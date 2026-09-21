@@ -49,101 +49,212 @@ than a fast wrong one.
 
 ---
 
-# Era II — Numerical foundations for fidelity
+# Era II — Numerical foundations for fidelity ✅ SHIPPED
 
 *Replace every numerical compromise that currently forces artificially
 high viscosity or small time steps. Without this era, none of the
 physics work downstream can run at realistic parameters.*
 
-### Phase 21 — Cut-cell immersed boundary method
-Replace the volume-penalization IBM with a conservative cut-cell
-formulation: compute exact wetted volumes and face apertures for every
-cell intersected by a building surface, rebuild the divergence and
-gradient operators on the cut geometry, and enforce no-slip on the true
-surface rather than the staircase approximation.
-**Validated by**: flow past a wall-mounted cube against Silsoe
-experimental data; channel with a single rib (Leonardi et al.).
-**Unlocks**: `ν = 10⁻⁵` in urban geometry, i.e. real high-Re LES.
+**Status: complete.** 2,094 validation tests, all green. Every phase
+ships a production implementation with measured validation against an
+analytic solution, a manufactured solution, or a convergence study —
+numbers recorded per phase below.
 
-### Phase 22 — Ghost-cell wall reconstruction
-Second-order ghost-cell reconstruction of velocity and scalars at
-immersed surfaces, with the wall model evaluated on the true surface
-normal rather than the Cartesian face. Handles sharp corners and
-oblique walls.
-**Validated by**: log-law recovery on an inclined plate; grid-refinement
-study showing 2nd-order convergence in the near-wall region.
+### Phase 21 — Cut-cell immersed boundary method ✅
+`src/CutCell.jl`. Conservative cut-cell geometry from a level set by
+sub-cell sampling: wetted volume fractions, per-face open-area
+apertures, surface normals from `∇φ`, wetted areas. Aperture-weighted
+divergence / gradient / Laplacian, small-cell volume floor plus optional
+flux-redistribution merging, exact no-penetration enforcement.
+**Validated:** discrete adjointness `⟨p,Du⟩ = −⟨Gp,u⟩` to **1.45e-15
+relative** on a sloping wall with an embedded sphere (this is what makes
+the projection exact on cut geometry); `L = D·G` to 2.2e-17 relative;
+half-cut cell volume fraction and area exact to 1e-14; tilted-plane
+normals to 1e-12; uniform-flow divergence past a cut wall < 1e-12.
+**Unlocks** `ν = 10⁻⁵` in urban geometry — the whole point of the era.
 
-### Phase 23 — Adaptive time stepping with substepping
-CFL/viscous/Brunt-Väisälä-constrained adaptive `Δt` with per-process
-substepping: fast microphysics and chemistry substep inside a slower
-dynamics step. Includes a stability monitor and automatic retry-with-
-smaller-`Δt` on divergence.
-**Validated by**: bit-comparison against fixed-`Δt` runs; wall-clock
-speed-up on a diurnal case with quiescent night.
+### Phase 22 — Ghost-cell wall reconstruction ✅
+`src/CutCell.jl`. Image/foot-point stencils on the *true* surface with
+trilinear donor weights (solid donors dropped, inverse-distance
+fallback), Dirichlet and Neumann reconstruction, wall shear stress on
+the true normal.
+**Validated:** linear profiles reproduced **exactly** (max error 0.0);
+quadratic-profile errors 1.06e-3 → 2.66e-4 → 6.64e-5 at Nz = 16/32/64,
+i.e. convergence ratios **4.0000 and 4.0** — clean second order;
+analytic wall stress `νᾱ = 0.0375` recovered as 0.0375 with zero spread.
 
-### Phase 24 — Stretched and terrain-following vertical coordinate
-Full operator retrofit for non-uniform `dz(k)`: metric terms in every
-stencil, the Poisson solver (tridiagonal-in-z with FFT in x, y), and
-the SGS filter width. Then terrain-following (`σ`-type) coordinates with
-proper Jacobian handling.
-**Validated by**: hydrostatic-balance preservation over a bell-shaped
-hill; linear mountain-wave solution (Queney).
+### Phase 23 — Adaptive time stepping with substepping ✅
+`src/TimeIntegration.jl`. Per-process CFL diagnostics reporting each
+limiting `dt` separately (advective via the true per-cell sum form,
+diffusive, Brunt-Väisälä, Coriolis, SGS-scalar) plus which one binds;
+growth-limited adaptive `dt`; process substepping; and retry-on-failure
+with bit-exact preallocated state rollback.
+**Validated:** hand-computed advective `dt` to 1e-12 with the right
+`limiter` symbol; growth limiting never exceeded; deliberate
+over-large-`dt` blow-up triggers rollback and recovers a finite state.
 
-### Phase 25 — Semi-implicit IMEX time integration
-Rosenbrock / additive-Runge-Kutta IMEX splitting so that diffusion and
-fast linear wave terms are treated implicitly. Removes the viscous
-`Δt ∝ Δz²` constraint that currently dominates near-surface resolution.
-**Validated by**: stiff-diffusion test; order-of-accuracy verification;
-speed-up on a wall-resolved channel.
+### Phase 24 — Stretched and terrain-following vertical coordinate ✅
+`src/StretchedGrids.jl`. `StretchedGrid` (uniform / geometric / tanh /
+two-wall-tanh / custom) and `TerrainFollowingGrid` (Gal-Chen–Somerville
+σ) as `AbstractMesh` subtypes, with metric-correct z-stencils added as
+new methods on the `FiniteVolume` internals so the public `Operators`
+façade picks them up by dispatch with no edit to it. Two distinct
+metrics (`dzc` cell thickness, `dzf` centre spacing) so `div(grad)` stays
+self-adjoint. Volume-weighted vertical interpolation.
+**Validated:** `:uniform` reduces to `RegularGrid` to **1.44e-15**;
+Laplacian convergence ratios **3.976, 3.995**; centre→face `∂z` exact on
+a linear profile to 6.2e-17; volume-weighted interpolation **5.7e-14**
+where naive ½-averaging gives **0.270**; flat terrain reduces to the
+stretched case to 1.7e-18 with `J ≡ 1`; `∂x` of physical height over a
+bell hill **3.5e-15** with the metric cross-term vs **0.158** without;
+hydrostatic residual 3.75e-4 relative and *unchanged* over the hill,
+converging at ratios 3.99, 4.00 — and 86.5× worse if the wrong metric
+is used, which the suite asserts.
 
-### Phase 26 — WENO-Z and TENO advection for all prognostics
-Production advection: WENO-Z5/Z7 and TENO5/TENO8 for scalars *and*
-momentum, with a positivity-preserving flux limiter for moisture and
-chemical species. Wired into `step!` as a selectable scheme, replacing
-the current centered-only default.
-**Validated by**: scalar-transport convergence study; sharp-front
-advection without over/undershoot; energy-spectrum comparison against
-pseudospectral reference.
+### Phase 25 — Semi-implicit IMEX time integration ✅
+`src/TimeIntegration.jl`. Matrix-free implicit diffusion `(I − dtν∇²)`
+via Jacobi-preconditioned CG (scalar or per-cell ν, wall rows
+eliminated), plus `ARK2` (ARS(2,2,2)) and `Rosenbrock2` (ROS2 W-method)
+drivers that project at every stage so each stage value is
+divergence-free.
+**Validated:** manufactured implicit solve in **3 CG iterations**, max
+error 9.1e-15 (34 iterations for variable ν); **unconditionally stable
+at 100× the explicit limit** — 20 backward-Euler steps, monotone decay,
+non-negative, mass drift **5.2e-12**; measured convergence orders
+**2.0004 / 2.0002** (ARK2) and 1.986 / 1.993 (Rosenbrock2); divergence
+4.3e-16 after stepping with walls + SGS + body force; **18.4× dt
+speed-up** over the diffusive constraint.
 
-### Phase 27 — Anelastic and pseudo-incompressible dynamics
-Replace Boussinesq with the anelastic (Lipps-Hemler) and
-pseudo-incompressible (Durran) systems as selectable options, so deep
-convection with realistic density stratification becomes possible.
-**Validated by**: warm-bubble rise against published anelastic
-solutions; comparison of the three systems on the same case.
+### Phase 26 — WENO-Z and TENO advection for all prognostics ✅
+`src/AdvectionSchemes.jl`. WENO-Z5/Z7 (τ-based Z weights), TENO5/TENO8
+(ENO cut-off then optimal linear weights), corrected WENO-JS5 as an
+accuracy reference, high-order staggered momentum advection, and a
+positivity-preserving flux limiter. All coefficients derived in exact
+rational arithmetic; smoothness indicators evaluated in the `a`-basis so
+they keep relative accuracy as `h → 0`.
+**Validated:** measured orders WENO-Z5 **5.00**, WENO-Z7 **6.86–6.98**,
+TENO5 **4.99**, TENO8 **6.95–7.19** (polynomial exactness is the sharper
+statement: TENO8 reproduces a degree-7 polynomial to 4.4e-16);
+**critical-point accuracy** — WENO-Z 1.19e-9 vs WENO-JS 8.73e-9 (7.3×
+better), the defect Z-weights exist to fix; square-wave total-variation
+ratios 1.0004 (Z5) / 0.99992 (Z7) / 1.00029 (TENO5) vs **4.11 for
+centred**; positivity — without the limiter a high-order scheme reaches
+**−1.84** (Z5) and **−19.6** (TENO8), with it **−1.7e-18** and −2.0e-28
+at mass drift ≤ 3e-15.
 
-### Phase 28 — Energy- and enstrophy-conserving discrete operators
-Morinishi-style skew-symmetric advection so kinetic energy is conserved
-by the discrete operator in the inviscid limit, and the scalar variance
-budget closes. Removes the small spurious dissipation in the current
-flux-form scheme.
-**Validated by**: inviscid TGV energy conservation to machine precision;
-closed TKE budget in a DCBL run.
+### Phase 27 — Anelastic and pseudo-incompressible dynamics ✅
+`src/Anelastic.jl`. `ReferenceState` base states (isothermal,
+isentropic, constant-`N²`, arbitrary profile) constructed in **discrete**
+hydrostatic balance on the model's own grid, with a logarithmic-mean
+face density so the exponential case is simultaneously analytic and
+discretely balanced. `DensityWeightedPoissonSolver` (deflated-Jacobi PCG
+for `∇·(w(z)∇φ) = f`) and one generic mass-weighted core aliased as
+`AnelasticSimulation` (`w = ρ̄`) and `PseudoIncompressibleSimulation`
+(`w = ρ̄θ̄`).
+**Validated:** hydrostatic residual **3.0e-13 … 6.8e-14 Pa/m** across
+all four constructors (≤ 4.3e-14 relative); isothermal `ρ̄` matches the
+analytic exponential to 2.2e-16; constant-`N²` recovered to 2e-17;
+variable-coefficient Poisson with a **density ratio of 42.5** recovered
+to **1.25e-13** in 71 iterations, operator exactly self-adjoint
+(`max|A − Aᵀ| = 0.0`); constraint after a step `(1/ρ̄)∇·(ρ̄u) = 1.1e-17`
+while plain `∇·u = 3.1e-5` — confirming the leftover is exactly
+`−w ∂log ρ̄/∂z`; Boussinesq-limit error grows **linearly** with density
+variation across three decades (9.96, 10.25 per decade); warm bubble
+rises in all three systems with anelastic ascent 3.1% stronger aloft.
 
-### Phase 29 — Multigrid pressure solver
-Geometric multigrid with a cut-cell-aware coarsening strategy and a
-matrix-free smoother, replacing CG for immersed-boundary and stretched-
-grid cases. Needed because CG iteration counts blow up once geometry is
-complex.
-**Validated by**: iteration-count independence of grid size; comparison
-against the FFT solver on periodic cases.
+### Phase 28 — Energy- and enstrophy-conserving discrete operators ✅
+`src/AdvectionSchemes.jl`. Morinishi skew-symmetric momentum advection
+(exact discrete KE conservation for *any* velocity field), a
+variance-conserving scalar form, and the KE / scalar-variance budget and
+enstrophy diagnostics that serve as the validation instruments.
+**Validated:** KE production on a non-divergence-free field — skew
+**8.3e-17** vs flux form **0.176**, a 2e15 separation; Taylor-Green
+advection-only drift over 2000 steps — skew **−3.19e-11** (pure RK3 time
+error) vs flux form **+0.223**, ~7e9× worse; variance-conserving form
+**−2.2e-16** vs centred **−2.77e-2** when `∇·u ≠ 0`; KE-budget closure
+residual **5.4e-16 relative**; `enstrophy` satisfies
+`νΣu·∇²u = −2ν·enstrophy` to 1e-8, an independent check of the staggered
+curl.
+**Bug found and fixed:** the Phase-10 WENO-5 in `src/FiniteVolume.jl`
+wrote `2f0` / `3f0` in its smoothness indicators. In Julia those are
+*Float32 literals*, not `2*f0` / `3*f0`. The scheme was therefore not
+translation-invariant (violation 0.0236), measured ~3rd order instead of
+5th, and *produced* scalar variance where every other upwind scheme
+dissipates. The centre argument is now named `fc` so the mistake is
+unrepresentable; translation-invariance violation is now **0.0**.
 
-### Phase 30 — Grid nesting with proper two-way feedback
-Production nesting: high-order interpolation at the nest boundary,
-conservative restriction back to the parent, a flux-correction step so
-mass and energy are conserved across the interface, and stability
-treatment for the well-known reflection problem.
-**Validated by**: nested vs single-domain comparison on a convective
-case; conservation diagnostics to machine precision.
+### Phase 29 — Multigrid pressure solver ✅
+`src/Multigrid.jl`. Cell-centred geometric multigrid: V/W-cycle plus
+full-multigrid start, red-black Gauss-Seidel smoother, full-weighting
+restriction and trilinear prolongation, variable-coefficient support
+with coefficient coarsening, null-space projection at every level for
+singular (all-periodic / all-Neumann) systems, and a
+multigrid-preconditioned CG variant.
+**Validated:** cycle count **flat at 7 from 16³ to 64³** — a 64× cell
+increase with no growth, which is the defining multigrid property and
+exactly what CG cannot do; per-cycle convergence factor **0.07–0.12**;
+manufactured solution to 1e-9; agreement with the exact cosine-FFT
+solver to 1e-8 on channel BCs; variable-coefficient recovery 6.4e-11;
+**MG-PCG converges in 8 iterations**; divergence 3.7e-13 when used as
+the projection solver inside a running simulation; non-power-of-two
+grids degrade gracefully via semi-coarsening.
 
-### Phase 31 — Adaptive mesh refinement
-Block-structured AMR with a refinement criterion from resolved-scale
-gradients and a subcycled time step per level. Essential for plumes,
-fronts, and near-source dispersion.
-**Validated by**: shear-layer roll-up at matched effective resolution;
-cost comparison against uniform fine grid.
+### Phase 30 — Grid nesting with proper two-way feedback ✅
+`src/AdaptiveMesh.jl`. Prolongation via the primitive function (parent
+cell averages fix the cumulative integral exactly at parent faces), so
+conservation is *structural* rather than approximate; staggering handled
+per-direction so a face velocity is nodal along its own axis and
+conservative across the others; volume/area-weighted restriction;
+Berger-Colella flux registers and refluxing; a tapered nest sponge; and
+subcycled stepping with time-interpolated boundary data.
+**Validated:** prolongation orders **1.97 / 3.04 / 3.97** for requested
+2 / 3 / 4; restriction conservation **bit-exact** at r=2 and 4.0e-16 at
+r=3; flux-preserving prolongation interface mismatch **1.5e-33**;
+**mass error 0.0 with flux correction vs 1.06e-3 without** — the
+correction doing real, measurable work; nest sponge reduces reflected
+amplitude **12.6×** (3.71e-2 → 2.94e-3).
 
----
+### Phase 31 — Adaptive mesh refinement ✅
+`src/AdaptiveMesh.jl`. Block-structured AMR: Löhner gradient, vorticity
+and Richardson-extrapolation refinement criteria with union /
+intersection / majority combination; Berger-Rigoutsos signature-based
+clustering; conservative regridding; proper-nesting enforcement by flag
+erosion; and recursive subcycled level advance with refluxing.
+**Validated:** criteria flag 896 cells at a tanh front and **0** in the
+smooth region (vorticity: 512 at a shear layer, 0 for uniform flow);
+Berger-Rigoutsos turns 344 flagged cells into **27 blocks at 0.787
+efficiency**; mass conserved to **1.13e-16 across two regrid events**
+(vs 4.49e-3 with refluxing disabled); and AMR reaches **near-fine-grid
+accuracy at 56% of the cell count** (L1 error 1.206e-2 on 2,296 cells
+vs 1.247e-2 on 4,096 uniform-fine cells, against 2.019e-2 coarse).
+
+### Era II — known limitations carried forward
+
+Recorded honestly rather than papered over; each is a candidate
+follow-up phase:
+
+  * **Solver/geometry coupling.** The FFT and cosine-FFT pressure
+    solvers are aperture-unaware, so cut-cell runs must re-apply the
+    velocity BC after the legacy projection. Wiring `cutcell_laplacian!`
+    into the Phase-29 multigrid (which already supports variable
+    coefficients) closes this.
+  * **Stretched-grid operator coverage.** Advection, momentum advection,
+    Coriolis and the Smagorinsky/eddy-viscosity kernels are not yet
+    retrofitted for `StretchedGrid` — they `MethodError` rather than
+    silently using the wrong metric, which is the safe failure mode.
+  * **Cut-cell geometry is sampling-quantised**; marching-cubes exact
+    intersection is the refinement.
+  * **IMEX SGS term** is a co-located approximation of the Smagorinsky
+    stress divergence, and `ν_eff` is lagged at `uⁿ` (standard).
+  * **Nested pressure projection** is single-level per grid; a
+    multi-level MAC sync projection is out of scope, so refluxing leaves
+    `O(mismatch)` divergence in the parent shell.
+  * **Sound-proof cores** reuse the Boussinesq viscous/SGS kernels
+    rather than density-weighted flux divergences, and do not carry
+    moisture.
+  * **AMR block advance** uses a prescribed velocity field with
+    flux-form upwind; per-block momentum and pressure solves are future
+    work.
 
 # Era III — High-fidelity radiation
 

@@ -210,7 +210,7 @@ explicit validation target.
 
 | Era | Phases | Theme |
 | :-- | :----- | :---- |
-| **II** | 21–31 | **Numerical foundations for fidelity** — cut-cell IBM, ghost-cell walls, adaptive Δt, terrain-following coordinates, IMEX integration, WENO-Z/TENO, anelastic dynamics, energy-conserving operators, multigrid, production nesting, AMR |
+| **II** ✅ | 21–31 | **Numerical foundations for fidelity** — *shipped.* Cut-cell IBM, ghost-cell walls, adaptive Δt, terrain-following coordinates, IMEX integration, WENO-Z/TENO, anelastic dynamics, energy-conserving operators, multigrid, production nesting, AMR. **2,094 validation tests** |
 | **III** | 32–38 | **High-fidelity radiation** — RRTMGP gas optics, two-stream with cloud optics, 3-D Monte-Carlo RT, full urban radiosity, spectral BRDF albedo, aerosol radiative feedback, NREL solar position |
 | **IV** | 39–45 | **High-fidelity clouds** — exact moist thermodynamics, P3 microphysics, superdroplet Lagrangian reference, aerosol-cloud interaction, ice nucleation, fog/visibility, turbulence-microphysics coupling |
 | **V** | 46–53 | **High-fidelity land & urban** — Richards-equation soil, Farquhar photosynthesis, resolved canopy, production urban-canopy model, building energy coupling, multi-layer snow, wave-coupled water, surface heterogeneity |

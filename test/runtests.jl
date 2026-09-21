@@ -849,3 +849,21 @@ C_s = 0.17
     end
 
 end
+
+# =========================================================================
+# Era II — numerical foundations for fidelity (Phases 21-31)
+# =========================================================================
+# Each file is a self-contained validated-capability suite. They are kept
+# in separate files because each is large and each corresponds to a
+# distinct roadmap phase; keeping the mapping one-file-per-phase-group
+# makes it obvious what a regression belongs to.
+
+@testset "Era II" begin
+    include("era2_cutcell.jl")     # Phases 21-22  cut-cell IBM, ghost cells
+    include("era2_stretched.jl")   # Phase  24     stretched / terrain-following
+    include("era2_timeint.jl")     # Phases 23, 25 adaptive dt, IMEX
+    include("era2_advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
+    include("era2_anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
+    include("era2_multigrid.jl")   # Phase  29     geometric multigrid
+    include("era2_amr.jl")         # Phases 30-31  nesting, AMR
+end

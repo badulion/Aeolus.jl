@@ -28,6 +28,15 @@ include("Particles.jl")
 include("ML.jl")
 include("DataAssimilation.jl")
 
+# --- Era II: numerical foundations for fidelity (Phases 21-31) -----------
+include("StretchedGrids.jl")    # Phase 24
+include("CutCell.jl")           # Phases 21-22
+include("AdvectionSchemes.jl")  # Phases 26, 28
+include("TimeIntegration.jl")   # Phases 23, 25
+include("Anelastic.jl")         # Phase 27
+include("Multigrid.jl")         # Phase 29
+include("AdaptiveMesh.jl")      # Phases 30-31
+
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -47,6 +56,14 @@ using .Chemistry
 using .Particles
 using .ML
 using .DataAssimilation
+
+using .StretchedGrids
+using .CutCell
+using .AdvectionSchemes
+using .TimeIntegration
+using .Anelastic
+using .Multigrid
+using .AdaptiveMesh
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -80,5 +97,91 @@ export apply_linear_chemistry!
 export ParticleSet, add_particles!, advance_particles!, positions
 export MLSGS, apply_mlsgs!
 export Observation, assimilate_nudging!
+
+# =========================================================================
+# Era II — numerical foundations for fidelity (Phases 21-31)
+# =========================================================================
+
+# Phases 21-22 — cut-cell IBM + ghost-cell wall reconstruction
+export CutCellGeometry, cut_cell_geometry, cut_cell_geometry_from_heightmap,
+       solid_mask, fluid_volume, wetted_area, cut_cell_count,
+       cutcell_divergence!, cutcell_gradient_x!, cutcell_gradient_y!,
+       cutcell_gradient_z!, cutcell_laplacian!,
+       cutcell_cell_inner, cutcell_face_inner,
+       apply_cutcell_velocity_bc!,
+       GhostCellStencil, build_ghost_stencils,
+       reconstruct_wall_velocity!, reconstruct_wall_scalar!,
+       wall_shear_stress
+
+# Phase 24 — stretched & terrain-following vertical coordinates
+export StretchedGrid, TerrainFollowingGrid, terrain_following_grid,
+       grid_stretching_ratio,
+       zfaces, zcenters, cell_thickness, center_spacing,
+       metric_jacobian, terrain_height, physical_heights,
+       set_physical!, hydrostatic_balance_error
+
+# Phases 23, 25 — adaptive time stepping + IMEX integration
+export CFLConstraints, cfl_diagnostics, adaptive_dt,
+       SubsteppingSchedule, substeps_for,
+       StateSnapshot, state_snapshot, save_state!, restore_state!,
+       step_adaptive!,
+       DiffusionWorkspace, solve_implicit_diffusion!,
+       IMEXScheme, ARK2, Rosenbrock2,
+       IMEXWorkspace, imex_workspace, step_imex!, imex_stability_limit
+
+# Phases 26, 28 — WENO-Z / TENO advection + conservative operators
+export weno_z5_left, weno_z5_right, weno_z7_left, weno_z7_right,
+       teno5_left, teno5_right, teno8_left, teno8_right,
+       weno_js5_left, weno_js5_right,
+       advect_weno_z!, advect_teno!, momentum_advect_weno_z!,
+       apply_positivity_limiter!, advect_positive!, FluxLimiterWorkspace,
+       AdvectionScheme, advection_scheme, required_halo,
+       momentum_advect_skew!, advect_variance_conserving!,
+       kinetic_energy_budget, scalar_variance_budget, enstrophy
+
+# Phase 27 — anelastic & pseudo-incompressible dynamics
+export ReferenceState,
+       isothermal_reference, isentropic_reference,
+       constant_stability_reference, reference_from_profile,
+       hydrostatic_residual, max_hydrostatic_residual,
+       reference_scale_height,
+       DensityWeightedPoissonSolver, apply_weighted_laplacian!,
+       solver_iterations, solver_residual,
+       MassWeighting, AnelasticWeighting, PseudoIncompressibleWeighting,
+       MassWeightedSimulation, AnelasticSimulation,
+       PseudoIncompressibleSimulation,
+       step_anelastic!, step_pseudo_incompressible!,
+       anelastic_divergence!, pseudo_incompressible_divergence!,
+       mass_flux_divergence!, weighted_divergence!,
+       max_anelastic_divergence, max_mass_flux_divergence,
+       max_pseudo_incompressible_divergence, constraint_residual,
+       add_anelastic_buoyancy!,
+       weighted_momentum_advect!, weighted_scalar_advect!,
+       set_reference_state!, reference_state,
+       θ_variance, max_w, bubble_top_height, unweighted_kinetic_energy,
+       system_comparison_diagnostics
+
+# Phase 29 — geometric multigrid pressure solver
+export MultigridPoissonSolver, MGPreconditionedCG,
+       mg_vcycle!, mg_solve!, mg_residual_norm,
+       mg_level_count, mg_iteration_history
+
+# Phases 30-31 — production nesting + block-structured AMR
+export NestedGrid, nested_grid, refinement_ratio, nest_offset,
+       nest_covered_range, nest_child_mesh, nest_parent_mesh,
+       NestBC, nest_bcs,
+       interpolate_to_nest_boundary!, interpolate_parent_to_child!,
+       restrict_to_parent!,
+       NestFluxMismatch, compute_nest_flux_mismatch, apply_flux_correction!,
+       mismatch_l1, mismatch_area,
+       NestSponge, apply_nest_sponge!,
+       NestInterpState, nest_interp_state, interpolate_parent_state!,
+       step_nested!, nest_conservation_error, composite_integral,
+       RefinementBlock, AMRHierarchy, amr_hierarchy,
+       refinement_criterion_gradient, refinement_criterion_vorticity,
+       refinement_criterion_richardson, combine_criteria,
+       cluster_flagged_cells, box_efficiency,
+       regrid!, check_proper_nesting, step_amr!,
+       amr_total_mass, amr_error, total_cells, level_cells, block_bounds
 
 end # module

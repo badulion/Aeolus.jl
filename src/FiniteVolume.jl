@@ -589,13 +589,22 @@ end
 #
 # Reference: Jiang & Shu (1996), JCP 126.
 
-@inline function _weno5_left(fm2, fm1, f0, fp1, fp2)
-    q0 = (1/3)*fm2 - (7/6)*fm1 + (11/6)*f0
-    q1 = (-1/6)*fm1 + (5/6)*f0 + (1/3)*fp1
-    q2 = (1/3)*f0 + (5/6)*fp1 - (1/6)*fp2
-    b0 = (13/12)*(fm2 - 2fm1 + f0)^2 + (1/4)*(fm2 - 4fm1 + 3f0)^2
-    b1 = (13/12)*(fm1 - 2f0  + fp1)^2 + (1/4)*(fm1 - fp1)^2
-    b2 = (13/12)*(f0  - 2fp1 + fp2)^2 + (1/4)*(3f0 - 4fp1 + fp2)^2
+# NOTE on the parameter name: the centre sample is called `fc`, not `f0`.
+# In Julia `2f0` is the *Float32 literal* 2.0f0, not `2 * f0` — the
+# `<digits>f<digits>` form is Float32 scientific notation. An earlier
+# version of this function used `f0` and wrote `2f0` / `3f0` in the
+# smoothness indicators, which silently substituted the constants 2.0f0
+# and 3.0f0 for `2*f0` and `3*f0`. That broke translation invariance,
+# degraded the scheme from 5th to ~3rd order, and made it *produce*
+# scalar variance instead of dissipating it. Renaming the argument makes
+# the mistake unrepresentable.
+@inline function _weno5_left(fm2, fm1, fc, fp1, fp2)
+    q0 = (1/3)*fm2 - (7/6)*fm1 + (11/6)*fc
+    q1 = (-1/6)*fm1 + (5/6)*fc + (1/3)*fp1
+    q2 = (1/3)*fc + (5/6)*fp1 - (1/6)*fp2
+    b0 = (13/12)*(fm2 - 2fm1 + fc)^2 + (1/4)*(fm2 - 4fm1 + 3fc)^2
+    b1 = (13/12)*(fm1 - 2fc  + fp1)^2 + (1/4)*(fm1 - fp1)^2
+    b2 = (13/12)*(fc  - 2fp1 + fp2)^2 + (1/4)*(3fc - 4fp1 + fp2)^2
     ε = 1e-6
     a0 = (1/10) / (b0 + ε)^2
     a1 = (6/10) / (b1 + ε)^2
