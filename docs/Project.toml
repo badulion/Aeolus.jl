@@ -1,0 +1,6 @@
+[deps]
+Aeolus = "a1e01005-1e51-4a5e-8d1e-4a5e8d1e4a5e"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+
+[compat]
+Documenter = "1"

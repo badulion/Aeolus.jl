@@ -1,0 +1,132 @@
+# Pluggable pressure solvers
+
+The pressure-Poisson solve is the single most consequential part of an
+incompressible LES code:
+
+  * It runs once per time step (more, with a projected RK3 scheme).
+  * Its cost dominates the run.
+  * It is the piece most likely to change when boundary conditions or
+    grid geometry change.
+
+Aeolus wraps it in an `AbstractPressureSolver` interface so different
+solvers can be swapped in without touching the fractional-step driver.
+
+## The interface
+
+```julia
+abstract type AbstractPressureSolver end
+
+solve!(p::Field{CellCenter}, source::Field{CellCenter}, solver::AbstractPressureSolver)
+```
+
+That's the entire contract. A `solver` is constructed once — typically
+at simulation setup — and reused every time step. `solve!` populates
+the interior of `p` from the interior of `source`; halos are left
+untouched.
+
+## Current: `FFTPoissonSolver`
+
+The only shipped implementation is [`FFTPoissonSolver`](@ref
+Aeolus.PressureSolvers.FFTPoissonSolver): direct solve via real FFT on
+a triply-periodic `RegularGrid`. See [Discrete Poisson &
+FFT](../theory/poisson.md) for the derivation.
+
+At construction:
+
+  * Preallocate a real buffer `(Nx, Ny, Nz)` and a complex buffer
+    `(Nx÷2+1, Ny, Nz)`.
+  * Plan a real forward FFT (`plan_rfft`) and a real inverse FFT
+    (`plan_irfft`).
+  * Precompute the discrete-Laplacian eigenvalues on the complex-buffer
+    grid, storing their reciprocals. The `(0,0,0)` mode's reciprocal is
+    stored as `0` — this projects out the zero-mean component.
+
+At each `solve!` call:
+
+  * Copy interior of `source` into the real buffer.
+  * Forward FFT.
+  * Multiply element-wise by the precomputed reciprocal eigenvalues.
+  * Inverse FFT.
+  * Copy into the interior of `p`.
+
+No heap allocation. The forward+inverse FFT pair dominates the cost:
+`O(Nx Ny Nz log(Nx Ny Nz))`.
+
+## Planned solvers
+
+### `CosineFFTPoissonSolver` *(Phase 1b — shipped)*
+
+For channel-like domains — periodic in `x, y`, walls in `z`. Uses a
+Type-II discrete cosine transform in `z` (matches the pressure-Neumann
+BC at the walls) combined with a real FFT in `x, y`. Cost is still
+`O(N log N)`. Passes the manufactured-Poisson test to machine precision;
+see [Discrete Poisson & FFT](../theory/poisson.md#Extension-to-channel-BCs:-the-cosine-transform).
+
+Selecting it is a constructor-time decision:
+
+```julia
+solver = CosineFFTPoissonSolver(mesh)
+sim    = BoussinesqSimulation(mesh; solver = solver, θ_bcs = θ_bcs, bcs = bcs)
+```
+
+The rest of the driver is unchanged. This unlocks the Dry Convective
+Boundary Layer benchmark and everything downstream in Phase 1b.
+
+### `CGPoissonSolver` (Phase 3)
+
+Matrix-free preconditioned conjugate gradient. Works for arbitrary
+BCs, immersed boundaries, cut cells — anything where a direct
+transform-based solver fails. Cost per solve is
+`O(N · √cond) ≈ O(N^{4/3})` for a Laplacian with mild
+preconditioning. The preconditioner will start as a simple diagonal
+scaling and can be upgraded to geometric multigrid.
+
+### `SEMPoissonSolver` (Phase 5)
+
+For the spectral-element backend. Element-local mass is not diagonal
+(GLL weights per element), so a matrix-free CG or a block-Jacobi
+multigrid is needed. This is what NekRS-family codes use.
+
+## What `Simulations.step!` sees
+
+The driver holds only `sim.solver::AbstractPressureSolver`. Its call
+site is a single line:
+
+```julia
+solve!(sim.φ, sim.div_buf, sim.solver)
+```
+
+No conditional; no interface knowledge. Swapping solvers is a
+constructor-time decision.
+
+```julia
+# Default: FFT, triply periodic
+sim1 = BoussinesqSimulation(mesh; ν=1e-2)
+
+# Custom solver — e.g. a future channel solver
+solver = CosineFFTPoissonSolver(mesh)
+sim2   = BoussinesqSimulation(mesh; ν=1e-2, solver=solver)
+```
+
+`step!` is bit-identical between the two.
+
+## Testing new solvers
+
+The unit-test recipe for any new solver is the same as for FFT:
+
+1. **Manufactured solution.** Prescribe an analytic `φ`, apply the
+   discrete Laplacian kernel to get `source = L_h φ`, call `solve!` and
+   check `‖φ_num − φ‖∞ < 10⁻¹⁰`.
+2. **Divergence-removal.** Fill `u, v, w` with random values, call the
+   full projection step, check `‖∇·u‖∞ < 10⁻¹⁰`.
+
+Both patterns are in `test/runtests.jl` for the FFT solver.
+
+## When *not* to build a new solver
+
+If you only need to change boundary conditions on `u, v, w` (e.g. add
+a slip wall) but keep the domain topology, extending `BoundaryConditions`
+is enough — the pressure BC follows automatically from the discrete
+Laplacian used in projection. New pressure solvers only earn their
+keep when the domain topology, BC type on pressure itself, or grid
+geometry actually changes.

@@ -1,0 +1,16 @@
+# Julia
+Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/docs/build/
+
+# Simulation output (large binaries)
+examples/urban/output/
+*.ppm
+*.jls
+
+# Editor
+.vscode/
+.idea/
+*.swp
