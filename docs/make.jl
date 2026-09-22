@@ -28,6 +28,7 @@ makedocs(
             "Fractional-step projection"  => "theory/fractional_step.md",
             "Smagorinsky-Lilly SGS"       => "theory/sgs.md",
             "Discrete Poisson & FFT"      => "theory/poisson.md",
+            "Radiative transfer"          => "theory/radiation.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

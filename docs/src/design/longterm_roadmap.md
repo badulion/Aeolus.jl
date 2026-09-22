@@ -258,8 +258,8 @@ follow-up phase:
 
 # Era III — High-fidelity radiation 🚧 IN PROGRESS
 
-**Status: the shared contract and Phase 38 are complete; Phases 32-37
-remain.** `src/RadiationCore.jl` fixes the interface every component in
+**Status: the shared contract, Phase 32, Phase 33 and Phase 38 are
+complete; Phases 34-37 remain.** `src/RadiationCore.jl` fixes the interface every component in
 this era speaks — `SpectralGrid` (RRTMG-layout bands with correlated-k
 g-points and weights), `OpticalProperties` (τ/ssa/g with the correct
 optical-depth- and scattering-weighted `combine_optics!` rule),
@@ -275,19 +275,119 @@ source sums to exactly 1361.0 W/m², and π·Σ_bands `planck_band` recovers
 real radiative-transfer solver, including 3-D effects that matter in
 urban geometry.*
 
-### Phase 32 — RRTMGP correlated-k gas optics
-Bind `RRTMGP.jl` for shortwave and longwave gas optics: full spectral
-treatment of H₂O, CO₂, O₃, CH₄ absorption on the model's own vertical
-grid, replacing the prescribed LW-down constant.
-**Validated by**: clear-sky flux profiles against RFMIP reference
-line-by-line calculations.
+### Phase 32 — Correlated-k gas optics ✅ SHIPPED
+`src/GasOptics.jl`. Full spectral treatment of H₂O, CO₂, O₃, CH₄, N₂O
+and O₂ across the 16 RRTMG longwave and 14 shortwave bands, on the
+model's own vertical grid, replacing the prescribed LW-down constant.
 
-### Phase 33 — Two-stream solver with cloud optics
-Two-stream (delta-Eddington) solution with cloud liquid/ice optical
-properties derived from the microphysics state. Full cloud-radiative
-feedback on the thermodynamics.
-**Validated by**: DYCOMS-II RF01 radiative-flux profiles; comparison
-with published LES intercomparison ensemble.
+**Design deviation from the original plan, and why.** The plan said
+"bind `RRTMGP.jl`". That is not possible on this host: RRTMGP.jl pulls
+in NetCDF/HDF5 for its k-distribution files, and those binary
+dependencies do not load here (the same `libmpifort.so` failure that
+forced the Serialization+TOML I/O layer in Era I). Rather than ship a
+module that cannot be loaded, Phase 32 builds the k-distribution
+**from first principles** instead of reading it from a file:
+
+  * A **Malkmus statistical narrow-band model** with embedded line
+    parameters (mean line strength and mean line spacing per band per
+    species) gives band transmission in closed form.
+  * **Domoto (1974) inversion** converts that band transmission into a
+    cumulative k-distribution, from which per-g-point absorption
+    coefficients follow — the standard route from a band model to
+    correlated-k when line-by-line data is unavailable.
+  * Pressure and temperature scaling of the absorber amount follows the
+    usual Curtis-Godson-style path scaling.
+
+This is less accurate than reading real RRTMGP k-tables — it is a
+band-model reconstruction, not a line-by-line fit — but it is
+self-contained, loads everywhere, and lands the broadband fluxes within
+a few percent of observations (below). A future phase can add an
+optional RRTMGP.jl backend behind the same `AbstractGasOptics`
+interface on hosts where it loads.
+
+Also implemented: Rayleigh scattering optics, Planck-weighted longwave
+layer and surface sources, and `us_standard_column` for a reference
+atmosphere. `erf_series`/`erfc_series` are hand-written because
+`SpecialFunctions` does not load either.
+
+**Measured validation** (US Standard Atmosphere, 40 layers):
+
+| Quantity | Aeolus | Observed |
+|---|---|---|
+| Clear-sky OLR | 229.1 W/m² | ~240 (global mean) |
+| Surface LW downwelling | 345.8 W/m² | ~333 |
+| Surface LW upwelling | 390.0 W/m² | ~398 |
+| Greenhouse effect Δ | 160.9 W/m² | ~150 |
+| LW cooling rate (mean) | −1.00 K/day | −1 to −2 |
+| CO₂ doubling band-4 response | +52.6 % absorption | — |
+
+**Bug found and fixed during validation**: at large absorber amounts
+the band transmission underflows to exactly 0, so `log(T)` returned
+`-Inf` and the optical depth became `NaN`. Added
+`malkmus_log_transmission`, which computes `log T` directly without
+ever forming `T` — a genuine robustness fix, not a test workaround.
+
+**Test expectation corrected**: an early test asserted that
+transmission *rises* with pressure. That is backwards — pressure
+broadening widens lines and fills the gaps between them, so higher
+pressure means **more** absorption and **lower** transmission. The
+module was right and the test was wrong.
+
+### Phase 33 — Two-stream solver with cloud optics ✅ SHIPPED
+`src/TwoStream.jl`. Three two-stream closures behind one interface —
+**delta-Eddington**, **PIFM** (Zdunkowski) and **Quadrature** — using
+the Meador & Weaver (1980) layer reflectance/transmittance
+coefficients, an adding/doubling column solver, maximum-random cloud
+overlap, and parameterised Mie cloud optics in terms of liquid/ice
+water path and effective radius. Full cloud-radiative feedback on the
+thermodynamics via `radiative_heating!`.
+
+**Numerical care that mattered.** Meador & Weaver eq. 14 as written
+contains `e^{kτ}` factors that overflow for optically thick layers.
+The implementation divides numerator and denominator through by
+`e^{kτ}` analytically, so the expression is evaluated entirely in terms
+of `e^{-kτ} ≤ 1` and nothing overflows even at τ = 10⁴.
+
+The longwave layer source is **linear in τ** rather than constant.
+Measured against a sub-layered reference of 180.66 W/m², the linear
+form gives an error of **0.55** where the constant form gives **3.30**
+— a 6× accuracy gain for no extra cost.
+
+**Measured validation**:
+
+| Check | Result |
+|---|---|
+| Conservative scattering, white surface: (out/in) | 0.99999999997 |
+| Cloud τ at LWP 100 g/m², r_eff 10 μm | 15.0 (textbook 15) |
+| …its single-scattering albedo | 0.99999 |
+| …its asymmetry parameter | 0.86 |
+| Cloud albedo at LWP 10/50/200/1000 g/m² | 0.110 / 0.407 / … monotone, < 1 |
+| LW heating rate (min/mean/max) | −2.48 / −1.00 / −0.089 K/day |
+
+**Two real implementation bugs were found by the tests** — worth
+recording because both produced plausible-looking output:
+
+  1. A spurious trailing `* k` on the direct-beam reflectance and
+     transmittance. Conservative scattering returned 1.5 W/m² instead
+     of 800, and a thick cloud had an albedo of 0.022 instead of > 0.5.
+     Diagnosed by re-deriving against Meador & Weaver eq. 14 term by
+     term.
+  2. `S_up` and `S_dn` swapped, with the wrong integral, in the
+     linear-in-τ longwave source. This made the "improved" linear
+     source *worse* than the constant one (error 6.03 vs 3.28), which
+     is what gave it away. Fixed by deriving the moment integral
+     properly: `∫₀^x s e^{-s} ds = 1 − e^{-x}(1+x)`.
+
+**Test expectations corrected** (implementation was right): a
+reflectance floor of `1e-6` at τ = 10⁴ with ω = 0.999 ignores that the
+diffusion regime falls off only as 1/τ; and a 96 K/day heating rate
+came from an artificial grey optical depth, not from the solver — it
+drops below 30 K/day with real gas optics.
+
+**Not yet done**: the DYCOMS-II RF01 intercomparison case itself.
+The solver is validated against analytic limits and textbook cloud
+optics, not yet against the published LES ensemble. That comparison is
+deferred to the Era III closing validation.
 
 ### Phase 34 — 3-D Monte-Carlo radiative transfer
 Photon-tracing solver that handles the genuinely 3-D radiative

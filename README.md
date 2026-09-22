@@ -211,7 +211,7 @@ explicit validation target.
 | Era | Phases | Theme |
 | :-- | :----- | :---- |
 | **II** ✅ | 21–31 | **Numerical foundations for fidelity** — *shipped.* Cut-cell IBM, ghost-cell walls, adaptive Δt, terrain-following coordinates, IMEX integration, WENO-Z/TENO, anelastic dynamics, energy-conserving operators, multigrid, production nesting, AMR. **2,094 validation tests** |
-| **III** 🚧 | 32–38 | **High-fidelity radiation** — *in progress: shared contract + Phase 38 done.* RRTMGP gas optics, two-stream with cloud optics, 3-D Monte-Carlo RT, full urban radiosity, spectral BRDF albedo, aerosol radiative feedback, NREL solar position |
+| **III** 🚧 | 32–38 | **High-fidelity radiation** — *in progress: contract + Phases 32, 33, 38 done; 34–37 remain.* Correlated-k gas optics (Malkmus→Domoto, self-contained), two-stream delta-Eddington/PIFM with cloud optics, 3-D Monte-Carlo RT, full urban radiosity, spectral BRDF albedo, aerosol radiative feedback, Meeus solar position |
 | **IV** | 39–45 | **High-fidelity clouds** — exact moist thermodynamics, P3 microphysics, superdroplet Lagrangian reference, aerosol-cloud interaction, ice nucleation, fog/visibility, turbulence-microphysics coupling |
 | **V** | 46–53 | **High-fidelity land & urban** — Richards-equation soil, Farquhar photosynthesis, resolved canopy, production urban-canopy model, building energy coupling, multi-layer snow, wave-coupled water, surface heterogeneity |
 | **VI** | 54–59 | **High-fidelity turbulence** — scale-dependent dynamic SGS, anisotropic/tensorial closures, prognostic SGS stress, high-Re wall models, stable-boundary-layer regime, laminar-turbulent transition |
