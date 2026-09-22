@@ -875,5 +875,7 @@ end
 # radiation contract (`RadiationCore`) and Phase 38 are complete.
 
 @testset "Era III" begin
+    include("era3_gasoptics.jl")       # Phase 32  correlated-k gas optics
+    include("era3_twostream.jl")       # Phase 33  two-stream RT, cloud optics
     include("era3_solargeometry.jl")   # Phase 38  solar position, shadows
 end

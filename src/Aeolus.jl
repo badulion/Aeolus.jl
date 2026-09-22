@@ -234,4 +234,25 @@ export AbstractSolarPosition, MeeusPosition,
        cloud_optical_depth_column, cloud_shadow_transmittance!,
        cloud_shadow_map, combined_shadow_transmittance!
 
+# Phase 32 — correlated-k gas optics
+export MalkmusParams, malkmus_transmission, malkmus_log_transmission,
+       malkmus_params, erf_series, erfc_series,
+       malkmus_cumulative_k, kdist_from_band_model,
+       CorrelatedKGasOptics, correlated_k_optics,
+       rayleigh_optical_depth, rayleigh_optics!,
+       lw_source!, lw_surface_source,
+       column_absorber_amount, transmission_band, optical_depth_profile,
+       us_standard_column
+
+# Phase 33 — two-stream RT and cloud optics
+export TwoStreamSolver, two_stream_solver,
+       DeltaEddington, PIFM, Quadrature,
+       delta_scale, two_stream_coefficients,
+       layer_reflectance_transmittance_sw,
+       layer_reflectance_transmittance_lw,
+       adding_solver!, solve_sw!, solve_lw!,
+       MieCloudOptics, mie_cloud_optics,
+       liquid_water_path, ice_water_path, cloud_optical_depth,
+       maximum_random_overlap, radiative_heating!
+
 end # module
