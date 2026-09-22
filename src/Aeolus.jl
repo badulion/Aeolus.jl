@@ -47,6 +47,9 @@ include("MonteCarloRT.jl")      # Phase 34
 include("Radiosity.jl")         # Phase 35
 include("SolarGeometry.jl")     # Phase 38
 
+# --- Era IV: high-fidelity clouds and microphysics (Phases 39-45) --------
+include("MoistThermodynamics.jl")  # Phase 39
+
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -83,6 +86,8 @@ using .TwoStream
 using .MonteCarloRT
 using .Radiosity
 using .SolarGeometry
+
+using .MoistThermodynamics
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -332,5 +337,32 @@ export Facet, LongwaveSolution, RadiosityScene, ShortwaveSolution,
        uniform_materials, urban_class_mixtures, view_factor_contour,
        view_factor_parallel_rectangles,
        view_factor_perpendicular_rectangles, view_factors
+
+# =========================================================================
+# Era IV — high-fidelity clouds and microphysics (Phases 39-45)
+# =========================================================================
+
+# Phase 39 — exact moist thermodynamics (the Era IV shared contract)
+export ThermodynamicConstants, DEFAULT_CONSTANTS,
+       latent_heat_vapor, latent_heat_sublim, latent_heat_fusion,
+       saturation_vapor_pressure, saturation_vapor_pressure_ice,
+       saturation_specific_humidity, saturation_mixing_ratio,
+       saturation_specific_humidity_ice,
+       vapor_pressure, relative_humidity, relative_humidity_ice,
+       dewpoint_temperature, frost_point_temperature,
+       gas_constant_moist, heat_capacity_moist, exner_function,
+       potential_temperature, temperature_from_theta,
+       liquid_ice_potential_temperature, temperature_from_theta_li,
+       virtual_temperature, density_temperature,
+       virtual_potential_temperature, density_potential_temperature,
+       equivalent_potential_temperature, wet_bulb_potential_temperature,
+       moist_static_energy, liquid_water_static_energy,
+       air_density, specific_volume,
+       saturation_adjustment, saturation_adjustment_ice,
+       PhasePartition, phase_partition, liquid_fraction,
+       moist_adiabatic_lapse_rate, dry_adiabatic_lapse_rate,
+       lifting_condensation_level, level_of_free_convection,
+       cape_cin, buoyancy, brunt_vaisala_frequency_moist,
+       supersaturation, supersaturation_ice
 
 end # module

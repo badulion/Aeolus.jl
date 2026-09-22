@@ -882,4 +882,8 @@ end
     include("era3_montecarlo.jl")      # Phase 34  3-D Monte-Carlo RT
     include("era3_radiosity.jl")       # Phase 35  urban radiosity
     include("era3_solargeometry.jl")   # Phase 38  solar position, shadows
+    end
+
+    @testset "Era IV" begin
+        include("era4_thermodynamics.jl")  # Phase 39  exact moist thermodynamics
 end

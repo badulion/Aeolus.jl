@@ -1,0 +1,880 @@
+"""
+    MoistThermodynamics
+
+Exact moist thermodynamics — Era IV, Phase 39.
+
+This module is the shared contract for Era IV the way `RadiationCore` is
+for Era III: every microphysics scheme, activation parameterisation and
+cloud diagnostic in Phases 40-45 speaks it, so they agree on what
+temperature, saturation and buoyancy mean.
+
+WHAT "EXACT" MEANS HERE, AND WHY IT MATTERS
+
+Three approximations are routine in LES codes and all three are dropped:
+
+ 1. **Constant latent heat.** `L_v` is temperature dependent through
+    Kirchhoff's relation, `dL_v/dT = c_pv - c_l`. Over the 220-320 K
+    range an atmosphere actually spans, `L_v` varies by about 10 %.
+    Holding it at its 273 K value biases condensational heating in deep
+    convection by a comparable amount.
+
+ 2. **Fitted saturation vapour pressure.** Tetens/Bolton/Magnus fits are
+    accurate near 273 K and degrade in the cold upper troposphere, which
+    is exactly where ice microphysics needs them. Here `e_s` is the
+    *analytic integral* of Clausius-Clapeyron with the Kirchhoff `L(T)`,
+    so it is thermodynamically consistent with the latent heat used
+    everywhere else, by construction rather than by coincidence.
+
+ 3. **Constant heat capacity.** The moist heat capacity `c_pm` depends
+    on the vapour and condensate loading and is carried explicitly.
+
+CONSISTENCY IS THE POINT. A scheme that uses one `L_v` in its saturation
+adjustment and a different effective `L_v` implicit in its `e_s` fit does
+not conserve moist static energy, and the error accumulates over a long
+integration rather than cancelling.
+
+REFERENCES
+
+  * Emanuel, K. A. (1994). *Atmospheric Convection*. Oxford. Ch. 4.
+  * Bolton, D. (1980). The computation of equivalent potential
+    temperature. *Mon. Wea. Rev.*, 108, 1046-1053.
+  * Bryan, G. H. & Fritsch, J. M. (2004). A reevaluation of ice-liquid
+    water potential temperature. *Mon. Wea. Rev.*, 132, 2421-2431.
+  * Romps, D. M. (2017). Exact expression for the lifting condensation
+    level. *J. Atmos. Sci.*, 74, 3891-3900.
+"""
+module MoistThermodynamics
+
+export ThermodynamicConstants, DEFAULT_CONSTANTS,
+       latent_heat_vapor, latent_heat_sublim, latent_heat_fusion,
+       saturation_vapor_pressure, saturation_vapor_pressure_ice,
+       saturation_specific_humidity, saturation_mixing_ratio,
+       saturation_specific_humidity_ice,
+       vapor_pressure, relative_humidity, relative_humidity_ice,
+       dewpoint_temperature, frost_point_temperature,
+       gas_constant_moist, heat_capacity_moist, exner_function,
+       potential_temperature, temperature_from_theta,
+       liquid_ice_potential_temperature, temperature_from_theta_li,
+       virtual_temperature, density_temperature,
+       virtual_potential_temperature, density_potential_temperature,
+       equivalent_potential_temperature, wet_bulb_potential_temperature,
+       moist_static_energy, liquid_water_static_energy,
+       air_density, specific_volume,
+       saturation_adjustment, saturation_adjustment_ice,
+       PhasePartition, phase_partition, liquid_fraction,
+       moist_adiabatic_lapse_rate, dry_adiabatic_lapse_rate,
+       lifting_condensation_level, level_of_free_convection,
+       cape_cin, buoyancy, brunt_vaisala_frequency_moist,
+       supersaturation, supersaturation_ice
+
+# =========================================================================
+# Constants
+# =========================================================================
+
+"""
+    ThermodynamicConstants{T}
+
+Thermodynamic constants, bundled so a caller can run in `Float32` or
+substitute a different reference state without touching call sites.
+
+Reference point: the triple point of water, `T_triple` = 273.16 K,
+`p_triple` = 611.657 Pa. Latent heats are given *at* the triple point and
+extrapolated by Kirchhoff's relation, which is what makes them consistent
+with the saturation vapour pressure below.
+"""
+Base.@kwdef struct ThermodynamicConstants{T<:AbstractFloat}
+    gas_constant::T = 8.314462618      # J mol⁻¹ K⁻¹ (CODATA 2018)
+    molmass_dry::T  = 0.02896546       # kg mol⁻¹
+    molmass_water::T = 0.018015268     # kg mol⁻¹
+    cp_dry::T       = 1004.6           # J kg⁻¹ K⁻¹
+    cp_vapor::T     = 1859.0           # J kg⁻¹ K⁻¹
+    cp_liquid::T    = 4181.0           # J kg⁻¹ K⁻¹  (at 298 K)
+    cp_ice::T       = 2108.0           # J kg⁻¹ K⁻¹
+    LH_v0::T        = 2.5008e6         # J kg⁻¹ at the triple point
+    LH_s0::T        = 2.8344e6         # J kg⁻¹ at the triple point
+    T_triple::T     = 273.16           # K
+    p_triple::T     = 611.657          # Pa
+    T_freeze::T     = 273.15           # K
+    T_icenuc::T     = 233.15           # K, all-ice below this
+    p_ref::T        = 1.0e5            # Pa, potential-temperature reference
+    grav::T         = 9.80665          # m s⁻²
+end
+
+const DEFAULT_CONSTANTS = ThermodynamicConstants{Float64}()
+
+R_d(c::ThermodynamicConstants) = c.gas_constant / c.molmass_dry     # 287.06
+R_v(c::ThermodynamicConstants) = c.gas_constant / c.molmass_water   # 461.52
+"Ratio of molar masses, ε ≈ 0.622."
+molmass_ratio(c::ThermodynamicConstants) = c.molmass_water / c.molmass_dry
+"Latent heat of fusion at the triple point."
+LH_f0(c::ThermodynamicConstants) = c.LH_s0 - c.LH_v0
+
+# =========================================================================
+# Phase partition
+# =========================================================================
+
+"""
+    PhasePartition{T}
+
+Specific humidities of the three water phases: `tot` (total water),
+`liq` (cloud liquid) and `ice` (cloud ice), all in kg water per kg of
+*moist* air. Vapour is the remainder, `tot - liq - ice`.
+
+Total water rather than vapour is the prognostic because it is conserved
+under phase change; vapour is not.
+"""
+struct PhasePartition{T<:AbstractFloat}
+    tot::T
+    liq::T
+    ice::T
+end
+
+PhasePartition(tot::Real, liq::Real = 0, ice::Real = 0) =
+    PhasePartition{typeof(float(tot))}(float(tot), float(liq), float(ice))
+
+"Vapour specific humidity of a phase partition."
+vapor(q::PhasePartition) = q.tot - q.liq - q.ice
+"Total condensate specific humidity."
+condensate(q::PhasePartition) = q.liq + q.ice
+
+Base.show(io::IO, q::PhasePartition) =
+    print(io, "PhasePartition(tot=", q.tot, ", liq=", q.liq, ", ice=", q.ice, ")")
+
+"""
+    liquid_fraction(T, c = DEFAULT_CONSTANTS) -> λ ∈ [0, 1]
+
+Fraction of condensate that is liquid at temperature `T`.
+
+Liquid above freezing, ice below the homogeneous-nucleation threshold
+(233.15 K), and a smooth ramp between — the mixed-phase regime, where
+supercooled liquid and ice genuinely coexist. The ramp is quadratic
+rather than linear so that both endpoints join with zero slope; a kink
+in `λ(T)` becomes a kink in the latent heating and shows up as grid-scale
+noise at the 0 °C level.
+"""
+function liquid_fraction(T::Real, c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    Tk = float(T)
+    Tk >= c.T_freeze && return one(Tk)
+    Tk <= c.T_icenuc && return zero(Tk)
+    x = (Tk - c.T_icenuc) / (c.T_freeze - c.T_icenuc)   # 0 → 1
+    return x * x * (3 - 2x)                              # smoothstep
+end
+
+"""
+    phase_partition(T, q_tot, q_cond, c = DEFAULT_CONSTANTS) -> PhasePartition
+
+Split a given amount of condensate between liquid and ice using
+[`liquid_fraction`](@ref).
+"""
+function phase_partition(T::Real, q_tot::Real, q_cond::Real,
+                         c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    λ = liquid_fraction(T, c)
+    qc = max(zero(float(q_cond)), float(q_cond))
+    return PhasePartition(float(q_tot), λ * qc, (1 - λ) * qc)
+end
+
+# =========================================================================
+# Latent heats — Kirchhoff's relation
+# =========================================================================
+
+"""
+    latent_heat_vapor(T, c = DEFAULT_CONSTANTS) -> J kg⁻¹
+
+Latent heat of vaporisation, `L_v(T) = L_v0 + (c_pv - c_l)(T - T_triple)`.
+
+This is Kirchhoff's relation, and it is exact given temperature-independent
+heat capacities. Since `c_pv - c_l` ≈ -2322 J kg⁻¹ K⁻¹, `L_v` *falls* with
+temperature: 2.50e6 at 273 K, 2.26e6 at 373 K, 2.62e6 at 223 K. Holding it
+constant at the triple-point value understates condensational heating in a
+cold cloud by ~5 % and overstates it in a warm one.
+"""
+latent_heat_vapor(T::Real, c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    c.LH_v0 + (c.cp_vapor - c.cp_liquid) * (float(T) - c.T_triple)
+
+"Latent heat of sublimation, `L_s(T) = L_s0 + (c_pv - c_i)(T - T_triple)`."
+latent_heat_sublim(T::Real, c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    c.LH_s0 + (c.cp_vapor - c.cp_ice) * (float(T) - c.T_triple)
+
+"Latent heat of fusion, `L_f = L_s - L_v`. Rises with temperature."
+latent_heat_fusion(T::Real, c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    latent_heat_sublim(T, c) - latent_heat_vapor(T, c)
+
+# =========================================================================
+# Saturation vapour pressure — exact Clausius-Clapeyron
+# =========================================================================
+
+# Integrating  d(ln e_s)/dT = L(T) / (R_v T²)  with L(T) = L0 + Δcp (T - T0)
+# gives the closed form
+#
+#   e_s(T) = e_triple · (T/T0)^(Δcp/R_v) · exp[ (L0 - Δcp T0)/R_v · (1/T0 - 1/T) ]
+#
+# which is exact for the Kirchhoff L(T) above — not a fit. Every use of
+# L_v elsewhere in this module is therefore thermodynamically consistent
+# with every use of e_s, which is the property that makes moist static
+# energy conserve to round-off instead of drifting.
+
+function _saturation_vapor_pressure(T::Real, L0::Real, Δcp::Real,
+                                    c::ThermodynamicConstants)
+    Tk = float(T)
+    Tk <= 0 && throw(DomainError(T, "saturation_vapor_pressure: T must be > 0 K"))
+    Rv = R_v(c)
+    T0 = c.T_triple
+    return c.p_triple * (Tk / T0)^(Δcp / Rv) *
+           exp((L0 - Δcp * T0) / Rv * (1 / T0 - 1 / Tk))
+end
+
+"""
+    saturation_vapor_pressure(T, c = DEFAULT_CONSTANTS) -> Pa
+
+Saturation vapour pressure over a plane surface of **liquid** water,
+valid (as supercooled liquid) well below freezing.
+
+Analytic integral of Clausius-Clapeyron with the Kirchhoff `L_v(T)`, so
+it is consistent with [`latent_heat_vapor`](@ref) by construction. At
+273.15 K it gives 611.2 Pa; at 373.15 K, 101.3 kPa — i.e. it reproduces
+the normal boiling point without being fitted to it.
+"""
+saturation_vapor_pressure(T::Real, c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    _saturation_vapor_pressure(T, c.LH_v0, c.cp_vapor - c.cp_liquid, c)
+
+"""
+    saturation_vapor_pressure_ice(T, c = DEFAULT_CONSTANTS) -> Pa
+
+Saturation vapour pressure over **ice**.
+
+Below freezing this is *lower* than the value over liquid, and that gap
+is the engine of the Wegener-Bergeron-Findeisen process: in a mixed-phase
+cloud the air is supersaturated with respect to ice while subsaturated
+with respect to liquid, so ice grows at the expense of evaporating
+droplets. The gap peaks near 261 K at about 1.5 % of `e_s`.
+"""
+saturation_vapor_pressure_ice(T::Real, c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    _saturation_vapor_pressure(T, c.LH_s0, c.cp_vapor - c.cp_ice, c)
+
+"""
+    saturation_specific_humidity(T, ρ_or_p, c; over = :liquid, use_density = false)
+
+Saturation specific humidity. By default `ρ_or_p` is interpreted as
+*pressure* (Pa) and
+
+    q_sat = ε e_s / (p - (1 - ε) e_s)
+
+is used. With `use_density = true` it is interpreted as moist-air density
+and `q_sat = e_s / (ρ R_v T)` — the form microphysics schemes want,
+because it does not require knowing the pressure.
+"""
+function saturation_specific_humidity(T::Real, ρ_or_p::Real,
+                                      c::ThermodynamicConstants = DEFAULT_CONSTANTS;
+                                      over::Symbol = :liquid,
+                                      use_density::Bool = false)
+    es = over === :liquid ? saturation_vapor_pressure(T, c) :
+         over === :ice    ? saturation_vapor_pressure_ice(T, c) :
+         throw(ArgumentError("saturation_specific_humidity: `over` must be :liquid or :ice"))
+    if use_density
+        return es / (float(ρ_or_p) * R_v(c) * float(T))
+    end
+    p = float(ρ_or_p)
+    ε = molmass_ratio(c)
+    # Once e_s reaches ambient pressure the water boils: there is no
+    # saturated *mixture* any more, the air is all vapour, and q_sat = 1.
+    # The formula below is continuous into that limit (at e_s = p it gives
+    # exactly 1) but overshoots past it — at 400 K and 1 bar it returns
+    # 15.2, which is not a specific humidity. Guarding only on the
+    # denominator is not enough: it stays positive well past boiling.
+    # The overshoot also makes θ_e non-monotone, which silently breaks any
+    # bisection that brackets above the boiling point.
+    es >= p && return one(float(T))
+    den = p - (1 - ε) * es
+    den <= 0 && return one(float(T))
+    return min(ε * es / den, one(float(T)))
+end
+
+"Saturation specific humidity over ice."
+saturation_specific_humidity_ice(T::Real, p::Real,
+                                 c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    saturation_specific_humidity(T, p, c; over = :ice)
+
+"""
+    saturation_mixing_ratio(T, p, c) -> kg kg⁻¹
+
+Saturation *mixing* ratio, `r_sat = ε e_s / (p - e_s)` — mass of vapour
+per mass of **dry** air, as distinct from specific humidity which is per
+mass of moist air. The two differ by ~2 % in the warm tropics; mixing up
+which one a scheme wants is a classic source of small persistent biases.
+"""
+function saturation_mixing_ratio(T::Real, p::Real,
+                                 c::ThermodynamicConstants = DEFAULT_CONSTANTS;
+                                 over::Symbol = :liquid)
+    es = over === :liquid ? saturation_vapor_pressure(T, c) :
+                            saturation_vapor_pressure_ice(T, c)
+    den = float(p) - es
+    den <= 0 && return float(Inf)
+    return molmass_ratio(c) * es / den
+end
+
+"""
+    vapor_pressure(q_v, p, c) -> Pa
+
+Partial pressure of water vapour given specific humidity and total
+pressure.
+"""
+function vapor_pressure(q_v::Real, p::Real,
+                        c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    ε = molmass_ratio(c)
+    qv = float(q_v)
+    return float(p) * qv / (ε + (1 - ε) * qv)
+end
+
+"Relative humidity over liquid, as a fraction (1.0 = saturated)."
+relative_humidity(T::Real, p::Real, q_v::Real,
+                  c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    vapor_pressure(q_v, p, c) / saturation_vapor_pressure(T, c)
+
+"Relative humidity over ice."
+relative_humidity_ice(T::Real, p::Real, q_v::Real,
+                      c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    vapor_pressure(q_v, p, c) / saturation_vapor_pressure_ice(T, c)
+
+"Supersaturation over liquid, `S - 1`. Positive means condensation."
+supersaturation(T::Real, p::Real, q_v::Real,
+                c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    relative_humidity(T, p, q_v, c) - 1
+
+"Supersaturation over ice."
+supersaturation_ice(T::Real, p::Real, q_v::Real,
+                    c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    relative_humidity_ice(T, p, q_v, c) - 1
+
+"""
+    dewpoint_temperature(p, q_v, c) -> K
+
+Temperature at which the given vapour would saturate over liquid at
+constant pressure. Solved by bisection on `e_s(T_d) = e(q_v, p)`, which
+is monotone, rather than by an inverted fit.
+"""
+function dewpoint_temperature(p::Real, q_v::Real,
+                              c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    e = vapor_pressure(q_v, p, c)
+    e <= 0 && return float(150.0)
+    return _invert_monotone(T -> saturation_vapor_pressure(T, c) - e, 150.0, 400.0)
+end
+
+"Frost point: as [`dewpoint_temperature`](@ref) but saturating over ice."
+function frost_point_temperature(p::Real, q_v::Real,
+                                 c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    e = vapor_pressure(q_v, p, c)
+    e <= 0 && return float(150.0)
+    return _invert_monotone(T -> saturation_vapor_pressure_ice(T, c) - e, 150.0, 400.0)
+end
+
+# Bisection on a monotonically increasing function. Bisection rather than
+# Newton on purpose: it cannot diverge, and these are called inside
+# microphysics loops where a single non-converged column would otherwise
+# poison an entire timestep with NaN.
+function _invert_monotone(f, lo::Real, hi::Real; tol::Real = 1e-10,
+                          maxiter::Int = 200)
+    a, b = float(lo), float(hi)
+    fa = f(a)
+    fa > 0 && return a
+    f(b) < 0 && return b
+    for _ in 1:maxiter
+        m = 0.5 * (a + b)
+        (b - a) < tol && return m
+        f(m) < 0 ? (a = m) : (b = m)
+    end
+    return 0.5 * (a + b)
+end
+
+# =========================================================================
+# Moist gas "constants"
+# =========================================================================
+
+"""
+    gas_constant_moist(q, c) -> J kg⁻¹ K⁻¹
+
+Gas constant of moist air per unit mass of *moist* air:
+
+    R_m = R_d (1 - q_tot) + R_v q_vap
+
+Note it is `q_tot` that is subtracted, not `q_vap`: condensate occupies
+negligible volume but carries mass, so it dilutes the gas constant.
+"""
+gas_constant_moist(q::PhasePartition, c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    R_d(c) * (1 - q.tot) + R_v(c) * vapor(q)
+
+gas_constant_moist(q_tot::Real, q_liq::Real = 0, q_ice::Real = 0,
+                   c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    gas_constant_moist(PhasePartition(q_tot, q_liq, q_ice), c)
+
+"""
+    heat_capacity_moist(q, c) -> J kg⁻¹ K⁻¹
+
+Isobaric heat capacity of moist air including condensate loading:
+
+    c_pm = c_pd (1 - q_tot) + c_pv q_vap + c_l q_liq + c_i q_ice
+
+Liquid water has four times the heat capacity of dry air, so even a
+modest cloud loading is not negligible at the accuracy this module aims
+for.
+"""
+heat_capacity_moist(q::PhasePartition, c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    c.cp_dry * (1 - q.tot) + c.cp_vapor * vapor(q) +
+    c.cp_liquid * q.liq + c.cp_ice * q.ice
+
+heat_capacity_moist(q_tot::Real, q_liq::Real = 0, q_ice::Real = 0,
+                    c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    heat_capacity_moist(PhasePartition(q_tot, q_liq, q_ice), c)
+
+"""
+    exner_function(p, q, c) -> Π
+
+Exner function `Π = (p/p_ref)^(R_m/c_pm)`. With a `PhasePartition` the
+moist exponent is used; the dry exponent `R_d/c_pd` ≈ 0.2857 is the
+`q = 0` limit.
+"""
+exner_function(p::Real, q::PhasePartition = PhasePartition(0.0),
+               c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    (float(p) / c.p_ref)^(gas_constant_moist(q, c) / heat_capacity_moist(q, c))
+
+air_density(T::Real, p::Real, q::PhasePartition = PhasePartition(0.0),
+            c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    float(p) / (gas_constant_moist(q, c) * float(T))
+
+specific_volume(T::Real, p::Real, q::PhasePartition = PhasePartition(0.0),
+                c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    1 / air_density(T, p, q, c)
+
+# =========================================================================
+# Potential temperatures
+# =========================================================================
+
+"Potential temperature `θ = T / Π`."
+potential_temperature(T::Real, p::Real, q::PhasePartition = PhasePartition(0.0),
+                      c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    float(T) / exner_function(p, q, c)
+
+"Temperature from potential temperature, `T = θ Π`."
+temperature_from_theta(θ::Real, p::Real, q::PhasePartition = PhasePartition(0.0),
+                       c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    float(θ) * exner_function(p, q, c)
+
+"""
+    liquid_ice_potential_temperature(T, p, q, c) -> θ_li
+
+Liquid-ice potential temperature (Bryan & Fritsch 2004):
+
+    θ_li = θ · exp( -(L_v q_liq + L_s q_ice) / (c_pm T) )
+
+This is the quantity an LES carries as its thermodynamic prognostic,
+because it is **conserved under reversible phase change** — condensation
+raises `T` and lowers `q_vap` in exactly the combination that leaves
+`θ_li` unchanged. Advecting `θ_li` and `q_tot` therefore means phase
+change never has to be advected, which is what keeps a cloud edge sharp.
+
+The exponential form is used rather than the linearised
+`θ - (L/c_p)(p₀/p)^κ q_l`. The linearisation errs by ~0.3 K at 3 g/kg of
+liquid — small, but it is a *systematic* bias, so it accumulates across a
+deep convective column instead of averaging out.
+"""
+function liquid_ice_potential_temperature(T::Real, p::Real, q::PhasePartition,
+                                          c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    Tk = float(T)
+    cpm = heat_capacity_moist(q, c)
+    Lv = latent_heat_vapor(Tk, c)
+    Ls = latent_heat_sublim(Tk, c)
+    θ = potential_temperature(Tk, p, q, c)
+    return θ * exp(-(Lv * q.liq + Ls * q.ice) / (cpm * Tk))
+end
+
+"""
+    temperature_from_theta_li(θ_li, p, q, c) -> T
+
+Invert [`liquid_ice_potential_temperature`](@ref) for temperature at a
+**known** phase partition. Bisection over a physically generous bracket;
+see [`saturation_adjustment`](@ref) for the case where the partition is
+itself unknown.
+"""
+function temperature_from_theta_li(θ_li::Real, p::Real, q::PhasePartition,
+                                   c::ThermodynamicConstants = DEFAULT_CONSTANTS;
+                                   tol::Real = 1e-10)
+    f(T) = liquid_ice_potential_temperature(T, p, q, c) - float(θ_li)
+    # θ_li increases monotonically with T at fixed p and partition.
+    return _invert_monotone(f, 100.0, 1000.0; tol = tol)
+end
+
+"""
+    virtual_temperature(T, q, c) -> K
+
+Virtual temperature: the temperature dry air would need to have the same
+density as this moist parcel at the same pressure. Vapour is lighter than
+dry air, so moist air is buoyant at equal temperature.
+"""
+virtual_temperature(T::Real, q::PhasePartition,
+                    c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    float(T) * gas_constant_moist(q, c) / R_d(c)
+
+"""
+    density_temperature(T, q, c) -> K
+
+Density temperature — virtual temperature *including condensate loading*:
+
+    T_ρ = T (1 + q_vap/ε - q_tot)
+
+Condensate adds mass without adding volume, so it is a negative buoyancy
+term. This is the quantity that belongs in a buoyancy calculation; using
+plain virtual temperature omits the weight of the cloud water and
+systematically over-predicts updraught strength. At 3 g/kg of liquid the
+loading is worth about 0.9 K of density temperature, comparable to the
+excess that drives shallow convection in the first place.
+"""
+function density_temperature(T::Real, q::PhasePartition,
+                             c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    ε = molmass_ratio(c)
+    return float(T) * (1 + vapor(q) / ε - q.tot)
+end
+
+"Virtual potential temperature, `θ_v = T_v / Π`."
+virtual_potential_temperature(T::Real, p::Real, q::PhasePartition,
+                              c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    virtual_temperature(T, q, c) / exner_function(p, q, c)
+
+"""
+    density_potential_temperature(T, p, q, c) -> θ_ρ
+
+Density potential temperature — the correct buoyancy variable for a
+cloudy parcel, since it includes condensate loading.
+"""
+density_potential_temperature(T::Real, p::Real, q::PhasePartition,
+                              c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    density_temperature(T, q, c) / exner_function(p, q, c)
+
+"""
+    equivalent_potential_temperature(T, p, q, c) -> θ_e
+
+Equivalent potential temperature — the temperature a parcel would reach
+if all its vapour condensed and it were brought to `p_ref`. Conserved
+under *both* dry and moist adiabatic processes, which makes it the
+standard tracer for air-mass identity.
+
+Uses the Bolton (1980) formulation, accurate to ~0.1 K, with the
+saturation temperature of the LCL computed from his eq. 21.
+"""
+function equivalent_potential_temperature(T::Real, p::Real, q::PhasePartition,
+                                          c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    Tk = float(T); pp = float(p)
+    qv = max(vapor(q), 1e-12)
+    r = qv / (1 - q.tot)                       # mixing ratio, kg/kg
+    e = vapor_pressure(qv, pp, c) / 100        # hPa, as Bolton uses
+    e = max(e, 1e-10)
+    # Bolton (1980) eq. 21: temperature at the LCL
+    T_L = 2840 / (3.5 * log(Tk) - log(e) - 4.805) + 55
+    # Bolton (1980) eq. 38
+    return Tk * (1000 / (pp / 100))^(0.2854 * (1 - 0.28 * r)) *
+           exp((3376 / T_L - 2.54) * r * (1 + 0.81 * r))
+end
+
+"""
+    wet_bulb_potential_temperature(T, p, q, c) -> θ_w
+
+Wet-bulb potential temperature, obtained by inverting Bolton's `θ_e`
+relation for the temperature a saturated parcel would have at `p_ref`.
+Monotone in `θ_e`, so bisection is safe.
+"""
+function wet_bulb_potential_temperature(T::Real, p::Real, q::PhasePartition,
+                                        c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    θe = equivalent_potential_temperature(T, p, q, c)
+    f(Tw) = begin
+        qs = saturation_specific_humidity(Tw, c.p_ref, c)
+        equivalent_potential_temperature(Tw, c.p_ref, PhasePartition(qs, 0.0, 0.0), c) - θe
+    end
+    # The bracket must stay BELOW the boiling point at p_ref (373 K): a
+    # saturated parcel above it has q_sat → 1, and θ_e diverges and then
+    # folds back, so the residual is no longer monotone and bisection
+    # converges to nonsense. θ_w never approaches boiling in any case —
+    # it is bounded above by the parcel's own temperature.
+    return _invert_monotone(f, 150.0, 350.0)
+end
+
+"""
+    moist_static_energy(T, z, q, c) -> J kg⁻¹
+
+Moist static energy `h = c_pm T + g z + L_v q_vap`.
+
+Approximately conserved under adiabatic vertical motion *including*
+condensation, which makes its drift a sharp diagnostic of whether a
+scheme's thermodynamics are self-consistent. A scheme using a fitted
+`e_s` with a different implicit `L_v` than it uses in its adjustment will
+show a slow systematic drift here; this module's does not, by
+construction.
+"""
+moist_static_energy(T::Real, z::Real, q::PhasePartition,
+                    c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    heat_capacity_moist(q, c) * float(T) + c.grav * float(z) +
+    latent_heat_vapor(T, c) * vapor(q)
+
+"""
+    liquid_water_static_energy(T, z, q, c) -> J kg⁻¹
+
+Liquid-water static energy `s_l = c_pm T + g z - L_v q_liq - L_s q_ice`,
+the condensate-referenced counterpart of moist static energy.
+"""
+liquid_water_static_energy(T::Real, z::Real, q::PhasePartition,
+                           c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    heat_capacity_moist(q, c) * float(T) + c.grav * float(z) -
+    latent_heat_vapor(T, c) * q.liq - latent_heat_sublim(T, c) * q.ice
+
+# =========================================================================
+# Saturation adjustment
+# =========================================================================
+
+"""
+    saturation_adjustment(θ_li, p, q_tot, c; ...) -> (T, PhasePartition)
+
+Given the conserved variables `θ_li` and `q_tot`, find the temperature
+and the liquid/ice split that put the parcel exactly at saturation (or
+leave it subsaturated with no condensate).
+
+# Why this is bisection and not a fixed-point iteration
+
+The obvious scheme — guess `T`, compute `q_liq = q_tot - q_sat(T)`,
+recompute `T` from the latent heating, repeat — **does not converge**.
+It oscillates, because condensing enough water to raise `T` also raises
+`q_sat` past `q_tot`, which un-condenses all of it, which drops `T` back.
+Measured on a marine stratocumulus sounding it cycles 281.9 → 285.2 →
+281.9 → … indefinitely, and a naive implementation that caps the iteration
+count silently returns zero liquid water — i.e. the cloud never forms and
+nothing reports an error.
+
+The residual solved here,
+
+    f(T) = θ_li(T, p, partition(T)) - θ_li_target
+
+is continuous and monotonically increasing in `T`, and the bracket
+`[T_dry_at_saturation, T_all_condensed]` is guaranteed to contain the
+root because condensate is bounded by `0 ≤ q_cond ≤ q_tot`. Bisection on
+it cannot fail.
+
+Returns `(T, PhasePartition)`.
+"""
+function saturation_adjustment(θ_li::Real, p::Real, q_tot::Real,
+                               c::ThermodynamicConstants = DEFAULT_CONSTANTS;
+                               tol::Real = 1e-10, maxiter::Int = 100)
+    qt = max(zero(float(q_tot)), float(q_tot))
+    pp = float(p)
+
+    # Unsaturated guess: no condensate at all.
+    q_dry = PhasePartition(qt, 0.0, 0.0)
+    T_dry = temperature_from_theta_li(θ_li, pp, q_dry, c)
+    q_sat_dry = saturation_specific_humidity(T_dry, pp, c)
+    if qt <= q_sat_dry
+        return T_dry, q_dry                     # subsaturated: done
+    end
+
+    # Saturated. f is increasing in T; bracket by the two extremes of the
+    # condensate range, which physically bound the answer.
+    q_wet = phase_partition(T_dry, qt, qt, c)   # everything condensed
+    T_wet = temperature_from_theta_li(θ_li, pp, q_wet, c)
+
+    function residual(T)
+        qs = saturation_specific_humidity(T, pp, c)
+        qc = max(0.0, qt - qs)
+        qc = min(qc, qt)
+        qp = phase_partition(T, qt, qc, c)
+        return liquid_ice_potential_temperature(T, pp, qp, c) - float(θ_li)
+    end
+
+    a, b = min(T_dry, T_wet), max(T_dry, T_wet)
+    fa = residual(a)
+    fb = residual(b)
+    # Degenerate bracket (can happen when q_tot is tiny): fall back to the
+    # dry solution rather than returning something unbracketed.
+    if fa * fb > 0
+        return T_dry, q_dry
+    end
+    T = a
+    for _ in 1:maxiter
+        T = 0.5 * (a + b)
+        (b - a) < tol && break
+        residual(T) < 0 ? (a = T) : (b = T)
+    end
+    qs = saturation_specific_humidity(T, pp, c)
+    qc = min(max(0.0, qt - qs), qt)
+    return T, phase_partition(T, qt, qc, c)
+end
+
+"""
+    saturation_adjustment_ice(θ_li, p, q_tot, c) -> (T, PhasePartition)
+
+As [`saturation_adjustment`](@ref) but saturating with respect to **ice**
+throughout, for the cirrus regime where no liquid is present.
+"""
+function saturation_adjustment_ice(θ_li::Real, p::Real, q_tot::Real,
+                                   c::ThermodynamicConstants = DEFAULT_CONSTANTS;
+                                   tol::Real = 1e-10, maxiter::Int = 100)
+    qt = max(zero(float(q_tot)), float(q_tot))
+    pp = float(p)
+    q_dry = PhasePartition(qt, 0.0, 0.0)
+    T_dry = temperature_from_theta_li(θ_li, pp, q_dry, c)
+    if qt <= saturation_specific_humidity_ice(T_dry, pp, c)
+        return T_dry, q_dry
+    end
+    q_wet = PhasePartition(qt, 0.0, qt)
+    T_wet = temperature_from_theta_li(θ_li, pp, q_wet, c)
+    function residual(T)
+        qs = saturation_specific_humidity_ice(T, pp, c)
+        qi = min(max(0.0, qt - qs), qt)
+        return liquid_ice_potential_temperature(T, pp,
+                   PhasePartition(qt, 0.0, qi), c) - float(θ_li)
+    end
+    a, b = min(T_dry, T_wet), max(T_dry, T_wet)
+    residual(a) * residual(b) > 0 && return T_dry, q_dry
+    T = a
+    for _ in 1:maxiter
+        T = 0.5 * (a + b)
+        (b - a) < tol && break
+        residual(T) < 0 ? (a = T) : (b = T)
+    end
+    qi = min(max(0.0, qt - saturation_specific_humidity_ice(T, pp, c)), qt)
+    return T, PhasePartition(qt, 0.0, qi)
+end
+
+# =========================================================================
+# Lapse rates, parcel theory
+# =========================================================================
+
+"Dry adiabatic lapse rate `g/c_pm` (K m⁻¹); ≈ 9.76e-3 for dry air."
+dry_adiabatic_lapse_rate(q::PhasePartition = PhasePartition(0.0),
+                         c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    c.grav / heat_capacity_moist(q, c)
+
+"""
+    moist_adiabatic_lapse_rate(T, p, c) -> K m⁻¹
+
+Saturated (pseudo)adiabatic lapse rate,
+
+    Γ_m = g (1 + L_v r_s /(R_d T)) / (c_pd + L_v² r_s ε /(R_d T²))
+
+About 4e-3 K/m in the warm tropics (latent heat release offsets roughly
+half the adiabatic cooling) rising toward the dry value 9.8e-3 K/m in
+cold air, where there is little vapour left to condense. That variation
+is why the tropical troposphere is so much closer to neutral than the
+polar one.
+"""
+function moist_adiabatic_lapse_rate(T::Real, p::Real,
+                                    c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    Tk = float(T)
+    rs = saturation_mixing_ratio(Tk, p, c)
+    Lv = latent_heat_vapor(Tk, c)
+    Rd = R_d(c); ε = molmass_ratio(c)
+    num = 1 + Lv * rs / (Rd * Tk)
+    den = c.cp_dry + Lv^2 * rs * ε / (Rd * Tk^2)
+    return c.grav * num / den
+end
+
+"""
+    lifting_condensation_level(T, p, q_v, c) -> (T_lcl, p_lcl)
+
+Temperature and pressure at which a parcel lifted dry-adiabatically first
+saturates. Solved by bisection on the residual `q_v - q_sat` along the dry
+adiabat, which is monotone in pressure, rather than by an empirical fit —
+the fits are good near the surface and drift aloft.
+"""
+function lifting_condensation_level(T::Real, p::Real, q_v::Real,
+                                    c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    Tk = float(T); pp = float(p); qv = float(q_v)
+    q = PhasePartition(qv, 0.0, 0.0)
+    θ = potential_temperature(Tk, pp, q, c)
+    # Along a dry adiabat q_v is fixed, so RH rises as p falls.
+    f(pl) = begin
+        Tl = temperature_from_theta(θ, pl, q, c)
+        qv - saturation_specific_humidity(Tl, pl, c)
+    end
+    f(pp) >= 0 && return (Tk, pp)              # already saturated
+    lo, hi = 1.0, pp
+    for _ in 1:200
+        m = 0.5 * (lo + hi)
+        (hi - lo) < 1e-6 && break
+        f(m) < 0 ? (hi = m) : (lo = m)
+    end
+    p_lcl = 0.5 * (lo + hi)
+    return (temperature_from_theta(θ, p_lcl, q, c), p_lcl)
+end
+
+"""
+    buoyancy(T, p, q, T_env, p_env, q_env, c) -> m s⁻²
+
+Buoyancy of a parcel relative to its environment, using **density**
+potential temperature so that condensate loading is included:
+
+    b = g (θ_ρ,parcel - θ_ρ,env) / θ_ρ,env
+"""
+function buoyancy(T::Real, p::Real, q::PhasePartition,
+                  T_env::Real, p_env::Real, q_env::PhasePartition,
+                  c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    θρ   = density_potential_temperature(T, p, q, c)
+    θρ_e = density_potential_temperature(T_env, p_env, q_env, c)
+    return c.grav * (θρ - θρ_e) / θρ_e
+end
+
+"""
+    brunt_vaisala_frequency_moist(θρ, dθρ_dz, c) -> N² in s⁻²
+
+Squared buoyancy frequency from the density-potential-temperature
+gradient. Negative means statically unstable.
+"""
+brunt_vaisala_frequency_moist(θρ::Real, dθρ_dz::Real,
+                              c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
+    c.grav * float(dθρ_dz) / float(θρ)
+
+"""
+    level_of_free_convection(T_p, p_p, q_p, sounding, c) -> p_lfc or NaN
+
+Pressure of the level of free convection for a parcel lifted from
+`(T_p, p_p, q_p)` through `sounding`, a vector of `(p, T, q_v)` ordered
+from the surface upward. Returns `NaN` if the parcel never becomes
+positively buoyant.
+"""
+function level_of_free_convection(T_p::Real, p_p::Real, q_p::Real,
+                                  sounding::AbstractVector,
+                                  c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    θli = liquid_ice_potential_temperature(T_p, p_p, PhasePartition(q_p), c)
+    for (pe, Te, qe) in sounding
+        pe >= p_p && continue
+        Tp, qp = saturation_adjustment(θli, pe, q_p, c)
+        b = buoyancy(Tp, pe, qp, Te, pe, PhasePartition(qe), c)
+        b > 0 && return float(pe)
+    end
+    return NaN
+end
+
+"""
+    cape_cin(T_p, p_p, q_p, sounding, c) -> (CAPE, CIN) in J kg⁻¹
+
+Convective available potential energy and convective inhibition for a
+parcel lifted through `sounding` (a vector of `(p, T, q_v)` from the
+surface up). The parcel is lifted reversibly — condensate is retained and
+loads the parcel — which gives a lower, more realistic CAPE than the
+pseudo-adiabatic assumption that precipitates everything out instantly.
+"""
+function cape_cin(T_p::Real, p_p::Real, q_p::Real,
+                  sounding::AbstractVector,
+                  c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    θli = liquid_ice_potential_temperature(T_p, p_p, PhasePartition(q_p), c)
+    Rd = R_d(c)
+    cape = 0.0; cin = 0.0
+    prev_p = float(p_p); prev_b = 0.0
+    for (pe, Te, qe) in sounding
+        pe >= p_p && continue
+        Tp, qp = saturation_adjustment(θli, pe, q_p, c)
+        b = buoyancy(Tp, pe, qp, Te, pe, PhasePartition(qe), c)
+        # dz = -(R_d T_v / g) dlnp  ⇒  b dz = -R_d T_v b/g dlnp
+        Tv = virtual_temperature(Te, PhasePartition(qe), c)
+        dlnp = log(prev_p / pe)
+        contrib = 0.5 * (b + prev_b) * Rd * Tv / c.grav * dlnp
+        contrib > 0 ? (cape += contrib) : (cin += contrib)
+        prev_p = float(pe); prev_b = b
+    end
+    return (cape, cin)
+end
+
+end # module
