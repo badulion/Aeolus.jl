@@ -11,3 +11,9 @@ Aeolus.PressureSolvers.FFTPoissonSolver
 Aeolus.PressureSolvers.CosineFFTPoissonSolver
 Aeolus.PressureSolvers.solve!
 ```
+
+## Iterative solver
+
+```@docs
+Aeolus.PressureSolvers.CGPoissonSolver
+```

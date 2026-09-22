@@ -27,3 +27,9 @@ Aeolus.BoundaryConditions.FieldBoundaryConditions
 ```@docs
 Aeolus.BoundaryConditions.fill_halos!
 ```
+
+## Wall conditions
+
+```@docs
+Aeolus.BoundaryConditions.ImpermeableWall
+```

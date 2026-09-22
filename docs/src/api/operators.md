@@ -50,3 +50,16 @@ Aeolus.Operators.add_eddy_viscosity_v!
 Aeolus.Operators.add_eddy_viscosity_w!
 Aeolus.Operators.add_eddy_diffusion_scalar!
 ```
+
+## Advection schemes
+
+```@docs
+Aeolus.Operators.advect_weno5!
+```
+
+## Forcing terms
+
+```@docs
+Aeolus.Operators.add_surface_flux!
+Aeolus.Operators.add_sponge!
+```

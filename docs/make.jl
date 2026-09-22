@@ -45,6 +45,9 @@ makedocs(
             "TimeSteppers"         => "api/time_steppers.md",
             "PressureSolvers"      => "api/pressure_solvers.md",
             "Simulations"          => "api/simulations.md",
+            "Physics modules"      => "api/physics.md",
+            "Era II — numerics"    => "api/era2.md",
+            "Era III — radiation"  => "api/era3.md",
         ],
         "Examples" => [
             "Scalar advection 2D"           => "examples/scalar_advection.md",

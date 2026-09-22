@@ -15,3 +15,17 @@ Aeolus.Simulations.max_divergence
 Aeolus.Simulations.max_νt
 Aeolus.Simulations.mean_θ_profile
 ```
+
+## Turbulence diagnostics
+
+```@docs
+Aeolus.Simulations.horizontal_mean
+Aeolus.Simulations.horizontal_variance
+Aeolus.Simulations.resolved_flux_wθ
+```
+
+## Low-level stepping
+
+```@docs
+Aeolus.Simulations.step_rk3!
+```
