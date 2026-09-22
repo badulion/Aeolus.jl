@@ -39,9 +39,17 @@ module MonteCarloRT
 #        `w·e^{-τ}` — the energy that *would* have travelled that far
 #        without colliding — instead of waiting to see whether the photon
 #        actually got there. This replaces a Bernoulli counter of variance
-#        `p(1-p)` with its deterministic mean, and it makes the unscattered
-#        direct beam *exact*: the first segment of every photon scores
-#        `e^{-τ_slant}`, i.e. Beer-Lambert with zero variance.
+#        `p(1-p)` with its deterministic mean. The gain is spectacular
+#        where the path is short and the answer nearly deterministic, and
+#        modest where it is not: the unscattered direct beam becomes
+#        *exact* (the first segment of every photon scores `e^{-τ_slant}`,
+#        i.e. Beer-Lambert with zero variance — measured standard error
+#        `~10⁻⁹` against a binomial `3·10⁻³` for the analogue counter at
+#        16k photons), while the multiply-scattered domain-mean albedo
+#        comes out statistically equivalent to analogue counting, because
+#        a deep random walk contributes many correlated terms. Both
+#        estimators are reported (`albedo` vs `albedo_analogue`) precisely
+#        so that this can be checked rather than assumed.
 #      * *Radiance estimator.* At every scattering and every surface
 #        reflection, the contribution to the top-of-domain radiance in each
 #        requested viewing direction is accumulated as
@@ -53,6 +61,14 @@ module MonteCarloRT
 #      boost `w ← w/p_survive`. Without it the implicit-capture weight
 #      decays geometrically and photons never terminate; with a naive
 #      cutoff instead of roulette the result is biased low.
+#
+#      Photon launch points are stratified over the *ground intercept* of
+#      the unattenuated beam rather than over the entry face. The map
+#      between the two is a rigid translation modulo the periodic box, so
+#      entry points stay uniform, but the surface irradiance map picks up
+#      exactly one sample per cell per pass. Measured on an isolated
+#      cloud, this halves the per-cell standard error of the surface
+#      irradiance at no cost.
 #
 # Uncertainty. Every reported quantity carries a standard error. Photons
 # are run in `nbatch` equal batches; the batch sums are i.i.d., so the
@@ -861,6 +877,23 @@ function _dda!(tal::MCTally{T}, med::MCMedium{T},
 
     i = min(max(floor(Int, (x - d.x0) / d.dx) + 1, 1), d.nx)
     j = min(max(floor(Int, (y - d.y0) / d.dy) + 1, 1), d.ny)
+
+    # Already on a domain face and heading out of it — the ray leaves without
+    # traversing anything. This happens for real: a photon reflected off the
+    # roof of a building that fills the topmost layer starts exactly at the
+    # model top.
+    if z >= domain_top(d) && uz > 0
+        return (collided = false, ci = i, cj = j, ck = d.nz, cx = x, cy = y, cz = z,
+                exitcode = EXIT_TOP, taub = zero(T),
+                ei = i, ej = j, ek = d.nz, ex = x, ey = y, ez = domain_top(d),
+                axis = 3, stepi = 0, stepj = 0, stepk = 1)
+    elseif z <= d.z0 && uz < 0
+        return (collided = false, ci = i, cj = j, ck = 1, cx = x, cy = y, cz = z,
+                exitcode = EXIT_GROUND, taub = zero(T),
+                ei = i, ej = j, ek = 1, ex = x, ey = y, ez = d.z0,
+                axis = 3, stepi = 0, stepj = 0, stepk = -1)
+    end
+
     k = min(max(floor(Int, (z - d.z0) / d.dz) + 1, 1), d.nz)
 
     stepi = ux > 0 ? 1 : (ux < 0 ? -1 : 0)
@@ -887,15 +920,35 @@ function _dda!(tal::MCTally{T}, med::MCMedium{T},
     ei = i; ej = j; ek = k
     ex = x; ey = y; ez = z
     axis = 0
-    doscore = score
 
-    # A photon should never start inside a building; if it does, treat the
-    # step as an immediate surface hit rather than tunnelling through.
+    # The ray may start *on the face of* a solid voxel: a photon launched at
+    # the model top lands directly on the roof of a building that fills the
+    # topmost layer. Identify which face it entered through so the reflection
+    # gets the right normal. A start strictly *inside* a solid is impossible
+    # by construction (reflections are nudged out along the face normal); if
+    # round-off ever produced one, the ray is abandoned and its weight booked
+    # as lost, rather than risking it ping-ponging inside the block.
     @inbounds if med.solid[i, j, k]
+        tolx = T(1e-6) * d.dx; toly = T(1e-6) * d.dy; tolz = T(1e-6) * d.dz
+        ax = 0; si = 0; sj = 0; sk = 0
+        df = z - (d.z0 + (k - 1) * d.dz)
+        if uz != 0 && (abs(df) < tolz || abs(df - d.dz) < tolz)
+            ax = 3; sk = uz > 0 ? 1 : -1
+        else
+            df = x - (d.x0 + (i - 1) * d.dx)
+            if ux != 0 && (abs(df) < tolx || abs(df - d.dx) < tolx)
+                ax = 1; si = ux > 0 ? 1 : -1
+            else
+                df = y - (d.y0 + (j - 1) * d.dy)
+                if uy != 0 && (abs(df) < toly || abs(df - d.dy) < toly)
+                    ax = 2; sj = uy > 0 ? 1 : -1
+                end
+            end
+        end
         return (collided = false, ci = i, cj = j, ck = k, cx = x, cy = y, cz = z,
-                exitcode = EXIT_SOLID, taub = zero(T),
+                exitcode = ax == 0 ? EXIT_STEPS : EXIT_SOLID, taub = zero(T),
                 ei = i, ej = j, ek = k, ex = x, ey = y, ez = z,
-                axis = 3, stepi = stepi, stepj = stepj, stepk = stepk)
+                axis = ax == 0 ? 3 : ax, stepi = si, stepj = sj, stepk = sk)
     end
 
     @inbounds for _ in 1:max_steps
@@ -940,7 +993,7 @@ function _dda!(tal::MCTally{T}, med::MCMedium{T},
             tmy += tdy
         else
             kl = stepk > 0 ? k + 1 : k
-            if doscore
+            if score
                 ww = w * exp(-τ)
                 if stepk > 0
                     tal.fup[i, j, kl] += ww
@@ -1278,7 +1331,7 @@ value means weight is being created or destroyed somewhere in the transport
 loop, which is the first thing to check when a Monte-Carlo solver
 misbehaves.
 """
-mc_closure_residual(r::MCResult) = one(eltype(r.albedo)) - mc_energy_budget(r).total
+mc_closure_residual(r::MCResult{T}) where {T} = one(T) - mc_energy_budget(r).total
 
 """
     mc_surface_irradiance(res) -> Array{T,2}

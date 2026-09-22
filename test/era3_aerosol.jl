@@ -248,7 +248,11 @@ end
     ssa = Dict(n => bulk_optics(m, 0.55)[4] for (n, m) in
                (("black_carbon", bc), ("sulphate", sul), ("sea_salt", ss),
                 ("organic_carbon", oc), ("mineral_dust", dust)))
-    @info "Visible (550 nm) single-scattering albedo by species" ssa...
+    # NB: `@info msg kwargs...` needs Symbol keys; splatting a
+    # String-keyed Dict throws a TypeError while building the log record,
+    # which silently swallows the message without failing a test. Log the
+    # Dict as a single value instead — the String keys are wanted below.
+    @info "Visible (550 nm) single-scattering albedo by species" ssa
 
     @test ssa["black_carbon"] < 0.4            # required: strongly absorbing
     @test ssa["black_carbon"] > 0.10           # but not a perfect absorber

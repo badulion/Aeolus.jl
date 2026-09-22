@@ -103,7 +103,11 @@ using LinearAlgebra
 using ..Grids
 using ..Grids: RegularGrid
 using ..RadiationCore
-using ..RadiationCore: STEFAN_BOLTZMANN, SOLAR_CONSTANT, AbstractSurfaceOptics
+using ..RadiationCore: STEFAN_BOLTZMANN, SOLAR_CONSTANT, AbstractSurfaceOptics,
+                       SpectralGrid, shortwave_bands, longwave_bands
+import ..RadiationCore: material_albedo, material_emissivity
+using ..SurfaceOptics: TiledSurface, tiled_surface, FresnelWater,
+                       broadband_albedo, broadband_emissivity
 
 export Facet, facet_corners, facet_sample_points, facet_edges,
        UrbanMaterials, default_urban_materials, uniform_materials,
@@ -229,7 +233,13 @@ description of its emission. Specular facades (glazing) violate this and need
 a directional method.
 
 A subtype of `RadiationCore.AbstractSurfaceOptics`; `material_albedo` and
-`material_emissivity` are the accessors.
+`material_emissivity` are the accessors — methods of the generics declared
+in `RadiationCore`, which `SurfaceOptics` also extends with its spectral
+versions. Same name, dispatched on argument type: ask for the albedo of a
+`Symbol` and you get a spectral object, ask for the albedo of an
+`UrbanMaterials` class and you get the grey scalar the radiosity solve
+needs. The greys are derived from the spectral curves, so they agree by
+construction.
 """
 struct UrbanMaterials{T<:AbstractFloat} <: AbstractSurfaceOptics
     albedo::Vector{T}
@@ -252,25 +262,137 @@ function UrbanMaterials(albedo::AbstractVector, emissivity::AbstractVector;
                              collect(String, name))
 end
 
-"""
-    default_urban_materials(T = Float64) -> UrbanMaterials
+# =========================================================================
+# Urban surface classes, derived from the Phase 36 spectral library
+# =========================================================================
+#
+# Each urban class is a MOSAIC of real materials, not a hand-entered
+# number. A city street is mostly asphalt with concrete pavements; a
+# European city-centre roofscape is clay tile plus some bitumen flat roof
+# and a little sheet metal; a facade is render plus brick plus glazing.
+#
+# Deriving the class albedo from those fractions, rather than tabulating
+# it, is what keeps this module and `SurfaceOptics` from drifting apart.
+# Before this, `Radiosity` carried its own five grey numbers and
+# `SurfaceOptics` carried sixteen spectral reflectance curves, and the
+# albedo of concrete was therefore defined twice in the same package.
+# They happened to agree; nothing made them agree.
+#
+# Two things fall out of the derivation that the old table could not
+# represent:
+#
+#   * WATER becomes solar-zenith dependent. A flat water surface reflects
+#     ~0.03 overhead and ~0.29 at 80° — a tenfold swing that a single
+#     grey 0.06 cannot express, and which dominates the energy balance of
+#     an urban river or lake in the morning and evening.
+#   * METAL ROOFS drag the roof-class emissivity down to ~0.85. That is
+#     physically right and is precisely why metal roofs run so hot: they
+#     absorb shortwave like everything else but cannot radiate it away.
+#
+# The mixture fractions below are for a warm-summer European city centre.
+# They are editable — that is the point — via `urban_class_mixtures`.
 
-Typical warm-summer European city-centre values, identical to
-`default_surface_params()` in `examples/urban/urban_physics.jl` so the two
-schemes agree on materials:
-
-| class  | α    | ε    |
-|--------|------|------|
-| street | 0.10 | 0.95 |
-| roof   | 0.20 | 0.90 |
-| park   | 0.22 | 0.98 |
-| water  | 0.06 | 0.98 |
-| wall   | 0.18 | 0.94 |
 """
-function default_urban_materials(::Type{T} = Float64) where {T<:AbstractFloat}
-    return UrbanMaterials(T[0.10, 0.20, 0.22, 0.06, 0.18],
-                          T[0.95, 0.90, 0.98, 0.98, 0.94];
-                          name = ["street", "roof", "park", "water", "wall"])
+    URBAN_CLASS_MIXTURES
+
+Material composition of each urban surface class, as
+`class => (material => area fraction, ...)`. Fractions within a class
+sum to one. Materials are names from
+[`SurfaceOptics.material_names`](@ref).
+
+The default is a warm-summer European city centre. Pass a modified
+mapping to [`default_urban_materials`](@ref) to describe a different
+building stock — a North American downtown with flat bitumen roofs and
+curtain-wall glazing has a very different roof and wall composition, and
+that difference is worth several degrees of surface temperature.
+"""
+const URBAN_CLASS_MIXTURES = (
+    street = (:asphalt => 0.85, :concrete => 0.15),
+    roof   = (:roof_tile_red => 0.40, :roof_tile_grey => 0.25,
+              :asphalt => 0.25, :metal_roof => 0.10),
+    park   = (:grass => 0.65, :tree_deciduous => 0.30, :soil_dry => 0.05),
+    water  = (:water => 1.00,),
+    wall   = (:concrete => 0.35, :brick => 0.35, :glass => 0.30),
+)
+
+"""
+    urban_class_mixtures() -> NamedTuple
+
+The default class composition, [`URBAN_CLASS_MIXTURES`](@ref).
+"""
+urban_class_mixtures() = URBAN_CLASS_MIXTURES
+
+"""
+    default_urban_materials(T = Float64; μ₀ = 0.7, mixtures, spec, lw_spec)
+
+Urban material properties for a warm-summer European city centre,
+**derived** from the Phase 36 spectral library by band-averaging a
+mosaic of real materials — see [`URBAN_CLASS_MIXTURES`](@ref).
+
+`μ₀` is the cosine of the solar zenith angle. Every class brightens
+toward grazing incidence — the Phase 36 library carries a Briegleb
+direct-beam shape function, and rough surfaces really do get brighter at
+low sun — but water does so by a different mechanism and by an order of
+magnitude more:
+
+| class  | α(μ₀=1) | α(μ₀=0.2) | ratio |
+|:-------|:--------|:----------|:------|
+| street | 0.119   | 0.138     | 1.15  |
+| wall   | 0.212   | 0.262     | 1.24  |
+| roof   | 0.198   | 0.257     | 1.30  |
+| park   | 0.178   | 0.273     | 1.53  |
+| water  | 0.030   | 0.258     | 8.60  |
+
+Water is a smooth Fresnel interface, not a rough Lambertian one. For a
+diurnal run, rebuild the materials as the sun moves rather than fixing
+them once — otherwise a morning or evening water surface is wrong by a
+factor of eight, and vegetation by half.
+
+Derived values at `μ₀ = 0.7` (the previous hand-entered table in
+brackets, for the record):
+
+| class  | α            | ε            |
+|:-------|:-------------|:-------------|
+| street | 0.125 (0.10) | 0.944 (0.95) |
+| roof   | 0.216 (0.20) | 0.848 (0.90) |
+| park   | 0.205 (0.22) | 0.977 (0.98) |
+| water  | 0.040 (0.06) | 0.960 (0.98) |
+| wall   | 0.227 (0.18) | 0.926 (0.94) |
+
+The street and wall classes come out brighter than the old table. That
+is the derivation disagreeing with a guess, and the derivation has the
+better provenance: measured facade albedos are 0.20-0.40 for light
+render and 0.25-0.35 for brick, so 0.18 was on the dark side. The roof
+emissivity drop from 0.90 to 0.85 is the metal fraction asserting
+itself, as it should.
+"""
+function default_urban_materials(::Type{T} = Float64;
+                                 μ₀::Real = 0.7,
+                                 mixtures = URBAN_CLASS_MIXTURES,
+                                 spec::SpectralGrid = shortwave_bands(T),
+                                 lw_spec::SpectralGrid = longwave_bands(T)
+                                 ) where {T<:AbstractFloat}
+    classes = keys(mixtures)
+    α = Vector{T}(undef, length(classes))
+    ε = Vector{T}(undef, length(classes))
+    for (i, c) in enumerate(classes)
+        surf = _class_surface(spec, lw_spec, mixtures[c])
+        α[i] = T(broadband_albedo(surf, float(μ₀)))
+        ε[i] = T(broadband_emissivity(surf, lw_spec))
+    end
+    return UrbanMaterials(α, ε; name = [String(c) for c in classes])
+end
+
+# Build the `AbstractSurfaceOptics` for one class. `:water` is special:
+# it is not a Lambertian reflectance curve but a Fresnel interface, so it
+# uses `FresnelWater` to get the zenith dependence right.
+function _class_surface(spec::SpectralGrid, lw_spec::SpectralGrid, mix)
+    pairs = Pair[]
+    for (m, f) in mix
+        comp = m === :water ? FresnelWater() : m
+        push!(pairs, comp => f)
+    end
+    return tiled_surface(spec, pairs...; lw_spec = lw_spec)
 end
 
 """

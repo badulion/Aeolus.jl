@@ -808,14 +808,93 @@ end
     @testset "API guards and materials" begin
         m = default_urban_materials()
         @test length(m) == 5
-        @test material_albedo(m, URBAN_STREET) ≈ 0.10
-        @test material_albedo(m, URBAN_ROOF) ≈ 0.20
-        @test material_emissivity(m, URBAN_WATER) ≈ 0.98
-        @test material_albedo(m, URBAN_WALL) ≈ 0.18
+
+        # --- single source of truth --------------------------------------
+        # The class greys are DERIVED from the Phase 36 spectral library,
+        # not tabulated here. Asserting the derivation is a far stronger
+        # property than asserting the five numbers it happens to produce:
+        # it cannot silently drift, and it fails loudly if either module's
+        # material data changes underneath the other.
+        sw, lw = shortwave_bands(), longwave_bands()
+        for (idx, cls) in enumerate((:street, :roof, :park, :water, :wall))
+            mix = Aeolus.Radiosity.URBAN_CLASS_MIXTURES[cls]
+            # rebuild the mosaic independently from the exported API
+            comps = Pair[]
+            for (name, f) in mix
+                push!(comps, (name === :water ? FresnelWater() : name) => f)
+            end
+            surf = tiled_surface(sw, comps...; lw_spec = lw)
+            @test material_albedo(m, idx) ≈ broadband_albedo(surf, 0.7) rtol=1e-12
+            @test material_emissivity(m, idx) ≈ broadband_emissivity(surf, lw) rtol=1e-12
+            # and the mixture is a genuine partition
+            @test sum(f for (_, f) in mix) ≈ 1.0
+        end
+
+        # --- physically sensible ranges ----------------------------------
+        @test 0.05 < material_albedo(m, URBAN_STREET) < 0.20   # asphalt-dominated
+        @test 0.10 < material_albedo(m, URBAN_ROOF)   < 0.35
+        @test 0.10 < material_albedo(m, URBAN_PARK)   < 0.30   # vegetation
+        @test 0.15 < material_albedo(m, URBAN_WALL)   < 0.40   # render + brick
+        @test material_albedo(m, URBAN_WATER) < material_albedo(m, URBAN_STREET)
+
+        # --- capability the old grey table could not express -------------
+        # Water is a Fresnel interface, so its albedo climbs steeply toward
+        # grazing incidence. A single grey number cannot represent a
+        # tenfold swing, and that swing dominates the energy balance of an
+        # urban river at either end of the day.
+        w_high = default_urban_materials(; μ₀ = 1.0).albedo[Int(URBAN_WATER)]
+        w_mid  = default_urban_materials(; μ₀ = 0.5).albedo[Int(URBAN_WATER)]
+        w_low  = default_urban_materials(; μ₀ = 0.17).albedo[Int(URBAN_WATER)]
+        @test w_high < w_mid < w_low
+        @test w_low > 8 * w_high
+        @info "water albedo vs solar zenith" overhead=w_high mid=w_mid grazing=w_low
+
+        # Every class brightens somewhat toward grazing incidence — that is
+        # the Briegleb direct-beam shape function in the Phase 36 library,
+        # and it is real: rough surfaces do get brighter at low sun. But
+        # water brightens by a completely different MECHANISM (Fresnel
+        # reflection at a smooth interface) and by a completely different
+        # AMOUNT. The test is that separation of scale, not independence:
+        #   street x1.15, wall x1.24, roof x1.30, park x1.53, water x8.60
+        # Vegetation is the strongest of the Lambertian-ish set, as canopies
+        # genuinely are.
+        ratio(idx) = default_urban_materials(; μ₀ = 0.2).albedo[Int(idx)] /
+                     default_urban_materials(; μ₀ = 1.0).albedo[Int(idx)]
+        for idx in (URBAN_STREET, URBAN_ROOF, URBAN_PARK, URBAN_WALL)
+            @test 1.0 < ratio(idx) < 2.0
+        end
+        @test ratio(URBAN_WATER) > 5.0
+        @test ratio(URBAN_WATER) > 3 * maximum(ratio(i) for i in
+                 (URBAN_STREET, URBAN_ROOF, URBAN_PARK, URBAN_WALL))
+        @info "albedo sensitivity to solar zenith (mu0 0.2 / 1.0)" street=ratio(URBAN_STREET) roof=ratio(URBAN_ROOF) park=ratio(URBAN_PARK) wall=ratio(URBAN_WALL) water=ratio(URBAN_WATER)
+
+        # --- the metal fraction must depress roof emissivity -------------
+        # Metal roofs have eps ~ 0.25 against >= 0.90 for everything else.
+        # This is why they reach extreme daytime temperatures: they absorb
+        # shortwave like any other roof but cannot radiate it away.
+        @test material_emissivity(m, URBAN_ROOF) <
+              material_emissivity(m, URBAN_STREET)
+        no_metal = merge(Aeolus.Radiosity.URBAN_CLASS_MIXTURES,
+                         (roof = (:roof_tile_red => 0.50,
+                                  :roof_tile_grey => 0.30,
+                                  :asphalt => 0.20),))
+        m_nm = default_urban_materials(; mixtures = no_metal)
+        @test material_emissivity(m_nm, URBAN_ROOF) >
+              material_emissivity(m, URBAN_ROOF) + 0.05
+        @info "roof emissivity" with_metal=material_emissivity(m, URBAN_ROOF) without=material_emissivity(m_nm, URBAN_ROOF)
+
+        # --- the table really is derived, not cached ---------------------
+        bright = merge(Aeolus.Radiosity.URBAN_CLASS_MIXTURES,
+                       (street = (:concrete => 1.0,),))
+        @test material_albedo(default_urban_materials(; mixtures = bright),
+                              URBAN_STREET) > 0.25
+
         # Plugs into the shared Era-III surface-optics contract.
         @test m isa Aeolus.RadiationCore.AbstractSurfaceOptics
-        @test Aeolus.RadiationCore.surface_albedo(m, URBAN_PARK) ≈ 0.22
-        @test Aeolus.RadiationCore.surface_emissivity(m, URBAN_PARK) ≈ 0.98
+        @test Aeolus.RadiationCore.surface_albedo(m, URBAN_PARK) ≈
+              material_albedo(m, URBAN_PARK)
+        @test Aeolus.RadiationCore.surface_emissivity(m, URBAN_PARK) ≈
+              material_emissivity(m, URBAN_PARK)
 
         @test_throws ErrorException UrbanMaterials([1.0], [0.9])
         @test_throws ErrorException UrbanMaterials([0.1], [1.5])

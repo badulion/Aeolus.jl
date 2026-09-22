@@ -488,8 +488,9 @@ end
 
 mie_cloud_optics(spec::SpectralGrid{T}) where {T} = MieCloudOptics{T}(spec)
 
-# Band-centre wavelength in μm
-_band_λ(spec, b) = (lo = band_limits(spec, b); 1e4 / ((lo[1] + lo[2]) / 2))
+# Band-centre wavelength in μm — shared with the other optics modules,
+# see RadiationCore.band_wavelength.
+_band_λ(spec, b) = band_wavelength(spec, b)
 
 """
     liquid_water_path(col) -> g m⁻²

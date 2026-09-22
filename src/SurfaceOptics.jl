@@ -90,13 +90,14 @@ using ..RadiationCore: SpectralGrid, AbstractSurfaceOptics,
                        nbands, ngpoints, band_limits, gpoint_range,
                        shortwave_bands, longwave_bands,
                        PLANCK_H, LIGHT_C, BOLTZMANN_K
-import ..RadiationCore: surface_albedo, surface_emissivity
+import ..RadiationCore: surface_albedo, surface_emissivity,
+                        material_albedo, material_emissivity
 
 export # spectral library
        material_names, spectral_reflectance, band_average_reflectance,
        material_emissivity, spectral_emissivity,
        SpectralAlbedo, material_albedo,
-       band_center_wavelength, band_wavelength_limits,
+       band_center_wavelength,
        # BRDF models
        AbstractBRDF, LambertianBRDF, RPVBRDF, RossLiBRDF, CookTorranceBRDF,
        brdf, rpv_preset, rossli_preset, cook_torrance_preset,
@@ -110,10 +111,11 @@ export # spectral library
        whitecap_fraction, water_albedo_direct, water_albedo_diffuse,
        # snow
        SnowSurface, snow_grain_radius, snow_albedo, snow_albedo_spectrum,
+       SNOW_REFERENCE_RADIUS, SNOW_GROWTH_RATE, SNOW_SOOT_CONSTANT,
        # tiles and integration helpers
        TiledSurface, tiled_surface, tile_fractions, tile_components,
        direct_albedo_vector, diffuse_albedo_vector, emissivity_vector,
-       broadband_albedo
+       broadband_albedo, broadband_emissivity
 
 # =========================================================================
 # Quadrature
@@ -245,18 +247,6 @@ function _band_mean(anchors::Vector{NTuple{2,Float64}},
     end
     den <= 0 && return _interp_anchors(anchors, 2e4 / (ν_lo + ν_hi))
     return num / den
-end
-
-"""
-    band_wavelength_limits(spec, b) -> (λ_lo, λ_hi)
-
-Wavelength limits of band `b` in μm, `λ = 10⁴/ν` with `ν` in cm⁻¹.
-Returned low-to-high, so the order is reversed relative to the wavenumber
-limits stored in the `SpectralGrid`.
-"""
-function band_wavelength_limits(spec::SpectralGrid, b::Integer)
-    lo, hi = band_limits(spec, Int(b))
-    return (1e4 / hi, 1e4 / lo)
 end
 
 """
@@ -393,15 +383,24 @@ const _REFLECTANCE_CURVES = Dict{Symbol, Vector{NTuple{2,Float64}}}(
                (4.00, 0.021), (12.0, 0.021)],
 
     # --- snow -----------------------------------------------------------
-    # Fine-grained fresh snow (effective grain radius ≈ 50 μm). Nearly
-    # perfectly white through the visible, falling through the NIR as ice
-    # absorption switches on: ~0.60 at 1.5 μm, ~0.20 at 2.0 μm and
-    # essentially black beyond 2.5 μm.
-    :snow_fresh => [(0.30, 0.970), (0.40, 0.980), (0.50, 0.980),
-                    (0.60, 0.970), (0.70, 0.960), (0.80, 0.950),
-                    (0.90, 0.920), (1.00, 0.890), (1.10, 0.850),
-                    (1.20, 0.800), (1.30, 0.700), (1.40, 0.550),
-                    (1.50, 0.600), (1.60, 0.550), (1.80, 0.300),
+    # Fine-grained *pure* fresh snow, effective grain radius 50 μm, the
+    # reference spectrum for `SnowSurface`. Nearly perfectly white through
+    # the visible, falling through the NIR as ice absorption switches on:
+    # ~0.60 at 1.5 μm, ~0.20 at 2.0 μm and essentially black beyond
+    # 2.5 μm (Wiscombe & Warren 1980, Fig. 2).
+    #
+    # The visible values are those of snow with *no* impurities, ~0.99
+    # rather than the 0.97 typically measured in the field, because the
+    # soot loading is an explicit parameter of `SnowSurface` rather than
+    # something baked into the reference curve. Folding a trace impurity
+    # into the reference would double-count it and would also compress the
+    # visible co-albedo, which is precisely the quantity that sets how
+    # much a given soot loading darkens the snow.
+    :snow_fresh => [(0.30, 0.980), (0.40, 0.990), (0.50, 0.992),
+                    (0.60, 0.990), (0.70, 0.982), (0.80, 0.968),
+                    (0.90, 0.945), (1.00, 0.915), (1.10, 0.875),
+                    (1.20, 0.825), (1.30, 0.720), (1.40, 0.560),
+                    (1.50, 0.610), (1.60, 0.555), (1.80, 0.300),
                     (2.00, 0.200), (2.20, 0.150), (2.50, 0.050),
                     (4.00, 0.020), (12.0, 0.010)],
 
@@ -658,6 +657,15 @@ reflectance curve over the band, and `direct` is that value evaluated at
 overhead sun through the normalised Briegleb shape, where it is typically
 15-20% lower for a vegetated surface. Query the albedo at an arbitrary
 sun angle with `surface_albedo(s, band, μ₀)`.
+
+One caveat for very bright bands. The Briegleb shape multiplies the
+diffuse albedo by up to `(1+d)/N(d)` at grazing incidence, which for a
+band albedo already near unity — pure snow in the visible is 0.99 — would
+push the result above 1. `surface_albedo` clamps, and the clamp costs a
+few parts per thousand of the exact hemispheric consistency between the
+direct and diffuse albedos. For snow use [`SnowSurface`](@ref) instead:
+its escape-function form `α_dir = α_dif^u(μ₀)` is bounded in `[0,1]` by
+construction and needs no clamp.
 """
 struct SpectralAlbedo{T<:AbstractFloat} <: AbstractSurfaceOptics
     name::Symbol
@@ -806,9 +814,19 @@ approximation, shows a 10-20% forward-scattering enhancement at low sun.
 """
 struct LambertianBRDF{T<:AbstractFloat} <: AbstractBRDF
     ρ::T
+    # Inner constructors, here and in the other models, are not stylistic:
+    # a parametric struct with no inner constructor gets a default
+    # `Model(a::T, b::T, ...)` outer constructor which is *more specific*
+    # than a validating `Model(a::Real, b::Real, ...)` method and silently
+    # takes precedence for the common all-Float64 call. Validation has to
+    # live in the inner constructor or it does not run at all.
+    function LambertianBRDF{T}(ρ::Real) where {T<:AbstractFloat}
+        0 <= ρ <= 1 || error("LambertianBRDF: ρ must lie in [0,1], got $ρ")
+        return new{T}(T(ρ))
+    end
 end
 
-LambertianBRDF(ρ::Real) = LambertianBRDF{typeof(float(ρ))}(float(ρ))
+LambertianBRDF(ρ::Real) = LambertianBRDF{typeof(float(ρ))}(ρ)
 
 brdf(m::LambertianBRDF, θ_i::Real, φ_i::Real, θ_v::Real, φ_v::Real) = m.ρ
 
@@ -897,14 +915,17 @@ struct RPVBRDF{T<:AbstractFloat} <: AbstractBRDF
     ρ0::T
     k::T
     Θ::T
+    function RPVBRDF{T}(ρ0::Real, k::Real, Θ::Real) where {T<:AbstractFloat}
+        0 <= ρ0 <= 1 || error("RPVBRDF: ρ0 must lie in [0,1], got $ρ0")
+        k > 0        || error("RPVBRDF: k must be positive, got $k")
+        -1 < Θ < 1   || error("RPVBRDF: Θ must lie in (-1,1), got $Θ")
+        return new{T}(T(ρ0), T(k), T(Θ))
+    end
 end
 
 function RPVBRDF(ρ0::Real, k::Real, Θ::Real)
     T = promote_type(typeof(float(ρ0)), typeof(float(k)), typeof(float(Θ)))
-    0 <= ρ0 <= 1 || error("RPVBRDF: ρ0 must lie in [0,1], got $ρ0")
-    k > 0        || error("RPVBRDF: k must be positive, got $k")
-    -1 < Θ < 1   || error("RPVBRDF: Θ must lie in (-1,1), got $Θ")
-    return RPVBRDF{T}(T(ρ0), T(k), T(Θ))
+    return RPVBRDF{T}(ρ0, k, Θ)
 end
 
 function brdf(m::RPVBRDF, θ_i::Real, φ_i::Real, θ_v::Real, φ_v::Real)
@@ -1097,6 +1118,16 @@ struct RossLiBRDF{T<:AbstractFloat} <: AbstractBRDF
     br::T
     hb::T
     clamp_negative::Bool
+    function RossLiBRDF{T}(f_iso::Real, f_vol::Real, f_geo::Real,
+                           br::Real, hb::Real,
+                           clamp_negative::Bool) where {T<:AbstractFloat}
+        br > 0 || error("RossLiBRDF: b/r must be positive, got $br")
+        hb > 0 || error("RossLiBRDF: h/b must be positive, got $hb")
+        f_iso >= 0 ||
+            error("RossLiBRDF: f_iso must be non-negative, got $f_iso")
+        return new{T}(T(f_iso), T(f_vol), T(f_geo), T(br), T(hb),
+                      clamp_negative)
+    end
 end
 
 function RossLiBRDF(f_iso::Real, f_vol::Real, f_geo::Real;
@@ -1105,10 +1136,7 @@ function RossLiBRDF(f_iso::Real, f_vol::Real, f_geo::Real;
     T = promote_type(typeof(float(f_iso)), typeof(float(f_vol)),
                      typeof(float(f_geo)), typeof(float(br)),
                      typeof(float(hb)))
-    br > 0 || error("RossLiBRDF: b/r must be positive, got $br")
-    hb > 0 || error("RossLiBRDF: h/b must be positive, got $hb")
-    return RossLiBRDF{T}(T(f_iso), T(f_vol), T(f_geo), T(br), T(hb),
-                         clamp_negative)
+    return RossLiBRDF{T}(f_iso, f_vol, f_geo, br, hb, clamp_negative)
 end
 
 function brdf(m::RossLiBRDF{T}, θ_i::Real, φ_i::Real,
@@ -1214,14 +1242,18 @@ struct CookTorranceBRDF{T<:AbstractFloat} <: AbstractBRDF
     ρd::T
     F0::T
     α::T
+    function CookTorranceBRDF{T}(ρd::Real, F0::Real,
+                                 α::Real) where {T<:AbstractFloat}
+        0 <= ρd <= 1 || error("CookTorranceBRDF: ρd must lie in [0,1], got $ρd")
+        0 <= F0 <= 1 || error("CookTorranceBRDF: F0 must lie in [0,1], got $F0")
+        α > 0        || error("CookTorranceBRDF: α must be positive, got $α")
+        return new{T}(T(ρd), T(F0), T(α))
+    end
 end
 
 function CookTorranceBRDF(ρd::Real, F0::Real, α::Real)
     T = promote_type(typeof(float(ρd)), typeof(float(F0)), typeof(float(α)))
-    0 <= ρd <= 1 || error("CookTorranceBRDF: ρd must lie in [0,1], got $ρd")
-    0 <= F0 <= 1 || error("CookTorranceBRDF: F0 must lie in [0,1], got $F0")
-    α > 0        || error("CookTorranceBRDF: α must be positive, got $α")
-    return CookTorranceBRDF{T}(T(ρd), T(F0), T(α))
+    return CookTorranceBRDF{T}(ρd, F0, α)
 end
 
 "Smith GGX masking-shadowing function for one direction."
@@ -2090,6 +2122,21 @@ Components may be any `AbstractSurfaceOptics`, including another
 struct TiledSurface{T<:AbstractFloat} <: AbstractSurfaceOptics
     components::Vector{AbstractSurfaceOptics}
     fractions::Vector{T}
+    function TiledSurface{T}(components::AbstractVector,
+                             fractions::AbstractVector) where {T<:AbstractFloat}
+        length(components) == length(fractions) ||
+            error("TiledSurface: $(length(components)) components but " *
+                  "$(length(fractions)) fractions")
+        isempty(components) &&
+            error("TiledSurface: needs at least one component")
+        all(f -> f >= 0, fractions) ||
+            error("TiledSurface: fractions must be non-negative")
+        s = sum(fractions)
+        isapprox(s, 1.0; atol = 1e-8) ||
+            error("TiledSurface: fractions sum to $s, expected 1")
+        return new{T}(AbstractSurfaceOptics[c for c in components],
+                      collect(T, fractions))
+    end
 end
 
 """
@@ -2103,18 +2150,8 @@ does not close.
 """
 function TiledSurface(components::AbstractVector,
                       fractions::AbstractVector{<:Real})
-    length(components) == length(fractions) ||
-        error("TiledSurface: $(length(components)) components but " *
-              "$(length(fractions)) fractions")
-    isempty(components) && error("TiledSurface: needs at least one component")
-    all(f -> f >= 0, fractions) ||
-        error("TiledSurface: fractions must be non-negative")
-    s = sum(fractions)
-    isapprox(s, 1.0; atol = 1e-8) ||
-        error("TiledSurface: fractions sum to $s, expected 1")
-    T = typeof(float(first(fractions)))
-    comps = AbstractSurfaceOptics[c for c in components]
-    return TiledSurface{T}(comps, collect(T, fractions))
+    isempty(fractions) && error("TiledSurface: needs at least one component")
+    return TiledSurface{typeof(float(first(fractions)))}(components, fractions)
 end
 
 """
@@ -2269,6 +2306,39 @@ function broadband_albedo(s::AbstractSurfaceOptics, μ₀ = nothing)
         acc += w[b] * T(α)
     end
     return acc
+end
+
+"""
+    broadband_emissivity(s, lw_spec = longwave_bands(); T_ref = 288) -> ε
+
+Planck-weighted broadband longwave emissivity of a surface — the
+counterpart of [`broadband_albedo`](@ref), and derived the same way
+rather than tabulated, so the scalar and the per-band values cannot
+disagree.
+
+Weighted by the Planck function at `T_ref`, because emissivity is a
+property of the surface but the *broadband* number depends on which
+part of the spectrum the surface is actually radiating into. 288 K is
+the usual terrestrial reference.
+
+This matters most for metal roofs. Their emissivity is ~0.25 against
+≥0.90 for every other urban material, and a grey treatment that
+averages it away loses the reason metal roofs reach extreme daytime
+temperatures: they absorb like everything else but cannot radiate.
+"""
+function broadband_emissivity(s::AbstractSurfaceOptics,
+                              lw_spec::SpectralGrid = longwave_bands();
+                              T_ref::Real = TERRESTRIAL_TEMPERATURE)
+    lw_spec.kind === :longwave ||
+        error("broadband_emissivity: `lw_spec` must be a longwave grid")
+    num = 0.0; den = 0.0
+    for b in 1:nbands(lw_spec)
+        lo, hi = band_limits(lw_spec, b)
+        w = planck_band(T_ref, lo, hi)
+        num += w * Float64(surface_emissivity(s, b))
+        den += w
+    end
+    return den > 0 ? num / den : 1.0
 end
 
 end # module

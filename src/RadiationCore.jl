@@ -48,6 +48,8 @@ export SpectralGrid, shortwave_bands, longwave_bands,
        AbstractGasOptics, AbstractCloudOptics, AbstractAerosolOptics,
        AbstractRTSolver, AbstractSurfaceOptics,
        compute_optics!, solve_rt!, surface_albedo, surface_emissivity,
+       material_albedo, material_emissivity,
+       band_wavelength, band_wavelength_limits,
        AtmosphericColumn, column_from_simulation,
        STEFAN_BOLTZMANN, SOLAR_CONSTANT, PLANCK_H, LIGHT_C, BOLTZMANN_K,
        planck_band, planck_integrated
@@ -134,6 +136,49 @@ function SpectralGrid(kind::Symbol, band_lo::AbstractVector{T},
     return SpectralGrid{T}(kind, collect(band_lo), collect(band_hi),
                            collect(Int, gpt_per_band), gpt_band,
                            collect(gpt_weight), collect(solar_src))
+end
+
+"""
+    band_wavelength_limits(spec, b) -> (λ_lo, λ_hi)
+
+Wavelength limits of band `b` in μm. Bands are stored in wavenumber
+(cm⁻¹), which is the natural coordinate for the transfer equation
+because it is linear in energy; wavelength is what optical-property
+tables are almost always keyed on. Note the order reverses — the
+*high*-wavenumber edge is the *short*-wavelength one.
+"""
+function band_wavelength_limits(spec::SpectralGrid, b::Integer)
+    lo, hi = band_limits(spec, Int(b))
+    return (1e4 / hi, 1e4 / lo)
+end
+
+"""
+    band_wavelength(spec, b; sub = 1, nsub = 1) -> λ in μm
+
+Wavelength of a band, or of one of `nsub` equal-wavenumber sub-intervals
+within it. With the defaults this is the wavelength of the band's
+wavenumber midpoint.
+
+The sub-interval form exists for optical-property models that need to
+integrate a strongly wavelength-dependent quantity across a band — Mie
+efficiencies ripple on a scale far finer than an RRTMG band, so
+evaluating them once at the band centre is not good enough.
+
+This lives in `RadiationCore` rather than in any one optics module
+because four separate copies of it had appeared by the end of Era III
+(in `SurfaceOptics`, `AerosolOptics`, `TwoStream` and, in spirit,
+`SolarGeometry`). It is a property of the spectral grid, so it belongs
+with the spectral grid.
+
+See also `SurfaceOptics.band_center_wavelength`, which is a *different*
+quantity: the Planck-weighted mean wavelength over the band. That one
+needs a source temperature and stays where the weighting machinery is.
+"""
+function band_wavelength(spec::SpectralGrid, b::Integer;
+                         sub::Integer = 1, nsub::Integer = 1)
+    lo, hi = band_limits(spec, Int(b))
+    ν = lo + (sub - 0.5) * (hi - lo) / nsub
+    return 1e4 / ν
 end
 
 function gpoint_range_impl(gpt_per_band, b::Int)
@@ -611,6 +656,36 @@ abstract type AbstractSurfaceOptics end
 # Interface stubs: these exist so the generic functions are defined and
 # concrete implementations in later phases add methods rather than
 # accidentally shadowing.
+"""
+    material_albedo(material, args...)
+
+Shortwave reflectance of a named surface material.
+
+Declared here, with no method, so that the modules which know about
+materials can each add their own without importing one another —
+the same pattern used for `surface_albedo`, `surface_emissivity`,
+`compute_optics!` and `solve_rt!` below.
+
+Implemented by:
+
+  * `SurfaceOptics.material_albedo(name::Symbol, spec)` → `SpectralAlbedo`,
+    the spectral authority: per-band direct and diffuse reflectance
+    derived from a reflectance curve.
+  * `Radiosity.material_albedo(m::UrbanMaterials, class)` → scalar, the
+    grey per-facet-class value the radiosity solve needs. Those greys
+    are themselves *derived* from the spectral curves above, so the two
+    cannot drift apart.
+"""
+function material_albedo end
+
+"""
+    material_emissivity(material, args...)
+
+Longwave emissivity of a named surface material. See
+`material_albedo` for why this generic is declared here.
+"""
+function material_emissivity end
+
 function compute_optics! end
 function solve_rt! end
 function surface_albedo end

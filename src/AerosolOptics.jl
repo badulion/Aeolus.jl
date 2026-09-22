@@ -97,7 +97,7 @@ export # --- Mie core -------------------------------------------------------
        kohler_saturation, wet_radius, growth_factor, wet_refractive_index,
        KELVIN_A_298,
        # --- band optics -------------------------------------------------------
-       AerosolBandOptics, aerosol_band_optics, band_wavelength,
+       AerosolBandOptics, aerosol_band_optics,
        HygroscopicTable, hygroscopic_table, interpolate_rh,
        angstrom_exponent,
        # --- standard mixtures --------------------------------------------------
@@ -1037,26 +1037,6 @@ end
 # 5. Band-mean optics and the Ångström exponent
 # =========================================================================
 
-"""
-    band_wavelength(spec, b; sub = 1, nsub = 1) -> μm
-
-Representative wavelength of sub-interval `sub` of `nsub` within band
-`b`. The band limits are in wavenumber, and the sub-intervals are equal
-in wavenumber (the natural measure for a band-integrated flux), so
-
-```math
-λ_{sub} = 10^4 / \\left[ν_{lo} + (sub - ½)\\,(ν_{hi}-ν_{lo})/n_{sub}\\right]
-```
-
-With `nsub = 1` this is the band-centre wavelength, which is what the
-rest of the Era III stack uses.
-"""
-function band_wavelength(spec::SpectralGrid, b::Int; sub::Int = 1,
-                         nsub::Int = 1)
-    lo, hi = band_limits(spec, b)
-    ν = lo + (sub - 0.5) * (hi - lo) / nsub
-    return 1e4 / ν
-end
 
 """
     AerosolBandOptics{T}

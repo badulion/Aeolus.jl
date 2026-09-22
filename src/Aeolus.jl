@@ -255,4 +255,82 @@ export TwoStreamSolver, two_stream_solver,
        liquid_water_path, ice_water_path, cloud_optical_depth,
        maximum_random_overlap, radiative_heating!
 
+# Phase 36 — spectral albedo and BRDF
+# `material_albedo` / `material_emissivity` are methods of the
+# RadiationCore generics, exported there, not here.
+export AbstractBRDF, BRDFSurface, CookTorranceBRDF, FresnelWater,
+       LambertianBRDF, RPVBRDF, RossLiBRDF, SNOW_GROWTH_RATE,
+       SNOW_REFERENCE_RADIUS, SNOW_SOOT_CONSTANT, SnowSurface,
+       SpectralAlbedo, TiledSurface, band_average_reflectance,
+       band_center_wavelength, black_sky_albedo, blue_sky_albedo,
+       brdf, broadband_albedo, broadband_emissivity,
+       cook_torrance_preset, cox_munk_slope_variance,
+       diffuse_albedo_vector, direct_albedo_vector, emissivity_vector,
+       fresnel_reflectance, hemisphere_quadrature_albedo,
+       li_sparse_kernel, material_names, ross_thick_kernel,
+       rossli_preset, rpv_preset, snow_albedo, snow_albedo_spectrum,
+       snow_grain_radius, spectral_emissivity, spectral_reflectance,
+       tile_components, tile_fractions, tiled_surface,
+       water_albedo_diffuse, water_albedo_direct, white_sky_albedo,
+       whitecap_fraction
+
+# Phase 37 — Mie aerosol optics and radiative feedback
+# The named mixture constructors (urban, desert, maritime_clean, ...)
+# are deliberately NOT re-exported: bare names like `urban` and
+# `desert` in every user's namespace are a collision waiting to
+# happen. Use `aerosol_mixture(:urban)`, or the qualified form
+# `Aeolus.AerosolOptics.urban()`.
+export AEROSOL_MIXTURE_NAMES, AerosolBandOptics, AerosolMode,
+       AerosolProfile, AerosolSpecies, HygroscopicTable, KELVIN_A_298,
+       LogNormalMode, MieResult, aerosol_band_optics,
+       aerosol_extinction_profile, aerosol_heating_rate,
+       aerosol_mixture, aerosol_optical_depth,
+       aerosol_optical_depth_550, aerosol_profile,
+       aerosol_radiative_forcing, aerosol_species,
+       aerosol_species_names, angstrom_exponent, bulk_optics,
+       clear_optics_cache!, critical_surface_albedo, effective_radius,
+       growth_factor, hygroscopic_table, interpolate_rh,
+       kohler_saturation, lognormal_mode, mass_absorption_coefficient,
+       mass_extinction_coefficient, mie_efficiencies, mie_sphere,
+       mode_mass, mode_number, mode_optics, number_pdf,
+       rayleigh_efficiencies, rebuild_bands, refractive_index,
+       relative_humidity_profile, size_parameter,
+       water_refractive_index, wet_radius, wet_refractive_index
+
+# Phase 34 — 3-D Monte-Carlo radiative transfer
+export MCDomain, MCMedium, MCResult, MonteCarloSolver,
+       add_box_building!, domain_extent, domain_top,
+       henyey_greenstein_phase, homogeneous_medium,
+       mc_closure_residual, mc_domain, mc_energy_budget,
+       mc_heating_rate, mc_medium, mc_solve, mc_sun_direction,
+       mc_surface_irradiance, medium_from_optics, monte_carlo_solver,
+       optical_depth_column, rayleigh_phase, rotate_scatter,
+       sample_free_path, sample_henyey_greenstein, sample_lambertian,
+       sample_rayleigh, scatter_direction, set_solid!,
+       solid_from_mask!
+
+# Phase 35 — urban radiosity
+# Urban class greys are DERIVED from the Phase 36 spectral library
+# via URBAN_CLASS_MIXTURES, so the two cannot drift apart.
+export Facet, LongwaveSolution, RadiosityScene, ShortwaveSolution,
+       URBAN_CLASS_MIXTURES, URBAN_PARK, URBAN_ROOF, URBAN_STREET,
+       URBAN_WALL, URBAN_WATER, UrbanMaterials, UrbanRadiationForcing,
+       ViewFactors, aggregate_to_grid, build_facets, build_scene,
+       canyon_centreline_sky_view_factor, canyon_sky_view_factor,
+       canyon_wallside_sky_view_factor, closure_error,
+       default_urban_materials, diffuse_sky_irradiance,
+       direct_beam_irradiance, effective_albedo, exchange_area,
+       facet_albedos, facet_areas, facet_corners, facet_edges,
+       facet_emissivities, facet_sample_points, facet_sunlit_fraction,
+       facet_temperatures, heightmap_from_solid_mask,
+       longwave_trapping_factor, nfacets, ray_blocked,
+       reciprocity_error, segment_blocked, set_temperature!,
+       set_temperatures!, sky_view_factor_raycast,
+       sky_view_factors_raycast, solar_unit_vector, solve_longwave,
+       solve_radiosity_direct, solve_radiosity_iterative,
+       solve_shortwave, sunlit_fractions, total_sky_exchange_area,
+       uniform_materials, urban_class_mixtures, view_factor_contour,
+       view_factor_parallel_rectangles,
+       view_factor_perpendicular_rectangles, view_factors
+
 end # module

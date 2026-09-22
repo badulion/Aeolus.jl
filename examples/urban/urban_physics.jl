@@ -45,14 +45,29 @@ struct SurfaceParams
     emissivity::Vector{Float64}
 end
 
-function default_surface_params()
+function default_surface_params(; μ₀::Real = 0.7)
     # Class index: 1=street, 2=roof, 3=park, 4=water, 5=wall (adjacent).
-    # Walls have HIGH effective heat capacity (thick masonry / concrete);
-    # low albedo (typical façade); high emissivity.
+    #
+    # Albedo and emissivity are NOT hand-entered here. They come from
+    # `Aeolus.Radiosity.default_urban_materials`, which derives them by
+    # band-averaging the Phase 36 spectral reflectance library over a
+    # mosaic of real materials per class. Until Era III this file carried
+    # its own copy of the five numbers, `Radiosity` carried a second copy
+    # and `SurfaceOptics` carried the underlying curves — three places to
+    # change and nothing keeping them consistent.
+    #
+    # `μ₀` (cosine solar zenith) only affects the water class, whose
+    # Fresnel reflectance runs from ~0.03 overhead to ~0.29 at grazing
+    # incidence. For a diurnal run, rebuild the params as the sun moves;
+    # the default corresponds to a sun about 45° above the horizon.
+    #
+    # Heat capacity stays here: it is a bulk thermal property of the
+    # surface layer, not an optical one, so it has no home in the
+    # radiation modules. Walls have HIGH effective heat capacity (thick
+    # masonry), water effectively enormous.
+    mats = default_urban_materials(; μ₀ = μ₀)
     C_s  = [3e5, 1.8e5, 5e5, 8e6, 4e5]
-    alb  = [0.10, 0.20, 0.22, 0.06, 0.18]
-    emis = [0.95, 0.90, 0.98, 0.98, 0.94]
-    return SurfaceParams(C_s, alb, emis)
+    return SurfaceParams(C_s, copy(mats.albedo), copy(mats.emissivity))
 end
 
 # ---------------------------------------------------------------------------

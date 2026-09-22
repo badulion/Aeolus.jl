@@ -877,5 +877,9 @@ end
 @testset "Era III" begin
     include("era3_gasoptics.jl")       # Phase 32  correlated-k gas optics
     include("era3_twostream.jl")       # Phase 33  two-stream RT, cloud optics
+    include("era3_surfaceoptics.jl")   # Phase 36  spectral albedo, BRDF
+    include("era3_aerosol.jl")         # Phase 37  Mie aerosol optics
+    include("era3_montecarlo.jl")      # Phase 34  3-D Monte-Carlo RT
+    include("era3_radiosity.jl")       # Phase 35  urban radiosity
     include("era3_solargeometry.jl")   # Phase 38  solar position, shadows
 end
