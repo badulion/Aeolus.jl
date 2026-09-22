@@ -167,17 +167,34 @@ function SoilGrid(mesh; T0::Real = _SOIL_T_DEEP)
 end
 
 """
-    step_soil!(soil, Ts, sfc, dt; T_deep = 288.0)
+    step_soil!(soil, Ts, sfc, dt, C_surface; T_deep = 288.0)
 
-Advance the 3-layer soil temperature field by `dt` (s). Applied
+Advance the 3-layer soil temperature field by `dt` (s), **and apply the
+equal and opposite ground-heat flux to the surface**. Applied
 per-column:
 
+    C_s        · dTs/dt = ... - k_skin · (Ts   - T1)          ← the surface
     C1 · Δz1 · dT1/dt = k_skin · (Ts   - T1) + k_12 · (T2  - T1) / d12
     C2 · Δz2 · dT2/dt = k_12   · (T1  - T2) / d12 + k_23 · (T3  - T2) / d23
     C3 · Δz3 · dT3/dt = k_23   · (T2  - T3) / d23 + k_deep · (T_d - T3) / d3d
 
 where distances between layer centres are `d = (Δz_k + Δz_{k+1}) / 2`
 and `k_deep = k_23`, `d3d = Δz3` (a virtual layer at the same thickness).
+
+`C_surface` is the surface heat capacity per class (J m⁻² K⁻¹) — pass
+`params.C_s`, or a `SurfaceParams`.
+
+!!! warning "This used to be a one-way sink, and it was an energy bug"
+    Earlier versions took `Ts` as read-only: `F_skin` warmed soil layer 1
+    but was never subtracted from the surface, so the column created heat
+    from nothing AND the surface lost its ground-conduction sink
+    entirely. Since `k_skin` = 6.0 W m⁻² K⁻¹ is comparable to the
+    radiative `4εσT³` ≈ 6.4 and about five times the sensible coupling,
+    that omission removed roughly half of the total nocturnal cooling.
+    Surfaces in the Alexanderplatz run stayed near 315 K at 03:00 —
+    about 20 K too warm — and the deficiency was initially misattributed
+    to the single-slab surface scheme being structurally incapable of
+    nocturnal cooling. It was not; it was this line.
 
 Soil under water surfaces is intentionally skipped — water columns have
 their own effective heat capacity in `SurfaceParams`.
@@ -187,8 +204,10 @@ Returns `soil`.
 function step_soil!(soil::AbstractArray{<:Real, 3},
                     Ts::AbstractMatrix{<:Real},
                     sfc::AbstractMatrix{UInt8},
-                    dt::Real;
+                    dt::Real,
+                    C_surface;
                     T_deep::Real = _SOIL_T_DEEP)
+    Cs = C_surface isa SurfaceParams ? C_surface.C_s : C_surface
     Nx, Ny, NL = size(soil)
     @assert NL == 3 "step_soil! expects a 3-layer soil array"
     dz1, dz2, dz3 = _SOIL_DZ
@@ -225,6 +244,10 @@ function step_soil!(soil::AbstractArray{<:Real, 3},
         soil[i, j, 1] = T1 + Δt * (F_skin + F_12) / cap1
         soil[i, j, 2] = T2 + Δt * (F_21   + F_23) / cap2
         soil[i, j, 3] = T3 + Δt * (F_32   + F_deep) / cap3
+        # The surface pays for what the soil gained. Without this the
+        # column is not energy conserving and the surface has no ground
+        # sink at all — see the warning in the docstring.
+        Ts[i, j] = Tsij - Δt * F_skin / Cs[sfc[i, j]]
     end
     return soil
 end

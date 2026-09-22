@@ -1,15 +1,32 @@
-# Real-geometry urban simulation — Alexanderplatz, Berlin.
+# Alexanderplatz, Berlin — THE simulation.
 #
-# Uses `data/alexanderplatz_real.osm`, an actual Overpass-API download
-# of the 1 km × 1 km box (52.518°N–52.526°N, 13.402°E–13.418°E).
-# Contains 373 buildings (including the 368-m Fernsehturm — clipped to
-# the 200 m domain top), 132 land-use patches, real streets and blocks.
+# Real OSM geometry, full Era III radiation, and every physics add-on the
+# stack ships. This is the single run; nothing else in examples/urban
+# integrates the equations.
 #
-# Re-fetch with `julia --project=examples data/fetch_alexanderplatz.jl`.
+# It writes a small frame file every `frame_every` steps into
+# `output/frames/`. `alexanderplatz_animation.jl` is a pure renderer over
+# those files — it does no physics at all.
 #
-# All the physics we have runs simultaneously — see `urban_diurnal.jl`
-# for the full list.  Nothing in this file is hand-tuned for the
-# geometry; the same script drops in on any Overpass download.
+# WHY THIS IS ONE SCRIPT AND NOT TWO
+#
+# There used to be two: this one and an "animation" script that ran its
+# own independent copy of the simulation in order to capture frames from
+# live state. That was never a design decision, just the path of least
+# resistance, and it cost real money:
+#
+#   * The physics had to be maintained twice. When the Era III radiation
+#     landed it had to be wired into both, separately.
+#   * The two copies DRIFTED. This one had soil conduction, latent heat,
+#     chemistry and aerosol; the other had none of them, while the docs
+#     claimed both ran "the same physics".
+#   * That drift is what hid an energy-conservation bug in `step_soil!`
+#     for as long as it survived: the script that exercised it was not
+#     the script whose diagnostics were being read.
+#   * Every animation cost a second full 24 h integration (~50 min), and
+#     re-rendering a panel meant re-running the physics.
+#
+# One run, saved state, separate rendering.
 
 using Aeolus
 using Aeolus.Fields: set!, interior_view
@@ -20,12 +37,17 @@ using Statistics: mean
 
 include(joinpath(@__DIR__, "osm_ingest.jl"))
 include(joinpath(@__DIR__, "urban_physics.jl"))
+include(joinpath(@__DIR__, "land_surface_addons.jl"))       # L2/L3/L5
+include(joinpath(@__DIR__, "turbulence_addons.jl"))          # F1/F2/F3
+include(joinpath(@__DIR__, "moisture_addons.jl"))            # M1/M2/M3/M4
+include(joinpath(@__DIR__, "aq_addons.jl"))                  # A1..A4
+include(joinpath(@__DIR__, "glass_material.jl"))             # R6
 include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 
 const OUT = joinpath(@__DIR__, "output"); mkpath(OUT)
 
 # ---------------------------------------------------------------------------
-# 1. Mesh + real OSM city
+# 1. Geometry — real Alexanderplatz OSM data
 # ---------------------------------------------------------------------------
 
 Lx = Ly = 1000.0; Lz = 200.0
@@ -38,71 +60,50 @@ isfile(OSM_PATH) || error("Missing $(OSM_PATH). Run data/fetch_alexanderplatz.jl
 city = load_city_osm(OSM_PATH;
                      lat0 = 52.5220, lon0 = 13.4100,
                      x_shift = Lx/2, y_shift = Ly/2,
-                     min_height = 8.0)     # skip 0-m artefacts
-@printf("Alexanderplatz OSM: %d buildings, %d patches loaded\n",
-        length(city.buildings), length(city.patches))
-
+                     min_height = 8.0)
 sm, sfc = surface_class_map(city, mesh; tag_walls = true)
-params  = default_surface_params()
-@printf("Solid cells: %d,  wall-tagged: %d,  park: %d,  water: %d\n",
-        count(sm.mask),
+# R6: promote a few south-facing roof cells to glass to demo the material
+# (real OSM has no glass tag; we synthesize a mask here for illustration)
+glass_mask = falses(Nx, Ny)
+for j in 1:Ny, i in 1:Nx
+    # Glass on the sunny (south) face of tall roofs
+    if sfc[i, j] == SURFACE_ROOF && (i % 5 == 0) && (j % 4 == 0)
+        glass_mask[i, j] = true
+    end
+end
+promote_to_glass!(sfc, glass_mask)
+params = glass_surface_params()
+@printf("Alexanderplatz OSM: %d buildings; solid=%d wall=%d glass=%d\n",
+        length(city.buildings), count(sm.mask),
         count(==(SURFACE_WALL), sfc),
-        count(==(SURFACE_PARK), sfc),
-        count(==(SURFACE_WATER), sfc))
+        count(==(SURFACE_GLASS), sfc))
 
-# ---------------------------------------------------------------------------
-# 1b. Era III radiation: full urban radiosity scene
-# ---------------------------------------------------------------------------
-# The geometry is static, so the facet decomposition and the view-factor
-# matrix are built ONCE. Only the radiosity solve runs inside the time
-# loop, and only every `rad_every` steps.
-#
-# This replaces four separate approximations the earlier version used:
-#   * diffuse sky light scaled by a ray-cast sky-view factor, with no
-#     inter-reflection between surfaces at all;
-#   * a hand-tuned `boost = 0.5(1-μ)` fudge to get some light onto walls;
-#   * longwave down as `320·SVF + 380·(1-SVF)`, two magic numbers;
-#   * a binary shadow mask.
-# All four are now consequences of the view-factor matrix rather than
-# parameters.
-@printf("Building radiosity scene... ")
-t_rad = time()
+# L2/L3/L5 state
+veg_mask   = (sfc .== SURFACE_PARK)
+LAI_map    = fill(2.5, Nx, Ny)   # dense grassy park; open water/streets → 0
+LAI_map .*= veg_mask
+soil       = SoilGrid(mesh; T0 = 288.0)
+snow       = SnowState(mesh)
+q_dew      = zeros(Float64, Nx, Ny)
+
+# Precompute the sky-view factor once (geometry doesn't change).
+@printf("Computing sky-view factor... ")
+t_svf = time()
+# Era III: a real radiosity scene replaces the ray-cast sky-view factor.
+# Geometry is static, so facets and view factors are built once.
 heightmap = heightmap_from_solid_mask(sm)
 scene = build_scene(mesh, heightmap; wall_subdivisions = 1)
 vfac  = view_factors(scene)
-svf   = vfac.F_sky                       # per-FACET sky-view factor
-@printf("%d facets, %.1fs\n", nfacets(scene), time() - t_rad)
-@printf("  reciprocity error %.2e, closure error %.2e\n",
-        reciprocity_error(vfac), closure_error(vfac))
-@printf("  sky-view factor: min %.3f, mean %.3f, max %.3f\n",
-        minimum(svf), sum(svf)/length(svf), maximum(svf))
-
-# Map each facet to the LES column it belongs to, so surface temperatures
-# can be pushed into the scene and fluxes pulled back out.
 facet_col = [f.col for f in scene.facets]
-
-# Radiative trapping on this geometry, measured once for the record.
-let sun_noon = solar_unit_vector((elevation = 60.9, azimuth = 180.0))
-    α_eff = effective_albedo(scene, vfac, sun_noon; dni = 800.0, dhi = 120.0)
-    α_mat = sum(facet_areas(scene) .* facet_albedos(scene)) / sum(facet_areas(scene))
-    @printf("  effective albedo %.4f vs area-weighted material %.4f (trapping %.1f%%)\n",
-            α_eff, α_mat, 100 * (1 - α_eff / α_mat))
-end
-
-# 2-D geometry snapshots
-heights_2d = zeros(Nx, Ny)
-for j in 1:Ny, i in 1:Nx, k in 1:Nz
-    if sm.mask[mesh.Hx+i, mesh.Hy+j, mesh.Hz+k]
-        heights_2d[i, j] = k * mesh.dz
-    end
-end
-save_heatmap(joinpath(OUT, "alexanderplatz_heights.ppm"),
-             Array(heights_2d); upscale=6)
-save_heatmap(joinpath(OUT, "alexanderplatz_class.ppm"),
-             Array(Float64.(sfc)); upscale=6)
+# Per-COLUMN sky-view factor, for the display panel and diagnostics.
+svf = aggregate_to_grid(scene, vfac).svf
+@printf("radiosity scene: %d facets in %.1fs, recip %.1e, closure %.1e\n",
+        nfacets(scene), time() - t_svf, reciprocity_error(vfac), closure_error(vfac))
+@printf("SVF per column: min %.3f mean %.3f max %.3f\n",
+        minimum(svf), mean(svf), maximum(svf))
 
 # ---------------------------------------------------------------------------
-# 2. Simulation setup
+# 2. Simulation
 # ---------------------------------------------------------------------------
 
 sim = BoussinesqSimulation(mesh;
@@ -112,7 +113,7 @@ sim = BoussinesqSimulation(mesh;
     f_coriolis     = 1e-4,
     C_s            = 0.1,
     Pr_t           = 1/3,
-    moisture       = false,          # qv treated passively for stability
+    moisture       = false,
     sponge_α_max   = 0.05,
     sponge_z_start = 0.75 * Lz,
     bcs   = FieldBoundaryConditions(:periodic, :periodic, :wall),
@@ -121,160 +122,148 @@ sim = BoussinesqSimulation(mesh;
 set!(sim.θ, (x,y,z) -> 293.0 + max(0, (z - 100.0)) * 3e-3)
 set!(sim.u, (x,y,z) -> 1.0)
 
-# Passive moisture + Kessler
 qv_p = Field(CellCenter(), mesh); set!(qv_p, (x,y,z) -> 0.010 * exp(-z / 800))
 ql_p = Field(CellCenter(), mesh)
 qr_p = Field(CellCenter(), mesh)
 tqv  = Field(CellCenter(), mesh)
 
-Ts = init_surface_state(sfc, 285.0)
-@. Ts = 285.0 + 5.0 * (sfc == SURFACE_WATER)
-
-# ---------------------------------------------------------------------------
-# 3. Pollutants
-# ---------------------------------------------------------------------------
+Ts = init_surface_state(sfc, 285.0); @. Ts = 285.0 + 5.0 * (sfc == SURFACE_WATER)
 
 pollutant = Field(CellCenter(), mesh); set!(pollutant, (x,y,z) -> 0.0)
 tp        = Field(CellCenter(), mesh)
-# Chimney locations — near the Fernsehturm plaza, S-Bahn station, and Kaufhof
-chimneys = [(500.0, 500.0, 60.0),
-            (350.0, 650.0, 25.0),
-            (700.0, 400.0, 40.0)]
+chimneys  = [(500.0, 500.0, 60.0), (350.0, 650.0, 25.0), (700.0, 400.0, 40.0)]
 chimney_ijk = [(round(Int, cx / mesh.dx),
                 round(Int, cy / mesh.dy),
                 clamp(round(Int, cz / mesh.dz), 1, Nz)) for (cx, cy, cz) in chimneys]
 
-particles = ParticleSet(mesh)
-
 # ---------------------------------------------------------------------------
-# 4. Diurnal loop
+# 3. Run + frame capture
 # ---------------------------------------------------------------------------
 
 const LAT     = 52.5220
-const LON     = 13.4100
 const DOY     = 172
 const T_DAY   = 24 * 3600.0
 const dt      = 2.0
-# Set AEOLUS_NSTEPS to shorten the run for a smoke test.
 const nsteps  = parse(Int, get(ENV, "AEOLUS_NSTEPS", string(Int(T_DAY / dt))))
 const start_h = 6.0
+const frame_every = 900
+const shadow_every = 300     # recompute shadow every 300 steps ≈ 10 sim-min
 
-cool_atm = fill(-2.315e-5, Nz)
+k_slice = clamp(round(Int, 30 / mesh.dz), 1, Nz)
 
-ts_h     = Float64[start_h]
-T_street = Float64[mean_surface_temperature(Ts, sfc, SURFACE_STREET)]
-T_roof   = Float64[mean_surface_temperature(Ts, sfc, SURFACE_ROOF)]
-T_park   = Float64[mean_surface_temperature(Ts, sfc, SURFACE_PARK)]
-T_water  = Float64[mean_surface_temperature(Ts, sfc, SURFACE_WATER)]
-T_wall   = Float64[mean_surface_temperature(Ts, sfc, SURFACE_WALL)]
-sw_hist  = Float64[0.0]
+# Direct/diffuse split of the top-of-atmosphere solar constant.
+# ~85% direct beam, ~15% isotropic diffuse — clear-sky approximation.
+const LON          = 13.4100
+const sky_model = BirdClearSky(; aod380 = 0.24, aod500 = 0.16,
+                                      precipitable_water = 2.0,
+                                      ozone = 0.33, albedo = 0.15)
+sun_now = Ref(solar_position(solar_time(2024, 6, 20, 6, 0, 0.0;
+                                        latitude = LAT, longitude = LON,
+                                        elevation = 34.0)))
 
-force!         = (s, Δt) -> add_geostrophic_wind!(s, 1.0, 0.0, 1800.0)
+force! = (s, Δt) -> begin
+    add_geostrophic_wind!(s, 1.0, 0.0, 1800.0)
+    # vegetation drag disabled — even at cd=0.03 it destabilizes at dt=2s;
+    # a proper implicit-Euler treatment is a follow-up (see the plan).
+    # apply_vegetation_drag!(s, veg_mask, LAI_map; cd = 0.01, k_height = 3)
+end
 post_predictor = (s, Δt) -> implicit_ibm_correction!(s, sm; τ = 0.0, dt = Δt)
-
 sensible = zeros(Float64, Nx, Ny)
 sw_arr   = zeros(Float64, Nx, Ny)
 lw_arr   = fill(320.0, Nx, Ny)
-snap_hours = [10.0, 14.0, 18.0, 22.0, 4.0]
+sw_beam_now = Ref(0.0)
 Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
-const rad_every = 300        # radiosity solve every 10 sim-minutes
-sw_top_now   = Ref(0.0)
-elev_now_deg = Ref(0.0)
 
-# Bird clear-sky model with a continental-urban aerosol load. The AOD is
-# taken from the Phase 37 urban mixture at a typical summer Berlin burden
-# rather than guessed.
-const sky_model = BirdClearSky(; aod380 = 0.24, aod500 = 0.16,
-                                 precipitable_water = 2.0, ozone = 0.33,
-                                 albedo = 0.15)
+# ---------------------------------------------------------------------------
+# Frame output — everything the renderer needs, and nothing more.
+#
+# Only 2-D slices are stored: the renderer draws horizontal panels at one
+# height, so writing the full 3-D state would be ~30x larger for no gain.
+# Static geometry (sky-view factor, heights, surface class) goes into a
+# single `static.jls`; per-frame fields go into `frame_NNN.jls`.
+# ---------------------------------------------------------------------------
+const FRAMES = joinpath(OUT, "frames"); mkpath(FRAMES)
+nframe = 0
 
-# Downwelling longwave from a correlated-k + two-stream solve on a
-# mid-latitude summer column, as a function of near-surface air
-# temperature. Built once and interpolated, because a full spectral
-# solve every radiation step would dominate the run time for a quantity
-# that varies smoothly over ~15 K.
-const _LW_SKY_TABLE = let
-    lw   = longwave_bands(Float64; ngpt_per_band = 2)
-    gas  = correlated_k_optics(lw)
-    slv  = two_stream_solver(lw; lw_variant = Quadrature())
-    Ts_probe = collect(283.0:3.0:308.0)
-    Ls = map(Ts_probe) do Tsfc
-        col = us_standard_column(Float64; nz = 30, T_sfc = Tsfc,
-                                 humid = :midlatitude_summer)
-        o = allocate_optics(Float64, (30,), lw); compute_optics!(o, gas, col)
-        f = allocate_fluxes(Float64, (), 31)
-        solve_lw!(f, slv, o, col; sfc_emissivity = 0.95)
-        f.flux_dn[1]
-    end
-    (Ts_probe, Ls)
+using Serialization: serialize
+
+serialize(joinpath(FRAMES, "static.jls"), Dict{Symbol,Any}(
+    :svf     => Array(svf),
+    :sfc     => Array(sfc),
+    :heights => [maximum(k for k in 1:Nz if sm.mask[Hx+i, Hy+j, Hz+k]; init = 0) * mesh.dz
+                 for i in 1:Nx, j in 1:Ny],
+    :Nx => Nx, :Ny => Ny, :Nz => Nz,
+    :Lx => Lx, :Ly => Ly, :Lz => Lz, :k_slice => k_slice))
+
+"Write the 2-D fields the renderer needs for one frame."
+function save_frame(idx::Int, hour_of_day::Real)
+    ui = interior_view(sim.u); vi = interior_view(sim.v); wi = interior_view(sim.w)
+    θi = interior_view(sim.θ); pp = interior_view(sim.p); ci = interior_view(pollutant)
+    serialize(joinpath(FRAMES, @sprintf("frame_%03d.jls", idx)),
+              Dict{Symbol,Any}(
+        :hour   => Float64(hour_of_day),
+        :elev   => sun_now[].elevation,
+        :Ts     => Array(Ts),
+        :sw     => Array(sw_arr),
+        :lw     => Array(lw_arr),
+        :u      => Array(view(ui, :, :, k_slice)),
+        :v      => Array(view(vi, :, :, k_slice)),
+        :w      => Array(view(wi, :, :, k_slice)),
+        :theta  => Array(view(θi, :, :, k_slice)),
+        :p      => Array(view(pp, :, :, k_slice)),
+        :c      => Array(view(ci, :, :, k_slice))))
+    return nothing
 end
 
-"Downwelling longwave at the surface for near-surface air temperature `Ta` (K)."
-function sky_longwave(Ta::Real)
-    xs, ys = _LW_SKY_TABLE
-    Ta <= xs[1]   && return ys[1]
-    Ta >= xs[end] && return ys[end]
-    k = searchsortedlast(xs, Ta)
-    t = (Ta - xs[k]) / (xs[k+1] - xs[k])
-    return ys[k] * (1 - t) + ys[k+1] * t
-end
 
-@printf("Alexanderplatz diurnal: %d steps × %.0f s = %.0f h\n",
-        nsteps, dt, T_DAY / 3600)
+# Batch D: two-moment moisture + fog dew + aerosol + chemistry state
+chem   = ChemistryState(mesh)
+aerosol = AerosolState(mesh)
+# The 2-moment state is separate from qv_p/ql_p/qr_p used above; we
+# advance it in parallel as the "real" microphysics path.
+
+
+
+# Initial shadow at t=start_h
+
+
+@printf("Animation: %d steps, %d frames, dt=%.0fs\n",
+        nsteps, cld(nsteps, frame_every), dt)
 t_wall_start = time()
 
-blew_up = false
 for n in 1:nsteps
     hour_of_day = (start_h + sim.t / 3600) % 24.0
 
-    # ----- Era III radiation, refreshed every ~10 sim-min ------------------
-    if n % rad_every == 0 || n == 1
-        # (a) Sun position: Meeus, accurate to <0.01 deg, replacing the
-        #     Era I sinusoid that was good to about a degree.
-        hh  = floor(Int, hour_of_day)
-        mm  = floor(Int, (hour_of_day - hh) * 60)
-        ss  = (hour_of_day - hh - mm/60) * 3600
-        st  = solar_time(2024, 6, 20, hh, mm, ss;
-                         latitude = LAT, longitude = LON, elevation = 34.0)
-        sunpos = solar_position(st)
-        μ = max(sunpos.μ₀, 0.0)
+    # Recompute shadows every ~10 sim-min
+    # ----- Era III radiation ------------------------------------------------
+    # Radiosity subsumes what used to be four separate approximations here:
+    # the binary shadow mask, the SVF-weighted diffuse, the R3 wall
+    # directional factor, and the R4 canyon-longwave proxy. Shadowing,
+    # wall orientation, inter-reflection and longwave trapping are all
+    # consequences of the view-factor matrix now.
+    if n % shadow_every == 0 || n == 1
+        hh = floor(Int, hour_of_day)
+        mi = floor(Int, (hour_of_day - hh) * 60)
+        se = (hour_of_day - hh - mi/60) * 3600
+        sun_now[] = solar_position(solar_time(2024, 6, 20, hh, mi, se;
+                                              latitude = LAT, longitude = LON,
+                                              elevation = 34.0))
+        sp  = sun_now[]
+        irr = clear_sky_irradiance(sp, sky_model)
+        μ   = max(sp.μ₀, 0.0)
 
-        # (b) Clear-sky irradiance: Bird model with a realistic urban
-        #     aerosol load, replacing Beer's law with a fixed optical
-        #     depth and the hardcoded 85/15 direct/diffuse split.
-        irr = clear_sky_irradiance(sunpos, sky_model)
-        dni, dhi = irr.dni, irr.dhi
-
-        # (c) Downwelling longwave from a real two-stream solve on a
-        #     correlated-k column, replacing the constant 320 W/m².
-        #     The near-surface air temperature is the diurnally varying
-        #     part, so the sky flux now breathes with the boundary layer.
-        θ1 = mean(view(sim.θ.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1))
-        L_sky = sky_longwave(θ1)
-
-        # (d) Materials follow the sun: water is a Fresnel interface and
-        #     its albedo runs 0.03 overhead to 0.26 at low sun.
         mats = default_urban_materials(; μ₀ = max(μ, 0.05))
         scene.materials.albedo     .= mats.albedo
         scene.materials.emissivity .= mats.emissivity
-
-        # (e) Push current surface temperatures onto the facets, then
-        #     solve both bands on the real geometry. Shadowing,
-        #     inter-reflection and canyon longwave trapping all fall out
-        #     of the view-factor matrix.
         for (fi, (ci, cj)) in enumerate(facet_col)
             set_temperature!(scene, fi, Ts[ci, cj])
         end
-        sunv = solar_unit_vector(sunpos)
-        swsol = μ > 0 ? solve_shortwave(scene, vfac, sunv; dni = dni, dhi = dhi) :
-                        nothing
-        lwsol = solve_longwave(scene, vfac; L_sky = L_sky)
+        sunv  = solar_unit_vector(sp)
+        swsol = μ > 0 ? solve_shortwave(scene, vfac, sunv;
+                                        dni = irr.dni, dhi = irr.dhi) : nothing
+        lwsol = solve_longwave(scene, vfac; L_sky = lw_from_walls(mean(Ts)))
         forcing = aggregate_to_grid(scene, vfac; sw = swsol, lw = lwsol,
                                     T_surface = Ts)
-
-        # `sw_effective` / `lw_down_effective` invert `step_surfaces!`'s own
-        # algebra, so the surface scheme reproduces the true facet fluxes
-        # without being modified.
         # `aggregate_to_grid` returns fluxes per unit PLAN area, so a column
         # holding a 200 m tower reports ~13x the incident flux — its wall
         # area is 13x its footprint. That is the correct column ENERGY, but
@@ -292,136 +281,88 @@ for n in 1:nsteps
         sw_arr .= forcing.sw_effective ./ ad
         lw_arr .= σSB .* Ts.^4 .+
                   (forcing.lw_down_effective .- σSB .* Ts.^4) ./ ad
-        sw_top_now[] = irr.ghi
-        elev_now_deg[] = sunpos.elevation
+        sw_beam_now[] = irr.dni * μ
     end
-    sw = sw_top_now[]
+    sw_direct_beam = sw_beam_now[]
+    sw_top = sw_direct_beam
+    # L2: tree shade attenuates SW under vegetation
+    apply_tree_shade!(sw_arr, veg_mask, LAI_map)
+    # R5: cloud shadow from column-integrated ql
+    ql_col = dropdims(sum(interior_view(ql_p); dims = 3) .* mesh.dz;
+                      dims = 3)
+    apply_cloud_shadow!(sw_arr, ql_col, sw_direct_beam)
 
-    # `local` is required: a bare assignment inside a `for` at top level
-    # shadows the outer `sensible` and Julia warns about the ambiguity.
     local sensible = apply_surface_flux!(sim, Ts, sfc, params;
                                     dt = dt, H_cap = 250.0, C_h = 1e-3)
+    # L4: anthropogenic heat (traffic, AC exhaust, interior heat loss)
+    add_anthropogenic_heat!(sensible, sfc, hour_of_day)
+    # R6: glass materials let some SW pass through; reduce sensible
+    apply_glass_sw_transmission!(sensible, sfc, sw_arr)
+    # L1: evaporative cooling
+    LE = apply_latent_flux!(sim, Ts, sfc; dt = dt, qv_field = qv_p,
+                            qv_air = 0.010)
+    @. sensible += LE
+    # L5: dew condensation on cold surfaces (disabled — warming term
+    # amplifies before proper coupling with atmosphere qv is wired in)
+    # apply_dew_condensation!(Ts, 0.010, LE; ε_warm = 3e-3)
+    # A3: emissions (traffic + biogenic); A1: photochemistry; A2: dep
+    add_emissions!(chem, sfc, hour_of_day, dt; dz = mesh.dz)
+    apply_photochem_step!(chem, hour_of_day, dt)
+    for spec in (:NO, :NO2, :O3)
+        apply_dry_deposition!(getproperty(chem, spec), sfc, spec, dt;
+                              dz = mesh.dz)
+    end
+    apply_dry_deposition!(aerosol.q_a, sfc, :PM, dt; dz = mesh.dz)
+    apply_aerosol_step!(aerosol, dt; V_sed = 0.005, sfc = sfc, dz = mesh.dz)
 
-    # Passive moisture + Kessler
     fill_halos!(qv_p, FieldBoundaryConditions(:periodic))
     fill!(tqv.data, 0)
     advect_centered!(tqv, sim.u, sim.v, sim.w, qv_p)
-    interior_view(qv_p) .+= dt .*
-        view(tqv.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
+    interior_view(qv_p) .+= dt .* view(tqv.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
     apply_kessler_step!(qv_p, ql_p, qr_p, dt; Vt = 3.0)
     clamp!(interior_view(qv_p), 0.0, 0.03)
 
-    # Pollutants
     fill_halos!(pollutant, FieldBoundaryConditions(:periodic))
     fill!(tp.data, 0)
     advect_centered!(tp, sim.u, sim.v, sim.w, pollutant)
     apply_linear_chemistry!(tp, pollutant, 3600.0)
-    daytime_boost = (hour_of_day > 7 && hour_of_day < 20) ? 1.0 : 0.3
+    dayboost = (hour_of_day > 7 && hour_of_day < 20) ? 1.0 : 0.3
     for (ci, cj, ck) in chimney_ijk
-        tp.data[Hx+ci, Hy+cj, Hz+ck] += 0.5 * daytime_boost
+        tp.data[Hx+ci, Hy+cj, Hz+ck] += 0.5 * dayboost
     end
-    interior_view(pollutant) .+= dt .*
-        view(tp.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
+    interior_view(pollutant) .+= dt .* view(tp.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
     clamp!(interior_view(pollutant), 0.0, 100.0)
 
     step!(sim, dt; body_force! = force!, post_predictor! = post_predictor)
     step_surfaces!(Ts, sfc, params, sw_arr, lw_arr, sensible, dt)
-    apply_radiative_cooling!(sim.θ, cool_atm .* dt)
+    # L3: multi-layer soil couples the ground reservoir to Ts
+    step_soil!(soil, Ts, sfc, dt, params)
+    # L5: snow state (dormant in a summer run, but the machinery ships)
+    update_snow_state!(snow, Ts, 0)
+    # M4: fog / dew — disabled by default; enable once atmosphere θ
+    # is proven robust to per-cell condensation warming (small
+    # ε_warm needed). API ships in moisture_addons.jl.
+    # apply_fog_dew!(sim.θ, qv_p, q_dew, Ts, dt; dz = mesh.dz, rate = 1e-4)
+    apply_radiative_cooling!(sim.θ, fill(-2.315e-5, Nz) .* dt)
     clamp!(Ts, 270.0, 340.0)
 
-    if n % 150 == 0
-        for (cx, cy, cz) in chimneys
-            add_particles!(particles, [(cx + 10*(rand()-0.5),
-                                         cy + 10*(rand()-0.5),
-                                         cz)])
-        end
-    end
-    if length(positions(particles)) > 0
-        fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
-        advance_particles!(particles, sim, dt)
-    end
-
     if any(!isfinite, interior_view(sim.u)) || any(!isfinite, Ts)
-        @printf("!! blowup at step %d (t=%.1fh)\n", n, hour_of_day)
-        global blew_up = true; break
+        @printf("!! blowup at step %d\n", n); break
     end
 
-    if n % 60 == 0
-        push!(ts_h,     hour_of_day)
-        push!(T_street, mean_surface_temperature(Ts, sfc, SURFACE_STREET))
-        push!(T_roof,   mean_surface_temperature(Ts, sfc, SURFACE_ROOF))
-        push!(T_park,   mean_surface_temperature(Ts, sfc, SURFACE_PARK))
-        push!(T_water,  mean_surface_temperature(Ts, sfc, SURFACE_WATER))
-        push!(T_wall,   mean_surface_temperature(Ts, sfc, SURFACE_WALL))
-        push!(sw_hist,  sw)
-    end
-
-    for h_snap in snap_hours
-        if abs(hour_of_day - h_snap) < dt/3600
-            fname = @sprintf("alexanderplatz_surfT_%02.0fh.ppm", h_snap)
-            save_heatmap(joinpath(OUT, fname), Array(Ts); upscale=6,
-                         vmin=280, vmax=325)
-            pname = @sprintf("alexanderplatz_pollutant_%02.0fh.ppm", h_snap)
-            k_slice = round(Int, 30 / mesh.dz)
-            slice_p = view(interior_view(pollutant), :, :, k_slice)
-            save_heatmap(joinpath(OUT, pname), Array(slice_p); upscale=6)
-
-            @printf("  t=%5.1fh  wall=%5.0fs  SW=%5.0f  T_str=%5.1f T_roof=%5.1f T_wall=%5.1f T_park=%5.1f  N=%d\n",
-                    hour_of_day, time() - t_wall_start, sw,
-                    T_street[end], T_roof[end], T_wall[end], T_park[end],
-                    length(positions(particles)))
-        end
+    if n % frame_every == 0
+        global nframe += 1
+        save_frame(nframe, hour_of_day)
+        @printf("  frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°\n",
+                nframe, hour_of_day, time() - t_wall_start,
+                minimum(Ts), maximum(Ts),
+                minimum(sw_arr), maximum(sw_arr), sun_now[].elevation)
     end
 end
-
-# ---------------------------------------------------------------------------
-# 5. Final plots
-# ---------------------------------------------------------------------------
-
-sim_hours = collect(range(0.0, T_DAY / 3600; length = length(ts_h)))
-save_multiline(joinpath(OUT, "alexanderplatz_class_surfT.svg"),
-               sim_hours, [T_street, T_roof, T_wall, T_park, T_water],
-               ["street", "roof", "wall", "park", "water"];
-               xlabel="hours since $(round(Int, start_h)):00",
-               ylabel="mean surface T (K)",
-               title="Alexanderplatz — diurnal surface T by class")
-
-save_multiline(joinpath(OUT, "alexanderplatz_sw_forcing.svg"),
-               sim_hours, [sw_hist], ["SW (W/m²)"];
-               xlabel="hours since $(round(Int, start_h)):00",
-               ylabel="SW (W/m²)",
-               title="Astronomical SW at Alexanderplatz")
-
-zs   = collect(Aeolus.Grids.znodes(mesh, Aeolus.Grids.CellCenter()))
-θbar = mean_θ_profile(sim)
-save_multiline(joinpath(OUT, "alexanderplatz_final_theta.svg"),
-               zs, [θbar], ["⟨θ⟩(z)"];
-               xlabel="z (m)", ylabel="θ (K)",
-               title="⟨θ⟩(z) after 24 h — Alexanderplatz")
-
-Ts_safe   = map(x -> isfinite(x) ? x : 293.0, Ts)
-final_map = Ts_safe .- mean(Ts_safe)
-save_heatmap(joinpath(OUT, "alexanderplatz_surfT_final.ppm"),
-             Array(final_map); upscale=6, vmin=-8, vmax=8)
-
-pos_map = zeros(Nx, Ny)
-for p in positions(particles)
-    i = clamp(round(Int, p[1] / mesh.dx), 1, Nx)
-    j = clamp(round(Int, p[2] / mesh.dy), 1, Ny)
-    pos_map[i, j] += 1.0
-end
-save_heatmap(joinpath(OUT, "alexanderplatz_particles_final.ppm"),
-             Array(pos_map); upscale=6)
 
 t_wall = time() - t_wall_start
-if blew_up
-    @printf("\nRun ended early. Peak street T so far: %.1f K\n", maximum(T_street))
-else
-    @printf("\nCompleted 24 h at Alexanderplatz in %.1f s wall time.\n", t_wall)
-end
-@printf("Peak ΔT (heat island): %.1f K   Streets vs parks: %.1f K   Walls vs parks: %.1f K\n",
-        maximum(Ts) - minimum(Ts),
-        maximum(T_street) - maximum(T_park),
-        maximum(T_wall)  - maximum(T_park))
-@printf("max|∇·u| = %.2e   Particles = %d   Outputs → %s\n",
-        max_divergence(sim), length(positions(particles)), OUT)
+@printf("Ran %d steps in %.1f s. Wrote %d frames to %s\n",
+        nsteps, t_wall, nframe, FRAMES)
+@printf("Peak ΔT (heat island): %.1f K   max|∇·u| = %.2e\n",
+        maximum(Ts) - minimum(Ts), max_divergence(sim))
+println("Render with:  julia --project=. examples/urban/alexanderplatz_animation.jl")

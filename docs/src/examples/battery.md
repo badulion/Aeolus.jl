@@ -156,10 +156,36 @@ with:
 
 ## Animated multi-field playback
 
-`examples/urban/alexanderplatz_animation.jl` runs the full-physics
-Alexanderplatz simulation for 24 h and captures a 6-panel mosaic every
-30 sim-minutes, producing a **single self-contained APNG** that plays
-in any modern browser (Chrome, Firefox, Safari) or in macOS Preview.
+`examples/urban/alexanderplatz_animation.jl` is a **pure renderer**. It
+runs no physics at all: it reads the frame files written by
+`alexanderplatz_diurnal.jl` into `output/frames/` and stitches an
+8-panel mosaic into a **single self-contained APNG** that plays in any
+modern browser (Chrome, Firefox, Safari) or in macOS Preview.
+
+```bash
+$ julia --project=. examples/urban/alexanderplatz_diurnal.jl   # ~20 min
+$ julia --project=. examples/urban/alexanderplatz_animation.jl # ~1.5 s
+```
+
+!!! note "Why rendering is separate from running"
+    These used to be two scripts that each ran their own independent
+    24-hour simulation, because capturing a frame needs the full state
+    at that instant and it was easier to duplicate the loop than to save
+    state. That was never a design decision, and it cost:
+
+      * the physics had to be maintained twice;
+      * the two copies **drifted** — one had soil conduction, latent
+        heat, chemistry and aerosol, the other had none of them, while
+        this page claimed both ran "the same physics";
+      * that drift hid an energy-conservation bug in `step_soil!`, since
+        the script exercising the soil model was not the script whose
+        diagnostics were read;
+      * every animation cost a second full integration, and re-colouring
+        a panel meant re-running the physics.
+
+    Now there is one simulation. It writes 2-D slices (~295 kB per
+    frame — only what a horizontal panel needs), and re-rendering takes
+    **1.5 s instead of 50 minutes**.
 
 Panels (2 rows × 4 columns):
 
@@ -222,8 +248,9 @@ public entry points you can compose:
 
 ## Real Berlin — Alexanderplatz OSM run
 
-`examples/urban/alexanderplatz_diurnal.jl` runs the same physics
-against `data/alexanderplatz_real.osm` — an actual Overpass-API
+`examples/urban/alexanderplatz_diurnal.jl` is **the** simulation — the
+only script in `examples/urban` that integrates the equations. It runs
+the full physics against `data/alexanderplatz_real.osm` — an actual Overpass-API
 download of a 1 km × 1 km box around Alexanderplatz, Berlin
 (52.518–52.526 N, 13.402–13.418 E). To (re-)fetch:
 
