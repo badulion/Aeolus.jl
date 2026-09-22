@@ -312,14 +312,23 @@ atmosphere. `erf_series`/`erfc_series` are hand-written because
 
 **Measured validation** (US Standard Atmosphere, 40 layers):
 
-| Quantity | Aeolus | Observed |
+| Quantity | Aeolus | Reference |
 |---|---|---|
-| Clear-sky OLR | 229.1 W/m² | ~240 (global mean) |
-| Surface LW downwelling | 345.8 W/m² | ~333 |
-| Surface LW upwelling | 390.0 W/m² | ~398 |
-| Greenhouse effect Δ | 160.9 W/m² | ~150 |
-| LW cooling rate (mean) | −1.00 K/day | −1 to −2 |
+| Clear-sky OLR | 240.2 W/m² | ~240 (global mean) |
+| Surface LW downwelling | 306.7 W/m² | 288 (Brutsaert, this column) |
+| Surface LW upwelling | 389.2 W/m² | — |
+| Greenhouse effect Δ | 149.0 W/m² | ~150 |
+| LW cooling rate (mean) | −0.92 K/day | −1 to −2 |
 | CO₂ doubling band-4 response | +52.6 % absorption | — |
+| Window transmission, dry column | 0.81 | window stays open when dry |
+
+(These are the numbers *after* the window recalibration described below.
+Before it they were OLR 229.1, surface downwelling 345.8 and greenhouse
+effect 160.9 — the first and third visibly too low and too high
+respectively, and the second too high by ~58 W/m² against the Brutsaert
+empirical relation for a column of this humidity, though it looked
+plausible against the global-mean 333 W/m² that belongs to a much
+moister atmosphere.)
 
 **Bug found and fixed during validation**: at large absorber amounts
 the band transmission underflows to exactly 0, so `log(T)` returned
@@ -332,6 +341,36 @@ transmission *rises* with pressure. That is backwards — pressure
 broadening widens lines and fills the gaps between them, so higher
 pressure means **more** absorption and **lower** transmission. The
 module was right and the test was wrong.
+
+**Accuracy bug found later by the DYCOMS-II RF01 case, and fixed.**
+The version of Phase 32 that shipped first had *two compensating
+errors* in the 8-12 μm atmospheric window: water-vapour line strengths
+roughly 50× too large, and a water-vapour continuum roughly 15× too
+weak. Those two cancel almost exactly for one particular column, so the
+US Standard Atmosphere broadband fluxes in the table above looked
+fine — which is precisely why a single broadband number is not an
+adequate test of a band model.
+
+They do not cancel in general, because the two terms scale differently:
+line absorption grows as ``\sqrt{ku}`` in the strong-line limit, while
+the continuum grows as ``u\,(e + \gamma p_{dry})`` — linear in amount
+*and* in water partial pressure. Applied to the dry 4.2 kg/m² column
+above the DYCOMS RF01 cloud top, the window emissivity came out at 0.38
+where it should be about 0.12, adding ~27 W/m² of spurious downwelling
+and cutting the cloud-top radiative cooling — the single term that
+drives the entire RF01 boundary layer — nearly in half.
+
+The fix replaces the ad-hoc continuum with the **Roberts, Selby &
+Biberman (1976)** parameterisation, which is calibrated against
+measurement and has the correct self/foreign split (γ = 0.002, so the
+self-continuum dominates wherever there is appreciable water), and
+rebalances the window line strengths against it. See
+`examples/validation/dycoms_rf01_radiation.jl`.
+
+The lesson is recorded here because it generalises: **a band model must
+be validated across columns that differ in absorber amount and
+pressure, not against a single atmosphere.** Compensating errors are
+invisible to the latter and obvious to the former.
 
 ### Phase 33 — Two-stream solver with cloud optics ✅ SHIPPED
 `src/TwoStream.jl`. Three two-stream closures behind one interface —
@@ -384,10 +423,29 @@ diffusion regime falls off only as 1/τ; and a 96 K/day heating rate
 came from an artificial grey optical depth, not from the solver — it
 drops below 30 K/day with real gas optics.
 
-**Not yet done**: the DYCOMS-II RF01 intercomparison case itself.
-The solver is validated against analytic limits and textbook cloud
-optics, not yet against the published LES ensemble. That comparison is
-deferred to the Era III closing validation.
+**DYCOMS-II RF01 intercomparison**: now implemented, in
+`examples/validation/dycoms_rf01_radiation.jl`. RF01 is nocturnal marine
+stratocumulus in which longwave cloud-top cooling is the *only* term
+driving the boundary layer, which makes it the sharpest available
+single-column test of a longwave scheme. The intercomparison prescribes
+the answer analytically — a net upward flux of F₀ = 70 W/m² at cloud
+top and F₁ = 22 W/m² at cloud base — so it is a genuine external check.
+
+| Quantity | Aeolus | DYCOMS spec |
+|---|---|---|
+| Net upward LW at cloud base | 24.8 W/m² | 22.2 |
+| Net upward LW at cloud top | **70.3 W/m²** | 70.1 |
+| Jump across cloud | 45.6 W/m² | 47.9 (−4.8 %) |
+| Peak cooling rate | −296 K/day, 2.5 m below cloud top | — |
+| Mean cooling, top 50 m | −83.9 K/day | ΔF/(ρc_pΔz) ⇒ −85 |
+
+The sounding itself reproduces the specification: cloud top lands exactly
+on the 840 m inversion and peak liquid water is 0.472 g/kg against the
+RF01 reference of ≈0.45.
+
+Running this case is what exposed the Phase 32 window-opacity bug
+recorded above — the first version of it disagreed with the prescribed
+cloud-top flux by 54 %.
 
 ### Phase 34 — 3-D Monte-Carlo radiative transfer
 Photon-tracing solver that handles the genuinely 3-D radiative

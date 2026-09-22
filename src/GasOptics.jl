@@ -41,6 +41,7 @@ export MalkmusParams, malkmus_transmission, malkmus_log_transmission,
        rayleigh_optical_depth, rayleigh_optics!,
        lw_source!, lw_surface_source,
        column_absorber_amount, transmission_band, optical_depth_profile,
+       roberts_continuum_coefficient, continuum_optical_depth,
        us_standard_column
 
 # =========================================================================
@@ -150,11 +151,22 @@ const T_REF = 296.0         # K
 # 630-700 cm⁻¹ (15 μm) band, O3 the 980-1080 cm⁻¹ (9.6 μm) band, and the
 # 820-980 / 1080-1180 cm⁻¹ window bands are comparatively transparent —
 # which is the defining structure of the terrestrial LW spectrum.
+#
+# The window line strengths (bands 6-8) are DELIBERATELY small: ~0.01-0.02
+# m² kg⁻¹, giving a line-only optical depth of about 0.1 across a 11 kg/m²
+# column. What actually closes the window is the water-vapour CONTINUUM
+# (see `continuum_optical_depth` below), which is measurement-calibrated
+# and scales differently with amount and pressure. Putting the window
+# opacity into the line term instead — as an earlier version of this file
+# did, with k ≈ 0.3 — reproduces one atmosphere's broadband flux and then
+# fails badly on any column with different humidity. It cost ~27 W/m² of
+# spurious downwelling in the DYCOMS-II RF01 case; see
+# examples/validation/dycoms_rf01_radiation.jl.
 const _LW_H2O = [
     MalkmusParams(180.0, 0.30, 0.5),  MalkmusParams(120.0, 0.30, 0.5),
     MalkmusParams( 45.0, 0.28, 0.5),  MalkmusParams(  2.0, 0.25, 0.5),
-    MalkmusParams(  3.0, 0.22, 0.5),  MalkmusParams(  0.35, 0.20, 0.5),
-    MalkmusParams(  0.18, 0.20, 0.5), MalkmusParams(  0.30, 0.20, 0.5),
+    MalkmusParams(  3.0, 0.22, 0.5),  MalkmusParams(  0.011, 0.20, 0.5),
+    MalkmusParams(  0.020, 0.20, 0.5), MalkmusParams(  0.010, 0.20, 0.5),
     MalkmusParams(  2.5, 0.22, 0.5),  MalkmusParams( 14.0, 0.25, 0.5),
     MalkmusParams( 30.0, 0.28, 0.5),  MalkmusParams( 60.0, 0.30, 0.5),
     MalkmusParams( 20.0, 0.28, 0.5),  MalkmusParams(  6.0, 0.25, 0.5),
@@ -521,20 +533,105 @@ _molar_mass(g::Symbol) =
     g === :ch4 ? 16.0425  : g === :n2o ? 44.0128 : g === :o2 ? 31.9988 :
     g === :n2  ? 28.0134  : 28.9647
 
-# Water-vapour continuum (MT_CKD in spirit): self-broadened term scaling
-# with water partial pressure and foreign-broadened with dry-air pressure.
-# Dominates the 820-1180 cm⁻¹ window, which is why the window is not
-# perfectly transparent in a moist atmosphere.
-function _continuum_tau(band::Int, kind::Symbol, u_h2o::Real,
+# =========================================================================
+# Water-vapour continuum
+# =========================================================================
+#
+# The 820-1180 cm⁻¹ "atmospheric window" is not transparent, but what
+# closes it is NOT the water-vapour line spectrum — the lines really are
+# weak there. It is the CONTINUUM: the far wings of strong lines outside
+# the window, plus water dimer absorption. A statistical narrow-band
+# model like Malkmus has no representation of this at all, so it must be
+# added separately.
+#
+# Getting the split right matters more than it looks. Lines and continuum
+# scale differently:
+#
+#   line absorption    ~ sqrt(k u)   in the strong-line limit, and
+#                        depends on pressure through line broadening;
+#   continuum          ~ u * (e + γ p_dry),  i.e. linear in amount AND
+#                        in water partial pressure.
+#
+# So a model that puts the window opacity in the wrong term can still
+# reproduce a single broadband flux for a single atmosphere, and then be
+# badly wrong for any other column. That is exactly what happened here:
+# an earlier version of this file used window line strengths ~50x too
+# large and a continuum ~15x too weak. The US Standard Atmosphere surface
+# flux came out fine; the DYCOMS-II RF01 cloud-top flux was wrong by 54%,
+# because that case has a dry 4 kg/m² column where the two terms no
+# longer trade off. See examples/validation/dycoms_rf01_radiation.jl.
+#
+# The form below is Roberts, Selby & Biberman (1976), which remains the
+# standard simple parameterisation and is calibrated against measurement:
+#
+#   k_c(ν) = [a₁ + a₂ exp(-β ν)]        cm² g⁻¹ atm⁻¹
+#   τ      = k_c · u · (e + γ (P - e)) · exp(T₀ (1/T - 1/296))
+#
+# with u in g cm⁻², pressures in atm. The γ = 0.002 foreign-broadening
+# coefficient is small: the self-continuum dominates wherever there is
+# appreciable water, which is why the window closes in the humid tropics
+# and stays open over a cold dry column.
+#
+# Roberts, R. E., Selby, J. E. A. & Biberman, L. M. (1976). Infrared
+# continuum absorption by atmospheric water vapor in the 8-12 μm window.
+# Appl. Opt., 15, 2085-2090.
+
+const _ROBERTS_A1 = 4.18      # cm² g⁻¹ atm⁻¹
+const _ROBERTS_A2 = 5578.0    # cm² g⁻¹ atm⁻¹
+const _ROBERTS_B  = 7.87e-3   # cm
+const _ROBERTS_T0 = 1800.0    # K
+const _ROBERTS_G  = 0.002     # foreign/self broadening ratio
+
+"""
+    roberts_continuum_coefficient(ν) -> cm² g⁻¹ atm⁻¹
+
+Roberts et al. (1976) water-vapour continuum absorption coefficient at
+wavenumber `ν` (cm⁻¹), before the amount, partial-pressure and
+temperature factors are applied. Falls steeply with wavenumber across
+the window — ~13 cm² g⁻¹ atm⁻¹ at 820 cm⁻¹ down to ~4.6 at 1180 cm⁻¹ —
+which is why the long-wavelength side of the window is the murkier one.
+"""
+roberts_continuum_coefficient(ν::Real) =
+    _ROBERTS_A1 + _ROBERTS_A2 * exp(-_ROBERTS_B * ν)
+
+"""
+    continuum_optical_depth(band_lo, band_hi, u_h2o, p_Pa, T_K, vmr_h2o)
+
+Water-vapour continuum optical depth of one layer in one band.
+
+`u_h2o` is the layer water path in kg m⁻². The continuum is evaluated at
+the band centre; this is adequate because `k_c` varies smoothly, unlike
+the line spectrum it complements.
+
+Outside roughly 700-1250 cm⁻¹ the Roberts fit is not meant to apply and
+the line spectrum dominates anyway, so the contribution is tapered to
+zero rather than extrapolated.
+"""
+function continuum_optical_depth(band_lo::Real, band_hi::Real,
+                                 u_h2o::Real, p_Pa::Real, T_K::Real,
+                                 vmr_h2o::Real)
+    ν = 0.5 * (band_lo + band_hi)
+    # taper outside the window region the fit was derived for
+    w = ν < 750.0   ? 0.0 :
+        ν < 820.0   ? (ν - 750.0) / 70.0 :
+        ν <= 1250.0 ? 1.0 :
+        ν < 1400.0  ? (1400.0 - ν) / 150.0 : 0.0
+    w <= 0 && return 0.0
+    kc = roberts_continuum_coefficient(ν)
+    u_g_cm2 = u_h2o * 0.1                     # kg m⁻² -> g cm⁻²
+    e_atm   = vmr_h2o * p_Pa / 101325.0       # water partial pressure, atm
+    p_atm   = p_Pa / 101325.0
+    f_T     = exp(_ROBERTS_T0 * (1 / T_K - 1 / 296.0))
+    return w * kc * u_g_cm2 *
+           (e_atm + _ROBERTS_G * max(p_atm - e_atm, 0.0)) * f_T
+end
+
+# Backwards-compatible internal wrapper used by `compute_optics!`.
+function _continuum_tau(spec, band::Int, kind::Symbol, u_h2o::Real,
                         p_Pa::Real, T_K::Real, vmr_h2o::Real)
     kind === :longwave || return 0.0
-    # window bands 6-9 (820-1390 cm⁻¹) carry most of the continuum
-    c_self = (band in 6:9) ? 2.2e-2 : (band in (5, 10)) ? 8.0e-3 : 1.5e-3
-    e_h2o = vmr_h2o * p_Pa                       # water partial pressure
-    p_dry = max(p_Pa - e_h2o, 0.0)
-    # strong negative temperature dependence of the self continuum
-    f_T = exp(1800.0 * (1 / T_K - 1 / 296.0))
-    return c_self * u_h2o * f_T * (e_h2o + 0.12 * p_dry) / P_REF
+    lo, hi = band_limits(spec, band)
+    return continuum_optical_depth(lo, hi, u_h2o, p_Pa, T_K, vmr_h2o)
 end
 
 """
@@ -574,7 +671,7 @@ function compute_optics!(optics::OpticalProperties{T},
             if go.include_continuum
                 u_h2o = column_absorber_amount(col, :h2o, k)
                 vh = haskey(col.vmr, :h2o) ? col.vmr[:h2o][k] : 0.0
-                τc = _continuum_tau(b, spec.kind, u_h2o, p, Tk, vh)
+                τc = _continuum_tau(spec, b, spec.kind, u_h2o, p, Tk, vh)
                 if τc > 0
                     @inbounds for g in gr
                         optics.τ[k, g] += T(τc)

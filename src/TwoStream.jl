@@ -517,7 +517,6 @@ function compute_optics!(optics::OpticalProperties{T}, cloud::MieCloudOptics{T},
     spec = cloud.spec
     nz = length(col.ql)
     fill!(optics.τ, 0); fill!(optics.ssa, 0); fill!(optics.g, 0)
-    ρ_w = T(1e6)     # g m⁻³ (density of liquid water)
     for b in 1:nbands(spec)
         λ = T(_band_λ(spec, b))
         # single-scattering albedo: ~1 in the visible, falling in the IR.
@@ -534,9 +533,8 @@ function compute_optics!(optics::OpticalProperties{T}, cloud::MieCloudOptics{T},
             @inbounds for k in 1:nz
                 lwp = col.ql[k] * col.ρ[k] * col.dz[k] * 1000   # g m⁻²
                 iwp = col.qi[k] * col.ρ[k] * col.dz[k] * 1000
-                τl = lwp > 0 ? 3 * lwp / (2 * (ρ_w / 1e6) * col.r_eff_liq[k]) * T(1e0) : zero(T)
-                # τ = 3 LWP / (2 ρ_w r_eff) with LWP in g/m², r in μm,
-                # ρ_w = 1 g/cm³ ⇒ τ = 1.5·LWP/r_eff  (r_eff in μm)
+                # τ = 3·LWP / (2 ρ_w r_eff). With LWP in g m⁻², r_eff in μm
+                # and ρ_w = 1 g cm⁻³ the unit factors cancel to τ = 1.5·LWP/r_eff.
                 τl = lwp > 0 ? T(1.5) * lwp / col.r_eff_liq[k] : zero(T)
                 τi = iwp > 0 ? T(1.0) * iwp / col.r_eff_ice[k] : zero(T)
                 τt = τl + τi
