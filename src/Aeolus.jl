@@ -37,6 +37,16 @@ include("Anelastic.jl")         # Phase 27
 include("Multigrid.jl")         # Phase 29
 include("AdaptiveMesh.jl")      # Phases 30-31
 
+# --- Era III: high-fidelity radiation (Phases 32-38) ---------------------
+include("RadiationCore.jl")     # shared spectral / optics / flux contract
+include("GasOptics.jl")         # Phase 32
+include("SurfaceOptics.jl")     # Phase 36
+include("AerosolOptics.jl")     # Phase 37
+include("TwoStream.jl")         # Phase 33
+include("MonteCarloRT.jl")      # Phase 34
+include("Radiosity.jl")         # Phase 35
+include("SolarGeometry.jl")     # Phase 38
+
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -64,6 +74,15 @@ using .TimeIntegration
 using .Anelastic
 using .Multigrid
 using .AdaptiveMesh
+
+using .RadiationCore
+using .GasOptics
+using .SurfaceOptics
+using .AerosolOptics
+using .TwoStream
+using .MonteCarloRT
+using .Radiosity
+using .SolarGeometry
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -183,5 +202,36 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        cluster_flagged_cells, box_efficiency,
        regrid!, check_proper_nesting, step_amr!,
        amr_total_mass, amr_error, total_cells, level_cells, block_bounds
+
+# =========================================================================
+# Era III — high-fidelity radiation (Phases 32-38)
+# =========================================================================
+
+# Shared radiation contract (spectral grids, optics, fluxes, interfaces)
+export SpectralGrid, shortwave_bands, longwave_bands,
+       nbands, ngpoints, band_of_gpoint, band_limits, gpoint_range,
+       OpticalProperties, allocate_optics, zero_optics!,
+       combine_optics!, scale_optics!, total_optical_depth,
+       RadiativeFluxes, allocate_fluxes, zero_fluxes!,
+       net_flux!, flux_divergence!, heating_rate!,
+       AbstractGasOptics, AbstractCloudOptics, AbstractAerosolOptics,
+       AbstractRTSolver, AbstractSurfaceOptics,
+       compute_optics!, solve_rt!, surface_albedo, surface_emissivity,
+       AtmosphericColumn, column_from_simulation,
+       STEFAN_BOLTZMANN, SOLAR_CONSTANT, planck_band, planck_integrated
+
+# Phase 38 — solar position, refraction, irradiance partitioning, shadows
+export AbstractSolarPosition, MeeusPosition,
+       SolarTime, solar_time, julian_day, julian_century,
+       SolarPosition, solar_position,
+       equation_of_time, solar_declination_accurate,
+       sun_direction_enu, air_mass,
+       refraction_bennett, apply_refraction,
+       earth_sun_distance_factor, extraterrestrial_irradiance,
+       ClearSkyModel, BirdClearSky, clear_sky_irradiance,
+       clearness_index, diffuse_fraction_erbs, diffuse_fraction_reindl,
+       partition_global_irradiance,
+       cloud_optical_depth_column, cloud_shadow_transmittance!,
+       cloud_shadow_map, combined_shadow_transmittance!
 
 end # module

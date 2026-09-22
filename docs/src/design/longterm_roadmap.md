@@ -256,7 +256,20 @@ follow-up phase:
     flux-form upwind; per-block momentum and pressure solves are future
     work.
 
-# Era III — High-fidelity radiation
+# Era III — High-fidelity radiation 🚧 IN PROGRESS
+
+**Status: the shared contract and Phase 38 are complete; Phases 32-37
+remain.** `src/RadiationCore.jl` fixes the interface every component in
+this era speaks — `SpectralGrid` (RRTMG-layout bands with correlated-k
+g-points and weights), `OpticalProperties` (τ/ssa/g with the correct
+optical-depth- and scattering-weighted `combine_optics!` rule),
+`RadiativeFluxes` (level-based, bottom-up, `net = dn - up` positive
+downward), `AtmosphericColumn`, and the `AbstractGasOptics` /
+`AbstractCloudOptics` / `AbstractAerosolOptics` / `AbstractRTSolver` /
+`AbstractSurfaceOptics` interfaces. Validated: the shortwave band solar
+source sums to exactly 1361.0 W/m², and π·Σ_bands `planck_band` recovers
+σT⁴ to 0.008% (the residual lying genuinely outside 10-3250 cm⁻¹).
+
 
 *Replace the prescribed-profile and Beer's-law approximations with a
 real radiative-transfer solver, including 3-D effects that matter in
@@ -306,12 +319,31 @@ effect, absorption by black carbon, and the radiative impact of ozone.
 **Validated by**: aerosol-optical-depth-to-radiative-forcing comparison
 against AERONET-constrained cases.
 
-### Phase 38 — Solar-position and cloud-shadow accuracy
-Full astronomical solar position (NREL SPA algorithm), atmospheric
-refraction, proper direct/diffuse partitioning with a clear-sky index,
-and true 3-D cloud shadows projected from the resolved cloud field.
-**Validated by**: irradiance comparison against pyranometer time series
-for a real site and date.
+### Phase 38 — Solar-position and cloud-shadow accuracy ✅
+`src/SolarGeometry.jl`. Apparent solar position from the standard
+astronomical series (Meeus ch. 25/22/12) including the equation of time,
+nutation in longitude, apparent obliquity, aberration and topocentric
+parallax; Bennett refraction scaled by station pressure and temperature;
+Kasten-Young air mass; Bird clear-sky irradiance; Erbs and Reindl
+direct/diffuse partitioning; and true 3-D cloud-shadow ray marching with
+combined cloud-plus-building attenuation in a single march.
+**Validated:** against the published NREL SPA reference case
+(2003-10-17, Golden CO) to **Δzenith 0.0083°, Δazimuth 0.0036°**;
+declination at both solstices and the March equinox to < 0.02°; equation
+of time spanning −14.2 to +16.4 min with the correct zero crossings;
+refraction 0.564° at the horizon and 1.0 arcmin at 45°; air mass exactly
+1.0 at the zenith, 2.0 at 30° and 37.9 at the horizon (finite, where the
+plane-parallel 1/μ₀ diverges); TOA irradiance 1316.7 W/m² at aphelion and
+1408.0 at perihelion; Berlin summer-solstice maximum elevation within
+0.5° of the analytic 90 − φ + ε and solar noon at the correct UTC hour.
+The Era-I sinusoidal declination it replaces is in error by up to
+**0.79°** near the equinoxes.
+**Accuracy is stated honestly**: this is Meeus-grade (~0.01°), not full
+NREL SPA (±0.0003°). The full SPA needs ≈ 350 published VSOP87
+coefficients; transcribing those from memory would risk silent errors,
+which is worse than a documented 0.01°. `AbstractSolarPosition` is the
+extension point for a table-carrying `SPAPosition`. For radiative
+transfer 0.01° is not limiting — the solar disc itself subtends 0.53°.
 
 ---
 

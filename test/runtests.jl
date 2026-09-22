@@ -867,3 +867,13 @@ end
     include("era2_multigrid.jl")   # Phase  29     geometric multigrid
     include("era2_amr.jl")         # Phases 30-31  nesting, AMR
 end
+
+# =========================================================================
+# Era III — high-fidelity radiation (Phases 32-38)
+# =========================================================================
+# In progress. Phases 32-37 are stubbed pending implementation; the shared
+# radiation contract (`RadiationCore`) and Phase 38 are complete.
+
+@testset "Era III" begin
+    include("era3_solargeometry.jl")   # Phase 38  solar position, shadows
+end
