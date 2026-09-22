@@ -76,9 +76,18 @@ q_dew      = zeros(Float64, Nx, Ny)
 # Precompute the sky-view factor once (geometry doesn't change).
 @printf("Computing sky-view factor... ")
 t_svf = time()
-svf = compute_sky_view_factor(sm, mesh; n_zenith = 5, n_azim = 20)
-@printf("done in %.1f s.  SVF ∈ [%.3f, %.3f]\n",
-        time() - t_svf, minimum(svf), maximum(svf))
+# Era III: a real radiosity scene replaces the ray-cast sky-view factor.
+# Geometry is static, so facets and view factors are built once.
+heightmap = heightmap_from_solid_mask(sm)
+scene = build_scene(mesh, heightmap; wall_subdivisions = 1)
+vfac  = view_factors(scene)
+facet_col = [f.col for f in scene.facets]
+# Per-COLUMN sky-view factor, for the display panel and diagnostics.
+svf = aggregate_to_grid(scene, vfac).svf
+@printf("radiosity scene: %d facets in %.1fs, recip %.1e, closure %.1e\n",
+        nfacets(scene), time() - t_svf, reciprocity_error(vfac), closure_error(vfac))
+@printf("SVF per column: min %.3f mean %.3f max %.3f\n",
+        minimum(svf), mean(svf), maximum(svf))
 
 # ---------------------------------------------------------------------------
 # 2. Simulation
@@ -122,7 +131,7 @@ const LAT     = 52.5220
 const DOY     = 172
 const T_DAY   = 24 * 3600.0
 const dt      = 2.0
-const nsteps  = Int(T_DAY / dt)
+const nsteps  = parse(Int, get(ENV, "AEOLUS_NSTEPS", string(Int(T_DAY / dt))))
 const start_h = 6.0
 const frame_every = 900
 const shadow_every = 300     # recompute shadow every 300 steps ≈ 10 sim-min
@@ -132,7 +141,14 @@ upscale = 4
 
 # Direct/diffuse split of the top-of-atmosphere solar constant.
 # ~85% direct beam, ~15% isotropic diffuse — clear-sky approximation.
-const DIRECT_FRAC  = 0.85
+const DIRECT_FRAC  = 0.85   # retained only for the legacy frame-0 call
+const LON          = 13.4100
+const sky_model_anim = BirdClearSky(; aod380 = 0.24, aod500 = 0.16,
+                                      precipitable_water = 2.0,
+                                      ozone = 0.33, albedo = 0.15)
+sun_now = Ref(solar_position(solar_time(2024, 6, 20, 6, 0, 0.0;
+                                        latitude = LAT, longitude = LON,
+                                        elevation = 34.0)))
 const DIFFUSE_FRAC = 0.15
 
 lim_Ts    = (280.0, 335.0)
@@ -152,7 +168,8 @@ post_predictor = (s, Δt) -> implicit_ibm_correction!(s, sm; τ = 0.0, dt = Δt)
 sensible = zeros(Float64, Nx, Ny)
 sw_arr   = zeros(Float64, Nx, Ny)
 lw_arr   = fill(320.0, Nx, Ny)
-shade    = falses(Nx, Ny)
+shade    = falses(Nx, Ny)   # display only
+sw_beam_now = Ref(0.0)
 Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
 
 # SVF panel is static; render once, reused each frame.
@@ -181,8 +198,11 @@ function capture_frame(hour_of_day, sw_direct_beam)
     θ_anom   = θ_slice .- mean(θ_slice)
     p_anom   = p_slice .- mean(p_slice)
 
-    # "Direct SW at surface" panel: 0 in shade, sw_direct_beam elsewhere
-    direct_sw = [shade[i, j] ? 0.0 : sw_direct_beam for i in 1:Nx, j in 1:Ny]
+    # Shortwave reaching the surface, straight from the radiosity solve.
+    # This is strictly more informative than the old binary shadow mask:
+    # a shaded street still receives diffuse and inter-reflected light,
+    # and the panel now shows that rather than pretending it is zero.
+    direct_sw = copy(sw_arr)
 
     Ts_panel   = scalar_to_rgb(Array(Ts),         lim_Ts...; upscale = upscale)
     sun_panel  = scalar_to_rgb(direct_sw,          0.0, 1200.0; upscale = upscale)
@@ -211,47 +231,67 @@ function capture_frame(hour_of_day, sw_direct_beam)
 end
 
 # Initial shadow at t=start_h
-elev0, azim0 = solar_elev_azim(LAT, DOY, start_h)
-compute_shadow_mask!(shade, sm, mesh, sun_direction(elev0, azim0))
+
 
 @printf("Animation: %d steps, %d frames, dt=%.0fs\n",
         nsteps, cld(nsteps, frame_every), dt)
 t_wall_start = time()
-capture_frame(start_h, sw_direct(max(sin(elev0), 0.0), 1361.0) * DIRECT_FRAC) |> f -> push!(frames, f)
+capture_frame(start_h, 0.0) |> f -> push!(frames, f)
 
 for n in 1:nsteps
     hour_of_day = (start_h + sim.t / 3600) % 24.0
 
     # Recompute shadows every ~10 sim-min
+    # ----- Era III radiation ------------------------------------------------
+    # Radiosity subsumes what used to be four separate approximations here:
+    # the binary shadow mask, the SVF-weighted diffuse, the R3 wall
+    # directional factor, and the R4 canyon-longwave proxy. Shadowing,
+    # wall orientation, inter-reflection and longwave trapping are all
+    # consequences of the view-factor matrix now.
     if n % shadow_every == 0 || n == 1
-        elev, azim = solar_elev_azim(LAT, DOY, hour_of_day)
-        compute_shadow_mask!(shade, sm, mesh, sun_direction(elev, azim))
-    end
-    elev, azim = solar_elev_azim(LAT, DOY, hour_of_day)
-    μ  = max(sin(elev), 0.0)                 # cos(zenith)
-    sw_top    = sw_direct(μ, 1361.0)
-    sw_direct_beam  = sw_top * DIRECT_FRAC
-    sw_diffuse_beam = sw_top * DIFFUSE_FRAC / max(μ, 1e-3)  # normalize by μ so scaling makes sense
-    # Effective SW at each ground cell:
-    #   direct   = sw_direct_beam   × (1 - shade)                 [W/m²]
-    #   diffuse  = sw_diffuse_beam  × svf                          [W/m²]
-    # Walls (steep near-ground faces) still get an azim-independent boost.
-    # R3: wall directional factor once per solar update.
-    wf = wall_directional_factor(sfc, sm, mesh, sun_direction(elev, azim))
-    # R4: sharpen LW using domain-mean Ts as canyon-wall proxy.
-    lw_canyon = lw_from_walls(mean(Ts))
-    for j in 1:Ny, i in 1:Nx
-        direct  = shade[i, j] ? 0.0 : sw_direct_beam
-        diffuse = sw_diffuse_beam * svf[i, j]
-        # Wall cells: multiply direct by cos(sun · wall_normal), and no
-        # separate isotropic boost — the directional factor already
-        # captures orientation.
-        if sfc[i, j] == SURFACE_WALL
-            direct *= wf[i, j]
+        hh = floor(Int, hour_of_day)
+        mi = floor(Int, (hour_of_day - hh) * 60)
+        se = (hour_of_day - hh - mi/60) * 3600
+        sun_now[] = solar_position(solar_time(2024, 6, 20, hh, mi, se;
+                                              latitude = LAT, longitude = LON,
+                                              elevation = 34.0))
+        sp  = sun_now[]
+        irr = clear_sky_irradiance(sp, sky_model_anim)
+        μ   = max(sp.μ₀, 0.0)
+
+        mats = default_urban_materials(; μ₀ = max(μ, 0.05))
+        scene.materials.albedo     .= mats.albedo
+        scene.materials.emissivity .= mats.emissivity
+        for (fi, (ci, cj)) in enumerate(facet_col)
+            set_temperature!(scene, fi, Ts[ci, cj])
         end
-        sw_arr[i, j] = direct + diffuse
-        lw_arr[i, j] = 320.0 * svf[i, j] + lw_canyon * (1 - svf[i, j])
+        sunv  = solar_unit_vector(sp)
+        swsol = μ > 0 ? solve_shortwave(scene, vfac, sunv;
+                                        dni = irr.dni, dhi = irr.dhi) : nothing
+        lwsol = solve_longwave(scene, vfac; L_sky = lw_from_walls(mean(Ts)))
+        forcing = aggregate_to_grid(scene, vfac; sw = swsol, lw = lwsol,
+                                    T_surface = Ts)
+        # `aggregate_to_grid` returns fluxes per unit PLAN area, so a column
+        # holding a 200 m tower reports ~13x the incident flux — its wall
+        # area is 13x its footprint. That is the correct column ENERGY, but
+        # `step_surfaces!` carries one temperature per column and wants an
+        # irradiance per unit of actual SURFACE. Divide by the area density
+        # to get the area-weighted mean over the column's facets.
+        #
+        # This is an explicit approximation, and worth naming: collapsing a
+        # whole facade to a single temperature is a limitation of the
+        # surface scheme, not of the radiosity solve, which resolves every
+        # facet individually. A multi-layer urban canopy (Era V, Phase 49)
+        # is what removes it.
+        ad = max.(forcing.area_density, 1.0)
+        σSB = 5.670374419e-8
+        sw_arr .= forcing.sw_effective ./ ad
+        lw_arr .= σSB .* Ts.^4 .+
+                  (forcing.lw_down_effective .- σSB .* Ts.^4) ./ ad
+        sw_beam_now[] = irr.dni * μ
     end
+    sw_direct_beam = sw_beam_now[]
+    sw_top = sw_direct_beam
     # L2: tree shade attenuates SW under vegetation
     apply_tree_shade!(sw_arr, veg_mask, LAI_map)
     # R5: cloud shadow from column-integrated ql
@@ -259,7 +299,7 @@ for n in 1:nsteps
                       dims = 3)
     apply_cloud_shadow!(sw_arr, ql_col, sw_direct_beam)
 
-    sensible = apply_surface_flux!(sim, Ts, sfc, params;
+    local sensible = apply_surface_flux!(sim, Ts, sfc, params;
                                     dt = dt, H_cap = 250.0, C_h = 1e-3)
     # L4: anthropogenic heat (traffic, AC exhaust, interior heat loss)
     add_anthropogenic_heat!(sensible, sfc, hour_of_day)
@@ -319,9 +359,10 @@ for n in 1:nsteps
 
     if n % frame_every == 0
         push!(frames, capture_frame(hour_of_day, sw_direct_beam))
-        @printf("  frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  shade=%4d/%d  elev=%4.1f°\n",
+        @printf("  frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°\n",
                 length(frames), hour_of_day, time() - t_wall_start,
-                minimum(Ts), maximum(Ts), count(shade), Nx*Ny, rad2deg(elev))
+                minimum(Ts), maximum(Ts),
+                minimum(sw_arr), maximum(sw_arr), sun_now[].elevation)
     end
 end
 

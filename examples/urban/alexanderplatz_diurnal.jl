@@ -50,11 +50,44 @@ params  = default_surface_params()
         count(==(SURFACE_PARK), sfc),
         count(==(SURFACE_WATER), sfc))
 
-@printf("Computing sky-view factor... ")
-t_svf = time()
-svf = compute_sky_view_factor(sm, mesh; n_zenith = 5, n_azim = 20)
-@printf("done in %.1fs, SVF ∈ [%.3f, %.3f]\n",
-        time() - t_svf, minimum(svf), maximum(svf))
+# ---------------------------------------------------------------------------
+# 1b. Era III radiation: full urban radiosity scene
+# ---------------------------------------------------------------------------
+# The geometry is static, so the facet decomposition and the view-factor
+# matrix are built ONCE. Only the radiosity solve runs inside the time
+# loop, and only every `rad_every` steps.
+#
+# This replaces four separate approximations the earlier version used:
+#   * diffuse sky light scaled by a ray-cast sky-view factor, with no
+#     inter-reflection between surfaces at all;
+#   * a hand-tuned `boost = 0.5(1-μ)` fudge to get some light onto walls;
+#   * longwave down as `320·SVF + 380·(1-SVF)`, two magic numbers;
+#   * a binary shadow mask.
+# All four are now consequences of the view-factor matrix rather than
+# parameters.
+@printf("Building radiosity scene... ")
+t_rad = time()
+heightmap = heightmap_from_solid_mask(sm)
+scene = build_scene(mesh, heightmap; wall_subdivisions = 1)
+vfac  = view_factors(scene)
+svf   = vfac.F_sky                       # per-FACET sky-view factor
+@printf("%d facets, %.1fs\n", nfacets(scene), time() - t_rad)
+@printf("  reciprocity error %.2e, closure error %.2e\n",
+        reciprocity_error(vfac), closure_error(vfac))
+@printf("  sky-view factor: min %.3f, mean %.3f, max %.3f\n",
+        minimum(svf), sum(svf)/length(svf), maximum(svf))
+
+# Map each facet to the LES column it belongs to, so surface temperatures
+# can be pushed into the scene and fluxes pulled back out.
+facet_col = [f.col for f in scene.facets]
+
+# Radiative trapping on this geometry, measured once for the record.
+let sun_noon = solar_unit_vector((elevation = 60.9, azimuth = 180.0))
+    α_eff = effective_albedo(scene, vfac, sun_noon; dni = 800.0, dhi = 120.0)
+    α_mat = sum(facet_areas(scene) .* facet_albedos(scene)) / sum(facet_areas(scene))
+    @printf("  effective albedo %.4f vs area-weighted material %.4f (trapping %.1f%%)\n",
+            α_eff, α_mat, 100 * (1 - α_eff / α_mat))
+end
 
 # 2-D geometry snapshots
 heights_2d = zeros(Nx, Ny)
@@ -118,10 +151,12 @@ particles = ParticleSet(mesh)
 # ---------------------------------------------------------------------------
 
 const LAT     = 52.5220
+const LON     = 13.4100
 const DOY     = 172
 const T_DAY   = 24 * 3600.0
 const dt      = 2.0
-const nsteps  = Int(T_DAY / dt)
+# Set AEOLUS_NSTEPS to shorten the run for a smoke test.
+const nsteps  = parse(Int, get(ENV, "AEOLUS_NSTEPS", string(Int(T_DAY / dt))))
 const start_h = 6.0
 
 cool_atm = fill(-2.315e-5, Nz)
@@ -140,11 +175,49 @@ post_predictor = (s, Δt) -> implicit_ibm_correction!(s, sm; τ = 0.0, dt = Δt)
 sensible = zeros(Float64, Nx, Ny)
 sw_arr   = zeros(Float64, Nx, Ny)
 lw_arr   = fill(320.0, Nx, Ny)
-shade    = falses(Nx, Ny)
 snap_hours = [10.0, 14.0, 18.0, 22.0, 4.0]
 Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
-const shadow_every = 300
-const DIRECT_FRAC, DIFFUSE_FRAC = 0.85, 0.15
+const rad_every = 300        # radiosity solve every 10 sim-minutes
+sw_top_now   = Ref(0.0)
+elev_now_deg = Ref(0.0)
+
+# Bird clear-sky model with a continental-urban aerosol load. The AOD is
+# taken from the Phase 37 urban mixture at a typical summer Berlin burden
+# rather than guessed.
+const sky_model = BirdClearSky(; aod380 = 0.24, aod500 = 0.16,
+                                 precipitable_water = 2.0, ozone = 0.33,
+                                 albedo = 0.15)
+
+# Downwelling longwave from a correlated-k + two-stream solve on a
+# mid-latitude summer column, as a function of near-surface air
+# temperature. Built once and interpolated, because a full spectral
+# solve every radiation step would dominate the run time for a quantity
+# that varies smoothly over ~15 K.
+const _LW_SKY_TABLE = let
+    lw   = longwave_bands(Float64; ngpt_per_band = 2)
+    gas  = correlated_k_optics(lw)
+    slv  = two_stream_solver(lw; lw_variant = Quadrature())
+    Ts_probe = collect(283.0:3.0:308.0)
+    Ls = map(Ts_probe) do Tsfc
+        col = us_standard_column(Float64; nz = 30, T_sfc = Tsfc,
+                                 humid = :midlatitude_summer)
+        o = allocate_optics(Float64, (30,), lw); compute_optics!(o, gas, col)
+        f = allocate_fluxes(Float64, (), 31)
+        solve_lw!(f, slv, o, col; sfc_emissivity = 0.95)
+        f.flux_dn[1]
+    end
+    (Ts_probe, Ls)
+end
+
+"Downwelling longwave at the surface for near-surface air temperature `Ta` (K)."
+function sky_longwave(Ta::Real)
+    xs, ys = _LW_SKY_TABLE
+    Ta <= xs[1]   && return ys[1]
+    Ta >= xs[end] && return ys[end]
+    k = searchsortedlast(xs, Ta)
+    t = (Ta - xs[k]) / (xs[k+1] - xs[k])
+    return ys[k] * (1 - t) + ys[k+1] * t
+end
 
 @printf("Alexanderplatz diurnal: %d steps × %.0f s = %.0f h\n",
         nsteps, dt, T_DAY / 3600)
@@ -154,26 +227,79 @@ blew_up = false
 for n in 1:nsteps
     hour_of_day = (start_h + sim.t / 3600) % 24.0
 
-    # Refresh the shadow mask every ~10 sim-min
-    if n % shadow_every == 0 || n == 1
-        elev, azim = solar_elev_azim(LAT, DOY, hour_of_day)
-        compute_shadow_mask!(shade, sm, mesh, sun_direction(elev, azim))
-    end
-    elev_now, _ = solar_elev_azim(LAT, DOY, hour_of_day)
-    μ = max(sin(elev_now), 0.0)
-    sw_top          = sw_direct(μ, 1361.0)
-    sw_direct_beam  = sw_top * DIRECT_FRAC
-    sw_diffuse_beam = sw_top * DIFFUSE_FRAC / max(μ, 1e-3)
-    for j in 1:Ny, i in 1:Nx
-        direct  = shade[i, j] ? 0.0 : sw_direct_beam
-        diffuse = sw_diffuse_beam * svf[i, j]
-        boost   = sfc[i, j] == SURFACE_WALL ? 0.5 * max(0, 1 - μ) : 0.0
-        sw_arr[i, j] = (direct + diffuse) * (1 + boost)
-        lw_arr[i, j] = 320.0 * svf[i, j] + 380.0 * (1 - svf[i, j])
-    end
-    sw = sw_top
+    # ----- Era III radiation, refreshed every ~10 sim-min ------------------
+    if n % rad_every == 0 || n == 1
+        # (a) Sun position: Meeus, accurate to <0.01 deg, replacing the
+        #     Era I sinusoid that was good to about a degree.
+        hh  = floor(Int, hour_of_day)
+        mm  = floor(Int, (hour_of_day - hh) * 60)
+        ss  = (hour_of_day - hh - mm/60) * 3600
+        st  = solar_time(2024, 6, 20, hh, mm, ss;
+                         latitude = LAT, longitude = LON, elevation = 34.0)
+        sunpos = solar_position(st)
+        μ = max(sunpos.μ₀, 0.0)
 
-    sensible = apply_surface_flux!(sim, Ts, sfc, params;
+        # (b) Clear-sky irradiance: Bird model with a realistic urban
+        #     aerosol load, replacing Beer's law with a fixed optical
+        #     depth and the hardcoded 85/15 direct/diffuse split.
+        irr = clear_sky_irradiance(sunpos, sky_model)
+        dni, dhi = irr.dni, irr.dhi
+
+        # (c) Downwelling longwave from a real two-stream solve on a
+        #     correlated-k column, replacing the constant 320 W/m².
+        #     The near-surface air temperature is the diurnally varying
+        #     part, so the sky flux now breathes with the boundary layer.
+        θ1 = mean(view(sim.θ.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1))
+        L_sky = sky_longwave(θ1)
+
+        # (d) Materials follow the sun: water is a Fresnel interface and
+        #     its albedo runs 0.03 overhead to 0.26 at low sun.
+        mats = default_urban_materials(; μ₀ = max(μ, 0.05))
+        scene.materials.albedo     .= mats.albedo
+        scene.materials.emissivity .= mats.emissivity
+
+        # (e) Push current surface temperatures onto the facets, then
+        #     solve both bands on the real geometry. Shadowing,
+        #     inter-reflection and canyon longwave trapping all fall out
+        #     of the view-factor matrix.
+        for (fi, (ci, cj)) in enumerate(facet_col)
+            set_temperature!(scene, fi, Ts[ci, cj])
+        end
+        sunv = solar_unit_vector(sunpos)
+        swsol = μ > 0 ? solve_shortwave(scene, vfac, sunv; dni = dni, dhi = dhi) :
+                        nothing
+        lwsol = solve_longwave(scene, vfac; L_sky = L_sky)
+        forcing = aggregate_to_grid(scene, vfac; sw = swsol, lw = lwsol,
+                                    T_surface = Ts)
+
+        # `sw_effective` / `lw_down_effective` invert `step_surfaces!`'s own
+        # algebra, so the surface scheme reproduces the true facet fluxes
+        # without being modified.
+        # `aggregate_to_grid` returns fluxes per unit PLAN area, so a column
+        # holding a 200 m tower reports ~13x the incident flux — its wall
+        # area is 13x its footprint. That is the correct column ENERGY, but
+        # `step_surfaces!` carries one temperature per column and wants an
+        # irradiance per unit of actual SURFACE. Divide by the area density
+        # to get the area-weighted mean over the column's facets.
+        #
+        # This is an explicit approximation, and worth naming: collapsing a
+        # whole facade to a single temperature is a limitation of the
+        # surface scheme, not of the radiosity solve, which resolves every
+        # facet individually. A multi-layer urban canopy (Era V, Phase 49)
+        # is what removes it.
+        ad = max.(forcing.area_density, 1.0)
+        σSB = 5.670374419e-8
+        sw_arr .= forcing.sw_effective ./ ad
+        lw_arr .= σSB .* Ts.^4 .+
+                  (forcing.lw_down_effective .- σSB .* Ts.^4) ./ ad
+        sw_top_now[] = irr.ghi
+        elev_now_deg[] = sunpos.elevation
+    end
+    sw = sw_top_now[]
+
+    # `local` is required: a bare assignment inside a `for` at top level
+    # shadows the outer `sensible` and Julia warns about the ambiguity.
+    local sensible = apply_surface_flux!(sim, Ts, sfc, params;
                                     dt = dt, H_cap = 250.0, C_h = 1e-3)
 
     # Passive moisture + Kessler
