@@ -448,9 +448,8 @@ function _p3_ice_integrals(μ, λ, md::P3MassDimension{T}, ρa, η, Sc13,
     return (Cf = Cf, C = C, AV = AV, AVrM = AVrM, AVrN = AVrN, V_M = vm / m)
 end
 
-# P3's physical limiter on the ice mean size (μ+1)/λ ∈ [2 μm, 5 mm + 20 mm F_rim²]
-# (create_p3_lookupTable_1.f90), as a λ bracket.
-_p3_ice_lambda_bounds(μ, F_rim) = ((μ + 1) / (5e-3 + 2e-2 * F_rim^2), (μ + 1) / 2e-6)
+# The ice mean-size limiter is `_p3_ice_λ_limits` (massdim.jl), the one
+# place its numbers live; sedimentation uses the same function.
 
 # -------------------------------------------------------------------------
 # All process rates
@@ -557,7 +556,7 @@ function p3_process_rates(s::P3ParcelState{FT},
     shed = n_shed_c = n_shed_r = melt = n_melt = z
     if have_i
         md = p3_mass_dimension(s.q_i, s.q_rim, s.B_rim, pp.ice)
-        λmin, λmax = _p3_ice_lambda_bounds(pp.μ_i, md.F_rim)
+        λmin, λmax = _p3_ice_λ_limits(pp.μ_i, md.F_rim)
         λi = p3_slope(s.q_i, s.N_i, md; μ = pp.μ_i, λ_min = λmin, λ_max = λmax)
         ii = _p3_ice_integrals(pp.μ_i, λi, md, ρa, η, Sc13, VrN, VrM, pp)
 
@@ -770,7 +769,7 @@ function _p3_cleanup(s::P3ParcelState{FT}, pp::P3ProcessParameters) where {FT}
         Brim = max(Brim, z)
         _, _, Brim = p3_rime_state(qi, qrim, Brim, pp.ice)
         md = p3_mass_dimension(qi, qrim, Brim, pp.ice)
-        λmin, λmax = _p3_ice_lambda_bounds(pp.μ_i, md.F_rim)
+        λmin, λmax = _p3_ice_λ_limits(pp.μ_i, md.F_rim)
         m_lo = p3_mean_mass(pp.μ_i, λmax, md)
         m_hi = p3_mean_mass(pp.μ_i, λmin, md)
         # P3 adjusts N_i when the mean size leaves its limiter (MM15 §2b)

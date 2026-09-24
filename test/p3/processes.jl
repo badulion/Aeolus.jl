@@ -519,4 +519,24 @@ using Aeolus: MoistThermodynamics, AerosolCloud, Superdroplet
         @test all(diff(qcs) .<= 1e-12) && all(diff(qrs) .>= -1e-12)
         @test qrs[end] > 0.5e-3
     end
+
+    @testset "Size limits: one definition shared with sedimentation" begin
+        P3 = Aeolus.P3Microphysics
+        # Ice: the mean-size limiter lives only in massdim.jl.
+        @test !isdefined(P3, :_p3_ice_lambda_bounds)
+        # The clean-up step's N_i adjustment uses exactly those limits: ice
+        # with mass but (almost) no number is given the number of the
+        # largest allowed PSD, (μ+1)/λ = 5 mm + 20 mm·F_rim².
+        qi, qrim = 1e-4, 4e-5
+        s = P3ParcelState(T = 260.0, p = 7e4, q_v = 1e-3, q_i = qi, N_i = 1e-300,
+                          q_rim = qrim, B_rim = qrim / 400)
+        md = p3_mass_dimension(qi, qrim, qrim / 400, pp.ice)
+        λmin, λmax = P3._p3_ice_λ_limits(pp.μ_i, md.F_rim)
+        @test λmin ≈ (pp.μ_i + 1) / (5e-3 + 2e-2 * md.F_rim^2) rtol = 1e-15
+        @test λmax ≈ (pp.μ_i + 1) / 2e-6 rtol = 1e-15
+        @test P3._p3_cleanup(s, pp).N_i ≈ qi / p3_mean_mass(pp.μ_i, λmin, md) rtol = 1e-12
+        s2 = P3ParcelState(T = 260.0, p = 7e4, q_v = 1e-3, q_i = qi, N_i = 1e30,
+                           q_rim = qrim, B_rim = qrim / 400)
+        @test P3._p3_cleanup(s2, pp).N_i ≈ qi / p3_mean_mass(pp.μ_i, λmax, md) rtol = 1e-12
+    end
 end
