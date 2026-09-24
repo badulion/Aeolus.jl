@@ -23,6 +23,28 @@
 
 using ..Superdroplet: terminal_velocity, DEFAULT_MICRO
 
+# -------------------------------------------------------------------------
+# Constants
+# -------------------------------------------------------------------------
+
+"""
+    P3_K2_WATER = 0.93
+
+Dielectric factor `|K_w|² = |(ε-1)/(ε+2)|²` of liquid water at
+centimetre (S/C-band) wavelengths, the value radar reflectivity is
+conventionally normalised by (Battan 1973; Smith 1984).
+"""
+const P3_K2_WATER = 0.93
+
+"""
+    P3_K2_ICE = 0.176
+
+Dielectric factor `|K_i|²` of solid ice (density 917 kg m⁻³) at
+centimetre wavelengths (Smith 1984). The ratio `|K_i|²/|K_w|² = 0.189`
+is the factor that appears in the P3 reference code's ice reflectivity.
+"""
+const P3_K2_ICE = 0.176
+
 # Reference air density of Superdroplet.terminal_velocity (sea level).
 _p3_rain_ρ_ref() = DEFAULT_MICRO.ρ_air
 
@@ -201,3 +223,67 @@ function p3_bulk_fall_speed_z(μ::Real, λ::Real, md::P3MassDimension{T};
     end
     return VZ / Z
 end
+
+# -------------------------------------------------------------------------
+# Radar reflectivity
+# -------------------------------------------------------------------------
+
+"""
+    p3_rain_reflectivity(N0, μ, λ) -> Z in mm⁶ m⁻³
+
+Rayleigh radar reflectivity factor of rain with gamma drop size
+distribution `N(D) = N₀ D^μ e^{-λD}`, `N₀` per m³ of air:
+
+    Z = ∫ D⁶ N(D) dD = N₀ Γ(μ+7) / λ^{μ+7}   (m⁶ m⁻³),
+
+returned in the radar unit mm⁶ m⁻³ (× 10¹⁸). Valid where drops are small
+compared with the wavelength (Rayleigh regime; S-band and, to within
+~1 dB at moderate rain rates, C-band). Convert with [`p3_dbz`](@ref).
+
+Reference: Battan (1973), *Radar Observation of the Atmosphere*;
+Marshall & Palmer (1948, J. Meteor. 5, 165-166).
+"""
+p3_rain_reflectivity(N0::Real, μ::Real, λ::Real) =
+    1e18 * gamma_psd_moment(N0, μ, λ, 6)
+
+"""
+    p3_ice_reflectivity(N0, μ, λ, md::P3MassDimension; K2_ratio = P3_K2_ICE / P3_K2_WATER) -> Z_e in mm⁶ m⁻³
+
+Equivalent radar reflectivity factor of P3 ice with gamma size
+distribution `N(D) = N₀ D^μ e^{-λD}` (`N₀` per m³ of air). Each ice
+particle of mass `m` scatters (Rayleigh) like a sphere of solid ice of
+the same mass, i.e. of melted-equivalent diameter
+`D_eq = (6m/(π ρ_ice))^{1/3}`, so
+
+    Z_e = (|K_i|²/|K_w|²) ∫ D_eq⁶ N dD
+        = (|K_i|²/|K_w|²) (6/(π ρ_ice))² ∫ m(D)² N(D) dD.
+
+Equivalently a particle of bulk density `ρ_p` contributes
+`(|K_i|²/|K_w|²)(ρ_p/ρ_ice)² D⁶`: low-density snow is a weak target for
+its size. `|K_i|²/|K_w|² = 0.176/0.93 = 0.189` (Smith 1984), the factor
+in the P3 reference code. Because `m(D)` is a piecewise power law, `m²`
+is too and `Z_e` is a sum of truncated gamma moments
+([`gamma_psd_partial_moment`](@ref)) — exact, no quadrature.
+
+References: Smith (1984, JCAM 23, 1258-1260); Morrison & Milbrandt
+(2015), §2; Heymsfield et al. (2005) for density scaling.
+"""
+function p3_ice_reflectivity(N0::Real, μ::Real, λ::Real, md::P3MassDimension{T};
+                             K2_ratio::Real = P3_K2_ICE / P3_K2_WATER) where {T}
+    N0T, μT, λT = T(N0), T(μ), T(λ)
+    s = zero(T)
+    for (c, b, D1, D2) in _p3_mass_segments(md)
+        c == 0 && continue
+        s += c^2 * gamma_psd_partial_moment(N0T, μT, λT, 2b, D1, D2)
+    end
+    return T(1e18) * T(K2_ratio) * (6 / (T(π) * md.params.ρ_ice))^2 * s
+end
+
+"""
+    p3_dbz(Z; Z_min = 1e-10) -> dBZ
+
+Logarithmic reflectivity `10 log₁₀(Z / 1 mm⁶ m⁻³)`. `Z` below `Z_min`
+(including zero) is floored, giving -100 dBZ by default, so an empty
+cell has a finite, clearly non-meteorological value.
+"""
+p3_dbz(Z::Real; Z_min::Real = 1e-10) = 10 * log10(max(float(Z), Z_min))
