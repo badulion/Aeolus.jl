@@ -448,3 +448,193 @@ function subgrid_cloud(θ_li::Real, p::Real, q_t::Real;
     end
     return SubgridCloud(C, qc, q, T, s̄, σ, s̄ / σ, σ_S, m)
 end
+
+# =========================================================================
+# 3. Sub-grid (co)variances from the Smagorinsky-Lilly closure
+# =========================================================================
+#
+# The LES closes SGS fluxes with an eddy viscosity ν_t = (C_s Δ)² |S|
+# (`Operators.compute_smagorinsky_νt!`) and an eddy diffusivity
+# K = ν_t / Pr_t for scalars. The SGS scalar-variance budget in local
+# equilibrium (Deardorff 1980; the diagnostic closure of Bechtold et al.
+# 1995 and Chaboureau & Bechtold 2002) balances gradient production
+# against dissipation on the SGS turnover time Δ/√e:
+#
+#     2 K |∇φ̄|²  =  C_χ (√e / Δ) φ'²
+#
+# With the Smagorinsky ν_t written in Deardorff form, ν_t = C_k Δ √e,
+# ν_t cancels and
+#
+#     φ'² = c_var Δ² |∇φ̄|²,      c_var = 2 C_k / (C_χ Pr_t),
+#     φ'ψ' = c_var Δ² ∇φ̄·∇ψ̄                 (same budget for a covariance).
+#
+# So in equilibrium the variance does not depend on C_s at all — only on
+# the filter width and the resolved gradient. What ν_t still decides is
+# whether there is SGS turbulence: where ν_t = 0 there is neither
+# production nor dissipation, and the variance is taken as zero.
+#
+# `Δ = (dx dy dz)^{1/3}` is the Smagorinsky filter width used by
+# `compute_smagorinsky_νt!`. The default c_var = 1/12 is the variance of
+# a linear profile of slope |∇φ̄| across a cell of width Δ — what the
+# resolved gradient alone puts inside a cell; a turbulent closure with
+# explicit (C_k, C_χ, Pr_t) is available via
+# `equilibrium_variance_coefficient`.
+
+export GEOMETRIC_VARIANCE_COEFF, equilibrium_variance_coefficient,
+       filter_width, sgs_scalar_covariance!, sgs_scalar_variance!,
+       subgrid_cloud!
+
+"""
+    GEOMETRIC_VARIANCE_COEFF = 1/12
+
+Default `c_var` in `φ'² = c_var Δ² |∇φ̄|²`: the variance of a linear
+profile of slope `|∇φ̄|` across a cubic cell of width `Δ`,
+`(1/Δ)∫(G z)² dz = G²Δ²/12` over `z ∈ [-Δ/2, Δ/2]`.
+"""
+const GEOMETRIC_VARIANCE_COEFF = 1 / 12
+
+"""
+    equilibrium_variance_coefficient(; C_k = 0.1, C_χ, Pr_t = 1/3) -> c_var
+
+Coefficient of the local-equilibrium SGS scalar variance
+`φ'² = c_var Δ² |∇φ̄|²` implied by a Deardorff-type closure with
+eddy viscosity `ν_t = C_k Δ √e`, eddy diffusivity `ν_t/Pr_t` and scalar
+variance dissipation `C_χ (√e/Δ) φ'²`:
+
+```math
+c_\\mathrm{var} = \\frac{2 C_k}{C_\\chi\\,\\mathrm{Pr}_t}.
+```
+
+`C_k = 0.1` is Deardorff's (1980) value; `Pr_t = 1/3` is the default of
+the package's `Simulations` and `Anelastic` cores. `C_χ` has no default
+here: published values differ between closures, and the choice should
+be made — and stated — by the caller.
+"""
+function equilibrium_variance_coefficient(; C_k::Real = 0.1, C_χ::Real,
+                                          Pr_t::Real = 1 / 3)
+    (C_k > 0 && C_χ > 0 && Pr_t > 0) || throw(ArgumentError(
+        "equilibrium_variance_coefficient: constants must be > 0"))
+    return 2 * float(C_k) / (float(C_χ) * float(Pr_t))
+end
+
+"""
+    filter_width(grid::RegularGrid) -> Δ
+
+Smagorinsky filter width `(dx dy dz)^{1/3}`, the same `Δ` as
+`compute_smagorinsky_νt!` uses.
+"""
+filter_width(g::RegularGrid) = (g.dx * g.dy * g.dz)^(1 / 3)
+
+"""
+    sgs_scalar_covariance!(cov, φ, ψ; c_var = GEOMETRIC_VARIANCE_COEFF, νt = nothing)
+
+Local-equilibrium SGS covariance `φ'ψ' = c_var Δ² ∇φ̄·∇ψ̄` at cell
+centres, with second-order centred gradients. Halos of `φ` and `ψ` must
+be filled. With an eddy-viscosity field `νt` (from
+`compute_smagorinsky_νt!`), cells with `νt ≤ 0` — no SGS turbulence —
+get zero. See the section comment in the source for the derivation from
+the Smagorinsky-Lilly closure.
+"""
+function sgs_scalar_covariance!(cov::Field, φ::Field, ψ::Field;
+                                c_var::Real = GEOMETRIC_VARIANCE_COEFF,
+                                νt::Union{Nothing,Field} = nothing)
+    g = φ.mesh
+    Δ2 = filter_width(g)^2
+    h2x = 1 / (2g.dx); h2y = 1 / (2g.dy); h2z = 1 / (2g.dz)
+    F, P, C = φ.data, ψ.data, cov.data
+    ii, jj, kk = interior(g)
+    @inbounds for k in kk, j in jj, i in ii
+        if νt !== nothing && νt.data[i, j, k] <= 0
+            C[i, j, k] = 0
+            continue
+        end
+        fx = (F[i+1, j, k] - F[i-1, j, k]) * h2x
+        fy = (F[i, j+1, k] - F[i, j-1, k]) * h2y
+        fz = (F[i, j, k+1] - F[i, j, k-1]) * h2z
+        px = (P[i+1, j, k] - P[i-1, j, k]) * h2x
+        py = (P[i, j+1, k] - P[i, j-1, k]) * h2y
+        pz = (P[i, j, k+1] - P[i, j, k-1]) * h2z
+        C[i, j, k] = c_var * Δ2 * (fx * px + fy * py + fz * pz)
+    end
+    return cov
+end
+
+"""
+    sgs_scalar_variance!(var, φ; c_var = GEOMETRIC_VARIANCE_COEFF, νt = nothing)
+
+Local-equilibrium SGS variance `φ'² = c_var Δ² |∇φ̄|²`; the `ψ = φ` case
+of [`sgs_scalar_covariance!`](@ref).
+"""
+sgs_scalar_variance!(var::Field, φ::Field; kw...) =
+    sgs_scalar_covariance!(var, φ, φ; kw...)
+
+_pressure_at(p::Real, i, j, k, kl) = float(p)
+_pressure_at(p::Field, i, j, k, kl) = p.data[i, j, k]
+_pressure_at(p::AbstractVector, i, j, k, kl) = float(p[kl])
+
+"""
+    subgrid_cloud!(cloud_fraction, condensate, θ_li, q_t, p;
+                   νt = nothing, c_var = GEOMETRIC_VARIANCE_COEFF,
+                   pdf = GaussianSaturationPDF(), c = DEFAULT_CONSTANTS,
+                   T = nothing, liquid = nothing, ice = nothing)
+
+Diagnose partial cloudiness on a grid. For every interior cell the
+sub-grid (co)variances of `q_t` and `θ_li` are formed from the resolved
+gradients by the Smagorinsky-consistent equilibrium closure of
+[`sgs_scalar_covariance!`](@ref), mapped to `σ_s` by
+[`saturation_deficit_variance`](@ref), and passed to
+[`subgrid_cloud`](@ref). Halos of `θ_li` and `q_t` must be filled.
+
+`p` is a number, a cell-centred `Field`, or a vector over the interior
+vertical levels (an anelastic reference profile). Optional `T`,
+`liquid`, `ice` fields receive the cell-mean temperature and phase
+split. `θ_li` and `q_t` are not modified: they are the conserved
+variables, and this is a diagnosis of how the water they describe is
+distributed, not a tendency.
+
+With `νt` identically zero (SGS closure off) every cell has `σ_s = 0`
+and the result is the all-or-nothing [`saturation_adjustment`](@ref).
+"""
+function subgrid_cloud!(cf::Field, qc::Field, θ_li::Field, q_t::Field, p;
+                        νt::Union{Nothing,Field} = nothing,
+                        c_var::Real = GEOMETRIC_VARIANCE_COEFF,
+                        pdf::AbstractSaturationPDF = GaussianSaturationPDF(),
+                        c::ThermodynamicConstants = DEFAULT_CONSTANTS,
+                        T::Union{Nothing,Field} = nothing,
+                        liquid::Union{Nothing,Field} = nothing,
+                        ice::Union{Nothing,Field} = nothing)
+    g = θ_li.mesh
+    Δ2 = filter_width(g)^2
+    h2x = 1 / (2g.dx); h2y = 1 / (2g.dy); h2z = 1 / (2g.dz)
+    Θ, Qt = θ_li.data, q_t.data
+    ii, jj, kk = interior(g)
+    for (kl, k) in enumerate(kk), j in jj, i in ii
+        θ = Θ[i, j, k]; qt = Qt[i, j, k]
+        pr = _pressure_at(p, i, j, k, kl)
+        if νt !== nothing && νt.data[i, j, k] <= 0
+            vq = vθ = cqθ = 0.0
+        else
+            tx = (Θ[i+1, j, k] - Θ[i-1, j, k]) * h2x
+            ty = (Θ[i, j+1, k] - Θ[i, j-1, k]) * h2y
+            tz = (Θ[i, j, k+1] - Θ[i, j, k-1]) * h2z
+            qx = (Qt[i+1, j, k] - Qt[i-1, j, k]) * h2x
+            qy = (Qt[i, j+1, k] - Qt[i, j-1, k]) * h2y
+            qz = (Qt[i, j, k+1] - Qt[i, j, k-1]) * h2z
+            vq = c_var * Δ2 * (qx^2 + qy^2 + qz^2)
+            vθ = c_var * Δ2 * (tx^2 + ty^2 + tz^2)
+            cqθ = c_var * Δ2 * (qx * tx + qy * ty + qz * tz)
+            # the gradient-model covariance obeys Cauchy-Schwarz exactly;
+            # clamp the last ulp so round-off cannot trip the check
+            lim = sqrt(vq * vθ)
+            cqθ = clamp(cqθ, -lim, lim)
+        end
+        r = subgrid_cloud(θ, pr, qt; var_qt = vq, var_θ = vθ, cov_qθ = cqθ,
+                          pdf = pdf, c = c)
+        cf.data[i, j, k] = r.cloud_fraction
+        qc.data[i, j, k] = r.condensate
+        T === nothing || (T.data[i, j, k] = r.T)
+        liquid === nothing || (liquid.data[i, j, k] = r.q.liq)
+        ice === nothing || (ice.data[i, j, k] = r.q.ice)
+    end
+    return cf, qc
+end

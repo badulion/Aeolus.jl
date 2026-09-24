@@ -10,6 +10,7 @@
 
 using Test, Printf
 using Aeolus
+using Aeolus.Grids: interior
 
 # Composite Simpson on a uniform grid (n even) — the tests' independent
 # quadrature, deliberately not sharing any code with the closed forms.
@@ -291,5 +292,143 @@ end
             @info @sprintf("q_t/q_s=%.2f σq=%.0e σθ=%.2f ρ=%+.1f | C ref %.4f pdf %.4f (Δ %+.4f) | q̄c ref %.4e pdf %.4e (rel %+.2f%%)",
                            r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], 100 * r[10])
         end
+    end
+
+    # ---------------------------------------------------------------------
+    # Variance from the SGS closure, and the gridded diagnosis
+    # ---------------------------------------------------------------------
+
+    # Fill a cell-centred field INCLUDING its halos from f(x, y, z), so a
+    # smooth profile has exact centred gradients up to the domain edge.
+    function fill_all!(fld, f)
+        g = fld.mesh
+        for k in axes(fld.data, 3), j in axes(fld.data, 2), i in axes(fld.data, 1)
+            x = g.x0 + (i - g.Hx - 0.5) * g.dx
+            y = g.y0 + (j - g.Hy - 0.5) * g.dy
+            z = g.z0 + (k - g.Hz - 0.5) * g.dz
+            fld.data[i, j, k] = f(x, y, z)
+        end
+        return fld
+    end
+
+    @testset "SGS variance: geometric meaning and the equilibrium budget" begin
+        g = RegularGrid(; size = (4, 4, 8), extent = (400.0, 400.0, 800.0))
+        Δ = filter_width(g)
+        @test Δ ≈ 100.0
+        G = 2.0e-5                         # q_t gradient, kg/kg per m
+        φ = fill_all!(Field(g), (x, y, z) -> 0.01 - G * z)
+        var = Field(g)
+        sgs_scalar_variance!(var, φ)
+        # exact variance of the linear profile inside one cell, by
+        # sub-sampling the cell (independent of the closure's algebra)
+        n = 10_001
+        zs = range(-Δ / 2, Δ / 2; length = n)
+        exact = sum((G .* zs) .^ 2) / n
+        vals = view(var.data, interior(g)...)
+        @test all(v -> isapprox(v, G^2 * Δ^2 / 12; rtol = 1e-12), vals)
+        @test vals[1] ≈ exact rtol = 1e-3
+        # gradient in a tilted direction: only |∇φ| matters
+        ψ = fill_all!(Field(g), (x, y, z) -> 3e-5 * x - 4e-5 * z)
+        sgs_scalar_variance!(var, ψ)
+        @test view(var.data, interior(g)...)[2, 2, 2] ≈ (5e-5)^2 * Δ^2 / 12 rtol = 1e-12
+        # covariance of anti-correlated profiles is negative, and obeys
+        # Cauchy-Schwarz with equality for collinear gradients
+        cov = Field(g)
+        sgs_scalar_covariance!(cov, φ, fill_all!(Field(g), (x, y, z) -> 3e-3 * z))
+        @test view(cov.data, interior(g)...)[1, 1, 1] ≈ -G * 3e-3 * Δ^2 / 12 rtol = 1e-12
+
+        # Equilibrium budget with a Smagorinsky ν_t written in Deardorff form
+        # (ν_t = C_k Δ √e): production 2(ν_t/Pr_t)|∇φ|² equals dissipation
+        # C_χ (√e/Δ) φ'², whatever ν_t is.
+        C_k, C_χ, Pr_t = 0.1, 2.0, 1 / 3
+        c_eq = equilibrium_variance_coefficient(; C_k = C_k, C_χ = C_χ, Pr_t = Pr_t)
+        @test c_eq ≈ 0.3
+        for νt in (0.1, 1.0, 50.0)
+            e½ = νt / (C_k * Δ)
+            v = c_eq * Δ^2 * G^2
+            @test 2 * (νt / Pr_t) * G^2 ≈ C_χ * e½ / Δ * v rtol = 1e-12
+        end
+        # ... so the variance field is the same for any ν_t > 0, and zero
+        # where the closure is switched off.
+        ν = Field(g); fill!(ν.data, 3.0)
+        view(ν.data, interior(g)...)[:, :, 1:4] .= 0.0
+        sgs_scalar_variance!(var, φ; c_var = c_eq, νt = ν)
+        iv = view(var.data, interior(g)...)
+        @test all(iv[:, :, 1:4] .== 0)
+        @test all(v -> isapprox(v, c_eq * Δ^2 * G^2; rtol = 1e-12), iv[:, :, 5:8])
+        @test_throws ArgumentError equilibrium_variance_coefficient(; C_χ = 0.0)
+    end
+
+    # A stratocumulus-top-like column: moist well-mixed layer under a warm,
+    # dry inversion at z_i, smoothed over a depth δ.
+    function inversion_state!(θf, qf, zi, δ)
+        θb, qb = 289.0, 0.0105            # θ_li, q_t in the mixed layer
+        dθ, dq = 8.0, -0.006              # jumps across the inversion
+        H(z) = 0.5 * (1 + tanh((z - zi) / δ))
+        fill_all!(θf, (x, y, z) -> θb + dθ * H(z) + 0.004 * max(z - zi, 0.0))
+        fill_all!(qf, (x, y, z) -> qb + dq * H(z))
+    end
+    p_of(z) = 1.0e5 * exp(-z / 8000)       # reference pressure profile
+
+    @testset "Gridded diagnosis: SGS off is saturation adjustment; water conserved" begin
+        g = RegularGrid(; size = (2, 2, 40), extent = (100.0, 100.0, 1200.0))
+        θf, qf = Field(g), Field(g)
+        inversion_state!(θf, qf, 800.0, 40.0)
+        zc = [g.z0 + (k - 0.5) * g.dz for k in 1:g.Nz]
+        pz = p_of.(zc)
+        cf, qc, T, ql, qi = Field(g), Field(g), Field(g), Field(g), Field(g)
+
+        # (i) closure off: exactly the contract's all-or-nothing adjustment
+        ν0 = Field(g)
+        subgrid_cloud!(cf, qc, θf, qf, pz; νt = ν0, T = T, liquid = ql, ice = qi)
+        ii, jj, kk = interior(g)
+        exact = true
+        for (kl, k) in enumerate(kk), j in jj, i in ii
+            Ta, qa = saturation_adjustment(θf.data[i, j, k], pz[kl], qf.data[i, j, k])
+            exact &= T.data[i, j, k] == Ta && ql.data[i, j, k] == qa.liq &&
+                     qi.data[i, j, k] == qa.ice &&
+                     cf.data[i, j, k] == (qa.liq + qa.ice > 0 ? 1.0 : 0.0)
+        end
+        @test exact
+        cf_off = copy(view(cf.data, ii, jj, kk)); qc_off = copy(view(qc.data, ii, jj, kk))
+        @test any(cf_off .== 1) && any(cf_off .== 0)       # the layer is cloudy
+
+        # (ii) closure on: partial cloud appears only where gradients are
+        subgrid_cloud!(cf, qc, θf, qf, pz; T = T, liquid = ql, ice = qi)
+        cf_on = view(cf.data, ii, jj, kk); qc_on = view(qc.data, ii, jj, kk)
+        partial = count(c -> 1e-6 < c < 1 - 1e-6, cf_on[1, 1, :])
+        @test partial >= 1
+        # conservation: total water untouched, condensate within it, the
+        # phase split sums to the condensate
+        @test all(0 .<= qc_on .<= view(qf.data, ii, jj, kk))
+        @test all(isapprox.(view(ql.data, ii, jj, kk) .+ view(qi.data, ii, jj, kk),
+                            qc_on; rtol = 1e-14, atol = 0))
+        # well-mixed interior (zero gradient) is identical to the adjustment
+        @test cf_on[1, 1, 5] == cf_off[1, 1, 5]
+        @test qc_on[1, 1, 5] == qc_off[1, 1, 5]
+        @info "inversion column" cells_partially_cloudy = partial column_qc_on = sum(qc_on[1, 1, :]) column_qc_off = sum(qc_off[1, 1, :])
+    end
+
+    @testset "Resolution convergence to the all-or-nothing limit" begin
+        # A smooth profile resolved ever more finely: σ_s ∝ Δ, so the
+        # column-integrated difference from the mean-state adjustment
+        # must fall as the grid is refined.
+        errs = Float64[]; Δs = Float64[]
+        for Nz in (20, 40, 80, 160)
+            g = RegularGrid(; size = (1, 1, Nz), extent = (1200.0 / Nz, 1200.0 / Nz, 1200.0))
+            θf, qf = Field(g), Field(g)
+            inversion_state!(θf, qf, 800.0, 60.0)
+            zc = [g.z0 + (k - 0.5) * g.dz for k in 1:g.Nz]
+            cf, qc = Field(g), Field(g)
+            subgrid_cloud!(cf, qc, θf, qf, p_of.(zc))
+            on = sum(view(qc.data, interior(g)...)) * g.dz
+            subgrid_cloud!(cf, qc, θf, qf, p_of.(zc); νt = Field(g))
+            off = sum(view(qc.data, interior(g)...)) * g.dz
+            push!(errs, abs(on - off) / off); push!(Δs, filter_width(g))
+        end
+        @test issorted(errs; rev = true)
+        rate = log(errs[end-1] / errs[end]) / log(Δs[end-1] / Δs[end])
+        @info "relative column-condensate difference SGS-on vs off" Δ = string(round.(Δs; sigdigits = 3)) rel_diff = string(round.(errs; sigdigits = 3)) order = rate
+        @test rate > 1.0
     end
 end

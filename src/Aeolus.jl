@@ -446,6 +446,9 @@ export AbstractSaturationPDF, GaussianSaturationPDF,
        saturation_pdf_density, exceedance_fraction,
        pdf_cloud_fraction, pdf_condensate,
        MellorCoefficients, mellor_coefficients, saturation_deficit_variance,
-       extended_condensate, SubgridCloud, subgrid_cloud
+       extended_condensate, SubgridCloud, subgrid_cloud,
+       GEOMETRIC_VARIANCE_COEFF, equilibrium_variance_coefficient,
+       filter_width, sgs_scalar_covariance!, sgs_scalar_variance!,
+       subgrid_cloud!
 
 end # module
