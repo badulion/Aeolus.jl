@@ -112,6 +112,20 @@ and the run blew up. Moisture (``q_v`` and the fog water ``q_l``, which
 must move with the air) now uses WENO-Z5 with the positivity limiter,
 after which the run stays bounded with fog and dew active.
 
+Measured over the full 24 h run (06 h to 06 h, ``\Delta t`` = 2 s): the
+lowest-layer ``\theta`` stayed in 292.1–301.5 K and ``\max|\nabla\cdot u|``
+= 1.75×10⁻¹⁵. Dew formed on the initially 285 K surfaces in the morning,
+peaked at 0.185 mm at 09:30 and had evaporated by 22:00. Fog water
+reached at most 3.4 g/kg, confined to wall nooks, and was gone by 15:30.
+The example's surfaces never cool below the dew point at night (the
+minimum ``T_s`` rises from 285 K to 292 K over the day), so it contains no
+nocturnal radiation fog. Two known residuals come from the example's IBM
+velocity correction, which is applied after the projection and is not
+divergence-free in cells next to buildings. First, a few wall-nook cells
+gain vapour: fog now caps them at saturation. Second, the lowest-layer
+``q_v`` drops to 0 in some cells between 18:30 and 22:30, while neither
+dew nor fog is active.
+
 ## References
 
 * Monteith, J. L. (1957). Dew. *Q. J. R. Meteorol. Soc.*, 83, 322–341.
