@@ -458,6 +458,7 @@ export P3ProcessParameters, P3_DEFAULT_PROCESS, P3ParcelState,
        p3_total_water,
        p3_autoconversion, p3_accretion, p3_rain_self_collection,
        p3_cober_list_density, p3_rime_density,
-       p3_condensation
+       p3_condensation, p3_ventilation,
+       p3_process_rates, p3_tendencies
 
 end # module

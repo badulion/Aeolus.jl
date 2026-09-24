@@ -168,4 +168,235 @@ using Aeolus: MoistThermodynamics, AerosolCloud, Superdroplet
         # R_i = 10 μm × 4 m/s / 5 K = 8 → 611
         @test ρ(20e-6, 4.0, 268.15) ≈ 611.0 rtol = 1e-9
     end
+
+    # ---------------------------------------------------------------------
+    # Size-distribution-integrated processes
+    # ---------------------------------------------------------------------
+    keys_mass = (:evap_r, :dep, :sub, :auto, :accr, :rime_c, :rime_r, :shed, :melt)
+    # number fields that belong to each mass process
+    companions = Dict(:evap_r => (:n_evap_r,), :dep => (), :sub => (:n_sub,),
+                      :auto => (:n_auto_r, :n_auto_c), :accr => (:n_accr_c,),
+                      :rime_c => (:n_rime_c,), :rime_r => (:n_rime_r,),
+                      :shed => (:n_shed_c, :n_shed_r), :melt => (:n_melt,))
+    function only(r, k)
+        z = map(v -> zero(v), r)
+        z = merge(z, (ρ_rime_c = r.ρ_rime_c,))
+        merge(z, NamedTuple{(k, companions[k]...)}(map(x -> r[x], (k, companions[k]...))))
+    end
+    # mixed-phase cold state (riming, deposition), warm melting state,
+    # subsaturated cold state (sublimation, evaporation)
+    cold = P3ParcelState(T = 263.15, p = 7.0e4, q_v = qsat(263.15, 7.0e4),
+                         q_c = 3e-4, N_c = 1e8, q_r = 2e-4, N_r = 2e4,
+                         q_i = 3e-4, N_i = 5e4, q_rim = 1e-4, B_rim = 1e-4 / 400)
+    warm = P3ParcelState(T = 276.15, p = 8.0e4, q_v = 0.95 * qsat(276.15, 8.0e4),
+                         q_c = 3e-4, N_c = 1e8, q_r = 2e-4, N_r = 2e4,
+                         q_i = 3e-4, N_i = 5e4, q_rim = 1e-4, B_rim = 1e-4 / 400)
+    dry = P3ParcelState(T = 258.15, p = 6.0e4, q_v = 0.7 * qsati(258.15, 6.0e4),
+                        q_r = 2e-4, N_r = 2e4,
+                        q_i = 3e-4, N_i = 5e4, q_rim = 1e-4, B_rim = 1e-4 / 400)
+
+    @testset "Each process conserves water and heats with its latent heat" begin
+        nact = 0
+        for st in (cold, warm, dry)
+            r = p3_process_rates(st)
+            cpm = MT.heat_capacity_moist(MT.PhasePartition(p3_total_water(st),
+                                         st.q_c + st.q_r, st.q_i), c)
+            Lv, Lf = MT.latent_heat_vapor(st.T, c), MT.latent_heat_fusion(st.T, c)
+            Ls = MT.latent_heat_sublim(st.T, c)
+            Lexp = Dict(:evap_r => -Lv, :dep => Ls, :sub => -Ls, :auto => 0.0,
+                        :accr => 0.0, :rime_c => Lf, :rime_r => Lf, :shed => 0.0,
+                        :melt => -Lf)
+            for k in keys_mass
+                r[k] > 0 || continue
+                nact += 1
+                d = p3_tendencies(st, only(r, k))
+                @test abs(d.q_v + d.q_c + d.q_r + d.q_i) <= 1e-15 * r[k]
+                @test cpm * d.T ≈ Lexp[k] * r[k] atol = 1e-12 * Ls * r[k]
+            end
+            # and the sum of all of them
+            d = p3_tendencies(st, r)
+            tot = sum(r[k] for k in keys_mass)
+            @test abs(d.q_v + d.q_c + d.q_r + d.q_i) <= 1e-15 * tot
+            @test cpm * d.T ≈ -Lv * d.q_v + Lf * d.q_i rtol = 1e-12
+        end
+        @printf("    %d active (state, process) pairs checked\n", nact)
+        @test nact >= 12          # every process appears in at least one state
+    end
+
+    @testset "Rain evaporation: only in subsaturation, ventilated" begin
+        base = (T = 280.0, p = 9.0e4, q_r = 5e-4, N_r = 5e3)
+        ev(S) = p3_process_rates(P3ParcelState(; base...,
+                    q_v = (1 + S) * qsat(280.0, 9.0e4))).evap_r
+        @test ev(0.0) == 0
+        @test ev(0.05) == 0                 # no evaporation when supersaturated
+        e1, e2 = ev(-0.1), ev(-0.2)
+        @test e1 > 0
+        @printf("    evap(S=-0.2)/evap(S=-0.1) = %.6f (linear in S)\n", e2 / e1)
+        @test e2 / e1 ≈ 2 rtol = 2e-3      # ρ_air changes slightly with q_v
+        # near-monodisperse small drops (μ_r = 400): f_v → 1 and the bulk rate
+        # reduces to N 2π D S/(A+B) with Superdroplet's F_k + F_d.
+        ppm = P3ProcessParameters{Float64}(μ_r = 400.0)
+        Dm, Nr = 40e-6, 1e8
+        qr = Nr * π / 6 * 1000 * Dm^3
+        st = P3ParcelState(T = 280.0, p = 9.0e4, q_v = 0.8 * qsat(280.0, 9.0e4),
+                           q_r = qr, N_r = Nr)
+        e = p3_process_rates(st, ppm).evap_r
+        AB = (Superdroplet.fk_thermal(280.0) + Superdroplet.fd_vapor(280.0, 9.0e4)) / 1000
+        eref = Nr * 2π * Dm * 0.2 / AB
+        @printf("    monodisperse 40 μm drops: evap / N 2πDS/(A+B) = %.5f\n", e / eref)
+        @test e / eref ≈ 1 atol = 0.02
+        # number removed in proportion to mass
+        r = p3_process_rates(P3ParcelState(; base..., q_v = 0.8 * qsat(280.0, 9.0e4)))
+        @test r.n_evap_r ≈ r.evap_r * base.N_r / base.q_r rtol = 1e-14
+    end
+
+    @testset "Ventilation coefficients" begin
+        for k in (:ice, :rain)
+            @test p3_ventilation(0.0, k) == 1
+            @test all(p3_ventilation(x, k) >= 1 for x in 0:0.01:20)
+        end
+        @test p3_ventilation(1 - 1e-12, :ice) ≈ p3_ventilation(1.0, :ice) atol = 1e-10
+        @test abs(p3_ventilation(1.4 - 1e-12, :rain) - p3_ventilation(1.4, :rain)) < 6e-4
+        @test p3_ventilation(10.0, :ice) ≈ 0.86 + 2.8
+        @test p3_ventilation(10.0, :rain) ≈ 0.78 + 3.08
+    end
+
+    @testset "Ice deposition and sublimation" begin
+        T, p = 258.15, 6.0e4
+        base = (T = T, p = p, q_i = 1e-4, N_i = 1e5)
+        rr(Si) = p3_process_rates(P3ParcelState(; base..., q_v = (1 + Si) * qsati(T, p)))
+        @test rr(0.0).dep == 0 && rr(0.0).sub == 0
+        @test rr(0.1).dep > 0 && rr(0.1).sub == 0
+        @test rr(-0.1).sub > 0 && rr(-0.1).dep == 0          # sublimation only if S_i < 0
+        @test rr(-0.1).n_sub ≈ rr(-0.1).sub * base.N_i / base.q_i rtol = 1e-14
+        @printf("    dep(S_i=+0.1) = %.4e, sub(S_i=-0.1) = %.4e kg/kg/s\n",
+                rr(0.1).dep, rr(-0.1).sub)
+        # Wegener-Bergeron-Findeisen: at water saturation below 0 °C the
+        # ice grows while rain/cloud do not evaporate.
+        wbf = p3_process_rates(P3ParcelState(; base..., q_v = qsat(T, p),
+                                             q_r = 1e-4, N_r = 1e4))
+        @test wbf.dep > 0 && wbf.evap_r == 0
+        # No vapour growth of ice at or above 0 °C (melting takes over).
+        hot = p3_process_rates(P3ParcelState(T = 275.0, p = 8e4, q_v = 1.1 * qsati(275.0, 8e4),
+                                             q_i = 1e-4, N_i = 1e5))
+        @test hot.dep == 0 && hot.sub == 0
+
+        # Benchmark: small ice spheres (mean size ~3 μm, regime 1, f_v ≈ 1):
+        # dep = N 4π E[D/2] S/(A+B) = N 2π (μ+1)/λ S/(A+B), A+B for ice
+        # built from the MoistThermodynamics/Superdroplet ingredients.
+        qi, Ni = 1e-6, 1e7            # mean size ~3 μm, inside P3's 2 μm limiter
+        st = P3ParcelState(T = T, p = p, q_v = 1.05 * qsati(T, p), q_i = qi, N_i = Ni)
+        dep = p3_process_rates(st).dep
+        md = p3_mass_dimension(0.0, 400.0)
+        λ = p3_slope(qi, Ni, md; λ_min = 1 / 5e-3, λ_max = 1 / 2e-6)
+        Ls = MT.latent_heat_sublim(T, c); Rv = c.gas_constant / c.molmass_water
+        Ka = Superdroplet.thermal_conductivity(T); Dv = Superdroplet.vapor_diffusivity(T, p)
+        AB = (Ls / (Rv * T) - 1) * Ls / (Ka * T) +
+             Rv * T / (Dv * MT.saturation_vapor_pressure_ice(T, c))
+        dref = Ni * 2π / λ * 0.05 / AB
+        @printf("    small-sphere deposition / analytic = %.5f (mean D = %.2f μm)\n",
+                dep / dref, 1e6 / λ)
+        @test dep / dref ≈ 1 atol = 2e-3
+
+        # Ventilation raises the growth of large snow: E[C f_v]/E[C] > 1.
+        pp0 = pp
+        snow = P3ParcelState(T = T, p = p, q_v = 1.05 * qsati(T, p), q_i = 1e-3, N_i = 1e5)
+        d_vent = p3_process_rates(snow).dep
+        md2 = p3_mass_dimension(0.0, 400.0)
+        # unventilated reference: same PSD, f_v ≡ 1
+        λ2 = p3_slope(1e-3, 1e5, md2; λ_min = 1 / 5e-3, λ_max = 1 / 2e-6)
+        EC = Aeolus.P3Microphysics._p3_psd_expectation(0.0, λ2, md2) do D
+            reg = p3_regime(D, md2)
+            ((reg == 1 || reg == 3 ? 1.0 : 0.48) * D / 2,)
+        end[1]
+        d_novent = 1e5 * 4π * EC * 0.05 / AB
+        @printf("    snow (mean D = %.2f mm): ventilation factor %.3f\n",
+                1e3 / λ2, d_vent / d_novent)
+        @test d_vent > d_novent
+        @test 1.1 < d_vent / d_novent < 3
+
+        # Sublimation preserves rime density and rime fraction; deposition
+        # adds unrimed mass, so F_rim falls.
+        r = rr(-0.1)
+        st2 = P3ParcelState(; base..., q_v = 0.9 * qsati(T, p), q_rim = 4e-5, B_rim = 4e-5 / 300)
+        r2 = p3_process_rates(st2)
+        d = p3_tendencies(st2, only(r2, :sub))
+        @test d.q_rim / d.q_i ≈ st2.q_rim / st2.q_i rtol = 1e-14
+        @test d.B_rim / d.q_i ≈ st2.B_rim / st2.q_i rtol = 1e-14
+        st3 = P3ParcelState(; base..., q_v = 1.1 * qsati(T, p), q_rim = 4e-5, B_rim = 4e-5 / 300)
+        d3 = p3_tendencies(st3)
+        @test d3.q_rim == 0 && d3.q_i > 0                     # F_rim decreases
+    end
+
+    @testset "Riming: rime mass, volume and Cober-List density" begin
+        r = p3_process_rates(cold)
+        @test r.rime_c > 0 && r.rime_r > 0 && r.shed == 0
+        d = p3_tendencies(cold, r)
+        @test d.q_rim > 0 && d.B_rim > 0
+        # B_rim budget: new rime at its own density (dep/sub contribute 0 here
+        # since the cold state is at water saturation → only deposition)
+        @test d.B_rim ≈ r.rime_c / r.ρ_rime_c + r.rime_r / pp.ρ_rim_rain rtol = 1e-12
+        @test d.q_rim ≈ r.rime_c + r.rime_r rtol = 1e-14
+        # rime fraction grows over a short step (riming ≫ deposition here)
+        dt = 1.0
+        F0 = cold.q_rim / cold.q_i
+        F1 = (cold.q_rim + dt * d.q_rim) / (cold.q_i + dt * d.q_i)
+        @printf("    riming: rime_c = %.3e, rime_r = %.3e kg/kg/s, ρ_rime_c = %.1f, F_rim %.4f → %.4f in 1 s\n",
+                r.rime_c, r.rime_r, r.ρ_rime_c, F0, F1)
+        @test F1 > F0
+        # Collected-drop number: droplets removed at the mean droplet mass
+        @test r.n_rime_c ≈ r.rime_c * cold.N_c / cold.q_c rtol = 1e-14
+        # Density within Cober & List / P3 bounds over a sweep of conditions
+        ρmin, ρmax = Inf, -Inf
+        for T in 240.0:4.0:272.0, qc in (1e-5, 3e-4, 2e-3), Nc in (3e7, 3e8),
+            qi in (1e-5, 1e-3)
+            st = P3ParcelState(T = T, p = 7e4, q_v = qsat(T, 7e4), q_c = qc, N_c = Nc,
+                               q_i = qi, N_i = 1e4, q_rim = 0.5qi, B_rim = 0.5qi / 500)
+            ρr = p3_process_rates(st).ρ_rime_c
+            ρmin, ρmax = min(ρmin, ρr), max(ρmax, ρr)
+        end
+        @printf("    Cober-List rime density over sweep: %.1f – %.1f kg/m³\n", ρmin, ρmax)
+        @test 50 <= ρmin && ρmax <= 900
+        @test ρmax > ρmin                                     # it does vary
+        # No riming at or above 0 °C: collected cloud is shed to rain as 1 mm drops.
+        rw = p3_process_rates(warm)
+        @test rw.rime_c == 0 && rw.rime_r == 0 && rw.shed > 0
+        @test rw.n_shed_r ≈ rw.shed / (π / 6 * 1000 * 1e-3^3) rtol = 1e-14
+        dw = p3_tendencies(warm, only(rw, :shed))
+        @test dw.q_r ≈ -dw.q_c rtol = 1e-15
+        @test dw.q_i == 0 && dw.T == 0
+        # riming is proportional to cloud water (continuous collection)
+        c2 = P3ParcelState(cold.T, cold.p, cold.q_v, 2cold.q_c, 2cold.N_c, cold.q_r,
+                           cold.N_r, cold.q_i, cold.N_i, cold.q_rim, cold.B_rim)
+        @test p3_process_rates(c2).rime_c / r.rime_c ≈ 2 rtol = 1e-3
+    end
+
+    @testset "Melting only above 0 °C, conserving mass" begin
+        base = (p = 8.0e4, q_i = 3e-4, N_i = 5e4, q_rim = 1e-4, B_rim = 1e-4 / 400)
+        mlt(T, rh) = p3_process_rates(P3ParcelState(; base..., T = T,
+                                      q_v = rh * qsat(T, 8.0e4))).melt
+        for T in (250.0, 265.0, 273.0, 273.15), rh in (0.5, 1.0)
+            @test mlt(T, rh) == 0
+        end
+        ms = [mlt(T, 1.0) for T in 273.65:0.5:283.15]
+        @test all(ms .> 0)
+        @test all(diff(ms) .> 0)                              # faster when warmer
+        @printf("    melt rate at +1 K, +5 K, +10 K (RH 100%%): %.3e %.3e %.3e kg/kg/s\n",
+                mlt(274.15, 1.0), mlt(278.15, 1.0), mlt(283.15, 1.0))
+        # Evaporative cooling can hold the particle below 0 °C: dry air at
+        # +0.5 °C gives no melting.
+        @test mlt(273.65, 0.3) == 0
+        # conservation: ice → rain, one drop per particle, rime melts in proportion
+        st = P3ParcelState(; base..., T = 278.15, q_v = qsat(278.15, 8e4))
+        r = p3_process_rates(st)
+        d = p3_tendencies(st, only(r, :melt))
+        @test d.q_r ≈ -d.q_i rtol = 1e-15
+        @test d.q_v == 0 && d.q_c == 0
+        @test d.N_r ≈ -d.N_i rtol = 1e-15
+        @test d.N_i ≈ -r.melt * st.N_i / st.q_i rtol = 1e-14
+        @test d.q_rim / d.q_i ≈ st.q_rim / st.q_i rtol = 1e-14
+        @test d.B_rim / d.q_i ≈ st.B_rim / st.q_i rtol = 1e-14
+        cpm = MT.heat_capacity_moist(MT.PhasePartition(p3_total_water(st), 0.0, st.q_i), c)
+        @test cpm * d.T ≈ -MT.latent_heat_fusion(st.T, c) * r.melt rtol = 1e-12
+    end
 end

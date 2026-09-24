@@ -338,3 +338,311 @@ function p3_condensation(s::P3ParcelState, pp::P3ProcessParameters = P3_DEFAULT_
     end
     return _p3_with(s; T = Tn, q_v = qt - qc, q_c = qc, N_c = Nc)
 end
+
+# -------------------------------------------------------------------------
+# Ventilation and growth resistances
+# -------------------------------------------------------------------------
+
+"""
+    p3_ventilation(X, kind::Symbol) -> f_v
+
+Ventilation coefficient `f_v` of diffusional growth as a function of
+`X = Sc^{1/3} Re^{1/2}`. For ice (`kind = :ice`), Hall & Pruppacher
+(1976):
+
+    f_v = 1 + 0.14 X²        X < 1,       f_v = 0.86 + 0.28 X        X ≥ 1;
+
+for drops (`kind = :rain`), Beard & Pruppacher (1971):
+
+    f_v = 1 + 0.108 X²       X < 1.4,     f_v = 0.78 + 0.308 X       X ≥ 1.4.
+
+Both are ≥ 1 and continuous (to 5e-4 at the rain junction). The P3
+reference code applies only the linear large-`X` branches (0.86, 0.28
+for ice and 0.78, 0.32 for rain), which give `f_v < 1` for the smallest
+particles; the piecewise forms keep the stagnant-air limit `f_v → 1`.
+"""
+function p3_ventilation(X::Real, kind::Symbol)
+    x = float(X)
+    if kind === :ice
+        return x < 1 ? 1 + 0.14x^2 : 0.86 + 0.28x
+    elseif kind === :rain
+        return x < 1.4 ? 1 + 0.108x^2 : 0.78 + 0.308x
+    end
+    throw(ArgumentError("kind must be :ice or :rain"))
+end
+
+# Diffusional growth resistance A + B (s m kg⁻¹) such that one particle of
+# capacitance C grows as  dm/dt = 4π C f_v S / (A + B),  S = e/e_s - 1.
+# Liquid: the Superdroplet resistances F_k + F_d (which carry ρ_w for the
+# r dr/dt form), divided by ρ_w. Ice: the same two terms with L_s and e_si.
+_p3_resistance_liquid(T, p, pp::P3ProcessParameters) =
+    (fk_thermal(T, pp.micro, pp.thermo) + fd_vapor(T, p, pp.micro, pp.thermo)) /
+    pp.micro.ρ_water
+
+function _p3_resistance_ice(T, p, pp::P3ProcessParameters)
+    c = pp.thermo
+    Rv = R_v(c)
+    Ls = latent_heat_sublim(T, c)
+    Ka = thermal_conductivity(T, pp.micro)
+    Dv = vapor_diffusivity(T, p, pp.micro)
+    return (Ls / (Rv * T) - 1) * Ls / (Ka * T) +
+           Rv * T / (Dv * saturation_vapor_pressure_ice(T, c))
+end
+
+# -------------------------------------------------------------------------
+# Size-distribution integrals
+# -------------------------------------------------------------------------
+
+# A mass-dimension state with no finite thresholds, so that
+# `_p3_psd_expectation` (massdim.jl) integrates an arbitrary gamma PSD
+# without panel edges from the ice regimes — used for rain.
+_p3_no_thresholds(p::P3IceParameters{T}) where {T} =
+    P3MassDimension{T}(zero(T), p.ρ_rim_default, zero(T), zero(T),
+                       T(Inf), T(Inf), T(Inf), p)
+
+# Rain PSD slope from (q_r, N_r) for spheres of density ρ_w, with N_r
+# bounded so that the mean-volume diameter lies in [D_r_min, D_r_max].
+function _p3_rain_slope(q_r, N_r, pp::P3ProcessParameters)
+    μ = pp.μ_r
+    mD(D) = π / 6 * pp.micro.ρ_water * D^3
+    Nr = clamp(N_r, q_r / mD(pp.D_r_max), q_r / mD(pp.D_r_min))
+    λ = gamma_psd_slope(Nr, 0, q_r / (π / 6 * pp.micro.ρ_water), 3, μ)
+    return λ, Nr
+end
+
+# Rain fall speed: the Superdroplet drop terminal velocity (Beard 1976 /
+# Atlas et al. 1973, at the reference air density) with the density
+# correction (ρ_ref/ρ_a)^0.54 of Heymsfield & Bansemer used in P3.
+_p3_rain_vt(D, ρa, pp::P3ProcessParameters) =
+    terminal_velocity(D / 2, pp.micro) * (pp.micro.ρ_air / ρa)^0.54
+
+# Rain integrals: E_N[D f_v], V_N, V_M.
+function _p3_rain_integrals(λ, ρa, η, Sc13, pp::P3ProcessParameters{T}) where {T}
+    md0 = _p3_no_thresholds(pp.ice)
+    Df, V, VD3, D3 = _p3_psd_expectation(T(pp.μ_r), T(λ), md0) do D
+        v = _p3_rain_vt(D, ρa, pp)
+        f = p3_ventilation(Sc13 * sqrt(v * D * ρa / η), :rain)
+        (D * f, v, v * D^3, D^3)
+    end
+    return (Df = Df, V_N = V, V_M = VD3 / D3)
+end
+
+# Ice integrals over the P3 PSD (number-weighted expectations).
+function _p3_ice_integrals(μ, λ, md::P3MassDimension{T}, ρa, η, Sc13,
+                           VrN, VrM, pp::P3ProcessParameters) where {T}
+    p = md.params
+    r = _p3_psd_expectation(T(μ), T(λ), md) do D
+        m = p3_particle_mass(D, md)
+        A = p3_particle_area(D, md)
+        v = _p3_vt(D, m, A, T(ρa), T(η), p)
+        reg = p3_regime(D, md)
+        C = (reg == 1 || reg == 3 ? one(T) : T(pp.cap_agg)) * D / 2
+        f = p3_ventilation(Sc13 * sqrt(v * D * ρa / η), :ice)
+        (C * f, C, A * v, A * abs(v - VrM), A * abs(v - VrN), v * m, m)
+    end
+    Cf, C, AV, AVrM, AVrN, vm, m = r
+    return (Cf = Cf, C = C, AV = AV, AVrM = AVrM, AVrN = AVrN, V_M = vm / m)
+end
+
+# P3's physical limiter on the ice mean size (μ+1)/λ ∈ [2 μm, 5 mm + 20 mm F_rim²]
+# (create_p3_lookupTable_1.f90), as a λ bracket.
+_p3_ice_lambda_bounds(μ, F_rim) = ((μ + 1) / (5e-3 + 2e-2 * F_rim^2), (μ + 1) / 2e-6)
+
+# -------------------------------------------------------------------------
+# All process rates
+# -------------------------------------------------------------------------
+
+"""
+    p3_process_rates(s::P3ParcelState, pp = P3_DEFAULT_PROCESS) -> NamedTuple
+
+Instantaneous rates of every P3 process for the state `s`, each a
+**non-negative magnitude** of the transfer it names (kg kg⁻¹ s⁻¹ for
+mass, kg⁻¹ s⁻¹ for number), except `n_self_r`, a net number sink that is
+negative when breakup dominates:
+
+| field | transfer | formulation |
+| :-- | :-- | :-- |
+| `evap_r`, `n_evap_r` | rain → vapour | ventilated diffusion, `S_w < 0` only |
+| `dep` | vapour → ice | ventilated diffusion, `S_i > 0`, `T < T₀` |
+| `sub`, `n_sub` | ice → vapour | ventilated diffusion, `S_i < 0`, `T < T₀` |
+| `auto`, `n_auto_r`, `n_auto_c` | cloud → rain | KK2000 ([`p3_autoconversion`](@ref)) |
+| `accr`, `n_accr_c` | cloud → rain | KK2000 ([`p3_accretion`](@ref)) |
+| `n_self_r` | rain number | SB2001 + breakup ([`p3_rain_self_collection`](@ref)) |
+| `rime_c`, `n_rime_c`, `ρ_rime_c` | cloud → rime | continuous collection, `T < T₀`, Cober & List density |
+| `rime_r`, `n_rime_r` | rain → rime | continuous collection, `T < T₀`, density `ρ_rim_rain` |
+| `shed`, `n_shed_c`, `n_shed_r` | cloud → rain | cloud collected by ice at `T ≥ T₀`, shed as 1 mm drops |
+| `melt`, `n_melt` | ice → rain | heat balance, `T > T₀` |
+
+**Diffusional growth.** One particle of capacitance `C` and ventilation
+coefficient `f_v` ([`p3_ventilation`](@ref)) grows as
+`dm/dt = 4π C f_v S / (A + B)` with `S` the super- or subsaturation over
+water (rain) or ice, `A` the heat-conduction and `B` the vapour-diffusion
+resistance (Pruppacher & Klett 1997, §13.2). `C = D/2` for spheres and
+graupel, `0.48 D/2` for unrimed and partially rimed nonspherical ice.
+The rate of a population is `N · 4π E_N[C f_v] S/(A+B)`, the expectation
+over the PSD taken by quadrature; `Re` uses [`p3_fall_speed`](@ref) for
+ice and the Superdroplet drop terminal velocity for rain. Sublimation and
+evaporation remove number in proportion to mass.
+
+**Riming.** Continuous collection with the geometric kernel of the ice
+particle, `∂q_c/∂t = -E_ci ρ_a q_c N_i E_N[A V]` (cloud droplets'
+own fall speed neglected), and for rain the kernel
+`A |V_i - V_r|` with the rain mass- (number-) weighted fall speed for
+mass (number). The rime density of cloud rime is
+[`p3_rime_density`](@ref) at the droplet mean-volume diameter and the
+impact speed `|V_M,i - V_c|`. Below 0 °C collected water becomes rime
+(`q_rim`, `B_rim += dq/ρ_rime`); at or above 0 °C collected cloud water
+is shed as rain (MM15 §2c) and collected rain stays rain but carries
+its sensible heat into melting.
+
+**Melting.** For `T > T₀` (Mason 1971; Rutledge & Hobbs 1983; MM15),
+
+    melt = [N_i 4π E_N[C f_v] (K_a (T-T₀) + L_v D_v (ρ_v - ρ_vs(T₀)))
+            + c_w (T-T₀) (coll_c + coll_r)] / L_f,
+
+floored at zero (dry air can hold a particle below 0 °C at its surface
+by evaporative cooling). Each melted particle becomes one drop, and the
+rime melts in proportion.
+
+Ice PSD: gamma with shape `μ_i` and λ from [`p3_slope`](@ref) with the
+P3 mean-size limiter (2 μm to 5 mm + 20 mm F_rim²). Rain PSD: gamma with
+shape `μ_r`, mean-volume diameter bounded to `[D_r_min, D_r_max]`.
+"""
+function p3_process_rates(s::P3ParcelState{FT},
+                          pp::P3ProcessParameters = P3_DEFAULT_PROCESS) where {FT}
+    c = pp.thermo
+    T, p = s.T, s.p
+    T0 = c.T_freeze
+    z = zero(FT)
+    ρa = air_density(T, p, _p3_partition(s), c)
+    η = p3_air_viscosity(T)
+    Dv = vapor_diffusivity(T, p, pp.micro)
+    Ka = thermal_conductivity(T, pp.micro)
+    Sc13 = cbrt(η / (ρa * Dv))
+    qs = saturation_specific_humidity(T, p, c)
+    qsi = saturation_specific_humidity(T, p, c; over = :ice)
+    Sw = s.q_v / qs - 1
+    Si = s.q_v / qsi - 1
+
+    have_c = s.q_c >= pp.q_small
+    have_r = s.q_r >= pp.q_small && s.N_r > 0
+    have_i = s.q_i >= pp.q_small && s.N_i > 0
+
+    # --- warm rain -------------------------------------------------------
+    auto, n_auto_r, n_auto_c = p3_autoconversion(s.q_c, s.N_c, ρa, pp)
+    accr, n_accr_c = have_r ? p3_accretion(s.q_c, s.N_c, s.q_r, pp) : (z, z)
+
+    evap_r = n_evap_r = n_self_r = z
+    VrN = VrM = z
+    λr = Nr = z
+    if have_r
+        λr, Nr = _p3_rain_slope(s.q_r, s.N_r, pp)
+        ri = _p3_rain_integrals(λr, ρa, η, Sc13, pp)
+        VrN, VrM = ri.V_N, ri.V_M
+        if Sw < 0
+            evap_r = -Nr * 2π * ri.Df * Sw / _p3_resistance_liquid(T, p, pp)
+            n_evap_r = evap_r * s.N_r / s.q_r
+        end
+        n_self_r = p3_rain_self_collection(s.q_r, s.N_r, λr, ρa, pp)
+    end
+
+    # --- ice ---------------------------------------------------------------
+    dep = sub = n_sub = z
+    rime_c = n_rime_c = rime_r = n_rime_r = z
+    ρ_rime_c = FT(pp.ice.ρ_rim_default)
+    shed = n_shed_c = n_shed_r = melt = n_melt = z
+    if have_i
+        md = p3_mass_dimension(s.q_i, s.q_rim, s.B_rim, pp.ice)
+        λmin, λmax = _p3_ice_lambda_bounds(pp.μ_i, md.F_rim)
+        λi = p3_slope(s.q_i, s.N_i, md; μ = pp.μ_i, λ_min = λmin, λ_max = λmax)
+        ii = _p3_ice_integrals(pp.μ_i, λi, md, ρa, η, Sc13, VrN, VrM, pp)
+
+        coll_c = have_c ? pp.E_ci * ρa * s.q_c * s.N_i * ii.AV : z
+        coll_r = have_r ? pp.E_ri * ρa * s.q_r * s.N_i * ii.AVrM : z
+        ncoll_r = have_r ? pp.E_ri * ρa * s.N_r * s.N_i * ii.AVrN : z
+
+        if T < T0
+            g = s.N_i * 4π * ii.Cf * Si / _p3_resistance_ice(T, p, pp)
+            dep, sub = max(g, z), max(-g, z)
+            n_sub = sub * s.N_i / s.q_i
+            rime_c, rime_r, n_rime_r = coll_c, coll_r, ncoll_r
+            if have_c && s.N_c > 0
+                n_rime_c = rime_c * s.N_c / s.q_c
+                Dc = cbrt(6 * s.q_c / (s.N_c * π * pp.micro.ρ_water))
+                Vc = terminal_velocity(Dc / 2, pp.micro)
+                ρ_rime_c = FT(p3_rime_density(Dc, ii.V_M - Vc, T, pp))
+            end
+        else
+            shed = coll_c
+            n_shed_c = have_c && s.N_c > 0 ? shed * s.N_c / s.q_c : z
+            n_shed_r = shed / (π / 6 * pp.micro.ρ_water * pp.D_shed^3)
+            if T > T0
+                Lf0 = latent_heat_fusion(T0, c)
+                Lv0 = latent_heat_vapor(T0, c)
+                ρvs0 = saturation_vapor_pressure(T0, c) / (R_v(c) * T0)
+                heat = Ka * (T - T0) + Lv0 * Dv * (ρa * s.q_v - ρvs0)
+                melt = (s.N_i * 4π * ii.Cf * heat +
+                        c.cp_liquid * (T - T0) * (coll_c + coll_r)) / Lf0
+                melt = max(melt, z)
+                n_melt = melt * s.N_i / s.q_i
+            end
+        end
+    end
+
+    return (evap_r = evap_r, n_evap_r = n_evap_r,
+            dep = dep, sub = sub, n_sub = n_sub,
+            auto = auto, n_auto_r = n_auto_r, n_auto_c = n_auto_c,
+            accr = accr, n_accr_c = n_accr_c,
+            n_self_r = n_self_r,
+            rime_c = rime_c, n_rime_c = n_rime_c, ρ_rime_c = ρ_rime_c,
+            rime_r = rime_r, n_rime_r = n_rime_r,
+            shed = shed, n_shed_c = n_shed_c, n_shed_r = n_shed_r,
+            melt = melt, n_melt = n_melt)
+end
+
+"""
+    p3_tendencies(s::P3ParcelState, r = p3_process_rates(s, pp), pp = P3_DEFAULT_PROCESS)
+        -> P3ParcelState
+
+Time derivatives of every prognostic variable implied by the process
+rates `r` ([`p3_process_rates`](@ref)), returned as a `P3ParcelState`
+whose fields are `d/dt` of the corresponding fields (`p` is held fixed,
+`dp/dt = 0`). The mapping is linear in the rates:
+
+    dq_v  =  evap_r - dep + sub
+    dq_c  = -auto - accr - rime_c - shed
+    dq_r  = -evap_r + auto + accr - rime_r + shed + melt
+    dq_i  =  dep - sub + rime_c + rime_r - melt
+    dq_rim = rime_c + rime_r - (sub + melt) q_rim/q_i
+    dB_rim = rime_c/ρ_rime_c + rime_r/ρ_rim_rain - (sub + melt) B_rim/q_i
+    c_pm dT = -L_v(T) dq_v + L_f(T) dq_i
+
+so `dq_v + dq_c + dq_r + dq_i = 0` identically, sublimation and melting
+leave the rime density `q_rim/B_rim` unchanged, and the heating is
+exactly the latent heat of the net phase change (`L_s = L_v + L_f` for
+deposition, `L_f` for riming, `-L_f` for melting). Latent heats and
+`c_pm` are those of `MoistThermodynamics` at the current state.
+"""
+function p3_tendencies(s::P3ParcelState{FT}, r::NamedTuple,
+                       pp::P3ProcessParameters = P3_DEFAULT_PROCESS) where {FT}
+    c = pp.thermo
+    dqv = r.evap_r - r.dep + r.sub
+    dqc = -r.auto - r.accr - r.rime_c - r.shed
+    dqr = -r.evap_r + r.auto + r.accr - r.rime_r + r.shed + r.melt
+    dqi = r.dep - r.sub + r.rime_c + r.rime_r - r.melt
+    dNc = -r.n_auto_c - r.n_accr_c - r.n_rime_c - r.n_shed_c
+    dNr = -r.n_evap_r + r.n_auto_r - r.n_self_r - r.n_rime_r + r.n_shed_r + r.n_melt
+    dNi = -r.n_sub - r.n_melt
+    loss = r.sub + r.melt
+    fq = s.q_i > 0 ? s.q_rim / s.q_i : zero(FT)
+    fB = s.q_i > 0 ? s.B_rim / s.q_i : zero(FT)
+    dqrim = r.rime_c + r.rime_r - loss * fq
+    dBrim = r.rime_c / r.ρ_rime_c + r.rime_r / pp.ρ_rim_rain - loss * fB
+    cpm = heat_capacity_moist(_p3_partition(s), c)
+    dT = (-latent_heat_vapor(s.T, c) * dqv + latent_heat_fusion(s.T, c) * dqi) / cpm
+    return P3ParcelState{FT}(dT, zero(FT), dqv, dqc, dNc, dqr, dNr, dqi, dNi,
+                             dqrim, dBrim)
+end
+
+p3_tendencies(s::P3ParcelState, pp::P3ProcessParameters = P3_DEFAULT_PROCESS) =
+    p3_tendencies(s, p3_process_rates(s, pp), pp)
