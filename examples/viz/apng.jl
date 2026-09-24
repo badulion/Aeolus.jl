@@ -127,6 +127,30 @@ Write an animated PNG at `path`. `frames` is a vector of `Array{UInt8, 3}`
 RGB images (`size(frame) == (H, W, 3)`). `delay_ms` is the per-frame
 delay; `loop = 0` loops forever.
 """
+
+"""
+    write_png(path, rgb) -> path
+
+Write a single RGB frame as a plain PNG — no `acTL`/`fcTL`, so it is an
+ordinary still image rather than a one-frame animation. Shares the chunk,
+filter and zlib machinery with [`write_apng`](@ref).
+
+Exists because a README hero image wants a still: a 48-frame APNG of a
+diurnal cycle is ~75 MB, which no repository front page should carry.
+"""
+function write_png(path::AbstractString, rgb::Array{UInt8,3})
+    h, w = size(rgb, 1), size(rgb, 2)
+    size(rgb, 3) == 3 || error("write_png: expected an RGB array")
+    open(path, "w") do io
+        write(io, _PNG_SIG)
+        _write_chunk(io, "IHDR", vcat(_u32be(UInt32(w)), _u32be(UInt32(h)),
+                                      UInt8[8, 2, 0, 0, 0]))
+        _write_chunk(io, "IDAT", _zlib_wrap(_filter_none_rgb(rgb)))
+        _write_chunk(io, "IEND", UInt8[])
+    end
+    return path
+end
+
 function write_apng(path::AbstractString, frames::Vector{Array{UInt8,3}};
                     delay_ms::Int = 200, loop::Int = 0)
     isempty(frames) && error("write_apng: no frames given")
@@ -290,6 +314,30 @@ const _FONT5x7 = Dict{Char, NTuple{5, UInt8}}(
     '7' => (0x02,0xE2,0x12,0x0A,0x06),
     '8' => (0x6C,0x92,0x92,0x92,0x6C),
     '9' => (0x0C,0x92,0x92,0x52,0x3C),
+    'B' => (0xFE,0x92,0x92,0x92,0x6C),
+    'G' => (0x7C,0x82,0x92,0x92,0xF4),
+    'I' => (0x00,0x82,0xFE,0x82,0x00),
+    'J' => (0x40,0x80,0x82,0x7E,0x02),
+    'M' => (0xFE,0x04,0x18,0x04,0xFE),
+    'Q' => (0x7C,0x82,0xA2,0x42,0xBC),
+    'Z' => (0xC2,0xA2,0x92,0x8A,0x86),
+    'b' => (0xFE,0x90,0x88,0x88,0x70),
+    'c' => (0x70,0x88,0x88,0x88,0x40),
+    'd' => (0x70,0x88,0x88,0x90,0xFE),
+    'f' => (0x10,0xFC,0x12,0x02,0x04),
+    'g' => (0x18,0xA4,0xA4,0xA4,0x7C),
+    'j' => (0x40,0x80,0x88,0x7A,0x00),
+    'k' => (0xFE,0x20,0x50,0x88,0x00),
+    'm' => (0xF8,0x08,0x30,0x08,0xF0),
+    'p' => (0xF8,0x28,0x28,0x28,0x10),
+    'q' => (0x10,0x28,0x28,0x30,0xF8),
+    'x' => (0x88,0x50,0x20,0x50,0x88),
+    '?' => (0x04,0x02,0xA2,0x12,0x0C),
+    '(' => (0x00,0x00,0x7C,0x82,0x00),
+    ')' => (0x00,0x82,0x7C,0x00,0x00),
+    '+' => (0x10,0x10,0x7C,0x10,0x10),
+    '%' => (0x46,0x26,0x10,0xC8,0xC4),
+    ',' => (0x00,0x00,0xA0,0x60,0x00),
     'A' => (0xF8,0x14,0x12,0x14,0xF8),
     'C' => (0x38,0x44,0x82,0x82,0x44),
     'D' => (0xFE,0x82,0x82,0x82,0x7C),
@@ -327,7 +375,10 @@ const _FONT5x7 = Dict{Char, NTuple{5, UInt8}}(
 )
 
 function _draw_char!(rgb::Array{UInt8,3}, ch::Char, row::Int, col::Int, r, g, b)
-    ch = haskey(_FONT5x7, ch) ? ch : ' '
+    # Render an unknown character as '?' rather than a blank. A missing
+    # glyph used to vanish silently, so "surface temperature" came out as
+    # "sur a e te erature" with nothing to indicate anything was wrong.
+    ch = haskey(_FONT5x7, ch) ? ch : '?'
     cols = _FONT5x7[ch]
     H = size(rgb, 1); W = size(rgb, 2)
     for cx in 1:5

@@ -1,279 +1,325 @@
+<div align="center">
+
 # Aeolus.jl
 
-A Julia-native large-eddy simulation framework. Work-in-progress.
+**A Julia-native large-eddy simulation framework**
 
-## Goals
+*Resolved turbulence, high-fidelity radiation and exact moist thermodynamics —
+with one non-standard-library dependency.*
 
-A general-purpose LES/DNS framework for atmospheric, oceanic, and
-engineering boundary-layer flows. Single-node CPU first; MPI and GPU
-come later. Inspired by PALM (finite-difference + FFT pressure) and
-Oceananigans.jl (staggered finite volume, kernel abstractions).
+<img src="assets/hero.png" alt="Aeolus.jl — Alexanderplatz, Berlin" width="760">
 
-## Design
+<sub><b>Alexanderplatz, Berlin, 13:30 local, sun 50° above the horizon.</b>
+322 buildings from OpenStreetMap, 24 h diurnal cycle at Δt = 2 s.
+Surface temperature · shortwave reaching the ground, with building shadows ·
+building height · resolved vertical velocity at 30 m.</sub>
 
-Spatial discretization lives behind an `AbstractMesh` interface:
+</div>
 
-- **Phase 1–2**: finite-volume on a staggered Cartesian grid
-  (`RegularGrid`). This is what PALM, Oceananigans, WRF-LES use.
-- **Future**: spectral-element on unstructured meshes for engineering
-  flows with complex geometry. New backend = new `AbstractMesh` subtype
-  + new methods on the internal operator kernels. No user-code changes.
+---
 
-The pressure solver is pluggable in the same way: FFT-direct for
-periodic, cosine-FFT for channel-in-z (shipped in Phase 5), conjugate
-gradient / multigrid for arbitrary BCs (Phase 14).
+## At a glance
 
-## Roadmap — 20 phases
+- **General-purpose LES core** — Boussinesq, anelastic and pseudo-incompressible
+  dynamics on a staggered finite-volume grid, behind an `AbstractMesh` interface
+  that a spectral-element backend can plug into without touching user code.
+- **A radiation stack that is unusual for an LES** — correlated-*k* gas optics,
+  two-stream *and* 3-D Monte-Carlo transfer, urban radiosity, spectral BRDF
+  surface optics, Mie aerosol.
+- **Validated against external references**, not just against itself — MODIS
+  kernel constants, Wiscombe's Mie benchmark, Golovin's analytic coalescence
+  solution, the DYCOMS-II RF01 intercomparison.
+- **7,407 tests.** 31,000 lines of source, 10,000 lines of tests.
+- **FFTW is the only non-stdlib dependency.** Everything else — NetCDF, PNG,
+  Mie scattering, error and Bessel functions — is written in the package.
+- Single-node CPU. MPI and GPU are planned, not present.
 
-Each phase is a 2–4 week chunk of focused work that ends with a
-validation, a benchmark, or a concrete new capability. See
-`docs/src/design/roadmap.md` for the full description of each phase.
+---
 
-### Shipped
+## What the stack can do
 
-- [x] **Phase 1** — Foundations (grid, fields, BCs, operators, RK3)
-- [x] **Phase 2** — Dry incompressible core (staggered momentum,
-      FFT-Poisson, Euler-projection, TGV validation)
-- [x] **Phase 3** — SGS + Boussinesq physics (Smagorinsky-Lilly,
-      buoyancy, Coriolis, θ transport, convection example)
-- [x] **Phase 4** — Documentation & benchmarks (Documenter site,
-      BenchmarkTools harness)
-- [x] **Phase 5** — Channel-BC pressure solver (`CosineFFTPoissonSolver`
-      for periodic-xy + Neumann-z)
+<table>
+<tr><td width="34%"><b>Dynamical core</b></td><td>
 
-### Planned
+Boussinesq · anelastic · pseudo-incompressible · staggered Arakawa-C finite
+volume · fractional-step pressure projection · SSP-RK3, IMEX (ARK2,
+Rosenbrock2) · adaptive Δt with CFL diagnostics
 
-- [x] **Phase 6** — Wall BCs on velocity + simulation integration
-      (`ImpermeableWall` + auto-select cosine-FFT solver)
-- [x] **Phase 7** — Surface fluxes for scalars + sponge damping layer
-- [x] **Phase 8** — DCBL example + diagnostics (reference-quality
-      validation deferred as separate benchmark task)
-- [x] **Phase 9** — I/O infrastructure (Serialization snapshots +
-      restart + TOML namelists; NetCDF deferred as optional add-on)
-- [x] **Phase 10** — Numerical upgrades (WENO-5, projected RK3)
-- [x] **Phase 11** — Moist thermodynamics (qv prognostic + virtual θ;
-      saturation adjustment moves to Phase 12)
-- [x] **Phase 12** — Bulk cloud microphysics (Kessler kernel; BOMEX
-      validation deferred)
-- [x] **Phase 13** — Immersed boundary method (direct-forcing);
-      stretched grid deferred
-- [x] **Phase 14** — Iterative CG pressure solver
-- [x] **Phase 15** — MPI infrastructure scaffolding (interface types;
-      actual MPI wiring lives in a future weak-dep extension)
-- [x] **Phase 16** — Nesting scaffold (`NestSpec`, one-way forcing +
-      two-way feedback; higher-order interp deferred)
-- [x] **Phase 17** — GPU backend scaffold (backend selector; full
-      KernelAbstractions port deferred to weak-dep extension)
-- [x] **Phase 18** — Spectral element mesh scaffold (`SpectralElementMesh`
-      type + GLL nodes/weights; operator retrofit deferred)
-- [x] **Phase 19** — Radiation (prescribed profile) + slab LSM
-      (RRTMGP + full vegetation LSM deferred)
-- [x] **Phase 20** — Advanced physics scaffolds (linear chemistry,
-      Lagrangian particles, pluggable ML SGS, nudging-DA)
+</td></tr>
+<tr><td><b>Pressure solvers</b></td><td>
 
-Rough milestones: **Phase 8** — dry ABL LES comparable to PALM (subset).
-**Phase 12** — moist ABL with shallow clouds. **Phase 17** — MPI+GPU
-production HPC. **Phase 18+** — multi-year territory needing domain
-expertise across met/ocean/CFD.
+FFT (triply periodic) · cosine-FFT (Neumann in *z*) · conjugate gradient ·
+geometric multigrid · density-weighted variants for anelastic flow
 
-## Post-Phase-20 refinement plan — physics gaps to close
+</td></tr>
+<tr><td><b>Advection &amp; geometry</b></td><td>
 
-The 20 phases wired up the *scaffolding* for every major LES capability
-we intend to ship. The flagship urban simulation exposed a set of
-physical mechanisms that are still absent — the current run captures
-class-based thermal inertia contrasts but is missing several first-order
-effects that shape a real urban heat island. In roughly the order they
-would visibly change the animation:
+WENO-5 / WENO-Z / TENO · skew-symmetric energy-conserving operators ·
+cut-cell immersed boundaries with ghost-cell wall reconstruction ·
+stretched and terrain-following (Gal-Chen) vertical coordinates
 
-### Radiation / lighting
-- [x] **R1. Direct-beam building shadows.** Per-cell ray-marched
-      shadow mask (`compute_shadow_mask!`). Wired into Alexanderplatz run.
-- [x] **R2. Sky-view factor.** Hemispheric occlusion per cell
-      (`compute_sky_view_factor`). Scales diffuse SW + outgoing LW.
-- [x] **R3. Wall directional SW.** `wall_directional_factor` gives
-      each wall cell a cos(sun·normal) SW factor. Full per-face
-      `SlabLand` on vertical building walls remains a further refinement.
-- [x] **R4. LW canyon trapping.** `lw_from_walls` refines the
-      SVF-weighted LW blend with a temperature-dependent canyon term.
-      Full 1-2 pass radiosity between building faces still to add.
-- [x] **R5. Cloud shadows.** `apply_cloud_shadow!` attenuates direct
-      SW by the column-integrated `ql` via Beer's law.
-- [x] **R6. Window / glass materials.** `SURFACE_GLASS` class with
-      high specular albedo + `apply_glass_sw_transmission!` removes
-      the transmitted portion from the exterior surface energy budget.
+</td></tr>
+<tr><td><b>Mesh refinement</b></td><td>
 
-### Land surface
-- [x] **L1. Latent heat flux.** `apply_latent_flux!` bulk formula
-      `LE = ρ Lᵥ Cₑ U β Δq` with class-dependent β (water=1, park=0.6,
-      street=0.15, roof/wall=0.05). Feeds into `sim.qv` too.
-- [x] **L2. Vegetation drag + tree shade.** `apply_vegetation_drag!`
-      + `apply_tree_shade!`. **Note:** explicit-Euler drag is CFL-
-      limited; enabled cd needs to satisfy `cd·LAI·|u|·dt < 1`.
-      Currently disabled in the Alexanderplatz flagship run — needs
-      implicit treatment before it can safely run at `dt = 2 s`.
-- [x] **L3. Multi-layer soil.** `SoilGrid`/`step_soil!` — 3-layer
-      conduction below each cell, deep BC pinned at 288 K.
-- [x] **L4. Anthropogenic heat.** `anthropogenic_heat` +
-      `add_anthropogenic_heat!` — traffic/AC W/m² with morning + evening
-      rush-hour peaks, class-dependent baseline.
-- [x] **L5. Snow / ice / dew state.** `SnowState`,
-      `update_snow_state!`, `snow_modify_params!` for albedo/emis flip;
-      `apply_dew_condensation!` for below-dew warming (disabled until
-      it can be coupled with saturated-air feedback).
+One- and two-way grid nesting with flux correction · block-structured AMR
+(Berger-Rigoutsos clustering, Berger-Colella refluxing)
 
-### Surface flux + turbulence
-- [x] **F1. MOST wall model.** `apply_surface_flux_most!` uses Louis-
-      1979 stability-corrected bulk formula with per-class `z₀`.
-      Scaffold shipped; flagship run still uses the bulk-`Cₕ` version
-      because MOST at the current Δt / dx is more delicate.
-- [x] **F2. Per-class roughness `z₀`.** `roughness_z0(cls)` lookup
-      (street 3 cm, roof 10 cm, park 15 cm, water 0.1 mm, wall 5 cm).
-- [x] **F3. Dynamic Smagorinsky.** `compute_dynamic_smagorinsky_cs!`
-      Germano-Lilly per-cell `Cₛ²` via a 3×3×3 test filter, clipped to
-      `[0, 0.25]`. `compute_smagorinsky_νt_dynamic!` reads it.
+</td></tr>
+<tr><td><b>Radiation</b></td><td>
 
-### Moisture & clouds
-- [x] **M1. Full saturation adjustment.** `saturation_adjustment!`
-      Bolton-1980 coupled qv⇄ql via Tetens with latent-heat feedback.
-- [x] **M2. Two-moment microphysics scaffold.** `TwoMomentState`
-      (qv, ql, qr, qi, Nc, Nr) + `apply_two_moment_micro!` (Kessler
-      auto/accretion coupled to number-conc + Marshall-Palmer sed).
-- [x] **M3. Ice / mixed-phase scaffold.** `apply_ice_processes!` —
-      homogeneous freezing < 235 K and melting > 273 K with latent-heat
-      back-reaction.
-- [x] **M4. Fog / dew.** `apply_fog_dew!` — first-layer condensation
-      below the dew point. **Disabled in flagship** until coupled with
-      full saturated-air feedback.
+Correlated-*k* gas optics over 16 longwave and 14 shortwave bands
+(H₂O, CO₂, O₃, CH₄, N₂O, O₂) · two-stream δ-Eddington / PIFM / quadrature
+with adding-doubling · 3-D Monte-Carlo transfer with next-event estimation ·
+urban radiosity with occlusion-tested view factors · spectral surface optics
+(16 materials, 4 BRDF models, Cox-Munk water, Wiscombe-Warren snow) ·
+Mie aerosol with κ-Köhler growth and OPAC mixtures · Meeus solar position,
+Bird clear-sky, Erbs/Reindl direct-diffuse partitioning
 
-### Air-quality
-- [x] **A1. Multi-species chemistry.** `ChemistryState` (NO/NO₂/O₃/VOC)
-      + `apply_photochem_step!` with photolysis + coupling reactions.
-      A proper KPP-generated mechanism replaces the toy 3-reaction
-      scheme in a future item.
-- [x] **A2. Wet + dry deposition.** `deposition_velocity` per species
-      × surface-class table; `apply_dry_deposition!` at the first
-      layer; `apply_wet_deposition!` scavenging by `qr`.
-- [x] **A3. Emissions maps.** `emission_rate` + `add_emissions!` —
-      bimodal traffic on street/wall for NO/NO₂; Gaussian biogenic on
-      park cells for VOC.
-- [x] **A4. Aerosol prognostics.** `AerosolState` (qₐ, Nₐ) +
-      `apply_aerosol_step!` — semi-implicit coagulation + upwind
-      sedimentation + PM dry deposition.
+</td></tr>
+<tr><td><b>Clouds &amp; microphysics</b></td><td>
 
-### Numerical infrastructure
-- [x] **N1. Bulk-viscosity map (scaffold).** `bulk_viscosity_map`
-      returns a per-cell ν so a future implicit-IBM solver can lower ν
-      away from obstacles while keeping it high near walls. The full
-      cut-cell / ghost-cell IBM refactor still to come.
-- [x] **N2. Stretched vertical grid metric (scaffold).**
-      `ZStretchMap` returns a non-uniform `dz(k)` table. Full operator
-      retrofit to use it stays a follow-up.
-- [x] **N3. Adaptive Δt.** `cfl_time_step` computes a CFL/viscous-
-      bounded dt from the current velocity field.
-- [x] **N4. WENO-5 tendency hook.** `add_weno_scalar_tendency!` wraps
-      `advect_weno5!` so users can add WENO advection to a scalar
-      tendency inside a `body_force!` callback.
-- [x] **N5. Lateral damper (non-periodic BC proxy).**
-      `apply_lateral_damper!` Rayleigh-damps toward an ambient wind
-      near the horizontal boundaries. Full characteristic inflow /
-      outflow BCs remain a follow-up.
+Exact moist thermodynamics — temperature-dependent latent heat, saturation
+vapour pressure as the analytic Clausius-Clapeyron integral, condensate
+loading · robust bracketed saturation adjustment · Köhler activation ·
+Abdul-Razzak &amp; Ghan parameterisation with an explicit parcel reference ·
+superdroplet Lagrangian microphysics · Kessler and two-moment bulk schemes
 
-### Regional / large-scale coupling
-- [x] **G1. Mesoscale nudging (scaffold).** `MesoForcing` bundle +
-      `apply_mesoscale_nudging!` relaxes horizontal means toward
-      externally supplied θ / qv / U / V profiles.
-- [x] **G2. Sea / lake coupling (scaffold).** `WaterMask` +
-      `apply_lake_exchange!` pins water-cell Ts and injects sea-breeze
-      sensible flux.
-- [x] **G3. Terrain (scaffold).** `add_terrain_to_mask!` adds a 2-D
-      height map to the `SolidMask`. Simple staircase terrain; smooth
-      terrain-following coordinates remain a follow-up.
+</td></tr>
+<tr><td><b>Surface &amp; urban</b></td><td>
 
-Each bullet is a shippable 1–3 week task in its own right. All 27 are
-now complete — either as full implementations (radiation, latent heat,
-anthropogenic heat, soil, chemistry, aerosol) or as validated-API
-scaffolds that the long-range roadmap below replaces with production
-versions.
+OpenStreetMap ingestion → building geometry and land use · facet radiosity
+resolving shadowing, inter-reflection and canyon longwave trapping ·
+multi-layer soil conduction · latent heat flux · anthropogenic heat ·
+material albedo and emissivity derived from the spectral library
 
-## Long-range roadmap — Eras II–XI (the next decade)
+</td></tr>
+<tr><td><b>Output</b></td><td>
 
-Era I (Phases 1–20 plus the 27 refinement items above) built the LES
-core and wired every interface. The next decade replaces every
-remaining approximation with a validated, production-quality
-implementation. **Guiding rule from here on: no scaffolds — a phase is
-only done when it is validated against reference data and stable at
-production resolution.**
+CF-1.8 NetCDF, readable by ncview, xarray, Paraview, CDO and Panoply ·
+pure-Julia PNG, APNG, PPM and SVG rendering
 
-See **[`docs/src/design/longterm_roadmap.md`](docs/src/design/longterm_roadmap.md)**
-for the full plan: 10 eras, 80 phases (21–100), each 2–6 weeks with an
-explicit validation target.
+</td></tr>
+</table>
 
-| Era | Phases | Theme |
-| :-- | :----- | :---- |
-| **II** ✅ | 21–31 | **Numerical foundations for fidelity** — *shipped.* Cut-cell IBM, ghost-cell walls, adaptive Δt, terrain-following coordinates, IMEX integration, WENO-Z/TENO, anelastic dynamics, energy-conserving operators, multigrid, production nesting, AMR. **2,094 validation tests** |
-| **III** 🚧 | 32–38 | **High-fidelity radiation** — *in progress: contract + Phases 32, 33, 38 done; 34–37 remain.* Correlated-k gas optics (Malkmus→Domoto, self-contained), two-stream delta-Eddington/PIFM with cloud optics, 3-D Monte-Carlo RT, full urban radiosity, spectral BRDF albedo, aerosol radiative feedback, Meeus solar position |
-| **IV** | 39–45 | **High-fidelity clouds** — exact moist thermodynamics, P3 microphysics, superdroplet Lagrangian reference, aerosol-cloud interaction, ice nucleation, fog/visibility, turbulence-microphysics coupling |
-| **V** | 46–53 | **High-fidelity land & urban** — Richards-equation soil, Farquhar photosynthesis, resolved canopy, production urban-canopy model, building energy coupling, multi-layer snow, wave-coupled water, surface heterogeneity |
-| **VI** | 54–59 | **High-fidelity turbulence** — scale-dependent dynamic SGS, anisotropic/tensorial closures, prognostic SGS stress, high-Re wall models, stable-boundary-layer regime, laminar-turbulent transition |
-| **VII** | 60–66 | **High-fidelity chemistry** — KPP-generated mechanism with analytic Jacobian, online photolysis, aqueous/heterogeneous chemistry, modal+sectional aerosol, SOA, real emission inventories, deposition & pollen |
-| **VIII** | 67–73 | **Real-world data & validation** — ERA5 driver, mesoscale nesting with synthetic-turbulence inflow, production OSM + DEM ingestion, observation operators, the canonical benchmark library (dry + moist), reproducibility & provenance |
-| **IX** | 74–79 | **Data assimilation & inverse problems** — Enzyme adjoint, 4D-Var, LETKF, hybrid & coupled DA, parameter and source inversion, calibrate-emulate-sample UQ |
-| **X** | 80–87 | **Performance & scale** *(deliberately after physics)* — production MPI to 10⁴ cores, full GPU port, multi-GPU, mixed precision, performance engineering, async/in-situ I/O, SEM completion, DG option |
-| **XI** | 88–100 | **ML, applications & ecosystem** — neural SGS & emulators, differentiable-physics design optimisation, foundation-model coupling, wildfire, wind energy, urban climate services, air-quality nowcasting, emergency response, contrails, Earth-system coupling, companion packages, community & papers |
+---
 
-**Milestones**: numerically sound real-Reynolds urban LES after Era II;
-research-standard cloud physics after Era IV; validated urban/land model
-after Era V; real chemistry-transport model after Era VII; HPC
-production after Era X.
+## Validated against
 
-**Honest scope**: this is a decade of sustained work assuming domain
-expertise across meteorology, cloud physics, chemistry, turbulence and
-numerical analysis, plus reference data and HPC access. A solo
-contributor should plan on reaching the end of Era IV in that window,
-not Era XI. The *ordering* is the load-bearing part: fidelity before
-speed, because a fast model of the wrong physics is worthless and
-optimising early freezes interfaces that still need to change.
+Every figure below is produced by the test suite, against a reference the
+code does not contain.
+
+| Check | Aeolus | Reference |
+|:--|:--|:--|
+| MODIS Ross-thick white-sky albedo | `0.189186` | `0.189184` (published) |
+| MODIS Li-sparse-reciprocal WSA | `-1.377660` | `-1.377622` (published) |
+| Mie extinction, *x*=10, *m*=1.5 | `2.881999` | `2.8820` (Wiscombe) |
+| Mie extinction, *x*=0.101, *m*=0.75 | `8.033538e-6` | `8.033542e-6` (Wiscombe) |
+| View factor vs closed form | `9.2e-15` | exact |
+| Canyon sky-view factor | within `1.4%` | √((H/W)²+1) − H/W |
+| DYCOMS-II RF01 cloud-top net LW | `70.3 W/m²` | `70.1` (intercomparison) |
+| Clear-sky OLR | `240.2 W/m²` | ~240 (observed) |
+| Greenhouse effect | `149.0 W/m²` | ~150 (observed) |
+| Clausius-Clapeyron self-consistency | `5.2e-12` | exact |
+| Liquid/ice saturation gap | `27.00 Pa @ 261.5 K` | ~27 Pa near 261 K |
+| Golovin coalescence, *L*¹ at 1200 s | `0.037` | analytic |
+| Monte-Carlo vs two-stream albedo | median `0.0059` | — |
+| Cloud optical depth, LWP 100 g/m², *r*<sub>eff</sub> 10 μm | `15.0` | 15 (textbook) |
+
+Plus the classical CFD cases — Taylor-Green vortex, decaying isotropic
+turbulence, channel flow, buoyant convection — in `examples/`.
+
+---
+
+## Installation
+
+```julia
+using Pkg
+Pkg.activate(".")
+Pkg.instantiate()
+```
+
+Julia ≥ 1.10. The only non-standard-library dependency is **FFTW**.
+
+> **Why so few dependencies?** The usual scientific-Julia stack — NetCDF,
+> HDF5, Makie, SpecialFunctions — needs binary libraries that do not build on
+> every target platform. Rather than ship a package that fails to load,
+> Aeolus writes what it needs: a CF-compliant NetCDF-3 writer, a PNG/APNG
+> encoder, a Mie solver, and series expansions for the error and Bessel
+> functions. See [`src/NetCDFIO.jl`](src/NetCDFIO.jl) for the clearest case.
+
+---
 
 ## Quick start
 
-```julia
-using Pkg; Pkg.activate("."); Pkg.instantiate()
-using Aeolus
-include("examples/taylor_green_vortex.jl")
-```
-
-Run tests:
+A dry convective boundary layer — warm below, cool above, left to overturn:
 
 ```julia
-Pkg.test()
+using Aeolus, Printf
+using Aeolus.Fields: set!
+
+L, θ₀, Δθ = 1000.0, 300.0, 2.0
+mesh = RegularGrid(; size = (48, 48, 48), extent = (L, L, L), halo = (2, 2, 2))
+sim  = BoussinesqSimulation(mesh; θ₀ = θ₀, g_accel = 9.81,
+                                  C_s = 0.17, Pr_t = 1/3)
+
+# unstable stratification plus a small perturbation to break symmetry
+set!(sim.θ, (x, y, z) -> θ₀ + Δθ * (0.5 - z/L) + 1e-3 * Δθ * (rand() - 0.5))
+
+w_star = sqrt(9.81 * Δθ / θ₀ * L)          # free-fall velocity scale
+dt     = 0.3 * mesh.dx / w_star            # CFL
+
+for _ in 1:400
+    step!(sim, dt)
+end
+
+@printf("KE = %.1f   max|div u| = %.2e   max nu_t = %.4f\n",
+        kinetic_energy(sim), max_divergence(sim), max_νt(sim))
 ```
 
-## Directory layout
+```
+KE = 24701.0   max|div u| = 2.80e-17   max nu_t = 0.0337
+```
 
+Divergence stays at machine precision: the fractional-step projection is
+doing its job. Run the full test suite with `Pkg.test()`, or a worked case
+directly:
+
+```bash
+julia --project=. examples/taylor_green_vortex.jl
+julia --project=. examples/buoyant_convection.jl
 ```
-src/
-  Aeolus.jl              top-level module
-  Grids.jl               AbstractMesh, RegularGrid, Location types
-  Fields.jl              Field type (mesh-generic)
-  BoundaryConditions.jl  Periodic, NoFlux, Value, Flux BCs; fill_halos!
-  Operators.jl           public API — dispatches on mesh type
-  FiniteVolume.jl        FV kernels for RegularGrid
-  TimeSteppers.jl        Shu–Osher SSP-RK3
-  PressureSolvers.jl     AbstractPressureSolver, FFT + CosineFFT solvers
-  Simulations.jl         BoussinesqSimulation + fractional-step driver
-examples/
-  scalar_advection_2d.jl
-  poisson_manufactured.jl
-  poisson_neumann_manufactured.jl
-  taylor_green_vortex.jl
-  buoyant_convection.jl
-test/
-  runtests.jl            39 unit tests
-benchmarks/
-  bench_operators.jl
-  bench_poisson.jl
-  bench_step.jl
-docs/
-  src/                   Documenter source (~20 pages)
-  make.jl                docs build
+
+---
+
+## Flagship application — urban climate
+
+The most demanding thing in the repository is a full diurnal simulation of a
+real city block, and it is where most of the radiation stack earns its place.
+
+**Why it is hard.** A street canyon is not a flat surface with an albedo.
+Sunlight that misses the road hits a wall and bounces back; longwave radiation
+that would escape to a cold sky is intercepted by the building opposite. The
+result is *radiative trapping*: the effective albedo of a canyon is
+substantially lower than the albedo of the materials it is built from, so the
+city absorbs more than the sum of its surfaces would suggest. That is a
+first-order driver of the urban heat island, and a sky-view-factor
+approximation cannot represent it.
+
+**Measured on the real Alexanderplatz geometry** — 322 OpenStreetMap
+buildings, 64 × 64 × 32 cells, 24 h at Δt = 2 s:
+
+| | |
+|:--|:--|
+| Effective albedo of the scene | `0.126` |
+| Area-weighted material albedo | `0.175` |
+| **Radiative trapping** | **28.0 %** |
+| Radiating facets | 5,810 |
+| View-factor reciprocity / closure | `4.5e-17` / `2.4e-15` |
+| Sky-view factor (min / mean / max) | `0.149` / `0.794` / `1.000` |
+| Peak surface temperature contrast | `18.6 K` |
+| Divergence after 43,200 steps | `1.6e-15` |
+| Wall-clock, one CPU | **9.2 min** |
+| Output | 228 MB NetCDF, 48 time levels |
+
+A full day of a city block, with resolved turbulence and facet-level
+radiation, costs about nine minutes on a single processor.
+
+### Run your own city
+
+```bash
+# 1. Fetch a 1 km box from OpenStreetMap (edit the bounding box inside)
+julia --project=. examples/urban/data/fetch_alexanderplatz.jl
+
+# 2. Simulate 24 hours — writes CF-1.8 NetCDF
+julia --project=. examples/urban/alexanderplatz_diurnal.jl
+
+# 3. Render the diurnal cycle as an animation
+julia --project=. examples/urban/alexanderplatz_animation.jl
 ```
+
+Nothing in the simulation is tuned to Alexanderplatz — the same script runs on
+any Overpass download. Output is a single `.nc` file carrying the full 3-D
+state (`u`, `v`, `w`, `θ`, `p`, `qv`, `ql`, `qr`, tracers) plus surface fields
+and static geometry, at every saved time level.
+
+---
+
+## Documentation
+
+```bash
+julia --project=docs docs/make.jl     # build locally
+```
+
+- **Theory** — Boussinesq equations, LES filtering and closure, staggered
+  discretization, fractional-step projection, discrete Poisson,
+  [radiative transfer](docs/src/theory/radiation.md)
+- **Design** — architecture, dispatch on `Location`, pluggable pressure solvers
+- **API reference** — generated for all 40 modules
+- **Examples** — worked cases with validation output
+
+---
+
+## Roadmap
+
+Development is organised into *eras*, each a coherent block of capability that
+ends with a validation target. Full plan:
+[`docs/src/design/longterm_roadmap.md`](docs/src/design/longterm_roadmap.md).
+
+- [x] **Era I** — LES core, physics scaffolds, urban flagship *(Phases 1–20)*
+- [x] **Era II** — numerical foundations: cut-cell IBM, IMEX, WENO-Z/TENO,
+      anelastic, multigrid, nesting, AMR *(21–31)* · 2,094 tests
+- [x] **Era III** — high-fidelity radiation: gas optics, two-stream,
+      Monte-Carlo, radiosity, BRDF, aerosol, solar geometry *(32–38)* · 4,881 tests
+- [ ] **Era IV** — clouds and microphysics *(39–45)*
+  - [x] Phase 39 — exact moist thermodynamics
+  - [ ] Phase 40 — P3 bulk microphysics
+  - [x] Phase 41 — superdroplet Lagrangian microphysics
+  - [x] Phase 42 — aerosol-cloud interaction
+  - [ ] Phase 43 — ice nucleation
+  - [ ] Phase 44 — precipitation, fog and visibility
+  - [ ] Phase 45 — turbulence-microphysics interaction
+- [ ] **Era V** — land surface and urban canopy *(46–53)*
+- [ ] **Era VI** — turbulence closure *(54–59)*
+- [ ] **Era VII** — chemistry and aerosol *(60–66)*
+- [ ] **Era VIII** — real-world data, forcing and validation *(67–73)*
+- [ ] **Era IX** — data assimilation and inverse problems *(74–79)*
+- [ ] **Era X** — performance and scale: MPI, GPU *(80–87)*
+- [ ] **Era XI** — machine learning, applications, ecosystem *(88–100)*
+
+---
+
+## Known limitations
+
+Caveats of what currently ships, as distinct from what is not yet built.
+
+- **Single-node CPU only.** Domain decomposition and GPU backends exist as
+  interfaces, not implementations. Era X.
+- **Gas optics is a band-model reconstruction**, not a fit to line-by-line
+  data. `RRTMGP.jl` does not load on every platform, so the *k*-distribution
+  is built from a Malkmus narrow-band model via Domoto inversion. Broadband
+  fluxes land within a few percent of observations; a line-by-line backend can
+  be added behind the same interface.
+- **One surface temperature per grid column.** The radiosity solver resolves
+  every facet individually, but the surface energy balance collapses a whole
+  facade to a single temperature. Removed by the multi-layer canopy in Era V.
+- **Superdroplet coalescence carries a finite-*N*<sub>sd</sub> bias** — about
+  2.5 % at *N*<sub>sd</sub> = 2¹², shrinking as ≈ *N*<sup>-0.6</sup>. It does
+  not average away over random seeds. The collision *rate* is correct: mean
+  number decay matches Golovin's analytic solution to ≤ 1.3 %.
+- **Two urban add-ons ship disabled**, with reasons documented in
+  `examples/urban/`: vegetation drag is CFL-unstable under explicit Euler at
+  Δt = 2 s and needs implicit treatment; fog/dew condensation needs tighter
+  coupling to the atmospheric moisture field.
+- **Test coverage is uneven.** The dynamical core and radiation are covered
+  thoroughly; the newest modules (Phases 41–42) exercise 38 % and 21 % of
+  their exported surface respectively.
+
+---
+
+## License and citation
+
+MIT — see [`LICENSE`](LICENSE).
+
+If you use Aeolus in published work, please cite it via
+[`CITATION.cff`](CITATION.cff) (GitHub renders a *Cite this repository*
+button from it).

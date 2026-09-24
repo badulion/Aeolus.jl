@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: "Aeolus.jl: a Julia-native large-eddy simulation framework"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  # TODO: replace with your details before publishing.
+  - family-names: "FAMILY-NAME"
+    given-names: "GIVEN-NAME"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"
+repository-code: "https://github.com/USER/Aeolus.jl"
+abstract: >-
+  Aeolus.jl is a large-eddy simulation framework written in Julia, with a
+  staggered finite-volume dynamical core behind an AbstractMesh interface,
+  a high-fidelity radiation stack (correlated-k gas optics, two-stream and
+  3-D Monte-Carlo transfer, urban radiosity, spectral BRDF surface optics),
+  and exact moist thermodynamics with bulk and Lagrangian microphysics. Its
+  flagship application is urban climate: simulating how a real city, built
+  from OpenStreetMap geometry, heats and cools over a diurnal cycle.
+keywords:
+  - large-eddy simulation
+  - computational fluid dynamics
+  - atmospheric boundary layer
+  - urban climate
+  - urban heat island
+  - radiative transfer
+  - Julia
+license: MIT
+version: "0.1.0"
+date-released: "2026-09-24"
