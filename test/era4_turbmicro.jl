@@ -114,10 +114,24 @@ end
         d0 = DoubleGaussianSaturationPDF(0.0)
         @test pdf_cloud_fraction(d0, s̄, σ) == pdf_cloud_fraction(g, s̄, σ)
         @test pdf_condensate(d0, s̄, σ) == pdf_condensate(g, s̄, σ)
-        # continuity as Sk → 0 (the separation vanishes as |Sk|^{1/3})
-        dC = abs(pdf_cloud_fraction(DoubleGaussianSaturationPDF(1e-9), s̄, σ) -
-                 pdf_cloud_fraction(g, s̄, σ))
-        @test dC < 1e-3
+        # Continuity as Sk → 0, against the first-order Edgeworth
+        # (Gram-Charlier) correction to a Gaussian exceedance probability,
+        #     P(s > 0) ≈ Φ(Q) + (Sk/6)(Q² − 1) φ(Q),
+        # which any family matching the first three moments must reproduce
+        # to O(Sk). This family's excess kurtosis is O(γ²) = O(Sk^{4/3}),
+        # so the slope dC/Sk approaches the Edgeworth value with a relative
+        # error O(Sk^{1/3}) — slowly: ~2e-3 at |Sk| = 1e-6, ~4e-4 at 1e-8.
+        Q = s̄ / σ
+        edgeworth = (Q^2 - 1) * exp(-Q^2 / 2) / sqrt(2π) / 6
+        slope(Sk) = (pdf_cloud_fraction(DoubleGaussianSaturationPDF(Sk), s̄, σ) -
+                     pdf_cloud_fraction(g, s̄, σ)) / Sk
+        for Sk in (1e-8, -1e-8, 1e-9)
+            @test slope(Sk) ≈ edgeworth rtol = 1e-3
+        end
+        dev(Sk) = abs(slope(Sk) / edgeworth - 1)
+        # three decades in Sk → one decade in the deviation (Sk^{1/3})
+        @test 5 < dev(1e-5) / dev(1e-8) < 20
+        @info "∂C/∂Sk at Sk → 0 vs Edgeworth" edgeworth slope_1e5 = slope(1e-5) slope_1e8 = slope(1e-8) dev_ratio = dev(1e-5) / dev(1e-8)
         # Positive skew with a subsaturated mean: a moist tail clouds more
         # of the cell than the symmetric distribution does; negative skew
         # (a dry tail, moist bulk) less. The ordering is NOT monotone in
