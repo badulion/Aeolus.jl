@@ -3,14 +3,21 @@ Manifest.toml
 *.jl.cov
 *.jl.*.cov
 *.jl.mem
+deps/build.log
+
+# Documentation build
 /docs/build/
+/docs/site/
 
 # Simulation output (large binaries)
-examples/urban/output/
+output/
+*.nc
 *.ppm
 *.jls
 
-# Editor
+# Editor / OS
 .vscode/
 .idea/
 *.swp
+*~
+.DS_Store

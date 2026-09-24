@@ -12,8 +12,8 @@ makedocs(
     authors  = "Andrzej Dulny",
     format   = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
-        canonical  = "https://andrzej-dulny.github.io/Aeolus.jl",
-        edit_link  = "main",
+        canonical  = "https://badulion.github.io/Aeolus.jl",
+        edit_link  = "master",
         assets     = String[],
     ),
     pages = [
@@ -60,5 +60,5 @@ makedocs(
         "Benchmarks"    => "benchmarks.md",
     ],
     warnonly = [:missing_docs, :cross_references],
-    remotes  = nothing,   # not currently a git repo
+    remotes  = nothing,   # source links disabled; docs build standalone
 )
