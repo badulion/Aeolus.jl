@@ -76,7 +76,8 @@ export # --- log-normal surface-area diagnostics (inp.jl) ------------------
        inp_number_above_radius, inp_surface_area_above_radius,
        inp_emit!, inp_entrain!,
        inp_consume!, inp_nucleate_singular!, inp_frozen_fraction,
-       inp_release!, inp_budget, inp_budget_residual
+       inp_release!, inp_scavenge!, inp_sediment!,
+       inp_settling_velocity, inp_budget, inp_budget_residual
 
 include("icenuc/inp.jl")          # issue #5 — prognostic INP species
 # include("icenuc/freezing.jl")   # issue #6 — immersion/deposition freezing

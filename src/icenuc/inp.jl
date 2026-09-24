@@ -682,3 +682,141 @@ function inp_release!(inp::INPPopulation, f::Real; mode::Integer = 0)
     end
     return total
 end
+
+# =========================================================================
+# 7. Removal sinks: scavenging and sedimentation
+# =========================================================================
+
+# Remove per-particle probability p(r) from one population of mode i,
+# booking the loss to (Nctr, Mctr). Returns the number removed.
+function _remove!(inp::INPPopulation, i::Integer, p, population::Symbol,
+                  Nctr::Vector, Mctr::Vector)
+    if population === :available
+        N, M = inp.N_avail[i], inp.M_avail[i]
+    elseif population === :consumed
+        N, M = inp.N_cons[i], inp.M_cons[i]
+    else
+        error("population must be :available or :consumed")
+    end
+    N > 0 || return 0.0
+    r_g = AerosolCloud._rg_from_moments(N, M, inp.ρ_p[i], inp.σ_g[i])
+    if p isa Real
+        fN = fM = clamp(Float64(p), 0.0, 1.0)
+    else
+        fN = _moment_fraction(p, r_g, inp.σ_g[i], 0)
+        fM = _moment_fraction(p, r_g, inp.σ_g[i], 3)
+    end
+    ΔN = fN * N
+    ΔM = fM * M
+    if fN >= 1 || ΔN >= N
+        ΔN, ΔM = N, M
+    end
+    if population === :available
+        inp.N_avail[i] -= ΔN; inp.M_avail[i] -= ΔM
+    else
+        inp.N_cons[i] -= ΔN; inp.M_cons[i] -= ΔM
+        inp.N_cons_lost[i] += ΔN; inp.M_cons_lost[i] += ΔM
+    end
+    Nctr[i] += ΔN; Mctr[i] += ΔM
+    return ΔN
+end
+
+function _populations(population::Symbol)
+    population === :both && return (:available, :consumed)
+    population in (:available, :consumed) && return (population,)
+    error("population must be :available, :consumed or :both")
+end
+
+"""
+    inp_scavenge!(inp, Λ, Δt; mode = 0, population = :available) -> ΔN
+
+Wet scavenging with scavenging coefficient `Λ` (s⁻¹) over a step `Δt`:
+each particle survives with probability `exp(-Λ Δt)` — the exact
+solution of `dN/dt = -Λ N`, so the operator is unconditionally positive
+for any `Δt`.
+
+`Λ` may be a number (size-independent: number and mass decay together
+and the median radius is unchanged) or a function `Λ(r)` of dry radius
+in m (e.g. below-cloud impaction scavenging, which has the
+Greenfield-gap minimum near 0.1–1 μm; Seinfeld & Pandis 2016, ch. 20).
+`population = :consumed` removes INP that are inside ice with a
+precipitation removal rate; `:both` applies the same `Λ` to both.
+"""
+function inp_scavenge!(inp::INPPopulation, Λ, Δt::Real; mode::Integer = 0,
+                       population::Symbol = :available)
+    Δt >= 0 || error("inp_scavenge!: Δt must be non-negative")
+    p = Λ isa Real ? (Λ >= 0 ? 1 - exp(-Λ * Δt) :
+                      error("inp_scavenge!: Λ must be non-negative")) :
+                     (r -> 1 - exp(-max(Λ(r), 0.0) * Δt))
+    total = 0.0
+    for pop in _populations(population), i in _modes_range(inp, mode)
+        total += _remove!(inp, i, p, pop, inp.N_wet, inp.M_wet)
+    end
+    return total
+end
+
+"""
+    inp_settling_velocity(inp, i; moment = 0, population = :available,
+                          micro = DEFAULT_MICRO) -> m s⁻¹
+
+Moment-weighted gravitational settling speed of mode `i`:
+`moment = 0` gives the number-weighted mean `⟨v⟩_N` (what sets the
+number flux), `moment = 3` the mass-weighted `⟨v⟩_M`. The single-
+particle speed is `Superdroplet.stokes_settling_velocity` (Stokes drag
+with Cunningham slip) at the mode's dry density.
+
+Without slip `v = k r²`, and the log-normal moments give the closed forms
+
+```math
+⟨v⟩_N = k r_g^2 e^{2\\ln^2σ_g}, \\qquad ⟨v⟩_M = k r_g^2 e^{8\\ln^2σ_g},
+```
+
+so for `σ_g = 2` mass settles `e^{6 ln²2} = 18` times faster than
+number — the reason dust plumes coarsen at their base and fine-mode
+dust travels intercontinental distances.
+"""
+function inp_settling_velocity(inp::INPPopulation, i::Integer; moment::Integer = 0,
+                               population::Symbol = :available,
+                               micro::MicrophysicalConstants = DEFAULT_MICRO)
+    N, M = _moments(inp, i, population)
+    N > 0 || return 0.0
+    r_g = inp_median_radius(inp, i; population)
+    lnσ = log(inp.σ_g[i])
+    ρ = inp.ρ_p[i]
+    s = 0.0
+    @inbounds for j in eachindex(_QZ)
+        s += _QW[j] * stokes_settling_velocity(r_g * exp(lnσ * (_QZ[j] + moment * lnσ)),
+                                               ρ, micro)
+    end
+    return s
+end
+
+"""
+    inp_sediment!(inp, Δz, Δt; mode = 0, micro = DEFAULT_MICRO) -> ΔN
+
+Gravitational sedimentation of *available* INP out of a well-mixed layer
+of depth `Δz` (m) over `Δt` (s), with no inflow from above (a transport-
+free sink; in a column model the host passes the outflow down as the
+next layer's `inp_emit!` source). A particle of radius `r` survives with
+probability `exp(-v(r)Δt/Δz)` — exact for a well-mixed box and positive
+for any `Δt` — so the coarse tail is lost first, number and mass are
+removed with different effective speeds, and the diagnosed median radius
+of what remains shrinks.
+
+Consumed INP fall with their ice crystal, not at the dry-particle speed;
+remove them with `inp_scavenge!(…; population = :consumed)` using the
+host's ice sedimentation rate.
+"""
+function inp_sediment!(inp::INPPopulation, Δz::Real, Δt::Real;
+                       mode::Integer = 0,
+                       micro::MicrophysicalConstants = DEFAULT_MICRO)
+    Δz > 0 || error("inp_sediment!: Δz must be positive")
+    Δt >= 0 || error("inp_sediment!: Δt must be non-negative")
+    total = 0.0
+    for i in _modes_range(inp, mode)
+        ρ = inp.ρ_p[i]
+        p = r -> 1 - exp(-stokes_settling_velocity(r, ρ, micro) * Δt / Δz)
+        total += _remove!(inp, i, p, :available, inp.N_sed, inp.M_sed)
+    end
+    return total
+end

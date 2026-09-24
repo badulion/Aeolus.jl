@@ -446,6 +446,7 @@ export DEMOTT_CUTOFF_RADIUS, INPPopulation, inp_budget,
        inp_frozen_fraction, inp_mass, inp_median_radius, inp_modes,
        inp_nmodes, inp_nucleate_singular!, inp_number,
        inp_number_above_radius, inp_population, inp_release!,
+       inp_scavenge!, inp_sediment!, inp_settling_velocity,
        inp_species, inp_surface_area, inp_surface_area_above_radius,
        mode_surface_area, surface_area_above_radius
 
