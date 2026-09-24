@@ -44,7 +44,8 @@ REFERENCES
 module P3Microphysics
 
 # --- gamma.jl -------------------------------------------------------------
-export lgamma_lanczos, gamma_lanczos
+export lgamma_lanczos, gamma_lanczos,
+       gamma_inc_lower, gamma_inc_upper, gamma_inc
 
 include("p3/gamma.jl")
 

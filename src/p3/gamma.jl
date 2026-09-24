@@ -106,3 +106,107 @@ function gamma_lanczos(x::Real)
     end
     return exp(_lgamma_lanczos_pos(xf))
 end
+
+# -------------------------------------------------------------------------
+# Regularised incomplete gamma functions
+# -------------------------------------------------------------------------
+
+const _GAMMA_INC_MAXITER = 100_000
+
+# log of the common prefactor x^a e^{-x} / Γ(a)
+@inline _gamma_inc_logpref(a::T, x::T) where {T} =
+    -x + a * log(x) - _lgamma_lanczos_pos(a)
+
+# P(a,x) by its series, converges fast for x < a + 1 (NR3 §6.2, `gser`):
+#   P(a,x) = e^{-x} x^a / Γ(a) · Σ_{n≥0} x^n / (a (a+1) … (a+n))
+function _gamma_p_series(a::T, x::T) where {T<:AbstractFloat}
+    ap = a
+    del = one(T) / a
+    s = del
+    for _ in 1:_GAMMA_INC_MAXITER
+        ap += one(T)
+        del *= x / ap
+        s += del
+        abs(del) < abs(s) * eps(T) && break
+    end
+    return s * exp(_gamma_inc_logpref(a, x))
+end
+
+# Q(a,x) by its continued fraction, converges fast for x ≥ a + 1,
+# evaluated with the modified Lentz algorithm (NR3 §5.2, §6.2, `gcf`):
+#   Q(a,x) = e^{-x} x^a / Γ(a) · 1/(x+1-a- 1·(1-a)/(x+3-a- 2·(2-a)/(x+5-a- …)))
+function _gamma_q_contfrac(a::T, x::T) where {T<:AbstractFloat}
+    fpmin = floatmin(T) / eps(T)
+    b = x + one(T) - a
+    c = one(T) / fpmin
+    d = one(T) / b
+    h = d
+    for i in 1:_GAMMA_INC_MAXITER
+        an = -i * (i - a)
+        b += 2
+        d = an * d + b
+        abs(d) < fpmin && (d = fpmin)
+        c = b + an / c
+        abs(c) < fpmin && (c = fpmin)
+        d = one(T) / d
+        del = d * c
+        h *= del
+        abs(del - one(T)) <= eps(T) && break
+    end
+    return exp(_gamma_inc_logpref(a, x)) * h
+end
+
+"""
+    gamma_inc(a, x) -> (P, Q)
+
+Regularised lower and upper incomplete gamma functions
+
+    P(a,x) = γ(a,x)/Γ(a) = (1/Γ(a)) ∫₀ˣ t^{a-1} e^{-t} dt
+    Q(a,x) = Γ(a,x)/Γ(a) = 1 - P(a,x)
+
+for `a > 0`, `x ≥ 0` (`x = Inf` allowed).
+
+Whichever of `P`, `Q` is the smaller is computed directly — by the power
+series for `x < a + 1` (it gives `P`) and by the Lentz-evaluated
+continued fraction otherwise (it gives `Q`) — and the other as its
+complement, so neither tail loses relative accuracy to cancellation.
+
+`P(a,x)` is the CDF of a Gamma(a,1) variate; for a gamma size
+distribution `N(D) ∝ D^μ e^{-λD}` the fraction of the `k`-th moment
+carried by particles smaller than `D` is `P(μ+k+1, λD)`.
+
+Reference: Press et al. (2007), *Numerical Recipes* 3rd ed., §6.2
+(`gammp`, `gammq`, `gser`, `gcf`).
+"""
+function gamma_inc(a::Real, x::Real)
+    af, xf = promote(float(a), float(x))
+    T = typeof(af)
+    (isnan(af) || isnan(xf)) && return (T(NaN), T(NaN))
+    af > 0 || throw(DomainError(a, "gamma_inc requires a > 0"))
+    xf >= 0 || throw(DomainError(x, "gamma_inc requires x ≥ 0"))
+    xf == 0 && return (zero(T), one(T))
+    isinf(xf) && return (one(T), zero(T))
+    if xf < af + one(T)
+        p = _gamma_p_series(af, xf)
+        return (p, one(T) - p)
+    else
+        q = _gamma_q_contfrac(af, xf)
+        return (one(T) - q, q)
+    end
+end
+
+"""
+    gamma_inc_lower(a, x)
+
+Regularised lower incomplete gamma function `P(a,x) = γ(a,x)/Γ(a)`,
+`a > 0`, `x ≥ 0`. See [`gamma_inc`](@ref).
+"""
+gamma_inc_lower(a::Real, x::Real) = first(gamma_inc(a, x))
+
+"""
+    gamma_inc_upper(a, x)
+
+Regularised upper incomplete gamma function `Q(a,x) = Γ(a,x)/Γ(a)
+= 1 - P(a,x)`, `a > 0`, `x ≥ 0`. See [`gamma_inc`](@ref).
+"""
+gamma_inc_upper(a::Real, x::Real) = last(gamma_inc(a, x))

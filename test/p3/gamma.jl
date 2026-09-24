@@ -92,4 +92,106 @@ relerr(x, ref) = abs(x - ref) / abs(ref)
         stirling = (x - 0.5) * log(x) - x + 0.5 * log(2π) + 1 / (12x) - 1 / (360x^3)
         @test relerr(lgamma_lanczos(x), stirling) < 1e-15
     end
+
+    @testset "Incomplete gamma: limits and complement" begin
+        for a in (0.1, 0.5, 1.0, 2.7, 10.0, 37.5, 100.0)
+            @test gamma_inc_lower(a, 0.0) == 0.0
+            @test gamma_inc_upper(a, 0.0) == 1.0
+            @test gamma_inc_lower(a, Inf) == 1.0
+            @test gamma_inc_upper(a, Inf) == 0.0
+            # far tails
+            @test gamma_inc_lower(a, 50a + 500) ≈ 1.0 atol = 1e-15
+            # near zero P(a,x) → x^a/Γ(a+1) · (1 - a x/(a+1) + …); note this
+            # is NOT small for small a (P(0.1, 1e-7) ≈ 0.21): the Gamma(a,1)
+            # density is integrably singular at 0 when a < 1.
+            # (two-term expansion: truncation error O(x²) ≈ 1e-12 at x = 1e-6)
+            x0 = 1e-6
+            lead = exp(a * log(x0) - lgamma_lanczos(a + 1)) * (1 - a * x0 / (a + 1))
+            if lead > 1e-290
+                @test relerr(gamma_inc_lower(a, x0), lead) < 1e-11
+            else                     # x^a underflows (a = 100): P must too
+                @test gamma_inc_lower(a, x0) < 1e-290
+            end
+            for x in (1e-3, 0.3, 0.9a, a, a + 1, 1.3a + 2, 5a + 10)
+                P, Q = gamma_inc(a, x)
+                @test abs(P + Q - 1) <= 2eps()
+                @test 0 <= P <= 1 && 0 <= Q <= 1
+            end
+        end
+        @test_throws DomainError gamma_inc(0.0, 1.0)
+        @test_throws DomainError gamma_inc(1.0, -1.0)
+    end
+
+    @testset "Incomplete gamma: closed forms" begin
+        # a = 1: P(1,x) = 1 - e^{-x}; the upper tail Q = e^{-x} relative.
+        maxe = 0.0
+        for x in [10.0 .^ (-8:0.25:0); 1.5:0.5:40]
+            e = relerr(gamma_inc_lower(1.0, x), -expm1(-x))
+            eq = relerr(gamma_inc_upper(1.0, x), exp(-x))
+            maxe = max(maxe, e, eq)
+        end
+        @printf("    P(1,x)=1-e^{-x}, Q(1,x)=e^{-x}: max rel err %.2e\n", maxe)
+        @test maxe < 1e-13
+
+        # a = 1/2: P(½,x) = erf(√x), with erf from GasOptics (the package's
+        # one error-function implementation). The upper tail Q(½,x) =
+        # erfc(√x) is checked against a 256-bit Taylor series for erf
+        # instead: GasOptics.erfc_series forms erfc as 1 - erf for z ≤ 3 and
+        # so carries up to ~1e-9 relative error there (measured at z = 3),
+        # which would mask the accuracy of Q.
+        maxe = 0.0; maxq = 0.0
+        setprecision(BigFloat, 256) do
+            berf(z) = 2 / sqrt(big(π)) *
+                      sum((-1)^n * z^(2n + 1) / (factorial(big(n)) * (2n + 1)) for n in 0:400)
+            for x in [10.0 .^ (-6:0.25:0); 1.25:0.25:30]
+                maxe = max(maxe, relerr(gamma_inc_lower(0.5, x), erf_series(sqrt(x))))
+                C = 1 - berf(sqrt(big(x)))
+                maxq = max(maxq, Float64(relerr(big(gamma_inc_upper(0.5, x)), C)))
+            end
+        end
+        @printf("    P(½,x) vs GasOptics erf(√x): max rel err %.2e\n", maxe)
+        @printf("    Q(½,x) vs 256-bit erfc(√x), x ≤ 30: max rel err %.2e\n", maxq)
+        @test maxe < 1e-13
+        @test maxq < 1e-13
+
+        # Integer a: Q(n,x) = e^{-x} Σ_{k<n} x^k/k! (the Poisson CDF),
+        # evaluated in BigFloat as the reference. Relative error in the
+        # SMALLER of P and Q — the tail that matters.
+        maxe = 0.0
+        setprecision(BigFloat, 256) do
+            for n in (2, 3, 7, 15, 30, 50), x in (0.05, 0.5, 1.0, 0.5n, n - 0.5,
+                                                  n + 1.0, 1.5n, 2n + 3, 4n + 20)
+                xb = big(x)
+                # both tails summed directly (1 - qb would lose a tiny P)
+                qb = exp(-xb) * sum(xb^k / factorial(big(k)) for k in 0:n-1)
+                pb = exp(-xb) * sum(xb^k / factorial(big(k)) for k in n:n+800)
+                P, Q = gamma_inc(n, x)
+                e = pb < qb ? relerr(P, Float64(pb)) : relerr(Q, Float64(qb))
+                maxe = max(maxe, e)
+            end
+        end
+        @printf("    Q(n,x) Poisson sum, n ≤ 50, smaller tail: max rel err %.2e\n", maxe)
+        @test maxe < 1e-12
+    end
+
+    @testset "Incomplete gamma: continuity and derivative" begin
+        # Continuity across the series / continued-fraction switch at x = a+1
+        for a in (0.3, 2.0, 8.5, 40.0)
+            xm = prevfloat(a + 1.0, 4); xp = a + 1.0
+            @test abs(gamma_inc_lower(a, xm) - gamma_inc_lower(a, xp)) < 1e-13
+        end
+        # dP/dx = x^{a-1} e^{-x} / Γ(a) (the Gamma(a,1) pdf), central differences
+        maxe = 0.0
+        for a in (0.7, 3.0, 12.0), x in (0.4, 1.0, a, a + 1, 2a + 1)
+            h = 1e-5 * max(x, 1.0)
+            dP = (gamma_inc_lower(a, x + h) - gamma_inc_lower(a, x - h)) / 2h
+            pdf = exp((a - 1) * log(x) - x - lgamma_lanczos(a))
+            maxe = max(maxe, relerr(dP, pdf))
+        end
+        @printf("    dP/dx vs gamma pdf (FD h=1e-5x): max rel err %.2e\n", maxe)
+        @test maxe < 1e-7
+        # monotone in x
+        ps = [gamma_inc_lower(4.3, x) for x in 0:0.1:30]
+        @test all(diff(ps) .>= 0)
+    end
 end

@@ -441,6 +441,7 @@ export AMMONIUM_SULFATE, AerosolProperties, CollisionKernel,
 # Phase 40 — P3 (predicted particle properties) bulk microphysics
 # Gamma-function names carry `_lanczos` / `gamma_inc_*` spellings so they
 # cannot collide with SpecialFunctions in user code that loads both.
-export lgamma_lanczos, gamma_lanczos
+export lgamma_lanczos, gamma_lanczos,
+       gamma_inc_lower, gamma_inc_upper, gamma_inc
 
 end # module
