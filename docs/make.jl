@@ -30,6 +30,7 @@ makedocs(
             "Discrete Poisson & FFT"      => "theory/poisson.md",
             "Radiative transfer"          => "theory/radiation.md",
             "Fog and dew"                 => "theory/fog.md",
+            "Radiation fog"               => "theory/radiation_fog.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
