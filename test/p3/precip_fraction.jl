@@ -62,12 +62,10 @@
             r2 = p3_fractional_process_rates(warm, f, f)
             @test r2.accr / g.accr ≈ f^(1 - 2e) rtol = 1e-12
             # autoconversion 1350 q_c^2.47 N_c^-1.79 on the cloud fraction:
-            # f · f^-2.47 · f^+1.79 = f^0.32 (reduced). Region air density
-            # differs from the grid mean by the redistributed condensate,
-            # hence a looser tolerance.
-            # Exact once the air density of the cloudy region (which counts
-            # its in-cloud condensate, and enters through N_c in cm⁻³) is
-            # included: the bare f^0.32 is off by 0.6 % at f = 0.1.
+            # f · f^-2.47 · f^+1.79 = f^0.32 (reduced). Exact once the air
+            # density of the cloudy region (which counts its in-cloud
+            # condensate, and enters through N_c in cm⁻³) is included; the
+            # bare f^0.32 is off by 0.6 % at f = 0.1.
             ra = p3_fractional_process_rates(warm, f, 1.0)
             cloudy = P3._p3_with(warm; q_c = warm.q_c / f, N_c = warm.N_c / f,
                                  q_v = min(qsat(warm.T, warm.p), warm.q_v / f))
@@ -123,6 +121,50 @@
             P3ParcelState(T = T, p = p, q_v = 0.9qs, q_c = 3e-4, N_c = 1e8,
                           q_r = 4e-4, N_r = 2e4), 0.5, 1.0).evap_r
         @test clear > wetter > 0
+    end
+
+    @testset "Large steps: each region is limited by its own contents" begin
+        # Review fix. A grid-mean limiter lets rain on 10 % of a fully
+        # cloudy cell collect, in one step, cloud water from the 90 % it
+        # does not cover (64 % of q_c gone in 60 s before the fix).
+        T, p = 285.0, 9.0e4
+        s = P3ParcelState(T = T, p = p, q_v = qsat(T, p), q_c = 5e-4, N_c = 1e8,
+                          q_r = 1e-3, N_r = 5e3)
+        # cloud outside the rain only autoconverts: its own rate bounds it
+        only = p3_process_rates(P3._p3_with(s; q_r = 0.0, N_r = 0.0))
+        for dt in (60.0, 300.0, 3000.0)
+            n = p3_step(s, dt; adjust = false, cloud_fraction = 1.0, precip_fraction = 0.1)
+            removed = 1 - n.q_c / s.q_c
+            bound = 0.1 + 0.9 * min(1.0, dt * only.auto / s.q_c)
+            @test removed <= bound * (1 + 1e-12)
+            dt == 3000.0 && @test removed >= 0.1 * (1 - 1e-12)   # all rain-area cloud taken
+        end
+        # Rain under saturated cloud cannot evaporate however long the step:
+        # with half the rain under cloud at least half of it survives.
+        d = P3ParcelState(T = T, p = p, q_v = 0.5qsat(T, p), q_c = 1e-4, N_c = 1e8,
+                          q_r = 1e-5, N_r = 1e3)
+        for dt in (300.0, 3000.0)
+            r = p3_fractional_process_rates(d, 0.5, 1.0; dt = dt)
+            @test dt * r.evap_r <= 0.5 * d.q_r * (1 + 1e-12)
+        end
+        # Where the grid mean is ice-subsaturated but the cloudy part is at
+        # water saturation, ice grows in the cloud (Wegener-Bergeron-
+        # Findeisen) and sublimates in the clear air; a grid-mean limiter
+        # would switch the in-cloud deposition off.
+        Tc, pc = 258.0, 7.0e4
+        c = P3ParcelState(T = Tc, p = pc, q_v = 0.8qsat(Tc, pc), q_c = 2e-4, N_c = 1e8,
+                          q_i = 1e-4, N_i = 1e5)
+        @test c.q_v < Aeolus.MoistThermodynamics.saturation_specific_humidity(
+            Tc, pc, Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS; over = :ice)
+        rl = p3_fractional_process_rates(c, 0.3, 1.0; dt = 10.0)
+        ru = p3_fractional_process_rates(c, 0.3, 1.0)
+        @test rl.dep ≈ ru.dep rtol = 1e-12      # not limited: far from the region's content
+        @test rl.dep > 0 && rl.sub > 0
+        # fractions of one: the grid-mean limited rates, bit for bit
+        for st in (warm, cold, melt)
+            @test p3_fractional_process_rates(st, 1.0, 1.0; dt = 10.0) ==
+                  p3_limit_rates(st, p3_process_rates(st), 10.0)
+        end
     end
 
     @testset "Vertical overlap: analytic values and ordering" begin

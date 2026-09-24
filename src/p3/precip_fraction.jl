@@ -125,7 +125,7 @@ end
 
 """
     p3_fractional_process_rates(s::P3ParcelState, cloud_fraction, precip_fraction,
-                                pp = P3_DEFAULT_PROCESS; f_min = 0.01) -> NamedTuple
+                                pp = P3_DEFAULT_PROCESS; f_min = 0.01, dt = nothing) -> NamedTuple
 
 The rates of [`p3_process_rates`](@ref) for a cell only partly covered by
 cloud (`cloud_fraction` `f_c`) and by precipitation (`precip_fraction`
@@ -154,16 +154,32 @@ A species present with a fraction below `f_min` is given `f_min`, which
 bounds the in-region mixing ratio at `q/f_min`. Fractions are ignored
 for absent species. Water conservation is unaffected: the rates still
 act through [`p3_tendencies`](@ref).
+
+With `dt` given, each region's rates are limited by
+[`p3_limit_rates`](@ref) over `dt` against *that region's* contents and
+saturation state before they are weighted (with `f_c`, `f_p` ∈ {0, 1}:
+the grid-mean `p3_limit_rates` itself). The result is then a complete,
+limited set of rates and must not be limited again at the grid mean,
+which would be wrong twice over: a grid-mean limiter lets rain collect,
+within one step, cloud water lying outside the rain area and evaporate
+rain that sits in saturated cloudy air, and, where the grid mean is
+subsaturated with respect to ice, it switches off the deposition that the
+cloudy (water-saturated) region does have. [`p3_step`](@ref) uses this
+form. Without `dt` (the default) the rates are unlimited.
 """
 function p3_fractional_process_rates(s::P3ParcelState{FT}, cloud_fraction::Real,
                                      precip_fraction::Real,
                                      pp::P3ProcessParameters = P3_DEFAULT_PROCESS;
-                                     f_min::Real = 0.01) where {FT}
+                                     f_min::Real = 0.01,
+                                     dt::Union{Nothing,Real} = nothing) where {FT}
+    # rates of one region (or of the whole cell), limited over dt if given
+    rates(st) = dt === nothing ? p3_process_rates(st, pp) :
+                p3_limit_rates(st, p3_process_rates(st, pp), dt, pp)
     fc = s.q_c >= pp.q_small ? clamp(FT(cloud_fraction), FT(f_min), one(FT)) : zero(FT)
     fp = s.q_r >= pp.q_small ? clamp(FT(precip_fraction), FT(f_min), one(FT)) : zero(FT)
     # A species that is absent or fills the cell leaves nothing sub-grid:
     # the grid-mean rates, bit for bit.
-    (fc == 0 || fc == 1) && (fp == 0 || fp == 1) && return p3_process_rates(s, pp)
+    (fc == 0 || fc == 1) && (fp == 0 || fp == 1) && return rates(s)
 
     qs = saturation_specific_humidity(s.T, s.p, pp.thermo)
     qv_cld = fc < 1 ? min(qs, s.q_v / fc) : s.q_v
@@ -181,7 +197,7 @@ function p3_fractional_process_rates(s::P3ParcelState{FT}, cloud_fraction::Real,
         sub = _p3_with(s; q_v = cloudy ? qv_cld : qv_clr,
                        q_c = cloudy ? s.q_c / fc : z, N_c = cloudy ? s.N_c / fc : z,
                        q_r = rainy ? s.q_r / fp : z, N_r = rainy ? s.N_r / fp : z)
-        r = p3_process_rates(sub, pp)
+        r = rates(sub)
         rime_vol += a * r.rime_c / r.ρ_rime_c
         w = map(x -> a * x, r)
         total = total === nothing ? w : map(+, total, w)
