@@ -211,8 +211,8 @@ r2_standard_deviation(sd::SuperdropletSet; indices = nothing) =
 # an eighth of the drive, so the terms matter for r̄ and are small
 # corrections to the width.
 #
-# The Raoult term b/r³ is dropped: for an activated droplet (r ≥ 3 μm,
-# 1e-18 kg NaCl) it is below 2e-6, three orders below S̄. This scheme is
+# The Raoult term b/r³ is dropped: for an activated droplet with 1e-18 kg
+# NaCl it is 5.2e-6 at 3 μm and 1.1e-6 at 5 μm, two to three orders below S̄. This scheme is
 # for activated cloud droplets; activation itself is `sgs_activation`.
 
 export bulk_condensation_step!, parcel_ascent!
