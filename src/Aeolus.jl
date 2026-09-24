@@ -449,6 +449,8 @@ export lgamma_lanczos, gamma_lanczos,
 # generic names (`particle_mass`, `fall_speed`) are taken or too ambiguous.
 export P3IceParameters, P3_DEFAULT_ICE, P3MassDimension,
        p3_rime_state, p3_mass_dimension, p3_regime,
-       p3_particle_mass, p3_particle_area
+       p3_particle_mass, p3_particle_area,
+       p3_mean_mass, p3_ice_mass, p3_bulk_density,
+       p3_slope, p3_size_distribution
 
 end # module

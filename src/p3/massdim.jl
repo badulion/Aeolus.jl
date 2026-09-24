@@ -293,9 +293,12 @@ relation `γ_va D^σ_va` for unrimed nonspherical ice, and for partially
 rimed ice the rime-fraction weighted blend
 `F_rim (π/4)D² + (1-F_rim) γ_va D^σ_va` (MM15, §2b).
 
-Unlike the mass, `A(D)` is *not* continuous at `D_th` (the sphere and
-aggregate relations are independent fits), exactly as in MM15; it is
-continuous in `F_rim` and `ρ_rim` at fixed `D`.
+Unlike the mass, `A(D)` is *not* continuous at the thresholds (the
+disc and aggregate relations are independent fits), exactly as in MM15.
+At fixed `D` it therefore jumps when a moving threshold `D_gr(F_rim,
+ρ_rim)` or `D_cr` crosses `D`. The bulk integrals over the size
+distribution are nevertheless continuous in `F_rim` and `ρ_rim`, since
+the jump location moves continuously.
 """
 function p3_particle_area(D::Real, md::P3MassDimension{T}) where {T}
     p = md.params
@@ -317,4 +320,127 @@ function _p3_mass_segments(md::P3MassDimension{T}) where {T}
             (p.α_va, p.β_va, md.D_th, md.D_gr),
             (isinf(md.D_gr) ? zero(T) : cg, T(3), md.D_gr, md.D_cr),
             (isinf(D_cr) ? zero(T) : cp, p.β_va, D_cr, T(Inf)))
+end
+
+# -------------------------------------------------------------------------
+# Size-distribution integrals and the slope solve
+# -------------------------------------------------------------------------
+
+"""
+    p3_mean_mass(μ, λ, md::P3MassDimension) -> kg
+
+Mean particle mass `q_i/N_i` of a gamma size distribution
+`N(D) ∝ D^μ e^{-λD}` under the four-regime P3 mass-dimension relation,
+
+    q/N = Σ_regimes c_j ∫_{D_lo,j}^{D_hi,j} D^{b_j} D^μ e^{-λD} dD
+          / ∫_0^∞ D^μ e^{-λD} dD,
+
+each term a truncated gamma moment ([`gamma_psd_partial_moment`](@ref)),
+so the result is exact up to the incomplete-gamma accuracy. Strictly
+decreasing in `λ`, since `m(D)` is increasing in `D`.
+
+Reference: Morrison & Milbrandt (2015), §2b and Appendix.
+"""
+function p3_mean_mass(μ::Real, λ::Real, md::P3MassDimension{T}) where {T}
+    μT, λT = T(μ), T(λ)
+    M0 = gamma_psd_moment(one(T), μT, λT, 0)
+    s = zero(T)
+    for (c, b, D1, D2) in _p3_mass_segments(md)
+        c == 0 && continue
+        s += c * gamma_psd_partial_moment(one(T), μT, λT, b, D1, D2)
+    end
+    return s / M0
+end
+
+"""
+    p3_ice_mass(N0, μ, λ, md::P3MassDimension)
+
+Ice mass content `q_i = ∫ m(D) N(D) dD` of the gamma distribution
+`N(D) = N₀ D^μ e^{-λD}` (per kg of air if `N₀` is, kg kg⁻¹; per m³ if
+`N₀` is per m³). See [`p3_mean_mass`](@ref).
+"""
+p3_ice_mass(N0::Real, μ::Real, λ::Real, md::P3MassDimension{T}) where {T} =
+    gamma_psd_moment(T(N0), T(μ), T(λ), 0) * p3_mean_mass(μ, λ, md)
+
+"""
+    p3_bulk_density(μ, λ, md::P3MassDimension) -> kg m⁻³
+
+Bulk density of the ice population: total mass divided by the total
+volume of the circumscribing spheres of diameter `D`,
+
+    ρ_bulk = q_i / ((π/6) ∫ D³ N(D) dD) = (q/N) / ((π/6) M₃/M₀).
+
+Equals `ρ_ice` for a population of small spheres, `ρ_g` for pure
+graupel, and falls towards the aggregate density `6α_va D^{β-3}/π` for
+large unrimed snow.
+"""
+function p3_bulk_density(μ::Real, λ::Real, md::P3MassDimension{T}) where {T}
+    μT, λT = T(μ), T(λ)
+    V = T(π) / 6 * gamma_psd_moment(one(T), μT, λT, 3) /
+        gamma_psd_moment(one(T), μT, λT, 0)
+    return p3_mean_mass(μT, λT, md) / V
+end
+
+"""
+    p3_slope(q_i, N_i, md::P3MassDimension; μ = 0, λ_min = 1.0, λ_max = 1e8) -> λ
+
+Slope `λ` (m⁻¹) of the gamma distribution with shape `μ` whose mean
+particle mass under the P3 mass-dimension relation equals `q_i/N_i`,
+i.e. the root of `p3_mean_mass(μ, λ, md) = q_i/N_i`.
+
+Because `m(D)` is piecewise, there is no closed form (unlike the
+single power law case, [`gamma_psd_slope`](@ref)); the mean mass is
+strictly decreasing in `λ`, and the root is bracketed in
+`[λ_min, λ_max]` and found by Illinois-modified regula falsi in `log λ`
+to ~1e-14 relative. If `q_i/N_i` lies outside the range spanned by the
+bracket the nearer bound is returned; P3 then adjusts `N_i` to be
+consistent with the limited `λ` (MM15, §2b), which is the caller's job.
+
+The shape parameter is held fixed here. MM15 diagnose `μ` from `λ`
+(Heymsfield 2003); a caller doing so iterates `μ`, `λ` jointly.
+
+Reference: Morrison & Milbrandt (2015), §2b.
+"""
+function p3_slope(q_i::Real, N_i::Real, md::P3MassDimension{T};
+                  μ::Real = 0, λ_min::Real = 1.0, λ_max::Real = 1e8) where {T}
+    (q_i > 0 && N_i > 0) ||
+        throw(DomainError((q_i, N_i), "q_i and N_i must be positive"))
+    target = log(T(q_i) / T(N_i))
+    f(y) = log(p3_mean_mass(μ, exp(y), md)) - target      # decreasing in y
+    a, b = log(T(λ_min)), log(T(λ_max))
+    fa, fb = f(a), f(b)
+    fa <= 0 && return exp(a)          # even the widest PSD is too light
+    fb >= 0 && return exp(b)          # even the narrowest is too heavy
+    side = 0
+    y = a
+    for _ in 1:200
+        y = (a * fb - b * fa) / (fb - fa)
+        fy = f(y)
+        if fy == 0
+            break
+        elseif fy > 0
+            a, fa = y, fy
+            side == -1 && (fb /= 2)
+            side = -1
+        else
+            b, fb = y, fy
+            side == 1 && (fa /= 2)
+            side = 1
+        end
+        abs(b - a) <= 4eps(T) * max(abs(a), abs(b)) && break
+    end
+    return exp(y)
+end
+
+"""
+    p3_size_distribution(q_i, N_i, md::P3MassDimension; μ = 0, kwargs...) -> (N0, μ, λ)
+
+Gamma size distribution parameters consistent with ice mass `q_i` and
+number `N_i`: `λ` from [`p3_slope`](@ref) (keyword arguments are passed
+on), then `N₀ = N_i λ^{μ+1}/Γ(μ+1)` ([`gamma_psd_intercept`](@ref)).
+"""
+function p3_size_distribution(q_i::Real, N_i::Real, md::P3MassDimension{T};
+                              μ::Real = 0, kwargs...) where {T}
+    λ = p3_slope(q_i, N_i, md; μ = μ, kwargs...)
+    return (gamma_psd_intercept(T(N_i), T(μ), λ), T(μ), λ)
 end

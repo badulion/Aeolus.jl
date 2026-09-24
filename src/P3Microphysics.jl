@@ -43,6 +43,7 @@ REFERENCES
 """
 module P3Microphysics
 
+
 # --- gamma.jl -------------------------------------------------------------
 export lgamma_lanczos, gamma_lanczos,
        gamma_inc_lower, gamma_inc_upper, gamma_inc_pq,
@@ -54,7 +55,9 @@ include("p3/gamma.jl")
 # --- massdim.jl -----------------------------------------------------------
 export P3IceParameters, P3_DEFAULT_ICE, P3MassDimension,
        p3_rime_state, p3_mass_dimension, p3_regime,
-       p3_particle_mass, p3_particle_area
+       p3_particle_mass, p3_particle_area,
+       p3_mean_mass, p3_ice_mass, p3_bulk_density,
+       p3_slope, p3_size_distribution
 
 include("p3/massdim.jl")
 

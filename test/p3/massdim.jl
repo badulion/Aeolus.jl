@@ -165,3 +165,145 @@
         @test md1.D_cr ≈ md2.D_cr rtol = 1e-14
     end
 end
+
+@testset "P3 size distribution: slope solve and bulk density" begin
+    relerr(x, ref) = abs(x - ref) / abs(ref)
+    p = P3_DEFAULT_ICE
+    # Largest relative step between neighbouring samples of a sweep
+    maxstep(v) = maximum(abs.(diff(v)) ./ abs.(v[1:end-1]))
+
+    @testset "Mean mass vs direct quadrature of m(D) N(D)" begin
+        # composite Simpson on a log-spaced grid split at the thresholds
+        function quad_mean_mass(μ, λ, md)
+            Dmax = 80 / λ
+            edges = [0.0; sort(filter(x -> 0 < x < Dmax,
+                                       [md.D_th, md.D_gr, md.D_cr])); Dmax]
+            num = 0.0; den = 0.0
+            for k in 1:(length(edges) - 1)
+                a, b = edges[k], edges[k + 1]
+                n = 4000
+                h = (b - a) / n
+                for i in 0:n
+                    D = a + i * h
+                    w = (i == 0 || i == n) ? 1 : (isodd(i) ? 4 : 2)
+                    nd = D^μ * exp(-λ * D)
+                    num += w * h / 3 * p3_particle_mass(D, md) * nd
+                    den += w * h / 3 * nd
+                end
+            end
+            return num / den
+        end
+        maxe = 0.0
+        for (F, ρr) in ((0.0, 400.0), (0.3, 150.0), (0.7, 900.0), (1.0, 500.0)),
+            μ in (0.0, 2.0), λ in (1e3, 1e4, 1e5)
+            md = p3_mass_dimension(F, ρr)
+            maxe = max(maxe, relerr(p3_mean_mass(μ, λ, md), quad_mean_mass(μ, λ, md)))
+        end
+        @printf("    mean mass (truncated moments) vs Simpson quadrature: max rel err %.2e\n", maxe)
+        @test maxe < 1e-6
+        # q_i = N_i · mean mass
+        md = p3_mass_dimension(0.4, 300.0)
+        N0 = gamma_psd_intercept(1e5, 1.0, 3e3)
+        @test p3_ice_mass(N0, 1.0, 3e3, md) ≈ 1e5 * p3_mean_mass(1.0, 3e3, md) rtol = 1e-13
+    end
+
+    @testset "Analytic limits of bulk density" begin
+        # Tiny particles (λ D_th ≫ 1): all solid-ice spheres, ρ_bulk → ρ_ice
+        md = p3_mass_dimension(0.5, 400.0)
+        @test p3_bulk_density(0, 1e7, md) ≈ p.ρ_ice rtol = 1e-12
+        # F_rim = 1 with λ small enough that nearly all volume is graupel:
+        # ρ_bulk → ρ_g = ρ_rim
+        md = p3_mass_dimension(1.0, 500.0)
+        ρb = p3_bulk_density(2, 50.0, md)
+        @printf("    ρ_bulk of pure graupel (ρ_rim = 500, λ = 50 m⁻¹): %.4f\n", ρb)
+        @test ρb ≈ 500 rtol = 1e-4
+        # unrimed, exponential PSD fully in the aggregate regime:
+        # ρ_bulk = 6α Γ(β+1)λ^{3-β}/(π Γ(4)) as D_th λ → 0
+        md = p3_mass_dimension(0.0, 400.0)
+        λ = 20.0
+        ref = 6p.α_va * gamma_lanczos(p.β_va + 1) * λ^(3 - p.β_va) / (π * 6)
+        @test relerr(p3_bulk_density(0, λ, md), ref) < 1e-6
+    end
+
+    @testset "Slope solve round trip" begin
+        maxe = 0.0
+        n = 0
+        for F in (0.0, 0.2, 0.6, 0.95, 1.0), ρr in (50.0, 400.0, 900.0),
+            μ in (0.0, 1.5, 4.0), λ in (3e2, 2e3, 1e4, 5e4, 3e5)
+            md = p3_mass_dimension(F, ρr)
+            N0 = gamma_psd_intercept(1e5, μ, λ)
+            q = p3_ice_mass(N0, μ, λ, md)
+            N0b, μb, λb = p3_size_distribution(q, 1e5, md; μ = μ)
+            maxe = max(maxe, relerr(λb, λ))
+            @test relerr(N0b, N0) < 1e-11
+            # and q/N is recovered from the solved PSD
+            @test p3_ice_mass(N0b, μb, λb, md) ≈ q rtol = 1e-12
+            n += 1
+        end
+        @printf("    λ round trip over %d (F_rim, ρ_rim, μ, λ) cases: max rel err %.2e\n", n, maxe)
+        @test maxe < 1e-12
+        # out-of-range mean mass clamps to the bracket
+        md = p3_mass_dimension(0.0, 400.0)
+        @test p3_slope(1.0, 1.0, md) == 1.0          # 1 kg particles
+        @test p3_slope(1e-30, 1.0, md) ≈ 1e8          # far below a 1 nm sphere
+        @test_throws DomainError p3_slope(0.0, 1e3, md)
+    end
+
+    @testset "Continuity of bulk properties across the F_rim, ρ_rim sweep" begin
+        # (a) fixed PSD (λ): mean mass and bulk density vs F_rim
+        # (b) fixed q_i/N_i: the solved λ and bulk density vs F_rim
+        # Continuity ⇔ the largest step shrinks ∝ the sample spacing.
+        steps = Dict{Int, Float64}()
+        for nF in (1001, 10001)
+            Fs = range(0.0, 1.0; length = nF)
+            worst = 0.0
+            for ρr in (50.0, 400.0, 900.0)
+                for λ in (2e3, 1e4)
+                    mm = [p3_mean_mass(0, λ, p3_mass_dimension(F, ρr)) for F in Fs]
+                    rb = [p3_bulk_density(0, λ, p3_mass_dimension(F, ρr)) for F in Fs]
+                    worst = max(worst, maxstep(mm), maxstep(rb))
+                end
+                ls = [p3_slope(1e-4, 1e4, p3_mass_dimension(F, ρr)) for F in Fs]
+                rb = [p3_bulk_density(0, λ, p3_mass_dimension(F, ρr))
+                      for (F, λ) in zip(Fs, ls)]
+                worst = max(worst, maxstep(ls), maxstep(rb))
+            end
+            steps[nF] = worst
+        end
+        @printf("    F_rim sweep, max step: ΔF=1e-3 → %.3e, ΔF=1e-4 → %.3e (ratio %.2f)\n",
+                steps[1001], steps[10001], steps[1001] / steps[10001])
+        @test steps[10001] < 3e-3
+        @test 8 < steps[1001] / steps[10001] < 12      # linear in the step: no jump
+
+        # ρ_rim sweep at fixed F_rim
+        rsteps = Float64[]
+        for nρ in (851, 8501)
+            ρs = range(p.ρ_rim_min, p.ρ_rim_max; length = nρ)
+            worst = 0.0
+            for F in (0.1, 0.5, 0.9, 1.0)
+                ls = [p3_slope(1e-4, 1e4, p3_mass_dimension(F, ρ)) for ρ in ρs]
+                rb = [p3_bulk_density(0, λ, p3_mass_dimension(F, ρ)) for (ρ, λ) in zip(ρs, ls)]
+                worst = max(worst, maxstep(ls), maxstep(rb))
+            end
+            push!(rsteps, worst)
+        end
+        @printf("    ρ_rim sweep, max step: Δρ=1 → %.3e, Δρ=0.1 → %.3e\n", rsteps...)
+        @test 8 < rsteps[1] / rsteps[2] < 12
+
+        # One-sided limit at F_rim = 0⁺ equals the unrimed value
+        for ρr in (50.0, 900.0), λ in (1e3, 1e4)
+            m0 = p3_mean_mass(0, λ, p3_mass_dimension(0.0, ρr))
+            m1 = p3_mean_mass(0, λ, p3_mass_dimension(1e-10, ρr))
+            @test relerr(m1, m0) < 1e-9
+        end
+
+        # Riming at fixed q_i/N_i makes particles denser and smaller:
+        # λ and ρ_bulk increase monotonically with F_rim and with ρ_rim.
+        for ρr in (100.0, 400.0, 900.0)
+            ls = [p3_slope(1e-4, 1e4, p3_mass_dimension(F, ρr)) for F in 0:0.05:1]
+            @test all(diff(ls) .> 0)
+        end
+        ls = [p3_slope(1e-4, 1e4, p3_mass_dimension(0.5, ρ)) for ρ in 50:50:900]
+        @test all(diff(ls) .> 0)
+    end
+end
