@@ -90,6 +90,19 @@ using Aeolus.MoistThermodynamics: PhasePartition, air_density, heat_capacity_moi
         @test p3_total_water(s1) ≈ p3_total_water(s) rtol = 1e-15
     end
 
+    @testset "Almost all cloud frozen: no negative q_c" begin
+        # 1e5 dust INP per cm³ at -30 °C freeze nearly every droplet but
+        # not all of them; q_c must stay ≥ 0 and water exact
+        T, p = 243.15, 6.0e4
+        s = P3ParcelState(T = T, p = p, q_v = saturation_specific_humidity(T, p, c),
+                          q_c = 1e-4, N_c = 5e7)
+        inp = inp_population([lognormal_mode(:mineral_dust, 1e5, 0.4, 2.0)])
+        s1, t = p3_ice_nucleation(s, inp, 10.0)
+        @test t.N_liq > 0
+        @test s1.q_c >= 0 && s1.N_c >= 0
+        @test p3_total_water(s1) ≈ p3_total_water(s) rtol = 1e-15
+    end
+
     @testset "Warm and ice-free cases leave the state unchanged" begin
         s = P3ParcelState(T = 275.0, p = 9e4, q_v = 5e-3, q_c = 1e-4, N_c = 1e8)
         inp = newinp()

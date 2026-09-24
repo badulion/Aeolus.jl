@@ -67,7 +67,9 @@ function p3_ice_nucleation(s::P3ParcelState{FT}, inp::INPPopulation, Δt::Real;
     ice_number_formed(t) > 0 || t.M_ice > 0 || return (s, t)
 
     all_frozen = have_c && t.N_liq >= N_liq
-    qc = all_frozen ? zero(FT) : s.q_c - FT(t.M_liq / ρ)
+    # (q_c ρ)/ρ can exceed q_c by an ulp: clamp, and book dqc from the
+    # clamped value so water stays exact
+    qc = all_frozen ? zero(FT) : max(s.q_c - FT(t.M_liq / ρ), zero(FT))
     Nc = all_frozen ? zero(FT) : s.N_c - FT(t.N_liq / ρ)
     dqc = s.q_c - qc                     # exactly what leaves the cloud
     dqv = FT(t.M_vap / ρ)
