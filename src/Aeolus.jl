@@ -16,6 +16,7 @@ include("TimeSteppers.jl")
 include("PressureSolvers.jl")
 include("Simulations.jl")
 include("IO.jl")
+include("NetCDFIO.jl")        # dependency-free NetCDF-3 reader/writer
 include("Microphysics.jl")
 include("IBM.jl")
 include("Parallel.jl")
@@ -58,6 +59,7 @@ using .TimeSteppers
 using .PressureSolvers
 using .Simulations
 using .IO
+using .NetCDFIO
 using .Microphysics
 using .IBM
 using .Parallel
@@ -108,6 +110,10 @@ export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
 export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
+export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
+       nc_write!, nc_append_record!, nc_close!, nc_write_fields,
+       nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
+       nc_attributes, nc_nrecords
 export apply_kessler_step!
 export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
        implicit_ibm_correction!

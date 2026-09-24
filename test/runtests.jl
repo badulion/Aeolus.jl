@@ -7,6 +7,8 @@ using Aeolus.Fields: set!, interior_view
 
 @testset "Aeolus.jl" begin
 
+    include("netcdf_io.jl")
+
     @testset "RegularGrid" begin
         g = RegularGrid(Float64; size=(8, 4, 2), extent=(1.0, 2.0, 4.0), halo=(2,2,2))
         @test g.dx ≈ 1/8

@@ -182,36 +182,106 @@ Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
 # Static geometry (sky-view factor, heights, surface class) goes into a
 # single `static.jls`; per-frame fields go into `frame_NNN.jls`.
 # ---------------------------------------------------------------------------
-const FRAMES = joinpath(OUT, "frames"); mkpath(FRAMES)
+const NCPATH = joinpath(OUT, "alexanderplatz.nc")
 nframe = 0
 
-using Serialization: serialize
+# Full 3-D model state in NetCDF-3, written with the dependency-free
+# writer in `src/NetCDFIO.jl`. This is the default output format because
+# it is the one every other tool in the field can read — ncview, xarray,
+# Paraview, CDO, Panoply — without Aeolus being installed.
+#
+# NCDatasets/NetCDF.jl/HDF5.jl all fail to precompile on this host, so
+# the container format is written directly from the Unidata specification
+# rather than through the C library. The files are ordinary `.nc` files;
+# nothing downstream can tell the difference.
+#
+# Size: 64x64x32 Float32 is 512 kB per 3-D field, nine fields per record,
+# 48 records — about 220 MB for a full day. Float32 rather than Float64
+# because that is the usual precision for model output and it halves the
+# file for no loss that matters at single-precision measurement accuracy.
+const ncf = nc_create(NCPATH; attributes = Dict(
+    "title"       => "Aeolus.jl LES — Alexanderplatz, Berlin",
+    "institution" => "Aeolus.jl",
+    "source"      => "Boussinesq LES, cut-cell IBM, Era III radiation",
+    "comment"     => "Real OSM geometry; 24 h diurnal cycle from 06:00 local",
+    "references"  => "examples/urban/alexanderplatz_diurnal.jl"))
 
-serialize(joinpath(FRAMES, "static.jls"), Dict{Symbol,Any}(
-    :svf     => Array(svf),
-    :sfc     => Array(sfc),
-    :heights => [maximum(k for k in 1:Nz if sm.mask[Hx+i, Hy+j, Hz+k]; init = 0) * mesh.dz
-                 for i in 1:Nx, j in 1:Ny],
-    :Nx => Nx, :Ny => Ny, :Nz => Nz,
-    :Lx => Lx, :Ly => Ly, :Lz => Lz, :k_slice => k_slice))
+nc_defdim!(ncf, "x", Nx); nc_defdim!(ncf, "y", Ny); nc_defdim!(ncf, "z", Nz)
+nc_defdim!(ncf, "time", nothing)          # unlimited record dimension
 
-"Write the 2-D fields the renderer needs for one frame."
+for (d, n, L) in (("x", Nx, Lx), ("y", Ny, Ly), ("z", Nz, Lz))
+    nc_defvar!(ncf, d, Float32, (d,);
+               attributes = Dict("units" => "m", "axis" => uppercase(d),
+                                 "long_name" => "$d cell centre"))
+end
+nc_defvar!(ncf, "time", Float64, ("time",);
+           attributes = Dict("units" => "seconds since simulation start",
+                             "axis" => "T", "long_name" => "simulation time"))
+nc_defvar!(ncf, "hour", Float64, ("time",);
+           attributes = Dict("units" => "h", "long_name" => "local hour of day"))
+nc_defvar!(ncf, "solar_elevation", Float64, ("time",);
+           attributes = Dict("units" => "degree", "long_name" => "solar elevation angle"))
+
+# --- static 2-D geometry ------------------------------------------------
+nc_defvar!(ncf, "sky_view_factor", Float32, ("x", "y");
+           attributes = Dict("units" => "1",
+               "long_name" => "sky view factor, area-weighted per column"))
+nc_defvar!(ncf, "building_height", Float32, ("x", "y");
+           attributes = Dict("units" => "m", "long_name" => "building height"))
+nc_defvar!(ncf, "surface_class", Float32, ("x", "y");
+           attributes = Dict("units" => "1",
+               "long_name" => "surface class (1 street 2 roof 3 park 4 water 5 wall)"))
+
+# --- prognostic 3-D fields ---------------------------------------------
+const NC3D = (("u",         "m s-1", "eastward wind"),
+              ("v",         "m s-1", "northward wind"),
+              ("w",         "m s-1", "upward wind"),
+              ("theta",     "K",     "potential temperature"),
+              ("p",         "m2 s-2", "kinematic pressure"),
+              ("qv",        "kg kg-1", "water vapour specific humidity"),
+              ("ql",        "kg kg-1", "cloud liquid water"),
+              ("qr",        "kg kg-1", "rain water"),
+              ("pollutant", "1",     "passive pollutant tracer"))
+for (n, u, ln) in NC3D
+    nc_defvar!(ncf, n, Float32, ("x", "y", "z", "time");
+               attributes = Dict("units" => u, "long_name" => ln,
+                                 "coordinates" => "x y z"))
+end
+
+# --- diagnostic 2-D fields ---------------------------------------------
+const NC2D = (("Ts",    "K",     "surface temperature"),
+              ("sw_in", "W m-2", "shortwave irradiance at the surface"),
+              ("lw_in", "W m-2", "downwelling longwave at the surface"))
+for (n, u, ln) in NC2D
+    nc_defvar!(ncf, n, Float32, ("x", "y", "time");
+               attributes = Dict("units" => u, "long_name" => ln,
+                                 "coordinates" => "x y"))
+end
+
+nc_endef!(ncf)
+nc_write!(ncf, "x", Float32[(i - 0.5) * mesh.dx for i in 1:Nx])
+nc_write!(ncf, "y", Float32[(j - 0.5) * mesh.dy for j in 1:Ny])
+nc_write!(ncf, "z", Float32[(k - 0.5) * mesh.dz for k in 1:Nz])
+nc_write!(ncf, "sky_view_factor", Float32.(svf))
+nc_write!(ncf, "building_height",
+          Float32[maximum(k for k in 1:Nz
+                          if sm.mask[mesh.Hx+i, mesh.Hy+j, mesh.Hz+k]; init = 0) * mesh.dz
+                  for i in 1:Nx, j in 1:Ny])
+nc_write!(ncf, "surface_class", Float32.(sfc))
+
+"Append one time level of the full 3-D state to the NetCDF file."
 function save_frame(idx::Int, hour_of_day::Real)
-    ui = interior_view(sim.u); vi = interior_view(sim.v); wi = interior_view(sim.w)
-    θi = interior_view(sim.θ); pp = interior_view(sim.p); ci = interior_view(pollutant)
-    serialize(joinpath(FRAMES, @sprintf("frame_%03d.jls", idx)),
-              Dict{Symbol,Any}(
-        :hour   => Float64(hour_of_day),
-        :elev   => sun_now[].elevation,
-        :Ts     => Array(Ts),
-        :sw     => Array(sw_arr),
-        :lw     => Array(lw_arr),
-        :u      => Array(view(ui, :, :, k_slice)),
-        :v      => Array(view(vi, :, :, k_slice)),
-        :w      => Array(view(wi, :, :, k_slice)),
-        :theta  => Array(view(θi, :, :, k_slice)),
-        :p      => Array(view(pp, :, :, k_slice)),
-        :c      => Array(view(ci, :, :, k_slice))))
+    iv(f) = Float32.(interior_view(f))
+    rec = Dict{String,Any}(
+        "time"            => [Float64(sim.t)],
+        "hour"            => [Float64(hour_of_day)],
+        "solar_elevation" => [Float64(sun_now[].elevation)],
+        "u" => iv(sim.u), "v" => iv(sim.v), "w" => iv(sim.w),
+        "theta" => iv(sim.θ), "p" => iv(sim.p), "qv" => iv(qv_p),
+        "ql" => iv(ql_p), "qr" => iv(qr_p), "pollutant" => iv(pollutant),
+        "Ts" => Float32.(Ts), "sw_in" => Float32.(sw_arr),
+        "lw_in" => Float32.(lw_arr))
+    nc_append_record!(ncf, rec)
     return nothing
 end
 
@@ -361,8 +431,9 @@ for n in 1:nsteps
 end
 
 t_wall = time() - t_wall_start
-@printf("Ran %d steps in %.1f s. Wrote %d frames to %s\n",
-        nsteps, t_wall, nframe, FRAMES)
+nc_close!(ncf)
+@printf("Ran %d steps in %.1f s. Wrote %d time levels to %s (%.1f MB)\n",
+        nsteps, t_wall, nframe, NCPATH, filesize(NCPATH) / 1e6)
 @printf("Peak ΔT (heat island): %.1f K   max|∇·u| = %.2e\n",
         maximum(Ts) - minimum(Ts), max_divergence(sim))
 println("Render with:  julia --project=. examples/urban/alexanderplatz_animation.jl")

@@ -25,26 +25,36 @@
 #   4. Vertical velocity w           8. Sky-view factor (static)
 
 using Printf
-using Serialization: deserialize
+using Aeolus
 using Statistics: mean
 
 include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 include(joinpath(@__DIR__, "..", "viz", "apng.jl"))
 
 const OUT    = joinpath(@__DIR__, "output")
-const FRAMES = joinpath(OUT, "frames")
+const NCPATH = joinpath(OUT, "alexanderplatz.nc")
 
-isdir(FRAMES) || error("""
-    No frame directory at $FRAMES.
+isfile(NCPATH) || error("""
+    No output file at $NCPATH.
     Run the simulation first:
         julia --project=. examples/urban/alexanderplatz_diurnal.jl
     """)
 
-static = deserialize(joinpath(FRAMES, "static.jls"))
-files  = sort(filter(f -> startswith(f, "frame_") && endswith(f, ".jls"),
-                     readdir(FRAMES)))
-isempty(files) && error("No frame_*.jls in $FRAMES — did the run finish?")
-@printf("Rendering %d frames from %s\n", length(files), FRAMES)
+# Read the model output back through the same dependency-free NetCDF
+# layer that wrote it. Records are read one at a time rather than all at
+# once: the full 3-D state for a day is a few hundred MB and the renderer
+# only ever needs one horizontal slice.
+ncf   = nc_open(NCPATH)
+nrec  = nc_nrecords(ncf)
+nrec > 0 || error("$NCPATH contains no time levels — did the run finish?")
+svf   = nc_read(ncf, "sky_view_factor")
+hours = nc_read(ncf, "hour")
+elevs = nc_read(ncf, "solar_elevation")
+nz    = length(nc_read(ncf, "z"))
+k_slice = max(1, min(nz, round(Int, 30.0 / (nc_read(ncf, "z")[1] * 2)) ))
+@printf("Rendering %d time levels from %s (%.1f MB)\n",
+        nrec, NCPATH, filesize(NCPATH) / 1e6)
+@printf("Horizontal panels at z = %.1f m\n", nc_read(ncf, "z")[k_slice])
 
 # Fixed colour limits so amplitudes stay comparable across the whole day.
 # Deliberately NOT per-frame autoscaled: an autoscaled animation makes a
@@ -59,21 +69,28 @@ const lim_c   = (0.0, 5.0)
 const lim_sw  = (0.0, 1200.0)
 
 # The sky-view factor is geometry, so it is static — render it once.
-svf_panel = scalar_to_rgb(Array(static[:svf]), 0.0, 1.0; upscale = upscale)
+svf_panel = scalar_to_rgb(Array(svf), 0.0, 1.0; upscale = upscale)
 add_label!(svf_panel, "SVF"; row = 4, col = 4)
 
-function render(frame)
-    uh   = sqrt.(frame[:u] .^ 2 .+ frame[:v] .^ 2)
-    θa   = frame[:theta] .- mean(frame[:theta])
-    pa   = frame[:p]     .- mean(frame[:p])
+"Render one time level. 3-D fields are sliced at `k_slice` on read."
+function render(rec::Int)
+    sl(name) = @view nc_read_record(ncf, name, rec)[:, :, k_slice]
+    u  = sl("u"); v = sl("v"); w = sl("w")
+    θ  = sl("theta"); pr = sl("p"); cc = sl("pollutant")
+    Ts = nc_read_record(ncf, "Ts", rec)
+    sw = nc_read_record(ncf, "sw_in", rec)
 
-    panels = [scalar_to_rgb(frame[:Ts], lim_Ts...; upscale = upscale),
-              scalar_to_rgb(frame[:sw], lim_sw...; upscale = upscale),
-              scalar_to_rgb(θa,         lim_θ...;  upscale = upscale),
-              scalar_to_rgb(frame[:w],  lim_w...;  upscale = upscale),
-              scalar_to_rgb(uh,         lim_uh...; upscale = upscale),
-              scalar_to_rgb(pa,         lim_p...;  upscale = upscale),
-              scalar_to_rgb(frame[:c],  lim_c...;  upscale = upscale),
+    uh = sqrt.(u .^ 2 .+ v .^ 2)
+    θa = θ  .- mean(θ)
+    pa = pr .- mean(pr)
+
+    panels = [scalar_to_rgb(Ts, lim_Ts...; upscale = upscale),
+              scalar_to_rgb(sw, lim_sw...; upscale = upscale),
+              scalar_to_rgb(θa, lim_θ...;  upscale = upscale),
+              scalar_to_rgb(w,  lim_w...;  upscale = upscale),
+              scalar_to_rgb(uh, lim_uh...; upscale = upscale),
+              scalar_to_rgb(pa, lim_p...;  upscale = upscale),
+              scalar_to_rgb(cc, lim_c...;  upscale = upscale),
               svf_panel]
     for (panel, title) in zip(panels, ("Ts K", "SW W/m2", "theta anom K",
                                        "w m/s", "uh m/s", "p anom",
@@ -83,13 +100,13 @@ function render(frame)
     end
     mosaic = tile_frames(reshape(panels, (2, 4)))
     add_label!(mosaic, @sprintf("t %04.1fh  sun %+05.1f deg",
-                                frame[:hour], frame[:elev]);
+                                hours[rec], elevs[rec]);
                row = size(mosaic, 1) - 12, col = 4)
     return mosaic
 end
 
 t0 = time()
-frames = [render(deserialize(joinpath(FRAMES, f))) for f in files]
+frames = [render(r) for r in 1:nrec]
 @printf("Rendered in %.1f s\n", time() - t0)
 
 out_path = joinpath(OUT, "alexanderplatz_animation.png")
