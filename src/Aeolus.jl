@@ -449,5 +449,14 @@ export DEMOTT_CUTOFF_RADIUS, INPPopulation, inp_budget,
        inp_scavenge!, inp_sediment!, inp_settling_velocity,
        inp_species, inp_surface_area, inp_surface_area_above_radius,
        mode_surface_area, surface_area_above_radius
+# Phase 43 — immersion and deposition freezing: schemes and source terms.
+export AerosolCountScheme, DeMott2015, FreezingScheme, IceNucleationTendency,
+       NUCLEATED_ICE_MASS, Niemand2012, STANDARD_PRESSURE,
+       STANDARD_TEMPERATURE, SiteDensityScheme, Tobo2013,
+       Ullrich2017Deposition, Ullrich2017Immersion,
+       default_freezing_scheme, default_freezing_schemes, freezing_mechanism,
+       freezing_regime, ice_active_site_density, ice_nucleation!,
+       ice_number_formed, inas_frozen_fraction, nucleation_rates,
+       scheme_temperature_range, singular_inp_concentration
 
 end # module

@@ -9,7 +9,6 @@
 
 using Test, Printf, Random
 using Aeolus
-using Aeolus.IceNucleation
 using Aeolus.MoistThermodynamics: DEFAULT_CONSTANTS, ThermodynamicConstants,
                                   liquid_fraction, latent_heat_fusion,
                                   latent_heat_sublim, latent_heat_vapor,
