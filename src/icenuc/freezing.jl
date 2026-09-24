@@ -325,14 +325,16 @@ default_freezing_schemes(inp::INPPopulation) =
 # =========================================================================
 
 """
-    NUCLEATED_ICE_MASS = 4π/3 × 900 kg m⁻³ × (1 μm)³ ≈ 3.77e-15 kg
+    NUCLEATED_ICE_MASS = P3_NUCLEATED_ICE_MASS ≈ 3.77e-15 kg
 
 Mass of a crystal freshly nucleated by deposition: a 1-μm-radius ice
-sphere at 900 kg m⁻³, the nucleated-ice mass of the P3 scheme (Morrison
-& Milbrandt 2015) that issue #7 couples into. Immersion-frozen crystals
-instead take the mass of the droplet that froze.
+sphere at 900 kg m⁻³, the nucleated-ice mass `mi0` of the P3 scheme
+(Morrison & Milbrandt 2015). It is *defined as*
+`P3Microphysics.P3_NUCLEATED_ICE_MASS` — one source of truth, so the
+nucleated crystals and P3's Hallett–Mossop splinters cannot drift apart.
+Immersion-frozen crystals instead take the mass of the droplet that froze.
 """
-const NUCLEATED_ICE_MASS = 4π / 3 * 900.0 * (1e-6)^3
+const NUCLEATED_ICE_MASS = P3_NUCLEATED_ICE_MASS
 
 """
     IceNucleationTendency

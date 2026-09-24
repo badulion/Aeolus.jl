@@ -30,7 +30,12 @@ module IceNucleation
 #                 the nucleation agree on where ice is impossible and
 #                 where it is compulsory.
 #
-# Coupling contract (for the P3 ice category, issue #7): this module
+#   p3_coupling.jl (issue #7) — the host side of the contract below for
+#                 P3's single ice category (`p3_ice_nucleation`,
+#                 `p3_inp_release!`). The nucleated-crystal mass is P3's
+#                 `P3_NUCLEATED_ICE_MASS` (one constant, not two).
+#
+# Coupling contract (for the P3 ice category, issue #7): freezing.jl
 # never touches a hydrometeor state. It returns rates and mutates only the
 # INP tracers; the host adds the ice number/mass tendencies to its own
 # ice category and removes the corresponding liquid/vapour. That keeps
@@ -70,6 +75,8 @@ import ..AerosolCloud
 using ..Superdroplet: MicrophysicalConstants, DEFAULT_MICRO,
                       stokes_settling_velocity
 using ..GasOptics: erfc_series
+using ..P3Microphysics: P3_NUCLEATED_ICE_MASS, P3ParcelState,
+                        P3ProcessParameters, P3_DEFAULT_PROCESS, p3_total_water
 
 export # --- log-normal surface-area diagnostics (inp.jl) ------------------
        mode_surface_area, surface_area_above_radius,
@@ -93,9 +100,12 @@ export # --- log-normal surface-area diagnostics (inp.jl) ------------------
        default_freezing_scheme, default_freezing_schemes,
        # --- source terms (freezing.jl) ------------------------------------
        IceNucleationTendency, NUCLEATED_ICE_MASS, ice_nucleation!,
-       ice_number_formed, nucleation_rates, freezing_regime
+       ice_number_formed, nucleation_rates, freezing_regime,
+       # --- coupling into the P3 ice category (p3_coupling.jl) -------------
+       p3_ice_nucleation, p3_inp_release!
 
 include("icenuc/inp.jl")          # issue #5 — prognostic INP species
 include("icenuc/freezing.jl")     # issue #6 — immersion/deposition freezing
+include("icenuc/p3_coupling.jl")  # issue #7 — sources into the P3 ice category
 
 end # module
