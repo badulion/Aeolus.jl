@@ -399,6 +399,15 @@ function p3_bulk_density(μ::Real, λ::Real, md::P3MassDimension{T}) where {T}
     return p3_mean_mass(μT, λT, md) / V
 end
 
+# P3's physical ice slope limits (create_p3_lookupTable_1.f90): mean size
+# (μ+1)/λ between 2 μm and 5 mm + 20 mm·F_rim². Returns (λ_min, λ_max) in m⁻¹.
+# Callers of p3_slope / p3_size_distribution use this rather than restating
+# the numbers.
+function _p3_ice_λ_limits(μ::Real, F_rim::Real)
+    μf, F = promote(float(μ), float(F_rim))
+    return ((μf + 1) / (5e-3 + 2e-2 * F^2), (μf + 1) / 2e-6)
+end
+
 """
     p3_slope(q_i, N_i, md::P3MassDimension; μ = 0, λ_min = 1.0, λ_max = 1e8) -> λ
 
@@ -421,7 +430,8 @@ mean size `(μ+1)/λ` between 2 μm and `5 mm + 20 mm·F_rim²`, i.e.
 
     λ_min = (μ+1) / (5e-3 + 2e-2 F_rim²),   λ_max = (μ+1) / 2e-6,
 
-and a model using this function should pass those. Near `λ = 1` m⁻¹ the
+and a model using this function should pass those; `_p3_ice_λ_limits`
+returns them (the single place these numbers live). Near `λ = 1` m⁻¹ the
 PSD is dominated by metre-sized particles, outside the range of the
 fall-speed and mass-dimension fits.
 
@@ -554,20 +564,27 @@ end
 # Normalised number-weighted integral E_N[f] = ∫ f(D) D^μ e^{-λD} dD / ∫ D^μ e^{-λD} dD
 # by composite 8-point Gauss-Legendre in x = λD, with panel edges at the
 # regime thresholds (where V(D) has a jump or a kink), geometric panels
-# towards x = 0 and unit panels out to where the D³·D^μ tail is < 1e-30.
+# towards x = 0 and unit panels out to where the D^kmax·D^μ tail is < 1e-30.
 # The Gauss-Legendre rule is RadiationCore's (one source of truth).
 const _P3_GL8 = _gauss_legendre(8)
 
-function _p3_psd_expectation(f, μ::T, λ::T, md::P3MassDimension{T}) where {T}
-    a = μ + 4
+_p3_psd_expectation(f, μ::T, λ::T, md::P3MassDimension{T}; kmax::Real = 3) where {T} =
+    _p3_psd_expectation(f, μ, λ, (md.D_th, md.D_gr, md.D_cr); kmax = kmax)
+
+# General form: `breaks` are the diameters (m) where the integrand has a
+# jump or kink; `kmax` the highest power of D the integrand grows like
+# (3 for mass weighting, 6 for reflectivity weighting), which sets how
+# far out the tail is integrated.
+function _p3_psd_expectation(f, μ::T, λ::T, breaks::Tuple; kmax::Real = 3) where {T}
+    a = μ + T(kmax) + 1
     xmax = a + 20 * sqrt(a) + 40
     edges = T[0]
     for k in 40:-1:1
         push!(edges, T(2.0)^(-k))
     end
     append!(edges, T(1):T(1):ceil(xmax))
-    for Db in (md.D_th, md.D_gr, md.D_cr)
-        xb = λ * Db
+    for Db in breaks
+        xb = λ * T(Db)
         0 < xb < xmax && push!(edges, xb)
     end
     sort!(edges)

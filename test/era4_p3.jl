@@ -10,4 +10,5 @@ using Aeolus
     include("p3/gamma.jl")          # gamma, incomplete gamma, PSD moments
     include("p3/massdim.jl")        # mass-dimension regimes, rime density, fall speed
     include("p3/processes.jl")      # process rates: condensation, warm rain, riming, melting
+    include("p3/sedimentation.jl")  # per-moment sedimentation, size sorting, radar reflectivity
 end
