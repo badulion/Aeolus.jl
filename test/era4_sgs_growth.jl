@@ -59,4 +59,106 @@ using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
         condensation_growth!(sd3, [1e-3, 3e-3], 283.0, 9e4, 10.0)
         @test sd3.radius[2] > sd3.radius[1]
     end
+
+    # Composite Simpson on a uniform grid — the tests' own quadrature,
+    # sharing no code with pdf_expectation / sgs_ccn_fraction.
+    function simpson(f, a, b, n)
+        h = (b - a) / n
+        acc = f(a) + f(b)
+        for i in 1:n-1
+            acc += (isodd(i) ? 4 : 2) * f(a + i * h)
+        end
+        return acc * h / 3
+    end
+    Nccn(S) = ccn_spectrum(modes, S; T_K = T_K)
+
+    @testset "SGS activation: σ_S → 0 is Phase 42 exactly" begin
+        for w in (0.05, 0.5, 3.0)
+            r42 = arg_activation(modes, w, T_K, p)
+            r45 = sgs_activation(modes, w, T_K, p, 0.0)
+            @test r45.fraction == r42.fraction
+            @test r45.N_act == r42.N_act
+            @test r45.N_act_total == r42.N_act_total
+            @test r45.mean.S_max == r42.S_max
+            # and continuously so: σ_S = 1e-9 (vs S_max ~ 1e-3)
+            r_eps = sgs_activation(modes, w, T_K, p, 1e-9)
+            @test r_eps.N_act_total ≈ r42.N_act_total rtol = 1e-9
+        end
+        # a clear-sky SubgridCloud with no variance carries σ_S = 0
+        sc = subgrid_cloud(288.0, 9e4, 8e-3)
+        @test sc.σ_S == 0
+        @test sgs_activation(modes, 0.5, T_K, p, sc).N_act_total ==
+              arg_activation(modes, 0.5, T_K, p).N_act_total
+        # no updraught, no activation — with or without fluctuations
+        @test sgs_activation(modes, 0.0, T_K, p, 1e-3).N_act_total == 0
+        @test sgs_activation(modes, -1.0, T_K, p, 1e-3).N_act_total == 0
+    end
+
+    @testset "SGS activation: quadrature against an independent integral" begin
+        worst_ind = 0.0; worst_meth = 0.0
+        for S̄ in (2e-4, 1e-3, 4e-3), σ in (0.1, 0.5, 1.0, 3.0) .* S̄
+            ref = simpson(S -> Nccn(S) * exp(-(S - S̄)^2 / (2σ^2)) / (sqrt(2π) * σ),
+                          max(0.0, S̄ - 12σ), S̄ + 12σ, 20_000)
+            got = sgs_ccn_spectrum(modes, S̄, σ; T_K = T_K)
+            worst_ind = max(worst_ind, abs(got - ref) / ref)
+            a = sgs_ccn_spectrum(modes, S̄, σ; T_K = T_K, method = :radius)
+            b = sgs_ccn_spectrum(modes, S̄, σ; T_K = T_K, method = :supersaturation)
+            worst_meth = max(worst_meth, abs(a - b) / b)
+        end
+        @test worst_ind < 1e-9
+        # Forcing the S-ordering where σ ≫ S̄ (its integrand then has the
+        # sharp ln S rise at S → 0) is the least accurate case, 8e-8;
+        # :auto picks the radius ordering there, hence worst_ind ~ 1e-11.
+        @test worst_meth < 1e-6
+        @info "SGS activation quadrature" max_rel_err_vs_simpson = worst_ind max_rel_diff_radius_vs_S_order = worst_meth
+        # a double Gaussian with zero skewness is the Gaussian
+        @test sgs_ccn_spectrum(modes, 1e-3, 5e-4; T_K = T_K,
+                               pdf = DoubleGaussianSaturationPDF(0.0)) ≈
+              sgs_ccn_spectrum(modes, 1e-3, 5e-4; T_K = T_K) rtol = 1e-13
+        # bounds: an activated fraction is a probability, N_act ≤ N
+        for σ in (1e-4, 1e-3, 1e-2)
+            r = sgs_activation(modes, 0.5, T_K, p, σ)
+            @test all(0 .<= r.fraction .<= 1)
+            @test r.N_act_total <= sum(m.N for m in modes)
+        end
+    end
+
+    @testset "SGS activation: Jensen — the sign follows the CCN curvature" begin
+        # ⟨N_CCN(S)⟩ − N_CCN(S̄) = ½ N''(S̄) σ² + O(σ⁴). The coarse mode
+        # (S_m = 0.033 %) makes the spectrum convex at S̄ = 0.02 %; from
+        # 0.05 % upward it is concave. Sub-grid fluctuations must add
+        # droplets in the first regime and remove them in the second.
+        signs = Int[]; ratios = Float64[]
+        for S̄ in (1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 4e-3, 8e-3)
+            h = 1e-3 * S̄
+            d2 = (Nccn(S̄ + h) - 2Nccn(S̄) + Nccn(S̄ - h)) / h^2
+            σ = 0.05 * S̄
+            ΔN = sgs_ccn_spectrum(modes, S̄, σ; T_K = T_K) - Nccn(S̄)
+            @test sign(ΔN) == sign(d2)
+            push!(signs, Int(sign(d2)))
+            push!(ratios, ΔN / (0.5 * d2 * σ^2))
+        end
+        @test 1 in signs && -1 in signs          # both regimes exercised
+        @test all(r -> 0.95 < r < 1.05, ratios)   # second-order Jensen term
+        @info "Jensen: ΔN / (½ N'' σ²) at σ = 0.05 S̄" S̄ = (1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 4e-3, 8e-3) curvature_sign = signs ratio = round.(ratios; digits = 4)
+        # With the ARG S_max as the mean: at w = 0.5 m/s (S_max ≈ 0.21 %)
+        # the spectrum is concave, so fluctuations reduce N_d.
+        r0 = arg_activation(modes, 0.5, T_K, p)
+        N_sgs = [sgs_activation(modes, 0.5, T_K, p, σ).N_act_total
+                 for σ in (0.25e-3, 0.5e-3, 1e-3)]
+        @test all(N_sgs .< r0.N_act_total)
+        @test issorted(N_sgs; rev = true)
+        @info "N_d at w = 0.5 m/s vs σ_S (0, 0.025, 0.05, 0.1 %)" S_max = r0.S_max N_cm3 = round.([r0.N_act_total; N_sgs] .* 1e-6; digits = 2)
+    end
+
+    @testset "SGS activation driven by a SubgridCloud" begin
+        # σ_S from the issue #12 closure: the clear-air relative
+        # supersaturation spread implied by q_t and θ_li variances.
+        sc = subgrid_cloud(288.0, 9e4, 9.5e-3; var_qt = (4e-4)^2)
+        @test sc.σ_S > 0
+        r1 = sgs_activation(modes, 0.5, T_K, p, sc)
+        r2 = sgs_activation(modes, 0.5, T_K, p, sc.σ_S)
+        @test r1.N_act_total == r2.N_act_total
+        @test r1.σ_S == sc.σ_S
+    end
 end

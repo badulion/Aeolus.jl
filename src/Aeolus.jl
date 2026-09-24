@@ -450,5 +450,10 @@ export AbstractSaturationPDF, GaussianSaturationPDF,
        GEOMETRIC_VARIANCE_COEFF, equilibrium_variance_coefficient,
        filter_width, sgs_scalar_covariance!, sgs_scalar_variance!,
        subgrid_cloud!
+# Sub-grid supersaturation in activation (Phase 42 CCN spectrum) and
+# condensational growth (Phase 41 superdroplets) (issue #13).
+export ccn_fraction, ccn_spectrum,                  # defined in AerosolCloud
+       pdf_expectation, sgs_ccn_fraction, sgs_ccn_spectrum,
+       SGSActivationResult, sgs_activation
 
 end # module
