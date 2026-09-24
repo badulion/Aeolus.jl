@@ -796,6 +796,10 @@ sedimentation) of one cell by `dt` seconds:
  5. if `adjust`, cloud condensation/evaporation by
     [`p3_condensation`](@ref) (`MoistThermodynamics.saturation_adjustment`).
 
+`hallett_mossop = P3_DEFAULT_HM` (a [`P3HallettMossop`](@ref)) adds rime
+splintering to step 3; it is off by default. See
+[`p3_step_with_rates`](@ref) for the variant that also returns the rates.
+
 Total water `q_v + q_c + q_r + q_i` is conserved to rounding in every
 stage. Steps 1-4 conserve the enthalpy form `c_pm ΔT = -L_v Δq_v +
 L_f Δq_i` exactly for a step without clean-up; step 5 conserves the
@@ -803,8 +807,30 @@ contract's θ_li (see [`p3_condensation`](@ref)).
 """
 function p3_step(s::P3ParcelState{FT}, dt::Real,
                  pp::P3ProcessParameters = P3_DEFAULT_PROCESS;
-                 adjust::Bool = true) where {FT}
+                 adjust::Bool = true, hallett_mossop = nothing) where {FT}
+    return first(p3_step_with_rates(s, dt, pp; adjust, hallett_mossop))
+end
+
+"""
+    p3_step_with_rates(s, dt, pp = P3_DEFAULT_PROCESS; adjust = true, hallett_mossop = nothing)
+        -> (P3ParcelState, rates)
+
+[`p3_step`](@ref), also returning the limited process rates that were
+applied (the NamedTuple of [`p3_limit_rates`](@ref)), so a host can book
+side effects of individual processes — e.g. release the ice-nucleating
+particles of sublimated ice (`n_sub`). With `hallett_mossop` a
+[`P3HallettMossop`](@ref), rime splintering ([`p3_hm_tendencies`](@ref))
+is added to the tendencies, driven by the same limited riming rates; the
+default `nothing` leaves it off.
+"""
+function p3_step_with_rates(s::P3ParcelState{FT}, dt::Real,
+                            pp::P3ProcessParameters = P3_DEFAULT_PROCESS;
+                            adjust::Bool = true, hallett_mossop = nothing) where {FT}
     r = p3_limit_rates(s, p3_process_rates(s, pp), dt, pp)
-    s1 = _p3_cleanup(_p3_axpy(s, dt, p3_tendencies(s, r, pp)), pp)
-    return adjust ? p3_condensation(s1, pp) : s1
+    ds = p3_tendencies(s, r, pp)
+    if hallett_mossop !== nothing
+        ds = _p3_axpy(ds, 1, p3_hm_tendencies(s, r, hallett_mossop, pp))
+    end
+    s1 = _p3_cleanup(_p3_axpy(s, dt, ds), pp)
+    return (adjust ? p3_condensation(s1, pp) : s1, r)
 end

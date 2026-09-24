@@ -27,6 +27,7 @@ The module is split into part-files under `src/p3/`:
   * `massdim.jl`       — four-regime m(D), A(D), rime density, fall speed
   * `processes.jl`     — microphysical process rates
   * `sedimentation.jl` — sedimentation and radar reflectivity
+  * `secondary.jl`     — Hallett–Mossop rime splintering, nucleated-ice mass
 
 Thermodynamics (saturation vapour pressures, latent heats, saturation
 adjustment) is NOT re-derived here: it comes from the Era IV contract
@@ -91,5 +92,12 @@ export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
        p3_ice_sedimentation_velocities, p3_sediment_ice!
 
 include("p3/sedimentation.jl")
+
+# --- secondary.jl ---------------------------------------------------------
+export P3_NUCLEATED_ICE_MASS, P3HallettMossop, P3_DEFAULT_HM,
+       p3_hm_temperature_factor, p3_hm_large_drop_fraction,
+       p3_hallett_mossop, p3_hm_tendencies, p3_step_with_rates
+
+include("p3/secondary.jl")
 
 end # module
