@@ -72,6 +72,15 @@
             @test md.ρ_g ≈ 2ρr / 3 rtol = 1e-11
             @test md.D_cr ≈ md.D_gr * (1 + 1e-12 / (3 - p.β_va)) rtol = 1e-15
         end
+        # The limit must hold all the way down to subnormal F_rim. Review
+        # regression: forming L² = log(D_cr/D_gr)² underflowed, giving
+        # ρ_g = -Inf for F_rim ≲ 1e-200 and a 1.1e-5 error at 1e-160.
+        for F in (1e-160, 1e-200, 1e-300, nextfloat(0.0)), ρr in (50.0, 900.0)
+            md = p3_mass_dimension(F, ρr)
+            @test md.ρ_g ≈ 2ρr / 3 rtol = 1e-14
+            @test md.ρ_d ≈ md.ρ_g rtol = 1e-14
+            @test md.D_th <= md.D_gr <= md.D_cr
+        end
         # F = 1: all graupel beyond D_gr, at the rime density
         md = p3_mass_dimension(1.0, 500.0)
         @test md.ρ_g == 500.0 && isinf(md.D_cr)

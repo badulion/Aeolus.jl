@@ -140,23 +140,29 @@ end
 # h(L) = 1 - (1-F) g,  g = (r^{β-2} - 1)/((β-2)(r-1)),  r = D_cr/D_gr = e^L.
 # With s = 3-β, c = β-2 = 1-s and 1-F = e^{-sL}:
 #   h = [c e^L - c - e^{(c-s)L} + e^{-sL}] / (c (e^L - 1)).
-# The numerator's O(1) and O(L) terms cancel exactly, so for small L it is
-# summed as Σ_{n≥2} Lⁿ/n! · (c - (c-s)ⁿ + (-s)ⁿ) — no cancellation.
-function _p3_h_graupel(L::T, s::T) where {T<:AbstractFloat}
+# Returned is h/L, with the factor L divided out analytically. The
+# numerator's O(1) and O(L) terms cancel exactly, so for small L it is
+# summed as L² Σ_{n≥2} L^{n-2}/n! · (c - (c-s)ⁿ + (-s)ⁿ) — no cancellation —
+# and with L² never formed, so nothing underflows even for F_rim ~ 1e-300
+# (forming L² directly lost all digits below F_rim ≈ 1e-154).
+_p3_exprel(x::T) where {T<:AbstractFloat} = x == 0 ? one(T) : expm1(x) / x
+
+function _p3_h_graupel_over_L(L::T, s::T) where {T<:AbstractFloat}
     c = one(T) - s
     if L < T(0.5)
-        num = zero(T)
-        term = L                         # Lⁿ/n!, starting at n = 1
+        S = zero(T)
+        term = one(T)                    # L^{n-2}/n!; after n = 2 it is 1/2
         for n in 2:40
-            term *= L / n
+            term = n == 2 ? term / 2 : term * L / n
             add = term * (c - (c - s)^n + (-s)^n)
-            num += add
-            abs(add) <= eps(T) * abs(num) && break
+            S += add
+            abs(add) <= eps(T) * abs(S) && break
         end
+        return S / (c * _p3_exprel(L))
     else
         num = c * expm1(L) - exp(-s * L) * expm1(c * L)
+        return num / (c * expm1(L) * L)
     end
-    return num / (c * expm1(L))
 end
 
 """
@@ -224,10 +230,12 @@ function p3_mass_dimension(F_rim::Real, ρ_rim::Real,
         D_gr = (6 * p.α_va / (π * ρg))^(1 / s)
         return P3MassDimension{T}(F, ρr, ρg, zero(T), D_th, D_gr, T(Inf), p)
     end
-    L = -log1p(-F) / s                         # log(D_cr / D_gr)
-    ρg = F * ρr / _p3_h_graupel(L, s)
+    mlog = -log1p(-F)                          # = s L,  L = log(D_cr / D_gr)
+    L = mlog / s
+    # ρ_g = F ρ_rim / h = (F/L) ρ_rim / (h/L), with F/L = s F / (-log(1-F))
+    ρg = (s * (F / mlog)) * ρr / _p3_h_graupel_over_L(L, s)
     c = β - 2
-    g = expm1(c * L) / (c * expm1(L))          # ρ_d / ρ_g
+    g = _p3_exprel(c * L) / _p3_exprel(L)      # ρ_d / ρ_g = (e^{cL}-1)/(c(e^L-1))
     D_gr = (6 * p.α_va / (π * ρg))^(1 / s)
     D_cr = D_gr * exp(L)
     return P3MassDimension{T}(F, ρr, ρg, g * ρg, D_th, D_gr, D_cr, p)
