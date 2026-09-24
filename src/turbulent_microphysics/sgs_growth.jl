@@ -133,8 +133,11 @@ end
 # Sub-steps needed to resolve the correlation time: the droplet holds its
 # S for one sub-step, which reproduces ∫S'dt only if h ≪ τ. With h = τ/10
 # the error in the integral variance is (h/τ)²/12 ≈ 0.08 %.
+# Capped like Phase 41's `_phase_substeps`, so a tiny τ cannot demand an
+# unbounded loop (or overflow `ceil(Int, ·)`).
 _ou_substeps(fl::SupersaturationFluctuations, Δt) =
-    (fl.σ_S > 0 && isfinite(fl.τ)) ? ceil(Int, 10 * Δt / fl.τ) : 1
+    (fl.σ_S > 0 && isfinite(fl.τ)) ?
+        Int(clamp(ceil(10 * Δt / fl.τ), 1, 100_000)) : 1
 
 """
     sgs_condensation_growth!(sd, fl, S̄, T, p, dt; indices = nothing,

@@ -244,6 +244,11 @@ using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
         ξp = copy(flp.ξ)
         advance_fluctuations!(flp, 0.1; indices = [1, 2])
         @test flp.ξ[3:4] == ξp[3:4] && flp.ξ[1:2] != ξp[1:2]
+        # sub-stepping to τ/10 is capped (review fix: τ = 1e-30 used to
+        # overflow ceil(Int, 1e32) with an InexactError)
+        ftiny = supersaturation_fluctuations(2; σ_S = 1e-3, τ = 1e-30)
+        @test Aeolus.TurbulentMicrophysics._ou_substeps(ftiny, 10.0) == 100_000
+        @test Aeolus.TurbulentMicrophysics._ou_substeps(fl, 1.0) == 3   # ceil(10·1/4)
         # the analytic integral variance and its limits
         @test supersaturation_integral_variance(1e-3, Inf, 30.0) ≈ (1e-3 * 30)^2
         @test supersaturation_integral_variance(1e-3, 1e6, 30.0) ≈ (1e-3 * 30)^2 rtol = 1e-4
