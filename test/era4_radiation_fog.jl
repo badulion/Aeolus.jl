@@ -179,6 +179,11 @@ end
         @test maximum(abs.(a.T .- b.T)) < 0.05
     end
 
+    @testset "Column input guards" begin
+        @test_throws ArgumentError parisfog_2011_column(; settings = FogColumnSettings(N_d = 0.0))
+        @test_throws ArgumentError parisfog_2011_column(; settings = FogColumnSettings(dt = 0.0))
+    end
+
     @testset "Moist stability: fog turns a dry-stable layer unstable" begin
         # 8 K/km lapse rate: stable for dry air (Γ_d = 9.8 K/km), unstable
         # for saturated air at 275 K (Γ_m ≈ 6 K/km).

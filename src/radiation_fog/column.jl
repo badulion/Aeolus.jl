@@ -208,6 +208,11 @@ function FogColumn(zf::AbstractVector, T0::AbstractVector, qv0::AbstractVector;
                    c::ThermodynamicConstants = DEFAULT_CONSTANTS)
     s = settings
     nz = length(zf) - 1
+    # N_d → 0 would silently fall back to the 1 μm r_min guard of
+    # fog_effective_radius (optically huge, non-settling droplets).
+    s.N_d > 0 || throw(ArgumentError("FogColumn: N_d must be > 0, got $(s.N_d)"))
+    s.dt > 0 && s.dt_rad >= s.dt ||
+        throw(ArgumentError("FogColumn: need 0 < dt <= dt_rad, got dt = $(s.dt), dt_rad = $(s.dt_rad)"))
     length(T0) == nz == length(qv0) ||
         throw(DimensionMismatch("FogColumn: T and qv need $(nz) layers"))
     zf = collect(float.(zf)); dz = diff(zf); z = (zf[1:end-1] .+ zf[2:end]) ./ 2
