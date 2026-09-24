@@ -450,13 +450,13 @@ for n in 1:nsteps
     if n % frame_every == 0
         global nframe += 1
         save_frame(nframe, hour_of_day)
-        @printf("  frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°  θ1=%5.1f/%5.1f  dew=%.3f mm  fog ql1max=%.2e\n",
+        @printf("  frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°  θ1=%5.1f/%5.1f  qv1min=%.4f  dew=%.3f mm  fog ql1max=%.2e\n",
                 nframe, hour_of_day, time() - t_wall_start,
                 minimum(Ts), maximum(Ts),
                 minimum(sw_arr), maximum(sw_arr), sun_now[].elevation,
                 minimum(view(interior_view(sim.θ), :, :, 1)),
                 maximum(view(interior_view(sim.θ), :, :, 1)),
-                maximum(q_dew), maximum(view(interior_view(ql_p), :, :, 1)))
+                minimum(view(interior_view(qv_p), :, :, 1)), maximum(q_dew), maximum(view(interior_view(ql_p), :, :, 1)))
     end
 end
 

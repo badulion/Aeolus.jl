@@ -26,6 +26,11 @@ with the example's own settings (surface 280 K, air 288 K,
    ``q_s``, overshooting below saturation for ``r\,\Delta t \gtrsim 0.4``
    (``q_v - q_s`` = −6.3×10⁻⁴ at ``r\Delta t = 1``, −2.9×10⁻³ at 3).
 
+In the full urban run (06–09 h, same settings) the first defect did not
+blow the run up within 3 h; it showed instead as the scheme draining the
+lowest layer of vapour entirely — ``q_v`` = 0 in some cells after
+~35 minutes — which is condensation from air at zero relative humidity.
+
 ## 2. The conserved quantity
 
 For a reversible isobaric phase change the invariant is the moist
