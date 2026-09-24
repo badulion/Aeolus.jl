@@ -172,7 +172,9 @@
         mp5 = p3_dbz(200 * 5.0^1.6)
         @printf("    5 mm/h: λ = %.0f /m, %.2f dBZ (Marshall-Palmer Z-R: %.2f dBZ)\n",
                 λ5, dbz5, mp5)
-        # Note: 200·5^1.6 = 2627 mm⁶/m³ = 34.2 dBZ, not ≈ 37 dBZ.
+        # Issue #4 asked for 35-45 dBZ at ~5 mm/h. That expectation was
+        # wrong: MP itself gives 200·5^1.6 = 2627 mm⁶/m³ = 34.2 dBZ (and
+        # WSR-88D 300·5^1.4 gives 34.6 dBZ), below the window.
         @test abs(dbz5 - mp5) < 1.0
         @test 30 < dbz5 < 40
         for R in (1.0, 10.0, 25.0, 50.0)
