@@ -33,3 +33,13 @@ and vapour sinks and latent heat (`ice_nucleation!`).
 ```@autodocs
 Modules = [Aeolus.IceNucleation]
 ```
+
+## Terminal-velocity spectrum and precipitation fraction (Phase 44)
+
+The Kessler scheme's rain now falls at the mass-weighted speed of its
+Marshall–Palmer spectrum (`kessler_fall_speed`, in `Aeolus.Microphysics`,
+see [Physics](physics.md)), and P3 gains a sub-grid precipitation
+fraction carried down the column with maximum, random or maximum-random
+overlap (`p3_precipitation_fraction`, `p3_fractional_process_rates`,
+`p3_step_column`), documented with the P3 module above. Theory:
+[P3 microphysics](../theory/p3.md), last section.
