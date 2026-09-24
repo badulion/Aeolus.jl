@@ -90,6 +90,7 @@ function gamma_lanczos(x::Real)
     xf = float(x)
     T = typeof(xf)
     isnan(xf) && return xf
+    xf == T(Inf) && return T(Inf)
     if isinteger(xf)
         xf <= 0 && throw(DomainError(x, "Γ has a pole at non-positive integers"))
         if xf <= 171
@@ -268,6 +269,11 @@ moment per regime (Morrison & Milbrandt 2015, §2b and Appendix).
 When the interval lies in the upper tail (`λD₁ > a`) the difference is
 taken as `Q(a, λD₁) - Q(a, λD₂)` instead, so a small tail contribution
 does not vanish into the cancellation of two numbers near one.
+
+The result is never negative. For an interval much narrower than the
+distribution (`λ(D₂-D₁) ≲ 1e-8`) the difference of two O(1) values keeps
+only about `eps/(λ(D₂-D₁))` relative accuracy; the absolute error stays
+at the 1e-16 × `M_k` level.
 """
 function gamma_psd_partial_moment(N0::Real, μ::Real, λ::Real, k::Real,
                                   D1::Real, D2::Real)
@@ -281,7 +287,12 @@ function gamma_psd_partial_moment(N0::Real, μ::Real, λ::Real, k::Real,
     P1, Q1 = gamma_inc(a, x1)
     P2, Q2 = gamma_inc(a, x2)
     frac = x1 > a ? (Q1 - Q2) : (P2 - P1)
-    return full * frac
+    # P(a,·) is non-decreasing, but for a very narrow interval the two
+    # endpoint values agree to within rounding and their difference can
+    # come out as a tiny negative number (measured down to -1.5e-14 of the
+    # full moment for intervals a few ulp wide). A negative number, mass or
+    # reflectivity in one regime is unphysical, so clamp at zero.
+    return full * max(frac, zero(frac))
 end
 
 """
@@ -297,6 +308,7 @@ Evaluated in log space.
 function gamma_psd_intercept(N::Real, μ::Real, λ::Real)
     a = float(μ + 1)
     a > 0 || throw(DomainError(μ, "need μ > -1"))
+    λ > 0 || throw(DomainError(λ, "slope λ must be positive"))
     return N * exp(a * log(float(λ)) - lgamma_lanczos(a))
 end
 
@@ -313,10 +325,18 @@ integers), for fixed shape `μ`:
 With `i = 0` (number) and `j = b` (the mass exponent of a power-law
 `m = αD^b`, with `M_b = q/α`) this is the standard two-moment closure
 for λ (e.g. Seifert & Beheng 2006; Morrison & Milbrandt 2015, §2).
+
+Both moments must be strictly positive: at `q → 0` or `N → 0` the slope
+is undefined and a `DomainError` is thrown, so callers apply the usual
+small-mixing-ratio threshold before diagnosing the PSD.
 """
 function gamma_psd_slope(Mi::Real, i::Real, Mj::Real, j::Real, μ::Real)
     i == j && throw(ArgumentError("moment orders must differ"))
     (Mi > 0 && Mj > 0) || throw(DomainError((Mi, Mj), "moments must be positive"))
+    # lgamma_lanczos returns log|Γ| for negative arguments too, which would
+    # silently give a wrong λ; the moments only exist for μ + k + 1 > 0.
+    (μ + i + 1 > 0 && μ + j + 1 > 0) ||
+        throw(DomainError((μ, i, j), "moments diverge: need μ + i + 1 > 0 and μ + j + 1 > 0"))
     lr = log(float(Mi)) - log(float(Mj)) +
          lgamma_lanczos(μ + j + 1) - lgamma_lanczos(μ + i + 1)
     return exp(lr / (j - i))

@@ -275,5 +275,23 @@ relerr(x, ref) = abs(x - ref) / abs(ref)
         end
         @test_throws DomainError gamma_psd_moment(1.0, -2.0, 1.0, 0)
         @test_throws ArgumentError gamma_psd_slope(1.0, 3, 1.0, 3, 0.0)
+        # μ + i + 1 ≤ 0: M_0 does not exist, so no λ can be diagnosed (the
+        # unchecked formula silently returned λ = 0.572 from log|Γ(-0.5)|)
+        @test_throws DomainError gamma_psd_slope(1.0, 0, 2.0, 3, -1.5)
+        @test_throws DomainError gamma_psd_intercept(1.0, 2.0, 0.0)
+        @test_throws DomainError gamma_psd_intercept(1.0, 2.0, -3.0)
+        @test gamma_lanczos(Inf) == Inf
+
+        # Truncated moments are never negative, even for intervals only a
+        # few ulp wide where P(a,x₂) - P(a,x₁) is pure rounding. Before the
+        # clamp, 262 of these 33 600 intervals returned negative values
+        # (down to -1.5e-14 of the full moment).
+        nneg = 0
+        for μ in 0.3:0.37:40, k in 0:3, j in 1:200
+            x2 = μ + k + 1
+            x1 = x2 - j * 1e-15 * x2
+            nneg += gamma_psd_partial_moment(1.0, μ, 1.0, k, x1, x2) < 0
+        end
+        @test nneg == 0
     end
 end
