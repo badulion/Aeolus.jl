@@ -148,6 +148,26 @@ using Aeolus
               droplet_extinction(mono; method = :geometric) rtol = 0.01
     end
 
+    @testset "one source of truth: geometric β matches cloud optical depth" begin
+        # τ = 3 LWP/(2 ρ_w r_eff) (AerosolCloud / TwoStream) over a 1 m slab
+        # must equal the geometric-limit β of the same spectrum.
+        for (lwc, N) in ((1e-4, 5e7), (3e-4, 3e8))
+            s = gamma_droplets(lwc, N)
+            τ1m = cloud_optical_depth_lwp(cloud_water_path(lwc, 1.0), s.r_eff)
+            @test droplet_extinction(s; method = :geometric) ≈ τ1m rtol = 1e-12
+        end
+        # rayleigh_extinction uses the GasOptics cross-section, and the
+        # GasOptics column optical depth is the same n σ integrated:
+        # β_R(ρ) × (1 m) = τ_R over dp = ρ g × 1 m.
+        p, T = 90000.0, 280.0
+        m_air = 28.9647e-3 / 6.02214076e23
+        ρ = p / (1.380649e-23 * T) * m_air
+        @test rayleigh_extinction(; p = p, T = T) ≈
+              rayleigh_optical_depth(0.55, ρ * 9.80665) rtol = 1e-12
+        @test rayleigh_extinction() ≈ 101325 / (1.380649e-23 * 288.15) *
+                                      rayleigh_cross_section(0.55) rtol = 1e-14
+    end
+
     @testset "superdroplet ensemble → binned spectrum" begin
         vol = 1e-6
         sd = init_monodisperse_superdroplets(100, 1e8, 1e-5, vol)
@@ -158,4 +178,31 @@ using Aeolus
               droplet_extinction(MonodisperseDroplets(1e8, 1e-5)) rtol = 1e-10
     end
 
+    @testset "clear air and haze" begin
+        βR = rayleigh_extinction()
+        VR = koschmieder_visibility(βR)
+        # Rayleigh-limited visibility at sea level: O(300 km)
+        @test 250e3 < VR < 400e3
+        # λ⁻⁴ and ∝ density
+        @test rayleigh_extinction(; λ = 0.45) / βR ≈ (0.55 / 0.45)^4 rtol = 1e-12
+        @test rayleigh_extinction(; p = 50000.0) / βR ≈ 50000 / 101325 rtol = 1e-12
+        @test visibility() ≈ VR
+        # clean continental haze: tens to hundreds of km, decreasing with RH
+        clean = aerosol_mixture(:continental_clean)
+        Vc = [visibility(; aerosol = clean, rh = rh) for rh in (0.0, 0.5, 0.8, 0.95)]
+        @test all(v -> 20e3 < v < 400e3, Vc)
+        @test all(diff(Vc) .< 0)
+        @test all(Vc .< VR)                         # aerosol only removes range
+        # urban haze at 80 % RH: order 10 km
+        Vu = visibility(; aerosol = aerosol_mixture(:urban), rh = 0.8)
+        @test 3e3 < Vu < 30e3
+        # contributions add
+        s = gamma_droplets(1e-5, 1e8)
+        βt = total_extinction(; droplets = s, aerosol = clean, rh = 0.8)
+        @test βt ≈ droplet_extinction(s) + aerosol_extinction(clean; rh = 0.8) + βR rtol = 1e-12
+        # a thin fog (LWC 0.01 g/m³) dominates any haze
+        @test droplet_extinction(s) > 10 * aerosol_extinction(clean; rh = 0.8)
+        @printf("  Rayleigh β=%.3e m⁻¹, V=%.0f km; continental clean RH 0/50/80/95%%: %.0f/%.0f/%.0f/%.0f km; urban RH80: %.1f km\n",
+                βR, VR / 1e3, (Vc ./ 1e3)..., Vu / 1e3)
+    end
 end

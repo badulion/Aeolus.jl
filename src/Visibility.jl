@@ -83,7 +83,8 @@ export KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD, VISIBILITY_WAVELENGTH,
        DropletSpectrum, MonodisperseDroplets, GammaDroplets, BinnedDroplets,
        gamma_droplets, droplet_spectrum, spectrum_number, spectrum_moment,
        spectrum_water_content, water_extinction_efficiency,
-       droplet_extinction, fog_extinction
+       droplet_extinction, fog_extinction, aerosol_extinction,
+       rayleigh_extinction, total_extinction, visibility
 
 # =========================================================================
 # 1. Koschmieder's law
@@ -406,5 +407,72 @@ fog_extinction(lwc::Real, N_d::Real; v_eff::Real = 0.1,
     lwc > 0 && N_d > 0 ?
         droplet_extinction(gamma_droplets(lwc, N_d; v_eff = v_eff);
                            λ = λ, method = method) : 0.0
+
+# =========================================================================
+# 4. Haze and clear air
+# =========================================================================
+
+"""
+    aerosol_extinction(modes; rh = 0.0, λ = 0.55, T_K = 298.15) -> m⁻¹
+
+Extinction of an interstitial (unactivated) aerosol population, i.e.
+haze: `AerosolOptics.bulk_optics(modes, λ; rh)`, with κ-Köhler wet growth
+of each mode at relative humidity `rh` (fraction, < 1). Use
+`AerosolOptics.aerosol_mixture(:urban)` etc. for the OPAC mixtures.
+
+At 550 nm and RH = 0.8 the library mixtures give V(ε = 0.02) of
+177 km (continental clean), 26 km (continental polluted) and 12 km
+(urban), falling to 60, 9 and 5 km at RH = 0.95.
+"""
+aerosol_extinction(modes::AbstractVector{<:AerosolMode}; rh::Real = 0.0,
+                   λ::Real = VISIBILITY_WAVELENGTH, T_K::Real = 298.15) =
+    isempty(modes) ? 0.0 : first(bulk_optics(modes, λ; rh = rh, T_K = T_K))
+
+const _K_BOLTZMANN = 1.380649e-23   # J K⁻¹ (exact, SI 2019)
+
+"""
+    rayleigh_extinction(; p = 101325, T = 288.15, λ = 0.55) -> m⁻¹
+
+Molecular scattering of particle-free air, `β_R = n σ_R(λ)` with the
+number density `n = p/(k_B T)` and `σ_R = GasOptics.rayleigh_cross_section`.
+At 1013.25 hPa, 288.15 K and 550 nm this is 1.27 × 10⁻⁵ m⁻¹, i.e. a
+Rayleigh-limited visibility of 307 km at `ε = 0.02` — the upper bound on
+visibility in the lower atmosphere.
+"""
+rayleigh_extinction(; p::Real = 101325.0, T::Real = 288.15,
+                    λ::Real = VISIBILITY_WAVELENGTH) =
+    float(p) / (_K_BOLTZMANN * float(T)) * rayleigh_cross_section(λ)
+
+"""
+    total_extinction(; droplets = nothing, aerosol = nothing, rh = 0.0,
+                     p = 101325, T = 288.15, λ = 0.55,
+                     rayleigh = true, method = :mie) -> m⁻¹
+
+Sum of droplet, haze and molecular extinction. `droplets` is a
+[`DropletSpectrum`](@ref) (or `nothing`), `aerosol` a vector of
+`AerosolOptics` modes (or `nothing`). Extinction coefficients add because
+the three populations scatter independently.
+"""
+function total_extinction(; droplets::Union{Nothing,DropletSpectrum} = nothing,
+                          aerosol::Union{Nothing,AbstractVector{<:AerosolMode}} = nothing,
+                          rh::Real = 0.0, p::Real = 101325.0, T::Real = 288.15,
+                          λ::Real = VISIBILITY_WAVELENGTH,
+                          rayleigh::Bool = true, method::Symbol = :mie)
+    β = 0.0
+    droplets === nothing || (β += droplet_extinction(droplets; λ = λ, method = method))
+    aerosol === nothing || (β += aerosol_extinction(aerosol; rh = rh, λ = λ))
+    rayleigh && (β += rayleigh_extinction(; p = p, T = T, λ = λ))
+    return β
+end
+
+"""
+    visibility(; ε = KOSCHMIEDER_THRESHOLD, kwargs...) -> m
+
+Koschmieder visibility of the atmosphere described by `kwargs` (see
+[`total_extinction`](@ref)): `koschmieder_visibility(total_extinction(;
+kwargs...); ε)`.
+"""
+visibility(; ε::Real = KOSCHMIEDER_THRESHOLD, kwargs...) =
+    koschmieder_visibility(total_extinction(; kwargs...); ε = ε)
 
 end # module Visibility

@@ -446,6 +446,8 @@ export KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD, VISIBILITY_WAVELENGTH,
        DropletSpectrum, MonodisperseDroplets, GammaDroplets, BinnedDroplets,
        gamma_droplets, droplet_spectrum, spectrum_number, spectrum_moment,
        spectrum_water_content, water_extinction_efficiency,
-       droplet_extinction, fog_extinction
+       droplet_extinction, fog_extinction, aerosol_extinction,
+       rayleigh_extinction, rayleigh_cross_section, total_extinction,
+       visibility
 
 end # module
