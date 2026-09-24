@@ -42,4 +42,21 @@ using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
         # insoluble aerosol never activates
         @test ccn_fraction(arg_mode(1e8, 0.1e-6, 1.5, 0.0), 0.01) == 0
     end
+
+    @testset "condensation_growth! with a per-droplet S" begin
+        V = 1.0
+        sd1 = init_monodisperse_superdroplets(64, 1e8, 6e-6, V;
+                                              solute_mass = 1e-18)
+        for k in eachindex(sd1.radius)
+            sd1.radius[k] *= 1 + 0.3 * (k / 64 - 0.5)
+        end
+        sd2 = deepcopy(sd1)
+        Δ1 = condensation_growth!(sd1, 2e-3, 283.0, 9e4, 5.0)
+        Δ2 = condensation_growth!(sd2, fill(2e-3, 64), 283.0, 9e4, 5.0)
+        @test Δ1 == Δ2 && sd1.radius == sd2.radius      # bit for bit
+        # a droplet in a moister sub-volume grows faster
+        sd3 = init_monodisperse_superdroplets(2, 1e8, 6e-6, V)
+        condensation_growth!(sd3, [1e-3, 3e-3], 283.0, 9e4, 10.0)
+        @test sd3.radius[2] > sd3.radius[1]
+    end
 end

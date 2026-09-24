@@ -1383,8 +1383,15 @@ Grow every superdroplet at a prescribed ambient state and return the total
 **real** water mass condensed (kg; negative for net evaporation). Does not
 touch the host cell — see [`condensation_step!`](@ref) for the coupled
 version.
+
+`S` is either one supersaturation for every droplet or a vector indexed
+like `sd.radius`, giving each superdroplet the supersaturation of the
+sub-grid environment it sits in (Phase 45 uses this to let droplets
+sample a sub-grid supersaturation distribution). A vector filled with a
+single value gives bit-for-bit the scalar result.
 """
-function condensation_growth!(sd::SuperdropletSet{T}, S::Real, Temp::Real,
+function condensation_growth!(sd::SuperdropletSet{T},
+                              S::Union{Real,AbstractVector{<:Real}}, Temp::Real,
                               p::Real, dt::Real;
                               indices::Union{Nothing,AbstractVector{Int}} = nothing,
                               substeps::Integer = 0,
@@ -1394,13 +1401,16 @@ function condensation_growth!(sd::SuperdropletSet{T}, S::Real, Temp::Real,
     Δv = 0.0
     @inbounds for i in idx
         r_old = sd.radius[i]
-        r_new = grow_droplet(r_old, sd.solute_mass[i], S, Temp, p, dt,
+        r_new = grow_droplet(r_old, sd.solute_mass[i], _droplet_S(S, i), Temp, p, dt,
                              sd.aerosol, mc, c; substeps = substeps)
         sd.radius[i] = T(r_new)
         Δv += sd.ξ[i] * (r_new^3 - float(r_old)^3)
     end
     return mc.ρ_water * (4π / 3) * Δv
 end
+
+_droplet_S(S::Real, i) = S
+_droplet_S(S::AbstractVector, i) = S[i]
 
 # =========================================================================
 # Eulerian coupling
