@@ -460,6 +460,21 @@ using Aeolus: MoistThermodynamics, AerosolCloud, Superdroplet
                 big.q_v / qsati(big.T, big.p), dd.q_v / qsat(dd.T, dd.p))
         @test dd.q_v <= qsat(dd.T, dd.p) * (1 + 1e-3)          # no evaporation overshoot
         @test all(>=(0), allfields(dd))
+
+        # Sublimation and rain evaporation together must not overshoot
+        # either: both feed vapour, and sublimation stops at ice
+        # saturation. (Review fix: with each limited on its own, a 1-h step
+        # of this state ended at q_v/q_si = 1.193 and q_v/q_s = 1.075 —
+        # vapour supersaturated over liquid produced by sublimating ice.)
+        for Ni in (1e3, 1e4, 1e6), (qr, Nr) in ((3e-3, 1e5), (3e-4, 1e4))
+            sd = P3ParcelState(T = 265.0, p = 7.0e4, q_v = 0.5 * qsati(265.0, 7.0e4),
+                               q_r = qr, N_r = Nr, q_i = 3e-3, N_i = Ni)
+            e = p3_step(sd, 3600.0; adjust = false)
+            @test e.q_v <= qsati(e.T, e.p) * (1 + 1e-3)
+            @test e.q_v <= qsat(e.T, e.p)
+            @test all(>=(0), allfields(e))
+            @test abs(p3_total_water(e) - p3_total_water(sd)) <= 4eps() * p3_total_water(sd)
+        end
     end
 
     @testset "Parcel regimes" begin

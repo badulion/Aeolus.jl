@@ -669,6 +669,9 @@ the manner of the P3 code's conservation checks:
     factor `Γ = 1 + (L/c_pm) dq_s/dT` that accounts for its own latent
     heating shifting `q_s` during the step; the saturation values are
     taken at the temperature after the step's riming and melting;
+    sublimation may fill only the part of the ice-saturation deficit
+    that the (limited) rain evaporation leaves, so the two vapour
+    sources together cannot push the parcel past ice saturation;
   * number rates are scaled with the mass rate they belong to, and the
     rain self-collection and ice-collection number sinks so `N_r ≥ 0`.
 
@@ -698,7 +701,14 @@ function p3_limit_rates(s::P3ParcelState{FT}, r::NamedTuple, dt::Real,
     Γw = 1 + Lv / cpm * qs * Lv / (Rv * Tf^2)
     Γi = 1 + Ls / cpm * qsi * Ls / (Rv * Tf^2)
     fev = min(fr, _p3_frac((qs - s.q_v) / Γw, dt * r.evap_r))
-    fsub = min(fi, _p3_frac((qsi - s.q_v) / Γi, dt * r.sub))
+    # Sublimation and rain evaporation both feed vapour. Once q_v reaches
+    # ice saturation the ice stops sublimating (and starts to grow) while
+    # the rain keeps evaporating toward liquid saturation, so sublimation
+    # may only fill the part of the ice deficit that evaporation leaves;
+    # Γwi accounts for the evaporative cooling lowering q_si.
+    Γwi = 1 + Lv / cpm * qsi * Ls / (Rv * Tf^2)
+    Eev = dt * fev * r.evap_r
+    fsub = min(fi, _p3_frac((qsi - s.q_v - Γwi * Eev) / Γi, dt * r.sub))
     fdep = min(_p3_frac((s.q_v - qsi) / Γi, dt * r.dep), _p3_frac(s.q_v, dt * r.dep))
 
     evap_r, n_evap_r = fev * r.evap_r, fev * r.n_evap_r
