@@ -1364,15 +1364,23 @@ function _implicit_r_step(r_n::Float64, h::Float64, S::Float64, A::Float64,
             # 10 μm droplet at S = -0.1 % over 0.5 s; found by the
             # Phase 45 stochastic-growth tests). The physical root, if
             # any, lies between the minimum of f and r_n: locate the
-            # minimum (f is convex in r when B = 0, and a ternary search
-            # in ln r is exact for any unimodal f) and bracket from there.
-            a, b = log(lo), log(r_n)
-            for _ in 1:100
-                m1 = a + (b - a) / 3; m2 = b - (b - a) / 3
-                f(exp(m1)) < f(exp(m2)) ? (b = m2) : (a = m1)
-                b - a < 1e-12 && break
+            # minimum and bracket from there. With B = 0 it is closed-form,
+            # f'(r) = 2r − 2hA/(F r²) = 0 at r³ = hA/F; otherwise a ternary
+            # search in ln r (exact for any unimodal f). The closed form
+            # matters: evaporating pure-water droplets are the common
+            # case in stochastic growth, and the search cost ~150 extra
+            # residual evaluations each (20x the cost of a growth step).
+            r_min = if B == 0
+                clamp(cbrt(h * A * invF), lo, r_n)
+            else
+                a, b = log(lo), log(r_n)
+                for _ in 1:100
+                    m1 = a + (b - a) / 3; m2 = b - (b - a) / 3
+                    f(exp(m1)) < f(exp(m2)) ? (b = m2) : (a = m1)
+                    b - a < 1e-12 && break
+                end
+                exp(0.5 * (a + b))
             end
-            r_min = exp(0.5 * (a + b))
             f(r_min) > 0 && return lo   # no root: it really evaporates away
             lo = r_min
         end
