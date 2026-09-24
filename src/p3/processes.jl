@@ -702,7 +702,8 @@ function p3_limit_rates(s::P3ParcelState{FT}, r::NamedTuple, dt::Real,
     fdep = min(_p3_frac((s.q_v - qsi) / Γi, dt * r.dep), _p3_frac(s.q_v, dt * r.dep))
 
     evap_r, n_evap_r = fev * r.evap_r, fev * r.n_evap_r
-    rime_r, n_rime_r = fr * r.rime_r, r.n_rime_r
+    # number is cut with the mass it belongs to, then by what N_r can supply
+    rime_r, n_rime_r = fr * r.rime_r, fr * r.n_rime_r
     # rain number: sinks other than evaporation limited by what is left
     nsink = dt * (max(r.n_self_r, zero(FT)) + n_rime_r)
     fN = _p3_frac(s.N_r - dt * n_evap_r, nsink)

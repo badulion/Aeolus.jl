@@ -419,6 +419,20 @@ using Aeolus: MoistThermodynamics, AerosolCloud, Superdroplet
             @test abs(p3_total_water(s1) - p3_total_water(st)) <= 4eps() * p3_total_water(st)
         end
 
+        # When the limiter cuts a mass rate, the number it carries is cut by
+        # at least the same factor: collected rain drops are removed at the
+        # mean drop mass, never faster. (Review fix: at dt = 600 s the rain
+        # riming mass was scaled to 0.242 but its number only to 0.805,
+        # removing drops at 3.3× the mean mass.)
+        rc = p3_process_rates(cold)
+        for dt in (60.0, 600.0, 3600.0)
+            l = p3_limit_rates(cold, rc, dt)
+            @test l.n_rime_r / rc.n_rime_r <= l.rime_r / rc.rime_r * (1 + 1e-12)
+            @test l.n_rime_c / rc.n_rime_c ≈ l.rime_c / rc.rime_c rtol = 1e-12
+        end
+        @test p3_limit_rates(cold, rc, 600.0).n_rime_r / rc.n_rime_r ≈
+              p3_limit_rates(cold, rc, 600.0).rime_r / rc.rime_r rtol = 1e-12
+
         # Long integrations with a large step in three regimes.
         maxerr = 0.0
         for (st, dt, n) in ((cold, 60.0, 120), (warm, 60.0, 120), (dry, 60.0, 120))
