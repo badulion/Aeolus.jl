@@ -22,6 +22,14 @@ export SpectralMoments, spectral_moments, gamma_moment_ratio,
 # Gamma ratio Γ(k+p) / (Γ(k) k^p) — the one special function the closure needs
 # =========================================================================
 
+# Why a ratio routine and not lgamma(k+p) − lgamma(k): for narrow spectra
+# k ~ 1e6, lgamma ~ 1.3e7, and a difference of two log-gammas that are
+# each good to 1e-15 relative leaves ~1e-9 absolute error in a quantity
+# (1 − R², R = Γ(k+½)/(Γ(k)√k)) of size 1/(4k) ~ 2.5e-7 — a 1 % error in
+# ε². Summing the Stirling series as a difference avoids that. (P3's
+# gamma functions, issue #1, are not on the base branch; once both are
+# merged this ratio belongs next to them.)
+#
 # ln Γ(K+p) − ln Γ(K) for K ≥ 16, from Stirling's series written as a
 # difference so that no O(K ln K) terms cancel:
 #   (K+p−½) ln(K+p) − (K−½) ln K − p + [φ(K+p) − φ(K)],
