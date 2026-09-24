@@ -70,7 +70,8 @@ using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
                              heat_capacity_moist, latent_heat_vapor,
                              saturation_specific_humidity, exner_function
 
-export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!
+export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
+       dew_deposition, dew_exchange!
 
 # =========================================================================
 # Helpers
@@ -236,6 +237,85 @@ function fog_adjust!(θ::AbstractArray{<:Real,3}, qv::AbstractArray{<:Real,3},
         end
     end
     return total
+end
+
+# =========================================================================
+# Dew: vapour deposition onto a surface below the dew point
+# =========================================================================
+
+"""
+    dew_deposition(qv, Ts, p, dt; dz, ρ = 1.2, C_e = 1e-3, U = 3.0,
+                   dew = Inf, c = DEFAULT_CONSTANTS)
+        -> (; Δqv, mass, surface_heat)
+
+Vapour exchange between the lowest air layer (thickness `dz`, density
+`ρ`, specific humidity `qv`) and a surface at temperature `Ts` over one
+step `dt`, by the bulk law
+
+    ρ dz dq_v/dt = −ρ g_a (q_v − q_s(T_s, p)),    g_a = C_e U.
+
+Solved exactly over the step with `T_s` held fixed, so
+`Δq_v = −(q_v − q_s(T_s))·(1 − exp(−g_a dt/dz))`: the air can at most be
+dried to the surface saturation humidity, whatever `dt` is.
+
+  * `q_v > q_s(T_s)` — the surface is below the dew point and dew forms:
+    `mass = −ρ dz Δq_v > 0` kg m⁻².
+  * `q_v < q_s(T_s)` — existing dew (`dew`, kg m⁻², the amount available)
+    evaporates, limited by what is there; with `dew = 0` nothing happens.
+
+`surface_heat = L_v(T_s)·mass` (J m⁻²) is the latent heat released **at
+the surface** (negative when dew evaporates). It belongs in the surface
+energy budget; the air temperature is untouched, because the vapour that
+left carried its own sensible enthalpy with it. This is the coupling the
+original urban `apply_fog_dew!` got wrong.
+"""
+function dew_deposition(qv::Real, Ts::Real, p::Real, dt::Real;
+                        dz::Real, ρ::Real = 1.2, C_e::Real = 1e-3,
+                        U::Real = 3.0, dew::Real = Inf,
+                        c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    qs = saturation_specific_humidity(Ts, p, c)
+    f  = relaxation_fraction(dt, dz / (C_e * U))
+    Δqv = -(float(qv) - qs) * f
+    if Δqv > 0                                  # evaporation of existing dew
+        Δqv = min(Δqv, max(float(dew), 0.0) / (ρ * dz))
+    end
+    mass = -ρ * dz * Δqv
+    return (Δqv = Δqv, mass = mass,
+            surface_heat = latent_heat_vapor(Ts, c) * mass)
+end
+
+"""
+    dew_exchange!(qv, q_dew, Ts, p, dt; dz, ρ = 1.2, C_e = 1e-3, U = 3.0,
+                  c = DEFAULT_CONSTANTS) -> H (W m⁻²)
+
+Apply [`dew_deposition`](@ref) column by column: `qv` is the 3-D vapour
+array (only level 1 is touched) or a 2-D array of lowest-layer values,
+`q_dew` the 2-D surface dew reservoir (kg m⁻², updated in place), `Ts`
+the 2-D surface temperature. Returns the 2-D latent heating of the
+surface, W m⁻², positive when dew forms — add it to the surface energy
+balance, not to the air.
+"""
+function dew_exchange!(qv::AbstractArray{<:Real}, q_dew::AbstractMatrix,
+                       Ts::AbstractMatrix, p::Real, dt::Real;
+                       dz::Real, ρ::Real = 1.2, C_e::Real = 1e-3,
+                       U::Real = 3.0,
+                       c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    Nx, Ny = size(Ts)
+    H = zeros(Float64, Nx, Ny)
+    @inbounds for j in 1:Ny, i in 1:Nx
+        q = ndims(qv) == 3 ? qv[i, j, 1] : qv[i, j]
+        r = dew_deposition(q, Ts[i, j], p, dt; dz = dz, ρ = ρ, C_e = C_e,
+                           U = U, dew = q_dew[i, j], c = c)
+        r.mass == 0 && continue
+        if ndims(qv) == 3
+            qv[i, j, 1] = q + r.Δqv
+        else
+            qv[i, j] = q + r.Δqv
+        end
+        q_dew[i, j] = max(q_dew[i, j] + r.mass, 0.0)
+        H[i, j] = r.surface_heat / dt
+    end
+    return H
 end
 
 end # module

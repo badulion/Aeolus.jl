@@ -440,6 +440,7 @@ export AMMONIUM_SULFATE, AerosolProperties, CollisionKernel,
        total_number, total_water_mass, vapor_diffusivity
 
 # Phase 44 — fog / dew condensation coupled to the vapour field
-export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!
+export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
+       dew_deposition, dew_exchange!
 
 end # module

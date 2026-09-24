@@ -150,4 +150,78 @@ using Aeolus.RadiationFog
         @test all(l2[:, :, 1] .> 0) && all(l2[:, :, 2:3] .== 0)
     end
 
+    @testset "Dew: surface deposition, coupled and bounded" begin
+        p, dz, ρ = 1.0e5, 6.25, 1.0
+        # No dew when the surface is above the dew point
+        r = dew_deposition(0.008, 290.0, p, 2.0; dz = dz, ρ = ρ, dew = 0.0)
+        @test r.mass == 0 && r.Δqv == 0 && r.surface_heat == 0
+        # Dew forms on a surface below the dew point; water and heat balance
+        qv = 0.010; Ts = 280.0
+        @test Ts < dewpoint_temperature(p, qv)
+        r = dew_deposition(qv, Ts, p, 2.0; dz = dz, ρ = ρ)
+        @test r.mass > 0
+        @test r.mass ≈ -ρ * dz * r.Δqv rtol = 1e-15
+        @test r.surface_heat ≈ latent_heat_vapor(Ts) * r.mass rtol = 1e-15
+        # Exact exponential in time: one step of 2dt == two steps of dt
+        a = dew_deposition(qv, Ts, p, 50.0; dz = dz, ρ = ρ)
+        b = dew_deposition(qv + a.Δqv, Ts, p, 50.0; dz = dz, ρ = ρ)
+        c2 = dew_deposition(qv, Ts, p, 100.0; dz = dz, ρ = ρ)
+        @test a.Δqv + b.Δqv ≈ c2.Δqv rtol = 1e-12
+        # Stable for any dt: can at most dry the air to q_s(T_s)
+        for dt in (2.0, 1e3, 1e6, 1e12)
+            r = dew_deposition(qv, Ts, p, dt; dz = dz, ρ = ρ)
+            @test qv + r.Δqv >= qsat(Ts, p) - 1e-15
+        end
+        r = dew_deposition(qv, Ts, p, 1e12; dz = dz, ρ = ρ)
+        @test qv + r.Δqv ≈ qsat(Ts, p) rtol = 1e-12
+        # Dew evaporation is limited by the dew actually present
+        r = dew_deposition(0.005, 290.0, p, 1e6; dz = dz, ρ = ρ, dew = 0.01)
+        @test r.mass ≈ -0.01 rtol = 1e-12
+        @test r.surface_heat < 0
+        # Dew rate is physical: Monteith (1957) puts the ceiling on dewfall
+        # at ~0.07-0.08 mm/h. With the urban example's bulk coefficients
+        # (C_e = 1e-3, U = 3 m/s) and a surface 7 K below T_d:
+        rate = dew_deposition(qv, Ts, p, 1.0; dz = dz, ρ = 1.2).mass * 3600
+        @test 0.005 < rate < 0.08                     # kg m⁻² h⁻¹ = mm/h
+        @info "dew rate, T_s = 280 K, q_v = 10 g/kg" mm_per_h=rate Td=dewpoint_temperature(p, qv)
+    end
+
+    @testset "Previously amplifying configuration now stays bounded" begin
+        # The configuration that made the urban scheme unusable: a cold
+        # surface (280 K) under subsaturated air (288 K, q_v = 10 g/kg,
+        # RH ≈ 0.94), vapour resupplied by evaporation / advection so that
+        # the lowest layer is held at q_v = 10 g/kg, dt = 2 s for 24 h.
+        # The old scheme heated the air by 75 K (288 -> 363 K) in that time.
+        p, dz, ρ, dt = 1.0e5, 6.25, 1.0, 2.0
+        θ  = fill(288.0, 1, 1, 1); qv = fill(0.010, 1, 1, 1)
+        ql = zeros(1, 1, 1); qd = zeros(1, 1); Ts = fill(280.0, 1, 1)
+        heat = 0.0; supplied = 0.0
+        for n in 1:43200
+            H = dew_exchange!(qv, qd, Ts, p, dt; dz = dz, ρ = ρ)
+            fog_adjust!(θ, qv, ql, p, dt)
+            heat += H[1] * dt
+            supplied += ρ * dz * (0.010 - qv[1])
+            qv[1] = 0.010
+        end
+        @test θ[1] == 288.0                   # the air is never heated
+        @test ql[1] == 0                      # and never fogged: RH < 1
+        @test qd[1] ≈ supplied rtol = 1e-10   # every gram accounted for
+        @test heat ≈ latent_heat_vapor(280.0) * qd[1] rtol = 1e-10
+        @info "24 h cold-surface box (old: θ 288 -> 363 K)" θ_final=θ[1] dew_mm=qd[1] surface_heat_Wm2=heat / 86400
+
+        # Without resupply, the air is dried towards q_s(T_s) and no further.
+        qv = fill(0.010, 1, 1, 1); qd = zeros(1, 1)
+        for n in 1:43200
+            dew_exchange!(qv, qd, Ts, p, dt; dz = dz, ρ = ρ)
+        end
+        @test qsat(280.0, p) <= qv[1] < 0.010
+        @test ρ * dz * (0.010 - qv[1]) ≈ qd[1] rtol = 1e-10
+
+        # Supersaturated, large explicit step: the old scheme overshot to
+        # q_v - q_s = -2.9e-3 at rate·dt = 3. Now bounded and monotone.
+        T0 = 285.0; qv0 = 1.05qsat(T0, p)
+        r = fog_condensation(T0, p, qv0, 0.0, 30.0)
+        @test abs(r.qv - qsat(r.T, p)) < 1e-12
+        @info "S=1.05, dt=30 s (old overshoot -2.9e-3 kg/kg)" excess_after=r.qv - qsat(r.T, p)
+    end
 end
