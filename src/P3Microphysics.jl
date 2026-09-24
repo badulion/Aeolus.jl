@@ -43,6 +43,8 @@ REFERENCES
 """
 module P3Microphysics
 
+using ..MoistThermodynamics: air_density, DEFAULT_CONSTANTS
+using ..RadiationCore: _gauss_legendre
 
 # --- gamma.jl -------------------------------------------------------------
 export lgamma_lanczos, gamma_lanczos,
@@ -57,7 +59,8 @@ export P3IceParameters, P3_DEFAULT_ICE, P3MassDimension,
        p3_rime_state, p3_mass_dimension, p3_regime,
        p3_particle_mass, p3_particle_area,
        p3_mean_mass, p3_ice_mass, p3_bulk_density,
-       p3_slope, p3_size_distribution
+       p3_slope, p3_size_distribution,
+       p3_air_viscosity, p3_fall_speed, p3_bulk_fall_speed
 
 include("p3/massdim.jl")
 

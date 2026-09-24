@@ -444,3 +444,143 @@ function p3_size_distribution(q_i::Real, N_i::Real, md::P3MassDimension{T};
     λ = p3_slope(q_i, N_i, md; μ = μ, kwargs...)
     return (gamma_psd_intercept(T(N_i), T(μ), λ), T(μ), λ)
 end
+
+# -------------------------------------------------------------------------
+# Fall speed
+# -------------------------------------------------------------------------
+
+"""
+    p3_air_viscosity(T) -> Pa s
+
+Dynamic viscosity of dry air from Sutherland's law,
+
+    η(T) = 1.458e-6 T^{3/2} / (T + 110.4),
+
+(U.S. Standard Atmosphere 1976), 1.716e-5 Pa s at 273.15 K. Only
+weakly dependent on humidity, which is neglected, as in MM15.
+"""
+p3_air_viscosity(T::Real) = 1.458e-6 * float(T)^1.5 / (float(T) + 110.4)
+
+# Reference air state for fall speeds (P3IceParameters.T_ref, p_ref).
+_p3_ref_air(p::P3IceParameters) =
+    (air_density(p.T_ref, p.p_ref), p3_air_viscosity(p.T_ref))
+
+"""
+    p3_fall_speed(D, md::P3MassDimension; ρ_air, η_air) -> m s⁻¹
+
+Still-air terminal fall speed of a P3 ice particle of maximum dimension
+`D` (m), from its regime mass `m(D)` and projected area `A(D)` by the
+boundary-layer drag theory of Mitchell & Heymsfield (2005, JAS 62,
+1637-1644), the formulation used to build the P3 lookup tables:
+
+    X  = 2 m g ρ_a D² / (A η²)                            (Best number)
+    Re = δ₀²/4 · [ (1 + 4√X/(δ₀²√C₀))^{1/2} - 1 ]² - a₀ X^{b₀}
+    V  = η Re / (ρ_a D),
+
+with `δ₀ = 5.83`, `C₀ = 0.6` and the aggregate correction
+`a₀ = 1.7e-3`, `b₀ = 0.8`. Air density `ρ_air` (kg m⁻³) and dynamic
+viscosity `η_air` (Pa s) default to 253.15 K, 600 hPa
+(`air_density` from `MoistThermodynamics`, [`p3_air_viscosity`](@ref)).
+Gravity is `MoistThermodynamics.DEFAULT_CONSTANTS.grav`.
+
+In the Stokes limit (`X → 0`) the first term gives `Re = X/(δ₀²C₀)`,
+about 18 % above the exact sphere result `X/24`; the `a₀` term brings it
+back to within 8.3 % of Stokes' law for 10-50 μm ice spheres (measured
+in the tests). Unrimed aggregates of 0.5-10 mm fall within 11 % of the
+Locatelli & Hobbs (1974) fit `0.8 D^0.16` (D in mm) at 1.2 kg m⁻³.
+For `D ≲ 0.1 μm` the `a₀` term would exceed the first and make `Re`
+negative; `Re` is floored at zero there (sedimentation of such particles
+is negligible anyway).
+
+`m(D)` is continuous but `A(D)` jumps at the thresholds, so `V(D)`
+jumps there too, as in MM15. The bulk speeds
+([`p3_bulk_fall_speed`](@ref)) are continuous in `F_rim` and `ρ_rim`.
+"""
+function p3_fall_speed(D::Real, md::P3MassDimension{T};
+                       ρ_air::Real = _p3_ref_air(md.params)[1],
+                       η_air::Real = _p3_ref_air(md.params)[2]) where {T}
+    D > 0 || return zero(T)
+    p = md.params
+    m = p3_particle_mass(D, md)
+    A = p3_particle_area(D, md)
+    return _p3_vt(T(D), m, A, T(ρ_air), T(η_air), p)
+end
+
+function _p3_vt(D::T, m::T, A::T, ρa::T, η::T, p::P3IceParameters) where {T}
+    g = T(DEFAULT_CONSTANTS.grav)
+    X = 2 * m * g * ρa * D^2 / (A * η^2)
+    δ0, C0 = T(p.δ0), T(p.C0)
+    c1 = 4 / (δ0^2 * sqrt(C0))
+    # (√(1+y) - 1) = y / (√(1+y) + 1): no cancellation at small X
+    y = c1 * sqrt(X)
+    Re = δ0^2 / 4 * (y / (sqrt(1 + y) + 1))^2 - T(p.a0) * X^T(p.b0)
+    return η * max(Re, zero(T)) / (ρa * D)
+end
+
+# Normalised number-weighted integral E_N[f] = ∫ f(D) D^μ e^{-λD} dD / ∫ D^μ e^{-λD} dD
+# by composite 8-point Gauss-Legendre in x = λD, with panel edges at the
+# regime thresholds (where V(D) has a jump or a kink), geometric panels
+# towards x = 0 and unit panels out to where the D³·D^μ tail is < 1e-30.
+# The Gauss-Legendre rule is RadiationCore's (one source of truth).
+const _P3_GL8 = _gauss_legendre(8)
+
+function _p3_psd_expectation(f, μ::T, λ::T, md::P3MassDimension{T}) where {T}
+    a = μ + 4
+    xmax = a + 20 * sqrt(a) + 40
+    edges = T[0]
+    for k in 40:-1:1
+        push!(edges, T(2.0)^(-k))
+    end
+    append!(edges, T(1):T(1):ceil(xmax))
+    for Db in (md.D_th, md.D_gr, md.D_cr)
+        xb = λ * Db
+        0 < xb < xmax && push!(edges, xb)
+    end
+    sort!(edges)
+    unique!(edges)
+    xs, ws = _P3_GL8
+    lg = lgamma_lanczos(μ + 1)
+    acc = nothing
+    for i in 1:(length(edges) - 1)
+        x1, x2 = edges[i], edges[i + 1]
+        h = (x2 - x1) / 2
+        mid = (x1 + x2) / 2
+        for j in eachindex(xs)
+            x = mid + h * T(xs[j])
+            wt = h * T(ws[j]) * exp(μ * log(x) - x - lg)
+            v = f(x / λ) .* wt
+            acc = acc === nothing ? v : acc .+ v
+        end
+    end
+    return acc
+end
+
+"""
+    p3_bulk_fall_speed(μ, λ, md::P3MassDimension; ρ_air, η_air) -> (V_N, V_M)
+
+Number- and mass-weighted mean fall speeds (m s⁻¹) of the gamma size
+distribution `N(D) ∝ D^μ e^{-λD}`,
+
+    V_N = ∫ V(D) N(D) dD / ∫ N(D) dD
+    V_M = ∫ V(D) m(D) N(D) dD / ∫ m(D) N(D) dD,
+
+the sedimentation velocities of `N_i` and of `q_i` (and of `q_rim`,
+`B_rim`, which fall with the mass; MM15 §2d). `V(D)` from
+[`p3_fall_speed`](@ref) is not a power law, so the integrals are taken
+by composite Gauss-Legendre quadrature split at the regime thresholds
+(P3 itself tabulates the same integrals offline). The mass-weighted
+integral of `m(D)` by the same quadrature reproduces the analytic
+truncated-moment value [`p3_mean_mass`](@ref) to 7e-15 (tests).
+"""
+function p3_bulk_fall_speed(μ::Real, λ::Real, md::P3MassDimension{T};
+                            ρ_air::Real = _p3_ref_air(md.params)[1],
+                            η_air::Real = _p3_ref_air(md.params)[2]) where {T}
+    ρa, η = T(ρ_air), T(η_air)
+    p = md.params
+    VN, VM, M = _p3_psd_expectation(T(μ), T(λ), md) do D
+        m = p3_particle_mass(D, md)
+        v = _p3_vt(D, m, p3_particle_area(D, md), ρa, η, p)
+        (v, v * m, m)
+    end
+    return (VN, VM / M)
+end

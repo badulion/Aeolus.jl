@@ -307,3 +307,100 @@ end
         @test all(diff(ls) .> 0)
     end
 end
+
+@testset "P3 fall speed" begin
+    relerr(x, ref) = abs(x - ref) / abs(ref)
+    maxstep(v) = maximum(abs.(diff(v)) ./ abs.(v[1:end-1]))
+    p = P3_DEFAULT_ICE
+    P3 = Aeolus.P3Microphysics
+    ρs, η = 1.2, p3_air_viscosity(283.15)       # near-surface air
+
+    @testset "Air viscosity (Sutherland)" begin
+        @test p3_air_viscosity(273.15) ≈ 1.716e-5 rtol = 1e-3
+        @test p3_air_viscosity(300.0) ≈ 1.846e-5 rtol = 2e-3   # tabulated dry air
+    end
+
+    @testset "Single-particle limits" begin
+        md0 = p3_mass_dimension(0.0, 400.0)
+        # Small solid-ice spheres against Stokes' law. MH05's boundary-
+        # layer form gives Re = X/(δ₀²C₀) ≈ X/20.4 rather than X/24 as X → 0,
+        # partly offset by the a₀ correction; measured deviation quoted.
+        maxdev = 0.0
+        for D in (10e-6, 20e-6, 30e-6, 50e-6)
+            vs = p.ρ_ice * 9.80665 * D^2 / (18η)
+            maxdev = max(maxdev, relerr(p3_fall_speed(D, md0; ρ_air = ρs, η_air = η), vs))
+        end
+        @printf("    ice spheres 10-50 μm vs Stokes: max rel dev %.3f\n", maxdev)
+        @test maxdev < 0.10
+        # Unrimed aggregates against Locatelli & Hobbs (1974),
+        # V = 0.8 D^0.16 (D in mm), aggregates of unrimed side planes etc.
+        maxdev = 0.0
+        for D in (0.5e-3, 1e-3, 2e-3, 5e-3, 1e-2)
+            v = p3_fall_speed(D, md0; ρ_air = ρs, η_air = η)
+            maxdev = max(maxdev, relerr(v, 0.8 * (1e3D)^0.16))
+        end
+        @printf("    unrimed aggregates 0.5-10 mm vs Locatelli & Hobbs (1974): max rel dev %.3f\n", maxdev)
+        @test maxdev < 0.15
+        # graupel falls faster than an aggregate of the same size, and
+        # denser rime falls faster
+        for D in (0.5e-3, 1e-3, 2e-3, 4e-3)
+            va = p3_fall_speed(D, md0; ρ_air = ρs, η_air = η)
+            vg = [p3_fall_speed(D, p3_mass_dimension(1.0, ρ); ρ_air = ρs, η_air = η)
+                  for ρ in (100.0, 400.0, 900.0)]
+            @test all(diff(vg) .> 0)
+            @test vg[2] > 1.4va
+        end
+        # lower air density (aloft) → faster fall
+        @test p3_fall_speed(2e-3, md0; ρ_air = 0.5, η_air = η) >
+              p3_fall_speed(2e-3, md0; ρ_air = 1.2, η_air = η)
+        # zero / tiny sizes
+        @test p3_fall_speed(0.0, md0) == 0
+        @test p3_fall_speed(5e-8, md0) >= 0
+    end
+
+    @testset "Bulk fall speeds" begin
+        # Quadrature check: the same composite rule applied to m(D)
+        # reproduces the analytic truncated-moment mean mass.
+        maxe = 0.0
+        for (F, ρr) in ((0.0, 400.0), (0.5, 400.0), (0.9, 900.0), (1.0, 100.0)),
+            μ in (0.0, 2.5), λ in (1e3, 1e4, 1e5)
+            md = p3_mass_dimension(F, ρr)
+            mq, one_ = P3._p3_psd_expectation(D -> (p3_particle_mass(D, md), 1.0),
+                                               μ, λ, md)
+            maxe = max(maxe, relerr(mq, p3_mean_mass(μ, λ, md)), abs(one_ - 1))
+        end
+        @printf("    PSD quadrature vs analytic mean mass / normalisation: max rel err %.2e\n", maxe)
+        @test maxe < 1e-12
+
+        # V_M ≥ V_N (bigger particles carry the mass and fall faster)
+        for F in (0.0, 0.5, 1.0), λ in (1e3, 1e4)
+            VN, VM = p3_bulk_fall_speed(0, λ, p3_mass_dimension(F, 400.0))
+            @test VM > VN > 0
+        end
+
+        # Continuity over the F_rim sweep at fixed q_i/N_i
+        steps = Float64[]
+        for nF in (401, 4001)
+            Fs = range(0.0, 1.0; length = nF)
+            VNs = Float64[]; VMs = Float64[]
+            for F in Fs
+                md = p3_mass_dimension(F, 400.0)
+                VN, VM = p3_bulk_fall_speed(0, p3_slope(1e-4, 1e3, md), md)
+                push!(VNs, VN); push!(VMs, VM)
+            end
+            push!(steps, max(maxstep(VNs), maxstep(VMs)))
+            if nF == 401
+                @printf("    q/N = 1e-7 kg: V_M(F=0) = %.3f, V_M(F=1) = %.3f m/s; V_N %.3f → %.3f\n",
+                        VMs[1], VMs[end], VNs[1], VNs[end])
+                # riming converts slow snow into fast graupel
+                @test VMs[end] > 2VMs[1]
+                # F_rim = 0⁺ joins the unrimed value
+                md = p3_mass_dimension(1e-9, 400.0)
+                @test relerr(p3_bulk_fall_speed(0, p3_slope(1e-4, 1e3, md), md)[2], VMs[1]) < 1e-7
+            end
+        end
+        @printf("    V_N, V_M F_rim sweep max step: ΔF=2.5e-3 → %.3e, ΔF=2.5e-4 → %.3e\n", steps...)
+        @test steps[2] < 5e-3
+        @test 8 < steps[1] / steps[2] < 12
+    end
+end
