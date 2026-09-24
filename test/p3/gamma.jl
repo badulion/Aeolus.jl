@@ -194,4 +194,86 @@ relerr(x, ref) = abs(x - ref) / abs(ref)
         ps = [gamma_inc_lower(4.3, x) for x in 0:0.1:30]
         @test all(diff(ps) .>= 0)
     end
+
+    @testset "Gamma PSD moments" begin
+        # Composite Simpson quadrature of the PSD, the independent reference
+        function simpson(f, a, b, n)
+            h = (b - a) / n
+            s = f(a) + f(b)
+            for i in 1:n-1
+                s += (isodd(i) ? 4 : 2) * f(a + i * h)
+            end
+            return s * h / 3
+        end
+
+        maxe = 0.0
+        for (N0, μ, λ) in ((8e6, 0.0, 2000.0), (1e12, 2.0, 1e4), (3e20, 5.5, 5e4)),
+            k in (0, 1, 2, 3, 6)
+            Dmax = (μ + k + 60) / λ
+            ref = simpson(D -> D^k * gamma_psd_density(D, N0, μ, λ), 0.0, Dmax, 20_000)
+            maxe = max(maxe, relerr(gamma_psd_moment(N0, μ, λ, k), ref))
+        end
+        @printf("    full moments vs Simpson quadrature: max rel err %.2e\n", maxe)
+        @test maxe < 1e-10
+
+        # Truncated moments vs quadrature, and summing to the full moment
+        maxq = 0.0; maxsum = 0.0
+        for (N0, μ, λ) in ((8e6, 0.0, 2000.0), (1e12, 2.0, 1e4), (3e20, 5.5, 5e4)),
+            k in (0, 1.9, 3, 6)
+            Dm = (μ + k + 1) / λ                     # near the mode of D^k N(D)
+            edges = (0.0, 0.2Dm, Dm, 3Dm, 10Dm, Inf)
+            parts = [gamma_psd_partial_moment(N0, μ, λ, k, edges[i], edges[i+1])
+                     for i in 1:5]
+            full = gamma_psd_moment(N0, μ, λ, k)
+            maxsum = max(maxsum, relerr(sum(parts), full))
+            for i in 1:4
+                ref = simpson(D -> D^k * gamma_psd_density(D, N0, μ, λ),
+                              edges[i], edges[i+1], 20_000)
+                maxq = max(maxq, relerr(parts[i], ref))
+            end
+            @test all(parts .>= 0)
+            @test gamma_psd_partial_moment(N0, μ, λ, k, Dm, Dm) == 0
+            @test gamma_psd_partial_moment(N0, μ, λ, k, 0.0, Inf) ≈ full rtol = 1e-14
+        end
+        @printf("    truncated moments vs Simpson: max rel err %.2e\n", maxq)
+        @printf("    Σ truncated moments vs full moment: max rel err %.2e\n", maxsum)
+        @test maxq < 1e-9
+        @test maxsum < 1e-14
+
+        # Far upper tail keeps relative accuracy (Q branch, no cancellation)
+        N0, μ, λ = 1e8, 1.0, 5000.0
+        tail = gamma_psd_partial_moment(N0, μ, λ, 3, 40 / λ, Inf)
+        # ∫_{x₀}^∞ x^4 e^{-x} dx = e^{-x₀}(x₀⁴+4x₀³+12x₀²+24x₀+24), x₀ = 40
+        x0 = 40.0
+        exact = N0 / λ^5 * exp(-x0) * (x0^4 + 4x0^3 + 12x0^2 + 24x0 + 24)
+        @test relerr(tail, exact) < 1e-12
+
+        # Physics: Marshall-Palmer exponential rain (μ = 0, N₀ = 8e6 m⁻⁴)
+        N0, λ, ρw = 8e6, 2000.0, 1000.0
+        @test gamma_psd_moment(N0, 0, λ, 0) ≈ N0 / λ rtol = 1e-14
+        lwc = π / 6 * ρw * gamma_psd_moment(N0, 0, λ, 3)
+        @test lwc ≈ π * ρw * N0 / λ^4 rtol = 1e-14
+        # mean diameter (μ+1)/λ
+        @test gamma_psd_moment(1.0, 2.5, λ, 1) / gamma_psd_moment(1.0, 2.5, λ, 0) ≈
+              3.5 / λ rtol = 1e-14
+        # median-volume diameter of the exponential: λ D₀ = 3.67 (Ulbrich
+        # 1983), i.e. P(4, λD₀) = ½; root 3.672060748850896 found by 256-bit
+        # bisection of the closed form 1 - e^{-x}(1+x+x²/2+x³/6) = ½.
+        D0 = 3.672060748850896 / λ
+        half = gamma_psd_partial_moment(N0, 0, λ, 3, 0, D0) / gamma_psd_moment(N0, 0, λ, 3)
+        @test half ≈ 0.5 atol = 1e-14
+
+        # Intercept and slope closures round-trip
+        for (Nt, μ, λ) in ((1e5, 0.0, 3e3), (2e8, 4.0, 4e4), (50.0, 12.0, 800.0))
+            N0 = gamma_psd_intercept(Nt, μ, λ)
+            @test gamma_psd_moment(N0, μ, λ, 0) ≈ Nt rtol = 1e-13
+            M3 = gamma_psd_moment(N0, μ, λ, 3)
+            @test gamma_psd_slope(Nt, 0, M3, 3, μ) ≈ λ rtol = 1e-13
+            # non-integer order (aggregate mass exponent b = 1.9) and i > j
+            Mb = gamma_psd_moment(N0, μ, λ, 1.9)
+            @test gamma_psd_slope(Mb, 1.9, Nt, 0, μ) ≈ λ rtol = 1e-13
+        end
+        @test_throws DomainError gamma_psd_moment(1.0, -2.0, 1.0, 0)
+        @test_throws ArgumentError gamma_psd_slope(1.0, 3, 1.0, 3, 0.0)
+    end
 end

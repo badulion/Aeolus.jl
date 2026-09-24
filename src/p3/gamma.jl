@@ -210,3 +210,114 @@ Regularised upper incomplete gamma function `Q(a,x) = Γ(a,x)/Γ(a)
 = 1 - P(a,x)`, `a > 0`, `x ≥ 0`. See [`gamma_inc`](@ref).
 """
 gamma_inc_upper(a::Real, x::Real) = last(gamma_inc(a, x))
+
+# -------------------------------------------------------------------------
+# Gamma particle size distribution  N(D) = N₀ D^μ exp(-λ D)
+# -------------------------------------------------------------------------
+
+"""
+    gamma_psd_density(D, N0, μ, λ)
+
+Number density of the complete gamma particle size distribution,
+
+    N(D) = N₀ D^μ exp(-λD),
+
+per unit diameter (m⁻⁴ for `N₀` in m⁻³⁻μ when `N` is per m³ of air).
+`D` diameter [m], `μ` shape parameter (dimensionless, `μ > -1`), `λ`
+slope [m⁻¹].
+
+Reference: Morrison & Milbrandt (2015, JAS 72, 287-311), eq. 1.
+"""
+gamma_psd_density(D::Real, N0::Real, μ::Real, λ::Real) =
+    N0 * D^μ * exp(-λ * D)
+
+"""
+    gamma_psd_moment(N0, μ, λ, k)
+
+`k`-th moment of the gamma size distribution over `0 ≤ D < ∞`,
+
+    M_k = ∫₀^∞ D^k N₀ D^μ e^{-λD} dD = N₀ Γ(μ+k+1) / λ^{μ+k+1},
+
+requiring `μ + k + 1 > 0`. `M₀` is the total number, `M₃·(π/6)ρ` the
+mass of spheres of density `ρ`, `M₆` the Rayleigh reflectivity factor.
+Evaluated in log space so that large `λ^{μ+k+1}` (λ ~ 10⁴-10⁵ m⁻¹ is
+routine for cloud ice) cannot overflow before the division.
+
+Reference: Morrison & Milbrandt (2015), §2; Seifert & Beheng (2006).
+"""
+function gamma_psd_moment(N0::Real, μ::Real, λ::Real, k::Real)
+    a = float(μ + k + 1)
+    a > 0 || throw(DomainError(a, "moment diverges: need μ + k + 1 > 0"))
+    λ > 0 || throw(DomainError(λ, "slope λ must be positive"))
+    return N0 * exp(lgamma_lanczos(a) - a * log(float(λ)))
+end
+
+"""
+    gamma_psd_partial_moment(N0, μ, λ, k, D1, D2)
+
+`k`-th moment of the gamma size distribution truncated to
+`D1 ≤ D ≤ D2` (`D2 = Inf` allowed),
+
+    ∫_{D1}^{D2} D^k N₀ D^μ e^{-λD} dD
+        = N₀ Γ(a)/λ^a · [P(a, λD₂) - P(a, λD₁)],   a = μ+k+1.
+
+P3 needs these because the mass-dimension and area-dimension relations
+are piecewise power laws: each bulk integral splits into one truncated
+moment per regime (Morrison & Milbrandt 2015, §2b and Appendix).
+
+When the interval lies in the upper tail (`λD₁ > a`) the difference is
+taken as `Q(a, λD₁) - Q(a, λD₂)` instead, so a small tail contribution
+does not vanish into the cancellation of two numbers near one.
+"""
+function gamma_psd_partial_moment(N0::Real, μ::Real, λ::Real, k::Real,
+                                  D1::Real, D2::Real)
+    0 <= D1 || throw(DomainError(D1, "D1 must be ≥ 0"))
+    D1 <= D2 || throw(DomainError((D1, D2), "need D1 ≤ D2"))
+    full = gamma_psd_moment(N0, μ, λ, k)
+    D1 == D2 && return zero(full)
+    a = float(μ + k + 1)
+    x1 = λ * D1
+    x2 = λ * D2
+    P1, Q1 = gamma_inc(a, x1)
+    P2, Q2 = gamma_inc(a, x2)
+    frac = x1 > a ? (Q1 - Q2) : (P2 - P1)
+    return full * frac
+end
+
+"""
+    gamma_psd_intercept(N, μ, λ)
+
+Intercept `N₀` of the gamma size distribution that has total number
+concentration `N = M₀` for the given shape `μ` and slope `λ`:
+
+    N₀ = N λ^{μ+1} / Γ(μ+1).
+
+Evaluated in log space.
+"""
+function gamma_psd_intercept(N::Real, μ::Real, λ::Real)
+    a = float(μ + 1)
+    a > 0 || throw(DomainError(μ, "need μ > -1"))
+    return N * exp(a * log(float(λ)) - lgamma_lanczos(a))
+end
+
+"""
+    gamma_psd_slope(Mi, i, Mj, j, μ)
+
+Slope `λ` of the gamma size distribution consistent with two of its
+moments, `Mi = M_i` and `Mj = M_j` (`i ≠ j`, orders need not be
+integers), for fixed shape `μ`:
+
+    M_i / M_j = Γ(μ+i+1)/Γ(μ+j+1) · λ^{j-i}
+    ⇒ λ = [ (M_i/M_j) · Γ(μ+j+1)/Γ(μ+i+1) ]^{1/(j-i)}.
+
+With `i = 0` (number) and `j = b` (the mass exponent of a power-law
+`m = αD^b`, with `M_b = q/α`) this is the standard two-moment closure
+for λ (e.g. Seifert & Beheng 2006; Morrison & Milbrandt 2015, §2).
+"""
+function gamma_psd_slope(Mi::Real, i::Real, Mj::Real, j::Real, μ::Real)
+    i == j && throw(ArgumentError("moment orders must differ"))
+    (Mi > 0 && Mj > 0) || throw(DomainError((Mi, Mj), "moments must be positive"))
+    lr = log(float(Mi)) - log(float(Mj)) +
+         lgamma_lanczos(μ + j + 1) - lgamma_lanczos(μ + i + 1)
+    return exp(lr / (j - i))
+end
