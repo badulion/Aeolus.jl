@@ -207,7 +207,7 @@ function FogColumn(zf::AbstractVector, T0::AbstractVector, qv0::AbstractVector;
     Rd = c.gas_constant / c.molmass_dry
     pf = zeros(nz + 1); pf[1] = p_sfc
     for k in 1:nz
-        Tv = T[k] * (1 + 0.608 * qv[k])
+        Tv = virtual_temperature(T[k], PhasePartition(qv[k]), c)
         pf[k + 1] = pf[k] * exp(-c.grav * dz[k] / (Rd * Tv))
     end
     p = [sqrt(pf[k] * pf[k + 1]) for k in 1:nz]
@@ -258,7 +258,8 @@ function parisfog_2011_column(; H::Real = 1000.0,
     z = (zf[1:end-1] .+ zf[2:end]) ./ 2
     nz = length(z)
     # potential-temperature profile (K), referenced to the surface
-    θs = T_sfc * (1.0e5 / p_sfc)^0.2857
+    Π(p) = exner_function(p, PhasePartition(0.0), c)     # dry Exner, contract
+    θs = T_sfc / Π(p_sfc)
     θ(z) = z < 60  ? θs + 2.0 * z / 60 :
            z < 400 ? θs + 2.0 + 1.5e-3 * (z - 60) :
                      θs + 2.0 + 1.5e-3 * 340 + 4.0e-3 * (z - 400)
@@ -270,8 +271,8 @@ function parisfog_2011_column(; H::Real = 1000.0,
     for k in 1:nz
         dzk = zf[k + 1] - zf[k]
         # pressure at the layer centre, isothermal step with the θ estimate
-        pk = p * exp(-c.grav * (z[k] - zf[k]) / (Rd * θ(z[k]) * (p / 1e5)^0.2857))
-        T[k] = θ(z[k]) * (pk / 1e5)^0.2857
+        pk = p * exp(-c.grav * (z[k] - zf[k]) / (Rd * θ(z[k]) * Π(p)))
+        T[k] = θ(z[k]) * Π(pk)
         qv[k] = RH(z[k]) * saturation_specific_humidity(T[k], pk, c)
         p = p * exp(-c.grav * dzk / (Rd * T[k]))
     end
