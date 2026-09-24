@@ -415,6 +415,20 @@ end
         @test inp_mass(inp) ≈ 1e-10 rtol = 1e-14
         @test inp_budget(inp).N_src < 0          # cleaner environment
         @test maximum(abs, values(inp_budget_residual(inp))) < 1e-14
+        # an environment with particles but no mass (or mass but no
+        # particles) is not a population; f = 1 would copy it in
+        @test_throws ErrorException inp_entrain!(inp, [2e5], [0.0], 1.0)
+        @test_throws ErrorException inp_entrain!(inp, [0.0], [1e-10], 1.0)
+        @test inp_entrain!(inp, [0.0], [0.0], 1.0) ≈ -2e5 rtol = 1e-14
+        @test inp_number(inp) == 0.0 && inp_mass(inp) == 0.0
+
+        # a NaN probability (e.g. 0·Inf from an overflowing n_s(T)) is an
+        # error, not a silent NaN in the tracer
+        inp = inp_population([dust])
+        @test_throws ErrorException inp_consume!(inp, 1, r -> NaN)
+        @test inp_number(inp) == N0
+        # but an overflowing rate that saturates is fine: everything freezes
+        @test inp_consume!(inp, 1, r -> 1 - exp(-Inf * r^2)) ≈ N0 rtol = 1e-14
     end
 
     # ---------------------------------------------------------------------

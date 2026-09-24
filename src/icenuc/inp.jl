@@ -96,6 +96,9 @@ function _moment_fraction(p, r_g::Real, σ_g::Real, k::Integer)
     s = 0.0
     @inbounds for j in eachindex(_QZ)
         pj = Float64(p(r_g * exp(lnσ * (_QZ[j] + shift))))
+        # clamp would pass NaN through into the prognostic state
+        isnan(pj) && error("per-particle probability p(r) returned NaN at " *
+                           "r = $(r_g * exp(lnσ * (_QZ[j] + shift))) m")
         s += _QW[j] * clamp(pj, 0.0, 1.0)
     end
     return s
@@ -496,6 +499,9 @@ function inp_entrain!(inp::INPPopulation, N_env::AbstractVector,
     for i in 1:n
         (N_env[i] >= 0 && M_env[i] >= 0) ||
             error("inp_entrain!: environmental INP must be non-negative")
+        (N_env[i] > 0) == (M_env[i] > 0) ||
+            error("inp_entrain!: environmental number and mass must both be " *
+                  "zero or both positive (mode $i)")
         ΔN = f * (N_env[i] - inp.N_avail[i])
         ΔM = f * (M_env[i] - inp.M_avail[i])
         inp.N_avail[i] += ΔN; inp.M_avail[i] += ΔM
