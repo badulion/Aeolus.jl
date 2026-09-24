@@ -68,7 +68,9 @@ r_g = \left[\frac{M}{N\,\rho_p\,\tfrac{4\pi}{3}\exp(4.5\ln^2\sigma_g)}\right]^{1
 exactly as in the Phase 42 `AerosolReservoir`; the mode shapes and
 species are the Phase 37 `LogNormalMode`/`AerosolSpecies` records
 (`:mineral_dust`, `:biological`), converted to SI with
-`AerosolCloud.arg_mode`. Size-selective sinks (sedimentation of the
+`AerosolCloud.arg_mode`. The species record is the only source of the
+particle density: a population built from SI `ARGMode`s whose `ρ_p`
+disagrees with its species is rejected. Size-selective sinks (sedimentation of the
 coarse tail, nucleation on the largest particles) therefore shrink the
 diagnosed ``r_g`` of what remains, which is the memory a two-moment
 scheme can hold.
@@ -156,6 +158,18 @@ so the nucleation increment is
   \max\!\left(0,\; N_\mathrm{frozen}(T;\,N_\mathrm{avail}+N_\mathrm{cons})
   - N_\mathrm{cons}\right)\right].
 ```
+
+The mass increment ``M_\mathrm{frozen} - M_\mathrm{cons}`` is computed
+the same way, but it is a difference of two separately computed totals
+and need not describe a set of particles that exists. If earlier
+nucleation took the largest particles (the DeMott number form uses
+`selection = :largest`), the consumed population already holds more
+mass than an INAS ``p(r)`` assigns to that many particles, and the
+difference is negative. The increment is therefore required to lie
+between the mass of the ``\Delta N`` smallest and the ``\Delta N``
+largest available particles. Outside that range, ``\Delta N`` moves
+with the mean mass of the available particles that ``p`` selects, so
+no particle is ever moved without its mass.
 
 Holding ``T`` fixed nucleates nothing after the first call (tested to
 be exactly zero); cooling further nucleates only the difference;
