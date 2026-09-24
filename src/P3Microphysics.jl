@@ -86,6 +86,7 @@ include("p3/processes.jl")
 # --- sedimentation.jl -----------------------------------------------------
 export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
        p3_rain_bulk_fall_speed, p3_rain_rate, p3_bulk_fall_speed_z,
+       P3_RAIN_D_MEAN_MIN, P3_RAIN_D_MEAN_MAX,
        P3_K2_WATER, P3_K2_ICE, p3_rain_reflectivity, p3_ice_reflectivity, p3_dbz,
        p3_sediment!, p3_rain_sedimentation_velocities, p3_sediment_rain!,
        p3_ice_sedimentation_velocities, p3_sediment_ice!

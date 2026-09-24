@@ -195,15 +195,19 @@
         @test gamma_psd_moment(N0r, μr, λr, 0) ≈ N rtol = 1e-12
         @test π / 6 * ρw * gamma_psd_moment(N0r, μr, λr, 3) ≈ q rtol = 1e-12
         @test p3_rain_size_distribution(0.0, 1.0) === nothing
-        # Mean-size limiter: N_r → tiny caps the mean diameter at 0.8 mm,
+        # Mean-size limiter: N_r → tiny caps the mean diameter at 2 mm
+        # (P3 get_rain_dsd2, inv_Drmax = 1/0.002; 0.8 mm is P3's old value),
         # and p3_rain_limit_number gives the number that makes the PSD
         # consistent with that limit, keeping the mass.
+        @test P3_RAIN_D_MEAN_MAX == 2e-3 && P3_RAIN_D_MEAN_MIN == 1e-5
         _, μl, λl = p3_rain_size_distribution(1e-3, 1e-3)
-        @test (μl + 1) / λl ≈ 8e-4 rtol = 1e-14
+        @test (μl + 1) / λl ≈ P3_RAIN_D_MEAN_MAX rtol = 1e-14
+        _, μs, λs = p3_rain_size_distribution(1e-3, 1e20)   # lower limit, 10 μm
+        @test (μs + 1) / λs ≈ P3_RAIN_D_MEAN_MIN rtol = 1e-14
         for μr in (0.0, 3.0)
             Nl = p3_rain_limit_number(1e-3, 1e-3; μ_r = μr)
             N0l, μl, λl = p3_rain_size_distribution(1e-3, Nl; μ_r = μr)
-            @test (μl + 1) / λl ≈ 8e-4 rtol = 1e-12
+            @test (μl + 1) / λl ≈ P3_RAIN_D_MEAN_MAX rtol = 1e-12
             @test π / 6 * ρw * gamma_psd_moment(N0l, μl, λl, 3) ≈ 1e-3 rtol = 1e-12
         end
         @test p3_rain_limit_number(1e-3, 5e3) == 5e3      # inside limits: unchanged
@@ -275,14 +279,14 @@
         @printf("    unlimited: largest diagnosed D_m = %.2g m\n", Dmax_free)
         @test Dmax_free > 1e-2
 
-        # Default (P3): number limited to mean size ≤ 0.8 mm; mass still exact.
+        # Default (P3): number limited to mean size ≤ 2 mm; mass still exact.
         Pq, PN, nsub = p3_sediment_rain!(q, N, ρ, dz, 300.0)
         eq = abs(sum(ρ .* q .* dz) + Pq - mq0) / mq0
         @printf("    rain shaft, 300 s, limited: %d sub-steps, surface %.2e mm, mass err %.1e\n",
                 nsub, Pq, eq)
         @test eq < 1e-13
         @test minimum(q) >= 0 && minimum(N) >= 0
-        Dcap = cbrt(gamma_lanczos(4.0)) * 8e-4          # mass-mean D at the limit, μ = 0
+        Dcap = cbrt(gamma_lanczos(4.0)) * P3_RAIN_D_MEAN_MAX  # mass-mean D at the limit, μ = 0
         Dall = [Dm(q[k], N[k]) for k in 1:nz if q[k] > 1e-10]
         @test maximum(Dall) <= Dcap * (1 + 1e-12)
 
@@ -299,8 +303,19 @@
         @test all(diff(Dprof) .< 0)
         @test Dprof[1] > 2 * D0                 # leading edge: large drops
         @test Dm(q[k_hi], N[k_hi]) < D0 / 2     # top: small drops left behind
-        # Front position: ~2.4 km of fall in 300 s ⇒ V_M ≈ 8 m/s at the edge.
-        @test 800 < z[k_lo] < 1600
+        # Front position: the leading edge falls faster than the initial
+        # PSD's V_M (in the densest air, the slowest case) and no faster
+        # than the V_M of the largest allowed PSD (mean size 2 mm) in the
+        # thinnest air of its path, plus one cell of upwind spreading.
+        # Measured: 3125 m in 300 s, 10.4 m/s.
+        _, _, λ0 = p3_rain_size_distribution(1e-3, 1e4)
+        V_init = p3_rain_bulk_fall_speed(0.0, λ0; ρ_air = maximum(ρ))[2]
+        V_cap = p3_rain_bulk_fall_speed(0.0, 1 / P3_RAIN_D_MEAN_MAX;
+                                        ρ_air = 1.2 * exp(-3500 / 8500))[2]
+        fall = 3500 - z[k_lo]
+        @printf("    front: %.0f m in 300 s (%.2f m/s); bounds %.2f-%.2f m/s\n",
+                fall, fall / 300, V_init, V_cap)
+        @test V_init * 300 < fall <= V_cap * 300 + dz
 
         # Monodisperse rain (μ_r → ∞) does not sort: D_m stays uniform.
         q2 = ifelse.(inlayer, 1e-3, 0.0)

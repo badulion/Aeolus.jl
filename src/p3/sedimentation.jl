@@ -80,8 +80,24 @@ function p3_rain_fall_speed(D::Real; ρ_air::Real = _p3_rain_ρ_ref())
     return oftype(Df, v0 * (_p3_rain_ρ_ref() / ρ_air)^0.54)
 end
 
+# P3's rain mean-size limiter — the one place its numbers live. The mean
+# (number-weighted) diameter (μ+1)/λ is kept in [10 μm, 2 mm]; the P3
+# reference code (microphy_p3.f90, get_rain_dsd2, v4.4.0 to v5.5.2) has
+#     lammax = (mu_r+1.)*1.e+5
+#     lammin = (mu_r+1.)*inv_Drmax,   inv_Drmax = 1./0.002
+# (0.8 mm, lammin = (mu_r+1)*1250, is the value it comments as "old").
+# p3_rain_size_distribution, p3_rain_limit_number and, through them, the
+# process rates (processes.jl) all read these.
+"Lower limit of the P3 rain mean diameter `(μ+1)/λ`, m (P3 `lammax = (μ+1)·1e5`)."
+const P3_RAIN_D_MEAN_MIN = 10e-6
+"Upper limit of the P3 rain mean diameter `(μ+1)/λ`, m (P3 `inv_Drmax = 1/0.002`)."
+const P3_RAIN_D_MEAN_MAX = 2e-3
+
+# (λ_min, λ_max) in m⁻¹ for rain of shape μ with mean size in [D_min, D_max].
+_p3_rain_λ_limits(μ, D_min, D_max) = ((μ + 1) / D_max, (μ + 1) / D_min)
+
 """
-    p3_rain_size_distribution(q_r, N_r; μ_r = 0, D_mean_min = 1e-5, D_mean_max = 8e-4) -> (N0, μ, λ)
+    p3_rain_size_distribution(q_r, N_r; μ_r = 0, D_mean_min = P3_RAIN_D_MEAN_MIN, D_mean_max = P3_RAIN_D_MEAN_MAX) -> (N0, μ, λ)
 
 Gamma size distribution `N(D) = N₀ D^μ e^{-λD}` of rain with mass `q_r`
 and number `N_r` (both per kg of air, or both per m³), drops being
@@ -90,9 +106,13 @@ spheres of liquid water (`ρ_w = Superdroplet.DEFAULT_MICRO.ρ_water`):
     λ = [ (π/6) ρ_w N_r Γ(μ+4) / (q_r Γ(μ+1)) ]^{1/3}
 
 ([`gamma_psd_slope`](@ref)), `N₀` from [`gamma_psd_intercept`](@ref).
-The mean diameter `(μ+1)/λ` is limited to `[D_mean_min, D_mean_max]`,
-defaults 10 μm and 0.8 mm, i.e. `λ ∈ (μ+1)·[1250, 10⁵] m⁻¹`, the rain
-slope limits of the P3 reference code. The upper size limit matters in
+The mean (number-weighted) diameter `(μ+1)/λ` is limited to
+`[D_mean_min, D_mean_max]`, defaults 10 μm and 2 mm, i.e.
+`λ ∈ (μ+1)·[500, 10⁵] m⁻¹` — the rain slope limits of the P3 reference
+code (`get_rain_dsd2`: `lammax = (μ_r+1)·1e5`, `lammin = (μ_r+1)/0.002`;
+P3 before v4.4 used 0.8 mm). This is the single rain PSD of the package:
+the process rates ([`p3_process_rates`](@ref)), sedimentation and radar
+reflectivity all use it. The upper size limit matters in
 sedimentation: number falls slower than mass, so the leading edge of a
 rain shaft is left with mass but almost no number, and without a limit
 its diagnosed drops grow without bound (the "excessive size sorting" of
@@ -103,47 +123,50 @@ the caller adjusts `N_r` with [`p3_rain_limit_number`](@ref), as P3 does.
 
 Returns `nothing` if `q_r ≤ 0` or `N_r ≤ 0`.
 
-Reference: Morrison & Milbrandt (2015), §2c; Seifert & Beheng (2006).
+Reference: Morrison & Milbrandt (2015), §2c; Seifert & Beheng (2006);
+P3 `microphy_p3.f90` v5.5.2, `get_rain_dsd2`.
 """
 function p3_rain_size_distribution(q_r::Real, N_r::Real; μ_r::Real = 0,
-                                   D_mean_min::Real = 1e-5, D_mean_max::Real = 8e-4)
+                                   D_mean_min::Real = P3_RAIN_D_MEAN_MIN,
+                                   D_mean_max::Real = P3_RAIN_D_MEAN_MAX)
     (q_r > 0 && N_r > 0) || return nothing
     q, N = promote(float(q_r), float(N_r))
     T = typeof(q)
     μ = T(μ_r)
     λ = gamma_psd_slope(N, 0, q / _p3_cw(T), 3, μ)
-    λ = clamp(λ, (μ + 1) / T(D_mean_max), (μ + 1) / T(D_mean_min))
+    λ = clamp(λ, _p3_rain_λ_limits(μ, T(D_mean_min), T(D_mean_max))...)
     return (gamma_psd_intercept(N, μ, λ), μ, λ)
 end
 
 _p3_cw(::Type{T}) where {T} = T(π) / 6 * T(DEFAULT_MICRO.ρ_water)
 
 """
-    p3_rain_limit_number(q_r, N_r; μ_r = 0, D_mean_min = 1e-5, D_mean_max = 8e-4) -> N_r′
+    p3_rain_limit_number(q_r, N_r; μ_r = 0, D_mean_min = P3_RAIN_D_MEAN_MIN, D_mean_max = P3_RAIN_D_MEAN_MAX) -> N_r′
 
 Rain number made consistent with the mean-size limits of
 [`p3_rain_size_distribution`](@ref): if `q_r/N_r` implies a mean
-diameter `(μ+1)/λ` outside `[D_mean_min, D_mean_max]`, return the number
-that puts it exactly on the limit, keeping the mass,
+diameter `(μ+1)/λ` outside `[D_mean_min, D_mean_max]` (10 μm, 2 mm),
+return the number that puts it exactly on the limit, keeping the mass,
 
     N_r′ = q_r Γ(μ+1) λ_lim³ / ((π/6) ρ_w Γ(μ+4));
 
 otherwise `N_r` unchanged. Rain with mass but no number (`N_r ≤ 0`) is
 given the number of the largest allowed drops. Mass is never changed;
 number is not conserved by this step — the same trade the P3 reference
-code makes when it limits `λ_r`.
+code makes when it limits `λ_r` (`get_rain_dsd2` resets
+`nr = 6 λ³ q_r / (π ρ_w (μ+3)(μ+2)(μ+1))`).
 """
 function p3_rain_limit_number(q_r::Real, N_r::Real; μ_r::Real = 0,
-                              D_mean_min::Real = 1e-5, D_mean_max::Real = 8e-4)
+                              D_mean_min::Real = P3_RAIN_D_MEAN_MIN,
+                              D_mean_max::Real = P3_RAIN_D_MEAN_MAX)
     q, N = promote(float(q_r), float(N_r))
     T = typeof(q)
     q > 0 || return N
     μ = T(μ_r)
     lg = lgamma_lanczos(μ + 1) - lgamma_lanczos(μ + 4)
     Nlim(λ) = q / _p3_cw(T) * exp(lg + 3 * log(λ))
-    Nmin = Nlim((μ + 1) / T(D_mean_max))
-    Nmax = Nlim((μ + 1) / T(D_mean_min))
-    return clamp(N, Nmin, Nmax)
+    λmin, λmax = _p3_rain_λ_limits(μ, T(D_mean_min), T(D_mean_max))
+    return clamp(N, Nlim(λmin), Nlim(λmax))
 end
 
 """
