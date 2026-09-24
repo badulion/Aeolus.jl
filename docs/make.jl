@@ -30,6 +30,7 @@ makedocs(
             "Discrete Poisson & FFT"      => "theory/poisson.md",
             "Radiative transfer"          => "theory/radiation.md",
             "Sub-grid cloud PDF"          => "theory/subgrid_cloud.md",
+            "SGS activation and growth"   => "theory/sgs_activation_growth.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
