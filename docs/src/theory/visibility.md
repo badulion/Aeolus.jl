@@ -113,6 +113,13 @@ with at least 10 points per unit of size parameter; against a
 at worst ``1.9\times10^{-3}`` (``r_{eff}=2`` μm). A coarser 5-points-per-π
 rule, as used for the aerosol modes in Phase 37, aliased the resonances
 into errors of up to ``5\times10^{-3}`` for droplets and was rejected.
+The quadrature returns ``\beta = \pi N\langle r^2\rangle\,\bar Q``: it
+integrates only the area-weighted mean efficiency ``\bar Q`` and takes
+``\langle r^2\rangle`` analytically. Normalising by the numerically
+integrated *number* instead (the first implementation) let the small-drop
+number cut off at the lower integration bound — most of ``N`` when
+``v_{eff}\to 0.5`` — inflate ``\beta``, to an effective
+``Q_{ext} = 6.6`` at ``v_{eff} = 0.49``; the area-weighted form gives 2.12.
 
 ### 2.2 Haze
 
