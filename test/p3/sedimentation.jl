@@ -345,5 +345,17 @@
                 join(round.(mm ./ 1e-8, digits = 2), ", "))
         @test all(diff(mm) .< 0)
         @test mm[1] > 1e-8
+
+        # Mean-size limiter: ice with mass but vanishing number falls at
+        # the speed of the largest allowed PSD, (μ+1)/λ = 5 mm + 20 mm·F²,
+        # not at an unbounded speed.
+        md = p3_mass_dimension(1e-4, 4e-5, 4e-5 / 500)
+        vn, vm = p3_ice_sedimentation_velocities([1e-4], [4e-5], [4e-5 / 500], [1e-300], [1.0])
+        λcap = 1 / (5e-3 + 2e-2 * md.F_rim^2)
+        @test P3._p3_ice_λ_limits(0.0, md.F_rim)[1] ≈ λcap rtol = 1e-15
+        vn_ref, vm_ref = p3_bulk_fall_speed(0.0, λcap, md; ρ_air = 1.0,
+                                            η_air = p3_air_viscosity(md.params.T_ref))
+        @test vn[1] ≈ vn_ref rtol = 1e-12
+        @test vm[1] ≈ vm_ref rtol = 1e-12
     end
 end

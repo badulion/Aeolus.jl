@@ -421,7 +421,8 @@ mean size `(μ+1)/λ` between 2 μm and `5 mm + 20 mm·F_rim²`, i.e.
 
     λ_min = (μ+1) / (5e-3 + 2e-2 F_rim²),   λ_max = (μ+1) / 2e-6,
 
-and a model using this function should pass those. Near `λ = 1` m⁻¹ the
+and a model using this function should pass those; `_p3_ice_λ_limits`
+returns them (the single place these numbers live). Near `λ = 1` m⁻¹ the
 PSD is dominated by metre-sized particles, outside the range of the
 fall-speed and mass-dimension fits.
 
@@ -430,6 +431,15 @@ The shape parameter is held fixed here. MM15 diagnose `μ` from `λ`
 
 Reference: Morrison & Milbrandt (2015), §2b.
 """
+# P3's physical ice slope limits (create_p3_lookupTable_1.f90): mean size
+# (μ+1)/λ between 2 μm and 5 mm + 20 mm·F_rim². Returns (λ_min, λ_max) in m⁻¹.
+# Callers of p3_slope / p3_size_distribution use this rather than restating
+# the numbers.
+function _p3_ice_λ_limits(μ::Real, F_rim::Real)
+    μf, F = promote(float(μ), float(F_rim))
+    return ((μf + 1) / (5e-3 + 2e-2 * F^2), (μf + 1) / 2e-6)
+end
+
 function p3_slope(q_i::Real, N_i::Real, md::P3MassDimension{T};
                   μ::Real = 0, λ_min::Real = 1.0, λ_max::Real = 1e8) where {T}
     (q_i > 0 && N_i > 0) ||

@@ -462,8 +462,7 @@ function p3_ice_sedimentation_velocities(q_i::AbstractVector, q_rim::AbstractVec
     for k in eachindex(q_i)
         (q_i[k] >= q_small && N_i[k] > 0) || continue
         md = p3_mass_dimension(q_i[k], max(q_rim[k], 0), max(B_rim[k], 0), p)
-        λmin = (μ + 1) / (5e-3 + 2e-2 * md.F_rim^2)
-        λmax = (μ + 1) / 2e-6
+        λmin, λmax = _p3_ice_λ_limits(μ, md.F_rim)
         _, μk, λ = p3_size_distribution(q_i[k], N_i[k], md; μ = μ,
                                         λ_min = λmin, λ_max = λmax)
         η = p3_air_viscosity(T_air === nothing ? p.T_ref : T_air[k])
