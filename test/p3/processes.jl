@@ -399,4 +399,95 @@ using Aeolus: MoistThermodynamics, AerosolCloud, Superdroplet
         cpm = MT.heat_capacity_moist(MT.PhasePartition(p3_total_water(st), 0.0, st.q_i), c)
         @test cpm * d.T ≈ -MT.latent_heat_fusion(st.T, c) * r.melt rtol = 1e-12
     end
+
+    # ---------------------------------------------------------------------
+    # Full source-term step
+    # ---------------------------------------------------------------------
+    allfields(x) = (x.q_v, x.q_c, x.N_c, x.q_r, x.N_r, x.q_i, x.N_i, x.q_rim, x.B_rim)
+
+    @testset "Full step: conservation, energy, positivity" begin
+        # Energy identity of the process part (no adjustment, no clean-up
+        # triggered): c_pm ΔT = -L_v Δq_v + L_f Δq_i exactly.
+        for st in (cold, warm, dry)
+            s1 = p3_step(st, 1.0; adjust = false)
+            cpm = MT.heat_capacity_moist(MT.PhasePartition(p3_total_water(st),
+                                         st.q_c + st.q_r, st.q_i), c)
+            lhs = cpm * (s1.T - st.T)
+            rhs = -MT.latent_heat_vapor(st.T, c) * (s1.q_v - st.q_v) +
+                   MT.latent_heat_fusion(st.T, c) * (s1.q_i - st.q_i)
+            @test lhs ≈ rhs rtol = 1e-10
+            @test abs(p3_total_water(s1) - p3_total_water(st)) <= 4eps() * p3_total_water(st)
+        end
+
+        # Long integrations with a large step in three regimes.
+        maxerr = 0.0
+        for (st, dt, n) in ((cold, 60.0, 120), (warm, 60.0, 120), (dry, 60.0, 120))
+            W0 = p3_total_water(st)
+            x = st
+            for _ in 1:n
+                x = p3_step(x, dt)
+                maxerr = max(maxerr, abs(p3_total_water(x) - W0) / W0)
+                @test all(>=(0), allfields(x))
+                @test x.q_rim <= x.q_i
+                x.q_rim > 0 && @test 50 - 1e-9 <= x.q_rim / x.B_rim <= 900 + 1e-9
+            end
+        end
+        @printf("    total water over 3 × 120 steps of 60 s: max rel. drift %.2e\n", maxerr)
+        @test maxerr < 1e-14
+
+        # An absurd step (1 day) still gives a non-negative, conserving state
+        # that does not overshoot saturation.
+        big = p3_step(cold, 86400.0; adjust = false)
+        @test all(>=(0), allfields(big))
+        @test abs(p3_total_water(big) - p3_total_water(cold)) <= 4eps() * p3_total_water(cold)
+        @test big.q_v >= qsati(big.T, big.p) * (1 - 1e-3)     # no deposition overshoot
+        dd = p3_step(dry, 86400.0; adjust = false)
+        @printf("    1-day step: cold q_v/q_si = %.5f, dry q_v/q_s = %.5f\n",
+                big.q_v / qsati(big.T, big.p), dd.q_v / qsat(dd.T, dd.p))
+        @test dd.q_v <= qsat(dd.T, dd.p) * (1 + 1e-3)          # no evaporation overshoot
+        @test all(>=(0), allfields(dd))
+    end
+
+    @testset "Parcel regimes" begin
+        # Glaciation (WBF + riming): a mixed-phase parcel at -10 °C loses
+        # all its liquid and relaxes to ice saturation.
+        x = cold
+        for _ in 1:120
+            x = p3_step(x, 30.0)
+        end
+        @printf("    glaciation: q_c %.2e, q_r %.2e, q_i %.3e, q_v/q_si %.5f, F_rim %.3f, ρ_rim %.1f\n",
+                x.q_c, x.q_r, x.q_i, x.q_v / qsati(x.T, x.p), x.q_rim / x.q_i,
+                x.q_rim / x.B_rim)
+        @test x.q_c == 0
+        @test x.q_r < 1e-9
+        @test x.q_v / qsati(x.T, x.p) ≈ 1 atol = 1e-3
+        @test x.T > cold.T                        # net freezing/deposition warms
+        @test x.q_rim > cold.q_rim                # rimed on the way
+
+        # Melting: all ice ends up as rain above 0 °C, cooling the air.
+        y = P3ParcelState(T = 278.15, p = 8e4, q_v = qsat(278.15, 8e4),
+                          q_i = 3e-4, N_i = 5e4, q_rim = 1e-4, B_rim = 1e-4 / 400)
+        for _ in 1:60
+            y = p3_step(y, 10.0)
+        end
+        @printf("    melting: q_i %.2e → %.2e, q_r %.3e, N_r %.3e, ΔT %.3f K\n",
+                3e-4, y.q_i, y.q_r, y.N_r, y.T - 278.15)
+        @test y.q_i == 0 && y.N_i == 0 && y.q_rim == 0
+        @test y.q_r > 2.5e-4
+        @test y.T < 278.15
+
+        # Warm rain: cloud water turns into rain monotonically
+        # (autoconversion then accretion), total water conserved.
+        z = P3ParcelState(T = 290.0, p = 9e4, q_v = qsat(290.0, 9e4),
+                          q_c = 1.5e-3, N_c = 5e7)
+        qcs, qrs = [z.q_c], [z.q_r]
+        for _ in 1:60
+            z = p3_step(z, 30.0)
+            push!(qcs, z.q_c); push!(qrs, z.q_r)
+        end
+        @printf("    warm rain: q_c %.3e → %.3e, q_r 0 → %.3e in 30 min\n",
+                qcs[1], qcs[end], qrs[end])
+        @test all(diff(qcs) .<= 1e-12) && all(diff(qrs) .>= -1e-12)
+        @test qrs[end] > 0.5e-3
+    end
 end

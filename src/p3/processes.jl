@@ -646,3 +646,150 @@ end
 
 p3_tendencies(s::P3ParcelState, pp::P3ProcessParameters = P3_DEFAULT_PROCESS) =
     p3_tendencies(s, p3_process_rates(s, pp), pp)
+
+# -------------------------------------------------------------------------
+# Full source-term step
+# -------------------------------------------------------------------------
+
+_p3_frac(avail, need) =
+    (need > 0 && need > avail) ? max(avail, zero(avail)) / need : one(avail)
+
+"""
+    p3_limit_rates(s::P3ParcelState, r, dt, pp = P3_DEFAULT_PROCESS) -> NamedTuple
+
+Scale the process rates `r` so that one forward-Euler step of length
+`dt` can neither drive a species negative nor overshoot saturation, in
+the manner of the P3 code's conservation checks:
+
+  * the sinks of each of `q_c`, `q_r`, `q_i` are scaled by a common
+    factor so their total over `dt` does not exceed what is there;
+  * deposition may not remove more vapour than brings the parcel to ice
+    saturation, and sublimation / rain evaporation no more than brings it
+    back to ice / liquid saturation, each reduced by the psychrometric
+    factor `Γ = 1 + (L/c_pm) dq_s/dT` that accounts for its own latent
+    heating shifting `q_s` during the step; the saturation values are
+    taken at the temperature after the step's riming and melting;
+  * number rates are scaled with the mass rate they belong to, and the
+    rain self-collection and ice-collection number sinks so `N_r ≥ 0`.
+
+Each process drains exactly one species, so scaling it by that species'
+factor keeps every species non-negative while the linear tendency map
+keeps water conserved exactly.
+"""
+function p3_limit_rates(s::P3ParcelState{FT}, r::NamedTuple, dt::Real,
+                        pp::P3ProcessParameters = P3_DEFAULT_PROCESS) where {FT}
+    c = pp.thermo
+    dt = FT(dt)
+    T, p = s.T, s.p
+    cpm = heat_capacity_moist(_p3_partition(s), c)
+    Rv = R_v(c)
+    Lv, Ls = latent_heat_vapor(T, c), latent_heat_sublim(T, c)
+
+    fc = _p3_frac(s.q_c, dt * (r.auto + r.accr + r.rime_c + r.shed))
+    fr = _p3_frac(s.q_r, dt * (r.evap_r + r.rime_r))
+    fi = _p3_frac(s.q_i, dt * (r.sub + r.melt))
+    # The saturation targets are taken at the temperature the step's
+    # freezing (riming) and melting will produce, so their latent heat
+    # cannot push the vapour processes past saturation.
+    Tf = T + latent_heat_fusion(T, c) * dt *
+             (fc * r.rime_c + fr * r.rime_r - fi * r.melt) / cpm
+    qs = saturation_specific_humidity(Tf, p, c)
+    qsi = saturation_specific_humidity(Tf, p, c; over = :ice)
+    Γw = 1 + Lv / cpm * qs * Lv / (Rv * Tf^2)
+    Γi = 1 + Ls / cpm * qsi * Ls / (Rv * Tf^2)
+    fev = min(fr, _p3_frac((qs - s.q_v) / Γw, dt * r.evap_r))
+    fsub = min(fi, _p3_frac((qsi - s.q_v) / Γi, dt * r.sub))
+    fdep = min(_p3_frac((s.q_v - qsi) / Γi, dt * r.dep), _p3_frac(s.q_v, dt * r.dep))
+
+    evap_r, n_evap_r = fev * r.evap_r, fev * r.n_evap_r
+    rime_r, n_rime_r = fr * r.rime_r, r.n_rime_r
+    # rain number: sinks other than evaporation limited by what is left
+    nsink = dt * (max(r.n_self_r, zero(FT)) + n_rime_r)
+    fN = _p3_frac(s.N_r - dt * n_evap_r, nsink)
+    n_self_r = r.n_self_r > 0 ? fN * r.n_self_r : r.n_self_r
+    n_rime_r = fN * n_rime_r
+
+    return (evap_r = evap_r, n_evap_r = n_evap_r,
+            dep = fdep * r.dep, sub = fsub * r.sub, n_sub = fsub * r.n_sub,
+            auto = fc * r.auto, n_auto_r = fc * r.n_auto_r, n_auto_c = fc * r.n_auto_c,
+            accr = fc * r.accr, n_accr_c = fc * r.n_accr_c,
+            n_self_r = n_self_r,
+            rime_c = fc * r.rime_c, n_rime_c = fc * r.n_rime_c, ρ_rime_c = r.ρ_rime_c,
+            rime_r = rime_r, n_rime_r = n_rime_r,
+            shed = fc * r.shed, n_shed_c = fc * r.n_shed_c, n_shed_r = fc * r.n_shed_r,
+            melt = fi * r.melt, n_melt = fi * r.n_melt)
+end
+
+# Remove species below q_small (evaporating / sublimating the residue, so
+# water and energy are conserved), clamp roundoff negatives the same way,
+# and keep number, rime and PSD consistent with the mass.
+function _p3_cleanup(s::P3ParcelState{FT}, pp::P3ProcessParameters) where {FT}
+    c = pp.thermo
+    T, qv = s.T, s.q_v
+    qc, Nc, qr, Nr = s.q_c, s.N_c, s.q_r, s.N_r
+    qi, Ni, qrim, Brim = s.q_i, s.N_i, s.q_rim, s.B_rim
+    cpm = heat_capacity_moist(_p3_partition(s), c)
+    z = zero(FT)
+    if qc < pp.q_small
+        qv += qc; T -= latent_heat_vapor(T, c) * qc / cpm
+        qc, Nc = z, z
+    end
+    if qr < pp.q_small
+        qv += qr; T -= latent_heat_vapor(T, c) * qr / cpm
+        qr, Nr = z, z
+    end
+    if qi < pp.q_small
+        qv += qi; T -= latent_heat_sublim(T, c) * qi / cpm
+        qi, Ni, qrim, Brim = z, z, z, z
+    end
+    Nc = qc > 0 ? max(Nc, z) : z
+    if qc > 0 && Nc == 0
+        Nc = pp.N_c_prescribed / air_density(T, s.p, _p3_partition(s), c)
+    end
+    if qr > 0
+        mD(D) = π / 6 * pp.micro.ρ_water * D^3
+        Nr = clamp(Nr, qr / mD(pp.D_r_max), qr / mD(pp.D_r_min))
+    end
+    if qi > 0
+        qrim = clamp(qrim, z, qi)
+        Brim = max(Brim, z)
+        _, _, Brim = p3_rime_state(qi, qrim, Brim, pp.ice)
+        md = p3_mass_dimension(qi, qrim, Brim, pp.ice)
+        λmin, λmax = _p3_ice_lambda_bounds(pp.μ_i, md.F_rim)
+        m_lo = p3_mean_mass(pp.μ_i, λmax, md)
+        m_hi = p3_mean_mass(pp.μ_i, λmin, md)
+        # P3 adjusts N_i when the mean size leaves its limiter (MM15 §2b)
+        Ni = qi / clamp(Ni > 0 ? qi / Ni : m_hi, m_lo, m_hi)
+    end
+    return P3ParcelState{FT}(T, s.p, qv, qc, Nc, qr, Nr, qi, Ni, qrim, Brim)
+end
+
+"""
+    p3_step(s::P3ParcelState, dt, pp = P3_DEFAULT_PROCESS; adjust = true) -> P3ParcelState
+
+Advance the P3 microphysical source terms (no transport, no
+sedimentation) of one cell by `dt` seconds:
+
+ 1. [`p3_process_rates`](@ref) at the start-of-step state;
+ 2. [`p3_limit_rates`](@ref) for positivity and no saturation overshoot;
+ 3. a forward-Euler update with [`p3_tendencies`](@ref);
+ 4. clean-up: species below `q_small` are evaporated/sublimated (with
+    their latent heat), rime is clamped to `0 ≤ q_rim ≤ q_i` and
+    `ρ_rim ∈ [50, 900]` via [`p3_rime_state`](@ref), `N_i` is adjusted
+    when the ice mean size leaves P3's limiter and `N_r` when the rain
+    mean-volume diameter leaves `[D_r_min, D_r_max]`;
+ 5. if `adjust`, cloud condensation/evaporation by
+    [`p3_condensation`](@ref) (`MoistThermodynamics.saturation_adjustment`).
+
+Total water `q_v + q_c + q_r + q_i` is conserved to rounding in every
+stage. Steps 1-4 conserve the enthalpy form `c_pm ΔT = -L_v Δq_v +
+L_f Δq_i` exactly for a step without clean-up; step 5 conserves the
+contract's θ_li (see [`p3_condensation`](@ref)).
+"""
+function p3_step(s::P3ParcelState{FT}, dt::Real,
+                 pp::P3ProcessParameters = P3_DEFAULT_PROCESS;
+                 adjust::Bool = true) where {FT}
+    r = p3_limit_rates(s, p3_process_rates(s, pp), dt, pp)
+    s1 = _p3_cleanup(_p3_axpy(s, dt, p3_tendencies(s, r, pp)), pp)
+    return adjust ? p3_condensation(s1, pp) : s1
+end
