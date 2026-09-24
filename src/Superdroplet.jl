@@ -1355,7 +1355,27 @@ function _implicit_r_step(r_n::Float64, h::Float64, S::Float64, A::Float64,
         # radius when there is solute, and by nothing much when there isn't
         hi = r_n
         lo = floor_r
-        f(lo) > 0 && return lo      # evaporates all the way to the floor
+        if f(lo) > 0
+            # f > 0 at BOTH ends of [floor, r_n]. That does not mean the
+            # droplet evaporates completely: without solute the Kelvin
+            # term makes f → +∞ at the floor however slight the
+            # subsaturation, so testing the floor alone sent every
+            # evaporating pure-water droplet to 1e-12 m in one step (a
+            # 10 μm droplet at S = -0.1 % over 0.5 s; found by the
+            # Phase 45 stochastic-growth tests). The physical root, if
+            # any, lies between the minimum of f and r_n: locate the
+            # minimum (f is convex in r when B = 0, and a ternary search
+            # in ln r is exact for any unimodal f) and bracket from there.
+            a, b = log(lo), log(r_n)
+            for _ in 1:100
+                m1 = a + (b - a) / 3; m2 = b - (b - a) / 3
+                f(exp(m1)) < f(exp(m2)) ? (b = m2) : (a = m1)
+                b - a < 1e-12 && break
+            end
+            r_min = exp(0.5 * (a + b))
+            f(r_min) > 0 && return lo   # no root: it really evaporates away
+            lo = r_min
+        end
     end
     r = clamp(r_n, lo, hi)
     for _ in 1:100
