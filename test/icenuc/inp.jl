@@ -338,9 +338,17 @@ end
         # and the mass moved is exactly the log-normal mass above the
         # radius that holds 3e5 particles
         m = arg_mode(dust)
-        @test inp_mass(inp; population = :consumed) <= mode_dry_mass(m)
+        # independent inversion: N(>r_c) = 3e5 ⇔ erfc(u)/2 = 0.3
+        r_c = m.r_g * exp(sqrt(2) * log(m.σ_g) * _erfc_inv_half(0.3))
+        @test number_above_radius(m, r_c) ≈ 3e5 rtol = 1e-10
+        @test inp_mass(inp; population = :consumed) ≈ mass_above_radius(m, r_c) rtol = 1e-10
         mfrac = inp_mass(inp; population = :consumed) / mode_dry_mass(m)
-        @test mfrac > 0.3            # 30 % of number carries > 30 % of mass
+        # for σ_g = 2 the largest 30 % of particles carry 0.5 erfc(u - 3lnσ/√2)
+        # = 94 % of the mass (u = erfc⁻¹(0.6) = 0.371, shift 1.470)
+        @test mfrac ≈ 0.5 * Aeolus.GasOptics.erfc_series(_erfc_inv_half(0.3) -
+                                                          3log(2.0) / sqrt(2)) rtol = 1e-10
+        @test 0.93 < mfrac < 0.95
+        @info "largest-first: mass fraction carried by 30 % of number" mfrac
 
         # probability form: p ≡ c moves exactly c of every moment
         inp = inp_population([dust])
