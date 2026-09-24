@@ -121,6 +121,39 @@ using Aeolus.RadiationFog
         @test b.T ≈ c2.T rtol = 1e-12
     end
 
+    @testset "Fog: solver lands on saturation across 200-330 K (regression)" begin
+        # Found in review by random sampling: when Newton hit g = 0 exactly,
+        # the safeguard replaced the converged root by the bracket
+        # midpoint, returning half the equilibrium condensate (this input:
+        # 1.143e-6 instead of 2.286e-6 kg/kg) or, when fog evaporated,
+        # overshooting into supersaturation (82 of 200,000 samples, mostly
+        # below 230 K where q_s ~ 1e-6).
+        Δ, Te = fog_equilibrium(204.2477594857438, 72681.13710255225,
+                                7.421642749398895e-6, 0.0)
+        @test Δ ≈ 2.28605e-6 rtol = 1e-4
+        @test abs(7.421642749398895e-6 - Δ - qsat(Te, 72681.13710255225)) < 1e-14
+        # Deterministic sweep: full adjustment always ends saturated (or
+        # with all fog evaporated), conserving enthalpy.
+        worst = 0.0; worst_h = 0.0; n_fail = 0
+        for T in 200.0:2.5:330.0, p in (3.0e4, 6.0e4, 1.0e5),
+            S in (0.3, 0.9, 1.02, 1.3), ql in (0.0, 1e-5, 3e-3)
+            qv = S * qsat(T, p)
+            r = fog_condensation(T, p, qv, ql, 1.0)
+            ex = r.qv - qsat(r.T, p)
+            if r.ql > 0
+                worst = max(worst, abs(ex) / qsat(r.T, p))
+            elseif ex > 1e-14 * qsat(r.T, p) + 1e-18
+                n_fail += 1                        # no fog left but supersaturated
+            end
+            h0 = moist_enthalpy(T, PhasePartition(qv + ql, ql, 0.0))
+            h1 = moist_enthalpy(r.T, PhasePartition(qv + ql, r.ql, 0.0))
+            worst_h = max(worst_h, abs(h1 - h0) / h0)
+        end
+        @test worst < 1e-8          # relative distance from saturation
+        @test n_fail == 0
+        @test worst_h < 1e-14
+    end
+
     @testset "Fog: agrees with the contract's saturation_adjustment" begin
         # One source of truth: fog_equilibrium is an enthalpy-based
         # saturation adjustment, the contract's `saturation_adjustment`

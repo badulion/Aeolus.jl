@@ -149,6 +149,11 @@ function fog_equilibrium(T::Real, p::Real, qv::Real, ql::Real,
     Δ = 0.5 * (lo + hi)
     for _ in 1:maxiter
         gΔ = g(Δ)
+        # Converged: keep THIS Δ. (Testing after the Newton update instead
+        # returned the bracket midpoint whenever g hit exactly 0 — the
+        # update set hi = Δ, the Newton iterate Δ then failed the strict
+        # `lo < Δn < hi` safeguard and was replaced by (lo+hi)/2.)
+        abs(gΔ) < tol && break
         gΔ > 0 ? (lo = Δ) : (hi = Δ)
         (hi - lo) < tol && break
         Tn  = Tof(Δ)
@@ -160,7 +165,6 @@ function fog_equilibrium(T::Real, p::Real, qv::Real, ql::Real,
                    Lv / heat_capacity_moist(PhasePartition(qt, ql0 + Δ, 0.0), c)
         Δn  = Δ - gΔ / dg
         Δ   = (lo < Δn < hi) ? Δn : 0.5 * (lo + hi)
-        abs(gΔ) < tol && break
     end
     return (Δ, Tof(Δ))
 end
