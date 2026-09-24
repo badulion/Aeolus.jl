@@ -187,3 +187,181 @@ exact for both the bulk state and the ensemble.
 r2_standard_deviation(m::SpectralMoments) = sqrt(max(m.V, 0.0))
 r2_standard_deviation(sd::SuperdropletSet; indices = nothing) =
     r2_standard_deviation(spectral_moments(sd; indices = indices))
+
+# =========================================================================
+# Bulk condensation with sub-grid fluctuations: the moment equations
+# =========================================================================
+#
+# Droplet i: dw_i/dt = 2G (S̄ + σ_S ξ_i − a w_i^{-1/2})   (Raoult dropped)
+#            dξ_i    = −ξ_i dt/τ + √(2/τ) dW_i           (unit OU)
+#
+# Taking ensemble moments, with ⟨ξ⟩ = 0 and ⟨ξ²⟩ = 1 (stationary):
+#
+#   dμ/dt = 2G (S̄ − a⟨w^{-1/2}⟩)
+#   dV/dt = 4G σ_S C − 4G a Cov(w, w^{-1/2})
+#   dC/dt = 2G σ_S − C/τ − 2G a Cov(w^{-1/2}, ξ)
+#
+# w carries no white noise itself (ξ is continuous), so there is no Itô
+# term. Without the Kelvin term these are exact and closed, and for an
+# initially uncorrelated population give V − V₀ = (2G)² σ_S² · 2τ[t −
+# τ(1 − e^{−t/τ})] — `supersaturation_integral_variance`, the #13 result.
+# The Kelvin terms need the shape: ⟨w^{-1/2}⟩ and Cov(w, w^{-1/2}) come
+# from the gamma closure, and Cov(w^{-1/2}, ξ) ≈ −½ μ^{-3/2} C is its
+# linearisation about μ. At S̄ = 0.2 % and r = 5 μm, a/r ≈ 0.024 % —
+# an eighth of the drive, so the terms matter for r̄ and are small
+# corrections to the width.
+#
+# The Raoult term b/r³ is dropped: for an activated droplet (r ≥ 3 μm,
+# 1e-18 kg NaCl) it is below 2e-6, three orders below S̄. This scheme is
+# for activated cloud droplets; activation itself is `sgs_activation`.
+
+export bulk_condensation_step!, parcel_ascent!
+
+# ⟨w^{-1/2}⟩ and Cov(w, w^{-1/2}) under the gamma closure. For k ≤ ½
+# (ε ≳ 0.35 in r, broader than any condensational spectrum) ⟨w^{-1/2}⟩
+# diverges for the gamma shape; fall back to the monodisperse value.
+function _kelvin_moments(m::SpectralMoments)
+    k = _shape(m)
+    sμ = sqrt(m.μ)
+    (isinf(k) || k <= 0.5) && return (1 / sμ, 0.0)
+    Rm = gamma_moment_ratio(k, -0.5)
+    Rp = gamma_moment_ratio(k, 0.5)
+    return (Rm / sμ, sμ * (Rp - Rm))
+end
+
+# (h − (1 − e^{−λh})/λ)/λ = ∫₀ʰ (1 − e^{−λs})/λ ds, stable for λh → 0
+function _ou_double_integral(λ::Float64, h::Float64)
+    x = λ * h
+    abs(x) < 1e-4 && return h^2 * (0.5 - x / 6 + x^2 / 24)
+    return (x + expm1(-x)) / λ^2
+end
+
+# Real droplets' ⟨r³⟩ × N — the liquid water of the bulk state, per 4πρ_w/3
+_volume_moment(m::SpectralMoments) = m.N * closure_radius_moment(m, 3)
+
+"""
+    bulk_condensation_step!(m, cell, dt; σ_S = 0, τ = Inf, nsub = 0,
+                            mc, c) -> (Δm, Δq_vap, ΔT)
+
+Bulk counterpart of [`sgs_condensation_step!`](@ref): advance the moment
+state `m` ([`SpectralMoments`](@ref)) of the droplets in `cell` over `dt`
+under sub-grid supersaturation fluctuations of standard deviation `σ_S`
+and Lagrangian correlation time `τ` (the `σ_S`, `τ` of a
+[`SupersaturationFluctuations`](@ref); `σ_S` is typically
+[`SubgridCloud`](@ref)`.σ_S` of issue #12), two-way coupled to the cell.
+
+The moment equations for `w = r²` under the Ornstein-Uhlenbeck
+fluctuation (Paoli & Shariff 2009; Sardina et al. 2015),
+
+```math
+\\dot μ = 2G(\\bar S - a⟨w^{-1/2}⟩),\\quad
+\\dot V = 4Gσ_S C - 4Ga\\,\\mathrm{Cov}(w, w^{-1/2}),\\quad
+\\dot C = 2Gσ_S - C/τ + Ga\\,μ^{-3/2} C,
+```
+
+are integrated with `C` exact over each sub-step (it is linear) and `S̄`,
+`T`, `p` frozen — the same operator split as the superdroplet step. `G`
+is the Phase 41 growth factor `1/(F_k + F_d)` and `a` the Phase 41
+Kelvin coefficient, so the bulk and the superdroplet scheme differ only
+in representing the spectrum by moments. Without the Kelvin term the
+equations are exact and give `supersaturation_integral_variance`.
+
+The condensed mass is `(4π/3)ρ_w N Δ⟨r³⟩` with `⟨r³⟩` from the gamma
+closure, and goes to the cell through Phase 41's
+`apply_condensate_tendency!`, so the cell's total water is conserved to
+round-off. Sub-steps: at most `0.2 τ_phase` (as `condensation_step!`)
+and, when `σ_S > 0`, `τ/10`.
+
+Limits: activated droplets only (no Raoult term, no activation or
+complete evaporation — `μ` must stay positive); the fluctuation is
+prescribed, not depleted by the droplets it drives (see the in-cloud
+caveat on the theory page).
+"""
+function bulk_condensation_step!(m::SpectralMoments, cell::EulerianCell, dt::Real;
+                                 σ_S::Real = 0.0, τ::Real = Inf, nsub::Integer = 0,
+                                 mc::MicrophysicalConstants = DEFAULT_MICRO,
+                                 c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    σ_S >= 0 || throw(ArgumentError("bulk_condensation_step!: σ_S must be ≥ 0"))
+    τ > 0 || throw(ArgumentError("bulk_condensation_step!: τ must be > 0"))
+    Δt = float(dt); σ = float(σ_S); τf = float(τ)
+    m.N > 0 || return (0.0, 0.0, 0.0)
+    ns = nsub > 0 ? Int(nsub) : _bulk_substeps(m, cell, Δt, σ, τf, mc, c)
+    h = Δt / ns
+    fac = mc.ρ_water * (4π / 3)
+    m_air = cell_air_mass(cell)
+
+    Δm_tot = 0.0; Δq_tot = 0.0; ΔT_tot = 0.0
+    M3 = _volume_moment(m)
+    for _ in 1:ns
+        Tk = cell.temperature
+        p = cell_pressure(cell, 0.0, c)
+        S̄ = cell_supersaturation(cell, c)
+        G = 1 / (fk_thermal(Tk, mc, c) + fd_vapor(Tk, p, mc, c))
+        a = kelvin_a(Tk, mc, c)
+        invsq, cov_kel = _kelvin_moments(m)
+
+        # C: linear, dC/dt = b − λC, integrated exactly; ∫C dt feeds V
+        b = 2G * σ
+        λ = (isfinite(τf) ? 1 / τf : 0.0) - G * a * m.μ^(-1.5)
+        E1 = abs(λ * h) < 1e-12 ? h : -expm1(-λ * h) / λ     # ∫₀ʰ e^{−λs} ds
+        intC = m.C * E1 + b * _ou_double_integral(λ, h)
+        m.V = max(m.V + 4G * σ * intC - 4G * a * cov_kel * h, 0.0)
+        m.C = m.C * exp(-λ * h) + b * E1
+        m.μ += 2G * h * (S̄ - a * invsq)
+        m.μ > 0 || throw(DomainError(m.μ,
+            "bulk_condensation_step!: droplets evaporated completely; " *
+            "the moment scheme covers activated droplets only"))
+
+        M3n = _volume_moment(m)
+        Δm = fac * (M3n - M3)
+        M3 = M3n
+        Δq, ΔT = apply_condensate_tendency!(cell, Δm, fac * M3 / m_air, c)
+        Δm_tot += Δm; Δq_tot += Δq; ΔT_tot += ΔT
+    end
+    return (Δm_tot, Δq_tot, ΔT_tot)
+end
+
+# Sub-step count mirroring `condensation_step!`/`sgs_condensation_step!`:
+# 1/τ_phase = 4π D_v N⟨r⟩/ΔV with h ≤ 0.2 τ_phase, and h ≤ τ/10 when
+# fluctuations are on.
+function _bulk_substeps(m::SpectralMoments, cell::EulerianCell, Δt::Float64,
+                        σ::Float64, τ::Float64,
+                        mc::MicrophysicalConstants, c::ThermodynamicConstants)
+    p = cell_pressure(cell, 0.0, c)
+    Dv = vapor_diffusivity(cell.temperature, p, mc)
+    rate = 4π * Dv * m.N * mean_radius(m) / cell.volume
+    ns_phase = rate > 0 ? clamp(ceil(Int, Δt * rate / 0.2), 1, 100_000) : 1
+    ns_ou = (σ > 0 && isfinite(τ)) ? Int(clamp(ceil(10 * Δt / τ), 1, 100_000)) : 1
+    return max(ns_phase, ns_ou)
+end
+
+"""
+    parcel_ascent!(cell, w, dt; q_liq = 0, c = DEFAULT_CONSTANTS) -> cell
+
+Lift a fixed-mass [`EulerianCell`](@ref) adiabatically by `w dt` (m):
+dry-adiabatic cooling `ΔT = −(g/c_pm) w dt`
+(`MoistThermodynamics.dry_adiabatic_lapse_rate`), hydrostatic pressure
+fall `Δp = −ρ g w dt`, and the density that follows from the gas law at
+the new `(T, p)`. The volume expands by the inverse density ratio, so the
+air mass `ρ ΔV` — the invariant denominator of the Phase 41 coupling — is
+unchanged, and so are the specific humidities.
+
+Latent heating is not here: it is added by the condensation step that
+follows (`apply_condensate_tendency!`), and the pair together is a
+saturated adiabat. Without droplets the supersaturation rises at
+`AerosolCloud.supersaturation_source(T, p) · w` (tested).
+"""
+function parcel_ascent!(cell::EulerianCell, w::Real, dt::Real;
+                        q_liq::Real = 0.0,
+                        c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    dz = float(w) * float(dt)
+    q = PhasePartition(cell.q_vap + float(q_liq), float(q_liq), 0.0)
+    p = cell_pressure(cell, q_liq, c)
+    T_new = cell.temperature - dry_adiabatic_lapse_rate(q, c) * dz
+    p_new = p - cell.density * c.grav * dz
+    ρ_new = p_new / (gas_constant_moist(q, c) * T_new)
+    cell.volume *= cell.density / ρ_new
+    cell.density = ρ_new
+    cell.temperature = T_new
+    return cell
+end

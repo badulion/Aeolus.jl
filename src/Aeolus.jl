@@ -465,6 +465,7 @@ export ccn_fraction, ccn_spectrum,                  # defined in AerosolCloud
 # the bulk state; they remain the Superdroplet / MoistThermodynamics
 # functions.
 export SpectralMoments, spectral_moments, gamma_moment_ratio,
-       closure_radius_moment, r2_standard_deviation
+       closure_radius_moment, r2_standard_deviation,
+       bulk_condensation_step!, parcel_ascent!
 
 end # module

@@ -86,4 +86,89 @@ using Aeolus
         fl.ξ .= (w .- m.μ) ./ sqrt(m.V)
         @test spectral_moments(sd; fl = fl).C ≈ sqrt(m.V) rtol = 1e-10
     end
+    @testset "parcel_ascent!: adiabatic source of supersaturation" begin
+        # Without droplets, lifting a saturated parcel must raise S at the
+        # rate of Phase 42's α(T, p) — an independent (linearised)
+        # derivation. α uses the dry-air molar mass in its pressure term,
+        # an O(0.16 q_v) ≈ 0.1-0.25 % difference: measured ratios 1.0015
+        # (283 K, 900 hPa), 1.0024 (293 K, 1000 hPa), 1.0012 (275 K, 700 hPa).
+        for (T, p) in ((283.0, 9e4), (293.0, 1e5), (275.0, 7e4))
+            qs = saturation_specific_humidity(T, p)
+            cell = cell_from_state(T, p, qs, 1.0)
+            S0 = cell_supersaturation(cell)
+            m0 = cell_air_mass(cell)
+            for _ in 1:10
+                parcel_ascent!(cell, 1.0, 0.1)
+            end
+            dSdz = cell_supersaturation(cell) - S0
+            α = Aeolus.AerosolCloud.supersaturation_source(T, p; q = PhasePartition(qs))
+            @test dSdz / α ≈ 1 atol = 3e-3
+            @test cell_air_mass(cell) ≈ m0 rtol = 1e-14      # fixed mass
+            @test cell.temperature ≈ T - 1.0 * dry_adiabatic_lapse_rate(PhasePartition(qs)) rtol = 1e-12
+        end
+    end
+
+    @testset "bulk moments: exact Ornstein-Uhlenbeck limit" begin
+        # With the Kelvin term switched off (zero surface tension) the
+        # moment equations are exact and closed: an initially monodisperse
+        # population must acquire Var(r²) = (2G)² Var∫S'dt exactly — the
+        # analytic result of issue #13 — for any τ, including frozen.
+        mc0 = Aeolus.Superdroplet.MicrophysicalConstants(σ_water0 = 0.0, dσ_dT = 0.0)
+        T, p = 283.0, 9e4
+        for τ in (0.5, 5.0, 50.0, Inf), σ in (5e-4, 2e-3)
+            # one droplet in 1e6 m³: the cell state does not move
+            cell = cell_from_state(T, p, 1.002saturation_specific_humidity(T, p), 1e6)
+            G = 1 / (Aeolus.Superdroplet.fk_thermal(T, mc0) +
+                     Aeolus.Superdroplet.fd_vapor(T, cell_pressure(cell), mc0))
+            m = SpectralMoments(1.0, 25e-12, 0.0, 0.0)
+            bulk_condensation_step!(m, cell, 60.0; σ_S = σ, τ = τ, mc = mc0)
+            @test m.V ≈ (2G)^2 * supersaturation_integral_variance(σ, τ, 60.0) rtol = 1e-9
+            # Cov(r², ξ) → 2Gσ_S τ (1 − e^{−t/τ}), σ_S t when frozen
+            @test m.C ≈ (isfinite(τ) ? 2G * σ * τ * -expm1(-60 / τ) : 2G * σ * 60) rtol = 1e-9
+        end
+        # σ_S = 0: no covariance, no variance from fluctuations
+        cell = cell_from_state(T, p, 1.002saturation_specific_humidity(T, p), 1e6)
+        m = SpectralMoments(1.0, 25e-12, 1e-24, 0.0)
+        bulk_condensation_step!(m, cell, 60.0; mc = mc0)
+        @test m.C == 0 && m.V == 1e-24
+    end
+
+    @testset "bulk step: conservation, narrowing without fluctuations" begin
+        T, p = 283.0, 9e4
+        mc = Aeolus.Superdroplet.DEFAULT_MICRO
+        ε_end = Dict{Float64,Float64}(); V_end = Dict{Float64,Float64}()
+        for σ in (0.0, 1e-3)
+            cell = cell_from_state(T, p, 1.003saturation_specific_humidity(T, p), 1.0)
+            m = SpectralMoments(1e8, 25e-12, (0.2 * 25e-12)^2, 0.0)
+            fac = mc.ρ_water * 4π / 3
+            W(m, cell) = cell.q_vap + fac * m.N * closure_radius_moment(m, 3) / cell_air_mass(cell)
+            W0 = W(m, cell)
+            ε0 = relative_dispersion(m)[2]
+            εs = Float64[]
+            for _ in 1:60
+                parcel_ascent!(cell, 0.5, 1.0)
+                bulk_condensation_step!(m, cell, 1.0; σ_S = σ, τ = 5.0)
+                push!(εs, relative_dispersion(m)[2])
+            end
+            @test abs(W(m, cell) / W0 - 1) < 1e-13
+            @test mean_radius(m) > 5e-6
+            if σ == 0
+                # dr²/dt the same for all: the r-spectrum narrows monotonically
+                @test all(diff([ε0; εs]) .< 0)
+                @test m.C == 0
+            end
+            ε_end[σ] = εs[end]; V_end[σ] = m.V
+        end
+        # same parcel, same mean growth: the fluctuations widen the spectrum,
+        # by the OU variance evaluated with G at the initial state. Measured
+        # ratio 1.025: G changes as the parcel cools and warms, and the
+        # Kelvin feedback on C (λ = 1/τ − Ga μ^{-3/2}) lengthens its memory.
+        G = 1 / (Aeolus.Superdroplet.fk_thermal(T, mc) +
+                 Aeolus.Superdroplet.fd_vapor(T, p, mc))
+        ΔV_ou = (2G)^2 * supersaturation_integral_variance(1e-3, 5.0, 60.0)
+        @printf("  bulk parcel 60 s: ε = %.4f (σ_S = 0) vs %.4f (σ_S = 0.1 %%); ΔVar(r²)/OU = %.4f\n",
+                ε_end[0.0], ε_end[1e-3], (V_end[1e-3] - V_end[0.0]) / ΔV_ou)
+        @test ε_end[1e-3] > ε_end[0.0]
+        @test (V_end[1e-3] - V_end[0.0]) / ΔV_ou ≈ 1 atol = 0.05
+    end
 end
