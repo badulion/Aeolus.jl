@@ -104,12 +104,14 @@ const VISIBILITY_WAVELENGTH = 0.55
     koschmieder_visibility(β_ext; ε = KOSCHMIEDER_THRESHOLD) -> m
 
 Koschmieder visibility `V = −ln(ε)/β_ext` for an extinction coefficient
-`β_ext` in m⁻¹. Returns `Inf` for `β_ext ≤ 0`. Pass `ε = MOR_THRESHOLD`
+`β_ext` in m⁻¹. Returns `Inf` for `β_ext ≤ 0` and `NaN` for a `NaN`
+extinction (a failed upstream calculation must not read as clear air). Pass `ε = MOR_THRESHOLD`
 for the WMO meteorological optical range, which is shorter by the factor
 `ln 20 / ln 50 = 0.766`.
 """
 function koschmieder_visibility(β_ext::Real; ε::Real = KOSCHMIEDER_THRESHOLD)
     0 < ε < 1 || error("koschmieder_visibility: need 0 < ε < 1, got $ε")
+    isnan(β_ext) && return float(β_ext)     # propagate, never report NaN as clear
     β_ext > 0 || return Inf
     return -log(float(ε)) / float(β_ext)
 end

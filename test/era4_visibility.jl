@@ -27,6 +27,8 @@ using Aeolus
                                              ε = ε) ≈ β rtol = 1e-14
         end
         @test koschmieder_visibility(0.0) == Inf
+        # review fix: NaN extinction used to come back as Inf (perfectly clear)
+        @test isnan(koschmieder_visibility(NaN))
         # contrast at the visibility distance is exactly ε
         V = koschmieder_visibility(β)
         @test exp(-β * V) ≈ KOSCHMIEDER_THRESHOLD rtol = 1e-12
