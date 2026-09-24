@@ -186,3 +186,265 @@ function pdf_condensate(pdf::DoubleGaussianSaturationPDF, s̄::Real, σ::Real)
     comps, σc = _components(pdf, s̄, σ)
     return sum(w * σc * _gauss_positive_part(μ / σc) for (w, μ) in comps)
 end
+
+# =========================================================================
+# 2. From (q_t, θ_li) fluctuations to the saturation deficit
+# =========================================================================
+#
+# Mellor (1977): linearise q_sat about the liquid-water temperature T_l,
+# the temperature the parcel would have with all condensate evaporated.
+# Condensing δq_c raises T by Γ δq_c (Γ = ∂T/∂q_c|θ_li ≈ L/c_pm) and
+# q_sat by q_s' Γ δq_c, so the condensate a sub-volume holds after
+# adjustment is
+#
+#     s = a (q_t − q_sat(T_l)),      a = 1 / (1 + Γ ∂q_s/∂T).
+#
+# A fluctuation (q_t', θ_li') moves T_l by Π θ_li' + (∂T_l/∂q_t) q_t'
+# (Π = T_l/θ_li, and the second term is the q_t-dependence of the moist
+# Exner exponent R_m/c_pm), hence
+#
+#     s' = a_q q_t' − b θ_li',
+#     a_q = a (1 − ∂q_s/∂T · ∂T_l/∂q_t),   b = a ∂q_s/∂T · Π,
+#     σ_s² = a_q² σ_qt² − 2 a_q b ⟨q_t'θ_li'⟩ + b² σ_θ².
+#
+# Only the FLUCTUATIONS are linearised. The cell-mean s̄ is anchored on
+# the exact, nonlinear saturation adjustment of the Phase 39 contract:
+# where that adjustment condenses water, s̄ is exactly its condensate;
+# where it does not, s̄ = a (q_t − q_sat(T_l)) < 0. The two branches meet
+# at s̄ = 0, and the σ → 0 limit of everything below is therefore the
+# all-or-nothing adjustment itself, not a linearisation of it.
+#
+# Saturation is taken over liquid throughout, with condensate split into
+# liquid and ice by `liquid_fraction` — the same convention as
+# `MoistThermodynamics.saturation_adjustment`, which this must agree with.
+
+export MellorCoefficients, mellor_coefficients, saturation_deficit_variance,
+       extended_condensate, SubgridCloud, subgrid_cloud
+
+"""
+    MellorCoefficients{T}
+
+Linearisation of the saturation deficit about the liquid-water
+temperature (Mellor 1977), returned by [`mellor_coefficients`](@ref):
+
+  * `a`     — thermodynamic factor `1/(1 + Γ ∂q_s/∂T)`, `Γ = dTdqc`
+  * `a_q`   — `∂s/∂q_t` (dimensionless)
+  * `b`     — `-∂s/∂θ_li` (kg kg⁻¹ K⁻¹)
+  * `T_l`   — liquid-water temperature (K)
+  * `q_sl`  — saturation specific humidity at `T_l` (kg kg⁻¹)
+  * `dqsdT` — `∂q_s/∂T` at `T_l` (kg kg⁻¹ K⁻¹)
+  * `dTdqc` — heating per unit condensate at fixed `θ_li`, `p`, `q_t`
+              (K per kg kg⁻¹); `≈ L/c_pm`
+"""
+struct MellorCoefficients{T<:AbstractFloat}
+    a::T
+    a_q::T
+    b::T
+    T_l::T
+    q_sl::T
+    dqsdT::T
+    dTdqc::T
+end
+
+"""
+    mellor_coefficients(θ_li, p, q_t, c = DEFAULT_CONSTANTS) -> MellorCoefficients
+
+Coefficients of the linearised saturation deficit
+`s' = a_q q_t' − b θ_li'` at the state `(θ_li, p, q_t)`.
+
+`∂q_s/∂T` is the exact derivative of the contract's
+`q_s = ε e_s/(p − (1−ε) e_s)` with Clausius-Clapeyron
+`de_s/dT = e_s L_v/(R_v T²)`, so it is consistent with
+[`saturation_specific_humidity`](@ref) by construction. The latent heat
+is the liquid/ice blend `λ L_v + (1−λ) L_s` with `λ =`
+[`liquid_fraction`](@ref)`(T_l)`, matching the partition used by
+[`saturation_adjustment`](@ref).
+
+Reference: Mellor (1977); Sommeria & Deardorff (1977), eq. (7)-(10).
+"""
+function mellor_coefficients(θ_li::Real, p::Real, q_t::Real,
+                             c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    qt = max(0.0, float(q_t))
+    pp = float(p)
+    q0 = PhasePartition(qt)
+    T_l = temperature_from_theta_li(θ_li, pp, q0, c)
+    es = saturation_vapor_pressure(T_l, c)
+    q_sl = saturation_specific_humidity(T_l, pp, c)
+    ε = molmass_ratio(c)
+    Lv = latent_heat_vapor(T_l, c)
+    # Past the boiling point q_sat is pinned at 1 and does not vary.
+    dqsdT = (es >= pp || q_sl >= 1) ? 0.0 :
+            q_sl * pp / (pp - (1 - ε) * es) * Lv / (R_v(c) * T_l^2)
+    λ = liquid_fraction(T_l, c)
+    L = λ * Lv + (1 - λ) * latent_heat_sublim(T_l, c)
+    cpm = heat_capacity_moist(q0, c)
+    Rm = gas_constant_moist(q0, c)
+    lnp = log(pp / c.p_ref)
+    # Heating per unit condensate at fixed (θ_li, p, q_t), differentiated
+    # from the contract's own θ_li = T/Π(q) · exp(-(L_v q_l + L_s q_i)/(c_pm T))
+    # at q_c = 0: the familiar L/c_pm plus the change of the moist Exner
+    # exponent κ = R_m/c_pm as vapour becomes condensate (≈ +1.5 % at
+    # 900 hPa). Using bare L/c_pm here leaves a ~1 % mismatch with
+    # `saturation_adjustment` that does not vanish as σ → 0.
+    dRm_c = -R_v(c)                                            # ∂R_m/∂q_c
+    dcp_c = λ * c.cp_liquid + (1 - λ) * c.cp_ice - c.cp_vapor  # ∂c_pm/∂q_c
+    dκ_c = (dRm_c * cpm - Rm * dcp_c) / cpm^2
+    dTdqc = L / cpm + T_l * lnp * dκ_c
+    a = 1 / (1 + dTdqc * dqsdT)
+    # T_l = θ_li Π(p, q_t): ∂T_l/∂θ_li = Π, and ∂T_l/∂q_t through the
+    # vapour dependence of κ.
+    Π = T_l / float(θ_li)
+    dRm_t = R_v(c) - c.gas_constant / c.molmass_dry            # ∂R_m/∂q_t
+    dcp_t = c.cp_vapor - c.cp_dry                              # ∂c_pm/∂q_t
+    dκ_t = (dRm_t * cpm - Rm * dcp_t) / cpm^2
+    dTl_dqt = T_l * lnp * dκ_t
+    a_q = a * (1 - dqsdT * dTl_dqt)
+    b = a * dqsdT * Π
+    return MellorCoefficients(a, a_q, b, T_l, q_sl, dqsdT, dTdqc)
+end
+
+"""
+    saturation_deficit_variance(m::MellorCoefficients, var_qt, var_θ = 0, cov_qθ = 0) -> σ_s²
+
+Variance of the saturation deficit from the sub-grid (co)variances of
+total water `var_qt` (kg² kg⁻²), liquid-ice potential temperature
+`var_θ` (K²) and their covariance `cov_qθ` (kg kg⁻¹ K):
+
+```math
+\\sigma_s^2 = a_q^2\\,\\overline{q_t'^2} - 2 a_q b\\,\\overline{q_t'\\theta_{li}'}
+            + b^2\\,\\overline{\\theta_{li}'^2}.
+```
+
+Positively correlated `q_t` and `θ_li` fluctuations (moist and warm
+together, typical of surface-driven thermals) *reduce* `σ_s`, because
+the warm anomaly raises the saturation humidity the moist anomaly would
+otherwise exceed. Throws if the inputs violate Cauchy-Schwarz.
+"""
+function saturation_deficit_variance(m::MellorCoefficients, var_qt::Real,
+                                     var_θ::Real = 0.0, cov_qθ::Real = 0.0)
+    (var_qt < 0 || var_θ < 0) && throw(ArgumentError(
+        "saturation_deficit_variance: variances must be ≥ 0"))
+    cov_qθ^2 > var_qt * var_θ * (1 + 1e-12) &&
+        throw(ArgumentError("saturation_deficit_variance: |cov| exceeds " *
+                            "√(var_qt var_θ) (Cauchy-Schwarz)"))
+    v = m.a_q^2 * var_qt - 2 * m.a_q * m.b * cov_qθ + m.b^2 * var_θ
+    return max(v, 0.0)
+end
+
+"""
+    extended_condensate(θ_li, p, q_t, c = DEFAULT_CONSTANTS) -> (s̄, T, q::PhasePartition)
+
+Cell-mean extended condensate `s̄` together with the all-or-nothing
+[`saturation_adjustment`](@ref) of the mean state it is anchored on.
+`s̄ > 0` is exactly that adjustment's condensate; `s̄ ≤ 0` is the
+Mellor-scaled deficit `a (q_t − q_sat(T_l))`.
+"""
+function extended_condensate(θ_li::Real, p::Real, q_t::Real,
+                             c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    T, q = saturation_adjustment(θ_li, p, q_t, c)
+    qc = q.liq + q.ice
+    if qc > 0
+        return qc, T, q
+    end
+    m = mellor_coefficients(θ_li, p, q_t, c)
+    return min(m.a * (max(0.0, float(q_t)) - m.q_sl), 0.0), T, q
+end
+
+"""
+    SubgridCloud{T}
+
+Partial-cloudiness diagnosis of one grid cell, returned by
+[`subgrid_cloud`](@ref):
+
+  * `cloud_fraction` — `P(s > 0)`, in `[0, 1]`
+  * `condensate`     — cell-mean condensate `q̄_c` (kg kg⁻¹)
+  * `q`              — cell-mean `PhasePartition` (total water unchanged)
+  * `T`              — cell-mean temperature consistent with `θ_li` and `q`
+  * `s̄`, `σ_s`       — mean and standard deviation of the deficit
+  * `Q`              — normalised saturation excess `s̄/σ_s` (±Inf if `σ_s = 0`)
+  * `σ_S`            — standard deviation of the sub-grid *relative
+                       supersaturation* `S = q_v/q_sat − 1` in the clear
+                       part, `σ_s/(a q_sl)` (dimensionless)
+  * `coefficients`   — the [`MellorCoefficients`](@ref) used
+"""
+struct SubgridCloud{T<:AbstractFloat}
+    cloud_fraction::T
+    condensate::T
+    q::PhasePartition{T}
+    T::T
+    s̄::T
+    σ_s::T
+    Q::T
+    σ_S::T
+    coefficients::MellorCoefficients{T}
+end
+
+"""
+    subgrid_cloud(θ_li, p, q_t; var_qt = 0, var_θ = 0, cov_qθ = 0,
+                  σ_s = nothing, pdf = GaussianSaturationPDF(),
+                  c = DEFAULT_CONSTANTS) -> SubgridCloud
+
+Sub-grid cloud fraction and mean condensate of a cell with mean state
+`(θ_li, p, q_t)` and sub-grid (co)variances of `q_t` and `θ_li`. Pass
+`σ_s` directly to bypass the (co)variance mapping.
+
+The deficit distribution has mean [`extended_condensate`](@ref) and
+standard deviation [`saturation_deficit_variance`](@ref)`^{1/2}`; the
+cloud fraction and condensate are [`pdf_cloud_fraction`](@ref) and
+[`pdf_condensate`](@ref) of `pdf`. The condensate is split between
+liquid and ice by [`liquid_fraction`](@ref) at the resulting mean
+temperature, and that temperature is recovered from `θ_li` by
+[`temperature_from_theta_li`](@ref), so `θ_li` and `q_t` — the two
+conserved variables — are left exactly as they were.
+
+With `σ_s = 0` the result **is** the all-or-nothing
+[`saturation_adjustment`](@ref) (same temperature and partition, cloud
+fraction 0 or 1).
+
+Mean condensate is capped at `q_t`: a Gaussian tail can otherwise ask
+for more water than the cell contains when `σ_s ≳ q_t`, which is outside
+the model's validity anyway.
+
+References: Sommeria & Deardorff (1977); Mellor (1977); Bechtold et al.
+(1995); Chaboureau & Bechtold (2002).
+"""
+function subgrid_cloud(θ_li::Real, p::Real, q_t::Real;
+                       var_qt::Real = 0.0, var_θ::Real = 0.0, cov_qθ::Real = 0.0,
+                       σ_s::Union{Nothing,Real} = nothing,
+                       pdf::AbstractSaturationPDF = GaussianSaturationPDF(),
+                       c::ThermodynamicConstants = DEFAULT_CONSTANTS,
+                       tol::Real = 1e-10)
+    qt = max(0.0, float(q_t))
+    pp = float(p)
+    m = mellor_coefficients(θ_li, pp, qt, c)
+    σ = σ_s === nothing ? sqrt(saturation_deficit_variance(m, var_qt, var_θ, cov_qθ)) :
+                          float(σ_s)
+    σ < 0 && throw(ArgumentError("subgrid_cloud: σ_s must be ≥ 0"))
+    s̄, T_adj, q_adj = extended_condensate(θ_li, pp, qt, c)
+    σ_S = m.q_sl > 0 ? σ / (m.a * m.q_sl) : 0.0
+
+    if σ == 0
+        # All-or-nothing: return the contract's adjustment untouched.
+        C = s̄ > 0 ? 1.0 : 0.0
+        Q = s̄ > 0 ? Inf : -Inf
+        return SubgridCloud(C, q_adj.liq + q_adj.ice, q_adj, T_adj, s̄, σ, Q,
+                            σ_S, m)
+    end
+
+    C = pdf_cloud_fraction(pdf, s̄, σ)
+    qc = min(pdf_condensate(pdf, s̄, σ), qt)
+
+    # Mean temperature: invert θ_li at the new partition. λ(T) couples the
+    # split to T, so iterate; λ is smooth and this converges in a few
+    # passes (one pass above freezing, where λ ≡ 1).
+    T = T_adj
+    q = phase_partition(T, qt, qc, c)
+    for _ in 1:20
+        Tn = temperature_from_theta_li(θ_li, pp, q, c; tol = tol)
+        q = phase_partition(Tn, qt, qc, c)
+        done = abs(Tn - T) < 10 * tol
+        T = Tn
+        done && break
+    end
+    return SubgridCloud(C, qc, q, T, s̄, σ, s̄ / σ, σ_S, m)
+end

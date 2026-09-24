@@ -444,6 +444,8 @@ export AMMONIUM_SULFATE, AerosolProperties, CollisionKernel,
 export AbstractSaturationPDF, GaussianSaturationPDF,
        DoubleGaussianSaturationPDF,
        saturation_pdf_density, exceedance_fraction,
-       pdf_cloud_fraction, pdf_condensate
+       pdf_cloud_fraction, pdf_condensate,
+       MellorCoefficients, mellor_coefficients, saturation_deficit_variance,
+       extended_condensate, SubgridCloud, subgrid_cloud
 
 end # module
