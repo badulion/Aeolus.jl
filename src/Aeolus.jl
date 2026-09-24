@@ -453,5 +453,9 @@ export P3IceParameters, P3_DEFAULT_ICE, P3MassDimension,
        p3_mean_mass, p3_ice_mass, p3_bulk_density,
        p3_slope, p3_size_distribution,
        p3_air_viscosity, p3_fall_speed, p3_bulk_fall_speed
+# P3 sedimentation (per-moment fall speeds, sub-stepped column) and radar
+# reflectivity; `p3_` prefixed next to Superdroplet's `terminal_velocity`.
+export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
+       p3_rain_bulk_fall_speed, p3_rain_rate, p3_bulk_fall_speed_z
 
 end # module

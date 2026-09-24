@@ -64,4 +64,10 @@ export P3IceParameters, P3_DEFAULT_ICE, P3MassDimension,
 
 include("p3/massdim.jl")
 
+# --- sedimentation.jl -----------------------------------------------------
+export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
+       p3_rain_bulk_fall_speed, p3_rain_rate, p3_bulk_fall_speed_z
+
+include("p3/sedimentation.jl")
+
 end # module
