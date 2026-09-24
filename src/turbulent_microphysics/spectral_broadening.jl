@@ -329,19 +329,15 @@ function bulk_condensation_step!(m::SpectralMoments, cell::EulerianCell, dt::Rea
     return (Δm_tot, Δq_tot, ΔT_tot)
 end
 
-# Sub-step count mirroring `condensation_step!`/`sgs_condensation_step!`:
-# 1/τ_phase = 4π D_v N⟨r⟩/ΔV with h ≤ 0.2 τ_phase, and h ≤ τ/10 when
-# fluctuations are on.
-function _bulk_substeps(m::SpectralMoments, cell::EulerianCell, Δt::Float64,
-                        σ::Float64, τ::Float64,
-                        mc::MicrophysicalConstants, c::ThermodynamicConstants)
-    p = cell_pressure(cell, 0.0, c)
-    Dv = vapor_diffusivity(cell.temperature, p, mc)
-    rate = 4π * Dv * m.N * mean_radius(m) / cell.volume
-    ns_phase = rate > 0 ? clamp(ceil(Int, Δt * rate / 0.2), 1, 100_000) : 1
-    ns_ou = (σ > 0 && isfinite(τ)) ? Int(clamp(ceil(10 * Δt / τ), 1, 100_000)) : 1
-    return max(ns_phase, ns_ou)
-end
+# Sub-step count: Phase 41's τ_phase rule (h ≤ 0.2 τ_phase, from the
+# droplet-radius sum N⟨r⟩) and, when fluctuations are on, issue #13's
+# h ≤ τ/10 — the same two helpers the superdroplet steps call, so the
+# bulk and the reference cannot drift apart in their sub-stepping.
+_bulk_substeps(m::SpectralMoments, cell::EulerianCell, Δt::Float64,
+               σ::Float64, τ::Float64,
+               mc::MicrophysicalConstants, c::ThermodynamicConstants) =
+    max(_phase_substeps(m.N * mean_radius(m), cell, Δt, mc, c),
+        _ou_substeps(σ, τ, Δt))
 
 """
     parcel_ascent!(cell, w, dt; q_liq = 0, c = DEFAULT_CONSTANTS) -> cell

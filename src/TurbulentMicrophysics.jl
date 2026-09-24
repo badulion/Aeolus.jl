@@ -91,7 +91,7 @@ using ..Superdroplet: SuperdropletSet, nsuperdroplets, condensation_growth!,
                       cell_air_mass, total_water_mass,
                       apply_condensate_tendency!, MicrophysicalConstants,
                       DEFAULT_MICRO, _phase_substeps,
-                      fk_thermal, fd_vapor, kelvin_a, vapor_diffusivity,
+                      fk_thermal, fd_vapor, kelvin_a,
                       init_monodisperse_superdroplets, cell_from_state
 # issue #14 extends the Phase 41 spectral diagnostics to the bulk state
 import ..Superdroplet: mean_radius, relative_dispersion
