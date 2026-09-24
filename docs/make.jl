@@ -29,6 +29,7 @@ makedocs(
             "Smagorinsky-Lilly SGS"       => "theory/sgs.md",
             "Discrete Poisson & FFT"      => "theory/poisson.md",
             "Radiative transfer"          => "theory/radiation.md",
+            "Sub-grid cloud PDF"          => "theory/subgrid_cloud.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -48,6 +49,7 @@ makedocs(
             "Physics modules"      => "api/physics.md",
             "Era II — numerics"    => "api/era2.md",
             "Era III — radiation"  => "api/era3.md",
+            "Era IV — microphysics" => "api/era4.md",
         ],
         "Examples" => [
             "Scalar advection 2D"           => "examples/scalar_advection.md",

@@ -20,7 +20,7 @@ under `src/turbulent_microphysics/`:
     fraction and mean condensate that follow from it.
 
 All thermodynamics is delegated to the Phase 39 contract
-([`MoistThermodynamics`](@ref)); the error function is `GasOptics`'. The
+(`MoistThermodynamics`); the error function is `GasOptics`'. The
 module holds no second copy of either.
 
 REFERENCES

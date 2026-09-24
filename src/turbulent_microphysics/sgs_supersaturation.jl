@@ -255,10 +255,10 @@ Coefficients of the linearised saturation deficit
 `∂q_s/∂T` is the exact derivative of the contract's
 `q_s = ε e_s/(p − (1−ε) e_s)` with Clausius-Clapeyron
 `de_s/dT = e_s L_v/(R_v T²)`, so it is consistent with
-[`saturation_specific_humidity`](@ref) by construction. The latent heat
+`saturation_specific_humidity` by construction. The latent heat
 is the liquid/ice blend `λ L_v + (1−λ) L_s` with `λ =`
-[`liquid_fraction`](@ref)`(T_l)`, matching the partition used by
-[`saturation_adjustment`](@ref).
+`liquid_fraction``(T_l)`, matching the partition used by
+`saturation_adjustment`.
 
 Reference: Mellor (1977); Sommeria & Deardorff (1977), eq. (7)-(10).
 """
@@ -335,7 +335,7 @@ end
     extended_condensate(θ_li, p, q_t, c = DEFAULT_CONSTANTS) -> (s̄, T, q::PhasePartition)
 
 Cell-mean extended condensate `s̄` together with the all-or-nothing
-[`saturation_adjustment`](@ref) of the mean state it is anchored on.
+`saturation_adjustment` of the mean state it is anchored on.
 `s̄ > 0` is exactly that adjustment's condensate; `s̄ ≤ 0` is the
 Mellor-scaled deficit `a (q_t − q_sat(T_l))`.
 """
@@ -392,13 +392,13 @@ The deficit distribution has mean [`extended_condensate`](@ref) and
 standard deviation [`saturation_deficit_variance`](@ref)`^{1/2}`; the
 cloud fraction and condensate are [`pdf_cloud_fraction`](@ref) and
 [`pdf_condensate`](@ref) of `pdf`. The condensate is split between
-liquid and ice by [`liquid_fraction`](@ref) at the resulting mean
+liquid and ice by `liquid_fraction` at the resulting mean
 temperature, and that temperature is recovered from `θ_li` by
-[`temperature_from_theta_li`](@ref), so `θ_li` and `q_t` — the two
+`temperature_from_theta_li`, so `θ_li` and `q_t` — the two
 conserved variables — are left exactly as they were.
 
 With `σ_s = 0` the result **is** the all-or-nothing
-[`saturation_adjustment`](@ref) (same temperature and partition, cloud
+`saturation_adjustment` (same temperature and partition, cloud
 fraction 0 or 1).
 
 Mean condensate is capped at `q_t`: a Gaussian tail can otherwise ask
@@ -593,7 +593,7 @@ variables, and this is a diagnosis of how the water they describe is
 distributed, not a tendency.
 
 With `νt` identically zero (SGS closure off) every cell has `σ_s = 0`
-and the result is the all-or-nothing [`saturation_adjustment`](@ref).
+and the result is the all-or-nothing `saturation_adjustment`.
 """
 function subgrid_cloud!(cf::Field, qc::Field, θ_li::Field, q_t::Field, p;
                         νt::Union{Nothing,Field} = nothing,
