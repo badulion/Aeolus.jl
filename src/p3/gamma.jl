@@ -167,10 +167,26 @@ Regularised lower and upper incomplete gamma functions
 
 for `a > 0`, `x ≥ 0` (`x = Inf` allowed).
 
-Whichever of `P`, `Q` is the smaller is computed directly — by the power
-series for `x < a + 1` (it gives `P`) and by the Lentz-evaluated
-continued fraction otherwise (it gives `Q`) — and the other as its
-complement, so neither tail loses relative accuracy to cancellation.
+`P` is computed directly by the power series for `x < a + 1`, and `Q`
+by the Lentz-evaluated continued fraction otherwise. The other value is
+the complement. The tail that can become very small (`P` for `x ≪ a`,
+`Q` for `x ≫ a`) is therefore always computed directly and keeps its
+relative accuracy. Measured against MPFR for `1 ≤ a ≤ 100`, the smaller
+tail's error is at most 1.0e-13 relative (at `a = 40`, `x = 1e-4`, where
+`P ≈ 1e-208` and the `a log x` term in the prefactor dominates).
+
+Limitation for `a < 1`. For `x < 1`, `Q(a,x)` is of order `a` and is
+formed as `1 - P`, so its relative error grows like `eps/Q`:
+
+| `a` | `Q(a, 0.99)` relative error |
+|:--|:--|
+| 0.1 | 4.7e-15 |
+| 1e-3 | 1.8e-12 |
+| 1e-6 | 4.2e-9 |
+
+P3 only needs `a = μ + k + 1 ≥ 1`, so this range is never reached there.
+For large `a` the error in the `x^a e^{-x}/Γ(a)` prefactor grows too,
+to about 2e-13 at `a = 500` and 2e-11 at `a = 10⁴`, both near `x = a`.
 
 `P(a,x)` is the CDF of a Gamma(a,1) variate; for a gamma size
 distribution `N(D) ∝ D^μ e^{-λD}` the fraction of the `k`-th moment
@@ -228,7 +244,8 @@ Number density of the complete gamma particle size distribution,
 
     N(D) = N₀ D^μ exp(-λD),
 
-per unit diameter (m⁻⁴ for `N₀` in m⁻³⁻μ when `N` is per m³ of air).
+per unit diameter: m⁻⁴ when `N` is per m³ of air, so `N₀` is in
+m⁻⁴⁻μ. P3 carries number per kg of air, which gives kg⁻¹ m⁻¹⁻μ.
 `D` diameter [m], `μ` shape parameter (dimensionless, `μ > -1`), `λ`
 slope [m⁻¹].
 

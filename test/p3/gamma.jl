@@ -6,9 +6,11 @@
 # integer a, erf for a = 1/2 from GasOptics), Legendre's duplication
 # formula, and direct numerical quadrature of the size distribution.
 
-relerr(x, ref) = abs(x - ref) / abs(ref)
-
 @testset "Gamma functions and PSD moments" begin
+    # Local to this testset. All test/p3/*.jl files are included into the
+    # same module, so a top-level helper here would be silently redefined
+    # by a same-named helper in a later part-file.
+    relerr(x, ref) = abs(x - ref) / abs(ref)
 
     @testset "Γ at known values" begin
         known = [(1.0, 1.0), (0.5, sqrt(π)), (5.0, 24.0), (1.5, sqrt(π) / 2),
