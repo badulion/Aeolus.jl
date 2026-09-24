@@ -891,4 +891,5 @@ end
         include("era4_activation.jl")      # Phase 42  aerosol-cloud interaction
         include("era4_superdroplet.jl")    # Phase 41  superdroplet microphysics
         include("era4_fog.jl")             # Phase 44  fog / dew coupling (#11)
+        include("era4_radiation_fog.jl")   # Phase 44  radiation fog feedback (#9)
 end

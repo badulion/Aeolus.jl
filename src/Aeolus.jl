@@ -442,5 +442,11 @@ export AMMONIUM_SULFATE, AerosolProperties, CollisionKernel,
 # Phase 44 — fog / dew condensation coupled to the vapour field
 export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
        dew_deposition, dew_exchange!
+# Phase 44 (#9) — droplet-radiative feedback: fog droplets in the Era III
+# radiation (delegated to GasOptics/TwoStream/RadiationCore)
+export fog_effective_radius, FogRadiation, fog_radiation,
+       fog_atmospheric_column, fog_radiative_transfer!,
+       fog_radiative_heating!, fog_top_flux_jump,
+       radiative_condensation_rate
 
 end # module

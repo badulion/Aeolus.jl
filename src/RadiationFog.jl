@@ -70,8 +70,29 @@ using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
                              heat_capacity_moist, latent_heat_vapor,
                              saturation_specific_humidity, exner_function
 
+# Era III radiation and Era IV droplet physics the fog column delegates to
+# (issue #9): no optics or transfer is computed in this module.
+using ..RadiationCore: SpectralGrid, OpticalProperties, RadiativeFluxes,
+                       AtmosphericColumn, longwave_bands, shortwave_bands,
+                       allocate_optics, allocate_fluxes, zero_fluxes!,
+                       combine_optics!, flux_divergence!, compute_optics!,
+                       STEFAN_BOLTZMANN
+using ..GasOptics: correlated_k_optics, us_standard_column
+using ..TwoStream: mie_cloud_optics, two_stream_solver, solve_lw!, solve_sw!
+using ..AerosolCloud: droplet_effective_radius
+using ..Superdroplet: terminal_velocity
+using ..SolarGeometry: solar_time, solar_position, earth_sun_distance_factor
+using ..MoistThermodynamics: saturation_vapor_pressure,
+                             density_potential_temperature,
+                             virtual_potential_temperature, air_density
+
 export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
        dew_deposition, dew_exchange!
+# Phase 44 (#9) — droplet-radiative feedback and the 1-D radiation-fog column
+export fog_effective_radius, FogRadiation, fog_radiation,
+       fog_atmospheric_column, fog_radiative_transfer!,
+       fog_radiative_heating!, fog_top_flux_jump,
+       radiative_condensation_rate
 
 # =========================================================================
 # Helpers
@@ -326,5 +347,7 @@ function dew_exchange!(qv::AbstractArray{<:Real}, q_dew::AbstractMatrix,
     end
     return H
 end
+
+include("radiation_fog/coupling.jl")
 
 end # module
