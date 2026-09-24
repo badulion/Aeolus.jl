@@ -168,6 +168,7 @@ end
             T_adj, q_adj = saturation_adjustment(θ, pr, qt)
             r = subgrid_cloud(θ, pr, qt)                 # all variances zero
             @test r.σ_s == 0
+            @test r.s̄ == extended_condensate(θ, pr, qt)[1]
             @test r.T == T_adj
             @test r.q == q_adj
             @test r.condensate == q_adj.liq + q_adj.ice

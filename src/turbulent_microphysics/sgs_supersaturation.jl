@@ -356,12 +356,13 @@ function extended_condensate(θ_li::Real, p::Real, q_t::Real,
                              c::ThermodynamicConstants = DEFAULT_CONSTANTS)
     T, q = saturation_adjustment(θ_li, p, q_t, c)
     qc = q.liq + q.ice
-    if qc > 0
-        return qc, T, q
-    end
-    m = mellor_coefficients(θ_li, p, q_t, c)
-    return min(m.a * (max(0.0, float(q_t)) - m.q_sl), 0.0), T, q
+    qc > 0 && return qc, T, q
+    return _clear_deficit(mellor_coefficients(θ_li, p, q_t, c), q_t), T, q
 end
+
+# s̄ on the clear side of the boundary, a (q_t − q_sat(T_l)) ≤ 0.
+_clear_deficit(m::MellorCoefficients, q_t) =
+    min(m.a * (max(0.0, float(q_t)) - m.q_sl), 0.0)
 
 """
     SubgridCloud{T}
@@ -433,7 +434,10 @@ function subgrid_cloud(θ_li::Real, p::Real, q_t::Real;
     σ = σ_s === nothing ? sqrt(saturation_deficit_variance(m, var_qt, var_θ, cov_qθ)) :
                           float(σ_s)
     σ < 0 && throw(ArgumentError("subgrid_cloud: σ_s must be ≥ 0"))
-    s̄, T_adj, q_adj = extended_condensate(θ_li, pp, qt, c)
+    # = extended_condensate(θ_li, pp, qt, c), reusing `m` on the clear side
+    T_adj, q_adj = saturation_adjustment(θ_li, pp, qt, c)
+    qc_adj = q_adj.liq + q_adj.ice
+    s̄ = qc_adj > 0 ? qc_adj : _clear_deficit(m, qt)
     σ_S = m.q_sl > 0 ? σ / (m.a * m.q_sl) : 0.0
 
     if σ == 0
