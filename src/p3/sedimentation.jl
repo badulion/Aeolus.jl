@@ -21,7 +21,7 @@
 # top, as in `Microphysics.apply_kessler_step!`. Velocities are fall
 # speeds, positive downward.
 
-using ..Superdroplet: terminal_velocity, DEFAULT_MICRO
+using ..Superdroplet: terminal_velocity, DEFAULT_MICRO, _VTERM_REGIME_D
 
 # -------------------------------------------------------------------------
 # Constants
@@ -48,8 +48,9 @@ const P3_K2_ICE = 0.176
 # Reference air density of Superdroplet.terminal_velocity (sea level).
 _p3_rain_ρ_ref() = DEFAULT_MICRO.ρ_air
 
-# Rain velocity has kinks where Superdroplet's drag regimes meet.
-const _P3_RAIN_BREAKS = (19.5e-6, 1.07e-3, 1.4e-3)
+# Rain velocity has kinks where Superdroplet's drag regimes meet; the
+# diameters are Superdroplet's own, so the two cannot drift apart.
+const _P3_RAIN_BREAKS = _VTERM_REGIME_D
 
 # -------------------------------------------------------------------------
 # Rain: fall speed and size distribution
