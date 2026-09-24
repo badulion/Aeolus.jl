@@ -44,6 +44,15 @@ REFERENCES
 module P3Microphysics
 
 using ..MoistThermodynamics: air_density, DEFAULT_CONSTANTS
+using ..MoistThermodynamics: ThermodynamicConstants, PhasePartition, R_v,
+    latent_heat_vapor, latent_heat_sublim, latent_heat_fusion,
+    saturation_vapor_pressure, saturation_vapor_pressure_ice,
+    saturation_specific_humidity, saturation_adjustment,
+    liquid_ice_potential_temperature, heat_capacity_moist
+using ..Superdroplet: MicrophysicalConstants, DEFAULT_MICRO,
+    vapor_diffusivity, thermal_conductivity, fk_thermal, fd_vapor,
+    terminal_velocity
+using ..AerosolCloud: autoconversion_rate
 using ..RadiationCore: _gauss_legendre
 
 # --- gamma.jl -------------------------------------------------------------
@@ -63,5 +72,14 @@ export P3IceParameters, P3_DEFAULT_ICE, P3MassDimension,
        p3_air_viscosity, p3_fall_speed, p3_bulk_fall_speed
 
 include("p3/massdim.jl")
+
+# --- processes.jl ---------------------------------------------------------
+export P3ProcessParameters, P3_DEFAULT_PROCESS, P3ParcelState,
+       p3_total_water,
+       p3_autoconversion, p3_accretion, p3_rain_self_collection,
+       p3_cober_list_density, p3_rime_density,
+       p3_condensation
+
+include("p3/processes.jl")
 
 end # module
