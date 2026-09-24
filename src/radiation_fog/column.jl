@@ -682,6 +682,7 @@ call):
   * `fog_top` (m; highest interface of a fog layer, 0 if none),
     `fog_base`, `lwp` (g m⁻²), `fog_obs` (fog at `z_obs`)
   * `T_obs`, `Ts` (K), `lw_net_sfc`, `sw_abs_sfc`, `lw_dn_sfc` (W m⁻²)
+  * `lw_net_top` — net LW flux at the fog top (W m⁻², `NaN` without fog)
   * `lw_fog` — longwave net-flux convergence of the fog layer (W m⁻²,
     negative = cooling), `lw_top_cooling` — the strongest LW cooling rate
     in the fog (K day⁻¹, `Q/(ρ c_pd)`)
@@ -694,9 +695,10 @@ function fog_diagnostics(col::FogColumn;
     fog = [col.ρ[k] * col.ql[k] >= s.lwc_fog for k in 1:nz]
     kt = findlast(fog); kb = findfirst(fog)
     kobs = clamp(searchsortedlast(col.zf, s.z_obs), 1, nz)
-    lw_fog = 0.0; cool = 0.0; CLW = 0.0; ESW = 0.0
+    lw_fog = 0.0; cool = 0.0; CLW = 0.0; ESW = 0.0; lw_top = NaN
     if kt !== nothing
         lw_fog, _ = fog_top_flux_jump(col.rad, kb, kt)
+        lw_top = col.rad.flux_lw.flux_net[kt + 1]
         for k in kb:kt
             fog[k] || continue
             cool = min(cool, col.Q_lw[k] / (col.ρ[k] * c.cp_dry) * 86400)
@@ -712,7 +714,7 @@ function fog_diagnostics(col::FogColumn;
             T_obs = col.T[kobs], Ts = col.Ts,
             lw_net_sfc = col.rad.flux_lw.flux_net[1],
             lw_dn_sfc = col.rad.flux_lw.flux_dn[1],
-            sw_abs_sfc = col.sw_abs_sfc, lw_fog = lw_fog,
+            sw_abs_sfc = col.sw_abs_sfc, lw_fog = lw_fog, lw_net_top = lw_top,
             lw_top_cooling = cool, C_LW = CLW * 1000 * 3600,
             E_SW = ESW * 1000 * 3600, w_sfc = col.w_sfc)
 end
