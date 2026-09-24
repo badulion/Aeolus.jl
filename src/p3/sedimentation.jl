@@ -287,3 +287,220 @@ Logarithmic reflectivity `10 log₁₀(Z / 1 mm⁶ m⁻³)`. `Z` below `Z_min`
 cell has a finite, clearly non-meteorological value.
 """
 p3_dbz(Z::Real; Z_min::Real = 1e-10) = 10 * log10(max(float(Z), Z_min))
+
+# -------------------------------------------------------------------------
+# Column sedimentation
+# -------------------------------------------------------------------------
+
+"""
+    p3_sediment!(fields, velocities, ρ, dz, dt; courant_max = 1) -> (surface, nsub)
+
+Sediment the columns in the tuple `fields` (vectors of specific
+quantities per kg of air, e.g. `q_r`, `N_r`) over time `dt` (s) with
+first-order upwind, flux-form finite volumes, sub-stepping so that the
+Courant number never exceeds `courant_max ≤ 1`.
+
+`velocities(fields)` must return a tuple, one vector per field, of fall
+speeds (m s⁻¹, ≥ 0, positive downward) at cell centres; it is called
+again at every sub-step, so the speeds follow the evolving PSD (as in
+the P3 reference code). `ρ` is air density (kg m⁻³) and `dz` layer
+thickness (m, scalar or vector); cell `k = 1` is at the surface.
+
+For each field `ψ` the update over a sub-step `h` is
+
+    ρ_k ψ_k Δz_k ← ρ_k ψ_k Δz_k − h F_k + h F_{k+1},   F_k = ρ_k ψ_k V_k,
+
+with `F_{nz+1} = 0` (nothing enters through the model top) and `h F_1`
+leaving through the surface. Properties, all exact in floating point up
+to round-off:
+
+  * **conservative** — `Σ ρ ψ Δz` changes only by the surface flux;
+  * **positive** — `h` is chosen so `C_k = V_k h / Δz_k ≤ courant_max`,
+    whence the outflow never exceeds the cell content; the outflow is
+    also capped at the content so rounding cannot drive `ψ` negative.
+
+The sub-step is `h = min(remaining, courant_max · min_k Δz_k / V_k)`,
+recomputed each sub-step. Returns the time-integrated surface flux of
+each field (`Σ h F_1`, e.g. kg m⁻² of precipitation for `q`) and the
+number of sub-steps taken.
+
+Reference: Morrison & Milbrandt (2015), §2d; the P3 reference code
+sub-steps its sedimentation in the same way.
+"""
+function p3_sediment!(fields::Tuple, velocities, ρ::AbstractVector,
+                      dz, dt::Real; courant_max::Real = 1)
+    nf = length(fields)
+    nz = length(ρ)
+    all(length(f) == nz for f in fields) ||
+        throw(DimensionMismatch("fields and ρ must have the same length"))
+    dz isa AbstractVector && length(dz) != nz &&
+        throw(DimensionMismatch("dz must be a scalar or have length(ρ)"))
+    0 < courant_max <= 1 ||
+        throw(ArgumentError("courant_max must lie in (0, 1] for positivity"))
+    T = promote_type(eltype(ρ), map(eltype, fields)...)
+    Δz(k) = dz isa AbstractVector ? T(dz[k]) : T(dz)
+    surface = zeros(T, nf)
+    remaining = T(dt)
+    nsub = 0
+    flux = zeros(T, nz + 1)
+    while remaining > 0
+        V = velocities(fields)
+        length(V) == nf ||
+            throw(DimensionMismatch("velocities must return one vector per field"))
+        # Largest stable sub-step over every field and cell.
+        rate = zero(T)
+        for i in 1:nf, k in 1:nz
+            v = T(V[i][k])
+            v >= 0 || throw(DomainError(v, "fall speeds must be ≥ 0"))
+            rate = max(rate, v / Δz(k))
+        end
+        h = rate > 0 ? min(remaining, T(courant_max) / rate) : remaining
+        last_step = h >= remaining
+        for i in 1:nf
+            ψ = fields[i]
+            v = V[i]
+            # Outflow through each cell's lower face: at most the content.
+            for k in 1:nz
+                content = ρ[k] * max(ψ[k], zero(T)) * Δz(k)
+                flux[k] = min(h * ρ[k] * max(ψ[k], zero(T)) * T(v[k]), content)
+            end
+            flux[nz + 1] = zero(T)
+            surface[i] += flux[1]
+            for k in 1:nz
+                mass = ρ[k] * ψ[k] * Δz(k) - flux[k] + flux[k + 1]
+                ψ[k] = mass / (ρ[k] * Δz(k))
+            end
+        end
+        nsub += 1
+        remaining = last_step ? zero(T) : remaining - h
+    end
+    return (surface, nsub)
+end
+
+# --- rain -----------------------------------------------------------------
+
+"""
+    p3_rain_sedimentation_velocities(q_r, N_r, ρ_air; μ_r = 0, q_small = 1e-14) -> (V_N, V_M)
+
+Per-cell number- and mass-weighted rain fall speeds (m s⁻¹) for columns
+of `q_r` (kg kg⁻¹) and `N_r` (kg⁻¹), from
+[`p3_rain_size_distribution`](@ref) and [`p3_rain_bulk_fall_speed`](@ref)
+with the local air-density correction. Cells with `q_r < q_small` or no
+number get zero speed.
+"""
+function p3_rain_sedimentation_velocities(q_r::AbstractVector, N_r::AbstractVector,
+                                          ρ_air::AbstractVector;
+                                          μ_r::Real = 0, q_small::Real = 1e-14)
+    T = promote_type(eltype(q_r), eltype(N_r), eltype(ρ_air))
+    VN = zeros(T, length(q_r))
+    VM = zeros(T, length(q_r))
+    for k in eachindex(q_r)
+        q_r[k] >= q_small || continue
+        psd = p3_rain_size_distribution(q_r[k], N_r[k]; μ_r = μ_r)
+        psd === nothing && continue
+        _, μ, λ = psd
+        vn, vm, _ = p3_rain_bulk_fall_speed(μ, λ; ρ_air = ρ_air[k])
+        VN[k], VM[k] = vn, vm
+    end
+    return (VN, VM)
+end
+
+"""
+    p3_sediment_rain!(q_r, N_r, ρ, dz, dt; μ_r = 0, courant_max = 1, limit_number = true) -> (P_q, P_N, nsub)
+
+Sediment two-moment rain in a column: `q_r` (kg kg⁻¹) falls at the
+mass-weighted and `N_r` (kg⁻¹) at the number-weighted fall speed
+([`p3_rain_sedimentation_velocities`](@ref)), both recomputed every
+sub-step by [`p3_sediment!`](@ref). Returns the accumulated surface
+precipitation `P_q` (kg m⁻², i.e. mm of water), the number of drops
+reaching the ground per m² `P_N`, and the sub-step count.
+
+With `limit_number = true` (default, as in P3) `N_r` is passed through
+[`p3_rain_limit_number`](@ref) before every sub-step and at the end, so
+that the size-sorted leading edge of a shaft cannot hold drops with a
+mean size above `D_mean_max`; mass is conserved exactly either way,
+number only with `limit_number = false`.
+"""
+function p3_sediment_rain!(q_r::AbstractVector, N_r::AbstractVector,
+                           ρ::AbstractVector, dz, dt::Real;
+                           μ_r::Real = 0, courant_max::Real = 1,
+                           limit_number::Bool = true)
+    limit!() = limit_number &&
+        (N_r .= p3_rain_limit_number.(q_r, N_r; μ_r = μ_r))
+    function vel(f)
+        limit!()
+        return reverse(p3_rain_sedimentation_velocities(f[1], f[2], ρ; μ_r = μ_r))
+    end
+    surf, nsub = p3_sediment!((q_r, N_r), vel, ρ, dz, dt; courant_max = courant_max)
+    limit!()
+    return (surf[1], surf[2], nsub)
+end
+
+# --- ice ------------------------------------------------------------------
+
+"""
+    p3_ice_sedimentation_velocities(q_i, q_rim, B_rim, N_i, ρ_air; T_air = nothing, μ = 0, p = P3_DEFAULT_ICE, q_small = 1e-14) -> (V_N, V_M)
+
+Per-cell number- and mass-weighted P3 ice fall speeds. In each cell the
+mass-dimension state is diagnosed from the prognostic rime variables
+([`p3_mass_dimension`](@ref)), the slope from `q_i/N_i` with P3's mean
+size limiter `(μ+1)/λ ∈ [2 μm, 5 mm + 20 mm·F_rim²]`
+([`p3_size_distribution`](@ref)), and `V_N, V_M` from
+[`p3_bulk_fall_speed`](@ref) at the local air density and — when the
+temperature column `T_air` (K) is given — viscosity
+([`p3_air_viscosity`](@ref); otherwise at `p.T_ref`).
+"""
+function p3_ice_sedimentation_velocities(q_i::AbstractVector, q_rim::AbstractVector,
+                                         B_rim::AbstractVector, N_i::AbstractVector,
+                                         ρ_air::AbstractVector;
+                                         T_air = nothing, μ::Real = 0,
+                                         p::P3IceParameters = P3_DEFAULT_ICE,
+                                         q_small::Real = 1e-14)
+    Tf = promote_type(eltype(q_i), eltype(N_i), eltype(ρ_air))
+    VN = zeros(Tf, length(q_i))
+    VM = zeros(Tf, length(q_i))
+    for k in eachindex(q_i)
+        (q_i[k] >= q_small && N_i[k] > 0) || continue
+        md = p3_mass_dimension(q_i[k], max(q_rim[k], 0), max(B_rim[k], 0), p)
+        λmin = (μ + 1) / (5e-3 + 2e-2 * md.F_rim^2)
+        λmax = (μ + 1) / 2e-6
+        _, μk, λ = p3_size_distribution(q_i[k], N_i[k], md; μ = μ,
+                                        λ_min = λmin, λ_max = λmax)
+        η = p3_air_viscosity(T_air === nothing ? p.T_ref : T_air[k])
+        vn, vm = p3_bulk_fall_speed(μk, λ, md; ρ_air = ρ_air[k], η_air = η)
+        VN[k], VM[k] = vn, vm
+    end
+    return (VN, VM)
+end
+
+"""
+    p3_sediment_ice!(q_i, q_rim, B_rim, N_i, ρ, dz, dt; T_air = nothing, μ = 0, p = P3_DEFAULT_ICE, courant_max = 1) -> (P_q, P_rim, P_B, P_N, nsub)
+
+Sediment the single P3 ice category: `q_i`, `q_rim` and `B_rim` fall
+together at the mass-weighted speed — so the rime fraction and rime
+density of the falling mass are carried unchanged — and `N_i` at the
+number-weighted speed ([`p3_ice_sedimentation_velocities`](@ref)),
+recomputed every sub-step by [`p3_sediment!`](@ref). Returns the
+surface accumulations of each field and the sub-step count.
+
+Unlike rain, `N_i` is not adjusted here: the ice slope limiter bounds
+the diagnosed fall speeds, and the matching number adjustment belongs
+with the process rates.
+
+Reference: Morrison & Milbrandt (2015), §2d.
+"""
+function p3_sediment_ice!(q_i::AbstractVector, q_rim::AbstractVector,
+                          B_rim::AbstractVector, N_i::AbstractVector,
+                          ρ::AbstractVector, dz, dt::Real;
+                          T_air = nothing, μ::Real = 0,
+                          p::P3IceParameters = P3_DEFAULT_ICE,
+                          courant_max::Real = 1)
+    function vel(f)
+        VN, VM = p3_ice_sedimentation_velocities(f[1], f[2], f[3], f[4], ρ;
+                                                 T_air = T_air, μ = μ, p = p)
+        return (VM, VM, VM, VN)
+    end
+    surf, nsub = p3_sediment!((q_i, q_rim, B_rim, N_i), vel, ρ, dz, dt;
+                              courant_max = courant_max)
+    return (surf[1], surf[2], surf[3], surf[4], nsub)
+end

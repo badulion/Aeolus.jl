@@ -209,4 +209,141 @@
         @test p3_rain_limit_number(0.0, 7.0) == 7.0
     end
 
+    @testset "Column scheme: exact shift, conservation, positivity" begin
+        # Constant speed with C = 1 per sub-step: upwind is an exact shift.
+        nz = 40
+        ψ = zeros(nz); ψ[30:32] .= (1.0, 2.0, 3.0)
+        ρ = ones(nz)
+        surf, nsub = p3_sediment!((ψ,), f -> (fill(5.0, nz),), ρ, 10.0, 20.0)
+        @test nsub == 10
+        @test ψ[20:22] == [1.0, 2.0, 3.0]
+        @test count(!iszero, ψ) == 3
+        @test surf[1] == 0
+
+        # Varying ρ and Δz, speeds up to 9 m/s, dt = 900 s: Courant ≫ 1.
+        nz = 60
+        dz = 50.0 .+ 30.0 .* (1 .+ sin.(1.7 .* (1:nz)))    # 50-110 m, irregular
+        z = cumsum(dz) .- dz ./ 2
+        ρ = 1.2 .* exp.(-z ./ 8000)
+        q = [3000 < zk < 4500 ? 2e-3 : 0.0 for zk in z]
+        m0 = sum(ρ .* q .* dz)
+        vel = f -> (9.0 .* ones(nz),)
+        Cmax = 9.0 * 900 / minimum(dz)
+        surf, nsub = p3_sediment!((q,), vel, ρ, dz, 900.0)
+        m1 = sum(ρ .* q .* dz)
+        cons = abs(m1 + surf[1] - m0) / m0
+        @printf("    constant V: C_max(no substep) = %.0f, %d sub-steps, surface %.3f kg/m², mass err %.1e\n",
+                Cmax, nsub, surf[1], cons)
+        @test nsub >= ceil(Cmax)
+        @test cons < 1e-14
+        @test minimum(q) >= 0
+        @test surf[1] > 0
+
+        @test_throws ArgumentError p3_sediment!((copy(q),), vel, ρ, dz, 1.0; courant_max = 1.5)
+        @test_throws DomainError p3_sediment!((copy(q),), f -> (-ones(nz),), ρ, dz, 1.0)
+    end
+
+    @testset "Rain shaft: conservation, positivity, size sorting" begin
+        nz = 100
+        dz = 50.0
+        z = ((1:nz) .- 0.5) .* dz
+        ρ = 1.2 .* exp.(-z ./ 8500)
+        # Rain layer 3.5-4.5 km: q = 1 g/kg, N = 1e4 /kg (mass-mean D ≈ 0.6 mm).
+        inlayer = (z .> 3500) .& (z .< 4500)
+        q = ifelse.(inlayer, 1e-3, 0.0)
+        N = ifelse.(inlayer, 1e4, 0.0)
+        mq0, mN0 = sum(ρ .* q .* dz), sum(ρ .* N .* dz)
+        Dm(qk, Nk) = (6 * qk / (π * ρw * Nk))^(1 / 3)
+        D0 = Dm(1e-3, 1e4)
+
+        # One big step: ~8 m/s × 300 s / 50 m ≈ 50 without sub-stepping.
+        # Without the number limiter both moments are conserved.
+        qa, Na = copy(q), copy(N)
+        Pq, PN, nsub = p3_sediment_rain!(qa, Na, ρ, dz, 300.0; limit_number = false)
+        eq = abs(sum(ρ .* qa .* dz) + Pq - mq0) / mq0
+        eN = abs(sum(ρ .* Na .* dz) + PN - mN0) / mN0
+        @printf("    rain shaft, 300 s, no limiter: %d sub-steps, mass err %.1e, number err %.1e\n",
+                nsub, eq, eN)
+        @test nsub > 30
+        @test eq < 1e-13 && eN < 1e-13
+        @test minimum(qa) >= 0 && minimum(Na) >= 0
+        # ... but the leading edge is left with mass and almost no number:
+        # unbounded diagnosed drop size (excessive two-moment size sorting).
+        Dmax_free = maximum(Dm(qa[k], Na[k]) for k in 1:nz if qa[k] > 1e-8)
+        @printf("    unlimited: largest diagnosed D_m = %.2g m\n", Dmax_free)
+        @test Dmax_free > 1e-2
+
+        # Default (P3): number limited to mean size ≤ 0.8 mm; mass still exact.
+        Pq, PN, nsub = p3_sediment_rain!(q, N, ρ, dz, 300.0)
+        eq = abs(sum(ρ .* q .* dz) + Pq - mq0) / mq0
+        @printf("    rain shaft, 300 s, limited: %d sub-steps, surface %.2e mm, mass err %.1e\n",
+                nsub, Pq, eq)
+        @test eq < 1e-13
+        @test minimum(q) >= 0 && minimum(N) >= 0
+        Dcap = cbrt(gamma_lanczos(4.0)) * 8e-4          # mass-mean D at the limit, μ = 0
+        Dall = [Dm(q[k], N[k]) for k in 1:nz if q[k] > 1e-10]
+        @test maximum(Dall) <= Dcap * (1 + 1e-12)
+
+        # Size sorting: large drops lead, small ones are left behind. D_m
+        # sampled every 400 m from the leading edge up to the top of the
+        # shaft decreases monotonically.
+        k_lo = findfirst(q .> 0.05 * maximum(q))
+        k_hi = findlast(q .> 1e-3 * maximum(q))
+        ks = k_lo:8:k_hi
+        Dprof = [Dm(q[k], N[k]) for k in ks]
+        @printf("    D_m from edge (z = %.0f m) upward, every 400 m: %s μm (initial %.0f)\n",
+                z[k_lo], join(round.(Int, 1e6 .* Dprof), ", "), 1e6 * D0)
+        @test length(Dprof) >= 5
+        @test all(diff(Dprof) .< 0)
+        @test Dprof[1] > 2 * D0                 # leading edge: large drops
+        @test Dm(q[k_hi], N[k_hi]) < D0 / 2     # top: small drops left behind
+        # Front position: ~2.4 km of fall in 300 s ⇒ V_M ≈ 8 m/s at the edge.
+        @test 800 < z[k_lo] < 1600
+
+        # Monodisperse rain (μ_r → ∞) does not sort: D_m stays uniform.
+        q2 = ifelse.(inlayer, 1e-3, 0.0)
+        N2 = ifelse.(inlayer, 1e4, 0.0)
+        p3_sediment_rain!(q2, N2, ρ, dz, 120.0; μ_r = 2000.0)
+        sel = q2 .> 1e-3 * maximum(q2)
+        Ds = [Dm(q2[k], N2[k]) for k in findall(sel)]
+        spread_mono = (maximum(Ds) - minimum(Ds)) / D0
+        @printf("    monodisperse shaft: D_m spread %.1e (relative)\n", spread_mono)
+        @test spread_mono < 0.02
+    end
+
+    @testset "Ice column: conservation, rime carried with mass, sorting" begin
+        nz = 80
+        dz = 100.0
+        z = ((1:nz) .- 0.5) .* dz
+        ρ = 1.2 .* exp.(-z ./ 8000)
+        Tair = 288.0 .- 6.5e-3 .* z
+        lay = (z .> 5000) .& (z .< 6000)
+        qi = ifelse.(lay, 5e-4, 0.0)
+        Frim = 0.4
+        qrim = Frim .* qi
+        Brim = qrim ./ 500.0
+        Ni = ifelse.(lay, 5e4, 0.0)
+        m0 = [sum(ρ .* f .* dz) for f in (qi, qrim, Brim, Ni)]
+        out = p3_sediment_ice!(qi, qrim, Brim, Ni, ρ, dz, 1200.0; T_air = Tair)
+        nsub = out[5]
+        errs = [abs(sum(ρ .* f .* dz) + out[i] - m0[i]) / m0[i]
+                for (i, f) in enumerate((qi, qrim, Brim, Ni))]
+        @printf("    ice column, 1200 s: %d sub-steps, max conservation err %.1e\n",
+                nsub, maximum(errs))
+        @test maximum(errs) < 1e-13
+        @test all(minimum.((qi, qrim, Brim, Ni)) .>= 0)
+        # q_rim and B_rim fall with q_i, so F_rim and ρ_rim are carried
+        # unchanged wherever there is ice.
+        has = qi .> 1e-10
+        @test count(has) > 10
+        @test maximum(abs.(qrim[has] ./ qi[has] .- Frim)) < 1e-12
+        @test maximum(abs.(qrim[has] ./ Brim[has] .- 500.0)) < 1e-9
+        # Size sorting: mean mass q/N largest at the leading edge.
+        k_lo = findfirst(qi .> 1e-3 * maximum(qi))
+        mm = [qi[k] / Ni[k] for k in k_lo:(k_lo + 3)]
+        @printf("    ice leading edge: q/N (bottom→up) = %s × initial\n",
+                join(round.(mm ./ 1e-8, digits = 2), ", "))
+        @test all(diff(mm) .< 0)
+        @test mm[1] > 1e-8
+    end
 end
