@@ -404,6 +404,17 @@ to ~1e-14 relative. If `q_i/N_i` lies outside the range spanned by the
 bracket the nearer bound is returned; P3 then adjusts `N_i` to be
 consistent with the limited `λ` (MM15, §2b), which is the caller's job.
 
+The default bracket `[1, 1e8]` m⁻¹ is only a numerical one (mean sizes
+`(μ+1)/λ` from 10 nm to 1 m for `μ = 0`); it is *not* P3's physical
+limiter. The P3 reference code (`create_p3_lookupTable_1.f90`) keeps the
+mean size `(μ+1)/λ` between 2 μm and `5 mm + 20 mm·F_rim²`, i.e.
+
+    λ_min = (μ+1) / (5e-3 + 2e-2 F_rim²),   λ_max = (μ+1) / 2e-6,
+
+and a model using this function should pass those. Near `λ = 1` m⁻¹ the
+PSD is dominated by metre-sized particles, outside the range of the
+fall-speed and mass-dimension fits.
+
 The shape parameter is held fixed here. MM15 diagnose `μ` from `λ`
 (Heymsfield 2003); a caller doing so iterates `μ`, `λ` jointly.
 
