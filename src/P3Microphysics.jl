@@ -27,6 +27,7 @@ The module is split into part-files under `src/p3/`:
   * `massdim.jl`       — four-regime m(D), A(D), rime density, fall speed
   * `processes.jl`     — microphysical process rates
   * `sedimentation.jl` — sedimentation and radar reflectivity
+  * `precip_fraction.jl` — sub-grid precipitation fraction and overlap
 
 Thermodynamics (saturation vapour pressures, latent heats, saturation
 adjustment) is NOT re-derived here: it comes from the Era IV contract
@@ -91,5 +92,11 @@ export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
        p3_ice_sedimentation_velocities, p3_sediment_ice!
 
 include("p3/sedimentation.jl")
+
+# --- precip_fraction.jl (Phase 44) ----------------------------------------
+export p3_precipitation_overlap, p3_precipitation_fraction,
+       p3_fractional_process_rates, p3_step_column
+
+include("p3/precip_fraction.jl")
 
 end # module

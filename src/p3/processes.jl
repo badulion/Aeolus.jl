@@ -800,11 +800,24 @@ Total water `q_v + q_c + q_r + q_i` is conserved to rounding in every
 stage. Steps 1-4 conserve the enthalpy form `c_pm ΔT = -L_v Δq_v +
 L_f Δq_i` exactly for a step without clean-up; step 5 conserves the
 contract's θ_li (see [`p3_condensation`](@ref)).
+
+Sub-grid fractions (Phase 44, off by default): passing `cloud_fraction`
+and/or `precip_fraction` (a missing one is taken as 1) evaluates step 1
+with [`p3_fractional_process_rates`](@ref) — accretion, riming,
+autoconversion with in-cloud / in-precipitation mixing ratios weighted
+by area, rain evaporation only in the clear part. With both `nothing`
+(the default) the step is the grid-mean one, bit for bit. Step 5 is
+still the grid-mean all-or-nothing adjustment.
 """
 function p3_step(s::P3ParcelState{FT}, dt::Real,
                  pp::P3ProcessParameters = P3_DEFAULT_PROCESS;
-                 adjust::Bool = true) where {FT}
-    r = p3_limit_rates(s, p3_process_rates(s, pp), dt, pp)
+                 adjust::Bool = true, cloud_fraction = nothing,
+                 precip_fraction = nothing, f_min::Real = 0.01) where {FT}
+    r0 = cloud_fraction === nothing && precip_fraction === nothing ?
+         p3_process_rates(s, pp) :
+         p3_fractional_process_rates(s, something(cloud_fraction, 1),
+                                     something(precip_fraction, 1), pp; f_min = f_min)
+    r = p3_limit_rates(s, r0, dt, pp)
     s1 = _p3_cleanup(_p3_axpy(s, dt, p3_tendencies(s, r, pp)), pp)
     return adjust ? p3_condensation(s1, pp) : s1
 end

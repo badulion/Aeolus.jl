@@ -470,6 +470,9 @@ export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
        P3_K2_WATER, P3_K2_ICE, p3_rain_reflectivity, p3_ice_reflectivity, p3_dbz,
        p3_sediment!, p3_rain_sedimentation_velocities, p3_sediment_rain!,
        p3_ice_sedimentation_velocities, p3_sediment_ice!
+# P3 sub-grid precipitation fraction and overlap (Phase 44, issue #8)
+export p3_precipitation_overlap, p3_precipitation_fraction,
+       p3_fractional_process_rates, p3_step_column
 
 # Phase 43 — ice nucleation: prognostic INP species (dust, biological)
 # and their available/consumed budget. All names are `inp_`-prefixed or
