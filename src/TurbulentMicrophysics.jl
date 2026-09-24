@@ -26,6 +26,10 @@ under `src/turbulent_microphysics/`:
     condensational growth: superdroplets sample a stochastic (Ornstein-
     Uhlenbeck) supersaturation, so `dr²/dt ∝ S` spreads the radius
     distribution while the cell's total water is conserved exactly.
+  * `spectral_broadening.jl` (issue #14) — the bulk counterpart: a
+    moment closure (`⟨r²⟩`, `Var r²`, `Cov(r², S')`) that carries the
+    same broadening without droplets, and the adiabatic-parcel case that
+    validates it against the superdroplet reference and DNS scaling.
 
 All thermodynamics is delegated to the Phase 39 contract
 (`MoistThermodynamics`); the error function is `GasOptics`'; Köhler
@@ -63,6 +67,11 @@ REFERENCES
   * Sardina, G., Picano, F., Brandt, L. & Caballero, R. (2015).
     Continuous growth of droplet size variance due to condensation in
     turbulent clouds. *Phys. Rev. Lett.*, 115, 184501.
+  * Lanotte, A. S., Seminara, A. & Toschi, F. (2009). Cloud droplet
+    growth by condensation in homogeneous isotropic turbulence.
+    *J. Atmos. Sci.*, 66, 1685-1697.
+  * Grabowski, W. W. & Wang, L.-P. (2013). Growth of cloud droplets in a
+    turbulent environment. *Annu. Rev. Fluid Mech.*, 45, 293-324.
 """
 module TurbulentMicrophysics
 
@@ -81,11 +90,17 @@ using ..Superdroplet: SuperdropletSet, nsuperdroplets, condensation_growth!,
                       EulerianCell, cell_pressure, cell_supersaturation,
                       cell_air_mass, total_water_mass,
                       apply_condensate_tendency!, MicrophysicalConstants,
-                      DEFAULT_MICRO, _phase_substeps
+                      DEFAULT_MICRO, _phase_substeps,
+                      fk_thermal, fd_vapor, kelvin_a, vapor_diffusivity,
+                      init_monodisperse_superdroplets
+# issue #14 extends the Phase 41 spectral diagnostics to the bulk state
+import ..Superdroplet: mean_radius, relative_dispersion
+import ..MoistThermodynamics: effective_radius
 using Random: AbstractRNG, MersenneTwister, randn
 
 include("turbulent_microphysics/sgs_supersaturation.jl")
 include("turbulent_microphysics/sgs_activation.jl")
 include("turbulent_microphysics/sgs_growth.jl")
+include("turbulent_microphysics/spectral_broadening.jl")
 
 end # module
