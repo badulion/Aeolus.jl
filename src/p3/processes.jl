@@ -297,8 +297,12 @@ with no cloud). Nothing thermodynamic is re-derived here.
 P3 cloud water stays liquid below 0 °C (it can only become ice by
 riming or freezing), so the adjustment is called with a copy of the
 constants whose liquid-fraction ramp is disabled. Rain and ice do not
-take part (their heat capacity is left out of the adjusted `c_pm`, a
-≲ 0.1 % effect for 5 g kg⁻¹ of hydrometeors).
+take part: their heat capacity is left out of the adjusted `c_pm`
+(and their mass is counted as dry air), so the condensational `ΔT` is
+too large by the fraction of `c_pm` they carry — measured 1.5 % for
+5 g kg⁻¹ of rain and 0.5 % for 5 g kg⁻¹ of ice. The contract's
+`saturation_adjustment` takes only `q_tot` and diagnoses the whole
+condensate, so fixed rain and ice cannot be passed to it.
 
 `q_v + q_c` is conserved exactly. Energy is conserved in the sense of
 the contract's invariant, θ_li, which is *not* exactly isobaric
