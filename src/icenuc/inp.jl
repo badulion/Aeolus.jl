@@ -628,7 +628,12 @@ this temperature. The nucleation increment is therefore
 ΔN = \\min\\!\\left[N_\\mathrm{avail},\\ \\max(0,\\ N_\\mathrm{frozen} - N_\\mathrm{cons})\\right]
 ```
 
-and likewise for mass with the `p`-weighted mass fraction. At constant
+and likewise for mass with the `p`-weighted mass fraction. When earlier
+nucleation used a different selection (e.g. `:largest` via the number
+form) that mass difference need not be realisable — it can even be
+negative — so it must lie between the mass of the `ΔN` smallest and the
+`ΔN` largest available particles; otherwise `ΔN` moves with the mean
+mass of the available particles that `p` selects. At constant
 temperature a second call returns exactly zero; cooling further
 nucleates only the difference; warming nucleates nothing (it does not
 un-freeze anything — melting is the host's business, see
@@ -650,8 +655,39 @@ function inp_nucleate_singular!(inp::INPPopulation, i::Integer, p::Function)
     fN, fM = inp_frozen_fraction(inp, i, p; population = :total)
     ΔN = min(inp.N_avail[i], max(0.0, fN * Ntot - inp.N_cons[i]))
     ΔN > 0 || return 0.0
-    ΔM = min(inp.M_avail[i], max(0.0, fM * Mtot - inp.M_cons[i]))
+    ΔM = fM * Mtot - inp.M_cons[i]
+    # The number and mass increments are differences of two separately
+    # computed totals, so they need not describe a realisable set of
+    # particles: if earlier nucleation took the largest particles
+    # (`selection = :largest`, or the DeMott number form), the consumed
+    # population already holds more mass than `p` assigns to that many
+    # particles and `ΔM` comes out ≤ 0 — ΔN particles would move with no
+    # mass. Clamp ΔM to what ΔN particles of the available log-normal can
+    # actually carry: between the mass of its ΔN smallest and of its ΔN
+    # largest members. Outside that range the per-particle mass is taken
+    # instead from `p` weighted over the available population (the mean
+    # mass of the available particles `p` would freeze), which keeps the
+    # size preference of `p`.
+    lo, hi = _mass_bounds(inp, i, ΔN)
+    if !(lo <= ΔM <= hi)
+        Na, Ma = inp.N_avail[i], inp.M_avail[i]
+        r_a = inp_median_radius(inp, i)
+        gN = _moment_fraction(p, r_a, inp.σ_g[i], 0)
+        gM = _moment_fraction(p, r_a, inp.σ_g[i], 3)
+        ΔM = gN > 0 ? clamp(ΔN * (gM * Ma) / (gN * Na), lo, hi) : hi
+    end
     return _transfer_to_consumed!(inp, i, ΔN, ΔM)
+end
+
+# Mass carried by the ΔN smallest and by the ΔN largest particles of the
+# available population of mode i (log-normal closure).
+function _mass_bounds(inp::INPPopulation, i::Integer, ΔN::Real)
+    N, M = inp.N_avail[i], inp.M_avail[i]
+    ΔN >= N && return (M, M)
+    m = _mode(inp, i, :available)
+    hi = min(M, mass_above_radius(m, _radius_holding(m, ΔN)))
+    lo = max(0.0, M - mass_above_radius(m, _radius_holding(m, N - ΔN)))
+    return (min(lo, hi), hi)
 end
 
 """

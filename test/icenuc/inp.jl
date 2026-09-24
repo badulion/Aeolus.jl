@@ -30,6 +30,17 @@ function _ref_moment_above(m::ARGMode, k::Integer, r_cut::Real; n = 200_000)
     return m.N / (sqrt(2π) * lnσ) * s * h
 end
 
+
+# u with erfc(u)/2 = f, by bisection (independent of the module's copy)
+function _erfc_inv_half(f)
+    lo, hi = -10.0, 10.0
+    for _ in 1:200
+        mid = (lo + hi) / 2
+        0.5 * Aeolus.GasOptics.erfc_series(mid) > f ? (lo = mid) : (hi = mid)
+    end
+    return (lo + hi) / 2
+end
+
 @testset "Prognostic INP species (issue #5)" begin
 
     # ---------------------------------------------------------------------
@@ -160,6 +171,7 @@ end
         rng = MersenneTwister(43)
         worst = 0.0
         nsteps = 0
+        massless = false
         for trial in 1:5
             inp = inp_population([lognormal_mode(:mineral_dust, 0.5, 0.3, 2.0),
                                   lognormal_mode(:mineral_dust, 0.05, 1.5, 1.9),
@@ -201,6 +213,10 @@ end
                 end
                 @assert all(>=(0), inp.N_avail) && all(>=(0), inp.M_avail) &&
                         all(>=(0), inp.N_cons) && all(>=(0), inp.M_cons)
+                # every transfer moves particles together with their mass
+                massless = massless ||
+                    any((inp.N_cons .> 0) .!= (inp.M_cons .> 0)) ||
+                    any((inp.N_avail .> 0) .!= (inp.M_avail .> 0))
             end
             b = inp_budget(inp)
             @test b.N_total ≈ b.N_avail + b.N_cons
@@ -210,6 +226,7 @@ end
             @test all((inp.N_avail .> 0) .== (inp.M_avail .> 0))
         end
         @test worst < 1e-13
+        @test !massless
         @info "INP budget closure over random source/sink sequences" steps = nsteps worst_rel_residual = worst
     end
 
@@ -262,6 +279,38 @@ end
         @test inp_number(inp) == 0.0
         @test inp_mass(inp) == 0.0
         @test inp_consume!(inp, 1, 1.0) == 0.0
+
+        # Mixing selections must still move a realisable set of particles.
+        # Take the largest 3 % first (the DeMott number form does this),
+        # then apply an INAS indicator whose frozen number exceeds that but
+        # whose p-weighted mass (38 %) is below what the largest 3 % already
+        # carry (58 %). The naive mass increment fM·M_tot - M_cons is then
+        # negative; the review of issue #5 found 1.6e4 m⁻³ particles moving
+        # with zero mass here. The increment must carry between the mass of
+        # the ΔN smallest and ΔN largest available particles.
+        inp = inp_population([dust])
+        inp_consume!(inp, 1, 0.03N0; selection = :largest)
+        m_av = inp_modes(inp)[1]
+        Mc0 = inp_mass(inp; population = :consumed)
+        ΔN = inp_nucleate_singular!(inp, 1, p(ns_warm))
+        ΔM = inp_mass(inp; population = :consumed) - Mc0
+        @test ΔN > 0
+        @test ΔM > 0
+        # bounds: mass of the ΔN smallest / ΔN largest available particles
+        r_hold(m, n) = m.r_g * exp(sqrt(2) * log(m.σ_g) *
+                                   _erfc_inv_half(n / m.N))
+        hi = mass_above_radius(m_av, r_hold(m_av, ΔN))
+        lo = mode_dry_mass(m_av) - mass_above_radius(m_av, r_hold(m_av, m_av.N - ΔN))
+        @test lo * (1 - 1e-9) <= ΔM <= hi * (1 + 1e-9)
+        # and it is the mean mass of the available particles p selects
+        # (the fallback), measured independently by the frozen fraction
+        fNa, fMa = inp_frozen_fraction(inp_population([m_av], :mineral_dust), 1,
+                                       p(ns_warm); population = :available)
+        @test ΔM / ΔN ≈ fMa * mode_dry_mass(m_av) / (fNa * m_av.N) rtol = 1e-9
+        # the per-particle mass moved is above the available mean: INAS
+        # freezes the larger of the particles still available
+        @test ΔM / ΔN > mode_dry_mass(m_av) / m_av.N
+        @info "singular increment after largest-first consumption" ΔN ΔM_over_lo = ΔM / lo ΔM_over_hi = ΔM / hi
     end
 
     # ---------------------------------------------------------------------
