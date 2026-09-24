@@ -49,7 +49,7 @@ abstract type AerosolCountScheme <: FreezingScheme end
     Niemand2012()
 
 Immersion freezing on desert dust, INAS density from AIDA cloud-chamber
-expansions (Niemand et al. 2012, JAS 69, 3077, their Eq. 5):
+expansions (Niemand et al. 2012, JAS 69, 3077):
 
 ```math
 n_s(T) = \\exp\\left[-0.517\\,(T - 273.15) + 8.934\\right]\\ \\mathrm{m^{-2}},
@@ -81,7 +81,7 @@ struct Ullrich2017Immersion <: SiteDensityScheme end
     Ullrich2017Deposition()
 
 Deposition nucleation on desert dust below water saturation, Ullrich et
-al. (2017), JAS 74, 699, their Eq. (2.11) and Table 1 for dust:
+al. (2017), JAS 74, 699, with their dust coefficients:
 
 ```math
 n_s(T, S_i) = \\exp\\left\\{α (S_i - 1)^{1/4}
@@ -306,8 +306,8 @@ The freezing schemes used for a species unless the caller passes its
 own: mineral dust — [`Niemand2012`](@ref) immersion and
 [`Ullrich2017Deposition`](@ref) deposition; biological —
 [`Tobo2013`](@ref) immersion and no deposition scheme (no deposition
-parameterisation for biological particles is established; Kanji et al.
-2017, §4); any other species — `nothing` for both (not an INP).
+parameterisation for biological particles is established; see the
+review of Kanji et al. 2017); any other species — `nothing` for both (not an INP).
 """
 function default_freezing_scheme(s::AerosolSpecies)
     s.name === :mineral_dust &&

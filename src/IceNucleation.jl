@@ -23,7 +23,12 @@ module IceNucleation
 #   freezing.jl  (issue #6) — immersion and deposition freezing
 #                 parameterisations that turn an INP population, T and
 #                 supersaturation into ice-number and ice-mass SOURCE
-#                 TERMS, drawing their INP sink from inp.jl.
+#                 TERMS, drawing their INP sink from inp.jl
+#                 (`ice_nucleation!` → `IceNucleationTendency`). Its
+#                 regime boundaries are the T_freeze / T_icenuc of
+#                 `MoistThermodynamics.liquid_fraction`, so the ramp and
+#                 the nucleation agree on where ice is impossible and
+#                 where it is compulsory.
 #
 # Coupling contract (for the P3 ice category, issue #7): this module
 # never touches a hydrometeor state. It returns rates and mutates only the
