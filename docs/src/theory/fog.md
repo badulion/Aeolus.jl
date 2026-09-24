@@ -78,6 +78,24 @@ not by the explicit ``\Delta t/\tau``, which exceeds 1 once
 ``\Delta t``. The default ``\tau = 0`` is full saturation adjustment:
 the phase-relaxation time of fog droplets at 100 cm⁻³ is a few seconds.
 
+### Relation to the contract's `saturation_adjustment`
+
+`MoistThermodynamics.saturation_adjustment` already solves a saturation
+adjustment, but it conserves the liquid-ice potential temperature
+``\theta_{li}`` rather than ``h``. The two are tested against each other.
+At ``p = p_\text{ref}`` they agree to ``|\Delta q_l|/q_l \le 3.2\times10^{-3}``
+and ``|\Delta T| \le 10^{-3}`` K for 275–310 K and ``S`` = 1.01–1.10. The
+remaining difference comes from the exponential ``\theta_{li}``
+approximation. Away from ``p_\text{ref}`` they disagree more, and the
+contract is the one in error. Its ``\theta_{li}`` uses the moist Exner
+exponent ``R_m/c_{pm}`` of the *current* partition, which changes when
+vapour condenses. At 800 hPa, 285 K and ``S`` = 1.05 its adjustment
+violates moist enthalpy by 2.8 % of ``L_v \Delta q``, and its condensate
+differs from the exact value here by 1.75 %. This is a pre-existing
+defect of the Phase 39 contract, recorded as `@test_broken` in
+`test/era4_fog.jl`. Fog uses the enthalpy form because it is exact for
+the isobaric step.
+
 ## 4. Dew: deposition with surface-side latent heat
 
 Dew exchanges vapour between the lowest air layer (thickness
@@ -99,6 +117,10 @@ With the urban example's coefficients (``C_e = 10^{-3}``,
 ``U`` = 3 m/s) a surface 7 K below the dew point collects
 0.049 mm/h, under Monteith's (1957) observed ceiling of about
 0.07–0.08 mm/h.
+
+Saturation is over liquid water. On a sub-freezing surface the
+deposit is really frost, which saturates over ice and releases
+``L_s``. That regime is not modelled; it is treated as supercooled dew.
 
 ## 5. In the urban example
 
@@ -125,6 +147,16 @@ divergence-free in cells next to buildings. First, a few wall-nook cells
 gain vapour: fog now caps them at saturation. Second, the lowest-layer
 ``q_v`` drops to 0 in some cells between 18:30 and 22:30, while neither
 dew nor fog is active.
+
+A third residual belongs to the example's surface coupling, not to this
+module. The example's bulk evaporation `apply_latent_flux!` (``\beta``-limited)
+and dew re-evaporation are computed independently. On a surface that
+still carries dew and is above the dew point, the two evaporation rates
+therefore add, reaching up to ``(1+\beta)`` times the potential rate.
+Physically a dew-wetted surface evaporates at the potential rate
+(``\beta = 1``). The excess lasts only while dew remains, and at most
+0.185 mm was present in the run. It is left for the land-surface
+coupling to resolve.
 
 ## References
 

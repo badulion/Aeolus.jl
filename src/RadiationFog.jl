@@ -263,6 +263,11 @@ dried to the surface saturation humidity, whatever `dt` is.
   * `q_v < q_s(T_s)` — existing dew (`dew`, kg m⁻², the amount available)
     evaporates, limited by what is there; with `dew = 0` nothing happens.
 
+Saturation is taken over **liquid** water. Below 273.15 K deposition
+is really frost (hoar), which would saturate over ice and release
+`L_s`; that regime is out of scope here, and dew on a sub-freezing
+surface is treated as supercooled liquid.
+
 `surface_heat = L_v(T_s)·mass` (J m⁻²) is the latent heat released **at
 the surface** (negative when dew evaporates). It belongs in the surface
 energy budget; the air temperature is untouched, because the vapour that
