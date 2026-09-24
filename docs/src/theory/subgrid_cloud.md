@@ -38,10 +38,16 @@ becomes condensate:
          \frac{\partial (R_m/c_{pm})}{\partial q_c}.
 ```
 
-At 900 hPa this is 1.7 % larger than ``L/c_{pm}``. With bare
-``L/c_{pm}`` the linearised slope ``\partial s/\partial q_t`` at the
-saturation boundary is 0.32569 against the exact adjustment's 0.32208;
-with ``\Gamma`` it is 0.32208 (relative difference 8 × 10⁻⁷).
+At 290 K and 900 hPa this is 1.4 % larger than ``L/c_{pm}``. The term
+scales with ``\ln(p/p_0)``: it vanishes at 1000 hPa and reaches 4.5 %
+at 700 hPa and 8.8 % at 500 hPa (280 K), so it matters most for
+mid-level cloud.
+
+Compare the slope ``\partial q_c/\partial q_t`` at the saturation
+boundary (290 K, 900 hPa) with the exact adjustment's 0.322085. The
+textbook ``a`` with bare ``L/c_{pm}`` gives 0.32569. Using ``\Gamma``
+gives ``a`` = 0.32266. Adding the ``q_t``-dependence of ``T_l`` in
+``a_q`` (below) gives 0.322084, a relative difference of 8 × 10⁻⁷.
 
 A fluctuation ``(q_t', \theta_{li}')`` gives
 ``s' = a_q q_t' - b\,\theta_{li}'`` with ``b = a\,(\partial q_s/\partial T)\,\Pi``

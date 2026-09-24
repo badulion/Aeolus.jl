@@ -295,9 +295,10 @@ function mellor_coefficients(θ_li::Real, p::Real, q_t::Real,
     # Heating per unit condensate at fixed (θ_li, p, q_t), differentiated
     # from the contract's own θ_li = T/Π(q) · exp(-(L_v q_l + L_s q_i)/(c_pm T))
     # at q_c = 0: the familiar L/c_pm plus the change of the moist Exner
-    # exponent κ = R_m/c_pm as vapour becomes condensate (≈ +1.5 % at
-    # 900 hPa). Using bare L/c_pm here leaves a ~1 % mismatch with
-    # `saturation_adjustment` that does not vanish as σ → 0.
+    # exponent κ = R_m/c_pm as vapour becomes condensate (+1.4 % at
+    # 290 K / 900 hPa, +8.8 % at 280 K / 500 hPa; ∝ ln(p/p_ref)). Using
+    # bare L/c_pm here leaves a ~1 % mismatch with `saturation_adjustment`
+    # that does not vanish as σ → 0.
     dRm_c = -R_v(c)                                            # ∂R_m/∂q_c
     dcp_c = λ * c.cp_liquid + (1 - λ) * c.cp_ice - c.cp_vapor  # ∂c_pm/∂q_c
     dκ_c = (dRm_c * cpm - Rm * dcp_c) / cpm^2
