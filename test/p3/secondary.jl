@@ -46,7 +46,9 @@ using Aeolus: MoistThermodynamics
         @printf("    HM at -5 °C: rime %.3e kg/kg/s → %.4e splinters/kg/s = %.6f per mg\n",
                 r.rime_c + r.rime_r, n, per_mg)
         @test per_mg ≈ 350 rtol = 1e-12
-        @test q ≈ n * P3_NUCLEATED_ICE_MASS rtol = 1e-14
+        @test q ≈ n * P3_HM_SPLINTER_MASS rtol = 1e-14
+        # the rimer is above P3's 250 μm threshold here
+        @test p3_hm_rimer_diameter(s) >= P3_DEFAULT_HM.D_ice_min
         # the splinter source scales with the riming rates it is given
         r2 = merge(r, (rime_c = 2r.rime_c, rime_r = 2r.rime_r))
         @test first(p3_hallett_mossop(s, r2)) ≈ 2n rtol = 1e-12
@@ -75,8 +77,11 @@ using Aeolus: MoistThermodynamics
         @test ρ_new(base.q_rim + d.q_rim, base.B_rim + d.B_rim) ≈
               ρ_new(r.rime_c + r.rime_r, r.rime_c / r.ρ_rime_c + r.rime_r / pp.ρ_rim_rain) rtol = 1e-12
         # splinter mass is a tiny fraction of the rime
-        @test q / (r.rime_c + r.rime_r) ≈ 3.5e8 * P3_NUCLEATED_ICE_MASS rtol = 1e-12
-        @test q / (r.rime_c + r.rime_r) < 2e-6
+        # splinter mass is a small fraction of the rime: 350 mg⁻¹ of
+        # 10 μm spheres at 900 kg m⁻³ (P3 code) = 1.65e-4
+        @test P3_HM_SPLINTER_MASS ≈ π / 6 * 900 * (10e-6)^3 rtol = 1e-15
+        @test q / (r.rime_c + r.rime_r) ≈ 3.5e8 * P3_HM_SPLINTER_MASS rtol = 1e-12
+        @test q / (r.rime_c + r.rime_r) ≈ 1.649e-4 rtol = 1e-3
 
         # a full step with splintering: water conserved to rounding, only
         # N_i raised (to within what the size limiter allows)
@@ -90,6 +95,38 @@ using Aeolus: MoistThermodynamics
         @test b.N_i - a.N_i ≈ nb * dt rtol = 1e-6
         @test 0 <= b.q_rim <= b.q_i
         @test p3_step(s, dt; hallett_mossop = hm) == b
+    end
+
+    @testset "Rimer conditions of the P3 code: size and existing rime" begin
+        s = riming(-5.0)
+        r = p3_process_rates(s)
+        D = p3_hm_rimer_diameter(s)
+        # the mean diameter reproduces the mean mass with the bulk density
+        md = p3_mass_dimension(s.q_i, s.q_rim, s.B_rim)
+        λ = p3_slope(s.q_i, s.N_i, md; λ_min = Aeolus.P3Microphysics._p3_ice_λ_limits(0, md.F_rim)[1],
+                     λ_max = Aeolus.P3Microphysics._p3_ice_λ_limits(0, md.F_rim)[2])
+        @test π / 6 * D^3 * p3_bulk_density(0, λ, md) ≈ s.q_i / s.N_i rtol = 1e-10
+        @printf("    rimer mean diameter %.0f μm (threshold 250 μm)\n", 1e6 * D)
+        n, _ = p3_hallett_mossop(s, r)
+        @test n > 0
+        # raise the threshold above D: no splinters, all else equal
+        @test p3_hallett_mossop(s, r, P3HallettMossop(D_ice_min = 1.01D)) == (0.0, 0.0)
+        @test first(p3_hallett_mossop(s, r, P3HallettMossop(D_ice_min = 0.99D))) == n
+        # the same ice mass split into many small crystals (mean D well
+        # below 250 μm) rimes but does not splinter
+        small = P3ParcelState(T = s.T, p = s.p, q_v = s.q_v, q_c = s.q_c, N_c = s.N_c,
+                              q_r = s.q_r, N_r = s.N_r, q_i = s.q_i, N_i = 1e7,
+                              q_rim = s.q_rim, B_rim = s.B_rim)
+        @test p3_hm_rimer_diameter(small) < 250e-6
+        rs = p3_process_rates(small)
+        @test rs.rime_c > 0
+        @test p3_hallett_mossop(small, rs) == (0.0, 0.0)
+        # unrimed ice (no rime yet): no splinters, as in the P3 code
+        bare = P3ParcelState(T = s.T, p = s.p, q_v = s.q_v, q_c = s.q_c, N_c = s.N_c,
+                             q_r = s.q_r, N_r = s.N_r, q_i = s.q_i, N_i = s.N_i)
+        @test p3_hallett_mossop(bare, p3_process_rates(bare)) == (0.0, 0.0)
+        # no ice
+        @test p3_hm_rimer_diameter(P3ParcelState(T = 268.0, p = 8e4)) == 0.0
     end
 
     @testset "Large-drop fraction" begin

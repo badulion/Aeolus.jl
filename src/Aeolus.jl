@@ -471,8 +471,8 @@ export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
        p3_sediment!, p3_rain_sedimentation_velocities, p3_sediment_rain!,
        p3_ice_sedimentation_velocities, p3_sediment_ice!
 # P3 secondary ice (issue #7): Hallett-Mossop rime splintering
-export P3_NUCLEATED_ICE_MASS, P3HallettMossop, P3_DEFAULT_HM,
-       p3_hm_temperature_factor, p3_hm_large_drop_fraction,
+export P3_NUCLEATED_ICE_MASS, P3_HM_SPLINTER_MASS, P3HallettMossop, P3_DEFAULT_HM,
+       p3_hm_temperature_factor, p3_hm_large_drop_fraction, p3_hm_rimer_diameter,
        p3_hallett_mossop, p3_hm_tendencies, p3_step_with_rates
 
 # Phase 43 — ice nucleation: prognostic INP species (dust, biological)

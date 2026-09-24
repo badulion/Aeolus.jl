@@ -371,8 +371,9 @@ n_\mathrm{melt})/N_i`` of each mode, using the limited rates that
 `p3_step_with_rates` applied.
 
 The two nucleated-crystal masses are one: `NUCLEATED_ICE_MASS` is
-defined as `P3_NUCLEATED_ICE_MASS` (``m_{i0}`` of P3), the mass also
-given to Hallett–Mossop splinters.
+defined as `P3_NUCLEATED_ICE_MASS` (``m_{i0}`` of P3). Hallett–Mossop
+splinters are larger (10 μm diameter, `P3_HM_SPLINTER_MASS`, as in the
+P3 code).
 
 | Check (tests) | Measured |
 | :-- | :-- |

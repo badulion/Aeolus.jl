@@ -16,11 +16,24 @@
 
 Mass of a newly formed ice crystal in P3 — a sphere of 1 μm radius at
 900 kg m⁻³ (`mi0` of the P3 reference code, Morrison & Milbrandt 2015).
-It is the mass of a Hallett–Mossop splinter here and of a crystal
-nucleated by deposition in `IceNucleation` (`NUCLEATED_ICE_MASS` is
-defined as this constant, so the two schemes cannot drift apart).
+It is the mass of a crystal nucleated by deposition in `IceNucleation`
+(`NUCLEATED_ICE_MASS` is defined as this constant, so the two schemes
+cannot drift apart). Hallett–Mossop splinters are larger, see
+[`P3_HM_SPLINTER_MASS`](@ref).
 """
 const P3_NUCLEATED_ICE_MASS = 4π / 3 * 900.0 * (1e-6)^3
+
+"""
+    P3_HM_SPLINTER_MASS = (π/6) × 900 kg m⁻³ × (10 μm)³ ≈ 4.71e-13 kg
+
+Mass of one Hallett–Mossop splinter: an ice sphere of 10 μm *diameter*
+at 900 kg m⁻³, `piov6*900*Dinit_HM**3` with `Dinit_HM = 10e-6` in the
+rime-splintering block of the P3 reference code (`microphy_p3.f90`).
+It is not [`P3_NUCLEATED_ICE_MASS`](@ref) (`mi0`, a 2 μm-diameter
+sphere): the P3 code gives splinters and nucleated crystals different
+sizes.
+"""
+const P3_HM_SPLINTER_MASS = π / 6 * 900.0 * (10e-6)^3
 
 """
     P3HallettMossop{T}(; kwargs...)
@@ -33,24 +46,32 @@ Parameters of Hallett–Mossop rime splintering in P3.
 | `T_lo`   | 265.15 | cold edge of the window, K (-8 °C) |
 | `T_peak` | 268.15 | optimum, K (-5 °C) |
 | `T_hi`   | 270.15 | warm edge of the window, K (-3 °C) |
-| `m_splinter` | [`P3_NUCLEATED_ICE_MASS`](@ref) | mass of one splinter, kg |
+| `m_splinter` | [`P3_HM_SPLINTER_MASS`](@ref) | mass of one splinter, kg (10 μm sphere, P3 code) |
+| `D_ice_min` | 250e-6 | rimer size threshold: no splinters unless the ice mean diameter is at least this, m (P3 code, one ice category) |
 | `D_drop_min` | 0 | only cloud droplets larger than this diameter (m) produce splinters; 0 = all |
 
-The window and the 350 mg⁻¹ yield are those of Hallett & Mossop (1974)
-and Mossop (1976), in the triangular form of the P3 reference code.
-Mossop (1976) and Choularton et al. (1980) found splintering needs drops
-larger than about 24 μm diameter; the P3 code does not apply that
-restriction (`D_drop_min = 0`), setting `D_drop_min = 25e-6` applies it
-to the cloud-droplet rime through the droplet gamma size distribution
-(see [`p3_hm_large_drop_fraction`](@ref)). Rime collected from rain is
-counted in full: rain drops are all larger than 25 μm.
+The window, the 350 mg⁻¹ yield, the splinter size and the rimer-size
+threshold are those of the P3 reference code (`microphy_p3.f90`,
+rime-splintering block: `Dinit_HM = 10e-6`, `Dmin_HM = 250e-6` for one
+ice category), which follows Hallett & Mossop (1974) and Mossop (1976);
+the P3 code also requires the ice to be rimed already
+(`q_rim ≥ q_small`), which is applied here too. Splinters come from
+large rimers collecting large drops: `D_ice_min` switches the process
+off for populations of small crystals, whose rime is mostly frozen
+small droplets. Mossop (1976) and Choularton et al. (1980) found
+splintering needs drops larger than about 24 μm diameter; the P3 code
+does not apply that restriction to cloud rime (`D_drop_min = 0`),
+setting `D_drop_min = 25e-6` applies it through the droplet gamma size
+distribution (see [`p3_hm_large_drop_fraction`](@ref)). Rime collected
+from rain is counted in full: rain drops are all larger than 25 μm.
 """
 Base.@kwdef struct P3HallettMossop{T<:AbstractFloat}
     splinters_per_kg::T = 3.5e8
     T_lo::T = 265.15
     T_peak::T = 268.15
     T_hi::T = 270.15
-    m_splinter::T = P3_NUCLEATED_ICE_MASS
+    m_splinter::T = P3_HM_SPLINTER_MASS
+    D_ice_min::T = 250e-6
     D_drop_min::T = 0.0
 end
 
@@ -110,6 +131,29 @@ function p3_hm_large_drop_fraction(q_c::Real, N_c::Real, ρ_air::Real, D_min::Re
 end
 
 """
+    p3_hm_rimer_diameter(s::P3ParcelState, pp = P3_DEFAULT_PROCESS) -> D (m)
+
+Mean diameter of the P3 ice population used by the Hallett–Mossop
+rimer-size threshold, as `diam_ice` of the P3 code:
+
+    D = (6 q_i / (π N_i ρ_bulk))^{1/3},
+
+with `ρ_bulk` = [`p3_bulk_density`](@ref) of the gamma PSD (shape
+`pp.μ_i`, slope from [`p3_slope`](@ref) within the P3 mean-size limits
+of `_p3_ice_λ_limits`). The P3 code uses the mass-weighted mean density
+from its lookup table in place of `ρ_bulk`. Returns 0 without ice.
+"""
+function p3_hm_rimer_diameter(s::P3ParcelState{FT},
+                              pp::P3ProcessParameters = P3_DEFAULT_PROCESS) where {FT}
+    (s.q_i >= pp.q_small && s.N_i > 0) || return zero(FT)
+    md = p3_mass_dimension(s.q_i, s.q_rim, s.B_rim, pp.ice)
+    λmin, λmax = _p3_ice_λ_limits(pp.μ_i, md.F_rim)
+    λ = p3_slope(s.q_i, s.N_i, md; μ = pp.μ_i, λ_min = λmin, λ_max = λmax)
+    ρb = p3_bulk_density(pp.μ_i, λ, md)
+    return FT(cbrt(6 * s.q_i / (π * s.N_i * ρb)))
+end
+
+"""
     p3_hallett_mossop(s::P3ParcelState, r, hm = P3_DEFAULT_HM, pp = P3_DEFAULT_PROCESS)
         -> (n_hm, q_hm)
 
@@ -123,7 +167,10 @@ limited form from [`p3_limit_rates`](@ref)):
 `f` = [`p3_hm_temperature_factor`](@ref), `φ_c` =
 [`p3_hm_large_drop_fraction`](@ref) (1 unless `hm.D_drop_min > 0`). At
 -5 °C this is exactly 350 splinters per mg of rime. Zero outside
--8…-3 °C and whenever there is no riming. The riming rates are used as
+-8…-3 °C, whenever there is no riming, when the ice carries no rime yet
+(`q_rim < q_small`), and when the ice mean diameter
+([`p3_hm_rimer_diameter`](@ref)) is below `hm.D_ice_min`, as in the P3
+code. The riming rates are used as
 given — they are not recomputed here.
 
 How the splinters are booked is [`p3_hm_tendencies`](@ref).
@@ -137,6 +184,11 @@ function p3_hallett_mossop(s::P3ParcelState{FT}, r::NamedTuple,
     f = p3_hm_temperature_factor(s.T, hm)
     z = zero(FT)
     (f > 0 && r.rime_c + r.rime_r > 0) || return (z, z)
+    # P3 code: only rimed ice of mean diameter ≥ D_ice_min splinters
+    s.q_rim >= pp.q_small || return (z, z)
+    if hm.D_ice_min > 0
+        p3_hm_rimer_diameter(s, pp) >= hm.D_ice_min || return (z, z)
+    end
     φc = one(FT)
     if hm.D_drop_min > 0 && r.rime_c > 0
         ρa = air_density(s.T, s.p, _p3_partition(s), pp.thermo)
@@ -165,8 +217,10 @@ of that ice: the splinters are small unrimed particles in P3's single
 ice category, so their mass leaves the *rime* mass, and rime volume
 leaves with it at the density of the rime being formed this step, which
 leaves the density of the new rime — and hence the rime-volume
-bookkeeping — unchanged. The mass is tiny (`350 mg⁻¹ × 3.8e-15 kg`
-= 1.3×10⁻⁶ of the rime), so the rime cannot be driven negative by it.
+bookkeeping — unchanged. This is the P3 code's treatment (`qcmul`,
+`qrmul` go to `q_i` but not to `q_rim`). The mass is small
+(`350 mg⁻¹ × 4.7e-13 kg` = 1.65×10⁻⁴ of the rime), so the rime cannot
+be driven negative by it.
 """
 function p3_hm_tendencies(s::P3ParcelState{FT}, r::NamedTuple,
                           hm::P3HallettMossop = P3_DEFAULT_HM,

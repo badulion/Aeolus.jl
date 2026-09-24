@@ -21,7 +21,9 @@ using Aeolus.MoistThermodynamics: PhasePartition, air_density, heat_capacity_moi
     @testset "One nucleated-ice mass" begin
         @test NUCLEATED_ICE_MASS === P3_NUCLEATED_ICE_MASS
         @test P3_NUCLEATED_ICE_MASS ≈ 4π / 3 * 900 * 1e-18 rtol = 1e-15
-        @test P3_DEFAULT_HM.m_splinter === P3_NUCLEATED_ICE_MASS
+        # splinters are not nucleated crystals: 10 μm vs 2 μm diameter (P3 code)
+        @test P3_DEFAULT_HM.m_splinter === P3_HM_SPLINTER_MASS
+        @test P3_HM_SPLINTER_MASS / P3_NUCLEATED_ICE_MASS ≈ 125 rtol = 1e-12
     end
 
     @testset "Immersion freezing of cloud: number, water, energy, rime" begin
