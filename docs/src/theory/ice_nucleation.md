@@ -427,14 +427,19 @@ column**, not an LES, in the set-up of the ISDAC intercomparison
 (Ovchinnikov et al. 2014, flight 31): the ISDAC initial ``\theta_l`` and
 ``q_t`` profiles (`isdac_initial_profile`; elevated mixed layer
 400–825 m under an inversion), 1020 hPa at the surface, no surface
-fluxes (sea ice), 200 cm⁻³ droplets, the ISDAC longwave
+fluxes (sea ice), 200 cm⁻³ droplets and the ISDAC subsidence
+``w = -Dz``, ``D`` = 5×10⁻⁶ s⁻¹ (constant, 4.125 mm s⁻¹, above 825 m).
+The initial LWP is 14.4 g m⁻², against the ~14 g m⁻² reported for the
+case (Paukert & Hoose 2014) — a check that the profiles are right, and
+asserted in the tests. The case paper itself (Ovchinnikov et al. 2014)
+was not accessible, so treat the set-up as "ISDAC-like".
+
+**The longwave is not ISDAC's.** ISDAC simulations use a full radiation
+code (RRTMG). Here cloud-top cooling is the idealised DYCOMS-form
 ``F = F_0 e^{-\kappa\,\mathrm{LWP}_\downarrow} + F_1 e^{-\kappa\,\mathrm{LWP}_\uparrow}``
-(``F_0`` = 72 W m⁻², ``F_1`` = 15 W m⁻², ``\kappa`` = 170 m² kg⁻¹) and
-the ISDAC subsidence ``w = -Dz``, ``D`` = 5×10⁻⁶ s⁻¹ (constant above
-825 m). The profile and forcing constants are quoted from the case
-specification as the author of this page recalled it; the paper itself
-was not accessible when this was written, so treat them as
-"ISDAC-like".
+with ``F_0`` = 72 W m⁻², ``F_1`` = 15 W m⁻², ``\kappa`` = 170 m² kg⁻¹;
+the provenance of these three values is unverified and they are a
+modelling choice, not a case specification.
 
 Simplified, and why it matters:
 
@@ -452,7 +457,10 @@ Simplified, and why it matters:
   INP consumed on freezing, entrained with free-tropospheric air,
   falling with the ice number and released where ice sublimates —
   instead of ISDAC's prescribed ice number. The dust number is chosen
-  so the ice falls in the ISDAC range (0.25–4 L⁻¹).
+  so the ice is of order 0.1–1 L⁻¹: flight 31 observed ~0.35 L⁻¹, and
+  the intercomparison prescribed 1 L⁻¹ with a 4 L⁻¹ sensitivity run.
+  The tests' 0.25–4 L⁻¹ window is a band around those numbers, not a
+  range published with the case.
 * **Microphysics** is the full P3 of this package: process rates with
   Hallett–Mossop (inactive: the cloud is at −12 to −15 °C, as in ISDAC
   and M-PACE), saturation adjustment (which conserves ``\theta_{li}``,
@@ -526,6 +534,9 @@ do not claim one.
 * Niemand, M. et al. (2012), *A particle-surface-area-based
   parameterization of immersion freezing on desert dust particles*,
   JAS 69, 3077.
+* Paukert, M. & Hoose, C. (2014), *Modeling immersion freezing with
+  aerosol-dependent prognostic ice nuclei in Arctic mixed-phase clouds*,
+  JGR Atmos. 119, 9073.
 * Ovchinnikov, M. et al. (2014), *Intercomparison of large-eddy
   simulations of Arctic mixed-phase clouds: Importance of ice size
   distribution assumptions*, JAMES 6, 223.

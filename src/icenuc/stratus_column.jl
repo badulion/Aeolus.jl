@@ -11,12 +11,18 @@
 # mixing, in the set-up of the ISDAC intercomparison (Ovchinnikov et al.
 # 2014; flight 31, 26 April 2008, over sea ice north of Alaska):
 #
-#   * initial θ_l and q_t profiles and surface pressure of the ISDAC case;
-#   * the ISDAC/DYCOMS-form longwave, F = F0 e^{-κ LWP↓} + F1 e^{-κ LWP↑}
-#     with F0 = 72 W m⁻², F1 = 15 W m⁻², κ = 170 m² kg⁻¹, driving
-#     cloud-top cooling interactively with the liquid water path;
+#   * initial θ_l and q_t profiles and surface pressure of the ISDAC case
+#     (initial LWP 14.4 g m⁻² here; ~14 g m⁻² reported for the case by
+#     Paukert & Hoose 2014);
 #   * no surface fluxes (sea ice), droplet number fixed at 200 cm⁻³
 #     (P3's `N_c_prescribed`), as in ISDAC.
+#
+# NOT from ISDAC: the longwave. ISDAC runs use a full radiation code
+# (RRTMG). Here cloud-top cooling is the idealised DYCOMS-form
+# F = F0 e^{-κ LWP↓} + F1 e^{-κ LWP↑} with F0 = 72 W m⁻², F1 = 15 W m⁻²,
+# κ = 170 m² kg⁻¹ — values of unverified provenance, chosen as a
+# plausible Arctic cloud-top cooling, not taken from the ISDAC
+# specification.
 #
 # Simplifications, stated because they matter:
 #
@@ -33,8 +39,10 @@
 #     al. 2015: entrained free-tropospheric INP sustain cloud ice);
 #   * ice comes from prognostic INP (IceNucleation: Niemand et al. 2012
 #     immersion freezing on a dust mode) consumed on nucleation, NOT from
-#     the ISDAC prescription of a fixed ice number; the INP scale factor
-#     is chosen to give ice numbers in the ISDAC range (0.25–4 L⁻¹);
+#     the ISDAC prescription of a fixed ice number; the dust number is
+#     chosen to give ice of order 0.1–1 L⁻¹ (ISDAC flight 31 observed
+#     ~0.35 L⁻¹; the intercomparison prescribed 1 L⁻¹ with a 4 L⁻¹
+#     sensitivity run);
 #   * microphysics is the full P3 of this package (process rates,
 #     Hallett–Mossop, saturation adjustment, sedimentation of ice with
 #     per-moment fall speeds), with consumed INP falling with the ice
@@ -45,7 +53,7 @@
 # (`MoistThermodynamics.liquid_water_static_energy`) and each water
 # species; after mixing T is recovered from s_l and the cloud is
 # re-adjusted by P3's `p3_condensation`, which conserves θ_li rather than
-# s_l (issue #82) — the resulting energy error is quoted in the tests.
+# s_l (issue #82). The resulting energy drift is not quantified here.
 
 """
     ArcticStratusColumn(; kwargs...)
@@ -61,7 +69,7 @@ Configuration of the 1-D mixed-phase Arctic stratus case
 | `p_sfc` | 1020 hPa | surface pressure (ISDAC) |
 | `z_ml_bot`, `z_inv` | 400, 825 m | elevated mixed layer (ISDAC) |
 | `K_ml` | 30 m² s⁻¹ | eddy diffusivity inside the mixed layer |
-| `F0`, `F1`, `κ_lw` | 72, 15 W m⁻², 170 m² kg⁻¹ | longwave parameterisation (ISDAC) |
+| `F0`, `F1`, `κ_lw` | 72, 15 W m⁻², 170 m² kg⁻¹ | idealised longwave parameterisation (not ISDAC, which uses RRTMG; values unverified) |
 | `D_sub` | 5e-6 s⁻¹ | large-scale divergence: `w = -D_sub z` below `z_inv`, `-D_sub z_inv` above (ISDAC) |
 | `dust_N` | 5 cm⁻³ | number of the dust INP mode (r_g 0.4 μm, σ_g 2) |
 | `inp_scale` | 1 | multiplies `dust_N` (100 for the glaciation experiment) |

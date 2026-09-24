@@ -27,6 +27,13 @@
     base, noice, ten, hundred, threehundred =
         runs[1.0], runs[0.0], runs[10.0], runs[100.0], runs[300.0]
 
+    @testset "Initial cloud matches the ISDAC case" begin
+        # ~14 g/m² initial LWP reported for ISDAC flight 31 (Paukert &
+        # Hoose 2014): checks the profiles, pressure and adjustment together
+        @test 13.0 <= base.LWP[1] <= 16.0
+        @test base.LWP[1] == noice.LWP[1]       # no ice at t = 0
+    end
+
     @testset "Budgets close" begin
         for r in values(runs)
             # water: column + precipitation − large-scale (subsidence) source
@@ -48,8 +55,9 @@
         i1 = findfirst(>=(1.0), base.t)
         # ice number in the liquid layer: 0.1–1 L⁻¹ from the first hour on
         @test all(0.1 .<= base.Ni_cloud[i1:end] .<= 1.0)
-        # ... inside the range prescribed in the ISDAC intercomparison
-        # (0.25–4 L⁻¹, Ovchinnikov et al. 2014) at the end of the run
+        # ... and within a band around the ISDAC numbers at the end of the
+        # run (observed ~0.35 L⁻¹; the intercomparison prescribed 1 and
+        # 4 L⁻¹). The band is ours, not a published range.
         @test 0.25 <= base.Ni_cloud[end] <= 4.0
         # liquid persists: LWP after 8 h is not below its initial value
         @test base.LWP[end] >= base.LWP[1]
