@@ -125,6 +125,8 @@ end
 """
 sgs_ccn_spectrum(modes::AbstractVector{<:ARGMode}, S̄::Real, σ_S::Real; kw...) =
     sum((m.N * sgs_ccn_fraction(m, S̄, σ_S; kw...) for m in modes); init = 0.0)
+sgs_ccn_spectrum(modes::AbstractVector{<:AerosolMode}, S̄::Real, σ_S::Real; kw...) =
+    sgs_ccn_spectrum(arg_modes(modes), S̄, σ_S; kw...)
 
 """
     SGSActivationResult{T}
@@ -159,7 +161,8 @@ Base.show(io::IO, r::SGSActivationResult) = print(io,
     sgs_activation(modes, w, coeffs::ActivationCoefficients, σ_S; pdf, method)
     sgs_activation(modes, w, T_K, p, cloud::SubgridCloud; kwargs...)
 
-Phase 42 activation with sub-grid supersaturation fluctuations. The
+Phase 42 activation with sub-grid supersaturation fluctuations. `modes`
+are `ARGMode`s or `AerosolOptics` modes, as for `arg_activation`. The
 cell-mean peak supersaturation is `arg_activation`'s `S_max` for the
 mean updraught `w`; unresolved turbulence spreads it by `σ_S`
 (fractional), with the shape of `pdf`, and each mode's activated
@@ -224,3 +227,7 @@ end
 sgs_activation(modes::AbstractVector{<:ARGMode}, w::Real, T_K::Real, p::Real,
                cloud::SubgridCloud; kw...) =
     sgs_activation(modes, w, T_K, p, cloud.σ_S; kw...)
+
+# AerosolOptics modes, converted as `arg_activation` converts them
+sgs_activation(modes::AbstractVector{<:AerosolMode}, args...; kw...) =
+    sgs_activation(arg_modes(modes), args...; kw...)

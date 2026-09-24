@@ -160,6 +160,13 @@ using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
         r2 = sgs_activation(modes, 0.5, T_K, p, sc.σ_S)
         @test r1.N_act_total == r2.N_act_total
         @test r1.σ_S == sc.σ_S
+        # AerosolOptics modes go through the same conversion as arg_activation
+        aom = [lognormal_mode(:sulphate, 300.0, 0.05, 1.8)]   # cm⁻³, μm
+        @test sgs_activation(aom, 0.5, T_K, p, 1e-3).N_act_total ==
+              sgs_activation(arg_modes(aom), 0.5, T_K, p, 1e-3).N_act_total
+        @test sgs_activation(aom, 0.5, T_K, p, 1e-3).N_act_total > 0
+        @test sgs_ccn_spectrum(aom, 2e-3, 1e-3; T_K = T_K) ==
+              sgs_ccn_spectrum(arg_modes(aom), 2e-3, 1e-3; T_K = T_K)
     end
 
     # ---------------------------------------------------------------------

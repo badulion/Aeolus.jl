@@ -74,7 +74,8 @@ using ..GasOptics: erfc_series
 # Phase 42: activation and the CCN spectrum (issue #13 delegates to them)
 using ..AerosolCloud: ARGMode, ActivationCoefficients, ActivationResult,
                       activation_coefficients, arg_activation, ccn_fraction,
-                      mode_critical_supersaturation, KAPPA_MIN
+                      mode_critical_supersaturation, KAPPA_MIN, arg_modes
+using ..AerosolOptics: AerosolMode
 # Phase 41: droplet growth and the cell water/heat budget
 using ..Superdroplet: SuperdropletSet, nsuperdroplets, condensation_growth!,
                       EulerianCell, cell_pressure, cell_supersaturation,
