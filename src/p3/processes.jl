@@ -51,7 +51,7 @@ MM15) unless noted.
 
 References: Khairoutdinov & Kogan (2000, MWR 128, 229-243); Seifert &
 Beheng (2001, Atmos. Res. 59-60, 265-281); Seifert (2008, JAS 65,
-3608-3619); Westbrook et al. (2008, QJRMS 134, 1235) for the aggregate
+3608-3619); Westbrook et al. (2008, JAS 65, 206-219) for the aggregate
 capacitance; MM15.
 """
 Base.@kwdef struct P3ProcessParameters{T<:AbstractFloat}
