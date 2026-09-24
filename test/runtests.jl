@@ -890,4 +890,5 @@ end
         include("era4_thermodynamics.jl")  # Phase 39  exact moist thermodynamics
         include("era4_activation.jl")      # Phase 42  aerosol-cloud interaction
         include("era4_superdroplet.jl")    # Phase 41  superdroplet microphysics
+        include("era4_fog.jl")             # Phase 44  fog / dew coupling (#11)
 end

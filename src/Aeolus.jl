@@ -378,7 +378,8 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        supersaturation, supersaturation_ice,
        kelvin_coefficient, kohler_supersaturation, kohler_critical_point,
        kohler_equilibrium_radius, surface_tension_water,
-       kappa_from_solute, solute_from_kappa
+       kappa_from_solute, solute_from_kappa,
+       moist_enthalpy
 
 # Phase 42 — aerosol-cloud interaction (Kohler activation)
 # Kohler theory itself lives in the Phase 39 contract; the names here
