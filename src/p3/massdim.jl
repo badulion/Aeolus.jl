@@ -41,7 +41,9 @@ Fixed parameters of the P3 ice particle model (SI units).
 unrimed ice, with the Hogan et al. (2012) correction of the maximum
 dimension that MM15 adopt; `γ_va, σ_va` the Mitchell (1996) aggregate
 area-dimension relation (0.2285 D^1.88 in cgs, converted to SI). The
-rime-density bounds are those of MM15 §2b.
+rime-density bounds are those of MM15 §2b. `ρ_ice = 917` follows the
+MM15 text; the P3 reference lookup-table code uses 900 kg m⁻³ for the
+small-sphere regime (`D_th` 66.0 μm vs 67.1 μm).
 """
 Base.@kwdef struct P3IceParameters{T<:AbstractFloat}
     ρ_ice::T = 917.0
@@ -307,6 +309,14 @@ At fixed `D` it therefore jumps when a moving threshold `D_gr(F_rim,
 ρ_rim)` or `D_cr` crosses `D`. The bulk integrals over the size
 distribution are nevertheless continuous in `F_rim` and `ρ_rim`, since
 the jump location moves continuously.
+
+The P3 reference lookup-table code (`create_p3_lookupTable_1.f90`) no
+longer uses the `F_rim` weighting for partially rimed ice: it
+interpolates the area linearly in *mass* between the aggregate and
+graupel relations, `A = A_agg + (m - m_agg)(A_gr - A_agg)/(m_gr - m_agg)`,
+which makes `A` continuous at `D_cr` (the `F_rim` form is left there
+commented out). The `F_rim` form of MM15 is kept here; expect bulk
+fall speeds of partially rimed ice to differ from current P3 tables.
 """
 function p3_particle_area(D::Real, md::P3MassDimension{T}) where {T}
     p = md.params
