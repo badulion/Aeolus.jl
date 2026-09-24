@@ -508,10 +508,10 @@ function p3_fall_speed(D::Real, md::P3MassDimension{T};
                        ρ_air::Real = _p3_ref_air(md.params)[1],
                        η_air::Real = _p3_ref_air(md.params)[2]) where {T}
     D > 0 || return zero(T)
-    p = md.params
-    m = p3_particle_mass(D, md)
-    A = p3_particle_area(D, md)
-    return _p3_vt(T(D), m, A, T(ρ_air), T(η_air), p)
+    DT = T(D)                 # work in the precision of md (D may be Float64)
+    m = p3_particle_mass(DT, md)
+    A = p3_particle_area(DT, md)
+    return _p3_vt(DT, m, A, T(ρ_air), T(η_air), md.params)
 end
 
 function _p3_vt(D::T, m::T, A::T, ρa::T, η::T, p::P3IceParameters) where {T}

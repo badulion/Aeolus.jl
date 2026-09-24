@@ -412,4 +412,25 @@ end
         @test steps[2] < 5e-3
         @test 8 < steps[1] / steps[2] < 12
     end
+
+    @testset "Generic float type" begin
+        # Review regression: a Float64 D with a Float32 state threw a
+        # MethodError in the fall-speed kernel. Float32 must agree with
+        # Float64 to single-precision rounding and stay Float32.
+        p32 = P3IceParameters{Float32}()
+        m32 = p3_mass_dimension(0.5f0, 400f0, p32)
+        m64 = p3_mass_dimension(0.5, 400.0)
+        @test m32.ρ_g ≈ m64.ρ_g rtol = 1e-6
+        for D in (30e-6, 1e-3), Dx in (D, Float32(D))
+            v = p3_fall_speed(Dx, m32)
+            @test v isa Float32
+            @test v ≈ p3_fall_speed(D, m64) rtol = 1e-5
+        end
+        VN32, VM32 = p3_bulk_fall_speed(0f0, 1f3, m32)
+        VN, VM = p3_bulk_fall_speed(0, 1e3, m64)
+        @test VN32 isa Float32 && VM32 isa Float32
+        @test VN32 ≈ VN rtol = 1e-5
+        @test VM32 ≈ VM rtol = 1e-5
+        @test p3_slope(1f-4, 1f3, m32) ≈ p3_slope(1e-4, 1e3, m64) rtol = 1e-5
+    end
 end
