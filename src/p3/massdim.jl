@@ -399,6 +399,15 @@ function p3_bulk_density(μ::Real, λ::Real, md::P3MassDimension{T}) where {T}
     return p3_mean_mass(μT, λT, md) / V
 end
 
+# P3's physical ice slope limits (create_p3_lookupTable_1.f90): mean size
+# (μ+1)/λ between 2 μm and 5 mm + 20 mm·F_rim². Returns (λ_min, λ_max) in m⁻¹.
+# Callers of p3_slope / p3_size_distribution use this rather than restating
+# the numbers.
+function _p3_ice_λ_limits(μ::Real, F_rim::Real)
+    μf, F = promote(float(μ), float(F_rim))
+    return ((μf + 1) / (5e-3 + 2e-2 * F^2), (μf + 1) / 2e-6)
+end
+
 """
     p3_slope(q_i, N_i, md::P3MassDimension; μ = 0, λ_min = 1.0, λ_max = 1e8) -> λ
 
@@ -431,15 +440,6 @@ The shape parameter is held fixed here. MM15 diagnose `μ` from `λ`
 
 Reference: Morrison & Milbrandt (2015), §2b.
 """
-# P3's physical ice slope limits (create_p3_lookupTable_1.f90): mean size
-# (μ+1)/λ between 2 μm and 5 mm + 20 mm·F_rim². Returns (λ_min, λ_max) in m⁻¹.
-# Callers of p3_slope / p3_size_distribution use this rather than restating
-# the numbers.
-function _p3_ice_λ_limits(μ::Real, F_rim::Real)
-    μf, F = promote(float(μ), float(F_rim))
-    return ((μf + 1) / (5e-3 + 2e-2 * F^2), (μf + 1) / 2e-6)
-end
-
 function p3_slope(q_i::Real, N_i::Real, md::P3MassDimension{T};
                   μ::Real = 0, λ_min::Real = 1.0, λ_max::Real = 1e8) where {T}
     (q_i > 0 && N_i > 0) ||
