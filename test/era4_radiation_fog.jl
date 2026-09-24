@@ -266,8 +266,9 @@ end
         @test all(-100 .< top .< -45)            # observed −73 … −100
         @test all(-250 .< cool .< -24)           # tens of K/day at the top
         # Wærsted et al. find C_LW = 40–70 g m⁻² h⁻¹ for opaque fog;
-        # Nakanishi's (2000) LES ≈ 30–40. This column's fog loses less LW
-        # (≈ 54 W m⁻² vs their ≈ 73–100) and sits at the low end.
+        # Nakanishi's (2000) LES ≈ 30–40. This column's fog has a smaller
+        # net LW deficit at its top (≈ −64 … −68 W m⁻² vs their −73 … −100)
+        # and sits at the low end.
         @test all(25 .< CLW .< 70)
         @test all(0.5 .< perW .< 0.7)            # their 0.55 at −2 °C … 0.90 at 15 °C
 

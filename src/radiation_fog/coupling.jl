@@ -245,8 +245,10 @@ end
     fog_radiative_heating!(Q, rad, col) -> Q
 
 Radiative energy input of each **model** layer, W m⁻³ (LW + SW),
-`Q_k = −∂F_net/∂z` with `F_net` positive downward, from
-`RadiationCore.flux_divergence!` on the last fluxes in `rad`.
+`Q_k = (F_net(k+1) − F_net(k))/Δz_k = +∂F_net/∂z` with `F_net`
+positive downward (energy entering through the top minus energy leaving
+through the bottom), from `RadiationCore.flux_divergence!` on the last
+fluxes in `rad`.
 
 Summed over the model layers, `Σ Q_k Δz_k = F_net(model top) − F_net(sfc)`
 exactly (the divergence telescopes); the column energy test relies on it.
@@ -270,8 +272,11 @@ end
 Net-flux convergence of the model layers `k_bot:k_top`
 (`F_net(k_top+1) − F_net(k_bot)`): the energy the layer gains per unit
 area. Negative in the longwave for a fog layer at night — its radiative
-cooling, the quantity Wærsted et al. (2017, Fig. 6b) report at fog top
-(−73 W m⁻² on 2 and 8 Nov 2015, −100 W m⁻² on 28 Oct 2014).
+cooling. In an opaque fog it is the net LW flux at the fog top
+(`rad.flux_lw.flux_net[k_top+1]`, the quantity Wærsted et al. 2017,
+Fig. 6b, report: −73 W m⁻² on 2 and 8 Nov 2015, −100 W m⁻² on
+28 Oct 2014) minus the small net LW at the fog base (≈ −10 W m⁻² at
+the ground), so its magnitude is ≈ 10 W m⁻² smaller than theirs.
 """
 function fog_top_flux_jump(rad::FogRadiation, k_bot::Int, k_top::Int)
     Fl = rad.flux_lw.flux_net; Fs = rad.flux_sw.flux_net

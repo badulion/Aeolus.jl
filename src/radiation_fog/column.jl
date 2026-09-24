@@ -167,7 +167,8 @@ const _KARMAN = 0.4
     stretched_levels(H; dz0 = 1.0, r = 1.08, dzmax = 25.0) -> zf
 
 Interface heights from 0 to `H`: the first layer `dz0` thick, each next
-one `r` times thicker up to `dzmax`, the last one trimmed to land on `H`.
+one `r` times thicker up to `dzmax`; the last layer absorbs the remainder
+to land on `H`, so it can be up to 1.5 times the current spacing thick.
 Fog forms in the lowest metres and its top is where the cooling
 concentrates, so both need metre-scale layers.
 """
