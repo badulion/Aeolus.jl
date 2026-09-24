@@ -54,6 +54,32 @@ end
         @info "PDF normalisation" worst_abs_error = worst_norm
     end
 
+    @testset "Far tails and extreme skewness stay finite and non-negative" begin
+        # Deep in the dry tail Q Φ(Q) + φ(Q) cancels to round-off; the
+        # condensate must still never be negative, and C, q̄_c must stay
+        # monotone in the mean deficit.
+        g = GaussianSaturationPDF()
+        qcs = [pdf_condensate(g, Q, 1.0) for Q in -60:0.01:60]
+        @test all(qcs .>= 0)
+        @test all(diff([pdf_cloud_fraction(g, Q, 1.0) for Q in -60:0.01:60]) .>= 0)
+        # Skewness far beyond anything physical used to give σ_c = 0 and
+        # w = 0 by cancellation, hence NaN. The limit is a vanishing
+        # far-moist spike of weight ≈ 1/Sk² over a bulk at the mean.
+        for Sk in (1e3, 1e8, 1e20, -1e8, -1e20)
+            d = DoubleGaussianSaturationPDF(Sk)
+            for s̄ in (-1e-4, 0.0, 1e-4)
+                C = pdf_cloud_fraction(d, s̄, 1e-4)
+                qc = pdf_condensate(d, s̄, 1e-4)
+                @test isfinite(C) && 0 <= C <= 1
+                @test isfinite(qc) && qc >= max(s̄, 0.0) * (1 - 1e-12)
+            end
+        end
+        @test pdf_cloud_fraction(DoubleGaussianSaturationPDF(1e8), -1e-4, 1e-4) ≈ 1e-16 rtol = 1e-6
+        @test_throws ArgumentError DoubleGaussianSaturationPDF(Inf)
+        @test_throws ArgumentError DoubleGaussianSaturationPDF(NaN)
+        @test_throws ArgumentError DoubleGaussianSaturationPDF(1.0; shape = 0.0)
+    end
+
     @testset "Gaussian closed forms (Sommeria-Deardorff / Mellor)" begin
         pdf = GaussianSaturationPDF()
         σ = 3.0e-4

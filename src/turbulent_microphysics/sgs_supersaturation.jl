@@ -83,8 +83,10 @@ struct DoubleGaussianSaturationPDF{T<:AbstractFloat} <: AbstractSaturationPDF
     skewness::T
     shape::T
     function DoubleGaussianSaturationPDF{T}(skewness, shape) where {T}
-        shape > 0 || throw(ArgumentError(
-            "DoubleGaussianSaturationPDF: shape must be > 0, got $shape"))
+        (shape > 0 && isfinite(shape)) || throw(ArgumentError(
+            "DoubleGaussianSaturationPDF: shape must be finite and > 0, got $shape"))
+        isfinite(skewness) || throw(ArgumentError(
+            "DoubleGaussianSaturationPDF: skewness must be finite, got $skewness"))
         return new{T}(skewness, shape)
     end
 end
@@ -99,8 +101,10 @@ _φ(x) = exp(-x * x / 2) / sqrt(2π)
 _Φ(x) = 0.5 * erfc_series(-x / sqrt(2.0))
 
 # ∫_{-Q}^{∞} (Q + z) φ(z) dz  =  Q Φ(Q) + φ(Q): mean positive part of
-# N(Q, 1). Written this way it is ≥ 0 and smooth through Q = 0.
-_gauss_positive_part(Q) = Q * _Φ(Q) + _φ(Q)
+# N(Q, 1), smooth through Q = 0. Exactly it is > 0, but for Q ≲ -38 the
+# two terms cancel to round-off and the difference can come out as a
+# negative denormal; clamp so a condensate is never negative.
+_gauss_positive_part(Q) = max(Q * _Φ(Q) + _φ(Q), 0.0)
 
 # Component weights / means / common std of the double Gaussian for a
 # given (s̄, σ). Returns ((w₁, μ₁), (w₂, μ₂), σ_c).
@@ -109,14 +113,22 @@ function _components(pdf::DoubleGaussianSaturationPDF, s̄::Real, σ::Real)
     if Sk == 0             # γ = 0: a single Gaussian
         return ((0.5, float(s̄)), (0.5, float(s̄))), float(σ)
     end
-    g32 = abs(Sk) / (abs(Sk) + pdf.shape)          # γ^{3/2}
+    aS = abs(Sk)
+    g32 = aS / (aS + pdf.shape)                    # γ^{3/2}
     γ = g32^(2 / 3)
-    S̃ = Sk / g32
-    w = 0.5 * (1 - sign(S̃) * sqrt(S̃^2 / (4 + S̃^2)))
-    μ1 = s̄ + σ * sqrt(γ * (1 - w) / w)
-    μ2 = s̄ - σ * sqrt(γ * w / (1 - w))
-    σc = σ * sqrt(1 - γ)
-    return ((w, μ1), (1 - w, μ2)), σc
+    # 1 - γ and the small weight are formed without cancellation, so that
+    # σ_c > 0 and w ∈ (0, 1) hold for every finite Sk. The naive
+    # `sqrt(1 - γ)` and `½(1 - √(S̃²/(4+S̃²)))` round to exactly 0 once
+    # |Sk| ≳ 1e8 and turn C and q̄_c into NaN.
+    one_minus_γ = -expm1((2 / 3) * log1p(-pdf.shape / (aS + pdf.shape)))
+    S̃ = aS / g32                                  # |Sk| / γ^{3/2}
+    r = hypot(2.0, S̃)
+    w_small = 2 / (r * (r + S̃))                   # ½(1 - S̃/√(4+S̃²))
+    w1, w2 = Sk > 0 ? (w_small, 1 - w_small) : (1 - w_small, w_small)
+    μ1 = s̄ + σ * sqrt(γ * w2 / w1)
+    μ2 = s̄ - σ * sqrt(γ * w1 / w2)
+    σc = σ * sqrt(one_minus_γ)
+    return ((w1, μ1), (w2, μ2)), σc
 end
 
 """
