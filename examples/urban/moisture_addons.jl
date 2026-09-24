@@ -364,7 +364,8 @@ end
 
 """
     apply_fog_dew!(θ, qv, ql, q_dew, Ts, dt; p = 1.01325e5, dz, ρ = 1.0,
-                   C_e = 1e-3, U = 3.0, τ_fog = 0.0, fog_levels = :)
+                   C_e = 1e-3, U = 3.0, τ_fog = 0.0,
+                   fog_levels = axes(θ, 3))
         -> H_dew (W m⁻², 2-D)
 
 Dew onto the surface, then fog in the air, for the urban example.
