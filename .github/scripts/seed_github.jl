@@ -4,8 +4,9 @@ Create the roadmap milestones, labels and issues on GitHub from
 `.github/roadmap-issues.toml`.
 
     gh auth login                                   # once, interactively
-    julia .github/scripts/seed_github.jl --dry-run  # show what would happen
-    julia .github/scripts/seed_github.jl            # do it
+    julia .github/scripts/seed_github.jl --dry-run        # show what would happen
+    julia .github/scripts/seed_github.jl                  # create what is missing
+    julia .github/scripts/seed_github.jl --update-bodies  # also refresh existing bodies
 
 Idempotent: milestones, labels and issues that already exist (matched by
 title) are skipped, so a partial run can simply be re-run. Nothing is
@@ -17,6 +18,9 @@ using TOML
 const ROOT    = abspath(joinpath(@__DIR__, "..", ".."))
 const SPEC    = joinpath(ROOT, ".github", "roadmap-issues.toml")
 const DRY     = "--dry-run" in ARGS
+# Re-push issue bodies for issues that already exist, so a change to the
+# acceptance criteria does not leave dozens of stale copies behind.
+const UPDATE  = "--update-bodies" in ARGS
 
 # Label colours by kind, so the board is readable at a glance.
 const LABEL_COLOURS = Dict(
@@ -107,11 +111,30 @@ function main()
     end
 
     println("\nIssues ($(length(issues)))")
-    created = skipped = 0
+    created = skipped = updated = 0
+    numbers = Dict{String,Int}()
+    if UPDATE && !DRY
+        raw = sh(String["issue", "list", "--state", "all", "--limit", "500",
+                        "--json", "number,title",
+                        "--jq", ".[] | \"\\(.number)\\t\\(.title)\""])
+        for line in split(raw, "\n"; keepempty = false)
+            parts = split(line, "\t"; limit = 2)
+            length(parts) == 2 && (numbers[strip(parts[2])] = parse(Int, parts[1]))
+        end
+    end
     for i in issues
         t = i["title"]
         if t in have_issue
-            skipped += 1; continue
+            if UPDATE && haskey(numbers, t)
+                updated += 1
+                println("  ~ $t")
+                sh(String["issue", "edit", string(numbers[t]), "--body", i["body"]])
+            elseif UPDATE
+                println("  ? $t (exists but number not found)")
+            else
+                skipped += 1
+            end
+            continue
         end
         created += 1
         println("  + $t")
@@ -123,7 +146,7 @@ function main()
         r = sh(args)
         startswith(r, "ERROR") && println("      ", first(r, 200))
     end
-    println("\n$(created) created, $(skipped) already present.")
+    println("\n$(created) created, $(updated) updated, $(skipped) already present.")
     DRY && println("\nDry run — nothing was sent to GitHub.")
 end
 

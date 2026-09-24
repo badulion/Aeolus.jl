@@ -219,13 +219,21 @@ def main():
                       body.strip(), '"""', ""])
 
     def accept(extra):
+        # The standing gate lives in CLAUDE.md so it cannot drift across
+        # dozens of copies; only issue-specific criteria are inlined here.
         return ("\n## Acceptance criteria\n\n"
                 + "".join(f"- [ ] {e}\n" for e in extra)
                 + "- [ ] Tests assert physics — conservation, analytic limits, "
                   "published benchmarks — not merely that the code runs\n"
                   "- [ ] Full suite green: `julia --project=. test/runtests.jl`\n"
                   "- [ ] Measured validation numbers quoted in the PR body\n"
-                  "- [ ] No new export collisions\n")
+                  "- [ ] Docstrings on new public functions; a new module also "
+                  "needs an `@autodocs` entry and a `docs/make.jl` line\n"
+                  "- [ ] No new export collisions\n"
+                  "\nPlus the standing gate in "
+                  "[`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README "
+                  "status updates are **not** part of this PR — they happen at "
+                  "phase/era closeout, after merge.\n")
 
     for p in sorted(set(list(NEAR) + list(phases))):
         if p in DONE or p not in ERA_OF_PHASE:

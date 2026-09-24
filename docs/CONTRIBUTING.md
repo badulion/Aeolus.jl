@@ -16,6 +16,7 @@ part an agent must follow every session — is in
 - [Commit granularity](#commit-granularity)
 - [Pull requests](#pull-requests)
 - [Testing standards](#testing-standards)
+- [Documentation is part of done](#documentation-is-part-of-done)
 - [Conventions with a history](#conventions-with-a-history)
 - [Recovery procedures](#recovery-procedures)
 
@@ -245,6 +246,96 @@ implementation or the expectation is wrong. Weakening an assertion to
 reach green, without stating that the original expectation was
 physically incorrect, is the one thing that will get a PR rejected
 outright.
+
+---
+
+## Documentation is part of done
+
+Documentation is not a follow-up task and not a separate issue. A phase
+that ships with the roadmap still describing it in the future tense has
+left the repository lying about itself, and the next person — quite
+possibly you, months later — will trust the wrong document.
+
+There are three levels, because three different things go stale.
+
+### Every pull request
+
+- **Docstrings** on new public functions. Include a literature reference
+  for anything non-obvious, and state the limits of validity. The
+  existing modules set the standard: see `MoistThermodynamics` on why
+  its saturation adjustment is bisection rather than a fixed point.
+- **A new module** needs an `@autodocs` block in `docs/src/api/` and a
+  line in the `pages` list in `docs/make.jl`. Without both, its
+  docstrings exist but no page reaches them, and Documenter will say so.
+- **Changed behaviour or interface** means updating the affected theory
+  or design page under `docs/src/`.
+
+### After the PR is merged — closeout
+
+Status updates are **not** part of the feature PR. They happen once it is
+merged, as a separate change on `master` made by the maintainer, or as a
+small dedicated closeout PR.
+
+Two reasons. A phase cannot honestly be marked ✅ SHIPPED while the PR
+delivering it is still open and might yet be rejected. And
+`longterm_roadmap.md` and `README.md` are shared files — if every
+phase-completing branch edited them, concurrent agents would conflict on
+precisely the two files most likely to be touched simultaneously. Keeping
+them off feature branches removes that class of conflict entirely.
+
+**When a phase's last issue is merged**, update
+`docs/src/design/longterm_roadmap.md`:
+
+- Mark the phase **✅ SHIPPED**.
+- Replace the planned description with **what was actually built**, and
+  the numbers it was measured at. A shipped phase's entry is a record,
+  not a forecast.
+- **If the implementation deviated from the plan, say so and say why.**
+  Phase 32 was planned as "bind RRTMGP.jl" and shipped as a Malkmus band
+  model inverted through Domoto, because RRTMGP needs a binary stack that
+  does not build here. That deviation is recorded with its reasoning, and
+  it is more useful than the original plan was.
+- **Record what the tests caught.** Bugs found, and — separately — test
+  *expectations* that proved wrong rather than the code. Both happen. The
+  distinction is the single most useful thing in the file, because it
+  tells the next reader which of their own assumptions to distrust.
+- Tick the phase in the README roadmap checkboxes.
+
+A worked example of the tone, from the Phase 32 entry:
+
+> **Accuracy bug found later by the DYCOMS-II RF01 case, and fixed.**
+> The version that shipped first had *two compensating errors* in the
+> 8–12 μm window: line strengths roughly 50× too large and a continuum
+> roughly 15× too weak. Those cancel for one particular column, which is
+> precisely why a single broadband number is not an adequate test of a
+> band model.
+
+**When an era's last phase is merged**, additionally:
+
+- **Close the era milestone.**
+- **Update the README** — era table, capability summary, validation table
+  and test count. The README carried "39 unit tests" long after the suite
+  passed seven thousand; that is how a README rots.
+- **Add or extend the theory page** for the era's physics. Era III added
+  `docs/src/theory/radiation.md`, explaining the transfer equation, why
+  band-averaging is biased, and where plane-parallel breaks down — the
+  reasoning behind the code, not a restatement of it.
+- **Rebuild the docs and read the warnings:**
+
+  ```bash
+  julia --project=docs docs/make.jl
+  ```
+
+  Missing-docstring warnings mean public API that no page documents. That
+  check once went from hundreds of undocumented names to two, both
+  private helpers that correctly stay out of the manual.
+
+### What not to do
+
+Do not open a separate "update the docs" issue at the end of an era.
+By then nobody remembers which numbers were measured under which
+configuration, and the temptation is to quote figures from a run that no
+longer exists. Quote what you measured, when you measured it.
 
 ---
 

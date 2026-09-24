@@ -56,7 +56,44 @@ That is the point of asking for them — do not squash them yourself.
 - [ ] New code has tests that assert **physics**, not just that it runs
 - [ ] Validation numbers measured and quoted in the PR body
 - [ ] No new export collisions (see below)
-- [ ] Docs updated if behaviour or API changed
+- [ ] Documentation updated — see below
+
+## Documentation is part of done
+
+Docs are not a follow-up task. But **status updates happen after the PR
+is merged, not inside it** — see the split below.
+
+**In every PR** (the code and its documentation land together)
+
+- Docstrings on new public functions, with references for any non-obvious
+  physics.
+- A new module gets an `@autodocs` entry in `docs/src/api/` and a line in
+  `docs/make.jl`.
+- If behaviour or an interface changed, update the affected theory or
+  design page under `docs/src/`.
+
+**After the PR is merged** — a separate *closeout* change, never part of
+the feature PR:
+
+- When a phase's last issue is merged: mark the phase ✅ SHIPPED in
+  `docs/src/design/longterm_roadmap.md` with **what was actually built
+  and the numbers it was measured at**, record any bug the tests caught
+  and any test *expectation* that proved wrong, and tick the phase in the
+  README.
+- When an era's last phase is merged: close the era milestone, update the
+  README era table, capability summary, validation table and test count,
+  add or extend the era's theory page, and rebuild the docs
+  (`julia --project=docs docs/make.jl`) checking for missing-docstring
+  warnings.
+
+Two reasons status updates are kept out of the feature PR. A phase cannot
+honestly be marked SHIPPED while the PR delivering it is still open. And
+`longterm_roadmap.md` and `README.md` are shared files — if every
+phase-completing branch edited them, concurrent agents would collide on
+exactly the two files most likely to be touched at once.
+
+Closeout is done by the maintainer on `master`, or by a small dedicated
+closeout PR. Agents do not push to `master`.
 
 ## What an agent may and may not do
 
