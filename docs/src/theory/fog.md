@@ -136,7 +136,7 @@ after which the run stays bounded with fog and dew active.
 
 Measured over the full 24 h run (06 h to 06 h, ``\Delta t`` = 2 s): the
 lowest-layer ``\theta`` stayed in 292.1–301.5 K and ``\max|\nabla\cdot u|``
-= 1.75×10⁻¹⁵. Dew formed on the initially 285 K surfaces in the morning,
+= 1.70×10⁻¹⁵ (re-measured after the `fog_equilibrium` convergence fix; 1784 s wall). Dew formed on the initially 285 K surfaces in the morning,
 peaked at 0.185 mm at 09:30 and had evaporated by 22:00. Fog water
 reached at most 3.4 g/kg, confined to wall nooks, and was gone by 15:30.
 The example's surfaces never cool below the dew point at night (the
