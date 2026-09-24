@@ -43,7 +43,6 @@ MM15) unless noted.
 | `D_shed` | 1e-3 | diameter of drops shed from melting ice, m |
 | `N_c_prescribed` | 200e6 | droplet number given to newly formed cloud, m⁻³ |
 | `μ_r`, `μ_i` | 0, 0 | gamma shape parameters of rain and ice |
-| `D_r_min`, `D_r_max` | 20e-6, 5e-3 | bounds on the rain mean-volume diameter, m |
 | `cap_agg` | 0.48 | capacitance of nonspherical ice relative to a sphere, `C = 0.48 D/2` |
 | `ice` | `P3_DEFAULT_ICE` | [`P3IceParameters`](@ref) |
 | `thermo` | `DEFAULT_CONSTANTS` | `MoistThermodynamics.ThermodynamicConstants` |
@@ -73,8 +72,6 @@ Base.@kwdef struct P3ProcessParameters{T<:AbstractFloat}
     N_c_prescribed::T = 200e6
     μ_r::T = 0.0
     μ_i::T = 0.0
-    D_r_min::T = 20e-6
-    D_r_max::T = 5e-3
     cap_agg::T = 0.48
     ice::P3IceParameters{T} = P3_DEFAULT_ICE
     thermo::ThermodynamicConstants{T} = DEFAULT_CONSTANTS
@@ -404,13 +401,13 @@ _p3_no_thresholds(p::P3IceParameters{T}) where {T} =
     P3MassDimension{T}(zero(T), p.ρ_rim_default, zero(T), zero(T),
                        T(Inf), T(Inf), T(Inf), p)
 
-# Rain PSD slope from (q_r, N_r) for spheres of density ρ_w, with N_r
-# bounded so that the mean-volume diameter lies in [D_r_min, D_r_max].
+# Rain PSD slope and limited number from (q_r, N_r). Not computed here:
+# this is sedimentation.jl's P3 rain PSD (p3_rain_limit_number, then
+# p3_rain_size_distribution; mean size (μ+1)/λ ∈ [10 μm, 2 mm]), so the
+# process rates, sedimentation and radar reflectivity see the same drops.
 function _p3_rain_slope(q_r, N_r, pp::P3ProcessParameters)
-    μ = pp.μ_r
-    mD(D) = π / 6 * pp.micro.ρ_water * D^3
-    Nr = clamp(N_r, q_r / mD(pp.D_r_max), q_r / mD(pp.D_r_min))
-    λ = gamma_psd_slope(Nr, 0, q_r / (π / 6 * pp.micro.ρ_water), 3, μ)
+    Nr = p3_rain_limit_number(q_r, N_r; μ_r = pp.μ_r)
+    _, _, λ = p3_rain_size_distribution(q_r, Nr; μ_r = pp.μ_r)
     return λ, Nr
 end
 
@@ -509,7 +506,9 @@ rime melts in proportion.
 
 Ice PSD: gamma with shape `μ_i` and λ from [`p3_slope`](@ref) with the
 P3 mean-size limiter (2 μm to 5 mm + 20 mm F_rim²). Rain PSD: gamma with
-shape `μ_r`, mean-volume diameter bounded to `[D_r_min, D_r_max]`.
+shape `μ_r` from [`p3_rain_size_distribution`](@ref) after
+[`p3_rain_limit_number`](@ref) — the same PSD sedimentation and radar
+use, mean diameter `(μ_r+1)/λ_r` in `[10 μm, 2 mm]` (P3 `get_rain_dsd2`).
 """
 function p3_process_rates(s::P3ParcelState{FT},
                           pp::P3ProcessParameters = P3_DEFAULT_PROCESS) where {FT}
@@ -761,8 +760,7 @@ function _p3_cleanup(s::P3ParcelState{FT}, pp::P3ProcessParameters) where {FT}
         Nc = pp.N_c_prescribed / air_density(T, s.p, _p3_partition(s), c)
     end
     if qr > 0
-        mD(D) = π / 6 * pp.micro.ρ_water * D^3
-        Nr = clamp(Nr, qr / mD(pp.D_r_max), qr / mD(pp.D_r_min))
+        Nr = p3_rain_limit_number(qr, Nr; μ_r = pp.μ_r)
     end
     if qi > 0
         qrim = clamp(qrim, z, qi)
@@ -791,7 +789,7 @@ sedimentation) of one cell by `dt` seconds:
     their latent heat), rime is clamped to `0 ≤ q_rim ≤ q_i` and
     `ρ_rim ∈ [50, 900]` via [`p3_rime_state`](@ref), `N_i` is adjusted
     when the ice mean size leaves P3's limiter and `N_r` when the rain
-    mean-volume diameter leaves `[D_r_min, D_r_max]`;
+    mean diameter leaves `[10 μm, 2 mm]` ([`p3_rain_limit_number`](@ref));
  5. if `adjust`, cloud condensation/evaporation by
     [`p3_condensation`](@ref) (`MoistThermodynamics.saturation_adjustment`).
 
