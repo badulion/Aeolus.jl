@@ -101,9 +101,20 @@ integral ``\sum \rho\Delta z\,(h + gz)`` therefore changes only through
 the radiative net flux at the model top and surface, the sensible heat
 flux, and the enthalpy of the vapour exchanged with the ground and of
 the droplets that settle out. `FogBudget` accumulates all four. Over
-6 h of the case the residual is 1.8×10⁻⁶ J m⁻² on a 1.14×10⁶ J m⁻²
-change, and over the full 14 h it stays below 10⁻⁹ of the fluxes. Water
-closes to 10⁻¹⁵.
+6 h of the case the residual is 5×10⁻⁶ J m⁻² on a 1.19×10⁶ J m⁻²
+change, and over the full 14 h it is 4×10⁻¹² of the summed boundary
+fluxes. Water closes to ~10⁻¹².
+
+**Time step.** The eddy diffusivity is evaluated from the start-of-step
+state and then used in an implicit solve. With a 1 m lowest layer this
+develops the well-known 2Δt oscillation ("fibrillation") of
+stability-dependent K closures (Kalnay & Kanamitsu 1988) once
+`dt ≳ 10` s. At `dt = 10` s the surface is 0.32 K colder after 3 h than
+at `dt = 2.5` s, and fog reaches the ground 45 min earlier. At
+`dt = 20` s the onset moves by 3.5 h. The default is therefore
+`dt = 5` s, which agrees with `dt = 2.5` s to 0.006 K after 3 h (a
+test) and with `dt = 1` s to 10 min in onset and 5 min in clearance
+over the 14 h case.
 
 ## 4. Validation: ParisFog, 14–15 November 2011
 
@@ -129,41 +140,41 @@ Measured (`examples/validation/parisfog_2011_radiation_fog.jl`):
 
 | | model | observed |
 | :-- | :-- | :-- |
-| fog first appears | aloft, top 120 m, base > 10 m | aloft at 150 m |
-| fog at the ground (3 m) | 04:35 UTC | 02:30 UTC |
-| max LWP | 101 g m⁻² at 08:30 | ≈ 70 g m⁻² at 07:30 |
+| fog first appears | 04:05 UTC aloft, 87–123 m | 02:00 UTC aloft at 150 m |
+| fog at the ground (3 m) | 05:20 UTC | 02:30 UTC |
+| max LWP | 92 g m⁻² at 07:55 | ≈ 70 g m⁻² at 07:30 |
 | max fog top before sunrise | ≈ 330 m | ≤ 300 m |
-| ground clear | 08:50 UTC (sunrise + 1.85 h) | ≈ 10:00 (+3.0 h) |
+| ground clear | 08:00 UTC (sunrise + 1.0 h) | ≈ 10:00 (+3.0 h) |
 | fog layer gone | 12:50 UTC | — |
 
-The fog forms two hours late and clears at the ground 1.2 h early, 0.5 h
+The fog forms 2.8 h late and clears at the ground 2 h early, 1.3 h
 before the lower end of the +2.3 to +7.6 h range that Wærsted et al.
 (2017, Table 2) list for SIRTA radiation fogs that cleared after sunrise.
 After sunrise the fog lifts into a stratus whose top keeps rising, to
 600 m by midday, so the column fog is too deep by then. Mazoyer et al.'s
 own LES also cleared an hour early and also lifted into stratus.
 
-**Opaque fog at night (LWP > 30 g m⁻², 25 samples)** against the SIRTA
+**Opaque fog at night (LWP > 30 g m⁻², 22 samples)** against the SIRTA
 radiation climatology of Wærsted et al. (2017):
 
 | | model | Wærsted et al. |
 | :-- | :-- | :-- |
-| net LW at the ground | −13.4 … −10.8 W m⁻² | → 0, "frequently −10" |
-| net LW at the fog top | −67.8 … −63.6 W m⁻² | −73 … −100 W m⁻² |
+| net LW at the ground | −12.7 … −10.5 W m⁻² | → 0, "frequently −10" |
+| net LW at the fog top | −68.3 … −63.4 W m⁻² | −73 … −100 W m⁻² |
 | LW loss in the top 100 m (static fog, 53 g m⁻²) | 99 % | "uppermost 50–100 m" |
-| fog-top LW cooling rate | 65–98 K day⁻¹ | — (LES: > 5.5 K h⁻¹ = 132 K day⁻¹ at 1 m) |
-| ``C_\mathrm{LW}`` | 31–35 g m⁻² h⁻¹ | 40–70 g m⁻² h⁻¹ |
-| max ``E_\mathrm{SW}`` in daytime fog | 5.8 g m⁻² h⁻¹ | 0–15 g m⁻² h⁻¹ |
+| fog-top LW cooling rate | 65–94 K day⁻¹ | — (LES: > 5.5 K h⁻¹ = 132 K day⁻¹ at 1 m) |
+| ``C_\mathrm{LW}`` | 30–35 g m⁻² h⁻¹ | 40–70 g m⁻² h⁻¹ |
+| max ``E_\mathrm{SW}`` in daytime fog | 5.2 g m⁻² h⁻¹ | 0–15 g m⁻² h⁻¹ |
 
 ``C_\mathrm{LW}`` falls below the observed range. The conversion factor
-is right (0.59–0.61 g m⁻² h⁻¹ per W m⁻² at 275 K, where Wærsted et al.
+is right (0.58–0.60 g m⁻² h⁻¹ per W m⁻² at 275 K, where Wærsted et al.
 give 0.55 to 0.90 between −2 °C and 15 °C), so the shortfall is in the
-radiative loss itself. The fog top loses 64–68 W m⁻² rather than 73–100.
+radiative loss itself. The fog top loses 63–68 W m⁻² rather than 73–100.
 Two causes are identifiable. First, the constructed air above the fog is
 humid (88 % to 400 m), which strengthens the downwelling longwave.
 Second, `MieCloudOptics` gives fog a longwave single-scattering albedo of
 0.45, which makes its emissivity ≈ 0.95 rather than ≈ 1: the downwelling
-at the ground under the fog is 313 W m⁻² against 326 W m⁻² for a black
+at the ground under the fog is 314 W m⁻² against 326 W m⁻² for a black
 body at the fog temperature, and Mazoyer et al. observed 325 W m⁻². The
 result sits inside Nakanishi's (2000) LES estimate of ≈ 30–40
 g m⁻² h⁻¹, as quoted by Wærsted et al. The peak cooling rate depends on
@@ -176,23 +187,25 @@ The same night with the droplets transparent to radiation:
 
 | | feedback on | feedback off |
 | :-- | :-- | :-- |
-| fog at the ground | 04:35 | 05:40 |
-| LWP at 06:00 | 61.2 g m⁻² | 7.0 g m⁻² |
-| fog top at 06:00 | 239 m | 203 m |
-| max LWP | 101 g m⁻² | 20.6 g m⁻² |
-| net LW at the ground in fog | ≈ −12 W m⁻² | ≈ −59 W m⁻² |
+| fog at the ground | 05:20 | never (base stays ≥ 27 m) |
+| LWP at 06:00 | 57.2 g m⁻² | 6.0 g m⁻² |
+| fog top at 06:00 | 281 m | 220 m |
+| max LWP | 92 g m⁻² | 23.7 g m⁻² |
+| net LW at the ground in fog | ≈ −11 W m⁻² | ≈ −60 W m⁻² |
 
 With the feedback off the ground keeps cooling at the clear-sky rate
 and the fog remains a weak, radiatively passive layer.
 
 ### Dissipation and the sun
 
-With the sun switched off, the fog still leaves the ground at 09:10, 20
-minutes later than with the sun. The ground heat flux, restoring the
+With the sun switched off, the fog still leaves the ground at 08:05,
+5 minutes later than with the sun. The ground heat flux, restoring the
 surface toward the deeper soil, and top-driven mixing lift its base.
-The layer then persists, with 68 g m⁻² at 13:20. With the sun on, the
-surface absorbs up to ≈ 135 W m⁻² under the thinning fog (Wærsted et
-al.: 40–120 W m⁻²), and the layer is gone by 12:50. In this setup, then,
+The layer then persists, with 73 g m⁻² at 13:20. With the sun on, the
+surface absorbs up to 157 W m⁻² under the lifted fog while its LWP is
+still above 30 g m⁻² (Wærsted et al.: net radiation 40–120 W m⁻² at a
+70° zenith angle; the sun here reaches ≈ 67°), and the layer is gone by
+12:50. In this setup, then,
 the sun removes the fog *layer*. Clearing at the ground is set mostly by
 the surface heat balance, and the tests assert only what the model
 shows.
@@ -203,6 +216,8 @@ shows.
   ground surface temperature. *J. Appl. Meteorol.*, 14, 1246–1258.
 * Deardorff, J. W. (1978). Efficient prediction of ground surface
   temperature and moisture. *J. Geophys. Res.*, 83, 1889–1903.
+* Kalnay, E. & Kanamitsu, M. (1988). Time schemes for strongly
+  nonlinear damping equations. *Mon. Wea. Rev.*, 116, 1945–1958.
 * Martin, G. M., Johnson, D. W. & Spice, A. (1994). The measurement and
   parameterization of effective radius of droplets in warm stratocumulus
   clouds. *J. Atmos. Sci.*, 51, 1823–1842.

@@ -161,6 +161,24 @@ end
         @test all(diff(zf) .<= 25.0 + 1e-9) && issorted(zf)
     end
 
+    @testset "Column time-step convergence (no K-closure fibrillation)" begin
+        # Review finding: the first default, dt = 10 s, was not converged —
+        # the stability-dependent K oscillated with period 2Δt and the
+        # surface ran 0.32 K colder after 3 h than at dt = 2.5 s, moving
+        # ground-fog onset by 45 min. The default must agree with a halved
+        # step before fog forms (23:20 → 02:20 UTC).
+        res = Dict{Float64, Any}()
+        for dt in (FogColumnSettings().dt, FogColumnSettings().dt / 2)
+            col = parisfog_2011_column(; settings = FogColumnSettings(dt = dt, dt_out = 3600.0))
+            run!(col, 3 * 3600)
+            res[dt] = col
+        end
+        a, b = res[FogColumnSettings().dt], res[FogColumnSettings().dt / 2]
+        @info "dt vs dt/2 after 3 h" ΔTs = a.Ts - b.Ts max_ΔT = maximum(abs.(a.T .- b.T))
+        @test abs(a.Ts - b.Ts) < 0.05
+        @test maximum(abs.(a.T .- b.T)) < 0.05
+    end
+
     @testset "Moist stability: fog turns a dry-stable layer unstable" begin
         # 8 K/km lapse rate: stable for dry air (Γ_d = 9.8 K/km), unstable
         # for saturated air at 275 K (Γ_m ≈ 6 K/km).
