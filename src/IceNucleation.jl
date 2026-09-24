@@ -68,7 +68,15 @@ using ..GasOptics: erfc_series
 
 export # --- log-normal surface-area diagnostics (inp.jl) ------------------
        mode_surface_area, surface_area_above_radius,
-       DEMOTT_CUTOFF_RADIUS
+       DEMOTT_CUTOFF_RADIUS,
+       # --- prognostic INP tracers (inp.jl) --------------------------------
+       INPPopulation, inp_population, inp_nmodes, inp_species,
+       inp_modes, inp_median_radius,
+       inp_number, inp_mass, inp_surface_area,
+       inp_number_above_radius, inp_surface_area_above_radius,
+       inp_emit!, inp_entrain!,
+       inp_consume!, inp_nucleate_singular!, inp_frozen_fraction,
+       inp_release!, inp_budget, inp_budget_residual
 
 include("icenuc/inp.jl")          # issue #5 — prognostic INP species
 # include("icenuc/freezing.jl")   # issue #6 — immersion/deposition freezing

@@ -119,4 +119,187 @@ end
     end
 
     # ---------------------------------------------------------------------
+    @testset "Population construction and diagnostics" begin
+        dust = lognormal_mode(:mineral_dust, 1.0, 0.4, 2.0)   # 1 cm⁻³
+        bio = lognormal_mode(:biological, 0.01, 1.0, 1.6)
+        inp = inp_population([dust, bio])
+        @test inp_nmodes(inp) == 2
+        @test inp_species(inp, 1).name === :mineral_dust
+        @test inp_species(inp, 2).name === :biological
+        @test inp_number(inp) ≈ 1.01e6 rtol = 1e-14
+        @test inp_number(inp; mode = 2) ≈ 1e4 rtol = 1e-14
+        @test inp_number(inp; population = :consumed) == 0.0
+        # dry mass agrees with the Phase 37 value (μg m⁻³ → kg m⁻³)
+        @test inp_mass(inp; mode = 1) ≈ mode_mass(dust) * 1e-9 rtol = 1e-12
+        # the modal closure recovers the median radius it was built from
+        @test inp_median_radius(inp, 1) ≈ 0.4e-6 rtol = 1e-12
+        @test inp_median_radius(inp, 2) ≈ 1.0e-6 rtol = 1e-12
+        @test inp_modes(inp)[1].r_g ≈ 0.4e-6 rtol = 1e-12
+        # DeMott N(D > 0.5 μm): a mode whose median sits exactly at the
+        # cut-off has half its number above it
+        half = inp_population([lognormal_mode(:mineral_dust, 1.0, 0.25, 2.0)])
+        @test inp_number_above_radius(half, DEMOTT_CUTOFF_RADIUS) ≈ 0.5e6 rtol = 1e-12
+        @test inp_surface_area(inp) ≈
+              mode_surface_area(dust) + mode_surface_area(bio) rtol = 1e-12
+        @test inp_surface_area_above_radius(inp, 0.0) ≈ inp_surface_area(inp) rtol = 1e-14
+
+        # ARGMode constructor with a species symbol
+        inp2 = inp_population([arg_mode(1e5, 5e-7, 1.8, 0.03; ρ_p = 2600.0)],
+                              :mineral_dust)
+        @test inp_species(inp2, 1) === aerosol_species(:mineral_dust)
+        @test_throws ErrorException inp_population([arg_mode(1e5, 5e-7, 1.8, 0.03)],
+                                                   [:dust, :biological])
+    end
+
+    # ---------------------------------------------------------------------
+    @testset "An INP cannot nucleate twice" begin
+        dust = lognormal_mode(:mineral_dust, 1.0, 0.4, 2.0)
+        inp = inp_population([dust])
+        N0 = inp_number(inp)
+        # singular INAS-type indicator at two temperatures: n_s grows
+        # roughly exponentially on cooling (Niemand et al. 2012 form)
+        p(ns) = r -> 1 - exp(-ns * 4π * r^2)
+        ns_warm, ns_cold = 1e10, 1e11
+
+        Δ1 = inp_nucleate_singular!(inp, 1, p(ns_warm))
+        target_warm = first(inp_frozen_fraction(inp, 1, p(ns_warm))) * N0
+        @test Δ1 > 0
+        @test inp_number(inp; population = :consumed) ≈ target_warm rtol = 1e-12
+        # same temperature again: exactly nothing
+        @test inp_nucleate_singular!(inp, 1, p(ns_warm)) == 0.0
+        @test inp_nucleate_singular!(inp, 1, p(ns_warm)) == 0.0
+        # colder: only the increment
+        Δ2 = inp_nucleate_singular!(inp, 1, p(ns_cold))
+        target_cold = first(inp_frozen_fraction(inp, 1, p(ns_cold))) * N0
+        @test Δ2 ≈ target_cold - target_warm rtol = 1e-10
+        @test inp_number(inp; population = :consumed) ≈ target_cold rtol = 1e-12
+        # warming back does not un-freeze or freeze anything
+        @test inp_nucleate_singular!(inp, 1, p(ns_warm)) == 0.0
+        @info "singular nucleation increments" frac_warm = target_warm / N0 frac_cold = target_cold / N0
+
+        # number form with a prescribed N_frozen
+        inp = inp_population([dust])
+        @test inp_nucleate_singular!(inp, 1, 2e5) ≈ 2e5
+        @test inp_nucleate_singular!(inp, 1, 2e5) == 0.0
+        @test inp_nucleate_singular!(inp, 1, 3e5) ≈ 1e5 rtol = 1e-12
+
+        # ice recycling: released INP re-freeze at the same temperature,
+        # and exactly the released number does
+        rel = inp_release!(inp, 0.5)
+        @test rel ≈ 1.5e5 rtol = 1e-12
+        @test inp_nucleate_singular!(inp, 1, 3e5) ≈ rel rtol = 1e-12
+
+        # exhaustion: asking for more than exists can never consume more
+        # than was ever available
+        inp = inp_population([dust])
+        total = 0.0
+        for _ in 1:5
+            total += inp_consume!(inp, 1, 0.6N0)
+        end
+        @test total ≈ N0 rtol = 1e-14
+        @test inp_number(inp) == 0.0
+        @test inp_mass(inp) == 0.0
+        @test inp_consume!(inp, 1, 1.0) == 0.0
+    end
+
+    # ---------------------------------------------------------------------
+    @testset "Which particles nucleate: selection physics" begin
+        dust = lognormal_mode(:mineral_dust, 1.0, 0.4, 2.0)
+        rg0 = 0.4e-6
+
+        # size-independent removal leaves the median radius unchanged
+        inp = inp_population([dust])
+        inp_consume!(inp, 1, 3e5; selection = :random)
+        @test inp_median_radius(inp, 1) ≈ rg0 rtol = 1e-12
+        @test inp_median_radius(inp, 1; population = :consumed) ≈ rg0 rtol = 1e-12
+
+        # largest-first: consumed particles are coarser than average, the
+        # remainder finer
+        inp = inp_population([dust])
+        inp_consume!(inp, 1, 3e5; selection = :largest)
+        @test inp_median_radius(inp, 1) < rg0
+        @test inp_median_radius(inp, 1; population = :consumed) > rg0
+        # and the mass moved is exactly the log-normal mass above the
+        # radius that holds 3e5 particles
+        m = arg_mode(dust)
+        @test inp_mass(inp; population = :consumed) <= mode_dry_mass(m)
+        mfrac = inp_mass(inp; population = :consumed) / mode_dry_mass(m)
+        @test mfrac > 0.3            # 30 % of number carries > 30 % of mass
+
+        # probability form: p ≡ c moves exactly c of every moment
+        inp = inp_population([dust])
+        N0, M0 = inp_number(inp), inp_mass(inp)
+        inp_consume!(inp, 1, r -> 0.37)
+        @test inp_number(inp; population = :consumed) ≈ 0.37N0 rtol = 1e-12
+        @test inp_mass(inp; population = :consumed) ≈ 0.37M0 rtol = 1e-12
+        @test inp_median_radius(inp, 1) ≈ rg0 rtol = 1e-12
+
+        # INAS small-n_s limit: frozen number → n_s × surface area
+        # (Hoose & Möhler 2012; Niemand et al. 2012) — ties the
+        # probability integral to the analytic second moment
+        inp = inp_population([dust])
+        A = inp_surface_area(inp)
+        for ns in (1e2, 1e4, 1e6)
+            fN, _ = inp_frozen_fraction(inp, 1, r -> 1 - exp(-ns * 4π * r^2))
+            @test fN * inp_number(inp) ≈ ns * A rtol = 5 * ns * A / inp_number(inp) + 1e-10
+        end
+
+        # smooth steep freezing curve vs an independent quadrature
+        ns = 3e10
+        fN, fM = inp_frozen_fraction(inp, 1, r -> 1 - exp(-ns * 4π * r^2))
+        lnσ = log(2.0); n = 200_000; lo = log(rg0) - 14lnσ; h = 28lnσ / n
+        sN = 0.0; sM = 0.0; sN0 = 0.0; sM0 = 0.0
+        for j in 1:n
+            x = lo + (j - 0.5)h; r = exp(x); w = exp(-0.5((x - log(rg0)) / lnσ)^2)
+            pr = 1 - exp(-ns * 4π * r^2)
+            sN += pr * w; sM += pr * w * r^3; sN0 += w; sM0 += w * r^3
+        end
+        errN = abs(fN - sN / sN0); errM = abs(fM - sM / sM0)
+        @test errN < 1e-10
+        @test errM < 1e-10
+        @info "INAS frozen fraction: module quadrature vs reference" fN fM errN errM
+
+        # a hard step (DeMott-like "everything above r_c") through the
+        # probability form reproduces the analytic cut-off to the node
+        # spacing of the quadrature, O(h)
+        inp = inp_population([dust])
+        rc = DEMOTT_CUTOFF_RADIUS
+        fN, _ = inp_frozen_fraction(inp, 1, r -> r > rc ? 1.0 : 0.0)
+        exact = number_above_radius(m, rc) / m.N
+        @test fN ≈ exact atol = 5e-3
+        @info "step freezing curve vs analytic N(>r)" quadrature = fN analytic = exact
+    end
+
+    # ---------------------------------------------------------------------
+    @testset "Sources: emission and entrainment" begin
+        dust = lognormal_mode(:mineral_dust, 1.0, 0.4, 2.0)
+        inp = inp_population([dust])
+        N0, M0 = inp_number(inp), inp_mass(inp)
+        # a source with the resident shape leaves r_g unchanged
+        src = arg_mode(100.0, 0.4e-6, 2.0, 0.03; ρ_p = 2600.0)   # m⁻³ s⁻¹
+        inp_emit!(inp, 1, src, 600.0)
+        @test inp_number(inp) ≈ N0 + 6e4 rtol = 1e-14
+        @test inp_median_radius(inp, 1) ≈ 0.4e-6 rtol = 1e-12
+        # a coarser source coarsens the population
+        inp_emit!(inp, 1, arg_mode(100.0, 1.5e-6, 2.0, 0.03; ρ_p = 2600.0), 600.0)
+        @test inp_median_radius(inp, 1) > 0.4e-6
+        @test_throws ErrorException inp_emit!(inp, 1, -1.0, 1e-12)
+        @test_throws ErrorException inp_emit!(inp, 1, 1.0, 0.0)
+
+        # entrainment: linear relaxation toward the environment
+        inp = inp_population([dust])
+        inp_consume!(inp, 1, 1e5)
+        Nc = inp_number(inp; population = :consumed)
+        Na = inp_number(inp)
+        inp_entrain!(inp, [2e5], [1e-10], 0.25)
+        @test inp_number(inp) ≈ 0.75Na + 0.25 * 2e5 rtol = 1e-14
+        @test inp_number(inp; population = :consumed) == Nc   # ice owns these
+        inp_entrain!(inp, [2e5], [1e-10], 1.0)
+        @test inp_number(inp) ≈ 2e5 rtol = 1e-14
+        @test inp_mass(inp) ≈ 1e-10 rtol = 1e-14
+        @test inp_budget(inp).N_src < 0          # cleaner environment
+        @test maximum(abs, values(inp_budget_residual(inp))) < 1e-14
+    end
+
+    # ---------------------------------------------------------------------
 end

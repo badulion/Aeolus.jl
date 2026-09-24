@@ -441,6 +441,12 @@ export AMMONIUM_SULFATE, AerosolProperties, CollisionKernel,
 # Phase 43 — ice nucleation: prognostic INP species (dust, biological)
 # and their available/consumed budget. All names are `inp_`-prefixed or
 # otherwise specific so they cannot collide with the P3 ice category.
-export DEMOTT_CUTOFF_RADIUS, mode_surface_area, surface_area_above_radius
+export DEMOTT_CUTOFF_RADIUS, INPPopulation, inp_budget,
+       inp_budget_residual, inp_consume!, inp_emit!, inp_entrain!,
+       inp_frozen_fraction, inp_mass, inp_median_radius, inp_modes,
+       inp_nmodes, inp_nucleate_singular!, inp_number,
+       inp_number_above_radius, inp_population, inp_release!,
+       inp_species, inp_surface_area, inp_surface_area_above_radius,
+       mode_surface_area, surface_area_above_radius
 
 end # module
