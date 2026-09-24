@@ -77,9 +77,17 @@ export # --- log-normal surface-area diagnostics (inp.jl) ------------------
        inp_emit!, inp_entrain!,
        inp_consume!, inp_nucleate_singular!, inp_frozen_fraction,
        inp_release!, inp_scavenge!, inp_sediment!,
-       inp_settling_velocity, inp_budget, inp_budget_residual
+       inp_settling_velocity, inp_budget, inp_budget_residual,
+       # --- freezing parameterisations (freezing.jl) -----------------------
+       FreezingScheme, SiteDensityScheme, AerosolCountScheme,
+       Niemand2012, Ullrich2017Immersion, Ullrich2017Deposition,
+       DeMott2015, Tobo2013,
+       scheme_temperature_range, freezing_mechanism,
+       ice_active_site_density, inas_frozen_fraction,
+       singular_inp_concentration, STANDARD_TEMPERATURE, STANDARD_PRESSURE,
+       default_freezing_scheme, default_freezing_schemes
 
 include("icenuc/inp.jl")          # issue #5 — prognostic INP species
-# include("icenuc/freezing.jl")   # issue #6 — immersion/deposition freezing
+include("icenuc/freezing.jl")     # issue #6 — immersion/deposition freezing
 
 end # module
