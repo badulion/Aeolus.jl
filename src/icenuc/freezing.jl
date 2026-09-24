@@ -538,10 +538,12 @@ function ice_nucleation!(inp::INPPopulation, T::Real, S_i::Real, Δt::Real;
                                       T, S_i, p, c)
             N_imm_inp += a; N_dep += b; N_inp += a + b; M_inp += m
         else
-            # deposition on the interstitial part only …
-            _, b, m = _nucleate_mode!(inp, i, nothing, s.deposition, 0.0,
+            # deposition on the interstitial part only: passing the
+            # immersed fraction f weights the deposition statement by
+            # 1 - f (with f = 1 every INP is inside a drop and none
+            # nucleates by deposition)
+            _, b, m = _nucleate_mode!(inp, i, nothing, s.deposition, f,
                                       T, S_i, p, c)
-            # … weighted by the interstitial fraction
             N_dep += b; N_inp += b; M_inp += m
             # the immersed INP end up inside homogeneously frozen drops
             if f > 0 && inp.N_avail[i] > 0

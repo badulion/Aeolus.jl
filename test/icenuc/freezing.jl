@@ -431,6 +431,31 @@ end
         t = ice_nucleation!(inp, 225.0, 1.2, 1.0)
         @test t.N_ice_dep > 0 && t.N_ice_hom == 0
 
+        # In cloud below T_icenuc the air is at water saturation, where the
+        # deposition scheme is at its largest. With every INP immersed
+        # (f = 1, the default with liquid present) none is interstitial,
+        # so none may nucleate by deposition: the only crystals are the
+        # frozen drops. (Review fix: the S_i = 1 test above could not see
+        # deposition acting on immersed INP, which it did — 2.8e5 m⁻³
+        # extra crystals at 230 K for this dust mode.)
+        T = 230.0
+        Siw = saturation_vapor_pressure(T) / saturation_vapor_pressure_ice(T)
+        dust() = inp_population([lognormal_mode(:mineral_dust, 1.0, 0.4, 2.0)])
+        inp = dust()
+        t = ice_nucleation!(inp, T, Siw, 1.0; N_liq, M_liq)
+        @test t.N_ice_dep == 0.0 && t.M_vap == 0.0
+        @test ice_number_formed(t) == N_liq
+        @test t.N_inp ≈ 1e6 rtol = 1e-12             # all INP inside frozen drops
+        # Half immersed: deposition acts on the interstitial half only, so
+        # it forms exactly half of what the scheme gives the whole mode.
+        m0 = inp_modes(dust())[1]
+        full = inas_frozen_fraction(Ullrich2017Deposition(), m0, T, Siw) * m0.N
+        @test full > 0
+        t = ice_nucleation!(dust(), T, Siw, 1.0; N_liq, M_liq, immersed_fraction = 0.5)
+        @test t.N_ice_dep ≈ 0.5 * full rtol = 1e-10
+        # then the immersed half of what is left is consumed with the drops
+        @test t.N_inp ≈ 0.5 * full + 0.5 * (1e6 - 0.5 * full) rtol = 1e-10
+
         # Just inside the ramp at the cold end: heterogeneous only, a
         # fraction of the liquid freezes.
         T = _C.T_icenuc + 0.01

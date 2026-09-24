@@ -367,7 +367,7 @@ constants**:
 | :-- | :-- | :-- | :-- |
 | `:liquid` | ``T \ge T_\mathrm{freeze}`` | 1 | none; no INP consumed |
 | `:heterogeneous` | ``T_\mathrm{icenuc} < T < T_\mathrm{freeze}`` | (0, 1) | immersion + deposition on INP |
-| `:homogeneous` | ``T \le T_\mathrm{icenuc}`` | 0 | all liquid freezes; deposition continues |
+| `:homogeneous` | ``T \le T_\mathrm{icenuc}`` | 0 | all liquid freezes (immersed INP inside it); deposition continues on the interstitial INP only |
 
 Tested: the regime and ``\lambda`` agree on a 0.05 K grid from 220 to
 280 K; at ``T_\mathrm{freeze}`` nothing freezes even for 100 cm⁻³ of
