@@ -33,7 +33,7 @@ labels  = String[]
 push!(ql_snap, profile(ql)); push!(qr_snap, profile(qr)); push!(labels, "t=0s")
 
 for (i, dt) in enumerate((60.0, 60.0, 120.0, 120.0, 120.0))
-    apply_kessler_step!(qv, ql, qr, dt; Vt=6.0)
+    apply_kessler_step!(qv, ql, qr, dt; Vt=:spectrum)
     push!(ql_snap, profile(ql))
     push!(qr_snap, profile(qr))
     push!(labels, "t=$(round(Int, sum((60.0,60.0,120.0,120.0,120.0)[1:i])))s")
