@@ -39,6 +39,10 @@ include("Multigrid.jl")         # Phase 29
 include("AdaptiveMesh.jl")      # Phases 30-31
 
 # --- Era III: high-fidelity radiation (Phases 32-38) ---------------------
+# MoistThermodynamics (Era IV, Phase 39) is dependency-free and defines the
+# canonical Kelvin coefficient and Köhler theory, which AerosolOptics needs,
+# so it is included ahead of the radiation stack rather than with its own era.
+include("MoistThermodynamics.jl")  # Phase 39
 include("RadiationCore.jl")     # shared spectral / optics / flux contract
 include("GasOptics.jl")         # Phase 32
 include("SurfaceOptics.jl")     # Phase 36
@@ -48,8 +52,8 @@ include("MonteCarloRT.jl")      # Phase 34
 include("Radiosity.jl")         # Phase 35
 include("SolarGeometry.jl")     # Phase 38
 
-# --- Era IV: high-fidelity clouds and microphysics (Phases 39-45) --------
-include("MoistThermodynamics.jl")  # Phase 39
+include("AerosolCloud.jl")         # Phase 42
+include("Superdroplet.jl")         # Phase 41
 
 using .Grids
 using .Fields
@@ -90,6 +94,8 @@ using .Radiosity
 using .SolarGeometry
 
 using .MoistThermodynamics
+using .AerosolCloud
+using .Superdroplet
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -369,6 +375,65 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        moist_adiabatic_lapse_rate, dry_adiabatic_lapse_rate,
        lifting_condensation_level, level_of_free_convection,
        cape_cin, buoyancy, brunt_vaisala_frequency_moist,
-       supersaturation, supersaturation_ice
+       supersaturation, supersaturation_ice,
+       kelvin_coefficient, kohler_supersaturation, kohler_critical_point,
+       kohler_equilibrium_radius, surface_tension_water,
+       kappa_from_solute, solute_from_kappa
+
+# Phase 42 — aerosol-cloud interaction (Kohler activation)
+# Kohler theory itself lives in the Phase 39 contract; the names here
+# are the kappa/dry-radius entry points in micrometres, which is the
+# unit AerosolOptics works in.
+export ARGMode, ActivationCoefficients, ActivationResult,
+       AerosolReservoir, KAPPA_MIN, ParcelResult, ParcelSettings,
+       RHO_WATER, activate!, activated_fraction, activated_number,
+       activation_coefficients, activation_susceptibility,
+       aerosol_reservoir, aerosol_total_mass, aerosol_total_number,
+       albedo_susceptibility, albrecht_lifetime_factor,
+       arg_activation, arg_maximum_supersaturation, arg_mode,
+       arg_modes, autoconversion_rate, autoconversion_suppression,
+       cloud_albedo, cloud_droplet_number, cloud_optical_depth_lwp,
+       cloud_water_path, critical_radius, critical_supersaturation,
+       droplet_effective_radius, droplet_number_from_effective_radius,
+       droplet_volume_radius, equilibrium_radius, growth_coefficient,
+       interstitial_modes, interstitial_number, kelvin_A,
+       kohler_critical, kohler_equilibrium_supersaturation,
+       kohler_slope, kohler_stable, mass_above_radius,
+       mode_critical_supersaturation, mode_dry_mass,
+       number_above_radius, parcel_activation, process_collisions!,
+       regenerate!, reservoir_dry_radius, supersaturation_sink,
+       supersaturation_source, thermal_conductivity_air,
+       twomey_albedo_change, twomey_radius_exponent,
+       water_vapor_diffusivity
+
+# Phase 41 — superdroplet Lagrangian microphysics
+# The `droplet_*` Kohler names take SOLUTE MASS, which is what a
+# superdroplet carries; they delegate to the same contract.
+export AMMONIUM_SULFATE, AerosolProperties, CollisionKernel,
+       DEFAULT_MICRO, EulerianCell, GolovinKernel,
+       GravitationalKernel, HydrodynamicKernel, LongEfficiency,
+       LongKernel, MicrophysicalConstants, NACL, SEASALT_KAPPA,
+       SuperdropletSet, UnitEfficiency, add_superdroplet!,
+       advance_positions!, aerosol_from_vant_hoff,
+       apply_condensate_tendency!, assign_cells!, bessel_i1,
+       bessel_i1_scaled, cell_air_mass, cell_from_state,
+       cell_populations, cell_pressure, cell_supersaturation,
+       cell_total_water, coalescence_probability, coalescence_step!,
+       collision_coalescence!, collision_efficiency, collision_kernel,
+       compact!, condensation_growth!, condensation_step!,
+       deposit_liquid_water!, diffusional_growth_rate,
+       droplet_critical_radius, droplet_critical_supersaturation,
+       droplet_equilibrium_radius, droplet_kohler_supersaturation,
+       droplet_mass, droplet_volume, dry_mass, dry_radius,
+       effective_radius, fd_vapor, fk_thermal, golovin_T,
+       golovin_mass_density, golovin_number_density, grow_droplet,
+       init_exponential_superdroplets,
+       init_monodisperse_superdroplets, kappa_kohler_supersaturation,
+       kelvin_a, liquid_water_content, liquid_water_mixing_ratio,
+       mass_distribution, mean_radius, nsuperdroplets,
+       number_concentration, radius_moment, radius_percentile,
+       raoult_b, relative_dispersion, size_distribution,
+       surface_tension, terminal_velocity, thermal_conductivity,
+       total_number, total_water_mass, vapor_diffusivity
 
 end # module

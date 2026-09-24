@@ -65,7 +65,11 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        moist_adiabatic_lapse_rate, dry_adiabatic_lapse_rate,
        lifting_condensation_level, level_of_free_convection,
        cape_cin, buoyancy, brunt_vaisala_frequency_moist,
-       supersaturation, supersaturation_ice
+       supersaturation, supersaturation_ice,
+       kelvin_coefficient, kohler_supersaturation, kohler_critical_point,
+       kohler_equilibrium_radius, surface_tension_water,
+       kappa_from_solute, solute_from_kappa,
+       effective_radius
 
 # =========================================================================
 # Constants
@@ -875,6 +879,195 @@ function cape_cin(T_p::Real, p_p::Real, q_p::Real,
         prev_p = float(pe); prev_b = b
     end
     return (cape, cin)
+end
+
+
+"""
+    effective_radius(population, args...)
+
+Effective radius of a size distribution: the ratio of its third to its
+second moment, `⟨r³⟩/⟨r²⟩`.
+
+Declared here with no method, so the modules that own a size distribution
+can each add one without importing each other — the same pattern
+`RadiationCore` uses for `surface_albedo` and `material_albedo`.
+
+It is the *same* quantity in every case, which is why it is one name: the
+3/2 moment ratio is what controls how much light a population of spheres
+scatters per unit mass, so it is the radius radiation actually sees.
+
+Implemented by:
+  * `AerosolOptics.effective_radius` for an aerosol size distribution.
+  * `Superdroplet.effective_radius` for a superdroplet ensemble.
+"""
+function effective_radius end
+
+# =========================================================================
+# Köhler theory — equilibrium over a curved solution droplet
+# =========================================================================
+#
+# Everything above concerns saturation over a PLANE surface of PURE water.
+# A cloud droplet is neither: it is curved, which raises its equilibrium
+# vapour pressure (Kelvin), and it contains dissolved solute, which lowers
+# it (Raoult). Köhler theory is the competition between the two, and it is
+# what decides whether a haze particle stays a haze particle or becomes a
+# cloud droplet.
+#
+# It lives HERE, in the Era IV thermodynamic contract, for the same reason
+# the plane-surface saturation does: several modules need it — the
+# superdroplet solver (Phase 41), the activation parameterisation (Phase
+# 42), and the hygroscopic-growth code in `AerosolOptics` (Phase 37) — and
+# if each carries its own copy they drift. Era III already taught that
+# lesson with the urban material tables.
+#
+# TWO PARAMETERISATIONS, ONE PHYSICS. The literature writes the solute
+# term two ways:
+#
+#   classical:  s = A/r − B/r³            B is the "Raoult B", m³
+#   kappa:      s = (r³ − r_d³) / (r³ − r_d³(1−κ)) · exp(A/r) − 1
+#
+# and they are the same thing to leading order with `B = κ r_d³`. The
+# κ form (Petters & Kreidenweis 2007) is used as canonical because it
+# stays correct as r → r_d, where the classical expansion does not, and
+# because κ is what is actually measured. `kappa_from_solute` and
+# `solute_from_kappa` convert, so a caller holding solute mass and a
+# caller holding κ reach the same numbers rather than two similar ones.
+#
+# References
+#   * Köhler, H. (1936). Trans. Faraday Soc., 32, 1152-1161.
+#   * Petters, M. D. & Kreidenweis, S. M. (2007). ACP, 7, 1961-1971.
+
+"""
+    surface_tension_water(T) -> N m⁻¹
+
+Surface tension of the water/air interface. Linear in temperature over
+the atmospheric range (Pruppacher & Klett eq. 5-12): 0.0756 at 0 °C
+falling to 0.0728 at 20 °C. The temperature dependence is small but it
+enters the Kelvin term directly.
+"""
+surface_tension_water(T::Real) = 0.0761 - 1.55e-4 * (float(T) - 273.15)
+
+"""
+    kelvin_coefficient(T, c = DEFAULT_CONSTANTS) -> m
+
+The Kelvin (curvature) coefficient `A = 2σ M_w / (R T ρ_w)`, in metres,
+such that the curvature term in the Köhler equation is `exp(A/r)`.
+
+About 1.1 nm at 293 K. Small — but divided by a 10 nm dry radius it is a
+supersaturation of order 10 %, which is why the smallest particles never
+activate.
+"""
+function kelvin_coefficient(T::Real, c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    Tk = float(T)
+    σ = surface_tension_water(Tk)
+    ρ_w = 1000.0
+    return 2 * σ / (R_v(c) * Tk * ρ_w)
+end
+
+"Raoult `B` (m³) from κ and dry radius: `B = κ r_d³`."
+solute_from_kappa(r_dry::Real, κ::Real) = float(κ) * float(r_dry)^3
+"κ from a Raoult `B` and dry radius."
+kappa_from_solute(r_dry::Real, B::Real) = float(B) / float(r_dry)^3
+
+"""
+    kohler_supersaturation(r, r_dry, κ, T, c = DEFAULT_CONSTANTS) -> s
+
+Equilibrium supersaturation `s = S − 1` over a solution droplet of wet
+radius `r` grown on a dry particle of radius `r_dry` (both metres) with
+hygroscopicity `κ`.
+
+Uses the Petters & Kreidenweis (2007) form,
+
+```math
+S = \\frac{r^3 - r_d^3}{r^3 - r_d^3 (1 - \\kappa)} \\exp\\left(\\frac{A}{r}\\right)
+```
+
+which remains correct as `r → r_d` where the classical `A/r − B/r³`
+expansion diverges from the truth.
+"""
+function kohler_supersaturation(r::Real, r_dry::Real, κ::Real, T::Real,
+                                c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    rr = float(r); rd = float(r_dry); kap = float(κ)
+    rr > rd || throw(DomainError(r, "kohler_supersaturation: need r > r_dry"))
+    A = kelvin_coefficient(T, c)
+    r3 = rr^3; rd3 = rd^3
+    kap <= 0 && return expm1(A / rr)          # insoluble: Kelvin only
+    return (r3 - rd3) / (r3 - rd3 * (1 - kap)) * exp(A / rr) - 1
+end
+
+"""
+    kohler_critical_point(r_dry, κ, T, c) -> (r_crit, s_crit)
+
+Critical radius and critical supersaturation — the maximum of the Köhler
+curve. A droplet held above `s_crit` grows without bound (it activates);
+below it, it sits at a stable haze equilibrium.
+
+For κ not too small the classical closed form
+`r_c = sqrt(3B/A)`, `s_c = sqrt(4A³/27B)` with `B = κ r_d³` is exact
+enough to seed a refinement; the maximum is then located by golden-section
+search on the full κ-Köhler expression, so the returned point is the
+maximum of the function actually used elsewhere rather than of its
+approximation. For κ → 0 there is no maximum (the curve is monotone
+decreasing) and the particle never activates; `s_crit = A/r_dry` is
+returned as the effective barrier.
+"""
+function kohler_critical_point(r_dry::Real, κ::Real, T::Real,
+                               c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    rd = float(r_dry); kap = float(κ)
+    rd > 0 || throw(DomainError(r_dry, "kohler_critical_point: r_dry must be > 0"))
+    A = kelvin_coefficient(T, c)
+    kap <= 1e-9 && return (rd, expm1(A / rd))
+    B = solute_from_kappa(rd, kap)
+    r0 = sqrt(3B / A)                          # classical estimate
+    # Golden-section maximisation of the exact κ-Köhler curve, bracketed
+    # generously around the classical estimate.
+    f(r) = kohler_supersaturation(r, rd, kap, T, c)
+    # The bracket must straddle the maximum AND stay above the dry radius.
+    # For nearly insoluble particles the classical estimate r0 = sqrt(3B/A)
+    # collapses below r_dry, which inverts `[r0/8, r0*8]` and makes the
+    # search sample r < r_dry, where the Köhler expression is undefined.
+    a = rd * (1 + 1e-9)
+    b = max(r0 * 8, rd * 100)
+    φ = (sqrt(5.0) - 1) / 2
+    x1 = b - φ * (b - a); x2 = a + φ * (b - a)
+    f1 = f(x1); f2 = f(x2)
+    for _ in 1:200
+        if f1 < f2
+            a = x1; x1 = x2; f1 = f2
+            x2 = a + φ * (b - a); f2 = f(x2)
+        else
+            b = x2; x2 = x1; f2 = f1
+            x1 = b - φ * (b - a); f1 = f(x1)
+        end
+        (b - a) < 1e-12 * max(1.0, b) && break
+    end
+    rc = 0.5 * (a + b)
+    return (rc, f(rc))
+end
+
+"""
+    kohler_equilibrium_radius(s, r_dry, κ, T, c) -> r
+
+Stable equilibrium wet radius of a haze particle held at subcritical
+supersaturation `s`. Bisection on the *rising* branch of the Köhler curve
+(below the critical radius), which is the branch that is stable: a
+perturbation there is restored, whereas beyond `r_crit` it runs away.
+
+Returns `NaN` if `s` exceeds `s_crit`, since no equilibrium exists — the
+particle activates.
+"""
+function kohler_equilibrium_radius(s::Real, r_dry::Real, κ::Real, T::Real,
+                                   c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    rd = float(r_dry); kap = float(κ); ss = float(s)
+    rc, sc = kohler_critical_point(rd, kap, T, c)
+    ss >= sc && return NaN
+    lo = rd * (1 + 1e-12); hi = rc
+    for _ in 1:300
+        mid = 0.5 * (lo + hi)
+        (hi - lo) < 1e-16 * max(1.0, hi) && break
+        kohler_supersaturation(mid, rd, kap, T, c) < ss ? (lo = mid) : (hi = mid)
+    end
+    return 0.5 * (lo + hi)
 end
 
 end # module

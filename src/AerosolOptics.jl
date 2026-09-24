@@ -80,6 +80,8 @@ using ..RadiationCore: SpectralGrid, OpticalProperties, RadiativeFluxes,
                        allocate_optics, allocate_fluxes, combine_optics!,
                        shortwave_bands, longwave_bands, SOLAR_CONSTANT
 using ..GasOptics: rayleigh_optics!
+import ..MoistThermodynamics
+import ..MoistThermodynamics: effective_radius
 import ..RadiationCore: compute_optics!
 
 export # --- Mie core -------------------------------------------------------
@@ -92,7 +94,7 @@ export # --- Mie core -------------------------------------------------------
        AerosolMode, LogNormalMode, lognormal_mode,
        number_pdf, mode_number, mode_mass, mode_optics,
        bulk_optics, mass_extinction_coefficient,
-       mass_absorption_coefficient, effective_radius, clear_optics_cache!,
+       mass_absorption_coefficient, clear_optics_cache!,
        # --- hygroscopic growth ----------------------------------------------
        kohler_saturation, wet_radius, growth_factor, wet_refractive_index,
        KELVIN_A_298,
@@ -586,12 +588,21 @@ const _M_WATER     = 0.0180153   # kg mol⁻¹
 const _R_GAS       = 8.314462618 # J mol⁻¹ K⁻¹
 const _RHO_WATER   = 1000.0      # kg m⁻³
 
-"Kelvin coefficient `A = 2σM/(RTρ)` in μm at 298.15 K (≈ 1.06 × 10⁻³ μm)."
-const KELVIN_A_298 = 2 * _SIGMA_WATER * _M_WATER /
-                     (_R_GAS * 298.15 * _RHO_WATER) * 1e6
+"""
+Kelvin coefficient `A = 2σM/(RTρ)` in μm at 298.15 K (≈ 1.05 × 10⁻³ μm).
+
+Derived from `MoistThermodynamics.kelvin_coefficient`, the package's single
+definition, rather than from a local surface tension. The local constant
+previously used σ = 0.0728 N/m — the 20 °C value — at 298.15 K, where the
+measured value is 0.0720. That is only 0.8 % in A, but s_crit ∝ A^{3/2},
+so it became 1.2 % in critical supersaturation, and it put this module and
+the Köhler contract into quiet disagreement about whether a given particle
+activates.
+"""
+const KELVIN_A_298 = MoistThermodynamics.kelvin_coefficient(298.15) * 1e6
 
 kelvin_coefficient(T_K::Real) =
-    2 * _SIGMA_WATER * _M_WATER / (_R_GAS * T_K * _RHO_WATER) * 1e6
+    MoistThermodynamics.kelvin_coefficient(T_K) * 1e6
 
 """
     kohler_saturation(r_wet, r_dry, κ; T_K = 298.15) -> S
