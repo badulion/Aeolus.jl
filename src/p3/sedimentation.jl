@@ -110,7 +110,7 @@ The mean (number-weighted) diameter `(μ+1)/λ` is limited to
 `[D_mean_min, D_mean_max]`, defaults 10 μm and 2 mm, i.e.
 `λ ∈ (μ+1)·[500, 10⁵] m⁻¹` — the rain slope limits of the P3 reference
 code (`get_rain_dsd2`: `lammax = (μ_r+1)·1e5`, `lammin = (μ_r+1)/0.002`;
-P3 before v4.4 used 0.8 mm). This is the single rain PSD of the package:
+earlier P3 versions used 0.8 mm). This is the single rain PSD of the package:
 the process rates ([`p3_process_rates`](@ref)), sedimentation and radar
 reflectivity all use it. The upper size limit matters in
 sedimentation: number falls slower than mass, so the leading edge of a
