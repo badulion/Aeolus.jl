@@ -160,6 +160,11 @@ end
         @test inp_species(inp2, 1) === aerosol_species(:mineral_dust)
         @test_throws ErrorException inp_population([arg_mode(1e5, 5e-7, 1.8, 0.03)],
                                                    [:dust, :biological])
+        # density comes from the species: arg_mode's default ρ_p is
+        # sulphate's 1770 kg m⁻³, which must not silently become dust
+        @test_throws ErrorException inp_population([arg_mode(1e5, 5e-7, 1.8, 0.03)],
+                                                   :mineral_dust)
+        @test inp2.ρ_p[1] == 1e3 * aerosol_species(:mineral_dust).ρ
     end
 
     # ---------------------------------------------------------------------

@@ -186,6 +186,11 @@ their species; units are converted with `AerosolCloud.arg_mode`) or from
 SI activation modes plus a species per mode (an `AerosolSpecies`, a
 symbol, or a vector of either). Everything starts available.
 
+The species is the single source of the particle density: an `ARGMode`
+whose `ρ_p` disagrees with `1e3 * species.ρ` is rejected (note that
+`arg_mode`'s default `ρ_p` is sulphate's). Hygroscopicity `κ` is taken
+from the mode, since coating and ageing legitimately change it.
+
 ```julia
 dust = lognormal_mode(:mineral_dust, 1.0, 0.4, 2.0)    # 1 cm⁻³, r_g 0.4 μm
 bio  = lognormal_mode(:biological, 0.01, 1.0, 1.6)
@@ -199,6 +204,16 @@ function inp_population(modes::AbstractVector{<:ARGMode}, species)
         error("inp_population: need one species per mode ($n), got $(length(sp))")
     sps = AerosolSpecies[s isa AerosolSpecies ? s : aerosol_species(Symbol(s))
                          for s in sp]
+    # The species record is the one definition of the particle density
+    # (`arg_mode(::LogNormalMode)` takes it from there). `arg_mode`'s
+    # keyword default is sulphate's 1770 kg m⁻³, so a dust mode built
+    # without `ρ_p` would otherwise settle and weigh as sulphate.
+    for (m, s) in zip(modes, sps)
+        isapprox(m.ρ_p, 1e3 * s.ρ; rtol = 1e-6) || error(
+            "inp_population: mode density ρ_p = $(m.ρ_p) kg m⁻³ disagrees " *
+            "with species :$(s.name) ($(1e3 * s.ρ) kg m⁻³); build the mode " *
+            "with ρ_p = $(1e3 * s.ρ) or pass a custom AerosolSpecies")
+    end
     z() = zeros(Float64, n)
     inp = INPPopulation{Float64}(sps, z(), z(), z(), z(), z(), z(), z(),
                                  z(), z(), z(), z(), z(), z(), z(), z(),
