@@ -84,7 +84,8 @@ export KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD, VISIBILITY_WAVELENGTH,
        gamma_droplets, droplet_spectrum, spectrum_number, spectrum_moment,
        spectrum_water_content, water_extinction_efficiency,
        droplet_extinction, fog_extinction, aerosol_extinction,
-       rayleigh_extinction, total_extinction, visibility
+       rayleigh_extinction, total_extinction, visibility,
+       kunkel_visibility, gultepe_visibility
 
 # =========================================================================
 # 1. Koschmieder's law
@@ -474,5 +475,38 @@ kwargs...); ε)`.
 """
 visibility(; ε::Real = KOSCHMIEDER_THRESHOLD, kwargs...) =
     koschmieder_visibility(total_extinction(; kwargs...); ε = ε)
+
+# =========================================================================
+# 5. Empirical fog parameterisations
+# =========================================================================
+
+"""
+    kunkel_visibility(lwc) -> m
+
+Kunkel (1984) fog visibility, `β = 144.7 LWC^{0.88}` km⁻¹ with LWC in
+g m⁻³, converted through `ε = 0.02`: `V = 27 m × LWC^{−0.88}`. Here `lwc`
+is in kg m⁻³ like the rest of the module. Fitted to fog drop spectra; it
+carries no droplet-number information, so it cannot see the aerosol
+indirect effect on visibility.
+"""
+function kunkel_visibility(lwc::Real)
+    lwc > 0 || return Inf
+    return 27.0 * (1e3 * float(lwc))^(-0.88)
+end
+
+"""
+    gultepe_visibility(lwc, N_d) -> m
+
+Gultepe et al. (2006) warm-fog visibility,
+`V = 1.002 km / (LWC · N_d)^{0.6473}` with LWC in g m⁻³ and N_d in cm⁻³,
+fitted to the FRAM-C observations (Nova Scotia). Here `lwc` is in
+kg m⁻³ and `N_d` in m⁻³. Unlike [`kunkel_visibility`](@ref) it decreases
+with droplet number at fixed water content, as Koschmieder with
+`β ∝ N_d^{1/3}LWC^{2/3}` does, although with a different exponent.
+"""
+function gultepe_visibility(lwc::Real, N_d::Real)
+    (lwc > 0 && N_d > 0) || return Inf
+    return 1002.0 * (1e3 * float(lwc) * 1e-6 * float(N_d))^(-0.6473)
+end
 
 end # module Visibility

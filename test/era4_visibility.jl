@@ -178,6 +178,54 @@ using Aeolus
               droplet_extinction(MonodisperseDroplets(1e8, 1e-5)) rtol = 1e-10
     end
 
+    @testset "fog: Koschmieder vs Kunkel (1984) and Gultepe et al. (2006)" begin
+        N = 100e6                         # 100 cm⁻³
+        println("  LWC [g/m³]  r_eff [μm]  β_Mie/β_geo  V_Kosch [m]  V_MOR [m]  Kunkel [m]  Gultepe [m]")
+        for lwc_g in (0.1, 0.2, 0.3)
+            lwc = lwc_g * 1e-3
+            s = gamma_droplets(lwc, N)
+            β = droplet_extinction(s)
+            βg = droplet_extinction(s; method = :geometric)
+            V = koschmieder_visibility(β)
+            Vk = kunkel_visibility(lwc)
+            Vg = gultepe_visibility(lwc, N)
+            @printf("  %9.2f  %10.2f  %11.4f  %11.1f  %9.1f  %10.1f  %11.1f\n",
+                    lwc_g, s.r_eff * 1e6, β / βg, V,
+                    koschmieder_visibility(β; ε = MOR_THRESHOLD), Vk, Vg)
+            # dense fog: ~100 m, well below the 1 km fog definition
+            @test 50 < V < 500
+            # Mie adds a few percent over the geometric limit for fog drops
+            @test 1.02 < β / βg < 1.10
+            # the bulk fits agree with explicit Mie within a factor 1.5
+            @test 1 / 1.5 < V / Vk < 1.5
+            @test 1 / 1.5 < V / Vg < 1.5
+        end
+        # the fits themselves at their quoted reference points
+        @test kunkel_visibility(1e-3) ≈ 27.0             # LWC = 1 g/m³ → 27 m
+        @test gultepe_visibility(1e-3, 1e6) ≈ 1002.0     # LWC·N = 1 → 1.002 km
+        @test kunkel_visibility(0.0) == Inf
+        # Kunkel's 0.027 km is 3.912/144.7: the fit assumes ε = 0.02
+        @test 3.912 / 144.7 ≈ 0.027 rtol = 2e-3
+    end
+
+    @testset "monotonicity: V falls with LWC and with N_d" begin
+        lwcs = (0.005:0.005:0.6) .* 1e-3
+        V = [koschmieder_visibility(fog_extinction(l, 1e8)) for l in lwcs]
+        @test issorted(V; rev = true)
+        @test all(diff(V) .< 0)
+        # Twomey for visibility: more droplets, same water → worse visibility
+        Vn = [koschmieder_visibility(fog_extinction(2e-4, n)) for n in (2e7, 5e7, 1e8, 3e8, 1e9)]
+        @test all(diff(Vn) .< 0)
+        # geometric limit scaling β ∝ N^{1/3} LWC^{2/3}
+        b1 = fog_extinction(1e-4, 1e8; method = :geometric)
+        @test fog_extinction(8e-4, 1e8; method = :geometric) / b1 ≈ 4 rtol = 1e-12
+        @test fog_extinction(1e-4, 8e8; method = :geometric) / b1 ≈ 2 rtol = 1e-12
+        # Kunkel is LWC-only and also monotone; Gultepe falls with N_d
+        @test all(diff([kunkel_visibility(l) for l in lwcs]) .< 0)
+        @test gultepe_visibility(2e-4, 3e8) < gultepe_visibility(2e-4, 1e8)
+        @test fog_extinction(0.0, 1e8) == 0.0
+    end
+
     @testset "clear air and haze" begin
         βR = rayleigh_extinction()
         VR = koschmieder_visibility(βR)

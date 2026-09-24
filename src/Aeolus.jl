@@ -448,6 +448,6 @@ export KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD, VISIBILITY_WAVELENGTH,
        spectrum_water_content, water_extinction_efficiency,
        droplet_extinction, fog_extinction, aerosol_extinction,
        rayleigh_extinction, rayleigh_cross_section, total_extinction,
-       visibility
+       visibility, kunkel_visibility, gultepe_visibility
 
 end # module
