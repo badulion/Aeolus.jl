@@ -45,7 +45,7 @@ module P3Microphysics
 
 # --- gamma.jl -------------------------------------------------------------
 export lgamma_lanczos, gamma_lanczos,
-       gamma_inc_lower, gamma_inc_upper, gamma_inc,
+       gamma_inc_lower, gamma_inc_upper, gamma_inc_pq,
        gamma_psd_density, gamma_psd_moment, gamma_psd_partial_moment,
        gamma_psd_intercept, gamma_psd_slope
 

@@ -158,7 +158,7 @@ function _gamma_q_contfrac(a::T, x::T) where {T<:AbstractFloat}
 end
 
 """
-    gamma_inc(a, x) -> (P, Q)
+    gamma_inc_pq(a, x) -> (P, Q)
 
 Regularised lower and upper incomplete gamma functions
 
@@ -176,15 +176,20 @@ complement, so neither tail loses relative accuracy to cancellation.
 distribution `N(D) ∝ D^μ e^{-λD}` the fraction of the `k`-th moment
 carried by particles smaller than `D` is `P(μ+k+1, λD)`.
 
+Named `gamma_inc_pq` rather than `gamma_inc` because
+`SpecialFunctions.gamma_inc` is exported under that name; both being
+exported would make the bare name ambiguous in user code that loads
+both packages.
+
 Reference: Press et al. (2007), *Numerical Recipes* 3rd ed., §6.2
 (`gammp`, `gammq`, `gser`, `gcf`).
 """
-function gamma_inc(a::Real, x::Real)
+function gamma_inc_pq(a::Real, x::Real)
     af, xf = promote(float(a), float(x))
     T = typeof(af)
     (isnan(af) || isnan(xf)) && return (T(NaN), T(NaN))
-    af > 0 || throw(DomainError(a, "gamma_inc requires a > 0"))
-    xf >= 0 || throw(DomainError(x, "gamma_inc requires x ≥ 0"))
+    af > 0 || throw(DomainError(a, "gamma_inc_pq requires a > 0"))
+    xf >= 0 || throw(DomainError(x, "gamma_inc_pq requires x ≥ 0"))
     xf == 0 && return (zero(T), one(T))
     isinf(xf) && return (one(T), zero(T))
     if xf < af + one(T)
@@ -200,17 +205,17 @@ end
     gamma_inc_lower(a, x)
 
 Regularised lower incomplete gamma function `P(a,x) = γ(a,x)/Γ(a)`,
-`a > 0`, `x ≥ 0`. See [`gamma_inc`](@ref).
+`a > 0`, `x ≥ 0`. See [`gamma_inc_pq`](@ref).
 """
-gamma_inc_lower(a::Real, x::Real) = first(gamma_inc(a, x))
+gamma_inc_lower(a::Real, x::Real) = first(gamma_inc_pq(a, x))
 
 """
     gamma_inc_upper(a, x)
 
 Regularised upper incomplete gamma function `Q(a,x) = Γ(a,x)/Γ(a)
-= 1 - P(a,x)`, `a > 0`, `x ≥ 0`. See [`gamma_inc`](@ref).
+= 1 - P(a,x)`, `a > 0`, `x ≥ 0`. See [`gamma_inc_pq`](@ref).
 """
-gamma_inc_upper(a::Real, x::Real) = last(gamma_inc(a, x))
+gamma_inc_upper(a::Real, x::Real) = last(gamma_inc_pq(a, x))
 
 # -------------------------------------------------------------------------
 # Gamma particle size distribution  N(D) = N₀ D^μ exp(-λ D)
@@ -284,8 +289,8 @@ function gamma_psd_partial_moment(N0::Real, μ::Real, λ::Real, k::Real,
     a = float(μ + k + 1)
     x1 = λ * D1
     x2 = λ * D2
-    P1, Q1 = gamma_inc(a, x1)
-    P2, Q2 = gamma_inc(a, x2)
+    P1, Q1 = gamma_inc_pq(a, x1)
+    P2, Q2 = gamma_inc_pq(a, x2)
     frac = x1 > a ? (Q1 - Q2) : (P2 - P1)
     # P(a,·) is non-decreasing, but for a very narrow interval the two
     # endpoint values agree to within rounding and their difference can

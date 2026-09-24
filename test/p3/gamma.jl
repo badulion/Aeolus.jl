@@ -113,13 +113,13 @@ relerr(x, ref) = abs(x - ref) / abs(ref)
                 @test gamma_inc_lower(a, x0) < 1e-290
             end
             for x in (1e-3, 0.3, 0.9a, a, a + 1, 1.3a + 2, 5a + 10)
-                P, Q = gamma_inc(a, x)
+                P, Q = gamma_inc_pq(a, x)
                 @test abs(P + Q - 1) <= 2eps()
                 @test 0 <= P <= 1 && 0 <= Q <= 1
             end
         end
-        @test_throws DomainError gamma_inc(0.0, 1.0)
-        @test_throws DomainError gamma_inc(1.0, -1.0)
+        @test_throws DomainError gamma_inc_pq(0.0, 1.0)
+        @test_throws DomainError gamma_inc_pq(1.0, -1.0)
     end
 
     @testset "Incomplete gamma: closed forms" begin
@@ -165,7 +165,7 @@ relerr(x, ref) = abs(x - ref) / abs(ref)
                 # both tails summed directly (1 - qb would lose a tiny P)
                 qb = exp(-xb) * sum(xb^k / factorial(big(k)) for k in 0:n-1)
                 pb = exp(-xb) * sum(xb^k / factorial(big(k)) for k in n:n+800)
-                P, Q = gamma_inc(n, x)
+                P, Q = gamma_inc_pq(n, x)
                 e = pb < qb ? relerr(P, Float64(pb)) : relerr(Q, Float64(qb))
                 maxe = max(maxe, e)
             end

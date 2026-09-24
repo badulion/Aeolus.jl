@@ -442,7 +442,7 @@ export AMMONIUM_SULFATE, AerosolProperties, CollisionKernel,
 # Gamma-function names carry `_lanczos` / `gamma_inc_*` spellings so they
 # cannot collide with SpecialFunctions in user code that loads both.
 export lgamma_lanczos, gamma_lanczos,
-       gamma_inc_lower, gamma_inc_upper, gamma_inc,
+       gamma_inc_lower, gamma_inc_upper, gamma_inc_pq,
        gamma_psd_density, gamma_psd_moment, gamma_psd_partial_moment,
        gamma_psd_intercept, gamma_psd_slope
 
