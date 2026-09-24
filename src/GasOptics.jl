@@ -38,7 +38,7 @@ export MalkmusParams, malkmus_transmission, malkmus_log_transmission,
        erf_series, erfc_series,
        malkmus_cumulative_k, kdist_from_band_model,
        CorrelatedKGasOptics, correlated_k_optics,
-       rayleigh_optical_depth, rayleigh_optics!,
+       rayleigh_cross_section, rayleigh_optical_depth, rayleigh_optics!,
        lw_source!, lw_surface_source,
        column_absorber_amount, transmission_band, optical_depth_profile,
        roberts_continuum_coefficient, continuum_optical_depth,
@@ -417,6 +417,21 @@ end
 _rayleigh_sigma_cm2(λ_μm::Real) = 4.577e-28 / λ_μm^4.0
 
 """
+    rayleigh_cross_section(λ_μm) -> m² per molecule
+
+Molecular (dry-air) Rayleigh scattering cross-section at wavelength
+`λ_μm`, the single definition used by [`rayleigh_optical_depth`](@ref)
+and by the clear-air term of the Phase 44 visibility diagnostic
+(`Visibility.rayleigh_extinction`). It is the `λ⁻⁴` fit
+`σ = 4.577 × 10⁻²⁸ λ⁻⁴ cm²`; at 550 nm that gives 5.00 × 10⁻³¹ m²,
+roughly 10 % above the tabulated standard-air values of Bucholtz (1995)
+and Bodhaine et al. (1999), ≈ 4.5–4.6 × 10⁻³¹ m². Callers inherit that
+bias; it is left alone here because the column optical depth it feeds is
+validated in the Phase 32 tests.
+"""
+rayleigh_cross_section(λ_μm::Real) = _rayleigh_sigma_cm2(λ_μm) * 1e-4
+
+"""
     rayleigh_optical_depth(λ_μm, dp_Pa) -> τ
 
 Rayleigh optical depth of a layer of pressure thickness `dp_Pa`, using
@@ -428,7 +443,7 @@ function rayleigh_optical_depth(λ_μm::Real, dp_Pa::Real)
     g = 9.80665
     m_air = 28.9647e-3 / 6.02214076e23     # kg per molecule
     N = dp_Pa / (m_air * g)                # molecules m⁻²
-    σ_m2 = _rayleigh_sigma_cm2(λ_μm) * 1e-4
+    σ_m2 = rayleigh_cross_section(λ_μm)
     return N * σ_m2
 end
 
