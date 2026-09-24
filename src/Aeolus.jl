@@ -445,5 +445,10 @@ export lgamma_lanczos, gamma_lanczos,
        gamma_inc_lower, gamma_inc_upper, gamma_inc_pq,
        gamma_psd_density, gamma_psd_moment, gamma_psd_partial_moment,
        gamma_psd_intercept, gamma_psd_slope
+# P3 mass-dimension relation and rime density: `P3`/`p3_` prefixed, since
+# generic names (`particle_mass`, `fall_speed`) are taken or too ambiguous.
+export P3IceParameters, P3_DEFAULT_ICE, P3MassDimension,
+       p3_rime_state, p3_mass_dimension, p3_regime,
+       p3_particle_mass, p3_particle_area
 
 end # module

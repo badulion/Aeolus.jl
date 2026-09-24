@@ -51,4 +51,11 @@ export lgamma_lanczos, gamma_lanczos,
 
 include("p3/gamma.jl")
 
+# --- massdim.jl -----------------------------------------------------------
+export P3IceParameters, P3_DEFAULT_ICE, P3MassDimension,
+       p3_rime_state, p3_mass_dimension, p3_regime,
+       p3_particle_mass, p3_particle_area
+
+include("p3/massdim.jl")
+
 end # module

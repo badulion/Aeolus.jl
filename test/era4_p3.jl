@@ -8,4 +8,5 @@ using Aeolus
 
 @testset "P3 microphysics (Phase 40)" begin
     include("p3/gamma.jl")          # gamma, incomplete gamma, PSD moments
+    include("p3/massdim.jl")        # mass-dimension regimes, rime density, fall speed
 end
