@@ -30,6 +30,7 @@ makedocs(
             "Discrete Poisson & FFT"      => "theory/poisson.md",
             "Radiative transfer"          => "theory/radiation.md",
             "P3 microphysics"             => "theory/p3.md",
+            "Ice nucleation"              => "theory/ice_nucleation.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
