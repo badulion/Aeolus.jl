@@ -394,4 +394,72 @@ end
               for T in 240.0:-0.5:210.0]
         @test all(diff(Nd) .>= 0) && Nd[end] > Nd[1]
     end
+
+    # ---------------------------------------------------------------------
+    @testset "Consistency with the Phase 39 liquid_fraction ramp" begin
+        # The regime boundaries are the ramp's endpoints, from one set of
+        # constants: :liquid ⇔ λ = 1, :homogeneous ⇔ λ = 0.
+        for T in 220.0:0.05:280.0
+            λ = liquid_fraction(T)
+            reg = freezing_regime(T)
+            @test (reg === :liquid) == (λ == 1)
+            @test (reg === :homogeneous) == (λ == 0)
+            @test (reg === :heterogeneous) == (0 < λ < 1)
+        end
+
+        # Warm end, λ = 1: nothing freezes, however much INP and however
+        # supersaturated.
+        inp = inp_population([lognormal_mode(:mineral_dust, 100.0, 0.4, 2.0)])
+        t = ice_nucleation!(inp, _C.T_freeze, 1.5, 1.0; N_liq, M_liq)
+        @test liquid_fraction(_C.T_freeze) == 1
+        @test t.M_liq == 0 && ice_number_formed(t) == 0 && t.N_inp == 0
+
+        # Cold end, λ = 0: all liquid is ice, exactly — the frozen liquid
+        # fraction equals 1 - λ = 1. Immersed INP are inside the frozen
+        # drops (consumed), and form no extra crystals.
+        for T in (_C.T_icenuc, _C.T_icenuc - 5)
+            inp = _parcel()
+            t = ice_nucleation!(inp, T, 1.0, 1.0; N_liq, M_liq)
+            @test liquid_fraction(T) == 0
+            @test t.M_liq / M_liq == 1 - liquid_fraction(T)
+            @test t.N_ice_hom == N_liq && t.N_ice_imm == 0
+            @test t.N_inp ≈ inp_number(_parcel()) rtol = 1e-12
+            @test inp_number(inp) ≈ 0 atol = 1e-9
+            @test t.heat ≈ latent_heat_fusion(T) * M_liq rtol = 1e-14
+        end
+        # … while deposition on interstitial INP continues below T_icenuc
+        inp = _parcel()
+        t = ice_nucleation!(inp, 225.0, 1.2, 1.0)
+        @test t.N_ice_dep > 0 && t.N_ice_hom == 0
+
+        # Just inside the ramp at the cold end: heterogeneous only, a
+        # fraction of the liquid freezes.
+        T = _C.T_icenuc + 0.01
+        t = ice_nucleation!(_parcel(), T, 1.0, 1.0; N_liq, M_liq)
+        @test 0 < t.M_liq / M_liq < 1 && t.N_ice_hom == 0
+
+        # Inside the ramp, heterogeneous nucleation never freezes more of
+        # the liquid than the ramp's ice fraction 1 - λ(T): checked for a
+        # heavy dust load (10 cm⁻³, all immersed) — nucleation sets the
+        # crystal number, and depositional growth (the host's) the rest.
+        worst = 0.0
+        for T in (_C.T_icenuc + 0.01):0.25:(_C.T_freeze - 0.01)
+            inp = inp_population([lognormal_mode(:mineral_dust, 10.0, 0.4, 2.0)])
+            t = ice_nucleation!(inp, T, 1.0, 1.0; N_liq, M_liq)
+            f = t.M_liq / M_liq
+            @test f <= 1 - liquid_fraction(T)
+            worst = max(worst, f / (1 - liquid_fraction(T)))
+        end
+        @info "Heterogeneous frozen liquid fraction / (1 - λ), 10 cm⁻³ dust" worst
+
+        # One set of constants: moving T_icenuc moves both together.
+        c = ThermodynamicConstants{Float64}(T_icenuc = 238.15)
+        @test liquid_fraction(236.0, c) == 0
+        @test freezing_regime(236.0, c) === :homogeneous
+        @test freezing_regime(236.0) === :heterogeneous
+        t = ice_nucleation!(_parcel(), 236.0, 1.0, 1.0; N_liq, M_liq, c)
+        @test t.M_liq == M_liq
+        t = ice_nucleation!(_parcel(), 236.0, 1.0, 1.0; N_liq, M_liq)
+        @test t.M_liq < M_liq
+    end
 end
