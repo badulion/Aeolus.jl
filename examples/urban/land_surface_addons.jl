@@ -350,24 +350,20 @@ end
 """
     dew_point(qv, p = 1.01325e5) -> K
 
-Approximate dew-point temperature (K) for specific humidity `qv` [kg/kg]
-at pressure `p` [Pa]. Inverts the Magnus / Tetens form used by
-`q_saturation` in `urban_physics.jl`, so the two are mutually
-consistent to within the Magnus approximation itself.
+Dew-point temperature (K) for specific humidity `qv` [kg/kg] at pressure
+`p` [Pa]. Delegates to `Aeolus.MoistThermodynamics.dewpoint_temperature`,
+the same saturation curve `q_saturation` uses.
 """
-function dew_point(qv::Real, p::Real = 1.01325e5)
-    q = max(Float64(qv), 1e-12)
-    # invert q_sat = ε e_s / (p - (1-ε) e_s)  ⇒  e_s = q p / (ε + (1-ε) q)
-    ε = 287.05 / 461.5
-    es = q * p / (ε + (1 - ε) * q)
-    # invert Tetens:  es = 611.2 exp(17.67 Tc / (Tc + 243.5))
-    x = log(max(es, 1e-6) / 611.2)
-    Tc = 243.5 * x / (17.67 - x)
-    return Tc + 273.15
-end
+dew_point(qv::Real, p::Real = 1.01325e5) =
+    Aeolus.MoistThermodynamics.dewpoint_temperature(p, max(Float64(qv), 1e-12))
 
 """
     apply_dew_condensation!(Ts, qv_air, LE; ε_warm = 5e-3, p = 1.01325e5)
+
+Legacy L5 proxy, superseded by `apply_fog_dew!` (moisture_addons.jl,
+backed by `Aeolus.RadiationFog`), which removes the vapour that forms the
+dew and derives the surface warming from `L_v · m` instead of a relaxation
+constant. Kept for reference; the urban run no longer calls it.
 
 When a surface cell is at or below the dew point of the air above it,
 water condenses onto it rather than evaporating. Enforce this by

@@ -12,8 +12,10 @@
 #                                    warm-rain scaffold (Nc, Nr prognostic).
 #   M3  apply_ice_processes!      — homogeneous freezing / melting with
 #                                    L_f accounting.
-#   M4  apply_fog_dew!            — cell-local dew / radiation-fog
-#                                    condensation when T < T_dew.
+#   M4  apply_fog_dew!            — dew onto cold surfaces + fog in the
+#                                    air, delegating to Aeolus.RadiationFog
+#                                    (Phase 44); latent heat of dew goes to
+#                                    the surface budget.
 #
 # All functions accept either raw 3-D `AbstractArray`s (interior extent)
 # or Aeolus `Field{CellCenter}` objects via multiple dispatch. The Field
@@ -339,78 +341,65 @@ function apply_ice_processes!(state::TwoMomentState, T_col::AbstractArray,
 end
 
 # ===========================================================================
-# M4 — Fog / dew condensation
+# M4 — Fog / dew condensation (delegates to Aeolus.RadiationFog)
 # ===========================================================================
-
-# Invert Tetens to recover the dew-point temperature from a vapour
-# specific humidity qv at pressure p.  qv = ε es / (p - (1-ε) es)
-# ⇒ es = qv p / (ε + (1-ε) qv). Then Tetens is inverted analytically.
-@inline function _dew_point(qv::Real, p::Real)
-    es = qv * p / (_EPS_D + (1 - _EPS_D) * qv)
-    r  = log(max(es, 1e-6) / 611.2)
-    return 273.15 + 243.5 * r / max(17.67 - r, 1e-6)
-end
+#
+# This used to be a local scheme that shipped DISABLED because "its
+# warming term amplifies". Two defects, both measured (Phase 44, #11):
+#
+#   * whenever the SURFACE was below the dew point it removed vapour from
+#     the AIR and put the latent heat into the AIR, even when the air was
+#     subsaturated. Nothing tied the heating to air-side saturation, so
+#     with vapour resupplied by evaporation it heated a 288 K cell to
+#     363 K in 24 h while its RH fell to 0.016;
+#   * in supersaturated air the explicit `rate·dt·(q_v - q_s)` step lacked
+#     the latent-heat feedback and overshot below saturation once
+#     rate·dt ≳ 0.4.
+#
+# The physics now lives in `src/RadiationFog.jl` (one source of truth,
+# with MoistThermodynamics saturation and latent heats): air-side fog is
+# an enthalpy-conserving saturation adjustment into `ql`, and dew is an
+# implicit bulk exchange whose latent heat goes to the SURFACE. This
+# wrapper only adapts the urban example's Fields to it.
 
 """
-    apply_fog_dew!(θ, qv, q_dew, Ts, dt; ρ=1.0, dz, p=1.0e5, rate=0.1)
+    apply_fog_dew!(θ, qv, ql, q_dew, Ts, dt; p = 1.01325e5, dz, ρ = 1.0,
+                   C_e = 1e-3, U = 3.0, τ_fog = 0.0, fog_levels = :)
+        -> H_dew (W m⁻², 2-D)
 
-Cell-local fog / dew condensation for the first atmospheric layer.
-For each `(i, j)`, temperature is diagnosed from `θ[i,j,1]` via the
-Exner factor `Π = (p/1e5)^(R_d/c_p)`, `T_dew` is inverted analytically
-from `qv[i,j,1]`, and — when either the air (`T < T_dew`) or the ground
-(`Ts[i,j] < T_dew`) is below the dew point — a small fraction of the
-saturation excess is condensed:
+Dew onto the surface, then fog in the air, for the urban example.
 
-    Δq = rate · dt · max(qv - q_sat(T, p), 0)
+  * **Dew** — `Aeolus.RadiationFog.dew_exchange!` on the lowest layer of
+    `qv`: vapour is deposited into the 2-D reservoir `q_dew` (kg m⁻²)
+    while `q_v > q_s(T_s)`, and re-evaporated from it when the surface
+    warms. The latent heat is **returned** as `H_dew` (positive = heating
+    the surface); the caller adds it to the surface energy budget. The
+    air temperature is not touched by dew.
+  * **Fog** — `Aeolus.RadiationFog.fog_adjust!` on `θ`, `qv`, `ql` in
+    `fog_levels`: enthalpy-conserving saturation adjustment (relaxed over
+    `τ_fog` if > 0), condensing into and evaporating from `ql`.
 
-`Δq` is removed from `qv[i,j,1]`, deposited into the 2-D `q_dew[i,j]`
-(taken by reference, units `kg m⁻²` — the areal water column now on
-the surface as dew/fog droplets = `ρ · Δq · dz`), and the corresponding
-latent-heat release `+L_v·Δq/(c_p·Π)` is added to `θ[i,j,1]`.
-
-`θ` and `qv` can be `Field` objects or interior-sized 3-D arrays;
-`q_dew` is any 2-D `(Nx, Ny)` array; `Ts` is the 2-D surface-temp
-matrix. `dz` is the vertical cell height (used to convert mixing
-ratio into an areal water content). `rate` (1/s) controls how fast
-the sub-saturation column relaxes toward `q_sat`.
+`p` is the surface pressure used for dew and either a scalar or a
+per-level vector for fog. Both steps are unconditionally stable in `dt`
+and cannot overshoot saturation.
 """
 function apply_fog_dew!(θ::AbstractArray{<:Real,3}, qv::AbstractArray{<:Real,3},
-                        q_dew::AbstractMatrix, Ts::AbstractMatrix,
-                        dt::Real; ρ::Real = 1.0, dz::Real = 1.0,
-                        p::Real = _PREF_D, rate::Real = 0.1)
-    Nx, Ny, _ = size(θ)
-    exner = (p / _PREF_D)^(_RD_D / _CP_D)
-    invΠ  = 1.0 / exner
-    @inbounds for j in 1:Ny, i in 1:Nx
-        θe = θ[i, j, 1]
-        qve = qv[i, j, 1]
-        T   = θe * exner
-        T_d = _dew_point(qve, p)
-        if T < T_d || Ts[i, j] < T_d
-            qs, _ = _qsat_tet(T, p)
-            excess = max(qve - qs, 0.0)
-            # For radiation-fog (Ts cold, T just above dew) we still want
-            # some condensation, so use the (T_d - min(T, Ts))/T_d as a
-            # secondary driver whenever the vapour is not yet super-saturated.
-            if excess == 0.0
-                ΔT = max(T_d - min(T, Ts[i, j]), 0.0)
-                excess = qve * min(ΔT / 20.0, 1.0)   # cap fraction at 100 %
-            end
-            Δq = rate * dt * excess
-            if Δq > 0
-                qv[i, j, 1]   = qve - Δq
-                q_dew[i, j]  += ρ * Δq * dz
-                θ[i, j, 1]    = θe + _LV_D * Δq * invΠ / _CP_D
-            end
-        end
-    end
-    return (θ, qv, q_dew)
+                        ql::AbstractArray{<:Real,3}, q_dew::AbstractMatrix,
+                        Ts::AbstractMatrix, dt::Real;
+                        p = 1.01325e5, dz::Real, ρ::Real = 1.0,
+                        C_e::Real = 1e-3, U::Real = 3.0,
+                        τ_fog::Real = 0.0, fog_levels = axes(θ, 3))
+    p_sfc = p isa AbstractVector ? first(p) : p
+    H = Aeolus.RadiationFog.dew_exchange!(qv, q_dew, Ts, p_sfc, dt;
+                                          dz = dz, ρ = ρ, C_e = C_e, U = U)
+    Aeolus.RadiationFog.fog_adjust!(θ, qv, ql, p, dt; τ = τ_fog,
+                                    levels = fog_levels)
+    return H
 end
 
-function apply_fog_dew!(θ::Field, qv::Field, q_dew::AbstractMatrix,
-                        Ts::AbstractMatrix, dt::Real; ρ::Real = 1.0,
-                        dz::Real = θ.mesh.dz, p::Real = _PREF_D,
-                        rate::Real = 0.1)
-    return apply_fog_dew!(interior_view(θ), interior_view(qv), q_dew, Ts,
-                          dt; ρ = ρ, dz = dz, p = p, rate = rate)
+function apply_fog_dew!(θ::Field, qv::Field, ql::Field, q_dew::AbstractMatrix,
+                        Ts::AbstractMatrix, dt::Real; dz::Real = θ.mesh.dz,
+                        kwargs...)
+    return apply_fog_dew!(interior_view(θ), interior_view(qv),
+                          interior_view(ql), q_dew, Ts, dt; dz = dz, kwargs...)
 end

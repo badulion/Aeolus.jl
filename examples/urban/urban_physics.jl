@@ -481,13 +481,15 @@ const _EPS_R    = _R_d / _R_v
     q_saturation(T_K, p_Pa = 1.01325e5) -> kg/kg
 
 Saturation specific humidity at temperature `T_K` (K) and pressure `p_Pa`
-(Pa) via the Tetens formula.
+(Pa). Delegates to the Era IV thermodynamic contract
+(`Aeolus.MoistThermodynamics.saturation_specific_humidity`) rather than a
+local Tetens fit, so that evaporation here and dew in `apply_fog_dew!`
+agree exactly on where saturation is — with two different fits (they
+differ by up to 0.2 % at 305 K) there is a band of surface temperatures
+where a cell both evaporates and collects dew in the same step.
 """
-function q_saturation(T_K::Real, p::Real = _P_ref)
-    Tc  = T_K - 273.15
-    es  = 611.2 * exp(17.67 * Tc / (Tc + 243.5))    # Pa
-    return _EPS_R * es / max(p - (1 - _EPS_R) * es, 1e-6)
-end
+q_saturation(T_K::Real, p::Real = _P_ref) =
+    Aeolus.MoistThermodynamics.saturation_specific_humidity(T_K, p)
 
 # Per-class moisture-availability factor β ∈ [0, 1]: 1 means saturated
 # surface (open water), 0 means desert. Streets, roofs ≈ dry after

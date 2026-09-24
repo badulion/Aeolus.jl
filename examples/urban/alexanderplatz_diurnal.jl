@@ -32,6 +32,7 @@ using Aeolus
 using Aeolus.Fields: set!, interior_view
 using Aeolus.Radiation: apply_radiative_cooling!
 using Aeolus.Operators: advect_centered!
+using Aeolus.AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using Printf
 using Statistics: mean
 
@@ -52,7 +53,7 @@ const OUT = joinpath(@__DIR__, "output"); mkpath(OUT)
 
 Lx = Ly = 1000.0; Lz = 200.0
 Nx = Ny = 64;    Nz = 32
-mesh = RegularGrid(; size=(Nx,Ny,Nz), extent=(Lx,Ly,Lz), halo=(2,2,2))
+mesh = RegularGrid(; size=(Nx,Ny,Nz), extent=(Lx,Ly,Lz), halo=(3,3,3))   # 3: WENO-Z5 moisture transport
 
 const OSM_PATH = joinpath(@__DIR__, "data", "alexanderplatz_real.osm")
 isfile(OSM_PATH) || error("Missing $(OSM_PATH). Run data/fetch_alexanderplatz.jl first.")
@@ -84,7 +85,10 @@ LAI_map    = fill(2.5, Nx, Ny)   # dense grassy park; open water/streets → 0
 LAI_map .*= veg_mask
 soil       = SoilGrid(mesh; T0 = 288.0)
 snow       = SnowState(mesh)
-q_dew      = zeros(Float64, Nx, Ny)
+q_dew      = zeros(Float64, Nx, Ny)      # surface dew reservoir, kg m⁻²
+# Layer pressures for fog/dew thermodynamics: isothermal 8 km scale height
+# from a standard surface pressure (the Boussinesq core carries no p).
+p_col      = [1.01325e5 * exp(-(k - 0.5) * (Lz / Nz) / 8000.0) for k in 1:Nz]
 
 # Precompute the sky-view factor once (geometry doesn't change).
 @printf("Computing sky-view factor... ")
@@ -126,6 +130,8 @@ qv_p = Field(CellCenter(), mesh); set!(qv_p, (x,y,z) -> 0.010 * exp(-z / 800))
 ql_p = Field(CellCenter(), mesh)
 qr_p = Field(CellCenter(), mesh)
 tqv  = Field(CellCenter(), mesh)
+moist_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux)
+adv_ws    = FluxLimiterWorkspace(mesh)
 
 Ts = init_surface_state(sfc, 285.0); @. Ts = 285.0 + 5.0 * (sfc == SURFACE_WATER)
 
@@ -372,9 +378,8 @@ for n in 1:nsteps
     LE = apply_latent_flux!(sim, Ts, sfc; dt = dt, qv_field = qv_p,
                             qv_air = 0.010)
     @. sensible += LE
-    # L5: dew condensation on cold surfaces (disabled — warming term
-    # amplifies before proper coupling with atmosphere qv is wired in)
-    # apply_dew_condensation!(Ts, 0.010, LE; ε_warm = 3e-3)
+    # L5: dew on cold surfaces is handled by M4 `apply_fog_dew!` below,
+    # which removes the vapour it deposits (the old L5 proxy did not).
     # A3: emissions (traffic + biogenic); A1: photochemistry; A2: dep
     add_emissions!(chem, sfc, hour_of_day, dt; dz = mesh.dz)
     apply_photochem_step!(chem, hour_of_day, dt)
@@ -385,10 +390,28 @@ for n in 1:nsteps
     apply_dry_deposition!(aerosol.q_a, sfc, :PM, dt; dz = mesh.dz)
     apply_aerosol_step!(aerosol, dt; V_sed = 0.005, sfc = sfc, dz = mesh.dz)
 
-    fill_halos!(qv_p, FieldBoundaryConditions(:periodic))
-    fill!(tqv.data, 0)
-    advect_centered!(tqv, sim.u, sim.v, sim.w, qv_p)
-    interior_view(qv_p) .+= dt .* view(tqv.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
+    # Moisture transport. qv and ql are ACTIVE now (fog/dew feed latent
+    # heat back into θ and Ts), so they need a stable, non-oscillatory
+    # scheme: WENO-Z5 with the positivity limiter (Phase 26). The former
+    # forward-Euler + 2nd-order centered update is unconditionally
+    # unstable; as a passive field its grid-scale noise was simply
+    # clipped at the 0.03 clamp (RH reached 2.07 in 8,395 cells within
+    # 1000 steps), but as soon as condensation was coupled that noise
+    # became latent heat and the run blew up within 500 steps.
+    # Cloud / fog water must move with the air too, or condensate stays
+    # put while its vapour is carried away — heating one air mass and
+    # evaporatively cooling the next.
+    # Known residual: a few wall-nook cells (e.g. (64,58,1)) still gain
+    # vapour, because the IBM correction applied after the projection
+    # leaves the velocity slightly convergent there. Fog now caps those
+    # cells at saturation instead of letting RH run to the clamp.
+    for q in (qv_p, ql_p)
+        fill_halos!(q, moist_bcs)
+        fill!(tqv.data, 0)
+        advect_positive!(tqv, sim.u, sim.v, sim.w, q, dt;
+                         scheme = :weno_z5, workspace = adv_ws, bcs = moist_bcs)
+        interior_view(q) .+= dt .* view(tqv.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
+    end
     apply_kessler_step!(qv_p, ql_p, qr_p, dt; Vt = 3.0)
     clamp!(interior_view(qv_p), 0.0, 0.03)
 
@@ -403,16 +426,20 @@ for n in 1:nsteps
     interior_view(pollutant) .+= dt .* view(tp.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
     clamp!(interior_view(pollutant), 0.0, 100.0)
 
+    # M4: dew onto cold surfaces + fog in the air (Aeolus.RadiationFog).
+    # Dew's latent heat goes to the SURFACE budget: `sensible` is a loss
+    # term there, so subtracting H_dew warms the surface. Fog condenses
+    # into ql_p with enthalpy-conserving warming of θ.
+    H_dew = apply_fog_dew!(sim.θ, qv_p, ql_p, q_dew, Ts, dt;
+                           p = p_col, dz = mesh.dz, ρ = 1.0)
+    @. sensible -= H_dew
+
     step!(sim, dt; body_force! = force!, post_predictor! = post_predictor)
     step_surfaces!(Ts, sfc, params, sw_arr, lw_arr, sensible, dt)
     # L3: multi-layer soil couples the ground reservoir to Ts
     step_soil!(soil, Ts, sfc, dt, params)
     # L5: snow state (dormant in a summer run, but the machinery ships)
     update_snow_state!(snow, Ts, 0)
-    # M4: fog / dew — disabled by default; enable once atmosphere θ
-    # is proven robust to per-cell condensation warming (small
-    # ε_warm needed). API ships in moisture_addons.jl.
-    # apply_fog_dew!(sim.θ, qv_p, q_dew, Ts, dt; dz = mesh.dz, rate = 1e-4)
     apply_radiative_cooling!(sim.θ, fill(-2.315e-5, Nz) .* dt)
     clamp!(Ts, 270.0, 340.0)
 
@@ -423,10 +450,13 @@ for n in 1:nsteps
     if n % frame_every == 0
         global nframe += 1
         save_frame(nframe, hour_of_day)
-        @printf("  frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°\n",
+        @printf("  frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°  θ1=%5.1f/%5.1f  dew=%.3f mm  fog ql1max=%.2e\n",
                 nframe, hour_of_day, time() - t_wall_start,
                 minimum(Ts), maximum(Ts),
-                minimum(sw_arr), maximum(sw_arr), sun_now[].elevation)
+                minimum(sw_arr), maximum(sw_arr), sun_now[].elevation,
+                minimum(view(interior_view(sim.θ), :, :, 1)),
+                maximum(view(interior_view(sim.θ), :, :, 1)),
+                maximum(q_dew), maximum(view(interior_view(ql_p), :, :, 1)))
     end
 end
 
