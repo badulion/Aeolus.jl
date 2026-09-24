@@ -316,6 +316,19 @@ Caveats of what currently ships, as distinct from what is not yet built.
 
 ---
 
+## Contributing
+
+Development is issue-driven: one issue, one git worktree, one branch,
+several commits, one pull request. See
+[`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for the workflow and
+[`CLAUDE.md`](CLAUDE.md) for the short operational contract.
+
+Work is tracked as GitHub issues grouped into milestones, one per era.
+The issue set is generated from the roadmap — see
+[`.github/roadmap-issues.toml`](.github/roadmap-issues.toml).
+
+---
+
 ## License and citation
 
 MIT — see [`LICENSE`](LICENSE).

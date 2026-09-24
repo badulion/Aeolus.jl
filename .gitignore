@@ -21,3 +21,6 @@ output/
 *.swp
 *~
 .DS_Store
+
+# Agent worktrees (one per issue)
+.worktrees/
