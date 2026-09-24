@@ -554,20 +554,27 @@ end
 # Normalised number-weighted integral E_N[f] = ∫ f(D) D^μ e^{-λD} dD / ∫ D^μ e^{-λD} dD
 # by composite 8-point Gauss-Legendre in x = λD, with panel edges at the
 # regime thresholds (where V(D) has a jump or a kink), geometric panels
-# towards x = 0 and unit panels out to where the D³·D^μ tail is < 1e-30.
+# towards x = 0 and unit panels out to where the D^kmax·D^μ tail is < 1e-30.
 # The Gauss-Legendre rule is RadiationCore's (one source of truth).
 const _P3_GL8 = _gauss_legendre(8)
 
-function _p3_psd_expectation(f, μ::T, λ::T, md::P3MassDimension{T}) where {T}
-    a = μ + 4
+_p3_psd_expectation(f, μ::T, λ::T, md::P3MassDimension{T}; kmax::Real = 3) where {T} =
+    _p3_psd_expectation(f, μ, λ, (md.D_th, md.D_gr, md.D_cr); kmax = kmax)
+
+# General form: `breaks` are the diameters (m) where the integrand has a
+# jump or kink; `kmax` the highest power of D the integrand grows like
+# (3 for mass weighting, 6 for reflectivity weighting), which sets how
+# far out the tail is integrated.
+function _p3_psd_expectation(f, μ::T, λ::T, breaks::Tuple; kmax::Real = 3) where {T}
+    a = μ + T(kmax) + 1
     xmax = a + 20 * sqrt(a) + 40
     edges = T[0]
     for k in 40:-1:1
         push!(edges, T(2.0)^(-k))
     end
     append!(edges, T(1):T(1):ceil(xmax))
-    for Db in (md.D_th, md.D_gr, md.D_cr)
-        xb = λ * Db
+    for Db in breaks
+        xb = λ * T(Db)
         0 < xb < xmax && push!(edges, xb)
     end
     sort!(edges)
