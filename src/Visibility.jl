@@ -424,7 +424,10 @@ fog_extinction(lwc::Real, N_d::Real; v_eff::Real = 0.1,
 
 Extinction of an interstitial (unactivated) aerosol population, i.e.
 haze: `AerosolOptics.bulk_optics(modes, λ; rh)`, with κ-Köhler wet growth
-of each mode at relative humidity `rh` (fraction, < 1). Use
+of each mode at relative humidity `rh` (fraction, < 1; values ≥ 1 are
+capped at 0.9999 by `AerosolOptics.wet_radius`, i.e. the haze is held at
+its largest stable equilibrium size — above saturation the droplets
+belong in `droplets`, not here). Use
 `AerosolOptics.aerosol_mixture(:urban)` etc. for the OPAC mixtures.
 
 At 550 nm and RH = 0.8 the library mixtures give V(ε = 0.02) of
@@ -457,7 +460,9 @@ rayleigh_extinction(; p::Real = 101325.0, T::Real = 288.15,
 
 Sum of droplet, haze and molecular extinction. `droplets` is a
 [`DropletSpectrum`](@ref) (or `nothing`), `aerosol` a vector of
-`AerosolOptics` modes (or `nothing`). Extinction coefficients add because
+`AerosolOptics` modes (or `nothing`). The one air temperature `T` is used
+both for the Rayleigh number density and for the Kelvin term of the haze
+wet growth. Extinction coefficients add because
 the three populations scatter independently.
 """
 function total_extinction(; droplets::Union{Nothing,DropletSpectrum} = nothing,
@@ -467,7 +472,7 @@ function total_extinction(; droplets::Union{Nothing,DropletSpectrum} = nothing,
                           rayleigh::Bool = true, method::Symbol = :mie)
     β = 0.0
     droplets === nothing || (β += droplet_extinction(droplets; λ = λ, method = method))
-    aerosol === nothing || (β += aerosol_extinction(aerosol; rh = rh, λ = λ))
+    aerosol === nothing || (β += aerosol_extinction(aerosol; rh = rh, λ = λ, T_K = T))
     rayleigh && (β += rayleigh_extinction(; p = p, T = T, λ = λ))
     return β
 end

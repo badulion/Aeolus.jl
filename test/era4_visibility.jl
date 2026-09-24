@@ -263,7 +263,13 @@ using Aeolus
         # contributions add
         s = gamma_droplets(1e-5, 1e8)
         βt = total_extinction(; droplets = s, aerosol = clean, rh = 0.8)
-        @test βt ≈ droplet_extinction(s) + aerosol_extinction(clean; rh = 0.8) + βR rtol = 1e-12
+        @test βt ≈ droplet_extinction(s) + aerosol_extinction(clean; rh = 0.8, T_K = 288.15) +
+                   βR rtol = 1e-12
+        # one air temperature for Rayleigh density AND haze Kelvin term
+        # (review fix: the haze term used to ignore T and run at 298.15 K)
+        βc = total_extinction(; aerosol = clean, rh = 0.9, T = 263.15, rayleigh = false)
+        @test βc ≈ aerosol_extinction(clean; rh = 0.9, T_K = 263.15) rtol = 1e-14
+        @test βc != aerosol_extinction(clean; rh = 0.9, T_K = 298.15)
         # a thin fog (LWC 0.01 g/m³) dominates any haze
         @test droplet_extinction(s) > 10 * aerosol_extinction(clean; rh = 0.8)
         @printf("  Rayleigh β=%.3e m⁻¹, V=%.0f km; continental clean RH 0/50/80/95%%: %.0f/%.0f/%.0f/%.0f km; urban RH80: %.1f km\n",
