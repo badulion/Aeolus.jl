@@ -447,6 +447,12 @@ export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
 export fog_effective_radius, FogRadiation, fog_radiation,
        fog_atmospheric_column, fog_radiative_transfer!,
        fog_radiative_heating!, fog_top_flux_jump,
-       radiative_condensation_rate
+       radiative_condensation_rate,
+       FogColumnSettings, FogBudget, FogColumn, stretched_levels,
+       parisfog_2011_column, column_energy, column_water,
+       fog_liquid_water_path, update_radiation!, moist_stability,
+       eddy_diffusivity, surface_exchange, settling_velocity,
+       fog_diagnostics, fog_life_cycle
+# (the fog column adds methods to the generic `step!` and `run!`)
 
 end # module

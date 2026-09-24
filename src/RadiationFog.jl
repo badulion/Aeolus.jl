@@ -82,6 +82,8 @@ using ..TwoStream: mie_cloud_optics, two_stream_solver, solve_lw!, solve_sw!
 using ..AerosolCloud: droplet_effective_radius
 using ..Superdroplet: terminal_velocity
 using ..SolarGeometry: solar_time, solar_position, earth_sun_distance_factor
+import ..TimeSteppers: step!      # the column extends the generic step!/run!
+import ..Simulations: run!
 using ..MoistThermodynamics: saturation_vapor_pressure,
                              density_potential_temperature,
                              virtual_potential_temperature, air_density
@@ -92,7 +94,12 @@ export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
 export fog_effective_radius, FogRadiation, fog_radiation,
        fog_atmospheric_column, fog_radiative_transfer!,
        fog_radiative_heating!, fog_top_flux_jump,
-       radiative_condensation_rate
+       radiative_condensation_rate,
+       FogColumnSettings, FogBudget, FogColumn, stretched_levels,
+       parisfog_2011_column, column_energy, column_water,
+       fog_liquid_water_path, update_radiation!, moist_stability,
+       eddy_diffusivity, surface_exchange, settling_velocity,
+       fog_diagnostics, fog_life_cycle
 
 # =========================================================================
 # Helpers
@@ -349,5 +356,6 @@ function dew_exchange!(qv::AbstractArray{<:Real}, q_dew::AbstractMatrix,
 end
 
 include("radiation_fog/coupling.jl")
+include("radiation_fog/column.jl")
 
 end # module

@@ -141,4 +141,81 @@ end
             @test ρ * r.Δq / dt ≈ radiative_condensation_rate(-1.0, T, ρ) rtol = 0.03
         end
     end
+
+    # ---------------------------------------------------------------------
+    # The 1-D column model
+    # ---------------------------------------------------------------------
+    @testset "Column numerics: conservative implicit mixing" begin
+        n = 12
+        φ = [sin(0.7k) + 2 for k in 1:n]; m = [1.0 + 0.1k for k in 1:n]
+        D = [0.0; fill(3.0, n - 1); 0.0]
+        tot0 = sum(m .* φ)
+        Aeolus.RadiationFog._implicit_diffuse!(φ, D, m, 50.0)
+        @test sum(m .* φ) ≈ tot0 rtol = 1e-14
+        # huge dt: fully mixed to the mass-weighted mean
+        Aeolus.RadiationFog._implicit_diffuse!(φ, D, m, 1e9)
+        @test maximum(φ) - minimum(φ) < 1e-6
+        @test all(isapprox.(φ, tot0 / sum(m); rtol = 1e-6))
+        zf = stretched_levels(1000.0)
+        @test zf[1] == 0 && zf[end] == 1000 && zf[2] ≈ 1.0
+        @test all(diff(zf) .<= 25.0 + 1e-9) && issorted(zf)
+    end
+
+    @testset "Moist stability: fog turns a dry-stable layer unstable" begin
+        # 8 K/km lapse rate: stable for dry air (Γ_d = 9.8 K/km), unstable
+        # for saturated air at 275 K (Γ_m ≈ 6 K/km).
+        zf = collect(0.0:20.0:1000.0); nz = length(zf) - 1
+        zc = (zf[1:end-1] .+ zf[2:end]) ./ 2
+        T = 276.0 .- 8e-3 .* zc
+        p = 1.0e5 .* exp.(-zc ./ 8000)
+        dry = FogColumn(zf, T, 0.7 .* saturation_specific_humidity.(T, p))
+        k = 8
+        N2dry = moist_stability(dry, k)
+        θρ = [density_potential_temperature(dry.T[i], dry.p[i], PhasePartition(dry.qv[i])) for i in 1:nz]
+        @test N2dry > 0
+        # unsaturated: the parcel estimate reduces to g/θ_ρ ∂θ_ρ/∂z.
+        # (A first version compared against plain θ and was 13 % off: the
+        # vapour decreasing with height lowers the θ_ρ gradient. The
+        # expectation was wrong, not the code.)
+        @test N2dry ≈ 9.80665 / θρ[k] * (θρ[k + 1] - θρ[k]) / 20 rtol = 0.02
+        wet = FogColumn(zf, T, 1.001 .* saturation_specific_humidity.(T, p))
+        @test all(wet.ql .> 0)
+        N2wet = moist_stability(wet, k)
+        @test N2wet < 0
+        @info "8 K/km layer" N2_dry = N2dry N2_saturated = N2wet
+        # neutral surface layer: stability function 1
+        ex = surface_exchange(dry)
+        @test ex.C_H > 0 && ex.C_D > 0
+    end
+
+    @testset "Bulk droplet settling" begin
+        ρ = 1.25
+        v = settling_velocity(0.2e-3 / ρ, ρ, 50e6)
+        @test 0.5e-2 < v < 2e-2                    # ≈ 1 cm/s for fog
+        # Stokes regime: v ∝ r_eff² ∝ LWC^{2/3}
+        v8 = settling_velocity(8 * 0.2e-3 / ρ, ρ, 50e6)
+        @test v8 / v ≈ 4 rtol = 0.03
+        @test settling_velocity(0.0, ρ, 50e6) == 0
+        @info "fog settling velocity, 0.2 g/m³, 50 cm⁻³" v_cm_s = 100v
+    end
+
+    @testset "Column energy and water budgets close to round-off" begin
+        # 6 h from 23:20 UTC: radiative cooling, dew, fog formation,
+        # settling and turbulent mixing all active.
+        col = parisfog_2011_column()
+        E0 = column_energy(col); W0 = column_water(col)
+        run!(col, 6 * 3600)
+        b = col.budget
+        @test fog_liquid_water_path(col) > 1e-3        # fog did form
+        @test b.fallout_mass < 0 && b.vapour_mass != 0
+        src = b.radiation + b.sensible + b.vapour_enthalpy + b.fallout_enthalpy
+        scale = abs(b.radiation) + abs(b.sensible) + abs(b.vapour_enthalpy) +
+                abs(b.fallout_enthalpy)
+        ΔE = column_energy(col) - E0
+        @info "6 h column energy budget (J/m²)" ΔE sources = src radiation = b.radiation sensible = b.sensible vapour = b.vapour_enthalpy fallout = b.fallout_enthalpy residual = ΔE - src
+        @test abs(ΔE - src) < 1e-9 * scale
+        ΔW = column_water(col) - W0
+        @test ΔW ≈ b.vapour_mass + b.fallout_mass rtol = 1e-9
+        @info "6 h column water budget (kg/m²)" ΔW vapour = b.vapour_mass fallout = b.fallout_mass
+    end
 end
