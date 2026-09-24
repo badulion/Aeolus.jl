@@ -224,6 +224,40 @@ using Aeolus.RadiationFog
         @info "dew rate, T_s = 280 K, q_v = 10 g/kg" mm_per_h=rate Td=dewpoint_temperature(p, qv)
     end
 
+    @testset "Dew: deposit-then-evaporate cycle closes water and energy" begin
+        # Night: surface at 280 K collects dew from a closed layer. Day:
+        # surface at 295 K re-evaporates it. Column water ρ dz q_v + dew is
+        # conserved at every step, all dew returns to the air, and the
+        # surface's net latent heating is exactly (L_v(280) - L_v(295))·m
+        # — deposition at the cold, evaporation at the warm temperature.
+        p, dz, ρ, dt = 1.0e5, 6.25, 1.0, 2.0
+        q3 = fill(0.010, 1, 1, 1); q2 = fill(0.010, 1, 1)
+        d3 = zeros(1, 1); d2 = zeros(1, 1)
+        W0 = ρ * dz * 0.010
+        E = 0.0; m_dep = 0.0
+        paths_agree = true; max_werr = 0.0; min_dew = Inf
+        for (Tsv, nsteps) in ((280.0, 3600), (295.0, 20000))
+            Ts = fill(Tsv, 1, 1)
+            for _ in 1:nsteps
+                H3 = dew_exchange!(q3, d3, Ts, p, dt; dz = dz, ρ = ρ)
+                H2 = dew_exchange!(q2, d2, Ts, p, dt; dz = dz, ρ = ρ)
+                paths_agree &= (H2 == H3)
+                E += H3[1] * dt
+                max_werr = max(max_werr, abs(ρ * dz * q3[1] + d3[1] - W0) / W0)
+                min_dew = min(min_dew, d3[1])
+            end
+            Tsv == 280.0 && (m_dep = d3[1])
+        end
+        @test paths_agree                           # 2-D and 3-D paths agree
+        @test max_werr < 1e-12                      # column water, every step
+        @test min_dew >= 0
+        @test m_dep > 0.01                          # dew did form (kg m⁻²)
+        @test d3[1] == 0                            # and all of it evaporated
+        @test q3[1] ≈ 0.010 rtol = 1e-12
+        @test q2 == q3[:, :, 1] && d2 == d3
+        @test E ≈ (latent_heat_vapor(280.0) - latent_heat_vapor(295.0)) * m_dep rtol = 1e-9
+    end
+
     @testset "Previously amplifying configuration now stays bounded" begin
         # The configuration that made the urban scheme unusable: a cold
         # surface (280 K) under subsaturated air (288 K, q_v = 10 g/kg,
