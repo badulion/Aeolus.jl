@@ -496,6 +496,8 @@ export AerosolCountScheme, DeMott2015, FreezingScheme, IceNucleationTendency,
        ice_number_formed, inas_frozen_fraction, nucleation_rates,
        scheme_temperature_range, singular_inp_concentration
 # Phase 43 (issue #7) — nucleation sources into the P3 ice category.
-export p3_ice_nucleation, p3_inp_release!
+export p3_ice_nucleation, p3_inp_release!,
+       ArcticStratusColumn, isdac_initial_profile, run_arctic_stratus,
+       glaciation_time
 
 end # module

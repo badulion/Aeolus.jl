@@ -4,6 +4,7 @@
 #   inp.jl       issue #5  prognostic INP species, budget, diagnostics
 #   freezing.jl  issue #6  immersion / deposition freezing, source terms
 #   p3_coupling.jl issue #7 nucleation sources into the P3 ice category
+#   stratus_column.jl issue #7 mixed-phase Arctic stratus persistence (ISDAC-style column)
 
 using Test, Printf, Random
 using Aeolus
@@ -12,4 +13,5 @@ using Aeolus
     include("icenuc/inp.jl")
     include("icenuc/freezing.jl")
     include("icenuc/p3_coupling.jl")
+    include("icenuc/stratus_column.jl")
 end

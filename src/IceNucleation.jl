@@ -34,6 +34,8 @@ module IceNucleation
 #                 P3's single ice category (`p3_ice_nucleation`,
 #                 `p3_inp_release!`). The nucleated-crystal mass is P3's
 #                 `P3_NUCLEATED_ICE_MASS` (one constant, not two).
+#   stratus_column.jl (issue #7) — the validation case: a 1-D ISDAC-style
+#                 mixed-phase Arctic stratus column with prescribed mixing.
 #
 # Coupling contract (for the P3 ice category, issue #7): freezing.jl
 # never touches a hydrometeor state. It returns rates and mutates only the
@@ -68,7 +70,7 @@ module IceNucleation
 
 using ..MoistThermodynamics
 using ..AerosolOptics: AerosolMode, AerosolSpecies, LogNormalMode,
-                       aerosol_species
+                       aerosol_species, lognormal_mode
 using ..AerosolCloud: ARGMode, arg_mode, mode_dry_mass,
                       number_above_radius, mass_above_radius
 import ..AerosolCloud
@@ -76,7 +78,10 @@ using ..Superdroplet: MicrophysicalConstants, DEFAULT_MICRO,
                       stokes_settling_velocity
 using ..GasOptics: erfc_series
 using ..P3Microphysics: P3_NUCLEATED_ICE_MASS, P3ParcelState,
-                        P3ProcessParameters, P3_DEFAULT_PROCESS, p3_total_water
+                        P3ProcessParameters, P3_DEFAULT_PROCESS, p3_total_water,
+                        P3HallettMossop, P3_DEFAULT_HM, p3_condensation,
+                        p3_step_with_rates, p3_sediment!, p3_sediment_rain!,
+                        p3_ice_sedimentation_velocities
 
 export # --- log-normal surface-area diagnostics (inp.jl) ------------------
        mode_surface_area, surface_area_above_radius,
@@ -102,10 +107,14 @@ export # --- log-normal surface-area diagnostics (inp.jl) ------------------
        IceNucleationTendency, NUCLEATED_ICE_MASS, ice_nucleation!,
        ice_number_formed, nucleation_rates, freezing_regime,
        # --- coupling into the P3 ice category (p3_coupling.jl) -------------
-       p3_ice_nucleation, p3_inp_release!
+       p3_ice_nucleation, p3_inp_release!,
+       # --- Arctic stratus column (stratus_column.jl) ----------------------
+       ArcticStratusColumn, isdac_initial_profile, run_arctic_stratus,
+       glaciation_time
 
 include("icenuc/inp.jl")          # issue #5 — prognostic INP species
 include("icenuc/freezing.jl")     # issue #6 — immersion/deposition freezing
 include("icenuc/p3_coupling.jl")  # issue #7 — sources into the P3 ice category
+include("icenuc/stratus_column.jl") # issue #7 — mixed-phase Arctic stratus column
 
 end # module
