@@ -170,9 +170,10 @@ real broadening, because small droplets grow more slowly:
 ``d\ln\mathrm{Var}/dt = 2Ga\mu^{-3/2} \approx 2\times10^{-4}`` s⁻¹ at 10 μm.
 This raises the width by 3.3 % and the exponent by 0.013, and the bulk
 scheme and the superdroplets agree on both. In the frozen limit
-(``\tau = \infty``) both schemes give ``p = 1.0009``, which is the
-``\sigma_{r^2} = 2G\sigma_S t`` short-time regime of Paoli & Shariff
-(2009).
+(``\tau = \infty``) both schemes give ``p = 1.0009``. This is the
+``t \ll \tau`` limit of the same OU result, ``\sigma_{r^2} = 2G\sigma_S t``,
+in which each droplet keeps its supersaturation for the whole run (cf. the
+stochastic model of Paoli & Shariff 2009).
 
 Monodisperse droplets with ``\sigma_S = 0`` stay monodisperse in both
 representations: ``\sigma_{r^2}`` is at round-off level

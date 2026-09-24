@@ -342,7 +342,7 @@ _bulk_substeps(m::SpectralMoments, cell::EulerianCell, Δt::Float64,
 """
     parcel_ascent!(cell, w, dt; q_liq = 0, c = DEFAULT_CONSTANTS) -> cell
 
-Lift a fixed-mass [`EulerianCell`](@ref) adiabatically by `w dt` (m):
+Lift a fixed-mass Phase 41 `EulerianCell` adiabatically by `w dt` (m):
 dry-adiabatic cooling `ΔT = −(g/c_pm) w dt`
 (`MoistThermodynamics.dry_adiabatic_lapse_rate`), hydrostatic pressure
 fall `Δp = −ρ g w dt`, and the density that follows from the gas law at
