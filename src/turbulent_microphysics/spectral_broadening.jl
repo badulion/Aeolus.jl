@@ -365,3 +365,178 @@ function parcel_ascent!(cell::EulerianCell, w::Real, dt::Real;
     cell.temperature = T_new
     return cell
 end
+
+# =========================================================================
+# The validation case: an adiabatic parcel with sub-grid fluctuations
+# =========================================================================
+
+export BroadeningCase, BroadeningHistory, run_broadening_case,
+       broadening_initial_population, fit_power_law
+
+"""
+    BroadeningCase(; kwargs...)
+
+Adiabatic-parcel spectral-broadening case: a fixed-mass cloudy parcel
+ascending at `w`, its activated droplets growing in the parcel's own
+supersaturation plus sub-grid fluctuations (`σ_S`, `τ`). Run it with
+[`run_broadening_case`](@ref) as the superdroplet reference or as the
+bulk moment scheme; both start from the same droplets and see the same
+parcel dynamics, so they differ only in how the spectrum is represented.
+
+Keyword fields (SI units):
+
+  * `T0 = 283.0`, `p0 = 9e4`, `S0 = 0.0` — initial temperature,
+    pressure and supersaturation (the parcel starts at cloud base)
+  * `N = 1e8` — droplet number concentration (m⁻³; 100 cm⁻³)
+  * `r0 = 5e-6`, `ε0 = 0.1` — median radius and log-normal width of the
+    initial activated spectrum (`ε0 = 0` is monodisperse)
+  * `solute_mass = 1e-18` — NaCl per droplet (kg)
+  * `n_sd = 2000` — superdroplets (reference only)
+  * `w = 0.5` — updraught (m s⁻¹)
+  * `σ_S = 1e-3`, `τ = 5.0` — sub-grid supersaturation spread and its
+    Lagrangian correlation time (s)
+  * `t_end = 300.0`, `dt = 1.0` — duration and output/coupling step (s)
+  * `seed = 1` — initial radii and fluctuation noise
+"""
+Base.@kwdef struct BroadeningCase
+    T0::Float64 = 283.0
+    p0::Float64 = 9e4
+    S0::Float64 = 0.0
+    N::Float64 = 1e8
+    r0::Float64 = 5e-6
+    ε0::Float64 = 0.1
+    solute_mass::Float64 = 1e-18
+    n_sd::Int = 2000
+    w::Float64 = 0.5
+    σ_S::Float64 = 1e-3
+    τ::Float64 = 5.0
+    t_end::Float64 = 300.0
+    dt::Float64 = 1.0
+    seed::Int = 1
+end
+
+"""
+    BroadeningHistory
+
+Time series from [`run_broadening_case`](@ref), one entry per `dt`
+(including `t = 0`): `t` (s), `S` (mean supersaturation), `T` (K),
+`mean_radius` (m), `ε` (relative dispersion), `σ_r2` (`√Var r²`, m²),
+`total_water` (kg kg⁻¹, vapour + liquid; conserved).
+"""
+struct BroadeningHistory
+    t::Vector{Float64}
+    S::Vector{Float64}
+    T::Vector{Float64}
+    mean_radius::Vector{Float64}
+    ε::Vector{Float64}
+    σ_r2::Vector{Float64}
+    total_water::Vector{Float64}
+end
+
+"""
+    broadening_initial_population(case) -> (sd, cell)
+
+The initial superdroplets and parcel of `case`: `n_sd` equal-multiplicity
+superdroplets with radii `r0 exp(ε0 z)`, `z ~ N(0,1)` (seeded), in a 1 m³
+cell at `(T0, p0)` with vapour at `1 + S0` times saturation. The bulk
+run takes its initial moments from this very population.
+"""
+function broadening_initial_population(case::BroadeningCase;
+                                       c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    rng = MersenneTwister(case.seed)
+    sd = init_monodisperse_superdroplets(case.n_sd, case.N, case.r0, 1.0;
+                                         solute_mass = case.solute_mass)
+    if case.ε0 > 0
+        for i in eachindex(sd.radius)
+            sd.radius[i] = case.r0 * exp(case.ε0 * randn(rng))
+        end
+    end
+    # vapour at 1 + S0 times saturation; iterate once so that the density
+    # (which depends on q_vap) and the density-form q_sat agree
+    cell = cell_from_state(case.T0, case.p0, 0.0, 1.0, 0.0, c)
+    for _ in 1:3
+        qs = saturation_specific_humidity(case.T0, cell.density, c; use_density = true)
+        cell = cell_from_state(case.T0, case.p0, (1 + case.S0) * qs, 1.0, 0.0, c)
+    end
+    return sd, cell
+end
+
+"""
+    run_broadening_case(case; model = :superdroplet, mc, c) -> BroadeningHistory
+
+Integrate the [`BroadeningCase`](@ref) with
+
+  * `model = :superdroplet` — the Phase 41 reference: every superdroplet
+    grows in its own `S̄ + σ_S ξ_i(t)` (issue #13
+    `sgs_condensation_step!`, which delegates to `condensation_growth!`);
+  * `model = :bulk` — the moment scheme [`bulk_condensation_step!`](@ref),
+    started from [`spectral_moments`](@ref) of the same initial droplets.
+
+Each step lifts the parcel ([`parcel_ascent!`](@ref)) and then condenses,
+two-way coupled. The superdroplet run's `σ_S = 0` path is Phase 41's
+`condensation_step!` bit for bit.
+"""
+function run_broadening_case(case::BroadeningCase; model::Symbol = :superdroplet,
+                             mc::MicrophysicalConstants = DEFAULT_MICRO,
+                             c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    model in (:superdroplet, :bulk) || throw(ArgumentError(
+        "run_broadening_case: model must be :superdroplet or :bulk"))
+    sd, cell = broadening_initial_population(case; c = c)
+    nsteps = round(Int, case.t_end / case.dt)
+    fac = mc.ρ_water * (4π / 3)
+    H = BroadeningHistory(Float64[], Float64[], Float64[], Float64[],
+                          Float64[], Float64[], Float64[])
+    if model === :superdroplet
+        fl = supersaturation_fluctuations(sd; σ_S = case.σ_S, τ = case.τ,
+                                          rng = MersenneTwister(case.seed + 1))
+        qliq() = total_water_mass(sd, mc) / cell_air_mass(cell)
+        record_sd!(t) = _record!(H, t, cell, mean_radius(sd),
+                                 relative_dispersion(sd)[2],
+                                 r2_standard_deviation(sd), qliq(), c)
+        record_sd!(0.0)
+        for n in 1:nsteps
+            parcel_ascent!(cell, case.w, case.dt; q_liq = qliq(), c = c)
+            sgs_condensation_step!(sd, cell, case.dt, fl; mc = mc, c = c)
+            record_sd!(n * case.dt)
+        end
+    else
+        m = spectral_moments(sd)
+        qliq_b() = fac * _volume_moment(m) / cell_air_mass(cell)
+        record_b!(t) = _record!(H, t, cell, mean_radius(m),
+                                relative_dispersion(m)[2],
+                                r2_standard_deviation(m), qliq_b(), c)
+        record_b!(0.0)
+        for n in 1:nsteps
+            parcel_ascent!(cell, case.w, case.dt; q_liq = qliq_b(), c = c)
+            bulk_condensation_step!(m, cell, case.dt; σ_S = case.σ_S,
+                                    τ = case.τ, mc = mc, c = c)
+            record_b!(n * case.dt)
+        end
+    end
+    return H
+end
+
+function _record!(H::BroadeningHistory, t, cell::EulerianCell, r̄, ε, σr2, q_liq, c)
+    push!(H.t, t); push!(H.S, cell_supersaturation(cell, c))
+    push!(H.T, cell.temperature); push!(H.mean_radius, r̄)
+    push!(H.ε, ε); push!(H.σ_r2, σr2); push!(H.total_water, cell.q_vap + q_liq)
+    return H
+end
+
+"""
+    fit_power_law(t, y) -> (exponent, prefactor)
+
+Least-squares fit of `y = prefactor · t^exponent` in log-log space (all
+`t, y > 0`). Used to measure the growth exponent of `σ_{r²}(t)` against
+the `t^{1/2}` law of turbulent condensational broadening (Sardina et al.
+2015).
+"""
+function fit_power_law(t::AbstractVector{<:Real}, y::AbstractVector{<:Real})
+    length(t) == length(y) || throw(DimensionMismatch("fit_power_law"))
+    length(t) >= 2 || throw(ArgumentError("fit_power_law: need ≥ 2 points"))
+    all(>(0), t) && all(>(0), y) || throw(DomainError(0, "fit_power_law: t, y must be > 0"))
+    x = log.(float.(t)); z = log.(float.(y))
+    x̄ = sum(x) / length(x); z̄ = sum(z) / length(z)
+    b = sum((x .- x̄) .* (z .- z̄)) / sum((x .- x̄) .^ 2)
+    return (b, exp(z̄ - b * x̄))
+end
