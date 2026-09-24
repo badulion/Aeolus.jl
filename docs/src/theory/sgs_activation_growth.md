@@ -109,6 +109,10 @@ mass, so the cell's total water is conserved to round-off for any
 condensate. The step is sub-stepped to at most ``\tau/10``, which puts
 the error in ``\mathrm{Var}\int S\,dt`` at ``(h/\tau)^2/12 \approx 0.08\,\%``.
 With ``\sigma_S = 0`` it is `condensation_step!` bit for bit.
+Stepping a grid cell by cell (`index = k`) advances only that cell's
+droplets' fluctuations, so each ``\xi_i`` ages once per time step
+however many cells there are; `fl.σ_S` is one value and should be set to
+each cell's ``\sigma_S`` before its call.
 
 Starting from a 5 μm population with ``\varepsilon_0 = 0.115`` in a
 cell at 12 % supersaturation (1000 superdroplets, τ = 10 s, 25 s), the
