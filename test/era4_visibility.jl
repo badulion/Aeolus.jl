@@ -1,0 +1,161 @@
+# Era IV, Phase 44 — visibility diagnostic.
+#
+# Koschmieder visibility V = −ln ε / β_ext with β_ext built from droplet
+# Mie extinction, κ-Köhler haze (AerosolOptics) and molecular Rayleigh
+# scattering (GasOptics). Validated against analytic limits and the
+# Kunkel (1984) and Gultepe et al. (2006) fog parameterisations.
+
+using Test, Printf, Random
+using Aeolus
+
+@testset "Era IV — Visibility diagnostic (Phase 44)" begin
+
+    @testset "Koschmieder's law" begin
+        @test KOSCHMIEDER_THRESHOLD == 0.02
+        @test MOR_THRESHOLD == 0.05
+        # the two textbook constants
+        @test koschmieder_visibility(1.0) ≈ 3.912 atol = 5e-4
+        @test koschmieder_visibility(1.0; ε = MOR_THRESHOLD) ≈ 2.996 atol = 5e-4
+        # MOR is shorter by exactly ln20/ln50
+        β = 0.0137
+        @test koschmieder_visibility(β; ε = MOR_THRESHOLD) /
+              koschmieder_visibility(β) ≈ log(20) / log(50) rtol = 1e-14
+        # V ∝ 1/β and the inverse round-trips
+        @test koschmieder_visibility(2β) ≈ koschmieder_visibility(β) / 2
+        for ε in (KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD)
+            @test extinction_from_visibility(koschmieder_visibility(β; ε = ε);
+                                             ε = ε) ≈ β rtol = 1e-14
+        end
+        @test koschmieder_visibility(0.0) == Inf
+        # contrast at the visibility distance is exactly ε
+        V = koschmieder_visibility(β)
+        @test exp(-β * V) ≈ KOSCHMIEDER_THRESHOLD rtol = 1e-12
+        @test_throws ErrorException koschmieder_visibility(β; ε = 1.5)
+    end
+
+    @testset "Q_ext → 2 for large water drops" begin
+        λ = VISIBILITY_WAVELENGTH
+        Q = [water_extinction_efficiency(r, λ) for r in (1e-5, 1e-4, 1e-3, 5e-3)]
+        # always above 2, and approaching it
+        @test all(>(2), Q)
+        @test issorted(Q; rev = true)
+        @test abs(water_extinction_efficiency(1e-2, λ) - 2) < 1e-3
+        # The approach is SLOW: the edge (Fock) term 1.99 x^{-2/3} still
+        # leaves 1.3e-3 at r = 5 mm (x = 5.7e4). The first draft of this
+        # test expected Q − 2 < 1e-3 there; that expectation was wrong.
+        x5 = 2π * 5e-3 / (λ * 1e-6)
+        @test Q[end] - 2 ≈ 1.9923861 * x5^(-2 / 3) rtol = 1e-12
+        # On the Mie side the excess oscillates (interference ripple) about
+        # the Nussenzveig-Wiscombe asymptote; a pointwise power-law slope
+        # between r = 0.1 and 0.8 mm came out −0.42, not −2/3, for that
+        # reason (second wrong first-draft expectation). The ±10 %-in-x
+        # average must match the asymptote:
+        m = water_refractive_index(λ)
+        for x0 in (1000.0, 3000.0, 9000.0)
+            xs = range(0.9x0, 1.1x0; length = 2001)
+            excess = sum(mie_sphere(x, m).Q_ext - 2 for x in xs) / length(xs)
+            @test excess ≈ 1.9923861 * x0^(-2 / 3) rtol = 3e-3
+        end
+        # continuity across the Mie → asymptote switch at x = 1e4
+        r_sw = 1e4 * λ * 1e-6 / (2π)
+        Qm = water_extinction_efficiency(r_sw * (1 - 1e-6))
+        Qa = water_extinction_efficiency(r_sw * (1 + 1e-6))
+        @test abs(Qa - Qm) / Qm < 1e-4
+        # small drops are in the Rayleigh regime: Q ≪ 2
+        @test water_extinction_efficiency(1e-8) < 1e-3
+        @printf("  Q_ext(550 nm): r=10μm %.4f, 100μm %.4f, 1mm %.5f, 5mm %.5f\n",
+                Q...)
+        @printf("  Mie-vs-asymptote jump at x=1e4: %.2e\n", abs(Qa - Qm) / Qm)
+    end
+
+    @testset "monodisperse: analytic β = N π r² Q_ext" begin
+        N, r = 1.0e8, 8e-6
+        s = MonodisperseDroplets(N, r)
+        Q = mie_sphere(2π * r / 0.55e-6, water_refractive_index(0.55)).Q_ext
+        @test droplet_extinction(s) ≈ N * π * r^2 * Q rtol = 1e-12
+        @test droplet_extinction(s; method = :geometric) ≈ 2π * N * r^2 rtol = 1e-14
+        # the monodisperse spectrum from (LWC, N) sits at the volume radius
+        lwc = 2e-4
+        m = gamma_droplets(lwc, N; v_eff = 0)
+        @test m isa MonodisperseDroplets
+        @test m.r ≈ droplet_volume_radius(lwc, N) rtol = 1e-14
+        @test spectrum_water_content(m) ≈ lwc rtol = 1e-12
+        # geometric-limit closed form 3 LWC / (2 ρ_w r)
+        @test droplet_extinction(m; method = :geometric) ≈
+              3lwc / (2 * RHO_WATER * m.r) rtol = 1e-12
+    end
+
+    @testset "β ∝ N r² at fixed Q" begin
+        base = droplet_extinction(MonodisperseDroplets(1e8, 5e-6); method = :geometric)
+        for fN in (0.5, 3.0), fr in (0.5, 2.0, 7.0)
+            β = droplet_extinction(MonodisperseDroplets(1e8fN, 5e-6fr);
+                                   method = :geometric)
+            @test β / base ≈ fN * fr^2 rtol = 1e-13
+        end
+        # with Mie, β is exactly linear in N; the r-dependence departs from
+        # r² only through Q_ext(x), which the normalised ratio removes
+        for r in (2e-6, 7e-6, 2e-5)
+            b1 = droplet_extinction(MonodisperseDroplets(1e8, r))
+            b3 = droplet_extinction(MonodisperseDroplets(3e8, r))
+            @test b3 / b1 ≈ 3 rtol = 1e-13
+            @test b1 / (1e8 * π * r^2) ≈ water_extinction_efficiency(r) rtol = 1e-13
+        end
+        # gamma spectra: β/(πN⟨r²⟩) is the effective Q; → 2 with size
+        Qeff = [droplet_extinction(GammaDroplets(1e8, re, 0.1)) /
+                (π * 1e8 * spectrum_moment(GammaDroplets(1e8, re, 0.1), 2))
+                for re in (3e-6, 1e-5, 3e-5, 1e-4)]
+        @test all(>(2), Qeff)
+        @test issorted(Qeff; rev = true)
+        @test Qeff[end] < 2.02
+        @printf("  effective Q_ext, gamma v_eff=0.1: r_eff = 3/10/30/100 μm → %.4f %.4f %.4f %.4f\n",
+                Qeff...)
+    end
+
+    @testset "gamma spectrum: moments and quadrature" begin
+        lwc, N = 2e-4, 1e8
+        for v in (0.05, 0.1, 0.2, 0.3)
+            s = gamma_droplets(lwc, N; v_eff = v)
+            # r_eff = ⟨r³⟩/⟨r²⟩ and the LWC are reproduced exactly
+            @test spectrum_moment(s, 3) / spectrum_moment(s, 2) ≈ s.r_eff rtol = 1e-12
+            @test spectrum_water_content(s) ≈ lwc rtol = 1e-12
+            @test spectrum_moment(s, 0) == 1
+            # effective variance: ⟨(r − r_eff)² r²⟩/(r_eff²⟨r²⟩) = v_eff
+            m2, m3, m4 = spectrum_moment(s, 2), spectrum_moment(s, 3), spectrum_moment(s, 4)
+            @test (m4 - 2s.r_eff * m3 + s.r_eff^2 * m2) / (s.r_eff^2 * m2) ≈ v rtol = 1e-10
+            # shape factor k = (r_v/r_eff)^3 = (1-v)(1-2v)
+            @test (droplet_volume_radius(lwc, N) / s.r_eff)^3 ≈ (1 - v) * (1 - 2v) rtol = 1e-12
+        end
+        # independent reference: the same gamma pdf on 40 000 linear bins
+        s = GammaDroplets(1e8, 8e-6, 0.1)
+        α = (1 - 3 * 0.1) / 0.1; θ = 8e-6 * 0.1
+        r = range(1e-8, 60e-6; length = 40_000)
+        w = [exp(α * log(ri / θ) - ri / θ) for ri in r]
+        ref = BinnedDroplets(collect(r), 1e8 .* w ./ sum(w))
+        βq = droplet_extinction(s); βr = droplet_extinction(ref)
+        # Narrow Mie resonances of (nearly non-absorbing) water limit any
+        # practical quadrature to ~1e-4..1e-3; see the docstring.
+        @test βq ≈ βr rtol = 1e-3
+        @test spectrum_moment(ref, 2) ≈ spectrum_moment(s, 2) rtol = 1e-4
+        for (re, v) in ((2e-6, 0.05), (3e-6, 0.1), (1.5e-5, 0.2))
+            g = GammaDroplets(1e8, re, v)
+            @test droplet_extinction(g) ≈ droplet_extinction(g; nquad = 60_000) rtol = 2.5e-3
+        end
+        @printf("  gamma quadrature vs 40k-bin reference: %.2e\n", abs(βq / βr - 1))
+        # narrow gamma → monodisperse at r_eff
+        narrow = GammaDroplets(1e8, 8e-6, 0.002)
+        mono = MonodisperseDroplets(1e8, 8e-6)
+        @test droplet_extinction(narrow; method = :geometric) ≈
+              droplet_extinction(mono; method = :geometric) rtol = 0.01
+    end
+
+    @testset "superdroplet ensemble → binned spectrum" begin
+        vol = 1e-6
+        sd = init_monodisperse_superdroplets(100, 1e8, 1e-5, vol)
+        spec = droplet_spectrum(sd; volume = vol)
+        @test spectrum_number(spec) ≈ 1e8 rtol = 1e-10
+        @test spectrum_water_content(spec) ≈ liquid_water_content(sd, vol) rtol = 1e-12
+        @test droplet_extinction(spec) ≈
+              droplet_extinction(MonodisperseDroplets(1e8, 1e-5)) rtol = 1e-10
+    end
+
+end

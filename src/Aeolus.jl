@@ -54,6 +54,7 @@ include("SolarGeometry.jl")     # Phase 38
 
 include("AerosolCloud.jl")         # Phase 42
 include("Superdroplet.jl")         # Phase 41
+include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 
 using .Grids
 using .Fields
@@ -96,6 +97,7 @@ using .SolarGeometry
 using .MoistThermodynamics
 using .AerosolCloud
 using .Superdroplet
+using .Visibility                  # Phase 44
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -435,5 +437,15 @@ export AMMONIUM_SULFATE, AerosolProperties, CollisionKernel,
        raoult_b, relative_dispersion, size_distribution,
        surface_tension, terminal_velocity, thermal_conductivity,
        total_number, total_water_mass, vapor_diffusivity
+
+# Phase 44 — visibility diagnostic (Koschmieder)
+# Mie, haze and Rayleigh are delegated to AerosolOptics / GasOptics;
+# `rayleigh_cross_section` is the GasOptics definition, re-exported here.
+export KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD, VISIBILITY_WAVELENGTH,
+       koschmieder_visibility, extinction_from_visibility,
+       DropletSpectrum, MonodisperseDroplets, GammaDroplets, BinnedDroplets,
+       gamma_droplets, droplet_spectrum, spectrum_number, spectrum_moment,
+       spectrum_water_content, water_extinction_efficiency,
+       droplet_extinction, fog_extinction
 
 end # module
