@@ -332,15 +332,21 @@ end
     @testset "Single-particle limits" begin
         md0 = p3_mass_dimension(0.0, 400.0)
         # Small solid-ice spheres against Stokes' law. MH05's boundary-
-        # layer form gives Re = X/(δ₀²C₀) ≈ X/20.4 rather than X/24 as X → 0,
-        # partly offset by the a₀ correction; measured deviation quoted.
+        # layer form gives Re = X/(δ₀²C₀) ≈ X/20.4 rather than X/24 as
+        # X → 0, i.e. V/V_Stokes → 24/(δ₀²C₀) = 1.177; measured deviation
+        # quoted. (Review: the earlier 10 % bound held only because the
+        # a₀X^b₀ turbulence correction, which the P3 reference code does
+        # not use, pulled small-X speeds down. With it off, as in P3, the
+        # measured maximum is 15.8 % at 10 μm, below the 17.7 % asymptote.)
         maxdev = 0.0
         for D in (10e-6, 20e-6, 30e-6, 50e-6)
             vs = p.ρ_ice * 9.80665 * D^2 / (18η)
             maxdev = max(maxdev, relerr(p3_fall_speed(D, md0; ρ_air = ρs, η_air = η), vs))
         end
         @printf("    ice spheres 10-50 μm vs Stokes: max rel dev %.3f\n", maxdev)
-        @test maxdev < 0.10
+        @test maxdev < 24 / (p.δ0^2 * p.C0) - 1
+        vtiny = p3_fall_speed(1e-7, md0; ρ_air = ρs, η_air = η)
+        @test vtiny / (p.ρ_ice * 9.80665 * 1e-14 / (18η)) ≈ 24 / (p.δ0^2 * p.C0) rtol = 1e-4
         # Unrimed aggregates against Locatelli & Hobbs (1974),
         # V = 0.8 D^0.16 (D in mm), aggregates of unrimed side planes etc.
         maxdev = 0.0
@@ -359,12 +365,27 @@ end
             @test all(diff(vg) .> 0)
             @test vg[2] > 1.4va
         end
+        # Dense graupel / hail: V(D) must keep increasing with size. Review
+        # regression: with MH05's aggregate turbulence correction applied
+        # to all particles, 900 kg m⁻³ graupel peaked at 11 m/s near 2 cm
+        # and fell at 0 m/s from 5 cm up.
+        mg = p3_mass_dimension(1.0, 900.0)
+        Ds = range(1e-3, 0.1; length = 200)
+        vs = [p3_fall_speed(D, mg) for D in Ds]
+        @test all(diff(vs) .> 0)
+        @printf("    900 kg m⁻³ graupel at 600 hPa: V(1 cm) = %.1f, V(5 cm) = %.1f m/s\n",
+                p3_fall_speed(0.01, mg), p3_fall_speed(0.05, mg))
+        # the turbulence correction is still available for snow
+        pt = P3IceParameters{Float64}(a0 = 1.7e-3, b0 = 0.8)
+        mdt = p3_mass_dimension(0.0, 400.0, pt)
+        @test p3_fall_speed(5e-3, mdt; ρ_air = ρs, η_air = η) <
+              p3_fall_speed(5e-3, md0; ρ_air = ρs, η_air = η)
         # lower air density (aloft) → faster fall
         @test p3_fall_speed(2e-3, md0; ρ_air = 0.5, η_air = η) >
               p3_fall_speed(2e-3, md0; ρ_air = 1.2, η_air = η)
         # zero / tiny sizes
         @test p3_fall_speed(0.0, md0) == 0
-        @test p3_fall_speed(5e-8, md0) >= 0
+        @test p3_fall_speed(5e-8, md0) > 0
     end
 
     @testset "Bulk fall speeds" begin

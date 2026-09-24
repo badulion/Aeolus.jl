@@ -34,7 +34,7 @@ Fixed parameters of the P3 ice particle model (SI units).
 | `ρ_rim_max` | 900.0 | upper bound on rime density, kg m⁻³ |
 | `ρ_rim_default` | 400.0 | rime density used when there is no rime volume |
 | `δ0`, `C0`  | 5.83, 0.6 | boundary-layer drag constants (Mitchell & Heymsfield 2005) |
-| `a0`, `b0`  | 1.7e-3, 0.8 | aggregate drag correction (Mitchell & Heymsfield 2005) |
+| `a0`, `b0`  | 0.0, 0.0 | turbulence correction `a0 X^b0` (Mitchell & Heymsfield 2005 give 1.7e-3, 0.8 for aggregates); off, as in the P3 reference code |
 | `T_ref`, `p_ref` | 253.15 K, 6.0e4 Pa | default air state for fall speeds |
 
 `α_va, β_va` are the Brown & Francis (1995) relation for aggregates of
@@ -54,8 +54,8 @@ Base.@kwdef struct P3IceParameters{T<:AbstractFloat}
     ρ_rim_default::T = 400.0
     δ0::T = 5.83
     C0::T = 0.6
-    a0::T = 1.7e-3
-    b0::T = 0.8
+    a0::T = 0.0
+    b0::T = 0.0
     T_ref::T = 253.15
     p_ref::T = 6.0e4
 end
@@ -479,26 +479,31 @@ _p3_ref_air(p::P3IceParameters) =
 Still-air terminal fall speed of a P3 ice particle of maximum dimension
 `D` (m), from its regime mass `m(D)` and projected area `A(D)` by the
 boundary-layer drag theory of Mitchell & Heymsfield (2005, JAS 62,
-1637-1644), the formulation used to build the P3 lookup tables:
+1637-1644), the formulation used to build the P3 lookup tables
+(`create_p3_lookupTable_1.f90`):
 
     X  = 2 m g ρ_a D² / (A η²)                            (Best number)
     Re = δ₀²/4 · [ (1 + 4√X/(δ₀²√C₀))^{1/2} - 1 ]² - a₀ X^{b₀}
     V  = η Re / (ρ_a D),
 
-with `δ₀ = 5.83`, `C₀ = 0.6` and the aggregate correction
-`a₀ = 1.7e-3`, `b₀ = 0.8`. Air density `ρ_air` (kg m⁻³) and dynamic
+with `δ₀ = 5.83`, `C₀ = 0.6`. The turbulence correction `a₀ X^{b₀}`
+is **off by default** (`a₀ = b₀ = 0`), as in the P3 reference
+lookup-table code ("neglect turbulent correction for aggregates"). MH05
+fitted `a₀ = 1.7e-3`, `b₀ = 0.8` to aggregates; applied to dense
+particles it outgrows the first term (at `X ≈ 4e9`), so `V(D)` of
+900 kg m⁻³ graupel peaks near 2 cm and reaches zero before 5 cm. Set
+`a0`, `b0` in [`P3IceParameters`](@ref) to use it for snow only. Air density `ρ_air` (kg m⁻³) and dynamic
 viscosity `η_air` (Pa s) default to 253.15 K, 600 hPa
 (`air_density` from `MoistThermodynamics`, [`p3_air_viscosity`](@ref)).
 Gravity is `MoistThermodynamics.DEFAULT_CONSTANTS.grav`.
 
-In the Stokes limit (`X → 0`) the first term gives `Re = X/(δ₀²C₀)`,
-about 18 % above the exact sphere result `X/24`; the `a₀` term brings it
-back to within 8.3 % of Stokes' law for 10-50 μm ice spheres (measured
-in the tests). Unrimed aggregates of 0.5-10 mm fall within 11 % of the
-Locatelli & Hobbs (1974) fit `0.8 D^0.16` (D in mm) at 1.2 kg m⁻³.
-For `D ≲ 0.1 μm` the `a₀` term would exceed the first and make `Re`
-negative; `Re` is floored at zero there (sedimentation of such particles
-is negligible anyway).
+In the Stokes limit (`X → 0`) the formula gives `Re = X/(δ₀²C₀)`,
+17.7 % above the exact sphere result `X/24`, a known property of the
+MH05 boundary-layer fit; 10-50 μm ice spheres fall within 15.8 % of
+Stokes' law (measured in the tests). Unrimed aggregates of 0.5-10 mm
+fall within 12.2 % of the Locatelli & Hobbs (1974) fit `0.8 D^0.16`
+(D in mm) at 1.2 kg m⁻³. With a nonzero `a₀`, `Re` is floored at zero
+where the correction would make it negative.
 
 `m(D)` is continuous but `A(D)` jumps at the thresholds, so `V(D)`
 jumps there too, as in MM15. The bulk speeds
