@@ -378,24 +378,33 @@ end
         @test view(cov.data, interior(g)...)[1, 1, 1] ≈ -G * 3e-3 * Δ^2 / 12 rtol = 1e-12
 
         # Equilibrium budget with a Smagorinsky ν_t written in Deardorff form
-        # (ν_t = C_k Δ √e): production 2(ν_t/Pr_t)|∇φ|² equals dissipation
-        # C_χ (√e/Δ) φ'², whatever ν_t is.
+        # (ν_t = C_k Δ √e): production 2(ν_t/Pr_t)|∇φ|² must equal
+        # dissipation C_χ (√e/Δ) φ'² in every cell, whatever ν_t is there.
+        # Checked on the variance the GRIDDED routine returns, with ν_t
+        # varying over three decades from level to level and the
+        # production from the analytic gradient G.
         C_k, C_χ, Pr_t = 0.1, 2.0, 1 / 3
         c_eq = equilibrium_variance_coefficient(; C_k = C_k, C_χ = C_χ, Pr_t = Pr_t)
         @test c_eq ≈ 0.3
-        for νt in (0.1, 1.0, 50.0)
-            e½ = νt / (C_k * Δ)
-            v = c_eq * Δ^2 * G^2
-            @test 2 * (νt / Pr_t) * G^2 ≈ C_χ * e½ / Δ * v rtol = 1e-12
+        ν = Field(g); fill!(ν.data, 1.0)
+        iν = view(ν.data, interior(g)...)
+        iν[:, :, 1:4] .= 0.0                          # closure off here
+        for (k, νk) in zip(5:8, (0.1, 1.0, 7.0, 50.0))
+            iν[:, :, k] .= νk
         end
-        # ... so the variance field is the same for any ν_t > 0, and zero
-        # where the closure is switched off.
-        ν = Field(g); fill!(ν.data, 3.0)
-        view(ν.data, interior(g)...)[:, :, 1:4] .= 0.0
         sgs_scalar_variance!(var, φ; c_var = c_eq, νt = ν)
         iv = view(var.data, interior(g)...)
         @test all(iv[:, :, 1:4] .== 0)
-        @test all(v -> isapprox(v, c_eq * Δ^2 * G^2; rtol = 1e-12), iv[:, :, 5:8])
+        worst_budget = 0.0
+        for k in 5:8, j in 1:4, i in 1:4
+            νk = iν[i, j, k]
+            e½ = νk / (C_k * Δ)
+            production = 2 * (νk / Pr_t) * G^2
+            dissipation = C_χ * e½ / Δ * iv[i, j, k]
+            worst_budget = max(worst_budget, abs(production / dissipation - 1))
+        end
+        @test worst_budget < 1e-12
+        @info "equilibrium SGS variance budget, ν_t = 0.1 … 50" max_rel_imbalance = worst_budget
         @test_throws ArgumentError equilibrium_variance_coefficient(; C_χ = 0.0)
     end
 
