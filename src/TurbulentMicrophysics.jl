@@ -22,6 +22,10 @@ under `src/turbulent_microphysics/`:
     aerosol activation: the activated number is the PDF-mean of the CCN
     spectrum, which differs from the mean-state value by the curvature
     of the spectrum (Jensen).
+  * `sgs_growth.jl` (issue #13) — the same fluctuations in Phase 41
+    condensational growth: superdroplets sample a stochastic (Ornstein-
+    Uhlenbeck) supersaturation, so `dr²/dt ∝ S` spreads the radius
+    distribution while the cell's total water is conserved exactly.
 
 All thermodynamics is delegated to the Phase 39 contract
 (`MoistThermodynamics`); the error function is `GasOptics`'; Köhler
@@ -71,8 +75,16 @@ using ..GasOptics: erfc_series
 using ..AerosolCloud: ARGMode, ActivationCoefficients, ActivationResult,
                       activation_coefficients, arg_activation, ccn_fraction,
                       mode_critical_supersaturation, KAPPA_MIN
+# Phase 41: droplet growth and the cell water/heat budget
+using ..Superdroplet: SuperdropletSet, nsuperdroplets, condensation_growth!,
+                      EulerianCell, cell_pressure, cell_supersaturation,
+                      cell_air_mass, total_water_mass,
+                      apply_condensate_tendency!, MicrophysicalConstants,
+                      DEFAULT_MICRO, _phase_substeps
+using Random: AbstractRNG, MersenneTwister, randn
 
 include("turbulent_microphysics/sgs_supersaturation.jl")
 include("turbulent_microphysics/sgs_activation.jl")
+include("turbulent_microphysics/sgs_growth.jl")
 
 end # module

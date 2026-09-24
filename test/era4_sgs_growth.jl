@@ -140,7 +140,7 @@ using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
         end
         @test 1 in signs && -1 in signs          # both regimes exercised
         @test all(r -> 0.95 < r < 1.05, ratios)   # second-order Jensen term
-        @info "Jensen: ΔN / (½ N'' σ²) at σ = 0.05 S̄" S̄ = (1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 4e-3, 8e-3) curvature_sign = signs ratio = round.(ratios; digits = 4)
+        @info "Jensen: ΔN / (½ N'' σ²) at σ = 0.05 S̄" S̄ = (1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 4e-3, 8e-3) curvature_sign = string(signs) ratio = string(round.(ratios; digits = 4))
         # With the ARG S_max as the mean: at w = 0.5 m/s (S_max ≈ 0.21 %)
         # the spectrum is concave, so fluctuations reduce N_d.
         r0 = arg_activation(modes, 0.5, T_K, p)
@@ -160,5 +160,145 @@ using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
         r2 = sgs_activation(modes, 0.5, T_K, p, sc.σ_S)
         @test r1.N_act_total == r2.N_act_total
         @test r1.σ_S == sc.σ_S
+    end
+
+    # ---------------------------------------------------------------------
+    # Condensational growth in a fluctuating supersaturation
+    # ---------------------------------------------------------------------
+
+    # Polydisperse 5 μm population in a supersaturated cell, as in the
+    # Phase 41 narrowing test, with 1000 superdroplets.
+    function growth_case(σ_S; τ = 10.0, seed = 7, steps = 50, dt = 0.5)
+        V = 1.0
+        sd = init_monodisperse_superdroplets(1000, 1e8, 5e-6, V;
+                                             solute_mass = 1e-17)
+        for k in eachindex(sd.radius)
+            sd.radius[k] *= 1 + 0.4 * (k / 1000 - 0.5)
+        end
+        cell = EulerianCell(temperature = 283.0, q_vap = 9.6e-3,
+                            density = 1.1, volume = V)
+        fl = supersaturation_fluctuations(sd; σ_S = σ_S, τ = τ,
+                                          rng = MersenneTwister(seed))
+        W0 = cell_total_water(sd, cell)
+        ε0 = relative_dispersion(sd)[2]
+        for _ in 1:steps
+            sgs_condensation_step!(sd, cell, dt, fl)
+        end
+        return (; sd, cell, ε0, ε = relative_dispersion(sd)[2],
+                  dW = (cell_total_water(sd, cell) - W0) / W0)
+    end
+
+    @testset "SGS growth: σ_S = 0 is Phase 41 condensation_step! bit for bit" begin
+        a = growth_case(0.0)
+        # the same population through the Phase 41 routine
+        V = 1.0
+        sd = init_monodisperse_superdroplets(1000, 1e8, 5e-6, V;
+                                             solute_mass = 1e-17)
+        for k in eachindex(sd.radius)
+            sd.radius[k] *= 1 + 0.4 * (k / 1000 - 0.5)
+        end
+        cell = EulerianCell(temperature = 283.0, q_vap = 9.6e-3,
+                            density = 1.1, volume = V)
+        for _ in 1:50
+            condensation_step!(sd, cell, 0.5)
+        end
+        @test a.sd.radius == sd.radius
+        @test a.cell.temperature == cell.temperature
+        @test a.cell.q_vap == cell.q_vap
+        # and pure condensation narrows the spectrum (Phase 41 result)
+        @test a.ε < a.ε0
+    end
+
+    @testset "Ornstein-Uhlenbeck supersaturation" begin
+        # stationary unit variance, lag-one correlation e^{-dt/τ}
+        fl = supersaturation_fluctuations(200_000; σ_S = 1e-3, τ = 4.0,
+                                          rng = MersenneTwister(3))
+        ξ0 = copy(fl.ξ)
+        advance_fluctuations!(fl, 2.0)
+        @test var(fl.ξ) ≈ 1 atol = 0.01
+        @test cor(ξ0, fl.ξ) ≈ exp(-0.5) atol = 0.01
+        @test mean(local_supersaturation(fl, 2e-3)) ≈ 2e-3 atol = 1e-5
+        # frozen sub-volumes: τ = Inf never changes ξ
+        fz = supersaturation_fluctuations(10; σ_S = 1e-3)
+        ξz = copy(fz.ξ); advance_fluctuations!(fz, 100.0)
+        @test fz.ξ == ξz
+        # the analytic integral variance and its limits
+        @test supersaturation_integral_variance(1e-3, Inf, 30.0) ≈ (1e-3 * 30)^2
+        @test supersaturation_integral_variance(1e-3, 1e6, 30.0) ≈ (1e-3 * 30)^2 rtol = 1e-4
+        @test supersaturation_integral_variance(1e-3, 0.01, 1000.0) ≈
+              2 * (1e-3)^2 * 0.01 * 1000 rtol = 1e-4
+    end
+
+    @testset "SGS growth: Var(r²) against the analytic OU result" begin
+        # Uncoupled growth at fixed mean S̄ from a monodisperse 10 μm
+        # population without solute: r² gains 2G∫S dt, so
+        # Var(r²) = (2G)² · 2σ²τ[t − τ(1−e^{−t/τ})] (Sardina et al. 2015).
+        # 4000 droplets: sampling s.e. of a variance ≈ √(2/4000) = 2.2 %.
+        T, pr = 283.0, 9e4
+        G = 1 / (fk_thermal(T) + fd_vapor(T, pr))
+        S̄, σ, t = 5e-3, 2e-3, 60.0
+        ratios = Float64[]
+        for τ in (5.0, Inf)
+            sd = init_monodisperse_superdroplets(4000, 1e8, 10e-6, 1.0)
+            fl = supersaturation_fluctuations(sd; σ_S = σ, τ = τ,
+                                              rng = MersenneTwister(1))
+            h = isfinite(τ) ? τ / 10 : 1.0
+            for _ in 1:round(Int, t / h)
+                sgs_condensation_growth!(sd, fl, S̄, T, pr, h)
+            end
+            pred = (2G)^2 * supersaturation_integral_variance(σ, τ, t)
+            push!(ratios, var(sd.radius .^ 2) / pred)
+        end
+        @test all(r -> abs(r - 1) < 0.07, ratios)     # ≈ 3 s.e.
+        # correlation time matters: frozen sub-volumes spread r² 6.5x more
+        @test supersaturation_integral_variance(σ, Inf, t) /
+              supersaturation_integral_variance(σ, 5.0, t) ≈ 6.545 rtol = 1e-3
+        @info "Var(r²) measured / analytic OU (τ = 5 s, τ = ∞)" ratios
+    end
+
+    @testset "SGS growth: dispersion rises monotonically with σ_S, water conserved" begin
+        σs = (0.0, 5e-4, 1e-3, 2e-3, 4e-3)
+        runs = [growth_case(σ) for σ in σs]
+        εs = [r.ε for r in runs]
+        @test issorted(εs) && allunique(εs)            # strictly increasing
+        @test all(abs(r.dW) < 1e-14 for r in runs)      # total water, round-off
+        # common random numbers: every run starts from the same spectrum
+        @test all(r.ε0 == runs[1].ε0 for r in runs)
+        # the broadening is the fluctuations', not a change of the mean
+        r̄ = [mean_radius(r.sd) for r in runs]
+        @test maximum(r̄) / minimum(r̄) - 1 < 0.005
+        @info "relative dispersion after 25 s vs σ_S" σ_S = σs ε0 = runs[1].ε0 ε = string(round.(εs; digits = 4)) max_dW_over_W = maximum(abs(r.dW) for r in runs)
+        # Over a longer run (100 s ≫ τ = 10 s and ≫ τ_phase ≈ 6 s) the mean
+        # supersaturation has been consumed (S̄ ≈ 1e-4), so pure
+        # condensation has stopped narrowing — ε is frozen to within 1 %
+        # (it drifts up by 0.6 % through the curvature/solute terms) — but
+        # the fluctuations keep broadening: σ_{r²} ∝ √t for t ≫ τ.
+        long0 = growth_case(0.0; steps = 200)
+        long2 = growth_case(2e-3; steps = 200)
+        @test abs(long0.ε / εs[1] - 1) < 0.01
+        @test long2.ε > 1.5 * εs[4]
+        @test abs(long2.dW) < 1e-14
+        @info "100 s run" ε_σ0 = long0.ε ε_σ2e_3 = long2.ε
+    end
+
+    @testset "SGS growth: entrainment-driven variance broadens the spectrum" begin
+        # Sub-grid (q_t, θ_li) variance at a cloud edge, mapped to σ_S by
+        # the issue #12 closure. Entrained air above a cloud is warm AND
+        # dry (q_t'θ_li' < 0), which adds to the saturation-deficit
+        # variance; surface thermals are moist AND warm (> 0), which
+        # partly cancels. Same variances, opposite correlation.
+        σq, σθ = 3e-5, 0.03
+        σ_S = Float64[]
+        for ρ in (-0.8, 0.0, 0.8)
+            sc = subgrid_cloud(288.0, 9e4, 9.8e-3; var_qt = σq^2, var_θ = σθ^2,
+                               cov_qθ = ρ * σq * σθ)
+            push!(σ_S, sc.σ_S)
+        end
+        @test issorted(σ_S; rev = true)
+        εs = [growth_case(σ).ε for σ in σ_S]
+        dWs = [growth_case(σ).dW for σ in σ_S]
+        @test issorted(εs; rev = true)
+        @test all(abs.(dWs) .< 1e-14)
+        @info "entrainment (ρ_qθ = -0.8, 0, +0.8)" σ_S_percent = round.(100 .* σ_S; digits = 3) ε = round.(εs; digits = 4)
     end
 end

@@ -454,6 +454,10 @@ export AbstractSaturationPDF, GaussianSaturationPDF,
 # condensational growth (Phase 41 superdroplets) (issue #13).
 export ccn_fraction, ccn_spectrum,                  # defined in AerosolCloud
        pdf_expectation, sgs_ccn_fraction, sgs_ccn_spectrum,
-       SGSActivationResult, sgs_activation
+       SGSActivationResult, sgs_activation,
+       SupersaturationFluctuations, supersaturation_fluctuations,
+       advance_fluctuations!, local_supersaturation,
+       supersaturation_integral_variance,
+       sgs_condensation_growth!, sgs_condensation_step!
 
 end # module
