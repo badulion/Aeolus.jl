@@ -77,17 +77,21 @@ supersaturation_fluctuations(sd::SuperdropletSet; kw...) =
     supersaturation_fluctuations(nsuperdroplets(sd); kw...)
 
 """
-    advance_fluctuations!(fl, dt) -> fl
+    advance_fluctuations!(fl, dt; indices = nothing) -> fl
 
 Exact Ornstein-Uhlenbeck update over `dt`:
 `ξ ← ρ ξ + √(1−ρ²) N(0,1)` with `ρ = exp(−dt/τ)`. Stationary for any
-`dt` (the variance stays 1); `τ = Inf` leaves `ξ` unchanged.
+`dt` (the variance stays 1); `τ = Inf` leaves `ξ` unchanged. With
+`indices`, only those droplets advance — the ones whose time has actually
+moved on (e.g. the droplets of the one cell being stepped).
 """
-function advance_fluctuations!(fl::SupersaturationFluctuations, dt::Real)
+function advance_fluctuations!(fl::SupersaturationFluctuations, dt::Real;
+                               indices::Union{Nothing,AbstractVector{Int}} = nothing)
     isfinite(fl.τ) || return fl
     ρ = exp(-float(dt) / fl.τ)
     a = sqrt(max(1 - ρ^2, 0.0))
-    @inbounds for i in eachindex(fl.ξ)
+    idx = indices === nothing ? eachindex(fl.ξ) : indices
+    @inbounds for i in idx
         fl.ξ[i] = ρ * fl.ξ[i] + a * randn(fl.rng)
     end
     return fl
@@ -141,7 +145,13 @@ over `dt`, with droplet `i` in the local supersaturation
 `S̄ + σ_S ξ[i]` ([`local_supersaturation`](@ref)), then advance the
 fluctuations by `dt`. The growth is Phase 41's `condensation_growth!`;
 returns the real water mass condensed (kg). Does not touch a host cell
-— see [`sgs_condensation_step!`](@ref).
+— see [`sgs_condensation_step!`](@ref). With `indices`, only those
+droplets grow and only their fluctuations advance.
+
+Each droplet holds its `S` for the whole `dt`, so `dt` should be well
+below `τ` (`sgs_condensation_step!` sub-steps to `τ/10` itself).
+`fl.σ_S` is a single value; when stepping several cells with different
+sub-grid spreads, set `fl.σ_S` to the cell's value before each call.
 """
 function sgs_condensation_growth!(sd::SuperdropletSet, fl::SupersaturationFluctuations,
                                   S̄::Real, Temp::Real, p::Real, dt::Real;
@@ -154,7 +164,11 @@ function sgs_condensation_growth!(sd::SuperdropletSet, fl::SupersaturationFluctu
         "$(nsuperdroplets(sd)) superdroplets"))
     Δm = condensation_growth!(sd, local_supersaturation(fl, S̄), Temp, p, dt;
                               indices = indices, substeps = substeps, mc = mc, c = c)
-    advance_fluctuations!(fl, dt)
+    # advance only the droplets that were grown: a caller stepping cell by
+    # cell (`sgs_condensation_step!(...; index = k)` for every k) must not
+    # age every droplet's fluctuation once per cell, which would shorten
+    # the effective correlation time to τ / (number of cells).
+    advance_fluctuations!(fl, dt; indices = indices)
     return Δm
 end
 

@@ -222,6 +222,28 @@ using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
         fz = supersaturation_fluctuations(10; σ_S = 1e-3)
         ξz = copy(fz.ξ); advance_fluctuations!(fz, 100.0)
         @test fz.ξ == ξz
+        # Stepping cell by cell must age each droplet's fluctuation ONCE per
+        # dt, not once per cell (review fix): two cells, each stepped over
+        # dt = 2 s with τ = 4 s, keep the lag correlation at e^{-1/2}
+        # (it was e^{-1} before the fix, as if 4 s had passed).
+        nd = 40_000
+        sdm = init_monodisperse_superdroplets(nd, 1e8, 10e-6, 2.0)
+        sdm.cell[1:nd÷2] .= 1; sdm.cell[nd÷2+1:end] .= 2
+        cells = [EulerianCell(temperature = 283.0, q_vap = 8.6e-3,
+                              density = 1.1, volume = 1.0) for _ in 1:2]
+        flm = supersaturation_fluctuations(sdm; σ_S = 1e-3, τ = 4.0,
+                                           rng = MersenneTwister(5))
+        ξm0 = copy(flm.ξ)
+        for k in 1:2
+            sgs_condensation_step!(sdm, cells[k], 2.0, flm; index = k)
+        end
+        @test cor(ξm0, flm.ξ) ≈ exp(-0.5) atol = 0.02
+        # and droplets outside `indices` keep their fluctuation untouched
+        flp = supersaturation_fluctuations(4; σ_S = 1e-3, τ = 1.0,
+                                           rng = MersenneTwister(1))
+        ξp = copy(flp.ξ)
+        advance_fluctuations!(flp, 0.1; indices = [1, 2])
+        @test flp.ξ[3:4] == ξp[3:4] && flp.ξ[1:2] != ξp[1:2]
         # the analytic integral variance and its limits
         @test supersaturation_integral_variance(1e-3, Inf, 30.0) ≈ (1e-3 * 30)^2
         @test supersaturation_integral_variance(1e-3, 1e6, 30.0) ≈ (1e-3 * 30)^2 rtol = 1e-4
