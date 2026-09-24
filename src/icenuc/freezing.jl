@@ -476,8 +476,12 @@ Arguments: temperature `T` (K); ice saturation ratio `S_i = e/e_si`;
 pressure `p` (Pa, for the std-concentration schemes); cloud droplet
 number `N_liq` (m⁻³) and liquid water content `M_liq` (kg m⁻³);
 `immersed_fraction` — the fraction of available INP inside droplets,
-by default 1 when liquid is present and 0 otherwise (INP larger than
-0.25 μm activate as CCN readily; the rest are interstitial); `schemes`
+by default 1 when liquid is present and 0 otherwise. The default
+treats every available INP as immersed: dust and biological INP are
+mostly larger than 0.25 μm and activate readily as CCN, but the smaller
+ones stay interstitial, so pass a smaller fraction when the host knows
+it. In the `:homogeneous` regime the same fraction decides which INP are
+frozen inside drops and which remain for deposition; `schemes`
 — one `(immersion = …, deposition = …)` pair per mode (see
 [`default_freezing_scheme`](@ref)); `m_ice0` — mass of a
 deposition-nucleated crystal.
