@@ -243,4 +243,155 @@ end
         @test freezing_mechanism(Ullrich2017Deposition()) === :deposition
         @test freezing_mechanism(Niemand2012()) === :immersion
     end
+
+    # ---------------------------------------------------------------------
+    # Source terms. A reference parcel: 1 cm⁻³ of dust (r_g 0.4 μm,
+    # σ_g 2) and 0.01 cm⁻³ of biological particles, in a cloud of
+    # 100 cm⁻³ droplets holding 0.2 g m⁻³ of liquid.
+    _parcel() = inp_population([lognormal_mode(:mineral_dust, 1.0, 0.4, 2.0),
+                                lognormal_mode(:biological, 0.01, 1.0, 1.6)])
+    N_liq, M_liq = 1e8, 2e-4
+    p_air = 7.0e4
+
+    @testset "INP consumed = ice crystals formed; budgets close" begin
+        inp = _parcel()
+        T = 248.15
+        b0 = inp_budget(inp)
+        t = ice_nucleation!(inp, T, 1.2, 10.0; p = p_air, N_liq, M_liq)
+        b1 = inp_budget(inp)
+        @test t.N_inp > 0
+        @test ice_number_formed(t) ≈ t.N_inp rtol = 1e-12
+        @test t.N_ice_imm ≈ t.N_inp rtol = 1e-12       # all immersed in cloud
+        @test t.N_ice_dep == 0.0 && t.N_ice_hom == 0.0
+        @test t.N_inp ≈ b1.N_cons - b0.N_cons rtol = 1e-12
+        @test t.M_inp ≈ b1.M_cons - b0.M_cons rtol = 1e-12
+        r = inp_budget_residual(inp)
+        @test maximum(abs, values(r)) < 1e-14
+
+        # First call on a fresh population: the dust increment is the INAS
+        # frozen fraction of the mode, the biological one Tobo (2013) on
+        # its N_{>0.5} — the source term is exactly the parameterisation.
+        inp2 = _parcel()
+        dust0 = inp_modes(inp2)[1]
+        N05bio = inp_number_above_radius(inp2, DEMOTT_CUTOFF_RADIUS; mode = 2)
+        ice_nucleation!(inp2, T, 1.2, 10.0; p = p_air, N_liq, M_liq)
+        @test inp_number(inp2; mode = 1, population = :consumed) ≈
+              inas_frozen_fraction(Niemand2012(), dust0, T) * dust0.N rtol = 1e-10
+        @test inp_number(inp2; mode = 2, population = :consumed) ≈
+              singular_inp_concentration(Tobo2013(), T, N05bio; p = p_air) rtol = 1e-10
+        @info "Ice nucleated at -25 °C (L⁻¹)" dust = 1e-3 * inp_number(inp2; mode = 1, population = :consumed) biological =
+              1e-3 * inp_number(inp2; mode = 2, population = :consumed)
+    end
+
+    @testset "Water and energy: liquid/vapour sinks and latent heat" begin
+        # immersion: each frozen droplet carries the mean droplet mass
+        inp = _parcel()
+        T = 243.15
+        t = ice_nucleation!(inp, T, 1.3, 5.0; p = p_air, N_liq, M_liq)
+        @test t.M_ice == t.M_liq + t.M_vap
+        @test t.N_liq == t.N_ice_imm
+        @test t.M_liq ≈ t.N_ice_imm * M_liq / N_liq rtol = 1e-14
+        @test t.M_vap == 0.0
+        @test t.heat ≈ latent_heat_fusion(T) * t.M_liq rtol = 1e-14
+        @info "Immersion freezing at -30 °C" N_ice_L = 1e-3 * t.N_ice_imm frozen_liquid_g_m3 = 1e3 * t.M_liq heat_J_m3 = t.heat
+
+        # deposition: out of cloud, ice supersaturated, below water
+        # saturation. Vapour → ice releases L_s = L_v + L_f.
+        inp = _parcel()
+        T, S = 225.0, 1.25
+        t = ice_nucleation!(inp, T, S, 5.0; p = 3.0e4)
+        @test t.N_ice_dep > 0
+        @test t.N_ice_imm == 0 && t.M_liq == 0
+        @test t.N_ice_dep ≈ t.N_inp rtol = 1e-12
+        @test t.M_vap ≈ t.N_ice_dep * NUCLEATED_ICE_MASS rtol = 1e-14
+        @test t.M_ice == t.M_vap
+        @test t.heat / t.M_vap ≈ latent_heat_sublim(T) rtol = 1e-14
+        @test latent_heat_sublim(T) ≈ latent_heat_vapor(T) + latent_heat_fusion(T) rtol = 1e-14
+        @info "Deposition nucleation at 225 K, S_i = 1.25" N_ice_L = 1e-3 * t.N_ice_dep
+
+        # vapour cap: a crystal mass so large that the nucleated crystals
+        # would take more than the excess over ice saturation
+        inp = _parcel()
+        t = ice_nucleation!(inp, T, S, 5.0; m_ice0 = 1e-3)
+        Rv = 8.314462618 / 0.018015268
+        excess = (S - 1) * saturation_vapor_pressure_ice(T) / (Rv * T)
+        @test t.M_vap ≈ excess rtol = 1e-12
+        @test t.N_ice_dep ≈ t.N_inp rtol = 1e-12       # crystals still form
+
+        # droplet cap: more immersion-frozen INP than droplets
+        inp = _parcel()
+        t = ice_nucleation!(inp, 238.15, 1.4, 5.0; N_liq = 10.0, M_liq = 1e-10)
+        @test t.N_inp > 10
+        @test t.N_ice_imm == 10.0
+        @test t.M_liq ≈ 1e-10 rtol = 1e-14
+
+        # rates are increments over Δt
+        inp = _parcel()
+        t = ice_nucleation!(inp, 245.0, 1.3, 4.0; N_liq, M_liq)
+        r = nucleation_rates(t)
+        @test r.dNi_dt * 4 ≈ ice_number_formed(t) rtol = 1e-14
+        @test r.heating * 4 ≈ t.heat rtol = 1e-14
+        @test r.dMl_dt * 4 ≈ t.M_liq rtol = 1e-14
+    end
+
+    @testset "Mixed immersion/deposition: split conserves number" begin
+        inp = _parcel()
+        T = 236.0
+        Siw = saturation_vapor_pressure(T) / saturation_vapor_pressure_ice(T)
+        t = ice_nucleation!(inp, T, 0.5 * (1 + Siw), 5.0; N_liq, M_liq,
+                            immersed_fraction = 0.5)
+        @test t.N_ice_imm > 0 && t.N_ice_dep > 0
+        @test ice_number_formed(t) ≈ t.N_inp rtol = 1e-12
+        @test t.M_ice == t.M_liq + t.M_vap
+        @test maximum(abs, values(inp_budget_residual(inp))) < 1e-14
+    end
+
+    @testset "Singular: no double counting" begin
+        inp = _parcel()
+        t1 = ice_nucleation!(inp, 248.15, 1.2, 10.0; N_liq, M_liq)
+        t2 = ice_nucleation!(inp, 248.15, 1.2, 10.0; N_liq, M_liq)
+        @test t1.N_inp > 0
+        @test t2.N_inp == 0.0 && ice_number_formed(t2) == 0.0 && t2.heat == 0.0
+        t3 = ice_nucleation!(inp, 245.15, 1.2, 10.0; N_liq, M_liq)   # cooler
+        @test t3.N_inp > 0
+        t4 = ice_nucleation!(inp, 250.15, 1.2, 10.0; N_liq, M_liq)   # warmer
+        @test t4.N_inp == 0.0
+        # the cumulative ice equals a single step straight to -28 °C
+        fresh = _parcel()
+        once = ice_nucleation!(fresh, 245.15, 1.2, 10.0; N_liq, M_liq)
+        @test t1.N_inp + t3.N_inp ≈ once.N_inp rtol = 1e-10
+    end
+
+    @testset "Zero nucleation: T ≥ 0 °C, and S_i ≤ 1 without liquid" begin
+        for T in (_C.T_freeze, 274.0, 290.0)
+            inp = _parcel()
+            t = ice_nucleation!(inp, T, 1.5, 1.0; N_liq, M_liq)
+            @test ice_number_formed(t) == 0 && t.M_ice == 0 && t.heat == 0
+            @test inp_number(inp; population = :consumed) == 0
+        end
+        for T in (210.0, 225.0, 238.0), S in (0.8, 0.99, 1.0)
+            inp = _parcel()
+            t = ice_nucleation!(inp, T, S, 1.0)
+            @test ice_number_formed(t) == 0 && t.M_vap == 0 && t.N_inp == 0
+            @test inp_number(inp; population = :consumed) == 0
+        end
+    end
+
+    @testset "Ice formed increases with supercooling" begin
+        # At fixed air density (p ∝ T), so that the ambient INP numbers
+        # describe the same air at every T: at fixed p the std-volume
+        # conversion of the Tobo (2013) biological mode lowers its INP by
+        # ≈ 0.06 % per K below its fitted range (see the n ∝ T^0.25 test
+        # above), which is the ideal-gas law, not a freezing effect.
+        Ts = collect(272.15:-0.5:233.65)
+        Ni = [ice_number_formed(ice_nucleation!(_parcel(), T, 1.2, 1.0;
+                                                p = p_air * T / 250.0, N_liq, M_liq))
+              for T in Ts]
+        @test all(diff(Ni) .>= -1e-14 .* Ni[2:end])
+        @test Ni[1] == 0                         # -1 °C: warmer than every fit
+        @test Ni[end] > 1e3 * Ni[findfirst(>(0), Ni)]
+        Nd = [ice_number_formed(ice_nucleation!(_parcel(), T, 1.2, 1.0))
+              for T in 240.0:-0.5:210.0]
+        @test all(diff(Nd) .>= 0) && Nd[end] > Nd[1]
+    end
 end

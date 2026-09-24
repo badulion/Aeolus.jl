@@ -85,7 +85,10 @@ export # --- log-normal surface-area diagnostics (inp.jl) ------------------
        scheme_temperature_range, freezing_mechanism,
        ice_active_site_density, inas_frozen_fraction,
        singular_inp_concentration, STANDARD_TEMPERATURE, STANDARD_PRESSURE,
-       default_freezing_scheme, default_freezing_schemes
+       default_freezing_scheme, default_freezing_schemes,
+       # --- source terms (freezing.jl) ------------------------------------
+       IceNucleationTendency, NUCLEATED_ICE_MASS, ice_nucleation!,
+       ice_number_formed, nucleation_rates, freezing_regime
 
 include("icenuc/inp.jl")          # issue #5 — prognostic INP species
 include("icenuc/freezing.jl")     # issue #6 — immersion/deposition freezing
