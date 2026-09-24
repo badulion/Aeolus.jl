@@ -141,6 +141,22 @@ using Aeolus
             @test droplet_extinction(g) ≈ droplet_extinction(g; nquad = 60_000) rtol = 2.5e-3
         end
         @printf("  gamma quadrature vs 40k-bin reference: %.2e\n", abs(βq / βr - 1))
+        # Broad spectra (v_eff → 0.5, α → −1): most of the NUMBER sits below
+        # the quadrature's lower bound. A review found that normalising by
+        # the numerically integrated number inflated β there (effective Q
+        # 2.55 at v_eff = 0.45, 6.57 at 0.49, for r_eff = 10 μm, where
+        # physics requires ≈ 2.1). Reference: an independent 60 000-bin
+        # linear-r histogram of the area distribution r² n(r).
+        for v in (0.45, 0.49)
+            g = GammaDroplets(1e8, 1e-5, v)
+            αg = (1 - 3v) / v; θg = 1e-5 * v
+            rr = range(1e-9, 40θg * (αg + 3); length = 60_000)
+            aw = [exp((αg + 2) * log(ri / θg) - ri / θg) for ri in rr]   # r² n(r) per dr
+            Qref = sum(aw[i] * water_extinction_efficiency(rr[i]) for i in eachindex(rr)) / sum(aw)
+            Qg = droplet_extinction(g) / (π * 1e8 * spectrum_moment(g, 2))
+            @test Qg ≈ Qref rtol = 2e-3
+            @test 2 < Qg < 2.2
+        end
         # narrow gamma → monodisperse at r_eff
         narrow = GammaDroplets(1e8, 8e-6, 0.002)
         mono = MonodisperseDroplets(1e8, 8e-6)

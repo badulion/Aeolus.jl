@@ -330,9 +330,12 @@ Extinction coefficient of a droplet spectrum,
 
 For [`GammaDroplets`](@ref) the integral is composite Simpson in `ln r`
 over `[θ·max(α+1−6√(α+1), 10⁻³(α+1)), θ(α+3+10√(α+3))]` (`θ = ab`),
-covering the `r²`-weighted integrand to beyond 6 standard deviations,
-with the weights normalised numerically so the result is exactly `N`
-times the discrete mean of `π r² Q_ext`. The number of intervals is at
+covering the `r²`-weighted integrand to beyond 6 standard deviations.
+The quadrature computes the area-weighted mean efficiency
+`Q̄ = ∫ r² Q_ext n dr / ∫ r² n dr` and returns `β = π N ⟨r²⟩ Q̄` with the
+analytic `⟨r²⟩`, so the geometric limit is exact and number truncated at
+the small-`r` end (large for broad spectra, `v_eff ≳ 0.4`, where the
+number pdf `∝ r^{α}` with `α → −1`) cannot bias the result. The number of intervals is at
 least `nquad` and at least 10 per unit of size parameter: water is so
 weakly absorbing at 550 nm that `Q_ext(x)` carries narrow resonance
 spikes on top of the ripple, and a coarser rule (5 points per `π`)
@@ -375,18 +378,21 @@ function droplet_extinction(s::GammaDroplets;
     nq = max(nquad, ceil(Int, _POINTS_PER_X * xspan))
     nq += isodd(nq)
     a = log(lo); h = (log(hi) - a) / nq
-    # number per ln r ∝ r^{α+1} e^{-r/θ}; log-weights avoid overflow
-    lwmax = (α + 1) * log(α + 1) - (α + 1)          # value at the mode r = (α+1)θ
+    # Area (r²-weighted number) per ln r ∝ r^{α+3} e^{-r/θ}; log-weights
+    # avoid overflow. Normalising by the *area* integral, not the number
+    # integral, keeps the truncated small-drop number (up to ~70 % of N at
+    # v_eff → 0.5) from inflating β.
+    lwmax = (α + 3) * log(α + 3) - (α + 3)          # value at the mode r = (α+3)θ
     W = 0.0; S = 0.0
     @inbounds for i in 0:nq
         w = (i == 0 || i == nq) ? 1.0 : (isodd(i) ? 4.0 : 2.0)
         r = exp(a + i * h)
         u = r / θ
-        pdf = exp((α + 1) * log(u) - u - lwmax)
+        pdf = exp((α + 3) * log(u) - u - lwmax)
         W += w * pdf
-        S += w * pdf * π * r^2 * water_extinction_efficiency(r, λ)
+        S += w * pdf * water_extinction_efficiency(r, λ)
     end
-    return s.N * S / W
+    return π * s.N * spectrum_moment(s, 2) * S / W
 end
 
 function _q(r, λ, method::Symbol)
