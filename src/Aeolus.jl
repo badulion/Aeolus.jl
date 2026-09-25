@@ -58,6 +58,7 @@ include("Microphysics.jl")         # Phase 12 Kessler; delegates rain fall speed
 include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
+include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 
 using .Grids
 using .Fields
@@ -104,6 +105,7 @@ using .P3Microphysics
 using .IceNucleation
 using .TurbulentMicrophysics
 using .Visibility                  # Phase 44
+using .RadiationFog                # Phase 44
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -386,7 +388,8 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        supersaturation, supersaturation_ice,
        kelvin_coefficient, kohler_supersaturation, kohler_critical_point,
        kohler_equilibrium_radius, surface_tension_water,
-       kappa_from_solute, solute_from_kappa
+       kappa_from_solute, solute_from_kappa,
+       moist_enthalpy
 
 # Phase 42 — aerosol-cloud interaction (Kohler activation)
 # Kohler theory itself lives in the Phase 39 contract; the names here
@@ -552,5 +555,21 @@ export KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD, VISIBILITY_WAVELENGTH,
        droplet_extinction, fog_extinction, aerosol_extinction,
        rayleigh_extinction, rayleigh_cross_section, total_extinction,
        visibility, kunkel_visibility, gultepe_visibility
+
+# Phase 44 — fog / dew condensation coupled to the vapour field
+export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
+       dew_deposition, dew_exchange!
+# Phase 44 (#9) — droplet-radiative feedback: fog droplets in the Era III
+# radiation (delegated to GasOptics/TwoStream/RadiationCore)
+export fog_effective_radius, FogRadiation, fog_radiation,
+       fog_atmospheric_column, fog_radiative_transfer!,
+       fog_radiative_heating!, fog_top_flux_jump,
+       radiative_condensation_rate,
+       FogColumnSettings, FogBudget, FogColumn, stretched_levels,
+       parisfog_2011_column, column_energy, column_water,
+       fog_liquid_water_path, update_radiation!, moist_stability,
+       eddy_diffusivity, surface_exchange, settling_velocity,
+       fog_diagnostics, fog_life_cycle
+# (the fog column adds methods to the generic `step!` and `run!`)
 
 end # module

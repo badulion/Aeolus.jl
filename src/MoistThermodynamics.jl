@@ -69,7 +69,8 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        kelvin_coefficient, kohler_supersaturation, kohler_critical_point,
        kohler_equilibrium_radius, surface_tension_water,
        kappa_from_solute, solute_from_kappa,
-       effective_radius
+       effective_radius,
+       moist_enthalpy
 
 # =========================================================================
 # Constants
@@ -608,13 +609,46 @@ Approximately conserved under adiabatic vertical motion *including*
 condensation, which makes its drift a sharp diagnostic of whether a
 scheme's thermodynamics are self-consistent. A scheme using a fitted
 `e_s` with a different implicit `L_v` than it uses in its adjustment will
-show a slow systematic drift here; this module's does not, by
-construction.
+show a slow systematic drift here. It is still only *approximately*
+conserved even with exact thermodynamics: it treats `c_pm` as fixed while
+vapour becomes liquid. For the exact isobaric invariant see
+[`moist_enthalpy`](@ref).
 """
 moist_static_energy(T::Real, z::Real, q::PhasePartition,
                     c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
     heat_capacity_moist(q, c) * float(T) + c.grav * float(z) +
     latent_heat_vapor(T, c) * vapor(q)
+
+"""
+    moist_enthalpy(T, q, c = DEFAULT_CONSTANTS) -> J kg⁻¹
+
+Specific enthalpy of moist air *including its condensate*, referenced to
+liquid water, and **exactly** consistent with the Kirchhoff latent heats
+of this module:
+
+    h = (c_pd q_d + c_l q_tot) T + L_v(T) q_v - L_f(T) q_ice
+
+It is the quantity conserved by a reversible isobaric phase change, and
+differs from [`moist_static_energy`](@ref) (at z = 0) by
+`(c_pv - c_l) T q_v`, which is *not* constant under condensation — about
+a quarter of `L_v Δq` near 285 K. Use `moist_static_energy` as the
+familiar diagnostic, and this function wherever a scheme must conserve
+energy exactly through condensation.
+
+A useful identity follows directly: condensing `Δq` of vapour to liquid
+at fixed `h`, `q_tot` and pressure warms the parcel by exactly
+
+    c_pm(q_final) · ΔT = L_v(T_initial) · Δq ,
+
+with `c_pm` = [`heat_capacity_moist`](@ref). `RadiationFog` relies on it.
+"""
+function moist_enthalpy(T::Real, q::PhasePartition,
+                        c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    Tk = float(T)
+    return (c.cp_dry * (1 - q.tot) + c.cp_liquid * q.tot) * Tk +
+           latent_heat_vapor(Tk, c) * vapor(q) -
+           latent_heat_fusion(Tk, c) * q.ice
+end
 
 """
     liquid_water_static_energy(T, z, q, c) -> J kg⁻¹
