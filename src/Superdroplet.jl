@@ -750,18 +750,24 @@ function terminal_velocity(r::Real, m::MicrophysicalConstants = DEFAULT_MICRO)
     return _vterm_d(Float64(2 * rr), m)
 end
 
+# Diameters (m) where the drop fall-speed law changes regime: Stokes → Beard
+# regime 2, start and end of the blend into the Atlas et al. fit. Bulk
+# integrals over V(D) (P3 sedimentation) split their quadrature here.
+const _VTERM_REGIME_D = (19.5e-6, 1.07e-3, 1.4e-3)
+
 function _vterm_d(d::Float64, m::MicrophysicalConstants)
     Δρ = m.ρ_water - m.ρ_air
-    if d < 19.5e-6
+    d_st, d_b2, d_at = _VTERM_REGIME_D
+    if d < d_st
         Csc = 1 + 2.51 * m.λ_air / d
         return Csc * Δρ * m.grav * d^2 / (18 * m.μ_air)
-    elseif d <= 1.07e-3
+    elseif d <= d_b2
         return _vterm_beard2(d, m, Δρ)
-    elseif d < 1.4e-3
+    elseif d < d_at
         # Continuous blend between Beard regime 2 and the Atlas fit.
         v2 = _vterm_beard2(d, m, Δρ)
         va = _vterm_atlas(d)
-        θ  = (d - 1.07e-3) / (1.4e-3 - 1.07e-3)
+        θ  = (d - d_b2) / (d_at - d_b2)
         return (1 - θ) * v2 + θ * va
     else
         return _vterm_atlas(d)
