@@ -777,7 +777,9 @@ function _p3_cleanup(s::P3ParcelState{FT}, pp::P3ProcessParameters) where {FT}
 end
 
 """
-    p3_step(s::P3ParcelState, dt, pp = P3_DEFAULT_PROCESS; adjust = true) -> P3ParcelState
+    p3_step(s::P3ParcelState, dt, pp = P3_DEFAULT_PROCESS; adjust = true,
+            cloud_fraction = nothing, precip_fraction = nothing, f_min = 0.01,
+            hallett_mossop = nothing) -> P3ParcelState
 
 Advance the P3 microphysical source terms (no transport, no
 sedimentation) of one cell by `dt` seconds:
@@ -801,29 +803,54 @@ Total water `q_v + q_c + q_r + q_i` is conserved to rounding in every
 stage. Steps 1-4 conserve the enthalpy form `c_pm ΔT = -L_v Δq_v +
 L_f Δq_i` exactly for a step without clean-up; step 5 conserves the
 contract's θ_li (see [`p3_condensation`](@ref)).
+
+Sub-grid fractions (Phase 44, off by default): passing `cloud_fraction`
+and/or `precip_fraction` (a missing one is taken as 1) evaluates step 1
+with [`p3_fractional_process_rates`](@ref) — accretion, riming,
+autoconversion with in-cloud / in-precipitation mixing ratios weighted
+by area, rain evaporation only in the clear part; the rates are limited
+per region, so no region loses more than it holds. With both `nothing`
+(the default) the step is the grid-mean one, bit for bit. Step 5 is
+still the grid-mean all-or-nothing adjustment.
 """
 function p3_step(s::P3ParcelState{FT}, dt::Real,
                  pp::P3ProcessParameters = P3_DEFAULT_PROCESS;
-                 adjust::Bool = true, hallett_mossop = nothing) where {FT}
-    return first(p3_step_with_rates(s, dt, pp; adjust, hallett_mossop))
+                 adjust::Bool = true, cloud_fraction = nothing,
+                 precip_fraction = nothing, f_min::Real = 0.01,
+                 hallett_mossop = nothing) where {FT}
+    return first(p3_step_with_rates(s, dt, pp; adjust, cloud_fraction,
+                                    precip_fraction, f_min, hallett_mossop))
 end
 
 """
-    p3_step_with_rates(s, dt, pp = P3_DEFAULT_PROCESS; adjust = true, hallett_mossop = nothing)
+    p3_step_with_rates(s, dt, pp = P3_DEFAULT_PROCESS; adjust = true,
+                       cloud_fraction = nothing, precip_fraction = nothing,
+                       f_min = 0.01, hallett_mossop = nothing)
         -> (P3ParcelState, rates)
 
 [`p3_step`](@ref), also returning the limited process rates that were
-applied (the NamedTuple of [`p3_limit_rates`](@ref)), so a host can book
-side effects of individual processes — e.g. release the ice-nucleating
-particles of sublimated ice (`n_sub`). With `hallett_mossop` a
-[`P3HallettMossop`](@ref), rime splintering ([`p3_hm_tendencies`](@ref))
-is added to the tendencies, driven by the same limited riming rates; the
-default `nothing` leaves it off.
+applied (the NamedTuple of [`p3_limit_rates`](@ref), or the
+area-weighted, region-by-region limited rates of
+[`p3_fractional_process_rates`](@ref) when a cloud or precipitation
+fraction is given), so a host can book side effects of individual
+processes — e.g. release the ice-nucleating particles of sublimated ice
+(`n_sub`). With `hallett_mossop` a [`P3HallettMossop`](@ref), rime
+splintering ([`p3_hm_tendencies`](@ref)) is added to the tendencies,
+driven by the same limited riming rates; the default `nothing` leaves it
+off.
 """
 function p3_step_with_rates(s::P3ParcelState{FT}, dt::Real,
                             pp::P3ProcessParameters = P3_DEFAULT_PROCESS;
-                            adjust::Bool = true, hallett_mossop = nothing) where {FT}
-    r = p3_limit_rates(s, p3_process_rates(s, pp), dt, pp)
+                            adjust::Bool = true, cloud_fraction = nothing,
+                            precip_fraction = nothing, f_min::Real = 0.01,
+                            hallett_mossop = nothing) where {FT}
+    # The fractional rates are limited region by region (see
+    # p3_fractional_process_rates); the grid-mean ones here.
+    r = cloud_fraction === nothing && precip_fraction === nothing ?
+        p3_limit_rates(s, p3_process_rates(s, pp), dt, pp) :
+        p3_fractional_process_rates(s, something(cloud_fraction, 1),
+                                    something(precip_fraction, 1), pp;
+                                    f_min = f_min, dt = dt)
     ds = p3_tendencies(s, r, pp)
     if hallett_mossop !== nothing
         ds = _p3_axpy(ds, 1, p3_hm_tendencies(s, r, hallett_mossop, pp))

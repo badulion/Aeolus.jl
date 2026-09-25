@@ -17,7 +17,6 @@ include("PressureSolvers.jl")
 include("Simulations.jl")
 include("IO.jl")
 include("NetCDFIO.jl")        # dependency-free NetCDF-3 reader/writer
-include("Microphysics.jl")
 include("IBM.jl")
 include("Parallel.jl")
 include("Nesting.jl")
@@ -55,6 +54,7 @@ include("SolarGeometry.jl")     # Phase 38
 include("AerosolCloud.jl")         # Phase 42
 include("Superdroplet.jl")         # Phase 41
 include("P3Microphysics.jl")       # Phase 40
+include("Microphysics.jl")         # Phase 12 Kessler; delegates rain fall speeds to P3 (Phase 44)
 include("IceNucleation.jl")        # Phase 43
 
 using .Grids
@@ -124,7 +124,7 @@ export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_write!, nc_append_record!, nc_close!, nc_write_fields,
        nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
        nc_attributes, nc_nrecords
-export apply_kessler_step!
+export apply_kessler_step!, KESSLER_N0, kessler_rain_number, kessler_fall_speed
 export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
        implicit_ibm_correction!
 export AbstractPartition, SerialPartition, PencilPartition,
@@ -471,6 +471,10 @@ export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
        P3_K2_WATER, P3_K2_ICE, p3_rain_reflectivity, p3_ice_reflectivity, p3_dbz,
        p3_sediment!, p3_rain_sedimentation_velocities, p3_sediment_rain!,
        p3_ice_sedimentation_velocities, p3_sediment_ice!
+# P3 sub-grid precipitation fraction and overlap (Phase 44, issue #8)
+export p3_precipitation_overlap, p3_precipitation_fraction,
+       p3_fractional_process_rates, p3_step_column
+
 # P3 secondary ice (issue #7): Hallett-Mossop rime splintering
 export P3_NUCLEATED_ICE_MASS, P3_HM_SPLINTER_MASS, P3HallettMossop, P3_DEFAULT_HM,
        p3_hm_temperature_factor, p3_hm_large_drop_fraction, p3_hm_rimer_diameter,
