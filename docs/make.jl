@@ -36,6 +36,7 @@ makedocs(
             "Spectral broadening"         => "theory/spectral_broadening.md",
             "Visibility (Koschmieder)"    => "theory/visibility.md",
             "Fog and dew"                 => "theory/fog.md",
+            "Radiation fog"               => "theory/radiation_fog.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

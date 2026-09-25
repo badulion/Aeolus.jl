@@ -5,7 +5,8 @@ This page covers the thermodynamic half of radiation fog in Aeolus
 in the air or onto a surface, where the latent heat goes, and why the
 update cannot overshoot saturation. The droplet-radiative feedback that
 drives radiation fog — fog cooling itself by emitting longwave from its
-top — builds on these functions and is documented with it.
+top — builds on these functions and is documented in
+[Radiation fog](radiation_fog.md).
 
 ## 1. What went wrong before
 

@@ -4,13 +4,15 @@
 Fog and dew condensation coupled consistently to the atmospheric vapour
 field — Era IV, Phase 44.
 
-This module owns the *thermodynamic* half of radiation fog: how much
+This module owns radiation fog. Its *thermodynamic* half (#11): how much
 vapour condenses in the air (fog) or onto a cold surface (dew), where the
 latent heat goes, and why the step cannot overshoot saturation for any
-time step. The droplet-radiative feedback that actually drives radiation
-fog (fog cooling itself by emitting longwave from droplet tops) is the
-subject of the follow-up issue and is meant to be added here, on top of
-these functions.
+time step. Its *radiative* half (#9, `radiation_fog/coupling.jl`): the
+droplet field handed to the Era III radiation, so that fog cools itself
+by emitting longwave from its top — the feedback that thickens it. And a
+1-D radiation-fog column (`radiation_fog/column.jl`) that couples the
+two with turbulence, a surface energy balance and droplet settling,
+validated on the ParisFog case of 14–15 Nov 2011.
 
 WHY THIS EXISTS — THE BUG IT REPLACES
 
@@ -70,8 +72,36 @@ using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
                              heat_capacity_moist, latent_heat_vapor,
                              saturation_specific_humidity, exner_function
 
+# Era III radiation and Era IV droplet physics the fog column delegates to
+# (issue #9): no optics or transfer is computed in this module.
+using ..RadiationCore: SpectralGrid, OpticalProperties, RadiativeFluxes,
+                       AtmosphericColumn, longwave_bands, shortwave_bands,
+                       allocate_optics, allocate_fluxes, zero_fluxes!,
+                       combine_optics!, flux_divergence!, compute_optics!,
+                       STEFAN_BOLTZMANN
+using ..GasOptics: correlated_k_optics, us_standard_column
+using ..TwoStream: mie_cloud_optics, two_stream_solver, solve_lw!, solve_sw!
+using ..AerosolCloud: droplet_effective_radius
+using ..Superdroplet: terminal_velocity
+using ..SolarGeometry: solar_time, solar_position, earth_sun_distance_factor
+import ..TimeSteppers: step!      # the column extends the generic step!/run!
+import ..Simulations: run!
+using ..MoistThermodynamics: saturation_vapor_pressure,
+                             density_potential_temperature,
+                             virtual_potential_temperature, air_density
+
 export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
        dew_deposition, dew_exchange!
+# Phase 44 (#9) — droplet-radiative feedback and the 1-D radiation-fog column
+export fog_effective_radius, FogRadiation, fog_radiation,
+       fog_atmospheric_column, fog_radiative_transfer!,
+       fog_radiative_heating!, fog_top_flux_jump,
+       radiative_condensation_rate,
+       FogColumnSettings, FogBudget, FogColumn, stretched_levels,
+       parisfog_2011_column, column_energy, column_water,
+       fog_liquid_water_path, update_radiation!, moist_stability,
+       eddy_diffusivity, surface_exchange, settling_velocity,
+       fog_diagnostics, fog_life_cycle
 
 # =========================================================================
 # Helpers
@@ -326,5 +356,8 @@ function dew_exchange!(qv::AbstractArray{<:Real}, q_dew::AbstractMatrix,
     end
     return H
 end
+
+include("radiation_fog/coupling.jl")
+include("radiation_fog/column.jl")
 
 end # module

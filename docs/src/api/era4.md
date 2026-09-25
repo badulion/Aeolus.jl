@@ -6,8 +6,9 @@ The theory behind these modules is developed in
 [Sub-grid cloud and supersaturation PDF](../theory/subgrid_cloud.md),
 [Sub-grid supersaturation in activation and droplet growth](../theory/sgs_activation_growth.md),
 [Spectral broadening: bulk closure and validation](../theory/spectral_broadening.md),
-[Visibility](../theory/visibility.md) and
-[Fog and dew](../theory/fog.md);
+[Visibility](../theory/visibility.md),
+[Fog and dew](../theory/fog.md) and
+[Radiation fog](../theory/radiation_fog.md);
 this page is the generated API reference.
 
 ## P3 microphysics (Phase 40)
@@ -87,6 +88,14 @@ Modules = [Aeolus.Visibility]
 (deposition onto a cold surface) to the vapour field with the exact
 moist enthalpy of the `MoistThermodynamics` contract. Both steps are
 saturation-limited and unconditionally stable in the time step.
+
+The same module carries the radiation-fog feedback (#9): the droplet
+field (LWC, `N_d`, `r_eff`) is passed to the Era III radiation —
+`GasOptics`, `TwoStream.MieCloudOptics`, `RadiationCore.combine_optics!`
+and the two-stream solver — through [`fog_atmospheric_column`](@ref) and
+[`fog_radiative_transfer!`](@ref), and a 1-D column ([`FogColumn`](@ref),
+[`parisfog_2011_column`](@ref)) runs fog through formation, fog-top
+cooling and dissipation. See [Radiation fog](../theory/radiation_fog.md).
 
 ```@autodocs
 Modules = [Aeolus.RadiationFog]
