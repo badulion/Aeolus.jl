@@ -69,6 +69,25 @@ the ``\sigma_s \to 0`` limit of the scheme is the Phase 39 adjustment
 bit-for-bit (not a linearisation of it), which the tests check over 15
 warm, mixed-phase and cold states.
 
+### Why this anchors on the θ_li diagnosis, not the enthalpy adjustment
+
+The contract has two saturation adjustments (issue #82).
+`saturation_adjustment` *diagnoses* ``T`` and the partition from a
+prognostic ``\theta_{li}`` by inverting its definition exactly.
+`isobaric_saturation_adjustment` performs condensation as a *process*
+during a step and conserves moist enthalpy. The sub-grid cloud scheme is
+a diagnosis. It reads the cell means ``(\theta_{li}, q_t)`` and their
+variances, returns cloud fraction, condensate and ``T``, and leaves
+``\theta_{li}`` and ``q_t`` exactly as they were. No heat is exchanged.
+So its ``\sigma_s \to 0`` limit has to be the ``\theta_{li}`` inversion, and
+``\Gamma`` is taken at fixed ``\theta_{li}`` for the same reason.
+Anchoring on the enthalpy adjustment instead would make the diagnosed
+``T`` disagree with the ``\theta_{li}`` the model carries, by 1.2 % of the
+latent heating at 900 hPa and 6.4 % at 600 hPa, so reading the state
+would change it. A model that prognoses ``T`` or ``h`` instead of
+``\theta_{li}`` would need an enthalpy-anchored variant of this scheme.
+That variant does not exist yet.
+
 ## Cloud fraction and condensate
 
 With ``Q = \bar s/\sigma_s`` and a Gaussian PDF,

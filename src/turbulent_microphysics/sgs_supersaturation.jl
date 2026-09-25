@@ -229,6 +229,19 @@ end
 # Saturation is taken over liquid throughout, with condensate split into
 # liquid and ice by `liquid_fraction` — the same convention as
 # `MoistThermodynamics.saturation_adjustment`, which this must agree with.
+#
+# DIAGNOSIS, NOT PROCESS (issue #82). The contract has two adjustments:
+# `saturation_adjustment` inverts the θ_li definition (a diagnosis), and
+# `isobaric_saturation_adjustment` conserves moist enthalpy through a
+# condensation step (a process). This scheme is a diagnosis: from the
+# prognostic cell means (θ_li, q_t) and their sub-grid variances it
+# infers cloud fraction, condensate and T, and returns θ_li and q_t
+# exactly as they were — it moves no heat. Its σ_s → 0 limit must
+# therefore be the θ_li inversion, and Γ = ∂T/∂q_c is differentiated at
+# fixed θ_li (the R_m/c_pm term below) for the same reason. Anchoring on
+# the enthalpy adjustment instead would make the diagnosed state
+# disagree with the θ_li the model carries, by 1-6 % of the latent
+# heating (issue #82's numbers), i.e. reading the state would change it.
 
 export MellorCoefficients, mellor_coefficients, saturation_deficit_variance,
        extended_condensate, SubgridCloud, subgrid_cloud

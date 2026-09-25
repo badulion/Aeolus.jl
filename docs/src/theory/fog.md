@@ -79,23 +79,31 @@ not by the explicit ``\Delta t/\tau``, which exceeds 1 once
 ``\Delta t``. The default ``\tau = 0`` is full saturation adjustment:
 the phase-relaxation time of fog droplets at 100 cm⁻³ is a few seconds.
 
-### Relation to the contract's `saturation_adjustment`
+### Relation to the contract's two saturation adjustments
 
-`MoistThermodynamics.saturation_adjustment` already solves a saturation
-adjustment, but it conserves the liquid-ice potential temperature
-``\theta_{li}`` rather than ``h``. The two are tested against each other.
-At ``p = p_\text{ref}`` they agree to ``|\Delta q_l|/q_l \le 3.2\times10^{-3}``
-and ``|\Delta T| \le 10^{-3}`` K for 275–310 K and ``S`` = 1.01–1.10. The
-remaining difference comes from the exponential ``\theta_{li}``
-approximation. Away from ``p_\text{ref}`` they disagree more, and the
-contract is the one in error. Its ``\theta_{li}`` uses the moist Exner
-exponent ``R_m/c_{pm}`` of the *current* partition, which changes when
-vapour condenses. At 800 hPa, 285 K and ``S`` = 1.05 its adjustment
-violates moist enthalpy by 2.8 % of ``L_v \Delta q``, and its condensate
-differs from the exact value here by 1.75 %. This is a pre-existing
-defect of the Phase 39 contract, recorded as `@test_broken` in
-`test/era4_fog.jl`. Fog uses the enthalpy form because it is exact for
-the isobaric step.
+The solver described above is not fog's own: it is the contract's
+*process* adjustment, `MoistThermodynamics.isobaric_saturation_adjustment`,
+and `fog_equilibrium` delegates to it with no rain or ice (issue #82). It
+was written here first and moved to the contract unchanged, so fog
+results are bit-for-bit the same; the tests assert `===` agreement over a
+sweep of states.
+
+The contract also has `saturation_adjustment`, which is a different
+operation: a *diagnosis* that recovers ``T`` and the partition from a
+prognostic ``\theta_{li}`` and must reproduce ``\theta_{li}`` exactly.
+``\theta_{li}`` is not isobaric enthalpy — its moist Exner exponent
+``R_m/c_{pm}`` changes as vapour condenses — so applied to the same parcel
+the two disagree. At ``p = p_\text{ref}`` they agree to
+``|\Delta q_l|/q_l \le 3.2\times10^{-3}`` and ``|\Delta T| \le 10^{-3}`` K
+for 275–310 K and ``S`` = 1.01–1.10, from the exponential ``\theta_{li}``
+form. At 800 hPa, 285 K and ``S`` = 1.05 the diagnosis over-heats by
+2.76 % of ``L_v \Delta q`` and condenses 1.75 % less. That is not a
+defect of either function: condensation during a step is a process and
+uses the enthalpy form; reading the state off a prognostic
+``\theta_{li}`` is a diagnosis and uses the ``\theta_{li}`` form. Before
+#82 the contract only had the diagnosis, and #85 recorded this gap as two
+`@test_broken`. They compared against the wrong operation, and are now
+passing tests against the process adjustment.
 
 ## 4. Dew: deposition with surface-side latent heat
 

@@ -463,8 +463,10 @@ Simplified, and why it matters:
   range published with the case.
 * **Microphysics** is the full P3 of this package: process rates with
   Hallett–Mossop (inactive: the cloud is at −12 to −15 °C, as in ISDAC
-  and M-PACE), saturation adjustment (which conserves ``\theta_{li}``,
-  not ``s_l`` — issue #82), and ice sedimentation with P3's mass- and
+  and M-PACE), saturation adjustment (the contract's isobaric,
+  moist-enthalpy-conserving one since issue #82; the column mixes
+  ``s_l``, which is not the same invariant), and ice sedimentation with
+  P3's mass- and
   number-weighted fall speeds.
 
 Water (column + precipitation − subsidence source) and INP (column +

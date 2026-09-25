@@ -33,6 +33,20 @@ adjustment and a different effective `L_v` implicit in its `e_s` fit does
 not conserve moist static energy, and the error accumulates over a long
 integration rather than cancelling.
 
+TWO SATURATION ADJUSTMENTS (issue #82)
+
+  * `saturation_adjustment(θ_li, p, q_tot)` is a **diagnosis**: it
+    recovers `T` and the partition that a prognostic `θ_li` denotes, and
+    reproduces `θ_li` exactly.
+  * `isobaric_saturation_adjustment(T, p, q_v, q_c; q_r, q_i)` is a
+    **process**: condensation or evaporation during an isobaric step,
+    conserving `moist_enthalpy` exactly, with rain and ice in `c_pm`.
+
+They differ because θ_li is not isobaric enthalpy: holding θ_li fixed
+through condensation overstates latent heating by 1.2 % at 900 hPa and
+6.4 % at 600 hPa. Microphysics (P3, fog) uses the process form; the
+sub-grid cloud scheme and parcel CAPE use the diagnosis.
+
 REFERENCES
 
   * Emanuel, K. A. (1994). *Atmospheric Convection*. Oxford. Ch. 4.
