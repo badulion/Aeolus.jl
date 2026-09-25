@@ -389,7 +389,7 @@ for n in 1:nsteps
     fill!(tqv.data, 0)
     advect_centered!(tqv, sim.u, sim.v, sim.w, qv_p)
     interior_view(qv_p) .+= dt .* view(tqv.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
-    apply_kessler_step!(qv_p, ql_p, qr_p, dt; Vt = 3.0)
+    apply_kessler_step!(qv_p, ql_p, qr_p, dt; Vt = :spectrum)
     clamp!(interior_view(qv_p), 0.0, 0.03)
 
     fill_halos!(pollutant, FieldBoundaryConditions(:periodic))

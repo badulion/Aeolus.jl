@@ -115,7 +115,7 @@ export # --- physical constants of the module ---------------------------
        number_above_radius, mass_above_radius, mode_dry_mass,
        # --- Abdul-Razzak & Ghan activation -----------------------------------
        ActivationResult, arg_activation, arg_maximum_supersaturation,
-       activated_fraction,
+       activated_fraction, ccn_fraction, ccn_spectrum,
        # --- explicit adiabatic parcel ----------------------------------------
        ParcelSettings, ParcelResult, parcel_activation,
        # --- prognostic aerosol -----------------------------------------------
@@ -727,6 +727,60 @@ function mass_above_radius(m::ARGMode, r_cut::Real)
 end
 
 # =========================================================================
+# 3b. The CCN spectrum N(S)
+# =========================================================================
+#
+# Number of particles of a log-normal mode whose critical supersaturation
+# lies below S. With the dilute κ-Köhler law s_crit ∝ r_d^{-3/2} the
+# cut-off dry radius is r_g (S_m/S)^{2/3} and the log-normal integral
+# above it is ½ erfc(2 ln(S_m/S) / (3√2 ln σ_g)). This is the last step
+# of Abdul-Razzak & Ghan's scheme and it is also what any caller needs
+# who knows the supersaturation already (a sub-grid PDF of S, a measured
+# CCN counter setting). One copy, used by `arg_activation` below.
+
+@inline _ccn_fraction(S_m, S, lnσ) =
+    0.5 * erfc_series(2 * log(S_m / S) / (3 * sqrt(2.0) * lnσ))
+
+"""
+    ccn_fraction(m::ARGMode, S; T_K = 298.15) -> fraction in [0, 1]
+
+Fraction of the particles of mode `m` that are activated at the
+(fractional) supersaturation `S`, i.e. whose dilute κ-Köhler critical
+supersaturation is below `S`:
+
+```math
+\\frac{N_\\mathrm{CCN}(S)}{N} = \\tfrac12\\,\\mathrm{erfc}\\!\\left(
+   \\frac{2\\ln(S_m/S)}{3\\sqrt2\\ln σ_g}\\right),
+```
+
+with `S_m` = [`mode_critical_supersaturation`](@ref)`(m, T_K)`. This is
+the CCN spectrum of a log-normal mode (Abdul-Razzak et al. 1998, eq. 13)
+and **the** expression [`arg_activation`](@ref) evaluates at `S_max`, so
+`ccn_fraction(m, r.S_max; T_K)` reproduces `r.fraction` bit for bit.
+
+Returns 0 for `S ≤ 0` and for non-CCN-active modes (`κ ≤ KAPPA_MIN`).
+"""
+function ccn_fraction(m::ARGMode, S::Real; T_K::Real = _T_KELVIN_REF)
+    (S > 0 && m.κ > KAPPA_MIN) || return 0.0
+    S_m = mode_critical_supersaturation(m, T_K)
+    isfinite(S_m) || return 0.0
+    isfinite(S) || return 1.0
+    return _ccn_fraction(S_m, float(S), log(m.σ_g))
+end
+
+"""
+    ccn_spectrum(modes, S; T_K = 298.15) -> m⁻³
+
+CCN number concentration `N_CCN(S) = Σ_i N_i ccn_fraction(m_i, S)` of a
+multi-mode population at supersaturation `S`. Accepts `ARGMode`s or
+`AerosolOptics` modes.
+"""
+ccn_spectrum(modes::AbstractVector{<:ARGMode}, S::Real; T_K::Real = _T_KELVIN_REF) =
+    sum((m.N * ccn_fraction(m, S; T_K = T_K) for m in modes); init = 0.0)
+ccn_spectrum(modes::AbstractVector{<:AerosolMode}, S::Real; kw...) =
+    ccn_spectrum(arg_modes(modes), S; kw...)
+
+# =========================================================================
 # 4. Abdul-Razzak & Ghan (2000) activation
 # =========================================================================
 
@@ -848,9 +902,7 @@ function arg_activation(modes::AbstractVector{<:ARGMode}, w::Real,
         for i in 1:n
             m = modes[i]
             (m.N > 0 && m.κ > KAPPA_MIN && isfinite(S_m[i])) || continue
-            lnσ = log(m.σ_g)
-            u = 2 * log(S_m[i] / S_max) / (3 * sqrt(T(2)) * lnσ)
-            frac[i] = 0.5 * erfc_series(u)
+            frac[i] = _ccn_fraction(S_m[i], S_max, log(m.σ_g))
             N_act[i] = m.N * frac[i]
             total += N_act[i]
             # dry radius whose critical supersaturation equals S_max
