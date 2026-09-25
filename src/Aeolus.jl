@@ -43,6 +43,10 @@ include("AdaptiveMesh.jl")      # Phases 30-31
 # so it is included ahead of the radiation stack rather than with its own era.
 include("MoistThermodynamics.jl")  # Phase 39
 include("RadiationCore.jl")     # shared spectral / optics / flux contract
+# Era V contract (surface exchange) needs MoistThermodynamics and the
+# RadiationCore albedo/emissivity generics, and SlabLand (Radiation.jl)
+# implements its surface interface, so it sits here.
+include("SurfaceExchange.jl")
 include("GasOptics.jl")         # Phase 32
 include("SurfaceOptics.jl")     # Phase 36
 include("AerosolOptics.jl")     # Phase 37
@@ -106,6 +110,8 @@ using .IceNucleation
 using .TurbulentMicrophysics
 using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
+
+using .SurfaceExchange             # Era V contract
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
