@@ -24,33 +24,53 @@ using Aeolus: MoistThermodynamics, AerosolCloud, Superdroplet
         @test a.q_c > 0
         @test a.q_v + a.q_c == s.q_v + s.q_c                     # exact
         @test relerr(a.q_v, qsat(a.T, a.p)) < 1e-8
-        # θ_li conserved (the adjustment's invariant)
-        part(x) = MT.PhasePartition(x.q_v + x.q_c, x.q_c, 0.0)
-        θ0 = MT.liquid_ice_potential_temperature(s.T, s.p, part(s), c)
-        θ1 = MT.liquid_ice_potential_temperature(a.T, a.p, part(a), c)
-        @test abs(θ1 - θ0) < 1e-8
-        # Latent heating vs condensate: c_pm ΔT ≈ L_v Δq_c. Not exact: the
-        # adjustment conserves Bryan-Fritsch θ_li, not isobaric enthalpy,
-        # and the moisture dependence of its Exner exponent R_m/c_pm alone
-        # shifts ΔT by ~0.5 % at 900 hPa. Measured 1.0100 here and 1.0118
-        # for the evaporation case below (a first 1 % bound was too tight
-        # for that reason, not because of a code error).
+        # Moist enthalpy conserved (the process adjustment's invariant, #82)
+        part(x) = MT.PhasePartition(x.q_v + x.q_c + x.q_r + x.q_i, x.q_c + x.q_r, x.q_i)
+        h(x) = MT.moist_enthalpy(x.T, part(x), c)
+        @test abs(h(a) - h(s)) / h(s) < 1e-14
+        # Latent heating vs condensate: c_pm(final) ΔT = L_v(T₀) Δq_c is the
+        # exact first-law identity at constant h. #81 had to loosen this to
+        # 1.5 % (and 7 % at 600 hPa) because the adjustment then conserved
+        # θ_li; that reason is gone (issue #82), so it is tight again.
         cpm = MT.heat_capacity_moist(part(a), c)
-        ratio = cpm * (a.T - s.T) / (MT.latent_heat_vapor(a.T, c) * a.q_c)
-        @printf("    adjustment: Δq_c = %.4f g/kg, ΔT = %.4f K, c_pm ΔT/(L_v Δq_c) = %.5f\n",
-                1e3 * a.q_c, a.T - s.T, ratio)
-        @test abs(ratio - 1) < 0.015
-        # The deviation is the contract's θ_li, not P3: it vanishes at
-        # p = p_ref (where the Exner factor is 1) and grows with
-        # ln(p_ref/p). Measured: 0.9985 at 1000 hPa, 1.0121 at 900 hPa,
-        # 1.0644 at 600 hPa (10 % supersaturation at 285 K).
-        for (pz, tol) in ((1.0e5, 0.003), (6.0e4, 0.07))
+        ratio = cpm * (a.T - s.T) / (MT.latent_heat_vapor(s.T, c) * a.q_c)
+        # the #81 metric (L_v at the FINAL T) for comparison with the old
+        # numbers; it differs from 1 by (c_l − c_pv)ΔT/L_v, i.e. Kirchhoff
+        ratio_old = cpm * (a.T - s.T) / (MT.latent_heat_vapor(a.T, c) * a.q_c)
+        @printf("    adjustment: Δq_c = %.4f g/kg, ΔT = %.4f K, c_pm ΔT/(L_v(T₀) Δq_c) = %.14f [L_v(T₁): %.5f]\n",
+                1e3 * a.q_c, a.T - s.T, ratio, ratio_old)
+        @test ratio ≈ 1 atol = 1e-12
+        @test ratio_old ≈ 1 + (c.cp_liquid - c.cp_vapor) * (a.T - s.T) /
+                              MT.latent_heat_vapor(a.T, c) rtol = 1e-12
+        # Independent of pressure now. Before #82 (θ_li): 0.99848 at 1000
+        # hPa, 1.0121 at 900 hPa, 1.06442 at 600 hPa (10 % supersaturation
+        # at 285 K), which is why #81 used 0.3 % / 7 % bounds here.
+        for pz in (1.0e5, 9.0e4, 6.0e4)
             sz = P3ParcelState(T = 285.0, p = pz, q_v = 1.1 * qsat(285.0, pz))
             az = p3_condensation(sz)
-            rz = MT.heat_capacity_moist(part(az), c) * (az.T - sz.T) /
-                 (MT.latent_heat_vapor(az.T, c) * az.q_c)
-            @printf("    p = %4.0f hPa: c_pm ΔT/(L_v Δq_c) = %.5f\n", pz / 100, rz)
-            @test abs(rz - 1) < tol
+            cz = MT.heat_capacity_moist(part(az), c)
+            rz = cz * (az.T - sz.T) / (MT.latent_heat_vapor(sz.T, c) * az.q_c)
+            rz_old = cz * (az.T - sz.T) / (MT.latent_heat_vapor(az.T, c) * az.q_c)
+            @printf("    p = %4.0f hPa: c_pm ΔT/(L_v(T₀) Δq_c) = %.14f [L_v(T₁): %.5f], ΔT = %.4f K\n",
+                    pz / 100, rz, rz_old, az.T - sz.T)
+            @test rz ≈ 1 atol = 1e-12
+            @test abs(h(az) - h(sz)) / h(sz) < 1e-14
+        end
+        # Rain and ice are in c_pm (issue #82): with 5 g/kg of rain the
+        # same supersaturation heats less per unit condensate, by the
+        # heat-capacity ratio (was ignored: +1.5 % rain, +0.5 % ice).
+        for (qr, qi) in ((5e-3, 0.0), (0.0, 5e-3), (2e-3, 1e-3))
+            sx = P3ParcelState(T = 285.0, p = 9.0e4, q_v = 0.012, q_r = qr, N_r = 1e4,
+                               q_i = qi, N_i = 1e5)
+            ax = p3_condensation(sx)
+            cx = MT.heat_capacity_moist(part(ax), c)
+            @test cx * (ax.T - sx.T) ≈ MT.latent_heat_vapor(sx.T, c) * ax.q_c rtol = 1e-12
+            @test abs(h(ax) - h(sx)) / h(sx) < 1e-14
+            @test relerr(ax.q_v, qsat(ax.T, ax.p)) < 1e-8
+            k_rain = ((a.T - s.T) / a.q_c) / ((ax.T - sx.T) / ax.q_c) - 1
+            @printf("    q_r = %.0f, q_i = %.0f g/kg: ΔT/Δq_c lower by %.3f %% than without\n",
+                    1e3qr, 1e3qi, 100k_rain)
+            @test k_rain > 0
         end
         # New cloud gets the prescribed droplet number.
         ρa = MT.air_density(a.T, a.p, MT.PhasePartition(a.q_v + a.q_c, a.q_c, 0.0), c)
@@ -63,6 +83,7 @@ using Aeolus: MoistThermodynamics, AerosolCloud, Superdroplet
         a2 = p3_condensation(s2)
         @test a2.q_c > 0 && a2.q_i == 0
         @test relerr(a2.q_v, qsat(a2.T, a2.p)) < 1e-8
+        @test abs(h(a2) - h(s2)) / h(s2) < 1e-14
 
         # Subsaturated with cloud: the cloud evaporates completely.
         s3 = P3ParcelState(T = 285.0, p = 9.0e4, q_v = 0.5 * qsat(285.0, 9.0e4),
@@ -72,9 +93,10 @@ using Aeolus: MoistThermodynamics, AerosolCloud, Superdroplet
         @test a3.T < s3.T                                      # evaporative cooling
         @test a3.q_v ≈ s3.q_v + s3.q_c rtol = 1e-15
         cp3 = MT.heat_capacity_moist(MT.PhasePartition(a3.q_v, 0.0, 0.0), c)
-        r3 = cp3 * (s3.T - a3.T) / (MT.latent_heat_vapor(a3.T, c) * s3.q_c)
-        @printf("    evaporation: c_pm ΔT/(L_v Δq_c) = %.5f\n", r3)
-        @test abs(r3 - 1) < 0.015
+        r3 = cp3 * (s3.T - a3.T) / (MT.latent_heat_vapor(s3.T, c) * s3.q_c)
+        @printf("    evaporation: c_pm ΔT/(L_v(T₀) Δq_c) = %.14f (was 1.01183 with θ_li)\n", r3)
+        @test r3 ≈ 1 atol = 1e-12
+        @test abs(h(a3) - h(s3)) / h(s3) < 1e-14
         # Rain and ice are untouched by the cloud adjustment.
         s4 = P3ParcelState(T = 270.0, p = 8e4, q_v = 0.004, q_r = 1e-3, N_r = 1e4,
                            q_i = 1e-4, N_i = 1e5)

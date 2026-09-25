@@ -49,8 +49,8 @@ using ..MoistThermodynamics: air_density, DEFAULT_CONSTANTS
 using ..MoistThermodynamics: ThermodynamicConstants, PhasePartition, R_v,
     latent_heat_vapor, latent_heat_sublim, latent_heat_fusion,
     saturation_vapor_pressure, saturation_vapor_pressure_ice,
-    saturation_specific_humidity, saturation_adjustment,
-    liquid_ice_potential_temperature, heat_capacity_moist
+    saturation_specific_humidity, isobaric_saturation_adjustment,
+    moist_enthalpy, temperature_from_moist_enthalpy, heat_capacity_moist
 using ..Superdroplet: MicrophysicalConstants, DEFAULT_MICRO,
     vapor_diffusivity, thermal_conductivity, fk_thermal, fd_vapor,
     terminal_velocity

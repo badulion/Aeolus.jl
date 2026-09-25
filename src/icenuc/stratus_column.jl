@@ -52,8 +52,10 @@
 # s_l = c_pm T + g z - L_v (q_c + q_r) - L_s q_i
 # (`MoistThermodynamics.liquid_water_static_energy`) and each water
 # species; after mixing T is recovered from s_l and the cloud is
-# re-adjusted by P3's `p3_condensation`, which conserves θ_li rather than
-# s_l (issue #82). The resulting energy drift is not quantified here.
+# re-adjusted by P3's `p3_condensation`, which conserves the contract's
+# isobaric moist enthalpy (issue #82) rather than this s_l. With c_pm T
+# and a T-dependent L_v in s_l the two are not the same invariant; the
+# resulting drift of s_l across the adjustment is not quantified here.
 
 """
     ArcticStratusColumn(; kwargs...)

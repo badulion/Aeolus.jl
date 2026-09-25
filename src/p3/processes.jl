@@ -269,51 +269,36 @@ end
 # Condensation / evaporation of cloud water: saturation adjustment
 # -------------------------------------------------------------------------
 
-# A copy of the thermodynamic constants whose liquid/ice ramp is disabled
-# (`liquid_fraction ≡ 1`): in P3 cloud water is liquid at every
-# temperature — supercooled below 0 °C — and ice exists only as its own
-# prognostic category, created and grown by explicit processes. Nothing
-# else in `ThermodynamicConstants` depends on T_freeze / T_icenuc.
-function _p3_liquid_only(c::ThermodynamicConstants{T}) where {T}
-    vals = (f === :T_freeze || f === :T_icenuc ? zero(T) : getfield(c, f)
-            for f in fieldnames(ThermodynamicConstants))
-    return ThermodynamicConstants{T}(vals...)
-end
-
 """
     p3_condensation(s::P3ParcelState, pp = P3_DEFAULT_PROCESS) -> P3ParcelState
 
 Condensation of vapour to cloud water, or evaporation of cloud water,
 by **saturation adjustment** with respect to liquid:
-`MoistThermodynamics.saturation_adjustment` is applied to the vapour +
-cloud subsystem (`q_tot = q_v + q_c`) at constant liquid-ice potential
-temperature and pressure, and returns the temperature and cloud water
-that leave the parcel exactly saturated over liquid (or subsaturated
-with no cloud). Nothing thermodynamic is re-derived here.
+`MoistThermodynamics.isobaric_saturation_adjustment` — the contract's
+*process* adjustment — is applied to the vapour + cloud subsystem at
+constant pressure and constant moist enthalpy
+(`MoistThermodynamics.moist_enthalpy`), and returns the temperature and
+cloud water that leave the parcel exactly saturated over liquid (or
+subsaturated with no cloud). Nothing thermodynamic is re-derived here.
 
-P3 cloud water stays liquid below 0 °C (it can only become ice by
-riming or freezing), so the adjustment is called with a copy of the
-constants whose liquid-fraction ramp is disabled. Rain and ice do not
-take part: their heat capacity is left out of the adjusted `c_pm`
-(and their mass is counted as dry air), so the condensational `ΔT` is
-too large by the fraction of `c_pm` they carry — measured 1.5 % for
-5 g kg⁻¹ of rain and 0.5 % for 5 g kg⁻¹ of ice. The contract's
-`saturation_adjustment` takes only `q_tot` and diagnoses the whole
-condensate, so fixed rain and ice cannot be passed to it.
+Rain and ice are passed as non-adjusting condensate (`q_r`, `q_i`): they
+do not change, but they are part of the parcel's heat capacity, so the
+heating is exactly `c_pm ΔT = L_v(T₀) Δq_c` with the full-state `c_pm`
+(issue #82). The contract saturates cloud water over liquid at every
+temperature, which is P3's convention: cloud water stays supercooled
+below 0 °C and becomes ice only by riming or freezing.
 
-`q_v + q_c` is conserved exactly. Energy is conserved in the sense of
-the contract's invariant, θ_li, which is *not* exactly isobaric
-enthalpy: `c_pm ΔT / (L_v Δq_c)` measures 0.998 at 1000 hPa, 1.012 at
-900 hPa and 1.064 at 600 hPa (tests), the deviation coming from the
-moisture dependence of the Exner exponent `R_m/c_pm` inside θ_li. It is
-a property of `MoistThermodynamics.saturation_adjustment` and is
-inherited here rather than patched, so that every scheme shares one
-adjustment.
+`q_v + q_c` is conserved exactly, and moist enthalpy to round-off
+(`|Δh|/h` ≈ 1e-16). Measured `c_pm ΔT / (L_v(T₀) Δq_c)` is 1 to 1e-12 at
+1000, 900 and 600 hPa (tests). Before #82 this step used the θ_li
+*diagnosis* `MoistThermodynamics.saturation_adjustment`, which gave 0.998,
+1.012 and 1.064 there and ignored rain and ice in `c_pm`.
 
 Cloud number: newly formed cloud
 (`N_c = 0`) receives the prescribed `N_c_prescribed / ρ_air`; complete
 evaporation removes all droplets, partial evaporation keeps `N_c` (the
-P3 convention — droplets shrink before they disappear).
+P3 convention — droplets shrink before they disappear). A cloud
+remainder below `q_small` is evaporated too, at constant moist enthalpy.
 
 The explicit supersaturation-relaxation condensation of the P3 code
 (Morrison & Grabowski 2008) is replaced by this adjustment; the two agree
@@ -321,21 +306,24 @@ whenever the phase relaxation time (~1-10 s) is short compared with the
 time step.
 """
 function p3_condensation(s::P3ParcelState, pp::P3ProcessParameters = P3_DEFAULT_PROCESS)
-    cl = _p3_liquid_only(pp.thermo)
+    c = pp.thermo
     qt = s.q_v + s.q_c
     qt > 0 || return s
-    θli = liquid_ice_potential_temperature(s.T, s.p, PhasePartition(qt, s.q_c, 0.0), cl)
-    Tn, part = saturation_adjustment(θli, s.p, qt, cl)
-    qc = part.liq
+    Δ, Tn = isobaric_saturation_adjustment(s.T, s.p, s.q_v, s.q_c, c;
+                                           q_r = s.q_r, q_i = s.q_i)
+    qc = min(max(s.q_c + Δ, zero(qt)), qt)
     Nc = s.N_c
     if qc < pp.q_small
-        # evaporate the residue too, so no cloud "dust" is left behind
-        cpm = heat_capacity_moist(PhasePartition(qt, qc, 0.0), pp.thermo)
-        Tn -= latent_heat_vapor(Tn, pp.thermo) * qc / cpm
+        # evaporate the residue too, so no cloud "dust" is left behind —
+        # at constant moist enthalpy, like the adjustment itself
+        qall = qt + s.q_r + s.q_i
+        h = moist_enthalpy(Tn, PhasePartition(qall, qc + s.q_r, s.q_i), c)
+        Tn = temperature_from_moist_enthalpy(h, PhasePartition(qall, s.q_r, s.q_i), c;
+                                             T_ref = Tn)
         qc, Nc = zero(qc), zero(qc)
     elseif Nc <= 0
         new = _p3_with(s; T = Tn, q_v = qt - qc, q_c = qc)
-        Nc = pp.N_c_prescribed / air_density(Tn, s.p, _p3_partition(new), pp.thermo)
+        Nc = pp.N_c_prescribed / air_density(Tn, s.p, _p3_partition(new), c)
     end
     return _p3_with(s; T = Tn, q_v = qt - qc, q_c = qc, N_c = Nc)
 end
@@ -793,7 +781,7 @@ sedimentation) of one cell by `dt` seconds:
     when the ice mean size leaves P3's limiter and `N_r` when the rain
     mean diameter leaves `[10 μm, 2 mm]` ([`p3_rain_limit_number`](@ref));
  5. if `adjust`, cloud condensation/evaporation by
-    [`p3_condensation`](@ref) (`MoistThermodynamics.saturation_adjustment`).
+    [`p3_condensation`](@ref) (`MoistThermodynamics.isobaric_saturation_adjustment`).
 
 `hallett_mossop = P3_DEFAULT_HM` (a [`P3HallettMossop`](@ref)) adds rime
 splintering to step 3; it is off by default. See
@@ -802,7 +790,8 @@ splintering to step 3; it is off by default. See
 Total water `q_v + q_c + q_r + q_i` is conserved to rounding in every
 stage. Steps 1-4 conserve the enthalpy form `c_pm ΔT = -L_v Δq_v +
 L_f Δq_i` exactly for a step without clean-up; step 5 conserves the
-contract's θ_li (see [`p3_condensation`](@ref)).
+contract's moist enthalpy exactly, rain and ice included (see
+[`p3_condensation`](@ref)).
 
 Sub-grid fractions (Phase 44, off by default): passing `cloud_fraction`
 and/or `precip_fraction` (a missing one is taken as 1) evaluates step 1
