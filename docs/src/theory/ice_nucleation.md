@@ -350,6 +350,39 @@ and heats the air by ``\mathrm{heat}/(\rho c_{pm})``. When its ice
 sublimates or melts it calls `inp_release!`; when ice precipitates out,
 `inp_scavenge!(…; population = :consumed)`.
 
+### 6.5 The P3 host side (issue #7)
+
+`p3_ice_nucleation(s, inp, Δt)` is that contract for P3's single ice
+category. It evaluates ``S_i`` with `relative_humidity_ice`, passes
+``N_\mathrm{liq} = N_c\rho`` and ``M_\mathrm{liq} = q_c\rho`` (``\rho``
+from `air_density` of the cell) and applies the increments per kg of air:
+droplets frozen leave ``q_c, N_c``; vapour deposited leaves ``q_v``;
+``q_i`` gains ``M_\mathrm{ice}/\rho``; ``N_i`` gains one particle per
+crystal; frozen drops enter the rime mass and volume at
+``\rho_\mathrm{rim,max}`` = 900 kg m⁻³ (the P3 code's treatment of
+frozen cloud) while vapour-nucleated crystals are unrimed; and
+``c_{pm}\Delta T = \mathrm{heat}/\rho``, which is exactly the P3
+enthalpy form ``c_{pm}\,dT = -L_v\,dq_v + L_f\,dq_i``. Only cloud
+droplets freeze — P3 rain has no immersion-freezing process here.
+
+`p3_inp_release!(inp, s, r, Δt)` returns the consumed INP of ice that
+sublimated or melted: the fraction ``\Delta t\,(n_\mathrm{sub} +
+n_\mathrm{melt})/N_i`` of each mode, using the limited rates that
+`p3_step_with_rates` applied.
+
+The two nucleated-crystal masses are one: `NUCLEATED_ICE_MASS` is
+defined as `P3_NUCLEATED_ICE_MASS` (``m_{i0}`` of P3). Hallett–Mossop
+splinters are larger (10 μm diameter, `P3_HM_SPLINTER_MASS`, as in the
+P3 code).
+
+| Check (tests) | Measured |
+| :-- | :-- |
+| P3 ice particles gained vs INP consumed, −25 °C cloud | 1e-12 rel. (15.59 L⁻¹) |
+| total water across the coupling | 1e-15 rel. |
+| heating vs ``L_f\Delta q_\mathrm{liq} + L_s\Delta q_\mathrm{vap}`` | 1e-10 rel. (``\Delta T`` itself to rounding of ``T``) |
+| rime density of frozen drops | 900 kg m⁻³ to 1e-10 |
+| INP released vs fraction of ice sublimated | 1e-12 rel.; budget residual < 1e-14 |
+
 ## 7. Consistency with the mixed-phase ramp
 
 `MoistThermodynamics.liquid_fraction` (Phase 39) partitions condensate
@@ -378,6 +411,92 @@ both together. Inside the ramp heterogeneous freezing never outruns the
 ramp's ice fraction: for 10 cm⁻³ of immersed dust the frozen liquid
 fraction is at most 0.075 of ``1 - \lambda(T)``.
 
+## 8. Validation: mixed-phase Arctic stratus
+
+The test a mixed-phase ice scheme must pass is that an Arctic
+stratocumulus deck *persists*: observed decks keep supercooled liquid
+for days with 0.1–1 L⁻¹ of ice, and a scheme that makes too much ice
+glaciates them through the Wegener–Bergeron–Findeisen process within
+hours (Harrington et al. 1999; Morrison et al. 2011, 2012; Ovchinnikov
+et al. 2014).
+
+### Set-up and what is simplified
+
+`run_arctic_stratus(ArcticStratusColumn(...))` integrates a **1-D
+column**, not an LES, in the set-up of the ISDAC intercomparison
+(Ovchinnikov et al. 2014, flight 31): the ISDAC initial ``\theta_l`` and
+``q_t`` profiles (`isdac_initial_profile`; elevated mixed layer
+400–825 m under an inversion), 1020 hPa at the surface, no surface
+fluxes (sea ice), 200 cm⁻³ droplets and the ISDAC subsidence
+``w = -Dz``, ``D`` = 5×10⁻⁶ s⁻¹ (constant, 4.125 mm s⁻¹, above 825 m).
+The initial LWP is 14.4 g m⁻², against the ~14 g m⁻² reported for the
+case (Paukert & Hoose 2014) — a check that the profiles are right, and
+asserted in the tests. The case paper itself (Ovchinnikov et al. 2014)
+was not accessible, so treat the set-up as "ISDAC-like".
+
+**The longwave is not ISDAC's.** ISDAC simulations use a full radiation
+code (RRTMG). Here cloud-top cooling is the idealised DYCOMS-form
+``F = F_0 e^{-\kappa\,\mathrm{LWP}_\downarrow} + F_1 e^{-\kappa\,\mathrm{LWP}_\uparrow}``
+with ``F_0`` = 72 W m⁻², ``F_1`` = 15 W m⁻², ``\kappa`` = 170 m² kg⁻¹;
+the provenance of these three values is unverified and they are a
+modelling choice, not a case specification.
+
+Simplified, and why it matters:
+
+* **Turbulence** is a prescribed eddy diffusivity, 30 m² s⁻¹ inside the
+  400–825 m mixed layer and zero across the inversion (implicit
+  diffusion of ``s_l``, the water species, the ice moments and the
+  INP). Free-tropospheric air enters the mixed layer only through the
+  subsidence, i.e. at the entrainment rate ``w_e = D z_i`` ≈ 4 mm s⁻¹
+  that keeps the inversion stationary (Lilly 1968), not at the rate
+  resolved turbulence would produce. The cloud-top cooling is therefore
+  not balanced by entrainment warming as in the LES, and LWP grows with
+  time even with ice (14 → 39 g m⁻² in 8 h without ice).
+* **Ice initiation** is prognostic — Niemand et al. (2012) immersion
+  freezing on a dust mode (5 cm⁻³, ``r_g`` = 0.4 μm, ``\sigma_g`` = 2) with
+  INP consumed on freezing, entrained with free-tropospheric air,
+  falling with the ice number and released where ice sublimates —
+  instead of ISDAC's prescribed ice number. The dust number is chosen
+  so the ice is of order 0.1–1 L⁻¹: flight 31 observed ~0.35 L⁻¹, and
+  the intercomparison prescribed 1 L⁻¹ with a 4 L⁻¹ sensitivity run.
+  The tests' 0.25–4 L⁻¹ window is a band around those numbers, not a
+  range published with the case.
+* **Microphysics** is the full P3 of this package: process rates with
+  Hallett–Mossop (inactive: the cloud is at −12 to −15 °C, as in ISDAC
+  and M-PACE), saturation adjustment (which conserves ``\theta_{li}``,
+  not ``s_l`` — issue #82), and ice sedimentation with P3's mass- and
+  number-weighted fall speeds.
+
+Water (column + precipitation − subsidence source) and INP (column +
+surface deposit − subsidence source) budgets close to 10⁻¹². A test
+that every P3 ice particle has a consumed INP (Hallett–Mossop being
+inactive) caught a bug during development: the column carried INP per
+m³ at a fixed transport density while P3 converts with the cell's
+current density, so each nucleated INP made ``\rho_\mathrm{cell}/\rho``
+crystals (up to 10⁻⁴ too many). INP are now rescaled to the cell
+density around each nucleation call.
+
+### Results
+
+| INP | run | LWP start → end (g m⁻²) | IWP end (g m⁻²) | ice in liquid layer (L⁻¹) | glaciation (LWP < 10 %) |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| none | 8 h | 14.4 → 39.3 | 0 | 0 | never |
+| ×1 (5 cm⁻³ dust) | 8 h | 14.4 → 35.4 | 0.36 | 0.27 → 0.48 | never |
+| ×10 | 8 h | 14.4 → 14.7 | 2.28 | 2.6 → 4.8 | never |
+| ×100 | 4 h | 14.4 → 0.0 | 0.35 | 27 → 30 | 2.2 h |
+| ×300 | 2 h | 14.4 → 0.0 | 2.37 | 77 → 83 | 0.7 h |
+
+With realistic INP the deck is mixed-phase and persistent; ice lowers
+LWP monotonically with ice number, as in the ISDAC LES; a 100-fold
+increase of INP glaciates it in about two hours, and the glaciation time
+shortens monotonically as INP rise. The IWP of the base case
+(0.36 g m⁻² at 0.48 L⁻¹) is, as far as the author recalls the
+intercomparison, below the several g m⁻² the ISDAC LES produced at
+1 L⁻¹ — the ice number here is half that, and bulk (single-moment-shape)
+ice PSDs were found by Ovchinnikov et al. to underpredict IWP by a factor
+of two — but the IWP comparison is not a verified match and the tests
+do not claim one.
+
 ## References
 
 * DeMott, P. J. et al. (2010), *Predicting global atmospheric ice nuclei
@@ -385,6 +504,9 @@ fraction is at most 0.075 of ``1 - \lambda(T)``.
 * DeMott, P. J. et al. (2015), *Integrating laboratory and field data to
   quantify the immersion freezing ice nucleation activity of mineral
   dust particles*, ACP 15, 393.
+* Harrington, J. Y., Reisin, T., Cotton, W. R. & Kreidenweis, S. M.
+  (1999), *Cloud resolving simulations of Arctic stratus. Part II:
+  Transition-season clouds*, Atmos. Res. 51, 45.
 * Harrington, J. Y. & Olsson, P. Q. (2001), *On the potential influence
   of ice nuclei on surface-forced marine stratocumulus cloud dynamics*,
   JGR 106, 27473.
@@ -393,6 +515,8 @@ fraction is at most 0.075 of ``1 - \lambda(T)``.
   experiments*, ACP 12, 9817.
 * Kanji, Z. A. et al. (2017), *Overview of ice nucleating particles*,
   Meteorol. Monogr. 58, 1.1.
+* Lilly, D. K. (1968), *Models of cloud-topped mixed layers under a
+  strong inversion*, QJRMS 94, 292.
 * Marinou, E. et al. (2019), *Retrieval of ice-nucleating particle
   concentrations from lidar observations and comparison with UAV in situ
   measurements*, ACP 19, 11315.
@@ -402,11 +526,20 @@ fraction is at most 0.075 of ``1 - \lambda(T)``.
 * Morrison, H. & Milbrandt, J. A. (2015), *Parameterization of
   cloud microphysics based on the prediction of bulk ice particle
   properties. Part I*, JAS 72, 287.
+* Morrison, H. et al. (2011), *Intercomparison of cloud model
+  simulations of Arctic mixed-phase boundary layer clouds observed
+  during SHEBA/FIRE-ACE*, JAMES 3, M06003.
 * Morrison, H. et al. (2012), *Resilience of persistent Arctic
   mixed-phase clouds*, Nature Geosci. 5, 11.
 * Niemand, M. et al. (2012), *A particle-surface-area-based
   parameterization of immersion freezing on desert dust particles*,
   JAS 69, 3077.
+* Paukert, M. & Hoose, C. (2014), *Modeling immersion freezing with
+  aerosol-dependent prognostic ice nuclei in Arctic mixed-phase clouds*,
+  JGR Atmos. 119, 9073.
+* Ovchinnikov, M. et al. (2014), *Intercomparison of large-eddy
+  simulations of Arctic mixed-phase clouds: Importance of ice size
+  distribution assumptions*, JAMES 6, 223.
 * Seinfeld, J. H. & Pandis, S. N. (2016), *Atmospheric Chemistry and
   Physics*, 3rd ed., Wiley — ch. 9, gravitational settling.
 * Solomon, A., Feingold, G. & Shupe, M. D. (2015), *The role of ice
