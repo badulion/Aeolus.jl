@@ -55,6 +55,7 @@ include("SolarGeometry.jl")     # Phase 38
 include("AerosolCloud.jl")         # Phase 42
 include("Superdroplet.jl")         # Phase 41
 include("P3Microphysics.jl")       # Phase 40
+include("IceNucleation.jl")        # Phase 43
 
 using .Grids
 using .Fields
@@ -98,6 +99,7 @@ using .MoistThermodynamics
 using .AerosolCloud
 using .Superdroplet
 using .P3Microphysics
+using .IceNucleation
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -468,5 +470,17 @@ export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
        P3_K2_WATER, P3_K2_ICE, p3_rain_reflectivity, p3_ice_reflectivity, p3_dbz,
        p3_sediment!, p3_rain_sedimentation_velocities, p3_sediment_rain!,
        p3_ice_sedimentation_velocities, p3_sediment_ice!
+
+# Phase 43 — ice nucleation: prognostic INP species (dust, biological)
+# and their available/consumed budget. All names are `inp_`-prefixed or
+# otherwise specific so they cannot collide with the P3 ice category.
+export DEMOTT_CUTOFF_RADIUS, INPPopulation, inp_budget,
+       inp_budget_residual, inp_consume!, inp_emit!, inp_entrain!,
+       inp_frozen_fraction, inp_mass, inp_median_radius, inp_modes,
+       inp_nmodes, inp_nucleate_singular!, inp_number,
+       inp_number_above_radius, inp_population, inp_release!,
+       inp_scavenge!, inp_sediment!, inp_settling_velocity,
+       inp_species, inp_surface_area, inp_surface_area_above_radius,
+       mode_surface_area, surface_area_above_radius
 
 end # module

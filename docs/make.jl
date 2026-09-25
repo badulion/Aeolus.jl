@@ -30,6 +30,7 @@ makedocs(
             "Discrete Poisson & FFT"      => "theory/poisson.md",
             "Radiative transfer"          => "theory/radiation.md",
             "P3 microphysics"             => "theory/p3.md",
+            "Ice nucleation"              => "theory/ice_nucleation.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -68,6 +69,7 @@ makedocs(
                 "Aerosol optics"               => "api/era3/aerosol_optics.md",
                 "Solar geometry"               => "api/era3/solar_geometry.md",
             ],
+            "Era IV — microphysics" => "api/era4.md",
             "Era IV — microphysics" => "api/era4.md",
         ],
         "Examples" => [
