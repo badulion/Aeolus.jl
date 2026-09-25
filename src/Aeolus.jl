@@ -54,6 +54,7 @@ include("SolarGeometry.jl")     # Phase 38
 
 include("AerosolCloud.jl")         # Phase 42
 include("Superdroplet.jl")         # Phase 41
+include("P3Microphysics.jl")       # Phase 40
 
 using .Grids
 using .Fields
@@ -96,6 +97,7 @@ using .SolarGeometry
 using .MoistThermodynamics
 using .AerosolCloud
 using .Superdroplet
+using .P3Microphysics
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -435,5 +437,13 @@ export AMMONIUM_SULFATE, AerosolProperties, CollisionKernel,
        raoult_b, relative_dispersion, size_distribution,
        surface_tension, terminal_velocity, thermal_conductivity,
        total_number, total_water_mass, vapor_diffusivity
+
+# Phase 40 — P3 (predicted particle properties) bulk microphysics
+# Gamma-function names carry `_lanczos` / `gamma_inc_*` spellings so they
+# cannot collide with SpecialFunctions in user code that loads both.
+export lgamma_lanczos, gamma_lanczos,
+       gamma_inc_lower, gamma_inc_upper, gamma_inc_pq,
+       gamma_psd_density, gamma_psd_moment, gamma_psd_partial_moment,
+       gamma_psd_intercept, gamma_psd_slope
 
 end # module
