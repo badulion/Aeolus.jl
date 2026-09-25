@@ -75,7 +75,16 @@ makedocs(
                 "Aerosol optics"               => "api/era3/aerosol_optics.md",
                 "Solar geometry"               => "api/era3/solar_geometry.md",
             ],
-            "Era IV — microphysics" => "api/era4.md",
+            "Era IV — microphysics" => [
+                "Overview"                     => "api/era4.md",
+                "P3 microphysics"              => "api/era4/p3_microphysics.md",
+                "P3 processes and secondary ice" => "api/era4/p3_processes.md",
+                "P3 sedimentation and precipitation fraction" => "api/era4/p3_sedimentation.md",
+                "Ice nucleation"               => "api/era4/ice_nucleation.md",
+                "Visibility"                   => "api/era4/visibility.md",
+                "Fog and dew"                  => "api/era4/radiation_fog.md",
+                "Turbulent microphysics"       => "api/era4/turbulent_microphysics.md",
+            ],
         ],
         "Examples" => [
             "Scalar advection 2D"           => "examples/scalar_advection.md",
