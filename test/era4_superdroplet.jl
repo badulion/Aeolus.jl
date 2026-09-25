@@ -199,6 +199,26 @@ using Aeolus
         @info "condensational narrowing" rel_dispersion_before=σ0 after=σ1
     end
 
+    @testset "Pure-water droplet evaporates, not vanishes" begin
+        # Regression (found by the Phase 45 stochastic-growth tests): with
+        # no solute, the Kelvin term makes the backward-Euler residual
+        # positive at the radius floor for ANY subsaturation, and the
+        # evaporating branch used to return the floor (1e-12 m) at once.
+        # Away from the floor, r² must fall by ≈ 2 G |S| dt.
+        T, p = 283.0, 9e4
+        G = 1 / (fk_thermal(T) + fd_vapor(T, p))
+        for (r0, S, dt) in ((10e-6, -1e-3, 0.5), (5e-6, -1e-2, 1.0),
+                            (20e-6, -2e-3, 30.0))
+            r = grow_droplet(r0, 0.0, S, T, p, dt, NACL)
+            A = kelvin_a(T)
+            # backward Euler on r² with the Kelvin term at the new radius
+            @test r^2 ≈ r0^2 + 2G * (S - A / r) * dt rtol = 1e-8
+            @test r > 0.9r0
+        end
+        # a droplet whose whole r² is gone within dt really does vanish
+        @test grow_droplet(0.5e-6, 0.0, -5e-2, T, p, 10.0, NACL) <= 1e-11
+    end
+
     @testset "Diagnostics" begin
         rng = MersenneTwister(3)
         V = 1.0

@@ -1386,7 +1386,35 @@ function _implicit_r_step(r_n::Float64, h::Float64, S::Float64, A::Float64,
         # radius when there is solute, and by nothing much when there isn't
         hi = r_n
         lo = floor_r
-        f(lo) > 0 && return lo      # evaporates all the way to the floor
+        if f(lo) > 0
+            # f > 0 at BOTH ends of [floor, r_n]. That does not mean the
+            # droplet evaporates completely: without solute the Kelvin
+            # term makes f → +∞ at the floor however slight the
+            # subsaturation, so testing the floor alone sent every
+            # evaporating pure-water droplet to 1e-12 m in one step (a
+            # 10 μm droplet at S = -0.1 % over 0.5 s; found by the
+            # Phase 45 stochastic-growth tests). The physical root, if
+            # any, lies between the minimum of f and r_n: locate the
+            # minimum and bracket from there. With B = 0 it is closed-form,
+            # f'(r) = 2r − 2hA/(F r²) = 0 at r³ = hA/F; otherwise a ternary
+            # search in ln r (exact for any unimodal f). The closed form
+            # matters: evaporating pure-water droplets are the common
+            # case in stochastic growth, and the search cost ~150 extra
+            # residual evaluations each (20x the cost of a growth step).
+            r_min = if B == 0
+                clamp(cbrt(h * A * invF), lo, r_n)
+            else
+                a, b = log(lo), log(r_n)
+                for _ in 1:100
+                    m1 = a + (b - a) / 3; m2 = b - (b - a) / 3
+                    f(exp(m1)) < f(exp(m2)) ? (b = m2) : (a = m1)
+                    b - a < 1e-12 && break
+                end
+                exp(0.5 * (a + b))
+            end
+            f(r_min) > 0 && return lo   # no root: it really evaporates away
+            lo = r_min
+        end
     end
     r = clamp(r_n, lo, hi)
     for _ in 1:100
@@ -1414,8 +1442,15 @@ Grow every superdroplet at a prescribed ambient state and return the total
 **real** water mass condensed (kg; negative for net evaporation). Does not
 touch the host cell — see [`condensation_step!`](@ref) for the coupled
 version.
+
+`S` is either one supersaturation for every droplet or a vector indexed
+like `sd.radius`, giving each superdroplet the supersaturation of the
+sub-grid environment it sits in (Phase 45 uses this to let droplets
+sample a sub-grid supersaturation distribution). A vector filled with a
+single value gives bit-for-bit the scalar result.
 """
-function condensation_growth!(sd::SuperdropletSet{T}, S::Real, Temp::Real,
+function condensation_growth!(sd::SuperdropletSet{T},
+                              S::Union{Real,AbstractVector{<:Real}}, Temp::Real,
                               p::Real, dt::Real;
                               indices::Union{Nothing,AbstractVector{Int}} = nothing,
                               substeps::Integer = 0,
@@ -1425,13 +1460,16 @@ function condensation_growth!(sd::SuperdropletSet{T}, S::Real, Temp::Real,
     Δv = 0.0
     @inbounds for i in idx
         r_old = sd.radius[i]
-        r_new = grow_droplet(r_old, sd.solute_mass[i], S, Temp, p, dt,
+        r_new = grow_droplet(r_old, sd.solute_mass[i], _droplet_S(S, i), Temp, p, dt,
                              sd.aerosol, mc, c; substeps = substeps)
         sd.radius[i] = T(r_new)
         Δv += sd.ξ[i] * (r_new^3 - float(r_old)^3)
     end
     return mc.ρ_water * (4π / 3) * Δv
 end
+
+_droplet_S(S::Real, i) = S
+_droplet_S(S::AbstractVector, i) = S[i]
 
 # =========================================================================
 # Eulerian coupling
