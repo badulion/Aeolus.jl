@@ -1661,6 +1661,15 @@ function _phase_substeps(sd::SuperdropletSet, cell::EulerianCell, Δt::Float64,
     @inbounds for i in idx
         Σξr += sd.ξ[i] * sd.radius[i]
     end
+    return _phase_substeps(Σξr, cell, Δt, mc, c)
+end
+
+# The same rule from the droplet-radius sum Σξr alone, so that a scheme
+# carrying moments instead of droplets (Phase 45 bulk broadening) uses the
+# identical τ_phase and sub-step criterion.
+function _phase_substeps(Σξr::Real, cell::EulerianCell, Δt::Float64,
+                         mc::MicrophysicalConstants,
+                         c::ThermodynamicConstants)
     Σξr <= 0 && return 1
     p = cell_pressure(cell, 0.0, c)
     Dv = vapor_diffusivity(cell.temperature, p, mc)

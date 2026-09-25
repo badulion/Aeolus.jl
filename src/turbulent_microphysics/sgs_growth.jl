@@ -135,9 +135,9 @@ end
 # the error in the integral variance is (h/τ)²/12 ≈ 0.08 %.
 # Capped like Phase 41's `_phase_substeps`, so a tiny τ cannot demand an
 # unbounded loop (or overflow `ceil(Int, ·)`).
-_ou_substeps(fl::SupersaturationFluctuations, Δt) =
-    (fl.σ_S > 0 && isfinite(fl.τ)) ?
-        Int(clamp(ceil(10 * Δt / fl.τ), 1, 100_000)) : 1
+_ou_substeps(σ_S::Real, τ::Real, Δt) =
+    (σ_S > 0 && isfinite(τ)) ? Int(clamp(ceil(10 * Δt / τ), 1, 100_000)) : 1
+_ou_substeps(fl::SupersaturationFluctuations, Δt) = _ou_substeps(fl.σ_S, fl.τ, Δt)
 
 """
     sgs_condensation_growth!(sd, fl, S̄, T, p, dt; indices = nothing,

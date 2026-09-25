@@ -528,5 +528,15 @@ export ccn_fraction, ccn_spectrum,                  # defined in AerosolCloud
        advance_fluctuations!, local_supersaturation,
        supersaturation_integral_variance,
        sgs_condensation_growth!, sgs_condensation_step!
+# Spectral broadening: bulk moment closure of the sub-grid broadening,
+# validated against the superdroplet reference and DNS (issue #14).
+# mean_radius / relative_dispersion / effective_radius gain methods for
+# the bulk state; they remain the Superdroplet / MoistThermodynamics
+# functions.
+export SpectralMoments, spectral_moments, gamma_moment_ratio,
+       closure_radius_moment, r2_standard_deviation,
+       bulk_condensation_step!, parcel_ascent!,
+       BroadeningCase, BroadeningHistory, run_broadening_case,
+       broadening_initial_population, fit_power_law
 
 end # module
