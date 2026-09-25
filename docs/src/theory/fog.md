@@ -91,16 +91,21 @@ sweep of states.
 The contract also has `saturation_adjustment`, which is a different
 operation: a *diagnosis* that recovers ``T`` and the partition from a
 prognostic ``\theta_{li}`` and must reproduce ``\theta_{li}`` exactly.
-``\theta_{li}`` is not isobaric enthalpy — its moist Exner exponent
-``R_m/c_{pm}`` changes as vapour condenses — so applied to the same parcel
-the two disagree. At ``p = p_\text{ref}`` they agree to
+The contract's ``\theta_{li}`` is only approximately conserved by phase
+change — its moist Exner exponent ``R_m/c_{pm}`` is taken at the current
+partition and changes as vapour condenses, where Bryan & Fritsch's exact
+form uses total water only — so applied to the same parcel the two
+disagree. At ``p = p_\text{ref}`` they agree to
 ``|\Delta q_l|/q_l \le 3.2\times10^{-3}`` and ``|\Delta T| \le 10^{-3}`` K
 for 275–310 K and ``S`` = 1.01–1.10, from the exponential ``\theta_{li}``
 form. At 800 hPa, 285 K and ``S`` = 1.05 the diagnosis over-heats by
-2.76 % of ``L_v \Delta q`` and condenses 1.75 % less. That is not a
-defect of either function: condensation during a step is a process and
-uses the enthalpy form; reading the state off a prognostic
-``\theta_{li}`` is a diagnosis and uses the ``\theta_{li}`` form. Before
+2.76 % of ``L_v \Delta q`` and condenses 1.75 % less. Most of that
+gap is the partition-dependent exponent: frozen at total water, the
+diagnosis agrees with the enthalpy form to 0.2–0.3 % at every pressure
+(`test/era4_thermodynamics.jl`). Condensation during a step is a process
+and uses the enthalpy form, which is exact; reading the state off a
+prognostic ``\theta_{li}`` is a diagnosis and must invert whatever
+``\theta_{li}`` the model carries, approximation included. Before
 #82 the contract only had the diagnosis, and #85 recorded this gap as two
 `@test_broken`. They compared against the wrong operation, and are now
 passing tests against the process adjustment.

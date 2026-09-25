@@ -42,10 +42,13 @@ TWO SATURATION ADJUSTMENTS (issue #82)
     **process**: condensation or evaporation during an isobaric step,
     conserving `moist_enthalpy` exactly, with rain and ice in `c_pm`.
 
-They differ because θ_li is not isobaric enthalpy: holding θ_li fixed
-through condensation overstates latent heating by 1.2 % at 900 hPa and
-6.4 % at 600 hPa. Microphysics (P3, fog) uses the process form; the
-sub-grid cloud scheme and parcel CAPE use the diagnosis.
+They differ because this module's θ_li is only approximately conserved
+through condensation: its Exner exponent R_m/c_pm is taken at the current
+partition (Bryan & Fritsch's exact form uses total water only), so
+holding it fixed misstates latent heating by -0.2 % at 1000 hPa, +1.1 %
+at 900 hPa and +6.3 % at 600 hPa (285 K, S = 1.1). Microphysics (P3,
+fog) uses the process form; the sub-grid cloud scheme and parcel CAPE
+use the diagnosis, which must invert whatever θ_li the model carries.
 
 REFERENCES
 
@@ -54,6 +57,9 @@ REFERENCES
     temperature. *Mon. Wea. Rev.*, 108, 1046-1053.
   * Bryan, G. H. & Fritsch, J. M. (2004). A reevaluation of ice-liquid
     water potential temperature. *Mon. Wea. Rev.*, 132, 2421-2431.
+  * Tripoli, G. J. & Cotton, W. R. (1981). The use of ice-liquid water
+    potential temperature as a thermodynamic variable in deep atmospheric
+    models. *Mon. Wea. Rev.*, 109, 1094-1102.
   * Romps, D. M. (2017). Exact expression for the lifting condensation
     level. *J. Atmos. Sci.*, 74, 3891-3900.
 """
@@ -481,15 +487,32 @@ temperature_from_theta(θ::Real, p::Real, q::PhasePartition = PhasePartition(0.0
 """
     liquid_ice_potential_temperature(T, p, q, c) -> θ_li
 
-Liquid-ice potential temperature (Bryan & Fritsch 2004):
+Liquid-ice potential temperature, in an exponential approximation of the
+kind reviewed by Bryan & Fritsch (2004) (cf. Tripoli & Cotton 1981):
 
     θ_li = θ · exp( -(L_v q_liq + L_s q_ice) / (c_pm T) )
 
+with `θ = T/Π` taken at the moist Exner exponent `R_m/c_pm` of the
+**current** partition `q`.
+
 This is the quantity an LES carries as its thermodynamic prognostic,
-because it is **conserved under reversible phase change** — condensation
-raises `T` and lowers `q_vap` in exactly the combination that leaves
-`θ_li` unchanged. Advecting `θ_li` and `q_tot` therefore means phase
-change never has to be advected, which is what keeps a cloud edge sharp.
+because it is **approximately conserved under reversible phase change** —
+condensation raises `T` and lowers `q_vap` in nearly the combination that
+leaves `θ_li` unchanged. Advecting `θ_li` and `q_tot` therefore means
+phase change never has to be advected, which is what keeps a cloud edge
+sharp.
+
+The conservation is not exact, and the dominant error is the exponent.
+Bryan & Fritsch's exact form evaluates it with total water only, so it is
+fixed during phase change; here `R_m/c_pm` moves as vapour becomes
+condensate. Measured against isobaric moist enthalpy (issue #82: 285 K,
+10 % supersaturation), holding this `θ_li` fixed gives
+`c_pm ΔT/(L_v(T₀) Δq)` = 0.998, 1.011 and 1.063 at 1000, 900 and 600 hPa.
+With the exponent frozen at the all-vapour partition the same measure is
+0.998 at every pressure (tests), the residual being the exponential
+approximation, first order in the supersaturation. That is why
+condensation as a *process* uses [`isobaric_saturation_adjustment`](@ref)
+and not an inversion of this function.
 
 The exponential form is used rather than the linearised
 `θ - (L/c_p)(p₀/p)^κ q_l`. The linearisation errs by ~0.3 K at 3 g/kg of
@@ -725,11 +748,14 @@ liquid_water_static_energy(T::Real, z::Real, q::PhasePartition,
 #  (b) PROCESS — `isobaric_saturation_adjustment(T, p, q_v, q_c; q_r, q_i)`.
 #      Condensation or evaporation *during* a step at fixed pressure is a
 #      physical process, and the first law says it conserves the moist
-#      enthalpy `moist_enthalpy` (`c_pm ΔT = L_v Δq` exactly). θ_li is not
-#      that invariant: its Exner exponent R_m/c_pm changes as vapour becomes
-#      condensate, so holding θ_li fixed overstates the latent heating by
-#      `c_pm ΔT/(L_v Δq_c)` = 0.998 at 1000 hPa, 1.012 at 900 hPa and 1.064
-#      at 600 hPa (measured, issue #82). Microphysics schemes (P3, fog) that
+#      enthalpy `moist_enthalpy` (`c_pm ΔT = L_v Δq` exactly). This
+#      module's θ_li is not that invariant: its Exner exponent R_m/c_pm is
+#      taken at the current partition and changes as vapour becomes
+#      condensate, so holding θ_li fixed gives `c_pm ΔT/(L_v(T₀) Δq_c)` =
+#      0.998 at 1000 hPa, 1.011 at 900 hPa and 1.063 at 600 hPa (285 K,
+#      S = 1.1; measured, issue #82). With the exponent frozen at total
+#      water, as in Bryan & Fritsch's exact form, it is 0.998 at every
+#      pressure; the rest is the exponential approximation. Microphysics schemes (P3, fog) that
 #      take T as their state use (b).
 #
 # Both saturate over the same `saturation_specific_humidity`; they differ
@@ -744,11 +770,12 @@ liquid/ice split that put the parcel exactly at saturation (or leave it
 subsaturated with no condensate) *and* reproduce `θ_li` exactly through
 [`liquid_ice_potential_temperature`](@ref).
 
-This is an inversion of the Bryan & Fritsch (2004) θ_li definition, so
+This is an inversion of [`liquid_ice_potential_temperature`](@ref), so
 θ_li-exactness is the correct invariant here. It is **not** the right
-operation for condensation *as a process* during an isobaric step: θ_li
-is not the isobaric enthalpy, and holding it fixed overstates latent
-heating by 1.2 % at 900 hPa and 6.4 % at 600 hPa (issue #82). For that,
+operation for condensation *as a process* during an isobaric step: this
+θ_li is only approximately conserved by phase change (its Exner exponent
+follows the partition), and holding it fixed misstates latent heating by
++1.1 % at 900 hPa and +6.3 % at 600 hPa (issue #82). For that,
 use [`isobaric_saturation_adjustment`](@ref), which conserves
 [`moist_enthalpy`](@ref).
 

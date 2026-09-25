@@ -377,6 +377,37 @@ const MT = Aeolus.MoistThermodynamics
             @test lo < ra < hi
             @test rbr ≈ 1 atol = 1e-12
         end
+        # Attribution (review of #82): the pressure-dependent part of that
+        # gap is the partition-dependent Exner exponent of the contract's
+        # θ_li. Freeze the exponent at total water (as Bryan & Fritsch's
+        # exact form does) and invert the same parcel: the ratio no longer
+        # depends on p. Measured 0.99767, 0.99757, 0.99723 at 1000, 900,
+        # 600 hPa; the residual ~0.25 % is the exponential approximation,
+        # first order in the supersaturation (0.9997 at S = 1.01).
+        function θfix(T, p, q)
+            q0 = PhasePartition(q.tot)
+            κ = MT.gas_constant_moist(q0) / heat_capacity_moist(q0)
+            return T * (c.p_ref / p)^κ *
+                   exp(-latent_heat_vapor(T) * q.liq / (heat_capacity_moist(q) * T))
+        end
+        rf = Float64[]
+        for p in (1.0e5, 9.0e4, 6.0e4), S in (1.1, 1.01)
+            T0 = 285.0
+            qv = S * saturation_specific_humidity(T0, p)
+            θ0 = θfix(T0, p, PhasePartition(qv))
+            f(T) = θfix(T, p, PhasePartition(qv, max(qv - saturation_specific_humidity(T, p), 0.0), 0.0)) - θ0
+            a, b = T0, T0 + 5.0
+            for _ in 1:200
+                m = (a + b) / 2; f(m) < 0 ? (a = m) : (b = m)
+            end
+            T = (a + b) / 2; ql = qv - saturation_specific_humidity(T, p)
+            r = heat_capacity_moist(PhasePartition(qv, ql, 0.0)) * (T - T0) /
+                (latent_heat_vapor(T0) * ql)
+            S == 1.1 && push!(rf, r)
+            @test abs(r - 1) < (S - 1) * 0.03      # first order in S - 1
+        end
+        @printf("    fixed-exponent θ_li: ratio %.5f, %.5f, %.5f at 1000, 900, 600 hPa\n", rf...)
+        @test maximum(rf) - minimum(rf) < 1e-3     # vs 0.066 with the moving exponent
     end
 
     @testset "Naive fixed point diverges where bisection does not" begin
