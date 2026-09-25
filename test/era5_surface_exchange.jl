@@ -6,7 +6,9 @@
 using Test, Printf
 using Aeolus
 using Aeolus.SurfaceExchange
-using Aeolus.MoistThermodynamics: DEFAULT_CONSTANTS
+using Aeolus.MoistThermodynamics: DEFAULT_CONSTANTS, PhasePartition, air_density,
+                                  heat_capacity_moist, saturation_specific_humidity,
+                                  latent_heat_vapor
 
 const SE = Aeolus.SurfaceExchange
 
@@ -192,5 +194,91 @@ const SE = Aeolus.SurfaceExchange
                                  q_a = 0.005, q_s = 0.015, z0m = 0.1, z0h = 0.01)
         @test mv.ζ < 0 && mv.θ_star == 0 && mv.q_star < 0
         @info "C_H stable / neutral / unstable" stable = stable.C_H neutral = neutral.C_H unstable = unstable.C_H ζ_stable = stable.ζ ζ_unstable = unstable.ζ ζ_very_stable = vs.ζ C_H_very_stable = vs.C_H ζ_free_convection = fc.ζ iterations = (stable.iterations, unstable.iterations, vs.iterations)
+    end
+    @testset "Surface interface: one surface_temperature, SlabLand implements it" begin
+        # One generic, owned by SurfaceExchange, extended by Radiation.SlabLand.
+        @test Aeolus.surface_temperature === SE.surface_temperature
+        @test Aeolus.Radiation.surface_temperature === SE.surface_temperature
+        @test SE.surface_albedo === Aeolus.RadiationCore.surface_albedo
+        @test SE.surface_emissivity === Aeolus.RadiationCore.surface_emissivity
+        @test SlabLand <: AbstractSurface
+        land = SlabLand(; T = 300.0, albedo = 0.25, z0m = 0.2)
+        @test surface_temperature(land) == 300.0
+        @test roughness_lengths(land) == (z0m = 0.2, z0h = 0.02, z0q = 0.02)
+        @test surface_albedo(land) == 0.25 && surface_emissivity(land) == 1.0
+        @test moisture_availability(land) == 0
+    end
+
+    # A minimal external implementer: a wet, grey, fixed-temperature surface.
+    struct _WetPatch <: AbstractSurface
+        T::Float64
+        β::Float64
+    end
+    SE.surface_temperature(s::_WetPatch) = s.T
+    SE.roughness_lengths(::_WetPatch) = (z0m = 1e-3, z0h = 1e-4, z0q = 1e-4)
+    SE.surface_albedo(::_WetPatch) = 0.06
+    SE.surface_emissivity(::_WetPatch) = 0.97
+    SE.moisture_availability(s::_WetPatch) = s.β
+
+    @testset "Surface interface: default turbulent_fluxes" begin
+        thermo = DEFAULT_CONSTANTS
+        f = SurfaceForcing(sw_down = 500.0, lw_down = 330.0, T_air = 293.0,
+                           q_air = 0.009, U = 6.0, p = 1.0e5, z_ref = 10.0)
+        land = SlabLand(; T = 303.0)
+        fl = turbulent_fluxes(land, f)
+        # Dry slab: no moisture flux at all (q_s = q_a, not q_s = 0).
+        @test fl.E == 0 && fl.LE == 0
+        @test fl.H > 0 && fl.τ > 0                 # warm ground heats the air
+        @test fl.Rn ≈ fl.H + fl.LE + fl.G rtol = 1e-14
+        @test fl.Rn ≈ 0.8 * 500 + 330 - SE.STEFAN_BOLTZMANN * 303.0^4 rtol = 1e-14
+        # The fluxes are the bulk formulae with the solver's coefficients.
+        θa = 293.0 + Aeolus.MoistThermodynamics.dry_adiabatic_lapse_rate(
+                 PhasePartition(0.009), thermo) * 10
+        sol = solve_surface_layer(; U = 6.0, z_m = 10.0, θ_a = θa, θ_s = 303.0,
+                                  q_a = 0.009, q_s = 0.009, z0m = 0.1, z0h = 0.01)
+        ρ = air_density(293.0, 1.0e5, PhasePartition(0.009))
+        cp = heat_capacity_moist(PhasePartition(0.009))
+        @test fl.H ≈ ρ * cp * sol.C_H * sol.U * (303.0 - θa) rtol = 1e-12
+        @test fl.τ ≈ ρ * sol.C_D * sol.U^2 rtol = 1e-12
+
+        # Wet surface: E = β ρ C_E U (q_sat(T_s) - q_a), LE = L_v(T_s) E.
+        for β in (1.0, 0.3)
+            w = _WetPatch(298.0, β)
+            fw = turbulent_fluxes(w, f)
+            qsat = saturation_specific_humidity(298.0, 1.0e5)
+            qs = surface_specific_humidity(w, f)
+            @test qs ≈ 0.009 + β * (qsat - 0.009) rtol = 1e-14
+            sw = solve_surface_layer(; U = 6.0, z_m = 10.0, θ_a = θa, θ_s = 298.0,
+                                     q_a = 0.009, q_s = qs, z0m = 1e-3, z0h = 1e-4)
+            @test fw.E ≈ β * ρ * sw.C_E * sw.U * (qsat - 0.009) rtol = 1e-12
+            @test fw.LE ≈ latent_heat_vapor(298.0) * fw.E rtol = 1e-14
+            @test fw.Rn ≈ 0.94 * 500 + 0.97 * 330 - 0.97 * SE.STEFAN_BOLTZMANN * 298.0^4 rtol = 1e-14
+            @test fw.Rn ≈ fw.H + fw.LE + fw.G rtol = 1e-12
+        end
+        wet = turbulent_fluxes(_WetPatch(298.0, 1.0), f)
+        # Dew: a surface colder than the air's dew point condenses (E < 0).
+        dew = turbulent_fluxes(_WetPatch(280.0, 1.0), f)
+        @test dew.E < 0 && dew.H < 0
+        @info "turbulent_fluxes (W m⁻²)" slab_H = fl.H slab_Rn = fl.Rn wet_H = wet.H wet_LE = wet.LE wet_Bowen = wet.H / wet.LE dew_E = dew.E
+    end
+
+    @testset "SlabLand.step_surface!: energy closure and equilibrium" begin
+        f = SurfaceForcing(sw_down = 0.0, lw_down = 300.0, T_air = 285.0,
+                           q_air = 0.005, U = 4.0)
+        land = SlabLand(; T = 295.0, C_s = 1e5)
+        T0 = land.T
+        fl = step_surface!(land, f, 60.0)
+        @test land.T - T0 ≈ fl.G * 60.0 / 1e5 rtol = 1e-12     # C_s ΔT = G Δt exactly
+        @test land.T < T0                                     # clear night: cools
+        # Long integration: the slab reaches Rn = H (G → 0) at a skin
+        # temperature between radiative equilibrium and the air.
+        for _ in 1:20_000
+            fl = step_surface!(land, f, 60.0)
+        end
+        T_rad = (300.0 / SE.STEFAN_BOLTZMANN)^(1 / 4)
+        @test abs(fl.G) < 1e-6
+        @test T_rad < land.T < 285.0
+        @test fl.H < 0                                        # stable, air heats ground
+        @info "SlabLand night equilibrium" T_s = land.T T_rad = T_rad H = fl.H G = fl.G
     end
 end

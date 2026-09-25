@@ -22,7 +22,6 @@ include("Parallel.jl")
 include("Nesting.jl")
 include("Backends.jl")
 include("SpectralElement.jl")
-include("Radiation.jl")
 include("Chemistry.jl")
 include("Particles.jl")
 include("ML.jl")
@@ -47,6 +46,7 @@ include("RadiationCore.jl")     # shared spectral / optics / flux contract
 # RadiationCore albedo/emissivity generics, and SlabLand (Radiation.jl)
 # implements its surface interface, so it sits here.
 include("SurfaceExchange.jl")
+include("Radiation.jl")         # SlabLand: first AbstractSurface implementer
 include("GasOptics.jl")         # Phase 32
 include("SurfaceOptics.jl")     # Phase 36
 include("AerosolOptics.jl")     # Phase 37

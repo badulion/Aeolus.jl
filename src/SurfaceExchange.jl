@@ -65,7 +65,11 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        LH_v0, LH_s0, LH_f0, grav, cp_water, cp_ice, von_karman,
        AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
        phi_m, phi_h, psi_m, psi_h,
-       SurfaceLayerSolution, solve_surface_layer, bulk_richardson, obukhov_length
+       SurfaceLayerSolution, solve_surface_layer, bulk_richardson, obukhov_length,
+       AbstractSurface, SurfaceForcing, SurfaceFluxes,
+       surface_temperature, roughness_lengths, surface_albedo, surface_emissivity,
+       moisture_availability, surface_specific_humidity, surface_latent_heat,
+       net_radiation, turbulent_fluxes, step_surface!
 
 # =========================================================================
 # 1. Material constants
@@ -397,6 +401,187 @@ function _illinois(f, a::T, b::T, fa::T, fb::T, maxiter::Integer) where {T}
         abs(fx) <= 4 * eps(T) * max(abs(x), one(T)) && return x, it, true
     end
     return x, maxiter, false
+end
+
+# =========================================================================
+# 4. The surface interface
+# =========================================================================
+
+"""
+    AbstractSurface
+
+Supertype of every Era V surface model (slab, soil column, canopy, urban
+facet, snowpack, sea ice, ocean mixed layer, tile mosaic). An implementer
+`S <: AbstractSurface` provides
+
+| method                                   | returns                                  |
+|:---------------------------------------- |:---------------------------------------- |
+| `surface_temperature(s)`                 | skin temperature, K                      |
+| `roughness_lengths(s)`                   | `(z0m = …, z0h = …, z0q = …)`, m         |
+| `surface_albedo(s)`                      | broadband shortwave albedo               |
+| `surface_emissivity(s)`                  | broadband longwave emissivity            |
+| `step_surface!(s, forcing, dt)`          | advances `s`, returns the `SurfaceFluxes` used |
+
+and may override the optional hooks, whose defaults describe a dry,
+liquid-water surface:
+
+| hook                                     | default                                  |
+|:---------------------------------------- |:---------------------------------------- |
+| `moisture_availability(s)`               | `0` (no evaporation)                     |
+| `surface_specific_humidity(s, forcing)`  | ``q_a + β (q_{sat}(T_s, p) - q_a)``      |
+| `surface_latent_heat(s)`                 | ``L_v(T_s)`` (snow/ice: override with ``L_s``) |
+
+[`turbulent_fluxes`](@ref) then works for any implementer. The spectral
+`surface_albedo(s, band, μ₀)` / `surface_emissivity(s, band)` of
+`RadiationCore` are the *same* functions; the one-argument broadband
+methods are what surface energy balances use.
+"""
+abstract type AbstractSurface end
+
+"""
+    SurfaceForcing(; sw_down = 0, lw_down = 350, T_air = 288.15, q_air = 0.008,
+                     U = 5, p = 101325, z_ref = 10, rain = 0, snow = 0)
+
+Atmospheric forcing seen by a surface over one step: downwelling
+shortwave and longwave irradiance (W m⁻²), air temperature (K) and
+specific humidity (kg kg⁻¹) at the reference height `z_ref` (m), wind
+speed `U` (m s⁻¹) at `z_ref`, surface pressure `p` (Pa), and rain and
+snow mass fluxes (kg m⁻² s⁻¹, positive downward).
+"""
+Base.@kwdef struct SurfaceForcing{T<:AbstractFloat}
+    sw_down::T = 0.0
+    lw_down::T = 350.0
+    T_air::T   = 288.15
+    q_air::T   = 0.008
+    U::T       = 5.0
+    p::T       = 101325.0
+    z_ref::T   = 10.0
+    rain::T    = 0.0
+    snow::T    = 0.0
+end
+SurfaceForcing(xs::Vararg{Real,9}) = SurfaceForcing(promote(map(float, xs)...)...)
+
+"""
+    SurfaceFluxes{T}
+
+Surface energy and momentum fluxes (W m⁻², N m⁻², kg m⁻² s⁻¹):
+
+  * `Rn` — net radiation, positive **into** the surface;
+  * `H`, `LE` — sensible and latent heat, positive **upward**;
+  * `G` — heat into the substrate, positive **downward**; the default
+    [`turbulent_fluxes`](@ref) sets it to the residual ``R_n - H - LE``;
+  * `τ` — momentum flux magnitude ``ρ u_*²``;
+  * `E` — evaporation mass flux ``-ρ u_* q_*``, positive upward
+    (negative = dew / deposition).
+"""
+struct SurfaceFluxes{T<:AbstractFloat}
+    Rn::T
+    H::T
+    LE::T
+    G::T
+    τ::T
+    E::T
+end
+
+"Skin temperature (K) of a surface."
+function surface_temperature end
+"Roughness lengths of a surface as a named tuple `(z0m, z0h, z0q)` (m)."
+function roughness_lengths end
+
+"""
+    step_surface!(s, forcing::SurfaceForcing, dt) -> SurfaceFluxes
+
+Advance surface `s` by `dt` seconds under `forcing` and return the
+fluxes that were applied — which is what the atmosphere needs back.
+"""
+function step_surface! end
+
+"""
+    moisture_availability(s) -> β ∈ [0, 1]
+
+Fraction of potential evaporation a surface delivers (the "β" of bucket
+models). `0` — the default — is a dry surface, `1` open water.
+"""
+moisture_availability(::AbstractSurface) = 0.0
+
+"""
+    surface_specific_humidity(s, forcing; c = DEFAULT_SURFACE_CONSTANTS) -> q_s
+
+Effective specific humidity at the surface. The default is the β form
+``q_s = q_a + β\\,(q_{sat}(T_s, p) - q_a)`` with
+β = [`moisture_availability`](@ref), which gives exactly
+``E = β ρ C_E U (q_{sat} - q_a)``. A dry surface (β = 0) therefore has
+``q_s = q_a`` and *zero* moisture flux — note that ``q_s = 0`` would
+instead be a strong vapour sink. Saturation is from
+`MoistThermodynamics.saturation_specific_humidity` (over liquid).
+Implementers with a resistance formulation, dew, or an ice surface
+override this.
+"""
+function surface_specific_humidity(s::AbstractSurface, f::SurfaceForcing;
+                                   c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    β = moisture_availability(s)
+    β == 0 && return f.q_air
+    q_sat = saturation_specific_humidity(surface_temperature(s), f.p, c.thermo)
+    return f.q_air + β * (q_sat - f.q_air)
+end
+
+"""
+    surface_latent_heat(s; c = DEFAULT_SURFACE_CONSTANTS) -> J kg⁻¹
+
+Latent heat that converts the evaporation mass flux into `LE`. Default
+``L_v(T_s)`` from `MoistThermodynamics.latent_heat_vapor`; snow and ice
+surfaces override with `latent_heat_sublim`.
+"""
+surface_latent_heat(s::AbstractSurface; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    latent_heat_vapor(surface_temperature(s), c.thermo)
+
+"""
+    net_radiation(s, forcing; c = DEFAULT_SURFACE_CONSTANTS) -> W m⁻²
+
+``R_n = (1-α) SW↓ + ε LW↓ - ε σ T_s⁴``, positive into the surface
+(Kirchhoff: the longwave absorptivity equals the emissivity).
+"""
+function net_radiation(s::AbstractSurface, f::SurfaceForcing;
+                       c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    α, ε, Ts = surface_albedo(s), surface_emissivity(s), surface_temperature(s)
+    return (1 - α) * f.sw_down + ε * f.lw_down - ε * c.σ_SB * Ts^4
+end
+
+"""
+    turbulent_fluxes(s, forcing; sf = BusingerDyerBeljaarsHoltslag(),
+                     c = DEFAULT_SURFACE_CONSTANTS, kwargs...) -> SurfaceFluxes
+
+Default flux computation for any [`AbstractSurface`](@ref): solves the
+surface layer between the skin (`surface_temperature`,
+`surface_specific_humidity`, `roughness_lengths`) and the forcing level,
+then
+
+    τ = ρ u_*²,   H = -ρ c_pm u_* θ_*,   E = -ρ u_* q_*,   LE = L E
+
+with ρ and ``c_{pm}`` of the moist air from `MoistThermodynamics`, and
+the air temperature referred to the surface by the dry adiabat,
+``θ_a = T_a + Γ_d z_{ref}``, ``θ_s = T_s``. `Rn` is
+[`net_radiation`](@ref) and `G` the residual ``R_n - H - LE``. `kwargs`
+(`U_min`, `gustiness`, …) are passed to [`solve_surface_layer`](@ref).
+"""
+function turbulent_fluxes(s::AbstractSurface, f::SurfaceForcing;
+                          sf::AbstractStabilityFunctions = BusingerDyerBeljaarsHoltslag(),
+                          c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS, kwargs...)
+    Ts = surface_temperature(s)
+    z0 = roughness_lengths(s)
+    qa = PhasePartition(f.q_air)
+    θ_a = f.T_air + dry_adiabatic_lapse_rate(qa, c.thermo) * f.z_ref
+    q_s = surface_specific_humidity(s, f; c = c)
+    sol = solve_surface_layer(sf; U = f.U, z_m = f.z_ref, θ_a = θ_a, θ_s = Ts,
+                              q_a = f.q_air, q_s = q_s,
+                              z0m = z0.z0m, z0h = z0.z0h, z0q = z0.z0q, c = c, kwargs...)
+    ρ = air_density(f.T_air, f.p, qa, c.thermo)
+    cp = heat_capacity_moist(qa, c.thermo)
+    H = -ρ * cp * sol.u_star * sol.θ_star
+    E = -ρ * sol.u_star * sol.q_star
+    LE = surface_latent_heat(s; c = c) * E
+    Rn = net_radiation(s, f; c = c)
+    return SurfaceFluxes(promote(Rn, H, LE, Rn - H - LE, ρ * sol.u_star^2, E)...)
 end
 
 end # module
