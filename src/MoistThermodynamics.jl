@@ -441,6 +441,18 @@ exner_function(p::Real, q::PhasePartition = PhasePartition(0.0),
                c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
     (float(p) / c.p_ref)^(gas_constant_moist(q, c) / heat_capacity_moist(q, c))
 
+"""
+    air_density(T, p, q = PhasePartition(0.0), c = DEFAULT_CONSTANTS) -> kg m⁻³
+
+Density of moist air (dry air + vapour + condensate) from the ideal-gas
+law with the moist gas constant of [`gas_constant_moist`](@ref):
+
+    ρ = p / (R_m T)
+
+Condensate adds mass but negligible volume, so at fixed `T`, `p` and
+vapour it *raises* `ρ` through the `(1 - q_tot)` factor in `R_m`.
+`specific_volume` is `1/ρ`.
+"""
 air_density(T::Real, p::Real, q::PhasePartition = PhasePartition(0.0),
             c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
     float(p) / (gas_constant_moist(q, c) * float(T))

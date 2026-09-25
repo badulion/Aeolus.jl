@@ -9,94 +9,18 @@ The theory behind these modules is developed in
 [Visibility](../theory/visibility.md),
 [Fog and dew](../theory/fog.md) and
 [Radiation fog](../theory/radiation_fog.md);
-this page is the generated API reference.
+the pages below are the generated API reference, one per module.
 
-## P3 microphysics (Phase 40)
-
-`P3Microphysics` implements the Morrison–Milbrandt predicted-particle-
-properties scheme. Its size-distribution integrals rest on the in-package
-gamma and regularised incomplete gamma functions documented here; its
-sedimentation (one fall speed per moment, Courant sub-stepping) and
-radar reflectivity (rain Rayleigh ``Z``, ice equivalent ``Z_e``) are
-the observables it is validated with. Secondary ice from Hallett–Mossop
-rime splintering is driven by its riming rates.
-
-```@autodocs
-Modules = [Aeolus.P3Microphysics]
-```
-
-## Ice nucleation (Phase 43)
-
-`IceNucleation` carries ice-nucleating particles (mineral dust and
-primary biological aerosol) as prognostic modal tracers with an
-available/consumed budget, and provides the log-normal number and
-surface-area diagnostics that heterogeneous freezing parameterisations
-are written in. On top of that population it implements immersion
-freezing (Niemand et al. 2012, Ullrich et al. 2017, DeMott et al. 2015,
-Tobo et al. 2013) and deposition nucleation (Ullrich et al. 2017), and
-returns ice number and mass source terms with the matching INP, liquid
-and vapour sinks and latent heat (`ice_nucleation!`). Those sources are
-coupled into the P3 ice category (`p3_ice_nucleation`,
-`p3_inp_release!`), and the phase is validated on a 1-D ISDAC-style
-mixed-phase Arctic stratus column (`run_arctic_stratus`).
-
-```@autodocs
-Modules = [Aeolus.IceNucleation]
-```
-
-## Terminal-velocity spectrum and precipitation fraction (Phase 44)
-
-The Kessler scheme's rain now falls at the mass-weighted speed of its
-Marshall–Palmer spectrum (`kessler_fall_speed`, in `Aeolus.Microphysics`,
-see [Physics](physics.md)), and P3 gains a sub-grid precipitation
-fraction carried down the column with maximum, random or maximum-random
-overlap (`p3_precipitation_fraction`, `p3_fractional_process_rates`,
-`p3_step_column`), documented with the P3 module above. Theory:
-[P3 microphysics](../theory/p3.md), last section.
-
-## Turbulence-microphysics interaction (Phase 45)
-
-Sub-grid distribution of the saturation deficit, partial cloud fraction
-and condensate, and the SGS variance that drives them (issue #12); that
-distribution fed into aerosol activation and stochastic condensational
-growth (issue #13); and the bulk moment closure of the broadening with its
-superdroplet/DNS validation case (issue #14: `SpectralMoments`,
-`bulk_condensation_step!`, `parcel_ascent!`, `run_broadening_case`). All
-of these live in one module, so the block below covers all three issues.
-The bulk state also extends `Superdroplet.mean_radius`,
-`Superdroplet.relative_dispersion` and
-`MoistThermodynamics.effective_radius`. The CCN spectrum they delegate
-to, `ccn_fraction` / `ccn_spectrum`, lives in `AerosolCloud` (Phase 42).
-
-```@autodocs
-Modules = [Aeolus.TurbulentMicrophysics]
-```
-
-## Visibility diagnostic (Phase 44)
-
-Koschmieder visibility from droplet, haze and molecular extinction at
-550 nm, plus the Kunkel (1984) and Gultepe et al. (2006) fog
-parameterisations. Theory: [Visibility](../theory/visibility.md).
-
-```@autodocs
-Modules = [Aeolus.Visibility]
-```
-
-## Fog and dew condensation (Phase 44)
-
-`RadiationFog` couples fog (condensation in the air) and dew
-(deposition onto a cold surface) to the vapour field with the exact
-moist enthalpy of the `MoistThermodynamics` contract. Both steps are
-saturation-limited and unconditionally stable in the time step.
-
-The same module carries the radiation-fog feedback (#9): the droplet
-field (LWC, `N_d`, `r_eff`) is passed to the Era III radiation —
-`GasOptics`, `TwoStream.MieCloudOptics`, `RadiationCore.combine_optics!`
-and the two-stream solver — through [`fog_atmospheric_column`](@ref) and
-[`fog_radiative_transfer!`](@ref), and a 1-D column ([`FogColumn`](@ref),
-[`parisfog_2011_column`](@ref)) runs fog through formation, fog-top
-cooling and dissipation. See [Radiation fog](../theory/radiation_fog.md).
-
-```@autodocs
-Modules = [Aeolus.RadiationFog]
-```
+- [Shared contract — MoistThermodynamics (Phase 39)](era4/moist_thermodynamics.md) — `Aeolus.MoistThermodynamics`
+- [P3 microphysics (Phase 40)](era4/p3_microphysics.md) — `Aeolus.P3Microphysics`, split by topic:
+  [process rates and secondary ice](era4/p3_processes.md),
+  [sedimentation, reflectivity and precipitation fraction](era4/p3_sedimentation.md)
+- [Superdroplet microphysics (Phase 41)](era4/superdroplet.md) — `Aeolus.Superdroplet`
+- [Aerosol-cloud interaction (Phase 42)](era4/aerosol_cloud.md) — `Aeolus.AerosolCloud`
+- [Ice nucleation (Phase 43)](era4/ice_nucleation.md) — `Aeolus.IceNucleation`
+- [Terminal-velocity spectrum and precipitation fraction (Phase 44)](era4/p3_microphysics.md#Terminal-velocity-spectrum-and-precipitation-fraction-(Phase-44))
+  — no module of its own: P3 part in `Aeolus.P3Microphysics`, Kessler part in
+  `Aeolus.Microphysics` (documented under [Physics modules](physics.md#Microphysics))
+- [Visibility diagnostic (Phase 44)](era4/visibility.md) — `Aeolus.Visibility`
+- [Fog and dew condensation (Phase 44)](era4/radiation_fog.md) — `Aeolus.RadiationFog`
+- [Turbulence-microphysics interaction (Phase 45)](era4/turbulent_microphysics.md) — `Aeolus.TurbulentMicrophysics`
