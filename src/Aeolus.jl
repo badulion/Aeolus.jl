@@ -453,5 +453,12 @@ export P3IceParameters, P3_DEFAULT_ICE, P3MassDimension,
        p3_mean_mass, p3_ice_mass, p3_bulk_density,
        p3_slope, p3_size_distribution,
        p3_air_viscosity, p3_fall_speed, p3_bulk_fall_speed
+# P3 process rates (issue #3)
+export P3ProcessParameters, P3_DEFAULT_PROCESS, P3ParcelState,
+       p3_total_water,
+       p3_autoconversion, p3_accretion, p3_rain_self_collection,
+       p3_cober_list_density, p3_rime_density,
+       p3_condensation, p3_ventilation,
+       p3_process_rates, p3_tendencies, p3_limit_rates, p3_step
 
 end # module
