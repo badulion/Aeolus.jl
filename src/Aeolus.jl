@@ -58,6 +58,7 @@ include("Microphysics.jl")         # Phase 12 Kessler; delegates rain fall speed
 include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
+include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 
 using .Grids
 using .Fields
@@ -104,6 +105,7 @@ using .P3Microphysics
 using .IceNucleation
 using .TurbulentMicrophysics
 using .Visibility                  # Phase 44
+using .RadiationFog                # Phase 44
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -386,7 +388,8 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        supersaturation, supersaturation_ice,
        kelvin_coefficient, kohler_supersaturation, kohler_critical_point,
        kohler_equilibrium_radius, surface_tension_water,
-       kappa_from_solute, solute_from_kappa
+       kappa_from_solute, solute_from_kappa,
+       moist_enthalpy
 
 # Phase 42 — aerosol-cloud interaction (Kohler activation)
 # Kohler theory itself lives in the Phase 39 contract; the names here
@@ -552,5 +555,9 @@ export KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD, VISIBILITY_WAVELENGTH,
        droplet_extinction, fog_extinction, aerosol_extinction,
        rayleigh_extinction, rayleigh_cross_section, total_extinction,
        visibility, kunkel_visibility, gultepe_visibility
+
+# Phase 44 — fog / dew condensation coupled to the vapour field
+export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
+       dew_deposition, dew_exchange!
 
 end # module

@@ -35,6 +35,7 @@ makedocs(
             "SGS activation and growth"   => "theory/sgs_activation_growth.md",
             "Spectral broadening"         => "theory/spectral_broadening.md",
             "Visibility (Koschmieder)"    => "theory/visibility.md",
+            "Fog and dew"                 => "theory/fog.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

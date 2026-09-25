@@ -896,4 +896,5 @@ end
         include("era4_sgs_growth.jl")      # Phase 45  SGS activation and growth
         include("era4_broadening.jl")      # Phase 45  spectral broadening validation
         include("era4_visibility.jl")      # Phase 44  visibility diagnostic
+        include("era4_fog.jl")             # Phase 44  fog / dew coupling (#11)
 end

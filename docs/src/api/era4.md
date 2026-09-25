@@ -5,8 +5,9 @@ The theory behind these modules is developed in
 [Ice nucleation](../theory/ice_nucleation.md),
 [Sub-grid cloud and supersaturation PDF](../theory/subgrid_cloud.md),
 [Sub-grid supersaturation in activation and droplet growth](../theory/sgs_activation_growth.md),
-[Spectral broadening: bulk closure and validation](../theory/spectral_broadening.md) and
-[Visibility](../theory/visibility.md);
+[Spectral broadening: bulk closure and validation](../theory/spectral_broadening.md),
+[Visibility](../theory/visibility.md) and
+[Fog and dew](../theory/fog.md);
 this page is the generated API reference.
 
 ## P3 microphysics (Phase 40)
@@ -78,4 +79,15 @@ parameterisations. Theory: [Visibility](../theory/visibility.md).
 
 ```@autodocs
 Modules = [Aeolus.Visibility]
+```
+
+## Fog and dew condensation (Phase 44)
+
+`RadiationFog` couples fog (condensation in the air) and dew
+(deposition onto a cold surface) to the vapour field with the exact
+moist enthalpy of the `MoistThermodynamics` contract. Both steps are
+saturation-limited and unconditionally stable in the time step.
+
+```@autodocs
+Modules = [Aeolus.RadiationFog]
 ```
