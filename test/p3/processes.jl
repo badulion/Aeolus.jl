@@ -519,4 +519,67 @@ using Aeolus: MoistThermodynamics, AerosolCloud, Superdroplet
         @test all(diff(qcs) .<= 1e-12) && all(diff(qrs) .>= -1e-12)
         @test qrs[end] > 0.5e-3
     end
+
+    @testset "Size limits: one definition shared with sedimentation" begin
+        P3 = Aeolus.P3Microphysics
+        # Ice: the mean-size limiter lives only in massdim.jl.
+        @test !isdefined(P3, :_p3_ice_lambda_bounds)
+        # The clean-up step's N_i adjustment uses exactly those limits: ice
+        # with mass but (almost) no number is given the number of the
+        # largest allowed PSD, (μ+1)/λ = 5 mm + 20 mm·F_rim².
+        qi, qrim = 1e-4, 4e-5
+        s = P3ParcelState(T = 260.0, p = 7e4, q_v = 1e-3, q_i = qi, N_i = 1e-300,
+                          q_rim = qrim, B_rim = qrim / 400)
+        md = p3_mass_dimension(qi, qrim, qrim / 400, pp.ice)
+        λmin, λmax = P3._p3_ice_λ_limits(pp.μ_i, md.F_rim)
+        @test λmin ≈ (pp.μ_i + 1) / (5e-3 + 2e-2 * md.F_rim^2) rtol = 1e-15
+        @test λmax ≈ (pp.μ_i + 1) / 2e-6 rtol = 1e-15
+        @test P3._p3_cleanup(s, pp).N_i ≈ qi / p3_mean_mass(pp.μ_i, λmin, md) rtol = 1e-12
+        s2 = P3ParcelState(T = 260.0, p = 7e4, q_v = 1e-3, q_i = qi, N_i = 1e30,
+                           q_rim = qrim, B_rim = qrim / 400)
+        @test P3._p3_cleanup(s2, pp).N_i ≈ qi / p3_mean_mass(pp.μ_i, λmax, md) rtol = 1e-12
+
+        # Rain: the process rates and sedimentation/radar see the identical
+        # PSD (N0, λ) for the same (q_r, N_r), with and without the limiter.
+        # Where the limiter is active, λ and N_r are those of P3's
+        # get_rain_dsd2: λ = (μ+1)·1e5 or (μ+1)/0.002, and
+        # N_r = 6 λ³ q_r / (π ρ_w (μ+3)(μ+2)(μ+1)).
+        @test !hasfield(P3ProcessParameters, :D_r_min)
+        @test !hasfield(P3ProcessParameters, :D_r_max)
+        ρw = pp.micro.ρ_water
+        nlim = 0
+        for μr in (0.0, 3.0), (q, N) in ((1e-3, 1e4),    # mean 0.32 mm: free
+                                         (1e-3, 10.0),   # 3.2 mm: large-drop limit
+                                         (1e-3, 1e-3),   # mass, ~no number
+                                         (1e-6, 1e9),    # 0.7 μm: small-drop limit
+                                         (5e-5, 3e5))    # free
+            ppμ = P3ProcessParameters{Float64}(μ_r = μr)
+            λp, Np = P3._p3_rain_slope(q, N, ppμ)
+            N0p = gamma_psd_intercept(Np, μr, λp)
+            Ns = p3_rain_limit_number(q, N; μ_r = μr)
+            N0s, μs, λs = p3_rain_size_distribution(q, Ns; μ_r = μr)
+            @test μs == μr
+            @test λp == λs
+            @test N0p == N0s
+            @test Np == Ns
+            # the slope sedimentation uses before the number adjustment
+            # (equal to rounding: after the adjustment λ is recomputed from
+            # the limited N_r and lands on the bound to ~1 ulp)
+            @test λp ≈ p3_rain_size_distribution(q, N; μ_r = μr)[3] rtol = 1e-14
+            # the limited PSD carries exactly the mass
+            @test π / 6 * ρw * gamma_psd_moment(N0p, μr, λp, 3) ≈ q rtol = 1e-12
+            Dmean = (μr + 1) / λp
+            @test P3_RAIN_D_MEAN_MIN * (1 - 1e-12) <= Dmean <= P3_RAIN_D_MEAN_MAX * (1 + 1e-12)
+            if Np != N
+                nlim += 1
+                λref = N > Np ? (μr + 1) * 1e5 : (μr + 1) * (1 / 0.002)
+                @test λp ≈ λref rtol = 1e-12
+                @test Np ≈ 6 * λref^3 * q / (π * ρw * (μr + 3) * (μr + 2) * (μr + 1)) rtol = 1e-12
+            end
+            # the clean-up step applies the same number adjustment
+            sc = P3ParcelState(T = 285.0, p = 9e4, q_v = 5e-3, q_r = q, N_r = N)
+            @test P3._p3_cleanup(sc, ppμ).N_r == Ns
+        end
+        @test nlim == 6        # limiter active in 3 states × 2 shapes
+    end
 end
