@@ -54,6 +54,7 @@ include("SolarGeometry.jl")     # Phase 38
 
 include("AerosolCloud.jl")         # Phase 42
 include("Superdroplet.jl")         # Phase 41
+include("P3Microphysics.jl")       # Phase 40
 include("IceNucleation.jl")        # Phase 43
 
 using .Grids
@@ -97,6 +98,7 @@ using .SolarGeometry
 using .MoistThermodynamics
 using .AerosolCloud
 using .Superdroplet
+using .P3Microphysics
 using .IceNucleation
 
 # Re-exports for the user-facing API.
@@ -437,6 +439,37 @@ export AMMONIUM_SULFATE, AerosolProperties, CollisionKernel,
        raoult_b, relative_dispersion, size_distribution,
        surface_tension, terminal_velocity, thermal_conductivity,
        total_number, total_water_mass, vapor_diffusivity
+
+# Phase 40 — P3 (predicted particle properties) bulk microphysics
+# Gamma-function names carry `_lanczos` / `gamma_inc_*` spellings so they
+# cannot collide with SpecialFunctions in user code that loads both.
+export lgamma_lanczos, gamma_lanczos,
+       gamma_inc_lower, gamma_inc_upper, gamma_inc_pq,
+       gamma_psd_density, gamma_psd_moment, gamma_psd_partial_moment,
+       gamma_psd_intercept, gamma_psd_slope
+# P3 mass-dimension relation and rime density: `P3`/`p3_` prefixed, since
+# generic names (`particle_mass`, `fall_speed`) are taken or too ambiguous.
+export P3IceParameters, P3_DEFAULT_ICE, P3MassDimension,
+       p3_rime_state, p3_mass_dimension, p3_regime,
+       p3_particle_mass, p3_particle_area,
+       p3_mean_mass, p3_ice_mass, p3_bulk_density,
+       p3_slope, p3_size_distribution,
+       p3_air_viscosity, p3_fall_speed, p3_bulk_fall_speed
+# P3 process rates (issue #3)
+export P3ProcessParameters, P3_DEFAULT_PROCESS, P3ParcelState,
+       p3_total_water,
+       p3_autoconversion, p3_accretion, p3_rain_self_collection,
+       p3_cober_list_density, p3_rime_density,
+       p3_condensation, p3_ventilation,
+       p3_process_rates, p3_tendencies, p3_limit_rates, p3_step
+
+# P3 sedimentation (per-moment fall speeds, sub-stepped column) and radar
+# reflectivity; `p3_` prefixed next to Superdroplet's `terminal_velocity`.
+export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
+       p3_rain_bulk_fall_speed, p3_rain_rate, p3_bulk_fall_speed_z,
+       P3_K2_WATER, P3_K2_ICE, p3_rain_reflectivity, p3_ice_reflectivity, p3_dbz,
+       p3_sediment!, p3_rain_sedimentation_velocities, p3_sediment_rain!,
+       p3_ice_sedimentation_velocities, p3_sediment_ice!
 
 # Phase 43 — ice nucleation: prognostic INP species (dust, biological)
 # and their available/consumed budget. All names are `inp_`-prefixed or
