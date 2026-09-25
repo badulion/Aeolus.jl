@@ -70,7 +70,8 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        kohler_equilibrium_radius, surface_tension_water,
        kappa_from_solute, solute_from_kappa,
        effective_radius,
-       moist_enthalpy
+       moist_enthalpy, temperature_from_moist_enthalpy,
+       isobaric_saturation_adjustment
 
 # =========================================================================
 # Constants
@@ -640,7 +641,9 @@ at fixed `h`, `q_tot` and pressure warms the parcel by exactly
 
     c_pm(q_final) · ΔT = L_v(T_initial) · Δq ,
 
-with `c_pm` = [`heat_capacity_moist`](@ref). `RadiationFog` relies on it.
+with `c_pm` = [`heat_capacity_moist`](@ref). It is what
+[`isobaric_saturation_adjustment`](@ref) conserves, and
+[`temperature_from_moist_enthalpy`](@ref) inverts it.
 """
 function moist_enthalpy(T::Real, q::PhasePartition,
                         c::ThermodynamicConstants = DEFAULT_CONSTANTS)
@@ -648,6 +651,34 @@ function moist_enthalpy(T::Real, q::PhasePartition,
     return (c.cp_dry * (1 - q.tot) + c.cp_liquid * q.tot) * Tk +
            latent_heat_vapor(Tk, c) * vapor(q) -
            latent_heat_fusion(Tk, c) * q.ice
+end
+
+"""
+    temperature_from_moist_enthalpy(h, q, c = DEFAULT_CONSTANTS; T_ref = c.T_triple) -> T
+
+Temperature at which the parcel with phase partition `q` has moist
+enthalpy `h` ([`moist_enthalpy`](@ref)), i.e. the exact inverse of
+`moist_enthalpy` at a known partition.
+
+With Kirchhoff latent heats (constant specific heats) `moist_enthalpy` is
+exactly *linear* in `T` at fixed partition, and its slope is
+[`heat_capacity_moist`](@ref)`(q)`:
+
+    ∂h/∂T = c_pd q_d + c_l q_tot + (c_pv − c_l) q_v − (c_l − c_i) q_ice = c_pm(q),
+
+so one linear step from any reference temperature is exact:
+
+    T = T_ref + (h − h(T_ref, q)) / c_pm(q).
+
+The result does not depend on `T_ref` except at round-off; passing the
+pre-step temperature as `T_ref` keeps the answer closest to it in floating
+point.
+"""
+function temperature_from_moist_enthalpy(h::Real, q::PhasePartition,
+                                         c::ThermodynamicConstants = DEFAULT_CONSTANTS;
+                                         T_ref::Real = c.T_triple)
+    Tr = float(T_ref)
+    return Tr + (float(h) - moist_enthalpy(Tr, q, c)) / heat_capacity_moist(q, c)
 end
 
 """
@@ -664,13 +695,48 @@ liquid_water_static_energy(T::Real, z::Real, q::PhasePartition,
 # =========================================================================
 # Saturation adjustment
 # =========================================================================
+#
+# TWO OPERATIONS, TWO INVARIANTS (issue #82). "Saturation adjustment" names
+# two different things, and they must not be confused:
+#
+#  (a) DIAGNOSIS — `saturation_adjustment(θ_li, p, q_tot)`. A model that
+#      carries θ_li and q_tot as prognostic variables must, at every point
+#      and every step, *recover* T and the vapour/condensate split that its
+#      prognostic θ_li denotes. That is an inversion of the θ_li definition
+#      at saturation, so the answer must reproduce θ_li exactly — anything
+#      else would change the model's prognostic state just by reading it.
+#      Also used for reversible parcel ascent at constant θ_li (CAPE, LFC)
+#      and by the sub-grid cloud scheme (TurbulentMicrophysics).
+#
+#  (b) PROCESS — `isobaric_saturation_adjustment(T, p, q_v, q_c; q_r, q_i)`.
+#      Condensation or evaporation *during* a step at fixed pressure is a
+#      physical process, and the first law says it conserves the moist
+#      enthalpy `moist_enthalpy` (`c_pm ΔT = L_v Δq` exactly). θ_li is not
+#      that invariant: its Exner exponent R_m/c_pm changes as vapour becomes
+#      condensate, so holding θ_li fixed overstates the latent heating by
+#      `c_pm ΔT/(L_v Δq_c)` = 0.998 at 1000 hPa, 1.012 at 900 hPa and 1.064
+#      at 600 hPa (measured, issue #82). Microphysics schemes (P3, fog) that
+#      take T as their state use (b).
+#
+# Both saturate over the same `saturation_specific_humidity`; they differ
+# only in which quantity is held fixed while doing it.
 
 """
     saturation_adjustment(θ_li, p, q_tot, c; ...) -> (T, PhasePartition)
 
-Given the conserved variables `θ_li` and `q_tot`, find the temperature
-and the liquid/ice split that put the parcel exactly at saturation (or
-leave it subsaturated with no condensate).
+**Diagnosis** of the thermodynamic state from the conserved variables:
+given the prognostic `θ_li` and `q_tot`, find the temperature and the
+liquid/ice split that put the parcel exactly at saturation (or leave it
+subsaturated with no condensate) *and* reproduce `θ_li` exactly through
+[`liquid_ice_potential_temperature`](@ref).
+
+This is an inversion of the Bryan & Fritsch (2004) θ_li definition, so
+θ_li-exactness is the correct invariant here. It is **not** the right
+operation for condensation *as a process* during an isobaric step: θ_li
+is not the isobaric enthalpy, and holding it fixed overstates latent
+heating by 1.2 % at 900 hPa and 6.4 % at 600 hPa (issue #82). For that,
+use [`isobaric_saturation_adjustment`](@ref), which conserves
+[`moist_enthalpy`](@ref).
 
 # Why this is bisection and not a fixed-point iteration
 
@@ -744,7 +810,9 @@ end
     saturation_adjustment_ice(θ_li, p, q_tot, c) -> (T, PhasePartition)
 
 As [`saturation_adjustment`](@ref) but saturating with respect to **ice**
-throughout, for the cirrus regime where no liquid is present.
+throughout, for the cirrus regime where no liquid is present. Like it,
+this is a **diagnosis** from `θ_li` (exact inversion), not an
+enthalpy-conserving process step.
 """
 function saturation_adjustment_ice(θ_li::Real, p::Real, q_tot::Real,
                                    c::ThermodynamicConstants = DEFAULT_CONSTANTS;
@@ -774,6 +842,94 @@ function saturation_adjustment_ice(θ_li::Real, p::Real, q_tot::Real,
     end
     qi = min(max(0.0, qt - saturation_specific_humidity_ice(T, pp, c)), qt)
     return T, PhasePartition(qt, 0.0, qi)
+end
+
+"""
+    isobaric_saturation_adjustment(T, p, q_v, q_c, c = DEFAULT_CONSTANTS;
+                                   q_r = 0, q_i = 0, tol = 1e-14, maxiter = 100)
+        -> (Δq, T)
+
+**Process** saturation adjustment: condensation of vapour to cloud liquid,
+or evaporation of cloud liquid, at constant pressure `p` and constant
+moist enthalpy ([`moist_enthalpy`](@ref)) — the first-law invariant of an
+isobaric phase change. Returns the amount condensed `Δq` (kg kg⁻¹;
+negative when cloud evaporates) and the adjusted temperature `T`.
+
+Only vapour `q_v` and cloud liquid `q_c` exchange mass. Rain `q_r` and
+ice `q_i` are **non-adjusting**: they do not change, but they are part of
+the parcel, so they enter its heat capacity `c_pm` (and `q_i` its
+enthalpy through `L_f`). Leaving them out overstates the condensational
+`ΔT` by about 1.5 % per 5 g kg⁻¹ of rain and 0.5 % per 5 g kg⁻¹ of ice.
+
+The target is saturation over **liquid** (supercooled below 0 °C — cloud
+liquid becomes ice only by explicit microphysics); if even evaporating all
+of `q_c` leaves the air subsaturated, all of it evaporates. Subsaturated
+air without cloud is returned unchanged. The adjusted state satisfies,
+exactly up to round-off,
+
+    h(T, q_v − Δq, q_c + Δq, q_r, q_i) = h(T₀, q_v, q_c, q_r, q_i),
+
+equivalently `c_pm(q_final) ΔT = L_v(T₀) Δq`, and `q_v + q_c` is conserved.
+
+# Algorithm
+
+`h` is linear in `T` at a fixed partition
+([`temperature_from_moist_enthalpy`](@ref)), so `T(Δ)` is explicit and
+the problem is the scalar root of `g(Δ) = (q_v − Δ) − q_s(T(Δ), p)`,
+which is strictly decreasing (condensing removes vapour *and* warms, which
+raises `q_s`) on the bracket `Δ ∈ [−q_c, q_v]`. A safeguarded Newton
+iteration (Clausius–Clapeyron slope) inside the bracket cannot fail; the
+convergence test is made on the current iterate *before* the update, so a
+root hit exactly is kept rather than replaced by the bracket midpoint
+(a bug found in review of #85, which had returned half the condensate for
+some cold inputs).
+
+Compare [`saturation_adjustment`](@ref), which *diagnoses* `(T, q_c)` from
+a prognostic `θ_li` and conserves θ_li instead (see the section comment).
+
+References: Emanuel (1994) §4.5; issue #82.
+"""
+function isobaric_saturation_adjustment(T::Real, p::Real, q_v::Real, q_c::Real,
+                                        c::ThermodynamicConstants = DEFAULT_CONSTANTS;
+                                        q_r::Real = 0.0, q_i::Real = 0.0,
+                                        tol::Real = 1e-14, maxiter::Int = 100)
+    T0 = float(T); pp = float(p)
+    qv0 = max(float(q_v), 0.0); qc0 = max(float(q_c), 0.0)
+    qr = max(float(q_r), 0.0);  qi = max(float(q_i), 0.0)
+    qt = qv0 + qc0 + qr + qi
+    # Partition after condensing Δ: rain counts as liquid, ice as ice.
+    part(Δ) = PhasePartition(qt, qc0 + Δ + qr, qi)
+    h0 = moist_enthalpy(T0, part(0.0), c)
+    Tof(Δ) = temperature_from_moist_enthalpy(h0, part(Δ), c; T_ref = T0)
+    g(Δ)   = (qv0 - Δ) - saturation_specific_humidity(Tof(Δ), pp, c)
+
+    g0 = g(0.0)
+    g0 == 0 && return (Δq = 0.0, T = T0)
+    if g0 < 0                      # subsaturated: can only evaporate cloud
+        qc0 == 0 && return (Δq = 0.0, T = T0)
+        lo, hi = -qc0, 0.0
+        g(lo) <= 0 && return (Δq = lo, T = Tof(lo))   # all cloud evaporates
+    else                           # supersaturated: condense
+        lo, hi = 0.0, qv0
+    end
+    # Safeguarded Newton on the bracket [lo, hi] with g(lo) > 0 > g(hi).
+    Rv = R_v(c)
+    Δ = 0.5 * (lo + hi)
+    for _ in 1:maxiter
+        gΔ = g(Δ)
+        # Converged: keep THIS Δ (test before the update — see docstring).
+        abs(gΔ) < tol && break
+        gΔ > 0 ? (lo = Δ) : (hi = Δ)
+        (hi - lo) < tol && break
+        Tn = Tof(Δ)
+        qs = qv0 - Δ - gΔ
+        # dq_s/dT from Clausius-Clapeyron, dT/dΔ ≈ L_v / c_pm.
+        Lv = latent_heat_vapor(Tn, c)
+        dg = -1 - qs * Lv / (Rv * Tn^2) * Lv / heat_capacity_moist(part(Δ), c)
+        Δn = Δ - gΔ / dg
+        Δ  = (lo < Δn < hi) ? Δn : 0.5 * (lo + hi)
+    end
+    return (Δq = Δ, T = Tof(Δ))
 end
 
 # =========================================================================
