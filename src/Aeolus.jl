@@ -56,6 +56,7 @@ include("Superdroplet.jl")         # Phase 41
 include("P3Microphysics.jl")       # Phase 40
 include("Microphysics.jl")         # Phase 12 Kessler; delegates rain fall speeds to P3 (Phase 44)
 include("IceNucleation.jl")        # Phase 43
+include("TurbulentMicrophysics.jl") # Phase 45
 
 using .Grids
 using .Fields
@@ -100,6 +101,7 @@ using .AerosolCloud
 using .Superdroplet
 using .P3Microphysics
 using .IceNucleation
+using .TurbulentMicrophysics
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -504,5 +506,37 @@ export AerosolCountScheme, DeMott2015, FreezingScheme, IceNucleationTendency,
 export p3_ice_nucleation, p3_inp_release!,
        ArcticStratusColumn, isdac_initial_profile, run_arctic_stratus,
        glaciation_time
+
+# Phase 45 — turbulence-microphysics interaction
+# Sub-grid saturation-deficit PDF, partial cloud fraction and condensate
+# (issue #12). Thermodynamics is the Phase 39 contract's.
+export AbstractSaturationPDF, GaussianSaturationPDF,
+       DoubleGaussianSaturationPDF,
+       saturation_pdf_density, exceedance_fraction,
+       pdf_cloud_fraction, pdf_condensate,
+       MellorCoefficients, mellor_coefficients, saturation_deficit_variance,
+       extended_condensate, SubgridCloud, subgrid_cloud,
+       GEOMETRIC_VARIANCE_COEFF, equilibrium_variance_coefficient,
+       filter_width, sgs_scalar_covariance!, sgs_scalar_variance!,
+       subgrid_cloud!
+# Sub-grid supersaturation in activation (Phase 42 CCN spectrum) and
+# condensational growth (Phase 41 superdroplets) (issue #13).
+export ccn_fraction, ccn_spectrum,                  # defined in AerosolCloud
+       pdf_expectation, sgs_ccn_fraction, sgs_ccn_spectrum,
+       SGSActivationResult, sgs_activation,
+       SupersaturationFluctuations, supersaturation_fluctuations,
+       advance_fluctuations!, local_supersaturation,
+       supersaturation_integral_variance,
+       sgs_condensation_growth!, sgs_condensation_step!
+# Spectral broadening: bulk moment closure of the sub-grid broadening,
+# validated against the superdroplet reference and DNS (issue #14).
+# mean_radius / relative_dispersion / effective_radius gain methods for
+# the bulk state; they remain the Superdroplet / MoistThermodynamics
+# functions.
+export SpectralMoments, spectral_moments, gamma_moment_ratio,
+       closure_radius_moment, r2_standard_deviation,
+       bulk_condensation_step!, parcel_ascent!,
+       BroadeningCase, BroadeningHistory, run_broadening_case,
+       broadening_initial_population, fit_power_law
 
 end # module

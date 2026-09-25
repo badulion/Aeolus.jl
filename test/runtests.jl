@@ -892,4 +892,7 @@ end
         include("era4_superdroplet.jl")    # Phase 41  superdroplet microphysics
         include("era4_p3.jl")              # Phase 40  P3 microphysics
         include("era4_icenucleation.jl")   # Phase 43  ice nucleation
+        include("era4_turbmicro.jl")       # Phase 45  sub-grid supersaturation PDF
+        include("era4_sgs_growth.jl")      # Phase 45  SGS activation and growth
+        include("era4_broadening.jl")      # Phase 45  spectral broadening validation
 end

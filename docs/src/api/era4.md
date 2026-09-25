@@ -1,9 +1,12 @@
 # Era IV — High-fidelity clouds and microphysics
 
 The theory behind these modules is developed in
-[P3 microphysics](../theory/p3.md) and
-[Ice nucleation](../theory/ice_nucleation.md); this page is the
-generated API reference.
+[P3 microphysics](../theory/p3.md),
+[Ice nucleation](../theory/ice_nucleation.md),
+[Sub-grid cloud and supersaturation PDF](../theory/subgrid_cloud.md),
+[Sub-grid supersaturation in activation and droplet growth](../theory/sgs_activation_growth.md) and
+[Spectral broadening: bulk closure and validation](../theory/spectral_broadening.md);
+this page is the generated API reference.
 
 ## P3 microphysics (Phase 40)
 
@@ -47,3 +50,21 @@ fraction carried down the column with maximum, random or maximum-random
 overlap (`p3_precipitation_fraction`, `p3_fractional_process_rates`,
 `p3_step_column`), documented with the P3 module above. Theory:
 [P3 microphysics](../theory/p3.md), last section.
+
+## Turbulence-microphysics interaction (Phase 45)
+
+Sub-grid distribution of the saturation deficit, partial cloud fraction
+and condensate, and the SGS variance that drives them (issue #12); that
+distribution fed into aerosol activation and stochastic condensational
+growth (issue #13); and the bulk moment closure of the broadening with its
+superdroplet/DNS validation case (issue #14: `SpectralMoments`,
+`bulk_condensation_step!`, `parcel_ascent!`, `run_broadening_case`). All
+of these live in one module, so the block below covers all three issues.
+The bulk state also extends `Superdroplet.mean_radius`,
+`Superdroplet.relative_dispersion` and
+`MoistThermodynamics.effective_radius`. The CCN spectrum they delegate
+to, `ccn_fraction` / `ccn_spectrum`, lives in `AerosolCloud` (Phase 42).
+
+```@autodocs
+Modules = [Aeolus.TurbulentMicrophysics]
+```
