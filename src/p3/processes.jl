@@ -43,7 +43,6 @@ MM15) unless noted.
 | `D_shed` | 1e-3 | diameter of drops shed from melting ice, m |
 | `N_c_prescribed` | 200e6 | droplet number given to newly formed cloud, m⁻³ |
 | `μ_r`, `μ_i` | 0, 0 | gamma shape parameters of rain and ice |
-| `D_r_min`, `D_r_max` | 20e-6, 5e-3 | bounds on the rain mean-volume diameter, m |
 | `cap_agg` | 0.48 | capacitance of nonspherical ice relative to a sphere, `C = 0.48 D/2` |
 | `ice` | `P3_DEFAULT_ICE` | [`P3IceParameters`](@ref) |
 | `thermo` | `DEFAULT_CONSTANTS` | `MoistThermodynamics.ThermodynamicConstants` |
@@ -73,8 +72,6 @@ Base.@kwdef struct P3ProcessParameters{T<:AbstractFloat}
     N_c_prescribed::T = 200e6
     μ_r::T = 0.0
     μ_i::T = 0.0
-    D_r_min::T = 20e-6
-    D_r_max::T = 5e-3
     cap_agg::T = 0.48
     ice::P3IceParameters{T} = P3_DEFAULT_ICE
     thermo::ThermodynamicConstants{T} = DEFAULT_CONSTANTS
@@ -404,13 +401,13 @@ _p3_no_thresholds(p::P3IceParameters{T}) where {T} =
     P3MassDimension{T}(zero(T), p.ρ_rim_default, zero(T), zero(T),
                        T(Inf), T(Inf), T(Inf), p)
 
-# Rain PSD slope from (q_r, N_r) for spheres of density ρ_w, with N_r
-# bounded so that the mean-volume diameter lies in [D_r_min, D_r_max].
+# Rain PSD slope and limited number from (q_r, N_r). Not computed here:
+# this is sedimentation.jl's P3 rain PSD (p3_rain_limit_number, then
+# p3_rain_size_distribution; mean size (μ+1)/λ ∈ [10 μm, 2 mm]), so the
+# process rates, sedimentation and radar reflectivity see the same drops.
 function _p3_rain_slope(q_r, N_r, pp::P3ProcessParameters)
-    μ = pp.μ_r
-    mD(D) = π / 6 * pp.micro.ρ_water * D^3
-    Nr = clamp(N_r, q_r / mD(pp.D_r_max), q_r / mD(pp.D_r_min))
-    λ = gamma_psd_slope(Nr, 0, q_r / (π / 6 * pp.micro.ρ_water), 3, μ)
+    Nr = p3_rain_limit_number(q_r, N_r; μ_r = pp.μ_r)
+    _, _, λ = p3_rain_size_distribution(q_r, Nr; μ_r = pp.μ_r)
     return λ, Nr
 end
 
@@ -448,9 +445,8 @@ function _p3_ice_integrals(μ, λ, md::P3MassDimension{T}, ρa, η, Sc13,
     return (Cf = Cf, C = C, AV = AV, AVrM = AVrM, AVrN = AVrN, V_M = vm / m)
 end
 
-# P3's physical limiter on the ice mean size (μ+1)/λ ∈ [2 μm, 5 mm + 20 mm F_rim²]
-# (create_p3_lookupTable_1.f90), as a λ bracket.
-_p3_ice_lambda_bounds(μ, F_rim) = ((μ + 1) / (5e-3 + 2e-2 * F_rim^2), (μ + 1) / 2e-6)
+# The ice mean-size limiter is `_p3_ice_λ_limits` (massdim.jl), the one
+# place its numbers live; sedimentation uses the same function.
 
 # -------------------------------------------------------------------------
 # All process rates
@@ -510,7 +506,9 @@ rime melts in proportion.
 
 Ice PSD: gamma with shape `μ_i` and λ from [`p3_slope`](@ref) with the
 P3 mean-size limiter (2 μm to 5 mm + 20 mm F_rim²). Rain PSD: gamma with
-shape `μ_r`, mean-volume diameter bounded to `[D_r_min, D_r_max]`.
+shape `μ_r` from [`p3_rain_size_distribution`](@ref) after
+[`p3_rain_limit_number`](@ref) — the same PSD sedimentation and radar
+use, mean diameter `(μ_r+1)/λ_r` in `[10 μm, 2 mm]` (P3 `get_rain_dsd2`).
 """
 function p3_process_rates(s::P3ParcelState{FT},
                           pp::P3ProcessParameters = P3_DEFAULT_PROCESS) where {FT}
@@ -557,7 +555,7 @@ function p3_process_rates(s::P3ParcelState{FT},
     shed = n_shed_c = n_shed_r = melt = n_melt = z
     if have_i
         md = p3_mass_dimension(s.q_i, s.q_rim, s.B_rim, pp.ice)
-        λmin, λmax = _p3_ice_lambda_bounds(pp.μ_i, md.F_rim)
+        λmin, λmax = _p3_ice_λ_limits(pp.μ_i, md.F_rim)
         λi = p3_slope(s.q_i, s.N_i, md; μ = pp.μ_i, λ_min = λmin, λ_max = λmax)
         ii = _p3_ice_integrals(pp.μ_i, λi, md, ρa, η, Sc13, VrN, VrM, pp)
 
@@ -762,15 +760,14 @@ function _p3_cleanup(s::P3ParcelState{FT}, pp::P3ProcessParameters) where {FT}
         Nc = pp.N_c_prescribed / air_density(T, s.p, _p3_partition(s), c)
     end
     if qr > 0
-        mD(D) = π / 6 * pp.micro.ρ_water * D^3
-        Nr = clamp(Nr, qr / mD(pp.D_r_max), qr / mD(pp.D_r_min))
+        Nr = p3_rain_limit_number(qr, Nr; μ_r = pp.μ_r)
     end
     if qi > 0
         qrim = clamp(qrim, z, qi)
         Brim = max(Brim, z)
         _, _, Brim = p3_rime_state(qi, qrim, Brim, pp.ice)
         md = p3_mass_dimension(qi, qrim, Brim, pp.ice)
-        λmin, λmax = _p3_ice_lambda_bounds(pp.μ_i, md.F_rim)
+        λmin, λmax = _p3_ice_λ_limits(pp.μ_i, md.F_rim)
         m_lo = p3_mean_mass(pp.μ_i, λmax, md)
         m_hi = p3_mean_mass(pp.μ_i, λmin, md)
         # P3 adjusts N_i when the mean size leaves its limiter (MM15 §2b)
@@ -780,7 +777,9 @@ function _p3_cleanup(s::P3ParcelState{FT}, pp::P3ProcessParameters) where {FT}
 end
 
 """
-    p3_step(s::P3ParcelState, dt, pp = P3_DEFAULT_PROCESS; adjust = true) -> P3ParcelState
+    p3_step(s::P3ParcelState, dt, pp = P3_DEFAULT_PROCESS; adjust = true,
+            cloud_fraction = nothing, precip_fraction = nothing, f_min = 0.01,
+            hallett_mossop = nothing) -> P3ParcelState
 
 Advance the P3 microphysical source terms (no transport, no
 sedimentation) of one cell by `dt` seconds:
@@ -792,9 +791,13 @@ sedimentation) of one cell by `dt` seconds:
     their latent heat), rime is clamped to `0 ≤ q_rim ≤ q_i` and
     `ρ_rim ∈ [50, 900]` via [`p3_rime_state`](@ref), `N_i` is adjusted
     when the ice mean size leaves P3's limiter and `N_r` when the rain
-    mean-volume diameter leaves `[D_r_min, D_r_max]`;
+    mean diameter leaves `[10 μm, 2 mm]` ([`p3_rain_limit_number`](@ref));
  5. if `adjust`, cloud condensation/evaporation by
     [`p3_condensation`](@ref) (`MoistThermodynamics.saturation_adjustment`).
+
+`hallett_mossop = P3_DEFAULT_HM` (a [`P3HallettMossop`](@ref)) adds rime
+splintering to step 3; it is off by default. See
+[`p3_step_with_rates`](@ref) for the variant that also returns the rates.
 
 Total water `q_v + q_c + q_r + q_i` is conserved to rounding in every
 stage. Steps 1-4 conserve the enthalpy form `c_pm ΔT = -L_v Δq_v +
@@ -813,7 +816,34 @@ still the grid-mean all-or-nothing adjustment.
 function p3_step(s::P3ParcelState{FT}, dt::Real,
                  pp::P3ProcessParameters = P3_DEFAULT_PROCESS;
                  adjust::Bool = true, cloud_fraction = nothing,
-                 precip_fraction = nothing, f_min::Real = 0.01) where {FT}
+                 precip_fraction = nothing, f_min::Real = 0.01,
+                 hallett_mossop = nothing) where {FT}
+    return first(p3_step_with_rates(s, dt, pp; adjust, cloud_fraction,
+                                    precip_fraction, f_min, hallett_mossop))
+end
+
+"""
+    p3_step_with_rates(s, dt, pp = P3_DEFAULT_PROCESS; adjust = true,
+                       cloud_fraction = nothing, precip_fraction = nothing,
+                       f_min = 0.01, hallett_mossop = nothing)
+        -> (P3ParcelState, rates)
+
+[`p3_step`](@ref), also returning the limited process rates that were
+applied (the NamedTuple of [`p3_limit_rates`](@ref), or the
+area-weighted, region-by-region limited rates of
+[`p3_fractional_process_rates`](@ref) when a cloud or precipitation
+fraction is given), so a host can book side effects of individual
+processes — e.g. release the ice-nucleating particles of sublimated ice
+(`n_sub`). With `hallett_mossop` a [`P3HallettMossop`](@ref), rime
+splintering ([`p3_hm_tendencies`](@ref)) is added to the tendencies,
+driven by the same limited riming rates; the default `nothing` leaves it
+off.
+"""
+function p3_step_with_rates(s::P3ParcelState{FT}, dt::Real,
+                            pp::P3ProcessParameters = P3_DEFAULT_PROCESS;
+                            adjust::Bool = true, cloud_fraction = nothing,
+                            precip_fraction = nothing, f_min::Real = 0.01,
+                            hallett_mossop = nothing) where {FT}
     # The fractional rates are limited region by region (see
     # p3_fractional_process_rates); the grid-mean ones here.
     r = cloud_fraction === nothing && precip_fraction === nothing ?
@@ -821,6 +851,10 @@ function p3_step(s::P3ParcelState{FT}, dt::Real,
         p3_fractional_process_rates(s, something(cloud_fraction, 1),
                                     something(precip_fraction, 1), pp;
                                     f_min = f_min, dt = dt)
-    s1 = _p3_cleanup(_p3_axpy(s, dt, p3_tendencies(s, r, pp)), pp)
-    return adjust ? p3_condensation(s1, pp) : s1
+    ds = p3_tendencies(s, r, pp)
+    if hallett_mossop !== nothing
+        ds = _p3_axpy(ds, 1, p3_hm_tendencies(s, r, hallett_mossop, pp))
+    end
+    s1 = _p3_cleanup(_p3_axpy(s, dt, ds), pp)
+    return (adjust ? p3_condensation(s1, pp) : s1, r)
 end

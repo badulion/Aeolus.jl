@@ -28,6 +28,7 @@ The module is split into part-files under `src/p3/`:
   * `processes.jl`     — microphysical process rates
   * `sedimentation.jl` — sedimentation and radar reflectivity
   * `precip_fraction.jl` — sub-grid precipitation fraction and overlap
+  * `secondary.jl`     — Hallett–Mossop rime splintering, nucleated-ice mass
 
 Thermodynamics (saturation vapour pressures, latent heats, saturation
 adjustment) is NOT re-derived here: it comes from the Era IV contract
@@ -87,6 +88,7 @@ include("p3/processes.jl")
 # --- sedimentation.jl -----------------------------------------------------
 export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
        p3_rain_bulk_fall_speed, p3_rain_rate, p3_bulk_fall_speed_z,
+       P3_RAIN_D_MEAN_MIN, P3_RAIN_D_MEAN_MAX,
        P3_K2_WATER, P3_K2_ICE, p3_rain_reflectivity, p3_ice_reflectivity, p3_dbz,
        p3_sediment!, p3_rain_sedimentation_velocities, p3_sediment_rain!,
        p3_ice_sedimentation_velocities, p3_sediment_ice!
@@ -98,5 +100,12 @@ export p3_precipitation_overlap, p3_precipitation_fraction,
        p3_fractional_process_rates, p3_step_column
 
 include("p3/precip_fraction.jl")
+
+# --- secondary.jl ---------------------------------------------------------
+export P3_NUCLEATED_ICE_MASS, P3_HM_SPLINTER_MASS, P3HallettMossop, P3_DEFAULT_HM,
+       p3_hm_temperature_factor, p3_hm_large_drop_fraction, p3_hm_rimer_diameter,
+       p3_hallett_mossop, p3_hm_tendencies, p3_step_with_rates
+
+include("p3/secondary.jl")
 
 end # module

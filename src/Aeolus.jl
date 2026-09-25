@@ -467,12 +467,18 @@ export P3ProcessParameters, P3_DEFAULT_PROCESS, P3ParcelState,
 # reflectivity; `p3_` prefixed next to Superdroplet's `terminal_velocity`.
 export p3_rain_fall_speed, p3_rain_size_distribution, p3_rain_limit_number,
        p3_rain_bulk_fall_speed, p3_rain_rate, p3_bulk_fall_speed_z,
+       P3_RAIN_D_MEAN_MIN, P3_RAIN_D_MEAN_MAX,
        P3_K2_WATER, P3_K2_ICE, p3_rain_reflectivity, p3_ice_reflectivity, p3_dbz,
        p3_sediment!, p3_rain_sedimentation_velocities, p3_sediment_rain!,
        p3_ice_sedimentation_velocities, p3_sediment_ice!
 # P3 sub-grid precipitation fraction and overlap (Phase 44, issue #8)
 export p3_precipitation_overlap, p3_precipitation_fraction,
        p3_fractional_process_rates, p3_step_column
+
+# P3 secondary ice (issue #7): Hallett-Mossop rime splintering
+export P3_NUCLEATED_ICE_MASS, P3_HM_SPLINTER_MASS, P3HallettMossop, P3_DEFAULT_HM,
+       p3_hm_temperature_factor, p3_hm_large_drop_fraction, p3_hm_rimer_diameter,
+       p3_hallett_mossop, p3_hm_tendencies, p3_step_with_rates
 
 # Phase 43 — ice nucleation: prognostic INP species (dust, biological)
 # and their available/consumed budget. All names are `inp_`-prefixed or
@@ -494,5 +500,9 @@ export AerosolCountScheme, DeMott2015, FreezingScheme, IceNucleationTendency,
        freezing_regime, ice_active_site_density, ice_nucleation!,
        ice_number_formed, inas_frozen_fraction, nucleation_rates,
        scheme_temperature_range, singular_inp_concentration
+# Phase 43 (issue #7) — nucleation sources into the P3 ice category.
+export p3_ice_nucleation, p3_inp_release!,
+       ArcticStratusColumn, isdac_initial_profile, run_arctic_stratus,
+       glaciation_time
 
 end # module

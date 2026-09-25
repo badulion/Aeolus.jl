@@ -247,4 +247,25 @@
         Pq, _, _ = p3_sediment_rain!(qr, Nr, ρ, dz, 60.0)
         @test sum(ρ .* qr .* dz) + Pq ≈ M0 rtol = 1e-13
     end
+
+    @testset "combined with Hallett-Mossop (issues #7 + #8 merge)" begin
+        # Mixed-phase riming state at -5 °C, where rime splintering peaks.
+        s = P3ParcelState{Float64}(268.15, 7e4, 3e-3, 5e-4, 1e8, 1e-3, 1e4,
+                                   1e-3, 1e5, 5e-4, 5e-4 / 400)
+        tw(x) = x.q_v + x.q_c + x.q_r + x.q_i
+        grid, _ = p3_step_with_rates(s, 10.0; hallett_mossop = P3_DEFAULT_HM)
+        full, _ = p3_step_with_rates(s, 10.0; hallett_mossop = P3_DEFAULT_HM,
+                                     cloud_fraction = 1.0, precip_fraction = 1.0)
+        frac, _ = p3_step_with_rates(s, 10.0; hallett_mossop = P3_DEFAULT_HM,
+                                     cloud_fraction = 0.4, precip_fraction = 0.6)
+        nohm = p3_step(s, 10.0; cloud_fraction = 0.4, precip_fraction = 0.6)
+        # fractions of one are the grid-mean step, splinters included
+        @test full == grid
+        # splinters are still produced when the rates come from the regions
+        @test frac.N_i > nohm.N_i
+        # p3_step forwards both options to p3_step_with_rates
+        @test p3_step(s, 10.0; hallett_mossop = P3_DEFAULT_HM,
+                      cloud_fraction = 0.4, precip_fraction = 0.6) == frac
+        @test tw(frac) ≈ tw(s) rtol = 1e-14
+    end
 end
