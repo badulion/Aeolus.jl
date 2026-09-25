@@ -37,7 +37,7 @@ pressure and cloud droplets (`N_liq = N_c ρ`, `M_liq = q_c ρ`, with
 
 so total water `q_v + q_c + q_r + q_i` is unchanged to rounding, every
 crystal formed is one P3 ice particle, and the heating is the
-`c_pm dT = -L_v dq_v + L_f dq_i` of [`p3_tendencies`](@ref). Crystals
+`c_pm dT = -L_v dq_v + L_f dq_i` of [`p3_tendencies`](@ref Aeolus.P3Microphysics.p3_tendencies). Crystals
 nucleated from vapour have mass `NUCLEATED_ICE_MASS`, which *is*
 `P3_NUCLEATED_ICE_MASS`.
 
@@ -45,7 +45,7 @@ Only cloud droplets freeze: P3 rain has no immersion-freezing process
 here (the Bigg rain freezing of the P3 code is not implemented), and
 rain is untouched even at `T ≤ T_icenuc`.
 
-Note that the next [`p3_step`](@ref) applies P3's mean-size limiter
+Note that the next [`p3_step`](@ref Aeolus.P3Microphysics.p3_step) applies P3's mean-size limiter
 (mean diameter ≥ 2 μm): a population made only of deposition-nucleated
 1-μm crystals is below it and has its number reduced there, as in the
 P3 code — this function itself conserves number exactly.
