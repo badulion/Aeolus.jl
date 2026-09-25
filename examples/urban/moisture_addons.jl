@@ -191,8 +191,7 @@ Base.propertynames(::TwoMomentState) = (:q_v, :q_l, :q_r, :q_i, :N_c, :N_r)
 
 """
     apply_two_moment_micro!(state, dt; k_auto=1e-3, ql_c=1e-3, k_acc=2.2,
-                            ρ_a=1.0, mesh=state.q_v.mesh, Vt_floor=4.0,
-                            Vt_cap=10.0)
+                            ρ_a=1.0, mesh=state.q_v.mesh)
 
 Advance the two-moment warm-rain state by `dt`. Steps:
 
@@ -203,21 +202,27 @@ Advance the two-moment warm-rain state by `dt`. Steps:
   2. Accretion       ql → qr : `dq_r/dt = k_acc · q_l · q_r^{7/8}` (Kessler
      form); the fractional loss `Δq_l / q_l` is applied to `N_c` too, so
      droplet number tracks the mass being scavenged.
-  3. Rain sedimentation      : cell-wise terminal velocity
-     `V_t = 6.5 · (q_r · ρ_a / N_r)^{1/6}` (from the mean-mass equivalent
-     of a Marshall–Palmer distribution), falling back to `Vt_floor = 4 m/s`
-     when `N_r` is not populated, then a 1st-order upwind step on both
-     `q_r` and `N_r` with a CFL cap at 0.5.
+  3. Rain sedimentation (Phase 44): delegated column by column to
+     `Aeolus.p3_sediment_rain!` — `q_r` falls at the mass-weighted and
+     `N_r` at the number-weighted speed of the gamma drop spectrum given
+     by `(q_r, N_r)` (drop terminal velocities of
+     `Superdroplet.terminal_velocity`), flux-form upwind with Courant
+     sub-stepping, so rain mass is conserved exactly and size sorting is
+     represented. This replaces a single cell-wise speed
+     `6.5 (q_r ρ_a / N_r)^{1/6}` with a 4 m/s floor whose upwind update
+     took the inflow from above at the *receiving* cell's Courant number
+     and so created or destroyed mass wherever the speed varied (+0.068 %
+     in 20 s for a 9-level shaft of 0-1 g kg⁻¹).
 
-References: Morrison & Milbrandt (2015) two-moment framework; Kessler
-(1969) rates for autoconv/accretion; Marshall & Palmer (1948) sizing.
+`N_r` is carried per m³ here and converted to per kg (÷ ρ_a) for the P3
+call. References: Morrison & Milbrandt (2015) two-moment framework;
+Kessler (1969) rates for autoconv/accretion.
 Returns the mutated `state`.
 """
 function apply_two_moment_micro!(state::TwoMomentState, dt::Real;
                                  k_auto::Real=1e-3, ql_c::Real=1e-3,
                                  k_acc::Real=2.2, ρ_a::Real=1.0,
-                                 mesh::AbstractMesh=state.q_v.mesh,
-                                 Vt_floor::Real=4.0, Vt_cap::Real=10.0)
+                                 mesh::AbstractMesh=state.q_v.mesh)
     ii, jj, kk = interior(mesh)
     dz = mesh.dz
     Δt = float(dt)
@@ -259,22 +264,21 @@ function apply_two_moment_micro!(state::TwoMomentState, dt::Real;
         end
     end
 
-    # ---- 3 : rain sedimentation (1st-order upwind, cell-wise Vt) --------
-    kend = last(kk)
-    @inbounds for k in kk, j in jj, i in ii
-        qre = max(qrd[i, j, k], 0.0)
-        nre = nrd[i, j, k]
-        Vt  = (qre > 1e-12 && nre > 1.0) ?
-                 6.5 * (qre * ρ_a / nre)^(1/6) : Vt_floor
-        Vt  = clamp(Vt, 0.0, Vt_cap)
-        α   = min(Vt * Δt / dz, 0.5)
-        k_up = k + 1
-        q_in  = k_up <= kend ? qrd[i, j, k_up] : 0.0
-        q_out = qrd[i, j, k]
-        qrd[i, j, k] = q_out + α * (q_in - q_out)
-        n_in  = k_up <= kend ? nrd[i, j, k_up] : 0.0
-        n_out = nrd[i, j, k]
-        nrd[i, j, k] = n_out + α * (n_in - n_out)
+    # ---- 3 : rain sedimentation: size-dependent fall speeds (P3) --------
+    nz = length(kk)
+    ρcol = fill(float(ρ_a), nz)
+    qcol = zeros(nz); ncol = zeros(nz)
+    @inbounds for j in jj, i in ii
+        for (n, k) in enumerate(kk)
+            qcol[n] = max(qrd[i, j, k], 0.0)
+            ncol[n] = max(nrd[i, j, k], 0.0) / ρ_a      # m⁻³ → kg⁻¹
+        end
+        any(>(0), qcol) || continue
+        p3_sediment_rain!(qcol, ncol, ρcol, dz, Δt)
+        for (n, k) in enumerate(kk)
+            qrd[i, j, k] = qcol[n]
+            nrd[i, j, k] = ncol[n] * ρ_a
+        end
     end
 
     return state

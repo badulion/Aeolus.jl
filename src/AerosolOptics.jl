@@ -538,6 +538,24 @@ const _AMMONIUM_NITRATE = AerosolSpecies(:ammonium_nitrate,
      1.2e-1, 1.5e-1, 2.0e-1, 2.6e-1],
     1.725, 0.67, "Jarzembski et al. (2003); Toon et al. (1976)")
 
+# Primary biological aerosol (PBAP: bacteria, fungal spores, pollen
+# fragments). Present here because it is one of the two ice-nucleating
+# particle classes carried by Phase 43 (`IceNucleation`) — the INP tracer
+# needs the same species record (density, κ) as every other aerosol so
+# that there is one definition of what a "biological particle" is.
+#
+# The optical constants are NOMINAL, not a measured table: PBAP optics
+# are poorly constrained and vary by organism (Després et al. 2012 review
+# the range). A flat n = 1.53 with weak absorption k = 1e-3 is used as a
+# representative value for dry cellular material; at the INP
+# concentrations this species exists to carry (< 1 cm⁻³) its radiative
+# effect is negligible, so the placeholder cannot bias a forcing result.
+# Density 1.2 g cm⁻³ and κ = 0.1 (weakly hygroscopic organic material)
+# are likewise nominal mid-range values, not fits to a measurement.
+const _BIOLOGICAL = AerosolSpecies(:biological,
+    [0.25, 100.0], [1.53, 1.53], [1.0e-3, 1.0e-3],
+    1.2, 0.10, "Nominal PBAP optics; Després et al. (2012), Tellus B 64, 15598")
+
 const _SPECIES_REGISTRY = Dict{Symbol, AerosolSpecies}(
     :water            => _WATER,
     :sulphate         => _SULPHATE,
@@ -549,6 +567,8 @@ const _SPECIES_REGISTRY = Dict{Symbol, AerosolSpecies}(
     :dust             => _MINERAL_DUST,
     :sea_salt         => _SEA_SALT,
     :ammonium_nitrate => _AMMONIUM_NITRATE,
+    :biological       => _BIOLOGICAL,
+    :bioaerosol       => _BIOLOGICAL,
 )
 
 """
@@ -557,8 +577,10 @@ const _SPECIES_REGISTRY = Dict{Symbol, AerosolSpecies}(
 Look up a species from the built-in library. Available:
 `:sulphate` (alias `:sulfate`), `:black_carbon` (alias `:soot`),
 `:organic_carbon`, `:mineral_dust` (alias `:dust`), `:sea_salt`,
-`:ammonium_nitrate`, and `:water` (the condensed phase used for
-hygroscopic mixing).
+`:ammonium_nitrate`, `:biological` (alias `:bioaerosol`; primary
+biological particles, nominal optics — carried for ice nucleation, see
+`IceNucleation`), and `:water` (the condensed phase used for hygroscopic
+mixing).
 
 The returned objects are library singletons; the internal optics cache
 relies on that, so do not mutate the returned tables.
