@@ -12,7 +12,10 @@ rime splintering is driven by its riming rates. Theory:
 The module's API is large, so it is split by topic over three pages:
 
 - this page — the module, gamma functions and gamma size-distribution
-  moments, and the mass–dimension relation across the rime regimes;
+  moments, and the mass–dimension relation across the rime regimes with
+  what follows from it: the ice parameters (`P3IceParameters`), the ice
+  size distribution and slope, and the single-particle and bulk ice fall
+  speeds (`p3_fall_speed`, `p3_bulk_fall_speed`);
 - [P3 process rates and secondary ice](p3_processes.md) — the process
   rates, the time step (`p3_tendencies`, `p3_step`) and Hallett–Mossop
   rime splintering;
@@ -31,7 +34,7 @@ maximum-random overlap (`p3_precipitation_fraction`,
 [P3 sedimentation, reflectivity and precipitation fraction](p3_sedimentation.md).
 Theory: [P3 microphysics](../../theory/p3.md), last section.
 
-## Gamma functions and the mass–dimension relation
+## Gamma functions, mass–dimension relation and ice fall speed
 
 ```@autodocs
 Modules = [Aeolus.P3Microphysics]

@@ -6,7 +6,10 @@ reflectivity diagnostics (rain Rayleigh ``Z``, ice equivalent ``Z_e``),
 and the Phase 44 sub-grid precipitation fraction carried down the column
 with maximum, random or maximum-random overlap
 (`p3_precipitation_fraction`, `p3_fractional_process_rates`,
-`p3_step_column`). The rain sedimentation here is also what the Kessler
+`p3_step_column`). The ice fall speed these moments are weighted with
+(`p3_fall_speed`, `p3_bulk_fall_speed`) follows from the mass–dimension
+relation and is documented on the [P3 microphysics](p3_microphysics.md)
+page. The rain sedimentation here is also what the Kessler
 scheme in `Aeolus.Microphysics` delegates its Marshall–Palmer fall speed
 to (see [Physics modules](../physics.md#Microphysics)). Theory:
 [P3 microphysics](../../theory/p3.md), sections "Sedimentation, size
