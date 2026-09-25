@@ -29,14 +29,19 @@
 
     @testset "Default off: bit-identical to the grid-mean scheme" begin
         # p3_step(s, 10 s) recorded on origin/integration/p3-icenuc before
-        # this change (shortest round-trip repr, so == is bitwise).
+        # this change (shortest round-trip repr, so == is bitwise), and
+        # re-recorded for issue #82, when p3_condensation (step 5) moved
+        # from the θ_li diagnosis to the enthalpy-conserving process
+        # adjustment. That shifted only T, q_v and q_c of step 5: T by
+        # +0.0138 K (warm), +0.0006 K (cold), +0.0045 K (melt); the
+        # sub-grid-fraction code under test here was not touched.
         ref = [
-            [283.77091794003206, 90000.0, 0.008217628079583062, 0.0, 0.0,
+            [283.7847623122012, 90000.0, 0.008217628079583062, 0.0, 0.0,
              0.00040232076000317564, 19268.96044637655, 0.0, 0.0, 0.0, 0.0],
-            [263.1576801470028, 70000.0, 0.0025518763338975552, 0.00028286742653199507,
+            [263.15825174821794, 70000.0, 0.002551991706534512, 0.00028275205389503854,
              9.725197277522258e7, 0.00017553639040846392, 9929.506893599479,
              0.00044004646557073787, 200000.0, 0.0001327076912658683, 3.117083421982849e-7],
-            [275.73584054911197, 80000.0, 0.005742139152933741, 6.206106867812696e-5,
+            [275.74035972657447, 80000.0, 0.005743990840089086, 6.0209381522781445e-5,
              4.597795875836948e7, 0.001314154405572437, 104931.78433446621,
              0.0, 0.0, 0.0, 0.0]]
         for (s, r) in zip((warm, cold, melt), ref)

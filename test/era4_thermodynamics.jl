@@ -239,6 +239,187 @@ const MT = Aeolus.MoistThermodynamics
         @test isfinite(Tn) && qn.tot == 0
     end
 
+    # Issue #82: two different operations, two different invariants.
+    #   (a) saturation_adjustment            — DIAGNOSIS from prognostic θ_li,
+    #       must invert the θ_li definition exactly;
+    #   (b) isobaric_saturation_adjustment   — PROCESS, must conserve moist
+    #       enthalpy exactly, with non-adjusting rain and ice in c_pm.
+    @testset "Enthalpy inverse: temperature_from_moist_enthalpy" begin
+        worst = 0.0
+        for T in 200.0:10.0:330.0, (qt, ql, qi) in ((0.0, 0.0, 0.0),
+                (1e-2, 0.0, 0.0), (2e-2, 3e-3, 0.0), (1e-2, 2e-3, 1e-3),
+                (5e-3, 0.0, 4e-3))
+            q = PhasePartition(qt, ql, qi)
+            h = moist_enthalpy(T, q)
+            for Tr in (c.T_triple, 150.0, T + 7.0)
+                worst = max(worst, abs(temperature_from_moist_enthalpy(h, q; T_ref = Tr) - T) / T)
+            end
+            # the slope of h in T at fixed partition IS c_pm (Kirchhoff)
+            @test moist_enthalpy(T + 1, q) - moist_enthalpy(T, q) ≈
+                  heat_capacity_moist(q) rtol = 1e-9
+        end
+        @printf("    T(h) round trip: max |ΔT|/T = %.2e\n", worst)
+        @test worst < 1e-14
+    end
+
+    @testset "Process adjustment conserves moist enthalpy (200-330 K, 300-1050 hPa)" begin
+        worst_h = 0.0; worst_first = 0.0; worst_sat = 0.0; worst_w = 0.0
+        n = 0; n_cond = 0; n_evap = 0; n_fail = 0
+        for T0 in 200.0:2.5:330.0, p in (3.0e4, 5.0e4, 7.0e4, 8.5e4, 1.0e5, 1.05e5),
+            S in (0.3, 0.9, 1.02, 1.3), qc in (0.0, 1e-5, 3e-3),
+            (qr, qi) in ((0.0, 0.0), (5e-3, 0.0), (0.0, 5e-3), (2e-3, 1e-3))
+            qs0 = saturation_specific_humidity(T0, p)
+            qs0 > 0.2 && continue          # near boiling at low p: not air
+            qv = S * qs0
+            r = isobaric_saturation_adjustment(T0, p, qv, qc; q_r = qr, q_i = qi)
+            qt = qv + qc + qr + qi
+            q0 = PhasePartition(qt, qc + qr, qi)
+            q1 = PhasePartition(qt, qc + r.Δq + qr, qi)
+            h0 = moist_enthalpy(T0, q0); h1 = moist_enthalpy(r.T, q1)
+            worst_h = max(worst_h, abs(h1 - h0) / abs(h0))
+            # first-law form: c_pm(final) ΔT = L_v(T0) Δq, residual in J/kg
+            # relative to h
+            worst_first = max(worst_first, abs(heat_capacity_moist(q1) * (r.T - T0) -
+                                               latent_heat_vapor(T0) * r.Δq) / abs(h0))
+            # water: only vapour ↔ cloud liquid, and never more than exists
+            @test -qc <= r.Δq <= qv
+            qv1 = qv - r.Δq; qc1 = qc + r.Δq
+            worst_w = max(worst_w, abs((qv1 + qc1) - (qv + qc)) / (qv + qc))
+            # end state: saturated over liquid, or all cloud gone and sub-
+            # saturated (never supersaturated with cloud left unadjusted)
+            qs1 = saturation_specific_humidity(r.T, p)
+            if qc1 > 0
+                worst_sat = max(worst_sat, abs(qv1 - qs1) / qs1)
+            elseif qv1 > qs1 * (1 + 1e-12)
+                n_fail += 1
+            end
+            r.Δq > 0 && (n_cond += 1); r.Δq < 0 && (n_evap += 1)
+            # heating has the sign of condensation
+            @test sign(r.T - T0) == sign(r.Δq)
+            n += 1
+        end
+        @printf("    isobaric adjustment, %d states (%d condense, %d evaporate): max |Δh|/h = %.2e, max first-law residual/h = %.2e, max |q_v/q_s-1| = %.2e\n",
+                n, n_cond, n_evap, worst_h, worst_first, worst_sat)
+        @test n > 4000 && n_cond > 1000 && n_evap > 1000
+        @test worst_h < 1e-12
+        @test worst_first < 1e-12
+        @test worst_w < 1e-15
+        @test worst_sat < 1e-8
+        @test n_fail == 0
+        # #85's exact-root regression, on the contract directly and with
+        # non-adjusting rain / ice present (review of #82): Newton hitting
+        # g = 0 exactly must keep that root, not the bracket midpoint
+        # (which returned 1.143e-6 instead of 2.286e-6 kg/kg).
+        Tx, px, qx = 204.2477594857438, 72681.13710255225, 7.421642749398895e-6
+        for (qr, qi) in ((0.0, 0.0), (1e-6, 0.0), (0.0, 1e-6))
+            r = isobaric_saturation_adjustment(Tx, px, qx, 0.0; q_r = qr, q_i = qi)
+            @test r.Δq ≈ 2.28605e-6 rtol = 1e-4
+            @test abs(qx - r.Δq - saturation_specific_humidity(r.T, px)) < 1e-14
+        end
+        # subsaturated, cloud-free air is returned bit-for-bit untouched
+        r = isobaric_saturation_adjustment(290.0, 9e4, 5e-3, 0.0; q_r = 1e-3)
+        @test r.Δq == 0 && r.T == 290.0
+    end
+
+    @testset "Process adjustment: rain and ice enter c_pm (issue #82)" begin
+        # Leaving 5 g/kg of rain (ice) out of c_pm overstates ΔT per unit
+        # condensate by (c_l - c_pd)·5e-3/c_pm ≈ 1.5 % ((c_i - c_pd)·5e-3/c_pm
+        # ≈ 0.5 %) — the numbers issue #82 measured on P3.
+        T0, p = 285.0, 9.0e4
+        qv = 1.1 * saturation_specific_humidity(T0, p)
+        per(qr, qi) = (r = isobaric_saturation_adjustment(T0, p, qv, 0.0; q_r = qr, q_i = qi);
+                       (r.T - T0) / r.Δq)
+        k0 = per(0.0, 0.0)
+        over_r = k0 / per(5e-3, 0.0) - 1
+        over_i = k0 / per(0.0, 5e-3) - 1
+        @printf("    ΔT/Δq overstated without 5 g/kg rain: %.3f %%, ice: %.3f %%\n",
+                100over_r, 100over_i)
+        @test 0.014 < over_r < 0.017
+        @test 0.004 < over_i < 0.006
+        # ... and exactly by the heat-capacity ratio (to the small change in
+        # the vapour share, since the final q_v differs slightly)
+        cp(qr, qi) = heat_capacity_moist(PhasePartition(qv + qr + qi, qr, qi))
+        @test 1 + over_r ≈ cp(5e-3, 0.0) / cp(0.0, 0.0) rtol = 1e-4
+        @test 1 + over_i ≈ cp(0.0, 5e-3) / cp(0.0, 0.0) rtol = 1e-4
+    end
+
+    @testset "Diagnosis inverts θ_li exactly (200-330 K, 300-1050 hPa)" begin
+        worst = 0.0; worst_rt = 0.0; n = 0
+        for T0 in 200.0:5.0:330.0, p in (3.0e4, 5.0e4, 7.0e4, 8.5e4, 1.0e5, 1.05e5),
+            S in (0.5, 1.02, 1.3)
+            qs0 = saturation_specific_humidity(T0, p)
+            qs0 > 0.2 && continue
+            qt = S * qs0
+            θli = liquid_ice_potential_temperature(T0, p, PhasePartition(qt))
+            T, q = saturation_adjustment(θli, p, qt)
+            worst = max(worst, abs(liquid_ice_potential_temperature(T, p, q) - θli) / θli)
+            # a diagnosis is idempotent: re-diagnosing the diagnosed state
+            # returns it (the round trip a model makes every step)
+            T2, _ = saturation_adjustment(liquid_ice_potential_temperature(T, p, q), p, qt)
+            worst_rt = max(worst_rt, abs(T2 - T))
+            n += 1
+        end
+        @printf("    θ_li diagnosis, %d states: max |Δθ_li|/θ_li = %.2e, re-diagnosis |ΔT| = %.2e K\n",
+                n, worst, worst_rt)
+        # "Exactly" = to the bisection tolerance, tol = 1e-10 K in T, which
+        # at saturation moves θ_li by up to ~3e-12 relative (measured 3.07e-12)
+        @test worst < 1e-11
+        @test worst_rt < 1e-9
+    end
+
+    @testset "Diagnosis ≠ process: θ_li is not isobaric enthalpy" begin
+        # Same initial parcel, both adjustments. (b) is exact; (a) conserves
+        # θ_li, whose Exner exponent R_m/c_pm moves with the partition, so
+        # its c_pm ΔT/(L_v Δq) departs from 1 roughly ∝ ln(p_ref/p).
+        # This is why (a) is kept for diagnosis only.
+        for (p, lo, hi) in ((1.0e5, 0.995, 1.001), (9.0e4, 1.005, 1.02),
+                            (6.0e4, 1.05, 1.08))
+            T0 = 285.0
+            qv = 1.1 * saturation_specific_humidity(T0, p)
+            θli = liquid_ice_potential_temperature(T0, p, PhasePartition(qv))
+            Ta, qa = saturation_adjustment(θli, p, qv)
+            ra = heat_capacity_moist(qa) * (Ta - T0) / (latent_heat_vapor(T0) * qa.liq)
+            rb = isobaric_saturation_adjustment(T0, p, qv, 0.0)
+            qb = PhasePartition(qv, rb.Δq, 0.0)
+            rbr = heat_capacity_moist(qb) * (rb.T - T0) / (latent_heat_vapor(T0) * rb.Δq)
+            @printf("    p = %4.0f hPa: c_pm ΔT/(L_v(T0) Δq) θ_li-diagnosis %.5f, isobaric %.14f\n",
+                    p / 100, ra, rbr)
+            @test lo < ra < hi
+            @test rbr ≈ 1 atol = 1e-12
+        end
+        # Attribution (review of #82): the pressure-dependent part of that
+        # gap is the partition-dependent Exner exponent of the contract's
+        # θ_li. Freeze the exponent at total water (as Bryan & Fritsch's
+        # exact form does) and invert the same parcel: the ratio no longer
+        # depends on p. Measured 0.99767, 0.99757, 0.99723 at 1000, 900,
+        # 600 hPa; the residual ~0.25 % is the exponential approximation,
+        # first order in the supersaturation (0.9997 at S = 1.01).
+        function θfix(T, p, q)
+            q0 = PhasePartition(q.tot)
+            κ = MT.gas_constant_moist(q0) / heat_capacity_moist(q0)
+            return T * (c.p_ref / p)^κ *
+                   exp(-latent_heat_vapor(T) * q.liq / (heat_capacity_moist(q) * T))
+        end
+        rf = Float64[]
+        for p in (1.0e5, 9.0e4, 6.0e4), S in (1.1, 1.01)
+            T0 = 285.0
+            qv = S * saturation_specific_humidity(T0, p)
+            θ0 = θfix(T0, p, PhasePartition(qv))
+            f(T) = θfix(T, p, PhasePartition(qv, max(qv - saturation_specific_humidity(T, p), 0.0), 0.0)) - θ0
+            a, b = T0, T0 + 5.0
+            for _ in 1:200
+                m = (a + b) / 2; f(m) < 0 ? (a = m) : (b = m)
+            end
+            T = (a + b) / 2; ql = qv - saturation_specific_humidity(T, p)
+            r = heat_capacity_moist(PhasePartition(qv, ql, 0.0)) * (T - T0) /
+                (latent_heat_vapor(T0) * ql)
+            S == 1.1 && push!(rf, r)
+            @test abs(r - 1) < (S - 1) * 0.03      # first order in S - 1
+        end
+        @printf("    fixed-exponent θ_li: ratio %.5f, %.5f, %.5f at 1000, 900, 600 hPa\n", rf...)
+        @test maximum(rf) - minimum(rf) < 1e-3     # vs 0.066 with the moving exponent
+    end
+
     @testset "Naive fixed point diverges where bisection does not" begin
         # This records WHY saturation_adjustment is written as bisection.
         # The obvious iteration T <- T_dry + (L/c_p) q_liq(T) oscillates:

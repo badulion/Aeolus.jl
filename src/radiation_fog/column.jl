@@ -326,7 +326,7 @@ fog_liquid_water_path(col::FogColumn) =
 @inline function _set_layer!(col::FogColumn, k, qv, ql, h_new, c)
     T0 = col.T[k]
     q1 = PhasePartition(qv + ql, ql, 0.0)
-    col.T[k] = T0 + (h_new - moist_enthalpy(T0, q1, c)) / heat_capacity_moist(q1, c)
+    col.T[k] = temperature_from_moist_enthalpy(h_new, q1, c; T_ref = T0)
     col.qv[k] = qv; col.ql[k] = ql
     return col
 end
@@ -385,12 +385,12 @@ end
 
 # Parcel from layer `a` displaced to layer `b`, conserving s = h + g z and
 # total water, then saturation-adjusted at p_b (condensing or evaporating
-# with the module's own exact adjustment). Returns θ_ρ of the parcel.
+# with the contract's isobaric adjustment via `fog_equilibrium`). Returns θ_ρ of the parcel.
 function _displaced_θρ(col::FogColumn, a::Int, b::Int, c)
     qt = col.qv[a] + col.ql[a]; ql = col.ql[a]
     h_b = _h(col.T[a], col.qv[a], ql, c) + c.grav * (col.z[a] - col.z[b])
     q1 = PhasePartition(qt, ql, 0.0)
-    T = col.T[a] + (h_b - moist_enthalpy(col.T[a], q1, c)) / heat_capacity_moist(q1, c)
+    T = temperature_from_moist_enthalpy(h_b, q1, c; T_ref = col.T[a])
     Δ, Teq = fog_equilibrium(T, col.p[b], qt - ql, ql, c)
     return density_potential_temperature(Teq, col.p[b],
                                          PhasePartition(qt, ql + Δ, 0.0), c)
