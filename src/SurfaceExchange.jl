@@ -62,7 +62,9 @@ using ..RadiationCore: STEFAN_BOLTZMANN
 import ..RadiationCore: surface_albedo, surface_emissivity
 
 export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
-       LH_v0, LH_s0, LH_f0, grav, cp_water, cp_ice, von_karman
+       LH_v0, LH_s0, LH_f0, grav, cp_water, cp_ice, von_karman,
+       AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
+       phi_m, phi_h, psi_m, psi_h
 
 # =========================================================================
 # 1. Material constants
@@ -117,5 +119,100 @@ cp_water(c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) = c.thermo.cp_liquid
 cp_ice(c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) = c.thermo.cp_ice
 "The von Kármán constant."
 von_karman(c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) = c.κ
+
+# =========================================================================
+# 2. Monin–Obukhov stability functions
+# =========================================================================
+
+"""
+    AbstractStabilityFunctions
+
+A family of Monin–Obukhov similarity functions. A concrete subtype
+implements the four generics
+
+    phi_m(sf, ζ), phi_h(sf, ζ)   # dimensionless gradients
+    psi_m(sf, ζ), psi_h(sf, ζ)   # integrated forms
+
+with ``ζ = z/L`` (positive stable), normalised so ``φ(0) = 1`` and
+``ψ(0) = 0``, and related by ``ψ(ζ) = ∫₀^ζ [1 - φ(x)]/x dx``, i.e.
+``dψ/dζ = (1 - φ)/ζ``. Profiles then read
+
+    u(z) = (u_*/κ) [ln(z/z₀ₘ) - ψ_m(z/L) + ψ_m(z₀ₘ/L)]
+
+and likewise for θ and q with ``ψ_h``. The surface-layer solver only
+calls `psi_m` and `psi_h`, so a new family (e.g. the COARE convective
+form of Grachev & Fairall) needs nothing else to be usable.
+"""
+abstract type AbstractStabilityFunctions end
+
+"""
+    BusingerDyerBeljaarsHoltslag(; γ_m = 16, γ_h = 16, a = 1, b = 2/3, c = 5, d = 0.35)
+
+The default stability functions.
+
+*Unstable* (``ζ < 0``): the Businger–Dyer gradients in Dyer's (1974)
+form with κ = 0.40,
+``φ_m = (1 - γ_m ζ)^{-1/4}``, ``φ_h = (1 - γ_h ζ)^{-1/2}``, and their
+exact integrals (Paulson 1970), with ``x = (1 - γ_m ζ)^{1/4}``,
+``y = (1 - γ_h ζ)^{1/2}``:
+
+    ψ_m = 2 ln[(1+x)/2] + ln[(1+x²)/2] - 2 atan(x) + π/2
+    ψ_h = 2 ln[(1+y)/2]
+
+*Stable* (``ζ ≥ 0``): Beljaars & Holtslag (1991), which stay finite and
+well-behaved in very stable conditions where the log-linear
+``φ = 1 + 5ζ`` shuts turbulence off:
+
+    ψ_m = -[a ζ + b (ζ - c/d) e^{-dζ} + b c/d]
+    ψ_h = -[(1 + 2aζ/3)^{3/2} + b (ζ - c/d) e^{-dζ} + b c/d - 1]
+
+with φ obtained analytically as ``φ = 1 - ζ dψ/dζ``.
+"""
+Base.@kwdef struct BusingerDyerBeljaarsHoltslag{T<:AbstractFloat} <: AbstractStabilityFunctions
+    γ_m::T = 16.0
+    γ_h::T = 16.0
+    a::T   = 1.0
+    b::T   = 2 / 3
+    c::T   = 5.0
+    d::T   = 0.35
+end
+
+"Dimensionless wind shear ``φ_m(ζ) = (κz/u_*) ∂u/∂z``."
+function phi_m end
+"Dimensionless potential-temperature (and scalar) gradient ``φ_h(ζ)``."
+function phi_h end
+"Integrated stability correction for momentum, ``ψ_m(ζ)``."
+function psi_m end
+"Integrated stability correction for heat and scalars, ``ψ_h(ζ)``."
+function psi_h end
+
+function phi_m(sf::BusingerDyerBeljaarsHoltslag, ζ::Real)
+    ζ < 0 && return (1 - sf.γ_m * ζ)^(-1 / 4)
+    return 1 + ζ * (sf.a + sf.b * exp(-sf.d * ζ) * (1 + sf.c - sf.d * ζ))
+end
+
+function phi_h(sf::BusingerDyerBeljaarsHoltslag, ζ::Real)
+    ζ < 0 && return (1 - sf.γ_h * ζ)^(-1 / 2)
+    return 1 + ζ * (sf.a * sqrt(1 + 2 * sf.a * ζ / 3) +
+                    sf.b * exp(-sf.d * ζ) * (1 + sf.c - sf.d * ζ))
+end
+
+function psi_m(sf::BusingerDyerBeljaarsHoltslag, ζ::Real)
+    if ζ < 0
+        x = (1 - sf.γ_m * ζ)^(1 / 4)
+        return 2 * log((1 + x) / 2) + log((1 + x^2) / 2) - 2 * atan(x) + π / 2
+    end
+    a, b, c, d = sf.a, sf.b, sf.c, sf.d
+    return -(a * ζ + b * (ζ - c / d) * exp(-d * ζ) + b * c / d)
+end
+
+function psi_h(sf::BusingerDyerBeljaarsHoltslag, ζ::Real)
+    if ζ < 0
+        y = sqrt(1 - sf.γ_h * ζ)
+        return 2 * log((1 + y) / 2)
+    end
+    a, b, c, d = sf.a, sf.b, sf.c, sf.d
+    return -((1 + 2 * a * ζ / 3)^(3 / 2) + b * (ζ - c / d) * exp(-d * ζ) + b * c / d - 1)
+end
 
 end # module
