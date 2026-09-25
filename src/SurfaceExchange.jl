@@ -64,7 +64,8 @@ import ..RadiationCore: surface_albedo, surface_emissivity
 export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        LH_v0, LH_s0, LH_f0, grav, cp_water, cp_ice, von_karman,
        AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
-       phi_m, phi_h, psi_m, psi_h
+       phi_m, phi_h, psi_m, psi_h,
+       SurfaceLayerSolution, solve_surface_layer, bulk_richardson, obukhov_length
 
 # =========================================================================
 # 1. Material constants
@@ -213,6 +214,189 @@ function psi_h(sf::BusingerDyerBeljaarsHoltslag, ζ::Real)
     end
     a, b, c, d = sf.a, sf.b, sf.c, sf.d
     return -((1 + 2 * a * ζ / 3)^(3 / 2) + b * (ζ - c / d) * exp(-d * ζ) + b * c / d - 1)
+end
+
+# =========================================================================
+# 3. Surface-layer solver
+# =========================================================================
+
+"""
+    SurfaceLayerSolution{T}
+
+Result of [`solve_surface_layer`](@ref). Fields:
+
+  * `u_star`, `θ_star`, `q_star` — friction velocity (m s⁻¹) and the
+    temperature (K) and humidity (kg kg⁻¹) scales, with
+    ``\\overline{w'θ'} = -u_* θ_*``, ``\\overline{w'q'} = -u_* q_*``;
+  * `θv_star` — the virtual-temperature scale that sets the buoyancy flux;
+  * `L`, `ζ` — Obukhov length (m) and ``ζ = z_m/L``;
+  * `C_D`, `C_H`, `C_E` — bulk transfer coefficients referred to the
+    effective wind `U`: ``τ = ρ C_D U²``, ``H = ρ c_p C_H U (θ_s - θ_a)``,
+    ``E = ρ C_E U (q_s - q_a)``;
+  * `U` — the effective wind speed actually used (after the gustiness /
+    minimum-wind safeguard);
+  * `iterations`, `converged` — `converged = false` means the root lay
+    beyond `[ζ_min, ζ_max]` and ζ was clamped there.
+"""
+struct SurfaceLayerSolution{T<:AbstractFloat}
+    u_star::T
+    θ_star::T
+    q_star::T
+    θv_star::T
+    L::T
+    ζ::T
+    C_D::T
+    C_H::T
+    C_E::T
+    U::T
+    iterations::Int
+    converged::Bool
+end
+
+# ε' = R_v/R_d - 1 ≈ 0.608, the virtual-temperature coefficient.
+_virtual_coefficient(c::SurfaceConstants) = R_v(c.thermo) / R_d(c.thermo) - 1
+
+"""
+    bulk_richardson(z, U, θv_a, θv_s; c = DEFAULT_SURFACE_CONSTANTS) -> Ri_B
+
+Bulk Richardson number between the surface and height `z`,
+
+    Ri_B = g z (θv_a - θv_s) / (θv_a U²)
+
+from virtual potential temperatures `θv_a` (at `z`) and `θv_s` (surface).
+Positive is stable. With ``z_m = z_h`` and no moisture it is related to
+the solver's ζ by ``Ri_B = ζ Φ_h/Φ_m²``, with Φ the stability-corrected
+log terms.
+"""
+bulk_richardson(z::Real, U::Real, θv_a::Real, θv_s::Real;
+                c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    grav(c) * z * (θv_a - θv_s) / (θv_a * U^2)
+
+"""
+    obukhov_length(u_star, θv_star, θv_ref; c = DEFAULT_SURFACE_CONSTANTS) -> L
+
+Obukhov length ``L = u_*² θ_v / (κ g θ_{v*})``, equivalently
+``-u_*³ θ_v / (κ g \\overline{w'θ_v'})``. Negative for an upward buoyancy
+flux (unstable), positive for stable, `±Inf` when neutral.
+"""
+obukhov_length(u_star::Real, θv_star::Real, θv_ref::Real;
+               c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    u_star^2 * θv_ref / (c.κ * grav(c) * θv_star)
+
+# Stability-corrected log terms Φ = ln(z/z0) - ψ(z/L) + ψ(z0/L), written
+# in terms of ζ = z_m/L so that ζ = 0 is exactly neutral.
+_Φm(sf, ζ, z_m, z0m) = log(z_m / z0m) - psi_m(sf, ζ) + psi_m(sf, ζ * z0m / z_m)
+_Φh(sf, ζ, z_m, z, z0) = log(z / z0) - psi_h(sf, ζ * z / z_m) + psi_h(sf, ζ * z0 / z_m)
+
+"""
+    solve_surface_layer(sf = BusingerDyerBeljaarsHoltslag();
+                        U, z_m, z_h = z_m, θ_a, θ_s, q_a = 0, q_s = 0,
+                        z0m, z0h, z0q = z0h,
+                        c = DEFAULT_SURFACE_CONSTANTS,
+                        U_min = 0.1, gustiness = 0,
+                        ζ_min = -1000, ζ_max = 1000, maxiter = 100)
+        -> SurfaceLayerSolution
+
+Monin–Obukhov similarity between the surface and the lowest model level:
+wind `U` at height `z_m`, potential temperature `θ_a` and specific
+humidity `q_a` at `z_h`; surface (skin) values `θ_s`, `q_s`; roughness
+lengths `z0m`, `z0h`, `z0q`. Solves
+
+    u_* = κ U / Φ_m(ζ),  θ_* = κ (θ_a - θ_s) / Φ_h(ζ),  q_* = κ (q_a - q_s) / Φ_q(ζ)
+    ζ   = z_m κ g θ_{v*} / (u_*² θ_{va})
+
+with ``Φ_m = \\ln(z_m/z_{0m}) - ψ_m(z_m/L) + ψ_m(z_{0m}/L)`` (and Φ_h, Φ_q
+likewise with ψ_h and `z0h`, `z0q`), buoyancy from the virtual potential
+temperature ``θ_v = θ(1 + ε' q)``, ``θ_{v*} = θ_*(1 + ε' q_a) + ε' θ_a q_*``.
+
+The single equation for ζ is solved by a bracketed secant (Illinois)
+iteration, which cannot diverge the way the textbook fixed-point on
+``L`` does in strongly stable conditions. The root lies in ``[ζ_min, 0]``
+for unstable and ``[0, ζ_max]`` for stable stratification; if it lies
+beyond, ζ is clamped and `converged = false`.
+
+Safeguards: the effective wind is ``U_e = \\max(\\sqrt{U² + w_g²}, U_{min})``
+with gustiness `w_g` (e.g. ``1.2 w_*``, Beljaars 1995), so free convection
+at ``U → 0`` keeps a finite ``u_*`` instead of ``L → 0``.
+
+`θ_a` and `θ_s` must be potential temperatures on a common reference
+(e.g. ``θ_a = T_a + g z/c_p``, ``θ_s = T_s``).
+"""
+function solve_surface_layer(sf::AbstractStabilityFunctions = BusingerDyerBeljaarsHoltslag();
+                             U::Real, z_m::Real, z_h::Real = z_m,
+                             θ_a::Real, θ_s::Real, q_a::Real = 0.0, q_s::Real = 0.0,
+                             z0m::Real, z0h::Real, z0q::Real = z0h,
+                             c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                             U_min::Real = 0.1, gustiness::Real = 0.0,
+                             ζ_min::Real = -1000.0, ζ_max::Real = 1000.0,
+                             maxiter::Integer = 100)
+    (z_m > z0m > 0 && z_h > z0h > 0 && z_h > z0q > 0) ||
+        throw(ArgumentError("solve_surface_layer: need z_m > z0m > 0 and z_h > z0h, z0q > 0"))
+    T = float(promote_type(typeof(U), typeof(z_m), typeof(θ_a), typeof(θ_s),
+                           typeof(q_a), typeof(q_s), typeof(z0m), typeof(z0h)))
+    κ, g, ε = T(c.κ), T(grav(c)), T(_virtual_coefficient(c))
+    Ue = max(sqrt(T(U)^2 + T(gustiness)^2), T(U_min))
+    Δθ, Δq = T(θ_a) - T(θ_s), T(q_a) - T(q_s)
+    θva = T(θ_a) * (1 + ε * T(q_a))
+
+    scales(ζ) = begin
+        Φm = _Φm(sf, ζ, z_m, z0m)
+        Φh = _Φh(sf, ζ, z_m, z_h, z0h)
+        Φq = _Φh(sf, ζ, z_m, z_h, z0q)
+        u = κ * Ue / Φm
+        θ = κ * Δθ / Φh
+        q = κ * Δq / Φq
+        θv = θ * (1 + ε * T(q_a)) + ε * T(θ_a) * q
+        (u, θ, q, θv, Φm, Φh, Φq)
+    end
+    # Residual F(ζ) = ζ - ζ_implied(ζ); increasing through the root.
+    F(ζ) = begin
+        u, _, _, θv = scales(ζ)
+        ζ - z_m * κ * g * θv / (u^2 * θva)
+    end
+
+    F0 = F(zero(T))
+    ζ, iters, conv = zero(T), 0, true
+    if F0 != 0
+        a, b = F0 > 0 ? (T(ζ_min), zero(T)) : (zero(T), T(ζ_max))
+        fa, fb = F0 > 0 ? (F(a), F0) : (F0, F(b))
+        if fa >= 0 || fb <= 0            # root outside the admissible range
+            ζ, conv = (fa >= 0 ? a : b), false
+        else
+            ζ, iters, conv = _illinois(F, a, b, fa, fb, maxiter)
+        end
+    end
+
+    u, θ, q, θv, Φm, Φh, Φq = scales(ζ)
+    L = ζ == 0 ? T(Inf) : T(z_m) / ζ
+    return SurfaceLayerSolution{T}(u, θ, q, θv, L, ζ,
+                                   κ^2 / Φm^2, κ^2 / (Φm * Φh), κ^2 / (Φm * Φq),
+                                   Ue, iters, conv)
+end
+
+# Illinois (modified regula falsi) on a bracket with f(a) < 0 < f(b).
+function _illinois(f, a::T, b::T, fa::T, fb::T, maxiter::Integer) where {T}
+    side = 0
+    x = (a + b) / 2
+    for it in 1:maxiter
+        x = (a * fb - b * fa) / (fb - fa)
+        (a < x < b) || (x = (a + b) / 2)
+        fx = f(x)
+        if fx == 0 || (b - a) <= 4 * eps(T) * max(abs(a), abs(b), one(T))
+            return x, it, true
+        end
+        if fx > 0
+            b, fb = x, fx
+            side == 1 && (fa /= 2)
+            side = 1
+        else
+            a, fa = x, fx
+            side == -1 && (fb /= 2)
+            side = -1
+        end
+        abs(fx) <= 4 * eps(T) * max(abs(x), one(T)) && return x, it, true
+    end
+    return x, maxiter, false
 end
 
 end # module

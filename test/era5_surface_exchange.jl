@@ -97,4 +97,100 @@ const SE = Aeolus.SurfaceExchange
         @test phi_m(sf, 100.0) ≈ 101 rtol = 1e-3
         @info "MOST published values" ψm_m1 = psi_m(sf, -1.0) ψh_m1 = psi_h(sf, -1.0) ψm_p1 = psi_m(sf, 1.0) ψh_p1 = psi_h(sf, 1.0) φm_p10 = phi_m(sf, 10.0) φh_p10 = phi_h(sf, 10.0)
     end
+    @testset "Surface-layer solver: neutral limit is exact" begin
+        κ = von_karman()
+        worst = 0.0
+        for z in (2.0, 10.0, 40.0), z0 in (1e-4, 0.01, 0.5), U in (0.5, 5.0, 20.0)
+            s = solve_surface_layer(; U = U, z_m = z, θ_a = 290.0, θ_s = 290.0,
+                                    z0m = z0, z0h = z0 / 10)
+            ref = (κ / log(z / z0))^2
+            worst = max(worst, abs(s.C_D - ref) / ref)
+            @test s.ζ == 0 && isinf(s.L) && s.converged
+            @test s.C_D ≈ ref rtol = 4eps()
+            @test s.C_H ≈ κ^2 / (log(z / z0) * log(z / (z0 / 10))) rtol = 4eps()
+            @test s.u_star ≈ κ * U / log(z / z0) rtol = 4eps()
+        end
+        @info "neutral C_D vs (κ/ln(z/z0))²" max_rel_err = worst
+    end
+
+    @testset "Surface-layer solver: self-consistency of the returned L" begin
+        sf = BusingerDyerBeljaarsHoltslag()
+        κ, g = von_karman(), grav()
+        ε = SE._virtual_coefficient(DEFAULT_SURFACE_CONSTANTS)
+        worst_prof, worst_L, worst_Ri = 0.0, 0.0, 0.0
+        for (θs, qs, U) in ((300.0, 0.012, 5.0), (305.0, 0.015, 1.0), (292.0, 0.010, 8.0),
+                            (287.0, 0.006, 4.0), (284.0, 0.005, 3.0), (289.5, 0.0085, 10.0))
+            θa, qa, zm, zh, z0m, z0h, z0q = 290.0, 0.008, 10.0, 2.0, 0.1, 0.01, 0.005
+            s = solve_surface_layer(sf; U = U, z_m = zm, z_h = zh, θ_a = θa, θ_s = θs,
+                                    q_a = qa, q_s = qs, z0m = z0m, z0h = z0h, z0q = z0q)
+            @test s.converged
+            L = s.L
+            # The flux-profile relations evaluated at the returned L reproduce
+            # the input differences.
+            Φm = log(zm / z0m) - psi_m(sf, zm / L) + psi_m(sf, z0m / L)
+            Φh = log(zh / z0h) - psi_h(sf, zh / L) + psi_h(sf, z0h / L)
+            Φq = log(zh / z0q) - psi_h(sf, zh / L) + psi_h(sf, z0q / L)
+            for (got, want) in ((s.u_star / κ * Φm, U), (s.θ_star / κ * Φh, θa - θs),
+                                (s.q_star / κ * Φq, qa - qs))
+                worst_prof = max(worst_prof, abs(got - want) / abs(want))
+                @test got ≈ want rtol = 1e-12
+            end
+            # ...and L is the Obukhov length of the fluxes it produced.
+            θv_star = s.θ_star * (1 + ε * qa) + ε * θa * s.q_star
+            @test θv_star ≈ s.θv_star rtol = 1e-14
+            Lc = obukhov_length(s.u_star, θv_star, θa * (1 + ε * qa))
+            worst_L = max(worst_L, abs(Lc - L) / abs(L))
+            @test Lc ≈ L rtol = 1e-10
+            # Signs: fluxes positive upward, L < 0 when the surface is warmer.
+            @test sign(s.θ_star) == sign(θa - θs)
+            @test (θs * (1 + ε * qs) > θa * (1 + ε * qa)) == (L < 0)
+        end
+        # Dry, z_m = z_h: the bulk Richardson number is ζ Φ_h / Φ_m².
+        for θs in (280.0, 286.0, 289.0, 291.0, 295.0, 305.0)
+            s = solve_surface_layer(sf; U = 4.0, z_m = 10.0, θ_a = 290.0, θ_s = θs,
+                                    z0m = 0.05, z0h = 0.005)
+            Ri = bulk_richardson(10.0, 4.0, 290.0, θs)
+            # Φm = κ/√C_D and Φh = κ²/(C_H Φm), so ζ Φh/Φm² = ζ C_D^{3/2}/(κ C_H).
+            rel = abs(Ri - s.ζ * s.C_D^1.5 / (κ * s.C_H)) / abs(Ri)
+            worst_Ri = max(worst_Ri, rel)
+            @test rel < 1e-10
+        end
+        @info "solver self-consistency" profile_rel_err = worst_prof obukhov_rel_err = worst_L richardson_rel_err = worst_Ri
+    end
+
+    @testset "Surface-layer solver: stability dependence and limits" begin
+        sf = BusingerDyerBeljaarsHoltslag()
+        kw = (U = 3.0, z_m = 10.0, θ_a = 290.0, z0m = 0.1, z0h = 0.01)
+        stable  = solve_surface_layer(sf; kw..., θ_s = 287.0)
+        neutral = solve_surface_layer(sf; kw..., θ_s = 290.0)
+        unstable = solve_surface_layer(sf; kw..., θ_s = 296.0)
+        @test stable.ζ > 0 && unstable.ζ < 0
+        @test stable.C_H < neutral.C_H < unstable.C_H
+        @test stable.C_D < neutral.C_D < unstable.C_D
+        # C_H decreases monotonically as the surface cools relative to the air.
+        CH = [solve_surface_layer(sf; kw..., θ_s = θs).C_H for θs in 300.0:-0.5:284.0]
+        @test all(diff(CH) .< 0)
+        # Strongly stable (ζ ≈ 10) is resolved, finite and still mixing.
+        vs = solve_surface_layer(sf; U = 2.0, z_m = 10.0, θ_a = 290.0, θ_s = 280.0,
+                                 z0m = 0.1, z0h = 0.01)
+        @test vs.converged && 5 < vs.ζ < 20
+        @test all(isfinite, (vs.u_star, vs.θ_star, vs.L, vs.C_D, vs.C_H))
+        @test vs.C_H > 0
+        # Beyond ζ_max the solver clamps and says so rather than returning NaN.
+        cl = solve_surface_layer(sf; U = 0.5, z_m = 10.0, θ_a = 290.0, θ_s = 275.0,
+                                 z0m = 0.1, z0h = 0.01)
+        @test !cl.converged && cl.ζ == 1000 && isfinite(cl.C_H)
+        # Free convection: calm wind still gives a finite, convective u*.
+        fc = solve_surface_layer(sf; U = 0.0, z_m = 10.0, θ_a = 290.0, θ_s = 300.0,
+                                 z0m = 0.1, z0h = 0.01)
+        @test fc.converged && fc.U == 0.1 && fc.ζ < -10 && isfinite(fc.u_star)
+        g = solve_surface_layer(sf; U = 0.0, z_m = 10.0, θ_a = 290.0, θ_s = 300.0,
+                                z0m = 0.1, z0h = 0.01, gustiness = 1.0)
+        @test g.U == 1.0 && g.u_star > fc.u_star
+        # Vapour buoyancy alone destabilises: equal θ, moister surface.
+        mv = solve_surface_layer(sf; U = 3.0, z_m = 10.0, θ_a = 290.0, θ_s = 290.0,
+                                 q_a = 0.005, q_s = 0.015, z0m = 0.1, z0h = 0.01)
+        @test mv.ζ < 0 && mv.θ_star == 0 && mv.q_star < 0
+        @info "C_H stable / neutral / unstable" stable = stable.C_H neutral = neutral.C_H unstable = unstable.C_H ζ_stable = stable.ζ ζ_unstable = unstable.ζ ζ_very_stable = vs.ζ C_H_very_stable = vs.C_H ζ_free_convection = fc.ζ iterations = (stable.iterations, unstable.iterations, vs.iterations)
+    end
 end
