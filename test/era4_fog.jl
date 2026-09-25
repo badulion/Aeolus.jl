@@ -154,13 +154,52 @@ using Aeolus.RadiationFog
         @test worst_h < 1e-14
     end
 
-    @testset "Fog: agrees with the contract's saturation_adjustment" begin
-        # One source of truth: fog_equilibrium is an enthalpy-based
-        # saturation adjustment, the contract's `saturation_adjustment`
-        # a θ_li-based one. They must not drift apart. Above freezing the
-        # contract partitions everything to liquid, so they are directly
-        # comparable. Measured at p = p_ref: |Δql|/ql ≤ 3.2e-3 (S = 1.10,
-        # 310 K), from the exponential θ_li approximation.
+    @testset "Fog: delegates to the contract's process adjustment (#82)" begin
+        # One source of truth: fog_equilibrium IS the contract's
+        # isobaric_saturation_adjustment with no rain or ice — the same
+        # numbers bit for bit, not merely close ones.
+        n_same = 0; n = 0
+        for T in 230.0:10.0:320.0, p in (5.0e4, 8.0e4, 1.0e5),
+            S in (0.5, 0.99, 1.01, 1.2), ql in (0.0, 1e-6, 2e-3)
+            qv = S * qsat(T, p)
+            Δ, Te = fog_equilibrium(T, p, qv, ql)
+            r = isobaric_saturation_adjustment(T, p, qv, ql)
+            n_same += (Δ === r.Δq && Te === r.T); n += 1
+        end
+        @test n_same == n
+
+        # Formerly two @test_broken (#85): they compared fog with the
+        # contract's saturation_adjustment, which is the θ_li DIAGNOSIS
+        # (it must reproduce θ_li, not moist enthalpy), and so encoded the
+        # wrong operation. The property they were waiting for — the
+        # contract providing an enthalpy-conserving adjustment — now holds:
+        # at 800 hPa, 285 K, S = 1.05 the contract's PROCESS adjustment
+        # agrees with fog exactly and conserves moist enthalpy.
+        T0, p = 285.0, 8.0e4
+        qv0 = 1.05qsat(T0, p)
+        r = fog_condensation(T0, p, qv0, 0.0, 2.0)
+        rc = isobaric_saturation_adjustment(T0, p, qv0, 0.0)
+        @test rc.Δq == r.ql
+        @test abs(moist_enthalpy(rc.T, PhasePartition(qv0, rc.Δq, 0.0)) -
+                  moist_enthalpy(T0, PhasePartition(qv0))) <
+              1e-12 * latent_heat_vapor(T0) * rc.Δq
+        @test moist_enthalpy(r.T, PhasePartition(qv0, r.ql, 0.0)) ≈
+              moist_enthalpy(T0, PhasePartition(qv0)) rtol = 1e-14
+
+        # The θ_li diagnosis of the same parcel is a different operation and
+        # legitimately differs. Recorded, not a defect: at 800 hPa it
+        # over-heats by +2.76 % of L_v Δq, so 1.75 % less condenses; near
+        # p_ref the two agree to the exponential-θ_li approximation
+        # (≤ 3.2e-3).
+        θli = liquid_ice_potential_temperature(T0, p, PhasePartition(qv0))
+        Tc, qc = saturation_adjustment(θli, p, qv0)
+        dq = qc.liq / r.ql - 1
+        dh = (moist_enthalpy(Tc, qc) - moist_enthalpy(T0, PhasePartition(qv0))) /
+             (latent_heat_vapor(T0) * qc.liq)
+        @printf("    800 hPa: θ_li diagnosis vs isobaric process: Δq_c %+.3f %%, Δh/(L_v Δq) %+.3f %%\n",
+                100dq, 100dh)
+        @test -0.025 < dq < -0.01
+        @test 0.02 < dh < 0.035
         for T0 in (275.0, 285.0, 300.0, 310.0), S in (1.01, 1.05, 1.10)
             p = c.p_ref
             qv0 = S * qsat(T0, p)
@@ -171,25 +210,6 @@ using Aeolus.RadiationFog
             @test abs(qc.liq - r.ql) / r.ql < 5e-3
             @test abs(Tc - r.T) < 2e-3
         end
-        # Known contract defect, NOT this module's: away from p_ref the
-        # contract's θ_li uses a partition-dependent Exner exponent
-        # (R_m/c_pm), so its adjustment is not isobaric-enthalpy
-        # conserving. At 800 hPa, 285 K, S = 1.05 it violates moist
-        # enthalpy by 2.8 % of L_v·Δq, and its condensate differs from
-        # the exact one here by 1.75 %. Marked broken so a contract fix
-        # shows up as an unexpected pass.
-        T0, p = 285.0, 8.0e4
-        qv0 = 1.05qsat(T0, p)
-        r = fog_condensation(T0, p, qv0, 0.0, 2.0)
-        θli = liquid_ice_potential_temperature(T0, p, PhasePartition(qv0))
-        Tc, qc = saturation_adjustment(θli, p, qv0)
-        @test_broken abs(qc.liq - r.ql) / r.ql < 5e-3
-        @test_broken abs(moist_enthalpy(Tc, qc) -
-                         moist_enthalpy(T0, PhasePartition(qv0))) <
-                     1e-3 * latent_heat_vapor(T0) * qc.liq
-        # ...while this module's result is exact at the same pressure.
-        @test moist_enthalpy(r.T, PhasePartition(qv0, r.ql, 0.0)) ≈
-              moist_enthalpy(T0, PhasePartition(qv0)) rtol = 1e-14
     end
 
     @testset "Fog: gridded fog_adjust! on potential temperature" begin

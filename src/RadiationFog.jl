@@ -69,6 +69,8 @@ module RadiationFog
 using ..MoistThermodynamics
 using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
                              PhasePartition, moist_enthalpy,
+                             temperature_from_moist_enthalpy,
+                             isobaric_saturation_adjustment,
                              heat_capacity_moist, latent_heat_vapor,
                              saturation_specific_humidity, exner_function
 
@@ -127,14 +129,6 @@ relaxation_fraction(dt::Real, τ::Real) =
 @inline _enthalpy(T, qt, ql, c) =
     moist_enthalpy(T, PhasePartition(qt, ql, 0.0), c)
 
-# Temperature of the state (qt, ql1) that has the same moist enthalpy h0.
-# h is exactly linear in T with slope c_pm(q1) (Kirchhoff), so one linear
-# solve is exact; equivalently c_pm(q1) ΔT = L_v(T0) Δq.
-@inline function _isenthalpic_T(h0, T0, qt, ql1, c)
-    q1 = PhasePartition(qt, ql1, 0.0)
-    return T0 + (h0 - _enthalpy(T0, qt, ql1, c)) / heat_capacity_moist(q1, c)
-end
-
 # =========================================================================
 # Fog: saturation-limited condensation in the air
 # =========================================================================
@@ -150,54 +144,18 @@ exactly to saturation over liquid water — or to evaporate all of `ql`
 if even that leaves the air subsaturated. `T_eq` is the temperature of
 the adjusted state.
 
-The residual `g(Δ) = (q_v − Δ) − q_s(T(Δ), p)` is strictly decreasing in
-`Δ` (condensing both removes vapour and, by warming, raises `q_s`), and
-`Δ ∈ [−ql, qv]`, so a safeguarded Newton iteration inside that bracket
-cannot fail. Subsaturated air with no fog returns `(0, T)` after one
-saturation evaluation.
+This is the contract's process adjustment,
+`MoistThermodynamics.isobaric_saturation_adjustment(T, p, qv, ql, c)`,
+with no rain or ice: the solver (a safeguarded Newton iteration on the
+monotone residual `(q_v − Δ) − q_s(T(Δ), p)` over `Δ ∈ [−ql, qv]`) lives
+there, one copy for every scheme (issue #82). It was written here first
+(#85) and moved to the contract unchanged, so fog results are
+bit-for-bit those of #85.
 """
-function fog_equilibrium(T::Real, p::Real, qv::Real, ql::Real,
-                         c::ThermodynamicConstants = DEFAULT_CONSTANTS;
-                         tol::Real = 1e-14, maxiter::Int = 100)
-    T0 = float(T); pp = float(p)
-    qv0 = max(float(qv), 0.0); ql0 = max(float(ql), 0.0)
-    qt = qv0 + ql0
-    h0 = _enthalpy(T0, qt, ql0, c)
-    Tof(Δ) = _isenthalpic_T(h0, T0, qt, ql0 + Δ, c)
-    g(Δ)   = (qv0 - Δ) - saturation_specific_humidity(Tof(Δ), pp, c)
-
-    g0 = g(0.0)
-    g0 == 0 && return (0.0, T0)
-    if g0 < 0                      # subsaturated: can only evaporate fog
-        ql0 == 0 && return (0.0, T0)
-        lo, hi = -ql0, 0.0
-        g(lo) <= 0 && return (lo, Tof(lo))   # all fog evaporates
-    else                           # supersaturated: condense
-        lo, hi = 0.0, qv0
-    end
-    # Safeguarded Newton on the bracket [lo, hi] with g(lo) > 0 > g(hi).
-    Δ = 0.5 * (lo + hi)
-    for _ in 1:maxiter
-        gΔ = g(Δ)
-        # Converged: keep THIS Δ. (Testing after the Newton update instead
-        # returned the bracket midpoint whenever g hit exactly 0 — the
-        # update set hi = Δ, the Newton iterate Δ then failed the strict
-        # `lo < Δn < hi` safeguard and was replaced by (lo+hi)/2.)
-        abs(gΔ) < tol && break
-        gΔ > 0 ? (lo = Δ) : (hi = Δ)
-        (hi - lo) < tol && break
-        Tn  = Tof(Δ)
-        qs  = qv0 - Δ - gΔ
-        # dq_s/dT from Clausius-Clapeyron, dT/dΔ ≈ L_v / c_pm.
-        Lv  = latent_heat_vapor(Tn, c)
-        Rv  = c.gas_constant / c.molmass_water
-        dg  = -1 - qs * Lv / (Rv * Tn^2) *
-                   Lv / heat_capacity_moist(PhasePartition(qt, ql0 + Δ, 0.0), c)
-        Δn  = Δ - gΔ / dg
-        Δ   = (lo < Δn < hi) ? Δn : 0.5 * (lo + hi)
-    end
-    return (Δ, Tof(Δ))
-end
+fog_equilibrium(T::Real, p::Real, qv::Real, ql::Real,
+                c::ThermodynamicConstants = DEFAULT_CONSTANTS;
+                tol::Real = 1e-14, maxiter::Int = 100) =
+    Tuple(isobaric_saturation_adjustment(T, p, qv, ql, c; tol = tol, maxiter = maxiter))
 
 """
     fog_condensation(T, p, qv, ql, dt; τ = 0, c = DEFAULT_CONSTANTS)
@@ -230,7 +188,9 @@ function fog_condensation(T::Real, p::Real, qv::Real, ql::Real, dt::Real;
     qv0 = max(float(qv), 0.0); ql0 = max(float(ql), 0.0)
     qt = qv0 + ql0
     h0 = _enthalpy(float(T), qt, ql0, c)
-    T1 = Δ == 0 ? float(T) : _isenthalpic_T(h0, float(T), qt, ql0 + Δ, c)
+    T1 = Δ == 0 ? float(T) :
+         temperature_from_moist_enthalpy(h0, PhasePartition(qt, ql0 + Δ, 0.0), c;
+                                         T_ref = float(T))
     return (T = T1, qv = qv0 - Δ, ql = ql0 + Δ, Δq = Δ,
             latent_heat = latent_heat_vapor(float(T), c) * Δ)
 end
