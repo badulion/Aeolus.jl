@@ -12,10 +12,10 @@ INP known at temperatures warmer than −15 °C (Hoose & Möhler 2012;
 Kanji et al. 2017).
 
 This page develops the theory behind `src/IceNucleation.jl` (Phase 43).
-Section 1–4 cover the prognostic INP population (issue #5); the
-freezing parameterisations that draw on it (issue #6) and the coupling
-into the P3 ice category (issue #7) build on the interface described in
-§5.
+Sections 1–4 cover the prognostic INP population (issue #5); §6–7 the
+immersion and deposition freezing that draws on it and its consistency
+with the Phase 39 mixed-phase ramp (issue #6). The coupling into the P3
+ice category (issue #7) builds on the interface described in §5 and §6.4.
 
 ## 1. Why INP must be prognostic
 
@@ -234,6 +234,150 @@ calls `inp_release!`, and when ice precipitates out of a cell it calls
 `inp_scavenge!(…; population = :consumed)`. Nucleation can therefore be
 tested in isolation and is independent of any one bulk scheme.
 
+## 6. Immersion and deposition freezing
+
+Freezing is **singular** throughout: each scheme states how many of a
+mode's INP are frozen at ``(T, S_i)``, and `inp_nucleate_singular!`
+applies it to the *total* (available + consumed) population so that
+only the increment is nucleated (§3). ``\Delta t`` only converts
+increments into rates.
+
+### 6.1 Schemes
+
+Two families, dispatched on type (`FreezingScheme`):
+
+| scheme | mechanism | form | fitted range |
+| :-- | :-- | :-- | :-- |
+| `Niemand2012` | immersion, dust | ``n_s = \exp[-0.517(T-273.15) + 8.934]`` m⁻² | −36 … −12 °C |
+| `Ullrich2017Immersion` | immersion, dust | ``n_s = \exp(150.577 - 0.517T)`` m⁻² | −30 … −14 °C |
+| `Ullrich2017Deposition` | deposition, dust | ``n_s(T, S_i)``, below | 206 … 240 K |
+| `DeMott2015` | immersion, dust | ``c_f N_{>0.5}^{1.25} e^{0.46(273.16-T) - 11.6}`` | −35 … −20 °C |
+| `Tobo2013` | immersion, biological | ``N_{>0.5}^{-0.074\Delta T + 3.8} e^{0.414\Delta T - 9.671}`` | −34 … −9 °C |
+
+The INAS schemes freeze a particle of radius ``r`` with the Poisson
+probability ``1 - \exp(-n_s 4\pi r^2)``, integrated over the
+log-normal with the quadrature of §2; the aerosol-count schemes are
+written in std cm⁻³ / std L⁻¹ (273.15 K, 1013.25 hPa) and converted
+with the ideal-gas factor ``(p/p_0)(T_0/T)``. Defaults per species:
+dust — `Niemand2012` immersion + `Ullrich2017Deposition`; biological —
+`Tobo2013` immersion, no deposition.
+
+The Ullrich et al. (2017) deposition density for dust is
+
+```math
+n_s(T, S_i) = \exp\!\left\{\alpha (S_i - 1)^{1/4}
+  \cos^2[\beta(T-\gamma)]\,\frac{\mathrm{arccot}[\kappa(T-\lambda)]}{\pi}\right\} - 1,
+```
+
+``\alpha = 285.692``, ``\beta = 0.017``, ``\gamma = 256.692``,
+``\kappa = 0.080``, ``\lambda = 200.745``, with ``S_i`` clamped at
+water saturation ``e_s/e_{si}`` (both from `MoistThermodynamics`). The
+``-1`` is ours: the published ``\exp\{\cdot\}`` gives 1 m⁻² at
+``S_i = 1``; subtracting it makes deposition vanish continuously at ice
+saturation and changes ``n_s`` by less than 10⁻⁶ wherever it exceeds
+10⁶ m⁻². Meyers et al. (1992) was not used for deposition because it
+predicts ice from ``S_i`` alone and cannot consume a prognostic INP.
+
+**Fitted ranges.** No scheme is extrapolated: warmer than its range it
+predicts no ice (an exponential fit carried to 0 °C gives spurious ice
+where no data constrain it), colder it is held at the cold-edge value;
+at ``T \ge T_\mathrm{freeze}`` every scheme is zero regardless.
+
+### 6.2 Measured values
+
+| quantity | value |
+| :-- | :-- |
+| Niemand ``n_s(-20\,°\mathrm{C})`` | 2.347×10⁸ m⁻² |
+| Niemand ``n_s(-30\,°\mathrm{C})`` | 4.13×10¹⁰ m⁻² |
+| Ullrich / Niemand immersion | ``e^{0.424}`` = 1.528 at every ``T`` (same slope) |
+| Ullrich deposition, 220 K, ``S_i`` = 1.1 | 2.66×10⁸ m⁻² |
+| Ullrich deposition, 230 K, ``S_i`` = 1.2 | 4.13×10⁸ m⁻² |
+| DeMott 2015 (``c_f`` = 3), −20 °C, ``N_{>0.5}`` = 1 std cm⁻³ | 0.273 std L⁻¹ |
+| Tobo 2013, −20 °C, ``N_{>0.5}`` = 1 std cm⁻³ | 0.250 std L⁻¹ |
+| DeMott (``c_f`` = 3) / Niemand, Saharan-like mode, −35 … −20 °C | 0.24 – 0.60 |
+| mode frozen fraction vs independent quadrature | 4×10⁻¹⁴ relative |
+
+The Saharan-like mode is ``N`` = 15 cm⁻³, ``r_g`` = 0.4 μm,
+``\sigma_g`` = 2 (``N_{>0.5}`` = 11.3 cm⁻³, ``A`` = 7.9×10⁻⁵ m² m⁻³,
+cf. DeMott et al. 2015 §3.3). DeMott et al. report excellent agreement
+with Niemand for their *measured* Saharan-layer size distribution; for
+this idealised log-normal the two independent fits agree within a
+factor of 4.2, DeMott lower.
+
+### 6.3 Source terms
+
+`ice_nucleation!(inp, T, S_i, Δt; p, N_liq, M_liq, immersed_fraction)`
+applies, per mode, the immersion scheme to the immersed fraction ``f``
+of the INP (default 1 in cloud, 0 out of cloud) and the deposition
+scheme to the rest. When both are INAS schemes the per-particle
+probabilities are combined, ``p(r) = f\,p_\mathrm{imm}(r) + (1-f)\,p_\mathrm{dep}(r)``,
+so the consumed mass stays size-resolved; otherwise the frozen numbers
+are combined. The increment is split between mechanisms in proportion
+to their contributions. Then:
+
+* an immersion-frozen INP freezes one droplet of the mean droplet mass
+  ``M_\mathrm{liq}/N_\mathrm{liq}``; at most ``N_\mathrm{liq}``
+  droplets freeze;
+* a deposition-nucleated INP makes one crystal of mass
+  ``m_{i0} = \tfrac{4\pi}{3}\,900\,(1\,\mu\mathrm{m})^3`` =
+  3.8×10⁻¹⁵ kg (the P3 nucleated-ice mass), drawn from vapour but never
+  more than the excess over ice saturation,
+  ``(S_i - 1)e_{si}(T)/(R_v T)``;
+* the latent heat is ``L_f(T) M_\mathrm{liq} + L_s(T) M_\mathrm{vap}``
+  with the Kirchhoff latent heats of `MoistThermodynamics`.
+
+The result is an `IceNucleationTendency` of increments (all
+non-negative); `nucleation_rates` divides by ``\Delta t``. The tests
+check, for every call, INP consumed = crystals formed (to 10⁻¹²),
+``M_\mathrm{ice} = M_\mathrm{liq} + M_\mathrm{vap}`` exactly, heat per
+kilogram = ``L_f`` or ``L_s``, closure of the INP budget (§3) to
+10⁻¹⁴, a second call at the same ``(T, S_i)`` nucleating exactly zero,
+and two cooling steps summing to one step straight to the colder
+temperature (to 10⁻¹⁰). For the reference parcel of the tests (1 cm⁻³
+dust, 0.01 cm⁻³ biological, 100 cm⁻³ droplets, 0.2 g m⁻³) immersion
+freezing at −25 °C forms 15.6 L⁻¹ crystals on dust and 3×10⁻⁴ L⁻¹ on
+biological particles; at −30 °C 150 L⁻¹; deposition at 225 K and
+``S_i`` = 1.25 (out of cloud) forms 30 L⁻¹.
+
+### 6.4 Coupling contract for P3 (issue #7)
+
+The host passes ``T``, ``S_i`` (`relative_humidity_ice`), ``p`` and
+its droplet number and liquid content, adds
+``N_\mathrm{ice,imm} + N_\mathrm{ice,dep} + N_\mathrm{ice,hom}`` and
+``M_\mathrm{ice}`` to its ice category, removes ``N_\mathrm{liq}``,
+``M_\mathrm{liq}`` from cloud liquid and ``M_\mathrm{vap}`` from vapour,
+and heats the air by ``\mathrm{heat}/(\rho c_{pm})``. When its ice
+sublimates or melts it calls `inp_release!`; when ice precipitates out,
+`inp_scavenge!(…; population = :consumed)`.
+
+## 7. Consistency with the mixed-phase ramp
+
+`MoistThermodynamics.liquid_fraction` (Phase 39) partitions condensate
+between liquid and ice with a smoothstep between
+``T_\mathrm{icenuc}`` = 233.15 K and ``T_\mathrm{freeze}`` = 273.15 K.
+It and heterogeneous nucleation answer different questions — ``\lambda``
+is an equilibrium partition for schemes *without* prognostic ice, while
+nucleation sets the number of crystals that depositional growth
+(Wegener–Bergeron–Findeisen, the host's business) then feeds. They must
+nevertheless agree about where ice is impossible and where it is
+compulsory. The rule is that `freezing_regime` is bounded by the **same
+constants**:
+
+| regime | ``T`` | ``\lambda(T)`` | nucleation |
+| :-- | :-- | :-- | :-- |
+| `:liquid` | ``T \ge T_\mathrm{freeze}`` | 1 | none; no INP consumed |
+| `:heterogeneous` | ``T_\mathrm{icenuc} < T < T_\mathrm{freeze}`` | (0, 1) | immersion + deposition on INP |
+| `:homogeneous` | ``T \le T_\mathrm{icenuc}`` | 0 | all liquid freezes (immersed INP inside it); deposition continues on the interstitial INP only |
+
+Tested: the regime and ``\lambda`` agree on a 0.05 K grid from 220 to
+280 K; at ``T_\mathrm{freeze}`` nothing freezes even for 100 cm⁻³ of
+dust at ``S_i`` = 1.5; at ``T_\mathrm{icenuc}`` the frozen liquid
+fraction is exactly ``1 - \lambda = 1`` and the immersed INP are
+consumed inside the frozen drops; a custom ``T_\mathrm{icenuc}`` moves
+both together. Inside the ramp heterogeneous freezing never outruns the
+ramp's ice fraction: for 10 cm⁻³ of immersed dust the frozen liquid
+fraction is at most 0.075 of ``1 - \lambda(T)``.
+
 ## References
 
 * DeMott, P. J. et al. (2010), *Predicting global atmospheric ice nuclei
@@ -249,6 +393,15 @@ tested in isolation and is independent of any one bulk scheme.
   experiments*, ACP 12, 9817.
 * Kanji, Z. A. et al. (2017), *Overview of ice nucleating particles*,
   Meteorol. Monogr. 58, 1.1.
+* Marinou, E. et al. (2019), *Retrieval of ice-nucleating particle
+  concentrations from lidar observations and comparison with UAV in situ
+  measurements*, ACP 19, 11315.
+* Meyers, M. P., DeMott, P. J. & Cotton, W. R. (1992), *New primary
+  ice-nucleation parameterizations in an explicit cloud model*, JAM 31,
+  708.
+* Morrison, H. & Milbrandt, J. A. (2015), *Parameterization of
+  cloud microphysics based on the prediction of bulk ice particle
+  properties. Part I*, JAS 72, 287.
 * Morrison, H. et al. (2012), *Resilience of persistent Arctic
   mixed-phase clouds*, Nature Geosci. 5, 11.
 * Niemand, M. et al. (2012), *A particle-surface-area-based
@@ -259,6 +412,9 @@ tested in isolation and is independent of any one bulk scheme.
 * Solomon, A., Feingold, G. & Shupe, M. D. (2015), *The role of ice
   nuclei recycling in the maintenance of cloud ice in Arctic
   mixed-phase stratocumulus*, ACP 15, 10631.
+* Tobo, Y. et al. (2013), *Biological aerosol particles as a key
+  determinant of ice nuclei populations in a forest ecosystem*, JGR 118,
+  10100.
 * Ullrich, R. et al. (2017), *A new ice nucleation active site
   parameterization for desert dust and soot*, JAS 74, 699.
 * Whitby, E. R. & McMurry, P. H. (1997), *Modal aerosol dynamics

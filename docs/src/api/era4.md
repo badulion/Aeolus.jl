@@ -24,7 +24,11 @@ Modules = [Aeolus.P3Microphysics]
 primary biological aerosol) as prognostic modal tracers with an
 available/consumed budget, and provides the log-normal number and
 surface-area diagnostics that heterogeneous freezing parameterisations
-are written in.
+are written in. On top of that population it implements immersion
+freezing (Niemand et al. 2012, Ullrich et al. 2017, DeMott et al. 2015,
+Tobo et al. 2013) and deposition nucleation (Ullrich et al. 2017), and
+returns ice number and mass source terms with the matching INP, liquid
+and vapour sinks and latent heat (`ice_nucleation!`).
 
 ```@autodocs
 Modules = [Aeolus.IceNucleation]
