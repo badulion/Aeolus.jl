@@ -6,8 +6,9 @@ The theory behind these modules is developed in
 [Sub-grid cloud and supersaturation PDF](../theory/subgrid_cloud.md),
 [Sub-grid supersaturation in activation and droplet growth](../theory/sgs_activation_growth.md),
 [Spectral broadening: bulk closure and validation](../theory/spectral_broadening.md),
-and, for fog and dew,
-[Fog and dew](../theory/fog.md) and [Radiation fog](../theory/radiation_fog.md);
+[Visibility](../theory/visibility.md),
+[Fog and dew](../theory/fog.md) and
+[Radiation fog](../theory/radiation_fog.md);
 the pages below are the generated API reference, one per module.
 
 - [Shared contract — MoistThermodynamics (Phase 39)](era4/moist_thermodynamics.md) — `Aeolus.MoistThermodynamics`
