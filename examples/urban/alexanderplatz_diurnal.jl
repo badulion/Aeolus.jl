@@ -412,7 +412,7 @@ for n in 1:nsteps
                          scheme = :weno_z5, workspace = adv_ws, bcs = moist_bcs)
         interior_view(q) .+= dt .* view(tqv.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
     end
-    apply_kessler_step!(qv_p, ql_p, qr_p, dt; Vt = 3.0)
+    apply_kessler_step!(qv_p, ql_p, qr_p, dt; Vt = :spectrum)
     clamp!(interior_view(qv_p), 0.0, 0.03)
 
     fill_halos!(pollutant, FieldBoundaryConditions(:periodic))
