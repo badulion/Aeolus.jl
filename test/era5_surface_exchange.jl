@@ -281,4 +281,17 @@ const SE = Aeolus.SurfaceExchange
         @test fl.H < 0                                        # stable, air heats ground
         @info "SlabLand night equilibrium" T_s = land.T T_rad = T_rad H = fl.H G = fl.G
     end
+    @testset "Exports: one binding per name, no ambiguities" begin
+        for n in (:SurfaceConstants, :DEFAULT_SURFACE_CONSTANTS, :BusingerDyerBeljaarsHoltslag,
+                  :psi_m, :psi_h, :phi_m, :phi_h, :solve_surface_layer, :obukhov_length,
+                  :bulk_richardson, :AbstractSurface, :SurfaceForcing, :SurfaceFluxes,
+                  :surface_temperature, :roughness_lengths, :surface_albedo,
+                  :surface_emissivity, :turbulent_fluxes, :step_surface!, :net_radiation)
+            @test Base.isexported(Aeolus, n)
+            @test getfield(Aeolus, n) === getfield(SE, n)
+        end
+        @test isempty(Test.detect_ambiguities(SE))
+        # The fog column's mixing length uses the contract's κ, not a copy.
+        @test Aeolus.RadiationFog._KARMAN === DEFAULT_SURFACE_CONSTANTS.κ
+    end
 end

@@ -44,6 +44,9 @@ surface warmer than the air gives ``θ_* < 0``, ``H > 0`` and ``L < 0``
   * Paulson, C. A. (1970). The mathematical representation of wind speed
     and temperature profiles in the unstable atmospheric surface layer.
     *J. Appl. Meteorol.*, 9, 857-861.
+  * Beljaars, A. C. M. (1995). The parametrization of surface fluxes in
+    large-scale models under free convection. *Q. J. R. Meteorol. Soc.*,
+    121, 255-270.
   * Beljaars, A. C. M. & Holtslag, A. A. M. (1991). Flux parameterization
     over land surfaces for atmospheric models. *J. Appl. Meteorol.*, 30,
     327-341.

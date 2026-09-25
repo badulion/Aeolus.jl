@@ -48,7 +48,11 @@ Modules = [Aeolus.SpectralElement]
 ## Radiation (Era I scaffold)
 
 Superseded for production use by the Era III stack; retained because it
-is cheap and adequate for idealised cases.
+is cheap and adequate for idealised cases. `SlabLand` is the first
+implementer of the Era V surface interface
+([SurfaceExchange](era5/surface_exchange.md)): `surface_temperature` is
+the SurfaceExchange generic, and `step_surface!` computes its own
+Monin–Obukhov fluxes.
 
 ```@autodocs
 Modules = [Aeolus.Radiation]
