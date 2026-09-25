@@ -57,6 +57,7 @@ include("P3Microphysics.jl")       # Phase 40
 include("Microphysics.jl")         # Phase 12 Kessler; delegates rain fall speeds to P3 (Phase 44)
 include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
+include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 
 using .Grids
 using .Fields
@@ -102,6 +103,7 @@ using .Superdroplet
 using .P3Microphysics
 using .IceNucleation
 using .TurbulentMicrophysics
+using .Visibility                  # Phase 44
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -538,5 +540,17 @@ export SpectralMoments, spectral_moments, gamma_moment_ratio,
        bulk_condensation_step!, parcel_ascent!,
        BroadeningCase, BroadeningHistory, run_broadening_case,
        broadening_initial_population, fit_power_law
+
+# Phase 44 — visibility diagnostic (Koschmieder)
+# Mie, haze and Rayleigh are delegated to AerosolOptics / GasOptics;
+# `rayleigh_cross_section` is the GasOptics definition, re-exported here.
+export KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD, VISIBILITY_WAVELENGTH,
+       koschmieder_visibility, extinction_from_visibility,
+       DropletSpectrum, MonodisperseDroplets, GammaDroplets, BinnedDroplets,
+       gamma_droplets, droplet_spectrum, spectrum_number, spectrum_moment,
+       spectrum_water_content, water_extinction_efficiency,
+       droplet_extinction, fog_extinction, aerosol_extinction,
+       rayleigh_extinction, rayleigh_cross_section, total_extinction,
+       visibility, kunkel_visibility, gultepe_visibility
 
 end # module
