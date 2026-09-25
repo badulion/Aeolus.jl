@@ -11,7 +11,7 @@ The bulk state also extends `Superdroplet.mean_radius`,
 `Superdroplet.relative_dispersion` and
 `MoistThermodynamics.effective_radius`. The CCN spectrum they delegate
 to, `ccn_fraction` / `ccn_spectrum`, lives in
-`AerosolCloud` (Phase 42).
+[`AerosolCloud`](aerosol_cloud.md) (Phase 42).
 
 Theory: [Sub-grid cloud and supersaturation PDF](../../theory/subgrid_cloud.md),
 [Sub-grid supersaturation in activation and droplet growth](../../theory/sgs_activation_growth.md)

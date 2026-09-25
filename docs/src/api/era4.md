@@ -10,9 +10,12 @@ and, for fog and dew,
 [Fog and dew](../theory/fog.md) and [Radiation fog](../theory/radiation_fog.md);
 the pages below are the generated API reference, one per module.
 
+- [Shared contract — MoistThermodynamics (Phase 39)](era4/moist_thermodynamics.md) — `Aeolus.MoistThermodynamics`
 - [P3 microphysics (Phase 40)](era4/p3_microphysics.md) — `Aeolus.P3Microphysics`, split by topic:
   [process rates and secondary ice](era4/p3_processes.md),
   [sedimentation, reflectivity and precipitation fraction](era4/p3_sedimentation.md)
+- [Superdroplet microphysics (Phase 41)](era4/superdroplet.md) — `Aeolus.Superdroplet`
+- [Aerosol-cloud interaction (Phase 42)](era4/aerosol_cloud.md) — `Aeolus.AerosolCloud`
 - [Ice nucleation (Phase 43)](era4/ice_nucleation.md) — `Aeolus.IceNucleation`
 - [Terminal-velocity spectrum and precipitation fraction (Phase 44)](era4/p3_microphysics.md#Terminal-velocity-spectrum-and-precipitation-fraction-(Phase-44))
   — no module of its own: P3 part in `Aeolus.P3Microphysics`, Kessler part in

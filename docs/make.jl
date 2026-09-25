@@ -77,9 +77,12 @@ makedocs(
             ],
             "Era IV — microphysics" => [
                 "Overview"                     => "api/era4.md",
+                "MoistThermodynamics"          => "api/era4/moist_thermodynamics.md",
                 "P3 microphysics"              => "api/era4/p3_microphysics.md",
                 "P3 processes and secondary ice" => "api/era4/p3_processes.md",
                 "P3 sedimentation and precipitation fraction" => "api/era4/p3_sedimentation.md",
+                "Superdroplet"                 => "api/era4/superdroplet.md",
+                "Aerosol-cloud interaction"    => "api/era4/aerosol_cloud.md",
                 "Ice nucleation"               => "api/era4/ice_nucleation.md",
                 "Visibility"                   => "api/era4/visibility.md",
                 "Fog and dew"                  => "api/era4/radiation_fog.md",
