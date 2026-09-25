@@ -911,6 +911,10 @@ exactly up to round-off,
     h(T, q_v − Δq, q_c + Δq, q_r, q_i) = h(T₀, q_v, q_c, q_r, q_i),
 
 equivalently `c_pm(q_final) ΔT = L_v(T₀) Δq`, and `q_v + q_c` is conserved.
+Saturation is reached to `tol` in *absolute* specific humidity
+(`|q_v − q_s| < 1e-14` kg kg⁻¹ by default), so relative to `q_s` it is
+~1e-12 in warm air but up to ~2e-8 near 190 K where `q_s` ~ 1e-6
+(measured by random sampling over 190-335 K, 200-1050 hPa).
 
 # Algorithm
 
