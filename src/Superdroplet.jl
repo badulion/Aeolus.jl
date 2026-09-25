@@ -105,7 +105,7 @@ export
     # kernels
     CollisionKernel, GolovinKernel, HydrodynamicKernel, GravitationalKernel,
     LongKernel, collision_kernel,
-    terminal_velocity, collision_efficiency, LongEfficiency, UnitEfficiency,
+    terminal_velocity, stokes_settling_velocity, collision_efficiency, LongEfficiency, UnitEfficiency,
     # collision-coalescence
     coalescence_step!, collision_coalescence!, coalescence_probability,
     # condensation
@@ -750,18 +750,49 @@ function terminal_velocity(r::Real, m::MicrophysicalConstants = DEFAULT_MICRO)
     return _vterm_d(Float64(2 * rr), m)
 end
 
+# Diameters (m) where the drop fall-speed law changes regime: Stokes → Beard
+# regime 2, start and end of the blend into the Atlas et al. fit. Bulk
+# integrals over V(D) (P3 sedimentation) split their quadrature here.
+const _VTERM_REGIME_D = (19.5e-6, 1.07e-3, 1.4e-3)
+
+"""
+    stokes_settling_velocity(r, ρ_p, m = DEFAULT_MICRO) -> m s⁻¹
+
+Stokes settling speed of a rigid sphere of radius `r` (m) and density
+`ρ_p` (kg m⁻³) with the Cunningham slip correction `1 + 2.51 λ/d`:
+
+```math
+v = \\left(1 + 2.51\\frac{λ}{d}\\right)\\frac{(ρ_p - ρ_a)\\, g\\, d^2}{18 μ}
+```
+
+This is regime 1 of [`terminal_velocity`](@ref), which calls it with
+`ρ_p = ρ_water`; it is exposed separately so that dry aerosol (dust,
+biological ice-nucleating particles in `IceNucleation`) settles with the
+*same* drag law and air properties as cloud droplets. Valid for particle
+Reynolds number ≪ 1, i.e. `d ≲ 20 μm` for water and `≲ 15 μm` for
+mineral dust (Seinfeld & Pandis 2016, ch. 9).
+"""
+function stokes_settling_velocity(r::Real, ρ_p::Real,
+                                  m::MicrophysicalConstants = DEFAULT_MICRO)
+    rr = float(r)
+    rr <= 0 && return zero(rr)
+    d = 2 * rr
+    Csc = 1 + 2.51 * m.λ_air / d
+    return Csc * (ρ_p - m.ρ_air) * m.grav * d^2 / (18 * m.μ_air)
+end
+
 function _vterm_d(d::Float64, m::MicrophysicalConstants)
     Δρ = m.ρ_water - m.ρ_air
-    if d < 19.5e-6
-        Csc = 1 + 2.51 * m.λ_air / d
-        return Csc * Δρ * m.grav * d^2 / (18 * m.μ_air)
-    elseif d <= 1.07e-3
+    d_st, d_b2, d_at = _VTERM_REGIME_D
+    if d < d_st
+        return stokes_settling_velocity(d / 2, m.ρ_water, m)
+    elseif d <= d_b2
         return _vterm_beard2(d, m, Δρ)
-    elseif d < 1.4e-3
+    elseif d < d_at
         # Continuous blend between Beard regime 2 and the Atlas fit.
         v2 = _vterm_beard2(d, m, Δρ)
         va = _vterm_atlas(d)
-        θ  = (d - 1.07e-3) / (1.4e-3 - 1.07e-3)
+        θ  = (d - d_b2) / (d_at - d_b2)
         return (1 - θ) * v2 + θ * va
     else
         return _vterm_atlas(d)

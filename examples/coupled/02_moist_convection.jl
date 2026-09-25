@@ -58,7 +58,7 @@ qr_total = Float64[sum(interior_view(qr))]
 
 for n in 1:nsteps
     step!(sim, dt)
-    apply_kessler_step!(sim.qv, ql, qr, dt; Vt=5.0)
+    apply_kessler_step!(sim.qv, ql, qr, dt; Vt=:spectrum)
     if n % 12 == 0
         push!(ts, sim.t / 60)
         push!(ql_total, sum(interior_view(ql)))
