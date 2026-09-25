@@ -892,4 +892,5 @@ end
         include("era4_superdroplet.jl")    # Phase 41  superdroplet microphysics
         include("era4_p3.jl")              # Phase 40  P3 microphysics
         include("era4_icenucleation.jl")   # Phase 43  ice nucleation
+        include("era4_turbmicro.jl")       # Phase 45  sub-grid supersaturation PDF
 end

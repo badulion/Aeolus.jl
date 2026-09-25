@@ -31,6 +31,7 @@ makedocs(
             "Radiative transfer"          => "theory/radiation.md",
             "P3 microphysics"             => "theory/p3.md",
             "Ice nucleation"              => "theory/ice_nucleation.md",
+            "Sub-grid cloud PDF"          => "theory/subgrid_cloud.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

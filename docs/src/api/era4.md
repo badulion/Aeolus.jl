@@ -1,9 +1,10 @@
 # Era IV — High-fidelity clouds and microphysics
 
 The theory behind these modules is developed in
-[P3 microphysics](../theory/p3.md) and
-[Ice nucleation](../theory/ice_nucleation.md); this page is the
-generated API reference.
+[P3 microphysics](../theory/p3.md),
+[Ice nucleation](../theory/ice_nucleation.md) and
+[Sub-grid cloud and supersaturation PDF](../theory/subgrid_cloud.md);
+this page is the generated API reference.
 
 ## P3 microphysics (Phase 40)
 
@@ -47,3 +48,12 @@ fraction carried down the column with maximum, random or maximum-random
 overlap (`p3_precipitation_fraction`, `p3_fractional_process_rates`,
 `p3_step_column`), documented with the P3 module above. Theory:
 [P3 microphysics](../theory/p3.md), last section.
+
+## Turbulence-microphysics interaction (Phase 45)
+
+Sub-grid distribution of the saturation deficit, partial cloud fraction
+and condensate, and the SGS variance that drives them (issue #12).
+
+```@autodocs
+Modules = [Aeolus.TurbulentMicrophysics]
+```
