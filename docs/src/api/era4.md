@@ -4,8 +4,9 @@ The theory behind these modules is developed in
 [P3 microphysics](../theory/p3.md),
 [Ice nucleation](../theory/ice_nucleation.md),
 [Sub-grid cloud and supersaturation PDF](../theory/subgrid_cloud.md),
-[Sub-grid supersaturation in activation and droplet growth](../theory/sgs_activation_growth.md) and
-[Spectral broadening: bulk closure and validation](../theory/spectral_broadening.md);
+[Sub-grid supersaturation in activation and droplet growth](../theory/sgs_activation_growth.md),
+[Spectral broadening: bulk closure and validation](../theory/spectral_broadening.md) and
+[Visibility](../theory/visibility.md);
 this page is the generated API reference.
 
 ## P3 microphysics (Phase 40)
@@ -67,4 +68,14 @@ to, `ccn_fraction` / `ccn_spectrum`, lives in `AerosolCloud` (Phase 42).
 
 ```@autodocs
 Modules = [Aeolus.TurbulentMicrophysics]
+```
+
+## Visibility diagnostic (Phase 44)
+
+Koschmieder visibility from droplet, haze and molecular extinction at
+550 nm, plus the Kunkel (1984) and Gultepe et al. (2006) fog
+parameterisations. Theory: [Visibility](../theory/visibility.md).
+
+```@autodocs
+Modules = [Aeolus.Visibility]
 ```

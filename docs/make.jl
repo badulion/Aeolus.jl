@@ -34,6 +34,7 @@ makedocs(
             "Sub-grid cloud PDF"          => "theory/subgrid_cloud.md",
             "SGS activation and growth"   => "theory/sgs_activation_growth.md",
             "Spectral broadening"         => "theory/spectral_broadening.md",
+            "Visibility (Koschmieder)"    => "theory/visibility.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
