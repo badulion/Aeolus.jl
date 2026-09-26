@@ -37,9 +37,16 @@ cell) is the special case of one tile per cell; [`class_fractions`](@ref)
 and [`tiles_from_class_map`](@ref) coarse-grain such a map into tiled
 cells.
 
-The blending-height formulation (tile-specific forcing heights) is a
-separate phase; tiles here all see the grid-cell forcing, or a forcing
-per tile passed explicitly to `step_surface!`.
+A plain `SurfaceMosaic` forces every tile with the grid-cell forcing
+(or a forcing per tile passed to `step_surface!`). The **blending-height**
+formulation (Wieringa 1986; Mason 1988; Claussen 1991) is the second half
+of this module: [`effective_roughness`](@ref) at a blending height ``l_b``,
+closures for ``l_b`` ([`MasonBlendingHeight`](@ref),
+[`ClaussenBlendingHeight`](@ref), [`BouZeidBlendingHeight`](@ref),
+[`IBLBlendingHeight`](@ref)), internal-boundary-layer growth laws
+([`ibl_height`](@ref)), and [`BlendedMosaic`](@ref), whose tiles are forced
+with the wind, temperature and humidity *at the blending height* obtained
+by matching the aggregate flux to the profile above it.
 
 # References
 
@@ -56,11 +63,37 @@ per tile passed explicitly to `step_surface!`.
   * Giorgi, F. & Avissar, R. (1997). Representation of heterogeneity
     effects in Earth system modeling: experience from land surface
     modeling. *Rev. Geophys.*, 35, 413-437.
+  * Wieringa, J. (1986). Roughness-dependent geographical interpolation
+    of surface wind speed averages. *Q. J. R. Meteorol. Soc.*, 112,
+    867-889.
+  * Claussen, M. (1991). Estimation of areally-averaged surface fluxes.
+    *Boundary-Layer Meteorol.*, 54, 387-410.
+  * Bou-Zeid, E., Meneveau, C. & Parlange, M. B. (2004). Large-eddy
+    simulation of neutral atmospheric boundary layer flow over
+    heterogeneous surfaces: blending height and effective surface
+    roughness. *Water Resour. Res.*, 40, W02505.
+  * Bou-Zeid, E., Parlange, M. B. & Meneveau, C. (2007). On the
+    parameterization of surface roughness at regional scales.
+    *J. Atmos. Sci.*, 64, 216-227.
+  * Savelyev, S. A. & Taylor, P. A. (2005). Internal boundary layers:
+    I. Height formulae for neutral and diabatic flows.
+    *Boundary-Layer Meteorol.*, 115, 1-25.
+  * Taylor, P. A. (1987). Comments and further analysis on effective
+    roughness lengths for use in numerical 3-dimensional models.
+    *Boundary-Layer Meteorol.*, 39, 403-418.
+  * Kramm, G. & Dlugi, R. (2009). On the accuracy with which the lower
+    boundary conditions can be determined in numerical models of the
+    atmosphere. arXiv:0911.2286 (Section 5.1 quotes the Mason and
+    Claussen blending-height formulae).
 """
 module SurfaceTiles
 
 using ..SurfaceExchange: AbstractSurface, SurfaceForcing, SurfaceFluxes,
-                         SurfaceConstants, DEFAULT_SURFACE_CONSTANTS
+                         SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
+                         AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
+                         psi_m, psi_h, obukhov_length, _virtual_coefficient
+using ..MoistThermodynamics: PhasePartition, air_density, heat_capacity_moist,
+                             dry_adiabatic_lapse_rate
 import ..SurfaceExchange: surface_temperature, roughness_lengths,
                           surface_albedo, surface_emissivity,
                           moisture_availability, net_radiation,
@@ -70,7 +103,12 @@ export SurfaceMosaic, ntiles, mosaic_fractions, set_mosaic_fractions!,
        aggregate_fluxes, tile_fluxes, last_tile_fluxes,
        effective_radiative_temperature, tile_mean_temperature,
        ParameterAggregatedSurface, parameter_aggregate,
-       class_fractions, tiles_from_class_map
+       class_fractions, tiles_from_class_map,
+       # blending height (#42)
+       effective_roughness, effective_scalar_roughness,
+       AbstractBlendingHeight, FixedBlendingHeight, MasonBlendingHeight,
+       ClaussenBlendingHeight, BouZeidBlendingHeight,
+       blending_height
 
 # =========================================================================
 # Fractions
@@ -335,8 +373,10 @@ Parameter aggregate of the tile roughness lengths by logarithmic
 averaging, ``\\ln z_{0,eff} = \\sum f_i \\ln z_{0,i}`` (for each of
 `z0m`, `z0h`, `z0q`). Log-averaging is the natural choice because the
 neutral drag depends on ``\\ln z_0``; it is still only an approximation
-of the tile-aggregated stress (it ignores the blending height, Mason
-1988). A tiled cell's own fluxes never use it.
+of the tile-aggregated stress: it is the ``l_b → ∞`` limit of the
+blending-height [`effective_roughness`](@ref) (Mason 1988), which a
+[`BlendedMosaic`](@ref) reports instead. A tiled cell's own fluxes never
+use it.
 """
 function roughness_lengths(ts::SurfaceMosaic)
     lg(k) = exp(_wsum(t -> log(getfield(roughness_lengths(t), k)), ts))
@@ -455,5 +495,271 @@ function tiles_from_class_map(class_map::AbstractMatrix{<:Integer}, block::NTupl
     end
     return cells
 end
+
+# =========================================================================
+# Blending height: effective roughness (#42)
+# =========================================================================
+#
+# Below the blending height l_b the flow is in equilibrium with each tile;
+# above it the tiles' internal boundary layers have merged and one
+# horizontally uniform profile exists (Wieringa 1986; Mason 1988). Wind,
+# temperature and humidity are therefore common to all tiles *at l_b*,
+# and each tile exchanges with that common state through its own surface
+# layer of depth l_b.
+
+# Tiles that carry weight; a zero-fraction tile never constrains l_b.
+_active(z0s, f) = [(z, w) for (z, w) in zip(z0s, f) if w > 0]
+
+function _check_blending(l_b, z0s, f)
+    length(z0s) == length(f) ||
+        throw(DimensionMismatch("blending height: $(length(z0s)) roughness lengths, $(length(f)) fractions"))
+    act = _active(z0s, f)
+    isempty(act) && throw(ArgumentError("blending height: no tile with a positive fraction"))
+    all(((z, _),) -> 0 < z < l_b, act) ||
+        throw(ArgumentError("blending height l_b = $l_b m must exceed every roughness length (got $(maximum(first, act)) m)"))
+    return act
+end
+
+"""
+    effective_roughness(z0s, fractions, l_b) -> z0_eff
+
+The effective momentum roughness length of a patchwork of tiles with
+roughness lengths `z0s` and area fractions `fractions`, for a blending
+height `l_b` (m):
+
+```math
+\\frac{1}{\\ln^2(l_b/z_{0,eff})} = \\sum_i \\frac{f_i}{\\ln^2(l_b/z_{0,i})} .
+```
+
+This is the neutral drag law applied tile by tile with the wind common
+to all tiles at ``l_b`` (Wieringa 1986; Mason 1988): the tile stresses
+``ρ[κU(l_b)/\\ln(l_b/z_{0,i})]^2`` average to the stress of one surface of
+roughness ``z_{0,eff}``. Because ``1/\\ln^2`` is convex, ``z_{0,eff}``
+lies above the logarithmic mean ``\\exp\\sum f_i\\ln z_{0,i}`` and below the
+largest ``z_{0,i}``; it tends to the logarithmic mean as ``l_b → ∞``
+(the log-average model of Taylor 1987) as
+``\\ln z_{0,eff} = \\overline{\\ln z_0} + \\tfrac32\\,\\mathrm{Var}(\\ln z_0)/\\ln(l_b/z_0) + O(\\ln^{-2})``,
+and grows as the blending height falls, i.e. as the patches become
+smaller. Form drag of obstacles at patch edges is not included: this is
+the aggregate of the tiles' own log-law drag.
+
+Zero-fraction tiles are ignored; ``l_b`` must exceed every remaining
+``z_{0,i}``.
+
+    effective_roughness(m::SurfaceMosaic, l_b) -> (z0m, z0h, z0q)
+    effective_roughness(m::SurfaceMosaic, bh::AbstractBlendingHeight) -> (z0m, z0h, z0q)
+
+All three effective roughness lengths of a mosaic's tiles, with the
+scalar ones from [`effective_scalar_roughness`](@ref); with a
+blending-height model `bh` the height is [`blending_height`](@ref)`(bh, m)`.
+"""
+function effective_roughness(z0s::AbstractVector{<:Real}, f::AbstractVector{<:Real}, l_b::Real)
+    act = _check_blending(l_b, z0s, f)
+    S = sum(w / log(l_b / z)^2 for (z, w) in act) / sum(last, act)
+    return l_b * exp(-1 / sqrt(S))
+end
+effective_roughness(z0s::Tuple, f, l_b::Real) = effective_roughness(collect(Float64, z0s), collect(Float64, f), l_b)
+
+"""
+    effective_scalar_roughness(z0ms, z0hs, fractions, l_b; z0m_eff = effective_roughness(z0ms, fractions, l_b))
+
+Effective roughness length for heat (or moisture) at blending height
+`l_b`: the neutral bulk transfer coefficient ``κ^2/[\\ln(l_b/z_{0m})
+\\ln(l_b/z_{0h})]`` is averaged over the tiles,
+
+```math
+\\frac{1}{\\ln(l_b/z_{0m,eff})\\,\\ln(l_b/z_{0h,eff})} =
+\\sum_i \\frac{f_i}{\\ln(l_b/z_{0m,i})\\,\\ln(l_b/z_{0h,i})} ,
+```
+
+which is exact for the cell heat flux when every tile has the same
+surface-to-``l_b`` temperature difference under neutral stratification
+— the same construction as [`effective_roughness`](@ref), applied to
+the scalar exchange coefficient.
+"""
+function effective_scalar_roughness(z0ms::AbstractVector{<:Real}, z0hs::AbstractVector{<:Real},
+                                    f::AbstractVector{<:Real}, l_b::Real;
+                                    z0m_eff::Real = effective_roughness(z0ms, f, l_b))
+    length(z0hs) == length(z0ms) ||
+        throw(DimensionMismatch("effective_scalar_roughness: $(length(z0ms)) z0m, $(length(z0hs)) z0h"))
+    _check_blending(l_b, z0ms, f); _check_blending(l_b, z0hs, f)
+    S = sum(w / (log(l_b / zm) * log(l_b / zh)) for (zm, zh, w) in zip(z0ms, z0hs, f) if w > 0) /
+        sum(w for w in f if w > 0)
+    return l_b * exp(-1 / (S * log(l_b / z0m_eff)))
+end
+
+_tile_roughness(m::SurfaceMosaic, k::Symbol) = Float64[getfield(roughness_lengths(t), k) for t in m.tiles]
+
+function effective_roughness(m::SurfaceMosaic, l_b::Real)
+    zm, zh, zq = _tile_roughness(m, :z0m), _tile_roughness(m, :z0h), _tile_roughness(m, :z0q)
+    f = m.fractions
+    z0m = effective_roughness(zm, f, l_b)
+    return (z0m = z0m,
+            z0h = effective_scalar_roughness(zm, zh, f, l_b; z0m_eff = z0m),
+            z0q = effective_scalar_roughness(zm, zq, f, l_b; z0m_eff = z0m))
+end
+
+# =========================================================================
+# Blending-height closures
+# =========================================================================
+
+"""
+    AbstractBlendingHeight
+
+A rule for the blending height ``l_b`` of a patchwork of tiles.
+Implementers extend `blending_height(bh, z0s, fractions; c)`. Provided:
+[`FixedBlendingHeight`](@ref), [`MasonBlendingHeight`](@ref),
+[`BouZeidBlendingHeight`](@ref).
+"""
+abstract type AbstractBlendingHeight end
+
+"""
+    FixedBlendingHeight(l_b)
+
+A prescribed blending height ``l_b`` (m), e.g. taken from where the
+resolved flow of an LES over the patches becomes horizontally uniform
+(Bou-Zeid et al. 2004 determine it from where the velocity quartile
+profiles merge).
+"""
+struct FixedBlendingHeight <: AbstractBlendingHeight
+    l_b::Float64
+    function FixedBlendingHeight(l_b::Real)
+        l_b > 0 || throw(ArgumentError("FixedBlendingHeight: l_b must be positive"))
+        new(Float64(l_b))
+    end
+end
+
+"""
+    MasonBlendingHeight(L; C = 2)
+
+Mason's (1988) heuristic blending height for patches of horizontal
+length scale `L` (m): the height at which ``(u_*/U(l_b))^2 ≈ l_b/(C L)``,
+
+```math
+\\frac{l_b}{L}\\,\\ln^2\\!\\frac{l_b}{z_{0,eff}} = C κ^2, \\qquad C ≈ 2,
+```
+
+(form as quoted by Kramm & Dlugi 2009, Eq. 5.4), solved jointly with the
+[`effective_roughness`](@ref) ``z_{0,eff}(l_b)``. For ``L`` of a few
+kilometres and ``z_0 ∼ 0.01``–``0.1`` m it gives ``l_b`` of tens of
+metres, ``O(L/100)``.
+"""
+struct MasonBlendingHeight <: AbstractBlendingHeight
+    L::Float64
+    C::Float64
+    function MasonBlendingHeight(L::Real; C::Real = 2.0)
+        (L > 0 && C > 0) || throw(ArgumentError("MasonBlendingHeight: L and C must be positive"))
+        new(Float64(L), Float64(C))
+    end
+end
+
+"""
+    ClaussenBlendingHeight(L; C = 1.75)
+
+Claussen's (1991) blending height for patches of horizontal scale `L`
+(m),
+
+```math
+\\frac{l_b}{L}\\,\\ln\\frac{l_b}{z_{0,eff}} = C κ, \\qquad C ≈ 1.75,
+```
+
+(form and constant as quoted by Kramm & Dlugi 2009, Eq. 5.5), solved
+jointly with [`effective_roughness`](@ref). It is
+[`BouZeidBlendingHeight`](@ref) without the ``-1``; Bou-Zeid et al.
+(2007, Sect. 6) note that the two give very similar ``z_{0,eff}``, the
+``-1`` mattering only for short patches.
+"""
+struct ClaussenBlendingHeight <: AbstractBlendingHeight
+    L::Float64
+    C::Float64
+    function ClaussenBlendingHeight(L::Real; C::Real = 1.75)
+        (L > 0 && C > 0) || throw(ArgumentError("ClaussenBlendingHeight: L and C must be positive"))
+        new(Float64(L), Float64(C))
+    end
+end
+
+"""
+    BouZeidBlendingHeight(L; C = 1.7)
+
+The blending height of Bou-Zeid, Meneveau & Parlange (2004), tested
+against LES of complex patchworks in Bou-Zeid et al. (2007): blending is
+complete where internal boundary layers growing by the diffusion analogy
+over about twice the patch length `L` (m) meet,
+``l_b[\\ln(l_b/z_{0,eff}) - 1] = C κ L``. Combined with
+[`effective_roughness`](@ref) this is Eq. (2) of Bou-Zeid et al. (2007),
+
+```math
+\\left(\\frac{l_b}{C κ L + l_b}\\right)^2 = \\sum_i \\frac{f_i}{\\ln^2(l_b/z_{0,i})},
+\\qquad z_{0,eff} = l_b \\exp\\!\\left(-\\frac{C κ L}{l_b} - 1\\right),
+```
+
+with ``C = 1.7`` and ``κ = 0.4``. For regular stripes `L` is the mean
+patch length; for patches that are not regular stripes Bou-Zeid et al.
+(2007, Eq. 6) take the integral length scale of the roughness structure
+function.
+"""
+struct BouZeidBlendingHeight <: AbstractBlendingHeight
+    L::Float64
+    C::Float64
+    function BouZeidBlendingHeight(L::Real; C::Real = 1.7)
+        (L > 0 && C > 0) || throw(ArgumentError("BouZeidBlendingHeight: L and C must be positive"))
+        new(Float64(L), Float64(C))
+    end
+end
+
+"""
+    blending_height(bh::AbstractBlendingHeight, z0s, fractions; c = DEFAULT_SURFACE_CONSTANTS) -> l_b
+    blending_height(bh, m::SurfaceMosaic; c = DEFAULT_SURFACE_CONSTANTS) -> l_b
+
+Blending height (m) of tiles with momentum roughness lengths `z0s` and
+area `fractions` (or of the tiles of a mosaic) under the closure `bh`.
+The von Kármán constant is `c.κ`.
+"""
+function blending_height end
+
+blending_height(bh::FixedBlendingHeight, z0s, f; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) = bh.l_b
+
+_lnlz(z0s, f, l) = sqrt(sum(w for w in f if w > 0) / sum(w / log(l / z)^2 for (z, w) in zip(z0s, f) if w > 0))
+
+function blending_height(bh::MasonBlendingHeight, z0s, f; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    κ = c.κ
+    return _increasing_root(l -> (l / bh.L) * _lnlz(z0s, f, l)^2 - bh.C * κ^2, z0s, f)
+end
+
+function blending_height(bh::ClaussenBlendingHeight, z0s, f; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    κ = c.κ
+    return _increasing_root(l -> _lnlz(z0s, f, l) - bh.C * κ * bh.L / l, z0s, f)
+end
+
+function blending_height(bh::BouZeidBlendingHeight, z0s, f; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    κ = c.κ
+    return _increasing_root(l -> _lnlz(z0s, f, l) - bh.C * κ * bh.L / l - 1, z0s, f)
+end
+
+blending_height(bh::AbstractBlendingHeight, m::SurfaceMosaic; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    blending_height(bh, _tile_roughness(m, :z0m), m.fractions; c = c)
+
+effective_roughness(m::SurfaceMosaic, bh::AbstractBlendingHeight; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    effective_roughness(m, blending_height(bh, m; c = c))
+
+# Root of g(l), increasing in l, above the largest active roughness length
+# (where both closures are negative). Bisection in ln l.
+function _increasing_root(g, z0s, f)
+    zmax = maximum(z for (z, w) in zip(z0s, f) if w > 0)
+    lo = zmax * (1 + 1e-9)
+    g(lo) < 0 || return lo
+    hi = 2zmax
+    while g(hi) <= 0
+        hi *= 2
+        hi < 1e9 || throw(ArgumentError("blending height: no root below 1e9 m"))
+    end
+    for _ in 1:200
+        mid = sqrt(lo * hi)
+        g(mid) <= 0 ? (lo = mid) : (hi = mid)
+        hi / lo - 1 <= 4eps() && break
+    end
+    return sqrt(lo * hi)
+end
+
 
 end # module
