@@ -203,4 +203,116 @@ end
         @test n_heat > 0 && n_cool > 0 && n_off > 0
         @test cons < 1e-12 * gross
     end
+
+    @testset "Capacity limit: unmet load and setpoint drift" begin
+        z = hvac_air_box(T = 299.15)
+        h = IdealLoadsHVAC(T_cool = 299.15, cooling_capacity = 1500.0)
+        T_wb = wet_bulb_temperature(299.15, z.p_ref, zone_specific_humidity(z))
+        cap = available_cooling_capacity(h, T_wb, 313.15)
+        b, hb = step_zone!(z, ZoneForcing(T_out = 313.15, Q_internal = 1000.0), 600.0, h)
+        @test hb.capacity ≈ cap rtol = 1e-14
+        @test cap ≈ 1500 * DX_CURVES_WINDOW_AC.capacity(T_wb - 273.15, 40.0) rtol = 1e-12
+        @test hb.Q_cooling_sensible ≈ cap rtol = 1e-14
+        @test hb.Q_unmet < 0 && b.T_air > 299.15
+        # the unmet load is what would have held the setpoint
+        z2 = hvac_air_box(T = 299.15)
+        _, hb2 = step_zone!(z2, ZoneForcing(T_out = 313.15, Q_internal = 1000.0), 600.0,
+                            IdealLoadsHVAC(T_cool = 299.15))
+        @test hb2.Q_cooling_sensible ≈ cap - hb.Q_unmet rtol = 1e-12
+        # no heating system: the zone floats down
+        z = hvac_air_box(T = 293.15)
+        b, hb = step_zone!(z, ZoneForcing(T_out = 263.15), 600.0, IdealLoadsHVAC(heating_capacity = 0.0))
+        @test hb.Q_heating == 0 && hb.Q_unmet > 0 && b.T_air < 293.15
+    end
+
+    @testset "Exhaust heat: first law of the plant, Q_exh = Q_cool (1 + 1/COP)" begin
+        f = ZoneForcing(T_out = 308.15, Q_internal = 1200.0, q_out = 0.014)
+        # air-cooled: all rejection sensible
+        z = hvac_air_box(T = 299.15)
+        b, hb = step_zone!(z, f, 600.0, IdealLoadsHVAC(T_cool = 299.15))
+        @test hb.Q_cooling > 0
+        @test hb.Q_exhaust_sensible ≈ hb.Q_cooling * (1 + 1 / hb.COP) rtol = 1e-14
+        @test hb.Q_exhaust_latent == 0 && hb.W_evaporated == 0
+        @test hb.P_cooling ≈ hb.Q_cooling / hb.COP rtol = 1e-14
+        @printf("  air-cooled at 35 °C: Q_cool = %.1f W, COP = %.3f, exhaust = %.1f W (%.3f × Q_cool)\n",
+                hb.Q_cooling, hb.COP, hb.Q_exhaust_sensible, hb.Q_exhaust_sensible / hb.Q_cooling)
+        # evaporative: 85 % latent, as evaporated water
+        z = hvac_air_box(T = 299.15)
+        he = IdealLoadsHVAC(T_cool = 299.15, condenser = :evaporative)
+        b, hbe = step_zone!(z, f, 600.0, he)
+        Q_rej = hbe.Q_cooling * (1 + 1 / hbe.COP)
+        @test hbe.Q_exhaust_latent ≈ 0.85 * Q_rej rtol = 1e-14
+        @test hbe.Q_exhaust_sensible ≈ 0.15 * Q_rej rtol = 1e-12
+        @test hbe.W_evaporated ≈ hbe.Q_exhaust_latent / latent_heat_vapor(hbe.T_condenser) rtol = 1e-14
+        @test hbe.COP > hb.COP                     # cooler condenser air
+        @test hbe.Q_exhaust_sensible < 0.2 * hb.Q_exhaust_sensible
+        @printf("  evaporative: COP = %.3f, sensible exhaust %.1f W, latent %.1f W, water %.3f kg/h\n",
+                hbe.COP, hbe.Q_exhaust_sensible, hbe.Q_exhaust_latent, 3600 * hbe.W_evaporated)
+        # heating: boiler flue loss, heat pump extraction, resistance heating
+        g = ZoneForcing(T_out = 268.15)
+        for (kind, η, exh) in ((:boiler, 0.9, Q -> Q * (1 / 0.9 - 1)), (:heat_pump, 3.0, Q -> -Q * (1 - 1 / 3)),
+                               (:electric, 1.0, Q -> 0.0))
+            z = hvac_air_box(T = 293.15)
+            _, hh = step_zone!(z, g, 600.0, IdealLoadsHVAC(heating = kind))
+            @test hh.Q_heating > 0
+            @test hh.P_heating ≈ hh.Q_heating / η rtol = 1e-14
+            @test hh.Q_exhaust_sensible ≈ exh(hh.Q_heating) atol = 1e-9 * hh.Q_heating
+        end
+        # the general identity, over a mixed run with dehumidification
+        z = hvac_mass_box(T = 297.15)
+        h = IdealLoadsHVAC(T_heat = 294.15, T_cool = 297.15, dehumidify = true, condenser = :evaporative)
+        worst = 0.0
+        for k in 1:288
+            day = sin(2π * (k / 144 - 0.25))
+            _, hk = step_zone!(z, ZoneForcing(T_out = 293.15 + 10day, Q_internal = 500.0,
+                                              Q_latent = 150.0, q_out = 0.013), 600.0, h)
+            lhs = hk.Q_exhaust_sensible + hk.Q_exhaust_latent
+            rhs = hk.P_heating + hk.P_cooling + hk.Q_cooling - hk.Q_heating
+            worst = max(worst, abs(lhs - rhs) / max(1.0, abs(rhs)))
+        end
+        @test worst < 1e-13
+    end
+
+    @testset "Dehumidification to RH_max; latent coil load" begin
+        f = ZoneForcing(T_out = 303.15, q_out = 0.018, Q_internal = 500.0, Q_latent = 300.0)
+        h = IdealLoadsHVAC(T_cool = 297.15, dehumidify = true, RH_max = 0.6)
+        z = hvac_air_box(T = 297.15, ach = 1.0)
+        local b, hb
+        for k in 1:500
+            b, hb = step_zone!(z, f, 600.0, h)
+            @assert zone_relative_humidity(z) <= 0.6 + 1e-12
+        end
+        M, n = z.ρ_air * z.volume, 1.0 / 3600
+        q_max = specific_humidity_from_relative_humidity(297.15, z.p_ref, 0.6)
+        @test zone_relative_humidity(z) ≈ 0.6 atol = 1e-12
+        # steady vapour balance: the coil condenses what ventilation and people bring
+        W_ss = M * n * (0.018 - q_max) + 300.0 / latent_heat_vapor(297.15)
+        @test hb.W_condensed ≈ W_ss rtol = 1e-9
+        @test hb.Q_cooling_latent ≈ W_ss * latent_heat_vapor(297.15) rtol = 1e-9
+        @test hb.Q_cooling ≈ hb.Q_cooling_sensible + hb.Q_cooling_latent
+        @test b.W_hvac ≈ -hb.W_condensed
+        @printf("  dehumidification: q = %.5f (RH %.3f); condensed %.3f kg/h; latent %.1f W of %.1f W coil load (SHR %.3f)\n",
+                zone_specific_humidity(z), zone_relative_humidity(z), 3600 * hb.W_condensed,
+                hb.Q_cooling_latent, hb.Q_cooling, hb.Q_cooling_sensible / hb.Q_cooling)
+        # without dehumidification the room is more humid; sensible load identical
+        z2 = hvac_air_box(T = 297.15, ach = 1.0)
+        local hb2
+        for k in 1:500
+            _, hb2 = step_zone!(z2, f, 600.0, IdealLoadsHVAC(T_cool = 297.15))
+        end
+        @test zone_relative_humidity(z2) > 0.7
+        @test hb2.Q_cooling_latent == 0
+        @test hb2.Q_cooling_sensible ≈ hb.Q_cooling_sensible rtol = 1e-12
+        # capacity is shared, sensible first: latent gets only what is left
+        z3 = hvac_air_box(T = 297.15, ach = 1.0)
+        cap = hb.Q_cooling_sensible + 0.5 * hb.Q_cooling_latent
+        h3 = IdealLoadsHVAC(T_cool = 297.15, dehumidify = true, curves = nothing, cooling_capacity = cap)
+        local hb3
+        for k in 1:500
+            _, hb3 = step_zone!(z3, f, 600.0, h3)
+        end
+        @test hb3.Q_cooling ≈ cap rtol = 1e-12
+        @test hb3.Q_cooling_sensible ≈ hb.Q_cooling_sensible rtol = 1e-12
+        @test zone_relative_humidity(z3) > 0.6
+    end
 end
