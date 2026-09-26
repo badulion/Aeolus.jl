@@ -640,8 +640,8 @@ balance (≈ 1 K for a sunlit roof); each step is one Newton iteration on
 that balance and the residual falls quadratically.
 
 For a wall, `SurfaceForcing.sw_down` / `lw_down` are the irradiances on
-the facet plane (the radiosity coupling that supplies them is Phase 49's
-facet–radiosity issue).
+the facet plane. [`UrbanFacetScene`](@ref) supplies them from the
+radiosity solves and treats the facet-to-facet longwave implicitly.
 """
 mutable struct UrbanFacet{T<:AbstractFloat} <: AbstractSurface
     kind::Symbol
