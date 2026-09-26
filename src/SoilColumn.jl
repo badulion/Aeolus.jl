@@ -676,10 +676,17 @@ HeadBottom(ψ::Real) = HeadBottom{Float64}(ψ)
 
 """
     bottom_flux_linearization(bc, col, ψ_N, K_N) -> (a, b)
+    bottom_flux_linearization(bc, col, ψ_N, K_N, dt) -> (a, b)
 
 Downward flux through the base of the column, ``q = a + b ψ_N`` (m s⁻¹).
-See [`AbstractSoilBottomBoundary`](@ref).
+The solver calls the five-argument form with the sub-step length `dt`
+(s), which a boundary with its own storage (an aquifer)
+needs to couple implicitly; by default it forwards to the four-argument
+form. See [`AbstractSoilBottomBoundary`](@ref).
 """
+function bottom_flux_linearization end
+bottom_flux_linearization(bc::AbstractSoilBottomBoundary, col, ψN, KN, dt) =
+    bottom_flux_linearization(bc, col, ψN, KN)
 bottom_flux_linearization(::FreeDrainage, col, ψN, KN) = (col.gravity * KN, zero(KN))
 bottom_flux_linearization(::ZeroFluxBottom, col, ψN, KN) = (zero(KN), zero(KN))
 function bottom_flux_linearization(bc::HeadBottom, col, ψN, KN)
@@ -1026,7 +1033,7 @@ function _picard!(col::SoilWaterColumn{T}, dt, mode::Symbol, topval, sink) where
             Kt = _interface_K(col, _layer_K(col, 1, topval), ws.K[1])
             at = Kt / g.z[1]
         end
-        αb, βb = bottom_flux_linearization(col.bottom, col, ψm[N], ws.K[N])
+        αb, βb = bottom_flux_linearization(col.bottom, col, ψm[N], ws.K[N], dt)
         @inbounds for i in 1:N
             r = g.dz[i] / dt
             diag = r * ws.C[i]
@@ -1234,5 +1241,7 @@ function step_soil_water!(col::SoilWaterColumn, forcing::SurfaceForcing,
     return step_soil_water!(col, dt; water_input = forcing.rain / ρw,
                             evaporation = fluxes.E / ρw, sink = sink)
 end
+
+
 
 end # module
