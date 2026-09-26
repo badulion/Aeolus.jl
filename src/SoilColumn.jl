@@ -75,8 +75,11 @@ unsaturated); water fluxes are in m s⁻¹ of liquid water, positive
 module SoilColumn
 
 using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
-                         SurfaceForcing, SurfaceFluxes, grav
-import ..SurfaceExchange: moisture_availability
+                         SurfaceForcing, SurfaceFluxes, AbstractSurface, grav,
+                         cp_water, cp_ice, LH_f0, turbulent_fluxes
+import ..SurfaceExchange: moisture_availability, surface_temperature, roughness_lengths,
+                          surface_albedo, surface_emissivity, step_surface!
+using ..SurfaceOptics: material_emissivity
 
 export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
        AbstractHydraulicModel, ClappHornberger, VanGenuchtenMualem, GardnerExponential,
@@ -93,7 +96,12 @@ export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
        bottom_flux_linearization, finalize_bottom!,
        SoilWaterColumn, SoilWaterBudget, SoilWaterStep, step_soil_water!,
        set_water_content!, set_matric_potential!, soil_water_storage,
-       soil_layer_conductivity, soil_field_capacity
+       soil_layer_conductivity, soil_field_capacity,
+       # heat and freeze–thaw (#16)
+       SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal_properties,
+       farouki_solids_conductivity, farouki_solids_heat_capacity,
+       johansen_solids_conductivity, johansen_dry_conductivity, kersten_number,
+       soil_thermal_conductivity, soil_heat_capacity
 
 # =========================================================================
 # 1. Layer structure
@@ -1234,5 +1242,172 @@ function step_soil_water!(col::SoilWaterColumn, forcing::SurfaceForcing,
     return step_soil_water!(col, dt; water_input = forcing.rain / ρw,
                             evaporation = fluxes.E / ρw, sink = sink)
 end
+
+# =========================================================================
+# 6. Soil heat: thermal properties
+# =========================================================================
+
+"""
+    SoilThermalProperties(; k_solids, c_solids, ρ_particle = 2700, kersten = :fine)
+
+Thermal constants of the solid phase of one soil, from which
+[`soil_thermal_conductivity`](@ref) and [`soil_heat_capacity`](@ref)
+build the bulk values for any water and ice content:
+
+| field        | meaning                                                          |
+|:------------ |:---------------------------------------------------------------- |
+| `k_solids`   | conductivity of the soil solids, W m⁻¹ K⁻¹                       |
+| `c_solids`   | volumetric heat capacity of the solids, J m⁻³ K⁻¹                |
+| `ρ_particle` | particle density, kg m⁻³ (sets Johansen's dry conductivity)      |
+| `kersten`    | `:fine` or `:coarse` — Johansen's (1975) Kersten-number law      |
+
+Use [`clm_soil_thermal_properties`](@ref) (sand/clay, as CLM) or
+[`johansen_soil_thermal_properties`](@ref) (quartz content).
+"""
+struct SoilThermalProperties{T<:AbstractFloat}
+    k_solids::T
+    c_solids::T
+    ρ_particle::T
+    kersten::Symbol
+    function SoilThermalProperties{T}(k_solids, c_solids, ρ_particle, kersten) where {T}
+        (k_solids > 0 && c_solids > 0 && ρ_particle > 0) ||
+            throw(ArgumentError("SoilThermalProperties: need k_solids, c_solids, ρ_particle > 0"))
+        kersten in (:fine, :coarse) ||
+            throw(ArgumentError("SoilThermalProperties: kersten must be :fine or :coarse"))
+        new{T}(k_solids, c_solids, ρ_particle, kersten)
+    end
+end
+SoilThermalProperties(; k_solids::Real, c_solids::Real, ρ_particle::Real = 2700.0,
+                      kersten::Symbol = :fine) =
+    SoilThermalProperties{Float64}(k_solids, c_solids, ρ_particle, kersten)
+
+"""
+    farouki_solids_conductivity(sand, clay) -> W m⁻¹ K⁻¹
+
+Conductivity of the soil solids from the sand and clay percentages,
+``k_s = (8.80\\,\\%sand + 2.92\\,\\%clay)/(\\%sand + \\%clay)`` (Farouki 1981;
+CLM4.5/CLM5 Technical Notes, soil thermal properties).
+"""
+function farouki_solids_conductivity(sand::Real, clay::Real)
+    (sand >= 0 && clay >= 0 && sand + clay > 0) ||
+        throw(ArgumentError("farouki_solids_conductivity: sand, clay ≥ 0 with sand + clay > 0"))
+    return (8.80 * sand + 2.92 * clay) / (sand + clay)
+end
+
+"""
+    farouki_solids_heat_capacity(sand, clay) -> J m⁻³ K⁻¹
+
+Volumetric heat capacity of the soil solids,
+``c_s = (2.128\\,\\%sand + 2.385\\,\\%clay)/(\\%sand + \\%clay) × 10^6``
+(Farouki 1981; CLM4.5/CLM5 Technical Notes).
+"""
+function farouki_solids_heat_capacity(sand::Real, clay::Real)
+    (sand >= 0 && clay >= 0 && sand + clay > 0) ||
+        throw(ArgumentError("farouki_solids_heat_capacity: sand, clay ≥ 0 with sand + clay > 0"))
+    return (2.128 * sand + 2.385 * clay) / (sand + clay) * 1e6
+end
+
+"""
+    johansen_solids_conductivity(quartz; k_other = quartz > 0.2 ? 2.0 : 3.0) -> W m⁻¹ K⁻¹
+
+Geometric-mean conductivity of the solids from the quartz fraction `q`
+(0–1), ``k_s = k_q^q\\, k_o^{1-q}`` with ``k_q = 7.7`` W m⁻¹ K⁻¹ (Johansen
+1975) and ``k_o`` = 2.0 (3.0 for ``q ≤ 0.2``) for the other minerals, as
+in Peters-Lidard et al. (1998).
+"""
+function johansen_solids_conductivity(quartz::Real; k_other::Real = quartz > 0.2 ? 2.0 : 3.0)
+    0 <= quartz <= 1 || throw(ArgumentError("johansen_solids_conductivity: quartz fraction in [0, 1]"))
+    return 7.7^quartz * k_other^(1 - quartz)
+end
+
+"""
+    johansen_dry_conductivity(θ_s; ρ_particle = 2700) -> W m⁻¹ K⁻¹
+
+Conductivity of dry natural soil (Johansen 1975),
+``k_{dry} = (0.135 ρ_d + 64.7)/(ρ_p - 0.947 ρ_d)`` with bulk density
+``ρ_d = ρ_p (1 - θ_s)`` (kg m⁻³).
+"""
+function johansen_dry_conductivity(θ_s::Real; ρ_particle::Real = 2700.0)
+    ρd = ρ_particle * (1 - θ_s)
+    return (0.135 * ρd + 64.7) / (ρ_particle - 0.947 * ρd)
+end
+
+"""
+    clm_soil_thermal_properties(sand, clay) -> SoilThermalProperties
+
+The CLM4.5/CLM5 soil thermal constants from the sand and clay
+percentages: [`farouki_solids_conductivity`](@ref),
+[`farouki_solids_heat_capacity`](@ref), a 2700 kg m⁻³ particle density and
+the fine-soil Kersten number.
+"""
+clm_soil_thermal_properties(sand::Real, clay::Real) =
+    SoilThermalProperties(k_solids = farouki_solids_conductivity(sand, clay),
+                          c_solids = farouki_solids_heat_capacity(sand, clay))
+
+"""
+    johansen_soil_thermal_properties(quartz; coarse = false, c_solids = 2.0e6,
+                                     ρ_particle = 2650) -> SoilThermalProperties
+
+Johansen (1975) / Peters-Lidard et al. (1998) soil from its quartz
+fraction ([`johansen_solids_conductivity`](@ref)); `coarse = true` selects
+the coarse-soil Kersten number. The default solids heat capacity is the
+mineral value of de Vries (1963), 2.0 MJ m⁻³ K⁻¹.
+"""
+johansen_soil_thermal_properties(quartz::Real; coarse::Bool = false, c_solids::Real = 2.0e6,
+                                 ρ_particle::Real = 2650.0) =
+    SoilThermalProperties(k_solids = johansen_solids_conductivity(quartz), c_solids = c_solids,
+                          ρ_particle = ρ_particle, kersten = coarse ? :coarse : :fine)
+
+"""
+    kersten_number(p::SoilThermalProperties, S_r, f_liq = 1) -> Ke ∈ [0, 1]
+
+Johansen's (1975) normalised conductivity ``Ke = (k - k_{dry})/(k_{sat} - k_{dry})``
+at degree of saturation ``S_r``. Unfrozen: ``\\log_{10}S_r + 1`` (fine)
+or ``0.7\\log_{10}S_r + 1`` (coarse), floored at 0; frozen: ``S_r``. A
+partly frozen layer with liquid fraction `f_liq` of its water takes the
+liquid-weighted mean — a continuous blend where CLM switches at 0 °C.
+"""
+function kersten_number(p::SoilThermalProperties, S_r::Real, f_liq::Real = 1.0)
+    S = clamp(S_r, 0.0, 1.0)
+    S > 0 || return zero(float(S))
+    Ku = p.kersten === :fine ? log10(S) + 1 : 0.7 * log10(S) + 1
+    return f_liq * max(Ku, zero(Ku)) + (1 - f_liq) * S
+end
+
+"""
+    soil_thermal_conductivity(p, θ_s, θ_liq, θ_ice; c = DEFAULT_SURFACE_CONSTANTS) -> W m⁻¹ K⁻¹
+
+Bulk conductivity by Johansen's (1975) method as used in CLM (Farouki
+1981): ``k = Ke\\,k_{sat} + (1 - Ke)\\,k_{dry}``, with the saturated value the
+geometric mean of the constituents,
+
+    k_sat = k_s^{1-θ_s} k_w^{θ_s f_liq} k_ice^{θ_s (1 - f_liq)}
+
+(`f_liq` the liquid fraction of the pore water by volume), ``S_r =
+(θ_{liq} + θ_{ice})/θ_s`` and [`kersten_number`](@ref). The conductivities of
+water and ice are the Era V contract's `k_water`, `k_ice`.
+"""
+function soil_thermal_conductivity(p::SoilThermalProperties, θ_s::Real, θ_liq::Real, θ_ice::Real;
+                                   c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    kdry = johansen_dry_conductivity(θ_s; ρ_particle = p.ρ_particle)
+    tot = θ_liq + θ_ice
+    tot > 0 || return kdry
+    fl = θ_liq / tot
+    ksat = p.k_solids^(1 - θ_s) * c.k_water^(θ_s * fl) * c.k_ice^(θ_s * (1 - fl))
+    Ke = kersten_number(p, tot / θ_s, fl)
+    return Ke * ksat + (1 - Ke) * kdry
+end
+
+"""
+    soil_heat_capacity(p, θ_s, θ_liq, θ_ice; c = DEFAULT_SURFACE_CONSTANTS) -> J m⁻³ K⁻¹
+
+Volumetric heat capacity from the constituents (de Vries 1963),
+``C = c_s(1-θ_s) + ρ_w c_w θ_{liq} + ρ_{ice} c_{ice} θ_{ice}`` (air
+neglected), with the densities from the Era V contract and the specific
+heats delegated to `MoistThermodynamics` through it.
+"""
+soil_heat_capacity(p::SoilThermalProperties, θ_s::Real, θ_liq::Real, θ_ice::Real;
+                   c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    p.c_solids * (1 - θ_s) + c.ρ_water * cp_water(c) * θ_liq + c.ρ_ice * cp_ice(c) * θ_ice
 
 end # module
