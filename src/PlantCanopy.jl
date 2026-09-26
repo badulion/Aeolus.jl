@@ -53,6 +53,7 @@ using ..Grids: RegularGrid
 using ..BoundaryConditions: fill_halos!
 using ..RadiationCore: _gauss_legendre
 using ..P3Microphysics: lgamma_lanczos
+using ..RadiationCore: STEFAN_BOLTZMANN
 using ..TwoStream: TwoStreamVariant, layer_reflectance_transmittance_sw, adding_solver!
 import ..TwoStream: two_stream_coefficients
 using ..SolarGeometry: SolarPosition
@@ -70,7 +71,8 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        beam_extinction_coefficient, average_inverse_optical_depth,
        canopy_scattering_parameters, canopy_beam_transmittance,
        sunlit_leaf_fraction, canopy_diffuse_transmittance,
-       CanopyShortwaveSolution, canopy_shortwave
+       CanopyShortwaveSolution, canopy_shortwave,
+       CanopyLongwaveSolution, canopy_longwave
 
 # =========================================================================
 # 1. Leaf-area density profiles
@@ -1077,5 +1079,97 @@ function canopy_shortwave(z_faces::AbstractVector{<:Real}, lad::AbstractVector{<
 end
 canopy_shortwave(p::AbstractLeafAreaDensity, z_faces::AbstractVector{<:Real}; kwargs...) =
     canopy_shortwave(z_faces, layer_leaf_area_density(p, z_faces); kwargs...)
+
+"""
+    CanopyLongwaveSolution
+
+Result of [`canopy_longwave`](@ref); arrays ordered bottom-up, fluxes
+[W m⁻²] per unit ground area.
+
+  * `flux_up`, `flux_dn` — at the faces
+  * `net_absorbed` — net longwave gain (absorbed minus emitted) of the
+    leaves of each layer
+  * `ground_net` — net longwave into the ground
+  * `outgoing` — upward longwave leaving the canopy top
+  * `emissivity_layer` — emissivity ``1 - R - T`` of each layer
+"""
+struct CanopyLongwaveSolution
+    z_faces::Vector{Float64}
+    Λ_faces::Vector{Float64}
+    flux_up::Vector{Float64}
+    flux_dn::Vector{Float64}
+    net_absorbed::Vector{Float64}
+    emissivity_layer::Vector{Float64}
+    ground_net::Float64
+    outgoing::Float64
+end
+
+"""
+    canopy_longwave(z_faces, lad; lw_down, T_leaf, T_ground, ε_leaf = 0.98,
+                    ε_ground = 0.95, leaves = SphericalLeaves()) -> CanopyLongwaveSolution
+    canopy_longwave(profile::AbstractLeafAreaDensity, z_faces; kwargs...)
+
+Thermal-infrared exchange between sky, leaves and ground. `T_leaf` [K] is
+a scalar or one value per layer; `lw_down` is the sky longwave at the top
+face [W m⁻²].
+
+Each layer is a two-stream slab with leaf reflectance ``1 - ε_{leaf}`` and
+zero leaf transmittance, whose diffuse reflectance ``R`` and transmittance
+``T`` come from the same `TwoStream` layer formulae as the shortwave
+(diffuse extinction ``1/\\bar μ`` per unit leaf area). By Kirchhoff's law
+the layer emits ``(1 - R - T)\\,σT_{leaf}^4`` both up and down. The
+coupled layer–ground system, including every multiple reflection, is then
+solved exactly as a linear system in the face fluxes, so the result
+conserves energy to round-off and gives zero net exchange when sky, leaves
+and ground share one temperature and the sky is black.
+"""
+function canopy_longwave(z_faces::AbstractVector{<:Real}, lad::AbstractVector{<:Real};
+                         lw_down::Real, T_leaf, T_ground::Real,
+                         ε_leaf::Real = 0.98, ε_ground::Real = 0.95,
+                         leaves::AbstractLeafAngleDistribution = SphericalLeaves())
+    N = length(lad)
+    length(z_faces) == N + 1 ||
+        throw(DimensionMismatch("canopy_longwave: need length(z_faces) == length(lad) + 1"))
+    (0 < ε_leaf <= 1 && 0 <= ε_ground <= 1) ||
+        throw(ArgumentError("canopy_longwave: emissivities must lie in (0, 1]"))
+    Tl = T_leaf isa Real ? fill(Float64(T_leaf), N) : Float64.(T_leaf)
+    length(Tl) == N || throw(DimensionMismatch("canopy_longwave: T_leaf must be scalar or length N"))
+    zf = Float64.(z_faces)
+    dΛ = [Float64(lad[k]) * (zf[k+1] - zf[k]) for k in 1:N]
+    Λ = zeros(N + 1)
+    for k in N:-1:1
+        Λ[k] = Λ[k+1] + dΛ[k]
+    end
+    μ̄ = average_inverse_optical_depth(leaves)
+    ω, β, _ = canopy_scattering_parameters(leaves, LeafOptics(1 - ε_leaf, 0.0), 1.0)
+    var = SellersCanopyVariant(μ̄, β, β)
+    R = zeros(N); Tt = zeros(N); E = zeros(N); εl = zeros(N)
+    for k in 1:N
+        Rd, Td, _, _, _ = layer_reflectance_transmittance_sw(var, dΛ[k], ω, 0.0, 1.0)
+        R[k] = Rd; Tt[k] = Td
+        εl[k] = max(1 - Rd - Td, 0.0)
+        E[k] = εl[k] * STEFAN_BOLTZMANN * Tl[k]^4
+    end
+    # Unknowns x = [up_1..up_{N+1}, dn_1..dn_{N+1}]
+    n = N + 1
+    A = zeros(2n, 2n); b = zeros(2n)
+    up(i) = i; dn(i) = n + i
+    r = 1
+    A[r, up(1)] = 1; A[r, dn(1)] = -(1 - ε_ground)
+    b[r] = ε_ground * STEFAN_BOLTZMANN * Float64(T_ground)^4; r += 1
+    A[r, dn(n)] = 1; b[r] = Float64(lw_down); r += 1
+    for k in 1:N
+        # dn_k = T dn_{k+1} + R up_k + E
+        A[r, dn(k)] = 1; A[r, dn(k+1)] = -Tt[k]; A[r, up(k)] = -R[k]; b[r] = E[k]; r += 1
+        # up_{k+1} = T up_k + R dn_{k+1} + E
+        A[r, up(k+1)] = 1; A[r, up(k)] = -Tt[k]; A[r, dn(k+1)] = -R[k]; b[r] = E[k]; r += 1
+    end
+    x = A \ b
+    fu = x[1:n]; fd = x[n+1:2n]
+    netk = [(fd[k+1] - fu[k+1]) - (fd[k] - fu[k]) for k in 1:N]
+    return CanopyLongwaveSolution(zf, Λ, fu, fd, netk, εl, fd[1] - fu[1], fu[n])
+end
+canopy_longwave(p::AbstractLeafAreaDensity, z_faces::AbstractVector{<:Real}; kwargs...) =
+    canopy_longwave(z_faces, layer_leaf_area_density(p, z_faces); kwargs...)
 
 end # module

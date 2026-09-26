@@ -293,4 +293,37 @@ end
         @test a.incident ≈ irr.ghi rtol = 1e-12
     end
 
+    @testset "longwave exchange" begin
+        zf = collect(0.0:1.0:20.0)
+        forest = LalicMihailovicLAD(4.0, 18.0; z_m = 12.0)
+        σ = STEFAN_BOLTZMANN
+        # Isothermal, black sky at the same temperature: no net exchange.
+        for εl in (1.0, 0.97, 0.9), εg in (1.0, 0.95)
+            s = canopy_longwave(forest, zf; lw_down = σ * 290.0^4, T_leaf = 290.0,
+                                T_ground = 290.0, ε_leaf = εl, ε_ground = εg)
+            @test maximum(abs.(s.net_absorbed)) < 1e-9
+            @test abs(s.ground_net) < 1e-9
+            @test s.outgoing ≈ σ * 290.0^4 rtol = 1e-12
+        end
+        # Energy: sky in - out = leaves + ground, with a temperature profile.
+        worst = 0.0
+        for εl in (1.0, 0.95), leaves in (SphericalLeaves(), RossGoudriaanLeaves(0.4))
+            Tl = [285.0 + 0.4k for k in 1:length(zf)-1]
+            s = canopy_longwave(forest, zf; lw_down = 300.0, T_leaf = Tl, T_ground = 288.0,
+                                ε_leaf = εl, ε_ground = 0.96, leaves = leaves)
+            worst = max(worst, abs((300.0 - s.outgoing) - sum(s.net_absorbed) - s.ground_net))
+        end
+        @test worst < 1e-9
+        # Black leaves over a black ground: the analytic slab solution.
+        Tl, Tg, Ld = 295.0, 285.0, 320.0
+        s = canopy_longwave(forest, zf; lw_down = Ld, T_leaf = Tl, T_ground = Tg,
+                            ε_leaf = 1.0, ε_ground = 1.0)
+        Tr = exp(-leaf_area_index(forest) / average_inverse_optical_depth(SphericalLeaves()))
+        @test s.outgoing ≈ σ * Tg^4 * Tr + σ * Tl^4 * (1 - Tr) rtol = 1e-10
+        @test s.ground_net ≈ Ld * Tr + σ * Tl^4 * (1 - Tr) - σ * Tg^4 rtol = 1e-10
+        # Warm leaves under a cold sky lose energy, and the top layers most
+        s = canopy_longwave(UniformLAD(4.0, 20.0), zf; lw_down = 280.0, T_leaf = 295.0, T_ground = 290.0)
+        @test all(s.net_absorbed .<= 0) && s.net_absorbed[20] < s.net_absorbed[5]
+    end
+
 end
