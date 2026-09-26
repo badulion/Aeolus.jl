@@ -248,6 +248,16 @@ window_rho_clr(Φ) = poly4(RHO_CLR, cos(Φ)) - window_tau_clr(Φ)
         o = glazing_optics(g, θ)
         @test o.T ≈ T12 atol = 1e-13
         @test o.R ≈ R12 atol = 1e-13
+        # Grazing incidence (the sun on the horizon of the facet plane):
+        # everything is reflected. A sunrise step at cos θ ~ 1e-17 once made
+        # the inter-pane linear system singular; the limit is now exact.
+        for g in (double_glazing(), triple_glazing())
+            o = glazing_optics(g, π / 2)
+            @test o.R == 1.0 && o.T == 0.0 && all(iszero, o.A)
+            o = glazing_optics(g, acos(1e-17))
+            @test o.R ≈ 1 atol = 1e-9
+            @test o.R + o.T + sum(o.A) ≈ 1 atol = 1e-12
+        end
         # Single-pane glazing is the pane
         @test glazing_optics(single_glazing(0.005), 0.4).T ≈ pane_optics(GlassPane(0.005), 0.4).T
 
@@ -387,5 +397,98 @@ window_rho_clr(Φ) = poly4(RHO_CLR, cos(Φ)) - window_tau_clr(Φ)
         # SHGC = T + Σ N A, and lies between T and T + ΣA
         o = glazing_optics(g6, 0.0)
         @test o.T < shgcs[1] < o.T + sum(o.A)
+    end
+    @testset "WindowFacet: shortwave partition, energy bookkeeping, interface" begin
+        σ = DEFAULT_SURFACE_CONSTANTS.σ_SB
+        g = double_glazing()
+        w = WindowFacet(g; T = 293.15, T_interior = 295.15)
+        @test w isa AbstractSurface
+        @test surface_temperature(w) == 293.15
+        @test surface_emissivity(w) == UNCOATED_GLASS_EMISSIVITY
+        @test roughness_lengths(w).z0m == 0.01
+        # Default geometry is diffuse: the albedo is the hemispherical reflectance
+        h = glazing_optics_hemispherical(g)
+        @test surface_albedo(w) ≈ h.R
+        # Direct beam: the facet sees the angular optics
+        set_solar_incidence!(w, cosd(30); diffuse_fraction = 0.0)
+        @test surface_albedo(w) ≈ glazing_optics(g, deg2rad(30)).R
+        set_solar_incidence!(w, cosd(80); diffuse_fraction = 0.0)
+        @test surface_albedo(w) > glazing_optics(g, deg2rad(30)).R
+        # Sun behind the facet: no direct beam
+        set_solar_incidence!(w, -0.3; diffuse_fraction = 0.2)
+        @test w.diffuse_fraction == 1.0
+        @test_throws ArgumentError set_solar_incidence!(w, 0.5; diffuse_fraction = 1.5)
+        @test_throws ArgumentError WindowFacet(g; interior = fixed_temperature_boundary(290.0))
+
+        # A sunny day with Monin–Obukhov exchange: every step conserves energy
+        # exactly and partitions the shortwave exactly.
+        w = WindowFacet(g; T = 290.15, T_interior = 295.15)
+        dt = 120.0
+        maxres = 0.0; maxsw = 0.0; maxbal = 0.0
+        for step in 1:720                       # 24 h
+            t = step * dt
+            μ = max(0.0, sin(2π * (t / 86400 - 0.25)))
+            set_solar_incidence!(w, μ; diffuse_fraction = 0.3)
+            f = SurfaceForcing(sw_down = 700μ, lw_down = 320.0,
+                               T_air = 290.0 + 5μ, U = 3.0)
+            opt = window_optics(w)
+            E0 = window_heat_content(w)
+            fl = step_surface!(w, f, dt)
+            dE = window_heat_content(w) - E0
+            maxbal = max(maxbal, abs(fl.Rn - fl.H - fl.LE - fl.G))
+            maxres = max(maxres, abs(dE - dt * (fl.G - interior_heat_flux(w) - transmitted_shortwave(w))))
+            maxsw = max(maxsw, abs(transmitted_shortwave(w) - opt.T * f.sw_down) +
+                               abs(w.sw_absorbed - sum(opt.A) * f.sw_down))
+        end
+        @info @sprintf("WindowFacet diurnal: max |Rn-H-LE-G| %.2e, max storage residual %.2e J m⁻², max SW partition error %.2e",
+                       maxbal, maxres, maxsw)
+        @test maxbal < 1e-9
+        @test maxres < 1e-13 * window_heat_content(w)     # round-off of a ~4e6 J m⁻² quantity
+        @test maxsw < 1e-10
+        @test w.T_panes[1] > 250 && w.T_panes[1] < 330
+
+        # Interior hook
+        set_interior_temperature!(w, 300.0)
+        @test w.interior.T_env == 300.0
+        set_interior_boundary!(w, convective_boundary(296.0, 3.0))
+        @test w.interior.h == 3.0
+        @test_throws ArgumentError set_interior_boundary!(w, fixed_temperature_boundary(296.0))
+    end
+
+    @testset "WindowFacet steady states reproduce the steady SHGC and U-value" begin
+        σ = DEFAULT_SURFACE_CONSTANTS.σ_SB
+        ε = UNCOATED_GLASS_EMISSIVITY
+        hc = 15.0
+        hi = 1 / ISO6946_SURFACE_RESISTANCE.inside_horizontal
+        rows = String[]
+        for g in (single_glazing(0.004), double_glazing(), triple_glazing())
+            # Sun at 40° incidence, outdoor air = room air = 298.15 K, sky at
+            # the air temperature: the steady room gain per unit irradiance is
+            # the SHGC by definition.
+            T0 = 298.15; θi = deg2rad(40); I = 600.0
+            w = WindowFacet(g; T = T0, T_interior = T0, h_convective = hc)
+            set_solar_incidence!(w, cos(θi); diffuse_fraction = 0.0)
+            f = SurfaceForcing(sw_down = I, lw_down = σ * T0^4, T_air = T0)
+            for _ in 1:2000; step_surface!(w, f, 60.0); end
+            gain = (interior_heat_flux(w) + transmitted_shortwave(w)) / I
+            shgc = glazing_shgc(g, θi; h_out = hc + 4ε * σ * T0^3, h_in = hi,
+                                T_out = T0, T_in = T0)
+            # Night: no sun, cold outside, warm room — steady loss is U ΔT
+            To, Ti = 268.15, 293.15
+            w2 = WindowFacet(g; T = 280.0, T_interior = Ti, h_convective = hc)
+            f2 = SurfaceForcing(sw_down = 0.0, lw_down = σ * To^4, T_air = To)
+            for _ in 1:2000; step_surface!(w2, f2, 60.0); end
+            U_dyn = -interior_heat_flux(w2) / (Ti - To)
+            Ts = w2.T_skin
+            U_st = glazing_u_value(g; T_out = To, T_in = Ti,
+                                   h_out = hc + ε * σ * (Ts^2 + To^2) * (Ts + To), h_in = hi)
+            push!(rows, @sprintf("%d pane(s): SHGC facet %.4f steady %.4f | U facet %.4f steady %.4f",
+                                 length(g), gain, shgc, U_dyn, U_st))
+            # Differences come only from nonlinearity the steady formulas
+            # linearise: pane-to-air radiation and the gap coefficients.
+            @test abs(gain - shgc) < 0.005
+            @test abs(U_dyn - U_st) / U_st < 0.01
+        end
+        @info "WindowFacet steady state vs steady formulas\n" * join(rows, "\n")
     end
 end

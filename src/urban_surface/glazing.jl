@@ -342,6 +342,12 @@ Base.length(g::Glazing) = length(g.panes)
 #   absorbed_j = A_j (D_{j-1} + U_j).
 function _stack!(A::AbstractVector, layers)
     N = length(layers)
+    # Grazing incidence: the outer interface reflects everything and the
+    # inter-pane system is degenerate (0 = 0); the answer is exact.
+    if layers[1][1] >= 1 - 1e-12
+        A .= 0
+        return (1.0, 0.0)
+    end
     M = zeros(2N + 2, 2N + 2); b = zeros(2N + 2)
     iD(k) = k + 1; iU(k) = N + 2 + k
     M[1, iD(0)] = 1; b[1] = 1
