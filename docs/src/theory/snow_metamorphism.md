@@ -52,8 +52,11 @@ x(t)^{e} = x(0)^{e} + e\,(dr/dt)_0\,τ^{1/κ}\,t ,
 ```
 
 (`flanner_grain_radius`). This composes exactly — ageing for ``t_1`` then
-``t_2`` is ageing for ``t_1 + t_2`` — so at fixed state the result does
-not depend on the time step. CLM takes one forward-Euler step per model
+``t_2`` is ageing for ``t_1 + t_2`` — so at fixed state and a single
+table node (`interpolation = :nearest`) the result does not depend on
+the time step. The default `:linear` blend of node outcomes (below) does
+not compose exactly: ten days in one step and in 480 half-hour steps
+differ by up to 0.9 % (108.7 vs 109.7 μm). CLM takes one forward-Euler step per model
 step instead; over 30 days of 30-minute steps the two differ by at most
 0.1 % (338.37 vs 338.05 μm at −5 °C, 20 K m⁻¹, 100 kg m⁻³).
 
@@ -132,7 +135,7 @@ Grain growth darkens the near-infrared, where ice absorbs. From 54.5 to
 | fresh snow (54.5 μm) broadband diffuse albedo | 0.847 | CLASS 0.84; USACE/VIC 0.85; ECMWF 0.85 |
 | fresh snow VIS / NIR | 0.986 / 0.679 | BATS 0.95 / 0.65 (BATS VIS includes impurities) |
 | Summit SSA, 37 d at 325 kg m⁻³ from 37 m² kg⁻¹ | 15.3–28.3 over −20…−10 °C, 10–30 K m⁻¹; 23.8 at −15 °C, 20 K m⁻¹ | observed 23 ± 3 (Carmagnola et al. 2014) |
-| same, no gradient, −15 °C | 26.4 m² kg⁻¹ | observed 23 ± 3 |
+| same, no gradient, −15 °C | 26.7 m² kg⁻¹ | observed 23 ± 3 |
 | 30-day clear-sky pack, −10 °C, clean | 0.851 → 0.770 | USACE 0.545, ECMWF 0.61, CLASS 0.55, BATS ≈ 0.64 |
 | same, 0.05 ppmw BC | 0.834 → 0.730 | as above |
 
@@ -144,15 +147,17 @@ What these comparisons are, stated plainly:
   the snow temperature or temperature gradient over that interval, so the
   test scans an *assumed* cold ice-sheet range and asks only that the
   observation fall inside the model's spread. It does, and near the
-  centre of the range. Without a gradient the model is at the edge of
-  the observed range.
+  centre of the range. Without a gradient (−15 °C) the model gives
+  26.7 m² kg⁻¹, just above the observed 23 ± 3.
 * **Albedo decay** is compared with reference *models*, not data: the US
   Army Corps of Engineers (1956) curves as coded in VIC, ECMWF
   (Douville et al. 1995), CLASS (Verseghy 1991) and BATS (Dickinson et
   al. 1993) as coded in Noah-MP. These schemes were tuned to real, dirty
   snow. BATS's cold-snow ageing, for example, is dominated by its constant
-  "dirt and soot" term. Clean-snow grain growth darkens more slowly than
-  every one of them: at day 30 the pack is at 0.770 against 0.55–0.64. The
+  "dirt and soot" term. From day 5 on, clean-snow grain growth darkens
+  more slowly than every one of them: at day 30 the pack is at 0.770
+  against 0.55–0.64. (On day 1 it is not: fresh grains coarsen fastest,
+  0.851 → 0.835, below ECMWF's linear 0.842.) The
   test asserts this as a bound, not as agreement. With 0.05 ppmw of black
   carbon the pack reaches 0.730. Observed melting snow at Col de Porte goes
   below 0.5 (Carmagnola et al. 2014). Getting there needs refrozen grains

@@ -154,7 +154,7 @@ end
             end
             r_ours = snicar_grain_radius(tab, 54.5, 720.0, T, G, ρ; interpolation = :nearest)
             @printf("  CLM port vs exact, T=%.2f ∇T=%.0f ρ=%.0f: %.2f vs %.2f μm\n", T, G, ρ, r_clm, r_ours)
-            @test abs(r_clm - r_ours) / r_ours < 5e-3
+            @test abs(r_clm - r_ours) / r_ours < 2e-3     # measured ≤ 0.095 %
             # and the growth rate the scheme reports is CLM's
             @test snow_dry_grain_growth_rate(m, 100.0, T, G, ρ) * 3600 ≈
                   q.drdt0 * (q.τ / (100.0 - 54.5 + q.τ))^(1 / q.κ) rtol = 1e-12
@@ -362,9 +362,10 @@ end
         end
         @test minimum(ssa) < 23 < maximum(ssa)
         @test abs(ssa[2, 2] - 23) < 3                  # −15 °C, 20 K m⁻¹: within the observed ±3
-        # without a gradient, even the warm end is only marginally inside
-        # the observed range: the decrease needs temperature-gradient metamorphism
+        # without a gradient, at −15 °C, the model (26.7) lies just above the
+        # observed 23 ± 3: the decrease needs temperature-gradient metamorphism
         g0 = snow_specific_surface_area(snicar_grain_radius(tab, r0, 37 * 24.0, Tf_m - 15, 0.0, 325.0))
+        @printf("  Summit, −15 °C, no gradient: SSA %.1f m² kg⁻¹\n", g0)
         @test g0 > 26
     end
 
@@ -405,10 +406,13 @@ end
         @test all(αs .< αc)
         # Fresh start agrees with the reference fresh values (above).
         @test abs(αc[1] - 0.85) < 0.01
-        # Clean-snow grain growth alone darkens *more slowly* than every
-        # empirical curve, which are fitted to real snow and so include
-        # impurity deposition (BATS's explicit "dirt and soot" term 0.3 is
-        # most of its cold-snow ageing). This is a physical bound, stated as one:
+        # From day 5 on, clean-snow grain growth alone darkens *more slowly*
+        # than every empirical curve, which are fitted to real snow and so
+        # include impurity deposition (BATS's explicit "dirt and soot" term
+        # 0.3 is most of its cold-snow ageing). This is a physical bound,
+        # stated as one. It does NOT hold on day 1: the fresh 54.5 μm grains
+        # coarsen fastest at first (0.851 → 0.835), below ECMWF's linear
+        # 0.842, so day 1 is deliberately not asserted.
         for d in (5, 10, 30)
             b = bats_alb(d, Tg)
             @test αc[d+1] > max(usace_accum(d), ecmwf_dry(d), class_alb(d), (b.vis + b.nir) / 2)
