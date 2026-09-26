@@ -39,6 +39,7 @@ makedocs(
             "Radiation fog"               => "theory/radiation_fog.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
             "Urban facet conduction"      => "theory/urban_conduction.md",
+            "Building energy (zone)"      => "theory/building_energy.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -94,6 +95,7 @@ makedocs(
                 "Overview"                     => "api/era5.md",
                 "SurfaceExchange"              => "api/era5/surface_exchange.md",
                 "UrbanSurface"                 => "api/era5/urban_surface.md",
+                "BuildingEnergy"               => "api/era5/building_energy.md",
             ],
         ],
         "Examples" => [
