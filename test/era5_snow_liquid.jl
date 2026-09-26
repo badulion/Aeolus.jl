@@ -209,4 +209,57 @@ cl98(θi) = θi <= 0.23 ? 0.0264 + 0.0099 * (1 - θi) / θi :
         @info @sprintf("Cold pack: first runoff after %.2f kg m⁻² of input (cold content freezes %.2f, irreducible storage %.2f); refrozen %.3f",
                        first, freeze_total, stored, p.budget.refreeze)
     end
+    @testset "Melt-refreeze cycles through the surface step: conservation" begin
+        # Eight spring days on a 0.6 m pack: sunny days melt the surface,
+        # clear nights refreeze it, and 21.6 mm of rain falls on day 5.
+        # Mass and enthalpy budgets must close to round-off with every
+        # scheme; liquid water obeys Δw_liq = melt + rain - refreeze - runoff;
+        # diurnal meltwater held near the surface refreezes overnight.
+        σ = DEFAULT_SURFACE_CONSTANTS.σ_SB
+        forcing(d, hr) = begin
+            sun = max(0.0, sin(π * (hr - 6) / 12))
+            Ta = 271.0 + 5 * sin(π * (hr - 9) / 12)
+            SurfaceForcing(sw_down = 650sun, lw_down = 0.8σ * Ta^4, T_air = Ta, q_air = 0.0035,
+                           U = 3.0, p = 85000.0, z_ref = 10.0,
+                           rain = d == 5 && 10 <= hr < 14 ? 1.5e-3 : 0.0, snow = 0.0)
+        end
+        res = Dict{Symbol,Any}()
+        for (name, liq) in ((:instant, InstantSnowRunoff()), (:bucket, SnowBucketPercolation()),
+                            (:gravity, SnowGravityDrainage()))
+            p = LayeredSnowpack(depth = 0.6, density = 300.0, T = 268.0, liquid = liq,
+                                bottom = SnowGroundTemperature(Tf_liq))
+            M0, H0 = snow_water_equivalent(p), snowpack_enthalpy(p)
+            eve, morn = Float64[], Float64[]
+            ok_T = true
+            for d in 1:8, s in 1:48
+                step_surface!(p, forcing(d, s / 2), 1800.0)
+                ok_T &= all(p.T .<= Tf_liq)
+                s == 36 && push!(eve, sum(p.m_liq))     # 18:00
+                s == 12 && push!(morn, sum(p.m_liq))    # 06:00
+            end
+            b = p.budget
+            mres = snow_water_equivalent(p) - M0 - (b.snowfall + b.rainfall - b.sublimation - b.runoff)
+            hres = snowpack_enthalpy(p) - H0 -
+                   (b.surface_heat - b.bottom_heat + b.advected_enthalpy - b.runoff_enthalpy)
+            @test ok_T
+            @test abs(mres) < 1e-12 * M0
+            @test abs(hres) < 1e-12 * abs(H0)
+            @test sum(p.m_liq) ≈ b.melt + b.rainfall - b.refreeze - b.runoff atol = 1e-9
+            res[name] = (p = p, eve = eve, morn = morn, mres = mres, hres = hres, H0 = H0)
+            @info @sprintf("%-8s melt %.1f, refrozen %.1f, runoff %.1f, retained %.2f kg m⁻²; SWE %.1f → %.1f; residuals %.1e kg m⁻², %.1e J m⁻² (of %.2e)",
+                           name, b.melt, b.refreeze, b.runoff, sum(p.m_liq), M0,
+                           snow_water_equivalent(p), mres, hres, H0)
+        end
+        for name in (:bucket, :gravity)
+            r = res[name]
+            b = r.p.budget
+            @test b.refreeze > 0.5 * b.melt                    # most meltwater refreezes
+            @test b.runoff < res[:instant].p.budget.runoff - 20   # rain is retained, not lost
+            @test snow_water_equivalent(r.p) > snow_water_equivalent(res[:instant].p)
+            # before the rain: meltwater every afternoon, none left at dawn
+            @test all(r.eve[1:4] .> 0.1)
+            @test all(r.morn[2:5] .== 0)
+        end
+        @test res[:instant].p.budget.refreeze == 0
+    end
 end
