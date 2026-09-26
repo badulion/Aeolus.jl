@@ -93,7 +93,9 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        DayProfile, WeeklySchedule, schedule_value, schedule_mean, full_load_hours,
        occupant_sensible_heat, InternalGains, InternalGainRates, internal_gains,
        ThermostatSchedule, scheduled_hvac, DOE_MEDIUM_OFFICE_SCHEDULES,
-       office_internal_gains, office_thermostat
+       office_internal_gains, office_thermostat,
+       BuildingHeatRelease, building_heat_release, energy_consumption, total_heat_release,
+       anthropogenic_sensible_heat, anthropogenic_latent_heat
 
 const _H_WALL = 1 / ISO6946_SURFACE_RESISTANCE.inside_horizontal   # 7.69 W m⁻² K⁻¹
 const _H_OUT  = 1 / ISO6946_SURFACE_RESISTANCE.outside             # 25 W m⁻² K⁻¹
@@ -1684,6 +1686,228 @@ function office_thermostat(; start_weekday::Integer = 1,
     return ThermostatSchedule(cal(S.heating_setpoint), cal(S.cooling_setpoint);
                               availability = availability ? cal(S.hvac_operation) : nothing)
 end
+
+# =========================================================================
+# 3d. Anthropogenic heat: what the building releases to the outdoors
+# =========================================================================
+
+"""
+    BuildingHeatRelease
+
+Where the energy a building uses goes, over one zone step (issue #29).
+All terms are in W. The released terms are positive when heat goes **from
+the building to the outdoor environment**.
+
+**Energy consumed**
+
+  * `P_electric` — lighting and plug loads, cooling equipment, and
+    electric heating (resistance or heat pump);
+  * `P_fuel` — boiler fuel input;
+  * `Q_metabolic` — occupants' metabolic heat (sensible + latent).
+
+**Released to the outdoor air directly** — what an urban canopy model
+receives as the building part of the anthropogenic heat flux ``Q_F``:
+
+  * `Q_exhaust_sensible`, `Q_exhaust_latent` — HVAC plant heat rejection
+    (condenser, cooling tower, boiler flue; see [`HVACBudget`](@ref));
+  * `Q_ventilation_sensible` — ``H_{ve}(T_{air} - T_{out})``, carried out
+    by infiltration and ventilation air;
+  * `Q_ventilation_latent` — ``L_v`` times the net vapour carried out by
+    the same air (``-L_v W_{ventilation}``);
+  * `Q_windows` — conduction through glazing, ``U_w A_w (T_{air} - T_{out})``;
+  * `Q_lost` — internal gains removed by return or exhaust air without
+    entering the zone (the `lost` part of [`InternalGainRates`](@ref));
+  * `Q_latent_vented` — latent internal gains that did not enter the
+    zone's vapour balance (all of them when the zone humidity is not
+    advanced), assumed vented;
+  * `Q_envelope_air` — net heat leaving the outer faces of `:air`
+    [`EnvelopeElement`](@ref)s. Their outer face has no surface energy
+    balance of its own, so what they give up is a direct source for the
+    air (negative in sunshine, when they absorb more than they lose).
+
+**Released through the urban surfaces**
+
+  * `Q_envelope_facets` — heat conducted out through the outer faces of
+    [`FacetElement`](@ref)s, ``-Σ A G``. It is *not* a direct source: it is
+    already in the facet's surface energy balance, where it raises the
+    skin temperature and leaves as the facet's ``H``, ``LE`` and emitted
+    long-wave. Adding it to the air as well would count it twice.
+  * `Q_envelope_ground` — heat conducted into the ground.
+
+**Other inputs and storage**
+
+  * `Q_solar` — solar gain transmitted through the glazing (not
+    anthropogenic);
+  * `Q_prescribed` — a prescribed `ZoneForcing.Q_hvac`, an energy input
+    from a system the model does not represent;
+  * `storage_sensible` — rate of change of the zone's sensible heat
+    content, ``ΔE/Δt`` ([`zone_heat_content`](@ref));
+  * `storage_latent` — rate of change of the latent heat held by the zone
+    air's vapour, ``L_v ρV Δq/Δt``.
+
+# The first law
+
+Summing the zone balance ([`ZoneBudget`](@ref)), the vapour balance, the
+plant ([`HVACBudget`](@ref)) and the split of the internal gains gives,
+exactly for every step,
+
+```math
+Q_{released} + \\frac{ΔE}{Δt} + L_v ρV\\frac{Δq}{Δt}
+  = P_{electric} + P_{fuel} + Q_{metabolic} + Q_{solar} + Q_{prescribed},
+```
+
+with ``Q_{released}`` the sum of all released terms,
+[`total_heat_release`](@ref). Over a period at the end of which the
+building is back in its initial state, the heat released equals the
+energy consumed plus the transmitted sunshine: that is the premise of
+the inventory method of estimating ``Q_F`` (Sailor 2011), which a
+building energy model resolves in time, because storage delays the
+release (a building heated at night gives the heat back through the
+next day).
+
+# References
+
+  * Sailor, D. J. (2011). A review of methods for estimating anthropogenic
+    heat and moisture emissions in the urban environment. *Int. J.
+    Climatol.*, 31, 189-199.
+  * Bueno, B., Pigeon, G., Norford, L. K., Zibouche, K. & Marchadier, C.
+    (2012). Development and evaluation of a building energy model
+    integrated in the TEB scheme. *Geosci. Model Dev.*, 5, 433-448
+    (TEB-BEM: HVAC waste heat and the air exchanged by the building are
+    released to the canyon; the envelope exchanges through the wall and
+    roof energy balances).
+"""
+struct BuildingHeatRelease{T<:AbstractFloat}
+    P_electric::T
+    P_fuel::T
+    Q_metabolic::T
+    Q_exhaust_sensible::T
+    Q_exhaust_latent::T
+    Q_ventilation_sensible::T
+    Q_ventilation_latent::T
+    Q_windows::T
+    Q_lost::T
+    Q_latent_vented::T
+    Q_envelope_air::T
+    Q_envelope_facets::T
+    Q_envelope_ground::T
+    Q_solar::T
+    Q_prescribed::T
+    storage_sensible::T
+    storage_latent::T
+end
+
+"""
+    building_heat_release(zone, forcing, budget; dt, gains = nothing,
+                          hvac = nothing, hvac_budget = nothing,
+                          q_before) -> BuildingHeatRelease
+
+The [`BuildingHeatRelease`](@ref) of the step that `zone` has just taken
+with `forcing` and returned `budget` ([`ZoneBudget`](@ref)); `hvac` and
+`hvac_budget` are the [`IdealLoadsHVAC`](@ref) and its
+[`HVACBudget`](@ref) if one was used.
+
+  * `gains` — the [`InternalGainRates`](@ref) the step was forced with.
+    They say how much of the internal gains is electric and how much is
+    metabolic, and what was lost or vented before reaching the zone.
+    Without them, `forcing.Q_internal + forcing.Q_latent` is counted as
+    electric power and nothing is lost.
+  * `q_before` — the zone's specific humidity before the step, for the
+    latent storage term (default: no change).
+  * `dt` — the step length (s); only the storage terms need it.
+
+The released terms are read from the budget and from the elements'
+last-step fluxes (`F_outer`); the storage terms are the budget's sum of
+sources and the vapour balance, so the first law holds to round-off.
+"""
+function building_heat_release(zone::BuildingZone{T}, forcing::ZoneForcing, budget::ZoneBudget;
+                               dt::Real, gains::Union{Nothing, InternalGainRates} = nothing,
+                               hvac::Union{Nothing, IdealLoadsHVAC} = nothing,
+                               hvac_budget::Union{Nothing, HVACBudget} = nothing,
+                               q_before::Real = zone.q_air) where {T}
+    (hvac === nothing) == (hvac_budget === nothing) ||
+        throw(ArgumentError("building_heat_release: pass both `hvac` and `hvac_budget`, or neither"))
+    dt > 0 || throw(ArgumentError("building_heat_release: dt must be positive"))
+    # internal gains: electric, metabolic, lost before reaching the zone
+    if gains === nothing
+        P_int = T(forcing.Q_internal) + T(forcing.Q_latent)
+        Q_met = zero(T); lost = zero(T); lat_vented = zero(T)
+    else
+        P_int = T(gains.lighting + gains.equipment)
+        Q_met = T(gains.people_sensible + gains.people_latent)
+        lost = T(gains.lost)
+        lat_vented = T(gains.latent) - T(forcing.Q_latent)
+    end
+    # plant
+    P_el = P_int; P_fuel = zero(T); Q_xs = zero(T); Q_xl = zero(T)
+    if hvac_budget !== nothing
+        P_el += hvac_budget.P_cooling
+        if hvac.heating === :boiler
+            P_fuel += hvac_budget.P_heating
+        else
+            P_el += hvac_budget.P_heating
+        end
+        Q_xs, Q_xl = hvac_budget.Q_exhaust_sensible, hvac_budget.Q_exhaust_latent
+    end
+    Q_prescribed = T(forcing.Q_hvac)
+    # envelope, by what is on the other side of each outer face
+    env_air = zero(T); env_fac = zero(T); env_gnd = zero(T)
+    for el in zone.envelope
+        if el isa FacetElement
+            env_fac -= el.area * el.F_outer
+        elseif el.exterior === :air
+            env_air -= el.area * el.F_outer
+        elseif el.exterior === :ground
+            env_gnd -= el.area * el.F_outer
+        end
+    end
+    L = latent_heat_vapor(budget.T_air, zone.thermo)
+    Q_vl = -L * budget.W_ventilation
+    # storage, from the zone's own balances
+    Q_hvac_air = budget.Q_hvac   # prescribed + ideal load, to the air node
+    dE = budget.Q_exterior + budget.Q_windows + budget.Q_ventilation + budget.Q_internal +
+         budget.Q_solar + Q_hvac_air
+    dL = L * _air_mass(zone) * (budget.q_air - T(q_before)) / T(dt)
+    return BuildingHeatRelease{T}(P_el, P_fuel, Q_met, Q_xs, Q_xl, -budget.Q_ventilation, Q_vl,
+                                  -budget.Q_windows, lost, lat_vented, env_air, env_fac, env_gnd,
+                                  budget.Q_solar, Q_prescribed, dE, dL)
+end
+
+"Energy consumed by the building (W): ``P_{electric} + P_{fuel} + Q_{metabolic}``."
+energy_consumption(r::BuildingHeatRelease) = r.P_electric + r.P_fuel + r.Q_metabolic
+
+"""
+    total_heat_release(r::BuildingHeatRelease) -> W
+
+Everything the building gives to the outdoor environment: the direct
+sensible and latent sources, the conduction out through facet outer
+faces, and into the ground.
+"""
+total_heat_release(r::BuildingHeatRelease) =
+    anthropogenic_sensible_heat(r) + anthropogenic_latent_heat(r) +
+    r.Q_envelope_facets + r.Q_envelope_ground
+
+"""
+    anthropogenic_sensible_heat(r::BuildingHeatRelease) -> W
+
+The sensible heat the building puts **directly** into the outdoor air:
+HVAC exhaust, air exchange, glazing, lost internal gains and the
+exchange of `:air` [`EnvelopeElement`](@ref)s. Conduction through
+[`FacetElement`](@ref)s is excluded: it reaches the air through the
+facet's own surface energy balance.
+"""
+anthropogenic_sensible_heat(r::BuildingHeatRelease) =
+    r.Q_exhaust_sensible + r.Q_ventilation_sensible + r.Q_windows + r.Q_lost + r.Q_envelope_air
+
+"""
+    anthropogenic_latent_heat(r::BuildingHeatRelease) -> W
+
+Latent heat (``L_v`` times the water vapour) the building adds to the
+outdoor air: evaporative heat rejection, vapour carried out by the air
+exchange, and vented latent gains.
+"""
+anthropogenic_latent_heat(r::BuildingHeatRelease) =
+    r.Q_exhaust_latent + r.Q_ventilation_latent + r.Q_latent_vented
 
 # =========================================================================
 # 4. ISO 13790 simple hourly method (5R1C) — the reference model

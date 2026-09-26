@@ -913,4 +913,5 @@ end
     include("era5_occupancy.jl")         # Phase 50  occupancy schedules and internal gains (#33)
     include("era5_bestest.jl")           # Phase 50  ASHRAE 140-2020 BESTEST annual loads (#33)
     include("era5_urban_radiosity.jl")   # Phase 49  facet temperatures coupled to radiosity (#28)
+    include("era5_anthropogenic_heat.jl") # Phase 49  anthropogenic heat from the building energy model (#29)
 end
