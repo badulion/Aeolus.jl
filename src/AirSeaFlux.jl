@@ -1276,4 +1276,221 @@ function rain_heat_flux(rain::Real; T_air::Real, q_air::Real, T_s::Real, q_s::Re
     return rain * cp_water(c) * α * ((T_s - T_air) + (q_s - q_air) * Lv / cpa)
 end
 
+# =========================================================================
+# 10. The full COARE algorithm: bulk fluxes + cool skin + warm layer
+# =========================================================================
+
+"""
+    COARESolution{T}
+
+Result of [`coare_fluxes`](@ref) (all fluxes positive upward, W m⁻²,
+N m⁻², kg m⁻² s⁻¹):
+
+  * `bulk` — the [`AirSeaSolution`](@ref) of the interfacial bulk solve;
+  * `T_skin` (K), `q_s` (kg kg⁻¹) — interface temperature and humidity;
+    `ΔT_cool` (K, > 0 when the skin is cooler) and `δ_cool` (m) — cool
+    skin; `ΔT_warm` (K) — warm-layer warming between the surface and the
+    bulk sensor that was applied;
+  * `H`, `LE`, `E`, `τ` — interfacial fluxes and stress;
+  * `H_spray`, `LE_spray` — spray-mediated fluxes (0 without spray);
+  * `H_total = H + H_spray`, `LE_total`, `E_total` — what leaves the top
+    of the droplet evaporation layer;
+  * `H_rain` — rain heat flux (positive = ocean cooling);
+  * `lw_net` — net longwave, positive **into** the ocean;
+  * `Q_ocean` — net heat into the ocean, ``SW_{net} + LW_{net} - H_{total}
+    - LE_{total} - H_{rain}``;
+  * `iterations` — cool-skin iterations.
+"""
+struct COARESolution{T<:AbstractFloat}
+    bulk::AirSeaSolution{T}
+    T_skin::T
+    q_s::T
+    ΔT_cool::T
+    δ_cool::T
+    ΔT_warm::T
+    H::T
+    LE::T
+    E::T
+    τ::T
+    H_spray::T
+    LE_spray::T
+    H_total::T
+    LE_total::T
+    E_total::T
+    H_rain::T
+    lw_net::T
+    Q_ocean::T
+    iterations::Int
+end
+
+"""
+    coare_fluxes(b::BulkAirSea = coare35_bulk(); U, z_u, z_t = z_u, T_air, q_air,
+                 p = 101325, T_sea, S = 35, sw_net = 0, lw_down, rain = 0,
+                 ΔT_warm = 0, emissivity = SurfaceOptics.material_emissivity(:water),
+                 cool_skin = CoolSkin(), eos = UNESCOWaterEOS(), c_w = cp_water(c),
+                 k_w = c.k_water, spray = nothing, sea = nothing,
+                 maxiter = 20, tol = 1e-6, c = DEFAULT_SURFACE_CONSTANTS) -> COARESolution
+
+The COARE bulk algorithm as the reference codes run it (Fairall et al.
+1996a,b, 2003; Edson et al. 2013), assembled from the pieces that
+already exist rather than restated:
+
+  * interfacial fluxes — [`air_sea_fluxes`](@ref) with the roughness,
+    stability and gustiness of `b`;
+  * interface temperature ``T_{skin} = T_{sea} + ΔT_{warm} - ΔT_{cool}``,
+    with ``T_{sea}`` the bulk water temperature measured at some depth,
+    `ΔT_warm` the warm-layer warming between that depth and the surface
+    (see [`coare_warm_layer_series`](@ref)), and the cool skin
+    ``ΔT_{cool}`` from `OceanMixedLayer.cool_skin`, iterated with the
+    fluxes to convergence (`tol`, K);
+  * seawater humidity ``q_s = (1 - 0.02 S/34) q_{sat}(T_{skin})``
+    (`OceanMixedLayer.salinity_humidity_factor`);
+  * seawater density, thermal expansion and haline contraction from
+    `eos`; latent heat and saturation from `MoistThermodynamics`;
+  * net longwave ``ε (LW_↓ - σ T_{skin}^4)``, the rain heat flux
+    ([`rain_heat_flux`](@ref), `rain` in kg m⁻² s⁻¹) and, if `spray` is
+    an [`AndreasSpray`](@ref), the spray fluxes
+    ([`sea_spray_fluxes`](@ref)) for droplets torn from water at
+    ``T_{sea} + ΔT_{warm}``, with ``H_s`` from `sea` or, without one, a
+    fully developed sea at the computed ``U_{10N}``.
+
+Inputs: wind `U` (m s⁻¹) at `z_u`, air temperature `T_air` (K) and
+specific humidity `q_air` at `z_t` (one height for both scalars), surface
+pressure `p` (Pa), salinity `S` (psu), net shortwave into the sea
+`sw_net` and downwelling longwave `lw_down` (W m⁻²). `cool_skin =
+nothing` switches the cool skin off.
+
+The cool skin sees only the interfacial fluxes (spray heat leaves with
+the droplets, not by conduction through the skin).
+"""
+function coare_fluxes(b::BulkAirSea = coare35_bulk(); U::Real, z_u::Real, z_t::Real = z_u,
+                      T_air::Real, q_air::Real, p::Real = 101325.0, T_sea::Real,
+                      S::Real = 35.0, sw_net::Real = 0.0, lw_down::Real, rain::Real = 0.0,
+                      ΔT_warm::Real = 0.0, emissivity::Real = material_emissivity(:water),
+                      cool_skin::Union{Nothing,CoolSkin} = CoolSkin(),
+                      eos::AbstractWaterEOS = UNESCOWaterEOS(),
+                      c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                      c_w::Real = cp_water(c), k_w::Real = c.k_water,
+                      spray::Union{Nothing,AndreasSpray} = nothing, sea = nothing,
+                      maxiter::Integer = 20, tol::Real = 1e-6)
+    th = c.thermo
+    pa = PhasePartition(q_air)
+    ρa = air_density(T_air, p, pa, th)
+    cpa = heat_capacity_moist(pa, th)
+    θ_a = T_air + dry_adiabatic_lapse_rate(pa, th) * z_t
+    T_sub = T_sea + ΔT_warm                       # just below the cool skin
+    fS = salinity_humidity_factor(S)
+    ρw = water_density(eos, T_sub, S)
+    α_w = water_thermal_expansion(eos, T_sub, S)
+    βS = water_haline_contraction(eos, T_sub, S) * S
+    σ = c.σ_SB
+    ΔTc = cool_skin === nothing ? 0.0 : 0.3        # COARE first guess
+    δc = 0.0
+    local r, H, E, LE, lw_net, Ts, qs
+    iters = 0
+    for it in 1:maxiter
+        iters = it
+        Ts = T_sub - ΔTc
+        qs = fS * saturation_specific_humidity(Ts, p, th)
+        r = air_sea_fluxes(b; U = U, z_m = z_u, z_h = z_t, θ_a = θ_a, θ_s = Ts,
+                           q_a = q_air, q_s = qs, T_air = T_air, p = p, sea = sea, c = c)
+        sl = r.surface
+        H = -ρa * cpa * sl.u_star * sl.θ_star
+        E = -ρa * sl.u_star * sl.q_star
+        LE = latent_heat_vapor(Ts, th) * E
+        lw_net = emissivity * (lw_down - σ * Ts^4)
+        cool_skin === nothing && break
+        Q_out = -lw_net + H + LE
+        cr = OceanMixedLayer.cool_skin(cool_skin, Q_out, sw_net, LE, sl.u_star * sqrt(ρa / ρw);
+                                       α = α_w, βS = βS, ρ_w = ρw, c_w = c_w, k_w = k_w,
+                                       g = grav(c), L_v = latent_heat_vapor(Ts, th),
+                                       δ0 = δc > 0 ? δc : 1e-3)
+        done = abs(cr.ΔT - ΔTc) <= tol
+        ΔTc, δc = cr.ΔT, cr.δ
+        done && break
+    end
+    τ = ρa * r.surface.u_star^2 * max(U, zero(U)) / r.surface.U
+    Hsp = LEsp = 0.0
+    if spray !== nothing
+        Hs = sea === nothing ? fully_developed_sea_state(max(r.U10N, 0.5); g = grav(c)).H_s : sea.H_s
+        RH = relative_humidity(T_air, p, q_air, th)
+        sp = sea_spray_fluxes(spray; u_star = r.surface.u_star, T_sea = T_sub, T_air = T_air,
+                              RH = RH, p = p, S = S, H_s = Hs, c = c)
+        Hsp, LEsp = sp.H_S, sp.H_L
+    end
+    Lv = latent_heat_vapor(Ts, th)
+    Hr = rain_heat_flux(rain; T_air = T_air, q_air = q_air, T_s = Ts, q_s = qs, p = p, c = c)
+    Ht, LEt = H + Hsp, LE + LEsp
+    Et = E + (spray === nothing ? 0.0 : LEsp / latent_heat_vapor(T_air, th))
+    Qo = sw_net + lw_net - Ht - LEt - Hr
+    T = typeof(float(H))
+    return COARESolution{T}(r, Ts, qs, ΔTc, δc, ΔT_warm, H, LE, E, τ, Hsp, LEsp, Ht, LEt, Et,
+                            Hr, lw_net, Qo, iters)
+end
+
+"""
+    coare_warm_layer_series(b::BulkAirSea, records; sensor_depth,
+                            warm = FairallWarmLayer(), z_u, z_t = z_u, S = 35,
+                            eos = UNESCOWaterEOS(), c_w = cp_water(c),
+                            c = DEFAULT_SURFACE_CONSTANTS, kwargs...) -> Vector{COARESolution}
+
+The COARE warm-layer time loop (Fairall et al. 1996a; the
+`coare36vnWarm_et` reference code) over a time series of bulk
+observations. `records` is a vector of named tuples with fields
+
+    jd (day of year, UTC), lon (degrees east), U, T_air, q_air, p,
+    T_sea (bulk sensor, K), sw_net, lw_down, rain (kg m⁻² s⁻¹)
+
+and optionally `S`. For every record after the first the Fairall warm
+layer `warm` (`OceanMixedLayer.FairallWarmLayer`) is stepped with this
+record's net shortwave and the *previous* record's turbulent, rain and
+longwave heat loss and stress (the reference's order); it starts at the
+first local morning (≤ 06:00 local solar time, local time = UTC + (lon +
+7.5)/15 h) and is reset whenever local time wraps past midnight. The
+warming between the surface and `sensor_depth` (m) is then passed to
+[`coare_fluxes`](@ref) as `ΔT_warm`; other keywords go to
+`coare_fluxes`.
+"""
+function coare_warm_layer_series(b::BulkAirSea, records::AbstractVector; sensor_depth::Real,
+                                 warm::FairallWarmLayer = FairallWarmLayer(),
+                                 z_u::Real, z_t::Real = z_u, S::Real = 35.0,
+                                 eos::AbstractWaterEOS = UNESCOWaterEOS(),
+                                 c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                                 c_w::Real = cp_water(c),
+                                 emissivity::Real = material_emissivity(:water), kwargs...)
+    out = COARESolution{Float64}[]
+    jtime, started = 0.0, false
+    σ = c.σ_SB
+    for (i, rec) in enumerate(records)
+        Si = hasproperty(rec, :S) ? rec.S : S
+        chk = (rec.lon + 7.5) / 15 + (rec.jd - trunc(rec.jd)) * 24
+        chk > 24 && (chk -= 24)
+        newtime = (chk - 24 * trunc(chk / 24)) * 3600
+        ΔTw = 0.0
+        if i > 1 && (newtime <= 21600 || started)
+            started = true
+            if newtime < jtime
+                reset_warm_layer!(warm)
+            else
+                prev = out[end]
+                lw_up = emissivity * (σ * (rec.T_sea - prev.ΔT_cool)^4 - rec.lw_down)
+                q_out = lw_up + prev.H_total + prev.LE_total + prev.H_rain
+                step_warm_layer!(warm, rec.sw_net, q_out, prev.τ, newtime - jtime;
+                                 α = water_thermal_expansion(eos, rec.T_sea, Si),
+                                 ρ_w = water_density(eos, rec.T_sea, Si), c_w = c_w,
+                                 g = grav(c), κ = von_karman(c))
+            end
+            ΔTw = warm_layer_warming(warm, sensor_depth)
+        end
+        sol = coare_fluxes(b; U = rec.U, z_u = z_u, z_t = z_t, T_air = rec.T_air,
+                           q_air = rec.q_air, p = rec.p, T_sea = rec.T_sea, S = Si,
+                           sw_net = rec.sw_net, lw_down = rec.lw_down, rain = rec.rain,
+                           ΔT_warm = ΔTw, eos = eos, c = c, c_w = c_w,
+                           emissivity = emissivity, kwargs...)
+        push!(out, sol)
+        jtime = newtime
+    end
+    return out
+end
+
 end # module

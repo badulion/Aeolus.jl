@@ -18,3 +18,9 @@ shows the implementation reproduces COARE 3.5, not that COARE 3.5 is
 right. The comparisons with measurements are the published
 C_D10N / C_E10N values quoted in the test (Fairall et al. 2003;
 Edson et al. 2013).
+
+## Issue #40 (`test/era5_sea_spray_coare.jl`)
+
+| file | what it is |
+| :-- | :-- |
+| `coare36_met_subset.txt` | the meteorological inputs (wind, air T, RH, pressure, shortwave, rain) of COARE 3.6's `test_36_data.txt` for exactly the 653 records of `coare36_warm_cool_subset.txt` (issue #38), which holds the ocean-side inputs and the reference outputs (u\*, τ, H, LE, cool skin, warm layer, rain heat flux) of `coare36vnWarm_et.py` for them. Together they drive the full algorithm (bulk + cool skin + warm layer) and check it against the reference code. Reference-model numbers, not flux observations. |
