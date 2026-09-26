@@ -441,4 +441,61 @@ const DATA = joinpath(@__DIR__, "data")
         @info "COARE 3.5 reference model, 60 synthetic cases, max |rel. diff|" (k => round(v, sigdigits = 3) for (k, v) in worst)...
     end
 
+    @testset "SeaSurface implements the Era V surface interface" begin
+        c = DEFAULT_SURFACE_CONSTANTS
+        s = SeaSurface(T_skin = 301.0)
+        @test s isa AbstractSurface
+        @test surface_temperature(s) == 301.0
+        @test moisture_availability(s) == 1
+        @test surface_emissivity(s) == Aeolus.SurfaceOptics.material_emissivity(:water)
+        @test surface_albedo(s) == 0.055
+        f = SurfaceForcing(sw_down = 600.0, lw_down = 420.0, T_air = 298.0, q_air = 0.016,
+                           U = 7.0, p = 101000.0, z_ref = 10.0)
+        # Seawater: e = 0.98 e_sat ⇒ q_s ≈ 0.98 q_sat (to O(e/p)).
+        qs = surface_specific_humidity(s, f)
+        qsat = MT.saturation_specific_humidity(301.0, 101000.0)
+        @test qs / qsat ≈ 0.98 rtol = 1e-3
+        @test qs < qsat
+
+        fl = turbulent_fluxes(s, f)
+        @test fl.Rn ≈ fl.H + fl.LE + fl.G rtol = 1e-12       # energy closure
+        @test fl.H > 0 && fl.LE > 0 && fl.E > 0 && fl.τ > 0  # warm, humid-deficit sea
+        @test fl.LE ≈ MT.latent_heat_vapor(301.0) * fl.E
+        # Rn = (1-α) SW + ε LW − ε σ T⁴ (contract net_radiation).
+        @test fl.Rn ≈ 0.945 * 600 + s.emissivity * (420 - c.σ_SB * 301.0^4)
+        r = sea_surface_solution(s, f)
+        ρ = MT.air_density(298.0, 101000.0, MT.PhasePartition(0.016))
+        # COARE stress: τ = ρ u*² U/S = ρ C_D S U.
+        @test fl.τ ≈ ρ * r.surface.C_D * r.surface.U * 7.0 rtol = 1e-12
+        @test fl.τ < ρ * r.surface.u_star^2
+
+        # The specialised turbulent_fluxes agrees with the contract's
+        # default once the roughness and gustiness are those of the
+        # solution: the contract default is the same MOST solve.
+        s.z0m, s.z0h, s.z0q = r.z0m, r.z0h, r.z0q
+        fd = invoke(turbulent_fluxes, Tuple{AbstractSurface, SurfaceForcing}, s, f;
+                    sf = s.bulk.stability, gustiness = r.w_g)
+        @test fd.H ≈ fl.H rtol = 1e-9
+        @test fd.LE ≈ fl.LE rtol = 1e-9
+        @test fd.τ * 7.0 / r.surface.U ≈ fl.τ rtol = 1e-9      # only the U/S factor
+
+        # step_surface!: roughness follows the wind, SST is prescribed.
+        s2 = SeaSurface(T_skin = 290.0)
+        low = step_surface!(s2, SurfaceForcing(U = 4.0, T_air = 289.0, q_air = 0.009), 60.0)
+        z_low = roughness_lengths(s2).z0m
+        high = step_surface!(s2, SurfaceForcing(U = 20.0, T_air = 289.0, q_air = 0.009), 60.0)
+        z_high = roughness_lengths(s2).z0m
+        @test surface_temperature(s2) == 290.0
+        @test z_high > 20 * z_low                # Charnock: z0 ∝ α u*², α rising
+        @test roughness_lengths(s2).z0q < 1.6e-4
+        @test high.τ / low.τ > (20 / 4)^2        # C_D rises with wind
+        # Waves: a young sea under the same wind drags more.
+        bw = coare35_bulk(roughness = WaveAgeCharnock())
+        f12 = SurfaceForcing(U = 12.0, T_air = 289.0, q_air = 0.009)
+        τ_old = turbulent_fluxes(SeaSurface(T_skin = 290.0, bulk = bw, sea = deep_water_sea_state(9.0, 3.0)), f12).τ
+        τ_young = turbulent_fluxes(SeaSurface(T_skin = 290.0, bulk = bw, sea = deep_water_sea_state(4.0, 1.0)), f12).τ
+        @test τ_young > 1.1 * τ_old
+        @info "SeaSurface" H = fl.H LE = fl.LE τ = fl.τ z0m_4ms = z_low z0m_20ms = z_high τ_young_over_old = τ_young / τ_old
+    end
+
 end

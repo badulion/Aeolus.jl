@@ -603,4 +603,20 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
 
+# Phase 52 — AirSeaFlux (#39): wave-dependent sea-surface roughness, COARE
+# stability / gustiness, COARE-style bulk fluxes, SeaSurface. The viscosity
+# helper stays qualified: `Aeolus.AirSeaFlux.air_kinematic_viscosity`.
+export COAREStability, ConvectiveGustiness, gustiness_velocity,
+       convective_velocity_scale,
+       SeaState, deep_water_sea_state, fully_developed_sea_state, wave_age,
+       AbstractSeaRoughness, AbstractCharnockRoughness, CharnockRoughness,
+       COARE30Charnock, COARE35Charnock, WaveAgeCharnock, OostRoughness,
+       TaylorYellandRoughness, SeaStateRoughness,
+       smooth_flow_roughness, charnock_parameter, sea_roughness_length,
+       AbstractScalarRoughness, COARE30ScalarRoughness, COARE35ScalarRoughness,
+       BrutsaertGarrattRoughness, sea_scalar_roughness, roughness_reynolds,
+       neutral_transfer_coefficients,
+       BulkAirSea, coare30_bulk, coare35_bulk, AirSeaSolution, air_sea_fluxes,
+       SeaSurface, sea_surface_solution
+
 end # module

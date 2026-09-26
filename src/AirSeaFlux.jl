@@ -92,7 +92,8 @@ export COAREStability, ConvectiveGustiness, gustiness_velocity,
        AbstractScalarRoughness, COARE30ScalarRoughness, COARE35ScalarRoughness,
        BrutsaertGarrattRoughness, sea_scalar_roughness, roughness_reynolds,
        neutral_transfer_coefficients,
-       BulkAirSea, coare30_bulk, coare35_bulk, AirSeaSolution, air_sea_fluxes
+       BulkAirSea, coare30_bulk, coare35_bulk, AirSeaSolution, air_sea_fluxes,
+       SeaSurface, sea_surface_solution
 
 # =========================================================================
 # 1. COARE stability functions (Grachev–Fairall convective blend)
@@ -821,6 +822,139 @@ function air_sea_fluxes(b::BulkAirSea = coare35_bulk();
                              w_used,
                              Bf, U10N, (κ / lm)^2, κ^2 / (lm * log(10 / zh)),
                              κ^2 / (lm * log(10 / zq)), νa, iters, conv)
+end
+
+# =========================================================================
+# 7. The sea surface as an Era V AbstractSurface
+# =========================================================================
+
+"""
+    SeaSurface(; T_skin = 293.15, bulk = coare35_bulk(), sea = nothing,
+                 albedo = 0.055, emissivity = material_emissivity(:water),
+                 salinity_factor = 0.98, U10N_init = 5.0)
+
+Open water with wave-dependent roughness, as a
+`SurfaceExchange.AbstractSurface`:
+
+| method                          | value                                                   |
+|:------------------------------- |:------------------------------------------------------- |
+| `surface_temperature(s)`        | `T_skin` (K), the interface temperature                 |
+| `roughness_lengths(s)`          | the roughness of the last flux computation (`z0m`, `z0h`, `z0q`) |
+| `surface_albedo(s)`             | `albedo` (0.055, the COARE broadband value)             |
+| `surface_emissivity(s)`         | `SurfaceOptics.material_emissivity(:water)` (0.96)      |
+| `moisture_availability(s)`      | 1                                                       |
+| `surface_specific_humidity(s,f)`| saturation over seawater, ``e = 0.98\\,e_{sat}(T_s)`` (Kraus & Businger 1994) |
+| `turbulent_fluxes(s, f)`        | [`air_sea_fluxes`](@ref) with `s.bulk` and `s.sea`       |
+| `step_surface!(s, f, dt)`       | updates the roughness state, returns the fluxes         |
+
+`turbulent_fluxes` specialises the contract's default: the roughness is
+solved *with* the fluxes (it depends on ``u_*``) rather than read from
+the stored state, and gustiness is applied. The stress follows COARE,
+``τ = ρ u_*² U/S``: gust-driven stress has no mean direction, so only
+the fraction ``U/S`` of ``ρ u_*²`` is momentum taken from the mean wind.
+
+`T_skin` is **prescribed**: `step_surface!` does not change it. The
+prognostic ocean temperature (mixed layer, diurnal warm layer, cool
+skin) belongs to `OceanMixedLayer`, which sets `s.T_skin`; the `G`
+returned is the heat flux into the ocean it must absorb. `sea` (a
+[`SeaState`](@ref)) is likewise set by whatever supplies the waves.
+"""
+mutable struct SeaSurface{B<:BulkAirSea, S, T<:AbstractFloat} <: AbstractSurface
+    T_skin::T
+    bulk::B
+    sea::S
+    albedo::T
+    emissivity::T
+    salinity_factor::T
+    z0m::T
+    z0h::T
+    z0q::T
+end
+
+function SeaSurface(; T_skin::Real = 293.15, bulk::BulkAirSea = coare35_bulk(),
+                    sea::Union{Nothing,SeaState} = nothing, albedo::Real = 0.055,
+                    emissivity::Real = material_emissivity(:water),
+                    salinity_factor::Real = 0.98, U10N_init::Real = 5.0)
+    n = neutral_transfer_coefficients(bulk.roughness, bulk.scalar, U10N_init; sea = sea)
+    return SeaSurface(float(T_skin), bulk, sea, float(albedo), float(emissivity),
+                      float(salinity_factor), n.z0m, n.z0h, n.z0q)
+end
+
+surface_temperature(s::SeaSurface) = s.T_skin
+roughness_lengths(s::SeaSurface) = (z0m = s.z0m, z0h = s.z0h, z0q = s.z0q)
+surface_albedo(s::SeaSurface) = s.albedo
+surface_emissivity(s::SeaSurface) = s.emissivity
+moisture_availability(::SeaSurface) = 1.0
+
+function surface_specific_humidity(s::SeaSurface, f::SurfaceForcing;
+                                   c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    e = s.salinity_factor * saturation_vapor_pressure(s.T_skin, c.thermo)
+    ε = molmass_ratio(c.thermo)
+    return ε * e / (f.p - (1 - ε) * e)
+end
+
+"""
+    sea_surface_solution(s::SeaSurface, f::SurfaceForcing; c, U_min = 0.1) -> AirSeaSolution
+
+The full [`AirSeaSolution`](@ref) behind `turbulent_fluxes(s, f)`: the
+air temperature is referred to the surface by the dry adiabat,
+``θ_a = T_a + Γ_d z_{ref}``, ``θ_s = T_{skin}``, as in the contract's
+default `turbulent_fluxes`.
+"""
+function sea_surface_solution(s::SeaSurface, f::SurfaceForcing;
+                              sf::AbstractStabilityFunctions = s.bulk.stability,
+                              c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                              U_min::Real = 0.1)
+    pa = PhasePartition(f.q_air)
+    θ_a = f.T_air + dry_adiabatic_lapse_rate(pa, c.thermo) * f.z_ref
+    b = sf === s.bulk.stability ? s.bulk :
+        BulkAirSea(s.bulk.roughness, s.bulk.scalar, sf, s.bulk.gustiness,
+                   s.bulk.maxiter, s.bulk.rtol)
+    return air_sea_fluxes(b; U = f.U, z_m = f.z_ref, θ_a = θ_a, θ_s = s.T_skin,
+                          q_a = f.q_air, q_s = surface_specific_humidity(s, f; c = c),
+                          T_air = f.T_air, p = f.p, sea = s.sea, c = c, U_min = U_min)
+end
+
+function _fluxes(s::SeaSurface, f::SurfaceForcing, r::AirSeaSolution, c::SurfaceConstants)
+    pa = PhasePartition(f.q_air)
+    ρ = air_density(f.T_air, f.p, pa, c.thermo)
+    cp = heat_capacity_moist(pa, c.thermo)
+    sl = r.surface
+    H = -ρ * cp * sl.u_star * sl.θ_star
+    E = -ρ * sl.u_star * sl.q_star
+    LE = latent_heat_vapor(s.T_skin, c.thermo) * E
+    Rn = net_radiation(s, f; c = c)
+    τ = ρ * sl.u_star^2 * max(f.U, zero(f.U)) / sl.U
+    return SurfaceFluxes(promote(Rn, H, LE, Rn - H - LE, τ, E)...)
+end
+
+"""
+    turbulent_fluxes(s::SeaSurface, forcing; sf = s.bulk.stability,
+                     c = DEFAULT_SURFACE_CONSTANTS, U_min = 0.1) -> SurfaceFluxes
+
+Fluxes over open water from the bulk algorithm of `s` (see
+[`SeaSurface`](@ref)); `G = Rn - H - LE` is the heat flux into the
+ocean. Does not modify `s`.
+"""
+function turbulent_fluxes(s::SeaSurface, f::SurfaceForcing;
+                          sf::AbstractStabilityFunctions = s.bulk.stability,
+                          c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS, U_min::Real = 0.1)
+    return _fluxes(s, f, sea_surface_solution(s, f; sf = sf, c = c, U_min = U_min), c)
+end
+
+"""
+    step_surface!(s::SeaSurface, forcing, dt; c = DEFAULT_SURFACE_CONSTANTS) -> SurfaceFluxes
+
+Computes the air–sea fluxes, stores the roughness lengths they imply (so
+`roughness_lengths(s)` reports the current, wind- and wave-dependent
+roughness to a tile aggregator), and returns the fluxes. The skin
+temperature is prescribed and left unchanged (see [`SeaSurface`](@ref)).
+"""
+function step_surface!(s::SeaSurface, f::SurfaceForcing, dt::Real;
+                       c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    r = sea_surface_solution(s, f; c = c)
+    s.z0m, s.z0h, s.z0q = r.z0m, r.z0h, r.z0q
+    return _fluxes(s, f, r, c)
 end
 
 end # module
