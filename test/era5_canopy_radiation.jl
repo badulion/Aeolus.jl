@@ -326,4 +326,22 @@ end
         @test all(s.net_absorbed .<= 0) && s.net_absorbed[20] < s.net_absorbed[5]
     end
 
+    @testset "LES field: per-column absorption" begin
+        mesh = RegularGrid(; size = (6, 4, 10), extent = (60.0, 40.0, 40.0))
+        mask = [i <= 3 for i in 1:6, j in 1:4]
+        lad = canopy_lad_field(mesh, LalicMihailovicLAD(4.0, 20.0; z_m = 13.0), mask)
+        q = zeros(6, 4, 10)
+        Sdir = [i == 2 ? 0.0 : 500.0 for i in 1:6, j in 1:4]      # a shadowed column
+        g = canopy_shortwave_field!(q, mesh, lad; sun = 0.6, sw_direct = Sdir, sw_diffuse = 100.0,
+                                    optics = nir, albedo_direct = 0.15)
+        # bare columns: all to the ground; vegetated: matches the 1-D solve
+        @test all(iszero, q[4:6, :, :])
+        @test g[5, 1] ≈ 0.85 * 600.0
+        zf = [(k - 1) * mesh.dz for k in 1:11]
+        s = canopy_shortwave(zf, lad[1, 1, :]; sun = 0.6, sw_direct = 500.0, sw_diffuse = 100.0,
+                             optics = nir, albedo_direct = 0.15)
+        @test q[1, 1, :] .* mesh.dz ≈ s.absorbed
+        @test g[1, 1] ≈ s.ground_absorbed
+        @test sum(q[2, 1, :]) * mesh.dz < sum(q[1, 1, :]) * mesh.dz
+    end
 end

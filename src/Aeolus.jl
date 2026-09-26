@@ -619,6 +619,6 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        canopy_scattering_parameters, canopy_beam_transmittance,
        sunlit_leaf_fraction, canopy_diffuse_transmittance,
        CanopyShortwaveSolution, canopy_shortwave,
-       CanopyLongwaveSolution, canopy_longwave
+       CanopyLongwaveSolution, canopy_longwave, canopy_shortwave_field!
 
 end # module

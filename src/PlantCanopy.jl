@@ -27,9 +27,18 @@ sink it exerts on the resolved flow:
      Inoue (1963) in the form of Harman & Finnigan (2007)
      ([`canopy_exponential_wind`](@ref)) that it reproduces.
 
-Radiation attenuation (#23) and the leaf energy balance (#24) extend this
-module; they use the cumulative leaf area [`cumulative_leaf_area`](@ref)
-defined here.
+  4. **Radiation in the canopy** — leaf-angle distributions with Ross's
+     ``G``-function in the Goudriaan (1977) fit ([`RossGoudriaanLeaves`](@ref)),
+     Beer–Lambert beam and diffuse transmittance, and the canopy
+     two-stream model of Sellers (1985) for the shortwave
+     ([`canopy_shortwave`](@ref)) with the sunlit/shaded split of
+     de Pury & Farquhar (1997), plus the longwave exchange between sky,
+     leaf layers and ground ([`canopy_longwave`](@ref)). The optical-depth
+     coordinate is the cumulative leaf area [`cumulative_leaf_area`](@ref),
+     and the two-stream layer algebra and adding solver are those of the
+     Era III `TwoStream` module, supplied with the canopy γ coefficients.
+
+The leaf energy balance (#24) extends this module.
 
 # References
 
@@ -46,6 +55,17 @@ defined here.
   * Harman, I. N. & Finnigan, J. J. (2007). A simple unified theory for
     flow in the canopy and roughness sublayer. *Boundary-Layer Meteorol.*,
     123, 339-363.
+  * Ross, J. (1981). *The Radiation Regime and Architecture of Plant
+    Stands.* Junk, The Hague.
+  * Goudriaan, J. (1977). *Crop Micrometeorology: A Simulation Study.*
+    Pudoc, Wageningen.
+  * Sellers, P. J. (1985). Canopy reflectance, photosynthesis and
+    transpiration. *Int. J. Remote Sens.*, 6, 1335-1372.
+  * de Pury, D. G. G. & Farquhar, G. D. (1997). Simple scaling of
+    photosynthesis from leaves to canopies without the errors of big-leaf
+    models. *Plant Cell Environ.*, 20, 537-557.
+  * Oleson, K. W. et al. (2013). Technical description of version 4.5 of
+    the Community Land Model (CLM). NCAR/TN-503+STR, ch. 3.
 """
 module PlantCanopy
 
@@ -72,7 +92,7 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        canopy_scattering_parameters, canopy_beam_transmittance,
        sunlit_leaf_fraction, canopy_diffuse_transmittance,
        CanopyShortwaveSolution, canopy_shortwave,
-       CanopyLongwaveSolution, canopy_longwave
+       CanopyLongwaveSolution, canopy_longwave, canopy_shortwave_field!
 
 # =========================================================================
 # 1. Leaf-area density profiles
@@ -1171,5 +1191,55 @@ function canopy_longwave(z_faces::AbstractVector{<:Real}, lad::AbstractVector{<:
 end
 canopy_longwave(p::AbstractLeafAreaDensity, z_faces::AbstractVector{<:Real}; kwargs...) =
     canopy_longwave(z_faces, layer_leaf_area_density(p, z_faces); kwargs...)
+
+"""
+    canopy_shortwave_field!(q, mesh::RegularGrid, lad; sun, sw_direct, sw_diffuse,
+                            optics, albedo_direct, albedo_diffuse = albedo_direct,
+                            leaves = SphericalLeaves()) -> ground_absorbed::Matrix
+
+Shortwave absorbed by the leaves of every cell of a resolved canopy,
+written to `q` `(Nx, Ny, Nz)` as a volumetric source [W m⁻³]; returns the
+`(Nx, Ny)` shortwave absorbed by the ground under each column [W m⁻²].
+`lad` is the cell-centred leaf-area density of
+[`canopy_lad_field`](@ref). `sw_direct`, `sw_diffuse` and the albedos are
+scalars or `(Nx, Ny)` matrices (e.g. the cloud-shadowed direct beam of
+`SolarGeometry.cloud_shadow_map` times the clear-sky flux).
+
+Each grid column is solved independently with [`canopy_shortwave`](@ref):
+the independent-column approximation, which ignores the horizontal
+displacement of a slanted beam through the crown. Columns without leaves
+put all the incident radiation into the ground budget.
+"""
+function canopy_shortwave_field!(q::AbstractArray{<:Real,3}, mesh::RegularGrid,
+                                 lad::AbstractArray{<:Real,3};
+                                 sun, sw_direct, sw_diffuse, optics::LeafOptics,
+                                 albedo_direct, albedo_diffuse = albedo_direct,
+                                 leaves::AbstractLeafAngleDistribution = SphericalLeaves())
+    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    size(lad) == (Nx, Ny, Nz) || throw(DimensionMismatch("canopy_shortwave_field!: lad must be (Nx, Ny, Nz)"))
+    size(q) == (Nx, Ny, Nz) || throw(DimensionMismatch("canopy_shortwave_field!: q must be (Nx, Ny, Nz)"))
+    pick(x, i, j) = x isa Real ? Float64(x) : Float64(x[i, j])
+    zf = [(k - 1) * mesh.dz for k in 1:Nz+1]
+    ground = zeros(Nx, Ny)
+    fill!(q, 0)
+    for j in 1:Ny, i in 1:Nx
+        col = @view lad[i, j, :]
+        Sd = pick(sw_direct, i, j); Df = pick(sw_diffuse, i, j)
+        ad = pick(albedo_direct, i, j); af = pick(albedo_diffuse, i, j)
+        if all(iszero, col)
+            μ = _cos_zenith(sun)
+            ground[i, j] = (μ > 1e-6 ? (1 - ad) * Sd : 0.0) + (1 - af) * Df
+            continue
+        end
+        s = canopy_shortwave(zf, col; sun = sun, sw_direct = Sd, sw_diffuse = Df,
+                             leaves = leaves, optics = optics,
+                             albedo_direct = ad, albedo_diffuse = af)
+        for k in 1:Nz
+            q[i, j, k] = s.absorbed[k] / mesh.dz
+        end
+        ground[i, j] = s.ground_absorbed
+    end
+    return ground
+end
 
 end # module
