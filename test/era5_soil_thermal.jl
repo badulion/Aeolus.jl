@@ -251,13 +251,13 @@ end
             i = argmin(abs.(g.z .- zq))
             z = g.z[i]
             @test amp[i] / A ≈ exp(-z / d) rtol = 0.012
-            @test lag[i] ≈ z / d atol = 0.01
+            @test lag[i] ≈ z / d atol = 0.005                   # measured ≤ 0.0026 rad
             @printf("  %s: z = %.3f m (%.1f d): amplitude ratio %.4f vs %.4f, lag %.4f vs %.4f rad\n",
                     name, z, z / d, amp[i] / A, exp(-z / d), lag[i], z / d)
         end
         Gamp, Glead = 2sqrt(Gs^2 + Gc^2) / nper, atan(Gc, Gs)
         @test Gamp ≈ A * sqrt(k * C * ω) rtol = 1e-3
-        @test Glead ≈ π / 4 atol = 0.01
+        @test Glead ≈ π / 4 atol = 0.005                     # measured 0.0029 rad
         @printf("  %s: d = %.4f m; G amplitude %.2f vs %.2f W/m², lead %.4f vs π/4 = %.4f\n",
                 name, d, Gamp, A * sqrt(k * C * ω), Glead, π / 4)
     end
@@ -350,7 +350,7 @@ _night(; T_air = 283.15, U = 3.0, q_air = 0.005) =
     @printf("  12 h night, Δt = 600 s: |G_full(T_s) - G| = %.2f W/m² on step 1 (ΔT_s ≈ -3 K), ≤ %.3f W/m² from step 4\n",
             lin[1], maximum(lin[4:end]))
 
-    # (2) the nocturnal sink: with the soil, the skin stays far warmer than a
+    # (2) the nocturnal source: with the soil, the skin stays far warmer than a
     # surface in local radiative-turbulent equilibrium (G = 0).
     f = _night()
     colG0 = SoilThermalColumn(SoilWaterColumn(clm5_soil_grid(), h; ψ = -3.0), p;
