@@ -85,7 +85,9 @@ is a tridiagonal system, solved by the Thomas algorithm in ``O(n)``.
 ``\theta = 1`` (backward Euler) is first order but L-stable: it damps
 the stiffest modes monotonically, which is preferable when ``\Delta t``
 is far longer than ``\Delta z^2/\kappa`` of the thinnest cell, for
-example a 1 cm waterproofing layer stepped hourly.
+example a 1 cm waterproofing layer stepped hourly. ``\theta < 1/2`` is
+only conditionally stable (explicit Euler on 2 cm brick cells at
+``\Delta t = 600`` s diverges within 100 steps), so the column rejects it.
 
 `step_conduction!` returns the θ-weighted boundary fluxes it applied.
 Summing the cell equations telescopes the interior conductances away, so

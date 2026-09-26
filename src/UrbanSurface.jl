@@ -391,6 +391,8 @@ Time stepping is the θ-scheme ([`step_conduction!`](@ref)):
 `θ = 0.5` is Crank–Nicolson (second order, A-stable), `θ = 1` backward
 Euler (first order, L-stable — damps the stiffest modes, preferable
 for time steps much longer than ``Δz²/κ`` of the thinnest cell).
+`θ` must lie in `[0.5, 1]`: below ½ the scheme is only conditionally
+stable, so it is rejected.
 
 `T` is the initial temperature: a scalar, or a vector of cell values.
 Fields: `T` (cell temperatures, K), `dz`, `z` (cell centres measured from
@@ -421,7 +423,7 @@ end
 
 function ConductionColumn(layers::AbstractVector{<:WallLayer}; T = 293.15, θ::Real = 0.5)
     isempty(layers) && throw(ArgumentError("ConductionColumn: need at least one layer"))
-    (0 <= θ <= 1) || throw(ArgumentError("ConductionColumn: θ must lie in [0, 1]"))
+    _check_theta(θ, "ConductionColumn")
     FT = promote_type(map(l -> typeof(l.thickness), layers)...)
     Ls = WallLayer{FT}[WallLayer{FT}(ThermalMaterial{FT}(l.material.name,
                          FT(l.material.conductivity), FT(l.material.density),
@@ -448,6 +450,17 @@ function ConductionColumn(layers::AbstractVector{<:WallLayer}; T = 293.15, θ::R
     length(Tv) == n || throw(ArgumentError("ConductionColumn: T must have $n entries"))
     return ConductionColumn{FT}(Ls, Tv, dz, z, k, C, lay, K, FT(θ),
                                 zeros(FT, n), zeros(FT, n), zeros(FT, n), zeros(FT, n))
+end
+
+# θ < ½ (explicit Euler at θ = 0) is only conditionally stable — a facet
+# with 2 cm brick cells stepped at 600 s with θ = 0 diverges to 1e8 K within
+# 100 steps — and it would also make the linearised skin balance explicit.
+# Only the unconditionally stable range is accepted.
+function _check_theta(θ::Real, who::AbstractString)
+    (0.5 <= θ <= 1) ||
+        throw(ArgumentError("$who: θ must lie in [0.5, 1] (Crank–Nicolson to " *
+                            "backward Euler); θ < 0.5 is only conditionally stable"))
+    return nothing
 end
 
 Base.length(col::ConductionColumn) = length(col.T)
@@ -500,6 +513,8 @@ holds to round-off: the scheme is conservative by construction.
 """
 function step_conduction!(col::ConductionColumn{T}, outer::ColumnBoundary,
                           inner::ColumnBoundary, dt::Real; θ::Real = col.θ) where {T}
+    _check_theta(θ, "step_conduction!")
+    dt > 0 || throw(ArgumentError("step_conduction!: dt must be positive"))
     n = length(col.T)
     a, b, c, d = col._a, col._b, col._c, col._d
     K, Tn = col.K, col.T

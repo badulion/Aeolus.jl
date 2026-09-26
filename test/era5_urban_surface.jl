@@ -323,6 +323,16 @@ wall_matrix(layers, ω) = foldl((M, l) -> layer_matrix(l, ω) * M, layers;
         @test column_heat_content(col) ≈ E0 rtol = 1e-14
         @test maximum(abs.(col.T .- Tbar)) < 1e-8
         @test_throws ArgumentError ConductionColumn(layers; θ = 1.5)
+        # θ < ½ is only conditionally stable (explicit Euler on 2 cm brick
+        # cells at Δt = 600 s diverges), so it is rejected, as is Δt ≤ 0.
+        @test_throws ArgumentError ConductionColumn(layers; θ = 0.0)
+        @test_throws ArgumentError UrbanFacet(:wall, example_wall_layers(); θ = 0.25)
+        let col = ConductionColumn(layers)
+            @test_throws ArgumentError step_conduction!(col, heat_flux_boundary(0.0),
+                                                        heat_flux_boundary(0.0), 60.0; θ = 2.0)
+            @test_throws ArgumentError step_conduction!(col, heat_flux_boundary(0.0),
+                                                        heat_flux_boundary(0.0), -60.0)
+        end
         @test_throws ArgumentError ColumnBoundary(290.0, -1.0, 0.0)
     end
     @testset "UrbanFacet implements AbstractSurface" begin
