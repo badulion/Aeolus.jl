@@ -104,7 +104,7 @@ ah_sun(t) = max(0.0, 700 * sin(2π * (t / 86400 - 0.25)))
         hv = IdealLoadsHVAC(T_heat = 294.15, T_cool = 297.15, condenser = :evaporative,
                             dehumidify = true)
         dt = 900.0
-        worst = 0.0; worst_E = 0.0; gross_max = 0.0
+        worst = 0.0; worst_E = 0.0; gross_max = 0.0; n_cons_bad = 0
         seen = Dict(:heat => false, :cool => false, :lost => false, :vent_lat => false)
         for (season, Tm, q_out) in ((:winter, 276.15, 0.004), (:summer, 301.15, 0.014))
             z = ah_full_zone(T = season === :winter ? 294.15 : 297.15)
@@ -132,8 +132,8 @@ ah_sun(t) = max(0.0, 700 * sin(2π * (t / 86400 - 0.25)))
                 worst = max(worst, abs(lhs - rhs) / gross)
                 worst_E = max(worst_E, abs(rel.storage_sensible - dE) / gross)
                 # consumption is what the gains and plant say it is
-                @assert energy_consumption(rel) ≈ r.people_sensible + r.people_latent +
-                        r.lighting + r.equipment + hb.P_heating + hb.P_cooling
+                n_cons_bad += !(energy_consumption(rel) ≈ r.people_sensible + r.people_latent +
+                                r.lighting + r.equipment + hb.P_heating + hb.P_cooling)
                 seen[:heat] |= hb.Q_heating > 0
                 seen[:cool] |= hb.Q_cooling > 0
                 seen[:lost] |= rel.Q_lost > 0
@@ -143,6 +143,7 @@ ah_sun(t) = max(0.0, 700 * sin(2π * (t / 86400 - 0.25)))
         @printf("  first law, 8 days of 15-min steps: max |release + storage - consumption - sun| = %.2e (rel. to gross, max gross %.0f W); storage term vs zone_heat_content %.2e\n",
                 worst, gross_max, worst_E)
         @test all(values(seen))
+        @test n_cons_bad == 0
         @test worst < 1e-10
         @test worst_E < 1e-10
     end
@@ -450,6 +451,11 @@ ah_sun(t) = max(0.0, 700 * sin(2π * (t / 86400 - 0.25)))
         mean_(v) = sum(v) / length(v)
         # Table 3: 2/3 of the heating electric, 1/3 gas (boiler η = 0.9,
         # assumed); 70 % of the internal gains electric ("electric fraction").
+        # Table 3's wording, "fraction of electric heating systems over gas
+        # heating systems 2/3", can also be read as electric : gas = 2 : 3;
+        # the total moves by < 2 % between the readings (theory page).
+        # The run itself heats electrically (η = 1), so the released heat
+        # below omits the flue loss of the gas third, Q_h/3 (1/0.9 - 1).
         Q_h = mean_(out.Q_heating); Q_i = mean_(out.Q_internal)
         elec = (0.7 * Q_i + 2 / 3 * Q_h) / A
         gas = (0.3 * Q_i + Q_h / (3 * 0.9)) / A
