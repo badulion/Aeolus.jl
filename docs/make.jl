@@ -44,6 +44,7 @@ makedocs(
             "Occupancy and BESTEST"       => "theory/occupancy_validation.md",
             "Facet–radiosity coupling"    => "theory/urban_radiosity_coupling.md",
             "Anthropogenic heat (BEM)"    => "theory/anthropogenic_heat.md",
+            "Glazing and window facets"   => "theory/urban_glazing.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

@@ -395,7 +395,8 @@ for n in 1:nsteps
     # surface loss term (see urban_physics.jl, L4).
     apply_building_heat!(sim, qv_p, sensible, bem, dt)
     add_traffic_heat!(sim, sfc, dt)
-    # R6: glass materials let some SW pass through; reduce sensible
+    # R6: glazing transmits part of the SW into the buildings; that part
+    # leaves the glass cells' surface budget (UrbanSurface glazing optics)
     apply_glass_sw_transmission!(sensible, sfc, sw_arr)
     # L1: evaporative cooling
     LE = apply_latent_flux!(sim, Ts, sfc; dt = dt, qv_field = qv_p,
