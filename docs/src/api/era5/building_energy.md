@@ -38,6 +38,15 @@ The API has three parts:
   `condenser_inlet_temperature`. Humidity: `ZoneForcing(q_out, Q_latent)`,
   `zone_specific_humidity`, `zone_relative_humidity`.
 
+- **Occupancy and internal gains** (#33; theory and ASHRAE 140
+  validation: [Occupancy schedules and BESTEST validation](../../theory/occupancy_validation.md)):
+  `DayProfile`, `WeeklySchedule`, `schedule_value`, `schedule_mean`,
+  `full_load_hours`; `InternalGains` → `internal_gains` →
+  `InternalGainRates`, passed as `ZoneForcing(rates; T_out, …)`;
+  `occupant_sensible_heat`; `ThermostatSchedule`, `scheduled_hvac`; the
+  DOE medium-office reference: `DOE_MEDIUM_OFFICE_SCHEDULES`,
+  `office_internal_gains`, `office_thermostat`.
+
 ## A zone behind two facets
 
 ```julia
@@ -70,10 +79,28 @@ end
 ac = IdealLoadsHVAC(T_heat = 293.15, T_cool = 299.15, cop_rated = 3.0,
                     curves = DX_CURVES_WINDOW_AC, condenser = :air_cooled,
                     dehumidify = true, RH_max = 0.6)
+sf = SurfaceForcing(sw_down = 600.0, lw_down = 380.0, T_air = 306.0, U = 3.0)
 b, h = step_zone!(zone, ZoneForcing(T_out = 306.0, q_out = 0.014, Q_internal = 500.0,
                                     Q_latent = 150.0, surface = sf), 600.0, ac)
 h.Q_cooling, h.COP                            # coil load, operating COP
 h.Q_exhaust_sensible, h.Q_exhaust_latent      # = Q_cooling (1 + 1/COP) to the outdoor air
+```
+
+## An occupied office week
+
+```julia
+gains = office_internal_gains(48.0; lighting_return_air_fraction = 0.0)  # DOE medium office
+tstat = office_thermostat()                                               # 21/24 °C occupied, setback otherwise
+base  = IdealLoadsHVAC(heating = :electric, curves = nothing)
+sf = SurfaceForcing(lw_down = 250.0, T_air = 268.15, U = 3.0)             # the facets' outside
+dt = 900.0
+for n in 0:(7 * 96 - 1)
+    t = n * dt                                   # seconds from Monday 00:00
+    r = internal_gains(gains, t, dt; T_air = zone_air_temperature(zone))   # exact step mean
+    b, h = step_zone!(zone, ZoneForcing(r; include_latent = false, T_out = 268.15, surface = sf), dt,
+                      scheduled_hvac(base, tstat, t))
+    # r.lighting + r.equipment is the electric demand; h.Q_heating the heating load
+end
 ```
 
 ## The 5R1C reference

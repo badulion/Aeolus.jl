@@ -28,6 +28,12 @@ and receive the radiative part of internal gains and the transmitted
 solar gain as an imposed flux. [`step_zone!`](@ref) is implicit in the
 air temperature and conserves the zone's heat content exactly.
 
+Occupancy (issue #33): [`WeeklySchedule`](@ref)s of piecewise-constant
+[`DayProfile`](@ref)s drive [`InternalGains`](@ref) (people, lighting,
+equipment, after the EnergyPlus objects) and a [`ThermostatSchedule`](@ref);
+the DOE medium-office reference building's schedules are
+[`DOE_MEDIUM_OFFICE_SCHEDULES`](@ref).
+
 For reference the module also carries the ISO 13790 simple hourly
 5R1C model ([`ISO13790Zone`](@ref)), with a mapping
 ([`iso13790_zone`](@ref)) that derives its parameters from the same

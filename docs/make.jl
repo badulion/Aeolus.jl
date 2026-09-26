@@ -41,6 +41,7 @@ makedocs(
             "Urban facet conduction"      => "theory/urban_conduction.md",
             "Building energy (zone)"      => "theory/building_energy.md",
             "HVAC and exhaust heat"       => "theory/hvac_exhaust.md",
+            "Occupancy and BESTEST"       => "theory/occupancy_validation.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
