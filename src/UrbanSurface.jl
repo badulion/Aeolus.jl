@@ -330,9 +330,12 @@ struct ColumnBoundary{T<:AbstractFloat}
     T_env::T
     h::T
     q::T
+    function ColumnBoundary{T}(T_env, h, q) where {T<:AbstractFloat}
+        h >= 0 || throw(ArgumentError("ColumnBoundary: h must be ≥ 0"))
+        return new{T}(T_env, h, q)
+    end
 end
 function ColumnBoundary(T_env::Real, h::Real, q::Real)
-    h >= 0 || throw(ArgumentError("ColumnBoundary: h must be ≥ 0"))
     Tp = float(promote_type(typeof(T_env), typeof(h), typeof(q)))
     return ColumnBoundary{Tp}(Tp(T_env), Tp(h), Tp(q))
 end
