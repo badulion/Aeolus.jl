@@ -63,8 +63,8 @@ Hydraulic conductivity is ``K = k\rho g/\mu``; the intrinsic
 permeability ``k`` does not depend on temperature, the viscosity of
 water does — by a factor 1.8 between 0 and 20 °C. Layer conductivities
 are multiplied by ``\mu(T_{ref})/\mu(T)`` with ``\mu(T)`` from the
-correlation of Kestin et al. (1978) (checked against the CRC table to
-0.3 %, 0–80 °C) and ``T_{ref} = 20`` °C, the laboratory temperature of the
+correlation of Kestin et al. (1978) (within 0.075 % of the CRC
+values at seven temperatures, 0–80 °C; the test tolerance is 0.3 %) and ``T_{ref} = 20`` °C, the laboratory temperature of the
 texture tables. A soil at 5 °C therefore needs a wetter profile to carry
 the same drainage flux, which the unit-gradient test verifies.
 

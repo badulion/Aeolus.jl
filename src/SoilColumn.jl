@@ -400,11 +400,11 @@ soil_water_capacity(h::GardnerExponential, ψ::Real) =
     CLAPP_HORNBERGER_1978
 
 Clapp & Hornberger (1978), Table 2: mean parameters for the 11 USDA
-texture classes, in the paper's units — porosity `θ_s`, saturated
-conductivity `K_s` (cm s⁻¹), saturated matric potential `ψ_s` (cm, as a
-positive suction) and `b`. As reproduced in Tarboton (2003, *Rainfall-
-Runoff Processes*, Table 4.1, `K_s` in cm h⁻¹ there). Use
-[`clapp_hornberger_texture`](@ref) for an SI model.
+texture classes — porosity `θ_s`, saturated conductivity `K_s`
+(**cm h⁻¹**; the paper gives cm s⁻¹), saturated matric potential `ψ_s`
+(cm, as a positive suction) and `b`. Values as reproduced in Tarboton
+(2003, *Rainfall-Runoff Processes*, ch. 4, Table 1, `K_s` in cm h⁻¹).
+Use [`clapp_hornberger_texture`](@ref) for an SI model.
 """
 const CLAPP_HORNBERGER_1978 = (
     sand            = (θ_s = 0.395, K_s = 63.36, ψ_s = 12.1, b = 4.05),
@@ -546,8 +546,9 @@ Handbook of Chemistry and Physics:
                    + 3.06×10⁻⁶ (20 - t)² + 2.55×10⁻⁸ (20 - t)³]
 
 with `t` in °C (from `T` K and the contract's freezing point) and
-``μ_{20} = 1.0016`` mPa s. It reproduces the CRC table to 0.15 % over
-0–80 °C and extrapolates smoothly into weakly supercooled water.
+``μ_{20} = 1.0016`` mPa s. It reproduces the CRC values at 0, 10, 20,
+25, 40, 60 and 80 °C to better than 0.1 % (largest deviation 0.075 %,
+at 10 °C) and extrapolates smoothly into weakly supercooled water.
 """
 function water_dynamic_viscosity(T::Real; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
     t = T - c.thermo.T_freeze
@@ -1161,7 +1162,8 @@ Richards' equation in mixed form,
     ∂θ/∂t = ∂/∂z [K (∂ψ/∂z - 1)] - s        (z depth, positive down)
 
 is discretised by finite volumes on the layer grid (interface
-conductivity the arithmetic mean of its neighbours) and backward Euler
+conductivity set by the column's `interface_mean`, by default the
+logarithmic mean of its neighbours) and backward Euler
 in time, and the nonlinear system is solved by the modified Picard
 iteration of Celia et al. (1990) with a tridiagonal solve per iterate.
 The new water content is the old one plus the divergence of the
