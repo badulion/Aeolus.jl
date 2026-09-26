@@ -615,4 +615,10 @@ export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
        SoilWaterColumn, step_soil_water!, set_water_content!, set_matric_potential!,
        soil_water_storage, soil_layer_conductivity, soil_field_capacity
 
+# Phase 46 (#17) — SoilColumn: water table / unconfined aquifer (SIMTOP).
+# The helpers aquifer_impermeable_fraction, gardner_two_point_flux and
+# bottom_water_storage stay qualified.
+export UnconfinedAquifer, water_table_depth, set_water_table!,
+       aquifer_baseflow_rate, total_water_storage
+
 end # module
