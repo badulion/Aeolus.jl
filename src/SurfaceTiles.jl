@@ -83,8 +83,9 @@ by matching the aggregate flux to the profile above it.
     *Boundary-Layer Meteorol.*, 39, 403-418.
   * Kramm, G. & Dlugi, R. (2009). On the accuracy with which the lower
     boundary conditions can be determined in numerical models of the
-    atmosphere. arXiv:0911.2286 (Section 5.1 quotes the Mason and
-    Claussen blending-height formulae).
+    atmosphere. arXiv:0911.2286 (Section 5.1, Eqs. 5.4-5.5, quotes the
+    Mason and Claussen blending-height formulae; see
+    [`ClaussenBlendingHeight`](@ref) for a discrepancy in Eq. 5.5).
 """
 module SurfaceTiles
 
@@ -611,7 +612,8 @@ end
 A rule for the blending height ``l_b`` of a patchwork of tiles.
 Implementers extend `blending_height(bh, z0s, fractions; c)`. Provided:
 [`FixedBlendingHeight`](@ref), [`MasonBlendingHeight`](@ref),
-[`BouZeidBlendingHeight`](@ref).
+[`ClaussenBlendingHeight`](@ref), [`BouZeidBlendingHeight`](@ref),
+[`IBLBlendingHeight`](@ref).
 """
 abstract type AbstractBlendingHeight end
 
@@ -665,11 +667,20 @@ Claussen's (1991) blending height for patches of horizontal scale `L`
 \\frac{l_b}{L}\\,\\ln\\frac{l_b}{z_{0,eff}} = C κ, \\qquad C ≈ 1.75,
 ```
 
-(form and constant as quoted by Kramm & Dlugi 2009, Eq. 5.5), solved
-jointly with [`effective_roughness`](@ref). It is
+solved jointly with [`effective_roughness`](@ref). It is
 [`BouZeidBlendingHeight`](@ref) without the ``-1``; Bou-Zeid et al.
-(2007, Sect. 6) note that the two give very similar ``z_{0,eff}``, the
-``-1`` mattering only for short patches.
+(2007, Sect. 6) state that this is the only difference between the two
+``z_{0,eff}`` equations and that it matters only for short patches.
+
+Source of the form and of the constant: the linear-in-``\\ln`` form
+above is the one implied by that statement of Bou-Zeid et al. (2007);
+Claussen (1991) itself was not consulted. The constant ``C ≈ 1.75`` is
+from Kramm & Dlugi (2009, Eq. 5.5), who however print the logarithm
+**squared**, ``(l_b/L)\\ln^2(l_b/z_0) ≅ C_b κ``. The two readings are
+not equivalent: the squared form gives a Mason-like ``l_b`` of tens of
+metres for ``L ∼ 3`` km, the linear form a few hundred metres, as does
+[`BouZeidBlendingHeight`](@ref). The linear form is used here; treat the
+constant as uncertain.
 """
 struct ClaussenBlendingHeight <: AbstractBlendingHeight
     L::Float64

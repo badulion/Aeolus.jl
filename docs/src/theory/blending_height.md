@@ -50,7 +50,7 @@ same surface-to-``l_b`` scalar difference.
 | closure | equation for ``l_b`` (solved jointly with ``z_{0,eff}(l_b)``) | source |
 |:--|:--|:--|
 | `MasonBlendingHeight(L)` | ``(l_b/L)\ln^2(l_b/z_{0,eff}) = 2κ^2`` | Mason 1988, as in Kramm & Dlugi 2009 Eq. 5.4 |
-| `ClaussenBlendingHeight(L)` | ``(l_b/L)\ln(l_b/z_{0,eff}) = 1.75κ`` | Claussen 1991, as in Kramm & Dlugi 2009 Eq. 5.5 |
+| `ClaussenBlendingHeight(L)` | ``(l_b/L)\ln(l_b/z_{0,eff}) = 1.75κ`` | Claussen 1991: form as described by Bou-Zeid et al. 2007 Sect. 6, constant from Kramm & Dlugi 2009 Eq. 5.5 (see note) |
 | `BouZeidBlendingHeight(L)` | ``l_b[\ln(l_b/z_{0,eff}) - 1] = 1.7κL`` | Bou-Zeid et al. 2004; 2007 Eqs. 2–3 |
 | `IBLBlendingHeight(model, L)` | deepest pairwise IBL at fetch ``2L`` | premise of Bou-Zeid et al. 2004 |
 | `FixedBlendingHeight(l_b)` | prescribed, e.g. diagnosed from an LES | — |
@@ -60,6 +60,15 @@ Mason's closure asks where ``(u_*/U(l_b))^2`` equals the aspect ratio
 diffusion-analogy IBLs over about twice the patch length and gives
 heights ten times larger. Claussen's closure is Bou-Zeid's without the
 ``-1``.
+
+*Note on the Claussen closure.* Claussen (1991) was not consulted
+directly. Bou-Zeid et al. (2007, Sect. 6) state that Claussen's
+``z_{0,e}`` equation differs from theirs only by the ``-1``, which fixes
+the linear-in-``\ln`` form used here. Kramm & Dlugi (2009, Eq. 5.5),
+the source of ``C_b ≅ 1.75``, print the logarithm squared instead,
+``(l_b/L)\ln^2(l_b/z_0) ≅ C_b κ``; read literally, that gives a
+Mason-like ``l_b`` (50 m instead of 265 m for case S25R75 below). The
+constant should be treated as uncertain.
 
 The IBL growth laws are the neutral short-fetch formulae compiled by
 Savelyev & Taylor (2005, Table I):

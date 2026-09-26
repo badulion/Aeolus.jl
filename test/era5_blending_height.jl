@@ -130,7 +130,7 @@ _θ(f::SurfaceForcing, z = f.z_ref) =
             lm = blending_height(MasonBlendingHeight(L), z, f)
             @test (lm / L) * lnz0(lm)^2 ≈ 2κ_bh^2 rtol = 1e-12      # Kramm & Dlugi Eq. 5.4
             lc = blending_height(ClaussenBlendingHeight(L), z, f)
-            @test (lc / L) * lnz0(lc) ≈ 1.75κ_bh rtol = 1e-12       # Kramm & Dlugi Eq. 5.5
+            @test (lc / L) * lnz0(lc) ≈ 1.75κ_bh rtol = 1e-12       # linear-ln form (Bou-Zeid et al. 2007 Sect. 6); C from Kramm & Dlugi Eq. 5.5, which prints ln²
             lz = blending_height(BouZeidBlendingHeight(L), z, f)
             # Bou-Zeid et al. (2007) Eq. (2) and Eq. (3) hold together.
             @test (lz / (1.7κ_bh * L + lz))^2 ≈ sum(f ./ log.(lz ./ z) .^ 2) rtol = 1e-12
@@ -185,7 +185,8 @@ _θ(f::SurfaceForcing, z = f.z_ref) =
         @printf("    rms ln-error of z0e: BZ %.3f  Claussen %.3f  Mason %.3f  log-mean %.3f;  max |hb error| %.2f\n",
                 rms(err[:bz]), rms(err[:cl]), rms(err[:ma]), rms(err[:lm]), maximum(abs, err[:hb]))
         # The blending-height models beat the log-average, which is biased
-        # low in every case (the Bou-Zeid et al. and Taylor-1987 finding).
+        # low in every case (Bou-Zeid et al. 2007, Sect. 6: the log-average
+        # model of Taylor 1987 "performs poorly").
         @test rms(err[:bz]) < rms(err[:lm]) / 2
         @test rms(err[:cl]) < rms(err[:lm]) / 2
         @test all(<(0), err[:lm])
