@@ -67,6 +67,7 @@ include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equat
 
 # --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53)
 include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
+include("LandSurface.jl")          # Phase 47 (#21): vegetated land column
 
 using .Grids
 using .Fields
@@ -118,6 +119,7 @@ using .RadiationFog                # Phase 44
 using .SurfaceExchange             # Era V contract
 using .Photosynthesis              # Phase 47
 using .SoilColumn                  # Phase 46
+using .LandSurface                 # Phase 47 (#21)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -655,5 +657,13 @@ export SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal
 # bottom_water_storage stay qualified.
 export UnconfinedAquifer, water_table_depth, set_water_table!,
        aquifer_baseflow_rate, total_water_storage
+
+# Phase 47 (#21) — LandSurface: vegetated land column (two-big-leaf canopy
+# over a SoilThermalColumn), root-zone soil-water stress, big-leaf radiation.
+export VegetationParameters, pft_vegetation,
+       zeng_root_fractions, AbstractSoilWaterStress, CLMWaterStress,
+       wilting_factor, soil_water_stress, root_water_uptake,
+       BigLeafShortwave, bigleaf_shortwave, BigLeafLongwave, bigleaf_longwave,
+       canopy_roughness, undercanopy_transfer_coefficient
 
 end # module
