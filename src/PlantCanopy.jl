@@ -131,7 +131,7 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD, Tabulat
        LeafEnergyBalance, leaf_energy_balance, leaf_penman_monteith,
        CanopyLeafEnergySolution, canopy_leaf_energy_balance,
        CanopyScalarSolution, solve_canopy_scalar_column, canopy_displacement_height,
-       harman_finnigan_scalar_diffusivity
+       canopy_mixing_length, harman_finnigan_scalar_diffusivity
 
 # =========================================================================
 # 1. Leaf-area density profiles
@@ -1974,6 +1974,31 @@ function canopy_displacement_height(sol::CanopyWindSolution, lad::AbstractVector
     end
     den > 0 || throw(ArgumentError("canopy_displacement_height: no momentum is absorbed"))
     return num / den
+end
+
+"""
+    canopy_mixing_length(z; h, l_c, κ = SurfaceExchange.von_karman()) -> l [m]
+
+Mixing-length profile for [`solve_canopy_wind_column`](@ref) over a canopy
+of height `h` with canopy mixing length `l_c` (e.g.
+[`harman_finnigan_mixing_length`](@ref)):
+
+```math
+l(z) = \\min(l_c,\\ κ z)\\quad (z ≤ h),\\qquad l(z) = l_c + κ (z - h)\\quad (z > h).
+```
+
+Inside the canopy the length is the constant ``l_c`` of the
+Inoue / Harman–Finnigan theory, limited by the wall value ``κz`` near the
+ground so that eddies cannot be larger than their distance from it (with a
+constant ``l_c`` down to the ground a no-slip floor takes a spurious share
+of the stress). Above the canopy it grows at the surface-layer rate
+``κ`` from ``l_c``, continuous at ``h``; the roughness-sublayer enhancement
+of Harman & Finnigan (2007) is not included.
+"""
+function canopy_mixing_length(z::Real; h::Real, l_c::Real, κ::Real = von_karman())
+    (h > 0 && l_c > 0) || throw(ArgumentError("canopy_mixing_length: h and l_c must be > 0"))
+    z <= h && return min(Float64(l_c), κ * max(Float64(z), 0.0))
+    return l_c + κ * (z - h)
 end
 
 """

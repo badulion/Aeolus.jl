@@ -656,6 +656,6 @@ export AbstractLeafBoundaryLayer, CampbellNormanBoundaryLayer, CLMLeafBoundaryLa
 # Phase 48 — within-canopy profiles (#25): scalar K-theory column,
 # displacement height, tabulated (measured) LAD profiles.
 export CanopyScalarSolution, solve_canopy_scalar_column, canopy_displacement_height,
-       harman_finnigan_scalar_diffusivity
+       canopy_mixing_length, harman_finnigan_scalar_diffusivity
 
 end # module
