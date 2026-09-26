@@ -63,6 +63,7 @@ include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
+include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
 
 using .Grids
 using .Fields
@@ -112,6 +113,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .IceThermodynamics           # Era V, Phase 51 (#37)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
