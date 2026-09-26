@@ -126,4 +126,87 @@ cl98(θi) = θi <= 0.23 ? 0.0264 + 0.0099 * (1 - θi) / θi :
         @test p.m_liq ≈ fill(hold0, N) rtol = 1e-12
         @test p.budget.refreeze == 0
     end
+    @testset "Saturated hydraulic conductivity (Calonne et al. 2012)" begin
+        c = DEFAULT_SURFACE_CONSTANTS
+        # k = 0.75 r² exp(-0.013 ρ), K = k ρ_w g / μ
+        K = snow_saturated_hydraulic_conductivity(400.0, 0.5e-3)
+        @test K ≈ 0.75 * 0.5e-3^2 * exp(-0.013 * 400) * 1000 * 9.80665 / 1.792e-3 rtol = 1e-3
+        @test 1e-3 < K < 1e-2                  # wet-snow values are of order mm s⁻¹
+        # coarser grains and lighter snow drain faster; quadratic in r
+        @test snow_saturated_hydraulic_conductivity(400.0, 1e-3) ≈ 4K rtol = 1e-12
+        @test snow_saturated_hydraulic_conductivity(300.0, 0.5e-3) > K
+    end
+
+    @testset "Gravity drainage: Colbeck (1972) kinematic-wave shock speed" begin
+        # A 1.5 m isothermal (0 °C) pack of dry 350 kg m⁻³ snow with
+        # 250 μm grains receives a constant q₀ at the top. With the
+        # capillary term dropped, q = ρ_w K_s S_e³, and a front advancing
+        # into dry snow is a shock that fills the pores to θ₁ with
+        # ρ_w K_s S_e(θ₁)³ = q₀, moving at v = q₀/(ρ_w θ₁). The base should
+        # start delivering water after D/v, and deliver q₀ once the whole
+        # pack carries the front's water content.
+        N, dz, ρ, rg = 60, 0.025, 350.0, 250.0
+        D = N * dz
+        q0 = 5e-3                                             # kg m⁻² s⁻¹ = 18 mm h⁻¹
+        θi = ρ / ρi_liq
+        θr, θs = cl98(θi), 1 - θi
+        Ks = snow_saturated_hydraulic_conductivity(ρ, rg * 1e-6)
+        θ1 = θr + (θs - θr) * (q0 / (ρw_liq * Ks))^(1 / 3)
+        v = q0 / (ρw_liq * θ1)
+        t_arrival = D / v
+        p = liquid_test_pack(N, dz, ρ, Tf_liq; grain = rg, liquid = SnowGravityDrainage())
+        M0, H0 = snow_water_equivalent(p), snowpack_enthalpy(p)
+        dt = 120.0
+        t, t_half, runoff, input = 0.0, NaN, 0.0, 0.0
+        rate = 0.0
+        while t < 2.5 * t_arrival
+            SPL._add_liquid!(p, 1, q0 * dt, 0.0)
+            input += q0 * dt
+            r = snow_liquid_water!(p.liquid, p, dt)
+            runoff += r
+            rate = r / dt
+            t += dt
+            isnan(t_half) && rate >= q0 / 2 && (t_half = t - dt / 2)
+        end
+        @test abs(t_half / t_arrival - 1) < 0.03
+        @test rate ≈ q0 rtol = 1e-3                             # steady state
+        θw = snow_liquid_water_content(p)
+        @test θw[N ÷ 2] ≈ θ1 rtol = 1e-3                       # front water content
+        @test snow_water_equivalent(p) + runoff ≈ M0 + input rtol = 1e-13
+        @test snowpack_enthalpy(p) ≈ H0 atol = 1e-6            # all at T_f
+        @test p.budget.refreeze == 0
+        @info @sprintf("Kinematic wave: K_s = %.2e m s⁻¹, θ₁ = %.4f, v = %.2e m s⁻¹; arrival %.2f h (analytic %.2f h, error %.2f %%); steady runoff %.5f of q₀; θ_w mid-pack %.4f",
+                       Ks, θ1, v, t_half / 3600, t_arrival / 3600, 100 * (t_half / t_arrival - 1),
+                       rate / q0, θw[N ÷ 2])
+    end
+
+    @testset "Gravity drainage into a cold pack: the cold content delays runoff" begin
+        # The same pack at −8 °C: no water can leave the base before the
+        # pack has frozen its whole cold content, CC/L_f, and stored its
+        # irreducible water.
+        N, dz, ρ, rg = 20, 0.05, 300.0, 300.0
+        p = liquid_test_pack(N, dz, ρ, Tf_liq - 8; grain = rg, liquid = SnowGravityDrainage())
+        M0, H0 = snow_water_equivalent(p), snowpack_enthalpy(p)
+        freeze_total = N * ρ * dz * ci_liq * 8 / Lf_liq
+        q0, dt = 2e-3, 300.0
+        input, runoff, first = 0.0, 0.0, NaN
+        never_warm = true
+        for _ in 1:600
+            SPL._add_liquid!(p, 1, q0 * dt, 0.0)
+            input += q0 * dt
+            r = snow_liquid_water!(p.liquid, p, dt)
+            runoff += r
+            r > 0 && isnan(first) && (first = input)
+            never_warm &= all(p.T .<= Tf_liq)
+        end
+        @test never_warm
+        stored = sum(snow_water_holding_capacity(ColeouLesaffre1998Retention(), p))
+        @test first > freeze_total + stored
+        @test p.budget.refreeze ≈ freeze_total rtol = 1e-9      # whole cold content used
+        @test all(p.T .≈ Tf_liq)
+        @test snow_water_equivalent(p) + runoff ≈ M0 + input rtol = 1e-13
+        @test snowpack_enthalpy(p) ≈ H0 rtol = 1e-12
+        @info @sprintf("Cold pack: first runoff after %.2f kg m⁻² of input (cold content freezes %.2f, irreducible storage %.2f); refrozen %.3f",
+                       first, freeze_total, stored, p.budget.refreeze)
+    end
 end

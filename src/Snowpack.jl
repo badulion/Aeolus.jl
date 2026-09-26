@@ -88,7 +88,8 @@ export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
 # liquid water: retention, refreezing, percolation (#36)
 export AbstractSnowWaterRetention, ColeouLesaffre1998Retention, PoreFractionRetention,
        snow_irreducible_water, snow_water_holding_capacity, snow_liquid_water_content,
-       snow_refreeze!, SnowBucketPercolation
+       snow_saturated_hydraulic_conductivity, snow_refreeze!,
+       SnowBucketPercolation, SnowGravityDrainage
 
 _Tfreeze(c::SurfaceConstants) = c.thermo.T_freeze
 
@@ -1331,6 +1332,121 @@ function snow_liquid_water!(s::SnowBucketPercolation, p::LayeredSnowpack, dt::Re
     end
     p.budget.refreeze += refrozen
     return flow
+end
+
+"""
+    snow_saturated_hydraulic_conductivity(ρ_dry, r_es; μ = 1.792e-3,
+                                          c = DEFAULT_SURFACE_CONSTANTS) -> m s⁻¹
+
+Saturated hydraulic conductivity of snow of dry density `ρ_dry`
+(kg m⁻³) and equivalent-sphere (optical) grain radius `r_es` (m), from
+the permeability Calonne et al. (2012, Eq. 7) computed on 3-D
+tomography images, ``k = 0.75\\, r_{es}^2 \\exp(-0.013 ρ_{dry})`` (m²),
+converted with ``K_s = k ρ_w g / μ`` (μ: viscosity of water at 0 °C,
+Pa s; Wever et al. 2014, Eq. 14). For ``r_{es} = 0.5`` mm and
+400 kg m⁻³ it is ``5.7·10^{-3}`` m s⁻¹.
+"""
+snow_saturated_hydraulic_conductivity(ρ_dry::Real, r_es::Real; μ::Real = 1.792e-3,
+                                      c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    0.75 * r_es^2 * exp(-0.013 * ρ_dry) * c.ρ_water * grav(c) / μ
+
+"""
+    SnowGravityDrainage(; retention = ColeouLesaffre1998Retention(),
+                          exponent = 3, μ = 1.792e-3, cfl = 0.5)
+
+Richards-type percolation in the gravity-flow limit: the kinematic-wave
+model of Colbeck (1972), as in SNTHERM (Jordan 1991) and early Crocus
+(Brun et al. 1989). The capillary-pressure gradient of Richards'
+equation is neglected, so the liquid flux is the unsaturated hydraulic
+conductivity,
+
+    q = ρ_w K_s S_e^n,     S_e = (θ_w - θ_r)/(θ_s - θ_r) ∈ [0, 1]
+
+with ``n = 3`` (Colbeck 1972), ``θ_r`` from `retention`, ``θ_s = 1 - θ_i``
+the porosity and ``K_s`` from
+[`snow_saturated_hydraulic_conductivity`](@ref) with each layer's dry
+density and grain radius (`p.grain`, μm, the optical radius evolved by
+#35). The layer fluxes are integrated with an explicit upwind scheme in
+sub-steps limited by the Courant number `cfl` of the kinematic wave
+(speed ``dq/dθ = n ρ_w K_s S_e^{n-1}/(θ_s - θ_r)/ρ_w``), no layer
+drains below its irreducible content and none receives more than its
+pores hold. Water arriving in a cold layer refreezes
+([`snow_refreeze!`](@ref)). Unlike [`SnowBucketPercolation`](@ref) the
+water takes time to cross the pack: a constant input ``q_0`` on dry
+snow advances as a shock at ``v = q_0 / (ρ_w θ_1)``, where
+``ρ_w K_s S_e(θ_1)^n = q_0``.
+"""
+Base.@kwdef struct SnowGravityDrainage{R<:AbstractSnowWaterRetention} <: AbstractSnowLiquidWater
+    retention::R = ColeouLesaffre1998Retention()
+    exponent::Float64 = 3.0
+    μ::Float64 = 1.792e-3        # Pa s, water at 0 °C
+    cfl::Float64 = 0.5
+end
+
+function snow_liquid_water!(s::SnowGravityDrainage, p::LayeredSnowpack, dt::Real)
+    n = snow_nlayers(p)
+    n == 0 && return 0.0
+    c = p.consts
+    Tf, ρw = _Tfreeze(c), c.ρ_water
+    snow_refreeze!(p)                                   # (booked by snow_refreeze!)
+    refrozen = 0.0
+    Ks = zeros(n); θr = zeros(n); θs = zeros(n)
+    runoff = 0.0
+    q = zeros(n)                 # mass flux out of the base of layer i, kg m⁻² s⁻¹
+    t = 0.0
+    while t < dt
+        # layer properties change with refreezing, so refresh each sub-step
+        vmax = 0.0
+        for i in 1:n
+            dzi = p.dz[i]
+            θi = _ice_fraction(p, i)
+            θr[i] = snow_irreducible_water(s.retention, θi)
+            θs[i] = max(1 - θi, 0.0)
+            Ks[i] = dzi > 0 ? snow_saturated_hydraulic_conductivity(p.m_ice[i] / dzi,
+                                  p.grain[i] * 1e-6; μ = s.μ, c = c) : 0.0
+            if dzi <= 0 || p.m_ice[i] <= 0
+                q[i] = p.m_liq[i] > 0 ? Inf : 0.0     # no matrix: water falls through
+                continue
+            end
+            θw = p.m_liq[i] / (ρw * dzi)
+            span = θs[i] - θr[i]
+            Se = span > 0 ? clamp((θw - θr[i]) / span, 0.0, 1.0) : (θw > θr[i] ? 1.0 : 0.0)
+            q[i] = ρw * Ks[i] * Se^s.exponent
+            if Se > 0 && span > 0
+                v = s.exponent * Ks[i] * Se^(s.exponent - 1) / span
+                vmax = max(vmax, v / dzi)
+            end
+        end
+        all(iszero, q) && break
+        h = vmax > 0 ? min(dt - t, s.cfl / vmax) : dt - t
+        # limit each flux to the mobile water and to the room below
+        out = zeros(n)
+        for i in 1:n
+            mobile = max(p.m_liq[i] - (p.m_ice[i] > 0 ? ρw * p.dz[i] * θr[i] : 0.0), 0.0)
+            out[i] = min(q[i] * h, mobile)
+        end
+        for i in n-1:-1:1
+            room = p.m_ice[i+1] > 0 ? max(ρw * p.dz[i+1] * θs[i+1] - p.m_liq[i+1] + out[i+1], 0.0) : Inf
+            out[i] = min(out[i], room)
+        end
+        all(iszero, out) && break          # nothing can move: the state is final
+        for i in 1:n
+            out[i] > 0 || continue
+            hout = out[i] * cp_water(c) * (p.T[i] - Tf)
+            p.m_liq[i] -= out[i]
+            if i < n
+                _add_liquid!(p, i + 1, out[i], hout)
+            else
+                runoff += out[i]
+            end
+        end
+        for i in 2:n
+            out[i-1] > 0 && (refrozen += _refreeze_layer!(p, i))
+        end
+        t += h
+    end
+    p.budget.refreeze += refrozen
+    return runoff
 end
 
 Base.show(io::IO, p::LayeredSnowpack) =
