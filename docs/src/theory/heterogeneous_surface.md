@@ -145,8 +145,9 @@ first-level ``u`` and of ``w`` at 350 m, over ``w_*``:
   describe the LES of Margairaz et al. (2020): the large cellular
   circulations at U_g = 1 m s⁻¹ "disappear with increasing wind speed".
   Here a 5 m s⁻¹ geostrophic wind across the strips reduces ``A_u/w_*``
-  from 0.76 to 0.024. That is within the phase-average noise of the
-  uniform surface (0.009 windy, 0.045 calm).
+  from 0.76 to 0.024, a factor 30. That is below the phase-average
+  noise of the calm uniform surface (0.045) but above that of the windy
+  uniform surface (0.009), so a weak patch-locked signal remains.
 
 `test/era5_heterogeneous_surface.jl` repeats the comparison on a 100 m
 grid (32 × 16 × 16, 1.25 h), with three seeds checked. It asserts:
@@ -158,7 +159,8 @@ grid (32 × 16 × 16, 1.25 h), with three seeds checked. It asserts:
 - the windy mosaic and `BlendedMosaic` within 3 %;
 - ``A_u`` at λ/z_i ≈ 3 more than 2× that at ≈ 0.9, which is itself more
   than 3× the uniform-surface noise;
-- convergence on the hot strip, and a mid-patch flux below 0.95 of the
+- convergence on the hot strip, mean ascent over it and descent over
+  the cool strip, and a mid-patch flux below 0.95 of the
   edge flux;
 - the windy ``A_u`` below 0.1 of the calm one.
 
