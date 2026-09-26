@@ -186,10 +186,12 @@ returns the absorbed shortwave per cell in W m⁻³.
 | :-- | :-- | --: |
 | ``\bar μ`` closed form (incl. series near ``χ_L = 0``) | quadrature of ``\int μ/G`` | ``6.7\times10^{-16}`` rel. |
 | ``β_0`` closed form for ``a_s`` | quadrature of its integral | ``< 10^{-8}`` rel. |
+| ``β_0`` at the removable singularity ``μφ_2 + G = 0`` (``χ_L = -0.4``, ``μ ≈ 0.996``) | quadrature of its integral | ``8.9\times10^{-16}`` rel. |
 | Beam flux at every face | ``e^{-KΛ(z)}`` | ``< 10^{-9}`` rel. |
 | Black-leaf diffuse | ``2E_3(Λ/2)`` via series ``E_1`` | ``< 10^{-10}`` rel. |
-| Energy closure (576 cases) | incident = reflected + canopy + ground | ``3.2\times10^{-16}`` |
+| Energy closure (576 cases; a bookkeeping identity, since absorption is the flux divergence) | incident = reflected + canopy + ground | ``3.2\times10^{-16}`` |
 | Face fluxes | RK4 integration of the Sellers ODEs | ``3.4\times10^{-14}`` of incident |
+| Face fluxes at the resonance ``K = k`` (``μ ≈ 0.54`` for spherical PAR leaves) | RK4 integration of the Sellers ODEs | ``1.9\times10^{-9}`` of incident |
 | Deep horizontal-leaf canopy albedo | Goudriaan ``ρ_h = \frac{1-\sqrt{1-σ}}{1+\sqrt{1-σ}}`` | ``< 10^{-9}`` abs. |
 | Isothermal longwave | zero net exchange | ``< 10^{-9}`` W m⁻² |
 
