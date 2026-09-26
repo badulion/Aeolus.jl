@@ -73,7 +73,9 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        BuildingZone, ZoneForcing, ZoneBudget, step_zone!, facet_fluxes,
        zone_air_temperature, zone_heat_content, zone_heat_loss_coefficient,
        zone_mean_radiant_temperature, zone_operative_temperature,
-       air_heat_capacity, ventilation_conductance, element_transmittance
+       air_heat_capacity, ventilation_conductance, element_transmittance,
+       iso13786_areal_heat_capacity,
+       ISO13790Zone, iso13790_zone, step_iso13790!
 
 const _H_WALL = 1 / ISO6946_SURFACE_RESISTANCE.inside_horizontal   # 7.69 W m⁻² K⁻¹
 const _H_OUT  = 1 / ISO6946_SURFACE_RESISTANCE.outside             # 25 W m⁻² K⁻¹
@@ -707,6 +709,179 @@ function step_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real; kwarg
     return ZoneBudget{T}(x, Q_ext, H_w * (T_out - x), H_ve * (T_out - x),
                          T(forcing.Q_internal), T(forcing.Q_solar), T(forcing.Q_hvac),
                          Q_surf, Q_env_air)
+end
+
+# =========================================================================
+# 4. ISO 13790 simple hourly method (5R1C) — the reference model
+# =========================================================================
+
+"""
+    iso13786_areal_heat_capacity(layers; side = :inner, d_max = 0.10,
+                                 k_insulation = 0.1) -> κ (J m⁻² K⁻¹)
+
+Internal areal heat capacity of a construction by the simplified
+effective-thickness estimate of ISO 13786 Annex A, as used by ISO 13790
+§12.3 for ``C_m``: ``κ = Σ ρ_i c_i d_i`` over the layers from the
+exposed surface (`side = :inner` → the last layer, `:outer` → the first)
+up to the smallest of
+
+  * half the total thickness of the element,
+  * the first thermally insulating layer (``k ≤`` `k_insulation`; the
+    threshold 0.1 W m⁻¹ K⁻¹ is this module's choice),
+  * `d_max` = 0.10 m.
+
+A symmetric partition exposed on both faces has ``2κ`` per unit face
+area.
+"""
+function iso13786_areal_heat_capacity(layers::AbstractVector{<:WallLayer}; side::Symbol = :inner,
+                                      d_max::Real = 0.10, k_insulation::Real = 0.1)
+    side in (:inner, :outer) || throw(ArgumentError("side must be :inner or :outer"))
+    ls = side === :inner ? reverse(layers) : layers
+    d_lim = min(sum(l -> l.thickness, layers) / 2, d_max)
+    κ = 0.0; d = 0.0
+    for l in ls
+        l.material.conductivity <= k_insulation && break
+        dd = min(l.thickness, d_lim - d)
+        dd <= 0 && break
+        κ += volumetric_heat_capacity(l.material) * dd
+        d += dd
+    end
+    return κ
+end
+
+"""
+    ISO13790Zone(; A_f, C_m, A_m, H_ve, H_tr_w, H_tr_op, Λ_at = 4.5,
+                 h_is = 3.45, h_ms = 9.1, θ_m = 293.15)
+
+The ISO 13790:2008 simple hourly model (§7.2.2, Annex C): five
+conductances and one capacitance between the outdoor, supply-air, air
+(``θ_{air}``), central surface (``θ_s``) and mass (``θ_m``) nodes.
+
+  * ``H_{tr,is} = h_{is} A_t``, ``A_t = Λ_{at} A_f``;
+  * ``H_{tr,ms} = h_{ms} A_m``;
+  * ``H_{tr,em} = 1/(1/H_{tr,op} - 1/H_{tr,ms})`` — the opaque envelope
+    conductance ``H_{tr,op}`` minus the mass-to-surface part;
+  * ``H_{tr,w}`` the glazing, ``H_{ve}`` the air exchange;
+  * ``C_m`` (J K⁻¹) and the effective mass area ``A_m`` (m²).
+
+Temperatures in K (the scheme is affine, so K and °C are equivalent).
+The state is the mass temperature `θ_m`; the air and surface
+temperatures of the last step are kept in `θ_air`, `θ_s`.
+"""
+mutable struct ISO13790Zone{T<:AbstractFloat}
+    A_f::T
+    A_t::T
+    A_m::T
+    C_m::T
+    H_ve::T
+    H_tr_w::T
+    H_tr_is::T
+    H_tr_ms::T
+    H_tr_em::T
+    θ_m::T
+    θ_air::T
+    θ_s::T
+end
+
+function ISO13790Zone(; A_f::Real, C_m::Real, A_m::Real, H_ve::Real, H_tr_w::Real,
+                      H_tr_op::Real, Λ_at::Real = 4.5, h_is::Real = 3.45,
+                      h_ms::Real = 9.1, θ_m::Real = 293.15)
+    (A_f > 0 && C_m > 0 && A_m > 0 && H_ve > 0 && H_tr_w >= 0 && H_tr_op > 0) ||
+        throw(ArgumentError("ISO13790Zone: A_f, C_m, A_m, H_ve, H_tr_op must be positive, H_tr_w ≥ 0"))
+    H_ms = h_ms * A_m
+    H_tr_op < H_ms ||
+        throw(ArgumentError("ISO13790Zone: H_tr_op must be smaller than H_tr_ms = h_ms A_m"))
+    H_em = 1 / (1 / H_tr_op - 1 / H_ms)
+    A_t = Λ_at * A_f
+    return ISO13790Zone{Float64}(A_f, A_t, A_m, C_m, H_ve, H_tr_w, h_is * A_t, H_ms, H_em,
+                                 θ_m, θ_m, θ_m)
+end
+
+"""
+    step_iso13790!(z::ISO13790Zone, θ_e, dt = 3600; Φ_int = 0, Φ_sol = 0,
+                   Φ_HC = 0, θ_sup = θ_e) -> (θ_air, θ_s, θ_m)
+
+One step of the ISO 13790 Annex C scheme (eqs. C.1-C.11), with the
+standard gain split
+
+  * ``Φ_{ia} = 0.5 Φ_{int}`` to the air node,
+  * ``Φ_m = (A_m/A_t)(0.5 Φ_{int} + Φ_{sol})`` to the mass node,
+  * ``Φ_{st} = (1 - A_m/A_t - H_{tr,w}/(9.1 A_t))(0.5 Φ_{int} + Φ_{sol})``
+    to the surface node,
+
+and the Crank–Nicolson mass update
+
+```math
+θ_{m,t} = \\frac{θ_{m,t-1} (C_m/Δt - (H_{tr,3} + H_{tr,em})/2) + Φ_{m,tot}}
+               {C_m/Δt + (H_{tr,3} + H_{tr,em})/2}
+```
+
+(the standard fixes ``Δt`` = 3600 s). `Φ_HC` is a heating/cooling input
+to the air node. Returns the step's air and surface temperatures and
+the step-mean mass temperature.
+"""
+function step_iso13790!(z::ISO13790Zone, θ_e::Real, dt::Real = 3600.0; Φ_int::Real = 0.0,
+                        Φ_sol::Real = 0.0, Φ_HC::Real = 0.0, θ_sup::Real = θ_e)
+    Φ_ia = 0.5Φ_int
+    Φ_m = z.A_m / z.A_t * (0.5Φ_int + Φ_sol)
+    Φ_st = (1 - z.A_m / z.A_t - z.H_tr_w / (9.1 * z.A_t)) * (0.5Φ_int + Φ_sol)
+    H1 = 1 / (1 / z.H_ve + 1 / z.H_tr_is)
+    H2 = H1 + z.H_tr_w
+    H3 = 1 / (1 / H2 + 1 / z.H_tr_ms)
+    Φ_mtot = Φ_m + z.H_tr_em * θ_e +
+             H3 * (Φ_st + z.H_tr_w * θ_e + H1 * ((Φ_ia + Φ_HC) / z.H_ve + θ_sup)) / H2
+    c = z.C_m / dt
+    θ_m_old = z.θ_m
+    θ_m_new = (θ_m_old * (c - 0.5(H3 + z.H_tr_em)) + Φ_mtot) / (c + 0.5(H3 + z.H_tr_em))
+    θ_m = (θ_m_new + θ_m_old) / 2
+    θ_s = (z.H_tr_ms * θ_m + Φ_st + z.H_tr_w * θ_e + H1 * (θ_sup + (Φ_ia + Φ_HC) / z.H_ve)) /
+          (z.H_tr_ms + z.H_tr_w + H1)
+    θ_air = (z.H_tr_is * θ_s + z.H_ve * θ_sup + Φ_ia + Φ_HC) / (z.H_tr_is + z.H_ve)
+    z.θ_m, z.θ_s, z.θ_air = θ_m_new, θ_s, θ_air
+    return (θ_air, θ_s, θ_m)
+end
+
+"""
+    iso13790_zone(zone::BuildingZone; Λ_at = 4.5, kwargs...) -> ISO13790Zone
+
+Derive the ISO 13790 5R1C parameters from the same construction as a
+[`BuildingZone`](@ref):
+
+  * ``H_{ve}`` = [`ventilation_conductance`](@ref), ``H_{tr,w} = U_w A_w``;
+  * ``H_{tr,op} = Σ U_j A_j`` over `:air` envelope and facet elements
+    ([`element_transmittance`](@ref)); `:adiabatic` elements add only
+    heat capacity; `:ground` elements are rejected (ISO 13790 treats
+    them through ISO 13370, which is not implemented);
+  * ``C_m = Σ κ_j A_j`` and ``A_m = C_m^2 / Σ A_j κ_j^2`` (ISO 13790
+    §12.3.1, detailed method) with ``κ_j`` from
+    [`iso13786_areal_heat_capacity`](@ref), counting both faces of a
+    two-sided internal mass.
+
+The mass node starts at the zone air temperature. `kwargs` go to
+[`ISO13790Zone`](@ref).
+"""
+function iso13790_zone(zone::BuildingZone; Λ_at::Real = 4.5, kwargs...)
+    H_op = 0.0; Cm = 0.0; S2 = 0.0
+    add!(A, κ) = (Cm += A * κ; S2 += A * κ^2)
+    for el in zone.envelope
+        if el isa EnvelopeElement
+            el.exterior === :ground &&
+                throw(ArgumentError("iso13790_zone: :ground elements are not supported (ISO 13370)"))
+            layers = el.column.layers
+        else
+            layers = el.facet.column.layers
+        end
+        H_op += element_transmittance(el) * el.area
+        add!(el.area, iso13786_areal_heat_capacity(layers; side = :inner))
+    end
+    for el in zone.internal_mass
+        add!(el.area, iso13786_areal_heat_capacity(el.column.layers; side = :inner))
+        el.sides == 2 && add!(el.area, iso13786_areal_heat_capacity(el.column.layers; side = :outer))
+    end
+    return ISO13790Zone(; A_f = zone.floor_area, C_m = Cm, A_m = Cm^2 / S2,
+                        H_ve = ventilation_conductance(zone),
+                        H_tr_w = zone.window_U * zone.window_area, H_tr_op = H_op,
+                        Λ_at = Λ_at, θ_m = zone.T_air, kwargs...)
 end
 
 end # module

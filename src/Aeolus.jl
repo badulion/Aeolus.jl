@@ -625,6 +625,8 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        BuildingZone, ZoneForcing, ZoneBudget, step_zone!, facet_fluxes,
        zone_air_temperature, zone_heat_content, zone_heat_loss_coefficient,
        zone_mean_radiant_temperature, zone_operative_temperature,
-       air_heat_capacity, ventilation_conductance, element_transmittance
+       air_heat_capacity, ventilation_conductance, element_transmittance,
+       iso13786_areal_heat_capacity,
+       ISO13790Zone, iso13790_zone, step_iso13790!
 
 end # module
