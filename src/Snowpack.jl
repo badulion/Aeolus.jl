@@ -1041,4 +1041,94 @@ function relayer_snowpack!(p::LayeredSnowpack)
     return p
 end
 
+# =========================================================================
+# 7. The AbstractSurface implementation
+# =========================================================================
+
+surface_temperature(p::LayeredSnowpack) =
+    snow_nlayers(p) > 0 ? p.T[1] : _bare_temperature(p.bottom, p.consts)
+roughness_lengths(p::LayeredSnowpack) = (z0m = p.z0m, z0h = p.z0h, z0q = p.z0h)
+surface_albedo(p::LayeredSnowpack) = snowpack_albedo(p.albedo, p)
+surface_emissivity(p::LayeredSnowpack) = p.emissivity
+"A snow surface is saturated: β = 1."
+moisture_availability(::LayeredSnowpack) = 1.0
+
+"""
+    surface_specific_humidity(p::LayeredSnowpack, forcing; c) -> q_s
+
+Saturation specific humidity over ice at the skin temperature (over
+liquid water at the melting point).
+"""
+function surface_specific_humidity(p::LayeredSnowpack, f::SurfaceForcing;
+                                   c::SurfaceConstants = p.consts)
+    Ts = surface_temperature(p)
+    return saturation_specific_humidity(Ts, f.p, c.thermo;
+                                        over = Ts < _Tfreeze(c) ? :ice : :liquid)
+end
+
+"Latent heat of sublimation at the skin temperature (`MoistThermodynamics.latent_heat_sublim`)."
+surface_latent_heat(p::LayeredSnowpack; c::SurfaceConstants = p.consts) =
+    latent_heat_sublim(surface_temperature(p), c.thermo)
+
+"""
+    step_surface!(p::LayeredSnowpack, forcing, dt; δT = 0.01, kwargs...) -> SurfaceFluxes
+
+Advance the snowpack by `dt` seconds:
+
+ 1. surface fluxes from `SurfaceExchange.turbulent_fluxes` at the current
+    skin temperature and at ``T_1 + δT``, giving ``R_n, H, LE, E, τ`` and
+    their derivatives with respect to the skin temperature;
+ 2. heat conduction with the surface energy balance
+    ``G = R_n - H - LE`` linearised in the top-layer temperature
+    (implicit, so the stiff radiative/turbulent coupling of a 2 cm top
+    layer is stable at any step);
+ 3. the returned fluxes are those actually applied: each is updated
+    linearly to the time-weighted skin temperature, so
+    ``R_n = H + LE + G`` holds exactly and `G` is what entered the pack;
+ 4. sublimation/deposition of ``E\\,dt``; rain and snowfall (density from
+    `fresh_density`, at `forcing.T_air` and `forcing.U`);
+ 5. melt, the liquid-water hook, compaction, the metamorphism hook, and
+    relayering.
+
+Without snow, the fluxes of a surface at the bare-ground temperature are
+returned (not applied) and precipitation is processed.
+`kwargs` go to `turbulent_fluxes`.
+"""
+function step_surface!(p::LayeredSnowpack, f::SurfaceForcing, dt::Real;
+                       δT::Real = 0.01, kwargs...)
+    c = p.consts
+    if snow_nlayers(p) == 0
+        fl = turbulent_fluxes(p, f; c = c, kwargs...)
+    else
+        T1 = p.T[1]
+        f0 = turbulent_fluxes(p, f; c = c, kwargs...)
+        p.T[1] = T1 + δT
+        f1 = turbulent_fluxes(p, f; c = c, kwargs...)
+        p.T[1] = T1
+        dRn, dH, dLE = (f1.Rn - f0.Rn) / δT, (f1.H - f0.H) / δT, (f1.LE - f0.LE) / δT
+        dτ, dE = (f1.τ - f0.τ) / δT, (f1.E - f0.E) / δT
+        G0 = f0.Rn - f0.H - f0.LE
+        F_top, _ = snow_heat_conduction!(p, dt; top_flux = G0, dtop_flux_dT = dRn - dH - dLE)
+        ΔTs = p.θ * (p.T[1] - T1)
+        fl = SurfaceFluxes(f0.Rn + dRn * ΔTs, f0.H + dH * ΔTs, f0.LE + dLE * ΔTs,
+                           F_top, f0.τ + dτ * ΔTs, f0.E + dE * ΔTs)
+        snow_sublimation!(p, fl.E * dt)
+    end
+    add_rainfall!(p, f.rain * dt, f.T_air)
+    add_snowfall!(p, f.snow * dt, f.T_air, fresh_snow_density(p.fresh_density, f.T_air, f.U; c = c))
+    snow_phase_change!(p)
+    _drain!(p, dt)
+    snow_compaction!(p, dt)
+    snow_metamorphism!(p.metamorphism, p, dt)
+    relayer_snowpack!(p)
+    return fl
+end
+
+Base.show(io::IO, p::LayeredSnowpack) =
+    print(io, "LayeredSnowpack(", snow_nlayers(p), " layers, depth = ",
+          round(snow_depth(p); digits = 3), " m, SWE = ",
+          round(snow_water_equivalent(p); digits = 1), " kg m⁻², ρ̄ = ",
+          round(snow_bulk_density(p); digits = 1), " kg m⁻³, T_s = ",
+          round(surface_temperature(p); digits = 2), " K)")
+
 end # module

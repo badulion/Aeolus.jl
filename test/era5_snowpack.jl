@@ -247,4 +247,123 @@ end
         @test r.budget.runoff ≈ 1e-7
         @test_throws ArgumentError SnowLayering(growth = 2.5)
     end
+
+    @testset "AbstractSurface implementation" begin
+        p = LayeredSnowpack(depth = 0.5, density = 250.0, T = 265.0)
+        @test p isa AbstractSurface
+        @test surface_temperature(p) == 265.0
+        @test surface_albedo(p) == 0.8
+        @test surface_emissivity(p) == Aeolus.SurfaceOptics.material_emissivity(:snow_fresh)
+        @test roughness_lengths(p) == (z0m = 1e-3, z0h = 1e-4, z0q = 1e-4)
+        @test moisture_availability(p) == 1.0
+        f = SurfaceForcing(T_air = 268.0, q_air = 0.001, p = 90000.0)
+        @test surface_specific_humidity(p, f) ≈ saturation_specific_humidity(265.0, 90000.0; over = :ice)
+        @test surface_latent_heat(p) == latent_heat_sublim(265.0)
+        # The returned fluxes close the surface energy balance exactly, and
+        # G is precisely the heat that entered the pack.
+        f = SurfaceForcing(sw_down = 300.0, lw_down = 250.0, T_air = 266.0, q_air = 0.0015,
+                           U = 4.0, p = 90000.0, z_ref = 10.0, rain = 0.0, snow = 0.0)
+        s0 = p.budget.surface_heat
+        fl = step_surface!(p, f, 1800.0)
+        @test fl.Rn ≈ fl.H + fl.LE + fl.G rtol = 1e-12
+        @test p.budget.surface_heat - s0 ≈ fl.G * 1800 rtol = 1e-12
+        @test fl.E > 0                                  # dry air: sublimation
+        @test fl.LE ≈ fl.E * latent_heat_sublim(surface_temperature(p)) rtol = 0.01
+        # Bare ground: fluxes of the ground temperature, snowfall starts a pack.
+        b = LayeredSnowpack(bottom = SnowGroundTemperature(272.0))
+        @test surface_temperature(b) == 272.0
+        step_surface!(b, SurfaceForcing(T_air = 268.0, q_air = 0.002, snow = 1e-3), 3600.0)
+        @test snow_water_equivalent(b) ≈ 3.6 rtol = 1e-12
+        # Deposited at the fresh-snow density, then settled for the rest of
+        # the step (fresh snow at -5 °C settles ~1 % per hour).
+        D_fresh = 3.6 / fresh_snow_density(Anderson1976FreshSnow(), 268.0)
+        @test 0.98D_fresh < snow_depth(b) < D_fresh
+    end
+
+    @testset "Mass and energy conservation through a 12-day composite run" begin
+        σ = DEFAULT_SURFACE_CONSTANTS.σ_SB
+        p = LayeredSnowpack(depth = 0.6, density = 220.0, T = 266.0,
+                            bottom = SnowGroundTemperature(273.0))
+        M0, H0 = snow_water_equivalent(p), snowpack_enthalpy(p)
+        dt = 1800.0
+        dep_seen = false
+        for d in 1:12, s in 1:48
+            hr = s / 2
+            sun = max(0.0, sin(π * (hr - 6) / 12))
+            if d <= 3        # snowstorm
+                f = SurfaceForcing(sw_down = 50sun, lw_down = 290.0, T_air = 267.0, q_air = 0.0025,
+                                   U = 6.0, p = 90000.0, z_ref = 10.0, rain = 0.0, snow = 4e-4)
+            elseif d <= 6    # clear, cold, dry: radiative cooling and sublimation
+                f = SurfaceForcing(sw_down = 450sun, lw_down = 190.0, T_air = 263.0, q_air = 0.0008,
+                                   U = 3.0, p = 90000.0, z_ref = 10.0, rain = 0.0, snow = 0.0)
+            elseif d <= 9    # warm spell with rain: melt and runoff
+                f = SurfaceForcing(sw_down = 600sun, lw_down = 320.0, T_air = 279.0, q_air = 0.005,
+                                   U = 5.0, p = 90000.0, z_ref = 10.0, rain = d == 8 ? 2e-4 : 0.0, snow = 0.0)
+            else             # cold and humid: hoar deposition
+                f = SurfaceForcing(sw_down = 0.0, lw_down = 0.9σ * 268^4, T_air = 268.0, q_air = 0.0032,
+                                   U = 2.0, p = 90000.0, z_ref = 10.0, rain = 0.0, snow = 0.0)
+            end
+            fl = step_surface!(p, f, dt)
+            fl.E < 0 && (dep_seen = true)
+            @test all(p.T .<= Tf_snow)
+        end
+        b = p.budget
+        ΔM = snow_water_equivalent(p) - M0
+        ΔH = snowpack_enthalpy(p) - H0
+        mass_resid = ΔM - (b.snowfall + b.rainfall - b.sublimation - b.runoff)
+        heat_resid = ΔH - (b.surface_heat - b.bottom_heat + b.advected_enthalpy - b.runoff_enthalpy)
+        @test abs(mass_resid) < 1e-10 * (M0 + b.snowfall)
+        @test abs(heat_resid) < 1e-10 * abs(H0)
+        @test b.melt > 1 && b.runoff > 1 && b.sublimation != 0 && dep_seen
+        @info @sprintf("12-day run: SWE %.2f → %.2f kg m⁻², snowfall %.1f, rain %.1f, sublimation %.3f, melt %.1f, runoff %.1f; mass residual %.2e kg m⁻², enthalpy residual %.2e J m⁻² (of %.3e)",
+                       M0, snow_water_equivalent(p), b.snowfall, b.rainfall, b.sublimation,
+                       b.melt, b.runoff, mass_resid, heat_resid, H0)
+    end
+
+    @testset "Surface physics: radiative cooling, melt, insulation" begin
+        σ = DEFAULT_SURFACE_CONSTANTS.σ_SB
+        # Clear night: the snow surface decouples and cools below the air.
+        p = LayeredSnowpack(depth = 0.5, density = 200.0, T = 263.0)
+        fnight = SurfaceForcing(sw_down = 0.0, lw_down = 200.0, T_air = 263.15, q_air = 0.0012,
+                                U = 5.0, p = 90000.0, z_ref = 10.0, rain = 0.0, snow = 0.0)
+        local fl
+        for _ in 1:24
+            fl = step_surface!(p, fnight, 1800.0)
+        end
+        @test surface_temperature(p) < 263.15 - 3
+        @test fl.Rn < 0
+        @test fl.H < 0                                  # heat flows down from the air
+        @test abs(fl.H) > abs(fl.G)                     # ... and, with wind, dominates
+        @info @sprintf("Clear night after 12 h: T_s = %.2f K (air 263.15), Rn = %.1f, H = %.1f, LE = %.1f, G = %.1f W m⁻²",
+                       surface_temperature(p), fl.Rn, fl.H, fl.LE, fl.G)
+        # Warm sunny day: the skin is pinned at the melting point and the pack melts.
+        p = LayeredSnowpack(depth = 0.5, density = 300.0, T = 272.0)
+        fday = SurfaceForcing(sw_down = 500.0, lw_down = 320.0, T_air = 280.0, q_air = 0.006,
+                              U = 4.0, p = 90000.0, z_ref = 10.0, rain = 0.0, snow = 0.0)
+        D0 = snow_depth(p)
+        for _ in 1:24
+            step_surface!(p, fday, 1800.0)
+            @test surface_temperature(p) <= Tf_snow
+        end
+        @test surface_temperature(p) == Tf_snow
+        @test p.budget.melt > 10
+        @test p.budget.runoff ≈ p.budget.melt rtol = 1e-12
+        @test snow_depth(p) < D0
+        @info @sprintf("Melt day: %.1f kg m⁻² melted in 12 h, depth %.3f → %.3f m",
+                       p.budget.melt, D0, snow_depth(p))
+        # Insulation: ground at 0 °C under 10 cm vs 1 m of snow, air -20 °C.
+        fcold = SurfaceForcing(sw_down = 0.0, lw_down = 0.85σ * 253.15^4, T_air = 253.15,
+                               q_air = 0.0006, U = 3.0, p = 90000.0, z_ref = 10.0, rain = 0.0, snow = 0.0)
+        loss = map((0.1, 1.0)) do D
+            q = LayeredSnowpack(depth = D, density = 250.0, T = 263.15,
+                                bottom = SnowGroundTemperature(273.15),
+                                compaction = Anderson1976Compaction(destructive = nothing, η0 = Inf))
+            for _ in 1:240                                  # 10 days
+                step_surface!(q, fcold, 3600.0)
+            end
+            -snow_heat_conduction!(q, 1.0)[2]               # ground → snow flux now
+        end
+        @test loss[1] > 5 * loss[2] > 0
+        @info @sprintf("Ground heat loss through 0.1 m / 1.0 m of snow: %.1f / %.1f W m⁻²", loss...)
+    end
 end
