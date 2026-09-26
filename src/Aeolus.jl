@@ -609,6 +609,9 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
        layer_leaf_area_density,
        canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,
-       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!
+       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!,
+       CanopyWindSolution, solve_canopy_wind_column,
+       harman_finnigan_mixing_length, canopy_attenuation_coefficient,
+       canopy_exponential_wind
 
 end # module

@@ -252,4 +252,71 @@ using Aeolus.Fields: set!
         _alloc_drag(simr, drag2); _alloc_halo(simr)
         @test _alloc_drag(simr, drag2) <= _alloc_halo(simr)
     end
+
+    @testset "1-D canopy column reproduces the Inoue / Harman-Finnigan profile" begin
+        # A dense, deep uniform canopy: h = 20 m, LAI = 10 (a = 0.5 m⁻¹),
+        # C_d = 0.25, so L_c = 1/(C_d a) = 8 m. With the Harman & Finnigan
+        # (2007) β = u*/U_h = 0.3, l = 2β³L_c = 0.432 m and the analytic
+        # attenuation γ = (C_d a/2l²)^(1/3) = β/l = 0.694 m⁻¹ (γh = 13.9).
+        h, LAI, C_d, β, U_h = 20.0, 10.0, 0.25, 0.3, 3.0
+        a = LAI / h
+        l = harman_finnigan_mixing_length(β, C_d, a)
+        γ = canopy_attenuation_coefficient(C_d, a, l)
+        @test l ≈ 2β^3 / (C_d * a)
+        @test γ ≈ β / l rtol = 1e-12                  # the two theories agree
+        # The profile solves the balance d/dz(l²|U'|U') = C_d a U² exactly.
+        U(z) = canopy_exponential_wind(z; h = h, u_h = U_h, C_d = C_d, a = a, β = β)
+        for z in (5.0, 12.0, 19.0)
+            lhs = 2 * l^2 * γ^3 * U(z)^2
+            @test lhs ≈ C_d * a * U(z)^2 rtol = 1e-12
+        end
+        @test U(h) == U_h && U(h + 5) == U_h
+
+        errs = Float64[]; ustar = Float64[]
+        for N in (100, 200, 400)
+            zf = collect(range(0, h; length = N + 1))
+            lad = layer_leaf_area_density(UniformLAD(LAI, h), zf)
+            sol = solve_canopy_wind_column(zf, lad; C_d = C_d, l_mix = l, u_top = U_h, ν = 1e-10)
+            @test sol.residual < 1e-12
+            # Momentum balance: stress into the top = drag on the leaves.
+            @test sol.u_star^2 ≈ sol.drag_integral rtol = 1e-10
+            @test sol.tau_ground == 0
+            sel = sol.z .> h - 5 / γ                    # U down to e⁻⁵ U_h
+            push!(errs, maximum(abs.(sol.u[sel] ./ U.(sol.z[sel]) .- 1)))
+            push!(ustar, sol.u_star / U_h)
+        end
+        @info "canopy column vs exponential profile" N = (100, 200, 400) max_rel_err = Tuple(errs) u_star_over_Uh = Tuple(ustar)
+        @test errs[end] < 5e-4
+        @test 3.5 < errs[end-1] / errs[end] < 4.5         # 2nd-order convergence
+        @test ustar[end] ≈ β rtol = 1e-3                  # u*/U_h = β recovered
+
+        # A sparse canopy (γh ≈ 3) over no-slip ground: the ground is felt,
+        # the stress splits between leaves and ground, and the lower canopy
+        # is slower than the deep-canopy exponential.
+        LAIs = 1.0; as = LAIs / h
+        zf = collect(range(0, h; length = 401))
+        ls = 1.0
+        sol = solve_canopy_wind_column(zf, layer_leaf_area_density(UniformLAD(LAIs, h), zf);
+                                       C_d = C_d, l_mix = ls, u_top = U_h, ν = 1e-10,
+                                       bottom = :no_slip)
+        @test sol.residual < 1e-12
+        @test sol.tau_ground > 0
+        @test sol.u_star^2 ≈ sol.drag_integral + sol.tau_ground rtol = 1e-10
+        @test all(diff(sol.u) .> 0) && 0 < sol.u[1] < sol.u[end] < U_h
+        Us(z) = canopy_exponential_wind(z; h = h, u_h = U_h, C_d = C_d, a = as, l_mix = ls)
+        @test sol.u[1] < Us(sol.z[1])
+
+        # Lalic–Mihailovic forest with a height-dependent mixing length:
+        # monotone wind, balance closed, default ν.
+        lm = LalicMihailovicLAD(5.0, h; z_m = 14.0)
+        sol = solve_canopy_wind_column(zf, layer_leaf_area_density(lm, zf);
+                                       C_d = 0.2, l_mix = z -> 0.1 + 0.05z,
+                                       u_top = U_h, bottom = :no_slip)
+        @test sol.residual < 1e-12
+        @test sol.u_star^2 ≈ sol.drag_integral + sol.tau_ground rtol = 1e-9
+        @test all(diff(sol.u) .>= 0)
+        # The dense crown shelters the trunk space: wind at mid-trunk is
+        # below a fifth of the canopy-top wind.
+        @test sol.u[findfirst(>=(5.0), sol.z)] < 0.2U_h
+    end
 end

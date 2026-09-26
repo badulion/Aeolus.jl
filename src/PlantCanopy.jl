@@ -58,7 +58,10 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
        layer_leaf_area_density,
        canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,
-       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!
+       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!,
+       CanopyWindSolution, solve_canopy_wind_column,
+       harman_finnigan_mixing_length, canopy_attenuation_coefficient,
+       canopy_exponential_wind
 
 # =========================================================================
 # 1. Leaf-area density profiles
@@ -481,6 +484,193 @@ function apply_canopy_drag!(sim, drag::ResolvedCanopyDrag{T}, dt::Real) where {T
     end
     dV = mesh.dx * mesh.dy * mesh.dz
     return (Fx = Fx * dV / Δt, Fy = Fy * dV / Δt, Fz = Fz * dV / Δt)
+end
+
+# =========================================================================
+# 3. In-canopy mean wind: 1-D column and the exponential profile
+# =========================================================================
+
+"""
+    harman_finnigan_mixing_length(β, C_d, a) -> l [m]
+
+Canopy mixing length of Harman & Finnigan (2007, eq. 8),
+``l = 2β^3 L_c`` with the canopy-drag length ``L_c = 1/(C_d a)`` and
+``β = u_*/U_h`` the ratio of friction velocity to wind speed at the
+canopy top (≈ 0.3 in neutral flow over dense canopies).
+"""
+harman_finnigan_mixing_length(β::Real, C_d::Real, a::Real) = 2 * β^3 / (C_d * a)
+
+"""
+    canopy_attenuation_coefficient(C_d, a, l) -> γ [m⁻¹]
+
+Exponential decay rate of the mean wind into a uniform canopy for a
+constant mixing length `l` (Inoue 1963):
+
+```math
+γ = \\left(\\frac{C_d\\,a}{2\\,l^2}\\right)^{1/3},
+```
+
+from the steady balance ``\\frac{d}{dz}\\left(l^2 \\left|\\frac{dU}{dz}\\right|\\frac{dU}{dz}\\right)
+= C_d\\,a\\,U^2`` with ``U = U_h e^{γ(z-h)}``. Inoue's dimensionless
+attenuation coefficient is ``γh``. With the Harman–Finnigan mixing
+length this is ``γ = β/l``.
+"""
+canopy_attenuation_coefficient(C_d::Real, a::Real, l::Real) = cbrt(C_d * a / (2 * l^2))
+
+"""
+    canopy_exponential_wind(z; h, u_h, C_d, a, β = 0.3, l_mix = harman_finnigan_mixing_length(β, C_d, a))
+
+The exponential in-canopy wind of Inoue (1963) / Harman & Finnigan
+(2007): ``U(z) = U_h \\exp[γ (z - h)]`` for ``z ≤ h`` with
+``γ = `` [`canopy_attenuation_coefficient`](@ref)`(C_d, a, l_mix)`. It is
+the exact solution of the uniform-canopy mixing-length balance for a
+canopy deep enough (``γh ≫ 1``) that the ground is not felt.
+"""
+function canopy_exponential_wind(z::Real; h::Real, u_h::Real, C_d::Real, a::Real,
+                                 β::Real = 0.3,
+                                 l_mix::Real = harman_finnigan_mixing_length(β, C_d, a))
+    γ = canopy_attenuation_coefficient(C_d, a, l_mix)
+    return u_h * exp(γ * (min(z, h) - h))
+end
+
+"""
+    CanopyWindSolution
+
+Result of [`solve_canopy_wind_column`](@ref): layer-centre heights `z`
+and wind `u` [m s⁻¹], the friction velocity at the column top `u_star`
+(from the resolved stress ``K\\,∂U/∂z`` there), the canopy drag
+integrated over the column `drag_integral` = ``\\sum C_d a_k |U_k| U_k Δz_k``
+[m² s⁻²], the kinematic stress on the ground `tau_ground` (zero for a
+free-slip bottom), the number of iterations and the final update norm
+`residual` (max ``|ΔU|/U_{top}``).
+"""
+struct CanopyWindSolution
+    z::Vector{Float64}
+    u::Vector{Float64}
+    u_star::Float64
+    drag_integral::Float64
+    tau_ground::Float64
+    iterations::Int
+    residual::Float64
+end
+
+_lmix_at(l::Real, z) = Float64(l)
+_lmix_at(l::Function, z) = Float64(l(z))
+
+"""
+    solve_canopy_wind_column(z_faces, lad; C_d, l_mix, u_top, ν = 1.5e-5,
+                             bottom = :free_slip, dt = 1e4, maxiter = 5_000,
+                             tol = 1e-12) -> CanopyWindSolution
+
+Steady mean wind in a 1-D canopy column driven by a prescribed wind
+`u_top` at the top face `z_faces[end]`:
+
+```math
+0 = \\frac{∂}{∂z}\\left(K \\frac{∂U}{∂z}\\right) - C_d\\,a(z)\\,|U|\\,U,\\qquad
+K = l^2 \\left|\\frac{∂U}{∂z}\\right| + ν .
+```
+
+`lad` holds layer-mean LAD values (e.g. from
+[`layer_leaf_area_density`](@ref)); `l_mix` is a number or a function of
+height evaluated at layer faces. `bottom = :free_slip` (zero stress) or
+`:no_slip` (``U = 0`` at `z_faces[1]`).
+
+The steady state is reached by pseudo-time marching in which the
+diffusion is backward Euler with ``K`` lagged one iteration and the
+drag is the implicit factor of [`canopy_drag_factor`](@ref) folded into
+the same tridiagonal solve — so every iteration is unconditionally
+stable and, at convergence, the discrete balance holds exactly: the
+stress at the top equals `drag_integral + tau_ground`.
+
+Keep `ν` small against ``l^2|∂U/∂z|`` where the comparison with the
+inviscid exponential profile matters: deep in a dense canopy the
+mixing-length viscosity decays like ``U`` and a molecular floor becomes
+comparable.
+"""
+function solve_canopy_wind_column(z_faces::AbstractVector{<:Real}, lad::AbstractVector{<:Real};
+                                  C_d::Real, l_mix, u_top::Real, ν::Real = 1.5e-5,
+                                  bottom::Symbol = :free_slip, dt::Real = 1.0e4,
+                                  maxiter::Integer = 5_000, tol::Real = 1e-12)
+    N = length(z_faces) - 1
+    length(lad) == N || throw(DimensionMismatch("solve_canopy_wind_column: lad must have one value per layer"))
+    bottom in (:free_slip, :no_slip) ||
+        throw(ArgumentError("solve_canopy_wind_column: bottom must be :free_slip or :no_slip"))
+    zf = Float64.(z_faces)
+    Δz = diff(zf)
+    zc = (zf[1:N] .+ zf[2:N+1]) ./ 2
+    # Distances between the nodes either side of each face; face 1 is the
+    # ground (node: z_faces[1]), face N+1 the top (node: z_faces[end]).
+    δ = similar(zf)
+    δ[1] = zc[1] - zf[1]
+    for f in 2:N
+        δ[f] = zc[f] - zc[f-1]
+    end
+    δ[N+1] = zf[N+1] - zc[N]
+    l2 = [_lmix_at(l_mix, zf[f])^2 for f in 1:N+1]
+    Cd = Float64(C_d); a = Float64.(lad); ut = Float64(u_top); νF = Float64(ν); Δt = Float64(dt)
+    u = [ut * (zc[k] - zf[1]) / (zf[N+1] - zf[1]) for k in 1:N]    # linear first guess
+    unew = similar(u); K = zeros(N + 1); Kn = zeros(N + 1)
+    lo = zeros(N); di = zeros(N); up = zeros(N); rhs = zeros(N)
+    cw = zeros(N); dw = zeros(N)
+    it = 0; res = Inf
+    while it < maxiter
+        it += 1
+        # Eddy viscosity at faces from the current iterate, averaged with
+        # the previous iteration's: plain Picard (K fully lagged) on the
+        # quadratic flux l²|∂U/∂z|∂U/∂z overshoots and oscillates at large
+        # pseudo-time steps; the average damps that two-cycle.
+        Kn[1] = bottom === :no_slip ? l2[1] * abs(u[1]) / δ[1] + νF : 0.0
+        for f in 2:N
+            Kn[f] = l2[f] * abs(u[f] - u[f-1]) / δ[f] + νF
+        end
+        Kn[N+1] = l2[N+1] * abs(ut - u[N]) / δ[N+1] + νF
+        for f in 1:N+1
+            K[f] = it == 1 ? Kn[f] : (K[f] + Kn[f]) / 2
+        end
+        # (u' - u)/Δt = [K_{k+1}(u'_{k+1}-u'_k)/δ_{k+1} - K_k(u'_k-u'_{k-1})/δ_k]/Δz_k - Cd a_k |u_k| u'_k
+        for k in 1:N
+            cb = K[k] / (δ[k] * Δz[k]); ct = K[k+1] / (δ[k+1] * Δz[k])
+            lo[k] = -Δt * cb
+            up[k] = -Δt * ct
+            di[k] = 1 + Δt * (cb + ct) + Δt * Cd * a[k] * abs(u[k])
+            rhs[k] = u[k]
+        end
+        # Boundary nodes: ground (u = 0, no slip) and prescribed top wind.
+        lo[1] = 0.0                     # u_0 = 0 (no slip) or K[1] = 0 (free slip)
+        up[N] = 0.0; rhs[N] += Δt * K[N+1] / (δ[N+1] * Δz[N]) * ut
+        _thomas!(unew, lo, di, up, rhs, cw, dw)
+        res = 0.0
+        for k in 1:N
+            res = max(res, abs(unew[k] - u[k]))
+        end
+        res /= abs(ut)
+        u, unew = unew, u
+        res < tol && break
+    end
+    # Diagnostics with the converged K (at convergence K = Kn).
+    τ_top = K[N+1] * (ut - u[N]) / δ[N+1]
+    drag = 0.0
+    for k in 1:N
+        drag += Cd * a[k] * abs(u[k]) * u[k] * Δz[k]
+    end
+    τ_g = K[1] * u[1] / δ[1]
+    return CanopyWindSolution(zc, u, sqrt(abs(τ_top)), drag, τ_g, it, res)
+end
+
+# Tridiagonal solve (Thomas algorithm); lo[1] and up[end] are ignored.
+function _thomas!(x, lo, di, up, rhs, c, d)
+    n = length(di)
+    c[1] = up[1] / di[1]; d[1] = rhs[1] / di[1]
+    for i in 2:n
+        m = di[i] - lo[i] * c[i-1]
+        c[i] = i < n ? up[i] / m : 0.0
+        d[i] = (rhs[i] - lo[i] * d[i-1]) / m
+    end
+    x[n] = d[n]
+    for i in n-1:-1:1
+        x[i] = d[i] - c[i] * x[i+1]
+    end
+    return x
 end
 
 end # module
