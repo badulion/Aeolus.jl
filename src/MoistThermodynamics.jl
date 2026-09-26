@@ -71,6 +71,7 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        saturation_specific_humidity, saturation_mixing_ratio,
        saturation_specific_humidity_ice,
        vapor_pressure, relative_humidity, relative_humidity_ice,
+       specific_humidity_from_relative_humidity,
        dewpoint_temperature, frost_point_temperature, wet_bulb_temperature,
        gas_constant_moist, heat_capacity_moist, exner_function,
        potential_temperature, temperature_from_theta,
@@ -355,6 +356,23 @@ end
 relative_humidity(T::Real, p::Real, q_v::Real,
                   c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
     vapor_pressure(q_v, p, c) / saturation_vapor_pressure(T, c)
+
+"""
+    specific_humidity_from_relative_humidity(T, p, RH, c = DEFAULT_CONSTANTS) -> kg kg⁻¹
+
+Inverse of [`relative_humidity`](@ref): the specific humidity of air at
+`T` (K) and `p` (Pa) whose vapour pressure is ``e = RH\\, e_s(T)`` (over
+liquid), ``q = ε e / (p - (1 - ε) e)``. Note that this is *not*
+``RH \\cdot q_{sat}``, which differs by the factor
+``(p - (1-ε)e_s)/(p - (1-ε)e)``.
+"""
+function specific_humidity_from_relative_humidity(T::Real, p::Real, RH::Real,
+                                                  c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    RH >= 0 || throw(ArgumentError("specific_humidity_from_relative_humidity: RH must be ≥ 0"))
+    e = float(RH) * saturation_vapor_pressure(T, c)
+    ε = molmass_ratio(c)
+    return ε * e / (float(p) - (1 - ε) * e)
+end
 
 "Relative humidity over ice."
 relative_humidity_ice(T::Real, p::Real, q_v::Real,

@@ -603,6 +603,20 @@ const MT = Aeolus.MoistThermodynamics
         @test wet_bulb_temperature(T, p, 0.0) < T - 12
     end
 
+    @testset "Specific humidity from relative humidity (inverse)" begin
+        p = 101325.0
+        for T in (263.15, 283.15, 300.0, 313.15), RH in (0.0, 0.3, 0.6, 1.0)
+            q = specific_humidity_from_relative_humidity(T, p, RH)
+            @test relative_humidity(T, p, q) ≈ RH atol = 1e-12
+        end
+        # RH = 1 is saturation
+        @test specific_humidity_from_relative_humidity(300.0, p, 1.0) ≈
+              saturation_specific_humidity(300.0, p) rtol = 1e-12
+        # and RH·q_sat is not the same thing (by ~1 % of q at 30 °C, 50 %)
+        q50 = specific_humidity_from_relative_humidity(303.15, p, 0.5)
+        @test abs(q50 / (0.5 * saturation_specific_humidity(303.15, p)) - 1) > 5e-3
+    end
+
     @testset "Type stability and Float32" begin
         c32 = ThermodynamicConstants{Float32}()
         @test saturation_vapor_pressure(273.16f0, c32) isa Float32
