@@ -10,9 +10,14 @@ It answers one question — *given the CO₂ inside a leaf, the light it
 absorbs and its temperature, how fast does it fix carbon?* — and is the
 single owner in Aeolus of that biochemistry, of its temperature
 responses, of the PAR → photon-flux conversion and of the per-PFT
-photosynthetic parameter table. Stomatal conductance (#20), the
-vegetated land column (#21) and the leaf energy balance of the resolved
-canopy (#24) delegate here.
+photosynthetic parameter table.
+
+It also couples that biochemistry to the stomata (#20): the Ball-Berry
+(1987) and Medlyn et al. (2011) conductance closures, the leaf boundary
+layer, transpiration and the coupled ``A_n``–``g_s``–``c_i`` solution
+[`leaf_gas_exchange`](@ref), with soil-water stress as an input factor
+β. The vegetated land column (#21) and the leaf energy balance of the
+resolved canopy (#24) delegate here.
 
 # Units
 
@@ -24,6 +29,8 @@ canopy (#24) delegate here.
 | absorbed photon flux `Q` | µmol photons m⁻² s⁻¹ |
 | C4 PEP-carboxylase slope `kp` | µmol m⁻² s⁻¹ per (mol mol⁻¹) |
 | leaf temperature | K |
+| conductances `gs`, `gb`, `gc` | mol m⁻² (leaf) s⁻¹ (to H₂O unless stated) |
+| vapour pressures | Pa |
 
 CLM writes the same equations in partial pressures, with every
 Michaelis constant and compensation point scaled by ``P_{atm}``
@@ -58,10 +65,24 @@ degree zero in those quantities, so working in mole fractions is
     Community Land Model version 4 (CLM4) using global flux fields
     empirically inferred from FLUXNET data. *J. Geophys. Res.*, 116,
     G02014.
+  * Ball, J. T., Woodrow, I. E. & Berry, J. A. (1987). A model predicting
+    stomatal conductance and its contribution to the control of
+    photosynthesis under different environmental conditions. In
+    *Progress in Photosynthesis Research*, vol. IV, 221-224. Nijhoff.
+  * Medlyn, B. E. et al. (2011). Reconciling the optimal and empirical
+    approaches to modelling stomatal conductance. *Glob. Change Biol.*,
+    17, 2134-2144.
+  * De Kauwe, M. G. et al. (2015). A test of an optimal stomatal
+    conductance scheme within the CABLE land surface model. *Geosci.
+    Model Dev.*, 8, 431-452.
+  * Sun et al. (2012), as cited by the CLM5 Technical Note §2.9.6 for the
+    non-convergence of CLM4's ci iteration.
   * Oleson, K. W. et al. (2013). *Technical description of version 4.5 of
     the Community Land Model (CLM)*. NCAR/TN-503+STR, §8.2-8.3, Tables
     8.1-8.2.
-  * Lawrence, D. M. et al. (2018). *CLM5 Documentation*, NCAR, §9.4.
+  * Lawrence, D. M. et al. (2018). *CLM5 Documentation*, NCAR, §9.4
+    (online Technical Note §2.9.3, §2.9.6, Table 2.9.1; §2.5.3
+    eq. 2.5.122).
 """
 module Photosynthesis
 
@@ -659,9 +680,9 @@ CLM4.5 Technical Note Table 8.1 (Oleson et al. 2013):
   * `α` — C4 quantum efficiency, mol CO₂ mol⁻¹ photons (`NaN` for C3).
 
 The tabulated `Vcmax25` is derived from the other three columns by
-[`vcmax25_from_leaf_nitrogen`](@ref) (CLM4.5 eq. 8.17); the stomatal
-(`m`) and soil-water (`ψo`, `ψc`) columns of that table belong to the
-stomatal-conductance and land-column phases.
+[`vcmax25_from_leaf_nitrogen`](@ref) (CLM4.5 eq. 8.17). The stomatal
+slope `m` of that table is carried by [`pft_stomatal_model`](@ref); the
+soil-water (`ψo`, `ψc`) columns belong to the land column (#21).
 """
 struct PFTPhotosynthesis
     name::String

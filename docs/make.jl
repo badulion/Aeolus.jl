@@ -39,6 +39,7 @@ makedocs(
             "Radiation fog"               => "theory/radiation_fog.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
             "Leaf photosynthesis"         => "theory/photosynthesis.md",
+            "Stomatal conductance"        => "theory/stomatal_conductance.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

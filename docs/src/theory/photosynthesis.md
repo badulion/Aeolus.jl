@@ -172,6 +172,9 @@ observations. The phase's observational target — FLUXNET latent and
 sensible heat — needs the stomatal conductance and land column that
 build on this module.
 
+The coupling to stomata and transpiration is developed in
+[Stomatal conductance](stomatal_conductance.md).
+
 ## References
 
 - Farquhar, von Caemmerer & Berry (1980), *Planta* 149, 78–90.
