@@ -14,7 +14,7 @@ the stability functions are a new `AbstractStabilityFunctions` subtype
 `MoistThermodynamics`, the air viscosity from `P3Microphysics`
 (Sutherland's law), the water emissivity from `SurfaceOptics`.
 
-Four parts:
+Seven parts:
 
   1. **Stability and gustiness** — [`COAREStability`](@ref) (Kansas
      forms blended into the free-convection ``(-ζ)^{-1/3}`` limit,
@@ -32,6 +32,17 @@ Four parts:
      gustiness and Monin–Obukhov stability to a joint fixed point;
      [`coare30_bulk`](@ref) and [`coare35_bulk`](@ref) are the published
      configurations.
+  5. **Sea spray** — the fast spray heat-flux algorithm of Andreas et
+     al. (2015) ([`AndreasSpray`](@ref), [`sea_spray_fluxes`](@ref)),
+     with the droplet microphysics taken from `MoistThermodynamics`
+     (κ-Köhler), `Superdroplet` and `OceanMixedLayer`, and the rain heat
+     flux ([`rain_heat_flux`](@ref)).
+  6. **The full COARE algorithm** — [`coare_fluxes`](@ref) (bulk fluxes
+     iterated with the `OceanMixedLayer` cool skin, plus rain and spray)
+     and [`coare_warm_layer_series`](@ref) (the COARE warm-layer time
+     loop with `OceanMixedLayer.FairallWarmLayer`).
+  7. **Coupling** — [`coare_flux_hook`](@ref) drives the prognostic
+     `OceanMixedLayer.WaterColumn` with COARE fluxes, spray and rain.
 
 Sign conventions are those of `SurfaceExchange`: fluxes positive upward,
 ``θ_* < 0`` for a surface warmer than the air, ``ζ > 0`` stable.
@@ -62,6 +73,21 @@ Sign conventions are those of `SurfaceExchange`: fluxes positive upward,
   * Edson, J. B. et al. (2013). On the exchange of momentum over the
     open ocean. *J. Phys. Oceanogr.*, 43, 1589-1610 (corrigendum 2014,
     44, 2590: ``m = 0.0017``).
+  * Andreas, E. L, Persson, P. O. G. & Hare, J. E. (2008). A bulk
+    turbulent air–sea flux algorithm for high-wind, spray conditions.
+    *J. Phys. Oceanogr.*, 38, 1581-1596.
+  * Andreas, E. L, Mahrt, L. & Vickers, D. (2012). A new drag relation
+    for aerodynamically rough flow over the ocean. *J. Atmos. Sci.*, 69,
+    2520-2537.
+  * Andreas, E. L, Mahrt, L. & Vickers, D. (2015). An improved bulk
+    air–sea surface flux algorithm, including spray-mediated transfer.
+    *Q. J. R. Meteorol. Soc.*, 141, 642-654.
+  * Gosnell, R., Fairall, C. W. & Webster, P. J. (1995). The sensible
+    heat of rainfall in the tropical ocean. *J. Geophys. Res.*, 100,
+    18437-18442.
+  * Fairall, C. W., Bradley, E. F., Godfrey, J. S., Wick, G. A., Edson,
+    J. B. & Young, G. S. (1996a). Cool-skin and warm-layer effects on sea
+    surface temperature. *J. Geophys. Res.*, 101, 1295-1308.
   * Beljaars, A. C. M. (1995). The parametrization of surface fluxes in
     large-scale models under free convection. *Q. J. R. Meteorol. Soc.*,
     121, 255-270.
