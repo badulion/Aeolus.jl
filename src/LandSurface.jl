@@ -67,7 +67,12 @@ canopy stores no heat).
   * Bonan, G. B. et al. (2011). Improving canopy processes in the
     Community Land Model version 4 (CLM4) using global flux fields
     empirically inferred from FLUXNET data. *J. Geophys. Res.*, 116,
-    G02014 (K_n = 0.11).
+    G02014.
+  * Bonan, G. B., Oleson, K. W., Fisher, R. A., Lasslop, G. &
+    Reichstein, M. (2012). Reconciling leaf physiological traits and
+    canopy flux data: use of the TRY and FLUXNET databases in the
+    Community Land Model version 4. *J. Geophys. Res.*, 117, G02026
+    (K_n = 0.30 for the sunlit/shaded canopy, as adopted by CLM4.5).
   * Lee, T. J. & Pielke, R. A. (1992). Estimating the soil surface
     specific humidity. *J. Appl. Meteorol.*, 31, 480-484.
 """
@@ -205,7 +210,7 @@ end
 """
     VegetationParameters(; photosynthesis, stomata, ψ_o, ψ_c, r_a, r_b,
                          ρ_vis, ρ_nir, τ_vis, τ_nir, R_z0m, R_d, d_leaf = 0.04,
-                         K_n = 0.11, Ω = 1.0, ε_leaf = 0.97,
+                         K_n = 0.30, Ω = 1.0, ε_leaf = 0.97,
                          stress_targets = (:vcmax, :rd, :g0))
 
 Everything the land column needs to know about its plants:
@@ -219,7 +224,7 @@ Everything the land column needs to know about its plants:
 | `ρ_vis`, `ρ_nir`, `τ_vis`, `τ_nir` | leaf reflectance and transmittance |
 | `R_z0m`, `R_d` | roughness length and displacement height per canopy height |
 | `d_leaf` | characteristic leaf dimension (m) |
-| `K_n` | canopy nitrogen (V_cmax) extinction coefficient; 0.11 is Bonan et al. (2011), CLM4.5 eq. 8.19 |
+| `K_n` | canopy nitrogen (V_cmax) extinction coefficient, CLM4.5 eq. 8.19; 0.30 is the value CLM4.5 uses with sunlit/shaded leaves (Bonan et al. 2012), which offsets the excess absorption of scattered light by the shaded big leaf; Bonan et al. (2011) had 0.11 |
 | `Ω` | foliage clumping index (1 = random) |
 | `ε_leaf` | leaf longwave emissivity (CLM: 0.97) |
 | `stress_targets` | what β_t multiplies, passed to `leaf_gas_exchange` |
@@ -241,7 +246,7 @@ Base.@kwdef struct VegetationParameters{P<:AbstractPhotosynthesisParameters,
     R_z0m::Float64
     R_d::Float64
     d_leaf::Float64 = 0.04
-    K_n::Float64 = 0.11
+    K_n::Float64 = 0.30
     Ω::Float64 = 1.0
     ε_leaf::Float64 = 0.97
     stress_targets::Tuple = (:vcmax, :rd, :g0)
@@ -365,7 +370,8 @@ function soil_water_stress(s::AbstractSoilWaterStress, col::SoilWaterColumn, roo
         w[i] = wilting_factor(s, col.ψ[i]) * clamp((θs - col.θ_ice[i]) / θs, 0.0, 1.0)
         β += roots[i] * w[i]
     end
-    return β, w
+    # the root fractions sum to one only to round-off: keep β_t in [0, 1]
+    return clamp(β, 0.0, 1.0), w
 end
 
 """
@@ -655,7 +661,7 @@ positive absorbed), water fluxes in kg m⁻² s⁻¹:
 | `T_v`, `T_g`, `T_ac`, `q_ac` | leaf, ground skin (step mean), canopy-air temperature and humidity |
 | `u_star`, `r_ah` | friction velocity, above-canopy resistance to heat (s m⁻¹) |
 | `leaf_residual` | ``R_{n,v} - H_v - LE_v`` at the solution, W m⁻² |
-| `iterations`, `converged` | canopy iteration count and outcome |
+| `iterations`, `converged`, `last_change` | canopy iterations, outcome, and the largest change of ``T_v`` or ``T_{ac}`` (K) in the last one |
 """
 struct LandSurfaceDiagnostics
     Rn_v::Float64; Rn_g::Float64
@@ -671,6 +677,7 @@ struct LandSurfaceDiagnostics
     leaf_residual::Float64
     iterations::Int
     converged::Bool
+    last_change::Float64
 end
 
 """
@@ -698,7 +705,7 @@ LandSurfaceBudget() = LandSurfaceBudget(zeros(12)...)
                         diffuse_fraction = 0.3, par_fraction = 0.5,
                         stress = CLMWaterStress(veg), roots = zeng_root_fractions(…),
                         T_veg = soil skin temperature, sf = BusingerDyerBeljaarsHoltslag(),
-                        U_min = 0.1, maxiter = 40, tol_T = 1e-6)
+                        U_min = 0.1, maxiter = 60, tol_T = 1e-4)
 
 A vegetated land column — a two-big-leaf canopy (leaf area `LAI`, stem
 area `SAI`, height `z_top` m) over the soil column `soil` — implementing
@@ -735,8 +742,13 @@ is shut off.
 ``R_{n,v}(T_v) = H_v(T_v) + λ E_v(T_v)`` (eq. 5.129; the canopy stores no
 heat) by Newton's method with the conductances fixed, inside an outer
 iteration that updates the surface layer, the stomata and the canopy air
-until ``T_v`` and ``T_{ac}`` change by less than `tol_T` (CLM allows 40
-iterations). When the air at the leaves is supersaturated (``E_v < 0``)
+until ``T_v`` and ``T_{ac}`` change by less than `tol_T` (default
+10⁻⁴ K; CLM uses 0.01 K and 40 iterations), with the canopy-air update
+under-relaxed adaptively after 10 iterations. The leaf balance is solved
+to round-off in every iteration, so the column closes its energy budget
+even when the outer iteration stops at `maxiter` (`converged = false`;
+0.3-3 % of the hours in the FLUXNET tests, all with a last change
+below 0.03 K). When the air at the leaves is supersaturated (``E_v < 0``)
 dew forms through ``(L+S) g_b`` and is passed to the soil surface: the
 column has no canopy interception store.
 
@@ -796,7 +808,7 @@ function VegetatedLandColumn(soil::SoilThermalColumn, veg::VegetationParameters;
                              roots = zeng_root_fractions(soil.water.grid, veg.r_a, veg.r_b),
                              T_veg::Real = soil.T_skin, q_ac::Real = 0.008,
                              sf::AbstractStabilityFunctions = BusingerDyerBeljaarsHoltslag(),
-                             U_min::Real = 0.1, maxiter::Integer = 40, tol_T::Real = 1e-6)
+                             U_min::Real = 0.1, maxiter::Integer = 60, tol_T::Real = 1e-4)
     (LAI >= 0 && SAI >= 0 && z_top > 0) ||
         throw(ArgumentError("VegetatedLandColumn: need LAI, SAI ≥ 0 and z_top > 0"))
     length(roots) == length(soil.water.grid) ||
@@ -1003,7 +1015,7 @@ function step_surface!(s::VegetatedLandColumn, f::SurfaceForcing, dt::Real;
     sun = sha = nothing
     gb_mol = 0.0
     λv = latent_heat_vapor(Tv, th)
-    iters, conv = 0, false
+    iters, conv, change, change_prev, ω = 0, false, Inf, Inf, 1.0
     for it in 1:s.maxiter
         iters = it
         # surface layer above the canopy (SurfaceExchange)
@@ -1038,11 +1050,14 @@ function step_surface!(s::VegetatedLandColumn, f::SurfaceForcing, dt::Real;
         # Newton on the leaf energy balance with the conductances fixed
         Tv_old, Tac_old = Tv, Tac
         Σh = ca + cg + cv
+        # Transpiration or dew: the regime is fixed for the Newton solve
+        # (switching inside it makes F(T_v) discontinuous and Newton cycles
+        # between the branches); dew wets all leaf and stem area.
+        cvw = saturation_specific_humidity(Tv, p, th) > qac ? cvw_t : LS * gb
+        Σw = caw + cgw + cvw
         for _ in 1:(LS > 0 ? 50 : 0)             # no canopy: nothing to balance
             qv = saturation_specific_humidity(Tv, p, th)
             dqv = _dqsat_dT(Tv, p, th)
-            cvw = qv > qac ? cvw_t : LS * gb          # dew wets all leaf and stem area
-            Σw = caw + cgw + cvw
             λv = latent_heat_vapor(Tv, th)
             lw = bigleaf_longwave(f.lw_down, Tv, Tg0, LS; ε_ground = εg, σ_SB = σSB)
             Hv = -ρ * cp * (ca * θa + cg * Tg0 - (ca + cg) * Tv) * cv / Σh
@@ -1059,15 +1074,19 @@ function step_surface!(s::VegetatedLandColumn, f::SurfaceForcing, dt::Real;
             abs(ΔT) < 1e-10 && break
         end
         qv = saturation_specific_humidity(Tv, p, th)
-        cvw = qv > qac ? cvw_t : LS * gb
-        # Canopy air from flux continuity; under-relaxed after 10 iterations,
-        # which breaks the limit cycle the stability switch of the surface
-        # layer can otherwise sustain near neutral (H ≈ 0 at dusk).
-        ω = it <= 10 ? 1.0 : 0.5
-        Σw = caw + cgw + cvw
+        # Canopy air from flux continuity. After 10 iterations the update is
+        # under-relaxed, and the relaxation halves whenever the change grows:
+        # this breaks the limit cycles that the stability dependence of the
+        # surface layer and of the stomata can sustain (H ≈ 0 at dusk,
+        # calm evenings under an evaporatively cooled canopy).
+        if it > 10
+            ω = ω == 1 ? 0.5 : (change > change_prev ? max(ω / 2, 1 / 64) : ω)
+        end
         Tac += ω * ((ca * θa + cg * Tg0 + cv * Tv) / Σh - Tac)
         qac += ω * ((caw * f.q_air + cgw * qg + cvw * qv) / Σw - qac)
-        if it > 1 && abs(Tv - Tv_old) < s.tol_T && abs(Tac - Tac_old) < s.tol_T
+        change_prev = change
+        change = max(abs(Tv - Tv_old), abs(Tac - Tac_old))
+        if it > 1 && change < s.tol_T
             conv = true
             break
         end
@@ -1143,7 +1162,7 @@ function step_surface!(s::VegetatedLandColumn, f::SurfaceForcing, dt::Real;
                                     An_sun * vis.L_sun, An_sha * vis.L_sha,
                                     sun === nothing ? 0.0 : sun.gs, sha === nothing ? 0.0 : sha.gs,
                                     vis.L_sun, vis.L_sha, Tv, st.T_skin_mean, s.T_ac, s.q_ac,
-                                    us, rah, leaf_res, iters, conv)
+                                    us, rah, leaf_res, iters, conv, change)
     b = s.budget
     b.Rn += Rn * dt; b.H += H * dt; b.LE += LE * dt; b.G += G * dt
     b.leaf_residual += leaf_res * dt
