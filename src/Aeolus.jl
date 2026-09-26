@@ -609,4 +609,13 @@ export SurfaceMosaic, ntiles, mosaic_fractions, set_mosaic_fractions!,
        ParameterAggregatedSurface, parameter_aggregate,
        class_fractions, tiles_from_class_map
 
+# Phase 53 — blending height (#42): effective roughness, blending-height
+# closures, internal-boundary-layer growth, tiles forced at l_b.
+export effective_roughness, effective_scalar_roughness,
+       AbstractBlendingHeight, FixedBlendingHeight, MasonBlendingHeight,
+       ClaussenBlendingHeight, BouZeidBlendingHeight, IBLBlendingHeight,
+       blending_height,
+       AbstractIBLModel, ElliottIBL, PowerLawIBL, DiffusionIBL, ibl_height,
+       BlendingHeightSolution, blended_forcing, BlendedMosaic, last_blending
+
 end # module

@@ -39,6 +39,7 @@ makedocs(
             "Radiation fog"               => "theory/radiation_fog.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
             "Sub-grid surface tiles"      => "theory/surface_tiles.md",
+            "Blending height"             => "theory/blending_height.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
