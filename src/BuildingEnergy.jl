@@ -979,6 +979,15 @@ Re-heat, part-load degradation and fan power are not modelled.
     *Cooling Towers — Basic Calculations*, PDHonline M374). The curves
     then see the evaporatively cooled condenser inlet temperature.
 
+    The two halves come from different models. The COP uses the
+    EnergyPlus pre-cooling-pad inlet temperature. The sensible/latent
+    split uses the wet-tower rule. In the EnergyPlus pad model the
+    evaporated water is ``\\dot m_{cond}\\,Δw`` across the pad. It depends
+    on the condenser air flow, not on the heat rejected, and the coil
+    itself rejects sensible heat. `W_evaporated` is therefore an estimate
+    within the 60-95 % band, not the EnergyPlus water use. The sum
+    ``Q_{exh,s} + Q_{exh,l}`` is exact either way.
+
 **Heating equipment** (`heating`, with `heating_efficiency`):
 
   * `:boiler` — fuel input ``Q/η`` (default ``η = 0.9``); the flue loss

@@ -101,6 +101,12 @@ Q_{exh,s} + Q_{exh,l} = P_{heat} + P_{cool} + Q_{cool} - Q_{heat}.
   thumb: evaporation of 0.00085 of the circulating flow per °F of range,
   against 0.001 if every joule went into evaporation. Published values
   span 60–95 %.
+  This split is not the one EnergyPlus uses. The COP follows the
+  EnergyPlus pre-cooling-pad condenser, whose water use is
+  ``\dot m_{cond}\,Δw`` across the pad and scales with the condenser air
+  flow, not with the rejected heat. The latent/sensible split follows the
+  wet-tower rule. So ``W_{evap}`` is an estimate within that band. The
+  total ``Q_{exh,s} + Q_{exh,l}`` does not depend on the split.
 - **Heating.** A boiler's flue loss ``Q(1/η - 1)`` is sensible exhaust.
   A heat pump's ``-Q(1 - 1/COP_h)`` is negative: it cools the outdoor
   air.
