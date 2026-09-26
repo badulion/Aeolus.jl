@@ -628,7 +628,11 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        zone_mean_radiant_temperature, zone_operative_temperature,
        air_heat_capacity, ventilation_conductance, element_transmittance,
        iso13786_areal_heat_capacity,
-       ISO13790Zone, iso13790_zone, step_iso13790!,
-       zone_specific_humidity, zone_relative_humidity
+       ISO13790Zone, iso13790_zone, step_iso13790!, iso13790_ideal_load!,
+       zone_specific_humidity, zone_relative_humidity,
+       BiquadraticCurve, DXCoolingCurves, DX_RATING_POINT,
+       DX_CURVES_WINDOW_AC, DX_CURVES_PACKAGED_AC,
+       IdealLoadsHVAC, HVACBudget, condenser_inlet_temperature,
+       cooling_cop, available_cooling_capacity
 
 end # module
