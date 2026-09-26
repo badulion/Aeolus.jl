@@ -2,8 +2,9 @@
 #
 # Reads the NetCDF written by `alexanderplatz_diurnal.jl` and prints, per
 # surface class, the class-mean surface temperature cycle: maximum and
-# minimum (with their local hour), the diurnal range, and the nocturnal
-# cooling from sunset to the minimum. If the file carries the soil fields
+# night minimum (with their local hour), their difference, and the nocturnal
+# cooling from sunset to the night minimum (the minimum after sunset —
+# the first records are the 285 K cold start, not a night). If the file carries the soil fields
 # (`T_soil1`, `G_soil`) their class means are reported too. Pass a second
 # file to compare two runs (e.g. before/after a physics change); the plot
 # then shows both.
@@ -43,7 +44,7 @@ function summarize(path)
     iset = findlast(i -> elev[i] > 0 && i < length(elev) && elev[i+1] <= 0, eachindex(elev))
     @printf("\n%s  (%d records, %.1f–%.1f h, sunset record at %.1f h)\n",
             path, length(hour), clock[1], clock[end], iset === nothing ? NaN : clock[iset])
-    @printf("  %-7s %6s %6s %6s %6s %7s %8s %8s", "class", "Tmax", "@h", "Tmin", "@h",
+    @printf("  %-7s %6s %6s %6s %6s %7s %8s %8s", "class", "Tmax", "@h", "Tnight", "@h",
             "range", "ΔT_night", "K/h")
     has_soil && @printf(" %8s %8s %8s", "Tsoil1 rng", "G max", "G min")
     println()
@@ -53,7 +54,10 @@ function summarize(path)
         count(==(c), sfc) == 0 && continue
         s = class_series(Ts, sfc, c)
         series[name] = s
-        imax, imin = argmax(s), argmin(s)
+        imax = argmax(s)
+        # night minimum: after sunset (the first records are the cold start)
+        i0 = iset === nothing ? 1 : iset
+        imin = i0 - 1 + argmin(s[i0:end])
         # nocturnal cooling: from sunset to the minimum after it
         if iset !== nothing
             jmin = iset - 1 + argmin(s[iset:end])
@@ -80,7 +84,7 @@ runs = [summarize(p) for p in paths]
 
 if length(runs) == 2
     println("\nDifference (first − second):")
-    @printf("  %-7s %7s %7s %7s %9s\n", "class", "ΔTmax", "ΔTmin", "Δrange", "ΔΔT_night")
+    @printf("  %-7s %7s %7s %7s %9s\n", "class", "ΔTmax", "ΔTnight", "Δrange", "ΔΔT_night")
     for (_, name) in CLASSES
         haskey(runs[1].rows, name) && haskey(runs[2].rows, name) || continue
         a, b = runs[1].rows[name], runs[2].rows[name]
