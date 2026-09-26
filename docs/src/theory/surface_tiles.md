@@ -89,10 +89,13 @@ The neutral roughness case has a closed form,
 ``10^{-12}``. The stress it produces corresponds to an effective
 roughness of 0.42 m, more than ten times the logarithmic mean 0.032 m —
 the result Mason (1988) formalised with the blending height, which a
-later phase adds. The stable/unstable case is Mahrt's (1987) point: a
-cell whose *average* skin is colder than the air still sends heat upward
-because the warm tile's unstable exchange is far more efficient than the
-cool tile's stable one. The wet/dry case is the land-surface situation
+later phase adds. In the stable/unstable case a cell whose *average* skin is colder than
+the air still sends heat upward, because the warm tile's unstable
+exchange is far more efficient than the cool tile's stable one. Mahrt
+(1987) showed that when stability varies within a grid area the
+grid-averaged exchange coefficient is a complicated function of the
+grid-averaged stability; a sign reversal of ``H`` is the extreme case of
+that nonlinearity. The wet/dry case is the land-surface situation
 Avissar & Pielke (1989) introduced the mosaic for: the dry half has no
 evaporative cooling, runs hot, loses more longwave (lower ``R_n``) and
 converts the rest into sensible heat, so the cell's Bowen ratio is 0.52

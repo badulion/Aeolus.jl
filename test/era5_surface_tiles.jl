@@ -221,10 +221,12 @@ _maxrel(a, b) = maximum(abs(x - y) / max(abs(x), abs(y), 1e-300)
         @test (Hf - Hp) / Hf > 0.05
         @info "Unstable/unstable mosaic" H_flux = Hf H_param = Hp rel = (Hf - Hp) / Hf
 
-        # (2) Mixed stable/unstable cell (Mahrt 1987): a cool tile below the
-        # air and a warm tile above it. The mean skin is *below* the air, so
-        # parameter aggregation says the cell is stable (H < 0), while the
-        # tiles together transport heat upward: the sign of H is wrong.
+        # (2) Mixed stable/unstable cell: a cool tile below the air and a warm
+        # tile above it. The mean skin is *below* the air, so parameter
+        # aggregation says the cell is stable (H < 0), while the tiles
+        # together transport heat upward: the sign of H is wrong. This is the
+        # extreme case of the Richardson-number dependence of the
+        # grid-averaged exchange coefficient analysed by Mahrt (1987).
         m = SurfaceMosaic([SlabLand(T = 285.0), SlabLand(T = 299.0)], [0.5, 0.5])
         Hf, Hp = turbulent_fluxes(m, forcing).H, turbulent_fluxes(parameter_aggregate(m), forcing).H
         tf = tile_fluxes(m, forcing)
@@ -334,7 +336,8 @@ _maxrel(a, b) = maximum(abs(x - y) / max(abs(x), abs(y), 1e-300)
         # at fine resolution, one class per cell as in examples/urban, versus
         # the same map coarse-grained into 4×4-cell tiled cells. Optical
         # properties come from Radiosity's urban material library (the one
-        # source of truth); heat capacities are illustrative test inputs.
+        # source of truth); heat capacities and roughness lengths are
+        # illustrative test inputs, not measured values.
         mats = Aeolus.Radiosity.default_urban_materials()
         C = [3e5, 1.8e5, 5e5, 8e6, 4e5]
         z0 = [0.05, 0.1, 0.1, 1e-3, 0.5]
