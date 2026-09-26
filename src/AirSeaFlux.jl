@@ -81,6 +81,18 @@ import ..SurfaceExchange: phi_m, phi_h, psi_m, psi_h,
                           turbulent_fluxes, step_surface!
 using ..P3Microphysics: p3_air_viscosity
 using ..SurfaceOptics: material_emissivity
+using ..MoistThermodynamics: latent_heat_vapor, saturation_specific_humidity,
+                             relative_humidity, kohler_supersaturation,
+                             kohler_equilibrium_radius
+using ..Superdroplet: AerosolProperties, SEASALT_KAPPA, DEFAULT_MICRO, dry_radius,
+                      vapor_diffusivity, thermal_conductivity, fk_thermal, fd_vapor,
+                      terminal_velocity
+import ..OceanMixedLayer
+using ..OceanMixedLayer: AbstractWaterEOS, UNESCOWaterEOS, CoolSkin, cool_skin,
+                         water_density, water_thermal_expansion, water_haline_contraction,
+                         salinity_humidity_factor, WaterColumn, AbstractWarmLayer,
+                         FairallWarmLayer, step_warm_layer!, reset_warm_layer!,
+                         warm_layer_warming
 
 export COAREStability, ConvectiveGustiness, gustiness_velocity,
        convective_velocity_scale,
@@ -93,7 +105,11 @@ export COAREStability, ConvectiveGustiness, gustiness_velocity,
        BrutsaertGarrattRoughness, sea_scalar_roughness, roughness_reynolds,
        neutral_transfer_coefficients,
        BulkAirSea, coare30_bulk, coare35_bulk, AirSeaSolution, air_sea_fluxes,
-       SeaSurface, sea_surface_solution
+       SeaSurface, sea_surface_solution,
+       andreas_friction_velocity, AndreasSpray, spray_wind_functions,
+       spray_dry_radius, spray_equilibrium_temperature, spray_radius_evolution,
+       spray_residence_time, sea_spray_fluxes, rain_heat_flux,
+       COARESolution, coare_fluxes, coare_warm_layer_series, coare_flux_hook
 
 # =========================================================================
 # 1. COARE stability functions (Grachev–Fairall convective blend)
@@ -964,6 +980,300 @@ function step_surface!(s::SeaSurface, f::SurfaceForcing, dt::Real;
     r = sea_surface_solution(s, f; c = c)
     s.z0m, s.z0h, s.z0q = r.z0m, r.z0h, r.z0q
     return _fluxes(s, f, r, c)
+end
+
+# =========================================================================
+# 8. Sea spray (Andreas et al. 2015 fast algorithm)
+# =========================================================================
+
+"""
+    andreas_friction_velocity(U10N) -> u_* (m s⁻¹)
+
+The drag relation of Andreas, Mahrt & Vickers (2012), eq. (2.2) of
+Andreas et al. (2015): a hyperbola joining the smooth- and rough-flow
+straight lines of 5600 eddy-covariance stress measurements,
+
+    u_* = 0.239 + 0.0433 {(U - 8.271) + [0.120 (U - 8.271)² + 0.181]^{1/2}},
+
+with `U = U10N` the 10-m neutral wind (m s⁻¹). For high winds it tends to
+``u_* = 0.0583 U - 0.243`` (their eq. 2.3), i.e. ``C_{DN10}`` rolls off
+to ``3.40×10^{-3}`` (eq. 2.4).
+
+Andreas et al. (2015) tuned their spray wind functions
+([`AndreasSpray`](@ref)) against the bulk ``u_{*,B}`` of *this* drag
+relation and warn that the spray algorithm should be driven by it. It is
+provided so that a caller can do so; the bulk algorithm here
+([`air_sea_fluxes`](@ref)) uses COARE roughness, which gives a
+``u_*`` within a few per cent of this relation up to ~20 m s⁻¹.
+"""
+function andreas_friction_velocity(U10N::Real)
+    x = U10N - 8.271
+    return 0.239 + 0.0433 * (x + sqrt(0.120 * x^2 + 0.181))
+end
+
+"""
+    AndreasSpray(; VL = (1.76e-9, 2.08e-7, 2.39, 0.1358),
+                   VS = (3.92e-8, 5.02e-6, 2.54, 0.1480),
+                   r_latent = 50e-6, r_sensible = 100e-6,
+                   aerosol = Superdroplet.SEASALT_KAPPA,
+                   eos = OceanMixedLayer.UNESCOWaterEOS())
+
+The fast sea-spray heat-flux algorithm of Andreas et al. (2015) (Version
+4.0 of the Andreas bulk algorithm; the structure is that of Andreas,
+Persson & Hare 2008). Spray droplets torn from wave crests cool to their
+equilibrium temperature within seconds (sensible heat, given up by the
+ocean) and evaporate much more slowly (latent heat, which the air
+supplies). The two fluxes are represented by *bellwether* droplets — the
+50-µm droplets for the latent and the 100-µm droplets for the sensible
+flux (their eqs. 5.1–5.2):
+
+    H_{L,sp} = ρ_w L_v [1 - (r(τ_{f,50})/50 µm)³] V_L(u_*)
+    H_{s,sp} = ρ_w c_w (Θ_s - T_{eq,100}) V_S(u_*)
+
+with the wind functions fitted to ~4000 eddy-covariance flux
+measurements (their eqs. 5.5–5.6; m s⁻¹),
+
+    V_L = 1.76e-9                  (u_* ≤ 0.1358),   2.08e-7 u_*^{2.39}  above,
+    V_S = 3.92e-8                  (u_* ≤ 0.1480),   5.02e-6 u_*^{2.54}  above.
+
+The tuning constants α, β, γ of the full model (``H_{L,sp} = α Q_L``,
+``H_{s,sp} = β Q_S - (α - γ) Q_L``; α = 2.46, β = 15.15, γ = 1.77) are
+absorbed in ``V_L`` and ``V_S``; ``H_{s,sp}`` already contains the air
+cooling by droplet evaporation.
+
+`VL` and `VS` are `(low value, coefficient, exponent, u_* breakpoint)`.
+The droplet microphysics — equilibrium temperature
+([`spray_equilibrium_temperature`](@ref)), equilibrium radius and radius
+e-folding time ([`spray_radius_evolution`](@ref)) and the residence time
+in air ([`spray_residence_time`](@ref)) — are computed from the
+physics already in the package, not from Andreas's (2005) approximation
+formulas: κ-Köhler equilibrium from `MoistThermodynamics` with the
+sea-salt κ of `Superdroplet`, the diffusional growth resistances and fall
+speed of `Superdroplet`, and the seawater density of
+`OceanMixedLayer`. See [`sea_spray_fluxes`](@ref).
+"""
+Base.@kwdef struct AndreasSpray{T<:AbstractFloat, E<:AbstractWaterEOS}
+    VL::NTuple{4,T} = (1.76e-9, 2.08e-7, 2.39, 0.1358)
+    VS::NTuple{4,T} = (3.92e-8, 5.02e-6, 2.54, 0.1480)
+    r_latent::T = 50e-6
+    r_sensible::T = 100e-6
+    aerosol::AerosolProperties{T} = SEASALT_KAPPA
+    eos::E = UNESCOWaterEOS()
+end
+
+"""
+    spray_wind_functions(sp::AndreasSpray, u_star) -> (V_L, V_S)   (m s⁻¹)
+
+The wind functions of [`AndreasSpray`](@ref): constant below the
+breakpoints (``u_* ≈ 0.14`` m s⁻¹, ``U_{10} ≈ 4.5–5`` m s⁻¹, where
+whitecaps start) and power laws above.
+"""
+function spray_wind_functions(sp::AndreasSpray, u_star::Real)
+    VL = u_star <= sp.VL[4] ? sp.VL[1] : sp.VL[2] * u_star^sp.VL[3]
+    VS = u_star <= sp.VS[4] ? sp.VS[1] : sp.VS[2] * u_star^sp.VS[3]
+    return (V_L = VL, V_S = VS)
+end
+
+"""
+    spray_dry_radius(r0, S; T = 293.15, eos = UNESCOWaterEOS(), aerosol = SEASALT_KAPPA) -> m
+
+Radius of the sea salt in a droplet of initial radius `r0` (m) torn from
+seawater of salinity `S` (psu, g of salt per kg of seawater) at
+temperature `T` (K): salt mass ``ρ_{sw}(T,S)\\,(4π/3) r_0³\\, S/1000``,
+converted to a dry radius with the sea-salt density.
+"""
+function spray_dry_radius(r0::Real, S::Real; T::Real = 293.15,
+                          eos::AbstractWaterEOS = UNESCOWaterEOS(),
+                          aerosol::AerosolProperties = SEASALT_KAPPA)
+    S > 0 || throw(ArgumentError("spray_dry_radius: sea spray needs salinity S > 0"))
+    m_s = water_density(eos, T, S) * (4π / 3) * r0^3 * S / 1000
+    return dry_radius(m_s, aerosol)
+end
+
+"""
+    spray_equilibrium_temperature(r0; T_air, RH, p = 101325, S = 34, T_sea = T_air,
+                                  eos, aerosol, c = DEFAULT_SURFACE_CONSTANTS) -> T_eq (K)
+
+Temperature at which a saline droplet of radius `r0` loses by evaporation
+exactly the heat it gains by conduction from the air (Andreas 1995; the
+"saline wet-bulb" temperature):
+
+    k_a (T_a - T) = L_v D_v [a_w(r_0, T) e_s(T)/(R_v T) - RH e_s(T_a)/(R_v T_a)],
+
+with ``a_w`` the droplet's equilibrium saturation ratio (κ-Köhler:
+solute and curvature, `MoistThermodynamics.kohler_supersaturation`),
+``k_a`` and ``D_v`` from `Superdroplet`. Kinetic (gas-kinetic and
+ventilation) corrections affect ``k_a`` and ``D_v`` alike and are
+negligible for the 100-µm bellwether droplets; they are omitted. Below
+``RH = a_w`` the droplet is cooler than the air; above, warmer
+(Andreas et al. 2015, §6.2: above 98.1 % RH at 34 psu).
+"""
+function spray_equilibrium_temperature(r0::Real; T_air::Real, RH::Real, p::Real = 101325.0,
+                                       S::Real = 34.0, T_sea::Real = T_air,
+                                       eos::AbstractWaterEOS = UNESCOWaterEOS(),
+                                       aerosol::AerosolProperties = SEASALT_KAPPA,
+                                       c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    th = c.thermo
+    rd = spray_dry_radius(r0, S; T = T_sea, eos = eos, aerosol = aerosol)
+    Rv = R_v(th)
+    Ta = float(T_air)
+    ka = thermal_conductivity(Ta)
+    Dv = vapor_diffusivity(Ta, p)
+    Lv = latent_heat_vapor(Ta, th)
+    ρv_a = RH * saturation_vapor_pressure(Ta, th) / (Rv * Ta)
+    # G(T) = heat lost by evaporation - heat gained by conduction; increasing in T.
+    G(T) = Lv * Dv * ((1 + kohler_supersaturation(r0, rd, aerosol.κ, T, th)) *
+                      saturation_vapor_pressure(T, th) / (Rv * T) - ρv_a) - ka * (Ta - T)
+    lo, hi = Ta - 40, Ta + 20
+    T_eq, _, _ = _illinois(G, lo, hi, G(lo), G(hi), 200)
+    return T_eq
+end
+
+"""
+    spray_radius_evolution(r0; T_air, RH, p = 101325, S = 34, T_sea = T_air,
+                           eos, aerosol, c = DEFAULT_SURFACE_CONSTANTS) -> (r_eq, τ_r)
+
+Equilibrium radius `r_eq` (m) of a seawater droplet of initial radius
+`r0` at relative humidity `RH` (fraction) and its radius e-folding time
+`τ_r` (s), defined as in Andreas (1990): the time at which
+``(r - r_{eq})/(r_0 - r_{eq}) = e^{-1}``.
+
+`r_eq` is the stable κ-Köhler equilibrium
+(`MoistThermodynamics.kohler_equilibrium_radius`). `τ_r` comes from
+integrating the diffusional growth equation
+
+    r dr/dt = (RH - 1 - s_eq(r)) / (F_k + F_d)
+
+(``s_eq`` the same κ-Köhler curve, ``F_k``, ``F_d`` from `Superdroplet`)
+with classical RK4 on steps of 1/400 of the local relaxation time. The
+droplet is taken at air temperature in ``F_k + F_d``, which already
+accounts for its evaporative cooling (Mason's form). If ``RH`` equals
+the droplet's initial saturation ratio, `r_eq = r0` and `τ_r = Inf`.
+"""
+function spray_radius_evolution(r0::Real; T_air::Real, RH::Real, p::Real = 101325.0,
+                                S::Real = 34.0, T_sea::Real = T_air,
+                                eos::AbstractWaterEOS = UNESCOWaterEOS(),
+                                aerosol::AerosolProperties = SEASALT_KAPPA,
+                                c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    th = c.thermo
+    rd = spray_dry_radius(r0, S; T = T_sea, eos = eos, aerosol = aerosol)
+    κs = aerosol.κ
+    Ta = float(T_air)
+    s = RH - 1
+    r_eq = kohler_equilibrium_radius(s, rd, κs, Ta, th)
+    isnan(r_eq) && throw(ArgumentError("spray_radius_evolution: RH = $RH activates the droplet (no equilibrium)"))
+    Gc = 1 / (fk_thermal(Ta, DEFAULT_MICRO, th) + fd_vapor(Ta, p, DEFAULT_MICRO, th))
+    drdt(r) = (s - kohler_supersaturation(r, rd, κs, Ta, th)) * Gc / r
+    Δ0 = r0 - r_eq
+    abs(Δ0) <= 1e-9 * r0 && return (r_eq = r_eq, τ_r = oftype(float(r0), Inf))
+    target = r_eq + Δ0 / ℯ
+    t, r = 0.0, float(r0)
+    for _ in 1:1_000_000
+        k1 = drdt(r)
+        h = 0.0025 * abs((r - r_eq) / k1)
+        k2 = drdt(r + h / 2 * k1)
+        k3 = drdt(r + h / 2 * k2)
+        k4 = drdt(r + h * k3)
+        rn = r + h / 6 * (k1 + 2k2 + 2k3 + k4)
+        if (rn - target) * Δ0 <= 0            # crossed the e-folding radius
+            return (r_eq = r_eq, τ_r = t + h * (r - target) / (r - rn))
+        end
+        t, r = t + h, rn
+    end
+    throw(ErrorException("spray_radius_evolution: no convergence"))
+end
+
+"""
+    spray_residence_time(r0, H_s) -> τ_f (s)
+
+Time a spume droplet of initial radius `r0` spends in the air
+(Andreas et al. 2015, eq. 2.10): ``τ_f = H_{1/3}/(2 u_f(r_0))`` — it is
+lofted to about the significant wave amplitude ``H_s/2`` and falls back at
+its terminal speed (`Superdroplet.terminal_velocity`, Beard 1976).
+"""
+spray_residence_time(r0::Real, H_s::Real) = H_s / (2 * terminal_velocity(r0))
+
+"""
+    sea_spray_fluxes(sp::AndreasSpray = AndreasSpray(); u_star, T_sea, T_air, RH,
+                     p = 101325, S = 34, H_s, c = DEFAULT_SURFACE_CONSTANTS)
+        -> (H_L, H_S, E, T_eq, r_eq, τ_r, τ_f, r_f, V_L, V_S)
+
+Spray-mediated latent and sensible heat fluxes (W m⁻², positive upward)
+of the Andreas et al. (2015) fast algorithm (see [`AndreasSpray`](@ref)):
+
+  * `u_star` — bulk friction velocity of the interfacial algorithm (m s⁻¹);
+  * `T_sea` — temperature of the water the droplets are torn from (K;
+    the sub-skin / near-surface bulk temperature);
+  * `T_air`, `RH` — air temperature (K) and relative humidity (fraction)
+    at the reference height (10 m in the paper);
+  * `S` — salinity (psu); `H_s` — significant wave height (m).
+
+Returns also the spray evaporation `E = H_L/L_v` (kg m⁻² s⁻¹), the
+100-µm equilibrium temperature `T_eq`, and for the 50-µm droplet the
+equilibrium radius `r_eq`, e-folding time `τ_r`, residence time `τ_f` and
+the radius `r_f = r_eq + (r_0 - r_eq) e^{-τ_f/τ_r}` it has on falling back
+(their eq. 2.9). The total fluxes out of the droplet evaporation layer
+are the interfacial ones plus these (their eq. 2.1); as in Andreas et
+al., the spray does not feed back on the stability.
+
+Above ``RH ≈ a_w`` (≈ 98 % at 34 psu) the droplets grow and ``H_L`` is
+negative.
+"""
+function sea_spray_fluxes(sp::AndreasSpray = AndreasSpray(); u_star::Real, T_sea::Real,
+                          T_air::Real, RH::Real, p::Real = 101325.0, S::Real = 34.0,
+                          H_s::Real, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    th = c.thermo
+    V = spray_wind_functions(sp, u_star)
+    ρw = water_density(sp.eos, T_sea, S)
+    cw = cp_water(c)
+    Lv = latent_heat_vapor(T_air, th)
+    kw = (T_air = T_air, RH = RH, p = p, S = S, T_sea = T_sea, eos = sp.eos,
+          aerosol = sp.aerosol, c = c)
+    T_eq = spray_equilibrium_temperature(sp.r_sensible; kw...)
+    rl = spray_radius_evolution(sp.r_latent; kw...)
+    τ_f = spray_residence_time(sp.r_latent, H_s)
+    r_f = rl.r_eq + (sp.r_latent - rl.r_eq) * exp(-τ_f / rl.τ_r)
+    H_L = ρw * Lv * (1 - (r_f / sp.r_latent)^3) * V.V_L
+    H_S = ρw * cw * (T_sea - T_eq) * V.V_S
+    return (H_L = H_L, H_S = H_S, E = H_L / Lv, T_eq = T_eq, r_eq = rl.r_eq,
+            τ_r = rl.τ_r, τ_f = τ_f, r_f = r_f, V_L = V.V_L, V_S = V.V_S)
+end
+
+# =========================================================================
+# 9. Rain heat flux
+# =========================================================================
+
+"""
+    rain_heat_flux(rain; T_air, q_air, T_s, q_s, p = 101325,
+                   c = DEFAULT_SURFACE_CONSTANTS) -> W m⁻² (positive = ocean cooling)
+
+Sensible heat carried into the sea by rain falling at the wet-bulb
+temperature (Gosnell, Fairall & Webster 1995; Fairall et al. 1996b,
+eq. 23; the form of the COARE codes):
+
+    H_rain = R c_w α [(T_s - T_a) + (q_s - q_a) L_v/c_p],
+    α = [1 + (L_v/c_p)(dq_sat/dT)(D_v/κ_T)]^{-1},
+
+with `rain` ``R`` in kg m⁻² s⁻¹ (the contract's `SurfaceForcing.rain`),
+the Clausius–Clapeyron slope ``dq_{sat}/dT = L_v q_{sat}/(R_v T²)`` at the
+air temperature, vapour diffusivity ``D_v`` and thermal diffusivity
+``κ_T = k_a/(ρ_a c_p)`` of air (`Superdroplet`). The COARE reference
+codes evaluate the slope with the air's *actual* humidity instead of
+``q_{sat}``; the wet-bulb derivation calls for ``q_{sat}``, used here.
+"""
+function rain_heat_flux(rain::Real; T_air::Real, q_air::Real, T_s::Real, q_s::Real,
+                        p::Real = 101325.0, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    th = c.thermo
+    rain > 0 || return zero(float(rain))
+    pa = PhasePartition(q_air)
+    ρa = air_density(T_air, p, pa, th)
+    cpa = heat_capacity_moist(pa, th)
+    Lv = latent_heat_vapor(T_air, th)
+    κT = thermal_conductivity(T_air) / (ρa * cpa)
+    Dv = vapor_diffusivity(T_air, p)
+    dqdT = saturation_specific_humidity(T_air, p, th) * Lv / (R_v(th) * T_air^2)
+    α = 1 / (1 + Lv / cpa * dqdT * Dv / κT)
+    return rain * cp_water(c) * α * ((T_s - T_air) + (q_s - q_air) * Lv / cpa)
 end
 
 end # module
