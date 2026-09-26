@@ -68,4 +68,33 @@ _erfc(x) = Aeolus.erfc_series(x)
     @printf("  loam (40/20): k_dry %.3f, k_sat unfrozen %.3f, frozen %.3f W/m/K\n", kdry, ksat_u, ksat_f)
 end
 
+@testset "Clapeyron freezing and ice impedance" begin
+    # Clapeyron: ψ = L_f (T - T_f)/(g T); slope at T_f is ρ_w L_f/T_f ≈ 1.22 MPa/K
+    Tf = CST.thermo.T_freeze
+    slope = (freezing_matric_potential(Tf - 1e-4) - freezing_matric_potential(Tf - 2e-4)) / 1e-4
+    @test slope * CST.ρ_water * grav(CST) / 1e6 ≈ CST.ρ_water * LH_f0(CST) / Tf / 1e6 rtol = 1e-3
+    @test 1.21 < slope * CST.ρ_water * grav(CST) / 1e6 < 1.23
+    @test freezing_matric_potential(Tf + 1) == 0
+    @test freezing_onset_temperature(freezing_matric_potential(Tf - 3.0)) ≈ Tf - 3.0 rtol = 1e-14
+    h = carsel_parrish_texture(:loam)
+    @test supercooled_liquid_content(h, Tf + 1) == soil_porosity(h)
+    θs = [supercooled_liquid_content(h, Tf - d) for d in (0.01, 0.1, 1.0, 5.0)]
+    @test issorted(θs; rev = true)
+    @test θs[end] > residual_water_content(h)
+    # CLM power-law impedance 10^(-Ω θ_ice/θ_s)
+    imp = PowerLawIceImpedance()
+    @test SCT.ice_impedance_factor(imp, 0.0, 0.4) == 1
+    @test SCT.ice_impedance_factor(imp, 0.2, 0.4) ≈ 1e-3
+    @test SCT.ice_impedance_factor(imp, 0.5, 0.4) ≈ 1e-6          # capped at F_ice = 1
+    # ice counts as water in the retention curve: a layer holding ice has
+    # the potential of its total (liquid-equivalent) water
+    wc0 = SoilWaterColumn(uniform_soil_grid(1.0, 2), h; ψ = -1.0)
+    W0 = wc0.θ_liq[1]
+    wc0.θ_ice .= 0.1
+    set_water_content!(wc0, W0 - 0.917 * 0.1)
+    @test wc0.ψ ≈ [-1.0, -1.0] rtol = 1e-12
+    @printf("  loam supercooled water at -0.01, -0.1, -1, -5 °C: %s\n",
+            join((@sprintf("%.3f", x) for x in θs), ", "))
+end
+
 end # testset

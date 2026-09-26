@@ -101,7 +101,9 @@ export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
        SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal_properties,
        farouki_solids_conductivity, farouki_solids_heat_capacity,
        johansen_solids_conductivity, johansen_dry_conductivity, kersten_number,
-       soil_thermal_conductivity, soil_heat_capacity
+       soil_thermal_conductivity, soil_heat_capacity,
+       freezing_matric_potential, freezing_onset_temperature, supercooled_liquid_content,
+       PowerLawIceImpedance
 
 # =========================================================================
 # 1. Layer structure
@@ -780,15 +782,19 @@ or a water content `θ` (scalars or per-layer vectors; `θ` wins).
 |:--------- |:-------------------------------------------------------------- |
 | `ψ`       | matric potential of each layer, m                              |
 | `θ_liq`   | liquid water content, m³ m⁻³ — the conserved prognostic        |
-| `θ_ice`   | ice content, m³ m⁻³ (zero until the freeze–thaw model, #16)    |
-| `T_soil`  | layer temperature, K (prescribed until the heat equation, #16) |
+| `θ_ice`   | ice content, m³ m⁻³ (set by [`SoilThermalColumn`](@ref), #16)  |
+| `T_soil`  | layer temperature, K (prescribed, or by [`SoilThermalColumn`](@ref)) |
 | `top`, `bottom` | boundary conditions; a stateful `bottom` (#17's water table) lives here |
 | `budget`  | cumulative [`SoilWaterBudget`](@ref)                           |
 
 The layer conductivity is
 ``K_i = K(ψ_i)\\, μ(T_{ref})/μ(T_i)\\, f_{ice}(θ_{ice,i})``
 ([`viscosity_conductivity_factor`](@ref), [`ice_impedance_factor`](@ref));
-`temperature_dependent = false` drops the viscosity factor. Saturated
+`temperature_dependent = false` drops the viscosity factor. In a layer
+with pore ice the retention curve applies to the *total* water
+``θ_{liq} + (ρ_{ice}/ρ_w)θ_{ice}`` (as in CLM4.5 and later; Swenson et al.
+2012): phase change leaves ψ unchanged, and ice blocks flow through the
+impedance factor rather than through a suction. Saturated
 layers (``ψ ≥ ψ_{ae}``) store ``θ_s + S_s (ψ - ψ_{ae})`` with a small
 elastic `specific_storage` ``S_s`` (m⁻¹), which keeps the problem
 well-posed when the whole column is saturated. `gravity = false` gives
@@ -866,11 +872,17 @@ end
 
 # ---- constitutive relations of a layer (with storage, temperature, ice) ----
 
+# Liquid water content of layer i at potential ψ. Retention is a function
+# of the *total* water, liquid plus the liquid equivalent of the pore ice
+# (#16; Swenson et al. 2012), so freezing and thawing move water between
+# phases without changing ψ; with no ice this is the retention curve.
 function _layer_W(col, i, ψ)
     h = col.hydraulics[i]
     ψae = air_entry_potential(h)
-    ψ >= ψae ? soil_porosity(h) + col.specific_storage * (ψ - ψae) : soil_water_content(h, ψ)
+    W = ψ >= ψae ? soil_porosity(h) + col.specific_storage * (ψ - ψae) : soil_water_content(h, ψ)
+    return W - _ice_liquid_equivalent(col, i)
 end
+_ice_liquid_equivalent(col, i) = col.constants.ρ_ice / col.constants.ρ_water * col.θ_ice[i]
 function _layer_C(col, i, ψ)
     h = col.hydraulics[i]
     ψ >= air_entry_potential(h) ? col.specific_storage : soil_water_capacity(h, ψ)
@@ -930,18 +942,20 @@ end
 
 Set the liquid water content (scalar or per layer, m³ m⁻³) and the
 consistent matric potential. Contents above porosity are held by the
-elastic storage (``ψ = ψ_{ae} + (θ - θ_s)/S_s``).
+elastic storage (``ψ = ψ_{ae} + (θ - θ_s)/S_s``). With pore ice, ψ is
+that of the total water ``θ + (ρ_{ice}/ρ_w) θ_{ice}``.
 """
 function set_water_content!(col::SoilWaterColumn, θ)
     θv = _per_layer(θ, length(col.grid), "θ")
     for i in eachindex(col.ψ)
         h = col.hydraulics[i]
-        θv[i] > residual_water_content(h) ||
+        W = θv[i] + _ice_liquid_equivalent(col, i)       # total water, liquid equivalent
+        (θv[i] >= 0 && W > residual_water_content(h)) ||
             throw(ArgumentError("set_water_content!: θ must exceed the residual content of layer $i"))
         col.θ_liq[i] = θv[i]
-        col.ψ[i] = θv[i] >= soil_porosity(h) ?
-                   air_entry_potential(h) + (θv[i] - soil_porosity(h)) / col.specific_storage :
-                   soil_matric_potential(h, θv[i])
+        col.ψ[i] = W >= soil_porosity(h) ?
+                   air_entry_potential(h) + (W - soil_porosity(h)) / col.specific_storage :
+                   soil_matric_potential(h, W)
     end
     return col
 end
@@ -1085,7 +1099,8 @@ function _picard!(col::SoilWaterColumn{T}, dt, mode::Symbol, topval, sink) where
                                 αb + βb * ψ[N]
                 s = sink === nothing ? zero(T) : T(sink[i])
                 ws.θnew[i] = θn[i] + dt / g.dz[i] * (qprev - qnext - s)
-                ws.θnew[i] > residual_water_content(col.hydraulics[i]) ||
+                (ws.θnew[i] >= 0 && ws.θnew[i] + _ice_liquid_equivalent(col, i) >
+                                    residual_water_content(col.hydraulics[i])) ||
                     return (false, it, zero(T), zero(T))
                 qprev = qnext
             end
@@ -1409,5 +1424,67 @@ heats delegated to `MoistThermodynamics` through it.
 soil_heat_capacity(p::SoilThermalProperties, θ_s::Real, θ_liq::Real, θ_ice::Real;
                    c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
     p.c_solids * (1 - θ_s) + c.ρ_water * cp_water(c) * θ_liq + c.ρ_ice * cp_ice(c) * θ_ice
+
+# =========================================================================
+# 7. Freezing: Clapeyron equilibrium, enthalpy, ice impedance
+# =========================================================================
+
+"""
+    freezing_matric_potential(T; c = DEFAULT_SURFACE_CONSTANTS) -> ψ (m)
+
+Matric potential of liquid water in equilibrium with pore ice at
+temperature `T` < ``T_f``, by the generalised Clapeyron equation
+(Koopmans & Miller 1966; CLM5 supercooled water, Niu & Yang 2006):
+
+    ψ = L_f (T - T_f) / (g T)
+
+≈ −125 m (−1.2 MPa) per kelvin of undercooling. Zero at and above
+``T_f``. ``L_f``, ``g`` and ``T_f`` come from the Era V contract.
+"""
+function freezing_matric_potential(T::Real; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    Tf = c.thermo.T_freeze
+    T >= Tf && return zero(float(T))
+    return LH_f0(c) * (T - Tf) / (grav(c) * T)
+end
+
+"""
+    freezing_onset_temperature(ψ; c = DEFAULT_SURFACE_CONSTANTS) -> K
+
+Temperature at which water held at matric potential `ψ` ≤ 0 (m) starts
+to freeze — the inverse of [`freezing_matric_potential`](@ref),
+``T^* = L_f T_f / (L_f - g ψ)``.
+"""
+function freezing_onset_temperature(ψ::Real; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    L = LH_f0(c)
+    return L * c.thermo.T_freeze / (L - grav(c) * min(ψ, zero(ψ)))
+end
+
+"""
+    supercooled_liquid_content(h, T; c = DEFAULT_SURFACE_CONSTANTS) -> θ_liq,max
+
+Largest liquid water content soil `h` can hold at `T` in the presence of
+ice: the retention curve at [`freezing_matric_potential`](@ref) (the
+"freezing = drying" analogy; CLM5, Niu & Yang 2006, Dall'Amico et al.
+2011). Equals ``θ_s`` at and above ``T_f``.
+"""
+supercooled_liquid_content(h::AbstractHydraulicModel, T::Real;
+                           c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    soil_water_content(h, freezing_matric_potential(T; c = c))
+
+"""
+    PowerLawIceImpedance(; Ω = 6)
+
+Ice impedance of CLM4.5/CLM5 (Swenson et al. 2012): hydraulic
+conductivity is multiplied by ``10^{-Ω F_{ice}}`` with the ice fraction of
+the pore space ``F_{ice} = θ_{ice}/θ_s`` (capped at 1). ``Ω = 6``: a layer
+whose pores are half ice conducts 1000 times less.
+"""
+struct PowerLawIceImpedance{T<:AbstractFloat} <: AbstractIceImpedance
+    Ω::T
+end
+PowerLawIceImpedance(; Ω::Real = 6.0) =
+    (Ω >= 0 || throw(ArgumentError("PowerLawIceImpedance: Ω ≥ 0")); PowerLawIceImpedance{Float64}(Ω))
+ice_impedance_factor(imp::PowerLawIceImpedance, θ_ice::Real, θ_s::Real) =
+    exp10(-imp.Ω * clamp(θ_ice / θ_s, 0.0, 1.0))
 
 end # module
