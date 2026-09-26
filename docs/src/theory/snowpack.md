@@ -147,7 +147,7 @@ radiative cooling, melt, rain and hoar deposition: residuals
 |:--- |:--- |:--- |
 | `AbstractSnowMetamorphism`: `snow_metamorphism!`, `viscosity_grain_factor` | layers age, grains fixed, ``f_2 = 1`` | #35 grain metamorphism |
 | `AbstractSnowAlbedo`: `snowpack_albedo` | constant 0.8 | #35 albedo ageing (delegating to `SurfaceOptics.SnowSurface`) |
-| `AbstractSnowLiquidWater`: `snow_liquid_water!` | all liquid runs off at once | #36 percolation and refreezing |
+| `AbstractSnowLiquidWater`: `snow_liquid_water!` | all liquid runs off at once | #36: `SnowBucketPercolation`, `SnowGravityDrainage` (Sect. 8) |
 
 The pack books the enthalpy carried off by whatever runoff a
 liquid-water scheme returns, so conservation holds for any scheme that
@@ -176,6 +176,88 @@ either compaction law, the gap growing through the season. No SnowMIP
 site forcing is used here; site validation needs the albedo and
 liquid-water physics of #35 and #36.
 
+## 8. Liquid water: retention, refreezing, percolation
+
+Meltwater and rain enter the top layer as liquid. `InstantSnowRunoff`
+(the default, kept so that the dry-season results above are unchanged)
+drains it all within the step. Two schemes keep it in the pack.
+
+**Irreducible water.** Snow holds liquid against gravity up to an
+irreducible volumetric content ``θ_r(θ_i)``, with
+``θ_i = w_{ice}/(ρ_{ice}Δz)``. `ColeouLesaffre1998Retention` is the
+laboratory drainage result of Coléou & Lesaffre (1998) in the form used
+by SNOWPACK (Wever et al. 2014, Eq. 1):
+
+```math
+θ_r = \begin{cases}
+0.0264 + 0.0099\,(1-θ_i)/θ_i, & θ_i ≤ 0.23\\
+0.08 - 0.1023\,(θ_i - 0.03), & 0.23 < θ_i ≤ 0.812\\
+0, & θ_i > 0.812
+\end{cases}
+```
+
+(0.062 at 200 kg m⁻³, 0.050 at 300, 0.038 at 400).
+`PoreFractionRetention(fraction = f)` is ``θ_r = f(1-θ_i)``: Crocus's
+5 % of the pore volume (Vionnet et al. 2012, Eq. 19) or CLM's
+``S_r = 0.033``. For 0.1 m of 300 kg m⁻³ snow they hold 4.96 and
+3.36 kg m⁻² respectively.
+
+**Refreezing.** Liquid water in a layer colder than ``T_f`` refreezes at
+constant enthalpy. With cold content ``C(T_f - T)``
+(``C = w_{ice}c_{ice} + w_{liq}c_w``), everything freezes if
+``C(T_f-T) ≥ w_{liq}L_f`` and the layer warms to
+``T_f - (C(T_f-T) - w_{liq}L_f)/C'``; otherwise ``C(T_f-T)/L_f`` freezes
+and the layer ends at ``T_f``. The ice fills pores: the thickness does
+not change (Vionnet et al. 2012, Sect. 3.10). Water that arrives in a
+layer is first mixed in at constant enthalpy, then refrozen. The
+refrozen mass is booked in `SnowBudget.refreeze`, so that
+``Δ\sum w_{liq} = \text{melt} + \text{rain} - \text{refreeze} - \text{runoff}``.
+
+**Bucket** (`SnowBucketPercolation`, Crocus and CLM). From the top down,
+each layer refreezes what its cold content allows, retains
+``ρ_wΔzθ_r``, and passes the excess to the layer below within the step.
+Water leaving the bottom layer is runoff. If refrozen water would fill a
+layer's pores, the water that does not fit passes on; capillary barriers
+and ponding are not represented.
+
+**Gravity drainage** (`SnowGravityDrainage`). This is Richards' equation
+without the capillary-pressure term. It is the kinematic-wave model of
+Colbeck (1972), used in SNTHERM (Jordan 1991) and early Crocus:
+
+```math
+q = ρ_w K_s S_e^{3},\qquad S_e = \frac{θ_w-θ_r}{θ_s-θ_r},\qquad θ_s = 1-θ_i,
+```
+
+with the saturated hydraulic conductivity from the permeability of
+Calonne et al. (2012),
+``K_s = 0.75\,r_{es}^2 e^{-0.013ρ_{dry}}\,ρ_w g/μ``. The layer's optical
+grain radius (`grain`, which #35 evolves) is ``r_{es}``, and
+``μ = 1.792·10^{-3}`` Pa s (Wever et al. 2014). The layer fluxes are
+upwinded explicitly. Sub-steps keep the Courant number of the kinematic
+wave, ``dq/dθ = 3K_sS_e^2/(θ_s-θ_r)``, at 0.5 or below. No layer drains
+below ``θ_r`` or fills beyond ``θ_s``, and water arriving in a cold layer
+refreezes. Under a constant input ``q_0`` on dry snow the wetting front
+is a shock. Behind it the water content is ``θ_1``, set by
+``ρ_wK_sS_e(θ_1)^3 = q_0``, and it advances at
+``v = q_0/(ρ_wθ_1)``. Capillary suction and the van Genuchten retention
+curve of full Richards models (Wever et al. 2014) are not included, so
+neither are capillary barriers.
+
+| check | measured | reference |
+|:--- |:--- |:--- |
+| Retention laws | to 1e-12 | Wever et al. (2014) Eq. 1; Vionnet et al. (2012) Eq. 19 |
+| Refreezing, 1 layer, 3 water amounts | enthalpy to 1e-14, refrozen mass and temperature to 1e-12 | exact cold-content solution |
+| Bucket on a cold 5-layer pack, 3 rain amounts | refrozen / retained / runoff to 1e-10 (e.g. 3.159 / 30.251 / 7.000 kg m⁻²) | closed-form partition |
+| Kinematic wave, 1.5 m, 18 mm h⁻¹ | arrival 9.52 h vs 9.54 h (−0.22 %); θ behind front 0.1145 (to 1e-3); steady runoff 1.00000 q₀ (tested to 1e-3) | Colbeck (1972) shock |
+| Gravity drainage into −8 °C pack | refrozen 15.165 = cold content / L_f (to 1e-9); first runoff after 103 kg m⁻² (> 15.2 + 47.9) | cold content + retention |
+| 8 diurnal cycles + 21.6 mm rain, 3 schemes | mass residual ≤ 5e-14 kg m⁻², enthalpy residual ≤ 1e-7 J m⁻² of 6.2e7 | budget closure |
+
+In the diurnal run, the retaining schemes refreeze 24.5 kg m⁻² (bucket)
+and 28.8 kg m⁻² (gravity drainage) of meltwater and rain, and let none
+run off. Instant runoff loses 29.8 kg m⁻². Each afternoon's meltwater has
+refrozen by dawn until the rain day. None of this is compared with
+observations: SnowMIP lysimeter runoff is not used here.
+
 ## References
 
 - Anderson, E. A. (1976). *A point energy and mass balance model of a snow cover.* NOAA Tech. Rep. NWS 19.
@@ -186,3 +268,7 @@ liquid-water physics of #35 and #36.
 - Sturm, M., Taras, B., Liston, G. E., Derksen, C., Jonas, T. & Lea, J. (2010). *J. Hydrometeorol.*, 11, 1380-1394.
 - Vionnet, V. et al. (2012). *Geosci. Model Dev.*, 5, 773-791.
 - Yen, Y.-C. (1981). *Review of thermal properties of snow, ice and sea ice.* CRREL Rep. 81-10.
+- Calonne, N. et al. (2012). *The Cryosphere*, 6, 939-951.
+- Colbeck, S. C. (1972). A theory of water percolation in snow. *J. Glaciol.*, 11, 369-385.
+- Coléou, C. & Lesaffre, B. (1998). Irreducible water saturation in snow: experimental results in a cold laboratory. *Ann. Glaciol.*, 26, 64-68.
+- Wever, N. et al. (2014). Solving Richards Equation for snow improves snowpack meltwater runoff estimations. *The Cryosphere*, 8, 257-274.

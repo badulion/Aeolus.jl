@@ -17,6 +17,22 @@ Material laws are chosen by dispatch (`Anderson1976Compaction`,
 (#35) and liquid water (#36) plug in through `AbstractSnowMetamorphism`,
 `AbstractSnowAlbedo` and `AbstractSnowLiquidWater`.
 
+Liquid water (#36): `SnowBucketPercolation` (Crocus / CLM tipping
+bucket) and `SnowGravityDrainage` (Colbeck 1972 kinematic wave, i.e.
+Richards' equation without capillarity, with the Calonne et al. 2012
+permeability) retain water up to the irreducible content of
+`ColeouLesaffre1998Retention` or `PoreFractionRetention`, refreeze it in
+cold layers (`snow_refreeze!`) and return the rest as runoff. See
+[Layered snowpack, Sect. 8](../../theory/snowpack.md).
+
+```julia
+pack = LayeredSnowpack(depth = 0.6, density = 300.0, T = 268.0,
+                       liquid = SnowBucketPercolation())
+add_rainfall!(pack, 10.0, 274.0)
+runoff = snow_liquid_water!(pack.liquid, pack, 1800.0)
+pack.budget.refreeze, snow_liquid_water_content(pack)
+```
+
 ```julia
 using Aeolus
 pack = LayeredSnowpack(depth = 0.8, density = 200.0, T = 265.0,

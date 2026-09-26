@@ -25,9 +25,13 @@ Three hooks are deliberately left thin, for the phases that own them:
     [`AbstractSnowAlbedo`](@ref) (`snowpack_albedo`). The defaults age
     the layers but leave the grain size and a constant albedo alone.
   * **liquid water (#36)** — [`AbstractSnowLiquidWater`](@ref)
-    (`snow_liquid_water!`). The default drains all liquid water — melt
-    and rain — as runoff within the step; percolation, retention and
-    refreezing belong to #36.
+    (`snow_liquid_water!`). The default, `InstantSnowRunoff`, drains all
+    liquid water — melt and rain — as runoff within the step.
+    [`SnowBucketPercolation`](@ref) (Crocus / CLM) and
+    [`SnowGravityDrainage`](@ref) (Colbeck 1972 kinematic wave) retain
+    water up to an irreducible content ([`AbstractSnowWaterRetention`](@ref),
+    Coléou & Lesaffre 1998), refreeze it in cold layers
+    ([`snow_refreeze!`](@ref)) and release the rest at the base.
 
 Constants come from the contracts: ice and water density, ``k_{ice}``,
 ``k_{air}`` from `SurfaceExchange.SurfaceConstants`; ``c_{ice}``,
@@ -55,6 +59,17 @@ Constants come from the contracts: ice and water density, ``k_{ice}``,
   * Sturm, M., Taras, B., Liston, G. E., Derksen, C., Jonas, T. & Lea, J.
     (2010). Estimating snow water equivalent using snow depth data and
     climate classes. *J. Hydrometeorol.*, 11, 1380-1394.
+  * Coléou, C. & Lesaffre, B. (1998). Irreducible water saturation in
+    snow: experimental results in a cold laboratory. *Ann. Glaciol.*, 26,
+    64-68.
+  * Colbeck, S. C. (1972). A theory of water percolation in snow.
+    *J. Glaciol.*, 11, 369-385.
+  * Calonne, N. et al. (2012). 3-D image-based numerical computations of
+    snow permeability. *The Cryosphere*, 6, 939-951.
+  * Wever, N., Fierz, C., Mitterer, C., Hirashima, H. & Lehning, M. (2014).
+    Solving Richards Equation for snow improves snowpack meltwater runoff
+    estimations in detailed multi-layer snowpack model. *The Cryosphere*,
+    8, 257-274.
 """
 module Snowpack
 
@@ -855,7 +870,7 @@ the layer is returned to ``T_f``. The layer thins in proportion to the
 ice lost — its density is unchanged, which is CLM's compaction-by-melt
 term ``C_{R3}`` applied exactly. Energy left over when a layer melts out
 passes to the layer below, and from the bottom layer into the substrate.
-Refreezing of retained water is the liquid-water scheme's (#36).
+Refreezing of retained water is the liquid-water scheme's ([`snow_refreeze!`](@ref)).
 """
 function snow_phase_change!(p::LayeredSnowpack)
     c = p.consts
@@ -1097,8 +1112,9 @@ Advance the snowpack by `dt` seconds:
     removed and the unspent latent heat is added to `G` and passed to the
     substrate, so ``R_n = H + LE + G`` still holds); rain and snowfall (density from
     `fresh_density`, at `forcing.T_air` and `forcing.U`);
- 5. melt, the liquid-water hook, compaction, the metamorphism hook, and
-    relayering.
+ 5. melt, the liquid-water hook (percolation, refreezing and runoff of
+    retained water under `SnowBucketPercolation` / `SnowGravityDrainage`),
+    compaction, the metamorphism hook, and relayering.
 
 Without snow, the fluxes of a surface at the bare-ground temperature are
 returned (not applied) and precipitation is processed.
@@ -1340,7 +1356,7 @@ end
 
 Saturated hydraulic conductivity of snow of dry density `ρ_dry`
 (kg m⁻³) and equivalent-sphere (optical) grain radius `r_es` (m), from
-the permeability Calonne et al. (2012, Eq. 7) computed on 3-D
+the permeability Calonne et al. (2012) computed on 3-D
 tomography images, ``k = 0.75\\, r_{es}^2 \\exp(-0.013 ρ_{dry})`` (m²),
 converted with ``K_s = k ρ_w g / μ`` (μ: viscosity of water at 0 °C,
 Pa s; Wever et al. 2014, Eq. 14). For ``r_{es} = 0.5`` mm and
