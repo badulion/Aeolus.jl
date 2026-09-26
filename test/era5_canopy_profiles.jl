@@ -239,7 +239,7 @@ end
     @printf("      max |ΔU/U_h| in canopy %.3f, above canopy max rel. err %.3f, max |Δτ/τ_h| %.3f, u*/U_h %.3f, d/h %.3f\n",
             err_in, err_above, err_τ, sqrt(m.τ_h) / m.U_h, m.d / h)
     # Mean wind through the canopy depth to within 0.05 U_h (measured 0.021)
-    # and above it to within 8 % (measured 4.7 %).
+    # and above it to within 8 % (measured 6.2 %).
     @test err_in < 0.05
     @test err_above < 0.08
     # Stress: the momentum absorbed by the upper canopy is under-predicted

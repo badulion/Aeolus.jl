@@ -102,7 +102,8 @@ sink it exerts on the resolved flow:
     Meteorol.*, 146, 29-37 (observed leaf-to-air temperature differences).
   * Incropera, F. P., DeWitt, D. P., Bergman, T. L. & Lavine, A. S. (2007).
     *Fundamentals of Heat and Mass Transfer*, 6th ed. Wiley — the laminar
-    flat-plate correlations behind the Campbell & Norman coefficients.  * Harman, I. N. & Finnigan, J. J. (2008). Scalar concentration profiles
+    flat-plate correlations behind the Campbell & Norman coefficients.
+  * Harman, I. N. & Finnigan, J. J. (2008). Scalar concentration profiles
     in the canopy and roughness sublayer. *Boundary-Layer Meteorol.*, 129,
     323-351.
   * Thom, A. S. (1971). Momentum absorption by vegetation. *Q. J. R.
