@@ -8,12 +8,14 @@ surface energy balance with the atmosphere. The result, `SoilThermalColumn`
 in `src/SoilColumn.jl`, is an `AbstractSurface` of the
 [Era V contract](surface_exchange.md).
 
-Why it matters: a surface without a ground heat flux has only radiation
-and turbulence to cool it at night. The single-slab `step_soil!` of the
-urban example once computed the conduction flux into the soil and never
-took it out of the skin; that removed about half of the nocturnal cooling
-(and nearly all of it in deep canyons) — see the commit history. The
-conducting column is the real nocturnal heat source for the skin.
+Why it matters: without a ground heat flux the skin is decoupled from
+the heat stored below it. The single-slab `step_soil!` of the urban
+example once computed the conduction flux into the soil and never took
+it out of the skin; for the hot urban surfaces of that run the omission
+removed roughly half of the evening cooling (nearly all of it in deep
+canyons) — commit 2b31389. The flux works both ways: it drains a skin
+warmer than the soil beneath and, on a clear night over cooler air,
+feeds heat back to a radiatively cooling skin (section 5).
 
 ## 1. Thermal properties
 
@@ -79,7 +81,8 @@ phase to move.
 
 **Ice in the water solver.** The retention curve of the water column is
 applied to the *total* water ``W = \theta_{liq} + (\rho_{ice}/\rho_w)\theta_{ice}``
-(as CLM4.5 onward, Swenson et al. 2012): freezing moves water between
+(after CLM4.5 onward, Swenson et al. 2012, which use the liquid-plus-ice
+volume; see the end of this paragraph): freezing moves water between
 phases at constant ``\psi``, and ice acts through the impedance factor
 ``10^{-\Omega\,\theta_{ice}/\theta_s}`` with ``\Omega = 6``
 (`PowerLawIceImpedance`) and the viscosity of cold water, rather than
@@ -199,9 +202,11 @@ the loam at ``\theta = 0.3`` (``k`` = 2.02 W m⁻¹ K⁻¹, ``C`` = 2.52 MJ m⁻
 | annual (Δz 0.1 m, Δt 12 h) | 2.84 m | 0.3654, 0.1356 | 0.3661, 0.1364 | 1.007, 1.989 | 0.7830 |
 
 (π/4 = 0.7854; the ground-flux amplitude matches ``A\sqrt{kC\omega}`` to
-1e-4). The residual amplitude error is mostly the numerical damping of
-backward Euler and shrinks under refinement: at 3d it is 3.9 %, 1.5 %
-and 0.9 % for (Δz, Δt) = (10 mm, 600 s), (5 mm, 150 s), (2.5 mm, 37.5 s).
+1e-4). The residual amplitude error has two parts: the numerical damping
+of backward Euler, and the start-up transient left after the six cycles
+the test runs. At 3d it is −4.2 %, −1.8 % and −1.2 % after 6 cycles, and
+−3.4 %, −1.0 % and −0.36 % after 16, for (Δz, Δt) = (10 mm, 600 s),
+(5 mm, 150 s), (2.5 mm, 37.5 s).
 
 **Energy conservation.** Forty days of freezing and thawing a layered
 CLM5 column under ±80 W m⁻² with a geothermal base, both freezing modes:

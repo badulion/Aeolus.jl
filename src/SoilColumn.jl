@@ -834,8 +834,10 @@ The layer conductivity is
 ([`viscosity_conductivity_factor`](@ref), [`ice_impedance_factor`](@ref));
 `temperature_dependent = false` drops the viscosity factor. In a layer
 with pore ice the retention curve applies to the *total* water
-``θ_{liq} + (ρ_{ice}/ρ_w)θ_{ice}`` (as in CLM4.5 and later; Swenson et al.
-2012): phase change leaves ψ unchanged, and ice blocks flow through the
+``θ_{liq} + (ρ_{ice}/ρ_w)θ_{ice}`` (after CLM4.5 and later, Swenson et al.
+2012, which use the liquid-plus-ice *volume*; the liquid equivalent is
+used here so that the 9 % expansion on freezing does not register as
+over-saturation): phase change leaves ψ unchanged, and ice blocks flow through the
 impedance factor rather than through a suction. Saturated
 layers (``ψ ≥ ψ_{ae}``) store ``θ_s + S_s (ψ - ψ_{ae})`` with a small
 elastic `specific_storage` ``S_s`` (m⁻¹), which keeps the problem
@@ -916,7 +918,7 @@ end
 
 # Liquid water content of layer i at potential ψ. Retention is a function
 # of the *total* water, liquid plus the liquid equivalent of the pore ice
-# (#16; Swenson et al. 2012), so freezing and thawing move water between
+# (#16; after CLM4.5, Swenson et al. 2012, which sums ice *volume*), so freezing and thawing move water between
 # phases without changing ψ; with no ice this is the retention curve.
 function _layer_W(col, i, ψ)
     h = col.hydraulics[i]
@@ -2152,8 +2154,9 @@ freeze–thaw, then soil water.
     Evaporation is capped by the liquid water of the top layer.
  2. [`step_soil_heat!`](@ref) with a [`LinearizedSkinBalance`](@ref):
     the skin temperature and the soil temperatures are solved together,
-    implicitly, so the ground heat flux is the real nocturnal sink the
-    slab model lacked.
+    implicitly, so the ground heat flux couples the skin to the soil's
+    heat store — a sink for a skin warmer than the soil, a source for a
+    skin cooling below it at night.
  3. The returned `SurfaceFluxes` are the linearised fluxes at the
     time-mean skin temperature of the step, so ``R_n - H - LE = G`` and
     ``G\\,dt`` is exactly the energy the soil received.
