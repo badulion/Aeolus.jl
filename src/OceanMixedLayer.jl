@@ -85,7 +85,11 @@ using ..SurfaceOptics: material_emissivity
 export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
        water_density, water_thermal_expansion, water_haline_contraction,
        SolarBands, jerlov_water, soloviev_solar,
-       solar_transmission, solar_absorbed_between, solar_mean_transmission
+       solar_transmission, solar_absorbed_between, solar_mean_transmission,
+       CoolSkin, cool_skin,
+       BusingerDyerLogLinear,
+       AbstractWarmLayer, NoWarmLayer, FairallWarmLayer, ZengBeljaarsWarmLayer,
+       step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth
 
 const _T0C = 273.15   # K at 0 °C
 
@@ -314,6 +318,291 @@ function solar_mean_transmission(p::SolarBands, D::Real)
         s += p.fractions[i] * ζ * (-expm1(-D / ζ))
     end
     return s / D
+end
+
+# =========================================================================
+# 3. Cool skin
+# =========================================================================
+
+"""
+    CoolSkin(; ν_w = 1e-6, λ0 = 6.0, δ_max = 0.01,
+               f_s = (0.065, 11.0, 6.6e-5, 8e-4), maxiter = 50)
+
+Parameters of the Fairall et al. (1996a) cool skin: kinematic viscosity
+of water `ν_w` (m² s⁻¹), Saunders' constant `λ0`, the cap `δ_max` (m) on
+the sublayer thickness when the skin is not convectively unstable, and
+the coefficients of the fraction of net shortwave absorbed in the skin,
+
+    f_s(δ) = a + b δ - (c/δ) (1 - e^{-δ/d})
+
+(Fairall et al. 1996a eq. 16 with the COARE 3.0+ value a = 0.065 of
+Fairall et al. 2003, replacing the original 0.137).
+"""
+Base.@kwdef struct CoolSkin{T<:AbstractFloat}
+    ν_w::T = 1e-6
+    λ0::T = 6.0
+    δ_max::T = 0.01
+    f_s::NTuple{4,T} = (0.065, 11.0, 6.6e-5, 8e-4)
+    maxiter::Int = 50
+end
+
+_skin_solar_fraction(cs::CoolSkin, δ) =
+    cs.f_s[1] + cs.f_s[2] * δ - cs.f_s[3] / δ * (-expm1(-δ / cs.f_s[4]))
+
+"""
+    cool_skin(cs::CoolSkin, Q_out, sw_net, LE, u_star_w;
+              α, βS = 0, ρ_w, c_w, k_w, g, L_v, δ0 = 1e-3)
+        -> (ΔT, δ, f_s)
+
+Cool-skin temperature depression ``ΔT = T_{-δ} - T_{skin}`` (K,
+positive when the skin is cooler than the water just below it) and the
+conductive sublayer thickness `δ` (m) (Saunders 1967; Fairall et al.
+1996a):
+
+    q_c = Q_out - f_s(δ) SW_net,          ΔT = q_c δ / k_w
+    δ   = λ ν_w / u_{*w},  λ = λ0 [1 + (16 g c_w ρ_w ν_w³ B / (k_w² u_{*w}⁴))^{3/4}]^{-1/3}
+
+with the water-side buoyancy flux (in heat-flux units)
+``B = α q_c + βS c_w LE / L_v`` — the second term is the salt left
+behind by evaporation, with `βS` = haline contraction × salinity (0 for
+a lake). If ``B ≤ 0`` the skin is not convective and
+``δ = \\min(δ_{max}, λ_0 ν_w / u_{*w})``. The fixed point in δ (f_s
+depends on δ) is iterated to machine precision.
+
+Inputs (W m⁻², positive as named): `Q_out` the non-solar heat loss
+``LW_{up,net} + H + LE``, `sw_net` the net shortwave into the water,
+`LE` the latent heat flux, `u_star_w` the water-side friction velocity
+``u_* \\sqrt{ρ_a/ρ_w}``.
+"""
+function cool_skin(cs::CoolSkin, Q_out::Real, sw_net::Real, LE::Real, u_star_w::Real;
+                   α::Real, βS::Real = 0.0, ρ_w::Real, c_w::Real, k_w::Real,
+                   g::Real, L_v::Real, δ0::Real = 1e-3)
+    T = float(promote_type(typeof(Q_out), typeof(sw_net), typeof(LE), typeof(u_star_w)))
+    u = max(T(u_star_w), T(1e-6))
+    ν = T(cs.ν_w)
+    bigc = 16 * T(g) * T(c_w) * T(ρ_w) * ν^3 / T(k_w)^2
+    δ = T(δ0)
+    fs = _skin_solar_fraction(cs, δ)
+    qc = T(Q_out) - fs * T(sw_net)
+    for _ in 1:cs.maxiter
+        fs = _skin_solar_fraction(cs, δ)
+        qc = T(Q_out) - fs * T(sw_net)
+        B = T(α) * qc + T(βS) * T(c_w) * T(LE) / T(L_v)
+        δnew = if B > 0
+            λ = cs.λ0 / (1 + (bigc * B / u^4)^(3 / 4))^(1 / 3)
+            λ * ν / u
+        else
+            min(T(cs.δ_max), cs.λ0 * ν / u)
+        end
+        conv = abs(δnew - δ) <= 8 * eps(T) * δnew
+        δ = δnew
+        conv && break
+    end
+    fs = _skin_solar_fraction(cs, δ)
+    qc = T(Q_out) - fs * T(sw_net)
+    return (ΔT = qc * δ / T(k_w), δ = δ, f_s = fs)
+end
+
+# =========================================================================
+# 4. Diurnal warm layer
+# =========================================================================
+
+"""
+    BusingerDyerLogLinear(; γ_m = 16, γ_h = 16, β = 5)
+
+Monin–Obukhov functions with the classical *log-linear* stable branch,
+``φ_m = φ_h = 1 + βζ`` and ``ψ = -βζ`` for ``ζ ≥ 0`` (Businger et al.
+1971; Dyer 1974). The unstable branch is delegated to
+`SurfaceExchange.BusingerDyerBeljaarsHoltslag` with the same γ, so the
+two families agree exactly for ``ζ < 0``. This is the water-side
+``φ_t`` of Zeng & Beljaars (2005) (IFS Cy43r1 eq. 8.158).
+"""
+Base.@kwdef struct BusingerDyerLogLinear{T<:AbstractFloat} <: AbstractStabilityFunctions
+    γ_m::T = 16.0
+    γ_h::T = 16.0
+    β::T = 5.0
+end
+_unstable(sf::BusingerDyerLogLinear) = BusingerDyerBeljaarsHoltslag(γ_m = sf.γ_m, γ_h = sf.γ_h)
+phi_m(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? phi_m(_unstable(sf), ζ) : 1 + sf.β * ζ
+phi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? phi_h(_unstable(sf), ζ) : 1 + sf.β * ζ
+psi_m(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_m(_unstable(sf), ζ) : -sf.β * ζ
+psi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_h(_unstable(sf), ζ) : -sf.β * ζ
+
+"""
+    AbstractWarmLayer
+
+A diurnal warm-layer scheme: the stably stratified, solar-heated layer a
+few metres deep that forms under weak wind. Implementations carry their
+own state and provide
+
+  * `step_warm_layer!(wl, sw_net, q_out, τ, dt; α, ρ_w, c_w, g, κ)` —
+    advance by `dt` (s) under net shortwave `sw_net` into the water,
+    non-solar heat loss `q_out` (``LW_{up,net} + H + LE``, W m⁻², positive
+    cooling the water) and wind stress `τ` (N m⁻²); `α` is the thermal
+    expansion of the water;
+  * `warm_layer_warming(wl)` — warming across the whole layer,
+    ``T(0^-) - T(-D)`` (K), and `warm_layer_warming(wl, z)` the part
+    between the surface and depth `z` (m);
+  * `warm_layer_depth(wl)` (m) and `reset_warm_layer!(wl)`.
+"""
+abstract type AbstractWarmLayer end
+
+"""
+    NoWarmLayer()
+
+No sub-grid warm layer: the top layer of the column is the bulk
+temperature right up to the skin. The right choice when the column's
+top layer is thin enough (≲ 0.5 m) to resolve the warm layer itself.
+"""
+struct NoWarmLayer <: AbstractWarmLayer end
+step_warm_layer!(::NoWarmLayer, args...; kwargs...) = 0.0
+warm_layer_warming(::NoWarmLayer, z::Real = 0.0) = 0.0
+warm_layer_depth(::NoWarmLayer) = 0.0
+reset_warm_layer!(w::NoWarmLayer) = w
+
+"""
+    FairallWarmLayer(; Ri_c = 0.65, D_max = 19, q_onset = 50, τ_min = 0.002,
+                       solar = soloviev_solar(:coare))
+
+The diurnal warm layer of Fairall et al. (1996b), exactly as coded in
+COARE 3.x (`coare36vnWarm_et`). From the moment the absorbed heat
+``q = f_x SW_{net} - q_{out}`` first exceeds `q_onset` (W m⁻²) in a day,
+the heat and momentum put into the layer are accumulated,
+
+    Q_ac = ∫ q dt,    I_ac = ∫ max(τ, τ_min) dt,
+
+and a layer with a linear temperature and velocity profile, marginally
+stable at critical Richardson number `Ri_c`, has depth and warming
+
+    D  = I_ac [2 Ri_c c_w / (α g ρ_w Q_ac)]^{1/2}  (≤ D_max),
+    ΔT = 2 Q_ac / (ρ_w c_w D).
+
+The absorbed solar fraction ``f_x = 1 - (1/D)∫_0^D I(z)/I_0 dz`` is
+iterated five times with D, as in the reference code. If the
+accumulated heat turns negative the layer is wiped out (``f_x = 0.75``,
+``D = D_{max}``). The scheme is diagnostic in the accumulated integrals
+and assumes a *daily* reset: call [`reset_warm_layer!`](@ref) at local
+midnight (the [`WaterColumn`](@ref) does this from its `local_time`).
+"""
+Base.@kwdef mutable struct FairallWarmLayer{T<:AbstractFloat,P<:SolarBands} <: AbstractWarmLayer
+    Ri_c::T = 0.65
+    D_max::T = 19.0
+    q_onset::T = 50.0
+    τ_min::T = 0.002
+    solar::P = soloviev_solar(:coare)
+    # state
+    Q_ac::T = 0.0        # accumulated heat, J m⁻²
+    I_ac::T = 0.0        # accumulated momentum, N s m⁻²
+    D::T = 19.0          # depth, m
+    fx::T = 0.5          # absorbed solar fraction
+    active::Bool = false # onset threshold crossed today
+    ΔT::T = 0.0          # warming across the layer, K
+end
+
+function reset_warm_layer!(w::FairallWarmLayer)
+    w.Q_ac = 0; w.I_ac = 0; w.D = w.D_max; w.fx = 0.5; w.active = false; w.ΔT = 0
+    return w
+end
+warm_layer_depth(w::FairallWarmLayer) = w.D
+"Warming ``T(0) - T(-z)`` of a linear profile: `ΔT min(z, D)/D`."
+warm_layer_warming(w::FairallWarmLayer) = w.ΔT
+warm_layer_warming(w::FairallWarmLayer, z::Real) = w.D <= z ? w.ΔT : w.ΔT * z / w.D
+
+function step_warm_layer!(w::FairallWarmLayer, sw_net::Real, q_out::Real, τ::Real, dt::Real;
+                          α::Real, ρ_w::Real, c_w::Real, g::Real, κ::Real = 0.4)
+    ctd1 = sqrt(2 * w.Ri_c * c_w / (α * g * ρ_w))
+    ctd2 = sqrt(2 * α * g / (w.Ri_c * ρ_w)) / c_w^1.5
+    q = w.fx * sw_net - q_out
+    (q >= w.q_onset || w.active) || return w.ΔT
+    w.active = true
+    w.I_ac += max(w.τ_min, τ) * dt
+    if w.Q_ac + q * dt > 0
+        qj = zero(w.Q_ac)
+        for _ in 1:5
+            w.fx = 1 - solar_mean_transmission(w.solar, w.D)
+            qj = (w.fx * sw_net - q_out) * dt
+            if w.Q_ac + qj > 0
+                w.D = min(w.D_max, ctd1 * w.I_ac / sqrt(w.Q_ac + qj))
+            end
+        end
+    else                                     # warm layer wiped out
+        w.fx = 0.75
+        w.D = w.D_max
+        qj = (w.fx * sw_net - q_out) * dt
+    end
+    w.Q_ac += qj
+    w.ΔT = w.Q_ac > 0 ? ctd2 * w.Q_ac^1.5 / w.I_ac : zero(w.ΔT)
+    return w.ΔT
+end
+
+"""
+    ZengBeljaarsWarmLayer(; d = 3, ν = 0.3, solar = soloviev_solar(:zeng_beljaars),
+                            stability = BusingerDyerLogLinear(), ΔT = 0)
+
+The prognostic warm layer of Zeng & Beljaars (2005), as in the IFS
+(Cy43r1 Part IV §8.10.2). With the similarity profile
+``T(z) - T(-d) = ΔT [1 - (-z/d)^ν]``, the warming ``ΔT = T_{-δ} - T_{-d}``
+obeys
+
+    ∂ΔT/∂t = (Q + R_s - R(-d)) / (d ρ_w c_w ν/(ν+1)) - (ν+1) κ u_{*w} ΔT / (d φ_t(d/L))
+
+with ``Q = -q_{out}`` the net non-solar flux into the water, ``R_s -
+R(-d)`` the shortwave absorbed above depth `d`, water-side friction
+velocity ``u_{*w} = \\sqrt{τ/ρ_w}``, ``L = ρ_w c_w u_{*w}^3/(κ F_d)`` and
+buoyancy flux
+
+    F_d = g α (Q + R_s - R(-d))                            if ΔT ≤ 0
+    F_d = ρ_w c_w u_{*w}² (ν g α ΔT / (5 d))^{1/2}          if ΔT > 0.
+
+Integrated with the damping term implicit (unconditionally stable).
+Being prognostic, it needs no daily reset and a residual layer can
+survive a calm night. ΔT is kept ≥ 0: a layer colder than its base is
+convectively unstable and is mixed away.
+
+At steady state under constant forcing the neutral (φ_t = 1) limit is
+``ΔT = (Q + R_s - R(-d)) / (ρ_w c_w ν κ u_{*w})``.
+"""
+Base.@kwdef mutable struct ZengBeljaarsWarmLayer{T<:AbstractFloat,P<:SolarBands,
+                                                 F<:AbstractStabilityFunctions} <: AbstractWarmLayer
+    d::T = 3.0
+    ν::T = 0.3
+    solar::P = soloviev_solar(:zeng_beljaars)
+    stability::F = BusingerDyerLogLinear()
+    ΔT::T = 0.0
+end
+
+reset_warm_layer!(w::ZengBeljaarsWarmLayer) = (w.ΔT = 0; w)
+warm_layer_depth(w::ZengBeljaarsWarmLayer) = w.d
+warm_layer_warming(w::ZengBeljaarsWarmLayer) = w.ΔT
+"Warming between the surface and depth `z`: ``ΔT \\min(z/d, 1)^ν``."
+warm_layer_warming(w::ZengBeljaarsWarmLayer, z::Real) = w.ΔT * min(max(z, 0) / w.d, 1)^w.ν
+
+"""
+    OceanMixedLayer.zeng_beljaars_tendency(w, ΔT, sw_net, q_out, u_star_w; α, ρ_w, c_w, g, κ)
+        -> (source, damping)
+
+The two terms of the Zeng–Beljaars equation, ``∂ΔT/∂t = source -
+damping × ΔT``, with φ_t evaluated at the given ΔT.
+"""
+function zeng_beljaars_tendency(w::ZengBeljaarsWarmLayer, ΔT::Real, sw_net::Real, q_out::Real,
+                                u_star_w::Real; α::Real, ρ_w::Real, c_w::Real, g::Real,
+                                κ::Real = 0.4)
+    d, ν = w.d, w.ν
+    u = max(u_star_w, 1e-5)
+    Qd = -q_out + sw_net * (1 - solar_transmission(w.solar, d))
+    Fd = ΔT > 0 ? ρ_w * c_w * u^2 * sqrt(ν * g * α * ΔT / (5 * d)) : g * α * Qd
+    ζ = d * κ * Fd / (ρ_w * c_w * u^3)          # d/L
+    φ = phi_h(w.stability, ζ)
+    return Qd / (d * ρ_w * c_w * ν / (ν + 1)), (ν + 1) * κ * u / (d * φ)
+end
+
+function step_warm_layer!(w::ZengBeljaarsWarmLayer, sw_net::Real, q_out::Real, τ::Real, dt::Real;
+                          α::Real, ρ_w::Real, c_w::Real, g::Real, κ::Real = 0.4)
+    u = sqrt(max(τ, 0) / ρ_w)
+    A, B = zeng_beljaars_tendency(w, w.ΔT, sw_net, q_out, u; α = α, ρ_w = ρ_w,
+                                  c_w = c_w, g = g, κ = κ)
+    w.ΔT = max(zero(w.ΔT), (w.ΔT + dt * A) / (1 + dt * B))
+    return w.ΔT
 end
 
 end # module
