@@ -315,4 +315,85 @@ end
         @test hb3.Q_cooling_sensible ≈ hb.Q_cooling_sensible rtol = 1e-12
         @test zone_relative_humidity(z3) > 0.6
     end
+
+    @testset "AC feedback: exhaust heat amplifies the canyon heat island" begin
+        # A well-mixed canyon air volume (heat capacity C_c) exchanging with the
+        # rural air T_r through K (W/K), heated by a background Q0 and by the
+        # sensible exhaust of an air-cooled AC whose zone sees T_out = T_c.
+        # Linear analysis with constant COP: the exhaust is
+        # E = (1 + 1/COP)(H (T_c - T_set) + G), so the steady canyon satisfies
+        # K (T_c - T_r) = Q0 + E, a loop of gain g = (1 + 1/COP) H / K:
+        #   T_c = [T_r + (Q0 + (1 + 1/COP)(G - H T_set))/K] / (1 - g).
+        T_r, T_set, Q0, K, G, C_c = 303.15, 299.15, 3000.0, 1000.0, 2000.0, 2e6
+        function canyon(h; exhaust = true, nsteps = 4000, dt = 600.0)
+            local z = hvac_air_box(T = T_set)
+            local Tcan = T_r
+            local hbk = nothing
+            for k in 1:nsteps
+                _, hbk = step_zone!(z, ZoneForcing(T_out = Tcan, Q_internal = G), dt, h)
+                E = exhaust ? hbk.Q_exhaust_sensible : 0.0
+                Tcan = (C_c / dt * Tcan + K * T_r + Q0 + E) / (C_c / dt + K)   # implicit canyon
+            end
+            return Tcan, hbk
+        end
+        H = zone_heat_loss_coefficient(hvac_air_box(T = T_set))
+        hc = IdealLoadsHVAC(T_cool = T_set, curves = nothing, cop_rated = 3.0)
+        a = 1 + 1 / 3.0
+        g = a * H / K
+        T_an = (T_r + (Q0 + a * (G - H * T_set)) / K) / (1 - g)
+        T_c, _ = canyon(hc)
+        T_c0, _ = canyon(hc; exhaust = false)
+        ΔT_ac = T_c - T_c0                                  # warming by the AC exhaust
+        E_open = a * (H * (T_c0 - T_set) + G)               # exhaust if it did not feed back
+        @printf("  AC feedback: H = %.1f W/K, loop gain g = %.4f; T_c = %.4f K (analytic %.4f), no-exhaust %.4f K\n",
+                H, g, T_c, T_an, T_c0)
+        @printf("  exhaust warming %.4f K vs open-loop %.4f K: amplification %.4f (1/(1-g) = %.4f)\n",
+                ΔT_ac, E_open / K, ΔT_ac / (E_open / K), 1 / (1 - g))
+        @test T_c0 ≈ T_r + Q0 / K rtol = 1e-12
+        @test T_c ≈ T_an rtol = 1e-10
+        @test ΔT_ac / (E_open / K) ≈ 1 / (1 - g) rtol = 1e-8
+        # With the published COP curve the COP also falls as the canyon warms:
+        # the loop gain rises and the amplification exceeds that of a constant
+        # COP equal to the curve's COP at the no-exhaust canyon temperature.
+        hv = IdealLoadsHVAC(T_cool = T_set, cop_rated = 3.0)
+        T_c0v, hb0 = canyon(hv; exhaust = false)
+        T_cv, _ = canyon(hv)
+        hfix = IdealLoadsHVAC(T_cool = T_set, curves = nothing, cop_rated = hb0.COP)
+        T_cf, _ = canyon(hfix)
+        amp_v = (T_cv - T_c0v); amp_f = (T_cf - T_c0v)
+        @printf("  with COP(T): exhaust warming %.4f K vs %.4f K at fixed COP %.3f (+%.1f %%)\n",
+                amp_v, amp_f, hb0.COP, 100 * (amp_v / amp_f - 1))
+        @test amp_v > amp_f
+    end
+
+    @testset "Resolved zone vs ISO 13790 5R1C ideal cooling need" begin
+        # Same construction, same hourly forcing, both with ideal loads; the
+        # 5R1C need follows ISO 13790 §C.4.2. Agreement bounds are envelopes
+        # set after measuring (as in #31), not physics expectations.
+        z = hvac_mass_box(T = 299.15)
+        iso = iso13790_zone(z)
+        h = IdealLoadsHVAC(T_heat = 293.15, T_cool = 299.15, curves = nothing)
+        Tout(t) = 302.15 + 6 * sin(2π * (t / 86400 - 0.375))
+        Qi(t) = 300.0 + (8 <= mod(t / 3600, 24) < 18 ? 500.0 : 0.0)
+        Qs(t) = max(0.0, 1500 * sin(2π * (t / 86400 - 0.25)))
+        E_res = zeros(5); E_iso = zeros(5); P_res = zeros(5); P_iso = zeros(5)
+        for k in 0:(5 * 24 - 1)
+            t = (k + 0.5) * 3600; d = k ÷ 24 + 1
+            _, hb = step_zone!(z, ZoneForcing(T_out = Tout(t), Q_internal = Qi(t), Q_solar = Qs(t)), 3600.0, h)
+            Φ, _, _, _ = iso13790_ideal_load!(iso, Tout(t), 3600.0; θ_heat = 293.15, θ_cool = 299.15,
+                                             Φ_int = Qi(t), Φ_sol = Qs(t))
+            E_res[d] += hb.Q_cooling_sensible * 3600; E_iso[d] += max(-Φ, 0.0) * 3600
+            P_res[d] = max(P_res[d], hb.Q_cooling_sensible); P_iso[d] = max(P_iso[d], -Φ)
+        end
+        r = E_res[5] / E_iso[5]
+        @printf("  day-5 cooling need: resolved %.2f kWh, ISO 13790 5R1C %.2f kWh (ratio %.3f); peak %.0f / %.0f W\n",
+                E_res[5] / 3.6e6, E_iso[5] / 3.6e6, r, P_res[5], P_iso[5])
+        @test 0.8 < r < 1.25
+        # the ISO C.4.2 need holds the 5R1C air node exactly on the setpoint
+        iso2 = iso13790_zone(hvac_mass_box(T = 299.15))
+        Φ, θa, _, _ = iso13790_ideal_load!(iso2, 310.0, 3600.0; θ_heat = 293.15, θ_cool = 299.15,
+                                          Φ_int = 500.0)
+        @test θa ≈ 299.15 atol = 1e-9
+        @test Φ < 0
+    end
 end
