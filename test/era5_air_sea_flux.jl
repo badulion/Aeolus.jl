@@ -33,6 +33,15 @@ _readtab(f) = [parse.(Float64, split(l)) for l in eachline(f)
                if !startswith(l, "#") && !startswith(l, "u")]
 const DATA = joinpath(@__DIR__, "data")
 
+# Two user-defined Charnock laws for the extension-point test.
+struct _UserCharnock <: Aeolus.AirSeaFlux.AbstractCharnockRoughness
+    β::Float64
+end
+Aeolus.AirSeaFlux.charnock_parameter(::_UserCharnock, u_star; kwargs...) = 0.02
+struct _NoAlphaCharnock <: Aeolus.AirSeaFlux.AbstractCharnockRoughness
+    β::Float64
+end
+
 @testset "Phase 52 — AirSeaFlux: wave-dependent roughness (#39)" begin
 
     @testset "COARE stability: normalisation, φ–ψ consistency, reference code" begin
@@ -156,6 +165,17 @@ const DATA = joinpath(@__DIR__, "data")
         @test abs(charnock_parameter(r35, 0.3; U10N = 30.0) - 0.028) < 1e-3
         @test charnock_parameter(r35, 0.05; U10N = 1.0) == 0      # floored
         @test_throws ArgumentError sea_roughness_length(r35, 0.3; ν = ν)
+
+        # Extension point: a user Charnock law defining only
+        # charnock_parameter(r, u_star; ...) (u_star untyped, as the
+        # docstring shows) gets z0 = α u*²/g + β ν/u* from the abstract
+        # type; one that forgets it fails with a message, not a stack
+        # overflow (review of #100: the call was ambiguous, the omission
+        # recursed).
+        z_user = sea_roughness_length(_UserCharnock(0.11), 2.0; ν = ν, g = g)
+        @test z_user ≈ 0.02 * 4 / g + 0.11 * ν / 2 rtol = 1e-12
+        @test charnock_parameter(_UserCharnock(0.11), 2.0) == 0.02
+        @test_throws ArgumentError sea_roughness_length(_NoAlphaCharnock(0.11), 2.0; ν = ν)
     end
 
     @testset "Neutral C_D10N / C_E10N against published COARE numbers" begin
@@ -458,7 +478,9 @@ const DATA = joinpath(@__DIR__, "data")
         @test qs < qsat
 
         fl = turbulent_fluxes(s, f)
-        @test fl.Rn ≈ fl.H + fl.LE + fl.G rtol = 1e-12       # energy closure
+        # Bookkeeping only: G is defined as the residual Rn - H - LE, so
+        # this cannot fail unless the fields are mis-assigned.
+        @test fl.Rn ≈ fl.H + fl.LE + fl.G rtol = 1e-12
         @test fl.H > 0 && fl.LE > 0 && fl.E > 0 && fl.τ > 0  # warm, humid-deficit sea
         @test fl.LE ≈ MT.latent_heat_vapor(301.0) * fl.E
         # Rn = (1-α) SW + ε LW − ε σ T⁴ (contract net_radiation).

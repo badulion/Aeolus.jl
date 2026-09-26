@@ -70,7 +70,7 @@ module AirSeaFlux
 
 using ..MoistThermodynamics: ThermodynamicConstants, PhasePartition, R_d, R_v,
                              air_density, saturation_vapor_pressure, molmass_ratio,
-                             heat_capacity_moist, latent_heat_vapor,
+                             heat_capacity_moist,
                              dry_adiabatic_lapse_rate
 using ..SurfaceExchange
 using ..SurfaceExchange: grav, von_karman, _illinois
@@ -484,11 +484,20 @@ charnock_parameter(r::COARE35Charnock, u_star::Real; U10N = nothing, kwargs...) 
 charnock_parameter(r::WaveAgeCharnock, u_star::Real; sea = nothing, kwargs...) =
     r.A * (u_star / _need(sea, :sea, r).c_p)^r.B
 
-function charnock_parameter(r::AbstractSeaRoughness, u_star::Real;
+# The generic fallbacks leave `u_star` untyped on purpose: a user subtype
+# that defines `charnock_parameter(r::MyLaw, u_star; kw...)` is then more
+# specific than them (with `u_star::Real` here that call was ambiguous).
+function charnock_parameter(r::AbstractSeaRoughness, u_star;
                             g::Real = grav(), ν::Real = 1.5e-5, kwargs...)
     z0 = sea_roughness_length(r, u_star; g = g, ν = ν, kwargs...)
     return g * (z0 - smooth_flow_roughness(u_star, ν; β = r.β)) / u_star^2
 end
+
+# A Charnock-type law *defines* its roughness through α, so the fallback
+# above (α from z0) would recurse forever; fail with a clear message.
+charnock_parameter(r::AbstractCharnockRoughness, u_star; kwargs...) =
+    throw(ArgumentError("$(nameof(typeof(r))) <: AbstractCharnockRoughness must implement " *
+                        "`charnock_parameter(r, u_star; g, U10N, sea)`"))
 
 """
     sea_roughness_length(r::AbstractSeaRoughness, u_star; ν, g = grav(),
@@ -922,7 +931,7 @@ function _fluxes(s::SeaSurface, f::SurfaceForcing, r::AirSeaSolution, c::Surface
     sl = r.surface
     H = -ρ * cp * sl.u_star * sl.θ_star
     E = -ρ * sl.u_star * sl.q_star
-    LE = latent_heat_vapor(s.T_skin, c.thermo) * E
+    LE = surface_latent_heat(s; c = c) * E        # contract hook: L_v(T_skin)
     Rn = net_radiation(s, f; c = c)
     τ = ρ * sl.u_star^2 * max(f.U, zero(f.U)) / sl.U
     return SurfaceFluxes(promote(Rn, H, LE, Rn - H - LE, τ, E)...)
