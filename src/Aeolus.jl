@@ -601,4 +601,16 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
 
+# Phase 51 — IceThermodynamics (#37): Bitz & Lipscomb (1999) energy-
+# conserving lake and sea ice with brine pockets, snow, melt and growth.
+export IceParameters, IceColumn, sea_ice_column, lake_ice_column,
+       seawater_freezing_point, bl99_salinity_profile,
+       ice_melting_temperature, ice_energy_of_melting, ice_enthalpy,
+       ice_temperature_from_enthalpy, ice_heat_capacity, ice_conductivity,
+       ice_snow_enthalpy,
+       PrescribedSurfaceTemperature, PrescribedSurfaceFluxes, IceStepBudget,
+       step_ice!, ice_thickness, ice_snow_depth, ice_layer_temperatures,
+       ice_column_enthalpy, ice_freeboard,
+       stefan_ice_thickness, neumann_lambda, neumann_ice_thickness
+
 end # module

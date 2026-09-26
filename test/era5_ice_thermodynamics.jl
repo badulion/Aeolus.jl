@@ -55,7 +55,7 @@ function _run_mu71(nyrs; N = 10, nday = 2, params, salinity = :bl99, Tf = -1.96,
                          T_layers = N == 10 ? Tl : nothing, T_snow = T0 - 23.1128,
                          F_ocean)
     daily = Float64[]; maxres = 0.0
-    U0 = column_enthalpy(col); ∑src = 0.0
+    U0 = ice_column_enthalpy(col); ∑src = 0.0
     prev = D[1, :]
     for _ in 1:nyrs, d in 1:365
         cur = D[d, :]
@@ -74,7 +74,7 @@ function _run_mu71(nyrs; N = 10, nday = 2, params, salinity = :bl99, Tf = -1.96,
         prev = cur
         push!(daily, col.h_ice)
     end
-    return (; daily, maxres, col, drift = (column_enthalpy(col) - U0 - ∑src) /
+    return (; daily, maxres, col, drift = (ice_column_enthalpy(col) - U0 - ∑src) /
                                           (nyrs * 365 * 86400))
 end
 _year(h, y) = h[(y-1)*365+1:y*365]
@@ -126,7 +126,7 @@ const K_BL99 = SurfaceConstants(k_ice = 2.034)
         # Fresh ice between -ρL and 0 enthalpy is partly melted and at 0 °C.
         @test ice_temperature_from_enthalpy(-0.5 * ρ * L, 0.0; p) == T0
         # Snow enthalpy.
-        @test snow_enthalpy(T0 - 10; p) ≈ p.ρ_snow * (-10c0 - L)
+        @test ice_snow_enthalpy(T0 - 10; p) ≈ p.ρ_snow * (-10c0 - L)
         # Sea-water freezing point and the multiyear salinity profile.
         @test seawater_freezing_point(0) == T0
         @test seawater_freezing_point(34) ≈ T0 - 1.836

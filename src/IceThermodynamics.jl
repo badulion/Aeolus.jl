@@ -79,10 +79,10 @@ export IceParameters, IceColumn, sea_ice_column, lake_ice_column,
        seawater_freezing_point, bl99_salinity_profile,
        ice_melting_temperature, ice_energy_of_melting, ice_enthalpy,
        ice_temperature_from_enthalpy, ice_heat_capacity, ice_conductivity,
-       snow_enthalpy,
+       ice_snow_enthalpy,
        PrescribedSurfaceTemperature, PrescribedSurfaceFluxes, IceStepBudget,
-       step_ice!, ice_thickness, snow_thickness, ice_layer_temperatures,
-       column_enthalpy, ice_freeboard,
+       step_ice!, ice_thickness, ice_snow_depth, ice_layer_temperatures,
+       ice_column_enthalpy, ice_freeboard,
        stefan_ice_thickness, neumann_lambda, neumann_ice_thickness
 
 # =========================================================================
@@ -291,12 +291,12 @@ ice_conductivity(T::Real, S::Real; p::IceParameters = IceParameters()) =
     _k(p, T - _T0(p), S)
 
 """
-    snow_enthalpy(T; p = IceParameters()) -> J m⁻³
+    ice_snow_enthalpy(T; p = IceParameters()) -> J m⁻³
 
 Enthalpy of (fresh) snow per unit volume relative to meltwater at 0 °C,
 ``E_s = ρ_s (c_0 T - L)`` (T in °C, ≤ 0).
 """
-snow_enthalpy(T::Real; p::IceParameters = IceParameters()) =
+ice_snow_enthalpy(T::Real; p::IceParameters = IceParameters()) =
     _Es(p, min(T - _T0(p), zero(T)))
 
 # =========================================================================
@@ -530,20 +530,20 @@ end
 "Ice thickness (m)."
 ice_thickness(c::IceColumn) = c.h_ice
 "Snow depth on the ice (m)."
-snow_thickness(c::IceColumn) = c.h_snow
+ice_snow_depth(c::IceColumn) = c.h_snow
 "Layer temperatures (K), top to bottom, diagnosed from the enthalpies."
 ice_layer_temperatures(c::IceColumn) =
     [_T0(c.params) + _T_of_E(c.params, c.E[j], c.S[j]) for j in 1:c.N]
 
 """
-    column_enthalpy(col) -> J m⁻²
+    ice_column_enthalpy(col) -> J m⁻²
 
 Total enthalpy of the ice and snow relative to meltwater at the melting
 point, ``U = Σ_j E_j h/N + E_s h_s`` (negative: the energy the column
 would need to melt completely). Its change over a step is what the
 energy budget closes against.
 """
-column_enthalpy(c::IceColumn) = sum(c.E) * c.h_ice / c.N + c.E_snow * c.h_snow
+ice_column_enthalpy(c::IceColumn) = sum(c.E) * c.h_ice / c.N + c.E_snow * c.h_snow
 
 """
     ice_freeboard(col) -> m
@@ -874,7 +874,7 @@ function _step!(col::IceColumn, bc, dt::Real; kwargs...)
     T0 = _T0(p)
     ρi = _ρi(p)
     dt = float(dt)
-    U0 = column_enthalpy(col)
+    U0 = ice_column_enthalpy(col)
     E_in = 0.0; E_out = 0.0; to_water = 0.0
     h_ice0, h_snow0 = col.h_ice, col.h_snow
 
@@ -900,7 +900,7 @@ function _step!(col::IceColumn, bc, dt::Real; kwargs...)
         else
             to_water = Fnet * dt
         end
-        U1 = column_enthalpy(col)
+        U1 = ice_column_enthalpy(col)
         res = (U1 - U0 - E_in + E_out + to_water) / dt - (Fs + col.F_ocean)
         col.budget = IceStepBudget{Float64}(Fs, 0.0, 0.0, 0.0, 0.0, col.F_ocean,
             to_water / dt, E_in, E_out, 0.0, dh, 0.0, 0.0, col.T_sfc,
@@ -1079,7 +1079,7 @@ function _step!(col::IceColumn, bc, dt::Real; kwargs...)
     col.E_snow = hs > 0 ? Es : _Es(p, 0.0)
     # Negligible ice melts into the water (with any snow on it).
     if col.h_ice < p.h_ice_min
-        E_out += column_enthalpy(col)
+        E_out += ice_column_enthalpy(col)
         col.h_ice = 0.0; col.h_snow = 0.0
         col.E .= 0.0
         col.T_sfc = col.T_bottom
@@ -1088,7 +1088,7 @@ function _step!(col::IceColumn, bc, dt::Real; kwargs...)
         col.h_snow = 0.0
     end
 
-    U1 = column_enthalpy(col)
+    U1 = ice_column_enthalpy(col)
     F_surface = sol.F_top_in
     sources = F_surface + I0 - I_b + col.F_ocean
     res = (U1 - U0 - E_in + E_out + to_water) / dt - sources

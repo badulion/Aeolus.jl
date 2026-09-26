@@ -38,6 +38,7 @@ makedocs(
             "Fog and dew"                 => "theory/fog.md",
             "Radiation fog"               => "theory/radiation_fog.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
+            "Lake and sea ice"            => "theory/ice_thermodynamics.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -92,6 +93,7 @@ makedocs(
             "Era V — surface exchange" => [
                 "Overview"                     => "api/era5.md",
                 "SurfaceExchange"              => "api/era5/surface_exchange.md",
+                "IceThermodynamics"            => "api/era5/ice_thermodynamics.md",
             ],
         ],
         "Examples" => [

@@ -907,4 +907,5 @@ end
 
 @testset "Era V" begin
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
+    include("era5_ice_thermodynamics.jl")  # Phase 51  lake and sea ice, BL99 (#37)
 end
