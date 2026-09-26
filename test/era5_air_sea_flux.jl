@@ -17,6 +17,22 @@ using Aeolus.AirSeaFlux
 
 const ASF = Aeolus.AirSeaFlux
 
+const MT = Aeolus.MoistThermodynamics
+
+# ---- Input conversion of the COARE reference code (NOT model physics) ----
+# The reference test files give air humidity as RH and water temperature;
+# the reference code turns them into specific humidities with Buck (1981)
+# and a 2 % seawater reduction, and uses latitude-dependent gravity. To
+# compare like with like, the test feeds the model the same q_a, q_s and g.
+_bucksat(T, P) = 6.1121 * exp(17.502T / (T + 240.97)) * (1.0007 + 3.46e-6P)   # hPa, T in °C
+_qsea(T, P) = (es = 0.98 * _bucksat(T, P); 0.622es / (P - 0.378es))
+_qair(T, P, rh) = (em = 0.01rh * _bucksat(T, P); 0.622em / (P - 0.378em))
+_grv(lat) = (x = sind(lat); 9.7803267715 * (1 + 0.0052790414x^2 + 0.0000232718x^4 +
+                                             0.0000001262x^6 + 0.0000000007x^8))
+_readtab(f) = [parse.(Float64, split(l)) for l in eachline(f)
+               if !startswith(l, "#") && !startswith(l, "u")]
+const DATA = joinpath(@__DIR__, "data")
+
 @testset "Phase 52 — AirSeaFlux: wave-dependent roughness (#39)" begin
 
     @testset "COARE stability: normalisation, φ–ψ consistency, reference code" begin
@@ -268,6 +284,161 @@ const ASF = Aeolus.AirSeaFlux
         # Brutsaert–Garratt: ln(z0/z0q) = 2.28 R_r^(1/4) − 2.
         rb = sea_scalar_roughness(bg, z0, u; ν = ν)
         @test log(z0 / rb.z0q) ≈ 2.28 * Rr^0.25 - 2
+    end
+
+    @testset "Bulk algorithm: analytic limits" begin
+        # Neutral, no gustiness: the bulk solve reduces to the neutral
+        # roughness fixed point, and C_D at 10 m is C_D10N.
+        b = coare35_bulk(gustiness = ConvectiveGustiness(w_min = 0.0, w_init = 0.0))
+        for U in (3.0, 8.0, 15.0)
+            r = air_sea_fluxes(b; U = U, z_m = 10.0, θ_a = 290.0, θ_s = 290.0,
+                               q_a = 0.01, q_s = 0.01, ν = 1.5e-5)
+            n = neutral_transfer_coefficients(COARE35Charnock(), COARE35ScalarRoughness(), U; ν = 1.5e-5)
+            @test r.converged
+            @test r.surface.ζ == 0
+            @test r.surface.u_star ≈ n.u_star rtol = 1e-8
+            @test r.surface.C_D ≈ r.C_D10N rtol = 1e-8
+            @test r.U10N ≈ U rtol = 1e-8
+        end
+
+        # Free convection over a warm sea: as U → 0 the gustiness keeps the
+        # fluxes finite, and the converged w_g is β (B z_i)^{1/3} of its
+        # own buoyancy flux.
+        b = coare35_bulk()
+        args = (z_m = 10.0, θ_a = 299.0, θ_s = 302.0, q_a = 0.016, q_s = 0.027)
+        r0 = air_sea_fluxes(b; U = 0.0, args...)
+        @test r0.converged
+        @test r0.B > 0
+        @test r0.w_g ≈ 1.2 * cbrt(r0.B * 600) rtol = 1e-6
+        @test r0.surface.U ≈ r0.w_g rtol = 1e-6
+        @test r0.surface.ζ < -1                    # strongly convective
+        H(r) = -r.surface.u_star * r.surface.θ_star
+        @test H(r0) > 0
+        # Free-convection scaling: the kinematic heat flux barely depends
+        # on the mean wind once U ≪ w_g (here w_g ≈ 0.72 m/s; an earlier
+        # version of this test used U = 0.5 m/s, which is not ≪ w_g and
+        # gave +12 %, simply because S = √(U² + w_g²) grew by 25 %), and
+        # rises monotonically as the mean wind takes over.
+        r05 = air_sea_fluxes(b; U = 0.1, args...)
+        @test H(r05) / H(r0) ≈ 1 atol = 0.01
+        Hs = [H(air_sea_fluxes(b; U = U, args...)) for U in (0.0, 0.25, 0.5, 1.0, 2.0)]
+        @test issorted(Hs)
+        # Stable: no convective gustiness, w_g = w_min.
+        rs = air_sea_fluxes(b; U = 3.0, z_m = 10.0, θ_a = 290.0, θ_s = 287.0, q_a = 0.008, q_s = 0.0095)
+        @test rs.B < 0 && rs.w_g == 0.2 && rs.surface.ζ > 0
+        @info "Free convection (U = 0)" w_g = r0.w_g B = r0.B H_kinematic = H(r0) ζ = r0.surface.ζ H_ratio_U01 = H(r05) / H(r0)
+
+        # A younger sea at the same wind raises the stress (wave-age law).
+        bw = coare35_bulk(roughness = WaveAgeCharnock())
+        rel = (U = 12.0, z_m = 10.0, θ_a = 290.0, θ_s = 290.5, q_a = 0.009, q_s = 0.011)
+        old = air_sea_fluxes(bw; rel..., sea = deep_water_sea_state(9.0, 3.0))
+        young = air_sea_fluxes(bw; rel..., sea = deep_water_sea_state(4.0, 1.0))
+        @test young.surface.u_star > old.surface.u_star
+        @test young.charnock > old.charnock
+        @test_throws ArgumentError air_sea_fluxes(bw; rel...)          # no sea state
+    end
+
+    @testset "COARE 3.5 reference test data (NOAA-PSL, 116 hourly records)" begin
+        # test/data/coare35_test_{input,output}.txt: the input and output
+        # files shipped with the NOAA-PSL COARE 3.5 Python reference.
+        # The reference was run with its cool-skin model on (jcool = 1);
+        # the cool-skin depressions dter, dqer are in its output, so the
+        # interface values θ_s = ts − dter, q_s = q_sea(ts) − dqer are
+        # exactly what its bulk loop used.
+        inp = _readtab(joinpath(DATA, "coare35_test_input.txt"))
+        out = _readtab(joinpath(DATA, "coare35_test_output.txt"))
+        @test length(inp) == length(out) == 116
+        keys_ = (:u_star, :τ, :H, :LE, :θ_star, :q_star, :z0t, :L, :C_D, :C_D10N, :H_dry_cp)
+        err = Dict(k => 0.0 for k in keys_)
+        bias = Dict(k => 0.0 for k in keys_)
+        nconv = 0
+        for (a, o) in zip(inp, out)
+            u, zu, t, zt, rh, zq, P, ts, _, _, lat = a[1:11]
+            usr, tau, hsb, hlb, _, tsr, qsr, zot, _, Cd, _, _, L, _, dter, dqer = o[1:16]
+            Cdn = o[19]
+            c = SurfaceConstants(thermo = MT.ThermodynamicConstants(grav = _grv(lat)))
+            qa = _qair(t, P, rh)
+            r = air_sea_fluxes(coare35_bulk(); U = u, z_m = zu,
+                               θ_a = t + 273.16 + 0.0098zt, θ_s = ts - dter + 273.16,
+                               q_a = qa, q_s = _qsea(ts, P) - dqer,
+                               T_air = t + 273.16, p = 100P, c = c)
+            nconv += r.converged
+            sl = r.surface
+            pp = MT.PhasePartition(qa)
+            ρ = MT.air_density(t + 273.16, 100P, pp, c.thermo)
+            cpm = MT.heat_capacity_moist(pp, c.thermo)
+            Lv = MT.latent_heat_vapor(ts - dter + 273.16, c.thermo)
+            G = sl.U / u                              # gustiness factor S/U
+            mine = Dict(:u_star => sl.u_star / usr, :τ => ρ * sl.u_star^2 / G / tau,
+                        :H => -ρ * cpm * sl.u_star * sl.θ_star / hsb,
+                        :LE => -ρ * Lv * sl.u_star * sl.q_star / hlb,
+                        :θ_star => sl.θ_star / tsr, :q_star => 1000sl.q_star / qsr,
+                        :z0t => r.z0h / zot, :L => sl.L / L,
+                        :C_D => sl.u_star^2 / G / (sl.U * u) / Cd,
+                        :C_D10N => 1000r.C_D10N / Cdn,
+                        # with COARE's dry-air c_p = 1004.67 instead of c_pm
+                        :H_dry_cp => -ρ * 1004.67 * sl.u_star * sl.θ_star / hsb)
+            for k in keys_
+                err[k] = max(err[k], abs(mine[k] - 1))
+                bias[k] += (mine[k] - 1) / length(inp)
+            end
+        end
+        @test nconv == 116
+        for k in (:u_star, :τ, :LE, :θ_star, :q_star, :C_D, :C_D10N)
+            @test err[k] < 0.01
+        end
+        @test err[:z0t] < 0.02
+        @test err[:L] < 0.025
+        # H is 1.5 % high throughout: COARE uses the dry-air c_p = 1004.67,
+        # the model the moist c_pm (q ≈ 18 g/kg here ⇒ +1.5 %). With the
+        # dry c_p the difference collapses:
+        @test 0.012 < bias[:H] < 0.02
+        @test err[:H_dry_cp] < 0.005
+        @info "COARE 3.5 reference test file, max |rel. diff| (116 records)" (k => round(err[k], sigdigits = 3) for k in keys_)...
+        @info "COARE 3.5 reference test file, mean rel. diff" (k => round(bias[k], sigdigits = 3) for k in keys_)...
+    end
+
+    @testset "COARE 3.5 reference model: stable/unstable × wind / wave-age / sea-state" begin
+        # test/data/coare35_synthetic.txt: the NOAA-PSL COARE 3.5 Python
+        # reference run by test/data/coare35_generate.py on a synthetic
+        # grid (jcool = 0; 2–25 m/s; ts − t = +2 K and −3 K; fully
+        # developed seas). Its sea-state option omits the smooth-flow term,
+        # which SeaStateRoughness(β = 0) reproduces.
+        c = SurfaceConstants(thermo = MT.ThermodynamicConstants(grav = _grv(45.0)))
+        worst = Dict(k => 0.0 for k in (:u_star, :θ_star, :q_star, :L, :C_D10N))
+        n = 0
+        for l in eachline(joinpath(DATA, "coare35_synthetic.txt"))
+            startswith(l, "#") && continue
+            w = split(l)
+            U, t, rh, ts, cp, Hs, usr, _, _, _, tsr, qsr, _, _, _, _, _, L, _, Cdn =
+                parse.(Float64, w[3:22])
+            b = w[2] == "none" ? coare35_bulk() :
+                w[2] == "age"  ? coare35_bulk(roughness = WaveAgeCharnock()) :
+                                 coare35_bulk(roughness = SeaStateRoughness(β = 0.0))
+            sea = SeaState(c_p = cp, H_s = Hs, λ_p = 2π * cp^2 / _grv(45.0))
+            r = air_sea_fluxes(b; U = U, z_m = 10.0, θ_a = t + 273.16 + 0.098,
+                               θ_s = ts + 273.16, q_a = _qair(t, 1010.0, rh),
+                               q_s = _qsea(ts, 1010.0), T_air = t + 273.16,
+                               p = 101000.0, c = c, sea = sea)
+            @test r.converged
+            s = r.surface
+            @test sign(s.ζ) == (w[1] == "stable" ? 1 : -1)
+            for (k, v) in ((:u_star, s.u_star / usr), (:θ_star, s.θ_star / tsr),
+                           (:q_star, 1000s.q_star / qsr), (:L, s.L / L),
+                           (:C_D10N, 1000r.C_D10N / Cdn))
+                worst[k] = max(worst[k], abs(v - 1))
+            end
+            n += 1
+        end
+        @test n == 60
+        for k in (:u_star, :θ_star, :q_star)
+            @test worst[k] < 0.005
+        end
+        # C_D10N: 0.6 % at U = 2 m/s, where the COARE 3.5 Charnock fit is
+        # negative (−0.0016) in the reference and floored at 0 here.
+        @test worst[:C_D10N] < 0.01
+        @test worst[:L] < 0.015
+        @info "COARE 3.5 reference model, 60 synthetic cases, max |rel. diff|" (k => round(v, sigdigits = 3) for (k, v) in worst)...
     end
 
 end

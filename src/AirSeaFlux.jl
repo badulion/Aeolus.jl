@@ -91,7 +91,8 @@ export COAREStability, ConvectiveGustiness, gustiness_velocity,
        smooth_flow_roughness, charnock_parameter, sea_roughness_length,
        AbstractScalarRoughness, COARE30ScalarRoughness, COARE35ScalarRoughness,
        BrutsaertGarrattRoughness, sea_scalar_roughness, roughness_reynolds,
-       neutral_transfer_coefficients
+       neutral_transfer_coefficients,
+       BulkAirSea, coare30_bulk, coare35_bulk, AirSeaSolution, air_sea_fluxes
 
 # =========================================================================
 # 1. COARE stability functions (Grachev–Fairall convective blend)
@@ -653,6 +654,173 @@ function neutral_transfer_coefficients(r::AbstractSeaRoughness, rs::AbstractScal
     return (C_D = (κ / lm)^2, C_H = κ^2 / (lm * log(z_ref / zs.z0h)),
             C_E = κ^2 / (lm * log(z_ref / zs.z0q)), u_star = u,
             z0m = zm, z0h = zs.z0h, z0q = zs.z0q)
+end
+
+# =========================================================================
+# 6. Bulk algorithm
+# =========================================================================
+
+"""
+    BulkAirSea(; roughness = COARE35Charnock(), scalar = COARE35ScalarRoughness(),
+                 stability = COAREStability(:coare35), gustiness = ConvectiveGustiness(),
+                 maxiter = 50, rtol = 1e-9)
+
+A COARE-style bulk air–sea flux algorithm: which momentum roughness law,
+scalar roughness law, stability functions and gustiness model to use.
+Any `AbstractSeaRoughness`, `AbstractScalarRoughness` and
+`AbstractStabilityFunctions` combine. [`coare30_bulk`](@ref) and
+[`coare35_bulk`](@ref) give the published configurations; pass e.g.
+`roughness = WaveAgeCharnock()` for the COARE 3.5 wave-age option.
+"""
+Base.@kwdef struct BulkAirSea{R<:AbstractSeaRoughness, S<:AbstractScalarRoughness,
+                              F<:AbstractStabilityFunctions, G<:ConvectiveGustiness, T<:AbstractFloat}
+    roughness::R = COARE35Charnock()
+    scalar::S    = COARE35ScalarRoughness()
+    stability::F = COAREStability(:coare35)
+    gustiness::G = ConvectiveGustiness()
+    maxiter::Int = 50
+    rtol::T      = 1e-9
+end
+
+"""
+    coare30_bulk(; kwargs...) -> BulkAirSea
+
+COARE 3.0 (Fairall et al. 2003): wind-dependent Charnock 0.011 → 0.018,
+the eq. (28) scalar roughness, COARE 3.0 stability, β = 1.2 gustiness.
+Keywords override fields.
+"""
+coare30_bulk(; kwargs...) = BulkAirSea(; roughness = COARE30Charnock(),
+                                       scalar = COARE30ScalarRoughness(),
+                                       stability = COAREStability(:coare30), kwargs...)
+
+"""
+    coare35_bulk(; kwargs...) -> BulkAirSea
+
+COARE 3.5 (Edson et al. 2013): Charnock ``0.0017 U_{10N} - 0.005``,
+the 3.5 scalar-roughness refit, COARE 3.5 stability, β = 1.2
+gustiness. Keywords override fields (e.g. `roughness = WaveAgeCharnock()`).
+"""
+coare35_bulk(; kwargs...) = BulkAirSea(; kwargs...)
+
+"""
+    AirSeaSolution{T}
+
+Result of [`air_sea_fluxes`](@ref):
+
+  * `surface` — the `SurfaceExchange.SurfaceLayerSolution` of the final
+    Monin–Obukhov solve (``u_*``, ``θ_*``, ``q_*``, ``L``, ζ, and ``C_D``,
+    ``C_H``, ``C_E`` referred to the gust-inclusive wind `surface.U`);
+  * `z0m`, `z0h`, `z0q` — roughness lengths (m); `charnock` — the
+    equivalent Charnock parameter; `Re_r` — roughness Reynolds number;
+  * `w_g` — gustiness velocity (m s⁻¹); `B` — surface buoyancy flux
+    ``(g/θ_v)\\overline{w'θ_v'}`` (m² s⁻³);
+  * `U10N` — 10-m neutral wind relative to the mean wind (COARE's
+    ``u_*/(κ G) \\ln(10/z_0)``, with gustiness factor ``G = S/U``);
+  * `C_D10N`, `C_H10N`, `C_E10N` — 10-m neutral transfer coefficients;
+  * `ν` — air kinematic viscosity used; `iterations`, `converged`.
+"""
+struct AirSeaSolution{T<:AbstractFloat}
+    surface::SurfaceLayerSolution{T}
+    z0m::T
+    z0h::T
+    z0q::T
+    charnock::T
+    Re_r::T
+    w_g::T
+    B::T
+    U10N::T
+    C_D10N::T
+    C_H10N::T
+    C_E10N::T
+    ν::T
+    iterations::Int
+    converged::Bool
+end
+
+"""
+    air_sea_fluxes(b::BulkAirSea = coare35_bulk();
+                   U, z_m, z_h = z_m, θ_a, θ_s, q_a, q_s,
+                   T_air = θ_a, p = 101325, sea = nothing, ν = nothing,
+                   c = DEFAULT_SURFACE_CONSTANTS, U_min = 0.1) -> AirSeaSolution
+
+Bulk air–sea fluxes, COARE style. Inputs as for
+`SurfaceExchange.solve_surface_layer`: wind speed `U` relative to the
+surface current at height `z_m`, potential temperature `θ_a` and
+specific humidity `q_a` at `z_h`, and the **interface** values `θ_s`
+(skin temperature: a cool-skin / warm-layer correction, if any, is
+applied by the caller) and `q_s` (e.g. ``0.98\\,q_{sat}(T_s)`` over
+seawater — see [`SeaSurface`](@ref)). `T_air` and `p` set the viscosity
+unless `ν` is given; `sea` is the [`SeaState`](@ref) for wave laws.
+
+Iteration: starting from COARE's first guess (``u_* = 0.035 U_{10}``,
+``w_g = 0.5``), each pass
+
+  1. updates ``z_0`` from ``u_*`` (and ``U_{10N}`` / `sea`) and
+     ``z_{0t}, z_{0q}`` from ``R_r = z_0 u_*/ν``;
+  2. solves Monin–Obukhov similarity exactly for that roughness and the
+     effective wind ``S = \\sqrt{U² + w_g²}``
+     (`SurfaceExchange.solve_surface_layer` with the stability functions
+     of `b`);
+  3. updates the gustiness from the buoyancy flux
+     ``B = -(g/θ_{va}) u_* θ_{v*}`` and ``U_{10N}``,
+
+until ``u_*`` and ``w_g`` change by less than `rtol` (relative). Because
+step 2 is solved to convergence inside each pass, the outer loop only
+has to converge the roughness–gustiness feedback, which contracts by a
+factor ≈ ``2/\\ln(z/z_0)`` per pass for Charnock-type laws.
+"""
+function air_sea_fluxes(b::BulkAirSea = coare35_bulk();
+                        U::Real, z_m::Real, z_h::Real = z_m,
+                        θ_a::Real, θ_s::Real, q_a::Real = 0.0, q_s::Real = 0.0,
+                        T_air::Real = θ_a, p::Real = 101325.0, sea = nothing,
+                        ν = nothing, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                        U_min::Real = 0.1)
+    T = float(promote_type(typeof(U), typeof(z_m), typeof(θ_a), typeof(θ_s),
+                           typeof(q_a), typeof(q_s)))
+    κ, g = T(von_karman(c)), T(grav(c))
+    νa = ν === nothing ? T(air_kinematic_viscosity(T_air, p; q = q_a, c = c)) : T(ν)
+    ε = T(R_v(c.thermo) / R_d(c.thermo) - 1)
+    θva = T(θ_a) * (1 + ε * T(q_a))
+
+    # COARE first guess.
+    w_g = T(b.gustiness.w_init)
+    S0 = sqrt(T(U)^2 + w_g^2)
+    U10 = S0 * log(10 / T(1e-4)) / log(z_m / T(1e-4))
+    u_star, U10N = T(0.035) * U10, U10
+    sol = nothing
+    zm = zh = zq = zero(T)
+    Bf = zero(T)
+    w_used = w_g                     # the gustiness of the final solve
+    iters, conv = 0, false
+    for it in 1:b.maxiter
+        iters = it
+        zm = T(sea_roughness_length(b.roughness, u_star; ν = νa, g = g, U10N = U10N, sea = sea))
+        zs = sea_scalar_roughness(b.scalar, zm, u_star; ν = νa)
+        zh, zq = T(zs.z0h), T(zs.z0q)
+        sol = solve_surface_layer(b.stability; U = U, z_m = z_m, z_h = z_h,
+                                  θ_a = θ_a, θ_s = θ_s, q_a = q_a, q_s = q_s,
+                                  z0m = zm, z0h = zh, z0q = zq, c = c,
+                                  U_min = U_min, gustiness = w_g)
+        w_used = w_g
+        Bf = -g / θva * sol.u_star * sol.θv_star
+        w_new = T(gustiness_velocity(b.gustiness, Bf))
+        # 10-m neutral wind relative to the mean (not gust-inclusive) wind.
+        U10N = sol.u_star / κ * log(10 / zm) * T(U) / sol.U
+        du = abs(sol.u_star - u_star) / sol.u_star
+        dw = abs(w_new - w_g) / max(w_new, w_g, sqrt(eps(T)))
+        u_star, w_g = sol.u_star, w_new
+        if du <= b.rtol && dw <= b.rtol
+            conv = true
+            break
+        end
+    end
+    conv &= sol.converged
+    α = T(g * (zm - smooth_flow_roughness(u_star, νa; β = b.roughness.β)) / u_star^2)
+    lm = log(10 / zm)
+    return AirSeaSolution{T}(sol, zm, zh, zq, α, roughness_reynolds(zm, u_star, νa),
+                             w_used,
+                             Bf, U10N, (κ / lm)^2, κ^2 / (lm * log(10 / zh)),
+                             κ^2 / (lm * log(10 / zq)), νa, iters, conv)
 end
 
 end # module
