@@ -6,7 +6,7 @@ bedrock or a fixed head). With one, rain that percolates through the
 column is stored in an aquifer and drains laterally at a rate set by how
 high the water table stands, and a high water table in turn keeps the
 soil wet from below. The model is the SIMTOP groundwater scheme of
-Niu et al. (2005, 2007) as used in CLM4/4.5 (Oleson et al. 2010, §7.5),
+Niu et al. (2005, 2007) as used in CLM4.0 (Oleson et al. 2010, §7.5),
 implemented as `UnconfinedAquifer`, a stateful `AbstractSoilBottomBoundary`
 of `SoilWaterColumn` in `src/SoilColumn.jl`.
 
@@ -93,7 +93,10 @@ q_{drai} = (1 - f_{imp})\, q_{max}\, e^{-f z_\nabla},
 ```
 
 with ``q_{max} = 5.5\times10^{-3}`` kg m⁻² s⁻¹ (5.5e-6 m s⁻¹) and
-``f = 2.5`` m⁻¹, the CLM4/4.5 global values. The frozen-soil impermeable
+``f = 2.5`` m⁻¹, the CLM4.0 global values (Oleson et al. 2010, below
+eq. 7.160). CLM4.5 replaced ``q_{max}`` by ``10\sin\beta`` kg m⁻² s⁻¹
+(``\beta`` the mean topographic slope) and ``f_{imp}`` by an ice impedance
+factor; those variants are not implemented. The frozen-soil impermeable
 fraction (CLM4 eq. 7.160, ``\alpha = 3``) is
 
 ```math

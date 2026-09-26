@@ -1260,7 +1260,7 @@ end
 
 A prognostic water table in an unconfined aquifer below the soil column
 — the SIMTOP groundwater model of Niu et al. (2005, 2007) as used in
-CLM4/CLM4.5 (Oleson et al. 2010, §7.5) — used as the column's `bottom`
+CLM4.0 (Oleson et al. 2010, §7.5) — used as the column's `bottom`
 boundary:
 
     col = SoilWaterColumn(grid, soil; bottom = UnconfinedAquifer())
@@ -1296,7 +1296,9 @@ Niu et al. 2005, CLM4 eq. 7.159):
     q_drai = (1 - f_imp) q_max exp(-f z_∇)
 
 with ``q_{max} = 5.5×10^{-3}`` kg m⁻² s⁻¹ ``= 5.5×10^{-6}`` m s⁻¹ and
-``f = 2.5`` m⁻¹ (CLM4/4.5 global values) and the frozen-soil impermeable
+``f = 2.5`` m⁻¹ (CLM4.0 global values, Oleson et al. 2010, p. 155; CLM4.5
+replaced ``q_{max}`` by ``10 \sin β`` kg m⁻² s⁻¹ and ``f_{imp}`` by an ice
+impedance factor) and the frozen-soil impermeable
 fraction ``f_{imp}`` of [`aquifer_impermeable_fraction`](@ref)
 (`frozen_restriction = false` sets it to 0).
 
