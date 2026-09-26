@@ -629,7 +629,7 @@ export AbstractStomatalModel, BallBerryStomata, MedlynStomata, stomatal_conducta
 
 # Phase 48 — PlantCanopy: leaf-area-density profiles and implicit
 # (unconditionally stable) canopy drag.
-export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
+export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD, TabulatedLAD,
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
        layer_leaf_area_density,
        canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,

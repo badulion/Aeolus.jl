@@ -110,7 +110,7 @@ using ..Photosynthesis: AbstractPhotosynthesisParameters, AbstractStomatalModel,
                         leaf_transpiration, par_to_photon_flux
 using ..SurfaceExchange: _illinois
 
-export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
+export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD, TabulatedLAD,
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
        layer_leaf_area_density,
        canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,
@@ -256,6 +256,53 @@ function leaf_area_density(b::BetaLAD, z::Real)
     return b.LAI / b.h * x^(b.p - 1) * (1 - x)^(b.q - 1) * exp(-b.logB)
 end
 _lad_breakpoints(::BetaLAD) = ()
+
+"""
+    TabulatedLAD(z, a; LAI = nothing)
+
+A measured leaf-area-density profile given at heights `z` [m] (strictly
+increasing, `z[1] ≥ 0`) with values `a` [m² m⁻³], linearly interpolated
+between the nodes and zero outside ``[z_1, z_n]``. The canopy height is
+`z[end]`.
+
+The leaf-area index is the exact integral of the interpolant (the
+trapezoidal sum of the table). If `LAI` is given, the values are rescaled
+by one common factor so that the profile integrates to it — for a
+published profile shape whose absolute scale is quoted separately (e.g. a
+normalised ``a h`` against ``z/h`` plus a stand LAI).
+"""
+struct TabulatedLAD{T<:AbstractFloat} <: AbstractLeafAreaDensity
+    z::Vector{T}
+    a::Vector{T}
+    LAI::T
+    h::T
+end
+function TabulatedLAD(z::AbstractVector{<:Real}, a::AbstractVector{<:Real};
+                      LAI::Union{Nothing,Real} = nothing)
+    n = length(z)
+    n >= 2 && length(a) == n ||
+        throw(ArgumentError("TabulatedLAD: need ≥ 2 nodes and length(a) == length(z)"))
+    zF = Float64.(z); aF = Float64.(a)
+    zF[1] >= 0 && all(>(0), diff(zF)) ||
+        throw(ArgumentError("TabulatedLAD: z must start at ≥ 0 and increase strictly"))
+    all(>=(0), aF) || throw(ArgumentError("TabulatedLAD: a must be ≥ 0"))
+    L = sum((aF[i] + aF[i+1]) / 2 * (zF[i+1] - zF[i]) for i in 1:n-1)
+    if LAI !== nothing
+        LAI >= 0 || throw(ArgumentError("TabulatedLAD: LAI must be ≥ 0"))
+        L > 0 || LAI == 0 ||
+            throw(ArgumentError("TabulatedLAD: cannot rescale an all-zero profile to LAI > 0"))
+        L > 0 && (aF .*= LAI / L)
+        L = Float64(LAI)
+    end
+    return TabulatedLAD{Float64}(zF, aF, L, zF[end])
+end
+function leaf_area_density(p::TabulatedLAD, z::Real)
+    (z < p.z[1] || z > p.z[end]) && return zero(p.LAI)
+    i = clamp(searchsortedlast(p.z, z), 1, length(p.z) - 1)
+    t = (z - p.z[i]) / (p.z[i+1] - p.z[i])
+    return (1 - t) * p.a[i] + t * p.a[i+1]
+end
+_lad_breakpoints(p::TabulatedLAD) = Tuple(p.z)
 
 """
     canopy_height(p::AbstractLeafAreaDensity) -> h [m]
