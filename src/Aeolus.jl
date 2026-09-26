@@ -607,6 +607,8 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
 # (unconditionally stable) canopy drag.
 export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
-       layer_leaf_area_density
+       layer_leaf_area_density,
+       canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,
+       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!
 
 end # module

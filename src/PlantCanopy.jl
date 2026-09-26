@@ -56,7 +56,9 @@ using ..P3Microphysics: lgamma_lanczos
 
 export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
-       layer_leaf_area_density
+       layer_leaf_area_density,
+       canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,
+       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!
 
 # =========================================================================
 # 1. Leaf-area density profiles
@@ -270,6 +272,215 @@ function layer_leaf_area_density(p::AbstractLeafAreaDensity, z_faces::AbstractVe
         a[k] = hi > lo ? _integrate(zz -> leaf_area_density(p, zz), lo, hi, br) / (z1 - z0) : 0.0
     end
     return a
+end
+
+# =========================================================================
+# 2. Implicit canopy drag
+# =========================================================================
+
+"""
+    canopy_drag_factor(C_d, a, speed, dt) -> f ∈ (0, 1]
+
+Factor by which the canopy drag ``dU_i/dt = -C_d\\,a\\,|U|\\,U_i``
+(Shaw & Schumann 1992) multiplies the velocity over a step `dt`:
+
+```math
+f = \\frac{1}{1 + Δt\\,C_d\\,a\\,|U|}.
+```
+
+With the speed taken at the start of the step, ``U\\,f`` is the *exact*
+solution of the pure drag equation — the speed obeys
+``d|U|/dt = -C_d a |U|^2`` with solution ``|U|_0/(1 + C_d a |U|_0 t)``
+and the direction does not change — and equivalently a backward-Euler
+step with the drag coefficient lagged. Because ``0 < f ≤ 1`` for every
+`dt`, the update is unconditionally stable and can never reverse the
+flow, which explicit Euler (``1 - Δt C_d a |U|``) does once
+``Δt\\,C_d\\,a\\,|U| > 1`` and amplifies once it exceeds 2.
+"""
+canopy_drag_factor(C_d::Real, a::Real, speed::Real, dt::Real) =
+    1 / (1 + dt * C_d * a * speed)
+
+"""
+    canopy_drag_force(C_d, a, u, v, w) -> (Fu, Fv, Fw)
+
+Instantaneous kinematic canopy drag force per unit mass [m s⁻²],
+``F_i = -C_d\\,a\\,|U|\\,U_i``. A diagnostic; the model applies the drag
+through [`implicit_canopy_drag`](@ref).
+"""
+function canopy_drag_force(C_d::Real, a::Real, u::Real, v::Real, w::Real)
+    k = -C_d * a * sqrt(u^2 + v^2 + w^2)
+    return (k * u, k * v, k * w)
+end
+
+"""
+    implicit_canopy_drag(C_d, a, u, v, w, dt) -> (u', v', w')
+
+Velocity after one step `dt` of canopy drag alone, all three components
+scaled by the same [`canopy_drag_factor`](@ref) of the local speed. The
+momentum removed, ``(U - U')/Δt``, is the step-mean drag of the exact
+solution; it tends to ``C_d a |U| U`` as ``Δt → 0``.
+"""
+function implicit_canopy_drag(C_d::Real, a::Real, u::Real, v::Real, w::Real, dt::Real)
+    f = canopy_drag_factor(C_d, a, sqrt(u^2 + v^2 + w^2), dt)
+    return (f * u, f * v, f * w)
+end
+
+"""
+    ResolvedCanopyDrag(mesh, lad; C_d = 0.2)
+
+Canopy drag for a [`BoussinesqSimulation`](@ref Aeolus.Simulations.BoussinesqSimulation)
+(or any simulation with `mesh`, `bcs` and staggered `u`, `v`, `w` fields)
+on a `RegularGrid`. `lad` is the cell-centred leaf-area density
+[m² m⁻³], an `(Nx, Ny, Nz)` array of interior cells (see
+[`canopy_lad_field`](@ref)). At construction the LAD is averaged onto the
+`u`, `v` and `w` faces (periodic wrap in x and y, as the LES is
+horizontally periodic); the struct also carries the scratch arrays of
+drag factors, so [`apply_canopy_drag!`](@ref) does not allocate.
+
+`C_d` is the leaf drag coefficient, ≈ 0.15-0.3 for forests (Shaw &
+Schumann 1992 use 0.15; Harman & Finnigan 2007 quote 0.25).
+"""
+struct ResolvedCanopyDrag{T<:AbstractFloat}
+    C_d::T
+    lad::Array{T,3}
+    a_u::Array{T,3}
+    a_v::Array{T,3}
+    a_w::Array{T,3}
+    f_u::Array{T,3}
+    f_v::Array{T,3}
+    f_w::Array{T,3}
+end
+function ResolvedCanopyDrag(mesh::RegularGrid{T}, lad::AbstractArray{<:Real,3};
+                            C_d::Real = 0.2) where {T}
+    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    size(lad) == (Nx, Ny, Nz) ||
+        throw(DimensionMismatch("ResolvedCanopyDrag: lad must be (Nx, Ny, Nz) = $((Nx, Ny, Nz))"))
+    all(>=(0), lad) || throw(ArgumentError("ResolvedCanopyDrag: lad must be ≥ 0"))
+    C_d >= 0 || throw(ArgumentError("ResolvedCanopyDrag: C_d must be ≥ 0"))
+    a = T.(lad)
+    a_u = similar(a); a_v = similar(a); a_w = similar(a)
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        im = i == 1 ? Nx : i - 1          # u face i: between cells i-1 and i
+        jm = j == 1 ? Ny : j - 1          # v face j: between cells j-1 and j
+        km = max(k - 1, 1)                # w face k: between cells k-1 and k
+        a_u[i, j, k] = (a[im, j, k] + a[i, j, k]) / 2
+        a_v[i, j, k] = (a[i, jm, k] + a[i, j, k]) / 2
+        a_w[i, j, k] = (a[i, j, km] + a[i, j, k]) / 2
+    end
+    return ResolvedCanopyDrag{T}(T(C_d), a, a_u, a_v, a_w,
+                                 ones(T, Nx, Ny, Nz), ones(T, Nx, Ny, Nz), ones(T, Nx, Ny, Nz))
+end
+
+"""
+    canopy_lad_field(mesh, profiles) -> Array{Float64,3}
+
+Cell-centred leaf-area density `(Nx, Ny, Nz)` on a `RegularGrid` from a
+per-column profile: `profiles[i, j]` is an [`AbstractLeafAreaDensity`](@ref)
+or `nothing` (no vegetation). Heights are measured from `mesh.z0`. Each
+column's layer values are layer integrals
+([`layer_leaf_area_density`](@ref)), so every column sums to its LAI.
+
+    canopy_lad_field(mesh, profile::AbstractLeafAreaDensity, mask::AbstractMatrix{Bool})
+
+is the same with one profile wherever `mask` is `true`.
+"""
+function canopy_lad_field(mesh::RegularGrid, profiles::AbstractMatrix)
+    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    size(profiles) == (Nx, Ny) ||
+        throw(DimensionMismatch("canopy_lad_field: profiles must be (Nx, Ny)"))
+    zf = [(k - 1) * mesh.dz for k in 1:Nz+1]
+    lad = zeros(Float64, Nx, Ny, Nz)
+    cache = IdDict{Any, Vector{Float64}}()
+    for j in 1:Ny, i in 1:Nx
+        p = profiles[i, j]
+        p === nothing && continue
+        col = get!(() -> layer_leaf_area_density(p, zf), cache, p)
+        @views lad[i, j, :] .= col
+    end
+    return lad
+end
+function canopy_lad_field(mesh::RegularGrid, profile::AbstractLeafAreaDensity,
+                          mask::AbstractMatrix{Bool})
+    return canopy_lad_field(mesh, [m ? profile : nothing for m in mask])
+end
+
+"""
+    apply_canopy_drag!(sim, drag::ResolvedCanopyDrag, dt) -> (Fx, Fy, Fz)
+
+Apply the canopy drag implicitly to the velocity of `sim`: every face
+velocity is multiplied by ``1/(1 + Δt\\,C_d\\,a\\,|U|)`` with ``a`` the LAD
+at that face and ``|U|`` the full speed there (the other two components
+averaged from their four neighbouring faces), all factors computed from
+the velocity *before* any is applied.
+
+Call it from the `post_predictor!` hook of
+[`step!`](@ref Aeolus.Simulations.step!), i.e. on the predicted velocity
+``u^*`` and before the pressure projection:
+
+```julia
+drag = ResolvedCanopyDrag(mesh, canopy_lad_field(mesh, LalicMihailovicLAD(4.0, 20.0; z_m = 12.0), mask))
+step!(sim, dt; post_predictor! = (s, Δt) -> apply_canopy_drag!(s, drag, Δt))
+```
+
+This replaces the explicit tendency ``-C_d a |U| U``: that one is
+unstable once ``Δt\\,C_d\\,a\\,|U| > 2`` (for ``C_d = 0.2``,
+``a = 1\\,\\mathrm{m^{-1}}`` and ``|U| = 5\\,\\mathrm{m\\,s^{-1}}`` that is any
+``Δt > 2\\,\\mathrm{s}``); this one is stable for every ``Δt``.
+
+Returns the volume-integrated kinematic force the step exerted,
+``\\sum (U' - U)/Δt\\,ΔV`` [m⁴ s⁻²] per component (negative for a flow
+in the positive direction); divide by the domain area for the canopy
+momentum sink per unit ground area (a stress, m² s⁻²).
+"""
+function apply_canopy_drag!(sim, drag::ResolvedCanopyDrag{T}, dt::Real) where {T}
+    mesh = sim.mesh
+    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
+    Δt = T(dt); C = drag.C_d
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+    u = sim.u.data; v = sim.v.data; w = sim.w.data
+    q = T(1) / 4
+    # 1. All factors from the pre-drag velocity.
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        I = Hx + i; J = Hy + j; K = Hz + k
+        au = drag.a_u[i, j, k]
+        if au > 0
+            uu = u[I, J, K]
+            vv = q * (v[I-1, J, K] + v[I, J, K] + v[I-1, J+1, K] + v[I, J+1, K])
+            ww = q * (w[I-1, J, K] + w[I, J, K] + w[I-1, J, K+1] + w[I, J, K+1])
+            drag.f_u[i, j, k] = canopy_drag_factor(C, au, sqrt(uu^2 + vv^2 + ww^2), Δt)
+        end
+        av = drag.a_v[i, j, k]
+        if av > 0
+            vv = v[I, J, K]
+            uu = q * (u[I, J-1, K] + u[I+1, J-1, K] + u[I, J, K] + u[I+1, J, K])
+            ww = q * (w[I, J-1, K] + w[I, J, K] + w[I, J-1, K+1] + w[I, J, K+1])
+            drag.f_v[i, j, k] = canopy_drag_factor(C, av, sqrt(uu^2 + vv^2 + ww^2), Δt)
+        end
+        aw = drag.a_w[i, j, k]
+        if aw > 0
+            ww = w[I, J, K]
+            uu = q * (u[I, J, K-1] + u[I+1, J, K-1] + u[I, J, K] + u[I+1, J, K])
+            vv = q * (v[I, J, K-1] + v[I, J+1, K-1] + v[I, J, K] + v[I, J+1, K])
+            drag.f_w[i, j, k] = canopy_drag_factor(C, aw, sqrt(uu^2 + vv^2 + ww^2), Δt)
+        end
+    end
+    # 2. Apply, and integrate the momentum removed.
+    Fx = zero(T); Fy = zero(T); Fz = zero(T)
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        I = Hx + i; J = Hy + j; K = Hz + k
+        if drag.a_u[i, j, k] > 0
+            u0 = u[I, J, K]; u[I, J, K] = u0 * drag.f_u[i, j, k]; Fx += u[I, J, K] - u0
+        end
+        if drag.a_v[i, j, k] > 0
+            v0 = v[I, J, K]; v[I, J, K] = v0 * drag.f_v[i, j, k]; Fy += v[I, J, K] - v0
+        end
+        if drag.a_w[i, j, k] > 0
+            w0 = w[I, J, K]; w[I, J, K] = w0 * drag.f_w[i, j, k]; Fz += w[I, J, K] - w0
+        end
+    end
+    dV = mesh.dx * mesh.dy * mesh.dz
+    return (Fx = Fx * dV / Δt, Fy = Fy * dV / Δt, Fz = Fz * dV / Δt)
 end
 
 end # module
