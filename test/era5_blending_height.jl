@@ -240,4 +240,160 @@ _θ(f::SurfaceForcing, z = f.z_ref) =
         @test blending_height(IBLBlendingHeight(DiffusionIBL(), 1000.0), z, [0.5, 0.5, 0.0]) ==
               blending_height(IBLBlendingHeight(DiffusionIBL(), 1000.0), z[1:2], [0.5, 0.5])
     end
+
+    @testset "Blended forcing: neutral limit is exactly z0_eff" begin
+        # ψ ≡ 0, all tiles at one skin temperature and saturated (β = 1):
+        # every tile has the same surface-to-l_b scalar difference, so the
+        # blended cell must exchange exactly like one surface with the
+        # effective roughness lengths forced at z.
+        tiles = [BHTestSlab(T = 296.0, β = 1.0, z0m = 0.01, z0h = 1e-3),
+                 BHTestSlab(T = 296.0, β = 1.0, z0m = 0.8, z0h = 0.02),
+                 BHTestSlab(T = 296.0, β = 1.0, z0m = 0.1, z0h = 1e-4)]
+        m = SurfaceMosaic(tiles, [0.5, 0.2, 0.3])
+        f = SurfaceForcing(T_air = 290.0, q_air = 0.006, U = 8.0, z_ref = 60.0)
+        worst = 0.0
+        for lb in (2.0, 10.0, 30.0, 59.0)
+            sol = blended_forcing(m, f, lb; sf = BHTestNeutral())
+            @test sol.converged && sol.blended
+            e = effective_roughness(m, lb)
+            u★ = κ_bh * f.U / log(f.z_ref / e.z0m)
+            θ★ = κ_bh * (_θ(f) - 296.0) / log(f.z_ref / e.z0h)
+            q★ = κ_bh * (f.q_air - saturation_specific_humidity(296.0, f.p)) / log(f.z_ref / e.z0q)
+            worst = max(worst, _bh_rel(sol.u_star, u★), _bh_rel(sol.θ_star, θ★), _bh_rel(sol.q_star, q★))
+            # and the blended wind sits on the log profile of z0_eff
+            @test sol.U_b ≈ f.U * log(lb / e.z0m) / log(f.z_ref / e.z0m) rtol = 1e-8
+        end
+        @printf("    neutral blended vs z0_eff closed form: max rel. error %.1e\n", worst)
+        @test worst < 1e-8
+    end
+
+    @testset "Blended forcing: single tile, stability, consistency" begin
+        # One tile split at l_b into two surface layers vs the tile forced
+        # directly at z. Kinematic fluxes are compared (ρ differs between
+        # l_b and z; H is divided by ρ c_p, c_p moist). With ψ ≡ 0 the split
+        # is exact. With stability it is
+        # exact only up to the level at which MOST takes its reference θv
+        # (the contract uses the forcing level, so l_b for the lower layer
+        # and z for the direct solve): O(Δθ/θ) in L, which in the stable
+        # case is amplified by ψ. Verified by temporarily fixing θv_ref =
+        # 300 K in both solvers: the BDBH errors then drop to 3e-11 and
+        # 1e-13. β = 0 and 1 only: the β hook defines
+        # q_s from q_a at the forcing level, so a 0 < β < 1 tile is itself
+        # level-dependent.
+        errs = Dict{Symbol,Float64}()
+        for (sf, key) in ((BHTestNeutral(), :neutral), (Aeolus.SurfaceExchange.BusingerDyerBeljaarsHoltslag(), :bdbh))
+            for β in (0.0, 1.0), (Ts, Ta) in ((300.0, 290.0), (285.0, 293.0), (293.0, 293.0))
+                s = BHTestSlab(T = Ts, β = β)
+                f = SurfaceForcing(T_air = Ta, q_air = 0.007, U = 4.0, z_ref = 40.0)
+                direct = turbulent_fluxes(s, f; sf = sf)
+                sol = blended_forcing(SurfaceMosaic([s], [1.0]), f, 8.0; sf = sf)
+                @test sol.converged
+                ρb = air_density(sol.T_b, f.p, PhasePartition(sol.q_b))
+                ρz = air_density(f.T_air, f.p, PhasePartition(f.q_air))
+                b = turbulent_fluxes(s, sol.forcings[1]; sf = sf)
+                e = _bh_rel(b.τ / ρb, direct.τ / ρz)
+                cpb = heat_capacity_moist(PhasePartition(sol.q_b))
+                cpz = heat_capacity_moist(PhasePartition(f.q_air))
+                abs(direct.H) > 1 && (e = max(e, _bh_rel(b.H / (ρb * cpb), direct.H / (ρz * cpz))))
+                abs(direct.E) > 1e-7 && (e = max(e, _bh_rel(b.E / ρb, direct.E / ρz)))
+                k = Symbol(key, Ts < Ta ? :_stable : :_other)
+                errs[k] = max(get(errs, k, 0.0), e)
+            end
+        end
+        @printf("    single tile split at l_b vs forced at z: ψ≡0 %.1e; BDBH unstable/neutral %.1e, stable %.1e\n",
+                max(errs[:neutral_stable], errs[:neutral_other]), errs[:bdbh_other], errs[:bdbh_stable])
+        @test max(errs[:neutral_stable], errs[:neutral_other]) < 1e-8
+        @test errs[:bdbh_other] < 2e-3
+        @test errs[:bdbh_stable] < 0.03
+
+        # Heterogeneous, unstable and stable: converged, the blended layer
+        # carries exactly the tile-aggregate flux, profile residual tiny.
+        tiles() = [BHTestSlab(T = 305.0, β = 0.1, z0m = 0.05, z0h = 0.005),
+                   BHTestSlab(T = 295.0, β = 1.0, z0m = 1.0, z0h = 0.1)]
+        for (Ta, U) in ((292.0, 3.0), (310.0, 6.0), (292.0, 0.5))
+            m = SurfaceMosaic(tiles(), [0.6, 0.4])
+            f = SurfaceForcing(T_air = Ta, q_air = 0.008, U = U, z_ref = 50.0)
+            sol = blended_forcing(m, f, 15.0)
+            @test sol.converged
+            @test sol.residual < 1e-10
+            agg = turbulent_fluxes(m, sol.forcings)
+            ρ = air_density(sol.T_b, f.p, PhasePartition(sol.q_b))
+            @test sol.u_star ≈ sqrt(agg.τ / ρ) rtol = 1e-12
+            @test sign(sol.L) == sign(Ta - 300.0)       # cell-mean skin ≈ 301 K
+        end
+
+        # l_b ≥ z: no blending, identical to the plain mosaic.
+        m = SurfaceMosaic(tiles(), [0.6, 0.4])
+        f = SurfaceForcing(T_air = 292.0, U = 5.0, z_ref = 10.0)
+        sol = blended_forcing(m, f, 12.0)
+        @test !sol.blended
+        a, b = turbulent_fluxes(m, sol.forcings), turbulent_fluxes(m, f)
+        @test (a.τ, a.H, a.LE) == (b.τ, b.H, b.LE)
+        # l_b → z⁻: continuous with the plain mosaic.
+        d(lb) = _bh_rel(turbulent_fluxes(m, blended_forcing(m, f, lb).forcings).H, b.H)
+        @test d(9.99) < d(9.9) < d(9.0)
+        @test d(9.99) < 1e-3
+        @test_throws ArgumentError blended_forcing(m, f, 0.5)     # l_b < z0 of the rough tile
+    end
+
+    @testset "BlendedMosaic: contract, conservation, time stepping" begin
+        mk() = SurfaceMosaic([BHTestSlab(T = 300.0, C = 1e5, β = 0.2, z0m = 0.02, z0h = 0.002),
+                              BHTestSlab(T = 296.0, C = 3e5, β = 0.9, z0m = 0.6, z0h = 0.06)],
+                             [0.55, 0.45])
+        bh = BouZeidBlendingHeight(2000.0)
+        b = BlendedMosaic(mk(), bh)
+        @test b isa AbstractSurface
+        @test last_blending(b) === nothing
+        lb = blending_height(b)
+        @test lb == blending_height(bh, b.mosaic)
+        @test roughness_lengths(b) == effective_roughness(b.mosaic, lb)
+        @test surface_temperature(b) == surface_temperature(b.mosaic)
+        @test surface_albedo(b) == surface_albedo(b.mosaic)
+        @test ntiles(b) == 2 && mosaic_fractions(b) == mosaic_fractions(b.mosaic)
+
+        # Energy conservation over a diurnal cycle: Σ f C ΔT = Σ G Δt.
+        dt, stored, nconv, nstep = 300.0, 0.0, 0, 0
+        e0 = sum(w * t.C * t.T for (t, w) in zip(b.mosaic.tiles, b.mosaic.fractions))
+        for k in 0:287
+            sw = max(0.0, 700sin(2π * (k * dt / 86400 - 0.25)))
+            f = SurfaceForcing(sw_down = sw, lw_down = 330.0, T_air = 294.0 + 3sin(2π * (k * dt / 86400 - 0.35)),
+                               q_air = 0.008, U = 4.0, z_ref = 80.0)
+            fl = step_surface!(b, f, dt)
+            stored += fl.G * dt
+            nconv += last_blending(b).converged; nstep += 1
+            @test fl.Rn ≈ fl.H + fl.LE + fl.G rtol = 1e-12 atol = 1e-9
+            @test last_tile_fluxes(b) == last_tile_fluxes(b.mosaic)
+        end
+        e1 = sum(w * t.C * t.T for (t, w) in zip(b.mosaic.tiles, b.mosaic.fractions))
+        @printf("    diurnal cycle: %d/%d blended solves converged; |ΣfCΔT − ΣGΔt| / ΣGΔt = %.1e\n",
+                nconv, nstep, abs(e1 - e0 - stored) / max(abs(stored), 1.0))
+        @test nconv == nstep
+        @test abs(e1 - e0 - stored) <= 1e-9 * max(abs(stored), sum(abs, (e0, e1)) * 1e-6)
+
+        # Single tile: a BlendedMosaic is the bare tile (to the l_b vs z
+        # difference in air density).
+        s1, s2 = BHTestSlab(T = 299.0), BHTestSlab(T = 299.0)
+        bm = BlendedMosaic([s1], [1.0], FixedBlendingHeight(5.0))
+        f = SurfaceForcing(sw_down = 500.0, T_air = 293.0, U = 3.0, z_ref = 30.0)
+        for _ in 1:20
+            step_surface!(bm, f, 600.0); step_surface!(s2, f, 600.0)
+        end
+        d1, d2 = s1.T - 299.0, s2.T - 299.0
+        @printf("    single-tile BlendedMosaic vs bare tile after 20 steps: warming %.3f vs %.3f K\n", d1, d2)
+        @test abs(d1 - d2) < 0.01 * abs(d2)
+
+        # Neutral stress of a blended cell equals that of z0_eff; forcing
+        # the tiles at z instead (plain mosaic) gives a different stress.
+        m = mk()
+        for t in m.tiles; t.T = _θ(SurfaceForcing(T_air = 295.0, z_ref = 50.0)); t.β = 0.0; end
+        f = SurfaceForcing(T_air = 295.0, U = 6.0, z_ref = 50.0, q_air = 0.0)
+        bn = BlendedMosaic(m, FixedBlendingHeight(20.0))
+        τb = turbulent_fluxes(bn, f; sf = BHTestNeutral()).τ
+        e = effective_roughness(m, 20.0)
+        ρb = air_density(last_blending(bn).T_b, f.p, PhasePartition(0.0))
+        @test τb ≈ ρb * (κ_bh * 6.0 / log(50.0 / e.z0m))^2 rtol = 1e-8
+        τp = turbulent_fluxes(m, f; sf = BHTestNeutral()).τ
+        @printf("    neutral cell stress: blended (l_b = 20 m) %.4f, plain mosaic at z %.4f N m⁻²\n", τb, τp)
+        @test abs(τb - τp) / τp > 1e-3
+    end
 end

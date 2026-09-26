@@ -109,7 +109,8 @@ export SurfaceMosaic, ntiles, mosaic_fractions, set_mosaic_fractions!,
        AbstractBlendingHeight, FixedBlendingHeight, MasonBlendingHeight,
        ClaussenBlendingHeight, BouZeidBlendingHeight, IBLBlendingHeight,
        blending_height,
-       AbstractIBLModel, ElliottIBL, PowerLawIBL, DiffusionIBL, ibl_height
+       AbstractIBLModel, ElliottIBL, PowerLawIBL, DiffusionIBL, ibl_height,
+       BlendingHeightSolution, blended_forcing, BlendedMosaic, last_blending
 
 # =========================================================================
 # Fractions
@@ -900,5 +901,284 @@ function blending_height(bh::IBLBlendingHeight, z0s, f; c::SurfaceConstants = DE
                    for (j, zu) in enumerate(act), (i, zd) in enumerate(act) if i != j)
 end
 
+# =========================================================================
+# Tiles forced at the blending height
+# =========================================================================
+
+"""
+    BlendingHeightSolution
+
+Result of [`blended_forcing`](@ref). Fields:
+
+  * `forcings` — one `SurfaceForcing` per tile: the grid-cell forcing
+    with `U`, `T_air`, `q_air` replaced by the blended values at
+    `z_ref = l_b` (or the grid forcing itself when `blended == false`);
+  * `l_b` — the blending height (m);
+  * `U_b`, `T_b`, `θ_b`, `q_b` — wind (m s⁻¹), temperature (K), potential
+    temperature on the surface reference (K), specific humidity at `l_b`;
+  * `u_star`, `θ_star`, `q_star`, `L` — scales of the aggregate flux and
+    the Obukhov length of the blended layer between `l_b` and the forcing
+    level;
+  * `residual` — the largest profile mismatch at the solution, in m s⁻¹,
+    K and kg kg⁻¹ scaled to one number (see [`blended_forcing`](@ref));
+  * `iterations`, `converged`;
+  * `blended` — `false` when the forcing level is at or below `l_b`, so
+    the tiles are forced directly at the forcing level (no blending).
+"""
+struct BlendingHeightSolution
+    forcings::Vector{SurfaceForcing{Float64}}
+    l_b::Float64
+    U_b::Float64
+    T_b::Float64
+    θ_b::Float64
+    q_b::Float64
+    u_star::Float64
+    θ_star::Float64
+    q_star::Float64
+    L::Float64
+    residual::Float64
+    iterations::Int
+    converged::Bool
+    blended::Bool
+end
+
+_with(f::SurfaceForcing, U, T, q, z) =
+    SurfaceForcing{Float64}(f.sw_down, f.lw_down, T, q, U, f.p, z, f.rain, f.snow)
+
+_lapse(q, c::SurfaceConstants) = dry_adiabatic_lapse_rate(PhasePartition(q), c.thermo)
+
+"""
+    blended_forcing(m::SurfaceMosaic, forcing, l_b; maxiter = 50, rtol = 1e-10, kwargs...)
+        -> BlendingHeightSolution
+
+The forcing each tile of `m` sees under the blending-height formulation
+(Wieringa 1986; Mason 1988; Claussen 1991), for a grid-cell `forcing` at
+height `z = forcing.z_ref` and blending height `l_b < z`.
+
+Between the surface and ``l_b`` every tile has its own surface layer; at
+``l_b`` the wind ``U_b``, potential temperature ``θ_b`` and humidity
+``q_b`` are common to all tiles; between ``l_b`` and ``z`` a single
+Monin–Obukhov profile carries the **aggregate** flux ``\\sum f_i F_i``.
+The blended state is the one for which the two agree:
+
+```math
+U(z) - U_b = \\frac{u_{*}}{κ}\\,Φ_m, \\quad
+θ(z) - θ_b = \\frac{θ_{*}}{κ}\\,Φ_h, \\quad
+q(z) - q_b = \\frac{q_{*}}{κ}\\,Φ_h,
+```
+
+with ``Φ = \\ln(z/l_b) - ψ(z/L) + ψ(l_b/L)``, ``u_*^2 = \\bar τ/ρ``,
+``u_* θ_* = -\\bar H/(ρ c_p)``, ``u_* q_* = -\\bar E/ρ`` from the tiles'
+own `turbulent_fluxes` against the blended forcing, and ``L`` from the
+contract's `obukhov_length`. The three equations are solved by Newton
+iteration with a finite-difference Jacobian (every evaluation calls each
+tile's `turbulent_fluxes`); convergence means every mismatch is below
+`rtol` times ``\\max(U(z), 1)``, ``θ(z)`` and ``\\max(q(z), 10^{-3})``.
+
+Under neutral stratification the solution is closed-form and reproduces
+the [`effective_roughness`](@ref) exactly: with uniform tile skin
+temperatures the cell stress and heat flux equal those of one surface
+with ``z_{0m,eff}``, ``z_{0h,eff}`` forced at ``z``.
+
+If ``l_b ≥ z`` the forcing level lies inside the tiles' own surface
+layers; each tile is then forced directly with `forcing` and
+`blended = false`. `kwargs` (`sf`, `c`, …) go to every tile's
+`turbulent_fluxes`; `sf` and `c` are also used for the blended layer.
+Temperatures are referred to the surface by the dry adiabat of the
+contract, ``θ = T + Γ_d z``.
+
+Two properties of the contract's surface-layer solve limit how exactly a
+single tile split at ``l_b`` reproduces the same tile forced at ``z``.
+Both are exact with ``ψ ≡ 0``.
+
+  * Buoyancy is referred to ``θ_v`` at the forcing level. The blended
+    layer refers it to ``θ_v`` at ``l_b``, as every tile does. This is an
+    ``O(Δθ/θ)`` ambiguity in ``L``, which stability amplifies: a 2.5 %
+    stress difference in a strongly stable test case, 5e-4 in unstable.
+  * The default `moisture_availability` hook forms ``q_s`` from ``q_a``
+    at the forcing level. A tile with ``0 < β < 1`` therefore evaporates
+    differently when it is forced at ``l_b``.
+"""
+function blended_forcing(m::SurfaceMosaic, f::SurfaceForcing, l_b::Real;
+                         maxiter::Integer = 50, rtol::Real = 1e-10, kwargs...)
+    kw = values(kwargs)
+    sf = get(kw, :sf, BusingerDyerBeljaarsHoltslag())
+    c = get(kw, :c, DEFAULT_SURFACE_CONSTANTS)
+    n = ntiles(m)
+    z = Float64(f.z_ref)
+    l_b = Float64(l_b)
+    zm = _tile_roughness(m, :z0m)
+    _check_blending(l_b, zm, m.fractions)
+    if l_b >= z
+        ff = _with(f, f.U, f.T_air, f.q_air, z)
+        return BlendingHeightSolution(fill(ff, n), l_b, f.U, f.T_air,
+                                      f.T_air + _lapse(f.q_air, c) * z, f.q_air,
+                                      NaN, NaN, NaN, NaN, 0.0, 0, true, false)
+    end
+
+    κ = c.κ
+    ε = _virtual_coefficient(c)
+    U_ref, q_ref = Float64(f.U), Float64(f.q_air)
+    θ_ref = f.T_air + _lapse(q_ref, c) * z
+    scale = (max(U_ref, 1.0), θ_ref, max(q_ref, 1e-3))
+
+    # Residual of the three profile equations at the blended state x.
+    # Everything assigned here is `local`: the enclosing function reuses
+    # the names r, T, L, … and a closure would otherwise overwrite them.
+    function resid(x)
+        local U, θ, q, T, fb, agg, qp, ρ, cp, us, θs, qs, θvs, L, Φm, Φh, r
+        U, θ, q = max(x[1], 1e-6), x[2], x[3]
+        T = θ - _lapse(q, c) * l_b
+        fb = _with(f, U, T, q, l_b)
+        agg = aggregate_fluxes(tile_fluxes(m, fb; kwargs...), m.fractions)
+        qp = PhasePartition(q)
+        ρ = air_density(T, f.p, qp, c.thermo)
+        cp = heat_capacity_moist(qp, c.thermo)
+        us = sqrt(max(agg.τ, 0.0) / ρ)
+        us > 0 || throw(ArgumentError("blended_forcing: zero aggregate stress; the blended layer is undefined"))
+        θs = -agg.H / (ρ * cp * us)
+        qs = -agg.E / (ρ * us)
+        θvs = θs * (1 + ε * q) + ε * θ * qs
+        # Buoyancy referred to θv at l_b, as each tile's own surface-layer
+        # solve refers it to its forcing level: a single tile is then split
+        # at l_b into two MOST layers that join exactly.
+        L = obukhov_length(us, θvs, θ * (1 + ε * q); c = c)
+        Φm = log(z / l_b) - psi_m(sf, z / L) + psi_m(sf, l_b / L)
+        Φh = log(z / l_b) - psi_h(sf, z / L) + psi_h(sf, l_b / L)
+        r = (U + us * Φm / κ - U_ref, θ + θs * Φh / κ - θ_ref, q + qs * Φh / κ - q_ref)
+        return r, (fb, T, us, θs, qs, L)
+    end
+    rnorm(r) = maximum(abs(r[k]) / scale[k] for k in 1:3)
+
+    # Neutral, uniform-state first guess: the log profile of z0_eff.
+    z0e = effective_roughness(zm, m.fractions, l_b)
+    x = [U_ref * log(l_b / z0e) / log(z / z0e), θ_ref, q_ref]
+    r, aux = resid(x)
+    it, conv = 0, rnorm(r) <= rtol
+    while !conv && it < maxiter
+        it += 1
+        J = zeros(3, 3)
+        for k in 1:3
+            h = 1e-6 * scale[k]
+            xk = copy(x); xk[k] += h
+            rk, _ = resid(xk)
+            for i in 1:3
+                J[i, k] = (rk[i] - r[i]) / h
+            end
+        end
+        dx = J \ collect(r)
+        # Damped step: halve until the scaled residual decreases.
+        λ, accepted = 1.0, false
+        for _ in 1:30
+            xn = x .- λ .* dx
+            xn[1] = max(xn[1], 1e-6)
+            rn, auxn = resid(xn)
+            if rnorm(rn) < rnorm(r)
+                x, r, aux, accepted = xn, rn, auxn, true
+                break
+            end
+            λ /= 2
+        end
+        conv = rnorm(r) <= rtol
+        accepted || break
+    end
+    fb, T, us, θs, qs, L = aux
+    return BlendingHeightSolution(fill(fb, n), l_b, fb.U, T, x[2], x[3], us, θs, qs, L,
+                                  rnorm(r), it, conv, true)
+end
+
+blended_forcing(m::SurfaceMosaic, f::SurfaceForcing, bh::AbstractBlendingHeight; kwargs...) =
+    blended_forcing(m, f, blending_height(bh, m; c = get(values(kwargs), :c, DEFAULT_SURFACE_CONSTANTS));
+                    kwargs...)
+
+"""
+    BlendedMosaic(mosaic::SurfaceMosaic, height::AbstractBlendingHeight)
+    BlendedMosaic(tiles, fractions, height; atol = 1e-6)
+
+A tiled grid cell whose tiles are forced at the blending height: each
+`step_surface!` or `turbulent_fluxes` call first finds the blended wind,
+temperature and humidity at ``l_b`` = [`blending_height`](@ref)`(height,
+mosaic)` with [`blended_forcing`](@ref), then lets every tile exchange
+with that state and returns ``\\sum f_i F_i``. The tiles, fractions and
+per-tile fluxes are those of the wrapped `mosaic`.
+
+Contract methods: `surface_temperature`, `surface_albedo`,
+`surface_emissivity`, `moisture_availability` and `net_radiation` are
+the mosaic's; `roughness_lengths` returns the blending-height
+[`effective_roughness`](@ref) (not the log average); `step_surface!` and
+`turbulent_fluxes` accept one `SurfaceForcing` for the cell and pass
+`kwargs` to the tiles and to [`blended_forcing`](@ref). The solution of
+the last call is kept in [`last_blending`](@ref).
+
+Compared with a plain `SurfaceMosaic` forced at the grid level ``z``,
+the difference is where the tiles' surface layers end: at ``z`` (each
+tile as if it extended to infinity upstream) or at ``l_b`` (tiles
+exchange with air that has already been mixed over the other tiles).
+"""
+mutable struct BlendedMosaic{M<:SurfaceMosaic,B<:AbstractBlendingHeight} <: AbstractSurface
+    mosaic::M
+    height::B
+    last::Union{Nothing,BlendingHeightSolution}
+end
+BlendedMosaic(m::SurfaceMosaic, h::AbstractBlendingHeight) = BlendedMosaic(m, h, nothing)
+BlendedMosaic(tiles::Union{Tuple,AbstractVector}, fractions, h::AbstractBlendingHeight; atol::Real = 1e-6) =
+    BlendedMosaic(SurfaceMosaic(tiles, fractions; atol = atol), h)
+
+"The [`BlendingHeightSolution`](@ref) of the last `step_surface!` / `turbulent_fluxes` of a [`BlendedMosaic`](@ref) (`nothing` before)."
+last_blending(b::BlendedMosaic) = b.last
+
+ntiles(b::BlendedMosaic) = ntiles(b.mosaic)
+mosaic_fractions(b::BlendedMosaic) = mosaic_fractions(b.mosaic)
+last_tile_fluxes(b::BlendedMosaic) = last_tile_fluxes(b.mosaic)
+blending_height(b::BlendedMosaic; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    blending_height(b.height, b.mosaic; c = c)
+
+surface_temperature(b::BlendedMosaic) = surface_temperature(b.mosaic)
+surface_albedo(b::BlendedMosaic) = surface_albedo(b.mosaic)
+surface_emissivity(b::BlendedMosaic) = surface_emissivity(b.mosaic)
+surface_albedo(b::BlendedMosaic, band, args...) = surface_albedo(b.mosaic, band, args...)
+surface_emissivity(b::BlendedMosaic, band, args...) = surface_emissivity(b.mosaic, band, args...)
+moisture_availability(b::BlendedMosaic) = moisture_availability(b.mosaic)
+net_radiation(b::BlendedMosaic, f::SurfaceForcing; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    net_radiation(b.mosaic, f; c = c)
+
+"Blending-height [`effective_roughness`](@ref) `(z0m, z0h, z0q)` of the tiles of a [`BlendedMosaic`](@ref)."
+roughness_lengths(b::BlendedMosaic) = effective_roughness(b.mosaic, blending_height(b))
+
+# Keywords for blended_forcing only; everything else goes to the tiles.
+_split_kw(kwargs) = (maxiter = get(values(kwargs), :maxiter, 50), rtol = get(values(kwargs), :rtol, 1e-10)),
+                    Base.structdiff(values(kwargs), NamedTuple{(:maxiter, :rtol)})
+
+function _blend!(b::BlendedMosaic, f::SurfaceForcing, kwargs)
+    solver, tilekw = _split_kw(kwargs)
+    c = get(tilekw, :c, DEFAULT_SURFACE_CONSTANTS)
+    sol = blended_forcing(b.mosaic, f, blending_height(b; c = c); solver..., tilekw...)
+    b.last = sol
+    return sol, tilekw
+end
+
+"""
+    turbulent_fluxes(b::BlendedMosaic, forcing; kwargs...) -> SurfaceFluxes
+
+``\\sum f_i F_i`` with every tile forced at the blending height (see
+[`blended_forcing`](@ref)); nothing is stepped.
+"""
+function turbulent_fluxes(b::BlendedMosaic, f::SurfaceForcing; kwargs...)
+    sol, tilekw = _blend!(b, f, kwargs)
+    return turbulent_fluxes(b.mosaic, sol.forcings; tilekw...)
+end
+
+"""
+    step_surface!(b::BlendedMosaic, forcing, dt; kwargs...) -> SurfaceFluxes
+
+Find the blended state at ``l_b`` for the current tile states, then step
+every tile with it (`step_surface!` of the wrapped mosaic with one forcing
+per tile) and return the fraction-weighted fluxes. Conservation is that
+of the mosaic: the returned `G` is ``\\sum f_i G_i``.
+"""
+function step_surface!(b::BlendedMosaic, f::SurfaceForcing, dt::Real; kwargs...)
+    sol, tilekw = _blend!(b, f, kwargs)
+    return step_surface!(b.mosaic, sol.forcings, dt; tilekw...)
+end
 
 end # module
