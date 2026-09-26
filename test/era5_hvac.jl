@@ -171,7 +171,7 @@ end
         z = hvac_mass_box(T = 296.15)
         dt = 600.0
         E0 = zone_heat_content(z); src = 0.0; gross = 0.0
-        on_err = 0.0; band_ok = true; n_heat = n_cool = n_off = 0; off_ok = true
+        on_err = 0.0; band_ok = true; n_heat = n_cool = n_off = 0; off_ok = true; unmet_ok = true
         for k in 1:(6 * 144)
             t = k * dt
             day = sin(2π * (t / 86400 - 0.25))
@@ -193,12 +193,12 @@ end
                 n_off += 1
                 off_ok &= (b.Q_hvac == 0)
             end
-            @assert hb.Q_unmet == 0
+            unmet_ok &= (hb.Q_unmet == 0)
         end
         cons = abs(zone_heat_content(z) - E0 - src)
         @printf("  setpoint holding: %d heating, %d cooling, %d dead-band steps; max |T - T_set| when on = %.2e K; |ΔE - ∫sources| = %.2e J (gross %.2e J)\n",
                 n_heat, n_cool, n_off, on_err, cons, gross)
-        @test band_ok && off_ok
+        @test band_ok && off_ok && unmet_ok
         @test on_err < 1e-9
         @test n_heat > 0 && n_cool > 0 && n_off > 0
         @test cons < 1e-12 * gross
@@ -278,10 +278,12 @@ end
         h = IdealLoadsHVAC(T_cool = 297.15, dehumidify = true, RH_max = 0.6)
         z = hvac_air_box(T = 297.15, ach = 1.0)
         local b, hb
+        rh_ok = true
         for k in 1:500
             b, hb = step_zone!(z, f, 600.0, h)
-            @assert zone_relative_humidity(z) <= 0.6 + 1e-12
+            rh_ok &= zone_relative_humidity(z) <= 0.6 + 1e-12
         end
+        @test rh_ok                     # RH_max never exceeded
         M, n = z.ρ_air * z.volume, 1.0 / 3600
         q_max = specific_humidity_from_relative_humidity(297.15, z.p_ref, 0.6)
         @test zone_relative_humidity(z) ≈ 0.6 atol = 1e-12
