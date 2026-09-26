@@ -247,6 +247,12 @@ tabulated in CLM4.5 Table 8.2 (J mol⁻¹, J mol⁻¹ K⁻¹):
 
 The activation energies of `Vcmax`, `Kc`, `Ko`, `Γ*` and `Rd` are those
 of Bernacchi et al. (2001); that of `Jmax` is Bernacchi et al. (2003).
+`Tp` reuses the `Vcmax` row, as Table 8.2 does ("because Tp as
+implemented here varies with Vcmax"). Note that the pre-acclimation
+CLM4.5 source (tag `clm4_5_00`, `CanopyFluxesMod.F90`, commented-out
+block) instead used Harley et al. (1992) for TPU: ΔHa = 53100,
+ΔHd = 150650, ΔS = 490. Pass a custom [`C3TemperatureResponses`](@ref)
+to use that variant.
 """
 function bonan2011_c3_temperature()
     vc = PeakedArrheniusResponse(65330.0, 149250.0, 485.0)

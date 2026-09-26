@@ -150,7 +150,8 @@ inhibition (CLM4.5 eqs. 8.12–8.14), not renormalised at 25 °C (the C4
 
 `CLM45_PFT_PHOTOSYNTHESIS` carries CLM4.5 Table 8.1: pathway, canopy-top
 ``V_{cmax25}``, leaf C:N, fraction of leaf N in Rubisco and specific leaf
-area for 15 natural and 4 crop types. ``V_{cmax25}`` in that table is
+area for 14 natural and 5 crop types (rainfed rows; the irrigated
+rows are identical). ``V_{cmax25}`` in that table is
 itself derived, ``V_{cmax25} = F_{LNR} F_{NR} a_{R25} / (CN_L\,SLA_0)``;
 recomputing it from the other columns reproduces every row to within
 0.1 %, which is how the transcription is checked.
@@ -160,7 +161,7 @@ recomputing it from the other columns reproduces every row to within
 | Check | Reference | Result |
 | :-- | :-- | :-- |
 | ``K_c, K_o, \Gamma^*`` temperature shape, 5–40 °C | Bernacchi et al. (2001) fits | max rel. error 1.3 × 10⁻⁴ |
-| ``K_c, K_o, \Gamma^*`` absolute, 5–40 °C | Bernacchi et al. (2001) fits | < 1 % (CLM rounds the 25 °C values) |
+| ``K_c, K_o, \Gamma^*`` absolute, 5–40 °C | Bernacchi et al. (2001) fits | < 1 % (max 0.54 %: the fit's two-decimal ``c`` does not reproduce Bernacchi's own tabulated 25 °C values exactly) |
 | ``V_{cmax}``, ``R_d`` activation part | Bernacchi et al. (2001) fits | < 1 % |
 | ``T_{opt}`` closed form | numerical maximum | < 2 mK |
 | CLM4.5 Table 8.1 transcription | eq. 8.17 from same row | max 9.3 × 10⁻⁴ |

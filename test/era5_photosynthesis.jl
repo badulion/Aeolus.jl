@@ -29,9 +29,12 @@ _bernacchi(c, ΔHa, T) = exp(c - ΔHa / (_Rkj * T))
     @test temperature_factor(Q10Response(), 308.15) ≈ 2.0 atol = 1e-12
 
     # Rubisco kinetics against Bernacchi et al. (2001)'s own functional
-    # form. The 25 °C values of that form (Kc 406.8, Ko 277.1, Γ* 42.93)
-    # differ from the rounded CLM values (404.9, 278.4, 42.75) by < 0.5 %;
-    # the *temperature shape* must agree to the precision of R.
+    # form. 404.9 / 278.4 / 42.75 are Bernacchi's tabulated 25 °C values
+    # (Table 1), which CLM adopts; evaluating the exp(c − ΔHa/RT) fit with
+    # the published two-decimal c gives 406.07 / 276.90 / 42.89 instead, a
+    # difference of up to 0.54 % that is the rounding of c, not an error.
+    # With identical ΔHa the *temperature shape* is a transcription check
+    # of the activation energies and must agree to the precision of R.
     tc = bonan2011_c3_temperature()
     worst = 0.0
     for (resp, c, ΔH, k25) in ((tc.Kc, 38.05, 79.43, 404.9),
@@ -55,8 +58,9 @@ _bernacchi(c, ΔHa, T) = exp(c - ΔHa / (_Rkj * T))
     @info "Γ* (µmol/mol) model vs Bernacchi" Γ15 ref15 = _bernacchi(19.02, 37.83, 288.15) Γ35 ref35 = _bernacchi(19.02, 37.83, 308.15)
 
     # Vcmax and Rd: Bernacchi's fits are pure Arrhenius (no deactivation).
-    # The activation part of the CLM responses must reproduce them.
-    for (Ha, c, ΔH) in ((65330.0, 26.35, 65.33), (46390.0, 18.72, 46.39))
+    # The activation part of the shipped Bonan-2011 responses must
+    # reproduce them (read ΔHa from the parameter set, not a literal).
+    for (Ha, c, ΔH) in ((tc.Vcmax.ΔHa, 26.35, 65.33), (tc.Rd.ΔHa, 18.72, 46.39))
         for Tc in 10.0:5.0:40.0
             T = Tc + 273.15
             @test abs(temperature_factor(ArrheniusResponse(Ha), T) / _bernacchi(c, ΔH, T) - 1) < 1e-2
