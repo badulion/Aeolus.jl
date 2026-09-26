@@ -1203,7 +1203,7 @@ struct ColeouLesaffre1998Retention <: AbstractSnowWaterRetention end
 A holding capacity that is a fixed fraction of the pore volume,
 ``θ_r = f (1 - θ_i)``. Crocus uses ``f = 0.05`` (Vionnet et al. 2012,
 Eq. 19, after Pahaut 1976); CLM uses the irreducible saturation
-``S_r = 0.033`` (Oleson et al. 2010, Sect. 7.2.3).
+``S_r = 0.033`` (Oleson et al. 2010, Sect. 7.2.2, Eq. 7.26).
 """
 Base.@kwdef struct PoreFractionRetention <: AbstractSnowWaterRetention
     fraction::Float64 = 0.05
@@ -1312,7 +1312,7 @@ _pore_room(p, i) = max(p.consts.ρ_ice * p.dz[i] - p.m_ice[i] -
     SnowBucketPercolation(; retention = ColeouLesaffre1998Retention())
 
 The "tipping bucket" liquid-water scheme of Crocus (Vionnet et al. 2012,
-Sect. 3.10) and CLM (Oleson et al. 2010, Sect. 7.2.3), with the
+Sect. 3.10) and CLM (Oleson et al. 2010, Sect. 7.2.2), with the
 holding capacity from `retention`. Proceeding downward from the top
 layer, water entering a layer first refreezes as far as the layer's cold
 content allows ([`snow_refreeze!`](@ref)); the layer then retains liquid
@@ -1357,14 +1357,18 @@ end
 Saturated hydraulic conductivity of snow of dry density `ρ_dry`
 (kg m⁻³) and equivalent-sphere (optical) grain radius `r_es` (m), from
 the permeability Calonne et al. (2012) computed on 3-D
-tomography images, ``k = 0.75\\, r_{es}^2 \\exp(-0.013 ρ_{dry})`` (m²),
+tomography images, ``k = 3.0\\, r_{es}^2 \\exp(-0.013 ρ_{dry})`` (m²;
+their abstract, with ``r_{es} = 3/(SSA\\,ρ_{ice})`` the equivalent-sphere *radius*),
 converted with ``K_s = k ρ_w g / μ`` (μ: viscosity of water at 0 °C,
-Pa s; Wever et al. 2014, Eq. 14). For ``r_{es} = 0.5`` mm and
-400 kg m⁻³ it is ``5.7·10^{-3}`` m s⁻¹.
+Pa s; Wever et al. 2014, Eq. 14). Wever et al. print the coefficient as
+0.75 applied to a grain size labelled ``r_{es}``; ``0.75\\,d^2 = 3.0\\,r^2``,
+i.e. their 0.75 goes with the optical grain *diameter* (SNOWPACK's
+`ogs`), not the radius. For ``r_{es} = 0.5`` mm and 400 kg m⁻³,
+``K_s = 2.3·10^{-2}`` m s⁻¹.
 """
 snow_saturated_hydraulic_conductivity(ρ_dry::Real, r_es::Real; μ::Real = 1.792e-3,
                                       c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
-    0.75 * r_es^2 * exp(-0.013 * ρ_dry) * c.ρ_water * grav(c) / μ
+    3.0 * r_es^2 * exp(-0.013 * ρ_dry) * c.ρ_water * grav(c) / μ
 
 """
     SnowGravityDrainage(; retention = ColeouLesaffre1998Retention(),

@@ -199,8 +199,8 @@ by SNOWPACK (Wever et al. 2014, Eq. 1):
 (0.062 at 200 kg m⁻³, 0.050 at 300, 0.038 at 400).
 `PoreFractionRetention(fraction = f)` is ``θ_r = f(1-θ_i)``: Crocus's
 5 % of the pore volume (Vionnet et al. 2012, Eq. 19) or CLM's
-``S_r = 0.033``. For 0.1 m of 300 kg m⁻³ snow they hold 4.96 and
-3.36 kg m⁻² respectively.
+``S_r = 0.033`` (Oleson et al. 2010, Eq. 7.26). For 0.1 m of 300 kg m⁻³
+snow, Coléou & Lesaffre holds 4.96 kg m⁻², Crocus 3.36 and CLM 2.22.
 
 **Refreezing.** Liquid water in a layer colder than ``T_f`` refreezes at
 constant enthalpy. With cold content ``C(T_f - T)``
@@ -230,9 +230,12 @@ q = ρ_w K_s S_e^{3},\qquad S_e = \frac{θ_w-θ_r}{θ_s-θ_r},\qquad θ_s = 1-θ
 
 with the saturated hydraulic conductivity from the permeability of
 Calonne et al. (2012),
-``K_s = 0.75\,r_{es}^2 e^{-0.013ρ_{dry}}\,ρ_w g/μ``. The layer's optical
+``K_s = 3.0\,r_{es}^2 e^{-0.013ρ_{dry}}\,ρ_w g/μ``. The layer's optical
 grain radius (`grain`, which #35 evolves) is ``r_{es}``, and
-``μ = 1.792·10^{-3}`` Pa s (Wever et al. 2014). The layer fluxes are
+``μ = 1.792·10^{-3}`` Pa s (Wever et al. 2014). Wever et al. (2014,
+Eq. 14) print the coefficient as 0.75; that value belongs with the
+optical grain *diameter* (``0.75\,d^2 = 3.0\,r^2``), and applied to the
+radius it would understate ``K_s`` fourfold. The layer fluxes are
 upwinded explicitly. Sub-steps keep the Courant number of the kinematic
 wave, ``dq/dθ = 3K_sS_e^2/(θ_s-θ_r)``, at 0.5 or below. No layer drains
 below ``θ_r`` or fills beyond ``θ_s``, and water arriving in a cold layer
@@ -248,12 +251,12 @@ neither are capillary barriers.
 | Retention laws | to 1e-12 | Wever et al. (2014) Eq. 1; Vionnet et al. (2012) Eq. 19 |
 | Refreezing, 1 layer, 3 water amounts | enthalpy to 1e-14, refrozen mass and temperature to 1e-12 | exact cold-content solution |
 | Bucket on a cold 5-layer pack, 3 rain amounts | refrozen / retained / runoff to 1e-10 (e.g. 3.159 / 30.251 / 7.000 kg m⁻²) | closed-form partition |
-| Kinematic wave, 1.5 m, 18 mm h⁻¹ | arrival 9.52 h vs 9.54 h (−0.22 %); θ behind front 0.1145 (to 1e-3); steady runoff 1.00000 q₀ (tested to 1e-3) | Colbeck (1972) shock |
-| Gravity drainage into −8 °C pack | refrozen 15.165 = cold content / L_f (to 1e-9); first runoff after 103 kg m⁻² (> 15.2 + 47.9) | cold content + retention |
-| 8 diurnal cycles + 21.6 mm rain, 3 schemes | mass residual ≤ 5e-14 kg m⁻², enthalpy residual ≤ 1e-7 J m⁻² of 6.2e7 | budget closure |
+| Kinematic wave, 1.5 m, 18 mm h⁻¹ | K_s = 1.08e-2 m s⁻¹; arrival 7.35 h vs 7.37 h (−0.22 %); θ behind front 0.0884 (to 1e-3); steady runoff 1.00000 q₀ (tested to 1e-3) | Colbeck (1972) shock |
+| Gravity drainage into −8 °C pack | refrozen 15.165 = cold content / L_f (to 1e-9); first runoff after 88.2 kg m⁻² (> 15.2 + 47.9) | cold content + retention |
+| 8 diurnal cycles + 21.6 mm rain, 3 schemes | mass residual ≤ 9e-14 kg m⁻², enthalpy residual ≤ 2e-7 J m⁻² of 6.2e7 | budget closure |
 
 In the diurnal run, the retaining schemes refreeze 24.5 kg m⁻² (bucket)
-and 28.8 kg m⁻² (gravity drainage) of meltwater and rain, and let none
+and 27.1 kg m⁻² (gravity drainage) of meltwater and rain, and let none
 run off. Instant runoff loses 29.8 kg m⁻². Each afternoon's meltwater has
 refrozen by dawn until the rain day. None of this is compared with
 observations: SnowMIP lysimeter runoff is not used here.

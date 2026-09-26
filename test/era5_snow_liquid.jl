@@ -128,10 +128,16 @@ cl98(θi) = θi <= 0.23 ? 0.0264 + 0.0099 * (1 - θi) / θi :
     end
     @testset "Saturated hydraulic conductivity (Calonne et al. 2012)" begin
         c = DEFAULT_SURFACE_CONSTANTS
-        # k = 0.75 r² exp(-0.013 ρ), K = k ρ_w g / μ
-        K = snow_saturated_hydraulic_conductivity(400.0, 0.5e-3)
-        @test K ≈ 0.75 * 0.5e-3^2 * exp(-0.013 * 400) * 1000 * 9.80665 / 1.792e-3 rtol = 1e-3
-        @test 1e-3 < K < 1e-2                  # wet-snow values are of order mm s⁻¹
+        # Calonne et al. (2012, abstract): permeability k = 3.0 r_es² exp(-0.0130 ρ_s)
+        # with r_es the equivalent-sphere RADIUS; K = k ρ_w g / μ (Wever et al.
+        # 2014, Eq. 14, who write 0.75 with the optical grain DIAMETER: 0.75 d² = 3 r²).
+        r = 0.5e-3
+        K = snow_saturated_hydraulic_conductivity(400.0, r)
+        k_calonne = 3.0 * r^2 * exp(-0.0130 * 400)            # m²
+        @test K ≈ k_calonne * 1000 * 9.80665 / 1.792e-3 rtol = 1e-3
+        @test K ≈ 0.75 * (2r)^2 * exp(-0.013 * 400) * 1000 * 9.80665 / 1.792e-3 rtol = 1e-3
+        # permeability of 0.5 mm grains at 400 kg m⁻³ is ~4e-9 m²
+        @test 3e-9 < K * 1.792e-3 / (1000 * 9.80665) < 5e-9
         # coarser grains and lighter snow drain faster; quadratic in r
         @test snow_saturated_hydraulic_conductivity(400.0, 1e-3) ≈ 4K rtol = 1e-12
         @test snow_saturated_hydraulic_conductivity(300.0, 0.5e-3) > K
