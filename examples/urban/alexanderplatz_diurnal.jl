@@ -170,8 +170,9 @@ sun_now = Ref(solar_position(solar_time(2024, 6, 20, 6, 0, 0.0;
 force! = (s, Δt) -> add_geostrophic_wind!(s, 1.0, 0.0, 1800.0)
 # Park canopy drag: a uniform crown over the lowest 3 layers (18.75 m) with
 # a leaf drag coefficient of 0.2. Applied implicitly after the predictor
-# (Aeolus.PlantCanopy, issue #22), so it is stable at dt = 2 s — the old
-# explicit tendency was not and shipped disabled.
+# (Aeolus.PlantCanopy, issue #22), so it is stable at any dt. The old
+# explicit tendency shipped disabled after an instability at dt = 2 s that
+# #22 could not reproduce (dt·cd·LAI·|U| <= 0.05 here); cause undiagnosed.
 veg_drag = vegetation_canopy_drag(mesh, veg_mask, LAI_map; cd = 0.2, k_height = 3)
 post_predictor = (s, Δt) -> begin
     implicit_ibm_correction!(s, sm; τ = 0.0, dt = Δt)

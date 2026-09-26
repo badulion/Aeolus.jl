@@ -341,7 +341,7 @@ horizontally periodic); the struct also carries the scratch arrays of
 drag factors, so [`apply_canopy_drag!`](@ref) does not allocate.
 
 `C_d` is the leaf drag coefficient, ≈ 0.15-0.3 for forests (Shaw &
-Schumann 1992 use 0.15; Harman & Finnigan 2007 quote 0.25).
+Schumann 1992 use 0.15).
 """
 struct ResolvedCanopyDrag{T<:AbstractFloat}
     C_d::T
@@ -493,7 +493,7 @@ end
 """
     harman_finnigan_mixing_length(β, C_d, a) -> l [m]
 
-Canopy mixing length of Harman & Finnigan (2007, eq. 8),
+Canopy mixing length of Harman & Finnigan (2007),
 ``l = 2β^3 L_c`` with the canopy-drag length ``L_c = 1/(C_d a)`` and
 ``β = u_*/U_h`` the ratio of friction velocity to wind speed at the
 canopy top (≈ 0.3 in neutral flow over dense canopies).

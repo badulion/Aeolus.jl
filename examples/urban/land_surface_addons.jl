@@ -70,8 +70,10 @@ hook of `step!`; `drag` comes from [`vegetation_canopy_drag`](@ref).
 History: this used to be an explicit tendency `-cd · LAI · |u| · u` added
 in `body_force!`. It used LAI (m² m⁻²) where the leaf-area *density*
 (m² m⁻³) belongs and read `u`, `v`, `w` co-located at the same index on
-the staggered grid, and the example shipped with it disabled because it
-went unstable at dt = 2 s. The implicit form is stable at any dt (issue #22).
+the staggered grid. The example shipped with it disabled after an
+instability at dt = 2 s was reported; re-running it in #22 (cd = 0.01 and
+0.03, 1 h at dt = 2 s) did not reproduce that, so its cause is undiagnosed.
+The implicit form is stable at any dt (issue #22).
 """
 apply_vegetation_drag!(sim, drag::ResolvedCanopyDrag, dt::Real) =
     apply_canopy_drag!(sim, drag, dt)
