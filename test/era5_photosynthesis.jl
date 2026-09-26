@@ -100,4 +100,157 @@ _bernacchi(c, ΔHa, T) = exp(c - ΔHa / (_Rkj * T))
     @info "Kattge–Knorr Vcmax T_opt (°C) at growth 11 → 35 °C" topt_v[1] - 273.15 topt_v[end] - 273.15
 end
 
+@testset "co-limitation and electron transport" begin
+    for (a, b) in ((3.0, 7.0), (5.0, 5.0), (0.0, 4.0), (12.0, 0.1))
+        @test colimited_rate(a, b, 1.0) ≈ min(a, b) atol = 1e-12
+        a + b > 0 && @test colimited_rate(a, b, 0.0) ≈ a * b / (a + b) atol = 1e-12
+        for Θ in (0.0, 0.5, 0.7, 0.95, 0.98)
+            x = colimited_rate(a, b, Θ)
+            @test x <= min(a, b) + 1e-12
+            @test Θ * x^2 - (a + b) * x + a * b ≈ 0 atol = 1e-9 * max(1.0, a * b)
+            @test colimited_rate(3a, 3b, Θ) ≈ 3x                   # homogeneity
+        end
+    end
+    @test colimited_rate(0.0, 0.0, 0.9) == 0.0
+    # J: zero in the dark, initial slope Φ/2, saturates at Jmax.
+    Jmax = 120.0
+    @test electron_transport_rate(Jmax, 0.0) == 0.0
+    @test electron_transport_rate(Jmax, 1e-3) / 1e-3 ≈ 0.5 * 0.85 rtol = 1e-4
+    @test electron_transport_rate(Jmax, 1e9) ≈ Jmax rtol = 1e-6
+    @test par_to_photon_flux(100.0) ≈ 460.0
+end
+
+@testset "C3 Farquhar: analytic limits" begin
+    p = C3Parameters(60.0)
+    T = 298.15
+    c = leaf_capacities(p, T)
+    # 25 °C capacities are the 25 °C parameters, and Ap = 3Tp ≈ Vcmax/2 (CLM).
+    @test c.Vcmax ≈ 60.0 && c.Jmax ≈ 1.97 * 60 && c.Γstar ≈ 42.75 && c.Kc ≈ 404.9
+    @test 3 * c.Tp ≈ 0.501 * c.Vcmax
+    Km = c.Kc * (1 + 209 / c.Ko)
+
+    # Darkness: no electron transport, so no gross assimilation: An = −Rd.
+    for ci in (60.0, 280.0, 1000.0)
+        r = leaf_assimilation(p, ci, 0.0, T)
+        @test r.A == 0.0 && r.An == -c.Rd
+        @test net_assimilation(C4Parameters(40.0), ci, 0.0, T) == -leaf_capacities(C4Parameters(40.0), T).Rd
+    end
+    # At ci = Γ* carboxylation exactly balances photorespiration.
+    for Q in (50.0, 500.0, 2000.0)
+        @test leaf_assimilation(p, c.Γstar, Q, T).A ≈ 0 atol = 1e-12
+    end
+    # Below Γ* gross assimilation is negative and continuous; at ci = 0 the
+    # Rubisco-limited rate is −Vcmax Γ*/Km (Farquhar et al. 1980).
+    @test leaf_assimilation(p, 0.5 * c.Γstar, 1500.0, T).A < 0
+    @test leaf_assimilation(p, 0.0, 1e7, T; colimitation = false).A ≈ -c.Vcmax * c.Γstar / Km rtol = 1e-4
+    @test abs(net_assimilation(p, c.Γstar - 1e-7, 1500.0, T) - net_assimilation(p, c.Γstar + 1e-7, 1500.0, T)) < 1e-6
+
+    # Γ* ∝ O₂ (Γ* = O / (2 S_c/o)).
+    @test photorespiratory_compensation_point(p, T; oi = 20.0) ≈ 42.75 * 20 / 209
+
+    # CO₂ compensation point, Rubisco-limited: Γ = (Γ* Vcmax + Km Rd)/(Vcmax − Rd).
+    Γ_analytic = (c.Γstar * c.Vcmax + Km * c.Rd) / (c.Vcmax - c.Rd)
+    Γ_num = co2_compensation_point(p, 1e7, T; colimitation = false)
+    @test Γ_num ≈ Γ_analytic rtol = 1e-8
+    Γ_colim = co2_compensation_point(p, 1500.0, T)
+    @test c.Γstar < Γ_colim < 60.0
+    @test isnan(co2_compensation_point(p, 0.0, T))
+    @info "C3 CO₂ compensation point at 25 °C (µmol/mol)" Γstar = c.Γstar Γ_rubisco_analytic = Γ_analytic Γ_colimited_Q1500 = Γ_colim
+
+    # Initial quantum yield: dA/dQ → ½Φ_PSII (ci − Γ*)/(4ci + 8Γ*) at Q → 0.
+    for ci in (150.0, 280.0, 800.0)
+        dQ = 1e-3
+        slope = (net_assimilation(p, ci, dQ, T) - net_assimilation(p, ci, 0.0, T)) / dQ
+        expected = 0.5 * 0.85 * (ci - c.Γstar) / (4ci + 8c.Γstar)
+        @test slope ≈ expected rtol = 2e-3
+    end
+    φ280 = 0.5 * 0.85 * (280 - c.Γstar) / (4 * 280 + 8c.Γstar)
+    @info "C3 initial quantum yield at ci = 280, 25 °C (mol CO₂/mol absorbed photons)" φ280
+
+    # Light saturation: An rises monotonically with Q to the J = Jmax limit.
+    Qs = 10.0 .^ range(0, 7; length = 200)
+    As = [net_assimilation(p, 280.0, Q, T) for Q in Qs]
+    @test all(diff(As) .>= -1e-12)
+    wc = c.Vcmax / (280 + Km); wj = c.Jmax / (4 * 280 + 8c.Γstar)
+    Asat = colimited_rate((280 - c.Γstar) * colimited_rate(wc, wj, 0.98), 3c.Tp, 0.95) - c.Rd
+    @test As[end] ≈ Asat rtol = 1e-4
+    @test net_assimilation(p, 280.0, 2000.0, T) > 0.9 * Asat
+
+    # A–ci transition between Rubisco and RuBP-regeneration limitation
+    # (Farquhar minimum): Vcmax(4ci + 8Γ*) = J(ci + Km).
+    Q = 400.0
+    J = electron_transport_rate(c.Jmax, Q)
+    ci_t = (J * Km - 8c.Γstar * c.Vcmax) / (4c.Vcmax - J)
+    @test leaf_assimilation(p, ci_t - 1, Q, T; colimitation = false).limitation == :rubisco
+    @test leaf_assimilation(p, ci_t + 1, Q, T; colimitation = false).limitation == :light
+    r = leaf_assimilation(p, ci_t, Q, T; colimitation = false)
+    @test r.Ac ≈ r.Aj rtol = 1e-10
+    @info "C3 Rubisco→RuBP transition ci at Q = 400, 25 °C" ci_t
+    # TPU. Aj can never exceed Jmax/4 (ci → ∞), so with CLM's Tp25 =
+    # 0.167 Vcmax25 export limitation needs Jmax25/Vcmax25 > 4·3·0.167 =
+    # 2.004 at 25 °C. The default 1.97 is just below: no TPU limitation
+    # anywhere on the A–ci curve. With the Kattge–Knorr ratio of a
+    # cool-grown leaf (2.2 at 11 °C) the A–ci curve does plateau at 3Tp.
+    @test c.Jmax / 4 < 3c.Tp
+    @test all(leaf_assimilation(p, ci, 1e6, T; colimitation = false).limitation != :export
+              for ci in 50.0:50.0:5000.0)
+    pk = C3Parameters(60.0; T_growth = 284.15)
+    @test pk.Jmax25 / pk.Vcmax25 ≈ 2.205
+    ck = leaf_capacities(pk, T)
+    r = leaf_assimilation(pk, 3000.0, 1e6, T; colimitation = false)
+    @test r.limitation == :export && r.A ≈ 3ck.Tp
+
+    # Co-limitation never exceeds the Farquhar minimum.
+    for ci in 50.0:50.0:1500.0, Q in (100.0, 800.0, 2000.0)
+        @test net_assimilation(p, ci, Q, T) <= net_assimilation(p, ci, Q, T; colimitation = false) + 1e-10
+    end
+    # A–ci curve: monotone in ci.
+    Aci = [net_assimilation(p, ci, 1500.0, T) for ci in 0.0:10.0:1500.0]
+    @test all(diff(Aci) .>= -1e-12)
+
+    # Warburg effect: 2 % O₂ suppresses photorespiration and raises
+    # Rubisco-limited assimilation.
+    @test net_assimilation(p, 200.0, 1500.0, T; oi = 20.0) > 1.3 * net_assimilation(p, 200.0, 1500.0, T)
+end
+
+@testset "C4 Collatz: analytic limits" begin
+    p = C4Parameters(40.0)
+    T = 298.15
+    c = leaf_capacities(p, T)
+    # CLM does not renormalise the C4 inhibition terms at 25 °C.
+    @test c.Vcmax / 40.0 ≈ 1 / ((1 + exp(0.3 * (298.15 - 313.15))) * (1 + exp(0.2 * (288.15 - 298.15)))) rtol = 1e-12
+    @test c.kp ≈ 20000 * 40 && c.Rd / 40 ≈ 0.025 / (1 + exp(1.3 * (298.15 - 328.15)))
+    # Initial quantum yield is α.
+    slope = (net_assimilation(p, 300.0, 1e-3, T) - net_assimilation(p, 300.0, 0.0, T)) / 1e-3
+    @test slope ≈ p.α rtol = 1e-3
+    # CO₂ compensation point: kp Γ = Rd (Farquhar minimum), a few µmol/mol.
+    Γ4 = co2_compensation_point(p, 1500.0, T; colimitation = false)
+    @test Γ4 ≈ c.Rd / c.kp * 1e6 rtol = 1e-8
+    Γ4c = co2_compensation_point(p, 1500.0, T)
+    @test Γ4c < 5.0
+    @info "C4 CO₂ compensation point (µmol/mol)" Γ_min = Γ4 Γ_colimited = Γ4c
+    # CO₂ saturation: the carbon-concentrating mechanism saturates a C4 leaf
+    # near ambient ci, and O₂ does not matter.
+    A150 = net_assimilation(p, 150.0, 1500.0, T); A1000 = net_assimilation(p, 1000.0, 1500.0, T)
+    @test A150 > 0.9 * A1000
+    @test net_assimilation(p, 150.0, 1500.0, T; oi = 20.0) == A150
+    # Light-saturated, CO₂-saturated → Vcmax.
+    @test leaf_assimilation(p, 1e5, 1e7, T; colimitation = false).A ≈ c.Vcmax
+    # Temperature: C4 Vcmax peaks between the two inhibition thresholds.
+    Ts = 273.15:0.1:323.15
+    Topt4 = Ts[argmax([leaf_capacities(p, t).Vcmax for t in Ts])]
+    @test 303.15 < Topt4 < 313.15
+    @info "C4 Vcmax optimum (°C)" Topt4 - 273.15
+
+    # Collatz et al. (1992) leaf: light- and CO₂-saturated An = Vmax − Rd.
+    pc = collatz1992_c4()
+    @test pc.Vcmax25 == 39.0 && pc.kp25 == 0.7e6 && pc.Rd25 == 0.8
+    @test leaf_assimilation(pc, 1e5, 1e8, 298.15; colimitation = false).A ≈ leaf_capacities(pc, 298.15).Vcmax
+
+    # C3 vs C4 at the same Vcmax25 at 35 °C, ci = 0.4 ca vs 0.7 ca for
+    # ca = 400: photorespiration makes the C3 leaf lose.
+    p3 = C3Parameters(40.0)
+    @test net_assimilation(p, 160.0, 1500.0, 308.15) > net_assimilation(p3, 280.0, 1500.0, 308.15)
+end
+
 end # Photosynthesis testset

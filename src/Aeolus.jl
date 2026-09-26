@@ -608,6 +608,11 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
 export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
        Q10Response, temperature_factor, optimum_temperature,
        C3TemperatureResponses, bonan2011_c3_temperature,
-       kattge_knorr_c3_temperature, kattge_knorr_jmax_ratio
+       kattge_knorr_c3_temperature, kattge_knorr_jmax_ratio,
+       PAR_PHOTONS_PER_JOULE, par_to_photon_flux, colimited_rate,
+       electron_transport_rate,
+       AbstractPhotosynthesisParameters, C3Parameters, C4Parameters, collatz1992_c4,
+       leaf_capacities, photorespiratory_compensation_point,
+       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point
 
 end # module

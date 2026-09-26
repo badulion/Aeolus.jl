@@ -70,7 +70,12 @@ using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS
 export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
        Q10Response, temperature_factor, optimum_temperature,
        C3TemperatureResponses, bonan2011_c3_temperature,
-       kattge_knorr_c3_temperature, kattge_knorr_jmax_ratio
+       kattge_knorr_c3_temperature, kattge_knorr_jmax_ratio,
+       PAR_PHOTONS_PER_JOULE, par_to_photon_flux, colimited_rate,
+       electron_transport_rate,
+       AbstractPhotosynthesisParameters, C3Parameters, C4Parameters, collatz1992_c4,
+       leaf_capacities, photorespiratory_compensation_point,
+       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point
 
 # Reference temperature of every "…25" parameter.
 const T_REF = 298.15
@@ -142,7 +147,7 @@ f(T) = \\frac{Q_{10}^{(T - T_{25})/10}}
 ```
 
 The inhibition terms are *not* renormalised at 25 °C, exactly as in CLM
-(for CLM's C4 `Vcmax` they reduce ``f(T_{25})`` to 0.953). A term is
+(for CLM's C4 `Vcmax` they reduce ``f(T_{25})`` to 0.871). A term is
 omitted when its slope is zero.
 """
 Base.@kwdef struct Q10Response <: AbstractTemperatureResponse
@@ -282,5 +287,340 @@ capacities, ``2.59 - 0.035\\,t_g`` (Kattge & Knorr 2007; CLM4.5 eq.
 8.16), with ``t_g`` in °C clamped to 11-35 °C.
 """
 kattge_knorr_jmax_ratio(T_growth::Real) = 2.59 - 0.035 * _growth_celsius(T_growth)
+
+# =========================================================================
+# 2. Light and co-limitation
+# =========================================================================
+
+"""
+    PAR_PHOTONS_PER_JOULE = 4.6
+
+Photosynthetic photon flux per unit PAR energy, µmol photons J⁻¹, as in
+CLM4.5 eqs. 8.4 and 8.7. Aeolus's single source for this conversion.
+"""
+const PAR_PHOTONS_PER_JOULE = 4.6
+
+"""
+    par_to_photon_flux(par) -> µmol photons m⁻² s⁻¹
+
+Convert photosynthetically active radiation `par` (W m⁻²) to photon flux
+with [`PAR_PHOTONS_PER_JOULE`](@ref).
+"""
+par_to_photon_flux(par::Real) = PAR_PHOTONS_PER_JOULE * par
+
+"""
+    colimited_rate(a, b, Θ) -> x
+
+Smaller root of ``Θ x^2 - (a + b) x + a b = 0`` for non-negative `a`,
+`b` and curvature ``0 ≤ Θ ≤ 1``: a smooth minimum of two limiting rates
+(Collatz et al. 1991). ``Θ = 1`` gives ``\\min(a, b)``; ``Θ = 0`` the
+rectangular hyperbola ``ab/(a+b)``; for ``Θ < 1`` the result is always
+below the minimum. Evaluated in the cancellation-free form
+``2ab / \\left[(a+b) + \\sqrt{(a+b)^2 - 4Θab}\\right]``. It is homogeneous
+of degree one, ``x(ca, cb) = c\\,x(a, b)``.
+"""
+function colimited_rate(a::Real, b::Real, Θ::Real)
+    s = a + b
+    s > 0 || return zero(float(s))
+    return 2 * a * b / (s + sqrt(max(s^2 - 4 * Θ * a * b, zero(s))))
+end
+
+"""
+    electron_transport_rate(Jmax, Q, Φ_PSII = 0.85, Θ_PSII = 0.7) -> J
+
+Whole-chain electron transport rate (µmol e⁻ m⁻² s⁻¹) at absorbed photon
+flux `Q` (µmol m⁻² s⁻¹): the smaller root of
+``Θ J^2 - (I + J_{max}) J + I J_{max} = 0`` with
+``I = \\tfrac12 Φ_{PSII} Q`` the light used by photosystem II (one photon
+per photosystem per electron) — CLM4.5 eqs. 8.6-8.7. Zero in the dark,
+initial slope ``\\tfrac12 Φ_{PSII}``, saturating at `Jmax`.
+"""
+electron_transport_rate(Jmax::Real, Q::Real, Φ::Real = 0.85, Θ::Real = 0.7) =
+    colimited_rate(0.5 * Φ * max(Q, zero(Q)), Jmax, Θ)
+
+# =========================================================================
+# 3. Leaf parameter sets
+# =========================================================================
+
+"""
+    AbstractPhotosynthesisParameters
+
+A leaf's photosynthetic parameters: [`C3Parameters`](@ref) or
+[`C4Parameters`](@ref). Both are evaluated by [`leaf_assimilation`](@ref).
+"""
+abstract type AbstractPhotosynthesisParameters end
+
+"""
+    C3Parameters(Vcmax25; T_growth = nothing, Jmax25, Tp25, Rd25, kwargs...)
+
+Farquhar, von Caemmerer & Berry (1980) parameters for a C3 leaf, with
+the CLM4.5/CLM5 defaults (Oleson et al. 2013 §8.2):
+
+| field | default | meaning |
+| :-- | :-- | :-- |
+| `Vcmax25` | – | Rubisco capacity at 25 °C, µmol m⁻² s⁻¹ |
+| `Jmax25` | `1.97 Vcmax25`, or the Kattge-Knorr ratio | electron-transport capacity |
+| `Tp25` | `0.167 Vcmax25` | triose-phosphate utilisation (so `Ap = 3Tp ≈ Vcmax/2`) |
+| `Rd25` | `0.015 Vcmax25` | day (mitochondrial) respiration |
+| `Kc25` | 404.9 µmol mol⁻¹ | Michaelis constant for CO₂ (Bernacchi 2001) |
+| `Ko25` | 278.4 mmol mol⁻¹ | Michaelis constant for O₂ (Bernacchi 2001) |
+| `Γstar25` | 42.75 µmol mol⁻¹ | photorespiratory compensation point at `o_ref` |
+| `o_ref` | 209.0 mmol mol⁻¹ | O₂ at which `Γstar25` applies |
+| `Φ_PSII`, `Θ_PSII` | 0.85, 0.7 | PSII quantum yield and curvature |
+| `Θ_cj`, `Θ_ip` | 0.98, 0.95 | co-limitation curvatures |
+
+With `T_growth` (K, e.g. the 10-day mean air temperature) the temperature
+responses acclimate after Kattge & Knorr (2007)
+([`kattge_knorr_c3_temperature`](@ref)) and `Jmax25` defaults to
+[`kattge_knorr_jmax_ratio`](@ref)` × Vcmax25`; without it they are the
+non-acclimating Bonan et al. (2011) set
+([`bonan2011_c3_temperature`](@ref)). A `temperature` keyword overrides
+either.
+"""
+struct C3Parameters{R<:C3TemperatureResponses} <: AbstractPhotosynthesisParameters
+    Vcmax25::Float64
+    Jmax25::Float64
+    Tp25::Float64
+    Rd25::Float64
+    Kc25::Float64
+    Ko25::Float64
+    Γstar25::Float64
+    o_ref::Float64
+    Φ_PSII::Float64
+    Θ_PSII::Float64
+    Θ_cj::Float64
+    Θ_ip::Float64
+    temperature::R
+end
+
+function C3Parameters(Vcmax25::Real; T_growth = nothing,
+                      temperature = T_growth === nothing ? bonan2011_c3_temperature() :
+                                                           kattge_knorr_c3_temperature(T_growth),
+                      Jmax25 = (T_growth === nothing ? 1.97 : kattge_knorr_jmax_ratio(T_growth)) * Vcmax25,
+                      Tp25 = 0.167 * Vcmax25, Rd25 = 0.015 * Vcmax25,
+                      Kc25 = 404.9, Ko25 = 278.4, Γstar25 = 42.75, o_ref = 209.0,
+                      Φ_PSII = 0.85, Θ_PSII = 0.7, Θ_cj = 0.98, Θ_ip = 0.95)
+    return C3Parameters(Float64(Vcmax25), Float64(Jmax25), Float64(Tp25), Float64(Rd25),
+                        Float64(Kc25), Float64(Ko25), Float64(Γstar25), Float64(o_ref),
+                        Float64(Φ_PSII), Float64(Θ_PSII), Float64(Θ_cj), Float64(Θ_ip),
+                        temperature)
+end
+
+"""
+    C4Parameters(Vcmax25; kp25 = 20000 Vcmax25, Rd25 = 0.025 Vcmax25, α = 0.05,
+                 Θ_cj = 0.80, Θ_ip = 0.95, Vcmax_T, kp_T, Rd_T)
+
+Collatz, Ribas-Carbo & Berry (1992) parameters for a C4 leaf with the
+CLM4.5/CLM5 defaults: quantum efficiency `α` (mol CO₂ mol⁻¹ photons),
+PEP-carboxylase initial slope `kp25` (µmol m⁻² s⁻¹ per mol mol⁻¹ of
+intercellular CO₂) and the Q10 temperature responses of CLM4.5 eqs.
+8.12-8.14 (`Q10 = 2`; `Vcmax` inhibited above 313.15 K with slope
+0.3 K⁻¹ and below 288.15 K with 0.2 K⁻¹; `Rd` above 328.15 K with
+1.3 K⁻¹). See [`collatz1992_c4`](@ref) for the original paper's values.
+"""
+struct C4Parameters{V<:AbstractTemperatureResponse,K<:AbstractTemperatureResponse,
+                    D<:AbstractTemperatureResponse} <: AbstractPhotosynthesisParameters
+    Vcmax25::Float64
+    kp25::Float64
+    Rd25::Float64
+    α::Float64
+    Θ_cj::Float64
+    Θ_ip::Float64
+    Vcmax_T::V
+    kp_T::K
+    Rd_T::D
+end
+
+function C4Parameters(Vcmax25::Real; kp25 = 20000 * Vcmax25, Rd25 = 0.025 * Vcmax25,
+                      α = 0.05, Θ_cj = 0.80, Θ_ip = 0.95,
+                      Vcmax_T = Q10Response(Q10 = 2.0, s_high = 0.3, T_high = 313.15,
+                                            s_low = 0.2, T_low = 288.15),
+                      kp_T = Q10Response(Q10 = 2.0),
+                      Rd_T = Q10Response(Q10 = 2.0, s_high = 1.3, T_high = 328.15))
+    return C4Parameters(Float64(Vcmax25), Float64(kp25), Float64(Rd25), Float64(α),
+                        Float64(Θ_cj), Float64(Θ_ip), Vcmax_T, kp_T, Rd_T)
+end
+
+"""
+    collatz1992_c4() -> C4Parameters
+
+The C4 leaf of Collatz et al. (1992) at 25 °C: `Vmax = 39`,
+`Rd = 0.8` µmol m⁻² s⁻¹, `α = 0.04`, `k = 0.7` mol m⁻² s⁻¹
+(= 7 × 10⁵ µmol m⁻² s⁻¹ per mol mol⁻¹), curvatures `θ = 0.83`,
+`β = 0.93` — the values carried as defaults of BioCro's `c4photo`,
+which implements that paper. Temperature responses are the CLM ones of
+[`C4Parameters`](@ref); the paper's own inhibition terms differ slightly.
+"""
+collatz1992_c4() = C4Parameters(39.0; kp25 = 0.7e6, Rd25 = 0.8, α = 0.04,
+                                Θ_cj = 0.83, Θ_ip = 0.93)
+
+# =========================================================================
+# 4. Temperature-adjusted capacities
+# =========================================================================
+
+"""
+    leaf_capacities(p::C3Parameters, T; oi = p.o_ref) -> NamedTuple
+    leaf_capacities(p::C4Parameters, T) -> NamedTuple
+
+The biochemical capacities at leaf temperature `T` (K). For C3:
+`(Vcmax, Jmax, Tp, Rd, Kc, Ko, Γstar)`; `Γstar` is scaled linearly with
+the O₂ mole fraction `oi` (mmol mol⁻¹), since
+``Γ^* = \\tfrac12\\, O / S_{c/o}`` with the Rubisco specificity
+``S_{c/o}`` independent of O₂ (Farquhar et al. 1980, eq. 38). For C4:
+`(Vcmax, kp, Rd)`.
+"""
+function leaf_capacities(p::C3Parameters, T::Real; oi::Real = p.o_ref)
+    t = p.temperature
+    return (Vcmax = p.Vcmax25 * temperature_factor(t.Vcmax, T),
+            Jmax  = p.Jmax25 * temperature_factor(t.Jmax, T),
+            Tp    = p.Tp25 * temperature_factor(t.Tp, T),
+            Rd    = p.Rd25 * temperature_factor(t.Rd, T),
+            Kc    = p.Kc25 * temperature_factor(t.Kc, T),
+            Ko    = p.Ko25 * temperature_factor(t.Ko, T),
+            Γstar = p.Γstar25 * temperature_factor(t.Γstar, T) * oi / p.o_ref)
+end
+
+leaf_capacities(p::C4Parameters, T::Real) =
+    (Vcmax = p.Vcmax25 * temperature_factor(p.Vcmax_T, T),
+     kp    = p.kp25 * temperature_factor(p.kp_T, T),
+     Rd    = p.Rd25 * temperature_factor(p.Rd_T, T))
+
+"""
+    photorespiratory_compensation_point(p::C3Parameters, T; oi = p.o_ref) -> Γ* (µmol mol⁻¹)
+
+The CO₂ mole fraction at which Rubisco carboxylation exactly balances
+photorespiratory CO₂ release, so that gross assimilation is zero.
+"""
+photorespiratory_compensation_point(p::C3Parameters, T::Real; oi::Real = p.o_ref) =
+    leaf_capacities(p, T; oi = oi).Γstar
+
+# =========================================================================
+# 5. Assimilation
+# =========================================================================
+
+"""
+    LeafAssimilation
+
+Result of [`leaf_assimilation`](@ref), all in µmol CO₂ m⁻² (leaf) s⁻¹:
+
+  * `Ac`, `Aj`, `Ap` — the Rubisco-, light (RuBP regeneration)- and
+    export (C3: triose-phosphate utilisation; C4: PEP-carboxylase)-limited
+    gross rates;
+  * `A` — gross assimilation after co-limitation;
+  * `Rd` — day respiration;
+  * `An = A − Rd` — net assimilation;
+  * `limitation` — `:rubisco`, `:light` or `:export`, the smallest of the
+    three limiting rates.
+"""
+struct LeafAssimilation
+    Ac::Float64
+    Aj::Float64
+    Ap::Float64
+    A::Float64
+    Rd::Float64
+    An::Float64
+    limitation::Symbol
+end
+
+_limitation(Ac, Aj, Ap) = Ac <= Aj ? (Ac <= Ap ? :rubisco : :export) :
+                                     (Aj <= Ap ? :light : :export)
+
+"""
+    leaf_assimilation(p, ci, Q, T; oi = 209.0, colimitation = true) -> LeafAssimilation
+
+Leaf photosynthesis at intercellular CO₂ `ci` (µmol mol⁻¹), absorbed
+photon flux `Q` (µmol m⁻² s⁻¹; see [`par_to_photon_flux`](@ref)) and leaf
+temperature `T` (K).
+
+**C3** (Farquhar et al. 1980; CLM4.5 eqs. 8.3-8.8):
+
+```math
+A_c = V_{cmax}\\frac{c_i - Γ^*}{c_i + K_c(1 + o_i/K_o)},\\quad
+A_j = J\\frac{c_i - Γ^*}{4 c_i + 8 Γ^*},\\quad
+A_p = 3 T_p ,
+```
+
+with `J` from [`electron_transport_rate`](@ref). **C4** (Collatz et al.
+1992): ``A_c = V_{cmax}``, ``A_j = α Q``, ``A_p = k_p c_i``.
+
+With `colimitation = true` the gross rate is
+``A = \\mathrm{colim}(\\mathrm{colim}(A_c, A_j; Θ_{cj}), A_p; Θ_{ip})``
+([`colimited_rate`](@ref)) as in CLM; with `false`, the plain Farquhar
+minimum. Net assimilation is ``A_n = A - R_d``.
+
+Below the compensation point (``c_i < Γ^*``) the C3 gross rate is
+negative — photorespiration releases more CO₂ than Rubisco fixes. It is
+evaluated as ``(c_i - Γ^*)\\,\\mathrm{colim}(V_{cmax}/(c_i + K_m), J/(4c_i + 8Γ^*))``,
+which is identical to CLM's form for ``c_i ≥ Γ^*`` (the co-limitation is
+homogeneous of degree one) and continues it correctly below, where CLM
+clips; TPU cannot limit a negative flux.
+"""
+function leaf_assimilation(p::C3Parameters, ci::Real, Q::Real, T::Real;
+                           oi::Real = p.o_ref, colimitation::Bool = true)
+    c = leaf_capacities(p, T; oi = oi)
+    ci = max(float(ci), 0.0)
+    Km = c.Kc * (1 + oi / c.Ko)
+    J = electron_transport_rate(c.Jmax, Q, p.Φ_PSII, p.Θ_PSII)
+    wc = c.Vcmax / (ci + Km)           # carboxylation per unit (ci − Γ*)
+    wj = J / (4ci + 8c.Γstar)
+    Ac = wc * (ci - c.Γstar)
+    Aj = wj * (ci - c.Γstar)
+    Ap = 3 * c.Tp
+    if colimitation
+        Ai = (ci - c.Γstar) * colimited_rate(wc, wj, p.Θ_cj)
+        A = Ai > 0 ? colimited_rate(Ai, Ap, p.Θ_ip) : Ai
+    else
+        Ai = (ci - c.Γstar) * min(wc, wj)
+        A = Ai > 0 ? min(Ai, Ap) : Ai
+    end
+    lim = ci >= c.Γstar ? _limitation(Ac, Aj, Ap) : (wc <= wj ? :rubisco : :light)
+    return LeafAssimilation(Ac, Aj, Ap, A, c.Rd, A - c.Rd, lim)
+end
+
+function leaf_assimilation(p::C4Parameters, ci::Real, Q::Real, T::Real;
+                           oi::Real = 209.0, colimitation::Bool = true)
+    c = leaf_capacities(p, T)
+    Ac = c.Vcmax
+    Aj = p.α * max(float(Q), 0.0)
+    Ap = c.kp * max(float(ci), 0.0) * 1e-6       # ci: µmol/mol → mol/mol
+    if colimitation
+        A = colimited_rate(colimited_rate(Ac, Aj, p.Θ_cj), Ap, p.Θ_ip)
+    else
+        A = min(Ac, Aj, Ap)
+    end
+    return LeafAssimilation(Ac, Aj, Ap, A, c.Rd, A - c.Rd, _limitation(Ac, Aj, Ap))
+end
+
+"""
+    net_assimilation(p, ci, Q, T; kwargs...) -> An (µmol m⁻² s⁻¹)
+
+Shorthand for `leaf_assimilation(p, ci, Q, T; kwargs...).An`.
+"""
+net_assimilation(p::AbstractPhotosynthesisParameters, ci, Q, T; kwargs...) =
+    leaf_assimilation(p, ci, Q, T; kwargs...).An
+
+"""
+    co2_compensation_point(p, Q, T; ci_max = 2000.0, kwargs...) -> Γ (µmol mol⁻¹)
+
+The intercellular CO₂ at which net assimilation vanishes,
+``A_n(Γ) = 0``, found by bisection on ``[0, c_{i,max}]`` (``A_n`` is
+monotone in ``c_i``). For C3 leaves ``Γ > Γ^*`` because day respiration
+must also be repaid; for C4 leaves it is a few µmol mol⁻¹. Returns `NaN`
+if the leaf cannot reach positive net uptake below `ci_max` (e.g. in
+darkness).
+"""
+function co2_compensation_point(p::AbstractPhotosynthesisParameters, Q::Real, T::Real;
+                                ci_max::Real = 2000.0, kwargs...)
+    f(ci) = net_assimilation(p, ci, Q, T; kwargs...)
+    lo, hi = 0.0, Float64(ci_max)
+    f(hi) > 0 || return NaN
+    f(lo) >= 0 && return lo
+    for _ in 1:200
+        mid = 0.5 * (lo + hi)
+        f(mid) > 0 ? (hi = mid) : (lo = mid)
+        hi - lo < 1e-10 * max(1.0, hi) && break
+    end
+    return 0.5 * (lo + hi)
+end
 
 end # module
