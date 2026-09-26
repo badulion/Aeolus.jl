@@ -615,6 +615,8 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        column_heat_content, cell_centers,
        UrbanFacet, interior_heat_flux, set_interior_boundary!,
        set_interior_temperature!, facet_layer_temperatures,
-       example_roof_layers, example_wall_layers, example_ground_layers
+       example_roof_layers, example_wall_layers, example_ground_layers,
+       UrbanFacetScene, step_urban_facets!, aggregate_facet_fluxes,
+       example_facet_layers
 
 end # module

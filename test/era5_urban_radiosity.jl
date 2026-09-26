@@ -102,4 +102,51 @@ const still_air = SurfaceForcing(lw_down = 300.0, T_air = 290.0, U = 2.0)
     @test all(abs.(r2.dN_dLsky) .< 1e-15)
 end
 
+# ===========================================================================
+@testset "construction: optics from the scene, one facet per radiosity facet" begin
+    hm = zeros(6, 4); hm[3:4, :] .= 12
+    sc = build_scene(hm, 4.0, 4.0; wall_subdivisions = 2)
+    vf = view_factors(sc)
+    u = UrbanFacetScene(sc, vf; T = 290.0,
+                        options = f -> f.kind === :wall ? (h_convective = 10.0, albedo = 0.99) : (;))
+    @test nfacets(u) == nfacets(sc)
+    for (i, f) in enumerate(u.facets)
+        m = sc.facets[i].material
+        @test f.kind === sc.facets[i].kind
+        @test surface_albedo(f) == sc.materials.albedo[m]        # `albedo = 0.99` overridden
+        @test surface_emissivity(f) == sc.materials.emissivity[m]
+    end
+    @test all(f -> f.h_convective == 10.0, filter(f -> f.kind === :wall, u.facets))
+    @test facet_temperatures(u) == fill(290.0, nfacets(u))
+    @test_throws ArgumentError UrbanFacetScene(sc, vf, u.facets[1:end-1])
+    @test_throws ArgumentError step_urban_facets!(u, still_air, 60.0; coupling = :explicit)
+    # A change of the scene's material table reaches the facets and the response.
+    sc.materials.emissivity .= 0.8
+    step_urban_facets!(u, still_air, 60.0)
+    @test all(f -> f.emissivity == 0.8, u.facets)
+    @test all(u.response.emissivity .== 0.8)
+end
+
+# ===========================================================================
+@testset "an isolated flat facet reduces to step_surface!" begin
+    mats = UrbanMaterials([0.15], [0.95])
+    s1 = analytic_scene((:roof,), mats, (1,), (1.0,))
+    vf1 = ViewFactors{Float64}(zeros(1, 1), [1.0], [1.0])
+    u = UrbanFacetScene(s1, vf1; T = 300.0, options = f -> (T_interior = 295.0,))
+    ref = UrbanFacet(:roof, example_roof_layers(); T = 300.0, T_interior = 295.0,
+                     albedo = 0.15, emissivity = 0.95)
+    worst = 0.0
+    for k in 1:48
+        f = SurfaceForcing(sw_down = 0.0, lw_down = 310.0, T_air = 288.0, U = 3.0)
+        a = step_urban_facets!(u, f, 900.0)[1]
+        b = step_surface!(ref, f, 900.0)
+        worst = max(worst, abs(surface_temperature(u.facets[1]) - surface_temperature(ref)))
+        @test a.Rn - a.H - a.LE ≈ a.G atol = 1e-10
+    end
+    # Only difference: the coupled step takes dRn/dT = -4εσT³ analytically,
+    # step_surface! by a one-sided difference of width δT = 0.01 K.
+    @printf("  isolated facet vs step_surface!: max |ΔT_skin| = %.2e K over 12 h\n", worst)
+    @test worst < 1e-3
+end
+
 end # testset
