@@ -2,7 +2,8 @@
     SoilColumn
 
 Era V (Phase 46) multi-layer soil column — CLM-style vertical
-discretisation with Richards-equation water transport.
+discretisation with Richards-equation water transport, heat conduction
+and freeze–thaw.
 
 Contents:
 
@@ -29,6 +30,14 @@ Contents:
      ponds (runoff) or dries out (soil-limited evaporation); the bottom
      boundary is an [`AbstractSoilBottomBoundary`](@ref) (free drainage by
      default), the extension point for the water table of #17.
+  5. **Heat and freeze–thaw** (#16) — [`SoilThermalProperties`](@ref)
+     with the Johansen (1975) / Farouki (1981) conductivity and a
+     constituent heat capacity; [`SoilThermalColumn`](@ref), which wraps a
+     water column and solves the heat equation in enthalpy form with
+     latent heat of fusion, a sharp or Clapeyron (supercooled-water)
+     freezing curve and the CLM power-law ice impedance
+     ([`PowerLawIceImpedance`](@ref)); and a skin energy balance that makes
+     the column an `AbstractSurface` ([`step_surface!`](@ref)).
 
 Depth `z` is positive **downward** from the soil surface; matric
 potential `ψ` is a pressure head in metres of water (negative when
@@ -71,6 +80,35 @@ unsaturated); water fluxes are in m s⁻¹ of liquid water, positive
   * Parlange, J.-Y. (1975). On solving the flow equation in unsaturated
     soils by optimization: horizontal infiltration. *Soil Sci. Soc. Am.
     Proc.*, 39, 415-418.
+  * Johansen, O. (1975). *Thermal conductivity of soils.* PhD thesis,
+    Trondheim (CRREL draft translation 637, 1977).
+  * Farouki, O. T. (1981). *Thermal properties of soils.* CRREL
+    Monograph 81-1.
+  * de Vries, D. A. (1963). Thermal properties of soils. In *Physics of
+    Plant Environment* (ed. van Wijk), 210-235. North-Holland.
+  * Peters-Lidard, C. D., Blackburn, E., Liang, X. & Wood, E. F. (1998).
+    The effect of soil thermal conductivity parameterization on surface
+    energy fluxes and temperatures. *J. Atmos. Sci.*, 55, 1209-1224.
+  * Koopmans, R. W. R. & Miller, R. D. (1966). Soil freezing and soil
+    water characteristic curves. *Soil Sci. Soc. Am. Proc.*, 30, 680-685.
+  * Niu, G.-Y. & Yang, Z.-L. (2006). Effects of frozen soil on snowmelt
+    runoff and soil water storage at a continental scale. *J.
+    Hydrometeorol.*, 7, 937-952.
+  * Dall'Amico, M., Endrizzi, S., Gruber, S. & Rigon, R. (2011). A robust
+    and energy-conserving model of freezing variably-saturated soil. *The
+    Cryosphere*, 5, 469-484.
+  * Swenson, S. C., Lawrence, D. M. & Lee, H. (2012). Improved simulation
+    of the terrestrial hydrological cycle in permafrost regions by the
+    Community Land Model. *J. Adv. Model. Earth Syst.*, 4, M08002.
+  * Carslaw, H. S. & Jaeger, J. C. (1959). *Conduction of Heat in
+    Solids*, 2nd ed., §2.6 (periodic surface temperature) and §11.2
+    (Neumann's solution). Oxford.
+  * Voller, V. R., Swaminathan, C. R. & Thomas, B. G. (1990). Fixed grid
+    techniques for phase change problems: a review. *Int. J. Numer.
+    Methods Eng.*, 30, 875-898.
+  * Nedjar, B. (2002). An enthalpy-based finite element method for
+    nonlinear heat problems involving phase change. *Comput. Struct.*,
+    80, 9-21.
 """
 module SoilColumn
 
@@ -2052,6 +2090,112 @@ function step_soil_heat!(col::SoilThermalColumn{T}, dt::Real, top::AbstractSoilH
     b.surface += Gsum; b.bottom += Fsum; b.time += dt
     return SoilHeatStep{T}(Gsum / dt, Fsum / dt, Ts, Tssum / dt, soil_enthalpy(col) - E0,
                            soil_ice_mass(col) - ice0, nsub, nit)
+end
+
+# ---- water transport inside the thermal column --------------------------------
+
+"""
+    step_soil_water!(col::SoilThermalColumn, dt; water_input, evaporation, sink)
+    step_soil_water!(col::SoilThermalColumn, forcing, fluxes, dt; sink)
+
+Richards step of the wrapped water column (see the [`SoilWaterColumn`](@ref)
+methods), followed by the energy bookkeeping of the moved water: each
+layer keeps its temperature while its liquid changes, so water carries
+the enthalpy of the layer it enters or leaves (recorded in
+`col.budget.water`), and each layer then re-equilibrates adiabatically —
+water that infiltrates a frozen layer refreezes and warms it.
+"""
+function step_soil_water!(col::SoilThermalColumn, dt::Real; kwargs...)
+    st = step_soil_water!(col.water, dt; kwargs...)
+    _after_water_step!(col)
+    return st
+end
+function step_soil_water!(col::SoilThermalColumn, forcing::SurfaceForcing,
+                          fluxes::SurfaceFluxes, dt::Real; sink = nothing)
+    st = step_soil_water!(col.water, forcing, fluxes, dt; sink = sink)
+    _after_water_step!(col)
+    return st
+end
+
+function _after_water_step!(col::SoilThermalColumn)
+    w = col.water
+    dE = zero(eltype(col.H))
+    for i in eachindex(col.H)
+        Hn = _layer_enthalpy(col, i, w.T_soil[i], w.θ_liq[i], w.θ_ice[i])
+        dE += w.grid.dz[i] * (Hn - col.H[i])
+        col.H[i] = Hn
+    end
+    col.budget.water += dE
+    _apply_enthalpy!(col)
+    return col
+end
+
+# ---- the AbstractSurface interface ---------------------------------------------
+
+surface_temperature(col::SoilThermalColumn) = col.T_skin
+roughness_lengths(col::SoilThermalColumn) = (z0m = col.z0m, z0h = col.z0h, z0q = col.z0q)
+surface_albedo(col::SoilThermalColumn) = col.albedo
+surface_emissivity(col::SoilThermalColumn) = col.emissivity
+"Lee & Pielke (1992) β of the wrapped water column (liquid water of the top layer)."
+moisture_availability(col::SoilThermalColumn) = moisture_availability(col.water)
+
+"""
+    step_surface!(col::SoilThermalColumn, forcing, dt; δT = 0.01, kwargs...) -> SurfaceFluxes
+
+One coupled land-surface step: skin energy balance, soil heat and
+freeze–thaw, then soil water.
+
+ 1. The atmospheric fluxes of the current skin temperature ``T_0`` come
+    from `SurfaceExchange.turbulent_fluxes` (Monin–Obukhov, with
+    `kwargs` passed on) and are linearised in the skin temperature by a
+    finite difference of `δT`: ``R_n``, ``H``, ``LE`` and ``E``.
+    Evaporation is capped by the liquid water of the top layer.
+ 2. [`step_soil_heat!`](@ref) with a [`LinearizedSkinBalance`](@ref):
+    the skin temperature and the soil temperatures are solved together,
+    implicitly, so the ground heat flux is the real nocturnal sink the
+    slab model lacked.
+ 3. The returned `SurfaceFluxes` are the linearised fluxes at the
+    time-mean skin temperature of the step, so ``R_n - H - LE = G`` and
+    ``G\\,dt`` is exactly the energy the soil received.
+ 4. With `hydrology = true`, [`step_soil_water!`](@ref) with the rain of
+    `forcing` and the evaporation ``E`` just returned.
+"""
+function step_surface!(col::SoilThermalColumn{T}, f::SurfaceForcing, dt::Real;
+                       δT::Real = 0.01, kwargs...) where {T}
+    c = col.water.constants
+    T0 = col.T_skin
+    f0 = turbulent_fluxes(col, f; c = c, kwargs...)
+    col.T_skin = T0 + δT
+    f1 = turbulent_fluxes(col, f; c = c, kwargs...)
+    col.T_skin = T0
+    dRn, dH = (f1.Rn - f0.Rn) / δT, (f1.H - f0.H) / δT
+    LE0, dLE = f0.LE, (f1.LE - f0.LE) / δT
+    E0, dE = f0.E, (f1.E - f0.E) / δT
+    if col.hydrology && E0 > 0
+        # the top layer cannot evaporate more liquid than it holds
+        Emax = c.ρ_water * max(col.water.θ_liq[1] - _liquid_floor(col, 1), zero(T)) *
+               col.water.grid.dz[1] / dt
+        if E0 > Emax
+            φ = Emax / E0
+            LE0 *= φ; dLE *= φ; E0 *= φ; dE *= φ
+        end
+    end
+    G0 = f0.Rn - f0.H - LE0
+    D = dRn - dH - dLE
+    st = step_soil_heat!(col, dt, LinearizedSkinBalance(G0, D, T0))
+    ΔT = st.T_skin_mean - T0
+    Rn = f0.Rn + dRn * ΔT
+    H = f0.H + dH * ΔT
+    LE = LE0 + dLE * ΔT
+    E = E0 + dE * ΔT
+    fl = SurfaceFluxes{T}(Rn, H, LE, Rn - H - LE, f0.τ, E)
+    if col.hydrology
+        ws = step_soil_water!(col, f, fl, dt)
+        # latent heat charged to the balance for water the soil did not deliver
+        col.budget.latent_mismatch += (E * dt / c.ρ_water - ws.evaporation) * c.ρ_water *
+                                      (E != 0 ? LE / E : zero(T))
+    end
+    return fl
 end
 
 end # module

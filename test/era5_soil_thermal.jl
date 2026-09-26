@@ -313,4 +313,147 @@ end
     @test wc.T_soil[1] < CST.thermo.T_freeze
 end
 
+# a dry, windless night: skin cools radiatively and is held up by the soil
+_night(; T_air = 283.15, U = 3.0, q_air = 0.005) =
+    SurfaceForcing(sw_down = 0.0, lw_down = 300.0, T_air = T_air, q_air = q_air, U = U)
+
+@testset "Skin energy balance: an AbstractSurface" begin
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    wc = SoilWaterColumn(clm5_soil_grid(), h; ψ = -3.0)
+    col = SoilThermalColumn(wc, p; T_soil = 288.15, hydrology = false)
+    @test col isa AbstractSurface
+    @test surface_temperature(col) == 288.15
+    @test Aeolus.SurfaceExchange.roughness_lengths(col) == (z0m = 0.01, z0h = 0.001, z0q = 0.001)
+    @test Aeolus.surface_emissivity(col) ≈ Aeolus.SurfaceOptics.material_emissivity(:soil_dry)
+    @test Aeolus.SurfaceExchange.moisture_availability(col) ==
+          Aeolus.SurfaceExchange.moisture_availability(wc)
+    # (1) every step closes Rn = H + LE + G exactly, and G dt is what the soil got
+    E0 = soil_enthalpy(col)
+    worst_lin = 0.0
+    lin = Float64[]
+    for n in 1:72
+        f = _night()
+        fl = step_surface!(col, f, 600.0)
+        @test fl.Rn - fl.H - fl.LE ≈ fl.G atol = 1e-10
+        @test fl.G < 0                                # the soil feeds the cooling skin
+        # linearisation error: the full Monin–Obukhov fluxes at the new skin T
+        fn = turbulent_fluxes(col, f)
+        push!(lin, abs((fn.Rn - fn.H - fn.LE) - fl.G))
+    end
+    @test soil_enthalpy(col) - E0 ≈ col.budget.surface rtol = 1e-12
+    # One linearisation per step (as CLM): the error is second order in the
+    # skin-temperature change — large only while the skin first drops 3 K
+    # from its 288 K start, then a fraction of a W/m².
+    @test lin[1] < 20
+    @test maximum(lin[4:end]) < 0.5
+    @printf("  12 h night, Δt = 600 s: |G_full(T_s) - G| = %.2f W/m² on step 1 (ΔT_s ≈ -3 K), ≤ %.3f W/m² from step 4\n",
+            lin[1], maximum(lin[4:end]))
+
+    # (2) the nocturnal sink: with the soil, the skin stays far warmer than a
+    # surface in local radiative-turbulent equilibrium (G = 0).
+    f = _night()
+    colG0 = SoilThermalColumn(SoilWaterColumn(clm5_soil_grid(), h; ψ = -3.0), p;
+                              T_soil = 288.15, hydrology = false)
+    Gfull(T) = (colG0.T_skin = T; fx = turbulent_fluxes(colG0, f); fx.Rn - fx.H - fx.LE)
+    lo, hi = 230.0, 300.0
+    for _ in 1:100
+        m = (lo + hi) / 2
+        Gfull(m) > 0 ? (lo = m) : (hi = m)
+    end
+    T_eq = (lo + hi) / 2
+    @test col.T_skin > T_eq + 1
+    @printf("  after 12 h: soil skin %.2f K vs G = 0 equilibrium %.2f K\n", col.T_skin, T_eq)
+
+    # (3) steady state under constant forcing with a fixed base temperature:
+    # G equals the conduction through the column, G = (T_s - T_b)/R with
+    # R = z₁/(2k₁)-style series resistance of the half layers, and the
+    # full nonlinear balance closes.
+    g = uniform_soil_grid(1.0, 20)
+    wc2 = SoilWaterColumn(g, h; θ = 0.3)
+    col2 = SoilThermalColumn(wc2, p; T_soil = 285.0, bottom = BottomTemperature(285.0),
+                             hydrology = false)
+    f2 = SurfaceForcing(sw_down = 200.0, lw_down = 330.0, T_air = 288.15, q_air = 0.006, U = 4.0)
+    local fl2
+    for _ in 1:400
+        fl2 = step_surface!(col2, f2, 3600.0)
+    end
+    k = soil_thermal_layer_conductivity(col2, 1)
+    @test fl2.G ≈ k * (col2.T_skin - 285.0) / 1.0 rtol = 1e-4
+    fn2 = turbulent_fluxes(col2, f2)
+    @test fn2.Rn - fn2.H - fn2.LE ≈ fl2.G atol = 0.01
+    @test all(diff(wc2.T_soil) .< 0)                      # linear profile, warm on top
+    @printf("  steady state: T_s = %.3f K, G = %.2f W/m² = k ΔT/D = %.2f W/m²\n",
+            col2.T_skin, fl2.G, k * (col2.T_skin - 285.0))
+end
+
+@testset "Coupled heat and water: frozen soil, runoff, conservation" begin
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    runoff = Dict{Bool,Float64}()
+    for frozen in (false, true)
+        wc = SoilWaterColumn(clm5_soil_grid(), h; ψ = -0.3, ice_impedance = PowerLawIceImpedance())
+        col = SoilThermalColumn(wc, p; T_soil = frozen ? 268.15 : 278.15)
+        E0, S0 = soil_enthalpy(col), soil_water_storage(wc)
+        # 6 h of 5 mm/h rain on a cold, still day
+        for _ in 1:12
+            f = SurfaceForcing(sw_down = 0.0, lw_down = 280.0, T_air = frozen ? 268.15 : 278.15,
+                               q_air = 0.003, U = 2.0, rain = 5.0 / 3600)
+            fl = step_surface!(col, f, 1800.0)
+            @test fl.Rn - fl.H - fl.LE ≈ fl.G atol = 1e-10
+        end
+        b, wb = col.budget, wc.budget
+        @test soil_enthalpy(col) - E0 ≈ b.surface - b.bottom + b.water rtol = 1e-12 atol = 1e-3
+        @test soil_water_storage(wc) - S0 ≈ wb.infiltration - wb.drainage rtol = 1e-10 atol = 1e-15
+        runoff[frozen] = wb.runoff
+    end
+    # ice impedance: a frozen surface sheds most of the rain the thawed one takes
+    @test runoff[false] < 0.1 * 0.03
+    @test runoff[true] > 0.5 * 0.03
+    @printf("  30 mm of rain: runoff %.1f mm on thawed, %.1f mm on frozen loam\n",
+            1000runoff[false], 1000runoff[true])
+
+    # water entering a frozen layer refreezes and warms it (latent heat)
+    wc = SoilWaterColumn(uniform_soil_grid(0.4, 8), h; ψ = -2.0)
+    col = SoilThermalColumn(wc, p; T_soil = [278.15, 278.15, 278.15, 278.15, 271.15, 271.15, 271.15, 271.15])
+    E0, T5 = soil_enthalpy(col), wc.T_soil[5]
+    ice5 = wc.θ_ice[5]
+    for _ in 1:24
+        step_soil_water!(col, 3600.0; water_input = 2e-6)
+    end
+    @test soil_enthalpy(col) - E0 ≈ col.budget.water rtol = 1e-12
+    @test wc.θ_ice[5] > ice5 && wc.T_soil[5] > T5
+    @printf("  infiltration into frozen layer: ice %.4f → %.4f, T %.3f → %.3f K\n",
+            ice5, wc.θ_ice[5], T5, wc.T_soil[5])
+end
+
+@testset "Seasonal freeze–thaw cycle, all textures" begin
+    # A 60-day winter-to-spring run through the full surface interface for
+    # each Carsel–Parrish texture: frost forms, thaws, energy and water close.
+    for tex in keys(CARSEL_PARRISH_1988)
+        h = carsel_parrish_texture(tex)
+        wc = SoilWaterColumn(clm5_soil_grid(), h; ψ = -1.0, ice_impedance = PowerLawIceImpedance())
+        col = SoilThermalColumn(wc, clm_soil_thermal_properties(40, 20); T_soil = 276.15,
+                                bottom = GeothermalHeatFlux(0.065))
+        E0, S0 = soil_enthalpy(col), soil_water_storage(wc)
+        icemax = 0.0
+        for n in 1:24 * 60
+            hr, day = mod(n, 24), n / 24
+            winter = day < 30
+            f = SurfaceForcing(sw_down = max(0.0, (winter ? 150 : 600) * sin(π * (hr - 6) / 12)),
+                               lw_down = winter ? 200.0 : 330.0,
+                               T_air = (winter ? 258.15 : 285.15) + 4sin(2π * (hr - 9) / 24),
+                               q_air = winter ? 0.0008 : 0.006, U = 4.0,
+                               rain = n % 50 == 0 ? 1e-3 : 0.0)
+            step_surface!(col, f, 3600.0)
+            icemax = max(icemax, soil_ice_mass(col))
+        end
+        b, wb = col.budget, wc.budget
+        @test icemax > 10
+        @test soil_ice_mass(col) < icemax
+        @test abs(soil_enthalpy(col) - E0 - (b.surface - b.bottom + b.water)) < 1e-12 * 1e9
+        @test abs(soil_water_storage(wc) - S0 - (wb.infiltration - wb.drainage)) < 1e-12
+    end
+end
+
 end # testset
