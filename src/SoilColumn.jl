@@ -1297,7 +1297,7 @@ Niu et al. 2005, CLM4 eq. 7.159):
 
 with ``q_{max} = 5.5×10^{-3}`` kg m⁻² s⁻¹ ``= 5.5×10^{-6}`` m s⁻¹ and
 ``f = 2.5`` m⁻¹ (CLM4.0 global values, Oleson et al. 2010, p. 155; CLM4.5
-replaced ``q_{max}`` by ``10 \sin β`` kg m⁻² s⁻¹ and ``f_{imp}`` by an ice
+replaced ``q_{max}`` by ``10 \\sin β`` kg m⁻² s⁻¹ and ``f_{imp}`` by an ice
 impedance factor) and the frozen-soil impermeable
 fraction ``f_{imp}`` of [`aquifer_impermeable_fraction`](@ref)
 (`frozen_restriction = false` sets it to 0).
