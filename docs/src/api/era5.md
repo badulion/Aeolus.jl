@@ -5,5 +5,5 @@ The theory behind these modules is developed in
 the pages below are the generated API reference, one per module.
 
 - [Shared contract — SurfaceExchange](era5/surface_exchange.md) — `Aeolus.SurfaceExchange`
-- [Urban facets — UrbanSurface](era5/urban_surface.md) — `Aeolus.UrbanSurface` (theory: [Urban facet conduction](../theory/urban_conduction.md))
+- [Urban facets — UrbanSurface](era5/urban_surface.md) — `Aeolus.UrbanSurface` (theory: [Urban facet conduction](../theory/urban_conduction.md), [Facet–radiosity coupling](../theory/urban_radiosity_coupling.md))
 - [Building interior — BuildingEnergy](era5/building_energy.md) — `Aeolus.BuildingEnergy` (theory: [Building energy: indoor air and thermal mass](../theory/building_energy.md), [Occupancy schedules and BESTEST validation](../theory/occupancy_validation.md))

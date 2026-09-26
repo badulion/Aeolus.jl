@@ -360,7 +360,8 @@ export Facet, LongwaveSolution, RadiosityScene, ShortwaveSolution,
        facet_albedos, facet_areas, facet_corners, facet_edges,
        facet_emissivities, facet_sample_points, facet_sunlit_fraction,
        facet_temperatures, heightmap_from_solid_mask,
-       longwave_trapping_factor, nfacets, ray_blocked,
+       longwave_trapping_factor, LongwaveResponse, longwave_response,
+       nfacets, ray_blocked,
        reciprocity_error, segment_blocked, set_temperature!,
        set_temperatures!, sky_view_factor_raycast,
        sky_view_factors_raycast, solar_unit_vector, solve_longwave,
@@ -617,7 +618,9 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        column_heat_content, cell_centers,
        UrbanFacet, interior_heat_flux, set_interior_boundary!,
        set_interior_temperature!, facet_layer_temperatures,
-       example_roof_layers, example_wall_layers, example_ground_layers
+       example_roof_layers, example_wall_layers, example_ground_layers,
+       UrbanFacetScene, step_urban_facets!, aggregate_facet_fluxes,
+       example_facet_layers
 
 # Phase 50 — BuildingEnergy: prognostic indoor air temperature, thermal
 # mass (UrbanSurface conduction columns), ventilation, and the ISO 13790

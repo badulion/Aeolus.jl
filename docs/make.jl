@@ -42,6 +42,7 @@ makedocs(
             "Building energy (zone)"      => "theory/building_energy.md",
             "HVAC and exhaust heat"       => "theory/hvac_exhaust.md",
             "Occupancy and BESTEST"       => "theory/occupancy_validation.md",
+            "Facet–radiosity coupling"    => "theory/urban_radiosity_coupling.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
