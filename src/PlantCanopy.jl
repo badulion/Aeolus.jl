@@ -417,7 +417,7 @@ averaged from their four neighbouring faces), all factors computed from
 the velocity *before* any is applied.
 
 Call it from the `post_predictor!` hook of
-[`step!`](@ref Aeolus.Simulations.step!), i.e. on the predicted velocity
+`step!`, i.e. on the predicted velocity
 ``u^*`` and before the pressure projection:
 
 ```julia
