@@ -617,4 +617,16 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        set_interior_temperature!, facet_layer_temperatures,
        example_roof_layers, example_wall_layers, example_ground_layers
 
+# Phase 49 — UrbanSurface glazing (#27): angle-dependent pane / unit
+# optics, gap heat transfer, U-value, SHGC and the window facet. The
+# fill-gas property fits (gas_conductivity, …) stay qualified.
+export CLEAR_FLOAT_REFRACTIVE_INDEX, CLEAR_FLOAT_EXTINCTION, UNCOATED_GLASS_EMISSIVITY,
+       GlassPane, glass_pane_from_normal, pane_optics,
+       FillGas, GLAZING_AIR, GLAZING_ARGON, GlazingGap, gap_nusselt, gap_conductance,
+       Glazing, single_glazing, double_glazing, triple_glazing,
+       glazing_optics, glazing_optics_hemispherical,
+       glazing_u_value, inward_flowing_fractions, glazing_shgc,
+       WindowFacet, set_solar_incidence!, window_optics, transmitted_shortwave,
+       pane_temperatures, window_heat_content
+
 end # module
