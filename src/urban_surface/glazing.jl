@@ -205,8 +205,11 @@ const GLAZING_AIR = FillGas(:air, (2.873e-3, 7.760e-5), (3.723e-6, 4.940e-8),
 const GLAZING_ARGON = FillGas(:argon, (2.285e-3, 5.149e-5), (3.379e-6, 6.451e-8),
                               (521.9285, 0.0), 39.948)
 
+"Conductivity of a fill gas at `T` (K), W m⁻¹ K⁻¹ (ISO 15099 Table B.1 fit)."
 gas_conductivity(g::FillGas, T::Real) = g.k[1] + g.k[2] * T
+"Dynamic viscosity of a fill gas at `T` (K), Pa s (ISO 15099 Table B.1 fit)."
 gas_viscosity(g::FillGas, T::Real) = g.μ[1] + g.μ[2] * T
+"Specific heat of a fill gas at `T` (K), J kg⁻¹ K⁻¹ (ISO 15099 Table B.1 fit)."
 gas_heat_capacity(g::FillGas, T::Real) = g.cp[1] + g.cp[2] * T
 
 """

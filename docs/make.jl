@@ -39,6 +39,7 @@ makedocs(
             "Radiation fog"               => "theory/radiation_fog.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
             "Urban facet conduction"      => "theory/urban_conduction.md",
+            "Glazing and window facets"   => "theory/urban_glazing.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

@@ -5,7 +5,7 @@ Phase 49 — the production urban surface: per-facet (roof / wall /
 ground) multi-layer heat conduction through real material layers,
 replacing the single heat-capacity slab of the urban example.
 
-Three parts:
+Four parts:
 
   1. **Thermal material table** — [`ThermalMaterial`](@ref) and
      [`thermal_material`](@ref): conductivity, density and specific heat
@@ -29,6 +29,14 @@ Three parts:
      whose outer face is closed by the surface energy balance
      ``R_n = H + LE + G``, linearised about the current skin temperature
      so the step stays implicit and conserves energy exactly.
+  4. **Glazing** (`src/urban_surface/glazing.jl`) — angle-dependent
+     shortwave optics of uncoated panes ([`GlassPane`](@ref),
+     [`pane_optics`](@ref)) and multi-pane units ([`Glazing`](@ref),
+     [`glazing_optics`](@ref)), ISO 15099 gap heat transfer, the steady
+     [`glazing_u_value`](@ref) and [`glazing_shgc`](@ref), and
+     [`WindowFacet`](@ref), a glazed `AbstractSurface` whose transmitted
+     shortwave ([`transmitted_shortwave`](@ref)) is the hook for the
+     building energy model.
 
 # Sign convention
 
