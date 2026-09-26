@@ -93,7 +93,10 @@ export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
        bottom_flux_linearization, finalize_bottom!,
        SoilWaterColumn, SoilWaterBudget, SoilWaterStep, step_soil_water!,
        set_water_content!, set_matric_potential!, soil_water_storage,
-       soil_layer_conductivity, soil_field_capacity
+       soil_layer_conductivity, soil_field_capacity,
+       UnconfinedAquifer, water_table_depth, set_water_table!, aquifer_baseflow_rate,
+       aquifer_impermeable_fraction, gardner_two_point_flux, bottom_water_storage,
+       total_water_storage
 
 # =========================================================================
 # 1. Layer structure
@@ -680,7 +683,7 @@ HeadBottom(ψ::Real) = HeadBottom{Float64}(ψ)
 
 Downward flux through the base of the column, ``q = a + b ψ_N`` (m s⁻¹).
 The solver calls the five-argument form with the sub-step length `dt`
-(s), which a boundary with its own storage (an aquifer)
+(s), which a boundary with its own storage (the [`UnconfinedAquifer`](@ref))
 needs to couple implicitly; by default it forwards to the four-argument
 form. See [`AbstractSoilBottomBoundary`](@ref).
 """
@@ -1243,5 +1246,379 @@ function step_soil_water!(col::SoilWaterColumn, forcing::SurfaceForcing,
 end
 
 
+# =========================================================================
+# 6. Water table and unconfined aquifer (#17)
+# =========================================================================
+
+"""
+    UnconfinedAquifer(; W = 4.8, S_y = 0.2, D = 25.0, q_max = 5.5e-6, f = 2.5,
+                      α_ice = 3.0, frozen_restriction = true)
+
+A prognostic water table in an unconfined aquifer below the soil column
+— the SIMTOP groundwater model of Niu et al. (2005, 2007) as used in
+CLM4/CLM4.5 (Oleson et al. 2010, §7.5) — used as the column's `bottom`
+boundary:
+
+    col = SoilWaterColumn(grid, soil; bottom = UnconfinedAquifer())
+
+**State.** `W` (m of water) is the water stored in an aquifer of
+thickness `D` (m) whose top is the base of the soil column ``z_b``. While
+the water table ``z_∇`` lies below the column the aquifer drains by
+gravity with specific yield ``S_y``,
+
+    z_∇ = z_b + D - W / S_y                      (W ≤ W_max = S_y D)
+
+(Oleson et al. 2010, eq. 7.165; CLM's ``W_a = 5000`` mm, ``z_∇ = z_b`` at
+``W_{max}``). When the aquifer is full the water table sits inside the soil
+column; the aquifer then stores water only elastically, with the column's
+`specific_storage` ``S_s``, and its excess pressure at the base is
+``ψ_b = (W - W_{max})/(S_s D)``, so that the hydrostatic water table is
+``z_∇ = z_b - ψ_b``. `W` is thus one continuous, monotone store for both
+regimes (CLM switches between two separate stores instead).
+
+**Recharge** — the flux across the column's base, downward positive —
+is the steady Darcy flux between the bottom node (``ψ_N`` at ``z_N``)
+and the water table (``ψ = 0`` at ``z_∇``), or the saturated base
+(``ψ_b`` at ``z_b``) when the table is in the column. It is evaluated by
+[`gardner_two_point_flux`](@ref), exact for a conductivity exponential
+in ``ψ`` between the two points, which keeps capillary rise from a deep
+water table realistic where a mean conductivity overstates it by orders
+of magnitude. It vanishes exactly for the hydrostatic profile
+``ψ_N = -(z_∇ - z_N)``.
+
+**Baseflow** (lateral, topographically controlled drainage; SIMTOP,
+Niu et al. 2005, CLM4 eq. 7.159):
+
+    q_drai = (1 - f_imp) q_max exp(-f z_∇)
+
+with ``q_{max} = 5.5×10^{-3}`` kg m⁻² s⁻¹ ``= 5.5×10^{-6}`` m s⁻¹ and
+``f = 2.5`` m⁻¹ (CLM4/4.5 global values) and the frozen-soil impermeable
+fraction ``f_{imp}`` of [`aquifer_impermeable_fraction`](@ref)
+(`frozen_restriction = false` sets it to 0).
+
+**Numerics.** Within a sub-step the recharge is coupled implicitly to the
+aquifer (the linearisation handed to the Richards solver includes the
+response of the water table, which is stiff when the aquifer is full),
+and after convergence `W` is advanced by the *exact* solution of
+``dW/dt = q - q_{drai}(W)`` at the converged recharge ``q`` — for a
+constant ``q`` the substitution ``u = e^{f z_∇}`` makes it linear in both
+regimes. Water is therefore conserved to round-off by
+[`total_water_storage`](@ref), and the recession
+``q_{drai}(t) = q_0/(1 + t/τ)``, ``τ = S_y/(f q_0)``, is reproduced for
+any step length.
+
+Cumulative fields: `recharge` and `baseflow` (m of water since
+construction).
+
+# References
+
+  * Niu, G.-Y., Yang, Z.-L., Dickinson, R. E. & Gulden, L. E. (2005). A
+    simple TOPMODEL-based runoff parameterization (SIMTOP) for use in
+    global climate models. *J. Geophys. Res.*, 110, D21106.
+  * Niu, G.-Y., Yang, Z.-L., Dickinson, R. E., Gulden, L. E. & Su, H.
+    (2007). Development of a simple groundwater model for use in climate
+    models and evaluation with Gravity Recovery and Climate Experiment
+    data. *J. Geophys. Res.*, 112, D07103.
+  * Oleson, K. W. et al. (2010). Technical description of version 4.0 of
+    the Community Land Model (CLM). NCAR/TN-478+STR, §7.4.2.4 and §7.5.
+"""
+mutable struct UnconfinedAquifer{T<:AbstractFloat} <: AbstractSoilBottomBoundary
+    W::T
+    S_y::T
+    D::T
+    q_max::T
+    f::T
+    α_ice::T
+    frozen_restriction::Bool
+    recharge::T
+    baseflow::T
+end
+function UnconfinedAquifer(; W::Real = 4.8, S_y::Real = 0.2, D::Real = 25.0,
+                           q_max::Real = 5.5e-6, f::Real = 2.5, α_ice::Real = 3.0,
+                           frozen_restriction::Bool = true)
+    (0 < S_y <= 1 && D > 0 && q_max >= 0 && f > 0 && α_ice > 0) ||
+        throw(ArgumentError("UnconfinedAquifer: need 0 < S_y ≤ 1, D > 0, q_max ≥ 0, f > 0, α_ice > 0"))
+    W >= 0 || throw(ArgumentError("UnconfinedAquifer: W ≥ 0"))
+    UnconfinedAquifer{Float64}(W, S_y, D, q_max, f, α_ice, frozen_restriction, 0.0, 0.0)
+end
+
+_aq_Wmax(aq::UnconfinedAquifer) = aq.S_y * aq.D
+_aq_Ce(aq::UnconfinedAquifer, col) = col.specific_storage * aq.D
+# storage W ↔ water-table depth z (m, positive down), continuous at z = z_b
+function _aq_depth(aq::UnconfinedAquifer, col, W)
+    zb = col.grid.zh[end]
+    W <= _aq_Wmax(aq) ? zb + aq.D - W / aq.S_y : zb - (W - _aq_Wmax(aq)) / _aq_Ce(aq, col)
+end
+function _aq_storage(aq::UnconfinedAquifer, col, z)
+    zb = col.grid.zh[end]
+    z >= zb ? aq.S_y * (zb + aq.D - z) : _aq_Wmax(aq) + _aq_Ce(aq, col) * (zb - z)
+end
+# capacity C = dW/d(-z∇) of the regime W is in
+_aq_capacity(aq::UnconfinedAquifer, col, W) = W <= _aq_Wmax(aq) ? aq.S_y : _aq_Ce(aq, col)
+
+"""
+    water_table_depth(aq::UnconfinedAquifer, col) -> z_∇ (m)
+    water_table_depth(col) -> z_∇ (m) or `nothing`
+
+Depth of the water table below the soil surface. For a column over an
+[`UnconfinedAquifer`](@ref) it is the aquifer's (hydrostatic) water
+table, which may lie inside the column. For any other lower boundary it
+is diagnosed from the column itself: the depth where ``ψ`` crosses zero
+above the saturated zone that reaches the base (linear interpolation
+between nodes), or `nothing` if the bottom layer is unsaturated.
+"""
+water_table_depth(aq::UnconfinedAquifer, col) = _aq_depth(aq, col, aq.W)
+function water_table_depth(col::SoilWaterColumn)
+    col.bottom isa UnconfinedAquifer && return water_table_depth(col.bottom, col)
+    return _column_water_table(col)
+end
+function _column_water_table(col::SoilWaterColumn)
+    ψ, z = col.ψ, col.grid.z
+    N = length(z)
+    ψ[N] >= 0 || return nothing
+    for i in N:-1:2
+        if ψ[i-1] < 0
+            return z[i] - ψ[i] * (z[i] - z[i-1]) / (ψ[i] - ψ[i-1])
+        end
+    end
+    return max(zero(ψ[1]), z[1] - ψ[1])
+end
+
+"""
+    aquifer_impermeable_fraction(aq, col) -> f_imp ∈ [0, 1]
+
+Fraction of the drainage area made impermeable by ground ice (CLM4
+eq. 7.160, after Niu & Yang 2006):
+
+    f_imp = [exp(-α(1 - F)) - exp(-α)] / [1 - exp(-α)],   α = aq.α_ice
+
+where ``F`` is the thickness-weighted ice mass fraction
+``w_{ice}/(w_{ice} + w_{liq})`` of the layers from the one holding the
+water table (the bottom layer when the table is below the column) down
+to the base. Zero for an ice-free column or `frozen_restriction = false`.
+"""
+function aquifer_impermeable_fraction(aq::UnconfinedAquifer, col)
+    aq.frozen_restriction || return zero(aq.W)
+    g, c = col.grid, col.constants
+    N = length(g)
+    zwt = water_table_depth(aq, col)
+    j = N
+    while j > 1 && g.zh[j] > zwt
+        j -= 1
+    end
+    num = den = zero(aq.W)
+    for i in j:N
+        mi = c.ρ_ice * col.θ_ice[i]
+        ml = c.ρ_water * col.θ_liq[i]
+        F = mi + ml > 0 ? mi / (mi + ml) : zero(mi)
+        num += F * g.dz[i]
+        den += g.dz[i]
+    end
+    F = num / den
+    α = aq.α_ice
+    return max(zero(F), (exp(-α * (1 - F)) - exp(-α)) / (1 - exp(-α)))
+end
+
+_aq_q0(aq::UnconfinedAquifer, col) = (1 - aquifer_impermeable_fraction(aq, col)) * aq.q_max
+
+"""
+    aquifer_baseflow_rate(col) -> q_drai (m s⁻¹)
+    aquifer_baseflow_rate(aq, col)
+
+Instantaneous SIMTOP baseflow ``(1 - f_{imp}) q_{max} e^{-f z_∇}`` of the
+column's [`UnconfinedAquifer`](@ref) in its current state.
+"""
+aquifer_baseflow_rate(aq::UnconfinedAquifer, col) =
+    _aq_q0(aq, col) * exp(-aq.f * water_table_depth(aq, col))
+aquifer_baseflow_rate(col::SoilWaterColumn) = aquifer_baseflow_rate(col.bottom, col)
+
+"""
+    gardner_two_point_flux(K_1, K_2, ψ_1, ψ_2, L) -> q (m s⁻¹, downward)
+
+Steady vertical Darcy flux from a point with potential `ψ_1` and
+conductivity `K_1` down to a point `L` metres below with `ψ_2`, `K_2`,
+assuming the conductivity varies exponentially with potential between
+them, ``K ∝ e^{α ψ}`` with ``α = \\ln(K_2/K_1)/(ψ_2 - ψ_1)``. Integrating
+``q = K (1 - dψ/dz)`` exactly (Gardner 1958) gives
+
+    q = (K_1 - K_2 e^{-αL}) / (1 - e^{-αL}),
+
+which is exact for a [`GardnerExponential`](@ref) soil, reduces to Darcy's
+law ``q = K (1 - (ψ_2 - ψ_1)/L)`` for uniform ``K``, and vanishes for the
+hydrostatic pair ``ψ_1 = ψ_2 - L`` whatever the soil. Used for the
+recharge between the bottom soil node and the water table.
+"""
+function gardner_two_point_flux(K1::Real, K2::Real, ψ1::Real, ψ2::Real, L::Real)
+    L > 0 || throw(ArgumentError("gardner_two_point_flux: L > 0"))
+    K1, K2, ψ1, ψ2, L = promote(float(K1), float(K2), ψ1, ψ2, L)
+    tiny = floatmin(K1)
+    K1 = max(K1, tiny); K2 = max(K2, tiny)
+    Δψ = ψ2 - ψ1
+    x = log(K2 / K1)
+    # uniform K (or K rising against ψ, which only a layered pair can do):
+    # plain Darcy with the logarithmic mean conductivity
+    if x == 0 || Δψ == 0 || x / Δψ <= 0
+        Km = x == 0 ? K1 : (K2 - K1) / x
+        return Km * (1 - Δψ / L)
+    end
+    y = x / Δψ * L                       # αL > 0
+    x - y <= 700 && return K1 * expm1(x - y) / expm1(-y)
+    return (K1 - K2 * exp(-y)) / (-expm1(-y))
+end
+
+# Steady recharge q(ψ_N, ψ_t) from the bottom node to the target point
+# (water table or saturated base) at depth z_t.
+_aq_flux(col, ψN, ψt, L) = gardner_two_point_flux(_layer_K(col, length(col.grid), ψN),
+                                                  _layer_K(col, length(col.grid), ψt),
+                                                  ψN, ψt, L)
+
+# The implicit aquifer coupling. For the current bottom-node potential ψ_N,
+# find the end-of-step storage W₁ solving the backward-Euler balance
+#   G(W₁) = W₁ - W₀ - Δt [q(ψ_N, ψ_t(W₁)) - q_drai(W₁)] = 0,
+# where the target point is frozen at the start-of-step depth z_t = max(z_∇, z_b)
+# and ψ_t(W₁) = z_t - z_∇(W₁) is the hydrostatic potential there; then return
+# the tangent q ≈ a + b ψ_N including dW₁/dψ_N. G is strictly increasing
+# (q falls and q_drai rises with W), so a safeguarded Newton iteration on a
+# bracket always converges.
+function bottom_flux_linearization(aq::UnconfinedAquifer, col, ψN, KN, dt)
+    col.gravity > 0 ||
+        throw(ArgumentError("UnconfinedAquifer: needs a column with gravity"))
+    T = typeof(aq.W)
+    N = length(col.grid)
+    zN, zb = col.grid.z[N], col.grid.zh[end]
+    W0 = aq.W
+    z0 = _aq_depth(aq, col, W0)
+    zt = max(z0, zb)
+    L = zt - zN
+    q0 = _aq_q0(aq, col)
+    f = aq.f
+    ψt(W) = zt - _aq_depth(aq, col, W)
+    qdrai(W) = q0 * exp(-f * _aq_depth(aq, col, W))
+    δ(ψ) = 1e-7 * max(one(ψ), abs(ψ))
+    function Φ2(ψ2)                                  # ∂q/∂ψ_t
+        h = δ(ψ2)
+        (_aq_flux(col, ψN, ψ2 + h, L) - _aq_flux(col, ψN, ψ2 - h, L)) / 2h
+    end
+    G(W) = W - W0 - dt * (_aq_flux(col, ψN, ψt(W), L) - qdrai(W))
+    function dG(W)
+        C = _aq_capacity(aq, col, W)
+        1 + dt * (-Φ2(ψt(W)) + f * qdrai(W)) / C
+    end
+    # bracket (see the monotonicity argument above)
+    g0 = G(W0)
+    tolW = 4eps(T) * max(one(T), abs(W0))
+    if g0 <= 0
+        lo, hi = W0, W0 - g0 + tolW
+        k = 0
+        while G(hi) < 0 && k < 60; hi += (hi - W0) + tolW; k += 1; end
+    else
+        lo, hi = W0 - g0 - tolW, W0
+        k = 0
+        while G(lo) > 0 && k < 60; lo -= (W0 - lo) + tolW; k += 1; end
+    end
+    W = g0 <= 0 ? lo : hi
+    for _ in 1:100
+        g = G(W)
+        abs(g) <= tolW && break
+        g > 0 ? (hi = W) : (lo = W)
+        Wn = W - g / dG(W)
+        (lo < Wn < hi) || (Wn = (lo + hi) / 2)
+        done = abs(Wn - W) <= tolW
+        W = Wn
+        done && break
+    end
+    # tangent at the solution
+    C = _aq_capacity(aq, col, W)
+    ψ2 = ψt(W)
+    q = _aq_flux(col, ψN, ψ2, L)
+    h = δ(ψN)
+    Φ1 = (_aq_flux(col, ψN + h, ψ2, L) - _aq_flux(col, ψN - h, ψ2, L)) / 2h
+    b = Φ1 * (1 + dt * f * qdrai(W) / C) / dG(W)
+    b = max(b, zero(b))
+    return (T(q - b * ψN), T(b))
+end
+
+# Exact water-table motion over time t at constant recharge q within one
+# regime of capacity C: with u = e^{f z}, du/dt = (f/C)(q₀ - q u). Returns
+# z(t) and, when the path would cross z_b, the crossing time instead.
+function _aq_regime_evolve(z0, q, q0, f, C, t, zb, deep::Bool)
+    Qd0 = q0 * exp(-f * z0)
+    λ = f * q / C
+    φ(x) = x == 0 ? one(x) : -expm1(-x) / x
+    v = exp(-λ * t) + Qd0 * (f * t / C) * φ(λ * t)          # u(t)/u(0)
+    z1 = z0 + log(v) / f
+    crosses = deep ? z1 < zb : z1 > zb
+    crosses || return (z1, t)
+    vc = exp(f * (zb - z0))
+    tc = if q == 0
+        (vc - 1) * C / (f * Qd0)
+    else
+        v∞ = Qd0 / q
+        -log((vc - v∞) / (1 - v∞)) / λ
+    end
+    tc = isfinite(tc) ? clamp(tc, zero(t), t) : t
+    return (zb, tc)
+end
+
+function finalize_bottom!(aq::UnconfinedAquifer, col, q, dt)
+    q0 = _aq_q0(aq, col)
+    zb = col.grid.zh[end]
+    W0 = aq.W
+    z = _aq_depth(aq, col, W0)
+    t = zero(dt)
+    for _ in 1:3                               # at most one regime change
+        t >= dt && break
+        Qd = q0 * exp(-aq.f * z)
+        deep = z > zb || (z == zb && q <= Qd)
+        C = deep ? aq.S_y : _aq_Ce(aq, col)
+        z, tc = _aq_regime_evolve(z, q, q0, aq.f, C, dt - t, zb, deep)
+        t = tc >= dt - t ? dt : t + tc
+    end
+    z <= zb + aq.D ||
+        throw(DomainError(z, "UnconfinedAquifer: the aquifer has run dry (water table below its base)"))
+    W1 = _aq_storage(aq, col, z)
+    aq.W = W1
+    aq.recharge += q * dt
+    aq.baseflow += q * dt - (W1 - W0)
+    return nothing
+end
+
+"""
+    bottom_water_storage(bc) -> m
+
+Water held by a stateful lower boundary: the aquifer storage `W` of an
+[`UnconfinedAquifer`](@ref), zero for the stateless boundaries.
+"""
+bottom_water_storage(::AbstractSoilBottomBoundary) = 0.0
+bottom_water_storage(aq::UnconfinedAquifer) = aq.W
+
+"""
+    total_water_storage(col) -> m
+
+Soil water ([`soil_water_storage`](@ref)) plus the water held by the
+lower boundary ([`bottom_water_storage`](@ref)). Over an
+[`UnconfinedAquifer`](@ref) its change equals infiltration minus
+extraction minus baseflow, to round-off.
+"""
+total_water_storage(col::SoilWaterColumn) = soil_water_storage(col) + bottom_water_storage(col.bottom)
+
+"""
+    set_water_table!(col, z_∇)
+
+Put the column in hydrostatic equilibrium with a water table at depth
+`z_∇` (m): ``ψ_i = z_i - z_∇`` in every layer (saturated, with elastic
+storage, below the table), and — over an [`UnconfinedAquifer`](@ref) —
+the aquifer storage consistent with it.
+"""
+function set_water_table!(col::SoilWaterColumn, zwt::Real)
+    set_matric_potential!(col, [z - zwt for z in col.grid.z])
+    if col.bottom isa UnconfinedAquifer
+        aq = col.bottom
+        zwt <= col.grid.zh[end] + aq.D ||
+            throw(ArgumentError("set_water_table!: water table below the aquifer base"))
+        aq.W = _aq_storage(aq, col, zwt)
+    end
+    return col
+end
 
 end # module
