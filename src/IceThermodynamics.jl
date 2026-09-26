@@ -564,7 +564,10 @@ function surface_albedo(c::IceColumn)
     p = c.params
     c.h_ice <= 0 && return p.α_water
     if c.h_snow > p.h_snow_min
-        return c.T_sfc >= _T0(p) - 0.01 ? p.α_snow_melt : p.α_snow
+        # "melting" = the surface was at the melting point last step (BL99
+        # code: T_s ≥ -0.01 °C). A flag, not T_s itself, so the albedo does
+        # not jump inside one step's surface-temperature iteration.
+        return c.budget.melting ? p.α_snow_melt : p.α_snow
     end
     return p.α_ice
 end
@@ -625,8 +628,8 @@ end
 # Uniform access to the pieces the solver needs.
 _snowfall(bc::Union{PrescribedSurfaceTemperature, PrescribedSurfaceFluxes}) = bc.snowfall
 _snowfall(f::SurfaceForcing) = f.snow
-_T_snowfall(bc::Union{PrescribedSurfaceTemperature, PrescribedSurfaceFluxes}) = bc.T_snowfall
-_T_snowfall(f::SurfaceForcing) = min(f.T_air, 273.15)
+_T_snowfall(bc::Union{PrescribedSurfaceTemperature, PrescribedSurfaceFluxes}, p) = bc.T_snowfall
+_T_snowfall(f::SurfaceForcing, p) = min(f.T_air, _T0(p))
 _sw(bc::PrescribedSurfaceTemperature) = 0.0
 _sw(bc::PrescribedSurfaceFluxes) = bc.sw_down
 _sw(f::SurfaceForcing) = f.sw_down
@@ -886,7 +889,7 @@ function _step!(col::IceColumn, bc, dt::Real; kwargs...)
         fl = bc isa SurfaceForcing ? turbulent_fluxes(col, bc; c = p.constants, kwargs...) : nothing
         # snowfall on open water melts into it (enthalpy in and straight out)
         sf = _snowfall(bc) * dt
-        Esf = sf / p.ρ_snow * _Es(p, min(_T_snowfall(bc) - T0, 0.0))
+        Esf = sf / p.ρ_snow * _Es(p, min(_T_snowfall(bc, p) - T0, 0.0))
         E_in += Esf; E_out += Esf
         Fs = first(_surface_flux(col, bc, col.T_bottom, 0.0; kwargs...))
         Fnet = Fs + col.F_ocean
@@ -1049,7 +1052,7 @@ function _step!(col::IceColumn, bc, dt::Real; kwargs...)
     # --- snowfall -----------------------------------------------------------
     sf = _snowfall(bc) * dt / p.ρ_snow            # m of snow
     if sf > 0
-        Ef = _Es(p, min(_T_snowfall(bc) - T0, 0.0))
+        Ef = _Es(p, min(_T_snowfall(bc, p) - T0, 0.0))
         E_in += Ef * sf
         Es = hs > 0 ? (Es * hs + Ef * sf) / (hs + sf) : Ef
         hs += sf
