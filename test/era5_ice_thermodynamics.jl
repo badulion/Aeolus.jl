@@ -348,4 +348,34 @@ const K_BL99 = SurfaceConstants(k_ice = 2.034)
         @info "Snow-ice formation" snow_ice_m = si freeboard_m = ice_freeboard(col)
     end
 
+    @testset "AbstractSurface: Monin–Obukhov coupling, sublimation, freeze-up" begin
+        col = lake_ice_column(h_ice = 0.0)
+        @test col isa AbstractSurface
+        @test roughness_lengths(col).z0m == col.params.z0m
+        # Open lake at 0 °C under a cold, dry, windy night: it freezes over.
+        f = SurfaceForcing(sw_down = 0.0, lw_down = 200.0, T_air = 253.15, q_air = 5e-4,
+                           U = 6.0, p = 101325.0, z_ref = 10.0)
+        fl = step_surface!(col, f, 3600.0)
+        @test col.h_ice > 0
+        @test fl.H > 0 && fl.LE > 0             # warm water heats and moistens the air
+        seb = 0.0; mr = 0.0
+        E_sum = 0.0; m0 = col.params.constants.ρ_ice * col.h_ice; growth = 0.0
+        for _ in 1:10*24
+            fl = step_surface!(col, f, 3600.0)
+            b = col.budget
+            seb = max(seb, abs(fl.Rn - fl.H - fl.LE - fl.G))
+            mr = max(mr, abs(b.energy_residual))
+            E_sum += fl.E * 3600
+            growth += col.params.constants.ρ_ice * b.dh_bottom
+        end
+        @test surface_temperature(col) < 273.15 - 5
+        @test col.h_ice > 0.1
+        @test seb < 1e-6                         # skin balance Rn = H + LE + G
+        @test mr < 1e-8
+        # Sublimation mass: ice lost at the top = ∫E dt (no melt, no snow).
+        m1 = col.params.constants.ρ_ice * col.h_ice
+        @test m1 ≈ m0 + growth - E_sum rtol = 1e-9
+        @test E_sum > 0
+        @info "Lake freeze-up (10 days, -20 °C, 6 m/s)" h_ice = col.h_ice T_sfc = surface_temperature(col) sublimated_kg_m2 = E_sum max_SEB_residual = seb
+    end
 end
