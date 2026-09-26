@@ -628,6 +628,7 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        zone_mean_radiant_temperature, zone_operative_temperature,
        air_heat_capacity, ventilation_conductance, element_transmittance,
        iso13786_areal_heat_capacity,
-       ISO13790Zone, iso13790_zone, step_iso13790!
+       ISO13790Zone, iso13790_zone, step_iso13790!,
+       zone_specific_humidity, zone_relative_humidity
 
 end # module

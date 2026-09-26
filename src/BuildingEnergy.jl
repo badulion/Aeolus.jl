@@ -61,7 +61,10 @@ module BuildingEnergy
 
 using ..SurfaceExchange: SurfaceForcing, SurfaceFluxes, step_surface!
 using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
-                             PhasePartition, air_density, heat_capacity_moist
+                             PhasePartition, air_density, heat_capacity_moist,
+                             saturation_specific_humidity, relative_humidity,
+                             latent_heat_vapor, wet_bulb_temperature,
+                             specific_humidity_from_relative_humidity
 using ..UrbanSurface: UrbanSurface, ConductionColumn, ColumnBoundary, WallLayer,
                       UrbanFacet, step_conduction!, face_temperature,
                       column_heat_content, thermal_resistance,
@@ -75,7 +78,8 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        zone_mean_radiant_temperature, zone_operative_temperature,
        air_heat_capacity, ventilation_conductance, element_transmittance,
        iso13786_areal_heat_capacity,
-       ISO13790Zone, iso13790_zone, step_iso13790!
+       ISO13790Zone, iso13790_zone, step_iso13790!,
+       zone_specific_humidity, zone_relative_humidity
 
 const _H_WALL = 1 / ISO6946_SURFACE_RESISTANCE.inside_horizontal   # 7.69 W m⁻² K⁻¹
 const _H_OUT  = 1 / ISO6946_SURFACE_RESISTANCE.outside             # 25 W m⁻² K⁻¹
@@ -284,8 +288,8 @@ element_transmittance(el::InternalMass) = zero(el.area)
                  window_area = 0, window_U = 0, infiltration_ach = 0.5,
                  ventilation_ach = 0, heat_recovery = 0,
                  radiative_fraction = 0.5, T_air = 293.15,
-                 p_ref = 101325, thermo = DEFAULT_CONSTANTS,
-                 air_capacity = nothing)
+                 q_air = nothing, p_ref = 101325,
+                 thermo = DEFAULT_CONSTANTS, air_capacity = nothing)
 
 A single thermal zone of `volume` m³ and `floor_area` m².
 
@@ -305,6 +309,14 @@ A single thermal zone of `volume` m³ and `floor_area` m².
     ``ρ = p_{ref}/(R_d T_{air})`` and ``c_p`` are the dry-air values of
     `thermo` (`MoistThermodynamics`) at construction. Many BEMs multiply
     ``C_a`` by a furniture factor; here furniture is internal mass.
+  * `q_air` — indoor specific humidity (kg kg⁻¹); by default 50 %
+    relative humidity at the initial `T_air` and `p_ref`. It is advanced
+    only when the forcing supplies an outdoor humidity
+    ([`ZoneForcing`](@ref)`.q_out`), by an implicit moisture balance of
+    the air mass ``ρV`` with the same air-change rates (heat recovery is
+    sensible only), latent internal gains, and dehumidification by an
+    [`IdealLoadsHVAC`](@ref). Hygroscopic buffering by the walls and
+    furniture is not modelled.
 
 The interior long-wave exchange between surfaces is lumped into the
 surface coefficients to the air node (the ISO 6946 combined ``h``), so
@@ -325,6 +337,10 @@ mutable struct BuildingZone{T<:AbstractFloat}
     T_air::T
     C_air::T
     ρc_air::T        # ρ c_p of the air (J m⁻³ K⁻¹), for the ventilation conductance
+    q_air::T         # indoor specific humidity, kg kg⁻¹
+    ρ_air::T         # air density at construction, kg m⁻³ (moisture mass balance)
+    p_ref::T
+    thermo::ThermodynamicConstants{T}
 end
 
 function BuildingZone(; volume::Real, floor_area::Real,
@@ -333,7 +349,7 @@ function BuildingZone(; volume::Real, floor_area::Real,
                       window_area::Real = 0.0, window_U::Real = 0.0,
                       infiltration_ach::Real = 0.5, ventilation_ach::Real = 0.0,
                       heat_recovery::Real = 0.0, radiative_fraction::Real = 0.5,
-                      T_air::Real = 293.15, p_ref::Real = 101325.0,
+                      T_air::Real = 293.15, q_air = nothing, p_ref::Real = 101325.0,
                       thermo::ThermodynamicConstants = DEFAULT_CONSTANTS,
                       air_capacity = nothing)
     volume > 0 || throw(ArgumentError("BuildingZone: volume must be positive"))
@@ -351,19 +367,30 @@ function BuildingZone(; volume::Real, floor_area::Real,
         throw(ArgumentError("BuildingZone: internal_mass takes InternalMass elements"))
     FT = Float64
     q0 = PhasePartition(0.0)
-    ρc = air_density(T_air, p_ref, q0, thermo) * heat_capacity_moist(q0, thermo)
+    ρ = air_density(T_air, p_ref, q0, thermo)
+    ρc = ρ * heat_capacity_moist(q0, thermo)
     C = air_capacity === nothing ? ρc * volume : float(air_capacity)
     C > 0 || throw(ArgumentError("BuildingZone: air_capacity must be positive"))
+    q = q_air === nothing ? specific_humidity_from_relative_humidity(T_air, p_ref, 0.5, thermo) :
+                            float(q_air)
+    (0 <= q < 1) || throw(ArgumentError("BuildingZone: q_air must lie in [0, 1)"))
     return BuildingZone{FT}(FT(volume), FT(floor_area), AbstractZoneElement[envelope...],
                             InternalMass{FT}[internal_mass...], FT(window_area), FT(window_U),
                             FT(infiltration_ach), FT(ventilation_ach), FT(heat_recovery),
-                            FT(radiative_fraction), FT(T_air), FT(C), FT(ρc))
+                            FT(radiative_fraction), FT(T_air), FT(C), FT(ρc), FT(q),
+                            FT(ρ), FT(p_ref), thermo)
 end
 
 _elements(z::BuildingZone) = Iterators.flatten((z.envelope, z.internal_mass))
 
 "Zone air temperature (K)."
 zone_air_temperature(z::BuildingZone) = z.T_air
+
+"Indoor specific humidity (kg kg⁻¹)."
+zone_specific_humidity(z::BuildingZone) = z.q_air
+
+"Indoor relative humidity over liquid water (fraction), from `MoistThermodynamics`."
+zone_relative_humidity(z::BuildingZone) = relative_humidity(z.T_air, z.p_ref, z.q_air, z.thermo)
 
 "Heat capacity of the zone air node, ``C_a`` (J K⁻¹)."
 air_heat_capacity(z::BuildingZone) = z.C_air
@@ -464,7 +491,8 @@ zone_operative_temperature(z::BuildingZone) = (z.T_air + zone_mean_radiant_tempe
 
 """
     ZoneForcing(; T_out, Q_internal = 0, Q_solar = 0, Q_hvac = 0,
-                irradiance = 0, surface = nothing)
+                irradiance = 0, surface = nothing, q_out = nothing,
+                Q_latent = 0)
 
 What drives a zone over one step:
 
@@ -474,33 +502,45 @@ What drives a zone over one step:
     split by the zone's `radiative_fraction`;
   * `Q_solar` — solar radiation transmitted through glazing (W),
     absorbed by the interior surfaces;
-  * `Q_hvac` — sensible heat delivered to the air node by a heating or
-    cooling system (W, negative for cooling); the HVAC model itself is
-    issue #32;
+  * `Q_hvac` — sensible heat delivered to the air node by a prescribed
+    heating or cooling input (W, negative for cooling). With an
+    [`IdealLoadsHVAC`](@ref) (`step_zone!(zone, forcing, dt, hvac)`) the
+    ideal load is computed and added to this;
   * `irradiance` — total irradiance on the outer face of `:air`
     [`EnvelopeElement`](@ref)s (W m⁻², absorbed with the element's
     `absorptance`): a number for all, or a vector indexed like
     `zone.envelope` (entries of other element types are ignored);
   * `surface` — the `SurfaceForcing` of the [`FacetElement`](@ref)s: one
     for all, or a vector indexed like `zone.envelope`. Required when the
-    zone has facet elements.
+    zone has facet elements;
+  * `q_out` — outdoor specific humidity (kg kg⁻¹). When given, the
+    zone humidity is advanced; `nothing` leaves it unchanged;
+  * `Q_latent` — latent internal gains (W; occupants, cooking), i.e. a
+    vapour source ``Q_{latent}/L_v``. Requires `q_out`.
 """
-struct ZoneForcing{T<:AbstractFloat, I, S}
+struct ZoneForcing{T<:AbstractFloat, I, S, Q}
     T_out::T
     Q_internal::T
     Q_solar::T
     Q_hvac::T
     irradiance::I
     surface::S
+    q_out::Q
+    Q_latent::T
 end
 
 function ZoneForcing(; T_out::Real, Q_internal::Real = 0.0, Q_solar::Real = 0.0,
-                     Q_hvac::Real = 0.0, irradiance = 0.0, surface = nothing)
+                     Q_hvac::Real = 0.0, irradiance = 0.0, surface = nothing,
+                     q_out = nothing, Q_latent::Real = 0.0)
     Q_solar >= 0 || throw(ArgumentError("ZoneForcing: Q_solar must be ≥ 0"))
+    Q_latent >= 0 || throw(ArgumentError("ZoneForcing: Q_latent must be ≥ 0"))
+    (Q_latent == 0 || q_out !== nothing) ||
+        throw(ArgumentError("ZoneForcing: latent gains need the outdoor humidity `q_out`"))
     T = float(promote_type(typeof(T_out), typeof(Q_internal), typeof(Q_solar), typeof(Q_hvac)))
-    return ZoneForcing{T, typeof(irradiance), typeof(surface)}(T(T_out), T(Q_internal),
-                                                               T(Q_solar), T(Q_hvac),
-                                                               irradiance, surface)
+    qo = q_out === nothing ? nothing : T(q_out)
+    (qo === nothing || 0 <= qo < 1) || throw(ArgumentError("ZoneForcing: q_out must lie in [0, 1)"))
+    return ZoneForcing{T, typeof(irradiance), typeof(surface), typeof(qo)}(
+        T(T_out), T(Q_internal), T(Q_solar), T(Q_hvac), irradiance, surface, qo, T(Q_latent))
 end
 
 _pick(x::Real, i) = x
@@ -524,11 +564,16 @@ positive when adding heat to the zone:
   * `Q_surfaces` — heat from all interior surfaces to the air node (the
     air-side view: envelope *and* internal mass);
   * `Q_envelope_air` — the envelope part of `Q_surfaces` (what a BEM
-    calls the envelope load).
+    calls the envelope load);
+  * `q_air` — the new indoor specific humidity (kg kg⁻¹);
+  * `W_ventilation`, `W_internal`, `W_hvac` — water vapour added to the
+    zone air by air exchange, latent gains and the HVAC (negative:
+    dehumidification), in kg s⁻¹ (zero when humidity is not advanced).
 
 Conservation: ``ΔE/Δt = Q_{exterior} + Q_{windows} + Q_{ventilation} +
 Q_{internal} + Q_{solar} + Q_{hvac}`` with ``E`` the
-[`zone_heat_content`](@ref).
+[`zone_heat_content`](@ref), and ``ρV Δq/Δt = W_{ventilation} +
+W_{internal} + W_{hvac}``.
 """
 struct ZoneBudget{T<:AbstractFloat}
     T_air::T
@@ -540,6 +585,10 @@ struct ZoneBudget{T<:AbstractFloat}
     Q_hvac::T
     Q_surfaces::T
     Q_envelope_air::T
+    q_air::T
+    W_ventilation::T
+    W_internal::T
+    W_hvac::T
 end
 
 # ---- the affine step --------------------------------------------------------
@@ -671,10 +720,34 @@ stable. Radiative gains ``f_r Φ_{int} + Φ_{sol}`` are imposed on the
 interior faces, spread by exposed area; with no interior surface they go
 to the air.
 
+When the forcing carries an outdoor humidity `q_out`, the indoor
+specific humidity is advanced after the temperature by the implicit
+vapour balance of the air mass ``M = ρV``,
+
+```math
+M \\frac{q^{n+1} - q^n}{Δt} = M \\frac{n_{inf} + n_{vent}}{3600} (q_{out} - q^{n+1})
+  + \\frac{Φ_{lat}}{L_v(T^{n+1})} + W_{hvac}.
+```
+
 `kwargs` are passed to the `step_surface!` of facet elements (`sf`, `c`,
 `δT`, …). The step conserves [`zone_heat_content`](@ref) exactly.
+
+    step_zone!(zone, forcing, dt, hvac::IdealLoadsHVAC; kwargs...) -> (ZoneBudget, HVACBudget)
+
+The same step with an ideal-loads HVAC system that holds the air
+temperature between its setpoints; see [`IdealLoadsHVAC`](@ref). The
+ideal load is added to `forcing.Q_hvac`.
 """
-function step_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real; kwargs...) where {T}
+function step_zone!(zone::BuildingZone, forcing::ZoneForcing, dt::Real; kwargs...)
+    sys = _assemble_zone!(zone, forcing, dt; kwargs...)
+    return _complete_zone_step!(zone, forcing, dt, sys, zero(sys.lhs), zero(sys.lhs))
+end
+
+# Step every element at the old air temperature and at +1 K and return the
+# scalar air balance lhs (x - x0) = R + Φ, Φ being any extra heat input to
+# the air node (the HVAC load). Leaves the elements in the pending state
+# that `_finalize_zone!` completes.
+function _assemble_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real; kwargs...) where {T}
     dt > 0 || throw(ArgumentError("step_zone!: dt must be positive"))
     x0 = zone.T_air
     T_out = T(forcing.T_out)
@@ -697,10 +770,18 @@ function step_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real; kwarg
     end
     H_w = zone.window_U * zone.window_area
     H_ve = ventilation_conductance(zone)
-    # C/dt (x - x0) = a + b (x - x0) + (H_w + H_ve)(T_out - x) + Φ_air
+    # C/dt (x - x0) = a + b (x - x0) + (H_w + H_ve)(T_out - x) + Φ_air + Φ
     lhs = zone.C_air / T(dt) - b + H_w + H_ve
-    s = (a + (H_w + H_ve) * (T_out - x0) + Φ_air) / lhs
-    x = x0 + s
+    R = a + (H_w + H_ve) * (T_out - x0) + Φ_air
+    return (; x0, T_out, lhs, R, H_w, H_ve)
+end
+
+# Finalise the elements at the solved air temperature, advance humidity,
+# and build the budget. `Φ` is the extra (HVAC) heat to the air node,
+# `W` the HVAC vapour source (kg s⁻¹, negative for dehumidification).
+function _complete_zone_step!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real, sys, Φ, W) where {T}
+    s = (sys.R + Φ) / sys.lhs
+    x = sys.x0 + s
     Q_ext = zero(T); Q_env_air = zero(T); Q_surf = zero(T)
     for el in zone.envelope
         Q_ext += el isa FacetElement ? _finalize!(el, s, x) : _finalize!(el, s)
@@ -712,9 +793,29 @@ function step_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real; kwarg
         Q_surf += el.area * el.Q_air
     end
     zone.T_air = x
-    return ZoneBudget{T}(x, Q_ext, H_w * (T_out - x), H_ve * (T_out - x),
-                         T(forcing.Q_internal), T(forcing.Q_solar), T(forcing.Q_hvac),
-                         Q_surf, Q_env_air)
+    W_ve = W_int = zero(T)
+    if forcing.q_out !== nothing
+        q_new, W_ve, W_int = _moisture_solve(zone, forcing, dt, x, W)
+        zone.q_air = q_new
+    end
+    return ZoneBudget{T}(x, Q_ext, sys.H_w * (sys.T_out - x), sys.H_ve * (sys.T_out - x),
+                         T(forcing.Q_internal), T(forcing.Q_solar), T(forcing.Q_hvac) + Φ,
+                         Q_surf, Q_env_air, zone.q_air, W_ve, W_int,
+                         forcing.q_out === nothing ? zero(T) : T(W))
+end
+
+# Air mass (kg) and total outdoor-air exchange rate (s⁻¹) of the vapour balance.
+_air_mass(zone::BuildingZone) = zone.ρ_air * zone.volume
+_exchange_rate(zone::BuildingZone) = (zone.infiltration_ach + zone.ventilation_ach) / 3600
+
+# Implicit vapour balance: (M/dt + M n) q = M q0/dt + M n q_out + W_int + W.
+# Returns the new q and the ventilation and internal vapour sources (kg s⁻¹).
+function _moisture_solve(zone::BuildingZone{T}, forcing::ZoneForcing, dt, T_new, W) where {T}
+    M, n = _air_mass(zone), _exchange_rate(zone)
+    W_int = T(forcing.Q_latent) / latent_heat_vapor(T_new, zone.thermo)
+    q_out = T(forcing.q_out)
+    q = (M * zone.q_air / dt + M * n * q_out + W_int + W) / (M / dt + M * n)
+    return q, M * n * (q_out - q), W_int
 end
 
 # =========================================================================

@@ -909,4 +909,5 @@ end
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
     include("era5_urban_surface.jl")     # Phase 49  multi-layer urban facet conduction (#26)
     include("era5_building_energy.jl")   # Phase 50  indoor air temperature + thermal mass (#31)
+    include("era5_hvac.jl")              # Phase 50  HVAC demand and exhaust heat (#32)
 end
