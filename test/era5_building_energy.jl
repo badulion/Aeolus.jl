@@ -167,7 +167,8 @@ end
             end
         end
         @printf("  two-node: max |T_air - analytic| over 2 days = %.2e K (of 10 K)\n", err)
-        @test err < 1e-2
+        # measured 1.12e-3 K (lumping error at Bi = 6e-4 plus CN time error)
+        @test err < 2e-3
     end
 
     @testset "Distributed mass: first plane-wall eigenmode β tan β = Bi" begin
@@ -196,7 +197,7 @@ end
         fit = -log_slope(ts, dev)
         @printf("  slab mode: Bi = %.3f, β₁ = %.4f, τ₁ analytic %.2f h, fitted %.2f h (%.3f %%)\n",
                 Bi, β, 1 / rate / 3600, 1 / fit / 3600, 100 * (fit / rate - 1))
-        @test fit ≈ rate rtol = 5e-3
+        @test fit ≈ rate rtol = 5e-4          # measured -9e-5
     end
 
     @testset "Steady state: composite walls, glazing, air exchange, radiative gains" begin
@@ -408,7 +409,7 @@ end
                 t = (day - 1) * 86400 + (h - 0.5) * 3600
                 θa, θs, _ = step_iso13790!(iso, Tout(t), 3600.0; Φ_int = Qi(t), Φ_sol = Qs(t))
                 if day > 148
-                    push!(ia, θa); push!(iop, 0.3θa + 0.7θs)      # ISO 13790 eq. (C.11)
+                    push!(ia, θa); push!(iop, 0.3θa + 0.7θs)      # ISO 13790 eq. (C.12)
                     Qs_iso += Qs(t)
                 end
             end
