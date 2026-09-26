@@ -645,6 +645,7 @@ export DayProfile, WeeklySchedule, schedule_value, schedule_mean, full_load_hour
        office_internal_gains, office_thermostat
 # Phase 49 — anthropogenic heat from the building energy model (#29).
 export BuildingHeatRelease, building_heat_release, energy_consumption, total_heat_release,
-       anthropogenic_sensible_heat, anthropogenic_latent_heat
+       anthropogenic_sensible_heat, anthropogenic_latent_heat,
+       step_buildings!, building_facets, scene_building_zone, anthropogenic_heat_maps
 
 end # module

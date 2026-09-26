@@ -76,7 +76,7 @@ using ..UrbanSurface: UrbanSurface, ConductionColumn, ColumnBoundary, WallLayer,
                       column_heat_content, thermal_resistance,
                       fixed_temperature_boundary, heat_flux_boundary,
                       set_interior_boundary!, ISO6946_SURFACE_RESISTANCE,
-                      volumetric_heat_capacity
+                      volumetric_heat_capacity, UrbanFacetScene
 
 export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        BuildingZone, ZoneForcing, ZoneBudget, step_zone!, facet_fluxes,
@@ -95,7 +95,8 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        ThermostatSchedule, scheduled_hvac, DOE_MEDIUM_OFFICE_SCHEDULES,
        office_internal_gains, office_thermostat,
        BuildingHeatRelease, building_heat_release, energy_consumption, total_heat_release,
-       anthropogenic_sensible_heat, anthropogenic_latent_heat
+       anthropogenic_sensible_heat, anthropogenic_latent_heat,
+       step_buildings!, building_facets, scene_building_zone, anthropogenic_heat_maps
 
 const _H_WALL = 1 / ISO6946_SURFACE_RESISTANCE.inside_horizontal   # 7.69 W m⁻² K⁻¹
 const _H_OUT  = 1 / ISO6946_SURFACE_RESISTANCE.outside             # 25 W m⁻² K⁻¹
@@ -772,7 +773,15 @@ end
 # scalar air balance lhs (x - x0) = R + Φ, Φ being any extra heat input to
 # the air node (the HVAC load). Leaves the elements in the pending state
 # that `_finalize_zone!` completes.
-function _assemble_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real; kwargs...) where {T}
+_assemble_zone!(zone::BuildingZone, forcing::ZoneForcing, dt::Real; kwargs...) =
+    _assemble_zone!(zone, forcing, dt, falses(length(zone.envelope)); kwargs...)
+
+# `in_scene[i]`: envelope element i is a FacetElement stepped by an
+# `UrbanFacetScene` together with the zone (`step_buildings!`). It receives
+# its share of the radiative gains but is not stepped here, and it is not in
+# the returned air balance.
+function _assemble_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real,
+                         in_scene::AbstractVector{Bool}; kwargs...) where {T}
     dt > 0 || throw(ArgumentError("step_zone!: dt must be positive"))
     x0 = zone.T_air
     T_out = T(forcing.T_out)
@@ -786,6 +795,7 @@ function _assemble_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real; 
     a = zero(T); b = zero(T)
     for (i, el) in enumerate(zone.envelope)
         el.q_inside = q
+        in_scene[i] && continue
         qa, qb = el isa FacetElement ? _affine_step!(el, x0, forcing, i, dt; kwargs...) :
                                         _affine_step!(el, x0, forcing, i, dt)
         a += qa; b += qb
@@ -800,18 +810,29 @@ function _assemble_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real; 
     # C/dt (x - x0) = a + b (x - x0) + (H_w + H_ve)(T_out - x) + Φ_air + Φ
     lhs = zone.C_air / T(dt) - b + H_w + H_ve
     R = a + (H_w + H_ve) * (T_out - x0) + Φ_air
-    return (; x0, T_out, lhs, R, H_w, H_ve)
+    return (; x0, T_out, lhs, R, H_w, H_ve, q)
 end
 
 # Finalise the elements at the solved air temperature, advance humidity,
 # and build the budget. `Φ` is the extra (HVAC) heat to the air node,
 # `W` the HVAC vapour source (kg s⁻¹, negative for dehumidification).
-function _complete_zone_step!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real, sys, Φ, W) where {T}
-    s = (sys.R + Φ) / sys.lhs
+function _complete_zone_step!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real, sys, Φ, W;
+                              s = (sys.R + Φ) / sys.lhs,
+                              in_scene::AbstractVector{Bool} = falses(length(zone.envelope)),
+                              scene_fluxes = nothing) where {T}
     x = sys.x0 + s
     Q_ext = zero(T); Q_env_air = zero(T); Q_surf = zero(T)
-    for el in zone.envelope
-        Q_ext += el isa FacetElement ? _finalize!(el, s, x) : _finalize!(el, s)
+    for (i, el) in enumerate(zone.envelope)
+        if in_scene[i]
+            # already advanced by the scene step, at this air temperature
+            f = el.facet
+            el.F_outer = f.G
+            el.Q_air = el.q_inside + f.Q_interior
+            el.fluxes = scene_fluxes[i]
+            Q_ext += el.area * f.G
+        else
+            Q_ext += el isa FacetElement ? _finalize!(el, s, x) : _finalize!(el, s)
+        end
         Q_env_air += el.area * el.Q_air
     end
     Q_surf = Q_env_air
@@ -1177,22 +1198,36 @@ end
 
 function step_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real, hvac::IdealLoadsHVAC;
                     kwargs...) where {T}
-    thermo, p = zone.thermo, zone.p_ref
-    # equipment operating point from the start-of-step state
-    T_wb = wet_bulb_temperature(zone.T_air, p, zone.q_air, thermo)
-    T_c = condenser_inlet_temperature(hvac, forcing.T_out, forcing.q_out, p; thermo = thermo)
-    cop = cooling_cop(hvac, T_wb, T_c)
-    cap_c = available_cooling_capacity(hvac, T_wb, T_c)
-    cap_c >= 0 || (cap_c = zero(cap_c))
+    op = _hvac_operating_point(zone, forcing, hvac)
     sys = _assemble_zone!(zone, forcing, dt; kwargs...)
     # sensible load that puts the end-of-step air temperature on the setpoint
     x_free = sys.x0 + sys.R / sys.lhs
     Φ_req = x_free < hvac.T_heat ? sys.lhs * (hvac.T_heat - sys.x0) - sys.R :
             x_free > hvac.T_cool ? sys.lhs * (hvac.T_cool - sys.x0) - sys.R : zero(T)
-    Φ = clamp(Φ_req, -cap_c, hvac.heating_capacity)
-    # dehumidification to RH_max at the new air temperature
-    W = zero(T)
+    Φ = clamp(Φ_req, -op.cap_c, hvac.heating_capacity)
     x_new = sys.x0 + (sys.R + Φ) / sys.lhs
+    W, L_v = _hvac_dehumidify(zone, forcing, dt, hvac, x_new, Φ, op.cap_c)
+    budget = _complete_zone_step!(zone, forcing, dt, sys, Φ, W)
+    return budget, _hvac_plant(zone, hvac, op, Φ, Φ_req, W, L_v)
+end
+
+# Equipment operating point from the start-of-step state.
+function _hvac_operating_point(zone::BuildingZone, forcing::ZoneForcing, hvac::IdealLoadsHVAC)
+    thermo, p = zone.thermo, zone.p_ref
+    T_wb = wet_bulb_temperature(zone.T_air, p, zone.q_air, thermo)
+    T_c = condenser_inlet_temperature(hvac, forcing.T_out, forcing.q_out, p; thermo = thermo)
+    cop = cooling_cop(hvac, T_wb, T_c)
+    cap_c = available_cooling_capacity(hvac, T_wb, T_c)
+    cap_c >= 0 || (cap_c = zero(cap_c))
+    return (; cop, T_c, cap_c)
+end
+
+# Dehumidification to RH_max at the new air temperature `x_new`: the vapour
+# source W (kg s⁻¹, ≤ 0) and the latent heat of vaporisation used.
+function _hvac_dehumidify(zone::BuildingZone{T}, forcing::ZoneForcing, dt, hvac::IdealLoadsHVAC,
+                          x_new, Φ, cap_c) where {T}
+    thermo, p = zone.thermo, zone.p_ref
+    W = zero(T)
     L_v = latent_heat_vapor(x_new, thermo)
     if hvac.dehumidify && forcing.q_out !== nothing
         q_free, _, _ = _moisture_solve(zone, forcing, dt, x_new, zero(T))
@@ -1204,19 +1239,23 @@ function step_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real, hvac:
             W = max(W_req, -avail / L_v)
         end
     end
-    budget = _complete_zone_step!(zone, forcing, dt, sys, Φ, W)
-    # plant
+    return W, L_v
+end
+
+# The plant: energy input and heat rejection for a sensible load Φ (> 0
+# heating) and a vapour source W.
+function _hvac_plant(zone::BuildingZone, hvac::IdealLoadsHVAC, op, Φ::T, Φ_req, W, L_v) where {T}
     Q_h = max(Φ, zero(T)); Q_cs = max(-Φ, zero(T)); Q_cl = -W * L_v
     Q_c = Q_cs + Q_cl
-    P_c = Q_c > 0 ? Q_c / cop : zero(T)
+    P_c = Q_c > 0 ? Q_c / op.cop : zero(T)
     P_h = Q_h / hvac.heating_efficiency
     Q_rej = Q_c + P_c
     f_lat = hvac.condenser === :evaporative ? hvac.latent_fraction : zero(T)
     Q_exh_l = f_lat * Q_rej
     Q_exh_s = (Q_rej - Q_exh_l) + (P_h - Q_h)
-    W_evap = Q_exh_l / latent_heat_vapor(T_c, thermo)
-    return budget, HVACBudget{T}(Q_h, Q_cs, Q_cl, Q_c, -W, cop, T_c, cap_c, P_h, P_c,
-                                 Q_exh_s, Q_exh_l, W_evap, Φ_req - Φ)
+    W_evap = Q_exh_l / latent_heat_vapor(op.T_c, zone.thermo)
+    return HVACBudget{T}(Q_h, Q_cs, Q_cl, Q_c, -W, op.cop, op.T_c, op.cap_c, P_h, P_c,
+                         Q_exh_s, Q_exh_l, W_evap, Φ_req - Φ)
 end
 
 # =========================================================================
@@ -1908,6 +1947,313 @@ exchange, and vented latent gains.
 """
 anthropogenic_latent_heat(r::BuildingHeatRelease) =
     r.Q_exhaust_latent + r.Q_ventilation_latent + r.Q_latent_vented
+
+# =========================================================================
+# 3e. Buildings in the urban canopy: zones behind the facets of a scene
+# =========================================================================
+
+"""
+    step_buildings!(u::UrbanFacetScene, zones, forcings, air, dt;
+                    hvac = nothing, L_sky, sw = nothing, sun = nothing,
+                    dni = 0, dhi = 0, samples = 2, δT = 0.01, kwargs...)
+        -> (fluxes, budgets, hvac_budgets)
+
+Advance the facets of an urban scene and the building zones behind them
+together, as one implicit system (issue #29).
+
+A zone is *behind* scene facets when its `envelope` holds
+[`FacetElement`](@ref)s wrapping the scene's own `UrbanFacet`s — the same
+objects, `FacetElement(u.facets[i], area)` with `area` the facet's area
+(see [`scene_building_zone`](@ref)). Each such facet then has the zone air
+as its interior environment and the rest of the canyon outside, and the
+zone sees the facet as part of its envelope. Other envelope elements and
+internal mass are stepped by the zone as in [`step_zone!`](@ref).
+
+`zones` and `forcings` are vectors of [`BuildingZone`](@ref) and
+[`ZoneForcing`](@ref) (the `surface` of a `ZoneForcing` only matters for
+facet elements that are *not* in the scene). `air`, `L_sky` and the
+shortwave keywords are those of `UrbanSurface.step_urban_facets!`.
+`hvac` is `nothing` or a vector with an [`IdealLoadsHVAC`](@ref) (or
+`nothing`) per zone.
+
+# The coupled step
+
+`step_urban_facets!` treats the longwave exchange between facets
+implicitly by measuring each facet column's affine response to an extra
+imposed surface flux. The same column is also affine in the temperature
+of its interior environment, and the zone air balance is affine in the
+air temperature, so the facets' skin increments and the zones' air
+temperature increments are solved **together** in one dense linear
+system. The exchange across the envelope is as implicit as the exchange
+between facets and between a zone and its internal mass: a lagged
+coupling of the air node (air time constant: minutes) would be unstable
+at canopy time steps.
+
+An ideal-loads HVAC is solved by active set: a zone whose free-floating
+temperature leaves its dead band is pinned on the violated setpoint and
+the load that holds it becomes the unknown; a load beyond capacity is
+clamped and the zone freed again. For one zone this is exactly the logic
+of `step_zone!(zone, forcing, dt, hvac)`, and the two agree.
+
+Returns the per-facet `SurfaceFluxes` (as `step_urban_facets!`), a
+[`ZoneBudget`](@ref) per zone, and an [`HVACBudget`](@ref) (or `nothing`)
+per zone. Energy is conserved exactly: every zone satisfies its budget
+identity with its facet columns included, and heat crosses the envelope
+without loss.
+"""
+function step_buildings!(u::UrbanFacetScene{T}, zones::AbstractVector{<:BuildingZone},
+                         forcings::AbstractVector{<:ZoneForcing}, air, dt::Real;
+                         hvac = nothing, L_sky::Real = UrbanSurface._sky_irradiance(air),
+                         sw = nothing, sun = nothing, dni::Real = 0, dhi::Real = 0,
+                         samples::Int = 2, δT::Real = 0.01, kwargs...) where {T}
+    m = length(zones)
+    length(forcings) == m ||
+        throw(ArgumentError("step_buildings!: $(length(forcings)) forcings for $m zones"))
+    hv = hvac === nothing ? fill(nothing, m) : hvac
+    length(hv) == m || throw(ArgumentError("step_buildings!: `hvac` needs one entry per zone"))
+    node, in_scene = _bind_zones(u, zones)
+    # operating points and zone assembly at the start-of-step state; the scene
+    # facets get their share of the radiative gains and the zone air as their
+    # interior environment
+    ops = [h === nothing ? nothing : _hvac_operating_point(zones[k], forcings[k], h)
+           for (k, h) in enumerate(hv)]
+    syss = map(1:m) do k
+        z = zones[k]
+        sys = _assemble_zone!(z, forcings[k], dt, in_scene[k]; δT, kwargs...)
+        for (j, el) in enumerate(z.envelope)
+            in_scene[k][j] || continue
+            set_interior_boundary!(el.facet, ColumnBoundary(z.T_air, el.facet.interior.h, sys.q))
+        end
+        sys
+    end
+    step = UrbanSurface._prepare_scene_step(u, air, dt; node, L_sky, sw, sun, dni, dhi,
+                                             samples, δT, kwargs...)
+    lhs = T[s.lhs for s in syss]
+    R = T[s.R for s in syss]
+    x0 = T[s.x0 for s in syss]
+    # active set over the thermostats
+    mode = fill(:free, m)
+    target = zeros(T, m); Φ = zeros(T, m); Φ_req = zeros(T, m); pin_heat = falses(m)
+    local x, y, Φs
+    for iter in 1:(3m + 3)
+        pinned = mode .=== :pinned
+        x, y, Φs = UrbanSurface._solve_scene_step(step; lhs, R, pinned, y = target, Φ)
+        changed = false
+        for k in 1:m
+            h = hv[k]
+            h === nothing && continue
+            if mode[k] === :free
+                xk = x0[k] + y[k]
+                Tset = xk < h.T_heat ? h.T_heat : xk > h.T_cool ? h.T_cool : nothing
+                Tset === nothing && continue
+                mode[k] = :pinned; target[k] = Tset - x0[k]; pin_heat[k] = xk < h.T_heat
+                changed = true
+            elseif mode[k] === :pinned
+                Φ_req[k] = Φs[k]
+                # a neighbour's change can leave a pinned zone needing the
+                # opposite action: it then floats in its dead band again
+                if (pin_heat[k] && Φs[k] < 0) || (!pin_heat[k] && Φs[k] > 0)
+                    mode[k] = :free; target[k] = 0; changed = true
+                    continue
+                end
+                Φc = clamp(Φs[k], -ops[k].cap_c, h.heating_capacity)
+                if Φc != Φs[k]
+                    mode[k] = :clamped; Φ[k] = Φc; changed = true
+                end
+            end
+        end
+        changed || break
+        iter == 3m + 3 && error("step_buildings!: the thermostat active set did not settle")
+    end
+    fluxes = UrbanSurface._apply_scene_step!(u, step, x, y)
+    budgets = Vector{ZoneBudget{T}}(undef, m)
+    hbs = Vector{Union{Nothing, HVACBudget{T}}}(nothing, m)
+    for k in 1:m
+        z, f, h = zones[k], forcings[k], hv[k]
+        Φk = mode[k] === :free ? zero(T) : Φs[k]
+        W = zero(T); L_v = zero(T)
+        if h !== nothing
+            W, L_v = _hvac_dehumidify(z, f, dt, h, x0[k] + y[k], Φk, ops[k].cap_c)
+        end
+        sf = [in_scene[k][j] ? fluxes[_scene_index(u, el)] : nothing
+              for (j, el) in enumerate(z.envelope)]
+        budgets[k] = _complete_zone_step!(z, f, dt, syss[k], Φk, W; s = y[k],
+                                          in_scene = in_scene[k], scene_fluxes = sf)
+        if h !== nothing
+            req = mode[k] === :free ? zero(T) : Φ_req[k]
+            hbs[k] = _hvac_plant(z, h, ops[k], Φk, req, W, L_v)
+        end
+    end
+    return fluxes, budgets, hbs
+end
+
+_scene_index(u::UrbanFacetScene, el::FacetElement) = findfirst(f -> f === el.facet, u.facets)
+
+# Which scene facet belongs to which zone. A facet may bound at most one
+# zone, and its element area must be the facet's area (the scene and the
+# zone must count the same column).
+function _bind_zones(u::UrbanFacetScene{T}, zones) where {T}
+    node = zeros(Int, length(u.facets))
+    idx = IdDict{Any, Int}(f => i for (i, f) in enumerate(u.facets))
+    in_scene = [falses(length(z.envelope)) for z in zones]
+    for (k, z) in enumerate(zones)
+        for (j, el) in enumerate(z.envelope)
+            el isa FacetElement || continue
+            i = get(idx, el.facet, 0)
+            i == 0 && continue
+            node[i] == 0 ||
+                throw(ArgumentError("step_buildings!: scene facet $i bounds zones $(node[i]) and $k"))
+            isapprox(el.area, u.vf.area[i]; rtol = 1e-12) ||
+                throw(ArgumentError("step_buildings!: the element of scene facet $i has area " *
+                                    "$(el.area) m², the facet $(u.vf.area[i]) m²"))
+            node[i] = k
+            in_scene[k][j] = true
+        end
+    end
+    return node, in_scene
+end
+
+# ---- building zones from the scene geometry ------------------------------------
+
+"""
+    building_facets(u::UrbanFacetScene, footprint) -> Vector{Int}
+
+Indices of the roof and wall facets of the building standing on the grid
+columns where `footprint` (an `Nx × Ny` Bool matrix on the scene's
+heightmap) is `true`. A roof belongs to its column; a wall belongs to the
+column it is the side of (behind its outward normal), not to the open
+column it faces and is attributed to for the plan-area aggregation.
+"""
+function building_facets(u::UrbanFacetScene, footprint::AbstractMatrix{Bool})
+    sc = u.scene
+    size(footprint) == size(sc.heightmap) ||
+        throw(ArgumentError("building_facets: footprint is $(size(footprint)), the scene grid $(size(sc.heightmap))"))
+    idx = Int[]
+    for (i, rf) in enumerate(sc.facets)
+        rf.kind === :ground && continue
+        ci, cj = rf.kind === :roof ? rf.col : _owner_column(sc, rf)
+        (1 <= ci <= size(footprint, 1) && 1 <= cj <= size(footprint, 2)) || continue
+        footprint[ci, cj] && push!(idx, i)
+    end
+    return idx
+end
+
+# The column a wall facet is the side of: a quarter cell behind its centroid.
+function _owner_column(sc, rf)
+    c, n = rf.centroid, rf.normal
+    x = c[1] - n[1] * sc.dx / 4
+    y = c[2] - n[2] * sc.dy / 4
+    return (floor(Int, (x - sc.x0) / sc.dx) + 1, floor(Int, (y - sc.y0) / sc.dy) + 1)
+end
+
+"""
+    scene_building_zone(u::UrbanFacetScene, footprint; floor_height = 3.0,
+                        floor_layers = [WallLayer(:concrete, 0.20)],
+                        slab_layers = [WallLayer(:xps_insulation, 0.05), WallLayer(:concrete, 0.20)],
+                        T_ground = 285.15, T_air = <mean interior temperature of its facets>,
+                        kwargs...) -> BuildingZone
+
+One well-mixed [`BuildingZone`](@ref) for the building on `footprint`
+(see [`building_facets`](@ref)), whose envelope **is** the scene's roof
+and wall facets of that building — `FacetElement(u.facets[i], area_i)`,
+the same `UrbanFacet` objects — so that [`step_buildings!`](@ref) steps
+them together with the zone.
+
+  * volume ``V = Σ h_{ij} Δx Δy`` over the footprint (flat ground at the
+    scene's ground level), floor area ``V / `` `floor_height`;
+  * a ground-floor slab of the footprint area on `slab_layers`, an
+    `EnvelopeElement` with `exterior = :ground` at `T_ground`;
+  * the intermediate floors, ``n_{floors} - 1`` times the footprint, as
+    two-sided [`InternalMass`](@ref) on `floor_layers`.
+
+`kwargs` go to `BuildingZone` (glazing, air change rates,
+`radiative_fraction`, …). The default constructions are illustrative,
+not a survey of any building stock. One zone per building is the
+TEB-BEM assumption (Bueno et al. 2012): a single indoor air temperature
+for the whole building.
+"""
+function scene_building_zone(u::UrbanFacetScene{T}, footprint::AbstractMatrix{Bool};
+                             floor_height::Real = 3.0,
+                             floor_layers = [WallLayer(:concrete, 0.20)],
+                             slab_layers = [WallLayer(:xps_insulation, 0.05), WallLayer(:concrete, 0.20)],
+                             T_ground::Real = 285.15, T_air = nothing, kwargs...) where {T}
+    floor_height > 0 || throw(ArgumentError("scene_building_zone: floor_height must be positive"))
+    sc = u.scene
+    ids = building_facets(u, footprint)
+    isempty(ids) && throw(ArgumentError("scene_building_zone: no building on the footprint"))
+    cell = sc.dx * sc.dy
+    ground = minimum(sc.heightmap)
+    A_fp = count(footprint) * cell
+    V = sum(max(sc.heightmap[I] - ground, zero(T)) * cell for I in findall(footprint))
+    V > 0 || throw(ArgumentError("scene_building_zone: the footprint has no height"))
+    n_floors = max(1, round(Int, V / A_fp / floor_height))
+    Ti = T_air === nothing ? sum(u.facets[i].interior.T_env for i in ids) / length(ids) : T(T_air)
+    env = AbstractZoneElement[FacetElement(u.facets[i], u.vf.area[i]; name = u.facets[i].kind) for i in ids]
+    push!(env, EnvelopeElement(slab_layers, A_fp; exterior = :ground, T_ground = T_ground,
+                               h_inside = 1 / ISO6946_SURFACE_RESISTANCE.inside_down,
+                               T = Ti, name = :ground_slab))
+    im = n_floors > 1 ? [InternalMass(floor_layers, (n_floors - 1) * A_fp; sides = 2,
+                                      h_inside = 1 / ISO6946_SURFACE_RESISTANCE.inside_horizontal,
+                                      T = Ti, name = :floors)] : InternalMass{T}[]
+    return BuildingZone(; volume = V, floor_area = V / floor_height, envelope = env,
+                        internal_mass = im, T_air = Ti, kwargs...)
+end
+
+"""
+    anthropogenic_heat_maps(u::UrbanFacetScene, zones, releases) -> (H, LE)
+
+Plan-area maps (W m⁻², on the scene's `Nx × Ny` grid, like
+`UrbanSurface.aggregate_facet_fluxes`) of the building anthropogenic
+heat that enters the air **directly**, from the
+[`BuildingHeatRelease`](@ref)s of zones bound to the scene:
+
+  * HVAC exhaust (sensible into `H`, latent into `LE`) at the building's
+    roof facets — rooftop condensers and cooling towers — weighted by
+    roof area;
+  * air exchange, glazing, lost gains, `:air` envelope elements and
+    vented latent gains at its wall facets, i.e. into the canyon they
+    face, weighted by wall area (at the roofs if it has no walls).
+
+Each facet's share goes to the column `Facet.col` it is attributed to, so
+``Σ (H + LE) Δx Δy`` equals the sum of the direct terms exactly.
+`Q_envelope_facets` is not mapped: it is already in the facets' own
+fluxes. Add the maps to `aggregate_facet_fluxes` to get the total the
+atmosphere receives.
+"""
+function anthropogenic_heat_maps(u::UrbanFacetScene{T}, zones::AbstractVector{<:BuildingZone},
+                                 releases::AbstractVector{<:BuildingHeatRelease}) where {T}
+    length(zones) == length(releases) ||
+        throw(ArgumentError("anthropogenic_heat_maps: one release per zone"))
+    sc = u.scene
+    nx, ny = size(sc.heightmap)
+    cell = sc.dx * sc.dy
+    H = zeros(T, nx, ny); LE = zeros(T, nx, ny)
+    node, _ = _bind_zones(u, zones)
+    for (k, r) in enumerate(releases)
+        roofs = [i for i in eachindex(node) if node[i] == k && sc.facets[i].kind === :roof]
+        walls = [i for i in eachindex(node) if node[i] == k && sc.facets[i].kind === :wall]
+        isempty(roofs) && isempty(walls) &&
+            throw(ArgumentError("anthropogenic_heat_maps: zone $k has no scene facets"))
+        roofs_or = isempty(roofs) ? walls : roofs
+        walls_or = isempty(walls) ? roofs : walls
+        _spread!(H, LE, sc, u.vf.area, roofs_or, r.Q_exhaust_sensible, r.Q_exhaust_latent, cell)
+        _spread!(H, LE, sc, u.vf.area, walls_or,
+                 r.Q_ventilation_sensible + r.Q_windows + r.Q_lost + r.Q_envelope_air,
+                 r.Q_ventilation_latent + r.Q_latent_vented, cell)
+    end
+    return (H = H, LE = LE)
+end
+
+function _spread!(H, LE, sc, area, ids, Qh, Qle, cell)
+    A = sum(area[i] for i in ids)
+    for i in ids
+        ci, cj = sc.facets[i].col
+        w = area[i] / A / cell
+        H[ci, cj] += w * Qh
+        LE[ci, cj] += w * Qle
+    end
+    return nothing
+end
 
 # =========================================================================
 # 4. ISO 13790 simple hourly method (5R1C) — the reference model
