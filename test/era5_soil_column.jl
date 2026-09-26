@@ -138,4 +138,162 @@ end
     @test Δθ * sqrt(D) < S < Δθ * sqrt(2D)
 end
 
+@testset "Modified van Genuchten (air entry)" begin
+    classic = carsel_parrish_texture(:loam; ψ_e = 0.0)
+    mod = carsel_parrish_texture(:loam)                   # ψ_e = -2 cm
+    @test air_entry_potential(mod) == -0.02
+    # ψ_e = 0 is exactly the classical model
+    v0 = VanGenuchtenMualem(θ_r = 0.078, θ_s = 0.43, α = 3.6, n = 1.56, K_s = 1.04 / 360000)
+    @test soil_hydraulic_conductivity(classic, -0.7) ≈ soil_hydraulic_conductivity(v0, -0.7) rtol = 1e-12
+    # continuity at the air-entry potential, and the removal of the cusp:
+    # the classical K has lost 40 % of K_s within 2 cm of saturation
+    @test soil_hydraulic_conductivity(mod, -0.02 - 1e-9) ≈ mod.K_s rtol = 1e-4
+    @test soil_water_content(mod, -0.02 - 1e-9) ≈ mod.θ_s rtol = 1e-6
+    @test soil_hydraulic_conductivity(classic, -0.02) / classic.K_s < 0.65
+    # the retention curve itself moves by < 1 % of the pore space
+    for ψ in (-0.1, -1.0, -10.0)
+        @test abs(soil_water_content(mod, ψ) - soil_water_content(classic, ψ)) < 0.01 * mod.θ_s
+    end
+end
+
+# Exact solution of Richards' equation for the Gardner soil (Srivastava &
+# Yeh 1991; Tracy 2006, 1-D form): with K = K_s e^{αψ} and θ linear in K,
+# c ∂K/∂t = ∂²K/∂ζ² + α ∂K/∂ζ, c = α(θ_s - θ_r)/K_s, ζ = L - z the height
+# above the base. Initially K = K_r everywhere, the base held at K_r and
+# the top raised to K_t at t = 0:
+#   K = K_r + A (1 - e^{-αζ})/(1 - e^{-αL})
+#       + e^{-αζ/2} Σ_n b_n sin(k_n ζ) e^{-λ_n t/c},
+#   A = K_t - K_r, k_n = nπ/L, λ_n = k_n² + α²/4,
+#   b_n = 2 A k_n (-1)^n e^{αL/2} / (L λ_n)   (derived in docs/src/theory/soil_water.md).
+function gardner_exact_θ(h::GardnerExponential, L, ψ_init, ψ_top, z, t; nterms = 4000)
+    α, Ks = h.α, h.K_s
+    c = α * (h.θ_s - h.θ_r) / Ks
+    Kr = Ks * exp(α * ψ_init)
+    A = Ks * exp(α * ψ_top) - Kr
+    ζ = L - z
+    K = Kr + A * (1 - exp(-α * ζ)) / (1 - exp(-α * L))
+    s = 0.0
+    for n in 1:nterms
+        k = n * π / L
+        λ = k^2 + α^2 / 4
+        s += 2A * k * (-1)^n * exp(α * L / 2) / (L * λ) * sin(k * ζ) * exp(-λ * t / c)
+    end
+    K += exp(-α * ζ / 2) * s
+    return h.θ_r + (h.θ_s - h.θ_r) * K / Ks
+end
+
+@testset "Exact Gardner infiltration benchmark" begin
+    h = GardnerExponential(θ_r = 0.05, θ_s = 0.40, α = 2.0, K_s = 1e-5)
+    L, ψi = 1.0, -5.0
+    # the series reproduces its own boundary and initial data
+    @test gardner_exact_θ(h, L, ψi, 0.0, 0.0, 600.0) ≈ h.θ_s rtol = 1e-10
+    @test gardner_exact_θ(h, L, ψi, 0.0, 0.8, 1.0) ≈ soil_water_content(h, ψi) atol = 1e-6
+    run(N, mean, dt, tend) = begin
+        col = SoilWaterColumn(uniform_soil_grid(L, N), h; ψ = ψi, top = HeadTop(0.0),
+                              bottom = HeadBottom(ψi), temperature_dependent = false,
+                              interface_mean = mean)
+        S0 = soil_water_storage(col)
+        while col.budget.time < tend - 1e-6
+            step_soil_water!(col, dt)
+        end
+        # water balance to round-off on every run
+        @test soil_water_storage(col) - S0 ≈
+              col.budget.infiltration - col.budget.drainage atol = 1e-14
+        maximum(abs.(col.θ_liq .- [gardner_exact_θ(h, L, ψi, 0.0, z, tend) for z in col.grid.z]))
+    end
+    # Space: after 12 h (smooth profile, time error negligible at dt = 30 s)
+    eL50, eL100 = run(50, :logarithmic, 30.0, 12 * 3600.0), run(100, :logarithmic, 30.0, 12 * 3600.0)
+    eA50, eA100 = run(50, :arithmetic, 30.0, 12 * 3600.0), run(100, :arithmetic, 30.0, 12 * 3600.0)
+    # Time: after 3 h, sharp front, fine grid, backward Euler
+    eT = [run(200, :logarithmic, dt, 3 * 3600.0) for dt in (10.0, 5.0, 2.5)]
+    @printf("  Gardner exact, 12 h max |Δθ|: log-mean N=50 %.2e, N=100 %.2e; arithmetic N=50 %.2e, N=100 %.2e\n",
+            eL50, eL100, eA50, eA100)
+    @printf("  Gardner exact, 3 h, N=200 max |Δθ|: dt=10 s %.2e, 5 s %.2e, 2.5 s %.2e\n", eT...)
+    @test eL100 < 1e-4                    # < 0.03 % of θ_s - θ_r
+    @test eL50 / eL100 > 3.0              # second order in space
+    @test 1.8 < eA50 / eA100 < 2.3        # arithmetic mean: first order
+    @test eA100 > 10eL100
+    @test eT[1] / eT[2] > 1.7 && eT[2] / eT[3] > 1.7     # first order in time
+    @test eT[3] < 5e-5
+end
+
+@testset "Sorptivity: horizontal absorption" begin
+    # Gravity off, surface held saturated: Boltzmann similarity makes the
+    # cumulative absorption exactly I = S √t.
+    # (a) Gardner soil = linear diffusion: S = 2 Δθ √(D/π) exactly.
+    g = GardnerExponential(θ_r = 0.05, θ_s = 0.40, α = 2.0, K_s = 1e-6)
+    ψi = -3.0
+    D = soil_water_diffusivity(g, -1.0)
+    Δθ = g.θ_s - soil_water_content(g, ψi)
+    S_exact = 2Δθ * sqrt(D / π)
+    col = SoilWaterColumn(uniform_soil_grid(1.0, 200), g; ψ = ψi, top = HeadTop(0.0),
+                          bottom = ZeroFluxBottom(), gravity = false, temperature_dependent = false)
+    ratios = Float64[]
+    for t in (2 * 3600.0, 6 * 3600.0)
+        while col.budget.time < t - 1e-6
+            step_soil_water!(col, 30.0)
+        end
+        push!(ratios, col.budget.infiltration / sqrt(t) / S_exact)
+    end
+    @printf("  Gardner absorption: S_num/S_exact = %.5f (2 h), %.5f (6 h)\n", ratios...)
+    @test all(r -> abs(r - 1) < 2e-3, ratios)
+    # (b) van Genuchten loam: against Parlange (1975), and self-similar.
+    v = carsel_parrish_texture(:loam)
+    ψi = -10.0
+    Sp = parlange_sorptivity(v, ψi)
+    col = SoilWaterColumn(uniform_soil_grid(0.6, 480), v; ψ = ψi, top = HeadTop(0.0),
+                          bottom = ZeroFluxBottom(), gravity = false, temperature_dependent = false)
+    S = Float64[]
+    for t in (3600.0, 6 * 3600.0)
+        while col.budget.time < t - 1e-6
+            step_soil_water!(col, 60.0)
+        end
+        push!(S, col.budget.infiltration / sqrt(t))
+    end
+    @printf("  vG loam absorption: S_num/S_Parlange = %.4f (1 h), %.4f (6 h)\n", (S ./ Sp)...)
+    @test abs(S[2] / S[1] - 1) < 0.01            # I ∝ √t
+    @test abs(S[2] / Sp - 1) < 0.02              # Parlange is good to a few %
+    θi = soil_water_content(v, ψi)
+    # rigorous bounds: 2∫(θ-θ_i)K dψ ≤ S² ≤ 2(θ_s-θ_i)∫K dψ
+    ψs = -exp.(range(log(10.0), log(1e-6), length = 20001))
+    Kint(f) = sum((ψs[k+1] - ψs[k]) * (f(ψs[k]) + f(ψs[k+1])) / 2 for k in 1:length(ψs)-1)
+    lo = sqrt(2 * Kint(ψ -> (soil_water_content(v, ψ) - θi) * soil_hydraulic_conductivity(v, ψ)))
+    hi = sqrt(2 * (v.θ_s - θi) * Kint(ψ -> soil_hydraulic_conductivity(v, ψ)))
+    @test lo < S[2] < hi
+end
+
+@testset "Philip infiltration: vertical vs horizontal" begin
+    # Philip (1957): I(t) = S√t + A t + …, with the same S as horizontal
+    # absorption and K_s/3 ≤ A ≤ 2K_s/3; at long times the ponded
+    # infiltration rate falls to K_s.
+    v = carsel_parrish_texture(:loam)
+    ψi = -10.0
+    mk(grav) = SoilWaterColumn(uniform_soil_grid(grav ? 3.0 : 0.6, grav ? 600 : 240), v;
+                               ψ = ψi, top = HeadTop(0.0),
+                               bottom = grav ? FreeDrainage() : ZeroFluxBottom(),
+                               gravity = grav, temperature_dependent = false)
+    cv, chz = mk(true), mk(false)
+    A = Float64[]
+    ratio = Float64[]
+    for t in (600.0, 3600.0, 3 * 3600.0)
+        for c in (cv, chz)
+            while c.budget.time < t - 1e-6
+                step_soil_water!(c, 60.0)
+            end
+        end
+        push!(ratio, cv.budget.infiltration / chz.budget.infiltration)
+        push!(A, (cv.budget.infiltration - chz.budget.infiltration) / t / v.K_s)
+    end
+    @printf("  Philip: I_v/I_h = %.3f, %.3f, %.3f; A/K_s = %.3f, %.3f, %.3f (10 min, 1 h, 3 h)\n",
+            ratio..., A...)
+    @test issorted(ratio) && ratio[1] < 1.10                 # gravity matters later
+    @test all(a -> 1 / 3 <= a <= 2 / 3, A)
+    col = SoilWaterColumn(uniform_soil_grid(5.0, 250), v; ψ = ψi, top = HeadTop(0.0),
+                          temperature_dependent = false)
+    rates = [step_soil_water!(col, 86400.0).infiltration / 86400 / v.K_s for _ in 1:5]
+    @printf("  ponded infiltration rate / K_s, days 1-5: %s\n", string(round.(rates, digits = 4)))
+    @test issorted(rates, rev = true)
+    @test 1 < rates[end] < 1.01
+end
+
 end # SoilColumn testset
