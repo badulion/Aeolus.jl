@@ -145,8 +145,8 @@ radiative cooling, melt, rain and hoar deposition: residuals
 
 | hook | default | extended by |
 |:--- |:--- |:--- |
-| `AbstractSnowMetamorphism`: `snow_metamorphism!`, `viscosity_grain_factor` | layers age, grains fixed, ``f_2 = 1`` | #35 grain metamorphism |
-| `AbstractSnowAlbedo`: `snowpack_albedo` | constant 0.8 | #35 albedo ageing (delegating to `SurfaceOptics.SnowSurface`) |
+| `AbstractSnowMetamorphism`: `snow_metamorphism!`, `viscosity_grain_factor`, `fresh_grain_radius`, `refrozen_grain_radius` | layers age, grains fixed, ``f_2 = 1`` | #35: `Flanner2006Metamorphism`, `ParabolicGrainGrowth` ([Snow metamorphism and albedo](snow_metamorphism.md)) |
+| `AbstractSnowAlbedo`: `snowpack_albedo` | constant 0.8 | #35: `SnowOpticsAlbedo`, delegating to `SurfaceOptics.SnowSurface` |
 | `AbstractSnowLiquidWater`: `snow_liquid_water!` | all liquid runs off at once | #36 percolation and refreezing |
 
 The pack books the enthalpy carried off by whatever runoff a

@@ -39,6 +39,7 @@ makedocs(
             "Radiation fog"               => "theory/radiation_fog.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
             "Layered snowpack"            => "theory/snowpack.md",
+            "Snow metamorphism and albedo" => "theory/snow_metamorphism.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

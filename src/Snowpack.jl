@@ -18,12 +18,22 @@ chooses among published parameterisations without touching the solver:
 | fresh-snow density            | [`AbstractFreshSnowDensity`](@ref) | `Anderson1976FreshSnow`, `Vionnet2012FreshSnow` |
 | settling / densification      | [`AbstractSnowCompaction`](@ref)  | `Anderson1976Compaction`, `Vionnet2012Compaction` |
 
-Three hooks are deliberately left thin, for the phases that own them:
+Grain and albedo ageing (#35) plug in through two hooks:
 
-  * **grain and albedo ageing (#35)** — [`AbstractSnowMetamorphism`](@ref)
-    (`snow_metamorphism!`, `viscosity_grain_factor`) and
-    [`AbstractSnowAlbedo`](@ref) (`snowpack_albedo`). The defaults age
-    the layers but leave the grain size and a constant albedo alone.
+  * [`AbstractSnowMetamorphism`](@ref) (`snow_metamorphism!`,
+    `viscosity_grain_factor`, `fresh_grain_radius`,
+    `refrozen_grain_radius`) — [`Flanner2006Metamorphism`](@ref) evolves
+    the optical grain radius with the CLM/SNICAR dry-ageing fits and
+    Brun (1989) wet growth; [`ParabolicGrainGrowth`](@ref) is the
+    `SurfaceOptics` ageing law; the default `NoSnowMetamorphism` keeps
+    grains fixed.
+  * [`AbstractSnowAlbedo`](@ref) (`snowpack_albedo`) —
+    [`SnowOpticsAlbedo`](@ref) delegates to the Wiscombe-Warren
+    `SurfaceOptics.SnowSurface` at the prognostic grain radius; the
+    default is a constant.
+
+One hook is left thin for the phase that owns it:
+
   * **liquid water (#36)** — [`AbstractSnowLiquidWater`](@ref)
     (`snow_liquid_water!`). The default drains all liquid water — melt
     and rain — as runoff within the step; percolation, retention and
@@ -55,6 +65,14 @@ Constants come from the contracts: ice and water density, ``k_{ice}``,
   * Sturm, M., Taras, B., Liston, G. E., Derksen, C., Jonas, T. & Lea, J.
     (2010). Estimating snow water equivalent using snow depth data and
     climate classes. *J. Hydrometeorol.*, 11, 1380-1394.
+  * Flanner, M. G. & Zender, C. S. (2006). Linking snowpack microphysics
+    and albedo evolution. *J. Geophys. Res.*, 111, D12208.
+  * Brun, E. (1989). Investigation on wet-snow metamorphism in respect of
+    liquid-water content. *Ann. Glaciol.*, 13, 22-26.
+  * Lawrence, D. et al. (2018). *Technical description of version 5.0 of
+    the Community Land Model (CLM)*, NCAR, Sect. 2.3.2.3.
+  * Wiscombe, W. J. & Warren, S. G. (1980). A model for the spectral
+    albedo of snow. I: Pure snow. *J. Atmos. Sci.*, 37, 2712-2733.
 """
 module Snowpack
 
@@ -391,7 +409,13 @@ Grain metamorphism — the hook for snow ageing (#35). Implementers extend
     `grain` (optical radius, μm) and `age` (s) of `pack`;
   * `viscosity_grain_factor(scheme, pack, i)` — the Crocus ``f_2`` factor
     by which angular grains (depth hoar) stiffen layer `i` against
-    settling (Vionnet et al. 2012, Eq. 9). Default 1.
+    settling (Vionnet et al. 2012, Eq. 9). Default 1;
+  * optionally `fresh_grain_radius(scheme, pack, T_air)` and
+    `refrozen_grain_radius(scheme)`.
+
+Implementations: [`NoSnowMetamorphism`](@ref),
+[`Flanner2006Metamorphism`](@ref), [`ParabolicGrainGrowth`](@ref).
+Neither #35 scheme tracks grain shape, so both keep ``f_2 = 1``.
 """
 abstract type AbstractSnowMetamorphism end
 
@@ -436,7 +460,7 @@ Broadband albedo of the pack — the hook for albedo ageing (#35).
 Implementers extend `snowpack_albedo(scheme, pack)`. Spectral snow
 optics already live in `SurfaceOptics.SnowSurface` (Wiscombe-Warren
 grain-size and soot dependence); a grain-aware scheme should delegate to
-it rather than restate it.
+it rather than restate it, as [`SnowOpticsAlbedo`](@ref) does.
 """
 abstract type AbstractSnowAlbedo end
 
