@@ -253,4 +253,39 @@ end
     @test net_assimilation(p, 160.0, 1500.0, 308.15) > net_assimilation(p3, 280.0, 1500.0, 308.15)
 end
 
+@testset "CLM4.5 plant functional types" begin
+    # Transcription check: every Vcmax25 of CLM4.5 Table 8.1 follows from
+    # the same row's CN_L, SLA0 and FLNR through eq. 8.17 (FNR = 7.16,
+    # aR25 = 60). A mistyped digit in any of the four columns fails here.
+    @test length(CLM45_PFT_PHOTOSYNTHESIS) == 19
+    worst = 0.0
+    for (k, t) in CLM45_PFT_PHOTOSYNTHESIS
+        v = vcmax25_from_leaf_nitrogen(t.CN_L, t.SLA0, t.FLNR)
+        worst = max(worst, abs(v / t.Vcmax25 - 1))
+        @test abs(v / t.Vcmax25 - 1) < 1e-3
+        @test t.pathway in (:C3, :C4)
+        @test (t.pathway === :C4) == !isnan(t.α)
+    end
+    @info "CLM4.5 Table 8.1: Vcmax25 from leaf N vs tabulated (max rel diff)" worst
+    @test pft_photosynthesis_parameters(:c4_grass) isa C4Parameters
+    @test pft_photosynthesis_parameters(:corn) isa C4Parameters
+    @test pft_photosynthesis_parameters(:c3_grass) isa C3Parameters
+    @test pft_photosynthesis_parameters(:net_boreal).Vcmax25 == 62.6
+    @test pft_photosynthesis_parameters(:c3_grass; T_growth = 298.15).Jmax25 ≈ (2.59 - 0.035 * 25) * 78.2
+    @test_throws ArgumentError pft_photosynthesis_parameters(:palm_tree)
+
+    # Light-saturated net assimilation at 25 °C, ci/ca = 0.7 (C3) and 0.3
+    # (C4) of ca = 400 µmol/mol, absorbed Q = 1500 µmol m⁻² s⁻¹. Ordered by
+    # Vcmax25 within a pathway, and C4 grass above C3 grass despite a
+    # lower Vcmax25.
+    An = Dict(k => net_assimilation(pft_photosynthesis_parameters(k),
+                                    CLM45_PFT_PHOTOSYNTHESIS[k].pathway === :C4 ? 120.0 : 280.0,
+                                    1500.0, 298.15) for k in keys(CLM45_PFT_PHOTOSYNTHESIS))
+    c3 = sort([k for k in keys(An) if CLM45_PFT_PHOTOSYNTHESIS[k].pathway === :C3],
+              by = k -> CLM45_PFT_PHOTOSYNTHESIS[k].Vcmax25)
+    @test issorted([An[k] for k in c3])
+    @test An[:c4_grass] > An[:c3_grass]
+    @info "An at 25 °C, Q = 1500 (µmol m⁻² s⁻¹)" c3_grass = An[:c3_grass] c4_grass = An[:c4_grass] net_temperate = An[:net_temperate] bdt_tropical = An[:bdt_tropical] crop = An[:crop] corn = An[:corn]
+end
+
 end # Photosynthesis testset

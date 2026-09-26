@@ -613,6 +613,8 @@ export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
        electron_transport_rate,
        AbstractPhotosynthesisParameters, C3Parameters, C4Parameters, collatz1992_c4,
        leaf_capacities, photorespiratory_compensation_point,
-       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point
+       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point,
+       PFTPhotosynthesis, CLM45_PFT_PHOTOSYNTHESIS, vcmax25_from_leaf_nitrogen,
+       pft_photosynthesis_parameters
 
 end # module

@@ -75,7 +75,9 @@ export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
        electron_transport_rate,
        AbstractPhotosynthesisParameters, C3Parameters, C4Parameters, collatz1992_c4,
        leaf_capacities, photorespiratory_compensation_point,
-       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point
+       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point,
+       PFTPhotosynthesis, CLM45_PFT_PHOTOSYNTHESIS, vcmax25_from_leaf_nitrogen,
+       pft_photosynthesis_parameters
 
 # Reference temperature of every "…25" parameter.
 const T_REF = 298.15
@@ -621,6 +623,124 @@ function co2_compensation_point(p::AbstractPhotosynthesisParameters, Q::Real, T:
         hi - lo < 1e-10 * max(1.0, hi) && break
     end
     return 0.5 * (lo + hi)
+end
+
+# =========================================================================
+# 6. Plant functional types (CLM4.5 Table 8.1)
+# =========================================================================
+
+"""
+    PFTPhotosynthesis
+
+Photosynthetic traits of one plant functional type, transcribed from
+CLM4.5 Technical Note Table 8.1 (Oleson et al. 2013):
+
+  * `name` — CLM's PFT label;
+  * `pathway` — `:C3` or `:C4`;
+  * `Vcmax25` — canopy-top Rubisco capacity at 25 °C, µmol m⁻² s⁻¹;
+  * `CN_L` — leaf carbon : nitrogen ratio, g C g⁻¹ N;
+  * `FLNR` — fraction of leaf N in Rubisco, g N g⁻¹ N;
+  * `SLA0` — canopy-top specific leaf area, m² g⁻¹ C;
+  * `α` — C4 quantum efficiency, mol CO₂ mol⁻¹ photons (`NaN` for C3).
+
+The tabulated `Vcmax25` is derived from the other three columns by
+[`vcmax25_from_leaf_nitrogen`](@ref) (CLM4.5 eq. 8.17); the stomatal
+(`m`) and soil-water (`ψo`, `ψc`) columns of that table belong to the
+stomatal-conductance and land-column phases.
+"""
+struct PFTPhotosynthesis
+    name::String
+    pathway::Symbol
+    Vcmax25::Float64
+    CN_L::Float64
+    FLNR::Float64
+    SLA0::Float64
+    α::Float64
+end
+
+"""
+    CLM45_PFT_PHOTOSYNTHESIS :: Dict{Symbol, PFTPhotosynthesis}
+
+CLM4.5 Table 8.1, natural vegetation and the unmanaged/rainfed crop rows
+(irrigated rows are identical). Keys:
+
+| key | CLM PFT | pathway | Vcmax25 |
+| :-- | :-- | :-- | --: |
+| `:net_temperate` | NET Temperate | C3 | 62.5 |
+| `:net_boreal` | NET Boreal | C3 | 62.6 |
+| `:ndt_boreal` | NDT Boreal | C3 | 39.1 |
+| `:bet_tropical` | BET Tropical | C3 | 55.0 |
+| `:bet_temperate` | BET temperate | C3 | 61.5 |
+| `:bdt_tropical` | BDT tropical | C3 | 41.0 |
+| `:bdt_temperate` | BDT temperate | C3 | 57.7 |
+| `:bdt_boreal` | BDT boreal | C3 | 57.7 |
+| `:bes_temperate` | BES temperate | C3 | 61.7 |
+| `:bds_temperate` | BDS temperate | C3 | 54.0 |
+| `:bds_boreal` | BDS boreal | C3 | 54.0 |
+| `:c3_arctic_grass` | C3 arctic grass | C3 | 78.2 |
+| `:c3_grass` | C3 grass | C3 | 78.2 |
+| `:c4_grass` | C4 grass | C4 | 51.6 |
+| `:crop` | Crop R | C3 | 100.7 |
+| `:corn` | Corn R | C4 | 100.7 |
+| `:temperate_cereal` | Temp Cereal R | C3 | 100.7 |
+| `:winter_cereal` | Winter Cereal R | C3 | 100.7 |
+| `:soybean` | Soybean R | C3 | 100.7 |
+
+(N = needleleaf, B = broadleaf, E = evergreen, D = deciduous, T = tree,
+S = shrub.) Every tabulated `Vcmax25` is reproduced from the same row's
+`CN_L`, `SLA0` and `FLNR` by [`vcmax25_from_leaf_nitrogen`](@ref) to
+within 0.1 % (the table's rounding), which is how the transcription is
+checked.
+"""
+const CLM45_PFT_PHOTOSYNTHESIS = Dict{Symbol,PFTPhotosynthesis}(
+    :net_temperate    => PFTPhotosynthesis("NET Temperate",   :C3,  62.5, 35, 0.0509, 0.010, NaN),
+    :net_boreal       => PFTPhotosynthesis("NET Boreal",      :C3,  62.6, 40, 0.0466, 0.008, NaN),
+    :ndt_boreal       => PFTPhotosynthesis("NDT Boreal",      :C3,  39.1, 25, 0.0546, 0.024, NaN),
+    :bet_tropical     => PFTPhotosynthesis("BET Tropical",    :C3,  55.0, 30, 0.0461, 0.012, NaN),
+    :bet_temperate    => PFTPhotosynthesis("BET temperate",   :C3,  61.5, 30, 0.0515, 0.012, NaN),
+    :bdt_tropical     => PFTPhotosynthesis("BDT tropical",    :C3,  41.0, 25, 0.0716, 0.030, NaN),
+    :bdt_temperate    => PFTPhotosynthesis("BDT temperate",   :C3,  57.7, 25, 0.1007, 0.030, NaN),
+    :bdt_boreal       => PFTPhotosynthesis("BDT boreal",      :C3,  57.7, 25, 0.1007, 0.030, NaN),
+    :bes_temperate    => PFTPhotosynthesis("BES temperate",   :C3,  61.7, 30, 0.0517, 0.012, NaN),
+    :bds_temperate    => PFTPhotosynthesis("BDS temperate",   :C3,  54.0, 25, 0.0943, 0.030, NaN),
+    :bds_boreal       => PFTPhotosynthesis("BDS boreal",      :C3,  54.0, 25, 0.0943, 0.030, NaN),
+    :c3_arctic_grass  => PFTPhotosynthesis("C3 arctic grass", :C3,  78.2, 25, 0.1365, 0.030, NaN),
+    :c3_grass         => PFTPhotosynthesis("C3 grass",        :C3,  78.2, 25, 0.1365, 0.030, NaN),
+    :c4_grass         => PFTPhotosynthesis("C4 grass",        :C4,  51.6, 25, 0.0900, 0.030, 0.05),
+    :crop             => PFTPhotosynthesis("Crop R",          :C3, 100.7, 25, 0.1758, 0.030, NaN),
+    :corn             => PFTPhotosynthesis("Corn R",          :C4, 100.7, 25, 0.2930, 0.050, 0.05),
+    :temperate_cereal => PFTPhotosynthesis("Temp Cereal R",   :C3, 100.7, 25, 0.4102, 0.070, NaN),
+    :winter_cereal    => PFTPhotosynthesis("Winter Cereal R", :C3, 100.7, 25, 0.4102, 0.070, NaN),
+    :soybean          => PFTPhotosynthesis("Soybean R",       :C3, 100.7, 25, 0.4102, 0.070, NaN),
+)
+
+"""
+    vcmax25_from_leaf_nitrogen(CN_L, SLA0, FLNR; FNR = 7.16, aR25 = 60.0) -> µmol m⁻² s⁻¹
+
+Rubisco capacity from leaf nitrogen (Thornton & Zimmermann 2007; CLM4.5
+eqs. 8.17-8.18):
+``V_{cmax25} = N_a\\,F_{LNR}\\,F_{NR}\\,a_{R25}`` with area-based leaf N
+``N_a = 1/(CN_L\\,SLA_0)`` (g N m⁻²), `FNR` the mass ratio of Rubisco to
+its nitrogen and `aR25` the Rubisco specific activity
+(µmol CO₂ g⁻¹ Rubisco s⁻¹).
+"""
+vcmax25_from_leaf_nitrogen(CN_L::Real, SLA0::Real, FLNR::Real; FNR::Real = 7.16,
+                           aR25::Real = 60.0) = FLNR * FNR * aR25 / (CN_L * SLA0)
+
+"""
+    pft_photosynthesis_parameters(pft::Symbol; kwargs...) -> C3Parameters | C4Parameters
+
+Leaf parameters for a CLM plant functional type (a key of
+[`CLM45_PFT_PHOTOSYNTHESIS`](@ref)) with its canopy-top `Vcmax25` and,
+for C4 types, its quantum efficiency. Keyword arguments are passed to
+[`C3Parameters`](@ref) / [`C4Parameters`](@ref) (e.g. `T_growth`).
+"""
+function pft_photosynthesis_parameters(pft::Symbol; kwargs...)
+    haskey(CLM45_PFT_PHOTOSYNTHESIS, pft) ||
+        throw(ArgumentError("unknown PFT :$pft; see keys(CLM45_PFT_PHOTOSYNTHESIS)"))
+    t = CLM45_PFT_PHOTOSYNTHESIS[pft]
+    return t.pathway === :C4 ? C4Parameters(t.Vcmax25; α = t.α, kwargs...) :
+                               C3Parameters(t.Vcmax25; kwargs...)
 end
 
 end # module
