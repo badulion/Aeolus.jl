@@ -183,6 +183,17 @@ end
         @test st["H"].r > 0.5
         @test abs(EFm - EFo) < 0.4
     end
+    # The CLM4.5 Ball-Berry closure instead of CLM5's Medlyn (same column,
+    # same parameters otherwise), reported for comparison.
+    for site in ("DE-Hai", "FI-Hyy", "GF-Guy", "DE-Gri", "FR-Pue")
+        meta, d, o, _ = _plumber_run(site; model = :ball_berry)
+        ev = (FLUXNET_SITES[site].spin * 24 + 1):length(d["hour"])
+        both = [k for k in ev if d["Qle_qc"][k] == 0 && d["Qh_qc"][k] == 0]
+        EFm, EFo = _pl_daytime_ef(both, d, o)
+        idx = [k for k in ev if d["Qle_qc"][k] == 0]
+        @info "FLUXNET $site with Ball-Berry stomata" EF_model = EFm EF_obs = EFo LE = _pl_stats(o.LE[idx], d["Qle"][idx])
+        @test maximum(abs, o.res) < 1e-9
+    end
     @test abs(results["FI-Hyy"].EFm - results["FI-Hyy"].EFo) < 0.05
     @test abs(results["GF-Guy"].EFm - results["GF-Guy"].EFo) < 0.05
 

@@ -43,6 +43,7 @@ makedocs(
             "Soil water (Richards)"       => "theory/soil_water.md",
             "Soil heat and freeze–thaw"   => "theory/soil_heat.md",
             "Water table and aquifer"     => "theory/water_table.md",
+            "Vegetated land column"       => "theory/land_surface.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -99,6 +100,7 @@ makedocs(
                 "SurfaceExchange"              => "api/era5/surface_exchange.md",
                 "Photosynthesis"               => "api/era5/photosynthesis.md",
                 "SoilColumn"                   => "api/era5/soil_column.md",
+                "LandSurface"                  => "api/era5/land_surface.md",
             ],
         ],
         "Examples" => [
