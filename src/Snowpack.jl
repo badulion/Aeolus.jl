@@ -85,6 +85,10 @@ export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
        snow_layer_density, snow_layer_depths, snowpack_enthalpy, snow_load,
        snow_compaction!, snow_heat_conduction!, snow_phase_change!,
        add_snowfall!, add_rainfall!, snow_sublimation!, relayer_snowpack!
+# liquid water: retention, refreezing, percolation (#36)
+export AbstractSnowWaterRetention, ColeouLesaffre1998Retention, PoreFractionRetention,
+       snow_irreducible_water, snow_water_holding_capacity, snow_liquid_water_content,
+       snow_refreeze!, SnowBucketPercolation
 
 _Tfreeze(c::SurfaceConstants) = c.thermo.T_freeze
 
@@ -561,6 +565,7 @@ conservation tests:
 | `sublimation`       | net vapour loss (negative: net deposition)                |
 | `runoff`            | liquid water leaving the base                             |
 | `melt`              | ice melted                                                |
+| `refreeze`          | liquid water refrozen (#36)                               |
 | `surface_heat`      | ``∫ G\\,dt`` conducted in at the surface                   |
 | `bottom_heat`       | heat leaving through the base (incl. melt surplus of a vanished bottom layer) |
 | `advected_enthalpy` | enthalpy brought in by precipitation and deposition, minus that carried off by sublimation |
@@ -578,6 +583,7 @@ Base.@kwdef mutable struct SnowBudget
     sublimation::Float64 = 0.0
     runoff::Float64 = 0.0
     melt::Float64 = 0.0
+    refreeze::Float64 = 0.0
     surface_heat::Float64 = 0.0
     bottom_heat::Float64 = 0.0
     advected_enthalpy::Float64 = 0.0
@@ -1138,6 +1144,193 @@ function step_surface!(p::LayeredSnowpack, f::SurfaceForcing, dt::Real;
     snow_metamorphism!(p.metamorphism, p, dt)
     relayer_snowpack!(p)
     return fl
+end
+
+# =========================================================================
+# 8. Liquid water: retention, refreezing and percolation (#36)
+# =========================================================================
+
+"""
+    AbstractSnowWaterRetention
+
+Irreducible (residual) liquid water content of snow: the water a layer
+holds against gravity by capillarity. Implementers extend
+`snow_irreducible_water(law, θ_i)`, returning the volumetric content
+``θ_r`` (m³ of water per m³ of snow) of snow whose volumetric ice
+content is ``θ_i = w_{ice}/(ρ_{ice} Δz)``.
+"""
+abstract type AbstractSnowWaterRetention end
+
+"""
+    ColeouLesaffre1998Retention()
+
+The irreducible water content Coléou & Lesaffre (1998) measured by
+gravity drainage of wet-snow samples in a cold laboratory, in the
+volumetric form used by SNOWPACK (Wever et al. 2014, Eq. 1):
+
+    θ_r = 0.0264 + 0.0099 (1 - θ_i)/θ_i        θ_i ≤ 0.23
+    θ_r = 0.08 - 0.1023 (θ_i - 0.03)           0.23 < θ_i ≤ 0.812
+    θ_r = 0                                    θ_i > 0.812
+
+The branches meet at ``θ_i = 0.23`` (θ_r = 0.0595, to 4·10⁻⁶); at ``θ_i = 0.812``
+(745 kg m⁻³) the pores are too few and too closed to hold water. The
+content is capped at the pore volume ``1 - θ_i``. Light snow holds more
+water per unit volume than dense snow: 0.062 at 200 kg m⁻³, 0.038 at
+400 kg m⁻³ (ρ_ice = 917).
+"""
+struct ColeouLesaffre1998Retention <: AbstractSnowWaterRetention end
+
+"""
+    PoreFractionRetention(; fraction = 0.05)
+
+A holding capacity that is a fixed fraction of the pore volume,
+``θ_r = f (1 - θ_i)``. Crocus uses ``f = 0.05`` (Vionnet et al. 2012,
+Eq. 19, after Pahaut 1976); CLM uses the irreducible saturation
+``S_r = 0.033`` (Oleson et al. 2010, Sect. 7.2.3).
+"""
+Base.@kwdef struct PoreFractionRetention <: AbstractSnowWaterRetention
+    fraction::Float64 = 0.05
+end
+
+"""
+    snow_irreducible_water(law, θ_i) -> θ_r (m³ m⁻³)
+
+Volumetric liquid water content snow of volumetric ice content `θ_i`
+holds against gravity under `law`.
+"""
+function snow_irreducible_water end
+
+function snow_irreducible_water(::ColeouLesaffre1998Retention, θ_i::Real)
+    θ_i <= 0 && return 0.0
+    θ = θ_i <= 0.23  ? 0.0264 + 0.0099 * (1 - θ_i) / θ_i :
+        θ_i <= 0.812 ? 0.08 - 0.1023 * (θ_i - 0.03) : 0.0
+    return clamp(θ, 0.0, max(1 - θ_i, 0.0))
+end
+
+snow_irreducible_water(law::PoreFractionRetention, θ_i::Real) =
+    θ_i <= 0 ? 0.0 : law.fraction * max(1 - θ_i, 0.0)
+
+_ice_fraction(p, i) = p.dz[i] > 0 ? p.m_ice[i] / (p.consts.ρ_ice * p.dz[i]) : 0.0
+_holding(law, p, i) = p.consts.ρ_water * p.dz[i] * snow_irreducible_water(law, _ice_fraction(p, i))
+
+"""
+    snow_water_holding_capacity(law, p) -> Vector (kg m⁻²)
+
+Liquid water each layer of `p` can hold against gravity,
+``ρ_w Δz_i θ_r(θ_{i,ice})``.
+"""
+snow_water_holding_capacity(law::AbstractSnowWaterRetention, p::LayeredSnowpack) =
+    [_holding(law, p, i) for i in 1:snow_nlayers(p)]
+
+"""
+    snow_liquid_water_content(p) -> Vector (m³ m⁻³)
+
+Volumetric liquid water content ``θ_w = w_{liq}/(ρ_w Δz)`` of each layer
+(0 for a layer of zero thickness).
+"""
+snow_liquid_water_content(p::LayeredSnowpack) =
+    [p.dz[i] > 0 ? p.m_liq[i] / (p.consts.ρ_water * p.dz[i]) : 0.0 for i in 1:snow_nlayers(p)]
+
+# Add liquid water of mass m carrying enthalpy h (relative to liquid at
+# T_f) to layer i, mixing its sensible heat in.
+function _add_liquid!(p, i, m, h)
+    m > 0 || return p
+    Tf = _Tfreeze(p.consts)
+    H = _heat_capacity(p, i) * (p.T[i] - Tf) + h
+    p.m_liq[i] += m
+    p.T[i] = Tf + H / _heat_capacity(p, i)
+    return p
+end
+
+# Refreeze liquid water in layer i as far as its cold content allows, at
+# constant enthalpy. Returns the mass refrozen. Freezing Δw releases
+# Δw L_f; if the cold content C (T_f - T) exceeds w_liq L_f everything
+# freezes and the layer warms, otherwise the layer ends at T_f with
+# Δw = C (T_f - T) / L_f frozen. Thickness is unchanged (pore filling;
+# Vionnet et al. 2012, Sect. 3.10).
+function _refreeze_layer!(p, i)
+    c = p.consts
+    Tf, Lf = _Tfreeze(c), LH_f0(c)
+    (p.m_liq[i] > 0 && p.T[i] < Tf) || return 0.0
+    cold = _heat_capacity(p, i) * (Tf - p.T[i])
+    if cold >= p.m_liq[i] * Lf
+        dm = p.m_liq[i]
+        excess = cold - dm * Lf                        # cold content left
+        p.m_ice[i] += dm
+        p.m_liq[i] = 0.0
+        p.T[i] = Tf - excess / _heat_capacity(p, i)
+    else
+        dm = cold / Lf
+        p.m_ice[i] += dm
+        p.m_liq[i] -= dm
+        p.T[i] = Tf
+    end
+    return dm
+end
+
+"""
+    snow_refreeze!(p) -> refrozen mass (kg m⁻²)
+
+Refreeze the liquid water of every layer colder than the melting point
+as far as its cold content allows, at constant enthalpy: the latent heat
+released warms the layer, to ``T_f`` if liquid remains. Layer thickness
+is unchanged (the ice fills pores). Adds the refrozen mass to
+`p.budget.refreeze`.
+"""
+function snow_refreeze!(p::LayeredSnowpack)
+    r = 0.0
+    for i in 1:snow_nlayers(p)
+        r += _refreeze_layer!(p, i)
+    end
+    p.budget.refreeze += r
+    return r
+end
+
+# Liquid mass (as ice-equivalent mass) that still fits into the pores of
+# layer i if it all froze: ρ_ice Δz - w_ice - w_liq ρ_ice/ρ_w.
+_pore_room(p, i) = max(p.consts.ρ_ice * p.dz[i] - p.m_ice[i] -
+                       p.m_liq[i] * p.consts.ρ_ice / p.consts.ρ_water, 0.0)
+
+"""
+    SnowBucketPercolation(; retention = ColeouLesaffre1998Retention())
+
+The "tipping bucket" liquid-water scheme of Crocus (Vionnet et al. 2012,
+Sect. 3.10) and CLM (Oleson et al. 2010, Sect. 7.2.3), with the
+holding capacity from `retention`. Proceeding downward from the top
+layer, water entering a layer first refreezes as far as the layer's cold
+content allows ([`snow_refreeze!`](@ref)); the layer then retains liquid
+up to its holding capacity ``ρ_w Δz θ_r``; any excess passes to the
+layer below within the step, and what leaves the bottom layer is runoff.
+Capillary barriers are not represented. If refreezing would fill a
+layer's pores with ice (an impermeable ice layer), the water that does
+not fit passes on. Mass and enthalpy are conserved exactly.
+"""
+Base.@kwdef struct SnowBucketPercolation{R<:AbstractSnowWaterRetention} <: AbstractSnowLiquidWater
+    retention::R = ColeouLesaffre1998Retention()
+end
+
+function snow_liquid_water!(s::SnowBucketPercolation, p::LayeredSnowpack, dt::Real)
+    c = p.consts
+    Tf = _Tfreeze(c)
+    flow, hflow = 0.0, 0.0            # mass and enthalpy entering layer i from above
+    refrozen = 0.0
+    for i in 1:snow_nlayers(p)
+        if flow > 0
+            take = min(flow, _pore_room(p, i))
+            htake = flow > 0 ? hflow * take / flow : 0.0
+            _add_liquid!(p, i, take, htake)
+            flow -= take; hflow -= htake
+        end
+        refrozen += _refreeze_layer!(p, i)
+        excess = p.m_liq[i] - _holding(s.retention, p, i)
+        if excess > 0
+            p.m_liq[i] -= excess
+            flow  += excess
+            hflow += excess * cp_water(c) * (p.T[i] - Tf)
+        end
+    end
+    p.budget.refreeze += refrozen
+    return flow
 end
 
 Base.show(io::IO, p::LayeredSnowpack) =

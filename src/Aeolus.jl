@@ -619,5 +619,9 @@ export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
        snow_layer_density, snow_layer_depths, snowpack_enthalpy, snow_load,
        snow_compaction!, snow_heat_conduction!, snow_phase_change!,
        add_snowfall!, add_rainfall!, snow_sublimation!, relayer_snowpack!
+# Phase 51 (#36) — Snowpack: liquid-water retention, percolation, refreezing.
+export AbstractSnowWaterRetention, ColeouLesaffre1998Retention, PoreFractionRetention,
+       snow_irreducible_water, snow_water_holding_capacity, snow_liquid_water_content,
+       snow_refreeze!, SnowBucketPercolation
 
 end # module
