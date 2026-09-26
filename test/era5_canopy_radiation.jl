@@ -110,6 +110,21 @@ end
             worst_as = max(worst_as, abs(β0 / ((1 + μ̄ * K) / (μ̄ * K) * a_s / ω) - 1))
         end
         @test worst_as < 1e-8
+        # χ_L = -0.4 has μφ₂ + G = 0 at μ* = φ₁/(2|φ₂|) ≈ 0.9963, where the
+        # closed form of a_s is 0/0 (it returned NaN there before the series
+        # branch, and lost 5 digits within 1e-6 of μ*).
+        d = RossGoudriaanLeaves(-0.4); μ̄ = average_inverse_optical_depth(d)
+        μstar = -d.φ1 / (2d.φ2)
+        worst_star = 0.0
+        for δ in (0.0, 1e-12, 1e-8, -1e-8, 1e-6, -1e-6, 1e-3)
+            μ = μstar + δ
+            ω, β, β0 = canopy_scattering_parameters(d, par, μ)
+            G = leaf_projection_function(d, μ); K = G / μ
+            a_s = (ω / 2) * sum(w[q] / 2 * (m -> m * G / (μ * leaf_projection_function(d, m) + m * G))((x[q] + 1) / 2)
+                                for q in eachindex(x))
+            worst_star = max(worst_star, abs(β0 / ((1 + μ̄ * K) / (μ̄ * K) * a_s / ω) - 1))
+        end
+        @test worst_star < 1e-12
         # Spherical leaves, α = τ: ωβ = ω/2 (up and down scatter equally)
         ω, β, _ = canopy_scattering_parameters(sph, LeafOptics(0.2, 0.2), 0.5)
         @test β ≈ 0.5

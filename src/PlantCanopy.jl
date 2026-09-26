@@ -839,15 +839,16 @@ are extinguished at ``1/\\bar μ`` per unit leaf area. For the Goudriaan fit
 evaluated by its series when ``φ_2/φ_1`` is small (the closed form is
 ``0/0`` at ``χ_L = 0``, where ``\\bar μ = 1``).
 """
-function average_inverse_optical_depth(d::RossGoudriaanLeaves)
-    φ1, φ2 = d.φ1, d.φ2
-    x = φ2 / φ1
-    if abs(x) < 1e-3
-        # 1 - ln(1+x)/x = x/2 - x²/3 + x³/4 - x⁴/5 + …
-        return (0.5 - x / 3 + x^2 / 4 - x^3 / 5 + x^4 / 6) / φ1
-    end
-    return (1 - log1p(x) / x) / φ2
+# ∫₀¹ μ'/(a + b μ') dμ' = [1 - ln(1 + x)/x]/b with x = b/a, for a > 0 and
+# a + b > 0. The closed form is 0/0 as b → 0, so for small |x| its series
+# (1/a)(1/2 - x/3 + x²/4 - x³/5 + x⁴/6 - …) is used (truncation < 2e-16).
+function _int_mu_over_linear(a::Float64, b::Float64)
+    x = b / a
+    abs(x) < 1e-3 && return (0.5 - x / 3 + x^2 / 4 - x^3 / 5 + x^4 / 6) / a
+    return (1 - log1p(x) / x) / b
 end
+
+average_inverse_optical_depth(d::RossGoudriaanLeaves) = _int_mu_over_linear(d.φ1, d.φ2)
 average_inverse_optical_depth(::HorizontalLeaves) = 1.0
 
 """
@@ -884,8 +885,9 @@ function canopy_scattering_parameters(d::RossGoudriaanLeaves, o::LeafOptics, μ:
     K = G / μ
     μ̄ = average_inverse_optical_depth(d)
     φ1, φ2 = d.φ1, d.φ2
-    s = μ * φ2 + G
-    a_s = (ω / 2) * (G / s) * (1 - (μ * φ1 / s) * log((μ * φ1 + s) / (μ * φ1)))
+    # the integrand's denominator is μφ₁ + μ'(μφ₂ + G); μφ₂ + G passes
+    # through zero near μ = 1 for χ_L → -0.4, where the closed form is 0/0
+    a_s = (ω / 2) * G * _int_mu_over_linear(μ * φ1, μ * φ2 + G)
     β0 = (1 + μ̄ * K) / (μ̄ * K) * a_s / ω
     return (ω, β, β0)
 end
