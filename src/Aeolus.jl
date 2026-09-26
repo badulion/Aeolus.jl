@@ -63,6 +63,7 @@ include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
+include("UrbanSurface.jl")         # Phase 49 (urban facets; needs SurfaceExchange + SurfaceOptics)
 
 using .Grids
 using .Fields
@@ -112,6 +113,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .UrbanSurface                # Phase 49
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -598,5 +600,20 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        roughness_lengths, moisture_availability,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
+
+# Phase 49 — UrbanSurface: per-facet multi-layer wall conduction. The
+# material-property accessors (volumetric_heat_capacity,
+# thermal_diffusivity, thermal_admittance) are generic names other Era V
+# modules may want, so they stay qualified: `Aeolus.UrbanSurface.thermal_admittance`.
+export ThermalMaterial, thermal_material, thermal_material_names,
+       WallLayer, thermal_resistance, thermal_transmittance,
+       ISO6946_SURFACE_RESISTANCE,
+       ColumnBoundary, fixed_temperature_boundary, heat_flux_boundary,
+       convective_boundary,
+       ConductionColumn, step_conduction!, face_temperature,
+       column_heat_content, cell_centers,
+       UrbanFacet, interior_heat_flux, set_interior_boundary!,
+       set_interior_temperature!, facet_layer_temperatures,
+       example_roof_layers, example_wall_layers, example_ground_layers
 
 end # module
