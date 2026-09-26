@@ -75,10 +75,15 @@ import ..SurfaceExchange: surface_temperature, roughness_lengths, surface_albedo
                           surface_specific_humidity, surface_latent_heat
 using ..GasOptics: erf_series
 
-export IceParameters, seawater_freezing_point, bl99_salinity_profile,
+export IceParameters, IceColumn, sea_ice_column, lake_ice_column,
+       seawater_freezing_point, bl99_salinity_profile,
        ice_melting_temperature, ice_energy_of_melting, ice_enthalpy,
        ice_temperature_from_enthalpy, ice_heat_capacity, ice_conductivity,
-       snow_enthalpy, stefan_ice_thickness, neumann_lambda, neumann_ice_thickness
+       snow_enthalpy,
+       PrescribedSurfaceTemperature, PrescribedSurfaceFluxes, IceStepBudget,
+       step_ice!, ice_thickness, snow_thickness, ice_layer_temperatures,
+       column_enthalpy, ice_freeboard,
+       stefan_ice_thickness, neumann_lambda, neumann_ice_thickness
 
 # =========================================================================
 # 1. Parameters
@@ -355,6 +360,758 @@ function neumann_ice_thickness(t::Real; ΔT::Real,
                                cp::Real = cp_ice(c), L::Real = LH_f0(c))
     λ = neumann_lambda(cp * ΔT / L)
     return 2λ * sqrt(k / (ρ * cp) * t)
+end
+
+
+# =========================================================================
+# 4. The ice column
+# =========================================================================
+
+"""
+    IceStepBudget{T}
+
+What one [`step_ice!`](@ref) did, as fluxes (W m⁻², positive *into* the
+ice/snow column unless stated) and thickness changes (m):
+
+  * `F_surface` — non-penetrating energy entering at the top surface
+    (conduction into the column plus the energy spent on surface melt);
+  * `F_penetrating` — shortwave that entered below the surface
+    (``i_0`` fraction), `F_transmitted` — the part of it that left
+    through the base into the water;
+  * `F_conductive_top` — conductive flux at the top, positive downward;
+    `F_conductive_bottom` — conductive flux at the base, positive
+    *upward* (heat drawn from the freezing interface);
+  * `F_ocean` — ocean/lake heat flux applied at the base;
+  * `F_to_water` — energy handed to the water because the ice melted
+    through or the surface was open water;
+  * `enthalpy_in`, `enthalpy_out` — enthalpy (J m⁻²) carried in by
+    snowfall/deposition and out by sublimation or by ice/snow dumped
+    into the water;
+  * `dh_top`, `dh_bottom`, `dh_snow` — net changes of ice (top, base)
+    and snow thickness; `dh_snow_ice` — ice formed from flooded snow;
+  * `T_surface` (K), `melting` — whether the surface was at melting point;
+  * `energy_residual` — ``ΔU/Δt`` minus all the sources above (W m⁻²);
+    zero to round-off in an energy-conserving model;
+  * `iterations` — Newton iterations of the heat equation.
+"""
+struct IceStepBudget{T<:AbstractFloat}
+    F_surface::T
+    F_penetrating::T
+    F_transmitted::T
+    F_conductive_top::T
+    F_conductive_bottom::T
+    F_ocean::T
+    F_to_water::T
+    enthalpy_in::T
+    enthalpy_out::T
+    dh_top::T
+    dh_bottom::T
+    dh_snow::T
+    dh_snow_ice::T
+    T_surface::T
+    melting::Bool
+    energy_residual::T
+    iterations::Int
+end
+
+IceStepBudget{T}() where {T} =
+    IceStepBudget{T}(ntuple(_ -> zero(T), 14)..., false, zero(T), 0)
+
+"""
+    IceColumn
+
+Thermodynamic ice column (BL99): `N` equal ice layers of thickness
+`h_ice/N` with prognostic enthalpy `E` (J m⁻³) and a fixed salinity
+profile `S` (ppt, attached to relative depth), one snow layer of depth
+`h_snow` with enthalpy `E_snow`, a skin temperature `T_sfc` (K), and the
+water below at its freezing point `T_bottom` (K) delivering the heat
+flux `F_ocean` (W m⁻², into the ice). `S_new` is the salinity of ice
+accreted at the base; `ρ_water` the density of the water (for the
+freeboard and snow-ice formation). `budget` holds the last
+[`IceStepBudget`](@ref).
+
+Build one with [`sea_ice_column`](@ref) or [`lake_ice_column`](@ref).
+`IceColumn <: AbstractSurface`: `step_surface!(col, forcing, dt)` couples
+it to the atmosphere through `SurfaceExchange` (Monin–Obukhov fluxes,
+sublimation); [`step_ice!`](@ref) drives it with a prescribed surface
+temperature or prescribed fluxes.
+"""
+mutable struct IceColumn{T<:AbstractFloat, P<:IceParameters} <: AbstractSurface
+    N::Int
+    h_ice::T
+    h_snow::T
+    T_sfc::T
+    E::Vector{T}
+    S::Vector{T}
+    S_new::T
+    E_snow::T
+    T_bottom::T
+    F_ocean::T
+    ρ_water::T
+    params::P
+    budget::IceStepBudget{T}
+end
+
+function _column(; N::Integer, h_ice::Real, h_snow::Real, T_surface::Real,
+                 T_bottom::Real, S::AbstractVector, S_new::Real, F_ocean::Real,
+                 ρ_water::Real, params::IceParameters,
+                 T_layers::Union{Nothing, AbstractVector} = nothing,
+                 T_snow::Union{Nothing, Real} = nothing)
+    N >= 1 || throw(ArgumentError("need N ≥ 1 ice layers"))
+    length(S) == N || throw(ArgumentError("salinity profile must have N = $N entries"))
+    p = params
+    T0 = _T0(p)
+    # Default initial state: linear in depth from the surface to the base.
+    Ts = min(T_surface, T0)
+    if T_layers === nothing
+        zc = ((1:N) .- 0.5) ./ N
+        T_layers = Ts .+ (T_bottom - Ts) .* zc
+    end
+    length(T_layers) == N || throw(ArgumentError("T_layers must have N entries"))
+    E = [_q(p, min(T_layers[j] - T0, -p.μ * S[j]), S[j]) for j in 1:N] .* -1
+    Tsn = T_snow === nothing ? Ts : T_snow
+    E_s = _Es(p, min(Tsn - T0, 0.0))
+    h_ice > 0 || (E .= 0)
+    return IceColumn{Float64, typeof(p)}(Int(N), Float64(h_ice), Float64(h_snow),
+        Float64(h_ice > 0 ? Ts : T_bottom), Float64.(E), Float64.(S), Float64(S_new),
+        Float64(E_s), Float64(T_bottom), Float64(F_ocean), Float64(ρ_water), p,
+        IceStepBudget{Float64}())
+end
+
+"""
+    sea_ice_column(; h_ice = 2.5, h_snow = 0.0, N = 10, T_surface = 253.15,
+                     S_water = 34, T_bottom = seawater_freezing_point(S_water),
+                     salinity = :bl99, S_max = 3.2, F_ocean = 2.0,
+                     ρ_water = 1026, params = IceParameters(),
+                     T_layers = nothing, T_snow = nothing) -> IceColumn
+
+Sea-ice column. `salinity` is `:bl99` (the MU71/BL99 multiyear profile
+[`bl99_salinity_profile`](@ref) with base value `S_max`), a number
+(isosaline ice) or a vector of `N` layer salinities; new basal ice gets
+`S_max` (BL99). The initial temperature is linear from `T_surface` to
+`T_bottom` unless `T_layers` (K, top to bottom) is given. `F_ocean`
+defaults to the 2 W m⁻² of MU71. `ρ_water` = 1026 kg m⁻³ is a
+representative sea-water density, used only for the freeboard.
+"""
+function sea_ice_column(; h_ice::Real = 2.5, h_snow::Real = 0.0, N::Integer = 10,
+                        T_surface::Real = 253.15, S_water::Real = 34.0,
+                        params::IceParameters = IceParameters(),
+                        T_bottom::Real = seawater_freezing_point(S_water; μ = params.μ,
+                                                                 c = params.constants),
+                        salinity = :bl99, S_max::Real = 3.2, F_ocean::Real = 2.0,
+                        ρ_water::Real = 1026.0, T_layers = nothing, T_snow = nothing)
+    S = salinity === :bl99 ? bl99_salinity_profile(N; S_max = S_max) :
+        salinity isa Real ? fill(float(salinity), N) : collect(float.(salinity))
+    S_new = salinity isa Real ? float(salinity) : float(S_max)
+    return _column(; N, h_ice, h_snow, T_surface, T_bottom, S, S_new, F_ocean,
+                   ρ_water, params, T_layers, T_snow)
+end
+
+"""
+    lake_ice_column(; h_ice = 0.1, h_snow = 0.0, N = 10, T_surface = 263.15,
+                      F_ocean = 0.0, params = IceParameters(),
+                      T_layers = nothing, T_snow = nothing) -> IceColumn
+
+Fresh-water (lake) ice: salinity zero everywhere, the water below at
+0 °C (`seawater_freezing_point(0)`), fresh-water density from the
+contract. With zero salinity the BL99 formulas reduce exactly to pure
+ice (``c = c_0``, ``k = k_0``, ``q = ρ_i [c_0(0 - T) + L]``). `h_ice = 0`
+starts from open water, which freezes over once it loses heat.
+"""
+function lake_ice_column(; h_ice::Real = 0.1, h_snow::Real = 0.0, N::Integer = 10,
+                         T_surface::Real = 263.15, F_ocean::Real = 0.0,
+                         params::IceParameters = IceParameters(),
+                         T_layers = nothing, T_snow = nothing)
+    T_bottom = seawater_freezing_point(0.0; μ = params.μ, c = params.constants)
+    return _column(; N, h_ice, h_snow, T_surface, T_bottom, S = zeros(N), S_new = 0.0,
+                   F_ocean, ρ_water = params.constants.ρ_water, params, T_layers, T_snow)
+end
+
+"Ice thickness (m)."
+ice_thickness(c::IceColumn) = c.h_ice
+"Snow depth on the ice (m)."
+snow_thickness(c::IceColumn) = c.h_snow
+"Layer temperatures (K), top to bottom, diagnosed from the enthalpies."
+ice_layer_temperatures(c::IceColumn) =
+    [_T0(c.params) + _T_of_E(c.params, c.E[j], c.S[j]) for j in 1:c.N]
+
+"""
+    column_enthalpy(col) -> J m⁻²
+
+Total enthalpy of the ice and snow relative to meltwater at the melting
+point, ``U = Σ_j E_j h/N + E_s h_s`` (negative: the energy the column
+would need to melt completely). Its change over a step is what the
+energy budget closes against.
+"""
+column_enthalpy(c::IceColumn) = sum(c.E) * c.h_ice / c.N + c.E_snow * c.h_snow
+
+"""
+    ice_freeboard(col) -> m
+
+Height of the ice surface above the waterline by Archimedes,
+``h - (ρ_i h + ρ_s h_s)/ρ_w``. Negative freeboard floods the snow, which
+[`step_ice!`](@ref) then converts to snow ice (when `params.snow_ice`).
+"""
+ice_freeboard(c::IceColumn) =
+    c.h_ice - (_ρi(c.params) * c.h_ice + c.params.ρ_snow * c.h_snow) / c.ρ_water
+
+# ---- AbstractSurface interface ----------------------------------------
+
+surface_temperature(c::IceColumn) = c.T_sfc
+roughness_lengths(c::IceColumn) =
+    (z0m = c.params.z0m, z0h = c.params.z0h, z0q = c.params.z0h)
+function surface_albedo(c::IceColumn)
+    p = c.params
+    c.h_ice <= 0 && return p.α_water
+    if c.h_snow > p.h_snow_min
+        return c.T_sfc >= _T0(p) - 0.01 ? p.α_snow_melt : p.α_snow
+    end
+    return p.α_ice
+end
+surface_emissivity(c::IceColumn) = c.params.ε
+"Ice, snow and open water are saturated at the skin: β = 1."
+moisture_availability(::IceColumn) = 1.0
+"Saturation humidity over ice (over water when the ice has melted away)."
+surface_specific_humidity(col::IceColumn, f::SurfaceForcing;
+                          c::SurfaceConstants = col.params.constants) =
+    saturation_specific_humidity(col.T_sfc, f.p, c.thermo;
+                                 over = col.h_ice > 0 ? :ice : :liquid)
+"Latent heat of sublimation over ice/snow, of vaporisation over open water."
+surface_latent_heat(col::IceColumn; c::SurfaceConstants = col.params.constants) =
+    col.h_ice > 0 ? latent_heat_sublim(col.T_sfc, c.thermo) :
+                    latent_heat_vapor(col.T_sfc, c.thermo)
+
+# =========================================================================
+# 5. Boundary conditions
+# =========================================================================
+
+"""
+    PrescribedSurfaceTemperature(T; snowfall = 0, T_snowfall = 273.15)
+
+Hold the top surface at `T` (K) — the Stefan-problem boundary condition.
+If `T` is at or above the melting point the surface melts with whatever
+energy conduction cannot remove. `snowfall` in kg m⁻² s⁻¹.
+"""
+Base.@kwdef struct PrescribedSurfaceTemperature{R<:AbstractFloat}
+    T::R
+    snowfall::R   = 0.0
+    T_snowfall::R = 273.15
+end
+PrescribedSurfaceTemperature(T::Real; kw...) = PrescribedSurfaceTemperature(; T = float(T), kw...)
+
+"""
+    PrescribedSurfaceFluxes(; sw_down, lw_down, H, LE, snowfall = 0,
+                              T_snowfall = 273.15)
+
+Atmospheric forcing as fluxes, the MU71/Semtner/BL99 protocol:
+downwelling short- and longwave (W m⁻²), and *turbulent* sensible and
+latent heat fluxes `H`, `LE` (W m⁻², positive upward, the contract sign)
+that do not depend on the surface temperature. The surface balance is
+
+    F(T_s) = (1-α)(1-i_0) SW↓ + ε LW↓ - ε σ T_s⁴ - H - LE.
+
+As in MU71 and BL99, `LE` is an energy flux only (no sublimation mass
+loss). `snowfall` in kg m⁻² s⁻¹, added at `T_snowfall` (K).
+"""
+Base.@kwdef struct PrescribedSurfaceFluxes{T<:AbstractFloat}
+    sw_down::T
+    lw_down::T
+    H::T          = 0.0
+    LE::T         = 0.0
+    snowfall::T   = 0.0
+    T_snowfall::T = 273.15
+end
+
+# Uniform access to the pieces the solver needs.
+_snowfall(bc::Union{PrescribedSurfaceTemperature, PrescribedSurfaceFluxes}) = bc.snowfall
+_snowfall(f::SurfaceForcing) = f.snow
+_T_snowfall(bc::Union{PrescribedSurfaceTemperature, PrescribedSurfaceFluxes}) = bc.T_snowfall
+_T_snowfall(f::SurfaceForcing) = min(f.T_air, 273.15)
+_sw(bc::PrescribedSurfaceTemperature) = 0.0
+_sw(bc::PrescribedSurfaceFluxes) = bc.sw_down
+_sw(f::SurfaceForcing) = f.sw_down
+
+# Net non-penetrating flux into the surface at skin temperature Ts (K),
+# F(Ts), with I0 the penetrating shortwave already subtracted.
+function _surface_flux(col::IceColumn, bc::PrescribedSurfaceFluxes, Ts, I0)
+    p = col.params
+    ε, σ = p.ε, p.constants.σ_SB
+    α = surface_albedo(col)
+    F = (1 - α) * bc.sw_down - I0 + ε * bc.lw_down - ε * σ * Ts^4 - bc.H - bc.LE
+    return F, -4ε * σ * Ts^3
+end
+
+function _surface_flux(col::IceColumn, f::SurfaceForcing, Ts, I0; kwargs...)
+    F(T) = begin
+        Told = col.T_sfc
+        col.T_sfc = T
+        fl = turbulent_fluxes(col, f; c = col.params.constants, kwargs...)
+        col.T_sfc = Told
+        fl.Rn - fl.H - fl.LE - I0
+    end
+    δ = 1e-3
+    F0 = F(Ts)
+    return F0, (F(Ts + δ) - F(Ts - δ)) / (2δ)
+end
+
+# =========================================================================
+# 6. Heat equation (backward Euler in enthalpy form, Newton)
+# =========================================================================
+
+# Thomas algorithm, in place on copies.
+function _tridiag(a, b, c, r)
+    n = length(b)
+    cp = similar(b); dp = similar(b); x = similar(b)
+    cp[1] = c[1] / b[1]; dp[1] = r[1] / b[1]
+    for i in 2:n
+        m = b[i] - a[i] * cp[i-1]
+        cp[i] = i < n ? c[i] / m : zero(m)
+        dp[i] = (r[i] - a[i] * dp[i-1]) / m
+    end
+    x[n] = dp[n]
+    for i in n-1:-1:1
+        x[i] = dp[i] - cp[i] * x[i+1]
+    end
+    return x
+end
+
+# Solve for the new temperatures of the thermal stack (snow layer if
+# active, then the ice layers). Returns the interface fluxes and the
+# surface state. All temperatures in °C here.
+function _heat_equation(col::IceColumn, bc, dt, I0, A; kwargs...)
+    p = col.params
+    T0 = _T0(p)
+    snow = col.h_snow > p.h_snow_min
+    N = col.N
+    M = N + (snow ? 1 : 0)
+    Δz = Vector{Float64}(undef, M)
+    En = Vector{Float64}(undef, M)          # old enthalpies
+    Tm = Vector{Float64}(undef, M)          # melting temperature of each layer
+    Sv = Vector{Float64}(undef, M)
+    src = zeros(M)                           # absorbed shortwave (W m⁻²)
+    isnow = snow ? 1 : 0
+    if snow
+        Δz[1] = col.h_snow; En[1] = col.E_snow; Tm[1] = 0.0; Sv[1] = 0.0
+    end
+    for j in 1:N
+        Δz[isnow+j] = col.h_ice / N
+        En[isnow+j] = col.E[j]
+        Tm[isnow+j] = -p.μ * col.S[j]
+        Sv[isnow+j] = col.S[j]
+        src[isnow+j] = A[j]
+    end
+    Tb = col.T_bottom - T0
+    T = [k <= isnow ? _Ts_of_E(p, En[k]) : _T_of_E(p, En[k], Sv[k]) for k in 1:M]
+    Tmelt = col.h_snow > 0 ? 0.0 : p.T_melt_ice
+    E_of(k, Tk)  = k <= isnow ? _Es(p, Tk) : -_q(p, Tk, Sv[k])
+    C_of(k, Tk)  = k <= isnow ? p.ρ_snow * _c0(p) : _C(p, Tk, Sv[k])
+    k_of(k, Tk)  = k <= isnow ? p.k_snow : _k(p, Tk, Sv[k])
+
+    prescribed = bc isa PrescribedSurfaceTemperature
+    Ts = prescribed ? min(bc.T - T0, Tmelt) : min(col.T_sfc - T0, Tmelt)
+    Fatm(Tc) = _surface_flux(col, bc, Tc + T0, I0; kwargs...)
+
+    Kint = zeros(M + 1)          # Kint[k] = conductance of interface above layer k; Kint[M+1] = base
+    function conductances!(T)
+        kk = [k_of(k, T[k]) for k in 1:M]
+        Kint[1] = 2kk[1] / Δz[1]
+        for k in 2:M
+            Kint[k] = 1 / (Δz[k-1] / (2kk[k-1]) + Δz[k] / (2kk[k]))
+        end
+        Kint[M+1] = 2kk[M] / Δz[M]
+        return Kint
+    end
+
+    # Surface mode: melting if the melting-point surface would still gain energy.
+    melting = if prescribed
+        bc.T - T0 >= Tmelt
+    else
+        conductances!(T)
+        first(Fatm(Tmelt)) + Kint[1] * (T[1] - Tmelt) > 0
+    end
+    fixed = falses(M)
+    iters = 0
+    a = zeros(M + 1); b = zeros(M + 1); c = zeros(M + 1); r = zeros(M + 1)
+    for _switch in 1:4
+        fill!(fixed, false)
+        for it in 1:100
+            iters += 1
+            conductances!(T)
+            # Row 1 = surface, rows 2..M+1 = layers.
+            if prescribed || melting
+                a[1] = 0; b[1] = 1; c[1] = 0; r[1] = prescribed ? Ts : Tmelt
+            else
+                F0, D = Fatm(Ts)
+                a[1] = 0; b[1] = D - Kint[1]; c[1] = Kint[1]; r[1] = D * Ts - F0
+            end
+            for k in 1:M
+                i = k + 1
+                if fixed[k]
+                    a[i] = 0; b[i] = 1; c[i] = 0; r[i] = Tm[k]
+                    continue
+                end
+                Kup, Kdn = Kint[k], Kint[k+1]
+                Ck = C_of(k, T[k])
+                a[i] = -Kup
+                b[i] = Δz[k] * Ck / dt + Kup + Kdn
+                c[i] = k < M ? -Kdn : 0.0
+                r[i] = src[k] + Δz[k] / dt * (En[k] - E_of(k, T[k]) + Ck * T[k]) +
+                       (k == M ? Kdn * Tb : 0.0)
+            end
+            x = _tridiag(a, b, c, r)
+            Tsn = x[1]
+            Tn = x[2:end]
+            for k in 1:M
+                if Tn[k] > Tm[k]
+                    Tn[k] = Tm[k]; fixed[k] = true
+                end
+            end
+            err = max(abs(Tsn - Ts), maximum(abs.(Tn .- T)))
+            Ts = Tsn; T .= Tn
+            err < 1e-10 && break
+        end
+        prescribed && break
+        if !melting && Ts > Tmelt
+            melting = true; Ts = Tmelt
+            continue
+        end
+        if melting
+            conductances!(T)
+            Fm = first(Fatm(Tmelt)) + Kint[1] * (T[1] - Tmelt)
+            if Fm < 0 && _switch < 3
+                melting = false
+                continue
+            end
+        end
+        break
+    end
+    conductances!(T)
+    # Interface fluxes, positive upward: F[k] above layer k, F[M+1] at the base.
+    F = zeros(M + 1)
+    F[1] = Kint[1] * (T[1] - Ts)
+    for k in 2:M
+        F[k] = Kint[k] * (T[k] - T[k-1])
+    end
+    F[M+1] = Kint[M+1] * (Tb - T[M])
+    F_melt = 0.0
+    F_top_in = -F[1]
+    if !prescribed
+        Fs, _ = Fatm(Ts)
+        if melting
+            F_melt = Fs + F[1]           # surplus at the melting surface
+            F_top_in = Fs
+        end
+    elseif Ts >= Tmelt
+        F_melt = 0.0                     # prescribed: surface held, no atmosphere
+    end
+    # Conservative enthalpy update from the fluxes actually used.
+    Enew = [En[k] + dt / Δz[k] * (F[k+1] - F[k] + src[k]) for k in 1:M]
+    return (; Enew, F, Ts = Ts + T0, melting, F_melt, F_top_in, snow, iters)
+end
+
+# =========================================================================
+# 7. The time step: heat equation, melt, growth, snow, remap
+# =========================================================================
+
+# Conservative remap of piecewise-constant enthalpy from layers of
+# thickness dz (top to bottom) onto N equal layers of the total thickness.
+function _remap(dz::Vector{Float64}, E::Vector{Float64}, N::Int)
+    H = sum(dz)
+    H <= 0 && return zeros(N), 0.0
+    Δ = H / N
+    out = zeros(N)
+    zt_old = 0.0
+    for (d, e) in zip(dz, E)
+        d <= 0 && continue
+        zb_old = zt_old + d
+        j1 = clamp(floor(Int, zt_old / Δ) + 1, 1, N)
+        j2 = clamp(ceil(Int, zb_old / Δ), 1, N)
+        for j in j1:j2
+            ov = min(zb_old, j * Δ) - max(zt_old, (j - 1) * Δ)
+            ov > 0 && (out[j] += e * ov)
+        end
+        zt_old = zb_old
+    end
+    return out ./ Δ, H
+end
+
+"""
+    step_ice!(col, bc, dt; kwargs...) -> IceStepBudget
+
+Advance the ice column `col` by `dt` seconds under the top boundary
+condition `bc` — a [`PrescribedSurfaceTemperature`](@ref), a
+[`PrescribedSurfaceFluxes`](@ref) or a `SurfaceExchange.SurfaceForcing`
+(Monin–Obukhov fluxes; `kwargs` go to `turbulent_fluxes`). The order of
+operations follows BL99:
+
+ 1. shortwave: ``I_0 = i_0(1-α)SW↓`` penetrates snow-free ice and is
+    absorbed with Beer's law (``κ_i``); what reaches the base goes to the
+    water;
+ 2. heat equation, backward Euler in enthalpy form: Newton on the
+    tridiagonal system for the layer temperatures (and the skin
+    temperature from the surface balance ``F(T_s) = `` conduction),
+    brine-pocket heat capacity ``ρ c(T,S)`` in the Jacobian; layers
+    driven past their melting point are pinned there; the enthalpies are
+    then updated from the interface fluxes, so energy is conserved;
+ 3. sublimation / deposition (only with a `SurfaceForcing`);
+ 4. surface melt with the surplus ``F(T_{melt}) - F_c`` — snow first,
+    then ice, each consuming ``-E`` per unit volume; plus any layer whose
+    enthalpy was pushed above zero (fully melted brine);
+ 5. basal accretion ``Δh = Δt(F_w - F_{cb})/E(T_f, S_{new})`` or
+    basal melt layer by layer from below;
+ 6. snowfall, snow-ice formation below the waterline, and a
+    conservative remap to `N` equal layers.
+
+Open water (``h = 0``) freezes when the net surface flux at ``T_f``
+plus `F_ocean` is negative (the new ice has ``E(T_f, S_{new})``);
+otherwise the energy goes to the water. Returns the step's
+[`IceStepBudget`](@ref), also stored in `col.budget`.
+"""
+step_ice!(col::IceColumn, bc, dt::Real; kwargs...) = first(_step!(col, bc, dt; kwargs...))
+
+function _step!(col::IceColumn, bc, dt::Real; kwargs...)
+    p = col.params
+    T0 = _T0(p)
+    ρi = _ρi(p)
+    dt = float(dt)
+    U0 = column_enthalpy(col)
+    E_in = 0.0; E_out = 0.0; to_water = 0.0
+    h_ice0, h_snow0 = col.h_ice, col.h_snow
+
+    # --- open water: freeze-up or hand the energy to the water ----------
+    if col.h_ice <= 0
+        bc isa PrescribedSurfaceTemperature &&
+            throw(ArgumentError("step_ice!: a prescribed surface temperature needs ice (h_ice > 0)"))
+        col.T_sfc = col.T_bottom
+        fl = bc isa SurfaceForcing ? turbulent_fluxes(col, bc; c = p.constants, kwargs...) : nothing
+        # snowfall on open water melts into it (enthalpy in and straight out)
+        sf = _snowfall(bc) * dt
+        Esf = sf / p.ρ_snow * _Es(p, min(_T_snowfall(bc) - T0, 0.0))
+        E_in += Esf; E_out += Esf
+        Fs = first(_surface_flux(col, bc, col.T_bottom, 0.0; kwargs...))
+        Fnet = Fs + col.F_ocean
+        Eg = -_q(p, col.T_bottom - T0, col.S_new)
+        dh = 0.0
+        if Fnet < 0 && Eg < 0
+            dh = Fnet * dt / Eg
+            col.h_ice = dh
+            col.E .= Eg
+            col.h_snow = 0.0
+        else
+            to_water = Fnet * dt
+        end
+        U1 = column_enthalpy(col)
+        res = (U1 - U0 - E_in + E_out + to_water) / dt - (Fs + col.F_ocean)
+        col.budget = IceStepBudget{Float64}(Fs, 0.0, 0.0, 0.0, 0.0, col.F_ocean,
+            to_water / dt, E_in, E_out, 0.0, dh, 0.0, 0.0, col.T_sfc,
+            false, res, 0)
+        return col.budget, fl
+    end
+
+    # --- wipe negligible snow (into the water) ----------------------------
+    if col.h_snow > 0 && (col.h_snow < p.h_snow_bare || col.E_snow > 0)
+        E_out += col.E_snow * col.h_snow
+        col.h_snow = 0.0
+    end
+
+    # --- shortwave penetration --------------------------------------------
+    N = col.N
+    Δ = col.h_ice / N
+    sw = _sw(bc)
+    α = surface_albedo(col)
+    I0 = col.h_snow < p.h_snow_bare ? p.i0 * (1 - α) * sw :
+         p.i0_snow_scale > 0 ? p.i0 * p.i0_snow_scale / (col.h_snow + p.i0_snow_scale) * (1 - α) * sw :
+         0.0
+    A = [I0 * (exp(-p.κ_i * (j - 1) * Δ) - exp(-p.κ_i * j * Δ)) for j in 1:N]
+    I_b = I0 * exp(-p.κ_i * col.h_ice)
+
+    # --- heat equation -----------------------------------------------------
+    sol = _heat_equation(col, bc, dt, I0, A; kwargs...)
+    col.T_sfc = sol.Ts
+    isnow = sol.snow ? 1 : 0
+    sol.snow && (col.E_snow = sol.Enew[1])
+    for j in 1:N
+        col.E[j] = sol.Enew[isnow+j]
+    end
+    F_cond_top = -sol.F[1]
+    F_cb = sol.F[end]
+
+    # --- layer bookkeeping for melt/growth --------------------------------
+    dz = fill(Δ, N)
+    Ev = copy(col.E)
+    hs = col.h_snow
+    Es = col.E_snow
+    Qtop = sol.F_melt * dt
+    # A melting surface that turned out to be losing energy cools the top.
+    if Qtop < 0
+        if sol.snow
+            Es += Qtop / hs
+        else
+            Ev[1] += Qtop / dz[1]
+        end
+        Qtop = 0.0
+    end
+    # Layers pushed above zero enthalpy are fully melted brine: their
+    # surplus joins the surface-melt energy.
+    if Es > 0 && hs > 0
+        Qtop += Es * hs; Es = 0.0
+    end
+    for j in 1:N
+        if Ev[j] > 0
+            Qtop += Ev[j] * dz[j]; Ev[j] = 0.0
+        end
+    end
+
+    # --- sublimation / deposition (Monin–Obukhov coupling only) ------------
+    dh_sub = 0.0
+    fl = nothing
+    if bc isa SurfaceForcing
+        fl = turbulent_fluxes(col, bc; c = p.constants, kwargs...)
+        m = fl.E * dt                               # kg m⁻², + = sublimation
+        if m > 0
+            # snow first, then ice from the top
+            ds = min(hs, m / p.ρ_snow)
+            E_out += Es * ds; hs -= ds; m -= ds * p.ρ_snow
+            for j in 1:N
+                m <= 0 && break
+                d = min(dz[j], m / ρi)
+                E_out += Ev[j] * d; dz[j] -= d; m -= d * ρi
+                dh_sub -= d
+            end
+        elseif m < 0
+            if hs > 0
+                d = -m / p.ρ_snow
+                E_in += Es * d; hs += d
+            else
+                d = -m / ρi
+                E_in += Ev[1] * d; dz[1] += d; dh_sub += d
+            end
+        end
+    end
+
+    # --- surface melt: snow first, then ice layers from the top ------------
+    dh_top = dh_sub
+    if Qtop > 0 && hs > 0
+        cost = -Es * hs
+        if Qtop < cost
+            hs -= Qtop / -Es; Qtop = 0.0
+        else
+            Qtop -= cost; hs = 0.0
+        end
+    end
+    for j in 1:N
+        Qtop <= 0 && break
+        dz[j] <= 0 && continue
+        cost = -Ev[j] * dz[j]
+        if Qtop < cost
+            d = Qtop / -Ev[j]
+            dz[j] -= d; dh_top -= d; Qtop = 0.0
+        else
+            Qtop -= cost; dh_top -= dz[j]; dz[j] = 0.0
+        end
+    end
+    to_water += max(Qtop, 0.0)                    # melted through from the top
+
+    # --- basal growth / melt ------------------------------------------------
+    ebot = dt * (col.F_ocean - F_cb)
+    dh_bot = 0.0
+    if sum(dz) > 0
+        if ebot < 0
+            Eg = -_q(p, col.T_bottom - T0, col.S_new)
+            dh_bot = ebot / Eg
+            push!(dz, dh_bot); push!(Ev, Eg)
+        elseif ebot > 0
+            for j in N:-1:1
+                ebot <= 0 && break
+                dz[j] <= 0 && continue
+                cost = -Ev[j] * dz[j]
+                if ebot < cost
+                    d = ebot / -Ev[j]
+                    dz[j] -= d; dh_bot -= d; ebot = 0.0
+                else
+                    ebot -= cost; dh_bot -= dz[j]; dz[j] = 0.0
+                end
+            end
+            if ebot > 0 && hs > 0                 # finally the snow
+                cost = -Es * hs
+                if ebot < cost
+                    hs -= ebot / -Es; ebot = 0.0
+                else
+                    ebot -= cost; hs = 0.0
+                end
+            end
+            to_water += max(ebot, 0.0)
+        end
+    else
+        to_water += ebot                           # no ice left: the flux passes on
+    end
+
+    # --- snowfall -----------------------------------------------------------
+    sf = _snowfall(bc) * dt / p.ρ_snow            # m of snow
+    if sf > 0
+        Ef = _Es(p, min(_T_snowfall(bc) - T0, 0.0))
+        E_in += Ef * sf
+        Es = hs > 0 ? (Es * hs + Ef * sf) / (hs + sf) : Ef
+        hs += sf
+    end
+
+    # --- snow-ice formation (flooded snow → ice, mass and energy kept) ------
+    dh_si = 0.0
+    hi = sum(dz)
+    if p.snow_ice && hs > 0 && hi > 0
+        draft = (ρi * hi + p.ρ_snow * hs) / col.ρ_water
+        if draft > hi
+            dh_si = draft - hi
+            dhs = dh_si * ρi / p.ρ_snow
+            if dhs > hs                              # cannot convert more than exists
+                dhs = hs; dh_si = hs * p.ρ_snow / ρi
+            end
+            pushfirst!(dz, dh_si); pushfirst!(Ev, Es * dhs / dh_si)
+            hs -= dhs
+        end
+    end
+
+    # --- remap to N equal layers --------------------------------------------
+    Enew, H = _remap(dz, Ev, N)
+    col.h_ice = H
+    col.E .= Enew
+    col.h_snow = hs
+    col.E_snow = hs > 0 ? Es : _Es(p, 0.0)
+    # Negligible ice melts into the water (with any snow on it).
+    if col.h_ice < p.h_ice_min
+        E_out += column_enthalpy(col)
+        col.h_ice = 0.0; col.h_snow = 0.0
+        col.E .= 0.0
+        col.T_sfc = col.T_bottom
+    end
+    if col.h_snow <= 0
+        col.h_snow = 0.0
+    end
+
+    U1 = column_enthalpy(col)
+    F_surface = sol.F_top_in
+    sources = F_surface + I0 - I_b + col.F_ocean
+    res = (U1 - U0 - E_in + E_out + to_water) / dt - sources
+    col.budget = IceStepBudget{Float64}(F_surface, I0, I_b, F_cond_top, F_cb,
+        col.F_ocean, to_water / dt, E_in, E_out, dh_top, dh_bot,
+        col.h_snow - h_snow0, dh_si, col.T_sfc, sol.melting, res, sol.iters)
+    return col.budget, fl
+end
+
+"""
+    step_surface!(col::IceColumn, forcing::SurfaceForcing, dt; kwargs...) -> SurfaceFluxes
+
+`AbstractSurface` entry point: one [`step_ice!`](@ref) under
+Monin–Obukhov coupling, returning the fluxes at the *new* skin
+temperature, with `G` the energy that actually entered the ice/snow
+column (surface conduction + surface melt + penetrating shortwave), so
+``R_n - H - LE - G`` is the (Newton-converged, ~1e-9 W m⁻²) residual of
+the surface balance. Over open water `G` is what the water received.
+"""
+function step_surface!(col::IceColumn, f::SurfaceForcing, dt::Real; kwargs...)
+    b, fl = _step!(col, f, dt; kwargs...)
+    G = b.F_surface + b.F_penetrating
+    return SurfaceFluxes(fl.Rn, fl.H, fl.LE, G, fl.τ, fl.E)
 end
 
 end # module
