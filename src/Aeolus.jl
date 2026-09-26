@@ -63,6 +63,7 @@ include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
+include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 
 using .Grids
 using .Fields
@@ -112,6 +113,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -598,5 +600,13 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        roughness_lengths, moisture_availability,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
+
+# Phase 53 — sub-grid surface tiles (#41): flux aggregation over a
+# mosaic of AbstractSurface tiles.
+export SurfaceMosaic, ntiles, mosaic_fractions, set_mosaic_fractions!,
+       aggregate_fluxes, tile_fluxes, last_tile_fluxes,
+       effective_radiative_temperature, tile_mean_temperature,
+       ParameterAggregatedSurface, parameter_aggregate,
+       class_fractions, tiles_from_class_map
 
 end # module
