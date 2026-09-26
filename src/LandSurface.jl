@@ -78,6 +78,7 @@ canopy stores no heat).
 """
 module LandSurface
 
+using ..RadiationCore: _gauss_legendre
 using ..MoistThermodynamics: ThermodynamicConstants, PhasePartition,
                              saturation_vapor_pressure, saturation_specific_humidity,
                              latent_heat_vapor, vapor_pressure, air_density,
@@ -226,7 +227,7 @@ Everything the land column needs to know about its plants:
 | `d_leaf` | characteristic leaf dimension (m) |
 | `K_n` | canopy nitrogen (V_cmax) extinction coefficient, CLM4.5 eq. 8.19; 0.30 is the value CLM4.5 uses with sunlit/shaded leaves (Bonan et al. 2012), which offsets the excess absorption of scattered light by the shaded big leaf; Bonan et al. (2011) had 0.11 |
 | `Ω` | foliage clumping index (1 = random) |
-| `ε_leaf` | leaf longwave emissivity (CLM: 0.97) |
+| `ε_leaf` | leaf longwave emissivity (CLM: 0.97); **not used** by the column, whose canopy emissivity is CLM's ``ε_v = 1 - e^{-(L+S)}`` ([`bigleaf_longwave`](@ref)) — kept for other longwave schemes |
 | `stress_targets` | what β_t multiplies, passed to `leaf_gas_exchange` |
 
 Use [`pft_vegetation`](@ref) for a CLM plant functional type.
@@ -401,20 +402,10 @@ end
 # =========================================================================
 
 # Gauss–Legendre nodes and weights on [0, 1] (16 points), for the
-# hemispheric integrals of the isotropic (uniform overcast) sky.
+# hemispheric integrals of the isotropic (uniform overcast) sky; the
+# quadrature itself is RadiationCore's.
 const _GL16 = let
-    x = [-0.9894009349916499, -0.9445750230732326, -0.8656312023878318,
-         -0.7554044083550030, -0.6178762444026438, -0.4580167776572274,
-         -0.2816035507792589, -0.0950125098376374, 0.0950125098376374,
-         0.2816035507792589, 0.4580167776572274, 0.6178762444026438,
-         0.7554044083550030, 0.8656312023878318, 0.9445750230732326,
-         0.9894009349916499]
-    w = [0.0271524594117541, 0.0622535239386479, 0.0951585116824928,
-         0.1246289712555339, 0.1495959888165767, 0.1691565193950025,
-         0.1826034150449236, 0.1894506104550685, 0.1894506104550685,
-         0.1826034150449236, 0.1691565193950025, 0.1495959888165767,
-         0.1246289712555339, 0.0951585116824928, 0.0622535239386479,
-         0.0271524594117541]
+    x, w = _gauss_legendre(16)
     ((x .+ 1) ./ 2, w ./ 2)
 end
 
