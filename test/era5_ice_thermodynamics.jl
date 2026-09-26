@@ -54,7 +54,8 @@ function _run_mu71(nyrs; N = 10, nday = 2, params, salinity = :bl99, Tf = -1.96,
                          T_bottom = T0 + Tf, T_surface = T0 - 29.2894,
                          T_layers = N == 10 ? Tl : nothing, T_snow = T0 - 23.1128,
                          F_ocean)
-    daily = Float64[]; maxres = 0.0
+    daily = Float64[]; maxres = 0.0; maxseb = 0.0
+    σ, ε = params.constants.σ_SB, params.ε
     U0 = ice_column_enthalpy(col); ∑src = 0.0
     prev = D[1, :]
     for _ in 1:nyrs, d in 1:365
@@ -66,22 +67,35 @@ function _run_mu71(nyrs; N = 10, nday = 2, params, salinity = :bl99, Tf = -1.96,
                                          snowfall = _mu71_snow_depth(d) * 330 / 86400,
                                          T_snowfall = T0)
             dt = 86400 / nday
+            α = surface_albedo(col)
             b = step_ice!(col, bc, dt)
             maxres = max(maxres, abs(b.energy_residual))
+            # Surface balance, recomputed here from the forcing at the new skin
+            # temperature: the energy that entered the column at the top must
+            # equal (1-α)SW↓ - I₀ + εLW↓ - εσT_s⁴ - H - LE. (The enthalpy
+            # residual alone cannot see an unconverged surface Newton.)
+            Fatm = (1 - α) * bc.sw_down - b.F_penetrating + ε * bc.lw_down -
+                   ε * σ * b.T_surface^4 - bc.H - bc.LE
+            maxseb = max(maxseb, abs(Fatm - b.F_surface))
             ∑src += dt * (b.F_surface + b.F_penetrating - b.F_transmitted + b.F_ocean -
                           b.F_to_water) + b.enthalpy_in - b.enthalpy_out
         end
         prev = cur
         push!(daily, col.h_ice)
     end
-    return (; daily, maxres, col, drift = (ice_column_enthalpy(col) - U0 - ∑src) /
+    return (; daily, maxres, maxseb, col, drift = (ice_column_enthalpy(col) - U0 - ∑src) /
                                           (nyrs * 365 * 86400))
 end
 _year(h, y) = h[(y-1)*365+1:y*365]
 
 # BL99 / MU71 standard parameters: k₀ = 2.034 W m⁻¹ K⁻¹ (BL99 §3.1) via the
-# contract constants, emissivity 1 (as in the BL99 code).
+# contract constants, emissivity 1 (as in the BL99 code). c₀ stays the
+# contract's 2108 J kg⁻¹ K⁻¹, i.e. the paper's 2110 (BL99 §2).
 const K_BL99 = SurfaceConstants(k_ice = 2.034)
+# The reference *code* (init_column.m) uses c₀ = 2054 J kg⁻¹ K⁻¹ instead of
+# the paper's 2110; the same-configuration comparison with the code uses it.
+const K_BL99_CODE = SurfaceConstants(k_ice = 2.034,
+                                     thermo = ThermodynamicConstants(cp_ice = 2054.0))
 
 @testset "Era V — lake and sea-ice thermodynamics (#37)" begin
 
@@ -205,12 +219,13 @@ const K_BL99 = SurfaceConstants(k_ice = 2.034)
         r = _run_mu71(2; params = IceParameters(ε = 1.0, constants = K_BL99))
         @test r.maxres < 1e-8
         @test abs(r.drift) < 1e-10
+        @test r.maxseb < 1e-8
         # Conservative remap: layer enthalpy integral preserved.
         dz = [0.1, 0.3, 0.05, 0.2]; E = [-3.1e8, -2.9e8, -2.5e8, -2.8e8]
         Enew, H = ITD._remap(dz, E, 7)
         @test H ≈ sum(dz)
         @test sum(Enew) * H / 7 ≈ sum(E .* dz) rtol = 1e-14
-        @info "Energy conservation (2 MU71 years)" max_step_residual_Wm2 = r.maxres cumulative_drift_Wm2 = r.drift
+        @info "Energy conservation (2 MU71 years)" max_step_residual_Wm2 = r.maxres cumulative_drift_Wm2 = r.drift max_surface_balance_Wm2 = r.maxseb
     end
 
     @testset "MU71 benchmark vs. the BL99 reference code (same configuration)" begin
@@ -223,7 +238,10 @@ const K_BL99 = SurfaceConstants(k_ice = 2.034)
         #   code with first-order (half-cell)
         #   boundary fluxes, as used here, yr 1:   mean 263.68  max 292.93  min 242.44
         #                                  yr 20:  mean 250.01
-        p = IceParameters(ε = 1.0, constants = K_BL99)
+        # (Re-measured independently in review: identical to 0.01 cm. The
+        # code's own 20-yr driver switches to Δt = 4 h in years 18-20; this
+        # driver keeps 12 h throughout.) c₀ = 2054 as in the code.
+        p = IceParameters(ε = 1.0, constants = K_BL99_CODE)
         r = _run_mu71(20; params = p)
         y1 = _year(r.daily, 1) .* 100; y20 = _year(r.daily, 20) .* 100
         # First annual cycle: agrees with the unmodified reference code.
@@ -265,6 +283,12 @@ const K_BL99 = SurfaceConstants(k_ice = 2.034)
         # 250.9 cm after 20 years), and the reference itself drifts towards
         # it with resolution (265 → 259 → 255 cm at N = 10, 30, 60, year 20).
         @test abs(vv.h / 281 - 1) < 0.08
+        # Direct check of that diagnosis, same Table-1 configuration (Δt = 4 h,
+        # Bettge i₀, T_f = -1.95 °C), BL99 reference code run in Octave 11.1
+        # during review: unmodified 281.04 cm at year 100 (reproduces Table 1),
+        # with only the snow-surface stencil made half-cell 262.62 cm.
+        # Isosaline α_i 0.63 (T_s,melt = -0.1 °C): 418.2 / 368.4 cm.
+        @test abs(vv.h - 262.62) < 3.0
         @test abs(iso.h / 400 - 1) < 0.13
         @test abs(isa.h / 259 - 1) < 0.12
         @test iso.h > vv.h > isa.h                 # BL99's ordering
