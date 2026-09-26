@@ -33,9 +33,32 @@ col.budget          # infiltration, runoff, evaporation, drainage, extraction
 
 - **Freeze–thaw (#16)** fills `col.θ_ice` and `col.T_soil`; a new
   `AbstractIceImpedance` subtype implements `ice_impedance_factor`.
-- **Water table (#17)** is an `AbstractSoilBottomBoundary` with its own
-  state: it implements `bottom_flux_linearization` and
-  `finalize_bottom!`.
+- **Water table (#17)** is implemented as `UnconfinedAquifer`, an
+  `AbstractSoilBottomBoundary` with its own state (see below). Another
+  stateful boundary does the same: it implements
+  `bottom_flux_linearization` (the five-argument form receives the
+  sub-step `dt`) and `finalize_bottom!`, and optionally
+  `bottom_water_storage`.
+
+## Water table (#17)
+
+`UnconfinedAquifer` is the SIMTOP groundwater model (Niu et al. 2005,
+2007; CLM4 §7.5). It provides a prognostic aquifer storage and water
+table, recharge as the exact exponential-K two-point flux
+(`gardner_two_point_flux`), and baseflow ``q_{max} e^{-f z_∇}`` with the
+frozen-soil impermeable fraction (`aquifer_impermeable_fraction`). The
+diagnostics are `water_table_depth`, `aquifer_baseflow_rate` and
+`total_water_storage`, and `set_water_table!` starts the column in
+hydrostatic equilibrium. Theory and validation are on the
+[water table](../../theory/water_table.md) page.
+
+```julia
+col = SoilWaterColumn(clm5_soil_grid(), carsel_parrish_texture(:silt_loam);
+                      bottom = UnconfinedAquifer())
+set_water_table!(col, 5.0)
+step_soil_water!(col, 86400.0; water_input = 5e-7)
+water_table_depth(col), col.bottom.baseflow, total_water_storage(col)
+```
 
 ```@autodocs
 Modules = [Aeolus.SoilColumn]

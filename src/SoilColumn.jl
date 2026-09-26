@@ -28,7 +28,11 @@ Contents:
      atmospheric flux that switches to a head condition when the surface
      ponds (runoff) or dries out (soil-limited evaporation); the bottom
      boundary is an [`AbstractSoilBottomBoundary`](@ref) (free drainage by
-     default), the extension point for the water table of #17.
+     default).
+  5. **Water table** — [`UnconfinedAquifer`](@ref), a prognostic
+     unconfined aquifer below the column (SIMTOP; Niu et al. 2005, 2007,
+     as in CLM4): recharge, water-table dynamics and topographic baseflow
+     ``q_{max} e^{-f z_∇}``, conserving soil + aquifer water exactly.
 
 Depth `z` is positive **downward** from the soil surface; matric
 potential `ψ` is a pressure head in metres of water (negative when

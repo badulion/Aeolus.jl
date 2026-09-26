@@ -145,7 +145,8 @@ potential directly.
 (CLM's default), an impermeable base, or a prescribed head. A boundary
 supplies the linearisation ``q = a + b\,\psi_N`` and may keep its own
 state, updated by `finalize_bottom!` after each accepted sub-step — the
-interface the water table of #17 implements.
+interface through which the [water table](water_table.md) (#17),
+`UnconfinedAquifer`, is coupled.
 
 **Coupling.** `step_soil_water!(col, forcing, fluxes, dt)` takes the
 Era V `SurfaceForcing` (rain) and `SurfaceFluxes` (evaporation ``E``)

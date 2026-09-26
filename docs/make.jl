@@ -39,6 +39,7 @@ makedocs(
             "Radiation fog"               => "theory/radiation_fog.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
             "Soil water (Richards)"       => "theory/soil_water.md",
+            "Water table and aquifer"     => "theory/water_table.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
