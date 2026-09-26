@@ -413,7 +413,7 @@ values, sources and method are in `test/data/canopy_profiles.jl`.
 | Dataset | Canopy | Profiles |
 | :-- | :-- | :-- |
 | Wind tunnel, waving-wheat model (Brunet et al. 1994), via Huang et al. (2008, Fig. 2) | ``h`` = 47 mm, ``a h`` = 0.50, ``C_d`` = 0.675 (Finnigan et al. 2009, §3.2) | ``U/U_h``, ``τ/τ_h`` at 9 heights |
-| CHATS walnut orchard, with / without leaves (Patton et al. 2011; Dupont & Patton 2012, Figs. 1b, 8, 9) | ``h`` = 10 m, measured PAD, PAI 2.5 / 0.7 | near-neutral ``U/U_h`` at 13 heights; ``d`` = 7.8 / 5.8 m (Dupont & Patton 2022) |
+| CHATS walnut orchard, with / without leaves (Patton et al. 2011; Dupont & Patton 2012, Figs. 1b, 8, 9) | ``h`` = 10 m, measured PAD (text: PAI ≈ 2.5 / 0.7; the digitised profiles, used as plotted, integrate to 2.69 / 0.74) | near-neutral ``U/U_h`` at 13 heights; ``d`` = 7.8 / 5.8 m (Dupont & Patton 2022) |
 | Hyytiälä Scots pine (Launiainen et al. 2007, Figs. 1, 3) | ``h`` = 15 m, measured LAD, LAI 3.5, ``C_d`` = 0.15 | ``U/u_*`` at 7 heights; ``Θ - Θ(16.8\,\mathrm{m})`` at 4.2, 8.4 m; ``d = 0.78h`` (Rannik et al. 2003) |
 
 No model parameter was fitted. For CHATS, for which no drag coefficient
@@ -434,7 +434,8 @@ used.
 | CHATS without leaves, crown ``U/U_h`` | 0.53-0.90 | max error 0.093 |
 | CHATS above canopy (1.1-2.9 ``h``), leaves / no leaves | | 4.0 % / 12.2 % |
 | CHATS ``d``, leaves / no leaves | 7.8 / 5.8 m | 8.36 / 6.64 m |
-| CHATS shear length ``L_s/h`` at ``h``, leaves | 0.32 | 0.31 |
+| CHATS shear length ``L_s/h`` at the inflection point, leaves | 0.32 (at ``h``) | 0.31 (at ``h``) |
+| CHATS shear length ``L_s/h`` at the inflection point, no leaves | 0.72 (at 0.6 ``h``) | 1.32 (at ``h``) |
 | Hyytiälä ``d/h`` | 0.78 | 0.750 |
 | Hyytiälä ``U/u_*`` at 0.78 ``h`` / 1.47 ``h`` | 1.47 / 4.96 | 1.85 / 6.44 (+26 % / +30 %) |
 | Hyytiälä ``U/u_*`` in the trunk space (0.13-0.40 ``h``) | 1.16-1.21 | 0.59-0.64 (×0.49-0.55) |
@@ -460,6 +461,10 @@ closure in a stable night).
   Shaw & Schumann 1992). A down-gradient K model is monotone there and
   gives about half the Hyytiälä trunk-space wind. Both are recorded as
   `@test_broken`.
+- **Leafless shear layer.** Without leaves the observed CHATS inflection
+  point is inside the crown at 6 m with ``L_s = 0.72h``; the model's
+  maximum shear stays at the canopy top with ``L_s = 1.32h``
+  (`@test_broken`). Leaf-out shortens ``L_s`` in both.
 - **Counter-gradient scalar transport** (Denmead & Bradley 1985) is
   likewise outside K-theory; the Harman–Finnigan diffusivity keeps the
   trunk space ventilated, which is why it is used for scalars.

@@ -275,12 +275,24 @@ end
         # shear length U_h / (∂U/∂z)_h
         k = searchsortedlast(m.sol.z, h)
         Ls = m.U_h / ((m.sol.u[k+1] - m.sol.u[k]) / (m.sol.z[k+1] - m.sol.z[k]))
+        # Dupont & Patton (2012) define L_s = U(h_i)/(dU/dz)(h_i) at the
+        # inflection point h_i (maximum shear); the model's h_i is taken as
+        # the maximum shear in the crown (0.3 h ≤ z ≤ h), away from the
+        # no-slip floor.
+        g = diff(m.sol.u) ./ diff(m.sol.z)
+        zg = (m.sol.z[1:end-1] .+ m.sol.z[2:end]) ./ 2
+        sel = findall(z -> 0.3h <= z <= h, zg)
+        i = sel[argmax(g[sel])]
+        h_i = zg[i]
+        Ls_i = (m.sol.u[i] + m.sol.u[i+1]) / 2 / g[i]
         println("    $(ds.name) (PAI $(round(leaf_area_index(p), digits = 2)), C_d = $C_d):")
         for (i, z) in enumerate(ds.z)
             @printf("      z/h = %.2f  U/U_h obs %.3f model %.3f\n", z, ds.U_over_Uh[i], U[i])
         end
         @printf("      crown max |ΔU/U_h| %.3f, above-canopy max rel. err %.3f, d = %.2f m (obs %.1f), L_s/h at h = %.2f, u*/U_h = %.3f\n",
                 err_crown, err_above, m.d, ds.d, Ls / h, sqrt(m.τ_h) / m.U_h)
+        @printf("      inflection point: h_i = %.2f m, L_s/h = %.2f (obs NN: L_s/h = %.2f)\n",
+                h_i, Ls_i / h, ds.Ls_over_h)
         # Crown (0.4 ≤ z/h < 1): within 0.12 U_h (measured 0.069 with
         # leaves, 0.093 without). Above the canopy within 15 % (measured
         # 4.0 % with leaves, 12.2 % without: over the sparse leafless crown
@@ -290,7 +302,7 @@ end
         # Displacement height within 0.1 h of the value inferred from the
         # measured momentum-flux profiles (measured +0.56 m, +0.84 m).
         @test abs(m.d - ds.d) < 0.1h
-        res[key] = (; U, d = m.d, Ls, crown)
+        res[key] = (; U, d = m.d, Ls, Ls_i, h_i, crown)
     end
     L, B = res[:leaves], res[:noleaves]
     # Leaf-out: less wind at every crown level and a higher displacement
@@ -301,6 +313,14 @@ end
     # Shear length at the canopy top with leaves: observed 0.32 h at the
     # inflection point, which is at h (Dupont & Patton 2012, Table 1).
     @test abs(L.Ls / 10.0 - obs.chats_leaves.Ls_over_h) < 0.1
+    @test abs(L.Ls_i / 10.0 - obs.chats_leaves.Ls_over_h) < 0.1
+    # Leaf-out shortens the shear length, observed (0.72 h → 0.32 h) and
+    # modelled. Known limitation: without leaves the observed inflection
+    # point is inside the crown at 6 m (L_s = 0.72 h, Table 1), whereas the
+    # model's maximum shear stays at the canopy top with L_s ≈ 1.3 h — the
+    # column does not reproduce the leafless shear layer.
+    @test obs.chats_noleaves.Ls_over_h > obs.chats_leaves.Ls_over_h && B.Ls_i > L.Ls_i
+    @test_broken abs(B.Ls_i / 10.0 - obs.chats_noleaves.Ls_over_h) < 0.2
     # Known limitation: with leaves the trunk space holds a secondary wind
     # maximum (U = 0.27 U_h at 0.15 h > 0.14 U_h at 0.3 h), carried by
     # sweeps and pressure gradients that first-order (K) closure cannot
