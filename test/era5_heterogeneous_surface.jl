@@ -18,7 +18,9 @@
 #   * published LES results for strip heterogeneity, qualitatively:
 #     organised motion grows from λ/z_i ≈ 1 towards 4 < λ/z_i < 9 and the
 #     coupled surface flux is smallest mid-patch (Patton, Sullivan &
-#     Moeng 2005; conference abstract NTRS 20030068489), and a background
+#     Moeng 2005: the λ/z_i range is quoted from the conference abstract
+#     NTRS 20030068489, the mid-patch statement from the J. Atmos. Sci.
+#     abstract), and a background
 #     wind removes the patch-locked circulation (Wanner, Calaf & Mauder
 #     2022, PLOS ONE 17, e0268097, Sect. 3 and Fig. 5, on the LES of
 #     Margairaz et al. 2020).
@@ -133,6 +135,10 @@ _hs_rel(a, b) = (a - b) / b
         n = length(r.u_p) ÷ 2
         @test sum(r.u_p[1:n÷2]) > 0 && sum(r.u_p[n÷2+1:n]) < 0
         @test argmax(r.w_p) in 1:n
+        # Mean ascent over the hot strip, descent over the cool one (the
+        # plane mean of w is zero, so this is the sign of the circulation).
+        @info "Phase-averaged w at z_mid, λ = 3.2 km" hot = sum(r.w_p[1:n]) / n cool = sum(r.w_p[n+1:end]) / n
+        @test sum(r.w_p[1:n]) > 0 > sum(r.w_p[n+1:end])
         # Coupled flux smallest mid-patch, largest at the edges (Patton et
         # al.: "surface fluxes in the middle of the patches are small
         # compared to the patch edges").
