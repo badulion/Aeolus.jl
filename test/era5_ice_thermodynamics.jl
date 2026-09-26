@@ -280,7 +280,7 @@ const K_BL99_CODE = SurfaceConstants(k_ice = 2.034,
         # through the snow and first ice layer across the snow/ice
         # conductivity jump; replacing that one stencil by the half-cell flux
         # used here moves the reference code onto our solution (250.0 vs
-        # 250.9 cm after 20 years), and the reference itself drifts towards
+        # 250.4 cm after 20 years), and the reference itself drifts towards
         # it with resolution (265 → 259 → 255 cm at N = 10, 30, 60, year 20).
         @test abs(vv.h / 281 - 1) < 0.08
         # Direct check of that diagnosis, same Table-1 configuration (Δt = 4 h,

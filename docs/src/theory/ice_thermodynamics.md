@@ -105,36 +105,45 @@ schedule; BL99 (and Semtner 1976) use the same protocol. The forcing,
 as distributed with the BL99 reference code, is in
 `test/data/mu71_forcing.csv`.
 
-**Against the BL99 reference code** (run in GNU Octave, same
-configuration: N = 10, Δt = 12 h): the first annual cycle agrees to a
-few millimetres (mean/max/min 263.9/293.0/242.8 cm vs 264.1/293.6/242.8).
-Over decades the two part: the reference settles at 265 cm, this model
-at 249 cm. The cause is one boundary stencil. With N = 10 the reference
-code estimates the conductive flux at a snow surface by a quadratic
-through the snow midpoint and the first ice-layer midpoint — across the
+**Against the BL99 reference code** (run in GNU Octave 11.1, same
+configuration: N = 10, Δt = 12 h, and the code's own ``c_0`` = 2054
+J kg⁻¹ K⁻¹): the first annual cycle agrees to a few millimetres
+(mean/max/min 263.8/293.0/242.5 cm vs 264.1/293.6/242.8). Over decades
+the two part: the reference settles at 265 cm, this model at ~250 cm.
+The cause is one boundary stencil. With N = 10 the reference code
+estimates the conductive flux at a snow surface by a quadratic through
+the snow midpoint and the first ice-layer midpoint — across the
 snow/ice interface, where ``k`` jumps from 0.31 to ~2 W m⁻¹ K⁻¹ and the
 profile has a kink a quadratic cannot represent. Replacing that one
 stencil by the half-cell flux used here brings the reference code to
-248.5 cm after 20 years (ours 250.9 cm; all-first-order reference
+248.5 cm after 20 years (ours 250.4 cm; all-first-order reference
 250.0 cm). The unmodified reference also drifts towards our value as its
 layers are refined (265.7, 259.1, 254.7 cm at N = 10, 30, 60, year 20),
-while this model is nearly resolution-independent (250.9, 250.4,
-249.7 cm).
+while this model changes by 1.5 cm (250.4, 249.5, 249.0 cm).
 
-**Against the published BL99 numbers** (Table 1 configuration: i₀
-through snow after Bettge et al. 1996, Δt = 4 h, 100 years):
+The same holds in the published Table-1 configuration (Δt = 4 h, i₀
+through snow after Bettge et al. 1996, ``T_f`` = −1.95 °C, 100 years):
+the unmodified reference code gives 281.0 cm — BL99's published 281 —
+and 262.6 cm with only the snow-surface stencil changed; this model
+gives 264.2 cm.
+
+**Against the published BL99 numbers** (Table 1 configuration; ``c_0``
+here is the contract's 2108 J kg⁻¹ K⁻¹, the paper's 2110):
 
 | case | BL99 (cm) | this model (cm) |
 | :-- | --: | --: |
 | vertically varying S, α_i = 0.63 | 281 | 264 |
 | isosaline 3.2 ppt, α_i = 0.63 | 400 | 356 |
-| isosaline 3.2 ppt, α_i = 0.60 | 259 | 235 |
-| first-cycle amplitude, varying S | 42 | 45 |
+| isosaline 3.2 ppt, α_i = 0.60 | 259 | 237 |
+| first-cycle amplitude, varying S | 42 | 44.5 |
+| first-cycle amplitude, isosaline α_i = 0.60 | 41 | 45.7 |
 | Δh for α_i − 0.01 (Table 2) | 27 thinner | 25.9 thinner |
-| Δh for F_L + 1 W m⁻² (Table 2) | −48 | −46.5 |
+| Δh for F_L + 1 W m⁻² (Table 2) | −48 | −44.9 |
 
 The equilibria are 6–11 % thinner — the stencil effect above — while the
-sensitivities, which the stencil hardly touches, agree within 5 %.
+sensitivities, which the stencil hardly touches, agree within 7 %. The
+isosaline case is less completely explained: the stencil-corrected
+reference gives 368 cm (unmodified 418 cm) against our 356 cm.
 
 No observations are used for validation; MU71 itself is a model
 benchmark forced by climatology.
