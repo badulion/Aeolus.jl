@@ -908,4 +908,5 @@ end
 @testset "Era V" begin
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
     include("era5_urban_surface.jl")     # Phase 49  multi-layer urban facet conduction (#26)
+    include("era5_urban_radiosity.jl")   # Phase 49  facet temperatures coupled to radiosity (#28)
 end
