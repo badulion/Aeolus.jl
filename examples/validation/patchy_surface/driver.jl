@@ -287,9 +287,12 @@ the first level:
   * `tile_gust` — `tile_vec` with the Beljaars (1995) gustiness ``1.2 w_*``;
   * `tile_patch` — each tile forced by the mean air over its own patches;
   * `param` — one surface of mean skin temperature forced like `tile_speed`;
+  * `blended` — a `BlendedMosaic` with the blending height at the first
+    level, forced by the domain-mean speed and θ at the level nearest
+    `z_blend` (NaN if the blended solve fails);
   * `ustar2` — domain-mean kinematic stress; `wstar`, `zi`.
 """
-function patchy_sample(pl::PatchyLES)
+function patchy_sample(pl::PatchyLES; z_blend = 125.0)
     sim = pl.sim
     patchy_column_fluxes!(pl)
     Nx, Ny = size(pl.classes)
@@ -314,10 +317,39 @@ function patchy_sample(pl::PatchyLES)
     tile_patch = sum(fr[c] * _wθ(pl.types[c], patchy_forcing(pl, sk[c] / nk[c], θk[c] / nk[c]))
                      for c in 1:2 if nk[c] > 0)
     param = _wθ(pl.aggregate, patchy_forcing(pl, Uspd, θm))
+    blended = _blended_estimate(pl, z_blend)
     ustar2 = sum(sqrt.(pl.τx .^ 2 .+ pl.τy .^ 2)) / n
     return (les = les, tile_vec = tile_vec, tile_speed = tile_speed, tile_gust = tile_gust,
-            tile_patch = tile_patch, param = param, ustar2 = ustar2, wstar = ws, zi = zi,
+            tile_patch = tile_patch, param = param, blended = blended, ustar2 = ustar2, wstar = ws, zi = zi,
             U_vec = Uvec, U_speed = Uspd)
+end
+
+# Blending-height estimate: the tiles see the blended state at the first
+# level, obtained by matching the aggregate flux to the domain-mean speed
+# and θ at a higher level through one Monin–Obukhov layer.
+function _blended_estimate(pl::PatchyLES, z_blend)
+    m = pl.sim.mesh
+    k = clamp(round(Int, z_blend / m.dz + 0.5), 2, m.Nz)
+    ii, jj, _ = Aeolus.Grids.interior(m)
+    K = m.Hz + k
+    sp = 0.0
+    for J in jj, I in ii
+        uc = 0.5 * (pl.sim.u.data[I, J, K] + pl.sim.u.data[I + 1, J, K])
+        vc = 0.5 * (pl.sim.v.data[I, J, K] + pl.sim.v.data[I, J + 1, K])
+        sp += sqrt(uc^2 + vc^2)
+    end
+    sp /= m.Nx * m.Ny
+    θk = mean_θ_profile(pl.sim)[k]
+    f = patchy_forcing(pl, sp, θk; z = (k - 0.5) * m.dz)
+    b = BlendedMosaic(pl.mosaic, FixedBlendingHeight(m.dz / 2))
+    try
+        fl = turbulent_fluxes(b, f)
+        last_blending(b).converged || return NaN
+        return fl.H / _rho_cp(patchy_forcing(pl, sp, θk))[2]
+    catch err
+        (err isa ArgumentError || nameof(typeof(err)) === :SingularException) || rethrow()
+        return NaN
+    end
 end
 
 """
@@ -361,7 +393,7 @@ function patchy_run!(pl::PatchyLES; t_end = 7200.0, dt = 2.0, t_avg = 3600.0,
         end
     end
     mean_of(k) = sum(getfield(x, k) for x in samples) / length(samples)
-    keys_ = (:les, :tile_vec, :tile_speed, :tile_gust, :tile_patch, :param, :ustar2, :wstar, :zi,
+    keys_ = (:les, :tile_vec, :tile_speed, :tile_gust, :tile_patch, :param, :blended, :ustar2, :wstar, :zi,
              :U_vec, :U_speed)
     means = NamedTuple{keys_}(Tuple(mean_of(k) for k in keys_))
     heat_error = (patchy_heat_content(pl) - h0 - pl.applied_heat) / pl.applied_heat

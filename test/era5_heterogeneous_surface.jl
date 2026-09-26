@@ -111,6 +111,13 @@ _hs_rel(a, b) = (a - b) / b
         # With a 5 m/s background wind the domain-mean air is representative
         # and the tiles need no patch information.
         @test abs(_hs_rel(R[:het4w].tile_vec, R[:het4w].les)) < 0.03
+        # So does a BlendedMosaic (#42) that finds the blended state at the
+        # first level from the mean air two levels up, when there is wind.
+        # In free convection it is reported, not asserted (measured +2 % at
+        # λ/z_i ≈ 0.9, −10 % at 3.2: one Monin–Obukhov layer does not
+        # describe the mean profile under a patch-locked circulation).
+        @info "BlendedMosaic estimate (rel. to LES)" het1 = _hs_rel(R[:het1].blended, R[:het1].les) het4 = _hs_rel(R[:het4].blended, R[:het4].les) het4w = _hs_rel(R[:het4w].blended, R[:het4w].les)
+        @test abs(_hs_rel(R[:het4w].blended, R[:het4w].les)) < 0.03
     end
 
     @testset "Organised motion: Patton et al. (2005); Wanner et al. (2022)" begin
