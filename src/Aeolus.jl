@@ -645,4 +645,12 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        CanopyShortwaveSolution, canopy_shortwave,
        CanopyLongwaveSolution, canopy_longwave, canopy_shortwave_field!
 
+# Phase 48 — leaf energy balance (#24): leaf temperature, boundary layer,
+# transpiration and sensible heat of resolved-canopy leaves.
+export AbstractLeafBoundaryLayer, CampbellNormanBoundaryLayer, CLMLeafBoundaryLayer,
+       leaf_boundary_layer_conductances,
+       AbstractLeafStomata, FixedStomatalConductance, CoupledLeafPhysiology,
+       LeafEnergyBalance, leaf_energy_balance, leaf_penman_monteith,
+       CanopyLeafEnergySolution, canopy_leaf_energy_balance
+
 end # module

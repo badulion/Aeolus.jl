@@ -38,7 +38,20 @@ sink it exerts on the resolved flow:
      and the two-stream layer algebra and adding solver are those of the
      Era III `TwoStream` module, supplied with the canopy γ coefficients.
 
-The leaf energy balance (#24) extends this module.
+  5. **Leaf energy balance** — leaf temperature from the balance of
+     absorbed radiation, thermal emission, sensible heat and
+     transpiration ([`leaf_energy_balance`](@ref)), with the leaf
+     boundary layer of Campbell & Norman (1998)
+     ([`CampbellNormanBoundaryLayer`](@ref)) or CLM5
+     ([`CLMLeafBoundaryLayer`](@ref)) and transpiration from a fixed
+     stomatal conductance or the coupled photosynthesis–stomata solution
+     of `Photosynthesis` ([`CoupledLeafPhysiology`](@ref)). Diagnostic
+     (steady) or prognostic (backward Euler with a leaf heat capacity).
+     Over a resolved canopy [`canopy_leaf_energy_balance`](@ref) solves
+     the sunlit and shaded leaves of every layer together with the
+     longwave exchange of item 4, and returns the heat and vapour sources
+     for the air. [`leaf_penman_monteith`](@ref) is the linearised
+     (Penman–Monteith) limit.
 
 # References
 
@@ -67,6 +80,15 @@ The leaf energy balance (#24) extends this module.
   * CLM5.0 Technical Note (Lawrence et al., NCAR), §2.3.1 "Canopy
     Radiative Transfer" — the two-stream equations and the
     ``G``, ``\bar μ``, ``β``, ``β_0`` expressions used here.
+  * Campbell, G. S. & Norman, J. M. (1998). *An Introduction to
+    Environmental Biophysics*, 2nd ed. Springer — ch. 7 (leaf
+    boundary-layer conductances) and ch. 14 (leaf energy balance and its
+    linearised solution).
+  * Monteith, J. L. & Unsworth, M. H. (2013). *Principles of Environmental
+    Physics*, 4th ed. Academic Press — ch. 13 (Penman–Monteith).
+  * Leuzinger, S. & Körner, C. (2007). Tree species diversity affects
+    canopy leaf temperatures in a mature temperate forest. *Agric. For.
+    Meteorol.*, 146, 29-37 (observed leaf-to-air temperature differences).
 """
 module PlantCanopy
 
@@ -78,6 +100,12 @@ using ..RadiationCore: STEFAN_BOLTZMANN
 using ..TwoStream: TwoStreamVariant, layer_reflectance_transmittance_sw, adding_solver!
 import ..TwoStream: two_stream_coefficients
 using ..SolarGeometry: SolarPosition
+using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
+                             saturation_vapor_pressure, latent_heat_vapor, R_v
+using ..Photosynthesis: AbstractPhotosynthesisParameters, AbstractStomatalModel,
+                        leaf_gas_exchange, leaf_boundary_layer_conductance,
+                        leaf_transpiration, par_to_photon_flux
+using ..SurfaceExchange: _illinois
 
 export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
@@ -93,7 +121,12 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        canopy_scattering_parameters, canopy_beam_transmittance,
        sunlit_leaf_fraction, canopy_diffuse_transmittance,
        CanopyShortwaveSolution, canopy_shortwave,
-       CanopyLongwaveSolution, canopy_longwave, canopy_shortwave_field!
+       CanopyLongwaveSolution, canopy_longwave, canopy_shortwave_field!,
+       AbstractLeafBoundaryLayer, CampbellNormanBoundaryLayer, CLMLeafBoundaryLayer,
+       leaf_boundary_layer_conductances,
+       AbstractLeafStomata, FixedStomatalConductance, CoupledLeafPhysiology,
+       LeafEnergyBalance, leaf_energy_balance, leaf_penman_monteith,
+       CanopyLeafEnergySolution, canopy_leaf_energy_balance
 
 # =========================================================================
 # 1. Leaf-area density profiles
@@ -1244,5 +1277,602 @@ function canopy_shortwave_field!(q::AbstractArray{<:Real,3}, mesh::RegularGrid,
     end
     return ground
 end
+
+# =========================================================================
+# 5. Leaf energy balance (#24)
+# =========================================================================
+#
+# Per unit (one-sided) leaf area, a leaf at temperature T_ℓ obeys
+#
+#   C dT_ℓ/dt = R_abs − ε_e σ T_ℓ⁴ − c_p g_H (T_ℓ − T_a) − λ E(T_ℓ),
+#
+# with R_abs the absorbed short- and longwave radiation, ε_e the emission
+# coefficient of the leaf (2ε for an isolated flat leaf, which emits from
+# both sides), g_H the boundary-layer conductance to heat of both sides,
+# and E the transpiration through stomata and boundary layer in series.
+# Molar conductances (mol m⁻² s⁻¹) are used throughout, as in
+# `Photosynthesis`; c_p is then the molar heat capacity of air.
+# Saturation vapour pressure and latent heat are `MoistThermodynamics`',
+# transpiration and the coupled photosynthesis–stomata solution are
+# `Photosynthesis`', the radiation is section 4 above.
+
+"""
+    AbstractLeafBoundaryLayer
+
+Leaf boundary-layer model. Implementers extend
+[`leaf_boundary_layer_conductances`](@ref), which returns the conductance
+to heat (both leaf sides) and to water vapour (the stomata-bearing
+sides), in mol m⁻² s⁻¹ per unit one-sided leaf area. Concrete models:
+[`CampbellNormanBoundaryLayer`](@ref), [`CLMLeafBoundaryLayer`](@ref).
+"""
+abstract type AbstractLeafBoundaryLayer end
+
+"""
+    CampbellNormanBoundaryLayer(; leaf_width = 0.05, turbulence_factor = 1.4,
+                                  free_convection = true, stomatal_sides = 1)
+
+Leaf boundary layer of Campbell & Norman (1998, ch. 7) for a flat leaf of
+width `leaf_width` [m], characteristic dimension ``d = 0.72 w``. Per leaf
+side, in mol m⁻² s⁻¹:
+
+  * forced convection (laminar flat plate, their eqs. 7.30 and 7.33),
+    multiplied by `turbulence_factor` for outdoor turbulence (the factor
+    1.4 they recommend):
+    ``g_{Ha} = 0.135\\sqrt{u/d}``, ``g_{va} = 0.147\\sqrt{u/d}``;
+  * free convection (their eqs. 7.36–7.37):
+    ``g_{Ha} = 0.05\\,(|T_\\ell - T_a|/d)^{1/4}``,
+    ``g_{va} = 0.055\\,(|T_\\ell - T_a|/d)^{1/4}``;
+
+the larger of the two is used (`free_convection = false` keeps only the
+forced value). The heat conductance of the leaf is that of both sides,
+``2g_{Ha}``; the vapour conductance is ``n\\,g_{va}`` with `n =
+stomatal_sides` = 1 for hypostomatous leaves (most broadleaf trees) and
+2 for amphistomatous ones. The coefficients are C&N's values at 20 °C and
+101.3 kPa; their weak temperature and pressure dependence is neglected.
+"""
+struct CampbellNormanBoundaryLayer <: AbstractLeafBoundaryLayer
+    leaf_width::Float64
+    d::Float64
+    turbulence_factor::Float64
+    free_convection::Bool
+    stomatal_sides::Int
+    function CampbellNormanBoundaryLayer(; leaf_width::Real = 0.05, turbulence_factor::Real = 1.4,
+                                         free_convection::Bool = true, stomatal_sides::Integer = 1)
+        leaf_width > 0 || throw(ArgumentError("CampbellNormanBoundaryLayer: leaf_width must be > 0"))
+        turbulence_factor > 0 || throw(ArgumentError("CampbellNormanBoundaryLayer: turbulence_factor must be > 0"))
+        stomatal_sides in (1, 2) || throw(ArgumentError("CampbellNormanBoundaryLayer: stomatal_sides must be 1 or 2"))
+        new(Float64(leaf_width), 0.72 * Float64(leaf_width), Float64(turbulence_factor),
+            free_convection, Int(stomatal_sides))
+    end
+end
+
+"""
+    CLMLeafBoundaryLayer(; d_leaf = 0.04, Cv = 0.01)
+
+The leaf boundary layer of CLM5 (eq. 2.5.122), evaluated by
+`Photosynthesis.leaf_boundary_layer_conductance`: one conductance
+``C_v\\sqrt{U/d_{leaf}}`` (m s⁻¹, converted to molar units) used for both
+heat and water vapour per unit one-sided leaf area, as in CLM's canopy
+fluxes. No free convection.
+"""
+struct CLMLeafBoundaryLayer <: AbstractLeafBoundaryLayer
+    d_leaf::Float64
+    Cv::Float64
+    function CLMLeafBoundaryLayer(; d_leaf::Real = 0.04, Cv::Real = 0.01)
+        (d_leaf > 0 && Cv > 0) || throw(ArgumentError("CLMLeafBoundaryLayer: d_leaf and Cv must be > 0"))
+        new(Float64(d_leaf), Float64(Cv))
+    end
+end
+
+"""
+    leaf_boundary_layer_conductances(bl, U, T_leaf, T_air, p_air; c = DEFAULT_CONSTANTS)
+        -> (g_H, g_v)
+
+Leaf boundary-layer conductances [mol m⁻² s⁻¹ per unit one-sided leaf
+area] for wind speed `U` [m s⁻¹] past the leaf: `g_H` to sensible heat
+(all leaf sides) and `g_v` to water vapour (the sides with stomata, in
+series with the stomatal conductance). `T_leaf` enters only through free
+convection.
+"""
+function leaf_boundary_layer_conductances(bl::CampbellNormanBoundaryLayer, U::Real,
+                                          T_leaf::Real, T_air::Real, p_air::Real;
+                                          c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    r = sqrt(max(Float64(U), 0.0) / bl.d)
+    gH = bl.turbulence_factor * 0.135 * r
+    gv = bl.turbulence_factor * 0.147 * r
+    if bl.free_convection
+        x = sqrt(sqrt(abs(Float64(T_leaf) - Float64(T_air)) / bl.d))
+        gH = max(gH, 0.05 * x)
+        gv = max(gv, 0.055 * x)
+    end
+    return (2gH, bl.stomatal_sides * gv)
+end
+function leaf_boundary_layer_conductances(bl::CLMLeafBoundaryLayer, U::Real,
+                                          T_leaf::Real, T_air::Real, p_air::Real;
+                                          c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    g = leaf_boundary_layer_conductance(U, T_air, p_air; d_leaf = bl.d_leaf, Cv = bl.Cv, c = c)
+    return (g, g)
+end
+
+"""
+    AbstractLeafStomata
+
+What controls transpiration in the leaf energy balance:
+[`FixedStomatalConductance`](@ref) or [`CoupledLeafPhysiology`](@ref).
+A plain number passed where a stomata model is expected is a fixed
+conductance.
+"""
+abstract type AbstractLeafStomata end
+
+"""
+    FixedStomatalConductance(gs)
+
+A prescribed stomatal conductance to water vapour `gs` [mol m⁻² s⁻¹];
+`0` is a leaf with closed stomata (no transpiration). Transpiration is
+`Photosynthesis.leaf_transpiration`.
+"""
+struct FixedStomatalConductance <: AbstractLeafStomata
+    gs::Float64
+    function FixedStomatalConductance(gs::Real)
+        gs >= 0 || throw(ArgumentError("FixedStomatalConductance: gs must be ≥ 0"))
+        new(Float64(gs))
+    end
+end
+
+"""
+    CoupledLeafPhysiology(photosynthesis, stomata; ca = 400, β = 1,
+                          stress_targets = (:vcmax, :rd, :g0))
+
+Stomatal conductance and transpiration from the coupled
+photosynthesis–stomata solution `Photosynthesis.leaf_gas_exchange`, with
+photosynthetic parameters `photosynthesis` (C3/C4), a stomatal closure
+`stomata` (Ball-Berry / Medlyn), ambient CO₂ `ca` [µmol mol⁻¹] and the
+soil-water-stress factor `β`. The leaf boundary-layer vapour conductance
+of the energy balance is passed to it as `gb`, so the CO₂, water and heat
+exchange of the leaf see the same boundary layer, and the leaf
+temperature of the energy balance is the one the biochemistry runs at.
+"""
+struct CoupledLeafPhysiology{P<:AbstractPhotosynthesisParameters,M<:AbstractStomatalModel} <: AbstractLeafStomata
+    photosynthesis::P
+    stomata::M
+    ca::Float64
+    β::Float64
+    stress_targets::Tuple
+end
+CoupledLeafPhysiology(p::AbstractPhotosynthesisParameters, m::AbstractStomatalModel;
+                      ca::Real = 400.0, β::Real = 1.0, stress_targets = (:vcmax, :rd, :g0)) =
+    CoupledLeafPhysiology(p, m, Float64(ca), Float64(β), Tuple(stress_targets))
+
+_as_stomata(s::AbstractLeafStomata) = s
+_as_stomata(g::Real) = FixedStomatalConductance(g)
+
+# -> (E [mol m⁻² s⁻¹], gs, An [µmol m⁻² s⁻¹], converged)
+function _leaf_vapour(s::FixedStomatalConductance, T, gv, Q, e_air, p_air, c)
+    (s.gs == 0 || gv == 0) && return (0.0, s.gs, 0.0, true)
+    return (leaf_transpiration(s.gs, gv, T, e_air, p_air; c = c), s.gs, 0.0, true)
+end
+function _leaf_vapour(s::CoupledLeafPhysiology, T, gv, Q, e_air, p_air, c)
+    ge = leaf_gas_exchange(s.photosynthesis, s.stomata; ca = s.ca, Q = max(Q, 0.0),
+                           T_leaf = T, e_air = e_air, gb = max(gv, 1e-6), p_air = p_air,
+                           β = s.β, stress_targets = s.stress_targets, c = c)
+    return (ge.E, ge.gs, ge.An, ge.converged)
+end
+
+"""
+    LeafEnergyBalance
+
+Result of [`leaf_energy_balance`](@ref), per unit one-sided leaf area:
+
+| field | unit | meaning |
+| :-- | :-- | :-- |
+| `T_leaf` | K | leaf temperature |
+| `R_abs` | W m⁻² | absorbed short- and longwave radiation (input) |
+| `emitted` | W m⁻² | thermal emission ``ε_e σ T_\\ell^4`` |
+| `H`, `LE` | W m⁻² | sensible and latent heat to the air (positive away from the leaf) |
+| `storage` | W m⁻² | ``C (T_\\ell - T_{prev})/Δt`` (zero when diagnostic) |
+| `E` | mol m⁻² s⁻¹ | transpiration |
+| `gs`, `g_H`, `g_v` | mol m⁻² s⁻¹ | stomatal, boundary-layer heat and vapour conductances |
+| `An` | µmol m⁻² s⁻¹ | net assimilation (0 for a fixed conductance) |
+| `iterations`, `converged` | – | root-finder diagnostics |
+
+``R_{abs} = emitted + H + LE + storage`` holds at the solution.
+"""
+struct LeafEnergyBalance
+    T_leaf::Float64
+    R_abs::Float64
+    emitted::Float64
+    H::Float64
+    LE::Float64
+    storage::Float64
+    E::Float64
+    gs::Float64
+    g_H::Float64
+    g_v::Float64
+    An::Float64
+    iterations::Int
+    converged::Bool
+end
+
+function _solve_leaf(st::AbstractLeafStomata, bl::AbstractLeafBoundaryLayer, R_abs, ε_e,
+                     T_air, e_air, U, p_air, Q, T_prev, C, dt, c, maxiter)
+    cpm = c.cp_dry * c.molmass_dry                   # J mol⁻¹ K⁻¹
+    σ = STEFAN_BOLTZMANN
+    prognostic = C > 0 && isfinite(dt)
+    prognostic && T_prev === nothing &&
+        throw(ArgumentError("leaf_energy_balance: a prognostic step (heat_capacity > 0, finite dt) needs T_prev"))
+    function parts(T)
+        gH, gv = leaf_boundary_layer_conductances(bl, U, T, T_air, p_air; c = c)
+        E, gs, An, ok = _leaf_vapour(st, T, gv, Q, e_air, p_air, c)
+        H = cpm * gH * (T - T_air)
+        LE = latent_heat_vapor(T, c) * c.molmass_water * E
+        em = ε_e * σ * T^4
+        S = prognostic ? C * (T - T_prev) / dt : 0.0
+        return (R_abs - em - H - LE - S, em, H, LE, S, E, gs, gH, gv, An, ok)
+    end
+    R(T) = -parts(T)[1]                              # increasing in T
+    lo = T_air - 40.0; hi = T_air + 40.0
+    if prognostic
+        lo = min(lo, T_prev - 40.0); hi = max(hi, T_prev + 40.0)
+    end
+    lo = max(lo, 100.0)
+    flo = R(lo); fhi = R(hi)
+    n = 0
+    while flo > 0 && lo > 100.0 && n < 20
+        lo = max(lo - 40.0, 100.0); flo = R(lo); n += 1
+    end
+    n = 0
+    while fhi < 0 && n < 20
+        hi += 40.0; fhi = R(hi); n += 1
+    end
+    (flo <= 0 <= fhi) || throw(ErrorException("leaf_energy_balance: could not bracket the leaf temperature"))
+    T, it, conv = flo == 0 ? (lo, 0, true) : fhi == 0 ? (hi, 0, true) :
+                  _illinois(R, lo, hi, flo, fhi, maxiter)
+    _, em, H, LE, S, E, gs, gH, gv, An, ok = parts(T)
+    return LeafEnergyBalance(T, R_abs, em, H, LE, S, E, gs, gH, gv, An, it, conv && ok)
+end
+
+"""
+    leaf_energy_balance(stomata, boundary_layer = CampbellNormanBoundaryLayer();
+                        R_abs, T_air, e_air, U, p_air = 101325, Q = 0,
+                        emissivity = 0.98, emission = 2emissivity,
+                        T_prev = nothing, heat_capacity = 0, dt = Inf,
+                        c = DEFAULT_CONSTANTS, maxiter = 200) -> LeafEnergyBalance
+
+Temperature of a leaf from its energy balance, per unit one-sided leaf
+area (Campbell & Norman 1998, ch. 14; Monteith & Unsworth 2013):
+
+```math
+C\\,\\frac{T_\\ell - T_{prev}}{Δt} = R_{abs} - ε_e σ T_\\ell^4
+  - c_p g_H (T_\\ell - T_a) - λ(T_\\ell)\\,E(T_\\ell).
+```
+
+  * `R_abs` — absorbed short- and longwave radiation [W m⁻²]
+  * `T_air` [K], `e_air` [Pa], `U` [m s⁻¹], `p_air` [Pa] — the air around the leaf
+  * `Q` — absorbed PAR photon flux [µmol m⁻² s⁻¹], used by a
+    [`CoupledLeafPhysiology`](@ref)
+  * `stomata` — a [`FixedStomatalConductance`](@ref), a number (the same),
+    or a [`CoupledLeafPhysiology`](@ref)
+  * `boundary_layer` — an [`AbstractLeafBoundaryLayer`](@ref) giving
+    ``g_H`` and the vapour conductance ``g_v``
+  * `emission` — ``ε_e``, thermal emission per unit leaf area in units of
+    ``σT^4``: ``2ε`` for an isolated flat leaf (both sides); inside a
+    canopy [`canopy_leaf_energy_balance`](@ref) supplies the two-stream
+    value
+  * `heat_capacity` ``C`` [J m⁻² K⁻¹], `dt` [s], `T_prev` [K] — with
+    ``C > 0`` and finite ``Δt`` this is one backward-Euler step of the
+    prognostic leaf temperature (unconditionally stable); the default is
+    the diagnostic (steady) balance, which is also the ``Δt → ∞`` limit.
+    A leaf holding ≈ 0.3 mm of water has ``C ≈ 1.3\\,\\mathrm{kJ\\,m^{-2}\\,K^{-1}}``.
+
+``c_p`` is the molar heat capacity of dry air, ``λ`` the latent heat of
+vaporisation at leaf temperature (`MoistThermodynamics`), ``E`` the
+transpiration of the stomata model with ``g_v`` in series. The scalar
+equation is solved on a bracket by the Illinois method of
+`SurfaceExchange` (the residual is monotone in ``T_\\ell`` except through
+the photosynthetic response of ``g_s``, which a bracketing method
+tolerates). Negative ``E`` (dew onto a leaf colder than the dew point)
+is returned as computed, through the stomatal path only; wet-leaf
+interception and dew are the land column's (#21).
+"""
+function leaf_energy_balance(stomata, boundary_layer::AbstractLeafBoundaryLayer = CampbellNormanBoundaryLayer();
+                             R_abs::Real, T_air::Real, e_air::Real, U::Real,
+                             p_air::Real = 101325.0, Q::Real = 0.0,
+                             emissivity::Real = 0.98, emission::Real = 2 * emissivity,
+                             T_prev = nothing, heat_capacity::Real = 0.0, dt::Real = Inf,
+                             c::ThermodynamicConstants = DEFAULT_CONSTANTS, maxiter::Integer = 200)
+    emission >= 0 || throw(ArgumentError("leaf_energy_balance: emission must be ≥ 0"))
+    heat_capacity >= 0 || throw(ArgumentError("leaf_energy_balance: heat_capacity must be ≥ 0"))
+    dt > 0 || throw(ArgumentError("leaf_energy_balance: dt must be > 0"))
+    Tp = T_prev === nothing ? nothing : Float64(T_prev)
+    return _solve_leaf(_as_stomata(stomata), boundary_layer, Float64(R_abs), Float64(emission),
+                       Float64(T_air), Float64(e_air), Float64(U), Float64(p_air), Float64(Q),
+                       Tp, Float64(heat_capacity), Float64(dt), c, maxiter)
+end
+
+"""
+    leaf_penman_monteith(; R_abs, T_air, e_air, g_H, g_s, g_v, p_air = 101325,
+                           emissivity = 0.98, emission = 2emissivity,
+                           c = DEFAULT_CONSTANTS)
+        -> (; ΔT, T_leaf, H, LE, E, R_ni, g_r, s, g_w)
+
+The linearised (Penman–Monteith) solution of the diagnostic leaf energy
+balance for a fixed stomatal conductance (Campbell & Norman 1998,
+§14.3; Monteith & Unsworth 2013, ch. 13). Linearising the emission,
+``ε_eσT_\\ell^4 ≈ ε_eσT_a^4 + c_p g_r ΔT`` with the radiative conductance
+``g_r = 4ε_eσT_a^3/c_p``, and the saturation vapour pressure,
+``e_s(T_\\ell) ≈ e_s(T_a) + sΔT``, gives
+
+```math
+ΔT = T_\\ell - T_a = \\frac{R_{ni} - λ g_w D/p}{c_p (g_H + g_r) + λ g_w s/p},
+\\qquad R_{ni} = R_{abs} - ε_eσT_a^4,
+```
+
+with ``D = e_s(T_a) - e_a``, ``g_w = g_s g_v/(g_s + g_v)`` the total leaf
+conductance to vapour, ``λ`` in J mol⁻¹, all evaluated at air
+temperature. Then ``H = c_p g_H ΔT`` and ``λE = λ g_w (D + sΔT)/p``.
+``s = de_s/dT = L_v e_s/(R_v T^2)`` is the exact derivative of the
+`MoistThermodynamics` saturation curve. The nonlinear
+[`leaf_energy_balance`](@ref) tends to this as the forcing
+(``R_{ni}``, ``D``) goes to zero, with an error quadratic in ``ΔT``.
+"""
+function leaf_penman_monteith(; R_abs::Real, T_air::Real, e_air::Real, g_H::Real, g_s::Real,
+                              g_v::Real, p_air::Real = 101325.0, emissivity::Real = 0.98,
+                              emission::Real = 2 * emissivity,
+                              c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    Ta = Float64(T_air); p = Float64(p_air)
+    cpm = c.cp_dry * c.molmass_dry
+    λ = latent_heat_vapor(Ta, c) * c.molmass_water
+    es = saturation_vapor_pressure(Ta, c)
+    s = latent_heat_vapor(Ta, c) * es / (R_v(c) * Ta^2)
+    D = es - Float64(e_air)
+    gw = (g_s == 0 || g_v == 0) ? 0.0 : isinf(g_v) ? Float64(g_s) : g_s * g_v / (g_s + g_v)
+    g_r = 4 * emission * STEFAN_BOLTZMANN * Ta^3 / cpm
+    R_ni = Float64(R_abs) - emission * STEFAN_BOLTZMANN * Ta^4
+    ΔT = (R_ni - λ * gw * D / p) / (cpm * (g_H + g_r) + λ * gw * s / p)
+    E = gw * (D + s * ΔT) / p
+    return (ΔT = ΔT, T_leaf = Ta + ΔT, H = cpm * g_H * ΔT, LE = λ * E, E = E,
+            R_ni = R_ni, g_r = g_r, s = s, g_w = gw)
+end
+
+"""
+    CanopyLeafEnergySolution
+
+Result of [`canopy_leaf_energy_balance`](@ref). Layer arrays are ordered
+bottom-up like `z_faces`. Per-class quantities are per unit leaf area of
+that class; layer quantities are per unit **ground** area of the layer.
+
+  * `T_sunlit`, `T_shaded` [K], `gs_sunlit`, `gs_shaded` [mol m⁻² s⁻¹] —
+    for a layer without sunlit (or any) leaves the sunlit value repeats
+    the shaded one (and a layer without leaves reports the air
+    temperature), so the fields can seed the next prognostic step
+  * `lai_sunlit`, `lai_shaded` — leaf area of each class in each layer
+  * `sw_absorbed`, `lw_net` — absorbed shortwave (all bands) and net
+    longwave of the leaves [W m⁻²]
+  * `H`, `LE`, `storage` [W m⁻²], `E` [mol H₂O m⁻² s⁻¹], `An`
+    [µmol CO₂ m⁻² s⁻¹] — per layer; `sw_absorbed + lw_net = H + LE + storage`
+  * `heat_source` [W m⁻³] and `vapour_source` [kg m⁻³ s⁻¹] — `H` and the
+    transpired mass divided by the layer depth: the sources of the air's
+    heat and moisture equations
+  * `H_total`, `LE_total`, `E_total` — column sums
+  * `longwave` — the [`CanopyLongwaveSolution`](@ref) at the final leaf
+    temperatures
+  * `residual` — max over layers of ``|sw\\_absorbed + lw\\_net - H - LE - storage|``
+    evaluated with that final longwave [W m⁻²]; `iterations`, `converged`
+"""
+struct CanopyLeafEnergySolution
+    z_faces::Vector{Float64}
+    Λ_faces::Vector{Float64}
+    T_sunlit::Vector{Float64}
+    T_shaded::Vector{Float64}
+    gs_sunlit::Vector{Float64}
+    gs_shaded::Vector{Float64}
+    lai_sunlit::Vector{Float64}
+    lai_shaded::Vector{Float64}
+    sw_absorbed::Vector{Float64}
+    lw_net::Vector{Float64}
+    H::Vector{Float64}
+    LE::Vector{Float64}
+    storage::Vector{Float64}
+    E::Vector{Float64}
+    An::Vector{Float64}
+    heat_source::Vector{Float64}
+    vapour_source::Vector{Float64}
+    H_total::Float64
+    LE_total::Float64
+    E_total::Float64
+    longwave::CanopyLongwaveSolution
+    residual::Float64
+    iterations::Int
+    converged::Bool
+end
+
+_layer_value(x::Real, k) = Float64(x)
+_layer_value(x::AbstractVector, k) = Float64(x[k])
+_sw_bands(s::CanopyShortwaveSolution) = (s,)
+_sw_bands(::Nothing) = ()
+_sw_bands(s) = Tuple(s)
+
+"""
+    canopy_leaf_energy_balance(z_faces, lad; shortwave, par = 1, T_air, e_air, U,
+                               p_air = 101325, lw_down, T_ground, ε_leaf = 0.98,
+                               ε_ground = 0.95, leaves = SphericalLeaves(), stomata,
+                               boundary_layer = CampbellNormanBoundaryLayer(),
+                               T_prev = nothing, heat_capacity = 0, dt = Inf,
+                               c = DEFAULT_CONSTANTS, maxiter = 100, tol = 1e-9)
+        -> CanopyLeafEnergySolution
+    canopy_leaf_energy_balance(profile::AbstractLeafAreaDensity, z_faces; kwargs...)
+
+Temperatures of the sunlit and shaded leaves of every layer of a resolved
+canopy, and the heat and water vapour they give to the air.
+
+  * `shortwave` — a [`CanopyShortwaveSolution`](@ref) from
+    [`canopy_shortwave`](@ref) on the same layers, or a collection of them
+    (one per band, e.g. `(par, nir)`), or `nothing` at night. The absorbed
+    shortwave of each class is the sum over bands of `absorbed_sunlit` /
+    `absorbed_shaded` divided by the class leaf area, and the sunlit and
+    shaded leaf areas are those of the first band.
+  * `par` — index into `shortwave` of the PAR band, whose absorbed flux per
+    leaf area is converted to photons by `Photosynthesis.par_to_photon_flux`
+    for a [`CoupledLeafPhysiology`](@ref); `nothing` for no PAR
+  * `T_air` [K], `e_air` [Pa], `U` [m s⁻¹] — scalars or one value per layer
+  * `lw_down`, `T_ground`, `ε_leaf`, `ε_ground`, `leaves` — as in
+    [`canopy_longwave`](@ref)
+  * `stomata`, `boundary_layer` — as in [`leaf_energy_balance`](@ref)
+  * `T_prev` — a previous `CanopyLeafEnergySolution` (or a named tuple
+    `(sunlit = …, shaded = …)` of per-layer temperatures) with
+    `heat_capacity` ``C`` [J m⁻² K⁻¹] and `dt` for a prognostic step
+
+The leaves exchange longwave radiation with each other, the sky and the
+ground, so the layers are coupled. They are solved by an outer iteration:
+the longwave field of [`canopy_longwave`](@ref) is computed with each
+layer at the leaf-area-weighted ``T^4`` of its two classes; the longwave
+*absorbed* per unit leaf area of a layer is then held fixed while every
+class solves its own [`leaf_energy_balance`](@ref), with its emission
+``ε_e σT^4``, ``ε_e = 2(1 - R_k - T_k)/ΔΛ_k`` the layer's two-stream
+emissivity per unit leaf area (``2ε_{leaf}`` for spherical leaves in the
+thin-layer limit). That is repeated until no leaf temperature changes by
+more than `tol` [K]. The longwave is recomputed at the final temperatures
+for the reported fluxes, and `residual` measures how well each layer's
+energy balance closes with it.
+
+For a prognostic step each class uses its own previous temperature. That
+conserves energy exactly while the class leaf areas are unchanged; when
+the sun moves, leaves that change class carry their old class's
+temperature, which is not tracked.
+"""
+function canopy_leaf_energy_balance(z_faces::AbstractVector{<:Real}, lad::AbstractVector{<:Real};
+                                    shortwave, par = 1, T_air, e_air, U,
+                                    p_air::Real = 101325.0, lw_down::Real, T_ground::Real,
+                                    ε_leaf::Real = 0.98, ε_ground::Real = 0.95,
+                                    leaves::AbstractLeafAngleDistribution = SphericalLeaves(),
+                                    stomata, boundary_layer::AbstractLeafBoundaryLayer = CampbellNormanBoundaryLayer(),
+                                    T_prev = nothing, heat_capacity::Real = 0.0, dt::Real = Inf,
+                                    c::ThermodynamicConstants = DEFAULT_CONSTANTS,
+                                    maxiter::Integer = 100, tol::Real = 1e-9)
+    N = length(lad)
+    length(z_faces) == N + 1 ||
+        throw(DimensionMismatch("canopy_leaf_energy_balance: need length(z_faces) == length(lad) + 1"))
+    zf = Float64.(z_faces)
+    Δz = diff(zf)
+    all(>(0), Δz) || throw(ArgumentError("canopy_leaf_energy_balance: z_faces must increase"))
+    dΛ = [Float64(lad[k]) * Δz[k] for k in 1:N]
+    all(>=(0), dΛ) || throw(ArgumentError("canopy_leaf_energy_balance: lad must be ≥ 0"))
+    for x in (T_air, e_air, U)
+        x isa Real || length(x) == N ||
+            throw(DimensionMismatch("canopy_leaf_energy_balance: T_air, e_air, U must be scalars or length N"))
+    end
+    st = _as_stomata(stomata)
+    bands = _sw_bands(shortwave)
+    for b in bands
+        length(b.absorbed) == N && isapprox(b.z_faces, zf; rtol = 1e-12, atol = 1e-12) ||
+            throw(DimensionMismatch("canopy_leaf_energy_balance: shortwave solution is on different layers"))
+    end
+    par === nothing || isempty(bands) || 1 <= par <= length(bands) ||
+        throw(ArgumentError("canopy_leaf_energy_balance: par must index a band of `shortwave` or be nothing"))
+
+    # Class leaf areas and absorbed shortwave per unit class leaf area.
+    lsun = isempty(bands) ? zeros(N) : copy(bands[1].lai_sunlit)
+    lsha = dΛ .- lsun
+    for k in 1:N
+        lsha[k] = max(lsha[k], 0.0)
+        lsun[k] = dΛ[k] - lsha[k]
+        abs(lsun[k] + lsha[k] - dΛ[k]) <= 1e-9 * max(dΛ[k], 1.0) ||
+            throw(DimensionMismatch("canopy_leaf_energy_balance: shortwave leaf area differs from lad"))
+    end
+    sw_layer = zeros(N); q_sun = zeros(N); q_sha = zeros(N); Q_sun = zeros(N); Q_sha = zeros(N)
+    for (ib, b) in enumerate(bands), k in 1:N
+        sw_layer[k] += b.absorbed[k]
+        lsun[k] > 0 && (q_sun[k] += b.absorbed_sunlit[k] / lsun[k])
+        lsha[k] > 0 && (q_sha[k] += b.absorbed_shaded[k] / lsha[k])
+        if par !== nothing && ib == par
+            lsun[k] > 0 && (Q_sun[k] = par_to_photon_flux(b.absorbed_sunlit[k] / lsun[k]))
+            lsha[k] > 0 && (Q_sha[k] = par_to_photon_flux(b.absorbed_shaded[k] / lsha[k]))
+        end
+    end
+
+    Ta = [_layer_value(T_air, k) for k in 1:N]
+    ea = [_layer_value(e_air, k) for k in 1:N]
+    Ua = [_layer_value(U, k) for k in 1:N]
+    C = Float64(heat_capacity)
+    prognostic = C > 0 && isfinite(dt)
+    Tp_sun = Tp_sha = nothing
+    if T_prev !== nothing
+        Tp_sun = Float64.(T_prev isa CanopyLeafEnergySolution ? T_prev.T_sunlit : T_prev.sunlit)
+        Tp_sha = Float64.(T_prev isa CanopyLeafEnergySolution ? T_prev.T_shaded : T_prev.shaded)
+        (length(Tp_sun) == N && length(Tp_sha) == N) ||
+            throw(DimensionMismatch("canopy_leaf_energy_balance: T_prev must have one value per layer"))
+    end
+    prognostic && T_prev === nothing &&
+        throw(ArgumentError("canopy_leaf_energy_balance: a prognostic step needs T_prev"))
+
+    Tsun = Tp_sun === nothing ? copy(Ta) : copy(Tp_sun)
+    Tsha = Tp_sha === nothing ? copy(Ta) : copy(Tp_sha)
+    σ = STEFAN_BOLTZMANN
+    teff(k) = dΛ[k] > 0 ? ((lsun[k] * Tsun[k]^4 + lsha[k] * Tsha[k]^4) / dΛ[k])^(1 / 4) : Ta[k]
+    lwsolve() = canopy_longwave(zf, lad; lw_down = lw_down, T_leaf = [teff(k) for k in 1:N],
+                                T_ground = T_ground, ε_leaf = ε_leaf, ε_ground = ε_ground,
+                                leaves = leaves)
+    res_sun = Vector{Union{Nothing,LeafEnergyBalance}}(nothing, N)
+    res_sha = Vector{Union{Nothing,LeafEnergyBalance}}(nothing, N)
+    it = 0; conv = false; all_ok = true
+    while it < maxiter
+        it += 1
+        lw = lwsolve()
+        δ = 0.0; all_ok = true
+        for k in 1:N
+            dΛ[k] > 0 || continue
+            εe = 2 * lw.emissivity_layer[k] / dΛ[k]
+            Te4 = teff(k)^4
+            L_abs = (lw.net_absorbed[k] + 2 * lw.emissivity_layer[k] * σ * Te4) / dΛ[k]
+            for (cls, larea, qsw, Qp, Tc, Tpc, store) in
+                    ((:sun, lsun[k], q_sun[k], Q_sun[k], Tsun, Tp_sun, res_sun),
+                     (:sha, lsha[k], q_sha[k], Q_sha[k], Tsha, Tp_sha, res_sha))
+                larea > 0 || continue
+                r = _solve_leaf(st, boundary_layer, qsw + L_abs, εe, Ta[k], ea[k], Ua[k],
+                                Float64(p_air), Qp, Tpc === nothing ? nothing : Tpc[k],
+                                C, Float64(dt), c, 200)
+                all_ok &= r.converged
+                δ = max(δ, abs(r.T_leaf - Tc[k]))
+                Tc[k] = r.T_leaf
+                store[k] = r
+            end
+        end
+        if δ <= tol
+            conv = true
+            break
+        end
+    end
+
+    lw = lwsolve()
+    H = zeros(N); LE = zeros(N); S = zeros(N); E = zeros(N); An = zeros(N)
+    gsun = zeros(N); gsha = zeros(N)
+    resid = 0.0
+    for k in 1:N
+        if dΛ[k] == 0
+            Tsun[k] = Ta[k]; Tsha[k] = Ta[k]
+            continue
+        end
+        for (larea, r) in ((lsun[k], res_sun[k]), (lsha[k], res_sha[k]))
+            (larea > 0 && r !== nothing) || continue
+            H[k] += larea * r.H; LE[k] += larea * r.LE; S[k] += larea * r.storage
+            E[k] += larea * r.E; An[k] += larea * r.An
+        end
+        gsha[k] = res_sha[k] === nothing ? 0.0 : res_sha[k].gs
+        gsun[k] = res_sun[k] === nothing ? gsha[k] : res_sun[k].gs
+        if lsun[k] == 0
+            Tsun[k] = Tsha[k]
+        elseif lsha[k] == 0
+            Tsha[k] = Tsun[k]; gsha[k] = gsun[k]
+        end
+        resid = max(resid, abs(sw_layer[k] + lw.net_absorbed[k] - H[k] - LE[k] - S[k]))
+    end
+    Mw = c.molmass_water
+    return CanopyLeafEnergySolution(zf, lw.Λ_faces, Tsun, Tsha, gsun, gsha, lsun, lsha,
+                                    sw_layer, copy(lw.net_absorbed), H, LE, S, E, An,
+                                    H ./ Δz, E .* Mw ./ Δz, sum(H), sum(LE), sum(E),
+                                    lw, resid, it, conv && all_ok)
+end
+canopy_leaf_energy_balance(p::AbstractLeafAreaDensity, z_faces::AbstractVector{<:Real}; kwargs...) =
+    canopy_leaf_energy_balance(z_faces, layer_leaf_area_density(p, z_faces); kwargs...)
 
 end # module
