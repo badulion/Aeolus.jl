@@ -83,7 +83,11 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        BiquadraticCurve, DXCoolingCurves, DX_RATING_POINT,
        DX_CURVES_WINDOW_AC, DX_CURVES_PACKAGED_AC,
        IdealLoadsHVAC, HVACBudget, condenser_inlet_temperature,
-       cooling_cop, available_cooling_capacity
+       cooling_cop, available_cooling_capacity,
+       DayProfile, WeeklySchedule, schedule_value, schedule_mean, full_load_hours,
+       occupant_sensible_heat, InternalGains, InternalGainRates, internal_gains,
+       ThermostatSchedule, scheduled_hvac, DOE_MEDIUM_OFFICE_SCHEDULES,
+       office_internal_gains, office_thermostat
 
 const _H_WALL = 1 / ISO6946_SURFACE_RESISTANCE.inside_horizontal   # 7.69 W m⁻² K⁻¹
 const _H_OUT  = 1 / ISO6946_SURFACE_RESISTANCE.outside             # 25 W m⁻² K⁻¹
@@ -496,7 +500,7 @@ zone_operative_temperature(z::BuildingZone) = (z.T_air + zone_mean_radiant_tempe
 """
     ZoneForcing(; T_out, Q_internal = 0, Q_solar = 0, Q_hvac = 0,
                 irradiance = 0, surface = nothing, q_out = nothing,
-                Q_latent = 0)
+                Q_latent = 0, radiative_fraction = nothing)
 
 What drives a zone over one step:
 
@@ -520,9 +524,14 @@ What drives a zone over one step:
   * `q_out` — outdoor specific humidity (kg kg⁻¹). When given, the
     zone humidity is advanced; `nothing` leaves it unchanged;
   * `Q_latent` — latent internal gains (W; occupants, cooking), i.e. a
-    vapour source ``Q_{latent}/L_v``. Requires `q_out`.
+    vapour source ``Q_{latent}/L_v``. Requires `q_out`;
+  * `radiative_fraction` — the radiative share of `Q_internal` for this
+    step, overriding the zone's `radiative_fraction` (`nothing`: use the
+    zone's). Scheduled gains whose components have different radiant
+    fractions (people, lighting, equipment) change it every step; see
+    [`internal_gains`](@ref) and `ZoneForcing(::InternalGainRates)`.
 """
-struct ZoneForcing{T<:AbstractFloat, I, S, Q}
+struct ZoneForcing{T<:AbstractFloat, I, S, Q, R}
     T_out::T
     Q_internal::T
     Q_solar::T
@@ -531,11 +540,12 @@ struct ZoneForcing{T<:AbstractFloat, I, S, Q}
     surface::S
     q_out::Q
     Q_latent::T
+    radiative_fraction::R
 end
 
 function ZoneForcing(; T_out::Real, Q_internal::Real = 0.0, Q_solar::Real = 0.0,
                      Q_hvac::Real = 0.0, irradiance = 0.0, surface = nothing,
-                     q_out = nothing, Q_latent::Real = 0.0)
+                     q_out = nothing, Q_latent::Real = 0.0, radiative_fraction = nothing)
     Q_solar >= 0 || throw(ArgumentError("ZoneForcing: Q_solar must be ≥ 0"))
     Q_latent >= 0 || throw(ArgumentError("ZoneForcing: Q_latent must be ≥ 0"))
     (Q_latent == 0 || q_out !== nothing) ||
@@ -543,8 +553,11 @@ function ZoneForcing(; T_out::Real, Q_internal::Real = 0.0, Q_solar::Real = 0.0,
     T = float(promote_type(typeof(T_out), typeof(Q_internal), typeof(Q_solar), typeof(Q_hvac)))
     qo = q_out === nothing ? nothing : T(q_out)
     (qo === nothing || 0 <= qo < 1) || throw(ArgumentError("ZoneForcing: q_out must lie in [0, 1)"))
-    return ZoneForcing{T, typeof(irradiance), typeof(surface), typeof(qo)}(
-        T(T_out), T(Q_internal), T(Q_solar), T(Q_hvac), irradiance, surface, qo, T(Q_latent))
+    fr = radiative_fraction === nothing ? nothing : T(radiative_fraction)
+    (fr === nothing || 0 <= fr <= 1) ||
+        throw(ArgumentError("ZoneForcing: radiative_fraction must lie in [0, 1]"))
+    return ZoneForcing{T, typeof(irradiance), typeof(surface), typeof(qo), typeof(fr)}(
+        T(T_out), T(Q_internal), T(Q_solar), T(Q_hvac), irradiance, surface, qo, T(Q_latent), fr)
 end
 
 _pick(x::Real, i) = x
@@ -755,7 +768,9 @@ function _assemble_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real; 
     dt > 0 || throw(ArgumentError("step_zone!: dt must be positive"))
     x0 = zone.T_air
     T_out = T(forcing.T_out)
-    Φ_rad = zone.radiative_fraction * T(forcing.Q_internal) + T(forcing.Q_solar)
+    f_rad = forcing.radiative_fraction === nothing ? zone.radiative_fraction :
+                                                     T(forcing.radiative_fraction)
+    Φ_rad = f_rad * T(forcing.Q_internal) + T(forcing.Q_solar)
     A_int = sum((_exposed_area(el) for el in _elements(zone)); init = zero(T))
     q = A_int > 0 ? Φ_rad / A_int : zero(T)
     Φ_air = T(forcing.Q_internal) + T(forcing.Q_solar) - (A_int > 0 ? Φ_rad : zero(T)) +
@@ -1194,6 +1209,474 @@ function step_zone!(zone::BuildingZone{T}, forcing::ZoneForcing, dt::Real, hvac:
     W_evap = Q_exh_l / latent_heat_vapor(T_c, thermo)
     return budget, HVACBudget{T}(Q_h, Q_cs, Q_cl, Q_c, -W, cop, T_c, cap_c, P_h, P_c,
                                  Q_exh_s, Q_exh_l, W_evap, Φ_req - Φ)
+end
+
+# =========================================================================
+# 3c. Occupancy, lighting and equipment schedules; internal gains
+# =========================================================================
+
+"""
+    DayProfile(until, values)
+    DayProfile(until_hour => value, ...)
+    DayProfile(value)
+
+A piecewise-constant daily profile in the form of an EnergyPlus
+`Schedule:Compact` day: `values[i]` holds from `until[i-1]` (0 for the
+first entry) up to `until[i]` hours of local clock time. The breakpoints
+must increase strictly and the last must be 24. `DayProfile(value)` is
+constant all day.
+
+Evaluate with `p(hour)` (the hour is taken modulo 24; a breakpoint
+belongs to the *next* interval, as in EnergyPlus). The daily integral —
+the "equivalent full-load hours" of a fractional schedule — is
+[`full_load_hours`](@ref)`(p)`.
+"""
+struct DayProfile
+    until::Vector{Float64}
+    values::Vector{Float64}
+    function DayProfile(until::AbstractVector{<:Real}, values::AbstractVector{<:Real})
+        length(until) == length(values) >= 1 ||
+            throw(ArgumentError("DayProfile: need as many breakpoints as values (≥ 1)"))
+        u = Float64.(until)
+        (u[1] > 0 && all(diff(u) .> 0)) ||
+            throw(ArgumentError("DayProfile: breakpoints must be positive and strictly increasing"))
+        u[end] == 24 || throw(ArgumentError("DayProfile: the last breakpoint must be 24 h"))
+        all(isfinite, values) || throw(ArgumentError("DayProfile: values must be finite"))
+        return new(u, Float64.(values))
+    end
+end
+DayProfile(pairs::Pair...) = DayProfile([first(p) for p in pairs], [last(p) for p in pairs])
+DayProfile(value::Real) = DayProfile([24.0], [value])
+
+function (p::DayProfile)(hour::Real)
+    h = mod(hour, 24)
+    @inbounds for i in eachindex(p.until)
+        h < p.until[i] && return p.values[i]
+    end
+    return p.values[end]
+end
+
+# ∫ p dh over [a, b] ⊂ [0, 24] (hours × value)
+function _profile_integral(p::DayProfile, a::Real, b::Real)
+    s = 0.0; lo = 0.0
+    for i in eachindex(p.until)
+        hi = p.until[i]
+        s += p.values[i] * max(0.0, min(b, hi) - max(a, lo))
+        lo = hi
+    end
+    return s
+end
+
+"""
+    WeeklySchedule(weekday, saturday = weekday, sunday = saturday;
+                   holidays = Int[], start_weekday = 1)
+
+A week of [`DayProfile`](@ref)s: `weekday` Monday–Friday, `saturday`,
+and `sunday`, which also applies to every day number in `holidays`
+(EnergyPlus `Weekdays` / `Saturday` / `Sunday Holidays AllOtherDays`).
+A profile may be given as a number (constant all day).
+
+Time is counted in seconds from 00:00 of day 1, whose weekday is
+`start_weekday` (1 = Monday, …, 7 = Sunday); `holidays` are day numbers
+in the same count. Evaluate with [`schedule_value`](@ref) or exactly
+averaged over a step with [`schedule_mean`](@ref).
+"""
+struct WeeklySchedule
+    weekday::DayProfile
+    saturday::DayProfile
+    sunday::DayProfile
+    holidays::Vector{Int}
+    start_weekday::Int
+end
+
+_profile(p::DayProfile) = p
+_profile(v::Real) = DayProfile(v)
+
+function WeeklySchedule(weekday, saturday = weekday, sunday = saturday;
+                        holidays::AbstractVector{<:Integer} = Int[], start_weekday::Integer = 1)
+    1 <= start_weekday <= 7 || throw(ArgumentError("WeeklySchedule: start_weekday must be 1 … 7"))
+    return WeeklySchedule(_profile(weekday), _profile(saturday), _profile(sunday),
+                          sort!(Int.(collect(holidays))), Int(start_weekday))
+end
+
+"Weekday (1 = Monday … 7 = Sunday) of day number `day` (day 1 = `s.start_weekday`)."
+_weekday(s::WeeklySchedule, day::Integer) = mod(s.start_weekday - 1 + day - 1, 7) + 1
+
+function _day_profile(s::WeeklySchedule, day::Integer)
+    insorted(day, s.holidays) && return s.sunday
+    wd = _weekday(s, day)
+    return wd <= 5 ? s.weekday : wd == 6 ? s.saturday : s.sunday
+end
+
+"""
+    schedule_value(s::WeeklySchedule, t) -> value
+
+The schedule at `t` seconds after 00:00 of day 1.
+"""
+function schedule_value(s::WeeklySchedule, t::Real)
+    day = fld(t, 86400)
+    return _day_profile(s, Int(day) + 1)((t - 86400 * day) / 3600)
+end
+
+"""
+    schedule_mean(s::WeeklySchedule, t0, t1) -> value
+
+The exact mean of the piecewise-constant schedule over ``[t_0, t_1]``
+(seconds). Used as the step-mean of a scheduled gain, it makes a model
+step of any length deliver exactly the scheduled energy; with
+`t0 == t1` it is `schedule_value(s, t0)`.
+"""
+function schedule_mean(s::WeeklySchedule, t0::Real, t1::Real)
+    t1 >= t0 || throw(ArgumentError("schedule_mean: t1 must not precede t0"))
+    t1 == t0 && return schedule_value(s, t0)
+    acc = 0.0
+    d0 = Int(fld(t0, 86400)); d1 = Int(fld(t1, 86400))
+    for d in d0:d1
+        a = max(t0 - 86400d, 0.0) / 3600
+        b = min(t1 - 86400d, 86400.0) / 3600
+        b > a && (acc += _profile_integral(_day_profile(s, d + 1), a, b))
+    end
+    return acc * 3600 / (t1 - t0)
+end
+
+"""
+    full_load_hours(p::DayProfile) -> h
+    full_load_hours(s::WeeklySchedule) -> h per week
+
+The integral of a schedule over a day (or a week without holidays):
+for a fractional schedule, the number of hours at full design level
+that deliver the same energy.
+"""
+full_load_hours(p::DayProfile) = _profile_integral(p, 0.0, 24.0)
+full_load_hours(s::WeeklySchedule) =
+    5 * full_load_hours(s.weekday) + full_load_hours(s.saturday) + full_load_hours(s.sunday)
+
+# ---- occupants ---------------------------------------------------------------
+
+# EnergyPlus InternalHeatGains.cc, `C` (the Engineering Reference prints
+# 6.461927 and 0.0000589172 for C₀ and C₅; the source, which EnergyPlus
+# runs, has the values below — the two differ by < 0.01 W).
+const _EPLUS_PEOPLE_SENSIBLE = (6.4611027, 0.946892, 0.0000255737, 7.139322, -0.0627909,
+                                0.0000589271, -0.198550, 0.000940018, -0.00000149532)
+
+"""
+    occupant_sensible_heat(activity, T_air) -> W per person
+
+Sensible (radiant + convective) part of an occupant's metabolic heat
+`activity` (W per person) at air temperature `T_air` (K); the rest,
+`activity - S`, is latent (evaporation and respiration). The EnergyPlus
+correlation (Engineering Reference, *Zone internal gains — heat gain
+from people*; coefficients from the EnergyPlus source)
+
+```math
+S = C_0 + C_1 M + C_2 M^2 + T(C_3 + C_4 M + C_5 M^2) + T^2 (C_6 + C_7 M + C_8 M^2),
+```
+
+``T`` in °C, is a fit to Carrier's (1965) sensible gains at average
+adjusted metabolic rates of 350–1450 Btu h⁻¹ and 70–82 °F, constrained
+to ``S = 0`` at 96 °F and ``S = M`` at 30 °F. The result is limited to
+``[0, M]`` as in EnergyPlus.
+"""
+function occupant_sensible_heat(activity::Real, T_air::Real)
+    activity >= 0 || throw(ArgumentError("occupant_sensible_heat: activity must be ≥ 0"))
+    C = _EPLUS_PEOPLE_SENSIBLE
+    M = float(activity); T = T_air - 273.15
+    S = C[1] + M * (C[2] + M * C[3]) + T * ((C[4] + M * (C[5] + M * C[6])) +
+                                             T * (C[7] + M * (C[8] + M * C[9])))
+    return clamp(S, zero(S), M)
+end
+
+# ---- internal gains ----------------------------------------------------------
+
+"""
+    InternalGains(; floor_area, floor_area_per_person = Inf, activity = 120,
+                  people_radiant_fraction = 0.3,
+                  lighting_power_density = 0, lighting_radiant_fraction = 0.4,
+                  lighting_visible_fraction = 0.2, lighting_return_air_fraction = 0,
+                  equipment_power_density = 0, equipment_radiant_fraction = 0.5,
+                  equipment_latent_fraction = 0, equipment_lost_fraction = 0,
+                  occupancy = WeeklySchedule(1), lighting = WeeklySchedule(1),
+                  equipment = WeeklySchedule(1))
+
+Scheduled internal heat gains of a zone of `floor_area` m², after the
+EnergyPlus `People`, `Lights` and `ElectricEquipment` objects:
+
+  * **People**: `floor_area / floor_area_per_person` occupants at design,
+    times the `occupancy` schedule, each releasing `activity` W of
+    metabolic heat, split by [`occupant_sensible_heat`](@ref) into
+    sensible (a fraction `people_radiant_fraction` radiant) and latent.
+  * **Lighting**: `lighting_power_density` W m⁻² times the `lighting`
+    schedule. Fractions: radiant (long-wave) and visible (short-wave) —
+    both go to the interior surfaces here — and return air (carried out
+    by the return air stream and lost to the zone); the rest is
+    convective.
+  * **Equipment**: `equipment_power_density` W m⁻² times the
+    `equipment` schedule, split into radiant, latent, lost (vented or
+    carried out) and convective.
+
+The electric power of lighting and equipment is the energy demand they
+represent; all of it, whatever the split, ends up as heat somewhere.
+[`internal_gains`](@ref) evaluates the gains; see
+[`office_internal_gains`](@ref) for the DOE medium-office reference
+values.
+"""
+struct InternalGains
+    floor_area::Float64
+    occupant_density::Float64
+    activity::Float64
+    people_radiant_fraction::Float64
+    lighting_power_density::Float64
+    lighting_radiant_fraction::Float64
+    lighting_visible_fraction::Float64
+    lighting_return_air_fraction::Float64
+    equipment_power_density::Float64
+    equipment_radiant_fraction::Float64
+    equipment_latent_fraction::Float64
+    equipment_lost_fraction::Float64
+    occupancy::WeeklySchedule
+    lighting::WeeklySchedule
+    equipment::WeeklySchedule
+end
+
+_in01(x) = 0 <= x <= 1
+
+function InternalGains(; floor_area::Real, floor_area_per_person::Real = Inf,
+                       activity::Real = 120.0, people_radiant_fraction::Real = 0.3,
+                       lighting_power_density::Real = 0.0, lighting_radiant_fraction::Real = 0.4,
+                       lighting_visible_fraction::Real = 0.2,
+                       lighting_return_air_fraction::Real = 0.0,
+                       equipment_power_density::Real = 0.0,
+                       equipment_radiant_fraction::Real = 0.5,
+                       equipment_latent_fraction::Real = 0.0, equipment_lost_fraction::Real = 0.0,
+                       occupancy::WeeklySchedule = WeeklySchedule(1.0),
+                       lighting::WeeklySchedule = WeeklySchedule(1.0),
+                       equipment::WeeklySchedule = WeeklySchedule(1.0))
+    floor_area > 0 || throw(ArgumentError("InternalGains: floor_area must be positive"))
+    floor_area_per_person > 0 || throw(ArgumentError("InternalGains: floor_area_per_person must be positive"))
+    (activity >= 0 && lighting_power_density >= 0 && equipment_power_density >= 0) ||
+        throw(ArgumentError("InternalGains: activity and power densities must be ≥ 0"))
+    all(_in01, (people_radiant_fraction, lighting_radiant_fraction, lighting_visible_fraction,
+                lighting_return_air_fraction, equipment_radiant_fraction,
+                equipment_latent_fraction, equipment_lost_fraction)) ||
+        throw(ArgumentError("InternalGains: fractions must lie in [0, 1]"))
+    lighting_radiant_fraction + lighting_visible_fraction + lighting_return_air_fraction <= 1 + 1e-12 ||
+        throw(ArgumentError("InternalGains: lighting fractions sum to more than 1"))
+    equipment_radiant_fraction + equipment_latent_fraction + equipment_lost_fraction <= 1 + 1e-12 ||
+        throw(ArgumentError("InternalGains: equipment fractions sum to more than 1"))
+    return InternalGains(floor_area, 1 / floor_area_per_person, activity, people_radiant_fraction,
+                         lighting_power_density, lighting_radiant_fraction,
+                         lighting_visible_fraction, lighting_return_air_fraction,
+                         equipment_power_density, equipment_radiant_fraction,
+                         equipment_latent_fraction, equipment_lost_fraction,
+                         occupancy, lighting, equipment)
+end
+
+"""
+    InternalGainRates
+
+What [`internal_gains`](@ref) returns, in W (occupants in persons):
+
+  * `occupants`, `people_sensible`, `people_latent`;
+  * `lighting`, `equipment` — their electric power (the demand);
+  * the split seen by the zone: `convective` (to the air node),
+    `radiative` (to the interior surfaces: radiant long-wave plus visible
+    light), `latent` (vapour) and `lost` (removed by return or exhaust air
+    without entering the zone balance).
+
+Conservation: `people_sensible + people_latent + lighting + equipment ==
+convective + radiative + latent + lost` to round-off.
+"""
+struct InternalGainRates
+    occupants::Float64
+    people_sensible::Float64
+    people_latent::Float64
+    lighting::Float64
+    equipment::Float64
+    convective::Float64
+    radiative::Float64
+    latent::Float64
+    lost::Float64
+end
+
+"""
+    internal_gains(g::InternalGains, t, dt = 0; T_air = 297.15) -> InternalGainRates
+
+The internal gains at `t` seconds after 00:00 of day 1 — or, with
+`dt > 0`, their exact mean over ``[t, t + dt]`` ([`schedule_mean`](@ref)),
+which is what a zone step of length `dt` should receive. The occupants'
+sensible/latent split uses the indoor air temperature `T_air` (K).
+"""
+function internal_gains(g::InternalGains, t::Real, dt::Real = 0.0; T_air::Real = 297.15)
+    dt >= 0 || throw(ArgumentError("internal_gains: dt must be ≥ 0"))
+    f(s) = schedule_mean(s, t, t + dt)
+    n = g.occupant_density * g.floor_area * f(g.occupancy)
+    S = n * occupant_sensible_heat(g.activity, T_air)
+    Lat = n * g.activity - S
+    L = g.lighting_power_density * g.floor_area * f(g.lighting)
+    E = g.equipment_power_density * g.floor_area * f(g.equipment)
+    rad = g.people_radiant_fraction * S +
+          (g.lighting_radiant_fraction + g.lighting_visible_fraction) * L +
+          g.equipment_radiant_fraction * E
+    lat = Lat + g.equipment_latent_fraction * E
+    lost = g.lighting_return_air_fraction * L + g.equipment_lost_fraction * E
+    conv = (S + Lat + L + E) - rad - lat - lost
+    return InternalGainRates(n, S, Lat, L, E, conv, rad, lat, lost)
+end
+
+"""
+    ZoneForcing(r::InternalGainRates; include_latent = true, kwargs...)
+
+A [`ZoneForcing`](@ref) whose internal gains are `r`: `Q_internal =
+r.convective + r.radiative` with the step's own `radiative_fraction`,
+and `Q_latent = r.latent` (which needs `q_out` in `kwargs`; pass
+`include_latent = false` to leave the vapour out). `kwargs` supply the
+rest (`T_out`, `Q_solar`, …).
+"""
+function ZoneForcing(r::InternalGainRates; include_latent::Bool = true, kwargs...)
+    Q = r.convective + r.radiative
+    fr = Q > 0 ? r.radiative / Q : 0.0
+    return ZoneForcing(; Q_internal = Q, radiative_fraction = fr,
+                       Q_latent = include_latent ? r.latent : 0.0, kwargs...)
+end
+
+# ---- thermostat schedules ----------------------------------------------------
+
+"""
+    ThermostatSchedule(heating, cooling; availability = nothing)
+
+Scheduled setpoints (K) of an [`IdealLoadsHVAC`](@ref): `heating` and
+`cooling` are [`WeeklySchedule`](@ref)s (or constants); `availability`,
+if given, switches the system off wherever it is 0. Apply with
+[`scheduled_hvac`](@ref).
+"""
+struct ThermostatSchedule
+    heating::WeeklySchedule
+    cooling::WeeklySchedule
+    availability::Union{Nothing, WeeklySchedule}
+end
+_weekly(s::WeeklySchedule) = s
+_weekly(v::Real) = WeeklySchedule(v)
+ThermostatSchedule(heating, cooling; availability = nothing) =
+    ThermostatSchedule(_weekly(heating), _weekly(cooling),
+                       availability === nothing ? nothing : _weekly(availability))
+
+"""
+    scheduled_hvac(hvac::IdealLoadsHVAC, ts::ThermostatSchedule, t) -> IdealLoadsHVAC
+
+`hvac` with the setpoints of `ts` at `t` seconds (the value at the start
+of the step; setpoint changes are instantaneous, as in EnergyPlus) and
+with both capacities set to 0 where the availability schedule is 0.
+"""
+function scheduled_hvac(hvac::IdealLoadsHVAC{T, C}, ts::ThermostatSchedule, t::Real) where {T, C}
+    Th = T(schedule_value(ts.heating, t)); Tc = T(schedule_value(ts.cooling, t))
+    Th <= Tc || throw(ArgumentError("scheduled_hvac: heating setpoint above cooling setpoint at t = $t"))
+    on = ts.availability === nothing || schedule_value(ts.availability, t) > 0
+    return IdealLoadsHVAC{T, C}(Th, Tc, on ? hvac.heating_capacity : zero(T),
+                                on ? hvac.cooling_capacity : zero(T), hvac.heating,
+                                hvac.heating_efficiency, hvac.cop_rated, hvac.curves,
+                                hvac.condenser, hvac.evaporative_effectiveness,
+                                hvac.latent_fraction, hvac.dehumidify, hvac.RH_max)
+end
+
+# ---- the DOE medium-office reference -------------------------------------------
+
+const _C = 273.15
+
+"""
+    DOE_MEDIUM_OFFICE_SCHEDULES
+
+Schedules of the U.S. DOE commercial reference building *Medium office,
+new construction (ASHRAE 90.1-2004)* (Deru et al. 2011), transcribed
+from the EnergyPlus model `RefBldgMediumOfficeNew2004_Chicago.idf`
+(NREL/EnergyPlus `testfiles/`), `Schedule:Compact` objects:
+
+| field | IDF schedule | |
+|:--|:--|:--|
+| `occupancy` | `BLDG_OCC_SCH` | fraction of design occupants |
+| `lighting` | `BLDG_LIGHT_SCH` | fraction of design lighting power |
+| `equipment` | `BLDG_EQUIP_SCH` | fraction of design plug load |
+| `heating_setpoint` | `HTGSETP_SCH` | K (15.6 / 21.0 °C) |
+| `cooling_setpoint` | `CLGSETP_SCH` | K (26.7 / 24.0 °C) |
+| `hvac_operation` | `HVACOperationSchd` | 0/1 |
+
+Design-day variants are omitted; `Sunday Holidays AllOtherDays` is the
+`sunday` profile.
+
+Reference: Deru, M. et al. (2011). *U.S. Department of Energy Commercial
+Reference Building Models of the National Building Stock.* NREL/TP-5500-46861.
+"""
+const DOE_MEDIUM_OFFICE_SCHEDULES = (
+    occupancy = WeeklySchedule(
+        DayProfile(6 => 0.0, 7 => 0.1, 8 => 0.2, 12 => 0.95, 13 => 0.5, 17 => 0.95, 18 => 0.7,
+                   20 => 0.4, 22 => 0.1, 24 => 0.05),
+        DayProfile(6 => 0.0, 8 => 0.1, 14 => 0.5, 17 => 0.1, 24 => 0.0),
+        DayProfile(0.0)),
+    lighting = WeeklySchedule(
+        DayProfile(5 => 0.05, 7 => 0.1, 8 => 0.3, 17 => 0.9, 18 => 0.7, 20 => 0.5, 22 => 0.3,
+                   23 => 0.1, 24 => 0.05),
+        DayProfile(6 => 0.05, 8 => 0.1, 14 => 0.5, 17 => 0.15, 24 => 0.05),
+        DayProfile(0.05)),
+    equipment = WeeklySchedule(
+        DayProfile(8 => 0.40, 12 => 0.90, 13 => 0.80, 17 => 0.90, 18 => 0.80, 20 => 0.60,
+                   22 => 0.50, 24 => 0.40),
+        DayProfile(6 => 0.30, 8 => 0.4, 14 => 0.5, 17 => 0.35, 24 => 0.30),
+        DayProfile(0.30)),
+    heating_setpoint = WeeklySchedule(
+        DayProfile(6 => _C + 15.6, 22 => _C + 21.0, 24 => _C + 15.6),
+        DayProfile(6 => _C + 15.6, 18 => _C + 21.0, 24 => _C + 15.6),
+        DayProfile(_C + 15.6)),
+    cooling_setpoint = WeeklySchedule(
+        DayProfile(6 => _C + 26.7, 22 => _C + 24.0, 24 => _C + 26.7),
+        DayProfile(6 => _C + 26.7, 18 => _C + 24.0, 24 => _C + 26.7),
+        DayProfile(_C + 26.7)),
+    hvac_operation = WeeklySchedule(
+        DayProfile(6 => 0.0, 22 => 1.0, 24 => 0.0),
+        DayProfile(6 => 0.0, 18 => 1.0, 24 => 0.0),
+        DayProfile(0.0)),
+)
+
+"""
+    office_internal_gains(floor_area; start_weekday = 1, holidays = Int[], kwargs...) -> InternalGains
+
+The internal gains of the DOE medium-office reference building
+(`RefBldgMediumOfficeNew2004`, see [`DOE_MEDIUM_OFFICE_SCHEDULES`](@ref)):
+18.58 m² per person at 120 W (`People`, radiant fraction 0.3,
+`ACTIVITY_SCH`), lighting 10.76 W m⁻² (radiant 0.4, visible 0.2, return
+air 0.4), plug loads 10.76 W m⁻² (radiant 0.5, no latent). `kwargs`
+override any [`InternalGains`](@ref) field; note that the reference
+building sends 40 % of the lighting heat to a return-air plenum, which
+a single zone without a plenum loses — set
+`lighting_return_air_fraction = 0` to keep it in the zone.
+"""
+function office_internal_gains(floor_area::Real; start_weekday::Integer = 1,
+                               holidays::AbstractVector{<:Integer} = Int[], kwargs...)
+    S = DOE_MEDIUM_OFFICE_SCHEDULES
+    cal(s) = WeeklySchedule(s.weekday, s.saturday, s.sunday; holidays, start_weekday)
+    return InternalGains(; floor_area, floor_area_per_person = 18.58, activity = 120.0,
+                         people_radiant_fraction = 0.3, lighting_power_density = 10.76,
+                         lighting_radiant_fraction = 0.4, lighting_visible_fraction = 0.2,
+                         lighting_return_air_fraction = 0.4, equipment_power_density = 10.76,
+                         equipment_radiant_fraction = 0.5, equipment_latent_fraction = 0.0,
+                         occupancy = cal(S.occupancy), lighting = cal(S.lighting),
+                         equipment = cal(S.equipment), kwargs...)
+end
+
+"""
+    office_thermostat(; start_weekday = 1, holidays = Int[], availability = true) -> ThermostatSchedule
+
+The DOE medium-office thermostat: 21 °C heating / 24 °C cooling while
+occupied (weekdays 06–22 h, Saturdays 06–18 h), set back to 15.6 / 26.7 °C
+otherwise, with the `HVACOperationSchd` availability (the reference
+building's night-cycle manager, which restarts the system on the setback
+setpoints, is not modelled: `availability = false` keeps the system on
+with the setback instead).
+"""
+function office_thermostat(; start_weekday::Integer = 1,
+                           holidays::AbstractVector{<:Integer} = Int[], availability::Bool = true)
+    S = DOE_MEDIUM_OFFICE_SCHEDULES
+    cal(s) = WeeklySchedule(s.weekday, s.saturday, s.sunday; holidays, start_weekday)
+    return ThermostatSchedule(cal(S.heating_setpoint), cal(S.cooling_setpoint);
+                              availability = availability ? cal(S.hvac_operation) : nothing)
 end
 
 # =========================================================================
