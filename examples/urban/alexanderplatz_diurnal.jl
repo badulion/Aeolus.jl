@@ -106,6 +106,16 @@ svf = aggregate_to_grid(scene, vfac).svf
 @printf("SVF per column: min %.3f mean %.3f max %.3f\n",
         minimum(svf), mean(svf), maximum(svf))
 
+# L4: the city's buildings, from the Phase 50 building energy model (#29).
+# One city-mean office building with the scene's total volume, footprint and
+# wall area; its release is mapped back onto roofs and canyon cells.
+const wall_ids = [i for (i, f) in enumerate(scene.facets) if f.kind === :wall]
+bem = city_buildings(heightmap, sfc, mesh.dx, mesh.dy, mesh.dz,
+                     sum(scene.facets[i].area for i in wall_ids))
+const open_cols = findall(==(0), heightmap)
+@printf("City-mean building: %.0f m² floor area, %.0f m² walls, %.0f m² roofs\n",
+        bem.zone.floor_area, bem.zone.envelope[1].area / (1 - 0.33), bem.zone.envelope[2].area)
+
 # ---------------------------------------------------------------------------
 # 2. Simulation
 # ---------------------------------------------------------------------------
@@ -338,6 +348,14 @@ for n in 1:nsteps
         swsol = μ > 0 ? solve_shortwave(scene, vfac, sunv;
                                         dni = irr.dni, dhi = irr.dhi) : nothing
         lwsol = solve_longwave(scene, vfac; L_sky = lw_from_walls(mean(Ts)))
+        # L4: advance the buildings over the next radiation interval against
+        # the canyon air; the irradiance on the walls sets the window sun.
+        aw(ids) = swsol === nothing ? 0.0 :
+                  sum(swsol.incident[i] * scene.facets[i].area for i in ids) /
+                  sum(scene.facets[i].area for i in ids)
+        θ1 = view(interior_view(sim.θ), :, :, 1); q1 = view(interior_view(qv_p), :, :, 1)
+        step_city_buildings!(bem, start_h * 3600 + sim.t, shadow_every * dt,
+                             mean(θ1[open_cols]), mean(q1[open_cols]); sw_wall = aw(wall_ids))
         forcing = aggregate_to_grid(scene, vfac; sw = swsol, lw = lwsol,
                                     T_surface = Ts)
         # `aggregate_to_grid` returns fluxes per unit PLAN area, so a column
@@ -370,8 +388,13 @@ for n in 1:nsteps
 
     local sensible = apply_surface_flux!(sim, Ts, sfc, params;
                                     dt = dt, H_cap = 250.0, C_h = 1e-3)
-    # L4: anthropogenic heat (traffic, AC exhaust, interior heat loss)
-    add_anthropogenic_heat!(sensible, sfc, hour_of_day)
+    # L4: anthropogenic heat — buildings from the building energy model
+    # (exhaust and roof envelope at the roofs, air exchange / glazing / wall
+    # envelope into the canyon), traffic as a constant urban-area mean. The
+    # air terms go into θ and qv directly, not into `sensible`, which is a
+    # surface loss term (see urban_physics.jl, L4).
+    apply_building_heat!(sim, qv_p, sensible, bem, dt)
+    add_traffic_heat!(sim, sfc, dt)
     # R6: glass materials let some SW pass through; reduce sensible
     apply_glass_sw_transmission!(sensible, sfc, sw_arr)
     # L1: evaporative cooling
@@ -457,6 +480,17 @@ for n in 1:nsteps
                 minimum(view(interior_view(sim.θ), :, :, 1)),
                 maximum(view(interior_view(sim.θ), :, :, 1)),
                 minimum(view(interior_view(qv_p), :, :, 1)), maximum(q_dew), maximum(view(interior_view(ql_p), :, :, 1)))
+        r = bem.release
+        zr, zw = bem.zone.envelope[2], bem.zone.envelope[1]
+        @printf("           buildings: T_in=%5.2f°C  to air %5.1f W/m² (exhaust %5.1f, canyon %5.1f)  (roof env %5.1f, wall env %5.1f)  window sun %5.1f W/m²  heat %6.0f kW  cool %6.0f kW\n",
+                zone_air_temperature(bem.zone) - 273.15,
+                sum(bem.H .+ bem.LE) / (Nx * Ny),
+                (r.Q_exhaust_sensible + r.Q_exhaust_latent) / (Lx * Ly),
+                (r.Q_ventilation_sensible + r.Q_ventilation_latent + r.Q_windows + r.Q_lost +
+                 r.Q_latent_vented) / (Lx * Ly),
+                -zr.area * zr.F_outer / (Lx * Ly), -zw.area * zw.F_outer / (Lx * Ly),
+                r.Q_solar / (Lx * Ly),
+                bem.hvac_budget.Q_heating / 1e3, bem.hvac_budget.Q_cooling / 1e3)
     end
 end
 
