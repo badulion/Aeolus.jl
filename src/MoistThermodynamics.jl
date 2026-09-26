@@ -71,7 +71,7 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        saturation_specific_humidity, saturation_mixing_ratio,
        saturation_specific_humidity_ice,
        vapor_pressure, relative_humidity, relative_humidity_ice,
-       dewpoint_temperature, frost_point_temperature,
+       dewpoint_temperature, frost_point_temperature, wet_bulb_temperature,
        gas_constant_moist, heat_capacity_moist, exner_function,
        potential_temperature, temperature_from_theta,
        liquid_ice_potential_temperature, temperature_from_theta_li,
@@ -391,6 +391,39 @@ function frost_point_temperature(p::Real, q_v::Real,
     e = vapor_pressure(q_v, p, c)
     e <= 0 && return float(150.0)
     return _invert_monotone(T -> saturation_vapor_pressure_ice(T, c) - e, 150.0, 400.0)
+end
+
+"""
+    wet_bulb_temperature(T, p, q_v, c = DEFAULT_CONSTANTS) -> K
+
+Thermodynamic (adiabatic-saturation) wet-bulb temperature ``T_w`` of air
+at `T` (K), pressure `p` (Pa) and specific humidity `q_v`: the
+temperature reached when liquid water at ``T_w`` evaporates into the air
+at constant pressure until it saturates. With mixing ratio ``r =
+q_v/(1-q_v)``, the isobaric enthalpy balance of this module's
+thermodynamics (constant ``c_{pd}``, ``c_{pv}``, ``c_l`` and the
+Kirchhoff ``L_v(T)``) is exactly
+
+```math
+(c_{pd} + r c_{pv}) (T - T_w) = \\bigl(r_s(T_w, p) - r\\bigr) L_v(T_w),
+```
+
+solved by bisection on ``[150 K, T]`` (the residual is monotone in
+``T_w``). This is the psychrometric wet bulb of ASHRAE *Fundamentals*
+(2017) ch. 1, eq. 33-35, with the same saturation curve as the rest of
+the model. Saturated or supersaturated air returns `T`.
+
+Used to drive equipment curves rated on wet-bulb temperature (cooling
+coils, evaporative condensers and cooling towers).
+"""
+function wet_bulb_temperature(T::Real, p::Real, q_v::Real,
+                              c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+    Tk, pp = float(T), float(p)
+    r = float(q_v) / (1 - float(q_v))
+    saturation_mixing_ratio(Tk, pp, c) <= r && return Tk
+    f(Tw) = (saturation_mixing_ratio(Tw, pp, c) - r) * latent_heat_vapor(Tw, c) -
+            (c.cp_dry + r * c.cp_vapor) * (Tk - Tw)
+    return _invert_monotone(f, 150.0, Tk)
 end
 
 # Bisection on a monotonically increasing function. Bisection rather than

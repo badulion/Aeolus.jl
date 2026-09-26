@@ -578,6 +578,31 @@ const MT = Aeolus.MoistThermodynamics
         @info "CAPE / CIN" CAPE=cape CIN=cin
     end
 
+    @testset "Thermodynamic wet-bulb temperature" begin
+        # ASHRAE Fundamentals (2017) ch. 1 eq. 35 (SI, t in °C, W in kg/kg):
+        #   W = ((2501 - 2.326 t*) W_s* - 1.006 (t - t*)) / (2501 + 1.86 t - 4.186 t*)
+        # gives the humidity ratio of air at (t, t*). Feed our wet bulb that W and
+        # it must return t*; the residual measures the difference between the
+        # ASHRAE rounded constants and this module's c_pd, c_pv, c_l, L_v(T).
+        p = 101325.0
+        errmax = 0.0
+        for (t, tw) in ((26.67, 19.44), (35.0, 23.89), (30.0, 20.0), (20.0, 12.0), (40.0, 30.0))
+            Ws = saturation_mixing_ratio(tw + 273.15, p)
+            W = ((2501 - 2.326tw) * Ws - 1.006 * (t - tw)) / (2501 + 1.86t - 4.186tw)
+            q = W / (1 + W)
+            Tw = wet_bulb_temperature(t + 273.15, p, q)
+            errmax = max(errmax, abs(Tw - 273.15 - tw))
+            # bounded by the dew point below and the dry bulb above
+            @test dewpoint_temperature(p, q) < Tw < t + 273.15
+        end
+        @info "wet bulb vs ASHRAE eq. 35" max_abs_error_K = errmax
+        @test errmax < 0.02            # measured 4.4e-3 K
+        # saturated air: T_w = T; completely dry air is far colder
+        T = 300.0
+        @test wet_bulb_temperature(T, p, saturation_specific_humidity(T, p)) == T
+        @test wet_bulb_temperature(T, p, 0.0) < T - 12
+    end
+
     @testset "Type stability and Float32" begin
         c32 = ThermodynamicConstants{Float32}()
         @test saturation_vapor_pressure(273.16f0, c32) isa Float32
