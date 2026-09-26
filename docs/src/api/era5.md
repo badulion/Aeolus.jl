@@ -5,3 +5,4 @@ The theory behind these modules is developed in
 the pages below are the generated API reference, one per module.
 
 - [Shared contract — SurfaceExchange](era5/surface_exchange.md) — `Aeolus.SurfaceExchange`
+- [Air–sea fluxes — AirSeaFlux](era5/air_sea_flux.md) — `Aeolus.AirSeaFlux` (wave-dependent roughness, COARE bulk fluxes)
