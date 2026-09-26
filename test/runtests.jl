@@ -907,4 +907,5 @@ end
 
 @testset "Era V" begin
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
+    include("era5_plant_canopy.jl")      # Phase 48  LAD profiles, implicit canopy drag (#22)
 end

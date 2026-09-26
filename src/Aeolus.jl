@@ -64,6 +64,9 @@ include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 
+# --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53) --
+include("PlantCanopy.jl")          # Phase 48 (resolved plant canopy)
+
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -112,6 +115,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .PlantCanopy                 # Phase 48
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -598,5 +602,11 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        roughness_lengths, moisture_availability,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
+
+# Phase 48 — PlantCanopy: leaf-area-density profiles and implicit
+# (unconditionally stable) canopy drag.
+export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
+       leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
+       layer_leaf_area_density
 
 end # module
