@@ -90,8 +90,9 @@ spray flux is sensitive to this choice (see §4).
 **Drag.** Andreas et al. tuned ``V_L`` and ``V_S`` against the ``u_*``
 of their own drag relation (Andreas et al. 2012), which
 [`andreas_friction_velocity`](@ref) provides. [`coare_fluxes`](@ref)
-drives the spray with the COARE ``u_*`` instead. That ``u_*`` is 3–9 %
-larger between 10 and 25 m s⁻¹.
+drives the spray with the COARE ``u_*`` instead. That ``u_*`` is 1–8 %
+larger between 5 and 25 m s⁻¹ (11 % at 30 m s⁻¹), which raises the spray
+fluxes by roughly 2.5 times as much, since ``V_L, V_S ∝ u_*^{2.4–2.5}``.
 
 ## 2. Rain heat flux
 
@@ -106,7 +107,7 @@ H_{rain} = R\,c_w\,α\left[(T_s - T_a) + (q_s - q_a)\frac{L_v}{c_p}\right],\qqua
 Here ``R`` is the rain mass flux and ``κ_T`` the thermal diffusivity of
 air. The COARE reference codes evaluate ``dq/dT`` with the air's actual
 humidity. The wet-bulb derivation calls for ``q_{sat}``, which is what
-is used here. On the COARE 3.6 test data this makes the flux 7–18 %
+is used here. On the COARE 3.6 test data (same c_w) this makes the flux 11–22 %
 smaller than the reference.
 
 ## 3. The full COARE algorithm
@@ -188,7 +189,9 @@ observations. Water temperature, salinity and air density for the
 forcing are assumed warm-pool values (29.5 °C, 34 psu, 1.15 kg m⁻³).
 
 **Spray vs Andreas et al. (2015).** The comparison values were
-digitised from Figs. 9–11 of the paper. They are the authors' model
+digitised from Figs. 9–11 of the extended abstract (AMS 21st Symp. on
+Boundary Layers and Turbulence, 2B.3), the conference version of the
+QJRMS paper; the figure numbers refer to that document. They are the authors' model
 curves, not data.
 
 - **Sensible spray flux** (independent of wave height): within 8.7 % at
@@ -200,6 +203,11 @@ curves, not data.
   developed sea (15.5 m), the latent flux is 1.76 times Fig. 11.
 - **Sign change of the latent spray flux:** at RH = 98.24 %, against
   "about 98.1 %" in the paper. Here a_w comes from the sea-salt κ = 1.10.
+- **Near saturation** (RH > 99 %) the exponential radius law with the
+  e-folding ``τ_r`` breaks down, because ``r_{eq}`` grows to millimetres:
+  ``H_{L,sp}`` returns to 0 at RH = 100 % (−12 W m⁻² at 99.5 %), while
+  Fig. 11 stays near −20 W m⁻². Supersaturated air is treated as
+  RH = 100 %.
 - **Crossover winds**, where spray equals the interfacial flux, with
   COARE interfacial fluxes: 21.0 m s⁻¹ for sensible heat and
   27.75 m s⁻¹ for latent heat, against the paper's ≈ 19 and ≈ 26.

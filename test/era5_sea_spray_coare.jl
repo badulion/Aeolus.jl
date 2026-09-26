@@ -326,6 +326,19 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
         d = coare_fluxes(coare35_bulk(); args..., cool_skin = nothing)
         @test d.ΔT_cool == 0 && d.LE > a.LE && d.H > a.H
         @test_throws ArgumentError spray_dry_radius(50e-6, 0.0)
+        # One seawater heat capacity throughout: rain heat and spray sensible
+        # heat are both ∝ c_w, so the c_w passed to coare_fluxes must reach
+        # them (it once reached only the cool skin).
+        r40 = coare_fluxes(coare35_bulk(); args..., rain = 1e-3, spray = sp, c_w = 4000.0)
+        r41 = coare_fluxes(coare35_bulk(); args..., rain = 1e-3, spray = sp, c_w = 4181.0)
+        @test r40.H_rain / r41.H_rain ≈ 4000 / 4181 rtol = 1e-3
+        @test r40.H_spray / r41.H_spray ≈ 4000 / 4181 rtol = 1e-3
+        # Supersaturated air (fog over the sea, or q_air a hair above q_sat)
+        # has no κ-Köhler equilibrium; it is treated as saturation instead
+        # of aborting the flux calculation: droplets then do not evaporate.
+        qsat = _MT.saturation_specific_humidity(299.15, 101000.0)
+        fog = coare_fluxes(coare35_bulk(); args..., q_air = 1.002qsat, spray = sp)
+        @test fog.LE_spray <= 0 && fog.H_spray > 0
     end
 
     @testset "Coupling: WaterColumn with COARE fluxes, spray and rain" begin

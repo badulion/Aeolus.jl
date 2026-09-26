@@ -1221,7 +1221,8 @@ spray_residence_time(r0::Real, H_s::Real) = H_s / (2 * terminal_velocity(r0))
 
 """
     sea_spray_fluxes(sp::AndreasSpray = AndreasSpray(); u_star, T_sea, T_air, RH,
-                     p = 101325, S = 34, H_s, c = DEFAULT_SURFACE_CONSTANTS)
+                     p = 101325, S = 34, H_s, c_w = cp_water(c),
+                     c = DEFAULT_SURFACE_CONSTANTS)
         -> (H_L, H_S, E, T_eq, r_eq, τ_r, τ_f, r_f, V_L, V_S)
 
 Spray-mediated latent and sensible heat fluxes (W m⁻², positive upward)
@@ -1242,16 +1243,28 @@ the radius `r_f = r_eq + (r_0 - r_eq) e^{-τ_f/τ_r}` it has on falling back
 are the interfacial ones plus these (their eq. 2.1); as in Andreas et
 al., the spray does not feed back on the stability.
 
+`c_w` is the specific heat of the seawater the droplets carry
+(J kg⁻¹ K⁻¹; default the contract's fresh-water `cp_water`, ≈ 4.5 %
+above seawater's ≈ 4000).
+
 Above ``RH ≈ a_w`` (≈ 98 % at 34 psu) the droplets grow and ``H_L`` is
-negative.
+negative. Supersaturated air (``RH > 1``, which would activate the
+droplet and has no κ-Köhler equilibrium) is treated as ``RH = 1``.
+Close to saturation the exponential radius law (their eq. 2.9) with the
+e-folding ``τ_r`` underestimates growth, because ``r_{eq}`` runs off to
+millimetres and ``τ_r`` diverges: ``H_L`` returns towards 0 as
+``RH → 1`` (Fig. 11 case: −12 W m⁻² at 99.5 %, −5 at 99.9 %, 0 at
+100 %) where Andreas et al.'s curve stays near −20 W m⁻².
 """
 function sea_spray_fluxes(sp::AndreasSpray = AndreasSpray(); u_star::Real, T_sea::Real,
                           T_air::Real, RH::Real, p::Real = 101325.0, S::Real = 34.0,
-                          H_s::Real, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+                          H_s::Real, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                          c_w::Real = cp_water(c))
     th = c.thermo
+    RH = min(RH, one(RH))              # supersaturation: no equilibrium; see docstring
     V = spray_wind_functions(sp, u_star)
     ρw = water_density(sp.eos, T_sea, S)
-    cw = cp_water(c)
+    cw = c_w
     Lv = latent_heat_vapor(T_air, th)
     kw = (T_air = T_air, RH = RH, p = p, S = S, T_sea = T_sea, eos = sp.eos,
           aerosol = sp.aerosol, c = c)
@@ -1270,7 +1283,7 @@ end
 # =========================================================================
 
 """
-    rain_heat_flux(rain; T_air, q_air, T_s, q_s, p = 101325,
+    rain_heat_flux(rain; T_air, q_air, T_s, q_s, p = 101325, c_w = cp_water(c),
                    c = DEFAULT_SURFACE_CONSTANTS) -> W m⁻² (positive = ocean cooling)
 
 Sensible heat carried into the sea by rain falling at the wet-bulb
@@ -1286,9 +1299,12 @@ air temperature, vapour diffusivity ``D_v`` and thermal diffusivity
 ``κ_T = k_a/(ρ_a c_p)`` of air (`Superdroplet`). The COARE reference
 codes evaluate the slope with the air's *actual* humidity instead of
 ``q_{sat}``; the wet-bulb derivation calls for ``q_{sat}``, used here.
+`c_w` is the specific heat of the (rain) water that is warmed to the sea
+temperature, J kg⁻¹ K⁻¹.
 """
 function rain_heat_flux(rain::Real; T_air::Real, q_air::Real, T_s::Real, q_s::Real,
-                        p::Real = 101325.0, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+                        p::Real = 101325.0, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                        c_w::Real = cp_water(c))
     th = c.thermo
     rain > 0 || return zero(float(rain))
     pa = PhasePartition(q_air)
@@ -1299,7 +1315,7 @@ function rain_heat_flux(rain::Real; T_air::Real, q_air::Real, T_s::Real, q_s::Re
     Dv = vapor_diffusivity(T_air, p)
     dqdT = saturation_specific_humidity(T_air, p, th) * Lv / (R_v(th) * T_air^2)
     α = 1 / (1 + Lv / cpa * dqdT * Dv / κT)
-    return rain * cp_water(c) * α * ((T_s - T_air) + (q_s - q_air) * Lv / cpa)
+    return rain * c_w * α * ((T_s - T_air) + (q_s - q_air) * Lv / cpa)
 end
 
 # =========================================================================
@@ -1384,7 +1400,9 @@ Inputs: wind `U` (m s⁻¹) at `z_u`, air temperature `T_air` (K) and
 specific humidity `q_air` at `z_t` (one height for both scalars), surface
 pressure `p` (Pa), salinity `S` (psu), net shortwave into the sea
 `sw_net` and downwelling longwave `lw_down` (W m⁻²). `cool_skin =
-nothing` switches the cool skin off.
+nothing` switches the cool skin off. The seawater specific heat `c_w` is
+used consistently by the cool skin, the rain heat flux and the spray
+sensible flux.
 
 The cool skin sees only the interfacial fluxes (spray heat leaves with
 the droplets, not by conduction through the skin).
@@ -1441,11 +1459,11 @@ function coare_fluxes(b::BulkAirSea = coare35_bulk(); U::Real, z_u::Real, z_t::R
         Hs = sea === nothing ? fully_developed_sea_state(max(r.U10N, 0.5); g = grav(c)).H_s : sea.H_s
         RH = relative_humidity(T_air, p, q_air, th)
         sp = sea_spray_fluxes(spray; u_star = r.surface.u_star, T_sea = T_sub, T_air = T_air,
-                              RH = RH, p = p, S = S, H_s = Hs, c = c)
+                              RH = RH, p = p, S = S, H_s = Hs, c = c, c_w = c_w)
         Hsp, LEsp = sp.H_S, sp.H_L
     end
-    Lv = latent_heat_vapor(Ts, th)
-    Hr = rain_heat_flux(rain; T_air = T_air, q_air = q_air, T_s = Ts, q_s = qs, p = p, c = c)
+    Hr = rain_heat_flux(rain; T_air = T_air, q_air = q_air, T_s = Ts, q_s = qs, p = p, c = c,
+                        c_w = c_w)
     Ht, LEt = H + Hsp, LE + LEsp
     Et = E + (spray === nothing ? 0.0 : LEsp / latent_heat_vapor(T_air, th))
     Qo = sw_net + lw_net - Ht - LEt - Hr
@@ -1543,6 +1561,8 @@ the column iterates itself) and seawater humidity it
   3. adds the rain heat flux of `forcing.rain` (if `rain_heat`) to the
      heat the column loses.
 
+Rain and spray use the column's own specific heat `col.c_p`.
+
 It returns ``SurfaceFluxes(R_n, H, LE, G, τ, E)`` with total (interfacial
 + spray) `H`, `LE`, `E`, the COARE stress ``τ = ρu_*^2 U/S`` and
 ``G = R_n - H - LE - H_{rain}`` — exactly what the column absorbs, so the
@@ -1579,13 +1599,13 @@ function coare_flux_hook(b::BulkAirSea = coare35_bulk(); sea = nothing,
                  sea.H_s
             sp = sea_spray_fluxes(spray; u_star = sl.u_star, T_sea = T_sub, T_air = f.T_air,
                                   RH = relative_humidity(f.T_air, f.p, f.q_air, th), p = f.p,
-                                  S = col.S, H_s = Hs, c = c)
+                                  S = col.S, H_s = Hs, c = c, c_w = col.c_p)
             H += sp.H_S
             LE += sp.H_L
             E += sp.E
         end
         Hr = rain_heat ? rain_heat_flux(f.rain; T_air = f.T_air, q_air = f.q_air, T_s = Ts,
-                                        q_s = qs, p = f.p, c = c) : 0.0
+                                        q_s = qs, p = f.p, c = c, c_w = col.c_p) : 0.0
         return SurfaceFluxes(promote(Rn, H, LE, Rn - H - LE - Hr, τ, E)...)
     end
 end
