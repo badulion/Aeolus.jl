@@ -269,4 +269,123 @@ window_rho_clr(Φ) = poly4(RHO_CLR, cos(Φ)) - window_tau_clr(Φ)
         h3 = glazing_optics_hemispherical(single_glazing(0.003))
         @info @sprintf("3 mm clear, hemispherical: T %.3f R %.3f A %.3f", h3.T, h3.R, sum(h3.A))
     end
+    @testset "Gas gaps (ISO 15099): conduction, convection, radiation limits" begin
+        c = DEFAULT_SURFACE_CONSTANTS
+        # One source of truth: the ISO 15099 air fit reproduces the contract's
+        # still-air conductivity at 0 °C.
+        @test USG.gas_conductivity(GLAZING_AIR, 273.15) ≈ c.k_air rtol = 5e-3
+        @test USG.gas_conductivity(GLAZING_ARGON, 283.15) < USG.gas_conductivity(GLAZING_AIR, 283.15)
+        # Nusselt: pure conduction at Ra → 0, near-continuous across branches
+        @test gap_nusselt(0.0, 100.0) == 1.0
+        @test gap_nusselt(100.0, 100.0) ≈ 1 atol = 0.02
+        for Ra in (1e4, 5e4)
+            @test gap_nusselt(Ra * (1 - 1e-9), 1.0) ≈ gap_nusselt(Ra * (1 + 1e-9), 1.0) rtol = 0.02
+        end
+        @test gap_nusselt(1e6, 50.0) > gap_nusselt(1e5, 50.0) > gap_nusselt(1e3, 50.0)
+        # Narrow gap, tiny ΔT: h_c = k/d (conduction); h_r → 4σT³/(2/ε-1)
+        gap = GlazingGap(0.006)
+        T = 283.15; ε = UNCOATED_GLASS_EMISSIVITY
+        h = gap_conductance(gap, T + 0.005, T - 0.005, ε, ε)
+        @test h.h_c ≈ USG.gas_conductivity(GLAZING_AIR, T) / 0.006 rtol = 1e-3
+        @test h.h_r ≈ 4c.σ_SB * T^3 / (2 / ε - 1) rtol = 1e-6
+        # the radiative coefficient is exact, not linearised
+        T1, T2, ε1, ε2 = 300.0, 270.0, 0.84, 0.10
+        h = gap_conductance(gap, T1, T2, ε1, ε2)
+        @test h.h_r * (T1 - T2) ≈ c.σ_SB * (T1^4 - T2^4) / (1 / ε1 + 1 / ε2 - 1) rtol = 1e-12
+        # A wide gap with a large ΔT convects (Nu > 1)
+        hw = gap_conductance(GlazingGap(0.03), 300.0, 270.0, ε, ε)
+        @test hw.h_c > USG.gas_conductivity(GLAZING_AIR, 285.0) / 0.03 * 1.2
+    end
+
+    @testset "U-value and SHGC: analytic single pane, published insulating units" begin
+        σ = DEFAULT_SURFACE_CONSTANTS.σ_SB
+        # Single pane: U = 1/(1/h_o + d/k + 1/h_i) exactly (series resistances)
+        p = GlassPane(0.004)
+        k = p.material.conductivity
+        for (ho, hi) in ((25.0, 7.7), (15.0, 3.0))
+            @test glazing_u_value(single_glazing(0.004); h_out = ho, h_in = hi) ≈
+                  1 / (1 / ho + 0.004 / k + 1 / hi) rtol = 1e-12
+        end
+        # Inward-flowing fraction of one pane: the conductance divider
+        ho, hi = 23.0, 7.7
+        Go = 1 / (1 / ho + 0.002 / k); Gi = 1 / (1 / hi + 0.002 / k)
+        N1 = inward_flowing_fractions(single_glazing(0.004); h_out = ho, h_in = hi)
+        @test N1[1] ≈ Gi / (Gi + Go) rtol = 1e-12
+        # EN 410's single-pane formula h_i/(h_i + h_e) neglects the pane
+        # resistance; it differs by < 0.005
+        @test abs(N1[1] - hi / (hi + ho)) < 0.005
+        # Ordering: argon < air, triple < double < single; outer pane's
+        # absorbed heat mostly goes out, the inner pane's mostly in
+        Ua = glazing_u_value(double_glazing())
+        Ur = glazing_u_value(double_glazing(gas = GLAZING_ARGON))
+        @test Ur < Ua < glazing_u_value(single_glazing())
+        @test glazing_u_value(triple_glazing()) < Ua
+        @test issorted([glazing_u_value(double_glazing(gap = d)) for d in (0.006, 0.009, 0.012)]; rev = true)
+        Nd = inward_flowing_fractions(double_glazing())
+        @test Nd[1] < 0.5 < Nd[2] < 1
+        @test issorted(inward_flowing_fractions(triple_glazing()))
+
+        # --- Published centre-of-glass U, clear/clear 6-13-6 (Vitro IGU data,
+        # NFRC 100 winter: T_out = -18 °C, T_in = 21 °C, V = 5.5 m/s).
+        # Exterior: h_c = 4 + 4V (ISO 15099 Eq. 131); interior: laminar
+        # natural convection on a 1 m vertical plate, Nu = 0.56 Ra^(1/4)
+        # (ISO 15099 §8.3.2). Radiation on both sides to surroundings at
+        # the air temperature, h_r = εσ(T_s² + T²)(T_s + T) — the exact
+        # grey-surface coefficient. Everything is evaluated test-side and
+        # iterated to the surface temperatures the U-value implies.
+        # 1 Btu/(h ft² °F) = 5.678263 W/(m² K).
+        ε = UNCOATED_GLASS_EMISSIVITY
+        hrad(Ts, T) = ε * σ * (Ts^2 + T^2) * (Ts + T)
+        function nfrc_winter_u(g)
+            T_out, T_in = 255.15, 294.15
+            U = 2.7; hc_in = 2.5; Tsi = T_in - 5.0; Tso = T_out + 1.0
+            for _ in 1:30
+                ho = 4 + 4 * 5.5 + hrad(Tso, T_out)
+                hi = hc_in + hrad(Tsi, T_in)
+                U = glazing_u_value(g; T_out = T_out, T_in = T_in, h_out = ho, h_in = hi)
+                Tsi = T_in - U * (T_in - T_out) / hi
+                Tso = T_out + U * (T_in - T_out) / ho
+                Tf = (Tsi + T_in) / 2
+                kk = USG.gas_conductivity(GLAZING_AIR, Tf); μ = USG.gas_viscosity(GLAZING_AIR, Tf)
+                cp = USG.gas_heat_capacity(GLAZING_AIR, Tf)
+                ρ = 101325 * 0.02897 / (8.314462618 * Tf)
+                Ra = ρ^2 * 9.80665 * cp * (T_in - Tsi) / (Tf * μ * kk)          # H = 1 m
+                hc_in = 0.56 * Ra^0.25 * kk
+            end
+            return U, hc_in
+        end
+        U_air, hci = nfrc_winter_u(double_glazing(thickness = 0.006, gap = 0.0127))
+        U_ar, _ = nfrc_winter_u(double_glazing(thickness = 0.006, gap = 0.0127, gas = GLAZING_ARGON))
+        U_pub_air, U_pub_ar = 0.47 * 5.678263, 0.45 * 5.678263
+        @info @sprintf("6-13-6 clear, NFRC winter U: air %.3f (Vitro %.3f), argon %.3f (Vitro %.3f) W m⁻² K⁻¹; interior h_c %.2f",
+                       U_air, U_pub_air, U_ar, U_pub_ar, hci)
+        @test abs(U_air - U_pub_air) / U_pub_air < 0.03
+        @test abs(U_ar - U_pub_ar) / U_pub_ar < 0.03
+
+        # --- Published SHGC. NFRC 100 summer: T_out = 32 °C, T_in = 24 °C,
+        # V = 2.75 m/s (h_c = 4 + 4V), interior h_c = 2.5 + radiation.
+        nfrc_summer(g, θ) = glazing_shgc(g, θ; T_out = 305.15, T_in = 297.15,
+                                         h_out = 4 + 4 * 2.75 + 4ε * σ * 305.15^3,
+                                         h_in = 2.5 + 4ε * σ * 297.15^3)
+        s3 = nfrc_summer(single_glazing(0.003), 0.0)
+        @test abs(s3 - 0.86) <= 0.01                      # LLumar/NFRC single 3 mm clear
+        g6 = double_glazing(thickness = 0.006, gap = 0.0127)
+        s6 = nfrc_summer(g6, 0.0)
+        v6 = glass_pane_from_normal(0.006, 0.77, 0.08)      # Vitro 6 mm row
+        g6v = Glazing([v6, v6], [GlazingGap(0.0127)])
+        s6v = nfrc_summer(g6v, 0.0)
+        @info @sprintf("SHGC: single 3 mm %.3f (NFRC 0.86); 6-13-6 default pane %.3f, Vitro-inverted pane %.3f (Vitro NFRC 0.70)",
+                       s3, s6, s6v)
+        @test abs(s6 - 0.70) <= 0.02
+        @test abs(s6v - 0.70) <= 0.01
+        # EN 410 conventions give nearly the same g for these units
+        @test abs(glazing_shgc(g6, 0.0) - s6) < 0.01
+        # Angular: SHGC falls with incidence angle; diffuse below normal
+        shgcs = [glazing_shgc(g6, deg2rad(θd)) for θd in 0:10:80]
+        @test issorted(shgcs; rev = true)
+        @test glazing_shgc(g6, :hemispherical) < shgcs[1]
+        # SHGC = T + Σ N A, and lies between T and T + ΣA
+        o = glazing_optics(g6, 0.0)
+        @test o.T < shgcs[1] < o.T + sum(o.A)
+    end
 end
