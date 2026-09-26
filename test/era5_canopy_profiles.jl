@@ -44,6 +44,43 @@ function _cp_wind(p::AbstractLeafAreaDensity, h; C_d, ztop, N = 400, β = 0.3, u
     return (; sol, lad, l_c, U_h, τ, τ_h, d, zf)
 end
 
+# Coupled in-canopy air temperature: leaf energy balance of every layer
+# (sunlit/shaded leaves, two-stream shortwave, longwave exchange) gives
+# the heat source; the steady scalar column with the Harman & Finnigan
+# (2008) diffusivity turns it into a temperature profile; repeat until the
+# air temperature the leaves see is the one their heat produces.
+function _cp_temperature(p, h; C_d, ztop, N, u_star, T_ref, rh, μ, S_dir, S_dif,
+                         lw_down, gs, H_ground = 0.0, Sc = 0.5, β = 0.3)
+    m = _cp_wind(p, h; C_d = C_d, ztop = ztop, N = N, u_top = 1.0, β = β)
+    U = m.sol.u .* (u_star / m.sol.u_star)
+    zf = m.zf; lad = m.lad
+    K = [harman_finnigan_scalar_diffusivity(z; h = h, u_star = u_star, l_mix = m.l_c,
+                                            β = β, Sc = Sc) for z in zf]
+    c = DEFAULT_CONSTANTS
+    ρcp = 101325 / (R_d(c) * T_ref) * c.cp_dry
+    ea = rh * saturation_vapor_pressure(T_ref)
+    leaves = RossGoudriaanLeaves(0.01)             # CLM needleleaf evergreen χ_L
+    sw = μ > 0 ? (canopy_shortwave(zf, lad; sun = μ, sw_direct = 0.45S_dir, sw_diffuse = 0.45S_dif,
+                                   optics = LeafOptics(0.07, 0.05), albedo_direct = 0.10, leaves = leaves),
+                  canopy_shortwave(zf, lad; sun = μ, sw_direct = 0.55S_dir, sw_diffuse = 0.55S_dif,
+                                   optics = LeafOptics(0.35, 0.10), albedo_direct = 0.20, leaves = leaves)) :
+         nothing
+    Ta = fill(Float64(T_ref), N); leaf = nothing; col = nothing; iters = 0
+    for it in 1:100
+        iters = it
+        leaf = canopy_leaf_energy_balance(zf, lad; shortwave = sw, par = sw === nothing ? nothing : 1,
+                                          T_air = Ta, e_air = ea, U = max.(U, 0.05), leaves = leaves,
+                                          lw_down = lw_down, T_ground = Ta[1], stomata = gs,
+                                          boundary_layer = CampbellNormanBoundaryLayer(leaf_width = 0.01))
+        col = solve_canopy_scalar_column(zf, K, leaf.heat_source ./ ρcp; top_value = T_ref,
+                                         bottom_flux = H_ground / ρcp)
+        δ = maximum(abs.(col.c .- Ta))
+        Ta .= col.c
+        δ < 1e-7 && break
+    end
+    return (; Ta, z = col.z, leaf, col, ρcp, iters, K)
+end
+
 @testset "Era V — PlantCanopy: within-canopy profiles (#25)" begin
 
 @testset "TabulatedLAD: measured profiles" begin
@@ -302,6 +339,64 @@ end
             join((@sprintf("%.2f", Uu[i] / hy.U_over_ustar.NN[i]) for i in trunk), ", "))
     @test all(Uu[trunk] .< hy.U_over_ustar.NN[trunk])
     @test_broken all(abs.(Uu[trunk] ./ hy.U_over_ustar.NN[trunk] .- 1) .< 0.3)
+end
+
+
+@testset "forest: Hyytiälä in-canopy air temperature" begin
+    # Semi-quantitative: Launiainen et al. (2007, Fig. 3b) give median
+    # Θ(z) - Θ(16.8 m) per stability class but not the radiation and wind
+    # of those medians. The forcing below is an assumed clear midsummer
+    # midday (μ = 0.78, 600 + 120 W m⁻², u* = 0.4 m s⁻¹) and clear night
+    # (sky 90 W m⁻² below σT⁴, u* = 0.1 m s⁻¹) at 61.8° N; stomata 0.1 /
+    # 0.005 mol m⁻² s⁻¹; no forest-floor sensible heat. So the test asserts
+    # the sign and size of the in-canopy anomaly, not a fitted value.
+    hy = canopy_profile_observations().hyytiala
+    h = hy.h
+    p = TabulatedLAD(hy.lad_z .* h, hy.lad)
+    kw = (; C_d = hy.C_d, ztop = 16.8, N = 84)
+    σ = 5.670374419e-8
+    day = (; u_star = 0.4, T_ref = 293.15, rh = 0.5, μ = 0.78, S_dir = 600.0, S_dif = 120.0,
+           lw_down = 330.0, gs = 0.1)
+    night = (; u_star = 0.1, T_ref = 285.15, rh = 0.8, μ = 0.0, S_dir = 0.0, S_dif = 0.0,
+             lw_down = σ * 285.15^4 - 90, gs = 0.005)
+    res = Dict{Symbol,Any}()
+    for (lab, f, cls) in ((:day, day, :US), (:night, night, :S))
+        r = _cp_temperature(p, h; kw..., f...)
+        @test r.leaf.converged
+        @test r.iters < 100
+        # The coupling conserves energy: the heat leaving the column top is
+        # the leaves' sensible heat (no ground flux).
+        @test r.col.flux[end] * r.ρcp ≈ r.leaf.H_total rtol = 1e-10
+        ΔT = [_cp_interp(r.z, r.Ta, z) - f.T_ref for z in hy.T_z_m[1:2]]
+        o = getproperty(hy.T_minus_ref, cls)[1:2]
+        @printf("    %-5s (%s): H_leaves = %6.1f W m⁻², Θ - Θ(16.8 m) at 4.2 / 8.4 m: obs %+.2f / %+.2f K, model %+.2f / %+.2f K\n",
+                lab, cls, r.leaf.H_total, o[1], o[2], ΔT[1], ΔT[2])
+        res[lab] = (; ΔT, o, H = r.leaf.H_total)
+    end
+    # Day: the crown heats the air; the sub-crown air is warmer than the
+    # reference level, as observed (+0.29 / +0.30 K). The model's +1.38 K
+    # is 4.6× too large (assumed forcing; H_leaves = 275 W m⁻²; neutral
+    # Sc = 0.5, whereas convective mixing in the US class is stronger);
+    # bounded here at 2 K.
+    D = res[:day]
+    @test D.H > 0
+    @test all(D.o .> 0) && all(0 .< D.ΔT .< 2.0)
+    # With no floor flux and no sources below the crown the trunk space is
+    # isothermal, as the observations nearly are (0.292 vs 0.301 K).
+    @test abs(D.ΔT[1] - D.ΔT[2]) < 0.02
+    # Night: radiatively cooled needles cool the canopy air below the
+    # reference level, as observed (-3.16 / -2.11 K). The neutral closure
+    # gives about -1.5 K: stable stratification, which suppresses mixing in
+    # the S regime, is not in the model.
+    Nn = res[:night]
+    @test Nn.H < 0
+    @test all(Nn.o .< 0) && all(-5 .< Nn.ΔT .< -0.5)
+    # K-theory scaling: doubling u* doubles K, the sources barely change,
+    # so the anomaly halves.
+    r2 = _cp_temperature(p, h; kw..., day..., u_star = 0.8)
+    ΔT2 = _cp_interp(r2.z, r2.Ta, 8.4) - day.T_ref
+    @printf("    day, u* doubled: ΔT(8.4 m) %+.3f K (ratio %.2f)\n", ΔT2, ΔT2 / D.ΔT[2])
+    @test 0.4 < ΔT2 / D.ΔT[2] < 0.65
 end
 
 end
