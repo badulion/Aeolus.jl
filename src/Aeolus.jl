@@ -602,4 +602,18 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
 
+# Phase 52 (#38) — OceanMixedLayer: lake / coastal-sea water column with a
+# Kraus–Turner mixed layer, shortwave penetration, cool skin and warm layer.
+export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
+       water_density, water_thermal_expansion, water_haline_contraction,
+       SolarBands, jerlov_water, soloviev_solar,
+       solar_transmission, solar_absorbed_between, solar_mean_transmission,
+       CoolSkin, cool_skin, BusingerDyerLogLinear,
+       AbstractWarmLayer, NoWarmLayer, FairallWarmLayer, ZengBeljaarsWarmLayer,
+       step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth,
+       KrausTurnerMixing, WaterColumn, layer_depths,
+       absorb_heat!, convective_adjustment!, wind_mixing!, mix_column!,
+       column_heat_content, column_potential_energy, mixed_layer_depth,
+       salinity_humidity_factor
+
 end # module

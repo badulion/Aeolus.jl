@@ -907,4 +907,5 @@ end
 
 @testset "Era V" begin
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
+    include("era5_ocean_mixed_layer.jl") # Phase 52  water column, cool skin, warm layer (#38)
 end

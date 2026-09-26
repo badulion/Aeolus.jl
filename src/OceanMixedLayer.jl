@@ -452,6 +452,33 @@ own state and provide
 abstract type AbstractWarmLayer end
 
 """
+    step_warm_layer!(wl, sw_net, q_out, τ, dt; α, ρ_w, c_w, g, κ = 0.4) -> ΔT
+
+Advance warm layer `wl` by `dt` seconds under net shortwave `sw_net` into
+the water, non-solar heat loss `q_out` (W m⁻², positive cooling) and
+wind stress `τ` (N m⁻²), with water thermal expansion `α`, density
+`ρ_w`, heat capacity `c_w`, gravity `g` and von Kármán `κ`. Returns the
+warming across the layer. See [`AbstractWarmLayer`](@ref).
+"""
+function step_warm_layer! end
+
+"Reset a warm layer to its no-warming state (the daily reset of the Fairall scheme)."
+function reset_warm_layer! end
+
+"""
+    warm_layer_warming(wl) -> K
+    warm_layer_warming(wl, z) -> K
+
+Warming across the whole warm layer, ``T(0^-) - T(-D)``, or the part of
+it between the surface and depth `z` (m) according to the scheme's
+profile shape.
+"""
+function warm_layer_warming end
+
+"Depth of the warm layer (m): `D` for the Fairall scheme, the fixed `d` for Zeng–Beljaars."
+function warm_layer_depth end
+
+"""
     NoWarmLayer()
 
 No sub-grid warm layer: the top layer of the column is the bulk
@@ -510,8 +537,8 @@ function reset_warm_layer!(w::FairallWarmLayer)
     return w
 end
 warm_layer_depth(w::FairallWarmLayer) = w.D
-"Warming ``T(0) - T(-z)`` of a linear profile: `ΔT min(z, D)/D`."
 warm_layer_warming(w::FairallWarmLayer) = w.ΔT
+# linear profile: warming between the surface and z is ΔT min(z, D)/D
 warm_layer_warming(w::FairallWarmLayer, z::Real) = w.D <= z ? w.ΔT : w.ΔT * z / w.D
 
 function step_warm_layer!(w::FairallWarmLayer, sw_net::Real, q_out::Real, τ::Real, dt::Real;
@@ -581,7 +608,7 @@ end
 reset_warm_layer!(w::ZengBeljaarsWarmLayer) = (w.ΔT = 0; w)
 warm_layer_depth(w::ZengBeljaarsWarmLayer) = w.d
 warm_layer_warming(w::ZengBeljaarsWarmLayer) = w.ΔT
-"Warming between the surface and depth `z`: ``ΔT \\min(z/d, 1)^ν``."
+# similarity profile: warming between the surface and z is ΔT min(z/d, 1)^ν
 warm_layer_warming(w::ZengBeljaarsWarmLayer, z::Real) = w.ΔT * min(max(z, 0) / w.d, 1)^w.ν
 
 """

@@ -38,6 +38,7 @@ makedocs(
             "Fog and dew"                 => "theory/fog.md",
             "Radiation fog"               => "theory/radiation_fog.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
+            "Water surfaces (mixed layer)" => "theory/ocean_mixed_layer.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -92,6 +93,7 @@ makedocs(
             "Era V — surface exchange" => [
                 "Overview"                     => "api/era5.md",
                 "SurfaceExchange"              => "api/era5/surface_exchange.md",
+                "OceanMixedLayer"              => "api/era5/ocean_mixed_layer.md",
             ],
         ],
         "Examples" => [

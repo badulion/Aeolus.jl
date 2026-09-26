@@ -5,3 +5,4 @@ The theory behind these modules is developed in
 the pages below are the generated API reference, one per module.
 
 - [Shared contract — SurfaceExchange](era5/surface_exchange.md) — `Aeolus.SurfaceExchange`
+- [Lake and sea surface — OceanMixedLayer](era5/ocean_mixed_layer.md) — `Aeolus.OceanMixedLayer`
