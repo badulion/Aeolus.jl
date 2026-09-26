@@ -64,6 +64,7 @@ include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 include("UrbanSurface.jl")         # Phase 49 (urban facets; needs SurfaceExchange + SurfaceOptics)
+include("BuildingEnergy.jl")       # Phase 50 (indoor air + thermal mass; reuses UrbanSurface columns)
 
 using .Grids
 using .Fields
@@ -114,6 +115,7 @@ using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
 using .UrbanSurface                # Phase 49
+using .BuildingEnergy              # Phase 50
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -615,5 +617,14 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        UrbanFacet, interior_heat_flux, set_interior_boundary!,
        set_interior_temperature!, facet_layer_temperatures,
        example_roof_layers, example_wall_layers, example_ground_layers
+
+# Phase 50 — BuildingEnergy: prognostic indoor air temperature, thermal
+# mass (UrbanSurface conduction columns), ventilation, and the ISO 13790
+# 5R1C reference model.
+export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
+       BuildingZone, ZoneForcing, ZoneBudget, step_zone!, facet_fluxes,
+       zone_air_temperature, zone_heat_content, zone_heat_loss_coefficient,
+       zone_mean_radiant_temperature, zone_operative_temperature,
+       air_heat_capacity, ventilation_conductance, element_transmittance
 
 end # module
