@@ -371,8 +371,8 @@ l(z) = \min(l_c,\ κz)\quad (z ≤ h),\qquad l(z) = l_c + κ(z - h)\quad (z > h)
 the Harman & Finnigan (2007) canopy length, limited by its wall value
 ``κz`` near the ground and growing at the surface-layer rate above the
 canopy. The wall limit matters: with ``l = l_c`` down to a no-slip floor
-the first wind-tunnel comparison below put 13 % of the canopy-top stress
-on the floor (observed: none) and under-predicted the lower-canopy wind
+the first wind-tunnel comparison below put 13 % of the stress
+(``τ_g = 0.13u_*^2``) on the floor (observed: none; 0.007 with the limit) and under-predicted the lower-canopy wind
 by 0.11 ``U_h``; with the limit the error is 0.02 ``U_h``.
 
 The zero-plane displacement is the centroid of momentum absorption,
@@ -390,8 +390,8 @@ multilayer canopy of Bonan et al. (2018):
 ``K_c = (l_c u_*/Sc)\,e^{(z-h)β/l_c}`` in the canopy, Sc = 0.5
 (`harman_finnigan_scalar_diffusivity`). The local
 ``l^2|∂U/∂z|`` of the wind solution is not used for scalars: in a
-sheltered trunk space it is an order of magnitude smaller (4×10⁻³ against
-0.1 m² s⁻¹ at 4 m in the Hyytiälä case), because the turbulence there is
+sheltered trunk space it is much smaller (``K/Sc`` = 0.022 against
+0.145 m² s⁻¹ at 4 m in the Hyytiälä case with ``u_*`` = 0.4 m s⁻¹), because the turbulence there is
 imported from the crown, not made by local shear; with it, a 20 W m⁻²
 forest-floor heat flux produced a 13 K near-ground excess.
 
