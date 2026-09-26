@@ -909,4 +909,5 @@ end
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
     include("era5_surface_tiles.jl")     # Phase 53 sub-grid tile mosaic, flux aggregation (#41)
     include("era5_blending_height.jl")   # Phase 53 blending height, effective roughness, IBL (#42)
+    include("era5_heterogeneous_surface.jl") # Phase 53 resolved patchy-surface LES vs tiles (#43)
 end
