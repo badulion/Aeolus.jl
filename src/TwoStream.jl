@@ -145,9 +145,9 @@ The three removable singularities are handled explicitly:
   * `τ → 0` — everything reduces to pass-through (`R = 0`, `T = 1`).
   * `ω → 1` (conservative) — `k → 0`, so `sinh(kτ)/k → τ` and the
     general formula's `0/0` is replaced by its limit.
-  * `k μ₀ → 1` — the direct-beam denominator `1 - k²μ₀²` vanishes; `μ₀`
-    is perturbed by one part in `10⁶`, which is the standard fix and is
-    far below the accuracy of the approximation itself.
+  * `k μ₀ → 1` — the direct-beam denominator `1 - k²μ₀²` vanishes; the
+    beam source terms are evaluated at `μ₀(1 ± 10⁻⁴)` (each with its own
+    beam transmittance) and averaged, which is accurate to ~1e-8.
 """
 function layer_reflectance_transmittance_sw(variant::TwoStreamVariant,
                                             τ::T, ω::T, g::T, μ₀::T) where {T}
@@ -176,24 +176,37 @@ function layer_reflectance_transmittance_sw(variant::TwoStreamVariant,
 
     # --- direct-beam source terms
     # The denominator 1 - k²μ₀² vanishes when the beam extinction matches
-    # the diffuse eigenvalue. Perturb μ₀ minutely rather than special-case
-    # the whole expression.
-    μ = μ₀
-    if abs(1 - (k * μ)^2) < 1e-6
-        μ = μ₀ * (1 + T(1e-6))
-    end
+    # the diffuse eigenvalue (a removable singularity). There the formula
+    # is evaluated at μ₀(1 ± h) and averaged, which is second-order
+    # accurate (error O(h²) ≈ 1e-8) while keeping the 0/0 cancellation at
+    # |1 - k²μ²| ≥ h. The beam transmittance inside the formula must be
+    # that of the shifted μ: mixing e^{-τ/μ₀} with a shifted μ leaves an
+    # O(1) error in the numerator that the small denominator amplifies.
     α1 = γ1 * γ4 + γ2 * γ3
     α2 = γ1 * γ3 + γ2 * γ4
     # Meador & Weaver (1980) eq. 14, with numerator and denominator both
     # divided through by e^{kτ} so nothing overflows at large τ.
-    d = (1 - (k * μ)^2)
-    pref = ω / d
-    R_dir = pref * ((1 - k * μ) * (α2 + k * γ3) -
-                    (1 + k * μ) * (α2 - k * γ3) * e2 -
-                    2k * (γ3 - α2 * μ) * e * T_beam) / denom
-    T_dir = -pref * ((1 + k * μ) * (α1 + k * γ4) * T_beam -
-                     (1 - k * μ) * (α1 - k * γ4) * e2 * T_beam -
-                     2k * (γ4 + α1 * μ) * e) / denom
+    function beam_source(μ)
+        Tb = exp(-min(τ / μ, T(500)))
+        d = (1 - (k * μ)^2)
+        pref = ω / d
+        Rd = pref * ((1 - k * μ) * (α2 + k * γ3) -
+                     (1 + k * μ) * (α2 - k * γ3) * e2 -
+                     2k * (γ3 - α2 * μ) * e * Tb) / denom
+        Td = -pref * ((1 + k * μ) * (α1 + k * γ4) * Tb -
+                      (1 - k * μ) * (α1 - k * γ4) * e2 * Tb -
+                      2k * (γ4 + α1 * μ) * e) / denom
+        return Rd, Td
+    end
+    if abs(1 - (k * μ₀)^2) < T(1e-4)       # shifts land at |d| ≥ 1e-4
+        h = T(1e-4)
+        Rp, Tp = beam_source(μ₀ * (1 + h))
+        Rm, Tm = beam_source(μ₀ * (1 - h))
+        R_dir = (Rp + Rm) / 2
+        T_dir = (Tp + Tm) / 2
+    else
+        R_dir, T_dir = beam_source(μ₀)
+    end
 
     # physical bounds — the two-stream formulae can overshoot slightly in
     # extreme corners of parameter space, and an R > 1 would break the

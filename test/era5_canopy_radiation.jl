@@ -177,7 +177,10 @@ end
         @test worst < 1e-12
         @test worst_split < 1e-10
         @test worst_lai < 1e-12
-        @info @sprintf("SW energy closure: worst |in - refl - abs_canopy - abs_ground|/in = %.1e over 576 cases", worst)
+        # NB: the closure is an identity of the bookkeeping (layer absorption
+        # is defined as the divergence of the face fluxes), so it checks the
+        # assembly, not the physics; the physics is checked against RK4 below.
+        @info @sprintf("SW energy closure (bookkeeping identity): worst |in - refl - abs_canopy - abs_ground|/in = %.1e over 576 cases", worst)
 
         # Conservative leaves over a white ground: nothing is absorbed.
         s = canopy_shortwave(UniformLAD(3.0, 10.0), collect(0.0:1.0:10.0); sun = 0.6,
@@ -246,6 +249,37 @@ end
         end
         @test worst < 1e-8
         @info @sprintf("two-stream (TwoStream adding) vs RK4 of the Sellers ODEs: worst flux error %.1e of incident", worst)
+    end
+
+    @testset "two-stream resonance K = k (TwoStream removable singularity)" begin
+        # The beam source terms have the denominator 1 - k²/K², which
+        # vanishes at a perfectly ordinary sun angle (μ ≈ 0.54 for spherical
+        # PAR leaves). TwoStream used to shift μ₀ there but keep e^{-τ/μ₀},
+        # which left errors of 3-14 % of the incident flux; compare with the
+        # RK4 solution exactly at resonance.
+        worst = 0.0
+        for (leaves, o) in ((SphericalLeaves(), par), (SphericalLeaves(), nir),
+                            (RossGoudriaanLeaves(0.5), par))
+            ω, β, _ = canopy_scattering_parameters(leaves, o, 0.5)
+            μ̄ = average_inverse_optical_depth(leaves)
+            γ1 = (1 - (1 - β) * ω) / μ̄; γ2 = ω * β / μ̄
+            k = sqrt(γ1^2 - γ2^2)
+            μr = leaves.φ1 / (k - leaves.φ2)             # G(μ)/μ = k
+            for δ in (0.0, 1e-7, 1e-5)
+                LAI = 4.5; n = 20_000
+                s = canopy_shortwave(UniformLAD(LAI, 15.0), collect(0.0:0.75:15.0); sun = μr + δ,
+                                     sw_direct = 500.0, sw_diffuse = 0.0, leaves = leaves,
+                                     optics = o, albedo_direct = 0.12, albedo_diffuse = 0.15)
+                up, dn = _sellers_ode(; Λt = LAI, ω = s.ω, β = s.β, β0 = s.β0, μ̄ = s.μ̄, K = s.K,
+                                      S0 = 500.0, D0 = 0.0, αb = 0.12, αd = 0.15, n = n)
+                for f in eachindex(s.Λ_faces)
+                    i = round(Int, s.Λ_faces[f] / LAI * n) + 1
+                    worst = max(worst, abs(s.flux_up[f] - up[i]) / 500, abs(s.flux_dn_dif[f] - dn[i]) / 500)
+                end
+            end
+        end
+        @test worst < 1e-8
+        @info @sprintf("two-stream at the resonance K = k vs RK4: worst flux error %.1e of incident", worst)
     end
 
     @testset "Goudriaan (1977) reflection coefficient" begin
