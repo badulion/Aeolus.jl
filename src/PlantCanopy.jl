@@ -64,8 +64,9 @@ The leaf energy balance (#24) extends this module.
   * de Pury, D. G. G. & Farquhar, G. D. (1997). Simple scaling of
     photosynthesis from leaves to canopies without the errors of big-leaf
     models. *Plant Cell Environ.*, 20, 537-557.
-  * Oleson, K. W. et al. (2013). Technical description of version 4.5 of
-    the Community Land Model (CLM). NCAR/TN-503+STR, ch. 3.
+  * CLM5.0 Technical Note (Lawrence et al., NCAR), §2.3.1 "Canopy
+    Radiative Transfer" — the two-stream equations and the
+    ``G``, ``\bar μ``, ``β``, ``β_0`` expressions used here.
 """
 module PlantCanopy
 
@@ -748,7 +749,7 @@ G(μ) = φ_1 + φ_2 μ,\\qquad φ_1 = 0.5 - 0.633χ_L - 0.33χ_L^2,\\qquad
 
 The fit is only valid for ``-0.4 ≤ χ_L ≤ 0.6`` (outside it ``G`` can turn
 negative), which the constructor enforces — the same range CLM uses
-(Oleson et al. 2013, §3.1). `χ_L = 0` gives the spherical distribution,
+(CLM5.0 Technical Note, §2.3.1). `χ_L = 0` gives the spherical distribution,
 ``G = 1/2`` exactly. For perfectly horizontal leaves use
 [`HorizontalLeaves`](@ref).
 """
@@ -855,7 +856,7 @@ average_inverse_optical_depth(::HorizontalLeaves) = 1.0
 Leaf single-scattering albedo ``ω = α + τ_l`` and the fractions of
 scattered radiation sent upward, ``β`` for diffuse and ``β_0`` for direct
 radiation from a sun at zenith cosine `μ`, as in Sellers (1985) and
-CLM (Oleson et al. 2013, eqs. 3.13–3.17):
+the CLM5.0 Technical Note (§2.3.1, eqs. 2.3.13–2.3.16):
 
 ```math
 ωβ = \\tfrac12\\left[α + τ_l + (α - τ_l)\\cos^2\\bar θ\\right],

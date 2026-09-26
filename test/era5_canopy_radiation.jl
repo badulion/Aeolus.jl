@@ -266,7 +266,7 @@ end
 
         # Spherical leaves, PAR (σ = 0.15), deep canopy, direct beam: the
         # widely used approximation ρ_cb = 1 - exp(-2ρ_h K/(1+K))
-        # (Goudriaan & van Laar 1994; de Pury & Farquhar 1997, eq. A19).
+        # (Goudriaan & van Laar 1994, as used by de Pury & Farquhar 1997).
         # It is an approximation to a different angular closure, so the
         # agreement is measured and only loosely bounded.
         σ = 0.15; ρh = (1 - sqrt(1 - σ)) / (1 + sqrt(1 - σ))
