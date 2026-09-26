@@ -484,7 +484,7 @@ function glazing_u_value(g::Glazing; T_out::Real = 273.15, T_in::Real = 293.15,
 end
 
 """
-    inward_flowing_fractions(g; h_out = 23.0, h_in = 7.7, T_out = 273.15,
+    inward_flowing_fractions(g; h_out = 23.0, h_in = 8.0, T_out = 273.15,
                              T_in = 293.15, c) -> Vector
 
 Fraction ``N_j`` of the shortwave absorbed in pane `j` that reaches the
@@ -492,11 +492,14 @@ room in steady state: the unit-source response of the pane network with
 both environments held fixed. Gap coefficients are frozen at the
 no-sun steady state between `T_out` and `T_in`, which linearises the
 problem as EN 410 does with its gap conductance Λ. Defaults are the
-EN 410 surface coefficients (``h_e = 23``, ``h_i = 7.7``). For a single
+EN 410 surface coefficients: ``h_e = 23`` and
+``h_i = 3.6 + 4.4\\,ε_i/0.837 = 8.0`` W m⁻² K⁻¹ for an uncoated inner face
+(EN 410 uses 8.0 for the g-value; the 7.7 of EN 673 is the U-value
+convention of [`glazing_u_value`](@ref)). For a single
 pane ``N = h_i' / (h_i' + h_e')`` with the half-pane conductance in
 series with each coefficient.
 """
-function inward_flowing_fractions(g::Glazing; h_out::Real = 23.0, h_in::Real = 7.7,
+function inward_flowing_fractions(g::Glazing; h_out::Real = 23.0, h_in::Real = 8.0,
                                   T_out::Real = 273.15, T_in::Real = 293.15,
                                   c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
     N = length(g)

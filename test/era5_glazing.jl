@@ -317,9 +317,10 @@ window_rho_clr(Φ) = poly4(RHO_CLR, cos(Φ)) - window_tau_clr(Φ)
                   1 / (1 / ho + 0.004 / k + 1 / hi) rtol = 1e-12
         end
         # Inward-flowing fraction of one pane: the conductance divider
-        ho, hi = 23.0, 7.7
+        ho, hi = 23.0, 8.0                               # EN 410 h_e, h_i
         Go = 1 / (1 / ho + 0.002 / k); Gi = 1 / (1 / hi + 0.002 / k)
         N1 = inward_flowing_fractions(single_glazing(0.004); h_out = ho, h_in = hi)
+        @test inward_flowing_fractions(single_glazing(0.004)) == N1     # EN 410 defaults
         @test N1[1] ≈ Gi / (Gi + Go) rtol = 1e-12
         # EN 410's single-pane formula h_i/(h_i + h_e) neglects the pane
         # resistance; it differs by < 0.005

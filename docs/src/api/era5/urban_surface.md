@@ -70,7 +70,7 @@ using Aeolus
 
 g = double_glazing()                        # 4-16-4 clear, air
 glazing_optics(g, deg2rad(60))              # (R, T, A = [A_outer, A_inner])
-glazing_shgc(g, 0.0), glazing_u_value(g)    # 0.732, 2.73 W m⁻² K⁻¹ (EN 410 / EN 673 coefficients)
+glazing_shgc(g, 0.0), glazing_u_value(g)    # 0.733, 2.73 W m⁻² K⁻¹ (EN 410 / EN 673 coefficients)
 
 w = WindowFacet(g; T = 293.0, T_interior = 295.0)
 set_solar_incidence!(w, cosd(50); diffuse_fraction = 0.3)   # from SolarGeometry / radiosity
