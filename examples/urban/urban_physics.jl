@@ -736,8 +736,9 @@ end
 Vehicle heat: a constant `Q_urban` W m⁻² of urban area, released over the
 road cells (streets and the building-adjacent cells). The default 8.0 W
 m⁻² is the traffic heat Bueno et al. (2012, Geosci. Model Dev. 5, 433,
-Tables 3 and 4) use for the Toulouse centre after Pigeon et al. (2007);
-it is not a Berlin inventory. It is not a building quantity and is not
+Table 3) prescribe for the Toulouse centre (their Table 4 uses the same
+value for Athens); the tables give no source for it, and it is not a
+Berlin inventory. It is not a building quantity and is not
 from the building energy model.
 """
 function add_traffic_heat!(sim, sfc::AbstractMatrix{UInt8}, dt::Real;

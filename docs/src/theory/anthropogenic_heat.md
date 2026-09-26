@@ -146,6 +146,13 @@ The test asserts the total within 20 %. Bueno et al. call a 20 % error
 in building energy use acceptable for urban canopy models. The
 electricity/gas split depends on how the "2/3" heating ratio and the
 "electric fraction 0.7" of the gains are read, so it is not asserted.
+Table 3's wording, "fraction of electric heating systems over gas
+heating systems: 2/3", can also mean electric : gas = 2 : 3 (40 %
+electric). With the same run, that reading gives electricity 33.8
+(inventory 33.6) and gas 33.1 (inventory 25.0), total 66.8 W m⁻²
+(+14 %). The simulated plant heats electrically (η = 1): the released
+heat omits the flue loss of the part costed as gas, 1.4 W m⁻² for the
+2/3 reading.
 The released heat, 69.9 W m⁻², falls inside the 5–100 W m⁻² typical of
 cities (Chrysoulakis & Grimmond 2016, after Christen & Vogt 2004 and
 Allen et al. 2011). Dense cores exceed 100 W m⁻² (up to 550 W m⁻² in
