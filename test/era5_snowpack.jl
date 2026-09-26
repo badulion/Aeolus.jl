@@ -320,6 +320,29 @@ end
                        b.melt, b.runoff, mass_resid, heat_resid, H0)
     end
 
+    @testset "A pack that sublimates away hands back only the vapour it had" begin
+        # 0.2 kg m⁻² of snow under very dry, windy air: the hourly
+        # sublimation demand exceeds the pack. The atmosphere must receive
+        # exactly the mass the pack lost, R_n = H + LE + G must still close,
+        # and the pack's own budget must still close.
+        p = LayeredSnowpack(depth = 0.002, density = 100.0, T = 265.0)
+        M0, H0 = snow_water_equivalent(p), snowpack_enthalpy(p)
+        f = SurfaceForcing(sw_down = 0.0, lw_down = 250.0, T_air = 268.0, q_air = 1e-4,
+                           U = 15.0, p = 90000.0, z_ref = 10.0, rain = 0.0, snow = 0.0)
+        E_total = 0.0
+        local fl
+        while snow_nlayers(p) > 0
+            fl = step_surface!(p, f, 3600.0)
+            E_total += fl.E * 3600
+            @test fl.Rn ≈ fl.H + fl.LE + fl.G rtol = 1e-12
+        end
+        b = p.budget
+        @test E_total ≈ b.sublimation rtol = 1e-12
+        @test b.sublimation ≈ M0 rtol = 1e-12            # all of it went to vapour
+        @test fl.LE ≈ fl.E * latent_heat_sublim(265.0) rtol = 0.01
+        @test abs(-H0 - (b.surface_heat - b.bottom_heat + b.advected_enthalpy)) < 1e-9 * abs(H0)
+    end
+
     @testset "Surface physics: radiative cooling, melt, insulation" begin
         σ = DEFAULT_SURFACE_CONSTANTS.σ_SB
         # Clear night: the snow surface decouples and cools below the air.

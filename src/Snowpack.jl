@@ -1085,7 +1085,10 @@ Advance the snowpack by `dt` seconds:
  3. the returned fluxes are those actually applied: each is updated
     linearly to the time-weighted skin temperature, so
     ``R_n = H + LE + G`` holds exactly and `G` is what entered the pack;
- 4. sublimation/deposition of ``E\\,dt``; rain and snowfall (density from
+ 4. sublimation/deposition of ``E\\,dt`` (if the pack sublimates away
+    within the step, `E` and `LE` are reduced to the mass actually
+    removed and the unspent latent heat is added to `G` and passed to the
+    substrate, so ``R_n = H + LE + G`` still holds); rain and snowfall (density from
     `fresh_density`, at `forcing.T_air` and `forcing.U`);
  5. melt, the liquid-water hook, compaction, the metamorphism hook, and
     relayering.
@@ -1112,7 +1115,20 @@ function step_surface!(p::LayeredSnowpack, f::SurfaceForcing, dt::Real;
         ΔTs = p.θ * (p.T[1] - T1)
         fl = SurfaceFluxes(f0.Rn + dRn * ΔTs, f0.H + dH * ΔTs, f0.LE + dLE * ΔTs,
                            F_top, f0.τ + dτ * ΔTs, f0.E + dE * ΔTs)
-        snow_sublimation!(p, fl.E * dt)
+        E_req = fl.E * dt
+        E_got = snow_sublimation!(p, E_req)
+        if E_req > 0 && E_got < E_req
+            # The pack sublimated away within the step. Only the vapour it
+            # actually supplied goes to the atmosphere; the latent heat
+            # that was not spent stays in G and, with no ice left to
+            # absorb it, passes into the substrate (as a melted-out
+            # bottom layer's surplus does in `snow_phase_change!`).
+            dE = (E_req - E_got) / dt
+            dLE = fl.LE * dE / fl.E
+            fl = SurfaceFluxes(fl.Rn, fl.H, fl.LE - dLE, fl.G + dLE, fl.τ, fl.E - dE)
+            p.budget.surface_heat += dLE * dt
+            p.budget.bottom_heat  += dLE * dt
+        end
     end
     add_rainfall!(p, f.rain * dt, f.T_air)
     add_snowfall!(p, f.snow * dt, f.T_air, fresh_snow_density(p.fresh_density, f.T_air, f.U; c = c))
