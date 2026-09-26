@@ -11,10 +11,11 @@
 #     correction, the neutral exactness of the blended profile);
 #   * the published LES values of Bou-Zeid, Parlange & Meneveau (2007,
 #     J. Atmos. Sci. 64, Table 2) for two-stripe surfaces;
-#   * the published spread of IBL formulae at 300 m fetch (Savelyev &
-#     Taylor 2005, Sect. 2 and Fig. 3);
+#   * the published values and spread of IBL formulae (Savelyev & Taylor
+#     2005, Table II and Fig. 3), and through Table II one measured IBL
+#     height (Echols & Wagner 1972);
 #   * conservation and single-tile consistency of the blended mosaic.
-# No field observations are used.
+# Apart from that one IBL height, no field observations are used.
 
 using Test, Printf
 using Aeolus
@@ -205,6 +206,17 @@ _θ(f::SurfaceForcing, z = f.z_ref) =
                     zu, zd, δe, δw, δd)
             @test all(8 .<= (δe, δw, δd) .<= 34.5)
             @test δe >= max(δw, δd)
+        end
+        # Savelyev & Taylor (2005, Table II): IBL at 90 m fetch after a
+        # sea-to-land change z0 = 3e-6 → 3e-2 m, published values of the
+        # formulae (m, one decimal) and the measured daytime height 7.2 m
+        # (Echols & Wagner 1972), from which they deviate by 19, 29, 32 %.
+        for (model, published) in ((ElliottIBL(), 8.6), (PowerLawIBL(), 5.1), (DiffusionIBL(), 9.5))
+            δ = ibl_height(model, 90.0; z0_up = 3e-6, z0_down = 3e-2)
+            @printf("    Table II, 90 m fetch: %-16s %.2f m (published %.1f m; observed 7.2 m)\n",
+                    nameof(typeof(model)), δ, published)
+            @test abs(δ - published) <= 0.05
+            @test abs(δ / 7.2 - 1) < 0.35
         end
         # Elliott: explicit formula; a smooth-to-rough step grows a deeper
         # layer at the same fetch than rough-to-smooth onto the same z0D.
