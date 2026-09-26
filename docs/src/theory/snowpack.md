@@ -104,7 +104,10 @@ and turbulence is stable at hourly steps. Every returned flux is updated
 to the same time-weighted skin temperature, so the fluxes handed to the
 atmosphere satisfy ``R_n = H + LE + G`` exactly and ``G`` is exactly the
 heat that entered the pack. Latent heat is that of sublimation and the
-skin humidity is saturation over ice.
+skin humidity is saturation over ice. If the pack sublimates away
+within a step, ``E`` and ``LE`` are cut to the mass actually removed and
+the unspent latent heat stays in ``G`` and passes to the substrate, so the
+atmosphere never receives vapour the pack did not have.
 
 **Lower boundary.** Either a fixed snow/ground interface temperature
 (`SnowGroundTemperature`) or a prescribed flux (`SnowBottomFlux`).
@@ -136,7 +139,7 @@ With enthalpy referred to liquid water at the melting point,
 
 to round-off over any sequence of steps (tested over 12 days of storms,
 radiative cooling, melt, rain and hoar deposition: residuals
-``10^{-13}`` kg m⁻² and ``3·10^{-8}`` J m⁻² on ``4.6·10^7`` J m⁻²).
+``2·10^{-13}`` kg m⁻² and ``1.4·10^{-7}`` J m⁻² on ``4.6·10^7`` J m⁻²).
 
 ## 6. Hooks for later phases
 
@@ -154,17 +157,19 @@ conserves enthalpy internally.
 
 | check | measured | reference |
 |:--- |:--- |:--- |
-| Destructive settling, 3 temperatures, 2 d | max rel. error 1e-4 or less | ``ρ_0 e^{c_3 e^{-c_4ΔT} t}`` |
-| Crocus settling, constant load, 5 d | max rel. error 1e-4 or less | closed form above |
-| Anderson overburden, 10 d | implied time within 1e-4 | quadrature of ``∫e^{c_6ρ}/ρ\,dρ`` |
-| Insulated cosine mode, 1 e-fold | amplitude error < 1e-3 | ``e^{-κπ^2 t/H^2}`` |
-| Surface step on deep pack, 2 d | max error < 0.02 K of 10 K | erf solution |
-| Two-density steady state | flux to 1e-9 | series resistance |
-| Seasonal bulk density (synthetic forcing) | within 25 % | Sturm et al. (2010) alpine climatology |
+| Destructive settling, 3 temperatures, 2 d | max rel. error 2.2e-16 | ``ρ_0 e^{c_3 e^{-c_4ΔT} t}`` |
+| Crocus settling, constant load, 5 d | max rel. error 5e-5 (223.23 vs 223.24 kg m⁻³) | closed form above |
+| Anderson overburden, 10 d | implied time 9.99978 d | quadrature of ``∫e^{c_6ρ}/ρ\,dρ`` |
+| Insulated cosine mode, 1 e-fold | amplitude error 3.3e-4 | ``e^{-κπ^2 t/H^2}`` |
+| Surface step on deep pack, 2 d | max error 0.0009 K of 10 K | erf solution |
+| Two-density steady state | flux to 1e-15 | series resistance |
+| Seasonal bulk density (synthetic forcing) | −3 to −17 % (Anderson), −5 to −19 % (Vionnet) | Sturm et al. (2010) alpine climatology |
 
 The last line is the only comparison with observations, and it is a
 comparison with a climatology: Sturm et al. (2010, Eq. 6, Table 4) fit
-bulk density against depth and day of year for 25 688 snow courses. A
+bulk density against depth and day of year for 25 688 depth–density–SWE
+measurements from the US, Canada and Switzerland; the local natural
+variation of bulk density they quote (after Jonas et al. 2009) is 7–23 %. A
 synthetic dry season (500 mm SWE evenly from 1 November to 31 March, air
 −5 ± 3 °C) gives bulk densities 3-19 % below the alpine curve with
 either compaction law, the gap growing through the season. No SnowMIP

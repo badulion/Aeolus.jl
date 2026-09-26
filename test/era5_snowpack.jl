@@ -89,7 +89,7 @@ end
             worst = max(worst, abs(snow_bulk_density(p) / ρ_exact - 1))
             @test snow_water_equivalent(p) ≈ 60.0 rtol = 1e-14         # mass untouched
         end
-        @test worst < 1e-4
+        @test worst < 1e-12       # constant rate: the midpoint rule is exact
         # Destructive settling at the melting point halves new snow in ln2/c3 = 2.89 d.
         p = one_layer(40.0, Tf_snow, Anderson1976Compaction(η0 = Inf))
         snow_compaction!(p, log(2) / 2.777e-6)
@@ -202,7 +202,7 @@ end
         z = snow_layer_depths(p)
         exact = 253.15 .+ 10 .* erf_series.(z ./ (2sqrt(κ * tend)))
         erf_err = maximum(abs.(p.T .- exact))
-        @test erf_err < 0.02                            # K, on a 10 K step
+        @test erf_err < 0.005                           # K, on a 10 K step (measured 0.0009)
         @info @sprintf("erf solution after 2 d: max |T - T_exact| = %.4f K (diffusion length %.3f m)",
                        erf_err, 2sqrt(κ * tend))
         # (d) Two-density pack at steady state: flux = ΔT / Σ Δz_i/k_i.
@@ -395,8 +395,10 @@ end
         # ρ(h, DOY) = (ρmax - ρ0)[1 - exp(-k1 h - k2 DOY)] + ρ0, h in cm,
         # ρ in g cm⁻³, DOY from -92 (1 Oct) through 181 (30 Jun), 1 Jan = 1.
         # Alpine class: ρmax = 0.5975, ρ0 = 0.2237, k1 = 0.0012, k2 = 0.0038.
-        # A regression on 25 688 observed snow courses — the observed
-        # seasonal densification, not a model.
+        # A regression on 25 688 observed depth-density-SWE measurements
+        # (US, Canada, Switzerland) — the observed seasonal densification.
+        # DOY has no 0: 31 Dec = -1, 1 Jan = 1 (the sampled days below
+        # straddle this by at most one day).
         sturm(h_cm, doy) = 1000 * ((0.5975 - 0.2237) * (1 - exp(-0.0012h_cm - 0.0038doy)) + 0.2237)
         # Synthetic forcing (NOT observations): 500 mm SWE falling evenly
         # 1 Nov - 31 Mar, air -5 ± 3 °C diurnal, clear-sky-ish longwave,
