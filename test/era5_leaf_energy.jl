@@ -227,6 +227,193 @@ end
     end
 end
 
+# ---- resolved canopy: sunlit/shaded leaves of every layer -------------------
+
+function _forest(; LAI = 5.0, h = 30.0, N = 30, μ = 0.888, Sdir = 780.0, Sdif = 120.0,
+                 leaves = SphericalLeaves())
+    prof = LalicMihailovicLAD(LAI, h; z_m = 0.7h)
+    zf = collect(range(0, h, length = N + 1))
+    lad = layer_leaf_area_density(prof, zf)
+    par = canopy_shortwave(zf, lad; sun = μ, sw_direct = 0.45Sdir, sw_diffuse = 0.45Sdif,
+                           optics = LeafOptics(0.10, 0.05), albedo_direct = 0.10, leaves = leaves)
+    nir = canopy_shortwave(zf, lad; sun = μ, sw_direct = 0.55Sdir, sw_diffuse = 0.55Sdif,
+                           optics = LeafOptics(0.45, 0.25), albedo_direct = 0.20, leaves = leaves)
+    zc = (zf[1:end-1] .+ zf[2:end]) ./ 2
+    return zf, lad, (par, nir), zc
+end
+_wind(zc, h, Uh) = [canopy_exponential_wind(z; h = h, u_h = Uh, C_d = 0.2, a = 5 / 15) for z in zc]
+
+@testset "canopy: energy closure and consistency with the single leaf" begin
+    Ta = 298.15; ea = saturation_vapor_pressure(Ta) - 1500.0
+    p = pft_photosynthesis_parameters(:bdt_temperate)
+    worst_col = 0.0; worst_layer = 0.0; worst_leaf = 0.0
+    for stom in (0.2, CoupledLeafPhysiology(p, pft_stomatal_model(:bdt_temperate))),
+        bl in (CampbellNormanBoundaryLayer(leaf_width = 0.045), CLMLeafBoundaryLayer()),
+        (μ, Sdir, Sdif) in ((0.888, 780.0, 120.0), (0.3, 150.0, 80.0), (0.0, 0.0, 0.0)),
+        leaves in (SphericalLeaves(), RossGoudriaanLeaves(0.3))
+        zf, lad, sw, zc = _forest(; μ = μ, Sdir = Sdir, Sdif = Sdif, leaves = leaves)
+        U = _wind(zc, 30.0, 1.5)
+        T_air = Ta .- 0.02 .* (30 .- zc)             # slightly stable in-canopy air
+        s = canopy_leaf_energy_balance(zf, lad; shortwave = sw, par = 1, T_air = T_air,
+                                       e_air = ea, U = U, lw_down = 350.0, T_ground = 296.0,
+                                       stomata = stom, boundary_layer = bl, leaves = leaves)
+        @test s.converged
+        # layer and column closure
+        worst_layer = max(worst_layer, s.residual)
+        sw_in = sum(b.incident - b.reflected - b.ground_absorbed for b in sw)
+        lw_in = 350.0 - s.longwave.outgoing - s.longwave.ground_net
+        col = sw_in + lw_in - (s.H_total + s.LE_total + sum(s.storage))
+        worst_col = max(worst_col, abs(col) / (sum(b.incident for b in sw) + 350.0))
+        @test sum(s.sw_absorbed) ≈ sum(b.canopy_absorbed for b in sw) rtol = 1e-12
+        # sources for the air
+        Δz = diff(zf)
+        @test sum(s.heat_source .* Δz) ≈ s.H_total rtol = 1e-12
+        @test sum(s.vapour_source .* Δz) ≈ s.E_total * DEFAULT_CONSTANTS.molmass_water rtol = 1e-12
+        # every class is the single-leaf balance with the final longwave
+        lw = s.longwave
+        for k in eachindex(lad)
+            dΛ = lad[k] * Δz[k]
+            dΛ > 0 || continue
+            εl = lw.emissivity_layer[k]
+            Teff4 = (s.lai_sunlit[k] * s.T_sunlit[k]^4 + s.lai_shaded[k] * s.T_shaded[k]^4) / dΛ
+            L_abs = (lw.net_absorbed[k] + 2εl * _σ * Teff4) / dΛ
+            for (la, T, ab, bi) in ((s.lai_sunlit[k], s.T_sunlit[k], :absorbed_sunlit, 1),
+                                    (s.lai_shaded[k], s.T_shaded[k], :absorbed_shaded, 2))
+                la > 0 || continue
+                q = sum(getfield(b, ab)[k] for b in sw) / la
+                Qp = 4.6 * getfield(sw[1], ab)[k] / la
+                r = leaf_energy_balance(stom, bl; R_abs = q + L_abs, emission = 2εl / dΛ,
+                                        T_air = T_air[k], e_air = ea, U = U[k], Q = Qp)
+                worst_leaf = max(worst_leaf, abs(r.T_leaf - T))
+            end
+        end
+        if μ > 0
+            # sunlit leaves are warmer than shaded ones in every leafy layer
+            @test all(s.T_sunlit[k] > s.T_shaded[k] for k in eachindex(lad) if s.lai_sunlit[k] > 1e-6)
+        else
+            @test all(==(0), s.lai_sunlit)
+        end
+    end
+    @printf("  canopy closure: column %.2e (rel.), worst layer residual %.2e W m⁻², class vs single leaf %.2e K\n",
+            worst_col, worst_layer, worst_leaf)
+    @test worst_col < 1e-10
+    @test worst_layer < 1e-6
+    @test worst_leaf < 1e-7
+end
+
+@testset "canopy: limits" begin
+    Ta = 290.0
+    zf, lad, _, zc = _forest()
+    # Isothermal night: black sky and black ground at air temperature,
+    # saturated air — every leaf at air temperature, no fluxes.
+    s = canopy_leaf_energy_balance(zf, lad; shortwave = nothing, T_air = Ta,
+                                   e_air = saturation_vapor_pressure(Ta), U = 1.0,
+                                   lw_down = _σ * Ta^4, T_ground = Ta, ε_ground = 1.0,
+                                   stomata = 0.05)
+    @test maximum(abs.(s.T_shaded .- Ta)) < 1e-9
+    @test maximum(abs.(s.H)) < 1e-7 && maximum(abs.(s.LE)) < 1e-7
+    # Clear night (sky 300 W m⁻² < σT⁴ = 385 W m⁻²): leaves cool below the
+    # air, most at the top, relaxing to the air (and warm ground) with depth.
+    s = canopy_leaf_energy_balance(zf, lad; shortwave = nothing, T_air = Ta, e_air = 1200.0,
+                                   U = _wind(zc, 30.0, 1.0), lw_down = 300.0, T_ground = Ta,
+                                   stomata = 0.0)
+    leafy = findall(>(0), lad)
+    ΔT = s.T_shaded[leafy] .- Ta
+    @printf("  clear night: top-layer leaf ΔT = %.2f K, lowest layer %.2f K\n", ΔT[end], ΔT[1])
+    @test all(<(0), ΔT)
+    @test ΔT[end] < ΔT[1]
+    @test s.H_total < 0                               # the canopy takes heat from the air
+    @test s.LE_total == 0
+    # Drought (β = 0) at midday: stomata shut, latent heat collapses, the
+    # canopy gets warmer and heats the air more.
+    zf, lad, sw, zc = _forest()
+    p = pft_photosynthesis_parameters(:bdt_temperate); m = pft_stomatal_model(:bdt_temperate)
+    ea = saturation_vapor_pressure(298.15) - 1970.0
+    kw = (; shortwave = sw, T_air = 298.15, e_air = ea, U = _wind(zc, 30.0, 1.0),
+          lw_down = 350.0, T_ground = 298.15, boundary_layer = CampbellNormanBoundaryLayer(leaf_width = 0.045))
+    wet = canopy_leaf_energy_balance(zf, lad; stomata = CoupledLeafPhysiology(p, m), kw...)
+    dry = canopy_leaf_energy_balance(zf, lad; stomata = CoupledLeafPhysiology(p, m; β = 0.0), kw...)
+    @printf("  midday canopy: H = %.0f, LE = %.0f W m⁻² (Bowen %.2f); β = 0: H = %.0f, LE = %.0f W m⁻²\n",
+            wet.H_total, wet.LE_total, wet.H_total / wet.LE_total, dry.H_total, dry.LE_total)
+    @test dry.LE_total < 0.05 * wet.LE_total
+    @test dry.H_total > wet.H_total + 0.5 * (wet.LE_total - dry.LE_total)
+    @test all(dry.T_sunlit[k] > wet.T_sunlit[k] for k in eachindex(lad) if lad[k] > 0)
+    @test sum(wet.An) > 0
+end
+
+@testset "canopy: prognostic leaf temperature" begin
+    zf, lad, sw, zc = _forest()
+    kw = (; shortwave = sw, T_air = 298.15, e_air = 1700.0, U = _wind(zc, 30.0, 1.0),
+          lw_down = 350.0, T_ground = 298.15, stomata = 0.2)
+    ss = canopy_leaf_energy_balance(zf, lad; kw...)
+    cold = (sunlit = fill(290.0, length(lad)), shaded = fill(290.0, length(lad)))
+    # (same fixed point; the outer iteration starts elsewhere, tol = 1e-9 K)
+    @test canopy_leaf_energy_balance(zf, lad; kw..., T_prev = cold, heat_capacity = 1300.0,
+                                     dt = Inf).T_sunlit ≈ ss.T_sunlit atol = 1e-8
+    @test_throws ArgumentError canopy_leaf_energy_balance(zf, lad; kw..., heat_capacity = 1300.0, dt = 10.0)
+    # March from a cold canopy: the stored energy equals the time-integrated
+    # imbalance of the column, and the steady state is the diagnostic one.
+    prev = cold; stored = 0.0; imbalance = 0.0; dt = 120.0
+    for n in 1:80
+        s = canopy_leaf_energy_balance(zf, lad; kw..., T_prev = prev, heat_capacity = 1300.0, dt = dt)
+        @test s.converged
+        stored += sum(s.storage) * dt
+        imbalance += (sum(s.sw_absorbed) + sum(s.lw_net) - s.H_total - s.LE_total) * dt
+        prev = s
+    end
+    @printf("  prognostic canopy after 80 × 120 s: max |T − T_diag| = %.2e K\n",
+            max(maximum(abs.(prev.T_sunlit .- ss.T_sunlit)), maximum(abs.(prev.T_shaded .- ss.T_shaded))))
+    @test stored ≈ imbalance rtol = 1e-8
+    @test maximum(abs.(prev.T_sunlit .- ss.T_sunlit)) < 1e-6
+    @test maximum(abs.(prev.T_shaded .- ss.T_shaded)) < 1e-6
+    # a profile can be passed instead of layer values
+    prof = LalicMihailovicLAD(5.0, 30.0; z_m = 21.0)
+    @test canopy_leaf_energy_balance(prof, zf; kw...).T_sunlit ≈ ss.T_sunlit rtol = 1e-12
+end
+
+@testset "canopy ΔT vs Leuzinger & Körner (2007), Swiss Canopy Crane" begin
+    # Observations (Leuzinger & Körner 2007, Agric. For. Meteorol. 146,
+    # 29-37, Table 1): thermal-camera canopy temperatures of a 35 m mixed
+    # deciduous forest (Hofstetten, 47.5° N) on 18 July 2004, 11:30-11:40
+    # true local time, clear sky, ample soil moisture, T_air = 25.0 °C,
+    # VPD = 19.7 hPa. Broad-leaved species (Prunus, Quercus, Carpinus,
+    # Fagus, Tilia): mean leaf-to-air ΔT 1.7, 2.4, 4.5, 4.6, 4.8 K;
+    # T_max − T_air 6.4, 7.2, 10.6, 9.9, 12.0 K.
+    #
+    # Model forcing — ASSUMED, not reported by the paper: cos θ = 0.888
+    # (solar geometry of the date and time), 780 W m⁻² direct + 120 W m⁻²
+    # diffuse (clear sky), 45 % PAR; CLM broadleaf optics; LAI 5
+    # (the paper's own assumption), h = 30 m Lalic–Mihailovic profile;
+    # 45 mm leaves (Fagus, Table 1); CLM5 broadleaf-deciduous Medlyn
+    # stomata; canopy-top wind U_h = 0.5-2 m/s with the exponential
+    # in-canopy profile; sky 350 W m⁻²; ground at air temperature.
+    Ta = 298.15; ea = saturation_vapor_pressure(Ta) - 1970.0
+    zf, lad, sw, zc = _forest()
+    p = pft_photosynthesis_parameters(:bdt_temperate); m = pft_stomatal_model(:bdt_temperate)
+    for Uh in (0.5, 1.0, 2.0)
+        s = canopy_leaf_energy_balance(zf, lad; shortwave = sw, par = 1, T_air = Ta, e_air = ea,
+                                       U = _wind(zc, 30.0, Uh), lw_down = 350.0, T_ground = Ta,
+                                       stomata = CoupledLeafPhysiology(p, m),
+                                       boundary_layer = CampbellNormanBoundaryLayer(leaf_width = 0.045))
+        # Leaf temperature seen from above (nadir, spherical leaves: K = 0.5):
+        # each layer weighted by its leaf area visible from the top.
+        Λ = s.Λ_faces; Tv = 0.0; W = 0.0
+        for k in eachindex(lad)
+            dΛ = Λ[k] - Λ[k+1]
+            dΛ > 0 || continue
+            w = exp(-0.5Λ[k+1]) * (1 - exp(-0.5dΛ)) / 0.5
+            fs = s.lai_sunlit[k] / dΛ
+            Tv += w * (fs * s.T_sunlit[k] + (1 - fs) * s.T_shaded[k]); W += w
+        end
+        ΔTv = Tv / W - Ta
+        ΔTmax = maximum(s.T_sunlit) - Ta
+        @printf("  U_h = %.1f m/s: view-weighted ΔT = %.2f K (obs. 1.7–4.8), max sunlit ΔT = %.2f K (obs. 6.4–12.0)\n",
+                Uh, ΔTv, ΔTmax)
+        @test 1.7 <= ΔTv <= 4.8
+        @test 6.4 <= ΔTmax <= 12.0
+    end
+end
+
 @testset "observed leaf-to-air ΔT (Ansari & Loomis 1959, via Leuzinger & Körner 2007)" begin
     # Leuzinger & Körner (2007, Agric. For. Meteorol. 146, §1) cite the rule
     # of thumb of Ansari & Loomis (1959, thermocouple survey): sunlit thin
