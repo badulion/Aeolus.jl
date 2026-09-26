@@ -107,8 +107,9 @@ export SurfaceMosaic, ntiles, mosaic_fractions, set_mosaic_fractions!,
        # blending height (#42)
        effective_roughness, effective_scalar_roughness,
        AbstractBlendingHeight, FixedBlendingHeight, MasonBlendingHeight,
-       ClaussenBlendingHeight, BouZeidBlendingHeight,
-       blending_height
+       ClaussenBlendingHeight, BouZeidBlendingHeight, IBLBlendingHeight,
+       blending_height,
+       AbstractIBLModel, ElliottIBL, PowerLawIBL, DiffusionIBL, ibl_height
 
 # =========================================================================
 # Fractions
@@ -759,6 +760,144 @@ function _increasing_root(g, z0s, f)
         hi / lo - 1 <= 4eps() && break
     end
     return sqrt(lo * hi)
+end
+
+# =========================================================================
+# Internal-boundary-layer growth
+# =========================================================================
+
+"""
+    AbstractIBLModel
+
+A formula for the depth ``δ(x)`` of the internal boundary layer at fetch
+``x`` downstream of a step change of roughness from `z0_up` to
+`z0_down`, under neutral stratification. See [`ibl_height`](@ref) and the
+compendium of Savelyev & Taylor (2005, Table I).
+"""
+abstract type AbstractIBLModel end
+
+"""
+    ElliottIBL()
+
+Elliott (1958):
+``δ/z_{0D} = (0.75 - 0.03 \\ln(z_{0D}/z_{0U}))\\,(x/z_{0D})^{0.8}``
+(Savelyev & Taylor 2005, Eq. 1).
+"""
+struct ElliottIBL <: AbstractIBLModel end
+
+"""
+    PowerLawIBL(; a = 0.28, b = 0.8)
+
+``δ/z_{0r} = a\\,(x/z_{0r})^{b}`` with ``z_{0r} = \\max(z_{0U}, z_{0D})``.
+The defaults are Wood (1982), who argued that only the rougher surface
+matters (Savelyev & Taylor 2005, Eq. 5).
+"""
+struct PowerLawIBL <: AbstractIBLModel
+    a::Float64
+    b::Float64
+end
+PowerLawIBL(; a::Real = 0.28, b::Real = 0.8) = PowerLawIBL(Float64(a), Float64(b))
+
+"""
+    DiffusionIBL(; C = 1.25)
+
+Miyake's diffusion analogy: the interface rises at the vertical velocity
+scale, ``U(δ)\\,dδ/dx = C u_*`` with ``C = σ_w/u_*``, and a logarithmic
+downstream profile ``U = (u_*/κ)\\ln(z/z_{0D})``, integrated from
+``δ(0) = z_{0D}``:
+
+```math
+C κ \\frac{x}{z_{0D}} = \\frac{δ}{z_{0D}}\\left(\\ln\\frac{δ}{z_{0D}} - 1\\right) + 1 .
+```
+
+``C = 1.25`` is Panofsky & Dutton (1984) (Savelyev & Taylor 2005,
+Table I); Miyake's (1965) original form has ``1.73`` and starts from a
+finite ``δ_0``. Differentiating gives ``dδ/dx = Cκ/\\ln(δ/z_{0D})``.
+"""
+struct DiffusionIBL <: AbstractIBLModel
+    C::Float64
+end
+DiffusionIBL(; C::Real = 1.25) = DiffusionIBL(Float64(C))
+
+"""
+    ibl_height(model::AbstractIBLModel, x; z0_up, z0_down, c = DEFAULT_SURFACE_CONSTANTS) -> δ
+
+Internal-boundary-layer depth (m) at fetch `x` (m) past a step change of
+roughness `z0_up` → `z0_down` (m). The formulas are for the surface
+layer, roughly ``δ ≲ 0.1``–``0.2 z_i`` (Wood 1982). The IBL depth at a
+fetch of the order of the patch length is the natural scale of the
+blending height (Bou-Zeid et al. 2004, 2007); see
+[`IBLBlendingHeight`](@ref).
+"""
+function ibl_height end
+
+function _check_ibl(x, z0_up, z0_down)
+    x >= 0 || throw(ArgumentError("ibl_height: fetch must be ≥ 0"))
+    (z0_up > 0 && z0_down > 0) || throw(ArgumentError("ibl_height: roughness lengths must be positive"))
+end
+
+function ibl_height(::ElliottIBL, x::Real; z0_up::Real, z0_down::Real,
+                    c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    _check_ibl(x, z0_up, z0_down)
+    return z0_down * (0.75 - 0.03 * log(z0_down / z0_up)) * (x / z0_down)^0.8
+end
+
+function ibl_height(m::PowerLawIBL, x::Real; z0_up::Real, z0_down::Real,
+                    c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    _check_ibl(x, z0_up, z0_down)
+    z0r = max(z0_up, z0_down)
+    return z0r * m.a * (x / z0r)^m.b
+end
+
+function ibl_height(m::DiffusionIBL, x::Real; z0_up::Real, z0_down::Real,
+                    c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    _check_ibl(x, z0_up, z0_down)
+    rhs = m.C * c.κ * x / z0_down - 1          # = y (ln y - 1), y = δ/z0D ≥ 1
+    rhs <= -1 && return float(z0_down)
+    # Newton on s = ln y for h(s) = e^s (s - 1) - rhs, h' = s e^s (convex, increasing for s > 0).
+    s = max(log(max(rhs, 1.0)), 1.0)
+    for _ in 1:100
+        es = exp(s)
+        ds = (es * (s - 1) - rhs) / (s * es)
+        s -= ds
+        s = max(s, 1e-12)
+        abs(ds) <= 4eps() * max(abs(s), 1.0) && break
+    end
+    return z0_down * exp(s)
+end
+
+"""
+    IBLBlendingHeight(model::AbstractIBLModel, L; fetch_factor = 2)
+
+Blending height from internal-boundary-layer growth: blending is complete
+where the IBLs that start at the patch edges have grown over
+`fetch_factor × L` (the premise of Bou-Zeid et al. 2004, who found that
+blending needs about twice the patch length `L`). ``l_b`` is the deepest
+IBL [`ibl_height`](@ref)`(model, fetch_factor * L)` over every ordered
+pair of distinct active tiles (upstream ``z_{0,j}``, downstream
+``z_{0,i}``); with a single active tile it is the depth over that
+surface. With [`DiffusionIBL`](@ref) this is, up to its constant, the
+IBL half of [`BouZeidBlendingHeight`](@ref) evaluated with the patch
+roughness instead of ``z_{0,eff}``.
+"""
+struct IBLBlendingHeight{M<:AbstractIBLModel} <: AbstractBlendingHeight
+    model::M
+    L::Float64
+    fetch_factor::Float64
+    function IBLBlendingHeight(model::M, L::Real; fetch_factor::Real = 2.0) where {M<:AbstractIBLModel}
+        (L > 0 && fetch_factor > 0) ||
+            throw(ArgumentError("IBLBlendingHeight: L and fetch_factor must be positive"))
+        new{M}(model, Float64(L), Float64(fetch_factor))
+    end
+end
+
+function blending_height(bh::IBLBlendingHeight, z0s, f; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    act = [z for (z, w) in zip(z0s, f) if w > 0]
+    isempty(act) && throw(ArgumentError("blending height: no tile with a positive fraction"))
+    x = bh.fetch_factor * bh.L
+    length(act) == 1 && return ibl_height(bh.model, x; z0_up = act[1], z0_down = act[1], c = c)
+    return maximum(ibl_height(bh.model, x; z0_up = zu, z0_down = zd, c = c)
+                   for (j, zu) in enumerate(act), (i, zd) in enumerate(act) if i != j)
 end
 
 

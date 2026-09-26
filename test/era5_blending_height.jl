@@ -192,4 +192,52 @@ _θ(f::SurfaceForcing, z = f.z_ref) =
         # trend with the smooth fraction is not reproduced (see PR).
         @test maximum(abs, err[:hb]) < 0.35
     end
+
+    @testset "Internal-boundary-layer growth" begin
+        # Savelyev & Taylor (2005, Sect. 2, Fig. 3): for the Jegede & Foken
+        # (1999) roughness changes, the published formulae give IBL heights
+        # of 8-34 m at 300 m fetch, Elliott (1958) the highest in both cases.
+        for (zu, zd) in ((0.008, 0.032), (0.053, 0.014))
+            δe = ibl_height(ElliottIBL(), 300.0; z0_up = zu, z0_down = zd)
+            δw = ibl_height(PowerLawIBL(), 300.0; z0_up = zu, z0_down = zd)
+            δd = ibl_height(DiffusionIBL(), 300.0; z0_up = zu, z0_down = zd)
+            @printf("    IBL at 300 m, z0 %.3f → %.3f: Elliott %.1f  Wood %.1f  Panofsky-Dutton %.1f m\n",
+                    zu, zd, δe, δw, δd)
+            @test all(8 .<= (δe, δw, δd) .<= 34.5)
+            @test δe >= max(δw, δd)
+        end
+        # Elliott: explicit formula; a smooth-to-rough step grows a deeper
+        # layer at the same fetch than rough-to-smooth onto the same z0D.
+        @test ibl_height(ElliottIBL(), 100.0; z0_up = 0.01, z0_down = 0.1) ≈
+              0.1 * (0.75 - 0.03log(10)) * 1000^0.8 rtol = 1e-14
+        # Diffusion analogy: δ(0) = z0D, the implicit law holds to rounding
+        # and dδ/dx = Cκ/ln(δ/z0D) (Panofsky & Dutton 1984).
+        d = DiffusionIBL()
+        @test ibl_height(d, 0.0; z0_up = 0.1, z0_down = 0.05) == 0.05
+        worst, worst_ode = 0.0, 0.0
+        for x in (1e-3, 0.1, 1.0, 10.0, 300.0, 1e4, 1e6), z0 in (1e-4, 0.03, 1.0)
+            δ = ibl_height(d, x; z0_up = 0.1, z0_down = z0)
+            y = δ / z0
+            worst = max(worst, abs(y * (log(y) - 1) + 1 - 1.25κ_bh * x / z0) / max(1.25κ_bh * x / z0, 1.0))
+            h = 1e-6x
+            dδ = (ibl_height(d, x + h; z0_up = 0.1, z0_down = z0) -
+                  ibl_height(d, x - h; z0_up = 0.1, z0_down = z0)) / 2h
+            worst_ode = max(worst_ode, _bh_rel(dδ, 1.25κ_bh / log(y)))
+        end
+        @test worst < 1e-12
+        @test worst_ode < 1e-5
+        # Rule of thumb δ ≈ x/10 (Brutsaert 1998, quoted by Bou-Zeid et al.
+        # 2007) at a kilometre fetch over grassland-to-crop roughness.
+        @test 0.05 < ibl_height(d, 1000.0; z0_up = 0.01, z0_down = 0.1) / 1000 < 0.2
+        @test_throws ArgumentError ibl_height(d, -1.0; z0_up = 0.1, z0_down = 0.1)
+
+        # IBL-based blending height: the deepest pairwise IBL at 2L.
+        z, f = [0.01, 0.1, 0.5], [0.3, 0.3, 0.4]
+        bh = IBLBlendingHeight(ElliottIBL(), 1000.0)
+        pairs = [ibl_height(ElliottIBL(), 2000.0; z0_up = z[j], z0_down = z[i]) for i in 1:3, j in 1:3 if i != j]
+        @test blending_height(bh, z, f) == maximum(pairs)
+        @test blending_height(bh, [0.1], [1.0]) == ibl_height(ElliottIBL(), 2000.0; z0_up = 0.1, z0_down = 0.1)
+        @test blending_height(IBLBlendingHeight(DiffusionIBL(), 1000.0), z, [0.5, 0.5, 0.0]) ==
+              blending_height(IBLBlendingHeight(DiffusionIBL(), 1000.0), z[1:2], [0.5, 0.5])
+    end
 end
