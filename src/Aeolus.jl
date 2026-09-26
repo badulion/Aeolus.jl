@@ -54,6 +54,8 @@ include("TwoStream.jl")         # Phase 33
 include("MonteCarloRT.jl")      # Phase 34
 include("Radiosity.jl")         # Phase 35
 include("SolarGeometry.jl")     # Phase 38
+# Era V, Phase 52 — lake / coastal-sea water column (needs SurfaceOptics).
+include("OceanMixedLayer.jl")
 
 include("AerosolCloud.jl")         # Phase 42
 include("Superdroplet.jl")         # Phase 41
@@ -116,6 +118,7 @@ using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
 using .AirSeaFlux                  # Phase 52 (#39)
+using .OceanMixedLayer             # Phase 52 (#38)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -618,5 +621,18 @@ export COAREStability, ConvectiveGustiness, gustiness_velocity,
        neutral_transfer_coefficients,
        BulkAirSea, coare30_bulk, coare35_bulk, AirSeaSolution, air_sea_fluxes,
        SeaSurface, sea_surface_solution
+# Phase 52 (#38) — OceanMixedLayer: lake / coastal-sea water column with a
+# Kraus–Turner mixed layer, shortwave penetration, cool skin and warm layer.
+export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
+       water_density, water_thermal_expansion, water_haline_contraction,
+       SolarBands, jerlov_water, soloviev_solar,
+       solar_transmission, solar_absorbed_between, solar_mean_transmission,
+       CoolSkin, cool_skin, BusingerDyerLogLinear,
+       AbstractWarmLayer, NoWarmLayer, FairallWarmLayer, ZengBeljaarsWarmLayer,
+       step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth,
+       KrausTurnerMixing, WaterColumn, layer_depths,
+       absorb_heat!, convective_adjustment!, wind_mixing!, mix_column!,
+       column_heat_content, column_potential_energy, mixed_layer_depth,
+       salinity_humidity_factor
 
 end # module
