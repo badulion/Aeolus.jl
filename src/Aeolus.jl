@@ -63,6 +63,7 @@ include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
+include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equation
 
 using .Grids
 using .Fields
@@ -112,6 +113,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .SoilColumn                  # Phase 46
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
