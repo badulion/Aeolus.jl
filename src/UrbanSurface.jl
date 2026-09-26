@@ -46,8 +46,8 @@ interior* (the room, or the deep ground).
   * Heisler, G. M. & Brazel, A. J. (2010). The urban physical
     environment: temperature and urban heat islands. In *Urban Ecosystem
     Ecology*, Agronomy Monograph 55, ASA-CSSA-SSSA, 29-56. Table 2-3
-    (after Goward, S. N., 1981, *Photogramm. Eng. Remote Sens.* 47,
-    1291-1302).
+    (after Goward, S. N., 1981, Thermal behavior of urban landscapes and
+    the urban heat island, *Phys. Geogr.* 2, 19-33).
   * ISO 6946:2017. *Building components and building elements — Thermal
     resistance and thermal transmittance — Calculation methods.* Table 7
     (conventional surface resistances).
