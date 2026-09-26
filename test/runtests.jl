@@ -912,4 +912,6 @@ end
     include("era5_soil_column.jl")       # Phase 46: soil column, Richards equation (#15)
     include("era5_soil_thermal.jl")      # Phase 46: soil heat and freeze–thaw (#16)
     include("era5_water_table.jl")       # Phase 46: water table, unconfined aquifer (#17)
+    include("era5_land_surface.jl")      # Phase 47: vegetated land column, soil-water stress (#21)
+    include("era5_land_surface_fluxnet.jl") # Phase 47: land column vs FLUXNET/PLUMBER2 towers (#21)
 end

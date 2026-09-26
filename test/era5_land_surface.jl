@@ -18,7 +18,7 @@ using Aeolus.LandSurface
 using Aeolus.SoilColumn: SoilThermalColumn
 
 # composite Simpson on [a, b] with n (even) intervals
-function _simpson(f, a, b; n = 2000)
+function _ls_simpson(f, a, b; n = 2000)
     h = (b - a) / n
     s = f(a) + f(b)
     for i in 1:n-1
@@ -156,17 +156,17 @@ end
         kb = 0.5 / μ; kbp = kb * sqrt(1 - σ)
         # effective diffuse coefficient from the isotropic-sky transmittance,
         # computed independently by Simpson quadrature over the sky
-        τd = _simpson(m -> 2m * exp(-0.5 / max(m, 1e-12) * sqrt(1 - σ) * L), 0.0, 1.0; n = 20000)
+        τd = _ls_simpson(m -> 2m * exp(-0.5 / max(m, 1e-12) * sqrt(1 - σ) * L), 0.0, 1.0; n = 20000)
         kdp = -log(τd) / L
         ρh = (1 - sqrt(1 - σ)) / (1 + sqrt(1 - σ))
         ρcb = 1 - exp(-2ρh * kb / (1 + kb))
-        ρcd = _simpson(m -> 2m * (1 - exp(-2ρh * (0.5 / max(m, 1e-12)) / (1 + 0.5 / max(m, 1e-12)))), 0.0, 1.0; n = 20000)
+        ρcd = _ls_simpson(m -> 2m * (1 - exp(-2ρh * (0.5 / max(m, 1e-12)) / (1 + 0.5 / max(m, 1e-12)))), 0.0, 1.0; n = 20000)
         tot(l) = (1 - ρcb) * kbp * Ib * exp(-kbp * l) + (1 - ρcd) * kdp * Id * exp(-kdp * l)
         dirdir(l) = (1 - σ) * kb * Ib                   # per sunlit leaf area
         sunabs(l) = exp(-kb * l) * (dirdir(l) + (1 - ρcd) * kdp * Id * exp(-kdp * l) +
                                     (1 - ρcb) * kbp * Ib * exp(-kbp * l) - (1 - σ) * kb * Ib * exp(-kb * l))
-        @test r.sunlit ≈ _simpson(sunabs, 0.0, L) rtol = 1e-6
-        @test r.sunlit + r.shaded ≈ _simpson(tot, 0.0, L) rtol = 1e-6
+        @test r.sunlit ≈ _ls_simpson(sunabs, 0.0, L) rtol = 1e-6
+        @test r.sunlit + r.shaded ≈ _ls_simpson(tot, 0.0, L) rtol = 1e-6
     end
 
     # Deep canopy: nothing reaches the ground and the reflection is ρ_cb.
