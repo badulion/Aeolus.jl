@@ -372,7 +372,8 @@ for n in 1:nsteps
                                     dt = dt, H_cap = 250.0, C_h = 1e-3)
     # L4: anthropogenic heat (traffic, AC exhaust, interior heat loss)
     add_anthropogenic_heat!(sensible, sfc, hour_of_day)
-    # R6: glass materials let some SW pass through; reduce sensible
+    # R6: glazing transmits part of the SW into the buildings; that part
+    # leaves the glass cells' surface budget (UrbanSurface glazing optics)
     apply_glass_sw_transmission!(sensible, sfc, sw_arr)
     # L1: evaporative cooling
     LE = apply_latent_flux!(sim, Ts, sfc; dt = dt, qv_field = qv_p,

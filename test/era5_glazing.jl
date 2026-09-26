@@ -491,4 +491,39 @@ window_rho_clr(Φ) = poly4(RHO_CLR, cos(Φ)) - window_tau_clr(Φ)
         end
         @info "WindowFacet steady state vs steady formulas\n" * join(rows, "\n")
     end
+    @testset "examples/urban/glass_material.jl delegates to UrbanSurface" begin
+        # The flagship example's glass class now carries no numbers of its
+        # own; load it (its includes re-define docs, hence the null logger)
+        ex = Module(:GlassExample)
+        Core.eval(ex, :(include(p) = Base.include($ex, p)))
+        Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+            Base.include(ex, joinpath(@__DIR__, "..", "examples", "urban", "glass_material.jl"))
+        end
+        g = Base.invokelatest(getfield(ex, :example_glazing))
+        params = Base.invokelatest(getfield(ex, :glass_surface_params))
+        h = glazing_optics_hemispherical(g)
+        cls = Int(getfield(ex, :SURFACE_GLASS))
+        @test params.albedo[cls] ≈ h.R
+        @test params.emissivity[cls] == g.panes[1].emissivity
+        @test params.C_s[cls] ≈ sum(p -> USG.volumetric_heat_capacity(p.material) * p.thickness, g.panes)
+        # One step of the example's surface scheme on a glass cell, with the
+        # long-wave balance neutral: the cell absorbs exactly ΣA·SW — the
+        # transmitted shortwave has left its budget. (Before #27 the add-on
+        # subtracted the transmitted part from the loss and so heated the
+        # glass with it.)
+        sfc = fill(UInt8(cls), 1, 1)
+        T0 = 300.0; sw = 600.0; dt = 10.0
+        Ts = fill(T0, 1, 1)
+        loss = zeros(1, 1)
+        Base.invokelatest(getfield(ex, :apply_glass_sw_transmission!), loss, sfc, fill(sw, 1, 1))
+        @test loss[1, 1] ≈ h.T * sw
+        lw = getfield(ex, :STEFAN) * T0^4
+        Base.invokelatest(getfield(ex, :step_surfaces!), Ts, sfc, params, fill(sw, 1, 1), lw, loss, dt)
+        @test (Ts[1, 1] - T0) * params.C_s[cls] / dt ≈ sum(h.A) * sw rtol = 1e-10
+        # direct-beam variant uses the angular transmittance
+        loss .= 0
+        Base.invokelatest(getfield(ex, :apply_glass_sw_transmission!), loss, sfc, fill(sw, 1, 1);
+                          cos_incidence = cosd(60))
+        @test loss[1, 1] ≈ glazing_optics(g, deg2rad(60)).T * sw
+    end
 end
