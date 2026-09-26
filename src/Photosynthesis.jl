@@ -67,6 +67,9 @@ module Photosynthesis
 
 using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
                              saturation_vapor_pressure, latent_heat_vapor
+# The bracketed Illinois root finder of the Era V contract (used by the
+# Monin-Obukhov solver) also solves the coupled A-gs-ci system here.
+using ..SurfaceExchange: _illinois
 
 export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
        Q10Response, temperature_factor, optimum_temperature,
@@ -80,7 +83,10 @@ export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
        PFTPhotosynthesis, CLM45_PFT_PHOTOSYNTHESIS, vcmax25_from_leaf_nitrogen,
        pft_photosynthesis_parameters,
        AbstractStomatalModel, BallBerryStomata, MedlynStomata, stomatal_conductance,
-       leaf_boundary_layer_conductance, molar_conductance, leaf_transpiration
+       leaf_boundary_layer_conductance, molar_conductance, leaf_transpiration,
+       STOMATAL_DIFFUSIVITY_RATIO, BOUNDARY_LAYER_DIFFUSIVITY_RATIO,
+       LeafGasExchange, leaf_gas_exchange, apply_water_stress,
+       CLM5_MEDLYN_G1, pft_stomatal_model
 
 # Reference temperature of every "…25" parameter.
 const T_REF = 298.15
@@ -817,9 +823,16 @@ g_s = g_0 + 1.6\\left(1 + \\frac{g_1}{\\sqrt{D_s}}\\right)\\frac{A_n}{c_s}
 
 with ``D_s`` the vapour-pressure deficit at the leaf surface in **kPa**,
 `g1` in kPa^½ and `g0` in mol m⁻² s⁻¹ (CLM5: 100 µmol m⁻² s⁻¹).
-Following CLM5 the air-to-leaf deficit ``e_{sat}(T_\\ell) - e_a`` is
-bounded below by `D_min` (Pa) so the closure stays finite in saturated
-air. For ``g_0 = 0`` and a perfectly coupled leaf it gives the optimal
+The leaf-surface deficit is bounded below by `D_min` (Pa), so the
+closure stays finite in saturated air. CLM5 applies its 50 Pa bound to
+the *air* deficit ``e_{sat}(T_\\ell) - e_a`` instead; that leaves the
+leaf-surface deficit unbounded below for a weakly coupled leaf, where
+opening stomata humidifies the leaf surface and opens them further —
+at 5 °C, 98 % RH and ``g_b = 0.1`` mol m⁻² s⁻¹ it gives
+``g_s ≈ 10^3`` mol m⁻² s⁻¹. Here the deficit entering the closure is
+``\\max(D_s, D_{min})``, which caps ``g_s`` at
+``g_0 + 1.6(1 + g_1/\\sqrt{D_{min}})A_n/c_s``. Whenever
+``D_s ≥ D_{min}`` the two agree exactly. For ``g_0 = 0`` and a perfectly coupled leaf it gives the optimal
 ratio ``c_i/c_a = g_1/(g_1 + \\sqrt{D})`` independent of ``A_n``. The
 default `g1` is CLM5's broadleaf-deciduous-tree value; per-PFT values
 are in [`CLM5_MEDLYN_G1`](@ref).
@@ -874,13 +887,19 @@ function stomatal_conductance(m::MedlynStomata, An::Real, cs::Real, e_air::Real,
                               e_sat_leaf::Real, gb::Real)
     g0 = m.g0
     An > 0 || return g0
-    Da = max(e_sat_leaf - min(e_air, e_sat_leaf), m.D_min) * 1e-3   # kPa, CLM5 bound
     c1 = STOMATAL_DIFFUSIVITY_RATIO * An / cs
+    Dmin = m.D_min * 1e-3                                  # kPa
+    gs_bound = g0 + c1 * (1 + m.g1 / sqrt(Dmin))           # closure at Ds = D_min
+    Da = (e_sat_leaf - min(e_air, e_sat_leaf)) * 1e-3      # air deficit, kPa
+    Da <= Dmin && return gs_bound
     isinf(gb) && return g0 + c1 * (1 + m.g1 / sqrt(Da))
     # gs = g0 + c1 + c2 x with x = √(gb + gs):  x² − c2 x − (gb + g0 + c1) = 0.
     c2 = m.g1 * c1 / sqrt(gb * Da)
     x = (c2 + sqrt(c2^2 + 4 * (gb + g0 + c1))) / 2
-    return g0 + c1 + c2 * x
+    gs = g0 + c1 + c2 * x
+    # Leaf-surface deficit Ds = gb Da / x². If it is below D_min the
+    # closure evaluated at max(Ds, D_min) has the single root gs_bound.
+    return gb * Da / x^2 >= Dmin ? gs : gs_bound
 end
 
 """
@@ -939,6 +958,264 @@ function leaf_transpiration(gs::Real, gb::Real, T_leaf::Real, e_air::Real, p_air
                             c::ThermodynamicConstants = DEFAULT_CONSTANTS)
     gw = isinf(gb) ? float(gs) : gs * gb / (gs + gb)
     return gw * (saturation_vapor_pressure(T_leaf, c) - e_air) / p_air
+end
+
+# =========================================================================
+# 8. Water stress hook and the coupled A–gs–ci solution
+# =========================================================================
+
+const _STRESS_TARGETS = (:vcmax, :rd, :g0, :g1)
+
+"""
+    apply_water_stress(p::AbstractPhotosynthesisParameters, β; targets = (:vcmax, :rd, :g0))
+    apply_water_stress(m::AbstractStomatalModel, β; targets = (:vcmax, :rd, :g0))
+
+The soil-water-stress hook. `β ∈ [0, 1]` is the plant wetness factor
+(CLM's `btran`); it is an *input* here — the land column (#21) computes
+it from soil matric potential. `targets` says what it multiplies:
+
+  * `:vcmax` — the Rubisco capacity `Vcmax25` (CLM4.5 eq. 8.10;
+    `vcmax_z = vcmax_z * btran` in CLM5's non-hydraulic path);
+  * `:rd` — day respiration `Rd25` (CLM, `lmr_z = lmr_z * btran`);
+  * `:g0` — the stomatal intercept (CLM, `bbb = max(bbbopt*btran, 1 µmol)`);
+  * `:g1` — the stomatal slope (the alternative of e.g. Zhou et al. 2013
+    and De Kauwe et al. 2015, not CLM's default).
+
+The default reproduces CLM4.5/CLM5. A parameter set is returned
+unchanged for targets that do not apply to it. The stomatal intercept is
+always bounded below by 1 µmol m⁻² s⁻¹ (CLM's floor), which keeps the
+coupled system well posed in the dark even for `g0 = 0`.
+"""
+function apply_water_stress end
+
+function _check_stress(β, targets)
+    0 <= β <= 1 || throw(DomainError(β, "water-stress factor β must lie in [0, 1]"))
+    for t in targets
+        t in _STRESS_TARGETS ||
+            throw(ArgumentError("unknown water-stress target :$t; use a subset of $_STRESS_TARGETS"))
+    end
+    return nothing
+end
+
+function apply_water_stress(p::C3Parameters, β::Real; targets = (:vcmax, :rd, :g0))
+    _check_stress(β, targets)
+    fv = :vcmax in targets ? β : 1.0
+    fr = :rd in targets ? β : 1.0
+    return C3Parameters(p.Vcmax25 * fv, p.Jmax25, p.Tp25, p.Rd25 * fr, p.Kc25, p.Ko25,
+                        p.Γstar25, p.o_ref, p.Φ_PSII, p.Θ_PSII, p.Θ_cj, p.Θ_ip,
+                        p.temperature)
+end
+
+function apply_water_stress(p::C4Parameters, β::Real; targets = (:vcmax, :rd, :g0))
+    _check_stress(β, targets)
+    fv = :vcmax in targets ? β : 1.0
+    fr = :rd in targets ? β : 1.0
+    return C4Parameters(p.Vcmax25 * fv, p.kp25, p.Rd25 * fr, p.α, p.Θ_cj, p.Θ_ip,
+                        p.Vcmax_T, p.kp_T, p.Rd_T)
+end
+
+function apply_water_stress(m::BallBerryStomata, β::Real; targets = (:vcmax, :rd, :g0))
+    _check_stress(β, targets)
+    g0 = max((:g0 in targets ? β : 1.0) * m.g0, _GS_FLOOR)
+    return BallBerryStomata(g1 = (:g1 in targets ? β : 1.0) * m.g1, g0 = g0)
+end
+
+function apply_water_stress(m::MedlynStomata, β::Real; targets = (:vcmax, :rd, :g0))
+    _check_stress(β, targets)
+    g0 = max((:g0 in targets ? β : 1.0) * m.g0, _GS_FLOOR)
+    return MedlynStomata(g1 = (:g1 in targets ? β : 1.0) * m.g1, g0 = g0, D_min = m.D_min)
+end
+
+"""
+    LeafGasExchange
+
+Result of [`leaf_gas_exchange`](@ref):
+
+| field | unit | meaning |
+| :-- | :-- | :-- |
+| `An`, `A`, `Rd` | µmol m⁻² s⁻¹ | net and gross assimilation, day respiration |
+| `ci`, `cs` | µmol mol⁻¹ | intercellular and leaf-surface CO₂ |
+| `gs`, `gb` | mol m⁻² s⁻¹ | stomatal and boundary-layer conductance to H₂O |
+| `gc` | mol m⁻² s⁻¹ | total leaf conductance to CO₂, ``(1.4/g_b + 1.6/g_s)^{-1}`` |
+| `hs` | – | relative humidity at the leaf surface |
+| `Ds` | Pa | vapour-pressure deficit at the leaf surface |
+| `E` | mol m⁻² s⁻¹ | transpiration ([`leaf_transpiration`](@ref)) |
+| `LE` | W m⁻² | latent heat of `E` at leaf temperature |
+| `limitation` | – | `:rubisco`, `:light` or `:export` at the solution |
+| `iterations`, `converged` | – | root-finder diagnostics |
+
+At the solution ``A_n = g_c (c_a - c_i) = \\frac{g_b}{1.4}(c_a - c_s)
+= \\frac{g_s}{1.6}(c_s - c_i)``.
+"""
+struct LeafGasExchange
+    An::Float64
+    A::Float64
+    Rd::Float64
+    ci::Float64
+    cs::Float64
+    gs::Float64
+    gb::Float64
+    gc::Float64
+    hs::Float64
+    Ds::Float64
+    E::Float64
+    LE::Float64
+    limitation::Symbol
+    iterations::Int
+    converged::Bool
+end
+
+"""
+    leaf_gas_exchange(p, model; ca, Q, T_leaf, e_air, gb = Inf, p_air = 101325.0,
+                      β = 1.0, stress_targets = (:vcmax, :rd, :g0),
+                      oi = nothing, colimitation = true,
+                      c = DEFAULT_CONSTANTS, maxiter = 200) -> LeafGasExchange
+
+Leaf photosynthesis, stomatal conductance and transpiration solved
+together. Inputs: photosynthetic parameters `p` ([`C3Parameters`](@ref)
+/ [`C4Parameters`](@ref)), a stomatal `model`
+([`BallBerryStomata`](@ref) / [`MedlynStomata`](@ref)), ambient CO₂ `ca`
+(µmol mol⁻¹), absorbed photon flux `Q` (µmol m⁻² s⁻¹), leaf temperature
+`T_leaf` (K), vapour pressure of the surrounding air `e_air` (Pa), leaf
+boundary-layer conductance to water vapour `gb` (mol m⁻² s⁻¹; see
+[`leaf_boundary_layer_conductance`](@ref); `Inf` = perfectly coupled)
+and air pressure `p_air` (Pa, used only for transpiration). `β` is the
+soil-water-stress factor applied by [`apply_water_stress`](@ref);
+`oi` (mmol mol⁻¹) overrides the C3 O₂ mole fraction.
+
+Four equations close the system (CLM5 §2.9.6, eqs. 2.9.19-2.9.27): the
+biochemistry ``A_n = f(c_i)`` ([`leaf_assimilation`](@ref)); diffusion
+through the boundary layer, ``c_s = c_a - 1.4 A_n / g_b``; the stomatal
+closure ``g_s(A_n, c_s, e_s)`` ([`stomatal_conductance`](@ref), exact in
+the leaf-surface humidity); and diffusion through the pore,
+``c_i = c_s - 1.6 A_n / g_s``. They reduce to one scalar equation
+``R(c_i) = c_i - [c_a - A_n(c_i)(1.4/g_b + 1.6/g_s)] = 0``, solved on a
+bracket by the Illinois method of `SurfaceExchange`, like CLM5's hybrid
+secant/Brent solver (Sun et al. 2012), which replaced CLM4's
+non-convergent fixed-point iteration. ``R(0) < 0`` always (no gross
+uptake at ``c_i = 0``); the upper end is ``c_a``, or, when respiration
+exceeds uptake there (darkness), the ``c_i > c_a`` it implies.
+Typically 5-20 iterations; near the compensation point, where ``g_s``
+drops from the closure value to the intercept as ``A_n`` changes sign,
+``R`` is steep and up to ~100 may be needed (hence `maxiter = 200`);
+`converged` reports the outcome.
+
+The leaf temperature is an input: the leaf energy balance that sets it
+belongs to the land column (#21) and the resolved canopy (#24).
+"""
+function leaf_gas_exchange(p::AbstractPhotosynthesisParameters, model::AbstractStomatalModel;
+                           ca::Real, Q::Real, T_leaf::Real, e_air::Real, gb::Real = Inf,
+                           p_air::Real = 101325.0, β::Real = 1.0,
+                           stress_targets = (:vcmax, :rd, :g0), oi = nothing,
+                           colimitation::Bool = true,
+                           c::ThermodynamicConstants = DEFAULT_CONSTANTS, maxiter::Integer = 200)
+    ca > 0 || throw(DomainError(ca, "ambient CO₂ must be positive"))
+    gb > 0 || throw(DomainError(gb, "boundary-layer conductance must be positive"))
+    ps = apply_water_stress(p, β; targets = stress_targets)
+    sm = apply_water_stress(model, β; targets = stress_targets)
+    ei = saturation_vapor_pressure(T_leaf, c)
+    rbc = isinf(gb) ? 0.0 : BOUNDARY_LAYER_DIFFUSIVITY_RATIO / gb   # CO₂ resistance, m² s mol⁻¹
+    kw = oi === nothing ? (; colimitation = colimitation) : (; oi = oi, colimitation = colimitation)
+
+    function state(ci)
+        la = leaf_assimilation(ps, ci, Q, T_leaf; kw...)
+        An = la.An
+        cs = max(ca - rbc * An, 1e-6)                      # CLM: cs = max(cs, 1e-6)
+        gs = stomatal_conductance(sm, An, cs, e_air, ei, gb)
+        return la, cs, gs, ca - An * (rbc + STOMATAL_DIFFUSIVITY_RATIO / gs)
+    end
+    R(ci) = ci - state(ci)[4]
+
+    lo, hi = 0.0, Float64(ca)
+    flo, fhi = R(lo), R(hi)
+    iters, conv = 0, true
+    if fhi < 0                       # net loss at ci = ca: the root lies above ca
+        for _ in 1:60
+            hi = state(hi)[4] + 1e-9 * hi
+            fhi = R(hi)
+            fhi >= 0 && break
+        end
+    end
+    if flo >= 0
+        ci = lo
+    elseif fhi == 0
+        ci = hi
+    elseif fhi > 0
+        ci, iters, conv = _illinois(R, lo, hi, flo, fhi, maxiter)
+    else
+        ci, conv = hi, false
+    end
+
+    la, cs, gs, _ = state(ci)
+    gc = 1 / (rbc + STOMATAL_DIFFUSIVITY_RATIO / gs)
+    es = isinf(gb) ? float(e_air) : (gb * e_air + gs * ei) / (gb + gs)
+    E = leaf_transpiration(gs, gb, T_leaf, e_air, p_air; c = c)
+    LE = latent_heat_vapor(T_leaf, c) * c.molmass_water * E
+    return LeafGasExchange(la.An, la.A, la.Rd, ci, cs, gs, Float64(gb), gc, es / ei, ei - es,
+                           E, LE, la.limitation, iters, conv)
+end
+
+# =========================================================================
+# 9. Per-PFT stomatal parameters
+# =========================================================================
+
+"""
+    CLM5_MEDLYN_G1 :: Dict{Symbol, Float64}
+
+Medlyn slope `g1` (kPa^½) per plant functional type, transcribed from
+CLM5 Technical Note Table 2.9.1 (Lawrence et al. 2018; the values of the
+CABLE model, De Kauwe et al. 2015). Keys are those of
+[`CLM45_PFT_PHOTOSYNTHESIS`](@ref):
+
+| key | CLM5 row | g1 |
+| :-- | :-- | --: |
+| `:net_temperate`, `:net_boreal`, `:ndt_boreal` | NET Temperate/Boreal, NDT Boreal | 2.35 |
+| `:bet_tropical`, `:bet_temperate` | BET Tropical/temperate | 4.12 |
+| `:bdt_tropical`, `:bdt_temperate`, `:bdt_boreal` | BDT tropical/temperate/boreal | 4.45 |
+| `:bes_temperate`, `:bds_temperate`, `:bds_boreal` | BES temperate, BDS temperate/boreal | 4.70 |
+| `:c3_arctic_grass` | C3 arctic grass | 2.22 |
+| `:c3_grass` | C3 grass | 5.25 |
+| `:c4_grass` | C4 grass | 1.62 |
+| `:corn` | Temperate Corn | 1.79 |
+| `:temperate_cereal` | Spring Wheat | 5.79 |
+| `:soybean` | Temperate Soybean | 5.79 |
+
+The generic `:crop` and `:winter_cereal` rows of CLM4.5 have no row in
+Table 2.9.1 and are deliberately absent rather than guessed.
+"""
+const CLM5_MEDLYN_G1 = Dict{Symbol,Float64}(
+    :net_temperate => 2.35, :net_boreal => 2.35, :ndt_boreal => 2.35,
+    :bet_tropical => 4.12, :bet_temperate => 4.12,
+    :bdt_tropical => 4.45, :bdt_temperate => 4.45, :bdt_boreal => 4.45,
+    :bes_temperate => 4.70, :bds_temperate => 4.70, :bds_boreal => 4.70,
+    :c3_arctic_grass => 2.22, :c3_grass => 5.25, :c4_grass => 1.62,
+    :corn => 1.79, :temperate_cereal => 5.79, :soybean => 5.79,
+)
+
+"""
+    pft_stomatal_model(pft::Symbol; model = :medlyn) -> MedlynStomata | BallBerryStomata
+
+Stomatal closure for a CLM plant functional type.
+
+  * `model = :medlyn` — CLM5: `g1` from [`CLM5_MEDLYN_G1`](@ref),
+    `g0 = 100 µmol m⁻² s⁻¹` for C3 and C4 (CLM5 §2.9.3).
+  * `model = :ball_berry` — CLM4.5: slope `m = 9` (C3) or `4` (C4)
+    (Table 8.1) and intercept `b = 10000` (C3) or `40000` (C4)
+    µmol m⁻² s⁻¹ (`bbbopt` in CLM's PhotosynthesisMod.F90).
+"""
+function pft_stomatal_model(pft::Symbol; model::Symbol = :medlyn)
+    haskey(CLM45_PFT_PHOTOSYNTHESIS, pft) ||
+        throw(ArgumentError("unknown PFT :$pft; see keys(CLM45_PFT_PHOTOSYNTHESIS)"))
+    c4 = CLM45_PFT_PHOTOSYNTHESIS[pft].pathway === :C4
+    if model === :ball_berry
+        return c4 ? BallBerryStomata(g1 = 4.0, g0 = 0.04) : BallBerryStomata(g1 = 9.0, g0 = 0.01)
+    elseif model === :medlyn
+        haskey(CLM5_MEDLYN_G1, pft) ||
+            throw(ArgumentError("CLM5 Table 2.9.1 has no Medlyn g1 for :$pft"))
+        return MedlynStomata(g1 = CLM5_MEDLYN_G1[pft], g0 = 1.0e-4)
+    else
+        throw(ArgumentError("model must be :medlyn or :ball_berry, got :$model"))
+    end
 end
 
 end # module
