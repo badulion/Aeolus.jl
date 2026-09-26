@@ -907,4 +907,5 @@ end
 
 @testset "Era V" begin
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
+    include("era5_air_sea_flux.jl")      # Phase 52  wave-dependent sea-surface roughness (#39)
 end

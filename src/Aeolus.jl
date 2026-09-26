@@ -64,6 +64,9 @@ include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 
+# --- Era V: surface exchange (Phases 46-53) ------------------------------
+include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
+
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -112,6 +115,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .AirSeaFlux                  # Phase 52 (#39)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
