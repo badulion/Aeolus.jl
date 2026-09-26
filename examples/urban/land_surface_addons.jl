@@ -7,7 +7,8 @@
 #
 # Contents:
 #   * L2 — vegetation drag + tree shade
-#       `apply_vegetation_drag!`, `apply_tree_shade!`
+#       `vegetation_canopy_drag`, `apply_vegetation_drag!` (implicit drag,
+#       delegating to `Aeolus.PlantCanopy`), `apply_tree_shade!`
 #   * L3 — multi-layer soil thermal diffusion
 #       `SoilGrid`, `step_soil!`
 #   * L5 — snow / ice / dew surface state
@@ -20,7 +21,7 @@
 
 include(joinpath(@__DIR__, "urban_physics.jl"))
 
-export apply_vegetation_drag!, apply_tree_shade!,
+export vegetation_canopy_drag, apply_vegetation_drag!, apply_tree_shade!,
        SoilGrid, step_soil!,
        SnowState, update_snow_state!, snow_modify_params!,
        apply_dew_condensation!,
@@ -31,72 +32,49 @@ export apply_vegetation_drag!, apply_tree_shade!,
 # ---------------------------------------------------------------------------
 
 """
-    apply_vegetation_drag!(sim, veg_mask, LAI_arr; cd=0.2, k_height=nothing)
+    vegetation_canopy_drag(mesh, veg_mask, LAI_arr; cd=0.2, k_height=nothing)
+        -> Aeolus.PlantCanopy.ResolvedCanopyDrag
 
-Add a canopy drag body force `−cd · LAI · |u| · u` to the momentum
-tendencies inside vegetation cells, for every interior z-layer whose
-index `k` satisfies `k ≤ k_height`. When `k_height === nothing`, the
-default is `sim.mesh.Nz ÷ 4` — i.e. the lower quarter of the domain,
-which matches the typical canopy scale for a city LES.
+Build the resolved canopy drag for the vegetated columns of the city.
+Each column with `veg_mask[i, j]` and `LAI_arr[i, j] > 0` gets a uniform
+leaf-area-density crown `UniformLAD(LAI, h)` with the canopy height
+`h = k_height · dz` (`k_height === nothing` → `Nz ÷ 4` layers, the old
+default). The physics — LAD profiles, the implicit drag factor and the
+staggered-grid application — lives in `Aeolus.PlantCanopy`; this is
+only the city-specific wiring.
 
-Arguments:
-  * `sim`          — the `BoussinesqSimulation`. The routine writes into
-                     `sim.tu.data`, `sim.tv.data`, `sim.tw.data`, so it
-                     must be called from inside a `body_force!` callback
-                     passed to `step!`.
-  * `veg_mask`     — `AbstractMatrix{Bool}` of size `(Nx, Ny)`. `true`
-                     marks a canopy column.
-  * `LAI_arr`      — `AbstractMatrix{<:Real}` of leaf-area index per
-                     ground cell (unitless, ~0..6). Only the values
-                     underneath `veg_mask` cells are consulted.
-
-Keyword arguments:
-  * `cd`           — canopy drag coefficient (typical 0.15..0.3).
-  * `k_height`     — top interior-z-index (inclusive) at which drag is
-                     still applied. `nothing` → `Nz ÷ 4`.
-
-Notes:
-  * The drag is evaluated on the *co-located* horizontal velocity at
-    each interior cell — u and v are staggered on FaceX / FaceY but,
-    consistent with `add_geostrophic_wind!` above, we read them at the
-    same `(Hx+i, Hy+j, Hz+k)` index for simplicity. The vertical
-    component uses `w` at the same index.
-  * The routine is fully in-place and allocation-free.
+Build it once, outside the time loop, and apply it with
+[`apply_vegetation_drag!`](@ref) from the `post_predictor!` hook.
 """
-function apply_vegetation_drag!(sim, veg_mask::AbstractMatrix{Bool},
+function vegetation_canopy_drag(mesh, veg_mask::AbstractMatrix{Bool},
                                 LAI_arr::AbstractMatrix{<:Real};
                                 cd::Real = 0.2,
                                 k_height::Union{Nothing, Integer} = nothing)
-    Nx, Ny, Nz = sim.mesh.Nx, sim.mesh.Ny, sim.mesh.Nz
-    Hx, Hy, Hz = sim.mesh.Hx, sim.mesh.Hy, sim.mesh.Hz
-    k_top = k_height === nothing ? max(1, Nz ÷ 4) : Int(k_height)
-    k_top = clamp(k_top, 1, Nz)
-    cdF   = Float64(cd)
-    ud    = sim.u.data
-    vd    = sim.v.data
-    wd    = sim.w.data
-    tud   = sim.tu.data
-    tvd   = sim.tv.data
-    twd   = sim.tw.data
-    @inbounds for j in 1:Ny, i in 1:Nx
-        veg_mask[i, j] || continue
-        lai = Float64(LAI_arr[i, j])
-        lai > 0.0 || continue
-        α = cdF * lai
-        for k in 1:k_top
-            iu = Hx + i; jv = Hy + j; kw = Hz + k
-            uu = ud[iu, jv, kw]
-            vv = vd[iu, jv, kw]
-            ww = wd[iu, jv, kw]
-            speed = sqrt(uu*uu + vv*vv + ww*ww)
-            f = α * speed
-            tud[iu, jv, kw] -= f * uu
-            tvd[iu, jv, kw] -= f * vv
-            twd[iu, jv, kw] -= f * ww
-        end
-    end
-    return sim
+    Nz = mesh.Nz
+    k_top = clamp(k_height === nothing ? max(1, Nz ÷ 4) : Int(k_height), 1, Nz)
+    h = k_top * mesh.dz
+    profiles = Union{Nothing, UniformLAD{Float64}}[
+        (veg_mask[i, j] && LAI_arr[i, j] > 0) ? UniformLAD(LAI_arr[i, j], h) : nothing
+        for i in axes(veg_mask, 1), j in axes(veg_mask, 2)]
+    return ResolvedCanopyDrag(mesh, canopy_lad_field(mesh, profiles); C_d = cd)
 end
+
+"""
+    apply_vegetation_drag!(sim, drag, dt)
+
+Apply the canopy drag `-C_d a |U| U` *implicitly* — delegates to
+`Aeolus.PlantCanopy.apply_canopy_drag!`, which multiplies the predicted
+velocity by `1 / (1 + dt C_d a |U|)`. Call it from the `post_predictor!`
+hook of `step!`; `drag` comes from [`vegetation_canopy_drag`](@ref).
+
+History: this used to be an explicit tendency `-cd · LAI · |u| · u` added
+in `body_force!`. It used LAI (m² m⁻²) where the leaf-area *density*
+(m² m⁻³) belongs and read `u`, `v`, `w` co-located at the same index on
+the staggered grid, and the example shipped with it disabled because it
+went unstable at dt = 2 s. The implicit form is stable at any dt (issue #22).
+"""
+apply_vegetation_drag!(sim, drag::ResolvedCanopyDrag, dt::Real) =
+    apply_canopy_drag!(sim, drag, dt)
 
 """
     apply_tree_shade!(sw_arr, veg_mask, LAI_arr; k_leaf = 0.5)
