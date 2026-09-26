@@ -53,9 +53,12 @@ chatter indefinitely once the surface layers reached saturation under
 ponding (thousands of sub-steps per 5 minutes). Following Vogel et al.
 (2001) the model takes an air-entry potential ``\psi_e``, below which
 ``S_e`` is rescaled by ``S_c = [1+(\alpha|\psi_e|)^n]^{-m}``;
-`carsel_parrish_texture` uses ``\psi_e = -2`` cm by default (the
-retention curve moves by < 1 % of the pore space; ``\psi_e = 0``
-recovers the published curves).
+`carsel_parrish_texture` uses ``\psi_e = -2`` cm by default
+(``\psi_e = 0`` recovers the published curves). The retention curve
+moves by at most ``(\theta_s-\theta_r)(1-S_c)``, at ``\psi_e``: under
+0.6 % of the pore space for the loams and clays, but 1.3–2.3 % for the
+coarse classes (sand, loamy sand, sandy loam, sandy clay loam) — a
+deliberate departure from the published curves in the wettest 2 cm.
 
 ## 3. Temperature and ice
 

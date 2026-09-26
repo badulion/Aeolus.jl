@@ -154,6 +154,18 @@ end
     for ψ in (-0.1, -1.0, -10.0)
         @test abs(soil_water_content(mod, ψ) - soil_water_content(classic, ψ)) < 0.01 * mod.θ_s
     end
+    # Across all 12 Carsel-Parrish classes the largest shift of the retention
+    # curve is (θ_s - θ_r)(1 - S_c), reached at ψ_e: < 0.6 % of the pore
+    # space for loam, but up to 2.3 % for the coarse classes (loamy sand).
+    for tex in keys(CARSEL_PARRISH_1988)
+        m, c0 = carsel_parrish_texture(tex), carsel_parrish_texture(tex; ψ_e = 0.0)
+        shift = maximum(abs(soil_water_content(m, ψ) - soil_water_content(c0, ψ))
+                        for ψ in -exp.(range(log(0.02 + 1e-9), log(1e3), length = 2000)))
+        @test shift ≈ (m.θ_s - m.θ_r) * (1 - m.S_c) rtol = 1e-3
+        @test shift < 0.025 * (m.θ_s - m.θ_r)
+        tex in (:sand, :loamy_sand, :sandy_loam, :sandy_clay_loam) ||
+            @test shift < 0.006 * (m.θ_s - m.θ_r)
+    end
 end
 
 # Exact solution of Richards' equation for the Gardner soil (Srivastava &

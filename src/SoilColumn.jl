@@ -291,9 +291,11 @@ is saturated for ``ψ ≥ ψ_e``, and with ``S_c = [1 + (α|ψ_e|)^n]^{-m}``
 
 For ``n < 2`` the unmodified K has an infinite slope at saturation — a
 non-physical cusp (Ippisch et al. 2006) that makes Richards solvers
-chatter near saturation; ``ψ_e`` of a few centimetres removes it while
-changing the retention curve by well under 1 %. `ψ_e = 0` is the
-classical model.
+chatter near saturation; ``ψ_e`` of a few centimetres removes it. The
+retention curve moves by at most ``(θ_s - θ_r)(1 - S_c)``, reached at
+``ψ_e``: for ``ψ_e = -2`` cm that is < 0.6 % of the pore space for loams
+and clays but 1.3-2.3 % for the Carsel-Parrish sands, loamy sands, sandy
+loams and sandy clay loams. `ψ_e = 0` is the classical model.
 
   * Vogel, T., van Genuchten, M. Th. & Císlerová, M. (2001). Effect of
     the shape of the soil hydraulic functions near saturation on
