@@ -1493,4 +1493,75 @@ function coare_warm_layer_series(b::BulkAirSea, records::AbstractVector; sensor_
     return out
 end
 
+# =========================================================================
+# 11. Coupling to the prognostic water column (OceanMixedLayer)
+# =========================================================================
+
+"""
+    coare_flux_hook(b::BulkAirSea = coare35_bulk(); sea = nothing, spray = nothing,
+                    rain_heat = true) -> (col::WaterColumn, forcing) -> SurfaceFluxes
+
+The air–sea flux function for `OceanMixedLayer.step_surface!(col,
+forcing, dt; flux = coare_flux_hook(...))`: the water column then runs
+with COARE fluxes and wave-dependent roughness instead of the contract's
+fixed-roughness default. For the column's current skin temperature
+(`surface_temperature(col)`: top layer + warm layer - cool skin, which
+the column iterates itself) and seawater humidity it
+
+  1. solves [`air_sea_fluxes`](@ref) with `b` (and `sea` for the wave
+     laws) and stores the resulting roughness lengths in `col`, so
+     `roughness_lengths(col)` reports them to a tile aggregator;
+  2. adds the spray fluxes if `spray` is an [`AndreasSpray`](@ref)
+     (droplets from the water just below the skin, salinity `col.S`,
+     ``H_s`` from `sea` or a fully developed sea);
+  3. adds the rain heat flux of `forcing.rain` (if `rain_heat`) to the
+     heat the column loses.
+
+It returns ``SurfaceFluxes(R_n, H, LE, G, τ, E)`` with total (interfacial
++ spray) `H`, `LE`, `E`, the COARE stress ``τ = ρu_*^2 U/S`` and
+``G = R_n - H - LE - H_{rain}`` — exactly what the column absorbs, so the
+column's heat budget stays closed.
+
+Limitation: `WaterColumn` computes its cool skin from the `H` and `LE` it
+is handed, so with spray the skin also "sees" the spray heat, which
+physically leaves with the droplets. [`coare_fluxes`](@ref) keeps them
+apart.
+"""
+function coare_flux_hook(b::BulkAirSea = coare35_bulk(); sea = nothing,
+                         spray::Union{Nothing,AndreasSpray} = nothing, rain_heat::Bool = true)
+    return function (col::WaterColumn, f::SurfaceForcing)
+        c = col.c
+        th = c.thermo
+        Ts = surface_temperature(col)
+        qs = surface_specific_humidity(col, f; c = c)
+        pa = PhasePartition(f.q_air)
+        θ_a = f.T_air + dry_adiabatic_lapse_rate(pa, th) * f.z_ref
+        r = air_sea_fluxes(b; U = f.U, z_m = f.z_ref, θ_a = θ_a, θ_s = Ts, q_a = f.q_air,
+                           q_s = qs, T_air = f.T_air, p = f.p, sea = sea, c = c)
+        col.z0m, col.z0h, col.z0q = r.z0m, r.z0h, r.z0q
+        ρ = air_density(f.T_air, f.p, pa, th)
+        cp = heat_capacity_moist(pa, th)
+        sl = r.surface
+        H = -ρ * cp * sl.u_star * sl.θ_star
+        E = -ρ * sl.u_star * sl.q_star
+        LE = surface_latent_heat(col; c = c) * E
+        τ = ρ * sl.u_star^2 * max(f.U, zero(f.U)) / sl.U
+        Rn = net_radiation(col, f; c = c)
+        if spray !== nothing
+            T_sub = col.T[1] + warm_layer_warming(col.warm_layer, col.dz[1] / 2)
+            Hs = sea === nothing ? fully_developed_sea_state(max(r.U10N, 0.5); g = grav(c)).H_s :
+                 sea.H_s
+            sp = sea_spray_fluxes(spray; u_star = sl.u_star, T_sea = T_sub, T_air = f.T_air,
+                                  RH = relative_humidity(f.T_air, f.p, f.q_air, th), p = f.p,
+                                  S = col.S, H_s = Hs, c = c)
+            H += sp.H_S
+            LE += sp.H_L
+            E += sp.E
+        end
+        Hr = rain_heat ? rain_heat_flux(f.rain; T_air = f.T_air, q_air = f.q_air, T_s = Ts,
+                                        q_s = qs, p = f.p, c = c) : 0.0
+        return SurfaceFluxes(promote(Rn, H, LE, Rn - H - LE - Hr, τ, E)...)
+    end
+end
+
 end # module

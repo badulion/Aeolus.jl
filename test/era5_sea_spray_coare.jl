@@ -328,4 +328,51 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
         @test_throws ArgumentError spray_dry_radius(50e-6, 0.0)
     end
 
+    @testset "Coupling: WaterColumn with COARE fluxes, spray and rain" begin
+        f = SurfaceForcing(sw_down = 0.0, lw_down = 400.0, T_air = 299.15,
+                           q_air = _qair_rh(299.15, 101000.0, 0.8), U = 22.0, p = 101000.0,
+                           z_ref = 10.0, rain = 2e-3, snow = 0.0)
+        # Without cool skin the hook must give exactly the fluxes of
+        # coare_fluxes at the column's skin temperature.
+        col = WaterColumn(dz = fill(1.0, 30), T = 301.15, S = 35.0, cool_skin = nothing)
+        hook = coare_flux_hook(coare35_bulk(); spray = sp)
+        fl = hook(col, f)
+        ref = coare_fluxes(coare35_bulk(); U = f.U, z_u = 10.0, T_air = f.T_air, q_air = f.q_air,
+                           p = f.p, T_sea = 301.15, S = 35.0, lw_down = f.lw_down,
+                           emissivity = surface_emissivity(col), rain = f.rain,
+                           cool_skin = nothing, spray = sp)
+        # (The hook's q_s uses the column's salinity factor, identical here.)
+        @test fl.H ≈ ref.H_total rtol = 1e-9
+        @test fl.LE ≈ ref.LE_total rtol = 1e-9
+        @test fl.τ ≈ ref.τ rtol = 1e-9
+        @test fl.G ≈ fl.Rn - fl.H - fl.LE - ref.H_rain rtol = 1e-9
+        @test roughness_lengths(col).z0m ≈ ref.bulk.z0m     # roughness stored for tiles
+        # Heat conservation over a stormy day, with cool skin, spray and rain.
+        col2 = WaterColumn(dz = fill(1.0, 30), T = 301.15, S = 35.0, bottom = :transmitting)
+        H0 = column_heat_content(col2)
+        budget = 0.0
+        for k in 1:144
+            sw = max(0.0, 800 * sinpi((k - 36) / 72))
+            fk = SurfaceForcing(sw_down = sw, lw_down = 400.0, T_air = 299.15, q_air = f.q_air,
+                                U = 22.0, p = 101000.0, z_ref = 10.0, rain = k < 20 ? 2e-3 : 0.0,
+                                snow = 0.0)
+            swnet = (1 - surface_albedo(col2)) * sw
+            flk = step_surface!(col2, fk, 600.0; flux = hook)
+            D = sum(col2.dz)
+            budget += (flk.G - swnet * solar_transmission(col2.solar, D)) * 600
+        end
+        @test abs(column_heat_content(col2) - H0 - budget) < 1e-12 * column_heat_content(col2)
+        # Spray cools the ocean: the same day without spray ends warmer.
+        col3 = WaterColumn(dz = fill(1.0, 30), T = 301.15, S = 35.0, bottom = :transmitting)
+        for k in 1:144
+            step_surface!(col3, f, 600.0; flux = coare_flux_hook(coare35_bulk()))
+        end
+        col4 = WaterColumn(dz = fill(1.0, 30), T = 301.15, S = 35.0, bottom = :transmitting)
+        for k in 1:144
+            step_surface!(col4, f, 600.0; flux = hook)
+        end
+        ΔH = (column_heat_content(col3) - column_heat_content(col4)) / 86400
+        @test ΔH > 0
+        @info "Coupled column, U = 22 m/s" spray_heat_loss_Wm2 = ΔH mixed_layer_m = mixed_layer_depth(col4)
+    end
 end
