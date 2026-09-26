@@ -907,4 +907,5 @@ end
 
 @testset "Era V" begin
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
+    include("era5_snowpack.jl")          # Phase 51: layered snowpack with compaction (#34)
 end

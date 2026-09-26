@@ -63,6 +63,7 @@ include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
+include("Snowpack.jl")             # Phase 51 (#34): layered snowpack, Era V surface
 
 using .Grids
 using .Fields
@@ -112,6 +113,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .Snowpack                    # Phase 51 (#34)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -598,5 +600,14 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        roughness_lengths, moisture_availability,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
+
+# Phase 51 (#34) — Snowpack: layered snowpack with compaction, heat
+# conduction and melt; `LayeredSnowpack <: AbstractSurface`.
+export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
+       Jordan1991Conductivity, Calonne2011Conductivity, snow_thermal_conductivity,
+       AbstractFreshSnowDensity, Anderson1976FreshSnow, Vionnet2012FreshSnow,
+       fresh_snow_density,
+       AbstractSnowCompaction, DestructiveMetamorphism, Anderson1976Compaction,
+       Vionnet2012Compaction, snow_compaction_rate, snow_viscosity
 
 end # module
