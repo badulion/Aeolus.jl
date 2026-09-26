@@ -49,7 +49,7 @@ positive into the column.
     Dynamic thermal characteristics — Calculation methods.* Annex A
     (simplified estimate of the internal areal heat capacity).
   * ISO 6946:2017, Table 7 (interior surface resistances).
-  * Bueno, B., Norford, L., Pigeon, G. & Britter, R. (2012). Combining a
+  * Bueno, B., Norford, L., Pigeon, G. & Britter, R. (2011). Combining a
     detailed building energy model with a physically-based urban canopy
     model. *Boundary-Layer Meteorol.*, 140, 471-489 (TEB-BEM: the zone
     air node coupled to TEB wall and roof columns, with internal mass).
@@ -448,7 +448,13 @@ end
     zone_operative_temperature(z) -> K
 
 ``T_{op} = (T_{air} + T_{mrt})/2``, the operative temperature at low air
-speed (ISO 7730 / ISO 13790 Annex C uses the same equal weighting).
+speed (ISO 7726 / ISO 7730: the mean of air and mean radiant temperature
+when the air speed is below 0.2 m s⁻¹).
+
+Note that the ISO 13790 5R1C model defines its operative temperature
+differently, ``θ_{op} = 0.3 θ_{air} + 0.7 θ_s`` (ISO 13790:2008 eq. C.12),
+with ``θ_s`` its central star-node temperature, not a mean radiant
+temperature; the two are not interchangeable.
 """
 zone_operative_temperature(z::BuildingZone) = (z.T_air + zone_mean_radiant_temperature(z)) / 2
 

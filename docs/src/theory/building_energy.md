@@ -9,7 +9,7 @@ and they release their stored heat at different hours.
 `src/BuildingEnergy.jl` models a single thermal zone. Its capacitances
 are resolved: every massive element is a multi-layer conduction column,
 and the zone air is one prognostic node. This follows the building
-energy model that TEB couples to its facets (TEB-BEM; Bueno et al. 2012).
+energy model that TEB couples to its facets (TEB-BEM; Bueno et al. 2011).
 
 ## 1. The network
 
@@ -137,6 +137,10 @@ noon solar peak. The heavy box has brick walls and a brick partition;
 the light box has timber-frame walls. Both are run to a periodic regime
 over 150 days.
 
+The "operative" temperatures compared are each model's own definition:
+``(T_{air} + T_{mrt})/2`` for the resolved zone and ISO 13790 eq. C.12,
+``0.3 θ_{air} + 0.7 θ_s``, for 5R1C.
+
 | Box | Operative mean, resolved / 5R1C | Amplitude, resolved / 5R1C | Peak time |
 |:----|:----|:----|:----|
 | Heavy | 18.541 / 18.552 °C | 0.605 / 0.848 K | 16.2 / 18.5 h |
@@ -174,7 +178,7 @@ glazing optics (#27) are all separate issues. `Q_hvac`, `Q_solar` and
 
 ## References
 
-- Bueno, B., Norford, L., Pigeon, G. & Britter, R. (2012). *Boundary-Layer Meteorol.* 140, 471-489.
+- Bueno, B., Norford, L., Pigeon, G. & Britter, R. (2011). Combining a detailed building energy model with a physically-based urban canopy model. *Boundary-Layer Meteorol.* 140, 471-489, doi:10.1007/s10546-011-9620-6.
 - ISO 13790:2008, §7.2.2, §9.3, §12.3 and Annex C.
 - ISO 13786:2007, Annex A.
 - ISO 6946:2017, Table 7.
