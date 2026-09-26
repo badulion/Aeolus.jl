@@ -42,6 +42,7 @@ makedocs(
             "Stomatal conductance"        => "theory/stomatal_conductance.md",
             "Soil water (Richards)"       => "theory/soil_water.md",
             "Soil heat and freeze–thaw"   => "theory/soil_heat.md",
+            "Water table and aquifer"     => "theory/water_table.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
