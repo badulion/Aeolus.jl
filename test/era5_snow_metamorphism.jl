@@ -345,4 +345,78 @@ end
                 100 * (v0 - v3) / v0, 100 * (n0 - n3) / n0, ratio)
         @test ratio > 5
     end
+
+    @testset "Observed SSA decrease at Summit, Greenland (Carmagnola et al. 2014)" begin
+        # Carmagnola et al. (2014, Sect. 4.1): at 2-15 cm depth, 5-19 May 2011
+        # SSA = 37 ± 3 m² kg⁻¹, ρ = 315 ± 13 kg m⁻³; 11-25 June SSA = 23 ± 3,
+        # ρ = 335 ± 20; i.e. 37 days (centre to centre) at ≈ 325 kg m⁻³. The
+        # snow temperature and gradient are NOT given there; we scan an
+        # assumed range for a cold ice-sheet spring (−20 to −10 °C,
+        # 10-30 K m⁻¹) and require the observation to lie inside it.
+        r0 = snow_optical_radius(37.0)
+        ssa = [snow_specific_surface_area(snicar_grain_radius(tab, r0, 37 * 24.0, Tf_m + Tc, G, 325.0))
+               for Tc in (-20, -15, -10), G in (10, 20, 30)]
+        println("  Summit, SSA after 37 d (rows −20/−15/−10 °C, cols 10/20/30 K m⁻¹):")
+        for i in 1:3
+            println("    ", join((@sprintf("%.1f", x) for x in ssa[i, :]), "  "))
+        end
+        @test minimum(ssa) < 23 < maximum(ssa)
+        @test abs(ssa[2, 2] - 23) < 3                  # −15 °C, 20 K m⁻¹: within the observed ±3
+        # without a gradient, even the warm end is only marginally inside
+        # the observed range: the decrease needs temperature-gradient metamorphism
+        g0 = snow_specific_surface_area(snicar_grain_radius(tab, r0, 37 * 24.0, Tf_m - 15, 0.0, 325.0))
+        @test g0 > 26
+    end
+
+    @testset "30-day albedo decay of a clear-sky pack vs reference-model curves" begin
+        # A 50 cm, 150 kg m⁻³ pack under a clear-sky diurnal cycle at −10 °C
+        # (SW peak 500 W m⁻², LW 230 W m⁻², RH 80 %, U = 3 m s⁻¹), 30-min steps,
+        # no new snow, clean snow and 0.05 ppmw of black carbon.
+        function season(soot)
+            p = LayeredSnowpack(depth = 0.5, density = 150.0, T = 263.15,
+                                metamorphism = Flanner2006Metamorphism(),
+                                albedo = SnowOpticsAlbedo(soot_ppmw = soot),
+                                bottom = SnowGroundTemperature(272.0))
+            αd = [surface_albedo(p)]
+            dt = 1800.0
+            for n in 1:(30 * 48)
+                h = mod(n * dt / 3600, 24)
+                Ta = 263.15 + 4 * sin(π * (h - 9) / 12)
+                qa = 0.8 * saturation_specific_humidity(Ta, 85000.0, DEFAULT_SURFACE_CONSTANTS.thermo; over = :ice)
+                f = SurfaceForcing(sw_down = max(0.0, 500 * sin(π * (h - 6) / 12)), lw_down = 230.0,
+                                   T_air = Ta, q_air = qa, U = 3.0, p = 85000.0, z_ref = 2.0,
+                                   rain = 0.0, snow = 0.0)
+                step_surface!(p, f, dt)
+                n % 48 == 0 && push!(αd, surface_albedo(p))
+            end
+            return αd, p
+        end
+        αc, pc = season(0.0)
+        αs, _ = season(0.05)
+        Tg = pc.T[1]
+        println("  day   clean  BC0.05  USACE  ECMWF  CLASS  BATS(VIS,NIR)")
+        for d in (0, 1, 5, 10, 20, 30)
+            b = bats_alb(d, Tg)
+            @printf("  %3d   %.3f  %.3f   %.3f  %.3f  %.3f  %.3f, %.3f\n", d, αc[d+1], αs[d+1],
+                    usace_accum(d), ecmwf_dry(d), class_alb(d), b.vis, b.nir)
+        end
+        # Physics: albedo only falls without new snow, and falls more with soot.
+        @test all(diff(αc) .<= 1e-12)
+        @test all(αs .< αc)
+        # Fresh start agrees with the reference fresh values (above).
+        @test abs(αc[1] - 0.85) < 0.01
+        # Clean-snow grain growth alone darkens *more slowly* than every
+        # empirical curve, which are fitted to real snow and so include
+        # impurity deposition (BATS's explicit "dirt and soot" term 0.3 is
+        # most of its cold-snow ageing). This is a physical bound, stated as one:
+        for d in (5, 10, 30)
+            b = bats_alb(d, Tg)
+            @test αc[d+1] > max(usace_accum(d), ecmwf_dry(d), class_alb(d), (b.vis + b.nir) / 2)
+        end
+        # ... and it is not negligible: ≥ 0.06 in 30 days, from grains alone.
+        @test αc[1] - αc[end] > 0.06
+        # CLASS/USACE/ECMWF/BATS span 0.55-0.64 at day 30; with 0.05 ppmw BC
+        # (mid-latitude seasonal snow) the pack reaches ≤ 0.74.
+        @test αs[end] < 0.74
+    end
 end
