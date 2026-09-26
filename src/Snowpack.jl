@@ -67,7 +67,9 @@ import ..SurfaceExchange: surface_temperature, roughness_lengths,
                           surface_albedo, surface_emissivity,
                           moisture_availability, surface_specific_humidity,
                           surface_latent_heat, step_surface!
-using ..SurfaceOptics: material_emissivity, SNOW_REFERENCE_RADIUS, snow_grain_radius
+using ..SurfaceOptics: material_emissivity, SNOW_REFERENCE_RADIUS, SnowSurface,
+                       snow_grain_radius, broadband_albedo
+using ..RadiationCore: SpectralGrid, shortwave_bands
 using ..NetCDFIO: nc_open, nc_read
 
 export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
@@ -92,7 +94,8 @@ export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
        snicar_grain_radius, flanner_grain_radius,
        Flanner2006Metamorphism, ParabolicGrainGrowth,
        snow_dry_grain_growth_rate, snow_wet_grain_growth_rate,
-       snow_temperature_gradient, snow_specific_surface_area, snow_optical_radius
+       snow_temperature_gradient, snow_specific_surface_area, snow_optical_radius,
+       SnowOpticsAlbedo, snowpack_optics, snowpack_optical_radius
 
 _Tfreeze(c::SurfaceConstants) = c.thermo.T_freeze
 
@@ -1567,5 +1570,73 @@ function snow_metamorphism!(m::ParabolicGrainGrowth, p, dt::Real)
     p.age .+= dt
     return p
 end
+
+# ---- albedo ---------------------------------------------------------------
+
+"""
+    SnowOpticsAlbedo(; spec = shortwave_bands(), soot_ppmw = 0, μ₀ = nothing,
+                       sensing_depth = 0.02)
+
+Broadband snowpack albedo from `SurfaceOptics.SnowSurface` — the
+Wiscombe & Warren (1980) grain-size and soot dependence already in the
+code base — evaluated at the pack's prognostic optical grain radius
+([`snowpack_optical_radius`](@ref)), solar-weighted over the shortwave
+bands of `spec` by `SurfaceOptics.broadband_albedo`. `μ₀ = nothing` gives
+the diffuse (white-sky) albedo, a number the direct-beam albedo at that
+cosine solar zenith angle. `soot_ppmw` is the black-carbon mixing ratio
+(ppm by mass) of the surface snow. The albedo ages exactly as fast as
+the grains grow: this is a *delegating* scheme, not a second snow albedo.
+
+Not represented: the underlying ground showing through thin snow
+(patchy cover belongs to the tile framework, #41), impurity deposition
+and enrichment by melt, and ponded water.
+"""
+struct SnowOpticsAlbedo{T<:AbstractFloat} <: AbstractSnowAlbedo
+    spec::SpectralGrid{T}
+    soot_ppmw::Float64
+    μ₀::Union{Nothing,Float64}
+    sensing_depth::Float64
+end
+function SnowOpticsAlbedo(; spec::SpectralGrid = shortwave_bands(), soot_ppmw::Real = 0.0,
+                          μ₀::Union{Nothing,Real} = nothing, sensing_depth::Real = 0.02)
+    soot_ppmw >= 0 || throw(ArgumentError("SnowOpticsAlbedo: soot_ppmw ≥ 0"))
+    sensing_depth > 0 || throw(ArgumentError("SnowOpticsAlbedo: sensing_depth > 0"))
+    return SnowOpticsAlbedo(spec, Float64(soot_ppmw),
+                            μ₀ === nothing ? nothing : Float64(μ₀), Float64(sensing_depth))
+end
+
+"""
+    snowpack_optical_radius(p; sensing_depth = 0.02) -> μm
+
+Thickness-weighted mean grain radius of the top `sensing_depth` metres
+of snow (the near-infrared, where grain size matters, is absorbed within
+a few centimetres). With no snow, the fresh-snow radius.
+"""
+function snowpack_optical_radius(p::LayeredSnowpack; sensing_depth::Real = 0.02)
+    n = snow_nlayers(p)
+    n == 0 && return fresh_grain_radius(p.metamorphism, p, _Tfreeze(p.consts))
+    acc, z = 0.0, 0.0
+    for i in 1:n
+        w = min(p.dz[i], sensing_depth - z)
+        w <= 0 && break
+        acc += w * p.grain[i]
+        z += w
+    end
+    return z > 0 ? acc / z : p.grain[1]
+end
+
+"""
+    snowpack_optics(scheme::SnowOpticsAlbedo, p) -> SurfaceOptics.SnowSurface
+
+The spectral optics of the pack's surface: a `SnowSurface` with the
+pack's optical radius and the scheme's soot loading. Radiation code that
+wants band albedos (`surface_albedo(s, band, μ₀)`) uses this directly.
+"""
+snowpack_optics(a::SnowOpticsAlbedo, p::LayeredSnowpack) =
+    SnowSurface(a.spec; grain_radius = snowpack_optical_radius(p; sensing_depth = a.sensing_depth),
+                age_days = 0.0, soot_ppmw = a.soot_ppmw)
+
+snowpack_albedo(a::SnowOpticsAlbedo, p::LayeredSnowpack) =
+    broadband_albedo(snowpack_optics(a, p), a.μ₀)
 
 end # module

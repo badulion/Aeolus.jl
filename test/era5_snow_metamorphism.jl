@@ -271,4 +271,78 @@ end
         relayer_snowpack!(pm)
         @test sum((pm.m_ice .+ pm.m_liq) .* pm.grain) ≈ s0 rtol = 1e-12
     end
+
+    @testset "Parabolic growth is SurfaceOptics' own ageing, made prognostic" begin
+        pg = LayeredSnowpack(depth = 0.3, density = 200.0, metamorphism = ParabolicGrainGrowth(),
+                             albedo = SnowOpticsAlbedo())
+        for _ in 1:(7 * 24)
+            snow_metamorphism!(pg.metamorphism, pg, 3600.0)
+        end
+        @test all(pg.grain .≈ snow_grain_radius(SNOW_REFERENCE_RADIUS, 7.0))
+        @test surface_albedo(pg) ≈ broadband_albedo(SnowSurface(age_days = 7.0)) rtol = 1e-12
+    end
+
+    @testset "SnowOpticsAlbedo delegates to SurfaceOptics.SnowSurface" begin
+        a = SnowOpticsAlbedo()
+        p = layered([0.01, 0.01, 0.2], [150.0, 200.0, 250.0], fill(263.0, 3);
+                    grain = [100.0, 300.0, 800.0], albedo = a)
+        @test snowpack_optical_radius(p) ≈ 200.0 rtol = 1e-12            # top 2 cm, thickness-weighted
+        @test snowpack_optical_radius(p; sensing_depth = 0.01) ≈ 100.0
+        @test surface_albedo(p) == broadband_albedo(SnowSurface(grain_radius = 200.0))
+        s = snowpack_optics(a, p)
+        @test s isa SnowSurface && s.effective_radius ≈ 200.0
+        # soot darkens; direct beam at high sun below low sun
+        ps = layered([0.01, 0.01, 0.2], [150.0, 200.0, 250.0], fill(263.0, 3);
+                     grain = [100.0, 300.0, 800.0], albedo = SnowOpticsAlbedo(soot_ppmw = 0.5))
+        @test surface_albedo(ps) == broadband_albedo(SnowSurface(grain_radius = 200.0, soot_ppmw = 0.5))
+        @test surface_albedo(ps) < surface_albedo(p) - 0.03
+        hi = SnowOpticsAlbedo(μ₀ = 1.0); lo = SnowOpticsAlbedo(μ₀ = 0.2)
+        @test snowpack_albedo(hi, p) < snowpack_albedo(a, p) < snowpack_albedo(lo, p)
+        # monotone in grain size
+        αs = [broadband_albedo(SnowSurface(grain_radius = r)) for r in (54.5, 100, 200, 500, 1000, 1500)]
+        @test issorted(αs; rev = true)
+        # bare ground: the fresh-snow value
+        @test surface_albedo(LayeredSnowpack(albedo = a)) ≈ broadband_albedo(SnowSurface(grain_radius = 50.0))
+        # the energy balance sees it: older snow absorbs more sunshine
+        f = SurfaceForcing(sw_down = 600.0, lw_down = 250.0, T_air = 265.0, q_air = 0.001,
+                           U = 3.0, p = 90000.0, z_ref = 2.0, rain = 0.0, snow = 0.0)
+        pf = layered([0.02], [150.0], [265.0]; grain = [54.5], albedo = a)
+        pa = layered([0.02], [150.0], [265.0]; grain = [500.0], albedo = a)
+        ΔRn = net_radiation(pa, f) - net_radiation(pf, f)
+        @test ΔRn ≈ 600 * (surface_albedo(pf) - surface_albedo(pa)) rtol = 1e-12
+        @printf("  54.5 → 500 μm: albedo %.3f → %.3f, +%.1f W m⁻² absorbed at 600 W m⁻²\n",
+                surface_albedo(pf), surface_albedo(pa), ΔRn)
+        @test ΔRn > 60
+        @test_throws ArgumentError SnowOpticsAlbedo(soot_ppmw = -1)
+    end
+
+    @testset "Fresh-snow albedo and the spectral signature of grain growth" begin
+        spec = shortwave_bands()
+        w = SOm._band_solar_weights(Float64, spec)
+        vis = [b for b in 1:SOm.nbands(spec) if SOm.band_center_wavelength(spec, b) < 0.7]
+        nir = setdiff(1:SOm.nbands(spec), vis)
+        split(s) = (sum(w[vis] .* s.diffuse[vis]) / sum(w[vis]), sum(w[nir] .* s.diffuse[nir]) / sum(w[nir]))
+        s0 = SnowSurface(grain_radius = 54.5)
+        α0 = broadband_albedo(s0)
+        v0, n0 = split(s0)
+        @printf("  fresh (54.5 μm): broadband %.3f, VIS %.3f, NIR %.3f\n", α0, v0, n0)
+        # Reference fresh-snow broadband albedos: CLASS 0.84 (Verseghy 1991;
+        # Noah-MP), US Army Corps 0.85 (VIC), ECMWF 0.85 (Douville et al. 1995).
+        @test abs(α0 - 0.84) < 0.015 && abs(α0 - 0.85) < 0.015
+        # BATS fresh snow: NIR 0.65, VIS 0.95. The NIR agrees; the clean
+        # Wiscombe-Warren VIS is higher because BATS's 0.95 carries impurities.
+        @test abs(n0 - 0.65) < 0.04
+        @test 0.95 < v0 < 0.99
+        # Col de Porte observations: daily-integrated albedo between < 0.5 (old,
+        # dirty, melting) and 0.95 (fresh) (Carmagnola et al. 2014, Sect. 4.1).
+        @test 0.5 < α0 < 0.95
+        # Grain growth is a near-infrared process (Wiscombe & Warren 1980):
+        # 54.5 → 300 μm cuts NIR by ≥ 5× the relative cut in VIS. BATS's
+        # age factors (0.5 NIR : 0.2 VIS) give 2.5×, the rest being impurity darkening.
+        v3, n3 = split(SnowSurface(grain_radius = 300.0))
+        ratio = ((n0 - n3) / n0) / ((v0 - v3) / v0)
+        @printf("  54.5 → 300 μm: VIS −%.1f %%, NIR −%.1f %% (ratio %.1f; BATS 2.5)\n",
+                100 * (v0 - v3) / v0, 100 * (n0 - n3) / n0, ratio)
+        @test ratio > 5
+    end
 end
