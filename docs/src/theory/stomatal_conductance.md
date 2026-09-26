@@ -144,7 +144,12 @@ there.
 The plant wetness factor ``β ∈ [0, 1]`` (CLM's `btran`) is an **input**.
 The land column (#21) computes it from soil matric potential.
 `apply_water_stress` multiplies it into the parameters. By default it
-scales ``V_{cmax}``, ``R_d`` and ``g_0``, as CLM4.5/CLM5 do. It can
+scales ``V_{cmax}``, ``R_d`` and ``g_0``. That is what CLM4.5 does, and
+what CLM5's non-hydraulic Ball-Berry path does. CLM5's Medlyn closure
+(`ci_func_PHS`, which runs with plant hydraulics) keeps its intercept
+unstressed. Scaling the Medlyn ``g_0`` by β is therefore an Aeolus
+choice, and a small one, since ``g_0 = 10^{-4}`` mol m⁻² s⁻¹. Use
+`stress_targets = (:vcmax, :rd)` to match CLM5 there. It can
 also scale the slope ``g_1`` (`stress_targets = (:g1,)`), which is the
 alternative used in CABLE-style studies. The stomatal intercept is
 always at least 1 µmol m⁻² s⁻¹, CLM's floor, so the system stays well

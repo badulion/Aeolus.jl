@@ -62,7 +62,7 @@ using Aeolus.MoistThermodynamics: saturation_vapor_pressure
 p  = pft_photosynthesis_parameters(:bdt_temperate)
 m  = pft_stomatal_model(:bdt_temperate)                 # Medlyn, g1 = 4.45 kPa^½
 T  = 298.15
-gb = leaf_boundary_layer_conductance(1.0, T, 101325.0)  # U = 1 m/s → 2.05 mol m⁻² s⁻¹
+gb = leaf_boundary_layer_conductance(1.0, T, 101325.0)  # U = 1 m/s → 2.04 mol m⁻² s⁻¹
 r  = leaf_gas_exchange(p, m; ca = 400.0, Q = 0.85 * par_to_photon_flux(400.0),
                        T_leaf = T, e_air = saturation_vapor_pressure(T) - 1500.0, gb = gb)
 r.An, r.ci / 400, r.gs, r.LE     # ≈ 12.7 µmol m⁻² s⁻¹, 0.78, 0.25 mol m⁻² s⁻¹, 146 W m⁻²

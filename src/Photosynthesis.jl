@@ -998,11 +998,20 @@ it from soil matric potential. `targets` says what it multiplies:
   * `:vcmax` — the Rubisco capacity `Vcmax25` (CLM4.5 eq. 8.10;
     `vcmax_z = vcmax_z * btran` in CLM5's non-hydraulic path);
   * `:rd` — day respiration `Rd25` (CLM, `lmr_z = lmr_z * btran`);
-  * `:g0` — the stomatal intercept (CLM, `bbb = max(bbbopt*btran, 1 µmol)`);
+  * `:g0` — the stomatal intercept (CLM's Ball-Berry path,
+    `bbb = max(bbbopt*btran, 1 µmol)`);
   * `:g1` — the stomatal slope (the alternative of e.g. Zhou et al. 2013
     and De Kauwe et al. 2015, not CLM's default).
 
-The default reproduces CLM4.5/CLM5. A parameter set is returned
+For [`BallBerryStomata`](@ref) the default reproduces CLM4.5 and CLM5's
+non-hydraulic Ball-Berry path. CLM5's Medlyn closure does *not* stress
+its intercept: `ci_func_PHS` in PhotosynthesisMod.F90 (release-clm5.0)
+uses the unstressed `medlynintercept`, and water stress enters through
+plant hydraulics instead. Scaling a [`MedlynStomata`](@ref) intercept by
+β is therefore an Aeolus choice, carried over from Ball-Berry. Its effect
+is small, because the CLM5 intercept is only 10⁻⁴ mol m⁻² s⁻¹. Pass
+`targets = (:vcmax, :rd)` to leave the Medlyn intercept unstressed.
+A parameter set is returned
 unchanged for targets that do not apply to it. The stomatal intercept is
 always bounded below by 1 µmol m⁻² s⁻¹ (CLM's floor), which keeps the
 coupled system well posed in the dark even for `g0 = 0`.
