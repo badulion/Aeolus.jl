@@ -89,7 +89,11 @@ export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
        CoolSkin, cool_skin,
        BusingerDyerLogLinear,
        AbstractWarmLayer, NoWarmLayer, FairallWarmLayer, ZengBeljaarsWarmLayer,
-       step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth
+       step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth,
+       KrausTurnerMixing, WaterColumn, layer_depths,
+       absorb_heat!, convective_adjustment!, wind_mixing!, mix_column!,
+       column_heat_content, column_potential_energy, mixed_layer_depth,
+       salinity_humidity_factor
 
 const _T0C = 273.15   # K at 0 °C
 
@@ -480,7 +484,9 @@ stable at critical Richardson number `Ri_c`, has depth and warming
 The absorbed solar fraction ``f_x = 1 - (1/D)∫_0^D I(z)/I_0 dz`` is
 iterated five times with D, as in the reference code. If the
 accumulated heat turns negative the layer is wiped out (``f_x = 0.75``,
-``D = D_{max}``). The scheme is diagnostic in the accumulated integrals
+``D = D_{max}``). Where the water's thermal expansion `α ≤ 0` (fresh
+water below 3.98 °C) heating does not stabilise and the layer is reset;
+the same holds for [`ZengBeljaarsWarmLayer`](@ref). The scheme is diagnostic in the accumulated integrals
 and assumes a *daily* reset: call [`reset_warm_layer!`](@ref) at local
 midnight (the [`WaterColumn`](@ref) does this from its `local_time`).
 """
@@ -510,6 +516,7 @@ warm_layer_warming(w::FairallWarmLayer, z::Real) = w.D <= z ? w.ΔT : w.ΔT * z 
 
 function step_warm_layer!(w::FairallWarmLayer, sw_net::Real, q_out::Real, τ::Real, dt::Real;
                           α::Real, ρ_w::Real, c_w::Real, g::Real, κ::Real = 0.4)
+    α > 0 || (reset_warm_layer!(w); return w.ΔT)    # heating does not stabilise
     ctd1 = sqrt(2 * w.Ri_c * c_w / (α * g * ρ_w))
     ctd2 = sqrt(2 * α * g / (w.Ri_c * ρ_w)) / c_w^1.5
     q = w.fx * sw_net - q_out
@@ -598,11 +605,407 @@ end
 
 function step_warm_layer!(w::ZengBeljaarsWarmLayer, sw_net::Real, q_out::Real, τ::Real, dt::Real;
                           α::Real, ρ_w::Real, c_w::Real, g::Real, κ::Real = 0.4)
+    α > 0 || (w.ΔT = 0; return w.ΔT)                # heating does not stabilise
     u = sqrt(max(τ, 0) / ρ_w)
     A, B = zeng_beljaars_tendency(w, w.ΔT, sw_net, q_out, u; α = α, ρ_w = ρ_w,
                                   c_w = c_w, g = g, κ = κ)
     w.ΔT = max(zero(w.ΔT), (w.ΔT + dt * A) / (1 + dt * B))
     return w.ΔT
+end
+
+# =========================================================================
+# 5. The water column
+# =========================================================================
+
+"""
+    KrausTurnerMixing(; m = 0.5, n = 0.2, decay_depth = Inf)
+
+Energetics of the bulk mixed layer (Kraus & Turner 1967; Niiler & Kraus
+1977). Over a step `dt` the turbulence available to entrain water from
+below is
+
+    E = ρ₀ m u_{*w}³ dt e^{-h/h_d} + n ΔPE_conv          (J m⁻²)
+
+— the wind-stirring work, `m` times the rate ``ρ_0 u_{*w}^3`` at which
+the water-side friction velocity supplies turbulent energy (optionally
+dissipated over `decay_depth` ``h_d``), plus the fraction `n` of the
+potential energy released by convective overturning. The mixed layer is
+then deepened (see [`wind_mixing!`](@ref)) until the potential-energy
+increase of mixing equals `E`. With `n = 0` convection is
+non-penetrative (encroachment).
+
+The coefficients are tunable; published bulk-model values span
+m ≈ 0.4–1.25 and n ≈ 0.15–0.2 (Niiler & Kraus 1977 and the models it
+reviews). The defaults sit inside that range and are **not** tuned
+against the tests here.
+"""
+Base.@kwdef struct KrausTurnerMixing{T<:AbstractFloat}
+    m::T = 0.5
+    n::T = 0.2
+    decay_depth::T = Inf
+end
+
+"""
+    WaterColumn(; dz = fill(1.0, 20), T = 288.15, S = 0.0,
+                  eos = UNESCOWaterEOS(), solar = jerlov_water(:IB),
+                  mixing = KrausTurnerMixing(), warm_layer = NoWarmLayer(),
+                  cool_skin = CoolSkin(), albedo = 0.06,
+                  emissivity = SurfaceOptics.material_emissivity(:water),
+                  z0m = 1e-4, z0h = 1e-5, z0q = z0h,
+                  bottom = :absorbing, bottom_flux = 0.0, local_time = 0.0,
+                  c = DEFAULT_SURFACE_CONSTANTS,
+                  ρ_ref = c.ρ_water, c_p = cp_water(c))
+
+A lake or coastal-sea water column and an `AbstractSurface`. Layers of
+thickness `dz` (m, top first; the top one can be a thick slab) carry
+temperatures `T` (K; a scalar, a vector, or a function of centre depth)
+at a constant salinity `S` (psu).
+
+**Skin temperature** (`surface_temperature`):
+
+    T_s = T₁ + ΔT_warm(dz₁/2) - ΔT_cool
+
+— the top layer, plus the sub-grid warm layer's warming between the
+surface and the top layer's centre ([`warm_layer_warming`](@ref)), minus
+the cool skin. Use a warm-layer scheme when the top layer is thicker
+than the warm layer (a slab of a few metres or more); with thin top
+layers (≲ 0.5 m) keep `NoWarmLayer()`, since the column then resolves
+the warm layer itself. `cool_skin = nothing` switches the cool skin off.
+
+**One `step_surface!`**:
+
+ 1. fluxes from `SurfaceExchange.turbulent_fluxes` (or the `flux`
+    keyword), iterated with the cool skin;
+ 2. [`absorb_heat!`](@ref): the non-solar flux ``G - SW_{net}`` into the
+    top layer, the net shortwave distributed by `solar`, the shortwave
+    left at the bottom absorbed by the bottom layer (`bottom = :absorbing`,
+    a lake bed) or lost (`:transmitting`, deep water), and `bottom_flux`
+    (W m⁻², positive downward) removed from the bottom layer;
+ 3. [`mix_column!`](@ref): convective adjustment, then wind and
+    convective entrainment with the [`KrausTurnerMixing`](@ref) budget;
+ 4. the warm layer and the local clock (a `FairallWarmLayer` is reset at
+    local midnight; set `local_time`, seconds after local midnight, to
+    the start time).
+
+Heat is conserved exactly: the column's heat content changes by
+``(G - SW_{bottom} - F_{bottom}) dt`` per step, to round-off.
+
+Not included (left to other modules or later work): ice formation below
+the freezing point (`IceThermodynamics`, #37), wave-dependent roughness
+and COARE fluxes (`AirSeaFlux`, #39; pass them through `flux`), the rain
+heat flux, currents, shear instability at the mixed-layer base and
+background diffusion below it.
+"""
+mutable struct WaterColumn{T<:AbstractFloat,E<:AbstractWaterEOS,P<:SolarBands,
+                           W<:AbstractWarmLayer,CS,C<:SurfaceConstants} <: AbstractSurface
+    dz::Vector{T}
+    z_top::Vector{T}
+    T::Vector{T}
+    S::T
+    eos::E
+    solar::P
+    mixing::KrausTurnerMixing{T}
+    warm_layer::W
+    cool_skin::CS
+    albedo::T
+    emissivity::T
+    z0m::T
+    z0h::T
+    z0q::T
+    ρ_ref::T
+    c_p::T
+    bottom::Symbol
+    bottom_flux::T
+    ΔT_cool::T
+    δ_skin::T
+    h_mix::T
+    local_time::T
+    c::C
+end
+
+function WaterColumn(; dz = fill(1.0, 20), T = 288.15, S::Real = 0.0,
+                     eos::AbstractWaterEOS = UNESCOWaterEOS(),
+                     solar::SolarBands = jerlov_water(:IB),
+                     mixing::KrausTurnerMixing = KrausTurnerMixing(),
+                     warm_layer::AbstractWarmLayer = NoWarmLayer(),
+                     cool_skin::Union{Nothing,CoolSkin} = CoolSkin(),
+                     albedo::Real = 0.06,
+                     emissivity::Real = material_emissivity(:water),
+                     z0m::Real = 1e-4, z0h::Real = 1e-5, z0q::Real = z0h,
+                     bottom::Symbol = :absorbing, bottom_flux::Real = 0.0,
+                     local_time::Real = 0.0,
+                     c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                     ρ_ref::Real = c.ρ_water, c_p::Real = cp_water(c))
+    dzv = collect(Float64, dz)
+    (isempty(dzv) || any(<=(0), dzv)) && throw(ArgumentError("WaterColumn: dz must be non-empty and positive"))
+    bottom in (:absorbing, :transmitting) ||
+        throw(ArgumentError("WaterColumn: bottom must be :absorbing or :transmitting"))
+    ztop = [0.0; cumsum(dzv)[1:end-1]]
+    zc = ztop .+ dzv ./ 2
+    Tv = T isa Real ? fill(Float64(T), length(dzv)) :
+         T isa AbstractVector ? collect(Float64, T) : Float64[T(z) for z in zc]
+    length(Tv) == length(dzv) || throw(ArgumentError("WaterColumn: T and dz lengths differ"))
+    mix = KrausTurnerMixing{Float64}(mixing.m, mixing.n, mixing.decay_depth)
+    return WaterColumn(dzv, ztop, Tv, Float64(S), eos, solar, mix, warm_layer, cool_skin,
+                       Float64(albedo), Float64(emissivity), Float64(z0m), Float64(z0h),
+                       Float64(z0q), Float64(ρ_ref), Float64(c_p), bottom,
+                       Float64(bottom_flux), 0.0, 0.0, dzv[1], Float64(local_time), c)
+end
+
+"Centre depths of the layers (m, positive down)."
+layer_depths(col::WaterColumn) = col.z_top .+ col.dz ./ 2
+
+"""
+    column_heat_content(col) -> J m⁻²
+
+``ρ_{ref} c_p Σ_k T_k Δz_k`` (relative to 0 K) — the quantity
+`step_surface!` conserves.
+"""
+column_heat_content(col::WaterColumn) = col.ρ_ref * col.c_p * sum(col.T .* col.dz)
+
+"""
+    column_potential_energy(col) -> J m⁻²
+
+``Σ_k ρ(T_k, S) g z_k Δz_k`` with `z` the (negative) height of the layer
+centre: mixing a stable column raises it.
+"""
+function column_potential_energy(col::WaterColumn)
+    g = grav(col.c)
+    zc = layer_depths(col)
+    return -sum(water_density(col.eos, col.T[k], col.S) * g * zc[k] * col.dz[k]
+                for k in eachindex(col.T))
+end
+
+"""
+    mixed_layer_depth(col) -> m
+
+Depth reached by the last mixing step: the homogeneous top layers plus
+the entrained fraction of the partially entrained layer below.
+"""
+mixed_layer_depth(col::WaterColumn) = col.h_mix
+
+# ---- AbstractSurface interface ------------------------------------------
+
+surface_temperature(col::WaterColumn) =
+    col.T[1] + warm_layer_warming(col.warm_layer, col.dz[1] / 2) - col.ΔT_cool
+roughness_lengths(col::WaterColumn) = (z0m = col.z0m, z0h = col.z0h, z0q = col.z0q)
+surface_albedo(col::WaterColumn) = col.albedo
+surface_emissivity(col::WaterColumn) = col.emissivity
+moisture_availability(::WaterColumn) = 1.0
+
+"""
+    salinity_humidity_factor(S) -> q_s / q_sat
+
+Reduction of the saturation humidity over salt water, linear in salinity
+through the standard 0.98 at S = 34 psu (Sverdrup et al. 1942; IFS
+Cy43r1 eq. 8.161): ``1 - 0.02 S/34``. Exactly 1 for fresh water.
+"""
+salinity_humidity_factor(S::Real) = 1 - 0.02 * S / 34
+
+"""
+    surface_specific_humidity(col::WaterColumn, forcing; c)
+
+Saturated over the skin, reduced for salinity:
+``q_s = f(S)\\, q_{sat}(T_s, p)`` with [`salinity_humidity_factor`](@ref).
+"""
+surface_specific_humidity(col::WaterColumn, f::SurfaceForcing;
+                          c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    salinity_humidity_factor(col.S) * saturation_specific_humidity(surface_temperature(col), f.p, c.thermo)
+
+# ---- column physics -------------------------------------------------------
+
+"""
+    absorb_heat!(col, Q_ns, sw_net, dt) -> SW leaving through the bottom (W m⁻²)
+
+Heat the column for `dt` seconds: the non-solar flux `Q_ns` (W m⁻²,
+positive into the water) into the top layer, the net shortwave `sw_net`
+layer by layer from `col.solar`, the shortwave reaching the bottom
+absorbed by the bottom layer (`:absorbing`) or returned (`:transmitting`),
+and `col.bottom_flux` removed from the bottom layer.
+"""
+function absorb_heat!(col::WaterColumn, Q_ns::Real, sw_net::Real, dt::Real)
+    ρc = col.ρ_ref * col.c_p
+    N = length(col.T)
+    D = col.z_top[end] + col.dz[end]
+    sw_bottom = sw_net * solar_transmission(col.solar, D)
+    out = col.bottom === :absorbing ? zero(sw_bottom) : sw_bottom
+    for k in 1:N
+        heat = sw_net * solar_absorbed_between(col.solar, col.z_top[k], col.z_top[k] + col.dz[k])
+        k == 1 && (heat += Q_ns)
+        k == N && (heat += sw_bottom - out - col.bottom_flux)
+        col.T[k] += heat * dt / (ρc * col.dz[k])
+    end
+    return out
+end
+
+# ΔPE (J m⁻²) of replacing the temperatures of layers ks by Tnew(k).
+function _dpe(col::WaterColumn, ks, Tnew)
+    g = grav(col.c)
+    s = 0.0
+    for k in ks
+        zc = col.z_top[k] + col.dz[k] / 2
+        s -= (water_density(col.eos, Tnew(k), col.S) - water_density(col.eos, col.T[k], col.S)) *
+             g * zc * col.dz[k]
+    end
+    return s
+end
+
+"""
+    convective_adjustment!(col) -> released potential energy (J m⁻², ≥ 0)
+
+Remove static instability by mixing (heat-conserving, thickness-weighted)
+every group of layers in which denser water lies above lighter water,
+using the column's equation of state — so fresh water cooled below
+3.98 °C stays at the surface. Returns the potential energy the overturn
+released, the convective energy source of [`KrausTurnerMixing`](@ref).
+"""
+function convective_adjustment!(col::WaterColumn)
+    ρ(T) = water_density(col.eos, T, col.S)
+    groups = Vector{Tuple{Int,Int,Float64,Float64}}()     # (first, last, T, thickness)
+    for k in eachindex(col.T)
+        g = (k, k, col.T[k], col.dz[k])
+        while !isempty(groups) && ρ(groups[end][3]) > ρ(g[3])
+            a = pop!(groups)
+            h = a[4] + g[4]
+            g = (a[1], g[2], (a[4] * a[3] + g[4] * g[3]) / h, h)
+        end
+        push!(groups, g)
+    end
+    released = 0.0
+    for (k1, k2, Tm, _) in groups
+        k1 == k2 && continue
+        released -= _dpe(col, k1:k2, _ -> Tm)
+        col.T[k1:k2] .= Tm
+    end
+    return released
+end
+
+"""
+    wind_mixing!(col, E) -> energy used (J m⁻²)
+
+Deepen the mixed layer from the surface with turbulent energy `E`
+(J m⁻²): layers are absorbed one by one while the potential-energy cost
+of mixing them in is affordable; the first unaffordable layer is
+entrained *partially* — a fraction `f` of it joins the mixed layer, the
+rest keeps its temperature, and `f` is found by bisection so the cost
+equals the energy left. Heat is conserved exactly and the column's
+potential energy rises by the energy used. Sets `col.h_mix`.
+"""
+function wind_mixing!(col::WaterColumn, E::Real)
+    N = length(col.T)
+    Erem = float(E)
+    Tml, h, k = col.T[1], col.dz[1], 1
+    col.h_mix = h
+    D = col.z_top[end] + col.dz[end]
+    # round-off allowance: re-mixing an already uniform layer costs ~1 ulp
+    tol = 1e-12 * max(abs(E), col.ρ_ref * grav(col.c) * D^2)
+    while k < N
+        Tb, db = col.T[k+1], col.dz[k+1]
+        Tfull = Tb == Tml ? Tml : (h * Tml + db * Tb) / (h + db)
+        cost = Tb == Tml ? 0.0 : _dpe(col, 1:k+1, _ -> Tfull)
+        if cost <= Erem + tol
+            Erem -= cost
+            col.T[1:k+1] .= Tfull
+            Tml, h, k = Tfull, h + db, k + 1
+            col.h_mix = h
+            continue
+        end
+        # partial entrainment of layer k+1
+        Tmix(f) = (h * Tml + f * db * Tb) / (h + f * db)
+        pcost(f) = (Tm = Tmix(f);
+                    _dpe(col, 1:k, _ -> Tm) + _dpe(col, k+1:k+1, _ -> f * Tm + (1 - f) * Tb))
+        lo, hi = 0.0, 1.0
+        if Erem > 0
+            for _ in 1:60
+                mid = (lo + hi) / 2
+                pcost(mid) <= Erem ? (lo = mid) : (hi = mid)
+            end
+        end
+        f = lo
+        if f > 0
+            Erem -= pcost(f)
+            Tm = Tmix(f)
+            col.T[k+1] = f * Tm + (1 - f) * Tb
+            col.T[1:k] .= Tm
+        end
+        col.h_mix = h + f * db
+        break
+    end
+    return E - Erem
+end
+
+"""
+    mix_column!(col, u_star_w, dt) -> (released, used)
+
+Convective adjustment followed by entrainment with the
+[`KrausTurnerMixing`](@ref) energy
+``E = ρ_{ref} m u_{*w}^3 dt\\, e^{-h/h_d} + n\\, ΔPE_{conv}``. Returns the
+convectively released and the entrainment-used energies (J m⁻²).
+"""
+function mix_column!(col::WaterColumn, u_star_w::Real, dt::Real)
+    released = convective_adjustment!(col)
+    mx = col.mixing
+    decay = isfinite(mx.decay_depth) ? exp(-col.h_mix / mx.decay_depth) : 1.0
+    E = col.ρ_ref * mx.m * u_star_w^3 * dt * decay + mx.n * released
+    used = wind_mixing!(col, E)
+    return (released = released, used = used)
+end
+
+function _update_cool_skin!(col::WaterColumn, fl::SurfaceFluxes, sw_net)
+    cs = col.cool_skin
+    cs === nothing && return col
+    T1, S, c = col.T[1], col.S, col.c
+    Q_out = -(fl.Rn - sw_net) + fl.H + fl.LE
+    u_w = sqrt(max(fl.τ, 0) / col.ρ_ref)
+    r = cool_skin(cs, Q_out, sw_net, fl.LE, u_w;
+                  α = water_thermal_expansion(col.eos, T1, S),
+                  βS = water_haline_contraction(col.eos, T1, S) * S,
+                  ρ_w = col.ρ_ref, c_w = col.c_p, k_w = c.k_water, g = grav(c),
+                  L_v = latent_heat_vapor(surface_temperature(col), c.thermo),
+                  δ0 = col.δ_skin > 0 ? col.δ_skin : 1e-3)
+    col.ΔT_cool, col.δ_skin = r.ΔT, r.δ
+    return col
+end
+
+"""
+    step_surface!(col::WaterColumn, forcing, dt; flux = nothing,
+                  skin_iterations = 2, kwargs...) -> SurfaceFluxes
+
+Advance the water column by `dt` seconds (see [`WaterColumn`](@ref) for
+the sequence). `flux(col, forcing) -> SurfaceFluxes` replaces the default
+`turbulent_fluxes(col, forcing; c = col.c, kwargs...)` — the hook for
+COARE-type air–sea fluxes; whatever it returns is exactly what the
+column absorbs (``G = R_n - H - LE``). The cool skin and the fluxes are
+iterated `skin_iterations` times so the returned fluxes are those of
+the final skin temperature.
+"""
+function step_surface!(col::WaterColumn, f::SurfaceForcing, dt::Real;
+                       flux = nothing, skin_iterations::Integer = 2, kwargs...)
+    getflux() = flux === nothing ? turbulent_fluxes(col, f; c = col.c, kwargs...) : flux(col, f)
+    sw_net = (1 - surface_albedo(col)) * f.sw_down
+    fl = getflux()
+    if col.cool_skin !== nothing
+        for _ in 1:skin_iterations
+            _update_cool_skin!(col, fl, sw_net)
+            fl = getflux()
+        end
+    end
+    Q_ns = fl.G - sw_net
+    absorb_heat!(col, Q_ns, sw_net, dt)
+    u_w = sqrt(max(fl.τ, 0) / col.ρ_ref)
+    mix_column!(col, u_w, dt)
+    # warm layer, with a daily reset for the accumulating scheme
+    t_new = col.local_time + dt
+    if col.warm_layer isa FairallWarmLayer && fld(t_new, 86400) > fld(col.local_time, 86400)
+        reset_warm_layer!(col.warm_layer)
+    end
+    col.local_time = mod(t_new, 86400.0)
+    if !(col.warm_layer isa NoWarmLayer)
+        step_warm_layer!(col.warm_layer, sw_net, -Q_ns, fl.τ, dt;
+                         α = water_thermal_expansion(col.eos, col.T[1], col.S),
+                         ρ_w = col.ρ_ref, c_w = col.c_p, g = grav(col.c), κ = von_karman(col.c))
+    end
+    return fl
 end
 
 end # module

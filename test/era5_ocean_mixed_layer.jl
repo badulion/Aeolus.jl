@@ -314,4 +314,185 @@ const OML = Aeolus.OceanMixedLayer
         rmsZ = sqrt(sum(abs2, Z[day] .- (obs[day] .- offset)) / count(day))
         @info "Warm layer vs ship observations, T(0.05 m) - T(5.3 m), days 19-25" sensor_offset_K = offset daily_max_obs = round.(mo; digits = 3) daily_max_Fairall = round.(mF; digits = 3) daily_max_ZengBeljaars = round.(mZ; digits = 3) daytime_rms_Fairall = rmsF daytime_rms_ZB = rmsZ
     end
+
+    # ---------------------------------------------------------------------
+    # The water column
+    # ---------------------------------------------------------------------
+    g0 = grav(DEFAULT_SURFACE_CONSTANTS)
+
+    @testset "Kato–Phillips: wind deepening into linear stratification" begin
+        # Mixing a linearly stratified column (N²) to depth h costs
+        # ρ₀ N² h³/12; with work ρ₀ m u*³ t that gives h = (12 m u*³ t/N²)^{1/3}.
+        eos = LinearWaterEOS(ρ0 = 1000.0, α = 2e-4)
+        N2, u, m = 1e-4, 0.01, 0.5
+        Γ = N2 / (g0 * eos.α)                     # K per metre of depth
+        for dz in (0.2, 0.1)
+            col = WaterColumn(dz = fill(dz, round(Int, 40 / dz)), T = z -> 290.0 - Γ * z,
+                              eos = eos, mixing = KrausTurnerMixing(m = m, n = 0.0),
+                              ρ_ref = 1000.0)
+            PE0 = column_potential_energy(col); H0 = column_heat_content(col)
+            dt, nstep = 60.0, 1440
+            used = 0.0
+            for _ in 1:nstep
+                used += mix_column!(col, u, dt).used
+            end
+            t = dt * nstep
+            h_exact = (12m * u^3 * t / N2)^(1 / 3)
+            relerr = mixed_layer_depth(col) / h_exact - 1
+            @test abs(relerr) < (dz == 0.1 ? 0.01 : 0.02)
+            # every joule of wind work went into potential energy
+            @test used ≈ 1000.0 * m * u^3 * t rtol = 1e-9
+            @test column_potential_energy(col) - PE0 ≈ used rtol = 1e-6
+            @test column_heat_content(col) ≈ H0 rtol = 1e-14
+            @info "Kato–Phillips deepening (1 day)" dz h_model = mixed_layer_depth(col) h_exact relerr
+        end
+    end
+
+    @testset "Free convection: encroachment and penetrative entrainment" begin
+        # Surface buoyancy loss B₀ into N²: h² = 2(1 + 2n) B₀ t / N²
+        # (n = 0: encroachment; n = 0.2: Deardorff's entrainment ratio).
+        eos = LinearWaterEOS(ρ0 = 1000.0, α = 2e-4)
+        N2, Q = 1e-4, 200.0
+        Γ = N2 / (g0 * eos.α)
+        for n in (0.0, 0.2)
+            col = WaterColumn(dz = fill(0.1, 400), T = z -> 290.0 - Γ * z, eos = eos,
+                              mixing = KrausTurnerMixing(m = 0.0, n = n), ρ_ref = 1000.0)
+            B0 = g0 * eos.α * Q / (col.ρ_ref * col.c_p)
+            H0 = column_heat_content(col)
+            dt, nstep = 600.0, 288
+            for _ in 1:nstep
+                absorb_heat!(col, -Q, 0.0, dt)
+                mix_column!(col, 0.0, dt)
+            end
+            t = dt * nstep
+            h_exact = sqrt(2 * (1 + 2n) * B0 * t / N2)
+            relerr = mixed_layer_depth(col) / h_exact - 1
+            @test abs(relerr) < 0.02
+            # exact to the round-off of the stored heat (5e10 J m⁻² over
+            # 400 layers and ~10⁵ mixing operations)
+            @test abs(column_heat_content(col) - H0 + Q * t) < 1e-12 * H0
+            @info "Free convection (2 days)" n h_model = mixed_layer_depth(col) h_exact relerr
+        end
+    end
+
+    @testset "Lake overturn at the 4 °C density maximum" begin
+        # Autumn cooling of a 20 m fresh-water lake at 10 °C, no wind: the
+        # whole lake overturns down to the temperature of maximum density,
+        # after which cooling only chills a light surface layer (inverse
+        # stratification) — the physics that lets lakes freeze from the top.
+        col = WaterColumn(dz = fill(1.0, 20), T = 283.15, S = 0.0,
+                          mixing = KrausTurnerMixing(m = 0.0, n = 0.0))
+        H0 = column_heat_content(col)
+        dt, Q, t = 3600.0, 300.0, 0.0
+        while col.T[1] > 273.15 + 1.0
+            absorb_heat!(col, -Q, 0.0, dt)
+            mix_column!(col, 0.0, dt)
+            t += dt
+        end
+        Tmd = 273.15 + 3.9817                    # EOS-80 maximum (first testset)
+        @test abs(col.T[end] - Tmd) < 0.02
+        @test col.T[1] < col.T[end]              # inverse stratification
+        ρs = [water_density(col.eos, T, 0.0) for T in col.T]
+        @test issorted(ρs)                       # statically stable
+        @test abs(column_heat_content(col) - H0 + Q * t) < 1e-13 * H0
+        @info "Lake overturn" days = t / 86400 T_top_C = col.T[1] - 273.15 T_bottom_C = col.T[end] - 273.15
+    end
+
+    @testset "WaterColumn as an AbstractSurface" begin
+        col = WaterColumn(T = 293.15, S = 35.0, cool_skin = nothing)
+        @test col isa AbstractSurface
+        @test surface_temperature(col) == 293.15
+        @test salinity_humidity_factor(0.0) == 1
+        @test salinity_humidity_factor(34.0) ≈ 0.98
+        f = SurfaceForcing(sw_down = 0.0, lw_down = 350.0, T_air = 290.15, q_air = 0.008, U = 6.0)
+        fsea = turbulent_fluxes(col, f)
+        lake = WaterColumn(T = 293.15, S = 0.0, cool_skin = nothing)
+        flake = turbulent_fluxes(lake, f)
+        @test fsea.H > 0 && fsea.LE > 0          # warm water, cooler drier air
+        @test flake.LE > fsea.LE                 # salt lowers the vapour pressure
+        @test fsea.G ≈ fsea.Rn - fsea.H - fsea.LE
+        # emissivity from SurfaceOptics — one source of truth
+        @test Aeolus.SurfaceExchange.surface_emissivity(col) ==
+              Aeolus.SurfaceOptics.material_emissivity(:water)
+        # A cool skin makes the skin cooler than the top layer at night.
+        cs = WaterColumn(T = 293.15, S = 35.0)
+        step_surface!(cs, f, 600.0)
+        @test 0.05 < cs.ΔT_cool < 0.6
+        @test surface_temperature(cs) < cs.T[1]
+        @test_throws ArgumentError WaterColumn(dz = [1.0, -1.0])
+        @test_throws ArgumentError WaterColumn(bottom = :leaky)
+    end
+
+    # A clear-sky diurnal forcing for the coupled tests.
+    function diurnal_forcing(t; U = 5.0, T_air = 298.15)
+        hour = mod(t, 86400.0) / 3600
+        sw = max(0.0, 950.0 * sin(π * (hour - 6) / 12))
+        SurfaceForcing(sw_down = sw, lw_down = 400.0, T_air = T_air, q_air = 0.016, U = U,
+                       p = 101325.0, z_ref = 10.0)
+    end
+
+    @testset "Coupled column: exact energy conservation" begin
+        # Every configuration: the heat content changes by ∫(G - SW_bottom - F_bottom) dt.
+        configs = (
+            (name = "resolved lake", kw = (dz = fill(0.25, 60), T = 298.15, S = 0.0)),
+            (name = "slab + Zeng–Beljaars", kw = (dz = [5.0, 10.0, 15.0], T = 298.15, S = 35.0,
+                                                   warm_layer = ZengBeljaarsWarmLayer())),
+            (name = "sea + Fairall, leaky bottom", kw = (dz = fill(1.0, 10), T = 298.15, S = 35.0,
+                                                   warm_layer = FairallWarmLayer(),
+                                                   bottom = :transmitting, bottom_flux = 5.0,
+                                                   solar = jerlov_water(:I))),
+        )
+        for cfg in configs
+            col = WaterColumn(; cfg.kw...)
+            H0 = column_heat_content(col)
+            D = sum(col.dz)
+            budget = 0.0; scale = 0.0
+            dt = 300.0
+            for i in 0:(3 * 288 - 1)
+                f = diurnal_forcing(i * dt)
+                fl = step_surface!(col, f, dt)
+                sw_net = (1 - col.albedo) * f.sw_down
+                out = col.bottom === :transmitting ? sw_net * solar_transmission(col.solar, D) : 0.0
+                budget += (fl.G - out - col.bottom_flux) * dt
+                scale += abs(fl.G) * dt
+            end
+            # Round-off: the column stores ~4e10 J m⁻², so Float64 resolves
+            # ~1e-5 J m⁻² per step; compare against that, and quote the
+            # error relative to the heat that actually crossed the surface.
+            abserr = abs(column_heat_content(col) - H0 - budget)
+            @test abserr < 1e-13 * H0
+            @test abserr / scale < 1e-10
+            @info "Energy conservation, 3 days" config = cfg.name abs_error_J_m2 = abserr relative_to_surface_flux = abserr / scale relative_to_heat_content = abserr / H0
+        end
+    end
+
+    @testset "Coupled column: diurnal SST cycle responds to wind" begin
+        # Resolved column (0.25 m layers): calm days trap the solar heating
+        # near the surface, windy days mix it down.
+        function sst_range(U; kw...)
+            col = WaterColumn(; dz = fill(0.25, 80), T = 298.15, S = 35.0, kw...)
+            dt = 300.0; Ts = Float64[]
+            for i in 0:(2 * 288 - 1)
+                step_surface!(col, diurnal_forcing(i * dt; U = U), dt)
+                i >= 288 && push!(Ts, surface_temperature(col))   # second day
+            end
+            maximum(Ts) - minimum(Ts), col
+        end
+        r_calm, ccalm = sst_range(1.5)
+        r_windy, cwind = sst_range(10.0)
+        @test r_calm > 3 * r_windy
+        @test mixed_layer_depth(cwind) > mixed_layer_depth(ccalm)
+        # A thick slab with the Zeng–Beljaars layer recovers a diurnal skin
+        # cycle that the slab alone cannot have.
+        slab = WaterColumn(dz = [10.0], T = 298.15, S = 35.0, warm_layer = ZengBeljaarsWarmLayer())
+        plain = WaterColumn(dz = [10.0], T = 298.15, S = 35.0)
+        rs = Float64[]; rp = Float64[]
+        for i in 0:(2 * 288 - 1)
+            f = diurnal_forcing(i * 300.0; U = 3.0)
+            step_surface!(slab, f, 300.0); step_surface!(plain, f, 300.0)
+            i >= 288 && (push!(rs, surface_temperature(slab)); push!(rp, surface_temperature(plain)))
+        end
+        @test maximum(rs) - minimum(rs) > 2 * (maximum(rp) - minimum(rp))
+        @info "Diurnal SST range (day 2)" calm_U1_5 = r_calm windy_U10 = r_windy h_mix_calm = mixed_layer_depth(ccalm) h_mix_windy = mixed_layer_depth(cwind) slab_ZB05_U3 = maximum(rs) - minimum(rs) slab_only_U3 = maximum(rp) - minimum(rp)
+    end
 end
