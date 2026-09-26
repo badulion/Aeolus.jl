@@ -189,7 +189,7 @@ end
     @test gardner_exact_θ(h, L, ψi, 0.0, 0.0, 600.0) ≈ h.θ_s rtol = 1e-10
     @test gardner_exact_θ(h, L, ψi, 0.0, 0.8, 1.0) ≈ soil_water_content(h, ψi) atol = 1e-6
     run(N, mean, dt, tend) = begin
-        col = SoilWaterColumn(uniform_soil_grid(L, N), h; ψ = ψi, top = HeadTop(0.0),
+        local col = SoilWaterColumn(uniform_soil_grid(L, N), h; ψ = ψi, top = HeadTop(0.0),
                               bottom = HeadBottom(ψi), temperature_dependent = false,
                               interface_mean = mean)
         S0 = soil_water_storage(col)
@@ -294,6 +294,188 @@ end
     @printf("  ponded infiltration rate / K_s, days 1-5: %s\n", string(round.(rates, digits = 4)))
     @test issorted(rates, rev = true)
     @test 1 < rates[end] < 1.01
+end
+
+@testset "Steady states: hydrostatic equilibrium and unit-gradient drainage" begin
+    # Layered CLM5 column on an impermeable base, no surface flux: the only
+    # steady state is hydrostatic, total head ψ - z uniform.
+    g = clm5_soil_grid()
+    hyd = [i <= 8 ? clapp_hornberger_texture(:loam) : clapp_hornberger_texture(:sandy_loam) for i in 1:20]
+    col = SoilWaterColumn(g, hyd; θ = 0.35, bottom = ZeroFluxBottom())
+    S0 = soil_water_storage(col)
+    for _ in 1:73
+        step_soil_water!(col, 5 * 86400.0)
+    end
+    H = col.ψ .- col.grid.z
+    @printf("  hydrostatic (loam over sandy loam, 8.6 m, 1 yr): head spread %.1e m, ΔS = %.1e m\n",
+            maximum(H) - minimum(H), soil_water_storage(col) - S0)
+    @test maximum(H) - minimum(H) < 1e-8
+    @test soil_water_storage(col) ≈ S0 atol = 1e-12
+    # Free drainage under a steady input q < K_s: unit gradient, K(θ) = q,
+    # so θ = θ_s (q / (K_s f_T))^{1/(2b+3)} — and colder water, being more
+    # viscous, needs a wetter soil to carry the same flux.
+    ch = clapp_hornberger_texture(:loam)
+    q = 0.1 * ch.K_s
+    θss = Float64[]
+    for Ts in (293.15, 278.15)
+        c = SoilWaterColumn(uniform_soil_grid(2.0, 40), ch; θ = 0.2, T_soil = Ts)
+        for _ in 1:200
+            step_soil_water!(c, 86400.0; water_input = q)
+        end
+        r = step_soil_water!(c, 86400.0; water_input = q)
+        θex = ch.θ_s * (q / (ch.K_s * viscosity_conductivity_factor(Ts)))^(1 / (2ch.b + 3))
+        @test maximum(abs.(c.θ_liq .- θex)) < 1e-6
+        @test r.drainage ≈ q * 86400 rtol = 1e-6
+        push!(θss, c.θ_liq[20])
+    end
+    @printf("  unit-gradient θ: %.5f at 20 °C, %.5f at 5 °C\n", θss...)
+    @test θss[2] > θss[1]
+end
+
+@testset "Atmospheric boundary: ponding, runoff and soil-limited evaporation" begin
+    v = carsel_parrish_texture(:loam)
+    t_pond = Float64[]
+    Iatm = 0.0
+    for r in (0.5, 2.0, 5.0, 20.0)
+        c = SoilWaterColumn(uniform_soil_grid(2.0, 100), v; ψ = -3.0)
+        P = r * v.K_s
+        tp = Inf
+        worst = 0.0
+        for _ in 1:720
+            st = step_soil_water!(c, 60.0; water_input = P)
+            # every step: rain = infiltration + runoff, exactly
+            worst = max(worst, abs(st.infiltration + st.runoff - P * 60))
+            st.runoff > 0 && isinf(tp) && (tp = c.budget.time)
+        end
+        @test worst < 1e-15
+        push!(t_pond, tp)
+        Iatm = c.budget.infiltration
+    end
+    @printf("  time to ponding (s) for rain = 0.5, 2, 5, 20 K_s: %s\n", string(t_pond))
+    @test isinf(t_pond[1])                 # rain below K_s never ponds
+    @test issorted(t_pond[2:end], rev = true) && isfinite(t_pond[2])
+    # after early ponding the soil takes what a ponded surface would
+    c = SoilWaterColumn(uniform_soil_grid(2.0, 100), v; ψ = -3.0, top = HeadTop(0.0))
+    for _ in 1:720
+        step_soil_water!(c, 60.0)
+    end
+    @printf("  12 h infiltration: rain 20 K_s %.5f m, ponded surface %.5f m\n", Iatm, c.budget.infiltration)
+    @test Iatm ≈ c.budget.infiltration rtol = 5e-3
+    # Evaporation from a column on bedrock: stage 1 at the potential rate,
+    # then stage 2 limited by the soil, falling steadily.
+    c = SoilWaterColumn(uniform_soil_grid(1.0, 100), v; ψ = -1.0, bottom = ZeroFluxBottom())
+    Ep = 5e-3 / 86400
+    S0 = soil_water_storage(c)
+    E = [step_soil_water!(c, 86400.0; evaporation = Ep).evaporation / (Ep * 86400) for _ in 1:20]
+    @printf("  E/E_pot on days 1, 2, 5, 10, 20: %.3f %.3f %.3f %.3f %.3f\n", E[[1, 2, 5, 10, 20]]...)
+    @test E[1] ≈ 1 rtol = 1e-6
+    @test issorted(E, rev = true) && E[end] < 0.1
+    @test soil_water_storage(c) - S0 ≈ -c.budget.evaporation atol = 1e-14
+end
+
+@testset "Exact water conservation under mixed forcing" begin
+    # CLM5 column, per-layer Cosby soils, rain bursts, evaporation, dew,
+    # root extraction, free drainage: every step must close its budget.
+    g = clm5_soil_grid()
+    hyd = [cosby_clapp_hornberger(70 - 3i, 10 + i) for i in 1:20]
+    col = SoilWaterColumn(g, hyd; θ = [0.25 + 0.005i for i in 1:20],
+                          T_soil = [285.0 - 0.3i for i in 1:20])
+    root = [exp(-g.z[i] / 0.3) for i in 1:20]
+    root ./= sum(root)
+    S0 = soil_water_storage(col)
+    worst = 0.0
+    for k in 1:24 * 30
+        hour = mod(k, 24)
+        P = (mod(k, 97) < 3) ? 2e-5 : 0.0              # 72 mm/h bursts
+        E = 6 < hour < 18 ? 8e-8 : -5e-9               # day evaporation, night dew
+        sink = (6 < hour < 18 ? 5e-8 : 0.0) .* root
+        S = soil_water_storage(col)
+        st = step_soil_water!(col, 3600.0; water_input = P, evaporation = E, sink = sink)
+        worst = max(worst, abs(st.storage_change - (st.infiltration - st.drainage - st.extraction)),
+                    abs(soil_water_storage(col) - S - st.storage_change),
+                    abs(P * 3600 - st.evaporation - (st.infiltration + st.runoff)))
+    end
+    b = col.budget
+    @printf("  30-day mixed forcing: worst per-step imbalance %.1e m; cumulative residual %.1e m of %.3f m infiltrated\n",
+            worst, soil_water_storage(col) - S0 - (b.infiltration - b.drainage - b.extraction), b.infiltration)
+    @test worst < 1e-13
+    @test soil_water_storage(col) - S0 ≈ b.infiltration - b.drainage - b.extraction atol = 1e-12
+    @test b.runoff > 0 && b.drainage > 0 && b.extraction > 0
+end
+
+@testset "Celia et al. (1990) problem: mass balance ratio" begin
+    # Celia et al. (1990), van Genuchten test soil: α = 0.0335 cm⁻¹,
+    # θ_s = 0.368, θ_r = 0.102, n = 2, K_s = 0.00922 cm/s; 100 cm column
+    # at ψ = -1000 cm, top raised to -75 cm, bottom held at -1000 cm, 1 day.
+    # Their point: the ψ-form loses mass at large Δt, the mixed form
+    # conserves it. Here the mass-balance ratio at Δt = 1 h, Δz = 2.5 cm:
+    v = VanGenuchtenMualem(θ_r = 0.102, θ_s = 0.368, α = 3.35, n = 2.0, K_s = 9.22e-5)
+    run(N, dt) = begin
+        local c = SoilWaterColumn(uniform_soil_grid(1.0, N), v; ψ = -10.0, top = HeadTop(-0.75),
+                            bottom = HeadBottom(-10.0), temperature_dependent = false)
+        S0 = soil_water_storage(c)
+        for _ in 1:round(Int, 86400 / dt)
+            step_soil_water!(c, dt)
+        end
+        c, (soil_water_storage(c) - S0) / (c.budget.infiltration - c.budget.drainage)
+    end
+    c, MB = run(40, 3600.0)
+    cref, _ = run(400, 60.0)
+    # wetting-front depth: where θ crosses the midpoint of its range
+    θmid = (soil_water_content(v, -0.75) + soil_water_content(v, -10.0)) / 2
+    front(c) = c.grid.z[findfirst(<(θmid), c.θ_liq)]
+    @printf("  Celia problem: mass-balance ratio %.15f; front at %.1f cm (Δz = 2.5 cm) vs %.1f cm (Δz = 0.25 cm)\n",
+            MB, 100front(c), 100front(cref))
+    @test MB ≈ 1 atol = 1e-12
+    @test abs(front(c) - front(cref)) <= 0.03
+end
+
+@testset "Surface-interface coupling and extension hooks" begin
+    v = carsel_parrish_texture(:loam)
+    # SurfaceForcing / SurfaceFluxes in kg m⁻² s⁻¹ → m s⁻¹ via the contract ρ_w
+    c1 = SoilWaterColumn(uniform_soil_grid(1.0, 20), v; ψ = -2.0)
+    c2 = SoilWaterColumn(uniform_soil_grid(1.0, 20), v; ψ = -2.0)
+    f = SurfaceForcing(rain = 1e-3)
+    fl = SurfaceFluxes(300.0, 50.0, 100.0, 150.0, 0.1, 4e-5)
+    s1 = step_soil_water!(c1, f, fl, 3600.0)
+    s2 = step_soil_water!(c2, 3600.0; water_input = 1e-6, evaporation = 4e-8)
+    @test s1.infiltration == s2.infiltration && c1.ψ == c2.ψ
+    # β (Lee & Pielke 1992): 1 at field capacity and wetter, 1/4 at half of it
+    θfc = soil_field_capacity(v)
+    @test θfc ≈ soil_water_content(v, -33e3 / (1000 * grav(DEFAULT_SURFACE_CONSTANTS)))
+    set_water_content!(c1, θfc + 0.01)
+    @test moisture_availability(c1) == 1
+    set_water_content!(c1, θfc / 2)
+    @test moisture_availability(c1) ≈ 0.25
+    set_water_content!(c1, 0.08)                     # θ_r < 0.08 < θ_fc/2
+    @test θfc / 2 > 0.08
+    @test 0 < moisture_availability(c1) < 0.25
+    # Ice-impedance hook (#16): a subtype scales K layer by layer.
+    struct HalfIfIce <: AbstractIceImpedance end
+    SC.ice_impedance_factor(::HalfIfIce, θi, θs) = θi > 0 ? 0.5 : 1.0
+    c3 = SoilWaterColumn(uniform_soil_grid(1.0, 20), v; ψ = -2.0, ice_impedance = HalfIfIce())
+    K0 = soil_layer_conductivity(c3, 5)
+    c3.θ_ice[5] = 0.05
+    @test soil_layer_conductivity(c3, 5) ≈ K0 / 2
+    # ... and ice counts as water in the storage (ρ_ice/ρ_w)
+    @test soil_water_storage(c3) ≈ sum(c3.grid.dz .* c3.θ_liq) + 0.917 * 0.05 * c3.grid.dz[5]
+    # Temperature: colder layers conduct less, by the viscosity ratio
+    c4 = SoilWaterColumn(uniform_soil_grid(1.0, 20), v; ψ = -2.0, T_soil = 273.15)
+    @test soil_layer_conductivity(c4, 5) / soil_layer_conductivity(c2, 5) ≈
+          viscosity_conductivity_factor(273.15) * soil_hydraulic_conductivity(v, c4.ψ[5]) /
+          soil_hydraulic_conductivity(v, c2.ψ[5])
+    # Stateful bottom boundary (#17): a linear reservoir fed by drainage.
+    mutable struct Reservoir <: AbstractSoilBottomBoundary
+        storage::Float64
+    end
+    SC.bottom_flux_linearization(::Reservoir, col, ψN, KN) = (col.gravity * KN, 0.0)
+    SC.finalize_bottom!(r::Reservoir, col, q, dt) = (r.storage += q * dt; nothing)
+    c5 = SoilWaterColumn(uniform_soil_grid(1.0, 20), v; ψ = -0.3, bottom = Reservoir(0.0))
+    for _ in 1:48
+        step_soil_water!(c5, 3600.0)
+    end
+    @test c5.bottom.storage ≈ c5.budget.drainage rtol = 1e-12
+    @test c5.bottom.storage > 0
 end
 
 end # SoilColumn testset
