@@ -40,6 +40,8 @@ makedocs(
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
             "Leaf photosynthesis"         => "theory/photosynthesis.md",
             "Stomatal conductance"        => "theory/stomatal_conductance.md",
+            "Soil water (Richards)"       => "theory/soil_water.md",
+            "Soil heat and freeze–thaw"   => "theory/soil_heat.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -95,6 +97,7 @@ makedocs(
                 "Overview"                     => "api/era5.md",
                 "SurfaceExchange"              => "api/era5/surface_exchange.md",
                 "Photosynthesis"               => "api/era5/photosynthesis.md",
+                "SoilColumn"                   => "api/era5/soil_column.md",
             ],
         ],
         "Examples" => [

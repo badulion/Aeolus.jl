@@ -63,6 +63,7 @@ include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
+include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equation
 
 # --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53)
 include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
@@ -116,6 +117,7 @@ using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
 using .Photosynthesis              # Phase 47
+using .SoilColumn                  # Phase 46
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -624,5 +626,28 @@ export AbstractStomatalModel, BallBerryStomata, MedlynStomata, stomatal_conducta
        STOMATAL_DIFFUSIVITY_RATIO, BOUNDARY_LAYER_DIFFUSIVITY_RATIO,
        LeafGasExchange, leaf_gas_exchange, apply_water_stress,
        CLM5_MEDLYN_G1, pft_stomatal_model
+
+# Phase 46 (#15) — SoilColumn: CLM-style soil column, Richards equation.
+# Boundary-condition types (FreeDrainage, HeadTop, AtmosphericTop, …),
+# hooks and the generic-sounding accessors (saturated_conductivity,
+# air_entry_potential, …) stay qualified: `Aeolus.SoilColumn.FreeDrainage`,
+# or `using Aeolus.SoilColumn`.
+export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
+       AbstractHydraulicModel, ClappHornberger, VanGenuchtenMualem, GardnerExponential,
+       clapp_hornberger_texture, carsel_parrish_texture, cosby_clapp_hornberger,
+       soil_water_content, soil_matric_potential, soil_hydraulic_conductivity,
+       soil_water_capacity, soil_water_diffusivity, soil_porosity,
+       parlange_sorptivity, water_dynamic_viscosity,
+       SoilWaterColumn, step_soil_water!, set_water_content!, set_matric_potential!,
+       soil_water_storage, soil_layer_conductivity, soil_field_capacity
+
+# Phase 46 (#16) — SoilColumn: soil heat, freeze–thaw, and the column as an
+# AbstractSurface. Heat boundary types (GroundHeatFluxTop, BottomTemperature,
+# …) and the Johansen/Farouki helpers stay qualified, as for #15.
+export SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal_properties,
+       soil_thermal_conductivity, soil_heat_capacity,
+       freezing_matric_potential, supercooled_liquid_content, PowerLawIceImpedance,
+       SoilThermalColumn, step_soil_heat!, set_soil_temperature!,
+       soil_enthalpy, soil_ice_mass
 
 end # module
