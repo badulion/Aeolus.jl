@@ -194,7 +194,7 @@ end
         @test cbrt(54.5^3 + 3e18 * 4.22e-13 * 0.1^3 / (4π) * 10 * 86400) ≈ 443.45 atol = 0.01
     end
 
-    @testset "Layer temperature gradient (CLM5 TN Eq. 2.3.76)" begin
+    @testset "Layer temperature gradient (CLM5 TN Eq. 2.3.74)" begin
         # Linear profile T = 260 + 20 z (K, z m below the surface) in 4 equal
         # layers on ground held at the extrapolated temperature.
         dz = fill(0.1, 4)
@@ -251,7 +251,7 @@ end
         @test fresh_grain_radius(mr, pf, Tf_m - 15) ≈ 129.5
         @test fresh_grain_radius(mr, pf, Tf_m - 40) == 54.5
         @test fresh_grain_radius(mr, pf, Tf_m + 3) == 204.5
-        # snowfall onto old snow: grain mass-weighted (CLM5 TN Eq. 2.3.74)
+        # snowfall onto old snow: grain mass-weighted (CLM5 TN Eq. 2.3.72)
         po = layered([0.05], [200.0], [263.0]; grain = [300.0], metamorphism = m)
         add_snowfall!(po, 10.0, 263.0, 100.0)
         @test po.grain[1] ≈ (10 * 300 + 10 * 54.5) / 20 rtol = 1e-12

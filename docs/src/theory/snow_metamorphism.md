@@ -68,7 +68,7 @@ the eight surrounding nodes and interpolates the *radii*
 outcomes, and the 15 K m⁻¹ cell edge that makes nearest-node growth jump
 by more than 1 μm over 10 days changes it by less than 1 % of that jump.
 
-**Temperature gradient.** As in CLM (CLM5 Technical Note, Eq. 2.3.76), from
+**Temperature gradient.** As in CLM (CLM5 Technical Note, Eq. 2.3.74), from
 interface temperatures that are thickness-weighted means of neighbouring
 layers, with the top interface taken at the top-layer temperature. The
 bottom interface is the ground temperature (`SnowGroundTemperature`), or

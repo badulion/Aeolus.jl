@@ -85,7 +85,7 @@ import ..SurfaceExchange: surface_temperature, roughness_lengths,
                           surface_albedo, surface_emissivity,
                           moisture_availability, surface_specific_humidity,
                           surface_latent_heat, step_surface!
-using ..SurfaceOptics: material_emissivity, SNOW_REFERENCE_RADIUS, SnowSurface,
+using ..SurfaceOptics: material_emissivity, SNOW_REFERENCE_RADIUS, SNOW_GROWTH_RATE, SnowSurface,
                        snow_grain_radius, broadband_albedo
 using ..RadiationCore: SpectralGrid, shortwave_bands
 using ..NetCDFIO: nc_open, nc_read
@@ -1247,7 +1247,7 @@ refrozen_grain_radius(::AbstractSnowMetamorphism) = nothing
 Mass-weight the grain radius of layer `i` towards
 [`refrozen_grain_radius`](@ref) of the pack's scheme after `m_refrozen`
 (kg m⁻²) of its ice has formed by refreezing — CLM's
-``r = r_{old} f_{old} + r_{rfz} f_{rfz}`` (CLM5 Technical Note, Eq. 2.3.74).
+``r = r_{old} f_{old} + r_{rfz} f_{rfz}`` (CLM5 Technical Note, Eq. 2.3.72).
 Call it *after* the refrozen mass has been added to `m_ice[i]`. The
 liquid-water scheme (#36) owns refreezing; this is its entry point into
 the grain state.
@@ -1269,7 +1269,7 @@ end
 
 Magnitude of the temperature gradient across each layer, from the
 interface temperatures (thickness-weighted means of neighbouring layer
-temperatures) — CLM5 Technical Note Eq. (2.3.76) (CTSM
+temperatures) — CLM5 Technical Note Eq. (2.3.74) (CTSM
 `SnowAge_grain`). As in CLM, the upper interface of the top layer is
 taken at the top-layer temperature. The lower interface of the bottom
 layer is the ground temperature for [`SnowGroundTemperature`](@ref) and,
@@ -1465,7 +1465,7 @@ end
                               fresh_radius_max = r_min, scale = 1)
 
 The CLM / SNICAR grain-ageing scheme (Flanner & Zender 2006; CLM5
-Technical Note, Sect. 2.3.2.3, Eqs. 2.3.74-2.3.77; CTSM
+Technical Note, Sect. 2.3.2.3, Eqs. 2.3.72-2.3.75; CTSM
 `SnowAge_grain`). Each step, in each layer:
 
  1. **dry ageing** — [`flanner_grain_radius`](@ref) with parameters from
@@ -1584,7 +1584,7 @@ dependence — a reference, not a substitute for
 [`Flanner2006Metamorphism`](@ref).
 """
 Base.@kwdef struct ParabolicGrainGrowth <: AbstractSnowMetamorphism
-    growth_rate::Float64 = 1.0e4      # μm² day⁻¹ (= SurfaceOptics.SNOW_GROWTH_RATE)
+    growth_rate::Float64 = SNOW_GROWTH_RATE   # μm² day⁻¹, owned by SurfaceOptics
 end
 
 function snow_metamorphism!(m::ParabolicGrainGrowth, p, dt::Real)
