@@ -325,4 +325,144 @@ wall_matrix(layers, ω) = foldl((M, l) -> layer_matrix(l, ω) * M, layers;
         @test_throws ArgumentError ConductionColumn(layers; θ = 1.5)
         @test_throws ArgumentError ColumnBoundary(290.0, -1.0, 0.0)
     end
+    @testset "UrbanFacet implements AbstractSurface" begin
+        for (kind, L) in ((:roof, example_roof_layers()), (:wall, example_wall_layers()),
+                          (:ground, example_ground_layers()))
+            f = UrbanFacet(kind, L; T = 291.0)
+            @test f isa AbstractSurface
+            @test surface_temperature(f) == 291.0
+            @test roughness_lengths(f) == (z0m = 0.01, z0h = 0.001, z0q = 0.001)
+            @test moisture_availability(f) == 0.0
+            @test length(facet_layer_temperatures(f)) == length(f.column)
+        end
+        # Default interior hooks: ISO 6946 R_si for roof / wall, deep-ground Dirichlet.
+        @test UrbanFacet(:roof, example_roof_layers()).interior.h ≈ 10.0
+        @test UrbanFacet(:wall, example_wall_layers()).interior.h ≈ 1 / 0.13
+        @test isinf(UrbanFacet(:ground, example_ground_layers(); T_interior = 285.0).interior.h)
+        @test UrbanFacet(:ground, example_ground_layers(); T_interior = 285.0).interior.T_env == 285.0
+        @test_throws ArgumentError UrbanFacet(:window, example_wall_layers())
+        f = UrbanFacet(:wall, example_wall_layers())
+        set_interior_temperature!(f, 300.0)
+        @test f.interior.T_env == 300.0 && f.interior.h ≈ 1 / 0.13
+        set_interior_boundary!(f, heat_flux_boundary(0.0))
+        @test f.interior.h == 0.0
+        # The skin is the massless outer face: its temperature is set by the
+        # energy balance against the half-cell conductance K = 2k/Δz, not a
+        # prognostic variable. Tiny steps therefore act as Newton iterations on
+        # Rn(Ts) - H(Ts) = K (Ts - T₁): an arbitrary initial skin is pulled onto
+        # the balance, the residual falling quadratically.
+        f = UrbanFacet(:roof, example_roof_layers(); T = 300.0)
+        fo = SurfaceForcing(sw_down = 600.0, lw_down = 350.0, T_air = 295.0, U = 4.0)
+        K = f.column.K[1]
+        seb_residual(f) = turbulent_fluxes(f, fo).G - K * (surface_temperature(f) - f.column.T[1])
+        res = [abs(seb_residual(f))]
+        for _ in 1:3
+            step_surface!(f, fo, 1e-6)
+            push!(res, abs(seb_residual(f)))
+        end
+        jump = surface_temperature(f) - 300.0
+        @test res[2] < 1e-2 * res[1]
+        @test res[3] < 1e-4 * res[2]          # quadratic: 0.45 → 5e-6 W/m²
+        @test res[4] < 1e-8
+        # On the balance, a tiny step returns the contract's fluxes at the skin.
+        ref = turbulent_fluxes(f, fo)
+        fl = step_surface!(f, fo, 1e-6)
+        @test fl.Rn ≈ ref.Rn rtol = 1e-8
+        @test fl.H ≈ ref.H rtol = 1e-6
+        @test fl.G ≈ ref.G rtol = 1e-6
+        @test fl.τ == ref.τ
+        @test fl.LE == 0.0 && fl.E == 0.0
+        @info @sprintf("Skin equilibration: initial skin moved %.3f K onto the balance; SEB residuals %s W/m² over successive steps",
+                       jump, string(round.(res; sigdigits = 2)))
+    end
+
+    @testset "Facet steady state: surface energy balance meets the U-value" begin
+        # Constant forcing, long backward-Euler steps: the skin temperature must
+        # solve  Rn(Ts) - H(Ts) = (Ts - T_in) / (R_wall + R_si)  — found here by
+        # bisection, independently of the solver.
+        σ = DEFAULT_SURFACE_CONSTANTS.σ_SB
+        fo = SurfaceForcing(sw_down = 500.0, lw_down = 320.0, T_air = 300.0, U = 3.0)
+        T_in = 295.0
+        bisect(F, a, b) = (for _ in 1:200; m = (a + b) / 2; F(a) * F(m) <= 0 ? (b = m) : (a = m); end; (a + b) / 2)
+        results = []
+        for (label, L, hc) in (("wall, h_c = 15", example_wall_layers(), 15.0),
+                               ("roof, h_c = 10", example_roof_layers(), 10.0),
+                               ("roof, MOST", example_roof_layers(), nothing))
+            kind = startswith(label, "wall") ? :wall : :roof
+            f = UrbanFacet(kind, L; T = 300.0, T_interior = T_in, h_convective = hc, θ = 1.0)
+            Rsi = 1 / f.interior.h
+            Ueff = 1 / (thermal_resistance(L) + Rsi)
+            local fl
+            for _ in 1:3000
+                fl = step_surface!(f, fo, 3600.0)
+            end
+            probe = UrbanFacet(kind, L; T = 300.0, h_convective = hc)
+            function Fres(Ts)
+                probe.T_skin = Ts
+                if hc === nothing
+                    return turbulent_fluxes(probe, fo).G - Ueff * (Ts - T_in)
+                end
+                Rn = (1 - probe.albedo) * fo.sw_down + probe.emissivity * (fo.lw_down - σ * Ts^4)
+                return Rn - hc * (Ts - fo.T_air) - Ueff * (Ts - T_in)
+            end
+            Ts_ref = bisect(Fres, 250.0, 400.0)
+            @test surface_temperature(f) ≈ Ts_ref atol = 1e-6
+            @test fl.G ≈ interior_heat_flux(f) rtol = 1e-8
+            @test fl.G ≈ Ueff * (Ts_ref - T_in) rtol = 1e-6
+            @test fl.Rn - fl.H - fl.LE ≈ fl.G atol = 1e-9
+            push!(results, (label, surface_temperature(f), Ts_ref, fl.G))
+        end
+        for r in results
+            @info @sprintf("Steady facet %-15s Ts = %.6f K (bisection %.6f), G = interior flux = %.4f W/m²", r...)
+        end
+        # Insulation: the roof passes far less heat to the room than the brick wall.
+        @test results[2][4] < results[1][4] / 3
+    end
+
+    @testset "Diurnal cycle: exact facet energy bookkeeping, time-step robustness" begin
+        forcing(t) = SurfaceForcing(sw_down = max(0.0, 800 * sin(2π * (t / 86400 - 0.25))),
+                                    lw_down = 330.0 + 20 * sin(2π * (t / 86400 - 0.375)),
+                                    T_air = 293.0 + 5 * sin(2π * (t / 86400 - 0.375)), U = 3.0)
+        function diurnal(kind, L, dt; days = 3, θ = 0.5)
+            f = UrbanFacet(kind, L; T = 293.0, θ = θ)
+            E0 = column_heat_content(f.column; T_ref = 293.0)
+            acc, seb, Ts, Qi = 0.0, 0.0, Float64[], Float64[]
+            n = round(Int, 86400 / dt)
+            for j in 0:days*n-1
+                t = j * dt
+                fl = step_surface!(f, forcing(t + dt / 2), dt)
+                acc += (fl.G - interior_heat_flux(f)) * dt
+                seb = max(seb, abs(fl.Rn - fl.H - fl.LE - fl.G))
+                if j >= (days - 1) * n && (j + 1) % round(Int, 3600 / dt) == 0
+                    push!(Ts, surface_temperature(f)); push!(Qi, interior_heat_flux(f))
+                end
+            end
+            cons = abs(column_heat_content(f.column; T_ref = 293.0) - E0 - acc)
+            return (; f, cons, acc, seb, Ts, Qi)
+        end
+        out = Dict()
+        for (kind, L) in ((:roof, example_roof_layers()), (:wall, example_wall_layers()),
+                          (:ground, example_ground_layers()))
+            r60 = diurnal(kind, L, 60.0)
+            r600 = diurnal(kind, L, 600.0)
+            @test r60.seb < 1e-9                     # Rn - H - LE = G every step
+            @test r60.cons < 1e-9 * sum(abs, r60.f.column.C .* r60.f.column.dz)
+            dTs = maximum(abs.(r60.Ts .- r600.Ts))   # hourly skin temperatures, last day
+            @test dTs < 0.5
+            out[kind] = (r60, dTs)
+            @info @sprintf("Diurnal %-6s: Ts range %.2f–%.2f K, SEB closure %.1e W/m², conservation %.1e J/m² of %.2e, |Ts(60 s) - Ts(600 s)| ≤ %.3f K, interior flux range %.2f–%.2f W/m²",
+                           kind, minimum(r60.Ts), maximum(r60.Ts), r60.seb, r60.cons, abs(r60.acc), dTs,
+                           minimum(r60.Qi), maximum(r60.Qi))
+        end
+        # Physics: an insulated roof damps the interior load. Its interior flux
+        # swing is a small fraction of the uninsulated brick wall's, although its
+        # skin temperature swing (low-albedo asphalt, full sun) is larger.
+        roof, wall = out[:roof][1], out[:wall][1]
+        swing(x) = maximum(x) - minimum(x)
+        @test swing(roof.Qi) < swing(wall.Qi) / 5
+        @test swing(roof.Ts) > swing(wall.Ts)
+        # The roof's asphalt skin peaks in the early afternoon; the brick wall's
+        # interior flux peaks hours later (thermal mass time lag).
+        @test argmax(wall.Qi) > argmax(wall.Ts)
+    end
 end

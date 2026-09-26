@@ -609,6 +609,13 @@ placeholders, not published values; set them per site). A number
 ``LE = 0``, ``τ = 0`` — the usual closure for a vertical wall, for which
 MOST has no formal basis. Facets are dry (`moisture_availability = 0`).
 
+**The skin is the outer face**, not an extra prognostic layer: its
+temperature is whatever closes the energy balance against the half-cell
+conductance ``2k_1/Δz_1`` of the first cell. The constructor starts it
+at the first cell's temperature, so the first step moves it onto the
+balance (≈ 1 K for a sunlit roof); each step is one Newton iteration on
+that balance and the residual falls quadratically.
+
 For a wall, `SurfaceForcing.sw_down` / `lw_down` are the irradiances on
 the facet plane (the radiosity coupling that supplies them is Phase 49's
 facet–radiosity issue).
