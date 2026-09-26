@@ -64,7 +64,8 @@ include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 
-# --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53) --
+# --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53)
+include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
 include("PlantCanopy.jl")          # Phase 48 (resolved plant canopy)
 
 using .Grids
@@ -115,6 +116,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .Photosynthesis              # Phase 47
 using .PlantCanopy                 # Phase 48
 
 # Re-exports for the user-facing API.
@@ -602,6 +604,28 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        roughness_lengths, moisture_availability,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
+
+# Phase 47 — Photosynthesis: Farquhar C3 / Collatz C4 leaf biochemistry,
+# Bernacchi / Kattge-Knorr temperature responses, CLM4.5 PFT parameters.
+export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
+       Q10Response, temperature_factor, optimum_temperature,
+       C3TemperatureResponses, bonan2011_c3_temperature,
+       kattge_knorr_c3_temperature, kattge_knorr_jmax_ratio,
+       PAR_PHOTONS_PER_JOULE, par_to_photon_flux, colimited_rate,
+       electron_transport_rate,
+       AbstractPhotosynthesisParameters, C3Parameters, C4Parameters, collatz1992_c4,
+       leaf_capacities, photorespiratory_compensation_point,
+       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point,
+       PFTPhotosynthesis, CLM45_PFT_PHOTOSYNTHESIS, vcmax25_from_leaf_nitrogen,
+       pft_photosynthesis_parameters
+
+# Phase 47 — stomatal conductance (#20): Ball-Berry / Medlyn closures,
+# leaf boundary layer, transpiration, coupled A–gs–ci solution.
+export AbstractStomatalModel, BallBerryStomata, MedlynStomata, stomatal_conductance,
+       leaf_boundary_layer_conductance, molar_conductance, leaf_transpiration,
+       STOMATAL_DIFFUSIVITY_RATIO, BOUNDARY_LAYER_DIFFUSIVITY_RATIO,
+       LeafGasExchange, leaf_gas_exchange, apply_water_stress,
+       CLM5_MEDLYN_G1, pft_stomatal_model
 
 # Phase 48 — PlantCanopy: leaf-area-density profiles and implicit
 # (unconditionally stable) canopy drag.

@@ -38,6 +38,8 @@ makedocs(
             "Fog and dew"                 => "theory/fog.md",
             "Radiation fog"               => "theory/radiation_fog.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
+            "Leaf photosynthesis"         => "theory/photosynthesis.md",
+            "Stomatal conductance"        => "theory/stomatal_conductance.md",
             "Resolved plant canopy"       => "theory/plant_canopy.md",
         ],
         "Design" => [
@@ -93,6 +95,7 @@ makedocs(
             "Era V — surface exchange" => [
                 "Overview"                     => "api/era5.md",
                 "SurfaceExchange"              => "api/era5/surface_exchange.md",
+                "Photosynthesis"               => "api/era5/photosynthesis.md",
                 "PlantCanopy"                  => "api/era5/plant_canopy.md",
             ],
         ],

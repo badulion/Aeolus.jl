@@ -907,6 +907,8 @@ end
 
 @testset "Era V" begin
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
+    include("era5_photosynthesis.jl")    # Phase 47  Farquhar C3 / Collatz C4 photosynthesis (#19)
+    include("era5_stomata.jl")           # Phase 47  Ball-Berry / Medlyn stomatal conductance (#20)
     include("era5_plant_canopy.jl")      # Phase 48  LAD profiles, implicit canopy drag (#22)
     include("era5_canopy_radiation.jl")  # Phase 48  canopy SW two-stream, sunlit/shaded, LW (#23)
 end
