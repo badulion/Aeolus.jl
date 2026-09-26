@@ -117,7 +117,8 @@ Three results come from this one network:
   steady state.
 * **SHGC** (`glazing_shgc`). The total solar energy transmittance
   ``\mathrm{SHGC}(θ) = T(θ) + Σ_j N_jA_j(θ)`` (Klems 2002; ISO 15099 §7;
-  EN 410's ``g``).
+  EN 410's ``g``). The default surface coefficients are EN 410's,
+  ``h_e = 23`` and ``h_i = 3.6 + 4.4\,ε/0.837 = 8.0`` W m⁻² K⁻¹.
 
 ## 5. The window facet
 
@@ -156,7 +157,7 @@ transmitted shortwave. It satisfies
 | 3 mm angular ``T(θ)``, ``R(θ)``, 0–80° | WINDOW clear-glass regression (Table 7-1) | ``T`` ≤ 0.007, ``R`` ≤ 0.012 |
 | single 3 mm clear SHGC | NFRC (LLumar data sheet) 0.86 | 0.857 |
 | 6-13-6 clear/clear SHGC | Vitro IGU data (NFRC, WINDOW 7.3) 0.70 | 0.682 (book ``K``), 0.691 (inverted Vitro pane) |
-| 6-13-6 U, NFRC winter, air / argon | Vitro 2.669 / 2.555 W m⁻² K⁻¹ | 2.707 / 2.547 |
+| 6-13-6 U, NFRC winter, air / argon | Vitro 2.669 / 2.555 W m⁻² K⁻¹ | 2.707 / 2.547 (see note) |
 | facet steady state vs SHGC, 1–3 panes | the steady network | ≤ 0.0008 |
 | facet steady state vs U-value | the steady network | 4 significant figures |
 | facet energy bookkeeping, 24 h diurnal | exact | 2e-9 J m⁻² |
@@ -166,6 +167,12 @@ whereas the physical path length grows as ``1/\cos θ_t``. For 6 mm glass
 the model therefore falls below the regression towards grazing
 incidence: by 0.026 in ``T`` and 0.038 in ``R`` at 80°. The direction is
 the one the path-length argument predicts.
+
+The published argon U-value is for a 90 % argon / 10 % air fill; the
+model gap is pure argon. Blending the air and argon property fits 90/10
+(a crude stand-in for the ISO 15099 mixing rules, which are not
+implemented) raises the model U by about 0.017 W m⁻² K⁻¹, so the
+like-for-like model value is about 2.56 (+0.3 %) rather than 2.547.
 
 No field observations of façade temperatures are used here. That
 comparison (BUBBLE / CAPITOUL) is the Phase 49 validation issue.

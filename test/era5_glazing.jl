@@ -367,6 +367,10 @@ window_rho_clr(Φ) = poly4(RHO_CLR, cos(Φ)) - window_tau_clr(Φ)
         end
         U_air, hci = nfrc_winter_u(double_glazing(thickness = 0.006, gap = 0.0127))
         U_ar, _ = nfrc_winter_u(double_glazing(thickness = 0.006, gap = 0.0127, gas = GLAZING_ARGON))
+        # Vitro's "winter argon" unit is 90 % argon / 10 % air; the model gap
+        # is pure argon (no ISO 15099 mixing rule). A 90/10 blend of the
+        # property fits raises the model U by ~0.017 W m⁻² K⁻¹ (~0.6 %),
+        # well inside the 3 % tolerance, so the comparison stands.
         U_pub_air, U_pub_ar = 0.47 * 5.678263, 0.45 * 5.678263
         @info @sprintf("6-13-6 clear, NFRC winter U: air %.3f (Vitro %.3f), argon %.3f (Vitro %.3f) W m⁻² K⁻¹; interior h_c %.2f",
                        U_air, U_pub_air, U_ar, U_pub_ar, hci)
