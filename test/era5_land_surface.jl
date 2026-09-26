@@ -226,4 +226,158 @@ end
           0.004 / (1 + 0.5 * min(S, 10)) rtol = 1e-12
 end
 
+# ---------------------------------------------------------------------------
+# The coupled column under an idealised clear-sky diurnal cycle
+# ---------------------------------------------------------------------------
+
+function _ls_column(; ψ = -3.37, pft = :bdt_temperate, LAI = 4.0, SAI = 0.5,
+                    z_top = 20.0, T = 292.0, hydrology = true)
+    g = clm5_soil_grid(13)
+    w = SoilWaterColumn(g, clapp_hornberger_texture(:loam); ψ = ψ,
+                        ice_impedance = PowerLawIceImpedance())
+    soil = SoilThermalColumn(w, clm_soil_thermal_properties(40.0, 20.0); T_soil = T,
+                             hydrology = hydrology)
+    return VegetatedLandColumn(soil, pft_vegetation(pft); LAI = LAI, SAI = SAI, z_top = z_top)
+end
+
+# Clear-sky day: sun up 6-18 h, peak 850 W m⁻², air 287-299 K, dry air.
+function _ls_forcing(t_hours; rain = 0.0, q = 0.008, U = 3.0)
+    h = mod(t_hours, 24)
+    μ = max(0.0, sin(π * (h - 6) / 12)) * 0.9
+    Ta = 293.0 + 6 * sin(π * (h - 9) / 12)
+    return μ, SurfaceForcing(sw_down = 850μ, lw_down = 330.0, T_air = Ta, q_air = q,
+                             U = U, z_ref = 40.0, rain = rain)
+end
+
+function _ls_run!(s, days; dt = 1800.0, rain_at = nothing, record = nothing)
+    n = round(Int, days * 86400 / dt)
+    for k in 0:n-1
+        t = k * dt / 3600
+        rain = rain_at !== nothing && rain_at(t) ? 2e-3 : 0.0     # 7.2 mm h⁻¹
+        μ, f = _ls_forcing(t; rain = rain)
+        fl = step_surface!(s, f, dt; cosz = μ, diffuse_fraction = 0.25)
+        record === nothing || record(t, f, fl, s.last)
+    end
+    return s
+end
+
+@testset "Vegetated column: energy and water closure" begin
+    s = _ls_column()
+    soil = s.soil
+    ρw = soil.water.constants.ρ_water
+    S0 = soil_water_storage(soil.water)
+    G0 = soil.budget.surface
+    b0 = deepcopy(soil.water.budget)
+    worst_col = worst_leaf = worst_sw = worst_G = 0.0
+    nconv = nsteps = 0
+    ΣG = 0.0
+    _ls_run!(s, 4; rain_at = t -> 50 <= t < 52, record = (t, f, fl, d) -> begin
+        worst_col = max(worst_col, abs(fl.Rn - fl.H - fl.LE - fl.G))
+        worst_leaf = max(worst_leaf, abs(d.Rn_v - d.H_v - d.LE_v))
+        worst_sw = max(worst_sw, abs(d.SW_v + d.SW_g + d.SW_up - f.sw_down))
+        @test fl.H ≈ d.H_v + d.H_g
+        @test fl.LE ≈ d.LE_v + d.LE_g
+        @test fl.Rn ≈ d.Rn_v + d.Rn_g
+        ΣG += fl.G * 1800.0
+        nconv += d.converged; nsteps += 1
+    end)
+    # G handed back is exactly the heat the soil received
+    worst_G = abs(ΣG - (soil.budget.surface - G0))
+    @test worst_col < 1e-8
+    @test worst_leaf < 1e-8
+    @test worst_sw < 1e-10
+    @test worst_G < 1e-6 * abs(ΣG) + 1e-3
+    @test nconv == nsteps
+    @test abs(s.budget.leaf_residual) < 1e-4
+    # Water: storage change = rain + dew − transpiration − ground evaporation
+    # delivered − runoff − drainage (kg m⁻² → m of water).
+    wb = soil.water.budget
+    ΔS = soil_water_storage(soil.water) - S0
+    @test wb.extraction - b0.extraction ≈ s.budget.transpiration / ρw rtol = 1e-12
+    inflow = (s.budget.rain + s.budget.dew) / ρw
+    outflow = s.budget.transpiration / ρw + (wb.evaporation - b0.evaporation) +
+              (wb.runoff - b0.runoff) + (wb.drainage - b0.drainage)
+    water_res = ΔS - (inflow - outflow)
+    @test abs(water_res) < 1e-12
+    @info "vegetated column, 4 days: worst |Rn−H−LE−G|, leaf residual (W m⁻²), SW residual, water residual (m)" worst_col worst_leaf worst_sw water_res
+    @info "vegetated column, 4 days: transpiration, ground evaporation (kg m⁻²), converged steps" s.budget.transpiration s.budget.ground_evaporation nconv / nsteps
+end
+
+@testset "Vegetated column: limits and interface" begin
+    # Bare column (LAI = SAI = 0): no canopy fluxes, no photosynthesis.
+    s = _ls_column(LAI = 0.0, SAI = 0.0)
+    _ls_run!(s, 1; record = (t, f, fl, d) -> begin
+        @test d.H_v == 0 && d.LE_v == 0 && d.GPP == 0
+        @test abs(d.Rn_v) < 1e-12 && abs(d.SW_v) < 1e-12
+        @test abs(fl.Rn - fl.H - fl.LE - fl.G) < 1e-9
+    end)
+    # Isothermal column under a black-body sky of the same temperature:
+    # Rn = ε_eff (L↓ − σT⁴) = 0 (Kirchhoff), and in general
+    # Rn = ε_eff (L↓ − σT⁴) with ε_eff = 1 − (1 − ε_g)(1 − ε_v)².
+    s = _ls_column()
+    σSB = s.soil.water.constants.σ_SB
+    T = s.soil.T_skin
+    s.T_v = T
+    εeff = surface_emissivity(s)
+    @test εeff ≈ 1 - (1 - s.soil.emissivity) * exp(-2 * (s.LAI + s.SAI)) rtol = 1e-14
+    for Ldn in (σSB * T^4, 300.0, 400.0)
+        f = SurfaceForcing(sw_down = 0.0, lw_down = Ldn, T_air = T)
+        @test net_radiation(s, f) ≈ εeff * (Ldn - σSB * T^4) atol = 1e-10
+    end
+    @test radiative_temperature(s) ≈ T rtol = 1e-12
+    @test moisture_availability(s) ≈ 1 atol = 1e-12
+    z = roughness_lengths(s)
+    @test z.z0m ≈ 0.055 * 20 && z.z0h == z.z0m == z.z0q
+    _ls_run!(s, 0.5)
+    @test 0 < surface_albedo(s) < 0.3
+    @test surface_temperature(s) == s.T_ac
+    @test surface_specific_humidity(s, SurfaceForcing()) == s.q_ac
+    @test_throws ArgumentError step_surface!(s, SurfaceForcing(z_ref = 10.0), 1800.0)
+end
+
+@testset "Soil-water stress: Bowen ratio response to drought" begin
+    # One clear day at fixed soil water, uniform ψ from field capacity to
+    # beyond ψ_c of the broadleaf deciduous tree (−224 m): midday fluxes.
+    ψs = (-3.37, -50.0, -100.0, -150.0, -200.0, -260.0)
+    rows = []
+    for ψ in ψs
+        s = _ls_column(ψ = ψ, hydrology = false)
+        mid = Ref{Any}(nothing)
+        _ls_run!(s, 2; record = (t, f, fl, d) -> (t == 36.0 && (mid[] = (fl, d, f))))
+        fl, d, f = mid[]
+        push!(rows, (ψ = ψ, βt = d.β_t, LE = fl.LE, H = fl.H, B = fl.H / fl.LE,
+                     Et = d.E_t, GPP = d.GPP, dT = d.T_v - f.T_air))
+    end
+    βt = [r.βt for r in rows]; LE = [r.LE for r in rows]; H = [r.H for r in rows]
+    B = [r.B for r in rows]; GPP = [r.GPP for r in rows]; dT = [r.dT for r in rows]
+    @test βt[1] ≈ 1 && βt[end] == 0
+    @test issorted(βt; rev = true)
+    @test issorted(LE; rev = true) && issorted(GPP; rev = true)
+    @test issorted(H) && issorted(B) && issorted(dT)
+    @test rows[end].Et == 0                 # beyond ψ_c the roots supply nothing
+    @test B[end] > 5 * B[1]
+    for r in rows
+        @info "drought response at noon" r.ψ r.βt r.LE r.H r.B r.GPP r.dT
+    end
+end
+
+@testset "Soil-water stress: dry-down" begin
+    # 30 rain-free clear days from field capacity: the root zone dries,
+    # βt falls, and the midday Bowen ratio rises day by day.
+    s = _ls_column(pft = :c3_grass, LAI = 3.0, SAI = 0.3, z_top = 0.5)
+    S0 = soil_water_storage(s.soil.water)
+    days = Dict{Int,Any}()
+    _ls_run!(s, 30; record = (t, f, fl, d) -> (mod(t, 24) == 12.0 &&
+                                              (days[Int(t ÷ 24)] = (βt = d.β_t, B = fl.H / fl.LE, LE = fl.LE))))
+    β = [days[k].βt for k in 0:29]
+    Bw = [days[k].B for k in 0:29]
+    @test all(diff(β) .<= 1e-12)
+    @test β[end] < β[1]
+    @test Bw[end] > Bw[1]
+    ET = s.budget.transpiration + s.budget.ground_evaporation
+    @test soil_water_storage(s.soil.water) - S0 ≈
+          (s.budget.dew - ET) / 1000 - s.soil.water.budget.drainage rtol = 1e-9
+    @info "dry-down, C3 grass: midday βt day 1/10/20/30, Bowen ratio day 1/30, ET (mm)" β[1] β[10] β[20] β[30] Bw[1] Bw[30] ET
+end
+
 end # LandSurface

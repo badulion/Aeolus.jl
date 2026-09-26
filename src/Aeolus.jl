@@ -664,6 +664,8 @@ export VegetationParameters, pft_vegetation,
        zeng_root_fractions, AbstractSoilWaterStress, CLMWaterStress,
        wilting_factor, soil_water_stress, root_water_uptake,
        BigLeafShortwave, bigleaf_shortwave, BigLeafLongwave, bigleaf_longwave,
-       canopy_roughness, undercanopy_transfer_coefficient
+       canopy_roughness, undercanopy_transfer_coefficient,
+       VegetatedLandColumn, LandSurfaceDiagnostics, LandSurfaceBudget,
+       set_leaf_area!, radiative_temperature
 
 end # module

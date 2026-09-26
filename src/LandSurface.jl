@@ -81,6 +81,10 @@ using ..MoistThermodynamics: ThermodynamicConstants, PhasePartition,
 using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, SurfaceForcing,
                          SurfaceFluxes, AbstractSurface, AbstractStabilityFunctions,
                          BusingerDyerBeljaarsHoltslag, solve_surface_layer, grav
+import ..SurfaceExchange: surface_temperature, roughness_lengths, surface_albedo,
+                          surface_emissivity, moisture_availability,
+                          surface_specific_humidity, surface_latent_heat,
+                          net_radiation, step_surface!
 using ..SoilColumn: SoilGrid, SoilWaterColumn, SoilThermalColumn, LinearizedSkinBalance,
                     step_soil_heat!, step_soil_water!, soil_porosity, soil_water_storage
 import ..SoilColumn
@@ -96,7 +100,9 @@ export VegetationParameters, pft_vegetation,
        zeng_root_fractions, AbstractSoilWaterStress, CLMWaterStress,
        wilting_factor, soil_water_stress, root_water_uptake,
        BigLeafShortwave, bigleaf_shortwave, BigLeafLongwave, bigleaf_longwave,
-       canopy_roughness, undercanopy_transfer_coefficient
+       canopy_roughness, undercanopy_transfer_coefficient,
+       VegetatedLandColumn, LandSurfaceDiagnostics, LandSurfaceBudget,
+       set_leaf_area!, radiative_temperature
 
 # =========================================================================
 # 1. Plant functional types: the columns of the CLM4.5 tables the land
@@ -623,5 +629,527 @@ function undercanopy_transfer_coefficient(u_star::Real, LS::Real, z0m_g::Real;
     return Cbare * W + Cdense * (1 - W)
 end
 
+
+# =========================================================================
+# 5. The vegetated land column
+# =========================================================================
+
+"""
+    LandSurfaceDiagnostics
+
+What the last [`step_surface!`](@ref) of a [`VegetatedLandColumn`](@ref)
+did. Fluxes in W m⁻² of ground (turbulent positive upward, radiation
+positive absorbed), water fluxes in kg m⁻² s⁻¹:
+
+| field | meaning |
+| :-- | :-- |
+| `Rn_v`, `Rn_g` | net radiation absorbed by the canopy and by the ground |
+| `SW_v`, `SW_g`, `SW_up` | shortwave absorbed by canopy and ground, reflected |
+| `H_v`, `H_g`, `LE_v`, `LE_g` | sensible and latent heat from canopy and ground |
+| `G` | ground heat flux into the soil (step mean) |
+| `E_t`, `E_dew`, `E_g` | transpiration, dew on the leaves (≥ 0), ground evaporation |
+| `β_t`, `β_soil` | root-zone stress factor, ground evaporation efficiency |
+| `GPP`, `A_sun`, `A_sha` | canopy gross and sunlit/shaded net assimilation, µmol m⁻² s⁻¹ (ground) |
+| `gs_sun`, `gs_sha` | stomatal conductance of the sunlit and shaded big leaves, mol m⁻² s⁻¹ (leaf) |
+| `L_sun`, `L_sha` | sunlit and shaded leaf area |
+| `T_v`, `T_g`, `T_ac`, `q_ac` | leaf, ground skin (step mean), canopy-air temperature and humidity |
+| `u_star`, `r_ah` | friction velocity, above-canopy resistance to heat (s m⁻¹) |
+| `leaf_residual` | ``R_{n,v} - H_v - LE_v`` at the solution, W m⁻² |
+| `iterations`, `converged` | canopy iteration count and outcome |
+"""
+struct LandSurfaceDiagnostics
+    Rn_v::Float64; Rn_g::Float64
+    SW_v::Float64; SW_g::Float64; SW_up::Float64
+    H_v::Float64; H_g::Float64; LE_v::Float64; LE_g::Float64; G::Float64
+    E_t::Float64; E_dew::Float64; E_g::Float64
+    β_t::Float64; β_soil::Float64
+    GPP::Float64; A_sun::Float64; A_sha::Float64
+    gs_sun::Float64; gs_sha::Float64
+    L_sun::Float64; L_sha::Float64
+    T_v::Float64; T_g::Float64; T_ac::Float64; q_ac::Float64
+    u_star::Float64; r_ah::Float64
+    leaf_residual::Float64
+    iterations::Int
+    converged::Bool
+end
+
+"""
+    LandSurfaceBudget
+
+Cumulative budgets of a [`VegetatedLandColumn`](@ref) since construction.
+Energy (J m⁻²): `Rn`, `H`, `LE`, `G`, and `leaf_residual`
+(∫ (R_{n,v} - H_v - LE_v) dt, the canopy's energy-balance error, which a
+converged canopy iteration keeps at round-off). Water (kg m⁻²): `rain`,
+`transpiration`, `dew`, `ground_evaporation` (delivered by the soil),
+`latent_mismatch` (J m⁻², latent heat charged for evaporation the soil
+could not deliver), `snow_ignored` (snowfall, not handled: the column has
+no snowpack), and `time` (s).
+"""
+mutable struct LandSurfaceBudget
+    Rn::Float64; H::Float64; LE::Float64; G::Float64; leaf_residual::Float64
+    rain::Float64; transpiration::Float64; dew::Float64; ground_evaporation::Float64
+    latent_mismatch::Float64; snow_ignored::Float64; time::Float64
+end
+LandSurfaceBudget() = LandSurfaceBudget(zeros(12)...)
+
+"""
+    VegetatedLandColumn(soil::SoilThermalColumn, veg::VegetationParameters;
+                        LAI, SAI = 0, z_top, co2 = 400, cosz = 0.5,
+                        diffuse_fraction = 0.3, par_fraction = 0.5,
+                        stress = CLMWaterStress(veg), roots = zeng_root_fractions(…),
+                        T_veg = soil skin temperature, sf = BusingerDyerBeljaarsHoltslag(),
+                        U_min = 0.1, maxiter = 40, tol_T = 1e-6)
+
+A vegetated land column — a two-big-leaf canopy (leaf area `LAI`, stem
+area `SAI`, height `z_top` m) over the soil column `soil` — implementing
+`AbstractSurface`. The canopy follows the CLM4.5 formulation (Oleson et al.
+2013, §5.3): leaves, ground and atmosphere exchange heat and vapour
+through a canopy air space with no storage, whose temperature ``T_{ac}``
+and humidity ``q_{ac}`` follow from flux continuity,
+
+    T_ac = (c_a θ_a + c_g T_g + c_v T_v)/(c_a + c_g + c_v)             (5.90)
+    q_ac = (c_a^w q_a + c_g^w q_g + c_v^w q_sat(T_v))/(c_a^w + c_g^w + c_v^w)   (5.104)
+
+with conductances (m s⁻¹): ``c_a = C_H U`` above the canopy from
+`SurfaceExchange.solve_surface_layer` between the canopy air (at
+``d + z_0``) and the reference height; ``c_v = (L+S)\\, g_b`` for the
+leaves, ``g_b`` from `Photosynthesis.leaf_boundary_layer_conductance` at
+``U = u_*``; ``c_g = C_s u_*`` below the canopy
+([`undercanopy_transfer_coefficient`](@ref)); for vapour
+``c_v^w = Σ_{sun,sha} L_x g_b g_{s,x}/(g_b + g_{s,x})`` (leaf boundary
+layer and stomata in series, eqs. 5.106, 5.110) and
+``c_g^w = β_{soil} c_g`` with the Lee & Pielke β of the soil's top layer.
+
+**Stomata and water stress.** The sunlit and shaded big leaves each call
+`Photosynthesis.leaf_gas_exchange` with their absorbed PAR
+([`bigleaf_shortwave`](@ref)), the leaf temperature, the canopy-air vapour
+pressure, the leaf boundary layer, and the root-zone stress factor
+β_t of [`soil_water_stress`](@ref), which scales V_cmax, R_d and g_0
+(`veg.stress_targets`). Leaf capacities (V_cmax25, J_max25, T_p25, R_d25;
+C4: V_cmax25, k_p25, R_d25) decline through the canopy as ``e^{-K_n x}``
+and are integrated over the sunlit and shaded leaf area (CLM4.5 eqs.
+8.19-8.23). With β_t = 0 the roots can supply no water and transpiration
+is shut off.
+
+**Leaf energy balance.** The leaf temperature ``T_v`` solves
+``R_{n,v}(T_v) = H_v(T_v) + λ E_v(T_v)`` (eq. 5.129; the canopy stores no
+heat) by Newton's method with the conductances fixed, inside an outer
+iteration that updates the surface layer, the stomata and the canopy air
+until ``T_v`` and ``T_{ac}`` change by less than `tol_T` (CLM allows 40
+iterations). When the air at the leaves is supersaturated (``E_v < 0``)
+dew forms through ``(L+S) g_b`` and is passed to the soil surface: the
+column has no canopy interception store.
+
+**Ground.** The ground skin is the soil column's: its fluxes
+``H_g``, ``E_g``, ``R_{n,g}`` are linearised in ``T_g`` with the leaf
+temperature and conductances held (as CLM does after the canopy
+iteration) and handed to `SoilColumn.step_soil_heat!` as a
+`LinearizedSkinBalance`, which solves the skin and soil temperatures
+implicitly; the ground fluxes are then evaluated at the step-mean skin
+temperature, so ``R_n - H - LE - G`` is the canopy residual alone.
+Finally `SoilColumn.step_soil_water!` takes rain and leaf dew as input,
+the ground evaporation as the surface demand, and the transpiration as a
+root sink ([`root_water_uptake`](@ref)).
+
+**Radiation.** `cosz` (cosine of the solar zenith angle),
+`diffuse_fraction` and `par_fraction` (0.5: the split of CLM's
+atmospheric forcing) are state, set before a step or passed to
+[`step_surface!`](@ref), because `SurfaceForcing` carries only the global
+shortwave — e.g. from `SolarGeometry.solar_position` and
+`partition_global_irradiance`. The ground albedo and emissivity are the
+soil column's.
+
+Snow is not handled (no snowpack; snowfall is recorded in the budget as
+ignored), nor is canopy interception of rain.
+"""
+mutable struct VegetatedLandColumn{S<:SoilThermalColumn, V<:VegetationParameters,
+                                   W<:AbstractSoilWaterStress,
+                                   F<:AbstractStabilityFunctions} <: AbstractSurface
+    soil::S
+    veg::V
+    stress::W
+    roots::Vector{Float64}
+    LAI::Float64
+    SAI::Float64
+    z_top::Float64
+    co2::Float64
+    cosz::Float64
+    diffuse_fraction::Float64
+    par_fraction::Float64
+    T_v::Float64
+    T_ac::Float64
+    q_ac::Float64
+    albedo::Float64
+    sf::F
+    U_min::Float64
+    maxiter::Int
+    tol_T::Float64
+    last::Union{Nothing, LandSurfaceDiagnostics}
+    budget::LandSurfaceBudget
+end
+
+function VegetatedLandColumn(soil::SoilThermalColumn, veg::VegetationParameters;
+                             LAI::Real, SAI::Real = 0.0, z_top::Real,
+                             co2::Real = 400.0, cosz::Real = 0.5,
+                             diffuse_fraction::Real = 0.3, par_fraction::Real = 0.5,
+                             stress::AbstractSoilWaterStress = CLMWaterStress(veg),
+                             roots = zeng_root_fractions(soil.water.grid, veg.r_a, veg.r_b),
+                             T_veg::Real = soil.T_skin, q_ac::Real = 0.008,
+                             sf::AbstractStabilityFunctions = BusingerDyerBeljaarsHoltslag(),
+                             U_min::Real = 0.1, maxiter::Integer = 40, tol_T::Real = 1e-6)
+    (LAI >= 0 && SAI >= 0 && z_top > 0) ||
+        throw(ArgumentError("VegetatedLandColumn: need LAI, SAI ≥ 0 and z_top > 0"))
+    length(roots) == length(soil.water.grid) ||
+        throw(ArgumentError("VegetatedLandColumn: one root fraction per soil layer"))
+    abs(sum(roots) - 1) < 1e-10 ||
+        throw(ArgumentError("VegetatedLandColumn: root fractions must sum to 1"))
+    s = VegetatedLandColumn(soil, veg, stress, collect(Float64, roots), Float64(LAI),
+                            Float64(SAI), Float64(z_top), Float64(co2), Float64(cosz),
+                            Float64(diffuse_fraction), Float64(par_fraction),
+                            Float64(T_veg), Float64(T_veg), Float64(q_ac), 0.15, sf,
+                            Float64(U_min), Int(maxiter), Float64(tol_T), nothing,
+                            LandSurfaceBudget())
+    return s
+end
+
+"""
+    set_leaf_area!(s::VegetatedLandColumn, LAI, SAI = s.SAI)
+
+Prescribe the leaf and stem area (phenology is an input of the column).
+"""
+function set_leaf_area!(s::VegetatedLandColumn, LAI::Real, SAI::Real = s.SAI)
+    (LAI >= 0 && SAI >= 0) || throw(ArgumentError("set_leaf_area!: LAI, SAI ≥ 0"))
+    s.LAI, s.SAI = Float64(LAI), Float64(SAI)
+    return s
+end
+
+# ---- the AbstractSurface interface -------------------------------------------
+
+"""
+    surface_temperature(s::VegetatedLandColumn) -> T_ac
+
+The *aerodynamic* surface temperature of a vegetated column: the canopy-air
+temperature at ``d + z_0``, which is what the surface layer above sees.
+[`radiative_temperature`](@ref) is the one that emits.
+"""
+surface_temperature(s::VegetatedLandColumn) = s.T_ac
+"The canopy-air specific humidity ``q_{ac}`` (eq. 5.104): what the surface layer sees."
+surface_specific_humidity(s::VegetatedLandColumn, f::SurfaceForcing; kwargs...) = s.q_ac
+"Roughness of the canopy ([`canopy_roughness`](@ref)); CLM uses ``z_{0h} = z_{0q} = z_{0m}``."
+function roughness_lengths(s::VegetatedLandColumn)
+    z0 = canopy_roughness(s.z_top, s.LAI + s.SAI, s.veg.R_z0m, s.veg.R_d, s.soil.z0m).z0m
+    return (z0m = z0, z0h = z0, z0q = z0)
+end
+"Effective shortwave albedo of canopy and ground for the current sun (last step)."
+surface_albedo(s::VegetatedLandColumn) = s.albedo
+"""
+Effective longwave emissivity of canopy over ground:
+``1 - (1-ε_g)(1-ε_v)²``, the complement of the sky radiation reflected back.
+"""
+function surface_emissivity(s::VegetatedLandColumn)
+    εv = -expm1(-(s.LAI + s.SAI))
+    return 1 - (1 - s.soil.emissivity) * (1 - εv)^2
+end
+"The root-zone soil-water stress factor β_t ([`soil_water_stress`](@ref))."
+moisture_availability(s::VegetatedLandColumn) = soil_water_stress(s.stress, s.soil, s.roots)[1]
+"Latent heat of vaporisation at the leaf temperature."
+surface_latent_heat(s::VegetatedLandColumn; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    latent_heat_vapor(s.T_v, c.thermo)
+
+"""
+    radiative_temperature(s::VegetatedLandColumn; Ldown = 0) -> K
+
+The temperature of a black body emitting the column's upwelling longwave
+emission (leaf and ground, excluding reflected sky radiation for
+`Ldown = 0`), ``[L↑_{emitted}/(ε σ)]^{1/4}`` with the effective
+[`surface_emissivity`](@ref).
+"""
+function radiative_temperature(s::VegetatedLandColumn; Ldown::Real = 0.0)
+    c = s.soil.water.constants
+    lw = bigleaf_longwave(Ldown, s.T_v, s.soil.T_skin, s.LAI + s.SAI;
+                          ε_ground = s.soil.emissivity, σ_SB = c.σ_SB)
+    reflected = (1 - s.soil.emissivity) * (1 - lw.ε_v)^2 * Ldown
+    return ((lw.upward - reflected) / (surface_emissivity(s) * c.σ_SB))^(1 / 4)
+end
+
+# ---- helpers --------------------------------------------------------------------
+
+# dq_sat/dT from Clausius–Clapeyron with the Kirchhoff L_v of MoistThermodynamics.
+function _dqsat_dT(T, p, thermo)
+    es = saturation_vapor_pressure(T, thermo)
+    ε = molmass_ratio(thermo)
+    den = p - (1 - ε) * es
+    des = latent_heat_vapor(T, thermo) * es / (R_v(thermo) * T^2)
+    return ε * p * des / den^2
+end
+
+# Canopy-integrated capacity factors of the sunlit and shaded big leaves,
+# per unit leaf area of each, relative to the canopy top (CLM4.5 8.20-8.23).
+function _capacity_factors(Kn, kb, L, Lsun)
+    L <= 0 && return (1.0, 1.0)
+    tot = -expm1(-Kn * L) / Kn
+    sun = isfinite(kb) ? -expm1(-(Kn + kb) * L) / (Kn + kb) : 0.0
+    Lsha = L - Lsun
+    fsun = Lsun > 1e-12 ? sun / Lsun : 1.0
+    fsha = Lsha > 1e-12 ? (tot - sun) / Lsha : 1.0
+    return (fsun, fsha)
+end
+
+_scale_capacity(p::C3Parameters, f) =
+    C3Parameters(p.Vcmax25 * f, p.Jmax25 * f, p.Tp25 * f, p.Rd25 * f, p.Kc25, p.Ko25,
+                 p.Γstar25, p.o_ref, p.Φ_PSII, p.Θ_PSII, p.Θ_cj, p.Θ_ip, p.temperature)
+_scale_capacity(p::C4Parameters, f) =
+    C4Parameters(p.Vcmax25 * f, p.kp25 * f, p.Rd25 * f, p.α, p.Θ_cj, p.Θ_ip,
+                 p.Vcmax_T, p.kp_T, p.Rd_T)
+
+# Shortwave of both bands for the current sun.
+function _canopy_shortwave(s::VegetatedLandColumn, sw)
+    v = s.veg
+    αg = s.soil.albedo
+    fdif = clamp(s.diffuse_fraction, 0.0, 1.0)
+    fpar = s.par_fraction
+    vis = bigleaf_shortwave(fpar * sw * (1 - fdif), fpar * sw * fdif, s.cosz, s.LAI;
+                            σ = v.ρ_vis + v.τ_vis, α_ground = αg, Ω = v.Ω)
+    nir = bigleaf_shortwave((1 - fpar) * sw * (1 - fdif), (1 - fpar) * sw * fdif, s.cosz, s.LAI;
+                            σ = v.ρ_nir + v.τ_nir, α_ground = αg, Ω = v.Ω)
+    return vis, nir
+end
+
+# Sunlit/shaded leaf gas exchange at leaf temperature Tv.
+function _stomata(s::VegetatedLandColumn, vis, Tv, e_ac, gb_mol, p, β)
+    v = s.veg
+    fsun, fsha = _capacity_factors(v.K_n, vis.k_b, s.LAI, vis.L_sun)
+    Qsun = vis.L_sun > 1e-12 ? par_to_photon_flux(vis.sunlit / vis.L_sun) : 0.0
+    Qsha = vis.L_sha > 1e-12 ? par_to_photon_flux(vis.shaded / vis.L_sha) : 0.0
+    kw = (ca = s.co2, T_leaf = Tv, e_air = e_ac, gb = gb_mol, p_air = p, β = β,
+          stress_targets = v.stress_targets)
+    sun = vis.L_sun > 1e-12 ?
+          leaf_gas_exchange(_scale_capacity(v.photosynthesis, fsun), v.stomata; Q = Qsun, kw...) :
+          nothing
+    sha = vis.L_sha > 1e-12 ?
+          leaf_gas_exchange(_scale_capacity(v.photosynthesis, fsha), v.stomata; Q = Qsha, kw...) :
+          nothing
+    return sun, sha
+end
+
+"""
+    net_radiation(s::VegetatedLandColumn, forcing; c) -> W m⁻²
+
+Net radiation of canopy plus ground for the current state and sun:
+absorbed shortwave of both bands ([`bigleaf_shortwave`](@ref)) plus the
+net longwave ([`bigleaf_longwave`](@ref)).
+"""
+function net_radiation(s::VegetatedLandColumn, f::SurfaceForcing;
+                       c::SurfaceConstants = s.soil.water.constants)
+    vis, nir = _canopy_shortwave(s, f.sw_down)
+    lw = bigleaf_longwave(f.lw_down, s.T_v, s.soil.T_skin, s.LAI + s.SAI;
+                          ε_ground = s.soil.emissivity, σ_SB = c.σ_SB)
+    return vis.sunlit + vis.shaded + vis.ground + nir.sunlit + nir.shaded + nir.ground +
+           lw.canopy + lw.ground
+end
+
+"""
+    step_surface!(s::VegetatedLandColumn, forcing, dt; cosz = s.cosz,
+                  diffuse_fraction = s.diffuse_fraction, co2 = s.co2,
+                  gustiness = 0) -> SurfaceFluxes
+
+Advance the vegetated column by `dt` seconds: canopy iteration (surface
+layer, stomata, leaf energy balance, canopy air), then soil heat with the
+ground balance linearised in the ground temperature, then soil water with
+rain, dew, ground evaporation and root uptake. Returns the column's
+`SurfaceFluxes` (canopy + ground; ``R_n - H - LE - G`` equals the canopy
+residual, ≈ 0). Details in [`VegetatedLandColumn`](@ref); the component
+fluxes are in `s.last` ([`LandSurfaceDiagnostics`](@ref)).
+"""
+function step_surface!(s::VegetatedLandColumn, f::SurfaceForcing, dt::Real;
+                       cosz::Real = s.cosz, diffuse_fraction::Real = s.diffuse_fraction,
+                       co2::Real = s.co2, gustiness::Real = 0.0)
+    dt > 0 || throw(ArgumentError("step_surface!: dt > 0"))
+    s.cosz, s.diffuse_fraction, s.co2 = Float64(cosz), Float64(diffuse_fraction), Float64(co2)
+    soil = s.soil
+    c = soil.water.constants
+    th = c.thermo
+    v = s.veg
+    LS = s.LAI + s.SAI
+    p = f.p
+    qa = PhasePartition(f.q_air)
+    ρ = air_density(f.T_air, p, qa, th)
+    cp = heat_capacity_moist(qa, th)
+    θa = f.T_air + dry_adiabatic_lapse_rate(qa, th) * f.z_ref
+    rough = canopy_roughness(s.z_top, LS, v.R_z0m, v.R_d, soil.z0m)
+    z0, d = rough.z0m, rough.d
+    zm = f.z_ref - d
+    zm > z0 || throw(ArgumentError("step_surface!: reference height $(f.z_ref) m must exceed d + z0 = $(d + z0) m"))
+    Tg0 = soil.T_skin
+
+    # --- radiation that does not depend on temperatures
+    vis, nir = _canopy_shortwave(s, f.sw_down)
+    SWv = vis.sunlit + vis.shaded + nir.sunlit + nir.shaded
+    SWg = vis.ground + nir.ground
+    SWup = vis.reflected + nir.reflected
+    s.albedo = f.sw_down > 0 ? SWup / f.sw_down : s.albedo
+
+    # --- soil water stress and ground evaporation efficiency
+    βt, wlay = soil_water_stress(s.stress, soil, s.roots)
+    βsoil0 = moisture_availability(soil.water)
+    qg = saturation_specific_humidity(Tg0, p, th)
+    σSB = c.σ_SB
+    εg = soil.emissivity
+
+    Tv, Tac, qac = s.T_v, s.T_ac, s.q_ac
+    Tac = isfinite(Tac) ? Tac : f.T_air
+    ca = caw = cv = cvw = cg = cgw = 0.0
+    us = rah = 0.0
+    sun = sha = nothing
+    gb_mol = 0.0
+    λv = latent_heat_vapor(Tv, th)
+    iters, conv = 0, false
+    for it in 1:s.maxiter
+        iters = it
+        # surface layer above the canopy (SurfaceExchange)
+        sol = solve_surface_layer(s.sf; U = f.U, z_m = zm, θ_a = θa, θ_s = Tac,
+                                  q_a = f.q_air, q_s = qac, z0m = z0, z0h = z0, z0q = z0,
+                                  c = c, U_min = s.U_min, gustiness = gustiness)
+        us = sol.u_star
+        ca = sol.C_H * sol.U
+        caw = sol.C_E * sol.U
+        rah = 1 / ca
+        # leaf boundary layer (Photosynthesis) at U = u*, per unit leaf area
+        gb_mol = leaf_boundary_layer_conductance(us, f.T_air, p; d_leaf = v.d_leaf, c = th)
+        mol_per_m = molar_conductance(1.0, f.T_air, p; c = th)          # mol m⁻³
+        gb = gb_mol / mol_per_m                                         # m s⁻¹
+        cv = LS * gb
+        # below the canopy
+        Cs = undercanopy_transfer_coefficient(us, LS, soil.z0m; T_ac = Tac, T_g = Tg0,
+                                              z_top = s.z_top, g = grav(c), κ = c.κ)
+        cg = Cs * us
+        βsoil = qg < qac ? 1.0 : βsoil0                                  # condensation onto soil
+        cgw = βsoil * cg
+        # stomata of the sunlit and shaded leaves
+        eac = vapor_pressure(qac, p, th)
+        if s.LAI > 0
+            sun, sha = _stomata(s, vis, Tv, eac, gb_mol, p, βt)
+        end
+        cvw_t = 0.0
+        if βt > 0
+            sun === nothing || (cvw_t += vis.L_sun * gb * (sun.gs / mol_per_m) / (gb + sun.gs / mol_per_m))
+            sha === nothing || (cvw_t += vis.L_sha * gb * (sha.gs / mol_per_m) / (gb + sha.gs / mol_per_m))
+        end
+        # Newton on the leaf energy balance with the conductances fixed
+        Tv_old, Tac_old = Tv, Tac
+        Σh = ca + cg + cv
+        for _ in 1:(LS > 0 ? 50 : 0)             # no canopy: nothing to balance
+            qv = saturation_specific_humidity(Tv, p, th)
+            dqv = _dqsat_dT(Tv, p, th)
+            cvw = qv > qac ? cvw_t : LS * gb          # dew wets all leaf and stem area
+            Σw = caw + cgw + cvw
+            λv = latent_heat_vapor(Tv, th)
+            lw = bigleaf_longwave(f.lw_down, Tv, Tg0, LS; ε_ground = εg, σ_SB = σSB)
+            Hv = -ρ * cp * (ca * θa + cg * Tg0 - (ca + cg) * Tv) * cv / Σh
+            Ev = Σw > 0 ? -ρ * (caw * f.q_air + cgw * qg - (caw + cgw) * qv) * cvw / Σw : 0.0
+            F = SWv + lw.canopy - Hv - λv * Ev
+            εv = lw.ε_v
+            dlw = -(2 - εv * (1 - εg)) * εv * 4σSB * Tv^3
+            dHv = ρ * cp * (ca + cg) * cv / Σh
+            dEv = Σw > 0 ? ρ * (caw + cgw) * cvw / Σw * dqv : 0.0
+            dF = dlw - dHv - λv * dEv
+            ΔT = -F / dF
+            ΔT = clamp(ΔT, -10.0, 10.0)
+            Tv += ΔT
+            abs(ΔT) < 1e-10 && break
+        end
+        qv = saturation_specific_humidity(Tv, p, th)
+        cvw = qv > qac ? cvw_t : LS * gb
+        # Canopy air from flux continuity; under-relaxed after 10 iterations,
+        # which breaks the limit cycle the stability switch of the surface
+        # layer can otherwise sustain near neutral (H ≈ 0 at dusk).
+        ω = it <= 10 ? 1.0 : 0.5
+        Σw = caw + cgw + cvw
+        Tac += ω * ((ca * θa + cg * Tg0 + cv * Tv) / Σh - Tac)
+        qac += ω * ((caw * f.q_air + cgw * qg + cvw * qv) / Σw - qac)
+        if it > 1 && abs(Tv - Tv_old) < s.tol_T && abs(Tac - Tac_old) < s.tol_T
+            conv = true
+            break
+        end
+    end
+
+    # --- canopy fluxes at the solution (T_g at the start of the step)
+    qv = saturation_specific_humidity(Tv, p, th)
+    Σh = ca + cg + cv
+    Σw = caw + cgw + cvw
+    λv = latent_heat_vapor(Tv, th)
+    lw = bigleaf_longwave(f.lw_down, Tv, Tg0, LS; ε_ground = εg, σ_SB = σSB)
+    Hv = -ρ * cp * (ca * θa + cg * Tg0 - (ca + cg) * Tv) * cv / Σh
+    Ev = Σw > 0 ? -ρ * (caw * f.q_air + cgw * qg - (caw + cgw) * qv) * cvw / Σw : 0.0
+    Rnv = SWv + lw.canopy
+    leaf_res = Rnv - Hv - λv * Ev
+
+    # --- ground: linearised balance handed to the soil heat solver
+    λg = latent_heat_vapor(Tg0, th)
+    Hg0 = -ρ * cp * (ca * θa + cv * Tv - (ca + cv) * Tg0) * cg / Σh
+    dHg = ρ * cp * cg * (ca + cv) / Σh
+    Eg0 = Σw > 0 ? -ρ * (caw * f.q_air + cvw * qv - (caw + cvw) * qg) * cgw / Σw : 0.0
+    dEg = Σw > 0 ? ρ * cgw * (caw + cvw) / Σw * _dqsat_dT(Tg0, p, th) : 0.0
+    Rng0 = SWg + lw.ground
+    dRng = -4εg * σSB * Tg0^3
+    if soil.hydrology && Eg0 > 0
+        # the top layer cannot evaporate more liquid than it holds
+        Emax = c.ρ_water * max(soil.water.θ_liq[1] - SoilColumn._liquid_floor(soil, 1), 0.0) *
+               soil.water.grid.dz[1] / dt
+        if Eg0 > Emax
+            φ = Emax / Eg0
+            Eg0 *= φ; dEg *= φ
+        end
+    end
+    G0 = Rng0 - Hg0 - λg * Eg0
+    D = dRng - dHg - λg * dEg
+    st = step_soil_heat!(soil, dt, LinearizedSkinBalance(G0, D, Tg0))
+    ΔTg = st.T_skin_mean - Tg0
+    Hg = Hg0 + dHg * ΔTg
+    Eg = Eg0 + dEg * ΔTg
+    Rng = Rng0 + dRng * ΔTg
+    LEg = λg * Eg
+    G = Rng - Hg - LEg                        # == st.G: the linearised skin balance
+
+    # --- water: rain and leaf dew in, ground evaporation, root uptake
+    Et = max(Ev, 0.0)
+    Edew = max(-Ev, 0.0)
+    ρw = c.ρ_water
+    if soil.hydrology
+        sink = root_water_uptake(Et, s.roots, wlay, βt; ρ_w = ρw)
+        ws = step_soil_water!(soil, dt; water_input = f.rain / ρw + Edew / ρw,
+                              evaporation = Eg / ρw, sink = sink)
+        s.budget.ground_evaporation += ws.evaporation * ρw
+        s.budget.latent_mismatch += (Eg * dt - ws.evaporation * ρw) * λg
+    end
+
+    # --- canopy air at the new ground temperature, for the next step
+    Tg1 = soil.T_skin
+    qg1 = saturation_specific_humidity(Tg1, p, th)
+    s.T_v = Tv
+    s.T_ac = (ca * θa + cg * Tg1 + cv * Tv) / Σh
+    s.q_ac = Σw > 0 ? (caw * f.q_air + cgw * qg1 + cvw * qv) / Σw : f.q_air
+
+    Rn = Rnv + Rng
+    H = Hv + Hg
+    LE = λv * Ev + LEg
+    E = Ev + Eg
+    τ = ρ * us^2
+    An_sun = sun === nothing ? 0.0 : sun.An
+    An_sha = sha === nothing ? 0.0 : sha.An
+    GPP = (sun === nothing ? 0.0 : sun.A * vis.L_sun) + (sha === nothing ? 0.0 : sha.A * vis.L_sha)
+    s.last = LandSurfaceDiagnostics(Rnv, Rng, SWv, SWg, SWup, Hv, Hg, λv * Ev, LEg, G,
+                                    Et, Edew, Eg, βt, βsoil0, GPP,
+                                    An_sun * vis.L_sun, An_sha * vis.L_sha,
+                                    sun === nothing ? 0.0 : sun.gs, sha === nothing ? 0.0 : sha.gs,
+                                    vis.L_sun, vis.L_sha, Tv, st.T_skin_mean, s.T_ac, s.q_ac,
+                                    us, rah, leaf_res, iters, conv)
+    b = s.budget
+    b.Rn += Rn * dt; b.H += H * dt; b.LE += LE * dt; b.G += G * dt
+    b.leaf_residual += leaf_res * dt
+    b.rain += f.rain * dt; b.transpiration += Et * dt; b.dew += Edew * dt
+    b.snow_ignored += f.snow * dt; b.time += dt
+    return SurfaceFluxes(promote(Rn, H, LE, G, τ, E)...)
+end
 
 end # module
