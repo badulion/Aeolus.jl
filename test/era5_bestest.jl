@@ -130,10 +130,12 @@ const A140_QUANTITIES = (("annual_heating_MWh", :heating), ("annual_cooling_MWh"
             end
         end
         @info @sprintf("other sensitivities: %d/%d inside the reference range", n_in, n)
-        # a regression floor at the measured count, not a physics claim: the
-        # misses are the solar-peak (250, 430), high-conductance element
-        # (400-395) and thermal-mass (800-430) differences discussed on the
-        # theory page
+        # a regression floor at the measured count, not a physics claim. The
+        # 11 misses: solar (250-220 heating and peak cooling, 430-420 peak
+        # cooling), the high-conductance element (400-395 heating and peak
+        # heating), thermal mass (800-430 cooling and both peaks) and
+        # infiltration cooling (230-220 cooling and peak cooling, 410-400
+        # peak cooling); see the theory page
         @test n_in >= 13
     end
 

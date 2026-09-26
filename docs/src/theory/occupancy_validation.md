@@ -142,8 +142,10 @@ compared:
 
 Plane-of-array irradiance comes from the Perez et al. (1990) model with
 ground reflectance 0.2, in the test driver `test/ashrae140_driver.jl`.
-The zone is stepped six times per hour; the results change by less than
-0.1 % between 6 and 12 steps per hour. Each case gets a 31-day warm-up
+The zone is stepped six times per hour. Going to 12 steps per hour
+changes every annual heating load and every peak by less than 0.04 %,
+and the annual cooling loads by at most 0.12 % (Case 400, whose annual
+cooling is only 0.025 MWh). Each case gets a 31-day warm-up
 before the year.
 
 **Results (explicit long-wave).**
@@ -169,8 +171,18 @@ physics:
 
 **Where it misses, and why.**
 
+The 11 misses among the other sensitivities are, in full: 250−220
+annual heating and peak cooling, 430−420 peak cooling (solar); 400−395
+annual and peak heating (high-conductance element); 800−430 annual
+cooling and both peaks (thermal mass); and 230−220 annual and peak
+cooling and 410−400 peak cooling (infiltration: +0.408 MWh vs
+0.379–0.399, +0.731 kW vs 0.620–0.726, +0.259 kW vs 0.168–0.252 — the
+infiltration adds slightly too much cooling). The causes below are
+likely, not demonstrated.
+
 1. *Solar-driven peaks.* Case 250 peak cooling and the 430−420 and
-   250−220 peak differences are low. Constant exterior convective
+   250−220 peak differences are low, and so is the heating saved by
+   the dark exterior (250−220: −1.476 MWh vs −1.805 … −1.556). Constant exterior convective
    coefficients represent the annual mean wind (4.02 m s⁻¹, per the
    Standard). The reference programs compute wind- and
    temperature-dependent coefficients, which are lower on calm, sunny
