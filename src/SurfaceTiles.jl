@@ -77,8 +77,9 @@ export SurfaceMosaic, ntiles, mosaic_fractions, set_mosaic_fractions!,
 # =========================================================================
 
 # Validate and normalise area fractions. Normalising (rather than only
-# checking) makes Σ f = 1 hold to the last bit that floating point
-# allows, so the aggregate conserves what the tiles conserve.
+# checking) removes the user's O(atol) error, so Σ f = 1 holds to
+# rounding (a few ulp; dividing by the sum does not make the
+# floating-point sum exactly 1 in general).
 function _checked_fractions(f::AbstractVector{<:Real}, n::Integer; atol::Real = 1e-6)
     length(f) == n ||
         throw(DimensionMismatch("SurfaceTiles: $(length(f)) fractions for $n tiles"))
@@ -103,7 +104,8 @@ of `AbstractSurface`s, which may be of different types — including
 other `SurfaceMosaic`s) covering area fractions `fractions`.
 
 Fractions must be non-negative and sum to one within `atol`; they are
-then renormalised so the sum is exact. A zero-fraction tile is allowed
+then renormalised by their sum, so they sum to one to rounding (a few
+ulp). A zero-fraction tile is allowed
 (it is still stepped, but carries no weight), which is how a tile that
 appears seasonally — snow, a flooded patch — is kept warm.
 
@@ -147,7 +149,7 @@ SurfaceMosaic(tiles::Union{Tuple,AbstractVector}, fractions::Tuple; kw...) =
 "Number of tiles in a [`SurfaceMosaic`](@ref)."
 ntiles(ts::SurfaceMosaic) = length(ts.tiles)
 
-"Area fractions of the tiles of a [`SurfaceMosaic`](@ref) (sum exactly 1)."
+"Area fractions of the tiles of a [`SurfaceMosaic`](@ref) (renormalised; sum 1 to rounding)."
 mosaic_fractions(ts::SurfaceMosaic) = ts.fractions
 
 """

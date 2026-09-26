@@ -82,6 +82,13 @@ _maxrel(a, b) = maximum(abs(x - y) / max(abs(x), abs(y), 1e-300)
         # Fractions within tolerance are renormalised to sum exactly to one.
         m2 = SurfaceMosaic((SlabLand(), SlabLand()), (0.3 + 1e-9, 0.7))
         @test sum(mosaic_fractions(m2)) ≈ 1 atol = 2eps()
+        # Renormalisation is exact only to rounding: Σ f of x ./ sum(x) can be
+        # off by an ulp, never more than a few.
+        worst_sum = maximum(1:2000) do k
+            x = [mod(0.6180339887 * k * j, 1.0) + 1e-3 for j in 1:(2 + k % 6)]
+            abs(sum(mosaic_fractions(SurfaceMosaic([SlabLand() for _ in x], x ./ sum(x)))) - 1)
+        end
+        @test worst_sum <= 4eps()
         @test_throws ArgumentError SurfaceMosaic([SlabLand(), SlabLand()], [0.5, 0.6])
         @test_throws ArgumentError SurfaceMosaic([SlabLand(), SlabLand()], [-0.1, 1.1])
         @test_throws DimensionMismatch SurfaceMosaic([SlabLand()], [0.5, 0.5])
