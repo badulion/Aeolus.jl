@@ -89,6 +89,9 @@ sink it exerts on the resolved flow:
   * Leuzinger, S. & Körner, C. (2007). Tree species diversity affects
     canopy leaf temperatures in a mature temperate forest. *Agric. For.
     Meteorol.*, 146, 29-37 (observed leaf-to-air temperature differences).
+  * Incropera, F. P., DeWitt, D. P., Bergman, T. L. & Lavine, A. S. (2007).
+    *Fundamentals of Heat and Mass Transfer*, 6th ed. Wiley — the laminar
+    flat-plate correlations behind the Campbell & Norman coefficients.
 """
 module PlantCanopy
 
@@ -1315,16 +1318,18 @@ Leaf boundary layer of Campbell & Norman (1998, ch. 7) for a flat leaf of
 width `leaf_width` [m], characteristic dimension ``d = 0.72 w``. Per leaf
 side, in mol m⁻² s⁻¹:
 
-  * forced convection (laminar flat plate, their eqs. 7.30 and 7.33),
-    multiplied by `turbulence_factor` for outdoor turbulence (the factor
+  * forced convection (laminar flat plate), multiplied by `turbulence_factor` for outdoor turbulence (the factor
     1.4 they recommend):
     ``g_{Ha} = 0.135\\sqrt{u/d}``, ``g_{va} = 0.147\\sqrt{u/d}``;
-  * free convection (their eqs. 7.36–7.37):
+  * free convection (laminar, heated plate):
     ``g_{Ha} = 0.05\\,(|T_\\ell - T_a|/d)^{1/4}``,
     ``g_{va} = 0.055\\,(|T_\\ell - T_a|/d)^{1/4}``;
 
 the larger of the two is used (`free_convection = false` keeps only the
-forced value). The heat conductance of the leaf is that of both sides,
+forced value). These are the textbook flat-plate correlations
+``\\overline{Nu} = 0.664\\,Re^{1/2}Pr^{1/3}`` and ``\\overline{Nu} = 0.54\\,Ra^{1/4}``
+(Incropera et al. 2007, chs. 7 and 9) evaluated for air at 20 °C;
+`test/era5_leaf_energy.jl` re-derives them to 1–3 %. The heat conductance of the leaf is that of both sides,
 ``2g_{Ha}``; the vapour conductance is ``n\\,g_{va}`` with `n =
 stomatal_sides` = 1 for hypostomatous leaves (most broadleaf trees) and
 2 for amphistomatous ones. The coefficients are C&N's values at 20 °C and

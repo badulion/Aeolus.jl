@@ -33,8 +33,8 @@ end
     d = 0.72 * 0.05
     for U in (0.1, 0.5, 1.0, 2.0, 5.0)
         gH, gv = leaf_boundary_layer_conductances(bl, U, 300.0, 298.0, 101325.0)
-        @test gH ≈ 2 * 1.4 * 0.135 * sqrt(U / d) rtol = 1e-14      # C&N eq. 7.30, both sides
-        @test gv ≈ 1.4 * 0.147 * sqrt(U / d) rtol = 1e-14          # eq. 7.33, one stomatal side
+        @test gH ≈ 2 * 1.4 * 0.135 * sqrt(U / d) rtol = 1e-14      # C&N ch. 7, both sides
+        @test gv ≈ 1.4 * 0.147 * sqrt(U / d) rtol = 1e-14          # C&N ch. 7, one stomatal side
     end
     # √U scaling of forced convection
     g1 = leaf_boundary_layer_conductances(bl, 1.0, 300.0, 298.0, 1e5)[1]
@@ -46,7 +46,7 @@ end
           2 * leaf_boundary_layer_conductances(bl, 1.0, 300.0, 298.0, 1e5)[2]
     @test leaf_boundary_layer_conductances(bl2, 1.0, 300.0, 298.0, 1e5)[1] ==
           leaf_boundary_layer_conductances(bl, 1.0, 300.0, 298.0, 1e5)[1]
-    # free convection: the floor in still air, (ΔT/d)^¼ (C&N eq. 7.36)
+    # free convection: the floor in still air, (ΔT/d)^¼ (C&N ch. 7)
     blf = CampbellNormanBoundaryLayer(leaf_width = 0.05)
     for ΔT in (1.0, 5.0, 16.0)
         gH, gv = leaf_boundary_layer_conductances(blf, 0.0, 298.0 + ΔT, 298.0, 1e5)
@@ -54,6 +54,37 @@ end
         @test gv ≈ 0.055 * (ΔT / d)^0.25 rtol = 1e-14
     end
     @test leaf_boundary_layer_conductances(blf, 0.0, 298.0, 298.0, 1e5) == (0.0, 0.0)
+    # The C&N coefficients are not free parameters: they are the laminar
+    # flat-plate correlations (Incropera, DeWitt, Bergman & Lavine 2007,
+    # Fundamentals of Heat and Mass Transfer, 6th ed.) for air at 20 °C,
+    # 101.325 kPa. Forced: mean Nu = 0.664 Re^½ Pr^⅓ (ch. 7), so
+    # g = 0.664 Pr^⅓ κ ρ̂/√ν · √(u/d); free: Nu = 0.54 Ra^¼ (ch. 9, hot
+    # plate facing up), g = 0.54 (g/(T ν κ))^¼ κ ρ̂ · (ΔT/d)^¼, with Sc and
+    # D_v in place of Pr and κ for vapour. Air properties: ν, κ linearly
+    # interpolated from Incropera Table A.4 (250 K: 11.44, 15.9; 300 K:
+    # 15.89, 22.5 × 10⁻⁶ m² s⁻¹); D_v = 21.78 × 10⁻⁶ (T/273.15)^1.81
+    # m² s⁻¹ (Massman 1998, Atmos. Environ. 32, 1111). ρ̂ = p/(R T).
+    let T = 293.15, p = 101325.0
+        w = (T - 250) / 50
+        ν = (11.44 + w * (15.89 - 11.44)) * 1e-6
+        κ = (15.9 + w * (22.5 - 15.9)) * 1e-6
+        Dv = 21.78e-6 * (T / 273.15)^1.81
+        ρ̂ = p / (DEFAULT_CONSTANTS.gas_constant * T)
+        forced(D) = 0.664 * (ν / D)^(1 / 3) * D * ρ̂ / sqrt(ν)
+        free(D) = 0.54 * (9.81 / (T * ν * D))^(1 / 4) * D * ρ̂
+        @printf("  flat-plate derivation: forced %.4f / %.4f (C&N 0.135 / 0.147), free %.4f / %.4f (C&N 0.050 / 0.055)\n",
+                forced(κ), forced(Dv), free(κ), free(Dv))
+        # per side, one-sided vapour, free_convection off → the C&N forced coefficients
+        cn1 = CampbellNormanBoundaryLayer(leaf_width = 1 / 0.72, turbulence_factor = 1.0,
+                                          free_convection = false)
+        gH1, gv1 = leaf_boundary_layer_conductances(cn1, 1.0, T, T, p)   # √(u/d) = 1
+        @test gH1 / 2 ≈ forced(κ) rtol = 0.02
+        @test gv1 ≈ forced(Dv) rtol = 0.02
+        cn0 = CampbellNormanBoundaryLayer(leaf_width = 1 / 0.72)
+        gH0, gv0 = leaf_boundary_layer_conductances(cn0, 0.0, T + 1.0, T, p)  # (ΔT/d)^¼ = 1
+        @test gH0 / 2 ≈ free(κ) rtol = 0.05
+        @test gv0 ≈ free(Dv) rtol = 0.05
+    end
     # forced convection wins at ordinary wind speeds
     @test leaf_boundary_layer_conductances(blf, 1.0, 303.0, 298.0, 1e5)[1] ≈ g1
     # CLM delegates to Photosynthesis (one source of truth): 20 s m⁻¹ at 1 m s⁻¹, 20 °C

@@ -242,7 +242,11 @@ layer.
 Norman's flat-plate conductances per leaf side, forced
 ``g_{Ha} = 0.135\sqrt{u/d}``, ``g_{va} = 0.147\sqrt{u/d}`` (× 1.4 for outdoor
 turbulence, ``d = 0.72 ×`` leaf width), and free convection
-``g_{Ha} = 0.05\,(ΔT/d)^{1/4}``, taking the larger. `CLMLeafBoundaryLayer`
+``g_{Ha} = 0.05\,(ΔT/d)^{1/4}``, taking the larger. These coefficients are
+the laminar flat-plate correlations (``\overline{Nu} = 0.664\,Re^{1/2}Pr^{1/3}``
+forced, ``0.54\,Ra^{1/4}`` free; Incropera et al. 2007) evaluated for air
+at 20 °C: the test re-derives them from tabulated air properties to within
+1.2 % (forced) and 2.8 % (free). `CLMLeafBoundaryLayer`
 is CLM5's ``C_v\sqrt{U/d}`` (delegated to `Photosynthesis`). For a 4 cm
 leaf in 1 m s⁻¹ wind the two give 1.89 and 2.08 mol m⁻² s⁻¹ for heat.
 
@@ -288,6 +292,7 @@ the air.
 
 | Check | Reference | Measured |
 | :-- | :-- | --: |
+| C&N boundary-layer coefficients 0.135/0.147 (forced), 0.050/0.055 (free) | laminar flat-plate correlations, air at 20 °C | 0.1359/0.1488, 0.0486/0.0539 (≤ 2.8 %) |
 | Single-leaf energy closure (300 cases: fixed and coupled stomata, both boundary layers, wind, light, humidity, T) | ``R_{abs} = εσT^4 + H + LE`` | ``1.7\times10^{-14}`` rel. |
 | Isothermal net radiation zero in saturated air | ``T_\ell = T_a`` | ``< 10^{-9}`` K |
 | No radiation, ``g_s → ∞``, ``g_H = g_v`` | psychrometer equation by bisection | ``< 10^{-6}`` K (``ΔT = -8.74`` K at 40 % RH, 25 °C) |
@@ -362,6 +367,8 @@ assert this second figure.
 - Harman, I. N. & Finnigan, J. J. (2007). A simple unified theory for
   flow in the canopy and roughness sublayer. *Boundary-Layer Meteorol.*,
   123, 339–363.
+- Incropera, F. P., DeWitt, D. P., Bergman, T. L. & Lavine, A. S.
+  (2007). *Fundamentals of Heat and Mass Transfer*, 6th ed. Wiley.
 - Inoue, E. (1963). On the turbulent structure of airflow within crop
   canopies. *J. Meteorol. Soc. Japan*, 41, 317–326.
 - Leuzinger, S. & Körner, C. (2007). Tree species diversity affects
