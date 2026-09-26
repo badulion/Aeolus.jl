@@ -170,7 +170,7 @@ stated otherwise the conditions are 25 °C, 400 W m⁻² PAR (85 % absorbed),
 | Ball-Berry root | defining equation / CLM `ci_func` quadratic | 4 × 10⁻¹⁶ / 2 × 10⁻¹² |
 | Medlyn root | defining equation / CLM5 eqs. 2.9.24–26 | 5 × 10⁻¹⁵ / 3 × 10⁻¹⁶ |
 | Medlyn ``g_s - g_0 ∝ D^{-1/2}``, ``∝ A``, ``∝ 1/c_s`` | closed form | log-slope −0.5 to 10⁻¹² |
-| ``c_i/c_a = g_1/(g_1+\sqrt{D})`` (32 cases) | Medlyn et al. (2011) | max abs. error 9.4 × 10⁻⁶ (the ``g_0`` floor) |
+| ``c_i/c_a = g_1/(g_1+\sqrt{D})`` (64 cases) | Medlyn et al. (2011) | max abs. error 9.4 × 10⁻⁶ (the ``g_0`` floor) |
 | ``A_n = g_c(c_a - c_i)`` = BL = pore flux (3456 cases) | CLM5 eq. 2.9.19 | 2.4 × 10⁻¹¹ relative; all converged |
 | H₂O flux continuity | CLM5 eq. 2.9.20 | 1.1 × 10⁻¹¹ (roundoff) |
 | ``c_i/c_a``, C3 PFTs × {Medlyn, Ball-Berry} | "≈ 0.7" for C3 | mean 0.719, range 0.638–0.811 |

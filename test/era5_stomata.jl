@@ -82,7 +82,7 @@ end
                             md.g0^2 + (2md.g0 + d * (1 - md.g1^2 / Da)) * d)
         worst_clm = max(worst_clm, abs(gs / gclm - 1))
     end
-    @test ncmp >= 100                   # 126 of the 432 cases are unbounded
+    @test ncmp >= 100                   # 126 of the 144 cases are unbounded
     @test worst_def < 1e-12
     @test worst_clm < 1e-9
     @info "Medlyn: defining-equation residual, CLM5-quadratic agreement" worst_def worst_clm ncmp
