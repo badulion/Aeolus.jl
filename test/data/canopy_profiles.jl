@@ -44,6 +44,14 @@ function canopy_profile_observations()
     #    hence a h = 0.4995 (agrees with Patton) and the tunnel's own
     #    C_d = 0.675. Patton (1997, Table 4.1) quotes C_d = 1.2 for the
     #    same canopy in the windbreak runs of Judd et al. (1996).
+    #    Huang et al. (2008, Table 1) list C_d = 1.35 and FAI = 0.47 for
+    #    the tunnel. Their text beside Table 1 notes that the tunnel's drag
+    #    law carries an extra factor 1/2 ("see Eqn. 12 in Brunet et al.
+    #    1994"), so in the F = C_d a |U| U form used here that is
+    #    h C_d a ≈ 1.35 × 0.47 / 2 = 0.32, consistent with the 0.337
+    #    (0.675 × 0.4995) used here. They also note that the tunnel C_d
+    #    varies with height (< 1 near the top to > 2 mid-canopy); a
+    #    constant C_d is used here.
     # ---------------------------------------------------------------------
     wind_tunnel = (
         name = "Brunet et al. (1994) wind-tunnel waving wheat",
