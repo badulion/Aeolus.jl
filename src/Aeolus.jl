@@ -64,6 +64,9 @@ include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 
+# --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53)
+include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
+
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -112,6 +115,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .Photosynthesis              # Phase 47
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -598,5 +602,12 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        roughness_lengths, moisture_availability,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
+
+# Phase 47 — Photosynthesis: Farquhar C3 / Collatz C4 leaf biochemistry,
+# Bernacchi / Kattge-Knorr temperature responses, CLM4.5 PFT parameters.
+export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
+       Q10Response, temperature_factor, optimum_temperature,
+       C3TemperatureResponses, bonan2011_c3_temperature,
+       kattge_knorr_c3_temperature, kattge_knorr_jmax_ratio
 
 end # module
