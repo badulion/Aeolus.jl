@@ -267,10 +267,15 @@ end
 
 """
     adding_solver!(flux_up, flux_dn, flux_dir, R_dif, T_dif, R_dir, T_dir,
-                   T_beam, sfc_alb_dif, sfc_alb_dir, F_top, μ₀)
+                   T_beam, sfc_alb_dif, sfc_alb_dir, F_top, μ₀; F_dif_top = 0)
 
 Combine per-layer reflectance/transmittance into level fluxes by the
 standard adding (doubling) equations, layers ordered bottom-up.
+
+`F_top·μ₀` is the direct beam on a horizontal plane at the top level and
+`F_dif_top` the diffuse flux entering from above (zero at the top of the
+atmosphere; the sky diffuse when the "column" is a plant canopy, see
+`PlantCanopy.canopy_shortwave`).
 
 The recursion builds the albedo of the composite "surface + all layers
 below level i" upward, then propagates the downward flux back down. The
@@ -284,7 +289,7 @@ function adding_solver!(flux_up::AbstractVector{T}, flux_dn::AbstractVector{T},
                         R_dir::AbstractVector{T}, T_dir::AbstractVector{T},
                         T_beam::AbstractVector{T},
                         sfc_alb_dif::T, sfc_alb_dir::T,
-                        F_top::T, μ₀::T) where {T}
+                        F_top::T, μ₀::T; F_dif_top::Real = zero(T)) where {T}
     nlay = length(R_dif)
     nlev = nlay + 1
 
@@ -308,7 +313,7 @@ function adding_solver!(flux_up::AbstractVector{T}, flux_dn::AbstractVector{T},
     end
 
     # --- downward sweep
-    flux_dn[nlev] = zero(T)                     # no diffuse from above TOA
+    flux_dn[nlev] = T(F_dif_top)                # diffuse entering from above
     flux_up[nlev] = A[nlev] * flux_dn[nlev] + S[nlev]
     for i in nlay:-1:1
         d = 1 / (1 - R_dif[i] * A[i])
