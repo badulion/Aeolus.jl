@@ -233,21 +233,22 @@ const OML = Aeolus.OceanMixedLayer
         Qd = -qo + sw * (1 - solar_transmission(zn.solar, zn.d))
         ΔT_neutral = Qd / (kw.ρ_w * kw.c_w * zn.ν * kw.κ * u)
         @test warm_layer_warming(zn) ≈ ΔT_neutral rtol = 1e-10
-        # Stable φ_t: the steady state solves ΔT·damping(ΔT) = source; find it
-        # by bisection and compare with the time-marched solution.
+        # Stable φ_t: closed form, written out here from IFS Cy43r3 Part IV
+        # eqs. 8.156-8.160 and independent of the module's tendency code.
+        # For ΔT > 0, φ_t = 1 + 5 d/L with d/L = a √ΔT,
+        # a = d κ (ν g α / 5d)^{1/2} / u*w, so the steady state
+        # ΔT = K φ_t / (κ u*w), K = Q_d/(ρ c ν), is a quadratic in x = √ΔT:
+        # κ u*w x² - 5 a K x - K = 0.
         z = ZengBeljaarsWarmLayer()
         # The lagged-φ implicit step converges at half the damping rate
         # (damping ∝ ΔT^{-1/2} here): ~8 h e-folding, so march 330 h.
         for _ in 1:20_000
             step_warm_layer!(z, sw, qo, τ, 60.0; kw...)
         end
-        f(x) = (AB = OML.zeng_beljaars_tendency(z, x, sw, qo, u; kw...); x * AB[2] - AB[1])
-        lo, hi = 1e-9, 20.0
-        for _ in 1:200
-            mid = (lo + hi) / 2
-            f(mid) > 0 ? (hi = mid) : (lo = mid)
-        end
-        @test warm_layer_warming(z) ≈ lo rtol = 1e-8
+        Kss = Qd / (kw.ρ_w * kw.c_w * z.ν)
+        a_ss = z.d * kw.κ * sqrt(z.ν * kw.g * kw.α / (5 * z.d)) / u
+        x_ss = (5a_ss * Kss + sqrt(25a_ss^2 * Kss^2 + 4kw.κ * u * Kss)) / (2kw.κ * u)
+        @test warm_layer_warming(z) ≈ x_ss^2 rtol = 1e-8
         @test warm_layer_warming(z) > ΔT_neutral        # stability suppresses mixing
         # More wind, less warming; net cooling erases the layer.
         z2 = ZengBeljaarsWarmLayer()
