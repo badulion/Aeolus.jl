@@ -53,6 +53,17 @@ sink it exerts on the resolved flow:
      for the air. [`leaf_penman_monteith`](@ref) is the linearised
      (Penman–Monteith) limit.
 
+  6. **Within-canopy profiles** — measured leaf-area profiles
+     ([`TabulatedLAD`](@ref)), the wall-limited canopy mixing length
+     ([`canopy_mixing_length`](@ref)), the displacement height as the
+     centroid of momentum absorption ([`canopy_displacement_height`](@ref)),
+     and the steady K-theory scalar column
+     ([`solve_canopy_scalar_column`](@ref)) with the Harman & Finnigan (2008)
+     diffusivity ([`harman_finnigan_scalar_diffusivity`](@ref)), which turns
+     the leaf heat sources of item 5 into an air-temperature profile. These
+     are what the #25 validation against wind-tunnel, orchard and forest
+     profiles uses (`test/era5_canopy_profiles.jl`).
+
 # References
 
   * Lalic, B. & Mihailovic, D. T. (2004). An empirical relation describing
@@ -91,7 +102,13 @@ sink it exerts on the resolved flow:
     Meteorol.*, 146, 29-37 (observed leaf-to-air temperature differences).
   * Incropera, F. P., DeWitt, D. P., Bergman, T. L. & Lavine, A. S. (2007).
     *Fundamentals of Heat and Mass Transfer*, 6th ed. Wiley — the laminar
-    flat-plate correlations behind the Campbell & Norman coefficients.
+    flat-plate correlations behind the Campbell & Norman coefficients.  * Harman, I. N. & Finnigan, J. J. (2008). Scalar concentration profiles
+    in the canopy and roughness sublayer. *Boundary-Layer Meteorol.*, 129,
+    323-351.
+  * Thom, A. S. (1971). Momentum absorption by vegetation. *Q. J. R.
+    Meteorol. Soc.*, 97, 414-428; Jackson, P. S. (1981). On the
+    displacement height in the logarithmic velocity profile. *J. Fluid
+    Mech.*, 111, 15-25.
 """
 module PlantCanopy
 

@@ -77,7 +77,7 @@ function canopy_profile_observations()
     #
     #    Displacement height from the within-canopy momentum-flux profiles
     #    in near-neutral conditions: d = 7.8 m with leaves, 5.8 m without
-    #    (Dupont & Patton 2022, BLM 183, 197-224, Table 1).
+    #    (Dupont & Patton 2022, BLM 184, 195-230, Table 1).
     #    Shear length L_s/h at the inflection point, NN: 0.32 with leaves,
     #    0.72 without (Dupont & Patton 2012a, Table 1).
     # ---------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 `PlantCanopy` resolves vegetation that spans several model layers
 (Phase 48). It owns the leaf-area-density profiles
-(`UniformLAD`, `LalicMihailovicLAD`, `BetaLAD`), the shortwave and
+(`UniformLAD`, `LalicMihailovicLAD`, `BetaLAD`, `TabulatedLAD`), the shortwave and
 longwave radiation through them, the leaf energy balance and leaf
 temperature, and the canopy drag
 ``-C_d a |U| U``, applied implicitly as ``U/(1 + Δt C_d a |U|)`` — the
@@ -78,6 +78,35 @@ temperature prognostic (backward Euler). `leaf_penman_monteith` gives the
 linearised solution. The theory and the comparison with measured leaf
 temperatures are in
 [Resolved plant canopy §5](../../theory/plant_canopy.md).
+
+## Within-canopy profiles
+
+A 1-D column gives the mean wind and, coupled to the leaf energy
+balance, the air temperature inside the canopy. With a measured
+leaf-area profile:
+
+```julia
+h  = 15.0
+p  = TabulatedLAD([0.0, 6.0, 8.3, 10.5, 12.8, 15.0], [0.0, 0.0, 0.70, 0.75, 0.20, 0.0]; LAI = 3.5)
+zf = collect(range(0, 1.5h; length = 301))
+lad = layer_leaf_area_density(p, zf)
+l_c = harman_finnigan_mixing_length(0.3, 0.15, leaf_area_index(p) / h)
+w  = solve_canopy_wind_column(zf, lad; C_d = 0.15, u_top = 5.0, bottom = :no_slip,
+                              l_mix = z -> canopy_mixing_length(z; h = h, l_c = l_c))
+canopy_displacement_height(w, lad; C_d = 0.15)       # m
+
+# air temperature from leaf heat sources S [K s⁻¹] per layer
+K  = [harman_finnigan_scalar_diffusivity(z; h = h, u_star = w.u_star, l_mix = l_c) for z in zf]
+S  = zeros(length(lad)); S[lad .> 0] .= 2e-3
+T  = solve_canopy_scalar_column(zf, K, S; top_value = 293.15, bottom_flux = 0.0)
+T.c, T.flux                                          # K; K m s⁻¹ at the faces
+```
+
+In a coupled run `S` is `canopy_leaf_energy_balance(...).heat_source`
+divided by ``ρc_p``, iterated with `T.c` as the leaves' air temperature.
+The comparison with a wind tunnel, the CHATS orchard and the Hyytiälä
+pine forest is in [Resolved plant canopy §6](../../theory/plant_canopy.md)
+and `examples/validation/canopy_profiles.jl`.
 
 ```@autodocs
 Modules = [Aeolus.PlantCanopy]

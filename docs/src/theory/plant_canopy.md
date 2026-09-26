@@ -6,8 +6,10 @@ as a roughness length. This page covers what `src/PlantCanopy.jl`
 implements for Phase 48: the vertical distribution of leaf area, the
 drag it exerts, treated implicitly so it is stable at any time step, and
 the attenuation of shortwave and longwave radiation through it
-(section 4), and the temperature of the leaves themselves from their
-energy balance (section 5).
+(section 4), the temperature of the leaves themselves from their
+energy balance (section 5), and the within-canopy wind and air
+temperature profiles that result, compared with a wind tunnel, an
+orchard and a forest tower (section 6).
 
 ## 1. Leaf-area density
 
@@ -21,6 +23,7 @@ normalised to its LAI by construction:
 | `UniformLAD(LAI, h; z_base)` | ``\mathrm{LAI}/(h - z_{base})`` on the crown | analytic theory, idealised cases |
 | `LalicMihailovicLAD(LAI, h; z_m)` | ``L_m r^n e^{n(1-r)}``, ``r = \frac{h-z_m}{h-z}``, ``n = 6`` below ``z_m``, ``1/2`` above | forests (Lalic & Mihailovic 2004) |
 | `BetaLAD(LAI, h; p, q)` | ``\frac{\mathrm{LAI}}{h}\frac{x^{p-1}(1-x)^{q-1}}{B(p,q)}``, ``x = z/h`` | flexible crown shapes (Markkanen et al. 2003) |
+| `TabulatedLAD(z, a; LAI)` | linear between measured nodes, optionally rescaled to a quoted LAI | measured profiles (section 6) |
 
 For Lalic–Mihailovic the peak ``L_m = a(z_m)`` is solved for so that the
 profile integrates to the given LAI.
@@ -349,12 +352,139 @@ assert this second figure.
   class's temperature, which is not tracked. The column's energy is
   conserved exactly only while the class leaf areas do not change.
 - Air temperature, humidity and wind are inputs per layer; the feedback
-  of the leaf sources on the in-canopy air is the LES's (or #25's) job.
+  of the leaf sources on the in-canopy air is the LES's job, or, in one
+  dimension, that of the scalar column of section 6.
+
+## 6. Within-canopy profiles and their validation
+
+### The 1-D column
+
+The steady mean wind of a horizontally homogeneous canopy is solved by
+`solve_canopy_wind_column` (section 3) with the mixing length
+`canopy_mixing_length`:
+
+```math
+l(z) = \min(l_c,\ κz)\quad (z ≤ h),\qquad l(z) = l_c + κ(z - h)\quad (z > h),
+\qquad l_c = 2β^3 \frac{h}{C_d\,\mathrm{LAI}},\ β = 0.3,
+```
+
+the Harman & Finnigan (2007) canopy length, limited by its wall value
+``κz`` near the ground and growing at the surface-layer rate above the
+canopy. The wall limit matters: with ``l = l_c`` down to a no-slip floor
+the first wind-tunnel comparison below put 13 % of the canopy-top stress
+on the floor (observed: none) and under-predicted the lower-canopy wind
+by 0.11 ``U_h``; with the limit the error is 0.02 ``U_h``.
+
+The zero-plane displacement is the centroid of momentum absorption,
+``d = \sum z\,C_d a U^2 Δz / (\sum C_d a U^2 Δz + τ_g)``
+(`canopy_displacement_height`; Thom 1971, Jackson 1981), the quantity
+tower studies infer from within-canopy momentum-flux profiles.
+
+A scalar ``c`` (potential temperature, humidity) with leaf sources ``S``
+obeys, in steady state, ``d/dz(K\,dc/dz) + S = 0``
+(`solve_canopy_scalar_column`). In one dimension the flux follows from
+the sources alone, ``F_{f+1} = F_f + S_kΔz_k``, so the discrete budget is
+exact; the profile is then integrated down from the top value. For
+heat the diffusivity is that of Harman & Finnigan (2008), as in the
+multilayer canopy of Bonan et al. (2018):
+``K_c = (l_c u_*/Sc)\,e^{(z-h)β/l_c}`` in the canopy, Sc = 0.5
+(`harman_finnigan_scalar_diffusivity`). The local
+``l^2|∂U/∂z|`` of the wind solution is not used for scalars: in a
+sheltered trunk space it is an order of magnitude smaller (4×10⁻³ against
+0.1 m² s⁻¹ at 4 m in the Hyytiälä case), because the turbulence there is
+imported from the crown, not made by local shear; with it, a 20 W m⁻²
+forest-floor heat flux produced a 13 K near-ground excess.
+
+The air-temperature profile is coupled to the leaves by iterating
+`canopy_leaf_energy_balance` (section 5) and the scalar column until the
+air temperature the leaves see is the one their heat produces (6-10
+iterations to 10⁻⁷ K).
+
+### Observations used
+
+No source tabulates its profiles; all values were read from the vector
+graphics of the published PDFs (path coordinates, calibrated on the tick
+marks; reading error below 0.5 % of the axis), except the CHATS
+plant-area density, which is a bitmap (±0.02 in ``a h``). Each dataset has
+a check value its own normalisation fixes (``U/U_h = 1`` at ``h``: read
+1.000; the Hyytiälä needle-area profile integrates to 7.02, text 7). The
+values, sources and method are in `test/data/canopy_profiles.jl`.
+
+| Dataset | Canopy | Profiles |
+| :-- | :-- | :-- |
+| Wind tunnel, waving-wheat model (Brunet et al. 1994), via Huang et al. (2008, Fig. 2) | ``h`` = 47 mm, ``a h`` = 0.50, ``C_d`` = 0.675 (Finnigan et al. 2009, §3.2) | ``U/U_h``, ``τ/τ_h`` at 9 heights |
+| CHATS walnut orchard, with / without leaves (Patton et al. 2011; Dupont & Patton 2012, Figs. 1b, 8, 9) | ``h`` = 10 m, measured PAD, PAI 2.5 / 0.7 | near-neutral ``U/U_h`` at 13 heights; ``d`` = 7.8 / 5.8 m (Dupont & Patton 2022) |
+| Hyytiälä Scots pine (Launiainen et al. 2007, Figs. 1, 3) | ``h`` = 15 m, measured LAD, LAI 3.5, ``C_d`` = 0.15 | ``U/u_*`` at 7 heights; ``Θ - Θ(16.8\,\mathrm{m})`` at 4.2, 8.4 m; ``d = 0.78h`` (Rannik et al. 2003) |
+
+No model parameter was fitted. For CHATS, for which no drag coefficient
+is published in these sources, ``C_d = 0.2`` (the module default) is
+used.
+
+### Results
+
+`test/era5_canopy_profiles.jl`, `examples/validation/canopy_profiles.jl`:
+
+| Quantity | Observed | Model |
+| :-- | --: | --: |
+| Wind tunnel ``U/U_h``, ``z ≤ h`` (5 levels) | 0.23-0.73 | max error 0.021 |
+| Wind tunnel ``U/U_h``, ``h < z ≤ 2h`` | 1.24-1.85 | max error 6.2 % |
+| Wind tunnel ``τ/τ_h``, ``z ≤ h`` | -0.02-0.71 | max error 0.18 (``z = 0.83h``, under-predicted) |
+| Wind tunnel ``U/U_h`` with ``C_d = 1.2`` (Patton 1997) | | max error 0.21 |
+| CHATS with leaves, crown ``U/U_h`` (0.45-0.9 ``h``) | 0.18-0.64 | max error 0.069 |
+| CHATS without leaves, crown ``U/U_h`` | 0.53-0.90 | max error 0.093 |
+| CHATS above canopy (1.1-2.9 ``h``), leaves / no leaves | | 4.0 % / 12.2 % |
+| CHATS ``d``, leaves / no leaves | 7.8 / 5.8 m | 8.36 / 6.64 m |
+| CHATS shear length ``L_s/h`` at ``h``, leaves | 0.32 | 0.31 |
+| Hyytiälä ``d/h`` | 0.78 | 0.750 |
+| Hyytiälä ``U/u_*`` at 0.78 ``h`` / 1.47 ``h`` | 1.47 / 4.96 | 1.85 / 6.44 (+26 % / +30 %) |
+| Hyytiälä ``U/u_*`` in the trunk space (0.13-0.40 ``h``) | 1.16-1.21 | 0.59-0.64 (×0.49-0.55) |
+| Hyytiälä ``Θ - Θ_{ref}`` at 8.4 m, day (unstable) | +0.30 K | +1.38 K |
+| Hyytiälä ``Θ - Θ_{ref}`` at 8.4 m, night (stable) | -2.11 K | -1.49 K |
+
+Leaf-out lowers the crown wind at every level and raises ``d`` in both the
+observations and the model. The temperature comparison is
+semi-quantitative: the paper gives class medians without the radiation
+and wind that produced them, so the forcing (clear-sky midsummer noon,
+600 + 120 W m⁻², ``u_*`` = 0.4 m s⁻¹; clear night, sky 90 W m⁻² below
+``σT^4``, ``u_*`` = 0.1 m s⁻¹; no forest-floor heat flux) is assumed. The
+sign and the order of magnitude are reproduced; the daytime anomaly is
+4.6 times too large and the nocturnal one 30 % too small (neutral
+closure in a stable night).
+
+### What first-order closure cannot do
+
+- **Trunk-space wind.** Under a dense crown the observed wind has a
+  secondary maximum (CHATS with leaves: 0.27 ``U_h`` at 0.15 ``h`` above
+  0.14 ``U_h`` at 0.3 ``h``; Hyytiälä: a nearly uniform 1.2 ``u_*``),
+  carried by sweeps from above and by pressure gradients (Shaw 1977;
+  Shaw & Schumann 1992). A down-gradient K model is monotone there and
+  gives about half the Hyytiälä trunk-space wind. Both are recorded as
+  `@test_broken`.
+- **Counter-gradient scalar transport** (Denmead & Bradley 1985) is
+  likewise outside K-theory; the Harman–Finnigan diffusivity keeps the
+  trunk space ventilated, which is why it is used for scalars.
+- **Stability.** The closure is neutral. The Harman–Finnigan stability
+  dependence of β and Sc is not included.
+- **Momentum absorption near the crown top** is under-predicted (wind
+  tunnel stress, Hyytiälä ``u_*/U_h`` = 0.26), so ``U/u_*`` in and above a
+  dense crown is too large by about a quarter.
+
+A three-dimensional LES with `ResolvedCanopyDrag` resolves the sweeps
+that the column misses; its validation against these profiles is not
+part of this phase.
 
 ## References
 
 - Ansari, A. Q. & Loomis, W. E. (1959). Leaf temperatures. *Am. J.
   Bot.*, 46, 713–717 (cited from Leuzinger & Körner 2007).
+- Bonan, G. B., Patton, E. G., Harman, I. N., Oleson, K. W., Finnigan,
+  J. J., Lu, Y. & Burakowski, E. A. (2018). Modeling canopy-induced
+  turbulence in the Earth system: a unified parameterization of
+  turbulent exchange within plant canopies and the roughness sublayer
+  (CLM-ml v0). *Geosci. Model Dev.*, 11, 1467–1496.
+- Brunet, Y., Finnigan, J. J. & Raupach, M. R. (1994). A wind tunnel
+  study of air flow in waving wheat: single-point velocity statistics.
+  *Boundary-Layer Meteorol.*, 70, 95–132.
 - Campbell, G. S. & Norman, J. M. (1998). *An Introduction to
   Environmental Biophysics*, 2nd ed. Springer, ch. 7 and 14.
 - CLM5.0 Technical Note (Lawrence et al., NCAR), §2.3.1, Canopy
@@ -362,29 +492,67 @@ assert this second figure.
 - de Pury, D. G. G. & Farquhar, G. D. (1997). Simple scaling of
   photosynthesis from leaves to canopies without the errors of big-leaf
   models. *Plant Cell Environ.*, 20, 537–557.
+- Denmead, O. T. & Bradley, E. F. (1985). Flux-gradient relationships in
+  a forest canopy. In *The Forest-Atmosphere Interaction*, Reidel,
+  421–442.
+- Dupont, S. & Patton, E. G. (2012). Influence of stability and seasonal
+  canopy changes on micrometeorology within and above an orchard canopy:
+  the CHATS experiment. *Agric. For. Meteorol.*, 157, 11–29.
+- Dupont, S. & Patton, E. G. (2022). On the influence of large-scale
+  atmospheric motions on near-surface turbulence: comparison between
+  flows over low-roughness and tall vegetation canopies.
+  *Boundary-Layer Meteorol.*, 184, 195–230.
+- Finnigan, J. J., Shaw, R. H. & Patton, E. G. (2009). Turbulence
+  structure above a vegetation canopy. *J. Fluid Mech.*, 637, 387–424.
 - Goudriaan, J. (1977). *Crop Micrometeorology: A Simulation Study.*
   Pudoc, Wageningen.
 - Harman, I. N. & Finnigan, J. J. (2007). A simple unified theory for
   flow in the canopy and roughness sublayer. *Boundary-Layer Meteorol.*,
   123, 339–363.
+- Harman, I. N. & Finnigan, J. J. (2008). Scalar concentration profiles
+  in the canopy and roughness sublayer. *Boundary-Layer Meteorol.*, 129,
+  323–351.
+- Huang, J., Cassiani, M. & Albertson, J. D. (2008). The effects of
+  vegetation density on turbulent structures within canopy sublayer.
+  AMS symposium extended abstract, paper 2.2,
+  https://ams.confex.com/ams/pdfpapers/138880.pdf.
 - Incropera, F. P., DeWitt, D. P., Bergman, T. L. & Lavine, A. S.
   (2007). *Fundamentals of Heat and Mass Transfer*, 6th ed. Wiley.
 - Inoue, E. (1963). On the turbulent structure of airflow within crop
   canopies. *J. Meteorol. Soc. Japan*, 41, 317–326.
-- Leuzinger, S. & Körner, C. (2007). Tree species diversity affects
-  canopy leaf temperatures in a mature temperate forest. *Agric. For.
-  Meteorol.*, 146, 29–37.
+- Jackson, P. S. (1981). On the displacement height in the logarithmic
+  velocity profile. *J. Fluid Mech.*, 111, 15–25.
 - Lalic, B. & Mihailovic, D. T. (2004). An empirical relation describing
   leaf-area density inside the forest for environmental modeling.
   *J. Appl. Meteorol.*, 43, 641–645.
+- Launiainen, S., Vesala, T., Mölder, M., Mammarella, I., Smolander, S.,
+  Rannik, Ü., Kolari, P., Hari, P., Lindroth, A. & Katul, G. G. (2007).
+  Vertical variability and effect of stability on turbulence
+  characteristics down to the floor of a pine forest. *Tellus*, 59B,
+  919–936.
+- Leuzinger, S. & Körner, C. (2007). Tree species diversity affects
+  canopy leaf temperatures in a mature temperate forest. *Agric. For.
+  Meteorol.*, 146, 29–37.
 - Markkanen, T., Rannik, Ü., Marcolla, B., Cescatti, A. & Vesala, T.
   (2003). Footprints and fetches for fluxes over forest canopies with
   varying structure and density. *Boundary-Layer Meteorol.*, 106, 437–459.
 - Monteith, J. L. & Unsworth, M. H. (2013). *Principles of Environmental
   Physics*, 4th ed. Academic Press.
+- Patton, E. G. (1997). *Large-eddy simulation of turbulent flow above
+  and within a plant canopy.* PhD thesis, University of California,
+  Davis.
+- Patton, E. G. et al. (2011). The Canopy Horizontal Array Turbulence
+  Study. *Bull. Amer. Meteor. Soc.*, 92, 593–611.
+- Rannik, Ü., Markkanen, T., Raittila, J., Hari, P. & Vesala, T. (2003).
+  Turbulence statistics inside and over forest: influence on footprint
+  prediction. *Boundary-Layer Meteorol.*, 109, 163–189.
 - Ross, J. (1981). *The Radiation Regime and Architecture of Plant
   Stands.* Junk, The Hague.
 - Sellers, P. J. (1985). Canopy reflectance, photosynthesis and
   transpiration. *Int. J. Remote Sens.*, 6, 1335–1372.
 - Shaw, R. H. & Schumann, U. (1992). Large-eddy simulation of turbulent
   flow above and within a forest. *Boundary-Layer Meteorol.*, 61, 47–64.
+- Shaw, R. H. (1977). Secondary wind speed maxima inside plant canopies.
+  *J. Appl. Meteorol.*, 16, 514–521.
+- Thom, A. S. (1971). Momentum absorption by vegetation. *Q. J. R.
+  Meteorol. Soc.*, 97, 414–428.
