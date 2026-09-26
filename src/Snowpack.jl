@@ -67,7 +67,8 @@ import ..SurfaceExchange: surface_temperature, roughness_lengths,
                           surface_albedo, surface_emissivity,
                           moisture_availability, surface_specific_humidity,
                           surface_latent_heat, step_surface!
-using ..SurfaceOptics: material_emissivity, SNOW_REFERENCE_RADIUS
+using ..SurfaceOptics: material_emissivity, SNOW_REFERENCE_RADIUS, snow_grain_radius
+using ..NetCDFIO: nc_open, nc_read
 
 export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
        Jordan1991Conductivity, Calonne2011Conductivity, snow_thermal_conductivity,
@@ -84,7 +85,14 @@ export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
        snow_nlayers, snow_depth, snow_water_equivalent, snow_bulk_density,
        snow_layer_density, snow_layer_depths, snowpack_enthalpy, snow_load,
        snow_compaction!, snow_heat_conduction!, snow_phase_change!,
-       add_snowfall!, add_rainfall!, snow_sublimation!, relayer_snowpack!
+       add_snowfall!, add_rainfall!, snow_sublimation!, relayer_snowpack!,
+       # metamorphism and albedo ageing (#35)
+       fresh_grain_radius, refrozen_grain_radius, mix_refrozen_grain!,
+       SnicarAgingTable, snicar_aging_table, snicar_aging_parameters,
+       snicar_grain_radius, flanner_grain_radius,
+       Flanner2006Metamorphism, ParabolicGrainGrowth,
+       snow_dry_grain_growth_rate, snow_wet_grain_growth_rate,
+       snow_temperature_gradient, snow_specific_surface_area, snow_optical_radius
 
 _Tfreeze(c::SurfaceConstants) = c.thermo.T_freeze
 
@@ -409,6 +417,14 @@ Grain-shape factor on the compactive viscosity of layer `i`; `1` unless
 a metamorphism scheme says otherwise.
 """
 viscosity_grain_factor(::AbstractSnowMetamorphism, pack, i::Integer) = 1.0
+
+"""
+    fresh_grain_radius(scheme, pack, T_air) -> μm
+
+Optical grain radius given to snow falling at air temperature `T_air`
+(K). The default is the pack's constant `fresh_grain`.
+"""
+fresh_grain_radius(::AbstractSnowMetamorphism, pack, T_air::Real) = pack.fresh_grain
 
 """
     AbstractSnowAlbedo
@@ -915,9 +931,10 @@ end
     add_snowfall!(p, mass, T_air, ρ_new) -> p
 
 Add `mass` (kg m⁻²) of snow of density `ρ_new` falling at `T_air`. The
-new snow has temperature ``\\min(T_{air}, T_f)`` and the fresh grain
-radius; it is mixed into the top layer (enthalpy-conserving) or, on bare
-ground, starts the pack. Layering rules later split it off as it grows.
+new snow has temperature ``\\min(T_{air}, T_f)`` and the grain radius
+[`fresh_grain_radius`](@ref) of the pack's metamorphism scheme; it is
+mixed into the top layer (enthalpy-conserving; grain radius and age
+mass-weighted) or, on bare ground, starts the pack. Layering rules later split it off as it grows.
 """
 function add_snowfall!(p::LayeredSnowpack, mass::Real, T_air::Real, ρ_new::Real)
     mass > 0 || return p
@@ -925,15 +942,16 @@ function add_snowfall!(p::LayeredSnowpack, mass::Real, T_air::Real, ρ_new::Real
     b = p.budget
     b.snowfall += mass
     b.advected_enthalpy += _ice_enthalpy(p, mass, Ts)
+    rg = fresh_grain_radius(p.metamorphism, p, T_air)
     if snow_nlayers(p) == 0
-        _push_layer!(p, mass / ρ_new, float(mass), 0.0, Ts, p.fresh_grain, 0.0)
+        _push_layer!(p, mass / ρ_new, float(mass), 0.0, Ts, rg, 0.0)
         return p
     end
     C0 = _heat_capacity(p, 1)
     Cn = mass * cp_ice(p.consts)
     m0 = p.m_ice[1] + p.m_liq[1]
     p.T[1] = (C0 * p.T[1] + Cn * Ts) / (C0 + Cn)
-    p.grain[1] = (m0 * p.grain[1] + mass * p.fresh_grain) / (m0 + mass)
+    p.grain[1] = (m0 * p.grain[1] + mass * rg) / (m0 + mass)
     p.age[1] = m0 * p.age[1] / (m0 + mass)
     p.m_ice[1] += mass
     p.dz[1] += mass / ρ_new
@@ -1146,5 +1164,408 @@ Base.show(io::IO, p::LayeredSnowpack) =
           round(snow_water_equivalent(p); digits = 1), " kg m⁻², ρ̄ = ",
           round(snow_bulk_density(p); digits = 1), " kg m⁻³, T_s = ",
           round(surface_temperature(p); digits = 2), " K)")
+
+# =========================================================================
+# 8. Grain metamorphism and albedo ageing (#35)
+# =========================================================================
+#
+# The optical grain radius r (μm) — the radius of ice spheres with the
+# same specific surface area, r = 3/(ρ_ice SSA) — is the one microphysical
+# number the snow albedo needs. Fresh snow (SSA ≈ 60 m² kg⁻¹, r ≈ 55 μm)
+# coarsens by vapour transport from high- to low-curvature ice (dry
+# metamorphism, fastest in warm, low-density snow under a strong
+# temperature gradient) and far faster when liquid water is present (wet
+# metamorphism). The albedo follows: ice absorbs weakly in the visible and
+# strongly beyond ~1 μm, so a larger r lengthens photon paths inside the
+# grains and darkens the near-infrared.
+#
+# The albedo itself is NOT computed here. `SurfaceOptics.SnowSurface` owns
+# the Wiscombe-Warren spectral snow albedo (grain size + soot); the pack
+# hands it the prognostic grain radius and asks for the broadband value.
+
+"""
+    snow_specific_surface_area(r; c = DEFAULT_SURFACE_CONSTANTS) -> m² kg⁻¹
+
+Specific surface area of snow with optical (effective) grain radius `r`
+(μm), ``SSA = 3/(ρ_{ice} r)`` (CLM5 Technical Note, Sect. 2.3.2.3;
+Carmagnola et al. 2014, Eq. 1 with ``d_{opt} = 2r``). With the contract's
+``ρ_{ice} = 917`` kg m⁻³, 54.5 μm is 60 m² kg⁻¹.
+"""
+snow_specific_surface_area(r::Real; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    3 / (c.ρ_ice * r * 1e-6)
+
+"""
+    snow_optical_radius(ssa; c = DEFAULT_SURFACE_CONSTANTS) -> μm
+
+Inverse of [`snow_specific_surface_area`](@ref): ``r = 3/(ρ_{ice} SSA)``.
+"""
+snow_optical_radius(ssa::Real; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    3e6 / (c.ρ_ice * ssa)
+
+# ---- refreezing hook (used by the liquid-water scheme, #36) -------------
+
+"""
+    refrozen_grain_radius(scheme) -> μm or `nothing`
+
+Grain radius of liquid water that refreezes in the pack. Refrozen melt
+forms large ice clumps that darken the snow; CLM uses 1000 μm (CLM5
+Technical Note, Sect. 2.3.2.3). `nothing` (the default) leaves grains
+unchanged.
+"""
+refrozen_grain_radius(::AbstractSnowMetamorphism) = nothing
+
+"""
+    mix_refrozen_grain!(pack, i, m_refrozen) -> pack
+
+Mass-weight the grain radius of layer `i` towards
+[`refrozen_grain_radius`](@ref) of the pack's scheme after `m_refrozen`
+(kg m⁻²) of its ice has formed by refreezing — CLM's
+``r = r_{old} f_{old} + r_{rfz} f_{rfz}`` (CLM5 Technical Note, Eq. 2.3.74).
+Call it *after* the refrozen mass has been added to `m_ice[i]`. The
+liquid-water scheme (#36) owns refreezing; this is its entry point into
+the grain state.
+"""
+function mix_refrozen_grain!(p::LayeredSnowpack, i::Integer, m_refrozen::Real)
+    r_rfz = refrozen_grain_radius(p.metamorphism)
+    (r_rfz === nothing || m_refrozen <= 0) && return p
+    m = p.m_ice[i] + p.m_liq[i]
+    m > 0 || return p
+    f = min(m_refrozen / m, 1.0)
+    p.grain[i] = (1 - f) * p.grain[i] + f * r_rfz
+    return p
+end
+
+# ---- temperature gradient -------------------------------------------------
+
+"""
+    snow_temperature_gradient(p) -> Vector (K m⁻¹)
+
+Magnitude of the temperature gradient across each layer, from the
+interface temperatures (thickness-weighted means of neighbouring layer
+temperatures) — CLM5 Technical Note Eq. (2.3.76) (CTSM
+`SnowAge_grain`). As in CLM, the upper interface of the top layer is
+taken at the top-layer temperature. The lower interface of the bottom
+layer is the ground temperature for [`SnowGroundTemperature`](@ref) and,
+for [`SnowBottomFlux`](@ref), the temperature that carries the
+prescribed flux across the lower half of the layer.
+"""
+function snow_temperature_gradient(p::LayeredSnowpack)
+    n = snow_nlayers(p)
+    g = zeros(n)
+    n == 0 && return g
+    T, dz = p.T, p.dz
+    for i in 1:n
+        Tu = i == 1 ? T[1] : (T[i-1] * dz[i] + T[i] * dz[i-1]) / (dz[i] + dz[i-1])
+        if i < n
+            Tl = (T[i+1] * dz[i] + T[i] * dz[i+1]) / (dz[i] + dz[i+1])
+        else
+            Tl = _bottom_interface_temperature(p.bottom, p, n)
+        end
+        g[i] = abs(Tu - Tl) / dz[i]
+    end
+    return g
+end
+
+_bottom_interface_temperature(b::SnowGroundTemperature, p, n) = b.T
+function _bottom_interface_temperature(b::SnowBottomFlux, p, n)
+    k = snow_thermal_conductivity(p.conductivity, (p.m_ice[n] + p.m_liq[n]) / p.dz[n];
+                                  c = p.consts)
+    return p.T[n] - b.F * p.dz[n] / (2k)
+end
+
+# ---- the SNICAR dry-ageing table (Flanner & Zender 2006) ---------------
+
+"""
+    SnicarAgingTable
+
+Best-fit parameters of the Flanner & Zender (2006) dry-snow ageing model,
+on a grid of temperature `T` (K, 223.15-273.15, 11 points), temperature
+gradient `dTdz` (K m⁻¹, 0-300, 31 points) and density `ρ` (kg m⁻³,
+50-400, 8 points). Arrays are indexed `[ρ, dTdz, T]`:
+
+| field   | meaning                                   | unit    |
+|:------- |:----------------------------------------- |:------- |
+| `drdt0` | initial growth rate ``(dr/dt)_0``         | μm h⁻¹  |
+| `τ`     | growth-decay length scale ``η``           | μm      |
+| `κ`     | growth-decay exponent                     | –       |
+| `r0`    | fresh radius the fits start from (54.5)   | μm      |
+
+The data are the file `snicar_drdt_bst_fit_60_c070416.nc` (M. Flanner,
+16 Apr 2007; "r_e0 = 54.5 um") distributed with CESM/CLM as
+`lnd/clm2/snicardata/` input data, shipped unchanged in `src/data/` and
+read with the in-package `NetCDFIO` reader.
+"""
+struct SnicarAgingTable
+    T::Vector{Float64}
+    dTdz::Vector{Float64}
+    ρ::Vector{Float64}
+    drdt0::Array{Float64,3}
+    τ::Array{Float64,3}
+    κ::Array{Float64,3}
+    r0::Float64
+    description::String
+end
+
+const SNICAR_AGING_FILE = joinpath(@__DIR__, "data", "snicar_drdt_bst_fit_60_c070416.nc")
+const _SNICAR_TABLE = Ref{Union{Nothing,SnicarAgingTable}}(nothing)
+
+"""
+    snicar_aging_table(path = SNICAR_AGING_FILE) -> SnicarAgingTable
+
+Load the Flanner & Zender (2006) ageing table. The default file is read
+once and cached.
+"""
+function snicar_aging_table(path::AbstractString = SNICAR_AGING_FILE)
+    if path == SNICAR_AGING_FILE && _SNICAR_TABLE[] !== nothing
+        return _SNICAR_TABLE[]
+    end
+    f = nc_open(path)
+    desc = string(get(f.gattrs, "description", ""))
+    tab = SnicarAgingTable(nc_read(f, "T"), nc_read(f, "dTdz"), nc_read(f, "sno_dns"),
+                           nc_read(f, "drdsdt0"), nc_read(f, "tau"), nc_read(f, "kappa"),
+                           54.5, desc)
+    path == SNICAR_AGING_FILE && (_SNICAR_TABLE[] = tab)
+    return tab
+end
+
+# Bracketing index and weight on a uniform-or-not ascending axis, clamped.
+function _bracket(ax::Vector{Float64}, x::Real)
+    n = length(ax)
+    x <= ax[1] && return (1, 1, 0.0)
+    x >= ax[n] && return (n, n, 0.0)
+    j = searchsortedlast(ax, x)
+    j >= n && return (n, n, 0.0)
+    return (j, j + 1, (x - ax[j]) / (ax[j+1] - ax[j]))
+end
+_nearest(ax::Vector{Float64}, x::Real) = argmin(abs.(ax .- x))
+
+"""
+    snicar_aging_parameters(tab, T, dTdz, ρ) -> (drdt0 [μm h⁻¹], τ [μm], κ)
+
+Ageing parameters of the grid point nearest to temperature `T` (K),
+temperature-gradient magnitude `dTdz` (K m⁻¹) and density `ρ`
+(kg m⁻³), clamped to the table's domain — CLM's look-up (CTSM
+`SnowAge_grain`).
+
+The three parameters are fitted jointly, cell by cell, and trade off
+against each other (a small `τ` with a large `κ` can describe nearly the
+same curve as the reverse), so they must **not** be interpolated
+separately: between the 300 and 350 kg m⁻³ nodes at −25 °C, 50 K m⁻¹,
+interpolated parameters grow a 88 μm grain to 484 μm in 37 days while
+both neighbouring nodes give 181 and 123 μm. Interpolation, where wanted,
+is applied to growth outcomes instead ([`snicar_grain_radius`](@ref)).
+"""
+function snicar_aging_parameters(tab::SnicarAgingTable, T::Real, dTdz::Real, ρ::Real)
+    i, j, k = _nearest(tab.ρ, ρ), _nearest(tab.dTdz, abs(dTdz)), _nearest(tab.T, T)
+    return (drdt0 = tab.drdt0[i, j, k], τ = tab.τ[i, j, k], κ = tab.κ[i, j, k])
+end
+
+# The (up to) eight table nodes around (T, G, ρ) and their trilinear weights.
+function _snicar_corners(tab::SnicarAgingTable, T::Real, G::Real, ρ::Real)
+    i0, i1, wi = _bracket(tab.ρ, ρ)
+    j0, j1, wj = _bracket(tab.dTdz, abs(G))
+    k0, k1, wk = _bracket(tab.T, T)
+    return ((i0, j0, k0, (1 - wi) * (1 - wj) * (1 - wk)), (i1, j0, k0, wi * (1 - wj) * (1 - wk)),
+            (i0, j1, k0, (1 - wi) * wj * (1 - wk)),       (i1, j1, k0, wi * wj * (1 - wk)),
+            (i0, j0, k1, (1 - wi) * (1 - wj) * wk),       (i1, j0, k1, wi * (1 - wj) * wk),
+            (i0, j1, k1, (1 - wi) * wj * wk),             (i1, j1, k1, wi * wj * wk))
+end
+
+function _check_interp(interpolation::Symbol)
+    interpolation in (:linear, :nearest) ||
+        throw(ArgumentError("interpolation must be :linear or :nearest"))
+    return interpolation
+end
+
+"""
+    flanner_grain_radius(r, t_hours, drdt0, τ, κ; r0 = 54.5) -> μm
+
+Grain radius after `t_hours` of dry ageing at fixed parameters, starting
+from `r` — the exact solution of the Flanner & Zender (2006) growth law
+
+```math
+\\frac{dr}{dt} = \\left(\\frac{dr}{dt}\\right)_0
+                 \\left(\\frac{τ}{(r - r_0) + τ}\\right)^{1/κ},
+```
+
+which with ``x = r - r_0 + τ`` integrates to
+``x^{1+1/κ} = x_0^{1+1/κ} + (1 + 1/κ)(dr/dt)_0\\,τ^{1/κ}\\,t``.
+Composes exactly: ageing for ``t_1`` then ``t_2`` equals ageing for
+``t_1 + t_2``, so the result does not depend on the model time step.
+"""
+function flanner_grain_radius(r::Real, t_hours::Real, drdt0::Real, τ::Real, κ::Real;
+                              r0::Real = 54.5)
+    t_hours >= 0 || throw(ArgumentError("flanner_grain_radius: t_hours ≥ 0"))
+    e = 1 + 1 / κ
+    x0 = max(r - r0, 0.0) + τ
+    x = (x0^e + e * drdt0 * τ^(1 / κ) * t_hours)^(1 / e)
+    return r0 + x - τ
+end
+
+"""
+    snicar_grain_radius(tab, r, t_hours, T, dTdz, ρ; interpolation = :linear) -> μm
+
+Dry-aged grain radius after `t_hours` at fixed temperature `T` (K),
+temperature gradient `dTdz` (K m⁻¹) and density `ρ` (kg m⁻³), starting
+from `r` (μm), using [`flanner_grain_radius`](@ref) with the table's
+fits. `:nearest` uses the nearest node (CLM). `:linear` evaluates the
+exact solution at the eight surrounding nodes and blends the *radii*
+trilinearly, so the result always lies between node outcomes and varies
+continuously with the state (see [`snicar_aging_parameters`](@ref) for
+why the parameters themselves are not interpolated).
+"""
+function snicar_grain_radius(tab::SnicarAgingTable, r::Real, t_hours::Real, T::Real,
+                             dTdz::Real, ρ::Real; interpolation::Symbol = :linear)
+    if _check_interp(interpolation) === :nearest
+        q = snicar_aging_parameters(tab, T, dTdz, ρ)
+        return flanner_grain_radius(r, t_hours, q.drdt0, q.τ, q.κ; r0 = tab.r0)
+    end
+    acc = 0.0
+    for (i, j, k, w) in _snicar_corners(tab, T, dTdz, ρ)
+        w == 0 && continue
+        acc += w * flanner_grain_radius(r, t_hours, tab.drdt0[i, j, k], tab.τ[i, j, k],
+                                        tab.κ[i, j, k]; r0 = tab.r0)
+    end
+    return acc
+end
+
+# ---- metamorphism schemes -------------------------------------------------
+
+"""
+    Flanner2006Metamorphism(; table = snicar_aging_table(), interpolation = :linear,
+                              C_wet = 4.22e-13, f_liq_max = 0.1,
+                              r_min = 54.5, r_max = 1500, r_refrozen = 1000,
+                              fresh_radius_max = r_min, scale = 1)
+
+The CLM / SNICAR grain-ageing scheme (Flanner & Zender 2006; CLM5
+Technical Note, Sect. 2.3.2.3, Eqs. 2.3.74-2.3.77; CTSM
+`SnowAge_grain`). Each step, in each layer:
+
+ 1. **dry ageing** — [`flanner_grain_radius`](@ref) with parameters from
+    the [`SnicarAgingTable`](@ref) at the layer's temperature,
+    temperature gradient ([`snow_temperature_gradient`](@ref)) and
+    density, integrated exactly over the step at fixed parameters;
+ 2. **wet ageing** — Brun (1989), as in CLM:
+    ``dr/dt = 10^{18} C_1 f_{liq}^3 / (4π r^2)`` μm s⁻¹ with
+    ``C_1 = 4.22·10^{-13}`` m³ s⁻¹ and the liquid mass fraction
+    ``f_{liq}`` capped at 0.1, integrated exactly
+    (``r^3`` grows linearly in time);
+ 3. bounded to `[r_min, r_max]` (the range of the SNICAR Mie tables).
+
+`scale` multiplies both rates (CLM's `xdrdt`). Fresh snow falls with
+`r_min` (SSA = 60 m² kg⁻¹, the state the table's fits start from);
+`fresh_radius_max > r_min` enables CLM5's linear ramp from `r_min` at
+−30 °C to `fresh_radius_max` at 0 °C (the CLM5 tech note gives 204.5 μm).
+Refrozen water has `r_refrozen` (see [`mix_refrozen_grain!`](@ref)).
+
+`interpolation = :nearest` reproduces CLM's table look-up; the default
+`:linear` blends the exact node solutions trilinearly
+([`snicar_grain_radius`](@ref)), which removes the jumps in growth rate
+as a layer crosses a 5 K, 10 K m⁻¹ or 50 kg m⁻³ cell boundary.
+
+Deviation from CLM: CLM integrates both rates with one forward-Euler
+step; here each is integrated exactly over the step at the layer's
+current temperature, gradient, density and liquid fraction.
+"""
+Base.@kwdef struct Flanner2006Metamorphism <: AbstractSnowMetamorphism
+    table::SnicarAgingTable = snicar_aging_table()
+    interpolation::Symbol = :linear
+    C_wet::Float64 = 4.22e-13          # m³ s⁻¹ (Brun 1989, as in CLM)
+    f_liq_max::Float64 = 0.1
+    r_min::Float64 = 54.5              # μm
+    r_max::Float64 = 1500.0            # μm
+    r_refrozen::Float64 = 1000.0       # μm
+    fresh_radius_max::Float64 = 54.5   # μm; > r_min enables the CLM5 ramp
+    scale::Float64 = 1.0
+end
+
+"""
+    snow_dry_grain_growth_rate(scheme, r, T, dTdz, ρ) -> μm s⁻¹
+
+Instantaneous dry-ageing rate of a grain of radius `r` (μm) at
+temperature `T`, temperature gradient `dTdz`, density `ρ`.
+"""
+function snow_dry_grain_growth_rate(m::Flanner2006Metamorphism, r::Real, T::Real,
+                                    dTdz::Real, ρ::Real)
+    tab = m.table
+    x = max(r - tab.r0, 0.0)
+    rate(i, j, k) = tab.drdt0[i, j, k] * (tab.τ[i, j, k] / (x + tab.τ[i, j, k]))^(1 / tab.κ[i, j, k])
+    ρc = max(ρ, 50.0)
+    if m.interpolation === :nearest
+        i, j, k = _nearest(tab.ρ, ρc), _nearest(tab.dTdz, abs(dTdz)), _nearest(tab.T, T)
+        return m.scale * rate(i, j, k) / 3600
+    end
+    acc = 0.0
+    for (i, j, k, w) in _snicar_corners(tab, T, dTdz, ρc)
+        w == 0 || (acc += w * rate(i, j, k))
+    end
+    return m.scale * acc / 3600
+end
+
+"""
+    snow_wet_grain_growth_rate(scheme, r, f_liq) -> μm s⁻¹
+
+Brun (1989) wet-snow growth, ``10^{18} C_1 \\min(f_{liq}, f_{max})^3/(4π r^2)``.
+"""
+snow_wet_grain_growth_rate(m::Flanner2006Metamorphism, r::Real, f_liq::Real) =
+    m.scale * 1e18 * m.C_wet * min(max(f_liq, 0.0), m.f_liq_max)^3 / (4π * r^2)
+
+function fresh_grain_radius(m::Flanner2006Metamorphism, p, T_air::Real)
+    m.fresh_radius_max <= m.r_min && return m.r_min
+    ΔT = T_air - _Tfreeze(p.consts)
+    w = clamp((ΔT + 30) / 30, 0.0, 1.0)
+    return m.r_min + w * (m.fresh_radius_max - m.r_min)
+end
+
+refrozen_grain_radius(m::Flanner2006Metamorphism) = m.r_refrozen
+
+function snow_metamorphism!(m::Flanner2006Metamorphism, p, dt::Real)
+    n = snow_nlayers(p)
+    n == 0 && return p
+    G = snow_temperature_gradient(p)
+    t_h = m.scale * dt / 3600
+    for i in 1:n
+        mi, ml = p.m_ice[i], p.m_liq[i]
+        mt = mi + ml
+        r = max(p.grain[i], m.r_min)
+        if mt > 0 && p.dz[i] > 0
+            ρ = max(mt / p.dz[i], 50.0)
+            r = snicar_grain_radius(m.table, r, t_h, p.T[i], G[i], ρ;
+                                    interpolation = m.interpolation)
+            f = min(ml / mt, m.f_liq_max)
+            if f > 0
+                # d(r³)/dt = 3·10¹⁸ C₁ f³ / (4π): exact at fixed f
+                r = cbrt(r^3 + 3e18 * m.C_wet * f^3 / (4π) * m.scale * dt)
+            end
+        end
+        p.grain[i] = clamp(r, m.r_min, m.r_max)
+    end
+    p.age .+= dt
+    return p
+end
+
+"""
+    ParabolicGrainGrowth(; growth_rate = SurfaceOptics.SNOW_GROWTH_RATE)
+
+The grain growth that `SurfaceOptics.SnowSurface` applies for its
+`age_days` argument, ``r^2 = r_0^2 + G t`` (G in μm² day⁻¹), made
+prognostic: each step delegates to `SurfaceOptics.snow_grain_radius`
+with the layer's current radius as ``r_0``. Parabolic growth composes
+exactly, so a pack aged with this scheme and a `SnowSurface` of the same
+age agree to round-off. It has no temperature, gradient or liquid-water
+dependence — a reference, not a substitute for
+[`Flanner2006Metamorphism`](@ref).
+"""
+Base.@kwdef struct ParabolicGrainGrowth <: AbstractSnowMetamorphism
+    growth_rate::Float64 = 1.0e4      # μm² day⁻¹ (= SurfaceOptics.SNOW_GROWTH_RATE)
+end
+
+function snow_metamorphism!(m::ParabolicGrainGrowth, p, dt::Real)
+    for i in 1:snow_nlayers(p)
+        p.grain[i] = snow_grain_radius(p.grain[i], dt / 86400; growth_rate = m.growth_rate)
+    end
+    p.age .+= dt
+    return p
+end
 
 end # module

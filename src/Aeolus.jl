@@ -620,4 +620,13 @@ export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
        snow_compaction!, snow_heat_conduction!, snow_phase_change!,
        add_snowfall!, add_rainfall!, snow_sublimation!, relayer_snowpack!
 
+# Phase 51 (#35) — Snowpack: grain metamorphism (Flanner & Zender 2006 /
+# Brun 1989) (albedo ageing below).
+export fresh_grain_radius, refrozen_grain_radius, mix_refrozen_grain!,
+       SnicarAgingTable, snicar_aging_table, snicar_aging_parameters,
+       snicar_grain_radius, flanner_grain_radius,
+       Flanner2006Metamorphism, ParabolicGrainGrowth,
+       snow_dry_grain_growth_rate, snow_wet_grain_growth_rate,
+       snow_temperature_gradient, snow_specific_surface_area, snow_optical_radius
+
 end # module
