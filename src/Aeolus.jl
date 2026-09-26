@@ -54,6 +54,8 @@ include("TwoStream.jl")         # Phase 33
 include("MonteCarloRT.jl")      # Phase 34
 include("Radiosity.jl")         # Phase 35
 include("SolarGeometry.jl")     # Phase 38
+# Era V, Phase 52 — lake / coastal-sea water column (needs SurfaceOptics).
+include("OceanMixedLayer.jl")
 
 include("AerosolCloud.jl")         # Phase 42
 include("Superdroplet.jl")         # Phase 41
@@ -112,6 +114,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .OceanMixedLayer             # Phase 52 (#38)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
