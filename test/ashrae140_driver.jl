@@ -10,13 +10,15 @@
 # UrbanSurface; the only modelling done here is the plane-of-array
 # irradiance, which the Standard leaves to the program.
 #
-# Surface heat transfer follows the Standard's option for programs without
-# time-step-varying surface coefficients or interior long-wave exchange
-# (§5.2.1.9.3 b, §5.2.1.10.3 b, §5.2.3.1.4.3-4): constant *combined*
-# coefficients, Tables 5-7, 5-9 (140-2020 Addendum a values), 5-38 and 5-39.
-# BuildingEnergy's `EnvelopeElement` is exactly such a surface: combined
-# outside coefficient with a sol-air source, combined inside coefficient to
-# the air node.
+# Surface heat transfer: interior, the Standard's constant *combined*
+# coefficients (§5.2.1.10.3 b, §5.2.3.1.4.4; Tables 5-9, 5-39), since the
+# zone lumps interior long-wave exchange into the surface-to-air coefficient.
+# Exterior, two options the Standard allows (§5.2.1.9.3 b, §5.2.3.1.4.3;
+# Tables 5-7, 5-38): `exterior = :longwave` (the reported result) — a
+# `FacetElement` with the constant *convective* coefficient and an explicit
+# long-wave balance against sky and ground; `exterior = :combined` — an
+# `EnvelopeElement` with the constant *combined* coefficient and a sol-air
+# source.
 #
 # Sources
 #   ANSI/ASHRAE Addendum a to Standard 140-2017 (2020): §5.2.1 (Case 600),
@@ -68,15 +70,14 @@ const PEREZ_1990 = [-0.008  0.588 -0.062 -0.060  0.072 -0.022
                      0.678 -0.327 -0.250  0.156 -1.377  0.251]
 const PEREZ_EPS_BINS = (1.065, 1.23, 1.5, 1.95, 2.8, 4.5, 6.2)
 
-# Relative optical air mass, Kasten & Young (1989), zenith in degrees.
-a140_airmass(z) = 1 / (cosd(z) + 0.50572 * (96.07995 - z)^-1.6364)
-
 # Perez (1990) circumsolar and horizon-brightening coefficients (F1, F2)
 # for sun zenith `z` (deg), DNI, DHI (W m⁻²) and extraterrestrial E0.
 function a140_perez_F(z, dni, dhi, E0)
     zr = deg2rad(z); κ = 1.041
     ε = ((dhi + dni) / dhi + κ * zr^3) / (1 + κ * zr^3)
-    Δ = dhi * a140_airmass(z) / E0
+    # relative optical air mass (Kasten & Young 1989; SolarGeometry owns it;
+    # the default sea-level pressure leaves it un-scaled, as Perez uses it)
+    Δ = dhi * air_mass(90 - z) / E0
     b = something(findfirst(>(ε), PEREZ_EPS_BINS), 8)
     c = @view PEREZ_1990[b, :]
     F1 = max(0.0, c[1] + c[2] * Δ + c[3] * zr)
@@ -268,7 +269,7 @@ function a140_run(spec, w, I; exterior::Symbol = :combined, substeps::Integer = 
     hvac = IdealLoadsHVAC(; T_heat = spec.T_heat, T_cool = spec.T_cool, heating = :electric,
                           curves = nothing)
     N = length(w.T_db); dt = 3600.0 / substeps
-    σ = 5.670374419e-8
+    σ = Aeolus.RadiationCore.STEFAN_BOLTZMANN
     irr = zeros(length(keys))
     Fsky = [(1 + cosd(β)) / 2 for β in tilts]
     resid = Ref(0.0)
