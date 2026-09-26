@@ -103,7 +103,11 @@ export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
        johansen_solids_conductivity, johansen_dry_conductivity, kersten_number,
        soil_thermal_conductivity, soil_heat_capacity,
        freezing_matric_potential, freezing_onset_temperature, supercooled_liquid_content,
-       PowerLawIceImpedance
+       PowerLawIceImpedance,
+       AbstractSoilHeatTop, GroundHeatFluxTop, SkinTemperatureTop, LinearizedSkinBalance,
+       AbstractSoilHeatBottom, ZeroHeatFluxBottom, GeothermalHeatFlux, BottomTemperature,
+       SoilThermalColumn, SoilHeatBudget, SoilHeatStep, step_soil_heat!,
+       set_soil_temperature!, soil_enthalpy, soil_ice_mass, soil_thermal_layer_conductivity
 
 # =========================================================================
 # 1. Layer structure
@@ -1486,5 +1490,568 @@ PowerLawIceImpedance(; Ω::Real = 6.0) =
     (Ω >= 0 || throw(ArgumentError("PowerLawIceImpedance: Ω ≥ 0")); PowerLawIceImpedance{Float64}(Ω))
 ice_impedance_factor(imp::PowerLawIceImpedance, θ_ice::Real, θ_s::Real) =
     exp10(-imp.Ω * clamp(θ_ice / θ_s, 0.0, 1.0))
+
+# =========================================================================
+# 8. Heat boundary conditions
+# =========================================================================
+
+"""
+    AbstractSoilHeatTop
+
+Upper boundary of the heat equation, given to [`step_soil_heat!`](@ref).
+Every subtype is reduced to a ground heat flux linear in the top-node
+temperature, ``G = α + β T_1`` (``β ≤ 0``), and a skin temperature
+``T_s(T_1)``: [`GroundHeatFluxTop`](@ref), [`SkinTemperatureTop`](@ref),
+[`LinearizedSkinBalance`](@ref).
+"""
+abstract type AbstractSoilHeatTop end
+
+"Prescribed ground heat flux `G` (W m⁻², positive into the soil)."
+struct GroundHeatFluxTop{T<:AbstractFloat} <: AbstractSoilHeatTop
+    G::T
+end
+GroundHeatFluxTop(G::Real) = GroundHeatFluxTop{Float64}(G)
+
+"Prescribed skin (soil-surface) temperature `T` (K) at depth 0."
+struct SkinTemperatureTop{T<:AbstractFloat} <: AbstractSoilHeatTop
+    T::T
+end
+SkinTemperatureTop(T::Real) = SkinTemperatureTop{Float64}(T)
+
+"""
+    LinearizedSkinBalance(G0, dG_dT, T0)
+
+A massless skin whose atmospheric energy supply
+``R_n - H - LE`` is linearised about the skin temperature `T0`:
+``G_{atm}(T_s) = G_0 + (dG/dT_s)(T_s - T_0)`` with ``dG/dT_s ≤ 0``
+(radiative, sensible and latent damping). The skin temperature closes
+``G_{atm}(T_s) = (k_1/z_1)(T_s - T_1)`` implicitly with the soil — the
+coupling [`step_surface!`](@ref) uses, and the one a canopy model (#21)
+passes for the ground below its leaves.
+"""
+struct LinearizedSkinBalance{T<:AbstractFloat} <: AbstractSoilHeatTop
+    G0::T
+    dG_dT::T
+    T0::T
+end
+LinearizedSkinBalance(G0::Real, dG_dT::Real, T0::Real) =
+    LinearizedSkinBalance{Float64}(promote(float(G0), float(dG_dT), float(T0))...)
+
+# (α, β) with G = α + β T1, for a top half-cell conductance κ = k₁/z₁
+_heat_top(bc::GroundHeatFluxTop, κ) = (bc.G, zero(κ))
+_heat_top(bc::SkinTemperatureTop, κ) = (κ * bc.T, -κ)
+function _heat_top(bc::LinearizedSkinBalance, κ)
+    D = bc.dG_dT
+    κ - D > 0 || throw(ArgumentError("LinearizedSkinBalance: need dG_dT < k₁/z₁"))
+    return (κ * (bc.G0 - D * bc.T0) / (κ - D), κ * D / (κ - D))
+end
+_skin_temperature(bc::GroundHeatFluxTop, κ, T1) = T1 + bc.G / κ
+_skin_temperature(bc::SkinTemperatureTop, κ, T1) = bc.T
+_skin_temperature(bc::LinearizedSkinBalance, κ, T1) =
+    (bc.G0 - bc.dG_dT * bc.T0 + κ * T1) / (κ - bc.dG_dT)
+
+"""
+    AbstractSoilHeatBottom
+
+Lower boundary of the heat equation: the heat flux leaving the column
+downward through its base is ``F = α + β T_N`` (``β ≥ 0``).
+[`ZeroHeatFluxBottom`](@ref) (CLM's default), [`GeothermalHeatFlux`](@ref),
+[`BottomTemperature`](@ref).
+"""
+abstract type AbstractSoilHeatBottom end
+"Insulated base, no heat flux (CLM's lower boundary)."
+struct ZeroHeatFluxBottom <: AbstractSoilHeatBottom end
+"""
+    GeothermalHeatFlux(q)
+
+Heat flux `q` (W m⁻²) entering the column from below (upward positive;
+the continental mean is about 0.065 W m⁻²: Pollack, Hurter & Johnson
+1993, *Rev. Geophys.*, 31, 267-280).
+"""
+struct GeothermalHeatFlux{T<:AbstractFloat} <: AbstractSoilHeatBottom
+    q::T
+end
+GeothermalHeatFlux(q::Real) = GeothermalHeatFlux{Float64}(q)
+"Prescribed temperature `T` (K) at the base interface of the column."
+struct BottomTemperature{T<:AbstractFloat} <: AbstractSoilHeatBottom
+    T::T
+end
+BottomTemperature(T::Real) = BottomTemperature{Float64}(T)
+
+_heat_bottom(::ZeroHeatFluxBottom, κ) = (zero(κ), zero(κ))
+_heat_bottom(bc::GeothermalHeatFlux, κ) = (-bc.q + zero(κ), zero(κ))
+_heat_bottom(bc::BottomTemperature, κ) = (-κ * bc.T, κ)
+
+# =========================================================================
+# 9. The thermal column: a soil water column with heat and freeze–thaw
+# =========================================================================
+
+"""
+    SoilHeatBudget
+
+Cumulative energy budget of a [`SoilThermalColumn`](@ref) (J m⁻²):
+`surface` (ground heat flux into the top, ∫G dt), `bottom` (out of the
+base), `water` (enthalpy moved by water redistribution, infiltration and
+evaporation, whose water carries the enthalpy of the layer it leaves or
+joins at that layer's temperature), `latent_mismatch` (latent heat of
+evaporation the surface balance charged but the soil could not deliver),
+and `time` (s). ``Δ(\\text{enthalpy}) = surface - bottom + water``.
+"""
+mutable struct SoilHeatBudget{T<:AbstractFloat}
+    surface::T
+    bottom::T
+    water::T
+    latent_mismatch::T
+    time::T
+end
+SoilHeatBudget{T}() where {T} = SoilHeatBudget{T}(0, 0, 0, 0, 0)
+
+"""
+    SoilHeatStep
+
+What one [`step_soil_heat!`](@ref) did: time-mean ground heat flux `G`
+and basal flux `bottom_flux` (W m⁻²), the final and time-mean skin
+temperature `T_skin`, `T_skin_mean` (K), `enthalpy_change` (J m⁻²),
+`freezing` (kg m⁻² of water frozen, negative = melt), `substeps` and
+Newton `iterations`.
+"""
+struct SoilHeatStep{T<:AbstractFloat}
+    G::T
+    bottom_flux::T
+    T_skin::T
+    T_skin_mean::T
+    enthalpy_change::T
+    freezing::T
+    substeps::Int
+    iterations::Int
+end
+
+struct _HeatWorkspace{T}
+    W::Vector{T}; Hn::Vector{T}; Hm::Vector{T}; Hnew::Vector{T}
+    Tm::Vector{T}; s::Vector{T}; e::Vector{T}; k::Vector{T}; kf::Vector{T}
+    a::Vector{T}; b::Vector{T}; c::Vector{T}; d::Vector{T}; cp::Vector{T}; dp::Vector{T}
+    Hsave::Vector{T}; θlsave::Vector{T}; θisave::Vector{T}; Tsave::Vector{T}
+end
+_HeatWorkspace{T}(N) where {T} = _HeatWorkspace{T}((zeros(T, N) for _ in 1:19)...)
+
+"""
+    SoilThermalColumn(water::SoilWaterColumn, thermal; T_soil = 283.15, T_skin = T_soil[1],
+                      bottom = ZeroHeatFluxBottom(), freezing_point_depression = true,
+                      unfrozen_fraction = 1e-3, albedo = 0.2,
+                      emissivity = material_emissivity(:soil_dry),
+                      z0m = 0.01, z0h = z0m / 10, z0q = z0h, hydrology = true,
+                      tol_T = 1e-6, tol_H = 1.0, maxiter = 50, dt_min = 1e-3)
+
+A multi-layer soil with heat conduction, freeze–thaw and (through the
+wrapped [`SoilWaterColumn`](@ref)) Richards-equation water transport — an
+[`AbstractSurface`](@ref) with a skin energy balance. `thermal` is one
+[`SoilThermalProperties`](@ref) or one per layer; `T_soil` the initial layer
+temperatures (scalar or vector, K); the initial water of `water` is
+partitioned into liquid and ice in equilibrium at `T`.
+
+# Prognostic: enthalpy
+
+Each layer carries its volumetric enthalpy (J m⁻³), relative to liquid
+water at the freezing point ``T_f``,
+
+    H = C(θ_liq, θ_ice) (T - T_f) - ρ_ice L_f θ_ice
+
+with [`soil_heat_capacity`](@ref) ``C``. Given `H` and the layer's total
+water ``W = θ_{liq} + (ρ_{ice}/ρ_w)θ_{ice}``, temperature and phase
+follow from equilibrium:
+
+  * `freezing_point_depression = true` (default): liquid water coexists
+    with ice below ``T_f`` up to [`supercooled_liquid_content`](@ref)
+    (Clapeyron + retention curve), so freezing starts at the
+    [`freezing_onset_temperature`](@ref) of the layer's matric potential
+    and proceeds over a temperature range;
+  * `false`: a sharp phase change at ``T_f`` — the Stefan problem.
+
+In both cases a fraction `unfrozen_fraction` of the pore space above the
+residual content stays liquid, so the water solver always has liquid to
+work with.
+
+The state is shared with `water`: `water.T_soil`, `water.θ_liq`,
+`water.θ_ice` are this column's temperature and phases, and give the
+water solver its viscosity and ice-impedance factors (pass
+`ice_impedance = PowerLawIceImpedance()` to the water column).
+
+# Surface
+
+`albedo`, `emissivity` (default the dry-soil value of `SurfaceOptics`)
+and roughness lengths `z0m`, `z0h`, `z0q` (m; 0.01 m is CLM4.5's bare-soil
+momentum roughness) make it an `AbstractSurface`; `T_skin` is the skin
+temperature, a massless surface at depth 0 joined to the first node
+through the half layer. `hydrology = false` freezes the water
+redistribution in [`step_surface!`](@ref) (heat-only runs).
+
+Numerics: see [`step_soil_heat!`](@ref).
+"""
+mutable struct SoilThermalColumn{T<:AbstractFloat, WC<:SoilWaterColumn, P<:SoilThermalProperties,
+                                 BB<:AbstractSoilHeatBottom} <: AbstractSurface
+    water::WC
+    thermal::Vector{P}
+    H::Vector{T}
+    T_skin::T
+    bottom::BB
+    freezing_point_depression::Bool
+    unfrozen_fraction::T
+    albedo::T
+    emissivity::T
+    z0m::T
+    z0h::T
+    z0q::T
+    hydrology::Bool
+    tol_T::T
+    tol_H::T
+    maxiter::Int
+    dt_min::T
+    dt_sub::T
+    budget::SoilHeatBudget{T}
+    ws::_HeatWorkspace{T}
+end
+
+function SoilThermalColumn(water::SoilWaterColumn{T}, thermal;
+                           T_soil = 283.15, T_skin = nothing,
+                           bottom::AbstractSoilHeatBottom = ZeroHeatFluxBottom(),
+                           freezing_point_depression::Bool = true,
+                           unfrozen_fraction::Real = 1e-3,
+                           albedo::Real = 0.2, emissivity::Real = material_emissivity(:soil_dry),
+                           z0m::Real = 0.01, z0h::Real = z0m / 10, z0q::Real = z0h,
+                           hydrology::Bool = true, tol_T::Real = 1e-6, tol_H::Real = 1.0,
+                           maxiter::Integer = 50, dt_min::Real = 1e-3) where {T}
+    N = length(water.grid)
+    P = thermal isa SoilThermalProperties ? fill(thermal, N) : _per_layer(thermal, N, "thermal")
+    P = [p for p in P]
+    0 < unfrozen_fraction < 1 || throw(ArgumentError("SoilThermalColumn: 0 < unfrozen_fraction < 1"))
+    Tv = T.(_per_layer(T_soil, N, "T_soil"))
+    col = SoilThermalColumn(water, P, zeros(T, N), T(T_skin === nothing ? Tv[1] : T_skin), bottom,
+                            freezing_point_depression, T(unfrozen_fraction), T(albedo),
+                            T(emissivity), T(z0m), T(z0h), T(z0q), hydrology, T(tol_T), T(tol_H),
+                            Int(maxiter), T(dt_min), T(Inf), SoilHeatBudget{T}(), _HeatWorkspace{T}(N))
+    set_soil_temperature!(col, Tv)
+    return col
+end
+
+# ---- layer thermodynamics -----------------------------------------------------
+
+_ice_ratio(col) = col.water.constants.ρ_ice / col.water.constants.ρ_water
+_total_water(col, i) = col.water.θ_liq[i] + _ice_ratio(col) * col.water.θ_ice[i]
+function _liquid_floor(col, i)
+    h = col.water.hydraulics[i]
+    θr = residual_water_content(h)
+    return θr + col.unfrozen_fraction * (soil_porosity(h) - θr)
+end
+
+_layer_C(col::SoilThermalColumn, i, θl, θi) =
+    soil_heat_capacity(col.thermal[i], soil_porosity(col.water.hydraulics[i]), θl, θi;
+                       c = col.water.constants)
+function _layer_enthalpy(col::SoilThermalColumn, i, T, θl, θi)
+    c = col.water.constants
+    return _layer_C(col, i, θl, θi) * (T - c.thermo.T_freeze) - c.ρ_ice * LH_f0(c) * θi
+end
+_layer_k(col::SoilThermalColumn, i, θl, θi) =
+    soil_thermal_conductivity(col.thermal[i], soil_porosity(col.water.hydraulics[i]), θl, θi;
+                              c = col.water.constants)
+
+# Largest liquid content coexisting with ice at T < T_f, and its T-derivative.
+function _liquid_max(col, i, T)
+    fl = _liquid_floor(col, i)
+    col.freezing_point_depression || return (fl, zero(T))
+    c = col.water.constants
+    h = col.water.hydraulics[i]
+    ψ = freezing_matric_potential(T; c = c)
+    θ = soil_water_content(h, ψ)
+    θ <= fl && return (fl, zero(T))
+    dψdT = LH_f0(c) * c.thermo.T_freeze / (grav(c) * T^2)
+    return (θ, soil_water_capacity(h, ψ) * dψdT)
+end
+
+# Equilibrium phase state of layer i at temperature T with total water W.
+function _equilibrium_at(col, i, T, W)
+    r = _ice_ratio(col)
+    Tf = col.water.constants.thermo.T_freeze
+    fl = _liquid_floor(col, i)
+    (T >= Tf || W <= fl) && return (W, zero(W))
+    col.freezing_point_depression || return (fl, (W - fl) / r)   # below T_f: all but the floor frozen
+    θm, _ = _liquid_max(col, i, T)
+    θl = min(W, θm)
+    return (θl, (W - θl) / r)
+end
+
+"""
+Temperature, phases and dT/dH of layer i with enthalpy H and total water W:
+(T, θ_liq, θ_ice, s = dT/dH).
+"""
+function _phase_state(col, i, H, W)
+    c = col.water.constants
+    Tf = c.thermo.T_freeze
+    r = _ice_ratio(col)
+    ρL = c.ρ_ice * LH_f0(c)
+    fl = _liquid_floor(col, i)
+    Cl = _layer_C(col, i, W, zero(W))
+    if W <= fl || H >= 0 && !col.freezing_point_depression
+        return (Tf + H / Cl, W, zero(W), 1 / Cl)
+    end
+    if !col.freezing_point_depression
+        θimax = (W - fl) / r
+        Hs = -ρL * θimax
+        if H >= Hs                                         # mushy: at T_f
+            θi = -H / ρL
+            return (Tf, W - r * θi, θi, zero(H))
+        end
+        Cf = _layer_C(col, i, fl, θimax)
+        return (Tf + (H - Hs) / Cf, fl, θimax, 1 / Cf)
+    end
+    # Freezing-point depression: freezing starts at T*(ψ(W)).
+    h = col.water.hydraulics[i]
+    ψW = W >= soil_porosity(h) ? air_entry_potential(h) : soil_matric_potential(h, W)
+    Tstar = freezing_onset_temperature(ψW; c = c)
+    Hstar = Cl * (Tstar - Tf)
+    H >= Hstar && return (Tf + H / Cl, W, zero(W), 1 / Cl)
+    # Solve Heq(T) = H on T < T*, Heq increasing: safeguarded Newton.
+    Heq(T) = begin
+        θl, θi = _equilibrium_at(col, i, T, W)
+        _layer_enthalpy(col, i, T, θl, θi)
+    end
+    dHeq(T) = begin
+        θl, θi = _equilibrium_at(col, i, T, W)
+        θm, dθ = _liquid_max(col, i, T)
+        dθl = θm < W ? dθ : zero(dθ)
+        _layer_C(col, i, θl, θi) + dθl * c.ρ_water * ((cp_water(c) - cp_ice(c)) * (T - Tf) + LH_f0(c))
+    end
+    hi = Tstar
+    lo = Tstar - one(Tstar)
+    while Heq(lo) > H
+        lo = Tstar - 2 * (Tstar - lo)
+        lo > 0 || error("SoilThermalColumn: enthalpy $H below any attainable temperature")
+    end
+    # Converged in enthalpy (not only in T: near T* the ice content moves
+    # by ~10 per kelvin, so a T tolerance alone would leave θ_ice loose).
+    Htol = 1e-13 * (abs(H) + ρL * W)
+    Tk = (lo + hi) / 2
+    for _ in 1:200
+        f = Heq(Tk) - H
+        abs(f) <= Htol && break
+        f > 0 ? (hi = Tk) : (lo = Tk)
+        Tn = Tk - f / dHeq(Tk)
+        (lo < Tn < hi) || (Tn = (lo + hi) / 2)
+        Tk = Tn
+        hi - lo <= 4eps(Tk) && break
+    end
+    θl, θi = _equilibrium_at(col, i, Tk, W)
+    return (Tk, θl, θi, 1 / dHeq(Tk))
+end
+
+"""
+    set_soil_temperature!(col::SoilThermalColumn, T)
+
+Set the layer temperatures (scalar or per layer, K), re-partitioning each
+layer's total water into liquid and ice in equilibrium at `T` and
+recomputing the enthalpy. Water is conserved; the matric potential is
+unchanged.
+"""
+function set_soil_temperature!(col::SoilThermalColumn, T)
+    w = col.water
+    Tv = _per_layer(T, length(w.grid), "T")
+    r = _ice_ratio(col)
+    for i in eachindex(col.H)
+        W = _total_water(col, i)
+        θl, θi = _equilibrium_at(col, i, Tv[i], W)
+        w.θ_ice[i] = θi
+        w.θ_liq[i] = W - r * θi
+        w.T_soil[i] = Tv[i]
+        col.H[i] = _layer_enthalpy(col, i, Tv[i], w.θ_liq[i], θi)
+    end
+    return col
+end
+
+# Set the phase state of every layer from the enthalpy in col.H.
+function _apply_enthalpy!(col)
+    w = col.water
+    r = _ice_ratio(col)
+    for i in eachindex(col.H)
+        W = _total_water(col, i)
+        T, _, θi, _ = _phase_state(col, i, col.H[i], W)
+        w.T_soil[i] = T
+        w.θ_ice[i] = θi
+        w.θ_liq[i] = W - r * θi
+    end
+    return col
+end
+
+"""
+    soil_enthalpy(col::SoilThermalColumn) -> J m⁻²
+
+Column enthalpy ``Σ_i Δz_i H_i`` relative to liquid water at ``T_f``.
+"""
+soil_enthalpy(col::SoilThermalColumn) = sum(col.water.grid.dz .* col.H)
+
+"""
+    soil_ice_mass(col::SoilThermalColumn) -> kg m⁻²
+
+Ice in the column, ``Σ_i Δz_i ρ_{ice} θ_{ice,i}``.
+"""
+soil_ice_mass(col::SoilThermalColumn) =
+    col.water.constants.ρ_ice * sum(col.water.grid.dz .* col.water.θ_ice)
+
+"""
+    soil_thermal_layer_conductivity(col::SoilThermalColumn, i) -> W m⁻¹ K⁻¹
+
+Current bulk thermal conductivity of layer `i`.
+"""
+soil_thermal_layer_conductivity(col::SoilThermalColumn, i::Integer) =
+    _layer_k(col, i, col.water.θ_liq[i], col.water.θ_ice[i])
+
+# ---- one backward-Euler heat step by Newton on the enthalpy -------------------
+#
+# Cell i:  Δz_i (H_i^{n+1} - H_i^n)/Δt = F_{i-1/2} - F_{i+1/2},
+#          F_{i+1/2} = k_{i+1/2} (T_i - T_{i+1})/(z_{i+1} - z_i)   (downward),
+# with the series (harmonic, thickness-weighted) interface conductivity.
+# T = T(H, W) is linearised as T ≈ T^m + s^m (H - H^m), s = dT/dH, which
+# is zero inside a sharp phase change — so the unknown is H, and the
+# matrix D + A S is column diagonally dominant. On convergence the new
+# enthalpy is the old plus the divergence of the converged fluxes, so the
+# column conserves energy to round-off.
+function _heat_newton!(col::SoilThermalColumn{T}, dt, top) where {T}
+    w, ws, g = col.water, col.ws, col.water.grid
+    N = length(g)
+    Hm = ws.Hm
+    copyto!(Hm, ws.Hn)
+    κt = κb = αt = βt = αb = βb = zero(T)
+    for it in 1:col.maxiter
+        @inbounds for i in 1:N
+            Ti, θl, θi, si = _phase_state(col, i, Hm[i], ws.W[i])
+            ws.Tm[i], ws.s[i] = Ti, si
+            ws.k[i] = _layer_k(col, i, θl, θi)
+            ws.e[i] = Ti - si * Hm[i]
+        end
+        @inbounds for i in 1:N-1
+            # conductance (W m⁻² K⁻¹) of the two half layers in series
+            ws.kf[i] = 1 / ((g.zh[i+1] - g.z[i]) / ws.k[i] + (g.z[i+1] - g.zh[i+1]) / ws.k[i+1])
+        end
+        κt = ws.k[1] / g.z[1]
+        κb = ws.k[N] / (g.zh[end] - g.z[N])
+        αt, βt = _heat_top(top, κt)
+        αb, βb = _heat_bottom(col.bottom, κb)
+        @inbounds for i in 1:N
+            r = g.dz[i] / dt
+            diag = r
+            rhs = r * ws.Hn[i]
+            lo = up = zero(T)
+            if i == 1
+                diag -= βt * ws.s[1]
+                rhs += αt + βt * ws.e[1]
+            else
+                a = ws.kf[i-1]
+                diag += a * ws.s[i]; lo = -a * ws.s[i-1]
+                rhs += a * (ws.e[i-1] - ws.e[i])
+            end
+            if i == N
+                diag += βb * ws.s[N]
+                rhs -= αb + βb * ws.e[N]
+            else
+                a = ws.kf[i]
+                diag += a * ws.s[i]; up = -a * ws.s[i+1]
+                rhs += a * (ws.e[i+1] - ws.e[i])
+            end
+            ws.a[i], ws.b[i], ws.c[i], ws.d[i] = lo, diag, up, rhs
+        end
+        _thomas!(ws.Hnew, ws.a, ws.b, ws.c, ws.d, ws.cp, ws.dp)
+        conv = true
+        @inbounds for i in 1:N
+            isfinite(ws.Hnew[i]) || return (false, it, zero(T), zero(T), zero(T))
+            Tn = _phase_state(col, i, ws.Hnew[i], ws.W[i])[1]
+            (abs(Tn - ws.Tm[i]) <= col.tol_T && abs(ws.Hnew[i] - Hm[i]) <= col.tol_H) || (conv = false)
+            ws.Tm[i] = Tn                         # now the temperature of the new iterate
+        end
+        if conv
+            # conservative update from the converged fluxes
+            G = αt + βt * ws.Tm[1]
+            Fprev = G
+            Fb = zero(T)
+            @inbounds for i in 1:N
+                Fnext = i < N ? ws.kf[i] * (ws.Tm[i] - ws.Tm[i+1]) : αb + βb * ws.Tm[N]
+                ws.Hnew[i] = ws.Hn[i] + dt / g.dz[i] * (Fprev - Fnext)
+                Fprev = Fnext
+            end
+            Fb = Fprev
+            return (true, it, G, Fb, _skin_temperature(top, κt, ws.Tm[1]))
+        end
+        ω = it <= 10 ? one(T) : T(1 / 2)
+        @inbounds for i in 1:N
+            Hm[i] += ω * (ws.Hnew[i] - Hm[i])
+        end
+    end
+    return (false, col.maxiter, zero(T), zero(T), zero(T))
+end
+
+"""
+    step_soil_heat!(col::SoilThermalColumn, dt, top::AbstractSoilHeatTop) -> SoilHeatStep
+
+Advance the soil temperature and ice of `col` by `dt` seconds with the
+water content fixed, under the upper boundary `top`
+([`GroundHeatFluxTop`](@ref), [`SkinTemperatureTop`](@ref),
+[`LinearizedSkinBalance`](@ref)) and the column's `bottom`.
+
+The heat equation in enthalpy form,
+
+    ∂H/∂t = ∂/∂z (k ∂T/∂z),   H = C (T - T_f) - ρ_ice L_f θ_ice,
+
+is discretised by finite volumes (series interface conductivity) and
+backward Euler, and solved by Newton's method on the enthalpy with the
+conductivity lagged (the enthalpy method of e.g. Voller et al. 1990,
+Nedjar 2002). Because the unknown is `H` and not `T`, a sharp phase
+change needs no apparent-heat-capacity smoothing: layers at ``T_f``
+simply absorb or release latent heat. The new enthalpy is formed from the
+divergence of the converged fluxes, so
+
+    enthalpy_change = (G - bottom_flux) dt
+
+to round-off. Sub-steps adapt to the Newton convergence (halved on
+failure). The layer temperatures, `θ_liq` and `θ_ice` of `col.water` are
+updated; its matric potential is unchanged (freezing conserves the total
+water, on which retention depends).
+"""
+function step_soil_heat!(col::SoilThermalColumn{T}, dt::Real, top::AbstractSoilHeatTop) where {T}
+    dt > 0 || throw(ArgumentError("step_soil_heat!: dt > 0"))
+    ws, w = col.ws, col.water
+    N = length(col.H)
+    for i in 1:N
+        ws.W[i] = _total_water(col, i)
+    end
+    E0 = soil_enthalpy(col)
+    ice0 = soil_ice_mass(col)
+    t = zero(T)
+    htry = min(col.dt_sub, T(dt))
+    Gsum = Fsum = Tssum = zero(T)
+    Ts = col.T_skin
+    nsub = nit = 0
+    while t < dt
+        h = min(htry, T(dt) - t)
+        copyto!(ws.Hn, col.H)
+        ok, it, G, Fb, Tsk = _heat_newton!(col, h, top)
+        nit += it
+        if ok
+            copyto!(col.H, ws.Hnew)
+            _apply_enthalpy!(col)
+            t = (T(dt) - t - h) <= 16eps(T(dt)) * dt ? T(dt) : t + h
+            Gsum += G * h; Fsum += Fb * h; Tssum += Tsk * h
+            Ts = Tsk
+            nsub += 1
+            it <= 4 && (htry = min(3htry / 2, T(dt)))
+        else
+            htry = h / 2
+            htry >= col.dt_min ||
+                error("step_soil_heat!: Newton iteration failed to converge for sub-steps down to $(col.dt_min) s")
+        end
+    end
+    col.dt_sub = htry
+    col.T_skin = Ts
+    b = col.budget
+    b.surface += Gsum; b.bottom += Fsum; b.time += dt
+    return SoilHeatStep{T}(Gsum / dt, Fsum / dt, Ts, Tssum / dt, soil_enthalpy(col) - E0,
+                           soil_ice_mass(col) - ice0, nsub, nit)
+end
 
 end # module

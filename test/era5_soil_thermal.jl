@@ -97,4 +97,220 @@ end
             join((@sprintf("%.3f", x) for x in θs), ", "))
 end
 
+@testset "Freezing equilibrium in a layer" begin
+    Tf = CST.thermo.T_freeze
+    h = carsel_parrish_texture(:loam)
+    # a layer at matric potential ψ starts to freeze at T*(ψ): drier soil later
+    p = clm_soil_thermal_properties(40, 20)
+    wc = SoilWaterColumn(uniform_soil_grid(1.0, 2), h; ψ = [-1.0, -10.0])
+    col = SoilThermalColumn(wc, p; T_soil = 280.0, hydrology = false)
+    W = copy(wc.θ_liq)
+    Ts = [freezing_onset_temperature(-1.0), freezing_onset_temperature(-10.0)]
+    @test Ts[2] < Ts[1] < Tf
+    set_soil_temperature!(col, Ts .+ 1e-6)
+    @test all(wc.θ_ice .== 0)
+    set_soil_temperature!(col, Ts .- 0.05)
+    @test all(wc.θ_ice .> 0)
+    # equilibrium liquid content is the retention curve at the Clapeyron ψ,
+    # water is conserved, and ψ (from total water) is untouched by freezing
+    for i in 1:2
+        @test wc.θ_liq[i] ≈ supercooled_liquid_content(h, Ts[i] - 0.05) rtol = 1e-12
+        @test wc.θ_liq[i] + 0.917 * wc.θ_ice[i] ≈ W[i] rtol = 1e-14
+    end
+    @test wc.ψ ≈ [-1.0, -10.0]
+    # enthalpy ↔ state is a bijection: re-deriving the state from H recovers it
+    for T in (280.0, Tf - 0.01, Tf - 0.5, Tf - 20)
+        set_soil_temperature!(col, T)
+        Tb, θl, θi = copy(wc.T_soil), copy(wc.θ_liq), copy(wc.θ_ice)
+        SCT._apply_enthalpy!(col)
+        @test wc.T_soil ≈ Tb rtol = 1e-12
+        @test wc.θ_ice ≈ θi rtol = 1e-9 atol = 1e-14
+    end
+    # sharp phase change: all but the unfrozen floor freezes just below T_f
+    wc2 = SoilWaterColumn(uniform_soil_grid(1.0, 1), h; θ = 0.3)
+    col2 = SoilThermalColumn(wc2, p; T_soil = Tf - 1e-6, freezing_point_depression = false)
+    floor = residual_water_content(h) + 1e-3 * (soil_porosity(h) - residual_water_content(h))
+    @test wc2.θ_liq[1] ≈ floor
+    @test wc2.θ_ice[1] ≈ (0.3 - floor) / 0.917
+    # the impedance and viscosity factors follow the layer's ice and temperature
+    imp = PowerLawIceImpedance()
+    wc3 = SoilWaterColumn(uniform_soil_grid(1.0, 4), h; ψ = -1.0, ice_impedance = imp)
+    col3 = SoilThermalColumn(wc3, p; T_soil = 280.0)
+    K0 = soil_layer_conductivity(wc3, 2)
+    set_soil_temperature!(col3, [280.0, Tf - 2, 280.0, 280.0])
+    @test soil_layer_conductivity(wc3, 2) / K0 ≈
+          viscosity_conductivity_factor(Tf - 2) / viscosity_conductivity_factor(280.0) *
+          10^(-6 * wc3.θ_ice[2] / soil_porosity(h)) rtol = 1e-10
+end
+
+@testset "Neumann two-phase freezing front" begin
+    # Semi-infinite soil at T_i > T_f whose surface drops to T_s < T_f at
+    # t = 0. Neumann's similarity solution (Carslaw & Jaeger 1959, §11.2):
+    # the front is at X = 2λ√(D_f t), with λ the root of
+    #   k_f ΔT_f e^{-λ²}/(erf λ √(π D_f)) - k_u ΔT_u e^{-λ² D_f/D_u}/(erfc(λ√(D_f/D_u)) √(π D_u))
+    #     = L λ √D_f
+    # Constant properties per phase come from the model's own constitutive
+    # functions for the fully frozen and fully thawed soil.
+    h = GardnerExponential(θ_r = 0.0, θ_s = 0.4, α = 1.0, K_s = 1e-6)
+    p = clm_soil_thermal_properties(40, 20)
+    W, Ti, Tsurf, Tf = 0.3, 275.15, 263.15, CST.thermo.T_freeze
+    fl = 1e-3 * 0.4
+    θimax = (W - fl) / 0.917
+    kf, ku = soil_thermal_conductivity(p, 0.4, fl, θimax), soil_thermal_conductivity(p, 0.4, W, 0.0)
+    Cf, Cu = soil_heat_capacity(p, 0.4, fl, θimax), soil_heat_capacity(p, 0.4, W, 0.0)
+    L = 917 * LH_f0(CST) * θimax
+    Df, Du = kf / Cf, ku / Cu
+    F(λ) = kf * (Tf - Tsurf) * exp(-λ^2) / (_erf(λ) * sqrt(π * Df)) -
+           ku * (Ti - Tf) * exp(-λ^2 * Df / Du) / (_erfc(λ * sqrt(Df / Du)) * sqrt(π * Du)) -
+           L * λ * sqrt(Df)
+    lo, hi = 1e-4, 3.0
+    for _ in 1:200
+        m = (lo + hi) / 2
+        F(m) > 0 ? (lo = m) : (hi = m)
+    end
+    λ = (lo + hi) / 2
+    t_end = 30 * 86400.0
+    Xa = 2λ * sqrt(Df * t_end)
+    Tan(z) = z < Xa ? Tsurf + (Tf - Tsurf) * _erf(z / (2sqrt(Df * t_end))) / _erf(λ) :
+                      Ti - (Ti - Tf) * _erfc(z / (2sqrt(Du * t_end))) / _erfc(λ * sqrt(Df / Du))
+    errs, terrs = Float64[], Float64[]
+    # uniform Δz over the top 2.5 m (the front reaches 1.27 m), then
+    # stretching by 10 % per layer to 15 m so the far field is unbounded
+    stretched(Δz) = begin
+        zh = collect(0.0:Δz:2.5)
+        while zh[end] < 15
+            push!(zh, zh[end] + 1.1 * (zh[end] - zh[end-1]))
+        end
+        SoilGrid(zh)
+    end
+    for (Δz, dt) in ((0.04, 3600.0), (0.02, 900.0), (0.01, 225.0))
+        g = stretched(Δz)
+        wc = SoilWaterColumn(g, h; θ = W)
+        col = SoilThermalColumn(wc, p; T_soil = Ti, freezing_point_depression = false,
+                                hydrology = false)
+        E0 = soil_enthalpy(col)
+        for _ in 1:round(Int, t_end / dt)
+            step_soil_heat!(col, dt, SkinTemperatureTop(Tsurf))
+        end
+        # front position: the frozen depth equivalent of the ice in the column
+        X = sum(g.dz .* wc.θ_ice) / θimax
+        push!(errs, X / Xa - 1)
+        # temperatures away from the one partly frozen cell, whose node is
+        # pinned at T_f (the enthalpy method's staircase)
+        mushy = findall(0 .< wc.θ_ice .< 0.999θimax)
+        away = [i for i in eachindex(g.z) if g.z[i] < 5 && all(abs(i - m) > 1 for m in mushy)]
+        Terr = maximum(abs.(wc.T_soil[away] .- Tan.(g.z[away])))
+        push!(terrs, Terr)
+        cons = soil_enthalpy(col) - E0 - (col.budget.surface - col.budget.bottom)
+        @test abs(cons) < 1e-12 * abs(E0)
+        @test length(mushy) <= 1
+        @printf("  Neumann Δz = %.0f mm, Δt = %.0f s: X = %.4f m vs %.4f m (%.2e), max |ΔT| off the front cell %.4f K, energy residual %.1e J/m²\n",
+                1000Δz, dt, X, Xa, X / Xa - 1, Terr, cons)
+    end
+    @test all(abs.(errs) .< 0.006)
+    @test abs(errs[3]) < 0.0015
+    @test all(terrs .< 0.1) && terrs[3] < terrs[1]
+    # first-order convergence of the front on the enthalpy grid
+    @test abs(errs[1]) / abs(errs[2]) > 1.6 && abs(errs[2]) / abs(errs[3]) > 1.6
+    # Stefan limit: with λ from the one-phase quasi-steady law X ≈ √(2 k_f ΔT t / L)
+    @test Xa < sqrt(2kf * (Tf - Tsurf) * t_end / L)          # warm soil below slows the front
+end
+
+@testset "Periodic surface temperature: damping depth and phase" begin
+    # T(z,t) = T̄ + A e^{-z/d} sin(ωt - z/d),  d = √(2k/(Cω)),  and the
+    # ground heat flux leads the surface temperature by π/4 with amplitude
+    # A √(k C ω) (Carslaw & Jaeger 1959, §2.6).
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    for (name, P, depth, N, dt, ncyc) in (("diurnal", 86400.0, 1.0, 200, 150.0, 6),
+                                         ("annual", 365 * 86400.0, 20.0, 200, 43200.0, 5))
+        g = uniform_soil_grid(depth, N)
+        wc = SoilWaterColumn(g, h; θ = 0.3)
+        col = SoilThermalColumn(wc, p; T_soil = 288.15, hydrology = false)
+        k = soil_thermal_layer_conductivity(col, 1)
+        C = soil_heat_capacity(p, soil_porosity(h), 0.3, 0.0)
+        ω = 2π / P
+        d = sqrt(2k / (C * ω))
+        A = 8.0
+        nper = round(Int, P / dt)
+        S, Cc = zeros(N), zeros(N)
+        Gs = Gc = 0.0
+        t = 0.0
+        for cyc in 1:ncyc, _ in 1:nper
+            t += dt
+            st = step_soil_heat!(col, dt, SkinTemperatureTop(288.15 + A * sin(ω * (t - dt / 2))))
+            if cyc == ncyc
+                S .+= (wc.T_soil .- 288.15) .* sin(ω * t)
+                Cc .+= (wc.T_soil .- 288.15) .* cos(ω * t)
+                Gs += st.G * sin(ω * (t - dt / 2)); Gc += st.G * cos(ω * (t - dt / 2))
+            end
+        end
+        amp = 2 .* sqrt.(S .^ 2 .+ Cc .^ 2) ./ nper
+        lag = atan.(Cc, S) .* -1
+        for zq in (d, 2d)
+            i = argmin(abs.(g.z .- zq))
+            z = g.z[i]
+            @test amp[i] / A ≈ exp(-z / d) rtol = 0.012
+            @test lag[i] ≈ z / d atol = 0.01
+            @printf("  %s: z = %.3f m (%.1f d): amplitude ratio %.4f vs %.4f, lag %.4f vs %.4f rad\n",
+                    name, z, z / d, amp[i] / A, exp(-z / d), lag[i], z / d)
+        end
+        Gamp, Glead = 2sqrt(Gs^2 + Gc^2) / nper, atan(Gc, Gs)
+        @test Gamp ≈ A * sqrt(k * C * ω) rtol = 1e-3
+        @test Glead ≈ π / 4 atol = 0.01
+        @printf("  %s: d = %.4f m; G amplitude %.2f vs %.2f W/m², lead %.4f vs π/4 = %.4f\n",
+                name, d, Gamp, A * sqrt(k * C * ω), Glead, π / 4)
+    end
+end
+
+@testset "Energy conservation with freeze–thaw" begin
+    # Freezing and thawing under a prescribed flux, both phase models,
+    # layered soil: Δ enthalpy = ∫(G - F_bottom) dt to round-off, and the
+    # latent heat shows up as a zero curtain at T_f.
+    g = clm5_soil_grid(12)
+    hyd = [i <= 4 ? carsel_parrish_texture(:silt_loam) : carsel_parrish_texture(:clay) for i in 1:12]
+    th = [i <= 4 ? clm_soil_thermal_properties(20, 15) : clm_soil_thermal_properties(20, 50) for i in 1:12]
+    for fpd in (true, false)
+        wc = SoilWaterColumn(g, hyd; ψ = -0.5)
+        col = SoilThermalColumn(wc, th; T_soil = 274.15, freezing_point_depression = fpd,
+                                bottom = GeothermalHeatFlux(0.065), hydrology = false)
+        E0, S0 = soil_enthalpy(col), soil_water_storage(wc)
+        worst = 0.0
+        for n in 1:24 * 40
+            G = n <= 24 * 20 ? -80.0 : 80.0              # 20 days of cooling, 20 of warming
+            E1 = soil_enthalpy(col)
+            st = step_soil_heat!(col, 3600.0, GroundHeatFluxTop(G))
+            worst = max(worst, abs(st.enthalpy_change - (st.G - st.bottom_flux) * 3600))
+            @test st.enthalpy_change ≈ soil_enthalpy(col) - E1
+            n == 24 * 20 && @test soil_ice_mass(col) > 50
+        end
+        cum = soil_enthalpy(col) - E0 - (col.budget.surface - col.budget.bottom)
+        @test worst < 1e-6
+        @test abs(cum) < 1e-6
+        @test col.budget.surface ≈ 0 atol = 1e-6                     # ±80 W/m² for equal times
+        @test col.budget.bottom ≈ -0.065 * 40 * 86400 rtol = 1e-12
+        @test soil_water_storage(wc) ≈ S0 rtol = 1e-14               # phase change conserves water
+        @printf("  fpd = %s: worst per-step energy residual %.1e J/m², cumulative %.1e J/m²\n",
+                fpd, worst, cum)
+    end
+    # zero curtain: a saturated sharp-freezing layer sits at T_f while latent
+    # heat is removed, for exactly ρ_ice L_f θ_ice,max Δz / |G| seconds
+    h = GardnerExponential(θ_r = 0.0, θ_s = 0.4, α = 1.0, K_s = 1e-6)
+    wc = SoilWaterColumn(uniform_soil_grid(0.1, 1), h; θ = 0.3)
+    col = SoilThermalColumn(wc, clm_soil_thermal_properties(40, 20); T_soil = 273.15 + 1e-9,
+                            freezing_point_depression = false, hydrology = false)
+    θimax = (0.3 - 4e-4) / 0.917
+    t_latent = 917 * LH_f0(CST) * θimax * 0.1 / 50.0
+    nsteps = floor(Int, t_latent / 600) - 1
+    for _ in 1:nsteps
+        step_soil_heat!(col, 600.0, GroundHeatFluxTop(-50.0))
+    end
+    @test wc.T_soil[1] == CST.thermo.T_freeze
+    @test soil_ice_mass(col) ≈ 917 * θimax * 0.1 * nsteps * 600 / t_latent rtol = 1e-6
+    for _ in 1:3
+        step_soil_heat!(col, 600.0, GroundHeatFluxTop(-50.0))
+    end
+    @test wc.T_soil[1] < CST.thermo.T_freeze
+end
+
 end # testset
