@@ -53,6 +53,9 @@ using ..Grids: RegularGrid
 using ..BoundaryConditions: fill_halos!
 using ..RadiationCore: _gauss_legendre
 using ..P3Microphysics: lgamma_lanczos
+using ..TwoStream: TwoStreamVariant, layer_reflectance_transmittance_sw, adding_solver!
+import ..TwoStream: two_stream_coefficients
+using ..SolarGeometry: SolarPosition
 
 export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
@@ -61,7 +64,13 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!,
        CanopyWindSolution, solve_canopy_wind_column,
        harman_finnigan_mixing_length, canopy_attenuation_coefficient,
-       canopy_exponential_wind
+       canopy_exponential_wind,
+       AbstractLeafAngleDistribution, RossGoudriaanLeaves, SphericalLeaves,
+       HorizontalLeaves, LeafOptics, leaf_projection_function,
+       beam_extinction_coefficient, average_inverse_optical_depth,
+       canopy_scattering_parameters, canopy_beam_transmittance,
+       sunlit_leaf_fraction, canopy_diffuse_transmittance,
+       CanopyShortwaveSolution, canopy_shortwave
 
 # =========================================================================
 # 1. Leaf-area density profiles
@@ -672,5 +681,401 @@ function _thomas!(x, lo, di, up, rhs, c, d)
     end
     return x
 end
+
+# =========================================================================
+# 4. Radiation in the canopy (#23)
+# =========================================================================
+#
+# The optical-depth coordinate is the cumulative leaf area Λ above a
+# height (`cumulative_leaf_area`). What decides how much of a beam a unit
+# of leaf area intercepts is the leaf orientation, through the
+# Ross (1981) projection function G(μ); what happens to the intercepted
+# light is the leaf single-scattering albedo ω = α + τ_l. The multiple
+# scattering between leaves and soil is the two-stream problem of
+# Sellers (1985), which is solved here with the Era III two-stream layer
+# formulae and adding solver of `TwoStream` — not a second copy of them —
+# by supplying the canopy's γ coefficients through a `TwoStreamVariant`.
+
+"""
+    AbstractLeafAngleDistribution
+
+Leaf orientation of a canopy. An implementer provides
+
+  * `leaf_projection_function(d, μ)` — Ross's ``G(μ)``: mean projection of
+    unit leaf area onto the plane normal to a direction with cosine of
+    zenith angle ``μ``;
+  * `average_inverse_optical_depth(d)` — Sellers' ``\\bar μ =
+    \\int_0^1 μ'/G(μ')\\,dμ'``, the diffuse-stream cosine;
+  * `canopy_scattering_parameters(d, optics, μ)` — ``(ω, β, β_0)``, the
+    leaf single-scattering albedo and the up-scatter fractions of diffuse
+    and of direct-beam radiation.
+"""
+abstract type AbstractLeafAngleDistribution end
+
+"""
+    RossGoudriaanLeaves(χ_L = 0)
+
+Leaf-angle distribution described by Ross's departure index ``χ_L``
+(``-1`` vertical, ``0`` spherical/random, ``+1`` horizontal), with the
+projection function fitted by Goudriaan (1977):
+
+```math
+G(μ) = φ_1 + φ_2 μ,\\qquad φ_1 = 0.5 - 0.633χ_L - 0.33χ_L^2,\\qquad
+φ_2 = 0.877\\,(1 - 2φ_1).
+```
+
+The fit is only valid for ``-0.4 ≤ χ_L ≤ 0.6`` (outside it ``G`` can turn
+negative), which the constructor enforces — the same range CLM uses
+(Oleson et al. 2013, §3.1). `χ_L = 0` gives the spherical distribution,
+``G = 1/2`` exactly. For perfectly horizontal leaves use
+[`HorizontalLeaves`](@ref).
+"""
+struct RossGoudriaanLeaves <: AbstractLeafAngleDistribution
+    χ::Float64
+    φ1::Float64
+    φ2::Float64
+    function RossGoudriaanLeaves(χ::Real = 0.0)
+        -0.4 <= χ <= 0.6 ||
+            throw(ArgumentError("RossGoudriaanLeaves: χ_L must lie in [-0.4, 0.6] (validity of the Goudriaan fit)"))
+        φ1 = 0.5 - 0.633χ - 0.33χ^2
+        new(Float64(χ), φ1, 0.877 * (1 - 2φ1))
+    end
+end
+
+"""
+    SphericalLeaves() = RossGoudriaanLeaves(0.0)
+
+Randomly (spherically) oriented leaves: ``G(μ) = 1/2`` for every direction.
+"""
+SphericalLeaves() = RossGoudriaanLeaves(0.0)
+
+"""
+    HorizontalLeaves()
+
+All leaves horizontal: ``G(μ) = μ``, so every direction is extinguished at
+exactly one unit per unit leaf area (``K = 1``, ``\\bar μ = 1``) and a
+scattering event sends the leaf reflectance up and the leaf transmittance
+down whatever the incidence angle (``β = β_0 = α/ω``). For this canopy the
+two-stream equations are exact rather than an approximation, which makes
+it a reference case (Goudriaan 1977).
+"""
+struct HorizontalLeaves <: AbstractLeafAngleDistribution end
+
+"""
+    LeafOptics(reflectance, transmittance)
+
+Hemispherical reflectance ``α`` and transmittance ``τ_l`` of a single leaf
+in one spectral band (bi-Lambertian leaf). Their sum is the leaf
+single-scattering albedo ``ω``. Typical broadleaf values are
+``α ≈ 0.10, τ_l ≈ 0.05`` in the PAR band and ``α ≈ 0.45, τ_l ≈ 0.25``
+in the near infrared; in the thermal infrared ``α = 1 - ε_{leaf}``,
+``τ_l ≈ 0``.
+"""
+struct LeafOptics
+    reflectance::Float64
+    transmittance::Float64
+    function LeafOptics(α::Real, τ::Real)
+        (α >= 0 && τ >= 0 && α + τ <= 1) ||
+            throw(ArgumentError("LeafOptics: need α ≥ 0, τ ≥ 0, α + τ ≤ 1"))
+        new(Float64(α), Float64(τ))
+    end
+end
+
+"""
+    leaf_projection_function(d::AbstractLeafAngleDistribution, μ) -> G(μ)
+
+Ross's ``G``-function: the projected area of unit leaf area in the
+direction whose zenith-angle cosine is `μ`, averaged over the leaf-angle
+distribution. For any real distribution ``\\int_0^1 G\\,dμ = 1/2``.
+"""
+leaf_projection_function(d::RossGoudriaanLeaves, μ::Real) = d.φ1 + d.φ2 * μ
+leaf_projection_function(::HorizontalLeaves, μ::Real) = Float64(μ)
+
+"""
+    beam_extinction_coefficient(d, μ) -> K = G(μ)/μ
+
+Extinction coefficient of the direct beam per unit leaf area for a sun
+with zenith-angle cosine `μ`: the beam transmitted to cumulative leaf area
+``Λ`` is ``e^{-KΛ}`` (Beer–Lambert).
+"""
+beam_extinction_coefficient(d::AbstractLeafAngleDistribution, μ::Real) =
+    leaf_projection_function(d, μ) / μ
+
+"""
+    average_inverse_optical_depth(d) -> μ̄
+
+Sellers' (1985) ``\\bar μ = \\int_0^1 μ'/G(μ')\\,dμ'``, the average inverse
+diffuse optical depth per unit leaf area. The two-stream diffuse fluxes
+are extinguished at ``1/\\bar μ`` per unit leaf area. For the Goudriaan fit
+
+```math
+\\bar μ = \\frac{1}{φ_2}\\left[1 - \\frac{φ_1}{φ_2}
+          \\ln\\frac{φ_1 + φ_2}{φ_1}\\right],
+```
+
+evaluated by its series when ``φ_2/φ_1`` is small (the closed form is
+``0/0`` at ``χ_L = 0``, where ``\\bar μ = 1``).
+"""
+function average_inverse_optical_depth(d::RossGoudriaanLeaves)
+    φ1, φ2 = d.φ1, d.φ2
+    x = φ2 / φ1
+    if abs(x) < 1e-3
+        # 1 - ln(1+x)/x = x/2 - x²/3 + x³/4 - x⁴/5 + …
+        return (0.5 - x / 3 + x^2 / 4 - x^3 / 5 + x^4 / 6) / φ1
+    end
+    return (1 - log1p(x) / x) / φ2
+end
+average_inverse_optical_depth(::HorizontalLeaves) = 1.0
+
+"""
+    canopy_scattering_parameters(d, optics::LeafOptics, μ) -> (ω, β, β₀)
+
+Leaf single-scattering albedo ``ω = α + τ_l`` and the fractions of
+scattered radiation sent upward, ``β`` for diffuse and ``β_0`` for direct
+radiation from a sun at zenith cosine `μ`, as in Sellers (1985) and
+CLM (Oleson et al. 2013, eqs. 3.13–3.17):
+
+```math
+ωβ = \\tfrac12\\left[α + τ_l + (α - τ_l)\\cos^2\\bar θ\\right],
+\\qquad \\cos\\bar θ = \\frac{1 + χ_L}{2},
+\\qquad ωβ_0 = \\frac{1 + \\bar μ K}{\\bar μ K}\\,a_s(μ),
+```
+
+with the single-scattering albedo of the canopy for isotropically
+scattering leaves
+
+```math
+a_s(μ) = \\frac{ω}{2}\\int_0^1 \\frac{μ' G(μ)}{μ G(μ') + μ' G(μ)}\\,dμ'
+       = \\frac{ω}{2}\\frac{G}{μφ_2 + G}\\left[1 - \\frac{μφ_1}{μφ_2 + G}
+         \\ln\\frac{μφ_1 + μφ_2 + G}{μφ_1}\\right].
+```
+"""
+function canopy_scattering_parameters(d::RossGoudriaanLeaves, o::LeafOptics, μ::Real)
+    α, τ = o.reflectance, o.transmittance
+    ω = α + τ
+    ω <= 0 && return (0.0, 0.0, 0.0)
+    cosθ = (1 + d.χ) / 2
+    β = (α + τ + (α - τ) * cosθ^2) / (2ω)
+    μ = Float64(μ)
+    G = leaf_projection_function(d, μ)
+    K = G / μ
+    μ̄ = average_inverse_optical_depth(d)
+    φ1, φ2 = d.φ1, d.φ2
+    s = μ * φ2 + G
+    a_s = (ω / 2) * (G / s) * (1 - (μ * φ1 / s) * log((μ * φ1 + s) / (μ * φ1)))
+    β0 = (1 + μ̄ * K) / (μ̄ * K) * a_s / ω
+    return (ω, β, β0)
+end
+function canopy_scattering_parameters(::HorizontalLeaves, o::LeafOptics, μ::Real)
+    ω = o.reflectance + o.transmittance
+    ω <= 0 && return (0.0, 0.0, 0.0)
+    β = o.reflectance / ω
+    return (ω, β, β)
+end
+
+"""
+    canopy_beam_transmittance(d, μ, Λ) -> e^{-G(μ)Λ/μ}
+
+Beer–Lambert transmittance of the direct beam through cumulative leaf area
+`Λ`. It is also the probability that a leaf at depth `Λ` is sunlit.
+"""
+canopy_beam_transmittance(d::AbstractLeafAngleDistribution, μ::Real, Λ::Real) =
+    μ > 0 ? exp(-beam_extinction_coefficient(d, μ) * Λ) : 0.0
+
+"""
+    sunlit_leaf_fraction(d, μ, Λ) -> f_sun
+
+Fraction of the leaves at cumulative leaf area `Λ` that see the sun, which
+for randomly placed leaves equals the beam transmittance ``e^{-KΛ}``
+(Monsi & Saeki 1953; de Pury & Farquhar 1997).
+"""
+sunlit_leaf_fraction(d::AbstractLeafAngleDistribution, μ::Real, Λ::Real) =
+    canopy_beam_transmittance(d, μ, Λ)
+
+"""
+    canopy_diffuse_transmittance(d, Λ; n = 64) -> T_d
+
+Exact Beer–Lambert transmittance of isotropic (uniform-radiance) diffuse
+light through cumulative leaf area `Λ` of **black** leaves,
+
+```math
+T_d(Λ) = 2\\int_0^1 e^{-G(μ)Λ/μ}\\,μ\\,dμ ,
+```
+
+which for spherical leaves is ``2E_3(Λ/2)``. The two-stream model replaces
+this by ``e^{-Λ/\\bar μ}``; the difference is the angular-closure error of
+the two-stream approximation (see the theory page).
+"""
+function canopy_diffuse_transmittance(d::AbstractLeafAngleDistribution, Λ::Real; n::Int = 64)
+    Λ <= 0 && return 1.0
+    # graded Gauss-Legendre on (0,1): the integrand has an essential
+    # singularity e^{-GΛ/μ} at μ → 0, so resolve small μ geometrically
+    x, w = _gauss_legendre(n)
+    s = 0.0
+    lo = 0.0
+    for m in 12:-1:0
+        hi = 2.0^(-m)
+        c = (hi + lo) / 2; r = (hi - lo) / 2
+        for q in eachindex(x)
+            μ = c + r * x[q]
+            s += w[q] * r * exp(-leaf_projection_function(d, μ) * Λ / μ) * μ
+        end
+        lo = hi
+    end
+    return 2s
+end
+
+# ---- two-stream variant carrying the canopy γ coefficients --------------
+
+# Sellers (1985) eqs. in the Meador–Weaver form used by `TwoStream`, with
+# optical depth τ = Λ, beam "μ₀" = 1/K and:
+#   γ₁ = [1 - (1-β)ω]/μ̄,  γ₂ = ωβ/μ̄,  γ₃ = β₀,  γ₄ = 1 - β₀.
+struct SellersCanopyVariant <: TwoStreamVariant
+    μ̄::Float64
+    β::Float64
+    β0::Float64
+end
+@inline function two_stream_coefficients(v::SellersCanopyVariant, ω::T, g::T, μ₀::T) where {T}
+    γ1 = (1 - (1 - v.β) * ω) / v.μ̄
+    γ2 = ω * v.β / v.μ̄
+    return (T(γ1), T(γ2), T(v.β0), T(1 - v.β0))
+end
+
+"""
+    CanopyShortwaveSolution
+
+Result of [`canopy_shortwave`](@ref) for one spectral band. Face arrays
+(length `N+1`) and layer arrays (length `N`) are ordered bottom-up like
+`z_faces`; fluxes are per unit ground area [W m⁻²].
+
+  * `z_faces`, `Λ_faces` — heights and cumulative leaf area above each face
+  * `flux_dn_dir`, `flux_dn_dif`, `flux_up` — direct and diffuse downward,
+    and upward, fluxes at the faces
+  * `absorbed` — absorbed by the leaves of each layer
+  * `absorbed_sunlit`, `absorbed_shaded` — the same split between sunlit
+    and shaded leaves (they sum to `absorbed`)
+  * `lai_sunlit`, `lai_shaded` — sunlit and shaded leaf area of each layer
+    (sum to the layer LAI)
+  * `incident`, `reflected`, `canopy_absorbed`, `ground_absorbed` — column
+    totals; `incident = reflected + canopy_absorbed + ground_absorbed`
+  * `K`, `μ̄`, `ω`, `β`, `β0` — the optical parameters used
+"""
+struct CanopyShortwaveSolution
+    z_faces::Vector{Float64}
+    Λ_faces::Vector{Float64}
+    flux_dn_dir::Vector{Float64}
+    flux_dn_dif::Vector{Float64}
+    flux_up::Vector{Float64}
+    absorbed::Vector{Float64}
+    absorbed_sunlit::Vector{Float64}
+    absorbed_shaded::Vector{Float64}
+    lai_sunlit::Vector{Float64}
+    lai_shaded::Vector{Float64}
+    incident::Float64
+    reflected::Float64
+    canopy_absorbed::Float64
+    ground_absorbed::Float64
+    K::Float64
+    μ̄::Float64
+    ω::Float64
+    β::Float64
+    β0::Float64
+end
+
+_cos_zenith(μ::Real) = Float64(μ)
+_cos_zenith(p::SolarPosition) = Float64(p.μ₀)
+
+"""
+    canopy_shortwave(z_faces, lad; sun, sw_direct, sw_diffuse, leaves = SphericalLeaves(),
+                     optics::LeafOptics, albedo_direct, albedo_diffuse = albedo_direct)
+        -> CanopyShortwaveSolution
+    canopy_shortwave(profile::AbstractLeafAreaDensity, z_faces; kwargs...)
+
+Shortwave radiation in one spectral band through a canopy of layer-mean
+leaf-area densities `lad` [m² m⁻³] on the layers bounded by `z_faces`
+(bottom-up), by the canopy two-stream model of Sellers (1985).
+
+  * `sun` — cosine of the solar zenith angle, or a
+    `SolarGeometry.SolarPosition` (its apparent ``μ_0`` is used); a sun at
+    or below the horizon has no direct beam and no sunlit leaves
+  * `sw_direct` — direct-beam irradiance **on a horizontal plane** at the
+    top face [W m⁻²] (i.e. DNI·μ, or the `flux_dn_dir` of an Era III
+    atmospheric solve at the surface level)
+  * `sw_diffuse` — diffuse downward irradiance at the top face [W m⁻²]
+  * `albedo_direct`, `albedo_diffuse` — ground (soil) albedo for the two
+
+The layer reflectances and transmittances and the adding solution are
+those of `TwoStream` (`layer_reflectance_transmittance_sw`,
+`adding_solver!`) with the canopy γ coefficients
+(``τ = Λ``, ``μ_0 → 1/K``, see [`canopy_scattering_parameters`](@ref)).
+Because the equations depend on height only through ``Λ``, the solution
+is independent of how the leaf area is layered.
+
+Absorption is split between sunlit and shaded leaves as in
+de Pury & Farquhar (1997) and CLM: sunlit leaves absorb the fraction
+``1-ω`` of the unscattered beam they intercept, and the absorbed diffuse
+(sky plus scattered) radiation of a layer is shared in proportion to leaf
+area. The sunlit leaf area of a layer between cumulative leaf areas
+``Λ_t < Λ_b`` is ``(e^{-KΛ_t} - e^{-KΛ_b})/K``.
+"""
+function canopy_shortwave(z_faces::AbstractVector{<:Real}, lad::AbstractVector{<:Real};
+                          sun, sw_direct::Real, sw_diffuse::Real,
+                          leaves::AbstractLeafAngleDistribution = SphericalLeaves(),
+                          optics::LeafOptics,
+                          albedo_direct::Real, albedo_diffuse::Real = albedo_direct)
+    N = length(lad)
+    length(z_faces) == N + 1 ||
+        throw(DimensionMismatch("canopy_shortwave: need length(z_faces) == length(lad) + 1"))
+    (sw_direct >= 0 && sw_diffuse >= 0) ||
+        throw(ArgumentError("canopy_shortwave: irradiances must be ≥ 0"))
+    zf = Float64.(z_faces)
+    dΛ = [Float64(lad[k]) * (zf[k+1] - zf[k]) for k in 1:N]
+    all(>=(0), dΛ) || throw(ArgumentError("canopy_shortwave: lad ≥ 0 and increasing z_faces required"))
+    Λ = zeros(N + 1)
+    for k in N:-1:1
+        Λ[k] = Λ[k+1] + dΛ[k]
+    end
+
+    μ = _cos_zenith(sun)
+    daylight = μ > 1e-6
+    μs = daylight ? μ : 1.0                      # dummy geometry at night
+    S0 = daylight ? Float64(sw_direct) : 0.0
+    K = beam_extinction_coefficient(leaves, μs)
+    μ̄ = average_inverse_optical_depth(leaves)
+    ω, β, β0 = canopy_scattering_parameters(leaves, optics, μs)
+    var = SellersCanopyVariant(μ̄, β, β0)
+    μ0 = 1 / K
+
+    Rd = zeros(N); Td = zeros(N); Rr = zeros(N); Tr = zeros(N); Tb = zeros(N)
+    for k in 1:N
+        Rd[k], Td[k], Rr[k], Tr[k], Tb[k] =
+            layer_reflectance_transmittance_sw(var, dΛ[k], ω, 0.0, μ0)
+    end
+    fu = zeros(N + 1); fd = zeros(N + 1); fdir = zeros(N + 1)
+    adding_solver!(fu, fd, fdir, Rd, Td, Rr, Tr, Tb,
+                   Float64(albedo_diffuse), Float64(albedo_direct),
+                   S0 * K, μ0; F_dif_top = Float64(sw_diffuse))
+
+    absorbed = zeros(N); a_sun = zeros(N); a_sha = zeros(N)
+    l_sun = zeros(N); l_sha = zeros(N)
+    net(i) = fd[i] + fdir[i] - fu[i]
+    for k in 1:N
+        absorbed[k] = net(k + 1) - net(k)
+        dΛ[k] > 0 || continue
+        ls = daylight ? (exp(-K * Λ[k+1]) - exp(-K * Λ[k])) / K : 0.0
+        ls = clamp(ls, 0.0, dΛ[k])
+        l_sun[k] = ls; l_sha[k] = dΛ[k] - ls
+        beam_abs = (1 - ω) * (fdir[k+1] - fdir[k])
+        dif_abs = absorbed[k] - beam_abs
+        a_sun[k] = beam_abs + dif_abs * ls / dΛ[k]
+        a_sha[k] = dif_abs * (1 - ls / dΛ[k])
+    end
+    inc = S0 + Float64(sw_diffuse)
+    return CanopyShortwaveSolution(zf, Λ, fdir, fd, fu, absorbed, a_sun, a_sha,
+                                   l_sun, l_sha, inc, fu[N+1], sum(absorbed), net(1),
+                                   K, μ̄, ω, β, β0)
+end
+canopy_shortwave(p::AbstractLeafAreaDensity, z_faces::AbstractVector{<:Real}; kwargs...) =
+    canopy_shortwave(z_faces, layer_leaf_area_density(p, z_faces); kwargs...)
 
 end # module
