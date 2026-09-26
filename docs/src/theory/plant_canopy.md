@@ -1,4 +1,4 @@
-# Resolved plant canopy: leaf area, drag and radiation
+# Resolved plant canopy: leaf area, drag, radiation and leaf temperature
 
 A resolved canopy is vegetation that occupies several model layers, so
 that the LES sees the leaves as a distributed momentum sink rather than
@@ -6,8 +6,8 @@ as a roughness length. This page covers what `src/PlantCanopy.jl`
 implements for Phase 48: the vertical distribution of leaf area, the
 drag it exerts, treated implicitly so it is stable at any time step, and
 the attenuation of shortwave and longwave radiation through it
-(section 4). The leaf energy balance (#24) builds on the same
-leaf-area coordinate.
+(section 4), and the temperature of the leaves themselves from their
+energy balance (section 5).
 
 ## 1. Leaf-area density
 
@@ -214,8 +214,144 @@ two differ by 5–8 %.
 Not validated here: comparison with measured within-canopy radiation
 profiles or with published tables of another canopy two-stream code.
 
+## 5. Leaf energy balance and leaf temperature
+
+Leaves are not at air temperature. A sunlit leaf absorbs several hundred
+W m⁻² and can only lose it by emission, by conduction through its
+boundary layer, and by transpiration; the balance sets how far it sits
+above the air. Per unit (one-sided) leaf area:
+
+```math
+C\,\frac{dT_\ell}{dt} = R_{abs} - ε_e σ T_\ell^4 - c_p g_H (T_\ell - T_a) - λ E,
+\qquad E = \frac{g_s g_v}{g_s + g_v}\,\frac{e_s(T_\ell) - e_a}{p}.
+```
+
+``R_{abs}`` is the absorbed short- and longwave radiation, ``ε_e`` the
+emission coefficient (``2ε`` for a flat leaf, which emits from both
+sides), ``c_p`` the molar heat capacity of air, ``g_H`` the boundary-layer
+conductance to heat of both leaf sides and ``g_v`` that to water vapour
+of the sides with stomata, ``g_s`` the stomatal conductance, all in
+mol m⁻² s⁻¹ (Campbell & Norman 1998, ch. 14). ``e_s`` and ``λ`` come from
+`MoistThermodynamics`, the transpiration and the coupled
+photosynthesis–stomata solution from `Photosynthesis`: with
+`CoupledLeafPhysiology` the stomata, the biochemistry and the energy
+balance all run at the same leaf temperature and see the same boundary
+layer.
+
+**Boundary layer.** `CampbellNormanBoundaryLayer` uses Campbell &
+Norman's flat-plate conductances per leaf side, forced
+``g_{Ha} = 0.135\sqrt{u/d}``, ``g_{va} = 0.147\sqrt{u/d}`` (× 1.4 for outdoor
+turbulence, ``d = 0.72 ×`` leaf width), and free convection
+``g_{Ha} = 0.05\,(ΔT/d)^{1/4}``, taking the larger. `CLMLeafBoundaryLayer`
+is CLM5's ``C_v\sqrt{U/d}`` (delegated to `Photosynthesis`). For a 4 cm
+leaf in 1 m s⁻¹ wind the two give 1.89 and 2.08 mol m⁻² s⁻¹ for heat.
+
+**Solution.** The equation is scalar in ``T_\ell``; it is solved on a
+bracket with the Illinois method of `SurfaceExchange`. With a heat
+capacity ``C`` and a step ``Δt`` it is a backward-Euler step, stable at any
+``Δt``; ``Δt → ∞`` is the diagnostic (steady) balance. For a small
+departure the leaf relaxes with ``τ = C/[c_p(g_H + g_r) + λ g_w s/p]``,
+about 14 s for ``C = 1.3`` kJ m⁻² K⁻¹ at 1 m s⁻¹, so over an LES time
+step of seconds a leaf is close to, but not at, equilibrium.
+
+**Penman–Monteith limit.** Linearising ``σT^4`` (radiative conductance
+``g_r = 4ε_eσT_a^3/c_p``) and ``e_s`` (slope ``s``) gives
+
+```math
+T_\ell - T_a = \frac{R_{ni} - λ g_w D/p}{c_p (g_H + g_r) + λ g_w s/p},
+\qquad R_{ni} = R_{abs} - ε_eσT_a^4,
+```
+
+which is `leaf_penman_monteith`. The exact balance approaches it
+quadratically: at ``R_{ni} = 300`` W m⁻², ``D = 1`` kPa the difference is
+0.028 K in 2.24 K, and it drops by 4.00 ± 0.01 per halving of the
+forcing.
+
+**In the canopy.** `canopy_leaf_energy_balance` solves a sunlit and a
+shaded leaf class in every layer. The shortwave is `canopy_shortwave`'s
+sunlit/shaded absorption (any number of bands), the PAR band is turned
+into photons for photosynthesis, and the longwave is `canopy_longwave`
+with each layer at the leaf-area-weighted ``T^4`` of its two classes.
+Because the leaves exchange longwave radiation with each other, the
+layers are coupled; an outer iteration holds each layer's *absorbed*
+longwave fixed while the classes solve their own balances with their own
+emission ``ε_e = 2(1 - R_k - T_k)/ΔΛ_k`` (the two-stream layer
+emissivity, ``2ε_{leaf}`` for thin layers of spherical leaves), and
+repeats until no temperature moves by more than 1e-9 K (about 20
+iterations). The sensible heat and transpiration of each layer, divided
+by its depth, are the heat (W m⁻³) and vapour (kg m⁻³ s⁻¹) sources for
+the air.
+
+### What the tests measure
+
+`test/era5_leaf_energy.jl`:
+
+| Check | Reference | Measured |
+| :-- | :-- | --: |
+| Single-leaf energy closure (300 cases: fixed and coupled stomata, both boundary layers, wind, light, humidity, T) | ``R_{abs} = εσT^4 + H + LE`` | ``1.7\times10^{-14}`` rel. |
+| Isothermal net radiation zero in saturated air | ``T_\ell = T_a`` | ``< 10^{-9}`` K |
+| No radiation, ``g_s → ∞``, ``g_H = g_v`` | psychrometer equation by bisection | ``< 10^{-6}`` K (``ΔT = -8.74`` K at 40 % RH, 25 °C) |
+| Linearised limit, three regimes, forcing halved 3× | Penman–Monteith | error ratio 3.99–4.01 per halving; 0.028 K at full forcing |
+| Backward-Euler step from ``T^* + δ`` | ``1/(1 + Δt/τ)`` | ``< 10^{-3}`` rel. for ``Δt/τ = 0.1, 1, 10`` |
+| Coupled physiology | `leaf_gas_exchange` at the returned ``T_\ell`` | ``g_s``, ``E``, ``A_n`` to ``10^{-12}`` rel. |
+| Canopy column closure (24 cases, day and night) | SW + LW in = ``H + LE`` + storage | ``4.7\times10^{-11}`` rel.; worst layer ``1.8\times10^{-9}`` W m⁻² |
+| Each canopy leaf class | single-leaf balance with the final longwave | ``4.3\times10^{-10}`` K |
+| Isothermal night (black sky and ground at ``T_a``, saturated) | all leaves at ``T_a`` | ``< 10^{-9}`` K |
+| Prognostic march (80 × 120 s from 290 K) | stored energy = integrated imbalance; diagnostic steady state | ``10^{-8}`` rel.; ``2.4\times10^{-10}`` K |
+
+### Comparison with observations
+
+*Leuzinger & Körner (2007, Table 1)* measured canopy leaf temperatures
+with a thermal camera from the Swiss Canopy Crane (35 m deciduous forest,
+47.5° N) on 18 July 2004, 11:30 true local time, clear sky, ample soil
+water, 25.0 °C, VPD 19.7 hPa. The broad-leaved species were on average
+1.7 (Prunus), 2.4 (Quercus), 4.5 (Carpinus), 4.6 (Fagus) and 4.8 K (Tilia)
+above the air, with crown maxima 6.4–12.0 K above it. The paper does not
+report the radiation components or the wind, so the model forcing is an
+**assumption**: the solar geometry of the date and time (cos θ = 0.888),
+780 + 120 W m⁻² direct + diffuse, LAI 5 (the paper's own assumption),
+45 mm leaves, CLM5 broadleaf-deciduous Medlyn stomata and a canopy-top
+wind of 0.5–2 m s⁻¹. The leaf temperature seen from above (layers
+weighted by their visible leaf area) is then 3.4, 2.6 and 1.9 K above
+the air for ``U_h`` = 0.5, 1 and 2 m s⁻¹, inside the observed range of
+species means, and the warmest sunlit leaves are 8.7, 8.2 and 7.5 K above
+it, inside the observed range of crown maxima. At 4 m s⁻¹ the view mean
+falls to 1.4 K, below the range. This is a check of magnitude, not a
+validation: the wind and radiation were not measured with the
+temperatures, and the ranges span several species.
+
+*Ansari & Loomis (1959)*, as summarised by Leuzinger & Körner, found
+sunlit thin leaves 6–10 K above the air in still air and 3–5 K in
+moderate wind (5 m s⁻¹). For a horizontal 5 cm leaf under a 1000 W m⁻²
+overhead sun (absorptance 0.5, assumed), VPD 2 kPa and
+``g_s = 0.2``–``0.4`` mol m⁻² s⁻¹, the model gives 9.1–7.7 K in still air
+(free convection only), inside the first range. At 5 m s⁻¹ it gives
+1.05 K, **below** the second range. The boundary-layer conductance at
+5 m s⁻¹ is 4.5 mol m⁻² s⁻¹, and 3–5 K would need either a much smaller
+conductance or far less transpiration than assumed. The test does not
+assert this second figure.
+
+### Limitations
+
+- The Campbell & Norman coefficients are for 20 °C and 101.3 kPa; their
+  weak dependence on temperature and pressure is neglected.
+- Free and forced convection are not combined; the larger one is used.
+- Dew and intercepted water on leaves are not modelled; a negative ``E``
+  goes through the stomatal path only. Wet leaves belong to the land
+  column (#21).
+- In a prognostic step each class keeps its own previous temperature.
+  When the sun moves, the leaves that change class carry their old
+  class's temperature, which is not tracked. The column's energy is
+  conserved exactly only while the class leaf areas do not change.
+- Air temperature, humidity and wind are inputs per layer; the feedback
+  of the leaf sources on the in-canopy air is the LES's (or #25's) job.
+
 ## References
 
+- Ansari, A. Q. & Loomis, W. E. (1959). Leaf temperatures. *Am. J.
+  Bot.*, 46, 713–717 (cited from Leuzinger & Körner 2007).
+- Campbell, G. S. & Norman, J. M. (1998). *An Introduction to
+  Environmental Biophysics*, 2nd ed. Springer, ch. 7 and 14.
 - CLM5.0 Technical Note (Lawrence et al., NCAR), §2.3.1, Canopy
   Radiative Transfer.
 - de Pury, D. G. G. & Farquhar, G. D. (1997). Simple scaling of
@@ -228,12 +364,17 @@ profiles or with published tables of another canopy two-stream code.
   123, 339–363.
 - Inoue, E. (1963). On the turbulent structure of airflow within crop
   canopies. *J. Meteorol. Soc. Japan*, 41, 317–326.
+- Leuzinger, S. & Körner, C. (2007). Tree species diversity affects
+  canopy leaf temperatures in a mature temperate forest. *Agric. For.
+  Meteorol.*, 146, 29–37.
 - Lalic, B. & Mihailovic, D. T. (2004). An empirical relation describing
   leaf-area density inside the forest for environmental modeling.
   *J. Appl. Meteorol.*, 43, 641–645.
 - Markkanen, T., Rannik, Ü., Marcolla, B., Cescatti, A. & Vesala, T.
   (2003). Footprints and fetches for fluxes over forest canopies with
   varying structure and density. *Boundary-Layer Meteorol.*, 106, 437–459.
+- Monteith, J. L. & Unsworth, M. H. (2013). *Principles of Environmental
+  Physics*, 4th ed. Academic Press.
 - Ross, J. (1981). *The Radiation Regime and Architecture of Plant
   Stands.* Junk, The Hague.
 - Sellers, P. J. (1985). Canopy reflectance, photosynthesis and
