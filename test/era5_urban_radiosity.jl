@@ -146,7 +146,7 @@ end
     # Only difference: the coupled step takes dRn/dT = -4εσT³ analytically,
     # step_surface! by a one-sided difference of width δT = 0.01 K.
     @printf("  isolated facet vs step_surface!: max |ΔT_skin| = %.2e K over 12 h\n", worst)
-    @test worst < 1e-3
+    @test worst < 2e-4
 end
 
 # ===========================================================================
@@ -268,9 +268,21 @@ end
     @testset "applied longwave equals the radiosity solution of the applied emission" begin
         u = newscene(293.0)
         worst_lin = 0.0; worst_seb = 0.0; worst_store = 0.0; worst_budget = 0.0
+        worst_hwall = 0.0
         for k in 1:24
             H0 = [column_heat_content(f.column) for f in u.facets]
+            Tn = facet_temperatures(u)
             fl = step_urban_facets!(u, air, 900.0)
+            # Walls use H = h_c (T_s - T_air), linear in T_s, so the sensible
+            # heat returned (the SEB residual Rn - LE - G) must equal h_c
+            # times the θ-weighted skin temperature the step applied. This
+            # is independent of how H is assembled (per-facet SEB closure
+            # below is exact by construction and is only a bookkeeping check).
+            for (i, f) in enumerate(u.facets)
+                f.kind === :wall || continue
+                worst_hwall = max(worst_hwall,
+                    abs(fl[i].H - 10.0 * (Tn[i] + u.skin_increment[i] - 291.0)))
+            end
             # Re-solve the radiosity system at the temperatures whose emission
             # the step applied: it must reproduce lw_net (the exchange is
             # linear in E, so this is exact up to round-off).
@@ -293,6 +305,8 @@ end
                 nfacets(u), worst_lin, worst_budget)
         @printf("  per-facet SEB closure ≤ %.2e W/m², storage bookkeeping ≤ %.2e (rel.)\n",
                 worst_seb, worst_store)
+        @printf("  walls: |H - h_c(T_n + x - T_air)| ≤ %.2e W/m²\n", worst_hwall)
+        @test worst_hwall < 1e-8
         @test worst_lin < 1e-9
         @test worst_budget < 1e-8 * sum(vf.area)
         @test worst_seb < 1e-9
@@ -312,6 +326,31 @@ end
             @test sum(getfield(agg, name)) * cell ≈ sum(vf.area .* fac.(fl)) rtol = 1e-12
         end
         @test sum(agg.area_density) * cell ≈ sum(vf.area) rtol = 1e-12
+    end
+
+    @testset "entry points: per-facet forcing, precomputed and diffuse-only shortwave" begin
+        sun = (0.3, -0.2, 0.93)
+        u1 = newscene(293.0); u2 = newscene(293.0); u3 = newscene(293.0)
+        fl1 = step_urban_facets!(u1, air, 600.0; sun = sun, dni = 800.0, dhi = 120.0)
+        # One identical forcing per facet and a precomputed ShortwaveSolution
+        # must give the same step.
+        swsol = solve_shortwave(sc, vf, sun; dni = 800.0, dhi = 120.0)
+        fl2 = step_urban_facets!(u2, fill(air, nfacets(u2)), 600.0; sw = swsol)
+        @test facet_temperatures(u2) == facet_temperatures(u1)
+        @test [f.H for f in fl2] == [f.H for f in fl1]
+        # Per-facet forcings that disagree on the sky irradiance need L_sky.
+        bad = fill(air, nfacets(u3)); bad[1] = SurfaceForcing(lw_down = 300.0, T_air = 291.0)
+        @test_throws ArgumentError step_urban_facets!(u3, bad, 600.0)
+        # Diffuse sky only (sun = nothing): absorbed = the radiosity solution
+        # with dni = 0, and every facet with sky view receives some.
+        u4 = newscene(293.0)
+        step_urban_facets!(u4, air, 600.0; dhi = 150.0)
+        swd = solve_shortwave(sc, vf, (0.0, 0.0, 1.0); dni = 0.0, dhi = 150.0)
+        @test u4.sw_absorbed ≈ swd.absorbed rtol = 1e-12
+        @test all(u4.sw_absorbed[vf.F_sky .> 0.01] .> 0)
+        u5 = newscene(293.0)
+        step_urban_facets!(u5, air, 600.0)
+        @test all(u5.sw_absorbed .== 0)
     end
 
     @testset "night cooling: the walls do not share one temperature" begin
@@ -356,8 +395,11 @@ end
         e_im2 = maximum(abs, run(450.0, :implicit) .- ref)
         @printf("  6 h night, max |T - T(dt=30 s)|: implicit %.4f K (900 s), %.4f K (450 s); lagged %.4f K (900 s)\n",
                 e_im, e_im2, e_la)
-        @test e_im < 0.1
+        @test e_im < 0.01
         @test e_im2 < e_im
+        # At the same step, the implicit coupling is more accurate than
+        # the lagged one (measured 0.0043 vs 0.0128 K).
+        @test e_im < e_la
     end
 end
 
