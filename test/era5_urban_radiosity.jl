@@ -85,6 +85,19 @@ const still_air = SurfaceForcing(lw_down = 300.0, T_air = 290.0, U = 2.0)
     col = vec(sum(A .* J; dims = 1)) ./ A
     @test all(-1 - 1e-12 .<= col .<= 1e-12)
 
+    # The response-based solve (one matvec, no factorisation, #138) gives
+    # the same LongwaveSolution as the direct radiosity solve, and closes
+    # the scene budget absorbed = emitted + sky in - sky out.
+    lwr = solve_longwave(sc, vf, r; L_sky = 300.0)
+    for fld in (:radiosity, :incident, :absorbed, :net_loss)
+        @test maximum(abs, getfield(lwr, fld) .- getfield(lw, fld)) < 1e-10
+    end
+    @test lwr.emitted == lw.emitted && lwr.from_sky == lw.from_sky
+    @test lwr.total_escaping ≈ lw.total_escaping rtol = 1e-12
+    @test lwr.total_absorbed ≈ lwr.total_emitted + lwr.total_from_sky - lwr.total_escaping rtol = 1e-12
+    sc_e = deepcopy(sc); sc_e.materials.emissivity .*= 0.9
+    @test_throws ArgumentError solve_longwave(sc_e, vf, r; L_sky = 300.0)
+
     # Black scene: J = F - I exactly, so Σ_i A_i J_ij = -A_j F_sky,j.
     scb = build_scene(hm, 5.0, 5.0; wall_subdivisions = 3,
                       materials = uniform_materials(0.2, 1.0))
