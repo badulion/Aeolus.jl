@@ -57,6 +57,31 @@ That is the point of asking for them — do not squash them yourself.
 - [ ] Validation numbers measured and quoted in the PR body
 - [ ] No new export collisions (see below)
 - [ ] Documentation updated — see below
+- [ ] New physics is wired into the Berlin example — see below
+
+## New physics lands in the Berlin example
+
+The Berlin (Alexanderplatz) run, `examples/urban/alexanderplatz_diurnal.jl`,
+is the flagship. It should exercise **all** of the physics in `src/`. A
+module that is validated as a point or column model but never coupled
+to the 3-D run is not done.
+
+In every PR that adds or changes physics:
+
+- Wire it into the Berlin run, **on by default**. If it is a genuine
+  alternative (P3 vs Kessler) or too expensive to run every step, put it
+  behind an option or a cadence and quote the measured cost.
+- Replace the example's own copy of that physics rather than running
+  both. The one-source-of-truth rule applies to examples too.
+- Quote one Berlin diagnostic in the PR body showing the coupling does
+  something physical (e.g. an energy-budget term, a facade temperature,
+  a park's latent heat flux).
+- Once the Berlin smoke test is in the suite (short run, every option
+  on), keep it green and add the new option to it.
+
+Exceptions (numerics the solver cannot use yet, physics with no urban
+meaning) are stated in the PR body with the reason, never skipped
+silently.
 
 ## Documentation is part of done
 
