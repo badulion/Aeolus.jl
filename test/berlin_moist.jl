@@ -53,6 +53,26 @@ const MT = Aeolus.MoistThermodynamics
         @test 1.19 < BC.ref_density(case, 1) < 1.21   # 294 K, 1013 hPa
     end
 
+    @testset "ledger: an incompressible exchange between levels is density redistribution, not transport" begin
+        case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing))
+        Nx, Ny, Nz = case.mesh.Nx, case.mesh.Ny, case.mesh.Nz
+        dz, A = case.mesh.dz, Nx * Ny
+        # a conservative (Σ dq = 0) exchange: 1 g/kg moved from level 1 to 2 in one column
+        dq = zeros(Nx, Ny, Nz); dq[3, 3, 1] = -1e-3; dq[3, 3, 2] = 1e-3
+        flat, redis = BC.ledger_water_split(case, dq)
+        ρ̄ = case.ref.ρ̄
+        @test abs(flat) < 1e-18
+        # moving vapour up into thinner air: the ρ̄-weighted water drops by Δρ̄·δq·Δz/A
+        @test redis ≈ (ρ̄[2] - ρ̄[1]) * 1e-3 * dz / A rtol = 1e-12
+        @test redis < 0
+        @test flat + redis ≈ BC.ledger_water(case, dq) rtol = 1e-12
+        # a net source splits into ρ̄_m·Σdq and the level-dependent rest
+        dq .= 0; dq[:, :, 4] .= 1e-4
+        flat, redis = BC.ledger_water_split(case, dq)
+        @test flat ≈ sum(ρ̄) / Nz * 1e-4 * dz rtol = 1e-12
+        @test flat + redis ≈ ρ̄[4] * 1e-4 * dz rtol = 1e-12
+    end
+
     @testset "moist buoyancy on a unit column: g (0.61 q_v′ − q_l′)" begin
         # 4 × 4 × 6, uniform θ = θ₀ and q_v = 10 g/kg; column (1,1) has 1 g/kg
         # more vapour in levels 3–4, column (2,3) 1 g/kg of fog there.

@@ -78,7 +78,7 @@ surface_pressure(case) = case.ref.p_surface
 ref_ρcp(case, k::Integer) = case.ref.ρ̄[k] * case.ref.cp
 
 """
-    hydrostatic_check(ref; nsub = 1000) -> max relative |p̄ − p_hyd| / p_hyd
+    hydrostatic_check(cfg, ref, mesh; nsub = 1000) -> max relative |p̄ − p_hyd| / p_hyd
 
 The reference pressure against an independent integration of the
 continuous hydrostatic equation ``dp/dz = -g p / (R_d θ(z) Π(p))`` by

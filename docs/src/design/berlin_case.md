@@ -370,6 +370,22 @@ puts a flux into the air with a different density than the ledger's
 shows up as a water residual, so a coupling converts every flux with
 `ref_density(case, k)`.
 
+The incompressible core does not conserve that ρ̄-weighted water: ∇·u = 0
+conserves Σ q, so vapour carried up into thinner air loses ρ̄-weighted
+mass (an anelastic core, #133, would conserve Σ ρ̄ q). The transport
+stage therefore books its change of water in two parts
+(`ledger_water_split`): `transport`, the column-mean ρ̄ times its change
+of Σ q (zero for a conservative scheme; today the #132 halo leak), and
+`density_redistribution`, the rest. Over the 1 h flagship run
+(06:00–07:00) with moist buoyancy on, `density_redistribution` is
+−8.1e-4 kg m⁻² (72 % of the slab's evaporation, 1.13e-3) and
+`transport` −7.0e-4; with it off, −6.3e-4 and +1.5e-5. Without the
+split both would be booked as `transport` (−1.5e-3, against −2.7e-4 at
+ρ = 1 in the #127 baseline), and fixing the #132 halo leak could not
+bring it to zero. Kessler
+sedimentation has the same effect inside its `precipitation` term
+(rain falling into denser levels), which #143 owns.
+
 The water integral runs over every grid cell, solid ones included.
 Today the slab's evaporation and the dew exchange act on level 1 of
 every column, which under a roof is inside the building (#129 moves
