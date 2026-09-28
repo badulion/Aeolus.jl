@@ -660,5 +660,8 @@ export CLEAR_FLOAT_REFRACTIVE_INDEX, CLEAR_FLOAT_EXTINCTION, UNCOATED_GLASS_EMIS
        glazing_u_value, inward_flowing_fractions, glazing_shgc,
        WindowFacet, set_solar_incidence!, window_optics, transmitted_shortwave,
        pane_temperatures, window_heat_content
+# Phase 49 — TEB canyon-exchange closures used by the BUBBLE / CAPITOUL
+# validation (#30).
+export canyon_wind_speed, rowley_convection_coefficient
 
 end # module

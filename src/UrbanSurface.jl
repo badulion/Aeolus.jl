@@ -5,7 +5,7 @@ Phase 49 — the production urban surface: per-facet (roof / wall /
 ground) multi-layer heat conduction through real material layers,
 replacing the single heat-capacity slab of the urban example.
 
-Four parts:
+Five parts:
 
   1. **Thermal material table** — [`ThermalMaterial`](@ref) and
      [`thermal_material`](@ref): conductivity, density and specific heat
@@ -37,6 +37,10 @@ Four parts:
      [`WindowFacet`](@ref), a glazed `AbstractSurface` whose transmitted
      shortwave ([`transmitted_shortwave`](@ref)) is the hook for the
      building energy model.
+  5. **Canyon exchange** (`src/urban_surface/canyon_exchange.jl`) — the
+     Town Energy Balance closures for the air next to walls and streets:
+     the canyon wind [`canyon_wind_speed`](@ref) and the wall convective
+     coefficient [`rowley_convection_coefficient`](@ref).
 
 # Sign convention
 
@@ -106,7 +110,9 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        glazing_optics, glazing_optics_hemispherical,
        glazing_u_value, inward_flowing_fractions, glazing_shgc,
        WindowFacet, set_solar_incidence!, window_optics, transmitted_shortwave,
-       pane_temperatures, window_heat_content
+       pane_temperatures, window_heat_content,
+       # canyon exchange (#30)
+       canyon_wind_speed, rowley_convection_coefficient
 
 # =========================================================================
 # 1. Thermal material table
@@ -1375,5 +1381,6 @@ end
 # =========================================================================
 
 include("urban_surface/glazing.jl")
+include("urban_surface/canyon_exchange.jl")
 
 end # module
