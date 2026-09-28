@@ -89,7 +89,13 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
             @test Aeolus.Anelastic.constraint_residual(sim) < 1e-9
             dlnρ = maximum(abs.(diff(log.(ref.ρ̄)))) / m.dz
             Hρ = 1 / dlnρ
-            @test 8_000 < Hρ < 13_000
+            # hydrostatic ideal gas: −∂ln ρ̄/∂z = (1 − κ) g/(R T̄) + ∂ln θ̄/∂z
+            # at every level (Hρ = 12.0 km in the neutral layer, 10.7 km in
+            # the 3 K/km inversion above it); measured agreement 5e-9
+            κ = ref.R_d / ref.cp
+            T̄f = (ref.T̄[1:end-1] .+ ref.T̄[2:end]) ./ 2
+            expected = (1 - κ) .* ref.g ./ (ref.R_d .* T̄f) .+ diff(log.(ref.θ̄)) ./ m.dz
+            @test maximum(abs.((-diff(log.(ref.ρ̄)) ./ m.dz) ./ expected .- 1)) < 1e-6
             @test 0.5 * wmax * dlnρ < max_divergence(sim) < 1.2 * wmax * dlnρ
             # a 100 m deep domain is 1 % of Hρ: the sound-proof core gives
             # the Boussinesq flow to well under 1 % after 24 s
