@@ -867,6 +867,7 @@ end
     include("era2_advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
     include("era2_anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
     include("era2_multigrid.jl")   # Phase  29     geometric multigrid
+    include("era2_sgs_numerics.jl") # #132         dynamic Smagorinsky, step! operator swap-ins
     include("era2_amr.jl")         # Phases 30-31  nesting, AMR
 end
 

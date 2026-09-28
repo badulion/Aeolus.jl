@@ -11,6 +11,7 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        momentum_advect!,
        add_buoyancy!, add_coriolis!,
        compute_smagorinsky_νt!,
+       compute_dynamic_smagorinsky_νt!, DynamicSmagorinskyWorkspace,
        add_eddy_viscosity_u!, add_eddy_viscosity_v!, add_eddy_viscosity_w!,
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
@@ -203,6 +204,209 @@ target location is inferred from `out`. Halos of `f` must be filled.
 interpolate_to_face!(out::Field, f::Field)   = _interp_to_face!(out, f, mesh(f))
 
 @doc (@doc interpolate_to_face!) interpolate_to_center!(out::Field, f::Field) = _interp_to_center!(out, f, mesh(f))
+
+# -------------------------------------------------------------------------
+# Dynamic Smagorinsky (Germano et al. 1991, Lilly 1992).
+# -------------------------------------------------------------------------
+# Moved here from the urban example (examples/urban/turbulence_addons.jl,
+# "F3", at dfaae75), where it was never called. Changes against that copy:
+# the sign of M_ij is corrected (the copy's C_s² was negative wherever the
+# flow cascades energy to small scales, so the clip set it to 0); the strain stencil is evaluated on one extra shell of cells from the
+# filled halos, so every interior cell gets a dynamic coefficient (the
+# example fell back to C_s = 0.16 on the outermost interior shell); the
+# averaging of the Germano identity is selectable (plane average, the
+# standard stabilisation, by default; the example's pointwise ratio as
+# `averaging = :local`); the test-filter width ratio is a keyword with a
+# default from the filter's second moment (the example used 2); and the
+# scratch arrays live in a reusable workspace.
+
+"""
+    DynamicSmagorinskyWorkspace(mesh)
+
+Scratch storage for [`compute_dynamic_smagorinsky_νt!`](@ref): the
+cell-centred velocity and strain-rate components on the interior plus one
+shell, and `cs2`, the interior-sized coefficient ``C_s^2`` of the last
+call (a diagnostic).
+"""
+struct DynamicSmagorinskyWorkspace{T}
+    Uc::Array{T,3}; Vc::Array{T,3}; Wc::Array{T,3}
+    S11::Array{T,3}; S22::Array{T,3}; S33::Array{T,3}
+    S12::Array{T,3}; S13::Array{T,3}; S23::Array{T,3}
+    magS::Array{T,3}
+    LM::Array{T,3}; MM::Array{T,3}
+    cs2::Array{T,3}
+end
+
+function DynamicSmagorinskyWorkspace(g::RegularGrid{T}) where {T}
+    e() = zeros(T, g.Nx + 2, g.Ny + 2, g.Nz + 2)
+    i() = zeros(T, g.Nx, g.Ny, g.Nz)
+    return DynamicSmagorinskyWorkspace{T}(e(), e(), e(), e(), e(), e(), e(), e(), e(), e(),
+                                          i(), i(), i())
+end
+
+# Strain-rate components and |S| = √(2 SᵢⱼSᵢⱼ) at cell centre (i,j,k) of the
+# data arrays: the stencil of the built-in `compute_smagorinsky_νt!`.
+@inline function _strain_at(u, v, w, i, j, k, idx, idy, idz)
+    @inbounds begin
+        S11 = (u[i+1,j,k] - u[i,j,k]) * idx
+        S22 = (v[i,j+1,k] - v[i,j,k]) * idy
+        S33 = (w[i,j,k+1] - w[i,j,k]) * idz
+        du_dy = ((u[i,j+1,k] + u[i+1,j+1,k]) - (u[i,j-1,k] + u[i+1,j-1,k])) * (0.25 * idy)
+        dv_dx = ((v[i+1,j,k] + v[i+1,j+1,k]) - (v[i-1,j,k] + v[i-1,j+1,k])) * (0.25 * idx)
+        du_dz = ((u[i,j,k+1] + u[i+1,j,k+1]) - (u[i,j,k-1] + u[i+1,j,k-1])) * (0.25 * idz)
+        dw_dx = ((w[i+1,j,k] + w[i+1,j,k+1]) - (w[i-1,j,k] + w[i-1,j,k+1])) * (0.25 * idx)
+        dv_dz = ((v[i,j,k+1] + v[i,j+1,k+1]) - (v[i,j,k-1] + v[i,j+1,k-1])) * (0.25 * idz)
+        dw_dy = ((w[i,j+1,k] + w[i,j+1,k+1]) - (w[i,j-1,k] + w[i,j-1,k+1])) * (0.25 * idy)
+    end
+    S12 = 0.5 * (du_dy + dv_dx)
+    S13 = 0.5 * (du_dz + dw_dx)
+    S23 = 0.5 * (dv_dz + dw_dy)
+    S2 = 2 * (S11^2 + S22^2 + S33^2) + 4 * (S12^2 + S13^2 + S23^2)
+    return S11, S22, S33, S12, S13, S23, sqrt(S2)
+end
+
+"""
+    compute_dynamic_smagorinsky_νt!(νt, u, v, w;
+                                    workspace = DynamicSmagorinskyWorkspace(mesh(u)),
+                                    averaging = :plane, filter_ratio = 3, cs_max = 0.5) -> νt
+
+Eddy viscosity ``ν_t = C_s^2 Δ^2 |S|`` with the coefficient computed from
+the resolved field by the dynamic procedure of Germano et al. (1991) in
+the least-squares form of Lilly (1992). With a test filter ``\\widetilde{·}``
+(here the 3 × 3 × 3 box average of cell-centred quantities),
+
+```math
+L_{ij} = \\widetilde{u_i u_j} - \\tilde u_i \\tilde u_j, \\qquad
+M_{ij} = 2Δ^2\\left(\\widetilde{|S| S_{ij}} - α^2 |\\tilde S| \\tilde S_{ij}\\right), \\qquad
+C_s^2 = \\frac{⟨L^d_{ij} M_{ij}⟩}{⟨M_{ij} M_{ij}⟩},
+```
+
+with ``L^d`` the deviatoric part of ``L``, ``Δ = (Δx Δy Δz)^{1/3}`` and
+``α = \\hat Δ / Δ`` the test-to-grid filter width ratio (`filter_ratio`).
+``C_s^2`` is clipped to ``[0, c_{s,\\max}^2]`` (no backscatter).
+
+* `averaging = :plane` — ``⟨·⟩`` is the average over each horizontal
+  level (Lilly 1992; the standard choice with horizontally homogeneous
+  statistics), so ``C_s`` depends on height only;
+* `averaging = :local` — the pointwise ratio (no averaging), which is
+  noisy and relies on the clip.
+
+`filter_ratio`: a discrete box of three cells has second moment
+``2Δ^2/3``; adding it to the implicit grid filter (``Δ^2/12``) gives an
+effective width ``\\sqrt{Δ^2 + 12·2Δ^2/3} = 3Δ``, hence the default 3.
+The value 2, often quoted for the 3-point trapezoidal filter, is the
+other common choice (see Lund 1997, *Annual Research Briefs*, CTR).
+
+The strain rate uses the stencil of [`compute_smagorinsky_νt!`](@ref), so
+for a fixed ``C_s^2`` the two agree exactly. Halos of `u, v, w` must be
+filled and be at least 2 wide (the strain rate is evaluated on one shell
+of halo cells so the test filter reaches every interior cell). The
+coefficient is left in `workspace.cs2`.
+
+References: Germano, Piomelli, Moin & Cabot (1991), *Phys. Fluids A* 3,
+1760; Lilly (1992), *Phys. Fluids A* 4, 633.
+"""
+function compute_dynamic_smagorinsky_νt!(νt::Field, u::Field, v::Field, w::Field;
+                                         workspace::DynamicSmagorinskyWorkspace = DynamicSmagorinskyWorkspace(mesh(u)),
+                                         averaging::Symbol = :plane,
+                                         filter_ratio::Real = 3,
+                                         cs_max::Real = 0.5)
+    g = mesh(u)
+    g isa RegularGrid || throw(ArgumentError("compute_dynamic_smagorinsky_νt!: RegularGrid only"))
+    min(g.Hx, g.Hy, g.Hz) >= 2 ||
+        throw(ArgumentError("compute_dynamic_smagorinsky_νt!: needs halo ≥ 2, mesh has $((g.Hx, g.Hy, g.Hz))"))
+    averaging in (:plane, :local) ||
+        throw(ArgumentError("averaging must be :plane or :local, got $(repr(averaging))"))
+    _dynamic_smagorinsky!(νt.data, u.data, v.data, w.data, workspace, g,
+                          averaging === :plane, float(filter_ratio)^2, float(cs_max)^2)
+    return νt
+end
+
+function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T}, g,
+                               plane::Bool, α2, cs2max) where {T}
+    Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
+    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    Δ2 = (g.dx * g.dy * g.dz)^(2/3)
+    Uc, Vc, Wc, magS = ws.Uc, ws.Vc, ws.Wc, ws.magS
+    S11, S22, S33, S12, S13, S23 = ws.S11, ws.S22, ws.S33, ws.S12, ws.S13, ws.S23
+
+    # Pass 1: cell-centred velocity and strain on the interior + one shell.
+    # Local index l ∈ 1:N+2 is data index H - 1 + l.
+    @inbounds for lk in 1:Nz+2, lj in 1:Ny+2, li in 1:Nx+2
+        i = Hx - 1 + li; j = Hy - 1 + lj; k = Hz - 1 + lk
+        Uc[li,lj,lk] = 0.5 * (ud[i,j,k] + ud[i+1,j,k])
+        Vc[li,lj,lk] = 0.5 * (vd[i,j,k] + vd[i,j+1,k])
+        Wc[li,lj,lk] = 0.5 * (wd[i,j,k] + wd[i,j,k+1])
+        s11, s22, s33, s12, s13, s23, ms = _strain_at(ud, vd, wd, i, j, k, idx, idy, idz)
+        S11[li,lj,lk] = s11; S22[li,lj,lk] = s22; S33[li,lj,lk] = s33
+        S12[li,lj,lk] = s12; S13[li,lj,lk] = s13; S23[li,lj,lk] = s23
+        magS[li,lj,lk] = ms
+    end
+
+    # Pass 2: L_ij M_ij and M_ij M_ij at every interior cell.
+    inv27 = one(T) / 27
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        li = i + 1; lj = j + 1; lk = k + 1
+        Ut = zero(T); Vt = zero(T); Wt = zero(T)
+        UU = zero(T); VV = zero(T); WW = zero(T); UV = zero(T); UW = zero(T); VW = zero(T)
+        A11 = zero(T); A22 = zero(T); A33 = zero(T); A12 = zero(T); A13 = zero(T); A23 = zero(T)
+        B11 = zero(T); B22 = zero(T); B33 = zero(T); B12 = zero(T); B13 = zero(T); B23 = zero(T)
+        for dk in -1:1, dj in -1:1, di in -1:1
+            a = li + di; b = lj + dj; c = lk + dk
+            uu = Uc[a,b,c]; vv = Vc[a,b,c]; ww = Wc[a,b,c]
+            Ut += uu; Vt += vv; Wt += ww
+            UU += uu*uu; VV += vv*vv; WW += ww*ww
+            UV += uu*vv; UW += uu*ww; VW += vv*ww
+            s11 = S11[a,b,c]; s22 = S22[a,b,c]; s33 = S33[a,b,c]
+            s12 = S12[a,b,c]; s13 = S13[a,b,c]; s23 = S23[a,b,c]
+            ms = magS[a,b,c]
+            A11 += s11; A22 += s22; A33 += s33; A12 += s12; A13 += s13; A23 += s23
+            B11 += ms*s11; B22 += ms*s22; B33 += ms*s33
+            B12 += ms*s12; B13 += ms*s13; B23 += ms*s23
+        end
+        Ut *= inv27; Vt *= inv27; Wt *= inv27
+        L11 = UU*inv27 - Ut*Ut; L22 = VV*inv27 - Vt*Vt; L33 = WW*inv27 - Wt*Wt
+        L12 = UV*inv27 - Ut*Vt; L13 = UW*inv27 - Ut*Wt; L23 = VW*inv27 - Vt*Wt
+        tr = (L11 + L22 + L33) / 3
+        L11 -= tr; L22 -= tr; L33 -= tr
+        A11 *= inv27; A22 *= inv27; A33 *= inv27; A12 *= inv27; A13 *= inv27; A23 *= inv27
+        magSt = sqrt(2 * (A11^2 + A22^2 + A33^2) + 4 * (A12^2 + A13^2 + A23^2))
+        # L = T − τ̃ with τ = −2C_s²Δ²|S|S (deviatoric) gives L = C_s² M with
+        # M = 2Δ²(~(|S|S) − α²|S̃|S̃). (The example's copy had the opposite
+        # sign, so C_s² came out negative in forward scatter and was clipped.)
+        c1 = 2 * Δ2 * α2 * magSt; c2 = 2 * Δ2 * inv27
+        M11 = c2*B11 - c1*A11; M22 = c2*B22 - c1*A22; M33 = c2*B33 - c1*A33
+        M12 = c2*B12 - c1*A12; M13 = c2*B13 - c1*A13; M23 = c2*B23 - c1*A23
+        ws.LM[i,j,k] = L11*M11 + L22*M22 + L33*M33 + 2 * (L12*M12 + L13*M13 + L23*M23)
+        ws.MM[i,j,k] = M11*M11 + M22*M22 + M33*M33 + 2 * (M12*M12 + M13*M13 + M23*M23)
+    end
+
+    # Averaging of the identity and the clip to [0, cs_max²].
+    cs2 = ws.cs2
+    if plane
+        @inbounds for k in 1:Nz
+            lm = zero(T); mm = zero(T)
+            for j in 1:Ny, i in 1:Nx
+                lm += ws.LM[i,j,k]; mm += ws.MM[i,j,k]
+            end
+            c = mm > 0 ? clamp(lm / mm, zero(T), T(cs2max)) : zero(T)
+            for j in 1:Ny, i in 1:Nx
+                cs2[i,j,k] = c
+            end
+        end
+    else
+        @inbounds for I in eachindex(cs2)
+            mm = ws.MM[I]
+            cs2[I] = mm > 0 ? clamp(ws.LM[I] / mm, zero(T), T(cs2max)) : zero(T)
+        end
+    end
+
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        nd[Hx+i, Hy+j, Hz+k] = cs2[i,j,k] * Δ2 * magS[i+1, j+1, k+1]
+    end
+    return nothing
+end
 
 # -------------------------------------------------------------------------
 # Load backend kernels.

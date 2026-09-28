@@ -145,6 +145,7 @@ export Periodic, NoFlux, ValueBC, FluxBC, FieldBoundaryConditions, fill_halos!
 export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!,
        interpolate_to_face!, interpolate_to_center!, momentum_advect!,
        add_buoyancy!, add_coriolis!, compute_smagorinsky_νt!,
+       compute_dynamic_smagorinsky_νt!, DynamicSmagorinskyWorkspace,
        add_eddy_viscosity_u!, add_eddy_viscosity_v!, add_eddy_viscosity_w!,
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
