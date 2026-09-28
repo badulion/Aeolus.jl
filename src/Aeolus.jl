@@ -63,6 +63,7 @@ include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
+include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equation
 
 using .Grids
 using .Fields
@@ -112,6 +113,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .SoilColumn                  # Phase 46
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -598,5 +600,19 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        roughness_lengths, moisture_availability,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
+
+# Phase 46 (#15) — SoilColumn: CLM-style soil column, Richards equation.
+# Boundary-condition types (FreeDrainage, HeadTop, AtmosphericTop, …),
+# hooks and the generic-sounding accessors (saturated_conductivity,
+# air_entry_potential, …) stay qualified: `Aeolus.SoilColumn.FreeDrainage`,
+# or `using Aeolus.SoilColumn`.
+export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
+       AbstractHydraulicModel, ClappHornberger, VanGenuchtenMualem, GardnerExponential,
+       clapp_hornberger_texture, carsel_parrish_texture, cosby_clapp_hornberger,
+       soil_water_content, soil_matric_potential, soil_hydraulic_conductivity,
+       soil_water_capacity, soil_water_diffusivity, soil_porosity,
+       parlange_sorptivity, water_dynamic_viscosity,
+       SoilWaterColumn, step_soil_water!, set_water_content!, set_matric_potential!,
+       soil_water_storage, soil_layer_conductivity, soil_field_capacity
 
 end # module
