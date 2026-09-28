@@ -923,4 +923,5 @@ end
     include("era5_glazing.jl")           # Phase 49  glazing transmission, window facets (#27)
     include("era5_urban_radiosity.jl")   # Phase 49  facet temperatures coupled to radiosity (#28)
     include("era5_building_energy.jl")   # Phase 50  indoor air temperature + thermal mass (#31)
+    include("era5_hvac.jl")              # Phase 50  HVAC demand and exhaust heat (#32)
 end
