@@ -670,7 +670,7 @@ export VegetationParameters, pft_vegetation,
        set_leaf_area!, radiative_temperature
 # Phase 48 — PlantCanopy: leaf-area-density profiles and implicit
 # (unconditionally stable) canopy drag.
-export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
+export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD, TabulatedLAD,
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
        layer_leaf_area_density,
        canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,
@@ -693,5 +693,10 @@ export AbstractLeafBoundaryLayer, CampbellNormanBoundaryLayer, CLMLeafBoundaryLa
        AbstractLeafStomata, FixedStomatalConductance, CoupledLeafPhysiology,
        LeafEnergyBalance, leaf_energy_balance, leaf_penman_monteith,
        CanopyLeafEnergySolution, canopy_leaf_energy_balance
+
+# Phase 48 — within-canopy profiles (#25): scalar K-theory column,
+# displacement height, tabulated (measured) LAD profiles.
+export CanopyScalarSolution, solve_canopy_scalar_column, canopy_displacement_height,
+       canopy_mixing_length, harman_finnigan_scalar_diffusivity
 
 end # module

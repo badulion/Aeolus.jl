@@ -918,4 +918,5 @@ end
     include("era5_plant_canopy.jl")      # Phase 48  LAD profiles, implicit canopy drag (#22)
     include("era5_canopy_radiation.jl")  # Phase 48  canopy SW two-stream, sunlit/shaded, LW (#23)
     include("era5_leaf_energy.jl")       # Phase 48  leaf energy balance, leaf temperature (#24)
+    include("era5_canopy_profiles.jl")   # Phase 48  within-canopy wind/temperature validation (#25)
 end
