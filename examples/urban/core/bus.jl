@@ -79,7 +79,12 @@ Per-column surface state shared between couplings (all `(Nx, Ny)`):
   radiation update, W m⁻²;
 * `params` — the per-class [`SurfaceParams`](@ref);
 * `swsol`, `lwsol` — the last radiosity solutions (`swsol === nothing`
-  at night).
+  at night);
+* `L_sky` — downwelling longwave from the sky at the surface, W m⁻², set
+  by the `:column_radiation` slot at every radiation update (#130);
+* `dni`, `dhi` — direct-normal and diffuse-horizontal shortwave for the
+  radiosity solve, W m⁻², set by the `:column_radiation` slot; `NaN`
+  means "use the radiosity coupling's own clear-sky model" (#130).
 """
 mutable struct SurfaceBus
     Ts::Matrix{Float64}
@@ -91,10 +96,13 @@ mutable struct SurfaceBus
     params::SurfaceParams
     swsol::Any
     lwsol::Any
+    L_sky::Float64
+    dni::Float64
+    dhi::Float64
 end
 
 function SurfaceBus(Nx::Integer, Ny::Integer; Ts0::Real = 285.0)
     return SurfaceBus(fill(Float64(Ts0), Nx, Ny), zeros(Nx, Ny), fill(320.0, Nx, Ny),
                       zeros(Nx, Ny), zeros(Nx, Ny), 0.0, default_surface_params(),
-                      nothing, nothing)
+                      nothing, nothing, NaN, NaN, NaN)
 end

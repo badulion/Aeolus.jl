@@ -59,12 +59,12 @@ const BC = Main.BerlinCase
         for s in keys(slots)
             @test count(C -> BC.slot(C) === s, sel) == 1
         end
-        # the initial couplings of the refactor, all on by default
+        # the default couplings (the initial ones of the refactor, with #130's radiation)
         @test Set(BC.coupling_name.(sel)) ==
               Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_slab,
                    :soil_urban, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :transport_weno,
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
-                   :cooling_prescribed, :traffic_heat])
+                   :column_radiation, :traffic_heat])
         # every coupling names only real Aeolus submodules
         for C in BC.REGISTRY, m in BC.modules_used(C)
             @test isdefined(Aeolus, m) && getfield(Aeolus, m) isa Module
@@ -85,8 +85,11 @@ const BC = Main.BerlinCase
     @testset "stage schedule reproduces the pre-refactor loop order" begin
         order = [(S, BC.coupling_name(e.coupling)) for S in BC.ALL_STAGES for e in case.schedule[S]]
         # the order of the pre-refactor alexanderplatz_diurnal.jl loop
+        # (#130 added the column radiation before the radiosity solve and
+        # replaced the prescribed cooling)
         @test order == [
-            (:radiation, :radiosity_sun), (:radiation, :buildings_citymean),
+            (:radiation, :column_radiation), (:radiation, :radiosity_sun),
+            (:radiation, :buildings_citymean),
             (:sw_modifiers, :sw_modifiers),
             (:surface_flux, :surface_slab),
             (:anthropogenic, :buildings_citymean), (:anthropogenic, :traffic_heat),
@@ -100,7 +103,7 @@ const BC = Main.BerlinCase
             (:post_predictor, :ibm), (:post_predictor, :veg_drag),
             (:surface_update, :surface_slab), (:surface_update, :soil_urban),
             (:surface_update, :snow_legacy),
-            (:column_tendency, :cooling_prescribed),
+            (:column_tendency, :column_radiation),
             (:sanity, :surface_slab)]
         @test [t.name for t in case.tracers] == [:qv, :ql, :qr, :pollutant]
         @test [t.name for t in case.tracers if t.advect] == [:qv, :ql]
