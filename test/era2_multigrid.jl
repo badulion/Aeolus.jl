@@ -200,6 +200,27 @@ using Aeolus.Multigrid
     end
 
     # ---------------------------------------------------------------------
+    # The solution of a linear problem scales with its right-hand side, so
+    # the iteration must too. Found by the Berlin case (#132): the
+    # breakdown test was an absolute `|p·Ap| < eps`, which stopped CG after
+    # 6 iterations at a relative residual of 8e-6 for a 1e-6 RHS.
+    # ---------------------------------------------------------------------
+    @testset "MG-preconditioned CG: convergence independent of the RHS scale" begin
+        g = RegularGrid(; size=(16,16,16), extent=(250.0,250.0,100.0), halo=(1,1,1))
+        b0 = [sin(0.7i) * cos(1.3j) + 0.1 * sin(0.9k) * i / 16 for i in 1:16, j in 1:16, k in 1:16]
+        sols = Dict{Float64,Array{Float64,3}}()
+        for scale in (1.0, 1e-3, 1e-6)
+            s = MGPreconditionedCG(g; bc_x=:periodic, bc_y=:periodic, bc_z=:neumann, tol=1e-10)
+            src = Field(CellCenter(), g); p = Field(CellCenter(), g)
+            interior_view(src) .= scale .* b0
+            solve!(p, src, s)
+            @test mg_residual_norm(s) < 1e-10
+            sols[scale] = interior_view(p) ./ scale
+        end
+        @test sols[1e-6] ≈ sols[1.0] rtol = 1e-8
+    end
+
+    # ---------------------------------------------------------------------
     # Interface conformance: MultigridPoissonSolver must be usable as the
     # simulation's pressure solver and keep the projection exact.
     # ---------------------------------------------------------------------

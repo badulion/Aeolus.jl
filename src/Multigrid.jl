@@ -736,7 +736,9 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
     for it in 1:solver.maxit
         _apply_fine!(Ap, pd, s)
         pAp = _dot(pd, Ap)
-        abs(pAp) < eps(T) && break
+        # breakdown test relative to r·z (pAp ~ r·z in magnitude), so the
+        # iteration is invariant to the scale of the right-hand side
+        abs(pAp) <= eps(T) * abs(rz_old) && break
         α = rz_old / pAp
         @. x = x + α * pd
         @. r = r - α * Ap
