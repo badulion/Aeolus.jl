@@ -83,7 +83,9 @@ params = glass_surface_params()
 veg_mask   = (sfc .== SURFACE_PARK)
 LAI_map    = fill(2.5, Nx, Ny)   # dense grassy park; open water/streets → 0
 LAI_map .*= veg_mask
-soil       = SoilGrid(mesh; T0 = 288.0)
+# L3: the production soil column (Aeolus.SoilColumn, Phase 46) under
+# every non-water cell — 10 CLM layers to 3.4 m, moist loam, base 288 K.
+soil       = UrbanSoil(sfc; T0 = 288.0, T_deep = 288.0)
 snow       = SnowState(mesh)
 q_dew      = zeros(Float64, Nx, Ny)      # surface dew reservoir, kg m⁻²
 # Layer pressures for fog/dew thermodynamics: isothermal 8 km scale height
@@ -154,6 +156,7 @@ const nsteps  = parse(Int, get(ENV, "AEOLUS_NSTEPS", string(Int(T_DAY / dt))))
 const start_h = 6.0
 const frame_every = 900
 const shadow_every = 300     # recompute shadow every 300 steps ≈ 10 sim-min
+const soil_every   = 15      # soil exchange every 15 steps = 30 s (implicit, see step_soil!)
 
 k_slice = clamp(round(Int, 30 / mesh.dz), 1, Nz)
 
@@ -257,7 +260,9 @@ end
 # --- diagnostic 2-D fields ---------------------------------------------
 const NC2D = (("Ts",    "K",     "surface temperature"),
               ("sw_in", "W m-2", "shortwave irradiance at the surface"),
-              ("lw_in", "W m-2", "downwelling longwave at the surface"))
+              ("lw_in", "W m-2", "downwelling longwave at the surface"),
+              ("T_soil1", "K",   "soil temperature, top layer (node 7 mm; NaN under water)"),
+              ("G_soil", "W m-2", "ground heat flux from the surface slab into the soil (NaN under water)"))
 for (n, u, ln) in NC2D
     nc_defvar!(ncf, n, Float32, ("x", "y", "time");
                attributes = Dict("units" => u, "long_name" => ln,
@@ -275,6 +280,15 @@ nc_write!(ncf, "building_height",
                   for i in 1:Nx, j in 1:Ny])
 nc_write!(ncf, "surface_class", Float32.(sfc))
 
+"Ground heat flux of the last soil exchange on the (Nx, Ny) grid, NaN under water."
+function G_map()
+    out = fill(NaN, Nx, Ny)
+    for (n, I) in enumerate(soil.cells)
+        out[I] = soil.G[n]
+    end
+    return out
+end
+
 "Append one time level of the full 3-D state to the NetCDF file."
 function save_frame(idx::Int, hour_of_day::Real)
     iv(f) = Float32.(interior_view(f))
@@ -286,7 +300,9 @@ function save_frame(idx::Int, hour_of_day::Real)
         "theta" => iv(sim.θ), "p" => iv(sim.p), "qv" => iv(qv_p),
         "ql" => iv(ql_p), "qr" => iv(qr_p), "pollutant" => iv(pollutant),
         "Ts" => Float32.(Ts), "sw_in" => Float32.(sw_arr),
-        "lw_in" => Float32.(lw_arr))
+        "lw_in" => Float32.(lw_arr),
+        "T_soil1" => Float32.(soil_layer_temperature(soil, (Nx, Ny), 1)),
+        "G_soil"  => Float32.(G_map()))
     nc_append_record!(ncf, rec)
     return nothing
 end
@@ -436,8 +452,9 @@ for n in 1:nsteps
 
     step!(sim, dt; body_force! = force!, post_predictor! = post_predictor)
     step_surfaces!(Ts, sfc, params, sw_arr, lw_arr, sensible, dt)
-    # L3: multi-layer soil couples the ground reservoir to Ts
-    step_soil!(soil, Ts, sfc, dt, params)
+    # L3: the production soil column exchanges heat with the slab Ts
+    # (implicit, energy-conserving; sub-cycled every `soil_every` steps)
+    n % soil_every == 0 && step_soil!(soil, Ts, sfc, soil_every * dt, params)
     # L5: snow state (dormant in a summer run, but the machinery ships)
     update_snow_state!(snow, Ts, 0)
     apply_radiative_cooling!(sim.θ, fill(-2.315e-5, Nz) .* dt)
