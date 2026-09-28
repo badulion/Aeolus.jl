@@ -262,10 +262,15 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
 end
 
 """
-    adaptive_dt(sim, constraints; dt_prev = nothing, diagnostics = nothing)
+    adaptive_dt(sim, constraints; dt_prev = nothing, diagnostics = nothing,
+                scheme = nothing)
 
 The time step to take next: the smallest per-process limit from
-[`cfl_diagnostics`](@ref), then
+[`cfl_diagnostics`](@ref) — or, when `scheme` is an [`IMEXScheme`](@ref),
+the smallest limit of the processes that scheme treats *explicitly*
+(advection, buoyancy, Coriolis, scaled by [`explicit_cfl_factor`](@ref);
+the `dt_explicit` of [`imex_stability_limit`](@ref)), because the
+diffusive limits do not bind an implicit diffusion solve — then
 
   1. limited to `growth_max · dt_prev` when `dt_prev` is given, and
   2. clamped to `[dt_min, dt_max]`.
@@ -276,9 +281,10 @@ a usable number rather than propagating the `NaN`. Pass `diagnostics` to
 reuse a `cfl_diagnostics` result instead of recomputing it.
 """
 function adaptive_dt(sim::BoussinesqSimulation{T}, c::CFLConstraints;
-                     dt_prev = nothing, diagnostics = nothing) where {T}
+                     dt_prev = nothing, diagnostics = nothing,
+                     scheme = nothing) where {T}
     d  = diagnostics === nothing ? cfl_diagnostics(sim, c) : diagnostics
-    dt = d.dt_limiting
+    dt = scheme isa IMEXScheme ? first(_explicit_limit(d, scheme)) : d.dt_limiting
     isnan(dt) && return c.dt_min
     if dt_prev !== nothing
         dtp = T(dt_prev)
@@ -446,7 +452,9 @@ _fast_process_pairs(nt::NamedTuple) = Tuple(k => getfield(nt, k) for k in keys(n
 Production adaptive driver. One call:
 
  1. picks `dt` from [`adaptive_dt`](@ref) (or uses the `dt` you pass,
-    which is how you deliberately overshoot the stability limit);
+    which is how you deliberately overshoot the stability limit); with
+    `scheme = ARK2()` the pick uses only the explicit processes' limit,
+    since the diffusion is implicit;
  2. saves the prognostic state into a preallocated
     [`StateSnapshot`](@ref);
  3. takes the step with `stepper(sim, dt; body_force!, post_predictor!)` —
@@ -492,7 +500,7 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
                         max_velocity::Real = Inf,
                         verbose::Bool = false) where {T}
 
-    Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev) : T(dt)
+    Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev, scheme = scheme) : T(dt)
     take_step! = if stepper !== nothing
         stepper
     elseif scheme isa IMEXScheme
@@ -1379,6 +1387,18 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     return sim
 end
 
+# The step limit of the processes an IMEX scheme treats explicitly
+# (advection, buoyancy, Coriolis) from a `cfl_diagnostics` result, and
+# which of them binds. Shared by `adaptive_dt(...; scheme)` and
+# `imex_stability_limit`. A NaN advective limit stays NaN.
+function _explicit_limit(d, scheme::IMEXScheme)
+    dt = d.dt_adv
+    limiter = :advective
+    if d.dt_buoy < dt; dt = d.dt_buoy; limiter = :buoyancy; end
+    if d.dt_cor  < dt; dt = d.dt_cor;  limiter = :coriolis; end
+    return (dt * oftype(dt, explicit_cfl_factor(scheme)), limiter)
+end
+
 """
     imex_stability_limit(sim, scheme; constraints = CFLConstraints())
     -> (; dt_explicit, dt_diffusive, dt_fully_explicit, speedup, limiter,
@@ -1405,13 +1425,7 @@ the one that binds a fully explicit step, and `diagnostics` is the full
 function imex_stability_limit(sim::BoussinesqSimulation{T}, scheme::IMEXScheme;
                               constraints::CFLConstraints = CFLConstraints(T)) where {T}
     d = cfl_diagnostics(sim, constraints)
-    factor = T(explicit_cfl_factor(scheme))
-
-    dt_explicit = d.dt_adv
-    limiter = :advective
-    if d.dt_buoy < dt_explicit; dt_explicit = d.dt_buoy; limiter = :buoyancy; end
-    if d.dt_cor  < dt_explicit; dt_explicit = d.dt_cor;  limiter = :coriolis; end
-    dt_explicit *= factor
+    dt_explicit, limiter = _explicit_limit(d, scheme)
 
     dt_diffusive = min(d.dt_diff, d.dt_sgs)
     dt_fully_explicit = min(dt_explicit, dt_diffusive)

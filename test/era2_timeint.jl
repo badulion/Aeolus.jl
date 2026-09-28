@@ -555,6 +555,39 @@ using Aeolus.Grids: interior, xnodes, znodes
                 "dt_diffusive = $(lim.dt_diffusive) s, speed-up = $(lim.speedup)×")
     end
 
+    @testset "adaptive_dt(...; scheme = ARK2()) drops the diffusive limit (#133)" begin
+        # Same diffusion-bound grid: an explicit step is limited by Δz²/ν,
+        # an IMEX step only by advection / buoyancy / Coriolis.
+        g = RegularGrid(; size = (16, 16, 32), extent = (200.0, 200.0, 20.0),
+                        halo = (2, 2, 2))
+        sim = BoussinesqSimulation(g; ν = 2.0)
+        set!(sim.u, (x, y, z) -> 5.0 + sin(2π * x / 200))
+        set!(sim.v, 1.0)
+        c = CFLConstraints()
+        lim = imex_stability_limit(sim, ARK2(); constraints = c)
+        dt_ex = adaptive_dt(sim, c)
+        dt_im = adaptive_dt(sim, c; scheme = ARK2())
+        @test dt_ex ≈ lim.dt_fully_explicit
+        @test dt_im ≈ lim.dt_explicit
+        @test dt_im / dt_ex ≈ lim.speedup
+        @test dt_im > 5 * dt_ex                         # ν = 2 on Δz = 0.625 m
+        # growth limiting and clamping still apply
+        @test adaptive_dt(sim, c; scheme = ARK2(), dt_prev = dt_ex) ≈ 1.1 * dt_ex
+        c2 = CFLConstraints(dt_max = dt_ex)
+        @test adaptive_dt(sim, c2; scheme = ARK2()) == dt_ex
+        # step_adaptive! with the scheme picks the IMEX limit and is stable there
+        ke0 = kinetic_energy(sim)
+        for _ in 1:3
+            _, dt, nretry = step_adaptive!(sim, c; scheme = ARK2())
+            @test nretry == 0
+            @test dt > 5 * dt_ex
+        end
+        @test max_divergence(sim) < 1e-10
+        @test kinetic_energy(sim) < ke0                 # viscous decay only
+        println("  [adaptive_dt] ν = 2, Δz = $(g.dz) m: explicit dt = $(dt_ex) s, " *
+                "IMEX dt = $(dt_im) s ($(round(dt_im / dt_ex; digits = 1))×)")
+    end
+
     # =====================================================================
     # The two phases together
     # =====================================================================
