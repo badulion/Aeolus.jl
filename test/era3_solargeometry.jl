@@ -397,6 +397,16 @@ using Aeolus.SolarGeometry
         roof = [sm.mask[1 + i, 1 + j, 1 + 1] for i in 1:16, j in 1:16]
         @test all(tr[roof] .== 1.0)              # roof above the cloud: unattenuated
         @test all(isapprox.(tr[.!roof], exp(-0.4); rtol = 1e-12))
+        # k_start does the same without the building blocking the beam: at
+        # a slant sun a roof cell next to the edge is lit through the cloud
+        # above the roof only, and nothing is fully shadowed
+        kst = [count(k -> sm.mask[1 + i, 1 + j, 1 + k], 1:16) for i in 1:16, j in 1:16]
+        τ[:, :, 6] .= 0.3                        # a cloud above the roofs too
+        sd = (cosd(40.0), 0.0, sind(40.0))
+        t_ks = cloud_shadow_map(τ, mesh, sd)     # allocating form: from the ground
+        cloud_shadow_transmittance!(t_ks, τ, mesh, sd; k_start = kst)
+        @test all(isapprox.(t_ks[roof], exp(-0.3 / sind(40.0)); rtol = 1e-12))
+        @test all(isapprox.(t_ks[.!roof], exp(-0.7 / sind(40.0)); rtol = 1e-12))
     end
 
     # ---------------------------------------------------------------------

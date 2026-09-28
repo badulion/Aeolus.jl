@@ -614,7 +614,7 @@ function cloud_optical_depth_column(ql::AbstractArray{T,3},
 end
 
 """
-    cloud_shadow_transmittance!(trans, τ_cloud, mesh, sun_dir)
+    cloud_shadow_transmittance!(trans, τ_cloud, mesh, sun_dir; k_start = nothing)
 
 Fill `trans[i,j] ∈ (0,1]` with the **direct-beam transmittance** reaching
 each surface cell, by tracing the ray from the centre of the cell's
@@ -636,6 +636,12 @@ amplification comes from the path lengths, and is not applied again.
 [`sun_direction_enu`](@ref)). Lateral boundaries wrap periodically, matching
 the LES. If the sun is at or below the horizon, `trans` is filled with 0.
 
+`k_start[i, j]` (optional) starts the ray of column `(i, j)` at height
+`k_start·Δz` instead of the ground: on a roof, pass the number of solid
+cells under it, so the roof sees only the cloud above it. Nothing blocks
+the ray (for opaque buildings see
+[`combined_shadow_transmittance!`](@ref)).
+
 This is genuinely 3-D: a cloud displaced horizontally from a surface cell
 shadows it when the sun is low, which no column-by-column (independent
 column) calculation can represent.
@@ -643,13 +649,29 @@ column) calculation can represent.
 function cloud_shadow_transmittance!(trans::AbstractMatrix{T},
                                      τ_cloud::AbstractArray{T,3},
                                      mesh::RegularGrid,
-                                     sun_dir::NTuple{3,<:Real}) where {T}
+                                     sun_dir::NTuple{3,<:Real};
+                                     k_start::Union{Nothing,AbstractMatrix{<:Integer}} = nothing) where {T}
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     size(trans) == (Nx, Ny) ||
         error("cloud_shadow_transmittance!: trans is $(size(trans)), expected ($Nx, $Ny)")
     size(τ_cloud) == (Nx, Ny, Nz) ||
         error("cloud_shadow_transmittance!: τ_cloud is $(size(τ_cloud)), expected ($Nx, $Ny, $Nz)")
-    return combined_shadow_transmittance!(trans, τ_cloud, nothing, mesh, sun_dir)
+    k_start === nothing &&
+        return combined_shadow_transmittance!(trans, τ_cloud, nothing, mesh, sun_dir)
+    size(k_start) == (Nx, Ny) ||
+        error("cloud_shadow_transmittance!: k_start is $(size(k_start)), expected ($Nx, $Ny)")
+    sx, sy, sz = Float64.(sun_dir)
+    if sz <= 1e-6
+        fill!(trans, zero(T))
+        return trans
+    end
+    dx, dy, dz = Float64(mesh.dx), Float64(mesh.dy), Float64(mesh.dz)
+    @inbounds for j in 1:Ny, i in 1:Nx
+        τ_slant, _ = _shadow_ray(τ_cloud, nothing, i, j, Int(k_start[i, j]), sx, sy, sz,
+                                 dx, dy, dz, Nx, Ny, Nz, mesh.Hx, mesh.Hy, mesh.Hz)
+        trans[i, j] = T(exp(-τ_slant))
+    end
+    return trans
 end
 
 """
