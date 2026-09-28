@@ -387,6 +387,38 @@ _night(; T_air = 283.15, U = 3.0, q_air = 0.005) =
             col2.T_skin, fl2.G, k * (col2.T_skin - 285.0))
 end
 
+@testset "Skin energy balance: extra energy input Q_extra (#129)" begin
+    # Energy put onto the skin besides radiation and the turbulent fluxes
+    # (dew's latent heat, heat released onto the surface, or negative:
+    # sunlight passed through glazing) enters the implicit skin balance.
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    mk() = SoilThermalColumn(SoilWaterColumn(clm_exponential_soil_grid(10), h; θ = 0.2), p;
+                             T_soil = 288.0, bottom = BottomTemperature(288.0), hydrology = false)
+    f = SurfaceForcing(sw_down = 400.0, lw_down = 330.0, T_air = 290.0, q_air = 0.007, U = 3.0)
+    base, warm, cool = mk(), mk(), mk()
+    E0 = soil_enthalpy(base)
+    local fb, fw, fc
+    for _ in 1:120                                   # 1 h at 30 s
+        fb = step_surface!(base, f, 30.0)
+        fw = step_surface!(warm, f, 30.0; Q_extra = 100.0)
+        fc = step_surface!(cool, f, 30.0; Q_extra = -100.0)
+    end
+    for (col, fl, Q) in ((warm, fw, 100.0), (cool, fc, -100.0))
+        # every step: G = Rn - H - LE + Q, and G dt is what the soil got
+        @test fl.G ≈ fl.Rn - fl.H - fl.LE + Q atol = 1e-9
+        @test soil_enthalpy(col) - E0 ≈ col.budget.surface - col.budget.bottom rtol = 1e-10
+    end
+    # a warmer skin sheds part of the extra energy to the air and by
+    # radiation; the rest goes into the ground: 0 < ΔG < Q
+    @test warm.T_skin > base.T_skin > cool.T_skin
+    @test fw.H > fb.H > fc.H && fw.Rn < fb.Rn < fc.Rn
+    @test 0 < fw.G - fb.G < 100 && 0 < fb.G - fc.G < 100
+    @printf("  Q_extra = ±100 W/m² for 1 h: ΔT_skin %+.2f / %+.2f K, ΔG %+.1f / %+.1f W/m², ΔH %+.1f / %+.1f W/m²\n",
+            warm.T_skin - base.T_skin, cool.T_skin - base.T_skin, fw.G - fb.G, fc.G - fb.G,
+            fw.H - fb.H, fc.H - fb.H)
+end
+
 @testset "Coupled heat and water: frozen soil, runoff, conservation" begin
     h = carsel_parrish_texture(:loam)
     p = clm_soil_thermal_properties(40, 20)

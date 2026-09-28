@@ -2157,7 +2157,8 @@ surface_emissivity(col::SoilThermalColumn) = col.emissivity
 moisture_availability(col::SoilThermalColumn) = moisture_availability(col.water)
 
 """
-    step_surface!(col::SoilThermalColumn, forcing, dt; δT = 0.01, kwargs...) -> SurfaceFluxes
+    step_surface!(col::SoilThermalColumn, forcing, dt; δT = 0.01, Q_extra = 0,
+                  kwargs...) -> SurfaceFluxes
 
 One coupled land-surface step: skin energy balance, soil heat and
 freeze–thaw, then soil water.
@@ -2177,9 +2178,17 @@ freeze–thaw, then soil water.
     ``G\\,dt`` is exactly the energy the soil received.
  4. With `hydrology = true`, [`step_soil_water!`](@ref) with the rain of
     `forcing` and the evaporation ``E`` just returned.
+
+`Q_extra` (W m⁻², positive *into* the surface, constant over the step) is
+energy the skin receives besides radiation and the turbulent fluxes —
+the latent heat of dew deposited on it, heat released onto it, or
+(negative) sunlight transmitted through glazing. It enters the skin
+balance with the atmospheric supply, ``G_{atm} = R_n - H - LE + Q_{extra}``,
+so the returned ``G = R_n - H - LE + Q_{extra}`` is still exactly what the
+soil received.
 """
 function step_surface!(col::SoilThermalColumn{T}, f::SurfaceForcing, dt::Real;
-                       δT::Real = 0.01, kwargs...) where {T}
+                       δT::Real = 0.01, Q_extra::Real = 0.0, kwargs...) where {T}
     c = col.water.constants
     T0 = col.T_skin
     f0 = turbulent_fluxes(col, f; c = c, kwargs...)
@@ -2198,7 +2207,7 @@ function step_surface!(col::SoilThermalColumn{T}, f::SurfaceForcing, dt::Real;
             LE0 *= φ; dLE *= φ; E0 *= φ; dE *= φ
         end
     end
-    G0 = f0.Rn - f0.H - LE0
+    G0 = f0.Rn - f0.H - LE0 + Q_extra
     D = dRn - dH - dLE
     st = step_soil_heat!(col, dt, LinearizedSkinBalance(G0, D, T0))
     ΔT = st.T_skin_mean - T0
@@ -2206,7 +2215,7 @@ function step_surface!(col::SoilThermalColumn{T}, f::SurfaceForcing, dt::Real;
     H = f0.H + dH * ΔT
     LE = LE0 + dLE * ΔT
     E = E0 + dE * ΔT
-    fl = SurfaceFluxes{T}(Rn, H, LE, Rn - H - LE, f0.τ, E)
+    fl = SurfaceFluxes{T}(Rn, H, LE, Rn - H - LE + Q_extra, f0.τ, E)
     if col.hydrology
         ws = step_soil_water!(col, f, fl, dt)
         # latent heat charged to the balance for water the soil did not deliver
