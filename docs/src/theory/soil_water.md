@@ -71,10 +71,14 @@ values at seven temperatures, 0–80 °C; the test tolerance is 0.3 %) and ``T_{
 texture tables. A soil at 5 °C therefore needs a wetter profile to carry
 the same drainage flux, which the unit-gradient test verifies.
 
-Pore ice will reduce conductivity further; the column already carries
-`θ_ice` and `T_soil` and multiplies ``K`` by
-`ice_impedance_factor(imp, θ_ice, θ_s)` of an `AbstractIceImpedance`
-(``1`` for `NoIceImpedance`), which the freeze–thaw phase (#16) extends.
+Pore ice reduces conductivity further: the column carries `θ_ice` and
+`T_soil` and multiplies ``K`` by `ice_impedance_factor(imp, θ_ice, θ_s)`
+of an `AbstractIceImpedance` (``1`` for `NoIceImpedance`; CLM's
+``10^{-6\,θ_{ice}/θ_s}`` for `PowerLawIceImpedance`). With ice present the
+retention curve applies to the *total* water
+``θ_{liq} + (ρ_{ice}/ρ_w)θ_{ice}``, so freezing does not change ψ — see
+[soil heat and freeze–thaw](soil_heat.md), where the temperatures and
+ice contents come from.
 
 ## 4. Richards' equation and its discretisation
 

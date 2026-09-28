@@ -615,6 +615,14 @@ export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
        SoilWaterColumn, step_soil_water!, set_water_content!, set_matric_potential!,
        soil_water_storage, soil_layer_conductivity, soil_field_capacity
 
+# Phase 46 (#16) — SoilColumn: soil heat, freeze–thaw, and the column as an
+# AbstractSurface. Heat boundary types (GroundHeatFluxTop, BottomTemperature,
+# …) and the Johansen/Farouki helpers stay qualified, as for #15.
+export SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal_properties,
+       soil_thermal_conductivity, soil_heat_capacity,
+       freezing_matric_potential, supercooled_liquid_content, PowerLawIceImpedance,
+       SoilThermalColumn, step_soil_heat!, set_soil_temperature!,
+       soil_enthalpy, soil_ice_mass
 # Phase 46 (#17) — SoilColumn: water table / unconfined aquifer (SIMTOP).
 # The helpers aquifer_impermeable_fraction, gardner_two_point_flux and
 # bottom_water_storage stay qualified.
