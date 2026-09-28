@@ -162,15 +162,20 @@ gain vapour: fog now caps them at saturation. Second, the lowest-layer
 ``q_v`` drops to 0 in some cells between 18:30 and 22:30, while neither
 dew nor fog is active.
 
-A third residual belongs to the example's surface coupling, not to this
+A third residual belonged to the example's surface coupling, not to this
 module. The example's bulk evaporation `apply_latent_flux!` (``\beta``-limited)
-and dew re-evaporation are computed independently. On a surface that
-still carries dew and is above the dew point, the two evaporation rates
-therefore add, reaching up to ``(1+\beta)`` times the potential rate.
+and dew re-evaporation were computed independently. On a surface that
+still carried dew and was above the dew point, the two evaporation rates
+therefore added, reaching up to ``(1+\beta)`` times the potential rate.
 Physically a dew-wetted surface evaporates at the potential rate
-(``\beta = 1``). The excess lasts only while dew remains, and at most
-0.185 mm was present in the run. It is left for the land-surface
-coupling to resolve.
+(``\beta = 1``). The excess lasted only while dew remained, and at most
+0.185 mm was present in the run. Since #129 the Berlin case has one
+vapour exchange per surface: over soil and water the Monin–Obukhov
+evaporation of the surface model (negative when the air is above
+saturation at the skin, which puts the dew into the soil water), and the
+dew reservoir of this module only over surfaces with no moisture of
+their own (roofs and glass), exchanging with the first air cell above
+them.
 
 ## References
 
