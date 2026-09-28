@@ -44,6 +44,7 @@ makedocs(
             "Leaf photosynthesis"         => "theory/photosynthesis.md",
             "Stomatal conductance"        => "theory/stomatal_conductance.md",
             "Vegetated land column"       => "theory/land_surface.md",
+            "Resolved plant canopy"       => "theory/plant_canopy.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -101,6 +102,7 @@ makedocs(
                 "SoilColumn"                   => "api/era5/soil_column.md",
                 "Photosynthesis"               => "api/era5/photosynthesis.md",
                 "LandSurface"                  => "api/era5/land_surface.md",
+                "PlantCanopy"                  => "api/era5/plant_canopy.md",
             ],
         ],
         "Examples" => [
