@@ -44,8 +44,10 @@ At the `:radiation` cadence (and step 1), before the radiosity solve:
    same column with the LES condensate removed; `heat` = the LES-layer
    heating rate (K/s) from the net-flux divergence with cloud.
 
-Every step (`:column_tendency`) θ += `heat`·dt on every LES level
-(`Radiation.apply_radiative_cooling!`).
+Every step (`:column_tendency`) θ += `heat`·dt on every LES level, in
+the fluid cells only (`Radiation.apply_radiative_cooling!` with the
+solid mask): the heating rate is a property of the air, and heating the
+immersed buildings' cells leaks into the air next to the walls.
 """
 mutable struct ColumnRadiation{GS, GL, CS, CL, SS, SL} <: AbstractCoupling
     gas_sw::GS
@@ -69,8 +71,7 @@ mutable struct ColumnRadiation{GS, GL, CS, CL, SS, SL} <: AbstractCoupling
     μ₀::Float64
     sun::Any                      # solar position of the last radiation call
     ghi_bird::Float64             # Bird GHI with the radiosity coupling's sky, for the log
-    applied::Float64              # ρ c_p Σ Δθ̄ dz of the last :column_tendency (J/m²)
-    dt_applied::Float64
+    dt_applied::Float64           # dt of the last :column_tendency
     ncalls::Int
 end
 
@@ -100,7 +101,7 @@ function build(::Type{<:ColumnRadiation}, case, o)
                            Int(o.nz_upper), Float64(o.r_eff_liq), ps, o.surface_sw,
                            nothing, nothing, nothing, nothing,
                            zeros(Nz), zeros(Nz), zeros(Nz), zeros(Nz),
-                           0.0, nothing, NaN, 0.0, 0.0, 0)
+                           0.0, nothing, NaN, 0.0, 0)
 end
 
 """
@@ -236,14 +237,33 @@ function _les_levels(f, Nz)
 end
 
 function run_stage!(c::ColumnRadiation, case, ::Val{:column_tendency}, dt)
-    θ = case.sim.θ
     c.buf .= c.heat .* dt
-    apply_radiative_cooling!(θ, c.buf)
-    # energy put into the LES air (every cell of a level gets the same Δθ)
-    col = c.col
-    c.applied = sum(col.ρ[k] * Aeolus.RadiationCore.CP_DRY_AIR * c.buf[k] * col.dz[k] for k in eachindex(c.buf))
+    apply_radiative_cooling!(case.sim.θ, c.buf; solid = case.geom.sm.mask)
     c.dt_applied = dt
     return nothing
+end
+
+# Apply the stage's increment to a copy of θ and compare what changed
+# with heating·dt: exactly that in every fluid cell, nothing in a solid
+# one. (Measured on the field, so it tests the masked application, not
+# the bookkeeping.)
+function _applied_increment_ok(c::ColumnRadiation, case)
+    θ = deepcopy(case.sim.θ)
+    dt = c.dt_applied > 0 ? c.dt_applied : 1.0
+    c.buf .= c.heat .* dt
+    apply_radiative_cooling!(θ, c.buf; solid = case.geom.sm.mask)
+    m, mask = case.mesh, case.geom.sm.mask
+    a, a0 = interior_view(θ), interior_view(case.sim.θ)
+    ok = true
+    @inbounds for k in 1:m.Nz, j in 1:m.Ny, i in 1:m.Nx
+        d = a[i, j, k] - a0[i, j, k]
+        if mask[m.Hx + i, m.Hy + j, m.Hz + k]
+            ok &= d == 0                                  # untouched
+        else
+            ok &= abs(d - c.heat[k] * dt) <= 1e-12        # ≈ 20 ulp of θ ≈ 300 K
+        end
+    end
+    return ok
 end
 
 "LES-layer mean heating rate in K/day, ρ·dz-weighted: (total, longwave, shortwave)."
@@ -274,8 +294,8 @@ function smoke_check(c::ColumnRadiation, case)
     checks = [
         "LES-layer heating ∫ρc_p Ḣ dz = net flux convergence (rel. 1e-10)" =>
             isapprox(Q, ΔF; rtol = 1e-10, atol = 1e-10),
-        "θ increment applied = heating·dt (rel. 1e-12)" =>
-            isapprox(c.applied, Q * c.dt_applied; rtol = 1e-12, atol = 1e-12),
+        "θ increment applied = heating·dt in every fluid cell, 0 in the solid ones" =>
+            _applied_increment_ok(c, case),
         "0 < L_sky < σ T_max⁴ of the column" => 0 < case.bus.L_sky < σ * Tmax^4,
         "sky longwave on the bus is the column's" => case.bus.L_sky == c.flw.flux_dn[1],
         "radiation ran" => c.ncalls > 0]
