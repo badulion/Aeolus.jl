@@ -75,6 +75,7 @@ include("UrbanSurface.jl")         # Phase 49 (urban facets; needs SurfaceExchan
 include("BuildingEnergy.jl")       # Phase 50 (indoor air + thermal mass; reuses UrbanSurface columns)
 include("Snowpack.jl")             # Phase 51 (#34): layered snowpack, Era V surface
 include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
+include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
 
 using .Grids
 using .Fields
@@ -133,6 +134,7 @@ using .BuildingEnergy              # Phase 50
 using .Snowpack                    # Phase 51 (#34)
 using .IceThermodynamics           # Era V, Phase 51 (#37)
 using .OceanMixedLayer             # Phase 52 (#38)
+using .AirSeaFlux                  # Phase 52 (#39)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -836,5 +838,21 @@ export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
        absorb_heat!, convective_adjustment!, wind_mixing!, mix_column!,
        column_heat_content, column_potential_energy, mixed_layer_depth,
        salinity_humidity_factor
+
+# Phase 52 — AirSeaFlux (#39): wave-dependent sea-surface roughness, COARE
+# stability / gustiness, COARE-style bulk fluxes, SeaSurface. The viscosity
+# helper stays qualified: `Aeolus.AirSeaFlux.air_kinematic_viscosity`.
+export COAREStability, ConvectiveGustiness, gustiness_velocity,
+       convective_velocity_scale,
+       SeaState, deep_water_sea_state, fully_developed_sea_state, wave_age,
+       AbstractSeaRoughness, AbstractCharnockRoughness, CharnockRoughness,
+       COARE30Charnock, COARE35Charnock, WaveAgeCharnock, OostRoughness,
+       TaylorYellandRoughness, SeaStateRoughness,
+       smooth_flow_roughness, charnock_parameter, sea_roughness_length,
+       AbstractScalarRoughness, COARE30ScalarRoughness, COARE35ScalarRoughness,
+       BrutsaertGarrattRoughness, sea_scalar_roughness, roughness_reynolds,
+       neutral_transfer_coefficients,
+       BulkAirSea, coare30_bulk, coare35_bulk, AirSeaSolution, air_sea_fluxes,
+       SeaSurface, sea_surface_solution
 
 end # module

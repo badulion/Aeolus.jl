@@ -57,6 +57,7 @@ makedocs(
             "Snow metamorphism and albedo" => "theory/snow_metamorphism.md",
             "Lake and sea ice"            => "theory/ice_thermodynamics.md",
             "Water surfaces (mixed layer)" => "theory/ocean_mixed_layer.md",
+            "Air–sea fluxes and waves"    => "theory/air_sea_flux.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -120,6 +121,7 @@ makedocs(
                 "Snowpack"                     => "api/era5/snowpack.md",
                 "IceThermodynamics"            => "api/era5/ice_thermodynamics.md",
                 "OceanMixedLayer"              => "api/era5/ocean_mixed_layer.md",
+                "AirSeaFlux"                   => "api/era5/air_sea_flux.md",
             ],
         ],
         "Examples" => [
