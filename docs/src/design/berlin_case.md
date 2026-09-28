@@ -82,7 +82,12 @@ crosses a multiple of 600 s, `floor(t_new/P) > floor(t_old/P)`;
 `Cadence(:radiation; first = true)` names a period in `cfg.cadence` and
 also fires on step 1. With `dt = 2 s` this is exactly the old
 `n % 300 == 0 || n == 1` (checked over a whole day in
-`test/berlin_case.jl`), and it keeps working with an adaptive `dt`.
+`test/berlin_case.jl`). With an adaptive `dt` the entry still fires
+once per period crossed, but the couplings that integrate over their
+interval, `soil_urban` and `buildings_citymean`, pass the nominal period
+`P` rather than the time elapsed since they last ran. That is exact only
+when `dt` divides `P`; the adaptive-dt issue (#133) has to pass the
+elapsed interval instead.
 
 ## The stage loop
 
@@ -113,8 +118,12 @@ included. That is why the slab's latent flux sits at the end of
 building, traffic and glazing terms. The surface-exchange issue (#129)
 replaces the slab and folds it into `:surface_flux`.
 
-`run_case!` prints the wall time of every entry (`timing_report`). For
-the 1 h flagship run the dynamics dominate; see the table in the #126 PR.
+`run_case!` prints the wall time of every entry (`timing_report`). In
+the 1 h flagship run (1800 steps, first-call compilation included) the
+largest entry is the WENO-Z5 scalar transport, about 17 ms/step, ahead
+of `step!` itself (about 12.5 ms/step), then `fog_dew` (6.1),
+`radiosity_sun` (5.5 averaged over all steps) and `soil_urban` (2.8);
+everything else is below 1 ms/step. See the table in the #126 PR.
 
 ## Shared state
 
