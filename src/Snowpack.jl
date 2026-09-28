@@ -1309,7 +1309,9 @@ end
 # Δw L_f; if the cold content C (T_f - T) exceeds w_liq L_f everything
 # freezes and the layer warms, otherwise the layer ends at T_f with
 # Δw = C (T_f - T) / L_f frozen. Thickness is unchanged (pore filling;
-# Vionnet et al. 2012, Sect. 3.10).
+# Vionnet et al. 2012, Sect. 3.10). The refrozen mass is handed to the
+# metamorphism scheme (`mix_refrozen_grain!`, #35), which coarsens the
+# layer's grains towards its `refrozen_grain_radius`.
 function _refreeze_layer!(p, i)
     c = p.consts
     Tf, Lf = _Tfreeze(c), LH_f0(c)
@@ -1327,6 +1329,7 @@ function _refreeze_layer!(p, i)
         p.m_liq[i] -= dm
         p.T[i] = Tf
     end
+    mix_refrozen_grain!(p, i, dm)
     return dm
 end
 
