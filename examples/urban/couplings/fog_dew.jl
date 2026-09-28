@@ -106,7 +106,7 @@ end
 # vapour deposited into the dew reservoir leaves the air (dew = the
 # reservoir change, negative = deposition, positive = re-evaporation).
 function budget!(c::FogDew, case, l)
-    add_surface!(l, :dew_heat, c.H_dew, case.geom.sfc, case.cfg.dt)
+    add_surface!(l, :dew_heat, c.H_dew, case.geom.sfc, l.dt)
     add_water!(l, :dew, -(sum(case.bus.dew) - sum(c.dew_start)) / length(c.dew_start))
     return nothing
 end
@@ -122,7 +122,7 @@ function smoke_check(c::FogDew, case)
                 all(I -> c.H_dew[I] * Δdew[I] >= 0, eachindex(Δdew)),
             "H_dew = L_v(Ts) · deposition rate (rel. 1e-9)" =>
                 all(I -> abs(c.H_dew[I] - Aeolus.MoistThermodynamics.latent_heat_vapor(case.ledger.Ts_start[I]) *
-                                          Δdew[I] / case.cfg.dt) <=
+                                          Δdew[I] / case.ledger.dt) <=
                          1e-9 * abs(c.H_dew[I]) + 1e-12, eachindex(Δdew))]
 end
 

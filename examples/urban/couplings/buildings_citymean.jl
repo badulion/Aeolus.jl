@@ -261,7 +261,7 @@ end
 # the flux into the surface); the building's latent release enters the
 # air as vapour, LE·dt/L_v per column (apply_building_heat!, ρ = 1).
 function budget!(c::CityMeanBuildings, case, l)
-    dt = case.cfg.dt
+    dt = l.dt
     add_surface!(l, :window_sun, c.bem.S, case.geom.sfc, dt)
     add_water!(l, :building_vapour, sum(c.bem.LE) * dt / _L_v / length(c.bem.LE))
     return nothing

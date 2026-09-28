@@ -28,7 +28,9 @@ end
 """
     Case
 
-A built case: `cfg`, `mesh`, `sim` (the `BoussinesqSimulation`), `geom`
+A built case: `cfg`, `mesh`, `sim` (the dynamical core: a
+`BoussinesqSimulation`, or the `MassWeightedSimulation` of the `:core`
+slot's anelastic / pseudo-incompressible provider), `geom`
 ([`Geometry`](@ref)), `bus` ([`SurfaceBus`](@ref)), `tracers`
 ([`TracerRegistry`](@ref)), `ledger`, the enabled `couplings` (registry
 order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
@@ -81,9 +83,38 @@ function solar_position_at(cfg::CaseConfig, hour::Real)
 end
 
 """
+    core_parameters(cfg) -> NamedTuple
+
+The keyword arguments every dynamical core of the case shares: viscosity,
+gravity, Coriolis, Smagorinsky, sponge and the boundary conditions
+(periodic laterally, wall / no-flux at top and bottom).
+"""
+core_parameters(cfg::CaseConfig) = (
+    ν              = cfg.ν,
+    g_accel        = cfg.g,
+    f_coriolis     = cfg.f_coriolis,
+    C_s            = cfg.C_s,
+    Pr_t           = cfg.Pr_t,
+    sponge_α_max   = cfg.sponge_α_max,
+    sponge_z_start = cfg.sponge_frac * cfg.extent[3],
+    bcs   = FieldBoundaryConditions(:periodic, :periodic, :wall),
+    θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+
+"The dry Boussinesq core of the case (buoyancy about the constant `cfg.θ₀`)."
+boussinesq_core(cfg::CaseConfig, mesh) =
+    BoussinesqSimulation(mesh; core_parameters(cfg)..., θ₀ = cfg.θ₀, moisture = false)
+
+"The initial potential temperature θ(z) = θ_surface + max(0, z − θ_inversion_z)·θ_lapse, as `(x, y, z) -> θ`."
+function initial_θ(cfg::CaseConfig)
+    θs, zi, Γ = cfg.θ_surface, cfg.θ_inversion_z, cfg.θ_lapse
+    return (x, y, z) -> θs + max(0, (z - zi)) * Γ
+end
+
+"""
     build_case(cfg; io = stdout) -> Case
 
-Build the mesh, the geometry, the dynamical core and its initial state,
+Build the mesh, the geometry, the dynamical core (`build_core` of the
+provider of the `:core` slot) and its initial state,
 the surface bus and the core tracers (`qv`, `ql`, `qr`), then the
 couplings `cfg` enables (see [`selected_couplings`](@ref)): each is
 constructed with `build(C, case, opts)`, then every `init!` runs in
@@ -91,24 +122,13 @@ registry order, and finally the stage schedule is assembled.
 """
 function build_case(cfg::CaseConfig; io::IO = stdout)
     Nx, Ny, Nz = cfg.size
-    Lx, Ly, Lz = cfg.extent
     mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
     geom = build_geometry(cfg, mesh; io = io)
 
-    sim = BoussinesqSimulation(mesh;
-        ν              = cfg.ν,
-        θ₀             = cfg.θ₀,
-        g_accel        = cfg.g,
-        f_coriolis     = cfg.f_coriolis,
-        C_s            = cfg.C_s,
-        Pr_t           = cfg.Pr_t,
-        moisture       = false,
-        sponge_α_max   = cfg.sponge_α_max,
-        sponge_z_start = cfg.sponge_frac * Lz,
-        bcs   = FieldBoundaryConditions(:periodic, :periodic, :wall),
-        θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
-    θs, zi, Γ = cfg.θ_surface, cfg.θ_inversion_z, cfg.θ_lapse
-    set!(sim.θ, (x, y, z) -> θs + max(0, (z - zi)) * Γ)
+    selected = selected_couplings(cfg)
+    icore = findfirst(C -> slot(C) === :core, selected)
+    sim = icore === nothing ? boussinesq_core(cfg, mesh) : build_core(selected[icore], cfg, mesh)
+    set!(sim.θ, initial_θ(cfg))
     u0 = cfg.u0
     set!(sim.u, (x, y, z) -> u0)
 
@@ -132,7 +152,7 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
                    units = "kg kg-1", long_name = "cloud liquid water")
     ensure_tracer!(case, :qr; units = "kg kg-1", long_name = "rain water")
 
-    for C in selected_couplings(cfg)
+    for C in selected
         push!(case.couplings, build(C, case, coupling_options(C, cfg)))
     end
     for c in case.couplings

@@ -61,7 +61,10 @@ the ledger was (re)started. See `core/ledger.jl` for the conventions.
 * `ρ` — air density per level used for the water integral (kg m⁻³;
   the Boussinesq case uses 1 everywhere, the value its surface and
   microphysics couplings assume);
-* `Ts_start`, `W_start` — snapshots at the start of the current step.
+* `Ts_start`, `W_start` — snapshots at the start of the current step;
+* `dt` — the length (s) of the current step, set before the `budget!`
+  calls. Use it, not `cfg.dt`, to turn a step's energy into a flux: with
+  the adaptive time stepper the two differ.
 """
 mutable struct Ledger
     terms::Dict{Symbol,Float64}
@@ -75,9 +78,10 @@ mutable struct Ledger
     nsteps::Int
     Ts_start::Matrix{Float64}
     W_start::Float64
+    dt::Float64
 end
 Ledger() = Ledger(Dict{Symbol,Float64}(), Dict{Symbol,Vector{Float64}}(), Dict{Symbol,Float64}(),
-                  0.0, [:qv, :ql, :qr], Float64[], Int[], 0.0, 0, zeros(0, 0), 0.0)
+                  0.0, [:qv, :ql, :qr], Float64[], Int[], 0.0, 0, zeros(0, 0), 0.0, 0.0)
 
 "Add `value` to the free-form ledger term `name` (a diagnostic outside the budgets)."
 add_term!(l::Ledger, name::Symbol, value::Real) =
@@ -186,6 +190,7 @@ end
 function ledger_end_step!(case, dt::Real)
     t0 = time_ns()
     l = case.ledger
+    l.dt = dt
     for c in case.couplings
         budget!(c, case, l)
     end

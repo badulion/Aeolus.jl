@@ -219,7 +219,7 @@ end
 # evaporation it put into qv.
 function budget!(c::SurfaceSlab, case, l)
     bus, sfc, C = case.bus, case.geom.sfc, case.bus.params.C_s
-    dt = case.cfg.dt
+    dt = l.dt
     add_surface!(l, :Rn, slab_net_radiation(l.Ts_start, sfc, bus.params, bus.sw, bus.lw), sfc, dt)
     add_surface!(l, :H, c.H, sfc, dt)
     add_surface!(l, :LE, c.LE, sfc, dt)

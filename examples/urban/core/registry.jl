@@ -17,6 +17,7 @@
 #   modules_used(::Type{C})     -> tuple of Aeolus submodule names (coverage test)
 #   default_options(::Type{C})  -> NamedTuple
 #   incompatible(::Type{C})     -> tuple of `slot => provider` or coupling names
+#   incompatible_reason(::Type{C}) -> String, why (appended to the selection error)
 #   stages(::Type{C})           -> tuple of (stage::Symbol, order::Int, Cadence), one per stage
 #   build(::Type{C}, case, opts)-> instance (default `C()`)
 #   init!(c, case)              -> called once, after every coupling is built
@@ -26,6 +27,14 @@
 #   report(c, case)             -> Union{Nothing,String}, printed with each output record
 #   smoke_variants(::Type{C})   -> tuple of configs worth a smoke run
 #   smoke_check(c, case)        -> Vector{Pair{String,Bool}}
+#
+# Dynamics contract (#133), used only by the providers of the two
+# dynamics slots:
+#
+#   slot :core         build_core(::Type{C}, cfg, mesh) -> the dynamical-core simulation
+#   slot :timestepper  next_dt(c, case)                 -> dt (s) of the next step
+#                      advance_dynamics!(c, case, dt)   -> advance case.sim by dt
+#                      variable_dt(::Type{C})           -> Bool: run_case! runs to a time
 
 """
     AbstractCoupling
@@ -81,6 +90,7 @@ is_default(::Type{<:AbstractCoupling}) = true
 modules_used(::Type{<:AbstractCoupling}) = ()
 default_options(::Type{<:AbstractCoupling}) = (;)
 incompatible(::Type{<:AbstractCoupling}) = ()
+incompatible_reason(::Type{<:AbstractCoupling}) = ""
 stages(::Type{<:AbstractCoupling}) = ()
 build(C::Type{<:AbstractCoupling}, case, opts) = C()
 init!(c::AbstractCoupling, case) = nothing
@@ -89,6 +99,11 @@ budget!(c::AbstractCoupling, case, ledger) = nothing
 report(c::AbstractCoupling, case) = nothing
 smoke_variants(::Type{<:AbstractCoupling}) = ()
 smoke_check(c::AbstractCoupling, case) = Pair{String,Bool}[]
+function build_core end
+variable_dt(::Type{<:AbstractCoupling}) = false
+next_dt(c::AbstractCoupling, case) = case.cfg.dt
+advance_dynamics!(c::AbstractCoupling, case, dt) =
+    (step!(case.sim, dt; body_force! = case.body_force, post_predictor! = case.post_predictor); nothing)
 run_stage!(c::AbstractCoupling, case, ::Val{S}, dt) where {S} =
     error("coupling :$(coupling_name(typeof(c))) declares stage :$S but has no run_stage! method for it")
 
@@ -184,7 +199,9 @@ function selected_couplings(cfg)
         for D in sel
             hit = x isa Pair ? (slot(D) === x.first && provider(D) === x.second) :
                                coupling_name(D) === x
-            hit && error("coupling :$(coupling_name(C)) is incompatible with :$(coupling_name(D))")
+            why = incompatible_reason(C)
+            hit && error("coupling :$(coupling_name(C)) is incompatible with :$(coupling_name(D))" *
+                         (isempty(why) ? "" : ": " * why))
         end
     end
     return sel
