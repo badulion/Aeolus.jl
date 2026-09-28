@@ -393,7 +393,8 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        saturation_specific_humidity, saturation_mixing_ratio,
        saturation_specific_humidity_ice,
        vapor_pressure, relative_humidity, relative_humidity_ice,
-       dewpoint_temperature, frost_point_temperature,
+       specific_humidity_from_relative_humidity,
+       dewpoint_temperature, frost_point_temperature, wet_bulb_temperature,
        gas_constant_moist, heat_capacity_moist, exner_function,
        potential_temperature, temperature_from_theta,
        liquid_ice_potential_temperature, temperature_from_theta_li,
@@ -745,6 +746,11 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        zone_mean_radiant_temperature, zone_operative_temperature,
        air_heat_capacity, ventilation_conductance, element_transmittance,
        iso13786_areal_heat_capacity,
-       ISO13790Zone, iso13790_zone, step_iso13790!
+       ISO13790Zone, iso13790_zone, step_iso13790!, iso13790_ideal_load!,
+       zone_specific_humidity, zone_relative_humidity,
+       BiquadraticCurve, DXCoolingCurves, DX_RATING_POINT,
+       DX_CURVES_WINDOW_AC, DX_CURVES_PACKAGED_AC,
+       IdealLoadsHVAC, HVACBudget, condenser_inlet_temperature,
+       cooling_cop, available_cooling_capacity
 
 end # module

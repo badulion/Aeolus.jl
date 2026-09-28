@@ -26,8 +26,17 @@ The API has three parts:
   `ventilation_conductance`, `air_heat_capacity` and
   `element_transmittance`.
 - **The ISO 13790 reference**: `ISO13790Zone`, `step_iso13790!`,
-  `iso13790_zone` (the 5R1C parameters derived from a `BuildingZone`)
-  and `iso13786_areal_heat_capacity`.
+  `iso13790_zone` (the 5R1C parameters derived from a `BuildingZone`),
+  `iso13790_ideal_load!` (the §C.4.2 heating/cooling need) and
+  `iso13786_areal_heat_capacity`.
+- **HVAC and exhaust heat** (#32; theory:
+  [HVAC demand and exhaust heat](../../theory/hvac_exhaust.md)):
+  `IdealLoadsHVAC`, passed as `step_zone!(zone, forcing, dt, hvac)`, which
+  also returns an `HVACBudget`. Equipment curves: `BiquadraticCurve`,
+  `DXCoolingCurves`, `DX_CURVES_WINDOW_AC`, `DX_CURVES_PACKAGED_AC`,
+  `DX_RATING_POINT`, `cooling_cop`, `available_cooling_capacity` and
+  `condenser_inlet_temperature`. Humidity: `ZoneForcing(q_out, Q_latent)`,
+  `zone_specific_humidity`, `zone_relative_humidity`.
 
 ## A zone behind two facets
 
@@ -53,6 +62,18 @@ for step in 1:144
                                      Q_solar = max(0, 600day), surface = sf), 600.0)
     # b.T_air, b.Q_ventilation, … ; facet_fluxes(roof) is what the canopy air receives
 end
+```
+
+## Air conditioning and its exhaust
+
+```julia
+ac = IdealLoadsHVAC(T_heat = 293.15, T_cool = 299.15, cop_rated = 3.0,
+                    curves = DX_CURVES_WINDOW_AC, condenser = :air_cooled,
+                    dehumidify = true, RH_max = 0.6)
+b, h = step_zone!(zone, ZoneForcing(T_out = 306.0, q_out = 0.014, Q_internal = 500.0,
+                                    Q_latent = 150.0, surface = sf), 600.0, ac)
+h.Q_cooling, h.COP                            # coil load, operating COP
+h.Q_exhaust_sensible, h.Q_exhaust_latent      # = Q_cooling (1 + 1/COP) to the outdoor air
 ```
 
 ## The 5R1C reference

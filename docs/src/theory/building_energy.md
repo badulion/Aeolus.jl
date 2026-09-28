@@ -171,7 +171,7 @@ ASHRAE 140 (BESTEST) cases need its weather file and were not run.
 ## 5. Scope
 
 This page covers issue #31 only. HVAC control and its exhaust heat
-(#32), occupancy schedules and the validation against a measured
+(#32) are on [HVAC demand and exhaust heat](hvac_exhaust.md). Occupancy schedules and the validation against a measured
 building (#33), anthropogenic heat coupling to the canopy (#29), and
 glazing optics (#27) are all separate issues. `Q_hvac`, `Q_solar` and
 `FacetElement` are the hooks they plug into.
