@@ -52,6 +52,7 @@ mutable struct Case{M, S, G<:Geometry}
     body_force::Union{Nothing,Function}
     post_predictor::Union{Nothing,Function}
     timing::Dict{Tuple{Symbol,Symbol},Float64}
+    step_kwargs::NamedTuple      # extra step! keywords from the couplings' step_options
 end
 
 "The enabled coupling called `name`, or `nothing`."
@@ -95,6 +96,10 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
     geom = build_geometry(cfg, mesh; io = io)
 
+    selected = selected_couplings(cfg)
+    simkw = merge_keywords("BoussinesqSimulation",
+                           (coupling_name(C) => sim_options(C, cfg, mesh, coupling_options(C, cfg))
+                            for C in selected))
     sim = BoussinesqSimulation(mesh;
         ν              = cfg.ν,
         θ₀             = cfg.θ₀,
@@ -106,7 +111,8 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
         sponge_α_max   = cfg.sponge_α_max,
         sponge_z_start = cfg.sponge_frac * Lz,
         bcs   = FieldBoundaryConditions(:periodic, :periodic, :wall),
-        θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+        θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux),
+        simkw...)
     θs, zi, Γ = cfg.θ_surface, cfg.θ_inversion_z, cfg.θ_lapse
     set!(sim.θ, (x, y, z) -> θs + max(0, (z - zi)) * Γ)
     u0 = cfg.u0
@@ -119,7 +125,7 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time())
     case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), Ledger(),
                 AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
-                nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}())
+                nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;))
 
     # Core moisture tracers. qv and ql are advected by the :transport
     # stage; KNOWN: qr is sedimented by the microphysics but never
@@ -132,7 +138,7 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
                    units = "kg kg-1", long_name = "cloud liquid water")
     ensure_tracer!(case, :qr; units = "kg kg-1", long_name = "rain water")
 
-    for C in selected_couplings(cfg)
+    for C in selected
         push!(case.couplings, build(C, case, coupling_options(C, cfg)))
     end
     for c in case.couplings

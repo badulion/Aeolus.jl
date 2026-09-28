@@ -26,6 +26,8 @@
 #   report(c, case)             -> Union{Nothing,String}, printed with each output record
 #   smoke_variants(::Type{C})   -> tuple of configs worth a smoke run
 #   smoke_check(c, case)        -> Vector{Pair{String,Bool}}
+#   sim_options(::Type{C}, cfg, mesh, opts) -> NamedTuple of BoussinesqSimulation keywords
+#   step_options(c, case)       -> NamedTuple of step! keywords
 
 """
     AbstractCoupling
@@ -89,10 +91,38 @@ budget!(c::AbstractCoupling, case, ledger) = nothing
 report(c::AbstractCoupling, case) = nothing
 smoke_variants(::Type{<:AbstractCoupling}) = ()
 smoke_check(c::AbstractCoupling, case) = Pair{String,Bool}[]
+"""
+    sim_options(::Type{C}, cfg, mesh, opts) -> NamedTuple
+
+Keywords `C` adds to the `BoussinesqSimulation` constructor (e.g. a
+`solver`), called before the dynamical core is built. Two couplings may
+not set the same keyword.
+"""
+sim_options(::Type{<:AbstractCoupling}, cfg, mesh, opts) = (;)
+"""
+    step_options(c, case) -> NamedTuple
+
+Keywords `c` adds to every `step!` call (e.g. `momentum_advection`,
+`eddy_viscosity!`), collected when the schedule is built. Two couplings
+may not set the same keyword.
+"""
+step_options(c::AbstractCoupling, case) = (;)
 run_stage!(c::AbstractCoupling, case, ::Val{S}, dt) where {S} =
     error("coupling :$(coupling_name(typeof(c))) declares stage :$S but has no run_stage! method for it")
 
 coupling_name(c::AbstractCoupling) = coupling_name(typeof(c))
+
+"Merge the keyword `NamedTuple`s `parts` (`name => nt`); a keyword set twice is an error."
+function merge_keywords(what::AbstractString, parts)
+    kw = (;)
+    for (name, nt) in parts
+        for k in keys(nt)
+            haskey(kw, k) && error("$what keyword `$k` is set by two couplings (the second is :$name)")
+        end
+        kw = merge(kw, nt)
+    end
+    return kw
+end
 
 # --- the registry ------------------------------------------------------------
 
