@@ -268,4 +268,22 @@ cl98(θi) = θi <= 0.23 ? 0.0264 + 0.0099 * (1 - θi) / θi :
         end
         @test res[:instant].p.budget.refreeze == 0
     end
+
+    @testset "Refreezing coarsens grains through the #35 metamorphism hook" begin
+        # 2 kg m⁻² of liquid in a cold 0.1 m, 300 kg m⁻³ layer of 100 μm grains
+        # (cold content 1.3 MJ m⁻² > 0.67 MJ m⁻² of latent heat) refreezes
+        # completely; CLM (Eq. 2.3.72) mass-weights the grain radius
+        # towards r_refrozen = 1000 μm with the refrozen fraction.
+        for (m, r_expect) in ((Flanner2006Metamorphism(), nothing),
+                              (NoSnowMetamorphism(), 100.0))
+            p = liquid_test_pack(1, 0.1, 300.0, Tf_liq - 20; grain = 100.0,
+                                 metamorphism = m)
+            p.m_liq[1] = 2.0
+            dm = snow_refreeze!(p)
+            @test dm ≈ 2.0
+            f = dm / (p.m_ice[1] + p.m_liq[1])
+            @test p.grain[1] ≈ (r_expect === nothing ? (1 - f) * 100.0 + f * 1000.0 : r_expect)
+            m isa Flanner2006Metamorphism && @test p.grain[1] ≈ 156.25   # f = 2/32
+        end
+    end
 end
