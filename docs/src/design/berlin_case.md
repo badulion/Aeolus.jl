@@ -391,8 +391,12 @@ the radiosity:
    twice; option `surface_sw = :bird` leaves the shortwave to the
    radiosity coupling's Bird clear sky;
 5. the heating rate of the LES layers (LW + SW, with the condensate) is
-   applied to θ on every step at `:column_tendency`, uniform over each
-   level, through `Radiation.apply_radiative_cooling!`.
+   applied to θ on every step at `:column_tendency`, uniform over the
+   fluid cells of each level, through `Radiation.apply_radiative_cooling!`
+   with the solid mask (the buildings' cells are not air; heating them
+   leaks back into the air next to the walls — in review, a 30 min night
+   run of the `:smoke` window cooled the fluid next to buildings at
+   level 1 by −0.314 K with the solid cells heated, −0.236 K without).
 
 **`cloud_shadow`** (additive). At order 15, after the radiosity: the
 per-cell cloud optical depth with the `RadiationCore` mass extinction
@@ -415,13 +419,13 @@ window, because the winter flagship blows up, see below):
 
 | | 00–01 h | 06–07 h | 12–13 h | winter 12–12:30 (smoke window) |
 | :-- | --: | --: | --: | --: |
-| `L_sky` (W m⁻²) | 331.6 | 333.3 | 335.3 | 237.9 |
+| `L_sky` (W m⁻²) | 331.9 | 333.5 | 335.4 | 237.9 |
 | old `0.95σT̄s⁴` at the same T̄s | 356.2 | 372.4 | 389.0 | 297.9 |
 | GHI, column (W m⁻²) | 0 | 559.5 | 831.4 | 234.3 |
 | Bird (the radiosity's sky: PW 2 cm, O₃ 0.33), aerosol-free / AOD₅₀₀ = 0.16 | 0 / 0 | 574.4 / 542.3 | 834.2 / 797.1 | 235.1 / 211.7 |
-| LES-layer heating, LW / SW (K day⁻¹) | −12.8 / 0 | −9.8 / +3.5 | −6.6 / +4.6 | −4.0 / +1.4 |
+| LES-layer heating, LW / SW (K day⁻¹) | −12.9 / 0 | −9.8 / +3.5 | −6.7 / +4.6 | −4.0 / +1.4 |
 | the same above 50 m, LW / total | −5.3 / −5.3 | −4.5 / −1.0 | −3.8 / +0.8 | −2.5 / −1.1 |
-| lowest level (0–6 m), LW | −155 | −107 | −58 | −16 |
+| lowest level (0–6 m), LW | −156 | −108 | −59 | −16 |
 | precipitable water (kg m⁻²) | 12.3 | 12.3 | 12.2 | 3.5 |
 
 * **Sky longwave** is 25–54 W m⁻² below the old surface-based value in
@@ -439,7 +443,7 @@ window, because the winter flagship blows up, see below):
   urban AOD the column is 4.3 % higher at noon and 10.7 % at the low
   winter sun: the TwoStream column has no aerosol until the
   aerosol-optics coupling (#142).
-* **Heating.** The lowest LES levels cool at tens to 155 K day⁻¹: the
+* **Heating.** The lowest LES levels cool at tens to 156 K day⁻¹: the
   case starts its surfaces at 285 K under 293 K air, and the air near
   the ground radiates into the colder surface. Above 50 m the longwave
   cooling is −3.8 to −5.3 K day⁻¹ in summer, beyond the −1…−3 K day⁻¹
@@ -449,9 +453,11 @@ window, because the winter flagship blows up, see below):
   that and half the humidity.
 * **Energy.** ``\int ρ c_p\,\dot T\,dz`` over the LES layers equals the
   net-flux convergence to round-off (a smoke check, 1e-10), and the θ
-  increment applied every step is that heating times dt.
+  increment is that heating times dt in every fluid cell and zero in
+  every solid one (a smoke check on the field). The air therefore takes
+  up the column's convergence times the fluid fraction of each level.
 * **Ledger.** In the 06–07 h hour the domain Rn falls from 244.28 W m⁻²
-  (#127 baseline, same configuration) to 228.51 W m⁻²: the lower sky
+  (#127 baseline, same configuration) to 228.59 W m⁻²: the lower sky
   longwave outweighs the stronger TwoStream shortwave (GHI 559.5 against
   Bird's 542.3).
 * **Cloud shadow** (`:smoke`, seeded fog of 0.2 g kg⁻¹ in the lowest
