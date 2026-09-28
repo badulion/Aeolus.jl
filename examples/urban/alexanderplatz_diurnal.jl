@@ -83,7 +83,9 @@ params = glass_surface_params()
 veg_mask   = (sfc .== SURFACE_PARK)
 LAI_map    = fill(2.5, Nx, Ny)   # dense grassy park; open water/streets → 0
 LAI_map .*= veg_mask
-soil       = SoilGrid(mesh; T0 = 288.0)
+# L3: the production soil column (Aeolus.SoilColumn, Phase 46) under
+# every non-water cell — 10 CLM layers to 3.4 m, moist loam, base 288 K.
+soil       = UrbanSoil(sfc; T0 = 288.0, T_deep = 288.0)
 snow       = SnowState(mesh)
 q_dew      = zeros(Float64, Nx, Ny)      # surface dew reservoir, kg m⁻²
 # Layer pressures for fog/dew thermodynamics: isothermal 8 km scale height
@@ -105,6 +107,16 @@ svf = aggregate_to_grid(scene, vfac).svf
         nfacets(scene), time() - t_svf, reciprocity_error(vfac), closure_error(vfac))
 @printf("SVF per column: min %.3f mean %.3f max %.3f\n",
         minimum(svf), mean(svf), maximum(svf))
+
+# L4: the city's buildings, from the Phase 50 building energy model (#29).
+# One city-mean office building with the scene's total volume, footprint and
+# wall area; its release is mapped back onto roofs and canyon cells.
+const wall_ids = [i for (i, f) in enumerate(scene.facets) if f.kind === :wall]
+bem = city_buildings(heightmap, sfc, mesh.dx, mesh.dy, mesh.dz,
+                     sum(scene.facets[i].area for i in wall_ids))
+const open_cols = findall(==(0), heightmap)
+@printf("City-mean building: %.0f m² floor area, %.0f m² walls, %.0f m² roofs\n",
+        bem.zone.floor_area, bem.zone.envelope[1].area / (1 - 0.33), bem.zone.envelope[2].area)
 
 # ---------------------------------------------------------------------------
 # 2. Simulation
@@ -154,6 +166,7 @@ const nsteps  = parse(Int, get(ENV, "AEOLUS_NSTEPS", string(Int(T_DAY / dt))))
 const start_h = 6.0
 const frame_every = 900
 const shadow_every = 300     # recompute shadow every 300 steps ≈ 10 sim-min
+const soil_every   = 15      # soil exchange every 15 steps = 30 s (implicit, see step_soil!)
 
 k_slice = clamp(round(Int, 30 / mesh.dz), 1, Nz)
 
@@ -167,13 +180,17 @@ sun_now = Ref(solar_position(solar_time(2024, 6, 20, 6, 0, 0.0;
                                         latitude = LAT, longitude = LON,
                                         elevation = 34.0)))
 
-force! = (s, Δt) -> begin
-    add_geostrophic_wind!(s, 1.0, 0.0, 1800.0)
-    # vegetation drag disabled — even at cd=0.03 it destabilizes at dt=2s;
-    # a proper implicit-Euler treatment is a follow-up (see the plan).
-    # apply_vegetation_drag!(s, veg_mask, LAI_map; cd = 0.01, k_height = 3)
+force! = (s, Δt) -> add_geostrophic_wind!(s, 1.0, 0.0, 1800.0)
+# Park canopy drag: a uniform crown over the lowest 3 layers (18.75 m) with
+# a leaf drag coefficient of 0.2. Applied implicitly after the predictor
+# (Aeolus.PlantCanopy, issue #22), so it is stable at any dt. The old
+# explicit tendency shipped disabled after an instability at dt = 2 s that
+# #22 could not reproduce (dt·cd·LAI·|U| <= 0.05 here); cause undiagnosed.
+veg_drag = vegetation_canopy_drag(mesh, veg_mask, LAI_map; cd = 0.2, k_height = 3)
+post_predictor = (s, Δt) -> begin
+    implicit_ibm_correction!(s, sm; τ = 0.0, dt = Δt)
+    apply_vegetation_drag!(s, veg_drag, Δt)
 end
-post_predictor = (s, Δt) -> implicit_ibm_correction!(s, sm; τ = 0.0, dt = Δt)
 sensible = zeros(Float64, Nx, Ny)
 sw_arr   = zeros(Float64, Nx, Ny)
 lw_arr   = fill(320.0, Nx, Ny)
@@ -257,7 +274,9 @@ end
 # --- diagnostic 2-D fields ---------------------------------------------
 const NC2D = (("Ts",    "K",     "surface temperature"),
               ("sw_in", "W m-2", "shortwave irradiance at the surface"),
-              ("lw_in", "W m-2", "downwelling longwave at the surface"))
+              ("lw_in", "W m-2", "downwelling longwave at the surface"),
+              ("T_soil1", "K",   "soil temperature, top layer (node 7 mm; NaN under water)"),
+              ("G_soil", "W m-2", "ground heat flux from the surface slab into the soil (NaN under water)"))
 for (n, u, ln) in NC2D
     nc_defvar!(ncf, n, Float32, ("x", "y", "time");
                attributes = Dict("units" => u, "long_name" => ln,
@@ -275,6 +294,15 @@ nc_write!(ncf, "building_height",
                   for i in 1:Nx, j in 1:Ny])
 nc_write!(ncf, "surface_class", Float32.(sfc))
 
+"Ground heat flux of the last soil exchange on the (Nx, Ny) grid, NaN under water."
+function G_map()
+    out = fill(NaN, Nx, Ny)
+    for (n, I) in enumerate(soil.cells)
+        out[I] = soil.G[n]
+    end
+    return out
+end
+
 "Append one time level of the full 3-D state to the NetCDF file."
 function save_frame(idx::Int, hour_of_day::Real)
     iv(f) = Float32.(interior_view(f))
@@ -286,7 +314,9 @@ function save_frame(idx::Int, hour_of_day::Real)
         "theta" => iv(sim.θ), "p" => iv(sim.p), "qv" => iv(qv_p),
         "ql" => iv(ql_p), "qr" => iv(qr_p), "pollutant" => iv(pollutant),
         "Ts" => Float32.(Ts), "sw_in" => Float32.(sw_arr),
-        "lw_in" => Float32.(lw_arr))
+        "lw_in" => Float32.(lw_arr),
+        "T_soil1" => Float32.(soil_layer_temperature(soil, (Nx, Ny), 1)),
+        "G_soil"  => Float32.(G_map()))
     nc_append_record!(ncf, rec)
     return nothing
 end
@@ -338,6 +368,14 @@ for n in 1:nsteps
         swsol = μ > 0 ? solve_shortwave(scene, vfac, sunv;
                                         dni = irr.dni, dhi = irr.dhi) : nothing
         lwsol = solve_longwave(scene, vfac; L_sky = lw_from_walls(mean(Ts)))
+        # L4: advance the buildings over the next radiation interval against
+        # the canyon air; the irradiance on the walls sets the window sun.
+        aw(ids) = swsol === nothing ? 0.0 :
+                  sum(swsol.incident[i] * scene.facets[i].area for i in ids) /
+                  sum(scene.facets[i].area for i in ids)
+        θ1 = view(interior_view(sim.θ), :, :, 1); q1 = view(interior_view(qv_p), :, :, 1)
+        step_city_buildings!(bem, start_h * 3600 + sim.t, shadow_every * dt,
+                             mean(θ1[open_cols]), mean(q1[open_cols]); sw_wall = aw(wall_ids))
         forcing = aggregate_to_grid(scene, vfac; sw = swsol, lw = lwsol,
                                     T_surface = Ts)
         # `aggregate_to_grid` returns fluxes per unit PLAN area, so a column
@@ -350,8 +388,8 @@ for n in 1:nsteps
         # This is an explicit approximation, and worth naming: collapsing a
         # whole facade to a single temperature is a limitation of the
         # surface scheme, not of the radiosity solve, which resolves every
-        # facet individually. A multi-layer urban canopy (Era V, Phase 49)
-        # is what removes it.
+        # facet individually. `UrbanFacetScene` (Era V, Phase 49) removes
+        # it: one conduction column and skin temperature per facet.
         ad = max.(forcing.area_density, 1.0)
         σSB = 5.670374419e-8
         sw_arr .= forcing.sw_effective ./ ad
@@ -370,9 +408,15 @@ for n in 1:nsteps
 
     local sensible = apply_surface_flux!(sim, Ts, sfc, params;
                                     dt = dt, H_cap = 250.0, C_h = 1e-3)
-    # L4: anthropogenic heat (traffic, AC exhaust, interior heat loss)
-    add_anthropogenic_heat!(sensible, sfc, hour_of_day)
-    # R6: glass materials let some SW pass through; reduce sensible
+    # L4: anthropogenic heat — buildings from the building energy model
+    # (exhaust and roof envelope at the roofs, air exchange / glazing / wall
+    # envelope into the canyon), traffic as a constant urban-area mean. The
+    # air terms go into θ and qv directly, not into `sensible`, which is a
+    # surface loss term (see urban_physics.jl, L4).
+    apply_building_heat!(sim, qv_p, sensible, bem, dt)
+    add_traffic_heat!(sim, sfc, dt)
+    # R6: glazing transmits part of the SW into the buildings; that part
+    # leaves the glass cells' surface budget (UrbanSurface glazing optics)
     apply_glass_sw_transmission!(sensible, sfc, sw_arr)
     # L1: evaporative cooling
     LE = apply_latent_flux!(sim, Ts, sfc; dt = dt, qv_field = qv_p,
@@ -436,8 +480,9 @@ for n in 1:nsteps
 
     step!(sim, dt; body_force! = force!, post_predictor! = post_predictor)
     step_surfaces!(Ts, sfc, params, sw_arr, lw_arr, sensible, dt)
-    # L3: multi-layer soil couples the ground reservoir to Ts
-    step_soil!(soil, Ts, sfc, dt, params)
+    # L3: the production soil column exchanges heat with the slab Ts
+    # (implicit, energy-conserving; sub-cycled every `soil_every` steps)
+    n % soil_every == 0 && step_soil!(soil, Ts, sfc, soil_every * dt, params)
     # L5: snow state (dormant in a summer run, but the machinery ships)
     update_snow_state!(snow, Ts, 0)
     apply_radiative_cooling!(sim.θ, fill(-2.315e-5, Nz) .* dt)
@@ -457,6 +502,17 @@ for n in 1:nsteps
                 minimum(view(interior_view(sim.θ), :, :, 1)),
                 maximum(view(interior_view(sim.θ), :, :, 1)),
                 minimum(view(interior_view(qv_p), :, :, 1)), maximum(q_dew), maximum(view(interior_view(ql_p), :, :, 1)))
+        r = bem.release
+        zr, zw = bem.zone.envelope[2], bem.zone.envelope[1]
+        @printf("           buildings: T_in=%5.2f°C  to air %5.1f W/m² (exhaust %5.1f, canyon %5.1f)  (roof env %5.1f, wall env %5.1f)  window sun %5.1f W/m²  heat %6.0f kW  cool %6.0f kW\n",
+                zone_air_temperature(bem.zone) - 273.15,
+                sum(bem.H .+ bem.LE) / (Nx * Ny),
+                (r.Q_exhaust_sensible + r.Q_exhaust_latent) / (Lx * Ly),
+                (r.Q_ventilation_sensible + r.Q_ventilation_latent + r.Q_windows + r.Q_lost +
+                 r.Q_latent_vented) / (Lx * Ly),
+                -zr.area * zr.F_outer / (Lx * Ly), -zw.area * zw.F_outer / (Lx * Ly),
+                r.Q_solar / (Lx * Ly),
+                bem.hvac_budget.Q_heating / 1e3, bem.hvac_budget.Q_cooling / 1e3)
     end
 end
 
