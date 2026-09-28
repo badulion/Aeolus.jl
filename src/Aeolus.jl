@@ -677,6 +677,13 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!,
        CanopyWindSolution, solve_canopy_wind_column,
        harman_finnigan_mixing_length, canopy_attenuation_coefficient,
-       canopy_exponential_wind
+       canopy_exponential_wind,
+       AbstractLeafAngleDistribution, RossGoudriaanLeaves, SphericalLeaves,
+       HorizontalLeaves, LeafOptics, leaf_projection_function,
+       beam_extinction_coefficient, average_inverse_optical_depth,
+       canopy_scattering_parameters, canopy_beam_transmittance,
+       sunlit_leaf_fraction, canopy_diffuse_transmittance,
+       CanopyShortwaveSolution, canopy_shortwave,
+       CanopyLongwaveSolution, canopy_longwave, canopy_shortwave_field!
 
 end # module

@@ -1,12 +1,13 @@
-# Resolved plant canopy: leaf area and implicit drag
+# Resolved plant canopy: leaf area, drag and radiation
 
 A resolved canopy is vegetation that occupies several model layers, so
 that the LES sees the leaves as a distributed momentum sink rather than
-as a roughness length. This page covers the two pieces implemented in
-`src/PlantCanopy.jl` for Phase 48: the vertical distribution of leaf
-area, and the drag it exerts, treated implicitly so it is stable at any
-time step. Radiation attenuation (#23) and the leaf energy balance (#24)
-build on the same leaf-area coordinate.
+as a roughness length. This page covers what `src/PlantCanopy.jl`
+implements for Phase 48: the vertical distribution of leaf area, the
+drag it exerts, treated implicitly so it is stable at any time step, and
+the attenuation of shortwave and longwave radiation through it
+(section 4). The leaf energy balance (#24) builds on the same
+leaf-area coordinate.
 
 ## 1. Leaf-area density
 
@@ -122,8 +123,106 @@ wind-tunnel observations. That is the job of the canopy-profile
 validation issue (#25), once the radiation and leaf energy balance are
 in place.
 
+## 4. Radiation in the canopy
+
+The optical depth of a canopy is its cumulative leaf area above a height,
+``Λ(z) = \int_z^h a\,dz'`` (`cumulative_leaf_area`). How much of a beam
+unit leaf area intercepts depends on leaf orientation through Ross's
+projection function ``G(μ)``; `RossGoudriaanLeaves(χ_L)` uses Goudriaan's
+fit ``G = φ_1 + φ_2 μ`` (valid for ``-0.4 ≤ χ_L ≤ 0.6``; ``χ_L = 0`` is the
+spherical distribution with ``G = 1/2``), and `HorizontalLeaves()` has
+``G = μ`` exactly.
+
+**Beer–Lambert.** The unscattered beam from a sun at zenith cosine ``μ``
+reaches depth ``Λ`` with ``e^{-KΛ}``, ``K = G(μ)/μ``, and that is also the
+sunlit fraction of the leaves there. For black leaves the exact diffuse
+transmittance is the hemispheric integral
+``T_d = 2\int_0^1 e^{-GΛ/μ} μ\,dμ`` (`canopy_diffuse_transmittance`;
+``2E_3(Λ/2)`` for spherical leaves).
+
+**Two-stream (Sellers 1985).** With leaf reflectance ``α``, transmittance
+``τ_l`` and ``ω = α + τ_l``,
+
+```math
+-\bar μ \frac{dI^\uparrow}{dΛ} + [1-(1-β)ω]I^\uparrow - ωβ I^\downarrow = ω\bar μ K β_0 e^{-KΛ},\qquad
+\bar μ \frac{dI^\downarrow}{dΛ} + [1-(1-β)ω]I^\downarrow - ωβ I^\uparrow = ω\bar μ K (1-β_0) e^{-KΛ},
+```
+
+with ``\bar μ = \int_0^1 μ/G\,dμ`` and the up-scatter fractions ``β``,
+``β_0`` of the CLM5.0 Technical Note (§2.3.1). Dividing by ``\bar μ``
+puts this in exactly the Meador–Weaver form solved by the Era III
+`TwoStream` module, with optical depth ``Λ``, beam cosine ``1/K`` and
+
+```math
+γ_1 = \frac{1-(1-β)ω}{\bar μ},\quad γ_2 = \frac{ωβ}{\bar μ},\quad γ_3 = β_0,\quad γ_4 = 1-β_0 .
+```
+
+`canopy_shortwave` therefore does not re-implement the two-stream: it
+supplies these coefficients as a `TwoStreamVariant` and calls
+`layer_reflectance_transmittance_sw` and `adding_solver!` (which gained
+a `F_dif_top` keyword for the sky diffuse entering at the canopy top).
+The ground enters as the lower boundary albedo. Because the equations
+depend on height only through ``Λ``, the solution does not depend on how
+the leaf area is split into layers.
+
+**Sunlit and shaded leaves.** A layer between ``Λ_t`` and ``Λ_b`` holds
+``(e^{-KΛ_t} - e^{-KΛ_b})/K`` of sunlit leaf area. Sunlit leaves absorb
+the fraction ``1-ω`` of the beam they intercept; the diffuse absorption
+of the layer (sky diffuse plus scattered beam) is shared in proportion to
+leaf area (de Pury & Farquhar 1997).
+
+**Longwave.** `canopy_longwave` treats each layer as a slab with leaf
+reflectance ``1 - ε_{leaf}``, takes ``R`` and ``T`` from the same
+two-stream layer formulae, emits ``(1-R-T)σT_{leaf}^4`` in each direction
+(Kirchhoff) and solves the coupled layer–ground system exactly.
+
+`canopy_shortwave_field!` applies the column solution to each grid
+column of a resolved LES canopy (independent-column approximation) and
+returns the absorbed shortwave per cell in W m⁻³.
+
+### What the tests measure
+
+| Check | Reference | Measured |
+| :-- | :-- | --: |
+| ``\bar μ`` closed form (incl. series near ``χ_L = 0``) | quadrature of ``\int μ/G`` | ``6.7\times10^{-16}`` rel. |
+| ``β_0`` closed form for ``a_s`` | quadrature of its integral | ``< 10^{-8}`` rel. |
+| ``β_0`` at the removable singularity ``μφ_2 + G = 0`` (``χ_L = -0.4``, ``μ ≈ 0.996``) | quadrature of its integral | ``8.9\times10^{-16}`` rel. |
+| Beam flux at every face | ``e^{-KΛ(z)}`` | ``< 10^{-9}`` rel. |
+| Black-leaf diffuse | ``2E_3(Λ/2)`` via series ``E_1`` | ``< 10^{-10}`` rel. |
+| Energy closure (576 cases; a bookkeeping identity, since absorption is the flux divergence) | incident = reflected + canopy + ground | ``3.2\times10^{-16}`` |
+| Face fluxes | RK4 integration of the Sellers ODEs | ``3.4\times10^{-14}`` of incident |
+| Face fluxes at the resonance ``K = k`` (``μ ≈ 0.54`` for spherical PAR leaves) | RK4 integration of the Sellers ODEs | ``1.9\times10^{-9}`` of incident |
+| Deep horizontal-leaf canopy albedo | Goudriaan ``ρ_h = \frac{1-\sqrt{1-σ}}{1+\sqrt{1-σ}}`` | ``< 10^{-9}`` abs. |
+| Isothermal longwave | zero net exchange | ``< 10^{-9}`` W m⁻² |
+
+Two limitations are worth stating with numbers.
+
+*Angular closure.* The two-stream extinguishes diffuse light at
+``1/\bar μ`` per unit leaf area, which for spherical leaves is 1. The
+exact black-leaf diffuse transmittance is larger: at ``Λ = 1`` it is
+0.443 against the two-stream's 0.368, and at ``Λ = 3`` 0.114 against
+0.050. The two-stream therefore puts more diffuse absorption in the
+upper crown than an exact angular treatment. For horizontal leaves the
+two coincide, since every direction sees ``K = 1``.
+
+*Spherical-leaf canopy albedo.* For spherical leaves with ``σ = 0.15``
+(PAR) over a deep canopy the two-stream albedo is 0.0454, 0.0338, 0.0254
+at ``μ = 0.3, 0.6, 1``; the widely used approximation
+``ρ_{cb} = 1 - e^{-2ρ_h K/(1+K)}`` gives 0.0495, 0.0362, 0.0267, i.e. the
+two differ by 5–8 %.
+
+Not validated here: comparison with measured within-canopy radiation
+profiles or with published tables of another canopy two-stream code.
+
 ## References
 
+- CLM5.0 Technical Note (Lawrence et al., NCAR), §2.3.1, Canopy
+  Radiative Transfer.
+- de Pury, D. G. G. & Farquhar, G. D. (1997). Simple scaling of
+  photosynthesis from leaves to canopies without the errors of big-leaf
+  models. *Plant Cell Environ.*, 20, 537–557.
+- Goudriaan, J. (1977). *Crop Micrometeorology: A Simulation Study.*
+  Pudoc, Wageningen.
 - Harman, I. N. & Finnigan, J. J. (2007). A simple unified theory for
   flow in the canopy and roughness sublayer. *Boundary-Layer Meteorol.*,
   123, 339–363.
@@ -135,5 +234,9 @@ in place.
 - Markkanen, T., Rannik, Ü., Marcolla, B., Cescatti, A. & Vesala, T.
   (2003). Footprints and fetches for fluxes over forest canopies with
   varying structure and density. *Boundary-Layer Meteorol.*, 106, 437–459.
+- Ross, J. (1981). *The Radiation Regime and Architecture of Plant
+  Stands.* Junk, The Hague.
+- Sellers, P. J. (1985). Canopy reflectance, photosynthesis and
+  transpiration. *Int. J. Remote Sens.*, 6, 1335–1372.
 - Shaw, R. H. & Schumann, U. (1992). Large-eddy simulation of turbulent
   flow above and within a forest. *Boundary-Layer Meteorol.*, 61, 47–64.
