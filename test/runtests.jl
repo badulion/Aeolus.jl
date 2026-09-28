@@ -908,4 +908,5 @@ end
 @testset "Era V" begin
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
     include("era5_soil_column.jl")       # Phase 46: soil column, Richards equation (#15)
+    include("era5_soil_thermal.jl")      # Phase 46: soil heat and freeze–thaw (#16)
 end
