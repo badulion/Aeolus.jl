@@ -88,8 +88,8 @@ The neutral roughness case has a closed form,
 ``τ_i = ρ\,[κU/\ln(z/z_{0,i})]^2``, which the mosaic reproduces to
 ``10^{-12}``. The stress it produces corresponds to an effective
 roughness of 0.42 m, more than ten times the logarithmic mean 0.032 m —
-the result Mason (1988) formalised with the blending height, which a
-later phase adds. In the stable/unstable case a cell whose *average* skin is colder than
+the result Mason (1988) formalised with the blending height (see
+[Blending height](blending_height.md)). In the stable/unstable case a cell whose *average* skin is colder than
 the air still sends heat upward, because the warm tile's unstable
 exchange is far more efficient than the cool tile's stable one. Mahrt
 (1987) showed that when stability varies within a grid area the
@@ -114,10 +114,11 @@ relative over six hours for an 8×8 five-class map in 4×4 blocks.
 
 ## 5. What is not here
 
-All tiles see the grid-cell forcing (or a forcing per tile supplied by
-the caller). The blending-height formulation, in which tiles are forced
-at the height where their internal boundary layers merge, is the next
-phase. Changing tile fractions (`set_mosaic_fractions!`) leaves tile
+A plain `SurfaceMosaic` forces all tiles with the grid-cell forcing (or
+a forcing per tile supplied by the caller). The blending-height
+formulation, in which tiles are forced at the height where their
+internal boundary layers merge, is `BlendedMosaic`; see
+[Blending height](blending_height.md). Changing tile fractions (`set_mosaic_fractions!`) leaves tile
 states untouched; moving heat and water between tiles when a fraction
 shrinks is left to the caller.
 
