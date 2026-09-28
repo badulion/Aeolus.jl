@@ -852,6 +852,8 @@ C_s = 0.17
 
 end
 
+include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet deposition (#135)
+
 # =========================================================================
 # Era II — numerical foundations for fidelity (Phases 21-31)
 # =========================================================================
