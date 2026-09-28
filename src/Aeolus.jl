@@ -623,5 +623,10 @@ export SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal
        freezing_matric_potential, supercooled_liquid_content, PowerLawIceImpedance,
        SoilThermalColumn, step_soil_heat!, set_soil_temperature!,
        soil_enthalpy, soil_ice_mass
+# Phase 46 (#17) — SoilColumn: water table / unconfined aquifer (SIMTOP).
+# The helpers aquifer_impermeable_fraction, gardner_two_point_flux and
+# bottom_water_storage stay qualified.
+export UnconfinedAquifer, water_table_depth, set_water_table!,
+       aquifer_baseflow_rate, total_water_storage
 
 end # module
