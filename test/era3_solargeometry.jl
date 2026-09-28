@@ -357,6 +357,49 @@ using Aeolus.SolarGeometry
     end
 
     # ---------------------------------------------------------------------
+    # Slant path is exact (#130). A horizontally uniform layer of vertical
+    # optical depth τ must give exp(-τ/μ₀) at every sun elevation, and the
+    # lowest cell must count in full. The first implementation marched in
+    # half-cell steps from the first cell CENTRE (so cell 1 counted half)
+    # and multiplied the already slant path by 1/μ₀ again, giving
+    # exp(-τ/μ₀²): at 30° elevation 0.20 instead of 0.45 for τ = 0.4.
+    # ---------------------------------------------------------------------
+    @testset "Cloud shadow slant path is exact" begin
+        mesh = RegularGrid(; size=(16,16,16), extent=(160.0,160.0,160.0), halo=(1,1,1))
+        τ = zeros(Float64, 16, 16, 16)
+        τ[:, :, 5:8] .= 0.1                      # column τ = 0.4
+        for (el, az) in ((90.0, 0.0), (60.0, 30.0), (30.0, 200.0), (12.0, 95.0))
+            sd = (cosd(el) * sind(az), cosd(el) * cosd(az), sind(el))
+            t = cloud_shadow_map(τ, mesh, sd)
+            @test maximum(abs.(t .- exp(-0.4 / sind(el)))) < 1e-12
+        end
+        τ .= 0; τ[:, :, 1] .= 0.4                # the lowest cell alone
+        @test all(isapprox.(cloud_shadow_map(τ, mesh, (0.0, 0.0, 1.0)), exp(-0.4); rtol = 1e-12))
+        # a single cell: a vertical ray through its centre sees exactly its τ
+        τ .= 0; τ[3, 4, 2] = 0.7
+        t = cloud_shadow_map(τ, mesh, (0.0, 0.0, 1.0))
+        @test t[3, 4] ≈ exp(-0.7) rtol = 1e-12
+        @test count(<(1), t) == 1
+        # sun due east at 45°: the rays from the centres of (1,4) and (2,4)
+        # each cross cell (3,4,2) (x ∈ [20,30] m, z ∈ [10,20] m) along
+        # ℓ = 5√2 m, so both see exp(-(0.7/10)·5√2); nothing else is shaded
+        el = 45.0
+        t45 = cloud_shadow_map(τ, mesh, (cosd(el), 0.0, sind(el)))
+        @test t45[1, 4] ≈ exp(-0.07 * 5sqrt(2)) rtol = 1e-12
+        @test t45[2, 4] ≈ exp(-0.07 * 5sqrt(2)) rtol = 1e-12
+        @test count(<(1), t45) == 2
+        # building mask: a roof starts the ray on top of its own stack
+        sm = SolidMask(mesh)
+        mark_solid!(sm, (x, y, z) -> 60 <= x <= 100 && 60 <= y <= 100 && z <= 40)
+        τ .= 0; τ[:, :, 3:4] .= 0.2              # cloud inside the building levels only
+        tr = Matrix{Float64}(undef, 16, 16)
+        combined_shadow_transmittance!(tr, τ, sm.mask, mesh, (0.0, 0.0, 1.0))
+        roof = [sm.mask[1 + i, 1 + j, 1 + 1] for i in 1:16, j in 1:16]
+        @test all(tr[roof] .== 1.0)              # roof above the cloud: unattenuated
+        @test all(isapprox.(tr[.!roof], exp(-0.4); rtol = 1e-12))
+    end
+
+    # ---------------------------------------------------------------------
     # Optical depth from the condensate field.
     # ---------------------------------------------------------------------
     @testset "Cloud optical depth from condensate" begin

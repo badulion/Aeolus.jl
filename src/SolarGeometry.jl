@@ -612,12 +612,20 @@ end
     cloud_shadow_transmittance!(trans, τ_cloud, mesh, sun_dir)
 
 Fill `trans[i,j] ∈ (0,1]` with the **direct-beam transmittance** reaching
-each surface cell, by ray-marching the 3-D cloud optical-depth field
-`τ_cloud` along the sun direction and accumulating slant optical depth:
+each surface cell, by tracing the ray from the centre of the cell's
+bottom face (z = 0) toward the sun through the 3-D cloud optical-depth
+field `τ_cloud` and accumulating the slant optical depth:
 
 ```math
-T_{i,j} = \\exp\\!\\left(-\\frac{1}{μ}\\sum_\\text{cells along ray} τ_k \\cdot w_k\\right)
+T_{i,j} = \\exp\\!\\left(-\\sum_\\text{cells c on the ray} \\frac{τ_c}{Δz}\\,ℓ_c\\right)
 ```
+
+`τ_c` is the vertical optical depth of cell `c` (its extinction
+coefficient is `τ_c/Δz`) and `ℓ_c` the exact length of the ray inside
+it, found by a grid traversal (Amanatides & Woo 1987). For a horizontally
+uniform layer of vertical optical depth `τ` this is exactly
+`exp(-τ/μ₀)`, with `μ₀` the `up` component of `sun_dir`: the slant
+amplification comes from the path lengths, and is not applied again.
 
 `sun_dir = (east, north, up)` is the unit vector *toward* the sun (from
 [`sun_direction_enu`](@ref)). Lateral boundaries wrap periodically, matching
@@ -631,44 +639,12 @@ function cloud_shadow_transmittance!(trans::AbstractMatrix{T},
                                      τ_cloud::AbstractArray{T,3},
                                      mesh::RegularGrid,
                                      sun_dir::NTuple{3,<:Real}) where {T}
-    dxs, dys, dzs = sun_dir
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     size(trans) == (Nx, Ny) ||
         error("cloud_shadow_transmittance!: trans is $(size(trans)), expected ($Nx, $Ny)")
     size(τ_cloud) == (Nx, Ny, Nz) ||
         error("cloud_shadow_transmittance!: τ_cloud is $(size(τ_cloud)), expected ($Nx, $Ny, $Nz)")
-
-    if dzs <= 1e-6
-        fill!(trans, zero(T))
-        return trans
-    end
-
-    dx, dy, dz = mesh.dx, mesh.dy, mesh.dz
-    step = T(0.5) * min(dx, dy, dz)
-    sx = dxs * step; sy = dys * step; sz = dzs * step
-    max_steps = ceil(Int, sqrt(mesh.Lx^2 + mesh.Ly^2 + mesh.Lz^2) / step) + 4
-    inv_μ = one(T) / T(dzs)          # slant-path amplification
-
-    @inbounds for j in 1:Ny, i in 1:Nx
-        x = (i - T(0.5)) * dx
-        y = (j - T(0.5)) * dy
-        z = T(0.5) * dz              # start at the first cell centre
-        τ_acc = zero(T)
-        for _ in 1:max_steps
-            z >= mesh.Lz && break
-            xp = mod(x, mesh.Lx); yp = mod(y, mesh.Ly)
-            i2 = clamp(Int(floor(xp / dx)) + 1, 1, Nx)
-            j2 = clamp(Int(floor(yp / dy)) + 1, 1, Ny)
-            k2 = clamp(Int(floor(z / dz)) + 1, 1, Nz)
-            # τ_cloud is a per-cell optical depth over dz; the ray crosses
-            # `step` of physical path, so scale by step/dz, then amplify by
-            # 1/μ for the slant geometry.
-            τ_acc += τ_cloud[i2, j2, k2] * (step / dz)
-            x += sx; y += sy; z += sz
-        end
-        trans[i, j] = exp(-τ_acc * inv_μ)
-    end
-    return trans
+    return combined_shadow_transmittance!(trans, τ_cloud, nothing, mesh, sun_dir)
 end
 
 """
@@ -686,65 +662,89 @@ end
     combined_shadow_transmittance!(trans, τ_cloud, solid_mask, mesh, sun_dir)
 
 Direct-beam transmittance including **both** cloud attenuation and opaque
-building blocking, in a single ray march. A cell is fully shadowed
-(`trans = 0`) if the ray hits a solid cell; otherwise the cloud slant
-optical depth attenuates it.
+building blocking, in a single ray traversal. The ray starts at the top
+of the column's solid stack (the roof, or the ground at z = 0), at the
+centre of the cell, and runs toward the sun until it leaves the top of
+the domain. A cell is fully shadowed (`trans = 0`) if the ray enters a
+solid cell; otherwise the cloud slant optical depth attenuates it, with
+the exact path length in every cell as in
+[`cloud_shadow_transmittance!`](@ref).
 
 `solid_mask` is a `Bool` array with the halo layout of the mesh (i.e. the
-`.mask` field of an `IBM.SolidMask`); pass `nothing` for no buildings.
-Doing the two effects in one march is not just an optimisation — it is
-also the only way to get the ordering right when a cloud shadow and a
-building shadow overlap.
+`.mask` field of an `IBM.SolidMask`); pass `nothing` for no buildings,
+and `τ_cloud = nothing` for no cloud. Doing the two effects in one march
+is not just an optimisation — it is also the only way to get the
+ordering right when a cloud shadow and a building shadow overlap.
 """
 function combined_shadow_transmittance!(trans::AbstractMatrix{T},
                                         τ_cloud::Union{Nothing,AbstractArray{T,3}},
                                         solid_mask::Union{Nothing,AbstractArray{Bool,3}},
                                         mesh::RegularGrid,
                                         sun_dir::NTuple{3,<:Real}) where {T}
-    dxs, dys, dzs = sun_dir
+    sx, sy, sz = Float64.(sun_dir)
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
-    if dzs <= 1e-6
+    if sz <= 1e-6
         fill!(trans, zero(T))
         return trans
     end
-    dx, dy, dz = mesh.dx, mesh.dy, mesh.dz
-    step = T(0.5) * min(dx, dy, dz)
-    sx = dxs * step; sy = dys * step; sz = dzs * step
-    max_steps = ceil(Int, sqrt(mesh.Lx^2 + mesh.Ly^2 + mesh.Lz^2) / step) + 4
-    inv_μ = one(T) / T(dzs)
-
+    dx, dy, dz = Float64(mesh.dx), Float64(mesh.dy), Float64(mesh.dz)
     @inbounds for j in 1:Ny, i in 1:Nx
-        # start above the local solid stack so a rooftop is not shadowed by
-        # its own building
+        # start on top of the local solid stack so a rooftop is not
+        # shadowed by its own building
         k_top = 0
         if solid_mask !== nothing
             for k in Nz:-1:1
                 if solid_mask[Hx + i, Hy + j, Hz + k]; k_top = k; break; end
             end
         end
-        x = (i - T(0.5)) * dx
-        y = (j - T(0.5)) * dy
-        z = (k_top + T(0.5)) * dz
-        τ_acc = zero(T)
-        blocked = false
-        for _ in 1:max_steps
-            x += sx; y += sy; z += sz
-            z >= mesh.Lz && break
-            xp = mod(x, mesh.Lx); yp = mod(y, mesh.Ly)
-            i2 = clamp(Int(floor(xp / dx)) + 1, 1, Nx)
-            j2 = clamp(Int(floor(yp / dy)) + 1, 1, Ny)
-            k2 = clamp(Int(floor(z / dz)) + 1, 1, Nz)
-            if solid_mask !== nothing && solid_mask[Hx + i2, Hy + j2, Hz + k2]
-                blocked = true; break
-            end
-            if τ_cloud !== nothing
-                τ_acc += τ_cloud[i2, j2, k2] * (step / dz)
-            end
-        end
-        trans[i, j] = blocked ? zero(T) : exp(-τ_acc * inv_μ)
+        τ_slant, blocked = _shadow_ray(τ_cloud, solid_mask, i, j, k_top,
+                                       sx, sy, sz, dx, dy, dz, Nx, Ny, Nz, Hx, Hy, Hz)
+        trans[i, j] = blocked ? zero(T) : T(exp(-τ_slant))
     end
     return trans
+end
+
+# Exact traversal of the ray from the centre of cell (i, j)'s face at
+# height k0·dz toward the sun (Amanatides & Woo 1987), with periodic
+# lateral wrap. Returns the slant optical depth Σ (τ_c/dz)·ℓ_c and
+# whether the ray entered a solid cell.
+function _shadow_ray(τ_cloud, solid_mask, i::Int, j::Int, k0::Int,
+                     sx::Float64, sy::Float64, sz::Float64,
+                     dx::Float64, dy::Float64, dz::Float64,
+                     Nx::Int, Ny::Int, Nz::Int, Hx::Int, Hy::Int, Hz::Int)
+    # unwrapped 0-based cell indices and the ray parameter (path length)
+    # at which the ray crosses the next x, y and z face
+    ix, iy, iz = i - 1, j - 1, k0
+    stx = sx > 0 ? 1 : -1
+    sty = sy > 0 ? 1 : -1
+    tdx = sx != 0 ? dx / abs(sx) : Inf
+    tdy = sy != 0 ? dy / abs(sy) : Inf
+    tdz = dz / sz
+    tmx = sx != 0 ? 0.5 * tdx : Inf          # start at the cell centre in x, y
+    tmy = sy != 0 ? 0.5 * tdy : Inf
+    tmz = tdz                                # and on the bottom face in z
+    t = 0.0
+    τ = 0.0
+    @inbounds while iz < Nz
+        ci = mod(ix, Nx) + 1
+        cj = mod(iy, Ny) + 1
+        ck = iz + 1
+        if solid_mask !== nothing && solid_mask[Hx + ci, Hy + cj, Hz + ck]
+            return τ, true
+        end
+        tn = min(tmx, tmy, tmz)
+        τ_cloud === nothing || (τ += τ_cloud[ci, cj, ck] / dz * (tn - t))
+        t = tn
+        if tmx == tn
+            ix += stx; tmx += tdx
+        elseif tmy == tn
+            iy += sty; tmy += tdy
+        else
+            iz += 1; tmz += tdz
+        end
+    end
+    return τ, false
 end
 
 end # module
