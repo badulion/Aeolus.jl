@@ -165,6 +165,15 @@ _aq_sums(c) = Dict(s => sum(BC._aq_sp(c, s)) for s in BC.AQ_SPECIES)
         fill!(qr, 0.0)
     end
 
+    @testset "physics[:chemistry] = :off registers no species" begin
+        cfg_off = BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
+                                physics = Dict{Symbol,Any}(:chemistry => :off))
+        sel = BC.selected_couplings(cfg_off)
+        @test BC.NoChem in sel && !(BC.AQChem in sel)
+        off = BC.build_case(cfg_off; io = devnull)
+        @test !any(s -> haskey(off.tracers, s), BC.AQ_SPECIES)
+    end
+
     @testset "a noon run keeps the photostationary state and closes the budgets" begin
         BC.run_case!(case; nsteps = 12)
         checks = BC.smoke_check(c, case)

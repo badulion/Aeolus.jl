@@ -96,6 +96,8 @@ provider(::Type{<:AQChem}) = :nox_o3_voc
 modules_used(::Type{<:AQChem}) = (:Chemistry, :SurfaceExchange)
 stages(::Type{<:AQChem}) = ((:chemistry, 10, EVERY_STEP),
                             (:surface_update, 90, Cadence(:soil)))
+# a night run: J = OH = 0, pure NO + O3 titration and no photochemical source
+smoke_variants(::Type{<:AQChem}) = ((label = "night titration", start_h = 0.5),)
 
 """
 Options (all mixing ratios in ppb):
@@ -357,10 +359,12 @@ function report(c::AQChem, case)
 end
 
 function smoke_check(c::AQChem, case)
-    fin = all(s -> all(x -> isfinite(x) && x >= 0, _aq_sp(c, s)), AQ_SPECIES)
+    # ≥ 0 to the round-off the transport's positivity limiter leaves
+    # (measured −3e-21 ppb where a species is 0, e.g. NO at night)
+    fin = all(s -> all(x -> isfinite(x) && x >= -1e-12, _aq_sp(c, s)), AQ_SPECIES)
     l = c.last
     Ox = sum(_aq_sp(c, :O3)) + sum(_aq_sp(c, :NO2))
-    checks = ["NO, NO2, O3, VOC, HNO3 finite and ≥ 0" => fin,
+    checks = ["NO, NO2, O3, VOC, HNO3 finite and ≥ 0 (to 1e-12 ppb)" => fin,
               # the mechanism's own budgets over the last photochemistry call:
               # ΔOx = P − L and ΔNOx = −ΔHNO3 (the triad conserves both exactly)
               "Ox budget closes in the photochemistry (rel. 1e-10)" =>
@@ -415,3 +419,21 @@ function Aeolus.Chemistry.apply_dry_deposition!(field::Field, sfc::AbstractMatri
 end
 
 register!(AQChem)
+
+"""
+    NoChem
+
+Slot `:chemistry`, provider `:off`: no reactive species at all. The
+chemistry roughly doubles the cost of a flagship step (measured on the
+64 × 64 × 32 case: 43 → 101 ms/step, of which 44 ms is the WENO transport
+of the five species and 11 ms the photochemistry), so runs that do not
+need air quality can switch it off with
+`physics = Dict(:chemistry => :off)`.
+"""
+struct NoChem <: AbstractCoupling end
+coupling_name(::Type{NoChem}) = :chem_off
+slot(::Type{NoChem}) = :chemistry
+provider(::Type{NoChem}) = :off
+is_default(::Type{NoChem}) = false
+
+register!(NoChem)
