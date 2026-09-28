@@ -1,307 +1,417 @@
-# Toy urban air quality: a four-species NOx–O3–VOC photochemistry
-# (explicit Euler), traffic and biogenic emissions, and class-dependent dry
-# deposition — all in a ppb-scaled internal unit. Its job is to exercise
-# multi-species surface coupling, not to be quantitative.
+# Urban air quality: the NOx–O3–VOC mechanism of Aeolus.Chemistry on five
+# advected tracers (NO, NO2, O3, VOC, HNO3, in ppb), with traffic and
+# biogenic emissions into the first air cell of each column, resistance-
+# model dry deposition whose aerodynamic resistance comes from
+# Aeolus.SurfaceExchange, and rain scavenging of HNO3.
 #
-# KNOWN (the chemistry issue moves the mechanism into src/Chemistry and
-# uses r_a-based deposition): the species are NOT advected and not written
-# to the output; `apply_wet_deposition!` is defined but not called.
-# `deposition_velocity` is also used by the aerosol coupling.
-
-# ---------------------------------------------------------------------------
-# A1 — Multi-species chemistry state
-# ---------------------------------------------------------------------------
+# All the chemistry, the deposition physics and the unit conversions live
+# in src/Chemistry.jl (#135). This file holds only what is specific to the
+# case: the emission inventory, the class → surface-kind and roughness
+# maps, and the initial state.
 #
-# Concentration units: mass-mixing-ratio-like scalars, non-dimensional
-# "background of unity" — we store ppb-scaled values as Float64. The
-# rate constants below are chosen so that a single Euler substep of
-# dt ≈ 1 s produces a stable, sensible photostationary state on the
-# 0..100 ppb range; treat this as a *toy* mechanism whose primary job
-# is to exercise transport + surface coupling with more than one
-# species, not to be quantitative.
+# Assumptions to know about (all stated, none tuned):
+#   * the emission inventory below is an order-of-magnitude estimate, not
+#     a Berlin inventory (see `default_options`);
+#   * OH is prescribed, OH_max × J(NO2)/J(NO2, overhead); the mechanism has
+#     no HOx budget;
+#   * J(NO2) is the clear-sky value everywhere: no shading, no clouds;
+#   * T and p per level: the level-mean θ over air cells, and the 8 km
+#     scale-height pressure of fog_dew.jl (#131 brings a reference state);
+#   * r_a is computed here from the first air cell with
+#     SurfaceExchange.solve_surface_layer and a per-class roughness equal
+#     to the one #129 (PR #158) gives its surfaces. Once that PR is in,
+#     the surface-exchange bus carries u* and the roughness per column and
+#     this coupling should read them instead of solving again.
 
-# Background concentrations (in the ppb-scaled internal unit).
-const _NO_BG    = 0.5
-const _NO2_BG   = 5.0
-const _O3_BG    = 40.0
-const _VOC_BG   = 10.0
+# Surface kinds of Chemistry.surface_resistance, by surface class
+# (1 street, 2 roof, 3 park, 4 water, 5 wall, 6 glass).
+const _AQ_SURFACE_KIND = (:paved, :paved, :vegetation, :water, :paved, :glass)
 
-# Rate constants (chosen for numerical realism in the toy unit system).
-const _J_MAX = 0.01        # 1/s — NO2 photolysis at solar noon
-const _K1    = 1.8e-14 * 1.0   # NO + O3 → NO2 + O2 ;  ρ absorbed = 1
-const _K2    = 1.0e-16     # VOC + O3 → 0.5*O3 + products (toy)
+"The dry-depositing species of the mechanism (VOC does not deposit)."
+const AQ_DEPOSITING = (:NO, :NO2, :O3, :HNO3)
+"All species of the mechanism, in the order of `apply_photochemistry!`."
+const AQ_SPECIES = (:NO, :NO2, :O3, :VOC, :HNO3)
 
 """
-    ChemistryState(mesh) -> NamedTuple
+    traffic_profile(hour) -> 0…1
 
-Return a NamedTuple `(NO, NO2, O3, VOC)` of `Field{CellCenter}` all
-initialized to the background concentrations
-`(0.5, 5.0, 40.0, 10.0)` in ppb-scaled internal units.
-
-Caller advects each field with the existing tracer operators and
-passes the whole tuple into [`apply_photochem_step!`](@ref) for the
-chemistry substep.
+Diurnal shape of the traffic emissions: a night floor of 0.15, a daytime
+plateau (06:30–21:00) and rush-hour peaks at 08:00 and 17:30, so that the
+morning peak is ≈ 1 and midday ≈ 0.7. An assumed shape of the kind urban
+weekday traffic counts show, not a Berlin count.
 """
-function ChemistryState(mesh)
-    NO  = Field(CellCenter(), mesh); set!(NO,  _NO_BG)
-    NO2 = Field(CellCenter(), mesh); set!(NO2, _NO2_BG)
-    O3  = Field(CellCenter(), mesh); set!(O3,  _O3_BG)
-    VOC = Field(CellCenter(), mesh); set!(VOC, _VOC_BG)
-    return (NO = NO, NO2 = NO2, O3 = O3, VOC = VOC)
+function traffic_profile(hour::Real)
+    day = 1 / (1 + exp(-(hour - 6.5) / 0.5)) / (1 + exp((hour - 21.0) / 0.7))
+    rush = exp(-((hour - 8.0) / 1.5)^2) + exp(-((hour - 17.5) / 1.5)^2)
+    return 0.15 + 0.55 * day + 0.3 * rush
 end
-
-"Diurnal proxy for the NO2 photolysis rate: `J = J_max · max(0, cos((h-12)π/12))`."
-@inline function _J_photolysis(hour::Real)
-    return _J_MAX * max(0.0, cos((hour - 12) * pi / 12))
-end
-
-"""
-    apply_photochem_step!(state, hour_of_day, dt)
-
-Advance the chemistry state one explicit-Euler substep of size `dt`
-seconds at local hour `hour_of_day`. Reactions:
-
-  * NO2 + hν → NO + O3        (rate `J`)
-  * NO + O3 → NO2 + O2        (rate `k1`)
-  * VOC + O3 → 0.5·O3 + prod. (rate `k2`, toy)
-
-Concentrations are clamped ≥ 0 at each cell after the update.
-"""
-function apply_photochem_step!(state::NamedTuple, hour_of_day::Real, dt::Real)
-    J = _J_photolysis(hour_of_day)
-    k1 = _K1
-    k2 = _K2
-    NO_v  = interior_view(state.NO)
-    NO2_v = interior_view(state.NO2)
-    O3_v  = interior_view(state.O3)
-    VOC_v = interior_view(state.VOC)
-    Nx, Ny, Nz = size(NO_v)
-    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
-        no   = NO_v[i, j, k]
-        no2  = NO2_v[i, j, k]
-        o3   = O3_v[i, j, k]
-        voc  = VOC_v[i, j, k]
-
-        r_photo = J  * no2
-        r_titr  = k1 * no  * o3
-        r_vocox = k2 * voc * o3
-
-        d_no   = ( r_photo - r_titr) * dt
-        d_no2  = (-r_photo + r_titr) * dt
-        d_o3   = ( r_photo - r_titr - 0.5 * r_vocox) * dt
-        d_voc  = (-r_vocox) * dt
-
-        NO_v[i, j, k]  = max(0.0, no  + d_no)
-        NO2_v[i, j, k] = max(0.0, no2 + d_no2)
-        O3_v[i, j, k]  = max(0.0, o3  + d_o3)
-        VOC_v[i, j, k] = max(0.0, voc + d_voc)
-    end
-    return state
-end
-
-# ---------------------------------------------------------------------------
-# A2 — Deposition velocities and dry / wet deposition
-# ---------------------------------------------------------------------------
-
-"""
-    deposition_velocity(species::Symbol, cls::UInt8) -> m/s
-
-Species-and-surface-class dependent dry deposition velocity.
-`species ∈ (:NO, :NO2, :O3, :PM)`. Values (m/s):
-
-| species | park  | water | street | roof   | wall   | glass  |
-|---------|-------|-------|--------|--------|--------|--------|
-| O3      | 0.007 | 0.001 | 0.0005 | 0.0005 | 0.0005 | 0.0002 |
-| NO/NO2  | 0.002 | 0.001 | 0.002  | 0.002  | 0.002  | 0.001  |
-| PM      | 0.005 | 0.001 | 0.001  | 0.001  | 0.001  | 0.0005 |
-
-Unknown species/class combinations fall back to 0.001 m/s.
-"""
-@inline function deposition_velocity(species::Symbol, cls::UInt8)
-    if species === :O3
-        cls == SURFACE_PARK   && return 0.007
-        cls == SURFACE_WATER  && return 0.001
-        cls == SURFACE_STREET && return 0.0005
-        cls == SURFACE_ROOF   && return 0.0005
-        cls == SURFACE_WALL   && return 0.0005
-        cls == 0x06           && return 0.0002   # SURFACE_GLASS
-        return 0.001
-    elseif species === :NO || species === :NO2
-        cls == SURFACE_WATER && return 0.001
-        cls == 0x06          && return 0.001
-        return 0.002
-    elseif species === :PM
-        cls == SURFACE_PARK   && return 0.005
-        cls == SURFACE_WATER  && return 0.001
-        cls == 0x06           && return 0.0005
-        return 0.001
-    else
-        return 0.001
-    end
-end
-
-"""
-    apply_dry_deposition!(field, sfc, species, dt; dz)
-
-Remove dry-deposited mass from the first interior z-layer of `field`
-(a `Field{CellCenter}`) using an explicit first-order sink
-
-    c_new = c · (1 - V_d · dt / dz)
-
-with the surface-class-dependent [`deposition_velocity`](@ref) for
-`species`. `sfc::AbstractMatrix{UInt8}` is the ground surface class map.
-The removal fraction is clamped to `[0, 1]` for stability.
-"""
-function apply_dry_deposition!(field, sfc::AbstractMatrix{UInt8},
-                               species::Symbol, dt::Real; dz::Real)
-    fv = interior_view(field)
-    Nx, Ny, _ = size(fv)
-    invdz = 1.0 / dz
-    @inbounds for j in 1:Ny, i in 1:Nx
-        Vd = deposition_velocity(species, sfc[i, j])
-        frac = clamp(Vd * dt * invdz, 0.0, 1.0)
-        fv[i, j, 1] *= (1.0 - frac)
-    end
-    return field
-end
-
-"""
-    apply_wet_deposition!(field, qr, dt; scav = 5e-4)
-
-Rain-scavenging sink applied everywhere:
-
-    dc/dt = -scav · qr · c
-
-Explicit Euler; the effective loss fraction is clamped to `[0, 1]`.
-`qr` may be a `Field{CellCenter}` (rain mixing ratio) or an interior-sized
-3-D array.
-"""
-function apply_wet_deposition!(field, qr, dt::Real; scav::Real = 5e-4)
-    fv = interior_view(field)
-    qv = qr isa AbstractArray{<:Real, 3} ? qr : interior_view(qr)
-    size(qv) == size(fv) || error("apply_wet_deposition!: qr size mismatch $(size(qv)) vs $(size(fv))")
-    Nx, Ny, Nz = size(fv)
-    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
-        frac = clamp(scav * qv[i, j, k] * dt, 0.0, 1.0)
-        fv[i, j, k] *= (1.0 - frac)
-    end
-    return field
-end
-
-# ---------------------------------------------------------------------------
-# A3 — Emissions (traffic + biogenic)
-# ---------------------------------------------------------------------------
-#
-# Rates below are chosen so that during rush hour a street cell adds
-# ~1 ppb/s to NO in a 20 m surface layer — the right order of magnitude
-# for a busy European avenue in the toy unit system.
-
-const _TRAFFIC_NO_PEAK  = 2.0e-3   # (unit-conc)/s peak NO from traffic
-const _TRAFFIC_NO2_PEAK = 5.0e-4   # (unit-conc)/s peak NO2 from traffic
-const _BIOGENIC_PEAK    = 2.0e-3   # (unit-conc)/s peak biogenic VOC
-
-"Traffic diurnal profile: bimodal Gaussian, morning 08:00 + evening 18:00."
-@inline function _traffic_profile(hour::Real)
-    return exp(-((hour - 8.0)  / 1.5)^2) +
-           exp(-((hour - 18.0) / 1.5)^2)
-end
-
-"Biogenic isoprene profile: single Gaussian bump centred at 14:00."
-@inline function _biogenic_profile(hour::Real)
-    return exp(-((hour - 14.0) / 3.0)^2)
-end
-
-"""
-    emission_rate(cls::UInt8, species::Symbol, hour::Real) -> conc/s
-
-Instantaneous emission rate (in internal concentration units per second)
-for `species` at a ground cell of surface class `cls` and local hour
-`hour`. Traffic (NO, NO2) fires on `SURFACE_STREET` and `SURFACE_WALL`
-with a bimodal rush-hour profile. Biogenic isoprene (counted as `:VOC`)
-fires on `SURFACE_PARK` with an early-afternoon peak. Everything else
-returns zero.
-"""
-@inline function emission_rate(cls::UInt8, species::Symbol, hour::Real)
-    cls == SURFACE_WATER && return 0.0
-    if species === :NO
-        if cls == SURFACE_STREET || cls == SURFACE_WALL
-            return _TRAFFIC_NO_PEAK * _traffic_profile(hour)
-        end
-        return 0.0
-    elseif species === :NO2
-        if cls == SURFACE_STREET || cls == SURFACE_WALL
-            return _TRAFFIC_NO2_PEAK * _traffic_profile(hour)
-        end
-        return 0.0
-    elseif species === :VOC
-        if cls == SURFACE_PARK
-            return _BIOGENIC_PEAK * _biogenic_profile(hour)
-        end
-        return 0.0
-    else
-        return 0.0
-    end
-end
-
-"""
-    add_emissions!(state, sfc, hour, dt; dz)
-
-Add class- and hour-dependent surface emissions to the first interior
-z-layer of every species in `state` (the [`ChemistryState`](@ref)
-NamedTuple). The concentration increment per cell is
-`E · dt / dz`-normalized so the rate has the same units as the state
-regardless of the surface-layer thickness.
-"""
-function add_emissions!(state::NamedTuple, sfc::AbstractMatrix{UInt8},
-                        hour::Real, dt::Real; dz::Real)
-    NO_v  = interior_view(state.NO)
-    NO2_v = interior_view(state.NO2)
-    VOC_v = interior_view(state.VOC)
-    Nx, Ny, _ = size(NO_v)
-    inv_layer = dt / dz
-    @inbounds for j in 1:Ny, i in 1:Nx
-        c = sfc[i, j]
-        NO_v[i, j, 1]  += emission_rate(c, :NO,  hour) * inv_layer
-        NO2_v[i, j, 1] += emission_rate(c, :NO2, hour) * inv_layer
-        VOC_v[i, j, 1] += emission_rate(c, :VOC, hour) * inv_layer
-    end
-    return state
-end
-
 
 """
     AQChem
 
-Slot `:chemistry`, provider `:toy_nox`: every step, emissions
-([`add_emissions!`](@ref)), photochemistry ([`apply_photochem_step!`](@ref))
-and dry deposition of NO, NO2 and O3 ([`apply_dry_deposition!`](@ref)) on
-the [`ChemistryState`](@ref) fields.
+Slot `:chemistry`, provider `:nox_o3_voc` (default). Every step in
+`:chemistry`:
+
+1. emissions into the first air cell of each column (`k_air`, above the
+   roof on building columns): traffic NOx on street and building-adjacent
+   columns, isoprene on park columns;
+2. [`apply_photochemistry!`](@ref) on the whole domain;
+3. dry deposition [`apply_dry_deposition!`](@ref) of NO, NO2, O3 and HNO3
+   from the first air cell with ``v_d = 1/(r_a + r_b + r_c)``;
+4. wet deposition [`apply_wet_deposition!`](@ref) of HNO3 by the rain
+   `qr` (the other species are too insoluble).
+
+The species are registered tracers (`advect = true`), so the
+`:transport` stage moves them. In `:surface_update`, on the surface
+cadence, ``r_a = 1/(C_H U)`` and ``u_*`` are recomputed per column from
+`solve_surface_layer` (first-air-cell wind and θ, surface skin Ts) and
+the deposition velocities with them.
 """
-struct AQChem{S} <: AbstractCoupling
-    chem::S
+mutable struct AQChem{F} <: AbstractCoupling
+    NO::F; NO2::F; O3::F; VOC::F; HNO3::F
+    k_air::Matrix{Int}               # first air level of each column (Nz+1 if none)
+    kind::Matrix{Symbol}             # surface kind per column
+    z0m::Matrix{Float64}
+    r_a::Matrix{Float64}             # s/m, scalar aerodynamic resistance
+    u_star::Matrix{Float64}
+    v_d::Dict{Symbol,Matrix{Float64}}
+    p_col::Vector{Float64}
+    T_col::Vector{Float64}
+    opts::NamedTuple
+    # emission fluxes at traffic_profile = 1 / full sun, ppb m s⁻¹
+    F_NO::Float64; F_NO2::Float64; F_VOC::Float64
+    # diagnostics, summed over the run (ppb m, over the domain area)
+    emitted::Dict{Symbol,Float64}
+    dry::Dict{Symbol,Float64}
+    wet::Dict{Symbol,Float64}
+    # last step (domain sums, ppb × cells) for the budget smoke check
+    last::NamedTuple
+    J::Float64
+    OH::Float64
 end
 
 coupling_name(::Type{<:AQChem}) = :aq_chem
 slot(::Type{<:AQChem}) = :chemistry
-provider(::Type{<:AQChem}) = :toy_nox
-stages(::Type{<:AQChem}) = ((:chemistry, 10, EVERY_STEP),)
-build(::Type{<:AQChem}, case, o) = AQChem(ChemistryState(case.mesh))
+provider(::Type{<:AQChem}) = :nox_o3_voc
+modules_used(::Type{<:AQChem}) = (:Chemistry, :SurfaceExchange)
+stages(::Type{<:AQChem}) = ((:chemistry, 10, EVERY_STEP),
+                            (:surface_update, 90, Cadence(:soil)))
 
-function run_stage!(c::AQChem, case, ::Val{:chemistry}, dt)
-    chem, sfc, dz, hour = c.chem, case.geom.sfc, case.mesh.dz, case.clock.hour
-    # A3: emissions (traffic + biogenic); A1: photochemistry; A2: deposition
-    add_emissions!(chem, sfc, hour, dt; dz = dz)
-    apply_photochem_step!(chem, hour, dt)
-    for spec in (:NO, :NO2, :O3)
-        apply_dry_deposition!(getproperty(chem, spec), sfc, spec, dt; dz = dz)
+"""
+Options (all mixing ratios in ppb):
+
+* `background` — initial NOx, Ox, VOC, HNO3; NO/NO2/O3 start in the
+  photostationary state of the start hour. NOx 5.5 and Ox 45 ppb are
+  of the order of a summer urban background, VOC (isoprene) 0.5 ppb.
+* `nox_street` — traffic NOx emission per m² of street / building-adjacent
+  ground at the morning peak, kg m⁻² s⁻¹ as NO2 mass: 2 µg m⁻² s⁻¹. The
+  order of magnitude of a busy inner-city road network averaged over its
+  area (≈ 0.3 g NOx km⁻¹ per vehicle, 1–2 thousand vehicles h⁻¹ on a
+  30 m wide road gives 3–6 µg m⁻² s⁻¹ on the carriageway). An estimate,
+  not an inventory.
+* `no2_fraction` — primary NO2 share of the NOx emission (molar), 0.1.
+* `isoprene_park` — park isoprene emission in full sun, kg m⁻² s⁻¹:
+  0.3 µg m⁻² s⁻¹ (≈ 1 mg m⁻² h⁻¹, the order of mixed deciduous stands),
+  scaled by J(NO2)/J(NO2, overhead) as a light proxy.
+* `OH_max` — prescribed midday OH, molecules cm⁻³ (5 × 10⁶, the order of
+  summer boundary-layer values).
+* `ν` — NO → NO2 conversions per VOC oxidised by OH (RO2 and HO2), 2.
+* `z0m` — momentum roughness per class (street, roof, park, water, wall,
+  glass), m; `z0h = z0m/10`. The values #129 gives its surfaces.
+* `output_3d` — species written as 3-D fields (the near-surface layer of
+  every species is always written).
+"""
+default_options(::Type{<:AQChem}) =
+    (background = (NOx = 5.5, Ox = 45.0, VOC = 0.5, HNO3 = 0.5),
+     nox_street = 2.0e-9, no2_fraction = 0.1, isoprene_park = 3.0e-10,
+     OH_max = 5.0e6, ν = 2.0,
+     z0m = (0.05, 0.05, 0.1, 1e-4, 0.05, 0.01),
+     output_3d = (:NO2, :O3))
+
+function build(::Type{<:AQChem}, case, o)
+    mesh, geom = case.mesh, case.geom
+    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    names = Dict(:NO => "nitric oxide", :NO2 => "nitrogen dioxide", :O3 => "ozone",
+                 :VOC => "reactive VOC (isoprene)", :HNO3 => "nitric acid")
+    f = Dict(s => ensure_tracer!(case, s; advect = true, positive = true,
+                                 output = s in o.output_3d, units = "ppb",
+                                 long_name = names[s] * " mixing ratio")
+             for s in AQ_SPECIES)
+    Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
+    k_air = [something(findfirst(k -> !geom.sm.mask[Hx+i, Hy+j, Hz+k], 1:Nz), Nz + 1)
+             for i in 1:Nx, j in 1:Ny]
+    cls = geom.sfc
+    kind = [_AQ_SURFACE_KIND[clamp(Int(cls[i, j]), 1, 6)] for i in 1:Nx, j in 1:Ny]
+    z0m = [Float64(o.z0m[clamp(Int(cls[i, j]), 1, 6)]) for i in 1:Nx, j in 1:Ny]
+    p_col = [1.01325e5 * exp(-(k - 0.5) * mesh.dz / 8000.0) for k in 1:Nz]
+    # emissions → ppb m/s at the surface
+    F_NOx = emission_ppb_flux(o.nox_street, 0.046)            # as NO2 mass
+    F_VOC = emission_ppb_flux(o.isoprene_park, 0.06812)       # isoprene C5H8
+    return AQChem(f[:NO], f[:NO2], f[:O3], f[:VOC], f[:HNO3], k_air, kind, z0m,
+                  fill(Inf, Nx, Ny), zeros(Nx, Ny),
+                  Dict(s => zeros(Nx, Ny) for s in AQ_DEPOSITING),
+                  p_col, zeros(Nz), o,
+                  (1 - o.no2_fraction) * F_NOx, o.no2_fraction * F_NOx, F_VOC,
+                  Dict(s => 0.0 for s in AQ_SPECIES), Dict(s => 0.0 for s in AQ_DEPOSITING),
+                  Dict(s => 0.0 for s in AQ_DEPOSITING),
+                  (dOx = 0.0, dNOx = 0.0, P_Ox = 0.0, L_Ox = 0.0, HNO3 = 0.0, rain = false),
+                  0.0, 0.0)
+end
+
+# J(NO2) and OH at the current time
+function _aq_sun!(c::AQChem, case)
+    μ = solar_position_at(case.cfg, case.clock.hour).μ₀
+    c.J = j_NO2(μ)
+    c.OH = c.opts.OH_max * c.J / j_NO2(1.0)
+    return c
+end
+
+# level-mean temperature over the air cells: T = θ (p/p₀)^(R/cp)
+function _aq_temperature!(c::AQChem, case)
+    θ = interior_view(case.sim.θ)
+    for k in axes(θ, 3)
+        s = 0.0; n = 0
+        @inbounds for j in axes(θ, 2), i in axes(θ, 1)
+            c.k_air[i, j] <= k || continue
+            s += θ[i, j, k]; n += 1
+        end
+        θk = n > 0 ? s / n : case.cfg.θ₀
+        c.T_col[k] = θk * (c.p_col[k] / 1e5)^0.2857
     end
+    return c
+end
+
+function init!(c::AQChem, case)
+    _aq_sun!(c, case)
+    _aq_temperature!(c, case)
+    b = c.opts.background
+    for k in axes(c.T_col, 1)
+        Tk, pk = c.T_col[k], c.p_col[k]
+        k1 = ppb_rate_constant(k_NO_O3(Tk), pk, Tk)
+        y = photostationary_NO2(b.NOx, b.Ox, c.J, k1)
+        view(interior_view(c.NO), :, :, k) .= b.NOx - y
+        view(interior_view(c.NO2), :, :, k) .= y
+        view(interior_view(c.O3), :, :, k) .= b.Ox - y
+    end
+    interior_view(c.VOC) .= b.VOC
+    interior_view(c.HNO3) .= b.HNO3
+    _aq_deposition_velocities!(c, case)
     return nothing
 end
 
+"""
+    _aq_deposition_velocities!(c, case)
+
+Per column: solve the surface layer between the skin (`bus.Ts`) and the
+first air cell (wind at the cell centre, θ, qv), take ``r_a = 1/(C_H U)``
+and ``u_*``, and set ``v_d = 1/(r_a + r_b + r_c)`` for every depositing
+species.
+"""
+function _aq_deposition_velocities!(c::AQChem, case)
+    u, v, θ = interior_view(case.sim.u), interior_view(case.sim.v), interior_view(case.sim.θ)
+    qv = haskey(case.tracers, :qv) ? interior_view(tracer(case, :qv)) : nothing
+    Nx, Ny, Nz = size(θ)
+    z_m = case.mesh.dz / 2                     # cell centre above the resolved surface
+    Ts = case.bus.Ts
+    Sc = Dict(s => schmidt_number(s) for s in AQ_DEPOSITING)
+    for j in 1:Ny, i in 1:Nx
+        k = c.k_air[i, j]
+        if k > Nz
+            c.r_a[i, j] = Inf; c.u_star[i, j] = 0.0
+            for s in AQ_DEPOSITING; c.v_d[s][i, j] = 0.0; end
+            continue
+        end
+        U = hypot(0.5 * (u[i, j, k] + u[mod1(i + 1, Nx), j, k]),
+                  0.5 * (v[i, j, k] + v[i, mod1(j + 1, Ny), k]))
+        q = qv === nothing ? 0.0 : qv[i, j, k]
+        z0 = c.z0m[i, j]
+        sol = solve_surface_layer(; U = U, z_m = z_m, θ_a = θ[i, j, k], θ_s = Ts[i, j],
+                                  q_a = q, q_s = q, z0m = z0, z0h = z0 / 10)
+        ra = 1 / (sol.C_H * sol.U)
+        c.r_a[i, j] = ra
+        c.u_star[i, j] = sol.u_star
+        for s in AQ_DEPOSITING
+            rb = quasi_laminar_resistance(sol.u_star; Sc = Sc[s])
+            c.v_d[s][i, j] = dry_deposition_velocity(ra, rb, surface_resistance(s, c.kind[i, j]))
+        end
+    end
+    return c
+end
+
+function run_stage!(c::AQChem, case, ::Val{:surface_update}, dt)
+    _aq_deposition_velocities!(c, case)
+    return nothing
+end
+
+_aq_sp(c::AQChem, s::Symbol) = interior_view(getfield(c, s))
+
+function _aq_emit!(c::AQChem, case, dt)
+    dz, sfc = case.mesh.dz, case.geom.sfc
+    NO, NO2, VOC = _aq_sp(c, :NO), _aq_sp(c, :NO2), _aq_sp(c, :VOC)
+    Nz = size(NO, 3)
+    ftr = traffic_profile(case.clock.hour)
+    fsun = c.J / j_NO2(1.0)
+    eNO, eNO2, eVOC = 0.0, 0.0, 0.0
+    @inbounds for j in axes(NO, 2), i in axes(NO, 1)
+        k = c.k_air[i, j]
+        k <= Nz || continue
+        cl = sfc[i, j]
+        if cl == SURFACE_STREET || cl == SURFACE_WALL
+            a = c.F_NO * ftr * dt / dz; b = c.F_NO2 * ftr * dt / dz
+            NO[i, j, k] += a; NO2[i, j, k] += b
+            eNO += a * dz; eNO2 += b * dz
+        elseif cl == SURFACE_PARK
+            a = c.F_VOC * fsun * dt / dz
+            VOC[i, j, k] += a
+            eVOC += a * dz
+        end
+    end
+    A = length(c.k_air)
+    c.emitted[:NO] += eNO / A; c.emitted[:NO2] += eNO2 / A; c.emitted[:VOC] += eVOC / A
+    return nothing
+end
+
+function run_stage!(c::AQChem, case, ::Val{:chemistry}, dt)
+    _aq_sun!(c, case)
+    _aq_temperature!(c, case)
+    _aq_emit!(c, case, dt)
+    NO, NO2, O3, VOC, HNO3 = (_aq_sp(c, s) for s in AQ_SPECIES)
+    Ox0 = sum(O3) + sum(NO2); N0 = sum(NO) + sum(NO2)
+    b = apply_photochemistry!(NO, NO2, O3, VOC, HNO3, dt; J = c.J, T = c.T_col, p = c.p_col,
+                              OH = c.OH, ν = c.opts.ν)
+    dOx = sum(O3) + sum(NO2) - Ox0
+    dN = sum(NO) + sum(NO2) - N0
+    A, dz = length(c.k_air), case.mesh.dz
+    for s in AQ_DEPOSITING
+        c.dry[s] += apply_dry_deposition!(_aq_sp(c, s), c.v_d[s], dt; dz = dz, k = c.k_air) / A
+    end
+    rain = false
+    if haskey(case.tracers, :qr)
+        qr = interior_view(tracer(case, :qr))
+        rain = any(>(0), qr)
+        for s in AQ_DEPOSITING
+            sc = rain_scavenging_coefficient(s)
+            sc > 0 && (c.wet[s] += apply_wet_deposition!(_aq_sp(c, s), qr, dt; scav = sc) * dz / A)
+        end
+    end
+    c.last = (dOx = dOx, dNOx = dN, P_Ox = b.P_Ox, L_Ox = b.L_Ox, HNO3 = b.HNO3_formed, rain = rain)
+    return nothing
+end
+
+"""
+    aq_leighton(c, case) -> (φ, φ_ext)
+
+Medians over the air cells with NO, O3 > 0.01 ppb of the Leighton ratio
+``φ = J[NO_2]/(k_1[NO][O_3])`` and of ``φ/φ_{ext}``, where
+``φ_{ext} = 1 + ν k_{VOC,OH}[OH][VOC]/(k_1[NO][O_3])`` is the steady state
+that includes the peroxy-radical NO → NO2 conversion. `NaN` at night.
+"""
+function aq_leighton(c::AQChem, case)
+    c.J > 0 || return (φ = NaN, φ_ext = NaN)
+    NO, NO2, O3, VOC = _aq_sp(c, :NO), _aq_sp(c, :NO2), _aq_sp(c, :O3), _aq_sp(c, :VOC)
+    φs = Float64[]; rs = Float64[]
+    for k in axes(NO, 3)
+        Tk, pk = c.T_col[k], c.p_col[k]
+        k1 = ppb_rate_constant(k_NO_O3(Tk), pk, Tk)
+        L4 = k_VOC_OH(Tk) * c.OH
+        for j in axes(NO, 2), i in axes(NO, 1)
+            c.k_air[i, j] <= k || continue
+            (NO[i, j, k] > 0.01 && O3[i, j, k] > 0.01) || continue
+            φ = leighton_ratio(NO[i, j, k], NO2[i, j, k], O3[i, j, k], c.J, k1)
+            push!(φs, φ)
+            push!(rs, φ / (1 + c.opts.ν * L4 * VOC[i, j, k] / (k1 * NO[i, j, k] * O3[i, j, k])))
+        end
+    end
+    isempty(φs) && return (φ = NaN, φ_ext = NaN)
+    med(x) = (s = sort(x); n = length(s); isodd(n) ? s[(n + 1) ÷ 2] : (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2)
+    return (φ = med(φs), φ_ext = med(rs))
+end
+
+"Mean over the columns of `f` in the first air cell."
+function _aq_surface_layer(c::AQChem, f)
+    a = interior_view(f)
+    Nz = size(a, 3)
+    return [c.k_air[i, j] <= Nz ? a[i, j, c.k_air[i, j]] : NaN for i in axes(a, 1), j in axes(a, 2)]
+end
+
+function output_fields(c::AQChem, case)
+    fs = OutputField[]
+    for s in AQ_SPECIES
+        f = getfield(c, s)
+        push!(fs, OutputField("$(s)_sfc", "ppb", "$s mixing ratio in the first air cell", :xy,
+                              _ -> _aq_surface_layer(c, f)))
+    end
+    push!(fs, OutputField("vd_O3", "m s-1", "O3 dry deposition velocity", :xy, _ -> c.v_d[:O3]))
+    push!(fs, OutputField("r_a", "s m-1", "aerodynamic resistance, surface to first air cell", :xy,
+                          _ -> min.(c.r_a, 1e6)))
+    return fs
+end
+
+function report(c::AQChem, case)
+    NO, NO2, O3 = (_aq_surface_layer(c, getfield(c, s)) for s in (:NO, :NO2, :O3))
+    ok = .!isnan.(NO)
+    m(x) = sum(x[ok]) / count(ok)
+    L = aq_leighton(c, case)
+    return @sprintf("chem: sfc NO %.2f NO2 %.2f O3 %.1f ppb, Leighton φ %.3f (φ/φ_ext %.3f), J %.2e",
+                    m(NO), m(NO2), m(O3), L.φ, L.φ_ext, c.J)
+end
+
 function smoke_check(c::AQChem, case)
-    ok(f) = all(x -> isfinite(x) && x >= 0, interior_view(f))
-    return ["NO, NO2, O3, VOC finite and ≥ 0" =>
-                all(ok, (c.chem.NO, c.chem.NO2, c.chem.O3, c.chem.VOC))]
+    fin = all(s -> all(x -> isfinite(x) && x >= 0, _aq_sp(c, s)), AQ_SPECIES)
+    l = c.last
+    Ox = sum(_aq_sp(c, :O3)) + sum(_aq_sp(c, :NO2))
+    checks = ["NO, NO2, O3, VOC, HNO3 finite and ≥ 0" => fin,
+              # the mechanism's own budgets over the last photochemistry call:
+              # ΔOx = P − L and ΔNOx = −ΔHNO3 (the triad conserves both exactly)
+              "Ox budget closes in the photochemistry (rel. 1e-10)" =>
+                  abs(l.dOx - (l.P_Ox - l.L_Ox)) <= 1e-10 * Ox,
+              "NOx budget closes in the photochemistry (rel. 1e-10)" =>
+                  abs(l.dNOx + l.HNO3) <= 1e-10 * Ox,
+              # series resistances: v_d below the aerodynamic conductance
+              "0 ≤ v_d ≤ 1/r_a for every species" =>
+                  all(s -> all(i -> 0 <= c.v_d[s][i] <= 1 / c.r_a[i] * (1 + 1e-12), eachindex(c.r_a)),
+                      AQ_DEPOSITING),
+              "dry deposition removed O3 and HNO3" => c.dry[:O3] > 0 && c.dry[:HNO3] > 0,
+              "no wet deposition of the insoluble NO, NO2, O3" =>
+                  c.wet[:NO] == 0 && c.wet[:NO2] == 0 && c.wet[:O3] == 0]
+    l.rain && push!(checks, "rain (qr > 0) scavenged HNO3" => c.wet[:HNO3] > 0)
+    if c.J > 0
+        L = aq_leighton(c, case)
+        # daylight: the triad keeps NO2/NO near its photostationary state
+        # (relaxation ≈ 40 s); fresh NO pulls φ below 1 and peroxy
+        # radicals push it above, so only a loose band is asserted.
+        push!(checks, "daylight Leighton ratio within [0.8, 1.25] (median $(round(L.φ, digits = 3)))" =>
+                  0.8 <= L.φ <= 1.25)
+    end
+    return checks
+end
+
+# ---------------------------------------------------------------------------
+# Legacy PM path of the toy aerosol (aq_aerosol.jl, replaced by #147): a
+# class table of PM deposition velocities, applied at k = 1 through the src
+# `apply_dry_deposition!`.
+# ---------------------------------------------------------------------------
+
+"""
+    deposition_velocity(:PM, cls::UInt8) -> m/s
+
+PM dry deposition velocity of the toy aerosol by surface class (park
+0.005, water 0.001, glass 0.0005, otherwise 0.001 m/s). Kept only for
+`aq_aerosol.jl` until #147 unifies the aerosol.
+"""
+@inline function deposition_velocity(species::Symbol, cls::UInt8)
+    species === :PM || throw(ArgumentError("deposition_velocity: only :PM (gases use Chemistry.dry_deposition_velocity)"))
+    cls == SURFACE_PARK  && return 0.005
+    cls == SURFACE_WATER && return 0.001
+    cls == 0x06          && return 0.0005   # SURFACE_GLASS
+    return 0.001
+end
+
+function Aeolus.Chemistry.apply_dry_deposition!(field::Field, sfc::AbstractMatrix{UInt8},
+                                                species::Symbol, dt::Real; dz::Real)
+    vd = [deposition_velocity(species, cl) for cl in sfc]
+    Aeolus.Chemistry.apply_dry_deposition!(interior_view(field), vd, dt; dz = dz, k = 1)
+    return field
 end
 
 register!(AQChem)
