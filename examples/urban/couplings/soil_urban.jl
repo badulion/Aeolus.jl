@@ -138,12 +138,16 @@ end
 
 Slot `:ground`, provider `:urban_soil`. Builds [`UrbanSoil`](@ref) at
 `init!` (`cfg.T_soil0`, base at the same temperature) and runs
-[`step_soil!`](@ref) at the `:soil` cadence over that interval, after
-the slab update. Outputs `T_soil1` and `G_soil`.
+[`step_soil!`](@ref) at the `:soil` cadence, after the slab update, over
+the time elapsed since the previous exchange (the cadence period `P`
+when `dt` divides it; exact with a variable `dt`, #133). Outputs
+`T_soil1` and `G_soil`.
 """
 mutable struct UrbanSoilCoupling <: AbstractCoupling
     soil::Union{Nothing,UrbanSoil}
     last_step::Int       # step on which the soil last exchanged heat (for the ledger)
+    last_t::Float64      # simulation time at the end of that step (s)
+    interval::Float64    # the interval that exchange covered (s)
 end
 
 coupling_name(::Type{UrbanSoilCoupling}) = :soil_urban
@@ -151,27 +155,34 @@ slot(::Type{UrbanSoilCoupling}) = :ground
 provider(::Type{UrbanSoilCoupling}) = :urban_soil
 modules_used(::Type{UrbanSoilCoupling}) = (:SoilColumn,)
 stages(::Type{UrbanSoilCoupling}) = ((:surface_update, 20, Cadence(:soil)),)
-build(::Type{UrbanSoilCoupling}, case, o) = UrbanSoilCoupling(nothing, 0)
+build(::Type{UrbanSoilCoupling}, case, o) = UrbanSoilCoupling(nothing, 0, 0.0, 0.0)
 
 function init!(c::UrbanSoilCoupling, case)
     T0 = case.cfg.T_soil0
     c.soil = UrbanSoil(case.geom.sfc; T0 = T0, T_deep = T0)
+    c.last_t = case.sim.t
     return nothing
 end
 
 function run_stage!(c::UrbanSoilCoupling, case, ::Val{:surface_update}, dt)
-    step_soil!(c.soil, case.bus.Ts, case.geom.sfc, cadence_period(case.cfg, :soil), case.bus.params)
+    # :surface_update runs after step!, so sim.t is already the end of
+    # this step. With a fixed dt dividing P the interval is exactly P
+    # (the times are exact multiples of dt).
+    t = case.sim.t
+    c.interval = t - c.last_t
+    step_soil!(c.soil, case.bus.Ts, case.geom.sfc, c.interval, case.bus.params)
     c.last_step = case.clock.n
+    c.last_t = t
     return nothing
 end
 
 # Ledger: on the step the soil exchanges, the slab pays G over the whole
-# soil interval P at once (Ts' = Ts* − G P / C_s), so G·P is booked on
+# soil interval at once (Ts' = Ts* − G P / C_s), so G·P is booked on
 # that step. The soil's own enthalpy change is below the surface layer
 # and not part of the surface balance.
 function budget!(c::UrbanSoilCoupling, case, l)
     c.last_step == case.clock.n || return nothing
-    P = cadence_period(case.cfg, :soil)
+    P = c.interval
     G = zeros(size(case.bus.Ts))
     for (n, I) in enumerate(c.soil.cells)
         G[I] = c.soil.G[n]
