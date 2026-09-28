@@ -496,4 +496,13 @@ const OML = Aeolus.OceanMixedLayer
         @test maximum(rs) - minimum(rs) > 2 * (maximum(rp) - minimum(rp))
         @info "Diurnal SST range (day 2)" calm_U1_5 = r_calm windy_U10 = r_windy h_mix_calm = mixed_layer_depth(ccalm) h_mix_windy = mixed_layer_depth(cwind) slab_ZB05_U3 = maximum(rs) - minimum(rs) slab_only_U3 = maximum(rp) - minimum(rp)
     end
+
+    @testset "column_heat_content is one contract generic" begin
+        # UrbanSurface (#26) and this module both export column_heat_content;
+        # as two separate functions the name was ambiguous in `Aeolus`.
+        chc = Aeolus.SurfaceExchange.column_heat_content
+        @test Aeolus.column_heat_content === chc
+        @test Aeolus.UrbanSurface.column_heat_content === chc
+        @test Aeolus.OceanMixedLayer.column_heat_content === chc
+    end
 end

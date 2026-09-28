@@ -79,7 +79,8 @@ using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, grav,
                          BusingerDyerBeljaarsHoltslag
 import ..SurfaceExchange: surface_temperature, roughness_lengths, surface_albedo,
                           surface_emissivity, step_surface!, moisture_availability,
-                          surface_specific_humidity, phi_m, phi_h, psi_m, psi_h
+                          surface_specific_humidity, phi_m, phi_h, psi_m, psi_h,
+                          column_heat_content
 using ..SurfaceOptics: material_emissivity
 
 export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
