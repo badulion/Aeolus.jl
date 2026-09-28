@@ -173,13 +173,11 @@ All numbers are from `test/era5_urban_surface.jl`.
 | Facet steady state (fixed ``h_c`` and Monin–Obukhov) | bisection of ``R_n - H = (T_s - T_\text{in})/(R + R_{si})`` | skin temperature to 1·10⁻⁶ K |
 | 3-day diurnal roof / wall / road | exact bookkeeping; Δt = 60 s vs 600 s | SEB closure ≤ 3·10⁻¹⁴ W m⁻², conservation to round-off, hourly skin within 0.16 K |
 
-**Not yet validated against observations.** The phase target is the
-BUBBLE and CAPITOUL facade and surface temperatures. That comparison
-needs the facet radiosity forcing (canyon shading, sky view), which
-[`UrbanFacetScene`](urban_radiosity_coupling.md) now supplies, and
-belongs to the Phase 49 validation issue. What is validated here is the
-numerical solution of the physics: steady, periodic, transient, and the
-bookkeeping of energy.
+**Against observations.** The phase target is the BUBBLE and CAPITOUL
+facade and surface temperatures. That comparison is on
+[BUBBLE / CAPITOUL validation](urban_validation.md) (#30). What is
+validated here is the numerical solution of the physics: steady,
+periodic, transient, and the bookkeeping of energy.
 
 ## References
 

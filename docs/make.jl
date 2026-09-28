@@ -52,6 +52,7 @@ makedocs(
             "HVAC and exhaust heat"       => "theory/hvac_exhaust.md",
             "Occupancy and BESTEST"       => "theory/occupancy_validation.md",
             "Anthropogenic heat (BEM)"    => "theory/anthropogenic_heat.md",
+            "BUBBLE / CAPITOUL validation" => "theory/urban_validation.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
