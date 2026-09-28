@@ -14,3 +14,4 @@ the pages below are the generated API reference, one per module.
 - [Building interior — BuildingEnergy](era5/building_energy.md) — `Aeolus.BuildingEnergy` (theory: [Building energy: indoor air and thermal mass](../theory/building_energy.md), [Occupancy schedules and BESTEST validation](../theory/occupancy_validation.md), [Anthropogenic heat from the building energy model](../theory/anthropogenic_heat.md))
 - [Snowpack](era5/snowpack.md) — `Aeolus.Snowpack`
 - [Lake and sea ice — IceThermodynamics](era5/ice_thermodynamics.md) — `Aeolus.IceThermodynamics` ([theory](../theory/ice_thermodynamics.md))
+- [Lake and sea surface — OceanMixedLayer](era5/ocean_mixed_layer.md) — `Aeolus.OceanMixedLayer`
