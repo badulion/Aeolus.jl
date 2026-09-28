@@ -276,6 +276,7 @@ export SpectralGrid, shortwave_bands, longwave_bands,
        AbstractRTSolver, AbstractSurfaceOptics,
        compute_optics!, solve_rt!, surface_albedo, surface_emissivity,
        AtmosphericColumn, column_from_simulation,
+       liquid_mass_extinction, ice_mass_extinction,
        STEFAN_BOLTZMANN, SOLAR_CONSTANT, planck_band, planck_integrated
 
 # Phase 38 — solar position, refraction, irradiance partitioning, shadows

@@ -51,6 +51,7 @@ export SpectralGrid, shortwave_bands, longwave_bands,
        material_albedo, material_emissivity,
        band_wavelength, band_wavelength_limits,
        AtmosphericColumn, column_from_simulation,
+       liquid_mass_extinction, ice_mass_extinction,
        STEFAN_BOLTZMANN, SOLAR_CONSTANT, PLANCK_H, LIGHT_C, BOLTZMANN_K,
        planck_band, planck_integrated
 
@@ -690,6 +691,40 @@ function compute_optics! end
 function solve_rt! end
 function surface_albedo end
 function surface_emissivity end
+
+# =========================================================================
+# Cloud mass extinction (shared by TwoStream and SolarGeometry)
+# =========================================================================
+
+"""
+    liquid_mass_extinction(r_eff) -> m² g⁻¹
+
+Shortwave mass extinction coefficient of liquid cloud with effective
+radius `r_eff` (μm), in the geometric-optics limit (extinction
+efficiency 2):
+
+```math
+k = \\frac{3}{2\\,ρ_w\\,r_{eff}} = \\frac{1.5}{r_{eff}[\\mathrm{μm}]}\\ \\mathrm{m^2\\,g^{-1}},
+```
+
+so a layer of liquid water path `LWP` (g m⁻²) has `τ = k·LWP` (Stephens
+1978; Hu & Stamnes 1993 in form). 10 μm gives 0.15 m² g⁻¹. It is the one
+definition used by `TwoStream.MieCloudOptics` and by
+`SolarGeometry.cloud_optical_depth_column`, so the cloud a column
+radiation scheme sees and the cloud that casts a 3-D shadow have the
+same optical depth.
+"""
+liquid_mass_extinction(r_eff::Real) = 1.5 / r_eff
+
+"""
+    ice_mass_extinction(r_eff) -> m² g⁻¹
+
+Shortwave mass extinction coefficient of ice cloud with effective
+radius `r_eff` (μm), `k = 1/r_eff` m² g⁻¹ (the form of Fu 1996 with an
+effective radius). 30 μm gives 0.033 m² g⁻¹. Shared like
+[`liquid_mass_extinction`](@ref).
+"""
+ice_mass_extinction(r_eff::Real) = 1.0 / r_eff
 
 # =========================================================================
 # Atmospheric column

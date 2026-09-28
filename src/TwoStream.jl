@@ -35,7 +35,8 @@ using ..RadiationCore: SpectralGrid, OpticalProperties, RadiativeFluxes,
                        AtmosphericColumn, AbstractRTSolver, AbstractCloudOptics,
                        AbstractSurfaceOptics, nbands, ngpoints, gpoint_range,
                        band_limits, planck_band, allocate_fluxes, net_flux!,
-                       heating_rate!, STEFAN_BOLTZMANN
+                       heating_rate!, STEFAN_BOLTZMANN,
+                       liquid_mass_extinction, ice_mass_extinction
 import ..RadiationCore: compute_optics!, solve_rt!
 
 export TwoStreamSolver, two_stream_solver,
@@ -552,10 +553,11 @@ function compute_optics!(optics::OpticalProperties{T}, cloud::MieCloudOptics{T},
             @inbounds for k in 1:nz
                 lwp = col.ql[k] * col.ρ[k] * col.dz[k] * 1000   # g m⁻²
                 iwp = col.qi[k] * col.ρ[k] * col.dz[k] * 1000
-                # τ = 3·LWP / (2 ρ_w r_eff). With LWP in g m⁻², r_eff in μm
-                # and ρ_w = 1 g cm⁻³ the unit factors cancel to τ = 1.5·LWP/r_eff.
-                τl = lwp > 0 ? T(1.5) * lwp / col.r_eff_liq[k] : zero(T)
-                τi = iwp > 0 ? T(1.0) * iwp / col.r_eff_ice[k] : zero(T)
+                # τ = 3·LWP / (2 ρ_w r_eff) = 1.5·LWP/r_eff (LWP in g m⁻²,
+                # r_eff in μm): RadiationCore.liquid_mass_extinction, shared
+                # with the 3-D cloud shadow of SolarGeometry.
+                τl = lwp > 0 ? T(liquid_mass_extinction(col.r_eff_liq[k]) * lwp) : zero(T)
+                τi = iwp > 0 ? T(ice_mass_extinction(col.r_eff_ice[k]) * iwp) : zero(T)
                 τt = τl + τi
                 τt <= 0 && continue
                 sl = τl * ω_liq; si = τi * ω_ice

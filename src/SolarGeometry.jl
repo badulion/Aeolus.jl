@@ -35,7 +35,7 @@ using ..Grids: RegularGrid, CellCenter, interior
 using ..Fields
 using ..Fields: Field, interior_view
 using ..RadiationCore
-using ..RadiationCore: SOLAR_CONSTANT
+using ..RadiationCore: SOLAR_CONSTANT, liquid_mass_extinction, ice_mass_extinction
 
 export AbstractSolarPosition, MeeusPosition,
        SolarTime, solar_time, julian_day, julian_century,
@@ -579,23 +579,28 @@ end
 # =========================================================================
 
 """
-    cloud_optical_depth_column(ql, qi, ρ, dz; k_liq = 0.06, k_ice = 0.02)
+    cloud_optical_depth_column(ql, qi, ρ, dz; k_liq = liquid_mass_extinction(10),
+                               k_ice = ice_mass_extinction(30))
 
-Per-cell cloud optical depth from the condensate field, using a simple
-mass-extinction parameterisation `τ = k · LWC · dz` with `k` in m²/g.
-Defaults correspond to an effective radius of ~10 μm for liquid and
-~30 μm for ice. For the full Mie-based treatment use
-`TwoStream.MieCloudOptics`; this lightweight version exists so shadow
-geometry can be computed without instantiating the whole optics pipeline.
+Per-cell cloud optical depth from the condensate field, `τ = k · WC · dz`
+with the mass extinction `k` in m²/g and the water content `WC` in g/m³.
+The defaults are the `RadiationCore` coefficients for effective radii of
+10 μm (liquid, 0.15 m²/g) and 30 μm (ice, 0.033 m²/g), the same ones
+`TwoStream.MieCloudOptics` uses, so a column scheme and the 3-D shadow
+see the same cloud. (Before #130 the defaults were 0.06 and 0.02 m²/g,
+which the docstring called "~10 μm" but correspond to 25 μm liquid.)
+This lightweight form exists so shadow geometry can be computed without
+instantiating the whole optics pipeline.
 
 `ql`, `qi` are mass mixing ratios (kg/kg), `ρ` is air density (kg/m³),
-`dz` the layer thickness (m). Returns a 3-D array of optical depths.
+a scalar, a per-level vector or a 3-D array, `dz` the layer thickness
+(m). Returns a 3-D array of optical depths.
 """
 function cloud_optical_depth_column(ql::AbstractArray{T,3},
                                     qi::AbstractArray{T,3},
                                     ρ, dz;
-                                    k_liq::Real = 0.06,
-                                    k_ice::Real = 0.02) where {T}
+                                    k_liq::Real = liquid_mass_extinction(10.0),
+                                    k_ice::Real = ice_mass_extinction(30.0)) where {T}
     τ = similar(ql)
     nx, ny, nz = size(ql)
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx

@@ -411,8 +411,17 @@ using Aeolus.SolarGeometry
         τ = cloud_optical_depth_column(ql, qi, ρ, dz)
         @test all(τ .>= 0)
         @test all(iszero, τ[:, :, 1:3])
-        # τ = k·LWC·dz = 0.06 * (5e-4*1.0*1000) * 50 = 1.5
-        @test isapprox(τ[1,1,5], 0.06 * 0.5 * 50; rtol = 1e-12)
+        # τ = k·LWC·dz with k = 1.5/r_eff = 0.15 m²/g at 10 μm:
+        # 0.15 * (5e-4*1.0*1000) * 50 = 3.75. (The original expectation,
+        # 0.06 m²/g, was the old default, which is the extinction of 25 μm
+        # droplets, not the ~10 μm the docstring claimed; #130.)
+        @test isapprox(τ[1,1,5], 0.15 * 0.5 * 50; rtol = 1e-12)
+        # one source of truth: the same cloud has the same visible optical
+        # depth in the 3-D shadow and in the TwoStream cloud optics
+        col = AtmosphericColumn(Float64, Nz; ql = ql[1, 1, :], ρ = fill(1.0, Nz),
+                                dz = fill(50.0, Nz))
+        τ_ts = cloud_optical_depth(col, mie_cloud_optics(shortwave_bands()))
+        @test isapprox(sum(τ[1, 1, :]), τ_ts; rtol = 1e-12)
         @info "cloud τ per layer" value=τ[1,1,5] column_total=sum(τ[1,1,:])
         # more condensate ⇒ more optical depth, linearly
         τ2 = cloud_optical_depth_column(2 .* ql, qi, ρ, dz)
