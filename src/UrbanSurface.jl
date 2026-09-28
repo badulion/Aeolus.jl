@@ -79,7 +79,8 @@ module UrbanSurface
 
 using ..SurfaceExchange
 using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS
-import ..SurfaceExchange: surface_temperature, roughness_lengths, step_surface!
+import ..SurfaceExchange: surface_temperature, roughness_lengths, step_surface!,
+                          column_heat_content
 import ..RadiationCore: surface_albedo, surface_emissivity
 using ..SurfaceOptics: SurfaceOptics, broadband_albedo, fresnel_polarized_reflectance
 using ..RadiationCore: _gauss_legendre, STEFAN_BOLTZMANN
