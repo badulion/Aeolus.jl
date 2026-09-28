@@ -148,27 +148,34 @@ const BC = Main.BerlinCase
                        βd, LEd, βm, LEm)
         @test βd < βm < 1 && LEd < LEm
         # A sunny afternoon under fixed air dries the top layer and β falls.
-        # LE itself RISES (measured 267 → 302 W/m² hourly): the skin heats
-        # and q_sat(T_s) grows faster than β falls — the first version of
-        # this test expected LE to fall with β, which was wrong. What β
-        # controls is the evaporation EFFICIENCY, LE over the LE of a
-        # saturated (β = 1) surface at the same skin temperature and
-        # roughness; it falls with β.
-        β = Float64[]; eff = Float64[]; θ1 = Float64[]; LE = Float64[]
+        # Two things decide the street's latent heat. The DEMAND of the
+        # Monin–Obukhov β form, LE(β) at the current skin, RISES here
+        # (measured 266 → 567 W/m² hourly): the skin heats and q_sat(T_s)
+        # grows faster than β falls — the first version of this test
+        # expected it to fall with β, which was wrong. β controls the
+        # demand's EFFICIENCY, LE(β)/LE(β = 1) at the same skin, which falls
+        # with β. What the soil DELIVERS (the E and LE step_surface! returns
+        # since #129) is limited by the dry top layer and falls (measured
+        # 267 → 5.8 W/m²).
+        β = Float64[]; eff = Float64[]; θ1 = Float64[]; LE = Float64[]; LEd = Float64[]
         for n in 1:720                           # 6 h at 30 s
-            step_surface!(moist, f, 30.0)
+            fl = step_surface!(moist, f, 30.0)
             if n % 120 == 0
                 wet = SlabLand(; T = moist.T_skin, albedo = moist.albedo, emissivity = moist.emissivity,
                                z0m = moist.z0m, z0h = moist.z0h, β = 1.0)
                 le = turbulent_fluxes(moist, f).LE
                 push!(β, moisture_availability(moist)); push!(θ1, moist.water.θ_liq[1])
-                push!(LE, le); push!(eff, le / turbulent_fluxes(wet, f).LE)
+                push!(LE, le); push!(eff, le / turbulent_fluxes(wet, f).LE); push!(LEd, fl.LE)
             end
         end
         @info "  street soil under 6 h of sun, hourly: θ₁ = " * join((@sprintf("%.4f", x) for x in θ1), ", ") *
               "; β = " * join((@sprintf("%.3f", x) for x in β), ", ") *
-              "; LE/LE(β=1) = " * join((@sprintf("%.3f", x) for x in eff), ", ") *
-              "; LE = " * join((@sprintf("%.1f", x) for x in LE), ", ") * " W/m²"
+              "; LE(β)/LE(β=1) = " * join((@sprintf("%.3f", x) for x in eff), ", ") *
+              "; demand LE(β) = " * join((@sprintf("%.1f", x) for x in LE), ", ") *
+              " W/m²; delivered LE = " * join((@sprintf("%.1f", x) for x in LEd), ", ") * " W/m²"
+        # delivered: 267 W/m² in the first hour (top layer still moist), then
+        # the surface reaches the dry potential and it falls to ~6 W/m²
+        @test LEd[end] < 0.1 * LEd[1] && issorted(LEd[2:end]; rev = true)
         @test issorted(θ1; rev = true) && issorted(β; rev = true) && issorted(eff; rev = true)
         @test β[end] < βm
         # The efficiency is β at fixed stability. It comes out a little BELOW
