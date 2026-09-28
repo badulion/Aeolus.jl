@@ -38,11 +38,11 @@ makedocs(
             "Fog and dew"                 => "theory/fog.md",
             "Radiation fog"               => "theory/radiation_fog.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
-            "Leaf photosynthesis"         => "theory/photosynthesis.md",
-            "Stomatal conductance"        => "theory/stomatal_conductance.md",
             "Soil water (Richards)"       => "theory/soil_water.md",
             "Soil heat and freeze–thaw"   => "theory/soil_heat.md",
             "Water table and aquifer"     => "theory/water_table.md",
+            "Leaf photosynthesis"         => "theory/photosynthesis.md",
+            "Stomatal conductance"        => "theory/stomatal_conductance.md",
             "Vegetated land column"       => "theory/land_surface.md",
         ],
         "Design" => [
@@ -98,8 +98,8 @@ makedocs(
             "Era V — surface exchange" => [
                 "Overview"                     => "api/era5.md",
                 "SurfaceExchange"              => "api/era5/surface_exchange.md",
-                "Photosynthesis"               => "api/era5/photosynthesis.md",
                 "SoilColumn"                   => "api/era5/soil_column.md",
+                "Photosynthesis"               => "api/era5/photosynthesis.md",
                 "LandSurface"                  => "api/era5/land_surface.md",
             ],
         ],

@@ -17,6 +17,11 @@ canyons) — commit 2b31389. The flux works both ways: it drains a skin
 warmer than the soil beneath and, on a clear night over cooler air,
 feeds heat back to a radiatively cooling skin (section 5).
 
+Since #18 the urban example has no soil model of its own: every non-water
+cell of the Alexanderplatz run sits on one `SoilThermalColumn`, coupled to
+the example's surface slab by `LinearizedSkinBalance` (see
+[the Alexanderplatz run](../examples/battery.md#Ground:-the-production-soil-column)).
+
 ## 1. Thermal properties
 
 **Heat capacity** is the sum over constituents (de Vries 1963),

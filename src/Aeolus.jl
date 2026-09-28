@@ -63,9 +63,9 @@ include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
-include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equation
 
 # --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53)
+include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equation
 include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
 include("LandSurface.jl")          # Phase 47 (#21): vegetated land column
 
@@ -117,8 +117,8 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
-using .Photosynthesis              # Phase 47
 using .SoilColumn                  # Phase 46
+using .Photosynthesis              # Phase 47
 using .LandSurface                 # Phase 47 (#21)
 
 # Re-exports for the user-facing API.
@@ -607,28 +607,6 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
 
-# Phase 47 — Photosynthesis: Farquhar C3 / Collatz C4 leaf biochemistry,
-# Bernacchi / Kattge-Knorr temperature responses, CLM4.5 PFT parameters.
-export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
-       Q10Response, temperature_factor, optimum_temperature,
-       C3TemperatureResponses, bonan2011_c3_temperature,
-       kattge_knorr_c3_temperature, kattge_knorr_jmax_ratio,
-       PAR_PHOTONS_PER_JOULE, par_to_photon_flux, colimited_rate,
-       electron_transport_rate,
-       AbstractPhotosynthesisParameters, C3Parameters, C4Parameters, collatz1992_c4,
-       leaf_capacities, photorespiratory_compensation_point,
-       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point,
-       PFTPhotosynthesis, CLM45_PFT_PHOTOSYNTHESIS, vcmax25_from_leaf_nitrogen,
-       pft_photosynthesis_parameters
-
-# Phase 47 — stomatal conductance (#20): Ball-Berry / Medlyn closures,
-# leaf boundary layer, transpiration, coupled A–gs–ci solution.
-export AbstractStomatalModel, BallBerryStomata, MedlynStomata, stomatal_conductance,
-       leaf_boundary_layer_conductance, molar_conductance, leaf_transpiration,
-       STOMATAL_DIFFUSIVITY_RATIO, BOUNDARY_LAYER_DIFFUSIVITY_RATIO,
-       LeafGasExchange, leaf_gas_exchange, apply_water_stress,
-       CLM5_MEDLYN_G1, pft_stomatal_model
-
 # Phase 46 (#15) — SoilColumn: CLM-style soil column, Richards equation.
 # Boundary-condition types (FreeDrainage, HeadTop, AtmosphericTop, …),
 # hooks and the generic-sounding accessors (saturated_conductivity,
@@ -651,12 +629,33 @@ export SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal
        freezing_matric_potential, supercooled_liquid_content, PowerLawIceImpedance,
        SoilThermalColumn, step_soil_heat!, set_soil_temperature!,
        soil_enthalpy, soil_ice_mass
-
 # Phase 46 (#17) — SoilColumn: water table / unconfined aquifer (SIMTOP).
 # The helpers aquifer_impermeable_fraction, gardner_two_point_flux and
 # bottom_water_storage stay qualified.
 export UnconfinedAquifer, water_table_depth, set_water_table!,
        aquifer_baseflow_rate, total_water_storage
+
+# Phase 47 — Photosynthesis: Farquhar C3 / Collatz C4 leaf biochemistry,
+# Bernacchi / Kattge-Knorr temperature responses, CLM4.5 PFT parameters.
+export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
+       Q10Response, temperature_factor, optimum_temperature,
+       C3TemperatureResponses, bonan2011_c3_temperature,
+       kattge_knorr_c3_temperature, kattge_knorr_jmax_ratio,
+       PAR_PHOTONS_PER_JOULE, par_to_photon_flux, colimited_rate,
+       electron_transport_rate,
+       AbstractPhotosynthesisParameters, C3Parameters, C4Parameters, collatz1992_c4,
+       leaf_capacities, photorespiratory_compensation_point,
+       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point,
+       PFTPhotosynthesis, CLM45_PFT_PHOTOSYNTHESIS, vcmax25_from_leaf_nitrogen,
+       pft_photosynthesis_parameters
+
+# Phase 47 — stomatal conductance (#20): Ball-Berry / Medlyn closures,
+# leaf boundary layer, transpiration, coupled A–gs–ci solution.
+export AbstractStomatalModel, BallBerryStomata, MedlynStomata, stomatal_conductance,
+       leaf_boundary_layer_conductance, molar_conductance, leaf_transpiration,
+       STOMATAL_DIFFUSIVITY_RATIO, BOUNDARY_LAYER_DIFFUSIVITY_RATIO,
+       LeafGasExchange, leaf_gas_exchange, apply_water_stress,
+       CLM5_MEDLYN_G1, pft_stomatal_model
 
 # Phase 47 (#21) — LandSurface: vegetated land column (two-big-leaf canopy
 # over a SoilThermalColumn), root-zone soil-water stress, big-leaf radiation.

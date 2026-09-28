@@ -29,7 +29,7 @@ Contents:
      atmospheric flux that switches to a head condition when the surface
      ponds (runoff) or dries out (soil-limited evaporation); the bottom
      boundary is an [`AbstractSoilBottomBoundary`](@ref) (free drainage by
-     default, or the water table below).
+     default; [`UnconfinedAquifer`](@ref) is the water table of #17).
   5. **Heat and freeze–thaw** (#16) — [`SoilThermalProperties`](@ref)
      with the Johansen (1975) / Farouki (1981) conductivity and a
      constituent heat capacity; [`SoilThermalColumn`](@ref), which wraps a
@@ -2215,6 +2215,7 @@ function step_surface!(col::SoilThermalColumn{T}, f::SurfaceForcing, dt::Real;
     end
     return fl
 end
+
 
 # =========================================================================
 # 10. Water table and unconfined aquifer (#17)
