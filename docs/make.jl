@@ -48,6 +48,7 @@ makedocs(
             "Urban facet conduction"      => "theory/urban_conduction.md",
             "Glazing and window facets"   => "theory/urban_glazing.md",
             "Facet–radiosity coupling"    => "theory/urban_radiosity_coupling.md",
+            "Building energy (zone)"      => "theory/building_energy.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -107,6 +108,7 @@ makedocs(
                 "LandSurface"                  => "api/era5/land_surface.md",
                 "PlantCanopy"                  => "api/era5/plant_canopy.md",
                 "UrbanSurface"                 => "api/era5/urban_surface.md",
+                "BuildingEnergy"               => "api/era5/building_energy.md",
             ],
         ],
         "Examples" => [
