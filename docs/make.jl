@@ -54,6 +54,7 @@ makedocs(
             "Anthropogenic heat (BEM)"    => "theory/anthropogenic_heat.md",
             "BUBBLE / CAPITOUL validation" => "theory/urban_validation.md",
             "Layered snowpack"            => "theory/snowpack.md",
+            "Snow metamorphism and albedo" => "theory/snow_metamorphism.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
