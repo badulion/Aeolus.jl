@@ -48,8 +48,22 @@ function step_options(c::MomentumWENOZ, case)
     return (momentum_advection = (tu, tv, tw, u, v, w) ->
                 Aeolus.AdvectionSchemes.momentum_advect_weno_z!(tu, tv, tw, u, v, w; order = order),)
 end
-smoke_check(c::MomentumWENOZ, case) =
-    ["projected velocity divergence-free (max|∇·u| < 1e-10 s⁻¹)" => max_divergence(case.sim) < 1e-10]
+# The flux form telescopes: on the periodic x, y directions and with w = 0
+# at the walls, the domain sums of the u and v tendencies vanish (measured
+# ~1e-18 relative in the :smoke window, the centred operator the same).
+# w is not conserved by the operator alone (the walls take momentum).
+function smoke_check(c::MomentumWENOZ, case)
+    sim, m = case.sim, case.mesh
+    for f in (sim.u, sim.v, sim.w)
+        fill_halos!(f, sim.bcs)
+    end
+    tu, tv, tw = Field(FaceX(), m), Field(FaceY(), m), Field(FaceZ(), m)
+    Aeolus.AdvectionSchemes.momentum_advect_weno_z!(tu, tv, tw, sim.u, sim.v, sim.w; order = c.order)
+    rel(t) = (x = interior_view(t); abs(sum(x)) / max(sum(abs, x), eps()))
+    return ["projected velocity divergence-free (max|∇·u| < 1e-10 s⁻¹)" => max_divergence(sim) < 1e-10,
+            "WENO-Z flux form conserves horizontal momentum (|Σtu|, |Σtv| < 1e-12 Σ|·|)" =>
+                rel(tu) < 1e-12 && rel(tv) < 1e-12]
+end
 
 register!(MomentumCentered)
 register!(MomentumWENOZ)

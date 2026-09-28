@@ -214,9 +214,11 @@ step, the scalar scheme once per advected tracer — qv and ql):
 | velocity halo refresh (the #132 fix) | | 0.3 |
 
 For scale, a whole default step costs about 40–60 ms under the same load
-(`timing_report`, radiation excluded). The alternatives stay options:
-none is more accurate for this case on this grid, and multigrid,
-MG-CG and the WENO-Z momentum advection each more than double the step.
+(`timing_report`, radiation excluded), of which `step!` is 12–17 ms. The
+alternatives stay options: none is more accurate for this case on this
+grid, and multigrid, MG-CG and the WENO-Z momentum advection each at
+least triple the cost of `step!` (107, 64 and 48 ms per step) and add
+roughly 50–150 % to a whole step.
 
 ## Adding a coupling
 
