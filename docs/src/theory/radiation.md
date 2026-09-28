@@ -336,8 +336,53 @@ modules:
   hygroscopic growth, which dominates visibility and the direct
   radiative effect at high relative humidity.
 
+### 3-D cloud shadows: the slant path
+
+`SolarGeometry.cloud_shadow_transmittance!` gives the direct-beam
+transmittance at each surface cell by tracing the ray toward the sun
+through the 3-D cloud field. With ``\tau_c`` the vertical optical depth
+of cell ``c`` (extinction coefficient ``\tau_c/\Delta z``) and
+``\ell_c`` the exact length of the ray inside it (a grid traversal,
+Amanatides & Woo 1987),
+
+```math
+T_{ij} = \exp\Big(-\sum_{c} \frac{\tau_c}{\Delta z}\,\ell_c\Big),
+```
+
+which for a horizontally uniform layer is exactly
+``\exp(-\tau/\mu_0)``: the ``1/\mu_0`` of the slant path is already in
+the path lengths. (Until #130 the march applied it a second time and
+returned ``\exp(-\tau/\mu_0^2)``, 0.20 instead of 0.45 at 30° elevation
+for ``\tau = 0.4``, and counted the lowest cell only half.)
+
+The cloud optical depth is ``\tau = k\,\rho q\,\Delta z`` with the
+mass extinction of `RadiationCore`,
+``k_{liq} = 1.5/r_{eff}`` m² g⁻¹ (``r_{eff}`` in μm; 0.15 m² g⁻¹ at
+10 μm) and ``k_{ice} = 1/r_{eff}`` — the same coefficients
+`TwoStream.MieCloudOptics` uses, so a column scheme and the shadow see
+the same cloud. A forward-peaked droplet phase function sends most of
+the light it "removes" on in almost the same direction; for the beam
+that reaches the ground the Berlin case therefore uses the
+delta-scaled depth ``\tau' = (1 - \omega g^2)\tau``, the same scaling
+the two-stream solve applies (``\approx 0.26\,\tau`` for liquid in the
+visible).
+
+### An LES column under a standard atmosphere
+
+An LES domain is a few hundred metres deep; its sky longwave and the
+sunlight at its top come from the ten kilometres above it.
+`RadiationCore.column_from_profiles` turns LES profiles into a
+hydrostatic column and `stitch_columns` puts it under the part of a
+deeper column (`GasOptics.us_standard_column`) above the LES top, with
+the pressure made continuous. A lower column that follows the standard
+column's own temperature and humidity gives the same surface ``L^\downarrow``
+(to 0.02 W/m²), outgoing longwave and global shortwave (to 0.12 W/m²)
+as the standard column alone.
+
 ## References
 
+* Amanatides, J. & Woo, A. (1987). A fast voxel traversal algorithm for
+  ray tracing. *Eurographics '87*, 3–10.
 * Meador, W. E. & Weaver, W. R. (1980). Two-stream approximations to
   radiative transfer in planetary atmospheres. *J. Atmos. Sci.*, 37,
   630–643.
