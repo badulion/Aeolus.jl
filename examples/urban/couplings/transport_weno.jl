@@ -56,7 +56,7 @@ function run_stage!(c::TransportWENO, case, ::Val{:transport}, dt)
                          scheme = :weno_z5, workspace = c.ws, bcs = c.bcs)
         tend = view(c.tend.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
         interior_view(q) .+= dt .* tend
-        t.name in case.ledger.water_tracers && (c.dW[] += dt * column_water(case, tend))
+        t.name in case.ledger.water_tracers && (c.dW[] += dt * ledger_water(case, tend))
     end
     return nothing
 end

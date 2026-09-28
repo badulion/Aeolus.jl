@@ -129,19 +129,19 @@ function air_water(case)
     W = 0.0
     for name in case.ledger.water_tracers
         haskey(case.tracers, name) || continue
-        W += column_water(case, interior_view(tracer(case, name)))
+        W += ledger_water(case, interior_view(tracer(case, name)))
     end
     return W
 end
 
 """
-    column_water(case, q) -> kg m⁻²
+    ledger_water(case, q) -> kg m⁻²
 
 ``Σ_k ρ_k Σ_{ij} q\\,Δz / (N_x N_y)`` for an interior-sized array `q`
 (a specific humidity, or its increment): the water it represents per unit
 domain area.
 """
-function column_water(case, q::AbstractArray{<:Real,3})
+function ledger_water(case, q::AbstractArray{<:Real,3})
     l, mesh = case.ledger, case.mesh
     isempty(l.ρ) && (l.ρ = ones(mesh.Nz))
     W = 0.0

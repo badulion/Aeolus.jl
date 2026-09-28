@@ -270,7 +270,7 @@ step:
 | `add_surface!(l, term, F, sfc, dt)` | a W m⁻² map `F` on the columns, over `dt` s, sorted by surface class |
 | `add_water!(l, term, m)` | `m` kg m⁻² of domain added to the air (negative: removed) |
 | `water_tracer!(l, :qi)` | count a new tracer as water in the air (not one that is part of another, like P3's rime mass) |
-| `column_water(case, q)` | ``Σ_k ρ_k Σ_{ij} q Δz / (N_x N_y)``, for measuring a change of a tracer |
+| `ledger_water(case, q)` | ``Σ_k ρ_k Σ_{ij} q Δz / (N_x N_y)``, for measuring a change of a tracer |
 
 **Surface energy.** `:Rn` (net radiation into the surface), `:H`,
 `:LE`, `:G` (sensible, latent and ground heat flux out of it) and `:dS`
@@ -306,6 +306,12 @@ per level, `1` for the Boussinesq case. A coupling that puts a flux into
 the air with a different density than the ledger's shows up as a water
 residual: #131, which introduces a reference density profile, sets
 `ledger.ρ` and the couplings must agree with it.
+
+The water integral runs over every grid cell, solid ones included.
+Today the slab's evaporation and the dew exchange act on level 1 of
+every column, which under a roof is inside the building (#129 moves
+them to the first air cell); the ledger closes either way, so a closed
+water ledger does not show that water sits in solid cells.
 
 `run_case!` prints `ledger_report(case)` at the end of a verbose run.
 The cost is about 1 ms/step on the flagship grid (the two water

@@ -167,6 +167,18 @@ coupling_file(C) = string(first(methods(BC.coupling_name, (Type{C},))).file)
         end
     end
 
+    @testset "BerlinCase shadows no Aeolus export" begin
+        # BerlinCase does `using Aeolus`; a function it defines under an
+        # exported Aeolus name silently hides the src one, and a coupling
+        # that later calls the src function inside BerlinCase gets a
+        # MethodError (the ledger's former `column_water` hid
+        # RadiationFog.column_water this way).
+        shadowed = sort!([n for n in names(Aeolus) if n !== :Aeolus && isdefined(BC, n) &&
+                          Base.binding_module(BC, n) === BC])
+        isempty(shadowed) || @error "BerlinCase defines names Aeolus exports: $(join(shadowed, ", ")). Rename them."
+        @test shadowed == Symbol[]
+    end
+
     ncoupled = length(intersect(mods, keys(used)))
     @info "Berlin coverage: $(length(mods)) Aeolus modules — $ncoupled coupled, " *
           "$(length(BERLIN_EXEMPT)) exempt, $(length(BERLIN_PENDING)) pending" *

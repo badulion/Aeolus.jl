@@ -29,9 +29,9 @@ function run_stage!(c::MicroKessler, case, ::Val{:microphysics}, dt)
     # Kessler conserves ql + qr except for the rain that sediments out of
     # the bottom, so the loss of ql + qr over the step is the surface
     # precipitation (ρ = 1, the density the scheme is called with).
-    Wc0 = column_water(case, interior_view(ql)) + column_water(case, interior_view(qr))
+    Wc0 = ledger_water(case, interior_view(ql)) + ledger_water(case, interior_view(qr))
     apply_kessler_step!(qv, ql, qr, dt; Vt = :spectrum)
-    c.precip = Wc0 - column_water(case, interior_view(ql)) - column_water(case, interior_view(qr))
+    c.precip = Wc0 - ledger_water(case, interior_view(ql)) - ledger_water(case, interior_view(qr))
     # the clamp, booking what it removes (same values as clamp!)
     c.clip = clamp_booked!(interior_view(qv), 0.0, c.qv_max, case.ledger.ρ) *
              case.mesh.dz / (case.mesh.Nx * case.mesh.Ny)
