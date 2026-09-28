@@ -128,7 +128,10 @@ allfinite(x) = all(isfinite, x)
             union!(exercised, BC.coupling_name.(case.couplings))
             sim, bus = case.sim, case.bus
 
-            @test case.clock.n == cfg.nsteps && !case.clock.blowup
+            # nsteps·dt of simulated time (in nsteps steps, unless the
+            # time stepper chooses its own step, #133)
+            @test !case.clock.blowup && isapprox(sim.t, cfg.nsteps * cfg.dt; rtol = 1e-12)
+            BC.variable_dt(typeof(BC.timestepper(case))) || @test case.clock.n == cfg.nsteps
             @test all(allfinite ∘ interior_view, (sim.u, sim.v, sim.w, sim.θ))
             @test all(t -> allfinite(interior_view(t.field)), case.tracers.list)
             @test all(allfinite, (bus.Ts, bus.sw, bus.lw, bus.dew))

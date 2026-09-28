@@ -53,7 +53,6 @@ const BERLIN_PENDING = Dict{Symbol,String}(
     :RadiationCore         => "#130 column radiation (the Era III contract; today reached only indirectly, through the spectral grids of the radiosity materials)",
     :Multigrid             => "#132 pressure-solver option",
     :ML                    => "#132 MLSGS option",
-    :TimeIntegration       => "#133 adaptive dt / IMEX",
     :Particles             => "#134 Lagrangian particles",
     :DataAssimilation      => "#134 nudging assimilation",
     :IO                    => "#134 checkpoint / restart",
