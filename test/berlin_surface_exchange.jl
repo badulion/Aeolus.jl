@@ -133,6 +133,31 @@ const BC = Main.BerlinCase
         sim.t = t_save
     end
 
+    @testset "dew: first air cell of dew_mask columns, at that cell's pressure" begin
+        fd = BC.find_coupling(case, :fog_dew)
+        qv = interior_view(BC.tracer(case, :qv))
+        θs, q0s, ql0 = copy(interior_view(sim.θ)), copy(qv), copy(interior_view(BC.tracer(case, :ql)))
+        Ts0, dew0, sens0 = copy(bus.Ts), copy(bus.dew), copy(bus.sensible)
+        # a cold roof under humid air: dew forms on it
+        I = findfirst(I -> bus.dew_mask[I] && bus.k_air[I] > 3, CartesianIndices(bus.k_air))
+        @test I !== nothing
+        k = bus.k_air[I]
+        bus.Ts .= 330.0                              # no dew anywhere else
+        bus.Ts[I] = 280.0
+        qv[I, k] = 0.009
+        dt = 2.0
+        # the expected deposition, at the pressure of the roof's air cell
+        r = Aeolus.RadiationFog.dew_deposition(0.009, 280.0, fd.p_col[k], dt; dz = dz, ρ = 1.0, dew = 0.0)
+        r1 = Aeolus.RadiationFog.dew_deposition(0.009, 280.0, fd.p_col[1], dt; dz = dz, ρ = 1.0, dew = 0.0)
+        BC.run_stage!(fd, case, Val(:fog_dew), dt)
+        @test r.mass > 0 && r.mass != r1.mass
+        @test bus.dew[I] ≈ r.mass rtol = 1e-12
+        @test fd.H_dew[I] ≈ r.surface_heat / dt rtol = 1e-12
+        @test count(!=(0), bus.dew) == 1
+        interior_view(sim.θ) .= θs; qv .= q0s; interior_view(BC.tracer(case, :ql)) .= ql0
+        bus.Ts .= Ts0; bus.dew .= dew0; bus.sensible .= sens0
+    end
+
     @testset "street β follows the soil water" begin
         I = CartesianIndices(g.sfc)[findfirst(==(BC.SURFACE_STREET), vec(g.sfc))]
         f = SurfaceForcing(sw_down = 700.0, lw_down = 330.0, T_air = 295.0, q_air = 0.006,

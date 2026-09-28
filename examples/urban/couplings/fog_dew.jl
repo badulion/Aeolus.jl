@@ -24,7 +24,7 @@
 #
 # Since #129 the dew exchanges with the first AIR cell of each column
 # (`bus.k_air`: above the roof on building columns, not inside the
-# building), and only over surfaces with no vapour exchange of their own
+# building, at that cell's pressure), and only over surfaces with no vapour exchange of their own
 # (`bus.dew_mask`: moisture availability 0, e.g. roofs and glass). Over a
 # soil column or water the surface exchange's Monin–Obukhov evaporation
 # already turns negative when the air is above saturation at the skin,
@@ -107,14 +107,27 @@ function run_stage!(c::FogDew, case, ::Val{:fog_dew}, dt)
     bus = case.bus
     copyto!(c.dew_start, bus.dew)
     qv = interior_view(tracer(case, :qv))
-    # dew: on the first air cell of the columns in dew_mask (q = 0 elsewhere
-    # gives no deposition, and those columns' reservoirs stay empty)
-    q1 = [bus.dew_mask[I] ? qv[I, bus.k_air[I]] : 0.0 for I in CartesianIndices(bus.dew)]
-    q0 = copy(q1)
-    H_dew = Aeolus.RadiationFog.dew_exchange!(q1, bus.dew, bus.Ts, first(c.p_col), dt;
-                                              dz = case.mesh.dz, ρ = 1.0)
-    for I in CartesianIndices(bus.dew)
-        bus.dew_mask[I] && (qv[I, bus.k_air[I]] += q1[I] - q0[I])
+    # dew: on the first air cell of the columns in dew_mask, at the pressure
+    # of that cell (roof columns exchange tens of metres up). One
+    # dew_exchange! per air level; the columns not at that level see q = 0
+    # and an empty reservoir, which gives no exchange (and those entries
+    # are not copied back).
+    H_dew = zeros(size(bus.dew))
+    q1, d1 = zeros(size(bus.dew)), zeros(size(bus.dew))
+    for k in unique(bus.k_air[bus.dew_mask])
+        at(I) = bus.dew_mask[I] && bus.k_air[I] == k
+        for I in CartesianIndices(q1)
+            q1[I], d1[I] = at(I) ? (qv[I, k], bus.dew[I]) : (0.0, 0.0)
+        end
+        q0 = copy(q1)
+        Hk = Aeolus.RadiationFog.dew_exchange!(q1, d1, bus.Ts, c.p_col[k], dt;
+                                               dz = case.mesh.dz, ρ = 1.0)
+        for I in CartesianIndices(q1)
+            at(I) || continue
+            qv[I, k] += q1[I] - q0[I]
+            bus.dew[I] = d1[I]
+            H_dew[I] = Hk[I]
+        end
     end
     # fog: saturation adjustment in the air
     Aeolus.RadiationFog.fog_adjust!(interior_view(case.sim.θ), qv,
