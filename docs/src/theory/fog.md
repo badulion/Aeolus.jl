@@ -138,7 +138,7 @@ deposit is really frost, which saturates over ice and releases
 
 ## 5. In the urban example
 
-`apply_fog_dew!` (examples/urban/moisture_addons.jl) now delegates to
+`apply_fog_dew!` (examples/urban/couplings/fog_dew.jl) now delegates to
 these functions and is switched on. Enabling it exposed that the
 example's moisture transport, forward-Euler with centered advection,
 is unconditionally unstable: with condensation off, relative humidity

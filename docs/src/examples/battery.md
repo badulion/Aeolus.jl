@@ -42,8 +42,18 @@ Combine several physics modules in one run.
 
 ## Tier 3 — Flagship urban simulation
 
-`examples/urban/urban_diurnal.jl` — the "everything on" showcase over a
-real-format OSM city.
+!!! note "Historical section"
+    This section describes `examples/urban/urban_diurnal.jl`, a second
+    script that integrated the equations over the synthetic sample city.
+    It was removed in #126: there is now one simulation, the Berlin case
+    (see [Real Berlin — Alexanderplatz OSM run](@ref) and the
+    [Berlin case design page](../design/berlin_case.md)). The synthetic
+    sample city runs through the same case with
+    `AEOLUS_SCENARIO=mitte_sample`. The setup and numbers below are the
+    old script's and are kept as a record.
+
+`examples/urban/urban_diurnal.jl` (removed) — the "everything on"
+showcase over a real-format OSM city.
 
 **Setup**
 - 1000 × 1000 × 200 m domain, 64 × 64 × 32 grid (dx ≈ 15.6 m)
@@ -249,7 +259,14 @@ public entry points you can compose:
 ## Real Berlin — Alexanderplatz OSM run
 
 `examples/urban/alexanderplatz_diurnal.jl` is **the** simulation — the
-only script in `examples/urban` that integrates the equations. It runs
+only script in `examples/urban` that integrates the equations. Since
+#126 it is a few lines over the `BerlinCase` module
+(`examples/urban/BerlinCase.jl`): `build_case(CaseConfig(:alexanderplatz))`
+then `run_case!`, with every physics coupling in its own file under
+`examples/urban/couplings/`. The [Berlin case design page](../design/berlin_case.md)
+describes the registry, the stage loop and how to add a coupling.
+`AEOLUS_NSTEPS` sets the number of steps and `AEOLUS_OUTPUT_DT` the
+seconds between NetCDF records. It runs
 the full physics against `data/alexanderplatz_real.osm` — an actual Overpass-API
 download of a 1 km × 1 km box around Alexanderplatz, Berlin
 (52.518–52.526 N, 13.402–13.418 E). To (re-)fetch:
@@ -320,7 +337,7 @@ Outputs land in `examples/urban/output/alexanderplatz_*`:
 Below each non-water cell's surface slab the run carries one
 `SoilThermalColumn` from `Aeolus.SoilColumn` (Phase 46, #18). It replaces
 a three-layer explicit soil that was written into the example. The
-example's `UrbanSoil` / `step_soil!` (in `land_surface_addons.jl`) only
+example's `UrbanSoil` / `step_soil!` (in `couplings/soil_urban.jl`) only
 couples that column to the slab, and does no soil physics of its own:
 
 - **The column.** It uses the 10 CLM2–4.5 exponential layers down to
@@ -385,7 +402,8 @@ The minimal schema is:
 Coordinates are meters relative to the mesh origin. Recognised `class`
 values: `roof`, `street`, `park`, `water`. See
 `examples/urban/data/city.geojson` for a working example, and
-`examples/urban/urban_geometry.jl` for the loader / rasterizer.
+`examples/urban/core/geometry.jl` for the loader / rasterizer
+(`examples/urban/core/osm_ingest.jl` for OSM XML).
 
 ### OSM XML
 

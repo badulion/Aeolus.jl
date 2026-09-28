@@ -67,6 +67,7 @@ makedocs(
             "Architecture"                => "design/architecture.md",
             "Multiple dispatch on Location" => "design/dispatch.md",
             "Pluggable pressure solvers"  => "design/pressure_solvers.md",
+            "The Berlin case"             => "design/berlin_case.md",
             "Roadmap"                     => "design/roadmap.md",
             "Long-range roadmap (Eras II–XI)" => "design/longterm_roadmap.md",
         ],
