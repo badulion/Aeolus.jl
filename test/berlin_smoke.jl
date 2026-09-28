@@ -160,11 +160,11 @@ allfinite(x) = all(isfinite, x)
                 print(BC.ledger_report(case))
                 # Midday sun: the surfaces gain radiative energy and warm.
                 @test dom.Rn > 0 && dom.dS > 0
-                # KNOWN (#132): step! leaves the velocity halos at their
-                # predictor values (on step 1 they were never filled), so
-                # the flux-form transport is not conservative. The ledger
-                # books what it creates; with fresh halos it is ~1e-16.
-                @test_broken abs(get(w.sources, :transport, 0.0)) < 1e-12
+                # The flux-form transport conserves water: the scalar-
+                # advection coupling refreshes the velocity halos step!
+                # leaves at their predictor values (#132; before, step 1
+                # alone added 7.5e-3 kg/m²).
+                @test abs(get(w.sources, :transport, 0.0)) < 1e-12
             end
         end
     end
