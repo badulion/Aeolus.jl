@@ -931,4 +931,5 @@ end
     include("era5_snowpack.jl")          # Phase 51: layered snowpack with compaction (#34)
     include("era5_snow_metamorphism.jl") # Phase 51: grain metamorphism and albedo ageing (#35)
     include("era5_snow_liquid.jl")        # Phase 51: snow percolation and refreezing (#36)
+    include("era5_ice_thermodynamics.jl")  # Phase 51  lake and sea ice, BL99 (#37)
 end
