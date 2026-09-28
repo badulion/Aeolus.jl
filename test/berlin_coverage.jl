@@ -51,7 +51,6 @@ const BERLIN_PENDING = Dict{Symbol,String}(
     :GasOptics             => "#130 column radiation",
     :TwoStream             => "#130 column radiation",
     :RadiationCore         => "#130 column radiation (the Era III contract; today reached only indirectly, through the spectral grids of the radiosity materials)",
-    :Anelastic             => "#133 anelastic / pseudo-incompressible core (#131 may use its ReferenceState first)",
     :Multigrid             => "#132 pressure-solver option",
     :ML                    => "#132 MLSGS option",
     :TimeIntegration       => "#133 adaptive dt / IMEX",
