@@ -71,6 +71,7 @@ include("LandSurface.jl")          # Phase 47 (#21): vegetated land column
 include("PlantCanopy.jl")          # Phase 48 (resolved plant canopy)
 include("UrbanSurface.jl")         # Phase 49 (urban facets; needs SurfaceExchange + SurfaceOptics)
 include("BuildingEnergy.jl")       # Phase 50 (indoor air + thermal mass; reuses UrbanSurface columns)
+include("Snowpack.jl")             # Phase 51 (#34): layered snowpack, Era V surface
 
 using .Grids
 using .Fields
@@ -126,6 +127,7 @@ using .LandSurface                 # Phase 47 (#21)
 using .PlantCanopy                 # Phase 48
 using .UrbanSurface                # Phase 49
 using .BuildingEnergy              # Phase 50
+using .Snowpack                    # Phase 51 (#34)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -768,5 +770,24 @@ export BuildingHeatRelease, building_heat_release, energy_consumption, total_hea
 # Phase 49 — TEB canyon-exchange closures used by the BUBBLE / CAPITOUL
 # validation (#30).
 export canyon_wind_speed, rowley_convection_coefficient
+
+# Phase 51 (#34) — Snowpack: layered snowpack with compaction, heat
+# conduction and melt; `LayeredSnowpack <: AbstractSurface`.
+export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
+       Jordan1991Conductivity, Calonne2011Conductivity, snow_thermal_conductivity,
+       AbstractFreshSnowDensity, Anderson1976FreshSnow, Vionnet2012FreshSnow,
+       fresh_snow_density,
+       AbstractSnowCompaction, DestructiveMetamorphism, Anderson1976Compaction,
+       Vionnet2012Compaction, snow_compaction_rate, snow_viscosity,
+       AbstractSnowMetamorphism, NoSnowMetamorphism, snow_metamorphism!,
+       viscosity_grain_factor,
+       AbstractSnowAlbedo, ConstantSnowAlbedo, snowpack_albedo,
+       AbstractSnowLiquidWater, InstantSnowRunoff, snow_liquid_water!,
+       AbstractSnowBottom, SnowGroundTemperature, SnowBottomFlux,
+       SnowLayering, LayeredSnowpack, SnowBudget,
+       snow_nlayers, snow_depth, snow_water_equivalent, snow_bulk_density,
+       snow_layer_density, snow_layer_depths, snowpack_enthalpy, snow_load,
+       snow_compaction!, snow_heat_conduction!, snow_phase_change!,
+       add_snowfall!, add_rainfall!, snow_sublimation!, relayer_snowpack!
 
 end # module

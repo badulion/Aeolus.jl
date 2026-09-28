@@ -928,4 +928,5 @@ end
     include("era5_bestest.jl")           # Phase 50  ASHRAE 140-2020 BESTEST annual loads (#33)
     include("era5_anthropogenic_heat.jl") # Phase 49  anthropogenic heat from the building energy model (#29)
     include("era5_urban_validation.jl")  # Phase 49  BUBBLE / CAPITOUL validation of the urban canopy (#30)
+    include("era5_snowpack.jl")          # Phase 51: layered snowpack with compaction (#34)
 end
