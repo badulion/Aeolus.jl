@@ -60,6 +60,7 @@ makedocs(
             "Air–sea fluxes and waves"    => "theory/air_sea_flux.md",
             "Sea spray and full COARE"     => "theory/sea_spray_coare.md",
             "Sub-grid surface tiles"      => "theory/surface_tiles.md",
+            "Blending height"             => "theory/blending_height.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

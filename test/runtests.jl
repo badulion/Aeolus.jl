@@ -936,4 +936,5 @@ end
     include("era5_air_sea_flux.jl")      # Phase 52  wave-dependent sea-surface roughness (#39)
     include("era5_sea_spray_coare.jl")   # Phase 52  sea spray, full COARE, validation (#40)
     include("era5_surface_tiles.jl")     # Phase 53 sub-grid tile mosaic, flux aggregation (#41)
+    include("era5_blending_height.jl")   # Phase 53 blending height, effective roughness, IBL (#42)
 end

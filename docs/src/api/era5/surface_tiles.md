@@ -25,6 +25,25 @@ last_tile_fluxes(cell)                   # the per-tile fluxes behind it
 turbulent_fluxes(parameter_aggregate(cell), f)   # the parameter-averaged alternative
 ```
 
+## Blending height
+
+A `BlendedMosaic` forces the tiles with the wind, temperature and
+humidity *at the blending height* ``l_b`` instead of at the forcing
+level, so that the tiles exchange with air already mixed over their
+neighbours. The same module provides the blending-height effective
+roughness, closures for ``l_b`` and internal-boundary-layer growth laws;
+theory and validation are in [Blending height](../../theory/blending_height.md).
+
+```julia
+bh   = BouZeidBlendingHeight(3140.0)            # patch length scale (m)
+cell = BlendedMosaic([SlabLand(T = 294.0, z0m = 0.01), SlabLand(T = 294.0, z0m = 0.1)], [0.25, 0.75], bh)
+blending_height(cell)                             # ≈ 289 m
+roughness_lengths(cell).z0m                       # ≈ 0.065 m (LES: 0.063 m)
+fl = step_surface!(cell, SurfaceForcing(T_air = 290.0, U = 8.0, z_ref = 400.0), 60.0)
+last_blending(cell).U_b                           # blended wind at l_b
+ibl_height(DiffusionIBL(), 300.0; z0_up = 0.008, z0_down = 0.032)   # ≈ 26 m
+```
+
 The energy mosaic is distinct from `SurfaceOptics.TiledSurface`, the
 optical (spectral-albedo) mosaic of Era III.
 
