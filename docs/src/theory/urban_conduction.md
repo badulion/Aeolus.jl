@@ -136,8 +136,9 @@ onto the balance with a quadratically falling residual (measured:
 
 Vertical walls fall outside Monin–Obukhov similarity. For them a facet
 may use a fixed convective coefficient, ``H = h_c (T_s - T_\text{air})``
-(`h_convective`). Wind-dependent wall correlations belong with the
-radiosity coupling of the street canyon.
+(`h_convective`). Wind-dependent wall correlations are not implemented
+yet; the [facet–radiosity coupling](urban_radiosity_coupling.md) takes
+the air state next to each facet as an input.
 
 ## 5. Materials and optics: one source of truth
 
@@ -174,7 +175,8 @@ All numbers are from `test/era5_urban_surface.jl`.
 
 **Not yet validated against observations.** The phase target is the
 BUBBLE and CAPITOUL facade and surface temperatures. That comparison
-needs the facet radiosity forcing (canyon shading, sky view) and
+needs the facet radiosity forcing (canyon shading, sky view), which
+[`UrbanFacetScene`](urban_radiosity_coupling.md) now supplies, and
 belongs to the Phase 49 validation issue. What is validated here is the
 numerical solution of the physics: steady, periodic, transient, and the
 bookkeeping of energy.
