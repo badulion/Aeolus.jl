@@ -934,4 +934,5 @@ end
     include("era5_ice_thermodynamics.jl")  # Phase 51  lake and sea ice, BL99 (#37)
     include("era5_ocean_mixed_layer.jl") # Phase 52  water column, cool skin, warm layer (#38)
     include("era5_air_sea_flux.jl")      # Phase 52  wave-dependent sea-surface roughness (#39)
+    include("era5_sea_spray_coare.jl")   # Phase 52  sea spray, full COARE, validation (#40)
 end

@@ -58,6 +58,7 @@ makedocs(
             "Lake and sea ice"            => "theory/ice_thermodynamics.md",
             "Water surfaces (mixed layer)" => "theory/ocean_mixed_layer.md",
             "Air–sea fluxes and waves"    => "theory/air_sea_flux.md",
+            "Sea spray and full COARE"     => "theory/sea_spray_coare.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

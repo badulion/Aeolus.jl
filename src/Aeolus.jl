@@ -855,4 +855,11 @@ export COAREStability, ConvectiveGustiness, gustiness_velocity,
        BulkAirSea, coare30_bulk, coare35_bulk, AirSeaSolution, air_sea_fluxes,
        SeaSurface, sea_surface_solution
 
+# Phase 52 — AirSeaFlux (#40): Andreas sea spray, rain heat flux, the full
+# COARE algorithm (cool skin + warm layer) and its WaterColumn coupling.
+export andreas_friction_velocity, AndreasSpray, spray_wind_functions,
+       spray_dry_radius, spray_equilibrium_temperature, spray_radius_evolution,
+       spray_residence_time, sea_spray_fluxes, rain_heat_flux,
+       COARESolution, coare_fluxes, coare_warm_layer_series, coare_flux_hook
+
 end # module
