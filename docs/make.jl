@@ -46,6 +46,7 @@ makedocs(
             "Vegetated land column"       => "theory/land_surface.md",
             "Resolved plant canopy"       => "theory/plant_canopy.md",
             "Urban facet conduction"      => "theory/urban_conduction.md",
+            "Glazing and window facets"   => "theory/urban_glazing.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

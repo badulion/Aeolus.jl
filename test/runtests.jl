@@ -920,4 +920,5 @@ end
     include("era5_leaf_energy.jl")       # Phase 48  leaf energy balance, leaf temperature (#24)
     include("era5_canopy_profiles.jl")   # Phase 48  within-canopy wind/temperature validation (#25)
     include("era5_urban_surface.jl")     # Phase 49  multi-layer urban facet conduction (#26)
+    include("era5_glazing.jl")           # Phase 49  glazing transmission, window facets (#27)
 end
