@@ -108,7 +108,7 @@ in the integer `order` their couplings declare.
 | `:tracers` | `pollutant` (10) |
 | `:fog_dew` | `fog_dew` (10) |
 | dynamics: `step!` with `:body_force` / `:post_predictor` | `geostrophic` (10) / `ibm` (10), `veg_drag` (20) |
-| `:surface_update` | `surface_slab` (10), `soil_urban` (20, every 30 s), `snow_legacy` (30) |
+| `:surface_update` | `surface_slab` (10), `soil_urban` (20, every 30 s), `snow_legacy` (30), `aq_chem` r_a / v_d refresh (90, every 30 s) |
 | `:column_tendency` | `cooling_prescribed` (10) |
 | `:sanity` | `surface_slab` Ts clamp (10), then the core finiteness check |
 | (ledger) | every coupling's `budget!`, and the change of water in the air (core) |
@@ -411,6 +411,79 @@ code with comments and docstrings removed); reviewed indirect uses go in
 (the core's infrastructure and the Parallel / Backends / SpectralElement
 scaffolds), 30 pending.
 
+## Air quality: chemistry and deposition (#135)
+
+The `:chemistry` slot's default provider `:nox_o3_voc` (`aq_chem.jl`)
+runs the `Aeolus.Chemistry` mechanism ([theory](../theory/urban_chemistry.md))
+on five tracers registered with `advect = true`: NO, NO2, O3, VOC and
+HNO3, in ppb. The `:transport` stage moves them. The example's toy
+mechanism, its deposition table and its dead `apply_wet_deposition!`
+are gone. What stays in the coupling is case data: the emission
+inventory, the class → surface-kind map and the roughness per class.
+
+Every step in `:chemistry`, in this order:
+
+1. Emissions go into the first air cell `k_air` of each column (above the
+   roof on building columns). Traffic NOx is emitted on street and
+   building-adjacent columns: 2 µg m⁻² s⁻¹ as NO2 at the morning peak,
+   10 % primary NO2, with an assumed diurnal shape (`traffic_profile`).
+   Isoprene is emitted on park columns: 0.3 µg m⁻² s⁻¹ in full sun,
+   scaled by J(NO2). Both are order-of-magnitude estimates, not a
+   Berlin inventory.
+2. `apply_photochemistry!` with the clear-sky `j_NO2(μ₀)` of the current
+   sun, OH prescribed as 5 × 10⁶ cm⁻³ × J/J_max, and the level-mean T
+   and the 8 km scale-height p per level.
+3. Dry deposition of NO, NO2, O3 and HNO3 from `k_air` with
+   ``v_d = 1/(r_a + r_b + r_c)``.
+4. Rain scavenging of HNO3 by `qr`.
+
+In `:surface_update`, on the surface cadence, `r_a = 1/(C_H U)` and `u*`
+are recomputed per column. They come from
+`SurfaceExchange.solve_surface_layer` between the skin `bus.Ts` and the
+first air cell (cell-centre wind, θ, qv at `z = Δz/2`), with
+`z0h = z0m/10` and the per-class `z0m` that #129 gives its surfaces. Once
+#129 (PR #158) is merged, the bus carries u* and the roughness per
+column, and this coupling should read them rather than solve again.
+
+`physics[:chemistry] = :off` (provider of `NoChem`) removes the species.
+It is not the default. The smoke matrix also runs a `night titration`
+variant (start 00:30, J = OH = 0).
+
+### Measured (flagship grid 64 × 64 × 32, 20 June, 12:00–12:30, 900 steps)
+
+| quantity | default (`Ts0` = 285 K) | warm surfaces (`Ts0` = 300 K) |
+| :-- | --: | --: |
+| Leighton ratio φ, median over air cells with NO, O3 > 0.01 ppb, at 12:30 | 1.0019 | 1.0014 |
+| φ / φ_ext (peroxy-radical steady state), median | 0.9968 | 0.9965 |
+| r_a street / roof / park, median (s m⁻¹) | 1.7e5 / 4.7e6 / 6.1e8 | 85 / 82 / 77 |
+| u* street / park, median (m s⁻¹) | 0.003 / 0.000 | 0.087 / 0.065 |
+| v_d O3 park / street (mm s⁻¹) | ≈ 0 | 3.17 / 0.46 |
+| v_d NO2, HNO3 street (mm s⁻¹) | ≈ 0 | 1.52, 5.72 |
+| mean dry deposition flux O3 / NO2 / HNO3 (nmol m⁻² s⁻¹) | 0.019 / 0.008 / 0.001 | 1.19 / 0.63 / 0.14 |
+| mean emission NO / NO2 / isoprene (nmol m⁻² s⁻¹) | 17.9 / 2.0 / 0.50 | same |
+| surface-layer NO / NO2 / O3 at 12:30 (ppb) | 13.5 / 16.3 / 31.6 | 8.7 / 11.5 / 33.6 |
+
+The default flagship starts its slab surfaces 8 K below the air. At noon
+the surface layer is then so stable that `solve_surface_layer` clamps ζ
+at its limit, `r_a` reaches 1e5–1e9 s m⁻¹, and dry deposition is
+effectively off for the first hour. This is the MOST answer for that
+state, not a defect of the deposition. With #129's soil skins the
+streets turn unstable within minutes. The periodic domain has no inflow
+of background air, so emitted NOx accumulates: surface-layer NO rises
+from 1.7 to 8.7 ppb in 30 min.
+
+Wet deposition, measured in the smoke window with `qr = 1e-4` seeded in
+levels 2–4: the HNO3 removed per step equals ``s[\mathrm{HNO_3}]\,(Σ q_r Δz)\,Δt``
+to 0.1 %. The rain sediments out in about four steps.
+
+**Cost.** On the flagship grid the step goes from 43.1 to 101.1 ms (300
+steps from 12:00, loaded machine). The WENO-Z5 transport of the five
+species adds 44 ms, 8.8 ms per tracer; the photochemistry adds 11.2 ms
+(85 ns per cell); the r_a refresh adds 2–3 ms averaged over steps. The
+chemistry stays on by default because the flagship is meant to exercise
+all the physics, and `:off` exists for runs that do not need air
+quality.
+
 ## Validation of the refactor (#126)
 
 The refactor had to be bit-for-bit. On a 1 h run (`AEOLUS_NSTEPS=1800`,
@@ -445,7 +518,7 @@ later issue.
 | isothermal pressure profile for fog/dew, no virtual buoyancy | `fog_dew.jl` | #131 |
 | `qr` sedimented but not advected; qv clamp | `micro_kessler.jl` | #143 |
 | glass is a synthetic roof mask | `glass.jl` | #144 |
-| chemistry/aerosol species not advected or output; toy mechanism | `aq_chem.jl`, `aq_aerosol.jl` | #135, #147 |
+| toy aerosol: not advected or output, zero with no source; its PM deposition table | `aq_aerosol.jl` (table in `aq_chem.jl`) | #147 |
 | OSM `&&`/`||` precedence; patches overwrite roofs | `core/osm_ingest.jl`, `core/geometry.jl` | #141 |
 
 **Found during #126: stale velocity halos in the scalar transport.**
