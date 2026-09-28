@@ -51,6 +51,7 @@ makedocs(
             "Building energy (zone)"      => "theory/building_energy.md",
             "HVAC and exhaust heat"       => "theory/hvac_exhaust.md",
             "Occupancy and BESTEST"       => "theory/occupancy_validation.md",
+            "Anthropogenic heat (BEM)"    => "theory/anthropogenic_heat.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

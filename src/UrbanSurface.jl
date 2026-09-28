@@ -1097,6 +1097,20 @@ function step_urban_facets!(u::UrbanFacetScene{T}, forcing, dt::Real;
                             δT::Real = 0.01, kwargs...) where {T}
     coupling in (:implicit, :lagged) ||
         throw(ArgumentError("step_urban_facets!: coupling must be :implicit or :lagged"))
+    if coupling === :lagged
+        lw, Qsw = _scene_radiation!(u, forcing, dt; L_sky, sw, sun, dni, dhi, samples)
+        return _step_lagged!(u, forcing, lw, Qsw, dt; δT, kwargs...)
+    end
+    sys = _prepare_scene_step(u, forcing, dt; L_sky, sw, sun, dni, dhi, samples, δT, kwargs...)
+    x, _, _ = _solve_scene_step(sys)
+    return _apply_scene_step!(u, sys, x)
+end
+
+# Validate the step and solve the radiation that does not depend on the
+# facet temperatures of the new step: the longwave at the current skins and
+# the incident shortwave. Sets `sw_absorbed` and `L_sky`.
+function _scene_radiation!(u::UrbanFacetScene{T}, forcing, dt; L_sky, sw, sun, dni, dhi,
+                           samples) where {T}
     dt > 0 || throw(ArgumentError("step_urban_facets!: dt must be positive"))
     n = nfacets(u)
     forcing isa AbstractVector && length(forcing) != n &&
@@ -1110,8 +1124,62 @@ function step_urban_facets!(u::UrbanFacetScene{T}, forcing, dt::Real;
     for i in 1:n
         u.sw_absorbed[i] = (1 - fs[i].albedo) * Qsw[i]
     end
-    coupling === :lagged && return _step_lagged!(u, forcing, lw, Qsw, dt; δT, kwargs...)
+    return lw, Qsw
+end
 
+# ---- the implicit step as a linear system ----------------------------------
+#
+# Every facet column step is affine in (i) an extra flux imposed on its outer
+# face, c_i, and (ii) the temperature of the interior environment of its inner
+# face. `_prepare_scene_step` measures both responses with trial steps (the
+# column state is restored after each): the θ-weighted skin increment
+#     x_i = a_i + b_i c_i + d_i y_k
+# and the flux into the column at the inner face
+#     F_i = F0_i + e_i c_i + g_i y_k,
+# where y_k is the change over the step of the temperature of the interior
+# node k the facet is bound to (`node[i] = k`, 0 for none: the interior
+# environment is then fixed). The longwave exchange closes c = G_off x.
+#
+# Interior nodes are what a building energy model adds: the zone air behind a
+# set of roof and wall facets, whose own balance is linear in y_k,
+#     lhs_k y_k = R_k + Φ_k + Σ_{i∈k} A_i (q_i - F_i),
+# with q_i the radiative flux imposed on the inner face (in `f.interior.q`),
+# lhs_k and R_k whatever else the node exchanges with (the caller's), and Φ_k
+# a heat input that is either given (a free node) or the unknown that holds
+# y_k at a prescribed value (a node on its thermostat setpoint).
+# `_solve_scene_step` solves facets and nodes together, so the exchange
+# between a zone and its facets is as implicit as the one between facets.
+struct _SceneStep{T, F}
+    forcing::F
+    dt::T
+    lw::Radiosity.LongwaveSolution{T}
+    G::Matrix{T}
+    dEdT::Vector{T}
+    N0::Vector{T}
+    outers::Vector{ColumnBoundary{T}}
+    fl0s::Vector{SurfaceFluxes{T}}
+    dLE::Vector{T}
+    a::Vector{T}
+    b::Vector{T}
+    d::Vector{T}
+    F0::Vector{T}
+    e::Vector{T}
+    g::Vector{T}
+    node::Vector{Int}
+    area::Vector{T}
+    q::Vector{T}
+end
+
+function _prepare_scene_step(u::UrbanFacetScene{T}, forcing, dt::Real;
+                             node::AbstractVector{<:Integer} = zeros(Int, nfacets(u)),
+                             L_sky::Real = _sky_irradiance(forcing),
+                             sw::Union{Nothing, ShortwaveSolution} = nothing,
+                             sun = nothing, dni::Real = 0, dhi::Real = 0,
+                             samples::Int = 2, δT::Real = 0.01, kwargs...) where {T}
+    lw, Qsw = _scene_radiation!(u, forcing, dt; L_sky, sw, sun, dni, dhi, samples)
+    n = nfacets(u)
+    length(node) == n || throw(ArgumentError("step_urban_facets!: `node` needs one entry per facet"))
+    fs = u.facets
     σ = T(STEFAN_BOLTZMANN)
     J = u.response.dN_dE
     dEdT = T[4 * f.emissivity * σ * f.T_skin^3 for f in fs]
@@ -1120,7 +1188,8 @@ function step_urban_facets!(u::UrbanFacetScene{T}, forcing, dt::Real;
     outers = Vector{ColumnBoundary{T}}(undef, n)
     fl0s = Vector{SurfaceFluxes{T}}(undef, n)
     dLE = zeros(T, n)
-    a = zeros(T, n); b = zeros(T, n)
+    a = zeros(T, n); b = zeros(T, n); d = zeros(T, n)
+    F0 = zeros(T, n); e = zeros(T, n); g = zeros(T, n)
     Δq = T(100)
     for (i, f) in enumerate(fs)
         fi = _facet_forcing(_air(forcing, i), Qsw[i], lw.incident[i])
@@ -1132,47 +1201,128 @@ function step_urban_facets!(u::UrbanFacetScene{T}, forcing, dt::Real;
         dH = (fl1.H - fl0.H) / T(δT)
         dLE[i] = (fl1.LE - fl0.LE) / T(δT)
         fl0s[i] = fl0
-        F0 = u.sw_absorbed[i] + N0[i] - fl0.H - fl0.LE
+        F0i = u.sw_absorbed[i] + N0[i] - fl0.H - fl0.LE
         Fp = G[i, i] - dH - dLE[i]
         Fp < 0 || (Fp = min(G[i, i], -eps(T)))
-        outers[i] = ColumnBoundary{T}(Ts, -Fp, F0)
-        # The column step is affine in an imposed extra flux: two trial
-        # steps (state restored after each) give x_i = a_i + b_i c_i.
+        outers[i] = ColumnBoundary{T}(Ts, -Fp, F0i)
+        # trial steps, state restored after each
         save = copy(f.column.T)
-        a[i] = _advance_column!(f, outers[i], dt)[4]
+        _, Fi_a, _, a[i] = _advance_column!(f, outers[i], dt)
+        F0[i] = Fi_a
         copyto!(f.column.T, save)
-        o2 = ColumnBoundary{T}(Ts, -Fp, F0 + Δq)
-        b[i] = (_advance_column!(f, o2, dt)[4] - a[i]) / Δq
+        o2 = ColumnBoundary{T}(Ts, -Fp, F0i + Δq)
+        _, Fi_b, _, xb = _advance_column!(f, o2, dt)
+        b[i] = (xb - a[i]) / Δq
+        e[i] = (Fi_b - Fi_a) / Δq
         copyto!(f.column.T, save)
+        if node[i] != 0
+            ib = f.interior
+            f.interior = ColumnBoundary{T}(ib.T_env + one(T), ib.h, ib.q)
+            _, Fi_d, _, xd = _advance_column!(f, outers[i], dt)
+            d[i] = xd - a[i]
+            g[i] = Fi_d - Fi_a
+            f.interior = ib
+            copyto!(f.column.T, save)
+        end
     end
-    M = Matrix{T}(I, n, n)
-    @inbounds for j in 1:n, i in 1:n
-        i == j && continue
-        M[i, j] = -b[i] * G[i, j]
+    return _SceneStep{T, typeof(forcing)}(forcing, T(dt), lw, G, dEdT, N0, outers, fl0s, dLE, a, b, d,
+                                          F0, e, g, collect(Int, node), copy(u.vf.area),
+                                          T[f.interior.q for f in fs])
+end
+
+# Solve the facets (and interior nodes) of a prepared step. With nodes, pass
+# per node `lhs`, `R` (see above), `pinned[k]` and either the prescribed
+# increment `y[k]` (pinned) or the heat input `Φ[k]` (free). Returns the skin
+# increments x, the node increments y and the node heat inputs Φ.
+function _solve_scene_step(s::_SceneStep{T}; lhs::AbstractVector = T[], R::AbstractVector = T[],
+                           pinned::AbstractVector{Bool} = falses(length(lhs)),
+                           y::AbstractVector = zeros(T, length(lhs)),
+                           Φ::AbstractVector = zeros(T, length(lhs))) where {T}
+    n = length(s.a); m = length(lhs)
+    length(R) == length(pinned) == length(y) == length(Φ) == m ||
+        throw(ArgumentError("interior nodes: lhs, R, pinned, y and Φ must have one entry per node"))
+    all(k -> 0 <= k <= m, s.node) || throw(ArgumentError("interior nodes: facet bound to a missing node"))
+    M = zeros(T, n + m, n + m)
+    rhs = zeros(T, n + m)
+    @inbounds for i in 1:n
+        M[i, i] = one(T)
+        for j in 1:n
+            i == j && continue
+            M[i, j] = -s.b[i] * s.G[i, j]
+        end
+        rhs[i] = s.a[i]
     end
-    x = lu!(M) \ a
-    c = G * x
+    for k in 1:m
+        rhs[n + k] = R[k]
+        if pinned[k]
+            M[n + k, n + k] = -one(T)                 # unknown: Φ_k
+            rhs[n + k] -= lhs[k] * y[k]
+        else
+            M[n + k, n + k] = T(lhs[k])               # unknown: y_k
+            rhs[n + k] += Φ[k]
+        end
+    end
+    @inbounds for i in 1:n
+        k = s.node[i]
+        k == 0 && continue
+        A = s.area[i]
+        # facet: x_i - d_i y_k
+        # node:  A_i e_i c_i + A_i g_i y_k, moved to the left; A_i (q_i - F0_i) to R
+        rhs[n + k] += A * (s.q[i] - s.F0[i])
+        for j in 1:n
+            j == i && continue
+            M[n + k, j] += A * s.e[i] * s.G[i, j]
+        end
+        if pinned[k]
+            rhs[i] += s.d[i] * y[k]
+            rhs[n + k] -= A * s.g[i] * y[k]
+        else
+            M[i, n + k] -= s.d[i]
+            M[n + k, n + k] += A * s.g[i]
+        end
+    end
+    sol = n + m == 0 ? T[] : lu!(M) \ rhs
+    x = sol[1:n]
+    yy = T[pinned[k] ? T(y[k]) : sol[n + k] for k in 1:m]
+    ΦΦ = T[pinned[k] ? sol[n + k] : T(Φ[k]) for k in 1:m]
+    return x, yy, ΦΦ
+end
+
+# Advance every facet with the solved skin increments `x` (and node
+# increments `y`: the interior environment of a bound facet becomes
+# T_env + y_k, and stays there). Returns the facet fluxes; the flux into
+# each column at its inner face is `-f.Q_interior`.
+function _apply_scene_step!(u::UrbanFacetScene{T}, s::_SceneStep{T}, x::AbstractVector,
+                            y::AbstractVector = T[]) where {T}
+    fs = u.facets
+    n = length(fs)
+    c = s.G * x
     for i in 1:n
-        c[i] -= G[i, i] * x[i]
+        c[i] -= s.G[i, i] * x[i]
     end
     out = Vector{SurfaceFluxes{T}}(undef, n)
     Fo = zeros(T, n)
     for (i, f) in enumerate(fs)
-        o = outers[i]
+        k = s.node[i]
+        if k != 0
+            ib = f.interior
+            f.interior = ColumnBoundary{T}(ib.T_env + T(y[k]), ib.h, ib.q)
+        end
+        o = s.outers[i]
         outer = ColumnBoundary{T}(o.T_env, o.h, o.q + c[i])
-        Fo[i], Fi, Tf_new, u.skin_increment[i] = _advance_column!(f, outer, dt)
+        Fo[i], Fi, Tf_new, u.skin_increment[i] = _advance_column!(f, outer, s.dt)
         f.T_skin = Tf_new
         f.G = Fo[i]
         f.Q_interior = -Fi
     end
     xa = u.skin_increment
-    u.lw_net .= N0 .+ G * xa
+    u.lw_net .= s.N0 .+ s.G * xa
     for (i, f) in enumerate(fs)
-        u.lw_emission[i] = lw.emitted[i] + dEdT[i] * xa[i]
+        u.lw_emission[i] = s.lw.emitted[i] + s.dEdT[i] * xa[i]
         Rn = u.sw_absorbed[i] + u.lw_net[i]
-        LE = fl0s[i].LE + dLE[i] * xa[i]
+        LE = s.fl0s[i].LE + s.dLE[i] * xa[i]
         H = Rn - LE - Fo[i]
-        out[i] = SurfaceFluxes{T}(Rn, H, LE, Fo[i], fl0s[i].τ, LE / surface_latent_heat(f))
+        out[i] = SurfaceFluxes{T}(Rn, H, LE, Fo[i], s.fl0s[i].τ, LE / surface_latent_heat(f))
     end
     _sync_scene_temperatures!(u)
     return out

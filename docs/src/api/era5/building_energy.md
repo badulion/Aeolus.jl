@@ -38,6 +38,14 @@ The API has three parts:
   `condenser_inlet_temperature`. Humidity: `ZoneForcing(q_out, Q_latent)`,
   `zone_specific_humidity`, `zone_relative_humidity`.
 
+- **Anthropogenic heat** (#29; theory:
+  [Anthropogenic heat from the building energy model](../../theory/anthropogenic_heat.md)):
+  `BuildingHeatRelease`, `building_heat_release`, `energy_consumption`,
+  `total_heat_release`, `anthropogenic_sensible_heat`,
+  `anthropogenic_latent_heat`; zones behind the facets of an
+  `UrbanFacetScene`: `building_facets`, `scene_building_zone`,
+  `step_buildings!`, `anthropogenic_heat_maps`.
+
 - **Occupancy and internal gains** (#33; theory and ASHRAE 140
   validation: [Occupancy schedules and BESTEST validation](../../theory/occupancy_validation.md)):
   `DayProfile`, `WeeklySchedule`, `schedule_value`, `schedule_mean`,
@@ -101,6 +109,38 @@ for n in 0:(7 * 96 - 1)
                       scheduled_hvac(base, tstat, t))
     # r.lighting + r.equipment is the electric demand; h.Q_heating the heating load
 end
+```
+
+## Anthropogenic heat: buildings behind the facets of a street
+
+Issue #29 (theory: [Anthropogenic heat from the building energy
+model](../../theory/anthropogenic_heat.md)). `scene_building_zone` makes
+one zone per building whose envelope *is* the scene's roof and wall
+facets; `step_buildings!` solves the facets and the zones in one
+implicit system. `building_heat_release` splits what a zone and its
+plant give to the outdoors (`BuildingHeatRelease`: `total_heat_release`,
+`energy_consumption`, `anthropogenic_sensible_heat`,
+`anthropogenic_latent_heat`), and `anthropogenic_heat_maps` puts the
+direct part on the plan-area grid next to `aggregate_facet_fluxes`.
+
+```julia
+hm = zeros(8, 12); hm[1:3, :] .= 20; hm[6:8, :] .= 20      # two blocks, H/W = 2
+scene = build_scene(hm, 5.0, 5.0; wall_subdivisions = 2)
+u = UrbanFacetScene(scene, view_factors(scene); T = 285.0,
+                    options = f -> f.kind === :wall ? (h_convective = 10.0, T_interior = 293.15) :
+                                   f.kind === :roof ? (T_interior = 293.15,) : (T_interior = 285.15,))
+west = falses(8, 12); west[1:3, :] .= true
+east = falses(8, 12); east[6:8, :] .= true
+zones = [scene_building_zone(u, fp; window_area = 120.0, window_U = 2.8) for fp in (west, east)]
+hvac  = [IdealLoadsHVAC(T_heat = 293.15, T_cool = 297.15, heating = :boiler) for _ in zones]
+air = SurfaceForcing(lw_down = 280.0, T_air = 278.15, U = 2.0, z_ref = 30.0)
+f = [ZoneForcing(T_out = 278.15, Q_internal = 5.0 * z.floor_area) for z in zones]
+fl, budgets, hb = step_buildings!(u, zones, f, air, 900.0; hvac)
+rel = [building_heat_release(z, fk, b; dt = 900.0, hvac = h, hvac_budget = hbk)
+       for (z, fk, b, h, hbk) in zip(zones, f, budgets, hvac, hb)]
+QF = anthropogenic_heat_maps(u, zones, rel)       # W m⁻² of plan area, (H, LE)
+agg = aggregate_facet_fluxes(u, fl)                # the facets' own H, LE, …
+H_total = agg.H .+ QF.H                            # what the air above each column receives
 ```
 
 ## The 5R1C reference

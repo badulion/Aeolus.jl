@@ -124,6 +124,16 @@ and surface temperature comparisons belong to the Phase 49 validation
 issue. The air state near each facet (canyon air temperature and wind,
 wall convection coefficients) is an input here and is not modelled.
 
+**Buildings behind the facets (#29).** The implicit step is built from
+three pieces: trial column steps, one dense solve, and the final column
+steps. A facet can also be bound to an *interior node*, the air of the
+building zone behind it. A third trial step then measures the column's
+response to that node's temperature, and the zones' air temperatures
+join the dense solve. `BuildingEnergy.step_buildings!` uses this; see
+[Anthropogenic heat from the building energy model](anthropogenic_heat.md).
+Without nodes the system is the one above, and every number in §4 is
+unchanged.
+
 ## References
 
 - Hottel, H. C. & Sarofim, A. F. (1967). *Radiative Transfer*.
