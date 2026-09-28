@@ -930,4 +930,5 @@ end
     include("era5_urban_validation.jl")  # Phase 49  BUBBLE / CAPITOUL validation of the urban canopy (#30)
     include("era5_snowpack.jl")          # Phase 51: layered snowpack with compaction (#34)
     include("era5_snow_metamorphism.jl") # Phase 51: grain metamorphism and albedo ageing (#35)
+    include("era5_snow_liquid.jl")        # Phase 51: snow percolation and refreezing (#36)
 end
