@@ -370,8 +370,8 @@ for n in 1:nsteps
         # This is an explicit approximation, and worth naming: collapsing a
         # whole facade to a single temperature is a limitation of the
         # surface scheme, not of the radiosity solve, which resolves every
-        # facet individually. A multi-layer urban canopy (Era V, Phase 49)
-        # is what removes it.
+        # facet individually. `UrbanFacetScene` (Era V, Phase 49) removes
+        # it: one conduction column and skin temperature per facet.
         ad = max.(forcing.area_density, 1.0)
         σSB = 5.670374419e-8
         sw_arr .= forcing.sw_effective ./ ad
