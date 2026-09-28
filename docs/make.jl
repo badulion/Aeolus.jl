@@ -53,6 +53,7 @@ makedocs(
             "Occupancy and BESTEST"       => "theory/occupancy_validation.md",
             "Anthropogenic heat (BEM)"    => "theory/anthropogenic_heat.md",
             "BUBBLE / CAPITOUL validation" => "theory/urban_validation.md",
+            "Layered snowpack"            => "theory/snowpack.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -113,6 +114,7 @@ makedocs(
                 "PlantCanopy"                  => "api/era5/plant_canopy.md",
                 "UrbanSurface"                 => "api/era5/urban_surface.md",
                 "BuildingEnergy"               => "api/era5/building_energy.md",
+                "Snowpack"                     => "api/era5/snowpack.md",
             ],
         ],
         "Examples" => [
