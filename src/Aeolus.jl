@@ -69,6 +69,7 @@ include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equat
 include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
 include("LandSurface.jl")          # Phase 47 (#21): vegetated land column
 include("PlantCanopy.jl")          # Phase 48 (resolved plant canopy)
+include("UrbanSurface.jl")         # Phase 49 (urban facets; needs SurfaceExchange + SurfaceOptics)
 
 using .Grids
 using .Fields
@@ -122,6 +123,7 @@ using .SoilColumn                  # Phase 46
 using .Photosynthesis              # Phase 47
 using .LandSurface                 # Phase 47 (#21)
 using .PlantCanopy                 # Phase 48
+using .UrbanSurface                # Phase 49
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -631,6 +633,7 @@ export SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal
        freezing_matric_potential, supercooled_liquid_content, PowerLawIceImpedance,
        SoilThermalColumn, step_soil_heat!, set_soil_temperature!,
        soil_enthalpy, soil_ice_mass
+
 # Phase 46 (#17) — SoilColumn: water table / unconfined aquifer (SIMTOP).
 # The helpers aquifer_impermeable_fraction, gardner_two_point_flux and
 # bottom_water_storage stay qualified.
@@ -668,6 +671,7 @@ export VegetationParameters, pft_vegetation,
        canopy_roughness, undercanopy_transfer_coefficient,
        VegetatedLandColumn, LandSurfaceDiagnostics, LandSurfaceBudget,
        set_leaf_area!, radiative_temperature
+
 # Phase 48 — PlantCanopy: leaf-area-density profiles and implicit
 # (unconditionally stable) canopy drag.
 export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD, TabulatedLAD,
@@ -698,5 +702,20 @@ export AbstractLeafBoundaryLayer, CampbellNormanBoundaryLayer, CLMLeafBoundaryLa
 # displacement height, tabulated (measured) LAD profiles.
 export CanopyScalarSolution, solve_canopy_scalar_column, canopy_displacement_height,
        canopy_mixing_length, harman_finnigan_scalar_diffusivity
+
+# Phase 49 — UrbanSurface: per-facet multi-layer wall conduction. The
+# material-property accessors (volumetric_heat_capacity,
+# thermal_diffusivity, thermal_admittance) are generic names other Era V
+# modules may want, so they stay qualified: `Aeolus.UrbanSurface.thermal_admittance`.
+export ThermalMaterial, thermal_material, thermal_material_names,
+       WallLayer, thermal_resistance, thermal_transmittance,
+       ISO6946_SURFACE_RESISTANCE,
+       ColumnBoundary, fixed_temperature_boundary, heat_flux_boundary,
+       convective_boundary,
+       ConductionColumn, step_conduction!, face_temperature,
+       column_heat_content, cell_centers,
+       UrbanFacet, interior_heat_flux, set_interior_boundary!,
+       set_interior_temperature!, facet_layer_temperatures,
+       example_roof_layers, example_wall_layers, example_ground_layers
 
 end # module

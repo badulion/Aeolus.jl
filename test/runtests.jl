@@ -919,4 +919,5 @@ end
     include("era5_canopy_radiation.jl")  # Phase 48  canopy SW two-stream, sunlit/shaded, LW (#23)
     include("era5_leaf_energy.jl")       # Phase 48  leaf energy balance, leaf temperature (#24)
     include("era5_canopy_profiles.jl")   # Phase 48  within-canopy wind/temperature validation (#25)
+    include("era5_urban_surface.jl")     # Phase 49  multi-layer urban facet conduction (#26)
 end
