@@ -59,6 +59,7 @@ makedocs(
             "Water surfaces (mixed layer)" => "theory/ocean_mixed_layer.md",
             "Air–sea fluxes and waves"    => "theory/air_sea_flux.md",
             "Sea spray and full COARE"     => "theory/sea_spray_coare.md",
+            "Sub-grid surface tiles"      => "theory/surface_tiles.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -123,6 +124,7 @@ makedocs(
                 "IceThermodynamics"            => "api/era5/ice_thermodynamics.md",
                 "OceanMixedLayer"              => "api/era5/ocean_mixed_layer.md",
                 "AirSeaFlux"                   => "api/era5/air_sea_flux.md",
+                "SurfaceTiles"                 => "api/era5/surface_tiles.md",
             ],
         ],
         "Examples" => [
