@@ -165,7 +165,8 @@ mutable struct FogColumn{R<:FogRadiation}
     last_out::Float64
 end
 
-const _KARMAN = 0.4
+# von Kármán constant: the Era V SurfaceExchange value, not a local copy.
+const _KARMAN = DEFAULT_SURFACE_CONSTANTS.κ
 
 # =========================================================================
 # Construction

@@ -85,6 +85,7 @@ using ..GasOptics: correlated_k_optics, us_standard_column
 using ..TwoStream: mie_cloud_optics, two_stream_solver, solve_lw!, solve_sw!
 using ..AerosolCloud: droplet_effective_radius
 using ..Superdroplet: terminal_velocity
+using ..SurfaceExchange: DEFAULT_SURFACE_CONSTANTS   # von Kármán constant
 using ..SolarGeometry: solar_time, solar_position, earth_sun_distance_factor
 import ..TimeSteppers: step!      # the column extends the generic step!/run!
 import ..Simulations: run!

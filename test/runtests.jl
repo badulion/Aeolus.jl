@@ -899,3 +899,12 @@ end
         include("era4_fog.jl")             # Phase 44  fog / dew coupling (#11)
         include("era4_radiation_fog.jl")   # Phase 44  radiation fog feedback (#9)
 end
+
+# =========================================================================
+# Era V — high-fidelity land, urban and surface exchange (Phases 46-53)
+# =========================================================================
+# `SurfaceExchange` is the era contract; later phases append here.
+
+@testset "Era V" begin
+    include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
+end
