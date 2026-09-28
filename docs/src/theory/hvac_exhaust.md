@@ -112,7 +112,8 @@ Q_{exh,s} + Q_{exh,l} = P_{heat} + P_{cool} + Q_{cool} - Q_{heat}.
   air.
 
 `HVACBudget` reports these terms separately so that the canopy coupling
-(#29) can place them.
+(#29, [Anthropogenic heat from the building energy model](anthropogenic_heat.md))
+can place them: `anthropogenic_heat_maps` puts them at the building's roofs.
 
 ## 4. The feedback loop
 
