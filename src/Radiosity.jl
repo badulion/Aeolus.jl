@@ -89,8 +89,9 @@ module Radiosity
 # first-order accurate in the subdivision — typically a few times 1e-3 of the
 # pair's exchange area. Scenes are assumed opaque and grey within each of the
 # shortwave and longwave bands, reflections diffuse (Lambertian), and the sky
-# isotropic. Specular glazing needs a BRDF and is out of scope here; see
-# `examples/urban/glass_material.jl`.
+# isotropic. Specular glazing needs a BRDF and is out of scope here; the
+# angle-dependent reflection, absorption and transmission of a glazed
+# facet are `UrbanSurface.glazing_optics` / `WindowFacet` (Phase 49).
 #
 # Dependency note. `SolarGeometry` (Phase 38) is included *after* this module
 # in `src/Aeolus.jl`, so it cannot be `using`-ed here. `solar_unit_vector`
@@ -127,6 +128,7 @@ export Facet, facet_corners, facet_sample_points, facet_edges,
        solve_radiosity_direct, solve_radiosity_iterative,
        ShortwaveSolution, solve_shortwave,
        LongwaveSolution, solve_longwave,
+       LongwaveResponse, longwave_response,
        effective_albedo, longwave_trapping_factor,
        UrbanRadiationForcing, aggregate_to_grid,
        ray_blocked, segment_blocked
@@ -2120,6 +2122,86 @@ function longwave_trapping_factor(s::RadiosityScene{T}, vf::ViewFactors{T},
         den += vf.area[i] * ε[i] * (σ * f.temperature^4 - T(L_sky))
     end
     return den == 0 ? T(NaN) : num / den
+end
+
+"""
+    LongwaveResponse{T}
+
+The longwave radiosity system written as a **linear map** from the facet
+emission to the net longwave each facet absorbs. Returned by
+[`longwave_response`](@ref); per unit facet area,
+
+```math
+N_i \\;=\\; \\varepsilon_i Q_i - \\varepsilon_i\\sigma T_i^4
+     \\;=\\; \\sum_j J_{ij}\\,E_j + j^{sky}_i\\,L_{sky},
+\\qquad E_j = \\varepsilon_j \\sigma T_j^4 .
+```
+
+  * `dN_dE`      — `J`, `n × n`: the change in facet `i`'s net longwave gain
+                   per W m⁻² of extra emission by facet `j`
+  * `dN_dLsky`   — `j^{sky}`, length `n`: the same for the sky irradiance
+  * `emissivity` — the facet emissivities it was built with; `J` depends on
+                   geometry and emissivity only, **not on temperature**, so it
+                   is valid until the emissivities change
+
+`N = -LongwaveSolution.net_loss` for any temperatures and sky.
+"""
+struct LongwaveResponse{T<:AbstractFloat}
+    dN_dE::Matrix{T}
+    dN_dLsky::Vector{T}
+    emissivity::Vector{T}
+end
+
+"""
+    longwave_response(scene, vf) -> LongwaveResponse
+
+The Jacobian of the longwave radiosity solution with respect to the facet
+emission and the sky irradiance. Eliminating the radiosity
+`B = E + (1-ε)Q` from `Q = F B + F_sky L_sky` gives
+
+```math
+Q = (I - F\\,\\mathrm{diag}(1-\\varepsilon))^{-1}\\,(F E + F_{sky} L_{sky}),
+```
+
+so the net absorbed longwave `N = diag(ε) Q - E` is **exactly linear** in the
+emission `E`; the only nonlinearity of longwave exchange is `E = εσT⁴`. Hence
+
+```math
+J = \\mathrm{diag}(\\varepsilon)\\,(I - F\\,\\mathrm{diag}(1-\\varepsilon))^{-1} F - I,
+\\qquad
+j^{sky} = \\mathrm{diag}(\\varepsilon)\\,(I - F\\,\\mathrm{diag}(1-\\varepsilon))^{-1} F_{sky},
+```
+
+one LU factorisation of the same operator [`solve_longwave`](@ref) solves.
+
+This is what an implicit surface scheme needs: with ``∂E_j/∂T_j = 4ε_jσT_j^3``,
+``∂N_i/∂T_j = J_{ij}\\,4ε_jσT_j^3`` couples every facet's energy balance to
+every other facet's temperature within one time step. Two properties make it
+conservative (both are asserted in the test suite):
+
+  * **Reciprocity of total exchange areas** (Hottel): for `i ≠ j`,
+    `A_i J_ij ε_j = A_j J_ji ε_i`.
+  * **Closure**: `Σ_i A_i J_ij = -A_j × (fraction of j's emission that
+    escapes to the sky)`; in an enclosure with no sky the area-weighted
+    column sums vanish, so extra emission by one facet is absorbed, in full,
+    by the others.
+"""
+function longwave_response(s::RadiosityScene{T}, vf::ViewFactors{T}) where {T}
+    n = nfacets(s)
+    length(vf.F_sky) == n ||
+        error("longwave_response: view factors have $(length(vf.F_sky)) " *
+              "facets, scene has $n")
+    ε = facet_emissivities(s)
+    M = Matrix{T}(undef, n, n)
+    @inbounds for j in 1:n, i in 1:n
+        M[i, j] = (i == j ? one(T) : zero(T)) - vf.F[i, j] * (one(T) - ε[j])
+    end
+    X = lu!(M) \ hcat(vf.F, vf.F_sky)
+    J = ε .* X[:, 1:n]
+    @inbounds for i in 1:n
+        J[i, i] -= one(T)
+    end
+    return LongwaveResponse{T}(J, ε .* X[:, n+1], ε)
 end
 
 # =========================================================================
