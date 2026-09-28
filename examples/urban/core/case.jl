@@ -32,7 +32,9 @@ A built case: `cfg`, `mesh`, `sim` (the `BoussinesqSimulation`), `geom`
 ([`Geometry`](@ref)), `bus` ([`SurfaceBus`](@ref)), `tracers`
 ([`TracerRegistry`](@ref)), `ledger`, the enabled `couplings` (registry
 order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
-NetCDF `output` (or `nothing`) and the `io` for log lines.
+NetCDF `output` (or `nothing`), the `io` for log lines, the composed
+`step!` hooks, and `timing` (wall seconds per `(stage, coupling)`, see
+[`timing_report`](@ref)).
 """
 mutable struct Case{M, S, G<:Geometry}
     cfg::CaseConfig
@@ -49,6 +51,7 @@ mutable struct Case{M, S, G<:Geometry}
     io::IO
     body_force::Union{Nothing,Function}
     post_predictor::Union{Nothing,Function}
+    timing::Dict{Tuple{Symbol,Symbol},Float64}
 end
 
 "The enabled coupling called `name`, or `nothing`."
@@ -116,7 +119,7 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time())
     case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), Ledger(),
                 AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
-                nothing, io, nothing, nothing)
+                nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}())
 
     # Core moisture tracers. qv and ql are advected by the :transport
     # stage; KNOWN: qr is sedimented by the microphysics but never

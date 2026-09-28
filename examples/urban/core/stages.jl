@@ -51,17 +51,44 @@ function build_schedule!(case)
     bf = case.schedule[:body_force]
     pp = case.schedule[:post_predictor]
     case.body_force = isempty(bf) ? nothing :
-        (s, Δt) -> (for e in bf; run_stage!(e.coupling, case, Val(:body_force), Δt); end; nothing)
+        (s, Δt) -> (for e in bf; timed_run!(case, e, :body_force, Δt); end; nothing)
     case.post_predictor = isempty(pp) ? nothing :
-        (s, Δt) -> (for e in pp; run_stage!(e.coupling, case, Val(:post_predictor), Δt); end; nothing)
+        (s, Δt) -> (for e in pp; timed_run!(case, e, :post_predictor, Δt); end; nothing)
+    empty!(case.timing)
     return case
+end
+
+function timed_run!(case, e::ScheduleEntry, S::Symbol, dt)
+    t0 = time_ns()
+    run_stage!(e.coupling, case, Val(S), dt)
+    key = (S, coupling_name(e.coupling))
+    case.timing[key] = get(case.timing, key, 0.0) + (time_ns() - t0) * 1e-9
+    return nothing
 end
 
 function run_entries!(case, S::Symbol, dt, n, t_old, t_new)
     for e in case.schedule[S]
-        fires(e.cadence, n, t_old, t_new) && run_stage!(e.coupling, case, Val(S), dt)
+        fires(e.cadence, n, t_old, t_new) && timed_run!(case, e, S, dt)
     end
     return nothing
+end
+
+"""
+    timing_report(case) -> String
+
+Wall time spent in each (stage, coupling) entry and in `step!` (the
+dynamics, which includes the `:body_force` / `:post_predictor` entries),
+in seconds and ms per step, largest first.
+"""
+function timing_report(case)
+    n = max(case.clock.n, 1)
+    io = IOBuffer()
+    rows = sort!(collect(case.timing); by = last, rev = true)
+    @printf(io, "Wall time by stage entry over %d steps (s, ms/step):\n", n)
+    for ((S, name), t) in rows
+        @printf(io, "  %-16s %-20s %8.2f %8.2f\n", S, name, t, 1e3 * t / n)
+    end
+    return String(take!(io))
 end
 
 """
@@ -83,7 +110,9 @@ function step_case!(case, dt::Real = case.cfg.dt)
     for S in PRE_DYNAMICS_STAGES[2:end]
         run_entries!(case, S, dt, n, t_old, t_new)
     end
+    t0 = time_ns()
     step!(sim, dt; body_force! = case.body_force, post_predictor! = case.post_predictor)
+    case.timing[(:dynamics, :step!)] = get(case.timing, (:dynamics, :step!), 0.0) + (time_ns() - t0) * 1e-9
     run_entries!(case, :surface_update, dt, n, t_old, t_new)
     run_entries!(case, :column_tendency, dt, n, t_old, t_new)
     # :sanity (coupling guards first, then the core finiteness check)
@@ -128,6 +157,7 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps)
         end
         @printf(io, "Peak ΔT (heat island): %.1f K   max|∇·u| = %.2e\n",
                 maximum(case.bus.Ts) - minimum(case.bus.Ts), max_divergence(case.sim))
+        print(io, timing_report(case))
     end
     return case
 end
