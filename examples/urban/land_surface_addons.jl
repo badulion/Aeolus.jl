@@ -9,8 +9,10 @@
 #   * L2 — vegetation drag + tree shade
 #       `vegetation_canopy_drag`, `apply_vegetation_drag!` (implicit drag,
 #       delegating to `Aeolus.PlantCanopy`), `apply_tree_shade!`
-#   * L3 — multi-layer soil thermal diffusion
-#       `SoilGrid`, `step_soil!`
+#   * L3 — soil below the surface slab: the production
+#       `Aeolus.SoilColumn` (thin adapter)
+#       `UrbanSoil`, `step_soil!`, `soil_layer_temperature`,
+#       `urban_soil_energy`
 #   * L5 — snow / ice / dew surface state
 #       `SnowState`, `update_snow_state!`, `snow_modify_params!`,
 #       `apply_dew_condensation!`
@@ -22,7 +24,7 @@
 include(joinpath(@__DIR__, "urban_physics.jl"))
 
 export vegetation_canopy_drag, apply_vegetation_drag!, apply_tree_shade!,
-       SoilGrid, step_soil!,
+       UrbanSoil, step_soil!, soil_layer_temperature, urban_soil_energy,
        SnowState, update_snow_state!, snow_modify_params!,
        apply_dew_condensation!,
        dew_point
@@ -106,130 +108,141 @@ function apply_tree_shade!(sw_arr::AbstractMatrix{<:Real},
 end
 
 # ---------------------------------------------------------------------------
-# L3. Multi-layer soil column
+# L3. Soil below the surface slab — the production SoilColumn
 # ---------------------------------------------------------------------------
+#
+# Every non-water cell carries one `Aeolus.SoilThermalColumn` (Phase 46:
+# enthalpy heat equation with Johansen/Farouki conductivity, freeze–thaw,
+# CLM layers). This file only couples it to the example's surface slab;
+# all soil physics lives in `src/SoilColumn.jl`.
+#
+# It replaces a hand-written three-layer explicit scheme (layers 0.05 /
+# 0.20 / 0.60 m, fixed k and C, relaxed to 288 K at 0.85 m). That scheme's
+# `SoilGrid(mesh)` constructor also extended the exported
+# `Aeolus.SoilGrid` type once Phase 46 landed — type piracy on the soil
+# grid of the package.
 
-"""
-Layer heat capacities [J/m³/K] for the three soil layers. Values are
-representative of moist mineral soil; the top layer is deliberately
-lighter (thinner) so it responds fast to surface forcing while the deep
-layer damps the diurnal cycle.
-"""
-const _SOIL_C = (1.4e6, 2.1e6, 2.5e6)
-
-"""
-Layer thicknesses [m] — geometrically expanding into the ground.
-"""
-const _SOIL_DZ = (0.05, 0.20, 0.60)
-
-"""
-Inter-layer conduction [W/m/K]. Third element is the surface-to-top
-conduction (skin coupling); it is intentionally larger so `Ts` and
-`T1` remain tightly coupled on time scales of order minutes.
-"""
-const _SOIL_K = (1.5, 1.2, 6.0)     # (k_12, k_23, k_skin)
-
-"""
-Climatological deep-soil temperature [K] used as the lower boundary
-condition for the bottom layer.
-"""
 const _SOIL_T_DEEP = 288.0
 
 """
-    SoilGrid(mesh; T0 = 288.0)
+    UrbanSoil(sfc; T0 = 288.0, T_deep = 288.0, grid = clm_exponential_soil_grid(10),
+              hydraulics = carsel_parrish_texture(:loam),
+              thermal = clm_soil_thermal_properties(40, 20), θ = 0.20,
+              h_contact = 6.0)
 
-Allocate a 3-D `Array{Float64, 3}` of size `(Nx, Ny, 3)` storing the
-three-layer soil temperature `(T1, T2, T3)` for every horizontal cell,
-initialized uniformly to `T0` (K).
+The ground below the urban surface slab: one production
+`SoilThermalColumn` (from `Aeolus.SoilColumn`) for every cell of the
+surface-class map `sfc` that is not `SURFACE_WATER` (water keeps its own
+deep heat capacity in `SurfaceParams`).
+
+Defaults: the 10 exponentially thickening CLM2–CLM4.5 layers down to
+3.43 m (top node 7 mm), a moist loam — Carsel & Parrish (1988) hydraulics
+at ``θ = 0.20`` and the CLM thermal constants for 40 % sand / 20 % clay,
+giving ``k = 1.64`` W m⁻¹ K⁻¹ and ``C = 2.10`` MJ m⁻³ K⁻¹ — uniformly at
+`T0`, with the base held at the climatological `T_deep`
+(`BottomTemperature`). The soil water is not stepped (`hydrology = false`):
+the example's latent flux comes from its own moisture-availability table.
+
+`h_contact` (W m⁻² K⁻¹) is the conductance between the slab temperature
+`Ts` and the soil surface — the conduction path from the middle of the
+paving/roof slab to its base. 6 W m⁻² K⁻¹ is the skin coupling of the
+three-layer scheme this replaces (for asphalt, ``k ≈ 0.75`` W m⁻¹ K⁻¹ over
+half of a 0.15 m slab gives 10).
+
+Fields: `columns` (one per soil cell), `cells` (their `CartesianIndex`),
+`G` (last time-mean ground heat flux per soil cell, W m⁻², positive into
+the soil), `h_contact`.
 """
-function SoilGrid(mesh; T0::Real = _SOIL_T_DEEP)
-    return fill(Float64(T0), mesh.Nx, mesh.Ny, 3)
+struct UrbanSoil{C<:SoilThermalColumn}
+    columns::Vector{C}
+    cells::Vector{CartesianIndex{2}}
+    G::Vector{Float64}
+    h_contact::Float64
+end
+
+function UrbanSoil(sfc::AbstractMatrix{UInt8};
+                   T0::Real = _SOIL_T_DEEP, T_deep::Real = _SOIL_T_DEEP,
+                   grid = clm_exponential_soil_grid(10),
+                   hydraulics = carsel_parrish_texture(:loam),
+                   thermal = clm_soil_thermal_properties(40, 20),
+                   θ = 0.20, h_contact::Real = 6.0)
+    h_contact > 0 || throw(ArgumentError("UrbanSoil: h_contact > 0"))
+    cells = [I for I in CartesianIndices(sfc) if sfc[I] != SURFACE_WATER]
+    make() = SoilThermalColumn(SoilWaterColumn(grid, hydraulics; θ = θ), thermal;
+                               T_soil = T0,
+                               bottom = Aeolus.SoilColumn.BottomTemperature(T_deep),
+                               hydrology = false)
+    columns = [make() for _ in cells]
+    return UrbanSoil(columns, cells, zeros(length(cells)), Float64(h_contact))
 end
 
 """
-    step_soil!(soil, Ts, sfc, dt, C_surface; T_deep = 288.0)
+    step_soil!(soil::UrbanSoil, Ts, sfc, dt, C_surface) -> soil
 
-Advance the 3-layer soil temperature field by `dt` (s), **and apply the
-equal and opposite ground-heat flux to the surface**. Applied
-per-column:
+Exchange heat between the surface slab `Ts` (K, per cell, areal heat
+capacity `C_surface[class]` J m⁻² K⁻¹ — pass `params.C_s` or the
+`SurfaceParams`) and the soil columns over `dt` seconds, and advance the
+soil. The slab has already taken its atmospheric fluxes (`step_surfaces!`)
+to `Ts*`; over `dt` it now loses the ground heat flux
 
-    C_s        · dTs/dt = ... - k_skin · (Ts   - T1)          ← the surface
-    C1 · Δz1 · dT1/dt = k_skin · (Ts   - T1) + k_12 · (T2  - T1) / d12
-    C2 · Δz2 · dT2/dt = k_12   · (T1  - T2) / d12 + k_23 · (T3  - T2) / d23
-    C3 · Δz3 · dT3/dt = k_23   · (T2  - T3) / d23 + k_deep · (T_d - T3) / d3d
+    G = h (Ts' - T_g),    C_s (Ts' - Ts*) = -G dt
 
-where distances between layer centres are `d = (Δz_k + Δz_{k+1}) / 2`
-and `k_deep = k_23`, `d3d = Δz3` (a virtual layer at the same thickness).
+to the soil surface ``T_g`` through the contact conductance `h`.
+Eliminating the new slab temperature ``Ts'`` gives a flux linear in
+``T_g``, ``G = (Ts* - T_g) / (1/h + dt/C_s)``, which is passed to
+`step_soil_heat!` as a `LinearizedSkinBalance(0, -1/(1/h + dt/C_s), Ts*)`
+and solved implicitly with the soil heat equation. The slab then pays
+exactly what the soil received, ``Ts' = Ts* - G dt / C_s``, so slab + soil
+conserve energy to round-off (the soil base exchanges with `T_deep`).
 
-`C_surface` is the surface heat capacity per class (J m⁻² K⁻¹) — pass
-`params.C_s`, or a `SurfaceParams`.
+Being implicit, the exchange is stable for any `dt`; the driver may call
+it every few dynamics steps with the accumulated interval (operator
+splitting: the slab then misses its ground flux for one soil interval,
+``ΔT ≈ G dt / C_s``).
 
-!!! warning "This used to be a one-way sink, and it was an energy bug"
-    Earlier versions took `Ts` as read-only: `F_skin` warmed soil layer 1
-    but was never subtracted from the surface, so the column created heat
-    from nothing AND the surface lost its ground-conduction sink
-    entirely. Since `k_skin` = 6.0 W m⁻² K⁻¹ is comparable to the
-    radiative `4εσT³` ≈ 6.4 and about five times the sensible coupling,
-    that omission removed roughly half of the total nocturnal cooling.
-    Surfaces in the Alexanderplatz run stayed near 315 K at 03:00 —
-    about 20 K too warm — and the deficiency was initially misattributed
-    to the single-slab surface scheme being structurally incapable of
-    nocturnal cooling. It was not; it was this line.
-
-Soil under water surfaces is intentionally skipped — water columns have
-their own effective heat capacity in `SurfaceParams`.
-
-Returns `soil`.
+`sfc` is accepted for the old call signature and must be the map the soil
+was built from.
 """
-function step_soil!(soil::AbstractArray{<:Real, 3},
-                    Ts::AbstractMatrix{<:Real},
-                    sfc::AbstractMatrix{UInt8},
-                    dt::Real,
-                    C_surface;
-                    T_deep::Real = _SOIL_T_DEEP)
+function step_soil!(soil::UrbanSoil, Ts::AbstractMatrix{<:Real},
+                    sfc::AbstractMatrix{UInt8}, dt::Real, C_surface)
     Cs = C_surface isa SurfaceParams ? C_surface.C_s : C_surface
-    Nx, Ny, NL = size(soil)
-    @assert NL == 3 "step_soil! expects a 3-layer soil array"
-    dz1, dz2, dz3 = _SOIL_DZ
-    C1,  C2,  C3  = _SOIL_C
-    k12, k23, k_s = _SOIL_K
-    # centre-to-centre distances
-    d12 = 0.5 * (dz1 + dz2)
-    d23 = 0.5 * (dz2 + dz3)
-    d3d = dz3
-    k_deep = k23
-    Td  = Float64(T_deep)
-    Δt  = Float64(dt)
-    @inbounds for j in 1:Ny, i in 1:Nx
-        # skip open-water cells — no soil column beneath.
-        sfc[i, j] == SURFACE_WATER && continue
-        T1 = soil[i, j, 1]
-        T2 = soil[i, j, 2]
-        T3 = soil[i, j, 3]
-        Tsij = Float64(Ts[i, j])
-
-        # heat fluxes [W/m²]
-        F_skin = k_s   * (Tsij - T1)          # surface -> layer 1
-        F_12   = k12   * (T2   - T1) / d12
-        F_21   = k12   * (T1   - T2) / d12
-        F_23   = k23   * (T3   - T2) / d23
-        F_32   = k23   * (T2   - T3) / d23
-        F_deep = k_deep * (Td   - T3) / d3d
-
-        # capacity per column area [J/m²/K]
-        cap1 = C1 * dz1
-        cap2 = C2 * dz2
-        cap3 = C3 * dz3
-
-        soil[i, j, 1] = T1 + Δt * (F_skin + F_12) / cap1
-        soil[i, j, 2] = T2 + Δt * (F_21   + F_23) / cap2
-        soil[i, j, 3] = T3 + Δt * (F_32   + F_deep) / cap3
-        # The surface pays for what the soil gained. Without this the
-        # column is not energy conserving and the surface has no ground
-        # sink at all — see the warning in the docstring.
-        Ts[i, j] = Tsij - Δt * F_skin / Cs[sfc[i, j]]
+    Δt = Float64(dt)
+    hinv = 1 / soil.h_contact
+    @inbounds for (n, I) in enumerate(soil.cells)
+        C = Float64(Cs[sfc[I]])
+        Tstar = Float64(Ts[I])
+        top = Aeolus.SoilColumn.LinearizedSkinBalance(0.0, -1 / (hinv + Δt / C), Tstar)
+        st = step_soil_heat!(soil.columns[n], Δt, top)
+        soil.G[n] = st.G
+        Ts[I] = Tstar - st.G * Δt / C
     end
     return soil
+end
+
+"""
+    soil_layer_temperature(soil::UrbanSoil, dims, layer = 1) -> Matrix{Float64}
+
+Temperature (K) of soil layer `layer` on the `dims = (Nx, Ny)` grid;
+`NaN` where there is no soil (water).
+"""
+function soil_layer_temperature(soil::UrbanSoil, dims, layer::Integer = 1)
+    out = fill(NaN, dims)
+    for (n, I) in enumerate(soil.cells)
+        out[I] = soil.columns[n].water.T_soil[layer]
+    end
+    return out
+end
+
+"""
+    urban_soil_energy(soil::UrbanSoil, Ts, C_surface, sfc) -> J m⁻² (sum over soil cells)
+
+Slab plus soil enthalpy summed over the soil cells, ``Σ (C_s T_s +
+∫H dz)`` — the quantity `step_soil!` conserves apart from the exchange
+with the deep boundary.
+"""
+function urban_soil_energy(soil::UrbanSoil, Ts::AbstractMatrix{<:Real}, C_surface, sfc)
+    Cs = C_surface isa SurfaceParams ? C_surface.C_s : C_surface
+    return sum(Cs[sfc[I]] * Ts[I] + soil_enthalpy(soil.columns[n]) for (n, I) in enumerate(soil.cells))
 end
 
 # ---------------------------------------------------------------------------
