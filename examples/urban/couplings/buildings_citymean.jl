@@ -257,4 +257,26 @@ function report(c::CityMeanBuildings, case)
                     bem.hvac_budget.Q_heating / 1e3, bem.hvac_budget.Q_cooling / 1e3)
 end
 
+# Ledger: the window sun on the walls leaves the surface budget (S ≤ 0 is
+# the flux into the surface); the building's latent release enters the
+# air as vapour, LE·dt/L_v per column (apply_building_heat!, ρ = 1).
+function budget!(c::CityMeanBuildings, case, l)
+    dt = case.cfg.dt
+    add_surface!(l, :window_sun, c.bem.S, case.geom.sfc, dt)
+    add_water!(l, :building_vapour, sum(c.bem.LE) * dt / _L_v / length(c.bem.LE))
+    return nothing
+end
+
+function smoke_check(c::CityMeanBuildings, case)
+    bem = c.bem
+    T_in = zone_air_temperature(bem.zone) - 273.15
+    b = bem.hvac_budget
+    return ["the zone was stepped" => bem.release !== nothing,
+            "indoor air within the thermostat band ± 5 K (15–31 °C)" => 15 <= T_in <= 31,
+            "HVAC heating and cooling ≥ 0" => b !== nothing && b.Q_heating >= 0 && b.Q_cooling >= 0,
+            "window sun only leaves the surface (S ≤ 0)" => all(<=(0), bem.S),
+            "building release into the air ≥ 0 in summer" =>
+                case.cfg.scenario !== :summer || sum(bem.H .+ bem.LE) >= 0]
+end
+
 register!(CityMeanBuildings)

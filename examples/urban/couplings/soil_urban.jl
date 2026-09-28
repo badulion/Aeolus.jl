@@ -143,6 +143,7 @@ the slab update. Outputs `T_soil1` and `G_soil`.
 """
 mutable struct UrbanSoilCoupling <: AbstractCoupling
     soil::Union{Nothing,UrbanSoil}
+    last_step::Int       # step on which the soil last exchanged heat (for the ledger)
 end
 
 coupling_name(::Type{UrbanSoilCoupling}) = :soil_urban
@@ -150,7 +151,7 @@ slot(::Type{UrbanSoilCoupling}) = :ground
 provider(::Type{UrbanSoilCoupling}) = :urban_soil
 modules_used(::Type{UrbanSoilCoupling}) = (:SoilColumn,)
 stages(::Type{UrbanSoilCoupling}) = ((:surface_update, 20, Cadence(:soil)),)
-build(::Type{UrbanSoilCoupling}, case, o) = UrbanSoilCoupling(nothing)
+build(::Type{UrbanSoilCoupling}, case, o) = UrbanSoilCoupling(nothing, 0)
 
 function init!(c::UrbanSoilCoupling, case)
     T0 = case.cfg.T_soil0
@@ -158,8 +159,40 @@ function init!(c::UrbanSoilCoupling, case)
     return nothing
 end
 
-run_stage!(c::UrbanSoilCoupling, case, ::Val{:surface_update}, dt) =
+function run_stage!(c::UrbanSoilCoupling, case, ::Val{:surface_update}, dt)
     step_soil!(c.soil, case.bus.Ts, case.geom.sfc, cadence_period(case.cfg, :soil), case.bus.params)
+    c.last_step = case.clock.n
+    return nothing
+end
+
+# Ledger: on the step the soil exchanges, the slab pays G over the whole
+# soil interval P at once (Ts' = Ts* − G P / C_s), so G·P is booked on
+# that step. The soil's own enthalpy change is below the surface layer
+# and not part of the surface balance.
+function budget!(c::UrbanSoilCoupling, case, l)
+    c.last_step == case.clock.n || return nothing
+    P = cadence_period(case.cfg, :soil)
+    G = zeros(size(case.bus.Ts))
+    for (n, I) in enumerate(c.soil.cells)
+        G[I] = c.soil.G[n]
+    end
+    add_surface!(l, :G, G, case.geom.sfc, P)
+    return nothing
+end
+
+function smoke_check(c::UrbanSoilCoupling, case)
+    # Heat diffusion with a Dirichlet base at T_soil0 and a top flux
+    # towards Ts obeys a maximum principle: no soil temperature can leave
+    # the range spanned by T_soil0 and the surface temperatures (a margin
+    # of 1 K covers Ts changing within the run).
+    T0, Ts = case.cfg.T_soil0, case.bus.Ts
+    lo, hi = min(T0, minimum(Ts)) - 1, max(T0, maximum(Ts)) + 1
+    Tall = reduce(vcat, (col.water.T_soil for col in c.soil.columns))
+    return ["soil exchanged heat during the run" => c.last_step > 0,
+            "soil temperatures within [min(T_soil0, Ts) − 1, max(T_soil0, Ts) + 1] K" =>
+                all(T -> lo <= T <= hi, Tall),
+            "no soil under water" => all(I -> case.geom.sfc[I] != SURFACE_WATER, c.soil.cells)]
+end
 
 "Ground heat flux of the last soil exchange on the (Nx, Ny) grid, NaN under water."
 function G_map(soil::UrbanSoil, dims)

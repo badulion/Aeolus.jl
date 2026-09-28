@@ -89,4 +89,25 @@ function run_stage!(c::RadiositySun, case, ::Val{:radiation}, dt)
     return nothing
 end
 
+function smoke_check(c::RadiositySun, case)
+    bus, sw = case.bus, case.bus.swsol
+    checks = ["surface shortwave ≥ 0" => all(>=(0), bus.sw),
+              "surface longwave within 150–600 W/m²" => all(x -> 150 <= x <= 600, bus.lw)]
+    lw = bus.lwsol
+    # the facet longwave solve closes: absorbed = emitted + sky in − escaping
+    push!(checks, "longwave scene budget closes (rel. 1e-9)" =>
+          isapprox(lw.total_absorbed, lw.total_emitted + lw.total_from_sky - lw.total_escaping;
+                   rtol = 1e-9))
+    if case.clock.sun.μ₀ > 0
+        push!(checks, "sun up: shortwave solved and reaching the surface" =>
+              sw !== nothing && maximum(bus.sw) > 0)
+        # every watt that enters the scene is absorbed or escapes to the sky
+        push!(checks, "shortwave scene budget closes: absorbed + escaping = incident (rel. 1e-9)" =>
+              isapprox(sw.total_absorbed + sw.total_escaping, sw.total_incident; rtol = 1e-9))
+        push!(checks, "effective albedo within (0, max facet albedo]" =>
+              0 < sw.effective_albedo <= maximum(case.geom.scene.materials.albedo) + 1e-12)
+    end
+    return checks
+end
+
 register!(RadiositySun)

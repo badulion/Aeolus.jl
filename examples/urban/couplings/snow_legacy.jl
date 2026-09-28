@@ -113,4 +113,8 @@ build(::Type{SnowLegacy}, case, o) = SnowLegacy(SnowState(case.mesh))
 run_stage!(c::SnowLegacy, case, ::Val{:surface_update}, dt) =
     (update_snow_state!(c.snow, case.bus.Ts, 0); nothing)
 
+# The flag rule needs precipitation to create snow, and nothing feeds it
+# (KNOWN), so no cell can be snowy.
+smoke_check(c::SnowLegacy, case) = ["no snow without precipitation" => !any(c.snow)]
+
 register!(SnowLegacy)

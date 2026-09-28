@@ -298,4 +298,10 @@ function run_stage!(c::AQChem, case, ::Val{:chemistry}, dt)
     return nothing
 end
 
+function smoke_check(c::AQChem, case)
+    ok(f) = all(x -> isfinite(x) && x >= 0, interior_view(f))
+    return ["NO, NO2, O3, VOC finite and ≥ 0" =>
+                all(ok, (c.chem.NO, c.chem.NO2, c.chem.O3, c.chem.VOC))]
+end
+
 register!(AQChem)
