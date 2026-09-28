@@ -15,4 +15,4 @@ the pages below are the generated API reference, one per module.
 - [Snowpack](era5/snowpack.md) — `Aeolus.Snowpack`
 - [Lake and sea ice — IceThermodynamics](era5/ice_thermodynamics.md) — `Aeolus.IceThermodynamics` ([theory](../theory/ice_thermodynamics.md))
 - [Lake and sea surface — OceanMixedLayer](era5/ocean_mixed_layer.md) — `Aeolus.OceanMixedLayer`
-- [Air–sea fluxes — AirSeaFlux](era5/air_sea_flux.md) — `Aeolus.AirSeaFlux` (wave-dependent roughness, COARE bulk fluxes)
+- [Air–sea fluxes — AirSeaFlux](era5/air_sea_flux.md) — `Aeolus.AirSeaFlux` (wave-dependent roughness, COARE bulk fluxes, sea spray, full COARE with cool skin and warm layer)
