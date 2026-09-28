@@ -411,6 +411,38 @@ code with comments and docstrings removed); reviewed indirect uses go in
 (the core's infrastructure and the Parallel / Backends / SpectralElement
 scaffolds), 30 pending.
 
+## Cost of per-facet surfaces (#138)
+
+The flagship radiosity scene has this many facets:
+
+| `wall_subdivisions` | facets | roof | wall | ground |
+|--:|--:|--:|--:|--:|
+| 1 | 5810 | 915 | 1714 | 3181 |
+| 2 | 7524 | 915 | 3428 | 3181 |
+| 4 | 10952 | 915 | 6856 | 3181 |
+
+The `:smoke` window has 314 facets.
+
+A coupling that gives each facet its own `UrbanFacetScene` column (#139)
+pays two costs:
+
+* **Once, at `init!`:** the longwave response ``J``. This is one LU,
+  9 s at 5810 facets and 18 s at 7524 on one BLAS thread (3 s at 5810 on
+  8 threads). ``J`` then stays resident, at 258 MB and 432 MB.
+* **Per step:** `step_urban_facets!` is matrix-free (GMRES, one ``O(n^2)``
+  product with ``J`` per iteration). It takes 0.31 s at 5810 facets and
+  0.47 s at 7524, on one thread, with 7 iterations. The dense LU it
+  replaced took 4.5 s and 9.3 s.
+
+Pass the radiation coupling's `bus.swsol` as `sw`, so the shortwave is
+not solved a second time.
+
+The response is rebuilt whenever a facet emissivity changes, for
+example under snow (#146). To avoid that, change emissivities only at
+the radiation cadence.
+
+Reproduce these numbers with `julia --project=. benchmarks/bench_urban_facets.jl [wall_subdivisions] [blas_threads]`.
+
 ## Validation of the refactor (#126)
 
 The refactor had to be bit-for-bit. On a 1 h run (`AEOLUS_NSTEPS=1800`,
