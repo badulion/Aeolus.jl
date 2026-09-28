@@ -55,6 +55,7 @@ makedocs(
             "BUBBLE / CAPITOUL validation" => "theory/urban_validation.md",
             "Layered snowpack"            => "theory/snowpack.md",
             "Snow metamorphism and albedo" => "theory/snow_metamorphism.md",
+            "Lake and sea ice"            => "theory/ice_thermodynamics.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -116,6 +117,7 @@ makedocs(
                 "UrbanSurface"                 => "api/era5/urban_surface.md",
                 "BuildingEnergy"               => "api/era5/building_energy.md",
                 "Snowpack"                     => "api/era5/snowpack.md",
+                "IceThermodynamics"            => "api/era5/ice_thermodynamics.md",
             ],
         ],
         "Examples" => [

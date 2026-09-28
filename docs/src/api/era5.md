@@ -13,3 +13,4 @@ the pages below are the generated API reference, one per module.
 - [Urban facets — UrbanSurface](era5/urban_surface.md) — `Aeolus.UrbanSurface` (theory: [Urban facet conduction](../theory/urban_conduction.md), [Glazing and window facets](../theory/urban_glazing.md), [Facet–radiosity coupling](../theory/urban_radiosity_coupling.md))
 - [Building interior — BuildingEnergy](era5/building_energy.md) — `Aeolus.BuildingEnergy` (theory: [Building energy: indoor air and thermal mass](../theory/building_energy.md), [Occupancy schedules and BESTEST validation](../theory/occupancy_validation.md), [Anthropogenic heat from the building energy model](../theory/anthropogenic_heat.md))
 - [Snowpack](era5/snowpack.md) — `Aeolus.Snowpack`
+- [Lake and sea ice — IceThermodynamics](era5/ice_thermodynamics.md) — `Aeolus.IceThermodynamics` ([theory](../theory/ice_thermodynamics.md))

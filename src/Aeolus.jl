@@ -72,6 +72,7 @@ include("PlantCanopy.jl")          # Phase 48 (resolved plant canopy)
 include("UrbanSurface.jl")         # Phase 49 (urban facets; needs SurfaceExchange + SurfaceOptics)
 include("BuildingEnergy.jl")       # Phase 50 (indoor air + thermal mass; reuses UrbanSurface columns)
 include("Snowpack.jl")             # Phase 51 (#34): layered snowpack, Era V surface
+include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
 
 using .Grids
 using .Fields
@@ -128,6 +129,7 @@ using .PlantCanopy                 # Phase 48
 using .UrbanSurface                # Phase 49
 using .BuildingEnergy              # Phase 50
 using .Snowpack                    # Phase 51 (#34)
+using .IceThermodynamics           # Era V, Phase 51 (#37)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -789,6 +791,7 @@ export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
        snow_layer_density, snow_layer_depths, snowpack_enthalpy, snow_load,
        snow_compaction!, snow_heat_conduction!, snow_phase_change!,
        add_snowfall!, add_rainfall!, snow_sublimation!, relayer_snowpack!
+
 # Phase 51 (#36) — Snowpack: liquid-water retention, percolation, refreezing.
 export AbstractSnowWaterRetention, ColeouLesaffre1998Retention, PoreFractionRetention,
        snow_irreducible_water, snow_water_holding_capacity, snow_liquid_water_content,
@@ -804,5 +807,17 @@ export fresh_grain_radius, refrozen_grain_radius, mix_refrozen_grain!,
        snow_dry_grain_growth_rate, snow_wet_grain_growth_rate,
        snow_temperature_gradient, snow_specific_surface_area, snow_optical_radius,
        SnowOpticsAlbedo, snowpack_optics, snowpack_optical_radius
+
+# Phase 51 — IceThermodynamics (#37): Bitz & Lipscomb (1999) energy-
+# conserving lake and sea ice with brine pockets, snow, melt and growth.
+export IceParameters, IceColumn, sea_ice_column, lake_ice_column,
+       seawater_freezing_point, bl99_salinity_profile,
+       ice_melting_temperature, ice_energy_of_melting, ice_enthalpy,
+       ice_temperature_from_enthalpy, ice_heat_capacity, ice_conductivity,
+       ice_snow_enthalpy,
+       PrescribedSurfaceTemperature, PrescribedSurfaceFluxes, IceStepBudget,
+       step_ice!, ice_thickness, ice_snow_depth, ice_layer_temperatures,
+       ice_column_enthalpy, ice_freeboard,
+       stefan_ice_thickness, neumann_lambda, neumann_ice_thickness
 
 end # module
