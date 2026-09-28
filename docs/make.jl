@@ -45,6 +45,7 @@ makedocs(
             "Facet–radiosity coupling"    => "theory/urban_radiosity_coupling.md",
             "Anthropogenic heat (BEM)"    => "theory/anthropogenic_heat.md",
             "Glazing and window facets"   => "theory/urban_glazing.md",
+            "BUBBLE / CAPITOUL validation" => "theory/urban_validation.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

@@ -174,8 +174,11 @@ model gap is pure argon. Blending the air and argon property fits 90/10
 implemented) raises the model U by about 0.017 W m⁻² K⁻¹, so the
 like-for-like model value is about 2.56 (+0.3 %) rather than 2.547.
 
-No field observations of façade temperatures are used here. That
-comparison (BUBBLE / CAPITOUL) is the Phase 49 validation issue.
+No field observations of façade temperatures are used here. The
+BUBBLE / CAPITOUL comparison is on
+[BUBBLE / CAPITOUL validation](urban_validation.md). Its walls are
+opaque, as in the TEB runs it is compared with, so glazing is not
+validated there either.
 
 ## References
 

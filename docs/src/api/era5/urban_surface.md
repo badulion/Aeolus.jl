@@ -37,6 +37,23 @@ It has three layers of API:
   solar gain handed to a building energy model. The fill-gas property
   fits (`gas_conductivity`, `gas_viscosity`, `gas_heat_capacity`) stay
   qualified.
+- **Canyon exchange** (#30; theory: [BUBBLE / CAPITOUL validation](../../theory/urban_validation.md))
+  — the Town Energy Balance closures for the air next to walls and
+  streets: `canyon_wind_speed` (TEB canyon wind, skimming flow) and
+  `rowley_convection_coefficient` (`h = 11.8 + 4.2 U`, TEB's wall
+  exchange).
+
+## Walls and street in the canyon wind
+
+```julia
+using Aeolus
+
+H, W = 20.5, 14.0                                 # CAPITOUL, rue d'Alsace-Lorraine
+U_can = canyon_wind_speed(4.0, 29.5, H, W)        # 4 m/s at 29.5 m above the roofs -> 0.74 m/s
+wall = UrbanFacet(:wall, [WallLayer(:brick, 0.30)];
+                  h_convective = rowley_convection_coefficient(U_can))   # 14.9 W m⁻² K⁻¹
+street_air = SurfaceForcing(T_air = 290.0, U = U_can, z_ref = H / 2)    # MOST for the road
+```
 
 ## A facet in a diurnal cycle
 
