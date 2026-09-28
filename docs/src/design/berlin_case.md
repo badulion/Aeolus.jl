@@ -374,6 +374,115 @@ at noon, 16 × 16 × 16) the domain residual is −34.4 W m⁻² in summer
 (dew heat +44.4 from the saturated seeded layer, window sun −6.9, glass
 −3.0) and +6.1 W m⁻² in winter.
 
+## Surface exchange (#129)
+
+`couplings/surface_exchange.jl` (slot `:surface_exchange`, provider
+`:most`) and `couplings/ground_soil.jl` (slot `:ground`, provider
+`:soil_column`) replaced the slab scheme of #126 (`surface_slab.jl`,
+`soil_urban.jl`).
+
+* **One surface per column.** Every column with air above it has an
+  `AbstractSurface`: a `SoilColumn.SoilThermalColumn` with hydrology for
+  streets, building-adjacent cells and the park (from `ground_soil`'s
+  factory), a `Radiation.SlabLand` for roofs, glass and water (β = 1)
+  until #139 / #144 / #141 register their own. Albedo and emissivity come
+  from `bus.params` (the radiosity materials), so the radiation and the
+  surface balance agree.
+* **Roof-aware air level.** The forcing is the first non-solid cell of
+  the column (`bus.k_air`), `z_ref = Δz/2` above the surface; the air
+  temperature is `θ − Γ_d z`, so the Monin–Obukhov solve compares the
+  skin with the air's potential temperature referred to the surface
+  height (roofs sit up to 190 m up). H goes into θ, E into qv of that
+  cell only: the smoke check counts writes into solid cells (0 in every
+  run), and `test/berlin_surface_exchange.jl` checks that the stage
+  changes nothing else, and that ``Σρc_pΔzΔθ = ΣHΔt`` (2e-11).
+* **Cadence.** The surfaces are stepped every `cfg.cadence[:soil]`
+  seconds (30 s in the flagship, 4 s in `:smoke`; a `:surface` key
+  overrides it) and their fluxes are held as tendencies until the next
+  surface step, so the air receives exactly what the surface gave.
+* **Momentum.** The surface stress ``ρu_*^2`` is applied as an implicit
+  drag on the first-air-cell velocity faces, after the IBM. The momentum
+  removed equals ``Σ u_*^2\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in
+  the test). The `:wall` ground used to be free-slip.
+* **Extra surface energy.** `bus.sensible` (window sun, glazing
+  transmission, dew heat) is collected every step and delivered to the
+  surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`
+  and `SoilThermalColumn` take it since #129). The ledger books the
+  pending energy in ``ΔS``, so the per-class closure stays at round-off
+  (≤ 1.5e-10 W m⁻² in 1 h of the flagship).
+* **Dew.** One vapour exchange per surface: the soil and water surfaces
+  take up dew as negative evaporation (into the soil water); the
+  RadiationFog dew reservoir of `fog_dew` acts only over surfaces with
+  β = 0 (roofs, glass), above the roof.
+* **No clamps.** H, LE and Ts are not clipped (the Kessler qv clamp
+  stays for #143).
+
+### Measured (flagship, 64 × 64 × 32, dt = 2 s, 1 h)
+
+Two 1 h runs, from 06:00 and from 12:00 local on 20 June, each against
+the same run on the #127 branch (slab scheme). Domain means over
+4096 columns, W m⁻², averaged over the interval:
+
+| interval | slab H | MOST H | MOST LE | MOST H street+wall | MOST H roof | u* street | u* roof |
+| :-- | --: | --: | --: | --: | --: | --: | --: |
+| 06:00–06:05 | −24.1 | −0.5 | 0.6 | −0.6 | −0.1 | 0.010 | 0.002 |
+| 06:45–07:00 | −15.9 | 22.7 | 46.2 | 34.5 | 0.0 | 0.054 | 0.001 |
+| 12:00–12:05 | −23.7 | 6.7 | 22.6 | 10.4 | −0.1 | 0.045 | 0.002 |
+| 12:45–13:00 | −8.7 | 86.5 | 15.2 | 127.9 | 10.5 | 0.085 | 0.040 |
+
+Why H differs: the slab scheme exchanged at a fixed `C_h = 1e-3` and
+`U = 3 m/s`, i.e. 3.0 W m⁻² K⁻¹ whatever the flow, from a slab that
+starts 8 K colder than the air (Ts0 = 285 K under θ = 293 K), so its H
+was about −24 W m⁻² at the start and still negative after an hour at
+noon. With Monin–Obukhov and the resolved wind at the first air cell
+(0.55 m/s over streets, 0.21 m/s over roofs at 07:00) the cold,
+stably stratified start is almost decoupled (H ≈ 0), and the soil
+columns' massless skins heat within minutes, so the streets turn
+unstable and give 30–130 W m⁻² after half an hour. The cold-started roof
+slabs (C_s = 1.8e5 J m⁻² K⁻¹) stay colder than the air for most of the
+hour, stable and decoupled.
+
+**u\* over roofs.** The plan expected 0.2–0.6 m/s at midday. Measured:
+0.045 m/s mean over roofs at 13:00 (0.0022 at 07:00); streets 0.116.
+Two reasons, both in the case rather than the scheme: the wind at the
+first air cell above the roofs is only 0.28 m/s (the case is driven by a
+1 m/s geostrophic wind, u0 = 1 m/s), which gives a *neutral* u\* of
+0.027 m/s for z0m = 0.05 m; and the roofs start at 285 K, so they are
+stably stratified for most of the first hour. At 13:00, with the roofs
+2.4 K warmer than the air, u\* is 1.7 × its neutral value (the
+convective enhancement). The expectation assumed a few m/s of wind.
+
+**Street β.** The street soil starts at θ = 0.10 (β = 0.44). In the
+noon hour its mean β falls to 0.37 (0.35–0.44) as the top layer dries,
+and the evaporation the soil can deliver collapses: the domain-mean LE
+is 71 W m⁻² between 12:15 and 12:30 and 16 W m⁻² after 12:30.
+
+**Bug found (src).** `SoilThermalColumn.step_surface!` returned the
+evaporation the skin balance charged even when the soil, at its dry
+potential, delivered less; the difference was only recorded as
+`budget.latent_mismatch`. Coupled to the air this created water: in the
+first noon run a third of the street LE (≈ 70 of 184 W m⁻²) was never
+lost by the soil. It now returns the delivered E and LE and keeps the
+unspent latent heat in the top soil layer (test in
+`era5_soil_thermal.jl`). LandSurface's vegetated column has the same
+pattern (`latent_mismatch` there); #140 should check it.
+
+**Cost.** The surface step (4094 surfaces: 3179 soil columns with
+hydrology, 915 slabs) is 10–17 ms per dynamics step averaged at the
+30 s cadence (18–31 s per simulated hour, the range is the machine's
+load), the air-side update 0.9 ms and the drag 0.15 ms. The soil column
+with hydrology costs about 56 µs per call, a slab 16 µs.
+
+**Known limitations.** Streets are bare loam: SoilColumn has no sealed
+surface, so a street evaporates until its top layer dries (a sealed
+option belongs in src). No rain reaches the soil (the microphysics books
+precipitation as a domain total). The roughness lengths are per class
+options (street/roof 0.05 m, park 0.1 m, water 1e-4 m, glass 0.01 m,
+z0h = z0m/10), not a survey. The more vigorous noon convection makes the
+stale-halo transport leak of #132 larger: the transport created
+3.4e-3 kg m⁻² of water in the noon hour and drove qv negative aloft,
+which the Kessler clamp then filled (+8.9e-5 kg m⁻²).
+
 ## Smoke test and coverage test
 
 **`test/berlin_smoke.jl`** runs the case in `CaseConfig(:smoke)`: a
