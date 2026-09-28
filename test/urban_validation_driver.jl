@@ -64,9 +64,10 @@ struct ValidationCanyon
 end
 
 # CAPITOUL canyons. H and W: Moscicki & Voogt (2007), Table 2.1 (Alsace 20.5/14.0,
-# Pomme 20.5/10.0, Remusat 16.8/10.0 m). Street azimuths: Pigeon et al. (2008,
-# AMS 8th Urban Env. Symp. extended abstract), Table 3 (0, 120, 60 deg; walls
-# facing 90/270, 210/30, 150/330). Grid: 2 cells across the street, canyon
+# Pomme 20.5/10.0, Remusat 16.8/10.0 m). Street azimuths: Pigeon et al. (2009,
+# AMS 8th Symposium on the Urban Environment, paper 3.6 — the extended abstract of
+# Pigeon et al. 2008, Meteorol. Atmos. Phys. 102, 159), Table 3 (0, 120, 60 deg;
+# walls facing 90/270, 210/30, 150/330). Grid: 2 cells across the street, canyon
 # length >= 100 m ≈ 5 H so that the central road's sky-view factor is within
 # 2 % of the infinite canyon (measured in the test).
 # The building depth is not needed for facet temperatures; 2 cells.
@@ -76,25 +77,30 @@ const CAPITOUL_CANYONS = (ValidationCanyon("Alsace", 20.5, 14.0, 0.0, 7.0, 15, 2
 
 const CAPITOUL_SITE = (latitude = 43.6045, longitude = 1.4440, elevation = 146.0)  # Qu (2011) §6.2; elevation: assumption
 
-# Construction and optics of the TEB run of Pigeon et al. (2008), Table 2 (the
-# same values in Henon et al. 2009). Only C = ρc is published; ρ = 1000 kg m⁻³
-# is a nominal split that does not enter the conduction (only k and ρc do).
-const _PIGEON = "Pigeon et al. (2008), AMS 8th Urban Env. Symp., Table 2 (TEB input, CAPITOUL)"
+# Construction and optics of the TEB run of Pigeon et al. (2009, paper 3.6),
+# Table 2 (the same values in Henon et al. 2009, AMS 8th Urban Env. Symp. JP3.2).
+# Only C = ρc is published; ρ = 1000 kg m⁻³ is a nominal split that does not
+# enter the conduction (only k and ρc do).
+const _PIGEON = "Pigeon et al. (2009), AMS 8th Symp. Urban Environment, paper 3.6, Table 2 (TEB input, CAPITOUL)"
 _capitoul_material(name, C, k) = ThermalMaterial(name, k, 1000.0, C / 1000.0; source = _PIGEON)
-const CAPITOUL_BRICK     = _capitoul_material(:tls_red_brick, 1.58e6, 1.15)
-const CAPITOUL_TILE      = _capitoul_material(:tls_red_tile, 1.58e6, 1.15)
-const CAPITOUL_WOOD      = _capitoul_material(:tls_wood, 2.20e6, 0.20)
-const CAPITOUL_ASPHALT   = _capitoul_material(:tls_asphalt, 1.74e6, 0.82)
-const CAPITOUL_AGGREGATE = _capitoul_material(:tls_aggregate, 2.00e6, 2.1)
-const CAPITOUL_GRAVEL    = _capitoul_material(:tls_gravel_soil, 1.40e6, 0.4)
+const CAPITOUL_BRICK     = _capitoul_material(:capitoul_red_brick, 1.58e6, 1.15)
+const CAPITOUL_TILE      = _capitoul_material(:capitoul_red_tile, 1.58e6, 1.15)
+const CAPITOUL_WOOD      = _capitoul_material(:capitoul_wood, 2.20e6, 0.20)
+const CAPITOUL_ASPHALT   = _capitoul_material(:capitoul_asphalt, 1.74e6, 0.82)
+const CAPITOUL_AGGREGATE = _capitoul_material(:capitoul_aggregate, 2.00e6, 2.1)
+const CAPITOUL_GRAVEL    = _capitoul_material(:capitoul_gravel_soil, 1.40e6, 0.4)
 
-capitoul_wall_layers() = [WallLayer(CAPITOUL_BRICK, 0.30; max_cell = 0.02)]                     # 1+5+18+5+1 cm
-capitoul_roof_layers() = [WallLayer(CAPITOUL_TILE, 0.06; ncells = 4), WallLayer(CAPITOUL_WOOD, 0.03; ncells = 2)]
-capitoul_road_layers() = [WallLayer(CAPITOUL_ASPHALT, 0.05; ncells = 4), WallLayer(CAPITOUL_AGGREGATE, 0.20),
-                     WallLayer(CAPITOUL_GRAVEL, 1.00; max_cell = 0.1)]
+# walls 1 + 5 + 18 + 5 + 1 cm of brick; roofs 6 cm tile + 3 cm wood; road 5 cm
+# asphalt + 20 cm aggregate + 1 m gravel and soil (Pigeon et al. Table 2)
+capitoul_wall_layers() = [WallLayer(CAPITOUL_BRICK, 0.30; max_cell = 0.02)]
+capitoul_roof_layers() = [WallLayer(CAPITOUL_TILE, 0.06; ncells = 4),
+                          WallLayer(CAPITOUL_WOOD, 0.03; ncells = 2)]
+capitoul_road_layers() = [WallLayer(CAPITOUL_ASPHALT, 0.05; ncells = 4),
+                          WallLayer(CAPITOUL_AGGREGATE, 0.20),
+                          WallLayer(CAPITOUL_GRAVEL, 1.00; max_cell = 0.1)]
 # (albedo, emissivity) per Radiosity class: street, roof, park (unused), water (unused), wall.
 capitoul_materials() = UrbanMaterials([0.08, 0.15, 0.2, 0.05, 0.25], [0.95, 0.90, 0.95, 0.96, 0.92];
-                                 name = ["street", "roof", "park", "water", "wall"])
+                                      name = ["street", "roof", "park", "water", "wall"])
 
 # BUBBLE, Basel-Sperrstrasse (U1). Hamdi & Schayes (2005, ACPD 5, 4257):
 # Table 1 — 47°33' N 7°35' E, 255 m, building height 14.6 m, streets at 67° and
@@ -118,7 +124,7 @@ bubble_wall_layers() = [WallLayer(BUBBLE_FABRIC, 0.30)]
 bubble_roof_layers() = [WallLayer(BUBBLE_FABRIC, 0.30)]
 bubble_road_layers() = [WallLayer(BUBBLE_ROAD, 0.50)]
 bubble_materials() = UrbanMaterials([0.08, 0.14, 0.2, 0.05, 0.14], [0.94, 0.90, 0.95, 0.96, 0.90];
-                                 name = ["street", "roof", "park", "water", "wall"])
+                                    name = ["street", "roof", "park", "water", "wall"])
 
 # ---------------------------------------------------------------------------
 # Published observations (test/data; provenance in the file headers)
@@ -169,7 +175,7 @@ central_rows(c::ValidationCanyon) = (c.ny ÷ 2, c.ny ÷ 2 + 1)
 
 A canyon of `c` between two building rows (`c.nb` cells deep), its
 `UrbanFacetScene`, one `BuildingZone` per row (heated to `T_heat`, no cooling —
-the TEB assumption of Pigeon et al. 2008, T_i,min = 292 K) and the facet sets of
+the TEB assumption of Pigeon et al. 2009, T_i,min = 292 K) and the facet sets of
 the central two rows: `road`, `wall_pos` (normal +x of the scene), `wall_neg`
 and `roof`. The street axis is the scene's +y; the real facing azimuths of the
 two walls are `c.axis + 90` and `c.axis + 270`.
@@ -230,7 +236,8 @@ Air-side forcing (all labelled assumptions of this offline case):
 `T_offset` is a number or a vector indexed like the records.
 
 Returns per-sample vectors (one sample per sub-step, at its end): the skin
-temperatures of the central road, the two canyon walls and the roofs, and the
+temperatures of the central road, the two canyon walls and the roofs, the heat
+the roofs conduct into the rooms below (`roof_interior`, W m⁻²), and the
 fluxes of one repeat unit of the canyon array per unit plan area (W m⁻²):
 `Qstar`, `QH`, `dQS` (heat into the fabric, including what the facets conduct
 into the rooms), `Sup` and `Lup` (the shortwave and longwave leaving the unit,
@@ -241,6 +248,7 @@ function run_canyon!(case, w, k0, nhours; site, z_forcing = 50.0, dt = 1800.0, T
     nsub = round(Int, 3600 / dt)
     n = nfacets(u)
     out = (road = Float64[], wall_pos = Float64[], wall_neg = Float64[], roof = Float64[],
+           roof_interior = Float64[],
            T_air = Float64[], hour = Int[], month = Int[], day = Int[], SWdn = Float64[],
            Qstar = Float64[], QH = Float64[], dQS = Float64[], Sup = Float64[], Lup = Float64[])
     A = u.vf.area
@@ -274,17 +282,24 @@ function run_canyon!(case, w, k0, nhours; site, z_forcing = 50.0, dt = 1800.0, T
             sp = solar_position(st)
             # the scene's +y is the street axis: rotate the sun into the scene frame
             sun = (elevation = sp.elevation, azimuth = sp.azimuth - c.axis)
-            sw = if sp.elevation > 0 && (w.DNI[k] > 0 || w.DIF[k] > 0)
-                solve_shortwave(u.scene, u.vf, sun; dni = w.DNI[k], dhi = w.DIF[k])
-            elseif w.DIF[k] > 0
-                solve_shortwave(u.scene, u.vf, (0.0, 0.0, 1.0); dni = 0.0, dhi = w.DIF[k])
+            # Beam and diffuse such that the horizontal irradiance the scene
+            # receives is POWER's hourly mean global irradiance exactly: the
+            # beam part SW - DIF is applied at the mid-step sun as DNI =
+            # (SW - DIF)/sin(elevation); below 3° elevation it is added to the
+            # diffuse part instead (no grazing beam from an hourly mean).
+            s_el = sind(sp.elevation)
+            beam = max(w.SW[k] - w.DIF[k], 0.0)
+            dni, dhi = s_el > sind(3.0) ? (beam / s_el, w.DIF[k]) : (0.0, w.DIF[k] + beam)
+            sw = if dni > 0
+                solve_shortwave(u.scene, u.vf, sun; dni = dni, dhi = dhi)
+            elseif dhi > 0
+                solve_shortwave(u.scene, u.vf, (0.0, 0.0, 1.0); dni = 0.0, dhi = dhi)
             else
                 nothing
             end
             fl, _, _ = step_buildings!(u, case.zones, zf, air, dt; hvac = case.hvac, sw = sw,
                                        L_sky = w.LW[k])
-            # the horizontal shortwave the scene actually received this step
-            sw_dn = sp.elevation > 0 ? w.DNI[k] * sind(sp.elevation) + w.DIF[k] : w.DIF[k]
+            sw_dn = dni * s_el + dhi          # = POWER SW (horizontal) whenever sw ≠ nothing
             push!(out.Qstar, unit_sum([f.Rn for f in fl]))
             push!(out.QH, unit_sum([f.H for f in fl]))
             push!(out.dQS, unit_sum([f.G for f in fl]))
@@ -295,6 +310,7 @@ function run_canyon!(case, w, k0, nhours; site, z_forcing = 50.0, dt = 1800.0, T
             push!(out.wall_pos, area_mean_T(u, case.wall_pos))
             push!(out.wall_neg, area_mean_T(u, case.wall_neg))
             push!(out.roof, area_mean_T(u, case.roof))
+            push!(out.roof_interior, mean(u.facets[i].Q_interior for i in case.roof))
             push!(out.T_air, T_air)
             push!(out.hour, w.hour[k]); push!(out.month, w.month[k]); push!(out.day, w.day[k])
         end
