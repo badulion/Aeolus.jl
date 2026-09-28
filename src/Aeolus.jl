@@ -753,4 +753,11 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        IdealLoadsHVAC, HVACBudget, condenser_inlet_temperature,
        cooling_cop, available_cooling_capacity
 
+# Phase 50 — BuildingEnergy: occupancy, lighting and equipment schedules and
+# internal gains (#33).
+export DayProfile, WeeklySchedule, schedule_value, schedule_mean, full_load_hours,
+       occupant_sensible_heat, InternalGains, InternalGainRates, internal_gains,
+       ThermostatSchedule, scheduled_hvac, DOE_MEDIUM_OFFICE_SCHEDULES,
+       office_internal_gains, office_thermostat
+
 end # module
