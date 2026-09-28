@@ -492,6 +492,17 @@ function surface_temperature end
 function roughness_lengths end
 
 """
+    column_heat_content(col; kwargs...) -> J m⁻²
+
+Heat stored per unit surface area in the 1-D column below (or behind) a
+surface — a wall or roof conduction column, a lake or ocean water column.
+One generic owned by the contract, extended by each implementer
+(`UrbanSurface.ConductionColumn`, `OceanMixedLayer.WaterColumn`), so the
+name has a single binding when several Era V modules are loaded together.
+"""
+function column_heat_content end
+
+"""
     step_surface!(s, forcing::SurfaceForcing, dt) -> SurfaceFluxes
 
 Advance surface `s` by `dt` seconds under `forcing` and return the
