@@ -11,3 +11,4 @@ the pages below are the generated API reference, one per module.
 - [Vegetated land column — LandSurface](era5/land_surface.md) — `Aeolus.LandSurface` (Phase 47, #21: two-big-leaf canopy over the soil column, soil-water stress, FLUXNET validation; [theory](../theory/land_surface.md))
 - [Plant canopy — PlantCanopy](era5/plant_canopy.md) — `Aeolus.PlantCanopy` (theory: [Resolved plant canopy](../theory/plant_canopy.md))
 - [Urban facets — UrbanSurface](era5/urban_surface.md) — `Aeolus.UrbanSurface` (theory: [Urban facet conduction](../theory/urban_conduction.md), [Glazing and window facets](../theory/urban_glazing.md), [Facet–radiosity coupling](../theory/urban_radiosity_coupling.md))
+- [Building interior — BuildingEnergy](era5/building_energy.md) — `Aeolus.BuildingEnergy` (theory: [Building energy: indoor air and thermal mass](../theory/building_energy.md))

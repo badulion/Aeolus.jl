@@ -70,6 +70,7 @@ include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
 include("LandSurface.jl")          # Phase 47 (#21): vegetated land column
 include("PlantCanopy.jl")          # Phase 48 (resolved plant canopy)
 include("UrbanSurface.jl")         # Phase 49 (urban facets; needs SurfaceExchange + SurfaceOptics)
+include("BuildingEnergy.jl")       # Phase 50 (indoor air + thermal mass; reuses UrbanSurface columns)
 
 using .Grids
 using .Fields
@@ -124,6 +125,7 @@ using .Photosynthesis              # Phase 47
 using .LandSurface                 # Phase 47 (#21)
 using .PlantCanopy                 # Phase 48
 using .UrbanSurface                # Phase 49
+using .BuildingEnergy              # Phase 50
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -733,5 +735,16 @@ export CLEAR_FLOAT_REFRACTIVE_INDEX, CLEAR_FLOAT_EXTINCTION, UNCOATED_GLASS_EMIS
        glazing_u_value, inward_flowing_fractions, glazing_shgc,
        WindowFacet, set_solar_incidence!, window_optics, transmitted_shortwave,
        pane_temperatures, window_heat_content
+
+# Phase 50 — BuildingEnergy: prognostic indoor air temperature, thermal
+# mass (UrbanSurface conduction columns), ventilation, and the ISO 13790
+# 5R1C reference model.
+export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
+       BuildingZone, ZoneForcing, ZoneBudget, step_zone!, facet_fluxes,
+       zone_air_temperature, zone_heat_content, zone_heat_loss_coefficient,
+       zone_mean_radiant_temperature, zone_operative_temperature,
+       air_heat_capacity, ventilation_conductance, element_transmittance,
+       iso13786_areal_heat_capacity,
+       ISO13790Zone, iso13790_zone, step_iso13790!
 
 end # module
