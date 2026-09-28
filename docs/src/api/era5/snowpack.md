@@ -13,9 +13,12 @@ forcing, dt)` returns the `SurfaceFluxes` it applied, computed through
 Material laws are chosen by dispatch (`Anderson1976Compaction`,
 `Vionnet2012Compaction`; `Yen1981Conductivity`, `Sturm1997Conductivity`,
 `Jordan1991Conductivity`, `Calonne2011Conductivity`;
-`Anderson1976FreshSnow`, `Vionnet2012FreshSnow`). Grain/albedo ageing
-(#35) and liquid water (#36) plug in through `AbstractSnowMetamorphism`,
-`AbstractSnowAlbedo` and `AbstractSnowLiquidWater`.
+`Anderson1976FreshSnow`, `Vionnet2012FreshSnow`). Grain and albedo
+ageing (#35) are `Flanner2006Metamorphism` — the CLM/SNICAR dry-ageing
+table plus Brun (1989) wet growth — and `SnowOpticsAlbedo`, which hands
+the prognostic grain radius to `SurfaceOptics.SnowSurface`
+([Snow metamorphism and albedo](../../theory/snow_metamorphism.md)).
+Liquid water (#36) plugs in through `AbstractSnowLiquidWater`.
 
 Liquid water (#36): `SnowBucketPercolation` (Crocus / CLM tipping
 bucket) and `SnowGravityDrainage` (Colbeck 1972 kinematic wave, i.e.
@@ -38,12 +41,14 @@ using Aeolus
 pack = LayeredSnowpack(depth = 0.8, density = 200.0, T = 265.0,
                        compaction = Vionnet2012Compaction(),
                        conductivity = Sturm1997Conductivity(),
-                       bottom = SnowGroundTemperature(273.15))
+                       bottom = SnowGroundTemperature(273.15),
+                       metamorphism = Flanner2006Metamorphism(),
+                       albedo = SnowOpticsAlbedo(soot_ppmw = 0.02))
 f = SurfaceForcing(sw_down = 200.0, lw_down = 250.0, T_air = 266.0,
                    q_air = 0.002, U = 4.0, p = 90000.0, z_ref = 10.0,
                    rain = 0.0, snow = 1e-4)
 fl = step_surface!(pack, f, 3600.0)      # fl.Rn == fl.H + fl.LE + fl.G
-snow_depth(pack), snow_bulk_density(pack), pack.budget.snowfall
+snow_depth(pack), snow_bulk_density(pack), pack.grain[1], surface_albedo(pack)
 ```
 
 ```@autodocs
