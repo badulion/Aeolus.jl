@@ -41,6 +41,7 @@ makedocs(
             "Soil water (Richards)"       => "theory/soil_water.md",
             "Soil heat and freeze–thaw"   => "theory/soil_heat.md",
             "Water table and aquifer"     => "theory/water_table.md",
+            "Leaf photosynthesis"         => "theory/photosynthesis.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -96,6 +97,7 @@ makedocs(
                 "Overview"                     => "api/era5.md",
                 "SurfaceExchange"              => "api/era5/surface_exchange.md",
                 "SoilColumn"                   => "api/era5/soil_column.md",
+                "Photosynthesis"               => "api/era5/photosynthesis.md",
             ],
         ],
         "Examples" => [

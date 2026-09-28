@@ -63,7 +63,10 @@ include("IceNucleation.jl")        # Phase 43
 include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
+
+# --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53)
 include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equation
+include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
 
 using .Grids
 using .Fields
@@ -114,6 +117,7 @@ using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
 using .SoilColumn                  # Phase 46
+using .Photosynthesis              # Phase 47
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -628,5 +632,18 @@ export SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal
 # bottom_water_storage stay qualified.
 export UnconfinedAquifer, water_table_depth, set_water_table!,
        aquifer_baseflow_rate, total_water_storage
+# Phase 47 — Photosynthesis: Farquhar C3 / Collatz C4 leaf biochemistry,
+# Bernacchi / Kattge-Knorr temperature responses, CLM4.5 PFT parameters.
+export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
+       Q10Response, temperature_factor, optimum_temperature,
+       C3TemperatureResponses, bonan2011_c3_temperature,
+       kattge_knorr_c3_temperature, kattge_knorr_jmax_ratio,
+       PAR_PHOTONS_PER_JOULE, par_to_photon_flux, colimited_rate,
+       electron_transport_rate,
+       AbstractPhotosynthesisParameters, C3Parameters, C4Parameters, collatz1992_c4,
+       leaf_capacities, photorespiratory_compensation_point,
+       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point,
+       PFTPhotosynthesis, CLM45_PFT_PHOTOSYNTHESIS, vcmax25_from_leaf_nitrogen,
+       pft_photosynthesis_parameters
 
 end # module

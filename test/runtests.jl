@@ -911,4 +911,5 @@ end
     include("era5_soil_thermal.jl")      # Phase 46: soil heat and freeze–thaw (#16)
     include("era5_water_table.jl")       # Phase 46: water table, unconfined aquifer (#17)
     include("era5_urban_soil.jl")        # Phase 46: production soil column in the urban example (#18)
+    include("era5_photosynthesis.jl")    # Phase 47  Farquhar C3 / Collatz C4 photosynthesis (#19)
 end
