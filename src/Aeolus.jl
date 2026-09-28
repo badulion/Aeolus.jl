@@ -646,4 +646,12 @@ export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
        PFTPhotosynthesis, CLM45_PFT_PHOTOSYNTHESIS, vcmax25_from_leaf_nitrogen,
        pft_photosynthesis_parameters
 
+# Phase 47 — stomatal conductance (#20): Ball-Berry / Medlyn closures,
+# leaf boundary layer, transpiration, coupled A–gs–ci solution.
+export AbstractStomatalModel, BallBerryStomata, MedlynStomata, stomatal_conductance,
+       leaf_boundary_layer_conductance, molar_conductance, leaf_transpiration,
+       STOMATAL_DIFFUSIVITY_RATIO, BOUNDARY_LAYER_DIFFUSIVITY_RATIO,
+       LeafGasExchange, leaf_gas_exchange, apply_water_stress,
+       CLM5_MEDLYN_G1, pft_stomatal_model
+
 end # module

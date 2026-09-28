@@ -912,4 +912,5 @@ end
     include("era5_water_table.jl")       # Phase 46: water table, unconfined aquifer (#17)
     include("era5_urban_soil.jl")        # Phase 46: production soil column in the urban example (#18)
     include("era5_photosynthesis.jl")    # Phase 47  Farquhar C3 / Collatz C4 photosynthesis (#19)
+    include("era5_stomata.jl")           # Phase 47  Ball-Berry / Medlyn stomatal conductance (#20)
 end
