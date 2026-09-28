@@ -123,4 +123,53 @@ end
         s2 = BoussinesqSimulation(mesh)
         @test_throws ArgumentError compute_dynamic_smagorinsky_νt!(s2.νt, s2.u, s2.v, s2.w; averaging = :box)
     end
+
+    @testset "step!: eddy_viscosity! with the Smagorinsky closure is bit-for-bit the built-in" begin
+        mk() = (s = BoussinesqSimulation(RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3));
+                                         C_s = 0.17, ν = 1e-4, θ₀ = 300.0, f_coriolis = 1e-4,
+                                         bcs = FieldBoundaryConditions(:periodic, :periodic, :wall));
+                _kolmogorov_field!(s, Xoshiro(7); kc = 4); set!(s.θ, (x, y, z) -> 300 + z); s)
+        a, b = mk(), mk()
+        ml = MLSGS((νt, u, v, w, m) -> compute_smagorinsky_νt!(νt, u, v, w, 0.17))
+        for _ in 1:20
+            step!(a, 1e-3)
+            step!(b, 1e-3; eddy_viscosity! = (νt, u, v, w) -> apply_mlsgs!(b, ml))
+        end
+        @test all(f -> getfield(a, f).data == getfield(b, f).data, (:u, :v, :w, :θ, :p, :νt))
+        # C_s = 0 disables the built-in closure but not a passed one
+        c = BoussinesqSimulation(RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3)))
+        _kolmogorov_field!(c, Xoshiro(7); kc = 4)
+        step!(c, 1e-3; eddy_viscosity! = (νt, u, v, w) -> compute_dynamic_smagorinsky_νt!(νt, u, v, w))
+        @test maximum(interior_view(c.νt)) > 0
+    end
+
+    @testset "step!: momentum_advection = WENO-Z conserves momentum and dissipates energy" begin
+        # Inviscid, triply periodic, no SGS: the flux-form operators
+        # conserve the domain momentum exactly; forward Euler with the
+        # centred operator gains kinetic energy, the upwind-biased WENO-Z
+        # removes it.
+        m16 = RegularGrid(; size = (16, 16, 16), extent = (2π, 2π, 2π), halo = (3, 3, 3))
+        weno = (tu, tv, tw, u, v, w) -> momentum_advect_weno_z!(tu, tv, tw, u, v, w)
+        res = Dict{Symbol,Any}()
+        for (name, kw) in ((:centered, (;)), (:weno_z, (momentum_advection = weno,)))
+            s = BoussinesqSimulation(m16)
+            _kolmogorov_field!(s, Xoshiro(5); kc = 4)
+            P0 = sum(interior_view(s.u)); E0 = kinetic_energy(s)
+            for _ in 1:50
+                step!(s, 0.01; kw...)
+            end
+            res[name] = (dP = abs(sum(interior_view(s.u)) - P0), dE = kinetic_energy(s) / E0 - 1,
+                         div = max_divergence(s))
+        end
+        @info @sprintf("  50 steps: ΔKE/KE centred %+.2e, WENO-Z %+.2e; |ΔΣu| WENO-Z %.1e; max|∇·u| %.1e",
+                       res[:centered].dE, res[:weno_z].dE, res[:weno_z].dP, res[:weno_z].div)
+        @test res[:weno_z].dP < 1e-10
+        @test res[:weno_z].div < 1e-10
+        @test res[:weno_z].dE < 0 < res[:centered].dE
+        # the default keyword is the built-in operator
+        a = BoussinesqSimulation(m16); b = BoussinesqSimulation(m16)
+        _kolmogorov_field!(a, Xoshiro(5); kc = 4); _kolmogorov_field!(b, Xoshiro(5); kc = 4)
+        step!(a, 0.01); step!(b, 0.01; momentum_advection = momentum_advect!)
+        @test a.u.data == b.u.data
+    end
 end
