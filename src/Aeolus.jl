@@ -67,6 +67,7 @@ include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 # --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53)
 include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equation
 include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
+include("LandSurface.jl")          # Phase 47 (#21): vegetated land column
 
 using .Grids
 using .Fields
@@ -118,6 +119,7 @@ using .RadiationFog                # Phase 44
 using .SurfaceExchange             # Era V contract
 using .SoilColumn                  # Phase 46
 using .Photosynthesis              # Phase 47
+using .LandSurface                 # Phase 47 (#21)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -632,6 +634,7 @@ export SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal
 # bottom_water_storage stay qualified.
 export UnconfinedAquifer, water_table_depth, set_water_table!,
        aquifer_baseflow_rate, total_water_storage
+
 # Phase 47 — Photosynthesis: Farquhar C3 / Collatz C4 leaf biochemistry,
 # Bernacchi / Kattge-Knorr temperature responses, CLM4.5 PFT parameters.
 export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
@@ -653,5 +656,15 @@ export AbstractStomatalModel, BallBerryStomata, MedlynStomata, stomatal_conducta
        STOMATAL_DIFFUSIVITY_RATIO, BOUNDARY_LAYER_DIFFUSIVITY_RATIO,
        LeafGasExchange, leaf_gas_exchange, apply_water_stress,
        CLM5_MEDLYN_G1, pft_stomatal_model
+
+# Phase 47 (#21) — LandSurface: vegetated land column (two-big-leaf canopy
+# over a SoilThermalColumn), root-zone soil-water stress, big-leaf radiation.
+export VegetationParameters, pft_vegetation,
+       zeng_root_fractions, AbstractSoilWaterStress, CLMWaterStress,
+       wilting_factor, soil_water_stress, root_water_uptake,
+       BigLeafShortwave, bigleaf_shortwave, BigLeafLongwave, bigleaf_longwave,
+       canopy_roughness, undercanopy_transfer_coefficient,
+       VegetatedLandColumn, LandSurfaceDiagnostics, LandSurfaceBudget,
+       set_leaf_area!, radiative_temperature
 
 end # module

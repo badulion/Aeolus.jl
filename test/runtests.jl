@@ -913,4 +913,6 @@ end
     include("era5_urban_soil.jl")        # Phase 46: production soil column in the urban example (#18)
     include("era5_photosynthesis.jl")    # Phase 47  Farquhar C3 / Collatz C4 photosynthesis (#19)
     include("era5_stomata.jl")           # Phase 47  Ball-Berry / Medlyn stomatal conductance (#20)
+    include("era5_land_surface.jl")      # Phase 47: vegetated land column, soil-water stress (#21)
+    include("era5_land_surface_fluxnet.jl") # Phase 47: land column vs FLUXNET/PLUMBER2 towers (#21)
 end

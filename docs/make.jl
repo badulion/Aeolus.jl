@@ -43,6 +43,7 @@ makedocs(
             "Water table and aquifer"     => "theory/water_table.md",
             "Leaf photosynthesis"         => "theory/photosynthesis.md",
             "Stomatal conductance"        => "theory/stomatal_conductance.md",
+            "Vegetated land column"       => "theory/land_surface.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -99,6 +100,7 @@ makedocs(
                 "SurfaceExchange"              => "api/era5/surface_exchange.md",
                 "SoilColumn"                   => "api/era5/soil_column.md",
                 "Photosynthesis"               => "api/era5/photosynthesis.md",
+                "LandSurface"                  => "api/era5/land_surface.md",
             ],
         ],
         "Examples" => [
