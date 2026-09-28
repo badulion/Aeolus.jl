@@ -58,9 +58,10 @@ the ledger was (re)started. See `core/ledger.jl` for the conventions.
 * `terms[name]` — free-form accumulated diagnostics ([`add_term!`](@ref));
 * `ncol` — columns per class, `elapsed` (s), `nsteps`;
 * `water_tracers` — tracers counted as water in the air;
-* `ρ` — air density per level used for the water integral (kg m⁻³;
-  the Boussinesq case uses 1 everywhere, the value its surface and
-  microphysics couplings assume);
+* `ρ` — air density per level used for the water integral (kg m⁻³).
+  `build_case` sets it to the reference density `case.ref.ρ̄`
+  (`core/reference_state.jl`), the density every coupling converts its
+  fluxes with; a bare `Ledger()` falls back to 1;
 * `Ts_start`, `W_start` — snapshots at the start of the current step.
 """
 mutable struct Ledger
