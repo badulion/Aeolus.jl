@@ -67,6 +67,7 @@ mutable struct ColumnRadiation{GS, GL, CS, CL, SS, SL} <: AbstractCoupling
     heat_sw::Vector{Float64}
     buf::Vector{Float64}
     μ₀::Float64
+    sun::Any                      # solar position of the last radiation call
     ghi_bird::Float64             # Bird GHI with the radiosity coupling's sky, for the log
     applied::Float64              # ρ c_p Σ Δθ̄ dz of the last :column_tendency (J/m²)
     dt_applied::Float64
@@ -99,7 +100,7 @@ function build(::Type{<:ColumnRadiation}, case, o)
                            Int(o.nz_upper), Float64(o.r_eff_liq), ps, o.surface_sw,
                            nothing, nothing, nothing, nothing,
                            zeros(Nz), zeros(Nz), zeros(Nz), zeros(Nz),
-                           0.0, NaN, 0.0, 0.0, 0)
+                           0.0, nothing, NaN, 0.0, 0.0, 0)
 end
 
 """
@@ -222,7 +223,7 @@ function run_stage!(c::ColumnRadiation, case, ::Val{:radiation}, dt)
     end
     bus.L_sky = flw.flux_dn[1]
     @. c.heat = c.heat_lw + c.heat_sw
-    c.col, c.flw, c.fsw, c.fsw_clear, c.μ₀ = col, flw, fsw, fcl, μ
+    c.col, c.flw, c.fsw, c.fsw_clear, c.μ₀, c.sun = col, flw, fsw, fcl, μ, sp
     c.ncalls += 1
     return nothing
 end
@@ -279,7 +280,7 @@ function smoke_check(c::ColumnRadiation, case)
         "sky longwave on the bus is the column's" => case.bus.L_sky == c.flw.flux_dn[1],
         "radiation ran" => c.ncalls > 0]
     if c.fsw !== nothing
-        sp = solar_position_at(case.cfg, case.clock.hour)
+        sp = c.sun
         # the column receives S₀ (distance-corrected) μ₀ at its top
         push!(checks, "TOA insolation = S₀ f μ₀ (rel. 1e-10)" =>
               isapprox(c.fsw.flux_dn[end], SOLAR_CONSTANT * earth_sun_distance_factor(sp) * c.μ₀; rtol = 1e-10))
@@ -287,6 +288,20 @@ function smoke_check(c::ColumnRadiation, case)
               0 <= c.fsw_clear.flux_dn_dir[1] <= c.fsw_clear.flux_dn[1] <= c.fsw_clear.flux_dn[end])
         push!(checks, "condensate does not add surface direct beam" =>
               c.fsw.flux_dn_dir[1] <= c.fsw_clear.flux_dn_dir[1] * (1 + 1e-12))
+        # an independent clear-sky model: Bird with no aerosol (the column
+        # has none) and the column's precipitable water, ozone and albedo.
+        # Measured: −0.4 % at μ₀ = 0.86, −3.1 % at 0.58, −4.6 % at 0.27
+        # (TwoStream falls below Bird as the sun gets low), so 5 % is
+        # asserted for a high sun (the issue's noon criterion) and 10 %
+        # below μ₀ = 0.5.
+        pw = sum(col.vmr[:h2o][k] * 18.01528 / 28.9647 * col.ρ[k] * col.dz[k] for k in eachindex(col.dz))
+        o3 = sum(col.vmr[:o3][k] * 47.9982 / 28.9647 * col.ρ[k] * col.dz[k] for k in eachindex(col.dz)) /
+             2.1415e-2                                       # kg/m² → atm-cm (1 atm-cm = 2.1415e-2 kg/m²)
+        bird = clear_sky_irradiance(sp, BirdClearSky(; aod380 = 0.0, aod500 = 0.0, ozone = o3,
+                                    precipitable_water = pw / 10, albedo = column_surface(case)[2])).ghi
+        tol = c.μ₀ >= 0.5 ? 0.05 : 0.10
+        push!(checks, "clear-LES surface GHI within $(round(Int, 100tol)) % of an aerosol-free Bird sky" =>
+              abs(c.fsw_clear.flux_dn[1] / bird - 1) < tol)
     end
     return checks
 end

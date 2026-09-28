@@ -418,7 +418,7 @@ window, because the winter flagship blows up, see below):
 | `L_sky` (W m⁻²) | 331.6 | 333.3 | 335.3 | 237.9 |
 | old `0.95σT̄s⁴` at the same T̄s | 356.2 | 372.4 | 389.0 | 297.9 |
 | GHI, column (W m⁻²) | 0 | 559.5 | 831.4 | 234.3 |
-| Bird, aerosol-free / the radiosity's AOD₅₀₀ = 0.16 | 0 / 0 | 574.4 / 542.3 | 834.2 / 797.1 | 235.1 / 211.7 |
+| Bird (the radiosity's sky: PW 2 cm, O₃ 0.33), aerosol-free / AOD₅₀₀ = 0.16 | 0 / 0 | 574.4 / 542.3 | 834.2 / 797.1 | 235.1 / 211.7 |
 | LES-layer heating, LW / SW (K day⁻¹) | −12.8 / 0 | −9.8 / +3.5 | −6.6 / +4.6 | −4.0 / +1.4 |
 | the same above 50 m, LW / total | −5.3 / −5.3 | −4.5 / −1.0 | −3.8 / +0.8 | −2.5 / −1.1 |
 | lowest level (0–6 m), LW | −155 | −107 | −58 | −16 |
@@ -430,11 +430,15 @@ window, because the winter flagship blows up, see below):
   300–380 W m⁻² the issue expected — that range was a summer
   expectation, and a clear sky over 3.5 kg m⁻² of water at 274 K gives
   about 0.7 σT⁴.
-* **Clear-sky GHI** agrees with Bird's aerosol-free sky to 0.3 % at
-  noon (−2.6 % at 06–07 h, low sun) and exceeds Bird with the case's
-  urban AOD by 4.3 % at noon and 10.7 % at the low winter sun: the
-  TwoStream column has no aerosol until the aerosol-optics coupling
-  (#142).
+* **Clear-sky GHI.** Against Bird with no aerosol and the column's own
+  precipitable water and ozone (440 DU in summer, 365 in winter), the column is −0.4 % at
+  μ₀ = 0.86, −3.1 % at μ₀ = 0.58 and −4.6 % at the winter noon sun,
+  μ₀ = 0.27 (first step of the `:smoke` window): TwoStream falls below
+  Bird as the sun gets low. The smoke check asserts 5 % for μ₀ ≥ 0.5 (the
+  issue's noon criterion) and 10 % below. Against Bird with the case's
+  urban AOD the column is 4.3 % higher at noon and 10.7 % at the low
+  winter sun: the TwoStream column has no aerosol until the
+  aerosol-optics coupling (#142).
 * **Heating.** The lowest LES levels cool at tens to 155 K day⁻¹: the
   case starts its surfaces at 285 K under 293 K air, and the air near
   the ground radiates into the colder surface. Above 50 m the longwave
