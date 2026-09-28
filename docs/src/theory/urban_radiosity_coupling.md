@@ -119,10 +119,12 @@ factor for the stiffest cell modes tends to −1, so those modes ring for
 hundreds of steps. With θ = ½ the plate test was still 1·10⁻⁶ K off after
 400 steps.
 
-**Not validated against observations.** The BUBBLE and CAPITOUL facade
-and surface temperature comparisons belong to the Phase 49 validation
-issue. The air state near each facet (canyon air temperature and wind,
-wall convection coefficients) is an input here and is not modelled.
+**Validation against observations** is on
+[BUBBLE / CAPITOUL validation](urban_validation.md). The air state near
+each facet is an input here. The canyon air temperature is not
+modelled. The canyon wind and the wall convection coefficient can come
+from the TEB closures `canyon_wind_speed` and
+`rowley_convection_coefficient` (#30).
 
 **Buildings behind the facets (#29).** The implicit step is built from
 three pieces: trial column steps, one dense solve, and the final column

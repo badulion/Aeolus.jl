@@ -765,4 +765,8 @@ export BuildingHeatRelease, building_heat_release, energy_consumption, total_hea
        anthropogenic_sensible_heat, anthropogenic_latent_heat,
        step_buildings!, building_facets, scene_building_zone, anthropogenic_heat_maps
 
+# Phase 49 — TEB canyon-exchange closures used by the BUBBLE / CAPITOUL
+# validation (#30).
+export canyon_wind_speed, rowley_convection_coefficient
+
 end # module

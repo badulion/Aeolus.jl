@@ -1,0 +1,31 @@
+# CAPITOUL (Toulouse old centre) surface temperatures: observed and TEB-modelled
+# summary statistics, all three study periods combined (summer 2004-07-15..08-15,
+# autumn 2004-10-15..11-15, winter 2005-01-15..02-15; ~4500 half-hourly samples).
+# Source: Moscicki, M. & Voogt, J. A. (2007). A comparison of modeled and observed
+#   urban surface temperatures in Toulouse, France. AMS 7th Symposium on the Urban
+#   Environment, San Diego, paper J2.6, extended abstract, Table 4.1
+#   (https://ams.confex.com/ams/pdfpapers/126731.pdf, downloaded 2026-09-28).
+#   Numbers typed from the table text (not digitised from a figure); units degC / K.
+# Observations: infrared thermometers, emissivity-corrected; "roads" = mean of the
+#   three canyon floors (Alsace, Pomme, Remusat; traffic-corrected), "walls" =
+#   weighted mean of the six walls, "roof" = one pitched clay-tile roof.
+# Model: TEB (Masson 2000) forced OFFLINE by the CAPITOUL tower observations.
+# Rows: M, O = modelled / observed mean; sM, sO = standard deviations; MBE = M - O;
+#   MAE; RMSE and its systematic / unsystematic parts; b, a = regression slope and
+#   intercept of M on O; r2; d = Willmott index; max and min of M - O.
+statistic,roads,walls,roof
+M,15.14,15.98,14.28
+O,15.78,15.30,12.88
+sM,12.09,8.88,13.20
+sO,9.38,9.11,11.28
+MBE,-0.64,0.68,1.40
+MAE,2.52,1.03,2.51
+RMSE,3.09,1.22,3.50
+RMSEs,2.86,0.82,2.35
+RMSEu,1.10,0.92,2.64
+b,1.28,0.97,1.14
+a,-5.10,1.16,-0.46
+r2,0.98,0.99,0.96
+d,0.90,0.98,0.95
+MOmax,11.98,4.00,15.47
+MOmin,-6.62,-3.13,-6.34

@@ -5,7 +5,7 @@ Phase 49 — the production urban surface: per-facet (roof / wall /
 ground) multi-layer heat conduction through real material layers,
 replacing the single heat-capacity slab of the urban example.
 
-Four parts:
+Five parts:
 
   1. **Thermal material table** — [`ThermalMaterial`](@ref) and
      [`thermal_material`](@ref): conductivity, density and specific heat
@@ -37,6 +37,10 @@ Four parts:
      [`WindowFacet`](@ref), a glazed `AbstractSurface` whose transmitted
      shortwave ([`transmitted_shortwave`](@ref)) is the hook for the
      building energy model.
+  5. **Canyon exchange** (`src/urban_surface/canyon_exchange.jl`) — the
+     Town Energy Balance closures for the air next to walls and streets:
+     the canyon wind [`canyon_wind_speed`](@ref) and the wall convective
+     coefficient [`rowley_convection_coefficient`](@ref).
 
 # Sign convention
 
@@ -107,7 +111,9 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        pane_temperatures, window_heat_content,
        # facet–radiosity coupling (#28)
        UrbanFacetScene, step_urban_facets!, aggregate_facet_fluxes,
-       example_facet_layers
+       example_facet_layers,
+       # canyon exchange (#30)
+       canyon_wind_speed, rowley_convection_coefficient
 
 # =========================================================================
 # 1. Thermal material table
@@ -1375,5 +1381,11 @@ function aggregate_facet_fluxes(u::UrbanFacetScene{T},
     end
     return (Rn = Rn, H = H, LE = LE, G = G, E = E, Q_interior = Qi, area_density = ad)
 end
+
+# =========================================================================
+# 13. Street-canyon exchange closures (#30)
+# =========================================================================
+
+include("urban_surface/canyon_exchange.jl")
 
 end # module
