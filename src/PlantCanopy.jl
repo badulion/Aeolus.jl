@@ -53,6 +53,17 @@ sink it exerts on the resolved flow:
      for the air. [`leaf_penman_monteith`](@ref) is the linearised
      (Penman–Monteith) limit.
 
+  6. **Within-canopy profiles** — measured leaf-area profiles
+     ([`TabulatedLAD`](@ref)), the wall-limited canopy mixing length
+     ([`canopy_mixing_length`](@ref)), the displacement height as the
+     centroid of momentum absorption ([`canopy_displacement_height`](@ref)),
+     and the steady K-theory scalar column
+     ([`solve_canopy_scalar_column`](@ref)) with the Harman & Finnigan (2008)
+     diffusivity ([`harman_finnigan_scalar_diffusivity`](@ref)), which turns
+     the leaf heat sources of item 5 into an air-temperature profile. These
+     are what the #25 validation against wind-tunnel, orchard and forest
+     profiles uses (`test/era5_canopy_profiles.jl`).
+
 # References
 
   * Lalic, B. & Mihailovic, D. T. (2004). An empirical relation describing
@@ -92,6 +103,13 @@ sink it exerts on the resolved flow:
   * Incropera, F. P., DeWitt, D. P., Bergman, T. L. & Lavine, A. S. (2007).
     *Fundamentals of Heat and Mass Transfer*, 6th ed. Wiley — the laminar
     flat-plate correlations behind the Campbell & Norman coefficients.
+  * Harman, I. N. & Finnigan, J. J. (2008). Scalar concentration profiles
+    in the canopy and roughness sublayer. *Boundary-Layer Meteorol.*, 129,
+    323-351.
+  * Thom, A. S. (1971). Momentum absorption by vegetation. *Q. J. R.
+    Meteorol. Soc.*, 97, 414-428; Jackson, P. S. (1981). On the
+    displacement height in the logarithmic velocity profile. *J. Fluid
+    Mech.*, 111, 15-25.
 """
 module PlantCanopy
 
@@ -108,9 +126,9 @@ using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
 using ..Photosynthesis: AbstractPhotosynthesisParameters, AbstractStomatalModel,
                         leaf_gas_exchange, leaf_boundary_layer_conductance,
                         leaf_transpiration, par_to_photon_flux
-using ..SurfaceExchange: _illinois
+using ..SurfaceExchange: _illinois, von_karman
 
-export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
+export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD, TabulatedLAD,
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
        layer_leaf_area_density,
        canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,
@@ -129,7 +147,9 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD,
        leaf_boundary_layer_conductances,
        AbstractLeafStomata, FixedStomatalConductance, CoupledLeafPhysiology,
        LeafEnergyBalance, leaf_energy_balance, leaf_penman_monteith,
-       CanopyLeafEnergySolution, canopy_leaf_energy_balance
+       CanopyLeafEnergySolution, canopy_leaf_energy_balance,
+       CanopyScalarSolution, solve_canopy_scalar_column, canopy_displacement_height,
+       canopy_mixing_length, harman_finnigan_scalar_diffusivity
 
 # =========================================================================
 # 1. Leaf-area density profiles
@@ -256,6 +276,53 @@ function leaf_area_density(b::BetaLAD, z::Real)
     return b.LAI / b.h * x^(b.p - 1) * (1 - x)^(b.q - 1) * exp(-b.logB)
 end
 _lad_breakpoints(::BetaLAD) = ()
+
+"""
+    TabulatedLAD(z, a; LAI = nothing)
+
+A measured leaf-area-density profile given at heights `z` [m] (strictly
+increasing, `z[1] ≥ 0`) with values `a` [m² m⁻³], linearly interpolated
+between the nodes and zero outside ``[z_1, z_n]``. The canopy height is
+`z[end]`.
+
+The leaf-area index is the exact integral of the interpolant (the
+trapezoidal sum of the table). If `LAI` is given, the values are rescaled
+by one common factor so that the profile integrates to it — for a
+published profile shape whose absolute scale is quoted separately (e.g. a
+normalised ``a h`` against ``z/h`` plus a stand LAI).
+"""
+struct TabulatedLAD{T<:AbstractFloat} <: AbstractLeafAreaDensity
+    z::Vector{T}
+    a::Vector{T}
+    LAI::T
+    h::T
+end
+function TabulatedLAD(z::AbstractVector{<:Real}, a::AbstractVector{<:Real};
+                      LAI::Union{Nothing,Real} = nothing)
+    n = length(z)
+    n >= 2 && length(a) == n ||
+        throw(ArgumentError("TabulatedLAD: need ≥ 2 nodes and length(a) == length(z)"))
+    zF = Float64.(z); aF = Float64.(a)
+    zF[1] >= 0 && all(>(0), diff(zF)) ||
+        throw(ArgumentError("TabulatedLAD: z must start at ≥ 0 and increase strictly"))
+    all(>=(0), aF) || throw(ArgumentError("TabulatedLAD: a must be ≥ 0"))
+    L = sum((aF[i] + aF[i+1]) / 2 * (zF[i+1] - zF[i]) for i in 1:n-1)
+    if LAI !== nothing
+        LAI >= 0 || throw(ArgumentError("TabulatedLAD: LAI must be ≥ 0"))
+        L > 0 || LAI == 0 ||
+            throw(ArgumentError("TabulatedLAD: cannot rescale an all-zero profile to LAI > 0"))
+        L > 0 && (aF .*= LAI / L)
+        L = Float64(LAI)
+    end
+    return TabulatedLAD{Float64}(zF, aF, L, zF[end])
+end
+function leaf_area_density(p::TabulatedLAD, z::Real)
+    (z < p.z[1] || z > p.z[end]) && return zero(p.LAI)
+    i = clamp(searchsortedlast(p.z, z), 1, length(p.z) - 1)
+    t = (z - p.z[i]) / (p.z[i+1] - p.z[i])
+    return (1 - t) * p.a[i] + t * p.a[i+1]
+end
+_lad_breakpoints(p::TabulatedLAD) = Tuple(p.z)
 
 """
     canopy_height(p::AbstractLeafAreaDensity) -> h [m]
@@ -610,7 +677,12 @@ and wind `u` [m s⁻¹], the friction velocity at the column top `u_star`
 integrated over the column `drag_integral` = ``\\sum C_d a_k |U_k| U_k Δz_k``
 [m² s⁻²], the kinematic stress on the ground `tau_ground` (zero for a
 free-slip bottom), the number of iterations and the final update norm
-`residual` (max ``|ΔU|/U_{top}``).
+`residual` (max ``|ΔU|/U_{top}``). `z_faces` are the layer faces and `K`
+the eddy viscosity ``l^2|∂U/∂z| + ν`` [m² s⁻¹] at those faces at
+convergence (`K[1]` is the ground exchange coefficient, zero for a
+free-slip bottom): the diffusivity that
+[`solve_canopy_scalar_column`](@ref) needs, divided by a turbulent Schmidt
+number.
 """
 struct CanopyWindSolution
     z::Vector{Float64}
@@ -620,6 +692,8 @@ struct CanopyWindSolution
     tau_ground::Float64
     iterations::Int
     residual::Float64
+    z_faces::Vector{Float64}
+    K::Vector{Float64}
 end
 
 _lmix_at(l::Real, z) = Float64(l)
@@ -722,7 +796,7 @@ function solve_canopy_wind_column(z_faces::AbstractVector{<:Real}, lad::Abstract
         drag += Cd * a[k] * abs(u[k]) * u[k] * Δz[k]
     end
     τ_g = K[1] * u[1] / δ[1]
-    return CanopyWindSolution(zc, u, sqrt(abs(τ_top)), drag, τ_g, it, res)
+    return CanopyWindSolution(zc, u, sqrt(abs(τ_top)), drag, τ_g, it, res, zf, copy(K))
 end
 
 # Tridiagonal solve (Thomas algorithm); lo[1] and up[end] are ignored.
@@ -1879,5 +1953,213 @@ function canopy_leaf_energy_balance(z_faces::AbstractVector{<:Real}, lad::Abstra
 end
 canopy_leaf_energy_balance(p::AbstractLeafAreaDensity, z_faces::AbstractVector{<:Real}; kwargs...) =
     canopy_leaf_energy_balance(z_faces, layer_leaf_area_density(p, z_faces); kwargs...)
+
+# =========================================================================
+# 6. Within-canopy profiles: scalar column and displacement height (#25)
+# =========================================================================
+
+"""
+    canopy_displacement_height(sol::CanopyWindSolution, lad; C_d) -> d [m]
+
+Zero-plane displacement of a canopy as the mean height of momentum
+absorption (Thom 1971; Jackson 1981):
+
+```math
+d = \\frac{\\sum_k z_k\\,C_d a_k |U_k| U_k\\,Δz_k + 0\\cdot τ_g}
+         {\\sum_k C_d a_k |U_k| U_k\\,Δz_k + τ_g},
+```
+
+with the drag and ground stress ``τ_g`` of a converged
+[`solve_canopy_wind_column`](@ref) solution on the same layers (`lad` the
+layer LAD it was solved with). Heights are measured from `z_faces[1]`.
+This is what tower studies report as ``d`` when they infer it from the
+within-canopy momentum-flux profile.
+
+  * Thom, A. S. (1971). Momentum absorption by vegetation. *Q. J. R.
+    Meteorol. Soc.*, 97, 414-428.
+  * Jackson, P. S. (1981). On the displacement height in the logarithmic
+    velocity profile. *J. Fluid Mech.*, 111, 15-25.
+"""
+function canopy_displacement_height(sol::CanopyWindSolution, lad::AbstractVector{<:Real}; C_d::Real)
+    N = length(sol.u)
+    length(lad) == N || throw(DimensionMismatch("canopy_displacement_height: lad must have one value per layer"))
+    Δz = diff(sol.z_faces)
+    num = 0.0; den = sol.tau_ground
+    for k in 1:N
+        D = Float64(C_d) * Float64(lad[k]) * abs(sol.u[k]) * sol.u[k] * Δz[k]
+        num += (sol.z[k] - sol.z_faces[1]) * D
+        den += D
+    end
+    den > 0 || throw(ArgumentError("canopy_displacement_height: no momentum is absorbed"))
+    return num / den
+end
+
+"""
+    canopy_mixing_length(z; h, l_c, κ = SurfaceExchange.von_karman()) -> l [m]
+
+Mixing-length profile for [`solve_canopy_wind_column`](@ref) over a canopy
+of height `h` with canopy mixing length `l_c` (e.g.
+[`harman_finnigan_mixing_length`](@ref)):
+
+```math
+l(z) = \\min(l_c,\\ κ z)\\quad (z ≤ h),\\qquad l(z) = l_c + κ (z - h)\\quad (z > h).
+```
+
+Inside the canopy the length is the constant ``l_c`` of the
+Inoue / Harman–Finnigan theory, limited by the wall value ``κz`` near the
+ground so that eddies cannot be larger than their distance from it (with a
+constant ``l_c`` down to the ground a no-slip floor takes a spurious share
+of the stress). Above the canopy it grows at the surface-layer rate
+``κ`` from ``l_c``, continuous at ``h``; the roughness-sublayer enhancement
+of Harman & Finnigan (2007) is not included.
+"""
+function canopy_mixing_length(z::Real; h::Real, l_c::Real, κ::Real = von_karman())
+    (h > 0 && l_c > 0) || throw(ArgumentError("canopy_mixing_length: h and l_c must be > 0"))
+    z <= h && return min(Float64(l_c), κ * max(Float64(z), 0.0))
+    return l_c + κ * (z - h)
+end
+
+"""
+    harman_finnigan_scalar_diffusivity(z; h, u_star, l_mix, β = 0.3, Sc = 0.5,
+                                       κ = SurfaceExchange.von_karman()) -> K_c [m² s⁻¹]
+
+Turbulent diffusivity for scalars in and above a canopy in the form of
+Harman & Finnigan (2008), as used by the multilayer canopy of Bonan et al.
+(2018, eqs. 22-23):
+
+```math
+K_c(z) = \\frac{l\\,u_*}{Sc}\\,\\exp\\!\\left[\\frac{(z-h)\\,β}{l}\\right]\\quad (z ≤ h),
+\\qquad K_c(z) = \\frac{(l + κ(z-h))\\,u_*}{Sc}\\quad (z > h),
+```
+
+with the canopy mixing length `l_mix` (constant in the canopy, e.g.
+[`harman_finnigan_mixing_length`](@ref)), ``β = u_*/U_h`` and the canopy-top
+turbulent Schmidt number `Sc` (0.5 in neutral flow, Harman & Finnigan
+2008). Inside the canopy the diffusivity decays with the wind,
+``e^{(z-h)β/l}`` being the exponential wind profile of
+[`canopy_exponential_wind`](@ref). Above the canopy the constant-stress
+eddy viscosity ``l\\,u_*`` of the mixing length ``l + κ(z-h)`` is used,
+which is continuous at ``z = h``; the roughness-sublayer correction of
+Harman & Finnigan is not included.
+
+Unlike the local ``l^2|∂U/∂z|`` of [`solve_canopy_wind_column`](@ref), this
+form does not collapse in a sheltered trunk space, where turbulence is
+imported from the crown rather than made by local shear.
+"""
+function harman_finnigan_scalar_diffusivity(z::Real; h::Real, u_star::Real, l_mix::Real,
+                                            β::Real = 0.3, Sc::Real = 0.5,
+                                            κ::Real = von_karman())
+    (h > 0 && l_mix > 0 && β > 0 && Sc > 0) ||
+        throw(ArgumentError("harman_finnigan_scalar_diffusivity: h, l_mix, β, Sc must be > 0"))
+    z <= h && return l_mix * u_star / Sc * exp((z - h) * β / l_mix)
+    return (l_mix + κ * (z - h)) * u_star / Sc
+end
+
+"""
+    CanopyScalarSolution
+
+Result of [`solve_canopy_scalar_column`](@ref): layer-centre heights `z`,
+the scalar `c` there, the faces `z_faces` and the upward turbulent flux
+`flux` at every face (`flux[1]` into the air from the ground, `flux[end]`
+leaving through the top), in the units of `K·c/z`.
+"""
+struct CanopyScalarSolution
+    z::Vector{Float64}
+    c::Vector{Float64}
+    z_faces::Vector{Float64}
+    flux::Vector{Float64}
+end
+
+"""
+    solve_canopy_scalar_column(z_faces, K, source; top_value,
+                               bottom_flux = nothing, bottom_value = nothing)
+        -> CanopyScalarSolution
+
+Steady profile of a scalar ``c`` (potential temperature, humidity, a
+tracer) in a canopy column with first-order (K-theory) turbulent
+transport:
+
+```math
+\\frac{d}{dz}\\left(K \\frac{dc}{dz}\\right) + S(z) = 0,\\qquad
+F = -K\\frac{dc}{dz} \\ \\text{(upward flux)},
+```
+
+with the per-layer source `source` [c-units s⁻¹] (e.g. the leaf
+`heat_source` of [`canopy_leaf_energy_balance`](@ref) divided by
+``ρc_p``), the diffusivity `K` [m² s⁻¹] at the `N+1` faces (e.g. the
+`K` of a [`CanopyWindSolution`](@ref) divided by a turbulent Schmidt
+number), `c = top_value` at the top face and at the bottom either an
+upward flux `bottom_flux` (face 1) or a surface value `bottom_value`
+exchanged through `K[1]` over the half layer. Exactly one bottom condition
+must be given.
+
+In one dimension the steady flux is fixed by the sources alone,
+``F_{f+1} = F_f + S_k Δz_k``, so the discrete budget holds exactly:
+the flux out of the top is the bottom flux plus the column-integrated
+source. The scalar then follows by integrating ``dc/dz = -F/K`` down from
+the top.
+
+This is the closure of Harman & Finnigan (2008) and of multilayer land
+models (e.g. Bonan et al. 2018). K-theory cannot represent
+counter-gradient transport by canopy-scale eddies (Denmead & Bradley
+1985), so in a canopy with a sparse trunk space it describes the crown
+better than the air beneath it.
+
+  * Harman, I. N. & Finnigan, J. J. (2008). Scalar concentration profiles
+    in the canopy and roughness sublayer. *Boundary-Layer Meteorol.*,
+    129, 323-351.
+  * Bonan, G. B. et al. (2018). Modeling canopy-induced turbulence in the
+    Earth system. *Geosci. Model Dev.*, 11, 1467-1496.
+  * Denmead, O. T. & Bradley, E. F. (1985). Flux-gradient relationships
+    in a forest canopy. In *The Forest-Atmosphere Interaction*, Reidel,
+    421-442.
+"""
+function solve_canopy_scalar_column(z_faces::AbstractVector{<:Real}, K::AbstractVector{<:Real},
+                                    source::AbstractVector{<:Real}; top_value::Real,
+                                    bottom_flux::Union{Nothing,Real} = nothing,
+                                    bottom_value::Union{Nothing,Real} = nothing)
+    N = length(z_faces) - 1
+    N >= 1 || throw(ArgumentError("solve_canopy_scalar_column: need ≥ 2 faces"))
+    length(K) == N + 1 || throw(DimensionMismatch("solve_canopy_scalar_column: K must be given at the N+1 faces"))
+    length(source) == N || throw(DimensionMismatch("solve_canopy_scalar_column: one source per layer"))
+    (bottom_flux === nothing) != (bottom_value === nothing) ||
+        throw(ArgumentError("solve_canopy_scalar_column: give exactly one of bottom_flux, bottom_value"))
+    zf = Float64.(z_faces)
+    Δz = diff(zf)
+    all(>(0), Δz) || throw(ArgumentError("solve_canopy_scalar_column: z_faces must increase"))
+    Kf = Float64.(K)
+    all(>(0), @view Kf[2:N+1]) ||
+        throw(ArgumentError("solve_canopy_scalar_column: K must be > 0 at every face above the ground"))
+    zc = (zf[1:N] .+ zf[2:N+1]) ./ 2
+    δ = similar(zf)
+    δ[1] = zc[1] - zf[1]
+    for f in 2:N
+        δ[f] = zc[f] - zc[f-1]
+    end
+    δ[N+1] = zf[N+1] - zc[N]
+    # Flux profile from a zero bottom flux: P_f = Σ_{j<f} S_j Δz_j.
+    P = zeros(N + 1)
+    for k in 1:N
+        P[k+1] = P[k] + Float64(source[k]) * Δz[k]
+    end
+    # c_k = top − Σ_{faces above k} F_f δ_f / K_f is affine in the bottom flux F₁:
+    # c_k = a_k + b_k F₁.
+    a = zeros(N); b = zeros(N)
+    acc_a = Float64(top_value); acc_b = 0.0
+    for k in N:-1:1
+        acc_a += P[k+1] * δ[k+1] / Kf[k+1]
+        acc_b += δ[k+1] / Kf[k+1]
+        a[k] = acc_a; b[k] = acc_b
+    end
+    F1 = if bottom_flux !== nothing
+        Float64(bottom_flux)
+    else
+        Kf[1] > 0 || throw(ArgumentError("solve_canopy_scalar_column: bottom_value needs K[1] > 0"))
+        # c_g − c₁ = F₁ δ₁ / K₁  ⇒  F₁ = (c_g − a₁) / (b₁ + δ₁/K₁)
+        (Float64(bottom_value) - a[1]) / (b[1] + δ[1] / Kf[1])
+    end
+    c = a .+ b .* F1
+    return CanopyScalarSolution(zc, c, zf, P .+ F1)
+end
 
 end # module
