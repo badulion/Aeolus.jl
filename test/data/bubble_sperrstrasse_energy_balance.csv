@@ -1,0 +1,55 @@
+# BUBBLE, Basel-Sperrstrasse (U1): observed surface energy balance of clear days,
+# June 2002, and the published skill of two reference urban canopy models.
+# Units W m-2. Sign: Q* positive downward; QH, QE, dQS positive away from the surface
+# (dQS into the fabric), as in the sources. dQS is the observed residual Q* - QH - QE.
+#
+# Block "HS05": Hamdi, R. & Schayes, G. (2005). Validation of the Martilli's urban
+#   boundary layer scheme with measurements from two mid-latitude European cities.
+#   Atmos. Chem. Phys. Discuss., 5, 4257-4289, Table 2 (row U1): mean of the clear days
+#   17, 18, 23, 26, 30 June 2002; D = 08:00-16:00 UTC, N = 22:00-03:00 UTC.
+#   The table gives S, L and Q* in W m-2 and QH, dQS, QE as fractions of Q*.
+# Block "HM08": Hamdi, R. & Masson, V. (2008). Inclusion of a drag approach in the
+#   Town Energy Balance (TEB) scheme: offline 1-D validation in a street canyon.
+#   J. Appl. Meteorol. Climatol., 47, 2627-2644, Table 4: mean of the clear days
+#   17, 18, 19, 22, 23, 29, 30 June 2002 (T = all hours; the paper does not define
+#   its day / night split, so only T is asserted). obs = tower; SBL, REF = TEB
+#   versions forced by the tower; rmseSBL / rmseREF their RMSE ("//": REF = SBL).
+# Block "HM08t3": the same paper, Table 3: observed air temperature (degC) at 18 m
+#   a.g.l. (above roof level) over the same seven days, used only to bias-correct
+#   the grid-box forcing temperature (not a validation target).
+# Numbers typed from the table text of the open-access PDFs (downloaded 2026-09-28).
+source,period,quantity,obs,SBL,REF,rmseSBL,rmseREF
+HS05,D,Sdown,741,,,,
+HS05,N,Sdown,0,,,,
+HS05,D,Sup,72,,,,
+HS05,N,Sup,3,,,,
+HS05,D,Ldown,360,,,,
+HS05,N,Ldown,340,,,,
+HS05,D,Lup,521,,,,
+HS05,N,Lup,420,,,,
+HS05,D,Qstar,510,,,,
+HS05,N,Qstar,-82,,,,
+HS05,D,QH/Qstar,0.48,,,,
+HS05,N,QH/Qstar,-0.21,,,,
+HS05,D,dQS/Qstar,0.32,,,,
+HS05,N,dQS/Qstar,1.3,,,,
+HS05,D,QE/Qstar,0.16,,,,
+HS05,N,QE/Qstar,-0.19,,,,
+HM08,T,Sup,34,31,31,4,4
+HM08,D,Sup,57,55,55,5,5
+HM08,N,Sup,4,1,1,3,3
+HM08,T,Lup,467,453,462,16,12
+HM08,D,Lup,494,483,492,15,10
+HM08,N,Lup,431,415,421,17,13
+HM08,T,Qstar,179,170,160,29,34
+HM08,D,Qstar,373,358,349,37,42
+HM08,N,Qstar,-76,-81,-88,10,17
+HM08,T,QH,112,103,137,49,56
+HM08,D,QH,189,172,219,60,64
+HM08,N,QH,26,26,45,31,44
+HM08,T,dQS,24,47,11,70,64
+HM08,D,dQS,143,170,116,91,83
+HM08,N,dQS,-111,-92,-106,35,30
+HM08t3,T,Tair18m,23.80,,,,
+HM08t3,D,Tair18m,25.34,,,,
+HM08t3,N,Tair18m,21.79,,,,

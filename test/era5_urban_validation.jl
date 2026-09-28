@@ -169,4 +169,94 @@ end
     @test Δpomme > 0.3 && Δremus > 0.3          # equator-facing walls are warmer
 end
 
+# ===========================================================================
+@testset "BUBBLE: surface energy balance of clear June days" begin
+    w = power_forcing("nasa_power_basel_bubble_hourly.csv")
+    ob = bubble_observations()
+    days_hm = (17, 18, 19, 22, 23, 29, 30)     # Hamdi & Masson (2008)
+    days_hs = (17, 18, 23, 26, 30)             # Hamdi & Schayes (2005)
+    k0 = power_index(w, 2002, 6, 1)
+    nh = 30 * 24
+    ev = [k for k in k0:k0+nh-1 if w.day[k] in days_hm]
+
+    # The forcing itself: observed S↓ + L↓ = Q* + S↑ + L↑ at the tower
+    # (HM08 Table 4, all hours of the seven days) against the satellite values.
+    obs_in = ob[("HM08", "T", "Qstar")].obs + ob[("HM08", "T", "Sup")].obs + ob[("HM08", "T", "Lup")].obs
+    pow_in = mean(w.SW[ev] .+ w.LW[ev])
+    @printf("  forcing check, 7 clear days: S↓ + L↓ = %.1f W m⁻² (CERES) vs %.0f (tower, Q* + S↑ + L↑)\n",
+            pow_in, obs_in)
+    @test abs(pow_in / obs_in - 1) < 0.02
+    # The grid-box air temperature lacks the urban heat island: bias-correct it to
+    # the tower mean at 18 m over the same days (HM08 Table 3) — one constant.
+    ΔT = ob[("HM08t3", "T", "Tair18m")].obs - mean(w.T2M[ev])
+    @printf("  T2M (MERRA-2) is %.2f K below the tower's 18 m mean; offset applied\n", ΔT)
+
+    layers = (wall = bubble_wall_layers(), roof = bubble_roof_layers(), ground = bubble_road_layers())
+    Tm = mean(w.T2M[k0:k0+nh-1]) + 273.15 + ΔT
+    # The source area holds both street directions (67° and 157°, HS05 Table 1):
+    # equal weights (assumption).
+    outs = map(BUBBLE_CANYONS) do c
+        case = canyon_case(c; layers, materials = bubble_materials(), T0 = Tm, T_deep = Tm)
+        run_canyon!(case, w, k0, nh; site = BUBBLE_SITE, dt = 3600.0, T_offset = ΔT)
+    end
+    avg(key) = (getfield(outs[1], key) .+ getfield(outs[2], key)) ./ 2
+    day, hour = outs[1].day, outs[1].hour
+    inwin(p, h) = p === :T || (p === :D && 8 <= h <= 15) || (p === :N && (h >= 22 || h <= 2))
+    sel(days, p) = [d in days && inwin(p, h) for (d, h) in zip(day, hour)]
+    m(key, s) = mean(avg(key)[s])
+
+    # --- Hamdi & Masson (2008), Table 4: all hours of the seven days --------
+    sT = sel(days_hm, :T)
+    turb_obs = ob[("HM08", "T", "Qstar")].obs - ob[("HM08", "T", "dQS")].obs   # QH + QE
+    @printf("  HM08 T   %-26s %8s %6s %8s %8s\n", "", "model", "obs", "TEB-SBL", "SBL rmse")
+    rows = (("Sup", :Sup, ob[("HM08", "T", "Sup")].obs), ("Lup", :Lup, ob[("HM08", "T", "Lup")].obs),
+            ("Qstar", :Qstar, ob[("HM08", "T", "Qstar")].obs),
+            ("QH", :QH, turb_obs), ("dQS", :dQS, ob[("HM08", "T", "dQS")].obs))
+    for (q, key, o) in rows
+        r = ob[("HM08", "T", q)]
+        label = q == "QH" ? "QH (obs: QH + QE)" : q
+        @printf("  HM08 T   %-26s %8.1f %6.0f %8.0f %8.0f\n", label, m(key, sT), o, r.SBL, r.rmseSBL)
+        # within the RMSE of TEB forced by the tower at the same site and days
+        @test abs(m(key, sT) - o) <= r.rmseSBL
+    end
+
+    # --- Hamdi & Schayes (2005), Table 2: day 08-16 UTC, night 22-03 UTC ----
+    for p in (:D, :N)
+        s = sel(days_hs, p); P = string(p)
+        o(q) = ob[("HS05", P, q)].obs
+        rm(q) = ob[("HM08", P, q)].rmseSBL      # TEB-SBL error scale for that part of the day
+        Q = m(:Qstar, s)
+        @printf("  HS05 %s: S↑ %.1f (obs %.0f)  L↑ %.1f (%.0f)  Q* %.1f (%.0f)  QH/Q* %.2f (QH+QE: %.2f)  ΔQS/Q* %.2f (%.2f)\n",
+                P, m(:Sup, s), o("Sup"), m(:Lup, s), o("Lup"), Q, o("Qstar"),
+                m(:QH, s) / Q, o("QH/Qstar") + o("QE/Qstar"), m(:dQS, s) / Q, o("dQS/Qstar"))
+        @test abs(Q - o("Qstar")) <= rm("Qstar")
+        @test abs(m(:Sup, s) - o("Sup")) <= rm("Sup")
+        if p === :N
+            @test abs(m(:Lup, s) - o("Lup")) <= rm("Lup")
+            # at night storage release exceeds the radiative loss and keeps QH > 0
+            @test m(:QH, s) > 0
+            @test m(:dQS, s) / Q > 1
+        else
+            # The daytime canopy is radiometrically too warm: L↑ +41 W m⁻² against
+            # TEB's 15. About 17 W m⁻² of it is the 16 % vegetation of the source
+            # area (not modelled; ~18 K cooler than the roofs by day) and the
+            # satellite S↓ is 4.6 % above the tower's 741 W m⁻² in this window.
+            # Recorded, not loosened.
+            @test_broken abs(m(:Lup, s) - o("Lup")) <= rm("Lup")
+            @test m(:Lup, s) > o("Lup")
+        end
+    end
+
+    # --- storage hysteresis (HM08 §4e: ΔQS rises faster than QH in the
+    # morning and peaks earlier; it turns negative 1-2 h before Q*) ----------
+    cQ = composite(avg(:Qstar), hour, sT)
+    cH = composite(avg(:QH), hour, sT)
+    cS = composite(avg(:dQS), hour, sT)
+    after(c) = findfirst(h -> h > 12 && c[h+1] < 0, 0:23) - 1
+    @printf("  composite peaks (UTC): ΔQS %02d, Q* %02d, QH %02d; afternoon sign change ΔQS %02d, Q* %02d\n",
+            peak_hour(cS), peak_hour(cQ), peak_hour(cH), after(cS), after(cQ))
+    @test peak_hour(cS) < peak_hour(cQ) <= peak_hour(cH)
+    @test 1 <= after(cQ) - after(cS) <= 2
+end
+
 end
