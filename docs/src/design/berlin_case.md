@@ -72,6 +72,17 @@ default.
 | `report(c, case)` | an extra log line with each output record |
 | `smoke_variants(::Type{C})` | extra smoke-test configurations, a tuple of `NamedTuple`s (see [the smoke test](#Smoke-test-and-coverage-test)) |
 | `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run |
+| `incompatible_reason(::Type{C})` | why the `incompatible` pairs fail, appended to the selection error |
+
+Two slots drive the dynamics itself and have three more methods
+(#133, see [Dynamical core and time integration](#Dynamical-core-and-time-integration)):
+
+| method | meaning |
+| :-- | :-- |
+| `build_core(::Type{C}, cfg, mesh)` | slot `:core`: construct the dynamical-core simulation (`case.sim`) |
+| `next_dt(c, case)` | slot `:timestepper`: the length of the next step (default `cfg.dt`) |
+| `advance_dynamics!(c, case, dt)` | slot `:timestepper`: advance `case.sim` by `dt` with the composed `:body_force` / `:post_predictor` hooks (default one `step!`) |
+| `variable_dt(::Type{C})` | slot `:timestepper`: `true` if `next_dt` varies; `run_case!` then runs to the simulated time `nsteps · cfg.dt` |
 
 `selected_couplings(cfg)` checks the configuration: an unknown key, an
 unknown provider, an additive switch used on a slot coupling, a slot
@@ -84,11 +95,15 @@ crosses a multiple of 600 s, `floor(t_new/P) > floor(t_old/P)`;
 also fires on step 1. With `dt = 2 s` this is exactly the old
 `n % 300 == 0 || n == 1` (checked over a whole day in
 `test/berlin_case.jl`). With an adaptive `dt` the entry still fires
-once per period crossed, but the couplings that integrate over their
-interval, `soil_urban` and `buildings_citymean`, pass the nominal period
-`P` rather than the time elapsed since they last ran. That is exact only
-when `dt` divides `P`; the adaptive-dt issue (#133) has to pass the
-elapsed interval instead.
+once per period crossed. `soil_urban` integrates over the time elapsed
+since its previous exchange (exactly `P` when `dt` divides `P`, so the
+fixed-step run is unchanged). `buildings_citymean` advances its zone
+over the *next* radiation interval, which it cannot know in advance
+under an adaptive `dt`; it uses the nominal `P`, so the zone and the air
+it heats disagree by less than one step per interval (≤ 10 s of 600 s)
+and the difference does not accumulate (the number of firings times `P`
+tracks the simulated time). The adaptive stepper caps `dt` at the
+shortest cadence period so that no firing is skipped.
 
 ## The stage loop
 
@@ -107,7 +122,7 @@ in the integer `order` their couplings declare.
 | `:microphysics` | `micro_kessler` (10) |
 | `:tracers` | `pollutant` (10) |
 | `:fog_dew` | `fog_dew` (10) |
-| dynamics: `step!` with `:body_force` / `:post_predictor` | `geostrophic` (10) / `ibm` (10), `veg_drag` (20) |
+| dynamics: `advance_dynamics!` of the `:timestepper` provider (default one `step!`) with `:body_force` / `:post_predictor` | `geostrophic` (10) / `ibm` (10), `veg_drag` (20) |
 | `:surface_update` | `surface_slab` (10), `soil_urban` (20, every 30 s), `snow_legacy` (30) |
 | `:column_tendency` | `cooling_prescribed` (10) |
 | `:sanity` | `surface_slab` Ts clamp (10), then the core finiteness check |
@@ -144,6 +159,103 @@ needs.
   the NetCDF file. The core registers `qv`, `ql` (advected) and `qr`.
 * **Geometry** (`case.geom`): mask, surface classes, scene, view factors.
   Couplings may add classes at `init!` (the glass coupling does).
+
+## Dynamical core and time integration
+
+Two exclusive slots select the dynamics (#133), both in
+`couplings/core_select.jl` and `couplings/timestepper.jl`:
+
+| slot | provider | src | what it is |
+| :-- | :-- | :-- | :-- |
+| `:core` | `:boussinesq` (default) | `Simulations.BoussinesqSimulation` | ∇·u = 0, buoyancy g(θ − θ₀)/θ₀ about the constant `cfg.θ₀` |
+| `:core` | `:anelastic` | `Anelastic.AnelasticSimulation` | ∇·(ρ̄u) = 0, buoyancy g(θ − θ̄)/θ̄, ρ̄-weighted advection and projection (Lipps & Hemler 1982) |
+| `:core` | `:pseudo_incompressible` | `Anelastic.PseudoIncompressibleSimulation` | ∇·(ρ̄θ̄u) = 0 (Durran 1989) |
+| `:timestepper` | `:fixed` (default) | `step!` | one forward-Euler projection step of `cfg.dt` |
+| `:timestepper` | `:adaptive` | `TimeIntegration.adaptive_dt`, `step_adaptive!` | CFL / diffusion / buoyancy limited step, growth ≤ 10 %, rollback and halving on failure; option `imex = true` steps with ARK2 and only the explicit limits bind |
+| `:timestepper` | `:imex` | `TimeIntegration.step_imex!(…, ARK2())` | implicit diffusion, explicit advection and hooks, a projection per stage, at `cfg.dt` |
+
+```julia
+cfg = CaseConfig(:alexanderplatz; nsteps = 1800,
+                 physics = Dict{Symbol,Any}(:core => :anelastic))
+cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # 1 h of simulated time
+                 physics = Dict{Symbol,Any}(:timestepper => :adaptive),
+                 options = Dict{Symbol,Any}(:timestep_adaptive => (C_advective = 0.5, dt_max = 10.0)))
+```
+
+**The sound-proof cores** take their base state from the case's own
+initial sounding: θ̄(z) is `initial_θ(cfg)`, integrated hydrostatically
+by `Anelastic.reference_from_profile` from `p_surf` (option, 101 325 Pa),
+so the initial state has no buoyancy and the flow starts as in the
+Boussinesq core. The dynamics hooks (IBM, canopy drag, geostrophic
+forcing) touch only `sim.u/v/w/tu/tv` and run unchanged. The projection
+is a Jacobi-preconditioned CG solve (`tol = 1e-10`), which is what makes
+them expensive: see the numbers below.
+
+**The adaptive step** is chosen at the *start* of a case step
+(`next_dt`), so every stage — surface, transport, microphysics — uses
+the dt the dynamics covers. If `step_adaptive!` has to roll back and
+halve, the dynamics covers the rest of that dt in further pieces, so
+the case clock and the dynamics clock never disagree. `dt_max`
+(10 s) is capped at the shortest `cfg.cadence` period. The ledgers book
+with `ledger.dt`, the current step's length, not `cfg.dt`.
+
+**Incompatible pairs.** `adaptive_dt`, `step_adaptive!` and
+`step_imex!` are typed on `BoussinesqSimulation`, so `:adaptive` and
+`:imex` declare `:core => :anelastic` and `:core => :pseudo_incompressible`
+incompatible; selecting such a pair is an error that says why.
+
+**Measured** (flagship 64 × 64 × 32, 1000 m × 1000 m × 200 m,
+20 June 06:00–07:00, 1 h, first-call compilation included; #133):
+
+| configuration | steps | wall (s) | dynamics (ms/step) | max\|Δ⟨θ⟩(z)\| vs Boussinesq/fixed |
+| :-- | --: | --: | --: | --: |
+| Boussinesq, fixed 2 s | 1800 | 165 | 19.6 | — |
+| anelastic, fixed 2 s | 1800 | 367 | 139.6 (CG ≈ 333 it.) | 0.0020 K |
+| pseudo-incompressible, fixed 2 s | 1800 | 364 | 136.9 | 0.0019 K |
+| Boussinesq, adaptive | 1480 | 151 | 25.1 | 0.0018 K |
+| Boussinesq, adaptive + ARK2 | 1460 | 349 | 163.9 | 0.0010 K |
+| Boussinesq, IMEX ARK2 at 2 s | 1800 | 334 | 124.7 | 0.0020 K |
+| *12:00–13:00:* Boussinesq, fixed 2 s | 1800 | 171 | 22.8 | — |
+| anelastic, fixed 2 s | 1800 | 371 | 142.8 (CG ≈ 331 it.) | 0.0036 K |
+| Boussinesq, adaptive | 1694 | 198 | — | 0.0004 K |
+
+Wall times are from runs sharing the machine with five others, so they
+compare only roughly; the step counts and profiles are exact.
+
+* The adaptive step saves 18 % of the steps in the morning hour and 6 %
+  at noon, with no retry in either; the step is 1.6–3.5 s (mean 2.43 s
+  in the morning, 2.13 s at noon, where the flow is stronger), bound by
+  advection (C = 0.5) in 98 % / 99.9 % of the steps and by the explicit
+  diffusion (ν = 2 m² s⁻¹ on dz = 6.25 m: 3.70 s) in the rest. The CFL
+  diagnostics cost about as much as the steps saved, so the wall time
+  is roughly unchanged.
+* IMEX buys no longer step here: at dx = 15.6 m, dz = 6.25 m the
+  diffusive limit is only 4 % above the advective one, so ARK2 is
+  bound by advection at nearly the same dt and costs twice as much per
+  step. It is the option for configurations where diffusion binds
+  (finer dz, larger ν); the smoke test shows it stable at dt = 12 s,
+  where the explicit step amplifies the 2Δ mode of θ.
+* In a 200 m deep domain the density changes by 2 % (Hρ ≈ 10.7 km), and
+  the sound-proof cores give the Boussinesq mean profile to 0.002 K
+  (morning) and 0.004 K (noon) after 1 h, at 2.2× the cost. They are there for deeper domains, not
+  for the flagship's physics.
+
+**Known limitations.**
+* The `:transport` stage advects tracers with the plain velocity. Under a
+  sound-proof core ∇·u = −w ∂ ln ρ̄/∂z (up to 1.1e-4 s⁻¹ in the flagship)
+  is not zero, so a uniform tracer does not stay exactly uniform; the
+  domain total is still conserved (flux form). The consistent form
+  advects ρ̄q with ρ̄u and belongs to the scalar-advection slot. Today it
+  is hidden by the stale-halo leak of #132: in the smoke window a
+  uniform tracer departs from 1 by up to 8.5e-2 after 96 s in *both*
+  cores (8.512e-2 Boussinesq, 8.508e-2 anelastic).
+* The adaptive stepper's CFL diagnostics fill the velocity halos before
+  the transport stage runs, so it removes the stale-halo leak of #132 as
+  a side effect (flagship transport term −2.7e-4 kg m⁻² fixed vs 4e-19
+  adaptive over 1 h). That is a change of answer caused by the halo
+  fill, not by the step length.
+* The ledger's air density is 1 kg m⁻³ at every level (#131 sets it);
+  with a sound-proof core the water integral should use ρ̄(z).
 
 ## Adding a coupling
 
@@ -271,6 +383,7 @@ step:
 | `add_water!(l, term, m)` | `m` kg m⁻² of domain added to the air (negative: removed) |
 | `water_tracer!(l, :qi)` | count a new tracer as water in the air (not one that is part of another, like P3's rime mass) |
 | `ledger_water(case, q)` | ``Σ_k ρ_k Σ_{ij} q Δz / (N_x N_y)``, for measuring a change of a tracer |
+| `l.dt` | the length of the current step (s); use it, not `cfg.dt`, to turn the step's energy into a flux — they differ under the adaptive stepper |
 
 **Surface energy.** `:Rn` (net radiation into the surface), `:H`,
 `:LE`, `:G` (sensible, latent and ground heat flux out of it) and `:dS`
@@ -394,9 +507,10 @@ also asserts that the domain gains radiative energy at noon (Rn > 0,
 coupling must have run in at least one configuration, and the whole
 test must take less than 300 s.
 
-Today the matrix is 2 runs (no slot has a second provider yet). Run on
-its own, the test takes 26 s, almost all of it first-call compilation
-(the two runs themselves take 0.3 s each once compiled).
+At #127 the matrix was 2 runs (no slot had a second provider yet); the
+`:core` and `:timestepper` slots of #133 add five (anelastic,
+pseudo-incompressible, adaptive, IMEX, adaptive + ARK2). Run on its own
+the test takes about 25 s, almost all of it first-call compilation.
 
 **`test/berlin_coverage.jl`** checks that every submodule of `Aeolus`
 is either listed in some registered coupling's `modules_used`, or in

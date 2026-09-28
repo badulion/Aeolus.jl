@@ -21,9 +21,9 @@
 #
 # KNOWN (not fixed here): the `:transport` stage advects the tracers with
 # the plain velocity. Under a sound-proof core ∇·u = −w ∂ln W/∂z ≠ 0, so a
-# uniform tracer is not kept exactly uniform; the level means are still
-# conserved (⟨W w⟩ = 0 at every level). The consistent form advects W·q
-# with W·u; it belongs to the scalar-advection slot.
+# uniform tracer does not stay exactly uniform (the domain total is still
+# conserved: flux form). The consistent form advects W·q with W·u; it
+# belongs to the scalar-advection slot. See docs/src/design/berlin_case.md.
 
 """
     BoussinesqCore
