@@ -394,6 +394,77 @@ end
         @test all(Ts .< 295.0)
     end
 
+    @testset "matrix-free GMRES solve matches the dense LU (#138)" begin
+        US = Aeolus.UrbanSurface
+        sun = (0.3, -0.2, 0.93)
+        # 24 coupled steps (sun for the first 12, then night), both solvers
+        ui = newscene(293.0); ud = newscene(293.0)
+        worst_T = 0.0; worst_H = 0.0; its = Int[]
+        for k in 1:24
+            kw = k <= 12 ? (sun = sun, dni = 800.0, dhi = 120.0) : (;)
+            fi = step_urban_facets!(ui, air, 900.0; solver = :iterative, kw...)
+            fd = step_urban_facets!(ud, air, 900.0; solver = :direct, kw...)
+            worst_T = max(worst_T, maximum(abs, facet_temperatures(ui) .- facet_temperatures(ud)))
+            worst_H = max(worst_H, maximum(abs, [a.H - b.H for (a, b) in zip(fi, fd)]))
+            push!(its, ui.solve_iterations)
+        end
+        # The reason a few iterations suffice: the coupled system is
+        # diagonally dominant, b_i Σ_{j≠i} |G_ij| < 1 (skin response to
+        # extra flux times the longwave conductance to the other facets).
+        s = US._prepare_scene_step(newscene(293.0), air, 900.0)
+        G = s.J .* s.dEdT'
+        dom = maximum(s.b[i] * (sum(abs, view(G, i, :)) - abs(G[i, i])) for i in eachindex(s.b))
+        @printf("  GMRES vs dense LU, 24 steps: max |ΔT_skin| %.2e K, |ΔH| %.2e W/m²; %d–%d iterations; max b_i Σ|G_ij| = %.3f\n",
+                worst_T, worst_H, minimum(its), maximum(its), dom)
+        @test worst_T < 1e-10
+        @test worst_H < 1e-8
+        @test dom < 1
+        @test maximum(its) <= 10
+        @test ud.solve_iterations == 0                        # the direct path reports none
+        @test ui.solve_residual <= 1e-12 * sqrt(nfacets(ui)) * 10
+
+        # With interior nodes (two building zones, one free and one held on
+        # a setpoint), both solvers give the same facets, zone temperature
+        # change and the heat that holds the pinned zone.
+        un = newscene(293.0)
+        blk(f) = f.kind === :ground ? 0 : f.centroid[1] < 20.0 ? 1 : 2
+        node = [blk(f) for f in sc.facets]
+        lhs = [2.0e5, 3.0e5]; R = [1.0e4, -5.0e3]
+        for pinned in ([false, false], [false, true], [true, true])
+            sI = US._prepare_scene_step(un, air, 900.0; node, sun = sun, dni = 800.0, dhi = 120.0)
+            sD = US._prepare_scene_step(un, air, 900.0; node, sun = sun, dni = 800.0, dhi = 120.0,
+                                        solver = :direct)
+            args = (; lhs, R, pinned, y = [0.3, -0.2], Φ = [500.0, -200.0])
+            xI, yI, ΦI = US._solve_scene_step(sI; args...)
+            xD, yD, ΦD = US._solve_scene_step(sD; args...)
+            @test maximum(abs, xI .- xD) < 1e-10
+            @test maximum(abs, yI .- yD) < 1e-10
+            @test maximum(abs, ΦI .- ΦD) < 1e-8 * max(1.0, maximum(abs, ΦD))
+            # Each zone's energy balance holds on the GMRES solution:
+            # lhs_k y_k = R_k + Φ_k + Σ_{i∈k} A_i (q_i - F_i), with F_i the
+            # flux into facet i's column at its inner face for the solved
+            # exchange c = G_off x and zone change y.
+            GI = sI.J .* sI.dEdT'
+            c = GI * xI .- diag(GI) .* xI
+            for k in 1:2
+                into = sum(sI.area[i] * (sI.q[i] - (sI.F0[i] + sI.e[i] * c[i] + sI.g[i] * yI[k]))
+                           for i in eachindex(node) if node[i] == k)
+                @test lhs[k] * yI[k] ≈ R[k] + ΦI[k] + into rtol = 1e-10
+            end
+        end
+        @test_throws ArgumentError step_urban_facets!(newscene(293.0), air, 900.0; solver = :cg)
+
+        # O(n) extra memory: the iterative solve allocates no n × n matrix
+        # (a dense one is 8n² bytes = 0.9 MB here).
+        sI = US._prepare_scene_step(newscene(293.0), air, 900.0)
+        US._solve_scene_step(sI)
+        n = nfacets(un)
+        @test (@allocated US._solve_scene_step(sI)) < 8n^2 / 4
+        sD = US._prepare_scene_step(newscene(293.0), air, 900.0; solver = :direct)
+        US._solve_scene_step(sD)
+        @test (@allocated US._solve_scene_step(sD)) > 8n^2
+    end
+
     @testset "time-step convergence of the implicit coupling" begin
         function run(dt, scheme)
             u = newscene(295.0)
