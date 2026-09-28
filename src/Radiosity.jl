@@ -89,8 +89,9 @@ module Radiosity
 # first-order accurate in the subdivision — typically a few times 1e-3 of the
 # pair's exchange area. Scenes are assumed opaque and grey within each of the
 # shortwave and longwave bands, reflections diffuse (Lambertian), and the sky
-# isotropic. Specular glazing needs a BRDF and is out of scope here; see
-# `examples/urban/glass_material.jl`.
+# isotropic. Specular glazing needs a BRDF and is out of scope here; the
+# angle-dependent reflection, absorption and transmission of a glazed
+# facet are `UrbanSurface.glazing_optics` / `WindowFacet` (Phase 49).
 #
 # Dependency note. `SolarGeometry` (Phase 38) is included *after* this module
 # in `src/Aeolus.jl`, so it cannot be `using`-ed here. `solar_unit_vector`

@@ -5,7 +5,7 @@ Phase 49 — the production urban surface: per-facet (roof / wall /
 ground) multi-layer heat conduction through real material layers,
 replacing the single heat-capacity slab of the urban example.
 
-Three parts:
+Four parts:
 
   1. **Thermal material table** — [`ThermalMaterial`](@ref) and
      [`thermal_material`](@ref): conductivity, density and specific heat
@@ -29,6 +29,14 @@ Three parts:
      whose outer face is closed by the surface energy balance
      ``R_n = H + LE + G``, linearised about the current skin temperature
      so the step stays implicit and conserves energy exactly.
+  4. **Glazing** (`src/urban_surface/glazing.jl`) — angle-dependent
+     shortwave optics of uncoated panes ([`GlassPane`](@ref),
+     [`pane_optics`](@ref)) and multi-pane units ([`Glazing`](@ref),
+     [`glazing_optics`](@ref)), ISO 15099 gap heat transfer, the steady
+     [`glazing_u_value`](@ref) and [`glazing_shgc`](@ref), and
+     [`WindowFacet`](@ref), a glazed `AbstractSurface` whose transmitted
+     shortwave ([`transmitted_shortwave`](@ref)) is the hook for the
+     building energy model.
 
 # Sign convention
 
@@ -69,7 +77,8 @@ using ..SurfaceExchange
 using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS
 import ..SurfaceExchange: surface_temperature, roughness_lengths, step_surface!
 import ..RadiationCore: surface_albedo, surface_emissivity
-using ..SurfaceOptics: SurfaceOptics, broadband_albedo
+using ..SurfaceOptics: SurfaceOptics, broadband_albedo, fresnel_polarized_reflectance
+using ..RadiationCore: _gauss_legendre
 
 export ThermalMaterial, thermal_material, thermal_material_names,
        volumetric_heat_capacity, thermal_diffusivity, thermal_admittance,
@@ -81,7 +90,16 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        column_heat_content, cell_centers,
        UrbanFacet, interior_heat_flux, set_interior_boundary!,
        set_interior_temperature!, facet_layer_temperatures,
-       example_roof_layers, example_wall_layers, example_ground_layers
+       example_roof_layers, example_wall_layers, example_ground_layers,
+       # glazing (#27)
+       CLEAR_FLOAT_REFRACTIVE_INDEX, CLEAR_FLOAT_EXTINCTION, UNCOATED_GLASS_EMISSIVITY,
+       GlassPane, glass_pane_from_normal, pane_optics,
+       FillGas, GLAZING_AIR, GLAZING_ARGON, GlazingGap, gap_nusselt, gap_conductance,
+       Glazing, single_glazing, double_glazing, triple_glazing,
+       glazing_optics, glazing_optics_hemispherical,
+       glazing_u_value, inward_flowing_fractions, glazing_shgc,
+       WindowFacet, set_solar_incidence!, window_optics, transmitted_shortwave,
+       pane_temperatures, window_heat_content
 
 # =========================================================================
 # 1. Thermal material table
@@ -823,5 +841,11 @@ not a survey.
 example_ground_layers() = [WallLayer(:asphalt, 0.05; ncells = 5), WallLayer(:concrete, 0.15),
                            WallLayer(:sand, 0.30; max_cell = 0.05),
                            WallLayer(:soil, 1.0; max_cell = 0.1)]
+
+# =========================================================================
+# 7-11. Glazing and window facets (#27)
+# =========================================================================
+
+include("urban_surface/glazing.jl")
 
 end # module
