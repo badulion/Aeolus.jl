@@ -61,6 +61,7 @@ makedocs(
             "Sea spray and full COARE"     => "theory/sea_spray_coare.md",
             "Sub-grid surface tiles"      => "theory/surface_tiles.md",
             "Blending height"             => "theory/blending_height.md",
+            "Heterogeneous-surface validation" => "theory/heterogeneous_surface.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

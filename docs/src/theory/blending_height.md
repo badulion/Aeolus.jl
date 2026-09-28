@@ -193,6 +193,8 @@ terrain. The other comparisons are with a published LES and a published
 compilation of formulae. Tiles in stable and unstable
 conditions are checked only for self-consistency; there is no reference
 flux for them.
+A resolved-LES test of tiles and `BlendedMosaic` over thermal strips is
+in [Heterogeneous-surface validation](heterogeneous_surface.md).
 
 ## References
 
