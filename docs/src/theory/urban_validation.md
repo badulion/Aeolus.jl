@@ -176,7 +176,9 @@ physics checks):
 **The match of the road and wall means is partly luck.** The means move
 by +0.82 K (road), +0.85 K (walls) and +0.76 K (roof) for every +1 K of
 forcing air temperature. The grid-box temperature lacks the urban heat
-island, which in Basel was 2.55 K on clear summer days. There is also no
+island: in Basel, on the seven clear summer days, it was 2.55 K below the
+tower's 18-m mean (that difference mixes the heat island with any
+reanalysis bias; the two cannot be separated here). There is also no
 canyon-air model. The Hamdi & Masson (2008) Table 3 observations show
 canyon air about 1 K warmer than the air above the roofs by day. An
 uncorrected cold forcing and the missing canyon warming both bias the
@@ -193,14 +195,15 @@ cannot be read as a skill of 0.1 K. What the comparison does establish:
 stays at the air temperature (19.95 °C against 19.89 °C), fed by
 15.8 W m⁻² of heat conducted up from the rooms. The observed roof "typically
 dropped below 15 °C at night and above 40 °C during mid-afternoon" in
-summer (Moscicki & Voogt 2007, §4.1.3). It is a pitched roof over an
-attic. TEB with the same inputs also runs warm (+1.40 K), and an
-independent SUM analysis in the same paper confirms that the observed
-roof is not unusually cold.
+summer (Moscicki & Voogt 2007, §4.1.3). It is a pitched tile roof,
+whereas TEB (and this case) assume a flat one; what lies under it is not
+described in the sources used here. TEB with the same inputs also runs
+warm (+1.40 K), and an independent SUM analysis in the same paper
+suggests that the observed roof is not unusually cold.
 
-A flat, massless roof straight onto a heated zone is the likely cause.
-Replacing it with a roof-plus-attic construction would be a guess that
-no paper here supports, so it was not done.
+A flat, thin roof straight onto a heated zone is the likely cause.
+Replacing it with some other construction (e.g. a ventilated roof space)
+would be a guess that no paper here supports, so it was not done.
 
 ## BUBBLE — the surface energy balance of Basel-Sperrstrasse
 
@@ -230,8 +233,9 @@ per unit plan area:
 
 - **Hamdi & Masson (2008), Table 4.** Means over the clear days 17, 18,
   19, 22, 23, 29 and 30 June 2002, with TEB's skill at the same site. The
-  paper does not define its day/night split, so only all-hours means are
-  asserted.
+  paper does not define its day/night split, so only its all-hours means
+  are compared with. Its day (D) and night (N) RMSEs are, however, borrowed
+  as the error scale for the Hamdi & Schayes windows below.
 - **Hamdi & Schayes (2005), Table 2.** Clear days 17, 18, 23, 26 and
   30 June. Day is 08–16 UTC and night is 22–03 UTC.
 
@@ -247,7 +251,11 @@ tolerance is the RMSE of TEB-SBL forced by the tower:
 | ``ΔQ_S`` | 21.4 | 24 | 47 | 70 | pass |
 
 Measured over the day and night windows (Hamdi & Schayes 2005). The
-tolerance is TEB's day/night RMSE:
+tolerance is TEB-SBL's D / N RMSE from Hamdi & Masson (2008), Table 4.
+That is a proxy, not a like-for-like pass mark: those RMSEs belong to
+different days and to day/night windows the paper does not define (its
+observed daytime ``Q^*`` is 373 W m⁻², against 510 in the 08–16 UTC
+window). Asserted: ``Q^*`` and ``S↑`` by day and night, ``L↑`` at night.
 
 | | ``S↑`` | ``L↑`` | ``Q^*`` | ``Q_H/Q^*`` (obs: ``(Q_H+Q_E)/Q^*``) | ``ΔQ_S/Q^*`` |
 |:--|:--|:--|:--|:--|:--|
@@ -279,7 +287,13 @@ not fits:
   ``S↓``. The vegetation at the package's park-class albedo (0.205) would
   add about 6 W m⁻².
 - **Turbulent flux.** Without vegetation there is no ``Q_E``, so the
-  model's ``Q_H`` is compared with the observed ``Q_H + Q_E``.
+  model's ``Q_H`` is compared with the observed ``Q_H + Q_E`` (155), using
+  the RMSE of ``Q_H`` (49) as the tolerance. Against the observed ``Q_H``
+  alone (112) the model is +36.6 W m⁻², which is also inside 49 but is a
+  real sensible-heat excess: the energy the missing vegetation would
+  evaporate goes into ``Q_H`` instead. At night the model's
+  ``Q_H/Q^* = -0.58`` against an observed ``Q_H/Q^* = -0.21``, i.e.
+  about 46 against 17 W m⁻² upward; only its sign is asserted.
 
 **Sensitivity to the temperature correction.** With separate day and
 night offsets instead of one (+1.91 / +4.90 K, which assumes that "day"

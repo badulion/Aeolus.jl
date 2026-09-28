@@ -12,7 +12,8 @@
 #   Town Energy Balance (TEB) scheme: offline 1-D validation in a street canyon.
 #   J. Appl. Meteorol. Climatol., 47, 2627-2644, Table 4: mean of the clear days
 #   17, 18, 19, 22, 23, 29, 30 June 2002 (T = all hours; the paper does not define
-#   its day / night split, so only T is asserted). obs = tower; SBL, REF = TEB
+#   its day / night split, so only the T means are compared with; the D / N RMSEs
+#   are borrowed as the error scale for the HS05 windows). obs = tower; SBL, REF = TEB
 #   versions forced by the tower; rmseSBL / rmseREF their RMSE ("//": REF = SBL).
 # Block "HM08t3": the same paper, Table 3: observed air temperature (degC) at 18 m
 #   a.g.l. (above roof level) over the same seven days, used only to bias-correct

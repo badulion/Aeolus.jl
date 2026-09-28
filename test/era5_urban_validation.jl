@@ -132,8 +132,8 @@ end
     # The roof fails that yardstick: +3.9 K against TEB's RMSE of 3.50 K (TEB's
     # own bias is +1.40 K). The flat 6 cm tile + 3 cm wood roof of the TEB input
     # (Pigeon et al. 2009, Table 2) sits directly over the heated / free-floating
-    # zone and does not undercool at night, while the observed pitched roof over
-    # an attic drops below 15 °C on summer nights (Moscicki & Voogt 2007, §4.1.3).
+    # zone and does not undercool at night, while the observed (pitched, not flat)
+    # roof drops below 15 °C on summer nights (Moscicki & Voogt 2007, §4.1.3).
     # Recorded, not loosened.
     @test_broken abs(M.roof - obs[:O].roof) <= obs[:RMSE].roof
     @test M.roof > obs[:O].roof                  # the direction of the known roof miss
@@ -186,8 +186,9 @@ end
     @printf("  forcing check, 7 clear days: S↓ + L↓ = %.1f W m⁻² (CERES) vs %.0f (tower, Q* + S↑ + L↑)\n",
             pow_in, obs_in)
     @test abs(pow_in / obs_in - 1) < 0.02
-    # The grid-box air temperature lacks the urban heat island: bias-correct it to
-    # the tower mean at 18 m over the same days (HM08 Table 3) — one constant.
+    # The grid-box air temperature lacks the urban heat island (and may carry a
+    # reanalysis bias; the two are not separable): bias-correct it to the tower
+    # mean at 18 m over the same days (HM08 Table 3) — one constant.
     ΔT = ob[("HM08t3", "T", "Tair18m")].obs - mean(w.T2M[ev])
     @printf("  T2M (MERRA-2) is %.2f K below the tower's 18 m mean; offset applied\n", ΔT)
 
@@ -234,7 +235,10 @@ end
     for p in (:D, :N)
         s = sel(days_hs, p); P = string(p)
         o(q) = ob[("HS05", P, q)].obs
-        rm(q) = ob[("HM08", P, q)].rmseSBL      # TEB-SBL error scale for that part of the day
+        # Tolerance: HM08's TEB-SBL D / N RMSE, borrowed as an error scale. HM08 does
+        # not define its D / N windows and uses other days, so this is a proxy, not
+        # the error of TEB in the HS05 windows.
+        rm(q) = ob[("HM08", P, q)].rmseSBL
         Q = m(:Qstar, s)
         @printf("  HS05 %s: S↑ %.1f (obs %.0f)  L↑ %.1f (%.0f)  Q* %.1f (%.0f)  QH/Q* %.2f (QH+QE: %.2f)  ΔQS/Q* %.2f (%.2f)\n",
                 P, m(:Sup, s), o("Sup"), m(:Lup, s), o("Lup"), Q, o("Qstar"),
