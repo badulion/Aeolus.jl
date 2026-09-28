@@ -22,7 +22,6 @@ include("Parallel.jl")
 include("Nesting.jl")
 include("Backends.jl")
 include("SpectralElement.jl")
-include("Radiation.jl")
 include("Chemistry.jl")
 include("Particles.jl")
 include("ML.jl")
@@ -43,6 +42,11 @@ include("AdaptiveMesh.jl")      # Phases 30-31
 # so it is included ahead of the radiation stack rather than with its own era.
 include("MoistThermodynamics.jl")  # Phase 39
 include("RadiationCore.jl")     # shared spectral / optics / flux contract
+# Era V contract (surface exchange) needs MoistThermodynamics and the
+# RadiationCore albedo/emissivity generics, and SlabLand (Radiation.jl)
+# implements its surface interface, so it sits here.
+include("SurfaceExchange.jl")
+include("Radiation.jl")         # SlabLand: first AbstractSurface implementer
 include("GasOptics.jl")         # Phase 32
 include("SurfaceOptics.jl")     # Phase 36
 include("AerosolOptics.jl")     # Phase 37
@@ -106,6 +110,8 @@ using .IceNucleation
 using .TurbulentMicrophysics
 using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
+
+using .SurfaceExchange             # Era V contract
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -572,5 +578,25 @@ export fog_effective_radius, FogRadiation, fog_radiation,
        eddy_diffusivity, surface_exchange, settling_velocity,
        fog_diagnostics, fog_life_cycle
 # (the fog column adds methods to the generic `step!` and `run!`)
+
+# =========================================================================
+# Era V — high-fidelity land, urban and surface exchange (Phases 46-53)
+# =========================================================================
+
+# Era V contract — SurfaceExchange: material constants, Monin–Obukhov
+# similarity, and the AbstractSurface interface. `surface_temperature`
+# (exported above with SlabLand) is its generic; `surface_albedo` /
+# `surface_emissivity` are the RadiationCore generics (exported above).
+# Constant accessors (LH_v0, grav, cp_water, …) stay qualified:
+# `Aeolus.SurfaceExchange.grav(c)`.
+export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
+       AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
+       phi_m, phi_h, psi_m, psi_h,
+       SurfaceLayerSolution, solve_surface_layer,
+       bulk_richardson, obukhov_length,
+       AbstractSurface, SurfaceForcing, SurfaceFluxes,
+       roughness_lengths, moisture_availability,
+       surface_specific_humidity, surface_latent_heat,
+       net_radiation, turbulent_fluxes, step_surface!
 
 end # module

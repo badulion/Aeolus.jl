@@ -37,6 +37,7 @@ makedocs(
             "Visibility (Koschmieder)"    => "theory/visibility.md",
             "Fog and dew"                 => "theory/fog.md",
             "Radiation fog"               => "theory/radiation_fog.md",
+            "Surface exchange (MOST)"     => "theory/surface_exchange.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -87,6 +88,10 @@ makedocs(
                 "Visibility"                   => "api/era4/visibility.md",
                 "Fog and dew"                  => "api/era4/radiation_fog.md",
                 "Turbulent microphysics"       => "api/era4/turbulent_microphysics.md",
+            ],
+            "Era V — surface exchange" => [
+                "Overview"                     => "api/era5.md",
+                "SurfaceExchange"              => "api/era5/surface_exchange.md",
             ],
         ],
         "Examples" => [
