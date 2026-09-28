@@ -78,7 +78,12 @@ using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS
 import ..SurfaceExchange: surface_temperature, roughness_lengths, step_surface!
 import ..RadiationCore: surface_albedo, surface_emissivity
 using ..SurfaceOptics: SurfaceOptics, broadband_albedo, fresnel_polarized_reflectance
-using ..RadiationCore: _gauss_legendre
+using ..RadiationCore: _gauss_legendre, STEFAN_BOLTZMANN
+using ..Radiosity: Radiosity, RadiosityScene, ViewFactors, Facet, LongwaveResponse,
+                   ShortwaveSolution, longwave_response, solve_longwave,
+                   solve_shortwave, set_temperature!
+import ..Radiosity: facet_temperatures, nfacets
+using LinearAlgebra: I, lu!
 
 export ThermalMaterial, thermal_material, thermal_material_names,
        volumetric_heat_capacity, thermal_diffusivity, thermal_admittance,
@@ -99,7 +104,10 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        glazing_optics, glazing_optics_hemispherical,
        glazing_u_value, inward_flowing_fractions, glazing_shgc,
        WindowFacet, set_solar_incidence!, window_optics, transmitted_shortwave,
-       pane_temperatures, window_heat_content
+       pane_temperatures, window_heat_content,
+       # facet–radiosity coupling (#28)
+       UrbanFacetScene, step_urban_facets!, aggregate_facet_fluxes,
+       example_facet_layers
 
 # =========================================================================
 # 1. Thermal material table
@@ -650,8 +658,8 @@ balance (≈ 1 K for a sunlit roof); each step is one Newton iteration on
 that balance and the residual falls quadratically.
 
 For a wall, `SurfaceForcing.sw_down` / `lw_down` are the irradiances on
-the facet plane (the radiosity coupling that supplies them is Phase 49's
-facet–radiosity issue).
+the facet plane. [`UrbanFacetScene`](@ref) supplies them from the
+radiosity solves and treats the facet-to-facet longwave implicitly.
 """
 mutable struct UrbanFacet{T<:AbstractFloat} <: AbstractSurface
     kind::Symbol
@@ -742,6 +750,21 @@ inner face, keeping its surface coefficient.
 set_interior_temperature!(f::UrbanFacet{T}, T_in::Real) where {T} =
     (f.interior = ColumnBoundary{T}(T(T_in), f.interior.h, f.interior.q); f)
 
+# One θ-step of the facet column under the linearised outer balance
+# `outer`. Returns the applied fluxes into the column at both faces, the
+# new skin (outer face) temperature and the θ-weighted skin increment
+# x = θ T_s^{n+1} + (1-θ) T_s^{n,*} - T_s^n on which the linearised
+# fluxes are evaluated (T_s^{n,*}: the face temperature of the old cells
+# under `outer`).
+function _advance_column!(f::UrbanFacet, outer::ColumnBoundary, dt::Real)
+    col = f.column
+    θ = col.θ
+    Tf_old = _face_temperature(outer, col.K[1], col.T[1])
+    Fo, Fi = step_conduction!(col, outer, f.interior, dt)
+    Tf_new = _face_temperature(outer, col.K[1], col.T[1])
+    return Fo, Fi, Tf_new, θ * Tf_new + (1 - θ) * Tf_old - outer.T_env
+end
+
 # Fluxes at the current skin temperature.
 function _facet_fluxes(f::UrbanFacet, forcing::SurfaceForcing;
                        c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS, kwargs...)
@@ -774,7 +797,6 @@ equals the change in column heat content to round-off. `kwargs` go to
 """
 function step_surface!(f::UrbanFacet{T}, forcing::SurfaceForcing, dt::Real;
                        δT::Real = 0.01, kwargs...) where {T}
-    col = f.column
     Ts = f.T_skin
     fl0 = _facet_fluxes(f, forcing; kwargs...)
     f.T_skin = Ts + T(δT)
@@ -790,11 +812,7 @@ function step_surface!(f::UrbanFacet{T}, forcing::SurfaceForcing, dt::Real;
     Fp = dRn - dH - dLE
     Fp < 0 || (Fp = min(dRn, -eps(T)))
     outer = ColumnBoundary{T}(T(Ts), T(-Fp), T(F0))
-    θ = col.θ
-    Tf_old = _face_temperature(outer, col.K[1], col.T[1])
-    Fo, Fi = step_conduction!(col, outer, f.interior, dt)
-    Tf_new = _face_temperature(outer, col.K[1], col.T[1])
-    x = θ * Tf_new + (1 - θ) * Tf_old - Ts
+    Fo, Fi, Tf_new, x = _advance_column!(f, outer, dt)
     Rn = fl0.Rn + dRn * x
     LE = fl0.LE + dLE * x
     H  = Rn - LE - Fo          # = fl0.H + dH x (up to the Fp guard)
@@ -847,5 +865,365 @@ example_ground_layers() = [WallLayer(:asphalt, 0.05; ncells = 5), WallLayer(:con
 # =========================================================================
 
 include("urban_surface/glazing.jl")
+
+# =========================================================================
+# 12. Facet–radiosity coupling (#28)
+# =========================================================================
+
+"""
+    example_facet_layers(facet_or_kind) -> Vector{WallLayer}
+
+The illustrative construction for a `Radiosity.Facet` (or a kind symbol):
+[`example_roof_layers`](@ref), [`example_wall_layers`](@ref) or
+[`example_ground_layers`](@ref). The default `layers` of
+[`UrbanFacetScene`](@ref).
+"""
+example_facet_layers(f::Facet) = example_facet_layers(f.kind)
+function example_facet_layers(kind::Symbol)
+    kind === :roof && return example_roof_layers()
+    kind === :wall && return example_wall_layers()
+    kind === :ground && return example_ground_layers()
+    throw(ArgumentError("example_facet_layers: kind must be one of $_FACET_KINDS"))
+end
+
+"""
+    UrbanFacetScene(scene, vf; layers = example_facet_layers,
+                    options = f -> (;), T = 293.15, θ = 0.5)
+    UrbanFacetScene(scene, vf, facets::Vector{<:UrbanFacet})
+
+Every facet of a `Radiosity.RadiosityScene` given its own
+[`UrbanFacet`](@ref) — its own conduction column and its own skin
+temperature — and coupled to all the others through the longwave
+radiosity system on the view factors `vf`.
+
+This removes the one-temperature-per-column approximation of the urban
+example, where a whole column's roof, walls and street shared a single
+temperature and the radiosity solution was averaged back onto it. Here
+the radiosity scene *is* the surface: facet `i` of `scene` is facet `i`
+of the energy balance.
+
+  * `layers(f)` — the construction of radiosity facet `f` (outside first);
+    the default picks the illustrative roof / wall / road by `f.kind`.
+  * `options(f)` — extra [`UrbanFacet`](@ref) keywords per facet, e.g.
+    `f -> f.kind === :wall ? (h_convective = 10.0, T_interior = 295.0) : (;)`.
+  * `T` — initial temperature, a scalar or one value per facet.
+
+**Optics have one source: the scene.** Each facet's albedo and emissivity
+are taken from `scene.materials` for its material class at construction
+and re-synchronised at every [`step_urban_facets!`](@ref), so the
+radiosity solve and the facet energy balances can never use different
+optical properties (an `albedo`/`emissivity` passed through `options`
+is overwritten).
+
+Fields of interest after a step (per facet, W m⁻² of facet area):
+`sw_absorbed`, `lw_net` (net longwave gain actually applied),
+`lw_emission` (the emission `εσT⁴` it corresponds to) and
+`skin_increment` (the θ-weighted skin-temperature change the linearised
+fluxes were evaluated at). `facet_temperatures(u)` returns the skin
+temperatures.
+"""
+mutable struct UrbanFacetScene{T<:AbstractFloat}
+    scene::RadiosityScene{T}
+    vf::ViewFactors{T}
+    facets::Vector{UrbanFacet{T}}
+    response::LongwaveResponse{T}
+    sw_absorbed::Vector{T}
+    lw_net::Vector{T}
+    lw_emission::Vector{T}
+    skin_increment::Vector{T}
+    L_sky::T
+end
+
+function UrbanFacetScene(scene::RadiosityScene{T}, vf::ViewFactors{T},
+                         facets::AbstractVector{<:UrbanFacet}) where {T}
+    n = nfacets(scene)
+    length(vf.F_sky) == n ||
+        throw(ArgumentError("UrbanFacetScene: view factors have $(length(vf.F_sky)) " *
+                            "facets, scene has $n"))
+    length(facets) == n ||
+        throw(ArgumentError("UrbanFacetScene: $(length(facets)) UrbanFacets for $n " *
+                            "radiosity facets"))
+    fs = UrbanFacet{T}[f for f in facets]
+    for i in 1:n
+        fs[i].kind === scene.facets[i].kind ||
+            throw(ArgumentError("UrbanFacetScene: facet $i is a :$(fs[i].kind) " *
+                                "UrbanFacet but a :$(scene.facets[i].kind) radiosity facet"))
+    end
+    z = zeros(T, n)
+    u = UrbanFacetScene{T}(scene, vf, fs, longwave_response(scene, vf),
+                           copy(z), copy(z), copy(z), copy(z), zero(T))
+    _sync_optics!(u)
+    _sync_scene_temperatures!(u)
+    return u
+end
+
+function UrbanFacetScene(scene::RadiosityScene{FT}, vf::ViewFactors{FT};
+                         layers = example_facet_layers,
+                         options = f -> NamedTuple(),
+                         T = 293.15, θ::Real = 0.5) where {FT}
+    n = nfacets(scene)
+    Tv = T isa Real ? fill(T, n) : collect(T)
+    length(Tv) == n ||
+        throw(ArgumentError("UrbanFacetScene: T has $(length(Tv)) entries for $n facets"))
+    mats = scene.materials
+    facets = map(1:n) do i
+        rf = scene.facets[i]
+        kw = merge(NamedTuple(options(rf)),
+                   (albedo = mats.albedo[rf.material], emissivity = mats.emissivity[rf.material]))
+        UrbanFacet(rf.kind, layers(rf); T = Tv[i], θ = θ, kw...)
+    end
+    return UrbanFacetScene(scene, vf, facets)
+end
+
+nfacets(u::UrbanFacetScene) = length(u.facets)
+"Skin temperatures (K) of every facet of an [`UrbanFacetScene`](@ref)."
+facet_temperatures(u::UrbanFacetScene{T}) where {T} = T[f.T_skin for f in u.facets]
+
+function Base.show(io::IO, u::UrbanFacetScene{T}) where {T}
+    Ts = facet_temperatures(u)
+    print(io, "UrbanFacetScene{$T}(", nfacets(u), " facets, T_skin ",
+          round(minimum(Ts); digits = 2), "–", round(maximum(Ts); digits = 2), " K)")
+end
+
+# Albedo and emissivity come from the scene's material table.
+function _sync_optics!(u::UrbanFacetScene{T}) where {T}
+    mats = u.scene.materials
+    for (i, f) in enumerate(u.facets)
+        m = u.scene.facets[i].material
+        f.albedo = mats.albedo[m]
+        f.emissivity = mats.emissivity[m]
+    end
+    ε = T[f.emissivity for f in u.facets]
+    ε == u.response.emissivity || (u.response = longwave_response(u.scene, u.vf))
+    return u
+end
+
+function _sync_scene_temperatures!(u::UrbanFacetScene)
+    for (i, f) in enumerate(u.facets)
+        set_temperature!(u.scene, i, f.T_skin)
+    end
+    return u
+end
+
+_sky_irradiance(f::SurfaceForcing) = f.lw_down
+function _sky_irradiance(fs::AbstractVector{<:SurfaceForcing})
+    L = first(fs).lw_down
+    all(f -> f.lw_down == L, fs) ||
+        throw(ArgumentError("step_urban_facets!: per-facet forcings disagree on " *
+                            "lw_down; pass the sky irradiance as `L_sky`"))
+    return L
+end
+
+_air(f::SurfaceForcing, i) = f
+_air(f::AbstractVector{<:SurfaceForcing}, i) = f[i]
+
+# The air state of `air`, with the radiation replaced by the facet's
+# incident irradiances from the radiosity solves.
+_facet_forcing(air::SurfaceForcing{T}, sw, lw) where {T} =
+    SurfaceForcing{T}(T(sw), T(lw), air.T_air, air.q_air, air.U, air.p, air.z_ref,
+                      air.rain, air.snow)
+
+function _incident_shortwave(u::UrbanFacetScene{T}, sw, sun, dni, dhi, samples) where {T}
+    sw !== nothing && return sw.incident
+    if sun === nothing
+        dhi > 0 || return zeros(T, nfacets(u))
+        return solve_shortwave(u.scene, u.vf, (0.0, 0.0, 1.0); dni = 0, dhi = dhi,
+                               samples = samples).incident
+    end
+    return solve_shortwave(u.scene, u.vf, sun; dni = dni, dhi = dhi,
+                           samples = samples).incident
+end
+
+"""
+    step_urban_facets!(u::UrbanFacetScene, forcing, dt; L_sky, sw = nothing,
+                       sun = nothing, dni = 0, dhi = 0, samples = 2,
+                       coupling = :implicit, δT = 0.01, kwargs...) -> Vector{SurfaceFluxes}
+
+Advance every facet of `u` by `dt` seconds with the longwave exchange
+between facets treated **implicitly**, and return each facet's
+`SurfaceFluxes` (per unit facet area, `SurfaceExchange` sign convention).
+
+`forcing` is the air state — one `SurfaceForcing` for all facets, or one
+per facet (canyon air for the street and walls, above-roof air for the
+roofs). Its `sw_down` and `lw_down` are **not** used as facet irradiances:
+the facets see what the radiosity solves deliver. `L_sky` is the sky's
+downwelling longwave on a horizontal surface and defaults to
+`forcing.lw_down`. Shortwave is a precomputed `sw::ShortwaveSolution`, or
+is solved here from `sun` (anything `Radiosity.solar_unit_vector`
+accepts), `dni` and `dhi`; with `sun = nothing` only the diffuse sky
+`dhi` is applied. It does not depend on the facet temperatures.
+
+# The implicit longwave exchange
+
+The net longwave a facet absorbs is linear in the emission of every facet,
+``N_i = \\sum_j J_{ij} E_j + j^{sky}_i L_{sky}``
+(`Radiosity.longwave_response`). Linearising ``E_j = ε_jσT_j^4`` about the
+current skin temperatures gives the coupled balance of facet `i`,
+
+```math
+R_{n,i} - H_i - LE_i \\approx F_{0,i} + F'_{ii}\\,x_i + \\sum_{j\\ne i} G_{ij}\\,x_j,
+\\qquad G_{ij} = J_{ij}\\,4ε_jσT_j^3,
+```
+
+where `x` are the θ-weighted skin increments of the step and ``F'_{ii}``
+combines the radiative ``G_{ii}`` with the turbulent derivatives. The
+diagonal term closes each facet column as in
+`step_surface!(::UrbanFacet, …)`. For the off-diagonal term, each column
+step is affine in an extra imposed surface flux, ``x_i = a_i + b_i c_i``
+(two trial steps give `a` and `b`); the dense system
+``(I - \\mathrm{diag}(b)\\,G_{off})\\,x = a`` then gives every facet's
+increment at once, and the columns are advanced with
+``c_i = \\sum_{j≠i} G_{ij} x_j``.
+
+What this buys, and why a lagged coupling is not enough: the longwave
+that facet `j` emits *extra* during the step, ``G_{\\cdot j}x_j``, is the
+longwave the other facets absorb. So the exchange conserves energy
+exactly: in an enclosure with no sky, ``\\sum_i A_i N_i = 0`` for the
+applied fluxes to round-off, and with a sky, `lw_net` equals the
+radiosity solution for the applied emission `lw_emission`. With
+`coupling = :lagged` each facet instead steps alone against the incident
+longwave frozen at the start of the step (`step_surface!` with
+`lw_down = Q_i`) — its own extra emission leaves it but reaches no one —
+which is provided only as the reference the test suite measures the
+conservation defect of.
+
+`kwargs` go to `SurfaceExchange.turbulent_fluxes`.
+"""
+function step_urban_facets!(u::UrbanFacetScene{T}, forcing, dt::Real;
+                            L_sky::Real = _sky_irradiance(forcing),
+                            sw::Union{Nothing, ShortwaveSolution} = nothing,
+                            sun = nothing, dni::Real = 0, dhi::Real = 0,
+                            samples::Int = 2, coupling::Symbol = :implicit,
+                            δT::Real = 0.01, kwargs...) where {T}
+    coupling in (:implicit, :lagged) ||
+        throw(ArgumentError("step_urban_facets!: coupling must be :implicit or :lagged"))
+    dt > 0 || throw(ArgumentError("step_urban_facets!: dt must be positive"))
+    n = nfacets(u)
+    forcing isa AbstractVector && length(forcing) != n &&
+        throw(ArgumentError("step_urban_facets!: $(length(forcing)) forcings for $n facets"))
+    fs = u.facets
+    _sync_optics!(u)
+    _sync_scene_temperatures!(u)
+    lw = solve_longwave(u.scene, u.vf; L_sky = L_sky)
+    Qsw = _incident_shortwave(u, sw, sun, dni, dhi, samples)
+    u.L_sky = T(L_sky)
+    for i in 1:n
+        u.sw_absorbed[i] = (1 - fs[i].albedo) * Qsw[i]
+    end
+    coupling === :lagged && return _step_lagged!(u, forcing, lw, Qsw, dt; δT, kwargs...)
+
+    σ = T(STEFAN_BOLTZMANN)
+    J = u.response.dN_dE
+    dEdT = T[4 * f.emissivity * σ * f.T_skin^3 for f in fs]
+    G = J .* dEdT'
+    N0 = -lw.net_loss
+    outers = Vector{ColumnBoundary{T}}(undef, n)
+    fl0s = Vector{SurfaceFluxes{T}}(undef, n)
+    dLE = zeros(T, n)
+    a = zeros(T, n); b = zeros(T, n)
+    Δq = T(100)
+    for (i, f) in enumerate(fs)
+        fi = _facet_forcing(_air(forcing, i), Qsw[i], lw.incident[i])
+        Ts = f.T_skin
+        fl0 = _facet_fluxes(f, fi; kwargs...)
+        f.T_skin = Ts + T(δT)
+        fl1 = _facet_fluxes(f, fi; kwargs...)
+        f.T_skin = Ts
+        dH = (fl1.H - fl0.H) / T(δT)
+        dLE[i] = (fl1.LE - fl0.LE) / T(δT)
+        fl0s[i] = fl0
+        F0 = u.sw_absorbed[i] + N0[i] - fl0.H - fl0.LE
+        Fp = G[i, i] - dH - dLE[i]
+        Fp < 0 || (Fp = min(G[i, i], -eps(T)))
+        outers[i] = ColumnBoundary{T}(Ts, -Fp, F0)
+        # The column step is affine in an imposed extra flux: two trial
+        # steps (state restored after each) give x_i = a_i + b_i c_i.
+        save = copy(f.column.T)
+        a[i] = _advance_column!(f, outers[i], dt)[4]
+        copyto!(f.column.T, save)
+        o2 = ColumnBoundary{T}(Ts, -Fp, F0 + Δq)
+        b[i] = (_advance_column!(f, o2, dt)[4] - a[i]) / Δq
+        copyto!(f.column.T, save)
+    end
+    M = Matrix{T}(I, n, n)
+    @inbounds for j in 1:n, i in 1:n
+        i == j && continue
+        M[i, j] = -b[i] * G[i, j]
+    end
+    x = lu!(M) \ a
+    c = G * x
+    for i in 1:n
+        c[i] -= G[i, i] * x[i]
+    end
+    out = Vector{SurfaceFluxes{T}}(undef, n)
+    Fo = zeros(T, n)
+    for (i, f) in enumerate(fs)
+        o = outers[i]
+        outer = ColumnBoundary{T}(o.T_env, o.h, o.q + c[i])
+        Fo[i], Fi, Tf_new, u.skin_increment[i] = _advance_column!(f, outer, dt)
+        f.T_skin = Tf_new
+        f.G = Fo[i]
+        f.Q_interior = -Fi
+    end
+    xa = u.skin_increment
+    u.lw_net .= N0 .+ G * xa
+    for (i, f) in enumerate(fs)
+        u.lw_emission[i] = lw.emitted[i] + dEdT[i] * xa[i]
+        Rn = u.sw_absorbed[i] + u.lw_net[i]
+        LE = fl0s[i].LE + dLE[i] * xa[i]
+        H = Rn - LE - Fo[i]
+        out[i] = SurfaceFluxes{T}(Rn, H, LE, Fo[i], fl0s[i].τ, LE / surface_latent_heat(f))
+    end
+    _sync_scene_temperatures!(u)
+    return out
+end
+
+function _step_lagged!(u::UrbanFacetScene{T}, forcing, lw, Qsw, dt; kwargs...) where {T}
+    fs = u.facets
+    out = Vector{SurfaceFluxes{T}}(undef, length(fs))
+    for (i, f) in enumerate(fs)
+        Ts = f.T_skin
+        fi = _facet_forcing(_air(forcing, i), Qsw[i], lw.incident[i])
+        out[i] = step_surface!(f, fi, dt; kwargs...)
+        u.lw_net[i] = out[i].Rn - u.sw_absorbed[i]
+        # frozen incident longwave: the applied net gain is ε Qⁿ - E
+        u.lw_emission[i] = f.emissivity * lw.incident[i] - u.lw_net[i]
+        u.skin_increment[i] = (u.lw_emission[i] - lw.emitted[i]) /
+                              (4 * f.emissivity * T(STEFAN_BOLTZMANN) * Ts^3)
+    end
+    _sync_scene_temperatures!(u)
+    return out
+end
+
+"""
+    aggregate_facet_fluxes(u::UrbanFacetScene, fluxes) -> NamedTuple
+
+Sum facet fluxes onto the `(Nx, Ny)` grid of the scene's heightmap, **per
+unit plan area**: each facet contributes `A_i × flux_i / (dx·dy)` to the
+column `Facet.col` it is attributed to (the open column a wall faces).
+Returns `(Rn, H, LE, G, E, Q_interior, area_density)`; `H`, `LE` and `E`
+are what the atmosphere above the column receives. Plan-area totals equal
+facet-area totals exactly, so no energy is created or lost in the
+aggregation — only the per-facet detail is.
+"""
+function aggregate_facet_fluxes(u::UrbanFacetScene{T},
+                                fluxes::AbstractVector{<:SurfaceFluxes}) where {T}
+    nx, ny = size(u.scene.heightmap)
+    cell = u.scene.dx * u.scene.dy
+    Rn = zeros(T, nx, ny); H = zeros(T, nx, ny); LE = zeros(T, nx, ny)
+    G = zeros(T, nx, ny); E = zeros(T, nx, ny); Qi = zeros(T, nx, ny)
+    ad = zeros(T, nx, ny)
+    for (i, rf) in enumerate(u.scene.facets)
+        ci, cj = rf.col
+        (1 <= ci <= nx && 1 <= cj <= ny) || continue
+        w = rf.area / cell
+        fl = fluxes[i]
+        Rn[ci, cj] += w * fl.Rn; H[ci, cj] += w * fl.H; LE[ci, cj] += w * fl.LE
+        G[ci, cj] += w * fl.G; E[ci, cj] += w * fl.E
+        Qi[ci, cj] += w * u.facets[i].Q_interior
+        ad[ci, cj] += w
+    end
+    return (Rn = Rn, H = H, LE = LE, G = G, E = E, Q_interior = Qi, area_density = ad)
+end
 
 end # module

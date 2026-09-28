@@ -47,6 +47,7 @@ makedocs(
             "Resolved plant canopy"       => "theory/plant_canopy.md",
             "Urban facet conduction"      => "theory/urban_conduction.md",
             "Glazing and window facets"   => "theory/urban_glazing.md",
+            "Facet–radiosity coupling"    => "theory/urban_radiosity_coupling.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

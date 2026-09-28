@@ -34,6 +34,9 @@ It has three layers of API:
   solar gain handed to a building energy model. The fill-gas property
   fits (`gas_conductivity`, `gas_viscosity`, `gas_heat_capacity`) stay
   qualified.
+- **Radiosity coupling** — `UrbanFacetScene`, `step_urban_facets!`,
+  `aggregate_facet_fluxes`: one facet column per radiosity facet, with
+  the facet-to-facet longwave exchange implicit.
 
 ## A facet in a diurnal cycle
 
@@ -52,6 +55,27 @@ for step in 1:1440
     fl = step_surface!(roof, f, 60.0)     # Rn, H, LE, G (G = Rn - H - LE exactly)
     interior_heat_flux(roof)              # W m⁻² into the room
 end
+```
+
+## A street canyon: every facet its own temperature
+
+`UrbanFacetScene` gives each facet of a `Radiosity` scene its own
+`UrbanFacet` and couples their longwave exchange implicitly through
+`Radiosity.longwave_response`
+([theory](../../theory/urban_radiosity_coupling.md)). Albedo and
+emissivity come from the scene's `UrbanMaterials`.
+
+```julia
+hm = zeros(8, 12); hm[1:3, :] .= 20; hm[6:8, :] .= 20   # H/W = 2 street
+scene = build_scene(hm, 5.0, 5.0; wall_subdivisions = 4)
+vf = view_factors(scene)
+u = UrbanFacetScene(scene, vf; T = 295.0,
+                    options = f -> f.kind === :wall ? (h_convective = 10.0,
+                                                        T_interior = 295.0) : (;))
+air = SurfaceForcing(lw_down = 310.0, T_air = 291.0, U = 2.0, z_ref = 30.0)
+fl = step_urban_facets!(u, air, 900.0; sun = (0.3, -0.2, 0.93), dni = 800.0, dhi = 120.0)
+facet_temperatures(u)                 # one skin temperature per facet
+agg = aggregate_facet_fluxes(u, fl)   # H, LE, … per unit plan area per LES column
 ```
 
 ## Reusing the conduction core
