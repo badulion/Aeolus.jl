@@ -419,6 +419,41 @@ end
             fw.H - fb.H, fc.H - fb.H)
 end
 
+@testset "Soil-limited evaporation: the surface returns what the soil delivered (#129)" begin
+    # A dry loam under strong sun: the soil surface reaches its dry
+    # potential and the water step delivers less than the skin balance's
+    # demand. The returned E must be the delivered water (so an atmosphere
+    # coupled to the column gets exactly what the soil lost), and the
+    # latent heat not spent goes into the soil, keeping energy exact.
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    col = SoilThermalColumn(SoilWaterColumn(clm_exponential_soil_grid(10), h; θ = 0.10), p;
+                            T_soil = 290.0, bottom = BottomTemperature(290.0))
+    f = SurfaceForcing(sw_down = 800.0, lw_down = 340.0, T_air = 298.0, q_air = 0.005, U = 2.0,
+                       z_ref = 3.0)
+    ρw = col.water.constants.ρ_water
+    E0 = soil_enthalpy(col) + col.budget.bottom - col.budget.water
+    W0 = soil_water_storage(col.water)
+    drain0 = col.water.budget.drainage
+    Eair = 0.0; Gsum = 0.0; limited = 0
+    for n in 1:240                                   # 2 h at 30 s
+        m0 = col.budget.latent_mismatch
+        fl = step_surface!(col, f, 30.0)
+        limited += col.budget.latent_mismatch > m0
+        @test fl.G ≈ fl.Rn - fl.H - fl.LE atol = 1e-8
+        Eair += fl.E * 30.0; Gsum += fl.G * 30.0
+    end
+    @test limited > 0                                 # the regime is exercised
+    # water: what the air received = storage loss − drainage out of the base
+    ΔW = soil_water_storage(col.water) - W0           # m of water
+    drain = col.water.budget.drainage - drain0
+    @test Eair / ρw ≈ -(ΔW + drain) rtol = 1e-8
+    # energy: the soil's store changed by exactly the returned G
+    @test soil_enthalpy(col) + col.budget.bottom - col.budget.water - E0 ≈ Gsum rtol = 1e-9
+    @printf("  dry loam, 2 h of sun: %d of 240 steps soil-limited, E delivered %.3f mm, latent heat kept in the soil %.2e J/m²\n",
+            limited, Eair, col.budget.latent_mismatch)
+end
+
 @testset "Coupled heat and water: frozen soil, runoff, conservation" begin
     h = carsel_parrish_texture(:loam)
     p = clm_soil_thermal_properties(40, 20)
