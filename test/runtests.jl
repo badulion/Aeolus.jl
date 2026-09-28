@@ -907,6 +907,10 @@ end
 
 @testset "Era V" begin
     include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
+    include("era5_soil_column.jl")       # Phase 46: soil column, Richards equation (#15)
+    include("era5_soil_thermal.jl")      # Phase 46: soil heat and freeze–thaw (#16)
+    include("era5_water_table.jl")       # Phase 46: water table, unconfined aquifer (#17)
+    include("era5_urban_soil.jl")        # Phase 46: production soil column in the urban example (#18)
     include("era5_photosynthesis.jl")    # Phase 47  Farquhar C3 / Collatz C4 photosynthesis (#19)
     include("era5_stomata.jl")           # Phase 47  Ball-Berry / Medlyn stomatal conductance (#20)
 end

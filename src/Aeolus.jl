@@ -65,6 +65,7 @@ include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 
 # --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53)
+include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equation
 include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
 
 using .Grids
@@ -115,6 +116,7 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
+using .SoilColumn                  # Phase 46
 using .Photosynthesis              # Phase 47
 
 # Re-exports for the user-facing API.
@@ -603,6 +605,33 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
 
+# Phase 46 (#15) — SoilColumn: CLM-style soil column, Richards equation.
+# Boundary-condition types (FreeDrainage, HeadTop, AtmosphericTop, …),
+# hooks and the generic-sounding accessors (saturated_conductivity,
+# air_entry_potential, …) stay qualified: `Aeolus.SoilColumn.FreeDrainage`,
+# or `using Aeolus.SoilColumn`.
+export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
+       AbstractHydraulicModel, ClappHornberger, VanGenuchtenMualem, GardnerExponential,
+       clapp_hornberger_texture, carsel_parrish_texture, cosby_clapp_hornberger,
+       soil_water_content, soil_matric_potential, soil_hydraulic_conductivity,
+       soil_water_capacity, soil_water_diffusivity, soil_porosity,
+       parlange_sorptivity, water_dynamic_viscosity,
+       SoilWaterColumn, step_soil_water!, set_water_content!, set_matric_potential!,
+       soil_water_storage, soil_layer_conductivity, soil_field_capacity
+
+# Phase 46 (#16) — SoilColumn: soil heat, freeze–thaw, and the column as an
+# AbstractSurface. Heat boundary types (GroundHeatFluxTop, BottomTemperature,
+# …) and the Johansen/Farouki helpers stay qualified, as for #15.
+export SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal_properties,
+       soil_thermal_conductivity, soil_heat_capacity,
+       freezing_matric_potential, supercooled_liquid_content, PowerLawIceImpedance,
+       SoilThermalColumn, step_soil_heat!, set_soil_temperature!,
+       soil_enthalpy, soil_ice_mass
+# Phase 46 (#17) — SoilColumn: water table / unconfined aquifer (SIMTOP).
+# The helpers aquifer_impermeable_fraction, gardner_two_point_flux and
+# bottom_water_storage stay qualified.
+export UnconfinedAquifer, water_table_depth, set_water_table!,
+       aquifer_baseflow_rate, total_water_storage
 # Phase 47 — Photosynthesis: Farquhar C3 / Collatz C4 leaf biochemistry,
 # Bernacchi / Kattge-Knorr temperature responses, CLM4.5 PFT parameters.
 export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
