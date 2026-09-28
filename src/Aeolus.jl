@@ -76,6 +76,7 @@ include("BuildingEnergy.jl")       # Phase 50 (indoor air + thermal mass; reuses
 include("Snowpack.jl")             # Phase 51 (#34): layered snowpack, Era V surface
 include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
 include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
+include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 
 using .Grids
 using .Fields
@@ -135,6 +136,7 @@ using .Snowpack                    # Phase 51 (#34)
 using .IceThermodynamics           # Era V, Phase 51 (#37)
 using .OceanMixedLayer             # Phase 52 (#38)
 using .AirSeaFlux                  # Phase 52 (#39)
+using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -861,5 +863,13 @@ export andreas_friction_velocity, AndreasSpray, spray_wind_functions,
        spray_dry_radius, spray_equilibrium_temperature, spray_radius_evolution,
        spray_residence_time, sea_spray_fluxes, rain_heat_flux,
        COARESolution, coare_fluxes, coare_warm_layer_series, coare_flux_hook
+
+# Phase 53 — sub-grid surface tiles (#41): flux aggregation over a
+# mosaic of AbstractSurface tiles.
+export SurfaceMosaic, ntiles, mosaic_fractions, set_mosaic_fractions!,
+       aggregate_fluxes, tile_fluxes, last_tile_fluxes,
+       effective_radiative_temperature, tile_mean_temperature,
+       ParameterAggregatedSurface, parameter_aggregate,
+       class_fractions, tiles_from_class_map
 
 end # module
