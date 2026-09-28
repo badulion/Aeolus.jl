@@ -42,6 +42,7 @@ makedocs(
             "Soil heat and freeze–thaw"   => "theory/soil_heat.md",
             "Water table and aquifer"     => "theory/water_table.md",
             "Leaf photosynthesis"         => "theory/photosynthesis.md",
+            "Stomatal conductance"        => "theory/stomatal_conductance.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
