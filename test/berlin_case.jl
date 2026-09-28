@@ -64,7 +64,7 @@ const BC = Main.BerlinCase
               Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_slab,
                    :soil_urban, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :transport_weno,
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
-                   :column_radiation, :traffic_heat])
+                   :column_radiation, :cloud_shadow, :traffic_heat])
         # every coupling names only real Aeolus submodules
         for C in BC.REGISTRY, m in BC.modules_used(C)
             @test isdefined(Aeolus, m) && getfield(Aeolus, m) isa Module
@@ -85,11 +85,12 @@ const BC = Main.BerlinCase
     @testset "stage schedule reproduces the pre-refactor loop order" begin
         order = [(S, BC.coupling_name(e.coupling)) for S in BC.ALL_STAGES for e in case.schedule[S]]
         # the order of the pre-refactor alexanderplatz_diurnal.jl loop
-        # (#130 added the column radiation before the radiosity solve and
-        # replaced the prescribed cooling)
+        # (#130 added the column radiation before and the cloud shadow after
+        # the radiosity solve, moved the cloud shadow out of :sw_modifiers
+        # and replaced the prescribed cooling)
         @test order == [
             (:radiation, :column_radiation), (:radiation, :radiosity_sun),
-            (:radiation, :buildings_citymean),
+            (:radiation, :cloud_shadow), (:radiation, :buildings_citymean),
             (:sw_modifiers, :sw_modifiers),
             (:surface_flux, :surface_slab),
             (:anthropogenic, :buildings_citymean), (:anthropogenic, :traffic_heat),
