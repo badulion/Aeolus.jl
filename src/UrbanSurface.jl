@@ -82,7 +82,7 @@ using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS
 import ..SurfaceExchange: surface_temperature, roughness_lengths, step_surface!
 import ..RadiationCore: surface_albedo, surface_emissivity
 using ..SurfaceOptics: SurfaceOptics, broadband_albedo, fresnel_polarized_reflectance
-using ..RadiationCore: STEFAN_BOLTZMANN, _gauss_legendre
+using ..RadiationCore: _gauss_legendre, STEFAN_BOLTZMANN
 using ..Radiosity: Radiosity, RadiosityScene, ViewFactors, Facet, LongwaveResponse,
                    ShortwaveSolution, longwave_response, solve_longwave,
                    solve_shortwave, set_temperature!
@@ -100,8 +100,6 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        UrbanFacet, interior_heat_flux, set_interior_boundary!,
        set_interior_temperature!, facet_layer_temperatures,
        example_roof_layers, example_wall_layers, example_ground_layers,
-       UrbanFacetScene, step_urban_facets!, aggregate_facet_fluxes,
-       example_facet_layers,
        # glazing (#27)
        CLEAR_FLOAT_REFRACTIVE_INDEX, CLEAR_FLOAT_EXTINCTION, UNCOATED_GLASS_EMISSIVITY,
        GlassPane, glass_pane_from_normal, pane_optics,
@@ -111,6 +109,9 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        glazing_u_value, inward_flowing_fractions, glazing_shgc,
        WindowFacet, set_solar_incidence!, window_optics, transmitted_shortwave,
        pane_temperatures, window_heat_content,
+       # facet–radiosity coupling (#28)
+       UrbanFacetScene, step_urban_facets!, aggregate_facet_fluxes,
+       example_facet_layers,
        # canyon exchange (#30)
        canyon_wind_speed, rowley_convection_coefficient
 
@@ -865,9 +866,14 @@ example_ground_layers() = [WallLayer(:asphalt, 0.05; ncells = 5), WallLayer(:con
                            WallLayer(:sand, 0.30; max_cell = 0.05),
                            WallLayer(:soil, 1.0; max_cell = 0.1)]
 
+# =========================================================================
+# 7-11. Glazing and window facets (#27)
+# =========================================================================
+
+include("urban_surface/glazing.jl")
 
 # =========================================================================
-# 7. Facet–radiosity coupling
+# 12. Facet–radiosity coupling (#28)
 # =========================================================================
 
 """
@@ -1377,10 +1383,9 @@ function aggregate_facet_fluxes(u::UrbanFacetScene{T},
 end
 
 # =========================================================================
-# 8. Glazing and window facets (#27) — sections 7–11 of glazing.jl
+# 13. Street-canyon exchange closures (#30)
 # =========================================================================
 
-include("urban_surface/glazing.jl")
 include("urban_surface/canyon_exchange.jl")
 
 end # module

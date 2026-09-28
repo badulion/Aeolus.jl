@@ -23,9 +23,6 @@ It has three layers of API:
 - **Facets** — `UrbanFacet <: AbstractSurface`, with `step_surface!`,
   `interior_heat_flux` and the interior hooks `set_interior_temperature!`
   / `set_interior_boundary!`.
-- **Radiosity coupling** — `UrbanFacetScene`, `step_urban_facets!`,
-  `aggregate_facet_fluxes`: one facet column per radiosity facet, with
-  the facet-to-facet longwave exchange implicit.
 - **Glazing** (#27; theory: [Glazing and window facets](../../theory/urban_glazing.md))
   — `GlassPane` / `glass_pane_from_normal` and `pane_optics` (Fresnel +
   Beer–Lambert, per polarisation), `Glazing` units (`single_glazing`,
@@ -37,6 +34,9 @@ It has three layers of API:
   solar gain handed to a building energy model. The fill-gas property
   fits (`gas_conductivity`, `gas_viscosity`, `gas_heat_capacity`) stay
   qualified.
+- **Radiosity coupling** — `UrbanFacetScene`, `step_urban_facets!`,
+  `aggregate_facet_fluxes`: one facet column per radiosity facet, with
+  the facet-to-facet longwave exchange implicit.
 - **Canyon exchange** (#30; theory: [BUBBLE / CAPITOUL validation](../../theory/urban_validation.md))
   — the Town Energy Balance closures for the air next to walls and
   streets: `canyon_wind_speed` (TEB canyon wind, skimming flow) and

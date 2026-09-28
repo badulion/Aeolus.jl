@@ -315,6 +315,53 @@ Outputs land in `examples/urban/output/alexanderplatz_*`:
 `pollutant_XXh.ppm`, `particles_final.ppm`, `class_surfT.svg`,
 `sw_forcing.svg`, `final_theta.svg`, `surfT_final.ppm`.
 
+### Ground: the production soil column
+
+Below each non-water cell's surface slab the run carries one
+`SoilThermalColumn` from `Aeolus.SoilColumn` (Phase 46, #18). It replaces
+a three-layer explicit soil that was written into the example. The
+example's `UrbanSoil` / `step_soil!` (in `land_surface_addons.jl`) only
+couples that column to the slab, and does no soil physics of its own:
+
+- **The column.** It uses the 10 CLM2–4.5 exponential layers down to
+  3.43 m, with the top node at 7 mm. The soil is a moist loam at
+  θ = 0.20 (k = 1.64 W m⁻¹ K⁻¹, C = 2.10 MJ m⁻³ K⁻¹), and the base is
+  held at 288 K. Soil water is not stepped.
+- **The coupling.** The slab (Ts, `C_s`) reaches the soil surface through
+  a contact conductance h = 6 W m⁻² K⁻¹, the skin coupling of the old
+  scheme. Folding the slab into
+  `LinearizedSkinBalance(0, -1/(1/h + Δt/C_s), Ts)` makes the exchange
+  implicit, and the slab loses exactly the ground heat flux the soil
+  gains.
+- **Sub-cycling.** The exchange runs every 15 dynamics steps (30 s). The
+  24 h run takes about 9 % longer.
+- **New output.** The NetCDF output gains `T_soil1` (top-layer soil
+  temperature) and `G_soil` (ground heat flux).
+
+`alexanderplatz_surface_diagnostics.jl` summarises a run, or compares two
+runs, from the NetCDF alone. It reports per-class means for sunset at
+19:30 local:
+
+| class-mean Ts, 24 h from 06:00 | three-layer soil | production column |
+| :-- | --: | --: |
+| street max (15:30) / night min (04:00–04:30) | 324.86 / 301.92 K | 324.54 / 301.40 K |
+| roof max (15:00) / night min (04:00) | 330.21 / 300.07 K | 329.71 / 299.47 K |
+| wall max (17:30) / night min (04:00) | 305.66 / 300.09 K | 305.48 / 299.72 K |
+| street cooling, sunset → night min | 14.23 K (1.67 K h⁻¹) | 14.27 K (1.59 K h⁻¹) |
+| roof cooling, sunset → night min | 16.25 K | 16.16 K |
+
+The diurnal cycle is essentially unchanged. The slab–soil exchange is
+limited by the contact conductance in both schemes, and the production
+column differs mainly in resolving the upper centimetres of the soil:
+
+- The street top-layer soil temperature swings through 13.5 K.
+- Street G peaks at 148 W m⁻² into the ground and reaches −5 W m⁻² at
+  night.
+
+What changes is what the ground can represent: moisture-dependent
+conductivity, frozen ground with latent heat, and a column that the
+land-surface model (#21) can share.
+
 ## Adding your own city
 
 Two ingest formats are supported.
