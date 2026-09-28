@@ -1,6 +1,7 @@
 # Phase 46 (#18): the production soil column in the urban example.
 #
-# examples/urban/land_surface_addons.jl couples the example's surface slab
+# examples/urban/couplings/soil_urban.jl (in the BerlinCase module)
+# couples the Berlin case's surface slab
 # (temperature Ts, areal heat capacity C_s per class) to one
 # `SoilThermalColumn` per non-water cell through a contact conductance h.
 # These tests check that adapter against physics: exact energy exchange,
@@ -12,10 +13,9 @@ using Test
 using Aeolus
 using Printf
 
-module UrbanSoilExample
-    include(joinpath(@__DIR__, "..", "examples", "urban", "land_surface_addons.jl"))
-end
-const USE = UrbanSoilExample
+isdefined(Main, :BerlinCase) ||
+    include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
+const USE = Main.BerlinCase
 
 # Periodic forcing of one slab cell: net flux F(t) = F_a cos(ωt) enters the
 # slab explicitly (as `step_surfaces!` does), then `step_soil!` exchanges

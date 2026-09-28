@@ -939,3 +939,10 @@ end
     include("era5_blending_height.jl")   # Phase 53 blending height, effective roughness, IBL (#42)
     include("era5_heterogeneous_surface.jl") # Phase 53 resolved patchy-surface LES vs tiles (#43)
 end
+
+# =========================================================================
+# The Berlin (Alexanderplatz) flagship case — examples/urban/BerlinCase.jl
+
+@testset "Berlin case" begin
+    include("berlin_case.jl")            # registry, stages, bus, tracers (#126)
+end
