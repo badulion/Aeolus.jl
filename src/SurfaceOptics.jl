@@ -107,7 +107,8 @@ export # spectral library
        hemisphere_quadrature_albedo,
        BRDFSurface,
        # water
-       FresnelWater, fresnel_reflectance, cox_munk_slope_variance,
+       FresnelWater, fresnel_reflectance, fresnel_polarized_reflectance,
+       cox_munk_slope_variance,
        whitecap_fraction, water_albedo_direct, water_albedo_diffuse,
        # snow
        SnowSurface, snow_grain_radius, snow_albedo, snow_albedo_spectrum,
@@ -1653,21 +1654,55 @@ Base.show(io::IO, s::BRDFSurface) =
 # sun is always low.
 
 """
-    fresnel_reflectance(θ, n = 1.34) -> R
+    fresnel_polarized_reflectance(θ, n) -> (R_s, R_p, cosθ_t)
 
-Unpolarised Fresnel reflectance of a smooth dielectric interface at
-incidence angle `θ` (radians) for real refractive index `n`, as the mean
-of the two polarisation components:
+Fresnel power reflectances of the two polarisation components at a
+smooth interface from air (index 1) into a non-absorbing dielectric of
+real refractive index `n > 1`, at incidence angle `θ` (radians):
 
 ```math
 r_s = \\frac{\\cosθ - n\\cosθ_t}{\\cosθ + n\\cosθ_t},
 \\qquad
 r_p = \\frac{n\\cosθ - \\cosθ_t}{n\\cosθ + \\cosθ_t},
 \\qquad
-R = \\tfrac{1}{2}\\,(r_s^2 + r_p^2)
+R_s = r_s^2,\\; R_p = r_p^2,
 ```
 
-with `sin θ_t = sin θ / n` from Snell's law. `n = 1.34` is the
+with `sin θ_t = sin θ / n` from Snell's law; `cosθ_t` (the cosine of the
+refraction angle inside the medium) is returned as well because the path
+length through an absorbing layer depends on it. By reciprocity the same
+`R_s`, `R_p` apply to the ray leaving the medium at `θ_t`. This is the
+single implementation of the Fresnel equations in the package:
+[`fresnel_reflectance`](@ref) (water) and the glazing optics of
+`UrbanSurface` both call it.
+
+Limits: `R_s = R_p = ((n-1)/(n+1))²` at normal incidence, `R_p = 0` at
+the Brewster angle `atan(n)`, and both tend to 1 at grazing incidence.
+"""
+function fresnel_polarized_reflectance(θ::Real, n::Real)
+    n > 1 || throw(ArgumentError("fresnel_polarized_reflectance: n must exceed 1"))
+    c = cos(clamp(θ, 0.0, π / 2))
+    s = sqrt(max(1 - c^2, 0.0))
+    st = s / n
+    ct = sqrt(max(1 - st^2, 0.0))
+    rs = (c - n * ct) / (c + n * ct)
+    rp = (n * c - ct) / (n * c + ct)
+    return (clamp(rs^2, 0.0, 1.0), clamp(rp^2, 0.0, 1.0), ct)
+end
+
+"""
+    fresnel_reflectance(θ, n = 1.34) -> R
+
+Unpolarised Fresnel reflectance of a smooth dielectric interface at
+incidence angle `θ` (radians) for real refractive index `n`, as the mean
+of the two polarisation components of
+[`fresnel_polarized_reflectance`](@ref):
+
+```math
+R = \\tfrac{1}{2}\\,(R_s + R_p)
+```
+
+`n = 1.34` is the
 appropriate broadband value for sea water across the solar spectrum (it
 runs from 1.35 in the blue to 1.32 at 2.5 μm; the variation changes the
 normal-incidence reflectance by less than 0.002 and is neglected here).
@@ -1678,14 +1713,8 @@ Limits: `R(0) = ((n-1)/(n+1))² = 0.0211`, and `R → 1` as `θ → π/2`. The
 strongly polarised and why a polarising filter darkens it.
 """
 function fresnel_reflectance(θ::Real, n::Real = 1.34)
-    c = cos(clamp(θ, 0.0, π / 2))
-    s = sqrt(max(1 - c^2, 0.0))
-    st = s / n
-    st >= 1 && return 1.0                 # cannot occur for n > 1
-    ct = sqrt(max(1 - st^2, 0.0))
-    rs = (c - n * ct) / (c + n * ct)
-    rp = (n * c - ct) / (n * c + ct)
-    return clamp(0.5 * (rs^2 + rp^2), 0.0, 1.0)
+    Rs, Rp, _ = fresnel_polarized_reflectance(θ, n)
+    return clamp(0.5 * (Rs + Rp), 0.0, 1.0)
 end
 
 """

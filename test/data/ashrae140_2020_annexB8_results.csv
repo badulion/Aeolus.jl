@@ -1,0 +1,87 @@
+# ASHRAE Standard 140-2020, Informative Annex B8, Section B8.1: example results of six
+# reference programs (BSIMAC, CSE, DeST, EnergyPlus, ESP-r, TRNSYS) for the Section 5.2
+# building thermal envelope and fabric load cases, as tabulated in the Standard's results
+# workbook RESULTS5-2A.xlsx (sheets "Tables 1", "Tables 2", "Tables 4", "Tables 5", "Tables 6"),
+# distributed with NREL BESTEST-GSR (github.com/NatLabRockies/BESTEST-GSR, results/resources/).
+# min, max, mean: statistics of the example results; energyplus: the EnergyPlus column.
+# The Standard states these statistics are not acceptance criteria.
+# Units: MWh (annual), kW (annual hourly-integrated peak), kWh/m2 (annual incident solar).
+# delta_* rows: sensitivity differences (case A - case B) of Tables B8-8, B8-9, B8-10.
+quantity,case,table,min,max,mean,energyplus
+annual_heating_MWh,220,B8-1,6.377,7.178,6.71167,6.45514
+annual_cooling_MWh,220,B8-2,0.497658,0.803,0.607893,0.609904
+peak_heating_kW,220,B8-3,2.631,2.87857,2.782,2.69203
+peak_cooling_kW,220,B8-4,0.968008,1.336,1.10816,1.18448
+annual_heating_MWh,230,B8-1,9.81236,10.417,10.0305,9.92986
+annual_cooling_MWh,230,B8-2,0.896638,1.184,0.991198,0.991213
+peak_heating_kW,230,B8-3,4.1329,4.3161,4.22772,4.3161
+peak_cooling_kW,230,B8-4,1.69356,1.994,1.78193,1.84088
+annual_heating_MWh,240,B8-1,5.116,5.944,5.49642,5.27938
+annual_cooling_MWh,240,B8-2,0.833776,1.287,0.979949,0.978748
+peak_heating_kW,240,B8-3,2.431,2.69309,2.59544,2.50712
+peak_cooling_kW,240,B8-4,1.14958,1.534,1.29237,1.36594
+annual_heating_MWh,250,B8-1,4.733,5.373,5.01478,4.89912
+annual_cooling_MWh,250,B8-2,2.90384,3.612,3.34404,3.18161
+peak_heating_kW,250,B8-3,2.631,2.87436,2.77747,2.68741
+peak_cooling_kW,250,B8-4,2.688,3.034,2.84043,2.86659
+annual_heating_MWh,395,B8-1,4.565,5.145,4.82999,4.64122
+annual_cooling_MWh,395,B8-2,0.00351617,0.021,0.0090264,0.0103802
+peak_heating_kW,395,B8-3,1.948,2.16134,2.06559,1.95173
+peak_cooling_kW,395,B8-4,0.265203,0.547,0.358195,0.377471
+annual_heating_MWh,400,B8-1,5.906,7.047,6.53597,6.34782
+annual_cooling_MWh,400,B8-2,0.0126829,0.063,0.028492,0.0305656
+peak_heating_kW,400,B8-3,2.559,2.87857,2.76999,2.692
+peak_cooling_kW,400,B8-4,0.371985,0.798,0.53059,0.606906
+annual_heating_MWh,410,B8-1,7.63,8.661,8.17893,8.08033
+annual_cooling_MWh,410,B8-2,0.0351196,0.096,0.0550299,0.0572686
+peak_heating_kW,410,B8-3,3.338,3.59694,3.48261,3.50404
+peak_cooling_kW,410,B8-4,0.603683,1.011,0.745901,0.827849
+annual_heating_MWh,420,B8-1,6.399,7.433,6.9726,6.9058
+annual_cooling_MWh,420,B8-2,0.109436,0.228,0.148587,0.15257
+peak_heating_kW,420,B8-3,3.138,3.41145,3.29664,3.31912
+peak_cooling_kW,420,B8-4,0.814075,1.208,0.95269,1.03254
+annual_heating_MWh,430,B8-1,5.171,5.954,5.5991,5.62013
+annual_cooling_MWh,430,B8-2,0.739022,1.084,0.913584,0.855624
+peak_heating_kW,430,B8-3,3.25388,3.40882,3.32066,3.31625
+peak_cooling_kW,430,B8-4,1.70408,2.167,1.89238,1.92937
+annual_heating_MWh,800,B8-1,4.90568,5.403,5.15242,5.11556
+annual_cooling_MWh,800,B8-2,0.282081,0.473,0.376974,0.373532
+peak_heating_kW,800,B8-3,2.77764,2.96695,2.88821,2.92365
+peak_cooling_kW,800,B8-4,0.93559,1.286,1.09638,1.04583
+delta_annual_heating_MWh,230-220,B8-8,3.14601,3.47472,3.31883,3.47472
+delta_annual_cooling_MWh,230-220,B8-8,0.3788,0.39898,0.383305,0.381309
+delta_peak_heating_kW,230-220,B8-8,1.29352,1.62407,1.44572,1.62407
+delta_peak_cooling_kW,230-220,B8-8,0.619681,0.725548,0.673771,0.656395
+delta_annual_heating_MWh,240-220,B8-8,-1.261,-1.17576,-1.21525,-1.17576
+delta_annual_cooling_MWh,240-220,B8-8,0.326,0.484,0.372055,0.368844
+delta_peak_heating_kW,240-220,B8-8,-0.2,-0.178,-0.186558,-0.184916
+delta_peak_cooling_kW,240-220,B8-8,0.178,0.198,0.18421,0.181453
+delta_annual_heating_MWh,250-220,B8-8,-1.805,-1.55602,-1.69688,-1.55602
+delta_annual_cooling_MWh,250-220,B8-8,2.40618,2.921,2.73614,2.5717
+delta_peak_heating_kW,250-220,B8-8,-0.008,0,-0.00452378,-0.00461829
+delta_peak_cooling_kW,250-220,B8-8,1.577,2.022,1.73227,1.68211
+delta_annual_heating_MWh,400-395,B8-9,1.341,1.902,1.70598,1.70661
+delta_annual_cooling_MWh,400-395,B8-9,0.00916673,0.042,0.0194656,0.0201854
+delta_peak_heating_kW,400-395,B8-9,0.611,0.778,0.704406,0.740276
+delta_peak_cooling_kW,400-395,B8-9,0.106782,0.251,0.172395,0.229435
+delta_annual_heating_MWh,410-400,B8-9,1.50928,1.73251,1.64295,1.73251
+delta_annual_cooling_MWh,410-400,B8-9,0.0224367,0.033,0.0265379,0.026703
+delta_peak_heating_kW,410-400,B8-9,0.601308,0.812033,0.712617,0.812033
+delta_peak_cooling_kW,410-400,B8-9,0.168,0.252,0.215311,0.220943
+delta_annual_heating_MWh,420-410,B8-9,-1.231,-1.17453,-1.20632,-1.17453
+delta_annual_cooling_MWh,420-410,B8-9,0.0743164,0.132,0.0935574,0.0953017
+delta_peak_heating_kW,420-410,B8-9,-0.2,-0.178,-0.185974,-0.184916
+delta_peak_cooling_kW,420-410,B8-9,0.197,0.212,0.206789,0.204691
+delta_annual_heating_MWh,430-420,B8-9,-1.4821,-1.228,-1.37351,-1.28567
+delta_annual_cooling_MWh,430-420,B8-9,0.629586,0.856,0.764997,0.703053
+delta_peak_heating_kW,430-420,B8-9,-0.005,0.162,0.0240231,-0.00286901
+delta_peak_cooling_kW,430-420,B8-9,0.890007,1.038,0.939686,0.896826
+delta_annual_heating_MWh,800-430,B8-10,-0.5651,-0.03,-0.446679,-0.504568
+delta_annual_cooling_MWh,800-430,B8-10,-0.611,-0.456941,-0.53661,-0.482091
+delta_peak_heating_kW,800-430,B8-10,-0.496,-0.343,-0.432453,-0.392599
+delta_peak_cooling_kW,800-430,B8-10,-0.883533,-0.683,-0.795994,-0.883533
+incident_solar_kWh_m2,horizontal,B8-13,1662.53,1670,1666.36,1664.34
+incident_solar_kWh_m2,north,B8-13,399.047,477.31,439.981,438.241
+incident_solar_kWh_m2,east,B8-13,1016.68,1067.94,1048.17,1062.16
+incident_solar_kWh_m2,south,B8-13,1290.59,1387,1352.05,1370.48
+incident_solar_kWh_m2,west,B8-13,903.066,997,951.453,967.278

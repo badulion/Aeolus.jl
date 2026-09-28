@@ -66,7 +66,15 @@ include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 
-# --- Era V: surface exchange (Phases 46-53) ------------------------------
+# --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53)
+include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equation
+include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
+include("LandSurface.jl")          # Phase 47 (#21): vegetated land column
+include("PlantCanopy.jl")          # Phase 48 (resolved plant canopy)
+include("UrbanSurface.jl")         # Phase 49 (urban facets; needs SurfaceExchange + SurfaceOptics)
+include("BuildingEnergy.jl")       # Phase 50 (indoor air + thermal mass; reuses UrbanSurface columns)
+include("Snowpack.jl")             # Phase 51 (#34): layered snowpack, Era V surface
+include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
 include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
 
 using .Grids
@@ -117,8 +125,16 @@ using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
 using .SurfaceExchange             # Era V contract
-using .AirSeaFlux                  # Phase 52 (#39)
+using .SoilColumn                  # Phase 46
+using .Photosynthesis              # Phase 47
+using .LandSurface                 # Phase 47 (#21)
+using .PlantCanopy                 # Phase 48
+using .UrbanSurface                # Phase 49
+using .BuildingEnergy              # Phase 50
+using .Snowpack                    # Phase 51 (#34)
+using .IceThermodynamics           # Era V, Phase 51 (#37)
 using .OceanMixedLayer             # Phase 52 (#38)
+using .AirSeaFlux                  # Phase 52 (#39)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -306,7 +322,8 @@ export AbstractBRDF, BRDFSurface, CookTorranceBRDF, FresnelWater,
        brdf, broadband_albedo, broadband_emissivity,
        cook_torrance_preset, cox_munk_slope_variance,
        diffuse_albedo_vector, direct_albedo_vector, emissivity_vector,
-       fresnel_reflectance, hemisphere_quadrature_albedo,
+       fresnel_reflectance, fresnel_polarized_reflectance,
+       hemisphere_quadrature_albedo,
        li_sparse_kernel, material_names, ross_thick_kernel,
        rossli_preset, rpv_preset, snow_albedo, snow_albedo_spectrum,
        snow_grain_radius, spectral_emissivity, spectral_reflectance,
@@ -363,7 +380,8 @@ export Facet, LongwaveSolution, RadiosityScene, ShortwaveSolution,
        facet_albedos, facet_areas, facet_corners, facet_edges,
        facet_emissivities, facet_sample_points, facet_sunlit_fraction,
        facet_temperatures, heightmap_from_solid_mask,
-       longwave_trapping_factor, nfacets, ray_blocked,
+       longwave_trapping_factor, LongwaveResponse, longwave_response,
+       nfacets, ray_blocked,
        reciprocity_error, segment_blocked, set_temperature!,
        set_temperatures!, sky_view_factor_raycast,
        sky_view_factors_raycast, solar_unit_vector, solve_longwave,
@@ -384,7 +402,8 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        saturation_specific_humidity, saturation_mixing_ratio,
        saturation_specific_humidity_ice,
        vapor_pressure, relative_humidity, relative_humidity_ice,
-       dewpoint_temperature, frost_point_temperature,
+       specific_humidity_from_relative_humidity,
+       dewpoint_temperature, frost_point_temperature, wet_bulb_temperature,
        gas_constant_moist, heat_capacity_moist, exner_function,
        potential_temperature, temperature_from_theta,
        liquid_ice_potential_temperature, temperature_from_theta_li,
@@ -606,6 +625,220 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!
 
+# Phase 46 (#15) — SoilColumn: CLM-style soil column, Richards equation.
+# Boundary-condition types (FreeDrainage, HeadTop, AtmosphericTop, …),
+# hooks and the generic-sounding accessors (saturated_conductivity,
+# air_entry_potential, …) stay qualified: `Aeolus.SoilColumn.FreeDrainage`,
+# or `using Aeolus.SoilColumn`.
+export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
+       AbstractHydraulicModel, ClappHornberger, VanGenuchtenMualem, GardnerExponential,
+       clapp_hornberger_texture, carsel_parrish_texture, cosby_clapp_hornberger,
+       soil_water_content, soil_matric_potential, soil_hydraulic_conductivity,
+       soil_water_capacity, soil_water_diffusivity, soil_porosity,
+       parlange_sorptivity, water_dynamic_viscosity,
+       SoilWaterColumn, step_soil_water!, set_water_content!, set_matric_potential!,
+       soil_water_storage, soil_layer_conductivity, soil_field_capacity
+
+# Phase 46 (#16) — SoilColumn: soil heat, freeze–thaw, and the column as an
+# AbstractSurface. Heat boundary types (GroundHeatFluxTop, BottomTemperature,
+# …) and the Johansen/Farouki helpers stay qualified, as for #15.
+export SoilThermalProperties, clm_soil_thermal_properties, johansen_soil_thermal_properties,
+       soil_thermal_conductivity, soil_heat_capacity,
+       freezing_matric_potential, supercooled_liquid_content, PowerLawIceImpedance,
+       SoilThermalColumn, step_soil_heat!, set_soil_temperature!,
+       soil_enthalpy, soil_ice_mass
+
+# Phase 46 (#17) — SoilColumn: water table / unconfined aquifer (SIMTOP).
+# The helpers aquifer_impermeable_fraction, gardner_two_point_flux and
+# bottom_water_storage stay qualified.
+export UnconfinedAquifer, water_table_depth, set_water_table!,
+       aquifer_baseflow_rate, total_water_storage
+
+# Phase 47 — Photosynthesis: Farquhar C3 / Collatz C4 leaf biochemistry,
+# Bernacchi / Kattge-Knorr temperature responses, CLM4.5 PFT parameters.
+export AbstractTemperatureResponse, ArrheniusResponse, PeakedArrheniusResponse,
+       Q10Response, temperature_factor, optimum_temperature,
+       C3TemperatureResponses, bonan2011_c3_temperature,
+       kattge_knorr_c3_temperature, kattge_knorr_jmax_ratio,
+       PAR_PHOTONS_PER_JOULE, par_to_photon_flux, colimited_rate,
+       electron_transport_rate,
+       AbstractPhotosynthesisParameters, C3Parameters, C4Parameters, collatz1992_c4,
+       leaf_capacities, photorespiratory_compensation_point,
+       LeafAssimilation, leaf_assimilation, net_assimilation, co2_compensation_point,
+       PFTPhotosynthesis, CLM45_PFT_PHOTOSYNTHESIS, vcmax25_from_leaf_nitrogen,
+       pft_photosynthesis_parameters
+
+# Phase 47 — stomatal conductance (#20): Ball-Berry / Medlyn closures,
+# leaf boundary layer, transpiration, coupled A–gs–ci solution.
+export AbstractStomatalModel, BallBerryStomata, MedlynStomata, stomatal_conductance,
+       leaf_boundary_layer_conductance, molar_conductance, leaf_transpiration,
+       STOMATAL_DIFFUSIVITY_RATIO, BOUNDARY_LAYER_DIFFUSIVITY_RATIO,
+       LeafGasExchange, leaf_gas_exchange, apply_water_stress,
+       CLM5_MEDLYN_G1, pft_stomatal_model
+
+# Phase 47 (#21) — LandSurface: vegetated land column (two-big-leaf canopy
+# over a SoilThermalColumn), root-zone soil-water stress, big-leaf radiation.
+export VegetationParameters, pft_vegetation,
+       zeng_root_fractions, AbstractSoilWaterStress, CLMWaterStress,
+       wilting_factor, soil_water_stress, root_water_uptake,
+       BigLeafShortwave, bigleaf_shortwave, BigLeafLongwave, bigleaf_longwave,
+       canopy_roughness, undercanopy_transfer_coefficient,
+       VegetatedLandColumn, LandSurfaceDiagnostics, LandSurfaceBudget,
+       set_leaf_area!, radiative_temperature
+
+# Phase 48 — PlantCanopy: leaf-area-density profiles and implicit
+# (unconditionally stable) canopy drag.
+export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD, TabulatedLAD,
+       leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
+       layer_leaf_area_density,
+       canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,
+       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!,
+       CanopyWindSolution, solve_canopy_wind_column,
+       harman_finnigan_mixing_length, canopy_attenuation_coefficient,
+       canopy_exponential_wind,
+       AbstractLeafAngleDistribution, RossGoudriaanLeaves, SphericalLeaves,
+       HorizontalLeaves, LeafOptics, leaf_projection_function,
+       beam_extinction_coefficient, average_inverse_optical_depth,
+       canopy_scattering_parameters, canopy_beam_transmittance,
+       sunlit_leaf_fraction, canopy_diffuse_transmittance,
+       CanopyShortwaveSolution, canopy_shortwave,
+       CanopyLongwaveSolution, canopy_longwave, canopy_shortwave_field!
+
+# Phase 48 — leaf energy balance (#24): leaf temperature, boundary layer,
+# transpiration and sensible heat of resolved-canopy leaves.
+export AbstractLeafBoundaryLayer, CampbellNormanBoundaryLayer, CLMLeafBoundaryLayer,
+       leaf_boundary_layer_conductances,
+       AbstractLeafStomata, FixedStomatalConductance, CoupledLeafPhysiology,
+       LeafEnergyBalance, leaf_energy_balance, leaf_penman_monteith,
+       CanopyLeafEnergySolution, canopy_leaf_energy_balance
+
+# Phase 48 — within-canopy profiles (#25): scalar K-theory column,
+# displacement height, tabulated (measured) LAD profiles.
+export CanopyScalarSolution, solve_canopy_scalar_column, canopy_displacement_height,
+       canopy_mixing_length, harman_finnigan_scalar_diffusivity
+
+# Phase 49 — UrbanSurface: per-facet multi-layer wall conduction. The
+# material-property accessors (volumetric_heat_capacity,
+# thermal_diffusivity, thermal_admittance) are generic names other Era V
+# modules may want, so they stay qualified: `Aeolus.UrbanSurface.thermal_admittance`.
+export ThermalMaterial, thermal_material, thermal_material_names,
+       WallLayer, thermal_resistance, thermal_transmittance,
+       ISO6946_SURFACE_RESISTANCE,
+       ColumnBoundary, fixed_temperature_boundary, heat_flux_boundary,
+       convective_boundary,
+       ConductionColumn, step_conduction!, face_temperature,
+       column_heat_content, cell_centers,
+       UrbanFacet, interior_heat_flux, set_interior_boundary!,
+       set_interior_temperature!, facet_layer_temperatures,
+       example_roof_layers, example_wall_layers, example_ground_layers,
+       UrbanFacetScene, step_urban_facets!, aggregate_facet_fluxes,
+       example_facet_layers
+
+# Phase 49 — UrbanSurface glazing (#27): angle-dependent pane / unit
+# optics, gap heat transfer, U-value, SHGC and the window facet. The
+# fill-gas property fits (gas_conductivity, …) stay qualified.
+export CLEAR_FLOAT_REFRACTIVE_INDEX, CLEAR_FLOAT_EXTINCTION, UNCOATED_GLASS_EMISSIVITY,
+       GlassPane, glass_pane_from_normal, pane_optics,
+       FillGas, GLAZING_AIR, GLAZING_ARGON, GlazingGap, gap_nusselt, gap_conductance,
+       Glazing, single_glazing, double_glazing, triple_glazing,
+       glazing_optics, glazing_optics_hemispherical,
+       glazing_u_value, inward_flowing_fractions, glazing_shgc,
+       WindowFacet, set_solar_incidence!, window_optics, transmitted_shortwave,
+       pane_temperatures, window_heat_content
+
+# Phase 50 — BuildingEnergy: prognostic indoor air temperature, thermal
+# mass (UrbanSurface conduction columns), ventilation, and the ISO 13790
+# 5R1C reference model.
+export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
+       BuildingZone, ZoneForcing, ZoneBudget, step_zone!, facet_fluxes,
+       zone_air_temperature, zone_heat_content, zone_heat_loss_coefficient,
+       zone_mean_radiant_temperature, zone_operative_temperature,
+       air_heat_capacity, ventilation_conductance, element_transmittance,
+       iso13786_areal_heat_capacity,
+       ISO13790Zone, iso13790_zone, step_iso13790!, iso13790_ideal_load!,
+       zone_specific_humidity, zone_relative_humidity,
+       BiquadraticCurve, DXCoolingCurves, DX_RATING_POINT,
+       DX_CURVES_WINDOW_AC, DX_CURVES_PACKAGED_AC,
+       IdealLoadsHVAC, HVACBudget, condenser_inlet_temperature,
+       cooling_cop, available_cooling_capacity
+
+# Phase 50 — BuildingEnergy: occupancy, lighting and equipment schedules and
+# internal gains (#33).
+export DayProfile, WeeklySchedule, schedule_value, schedule_mean, full_load_hours,
+       occupant_sensible_heat, InternalGains, InternalGainRates, internal_gains,
+       ThermostatSchedule, scheduled_hvac, DOE_MEDIUM_OFFICE_SCHEDULES,
+       office_internal_gains, office_thermostat
+
+# Phase 49 — anthropogenic heat from the building energy model (#29).
+export BuildingHeatRelease, building_heat_release, energy_consumption, total_heat_release,
+       anthropogenic_sensible_heat, anthropogenic_latent_heat,
+       step_buildings!, building_facets, scene_building_zone, anthropogenic_heat_maps
+
+# Phase 49 — TEB canyon-exchange closures used by the BUBBLE / CAPITOUL
+# validation (#30).
+export canyon_wind_speed, rowley_convection_coefficient
+
+# Phase 51 (#34) — Snowpack: layered snowpack with compaction, heat
+# conduction and melt; `LayeredSnowpack <: AbstractSurface`.
+export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
+       Jordan1991Conductivity, Calonne2011Conductivity, snow_thermal_conductivity,
+       AbstractFreshSnowDensity, Anderson1976FreshSnow, Vionnet2012FreshSnow,
+       fresh_snow_density,
+       AbstractSnowCompaction, DestructiveMetamorphism, Anderson1976Compaction,
+       Vionnet2012Compaction, snow_compaction_rate, snow_viscosity,
+       AbstractSnowMetamorphism, NoSnowMetamorphism, snow_metamorphism!,
+       viscosity_grain_factor,
+       AbstractSnowAlbedo, ConstantSnowAlbedo, snowpack_albedo,
+       AbstractSnowLiquidWater, InstantSnowRunoff, snow_liquid_water!,
+       AbstractSnowBottom, SnowGroundTemperature, SnowBottomFlux,
+       SnowLayering, LayeredSnowpack, SnowBudget,
+       snow_nlayers, snow_depth, snow_water_equivalent, snow_bulk_density,
+       snow_layer_density, snow_layer_depths, snowpack_enthalpy, snow_load,
+       snow_compaction!, snow_heat_conduction!, snow_phase_change!,
+       add_snowfall!, add_rainfall!, snow_sublimation!, relayer_snowpack!
+
+# Phase 51 (#36) — Snowpack: liquid-water retention, percolation, refreezing.
+export AbstractSnowWaterRetention, ColeouLesaffre1998Retention, PoreFractionRetention,
+       snow_irreducible_water, snow_water_holding_capacity, snow_liquid_water_content,
+       snow_saturated_hydraulic_conductivity, snow_refreeze!,
+       SnowBucketPercolation, SnowGravityDrainage
+
+# Phase 51 (#35) — Snowpack: grain metamorphism (Flanner & Zender 2006 /
+# Brun 1989) and albedo ageing through SurfaceOptics.SnowSurface.
+export fresh_grain_radius, refrozen_grain_radius, mix_refrozen_grain!,
+       SnicarAgingTable, snicar_aging_table, snicar_aging_parameters,
+       snicar_grain_radius, flanner_grain_radius,
+       Flanner2006Metamorphism, ParabolicGrainGrowth,
+       snow_dry_grain_growth_rate, snow_wet_grain_growth_rate,
+       snow_temperature_gradient, snow_specific_surface_area, snow_optical_radius,
+       SnowOpticsAlbedo, snowpack_optics, snowpack_optical_radius
+
+# Phase 51 — IceThermodynamics (#37): Bitz & Lipscomb (1999) energy-
+# conserving lake and sea ice with brine pockets, snow, melt and growth.
+export IceParameters, IceColumn, sea_ice_column, lake_ice_column,
+       seawater_freezing_point, bl99_salinity_profile,
+       ice_melting_temperature, ice_energy_of_melting, ice_enthalpy,
+       ice_temperature_from_enthalpy, ice_heat_capacity, ice_conductivity,
+       ice_snow_enthalpy,
+       PrescribedSurfaceTemperature, PrescribedSurfaceFluxes, IceStepBudget,
+       step_ice!, ice_thickness, ice_snow_depth, ice_layer_temperatures,
+       ice_column_enthalpy, ice_freeboard,
+       stefan_ice_thickness, neumann_lambda, neumann_ice_thickness
+
+# Phase 52 (#38) — OceanMixedLayer: lake / coastal-sea water column with a
+# Kraus–Turner mixed layer, shortwave penetration, cool skin and warm layer.
+export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
+       water_density, water_thermal_expansion, water_haline_contraction,
+       SolarBands, jerlov_water, soloviev_solar,
+       solar_transmission, solar_absorbed_between, solar_mean_transmission,
+       CoolSkin, cool_skin, BusingerDyerLogLinear,
+       AbstractWarmLayer, NoWarmLayer, FairallWarmLayer, ZengBeljaarsWarmLayer,
+       step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth,
+       KrausTurnerMixing, WaterColumn, layer_depths,
+       absorb_heat!, convective_adjustment!, wind_mixing!, mix_column!,
+       column_heat_content, column_potential_energy, mixed_layer_depth,
+       salinity_humidity_factor
+
 # Phase 52 — AirSeaFlux (#39): wave-dependent sea-surface roughness, COARE
 # stability / gustiness, COARE-style bulk fluxes, SeaSurface. The viscosity
 # helper stays qualified: `Aeolus.AirSeaFlux.air_kinematic_viscosity`.
@@ -621,24 +854,12 @@ export COAREStability, ConvectiveGustiness, gustiness_velocity,
        neutral_transfer_coefficients,
        BulkAirSea, coare30_bulk, coare35_bulk, AirSeaSolution, air_sea_fluxes,
        SeaSurface, sea_surface_solution
+
 # Phase 52 — AirSeaFlux (#40): Andreas sea spray, rain heat flux, the full
 # COARE algorithm (cool skin + warm layer) and its WaterColumn coupling.
 export andreas_friction_velocity, AndreasSpray, spray_wind_functions,
        spray_dry_radius, spray_equilibrium_temperature, spray_radius_evolution,
        spray_residence_time, sea_spray_fluxes, rain_heat_flux,
        COARESolution, coare_fluxes, coare_warm_layer_series, coare_flux_hook
-# Phase 52 (#38) — OceanMixedLayer: lake / coastal-sea water column with a
-# Kraus–Turner mixed layer, shortwave penetration, cool skin and warm layer.
-export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
-       water_density, water_thermal_expansion, water_haline_contraction,
-       SolarBands, jerlov_water, soloviev_solar,
-       solar_transmission, solar_absorbed_between, solar_mean_transmission,
-       CoolSkin, cool_skin, BusingerDyerLogLinear,
-       AbstractWarmLayer, NoWarmLayer, FairallWarmLayer, ZengBeljaarsWarmLayer,
-       step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth,
-       KrausTurnerMixing, WaterColumn, layer_depths,
-       absorb_heat!, convective_adjustment!, wind_mixing!, mix_column!,
-       column_heat_content, column_potential_energy, mixed_layer_depth,
-       salinity_humidity_factor
 
 end # module
