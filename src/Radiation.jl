@@ -33,7 +33,7 @@ export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
 # -------------------------------------------------------------------------
 
 """
-    apply_radiative_cooling!(tθ, rate)
+    apply_radiative_cooling!(tθ, rate; solid = nothing)
 
 Add a radiative-cooling tendency to `tθ` at every interior cell.
 
@@ -44,9 +44,17 @@ Add a radiative-cooling tendency to `tθ` at every interior cell.
 Signs: positive `rate` = warming, negative = cooling. The typical
 free-atmosphere clear-sky longwave cooling in ABL LES is `≈ -2 K/day
 = -2.3e-5 K/s`.
+
+`solid` (optional) is a `Bool` array in the halo layout of the mesh (the
+`.mask` of an `IBM.SolidMask`): cells marked `true` are left unchanged.
+A radiative heating rate is a property of the air; applied inside an
+immersed building it would put energy into cells that are not air, from
+where the scalar diffusion carries it back into the fluid next to the
+walls.
 """
-function apply_radiative_cooling!(tθ::Field, rate::Real)
+function apply_radiative_cooling!(tθ::Field, rate::Real; solid = nothing)
     _, _, kk = interior(tθ.mesh)
+    solid === nothing || return apply_radiative_cooling!(tθ, fill(rate, length(kk)); solid = solid)
     r = eltype(tθ.data)(rate)
     for k in kk
         @views tθ.data[:, :, k] .+= r
@@ -54,13 +62,25 @@ function apply_radiative_cooling!(tθ::Field, rate::Real)
     return tθ
 end
 
-function apply_radiative_cooling!(tθ::Field, rate::AbstractVector)
+function apply_radiative_cooling!(tθ::Field, rate::AbstractVector; solid = nothing)
     ii, jj, kk = interior(tθ.mesh)
     length(rate) == length(kk) ||
         error("apply_radiative_cooling!: rate profile length $(length(rate)) ≠ Nz $(length(kk))")
-    for (idx, k) in enumerate(kk)
-        r = eltype(tθ.data)(rate[idx])
-        @views tθ.data[:, :, k] .+= r
+    if solid === nothing
+        for (idx, k) in enumerate(kk)
+            r = eltype(tθ.data)(rate[idx])
+            @views tθ.data[:, :, k] .+= r
+        end
+    else
+        size(solid) == size(tθ.data) ||
+            error("apply_radiative_cooling!: solid mask is $(size(solid)), field data $(size(tθ.data))")
+        d = tθ.data
+        @inbounds for (idx, k) in enumerate(kk)
+            r = eltype(d)(rate[idx])
+            for j in jj, i in ii
+                solid[i, j, k] || (d[i, j, k] += r)
+            end
+        end
     end
     return tθ
 end

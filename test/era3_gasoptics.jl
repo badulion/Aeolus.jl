@@ -293,4 +293,66 @@ using Aeolus.GasOptics
         # forcing is logarithmic rather than linear in concentration
         @test (τs[4] - τs[3]) < (τs[2] - τs[1]) * 4
     end
+
+    # ---------------------------------------------------------------------
+    # An LES column under a standard atmosphere (#130). The Berlin case
+    # stitches its 200 m domain onto us_standard_column; the join must not
+    # change the radiation. A lower column that follows the standard
+    # column's own temperature and humidity must give the same fluxes as
+    # the standard column alone, to the vertical-resolution difference.
+    # ---------------------------------------------------------------------
+    @testset "column_from_profiles and stitch_columns" begin
+        std = us_standard_column(; nz = 60, T_sfc = 293.0)
+        dz = 6.25; nz = 32
+        zc = [(k - 0.5) * dz for k in 1:nz]
+        Tz = 293.0 .- 6.5e-3 .* zc
+        q  = std.vmr[:h2o][1] * 18.01528 / 28.9647
+        θ = copy(Tz)
+        for _ in 1:5                     # θ whose layer temperature is Tz
+            c = column_from_profiles(θ, dz; qv = fill(q, nz))
+            θ .*= Tz ./ c.T_lay
+        end
+        low = column_from_profiles(θ, dz; qv = fill(q, nz), T_sfc = 293.0)
+        # hydrostatic: p(200 m) = p_s exp(-g z / (R_d T̄)) for the mean T̄
+        T̄ = 293.0 - 6.5e-3 * 100
+        @test isapprox(low.p_lev[end], 1.01325e5 * exp(-9.80665 * 200 / (287.05 * T̄)); rtol = 1e-4)
+        @test maximum(abs.(low.T_lay .- Tz)) < 1e-9
+        @test low.vmr[:h2o][1] ≈ std.vmr[:h2o][1] rtol = 1e-12
+        @test all(low.ρ .> 1.1) && all(low.ρ .< 1.25)
+
+        st = stitch_columns(low, std)
+        @test sum(st.dz) ≈ sum(std.dz) rtol = 1e-12            # reaches the same top
+        @test st.p_lev[nz + 1] == low.p_lev[end]                # continuous at the join
+        @test all(diff(st.p_lev) .< 0) && all(st.dz .> 0)
+        @test st.p_lev[end] ≈ std.p_lev[end] rtol = 1e-3
+        @test st.T_sfc == low.T_sfc
+        @test length(st.dz) == nz + 60          # std layer 1 (0–500 m) is cut to 200–500 m
+
+        spec_lw = longwave_bands(); spec_sw = shortwave_bands()
+        function fluxes(col, spec)
+            o = allocate_optics(Float64, (length(col.dz),), spec)
+            compute_optics!(o, correlated_k_optics(spec), col)
+            f = allocate_fluxes(Float64, (), length(col.dz) + 1)
+            spec.kind === :longwave ?
+                solve_lw!(f, two_stream_solver(spec), o, col; sfc_emissivity = 1.0) :
+                solve_sw!(f, two_stream_solver(spec), o; μ₀ = 0.87, sfc_albedo_direct = 0.15)
+        end
+        l1, l2 = fluxes(std, spec_lw), fluxes(st, spec_lw)
+        s1, s2 = fluxes(std, spec_sw), fluxes(st, spec_sw)
+        @info "stitched vs standard column" L_down=(l1.flux_dn[1], l2.flux_dn[1]) OLR=(l1.flux_up[end], l2.flux_up[end]) GHI=(s1.flux_dn[1], s2.flux_dn[1])
+        @test abs(l2.flux_dn[1] - l1.flux_dn[1]) < 0.5         # measured 0.02 W/m²
+        @test abs(l2.flux_up[end] - l1.flux_up[end]) < 0.5     # measured 0.001 W/m²
+        @test abs(s2.flux_dn[1] - s1.flux_dn[1]) < 1.0         # measured 0.12 W/m²
+        # clear-sky summer sky longwave is well below the surface emission
+        @test 300 < l2.flux_dn[1] < 380
+
+        # column_from_simulation is column_from_profiles of the (i, j) column
+        mesh = RegularGrid(; size = (4, 4, 8), extent = (100.0, 100.0, 80.0))
+        sim = BoussinesqSimulation(mesh)
+        Aeolus.Fields.set!(sim.θ, (x, y, z) -> 290 + 0.01z)
+        c1 = column_from_simulation(sim, 2, 3)
+        c2 = column_from_profiles(Float64[290 + 0.01 * (k - 0.5) * 10 for k in 1:8], 10.0)
+        @test c1.p_lev ≈ c2.p_lev rtol = 1e-14
+        @test c1.T_lay ≈ c2.T_lay rtol = 1e-14
+    end
 end

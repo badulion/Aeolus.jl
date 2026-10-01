@@ -59,14 +59,14 @@ const BC = Main.BerlinCase
         for s in keys(slots)
             @test count(C -> BC.slot(C) === s, sel) == 1
         end
-        # the initial couplings of the refactor, all on by default (#129
+        # the default couplings: the initial ones of the refactor (#129
         # replaced the slab and the soil adapter by the surface exchange
-        # and the soil ground)
+        # and the soil ground), with #130's radiation
         @test Set(BC.coupling_name.(sel)) ==
               Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_exchange,
                    :ground_soil, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :transport_weno,
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
-                   :cooling_prescribed, :traffic_heat, :moist_buoyancy])
+                   :column_radiation, :cloud_shadow, :traffic_heat, :moist_buoyancy])
         # every coupling names only real Aeolus submodules
         for C in BC.REGISTRY, m in BC.modules_used(C)
             @test isdefined(Aeolus, m) && getfield(Aeolus, m) isa Module
@@ -91,9 +91,13 @@ const BC = Main.BerlinCase
         # into the air in :surface_flux (the slab's latent flux at the end
         # of :anthropogenic and its Ts clamp in :sanity are gone), its
         # surface drag follows the IBM, and the surfaces (soil included)
-        # are stepped in :surface_update
+        # are stepped in :surface_update. #130 added the column radiation
+        # before and the cloud shadow after the radiosity solve, moved the
+        # cloud shadow out of :sw_modifiers and replaced the prescribed
+        # cooling.
         @test order == [
-            (:radiation, :radiosity_sun), (:radiation, :buildings_citymean),
+            (:radiation, :column_radiation), (:radiation, :radiosity_sun),
+            (:radiation, :cloud_shadow), (:radiation, :buildings_citymean),
             (:sw_modifiers, :sw_modifiers),
             (:surface_flux, :surface_exchange),
             (:anthropogenic, :buildings_citymean), (:anthropogenic, :traffic_heat),
@@ -108,7 +112,7 @@ const BC = Main.BerlinCase
             (:post_predictor, :veg_drag),
             (:surface_update, :surface_exchange), (:surface_update, :snow_legacy),
             (:surface_update, :aq_chem),              # r_a / v_d refresh (#135)
-            (:column_tendency, :cooling_prescribed)]
+            (:column_tendency, :column_radiation)]
         # the chemistry species are advected tracers since #135
         @test [t.name for t in case.tracers] == [:qv, :ql, :qr, :NO, :NO2, :O3, :VOC, :HNO3, :pollutant]
         @test [t.name for t in case.tracers if t.advect] == [:qv, :ql, :NO, :NO2, :O3, :VOC, :HNO3]

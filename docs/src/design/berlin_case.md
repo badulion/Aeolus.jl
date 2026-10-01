@@ -99,8 +99,8 @@ in the integer `order` their couplings declare.
 | stage | entries (order) in the default case |
 | :-- | :-- |
 | `:clock` | local hour (core) |
-| `:radiation` (600 s, and step 1) | `radiosity_sun` (10), `buildings_citymean` (20) |
-| `:sw_modifiers` | `sw_modifiers` (10) |
+| `:radiation` (600 s, and step 1) | `column_radiation` (5), `radiosity_sun` (10), `cloud_shadow` (15), `buildings_citymean` (20) |
+| `:sw_modifiers` | `sw_modifiers` (10, tree shade) |
 | `:surface_flux` | `surface_exchange` (10): the held H, E into the first air cell (step 1: the first surface step) |
 | `:anthropogenic` | `buildings_citymean` (10), `traffic_heat` (20), `glass` (30) |
 | `:chemistry` | `aq_chem` (10), `aq_aerosol` (20) |
@@ -110,7 +110,7 @@ in the integer `order` their couplings declare.
 | `:fog_dew` | `fog_dew` (10) |
 | dynamics: `step!` with `:body_force` / `:post_predictor` | `geostrophic` (10), `moist_buoyancy` (20) / `ibm` (10), `surface_exchange` drag (15), `veg_drag` (20) |
 | `:surface_update` | `surface_exchange` (10: collects `bus.sensible`; every surface period steps all surfaces, soil included), `snow_legacy` (30), `aq_chem` r_a / v_d refresh (90, every 30 s) |
-| `:column_tendency` | `cooling_prescribed` (10) |
+| `:column_tendency` | `column_radiation` (10) |
 | `:sanity` | the core finiteness check |
 | (ledger) | every coupling's `budget!`, and the change of water in the air (core) |
 | `:output` (1800 s) | NetCDF record and log line (core), then coupling entries |
@@ -137,7 +137,9 @@ needs.
   to the surfaces this step — window sun, glazing transmission, dew heat;
   not the turbulent sensible flux), the dew reservoir `dew`, the clear-sky
   beam `sw_beam`, the per-class `params`, the last radiosity solutions
-  `swsol`/`lwsol`, and (#129) the per-column `surface`
+  `swsol`/`lwsol`, the sky longwave `L_sky` and the direct/diffuse
+  shortwave `dni`/`dhi` the `:column_radiation` slot hands the radiosity
+  solve (#130; `NaN` shortwave means "Bird"), and (#129) the per-column `surface`
   (`AbstractSurface`), the roof-aware air level `k_air`, the forcing each
   surface last saw (`T_air`, `q_air`, `U`, `z_ref`), the fluxes it
   returned (`Rn`, `H`, `LE`, `G`, `E`, `u_star`) and the `dew_mask`.
@@ -634,6 +636,127 @@ stale-halo transport leak of #132 larger: the transport created
 3.4e-3 kg m⁻² of water in the noon hour and drove qv negative aloft,
 which the Kessler clamp then filled (+8.9e-5 kg m⁻²).
 
+## Radiation (#130)
+
+Two couplings put the Era III radiation stack into the case. Both run at
+the `:radiation` cadence, around the radiosity solve.
+
+**`column_radiation`** (slot `:column_radiation`, provider `:twostream`,
+the only one; it replaced `cooling_prescribed`). At order 5, before
+the radiosity:
+
+1. the mean over the fluid cells of θ, qv and ql on every LES level
+   becomes a hydrostatic column (`column_from_profiles`, surface
+   pressure `surface_pressure(case)` of the reference state, #131), stitched with `stitch_columns` under
+   `us_standard_column` (60 layers to 30 km, its surface temperature
+   set so that it continues the LES top temperature at 6.5 K/km,
+   mid-latitude-summer or sub-arctic-winter humidity by scenario);
+2. the surface of the column is the whole domain: the radiative
+   temperature ``(\sum ε T_s^4/\sum ε)^{1/4}``, the mean emissivity and the
+   effective albedo of the last radiosity solve;
+3. correlated-k gas optics plus Mie cloud optics, `solve_lw!` and
+   `solve_sw!` (scaled by the Earth–Sun distance factor);
+4. `bus.L_sky` is the downwelling longwave at the surface of that
+   column (the fog emits into it); `bus.dni`/`bus.dhi` are the surface
+   direct and diffuse shortwave of the **same column with the LES
+   condensate removed**, because the 3-D cloud shadow below applies the
+   resolved cloud to the direct beam, and doing both would count it
+   twice; option `surface_sw = :bird` leaves the shortwave to the
+   radiosity coupling's Bird clear sky;
+5. the heating rate of the LES layers (LW + SW, with the condensate) is
+   applied to θ on every step at `:column_tendency`, uniform over the
+   fluid cells of each level, through `Radiation.apply_radiative_cooling!`
+   with the solid mask (the buildings' cells are not air; heating them
+   leaks back into the air next to the walls — in review, a 30 min night
+   run of the `:smoke` window cooled the fluid next to buildings at
+   level 1 by −0.314 K with the solid cells heated, −0.236 K without).
+
+**`cloud_shadow`** (additive). At order 15, after the radiosity: the
+per-cell cloud optical depth with the `RadiationCore` mass extinction
+(the same as the column's Mie cloud optics; zero in solid cells),
+delta-scaled with the visible ``ω``, ``g`` of that cloud optics
+(``τ' = 0.26\,τ``), the slant-path transmittance
+`cloud_shadow_transmittance!` from the top of each column's solid stack,
+and `bus.sw ← bus.sw·(1 − f_dir(1 − T))` with ``f_{dir}`` the share of the
+column's absorbed radiosity shortwave that arrived as direct beam. It
+replaced `apply_cloud_shadow!` (vertical ql integral with an ad-hoc
+700 m² kg⁻¹, 15 % of the removed light kept, no sun angle, multiplied
+into `bus.sw` every step, so compounding). Limitations: the
+interreflections of the shaded beam and the buildings' window sun (read
+from the radiosity solution) are not attenuated, and the light the cloud
+scatters sideways is not added to the diffuse.
+
+Measured before the merge with #131, with the column's surface pressure
+from `cfg.elevation` (100.92 kPa against the reference state's 101.325)
+(1 h runs of the flagship, 64 × 64 × 32, dt = 2 s, radiation
+every 600 s; values at the end of the hour; winter on the `:smoke`
+window, because the winter flagship blows up, see below):
+
+| | 00–01 h | 06–07 h | 12–13 h | winter 12–12:30 (smoke window) |
+| :-- | --: | --: | --: | --: |
+| `L_sky` (W m⁻²) | 331.9 | 333.5 | 335.4 | 237.9 |
+| old `0.95σT̄s⁴` at the same T̄s | 356.2 | 372.4 | 389.0 | 297.9 |
+| GHI, column (W m⁻²) | 0 | 559.5 | 831.4 | 234.3 |
+| Bird (the radiosity's sky: PW 2 cm, O₃ 0.33), aerosol-free / AOD₅₀₀ = 0.16 | 0 / 0 | 574.4 / 542.3 | 834.2 / 797.1 | 235.1 / 211.7 |
+| LES-layer heating, LW / SW (K day⁻¹) | −12.9 / 0 | −9.8 / +3.5 | −6.7 / +4.6 | −4.0 / +1.4 |
+| the same above 50 m, LW / total | −5.3 / −5.3 | −4.5 / −1.0 | −3.8 / +0.8 | −2.5 / −1.1 |
+| lowest level (0–6 m), LW | −156 | −108 | −59 | −16 |
+| precipitable water (kg m⁻²) | 12.3 | 12.3 | 12.2 | 3.5 |
+
+* **Sky longwave** is 25–54 W m⁻² below the old surface-based value in
+  summer. It is almost constant over the day (it depends on the air,
+  not on the surfaces); in winter it is 238 W m⁻², below the
+  300–380 W m⁻² the issue expected — that range was a summer
+  expectation, and a clear sky over 3.5 kg m⁻² of water at 274 K gives
+  about 0.7 σT⁴.
+* **Clear-sky GHI.** Against Bird with no aerosol and the column's own
+  precipitable water and ozone (440 DU in summer, 365 in winter), the column is −0.4 % at
+  μ₀ = 0.86, −3.1 % at μ₀ = 0.58 and −4.6 % at the winter noon sun,
+  μ₀ = 0.27 (first step of the `:smoke` window): TwoStream falls below
+  Bird as the sun gets low. The smoke check asserts 5 % for μ₀ ≥ 0.5 (the
+  issue's noon criterion) and 10 % below. Against Bird with the case's
+  urban AOD the column is 4.3 % higher at noon and 10.7 % at the low
+  winter sun: the TwoStream column has no aerosol until the
+  aerosol-optics coupling (#142).
+* **Heating.** The lowest LES levels cool at tens to 156 K day⁻¹: the
+  case starts its surfaces at 285 K under 293 K air, and the air near
+  the ground radiates into the colder surface. Above 50 m the longwave
+  cooling is −3.8 to −5.3 K day⁻¹ in summer, beyond the −1…−3 K day⁻¹
+  the issue expected. Both the cold surface and the humid initial
+  profile (qv = 10 g kg⁻¹ at the ground) cause it: in the initial state,
+  −5.0 K day⁻¹ above 50 m; −3.1 with the surfaces at 293 K; −1.4 with
+  that and half the humidity.
+* **Energy.** ``\int ρ c_p\,\dot T\,dz`` over the LES layers equals the
+  net-flux convergence to round-off (a smoke check, 1e-10), and the θ
+  increment is that heating times dt in every fluid cell and zero in
+  every solid one (a smoke check on the field). The air therefore takes
+  up the column's convergence times the fluid fraction of each level.
+* **Ledger.** In the 06–07 h hour the domain Rn falls from 244.28 W m⁻²
+  (#127 baseline, same configuration) to 228.59 W m⁻²: the lower sky
+  longwave outweighs the stronger TwoStream shortwave (GHI 559.5 against
+  Bird's 542.3).
+* **Cloud shadow** (`:smoke`, seeded fog of 0.2 g kg⁻¹ in the lowest
+  18.75 m, noon): on step 1 the direct-beam transmittance is 0.80–0.85
+  (mean 0.849; ``e^{-0.2}``, the delta-scaled 0.17 over μ₀ = 0.86), and
+  the shadow takes 117.6 W m⁻² (domain mean) off the surface shortwave;
+  the old formula would have kept 21 % of the shortwave under the same
+  fog, and then again on every step. Roofs above the fog are not
+  shaded.
+* **Cost** per radiation call, measured after warm-up on the flagship:
+  column radiation 38 ms by day, 23 ms at night; cloud shadow 13 ms;
+  (the radiosity solve itself: 1–3 s). At the 600 s cadence that is
+  0.2 ms/step, plus 0.3–0.4 ms/step for applying the heating. The
+  radiation cadence (`cfg.cadence[:radiation]`) is shared with the
+  radiosity: the sky longwave and the beam must be the ones the
+  radiosity solve uses.
+
+**The winter flagship blows up** (pre-existing, not a radiation
+problem): `CaseConfig(:winter)` from 12:00 on the 64 × 64 × 32 grid
+reaches θ ∈ [10, 353] K by step 118 and −700 K in the dynamics of step
+119, after which `fog_dew` stops on a negative temperature. The #127
+branch, without these couplings, does exactly the same (|u| grows from
+1.9 to 12 m s⁻¹ between steps 100 and 118).
+
 ## Smoke test and coverage test
 
 **`test/berlin_smoke.jl`** runs the case in `CaseConfig(:smoke)`: a
@@ -669,9 +792,10 @@ also asserts that the domain gains radiative energy at noon (Rn > 0,
 coupling must have run in at least one configuration, and the whole
 test must take less than 300 s.
 
-Today the matrix is 2 runs (no slot has a second provider yet). Run on
-its own, the test takes 26 s, almost all of it first-call compilation
-(the two runs themselves take 0.3 s each once compiled).
+At #127 the matrix was 2 runs (no slot had a second provider yet); #130
+added a third, the column radiation's `surface_sw = :bird` variant. Run
+on its own, the test takes about 36 s, almost all of it first-call
+compilation (each run takes well under a second once compiled).
 
 **`test/berlin_coverage.jl`** checks that every submodule of `Aeolus`
 is either listed in some registered coupling's `modules_used`, or in
@@ -684,7 +808,8 @@ module it lists (an exported name, or a `Module.` qualification, in the
 code with comments and docstrings removed); reviewed indirect uses go in
 `BERLIN_INDIRECT`. At #127: 55 modules, 15 coupled, 11 exempt
 (the core's infrastructure and the Parallel / Backends / SpectralElement
-scaffolds), 30 pending.
+scaffolds), 30 pending; #130 coupled RadiationCore, GasOptics and
+TwoStream (27 pending).
 
 ## Cost of per-facet surfaces (#138)
 
@@ -823,7 +948,6 @@ later issue.
 | tree shade and cloud shadow multiply `bus.sw` in place every step, so they compound between radiation updates | `sw_modifiers.jl` | #128 (fixed) |
 | no `class_map` in the radiosity scene (park/water facets get street material) | `core/geometry.jl` | #128 (fixed) |
 | slab: constant C_h and U, flux clamps, roof fluxes into solid k = 1, no surface drag | `surface_slab.jl`, `fog_dew.jl` | #129 (fixed: `surface_exchange.jl`, `ground_soil.jl`) |
-| sky longwave from the surface temperature, prescribed −2 K/day cooling | `radiosity_sun.jl`, `cooling_prescribed.jl` | #130 |
 | `qr` sedimented but not advected; qv clamp | `micro_kessler.jl` | #143 |
 | glass is a synthetic roof mask | `glass.jl` | #144 |
 | toy aerosol: not advected or output, zero with no source; its PM deposition table | `aq_aerosol.jl` (table in `aq_chem.jl`) | #147 |

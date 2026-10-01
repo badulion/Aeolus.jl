@@ -50,7 +50,9 @@ export SpectralGrid, shortwave_bands, longwave_bands,
        compute_optics!, solve_rt!, surface_albedo, surface_emissivity,
        material_albedo, material_emissivity,
        band_wavelength, band_wavelength_limits,
-       AtmosphericColumn, column_from_simulation,
+       AtmosphericColumn, column_from_simulation, column_from_profiles,
+       stitch_columns,
+       liquid_mass_extinction, ice_mass_extinction,
        STEFAN_BOLTZMANN, SOLAR_CONSTANT, PLANCK_H, LIGHT_C, BOLTZMANN_K,
        planck_band, planck_integrated
 
@@ -692,6 +694,40 @@ function surface_albedo end
 function surface_emissivity end
 
 # =========================================================================
+# Cloud mass extinction (shared by TwoStream and SolarGeometry)
+# =========================================================================
+
+"""
+    liquid_mass_extinction(r_eff) -> m² g⁻¹
+
+Shortwave mass extinction coefficient of liquid cloud with effective
+radius `r_eff` (μm), in the geometric-optics limit (extinction
+efficiency 2):
+
+```math
+k = \\frac{3}{2\\,ρ_w\\,r_{eff}} = \\frac{1.5}{r_{eff}[\\mathrm{μm}]}\\ \\mathrm{m^2\\,g^{-1}},
+```
+
+so a layer of liquid water path `LWP` (g m⁻²) has `τ = k·LWP` (Stephens
+1978; Hu & Stamnes 1993 in form). 10 μm gives 0.15 m² g⁻¹. It is the one
+definition used by `TwoStream.MieCloudOptics` and by
+`SolarGeometry.cloud_optical_depth_column`, so the cloud a column
+radiation scheme sees and the cloud that casts a 3-D shadow have the
+same optical depth.
+"""
+liquid_mass_extinction(r_eff::Real) = 1.5 / r_eff
+
+"""
+    ice_mass_extinction(r_eff) -> m² g⁻¹
+
+Shortwave mass extinction coefficient of ice cloud with effective
+radius `r_eff` (μm), `k = 1/r_eff` m² g⁻¹ (the form of Fu 1996 with an
+effective radius). 30 μm gives 0.033 m² g⁻¹. Shared like
+[`liquid_mass_extinction`](@ref).
+"""
+ice_mass_extinction(r_eff::Real) = 1.0 / r_eff
+
+# =========================================================================
 # Atmospheric column
 # =========================================================================
 
@@ -783,9 +819,43 @@ function column_from_simulation(sim, i::Int, j::Int;
     m = sim.mesh
     nz = m.Nz
     Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
-    dz = fill(T(m.dz), nz)
     θ  = T[sim.θ.data[Hx + i, Hy + j, Hz + k] for k in 1:nz]
-    # hydrostatic pressure from the θ profile (dry, Exner-consistent)
+    qv = sim.has_moisture ? T[sim.qv.data[Hx + i, Hy + j, Hz + k] for k in 1:nz] : nothing
+    return column_from_profiles(θ, fill(T(m.dz), nz); p_surf = p_surf, qv = qv,
+                                vmr = vmr, T_sfc = T_sfc)
+end
+
+"""
+    column_from_profiles(θ, dz; p_surf = 101325, qv = nothing, ql = nothing,
+                         qi = nothing, vmr = nothing, T_sfc = nothing,
+                         r_eff_liq = 10, r_eff_ice = 30) -> AtmosphericColumn
+
+A radiation column from layer profiles of potential temperature `θ` (K,
+reference pressure 1000 hPa) on layers of thickness `dz` (m), bottom-up.
+Pressure is integrated hydrostatically from `p_surf` with the dry-air
+density of each layer, `T = θ·(p/p₀)^{R_d/c_p}` at the layer mid-point;
+levels get the mean of the adjacent layer temperatures (the bottom and
+top level the temperature of their layer).
+
+`qv` (specific humidity, kg/kg) becomes the `:h2o` volume mixing ratio
+`qv·M_air/M_h2o`; the other gases come from `vmr` or a standard
+mid-latitude composition. `ql`, `qi` (kg/kg) are the condensate the cloud
+optics reads, with effective radii `r_eff_liq`, `r_eff_ice` (μm, scalars
+or per-layer). `T_sfc` defaults to the lowest layer's temperature.
+
+This is the hydrostatic core of [`column_from_simulation`](@ref), for a
+caller that has already reduced the LES to a profile (a domain mean, a
+masked mean over the fluid cells).
+"""
+function column_from_profiles(θ::AbstractVector, dz;
+                              p_surf::Real = 1.01325e5,
+                              qv = nothing, ql = nothing, qi = nothing,
+                              vmr = nothing, T_sfc = nothing,
+                              r_eff_liq = 10, r_eff_ice = 30)
+    T = float(eltype(θ))
+    nz = length(θ)
+    dzv = dz isa Real ? fill(T(dz), nz) : collect(T, dz)
+    length(dzv) == nz || error("column_from_profiles: $(length(dzv)) layer thicknesses for $nz layers")
     Rd = T(287.05); cp = T(CP_DRY_AIR); g = T(GRAVITY); p0 = T(1e5)
     p_lev = zeros(T, nz + 1); p_lev[1] = T(p_surf)
     p_lay = zeros(T, nz); T_lay = zeros(T, nz); ρ = zeros(T, nz)
@@ -794,7 +864,7 @@ function column_from_simulation(sim, i::Int, j::Int;
         π_ex = (p_lev[k] / p0)^(Rd / cp)
         Tk   = θ[k] * π_ex
         ρk   = p_lev[k] / (Rd * Tk)
-        p_lev[k + 1] = p_lev[k] - ρk * g * dz[k]
+        p_lev[k + 1] = p_lev[k] - ρk * g * dzv[k]
         p_lay[k] = (p_lev[k] + p_lev[k + 1]) / 2
         π_l  = (p_lay[k] / p0)^(Rd / cp)
         T_lay[k] = θ[k] * π_l
@@ -809,15 +879,93 @@ function column_from_simulation(sim, i::Int, j::Int;
 
     vmr_use = vmr === nothing ? _standard_vmr(T, nz) :
               Dict{Symbol, Vector{T}}(k => collect(T, v) for (k, v) in vmr)
-    if sim.has_moisture
-        qv = T[sim.qv.data[Hx + i, Hy + j, Hz + k] for k in 1:nz]
+    if qv !== nothing
         # specific humidity → volume mixing ratio
-        vmr_use[:h2o] = @. qv * T(28.9647 / 18.01528)
+        vmr_use[:h2o] = T[q * T(28.9647 / 18.01528) for q in qv]
     end
-    return AtmosphericColumn{T}(p_lay, T_lay, p_lev, T_lev, dz, ρ, vmr_use,
-                               zeros(T, nz), zeros(T, nz),
-                               fill(T(10), nz), fill(T(30), nz),
+    prof(x, d) = x === nothing ? fill(T(d), nz) : x isa Real ? fill(T(x), nz) : collect(T, x)
+    return AtmosphericColumn{T}(p_lay, T_lay, p_lev, T_lev, dzv, ρ, vmr_use,
+                               prof(ql, 0), prof(qi, 0),
+                               prof(r_eff_liq, 10), prof(r_eff_ice, 30),
                                T_sfc === nothing ? T_lay[1] : T(T_sfc))
+end
+
+"""
+    stitch_columns(lower, upper) -> AtmosphericColumn
+
+Put the column `lower`, which spans the heights `0 … z_L` (`z_L =
+Σ lower.dz`), under the part of `upper` that lies above `z_L`, with both
+columns measured from the same ground. The typical use is an LES domain
+a few hundred metres deep under a standard atmosphere
+(`GasOptics.us_standard_column`) up to the stratosphere, so that the
+downwelling longwave and the shortwave at the LES top see the whole
+atmosphere.
+
+* The layer of `upper` that straddles `z_L` is cut at `z_L`; its part
+  above becomes the first upper layer (dropped if thinner than 1 mm).
+* The pressure is continuous: every upper pressure (levels, layers) and
+  density is scaled by `p_L / p_upper(z_L)`, where `p_L` is the top
+  pressure of `lower` and `p_upper(z_L)` the upper column's own pressure
+  there (log-linear in the straddling layer). This keeps the upper
+  column's hydrostatic shape, and its layer masses Δp/g, up to that
+  factor.
+* The temperature of the joining level is `lower`'s top-level
+  temperature; the upper levels and layers keep their own.
+* Gases present in either column are carried over; a gas missing from
+  one column has zero mixing ratio there. Condensate and effective radii
+  are taken from each column. The surface temperature is `lower`'s.
+"""
+function stitch_columns(lower::AtmosphericColumn{T}, upper::AtmosphericColumn{T}) where {T}
+    nl = length(lower.dz); nu = length(upper.dz)
+    zL = sum(lower.dz)
+    zu = zeros(T, nu + 1)
+    for k in 1:nu
+        zu[k + 1] = zu[k] + upper.dz[k]
+    end
+    zu[end] > zL || error("stitch_columns: the upper column (top $(zu[end]) m) does not reach above the lower one ($zL m)")
+    m = findfirst(k -> zu[k + 1] > zL, 1:nu)             # straddling layer
+    # upper pressure at z_L, log-linear within layer m
+    f = (zL - zu[m]) / upper.dz[m]
+    pz = exp((1 - f) * log(upper.p_lev[m]) + f * log(upper.p_lev[m + 1]))
+    s = lower.p_lev[end] / pz
+    keep_partial = zu[m + 1] - zL > T(1e-3)
+    ups = keep_partial ? (m:nu) : (m + 1:nu)
+    nup = length(ups)
+    n = nl + nup
+    p_lay = zeros(T, n); T_lay = zeros(T, n); dz = zeros(T, n); ρ = zeros(T, n)
+    p_lev = zeros(T, n + 1); T_lev = zeros(T, n + 1)
+    ql = zeros(T, n); qi = zeros(T, n); rl = zeros(T, n); ri = zeros(T, n)
+    p_lev[1:nl + 1] .= lower.p_lev
+    T_lev[1:nl + 1] .= lower.T_lev
+    for k in 1:nl
+        p_lay[k] = lower.p_lay[k]; T_lay[k] = lower.T_lay[k]; dz[k] = lower.dz[k]
+        ρ[k] = lower.ρ[k]; ql[k] = lower.ql[k]; qi[k] = lower.qi[k]
+        rl[k] = lower.r_eff_liq[k]; ri[k] = lower.r_eff_ice[k]
+    end
+    for (a, ku) in enumerate(ups)
+        k = nl + a
+        p_lev[k + 1] = s * upper.p_lev[ku + 1]
+        T_lev[k + 1] = upper.T_lev[ku + 1]
+        dz[k] = zu[ku + 1] - max(zu[ku], zL)
+        p_lay[k] = (p_lev[k] + p_lev[k + 1]) / 2
+        T_lay[k] = upper.T_lay[ku]
+        ρ[k] = s * upper.ρ[ku]
+        ql[k] = upper.ql[ku]; qi[k] = upper.qi[ku]
+        rl[k] = upper.r_eff_liq[ku]; ri[k] = upper.r_eff_ice[ku]
+    end
+    vmr = Dict{Symbol, Vector{T}}()
+    for gas in union(keys(lower.vmr), keys(upper.vmr))
+        v = zeros(T, n)
+        haskey(lower.vmr, gas) && (v[1:nl] .= lower.vmr[gas])
+        if haskey(upper.vmr, gas)
+            for (a, ku) in enumerate(ups)
+                v[nl + a] = upper.vmr[gas][ku]
+            end
+        end
+        vmr[gas] = v
+    end
+    return AtmosphericColumn{T}(p_lay, T_lay, p_lev, T_lev, dz, ρ, vmr,
+                               ql, qi, rl, ri, lower.T_sfc)
 end
 
 # Standard mid-latitude-summer-ish composition; well-mixed gases constant.

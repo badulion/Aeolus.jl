@@ -717,6 +717,29 @@ using Aeolus.Fields: set!, interior_view
         end
     end
 
+    @testset "Radiative cooling: solid cells are not air" begin
+        # a rate applied with a solid mask changes the fluid cells only, and
+        # the fluid cells exactly as without the mask (#130: the Berlin
+        # column heating was going into the buildings too)
+        mesh = RegularGrid(; size=(4,4,4), extent=(1.0,1.0,1.0), halo=(1,1,1))
+        sm = Aeolus.IBM.SolidMask(mesh)
+        Aeolus.IBM.mark_solid!(sm, (x, y, z) -> x < 0.5 && y < 0.5 && z < 0.5)
+        prof = collect(-4:-1) * 1e-4
+        a = Field(CellCenter(), mesh); fill!(a.data, 0)
+        b = Field(CellCenter(), mesh); fill!(b.data, 0)
+        apply_radiative_cooling!(a, prof; solid = sm.mask)
+        apply_radiative_cooling!(b, prof)
+        va, vb = interior_view(a), interior_view(b)
+        solid = view(sm.mask, 2:5, 2:5, 2:5)
+        @test count(solid) == 8
+        @test all(iszero, va[solid])
+        @test va[.!solid] == vb[.!solid]
+        # the scalar form is the uniform profile
+        c = Field(CellCenter(), mesh); fill!(c.data, 0)
+        apply_radiative_cooling!(c, -1e-3; solid = sm.mask)
+        @test all(iszero, interior_view(c)[solid]) && all(interior_view(c)[.!solid] .== -1e-3)
+    end
+
     @testset "SlabLand: reaches radiative equilibrium" begin
         # No sensible flux, no SW: ground cools toward LW equilibrium.
         land = SlabLand(; T=310.0, C_s=1e5, albedo=0.0)

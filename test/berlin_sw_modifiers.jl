@@ -53,7 +53,7 @@ const BC = Main.BerlinCase
     end
 
     @testset "the modifiers apply once per radiation field, not per step" begin
-        # no cloud water, so only the tree shade acts
+        # no cloud water, so the cloud shadow (#130) leaves the base unchanged
         fill!(interior_view(BC.tracer(case, :ql)), 0.0)
         ratios = Float64[]; parksw = Float64[]
         for n in 2:12                                 # radiation fires at steps 4, 8, 12
@@ -76,29 +76,26 @@ const BC = Main.BerlinCase
         @test minimum(parksw) > 200
     end
 
-    @testset "cloud shadow does not compound either" begin
+    @testset "a new radiation field becomes the base; cloud water does not act here" begin
+        # Since #130 the cloud shadow is cloud_shadow.jl, applied at the
+        # radiation cadence before this stage; sw_modifiers only shades.
         sw = case.bus.sw
         R = fill(800.0, size(sw))
         ql = interior_view(BC.tracer(case, :ql))
         fill!(ql, 0.0)
-        # 1 g/m² of cloud water over one open street column:
-        # tr = exp(−0.7), factor tr + 0.15(1 − tr) = 0.575
         c0 = first(street)
-        ql[c0, 1] = 1e-3 / case.mesh.dz
-        rest = setdiff(street, [c0])
+        ql[c0, 1] = 1e-3 / case.mesh.dz               # 1 g/m² over one open street column
         copyto!(sw, R)                                # a "radiation update"
         for _ in 1:4
             BC.run_stage!(sw_mod, case, Val(:sw_modifiers), cfg.dt)
-            tr = exp(-0.7)
-            @test sw[c0] ≈ 800 * (tr + 0.15 * (1 - tr)) rtol = 1e-12
             @test all(sw[park] .≈ 800 * shade)
-            @test sw[rest] == R[rest]                  # clear, unshaded columns untouched
+            @test sw[street] == R[street]              # unshaded columns untouched, ql or not
         end
-        # the next radiation update becomes the new base
         copyto!(sw, 2 .* R)
         BC.run_stage!(sw_mod, case, Val(:sw_modifiers), cfg.dt)
         @test sw_mod.sw_base == 2 .* R
         @test all(sw[park] .≈ 1600 * shade)
+        fill!(ql, 0.0)
         # the coupling's own smoke checks agree
         @test all(last, BC.smoke_check(sw_mod, case))
     end

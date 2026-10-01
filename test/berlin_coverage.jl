@@ -47,9 +47,6 @@ module removes it here in the same PR (the ratchet test below fails
 until it does).
 """
 const BERLIN_PENDING = Dict{Symbol,String}(
-    :GasOptics             => "#130 column radiation",
-    :TwoStream             => "#130 column radiation",
-    :RadiationCore         => "#130 column radiation (the Era III contract; today reached only indirectly, through the spectral grids of the radiosity materials)",
     :Anelastic             => "#133 anelastic / pseudo-incompressible core (since #131 the case's hydrostatic reference state is Anelastic.reference_from_profile, built by the core in core/reference_state.jl, not by a coupling)",
     :Multigrid             => "#132 pressure-solver option",
     :ML                    => "#132 MLSGS option",

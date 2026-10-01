@@ -90,7 +90,12 @@ Radiation and the other couplings:
 * `params` — the per-class [`SurfaceParams`](@ref) (albedo, emissivity;
   `C_s` is the heat capacity of the slab surfaces);
 * `swsol`, `lwsol` — the last radiosity solutions (`swsol === nothing`
-  at night).
+  at night);
+* `L_sky` — downwelling longwave from the sky at the surface, W m⁻², set
+  by the `:column_radiation` slot at every radiation update (#130);
+* `dni`, `dhi` — direct-normal and diffuse-horizontal shortwave for the
+  radiosity solve, W m⁻², set by the `:column_radiation` slot; `NaN`
+  means "use the radiosity coupling's own clear-sky model" (#130).
 
 Surface exchange (#129):
 
@@ -124,6 +129,9 @@ mutable struct SurfaceBus
     params::SurfaceParams
     swsol::Any
     lwsol::Any
+    L_sky::Float64
+    dni::Float64
+    dhi::Float64
     # surface exchange (#129)
     surface::Matrix{Union{Nothing,AbstractSurface}}
     factories::Dict{UInt8,Tuple{Symbol,Any}}
@@ -145,6 +153,7 @@ function SurfaceBus(Nx::Integer, Ny::Integer; Ts0::Real = 285.0)
     z() = zeros(Nx, Ny)
     return SurfaceBus(fill(Float64(Ts0), Nx, Ny), z(), fill(320.0, Nx, Ny),
                       z(), z(), 0.0, default_surface_params(), nothing, nothing,
+                      NaN, NaN, NaN,
                       Matrix{Union{Nothing,AbstractSurface}}(nothing, Nx, Ny),
                       Dict{UInt8,Tuple{Symbol,Any}}(), ones(Int, Nx, Ny), z(),
                       z(), z(), z(), z(), z(), z(), z(), z(), z(), trues(Nx, Ny))

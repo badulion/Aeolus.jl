@@ -14,27 +14,22 @@
 # water's Fresnel zenith dependence, which the μ₀-dependent materials
 # below update at every radiation call.
 #
+# The sky longwave and (unless the column radiation is told to leave it
+# to Bird) the direct/diffuse split come from the :column_radiation slot
+# through the bus (`bus.L_sky`, `bus.dni`, `bus.dhi`, #130).
+#
 # KNOWN (fixed by later issues, kept for bit-for-bit):
-#   * sky longwave is taken from the surface, L_sky = 0.95 σ T̄s⁴
-#     (column-radiation issue);
 #   * one temperature per column is pushed onto every facet of that
 #     column and the column's facet fluxes are collapsed back by the area
 #     density (UrbanFacetScene issue).
-
-"""
-    lw_from_walls(Ts_mean, ε = 0.95) -> W/m²
-
-Longwave `ε σ Ts_mean⁴` of surfaces at `Ts_mean`. Used (as a known
-defect) as the sky longwave of the radiosity solve.
-"""
-lw_from_walls(Ts_mean::Real, ε::Real = 0.95) = ε * STEFAN * Ts_mean^4
 
 """
     RadiositySun
 
 Slot `:surface_radiation`, provider `:radiosity`. At the `:radiation`
 cadence (and on step 1): the solar position (`SolarGeometry`), Bird
-clear-sky DNI/DHI with the `sky` model, the μ₀-dependent materials
+DNI/DHI from the bus (the column radiation) or, when those are `NaN`,
+the Bird clear sky `sky`, the sky longwave `bus.L_sky`, the μ₀-dependent materials
 (`default_urban_materials`), the shortwave and longwave radiosity solves
 over the static scene, and the per-column aggregation into `bus.sw`,
 `bus.lw` (per unit surface). Leaves the solutions in `bus.swsol`,
@@ -62,7 +57,8 @@ function run_stage!(c::RadiositySun, case, ::Val{:radiation}, dt)
     Ts = bus.Ts
     case.clock.sun = solar_position_at(case.cfg, case.clock.hour)
     sp  = case.clock.sun
-    irr = clear_sky_irradiance(sp, c.sky)
+    isnan(bus.L_sky) && error("radiosity_sun: no sky longwave on the bus (bus.L_sky); the :column_radiation slot sets it before this stage")
+    irr = isnan(bus.dni) ? clear_sky_irradiance(sp, c.sky) : (dni = bus.dni, dhi = bus.dhi)
     μ   = max(sp.μ₀, 0.0)
 
     mats = default_urban_materials(; μ₀ = max(μ, 0.05))
@@ -74,7 +70,7 @@ function run_stage!(c::RadiositySun, case, ::Val{:radiation}, dt)
     sunv  = solar_unit_vector(sp)
     swsol = μ > 0 ? solve_shortwave(scene, vfac, sunv;
                                     dni = irr.dni, dhi = irr.dhi) : nothing
-    lwsol = solve_longwave(scene, vfac; L_sky = lw_from_walls(mean(Ts)))
+    lwsol = solve_longwave(scene, vfac; L_sky = bus.L_sky)
     bus.swsol = swsol
     bus.lwsol = lwsol
     forcing = aggregate_to_grid(scene, vfac; sw = swsol, lw = lwsol, T_surface = Ts)
