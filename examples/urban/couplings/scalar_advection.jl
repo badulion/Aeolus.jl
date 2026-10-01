@@ -51,7 +51,8 @@ struct ScalarAdvection{F, W, B, S} <: AbstractCoupling
     scheme::S                     # AdvectionScheme (the unlimited operator)
     positivity::Bool
     refresh_halos::Bool
-    dW::Base.RefValue{Float64}    # this step's change of air water (kg/m²; 0 if conservative)
+    dW::Base.RefValue{Float64}    # this step's change of air water, ρ̄-mean part (kg/m²; 0 if conservative)
+    dWρ::Base.RefValue{Float64}   # this step's ρ̄-redistribution part (kg/m²; see ledger_water_split)
 end
 
 coupling_name(::Type{<:ScalarAdvection}) = :scalar_advection
@@ -71,7 +72,7 @@ function build(::Type{<:ScalarAdvection}, case, o)
         error("scalar_advection: the positivity limiter takes one of $(POSITIVE_SCHEMES), not :$(o.scheme); set positivity = false")
     return ScalarAdvection(Field(CellCenter(), mesh), FluxLimiterWorkspace(mesh),
                            FieldBoundaryConditions(:periodic, :periodic, :noflux),
-                           scheme, o.positivity, o.refresh_halos, Ref(0.0))
+                           scheme, o.positivity, o.refresh_halos, Ref(0.0), Ref(0.0))
 end
 
 function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
@@ -83,7 +84,7 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
         fill_halos!(sim.v, sim.bcs)
         fill_halos!(sim.w, sim.bcs)
     end
-    c.dW[] = 0.0
+    c.dW[] = 0.0; c.dWρ[] = 0.0
     for t in case.tracers
         t.advect || continue
         q = t.field
@@ -97,7 +98,10 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
         end
         tend = view(c.tend.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
         interior_view(q) .+= dt .* tend
-        t.name in case.ledger.water_tracers && (c.dW[] += dt * ledger_water(case, tend))
+        if t.name in case.ledger.water_tracers
+            flat, redis = ledger_water_split(case, tend)
+            c.dW[] += dt * flat; c.dWρ[] += dt * redis
+        end
     end
     return nothing
 end
@@ -105,8 +109,14 @@ end
 # Ledger: a flux-form scheme on a divergence-free velocity with periodic /
 # no-flux boundaries changes no domain total, so anything it does change
 # is booked as `transport` — a measure of non-conservation (zero to
-# round-off with refreshed halos).
-budget!(c::ScalarAdvection, case, l) = (add_water!(l, :transport, c.dW[]); nothing)
+# round-off with refreshed halos). The ledger integrates with the
+# reference density ρ̄_k (#131), which an incompressible transport does
+# not conserve: moving vapour up into thinner air loses ρ̄-weighted water.
+# That part is booked separately as `density_redistribution`
+# (ledger_water_split), so `transport` stays the scheme's own
+# non-conservation.
+budget!(c::ScalarAdvection, case, l) =
+    (add_water!(l, :transport, c.dW[]); add_water!(l, :density_redistribution, c.dWρ[]); nothing)
 
 function smoke_check(c::ScalarAdvection, case)
     W = sum(t -> ledger_water(case, interior_view(t.field)),
