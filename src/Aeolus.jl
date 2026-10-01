@@ -170,7 +170,14 @@ export NestSpec, apply_one_way_forcing!, apply_two_way_feedback!
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
-export apply_linear_chemistry!
+export apply_linear_chemistry!,
+       air_number_density, ppb_rate_constant, emission_ppb_flux,
+       k_NO_O3, k_NO2_OH, k_VOC_O3, k_VOC_OH, j_NO2,
+       nox_triad, photostationary_NO2, leighton_ratio,
+       photochemistry_cell, apply_photochemistry!,
+       schmidt_number, quasi_laminar_resistance, surface_resistance,
+       dry_deposition_velocity, apply_dry_deposition!,
+       rain_scavenging_coefficient, apply_wet_deposition!
 export ParticleSet, add_particles!, advance_particles!, positions
 export MLSGS, apply_mlsgs!
 export Observation, assimilate_nudging!

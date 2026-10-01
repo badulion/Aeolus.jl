@@ -100,10 +100,12 @@ const BC = Main.BerlinCase
             (:post_predictor, :ibm), (:post_predictor, :veg_drag),
             (:surface_update, :surface_slab), (:surface_update, :soil_urban),
             (:surface_update, :snow_legacy),
+            (:surface_update, :aq_chem),              # r_a / v_d refresh (#135)
             (:column_tendency, :cooling_prescribed),
             (:sanity, :surface_slab)]
-        @test [t.name for t in case.tracers] == [:qv, :ql, :qr, :pollutant]
-        @test [t.name for t in case.tracers if t.advect] == [:qv, :ql]
+        # the chemistry species are advected tracers since #135
+        @test [t.name for t in case.tracers] == [:qv, :ql, :qr, :NO, :NO2, :O3, :VOC, :HNO3, :pollutant]
+        @test [t.name for t in case.tracers if t.advect] == [:qv, :ql, :NO, :NO2, :O3, :VOC, :HNO3]
     end
 
     @testset "tracer registry: ensure_tracer! is idempotent and ORs the flags" begin
