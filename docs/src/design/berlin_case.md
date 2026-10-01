@@ -73,6 +73,8 @@ default.
 | `report(c, case)` | an extra log line with each output record |
 | `smoke_variants(::Type{C})` | extra smoke-test configurations, a tuple of `NamedTuple`s (see [the smoke test](#Smoke-test-and-coverage-test)) |
 | `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run |
+| `sim_options(::Type{C}, cfg, mesh, opts)` | `BoussinesqSimulation` keywords (e.g. `solver`), before the core is built (see [numerics slots](#Numerics-slots)) |
+| `step_options(c, case)` | keywords added to every `step!` call (e.g. `momentum_advection`, `eddy_viscosity!`) |
 
 `selected_couplings(cfg)` checks the configuration: an unknown key, an
 unknown provider, an additive switch used on a slot coupling, a slot
@@ -104,11 +106,11 @@ in the integer `order` their couplings declare.
 | `:surface_flux` | `surface_exchange` (10): the held H, E into the first air cell (step 1: the first surface step) |
 | `:anthropogenic` | `buildings_citymean` (10), `traffic_heat` (20), `glass` (30) |
 | `:chemistry` | `aq_chem` (10), `aq_aerosol` (20) |
-| `:transport` | `transport_weno` (10) |
+| `:transport` | `scalar_advection` (10) |
 | `:microphysics` | `micro_kessler` (10) |
 | `:tracers` | `pollutant` (10) |
 | `:fog_dew` | `fog_dew` (10) |
-| dynamics: `step!` with `:body_force` / `:post_predictor` | `geostrophic` (10), `moist_buoyancy` (20) / `ibm` (10), `surface_exchange` drag (15), `veg_drag` (20) |
+| dynamics: `step!` with `:body_force` / `:post_predictor` | `geostrophic` (10), `moist_buoyancy` (20) / `ibm` (10), `surface_exchange` drag (15), `veg_drag` (20); the `step_options` of the numerics slots |
 | `:surface_update` | `surface_exchange` (10: collects `bus.sensible`; every surface period steps all surfaces, soil included), `snow_legacy` (30), `aq_chem` r_a / v_d refresh (90, every 30 s) |
 | `:column_tendency` | `column_radiation` (10) |
 | `:sanity` | the core finiteness check |
@@ -232,6 +234,79 @@ The two runs also differ in the minimum level-1 humidity (4.8 g/kg with,
 3.3 without) and in dew deposition (1.6e-3 against 2.9e-3 kg m⁻²), but
 after an hour of turbulence part of that is the divergence of two
 chaotic runs, not the term alone.
+
+## Numerics slots
+
+Four exclusive slots swap the numerics of the dynamical core and the
+transport (#132). Select with `physics = Dict(:slot => :provider)`;
+options go under the coupling name in `options`.
+
+| slot | providers (default first) | how |
+| :-- | :-- | :-- |
+| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`) | `sim_options`: the `solver` of `BoussinesqSimulation` |
+| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, the built-in closure with `cfg.C_s`), `:dynamic` (`sgs_dynamic`), `:mlsgs` (`sgs_mlsgs`) | `step_options`: `eddy_viscosity!` |
+| `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
+| `:scalar_advection` | `:advection_schemes` (`scalar_advection`, option `scheme = :weno_z5`) | the `:transport` stage |
+
+`sim_options` and `step_options` are contract hooks: a coupling returns a
+`NamedTuple` of keywords for the `BoussinesqSimulation` constructor or
+for every `step!` call; two couplings may not set the same keyword.
+
+* **Pressure solvers.** All three solve the same 7-point Laplacian with
+  the same boundary conditions (periodic, periodic, Neumann); the
+  multigrid ones iterate to a relative residual of 1e-10. In the
+  `:smoke` window after 100 steps, MG-CG differs from the FFT by at most
+  6.1e-10 m s⁻¹ in u, v, w and 2.1e-9 K in θ, with max|∇·u| = 1.9e-13
+  s⁻¹ (`test/berlin_numerics.jl`). They are here for the stretched-grid
+  and cut-cell solver work (#151, #152), not for speed.
+* **SGS.** `:dynamic` is the Germano–Lilly coefficient of
+  `Operators.compute_dynamic_smagorinsky_νt!`, plane-averaged, test-filter
+  ratio 3 (see [the SGS theory page](../theory/sgs.md)); `report` prints
+  the mean C_s in the canopy and in the free stream (the levels between
+  the highest roof + 1 and the sponge). `:mlsgs` wraps `ML.MLSGS`; with
+  the default `fn` (the Smagorinsky closure with `cfg.C_s`) the run is
+  bit for bit the default run (tested over 100 smoke steps). There is no
+  trained model.
+* **Scalar advection.** Every tracer registered with `advect = true`;
+  `positive` tracers go through the flux limiter (`advect_positive!`).
+  `:weno_z7` needs `CaseConfig(halo = (4, 4, 4))`, `:teno8` halo 5; the
+  build errors otherwise. The coupling refreshes the velocity halos
+  first (see [the stale-halo defect](#Known-defects-kept-by-the-refactor)).
+
+Measured in the `:smoke` window over 1 h (1800 steps, 12:00–13:00, the
+free stream is levels 7–12, 37.5–75 m, above the 31 m roofs and below
+the sponge), the dynamic mean C_s is 0.077 in the free stream and 0.076
+in the canopy with ratio 3 (0.128 and 0.115 with ratio 2). That is below
+the inertial-range 0.17: the window's flow is a 1 m s⁻¹ geostrophic wind
+over 250 m with a capping inversion at 60 m, far from developed
+isotropic turbulence, and the dynamic coefficient is lower in stratified
+and transitional flow (it reaches 0.13–0.15 in the decaying-turbulence
+test of `test/era2_sgs_numerics.jl`).
+
+**Cost** on the flagship grid (64 × 64 × 32), per call, minimum of 15
+repetitions on a loaded 24-core machine (each operator runs once per
+step, the scalar scheme once per advected tracer — qv and ql):
+
+| option | operator | ms/call |
+| :-- | :-- | --: |
+| pressure solve | cosine FFT (default) | 2.0 |
+| | multigrid (20 V-cycles to 1e-10) | 72.6 |
+| | MG-CG (11 iterations) | 45.8 |
+| SGS ν_t | Smagorinsky (default; also MLSGS default) | 0.8 |
+| | dynamic | 10.4 |
+| momentum advection | centred (default) | 0.3 |
+| | WENO-Z5 | 36.9 |
+| scalar advection, one positive tracer | WENO-Z5 (default) | 7.4 |
+| | TENO5 | 10.4 |
+| | WENO-Z7 (halo 4) | 12.4 |
+| velocity halo refresh (the #132 fix) | | 0.3 |
+
+For scale, a whole default step costs about 40–60 ms under the same load
+(`timing_report`, radiation excluded), of which `step!` is 12–17 ms. The
+alternatives stay options: none is more accurate for this case on this
+grid, and multigrid, MG-CG and the WENO-Z momentum advection each at
+least triple the cost of `step!` (107, 64 and 48 ms per step) and add
+roughly 50–150 % to a whole step.
 
 ## Adding a coupling
 
@@ -391,7 +466,8 @@ where the surface takes up dew), `building_vapour`,
 `dew` (deposition, negative), `precipitation` (Kessler rain out of the
 bottom), `qv_clamp` (the Kessler coupling's clamp) and `transport` (the
 change of water the transport stage makes; zero for a conservative
-scheme). The ledger integrates the water with `ledger.ρ`, one density
+scheme, and measured at ~1e-19 kg m⁻² at ρ = 1 since #132). The ledger
+integrates the water with `ledger.ρ`, one density
 per level, the reference density `case.ref.ρ̄` (#131). A coupling that
 puts a flux into the air with a different density than the ledger's
 shows up as a water residual, so a coupling converts every flux with
@@ -402,9 +478,10 @@ conserves Σ q, so vapour carried up into thinner air loses ρ̄-weighted
 mass (an anelastic core, #133, would conserve Σ ρ̄ q). The transport
 stage therefore books its change of water in two parts
 (`ledger_water_split`): `transport`, the column-mean ρ̄ times its change
-of Σ q (zero for a conservative scheme; today the #132 halo leak), and
+of Σ q (zero for a conservative scheme; before #132 the halo leak), and
 `density_redistribution`, the rest. Over the 1 h flagship run
-(06:00–07:00) with moist buoyancy on, `density_redistribution` is
+(06:00–07:00, before #132's halo fix) with moist buoyancy on,
+`density_redistribution` is
 −8.1e-4 kg m⁻² (72 % of the slab's evaporation, 1.13e-3) and
 `transport` −7.0e-4; with it off, −6.3e-4 and +1.5e-5. Without the
 split both would be booked as `transport` (−1.5e-3, against −2.7e-4 at
@@ -449,6 +526,10 @@ Flagship configuration, 1 h (`AEOLUS_NSTEPS=1800`, 06:00–07:00 local,
 Water over the same hour (kg m⁻² of domain): ΔW = −7.75e-4 =
 evaporation +7.72e-4, building vapour +9.38e-4, dew −2.21e-3,
 precipitation 0, clamp 0, transport **−2.70e-4**; residual −1.4e-14.
+After the stale-halo fix of #132 the same hour gives ΔW = −5.72e-4 =
+evaporation +7.57e-4, building vapour +9.12e-4, dew −2.24e-3,
+transport **+6.9e-19**; residual −1.3e-14 (the surface-energy table
+changes by at most 0.1 W m⁻² in any entry).
 
 What the numbers say about the current (pre-#128/#129) physics:
 
@@ -461,18 +542,19 @@ What the numbers say about the current (pre-#128/#129) physics:
   starts with `Ts0 = 285 K` under air at θ = 293 K, and the slab's
   constant-coefficient flux (#129) is weak. The surfaces warm by storage
   (ΔS ≈ Rn) instead.
-* **The transport is not conservative**: over the hour it removes
-  2.7e-4 kg m⁻² of water, 35 % of what the surfaces evaporate. This is
-  the stale-halo leak below (#132).
+* **The transport was not conservative**: over the hour it removed
+  2.7e-4 kg m⁻² of water, 35 % of what the surfaces evaporate. This was
+  the stale-halo leak below, fixed by #132.
 * The domain residual of 16.9 W m⁻² is the window sun (−16.0), the
   glass transmission (−2.4) and the dew's latent heat (+1.5): energy
   that goes into the buildings or comes from condensation, which the
   four-term balance does not see.
 
 In the `:smoke` configuration of the smoke test (seeded fog, 12 steps
-at noon, 16 × 16 × 16) the domain residual is −34.4 W m⁻² in summer
+at noon, 16 × 16 × 16) the domain residual was −34.4 W m⁻² in summer
 (dew heat +44.4 from the saturated seeded layer, window sun −6.9, glass
-−3.0) and +6.1 W m⁻² in winter.
+−3.0) and +6.1 W m⁻² in winter; with the transport conserving water
+(#132) the summer value is −33.9 W m⁻².
 
 **Correction (#131).** That seeded layer was not saturated for the fog
 scheme: the seed set `q_v = q_s(θ, p)`, treating θ as the temperature,
@@ -787,15 +869,19 @@ without a blow-up, leave every field and tracer finite, pass every
 `smoke_check` of its couplings, and close the surface-energy ledger per
 class (1e-6 W m⁻²) and the water ledger (1e-12 kg m⁻²). The first run
 also asserts that the domain gains radiative energy at noon (Rn > 0,
-ΔS > 0) and records the transport's water non-conservation as
-`@test_broken` (#132 turns it into a pass). Finally every registered
+ΔS > 0) and that the transport conserves water (|transport| <
+1e-12 kg m⁻²; measured ~1e-19 since #132). Finally every registered
 coupling must have run in at least one configuration, and the whole
 test must take less than 300 s.
 
 At #127 the matrix was 2 runs (no slot had a second provider yet); #130
-added a third, the column radiation's `surface_sw = :bird` variant. Run
-on its own, the test takes about 36 s, almost all of it first-call
-compilation (each run takes well under a second once compiled).
+added the column radiation's `surface_sw = :bird` variant, and #132 the
+non-default providers of the numerics slots (`momentum_advection =
+weno_z`, `pressure_solver = multigrid` and `mg_cg`, `sgs = dynamic` and
+`mlsgs`) and the scalar-advection variants (TENO5; WENO-Z7 with halo 4).
+Run on its own the test took about 66 s at #132, almost all of it
+first-call compilation (each run takes 0.3–1 s once compiled, the
+multigrid runs a few seconds).
 
 **`test/berlin_coverage.jl`** checks that every submodule of `Aeolus`
 is either listed in some registered coupling's `modules_used`, or in
@@ -953,7 +1039,8 @@ later issue.
 | toy aerosol: not advected or output, zero with no source; its PM deposition table | `aq_aerosol.jl` (table in `aq_chem.jl`) | #147 |
 | OSM `&&`/`||` precedence; patches overwrite roofs | `core/osm_ingest.jl`, `core/geometry.jl` | #141 |
 
-**Found during #126: stale velocity halos in the scalar transport.**
+**Found during #126, fixed in #132: stale velocity halos in the scalar
+transport.**
 `step!` corrects the interior velocity after the pressure solve but
 leaves the halos at the predictor values. The Berlin case advects its
 scalars (qv, ql with WENO-Z5, the pollutant with centred differences)
@@ -974,5 +1061,11 @@ transport first runs (`set!` fills only the interior), and in the
 0.8 % of the water in the air (9.4e-1 kg m⁻²); every later step removes
 about 3.5e-5 kg m⁻². With the halos refreshed the same steps change the
 water by at most 1.3e-15 kg m⁻². Over the 1 h flagship run the
-transport term is −2.70e-4 kg m⁻². `test/berlin_smoke.jl` records it as
-`@test_broken`.
+transport term is −2.70e-4 kg m⁻². **Fixed in #132**: the
+`scalar_advection` coupling refreshes the u, v, w halos before it
+advects (`refresh_halos = true`), which also gives the pollutant, which
+advects later in the step, fresh halos. The water change of the
+transport stage is now ~1e-19 kg m⁻² per run (smoke) and +6.9e-19 kg m⁻²
+over the flagship hour; both `@test_broken` are now `@test`, and
+`test/berlin_case.jl` keeps the mechanism tested with
+`refresh_halos = false`.

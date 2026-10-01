@@ -118,6 +118,52 @@ cell centers to each face.
 Both are constructor parameters on
 [`BoussinesqSimulation`](@ref Aeolus.Simulations.BoussinesqSimulation).
 
+## Dynamic coefficient (Germano–Lilly)
+
+[`compute_dynamic_smagorinsky_νt!`](@ref Aeolus.Operators.compute_dynamic_smagorinsky_νt!)
+computes ``C_s`` from the resolved flow instead of prescribing it
+(Germano et al. 1991, Lilly 1992). The resolved stress at a coarser
+*test* filter ``\widetilde{\cdot}`` (a 3 × 3 × 3 box of cell-centred
+values) is known exactly, and the Germano identity equates it to the
+difference of the model at the two filter levels:
+
+```math
+L_{ij} = \widetilde{u_i u_j} - \tilde u_i \tilde u_j = C_s^2 M_{ij}, \qquad
+M_{ij} = 2Δ^2\left(\widetilde{|S| S_{ij}} - α^2 |\tilde S|\, \tilde S_{ij}\right),
+```
+
+with ``α = \hat Δ/Δ``. The least-squares solution, averaged over each
+horizontal level (the homogeneous directions), is
+``C_s^2(z) = ⟨L^d_{ij} M_{ij}⟩ / ⟨M_{ij} M_{ij}⟩``, clipped to
+``[0, 0.5^2]`` (no backscatter). `averaging = :local` uses the pointwise
+ratio instead.
+
+**Filter-width ratio.** The discrete box of three cells has second moment
+``2Δ^2/3``; combined with the implicit grid filter (a top hat of width
+``Δ``, second moment ``Δ^2/12``) the effective test-level width is
+``\sqrt{Δ^2 + 12 \cdot 2Δ^2/3} = 3Δ``, so `filter_ratio = 3` is the
+default. With 2 (the value often quoted for the trapezoidal filter) the
+coefficient is too large for this filter:
+
+| field (32³, triply periodic, ``u_{rms} = 1``) | ``α = 3`` | ``α = 2`` |
+| :-- | --: | --: |
+| random phases, ``E(k) ∝ k^{-5/3}`` | 0.018 | — |
+| same field after ``t = 1`` (≈ 1 turnover) of LES | 0.129 | 0.222 |
+| after ``t = 3`` | 0.153 | 0.265 |
+
+Lilly's inertial-range value is 0.17. The random-phase field has the
+right spectrum but no energy transfer to small scales, and the dynamic
+procedure — which measures that transfer — correctly gives
+``C_s ≈ 0``; it switches off in laminar shear too (``L_{ij}M_{ij} = 0``
+for a linear velocity profile), where the constant-coefficient model
+still dissipates. These are the tests in `test/era2_sgs_numerics.jl`.
+
+**Using it.** `step!(sim, dt; eddy_viscosity! = (νt, u, v, w) ->
+compute_dynamic_smagorinsky_νt!(νt, u, v, w; workspace = ws))` replaces
+the built-in closure (the eddy-viscosity terms are added where the
+built-in ones are); `ML.MLSGS` closures plug in the same way. The
+Berlin case selects it with `physics[:sgs] = :dynamic`.
+
 ## Limitations and planned upgrades
 
 The current implementation is deliberately the *simplest* working
@@ -125,9 +171,8 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
 
   * No wall damping (Van Driest / Piomelli). Needed only when walls
     exist — Phase 1b.
-  * No dynamic coefficient (Germano-Lilly procedure) — the model is
-    known to be too dissipative in transitional / stably stratified
-    regimes.
+  * The constant coefficient is too dissipative in transitional / stably
+    stratified regimes. The dynamic coefficient below is the alternative.
   * The **stability correction** for stably stratified flow
     (Deardorff / Lilly closure with a Richardson-number reduction) is
     not applied — it will matter when we do stably stratified boundary
@@ -144,3 +189,9 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Moin, P. & Kim, J. (1982), *Numerical investigation of turbulent
     channel flow*, JFM 118, 341.
   * Pope, S. B. (2000), *Turbulent Flows*, ch. 13.
+  * Germano, M., Piomelli, U., Moin, P. & Cabot, W. H. (1991), *A dynamic
+    subgrid-scale eddy viscosity model*, Phys. Fluids A 3, 1760.
+  * Lilly, D. K. (1992), *A proposed modification of the Germano subgrid-scale
+    closure method*, Phys. Fluids A 4, 633.
+  * Lund, T. S. (1997), *On the use of discrete filters for large eddy
+    simulation*, CTR Annual Research Briefs, 83.

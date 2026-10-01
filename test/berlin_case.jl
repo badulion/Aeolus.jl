@@ -64,9 +64,10 @@ const BC = Main.BerlinCase
         # and the soil ground), with #130's radiation
         @test Set(BC.coupling_name.(sel)) ==
               Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_exchange,
-                   :ground_soil, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :transport_weno,
+                   :ground_soil, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :scalar_advection,
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
-                   :column_radiation, :cloud_shadow, :traffic_heat, :moist_buoyancy])
+                   :column_radiation, :cloud_shadow, :traffic_heat, :moist_buoyancy,
+                   :pressure_fft, :sgs_smagorinsky, :momentum_centered])
         # every coupling names only real Aeolus submodules
         for C in BC.REGISTRY, m in BC.modules_used(C)
             @test isdefined(Aeolus, m) && getfield(Aeolus, m) isa Module
@@ -103,7 +104,7 @@ const BC = Main.BerlinCase
             (:anthropogenic, :buildings_citymean), (:anthropogenic, :traffic_heat),
             (:anthropogenic, :glass),
             (:chemistry, :aq_chem), (:chemistry, :aq_aerosol),
-            (:transport, :transport_weno),
+            (:transport, :scalar_advection),
             (:microphysics, :micro_kessler),
             (:tracers, :pollutant),
             (:fog_dew, :fog_dew),
@@ -141,7 +142,7 @@ const BC = Main.BerlinCase
         interior_view(sim.θ) .= θ0
     end
 
-    @testset "transport stage: flux-form conservation, and the stale-halo leak (KNOWN)" begin
+    @testset "transport stage: flux-form conservation; the stale-halo leak it fixes (#132)" begin
         # give the flow some structure first
         for _ in 1:4
             BC.step_case!(case, 2.0)
@@ -149,38 +150,40 @@ const BC = Main.BerlinCase
         ql = interior_view(BC.tracer(case, :ql))
         ql .= 1e-4 .* (1 .+ sin.(reshape(1:Nx*Ny*Nz, Nx, Ny, Nz)))
         saved = Dict(t.name => copy(interior_view(t.field)) for t in case.tracers)
-        tr = BC.find_coupling(case, :transport_weno)
+        velsaved = Dict(f => copy(getfield(case.sim, f).data) for f in (:u, :v, :w))
+        tr = BC.find_coupling(case, :scalar_advection)
         mass() = Dict(t.name => sum(interior_view(t.field)) for t in case.tracers)
-        restore!() = foreach(t -> interior_view(t.field) .= saved[t.name], case.tracers)
+        restore!() = (foreach(t -> interior_view(t.field) .= saved[t.name], case.tracers);
+                      foreach(f -> getfield(case.sim, f).data .= velsaved[f], (:u, :v, :w)))
 
-        # (a) As shipped. step! corrects the interior velocity after the
-        # projection but leaves the halos at the predictor values, so the
-        # transport that runs at the start of the next step sees a
+        # (a) The defect the coupling guards against. step! corrects the
+        # interior velocity after the projection but leaves the halos at
+        # the predictor values, so a transport that used them would see a
         # velocity that is not divergence-free across the periodic seam
-        # and the flux form stops conserving. Kept bit-for-bit here; the
-        # scalar-advection issue refreshes the halos.
+        # and the flux form would stop conserving (the pre-#132 transport,
+        # `refresh_halos = false`).
+        stale = BC.build(BC.ScalarAdvection, case,
+                         merge(BC.default_options(BC.ScalarAdvection), (refresh_halos = false,)))
         m0 = mass()
-        BC.run_stage!(tr, case, Val(:transport), 2.0)
+        BC.run_stage!(stale, case, Val(:transport), 2.0)
         m1 = mass()
         leak = Dict(n => (m1[n] - m0[n]) / m0[n] for n in (:qv, :ql))
-        @info @sprintf("  transport as shipped (stale velocity halos): relative mass change per step qv %.2e, ql %.2e",
+        @info @sprintf("  transport on stale velocity halos (pre-#132): relative mass change per step qv %.2e, ql %.2e",
                        leak[:qv], leak[:ql])
-        @test_broken abs(leak[:qv]) < 1e-12
+        @test abs(leak[:qv]) > 1e-9
 
-        # (b) With the velocity halos refreshed the same stage conserves
-        # every advected tracer to round-off, keeps it non-negative
-        # (to round-off: the limiter guarantees ≥ 0 in exact arithmetic),
-        # and leaves the non-advected tracers untouched.
+        # (b) As shipped: the coupling refreshes the velocity halos, and
+        # the stage conserves every advected tracer to round-off, keeps it
+        # non-negative (to round-off: the limiter guarantees ≥ 0 in exact
+        # arithmetic), and leaves the non-advected tracers untouched.
         restore!()
-        for f in (case.sim.u, case.sim.v, case.sim.w)
-            fill_halos!(f, case.sim.bcs)
-        end
+        @test tr.refresh_halos
         m0 = mass()
         BC.run_stage!(tr, case, Val(:transport), 2.0)
         m1 = mass()
         for t in case.tracers
             if t.advect
-                @info @sprintf("  transport %s with fresh halos: relative mass change %.1e, min %.1e",
+                @info @sprintf("  transport %s (fresh halos): relative mass change %.1e, min %.1e",
                                t.name, abs(m1[t.name] - m0[t.name]) / m0[t.name],
                                minimum(interior_view(t.field)))
                 @test m1[t.name] ≈ m0[t.name] rtol = 1e-12

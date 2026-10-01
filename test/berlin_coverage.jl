@@ -48,8 +48,6 @@ until it does).
 """
 const BERLIN_PENDING = Dict{Symbol,String}(
     :Anelastic             => "#133 anelastic / pseudo-incompressible core (since #131 the case's hydrostatic reference state is Anelastic.reference_from_profile, built by the core in core/reference_state.jl, not by a coupling)",
-    :Multigrid             => "#132 pressure-solver option",
-    :ML                    => "#132 MLSGS option",
     :TimeIntegration       => "#133 adaptive dt / IMEX",
     :Particles             => "#134 Lagrangian particles",
     :DataAssimilation      => "#134 nudging assimilation",

@@ -892,6 +892,7 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
     include("era2_anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
     include("era2_multigrid.jl")   # Phase  29     geometric multigrid
+    include("era2_sgs_numerics.jl") # #132         dynamic Smagorinsky, step! operator swap-ins
     include("era2_amr.jl")         # Phases 30-31  nesting, AMR
 end
 
@@ -975,4 +976,5 @@ end
     include("berlin_sw_modifiers.jl")    # tree shade / cloud shadow once per radiation field; scene class map (#128)
     include("berlin_moist.jl")           # reference state, moist buoyancy, fog enthalpy (#131)
     include("berlin_chemistry.jl")       # NOx–O3–VOC on tracers, r_a-based dry / wet deposition (#135)
+    include("berlin_numerics.jl")        # pressure solver, SGS, advection slots (#132)
 end
