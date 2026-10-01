@@ -61,7 +61,8 @@ _aq_sums(c) = Dict(s => sum(BC._aq_sp(c, s)) for s in BC.AQ_SPECIES)
         for I in (first(findall(==(BC.SURFACE_PARK), sfc)), first(findall(==(BC.SURFACE_ROOF), sfc)))
             i, j = Tuple(I); k = kair[I]
             U = hypot((u[i, j, k] + u[mod1(i + 1, Nx), j, k]) / 2, (v[i, j, k] + v[i, mod1(j + 1, Ny), k]) / 2)
-            sol = solve_surface_layer(; U = U, z_m = dz / 2, θ_a = θ[i, j, k], θ_s = case.bus.Ts[I],
+            sol = solve_surface_layer(; U = U, z_m = dz / 2, θ_a = θ[i, j, k],
+                                      θ_s = case.bus.Ts[I] / BC.ref_exner(case, k),
                                       q_a = qv[i, j, k], q_s = qv[i, j, k],
                                       z0m = c.z0m[I], z0h = c.z0m[I] / 10)
             @test c.r_a[I] ≈ 1 / (sol.C_H * sol.U)
