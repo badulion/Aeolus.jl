@@ -18,13 +18,18 @@
 # implicit bulk exchange whose latent heat goes to the SURFACE. This file
 # only adapts the case's fields to it.
 #
-# KNOWN (kept for bit-for-bit): the pressure is an isothermal 8 km
-# scale-height profile from 1013.25 hPa (the moist-thermodynamics issue
-# replaces it with a reference state), and dew goes into k = 1 of every
-# column, inside the building on roof columns.
+# Pressure and density come from the case's hydrostatic reference state
+# (core/reference_state.jl, #131): fog is adjusted at p̄_k (T = θ Π̄_k),
+# dew exchanges with the surface at the ground pressure and the level-1
+# density ρ̄_1, the density the ledger integrates the water with. Before
+# #131 fog and dew used an isothermal 8 km scale height from 1013.25 hPa
+# (0.17 % off the hydrostatic p̄ at the flagship's top level) and ρ = 1.
+#
+# KNOWN: dew goes into k = 1 of every column, inside the building on
+# roof columns (#129).
 
 """
-    apply_fog_dew!(θ, qv, ql, q_dew, Ts, dt; p = 1.01325e5, dz, ρ = 1.0,
+    apply_fog_dew!(θ, qv, ql, q_dew, Ts, dt; p = 1.01325e5, p_sfc, dz, ρ = 1.0,
                    C_e = 1e-3, U = 3.0, τ_fog = 0.0,
                    fog_levels = axes(θ, 3))
         -> H_dew (W m⁻², 2-D)
@@ -41,17 +46,18 @@ Dew onto the surface, then fog in the air.
     `fog_levels`: enthalpy-conserving saturation adjustment (relaxed over
     `τ_fog` if > 0), condensing into and evaporating from `ql`.
 
-`p` is the surface pressure used for dew and either a scalar or a
-per-level vector for fog. Both steps are unconditionally stable in `dt`
+`p` is the pressure for fog, a scalar or a per-level vector; `p_sfc`
+(default: `p`, or its first entry) the surface pressure for dew, and `ρ`
+the density of the lowest air layer. Both steps are unconditionally stable in `dt`
 and cannot overshoot saturation.
 """
 function apply_fog_dew!(θ::AbstractArray{<:Real,3}, qv::AbstractArray{<:Real,3},
                         ql::AbstractArray{<:Real,3}, q_dew::AbstractMatrix,
                         Ts::AbstractMatrix, dt::Real;
-                        p = 1.01325e5, dz::Real, ρ::Real = 1.0,
+                        p = 1.01325e5, p_sfc = (p isa AbstractVector ? first(p) : p),
+                        dz::Real, ρ::Real = 1.0,
                         C_e::Real = 1e-3, U::Real = 3.0,
                         τ_fog::Real = 0.0, fog_levels = axes(θ, 3))
-    p_sfc = p isa AbstractVector ? first(p) : p
     H = Aeolus.RadiationFog.dew_exchange!(qv, q_dew, Ts, p_sfc, dt;
                                           dz = dz, ρ = ρ, C_e = C_e, U = U)
     Aeolus.RadiationFog.fog_adjust!(θ, qv, ql, p, dt; τ = τ_fog,
@@ -72,9 +78,10 @@ end
 Additive coupling: every step in `:fog_dew`, [`apply_fog_dew!`](@ref) on
 θ, qv, ql with the dew reservoir `bus.dew` and the surface temperature
 `bus.Ts`; the dew's latent heat warms the surface (`bus.sensible -= H_dew`).
+Fog is adjusted at the reference pressure `p̄_k`, dew at the ground
+pressure with the reference density `ρ̄_1` (`case.ref`).
 """
 mutable struct FogDew <: AbstractCoupling
-    p_col::Vector{Float64}
     H_dew::Matrix{Float64}    # this step's dew latent heat into the surface (W/m²)
     dew_start::Matrix{Float64}  # dew reservoir before this step's exchange (kg/m²)
 end
@@ -83,20 +90,15 @@ coupling_name(::Type{FogDew}) = :fog_dew
 modules_used(::Type{FogDew}) = (:RadiationFog, :MoistThermodynamics)
 stages(::Type{FogDew}) = ((:fog_dew, 10, EVERY_STEP),)
 
-function build(::Type{FogDew}, case, o)
-    mesh = case.mesh
-    Lz, Nz = mesh.Lz, mesh.Nz
-    # Layer pressures: isothermal 8 km scale height from a standard surface
-    # pressure (the Boussinesq core carries no p).
-    return FogDew([1.01325e5 * exp(-(k - 0.5) * (Lz / Nz) / 8000.0) for k in 1:Nz],
-                  zeros(mesh.Nx, mesh.Ny), zeros(mesh.Nx, mesh.Ny))
-end
+build(::Type{FogDew}, case, o) =
+    FogDew(zeros(case.mesh.Nx, case.mesh.Ny), zeros(case.mesh.Nx, case.mesh.Ny))
 
 function run_stage!(c::FogDew, case, ::Val{:fog_dew}, dt)
     bus = case.bus
     copyto!(c.dew_start, bus.dew)
     H_dew = apply_fog_dew!(case.sim.θ, tracer(case, :qv), tracer(case, :ql), bus.dew, bus.Ts, dt;
-                           p = c.p_col, dz = case.mesh.dz, ρ = 1.0)
+                           p = ref_pressure(case), p_sfc = surface_pressure(case),
+                           dz = case.mesh.dz, ρ = ref_density(case, 1))
     @. bus.sensible -= H_dew
     c.H_dew = H_dew
     return nothing

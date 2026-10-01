@@ -10,6 +10,12 @@
 #   * sensible, latent (and dew) fluxes go into k = 1 of EVERY column,
 #     which on roof columns is inside the building;
 #   * no surface momentum drag.
+#
+# The air density of both bulk fluxes and of their conversion into θ and
+# qv increments at k = 1 is the reference density ρ̄_1 (≈ 1.20 kg m⁻³ in
+# summer), and evaporation saturates at the ground pressure, both from
+# the case's reference state (#131). Before #131 they used ρ = 1 and
+# 1013.25 hPa.
 
 """
     step_surfaces!(Ts, sfc, params, sw_in_arr, lw_in, sensible_arr, dt)
@@ -90,19 +96,20 @@ function _moisture_availability(cls::UInt8)
 end
 
 """
-    apply_latent_flux!(LE, sim, Ts, sfc; ρ = 1.0, C_e = 1e-3, U_char = 3.0,
-                       qv_air = 0.008, LE_cap = 400.0, dt = 1.0,
+    apply_latent_flux!(LE, sim, Ts, sfc; ρ = 1.0, p_sfc = 1.01325e5, C_e = 1e-3,
+                       U_char = 3.0, qv_air = 0.008, LE_cap = 400.0, dt = 1.0,
                        qv_field = nothing) -> LE
 
 Evaporative cooling `LE = ρ L_v C_e U β max(0, q_sat(Ts) − q_v)`, clamped
 to `[0, LE_cap]`, written into `LE` (W/m²); with `qv_field` the matching
 vapour source goes into its first layer (`q_v` is then that layer,
-otherwise `qv_air`). `β` is the per-class moisture availability.
+otherwise `qv_air`). `β` is the per-class moisture availability; `q_sat`
+is taken at the surface pressure `p_sfc`.
 """
 function apply_latent_flux!(LE::AbstractMatrix, sim, Ts::AbstractMatrix,
                             sfc::AbstractMatrix{UInt8};
-                            ρ::Real = 1.0, C_e::Real = 1e-3,
-                            U_char::Real = 3.0,
+                            ρ::Real = 1.0, p_sfc::Real = 1.01325e5,
+                            C_e::Real = 1e-3, U_char::Real = 3.0,
                             qv_air::Real = 0.008,
                             LE_cap::Real = 400.0,
                             dt::Real = 1.0,
@@ -112,7 +119,7 @@ function apply_latent_flux!(LE::AbstractMatrix, sim, Ts::AbstractMatrix,
     @inbounds for j in 1:Ny, i in 1:Nx
         c   = sfc[i, j]
         β   = _moisture_availability(c)
-        qsat = q_saturation(Ts[i, j])
+        qsat = q_saturation(Ts[i, j], p_sfc)
         qv_local = qv_field === nothing ? qv_air : interior_view(qv_field)[i, j, 1]
         Δq  = max(0.0, qsat - qv_local)
         H_L = ρ * _L_v * C_e * U_char * β * Δq
@@ -167,7 +174,7 @@ build(::Type{SurfaceSlab}, case, o) =
 function run_stage!(c::SurfaceSlab, case, ::Val{:surface_flux}, dt)
     o, bus = c, case.bus
     apply_surface_flux!(bus.sensible, case.sim, bus.Ts, case.geom.sfc, bus.params;
-                        dt = dt, H_cap = o.H_cap, C_h = o.C_h)
+                        dt = dt, H_cap = o.H_cap, C_h = o.C_h, ρcp = ref_ρcp(case, 1))
     copyto!(c.H, bus.sensible)
     return nothing
 end
@@ -175,7 +182,8 @@ end
 function run_stage!(c::SurfaceSlab, case, ::Val{:anthropogenic}, dt)
     o, bus = c, case.bus
     apply_latent_flux!(c.LE, case.sim, bus.Ts, case.geom.sfc; dt = dt,
-                       qv_field = tracer(case, :qv), qv_air = o.qv_air)
+                       qv_field = tracer(case, :qv), qv_air = o.qv_air,
+                       ρ = ref_density(case, 1), p_sfc = surface_pressure(case))
     @. bus.sensible += c.LE
     return nothing
 end
@@ -229,7 +237,8 @@ function budget!(c::SurfaceSlab, case, l)
     end
     add_surface!(l, :dS, dS, sfc, dt)
     add_surface!(l, :clamp, c.clip, sfc, dt)
-    # apply_latent_flux! adds LE·dt/(ρ L_v dz) to qv at k = 1, ρ = 1
+    # apply_latent_flux! adds LE·dt/(ρ̄_1 L_v dz) to qv at k = 1; the ledger
+    # integrates qv with the same ρ̄_1, so the air gains LE·dt/L_v
     add_water!(l, :evaporation, sum(c.LE) * dt / _L_v / length(c.LE))
     return nothing
 end

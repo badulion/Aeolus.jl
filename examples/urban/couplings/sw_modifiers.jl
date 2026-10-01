@@ -2,14 +2,18 @@
 # Beer's-law shade under the park trees and a cloud shadow from the
 # column-integrated cloud water.
 #
-# KNOWN DEFECTS, kept so the refactor is bit-for-bit (the shortwave
-# modifier issue fixes them): both multiply `bus.sw` IN PLACE on every
-# step, while `bus.sw` is recomputed only at the radiation cadence, so
-# the attenuation compounds — park shortwave is multiplied by
-# exp(-0.5·2.5) = 0.287 per step and is effectively zero between
-# radiation updates, and the cloud shadow compounds the same way wherever
-# there is condensate. The cloud shadow is also not a slant path
-# (SolarGeometry.cloud_shadow_transmittance! is the replacement).
+# The modifiers act on the UNMODIFIED irradiance of the last radiation
+# update, never on their own previous output. `bus.sw` is recomputed only
+# at the radiation cadence, so the coupling keeps that field (`sw_base`)
+# and rebuilds `bus.sw = cloud(shade(sw_base))` every step. Before #128
+# both modifiers multiplied `bus.sw` in place, so the attenuation
+# compounded between radiation updates (park shortwave × 0.287 per step,
+# 7e-28 of its value after 50 steps).
+#
+# KNOWN (later issues): the cloud shadow is not a slant path and its
+# extinction is tuned, not derived (SolarGeometry.cloud_shadow_transmittance!,
+# #130); the shade is a single big-leaf Beer's law on the effective
+# irradiance of the radiosity solve, not a resolved canopy (#140, #145).
 
 """
     apply_tree_shade!(sw_arr, veg_mask, LAI_arr; k_leaf = 0.5)
@@ -71,13 +75,23 @@ end
 Additive coupling: tree shade ([`apply_tree_shade!`](@ref), park columns,
 LAI `cfg.park_lai`, option `k_leaf`) then cloud shadow
 ([`apply_cloud_shadow!`](@ref) with the column-integrated `ql`, option
-`k_ext`) on `bus.sw`, every step. See the KNOWN DEFECTS in this file.
+`k_ext`), every step, on the irradiance of the last radiation update.
+
+`sw_base` holds that irradiance. The coupling detects a new radiation
+update by `bus.sw` no longer equalling `sw_out`, the field it wrote on its
+previous step, so it needs no knowledge of which provider or cadence
+produced the irradiance. The modifiers are therefore applied exactly once
+to each radiation field: over the park, with no cloud water,
+`bus.sw / sw_base = exp(−k_leaf·LAI)` on every step.
 """
-struct SWModifiers <: AbstractCoupling
+mutable struct SWModifiers <: AbstractCoupling
     veg_mask::BitMatrix
     LAI::Matrix{Float64}
     k_leaf::Float64
     k_ext::Float64
+    sw_base::Matrix{Float64}   # irradiance of the last radiation update
+    sw_out::Matrix{Float64}    # what this coupling wrote to bus.sw last step
+    ql_col::Matrix{Float64}    # column-integrated ql, kg m⁻²
 end
 
 coupling_name(::Type{SWModifiers}) = :sw_modifiers
@@ -86,22 +100,65 @@ stages(::Type{SWModifiers}) = ((:sw_modifiers, 10, EVERY_STEP),)
 
 function build(::Type{SWModifiers}, case, o)
     veg_mask, LAI_map = park_lai_map(case)
-    return SWModifiers(veg_mask, LAI_map, o.k_leaf, o.k_ext)
+    sz = size(case.bus.sw)
+    # NaN: the first call always takes bus.sw as the new base
+    return SWModifiers(veg_mask, LAI_map, o.k_leaf, o.k_ext,
+                       zeros(sz), fill(NaN, sz), zeros(sz))
+end
+
+"""
+    column_liquid_water!(ql_col, ql, dz) -> ql_col
+
+`ql_col[i, j] = Σ_k ql[i, j, k]·dz` (kg m⁻² for ρ = 1 kg m⁻³, the
+Boussinesq reference density of the case).
+"""
+function column_liquid_water!(ql_col::AbstractMatrix, ql::AbstractArray{<:Real,3}, dz::Real)
+    fill!(ql_col, 0)
+    @inbounds for k in axes(ql, 3), j in axes(ql, 2), i in axes(ql, 1)
+        ql_col[i, j] += ql[i, j, k]
+    end
+    ql_col .*= dz
+    return ql_col
 end
 
 function run_stage!(c::SWModifiers, case, ::Val{:sw_modifiers}, dt)
     sw = case.bus.sw
+    # a radiation update (by any provider) has rewritten bus.sw since our
+    # last step: that is the new unmodified irradiance
+    sw == c.sw_out || copyto!(c.sw_base, sw)
+    copyto!(sw, c.sw_base)
     # L2: tree shade attenuates SW under vegetation
     apply_tree_shade!(sw, c.veg_mask, c.LAI; k_leaf = c.k_leaf)
     # R5: cloud shadow from column-integrated ql
-    ql_col = dropdims(sum(interior_view(tracer(case, :ql)); dims = 3) .* case.mesh.dz;
-                      dims = 3)
-    apply_cloud_shadow!(sw, ql_col, case.bus.sw_beam; k_ext = c.k_ext)
+    column_liquid_water!(c.ql_col, interior_view(tracer(case, :ql)), case.mesh.dz)
+    apply_cloud_shadow!(sw, c.ql_col, case.bus.sw_beam; k_ext = c.k_ext)
+    copyto!(c.sw_out, sw)
     return nothing
 end
 
-smoke_check(c::SWModifiers, case) =
-    ["shaded shortwave ≥ 0" => all(>=(0), case.bus.sw),
-     "park columns in the window" => any(c.veg_mask)]
+"""
+    sw_modifier_factor(c::SWModifiers, i, j) -> Float64
+
+The factor the modifiers apply to the unmodified irradiance in column
+`(i, j)` given the current column water `c.ql_col`: the Beer's-law shade
+`exp(−k_leaf·LAI)` on park columns times the cloud factor
+`tr + 0.15·(1 − tr)`, `tr = exp(−k_ext·ql_col)`.
+"""
+function sw_modifier_factor(c::SWModifiers, i, j)
+    shade = c.veg_mask[i, j] ? exp(-c.k_leaf * c.LAI[i, j]) : 1.0
+    tr = exp(-c.k_ext * c.ql_col[i, j])
+    return shade * (tr + 0.15 * (1 - tr))
+end
+
+function smoke_check(c::SWModifiers, case)
+    sw = case.bus.sw
+    fac = [sw_modifier_factor(c, i, j) for i in axes(sw, 1), j in axes(sw, 2)]
+    return ["shaded shortwave ≥ 0" => all(>=(0), sw),
+            "park columns in the window" => any(c.veg_mask),
+            # applied once to the radiation field, not compounded
+            "bus.sw = factor × unmodified irradiance (rel. 1e-12)" =>
+                all(isapprox.(sw, fac .* c.sw_base; rtol = 1e-12, atol = 1e-12)),
+            "unmodified irradiance kept ≥ bus.sw" => all(c.sw_base .>= sw)]
+end
 
 register!(SWModifiers)

@@ -64,7 +64,7 @@ const BC = Main.BerlinCase
               Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_slab,
                    :soil_urban, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :transport_weno,
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
-                   :cooling_prescribed, :traffic_heat])
+                   :cooling_prescribed, :traffic_heat, :moist_buoyancy])
         # every coupling names only real Aeolus submodules
         for C in BC.REGISTRY, m in BC.modules_used(C)
             @test isdefined(Aeolus, m) && getfield(Aeolus, m) isa Module
@@ -96,7 +96,7 @@ const BC = Main.BerlinCase
             (:microphysics, :micro_kessler),
             (:tracers, :pollutant),
             (:fog_dew, :fog_dew),
-            (:body_force, :geostrophic),
+            (:body_force, :geostrophic), (:body_force, :moist_buoyancy),
             (:post_predictor, :ibm), (:post_predictor, :veg_drag),
             (:surface_update, :surface_slab), (:surface_update, :soil_urban),
             (:surface_update, :snow_legacy),
@@ -120,13 +120,15 @@ const BC = Main.BerlinCase
 
     @testset "surface_flux stage: heat into the air equals the bus sensible flux" begin
         # Warm the surface so there is a flux; the stage must put exactly
-        # H·dt/(ρcp·dz) into the first layer of every column.
+        # H·dt/(ρcp·dz) into the first layer of every column, with the
+        # reference density ρ̄_1 of the case (#131; ρ = 1 before).
+        ρcp = BC.ref_density(case, 1) * Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS.cp_dry
         bus.Ts .= 300.0 .+ 5.0 .* sin.(1:Nx) .* cos.((1:Ny)')
         θ0 = copy(interior_view(sim.θ))
         slab = BC.find_coupling(case, :surface_slab)
         BC.run_stage!(slab, case, Val(:surface_flux), 2.0)
         Δθ = interior_view(sim.θ) .- θ0
-        E_air = sum(Δθ[:, :, 1]) * 1005.0 * mesh.dz          # J/m² × columns, ρ = 1
+        E_air = sum(Δθ[:, :, 1]) * ρcp * mesh.dz             # J/m² × columns
         E_sfc = sum(bus.sensible) * 2.0
         @info @sprintf("  surface_flux: air gain %.6e J/m², surface loss %.6e J/m², rel. diff %.1e",
                        E_air, E_sfc, abs(E_air - E_sfc) / abs(E_sfc))
@@ -139,7 +141,8 @@ const BC = Main.BerlinCase
     @testset "anthropogenic stage: traffic heat is Q_urban over the domain" begin
         θ0 = copy(interior_view(sim.θ))
         BC.run_stage!(BC.find_coupling(case, :traffic_heat), case, Val(:anthropogenic), 2.0)
-        Q = sum(interior_view(sim.θ) .- θ0) * 1005.0 * mesh.dz / 2.0 / (Nx * Ny)
+        ρcp = BC.ref_density(case, 1) * Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS.cp_dry
+        Q = sum(interior_view(sim.θ) .- θ0) * ρcp * mesh.dz / 2.0 / (Nx * Ny)
         @info @sprintf("  traffic heat: %.6f W/m² domain mean (expected 8)", Q)
         @test Q ≈ 8.0 rtol = 1e-9
         interior_view(sim.θ) .= θ0
