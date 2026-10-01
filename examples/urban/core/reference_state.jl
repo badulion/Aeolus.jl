@@ -44,19 +44,32 @@ struct CaseReference
 end
 
 """
+    initial_θ(cfg) -> (x, y, z) -> θ
+
+The initial potential temperature of the case,
+``θ(z) = θ_s + \\max(0, z - z_i)Γ`` (`cfg.θ_surface`, `cfg.θ_inversion_z`,
+`cfg.θ_lapse`). The one definition: `build_case` sets `sim.θ` from it and
+[`build_reference`](@ref) integrates the reference state from it.
+"""
+function initial_θ(cfg::CaseConfig)
+    θs, zi, Γ = cfg.θ_surface, cfg.θ_inversion_z, cfg.θ_lapse
+    return (x, y, z) -> θs + max(0, z - zi) * Γ
+end
+
+"""
     build_reference(cfg, mesh) -> CaseReference
 
 The hydrostatic reference state of the case: θ̄(z) is the initial
-potential-temperature profile ``θ_s + \\max(0, z - z_i)Γ`` of `cfg`
-sampled at the cell centres, integrated from `cfg.p_surface` with
+potential-temperature profile [`initial_θ`](@ref) of `cfg` sampled at
+the cell centres, integrated from `cfg.p_surface` with
 `Aeolus.Anelastic.reference_from_profile`, the dry-air constants of
 `Aeolus.MoistThermodynamics` and `g = cfg.g`.
 """
 function build_reference(cfg::CaseConfig, mesh)
     c = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS
     R_d = c.gas_constant / c.molmass_dry
-    θs, zi, Γ = cfg.θ_surface, cfg.θ_inversion_z, cfg.θ_lapse
-    state = Aeolus.Anelastic.reference_from_profile(mesh, z -> θs + max(0, z - zi) * Γ,
+    θ0 = initial_θ(cfg)
+    state = Aeolus.Anelastic.reference_from_profile(mesh, z -> θ0(0.0, 0.0, z),
                                                     cfg.p_surface;
                                                     R_d = R_d, cp = c.cp_dry, p₀ = c.p_ref,
                                                     g_accel = cfg.g)
@@ -92,8 +105,8 @@ function hydrostatic_check(cfg::CaseConfig, ref::CaseReference, mesh; nsub::Int 
     c = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS
     R_d = c.gas_constant / c.molmass_dry
     κ = R_d / c.cp_dry
-    θs, zi, Γ = cfg.θ_surface, cfg.θ_inversion_z, cfg.θ_lapse
-    θ(z) = θs + max(0, z - zi) * Γ
+    θ0 = initial_θ(cfg)
+    θ(z) = θ0(0.0, 0.0, z)
     f(z, p) = -cfg.g * p / (R_d * θ(z) * (p / c.p_ref)^κ)
     err = 0.0
     p, z = ref.p_surface, 0.0

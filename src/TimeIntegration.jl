@@ -181,7 +181,8 @@ function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
 end
 
 """
-    cfl_diagnostics(sim, constraints = CFLConstraints(); update_νt = sim.has_sgs)
+    cfl_diagnostics(sim, constraints = CFLConstraints(); update_νt = sim.has_sgs,
+                    sgs_active = sim.has_sgs)
 
 Report the time-step limit imposed by *each* process separately. Returns a
 `NamedTuple`:
@@ -206,12 +207,20 @@ before the diffusive limits are formed (`sim.νt` is a scratch buffer that
 `step!` overwrites anyway); pass `false` to reuse whatever is in
 `sim.νt`.
 
+`sgs_active` says whether an eddy viscosity acts on the step at all. It
+defaults to `sim.has_sgs` (the built-in Smagorinsky, `C_s ≠ 0`); pass
+`true` when `step!` is given an external `eddy_viscosity!` closure —
+which `step!` applies whatever `C_s` is — after filling `sim.νt` from that
+closure (with `update_νt = false`), so the diffusive limits see its ν_t
+even with `C_s = 0`.
+
 Ties are broken in the table order above, so a pure-molecular run where
 `dt_diff == dt_sgs` reports `:diffusive`.
 """
 function cfl_diagnostics(sim::BoussinesqSimulation{T},
                          c::CFLConstraints = CFLConstraints(T);
-                         update_νt::Bool = sim.has_sgs) where {T}
+                         update_νt::Bool = sim.has_sgs,
+                         sgs_active::Bool = sim.has_sgs) where {T}
     m = sim.mesh
     INF = T(Inf)
 
@@ -230,7 +239,7 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
         compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, sim.C_s)
         fill_halos!(sim.νt, sim.bcs)
     end
-    νt_max  = sim.has_sgs ? maximum(interior_view(sim.νt)) : zero(T)
+    νt_max  = sgs_active ? maximum(interior_view(sim.νt)) : zero(T)
     Δ²harm  = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
     ν_total = sim.ν + νt_max
     dt_diff = ν_total > 0 ? c.C_diffusive * Δ²harm / ν_total : INF
@@ -262,10 +271,15 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
 end
 
 """
-    adaptive_dt(sim, constraints; dt_prev = nothing, diagnostics = nothing)
+    adaptive_dt(sim, constraints; dt_prev = nothing, diagnostics = nothing,
+                scheme = nothing)
 
 The time step to take next: the smallest per-process limit from
-[`cfl_diagnostics`](@ref), then
+[`cfl_diagnostics`](@ref) — or, when `scheme` is an [`IMEXScheme`](@ref),
+the smallest limit of the processes that scheme treats *explicitly*
+(advection, buoyancy, Coriolis, scaled by [`explicit_cfl_factor`](@ref);
+the `dt_explicit` of [`imex_stability_limit`](@ref)), because the
+diffusive limits do not bind an implicit diffusion solve — then
 
   1. limited to `growth_max · dt_prev` when `dt_prev` is given, and
   2. clamped to `[dt_min, dt_max]`.
@@ -276,9 +290,10 @@ a usable number rather than propagating the `NaN`. Pass `diagnostics` to
 reuse a `cfl_diagnostics` result instead of recomputing it.
 """
 function adaptive_dt(sim::BoussinesqSimulation{T}, c::CFLConstraints;
-                     dt_prev = nothing, diagnostics = nothing) where {T}
+                     dt_prev = nothing, diagnostics = nothing,
+                     scheme = nothing) where {T}
     d  = diagnostics === nothing ? cfl_diagnostics(sim, c) : diagnostics
-    dt = d.dt_limiting
+    dt = scheme isa IMEXScheme ? first(_explicit_limit(d, scheme)) : d.dt_limiting
     isnan(dt) && return c.dt_min
     if dt_prev !== nothing
         dtp = T(dt_prev)
@@ -446,7 +461,9 @@ _fast_process_pairs(nt::NamedTuple) = Tuple(k => getfield(nt, k) for k in keys(n
 Production adaptive driver. One call:
 
  1. picks `dt` from [`adaptive_dt`](@ref) (or uses the `dt` you pass,
-    which is how you deliberately overshoot the stability limit);
+    which is how you deliberately overshoot the stability limit); with
+    `scheme = ARK2()` the pick uses only the explicit processes' limit,
+    since the diffusion is implicit;
  2. saves the prognostic state into a preallocated
     [`StateSnapshot`](@ref);
  3. takes the step with `stepper(sim, dt; body_force!, post_predictor!)` —
@@ -492,7 +509,7 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
                         max_velocity::Real = Inf,
                         verbose::Bool = false) where {T}
 
-    Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev) : T(dt)
+    Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev, scheme = scheme) : T(dt)
     take_step! = if stepper !== nothing
         stepper
     elseif scheme isa IMEXScheme
@@ -1069,7 +1086,8 @@ end
 # surface flux, sponge and the user body force. Mirrors Simulations.step!
 # with the viscous/SGS terms removed — those are the implicit half.
 function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
-                               body_force!::Union{Nothing,Function} = nothing) where {T}
+                               body_force!::Union{Nothing,Function} = nothing,
+                               momentum_advection = momentum_advect!) where {T}
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
@@ -1080,7 +1098,7 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
     fill!(sim.tθ.data, 0)
     sim.has_moisture && fill!(sim.tqv.data, 0)
 
-    momentum_advect!(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w)
+    momentum_advection(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w)
     advect_centered!(sim.tθ, sim.u, sim.v, sim.w, sim.θ)
     sim.has_moisture && advect_centered!(sim.tqv, sim.u, sim.v, sim.w, sim.qv)
 
@@ -1106,15 +1124,21 @@ end
 
 # Freeze ν_eff = ν + νt (momentum) and ν + νt/Prₜ (scalars) at the start
 # of the step — the standard lagged-coefficient linearization; the
-# implicit operator stays linear and SPD.
-function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T}) where {T}
-    if !sim.has_sgs
+# implicit operator stays linear and SPD. νt is the Smagorinsky closure,
+# or `eddy_viscosity!(νt, u, v, w)` when given (the same rule as `step!`).
+function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
+                            eddy_viscosity! = nothing) where {T}
+    if !sim.has_sgs && eddy_viscosity! === nothing
         return (T(sim.ν), T(sim.ν))
     end
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
-    compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, sim.C_s)
+    if eddy_viscosity! === nothing
+        compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, sim.C_s)
+    else
+        eddy_viscosity!(sim.νt, sim.u, sim.v, sim.w)
+    end
     fill_halos!(sim.νt, sim.bcs)
     ws.ν_mom  === nothing && (ws.ν_mom  = similar(sim.νt.data))
     ws.ν_scal === nothing && (ws.ν_scal = similar(sim.νt.data))
@@ -1226,7 +1250,8 @@ end
 """
     step_imex!(sim, dt, scheme::IMEXScheme; body_force! = nothing,
                post_predictor! = nothing, workspace = imex_workspace(sim),
-               tol = 1e-10, maxit = 200)
+               tol = 1e-10, maxit = 200,
+               momentum_advection = momentum_advect!, eddy_viscosity! = nothing)
 
 Advance `sim` by `dt` with a semi-implicit IMEX scheme
 ([`ARK2`](@ref) or [`Rosenbrock2`](@ref)):
@@ -1247,6 +1272,12 @@ contributes to the explicit tendency, `post_predictor!(sim, Δt_stage)`
 runs after the implicit solve and before the projection, so a velocity
 correction it applies is folded into a divergence-free result.
 
+The two operator keywords are `step!`'s as well, so a driver can pass
+the same keywords to either: `momentum_advection(tu, tv, tw, u, v, w)`
+is the (explicit) momentum-advection operator, and `eddy_viscosity!(νt,
+u, v, w)`, when given, replaces the Smagorinsky closure in the frozen
+`ν_eff` (it is called even with `C_s = 0`, as in `step!`).
+
 Notes and limitations:
 
   * The implicit operator is `∇·(ν_eff ∇·)` with `ν_eff` face-averaged
@@ -1266,7 +1297,9 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
                     body_force!::Union{Nothing,Function} = nothing,
                     post_predictor!::Union{Nothing,Function} = nothing,
                     workspace::IMEXWorkspace = imex_workspace(sim),
-                    tol::Real = 1e-10, maxit::Integer = 200) where {T}
+                    tol::Real = 1e-10, maxit::Integer = 200,
+                    momentum_advection::F = momentum_advect!,
+                    eddy_viscosity!::E = nothing) where {T, F, E<:Union{Nothing,Function}}
     Δt = T(dt)
     γ  = T(scheme.γ)
     δ  = T(scheme.δ)
@@ -1277,11 +1310,12 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     ws.total_iterations = 0
     ws.max_residual = zero(T)
 
-    νm, νs = _freeze_viscosity!(sim, ws)
+    νm, νs = _freeze_viscosity!(sim, ws, eddy_viscosity!)
     _copy_fields!(ws.state0, sim, names)
 
     # ---- stage 1: (I - γΔt D) U₁ = uⁿ + γΔt E(uⁿ) ------------------------
-    _explicit_tendencies!(sim, γ * Δt; body_force! = body_force!)
+    _explicit_tendencies!(sim, γ * Δt; body_force! = body_force!,
+                          momentum_advection = momentum_advection)
     _copy_tendencies!(ws.aux, sim, names)                 # E(uⁿ)
     for name in names
         f = getfield(sim, name)
@@ -1303,7 +1337,8 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     end
 
     # ---- stage 2 --------------------------------------------------------
-    _explicit_tendencies!(sim, Δt; body_force! = body_force!)   # E(U₁) → sim.t*
+    _explicit_tendencies!(sim, Δt; body_force! = body_force!,
+                          momentum_advection = momentum_advection)   # E(U₁) → sim.t*
     for name in names
         f = getfield(sim, name)
         _combine4!(f, one(T), getfield(ws.state0, name),
@@ -1323,7 +1358,9 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
                     body_force!::Union{Nothing,Function} = nothing,
                     post_predictor!::Union{Nothing,Function} = nothing,
                     workspace::IMEXWorkspace = imex_workspace(sim),
-                    tol::Real = 1e-10, maxit::Integer = 200) where {T}
+                    tol::Real = 1e-10, maxit::Integer = 200,
+                    momentum_advection::F = momentum_advect!,
+                    eddy_viscosity!::E = nothing) where {T, F, E<:Union{Nothing,Function}}
     Δt  = T(dt)
     γ   = T(scheme.γ)
     a21 = T(scheme.a21)
@@ -1336,12 +1373,13 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     ws.total_iterations = 0
     ws.max_residual = zero(T)
 
-    νm, νs = _freeze_viscosity!(sim, ws)
+    νm, νs = _freeze_viscosity!(sim, ws, eddy_viscosity!)
     _copy_fields!(ws.state0, sim, names)
     k2set = _k2_set!(ws)
 
     # ---- k₁: (I - γΔt J) k₁ = Δt F(uⁿ) ----------------------------------
-    _explicit_tendencies!(sim, Δt; body_force! = body_force!)
+    _explicit_tendencies!(sim, Δt; body_force! = body_force!,
+                          momentum_advection = momentum_advection)
     _add_diffusion_tendencies!(sim, ws, νm, νs, names)
     for name in names
         k1 = getfield(ws.aux, name)
@@ -1359,7 +1397,8 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     sim.t = t0 + a21 * Δt
 
     # ---- k₂: (I - γΔt J) k₂ = Δt F(u+k₁) + c₂₁ k₁ ------------------------
-    _explicit_tendencies!(sim, Δt; body_force! = body_force!)
+    _explicit_tendencies!(sim, Δt; body_force! = body_force!,
+                          momentum_advection = momentum_advection)
     _add_diffusion_tendencies!(sim, ws, νm, νs, names)
     for name in names
         k2 = getfield(k2set, name)
@@ -1377,6 +1416,18 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     sim.t = t0 + Δt
 
     return sim
+end
+
+# The step limit of the processes an IMEX scheme treats explicitly
+# (advection, buoyancy, Coriolis) from a `cfl_diagnostics` result, and
+# which of them binds. Shared by `adaptive_dt(...; scheme)` and
+# `imex_stability_limit`. A NaN advective limit stays NaN.
+function _explicit_limit(d, scheme::IMEXScheme)
+    dt = d.dt_adv
+    limiter = :advective
+    if d.dt_buoy < dt; dt = d.dt_buoy; limiter = :buoyancy; end
+    if d.dt_cor  < dt; dt = d.dt_cor;  limiter = :coriolis; end
+    return (dt * oftype(dt, explicit_cfl_factor(scheme)), limiter)
 end
 
 """
@@ -1405,13 +1456,7 @@ the one that binds a fully explicit step, and `diagnostics` is the full
 function imex_stability_limit(sim::BoussinesqSimulation{T}, scheme::IMEXScheme;
                               constraints::CFLConstraints = CFLConstraints(T)) where {T}
     d = cfl_diagnostics(sim, constraints)
-    factor = T(explicit_cfl_factor(scheme))
-
-    dt_explicit = d.dt_adv
-    limiter = :advective
-    if d.dt_buoy < dt_explicit; dt_explicit = d.dt_buoy; limiter = :buoyancy; end
-    if d.dt_cor  < dt_explicit; dt_explicit = d.dt_cor;  limiter = :coriolis; end
-    dt_explicit *= factor
+    dt_explicit, limiter = _explicit_limit(d, scheme)
 
     dt_diffusive = min(d.dt_diff, d.dt_sgs)
     dt_fully_explicit = min(dt_explicit, dt_diffusive)

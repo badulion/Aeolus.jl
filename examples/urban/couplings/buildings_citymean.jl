@@ -265,7 +265,7 @@ end
 # air as vapour, LE·dt/L_v per column (apply_building_heat! converts with
 # the reference density ρ̄_k, the one the ledger integrates with).
 function budget!(c::CityMeanBuildings, case, l)
-    dt = case.cfg.dt
+    dt = l.dt
     add_surface!(l, :window_sun, c.bem.S, case.geom.sfc, dt)
     add_water!(l, :building_vapour, sum(c.bem.LE) * dt / _L_v / length(c.bem.LE))
     return nothing

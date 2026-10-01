@@ -168,7 +168,7 @@ run_stage!(c::GlassClass, case, ::Val{:anthropogenic}, dt) =
 function budget!(c::GlassClass, case, l)
     T = apply_glass_sw_transmission!(zeros(size(case.bus.sw)), case.geom.sfc, case.bus.sw;
                                      glazing = c.glazing)
-    add_surface!(l, :glass_transmission, -T, case.geom.sfc, case.cfg.dt)
+    add_surface!(l, :glass_transmission, -T, case.geom.sfc, l.dt)
     return nothing
 end
 

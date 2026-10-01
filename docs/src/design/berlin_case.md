@@ -73,8 +73,25 @@ default.
 | `report(c, case)` | an extra log line with each output record |
 | `smoke_variants(::Type{C})` | extra smoke-test configurations, a tuple of `NamedTuple`s (see [the smoke test](#Smoke-test-and-coverage-test)) |
 | `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run |
-| `sim_options(::Type{C}, cfg, mesh, opts)` | `BoussinesqSimulation` keywords (e.g. `solver`), before the core is built (see [numerics slots](#Numerics-slots)) |
-| `step_options(c, case)` | keywords added to every `step!` call (e.g. `momentum_advection`, `eddy_viscosity!`) |
+| `sim_options(::Type{C}, cfg, mesh, opts)` | keywords of the dynamical core's constructor (the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of a sound-proof core), before the core is built (see [numerics slots](#Numerics-slots)) |
+| `step_options(c, case)` | keywords added to every dynamics step, `step!` or `step_imex!` (e.g. `momentum_advection`, `eddy_viscosity!`) |
+| `incompatible_reason(::Type{C})` | why the `incompatible` pairs fail, appended to the selection error |
+
+Two slots drive the dynamics itself and have four more methods
+(#133, see [Dynamical core and time integration](#Dynamical-core-and-time-integration)):
+
+| method | meaning |
+| :-- | :-- |
+| `build_core(::Type{C}, cfg, mesh, ref, simkw)` | slot `:core`: construct the dynamical-core simulation (`case.sim`) on the case's reference state `ref` with the merged `sim_options` keywords `simkw`; a keyword it does not take is an error |
+| `next_dt(c, case)` | slot `:timestepper`: the length of the next step (default `cfg.dt`) |
+| `advance_dynamics!(c, case, dt)` | slot `:timestepper`: advance `case.sim` by `dt` with the composed `:body_force` / `:post_predictor` hooks and the numerics slots' `case.step_kwargs` (default `dynamics_step!`: one `step!`) |
+| `variable_dt(::Type{C})` | slot `:timestepper`: `true` if `next_dt` varies; `run_case!` then runs to the simulated time `nsteps · cfg.dt` |
+
+A keyword from `sim_options` or `step_options` is never dropped: every
+time stepper passes `case.step_kwargs` to the step it takes, and a core
+or stepper that cannot take a provider's keyword declares that provider
+`incompatible` (with `incompatible_reason`), so the selection fails
+with the reason instead.
 
 `selected_couplings(cfg)` checks the configuration: an unknown key, an
 unknown provider, an additive switch used on a slot coupling, a slot
@@ -87,11 +104,20 @@ crosses a multiple of 600 s, `floor(t_new/P) > floor(t_old/P)`;
 also fires on step 1. With `dt = 2 s` this is exactly the old
 `n % 300 == 0 || n == 1` (checked over a whole day in
 `test/berlin_case.jl`). With an adaptive `dt` the entry still fires
-once per period crossed, but the couplings that integrate over their
-interval, `buildings_citymean` and the surface exchange, advance by the
-nominal period `P` rather than the time elapsed since they last ran.
-That is exact only when `dt` divides `P`; the adaptive-dt issue (#133)
-has to pass the elapsed interval instead.
+once per period crossed, and the adaptive stepper caps `dt` at the
+shortest `cfg.cadence` period so that no firing is skipped. The surface
+exchange steps its surfaces (the soil columns of `ground_soil`
+included) forward by its period `P` and gives the held fluxes to the
+air; a step that runs past the end of a surface interval delivers them
+only up to that end and carries the rest of the step into the next
+interval (`air_delivery_time!`), so the air receives every interval's
+fluxes for exactly `P` (smoke check, 1e-9 P; with a fixed `dt` dividing
+`P` that is every step's `dt`, bit for bit). `buildings_citymean`
+advances its zone over the *next* radiation interval, which it cannot
+know under an adaptive `dt`; it uses the nominal `P`, so the zone and
+the air it heats disagree by less than one step per interval (≤ 10 s of
+600 s) and the difference does not accumulate. Every `budget!` books
+with `ledger.dt`, the current step's length, never `cfg.dt`.
 
 ## The stage loop
 
@@ -110,7 +136,7 @@ in the integer `order` their couplings declare.
 | `:microphysics` | `micro_kessler` (10) |
 | `:tracers` | `pollutant` (10) |
 | `:fog_dew` | `fog_dew` (10) |
-| dynamics: `step!` with `:body_force` / `:post_predictor` | `geostrophic` (10), `moist_buoyancy` (20) / `ibm` (10), `surface_exchange` drag (15), `veg_drag` (20); the `step_options` of the numerics slots |
+| dynamics: `advance_dynamics!` of the `:timestepper` provider (default one `step!`) with `:body_force` / `:post_predictor` | `geostrophic` (10), `moist_buoyancy` (20) / `ibm` (10), `surface_exchange` drag (15), `veg_drag` (20); the `step_options` of the numerics slots |
 | `:surface_update` | `surface_exchange` (10: collects `bus.sensible`; every surface period steps all surfaces, soil included), `snow_legacy` (30), `aq_chem` r_a / v_d refresh (90, every 30 s) |
 | `:column_tendency` | `column_radiation` (10) |
 | `:sanity` | the core finiteness check |
@@ -201,6 +227,7 @@ in summer, 1.30 in winter.
 | `fog_dew` | fog adjusted at `p̄_k` (`T = θ Π̄_k`); dew at `p_surface` with `ρ̄_1` |
 | `surface_slab` | `ρ̄_1 c_pd` and `ρ̄_1` in the bulk H and LE and their conversion to θ, qv; q_sat at `p_surface` |
 | `buildings_citymean`, `traffic_heat` | `ρ̄_k c_pd`, `ρ̄_k` for the release into level k |
+| the sound-proof cores (#133) | `case.ref.state` itself as the base state: the projection, buoyancy and advection weights are this ρ̄, θ̄ (`build_case` builds the reference before the core) |
 | the ledger | `ledger.ρ = ρ̄`: the water in the air is integrated with the density the couplings use, so the water ledger still closes |
 | `moist_buoyancy` | `Π̄_1`, `p̄_1` for the RH and dew point it reports |
 
@@ -243,14 +270,18 @@ options go under the coupling name in `options`.
 
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
-| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`) | `sim_options`: the `solver` of `BoussinesqSimulation` |
+| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
 | `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, the built-in closure with `cfg.C_s`), `:dynamic` (`sgs_dynamic`), `:mlsgs` (`sgs_mlsgs`) | `step_options`: `eddy_viscosity!` |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, option `scheme = :weno_z5`) | the `:transport` stage |
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
-`NamedTuple` of keywords for the `BoussinesqSimulation` constructor or
-for every `step!` call; two couplings may not set the same keyword.
+`NamedTuple` of keywords for the core's constructor or for every
+dynamics step (`step!`, or `step_imex!` under the IMEX steppers, which
+takes the same `momentum_advection` and `eddy_viscosity!`); two
+couplings may not set the same keyword. Which providers combine with the
+`:core` and `:timestepper` slots is in [Dynamical core and time
+integration](#Dynamical-core-and-time-integration).
 
 * **Pressure solvers.** All three solve the same 7-point Laplacian with
   the same boundary conditions (periodic, periodic, Neumann); the
@@ -307,6 +338,147 @@ alternatives stay options: none is more accurate for this case on this
 grid, and multigrid, MG-CG and the WENO-Z momentum advection each at
 least triple the cost of `step!` (107, 64 and 48 ms per step) and add
 roughly 50–150 % to a whole step.
+
+## Dynamical core and time integration
+
+Two exclusive slots select the dynamics (#133), both in
+`couplings/core_select.jl` and `couplings/timestepper.jl`:
+
+| slot | provider | src | what it is |
+| :-- | :-- | :-- | :-- |
+| `:core` | `:boussinesq` (default) | `Simulations.BoussinesqSimulation` | ∇·u = 0, buoyancy g(θ − θ₀)/θ₀ about the constant `cfg.θ₀` |
+| `:core` | `:anelastic` | `Anelastic.AnelasticSimulation` | ∇·(ρ̄u) = 0, buoyancy g(θ − θ̄)/θ̄, ρ̄-weighted advection and projection (Lipps & Hemler 1982) |
+| `:core` | `:pseudo_incompressible` | `Anelastic.PseudoIncompressibleSimulation` | ∇·(ρ̄θ̄u) = 0 (Durran 1989) |
+| `:timestepper` | `:fixed` (default) | `step!` | one forward-Euler projection step of `cfg.dt` |
+| `:timestepper` | `:adaptive` | `TimeIntegration.adaptive_dt`, `step_adaptive!` | CFL / diffusion / buoyancy limited step, growth ≤ 10 %, rollback and halving on failure; option `imex = true` steps with ARK2 and only the explicit limits bind |
+| `:timestepper` | `:imex` | `TimeIntegration.step_imex!(…, ARK2())` | implicit diffusion, explicit advection and hooks, a projection per stage, at `cfg.dt` |
+
+```julia
+cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # a sound-proof core brings its solver
+                 physics = Dict{Symbol,Any}(:core => :anelastic,
+                                            :pressure_solver => :density_weighted_cg))
+cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # 1 h of simulated time
+                 physics = Dict{Symbol,Any}(:timestepper => :adaptive),
+                 options = Dict{Symbol,Any}(:timestep_adaptive => (C_advective = 0.5, dt_max = 10.0)))
+```
+
+**The sound-proof cores** take the case's reference state as their
+base state: `case.ref.state`, built by `build_reference` (θ̄(z) =
+`initial_θ(cfg)` integrated hydrostatically from `cfg.p_surface` with
+the MoistThermodynamics constants, see [Reference
+state](#Reference-state-and-moist-buoyancy)), so there is one ρ̄(z) per
+case — the one the couplings convert fluxes with and the ledger
+integrates water with — the initial state has no buoyancy, and the flow
+starts as in the Boussinesq core. The dynamics hooks (IBM, canopy drag,
+geostrophic forcing, moist buoyancy, surface drag) touch only
+`sim.u/v/w/tu/tv/θ` and run unchanged. The projection is the core's own
+Jacobi-preconditioned CG solve of ∇·(W∇φ) = ∇·(W u*) (the
+`:pressure_solver` provider `:density_weighted_cg`, options `tol =
+1e-10`, `maxit = 500`), which is what makes them expensive: see the
+numbers below.
+
+**Tracers under a sound-proof core.** ∇·(W u) = 0 does not make ∇·u
+vanish (∇·u = −w ∂ ln W/∂z), so `scalar_advection` advects with the mass
+flux: ∂(W q)/∂t = −∇·(W u q), the scheme applied to (W/W_min) u and the
+increment scaled by W_min/W_k (`Anelastic.constraint_weights` gives the
+core's W). Σ W q is conserved exactly, the positivity limiter stays
+valid (the scaling is ≤ 1) and a uniform tracer stays uniform: in the
+smoke window, 24 s, max|q − 1| = 1.1e-11, against 5.8e-4 with the plain
+velocity (option `weighted = false`). On the anelastic core W = ρ̄ is
+the ledger's density, so the transport books no
+`density_redistribution` (exactly 0.0); on the pseudo-incompressible
+core W = ρ̄θ̄ and the θ̄ part of it is booked there (−1.4e-10 kg m⁻² in
+the smoke window).
+
+**The adaptive step** is chosen at the *start* of a case step
+(`next_dt`), so every stage — surface, transport, microphysics — uses
+the dt the dynamics covers. If `step_adaptive!` has to roll back and
+halve, the dynamics covers the rest of that dt in further pieces, so
+the case clock and the dynamics clock never disagree. `dt_max`
+(10 s) is capped at the shortest `cfg.cadence` period. The ledgers book
+with `ledger.dt`, the current step's length, not `cfg.dt`.
+
+**Numerics keywords under every stepper.** The `:fixed` stepper is
+`dynamics_step!` (`step!` with the hooks and `case.step_kwargs`). The
+`:adaptive` stepper hands `step_adaptive!` a stepper that calls `step!`
+(or `step_imex!` with `imex = true`) with `case.step_kwargs`, so every
+retried piece carries them; with an `eddy_viscosity!` closure (`sgs =
+:dynamic`, `:mlsgs`) its diffusive limit uses that closure's ν_t of the
+current flow (`sgs_cfl_diagnostics`), also with `C_s = 0`, since
+`step!` applies the closure whatever `C_s` is. `:imex` passes them to
+`step_imex!`, whose `momentum_advection` is the explicit operator and
+whose `eddy_viscosity!` supplies the frozen ν_eff. Tested with an MLSGS
+closure that is Smagorinsky plus a call counter: called once per step
+(fixed, IMEX) or twice (adaptive: the dt limit and the step), and the
+flow is bit for bit the plain run of each stepper.
+
+**Incompatible pairs** (declared, so selecting one is an error that
+says why, and the smoke matrix steers around them):
+
+| provider | incompatible with | why |
+| :-- | :-- | :-- |
+| `timestepper = :adaptive`, `:imex` | `core = :anelastic`, `:pseudo_incompressible` | `adaptive_dt`, `step_adaptive!`, `step_imex!` are typed on `BoussinesqSimulation` |
+| `core = :anelastic`, `:pseudo_incompressible` | `pressure_solver = :cosine_fft`, `:multigrid`, `:mg_cg` | those solve the constant-coefficient ∇²φ = ∇·u*, not the weighted projection; select `:density_weighted_cg` |
+| | `momentum_advection = :weno_z` | an unweighted operator; the core advects momentum in its W-weighted centred flux form (`:centered` passes no keyword to it) |
+| | `sgs = :dynamic`, `:mlsgs` | they act through `eddy_viscosity!`, which the sound-proof step does not take; the core's closure is the built-in Smagorinsky |
+| `pressure_solver = :density_weighted_cg` | `core = :boussinesq` | it solves only the weighted projection of the sound-proof cores |
+
+Behind the declarations, `build_core` of a sound-proof core rejects any
+`sim_options` keyword other than `tol` and `maxit`.
+
+**Measured** (flagship 64 × 64 × 32, 1000 m × 1000 m × 200 m,
+20 June 06:00–07:00, 1 h, first-call compilation included; #133,
+measured on the branch before it was merged with #129–#132 and #135,
+which changed the surface exchange, the radiation and the numerics; the
+table was not re-measured after the merge):
+
+| configuration | steps | wall (s) | dynamics (ms/step) | max\|Δ⟨θ⟩(z)\| vs Boussinesq/fixed |
+| :-- | --: | --: | --: | --: |
+| Boussinesq, fixed 2 s | 1800 | 165 | 19.6 | — |
+| anelastic, fixed 2 s | 1800 | 367 | 139.6 (CG ≈ 333 it.) | 0.0020 K |
+| pseudo-incompressible, fixed 2 s | 1800 | 364 | 136.9 | 0.0019 K |
+| Boussinesq, adaptive | 1480 | 151 | 25.1 | 0.0018 K |
+| Boussinesq, adaptive + ARK2 | 1460 | 349 | 163.9 | 0.0010 K |
+| Boussinesq, IMEX ARK2 at 2 s | 1800 | 334 | 124.7 | 0.0020 K |
+| *12:00–13:00:* Boussinesq, fixed 2 s | 1800 | 171 | 22.8 | — |
+| anelastic, fixed 2 s | 1800 | 371 | 142.8 (CG ≈ 331 it.) | 0.0036 K |
+| Boussinesq, adaptive | 1694 | 198 | — | 0.0004 K |
+
+Wall times are from runs sharing the machine with five others, so they
+compare only roughly; the step counts and profiles are exact.
+
+* The adaptive step saves 18 % of the steps in the morning hour and 6 %
+  at noon, with no retry in either; the step is 1.6–3.5 s (mean 2.43 s
+  in the morning, 2.13 s at noon, where the flow is stronger), bound by
+  advection (C = 0.5) in 98 % / 99.9 % of the steps and by the explicit
+  diffusion (ν = 2 m² s⁻¹ on dz = 6.25 m: 3.70 s) in the rest. The CFL
+  diagnostics cost about as much as the steps saved, so the wall time
+  is roughly unchanged.
+* IMEX buys no longer step here: at dx = 15.6 m, dz = 6.25 m the
+  diffusive limit is only 4 % above the advective one, so ARK2 is
+  bound by advection at nearly the same dt and costs twice as much per
+  step. It is the option for configurations where diffusion binds
+  (finer dz, larger ν); the smoke test shows it stable at dt = 12 s,
+  where the explicit step amplifies the 2Δ mode of θ.
+* In a 200 m deep domain the density changes by 2 % (Hρ ≈ 10.7 km), and
+  the sound-proof cores give the Boussinesq mean profile to 0.002 K
+  (morning) and 0.004 K (noon) after 1 h, at 2.2× the cost. They are there for deeper domains, not
+  for the flagship's physics.
+
+**Known limitations.**
+* The sound-proof cores take only the built-in Smagorinsky closure and
+  their own centred momentum advection (see the table above): their
+  step has no operator keywords.
+* `buildings_citymean` uses the nominal radiation period under an
+  adaptive `dt` (see [Cadences](#The-coupling-contract)).
+* `moist_buoyancy` adds `g (θ_ρ − θ)′/θ₀` with the constant `θ₀` on every
+  core; on a sound-proof core the dry buoyancy is about θ̄(z), a
+  difference of θ̄/θ₀ − 1 (< 1 % over the flagship depth).
+* Resolved since the PR was opened: the plain-velocity tracer transport
+  under a sound-proof core (now W-weighted, above), the stale-halo leak
+  that the adaptive stepper's CFL diagnostics used to hide (#132 refreshes
+  the halos in the transport itself), and the ledger density (ρ̄ since
+  #131).
 
 ## Adding a coupling
 
@@ -434,6 +606,7 @@ step:
 | `add_water!(l, term, m)` | `m` kg m⁻² of domain added to the air (negative: removed) |
 | `water_tracer!(l, :qi)` | count a new tracer as water in the air (not one that is part of another, like P3's rime mass) |
 | `ledger_water(case, q)` | ``Σ_k ρ_k Σ_{ij} q Δz / (N_x N_y)``, for measuring a change of a tracer |
+| `l.dt` | the length of the current step (s); use it, not `cfg.dt`, to turn the step's energy into a flux — they differ under the adaptive stepper |
 
 **Surface energy.** `:Rn` (net radiation into the surface), `:H`,
 `:LE`, `:G` (sensible, latent and ground heat flux out of it) and `:dS`
@@ -475,11 +648,14 @@ shows up as a water residual, so a coupling converts every flux with
 
 The incompressible core does not conserve that ρ̄-weighted water: ∇·u = 0
 conserves Σ q, so vapour carried up into thinner air loses ρ̄-weighted
-mass (an anelastic core, #133, would conserve Σ ρ̄ q). The transport
-stage therefore books its change of water in two parts
-(`ledger_water_split`): `transport`, the column-mean ρ̄ times its change
-of Σ q (zero for a conservative scheme; before #132 the halo leak), and
-`density_redistribution`, the rest. Over the 1 h flagship run
+mass. The transport stage therefore books its change of water in two
+parts (`ledger_water_split`): `transport`, the column-mean ρ̄ times its
+change of Σ q (zero for a conservative scheme; before #132 the halo
+leak), and `density_redistribution`, the rest. Under a sound-proof core
+(#133) the transport is W-weighted and conserves Σ W q, and the split is
+by that weight: `transport` is c Σ W dq (c = ρ̄_m/W_m), zero for a
+conservative scheme, and `density_redistribution` Σ(ρ̄_k − c W_k) dq,
+exactly 0 on the anelastic core (W = ρ̄). Over the 1 h flagship run
 (06:00–07:00, before #132's halo fix) with moist buoyancy on,
 `density_redistribution` is
 −8.1e-4 kg m⁻² (72 % of the slab's evaporation, 1.13e-3) and
@@ -864,7 +1040,11 @@ test file):
 4. one run per entry of every coupling's **`smoke_variants`**.
 
 A run that selects a coupling declared `incompatible` with an additive
-coupling switches that additive coupling off. Every run must finish
+coupling switches that additive coupling off; one incompatible with the
+default provider of another slot switches that slot to its first
+compatible provider (so `core = anelastic` runs with `pressure_solver =
+density_weighted_cg`, and that solver's own run with the anelastic
+core). Every run must finish
 without a blow-up, leave every field and tracer finite, pass every
 `smoke_check` of its couplings, and close the surface-energy ledger per
 class (1e-6 W m⁻²) and the water ledger (1e-12 kg m⁻²). The first run
@@ -881,7 +1061,9 @@ weno_z`, `pressure_solver = multigrid` and `mg_cg`, `sgs = dynamic` and
 `mlsgs`) and the scalar-advection variants (TENO5; WENO-Z7 with halo 4).
 Run on its own the test took about 66 s at #132, almost all of it
 first-call compilation (each run takes 0.3–1 s once compiled, the
-multigrid runs a few seconds).
+multigrid runs a few seconds). The `:core` and `:timestepper` slots of #133
+add six (anelastic, pseudo-incompressible, `pressure_solver =
+density_weighted_cg`, adaptive, IMEX, adaptive + ARK2): 18 runs.
 
 **`test/berlin_coverage.jl`** checks that every submodule of `Aeolus`
 is either listed in some registered coupling's `modules_used`, or in

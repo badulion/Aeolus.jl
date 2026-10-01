@@ -627,4 +627,28 @@ end
     @test d1.only.rel_ke == 0
 end
 
+@testset "constraint_weights: the W of ∇·(W u) = 0, and W-weighted tracer transport" begin
+    g = RegularGrid(; size = (8, 8, 16), extent = (800.0, 800.0, 4000.0), halo = (2, 2, 2))
+    ref = constant_stability_reference(g; N = 0.01, θ_surf = 300.0, p_surf = 1e5)
+    an = AnelasticSimulation(g; ref = ref)
+    psi = PseudoIncompressibleSimulation(g; ref = ref)
+    @test constraint_weights(an) == (ref.ρ̄c_pad, ref.ρ̄f_pad)
+    @test constraint_weights(psi) == (ref.Pc_pad, ref.Pf_pad)
+    # after a projection ∇·(W u) vanishes with these weights, so the flux
+    # form ∇·(W u q) of a uniform q does too, while ∇·(u q) does not
+    for sim in (an, psi)
+        set!(sim.θ, (x, y, z) -> sim.ref.θ̄[clamp(round(Int, z / g.dz + 0.5), 1, g.Nz)] +
+                                 0.5 * exp(-((x - 400)^2 + (z - 1000)^2) / 300^2))
+        for _ in 1:5
+            step!(sim, 5.0)
+        end
+        Wc, Wf = constraint_weights(sim)
+        d = Field(CellCenter(), g)
+        weighted_divergence!(d, sim.u, sim.v, sim.w, Wc, Wf, g)
+        Hz = g.Hz
+        @test maximum(abs, interior_view(d)) / maximum(Wc[Hz+1:Hz+g.Nz]) < 1e-8
+        @test max_divergence(sim) > 1e-6       # the plain divergence is not zero
+    end
+end
+
 end # @testset "Era II — Anelastic & pseudo-incompressible"
