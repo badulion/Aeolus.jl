@@ -30,7 +30,8 @@ end
 
 A built case: `cfg`, `mesh`, `sim` (the `BoussinesqSimulation`), `geom`
 ([`Geometry`](@ref)), `bus` ([`SurfaceBus`](@ref)), `tracers`
-([`TracerRegistry`](@ref)), `ledger`, the enabled `couplings` (registry
+([`TracerRegistry`](@ref)), `ledger`, the hydrostatic reference state
+`ref` ([`CaseReference`](@ref)), the enabled `couplings` (registry
 order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
 NetCDF `output` (or `nothing`), the `io` for log lines, the composed
 `step!` hooks, and `timing` (wall seconds per `(stage, coupling)`, see
@@ -44,6 +45,7 @@ mutable struct Case{M, S, G<:Geometry}
     bus::SurfaceBus
     tracers::TracerRegistry
     ledger::Ledger
+    ref::CaseReference
     couplings::Vector{AbstractCoupling}
     schedule::Dict{Symbol,Vector{ScheduleEntry}}
     clock::Clock
@@ -122,8 +124,14 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     Ts0, ΔTw = cfg.Ts0, cfg.Ts_water_offset
     @. bus.Ts = Ts0 + ΔTw * (geom.sfc == SURFACE_WATER)
 
+    # Hydrostatic reference p̄, ρ̄ (core/reference_state.jl); the ledger
+    # integrates the water in the air with the same ρ̄ the couplings use.
+    ref = build_reference(cfg, mesh)
+    ledger = Ledger()
+    ledger.ρ = copy(ref.ρ̄)
+
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time())
-    case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), Ledger(),
+    case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), ledger, ref,
                 AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
                 nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;))
 

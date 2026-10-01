@@ -89,8 +89,8 @@ end
 """
     seed_fog!(case, rng)
 
-Saturate the lowest three levels (``q_v = q_s(θ, p_k)`` on the fog/dew
-pressure profile), put ``q_l = 0.2 \\,(1 ± 0.1)`` g/kg there, and a little
+Saturate the lowest three levels (``q_v = q_s(T, \bar p_k)`` with
+``T = θ \bar Π_k`` on the case's hydrostatic reference state), put ``q_l = 0.2 \\,(1 ± 0.1)`` g/kg there, and a little
 rain, ``q_r ∈ [0, 5\\times10^{-5})``, in levels 2–3.
 """
 function seed_fog!(case, rng)
@@ -98,11 +98,10 @@ function seed_fog!(case, rng)
     ql = interior_view(BC.tracer(case, :ql))
     qr = interior_view(BC.tracer(case, :qr))
     θ = interior_view(case.sim.θ)
-    dz = case.mesh.dz
     for k in 1:3
-        p = 1.01325e5 * exp(-(k - 0.5) * dz / 8000.0)
+        p, Π = BC.ref_pressure(case, k), BC.ref_exner(case, k)
         for j in axes(qv, 2), i in axes(qv, 1)
-            qv[i, j, k] = Aeolus.MoistThermodynamics.saturation_specific_humidity(θ[i, j, k], p)
+            qv[i, j, k] = Aeolus.MoistThermodynamics.saturation_specific_humidity(θ[i, j, k] * Π, p)
             ql[i, j, k] = 2e-4 * (1 + 0.1 * (2 * rand(rng) - 1))
             k >= 2 && (qr[i, j, k] = 5e-5 * rand(rng))
         end

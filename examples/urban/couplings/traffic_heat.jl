@@ -48,6 +48,7 @@ function init!(c::TrafficHeat, case)
 end
 
 run_stage!(c::TrafficHeat, case, ::Val{:anthropogenic}, dt) =
-    add_traffic_heat!(case.sim, c.road, length(case.geom.sfc), dt; Q_urban = c.Q_urban)
+    add_traffic_heat!(case.sim, c.road, length(case.geom.sfc), dt; Q_urban = c.Q_urban,
+                      ρcp = ref_ρcp(case, 1))
 
 register!(TrafficHeat)

@@ -339,13 +339,14 @@ function build_geometry(cfg, mesh; io::IO = stdout)
     sm, sfc = surface_class_map(city, mesh; tag_walls = true)
 
     # Era III: a radiosity scene replaces the ray-cast sky-view factor.
-    # Geometry is static, so facets and view factors are built once.
-    # KNOWN (fixed by the shortwave-modifier issue): no `class_map` is
-    # passed, so park and water ground facets get street material.
+    # Geometry is static, so facets and view factors are built once. The
+    # ground facet of every open column takes the material of its surface
+    # class (park, water, street), see `scene_class_map`.
     cfg.verbose && @printf(io, "Computing sky-view factor... ")
     t_svf = time()
     heightmap = heightmap_from_solid_mask(sm)
-    scene = build_scene(mesh, heightmap; wall_subdivisions = cfg.wall_subdivisions)
+    scene = build_scene(mesh, heightmap; wall_subdivisions = cfg.wall_subdivisions,
+                        class_map = scene_class_map(sfc))
     vfac  = view_factors(scene)
     facet_col = Tuple{Int,Int}[f.col for f in scene.facets]
     svf = aggregate_to_grid(scene, vfac).svf
@@ -357,6 +358,24 @@ function build_geometry(cfg, mesh; io::IO = stdout)
     open_cols = findall(==(0), heightmap)
     return Geometry(city, sm, sfc, heightmap, scene, vfac, facet_col,
                     Matrix{Float64}(svf), wall_ids, open_cols)
+end
+
+"""
+    scene_class_map(sfc) -> Matrix{Int}
+
+The radiosity ground-material class (`Radiosity.URBAN_*`) of every
+column, from the surface-class map `sfc`. The `SURFACE_*` codes 1–4
+(street, roof, park, water) are the `URBAN_*` material indices, so they
+pass through. `SURFACE_WALL` marks a street cell next to a building so
+the 2-D slab can carry the wall heat load; the ground facet in that
+column is still street, so it maps to `URBAN_STREET`. `build_facets`
+reads the map only for open (unbuilt) columns.
+"""
+function scene_class_map(sfc::AbstractMatrix{UInt8})
+    return [c == SURFACE_PARK  ? URBAN_PARK  :
+            c == SURFACE_WATER ? URBAN_WATER :
+            c == SURFACE_ROOF  ? URBAN_ROOF  : URBAN_STREET
+            for c in sfc]
 end
 
 "Building height (m) per column: top of the highest solid cell."
