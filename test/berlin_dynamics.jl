@@ -177,8 +177,17 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
             @test abs(r.closure) < 1e-6
         end
         @test abs(BC.water_budget(case.ledger).residual) < 1e-12
-        @printf("  [adaptive] 24 s in %d steps (fixed: 12), dt %.2f–%.2f s, diffusive limit %.2f s, max CFL %.2f\n",
-                s.n, s.dt_min, s.dt_max, dt_diff, s.cfl_max)
+        # the surface exchange holds its fluxes over the 4 s surface
+        # period; steps that run past the end of an interval hand the rest
+        # of the step to the next interval, so the air receives every
+        # interval's fluxes for exactly 4 s (with the fixed 2 s step, no
+        # step runs past one)
+        se = BC.find_coupling(case, :surface_exchange)
+        @test se.n_split > 0
+        @test se.interval_err <= 1e-9 * se.P
+        @test BC.find_coupling(bous, :surface_exchange).n_split == 0
+        @printf("  [adaptive] 24 s in %d steps (fixed: 12), dt %.2f–%.2f s, diffusive limit %.2f s, max CFL %.2f; %d steps ran past a surface interval, delivered-time error %.1e s\n",
+                s.n, s.dt_min, s.dt_max, dt_diff, s.cfl_max, se.n_split, se.interval_err)
 
         # A failed step is rolled back and the dt covered in pieces: a
         # 64 s step (17× the diffusive limit) overshoots a 1.2 m/s velocity
