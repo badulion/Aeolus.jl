@@ -93,14 +93,44 @@ function timing_report(case)
     return String(take!(io))
 end
 
+"The enabled provider of the `:timestepper` slot, or `nothing` (plain `step!` at `cfg.dt`)."
+function timestepper(case)
+    for c in case.couplings
+        slot(typeof(c)) === :timestepper && return c
+    end
+    return nothing
+end
+
 """
-    step_case!(case, dt = case.cfg.dt) -> Bool
+    dynamics_step!(case, dt)
+
+One `step!` of the dynamical core over `dt` with the composed
+`:body_force` / `:post_predictor` hooks and the numerics slots'
+`case.step_kwargs`. The fixed time stepper (and the contract default of
+`advance_dynamics!`).
+"""
+dynamics_step!(case, dt) =
+    (step!(case.sim, dt; body_force! = case.body_force, post_predictor! = case.post_predictor,
+           case.step_kwargs...); nothing)
+
+"""
+    step_dt(case) -> dt
+
+The length (s) of the next step: `next_dt` of the `:timestepper`
+provider (`cfg.dt` for a fixed step; the CFL-limited step of the adaptive
+provider).
+"""
+step_dt(case) = (ts = timestepper(case); ts === nothing ? case.cfg.dt : next_dt(ts, case))
+
+"""
+    step_case!(case, dt = step_dt(case)) -> Bool
 
 Advance the case by one step of `dt` seconds through every stage.
 Returns `false` if the `:sanity` stage found non-finite state (the step
-is complete, but the run should stop).
+is complete, but the run should stop). The dynamics is advanced by the
+`:timestepper` provider's `advance_dynamics!` (default: one `step!`).
 """
-function step_case!(case, dt::Real = case.cfg.dt)
+function step_case!(case, dt::Real = step_dt(case))
     sim, clk = case.sim, case.clock
     clk.n += 1
     n = clk.n
@@ -114,8 +144,8 @@ function step_case!(case, dt::Real = case.cfg.dt)
         run_entries!(case, S, dt, n, t_old, t_new)
     end
     t0 = time_ns()
-    step!(sim, dt; body_force! = case.body_force, post_predictor! = case.post_predictor,
-          case.step_kwargs...)
+    ts = timestepper(case)
+    ts === nothing ? dynamics_step!(case, dt) : advance_dynamics!(ts, case, dt)
     case.timing[(:dynamics, :step!)] = get(case.timing, (:dynamics, :step!), 0.0) + (time_ns() - t0) * 1e-9
     run_entries!(case, :surface_update, dt, n, t_old, t_new)
     run_entries!(case, :column_tendency, dt, n, t_old, t_new)
@@ -134,22 +164,50 @@ function step_case!(case, dt::Real = case.cfg.dt)
 end
 
 """
+    last_step_dt(dt, remaining) -> dt
+
+The step to take when `remaining` seconds are left: `dt`, or all of
+`remaining` when it is no longer than `dt`, or half of it when it is
+shorter than `2dt` (so the run does not end on a sliver of a step).
+"""
+last_step_dt(dt, remaining) = remaining <= dt ? remaining : remaining < 2dt ? remaining / 2 : dt
+
+"""
     run_case!(case; nsteps = case.cfg.nsteps) -> case
 
 Open the output (unless `cfg.output_path === nothing`), run `nsteps`
 steps (stopping early on a blow-up), close the output and print the
 summary.
+
+With a variable-step `:timestepper` provider (`variable_dt`, e.g.
+`:adaptive`) `nsteps · cfg.dt` is instead the simulated time to reach:
+each step takes `step_dt(case)`, the last one shortened to land on it.
 """
 function run_case!(case; nsteps::Integer = case.cfg.nsteps)
     cfg, io = case.cfg, case.io
     cfg.output_path === nothing || open_output!(case)
     P = cadence_period(cfg, :output)
-    cfg.verbose && @printf(io, "Run: %d steps, %d output records, dt=%.0fs\n",
+    ts = timestepper(case)
+    variable = ts !== nothing && variable_dt(typeof(ts))
+    if cfg.verbose
+        variable ? @printf(io, "Run: %.0f s with a variable step (:%s), %d output records\n",
+                           nsteps * cfg.dt, provider(typeof(ts)), floor(Int, nsteps * cfg.dt / P)) :
+                   @printf(io, "Run: %d steps, %d output records, dt=%.0fs\n",
                            nsteps, floor(Int, nsteps * cfg.dt / P), cfg.dt)
-    case.clock.t_wall0 = time()
-    for _ in 1:nsteps
-        step_case!(case, cfg.dt) || break
     end
+    case.clock.t_wall0 = time()
+    n0 = case.clock.n
+    if variable
+        t_end = case.sim.t + nsteps * cfg.dt
+        while t_end - case.sim.t > 1e-9 * cfg.dt
+            step_case!(case, last_step_dt(step_dt(case), t_end - case.sim.t)) || break
+        end
+    else
+        for _ in 1:nsteps
+            step_case!(case, cfg.dt) || break
+        end
+    end
+    nsteps = case.clock.n - n0
     t_wall = time() - case.clock.t_wall0
     close_output!(case)
     if cfg.verbose

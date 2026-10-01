@@ -555,6 +555,77 @@ using Aeolus.Grids: interior, xnodes, znodes
                 "dt_diffusive = $(lim.dt_diffusive) s, speed-up = $(lim.speedup)×")
     end
 
+    @testset "adaptive_dt(...; scheme = ARK2()) drops the diffusive limit (#133)" begin
+        # Same diffusion-bound grid: an explicit step is limited by Δz²/ν,
+        # an IMEX step only by advection / buoyancy / Coriolis.
+        g = RegularGrid(; size = (16, 16, 32), extent = (200.0, 200.0, 20.0),
+                        halo = (2, 2, 2))
+        sim = BoussinesqSimulation(g; ν = 2.0)
+        set!(sim.u, (x, y, z) -> 5.0 + sin(2π * x / 200))
+        set!(sim.v, 1.0)
+        c = CFLConstraints()
+        lim = imex_stability_limit(sim, ARK2(); constraints = c)
+        dt_ex = adaptive_dt(sim, c)
+        dt_im = adaptive_dt(sim, c; scheme = ARK2())
+        @test dt_ex ≈ lim.dt_fully_explicit
+        @test dt_im ≈ lim.dt_explicit
+        @test dt_im / dt_ex ≈ lim.speedup
+        @test dt_im > 5 * dt_ex                         # ν = 2 on Δz = 0.625 m
+        # growth limiting and clamping still apply
+        @test adaptive_dt(sim, c; scheme = ARK2(), dt_prev = dt_ex) ≈ 1.1 * dt_ex
+        c2 = CFLConstraints(dt_max = dt_ex)
+        @test adaptive_dt(sim, c2; scheme = ARK2()) == dt_ex
+        # step_adaptive! with the scheme picks the IMEX limit and is stable there
+        ke0 = kinetic_energy(sim)
+        for _ in 1:3
+            _, dt, nretry = step_adaptive!(sim, c; scheme = ARK2())
+            @test nretry == 0
+            @test dt > 5 * dt_ex
+        end
+        @test max_divergence(sim) < 1e-10
+        @test kinetic_energy(sim) < ke0                 # viscous decay only
+        println("  [adaptive_dt] ν = 2, Δz = $(g.dz) m: explicit dt = $(dt_ex) s, " *
+                "IMEX dt = $(dt_im) s ($(round(dt_im / dt_ex; digits = 1))×)")
+    end
+
+    @testset "step_imex! takes step!'s operator keywords (#133)" begin
+        # A driver passes the same keywords to step! and step_imex!: the
+        # momentum-advection operator and the eddy-viscosity closure. The
+        # defaults are the built-in ones, so passing them explicitly is
+        # bit for bit the default step; a different operator / closure is
+        # actually used.
+        g = RegularGrid(; size = (12, 12, 12), extent = (120.0, 120.0, 60.0),
+                        halo = (2, 2, 2))
+        function mk()
+            sim = BoussinesqSimulation(g; ν = 0.5, C_s = 0.18, θ₀ = 300.0)
+            set!(sim.u, (x, y, z) -> 2.0 + sin(2π * x / 120) * cos(2π * z / 60))
+            set!(sim.v, (x, y, z) -> cos(2π * y / 120))
+            set!(sim.θ, (x, y, z) -> 300.0 + 0.01z + 0.1sin(2π * x / 120))
+            return sim
+        end
+        state(s) = (copy(interior_view(s.u)), copy(interior_view(s.v)),
+                    copy(interior_view(s.w)), copy(interior_view(s.θ)))
+        C_s = 0.18
+        smag!(νt, u, v, w) = Aeolus.Operators.compute_smagorinsky_νt!(νt, u, v, w, C_s)
+        for scheme in (ARK2(), Rosenbrock2())
+            ref = mk(); step_imex!(ref, 2.0, scheme)
+            a = mk(); step_imex!(a, 2.0, scheme; momentum_advection = Aeolus.Operators.momentum_advect!,
+                                 eddy_viscosity! = smag!)
+            @test state(a) == state(ref)                     # bitwise
+            # no momentum advection: u changes differently
+            b = mk(); step_imex!(b, 2.0, scheme; momentum_advection = (tu, tv, tw, u, v, w) -> nothing)
+            @test maximum(abs.(interior_view(b.u) .- interior_view(ref.u))) > 1e-3
+            # a closure that doubles νt is the one frozen into ν_eff
+            calls = Ref(0)
+            dbl!(νt, u, v, w) = (calls[] += 1; smag!(νt, u, v, w); interior_view(νt) .*= 2; nothing)
+            c = mk(); step_imex!(c, 2.0, scheme; eddy_viscosity! = dbl!)
+            @test calls[] == 1                                # once per step (frozen)
+            @test maximum(interior_view(c.νt)) ≈ 2 * maximum(interior_view(ref.νt))
+            @test interior_view(c.θ) != interior_view(ref.θ)
+            @test max_divergence(c) < 1e-10
+        end
+    end
+
     # =====================================================================
     # The two phases together
     # =====================================================================

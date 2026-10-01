@@ -977,4 +977,5 @@ end
     include("berlin_moist.jl")           # reference state, moist buoyancy, fog enthalpy (#131)
     include("berlin_chemistry.jl")       # NOx–O3–VOC on tracers, r_a-based dry / wet deposition (#135)
     include("berlin_numerics.jl")        # pressure solver, SGS, advection slots (#132)
+    include("berlin_dynamics.jl")        # core / timestepper slots: anelastic, adaptive, IMEX (#133)
 end

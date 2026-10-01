@@ -3,7 +3,9 @@
 # (`step_options`).
 #
 #   :centered (default) Operators.momentum_advect! — 2nd-order centred
-#             flux form, energy-conserving in space.
+#             flux form, energy-conserving in space. On a sound-proof core
+#             (#133) the centred operator is the core's own W-weighted
+#             flux form, which its step! applies without a keyword.
 #   :weno_z   AdvectionSchemes.momentum_advect_weno_z! — WENO-Z
 #             reconstruction of the transported component (order 5, halo
 #             3; order 7 needs halo 4): upwind-biased, dissipative, robust
@@ -13,14 +15,19 @@
     MomentumCentered
 
 Slot `:momentum_advection`, provider `:centered` (default): the built-in
-`momentum_advect!`.
+`momentum_advect!` (`step!`'s and `step_imex!`'s `momentum_advection`) on
+the Boussinesq core; on the anelastic / pseudo-incompressible cores their
+own ρ̄- / ρ̄θ̄-weighted centred flux form, which takes no keyword.
 """
 struct MomentumCentered <: AbstractCoupling end
 coupling_name(::Type{MomentumCentered}) = :momentum_centered
 slot(::Type{MomentumCentered}) = :momentum_advection
 provider(::Type{MomentumCentered}) = :centered
 modules_used(::Type{MomentumCentered}) = (:Operators,)
-step_options(c::MomentumCentered, case) = (momentum_advection = momentum_advect!,)
+step_options(c::MomentumCentered, case) = centered_momentum_options(case.sim)
+centered_momentum_options(::BoussinesqSimulation) = (momentum_advection = momentum_advect!,)
+# the sound-proof step advects momentum in its weighted centred flux form itself
+centered_momentum_options(::Aeolus.Anelastic.MassWeightedSimulation) = (;)
 
 """
     MomentumWENOZ
