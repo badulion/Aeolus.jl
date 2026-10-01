@@ -88,7 +88,7 @@ using ..Radiosity: Radiosity, RadiosityScene, ViewFactors, Facet, LongwaveRespon
                    ShortwaveSolution, longwave_response, solve_longwave,
                    solve_shortwave, set_temperature!
 import ..Radiosity: facet_temperatures, nfacets
-using LinearAlgebra: I, lu!
+using LinearAlgebra: I, lu!, mul!, dot, norm
 
 export ThermalMaterial, thermal_material, thermal_material_names,
        volumetric_heat_capacity, thermal_diffusivity, thermal_admittance,
@@ -927,7 +927,8 @@ Fields of interest after a step (per facet, W m⁻² of facet area):
 `lw_emission` (the emission `εσT⁴` it corresponds to) and
 `skin_increment` (the θ-weighted skin-temperature change the linearised
 fluxes were evaluated at). `facet_temperatures(u)` returns the skin
-temperatures.
+temperatures. `solve_iterations` and `solve_residual` report the last
+coupled solve (see [`step_urban_facets!`](@ref)).
 """
 mutable struct UrbanFacetScene{T<:AbstractFloat}
     scene::RadiosityScene{T}
@@ -939,6 +940,8 @@ mutable struct UrbanFacetScene{T<:AbstractFloat}
     lw_emission::Vector{T}
     skin_increment::Vector{T}
     L_sky::T
+    solve_iterations::Int
+    solve_residual::T
 end
 
 function UrbanFacetScene(scene::RadiosityScene{T}, vf::ViewFactors{T},
@@ -958,7 +961,7 @@ function UrbanFacetScene(scene::RadiosityScene{T}, vf::ViewFactors{T},
     end
     z = zeros(T, n)
     u = UrbanFacetScene{T}(scene, vf, fs, longwave_response(scene, vf),
-                           copy(z), copy(z), copy(z), copy(z), zero(T))
+                           copy(z), copy(z), copy(z), copy(z), zero(T), 0, zero(T))
     _sync_optics!(u)
     _sync_scene_temperatures!(u)
     return u
@@ -1044,7 +1047,8 @@ end
 """
     step_urban_facets!(u::UrbanFacetScene, forcing, dt; L_sky, sw = nothing,
                        sun = nothing, dni = 0, dhi = 0, samples = 2,
-                       coupling = :implicit, δT = 0.01, kwargs...) -> Vector{SurfaceFluxes}
+                       coupling = :implicit, solver = :iterative, tol = 1e-12,
+                       maxiter = 200, δT = 0.01, kwargs...) -> Vector{SurfaceFluxes}
 
 Advance every facet of `u` by `dt` seconds with the longwave exchange
 between facets treated **implicitly**, and return each facet's
@@ -1082,6 +1086,26 @@ step is affine in an extra imposed surface flux, ``x_i = a_i + b_i c_i``
 increment at once, and the columns are advanced with
 ``c_i = \\sum_{j≠i} G_{ij} x_j``.
 
+# Solving the coupled system
+
+`solver = :iterative` (the default) solves it matrix-free with restarted
+GMRES: each iteration is one product with the precomputed radiosity
+response `J` (``G\\,v = J\\,(∂E/∂T ∘ v)``), `O(n²)` work and `O(n)` extra
+memory, and no `n × n` matrix is formed or factorised per step. The
+system is strongly diagonally dominant — ``b_i`` is the skin warming per
+W m⁻² of extra flux (≲ 1/(4εσT³ + h + conduction)) and
+``\\sum_j |G_{ij}|`` is at most the longwave conductance towards the
+other facets, so ``b_i\\sum_{j≠i}|G_{ij}| < 1`` — and GMRES converges in
+a few iterations; it stops when the residual 2-norm is below
+`tol × max(‖a‖₂, 1 K)` and throws if `maxiter` products do not get there.
+The longwave at the start of the step is also evaluated from `J`
+(`Radiosity.solve_longwave(scene, vf, response)`), so a step costs
+`O(n²)`; only a change of emissivities refactorises (`O(n³)`, once).
+`solver = :direct` assembles the dense ``(n+m)^2`` matrix and LU-factorises
+it (`O(n³)` per step): the reference the test suite compares against, to
+`1e-10` K. `u.solve_iterations` and `u.solve_residual` report the last
+solve.
+
 What this buys, and why a lagged coupling is not enough: the longwave
 that facet `j` emits *extra* during the step, ``G_{\\cdot j}x_j``, is the
 longwave the other facets absorb. So the exchange conserves energy
@@ -1101,14 +1125,16 @@ function step_urban_facets!(u::UrbanFacetScene{T}, forcing, dt::Real;
                             sw::Union{Nothing, ShortwaveSolution} = nothing,
                             sun = nothing, dni::Real = 0, dhi::Real = 0,
                             samples::Int = 2, coupling::Symbol = :implicit,
-                            δT::Real = 0.01, kwargs...) where {T}
+                            solver::Symbol = :iterative, tol::Real = 1e-12,
+                            maxiter::Int = 200, δT::Real = 0.01, kwargs...) where {T}
     coupling in (:implicit, :lagged) ||
         throw(ArgumentError("step_urban_facets!: coupling must be :implicit or :lagged"))
     if coupling === :lagged
         lw, Qsw = _scene_radiation!(u, forcing, dt; L_sky, sw, sun, dni, dhi, samples)
         return _step_lagged!(u, forcing, lw, Qsw, dt; δT, kwargs...)
     end
-    sys = _prepare_scene_step(u, forcing, dt; L_sky, sw, sun, dni, dhi, samples, δT, kwargs...)
+    sys = _prepare_scene_step(u, forcing, dt; L_sky, sw, sun, dni, dhi, samples, δT,
+                              solver, tol, maxiter, kwargs...)
     x, _, _ = _solve_scene_step(sys)
     return _apply_scene_step!(u, sys, x)
 end
@@ -1125,7 +1151,9 @@ function _scene_radiation!(u::UrbanFacetScene{T}, forcing, dt; L_sky, sw, sun, d
     fs = u.facets
     _sync_optics!(u)
     _sync_scene_temperatures!(u)
-    lw = solve_longwave(u.scene, u.vf; L_sky = L_sky)
+    # the response is current (`_sync_optics!`): one O(n²) product, no LU
+    lw = all(f -> f.emissivity > 0, fs) ? solve_longwave(u.scene, u.vf, u.response; L_sky = L_sky) :
+                                          solve_longwave(u.scene, u.vf; L_sky = L_sky)
     Qsw = _incident_shortwave(u, sw, sun, dni, dhi, samples)
     u.L_sky = T(L_sky)
     for i in 1:n
@@ -1160,8 +1188,9 @@ struct _SceneStep{T, F}
     forcing::F
     dt::T
     lw::Radiosity.LongwaveSolution{T}
-    G::Matrix{T}
-    dEdT::Vector{T}
+    J::Matrix{T}          # longwave response dN/dE (shared with the scene, not copied)
+    dEdT::Vector{T}       # G = J diag(dEdT); never formed on the iterative path
+    Gii::Vector{T}
     N0::Vector{T}
     outers::Vector{ColumnBoundary{T}}
     fl0s::Vector{SurfaceFluxes{T}}
@@ -1175,6 +1204,19 @@ struct _SceneStep{T, F}
     node::Vector{Int}
     area::Vector{T}
     q::Vector{T}
+    solver::Symbol
+    tol::T
+    maxiter::Int
+    iterations::Base.RefValue{Int}
+    residual::Base.RefValue{T}
+end
+
+# out = G_off v = J (dEdT ∘ v) - diag(G) v, with `tmp` as scratch: O(n²)
+function _offdiag_exchange!(out, s::_SceneStep, v, tmp)
+    tmp .= s.dEdT .* v
+    mul!(out, s.J, tmp)
+    out .-= s.Gii .* v
+    return out
 end
 
 function _prepare_scene_step(u::UrbanFacetScene{T}, forcing, dt::Real;
@@ -1182,7 +1224,12 @@ function _prepare_scene_step(u::UrbanFacetScene{T}, forcing, dt::Real;
                              L_sky::Real = _sky_irradiance(forcing),
                              sw::Union{Nothing, ShortwaveSolution} = nothing,
                              sun = nothing, dni::Real = 0, dhi::Real = 0,
-                             samples::Int = 2, δT::Real = 0.01, kwargs...) where {T}
+                             samples::Int = 2, δT::Real = 0.01,
+                             solver::Symbol = :iterative, tol::Real = 1e-12,
+                             maxiter::Int = 200, kwargs...) where {T}
+    solver in (:iterative, :direct) ||
+        throw(ArgumentError("step_urban_facets!: solver must be :iterative or :direct"))
+    tol > 0 || throw(ArgumentError("step_urban_facets!: tol must be positive"))
     lw, Qsw = _scene_radiation!(u, forcing, dt; L_sky, sw, sun, dni, dhi, samples)
     n = nfacets(u)
     length(node) == n || throw(ArgumentError("step_urban_facets!: `node` needs one entry per facet"))
@@ -1190,7 +1237,7 @@ function _prepare_scene_step(u::UrbanFacetScene{T}, forcing, dt::Real;
     σ = T(STEFAN_BOLTZMANN)
     J = u.response.dN_dE
     dEdT = T[4 * f.emissivity * σ * f.T_skin^3 for f in fs]
-    G = J .* dEdT'
+    Gii = T[J[i, i] * dEdT[i] for i in 1:n]
     N0 = -lw.net_loss
     outers = Vector{ColumnBoundary{T}}(undef, n)
     fl0s = Vector{SurfaceFluxes{T}}(undef, n)
@@ -1209,8 +1256,8 @@ function _prepare_scene_step(u::UrbanFacetScene{T}, forcing, dt::Real;
         dLE[i] = (fl1.LE - fl0.LE) / T(δT)
         fl0s[i] = fl0
         F0i = u.sw_absorbed[i] + N0[i] - fl0.H - fl0.LE
-        Fp = G[i, i] - dH - dLE[i]
-        Fp < 0 || (Fp = min(G[i, i], -eps(T)))
+        Fp = Gii[i] - dH - dLE[i]
+        Fp < 0 || (Fp = min(Gii[i], -eps(T)))
         outers[i] = ColumnBoundary{T}(Ts, -Fp, F0i)
         # trial steps, state restored after each
         save = copy(f.column.T)
@@ -1232,9 +1279,10 @@ function _prepare_scene_step(u::UrbanFacetScene{T}, forcing, dt::Real;
             copyto!(f.column.T, save)
         end
     end
-    return _SceneStep{T, typeof(forcing)}(forcing, T(dt), lw, G, dEdT, N0, outers, fl0s, dLE, a, b, d,
-                                          F0, e, g, collect(Int, node), copy(u.vf.area),
-                                          T[f.interior.q for f in fs])
+    return _SceneStep{T, typeof(forcing)}(forcing, T(dt), lw, J, dEdT, Gii, N0, outers, fl0s, dLE,
+                                          a, b, d, F0, e, g, collect(Int, node), copy(u.vf.area),
+                                          T[f.interior.q for f in fs], solver, T(tol), maxiter,
+                                          Ref(0), Ref(zero(T)))
 end
 
 # Solve the facets (and interior nodes) of a prepared step. With nodes, pass
@@ -1245,17 +1293,25 @@ function _solve_scene_step(s::_SceneStep{T}; lhs::AbstractVector = T[], R::Abstr
                            pinned::AbstractVector{Bool} = falses(length(lhs)),
                            y::AbstractVector = zeros(T, length(lhs)),
                            Φ::AbstractVector = zeros(T, length(lhs))) where {T}
-    n = length(s.a); m = length(lhs)
+    m = length(lhs)
     length(R) == length(pinned) == length(y) == length(Φ) == m ||
         throw(ArgumentError("interior nodes: lhs, R, pinned, y and Φ must have one entry per node"))
     all(k -> 0 <= k <= m, s.node) || throw(ArgumentError("interior nodes: facet bound to a missing node"))
+    return s.solver === :direct ? _solve_scene_direct(s, lhs, R, pinned, y, Φ) :
+                                  _solve_scene_iterative(s, lhs, R, pinned, y, Φ)
+end
+
+# The reference: the dense (n+m)² system, LU-factorised (O((n+m)³)).
+function _solve_scene_direct(s::_SceneStep{T}, lhs, R, pinned, y, Φ) where {T}
+    n = length(s.a); m = length(lhs)
     M = zeros(T, n + m, n + m)
     rhs = zeros(T, n + m)
+    J, dEdT = s.J, s.dEdT
     @inbounds for i in 1:n
         M[i, i] = one(T)
         for j in 1:n
             i == j && continue
-            M[i, j] = -s.b[i] * s.G[i, j]
+            M[i, j] = -s.b[i] * (J[i, j] * dEdT[j])
         end
         rhs[i] = s.a[i]
     end
@@ -1278,7 +1334,7 @@ function _solve_scene_step(s::_SceneStep{T}; lhs::AbstractVector = T[], R::Abstr
         rhs[n + k] += A * (s.q[i] - s.F0[i])
         for j in 1:n
             j == i && continue
-            M[n + k, j] += A * s.e[i] * s.G[i, j]
+            M[n + k, j] += A * s.e[i] * (J[i, j] * dEdT[j])
         end
         if pinned[k]
             rhs[i] += s.d[i] * y[k]
@@ -1292,7 +1348,137 @@ function _solve_scene_step(s::_SceneStep{T}; lhs::AbstractVector = T[], R::Abstr
     x = sol[1:n]
     yy = T[pinned[k] ? T(y[k]) : sol[n + k] for k in 1:m]
     ΦΦ = T[pinned[k] ? sol[n + k] : T(Φ[k]) for k in 1:m]
+    s.iterations[] = 0
+    s.residual[] = zero(T)
     return x, yy, ΦΦ
+end
+
+# Matrix-free solve of the same system. Each node row is linear in its own
+# unknown given the facet exchange c = G_off x,
+#     Σ_{i∈k} w_i c_i + α_k u_k = ρ_k,     w_i = A_i e_i,
+# with u_k = y_k, α_k = lhs_k + Σ_{i∈k} A_i g_i for a free node and
+# u_k = Φ_k, α_k = -1 for a pinned one (whose y_k is given). Eliminating the
+# free nodes leaves a system in the facet increments alone,
+#     x_i - b_i c_i + d_i [k free] (Σ_{j∈k} w_j c_j) / α_k
+#         = a_i + d_i (pinned ? y_k : ρ_k / α_k),
+# with a unit diagonal (c_i excludes x_i). It is solved by GMRES, one
+# O(n²) product with J per iteration; the node unknowns follow from x.
+function _solve_scene_iterative(s::_SceneStep{T}, lhs, R, pinned, y, Φ) where {T}
+    n = length(s.a); m = length(lhs)
+    ρn = zeros(T, m); α = zeros(T, m)
+    for k in 1:m
+        ρn[k] = R[k] + (pinned[k] ? -lhs[k] * y[k] : Φ[k])
+        α[k] = pinned[k] ? -one(T) : T(lhs[k])
+    end
+    w = zeros(T, n)
+    for i in 1:n
+        k = s.node[i]
+        k == 0 && continue
+        A = s.area[i]
+        w[i] = A * s.e[i]
+        ρn[k] += A * (s.q[i] - s.F0[i])
+        pinned[k] ? (ρn[k] -= A * s.g[i] * y[k]) : (α[k] += A * s.g[i])
+    end
+    for k in 1:m
+        pinned[k] || α[k] != 0 ||
+            throw(ArgumentError("interior nodes: node $k is free with no heat capacity and no " *
+                                "facets (singular)"))
+    end
+    rhs = copy(s.a)
+    for i in 1:n
+        k = s.node[i]
+        k == 0 && continue
+        rhs[i] += s.d[i] * (pinned[k] ? T(y[k]) : ρn[k] / α[k])
+    end
+    c = zeros(T, n); tmp = zeros(T, n); sk = zeros(T, m)
+    function op!(out, v)
+        _offdiag_exchange!(c, s, v, tmp)
+        fill!(sk, zero(T))
+        @inbounds for i in 1:n
+            k = s.node[i]
+            k != 0 && !pinned[k] && (sk[k] += w[i] * c[i])
+        end
+        @inbounds for i in 1:n
+            k = s.node[i]
+            out[i] = v[i] - s.b[i] * c[i]
+            k != 0 && !pinned[k] && (out[i] += s.d[i] * sk[k] / α[k])
+        end
+        return out
+    end
+    x = copy(rhs)                          # the uncoupled columns as first guess
+    if n > 0
+        its, res = _gmres!(x, op!, rhs; tol = s.tol * max(norm(rhs), one(T)),
+                           restart = min(n, 30), maxiter = s.maxiter)
+        res <= s.tol * max(norm(rhs), one(T)) ||
+            error("step_urban_facets!: GMRES did not converge in $(s.maxiter) iterations " *
+                  "(residual $res K); raise `maxiter` or use `solver = :direct`")
+        s.iterations[] = its
+        s.residual[] = res
+    end
+    # the node unknowns from the converged exchange
+    _offdiag_exchange!(c, s, x, tmp)
+    fill!(sk, zero(T))
+    for i in 1:n
+        k = s.node[i]
+        k != 0 && (sk[k] += w[i] * c[i])
+    end
+    yy = T[pinned[k] ? T(y[k]) : (ρn[k] - sk[k]) / α[k] for k in 1:m]
+    ΦΦ = T[pinned[k] ? sk[k] - ρn[k] : T(Φ[k]) for k in 1:m]
+    return x, yy, ΦΦ
+end
+
+# Restarted GMRES (Saad & Schultz 1986) with modified Gram–Schmidt and
+# Givens rotations, for op!(out, v) = A v. Solves A x = b in place from the
+# initial `x` until ‖b - A x‖₂ ≤ tol (absolute) or `maxiter` products.
+# Returns (products used, true final residual ‖b - A x‖₂).
+function _gmres!(x::Vector{T}, op!, b::Vector{T}; tol::T, restart::Int,
+                 maxiter::Int) where {T}
+    n = length(b)
+    V = zeros(T, n, restart + 1)
+    H = zeros(T, restart + 1, restart)
+    cs = zeros(T, restart); sn = zeros(T, restart); gv = zeros(T, restart + 1)
+    r = zeros(T, n); wv = zeros(T, n)
+    its = 0
+    op!(wv, x); r .= b .- wv
+    β = norm(r)
+    while β > tol && its < maxiter
+        fill!(gv, zero(T)); gv[1] = β
+        V[:, 1] .= r ./ β
+        k = 0
+        for j in 1:restart
+            k = j
+            op!(wv, view(V, :, j)); its += 1
+            for i in 1:j                                  # modified Gram–Schmidt
+                H[i, j] = dot(view(V, :, i), wv)
+                wv .-= H[i, j] .* view(V, :, i)
+            end
+            H[j + 1, j] = norm(wv)
+            H[j + 1, j] > 0 && (V[:, j + 1] .= wv ./ H[j + 1, j])
+            for i in 1:j-1                                # previous rotations
+                t = cs[i] * H[i, j] + sn[i] * H[i + 1, j]
+                H[i + 1, j] = -sn[i] * H[i, j] + cs[i] * H[i + 1, j]
+                H[i, j] = t
+            end
+            ρh = hypot(H[j, j], H[j + 1, j])
+            cs[j] = H[j, j] / ρh; sn[j] = H[j + 1, j] / ρh
+            H[j, j] = ρh; H[j + 1, j] = zero(T)
+            gv[j + 1] = -sn[j] * gv[j]; gv[j] = cs[j] * gv[j]
+            (abs(gv[j + 1]) <= tol || its >= maxiter) && break
+        end
+        # x += V_k z with H[1:k, 1:k] z = g[1:k] (upper triangular)
+        z = zeros(T, k)
+        for i in k:-1:1
+            acc = gv[i]
+            for l in i+1:k
+                acc -= H[i, l] * z[l]
+            end
+            z[i] = acc / H[i, i]
+        end
+        mul!(x, view(V, :, 1:k), z, one(T), one(T))
+        op!(wv, x); r .= b .- wv                          # true residual
+        β = norm(r)
+    end
+    return its, β
 end
 
 # Advance every facet with the solved skin increments `x` (and node
@@ -1303,10 +1489,8 @@ function _apply_scene_step!(u::UrbanFacetScene{T}, s::_SceneStep{T}, x::Abstract
                             y::AbstractVector = T[]) where {T}
     fs = u.facets
     n = length(fs)
-    c = s.G * x
-    for i in 1:n
-        c[i] -= s.G[i, i] * x[i]
-    end
+    tmp = zeros(T, n)
+    c = _offdiag_exchange!(zeros(T, n), s, x, tmp)
     out = Vector{SurfaceFluxes{T}}(undef, n)
     Fo = zeros(T, n)
     for (i, f) in enumerate(fs)
@@ -1323,7 +1507,10 @@ function _apply_scene_step!(u::UrbanFacetScene{T}, s::_SceneStep{T}, x::Abstract
         f.Q_interior = -Fi
     end
     xa = u.skin_increment
-    u.lw_net .= s.N0 .+ s.G * xa
+    # lw_net = N0 + G xa (the full G, diagonal included)
+    tmp .= s.dEdT .* xa
+    mul!(u.lw_net, s.J, tmp)
+    u.lw_net .+= s.N0
     for (i, f) in enumerate(fs)
         u.lw_emission[i] = s.lw.emitted[i] + s.dEdT[i] * xa[i]
         Rn = u.sw_absorbed[i] + u.lw_net[i]
@@ -1331,6 +1518,8 @@ function _apply_scene_step!(u::UrbanFacetScene{T}, s::_SceneStep{T}, x::Abstract
         H = Rn - LE - Fo[i]
         out[i] = SurfaceFluxes{T}(Rn, H, LE, Fo[i], s.fl0s[i].τ, LE / surface_latent_heat(f))
     end
+    u.solve_iterations = s.iterations[]
+    u.solve_residual = s.residual[]
     _sync_scene_temperatures!(u)
     return out
 end
