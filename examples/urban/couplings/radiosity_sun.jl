@@ -8,10 +8,15 @@
 # inter-reflection and longwave trapping are all consequences of the
 # view-factor matrix.
 #
+# The ground facet of each open column carries the material of its
+# surface class (`scene_class_map` in core/geometry.jl, #128), so park
+# and water get their own albedo and emissivity here — including the
+# water's Fresnel zenith dependence, which the μ₀-dependent materials
+# below update at every radiation call.
+#
 # KNOWN (fixed by later issues, kept for bit-for-bit):
 #   * sky longwave is taken from the surface, L_sky = 0.95 σ T̄s⁴
 #     (column-radiation issue);
-#   * no class_map in the scene (shortwave-modifier issue);
 #   * one temperature per column is pushed onto every facet of that
 #     column and the column's facet fluxes are collapsed back by the area
 #     density (UrbanFacetScene issue).
@@ -93,6 +98,11 @@ function smoke_check(c::RadiositySun, case)
     bus, sw = case.bus, case.bus.swsol
     checks = ["surface shortwave ≥ 0" => all(>=(0), bus.sw),
               "surface longwave within 150–600 W/m²" => all(x -> 150 <= x <= 600, bus.lw)]
+    # every open column's ground facet has the material of its class
+    g = case.geom
+    cm = scene_class_map(g.sfc)
+    push!(checks, "ground facets carry their column's class material (park, water, street)" =>
+          all(f -> f.kind !== :ground || f.material == cm[f.col...], g.scene.facets))
     lw = bus.lwsol
     # the facet longwave solve closes: absorbed = emitted + sky in − escaping
     push!(checks, "longwave scene budget closes (rel. 1e-9)" =>

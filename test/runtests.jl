@@ -947,5 +947,6 @@ end
     include("berlin_case.jl")            # registry, stages, bus, tracers (#126)
     include("berlin_coverage.jl")        # every Aeolus module coupled, exempt or pending (#127)
     include("berlin_smoke.jl")           # every coupling and option, 12 steps, ledgers close (#127)
+    include("berlin_sw_modifiers.jl")    # tree shade / cloud shadow once per radiation field; scene class map (#128)
     include("berlin_moist.jl")           # reference state, moist buoyancy, fog enthalpy (#131)
 end

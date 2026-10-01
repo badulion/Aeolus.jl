@@ -144,13 +144,26 @@ needs.
   registration order, and every tracer with `output = true` is written to
   the NetCDF file. The core registers `qv`, `ql` (advected) and `qr`.
 * **Geometry** (`case.geom`): mask, surface classes, scene, view factors.
-  Couplings may add classes at `init!` (the glass coupling does).
+  Couplings may add classes at `init!` (the glass coupling does). The
+  scene is built with `class_map = scene_class_map(sfc)`, so the ground
+  facet of every open column has the material of its class (park, water,
+  street; wall-tagged cells are street ground).
 * **Reference state** (`case.ref`, see [below](#Reference-state-and-moist-buoyancy)):
   the hydrostatic `p̄`, `ρ̄`, `T̄`, `Π̄` per level. Every coupling that
   needs a pressure, converts a flux into a mixing-ratio or θ increment,
   or turns θ into T takes it from here (`ref_pressure`, `ref_density`,
   `ref_exner`, `surface_pressure`, `ref_ρcp`), never from a constant of
   its own.
+
+**Modifying `bus.sw`.** The radiation provider writes `bus.sw` only at
+the radiation cadence; the `:sw_modifiers` stage runs every step. A
+modifier must therefore act on the unmodified field, not on its own
+previous output. `sw_modifiers` keeps that field (`sw_base`), takes a
+new one whenever `bus.sw` differs from what it wrote on its previous
+step, and rebuilds `bus.sw = cloud(shade(sw_base))` each step. A second
+modifier added later belongs in the same pattern. Before #128 the tree
+shade and the cloud shadow multiplied `bus.sw` in place, so they
+compounded between radiation updates.
 
 ## Reference state and moist buoyancy
 
@@ -426,7 +439,8 @@ What the numbers say about the current (pre-#128/#129) physics:
 * **The park has negative net radiation in the morning sun** (−9.95
   W m⁻² while the streets get +327). This is the compounding tree shade
   of #128: `bus.sw` over the park is multiplied by exp(−0.5·LAI) every
-  step between radiation updates, so it is effectively zero.
+  step between radiation updates, so it is effectively zero. **Fixed in
+  #128**: see "After #128" below.
 * **H is negative everywhere** (the air heats the surfaces): the case
   starts with `Ts0 = 285 K` under air at θ = 293 K, and the slab's
   constant-coefficient flux (#129) is weak. The surfaces warm by storage
@@ -454,6 +468,44 @@ after the first call, 90 % after 12 steps). With a fog that stays, the
 compounding cloud shadow (#128) darkens the smoke window: domain Rn
 34.8 W m⁻² instead of 388.7, residual −53.2 W m⁻² (dew heat +60.5,
 window sun −6.9, glass −0.4) in summer and +5.5 in winter.
+
+### After #128 (shade applied once, radiosity class map)
+
+Same 1 h flagship configuration. The park shortwave (mean over the 511
+park columns) is 116.05 W m⁻² averaged over the hour, against 0.62
+before; the park / open-street ratio is 0.288–0.298 on every step
+(before: 0.298 on a radiation step, then 0.086, 0.025, 0.007, …, 0 to
+three decimals after 180 steps). The ratio is a little above
+exp(−0.5·2.5) = 0.2865 because the unshaded effective irradiance of the
+park columns is 0.4–4 % above that of the open streets (the park is less
+shaded by buildings in the low morning sun). Per class, W m⁻² over the
+hour:
+
+| class | Rn before | Rn after | ΔS after | dew heat after |
+| :-- | --: | --: | --: | --: |
+| park | −9.95 | 80.47 | 119.74 | 3.43 |
+| street | 327.47 | 327.63 | 350.21 | 0.28 |
+| water | 389.85 | 389.95 | 381.12 | — |
+| domain | 244.28 | 255.71 | 263.72 | 1.39 |
+
+The domain residual Rn − H − LE − G − ΔS is 17.07 W m⁻² (16.89 before);
+it is still the window sun, glass transmission and dew heat. The park and
+water ground facets now carry their own material in the radiosity solve
+(511 park and 2 water facets; before, all 3181 ground facets were
+street). For flat ground this changes the absorbed shortwave but not the
+effective irradiance `absorbed / (1 − α)` the slab receives, so the park
+shortwave at the first radiation step moves only from 99.409 to 99.427
+W m⁻²; the brighter park raises the reflected light on its neighbours
+(street 333.190 → 333.212).
+
+Around noon (900 steps, 11:45–12:15, otherwise the same flagship
+configuration) the park / open-street ratio is 0.2840–0.2860 on every
+step against exp(−1.25) = 0.2865, and the park shortwave is 234.83
+W m⁻² averaged over the half hour (1.36 before). Park Rn goes from
+−10.12 to +174.01 W m⁻²; domain Rn from 495.61 to 518.76.
+
+In the `:smoke` configuration the summer domain residual is −33.9 W m⁻²
+after #128.
 
 ## Smoke test and coverage test
 
@@ -507,6 +559,38 @@ code with comments and docstrings removed); reviewed indirect uses go in
 (the core's infrastructure and the Parallel / Backends / SpectralElement
 scaffolds), 30 pending.
 
+## Cost of per-facet surfaces (#138)
+
+The flagship radiosity scene has this many facets:
+
+| `wall_subdivisions` | facets | roof | wall | ground |
+|--:|--:|--:|--:|--:|
+| 1 | 5810 | 915 | 1714 | 3181 |
+| 2 | 7524 | 915 | 3428 | 3181 |
+| 4 | 10952 | 915 | 6856 | 3181 |
+
+The `:smoke` window has 314 facets.
+
+A coupling that gives each facet its own `UrbanFacetScene` column (#139)
+pays two costs:
+
+* **Once, at `init!`:** the longwave response ``J``. This is one LU,
+  9 s at 5810 facets and 18 s at 7524 on one BLAS thread (3 s at 5810 on
+  8 threads). ``J`` then stays resident, at 258 MB and 432 MB.
+* **Per step:** `step_urban_facets!` is matrix-free (GMRES, one ``O(n^2)``
+  product with ``J`` per iteration). It takes 0.31 s at 5810 facets and
+  0.47 s at 7524, on one thread, with 7 iterations. The dense LU it
+  replaced took 4.5 s and 9.3 s.
+
+Pass the radiation coupling's `bus.swsol` as `sw`, so the shortwave is
+not solved a second time.
+
+The response is rebuilt whenever a facet emissivity changes, for
+example under snow (#146). To avoid that, change emissivities only at
+the radiation cadence.
+
+Reproduce these numbers with `julia --project=. benchmarks/bench_urban_facets.jl [wall_subdivisions] [blas_threads]`.
+
 ## Validation of the refactor (#126)
 
 The refactor had to be bit-for-bit. On a 1 h run (`AEOLUS_NSTEPS=1800`,
@@ -534,8 +618,8 @@ later issue.
 
 | defect | file | fixed by |
 | :-- | :-- | :-- |
-| tree shade and cloud shadow multiply `bus.sw` in place every step, so they compound between radiation updates | `sw_modifiers.jl` | #128 |
-| no `class_map` in the radiosity scene (park/water facets get street material) | `core/geometry.jl` | #128 |
+| tree shade and cloud shadow multiply `bus.sw` in place every step, so they compound between radiation updates | `sw_modifiers.jl` | #128 (fixed) |
+| no `class_map` in the radiosity scene (park/water facets get street material) | `core/geometry.jl` | #128 (fixed) |
 | slab: constant C_h and U, flux clamps, roof fluxes into solid k = 1, no surface drag | `surface_slab.jl`, `fog_dew.jl` | #129 |
 | sky longwave from the surface temperature, prescribed −2 K/day cooling | `radiosity_sun.jl`, `cooling_prescribed.jl` | #130 |
 | `qr` sedimented but not advected; qv clamp | `micro_kessler.jl` | #143 |

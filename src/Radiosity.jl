@@ -2204,6 +2204,45 @@ function longwave_response(s::RadiosityScene{T}, vf::ViewFactors{T}) where {T}
     return LongwaveResponse{T}(J, ε .* X[:, n+1], ε)
 end
 
+"""
+    solve_longwave(scene, vf, r::LongwaveResponse; L_sky) -> LongwaveSolution
+
+The same [`LongwaveSolution`](@ref) as `solve_longwave(scene, vf; L_sky)`,
+evaluated from a precomputed [`longwave_response`](@ref) instead of a new
+factorisation: the net absorbed longwave is exactly linear in the emission,
+`N = J E + j^{sky} L_sky`, so one matrix–vector product (`O(n²)`) replaces
+the `O(n³)` LU of the direct solve. The other fields follow from `N` by
+Kirchhoff (`absorbed = εQ = N + E`, `B = E + (1-ε)Q`), which requires every
+facet emissivity to be positive.
+
+This is the longwave solve for a scene whose geometry and emissivities are
+fixed while the temperatures change every step (`UrbanSurface`'s facet
+scene). `r` must have been built with the scene's current emissivities.
+"""
+function solve_longwave(s::RadiosityScene{T}, vf::ViewFactors{T},
+                        r::LongwaveResponse{T}; L_sky::Real) where {T}
+    n = nfacets(s)
+    length(vf.F_sky) == n == length(r.emissivity) ||
+        error("solve_longwave: scene, view factors and response disagree on the facet count")
+    ε = facet_emissivities(s)
+    ε == r.emissivity ||
+        throw(ArgumentError("solve_longwave: the response was built with other emissivities " *
+                            "than the scene's; rebuild it with `longwave_response`"))
+    all(>(0), ε) ||
+        throw(ArgumentError("solve_longwave: a response-based solve needs every emissivity > 0"))
+    A = vf.area
+    σ = T(STEFAN_BOLTZMANN)
+    Ls = T(L_sky)
+    emitted = T[ε[i] * σ * s.facets[i].temperature^4 for i in 1:n]
+    from_sky = vf.F_sky .* Ls
+    absorbed = r.dN_dE * emitted .+ r.dN_dLsky .* Ls .+ emitted   # N + E = εQ
+    Q = absorbed ./ ε
+    B = emitted .+ (one(T) .- ε) .* Q
+    return LongwaveSolution{T}(B, Q, emitted, absorbed, B .- Q, from_sky,
+                               sum(A .* emitted), sum(A .* absorbed),
+                               sum(A .* from_sky), sum(A .* B .* vf.F_sky))
+end
+
 # =========================================================================
 # Coupling back to the LES surface scheme
 # =========================================================================
