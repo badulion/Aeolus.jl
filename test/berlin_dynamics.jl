@@ -325,5 +325,23 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
         d1 = Aeolus.TimeIntegration.cfl_diagnostics(case.sim, k)      # recomputes Smagorinsky
         @test d1.νt_max > 0
         @test isapprox(d4.νt_max, 4 * d1.νt_max; rtol = 1e-12)
+        # ... also with the built-in Smagorinsky off (C_s = 0): step! still
+        # applies the closure, so its ν_t must still bound the step
+        case0 = BC.build_case(smoke(physics = Dict(:timestepper => :adaptive, :sgs => :mlsgs),
+                                    options = Dict(:sgs_mlsgs => (fn = quad,)), C_s = 0.0);
+                              io = devnull)
+        @test !case0.sim.has_sgs
+        BC.step_case!(case0); BC.step_case!(case0)
+        k0 = BC.find_coupling(case0, :timestep_adaptive).constraints
+        d0 = BC.sgs_cfl_diagnostics(case0, k0)
+        m0 = case0.sim.mesh
+        Δ²harm = 1 / (1 / m0.dx^2 + 1 / m0.dy^2 + 1 / m0.dz^2)
+        @test d0.νt_max > 0
+        @test d0.νt_max == maximum(interior_view(case0.sim.νt))
+        @test isfinite(d0.dt_sgs)
+        @test d0.dt_diff ≈ k0.C_diffusive * Δ²harm / (case0.sim.ν + d0.νt_max)
+        @test d0.dt_diff < k0.C_diffusive * Δ²harm / case0.sim.ν       # shorter than molecular-only
+        @printf("  [adaptive, C_s = 0] closure νt_max = %.3e m²/s, dt_diff = %.3f s, dt_sgs = %.3f s\n",
+                d0.νt_max, d0.dt_diff, d0.dt_sgs)
     end
 end

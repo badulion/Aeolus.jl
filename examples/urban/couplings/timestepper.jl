@@ -153,7 +153,8 @@ end
 `cfl_diagnostics` of the case's core with the SGS viscosity of the
 selected closure: the `eddy_viscosity!` of `case.step_kwargs` fills
 `sim.νt` from the current flow when there is one (it is what the next
-step will use), otherwise the built-in Smagorinsky ν_t is recomputed.
+step will use, with or without `C_s ≠ 0`), otherwise the built-in
+Smagorinsky ν_t is recomputed.
 """
 function sgs_cfl_diagnostics(case, k)
     sim = case.sim
@@ -164,7 +165,9 @@ function sgs_cfl_diagnostics(case, k)
     end
     ev(sim.νt, sim.u, sim.v, sim.w)
     fill_halos!(sim.νt, sim.bcs)
-    return cfl_diagnostics(sim, k; update_νt = false)
+    # `step!` applies the closure whatever `C_s` is, so its ν_t limits
+    # the step even when the built-in Smagorinsky is off (`C_s = 0`)
+    return cfl_diagnostics(sim, k; update_νt = false, sgs_active = true)
 end
 
 function next_dt(c::AdaptiveStep, case)

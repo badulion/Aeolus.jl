@@ -181,7 +181,8 @@ function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
 end
 
 """
-    cfl_diagnostics(sim, constraints = CFLConstraints(); update_νt = sim.has_sgs)
+    cfl_diagnostics(sim, constraints = CFLConstraints(); update_νt = sim.has_sgs,
+                    sgs_active = sim.has_sgs)
 
 Report the time-step limit imposed by *each* process separately. Returns a
 `NamedTuple`:
@@ -206,12 +207,20 @@ before the diffusive limits are formed (`sim.νt` is a scratch buffer that
 `step!` overwrites anyway); pass `false` to reuse whatever is in
 `sim.νt`.
 
+`sgs_active` says whether an eddy viscosity acts on the step at all. It
+defaults to `sim.has_sgs` (the built-in Smagorinsky, `C_s ≠ 0`); pass
+`true` when `step!` is given an external `eddy_viscosity!` closure —
+which `step!` applies whatever `C_s` is — after filling `sim.νt` from that
+closure (with `update_νt = false`), so the diffusive limits see its ν_t
+even with `C_s = 0`.
+
 Ties are broken in the table order above, so a pure-molecular run where
 `dt_diff == dt_sgs` reports `:diffusive`.
 """
 function cfl_diagnostics(sim::BoussinesqSimulation{T},
                          c::CFLConstraints = CFLConstraints(T);
-                         update_νt::Bool = sim.has_sgs) where {T}
+                         update_νt::Bool = sim.has_sgs,
+                         sgs_active::Bool = sim.has_sgs) where {T}
     m = sim.mesh
     INF = T(Inf)
 
@@ -230,7 +239,7 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
         compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, sim.C_s)
         fill_halos!(sim.νt, sim.bcs)
     end
-    νt_max  = sim.has_sgs ? maximum(interior_view(sim.νt)) : zero(T)
+    νt_max  = sgs_active ? maximum(interior_view(sim.νt)) : zero(T)
     Δ²harm  = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
     ν_total = sim.ν + νt_max
     dt_diff = ν_total > 0 ? c.C_diffusive * Δ²harm / ν_total : INF

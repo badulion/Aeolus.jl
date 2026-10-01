@@ -404,7 +404,8 @@ with `ledger.dt`, the current step's length, not `cfg.dt`.
 (or `step_imex!` with `imex = true`) with `case.step_kwargs`, so every
 retried piece carries them; with an `eddy_viscosity!` closure (`sgs =
 :dynamic`, `:mlsgs`) its diffusive limit uses that closure's ν_t of the
-current flow (`sgs_cfl_diagnostics`). `:imex` passes them to
+current flow (`sgs_cfl_diagnostics`), also with `C_s = 0`, since
+`step!` applies the closure whatever `C_s` is. `:imex` passes them to
 `step_imex!`, whose `momentum_advection` is the explicit operator and
 whose `eddy_viscosity!` supplies the frozen ν_eff. Tested with an MLSGS
 closure that is Smagorinsky plus a call counter: called once per step
