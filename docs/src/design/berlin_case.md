@@ -349,16 +349,16 @@ Two exclusive slots select the dynamics (#133), both in
 | `:core` | `:boussinesq` (default) | `Simulations.BoussinesqSimulation` | ∇·u = 0, buoyancy g(θ − θ₀)/θ₀ about the constant `cfg.θ₀` |
 | `:core` | `:anelastic` | `Anelastic.AnelasticSimulation` | ∇·(ρ̄u) = 0, buoyancy g(θ − θ̄)/θ̄, ρ̄-weighted advection and projection (Lipps & Hemler 1982) |
 | `:core` | `:pseudo_incompressible` | `Anelastic.PseudoIncompressibleSimulation` | ∇·(ρ̄θ̄u) = 0 (Durran 1989) |
-| `:timestepper` | `:fixed` (default) | `step!` | one forward-Euler projection step of `cfg.dt` |
-| `:timestepper` | `:adaptive` | `TimeIntegration.adaptive_dt`, `step_adaptive!` | CFL / diffusion / buoyancy limited step, growth ≤ 10 %, rollback and halving on failure; option `imex = true` steps with ARK2 and only the explicit limits bind |
+| `:timestepper` | `:fixed` | `step!` | one forward-Euler projection step of `cfg.dt`; the stepper of the sound-proof cores |
+| `:timestepper` | `:adaptive` (default) | `TimeIntegration.adaptive_dt`, `step_adaptive!` | CFL / diffusion / buoyancy limited step, growth ≤ 10 %, rollback and halving on failure; option `imex = true` steps with ARK2 and only the explicit limits bind |
 | `:timestepper` | `:imex` | `TimeIntegration.step_imex!(…, ARK2())` | implicit diffusion, explicit advection and hooks, a projection per stage, at `cfg.dt` |
 
 ```julia
 cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # a sound-proof core brings its solver
                  physics = Dict{Symbol,Any}(:core => :anelastic,
-                                            :pressure_solver => :density_weighted_cg))
+                                            :pressure_solver => :density_weighted_cg,
+                                            :timestepper => :fixed))
 cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # 1 h of simulated time
-                 physics = Dict{Symbol,Any}(:timestepper => :adaptive),
                  options = Dict{Symbol,Any}(:timestep_adaptive => (C_advective = 0.5, dt_max = 10.0)))
 ```
 
@@ -464,6 +464,29 @@ compare only roughly; the step counts and profiles are exact.
   the sound-proof cores give the Boussinesq mean profile to 0.002 K
   (morning) and 0.004 K (noon) after 1 h, at 2.2× the cost. They are there for deeper domains, not
   for the flagship's physics.
+
+**The adaptive stepper is the default.** After the merge with #129–#132
+and #135 the fixed 2 s step is no longer safe. Measured on master
+(a630153, flagship grid, 1 h from 12:00, default couplings, the two
+steppers otherwise identical):
+
+| run | stepper | steps | dt min / mean / max (s) | wall (s) | outcome |
+| :-- | :-- | --: | :-- | --: | :-- |
+| summer, 20 June | fixed 2 s | 1800 | 2 / 2 / 2 | 259 | completed |
+| summer, 20 June | adaptive | 2157 | 0.76 / 1.67 / 3.23 | 312 | completed |
+| winter, 15 Jan | fixed 2 s | 141 | 2 / 2 / 2 | — | **blows up**: θ ∈ [−95, 587] K at step 141, `fog_dew` stops on a negative temperature |
+| winter, 15 Jan | adaptive | 3378 | 0.70 / 1.07 / 2.69 | 426 | completed, θ ∈ [273.0, 277.3] K |
+
+In summer the two agree at 13:00 to under 1 % (domain H 80.0 / 79.5,
+LE 10.3 / 10.3 W m⁻², Ts 300.08 / 300.09 K, the same interval-mean Rn
+466.17 W m⁻²) and both close the energy (≤ 1e-10 W m⁻²) and water
+(≤ 2e-14 kg m⁻²) ledgers; the adaptive step costs 20 % more wall time,
+because at noon the flow now needs a step below 2 s (0.76 s at 13:00).
+In winter the fixed step is unstable within 5 minutes; this is the
+winter-flagship blow-up recorded under #130, and it is a time-step
+problem, not one of the physics. The fixed stepper stays for the
+sound-proof cores, which require it (the adaptive and IMEX steppers are
+typed on BoussinesqSimulation).
 
 **Known limitations.**
 * The sound-proof cores take only the built-in Smagorinsky closure and
@@ -1013,7 +1036,9 @@ problem): `CaseConfig(:winter)` from 12:00 on the 64 × 64 × 32 grid
 reaches θ ∈ [10, 353] K by step 118 and −700 K in the dynamics of step
 119, after which `fog_dew` stops on a negative temperature. The #127
 branch, without these couplings, does exactly the same (|u| grows from
-1.9 to 12 m s⁻¹ between steps 100 and 118).
+1.9 to 12 m s⁻¹ between steps 100 and 118). It was the fixed 2 s step:
+with the adaptive stepper, the default since then, the winter flagship
+runs (see "The adaptive stepper is the default" above).
 
 ## Smoke test and coverage test
 

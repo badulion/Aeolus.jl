@@ -61,7 +61,8 @@ function smoke_matrix(registry = BC.REGISTRY)
         # that the run did not ask for gives way: an addon is switched
         # off, a slot's default provider is replaced by the slot's first
         # provider (registry order) compatible with the rest (e.g. core =
-        # anelastic brings pressure_solver = density_weighted_cg along).
+        # anelastic brings pressure_solver = density_weighted_cg and
+        # timestepper = fixed along).
         selection() = [C for C in registry if (BC.slot(C) === :addon ? phys[name(C)] :
                        BC.provider(C) === get(phys, BC.slot(C), defaults[BC.slot(C)]))]
         clash(C, D) = hits(C, D) || hits(D, C)
@@ -76,7 +77,15 @@ function smoke_matrix(registry = BC.REGISTRY)
                         haskey(physics, name(X)) || (phys[name(X)] = false; changed = true)
                     elseif !haskey(physics, s)
                         others = [Y for Y in sel if BC.slot(Y) !== s]
-                        i = findfirst(P -> BC.slot(P) === s && !any(Y -> clash(P, Y), others), registry)
+                        fits(P, Ys) = BC.slot(P) === s && !any(Y -> clash(P, Y), Ys)
+                        i = findfirst(P -> fits(P, others), registry)
+                        # none fits everything: take one that fits what the run
+                        # asked for, and let the next pass move the slots that
+                        # now clash with it (pressure_solver = density_weighted_cg
+                        # brings a sound-proof core, which brings the fixed stepper)
+                        asked = [Y for Y in others if BC.slot(Y) === :addon ? haskey(physics, name(Y)) :
+                                                                              haskey(physics, BC.slot(Y))]
+                        i === nothing && (i = findfirst(P -> fits(P, asked), registry))
                         i === nothing && error("smoke run \"$label\": no provider of slot :$s is compatible with the selection")
                         phys[s] = BC.provider(registry[i]); changed = true
                     end
@@ -85,6 +94,9 @@ function smoke_matrix(registry = BC.REGISTRY)
             end
             changed || break
         end
+        sel = selection()
+        left = [(name(C), name(D)) for C in sel, D in sel if hits(C, D)]
+        isempty(left) || error("smoke run \"$label\": the selection still clashes: $left")
         opts = base_options()
         haskey(opts, :pollutant) && !any(C -> name(C) === :pollutant, registry) && delete!(opts, :pollutant)
         merge!(opts, options)

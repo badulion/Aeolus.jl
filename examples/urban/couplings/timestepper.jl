@@ -1,8 +1,9 @@
 # Time integration of the dynamics: slot `:timestepper`.
 #
 #   :fixed     one `step!` (forward-Euler projection) of cfg.dt per step
-#              (default; the step every core provides).
-#   :adaptive  TimeIntegration.step_adaptive!: the step length is the
+#              (the step every core provides; required by the sound-proof
+#              cores).
+#   :adaptive  (default) TimeIntegration.step_adaptive!: the step length is the
 #              CFL / diffusion / buoyancy limit of `adaptive_dt`, growth-
 #              limited; a step that fails (non-finite, divergence above
 #              tolerance, velocity above a ceiling) is rolled back and
@@ -41,17 +42,22 @@ const _SOUNDPROOF_REASON =
 """
     FixedStep
 
-Slot `:timestepper`, provider `:fixed` (default): one `step!(sim, dt)` of
+Slot `:timestepper`, provider `:fixed`: one `step!(sim, dt)` of
 the dynamical core per case step, `dt = cfg.dt`, with the numerics
 slots' step keywords ([`dynamics_step!`](@ref), the contract default of
 `advance_dynamics!`). Works with every core (`step!` dispatches on the
-simulation type).
+simulation type), so it is the stepper of the anelastic and
+pseudo-incompressible cores. Not the default: at the flagship's
+`cfg.dt = 2 s` the winter case is unstable (θ spans −95…587 K by
+step 141), and in summer the step exceeds the advective limit the
+adaptive stepper keeps to (it takes 1.67 s on average, 0.76 s by 13:00).
 """
 struct FixedStep <: AbstractCoupling end
 
 coupling_name(::Type{FixedStep}) = :timestep_fixed
 slot(::Type{FixedStep}) = :timestepper
 provider(::Type{FixedStep}) = :fixed
+is_default(::Type{FixedStep}) = false
 modules_used(::Type{FixedStep}) = (:TimeSteppers,)
 
 """
@@ -90,7 +96,7 @@ end
 """
     AdaptiveStep
 
-Slot `:timestepper`, provider `:adaptive`: `TimeIntegration.adaptive_dt`
+Slot `:timestepper`, provider `:adaptive` (default): `TimeIntegration.adaptive_dt`
 picks each step (`CFLConstraints` from the options `C_advective`,
 `C_diffusive`, `C_buoyancy`, `C_coriolis`, `dt_min`, `dt_max`,
 `growth_max`) and `step_adaptive!` takes it, rolling back and halving on
@@ -123,7 +129,6 @@ end
 coupling_name(::Type{<:AdaptiveStep}) = :timestep_adaptive
 slot(::Type{<:AdaptiveStep}) = :timestepper
 provider(::Type{<:AdaptiveStep}) = :adaptive
-is_default(::Type{<:AdaptiveStep}) = false
 modules_used(::Type{<:AdaptiveStep}) = (:TimeIntegration,)
 incompatible(::Type{<:AdaptiveStep}) = _SOUNDPROOF_CORES
 incompatible_reason(::Type{<:AdaptiveStep}) = _SOUNDPROOF_REASON

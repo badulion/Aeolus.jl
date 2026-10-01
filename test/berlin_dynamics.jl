@@ -1,7 +1,7 @@
 # Berlin case: dynamical-core and time-integration options (#133).
 #
 #   slot :core         :boussinesq (default) | :anelastic | :pseudo_incompressible
-#   slot :timestepper  :fixed (default) | :adaptive | :imex
+#   slot :timestepper  :adaptive (default) | :fixed | :imex
 #
 # and how they combine with the numerics slots of #132: every time
 # stepper carries the step! keywords (momentum advection, SGS closure);
@@ -30,7 +30,10 @@ smoke(; physics = Dict{Symbol,Any}(), options = Dict{Symbol,Any}(), kw...) =
 run_smoke(; kw...) = (case = BC.build_case(smoke(; kw...); io = devnull); BC.run_case!(case); case)
 
 "The physics selecting sound-proof core `core` (it brings its own pressure solver)."
-soundproof(core) = Dict{Symbol,Any}(:core => core, :pressure_solver => :density_weighted_cg)
+# a sound-proof core brings its solver and the fixed stepper (the adaptive default is typed on
+# BoussinesqSimulation)
+soundproof(core) = Dict{Symbol,Any}(:core => core, :pressure_solver => :density_weighted_cg,
+                                    :timestepper => :fixed)
 
 "The selection error for `physics`, or `nothing`."
 selection_error(physics) =
@@ -53,7 +56,7 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
         @test Set(slots[:core]) == Set([:boussinesq, :anelastic, :pseudo_incompressible])
         @test Set(slots[:timestepper]) == Set([:fixed, :adaptive, :imex])
         @test BC.default_provider(:core) === :boussinesq
-        @test BC.default_provider(:timestepper) === :fixed
+        @test BC.default_provider(:timestepper) === :adaptive
         for ts in (:adaptive, :imex), core in (:anelastic, :pseudo_incompressible)
             err = selection_error(merge(soundproof(core), Dict(:timestepper => ts)))
             @test err !== nothing
@@ -99,8 +102,10 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
                                                   (solver = CosineFFTPoissonSolver(mesh),))
     end
 
-    bous = run_smoke()
-    @testset "default: Boussinesq core, fixed step" begin
+    # the reference flow: Boussinesq core, fixed 2 s step (the sound-proof
+    # cores below run the fixed step, so they compare against it)
+    bous = run_smoke(physics = Dict(:timestepper => :fixed))
+    @testset "Boussinesq core, fixed step" begin
         @test bous.sim isa BoussinesqSimulation
         @test bous.clock.n == 12 && bous.sim.t == 24.0
         @test max_divergence(bous.sim) < 1e-12
@@ -266,7 +271,7 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
         # dt = 12 s is 1.6× the forward-Euler stability bound 2Δ²/(4ν)·…
         # (7.4 s here): the explicit step amplifies the 2Δ mode of θ and
         # the wind runs away; ARK2 with implicit diffusion does not.
-        ex = run_smoke(dt = 12.0, nsteps = 8)
+        ex = run_smoke(dt = 12.0, nsteps = 8, physics = Dict(:timestepper => :fixed))
         im = run_smoke(dt = 12.0, nsteps = 8, physics = Dict(:timestepper => :imex))
         ui(c) = maximum(abs, interior_view(c.sim.u))
         @test ui(ex) > 3.0                       # measured 6.8 m/s from ~1 m/s
