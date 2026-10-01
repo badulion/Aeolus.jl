@@ -537,9 +537,8 @@ after #128.
   surface balance agree.
 * **Roof-aware air level.** The forcing is the first non-solid cell of
   the column (`bus.k_air`), `z_ref = Δz/2` above the surface; the air
-  temperature is `θ − Γ_d z`, so the Monin–Obukhov solve compares the
-  skin with the air's potential temperature referred to the surface
-  height (roofs sit up to 190 m up). H goes into θ, E into qv of that
+  temperature is `θ Π̄_k` and the pressure `p̄_k` of the reference state
+  (#131; roofs sit up to 190 m up). H goes into θ, E into qv of that
   cell only: the smoke check counts writes into solid cells (0 in every
   run), and `test/berlin_surface_exchange.jl` checks that the stage
   changes nothing else, and that ``Σρc_pΔzΔθ = ΣHΔt`` (2e-11).
@@ -565,6 +564,11 @@ after #128.
   stays for #143).
 
 ### Measured (flagship, 64 × 64 × 32, dt = 2 s, 1 h)
+
+These runs predate the merge with #131. They used `T_air = θ − Γ_d z`
+(about 1.1 K below `θ Π̄_k` at the ground), an 8 km scale-height
+pressure and ρ = 1 for the air-side increments; the numbers have not
+been remeasured with the reference state.
 
 Two 1 h runs, from 06:00 and from 12:00 local on 20 June, each against
 the same run on the #127 branch (slab scheme). Domain means over

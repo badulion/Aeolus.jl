@@ -69,9 +69,10 @@ const BC = Main.BerlinCase
         @test all(==(0), Δθ[.!at_air]) && all(==(0), Δq[.!at_air])
         nsolid = count(I -> g.sm.mask[Hx+I[1], Hy+I[2], Hz+I[3]], CartesianIndices(Δθ))
         @test nsolid > 0
-        # energy and water: ρ c_p Δz Δθ = H Δt, ρ Δz Δq = E Δt (ρ = ledger density, 1)
-        E_air = sum(se.cp[I] * dz * Δθ[I, bus.k_air[I]] for I in CartesianIndices(bus.k_air))
-        W_air = sum(dz * Δq[I, bus.k_air[I]] for I in CartesianIndices(bus.k_air))
+        # energy and water: ρ̄_k c_p Δz Δθ = H Δt, ρ̄_k Δz Δq = E Δt (reference density, #131)
+        ρ̄(I) = BC.ref_density(case, bus.k_air[I])
+        E_air = sum(ρ̄(I) * se.cp[I] * dz * Δθ[I, bus.k_air[I]] for I in CartesianIndices(bus.k_air))
+        W_air = sum(ρ̄(I) * dz * Δq[I, bus.k_air[I]] for I in CartesianIndices(bus.k_air))
         E_sfc, W_sfc = sum(bus.H) * dt, sum(bus.E) * dt
         @info @sprintf("  surface_flux: air gain %.6e J/m², surface sensible %.6e J/m² (rel %.1e); water %.4e vs %.4e kg/m²",
                        E_air, E_sfc, abs(E_air - E_sfc) / abs(E_sfc), W_air, W_sfc)
@@ -146,9 +147,12 @@ const BC = Main.BerlinCase
         bus.Ts[I] = 280.0
         qv[I, k] = 0.009
         dt = 2.0
-        # the expected deposition, at the pressure of the roof's air cell
-        r = Aeolus.RadiationFog.dew_deposition(0.009, 280.0, fd.p_col[k], dt; dz = dz, ρ = 1.0, dew = 0.0)
-        r1 = Aeolus.RadiationFog.dew_deposition(0.009, 280.0, fd.p_col[1], dt; dz = dz, ρ = 1.0, dew = 0.0)
+        # the expected deposition, at the reference pressure and density of
+        # the roof's air cell (#131)
+        r = Aeolus.RadiationFog.dew_deposition(0.009, 280.0, BC.ref_pressure(case, k), dt;
+                                               dz = dz, ρ = BC.ref_density(case, k), dew = 0.0)
+        r1 = Aeolus.RadiationFog.dew_deposition(0.009, 280.0, BC.ref_pressure(case, 1), dt;
+                                                dz = dz, ρ = BC.ref_density(case, 1), dew = 0.0)
         BC.run_stage!(fd, case, Val(:fog_dew), dt)
         @test r.mass > 0 && r.mass != r1.mass
         @test bus.dew[I] ≈ r.mass rtol = 1e-12

@@ -35,10 +35,9 @@ Slot `:surface_exchange`, provider `:most` (default).
 * **Air level.** `bus.k_air` is the first non-solid level of each column,
   so roof fluxes go into the air above the roof. The forcing height is
   the centre of that cell above the surface, `z_ref = Δz/2`; the air
-  temperature is ``T = θ - Γ_d z`` at the cell's height `z` (the case's θ
-  is referred to the ground), so the Monin–Obukhov solve compares the
-  skin with ``θ - Γ_d z_{sfc}``, the air's potential temperature referred
-  to the surface height.
+  temperature and pressure are ``T = θ\\,\\bar Π_k`` and ``\\bar p_k`` of
+  the case's reference state (#131), the conversion every other coupling
+  uses.
 * **Cadence.** The surfaces are stepped every `period` seconds
   (`cfg.cadence[:surface]` if present, otherwise `cfg.cadence[:soil]`):
   on step 1 in `:surface_flux`, then in `:surface_update` on the step at
@@ -48,8 +47,8 @@ Slot `:surface_exchange`, provider `:most` (default).
   what the surface gave away when `dt` divides `period`.
 * **Air side**, every step in `:surface_flux`: ``Δθ = H\\,Δt/(ρ_k c_p Δz)``,
   ``Δq_v = E\\,Δt/(ρ_k Δz)`` in the first air cell, with ``ρ_k`` the
-  ledger density of that level (1 in the Boussinesq case; #131 sets a
-  reference profile) and ``c_p`` the moist heat capacity of that air.
+  reference density ``\\bar ρ_k`` of that level (`case.ref`, the density
+  the ledger integrates with) and ``c_p`` the moist heat capacity of that air.
 * **Momentum**, every step in `:post_predictor` (after the IBM): each
   first-air-cell velocity face is multiplied by ``1/(1 + Δt\\,u_*^2/(U\\,Δz))``
   (implicit, so stable for any `Δt`), the drag of the surface stress
@@ -176,18 +175,6 @@ function init!(c::SurfaceExchangeMOST, case)
     return nothing
 end
 
-"Air density of the ledger at level `k` (the Boussinesq case: 1)."
-function _ledger_rho(case, k)
-    l = case.ledger
-    isempty(l.ρ) && (l.ρ = ones(case.mesh.Nz))
-    return l.ρ[k]
-end
-
-# Pressure of the air cell (Pa): the isothermal 8 km scale-height profile
-# fog_dew uses (the Boussinesq core carries no pressure; #131 replaces it
-# with a reference state).
-_cell_pressure(z) = 1.01325e5 * exp(-z / 8000.0)
-
 """
     step_all_surfaces!(c, case)
 
@@ -206,13 +193,12 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         s === nothing && continue
         k = bus.k_air[i, j]
         q = qv[i, j, k]
-        z = (k - 0.5) * dz
         uc = (u[i, j, k] + u[mod1(i + 1, Nx), j, k]) / 2
         vc = (v[i, j, k] + v[i, mod1(j + 1, Ny), k]) / 2
         U = sqrt(uc^2 + vc^2)
         qa = PhasePartition(q)
-        T_air = θ[i, j, k] - dry_adiabatic_lapse_rate(qa) * z
-        p = _cell_pressure(z)
+        T_air = θ[i, j, k] * ref_exner(case, k)
+        p = ref_pressure(case, k)
         f = SurfaceForcing(; sw_down = bus.sw[i, j], lw_down = bus.lw[i, j], T_air = T_air,
                            q_air = q, U = U, p = p, z_ref = bus.z_ref[i, j])
         Q = c.pending[i, j] / P
@@ -266,7 +252,7 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
         i, j = Tuple(I)
         k = bus.k_air[I]
         sm.mask[Hx+i, Hy+j, Hz+k] && (nsolid += 1)
-        ρk = _ledger_rho(case, k)
+        ρk = ref_density(case, k)
         θ[i, j, k] += bus.H[I] * dt / (ρk * c.cp[I] * dz)
         qv[i, j, k] += bus.E[I] * dt / (ρk * dz)
         evap += bus.E[I] * dt
