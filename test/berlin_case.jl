@@ -68,7 +68,7 @@ const BC = Main.BerlinCase
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
                    :column_radiation, :cloud_shadow, :traffic_heat, :moist_buoyancy,
                    :pressure_fft, :sgs_smagorinsky, :momentum_centered,
-                   :core_boussinesq, :timestep_fixed])
+                   :core_boussinesq, :timestep_adaptive])
         # every coupling names only real Aeolus submodules
         for C in BC.REGISTRY, m in BC.modules_used(C)
             @test isdefined(Aeolus, m) && getfield(Aeolus, m) isa Module

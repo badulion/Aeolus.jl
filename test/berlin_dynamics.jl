@@ -1,7 +1,7 @@
 # Berlin case: dynamical-core and time-integration options (#133).
 #
 #   slot :core         :boussinesq (default) | :anelastic | :pseudo_incompressible
-#   slot :timestepper  :fixed (default) | :adaptive | :imex
+#   slot :timestepper  :adaptive (default) | :fixed | :imex
 #
 # and how they combine with the numerics slots of #132: every time
 # stepper carries the step! keywords (momentum advection, SGS closure);
@@ -30,7 +30,10 @@ smoke(; physics = Dict{Symbol,Any}(), options = Dict{Symbol,Any}(), kw...) =
 run_smoke(; kw...) = (case = BC.build_case(smoke(; kw...); io = devnull); BC.run_case!(case); case)
 
 "The physics selecting sound-proof core `core` (it brings its own pressure solver)."
-soundproof(core) = Dict{Symbol,Any}(:core => core, :pressure_solver => :density_weighted_cg)
+# a sound-proof core brings its solver and the fixed stepper (the adaptive default is typed on
+# BoussinesqSimulation)
+soundproof(core) = Dict{Symbol,Any}(:core => core, :pressure_solver => :density_weighted_cg,
+                                    :timestepper => :fixed)
 
 "The selection error for `physics`, or `nothing`."
 selection_error(physics) =
@@ -53,7 +56,7 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
         @test Set(slots[:core]) == Set([:boussinesq, :anelastic, :pseudo_incompressible])
         @test Set(slots[:timestepper]) == Set([:fixed, :adaptive, :imex])
         @test BC.default_provider(:core) === :boussinesq
-        @test BC.default_provider(:timestepper) === :fixed
+        @test BC.default_provider(:timestepper) === :adaptive
         for ts in (:adaptive, :imex), core in (:anelastic, :pseudo_incompressible)
             err = selection_error(merge(soundproof(core), Dict(:timestepper => ts)))
             @test err !== nothing
