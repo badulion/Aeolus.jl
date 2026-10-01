@@ -8,10 +8,13 @@
 #   :pseudo_incompressible  Anelastic.PseudoIncompressibleSimulation (Durran
 #                           1989) — the same with the weight ρ̄θ̄.
 #
-# The sound-proof cores take their base state from the case's own initial
-# sounding: θ̄(z) is the initial θ profile (`initial_θ`), integrated
-# hydrostatically from `p_surf`, so the initial state has no buoyancy and
-# the two cores start from the same flow.
+# The sound-proof cores take the case's reference state as their base
+# state: `case.ref.state` (core/reference_state.jl, #131), the initial θ
+# profile (`initial_θ`) integrated hydrostatically from `cfg.p_surface`
+# with the MoistThermodynamics constants. It is the same ρ̄(z) the
+# couplings convert their fluxes with and the ledger integrates water
+# with, so there is one reference state per case. The initial state has
+# no buoyancy and the cores start from the same flow.
 #
 # The dynamics hooks of the case (IBM, canopy drag, geostrophic forcing)
 # are duck-typed on `sim.u/v/w/tu/tv`, so they run unchanged on either
@@ -38,7 +41,7 @@ coupling_name(::Type{BoussinesqCore}) = :core_boussinesq
 slot(::Type{BoussinesqCore}) = :core
 provider(::Type{BoussinesqCore}) = :boussinesq
 modules_used(::Type{BoussinesqCore}) = (:Simulations,)
-build_core(::Type{BoussinesqCore}, cfg, mesh, simkw) = boussinesq_core(cfg, mesh; simkw...)
+build_core(::Type{BoussinesqCore}, cfg, mesh, ref, simkw) = boussinesq_core(cfg, mesh; simkw...)
 
 function smoke_check(c::BoussinesqCore, case)
     sim = case.sim
@@ -52,9 +55,9 @@ end
 Slot `:core`, provider `P ∈ (:anelastic, :pseudo_incompressible)`: the
 sound-proof cores of `Aeolus.Anelastic`, `AnelasticSimulation`
 (`∇·(ρ̄u) = 0`) and `PseudoIncompressibleSimulation` (`∇·(ρ̄θ̄u) = 0`). The
-base state is `reference_from_profile` of the case's initial θ(z) from
-the surface pressure `p_surf` (option, Pa, default 101 325). Options
-`tol` and `maxit` go to the density-weighted CG projection solver.
+base state is the case's reference state `case.ref.state`
+([`build_reference`](@ref): the initial θ(z) from `cfg.p_surface`).
+Options `tol` and `maxit` go to the density-weighted CG projection solver.
 
 The constraint the projection enforces is reported with every output
 record (`report`) and checked by the smoke test.
@@ -72,29 +75,15 @@ slot(::Type{<:MassWeightedCore}) = :core
 provider(::Type{MassWeightedCore{P}}) where {P} = P
 is_default(::Type{<:MassWeightedCore}) = false
 modules_used(::Type{<:MassWeightedCore}) = (:Anelastic,)
-default_options(::Type{<:MassWeightedCore}) = (p_surf = 101_325.0, tol = 1e-10, maxit = 500)
+default_options(::Type{<:MassWeightedCore}) = (tol = 1e-10, maxit = 500)
 build(C::Type{<:MassWeightedCore}, case, o) = C(o.tol)
-
-"""
-    case_reference_state(cfg, mesh; p_surf) -> Anelastic.ReferenceState
-
-The base state of the sound-proof cores: the initial θ(z) of `cfg`
-([`initial_θ`](@ref)) in discrete hydrostatic balance on `mesh`, from
-the surface pressure `p_surf` (Pa), with the case's gravity.
-"""
-function case_reference_state(cfg, mesh; p_surf::Real = 101_325.0)
-    θ0 = initial_θ(cfg)
-    return Aeolus.Anelastic.reference_from_profile(mesh, z -> θ0(0.0, 0.0, z), p_surf;
-                                                   g_accel = cfg.g)
-end
 
 _mass_weighted_type(::Type{AnelasticCore}) = Aeolus.Anelastic.AnelasticSimulation
 _mass_weighted_type(::Type{PseudoIncompressibleCore}) = Aeolus.Anelastic.PseudoIncompressibleSimulation
 
-function build_core(C::Type{<:MassWeightedCore}, cfg, mesh, simkw)
+function build_core(C::Type{<:MassWeightedCore}, cfg, mesh, ref, simkw)
     o = coupling_options(C, cfg)
-    ref = case_reference_state(cfg, mesh; p_surf = o.p_surf)
-    return _mass_weighted_type(C)(mesh; core_parameters(cfg)..., ref = ref,
+    return _mass_weighted_type(C)(mesh; core_parameters(cfg)..., ref = ref.state,
                                   buoyancy = true, tol = o.tol, maxit = o.maxit)
 end
 
@@ -113,6 +102,7 @@ function smoke_check(c::MassWeightedCore{P}, case) where {P}
     res = Aeolus.Anelastic.constraint_residual(sim)
     plain = max_divergence(sim)
     return ["the core is the $P MassWeightedSimulation" => sim isa _mass_weighted_type(typeof(c)),
+            "the base state is the case's reference state (case.ref.state)" => ref === case.ref.state,
             "θ̄(z) is the initial sounding" => maximum(abs.(ref.θ̄ .- θ0.(0.0, 0.0, zc))) < 1e-10,
             "the base state is in discrete hydrostatic balance (< 1e-8 Pa/m)" =>
                 Aeolus.Anelastic.max_hydrostatic_residual(ref) < 1e-8,

@@ -107,12 +107,6 @@ core_parameters(cfg::CaseConfig) = (
 boussinesq_core(cfg::CaseConfig, mesh; kw...) =
     BoussinesqSimulation(mesh; core_parameters(cfg)..., θ₀ = cfg.θ₀, moisture = false, kw...)
 
-"The initial potential temperature θ(z) = θ_surface + max(0, z − θ_inversion_z)·θ_lapse, as `(x, y, z) -> θ`."
-function initial_θ(cfg::CaseConfig)
-    θs, zi, Γ = cfg.θ_surface, cfg.θ_inversion_z, cfg.θ_lapse
-    return (x, y, z) -> θs + max(0, (z - zi)) * Γ
-end
-
 """
     build_case(cfg; io = stdout) -> Case
 
@@ -128,13 +122,19 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
     geom = build_geometry(cfg, mesh; io = io)
 
+    # Hydrostatic reference p̄, ρ̄ (core/reference_state.jl), built before
+    # the core: the sound-proof cores use it as their base state, the
+    # ledger integrates the water in the air with the same ρ̄ the couplings
+    # use. One reference state per case.
+    ref = build_reference(cfg, mesh)
+
     selected = selected_couplings(cfg)
     simkw = merge_keywords("BoussinesqSimulation",
                            (coupling_name(C) => sim_options(C, cfg, mesh, coupling_options(C, cfg))
                             for C in selected))
     icore = findfirst(C -> slot(C) === :core, selected)
     sim = icore === nothing ? boussinesq_core(cfg, mesh; simkw...) :
-                              build_core(selected[icore], cfg, mesh, simkw)
+                              build_core(selected[icore], cfg, mesh, ref, simkw)
     set!(sim.θ, initial_θ(cfg))
     u0 = cfg.u0
     set!(sim.u, (x, y, z) -> u0)
@@ -143,9 +143,6 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     Ts0, ΔTw = cfg.Ts0, cfg.Ts_water_offset
     @. bus.Ts = Ts0 + ΔTw * (geom.sfc == SURFACE_WATER)
 
-    # Hydrostatic reference p̄, ρ̄ (core/reference_state.jl); the ledger
-    # integrates the water in the air with the same ρ̄ the couplings use.
-    ref = build_reference(cfg, mesh)
     ledger = Ledger()
     ledger.ρ = copy(ref.ρ̄)
 

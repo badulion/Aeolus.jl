@@ -33,7 +33,7 @@
 # Dynamics contract (#133), used only by the providers of the two
 # dynamics slots:
 #
-#   slot :core         build_core(::Type{C}, cfg, mesh, simkw) -> the dynamical-core simulation
+#   slot :core         build_core(::Type{C}, cfg, mesh, ref, simkw) -> the dynamical-core simulation
 #   slot :timestepper  next_dt(c, case)                 -> dt (s) of the next step
 #                      advance_dynamics!(c, case, dt)   -> advance case.sim by dt
 #                      variable_dt(::Type{C})           -> Bool: run_case! runs to a time
