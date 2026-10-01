@@ -15,8 +15,8 @@
 #   * OH is prescribed, OH_max × J(NO2)/J(NO2, overhead); the mechanism has
 #     no HOx budget;
 #   * J(NO2) is the clear-sky value everywhere: no shading, no clouds;
-#   * T and p per level: the level-mean θ over air cells, and the 8 km
-#     scale-height pressure of fog_dew.jl (#131 brings a reference state);
+#   * T and p per level: the level-mean θ over air cells times the
+#     reference Exner function, and the reference pressure p̄ (#131);
 #   * r_a is computed here from the first air cell with
 #     SurfaceExchange.solve_surface_layer and a per-class roughness equal
 #     to the one #129 (PR #158) gives its surfaces. Once that PR is in,
@@ -145,7 +145,7 @@ function build(::Type{<:AQChem}, case, o)
     cls = geom.sfc
     kind = [_AQ_SURFACE_KIND[clamp(Int(cls[i, j]), 1, 6)] for i in 1:Nx, j in 1:Ny]
     z0m = [Float64(o.z0m[clamp(Int(cls[i, j]), 1, 6)]) for i in 1:Nx, j in 1:Ny]
-    p_col = [1.01325e5 * exp(-(k - 0.5) * mesh.dz / 8000.0) for k in 1:Nz]
+    p_col = copy(ref_pressure(case))
     # emissions → ppb m/s at the surface
     F_NOx = emission_ppb_flux(o.nox_street, 0.046)            # as NO2 mass
     F_VOC = emission_ppb_flux(o.isoprene_park, 0.06812)       # isoprene C5H8
@@ -168,7 +168,7 @@ function _aq_sun!(c::AQChem, case)
     return c
 end
 
-# level-mean temperature over the air cells: T = θ (p/p₀)^(R/cp)
+# level-mean temperature over the air cells: T = θ Π̄
 function _aq_temperature!(c::AQChem, case)
     θ = interior_view(case.sim.θ)
     for k in axes(θ, 3)
@@ -178,7 +178,7 @@ function _aq_temperature!(c::AQChem, case)
             s += θ[i, j, k]; n += 1
         end
         θk = n > 0 ? s / n : case.cfg.θ₀
-        c.T_col[k] = θk * (c.p_col[k] / 1e5)^0.2857
+        c.T_col[k] = θk * ref_exner(case, k)
     end
     return c
 end

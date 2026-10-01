@@ -611,8 +611,10 @@ Every step in `:chemistry`, in this order:
    scaled by J(NO2). Both are order-of-magnitude estimates, not a
    Berlin inventory.
 2. `apply_photochemistry!` with the clear-sky `j_NO2(μ₀)` of the current
-   sun, OH prescribed as 5 × 10⁶ cm⁻³ × J/J_max, and the level-mean T
-   and the 8 km scale-height p per level.
+   sun, OH prescribed as 5 × 10⁶ cm⁻³ × J/J_max, T = θ̄ Π̄ (θ̄ the
+   level mean over air cells) and the reference p̄ per level (`case.ref`,
+   #131). The numbers below were measured before the switch from the 8 km
+   scale-height pressure, which differed from p̄ by at most 0.17 %.
 3. Dry deposition of NO, NO2, O3 and HNO3 from `k_air` with
    ``v_d = 1/(r_a + r_b + r_c)``.
 4. Rain scavenging of HNO3 by `qr`.
