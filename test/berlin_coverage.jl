@@ -63,8 +63,6 @@ module cannot be parked here, it must be coupled (or, if it is not
 physics, exempted).
 """
 const BERLIN_PENDING = Dict{Symbol,String}(
-    :Anelastic             => "#133 anelastic / pseudo-incompressible core (since #131 the case's hydrostatic reference state is Anelastic.reference_from_profile, built by the core in core/reference_state.jl, not by a coupling)",
-    :TimeIntegration       => "#133 adaptive dt / IMEX",
     :Particles             => "#134 Lagrangian particles",
     :DataAssimilation      => "#134 nudging assimilation",
     :IO                    => "#134 checkpoint / restart",

@@ -42,11 +42,17 @@ Slot `:surface_exchange`, provider `:most` (default).
   (`cfg.cadence[:surface]` if present, otherwise `cfg.cadence[:soil]`):
   on step 1 in `:surface_flux`, then in `:surface_update` on the step at
   which the air reaches the time the surfaces were advanced to. Each
-  surface step covers the next `period` seconds, during which its
-  fluxes are applied to the air every step, so the air receives exactly
-  what the surface gave away when `dt` divides `period`.
-* **Air side**, every step in `:surface_flux`: ``Δθ = H\\,Δt/(ρ_k c_p Δz)``,
-  ``Δq_v = E\\,Δt/(ρ_k Δz)`` in the first air cell, with ``ρ_k`` the
+  surface step covers the next `period` seconds, and the air receives
+  its fluxes for exactly that long, so the air gets what the surface
+  gave away. With a fixed `dt` dividing `period` that is every step's
+  `dt`. With a variable `dt` (the adaptive time stepper, #133) a step
+  can run past the end of a surface interval: it delivers the held
+  fluxes only up to that end, and the time beyond it is delivered with
+  the next surface step's fluxes, which cover it (`dt ≤ period` is
+  assumed; the adaptive stepper caps `dt` at the shortest cadence).
+* **Air side**, every step in `:surface_flux`: ``Δθ = H\\,τ/(ρ_k c_p Δz)``,
+  ``Δq_v = E\\,τ/(ρ_k Δz)`` in the first air cell, `τ` the air time this
+  step delivers (``τ = Δt`` with a fixed step), with ``ρ_k`` the
   reference density ``\\bar ρ_k`` of that level (`case.ref`, the density
   the ledger integrates with) and ``c_p`` the moist heat capacity of that air.
 * **Momentum**, every step in `:post_predictor` (after the IBM): each
@@ -70,6 +76,8 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     z0h_ratio::Float64
     stepped::Bool
     t_next::Float64            # the surfaces are advanced up to this simulation time
+    owed::Float64              # air time (s) past the end of the previous surface interval, not yet delivered
+    τ_interval::Float64        # air time the current surface interval's fluxes have been delivered for (s)
     cp::Matrix{Float64}        # c_p of the air cell, for H → θ
     drag::Matrix{Float64}      # u*²/U (m s⁻¹): kinematic stress per unit wind
     pending::Matrix{Float64}   # extra energy into the surface not yet delivered (J m⁻²)
@@ -86,6 +94,8 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     solid_writes::Int          # air-side increments that landed in a solid cell (must be 0)
     store_err::Float64         # max |Δ(surface store)/P − G| over columns and surface steps (W m⁻²)
     nsurface_steps::Int
+    interval_err::Float64      # max |delivered air time − P| over the completed surface intervals (s)
+    n_split::Int               # steps that ran past the end of a surface interval (variable dt only)
 end
 
 coupling_name(::Type{SurfaceExchangeMOST}) = :surface_exchange
@@ -134,8 +144,8 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
     fill!(bus.z_ref, mesh.dz / 2)
     z() = zeros(Nx, Ny)
     return SurfaceExchangeMOST(P, o.U_min, Dict{UInt8,Float64}(o.z0m), o.z0h_ratio,
-                               false, 0.0, z(), z(), z(), z(), z(), z(), z(), z(), z(),
-                               0.0, 0, 0.0, 0)
+                               false, 0.0, 0.0, 0.0, z(), z(), z(), z(), z(), z(), z(), z(), z(),
+                               0.0, 0, 0.0, 0, 0.0, 0)
 end
 
 "The `SlabLand` for a column of class `cls` nobody registered a factory for."
@@ -188,6 +198,10 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
     qv = interior_view(tracer(case, :qv))
     Nx, Ny, dz = mesh.Nx, mesh.Ny, mesh.dz
     P = c.P
+    # the air has received the fluxes of the interval that ends now for
+    # τ_interval seconds; it must be P (not checked before the first step)
+    c.stepped && (c.interval_err = max(c.interval_err, abs(c.τ_interval - P)))
+    c.τ_interval = 0.0
     @inbounds for j in 1:Ny, i in 1:Nx
         s = bus.surface[i, j]
         s === nothing && continue
@@ -240,6 +254,7 @@ _step_one(s, f, P, Q, U_min) = step_surface!(s, f, P; Q_extra = Q, U_min = U_min
 
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
     c.stepped || step_all_surfaces!(c, case)          # step 1: the first surface step
+    τ = air_delivery_time!(c, case.sim.t, dt)
     bus, mesh = case.bus, case.mesh
     θ = interior_view(case.sim.θ)
     qv = interior_view(tracer(case, :qv))
@@ -253,13 +268,38 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
         k = bus.k_air[I]
         sm.mask[Hx+i, Hy+j, Hz+k] && (nsolid += 1)
         ρk = ref_density(case, k)
-        θ[i, j, k] += bus.H[I] * dt / (ρk * c.cp[I] * dz)
-        qv[i, j, k] += bus.E[I] * dt / (ρk * dz)
-        evap += bus.E[I] * dt
+        θ[i, j, k] += bus.H[I] * τ / (ρk * c.cp[I] * dz)
+        qv[i, j, k] += bus.E[I] * τ / (ρk * dz)
+        evap += bus.E[I] * τ
     end
     c.evap = evap / length(bus.k_air)
     c.solid_writes += nsolid
     return nothing
+end
+
+"""
+    air_delivery_time!(c, t, dt) -> τ
+
+The air time (s) for which the step from `t` to `t + dt` hands the held
+surface fluxes to the air: the part of the step inside the current
+surface interval (which ends at `c.t_next`) plus `c.owed`, the part of
+the previous step that ran past the end of the previous interval. If
+this step runs past `c.t_next`, the excess becomes the new `c.owed`. So
+each interval's fluxes reach the air for exactly the interval's length
+`P`. With a fixed `dt` dividing `P` it returns `dt` (bit for bit).
+"""
+function air_delivery_time!(c::SurfaceExchangeMOST, t, dt)
+    left = c.t_next - t                       # time to the end of the surface interval
+    if dt <= left + 1e-9 * c.P                # (the firing tolerance of :surface_update)
+        τ = c.owed + dt
+        c.owed = 0.0
+    else
+        τ = c.owed + left
+        c.owed = dt - left
+        c.n_split += 1
+    end
+    c.τ_interval += τ
+    return τ
 end
 
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:post_predictor}, dt)
@@ -361,6 +401,8 @@ function smoke_check(c::SurfaceExchangeMOST, case)
             "roof columns exchange above the roof (k_air > 1)" => !isempty(roofs),
             "no surface flux was put into a solid cell" => c.solid_writes == 0,
             "the surfaces were stepped more than once" => c.nsurface_steps >= 2,
+            "the air received each completed surface interval's fluxes for exactly P (1e-9 P)" =>
+                c.interval_err <= 1e-9 * c.P,
             "per column, the surface stored G·P (|Δstore/P − G| < 1e-6 W/m²)" =>
                 c.store_err < 1e-6,
             "u* > 0; above its neutral value κU/ln(z_ref/z0m) where H > 5 and E ≥ 0 (unstable), below it where H < −5 and E ≤ 0 (stable)" =>

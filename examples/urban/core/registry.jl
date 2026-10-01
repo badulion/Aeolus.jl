@@ -17,6 +17,7 @@
 #   modules_used(::Type{C})     -> tuple of Aeolus submodule names (coverage test)
 #   default_options(::Type{C})  -> NamedTuple
 #   incompatible(::Type{C})     -> tuple of `slot => provider` or coupling names
+#   incompatible_reason(::Type{C}) -> String, why (appended to the selection error)
 #   stages(::Type{C})           -> tuple of (stage::Symbol, order::Int, Cadence), one per stage
 #   build(::Type{C}, case, opts)-> instance (default `C()`)
 #   init!(c, case)              -> called once, after every coupling is built
@@ -26,8 +27,24 @@
 #   report(c, case)             -> Union{Nothing,String}, printed with each output record
 #   smoke_variants(::Type{C})   -> tuple of configs worth a smoke run
 #   smoke_check(c, case)        -> Vector{Pair{String,Bool}}
-#   sim_options(::Type{C}, cfg, mesh, opts) -> NamedTuple of BoussinesqSimulation keywords
-#   step_options(c, case)       -> NamedTuple of step! keywords
+#   sim_options(::Type{C}, cfg, mesh, opts) -> NamedTuple of keywords of the core's constructor
+#   step_options(c, case)       -> NamedTuple of keywords of the core's step! (and of the
+#                                  :timestepper provider's stepper)
+#
+# Dynamics contract (#133), used only by the providers of the two
+# dynamics slots:
+#
+#   slot :core         build_core(::Type{C}, cfg, mesh, ref, simkw) -> the dynamical-core
+#                      simulation, on the case reference state `ref`, with the merged
+#                      `sim_options` keywords `simkw` (a keyword it cannot honour is an error)
+#   slot :timestepper  next_dt(c, case)                 -> dt (s) of the next step
+#                      advance_dynamics!(c, case, dt)   -> advance case.sim by dt, with the
+#                                                          hooks and case.step_kwargs
+#                      variable_dt(::Type{C})           -> Bool: run_case! runs to a time
+#
+# Keywords are never dropped: a combination of a core / time stepper with
+# a numerics provider whose keywords it does not take is declared with
+# `incompatible` (and `incompatible_reason`), so selecting it is an error.
 
 """
     AbstractCoupling
@@ -83,6 +100,7 @@ is_default(::Type{<:AbstractCoupling}) = true
 modules_used(::Type{<:AbstractCoupling}) = ()
 default_options(::Type{<:AbstractCoupling}) = (;)
 incompatible(::Type{<:AbstractCoupling}) = ()
+incompatible_reason(::Type{<:AbstractCoupling}) = ""
 stages(::Type{<:AbstractCoupling}) = ()
 build(C::Type{<:AbstractCoupling}, case, opts) = C()
 init!(c::AbstractCoupling, case) = nothing
@@ -94,19 +112,27 @@ smoke_check(c::AbstractCoupling, case) = Pair{String,Bool}[]
 """
     sim_options(::Type{C}, cfg, mesh, opts) -> NamedTuple
 
-Keywords `C` adds to the `BoussinesqSimulation` constructor (e.g. a
-`solver`), called before the dynamical core is built. Two couplings may
-not set the same keyword.
+Keywords `C` adds to the constructor of the dynamical core (e.g. the
+`solver` of `BoussinesqSimulation`, or the `tol` / `maxit` of the
+sound-proof cores' density-weighted CG), called before the core is built
+and passed to `build_core` of the `:core` provider. Two couplings may not
+set the same keyword, and a core rejects a keyword it does not take.
 """
 sim_options(::Type{<:AbstractCoupling}, cfg, mesh, opts) = (;)
 """
     step_options(c, case) -> NamedTuple
 
-Keywords `c` adds to every `step!` call (e.g. `momentum_advection`,
-`eddy_viscosity!`), collected when the schedule is built. Two couplings
-may not set the same keyword.
+Keywords `c` adds to every dynamics step (e.g. `momentum_advection`,
+`eddy_viscosity!`), collected into `case.step_kwargs` when the schedule
+is built and passed by the `:timestepper` provider to `step!` (or to
+`step_imex!`, which takes the same keywords). Two couplings may not set
+the same keyword.
 """
 step_options(c::AbstractCoupling, case) = (;)
+function build_core end
+variable_dt(::Type{<:AbstractCoupling}) = false
+next_dt(c::AbstractCoupling, case) = case.cfg.dt
+advance_dynamics!(c::AbstractCoupling, case, dt) = dynamics_step!(case, dt)
 run_stage!(c::AbstractCoupling, case, ::Val{S}, dt) where {S} =
     error("coupling :$(coupling_name(typeof(c))) declares stage :$S but has no run_stage! method for it")
 
@@ -214,7 +240,9 @@ function selected_couplings(cfg)
         for D in sel
             hit = x isa Pair ? (slot(D) === x.first && provider(D) === x.second) :
                                coupling_name(D) === x
-            hit && error("coupling :$(coupling_name(C)) is incompatible with :$(coupling_name(D))")
+            why = incompatible_reason(C)
+            hit && error("coupling :$(coupling_name(C)) is incompatible with :$(coupling_name(D))" *
+                         (isempty(why) ? "" : ": " * why))
         end
     end
     return sel
