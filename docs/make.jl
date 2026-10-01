@@ -37,6 +37,7 @@ makedocs(
             "Visibility (Koschmieder)"    => "theory/visibility.md",
             "Fog and dew"                 => "theory/fog.md",
             "Radiation fog"               => "theory/radiation_fog.md",
+            "Urban chemistry and deposition" => "theory/urban_chemistry.md",
             "Surface exchange (MOST)"     => "theory/surface_exchange.md",
             "Soil water (Richards)"       => "theory/soil_water.md",
             "Soil heat and freeze–thaw"   => "theory/soil_heat.md",

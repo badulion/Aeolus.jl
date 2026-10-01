@@ -66,7 +66,7 @@ const BC = Main.BerlinCase
               Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_exchange,
                    :ground_soil, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :transport_weno,
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
-                   :cooling_prescribed, :traffic_heat])
+                   :cooling_prescribed, :traffic_heat, :moist_buoyancy])
         # every coupling names only real Aeolus submodules
         for C in BC.REGISTRY, m in BC.modules_used(C)
             @test isdefined(Aeolus, m) && getfield(Aeolus, m) isa Module
@@ -103,13 +103,15 @@ const BC = Main.BerlinCase
             (:microphysics, :micro_kessler),
             (:tracers, :pollutant),
             (:fog_dew, :fog_dew),
-            (:body_force, :geostrophic),
+            (:body_force, :geostrophic), (:body_force, :moist_buoyancy),
             (:post_predictor, :ibm), (:post_predictor, :surface_exchange),
             (:post_predictor, :veg_drag),
             (:surface_update, :surface_exchange), (:surface_update, :snow_legacy),
+            (:surface_update, :aq_chem),              # r_a / v_d refresh (#135)
             (:column_tendency, :cooling_prescribed)]
-        @test [t.name for t in case.tracers] == [:qv, :ql, :qr, :pollutant]
-        @test [t.name for t in case.tracers if t.advect] == [:qv, :ql]
+        # the chemistry species are advected tracers since #135
+        @test [t.name for t in case.tracers] == [:qv, :ql, :qr, :NO, :NO2, :O3, :VOC, :HNO3, :pollutant]
+        @test [t.name for t in case.tracers if t.advect] == [:qv, :ql, :NO, :NO2, :O3, :VOC, :HNO3]
     end
 
     @testset "tracer registry: ensure_tracer! is idempotent and ORs the flags" begin
@@ -128,7 +130,8 @@ const BC = Main.BerlinCase
     @testset "anthropogenic stage: traffic heat is Q_urban over the domain" begin
         θ0 = copy(interior_view(sim.θ))
         BC.run_stage!(BC.find_coupling(case, :traffic_heat), case, Val(:anthropogenic), 2.0)
-        Q = sum(interior_view(sim.θ) .- θ0) * 1005.0 * mesh.dz / 2.0 / (Nx * Ny)
+        ρcp = BC.ref_density(case, 1) * Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS.cp_dry
+        Q = sum(interior_view(sim.θ) .- θ0) * ρcp * mesh.dz / 2.0 / (Nx * Ny)
         @info @sprintf("  traffic heat: %.6f W/m² domain mean (expected 8)", Q)
         @test Q ≈ 8.0 rtol = 1e-9
         interior_view(sim.θ) .= θ0

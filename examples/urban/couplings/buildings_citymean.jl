@@ -163,15 +163,16 @@ function step_city_buildings!(cb::CityBuildings, t::Real, dt::Real, T_out::Real,
 end
 
 """
-    apply_building_heat!(sim, qv_field, sensible, cb, dt; ρcp = 1005.0, ρ = 1.0)
+    apply_building_heat!(sim, qv_field, sensible, cb, dt; ρ = 1.0, cp = 1005.0)
 
 Put the city-mean building's direct release into the first air layer of
-each column (above the roof for building columns): θ gets `H/ρcp`, the
-vapour field `LE/(ρ L_v)`, per `dz`, over `dt`. `S` goes to the slab
+each column (above the roof for building columns): θ gets `H/(ρ_k cp)`,
+the vapour field `LE/(ρ_k L_v)`, per `dz`, over `dt`. `ρ` is a scalar or
+a per-level vector (the case passes the reference density `ρ̄`). `S` goes to the slab
 surfaces: `sensible` is their loss term, so it is reduced by `S`.
 """
 function apply_building_heat!(sim, qv_field, sensible::AbstractMatrix, cb::CityBuildings, dt::Real;
-                              ρcp::Real = 1005.0, ρ::Real = 1.0)
+                              ρ = 1.0, cp::Real = 1005.0)
     sensible .-= cb.S
     Hx, Hy, Hz = sim.mesh.Hx, sim.mesh.Hy, sim.mesh.Hz
     dz = sim.mesh.dz; Nz = sim.mesh.Nz
@@ -179,8 +180,9 @@ function apply_building_heat!(sim, qv_field, sensible::AbstractMatrix, cb::CityB
     @inbounds for I in CartesianIndices(cb.H)
         i, j = Tuple(I)
         k = min(cb.kair[I], Nz)
-        sim.θ.data[Hx+i, Hy+j, Hz+k] += cb.H[I] / ρcp * dt / dz
-        qv[i, j, k] += cb.LE[I] / (ρ * _L_v) * dt / dz
+        ρk = ρ isa AbstractVector ? ρ[k] : ρ
+        sim.θ.data[Hx+i, Hy+j, Hz+k] += cb.H[I] / (ρk * cp) * dt / dz
+        qv[i, j, k] += cb.LE[I] / (ρk * _L_v) * dt / dz
     end
     return sim
 end
@@ -237,7 +239,8 @@ function run_stage!(c::CityMeanBuildings, case, ::Val{:radiation}, dt)
 end
 
 run_stage!(c::CityMeanBuildings, case, ::Val{:anthropogenic}, dt) =
-    apply_building_heat!(case.sim, tracer(case, :qv), case.bus.sensible, c.bem, dt)
+    apply_building_heat!(case.sim, tracer(case, :qv), case.bus.sensible, c.bem, dt;
+                         ρ = ref_density(case), cp = case.ref.cp)
 
 function report(c::CityMeanBuildings, case)
     bem = c.bem
@@ -259,7 +262,8 @@ end
 
 # Ledger: the window sun on the walls leaves the surface budget (S ≤ 0 is
 # the flux into the surface); the building's latent release enters the
-# air as vapour, LE·dt/L_v per column (apply_building_heat!, ρ = 1).
+# air as vapour, LE·dt/L_v per column (apply_building_heat! converts with
+# the reference density ρ̄_k, the one the ledger integrates with).
 function budget!(c::CityMeanBuildings, case, l)
     dt = case.cfg.dt
     add_surface!(l, :window_sun, c.bem.S, case.geom.sfc, dt)

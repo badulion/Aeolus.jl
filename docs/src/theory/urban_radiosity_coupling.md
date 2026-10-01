@@ -60,7 +60,7 @@ Robin condition that closes each facet column. The off-diagonal part
 couples all the columns. Each column step is affine in an extra flux
 ``c_i`` imposed on its outer face, ``x_i = a_i + b_i c_i``, so two
 trial steps per facet give ``a`` and ``b``. The coupled increments then
-solve one dense system,
+solve one linear system,
 
 ```math
 \bigl(I - \mathrm{diag}(b)\,G_{\text{off}}\bigr)\,x = a ,
@@ -77,6 +77,61 @@ Albedo and emissivity have one source: the scene's `UrbanMaterials`.
 They are copied into the facets at construction and again at every
 step.
 
+### Solving it at city scale (#138)
+
+The system has ``n`` unknowns (``n + m`` with building zones, below), and
+``G`` is dense: every facet sees every other. Assembling it and
+LU-factorising it costs ``O(n^3)`` per step. That is nothing for the
+336-facet canyon of §4, but it does not scale to a city. The Berlin
+(Alexanderplatz) scene has 5810 facets with `wall_subdivisions = 1` and
+7524 with 2. There the dense step took 4.5 s and 9.3 s on one BLAS
+thread: half in the LU of this system and half in the LU inside
+`solve_longwave`.
+
+The default `solver = :iterative` needs neither factorisation.
+
+* **The longwave at the start of the step** is exactly linear in the
+  emission, so it is one product with the response the scene already
+  holds, ``N = J E + j^{sky} L_{sky}``
+  (`Radiosity.solve_longwave(scene, vf, response)`).
+* **The coupled system** is solved matrix-free by restarted GMRES (Saad &
+  Schultz 1986). Each iteration is one product
+  ``G v = J\,(\partial E/\partial T \circ v)``, so it costs ``O(n^2)``
+  and needs ``O(n)`` extra memory. ``G`` itself is never formed.
+* **Building zones** (below) are eliminated first. Given the exchange
+  ``c``, each zone's balance is linear in its own unknown, so the GMRES
+  system stays in the facet increments alone.
+
+The system has a unit diagonal and is strongly diagonally dominant.
+``b_i`` is the skin warming per W m⁻² of imposed flux, and
+``\sum_{j\ne i}|G_{ij}|`` is the longwave conductance to the other
+facets. In the canyon ``\max_i b_i \sum_{j\ne i}|G_{ij}| = 0.084`` at
+900 s, and GMRES converges to a relative residual of 10⁻¹² in 6–7
+iterations.
+
+The one ``O(n^3)`` operation left is `longwave_response`. It depends only
+on geometry and emissivity, so it is paid once, and again only if the
+emissivities change. It takes 9 s at 5810 facets and 18 s at 7524, on
+one thread. The response ``J`` is the memory floor: 8n² bytes, 258 MB and
+432 MB.
+
+`solver = :direct` keeps the dense LU as the reference.
+
+Measured with `benchmarks/bench_urban_facets.jl`: 6 steps of 600 s
+around noon on 20 June, Bird clear-sky sun, one BLAS thread, on a shared
+and loaded machine.
+
+| Berlin scene | facets | dense LU (before) | dense LU, response longwave | GMRES | iterations | max ``\lvert\Delta T_{skin}\rvert`` GMRES vs LU |
+|:--|--:|--:|--:|--:|--:|--:|
+| `wall_subdivisions = 1` | 5810 | 4.54 s | 2.40 s | **0.31 s** | 7 | 2.0·10⁻¹² K |
+| `wall_subdivisions = 2` | 7524 | 9.29 s | 4.73 s | **0.47 s** | 7 | 2.9·10⁻¹² K |
+
+The GMRES solve itself takes 0.112 s at 5810 facets and 0.196 s at 7524.
+The ratio, 1.75, matches ``(7524/5810)^2 = 1.68``, so the cost per
+iteration is ``O(n^2)``. What remains of the step is the per-facet trial
+column steps, 0.18 s and 0.23 s, which scale as ``O(n)``. With 8 BLAS
+threads the 5810-facet step takes 0.22 s (GMRES) against 0.89 s (dense).
+
 ## 3. Why a lagged coupling is not enough
 
 The simple alternative steps each facet on its own against the incident
@@ -90,7 +145,7 @@ concrete each, stepped at 30 min:
 
 | coupling | max ``\lvert\sum_i A_i N_i\rvert`` per step | stored-heat drift over 100 h |
 |:---------|:-------------------------------------------|:-----------------------------|
-| implicit | 7·10⁻¹⁵ W m⁻² | −6·10⁻⁵ J m⁻² (1·10⁻¹² relative) |
+| implicit | 1·10⁻¹³ W m⁻² | −6·10⁻⁵ J m⁻² (1·10⁻¹² relative) |
 | lagged   | 14.7 W m⁻² | 1.2·10⁵ J m⁻² |
 
 ## 4. Validation
@@ -104,14 +159,17 @@ All numbers are from `test/era5_urban_radiosity.jl`.
 | Adiabatic plates | energy conservation; equilibrium at the heat-weighted mean | see §3; both plates reach 295.000000 K |
 | Infinite canyon, adiabatic walls, black floor (crossed-string view factors) | ``\sigma T_w^4 = (\sigma T_g^4 + L)/2`` for any ``H/W`` and wall ε; floor loss ``\tfrac{1+\psi}{2}(\sigma T_g^4 - L)`` | ``H/W`` 0.5 / 1 / 2 with ε_w 0.9 / 0.7 / 0.95: ``T_w`` 279.667618 / 280.100011 / 280.501963 K, all < 10⁻⁶ K |
 | Isolated flat facet | `step_surface!(::UrbanFacet)` | 5·10⁻⁵ K over 12 h (analytic vs finite-difference ``dR_n/dT``) |
-| 3-D ``H/W = 2`` canyon, 336 facets | radiosity re-solved at the applied emission | 8·10⁻¹³ W m⁻²; per-facet SEB 4·10⁻¹⁵ W m⁻²; storage 2·10⁻¹⁰ relative; shortwave and plan-area aggregation to 10⁻¹² |
+| 3-D ``H/W = 2`` canyon, 336 facets | radiosity re-solved at the applied emission | 7·10⁻¹³ W m⁻²; per-facet SEB 4·10⁻¹⁵ W m⁻²; storage 2·10⁻¹⁰ relative; shortwave and plan-area aggregation to 10⁻¹² |
+| Same, 24 steps (12 with sun), GMRES vs the dense LU (#138) | `solver = :direct` | ``\lvert\Delta T_{skin}\rvert`` 1.4·10⁻¹² K, ``\lvert\Delta H\rvert`` 4.4·10⁻¹¹ W m⁻², 6–7 iterations; with two zones (free/pinned), ``x``, ``y``, ``Φ`` to 10⁻¹⁰ |
 | Same, 6 h night, vs ``\Delta t = 30`` s | time-step convergence | implicit 0.0043 K at 900 s, 0.0004 K at 450 s; lagged 0.0128 K at 900 s |
 
 The last two rows are the capability this adds. After a 12-hour night
 in the 3-D canyon, the lowest wall strips (sky-view factor 0.083) are
 at 291.24 K and the top strips (0.402) are at 289.61 K. A single column
 temperature cannot hold that difference. A step of the 336-facet scene
-costs about 13 ms; one `solve_longwave` alone costs 1.6 ms.
+costs 6–10 ms (machine load varies), almost all of it in the trial
+column steps. The coupled solve takes 0.09 ms with GMRES and 0.9 ms with
+the dense LU.
 
 **Steady-state tests use θ = 1.** A steady state does not depend on θ.
 But at ``\Delta t \gg \Delta z^2/\kappa``, Crank–Nicolson's amplification
@@ -127,11 +185,12 @@ from the TEB closures `canyon_wind_speed` and
 `rowley_convection_coefficient` (#30).
 
 **Buildings behind the facets (#29).** The implicit step is built from
-three pieces: trial column steps, one dense solve, and the final column
+three pieces: trial column steps, one coupled solve, and the final column
 steps. A facet can also be bound to an *interior node*, the air of the
 building zone behind it. A third trial step then measures the column's
 response to that node's temperature, and the zones' air temperatures
-join the dense solve. `BuildingEnergy.step_buildings!` uses this; see
+join the coupled solve. The GMRES path eliminates them exactly, as in §2.
+`BuildingEnergy.step_buildings!` uses this; see
 [Anthropogenic heat from the building energy model](anthropogenic_heat.md).
 Without nodes the system is the one above, and every number in §4 is
 unchanged.
@@ -145,5 +204,8 @@ unchanged.
   plates).
 - Harman, I. N., Best, M. J. & Belcher, S. E. (2004). Radiative exchange
   in an urban street canyon. *Boundary-Layer Meteorol.*, 110, 301-316.
+- Saad, Y. & Schultz, M. H. (1986). GMRES: a generalized minimal
+  residual algorithm for solving nonsymmetric linear systems. *SIAM J.
+  Sci. Stat. Comput.*, 7, 856-869.
 - Resler, J. et al. (2017). PALM-USM v1.0. *Geosci. Model Dev.*, 10,
   3635-3659.

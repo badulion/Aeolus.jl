@@ -32,7 +32,10 @@
 #
 # Water. `add_water!` terms are sources of water to the air (negative =
 # sink): surface evaporation, dew deposition, precipitation reaching the
-# ground, clips, and the non-conservation of a transport scheme. The
+# ground, clips, the non-conservation of a transport scheme, and the
+# `density_redistribution` a transport books through
+# `ledger_water_split` (the ledger integrates with the reference density
+# ρ̄_k, which the incompressible transport does not conserve). The
 # ledger measures the change of water in the air itself, over the tracers
 # in `ledger.water_tracers` (default qv, ql, qr; a coupling that adds a
 # water species calls `water_tracer!`), and reports
@@ -58,9 +61,10 @@ the ledger was (re)started. See `core/ledger.jl` for the conventions.
 * `terms[name]` — free-form accumulated diagnostics ([`add_term!`](@ref));
 * `ncol` — columns per class, `elapsed` (s), `nsteps`;
 * `water_tracers` — tracers counted as water in the air;
-* `ρ` — air density per level used for the water integral (kg m⁻³;
-  the Boussinesq case uses 1 everywhere, the value its surface and
-  microphysics couplings assume);
+* `ρ` — air density per level used for the water integral (kg m⁻³).
+  `build_case` sets it to the reference density `case.ref.ρ̄`
+  (`core/reference_state.jl`), the density every coupling converts its
+  fluxes with; a bare `Ledger()` falls back to 1;
 * `Ts_start`, `W_start` — snapshots at the start of the current step.
 """
 mutable struct Ledger
@@ -149,6 +153,34 @@ function ledger_water(case, q::AbstractArray{<:Real,3})
         W += l.ρ[k] * sum(view(q, :, :, k))
     end
     return W * mesh.dz / (mesh.Nx * mesh.Ny)
+end
+
+"""
+    ledger_water_split(case, dq) -> (transport, density_redistribution)
+
+Split ``ledger_water(case, dq)`` of a transport increment `dq` into two
+parts that sum to it: ``\\bar ρ_m Σ_{cells} dq\\,Δz/(N_xN_y)`` with the
+column-mean density ``\\bar ρ_m`` of `ledger.ρ`, which is zero for a
+transport that conserves ``Σ q`` (what a flux-form scheme on a
+divergence-free velocity does), and ``Σ_k (ρ_k − \\bar ρ_m) Σ_{ij} dq\\,Δz
+/(N_xN_y)``, the water the ledger sees created or destroyed because the
+incompressible core moves `q` between levels of different reference
+density (``∇·u = 0`` conserves ``Σ q``, not ``Σ \\bar ρ q``; an anelastic
+core, #133, would conserve the latter). Upward transport of vapour
+makes the second part negative. With `ledger.ρ ≡ 1` it is exactly 0.
+"""
+function ledger_water_split(case, q::AbstractArray{<:Real,3})
+    l, mesh = case.ledger, case.mesh
+    isempty(l.ρ) && (l.ρ = ones(mesh.Nz))
+    ρm = sum(l.ρ) / length(l.ρ)
+    flat, redis = 0.0, 0.0
+    @inbounds for k in axes(q, 3)
+        s = sum(view(q, :, :, k))
+        flat += ρm * s
+        redis += (l.ρ[k] - ρm) * s
+    end
+    f = mesh.dz / (mesh.Nx * mesh.Ny)
+    return flat * f, redis * f
 end
 
 """

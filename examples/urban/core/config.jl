@@ -33,7 +33,9 @@ Groups of fields:
 * **initial state** — `θ_surface`, `θ_inversion_z`, `θ_lapse` (θ(z) =
   θ_surface + max(0, z − θ_inversion_z)·θ_lapse), `u0`, `qv0`, `qv_scale`
   (qv(z) = qv0·exp(−z/qv_scale)), `Ts0` and `Ts_water_offset` (surface
-  temperature, water `Ts0 + offset`), `T_soil0`;
+  temperature, water `Ts0 + offset`), `T_soil0`, `p_surface` (Pa at the
+  ground: the hydrostatic reference state is integrated from it, see
+  `core/reference_state.jl`);
 * **physics** — `physics::Dict{Symbol,Any}`: for an exclusive slot,
   `slot => provider` (e.g. `:microphysics => :kessler`); for an additive
   coupling, `name => true/false`. Anything absent takes the registry
@@ -85,6 +87,7 @@ Base.@kwdef mutable struct CaseConfig
     Ts0::Float64                      = 285.0
     Ts_water_offset::Float64          = 5.0
     T_soil0::Float64                  = 288.0
+    p_surface::Float64                = 101325.0
     # coupling selection
     physics::Dict{Symbol,Any}         = Dict{Symbol,Any}()
     options::Dict{Symbol,Any}         = Dict{Symbol,Any}()

@@ -852,6 +852,8 @@ C_s = 0.17
 
 end
 
+include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet deposition (#135)
+
 # =========================================================================
 # Era II — numerical foundations for fidelity (Phases 21-31)
 # =========================================================================
@@ -947,4 +949,7 @@ end
     include("berlin_surface_exchange.jl") # MOST fluxes, soil ground, roof-aware air level, drag (#129)
     include("berlin_coverage.jl")        # every Aeolus module coupled, exempt or pending (#127)
     include("berlin_smoke.jl")           # every coupling and option, 12 steps, ledgers close (#127)
+    include("berlin_sw_modifiers.jl")    # tree shade / cloud shadow once per radiation field; scene class map (#128)
+    include("berlin_moist.jl")           # reference state, moist buoyancy, fog enthalpy (#131)
+    include("berlin_chemistry.jl")       # NOx–O3–VOC on tracers, r_a-based dry / wet deposition (#135)
 end
