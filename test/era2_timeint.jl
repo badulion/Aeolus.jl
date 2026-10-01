@@ -588,6 +588,44 @@ using Aeolus.Grids: interior, xnodes, znodes
                 "IMEX dt = $(dt_im) s ($(round(dt_im / dt_ex; digits = 1))×)")
     end
 
+    @testset "step_imex! takes step!'s operator keywords (#133)" begin
+        # A driver passes the same keywords to step! and step_imex!: the
+        # momentum-advection operator and the eddy-viscosity closure. The
+        # defaults are the built-in ones, so passing them explicitly is
+        # bit for bit the default step; a different operator / closure is
+        # actually used.
+        g = RegularGrid(; size = (12, 12, 12), extent = (120.0, 120.0, 60.0),
+                        halo = (2, 2, 2))
+        function mk()
+            sim = BoussinesqSimulation(g; ν = 0.5, C_s = 0.18, θ₀ = 300.0)
+            set!(sim.u, (x, y, z) -> 2.0 + sin(2π * x / 120) * cos(2π * z / 60))
+            set!(sim.v, (x, y, z) -> cos(2π * y / 120))
+            set!(sim.θ, (x, y, z) -> 300.0 + 0.01z + 0.1sin(2π * x / 120))
+            return sim
+        end
+        state(s) = (copy(interior_view(s.u)), copy(interior_view(s.v)),
+                    copy(interior_view(s.w)), copy(interior_view(s.θ)))
+        C_s = 0.18
+        smag!(νt, u, v, w) = Aeolus.Operators.compute_smagorinsky_νt!(νt, u, v, w, C_s)
+        for scheme in (ARK2(), Rosenbrock2())
+            ref = mk(); step_imex!(ref, 2.0, scheme)
+            a = mk(); step_imex!(a, 2.0, scheme; momentum_advection = Aeolus.Operators.momentum_advect!,
+                                 eddy_viscosity! = smag!)
+            @test state(a) == state(ref)                     # bitwise
+            # no momentum advection: u changes differently
+            b = mk(); step_imex!(b, 2.0, scheme; momentum_advection = (tu, tv, tw, u, v, w) -> nothing)
+            @test maximum(abs.(interior_view(b.u) .- interior_view(ref.u))) > 1e-3
+            # a closure that doubles νt is the one frozen into ν_eff
+            calls = Ref(0)
+            dbl!(νt, u, v, w) = (calls[] += 1; smag!(νt, u, v, w); interior_view(νt) .*= 2; nothing)
+            c = mk(); step_imex!(c, 2.0, scheme; eddy_viscosity! = dbl!)
+            @test calls[] == 1                                # once per step (frozen)
+            @test maximum(interior_view(c.νt)) ≈ 2 * maximum(interior_view(ref.νt))
+            @test interior_view(c.θ) != interior_view(ref.θ)
+            @test max_divergence(c) < 1e-10
+        end
+    end
+
     # =====================================================================
     # The two phases together
     # =====================================================================

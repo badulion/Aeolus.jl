@@ -1077,7 +1077,8 @@ end
 # surface flux, sponge and the user body force. Mirrors Simulations.step!
 # with the viscous/SGS terms removed — those are the implicit half.
 function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
-                               body_force!::Union{Nothing,Function} = nothing) where {T}
+                               body_force!::Union{Nothing,Function} = nothing,
+                               momentum_advection = momentum_advect!) where {T}
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
@@ -1088,7 +1089,7 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
     fill!(sim.tθ.data, 0)
     sim.has_moisture && fill!(sim.tqv.data, 0)
 
-    momentum_advect!(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w)
+    momentum_advection(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w)
     advect_centered!(sim.tθ, sim.u, sim.v, sim.w, sim.θ)
     sim.has_moisture && advect_centered!(sim.tqv, sim.u, sim.v, sim.w, sim.qv)
 
@@ -1114,15 +1115,21 @@ end
 
 # Freeze ν_eff = ν + νt (momentum) and ν + νt/Prₜ (scalars) at the start
 # of the step — the standard lagged-coefficient linearization; the
-# implicit operator stays linear and SPD.
-function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T}) where {T}
-    if !sim.has_sgs
+# implicit operator stays linear and SPD. νt is the Smagorinsky closure,
+# or `eddy_viscosity!(νt, u, v, w)` when given (the same rule as `step!`).
+function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
+                            eddy_viscosity! = nothing) where {T}
+    if !sim.has_sgs && eddy_viscosity! === nothing
         return (T(sim.ν), T(sim.ν))
     end
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
-    compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, sim.C_s)
+    if eddy_viscosity! === nothing
+        compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, sim.C_s)
+    else
+        eddy_viscosity!(sim.νt, sim.u, sim.v, sim.w)
+    end
     fill_halos!(sim.νt, sim.bcs)
     ws.ν_mom  === nothing && (ws.ν_mom  = similar(sim.νt.data))
     ws.ν_scal === nothing && (ws.ν_scal = similar(sim.νt.data))
@@ -1234,7 +1241,8 @@ end
 """
     step_imex!(sim, dt, scheme::IMEXScheme; body_force! = nothing,
                post_predictor! = nothing, workspace = imex_workspace(sim),
-               tol = 1e-10, maxit = 200)
+               tol = 1e-10, maxit = 200,
+               momentum_advection = momentum_advect!, eddy_viscosity! = nothing)
 
 Advance `sim` by `dt` with a semi-implicit IMEX scheme
 ([`ARK2`](@ref) or [`Rosenbrock2`](@ref)):
@@ -1255,6 +1263,12 @@ contributes to the explicit tendency, `post_predictor!(sim, Δt_stage)`
 runs after the implicit solve and before the projection, so a velocity
 correction it applies is folded into a divergence-free result.
 
+The two operator keywords are `step!`'s as well, so a driver can pass
+the same keywords to either: `momentum_advection(tu, tv, tw, u, v, w)`
+is the (explicit) momentum-advection operator, and `eddy_viscosity!(νt,
+u, v, w)`, when given, replaces the Smagorinsky closure in the frozen
+`ν_eff` (it is called even with `C_s = 0`, as in `step!`).
+
 Notes and limitations:
 
   * The implicit operator is `∇·(ν_eff ∇·)` with `ν_eff` face-averaged
@@ -1274,7 +1288,9 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
                     body_force!::Union{Nothing,Function} = nothing,
                     post_predictor!::Union{Nothing,Function} = nothing,
                     workspace::IMEXWorkspace = imex_workspace(sim),
-                    tol::Real = 1e-10, maxit::Integer = 200) where {T}
+                    tol::Real = 1e-10, maxit::Integer = 200,
+                    momentum_advection::F = momentum_advect!,
+                    eddy_viscosity!::E = nothing) where {T, F, E<:Union{Nothing,Function}}
     Δt = T(dt)
     γ  = T(scheme.γ)
     δ  = T(scheme.δ)
@@ -1285,11 +1301,12 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     ws.total_iterations = 0
     ws.max_residual = zero(T)
 
-    νm, νs = _freeze_viscosity!(sim, ws)
+    νm, νs = _freeze_viscosity!(sim, ws, eddy_viscosity!)
     _copy_fields!(ws.state0, sim, names)
 
     # ---- stage 1: (I - γΔt D) U₁ = uⁿ + γΔt E(uⁿ) ------------------------
-    _explicit_tendencies!(sim, γ * Δt; body_force! = body_force!)
+    _explicit_tendencies!(sim, γ * Δt; body_force! = body_force!,
+                          momentum_advection = momentum_advection)
     _copy_tendencies!(ws.aux, sim, names)                 # E(uⁿ)
     for name in names
         f = getfield(sim, name)
@@ -1311,7 +1328,8 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     end
 
     # ---- stage 2 --------------------------------------------------------
-    _explicit_tendencies!(sim, Δt; body_force! = body_force!)   # E(U₁) → sim.t*
+    _explicit_tendencies!(sim, Δt; body_force! = body_force!,
+                          momentum_advection = momentum_advection)   # E(U₁) → sim.t*
     for name in names
         f = getfield(sim, name)
         _combine4!(f, one(T), getfield(ws.state0, name),
@@ -1331,7 +1349,9 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
                     body_force!::Union{Nothing,Function} = nothing,
                     post_predictor!::Union{Nothing,Function} = nothing,
                     workspace::IMEXWorkspace = imex_workspace(sim),
-                    tol::Real = 1e-10, maxit::Integer = 200) where {T}
+                    tol::Real = 1e-10, maxit::Integer = 200,
+                    momentum_advection::F = momentum_advect!,
+                    eddy_viscosity!::E = nothing) where {T, F, E<:Union{Nothing,Function}}
     Δt  = T(dt)
     γ   = T(scheme.γ)
     a21 = T(scheme.a21)
@@ -1344,12 +1364,13 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     ws.total_iterations = 0
     ws.max_residual = zero(T)
 
-    νm, νs = _freeze_viscosity!(sim, ws)
+    νm, νs = _freeze_viscosity!(sim, ws, eddy_viscosity!)
     _copy_fields!(ws.state0, sim, names)
     k2set = _k2_set!(ws)
 
     # ---- k₁: (I - γΔt J) k₁ = Δt F(uⁿ) ----------------------------------
-    _explicit_tendencies!(sim, Δt; body_force! = body_force!)
+    _explicit_tendencies!(sim, Δt; body_force! = body_force!,
+                          momentum_advection = momentum_advection)
     _add_diffusion_tendencies!(sim, ws, νm, νs, names)
     for name in names
         k1 = getfield(ws.aux, name)
@@ -1367,7 +1388,8 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     sim.t = t0 + a21 * Δt
 
     # ---- k₂: (I - γΔt J) k₂ = Δt F(u+k₁) + c₂₁ k₁ ------------------------
-    _explicit_tendencies!(sim, Δt; body_force! = body_force!)
+    _explicit_tendencies!(sim, Δt; body_force! = body_force!,
+                          momentum_advection = momentum_advection)
     _add_diffusion_tendencies!(sim, ws, νm, νs, names)
     for name in names
         k2 = getfield(k2set, name)
