@@ -129,7 +129,7 @@ end
 coupling_name(::Type{<:AdaptiveStep}) = :timestep_adaptive
 slot(::Type{<:AdaptiveStep}) = :timestepper
 provider(::Type{<:AdaptiveStep}) = :adaptive
-modules_used(::Type{<:AdaptiveStep}) = (:TimeIntegration,)
+modules_used(::Type{<:AdaptiveStep}) = (:TimeIntegration, :TimeSteppers)   # step_adaptive! drives the generic step!
 incompatible(::Type{<:AdaptiveStep}) = _SOUNDPROOF_CORES
 incompatible_reason(::Type{<:AdaptiveStep}) = _SOUNDPROOF_REASON
 variable_dt(::Type{<:AdaptiveStep}) = true

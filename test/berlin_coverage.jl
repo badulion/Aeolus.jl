@@ -110,7 +110,7 @@ const BERLIN_EXEMPT_FROZEN = Set{Symbol}([
 
 "Frozen: the modules of `BERLIN_PENDING`. Entries may only be deleted."
 const BERLIN_PENDING_FROZEN = Set{Symbol}([
-    :Anelastic, :TimeIntegration, :Particles, :DataAssimilation, :IO, :MonteCarloRT,
+    :Particles, :DataAssimilation, :IO, :MonteCarloRT,
     :Visibility, :LandSurface, :Photosynthesis, :OceanMixedLayer, :AirSeaFlux,
     :AerosolOptics, :P3Microphysics, :Snowpack, :IceThermodynamics, :AerosolCloud,
     :TurbulentMicrophysics, :IceNucleation, :SurfaceTiles, :Superdroplet,
@@ -145,10 +145,16 @@ const BERLIN_OPTION_ONLY = Dict{Symbol,String}(
                   "solve (45.8-72.6 vs 2.0 ms); kept for the stretched-grid / cut-cell solvers (#151, #152)",
     :ML        => "sgs = :mlsgs: wraps ML.MLSGS, and there is no trained model; with the default " *
                   "closure it is bit for bit the Smagorinsky default (berlin_case.md, numerics slots)",
+    :Anelastic => "core = :anelastic / :pseudo_incompressible (with pressure_solver = " *
+                  ":density_weighted_cg and timestepper = :fixed): in the flagship's 200 m deep " *
+                  "domain the density changes by 2 % and the sound-proof cores give the Boussinesq " *
+                  "mean profile to 0.002-0.004 K after 1 h at 2.2x the cost, without the dynamic / ML " *
+                  "SGS, WENO-Z momentum or the adaptive step (#133, #166); the maintainer kept the " *
+                  "Boussinesq core as the default",
 )
 
 "Frozen: the modules of `BERLIN_OPTION_ONLY`. Entries may only be deleted."
-const BERLIN_OPTION_ONLY_FROZEN = Set{Symbol}([:Multigrid, :ML])
+const BERLIN_OPTION_ONLY_FROZEN = Set{Symbol}([:Multigrid, :ML, :Anelastic])
 
 """
 Reviewed indirect uses: `(coupling, module) => how`. A coupling may list
