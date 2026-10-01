@@ -815,9 +815,9 @@ about 34 W m⁻².
 
 Earlier values of this paragraph (residual −34.4 / −33.9 W m⁻² with
 dew heat +44.4 at #127–#132; Rn 34.8 instead of 388.7 and residual
-−53.2 at #131) came from the compounding shade and cloud shadow
-(removed by #128; the cloud shadow itself was replaced in #130) and from the slab surface (#129); they do not
-reproduce on master. Even the pre-#131 seed now gives a summer residual
+−53.2 at #131) do not reproduce on master. #128–#132 changed the
+shade, the cloud shadow, the surfaces and the seed in between; which of
+these changes accounts for the difference was not isolated. Even the pre-#131 seed now gives a summer residual
 of −3.16 W m⁻² (dew heat +13.36, window sun −6.31, glass −3.89), winter
 +8.01, with 0 % of the fog left after the first call and after 12
 steps (that reproduction uses p̄_k, since the 8 km scale-height pressure

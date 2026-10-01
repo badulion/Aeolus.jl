@@ -957,7 +957,10 @@ lagged one leaks 14.7 W/m²; CAPITOUL road and wall mean temperature
 BUBBLE Q* 170.0 vs 179 W m⁻² (TEB 170); CAPITOUL winter building energy
 use 65.7 W m⁻² vs the inventory's 58.6 (+12 %; TEB-BEM −15 %). GMRES
 (#138): 1.4e-12 K against dense LU in 6–7 iterations; the Berlin scene
-costs 0.31 s per step at 5,810 facets (LU 4.54 s), O(n^1.75).
+costs 0.31 s per step at 5,810 facets (LU 4.54 s). Each iteration is
+O(n²): from 5,810 to 7,524 facets the solve time grew 0.112 → 0.196 s,
+a ratio of 1.75 against (7524/5810)² = 1.68, at 7 iterations each (an
+implied exponent of ln 1.75 / ln 1.295 ≈ 2.2 from these two sizes).
 **Bugs the tests caught**: θ < ½ accepted (Ts ran away to 1e8 K);
 the `h ≥ 0` check bypassed by the default constructor; a singular
 inter-pane system at grazing sun; the example heated glass with the
