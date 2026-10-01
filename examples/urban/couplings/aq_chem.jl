@@ -427,10 +427,11 @@ register!(AQChem)
     NoChem
 
 Slot `:chemistry`, provider `:off`: no reactive species at all. The
-chemistry roughly doubles the cost of a flagship step (measured on the
-64 × 64 × 32 case: 43 → 101 ms/step, of which 44 ms is the WENO transport
-of the five species and 11 ms the photochemistry), so runs that do not
-need air quality can switch it off with
+chemistry adds about 25–30 % to the cost of a flagship step (measured on
+the 64 × 64 × 32 case on master `2895fed`: 135.5 → 169.2 ms/step, of
+which 37 ms is the WENO transport of the five species and 9 ms the
+`aq_chem` stage; see `docs/src/design/berlin_case.md`), so runs that do
+not need air quality can switch it off with
 `physics = Dict(:chemistry => :off)`.
 """
 struct NoChem <: AbstractCoupling end
