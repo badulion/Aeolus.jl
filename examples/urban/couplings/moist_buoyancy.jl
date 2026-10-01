@@ -161,7 +161,11 @@ function smoke_check(c::MoistBuoyancy, case)
         scale = maximum(abs(ref[I] - m) for I in CartesianIndices(f) if f[I])
         zero_mean &= abs(sum(Δ[I, k] for I in CartesianIndices(f) if f[I])) <=
                      1e-12 * n * max(scale, 1e-6)
-        form_ok &= all(I -> !f[I] || abs(Δ[I, k] - (ref[I] - m)) <= 1e-9 * max(scale, 1e-6),
+        # the floor is the round-off of θ_ρ − θ, a difference of two ≈ 300 K
+        # numbers: with nearly uniform vapour on a level the relative
+        # tolerance alone falls below it
+        form_ok &= all(I -> !f[I] || abs(Δ[I, k] - (ref[I] - m)) <=
+                                     1e-9 * max(scale, 1e-6) + 16 * eps(θ[I, k]),
                        CartesianIndices(f))
     end
     return ["(θ_ρ − θ)′ has zero mean over the fluid cells of every level (no net force)" => zero_mean,

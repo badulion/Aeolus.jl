@@ -163,7 +163,10 @@ const MT = Aeolus.MoistThermodynamics
         end
         h(k, I) = MT.moist_enthalpy(θ[I, k] * BC.ref_exner(case, k),
                                     MT.PhasePartition(qv[I, k] + ql[I, k], ql[I, k]))
-        cells = [(k, I) for k in 2:Nz for I in CartesianIndices((Nx, Ny))]   # k = 1 exchanges dew with the surface
+        # the first air cell of a dew_mask column exchanges dew with the
+        # surface (#129): k = 1 on open ground, above the roof on buildings
+        dew_cell(k, I) = case.bus.dew_mask[I] && case.bus.k_air[I] == k
+        cells = [(k, I) for k in 2:Nz for I in CartesianIndices((Nx, Ny)) if !dew_cell(k, I)]
         h0 = [h(k, I) for (k, I) in cells]
         qt0 = [qv[I, k] + ql[I, k] for (k, I) in cells]
         ql0 = sum(ql)
