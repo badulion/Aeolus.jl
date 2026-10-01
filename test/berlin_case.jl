@@ -144,6 +144,12 @@ const BC = Main.BerlinCase
     end
 
     @testset "transport stage: flux-form conservation; the stale-halo leak it fixes (#132)" begin
+        # The leak is a property of step! (it leaves the velocity halos at
+        # the predictor values), so this uses the fixed stepper: the
+        # adaptive default refreshes the halos in its CFL diagnostics.
+        local case = BC.build_case(BC.CaseConfig(:smoke; verbose = false,
+                                                 physics = Dict{Symbol,Any}(:timestepper => :fixed));
+                                   io = devnull)
         # give the flow some structure first
         for _ in 1:4
             BC.step_case!(case, 2.0)
@@ -199,7 +205,8 @@ const BC = Main.BerlinCase
         path = joinpath(mktempdir(), "smoke.nc")
         c2 = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = path))
         BC.run_case!(c2)
-        @test c2.clock.n == 12 && !c2.clock.blowup
+        # the adaptive default runs to the simulated time nsteps·dt = 24 s
+        @test c2.sim.t ≈ 24.0 && c2.clock.n >= 1 && !c2.clock.blowup
         f = nc_open(path)
         @test nc_nrecords(f) == 2
         vars = nc_varnames(f)
@@ -208,7 +215,11 @@ const BC = Main.BerlinCase
                   "H_sfc", "LE_sfc", "u_star", "beta_sfc")
             @test v in vars
         end
-        @test nc_read(f, "time") == [12.0, 24.0]
+        # an output record is written on the first step at or after each
+        # 12 s firing, so with a variable step its time is within one step
+        # (dt ≤ 4 s, capped at the soil cadence) after the firing
+        t = nc_read(f, "time")
+        @test 12.0 <= t[1] < 16.0 && t[2] ≈ 24.0
         @test all(isfinite, nc_read(f, "theta"))
     end
 end

@@ -102,8 +102,10 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
                                                   (solver = CosineFFTPoissonSolver(mesh),))
     end
 
-    bous = run_smoke()
-    @testset "default: Boussinesq core, fixed step" begin
+    # the reference flow: Boussinesq core, fixed 2 s step (the sound-proof
+    # cores below run the fixed step, so they compare against it)
+    bous = run_smoke(physics = Dict(:timestepper => :fixed))
+    @testset "Boussinesq core, fixed step" begin
         @test bous.sim isa BoussinesqSimulation
         @test bous.clock.n == 12 && bous.sim.t == 24.0
         @test max_divergence(bous.sim) < 1e-12
@@ -269,7 +271,7 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
         # dt = 12 s is 1.6× the forward-Euler stability bound 2Δ²/(4ν)·…
         # (7.4 s here): the explicit step amplifies the 2Δ mode of θ and
         # the wind runs away; ARK2 with implicit diffusion does not.
-        ex = run_smoke(dt = 12.0, nsteps = 8)
+        ex = run_smoke(dt = 12.0, nsteps = 8, physics = Dict(:timestepper => :fixed))
         im = run_smoke(dt = 12.0, nsteps = 8, physics = Dict(:timestepper => :imex))
         ui(c) = maximum(abs, interior_view(c.sim.u))
         @test ui(ex) > 3.0                       # measured 6.8 m/s from ~1 m/s
