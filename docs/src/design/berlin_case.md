@@ -34,6 +34,7 @@ examples/urban/
     bus.jl             SurfaceBus, SurfaceParams (per-class slab parameters)
     tracers.jl         tracer registry (ensure_tracer!)
     ledger.jl          energy/water budget ledger (surface energy per class, water in the air)
+    reference_state.jl hydrostatic reference p̄, ρ̄, T̄, Π̄ (CaseReference)
     output.jl          NetCDF output driven by the registry
     case.jl            Case, build_case
     stages.jl          the stage loop: step_case!, run_case!, timing_report
@@ -107,7 +108,7 @@ in the integer `order` their couplings declare.
 | `:microphysics` | `micro_kessler` (10) |
 | `:tracers` | `pollutant` (10) |
 | `:fog_dew` | `fog_dew` (10) |
-| dynamics: `step!` with `:body_force` / `:post_predictor` | `geostrophic` (10) / `ibm` (10), `veg_drag` (20) |
+| dynamics: `step!` with `:body_force` / `:post_predictor` | `geostrophic` (10), `moist_buoyancy` (20) / `ibm` (10), `veg_drag` (20) |
 | `:surface_update` | `surface_slab` (10), `soil_urban` (20, every 30 s), `snow_legacy` (30) |
 | `:column_tendency` | `cooling_prescribed` (10) |
 | `:sanity` | `surface_slab` Ts clamp (10), then the core finiteness check |
@@ -147,6 +148,12 @@ needs.
   scene is built with `class_map = scene_class_map(sfc)`, so the ground
   facet of every open column has the material of its class (park, water,
   street; wall-tagged cells are street ground).
+* **Reference state** (`case.ref`, see [below](#Reference-state-and-moist-buoyancy)):
+  the hydrostatic `p̄`, `ρ̄`, `T̄`, `Π̄` per level. Every coupling that
+  needs a pressure, converts a flux into a mixing-ratio or θ increment,
+  or turns θ into T takes it from here (`ref_pressure`, `ref_density`,
+  `ref_exner`, `surface_pressure`, `ref_ρcp`), never from a constant of
+  its own.
 
 **Modifying `bus.sw`.** The radiation provider writes `bus.sw` only at
 the radiation cadence; the `:sw_modifiers` stage runs every step. A
@@ -157,6 +164,62 @@ step, and rebuilds `bus.sw = cloud(shade(sw_base))` each step. A second
 modifier added later belongs in the same pattern. Before #128 the tree
 shade and the cloud shadow multiplied `bus.sw` in place, so they
 compounded between radiation updates.
+
+## Reference state and moist buoyancy
+
+The Boussinesq core carries neither pressure nor density, and before
+#131 each coupling assumed its own: fog and dew an isothermal 8 km
+scale height from 1013.25 hPa, the surface, building and traffic
+fluxes and the ledger `ρ = 1` (`ρcp = 1005`). Since #131
+`core/reference_state.jl` builds one hydrostatic profile per case,
+`Aeolus.Anelastic.reference_from_profile` of the initial θ(z) from
+`cfg.p_surface` (101 325 Pa at the ground), with the dry-air constants
+of `MoistThermodynamics` (so `T = θ Π̄` is the temperature the fog
+adjustment and the saturation functions assume) and the `g` of the
+dynamics. It is exactly (1e-12 Pa m⁻¹) in the discrete balance of the
+anelastic core and 5e-8 from an RK4 integration of the continuous
+hydrostatic equation. The isothermal profile it replaces was 0.17 % off
+at the flagship's top level; the density is 1.20 kg m⁻³ at the ground
+in summer, 1.30 in winter.
+
+| consumer | uses |
+| :-- | :-- |
+| `fog_dew` | fog adjusted at `p̄_k` (`T = θ Π̄_k`); dew at `p_surface` with `ρ̄_1` |
+| `surface_slab` | `ρ̄_1 c_pd` and `ρ̄_1` in the bulk H and LE and their conversion to θ, qv; q_sat at `p_surface` |
+| `buildings_citymean`, `traffic_heat` | `ρ̄_k c_pd`, `ρ̄_k` for the release into level k |
+| the ledger | `ledger.ρ = ρ̄`: the water in the air is integrated with the density the couplings use, so the water ledger still closes |
+| `moist_buoyancy` | `Π̄_1`, `p̄_1` for the RH and dew point it reports |
+
+**Moist buoyancy** (`couplings/moist_buoyancy.jl`, on by default). The
+core adds only the dry buoyancy `g (θ − θ₀)/θ₀` (`sim.moisture = false`:
+the water lives in the tracer registry). In `:body_force` the coupling
+adds the rest of the density-potential-temperature buoyancy,
+
+    g (θ_ρ − θ)′ / θ₀,     θ_ρ = θ (1 + q_v/ε − q_t) ≈ θ (1 + 0.608 q_v − q_c),
+
+from `MoistThermodynamics.density_temperature`, at every interior w face
+(the two adjacent centres averaged, as the core does for θ). The prime
+is the deviation from the mean over the fluid cells of the level: a
+horizontally uniform force is a pure pressure gradient in the
+incompressible core, so subtracting it only changes the diagnosed
+pressure. The condensate `q_c` is every tracer the ledger counts as
+water other than `qv` (`ql` and `qr` today), so a microphysics provider
+that calls `water_tracer!` has its species loaded without touching this
+coupling. It writes `b_moist` (m s⁻²) to the NetCDF file and a report
+line (rms and max of b′, max RH and min dew-point depression of the
+lowest layer).
+
+In the flagship configuration (1 h from 06:00, no fog) it costs 0.86
+ms/step. At the end of the hour the rms moist buoyancy is 8.8e-4 m s⁻²
+(max 1.8e-2, the buoyancy of 0.5 K), a quarter of the rms dry buoyancy
+perturbation (3.6e-3). In the same hour run without the coupling, the
+moist buoyancy the state would have is twice as large (rms 1.8e-3,
+max 3.4e-2): with the term on, the light, humid air the buildings and
+surfaces release rises and mixes instead of accumulating as anomalies.
+The two runs also differ in the minimum level-1 humidity (4.8 g/kg with,
+3.3 without) and in dew deposition (1.6e-3 against 2.9e-3 kg m⁻²), but
+after an hour of turbulence part of that is the divergence of two
+chaotic runs, not the term alone.
 
 ## Adding a coupling
 
@@ -315,10 +378,26 @@ Sources in the default case: `evaporation` (slab), `building_vapour`,
 bottom), `qv_clamp` (the Kessler coupling's clamp) and `transport` (the
 change of water the transport stage makes; zero for a conservative
 scheme). The ledger integrates the water with `ledger.ρ`, one density
-per level, `1` for the Boussinesq case. A coupling that puts a flux into
-the air with a different density than the ledger's shows up as a water
-residual: #131, which introduces a reference density profile, sets
-`ledger.ρ` and the couplings must agree with it.
+per level, the reference density `case.ref.ρ̄` (#131). A coupling that
+puts a flux into the air with a different density than the ledger's
+shows up as a water residual, so a coupling converts every flux with
+`ref_density(case, k)`.
+
+The incompressible core does not conserve that ρ̄-weighted water: ∇·u = 0
+conserves Σ q, so vapour carried up into thinner air loses ρ̄-weighted
+mass (an anelastic core, #133, would conserve Σ ρ̄ q). The transport
+stage therefore books its change of water in two parts
+(`ledger_water_split`): `transport`, the column-mean ρ̄ times its change
+of Σ q (zero for a conservative scheme; today the #132 halo leak), and
+`density_redistribution`, the rest. Over the 1 h flagship run
+(06:00–07:00) with moist buoyancy on, `density_redistribution` is
+−8.1e-4 kg m⁻² (72 % of the slab's evaporation, 1.13e-3) and
+`transport` −7.0e-4; with it off, −6.3e-4 and +1.5e-5. Without the
+split both would be booked as `transport` (−1.5e-3, against −2.7e-4 at
+ρ = 1 in the #127 baseline), and fixing the #132 halo leak could not
+bring it to zero. Kessler
+sedimentation has the same effect inside its `precipitation` term
+(rain falling into denser levels), which #143 owns.
 
 The water integral runs over every grid cell, solid ones included.
 Today the slab's evaporation and the dew exchange act on level 1 of
@@ -332,6 +411,11 @@ integrals), plus about 0.4 ms/step for the Kessler coupling's own
 bookkeeping.
 
 ### Baseline (measured, #127)
+
+(Before the reference state of #131. With it the slab's fluxes carry
+ρ̄_1 ≈ 1.20 instead of 1, so in the same hour the domain H is −23.2
+instead of −19.7 W m⁻², and the moist buoyancy changes the flow; see
+the #131 PR for its ledger.)
 
 Flagship configuration, 1 h (`AEOLUS_NSTEPS=1800`, 06:00–07:00 local,
 20 June, 64 × 64 × 32, dt = 2 s), mean W m⁻² over the hour per class:
@@ -373,6 +457,17 @@ In the `:smoke` configuration of the smoke test (seeded fog, 12 steps
 at noon, 16 × 16 × 16) the domain residual is −34.4 W m⁻² in summer
 (dew heat +44.4 from the saturated seeded layer, window sun −6.9, glass
 −3.0) and +6.1 W m⁻² in winter.
+
+**Correction (#131).** That seeded layer was not saturated for the fog
+scheme: the seed set `q_v = q_s(θ, p)`, treating θ as the temperature,
+while the fog adjustment uses `T = θ Π(p)`, about 1.1 K warmer at
+1013 hPa. The air was at 93.5 % RH and the fog evaporated completely on
+the first step (ql after one `:fog_dew` call: 0 of the seeded amount;
+after 12 steps 1.6 %). Seeded at `q_s(θ Π̄_k, p̄_k)` it persists (99.7 %
+after the first call, 90 % after 12 steps). With a fog that stays, the
+compounding cloud shadow (#128) darkens the smoke window: domain Rn
+34.8 W m⁻² instead of 388.7, residual −53.2 W m⁻² (dew heat +60.5,
+window sun −6.9, glass −0.4) in summer and +5.5 in winter.
 
 ### After #128 (shade applied once, radiosity class map)
 
@@ -419,7 +514,8 @@ after #128.
 dx = 15.6 m, 312.5 m south of the anchor, 69 building and 50 park
 columns, tallest roof 31 m) at local noon, 12 steps of 2 s, radiation
 every 8 s, soil every 4 s. Before the first step it seeds a fog layer
-from a fixed RNG seed (`Xoshiro(127)`): saturated air with ql = 0.2 g/kg
+from a fixed RNG seed (`Xoshiro(127)`): air saturated at the reference
+state (`q_v = q_s(θ Π̄_k, p̄_k)`) with ql = 0.2 g/kg
 ± 10 % in the lowest three levels and rain qr < 5e-5 in levels 2–3, so
 dew, fog, sedimentation and precipitation all do real work. The
 flagship's pollutant stacks are outside this window, so the smoke runs
@@ -526,7 +622,6 @@ later issue.
 | no `class_map` in the radiosity scene (park/water facets get street material) | `core/geometry.jl` | #128 (fixed) |
 | slab: constant C_h and U, flux clamps, roof fluxes into solid k = 1, no surface drag | `surface_slab.jl`, `fog_dew.jl` | #129 |
 | sky longwave from the surface temperature, prescribed −2 K/day cooling | `radiosity_sun.jl`, `cooling_prescribed.jl` | #130 |
-| isothermal pressure profile for fog/dew, no virtual buoyancy | `fog_dew.jl` | #131 |
 | `qr` sedimented but not advected; qv clamp | `micro_kessler.jl` | #143 |
 | glass is a synthetic roof mask | `glass.jl` | #144 |
 | chemistry/aerosol species not advected or output; toy mechanism | `aq_chem.jl`, `aq_aerosol.jl` | #135, #147 |
