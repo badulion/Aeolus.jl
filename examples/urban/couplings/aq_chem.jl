@@ -227,7 +227,10 @@ function _aq_deposition_velocities!(c::AQChem, case)
                   0.5 * (v[i, j, k] + v[i, mod1(j + 1, Ny), k]))
         q = qv === nothing ? 0.0 : qv[i, j, k]
         z0 = c.z0m[i, j]
-        sol = solve_surface_layer(; U = U, z_m = z_m, θ_a = θ[i, j, k], θ_s = Ts[i, j],
+        # θ is referred to 1000 hPa (#131): the skin's potential temperature
+        # is Ts / Π̄ at its air cell
+        sol = solve_surface_layer(; U = U, z_m = z_m, θ_a = θ[i, j, k],
+                                  θ_s = Ts[i, j] / ref_exner(case, k),
                                   q_a = q, q_s = q, z0m = z0, z0h = z0 / 10)
         ra = 1 / (sol.C_H * sol.U)
         c.r_a[i, j] = ra
