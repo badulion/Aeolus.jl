@@ -90,7 +90,7 @@ export ReferenceState,
        max_pseudo_incompressible_divergence, constraint_residual,
        add_anelastic_buoyancy!,
        weighted_momentum_advect!, weighted_scalar_advect!,
-       set_reference_state!, reference_state,
+       set_reference_state!, reference_state, constraint_weights,
        θ_variance, max_w, bubble_top_height, unweighted_kinetic_energy,
        system_comparison_diagnostics
 
@@ -1307,6 +1307,20 @@ _weight_c(::AnelasticWeighting, r::ReferenceState)            = r.ρ̄c_pad
 _weight_f(::AnelasticWeighting, r::ReferenceState)            = r.ρ̄f_pad
 _weight_c(::PseudoIncompressibleWeighting, r::ReferenceState) = r.Pc_pad
 _weight_f(::PseudoIncompressibleWeighting, r::ReferenceState) = r.Pf_pad
+
+"""
+    constraint_weights(sim::MassWeightedSimulation) -> (Wc, Wf)
+
+The weight `W` of the constraint `∇·(W u) = 0` a sound-proof simulation
+enforces (`ρ̄` anelastic, `ρ̄θ̄` pseudo-incompressible), as the
+halo-padded cell and bottom-face vectors its kernels use (`Wc[k]`,
+`Wf[k]` at storage index `k`, see [`weighted_divergence!`](@ref)). A
+tracer transported in the flux form `∂(W q)/∂t = −∇·(W u q)` with these
+weights conserves `Σ W q` and keeps a uniform `q` uniform to the
+projection's tolerance.
+"""
+constraint_weights(sim::MassWeightedSimulation) =
+    (_weight_c(sim.weighting, sim.ref), _weight_f(sim.weighting, sim.ref))
 
 _default_reference(::AnelasticWeighting, mesh)            = isentropic_reference(mesh)
 _default_reference(::PseudoIncompressibleWeighting, mesh)  = constant_stability_reference(mesh)

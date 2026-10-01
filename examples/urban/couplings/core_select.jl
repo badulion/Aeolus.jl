@@ -45,11 +45,11 @@
 # `maxit`, so a future solver provider that forgets to declare itself
 # incompatible fails loudly instead of being ignored.
 #
-# KNOWN (not fixed here): the `:transport` stage advects the tracers with
-# the plain velocity. Under a sound-proof core ∇·u = −w ∂ln W/∂z ≠ 0, so a
-# uniform tracer does not stay exactly uniform (the domain total is still
-# conserved: flux form). The consistent form advects W·q with W·u; it
-# belongs to the scalar-advection slot. See docs/src/design/berlin_case.md.
+# Tracers: under a sound-proof core ∇·u = −w ∂ln W/∂z ≠ 0, so the plain
+# flux form would not keep a uniform tracer uniform and would conserve
+# Σ q rather than Σ ρ̄ q. The `:scalar_advection` slot therefore advects
+# with the mass flux W u (∂(W q)/∂t = −∇·(W u q)) whenever the core is
+# sound-proof; see couplings/scalar_advection.jl.
 
 """
     BoussinesqCore

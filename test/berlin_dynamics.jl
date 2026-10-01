@@ -155,6 +155,38 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
         end
     end
 
+    @testset "sound-proof core: W-weighted tracer transport" begin
+        # ∂(W q)/∂t = −∇·(W u q): a uniform tracer stays uniform (it would
+        # drift by ~dt·|∇·u| per step with the plain velocity), Σ W q is
+        # conserved, and on the anelastic core (W = ρ̄ = ledger.ρ) the
+        # transport books no density redistribution.
+        function uniform_run(core; weighted = true)
+            cfg = smoke(physics = soundproof(core),
+                        options = Dict(:scalar_advection => (weighted = weighted,)))
+            case = BC.build_case(cfg; io = devnull)
+            one = BC.ensure_tracer!(case, :one; advect = true, units = "1", long_name = "uniform test tracer")
+            Aeolus.Fields.set!(one, 1.0)
+            BC.run_case!(case)
+            return case, interior_view(BC.tracer(case, :one))
+        end
+        for core in (:anelastic, :pseudo_incompressible)
+            case, q = uniform_run(core)
+            _, q0 = uniform_run(core; weighted = false)
+            Wc, _ = Aeolus.Anelastic.constraint_weights(case.sim)
+            m = case.mesh
+            W = Wc[m.Hz+1:m.Hz+m.Nz]
+            ΣWq = sum(W[k] * sum(view(q, :, :, k)) for k in 1:m.Nz)
+            dev, dev0 = maximum(abs, q .- 1), maximum(abs, q0 .- 1)
+            @test isapprox(ΣWq, sum(W) * m.Nx * m.Ny; rtol = 1e-13)    # Σ W q conserved
+            @test dev < 1e-3 * dev0
+            w = BC.water_budget(case.ledger)
+            @test abs(w.residual) < 1e-12
+            core === :anelastic && @test abs(get(w.sources, :density_redistribution, 0.0)) < 1e-15
+            @printf("  [%s] uniform tracer after 24 s: max|q − 1| = %.1e weighted vs %.1e plain; density_redistribution %.1e kg/m²\n",
+                    core, dev, dev0, get(w.sources, :density_redistribution, 0.0))
+        end
+    end
+
     @testset "adaptive step: CFL-limited dt, fewer steps, ledgers close" begin
         case = run_smoke(physics = Dict(:timestepper => :adaptive))
         c = BC.find_coupling(case, :timestep_adaptive)

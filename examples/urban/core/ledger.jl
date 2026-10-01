@@ -160,28 +160,35 @@ function ledger_water(case, q::AbstractArray{<:Real,3})
 end
 
 """
-    ledger_water_split(case, dq) -> (transport, density_redistribution)
+    ledger_water_split(case, dq, W = nothing) -> (transport, density_redistribution)
 
 Split ``ledger_water(case, dq)`` of a transport increment `dq` into two
-parts that sum to it: ``\\bar ρ_m Σ_{cells} dq\\,Δz/(N_xN_y)`` with the
-column-mean density ``\\bar ρ_m`` of `ledger.ρ`, which is zero for a
-transport that conserves ``Σ q`` (what a flux-form scheme on a
-divergence-free velocity does), and ``Σ_k (ρ_k − \\bar ρ_m) Σ_{ij} dq\\,Δz
-/(N_xN_y)``, the water the ledger sees created or destroyed because the
-incompressible core moves `q` between levels of different reference
-density (``∇·u = 0`` conserves ``Σ q``, not ``Σ \\bar ρ q``; an anelastic
-core, #133, would conserve the latter). Upward transport of vapour
-makes the second part negative. With `ledger.ρ ≡ 1` it is exactly 0.
+parts that sum to it, according to what the transport conserves: ``Σ W
+q`` with the per-level weight `W` (length `Nz`), or ``Σ q`` when `W` is
+`nothing` (W ≡ 1). With ``c = \\bar ρ_m / \\bar W_m`` (column means of
+`ledger.ρ` and `W`) the first part is ``c Σ_k W_k Σ_{ij} dq\\,Δz/(N_xN_y)``,
+zero for a flux-form transport that conserves its ``Σ W q``, and the
+second ``Σ_k (ρ_k − c W_k) Σ_{ij} dq\\,Δz/(N_xN_y)``, the water the ledger
+sees created or destroyed because the transport conserves a different
+weight than the ledger's ρ̄. On the Boussinesq core (``∇·u = 0``
+conserves ``Σ q``) that is the incompressible transport moving `q`
+between levels of different reference density; upward transport of
+vapour makes it negative. On the anelastic core the transport is
+ρ̄-weighted (`scalar_advection`, #133), `W = ρ̄ = ledger.ρ` and the second
+part is exactly 0; on the pseudo-incompressible core `W = ρ̄θ̄`. With
+`ledger.ρ ≡ 1` and `W = nothing` it is exactly 0.
 """
-function ledger_water_split(case, q::AbstractArray{<:Real,3})
+function ledger_water_split(case, q::AbstractArray{<:Real,3}, W = nothing)
     l, mesh = case.ledger, case.mesh
     isempty(l.ρ) && (l.ρ = ones(mesh.Nz))
     ρm = sum(l.ρ) / length(l.ρ)
+    c = W === nothing ? ρm : ρm / (sum(W) / length(W))
     flat, redis = 0.0, 0.0
     @inbounds for k in axes(q, 3)
         s = sum(view(q, :, :, k))
-        flat += ρm * s
-        redis += (l.ρ[k] - ρm) * s
+        w = W === nothing ? 1.0 : W[k]
+        flat += c * w * s
+        redis += (l.ρ[k] - c * w) * s
     end
     f = mesh.dz / (mesh.Nx * mesh.Ny)
     return flat * f, redis * f
