@@ -15,15 +15,15 @@ Named presets for [`CaseConfig`](@ref):
 * `:winter` — the same domain on 15 January 2024 from 06:00, with cold
   initial air, surfaces and soil. Initial conditions only: the surface
   physics is the summer set (the snowpack mosaic, river ice and snow
-  optics arrive with the winter-surface issue), and the slab's legacy
-  270 K lower clamp on Ts is still active until the surface-exchange
-  issue removes it — so this is not yet a physical winter run.
+  optics arrive with the winter-surface issue) — so this is not yet a
+  physical winter run.
 * `:smoke` — a 250 m × 250 m × 100 m window of the real OSM file (centred
   312.5 m south of the anchor: 69 building and 50 park columns, tallest
   roof 31 m, well clear of the towers that reach 200 m in the OSM
   heights) on a
   16 × 16 × 16 grid (dx = 15.6 m) at local noon, 12 steps of 2 s with
-  radiation every 8 s, soil every 4 s and output every 12 s. Used for
+  radiation every 8 s, the surfaces (soil included) every 4 s and output
+  every 12 s. Used for
   quick checks of every code path, not for physics.
 * `:mitte_sample` — the bundled synthetic OSM sample
   (`data/sample_berlin_mitte.osm`, hand-generated, *not* real

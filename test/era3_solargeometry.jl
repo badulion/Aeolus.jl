@@ -357,6 +357,59 @@ using Aeolus.SolarGeometry
     end
 
     # ---------------------------------------------------------------------
+    # Slant path is exact (#130). A horizontally uniform layer of vertical
+    # optical depth τ must give exp(-τ/μ₀) at every sun elevation, and the
+    # lowest cell must count in full. The first implementation marched in
+    # half-cell steps from the first cell CENTRE (so cell 1 counted half)
+    # and multiplied the already slant path by 1/μ₀ again, giving
+    # exp(-τ/μ₀²): at 30° elevation 0.20 instead of 0.45 for τ = 0.4.
+    # ---------------------------------------------------------------------
+    @testset "Cloud shadow slant path is exact" begin
+        mesh = RegularGrid(; size=(16,16,16), extent=(160.0,160.0,160.0), halo=(1,1,1))
+        τ = zeros(Float64, 16, 16, 16)
+        τ[:, :, 5:8] .= 0.1                      # column τ = 0.4
+        for (el, az) in ((90.0, 0.0), (60.0, 30.0), (30.0, 200.0), (12.0, 95.0))
+            sd = (cosd(el) * sind(az), cosd(el) * cosd(az), sind(el))
+            t = cloud_shadow_map(τ, mesh, sd)
+            @test maximum(abs.(t .- exp(-0.4 / sind(el)))) < 1e-12
+        end
+        τ .= 0; τ[:, :, 1] .= 0.4                # the lowest cell alone
+        @test all(isapprox.(cloud_shadow_map(τ, mesh, (0.0, 0.0, 1.0)), exp(-0.4); rtol = 1e-12))
+        # a single cell: a vertical ray through its centre sees exactly its τ
+        τ .= 0; τ[3, 4, 2] = 0.7
+        t = cloud_shadow_map(τ, mesh, (0.0, 0.0, 1.0))
+        @test t[3, 4] ≈ exp(-0.7) rtol = 1e-12
+        @test count(<(1), t) == 1
+        # sun due east at 45°: the rays from the centres of (1,4) and (2,4)
+        # each cross cell (3,4,2) (x ∈ [20,30] m, z ∈ [10,20] m) along
+        # ℓ = 5√2 m, so both see exp(-(0.7/10)·5√2); nothing else is shaded
+        el = 45.0
+        t45 = cloud_shadow_map(τ, mesh, (cosd(el), 0.0, sind(el)))
+        @test t45[1, 4] ≈ exp(-0.07 * 5sqrt(2)) rtol = 1e-12
+        @test t45[2, 4] ≈ exp(-0.07 * 5sqrt(2)) rtol = 1e-12
+        @test count(<(1), t45) == 2
+        # building mask: a roof starts the ray on top of its own stack
+        sm = SolidMask(mesh)
+        mark_solid!(sm, (x, y, z) -> 60 <= x <= 100 && 60 <= y <= 100 && z <= 40)
+        τ .= 0; τ[:, :, 3:4] .= 0.2              # cloud inside the building levels only
+        tr = Matrix{Float64}(undef, 16, 16)
+        combined_shadow_transmittance!(tr, τ, sm.mask, mesh, (0.0, 0.0, 1.0))
+        roof = [sm.mask[1 + i, 1 + j, 1 + 1] for i in 1:16, j in 1:16]
+        @test all(tr[roof] .== 1.0)              # roof above the cloud: unattenuated
+        @test all(isapprox.(tr[.!roof], exp(-0.4); rtol = 1e-12))
+        # k_start does the same without the building blocking the beam: at
+        # a slant sun a roof cell next to the edge is lit through the cloud
+        # above the roof only, and nothing is fully shadowed
+        kst = [count(k -> sm.mask[1 + i, 1 + j, 1 + k], 1:16) for i in 1:16, j in 1:16]
+        τ[:, :, 6] .= 0.3                        # a cloud above the roofs too
+        sd = (cosd(40.0), 0.0, sind(40.0))
+        t_ks = cloud_shadow_map(τ, mesh, sd)     # allocating form: from the ground
+        cloud_shadow_transmittance!(t_ks, τ, mesh, sd; k_start = kst)
+        @test all(isapprox.(t_ks[roof], exp(-0.3 / sind(40.0)); rtol = 1e-12))
+        @test all(isapprox.(t_ks[.!roof], exp(-0.7 / sind(40.0)); rtol = 1e-12))
+    end
+
+    # ---------------------------------------------------------------------
     # Optical depth from the condensate field.
     # ---------------------------------------------------------------------
     @testset "Cloud optical depth from condensate" begin
@@ -368,8 +421,17 @@ using Aeolus.SolarGeometry
         τ = cloud_optical_depth_column(ql, qi, ρ, dz)
         @test all(τ .>= 0)
         @test all(iszero, τ[:, :, 1:3])
-        # τ = k·LWC·dz = 0.06 * (5e-4*1.0*1000) * 50 = 1.5
-        @test isapprox(τ[1,1,5], 0.06 * 0.5 * 50; rtol = 1e-12)
+        # τ = k·LWC·dz with k = 1.5/r_eff = 0.15 m²/g at 10 μm:
+        # 0.15 * (5e-4*1.0*1000) * 50 = 3.75. (The original expectation,
+        # 0.06 m²/g, was the old default, which is the extinction of 25 μm
+        # droplets, not the ~10 μm the docstring claimed; #130.)
+        @test isapprox(τ[1,1,5], 0.15 * 0.5 * 50; rtol = 1e-12)
+        # one source of truth: the same cloud has the same visible optical
+        # depth in the 3-D shadow and in the TwoStream cloud optics
+        col = AtmosphericColumn(Float64, Nz; ql = ql[1, 1, :], ρ = fill(1.0, Nz),
+                                dz = fill(50.0, Nz))
+        τ_ts = cloud_optical_depth(col, mie_cloud_optics(shortwave_bands()))
+        @test isapprox(sum(τ[1, 1, :]), τ_ts; rtol = 1e-12)
         @info "cloud τ per layer" value=τ[1,1,5] column_total=sum(τ[1,1,:])
         # more condensate ⇒ more optical depth, linearly
         τ2 = cloud_optical_depth_column(2 .* ql, qi, ρ, dz)

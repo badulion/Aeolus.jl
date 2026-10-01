@@ -118,7 +118,7 @@ module SoilColumn
 
 using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
                          SurfaceForcing, SurfaceFluxes, AbstractSurface, grav,
-                         cp_water, cp_ice, LH_f0, turbulent_fluxes
+                         cp_water, cp_ice, LH_f0, turbulent_fluxes, surface_latent_heat
 import ..SurfaceExchange: moisture_availability, surface_temperature, roughness_lengths,
                           surface_albedo, surface_emissivity, step_surface!
 using ..SurfaceOptics: material_emissivity
@@ -1649,7 +1649,9 @@ Cumulative energy budget of a [`SoilThermalColumn`](@ref) (J m⁻²):
 base), `water` (enthalpy moved by water redistribution, infiltration and
 evaporation, whose water carries the enthalpy of the layer it leaves or
 joins at that layer's temperature), `latent_mismatch` (latent heat of
-evaporation the surface balance charged but the soil could not deliver),
+evaporation the surface balance charged but the soil could not deliver;
+since #129 [`step_surface!`](@ref) returns the delivered evaporation and
+puts this heat into the top layer, so it is also part of `surface`),
 and `time` (s). ``Δ(\\text{enthalpy}) = surface - bottom + water``.
 """
 mutable struct SoilHeatBudget{T<:AbstractFloat}
@@ -2157,7 +2159,8 @@ surface_emissivity(col::SoilThermalColumn) = col.emissivity
 moisture_availability(col::SoilThermalColumn) = moisture_availability(col.water)
 
 """
-    step_surface!(col::SoilThermalColumn, forcing, dt; δT = 0.01, kwargs...) -> SurfaceFluxes
+    step_surface!(col::SoilThermalColumn, forcing, dt; δT = 0.01, Q_extra = 0,
+                  kwargs...) -> SurfaceFluxes
 
 One coupled land-surface step: skin energy balance, soil heat and
 freeze–thaw, then soil water.
@@ -2176,10 +2179,23 @@ freeze–thaw, then soil water.
     time-mean skin temperature of the step, so ``R_n - H - LE = G`` and
     ``G\\,dt`` is exactly the energy the soil received.
  4. With `hydrology = true`, [`step_soil_water!`](@ref) with the rain of
-    `forcing` and the evaporation ``E`` just returned.
+    `forcing` and the evaporation ``E`` just returned. If the soil
+    delivers less (its surface dries to the dry potential), the returned
+    `E` and `LE` are what it delivered, and the latent heat charged but
+    not spent goes into the top layer and into `G` (#129: before, the
+    surface reported the full demand, so an atmosphere coupled to it
+    received water the soil never lost).
+
+`Q_extra` (W m⁻², positive *into* the surface, constant over the step) is
+energy the skin receives besides radiation and the turbulent fluxes —
+the latent heat of dew deposited on it, heat released onto it, or
+(negative) sunlight transmitted through glazing. It enters the skin
+balance with the atmospheric supply, ``G_{atm} = R_n - H - LE + Q_{extra}``,
+so the returned ``G = R_n - H - LE + Q_{extra}`` is still exactly what the
+soil received.
 """
 function step_surface!(col::SoilThermalColumn{T}, f::SurfaceForcing, dt::Real;
-                       δT::Real = 0.01, kwargs...) where {T}
+                       δT::Real = 0.01, Q_extra::Real = 0.0, kwargs...) where {T}
     c = col.water.constants
     T0 = col.T_skin
     f0 = turbulent_fluxes(col, f; c = c, kwargs...)
@@ -2198,7 +2214,7 @@ function step_surface!(col::SoilThermalColumn{T}, f::SurfaceForcing, dt::Real;
             LE0 *= φ; dLE *= φ; E0 *= φ; dE *= φ
         end
     end
-    G0 = f0.Rn - f0.H - LE0
+    G0 = f0.Rn - f0.H - LE0 + Q_extra
     D = dRn - dH - dLE
     st = step_soil_heat!(col, dt, LinearizedSkinBalance(G0, D, T0))
     ΔT = st.T_skin_mean - T0
@@ -2206,12 +2222,25 @@ function step_surface!(col::SoilThermalColumn{T}, f::SurfaceForcing, dt::Real;
     H = f0.H + dH * ΔT
     LE = LE0 + dLE * ΔT
     E = E0 + dE * ΔT
-    fl = SurfaceFluxes{T}(Rn, H, LE, Rn - H - LE, f0.τ, E)
+    fl = SurfaceFluxes{T}(Rn, H, LE, Rn - H - LE + Q_extra, f0.τ, E)
     if col.hydrology
         ws = step_soil_water!(col, f, fl, dt)
-        # latent heat charged to the balance for water the soil did not deliver
-        col.budget.latent_mismatch += (E * dt / c.ρ_water - ws.evaporation) * c.ρ_water *
-                                      (E != 0 ? LE / E : zero(T))
+        # When the soil limits evaporation (its surface reaches the dry
+        # potential), the water step delivers less than the E the skin
+        # balance charged. Return what was delivered, so the atmosphere
+        # receives exactly the water the soil lost, and keep the latent
+        # heat that was charged but not spent in the soil: it goes into the
+        # top layer, and G grows by the same amount (energy conserved).
+        E_del = T(ws.evaporation * c.ρ_water / dt)
+        if E_del != E
+            λ = E != 0 ? LE / E : surface_latent_heat(col; c = c)
+            ΔLE = (E - E_del) * λ
+            col.H[1] += ΔLE * dt / col.water.grid.dz[1]
+            _apply_enthalpy!(col)
+            col.budget.surface += ΔLE * dt
+            col.budget.latent_mismatch += ΔLE * dt
+            fl = SurfaceFluxes{T}(Rn, H, LE - ΔLE, fl.G + ΔLE, f0.τ, E_del)
+        end
     end
     return fl
 end

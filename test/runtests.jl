@@ -717,6 +717,29 @@ using Aeolus.Fields: set!, interior_view
         end
     end
 
+    @testset "Radiative cooling: solid cells are not air" begin
+        # a rate applied with a solid mask changes the fluid cells only, and
+        # the fluid cells exactly as without the mask (#130: the Berlin
+        # column heating was going into the buildings too)
+        mesh = RegularGrid(; size=(4,4,4), extent=(1.0,1.0,1.0), halo=(1,1,1))
+        sm = Aeolus.IBM.SolidMask(mesh)
+        Aeolus.IBM.mark_solid!(sm, (x, y, z) -> x < 0.5 && y < 0.5 && z < 0.5)
+        prof = collect(-4:-1) * 1e-4
+        a = Field(CellCenter(), mesh); fill!(a.data, 0)
+        b = Field(CellCenter(), mesh); fill!(b.data, 0)
+        apply_radiative_cooling!(a, prof; solid = sm.mask)
+        apply_radiative_cooling!(b, prof)
+        va, vb = interior_view(a), interior_view(b)
+        solid = view(sm.mask, 2:5, 2:5, 2:5)
+        @test count(solid) == 8
+        @test all(iszero, va[solid])
+        @test va[.!solid] == vb[.!solid]
+        # the scalar form is the uniform profile
+        c = Field(CellCenter(), mesh); fill!(c.data, 0)
+        apply_radiative_cooling!(c, -1e-3; solid = sm.mask)
+        @test all(iszero, interior_view(c)[solid]) && all(interior_view(c)[.!solid] .== -1e-3)
+    end
+
     @testset "SlabLand: reaches radiative equilibrium" begin
         # No sensible flux, no SW: ground cools toward LW equilibrium.
         land = SlabLand(; T=310.0, C_s=1e5, albedo=0.0)
@@ -852,6 +875,8 @@ C_s = 0.17
 
 end
 
+include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet deposition (#135)
+
 # =========================================================================
 # Era II — numerical foundations for fidelity (Phases 21-31)
 # =========================================================================
@@ -867,6 +892,7 @@ end
     include("era2_advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
     include("era2_anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
     include("era2_multigrid.jl")   # Phase  29     geometric multigrid
+    include("era2_sgs_numerics.jl") # #132         dynamic Smagorinsky, step! operator swap-ins
     include("era2_amr.jl")         # Phases 30-31  nesting, AMR
 end
 
@@ -910,7 +936,6 @@ end
     include("era5_soil_column.jl")       # Phase 46: soil column, Richards equation (#15)
     include("era5_soil_thermal.jl")      # Phase 46: soil heat and freeze–thaw (#16)
     include("era5_water_table.jl")       # Phase 46: water table, unconfined aquifer (#17)
-    include("era5_urban_soil.jl")        # Phase 46: production soil column in the urban example (#18)
     include("era5_photosynthesis.jl")    # Phase 47  Farquhar C3 / Collatz C4 photosynthesis (#19)
     include("era5_stomata.jl")           # Phase 47  Ball-Berry / Medlyn stomatal conductance (#20)
     include("era5_land_surface.jl")      # Phase 47: vegetated land column, soil-water stress (#21)
@@ -945,7 +970,12 @@ end
 
 @testset "Berlin case" begin
     include("berlin_case.jl")            # registry, stages, bus, tracers (#126)
+    include("berlin_surface_exchange.jl") # MOST fluxes, soil ground, roof-aware air level, drag (#129)
     include("berlin_coverage.jl")        # every Aeolus module coupled, exempt or pending (#127)
     include("berlin_smoke.jl")           # every coupling and option, 12 steps, ledgers close (#127)
+    include("berlin_sw_modifiers.jl")    # tree shade / cloud shadow once per radiation field; scene class map (#128)
+    include("berlin_moist.jl")           # reference state, moist buoyancy, fog enthalpy (#131)
+    include("berlin_chemistry.jl")       # NOx–O3–VOC on tracers, r_a-based dry / wet deposition (#135)
+    include("berlin_numerics.jl")        # pressure solver, SGS, advection slots (#132)
     include("berlin_dynamics.jl")        # core / timestepper slots: anelastic, adaptive, IMEX (#133)
 end

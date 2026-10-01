@@ -38,7 +38,7 @@ coupling_name(::Type{BoussinesqCore}) = :core_boussinesq
 slot(::Type{BoussinesqCore}) = :core
 provider(::Type{BoussinesqCore}) = :boussinesq
 modules_used(::Type{BoussinesqCore}) = (:Simulations,)
-build_core(::Type{BoussinesqCore}, cfg, mesh) = boussinesq_core(cfg, mesh)
+build_core(::Type{BoussinesqCore}, cfg, mesh, simkw) = boussinesq_core(cfg, mesh; simkw...)
 
 function smoke_check(c::BoussinesqCore, case)
     sim = case.sim
@@ -91,7 +91,7 @@ end
 _mass_weighted_type(::Type{AnelasticCore}) = Aeolus.Anelastic.AnelasticSimulation
 _mass_weighted_type(::Type{PseudoIncompressibleCore}) = Aeolus.Anelastic.PseudoIncompressibleSimulation
 
-function build_core(C::Type{<:MassWeightedCore}, cfg, mesh)
+function build_core(C::Type{<:MassWeightedCore}, cfg, mesh, simkw)
     o = coupling_options(C, cfg)
     ref = case_reference_state(cfg, mesh; p_surf = o.p_surf)
     return _mass_weighted_type(C)(mesh; core_parameters(cfg)..., ref = ref,

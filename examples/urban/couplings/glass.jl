@@ -13,8 +13,8 @@
 # the wrong sign; see `apply_glass_sw_transmission!` below.
 #
 # The class integer is 6, one past `SURFACE_WALL = 5`, so a
-# `SurfaceParams` from [`glass_surface_params`](@ref) can be used with
-# `step_surfaces!` as-is. For a resolved glazed facet (pane temperatures,
+# `SurfaceParams` from [`glass_surface_params`](@ref) extends the class
+# tables as-is (since #129 the surface exchange builds a `SlabLand` from it). For a resolved glazed facet (pane temperatures,
 # transmitted solar gain into the room) use `WindowFacet` directly.
 
 # KNOWN (the per-building zones / WindowFacet issue replaces this file):
@@ -72,7 +72,7 @@ by `Aeolus.UrbanSurface`:
   * `emissivity` — the outer pane's thermal emissivity (0.837).
 
 The transmitted part of the shortwave is *not* in the albedo: the
-example's `step_surfaces!` would absorb it into the cell. Remove it with
+case's glass surface (a `SlabLand`, #129) would absorb it into the cell. Remove it with
 [`apply_glass_sw_transmission!`](@ref).
 """
 function glass_surface_params(; glazing::Glazing = example_glazing())
@@ -92,8 +92,8 @@ end
 
 For every cell tagged [`SURFACE_GLASS`](@ref), add the shortwave the
 glazing transmits into the building, ``T\\,SW``, to the surface-loss
-matrix `loss` (the `sensible` matrix `step_surfaces!` subtracts from the
-cell's energy budget). ``T`` is the glazing's solar transmittance: the
+matrix `loss` (`bus.sensible`, which the surface exchange takes from the
+cell's energy budget as `Q_extra = -loss`). ``T`` is the glazing's solar transmittance: the
 hemispherical value by default, or the direct-beam value at the
 incidence angle `acos(cos_incidence)` (for the example's horizontal
 glass cells, the cosine of the solar zenith angle). With the albedo of

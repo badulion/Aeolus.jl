@@ -54,6 +54,8 @@ function build_schedule!(case)
         (s, Δt) -> (for e in bf; timed_run!(case, e, :body_force, Δt); end; nothing)
     case.post_predictor = isempty(pp) ? nothing :
         (s, Δt) -> (for e in pp; timed_run!(case, e, :post_predictor, Δt); end; nothing)
+    case.step_kwargs = merge_keywords("step!", (coupling_name(c) => step_options(c, case)
+                                                for c in case.couplings))
     empty!(case.timing)
     return case
 end
@@ -132,7 +134,8 @@ function step_case!(case, dt::Real = step_dt(case))
     t0 = time_ns()
     ts = timestepper(case)
     if ts === nothing
-        step!(sim, dt; body_force! = case.body_force, post_predictor! = case.post_predictor)
+        step!(sim, dt; body_force! = case.body_force, post_predictor! = case.post_predictor,
+              case.step_kwargs...)
     else
         advance_dynamics!(ts, case, dt)
     end

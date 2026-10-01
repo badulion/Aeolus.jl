@@ -32,7 +32,8 @@ A built case: `cfg`, `mesh`, `sim` (the dynamical core: a
 `BoussinesqSimulation`, or the `MassWeightedSimulation` of the `:core`
 slot's anelastic / pseudo-incompressible provider), `geom`
 ([`Geometry`](@ref)), `bus` ([`SurfaceBus`](@ref)), `tracers`
-([`TracerRegistry`](@ref)), `ledger`, the enabled `couplings` (registry
+([`TracerRegistry`](@ref)), `ledger`, the hydrostatic reference state
+`ref` ([`CaseReference`](@ref)), the enabled `couplings` (registry
 order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
 NetCDF `output` (or `nothing`), the `io` for log lines, the composed
 `step!` hooks, and `timing` (wall seconds per `(stage, coupling)`, see
@@ -46,6 +47,7 @@ mutable struct Case{M, S, G<:Geometry}
     bus::SurfaceBus
     tracers::TracerRegistry
     ledger::Ledger
+    ref::CaseReference
     couplings::Vector{AbstractCoupling}
     schedule::Dict{Symbol,Vector{ScheduleEntry}}
     clock::Clock
@@ -54,6 +56,7 @@ mutable struct Case{M, S, G<:Geometry}
     body_force::Union{Nothing,Function}
     post_predictor::Union{Nothing,Function}
     timing::Dict{Tuple{Symbol,Symbol},Float64}
+    step_kwargs::NamedTuple      # extra step! keywords from the couplings' step_options
 end
 
 "The enabled coupling called `name`, or `nothing`."
@@ -101,8 +104,8 @@ core_parameters(cfg::CaseConfig) = (
     θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
 
 "The dry Boussinesq core of the case (buoyancy about the constant `cfg.θ₀`)."
-boussinesq_core(cfg::CaseConfig, mesh) =
-    BoussinesqSimulation(mesh; core_parameters(cfg)..., θ₀ = cfg.θ₀, moisture = false)
+boussinesq_core(cfg::CaseConfig, mesh; kw...) =
+    BoussinesqSimulation(mesh; core_parameters(cfg)..., θ₀ = cfg.θ₀, moisture = false, kw...)
 
 "The initial potential temperature θ(z) = θ_surface + max(0, z − θ_inversion_z)·θ_lapse, as `(x, y, z) -> θ`."
 function initial_θ(cfg::CaseConfig)
@@ -126,8 +129,12 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     geom = build_geometry(cfg, mesh; io = io)
 
     selected = selected_couplings(cfg)
+    simkw = merge_keywords("BoussinesqSimulation",
+                           (coupling_name(C) => sim_options(C, cfg, mesh, coupling_options(C, cfg))
+                            for C in selected))
     icore = findfirst(C -> slot(C) === :core, selected)
-    sim = icore === nothing ? boussinesq_core(cfg, mesh) : build_core(selected[icore], cfg, mesh)
+    sim = icore === nothing ? boussinesq_core(cfg, mesh; simkw...) :
+                              build_core(selected[icore], cfg, mesh, simkw)
     set!(sim.θ, initial_θ(cfg))
     u0 = cfg.u0
     set!(sim.u, (x, y, z) -> u0)
@@ -136,10 +143,16 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     Ts0, ΔTw = cfg.Ts0, cfg.Ts_water_offset
     @. bus.Ts = Ts0 + ΔTw * (geom.sfc == SURFACE_WATER)
 
+    # Hydrostatic reference p̄, ρ̄ (core/reference_state.jl); the ledger
+    # integrates the water in the air with the same ρ̄ the couplings use.
+    ref = build_reference(cfg, mesh)
+    ledger = Ledger()
+    ledger.ρ = copy(ref.ρ̄)
+
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time())
-    case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), Ledger(),
+    case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), ledger, ref,
                 AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
-                nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}())
+                nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;))
 
     # Core moisture tracers. qv and ql are advected by the :transport
     # stage; KNOWN: qr is sedimented by the microphysics but never

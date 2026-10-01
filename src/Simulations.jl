@@ -192,10 +192,31 @@ Advance `sim` by `dt`. Two optional callbacks are supported:
     velocity-damping, mask enforcement, anything that would blow up if
     added as an explicit tendency. The pressure projection then makes
     the resulting field divergence-free.
+
+Two keywords swap numerical operators without changing the algorithm:
+
+  * `momentum_advection = momentum_advect!` — the operator
+    `f(tu, tv, tw, u, v, w)` that adds `-∂(uⱼuᵢ)/∂xⱼ` to the momentum
+    tendencies (halos of `u, v, w` are filled). The default is the
+    2nd-order centred flux form; e.g.
+    `(tu, tv, tw, u, v, w) -> momentum_advect_weno_z!(tu, tv, tw, u, v, w)`
+    (`AdvectionSchemes`) selects the WENO-Z form.
+
+  * `eddy_viscosity! = nothing` — the SGS closure `f(νt, u, v, w)` that
+    fills the cell-centred eddy viscosity `νt` from the velocity (halos
+    filled). When given, it replaces the built-in
+    `compute_smagorinsky_νt!(νt, u, v, w, C_s)` and switches the SGS
+    terms on even if `C_s = 0`; the eddy-viscosity and eddy-diffusion
+    terms are then added at the same place in the tendency sum as for
+    the built-in closure, so a closure that computes the Smagorinsky
+    `νt` reproduces the built-in run bit for bit. Examples:
+    `compute_dynamic_smagorinsky_νt!` (`Operators`) or an `ML.MLSGS`.
 """
 function step!(sim::BoussinesqSimulation{T}, dt::Real;
                body_force!::Union{Nothing, Function} = nothing,
-               post_predictor!::Union{Nothing, Function} = nothing) where {T}
+               post_predictor!::Union{Nothing, Function} = nothing,
+               momentum_advection::F = momentum_advect!,
+               eddy_viscosity!::E = nothing) where {T, F, E<:Union{Nothing, Function}}
     Δt = T(dt)
 
     # 1. Halo fill so all stencils see valid neighbours.
@@ -209,7 +230,7 @@ function step!(sim::BoussinesqSimulation{T}, dt::Real;
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
     fill!(sim.tθ.data, 0)
     sim.has_moisture && fill!(sim.tqv.data, 0)
-    momentum_advect!(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w)
+    momentum_advection(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w)
     advect_centered!(sim.tθ, sim.u, sim.v, sim.w, sim.θ)
     sim.has_moisture && advect_centered!(sim.tqv, sim.u, sim.v, sim.w, sim.qv)
 
@@ -223,9 +244,13 @@ function step!(sim::BoussinesqSimulation{T}, dt::Real;
         _axpy_interior!(sim.tθ, sim.ν, sim.lap_θ, sim.mesh)
     end
 
-    # 4. Smagorinsky-Lilly SGS.
-    if sim.has_sgs
-        compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, sim.C_s)
+    # 4. Smagorinsky-Lilly SGS (or the closure passed as `eddy_viscosity!`).
+    if sim.has_sgs || eddy_viscosity! !== nothing
+        if eddy_viscosity! === nothing
+            compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, sim.C_s)
+        else
+            eddy_viscosity!(sim.νt, sim.u, sim.v, sim.w)
+        end
         fill_halos!(sim.νt, sim.bcs)
         add_eddy_viscosity_u!(sim.tu, sim.u, sim.νt)
         add_eddy_viscosity_v!(sim.tv, sim.v, sim.νt)

@@ -47,12 +47,6 @@ module removes it here in the same PR (the ratchet test below fails
 until it does).
 """
 const BERLIN_PENDING = Dict{Symbol,String}(
-    :SurfaceExchange       => "#129 MOST surface fluxes",
-    :GasOptics             => "#130 column radiation",
-    :TwoStream             => "#130 column radiation",
-    :RadiationCore         => "#130 column radiation (the Era III contract; today reached only indirectly, through the spectral grids of the radiosity materials)",
-    :Multigrid             => "#132 pressure-solver option",
-    :ML                    => "#132 MLSGS option",
     :Particles             => "#134 Lagrangian particles",
     :DataAssimilation      => "#134 nudging assimilation",
     :IO                    => "#134 checkpoint / restart",

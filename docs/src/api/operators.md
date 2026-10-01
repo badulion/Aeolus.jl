@@ -45,6 +45,8 @@ Aeolus.Operators.add_coriolis!
 
 ```@docs
 Aeolus.Operators.compute_smagorinsky_νt!
+Aeolus.Operators.compute_dynamic_smagorinsky_νt!
+Aeolus.Operators.DynamicSmagorinskyWorkspace
 Aeolus.Operators.add_eddy_viscosity_u!
 Aeolus.Operators.add_eddy_viscosity_v!
 Aeolus.Operators.add_eddy_viscosity_w!
