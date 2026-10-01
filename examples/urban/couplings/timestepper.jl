@@ -21,6 +21,13 @@
 # are pure functions of the velocity and its tendency, so re-running them
 # on a retry or an IMEX stage is safe.
 #
+# Every provider passes the numerics slots' step keywords
+# (`case.step_kwargs`: `momentum_advection`, `eddy_viscosity!`, #132) to
+# the step it takes — `step!`, or `step_imex!`, which takes the same
+# keywords — so the momentum-advection and SGS choices hold under every
+# time stepper. The adaptive provider estimates the diffusive limit with
+# the selected SGS closure's ν_t, not with Smagorinsky's.
+#
 # `adaptive_dt`, `step_adaptive!` and `step_imex!` are typed on
 # BoussinesqSimulation, so both providers are incompatible with the
 # anelastic and pseudo-incompressible cores (couplings/core_select.jl).
@@ -35,8 +42,10 @@ const _SOUNDPROOF_REASON =
     FixedStep
 
 Slot `:timestepper`, provider `:fixed` (default): one `step!(sim, dt)` of
-the dynamical core per case step, `dt = cfg.dt`. Works with every core
-(`step!` dispatches on the simulation type).
+the dynamical core per case step, `dt = cfg.dt`, with the numerics
+slots' step keywords ([`dynamics_step!`](@ref), the contract default of
+`advance_dynamics!`). Works with every core (`step!` dispatches on the
+simulation type).
 """
 struct FixedStep <: AbstractCoupling end
 
@@ -44,8 +53,6 @@ coupling_name(::Type{FixedStep}) = :timestep_fixed
 slot(::Type{FixedStep}) = :timestepper
 provider(::Type{FixedStep}) = :fixed
 modules_used(::Type{FixedStep}) = (:TimeSteppers,)
-advance_dynamics!(c::FixedStep, case, dt) =
-    (step!(case.sim, dt; body_force! = case.body_force, post_predictor! = case.post_predictor); nothing)
 
 """
     StepStats
@@ -91,6 +98,11 @@ failure (`max_retries`, `divergence_tol`, `max_velocity`). With
 `imex = true` the dynamics is `step_imex!(…, ARK2())` and the step is
 limited only by the explicitly treated processes.
 
+Each step (and each retried piece) is `step!` — or `step_imex!` — with
+the numerics slots' `case.step_kwargs`. With an `eddy_viscosity!` closure
+selected (`sgs = :dynamic`, `:mlsgs`) the diffusive limit is computed
+from that closure's ν_t of the current flow.
+
 `dt_max` is further capped at the shortest period in `cfg.cadence`, so a
 step never skips a firing of a cadence (the soil and building couplings
 integrate over their period). `run_case!` runs to the simulated time
@@ -135,10 +147,30 @@ function build(::Type{<:AdaptiveStep}, case, o)
                         o.max_velocity, case.cfg.dt, 0.0, StepStats())
 end
 
+"""
+    sgs_cfl_diagnostics(case, constraints)
+
+`cfl_diagnostics` of the case's core with the SGS viscosity of the
+selected closure: the `eddy_viscosity!` of `case.step_kwargs` fills
+`sim.νt` from the current flow when there is one (it is what the next
+step will use), otherwise the built-in Smagorinsky ν_t is recomputed.
+"""
+function sgs_cfl_diagnostics(case, k)
+    sim = case.sim
+    ev = get(case.step_kwargs, :eddy_viscosity!, nothing)
+    ev === nothing && return cfl_diagnostics(sim, k)
+    for f in (sim.u, sim.v, sim.w)
+        fill_halos!(f, sim.bcs)
+    end
+    ev(sim.νt, sim.u, sim.v, sim.w)
+    fill_halos!(sim.νt, sim.bcs)
+    return cfl_diagnostics(sim, k; update_νt = false)
+end
+
 function next_dt(c::AdaptiveStep, case)
     sim, k = case.sim, c.constraints
     if c.scheme === nothing
-        d = cfl_diagnostics(sim, k)
+        d = sgs_cfl_diagnostics(case, k)
         lim = d.limiter
     else
         l = imex_stability_limit(sim, c.scheme; constraints = k)
@@ -152,11 +184,16 @@ end
 
 function advance_dynamics!(c::AdaptiveStep, case, dt)
     sim, s = case.sim, c.stats
+    skw, scheme = case.step_kwargs, c.scheme
+    # the step (and every retry) with the numerics slots' keywords
+    stepper = scheme === nothing ? ((m, h; kw...) -> step!(m, h; kw..., skw...)) :
+                                   ((m, h; kw...) -> step_imex!(m, h, scheme; kw..., skw...))
     remaining, nretry, piece_min = Float64(dt), 0, Inf
     while remaining > 1e-12 * dt
         _, used, r = step_adaptive!(sim, c.constraints; dt = remaining,
                                     body_force! = case.body_force,
                                     post_predictor! = case.post_predictor,
+                                    stepper = stepper,
                                     max_retries = c.max_retries, scheme = c.scheme,
                                     divergence_tol = c.divergence_tol,
                                     max_velocity = c.max_velocity)
@@ -211,8 +248,10 @@ end
     IMEXStep
 
 Slot `:timestepper`, provider `:imex`: `step_imex!(sim, cfg.dt, ARK2())`
-— the diffusion (molecular + Smagorinsky, frozen ν_eff) implicit, the
-rest explicit, a projection after each of the two stages. Options `tol`
+— the diffusion (molecular + SGS, frozen ν_eff) implicit, the rest
+explicit, a projection after each of the two stages. The numerics slots'
+step keywords are passed on: the momentum-advection operator is the
+explicit one, and an `eddy_viscosity!` closure supplies the frozen ν_t. Options `tol`
 and `maxit` of the implicit CG solves. Buys nothing at a dt the explicit
 step is stable at (it costs two projections and four implicit solves per
 step); it is what lets `cfg.dt` exceed the diffusive limit Δ²/ν_eff.
@@ -240,7 +279,7 @@ function advance_dynamics!(c::IMEXStep, case, dt)
     ws = imex_workspace(sim)
     step_imex!(sim, dt, c.scheme; body_force! = case.body_force,
                post_predictor! = case.post_predictor, workspace = ws,
-               tol = c.tol, maxit = c.maxit)
+               tol = c.tol, maxit = c.maxit, case.step_kwargs...)
     c.stats.pieces += 1
     _record_dt!(c.stats, dt, cfl)
     c.stats.imex_iterations, c.stats.imex_residual = ws.total_iterations, ws.max_residual

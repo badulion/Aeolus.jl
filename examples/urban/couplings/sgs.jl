@@ -35,7 +35,10 @@ provider(::Type{SGSSmagorinsky}) = :smagorinsky
 modules_used(::Type{SGSSmagorinsky}) = (:Simulations,)
 smoke_check(c::SGSSmagorinsky, case) =
     ["ν_t ≥ 0" => minimum(interior_view(case.sim.νt)) >= 0,
-     "ν_t > 0 where the flow is strained" => Aeolus.Simulations.max_νt(case.sim) > 0]
+     "ν_t > 0 where the flow is strained" => core_max_νt(case.sim) > 0]
+# the built-in closure of either core (the sound-proof cores, #133, have no max_νt)
+core_max_νt(sim::BoussinesqSimulation) = Aeolus.Simulations.max_νt(sim)
+core_max_νt(sim) = maximum(interior_view(sim.νt))
 
 """
     SGSDynamic

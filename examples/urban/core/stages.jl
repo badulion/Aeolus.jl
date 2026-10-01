@@ -102,6 +102,18 @@ function timestepper(case)
 end
 
 """
+    dynamics_step!(case, dt)
+
+One `step!` of the dynamical core over `dt` with the composed
+`:body_force` / `:post_predictor` hooks and the numerics slots'
+`case.step_kwargs`. The fixed time stepper (and the contract default of
+`advance_dynamics!`).
+"""
+dynamics_step!(case, dt) =
+    (step!(case.sim, dt; body_force! = case.body_force, post_predictor! = case.post_predictor,
+           case.step_kwargs...); nothing)
+
+"""
     step_dt(case) -> dt
 
 The length (s) of the next step: `next_dt` of the `:timestepper`
@@ -133,12 +145,7 @@ function step_case!(case, dt::Real = step_dt(case))
     end
     t0 = time_ns()
     ts = timestepper(case)
-    if ts === nothing
-        step!(sim, dt; body_force! = case.body_force, post_predictor! = case.post_predictor,
-              case.step_kwargs...)
-    else
-        advance_dynamics!(ts, case, dt)
-    end
+    ts === nothing ? dynamics_step!(case, dt) : advance_dynamics!(ts, case, dt)
     case.timing[(:dynamics, :step!)] = get(case.timing, (:dynamics, :step!), 0.0) + (time_ns() - t0) * 1e-9
     run_entries!(case, :surface_update, dt, n, t_old, t_new)
     run_entries!(case, :column_tendency, dt, n, t_old, t_new)

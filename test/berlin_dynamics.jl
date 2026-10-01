@@ -3,6 +3,12 @@
 #   slot :core         :boussinesq (default) | :anelastic | :pseudo_incompressible
 #   slot :timestepper  :fixed (default) | :adaptive | :imex
 #
+# and how they combine with the numerics slots of #132: every time
+# stepper carries the step! keywords (momentum advection, SGS closure);
+# the sound-proof cores take only the density-weighted CG pressure
+# solver and their own operators, and every other combination is a
+# declared incompatibility.
+#
 # Every run here is CaseConfig(:smoke) (250 m × 250 m × 100 m of the real
 # OSM scene, 16³, noon). The 1 h flagship comparisons (steps saved by the
 # adaptive step, anelastic vs Boussinesq θ(z)) are measured in the PR.
@@ -23,6 +29,17 @@ smoke(; physics = Dict{Symbol,Any}(), options = Dict{Symbol,Any}(), kw...) =
 
 run_smoke(; kw...) = (case = BC.build_case(smoke(; kw...); io = devnull); BC.run_case!(case); case)
 
+"The physics selecting sound-proof core `core` (it brings its own pressure solver)."
+soundproof(core) = Dict{Symbol,Any}(:core => core, :pressure_solver => :density_weighted_cg)
+
+"The selection error for `physics`, or `nothing`."
+selection_error(physics) =
+    try
+        BC.selected_couplings(smoke(physics = physics)); nothing
+    catch e
+        sprint(showerror, e)
+    end
+
 mean_θ(case) = vec(mean(interior_view(case.sim.θ); dims = (1, 2)))
 
 "2Δ (checkerboard) amplitude of θ on level k: the mode an unstable explicit diffusion step amplifies."
@@ -38,23 +55,48 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
         @test BC.default_provider(:core) === :boussinesq
         @test BC.default_provider(:timestepper) === :fixed
         for ts in (:adaptive, :imex), core in (:anelastic, :pseudo_incompressible)
-            err = try
-                BC.selected_couplings(smoke(physics = Dict(:timestepper => ts, :core => core)))
-                nothing
-            catch e
-                sprint(showerror, e)
-            end
+            err = selection_error(merge(soundproof(core), Dict(:timestepper => ts)))
             @test err !== nothing
             @test occursin("incompatible", err) && occursin("BoussinesqSimulation", err) &&
                   occursin("timestepper = :fixed", err)
         end
-        # every other pair is allowed
+        # every other core × time-stepper pair is allowed
         for ts in (:fixed, :adaptive, :imex)
             @test length(BC.selected_couplings(smoke(physics = Dict(:timestepper => ts)))) > 0
         end
         for core in (:anelastic, :pseudo_incompressible)
-            @test length(BC.selected_couplings(smoke(physics = Dict(:core => core)))) > 0
+            @test length(BC.selected_couplings(smoke(physics = soundproof(core)))) > 0
         end
+    end
+
+    @testset "numerics slots × core: the keywords a core cannot take are declared incompatible" begin
+        @test :density_weighted_cg in BC.slot_providers()[:pressure_solver]
+        for core in (:anelastic, :pseudo_incompressible)
+            # the default (cosine FFT) and multigrid solvers solve ∇²φ = ∇·u*,
+            # not the weighted projection: selecting the core alone says so
+            for ps in (nothing, :multigrid, :mg_cg)
+                phys = Dict{Symbol,Any}(:core => core)
+                ps === nothing || (phys[:pressure_solver] = ps)
+                err = selection_error(phys)
+                @test err !== nothing && occursin("incompatible", err) &&
+                      occursin("density_weighted_cg", err)
+            end
+            # unweighted WENO-Z momentum and the eddy_viscosity! closures
+            for (s, p) in ((:momentum_advection, :weno_z), (:sgs, :dynamic), (:sgs, :mlsgs))
+                err = selection_error(merge(soundproof(core), Dict(s => p)))
+                @test err !== nothing && occursin("incompatible", err)
+            end
+        end
+        # the weighted solver on the Boussinesq core
+        err = selection_error(Dict(:pressure_solver => :density_weighted_cg))
+        @test err !== nothing && occursin("sound-proof", err)
+        # a sim_options keyword a sound-proof core does not take is an
+        # error, never dropped (the guard behind the declarations)
+        cfg = smoke(physics = soundproof(:anelastic))
+        mesh = Aeolus.Grids.RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
+        @test_throws ErrorException BC.build_core(BC.AnelasticCore, cfg, mesh,
+                                                  BC.build_reference(cfg, mesh),
+                                                  (solver = CosineFFTPoissonSolver(mesh),))
     end
 
     bous = run_smoke()
@@ -66,7 +108,7 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
 
     @testset "anelastic / pseudo-incompressible core: the weighted constraint, same flow" begin
         for core in (:anelastic, :pseudo_incompressible)
-            case = run_smoke(physics = Dict(:core => core))
+            case = run_smoke(physics = soundproof(core))
             sim, m = case.sim, case.mesh
             ref = Aeolus.Anelastic.reference_state(sim)
             @test sim isa Aeolus.Anelastic.MassWeightedSimulation
@@ -198,5 +240,49 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
         @test maximum(abs.(mean_θ(im2) .- mean_θ(bous))) < 1e-2    # K; measured 2.9e-3
         @printf("  [imex] dt = 12 s: max|u| explicit %.2f vs ARK2 %.2f m/s; 2Δ θ %.1e vs %.1e K\n",
                 ui(ex), ui(im), checkerboard(ex, 4), checkerboard(im, 4))
+    end
+
+    @testset "every time stepper carries the numerics slots' step! keywords" begin
+        # An MLSGS closure that is Smagorinsky with a call counter: the
+        # flow is the default one bit for bit, and the count shows whether
+        # the stepper passed `eddy_viscosity!` on (a dropped keyword would
+        # leave it at 0).
+        calls = Ref(0)
+        C_s = BC.CaseConfig(:smoke).C_s
+        counting(νt, u, v, w, mesh) =
+            (calls[] += 1; Aeolus.Operators.compute_smagorinsky_νt!(νt, u, v, w, C_s); nothing)
+        mlsgs = Dict{Symbol,Any}(:sgs_mlsgs => (fn = counting,))
+        plain = Dict(ts => run_smoke(physics = Dict(:timestepper => ts)) for ts in (:adaptive, :imex))
+        plain[:fixed] = bous
+        state(c) = (interior_view(c.sim.u), interior_view(c.sim.w), interior_view(c.sim.θ))
+        for ts in (:fixed, :adaptive, :imex)
+            calls[] = 0
+            case = run_smoke(physics = Dict(:timestepper => ts, :sgs => :mlsgs), options = mlsgs)
+            n = case.clock.n
+            # fixed: once per step!; IMEX: once per step (ν_eff frozen);
+            # adaptive: once in next_dt (the diffusive limit) and once per step!
+            @test calls[] == (ts === :adaptive ? 2n : n)
+            @test state(case) == state(plain[ts])                    # bitwise
+        end
+        # the WENO-Z momentum operator reaches the adaptive and IMEX steps
+        for ts in (:adaptive, :imex)
+            wz = run_smoke(physics = Dict(:timestepper => ts, :momentum_advection => :weno_z))
+            Δu = maximum(abs.(interior_view(wz.sim.u) .- interior_view(plain[ts].sim.u)))
+            @test Δu > 1e-6
+            @test max_divergence(wz.sim) < 1e-10
+            @printf("  [%s] WENO-Z vs centred momentum after 24 s: max|Δu| = %.1e m/s\n", ts, Δu)
+        end
+        # the adaptive diffusive limit uses the selected closure's ν_t: a
+        # closure with 4× the Smagorinsky ν_t gives a 4× shorter SGS limit
+        quad(νt, u, v, w, mesh) = (Aeolus.Operators.compute_smagorinsky_νt!(νt, u, v, w, C_s);
+                                   interior_view(νt) .*= 4; nothing)
+        case = BC.build_case(smoke(physics = Dict(:timestepper => :adaptive, :sgs => :mlsgs),
+                                   options = Dict(:sgs_mlsgs => (fn = quad,))); io = devnull)
+        BC.step_case!(case); BC.step_case!(case)
+        k = BC.find_coupling(case, :timestep_adaptive).constraints
+        d4 = BC.sgs_cfl_diagnostics(case, k)
+        d1 = Aeolus.TimeIntegration.cfl_diagnostics(case.sim, k)      # recomputes Smagorinsky
+        @test d1.νt_max > 0
+        @test isapprox(d4.νt_max, 4 * d1.νt_max; rtol = 1e-12)
     end
 end

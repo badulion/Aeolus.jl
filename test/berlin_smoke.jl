@@ -37,7 +37,9 @@ const BC = Main.BerlinCase
 The smoke-test configurations derived from `registry` (see the file
 header). Every run starts from `CaseConfig(:smoke)` with every additive
 coupling on; a run that selects a coupling declared incompatible with an
-additive one switches that additive coupling off.
+additive one switches that additive coupling off, and one incompatible
+with the default provider of another slot switches that slot to its
+first compatible provider (registry order).
 """
 function smoke_matrix(registry = BC.REGISTRY)
     name = BC.coupling_name
@@ -55,14 +57,33 @@ function smoke_matrix(registry = BC.REGISTRY)
     function mk(label; physics = Dict{Symbol,Any}(), options = Dict{Symbol,Any}(), kw...)
         phys = Dict{Symbol,Any}(name(C) => true for C in addons)
         merge!(phys, physics)
-        # the selection this physics makes, and any addon it conflicts with
-        sel = [C for C in registry if (BC.slot(C) === :addon ? phys[name(C)] :
-               BC.provider(C) === get(phys, BC.slot(C), defaults[BC.slot(C)]))]
-        for C in sel, D in sel
-            (hits(C, D) || hits(D, C)) || continue
-            for X in (C, D)
-                BC.slot(X) === :addon && !haskey(physics, name(X)) && (phys[name(X)] = false)
+        # The selection this physics makes. A coupling it conflicts with
+        # that the run did not ask for gives way: an addon is switched
+        # off, a slot's default provider is replaced by the slot's first
+        # provider (registry order) compatible with the rest (e.g. core =
+        # anelastic brings pressure_solver = density_weighted_cg along).
+        selection() = [C for C in registry if (BC.slot(C) === :addon ? phys[name(C)] :
+                       BC.provider(C) === get(phys, BC.slot(C), defaults[BC.slot(C)]))]
+        clash(C, D) = hits(C, D) || hits(D, C)
+        for _ in 1:length(registry)
+            sel = selection()
+            changed = false
+            for C in sel, D in sel
+                clash(C, D) || continue
+                for X in (C, D)
+                    s = BC.slot(X)
+                    if s === :addon
+                        haskey(physics, name(X)) || (phys[name(X)] = false; changed = true)
+                    elseif !haskey(physics, s)
+                        others = [Y for Y in sel if BC.slot(Y) !== s]
+                        i = findfirst(P -> BC.slot(P) === s && !any(Y -> clash(P, Y), others), registry)
+                        i === nothing && error("smoke run \"$label\": no provider of slot :$s is compatible with the selection")
+                        phys[s] = BC.provider(registry[i]); changed = true
+                    end
+                end
+                changed && break
             end
+            changed || break
         end
         opts = base_options()
         haskey(opts, :pollutant) && !any(C -> name(C) === :pollutant, registry) && delete!(opts, :pollutant)
@@ -185,11 +206,15 @@ end
 struct _SmokeA <: BC.AbstractCoupling end
 struct _SmokeB <: BC.AbstractCoupling end
 struct _SmokeAddon <: BC.AbstractCoupling end
+struct _SmokeC <: BC.AbstractCoupling end
+struct _SmokeD <: BC.AbstractCoupling end
 
 @testset "smoke matrix: derived from the registry" begin
     # a synthetic registry (not registered): a slot with a default and an
     # alternative provider, an addon that is off by default and conflicts
-    # with the alternative, and a coupling that asks for one extra variant
+    # with the alternative, a second slot whose default provider the
+    # alternative also conflicts with, and a coupling that asks for one
+    # extra variant
     BC.coupling_name(::Type{_SmokeA}) = :smoke_a
     BC.coupling_name(::Type{_SmokeB}) = :smoke_b
     BC.coupling_name(::Type{_SmokeAddon}) = :smoke_addon
@@ -199,16 +224,26 @@ struct _SmokeAddon <: BC.AbstractCoupling end
     BC.provider(::Type{_SmokeB}) = :b
     BC.is_default(::Type{_SmokeB}) = false
     BC.is_default(::Type{_SmokeAddon}) = false
-    BC.incompatible(::Type{_SmokeB}) = (:smoke_addon,)
+    BC.coupling_name(::Type{_SmokeC}) = :smoke_c
+    BC.coupling_name(::Type{_SmokeD}) = :smoke_d
+    BC.slot(::Type{_SmokeC}) = :smoke_slot2
+    BC.slot(::Type{_SmokeD}) = :smoke_slot2
+    BC.provider(::Type{_SmokeC}) = :c
+    BC.provider(::Type{_SmokeD}) = :d
+    BC.is_default(::Type{_SmokeD}) = false
+    BC.incompatible(::Type{_SmokeB}) = (:smoke_addon, :smoke_slot2 => :c)
     BC.smoke_variants(::Type{_SmokeA}) = ((label = "coarse", options = Dict(:smoke_a => (n = 2,)), nsteps = 4),)
-    runs = Dict(smoke_matrix(Type[_SmokeA, _SmokeB, _SmokeAddon]))
+    runs = Dict(smoke_matrix(Type[_SmokeA, _SmokeB, _SmokeAddon, _SmokeC, _SmokeD]))
     @test Set(keys(runs)) == Set(["summer, everything on", "winter, everything on",
-                                  "smoke_slot = b", "smoke_a: coarse"])
+                                  "smoke_slot = b", "smoke_slot2 = d", "smoke_a: coarse"])
     @test runs["summer, everything on"].physics[:smoke_addon] == true       # default-off addon on
     @test runs["winter, everything on"].scenario === :winter
     @test runs["winter, everything on"].θ_surface == BC.SCENARIOS[:winter].θ_surface
     @test runs["smoke_slot = b"].physics[:smoke_slot] === :b
     @test runs["smoke_slot = b"].physics[:smoke_addon] == false             # conflict resolved
+    @test runs["smoke_slot = b"].physics[:smoke_slot2] === :d               # slot default gives way
+    @test runs["smoke_slot2 = d"].physics[:smoke_slot2] === :d
+    @test !haskey(runs["summer, everything on"].physics, :smoke_slot2)      # defaults untouched
     @test runs["smoke_a: coarse"].nsteps == 4
     @test runs["smoke_a: coarse"].options[:smoke_a] == (n = 2,)
     @test !haskey(runs["summer, everything on"].options, :pollutant)        # not in this registry

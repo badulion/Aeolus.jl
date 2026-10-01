@@ -16,11 +16,34 @@
 # with, so there is one reference state per case. The initial state has
 # no buoyancy and the cores start from the same flow.
 #
-# The dynamics hooks of the case (IBM, canopy drag, geostrophic forcing)
-# are duck-typed on `sim.u/v/w/tu/tv`, so they run unchanged on either
-# core. The time-integration providers `:adaptive` and `:imex` are typed
-# on BoussinesqSimulation in src and declare themselves incompatible with
-# the two sound-proof cores (see couplings/timestepper.jl).
+# The dynamics hooks of the case (IBM, canopy drag, geostrophic forcing,
+# moist buoyancy, surface drag) are duck-typed on `sim.u/v/w/tu/tv/θ`,
+# so they run unchanged on either core. The time-integration providers
+# `:adaptive` and `:imex` are typed on BoussinesqSimulation in src and
+# declare themselves incompatible with the two sound-proof cores (see
+# couplings/timestepper.jl).
+#
+# The numerics slots (#132) and the sound-proof cores. A sound-proof core
+# is its own projection and its own momentum operator: the projection
+# solves ∇·(W∇φ) = ∇·(W u*) with a density-weighted CG built from the
+# core's base state and weighting, momentum is advected in the W-weighted
+# centred flux form, and the SGS closure is the built-in Smagorinsky
+# (`_step_mass_weighted!` takes no operator keywords). Hence:
+#
+#   :pressure_solver     only `:density_weighted_cg` (its `tol`, `maxit`
+#                        reach the core's own solver); the Boussinesq
+#                        solvers (cosine FFT, multigrid, MG-CG) solve the
+#                        constant-coefficient equation and are incompatible;
+#   :momentum_advection  `:centered` (the core's weighted centred form; the
+#                        provider passes no keyword to a sound-proof core);
+#                        `:weno_z` is an unweighted operator: incompatible;
+#   :sgs                 `:smagorinsky`; `:dynamic` and `:mlsgs` act through
+#                        `eddy_viscosity!`, which the sound-proof step does
+#                        not take: incompatible.
+#
+# `build_core` also refuses any `sim_options` keyword other than `tol` /
+# `maxit`, so a future solver provider that forgets to declare itself
+# incompatible fails loudly instead of being ignored.
 #
 # KNOWN (not fixed here): the `:transport` stage advects the tracers with
 # the plain velocity. Under a sound-proof core ∇·u = −w ∂ln W/∂z ≠ 0, so a
@@ -57,14 +80,14 @@ sound-proof cores of `Aeolus.Anelastic`, `AnelasticSimulation`
 (`∇·(ρ̄u) = 0`) and `PseudoIncompressibleSimulation` (`∇·(ρ̄θ̄u) = 0`). The
 base state is the case's reference state `case.ref.state`
 ([`build_reference`](@ref): the initial θ(z) from `cfg.p_surface`).
-Options `tol` and `maxit` go to the density-weighted CG projection solver.
+The projection solver is the core's own density-weighted CG; its `tol`
+and `maxit` are options of the `:pressure_solver` provider
+`:density_weighted_cg` (the only one these cores accept).
 
 The constraint the projection enforces is reported with every output
 record (`report`) and checked by the smoke test.
 """
-struct MassWeightedCore{P} <: AbstractCoupling
-    tol::Float64
-end
+struct MassWeightedCore{P} <: AbstractCoupling end
 
 const AnelasticCore = MassWeightedCore{:anelastic}
 const PseudoIncompressibleCore = MassWeightedCore{:pseudo_incompressible}
@@ -75,16 +98,28 @@ slot(::Type{<:MassWeightedCore}) = :core
 provider(::Type{MassWeightedCore{P}}) where {P} = P
 is_default(::Type{<:MassWeightedCore}) = false
 modules_used(::Type{<:MassWeightedCore}) = (:Anelastic,)
-default_options(::Type{<:MassWeightedCore}) = (tol = 1e-10, maxit = 500)
-build(C::Type{<:MassWeightedCore}, case, o) = C(o.tol)
+incompatible(::Type{<:MassWeightedCore}) =
+    (:pressure_solver => :cosine_fft, :pressure_solver => :multigrid, :pressure_solver => :mg_cg,
+     :momentum_advection => :weno_z, :sgs => :dynamic, :sgs => :mlsgs)
+incompatible_reason(::Type{<:MassWeightedCore}) =
+    "a sound-proof core projects with its own density-weighted CG (select " *
+    "pressure_solver = :density_weighted_cg), advects momentum in its weighted centred " *
+    "flux form (momentum_advection = :centered) and takes no eddy_viscosity! closure " *
+    "(sgs = :smagorinsky)"
+
+"The `sim_options` keywords a sound-proof core takes (those of its default projection solver)."
+const MASS_WEIGHTED_SIM_KEYWORDS = (:tol, :maxit)
 
 _mass_weighted_type(::Type{AnelasticCore}) = Aeolus.Anelastic.AnelasticSimulation
 _mass_weighted_type(::Type{PseudoIncompressibleCore}) = Aeolus.Anelastic.PseudoIncompressibleSimulation
 
 function build_core(C::Type{<:MassWeightedCore}, cfg, mesh, ref, simkw)
-    o = coupling_options(C, cfg)
+    bad = setdiff(keys(simkw), MASS_WEIGHTED_SIM_KEYWORDS)
+    isempty(bad) || error("coupling :$(coupling_name(C)): the sim_options keyword(s) " *
+                          "$(join(bad, ", ")) are not keywords of the sound-proof core " *
+                          "(it takes $(join(MASS_WEIGHTED_SIM_KEYWORDS, ", ")))")
     return _mass_weighted_type(C)(mesh; core_parameters(cfg)..., ref = ref.state,
-                                  buoyancy = true, tol = o.tol, maxit = o.maxit)
+                                  buoyancy = true, simkw...)
 end
 
 function report(c::MassWeightedCore{P}, case) where {P}
