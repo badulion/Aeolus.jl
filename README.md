@@ -28,8 +28,9 @@ building height · resolved vertical velocity at 30 m.</sub>
   surface optics, Mie aerosol.
 - **Validated against external references**, not just against itself — MODIS
   kernel constants, Wiscombe's Mie benchmark, Golovin's analytic coalescence
-  solution, the DYCOMS-II RF01 intercomparison.
-- **7,407 tests.** 31,000 lines of source, 10,000 lines of tests.
+  solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
+  CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
+- **80,328 tests.** 62,000 lines of source, 31,000 lines of tests.
 - **FFTW is the only non-stdlib dependency.** Everything else — NetCDF, PNG,
   Mie scattering, error and Bessel functions — is written in the package.
 - Single-node CPU. MPI and GPU are planned, not present.
@@ -80,17 +81,46 @@ Bird clear-sky, Erbs/Reindl direct-diffuse partitioning
 
 Exact moist thermodynamics — temperature-dependent latent heat, saturation
 vapour pressure as the analytic Clausius-Clapeyron integral, condensate
-loading · robust bracketed saturation adjustment · Köhler activation ·
-Abdul-Razzak &amp; Ghan parameterisation with an explicit parcel reference ·
-superdroplet Lagrangian microphysics · Kessler and two-moment bulk schemes
+loading · θ<sub>li</sub> diagnosis and enthalpy-conserving process saturation
+adjustment · Köhler activation · Abdul-Razzak &amp; Ghan parameterisation with
+an explicit parcel reference · P3 predicted-particle-property ice with
+prognostic rime, per-moment sedimentation and radar reflectivity ·
+prognostic ice-nucleating particles, immersion / deposition freezing,
+Hallett-Mossop · superdroplet Lagrangian microphysics · sub-grid
+precipitation fraction · fog and dew with droplet-radiative feedback ·
+Koschmieder visibility · sub-grid supersaturation PDF and its effect on
+activation and droplet growth · Kessler and two-moment bulk schemes
 
 </td></tr>
 <tr><td><b>Surface &amp; urban</b></td><td>
 
+Monin-Obukhov surface-exchange contract shared by every surface ·
+CLM-style soil column (Richards water, freeze-thaw, water table) ·
+Farquhar / Collatz photosynthesis with Ball-Berry / Medlyn stomata on a
+vegetated land column · resolved plant canopy (implicit drag, canopy
+two-stream, leaf energy balance) · per-facet multi-layer wall conduction,
+angle-dependent glazing, facet temperatures coupled implicitly through the
+radiosity longwave, matrix-free GMRES at city scale · building energy
+model (zone air, HVAC and exhaust heat, occupancy schedules) · layered
+snowpack with grain ageing and percolation, lake and sea ice · water
+mixed layer with cool skin and warm layer, COARE 3.5 fluxes, wave-dependent
+roughness, sea spray · sub-grid surface tiles and blending height ·
 OpenStreetMap ingestion → building geometry and land use · facet radiosity
 resolving shadowing, inter-reflection and canyon longwave trapping ·
-multi-layer soil conduction · latent heat flux · anthropogenic heat ·
 material albedo and emissivity derived from the spectral library
+
+</td></tr>
+<tr><td><b>Turbulence</b></td><td>
+
+Smagorinsky-Lilly · plane-averaged dynamic (Germano-Lilly) Smagorinsky ·
+a wrapper for learned closures (`ML.MLSGS`)
+
+</td></tr>
+<tr><td><b>Chemistry</b></td><td>
+
+Reduced NOx-O₃-VOC mechanism with an exact NO-NO₂-O₃ triad · clear-sky
+J(NO₂) · resistance-model (r<sub>a</sub> + r<sub>b</sub> + r<sub>c</sub>)
+dry deposition · rain scavenging of HNO₃
 
 </td></tr>
 <tr><td><b>Output</b></td><td>
@@ -124,6 +154,18 @@ code does not contain.
 | Golovin coalescence, *L*¹ at 1200 s | `0.037` | analytic |
 | Monte-Carlo vs two-stream albedo | median `0.0059` | — |
 | Cloud optical depth, LWP 100 g/m², *r*<sub>eff</sub> 10 μm | `15.0` | 15 (textbook) |
+| P3 rain reflectivity at 5 mm/h | `33.93 dBZ` | `34.19` (Marshall-Palmer) |
+| Settling speed, 10 μm particle | `0.304 cm/s` | `0.31` (Seinfeld & Pandis) |
+| Fog visibility, LWC 0.2 g/m³ | `108 m` | `111` (Kunkel 1984) |
+| Dynamic Smagorinsky *C*<sub>s</sub>, decaying turbulence | `0.153` | ~0.17 (Lilly) |
+| Hourly latent heat flux, 5 FLUXNET towers | *r* `0.83–0.94` | tower observations |
+| CAPITOUL road / wall mean temperature | `+0.06 / −0.03 K` | campaign observations |
+| ASHRAE 140 annual heating and cooling loads | `19 of 20` inside | six reference programs |
+| Single 3 mm clear pane, SHGC | `0.857` | `0.86` (NFRC data sheet) |
+| COARE 3.0 neutral drag coefficient at 20 m/s | `2.071e-3` | `2.06e-3` (Fairall 2003) |
+| Peak afternoon SST warming, TOGA COARE, 42 days | *r* `0.953` | ship observations |
+| Snow specific surface area after 37 days, Summit | `23.8 m²/kg` | `23 ± 3` (observed) |
+| Effective roughness of two-stripe surfaces, 8 cases | rms ln error `0.074` | LES (Bou-Zeid 2007) |
 
 Plus the classical CFD cases — Taylor-Green vortex, decaying isotropic
 turbulence, channel flow, buoyant convection — in `examples/`.
@@ -206,23 +248,33 @@ first-order driver of the urban heat island, and a sky-view-factor
 approximation cannot represent it.
 
 **Measured on the real Alexanderplatz geometry** — 322 OpenStreetMap
-buildings, 64 × 64 × 32 cells, 24 h at Δt = 2 s:
+buildings, 64 × 64 × 32 cells, 24 h at Δt = 2 s from 06:00 on 20 June,
+every default coupling on (run on master `2895fed`):
 
 | | |
 |:--|:--|
-| Effective albedo of the scene | `0.126` |
-| Area-weighted material albedo | `0.175` |
-| **Radiative trapping** | **28.0 %** |
+| Effective albedo of the scene | `0.126` † |
+| Area-weighted material albedo | `0.175` † |
+| **Radiative trapping** | **28.0 %** † |
 | Radiating facets | 5,810 |
 | View-factor reciprocity / closure | `4.5e-17` / `2.4e-15` |
 | Sky-view factor (min / mean / max) | `0.149` / `0.794` / `1.000` |
-| Peak surface temperature contrast | `18.6 K` |
-| Divergence after 43,200 steps | `1.6e-15` |
-| Wall-clock, one CPU | **9.2 min** |
-| Output | 228 MB NetCDF, 48 time levels |
+| Surface temperature spread at the end of the day (max − min *T*<sub>s</sub>) | `35.4 K` |
+| Divergence after 43,200 steps | `3.4e-15` |
+| Surface energy ledger closure, 24 h, domain | `4.5e-10 W/m²` |
+| Water ledger residual, 24 h | `−6.3e-15 kg/m²` |
+| Wall-clock, one Julia process | **95 min** |
+| Output | 316 MB NetCDF, 48 time levels |
 
-A full day of a city block, with resolved turbulence and facet-level
-radiation, costs about nine minutes on a single processor.
+† From the radiosity scene before the per-class ground materials of #128;
+not remeasured.
+
+A full day of a city block, with resolved turbulence, facet-level
+radiation, a soil column under every open cell, fog and dew, and five
+reactive species, takes about an hour and a half on one process (2 GB
+resident; measured on a shared 24-core machine). Over half of it is the
+WENO-Z5 transport of the seven advected tracers (qv, ql and the five species; 77 ms of 132 ms per
+step); the dynamics `step!` is 11 ms per step.
 
 ### Run your own city
 
@@ -239,8 +291,13 @@ julia --project=. examples/urban/alexanderplatz_animation.jl
 
 Nothing in the simulation is tuned to Alexanderplatz — the same script runs on
 any Overpass download. Output is a single `.nc` file carrying the full 3-D
-state (`u`, `v`, `w`, `θ`, `p`, `qv`, `ql`, `qr`, tracers) plus surface fields
-and static geometry, at every saved time level.
+state (`u`, `v`, `w`, `θ`, `p`, `qv`, `ql`, `qr`, the NO / NO₂ / O₃ / VOC /
+HNO₃ species and the other tracers, the moist buoyancy `b_moist`) plus
+surface fields (`Ts`, shortwave and longwave in, `H_sfc`, `LE_sfc`, `G_soil`,
+`u_star`, soil temperature and moisture availability, `r_a`, `vd_O3`, the
+cloud-shadow transmittance) and static geometry, at every saved time level.
+The run is assembled from one file per coupling (`examples/urban/couplings/`);
+see [the Berlin case](docs/src/design/berlin_case.md).
 
 ---
 
@@ -254,7 +311,7 @@ julia --project=docs docs/make.jl     # build locally
   discretization, fractional-step projection, discrete Poisson,
   [radiative transfer](docs/src/theory/radiation.md)
 - **Design** — architecture, dispatch on `Location`, pluggable pressure solvers
-- **API reference** — generated for all 40 modules
+- **API reference** — generated for all 55 modules
 - **Examples** — worked cases with validation output
 
 ---
@@ -267,18 +324,26 @@ ends with a validation target. Full plan:
 
 - [x] **Era I** — LES core, physics scaffolds, urban flagship *(Phases 1–20)*
 - [x] **Era II** — numerical foundations: cut-cell IBM, IMEX, WENO-Z/TENO,
-      anelastic, multigrid, nesting, AMR *(21–31)* · 2,094 tests
+      anelastic, multigrid, nesting, AMR *(21–31)* · 2,116 tests
 - [x] **Era III** — high-fidelity radiation: gas optics, two-stream,
-      Monte-Carlo, radiosity, BRDF, aerosol, solar geometry *(32–38)* · 4,881 tests
-- [ ] **Era IV** — clouds and microphysics *(39–45)*
+      Monte-Carlo, radiosity, BRDF, aerosol, solar geometry *(32–38)* · 4,912 tests
+- [x] **Era IV** — clouds and microphysics *(39–45)* · 47,392 tests
   - [x] Phase 39 — exact moist thermodynamics
-  - [ ] Phase 40 — P3 bulk microphysics
+  - [x] Phase 40 — P3 bulk microphysics
   - [x] Phase 41 — superdroplet Lagrangian microphysics
   - [x] Phase 42 — aerosol-cloud interaction
-  - [ ] Phase 43 — ice nucleation
-  - [ ] Phase 44 — precipitation, fog and visibility
-  - [ ] Phase 45 — turbulence-microphysics interaction
-- [ ] **Era V** — land surface and urban canopy *(46–53)*
+  - [x] Phase 43 — ice nucleation
+  - [x] Phase 44 — precipitation, fog and visibility
+  - [x] Phase 45 — turbulence-microphysics interaction
+- [x] **Era V** — land surface and urban canopy *(46–53)* · 19,326 tests (6 `@test_broken`)
+  - [x] Phase 46 — multi-layer soil and hydrology
+  - [x] Phase 47 — photosynthesis, stomatal conductance, FLUXNET
+  - [x] Phase 48 — resolved plant canopy
+  - [x] Phase 49 — production urban canopy model, BUBBLE / CAPITOUL
+  - [x] Phase 50 — building energy model
+  - [x] Phase 51 — snow, ice and frozen surfaces
+  - [x] Phase 52 — water surfaces and wave coupling
+  - [x] Phase 53 — surface heterogeneity and blending
 - [ ] **Era VI** — turbulence closure *(54–59)*
 - [ ] **Era VII** — chemistry and aerosol *(60–66)*
 - [ ] **Era VIII** — real-world data, forcing and validation *(67–73)*
@@ -299,20 +364,27 @@ Caveats of what currently ships, as distinct from what is not yet built.
   is built from a Malkmus narrow-band model via Domoto inversion. Broadband
   fluxes land within a few percent of observations; a line-by-line backend can
   be added behind the same interface.
-- **One surface temperature per grid column.** The radiosity solver resolves
-  every facet individually, but the surface energy balance collapses a whole
-  facade to a single temperature. Removed by the multi-layer canopy in Era V.
+- **One surface temperature per grid column in the flagship.** Era V's
+  `UrbanSurface` gives every facet its own conduction column and skin
+  temperature, coupled implicitly through the radiosity longwave, but the
+  Berlin run still collapses a façade to one surface per grid column until
+  the per-facet coupling (#139) lands.
 - **Superdroplet coalescence carries a finite-*N*<sub>sd</sub> bias** — about
   2.5 % at *N*<sub>sd</sub> = 2¹², shrinking as ≈ *N*<sup>-0.6</sup>. It does
   not average away over random seeds. The collision *rate* is correct: mean
   number decay matches Golovin's analytic solution to ≤ 1.3 %.
-- **Two urban add-ons ship disabled**, with reasons documented in
-  `examples/urban/`: vegetation drag is CFL-unstable under explicit Euler at
-  Δt = 2 s and needs implicit treatment; fog/dew condensation needs tighter
-  coupling to the atmospheric moisture field.
+- **Most Era IV–V physics is validated as point and column models, not yet
+  in the 3-D flagship.** The Berlin run couples the surface exchange, soil,
+  column radiation, fog and dew, moist buoyancy and chemistry; P3, ice
+  nucleation, the land column, per-facet walls, building zones, snow, water
+  surfaces and tiles are wired in by the open issues of the Berlin epic
+  (#125). The winter flagship (64 × 64 × 32 from 12:00) still blows up after
+  about 140 steps.
 - **Test coverage is uneven.** The dynamical core and radiation are covered
-  thoroughly; the newest modules (Phases 41–42) exercise 38 % and 21 % of
-  their exported surface respectively.
+  thoroughly; of their exported names, the tests use 53 % for `Superdroplet`
+  and 43 % for `AerosolCloud` (Phases 41–42), against 72–93 % for
+  `IceNucleation`, `SurfaceTiles`, `UrbanSurface` and `P3Microphysics`
+  (counting exported names that appear anywhere under `test/`).
 
 ---
 
