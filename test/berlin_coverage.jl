@@ -297,7 +297,10 @@ coupling_file(C) = string(first(methods(BC.coupling_name, (Type{C},))).file)
             defs = [C for C in BC.REGISTRY if BC.slot(C) === s && BC.is_default(C)]
             length(defs) == 1 || @error "slot :$s has $(length(defs)) default providers; it needs exactly one"
             @test length(defs) == 1
-            @test all(C -> !(BC.provider(C) in (:off, :none, :disabled)), defs)
+            offs = [BC.coupling_name(C) for C in defs if BC.provider(C) in (:off, :none, :disabled)]
+            isempty(offs) || @error "slot :$s defaults to an off switch ($(join(offs, ", "))); " *
+                "the flagship runs the physics of every slot by default"
+            @test isempty(offs)
         end
 
         # The default CaseConfig, and every scenario preset, select every addon
