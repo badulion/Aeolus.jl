@@ -74,13 +74,12 @@ function build(::Type{CloudShadow}, case, o)
                        Float64(o.r_eff_liq), Float64(o.r_eff_ice), fδ, false, false)
 end
 
-"Air density per LES level: the column radiation's, else hydrostatic from the mean θ."
+"Air density per LES level: the column radiation's, else the reference ρ̄ (#131)."
 function _air_density(case)
     cr = find_coupling(case, :column_radiation)
     Nz = case.mesh.Nz
     cr !== nothing && cr.col !== nothing && return cr.col.ρ[1:Nz]
-    θ = fluid_mean_profile(case, case.sim.θ)
-    return column_from_profiles(θ, case.mesh.dz).ρ
+    return ref_density(case)
 end
 
 function run_stage!(c::CloudShadow, case, ::Val{:radiation}, dt)

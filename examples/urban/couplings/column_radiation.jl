@@ -28,8 +28,8 @@ Slot `:column_radiation`, provider `:twostream` (default).
 At the `:radiation` cadence (and step 1), before the radiosity solve:
 
 1. the fluid-cell mean profiles of θ, qv and ql on the LES levels become
-   a hydrostatic column (`column_from_profiles`, surface pressure from
-   `cfg.elevation`), which is stitched (`stitch_columns`) under
+   a hydrostatic column (`column_from_profiles`, surface pressure
+   `surface_pressure(case)` of the reference state), which is stitched (`stitch_columns`) under
    `us_standard_column` (`nz_upper` layers to 30 km, its surface
    temperature chosen so that it matches the LES top temperature, the
    humidity profile of the scenario's season);
@@ -92,9 +92,8 @@ function build(::Type{<:ColumnRadiation}, case, o)
         error("column_radiation: surface_sw must be :twostream or :bird, got $(o.surface_sw)")
     sw, lw = shortwave_bands(), longwave_bands()
     Nz = case.mesh.Nz
-    # hydrostatic surface pressure at the site elevation (scale height of a 288 K atmosphere)
-    ps = o.p_surf === nothing ?
-         1.01325e5 * exp(-9.80665 * case.cfg.elevation / (287.05 * 288.15)) : Float64(o.p_surf)
+    # the case's surface pressure (the reference state, #131), unless overridden
+    ps = o.p_surf === nothing ? surface_pressure(case) : Float64(o.p_surf)
     return ColumnRadiation(correlated_k_optics(sw), correlated_k_optics(lw),
                            mie_cloud_optics(sw), mie_cloud_optics(lw),
                            two_stream_solver(sw), two_stream_solver(lw),

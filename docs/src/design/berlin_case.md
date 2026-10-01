@@ -647,7 +647,7 @@ the radiosity:
 
 1. the mean over the fluid cells of θ, qv and ql on every LES level
    becomes a hydrostatic column (`column_from_profiles`, surface
-   pressure from `cfg.elevation`), stitched with `stitch_columns` under
+   pressure `surface_pressure(case)` of the reference state, #131), stitched with `stitch_columns` under
    `us_standard_column` (60 layers to 30 km, its surface temperature
    set so that it continues the LES top temperature at 6.5 K/km,
    mid-latitude-summer or sub-arctic-winter humidity by scenario);
@@ -686,7 +686,9 @@ interreflections of the shaded beam and the buildings' window sun (read
 from the radiosity solution) are not attenuated, and the light the cloud
 scatters sideways is not added to the diffuse.
 
-Measured (1 h runs of the flagship, 64 × 64 × 32, dt = 2 s, radiation
+Measured before the merge with #131, with the column's surface pressure
+from `cfg.elevation` (100.92 kPa against the reference state's 101.325)
+(1 h runs of the flagship, 64 × 64 × 32, dt = 2 s, radiation
 every 600 s; values at the end of the hour; winter on the `:smoke`
 window, because the winter flagship blows up, see below):
 
