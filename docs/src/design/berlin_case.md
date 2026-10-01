@@ -1104,6 +1104,56 @@ code with comments and docstrings removed); reviewed indirect uses go in
 scaffolds), 30 pending; #130 coupled RadiationCore, GasOptics and
 TwoStream (27 pending).
 
+**The flagship guardrails.** The Berlin case is the flagship: it runs
+every component, on by default, and new physics lands in it in the PR
+that adds the physics. `test/berlin_coverage.jl` enforces that with four
+reviewed lists, each frozen against a literal snapshot in the same file
+(`*_FROZEN`; the test requires list = snapshot, so an entry can only be
+deleted, from both; adding one is a snapshot edit a reviewer sees and
+only the maintainer agrees to):
+
+| list | holds | at #160 |
+| :-- | :-- | :-- |
+| `BERLIN_EXEMPT` | non-physics modules; each reason starts `infrastructure:` or `scaffold:` | 11 |
+| `BERLIN_PENDING` | modules not wired in yet, with the owning issue | 24 |
+| `BERLIN_DEFAULT_OFF` | addon couplings off by default, with the measured cost or conflict | 0 |
+| `BERLIN_OPTION_ONLY` | modules only a non-default slot provider runs, with why it is an alternative | 2 (Multigrid: `pressure_solver = :multigrid / :mg_cg`; ML: `sgs = :mlsgs`) |
+
+and with these testsets:
+
+* **frozen lists … may only shrink** — each list equals its snapshot;
+  exemption reasons start with `infrastructure:` / `scaffold:`.
+* **every addon on by default, every slot's default provider in the
+  default run** — every `slot = :addon` coupling has `is_default = true`
+  unless it is in `BERLIN_DEFAULT_OFF`; every exclusive slot has exactly
+  one default provider and it is not an `:off` / `:none` / `:disabled`
+  switch (`chem_off` is a non-default provider of `:chemistry`); and
+  `selected_couplings` of `CaseConfig()` and of every `SCENARIOS` preset
+  contains every such addon and default provider.
+* **a module only a non-default provider runs is a reviewed exception** —
+  a module some coupling lists counts as coupled (the smoke test runs
+  every provider), but if the default `CaseConfig()` run does not use
+  it, it must be in `BERLIN_OPTION_ONLY`; an entry the default run now
+  uses is stale and fails too.
+
+`test/berlin_smoke.jl` adds one more: the "summer / winter, everything
+on" configurations of `smoke_matrix()` must select every addon and every
+default provider, so an `incompatible` declaration cannot silently drop
+a coupling from the runs that are meant to have everything.
+
+Each guardrail was checked against a deliberately broken tree (not
+committed): a new `src/DummyPhysics.jl` added to `BERLIN_PENDING` or
+`BERLIN_EXEMPT` fails "BERLIN_PENDING has grown: DummyPhysics" (resp.
+EXEMPT, plus the `infrastructure:` / `scaffold:` check);
+`is_default = false` on `veg_drag` fails "Addon couplings off by
+default: veg_drag" and "CaseConfig() does not run: veg_drag"; `veg_drag`
+moved into the `:sgs` slot as a non-default provider fails "Modules the
+default Berlin run does not use (only a non-default provider does):
+PlantCanopy (by veg_drag)"; making `chem_off` the `:chemistry` default
+fails "slot :chemistry defaults to an off switch (chem_off)"; and
+declaring `cloud_shadow` incompatible with `fog_dew` fails 'smoke run
+"summer, everything on" does not run: cloud_shadow, fog_dew'.
+
 ## Cost of per-facet surfaces (#138)
 
 The flagship radiosity scene has this many facets:

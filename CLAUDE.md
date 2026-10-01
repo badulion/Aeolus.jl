@@ -78,7 +78,26 @@ In every PR that adds or changes physics:
   a park's latent heat flux).
 - Keep the Berlin smoke test (`test/berlin_smoke.jl`: every coupling
   and option, 12 steps, energy and water ledgers must close) green, and
-  remove your module from `BERLIN_PENDING` in `test/berlin_coverage.jl`.
+  remove your module from `BERLIN_PENDING` (and `BERLIN_PENDING_FROZEN`)
+  in `test/berlin_coverage.jl`.
+
+The suite enforces this (`test/berlin_coverage.jl`, `test/berlin_smoke.jl`):
+
+- Every src module is coupled, exempt or pending. `BERLIN_EXEMPT` and
+  `BERLIN_PENDING` are frozen against literal snapshots: they may only
+  shrink, so a new module must be coupled. Exemptions are for
+  non-physics infrastructure and scaffolds only.
+- Every addon coupling is `is_default = true`; every slot has one
+  default provider, not an `:off` switch; `CaseConfig()` and every
+  scenario run them all. Off-by-default addons need a frozen,
+  reasoned entry in `BERLIN_DEFAULT_OFF` (empty today).
+- A module only a non-default provider runs (an alternative: P3 vs
+  Kessler) needs a frozen, reasoned entry in `BERLIN_OPTION_ONLY`.
+- The smoke test's "everything on" runs must enable every addon and
+  every default provider.
+
+Growing any frozen list is the maintainer's call, agreed in the issue —
+never a way to get green.
 
 **How to add a coupling** (one file under `examples/urban/couplings/`,
 `register!`, `modules_used`, `budget!`, `smoke_check`/`smoke_variants`):
