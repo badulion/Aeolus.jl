@@ -10,7 +10,18 @@
 #     shrinks, and the PR that wires a module in says so here.
 #
 # When your coupling runs a module: list it in `modules_used` and delete
-# its line from PENDING below. See docs/src/design/berlin_case.md.
+# its line from PENDING (and BERLIN_PENDING_FROZEN) below. See
+# docs/src/design/berlin_case.md.
+#
+# The flagship guardrails (the maintainer's rule: the Berlin case runs
+# every component, on by default, and stays up to date with new physics):
+#   * BERLIN_EXEMPT, BERLIN_PENDING, BERLIN_DEFAULT_OFF and
+#     BERLIN_OPTION_ONLY are frozen: they may only shrink;
+#   * every addon coupling is on by default, every exclusive slot has one
+#     default provider, and the default CaseConfig (and every scenario)
+#     runs them all;
+#   * a module that only a non-default provider runs is a reviewed,
+#     frozen exception.
 
 using Test
 using Aeolus
@@ -20,9 +31,12 @@ isdefined(Main, :BerlinCase) ||
 const BC = Main.BerlinCase
 
 """
-Modules the Berlin case is not required to couple, with the reason. A
-reviewer has to agree with the reason; "not done yet" is not one (that
-is what PENDING is for).
+Modules the Berlin case is not required to couple, with the reason.
+Exemptions are for **non-physics** code only: the infrastructure the
+case's core runs on, or a scaffold with no operator to call. Every
+reason starts with `infrastructure:` or `scaffold:`. Physics is never
+exempt; "not done yet" is what PENDING is for. The list is frozen
+(`BERLIN_EXEMPT_FROZEN` below).
 """
 const BERLIN_EXEMPT = Dict{Symbol,String}(
     # infrastructure the core itself runs on (core/case.jl, stages.jl, output.jl)
@@ -43,8 +57,10 @@ const BERLIN_EXEMPT = Dict{Symbol,String}(
 """
 TEMPORARY: modules not yet wired into the Berlin case, with the issue that
 wires each one in. This list may only shrink. The PR that couples a
-module removes it here in the same PR (the ratchet test below fails
-until it does).
+module removes it here, and from `BERLIN_PENDING_FROZEN`, in the same PR
+(the ratchet test below fails until it does). It is frozen: a new src
+module cannot be parked here, it must be coupled (or, if it is not
+physics, exempted).
 """
 const BERLIN_PENDING = Dict{Symbol,String}(
     :Anelastic             => "#133 anelastic / pseudo-incompressible core (since #131 the case's hydrostatic reference state is Anelastic.reference_from_profile, built by the core in core/reference_state.jl, not by a coupling)",
@@ -72,6 +88,69 @@ const BERLIN_PENDING = Dict{Symbol,String}(
     :AdaptiveMesh          => "#153 nesting with forward hooks (AMR blocks themselves cannot carry the IBM/surfaces: exempt that part with the reason then)",
     :Nesting               => "#153 multi-domain case (legacy one-way forcing, deferred with AdaptiveMesh)",
 )
+
+# --- frozen snapshots ---------------------------------------------------------
+#
+# BERLIN_EXEMPT, BERLIN_PENDING, BERLIN_DEFAULT_OFF and BERLIN_OPTION_ONLY
+# are frozen at the sets below (taken on master at PR #160, 2026-10-01).
+# The tests require each list to equal its snapshot, so:
+#
+#   * an entry may only be DELETED, from the list and its snapshot
+#     together (a pending module that gets coupled; an exemption that
+#     goes away);
+#   * ADDING an entry means editing a snapshot. Do not, unless the
+#     maintainer has agreed in the issue: new physics is wired into the
+#     Berlin case, on by default, in the PR that adds it (CLAUDE.md, "New
+#     physics lands in the Berlin example"). A reviewer who sees a line
+#     added to a snapshot should ask why.
+
+"Frozen: the modules of `BERLIN_EXEMPT`. Entries may only be deleted."
+const BERLIN_EXEMPT_FROZEN = Set{Symbol}([
+    :Grids, :Fields, :BoundaryConditions, :Operators, :Simulations, :PressureSolvers,
+    :TimeSteppers, :NetCDFIO, :Parallel, :Backends, :SpectralElement,
+])
+
+"Frozen: the modules of `BERLIN_PENDING`. Entries may only be deleted."
+const BERLIN_PENDING_FROZEN = Set{Symbol}([
+    :Anelastic, :TimeIntegration, :Particles, :DataAssimilation, :IO, :MonteCarloRT,
+    :Visibility, :LandSurface, :Photosynthesis, :OceanMixedLayer, :AirSeaFlux,
+    :AerosolOptics, :P3Microphysics, :Snowpack, :IceThermodynamics, :AerosolCloud,
+    :TurbulentMicrophysics, :IceNucleation, :SurfaceTiles, :Superdroplet,
+    :StretchedGrids, :CutCell, :AdaptiveMesh, :Nesting,
+])
+
+"""
+Additive couplings (`slot = :addon`) that are OFF in the default run,
+with the reason (e.g. the measured cost that makes it an option). Every
+other addon must have `is_default = true`: the flagship runs every
+component. Empty at #160: every addon is on. Adding an entry needs the
+maintainer's agreement in the issue, and the reason must quote the
+measured cost or the conflict.
+"""
+const BERLIN_DEFAULT_OFF = Dict{Symbol,String}()
+
+"Frozen: the couplings of `BERLIN_DEFAULT_OFF`. Entries may only be deleted."
+const BERLIN_DEFAULT_OFF_FROZEN = Set{Symbol}()
+
+"""
+Modules the Berlin case runs ONLY through a non-default provider of an
+exclusive slot (`physics = Dict(slot => provider)`), with the reason the
+provider is an alternative and not the default. They count as coupled
+(the smoke test runs every provider), but they are not in the default
+run, so the list is reviewed and frozen like the others. New physics
+that is a genuine alternative (P3 vs Kessler) may land here, with the
+reason and the maintainer's agreement; never by default.
+"""
+const BERLIN_OPTION_ONLY = Dict{Symbol,String}(
+    :Multigrid => "pressure_solver = :multigrid / :mg_cg: the same 7-point Laplacian as the exact " *
+                  "cosine-FFT default, which MG-CG matches to 6.1e-10 m/s, at 23-36x the cost per " *
+                  "solve (45.8-72.6 vs 2.0 ms); kept for the stretched-grid / cut-cell solvers (#151, #152)",
+    :ML        => "sgs = :mlsgs: wraps ML.MLSGS, and there is no trained model; with the default " *
+                  "closure it is bit for bit the Smagorinsky default (berlin_case.md, numerics slots)",
+)
+
+"Frozen: the modules of `BERLIN_OPTION_ONLY`. Entries may only be deleted."
+const BERLIN_OPTION_ONLY_FROZEN = Set{Symbol}([:Multigrid, :ML])
 
 """
 Reviewed indirect uses: `(coupling, module) => how`. A coupling may list
@@ -171,6 +250,92 @@ coupling_file(C) = string(first(methods(BC.coupling_name, (Type{C},))).file)
                           Base.binding_module(BC, n) === BC])
         isempty(shadowed) || @error "BerlinCase defines names Aeolus exports: $(join(shadowed, ", ")). Rename them."
         @test shadowed == Symbol[]
+    end
+
+    @testset "frozen lists: EXEMPT / PENDING / DEFAULT_OFF / OPTION_ONLY may only shrink" begin
+        for (lname, list, frozen) in (("BERLIN_EXEMPT", BERLIN_EXEMPT, BERLIN_EXEMPT_FROZEN),
+                                      ("BERLIN_PENDING", BERLIN_PENDING, BERLIN_PENDING_FROZEN),
+                                      ("BERLIN_DEFAULT_OFF", BERLIN_DEFAULT_OFF, BERLIN_DEFAULT_OFF_FROZEN),
+                                      ("BERLIN_OPTION_ONLY", BERLIN_OPTION_ONLY, BERLIN_OPTION_ONLY_FROZEN))
+            grown = sort!(collect(setdiff(keys(list), frozen)))
+            isempty(grown) || @error "$lname has grown: $(join(grown, ", ")). It may only shrink: new " *
+                "physics is wired into the Berlin case, on by default (CLAUDE.md). Only the maintainer " *
+                "extends $(lname)_FROZEN in test/berlin_coverage.jl."
+            @test grown == Symbol[]
+            shrunk = sort!(collect(setdiff(frozen, keys(list))))
+            isempty(shrunk) || @error "$lname no longer lists $(join(shrunk, ", ")): " *
+                "delete them from $(lname)_FROZEN in test/berlin_coverage.jl too."
+            @test shrunk == Symbol[]
+        end
+        # exemptions are for non-physics code only
+        notinfra = sort!([m for (m, r) in BERLIN_EXEMPT
+                          if !(startswith(r, "infrastructure:") || startswith(r, "scaffold:"))])
+        isempty(notinfra) || @error "BERLIN_EXEMPT reasons must start with `infrastructure:` or " *
+            "`scaffold:` (physics is never exempt): $(join(notinfra, ", "))"
+        @test notinfra == Symbol[]
+        @test all(r -> length(r) >= 20, values(BERLIN_DEFAULT_OFF))
+        @test all(r -> length(r) >= 20, values(BERLIN_OPTION_ONLY))
+    end
+
+    @testset "flagship: every addon on by default, every slot's default provider in the default run" begin
+        addons = [C for C in BC.REGISTRY if BC.slot(C) === :addon]
+        @test isempty(setdiff(keys(BERLIN_DEFAULT_OFF), BC.coupling_name.(addons)))   # no stale names
+        off = sort!([BC.coupling_name(C) for C in addons
+                     if !BC.is_default(C) && !haskey(BERLIN_DEFAULT_OFF, BC.coupling_name(C))])
+        isempty(off) || @error "Addon couplings off by default: $(join(off, ", ")). The Berlin case is the " *
+            "flagship and runs every component: set is_default = true (or, with the maintainer's " *
+            "agreement and the measured cost, list it in BERLIN_DEFAULT_OFF in test/berlin_coverage.jl)."
+        @test off == Symbol[]
+        # an allow-listed addon really is off by default (else the entry is stale)
+        @test all(C -> !haskey(BERLIN_DEFAULT_OFF, BC.coupling_name(C)) || !BC.is_default(C), addons)
+
+        # Every exclusive slot has exactly one default provider, and it is not
+        # an "off" switch; so every non-default provider is an alternative in
+        # a slot whose default runs.
+        slots = BC.slot_providers()
+        for (s, provs) in slots
+            defs = [C for C in BC.REGISTRY if BC.slot(C) === s && BC.is_default(C)]
+            length(defs) == 1 || @error "slot :$s has $(length(defs)) default providers; it needs exactly one"
+            @test length(defs) == 1
+            @test all(C -> !(BC.provider(C) in (:off, :none, :disabled)), defs)
+        end
+
+        # The default CaseConfig, and every scenario preset, select every addon
+        # not allow-listed and the default provider of every slot.
+        want = Set(BC.coupling_name(C) for C in BC.REGISTRY
+                   if BC.slot(C) === :addon ? !haskey(BERLIN_DEFAULT_OFF, BC.coupling_name(C)) :
+                                              BC.is_default(C))
+        cfgs = Pair{String,Any}["CaseConfig()" => BC.CaseConfig()]
+        for s in sort!(collect(keys(BC.SCENARIOS)))
+            push!(cfgs, "CaseConfig(:$s)" => BC.CaseConfig(s))
+        end
+        for (label, cfg) in cfgs
+            got = Set(BC.coupling_name.(BC.selected_couplings(cfg)))
+            miss = sort!(collect(setdiff(want, got)))
+            isempty(miss) || @error "$label does not run: $(join(miss, ", "))"
+            @test isempty(miss)
+        end
+    end
+
+    @testset "flagship: a module only a non-default provider runs is a reviewed exception" begin
+        # A module in some coupling's `modules_used` is coupled (the smoke test
+        # runs every provider). One the DEFAULT run does not use must be in
+        # BERLIN_OPTION_ONLY with a reason: new physics is on by default.
+        default_mods = Set{Symbol}()
+        for C in BC.selected_couplings(BC.CaseConfig())
+            union!(default_mods, BC.modules_used(C))
+        end
+        option_only = Set(m for m in keys(used) if !(m in default_mods))
+        unreviewed = sort!(collect(setdiff(option_only, keys(BERLIN_OPTION_ONLY))))
+        isempty(unreviewed) || @error "Modules the default Berlin run does not use (only a non-default " *
+            "provider does): " * join(("$m (by $(join(used[m], ", ")))" for m in unreviewed), "; ") *
+            ". Make that coupling the default, or (a genuine alternative, with the maintainer's " *
+            "agreement) list the module in BERLIN_OPTION_ONLY in test/berlin_coverage.jl with the reason."
+        @test unreviewed == Symbol[]
+        stale = sort!(collect(setdiff(keys(BERLIN_OPTION_ONLY), option_only)))
+        isempty(stale) || @error "BERLIN_OPTION_ONLY lists modules the default run now uses (or no " *
+            "coupling uses): $(join(stale, ", ")). Delete them there and from BERLIN_OPTION_ONLY_FROZEN."
+        @test stale == Symbol[]
     end
 
     ncoupled = length(intersect(mods, keys(used)))
