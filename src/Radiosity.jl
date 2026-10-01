@@ -2251,7 +2251,9 @@ end
     UrbanRadiationForcing{T}
 
 Facet-level radiation aggregated onto the `(Nx, Ny)` LES horizontal grid, in
-the form `examples/urban/couplings/surface_slab.jl`'s `step_surfaces!` consumes.
+the form a flat-plate surface balance `R_n = (1-α)·SW + ε·LW - εσT⁴`
+consumes (the Berlin case passes them as `SurfaceExchange.SurfaceForcing`
+`sw_down` / `lw_down` to its per-column surfaces).
 
 All flux arrays are **per unit plan area** — facet fluxes are multiplied by
 facet area and divided by `dx·dy`. That is the correct normalisation for a
@@ -2266,7 +2268,8 @@ is the very thing this phase exists to capture.
   * `area_density` — `Σ A_facet / (dx·dy)` per column; `1` for flat ground,
                      larger where walls stand. The "urban rugosity" factor.
   * `svf`          — facet-area-weighted sky-view factor per column
-  * `sw_effective` — the value to pass as `sw_in_arr[i,j]` to `step_surfaces!`
+  * `sw_effective` — the value to pass as the downwelling shortwave of the
+                     surface balance
                      so that its `(1-α)·sw_in` reproduces `sw_absorbed`
                      exactly, given the column's class albedo
   * `lw_down_effective` — the value to pass as `lw_in[i,j]` so that
@@ -2374,7 +2377,7 @@ function aggregate_to_grid(s::RadiosityScene{T}, vf::ViewFactors{T};
         ε = s.materials.emissivity[m]
         swe[i, j] = swa[i, j] / max(one(T) - α, eps(T))
         Tsfc = T_surface === nothing ? Tw[i, j] : T(T_surface[i, j])
-        # step_surfaces! forms ε·lw_in - ε σ T⁴; we want that to equal -lw_net.
+        # the surface balance forms ε·lw_in - ε σ T⁴; we want that to equal -lw_net.
         lwe[i, j] = σ * Tsfc^4 - lwn[i, j] / max(ε, eps(T))
     end
 

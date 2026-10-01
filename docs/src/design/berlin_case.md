@@ -31,7 +31,7 @@ examples/urban/
     registry.jl        AbstractCoupling, the contract, Cadence, register!, selection
     geometry.jl        surface classes, rasterisation, build_geometry (scene, view factors)
     osm_ingest.jl      OSM XML reader
-    bus.jl             SurfaceBus, SurfaceParams (per-class slab parameters)
+    bus.jl             SurfaceBus (incl. the per-column surfaces), SurfaceParams, surface factories
     tracers.jl         tracer registry (ensure_tracer!)
     ledger.jl          energy/water budget ledger (surface energy per class, water in the air)
     reference_state.jl hydrostatic reference p̄, ρ̄, T̄, Π̄ (CaseReference)
@@ -86,10 +86,10 @@ also fires on step 1. With `dt = 2 s` this is exactly the old
 `n % 300 == 0 || n == 1` (checked over a whole day in
 `test/berlin_case.jl`). With an adaptive `dt` the entry still fires
 once per period crossed, but the couplings that integrate over their
-interval, `soil_urban` and `buildings_citymean`, pass the nominal period
-`P` rather than the time elapsed since they last ran. That is exact only
-when `dt` divides `P`; the adaptive-dt issue (#133) has to pass the
-elapsed interval instead.
+interval, `buildings_citymean` and the surface exchange, advance by the
+nominal period `P` rather than the time elapsed since they last ran.
+That is exact only when `dt` divides `P`; the adaptive-dt issue (#133)
+has to pass the elapsed interval instead.
 
 ## The stage loop
 
@@ -101,25 +101,24 @@ in the integer `order` their couplings declare.
 | `:clock` | local hour (core) |
 | `:radiation` (600 s, and step 1) | `radiosity_sun` (10), `buildings_citymean` (20) |
 | `:sw_modifiers` | `sw_modifiers` (10) |
-| `:surface_flux` | `surface_slab` (10) |
-| `:anthropogenic` | `buildings_citymean` (10), `traffic_heat` (20), `glass` (30), `surface_slab` latent flux (90) |
+| `:surface_flux` | `surface_exchange` (10): the held H, E into the first air cell (step 1: the first surface step) |
+| `:anthropogenic` | `buildings_citymean` (10), `traffic_heat` (20), `glass` (30) |
 | `:chemistry` | `aq_chem` (10), `aq_aerosol` (20) |
 | `:transport` | `transport_weno` (10) |
 | `:microphysics` | `micro_kessler` (10) |
 | `:tracers` | `pollutant` (10) |
 | `:fog_dew` | `fog_dew` (10) |
-| dynamics: `step!` with `:body_force` / `:post_predictor` | `geostrophic` (10), `moist_buoyancy` (20) / `ibm` (10), `veg_drag` (20) |
-| `:surface_update` | `surface_slab` (10), `soil_urban` (20, every 30 s), `snow_legacy` (30), `aq_chem` r_a / v_d refresh (90, every 30 s) |
+| dynamics: `step!` with `:body_force` / `:post_predictor` | `geostrophic` (10), `moist_buoyancy` (20) / `ibm` (10), `surface_exchange` drag (15), `veg_drag` (20) |
+| `:surface_update` | `surface_exchange` (10: collects `bus.sensible`; every surface period steps all surfaces, soil included), `snow_legacy` (30), `aq_chem` r_a / v_d refresh (90, every 30 s) |
 | `:column_tendency` | `cooling_prescribed` (10) |
-| `:sanity` | `surface_slab` Ts clamp (10), then the core finiteness check |
+| `:sanity` | the core finiteness check |
 | (ledger) | every coupling's `budget!`, and the change of water in the air (core) |
 | `:output` (1800 s) | NetCDF record and log line (core), then coupling entries |
 
-The order is the order of the pre-refactor loop, floating-point order
-included. That is why the slab's latent flux sits at the end of
-`:anthropogenic`: the old loop added it to the surface loss after the
-building, traffic and glazing terms. The surface-exchange issue (#129)
-replaces the slab and folds it into `:surface_flux`.
+The order was the order of the pre-refactor loop, floating-point order
+included (#126). The surface exchange (#129) replaced the slab, whose
+latent flux sat at the end of `:anthropogenic` and whose Ts clamp ran in
+`:sanity` only to keep that order; see [Surface exchange](#Surface-exchange-(#129)).
 
 `run_case!` prints the wall time of every entry (`timing_report`). In
 the 1 h flagship run (1800 steps, first-call compilation included) the
@@ -134,9 +133,20 @@ Couplings never keep a private copy of a quantity another coupling
 needs.
 
 * **`SurfaceBus`** (`case.bus`, per column): `Ts`, `sw`, `lw`, the
-  combined surface loss `sensible`, the dew reservoir `dew`, the clear-sky
-  beam `sw_beam`, the per-class `params`, and the last radiosity
-  solutions `swsol`/`lwsol`. #129 extends it with the MOST fields.
+  extra surface loss `sensible` (energy other couplings take from or give
+  to the surfaces this step — window sun, glazing transmission, dew heat;
+  not the turbulent sensible flux), the dew reservoir `dew`, the clear-sky
+  beam `sw_beam`, the per-class `params`, the last radiosity solutions
+  `swsol`/`lwsol`, and (#129) the per-column `surface`
+  (`AbstractSurface`), the roof-aware air level `k_air`, the forcing each
+  surface last saw (`T_air`, `q_air`, `U`, `z_ref`), the fluxes it
+  returned (`Rn`, `H`, `LE`, `G`, `E`, `u_star`) and the `dew_mask`.
+* **Surface factories.** A coupling that provides the surface of a
+  class registers `register_surface_factory!(case, class, name, (case, I) -> surface)`
+  in its `build`; the surface exchange builds every column's surface
+  from these in its `init!` (a `SlabLand` for a class nobody claims).
+  This is how the park (#140), water (#141) and facet (#139) couplings
+  replace a class's surface without touching the surface exchange.
 * **Tracers** (`case.tracers`): `ensure_tracer!(case, :qi; advect = true,
   positive = true, units = …, long_name = …)` creates or returns a
   cell-centred field; flags are OR-ed, so two couplings share one `ql`.
@@ -361,19 +371,21 @@ The residual is a physical baseline: the terms this model has that the
 conventional balance does not. The closure is bookkeeping and the smoke
 test asserts it to 1e-6 W m⁻² (measured ≤ 3.5e-10).
 
-Who books what in the default case: `surface_slab` books `Rn` (computed
-from `Ts_start` exactly as `step_surfaces!` does), `H`, `LE`, the
-storage `C_s ΔTs` over the whole step (the soil exchange and the clamp
-included) and the energy its Ts clamp adds (`clamp`); `soil_urban`
-books `G·P` on the step it exchanges; `fog_dew` the dew's latent heat
+Who books what in the default case: `surface_exchange` books, on each
+surface step, the whole interval's `Rn`, `H`, `LE` and `G` (the heat
+conducted into a soil column; a slab's storage `C_s ΔT` goes to `ΔS`
+instead), and every step the change of the extra energy it holds for
+the next surface step (in `ΔS`); `fog_dew` the dew's latent heat
 (`dew_heat`); `buildings_citymean` the window sun that leaves the wall
 cells (`window_sun`); `glass` the shortwave transmitted into the
-building (`glass_transmission`).
+building (`glass_transmission`). Before #129 the slab booked the same
+terms per step and its Ts clamp as `clamp`; nothing is clamped now.
 
 **Water.** `water_budget(ledger)` gives the change of water in the air
 `ΔW` (measured by the ledger over `qv`, `ql`, `qr` and every
 `water_tracer!`), the booked sources and `residual = ΔW − Σ sources`.
-Sources in the default case: `evaporation` (slab), `building_vapour`,
+Sources in the default case: `evaporation` (surface exchange; negative
+where the surface takes up dew), `building_vapour`,
 `dew` (deposition, negative), `precipitation` (Kessler rain out of the
 bottom), `qv_clamp` (the Kessler coupling's clamp) and `transport` (the
 change of water the transport stage makes; zero for a conservative
@@ -400,10 +412,12 @@ sedimentation has the same effect inside its `precipitation` term
 (rain falling into denser levels), which #143 owns.
 
 The water integral runs over every grid cell, solid ones included.
-Today the slab's evaporation and the dew exchange act on level 1 of
-every column, which under a roof is inside the building (#129 moves
-them to the first air cell); the ledger closes either way, so a closed
-water ledger does not show that water sits in solid cells.
+Before #129 the slab's evaporation and the dew exchange acted on level 1
+of every column, which under a roof is inside the building; the ledger
+closed either way, so a closed water ledger does not show where the
+water went. Since #129 both act on the first air cell (`bus.k_air`), and
+the surface exchange's smoke check counts writes into solid cells
+(zero).
 
 `run_case!` prints `ledger_report(case)` at the end of a verbose run.
 The cost is about 1 ms/step on the flagship grid (the two water
@@ -506,6 +520,119 @@ W m⁻² averaged over the half hour (1.36 before). Park Rn goes from
 
 In the `:smoke` configuration the summer domain residual is −33.9 W m⁻²
 after #128.
+
+## Surface exchange (#129)
+
+`couplings/surface_exchange.jl` (slot `:surface_exchange`, provider
+`:most`) and `couplings/ground_soil.jl` (slot `:ground`, provider
+`:soil_column`) replaced the slab scheme of #126 (`surface_slab.jl`,
+`soil_urban.jl`).
+
+* **One surface per column.** Every column with air above it has an
+  `AbstractSurface`: a `SoilColumn.SoilThermalColumn` with hydrology for
+  streets, building-adjacent cells and the park (from `ground_soil`'s
+  factory), a `Radiation.SlabLand` for roofs, glass and water (β = 1)
+  until #139 / #144 / #141 register their own. Albedo and emissivity come
+  from `bus.params` (the radiosity materials), so the radiation and the
+  surface balance agree.
+* **Roof-aware air level.** The forcing is the first non-solid cell of
+  the column (`bus.k_air`), `z_ref = Δz/2` above the surface; the air
+  temperature is `θ Π̄_k` and the pressure `p̄_k` of the reference state
+  (#131; roofs sit up to 190 m up). H goes into θ, E into qv of that
+  cell only: the smoke check counts writes into solid cells (0 in every
+  run), and `test/berlin_surface_exchange.jl` checks that the stage
+  changes nothing else, and that ``Σρc_pΔzΔθ = ΣHΔt`` (2e-11).
+* **Cadence.** The surfaces are stepped every `cfg.cadence[:soil]`
+  seconds (30 s in the flagship, 4 s in `:smoke`; a `:surface` key
+  overrides it) and their fluxes are held as tendencies until the next
+  surface step, so the air receives exactly what the surface gave.
+* **Momentum.** The surface stress ``ρu_*^2`` is applied as an implicit
+  drag on the first-air-cell velocity faces, after the IBM. The momentum
+  removed equals ``Σ u_*^2\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in
+  the test). The `:wall` ground used to be free-slip.
+* **Extra surface energy.** `bus.sensible` (window sun, glazing
+  transmission, dew heat) is collected every step and delivered to the
+  surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`
+  and `SoilThermalColumn` take it since #129). The ledger books the
+  pending energy in ``ΔS``, so the per-class closure stays at round-off
+  (≤ 1.5e-10 W m⁻² in 1 h of the flagship).
+* **Dew.** One vapour exchange per surface: the soil and water surfaces
+  take up dew as negative evaporation (into the soil water); the
+  RadiationFog dew reservoir of `fog_dew` acts only over surfaces with
+  β = 0 (roofs, glass), above the roof.
+* **No clamps.** H, LE and Ts are not clipped (the Kessler qv clamp
+  stays for #143).
+
+### Measured (flagship, 64 × 64 × 32, dt = 2 s, 1 h)
+
+These runs predate the merge with #131. They used `T_air = θ − Γ_d z`
+(about 1.1 K below `θ Π̄_k` at the ground), an 8 km scale-height
+pressure and ρ = 1 for the air-side increments; the numbers have not
+been remeasured with the reference state.
+
+Two 1 h runs, from 06:00 and from 12:00 local on 20 June, each against
+the same run on the #127 branch (slab scheme). Domain means over
+4096 columns, W m⁻², averaged over the interval:
+
+| interval | slab H | MOST H | MOST LE | MOST H street+wall | MOST H roof | u* street | u* roof |
+| :-- | --: | --: | --: | --: | --: | --: | --: |
+| 06:00–06:05 | −24.1 | −0.5 | 0.6 | −0.6 | −0.1 | 0.010 | 0.002 |
+| 06:45–07:00 | −15.9 | 22.7 | 46.2 | 34.5 | 0.0 | 0.054 | 0.001 |
+| 12:00–12:05 | −23.7 | 6.7 | 22.6 | 10.4 | −0.1 | 0.045 | 0.002 |
+| 12:45–13:00 | −8.7 | 86.5 | 15.2 | 127.9 | 10.5 | 0.085 | 0.040 |
+
+Why H differs: the slab scheme exchanged at a fixed `C_h = 1e-3` and
+`U = 3 m/s`, i.e. 3.0 W m⁻² K⁻¹ whatever the flow, from a slab that
+starts 8 K colder than the air (Ts0 = 285 K under θ = 293 K), so its H
+was about −24 W m⁻² at the start and still negative after an hour at
+noon. With Monin–Obukhov and the resolved wind at the first air cell
+(0.55 m/s over streets, 0.21 m/s over roofs at 07:00) the cold,
+stably stratified start is almost decoupled (H ≈ 0), and the soil
+columns' massless skins heat within minutes, so the streets turn
+unstable and give 30–130 W m⁻² after half an hour. The cold-started roof
+slabs (C_s = 1.8e5 J m⁻² K⁻¹) stay colder than the air for most of the
+hour, stable and decoupled.
+
+**u\* over roofs.** The plan expected 0.2–0.6 m/s at midday. Measured:
+0.045 m/s mean over roofs at 13:00 (0.0022 at 07:00); streets 0.116.
+Two reasons, both in the case rather than the scheme: the wind at the
+first air cell above the roofs is only 0.28 m/s (the case is driven by a
+1 m/s geostrophic wind, u0 = 1 m/s), which gives a *neutral* u\* of
+0.027 m/s for z0m = 0.05 m; and the roofs start at 285 K, so they are
+stably stratified for most of the first hour. At 13:00, with the roofs
+2.4 K warmer than the air, u\* is 1.7 × its neutral value (the
+convective enhancement). The expectation assumed a few m/s of wind.
+
+**Street β.** The street soil starts at θ = 0.10 (β = 0.44). In the
+noon hour its mean β falls to 0.37 (0.35–0.44) as the top layer dries,
+and the evaporation the soil can deliver collapses: the domain-mean LE
+is 71 W m⁻² between 12:15 and 12:30 and 16 W m⁻² after 12:30.
+
+**Bug found (src).** `SoilThermalColumn.step_surface!` returned the
+evaporation the skin balance charged even when the soil, at its dry
+potential, delivered less; the difference was only recorded as
+`budget.latent_mismatch`. Coupled to the air this created water: in the
+first noon run a third of the street LE (≈ 70 of 184 W m⁻²) was never
+lost by the soil. It now returns the delivered E and LE and keeps the
+unspent latent heat in the top soil layer (test in
+`era5_soil_thermal.jl`). LandSurface's vegetated column has the same
+pattern (`latent_mismatch` there); #140 should check it.
+
+**Cost.** The surface step (4094 surfaces: 3179 soil columns with
+hydrology, 915 slabs) is 10–17 ms per dynamics step averaged at the
+30 s cadence (18–31 s per simulated hour, the range is the machine's
+load), the air-side update 0.9 ms and the drag 0.15 ms. The soil column
+with hydrology costs about 56 µs per call, a slab 16 µs.
+
+**Known limitations.** Streets are bare loam: SoilColumn has no sealed
+surface, so a street evaporates until its top layer dries (a sealed
+option belongs in src). No rain reaches the soil (the microphysics books
+precipitation as a domain total). The roughness lengths are per class
+options (street/roof 0.05 m, park 0.1 m, water 1e-4 m, glass 0.01 m,
+z0h = z0m/10), not a survey. The more vigorous noon convection makes the
+stale-halo transport leak of #132 larger: the transport created
+3.4e-3 kg m⁻² of water in the noon hour and drove qv negative aloft,
+which the Kessler clamp then filled (+8.9e-5 kg m⁻²).
 
 ## Smoke test and coverage test
 
@@ -695,7 +822,7 @@ later issue.
 | :-- | :-- | :-- |
 | tree shade and cloud shadow multiply `bus.sw` in place every step, so they compound between radiation updates | `sw_modifiers.jl` | #128 (fixed) |
 | no `class_map` in the radiosity scene (park/water facets get street material) | `core/geometry.jl` | #128 (fixed) |
-| slab: constant C_h and U, flux clamps, roof fluxes into solid k = 1, no surface drag | `surface_slab.jl`, `fog_dew.jl` | #129 |
+| slab: constant C_h and U, flux clamps, roof fluxes into solid k = 1, no surface drag | `surface_slab.jl`, `fog_dew.jl` | #129 (fixed: `surface_exchange.jl`, `ground_soil.jl`) |
 | sky longwave from the surface temperature, prescribed −2 K/day cooling | `radiosity_sun.jl`, `cooling_prescribed.jl` | #130 |
 | `qr` sedimented but not advected; qv clamp | `micro_kessler.jl` | #143 |
 | glass is a synthetic roof mask | `glass.jl` | #144 |

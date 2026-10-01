@@ -334,7 +334,18 @@ Outputs land in `examples/urban/output/alexanderplatz_*`:
 
 ### Ground: the production soil column
 
-Below each non-water cell's surface slab the run carries one
+**Since #129** the soil column is no longer under a slab: each street,
+building-adjacent and park column's surface *is* a `SoilThermalColumn`,
+stepped by the Berlin case's surface exchange with Monin–Obukhov fluxes
+from the first air cell, with its soil water (`hydrology = true`), so β
+follows the top layer. Roofs, water and glass are `Radiation.SlabLand`
+surfaces. `UrbanSoil` / `step_soil!` and `couplings/soil_urban.jl` are
+gone; `couplings/ground_soil.jl` registers the soil columns. See
+`docs/src/design/berlin_case.md` for the design and the measured
+effect. The rest of this section describes the #18 arrangement and its
+measurements.
+
+Below each non-water cell's surface slab the run carried one
 `SoilThermalColumn` from `Aeolus.SoilColumn` (Phase 46, #18). It replaces
 a three-layer explicit soil that was written into the example. The
 example's `UrbanSoil` / `step_soil!` (in `couplings/soil_urban.jl`) only

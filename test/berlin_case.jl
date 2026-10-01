@@ -59,10 +59,12 @@ const BC = Main.BerlinCase
         for s in keys(slots)
             @test count(C -> BC.slot(C) === s, sel) == 1
         end
-        # the initial couplings of the refactor, all on by default
+        # the initial couplings of the refactor, all on by default (#129
+        # replaced the slab and the soil adapter by the surface exchange
+        # and the soil ground)
         @test Set(BC.coupling_name.(sel)) ==
-              Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_slab,
-                   :soil_urban, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :transport_weno,
+              Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_exchange,
+                   :ground_soil, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :transport_weno,
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
                    :cooling_prescribed, :traffic_heat, :moist_buoyancy])
         # every coupling names only real Aeolus submodules
@@ -82,27 +84,31 @@ const BC = Main.BerlinCase
     mesh, sim, bus = case.mesh, case.sim, case.bus
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
 
-    @testset "stage schedule reproduces the pre-refactor loop order" begin
+    @testset "stage schedule" begin
         order = [(S, BC.coupling_name(e.coupling)) for S in BC.ALL_STAGES for e in case.schedule[S]]
-        # the order of the pre-refactor alexanderplatz_diurnal.jl loop
+        # the order of the pre-refactor alexanderplatz_diurnal.jl loop, with
+        # the slab replaced by the surface exchange (#129): its fluxes go
+        # into the air in :surface_flux (the slab's latent flux at the end
+        # of :anthropogenic and its Ts clamp in :sanity are gone), its
+        # surface drag follows the IBM, and the surfaces (soil included)
+        # are stepped in :surface_update
         @test order == [
             (:radiation, :radiosity_sun), (:radiation, :buildings_citymean),
             (:sw_modifiers, :sw_modifiers),
-            (:surface_flux, :surface_slab),
+            (:surface_flux, :surface_exchange),
             (:anthropogenic, :buildings_citymean), (:anthropogenic, :traffic_heat),
-            (:anthropogenic, :glass), (:anthropogenic, :surface_slab),
+            (:anthropogenic, :glass),
             (:chemistry, :aq_chem), (:chemistry, :aq_aerosol),
             (:transport, :transport_weno),
             (:microphysics, :micro_kessler),
             (:tracers, :pollutant),
             (:fog_dew, :fog_dew),
             (:body_force, :geostrophic), (:body_force, :moist_buoyancy),
-            (:post_predictor, :ibm), (:post_predictor, :veg_drag),
-            (:surface_update, :surface_slab), (:surface_update, :soil_urban),
-            (:surface_update, :snow_legacy),
+            (:post_predictor, :ibm), (:post_predictor, :surface_exchange),
+            (:post_predictor, :veg_drag),
+            (:surface_update, :surface_exchange), (:surface_update, :snow_legacy),
             (:surface_update, :aq_chem),              # r_a / v_d refresh (#135)
-            (:column_tendency, :cooling_prescribed),
-            (:sanity, :surface_slab)]
+            (:column_tendency, :cooling_prescribed)]
         # the chemistry species are advected tracers since #135
         @test [t.name for t in case.tracers] == [:qv, :ql, :qr, :NO, :NO2, :O3, :VOC, :HNO3, :pollutant]
         @test [t.name for t in case.tracers if t.advect] == [:qv, :ql, :NO, :NO2, :O3, :VOC, :HNO3]
@@ -118,25 +124,8 @@ const BC = Main.BerlinCase
         @test_throws ErrorException BC.tracer(case, :no_such_tracer)
     end
 
-    @testset "surface_flux stage: heat into the air equals the bus sensible flux" begin
-        # Warm the surface so there is a flux; the stage must put exactly
-        # H·dt/(ρcp·dz) into the first layer of every column, with the
-        # reference density ρ̄_1 of the case (#131; ρ = 1 before).
-        ρcp = BC.ref_density(case, 1) * Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS.cp_dry
-        bus.Ts .= 300.0 .+ 5.0 .* sin.(1:Nx) .* cos.((1:Ny)')
-        θ0 = copy(interior_view(sim.θ))
-        slab = BC.find_coupling(case, :surface_slab)
-        BC.run_stage!(slab, case, Val(:surface_flux), 2.0)
-        Δθ = interior_view(sim.θ) .- θ0
-        E_air = sum(Δθ[:, :, 1]) * ρcp * mesh.dz             # J/m² × columns
-        E_sfc = sum(bus.sensible) * 2.0
-        @info @sprintf("  surface_flux: air gain %.6e J/m², surface loss %.6e J/m², rel. diff %.1e",
-                       E_air, E_sfc, abs(E_air - E_sfc) / abs(E_sfc))
-        @test E_air ≈ E_sfc rtol = 1e-9          # round-off of θ ≈ 300 K vs Δθ ≈ 0.01 K
-        @test all(==(0), Δθ[:, :, 2:end])
-        @test maximum(abs, bus.sensible) <= 250.0                # the known clamp
-        interior_view(sim.θ) .= θ0
-    end
+    # The surface_flux stage (surface exchange, #129) is tested in
+    # berlin_surface_exchange.jl.
 
     @testset "anthropogenic stage: traffic heat is Q_urban over the domain" begin
         θ0 = copy(interior_view(sim.θ))
@@ -207,7 +196,8 @@ const BC = Main.BerlinCase
         @test nc_nrecords(f) == 2
         vars = nc_varnames(f)
         for v in ("u", "v", "w", "theta", "p", "qv", "ql", "qr", "pollutant",
-                  "Ts", "sw_in", "lw_in", "T_soil1", "G_soil")
+                  "Ts", "sw_in", "lw_in", "T_soil1", "G_soil", "theta_soil1",
+                  "H_sfc", "LE_sfc", "u_star", "beta_sfc")
             @test v in vars
         end
         @test nc_read(f, "time") == [12.0, 24.0]

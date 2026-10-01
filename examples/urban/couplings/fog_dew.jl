@@ -20,13 +20,19 @@
 #
 # Pressure and density come from the case's hydrostatic reference state
 # (core/reference_state.jl, #131): fog is adjusted at p̄_k (T = θ Π̄_k),
-# dew exchanges with the surface at the ground pressure and the level-1
-# density ρ̄_1, the density the ledger integrates the water with. Before
-# #131 fog and dew used an isothermal 8 km scale height from 1013.25 hPa
-# (0.17 % off the hydrostatic p̄ at the flagship's top level) and ρ = 1.
+# and dew exchanges at the p̄_k and ρ̄_k of its air cell, the density the
+# ledger integrates the water with. Before #131 fog and dew used an
+# isothermal 8 km scale height from 1013.25 hPa (0.17 % off the
+# hydrostatic p̄ at the flagship's top level) and ρ = 1.
 #
-# KNOWN: dew goes into k = 1 of every column, inside the building on
-# roof columns (#129).
+# Since #129 the dew exchanges with the first AIR cell of each column
+# (`bus.k_air`: above the roof on building columns, not inside the
+# building, at that cell's pressure), and only over surfaces with no vapour exchange of their own
+# (`bus.dew_mask`: moisture availability 0, e.g. roofs and glass). Over a
+# soil column or water the surface exchange's Monin–Obukhov evaporation
+# already turns negative when the air is above saturation at the skin,
+# and that dew goes into the soil water; a second dew path there would
+# count the same deposition twice.
 
 """
     apply_fog_dew!(θ, qv, ql, q_dew, Ts, dt; p = 1.01325e5, p_sfc, dz, ρ = 1.0,
@@ -75,11 +81,14 @@ end
 """
     FogDew
 
-Additive coupling: every step in `:fog_dew`, [`apply_fog_dew!`](@ref) on
-θ, qv, ql with the dew reservoir `bus.dew` and the surface temperature
-`bus.Ts`; the dew's latent heat warms the surface (`bus.sensible -= H_dew`).
-Fog is adjusted at the reference pressure `p̄_k`, dew at the ground
-pressure with the reference density `ρ̄_1` (`case.ref`).
+Additive coupling: every step in `:fog_dew`, dew (`RadiationFog.dew_exchange!`)
+between the first air cell of each `bus.dew_mask` column (`bus.k_air`)
+and the dew reservoir `bus.dew` at the surface temperature `bus.Ts`, then
+fog (`RadiationFog.fog_adjust!`) on θ, qv, ql — the two steps of
+[`apply_fog_dew!`](@ref). The dew's latent heat warms the surface
+(`bus.sensible -= H_dew`, delivered by the surface exchange). Fog is
+adjusted at the reference pressure `p̄_k`, dew at the `p̄_k` and `ρ̄_k` of
+its air cell (`case.ref`).
 """
 mutable struct FogDew <: AbstractCoupling
     H_dew::Matrix{Float64}    # this step's dew latent heat into the surface (W/m²)
@@ -96,9 +105,32 @@ build(::Type{FogDew}, case, o) =
 function run_stage!(c::FogDew, case, ::Val{:fog_dew}, dt)
     bus = case.bus
     copyto!(c.dew_start, bus.dew)
-    H_dew = apply_fog_dew!(case.sim.θ, tracer(case, :qv), tracer(case, :ql), bus.dew, bus.Ts, dt;
-                           p = ref_pressure(case), p_sfc = surface_pressure(case),
-                           dz = case.mesh.dz, ρ = ref_density(case, 1))
+    qv = interior_view(tracer(case, :qv))
+    # dew: on the first air cell of the columns in dew_mask, at the pressure
+    # of that cell (roof columns exchange tens of metres up). One
+    # dew_exchange! per air level; the columns not at that level see q = 0
+    # and an empty reservoir, which gives no exchange (and those entries
+    # are not copied back).
+    H_dew = zeros(size(bus.dew))
+    q1, d1 = zeros(size(bus.dew)), zeros(size(bus.dew))
+    for k in unique(bus.k_air[bus.dew_mask])
+        at(I) = bus.dew_mask[I] && bus.k_air[I] == k
+        for I in CartesianIndices(q1)
+            q1[I], d1[I] = at(I) ? (qv[I, k], bus.dew[I]) : (0.0, 0.0)
+        end
+        q0 = copy(q1)
+        Hk = Aeolus.RadiationFog.dew_exchange!(q1, d1, bus.Ts, ref_pressure(case, k), dt;
+                                               dz = case.mesh.dz, ρ = ref_density(case, k))
+        for I in CartesianIndices(q1)
+            at(I) || continue
+            qv[I, k] += q1[I] - q0[I]
+            bus.dew[I] = d1[I]
+            H_dew[I] = Hk[I]
+        end
+    end
+    # fog: saturation adjustment in the air
+    Aeolus.RadiationFog.fog_adjust!(interior_view(case.sim.θ), qv,
+                                    interior_view(tracer(case, :ql)), ref_pressure(case), dt)
     @. bus.sensible -= H_dew
     c.H_dew = H_dew
     return nothing
