@@ -76,8 +76,13 @@ In every PR that adds or changes physics:
 - Quote one Berlin diagnostic in the PR body showing the coupling does
   something physical (e.g. an energy-budget term, a facade temperature,
   a park's latent heat flux).
-- Once the Berlin smoke test is in the suite (short run, every option
-  on), keep it green and add the new option to it.
+- Keep the Berlin smoke test (`test/berlin_smoke.jl`: every coupling
+  and option, 12 steps, energy and water ledgers must close) green, and
+  remove your module from `BERLIN_PENDING` in `test/berlin_coverage.jl`.
+
+**How to add a coupling** (one file under `examples/urban/couplings/`,
+`register!`, `modules_used`, `budget!`, `smoke_check`/`smoke_variants`):
+[`docs/src/design/berlin_case.md`](docs/src/design/berlin_case.md).
 
 Exceptions (numerics the solver cannot use yet, physics with no urban
 meaning) are stated in the PR body with the reason, never skipped

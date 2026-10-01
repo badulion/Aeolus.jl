@@ -104,6 +104,7 @@ function step_case!(case, dt::Real = case.cfg.dt)
     n = clk.n
     t_old = sim.t
     t_new = t_old + dt
+    ledger_begin_step!(case)
     # :clock (core)
     clk.hour = hour_of_day(case.cfg, sim.t)
     run_entries!(case, :clock, dt, n, t_old, t_new)
@@ -122,6 +123,7 @@ function step_case!(case, dt::Real = case.cfg.dt)
         clk.blowup = true
         return false
     end
+    ledger_end_step!(case, dt)
     # :output (core record + log line, then coupling entries)
     fires(resolve(Cadence(:output), case.cfg), n, t_old, t_new) && write_output!(case)
     run_entries!(case, :output, dt, n, t_old, t_new)
@@ -158,6 +160,7 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps)
         @printf(io, "Peak ΔT (heat island): %.1f K   max|∇·u| = %.2e\n",
                 maximum(case.bus.Ts) - minimum(case.bus.Ts), max_divergence(case.sim))
         print(io, timing_report(case))
+        print(io, ledger_report(case))
     end
     return case
 end

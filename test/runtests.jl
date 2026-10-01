@@ -945,4 +945,6 @@ end
 
 @testset "Berlin case" begin
     include("berlin_case.jl")            # registry, stages, bus, tracers (#126)
+    include("berlin_coverage.jl")        # every Aeolus module coupled, exempt or pending (#127)
+    include("berlin_smoke.jl")           # every coupling and option, 12 steps, ledgers close (#127)
 end

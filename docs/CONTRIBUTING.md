@@ -390,8 +390,11 @@ What counts as wired in:
   removed (one source of truth applies to examples).
 - It is **on by default**. Alternatives (Kessler, P3, superdroplets)
   and expensive schemes may sit behind an option or a cadence. The PR
-  then quotes the measured cost per simulated hour. Once the Berlin
-  smoke test is in the suite, the option must be exercised there too.
+  then quotes the measured cost per simulated hour. The option must be
+  exercised by the Berlin smoke test (`test/berlin_smoke.jl`), which
+  derives its runs from the coupling registry, and the module must come
+  off the pending list of the coverage test (`test/berlin_coverage.jl`).
+  How to add a coupling, step by step: `docs/src/design/berlin_case.md`.
 - The PR body quotes one diagnostic from the Berlin run showing the
   coupling does something physical, with its value.
 

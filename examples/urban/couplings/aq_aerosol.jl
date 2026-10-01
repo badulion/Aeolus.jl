@@ -122,4 +122,8 @@ function run_stage!(c::AQAerosol, case, ::Val{:chemistry}, dt)
     return nothing
 end
 
+smoke_check(c::AQAerosol, case) =
+    ["aerosol mass and number finite and ≥ 0" =>
+         all(f -> all(x -> isfinite(x) && x >= 0, interior_view(f)), (c.aerosol.q_a, c.aerosol.N_a))]
+
 register!(AQAerosol)

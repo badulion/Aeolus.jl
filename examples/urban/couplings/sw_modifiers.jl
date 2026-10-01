@@ -100,4 +100,8 @@ function run_stage!(c::SWModifiers, case, ::Val{:sw_modifiers}, dt)
     return nothing
 end
 
+smoke_check(c::SWModifiers, case) =
+    ["shaded shortwave ≥ 0" => all(>=(0), case.bus.sw),
+     "park columns in the window" => any(c.veg_mask)]
+
 register!(SWModifiers)

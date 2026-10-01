@@ -48,6 +48,7 @@ end
 
 export CaseConfig, SCENARIOS, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
-       ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling
+       ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
+       Ledger, ledger_report, surface_budget, water_budget
 
 end # module BerlinCase

@@ -163,4 +163,21 @@ run_stage!(c::GlassClass, case, ::Val{:anthropogenic}, dt) =
     (apply_glass_sw_transmission!(case.bus.sensible, case.geom.sfc, case.bus.sw;
                                   glazing = c.glazing); nothing)
 
+# Ledger: the shortwave transmitted through the glass leaves the glass
+# cells' surface budget (it heats the building, not the slab).
+function budget!(c::GlassClass, case, l)
+    T = apply_glass_sw_transmission!(zeros(size(case.bus.sw)), case.geom.sfc, case.bus.sw;
+                                     glazing = c.glazing)
+    add_surface!(l, :glass_transmission, -T, case.geom.sfc, case.cfg.dt)
+    return nothing
+end
+
+function smoke_check(c::GlassClass, case)
+    opt = glazing_optics_hemispherical(c.glazing)
+    α = case.bus.params.albedo[SURFACE_GLASS]
+    return ["glass cells in the window" => any(==(SURFACE_GLASS), case.geom.sfc),
+            "glazing R + T + ΣA = 1 and the glass albedo is R" =>
+                isapprox(opt.R + opt.T + sum(opt.A), 1; atol = 1e-9) && α == opt.R]
+end
+
 register!(GlassClass)

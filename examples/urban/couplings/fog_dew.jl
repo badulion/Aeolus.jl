@@ -73,8 +73,10 @@ Additive coupling: every step in `:fog_dew`, [`apply_fog_dew!`](@ref) on
 θ, qv, ql with the dew reservoir `bus.dew` and the surface temperature
 `bus.Ts`; the dew's latent heat warms the surface (`bus.sensible -= H_dew`).
 """
-struct FogDew <: AbstractCoupling
+mutable struct FogDew <: AbstractCoupling
     p_col::Vector{Float64}
+    H_dew::Matrix{Float64}    # this step's dew latent heat into the surface (W/m²)
+    dew_start::Matrix{Float64}  # dew reservoir before this step's exchange (kg/m²)
 end
 
 coupling_name(::Type{FogDew}) = :fog_dew
@@ -86,15 +88,42 @@ function build(::Type{FogDew}, case, o)
     Lz, Nz = mesh.Lz, mesh.Nz
     # Layer pressures: isothermal 8 km scale height from a standard surface
     # pressure (the Boussinesq core carries no p).
-    return FogDew([1.01325e5 * exp(-(k - 0.5) * (Lz / Nz) / 8000.0) for k in 1:Nz])
+    return FogDew([1.01325e5 * exp(-(k - 0.5) * (Lz / Nz) / 8000.0) for k in 1:Nz],
+                  zeros(mesh.Nx, mesh.Ny), zeros(mesh.Nx, mesh.Ny))
 end
 
 function run_stage!(c::FogDew, case, ::Val{:fog_dew}, dt)
     bus = case.bus
+    copyto!(c.dew_start, bus.dew)
     H_dew = apply_fog_dew!(case.sim.θ, tracer(case, :qv), tracer(case, :ql), bus.dew, bus.Ts, dt;
                            p = c.p_col, dz = case.mesh.dz, ρ = 1.0)
     @. bus.sensible -= H_dew
+    c.H_dew = H_dew
     return nothing
+end
+
+# Ledger: the dew's latent heat is an extra flux into the surface; the
+# vapour deposited into the dew reservoir leaves the air (dew = the
+# reservoir change, negative = deposition, positive = re-evaporation).
+function budget!(c::FogDew, case, l)
+    add_surface!(l, :dew_heat, c.H_dew, case.geom.sfc, case.cfg.dt)
+    add_water!(l, :dew, -(sum(case.bus.dew) - sum(c.dew_start)) / length(c.dew_start))
+    return nothing
+end
+
+function smoke_check(c::FogDew, case)
+    Δdew = case.bus.dew .- c.dew_start
+    ql = interior_view(tracer(case, :ql))
+    return ["dew reservoir ≥ 0" => all(>=(0), case.bus.dew),
+            "cloud water ≥ 0 (to round-off)" => minimum(ql) >= -1e-15,
+            # deposition releases latent heat into the surface,
+            # re-evaporation takes it: H_dew and Δdew have the same sign
+            "dew latent heat has the sign of the deposition" =>
+                all(I -> c.H_dew[I] * Δdew[I] >= 0, eachindex(Δdew)),
+            "H_dew = L_v(Ts) · deposition rate (rel. 1e-9)" =>
+                all(I -> abs(c.H_dew[I] - Aeolus.MoistThermodynamics.latent_heat_vapor(case.ledger.Ts_start[I]) *
+                                          Δdew[I] / case.cfg.dt) <=
+                         1e-9 * abs(c.H_dew[I]) + 1e-12, eachindex(Δdew))]
 end
 
 register!(FogDew)

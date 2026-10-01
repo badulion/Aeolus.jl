@@ -33,7 +33,7 @@ examples/urban/
     osm_ingest.jl      OSM XML reader
     bus.jl             SurfaceBus, SurfaceParams (per-class slab parameters)
     tracers.jl         tracer registry (ensure_tracer!)
-    ledger.jl          energy/water budget ledger (stub, filled by #127)
+    ledger.jl          energy/water budget ledger (surface energy per class, water in the air)
     output.jl          NetCDF output driven by the registry
     case.jl            Case, build_case
     stages.jl          the stage loop: step_case!, run_case!, timing_report
@@ -60,7 +60,7 @@ default.
 | `slot(::Type{C})` | `:addon` (additive, on/off) or an exclusive slot such as `:microphysics` |
 | `provider(::Type{C})` | the value of `cfg.physics[slot]` that selects `C` |
 | `is_default(::Type{C})` | default provider of its slot; for an addon, on by default |
-| `modules_used(::Type{C})` | Aeolus submodules it runs (for the coverage test, #127) |
+| `modules_used(::Type{C})` | Aeolus submodules it runs (checked by the coverage test) |
 | `default_options(::Type{C})` | `NamedTuple`, merged with `cfg.options[name]` and passed to `build` |
 | `incompatible(::Type{C})` | `slot => provider` pairs or coupling names it cannot run with |
 | `stages(::Type{C})` | `((stage, order, Cadence), …)`, at most one entry per stage |
@@ -68,9 +68,10 @@ default.
 | `init!(c, case)` | after every coupling is built, in registry order |
 | `run_stage!(c, case, ::Val{S}, dt)` | the work of stage `S` |
 | `output_fields(c, case)` | `OutputField`s added to the NetCDF file |
-| `budget!(c, case, ledger)` | budget terms (#127) |
+| `budget!(c, case, ledger)` | this step's surface-energy and water terms (see [the ledger](#The-budget-ledger)) |
 | `report(c, case)` | an extra log line with each output record |
-| `smoke_variants(::Type{C})`, `smoke_check(c, case)` | for the smoke test (#127) |
+| `smoke_variants(::Type{C})` | extra smoke-test configurations, a tuple of `NamedTuple`s (see [the smoke test](#Smoke-test-and-coverage-test)) |
+| `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run |
 
 `selected_couplings(cfg)` checks the configuration: an unknown key, an
 unknown provider, an additive switch used on a slot coupling, a slot
@@ -110,6 +111,7 @@ in the integer `order` their couplings declare.
 | `:surface_update` | `surface_slab` (10), `soil_urban` (20, every 30 s), `snow_legacy` (30) |
 | `:column_tendency` | `cooling_prescribed` (10) |
 | `:sanity` | `surface_slab` Ts clamp (10), then the core finiteness check |
+| (ledger) | every coupling's `budget!`, and the change of water in the air (core) |
 | `:output` (1800 s) | NetCDF record and log line (core), then coupling entries |
 
 The order is the order of the pre-refactor loop, floating-point order
@@ -142,6 +144,272 @@ needs.
   the NetCDF file. The core registers `qv`, `ql` (advected) and `qr`.
 * **Geometry** (`case.geom`): mask, surface classes, scene, view factors.
   Couplings may add classes at `init!` (the glass coupling does).
+
+## Adding a coupling
+
+This is the whole procedure. It touches one new file, one line of the
+coverage test and the PR body; no shared file of the case is edited.
+
+**1. Put the physics in `src/`.** A coupling only wires a src
+implementation into the 3-D run. If the physics is missing, add it to
+the right src module with its own tests first. Never copy it into the
+example.
+
+**2. Write `examples/urban/couplings/<name>.jl`.** One struct, the
+contract methods it needs, and `register!` as the last line:
+
+```julia
+# P3 microphysics (Aeolus.P3Microphysics) in the :microphysics slot.
+
+struct MicroP3{W} <: AbstractCoupling
+    work::W
+end
+
+coupling_name(::Type{<:MicroP3}) = :micro_p3             # unique; key in cfg.options
+slot(::Type{<:MicroP3})          = :microphysics         # or :addon
+provider(::Type{<:MicroP3})      = :p3                   # cfg.physics[:microphysics] = :p3
+is_default(::Type{<:MicroP3})    = false                 # an alternative: off by default
+modules_used(::Type{<:MicroP3})  = (:P3Microphysics,)    # what the coverage test checks
+default_options(::Type{<:MicroP3}) = (skip_dry = true,)
+stages(::Type{<:MicroP3}) = ((:microphysics, 10, EVERY_STEP),)
+
+function build(::Type{<:MicroP3}, case, o)
+    ensure_tracer!(case, :qi; advect = true, positive = true, units = "kg kg-1",
+                   long_name = "ice mass")               # transport picks it up
+    return MicroP3(...)
+end
+init!(c::MicroP3, case) = water_tracer!(case.ledger, :qi) # count it as water
+
+function run_stage!(c::MicroP3, case, ::Val{:microphysics}, dt)
+    ...                                                  # calls into Aeolus.P3Microphysics
+end
+
+budget!(c::MicroP3, case, l) = add_water!(l, :precipitation, -c.surface_precip_step)
+
+smoke_check(c::MicroP3, case) =
+    ["ice ≥ 0" => minimum(interior_view(tracer(case, :qi))) >= 0,
+     "precipitation ≥ 0" => c.surface_precip_step >= 0]
+
+register!(MicroP3)
+```
+
+The file is picked up by the directory scan; include order is the
+sorted file name, which is also the registry order (and the tie-break
+between entries of the same stage and order).
+
+* **On by default.** An additive coupling is on unless `is_default`
+  says otherwise; a slot provider is the slot's default only if it is
+  the one with `is_default = true`. The rule of #123: new physics is on
+  by default unless it is a genuine alternative or too expensive, and
+  then its cost per step is quoted from `timing_report` in the PR.
+* **Cadence.** An expensive stage can run every `P` seconds:
+  `Cadence(600.0)`, or `Cadence(:mykey)` with a default in
+  `cfg.cadence` (add the key through the scenario or your option; a
+  missing key is an error). Stages inside `step!` (`:body_force`,
+  `:post_predictor`) must run every step.
+* **Shared state** goes through the bus, the tracer registry and the
+  geometry, never a private copy (see above). If you need a bus field
+  that does not exist, add it to `core/bus.jl` additively and say so
+  in the PR.
+* **Replacing a coupling.** Delete the old file (the issue says which)
+  and move its `budget!` terms and checks over. The ledger closure in
+  the smoke test fails if a term that changes a surface temperature or
+  the water in the air is lost.
+
+**3. Report to the ledger.** If the coupling changes a surface
+temperature, adds or removes water from the air, or clips anything,
+book it in `budget!` (next section). The smoke test asserts the
+closure, so a missing term fails the suite.
+
+**4. Give it smoke coverage.** The smoke test already runs every
+additive coupling and one configuration per non-default provider, so
+most couplings need no `smoke_variants`. Add one for a configuration
+that is not reached that way, for example an option that changes the
+code path:
+
+```julia
+smoke_variants(::Type{<:MicroP3}) =
+    ((label = "sgs cloud on", physics = Dict(:microphysics => :p3),
+      options = Dict(:micro_p3 => (sgs_cloud = true,))),)
+```
+
+Each variant is a `NamedTuple`: `label`, then `physics` and `options`
+(merged into the everything-on configuration), then any `CaseConfig`
+field (`nsteps = 30`, `size = …`). Write `smoke_check`s that assert
+physics: a conservation or a budget, a bound that follows from the
+equations (a maximum principle, positivity, a range set by the
+thermostat), a sign that follows from the physics. "It ran" is already
+asserted for every coupling.
+
+**5. Remove the module from the pending list.** Delete its line from
+`BERLIN_PENDING` in `test/berlin_coverage.jl`. The coverage test fails
+until you do (the ratchet), and it also checks that the coupling's file
+really calls into every module in its `modules_used` (by an exported
+name or a `Module.` qualification). An indirect use (you call a src
+function that runs the module every time) goes in `BERLIN_INDIRECT`
+with the explanation.
+
+**6. Run and quote.** `julia --project=. test/berlin_smoke.jl` and
+`test/berlin_coverage.jl` locally (under a minute), then the full suite.
+In the PR body quote one Berlin diagnostic — a ledger term is often the
+natural one — the configuration it was measured in, and the cost from
+`timing_report`.
+
+## The budget ledger
+
+`case.ledger` integrates, step by step, the surface energy balance of
+every surface class and the water budget of the air. The core calls
+`ledger_begin_step!` before `:clock` (it snapshots `bus.Ts` into
+`ledger.Ts_start` and the water in the air) and `ledger_end_step!` after
+`:sanity` (it calls every coupling's `budget!` and books the change of
+the water in the air). A coupling reports only what it did during that
+step:
+
+| call | meaning |
+| :-- | :-- |
+| `add_surface!(l, term, F, sfc, dt)` | a W m⁻² map `F` on the columns, over `dt` s, sorted by surface class |
+| `add_water!(l, term, m)` | `m` kg m⁻² of domain added to the air (negative: removed) |
+| `water_tracer!(l, :qi)` | count a new tracer as water in the air (not one that is part of another, like P3's rime mass) |
+| `ledger_water(case, q)` | ``Σ_k ρ_k Σ_{ij} q Δz / (N_x N_y)``, for measuring a change of a tracer |
+
+**Surface energy.** `:Rn` (net radiation into the surface), `:H`,
+`:LE`, `:G` (sensible, latent and ground heat flux out of it) and `:dS`
+(storage change of the surface layer) are the core terms. Every other
+term name is an extra flux *into* the surface. `surface_budget(ledger)`
+returns per class, and for the whole domain,
+
+    residual = Rn − H − LE − G − ΔS        (what the four-term balance misses)
+    closure  = residual + Σ extras          (round-off if nothing is missed)
+
+The residual is a physical baseline: the terms this model has that the
+conventional balance does not. The closure is bookkeeping and the smoke
+test asserts it to 1e-6 W m⁻² (measured ≤ 3.5e-10).
+
+Who books what in the default case: `surface_slab` books `Rn` (computed
+from `Ts_start` exactly as `step_surfaces!` does), `H`, `LE`, the
+storage `C_s ΔTs` over the whole step (the soil exchange and the clamp
+included) and the energy its Ts clamp adds (`clamp`); `soil_urban`
+books `G·P` on the step it exchanges; `fog_dew` the dew's latent heat
+(`dew_heat`); `buildings_citymean` the window sun that leaves the wall
+cells (`window_sun`); `glass` the shortwave transmitted into the
+building (`glass_transmission`).
+
+**Water.** `water_budget(ledger)` gives the change of water in the air
+`ΔW` (measured by the ledger over `qv`, `ql`, `qr` and every
+`water_tracer!`), the booked sources and `residual = ΔW − Σ sources`.
+Sources in the default case: `evaporation` (slab), `building_vapour`,
+`dew` (deposition, negative), `precipitation` (Kessler rain out of the
+bottom), `qv_clamp` (the Kessler coupling's clamp) and `transport` (the
+change of water the transport stage makes; zero for a conservative
+scheme). The ledger integrates the water with `ledger.ρ`, one density
+per level, `1` for the Boussinesq case. A coupling that puts a flux into
+the air with a different density than the ledger's shows up as a water
+residual: #131, which introduces a reference density profile, sets
+`ledger.ρ` and the couplings must agree with it.
+
+The water integral runs over every grid cell, solid ones included.
+Today the slab's evaporation and the dew exchange act on level 1 of
+every column, which under a roof is inside the building (#129 moves
+them to the first air cell); the ledger closes either way, so a closed
+water ledger does not show that water sits in solid cells.
+
+`run_case!` prints `ledger_report(case)` at the end of a verbose run.
+The cost is about 1 ms/step on the flagship grid (the two water
+integrals), plus about 0.4 ms/step for the Kessler coupling's own
+bookkeeping.
+
+### Baseline (measured, #127)
+
+Flagship configuration, 1 h (`AEOLUS_NSTEPS=1800`, 06:00–07:00 local,
+20 June, 64 × 64 × 32, dt = 2 s), mean W m⁻² over the hour per class:
+
+| class | cols | Rn | H | LE | G | ΔS | Rn − H − LE − G − ΔS | extras | closure |
+| :-- | --: | --: | --: | --: | --: | --: | --: | :-- | --: |
+| street | 1690 | 327.47 | −18.45 | 0.88 | −4.72 | 350.04 | −0.27 | dew heat 0.27 | 1.7e-11 |
+| roof | 874 | 309.18 | −15.83 | 0.44 | 1.51 | 323.21 | −0.16 | dew heat 0.16 | 2.3e-11 |
+| park | 511 | −9.95 | −23.51 | 0.04 | −15.07 | 33.13 | −4.55 | dew heat 4.55 | 1.1e-12 |
+| water | 2 | 389.85 | −9.36 | 18.23 | 0 | 380.98 | 0.00 | — | −3.5e-10 |
+| wall | 978 | 172.33 | −24.03 | 0.05 | −12.26 | 145.08 | 63.49 | dew heat 3.39, window sun −66.89 | 1.4e-10 |
+| glass | 41 | 309.22 | −4.53 | 4.31 | 21.27 | 43.87 | 244.29 | glass transmission −244.29 | 9.6e-12 |
+| domain | 4096 | 244.28 | −19.71 | 0.53 | −6.22 | 252.79 | **16.89** | dew 1.52, glass −2.45, window sun −15.97 | 4.6e-11 |
+
+Water over the same hour (kg m⁻² of domain): ΔW = −7.75e-4 =
+evaporation +7.72e-4, building vapour +9.38e-4, dew −2.21e-3,
+precipitation 0, clamp 0, transport **−2.70e-4**; residual −1.4e-14.
+
+What the numbers say about the current (pre-#128/#129) physics:
+
+* **The park has negative net radiation in the morning sun** (−9.95
+  W m⁻² while the streets get +327). This is the compounding tree shade
+  of #128: `bus.sw` over the park is multiplied by exp(−0.5·LAI) every
+  step between radiation updates, so it is effectively zero.
+* **H is negative everywhere** (the air heats the surfaces): the case
+  starts with `Ts0 = 285 K` under air at θ = 293 K, and the slab's
+  constant-coefficient flux (#129) is weak. The surfaces warm by storage
+  (ΔS ≈ Rn) instead.
+* **The transport is not conservative**: over the hour it removes
+  2.7e-4 kg m⁻² of water, 35 % of what the surfaces evaporate. This is
+  the stale-halo leak below (#132).
+* The domain residual of 16.9 W m⁻² is the window sun (−16.0), the
+  glass transmission (−2.4) and the dew's latent heat (+1.5): energy
+  that goes into the buildings or comes from condensation, which the
+  four-term balance does not see.
+
+In the `:smoke` configuration of the smoke test (seeded fog, 12 steps
+at noon, 16 × 16 × 16) the domain residual is −34.4 W m⁻² in summer
+(dew heat +44.4 from the saturated seeded layer, window sun −6.9, glass
+−3.0) and +6.1 W m⁻² in winter.
+
+## Smoke test and coverage test
+
+**`test/berlin_smoke.jl`** runs the case in `CaseConfig(:smoke)`: a
+250 m × 250 m × 100 m window of the real OSM file (16 × 16 × 16,
+dx = 15.6 m, 312.5 m south of the anchor, 69 building and 50 park
+columns, tallest roof 31 m) at local noon, 12 steps of 2 s, radiation
+every 8 s, soil every 4 s. Before the first step it seeds a fog layer
+from a fixed RNG seed (`Xoshiro(127)`): saturated air with ql = 0.2 g/kg
+± 10 % in the lowest three levels and rain qr < 5e-5 in levels 2–3, so
+dew, fog, sedimentation and precipitation all do real work. The
+flagship's pollutant stacks are outside this window, so the smoke runs
+put one stack in it, 40 m up.
+
+The run matrix is derived from the registry (`smoke_matrix()` in the
+test file):
+
+1. **summer, everything on** — every additive coupling on, including
+   those off by default, and the default provider of every slot;
+2. **winter, everything on** — the same with the `:winter` initial
+   state;
+3. one run per **non-default provider** of every exclusive slot;
+4. one run per entry of every coupling's **`smoke_variants`**.
+
+A run that selects a coupling declared `incompatible` with an additive
+coupling switches that additive coupling off. Every run must finish
+without a blow-up, leave every field and tracer finite, pass every
+`smoke_check` of its couplings, and close the surface-energy ledger per
+class (1e-6 W m⁻²) and the water ledger (1e-12 kg m⁻²). The first run
+also asserts that the domain gains radiative energy at noon (Rn > 0,
+ΔS > 0) and records the transport's water non-conservation as
+`@test_broken` (#132 turns it into a pass). Finally every registered
+coupling must have run in at least one configuration, and the whole
+test must take less than 300 s.
+
+Today the matrix is 2 runs (no slot has a second provider yet). Run on
+its own, the test takes 26 s, almost all of it first-call compilation
+(the two runs themselves take 0.3 s each once compiled).
+
+**`test/berlin_coverage.jl`** checks that every submodule of `Aeolus`
+is either listed in some registered coupling's `modules_used`, or in
+`BERLIN_EXEMPT` with a reason, or in `BERLIN_PENDING` with the issue
+that wires it in. It ratchets: a new src module fails the suite until
+it is coupled or exempted, and a pending module that some coupling now
+uses fails it until it is removed from `BERLIN_PENDING`, so that list
+only shrinks. It also checks that each coupling's file calls into every
+module it lists (an exported name, or a `Module.` qualification, in the
+code with comments and docstrings removed); reviewed indirect uses go in
+`BERLIN_INDIRECT`. At #127: 55 modules, 15 coupled, 11 exempt
+(the core's infrastructure and the Parallel / Backends / SpectralElement
+scaffolds), 30 pending.
 
 ## Validation of the refactor (#126)
 
@@ -193,3 +461,13 @@ stage conserves both to 1.5e-15 and 3.8e-15. The fix changes the
 answer, so it is not in #126; `test/berlin_case.jl` records the leak as
 `@test_broken` and asserts the conservation with fresh halos. The
 scalar-advection issue (#132) owns it.
+
+The ledger (#127) measures the same leak in water. On **step 1** it is
+much larger: the velocity halos have never been filled when the
+transport first runs (`set!` fills only the interior), and in the
+`:smoke` window the first transport step *adds* 7.5e-3 kg m⁻² of water,
+0.8 % of the water in the air (9.4e-1 kg m⁻²); every later step removes
+about 3.5e-5 kg m⁻². With the halos refreshed the same steps change the
+water by at most 1.3e-15 kg m⁻². Over the 1 h flagship run the
+transport term is −2.70e-4 kg m⁻². `test/berlin_smoke.jl` records it as
+`@test_broken`.

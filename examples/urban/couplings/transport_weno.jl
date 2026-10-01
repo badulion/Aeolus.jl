@@ -26,6 +26,7 @@ struct TransportWENO{F, W, B} <: AbstractCoupling
     tend::F
     ws::W
     bcs::B
+    dW::Base.RefValue{Float64}   # this step's change of air water (kg/m²; 0 if conservative)
 end
 
 coupling_name(::Type{<:TransportWENO}) = :transport_weno
@@ -38,13 +39,14 @@ function build(::Type{<:TransportWENO}, case, o)
     mesh = case.mesh
     min(mesh.Hx, mesh.Hy, mesh.Hz) >= 3 || error("transport_weno: WENO-Z5 needs halo ≥ 3")
     return TransportWENO(Field(CellCenter(), mesh), FluxLimiterWorkspace(mesh),
-                         FieldBoundaryConditions(:periodic, :periodic, :noflux))
+                         FieldBoundaryConditions(:periodic, :periodic, :noflux), Ref(0.0))
 end
 
 function run_stage!(c::TransportWENO, case, ::Val{:transport}, dt)
     sim, mesh = case.sim, case.mesh
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    c.dW[] = 0.0
     for t in case.tracers
         t.advect || continue
         q = t.field
@@ -52,9 +54,21 @@ function run_stage!(c::TransportWENO, case, ::Val{:transport}, dt)
         fill!(c.tend.data, 0)
         advect_positive!(c.tend, sim.u, sim.v, sim.w, q, dt;
                          scheme = :weno_z5, workspace = c.ws, bcs = c.bcs)
-        interior_view(q) .+= dt .* view(c.tend.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
+        tend = view(c.tend.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
+        interior_view(q) .+= dt .* tend
+        t.name in case.ledger.water_tracers && (c.dW[] += dt * ledger_water(case, tend))
     end
     return nothing
 end
+
+# Ledger: a flux-form scheme on a divergence-free velocity with periodic /
+# no-flux boundaries changes no domain total, so anything it does change
+# is booked as `transport` — a measure of non-conservation (KNOWN: the
+# stale velocity halos of #132 make it nonzero).
+budget!(c::TransportWENO, case, l) = (add_water!(l, :transport, c.dW[]); nothing)
+
+smoke_check(c::TransportWENO, case) =
+    ["advected tracers ≥ 0 (positivity limiter, to round-off)" =>
+         all(t -> !t.advect || minimum(interior_view(t.field)) >= -1e-15, case.tracers.list)]
 
 register!(TransportWENO)

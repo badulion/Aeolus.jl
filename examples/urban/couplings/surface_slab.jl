@@ -141,6 +141,8 @@ Slot `:surface_exchange`, provider `:slab_bulk`: the legacy slab scheme.
 """
 struct SurfaceSlab <: AbstractCoupling
     LE::Matrix{Float64}
+    H::Matrix{Float64}        # this step's bulk sensible flux (W/m², for the ledger)
+    clip::Matrix{Float64}     # energy the Ts clamp added this step (W/m², for the ledger)
     C_h::Float64
     H_cap::Float64
     qv_air::Float64
@@ -151,7 +153,7 @@ end
 coupling_name(::Type{SurfaceSlab}) = :surface_slab
 slot(::Type{SurfaceSlab}) = :surface_exchange
 provider(::Type{SurfaceSlab}) = :slab_bulk
-modules_used(::Type{SurfaceSlab}) = (:MoistThermodynamics, :Radiosity)
+modules_used(::Type{SurfaceSlab}) = (:MoistThermodynamics,)
 default_options(::Type{SurfaceSlab}) = (C_h = 1e-3, H_cap = 250.0, qv_air = 0.010,
                                         Ts_min = 270.0, Ts_max = 340.0)
 stages(::Type{SurfaceSlab}) = ((:surface_flux, 10, EVERY_STEP),
@@ -159,12 +161,14 @@ stages(::Type{SurfaceSlab}) = ((:surface_flux, 10, EVERY_STEP),
                                (:surface_update, 10, EVERY_STEP),
                                (:sanity, 10, EVERY_STEP))
 build(::Type{SurfaceSlab}, case, o) =
-    SurfaceSlab(zeros(case.mesh.Nx, case.mesh.Ny), o.C_h, o.H_cap, o.qv_air, o.Ts_min, o.Ts_max)
+    SurfaceSlab(zeros(case.mesh.Nx, case.mesh.Ny), zeros(case.mesh.Nx, case.mesh.Ny),
+                zeros(case.mesh.Nx, case.mesh.Ny), o.C_h, o.H_cap, o.qv_air, o.Ts_min, o.Ts_max)
 
 function run_stage!(c::SurfaceSlab, case, ::Val{:surface_flux}, dt)
     o, bus = c, case.bus
     apply_surface_flux!(bus.sensible, case.sim, bus.Ts, case.geom.sfc, bus.params;
                         dt = dt, H_cap = o.H_cap, C_h = o.C_h)
+    copyto!(c.H, bus.sensible)
     return nothing
 end
 
@@ -183,8 +187,72 @@ function run_stage!(c::SurfaceSlab, case, ::Val{:surface_update}, dt)
 end
 
 function run_stage!(c::SurfaceSlab, case, ::Val{:sanity}, dt)
-    clamp!(case.bus.Ts, c.Ts_min, c.Ts_max)
+    Ts, C = case.bus.Ts, case.bus.params.C_s
+    sfc = case.geom.sfc
+    @inbounds for I in eachindex(Ts)
+        Tc = clamp(Ts[I], c.Ts_min, c.Ts_max)
+        c.clip[I] = C[sfc[I]] * (Tc - Ts[I]) / dt
+        Ts[I] = Tc
+    end
     return nothing
+end
+
+"""
+    slab_net_radiation(Ts, sfc, params, sw, lw) -> Matrix
+
+Net radiation absorbed by the slab, ``(1-α)SW + εLW↓ - εσT_s^4`` (W m⁻²),
+exactly the radiative part of [`step_surfaces!`](@ref).
+"""
+function slab_net_radiation(Ts, sfc, params::SurfaceParams, sw, lw)
+    Rn = similar(Ts, Float64)
+    @inbounds for I in eachindex(Ts)
+        k = sfc[I]
+        α, ε = params.albedo[k], params.emissivity[k]
+        Rn[I] = (1 - α) * sw[I] + ε * lw[I] - ε * STEFAN * Ts[I]^4
+    end
+    return Rn
+end
+
+# Ledger: the slab owns the surface storage, so it books Rn, H, LE, the
+# storage change C_s ΔTs over the whole step (the soil exchange and the
+# clamp included) and the clamp's energy as an extra term. Water: the
+# evaporation it put into qv.
+function budget!(c::SurfaceSlab, case, l)
+    bus, sfc, C = case.bus, case.geom.sfc, case.bus.params.C_s
+    dt = case.cfg.dt
+    add_surface!(l, :Rn, slab_net_radiation(l.Ts_start, sfc, bus.params, bus.sw, bus.lw), sfc, dt)
+    add_surface!(l, :H, c.H, sfc, dt)
+    add_surface!(l, :LE, c.LE, sfc, dt)
+    dS = similar(bus.Ts)
+    @inbounds for I in eachindex(dS)
+        dS[I] = C[sfc[I]] * (bus.Ts[I] - l.Ts_start[I]) / dt
+    end
+    add_surface!(l, :dS, dS, sfc, dt)
+    add_surface!(l, :clamp, c.clip, sfc, dt)
+    # apply_latent_flux! adds LE·dt/(ρ L_v dz) to qv at k = 1, ρ = 1
+    add_water!(l, :evaporation, sum(c.LE) * dt / _L_v / length(c.LE))
+    return nothing
+end
+
+function smoke_check(c::SurfaceSlab, case)
+    Ts = case.bus.Ts
+    return ["Ts within the clamp [$(c.Ts_min), $(c.Ts_max)] K" =>
+                all(T -> c.Ts_min <= T <= c.Ts_max, Ts),
+            "|H| ≤ H_cap = $(c.H_cap) W/m²" => maximum(abs, c.H) <= c.H_cap,
+            "0 ≤ LE ≤ 400 W/m² (no dew through the latent flux)" =>
+                all(x -> 0 <= x <= 400, c.LE),
+            "H has the sign of Ts − θ₁ where |Ts − θ₁| > 0.5 K" =>
+                _h_sign_ok(c, case)]
+end
+
+# The bulk flux is ρcp C_h U (Ts − θ₁) evaluated before the step; at the
+# end of the step θ₁ and Ts have moved by well under 0.5 K in a 2 s step, so the
+# sign still holds wherever the difference is larger than 0.5 K.
+function _h_sign_ok(c::SurfaceSlab, case)
+    θ1 = view(interior_view(case.sim.θ), :, :, 1)
+    Ts = case.bus.Ts
+    return all(I -> abs(Ts[I] - θ1[I]) <= 0.5 || sign(c.H[I]) == sign(Ts[I] - θ1[I]),
+               eachindex(Ts))
 end
 
 register!(SurfaceSlab)

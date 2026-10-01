@@ -63,4 +63,10 @@ function run_stage!(c::PollutantCoupling, case, ::Val{:tracers}, dt)
     return nothing
 end
 
+function smoke_check(c::PollutantCoupling, case)
+    p = interior_view(tracer(case, :pollutant))
+    return ["pollutant within the [0, 100] clip" => all(x -> 0 <= x <= 100, p),
+            "emits iff a stack is in the window" => (sum(p) > 0) == !isempty(c.stacks)]
+end
+
 register!(PollutantCoupling)
