@@ -366,6 +366,39 @@ Before adding a function, check whether it already exists under another
 name. A collision scan across all modules takes a minute and has caught
 a real conflict every time it has been run.
 
+### New physics lands in the Berlin example
+
+After Era V, the Berlin run called fewer than half of the physics
+modules in `src/`, several of them for only one or two functions.
+Soil, canopy drag, glazing and the building energy model were wired in.
+Per-facet wall conduction, the surface-exchange contract, photosynthesis,
+snow, water surfaces, tiles, the Era III radiation solvers and most of
+Era IV's microphysics were not.
+Every one of those modules was tested, but on its own. A module that is
+never coupled to the 3-D run hides a whole class of bugs: the Era V
+integration branch found two cross-module defects that no module's own
+tests could see. It also hides the physics from users, who run the
+example, not the unit tests.
+
+The rule: **a PR that adds or changes physics wires it into the Berlin
+run in the same PR.**
+
+What counts as wired in:
+
+- The run calls the `src/` implementation. A copy in the example does
+  not count, and the example's old version of the same physics is
+  removed (one source of truth applies to examples).
+- It is **on by default**. Alternatives (Kessler, P3, superdroplets)
+  and expensive schemes may sit behind an option or a cadence. The PR
+  then quotes the measured cost per simulated hour. Once the Berlin
+  smoke test is in the suite, the option must be exercised there too.
+- The PR body quotes one diagnostic from the Berlin run showing the
+  coupling does something physical, with its value.
+
+Legitimate exceptions are numerics the solver cannot yet use and
+physics with no meaning in an urban scene. State them in the PR body
+with the reason. Do not skip them silently.
+
 ### No binary dependencies
 
 FFTW is the only non-stdlib dependency. NetCDF, PNG/APNG, Mie
