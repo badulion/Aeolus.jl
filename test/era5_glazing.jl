@@ -508,20 +508,26 @@ window_rho_clr(Φ) = poly4(RHO_CLR, cos(Φ)) - window_tau_clr(Φ)
         @test params.albedo[cls] ≈ h.R
         @test params.emissivity[cls] == g.panes[1].emissivity
         @test params.C_s[cls] ≈ sum(p -> USG.volumetric_heat_capacity(p.material) * p.thickness, g.panes)
-        # One step of the example's surface scheme on a glass cell, with the
-        # long-wave balance neutral: the cell absorbs exactly ΣA·SW — the
-        # transmitted shortwave has left its budget. (Before #27 the add-on
-        # subtracted the transmitted part from the loss and so heated the
-        # glass with it.)
+        # One step of the case's glass surface — the surface exchange's
+        # SlabLand with the glass class parameters (#129) — with the
+        # long-wave balance neutral and the air at the skin's potential
+        # temperature (no sensible flux; the dry slab has no latent flux):
+        # the cell absorbs exactly ΣA·SW, because the transmitted shortwave
+        # leaves its budget as Q_extra. (Before #27 the add-on subtracted
+        # the transmitted part from the loss and so heated the glass with it.)
         sfc = fill(UInt8(cls), 1, 1)
         T0 = 300.0; sw = 600.0; dt = 10.0
-        Ts = fill(T0, 1, 1)
         loss = zeros(1, 1)
         Base.invokelatest(getfield(ex, :apply_glass_sw_transmission!), loss, sfc, fill(sw, 1, 1))
         @test loss[1, 1] ≈ h.T * sw
-        lw = getfield(ex, :STEFAN) * T0^4
-        Base.invokelatest(getfield(ex, :step_surfaces!), Ts, sfc, params, fill(sw, 1, 1), lw, loss, dt)
-        @test (Ts[1, 1] - T0) * params.C_s[cls] / dt ≈ sum(h.A) * sw rtol = 1e-10
+        slab = SlabLand(; T = T0, C_s = params.C_s[cls], albedo = params.albedo[cls],
+                        emissivity = params.emissivity[cls])
+        z_ref = 3.125
+        f = SurfaceForcing(sw_down = sw, lw_down = STEFAN_BOLTZMANN * T0^4, U = 2.0, z_ref = z_ref,
+                           q_air = 0.008, T_air = T0 - dry_adiabatic_lapse_rate(PhasePartition(0.008)) * z_ref)
+        fl = step_surface!(slab, f, dt; Q_extra = -loss[1, 1])
+        @test abs(fl.H) < 1e-6 && fl.LE == 0
+        @test (slab.T - T0) * params.C_s[cls] / dt ≈ sum(h.A) * sw rtol = 1e-9
         # direct-beam variant uses the angular transmittance
         loss .= 0
         Base.invokelatest(getfield(ex, :apply_glass_sw_transmission!), loss, sfc, fill(sw, 1, 1);

@@ -47,8 +47,7 @@ module removes it here in the same PR (the ratchet test below fails
 until it does).
 """
 const BERLIN_PENDING = Dict{Symbol,String}(
-    :SurfaceExchange       => "#129 MOST surface fluxes",
-    :Anelastic             => "#133 anelastic / pseudo-incompressible core (#131 may use its ReferenceState first)",
+    :Anelastic             => "#133 anelastic / pseudo-incompressible core (since #131 the case's hydrostatic reference state is Anelastic.reference_from_profile, built by the core in core/reference_state.jl, not by a coupling)",
     :Multigrid             => "#132 pressure-solver option",
     :ML                    => "#132 MLSGS option",
     :TimeIntegration       => "#133 adaptive dt / IMEX",

@@ -875,6 +875,8 @@ C_s = 0.17
 
 end
 
+include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet deposition (#135)
+
 # =========================================================================
 # Era II — numerical foundations for fidelity (Phases 21-31)
 # =========================================================================
@@ -933,7 +935,6 @@ end
     include("era5_soil_column.jl")       # Phase 46: soil column, Richards equation (#15)
     include("era5_soil_thermal.jl")      # Phase 46: soil heat and freeze–thaw (#16)
     include("era5_water_table.jl")       # Phase 46: water table, unconfined aquifer (#17)
-    include("era5_urban_soil.jl")        # Phase 46: production soil column in the urban example (#18)
     include("era5_photosynthesis.jl")    # Phase 47  Farquhar C3 / Collatz C4 photosynthesis (#19)
     include("era5_stomata.jl")           # Phase 47  Ball-Berry / Medlyn stomatal conductance (#20)
     include("era5_land_surface.jl")      # Phase 47: vegetated land column, soil-water stress (#21)
@@ -968,6 +969,10 @@ end
 
 @testset "Berlin case" begin
     include("berlin_case.jl")            # registry, stages, bus, tracers (#126)
+    include("berlin_surface_exchange.jl") # MOST fluxes, soil ground, roof-aware air level, drag (#129)
     include("berlin_coverage.jl")        # every Aeolus module coupled, exempt or pending (#127)
     include("berlin_smoke.jl")           # every coupling and option, 12 steps, ledgers close (#127)
+    include("berlin_sw_modifiers.jl")    # tree shade / cloud shadow once per radiation field; scene class map (#128)
+    include("berlin_moist.jl")           # reference state, moist buoyancy, fog enthalpy (#131)
+    include("berlin_chemistry.jl")       # NOx–O3–VOC on tracers, r_a-based dry / wet deposition (#135)
 end

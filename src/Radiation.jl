@@ -23,7 +23,8 @@ using ..SurfaceExchange: AbstractSurface, SurfaceForcing, SurfaceFluxes,
 # `surface_temperature` is the SurfaceExchange generic (one function for
 # every surface model); SlabLand adds a method and this module re-exports it.
 import ..SurfaceExchange: surface_temperature, roughness_lengths,
-                          surface_albedo, surface_emissivity, step_surface!
+                          surface_albedo, surface_emissivity, step_surface!,
+                          moisture_availability
 
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
 
@@ -90,7 +91,7 @@ end
 
 """
     SlabLand(; T = 290.0, C_s = 2e5, albedo = 0.2, emissivity = 1.0,
-               z0m = 0.1, z0h = z0m / 10)
+               z0m = 0.1, z0h = z0m / 10, β = 0.0)
 
 A single-layer soil-temperature reservoir governed by
 
@@ -102,11 +103,13 @@ heat flux to the atmosphere (typically `ρ cₚ w'θ'|₀`), `LE` the latent
 heat flux, and `C_s` [J/m²/K] the effective heat capacity.
 
 `SlabLand` is the first implementer of the Era V
-`SurfaceExchange.AbstractSurface` interface: it is dry
-(`moisture_availability = 0`, so `LE = 0`) and has roughness lengths
-`z0m`, `z0h` (= `z0q`), so `step_surface!(land, forcing, dt)` computes
-its own Monin–Obukhov fluxes. `step_land!` remains for callers that
-supply `H` themselves.
+`SurfaceExchange.AbstractSurface` interface. Its moisture availability
+is the constant `β` (`moisture_availability(land) = β`): `β = 0`, the
+default, is a dry surface (`LE = 0`); `β = 1` an open-water surface with
+an unlimited supply (the slab carries no water store, so `LE` never runs
+out). It has roughness lengths `z0m`, `z0h` (= `z0q`), so
+`step_surface!(land, forcing, dt)` computes its own Monin–Obukhov
+fluxes. `step_land!` remains for callers that supply `H` themselves.
 
 This is deliberately the simplest useful LSM — vegetation, soil
 moisture, and multi-layer conduction are future refinements.
@@ -118,17 +121,22 @@ mutable struct SlabLand{T<:AbstractFloat} <: AbstractSurface
     emissivity::T
     z0m::T         # momentum roughness length  [m]
     z0h::T         # heat / moisture roughness length [m]
+    β::T           # moisture availability ∈ [0, 1]
 end
 
-SlabLand(; T::Real = 290.0, C_s::Real = 2e5, albedo::Real = 0.2,
-         emissivity::Real = 1.0, z0m::Real = 0.1, z0h::Real = z0m / 10) =
-    SlabLand{Float64}(Float64(T), Float64(C_s), Float64(albedo),
-                      Float64(emissivity), Float64(z0m), Float64(z0h))
+function SlabLand(; T::Real = 290.0, C_s::Real = 2e5, albedo::Real = 0.2,
+                  emissivity::Real = 1.0, z0m::Real = 0.1, z0h::Real = z0m / 10,
+                  β::Real = 0.0)
+    0 <= β <= 1 || throw(ArgumentError("SlabLand: moisture availability β must lie in [0, 1], got $β"))
+    return SlabLand{Float64}(Float64(T), Float64(C_s), Float64(albedo),
+                             Float64(emissivity), Float64(z0m), Float64(z0h), Float64(β))
+end
 
 surface_temperature(l::SlabLand) = l.T
 roughness_lengths(l::SlabLand) = (z0m = l.z0m, z0h = l.z0h, z0q = l.z0h)
 surface_albedo(l::SlabLand) = l.albedo
 surface_emissivity(l::SlabLand) = l.emissivity
+moisture_availability(l::SlabLand) = l.β
 
 """
     step_land!(land, sw_in, lw_in, sensible_flux, dt)
@@ -146,16 +154,23 @@ function step_land!(l::SlabLand, sw_in::Real, lw_in::Real,
 end
 
 """
-    step_surface!(land::SlabLand, forcing, dt; kwargs...) -> SurfaceFluxes
+    step_surface!(land::SlabLand, forcing, dt; Q_extra = 0, kwargs...) -> SurfaceFluxes
 
 Forward-Euler step of the slab under `SurfaceExchange.turbulent_fluxes`
 (Monin–Obukhov H, LE from the current skin temperature):
-`C_s ΔT = G dt` with `G = Rn - H - LE`. `kwargs` go to `turbulent_fluxes`.
+`C_s ΔT = G dt` with `G = Rn - H - LE + Q_extra`.
+
+`Q_extra` (W m⁻², positive *into* the surface) is energy the surface
+receives besides radiation and the turbulent fluxes, e.g. the latent
+heat of dew formed on it, or (negative) sunlight transmitted through
+glazing into a building. It is part of the returned `G`, the energy the
+slab stored. `kwargs` go to `turbulent_fluxes`.
 """
-function step_surface!(l::SlabLand, f::SurfaceForcing, dt::Real; kwargs...)
+function step_surface!(l::SlabLand, f::SurfaceForcing, dt::Real; Q_extra::Real = 0.0, kwargs...)
     fl = turbulent_fluxes(l, f; kwargs...)
-    l.T += fl.G * dt / l.C_s
-    return fl
+    G = fl.G + Q_extra
+    l.T += G * dt / l.C_s
+    return SurfaceFluxes(fl.Rn, fl.H, fl.LE, oftype(fl.G, G), fl.τ, fl.E)
 end
 
 end # module

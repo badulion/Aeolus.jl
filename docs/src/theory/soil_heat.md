@@ -17,10 +17,15 @@ canyons) — commit 2b31389. The flux works both ways: it drains a skin
 warmer than the soil beneath and, on a clear night over cooler air,
 feeds heat back to a radiatively cooling skin (section 5).
 
-Since #18 the urban example has no soil model of its own: every non-water
-cell of the Alexanderplatz run sits on one `SoilThermalColumn`, coupled to
-the example's surface slab by `LinearizedSkinBalance` (see
-[the Alexanderplatz run](../examples/battery.md#Ground:-the-production-soil-column)).
+Since #18 the urban example has no soil model of its own. Since #129 the
+`SoilThermalColumn` *is* the surface of every street, building-adjacent
+and park column of the Alexanderplatz run: its massless skin exchanges
+Monin–Obukhov fluxes with the first air cell through `step_surface!`,
+with the soil water stepped (`hydrology = true`) so the moisture
+availability follows the top layer (see
+[the Alexanderplatz run](../examples/battery.md#Ground:-the-production-soil-column)
+and `docs/src/design/berlin_case.md`). Before that (#18) it sat under a
+surface slab, coupled through a contact conductance.
 
 ## 1. Thermal properties
 

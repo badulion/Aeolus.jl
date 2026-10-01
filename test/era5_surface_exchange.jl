@@ -281,6 +281,39 @@ const SE = Aeolus.SurfaceExchange
         @test fl.H < 0                                        # stable, air heats ground
         @info "SlabLand night equilibrium" T_s = land.T T_rad = T_rad H = fl.H G = fl.G
     end
+
+    @testset "SlabLand: moisture availability β and the extra energy input (#129)" begin
+        f = SurfaceForcing(sw_down = 500.0, lw_down = 330.0, T_air = 293.0,
+                           q_air = 0.006, U = 3.0)
+        dry = SlabLand(; T = 300.0)
+        wet = SlabLand(; T = 300.0, β = 1.0)
+        half = SlabLand(; T = 300.0, β = 0.5)
+        @test SE.moisture_availability(dry) == 0 && SE.moisture_availability(wet) == 1
+        @test_throws ArgumentError SlabLand(; β = 1.5)
+        fd, fw, fh = turbulent_fluxes(dry, f), turbulent_fluxes(wet, f), turbulent_fluxes(half, f)
+        # β = 1 evaporates at the potential rate E = ρ C_E U (q_sat(T_s) - q_a).
+        # The β form puts q_s - q_a in proportion to β exactly; E is linear in
+        # β only at fixed stability. Here (surface 7 K warmer than the air)
+        # the vapour flux adds buoyancy, so the wetter slab is more unstable,
+        # has the larger C_E, and half the β gives a bit less than half the E
+        # (measured 0.481; the first guess of "½ to 0.5 %" ignored that).
+        @test fd.LE == 0 && fd.E == 0
+        @test fw.E > 0
+        @test fw.LE ≈ latent_heat_vapor(300.0) * fw.E rtol = 1e-12
+        qa = f.q_air
+        @test SE.surface_specific_humidity(half, f) - qa ≈ (SE.surface_specific_humidity(wet, f) - qa) / 2 rtol = 1e-12
+        @test 0.45 < fh.E / fw.E < 0.5
+        # Q_extra is stored with the other fluxes: C_s ΔT = (Rn - H - LE + Q) dt,
+        # and the returned G includes it
+        for (Q, land) in ((0.0, SlabLand(; T = 300.0, β = 1.0)), (-80.0, SlabLand(; T = 300.0, β = 1.0)),
+                          (150.0, SlabLand(; T = 300.0, β = 1.0)))
+            T0 = land.T
+            fl = step_surface!(land, f, 30.0; Q_extra = Q)
+            @test fl.G ≈ fl.Rn - fl.H - fl.LE + Q rtol = 1e-12
+            @test (land.T - T0) * land.C_s / 30.0 ≈ fl.G rtol = 1e-12
+            @test fl.LE ≈ fw.LE rtol = 1e-12          # fluxes of the pre-step state
+        end
+    end
     @testset "Exports: one binding per name, no ambiguities" begin
         for n in (:SurfaceConstants, :DEFAULT_SURFACE_CONSTANTS, :BusingerDyerBeljaarsHoltslag,
                   :psi_m, :psi_h, :phi_m, :phi_h, :solve_surface_layer, :obukhov_length,
