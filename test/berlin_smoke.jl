@@ -210,3 +210,21 @@ struct _SmokeAddon <: BC.AbstractCoupling end
     @test runs["smoke_a: coarse"].options[:smoke_a] == (n = 2,)
     @test !haskey(runs["summer, everything on"].options, :pollutant)        # not in this registry
 end
+
+@testset "smoke matrix: the \"everything on\" runs enable every addon and every default provider" begin
+    # The flagship rule (CLAUDE.md): the "everything on" runs must really run
+    # every additive coupling (none switched off by a declared
+    # incompatibility) and the default provider of every exclusive slot.
+    runs = Dict(smoke_matrix())
+    addons = Set(BC.coupling_name(C) for C in BC.REGISTRY if BC.slot(C) === :addon)
+    defaults = Set(BC.coupling_name(C) for C in BC.REGISTRY if BC.slot(C) !== :addon && BC.is_default(C))
+    for label in ("summer, everything on", "winter, everything on")
+        cfg = runs[label]
+        @test all(a -> cfg.physics[a] === true, addons)
+        got = Set(BC.coupling_name.(BC.selected_couplings(cfg)))
+        miss = sort!(collect(setdiff(union(addons, defaults), got)))
+        isempty(miss) || @error "smoke run \"$label\" does not run: $(join(miss, ", ")) " *
+            "(switched off by an `incompatible` declaration?)"
+        @test isempty(miss)
+    end
+end
