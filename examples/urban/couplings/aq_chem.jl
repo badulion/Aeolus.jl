@@ -1,33 +1,12 @@
-# Air-quality / aerosol add-ons for the Tier 3 urban flagship example.
+# Toy urban air quality: a four-species NOx–O3–VOC photochemistry
+# (explicit Euler), traffic and biogenic emissions, and class-dependent dry
+# deposition — all in a ppb-scaled internal unit. Its job is to exercise
+# multi-species surface coupling, not to be quantitative.
 #
-# Batch E — five gaps:
-#
-#   * A1 Multi-species chemistry — a small hard-coded KPP-style mechanism
-#     (NO, NO2, O3, VOC) with photolysis + Ox coupling.
-#   * A2 Dry + wet deposition — per-species surface-class-dependent dry
-#     deposition velocities plus rain-scavenging.
-#   * A3 Biogenic + traffic emissions — hour-of-day, surface-class-keyed
-#     emission maps (traffic on streets/walls, biogenic on parks).
-#   * A4 Two-moment aerosol — a mass mixing ratio + number concentration,
-#     first-order coagulation, mass-conserving sedimentation, deposition.
-#
-# All routines are surface-class-aware and reuse the enum defined by
-# `urban_geometry.jl` (SURFACE_STREET=1, ROOF=2, PARK=3, WATER=4, WALL=5,
-# GLASS=6 once `glass_material.jl` is also included).
-#
-# Nothing here mutates the Aeolus core. The chemistry / aerosol state is
-# a NamedTuple of Field{CellCenter} that the caller advects (via
-# `advect_centered!` / `advect_weno5!`) and passes back into these
-# kernels for the reactive substeps.
-
-include(joinpath(@__DIR__, "urban_geometry.jl"))
-using Aeolus
-using Aeolus.Fields: interior_view, set!
-
-export ChemistryState, apply_photochem_step!,
-       deposition_velocity, apply_dry_deposition!, apply_wet_deposition!,
-       emission_rate, add_emissions!,
-       AerosolState, apply_aerosol_step!
+# KNOWN (the chemistry issue moves the mechanism into src/Chemistry and
+# uses r_a-based deposition): the species are NOT advected and not written
+# to the output; `apply_wet_deposition!` is defined but not called.
+# `deposition_velocity` is also used by the aerosol coupling.
 
 # ---------------------------------------------------------------------------
 # A1 — Multi-species chemistry state
@@ -289,92 +268,34 @@ function add_emissions!(state::NamedTuple, sfc::AbstractMatrix{UInt8},
     return state
 end
 
-# ---------------------------------------------------------------------------
-# A4 — Two-moment aerosol prognostics
-# ---------------------------------------------------------------------------
 
 """
-    AerosolState(mesh) -> NamedTuple(q_a, N_a)
+    AQChem
 
-Two-moment aerosol state:
-
-  * `q_a::Field{CellCenter}` — aerosol mass mixing ratio [kg/kg-like].
-  * `N_a::Field{CellCenter}` — aerosol number concentration [#/kg-like].
-
-Both are initialized to zero; the caller populates them (e.g. with an
-initial urban background) and advects them alongside the chemistry
-species.
+Slot `:chemistry`, provider `:toy_nox`: every step, emissions
+([`add_emissions!`](@ref)), photochemistry ([`apply_photochem_step!`](@ref))
+and dry deposition of NO, NO2 and O3 ([`apply_dry_deposition!`](@ref)) on
+the [`ChemistryState`](@ref) fields.
 """
-function AerosolState(mesh)
-    q_a = Field(CellCenter(), mesh)
-    N_a = Field(CellCenter(), mesh)
-    return (q_a = q_a, N_a = N_a)
+struct AQChem{S} <: AbstractCoupling
+    chem::S
 end
 
-"""
-    apply_aerosol_step!(state, dt; V_sed = 0.01, sfc = nothing, dz = 1.0,
-                        k_coag = nothing)
+coupling_name(::Type{<:AQChem}) = :aq_chem
+slot(::Type{<:AQChem}) = :chemistry
+provider(::Type{<:AQChem}) = :toy_nox
+stages(::Type{<:AQChem}) = ((:chemistry, 10, EVERY_STEP),)
+build(::Type{<:AQChem}, case, o) = AQChem(ChemistryState(case.mesh))
 
-Advance the aerosol state by `dt`:
-
-  * First-order coagulation on number:  `dN/dt = -k · N²`, with
-    `k = k_coag` if given, otherwise `1e-13 · V_sed`. Mass `q_a` is
-    preserved (particles merge, mass conserved).
-  * Mass-conserving sedimentation of both `q_a` and `N_a` using a
-    1st-order upwind vertical flux at settling velocity `V_sed`
-    (m/s, positive downward). Requires `dz`.
-  * Dry deposition at the surface via [`deposition_velocity(:PM, cls)`](@ref)
-    when a surface-class map `sfc` is supplied.
-
-Numerical constraints: the sedimentation Courant number `V_sed·dt/dz`
-is clamped to `≤ 1` per substep for stability.
-"""
-function apply_aerosol_step!(state::NamedTuple, dt::Real;
-                             V_sed::Real = 0.01,
-                             sfc::Union{Nothing, AbstractMatrix{UInt8}} = nothing,
-                             dz::Real = 1.0,
-                             k_coag::Union{Nothing, Real} = nothing)
-    q_v = interior_view(state.q_a)
-    N_v = interior_view(state.N_a)
-    Nx, Ny, Nz = size(q_v)
-
-    # ---- Coagulation (number only; mass preserved) ----
-    k = k_coag === nothing ? 1.0e-13 * V_sed : Float64(k_coag)
-    @inbounds for kk in 1:Nz, j in 1:Ny, i in 1:Nx
-        Nc = N_v[i, j, kk]
-        # Semi-implicit for stability at large N: dN/dt = -k N²
-        # N_new = N / (1 + k · N · dt)
-        N_v[i, j, kk] = Nc / (1.0 + k * Nc * dt)
+function run_stage!(c::AQChem, case, ::Val{:chemistry}, dt)
+    chem, sfc, dz, hour = c.chem, case.geom.sfc, case.mesh.dz, case.clock.hour
+    # A3: emissions (traffic + biogenic); A1: photochemistry; A2: deposition
+    add_emissions!(chem, sfc, hour, dt; dz = dz)
+    apply_photochem_step!(chem, hour, dt)
+    for spec in (:NO, :NO2, :O3)
+        apply_dry_deposition!(getproperty(chem, spec), sfc, spec, dt; dz = dz)
     end
-
-    # ---- Sedimentation (1st-order upwind, mass conserving) ----
-    C = clamp(V_sed * dt / dz, 0.0, 1.0)
-    if C > 0
-        # Sweep top → bottom so we can update in place.
-        @inbounds for j in 1:Ny, i in 1:Nx
-            # top face flux = 0 (no aerosol source from above the domain)
-            for kk in Nz:-1:2
-                # flux from cell kk into kk-1
-                dq = C * q_v[i, j, kk]
-                dN = C * N_v[i, j, kk]
-                q_v[i, j, kk]     -= dq
-                N_v[i, j, kk]     -= dN
-                q_v[i, j, kk - 1] += dq
-                N_v[i, j, kk - 1] += dN
-            end
-        end
-    end
-
-    # ---- Dry deposition at the surface ----
-    if sfc !== nothing
-        invdz = 1.0 / dz
-        @inbounds for j in 1:Ny, i in 1:Nx
-            Vd = deposition_velocity(:PM, sfc[i, j])
-            frac = clamp(Vd * dt * invdz, 0.0, 1.0)
-            q_v[i, j, 1] *= (1.0 - frac)
-            N_v[i, j, 1] *= (1.0 - frac)
-        end
-    end
-
-    return state
+    return nothing
 end
+
+register!(AQChem)

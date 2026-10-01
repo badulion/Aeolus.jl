@@ -1,0 +1,100 @@
+# Dew on the surfaces and fog in the air (Aeolus.RadiationFog, Phase 44).
+#
+# This used to be a local scheme that shipped DISABLED because "its
+# warming term amplifies". Two defects, both measured (Phase 44, #11):
+#
+#   * whenever the SURFACE was below the dew point it removed vapour from
+#     the AIR and put the latent heat into the AIR, even when the air was
+#     subsaturated. Nothing tied the heating to air-side saturation, so
+#     with vapour resupplied by evaporation it heated a 288 K cell to
+#     363 K in 24 h while its RH fell to 0.016;
+#   * in supersaturated air the explicit `rate·dt·(q_v - q_s)` step lacked
+#     the latent-heat feedback and overshot below saturation once
+#     rate·dt ≳ 0.4.
+#
+# The physics lives in `src/RadiationFog.jl` (one source of truth, with
+# MoistThermodynamics saturation and latent heats): air-side fog is an
+# enthalpy-conserving saturation adjustment into `ql`, and dew is an
+# implicit bulk exchange whose latent heat goes to the SURFACE. This file
+# only adapts the case's fields to it.
+#
+# KNOWN (kept for bit-for-bit): the pressure is an isothermal 8 km
+# scale-height profile from 1013.25 hPa (the moist-thermodynamics issue
+# replaces it with a reference state), and dew goes into k = 1 of every
+# column, inside the building on roof columns.
+
+"""
+    apply_fog_dew!(θ, qv, ql, q_dew, Ts, dt; p = 1.01325e5, dz, ρ = 1.0,
+                   C_e = 1e-3, U = 3.0, τ_fog = 0.0,
+                   fog_levels = axes(θ, 3))
+        -> H_dew (W m⁻², 2-D)
+
+Dew onto the surface, then fog in the air.
+
+  * **Dew** — `Aeolus.RadiationFog.dew_exchange!` on the lowest layer of
+    `qv`: vapour is deposited into the 2-D reservoir `q_dew` (kg m⁻²)
+    while `q_v > q_s(T_s)`, and re-evaporated from it when the surface
+    warms. The latent heat is **returned** as `H_dew` (positive = heating
+    the surface); the caller adds it to the surface energy budget. The
+    air temperature is not touched by dew.
+  * **Fog** — `Aeolus.RadiationFog.fog_adjust!` on `θ`, `qv`, `ql` in
+    `fog_levels`: enthalpy-conserving saturation adjustment (relaxed over
+    `τ_fog` if > 0), condensing into and evaporating from `ql`.
+
+`p` is the surface pressure used for dew and either a scalar or a
+per-level vector for fog. Both steps are unconditionally stable in `dt`
+and cannot overshoot saturation.
+"""
+function apply_fog_dew!(θ::AbstractArray{<:Real,3}, qv::AbstractArray{<:Real,3},
+                        ql::AbstractArray{<:Real,3}, q_dew::AbstractMatrix,
+                        Ts::AbstractMatrix, dt::Real;
+                        p = 1.01325e5, dz::Real, ρ::Real = 1.0,
+                        C_e::Real = 1e-3, U::Real = 3.0,
+                        τ_fog::Real = 0.0, fog_levels = axes(θ, 3))
+    p_sfc = p isa AbstractVector ? first(p) : p
+    H = Aeolus.RadiationFog.dew_exchange!(qv, q_dew, Ts, p_sfc, dt;
+                                          dz = dz, ρ = ρ, C_e = C_e, U = U)
+    Aeolus.RadiationFog.fog_adjust!(θ, qv, ql, p, dt; τ = τ_fog,
+                                    levels = fog_levels)
+    return H
+end
+
+function apply_fog_dew!(θ::Field, qv::Field, ql::Field, q_dew::AbstractMatrix,
+                        Ts::AbstractMatrix, dt::Real; dz::Real = θ.mesh.dz,
+                        kwargs...)
+    return apply_fog_dew!(interior_view(θ), interior_view(qv),
+                          interior_view(ql), q_dew, Ts, dt; dz = dz, kwargs...)
+end
+
+"""
+    FogDew
+
+Additive coupling: every step in `:fog_dew`, [`apply_fog_dew!`](@ref) on
+θ, qv, ql with the dew reservoir `bus.dew` and the surface temperature
+`bus.Ts`; the dew's latent heat warms the surface (`bus.sensible -= H_dew`).
+"""
+struct FogDew <: AbstractCoupling
+    p_col::Vector{Float64}
+end
+
+coupling_name(::Type{FogDew}) = :fog_dew
+modules_used(::Type{FogDew}) = (:RadiationFog, :MoistThermodynamics)
+stages(::Type{FogDew}) = ((:fog_dew, 10, EVERY_STEP),)
+
+function build(::Type{FogDew}, case, o)
+    mesh = case.mesh
+    Lz, Nz = mesh.Lz, mesh.Nz
+    # Layer pressures: isothermal 8 km scale height from a standard surface
+    # pressure (the Boussinesq core carries no p).
+    return FogDew([1.01325e5 * exp(-(k - 0.5) * (Lz / Nz) / 8000.0) for k in 1:Nz])
+end
+
+function run_stage!(c::FogDew, case, ::Val{:fog_dew}, dt)
+    bus = case.bus
+    H_dew = apply_fog_dew!(case.sim.θ, tracer(case, :qv), tracer(case, :ql), bus.dew, bus.Ts, dt;
+                           p = c.p_col, dz = case.mesh.dz, ρ = 1.0)
+    @. bus.sensible -= H_dew
+    return nothing
+end
+
+register!(FogDew)

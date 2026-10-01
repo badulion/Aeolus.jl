@@ -1,4 +1,4 @@
-# R6 — Window / glass material for the urban flagship example.
+# R6 — Window / glass material for the Berlin case.
 #
 # Adds a sixth surface class (`SURFACE_GLASS = 6`) representing curtain
 # walls / large window façades in the example's one-temperature-per-cell
@@ -17,11 +17,9 @@
 # `step_surfaces!` as-is. For a resolved glazed facet (pane temperatures,
 # transmitted solar gain into the room) use `WindowFacet` directly.
 
-include(joinpath(@__DIR__, "urban_geometry.jl"))
-include(joinpath(@__DIR__, "urban_physics.jl"))
-
-export SURFACE_GLASS, promote_to_glass!, glass_surface_params,
-       apply_glass_sw_transmission!, example_glazing
+# KNOWN (the per-building zones / WindowFacet issue replaces this file):
+# the glass cells are a SYNTHETIC mask — every 5th/4th roof cell — because
+# OSM carries no glazing tag, so the "glass" sits on roofs, not facades.
 
 "Surface-class code for window / glass façade cells."
 const SURFACE_GLASS = UInt8(6)
@@ -125,3 +123,44 @@ function apply_glass_sw_transmission!(loss::AbstractMatrix,
     end
     return loss
 end
+
+"""
+    GlassClass
+
+Slot `:glazing`, provider `:glass_class`. At `init!` promotes a synthetic
+set of roof cells (`i % 5 == 0 && j % 4 == 0`) to [`SURFACE_GLASS`](@ref)
+and extends `bus.params` with the glass class
+([`glass_surface_params`](@ref)); every step, in `:anthropogenic` after
+the buildings and traffic, the transmitted shortwave leaves the glass
+cells' surface budget ([`apply_glass_sw_transmission!`](@ref)).
+"""
+struct GlassClass{G} <: AbstractCoupling
+    glazing::G
+end
+
+coupling_name(::Type{<:GlassClass}) = :glass
+slot(::Type{<:GlassClass}) = :glazing
+provider(::Type{<:GlassClass}) = :glass_class
+modules_used(::Type{<:GlassClass}) = (:UrbanSurface,)
+stages(::Type{<:GlassClass}) = ((:anthropogenic, 30, EVERY_STEP),)
+build(::Type{<:GlassClass}, case, o) = GlassClass(example_glazing())
+
+function init!(c::GlassClass, case)
+    sfc = case.geom.sfc
+    Nx, Ny = size(sfc)
+    glass_mask = falses(Nx, Ny)
+    for j in 1:Ny, i in 1:Nx
+        if sfc[i, j] == SURFACE_ROOF && (i % 5 == 0) && (j % 4 == 0)
+            glass_mask[i, j] = true
+        end
+    end
+    promote_to_glass!(sfc, glass_mask)
+    case.bus.params = glass_surface_params(; glazing = c.glazing)
+    return nothing
+end
+
+run_stage!(c::GlassClass, case, ::Val{:anthropogenic}, dt) =
+    (apply_glass_sw_transmission!(case.bus.sensible, case.geom.sfc, case.bus.sw;
+                                  glazing = c.glazing); nothing)
+
+register!(GlassClass)

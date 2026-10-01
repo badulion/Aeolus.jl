@@ -10,10 +10,13 @@
 # equirectangular projection anchored at a user-supplied `(lat0, lon0)`.
 # Good to sub-metre accuracy over a few km — appropriate for LES
 # domains of ~100 m to ~5 km.
-
-include(joinpath(@__DIR__, "urban_geometry.jl"))
-
-export load_city_osm
+#
+# KNOWN DEFECTS, kept so the refactor stays bit-for-bit (the water /
+# Spree issue fixes them together with multipolygon relations):
+#   * `latm === nothing || lonm === nothing && continue` parses as
+#     `latm === nothing || (lonm === nothing && continue)`;
+#   * patches are rasterised after buildings (`rasterize_city!`), so a
+#     park polygon can relabel a roof cell.
 
 const _EARTH_R = 6_371_000.0
 

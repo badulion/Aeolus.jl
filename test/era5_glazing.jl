@@ -496,14 +496,11 @@ window_rho_clr(Φ) = poly4(RHO_CLR, cos(Φ)) - window_tau_clr(Φ)
         end
         @info "WindowFacet steady state vs steady formulas\n" * join(rows, "\n")
     end
-    @testset "examples/urban/glass_material.jl delegates to UrbanSurface" begin
-        # The flagship example's glass class now carries no numbers of its
-        # own; load it (its includes re-define docs, hence the null logger)
-        ex = Module(:GlassExample)
-        Core.eval(ex, :(include(p) = Base.include($ex, p)))
-        Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
-            Base.include(ex, joinpath(@__DIR__, "..", "examples", "urban", "glass_material.jl"))
-        end
+    @testset "examples/urban/couplings/glass.jl delegates to UrbanSurface" begin
+        # The Berlin case's glass class carries no numbers of its own.
+        isdefined(Main, :BerlinCase) ||
+            Base.include(Main, joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
+        ex = getfield(Main, :BerlinCase)
         g = Base.invokelatest(getfield(ex, :example_glazing))
         params = Base.invokelatest(getfield(ex, :glass_surface_params))
         h = glazing_optics_hemispherical(g)

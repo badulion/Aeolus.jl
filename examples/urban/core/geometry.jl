@@ -1,21 +1,11 @@
-# Urban-geometry utilities for the Tier 3 flagship example.
+# Geometry of the Berlin case: surface classes, footprint rasterisation,
+# and `build_geometry`, which turns a CaseConfig into the solid mask, the
+# surface-class map and the radiosity scene with its view factors.
 #
-# Reads a GeoJSON-style building footprint file (one FeatureCollection
-# with Polygon geometries and a `height` property per feature),
-# rasterizes each polygon onto a RegularGrid via the SolidMask, and
-# tags each ground-cell with a surface class (roof, street, park).
-#
-# The GeoJSON parser here is deliberately hand-rolled and minimal — we
-# read only the subset of GeoJSON we need. Avoids adding a JSON.jl dep
-# to Aeolus.
-#
-# A sample synthetic-city dataset is provided in
-# `examples/urban/data/city.geojson`.
-
-using Aeolus
-using Aeolus.IBM: SolidMask, mark_solid!
-
-export UrbanCity, load_city_geojson, rasterize_city!, surface_class_map
+# Buildings come from OpenStreetMap (`osm_ingest.jl`); a minimal GeoJSON
+# reader is kept for hand-made cities (`data/city.geojson`). Both parsers
+# are hand-rolled: they read only the subset of the formats we need and
+# keep Aeolus free of a JSON/XML dependency.
 
 # ---------------------------------------------------------------------------
 # Surface-class enum (integer flags packed into a UInt8 array)
@@ -293,4 +283,97 @@ function tag_building_adjacent!(sfc::AbstractMatrix{UInt8}, sm::SolidMask, mesh;
         end
     end
     return sfc
+end
+
+# ---------------------------------------------------------------------------
+# The Berlin-case geometry
+# ---------------------------------------------------------------------------
+
+"""
+    Geometry
+
+Static geometry of a case, built once by [`build_geometry`](@ref):
+
+* `city` — the parsed `UrbanCity`;
+* `sm` — the IBM `SolidMask` of the buildings;
+* `sfc` — the `(Nx, Ny)` surface-class map (`SURFACE_*`; couplings may
+  add classes during `init!`, e.g. glass);
+* `heightmap` — building top height (m) per column;
+* `scene`, `vfac` — the radiosity scene and its view factors;
+* `facet_col` — the `(i, j)` column of every facet;
+* `svf` — the area-weighted sky-view factor per column;
+* `wall_ids` — indices of the wall facets;
+* `open_cols` — the columns with no building.
+"""
+struct Geometry{SM, HM, SC, VF}
+    city::UrbanCity
+    sm::SM
+    sfc::Matrix{UInt8}
+    heightmap::HM
+    scene::SC
+    vfac::VF
+    facet_col::Vector{Tuple{Int,Int}}
+    svf::Matrix{Float64}
+    wall_ids::Vector{Int}
+    open_cols::Vector{CartesianIndex{2}}
+end
+
+"""
+    build_geometry(cfg, mesh; io = stdout) -> Geometry
+
+Load the OSM city of `cfg` (projected about `cfg.lat0/lon0`, shifted so
+that the point `cfg.offset` metres from the anchor is the domain centre),
+rasterise it on `mesh` with building-adjacent cells tagged
+`SURFACE_WALL`, and build the radiosity scene and its view factors (the
+geometry is static, so this happens once).
+"""
+function build_geometry(cfg, mesh; io::IO = stdout)
+    isfile(cfg.osm_path) ||
+        error("Missing $(cfg.osm_path). Run examples/urban/data/fetch_alexanderplatz.jl first.")
+    Lx, Ly = mesh.Lx, mesh.Ly
+    city = load_city_osm(cfg.osm_path;
+                         lat0 = cfg.lat0, lon0 = cfg.lon0,
+                         x_shift = Lx / 2 - cfg.offset[1],
+                         y_shift = Ly / 2 - cfg.offset[2],
+                         min_height = cfg.min_height)
+    sm, sfc = surface_class_map(city, mesh; tag_walls = true)
+
+    # Era III: a radiosity scene replaces the ray-cast sky-view factor.
+    # Geometry is static, so facets and view factors are built once.
+    # KNOWN (fixed by the shortwave-modifier issue): no `class_map` is
+    # passed, so park and water ground facets get street material.
+    cfg.verbose && @printf(io, "Computing sky-view factor... ")
+    t_svf = time()
+    heightmap = heightmap_from_solid_mask(sm)
+    scene = build_scene(mesh, heightmap; wall_subdivisions = cfg.wall_subdivisions)
+    vfac  = view_factors(scene)
+    facet_col = Tuple{Int,Int}[f.col for f in scene.facets]
+    svf = aggregate_to_grid(scene, vfac).svf
+    cfg.verbose && @printf(io, "radiosity scene: %d facets in %.1fs, recip %.1e, closure %.1e\n",
+                           nfacets(scene), time() - t_svf, reciprocity_error(vfac), closure_error(vfac))
+    cfg.verbose && @printf(io, "SVF per column: min %.3f mean %.3f max %.3f\n",
+                           minimum(svf), mean(svf), maximum(svf))
+    wall_ids = [i for (i, f) in enumerate(scene.facets) if f.kind === :wall]
+    open_cols = findall(==(0), heightmap)
+    return Geometry(city, sm, sfc, heightmap, scene, vfac, facet_col,
+                    Matrix{Float64}(svf), wall_ids, open_cols)
+end
+
+"Building height (m) per column: top of the highest solid cell."
+building_height(g::Geometry, mesh) =
+    [maximum(k for k in 1:mesh.Nz if g.sm.mask[mesh.Hx+i, mesh.Hy+j, mesh.Hz+k]; init = 0) * mesh.dz
+     for i in 1:mesh.Nx, j in 1:mesh.Ny]
+
+"""
+    park_lai_map(case) -> (veg_mask, LAI_map)
+
+The park columns (`SURFACE_PARK`) and their leaf-area index
+(`cfg.park_lai` on park cells, 0 elsewhere).
+"""
+function park_lai_map(case)
+    sfc = case.geom.sfc
+    veg_mask = (sfc .== SURFACE_PARK)
+    LAI_map = fill(case.cfg.park_lai, size(sfc))
+    LAI_map .*= veg_mask
+    return veg_mask, LAI_map
 end

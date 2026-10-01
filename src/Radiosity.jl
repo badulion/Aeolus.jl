@@ -208,7 +208,7 @@ end
 
 """
 Surface-class indices. These deliberately coincide with the `SURFACE_*`
-constants of `examples/urban/urban_geometry.jl`, so a `Facet`'s material index
+constants of `examples/urban/core/geometry.jl`, so a `Facet`'s material index
 can be used directly as an index into that example's `SurfaceParams` arrays and
 a `RadiosityScene` can be driven from an existing `surface_class_map`.
 """
@@ -449,7 +449,7 @@ One planar rectangular radiating patch.
 
 Walls are attributed to the **open** column they face, not to the building
 column they belong to. That matches `tag_building_adjacent!` in
-`examples/urban/urban_geometry.jl`, which tags the street cell next to a
+`examples/urban/core/geometry.jl`, which tags the street cell next to a
 building as `SURFACE_WALL` precisely so a 2-D surface scheme can carry the
 wall's heat load.
 
@@ -821,7 +821,7 @@ so it also accepts any object with those fields.
 
 Note the discretisation: a mask resolves heights only to `dz`, so the returned
 heightmap is the mask's staircase. Where the true building height is known
-(e.g. from `urban_geometry.load_city_geojson`) rasterise it directly instead —
+(e.g. from `load_city_geojson` in `examples/urban/core/geometry.jl`) rasterise it directly instead —
 a wall facet built from the real height is exact, whereas one built from the
 mask inherits a half-cell bias.
 """
@@ -2212,7 +2212,7 @@ end
     UrbanRadiationForcing{T}
 
 Facet-level radiation aggregated onto the `(Nx, Ny)` LES horizontal grid, in
-the form `examples/urban/urban_physics.jl`'s `step_surfaces!` consumes.
+the form `examples/urban/couplings/surface_slab.jl`'s `step_surfaces!` consumes.
 
 All flux arrays are **per unit plan area** — facet fluxes are multiplied by
 facet area and divided by `dx·dy`. That is the correct normalisation for a
