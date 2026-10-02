@@ -9,6 +9,12 @@ and parallel-decomposition machinery.
 Modules = [Aeolus.IO]
 ```
 
+## NetCDF reader / writer
+
+```@autodocs
+Modules = [Aeolus.NetCDFIO]
+```
+
 ## Microphysics
 
 ```@autodocs
