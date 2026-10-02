@@ -378,8 +378,10 @@ Caveats of what currently ships, as distinct from what is not yet built.
   column radiation, fog and dew, moist buoyancy and chemistry; P3, ice
   nucleation, the land column, per-facet walls, building zones, snow, water
   surfaces and tiles are wired in by the open issues of the Berlin epic
-  (#125). The winter flagship (64 × 64 × 32 from 12:00) still blows up after
-  about 140 steps.
+  (#125). The winter flagship (64 × 64 × 32 from 12:00) runs only with the
+  adaptive time step, the default: with a fixed 2 s step it blows up after
+  141 steps, with the adaptive one it ran 3 h (8,606 steps, θ within
+  270.2–278.4 K).
 - **Test coverage is uneven.** The dynamical core and radiation are covered
   thoroughly; of their exported names, the tests use 53 % for `Superdroplet`
   and 43 % for `AerosolCloud` (Phases 41–42), against 72–93 % for
