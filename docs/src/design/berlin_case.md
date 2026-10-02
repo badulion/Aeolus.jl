@@ -23,17 +23,18 @@ between records, default 1800) and `AEOLUS_SCENARIO`.
 ## Status of the epic (#125)
 
 The work is tracked in the milestone "Berlin — full-physics flagship"
-under the epic #125. On master `2895fed` (after PR #163) 9 of its 29
-issues are closed and 20 are open:
+under the epic #125. On master `915bd49` (after PRs #161 and #166) 10 of
+its 29 issues are closed and 19 are open:
 
 * **Wave 0, done:** the refactor (#126) and the smoke / coverage /
   ledger tests (#127).
-* **Wave 1, 6 of 10 merged:** shade / class map (#128), surface exchange
+* **Wave 1, 7 of 10 merged:** shade / class map (#128), surface exchange
   and soil (#129), column radiation and cloud shadow (#130), reference
-  state and moist buoyancy (#131), numerics slots (#132), chemistry and
-  deposition (#135). Open: time integration and core options (#133, PR
-  #161 under review), Era I add-ons (#134), the Monte-Carlo RT diagnostic
-  (#136), visibility and fog feedback (#137).
+  state and moist buoyancy (#131), numerics slots (#132), time
+  integration and core options (#133, PR #161; the adaptive stepper
+  became the default in PR #166), chemistry and deposition (#135).
+  Open: Era I add-ons (#134), the Monte-Carlo RT diagnostic (#136),
+  visibility and fog feedback (#137).
 * **Wave 2:** the GMRES facet solve (#138) is merged; the per-facet
   walls (#139), park land column (#140), water surfaces (#141), aerosol
   optics (#142) and P3 slot (#143) are open.
@@ -179,8 +180,8 @@ included), the largest entry was the WENO-Z5 scalar transport, about
 (6.1), `radiosity_sun` (5.5 averaged over all steps) and `soil_urban`
 (2.8); everything else was below 1 ms/step (table in the #126 PR).
 Since then `soil_urban` has been replaced by the surface exchange
-(#129; its surface step costs 13.5–16.8 ms/step, remeasured on master
-`2895fed`) and the chemistry (#135) adds five advected species; see the
+(#129; its surface step costs 13.6–16.3 ms per step of the adaptive
+stepper, remeasured on master `915bd49`) and the chemistry (#135) adds five advected species; see the
 cost paragraphs of those sections.
 
 ## Shared state
@@ -782,9 +783,9 @@ What the numbers say about the current (pre-#128/#129) physics:
   that goes into the buildings or comes from condensation, which the
   four-term balance does not see.
 
-On master (`2895fed`, after #128–#132) the same hour gives a domain Rn
-of 222.26 W m⁻² and a residual of 19.02 W m⁻²: window sun −16.57, glass
-−2.50, dew heat +0.06. The dew term has almost gone because since #129
+On master (`915bd49`, after #128–#133, adaptive step) the same hour
+gives a domain Rn of 222.28 W m⁻² and a residual of 19.02 W m⁻²: window
+sun −16.57, glass −2.50, dew heat +0.06. The dew term has almost gone because since #129
 the RadiationFog dew acts only over the β = 0 surfaces (roofs, glass);
 the soil and water surfaces take up dew as negative evaporation. This
 was measured with a reconstruction of the method above, not the
@@ -795,20 +796,22 @@ original script, so it is indicative.
 adjustment uses `T = θ Π(p)`, about 1.1 K warmer at 1013 hPa. The air
 was at 93.5 % RH and the fog evaporated completely on the first
 `:fog_dew` call. Since #131 the seed is `q_s(θ Π̄_k, p̄_k)` and the fog
-persists. Remeasured on master (`2895fed`, `test/berlin_smoke.jl`
-configuration, 16 × 16 × 16, 12 steps of 2 s at noon, every addon on):
+persists. Remeasured on master (`915bd49`, `test/berlin_smoke.jl`
+configuration, 16 × 16 × 16, every addon on, 24 s at noon: with the
+adaptive default that is 9 steps, the first of 2.2 s, mean 2.67 s, not
+12 of 2 s):
 
 | | summer | winter |
 | :-- | --: | --: |
-| ql left after the first `:fog_dew` call, called directly on the seeded state / within step 1 | 99.92 % / 99.21 % | 100.0 % / 98.3 % |
-| ql left after 12 steps | 83.5 % | 74.8 % |
-| domain Rn (W m⁻²) | 568.31 | 69.96 |
-| domain residual Rn − H − LE − G − ΔS (W m⁻²) | −4.91 | +7.85 |
-| of which dew heat / window sun / glass (W m⁻²) | +15.02 / −6.31 / −3.81 | +0.10 / −6.92 / −1.03 |
+| ql left after the first `:fog_dew` call, called directly on the seeded state (dt of the first step, 2.2 s) / within step 1 | 99.91 % / 99.13 % | 100.0 % / 98.1 % |
+| ql left after 24 s (9 steps) | 84.1 % | 75.1 % |
+| domain Rn (W m⁻²) | 568.41 | 70.10 |
+| domain residual Rn − H − LE − G − ΔS (W m⁻²) | −4.87 | +7.86 |
+| of which dew heat / window sun / glass (W m⁻²) | +14.99 / −6.31 / −3.81 | +0.09 / −6.92 / −1.03 |
 
-The other summer terms are H −1.34, LE −1.26, G 363.50, ΔS 212.31
-W m⁻², closure 6.9e-13. The dew heat now sits only on the β = 0 surfaces: a class mean of
-+55.7 W m⁻² on roofs and +56.2 on glass. The
+The other summer terms are H −1.30, LE −1.24, G 363.36, ΔS 212.46
+W m⁻², closure −2.9e-13. The dew heat now sits only on the β = 0
+surfaces: a class mean of +55.6 W m⁻² on roofs and +56.3 on glass. The
 same model without fog (the pre-#131 seed, whose fog evaporates at
 once) has a summer Rn of 602.30, so the fog darkens the smoke window by
 about 34 W m⁻².
@@ -817,10 +820,10 @@ Earlier values of this paragraph (residual −34.4 / −33.9 W m⁻² with
 dew heat +44.4 at #127–#132; Rn 34.8 instead of 388.7 and residual
 −53.2 at #131) do not reproduce on master. #128–#132 changed the
 shade, the cloud shadow, the surfaces and the seed in between; which of
-these changes accounts for the difference was not isolated. Even the pre-#131 seed now gives a summer residual
-of −3.16 W m⁻² (dew heat +13.36, window sun −6.31, glass −3.89), winter
-+8.01, with 0 % of the fog left after the first call and after 12
-steps (that reproduction uses p̄_k, since the 8 km scale-height pressure
+these changes accounts for the difference was not isolated. Even the
+pre-#131 seed now gives a summer residual of −3.14 W m⁻² (dew heat
++13.34, window sun −6.31, glass −3.88), winter +8.0, with 0 % of the
+fog left after the first call and after 24 s (that reproduction uses p̄_k, since the 8 km scale-height pressure
 it originally used is gone).
 
 ### After #128 (shade applied once, radiosity class map)
@@ -859,7 +862,7 @@ W m⁻² averaged over the half hour (1.36 before). Park Rn goes from
 −10.12 to +174.01 W m⁻²; domain Rn from 495.61 to 518.76.
 
 In the `:smoke` configuration the summer domain residual was −33.9
-W m⁻² after #128; on master it is −4.91 W m⁻² (see the table under the
+W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
 #127 baseline).
 
 ## Surface exchange (#129)
@@ -896,7 +899,7 @@ W m⁻² after #128; on master it is −4.91 W m⁻² (see the table under the
   surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`
   and `SoilThermalColumn` take it since #129). The ledger books the
   pending energy in ``ΔS``, so the per-class closure stays at round-off
-  (≤ 4.2e-10 W m⁻² in 1 h of the flagship, wall class at noon).
+  (≤ 3.1e-11 W m⁻² in 1 h of the flagship, wall class at noon).
 * **Dew.** One vapour exchange per surface: the soil and water surfaces
   take up dew as negative evaporation (into the soil water); the
   RadiationFog dew reservoir of `fog_dew` acts only over surfaces with
@@ -904,13 +907,16 @@ W m⁻² after #128; on master it is −4.91 W m⁻² (see the table under the
 * **No clamps.** H, LE and Ts are not clipped (the Kessler qv clamp
   stays for #143).
 
-### Measured (flagship, 64 × 64 × 32, dt = 2 s, 1 h)
+### Measured (flagship, 64 × 64 × 32, adaptive step, 1 h)
 
-Remeasured on master (`2895fed`, with the reference state of #131 and
-the halo fix of #132). Two 1 h runs, from 06:00 and from 12:00 local on
-20 June (`CaseConfig(:alexanderplatz; nsteps = 1800, start_h = 6 or 12)`,
-default couplings), with the bus fields averaged over the steps of each
-interval. "Slab H" is the same run on the #127 branch (slab scheme),
+Remeasured on master (`915bd49`, with the reference state of #131, the
+halo fix of #132 and the adaptive stepper, the default since #166). Two
+1 h runs, from 06:00 and from 12:00 local on 20 June
+(`CaseConfig(:alexanderplatz; nsteps = 1800, start_h = 6 or 12)`,
+default couplings), each run to 3600 s of simulated time: 1648 steps of
+1.45–3.36 s (mean 2.18 s) from 06:00 and 2157 steps of 0.76–3.23 s
+(mean 1.67 s) from 12:00. The bus fields are averaged over simulated
+time, each step weighted by its dt, over each interval. "Slab H" is the same run on the #127 branch (slab scheme),
 kept from the #129 measurement. Domain means over 4096 columns (the two
 columns without a surface count as zero), W m⁻²; "street+wall" is the
 mean over the 1690 street and 978 wall-adjacent columns, "roof" over the
@@ -920,10 +926,10 @@ mean over the 1690 street and 978 wall-adjacent columns, "roof" over the
 | :-- | --: | --: | --: | --: | --: | --: | --: |
 | 06:00–06:05 | −24.1 | −0.4 | 0.3 | −0.5 | −0.1 | 0.011 | 0.002 |
 | 06:45–07:00 | −15.9 | 16.5 | 42.9 | 25.2 | −0.0 | 0.066 | 0.0007 |
-| 12:00–12:05 | −23.7 | 4.6 | 22.2 | 7.1 | −0.1 | 0.063 | 0.002 |
-| 12:45–13:00 | −8.7 | 74.3 | 13.4 | 112.1 | 3.2 | 0.107 | 0.027 |
+| 12:00–12:05 | −23.7 | 4.5 | 22.1 | 7.0 | −0.1 | 0.063 | 0.002 |
+| 12:45–13:00 | −8.7 | 74.1 | 13.4 | 111.9 | 3.0 | 0.107 | 0.027 |
 
-The street columns alone give H = −0.7, 35.6, 11.3 and 168.6 W m⁻² in
+The street columns alone give H = −0.7, 35.6, 11.2 and 168.4 W m⁻² in
 the same four intervals. (The scripts of the #129 measurement no longer
 exist; the class averages are reconstructed from their column labels.
 Before #131, with `T_air = θ − Γ_d z`, an 8 km scale-height pressure and
@@ -939,18 +945,18 @@ noon. With Monin–Obukhov and the resolved wind at the first air cell
 stably stratified start is almost decoupled (H ≈ 0), and the soil
 columns' massless skins heat within minutes, so the streets turn
 unstable: after half an hour street+wall H is 25 W m⁻² in the morning
-and 112 W m⁻² at noon (street columns alone 36–169). The cold-started
+and 112 W m⁻² at noon (street columns alone 36–168). The cold-started
 roof slabs (C_s = 1.8e5 J m⁻² K⁻¹) stay colder than the air for most of
 the hour, stable and decoupled.
 
 **u\* over roofs.** The plan expected 0.2–0.6 m/s at midday. Measured:
-0.039 m/s mean over roofs at 13:00 (0.0010 at 07:00); streets 0.110.
+0.038 m/s mean over roofs at 13:00 (0.0010 at 07:00); streets 0.109.
 Two reasons, both in the case rather than the scheme: the wind at the
-first air cell above the roofs is only 0.26 m/s (the case is driven by a
+first air cell above the roofs is only 0.25 m/s (the case is driven by a
 1 m/s geostrophic wind, u0 = 1 m/s), which gives a *neutral* u\* of
-0.0255 m/s for z0m = 0.05 m (the mean of κ max(U, 0.1)/ln(z_ref/z0m));
+0.0246 m/s for z0m = 0.05 m (the mean of κ max(U, 0.1)/ln(z_ref/z0m));
 and the roofs start at 285 K, so they are stably stratified for most of
-the first hour (roof skin − air −5.05 K averaged over 12:15–12:30). At
+the first hour (roof skin − air −5.07 K averaged over 12:15–12:30). At
 13:00, with the roofs 1.1 K warmer than the air, u\* is 1.5 × its
 neutral value (the convective enhancement). The expectation assumed a
 few m/s of wind.
@@ -958,11 +964,11 @@ few m/s of wind.
 **Street β.** The street soil starts at θ = 0.10 (β = 0.44). In the
 noon hour its mean β falls as the top layer dries, to 0.373 at 13:00
 (hour mean 0.394, range 0.373–0.441), and the evaporation the soil can
-deliver collapses: the domain-mean LE is 70.0 W m⁻² between 12:15 and
-12:30 and 14.2 W m⁻² after 12:30. In the last quarter hour the street
-columns have Rn 617.0, H 109.5, LE 68.9 and G 438.6 W m⁻², the roofs Rn
-587.3, H 0.84 and ΔS 586.6 W m⁻² (before #131: 637 / 125 / 69 / 443
-and 614 / 2.8 / 611).
+deliver collapses: the domain-mean LE is 70.1 W m⁻² between 12:15 and
+12:30 and 14.2 W m⁻² after 12:30. Averaged over the noon hour (the
+ledger), the street columns have Rn 617.0, H 109.5, LE 68.9 and G 438.6
+W m⁻², the roofs Rn 587.35, H 0.81 and ΔS 586.6 W m⁻² (before #131:
+637 / 125 / 69 / 443 and 614 / 2.8 / 611).
 
 **Bug found (src).** `SoilThermalColumn.step_surface!` returned the
 evaporation the skin balance charged even when the soil, at its dry
@@ -975,10 +981,13 @@ unspent latent heat in the top soil layer (test in
 pattern (`latent_mismatch` there); #140 should check it.
 
 **Cost.** The surface step (4094 surfaces: 3179 soil columns with
-hydrology, 915 slabs) is 13.5 ms (06:00 run) and 16.8 ms (12:00 run) per
-dynamics step averaged at the 30 s cadence, the air-side update 1.19 ms
-and the drag 0.24–0.26 ms (remeasured on master with two runs sharing a
-24-core machine; at #129 10–17, 0.9 and 0.15 ms). The soil column with
+hydrology, 915 slabs) is 16.3 ms (06:00 run, 1648 steps) and 13.6 ms
+(12:00 run, 2157 steps) per dynamics step averaged at the 30 s cadence,
+i.e. 26.9 and 29.2 s per simulated hour; the air-side update is
+1.30 / 1.08 ms and the drag 0.26 / 0.24 ms per step (remeasured on
+master `915bd49` with the adaptive step, on a 24-core machine shared
+with five other runs; at #129, with the fixed 2 s step, 10–17, 0.9 and
+0.15 ms, 18–31 s per simulated hour). The soil column with
 hydrology costs about 56 µs per call, a slab 16 µs (measured at #129,
 not remeasured).
 
@@ -991,8 +1000,8 @@ z0h = z0m/10), not a survey. Before the halo fix of #132 the more
 vigorous noon convection made the stale-halo transport leak larger (it
 created 3.4e-3 kg m⁻² of water in the noon hour, and the Kessler clamp
 filled the negative qv it left aloft, +8.9e-5 kg m⁻²). On master both
-are zero to round-off in both runs: transport 3e-18 kg m⁻², qv clamp 0;
-the water ledger closes to −1.7e-14 kg m⁻².
+are zero to round-off in both runs: transport ≤ 3e-18 kg m⁻² in
+magnitude, qv clamp 0; the water ledger closes to −1.7e-14 kg m⁻².
 
 ## Radiation (#130)
 
@@ -1044,26 +1053,31 @@ interreflections of the shaded beam and the buildings' window sun (read
 from the radiosity solution) are not attenuated, and the light the cloud
 scatters sideways is not added to the diffuse.
 
-Remeasured on master (`2895fed`: the reference-state surface pressure
-of 101.325 kPa, the MOST / soil surfaces of #129). 1 h runs of the
-flagship, 64 × 64 × 32, dt = 2 s, radiation every 600 s, default
-couplings; values from the radiation call at the end of the hour (step
-1800). Winter on the `:smoke` window (smoke cadences, no fog seeded),
-because the winter flagship blows up, see below. "Above 50 m" is the
+Remeasured on master (`915bd49`: the reference-state surface pressure
+of 101.325 kPa, the MOST / soil surfaces of #129, the adaptive step of
+#166). 1 h runs of the flagship, 64 × 64 × 32, each run to 3600 s of
+simulated time (1429 / 1648 / 2157 adaptive steps from 00:00 / 06:00 /
+12:00), radiation every 600 s, default couplings; values from the last
+radiation call of the hour (at 3600 s less one step; at #130 this was
+step 1800). Winter on the `:smoke` window (smoke cadences, no fog
+seeded; 690 adaptive steps to 1800 s), which the smoke check uses, and,
+since the adaptive stepper lets it run, on the winter flagship itself
+(`CaseConfig(:winter; nsteps = 1800, start_h = 12)`, 3378 adaptive steps
+of mean 1.07 s to 3600 s). "Above 50 m" is the
 ρΔz-weighted mean over the levels whose centre is above 50 m; the old
 `0.95σT̄s⁴` uses the arithmetic mean of `bus.Ts`, as the deleted
 `lw_from_walls(mean(Ts))` did.
 
-| | 00–01 h | 06–07 h | 12–13 h | winter 12–12:30 (smoke window) |
-| :-- | --: | --: | --: | --: |
-| `L_sky` (W m⁻²) | 335.3 | 337.9 | 342.5 | 238.6 |
-| old `0.95σT̄s⁴` at the same T̄s | 360.1 (T̄s 285.9 K) | 402.1 (293.9 K) | 436.8 (300.1 K) | 310.2 (275.5 K) |
-| GHI, column (W m⁻²) | 0 | 559.0 | 830.6 | 234.2 |
-| Bird (the radiosity's sky: PW 2 cm, O₃ 0.33), aerosol-free / AOD₅₀₀ = 0.16 | 0 / 0 | 574.4 / 542.3 | 834.2 / 797.1 | 235.1 / 211.7 |
-| LES-layer heating, LW / SW (K day⁻¹) | −13.0 / 0 | −4.3 / +3.6 | +2.5 / +4.7 | −0.2 / +1.4 |
-| the same above 50 m, LW / total | −5.2 / −5.2 | −3.3 / +0.4 | −1.7 / +3.0 | −1.3 / +0.1 |
-| lowest level (0–6 m), LW | −158 | −24 | +78 | +9.5 |
-| precipitable water (kg m⁻²) | 12.3 | 12.3 | 12.3 | 3.5 |
+| | 00–01 h | 06–07 h | 12–13 h | winter 12–12:30 (smoke window) | winter 12–13 h (flagship) |
+| :-- | --: | --: | --: | --: | --: |
+| `L_sky` (W m⁻²) | 335.3 | 337.9 | 342.6 | 238.6 | 240.9 |
+| old `0.95σT̄s⁴` at the same T̄s | 360.1 (T̄s 285.94 K) | 402.2 (293.95 K) | 436.8 (300.09 K) | 310.3 (275.49 K) | 309.2 (275.25 K) |
+| GHI, column (W m⁻²) | 0 | 559.0 | 830.6 | 234.2 | 200.8 |
+| Bird (the radiosity's sky: PW 2 cm, O₃ 0.33), aerosol-free / AOD₅₀₀ = 0.16 | 0 / 0 | 574.5 / 542.3 | 834.1 / 797.0 | 235.1 / 211.7 | 204.0 / 181.8 |
+| LES-layer heating, LW / SW (K day⁻¹) | −13.0 / 0 | −4.3 / +3.6 | +2.45 / +4.7 | −0.2 / +1.4 | −1.4 / +1.2 |
+| the same above 50 m, LW / total | −5.2 / −5.2 | −3.3 / +0.4 | −1.7 / +3.1 | −1.3 / +0.1 | −1.3 / −0.1 |
+| lowest level (0–6 m), LW | −158 | −24 | +77 | +9.7 | −2.7 |
+| precipitable water (kg m⁻²) | 12.3 | 12.3 | 12.3 | 3.5 | 3.6 |
 
 (Before #129 and #131, with the slab surfaces and 100.92 kPa: L_sky
 331.9 / 333.5 / 335.4 / 237.9, LES-layer LW −12.9 / −9.8 / −6.7 / −4.0,
@@ -1081,8 +1095,8 @@ lowest level −156 / −108 / −59 / −16 K day⁻¹.)
   the column is −0.90 % at μ₀ = 0.86 (12:00), −1.20 % at μ₀ = 0.81
   (13:00), −3.45 % at μ₀ = 0.58 (07:00) and −4.91 % at the winter noon
   sun, μ₀ = 0.27 (first step of the `:smoke` window; −5.39 % at the end
-  of the window, μ₀ = 0.25): TwoStream falls below Bird as the sun gets
-  low. The smoke check asserts 5 % for μ₀ ≥ 0.5 (the issue's noon
+  of the window, μ₀ = 0.25; −6.31 % at 13:00 on the winter flagship,
+  μ₀ = 0.22): TwoStream falls below Bird as the sun gets low. The smoke check asserts 5 % for μ₀ ≥ 0.5 (the issue's noon
   criterion) and 10 % below. Against Bird with the case's urban AOD the
   column is 4.2 % higher at 13:00 and 10.6 % at the low winter sun: the
   TwoStream column has no aerosol until the aerosol-optics coupling
@@ -1091,8 +1105,9 @@ lowest level −156 / −108 / −59 / −16 K day⁻¹.)
   case starts its surfaces at 285 K under 293 K air, and the air near
   the ground radiates into the colder surface. By day the surfaces
   overtake the air (mean Ts 293.9 K at 07:00, 300.1 K at 13:00), and the
-  lowest level's longwave goes from −24 K day⁻¹ at 07:00 to **+78 K
-  day⁻¹** at 13:00; the winter window heats it too (+9.5). Above 50 m
+  lowest level's longwave goes from −24 K day⁻¹ at 07:00 to **+77 K
+  day⁻¹** at 13:00; the winter smoke window heats it too (+9.7), while on
+  the winter flagship at 13:00 it cools slightly (−2.7). Above 50 m
   the longwave cooling is −1.7 to −5.2 K day⁻¹ in summer; the noon hour
   is inside the −1…−3 K day⁻¹ the issue expected, the night and morning
   are beyond it. Both the cold surface and the humid initial profile
@@ -1104,8 +1119,8 @@ lowest level −156 / −108 / −59 / −16 K day⁻¹.)
   increment is that heating times dt in every fluid cell and zero in
   every solid one (a smoke check on the field). The air therefore takes
   up the column's convergence times the fluid fraction of each level.
-* **Ledger.** In the 06–07 h hour the domain Rn is 222.26 W m⁻²
-  (closure −1.4e-11; GHI 559.0 against Bird's 542.3). At #130 it was
+* **Ledger.** In the 06–07 h hour the domain Rn is 222.28 W m⁻²
+  (closure 5.2e-12; GHI 559.0 against Bird's 542.3). At #130 it was
   228.59, against 244.28 in the #127 baseline; that baseline cannot be
   rerun on master, and Rn now also carries the #129 surfaces, so the
   share of the drop due to the lower sky longwave alone is no longer
@@ -1121,25 +1136,36 @@ lowest level −156 / −108 / −59 / −16 K day⁻¹.)
   transmittance is 0.928 (not checked: probably roofs below the 18.75 m
   fog top).
 * **Cost** per radiation call, measured warm (mean of 10 calls after a
-  300-step run) on the flagship on master: column radiation 33.4 ms by
-  day, 20.8 ms at night; cloud shadow 11.1 ms (at #130: 38 / 23 / 13);
-  the radiosity solve itself takes 1–3 s. At the 600 s cadence that is
-  about 0.2 ms/step, plus 0.28–0.39 ms/step for applying the heating.
+  600 s run, 230 adaptive steps) on the flagship on master `915bd49`:
+  column radiation 45.0 ms by day, 27.9 ms at night; cloud shadow
+  13.3 ms (at #130: 38 / 23 / 13; at `2895fed`: 33.4 / 20.8 / 11.1, on a
+  less loaded machine); the radiosity solve itself takes 1–3 s. At the
+  600 s cadence that is about 0.1 ms per simulated second (0.2 ms per
+  step of 2 s), plus
+  0.36–0.59 ms per step for applying the heating (all on a shared
+  24-core machine).
   The radiation cadence (`cfg.cadence[:radiation]`) is shared with the
   radiosity: the sky longwave and the beam must be the ones the
   radiosity solve uses.
 
-**The winter flagship blows up** (pre-existing, not a radiation
-problem): `CaseConfig(:winter; start_h = 12)` on the 64 × 64 × 32 grid
-still has θ ∈ [270.0, 276.8] K and |u| 1.95 m s⁻¹ at step 125 on master,
+**The winter flagship blows up with the fixed 2 s step, and runs with
+the adaptive one** (not a radiation problem). With `timestepper =
+:fixed`, `CaseConfig(:winter; start_h = 12)` on the 64 × 64 × 32 grid
+had θ ∈ [270.0, 276.8] K and |u| 1.95 m s⁻¹ at step 125 on `2895fed`,
 then θ ∈ [44.8, 428.4] K at step 140 and [−95, 587] K with |u| 15 m s⁻¹
-at step 141, after which a saturation call stops on a negative
-temperature (`DomainError` in `saturation_vapor_pressure`). At #130 it
-blew up earlier (θ ∈ [10, 353] K by step 118, −700 K at step 119), and
-the #127 branch, without the radiation couplings, did the same (|u|
-grew from 1.9 to 12 m s⁻¹ between steps 100 and 118). It was the fixed 2 s step:
-with the adaptive stepper, the default since then, the winter flagship
-runs (see "The adaptive stepper is the default" above).
+at step 141, after which a saturation call stopped on a negative
+temperature (`DomainError` in `saturation_vapor_pressure`); the fixed
+stepper still blows up at step 141 on `a630153` (table above). At #130
+it blew up earlier (θ ∈ [10, 353] K by step 118, −700 K at step 119),
+and the #127 branch, without the radiation couplings, did the same (|u|
+grew from 1.9 to 12 m s⁻¹ between steps 100 and 118). With the adaptive
+stepper, the default since #166, the winter flagship runs. Measured on
+master `915bd49`, 3 h from 12:00: 8606 steps (dt 0.70–2.69 s, mean
+1.07 s in the first hour and 1.25 s over the three), θ within
+[270.2, 278.4] K throughout, max |u| 2.46 m s⁻¹ at 12:10 falling to
+1.17 m s⁻¹ at 15:00, Ts ∈ [262.0, 283.8] K at 15:00; the surface energy
+ledger closes to −3.8e-11 W m⁻² (domain) and the water ledger to
+−4.5e-15 kg m⁻². Its radiation is in the last column of the table above.
 
 ## Smoke test and coverage test
 
@@ -1277,25 +1303,27 @@ its own surface-layer solve; reading them from the bus is open.
 It is not the default. The smoke matrix also runs a `night titration`
 variant (start 00:30, J = OH = 0).
 
-### Measured (flagship grid 64 × 64 × 32, 20 June, 12:00–12:30, 900 steps)
+### Measured (flagship grid 64 × 64 × 32, 20 June, 12:00–12:30)
 
-Remeasured on master (`2895fed`: reference state, MOST / soil surfaces
-of #129), `CaseConfig(:alexanderplatz; nsteps = 900, start_h = 12)` with
-the default couplings, with and without `Ts0 = 300.0`. Street / roof /
+Remeasured on master (`915bd49`: reference state, MOST / soil surfaces
+of #129, adaptive step of #166), `CaseConfig(:alexanderplatz; nsteps =
+900, start_h = 12)` with the default couplings, with and without
+`Ts0 = 300.0`, run to 1800 s of simulated time (962 / 1079 adaptive
+steps; at #135 and in the first remeasurement 900 steps of 2 s). Street / roof /
 park are surface classes 1 / 2 / 3; r_a, u* and v_d are medians over
 the class; fluxes and emissions are means over the ledger's elapsed time.
 
 | quantity | default (`Ts0` = 285 K) | warm surfaces (`Ts0` = 300 K) |
 | :-- | --: | --: |
 | Leighton ratio φ, median over air cells with NO, O3 > 0.01 ppb, at 12:30 | 1.0013 | 1.0013 |
-| φ / φ_ext (peroxy-radical steady state), median | 0.9963 | 0.9963 |
-| r_a street / roof / park, median (s m⁻¹) | 89 / 6.65e6 / 5.35e5 | 89.7 / 88.2 / 7.28e5 |
-| u* street / park, median (m s⁻¹) | 0.096 / 0.0015 | 0.093 / 0.0014 |
+| φ / φ_ext (peroxy-radical steady state), median | 0.9964 | 0.9963 |
+| r_a street / roof / park, median (s m⁻¹) | 89.5 / 5.6e6 / 5.76e5 | 89.6 / 88.4 / 8.48e5 |
+| u* street / park, median (m s⁻¹) | 0.094 / 0.0016 | 0.093 / 0.0013 |
 | v_d O3 park / street (mm s⁻¹) | 0.002 / 0.464 | 0.001 / 0.464 |
-| v_d NO2, HNO3 street (mm s⁻¹) | 1.53, 5.84 | 1.52, 5.74 |
-| mean dry deposition flux O3 / NO2 / HNO3 (nmol m⁻² s⁻¹) | 0.317 / 0.320 / 0.063 | 0.507 / 0.381 / 0.093 |
+| v_d NO2, HNO3 street (mm s⁻¹) | 1.53, 5.78 | 1.52, 5.74 |
+| mean dry deposition flux O3 / NO2 / HNO3 (nmol m⁻² s⁻¹) | 0.316 / 0.320 / 0.063 | 0.507 / 0.382 / 0.093 |
 | mean emission NO / NO2 / isoprene (nmol m⁻² s⁻¹) | 17.84 / 1.98 / 0.504 | same |
-| surface-layer NO / NO2 / O3 at 12:30 (ppb) | 7.66 / 10.58 / 35.62 | 7.44 / 10.45 / 35.55 |
+| surface-layer NO / NO2 / O3 at 12:30 (ppb) | 7.74 / 10.66 / 35.55 | 7.50 / 10.45 / 35.55 |
 
 The default flagship starts its surfaces (the soil columns and slabs of
 #129) 8 K below the air (`Ts0` = 285 K). At step 0 every class is stably
@@ -1304,30 +1332,35 @@ clamp. The street soil skins heat within minutes, and by 12:30 the
 streets are unstable (r_a 89 s m⁻¹, v_d O3 0.46 mm s⁻¹): the domain-mean
 O3 deposition is 0.32 nmol m⁻² s⁻¹, 17 × its value with the pre-#129
 slabs, when r_a reached 1e5–1e9 s m⁻¹ and dry deposition was
-effectively off. Roofs and park stay decoupled (r_a 6.7e6 and 5.4e5
-s m⁻¹; mean Ts at 12:30 291.2 K on roofs and 291.1 K in the park, under
+effectively off. Roofs and park stay decoupled (r_a 5.6e6 and 5.8e5
+s m⁻¹; mean Ts at 12:30 291.2 K on roofs and 291.05 K in the park, under
 first-cell air of about 294 K; streets 302.8 K). Warm surfaces do not
 change that for the park: its skin cools from 300 to about 291 K within
-the half hour and decouples (r_a 1.5e3–1e9 s m⁻¹), so the PR #162
+the half hour and decouples (r_a 1.0e3–1.05e9 s m⁻¹), so the PR #162
 expectation that the default case would look like the right-hand column
 holds for the streets but not for the park. The periodic domain has no
 inflow of background air, so emitted NOx accumulates: surface-layer NO
-rises from 1.68 to 7.66 ppb in 30 min.
+rises from 1.68 to 7.74 ppb in 30 min.
 
 Wet deposition, measured in the smoke window with `qr = 1e-4` seeded in
 levels 2–4: the HNO3 removed per step equals ``s[\mathrm{HNO_3}]\,(Σ q_r Δz)\,Δt``
 to 0.1 %. The rain sediments out in about four steps.
 
-**Cost.** On the flagship grid on master (300 steps from 12:00, with
-and without `physics = Dict(:chemistry => :off)`, run one after the
-other on a loaded 24-core machine, first-call compilation included) the
-step goes from 135.5 to 169.2 ms (wall time over steps; 119.4 → 154.7 ms
-summed over the stage timings), i.e. the chemistry adds about 25–30 %.
-The WENO-Z5 transport of the five species adds 37.1 ms (7.4 ms per
-tracer: `scalar_advection` 25.8 → 62.9 ms per step); the `aq_chem` stage
-costs 8.9 ms (68 ns per cell) including emissions and deposition; the
-r_a refresh 2.0 ms averaged over steps. (At #135, before #129, the step
-went from 43.1 to 101.1 ms.) The chemistry stays on by default because
+**Cost.** On the flagship grid on master `915bd49` (600 s from 12:00,
+with and without `physics = Dict(:chemistry => :off)`, run one after the
+other on a loaded 24-core machine, first-call compilation included; both
+runs take the same 230 adaptive steps, mean dt 2.61 s, since the
+chemistry does not feed back on the flow) the step goes from 233.7 to
+289.1 ms (wall time over steps, i.e. 89.6 → 110.8 ms per simulated
+second; 190.5 → 248.8 ms summed over the stage timings), so the
+chemistry adds about 24–31 %. The WENO-Z5 transport of the five species
+adds 50.0 ms (10.0 ms per tracer: `scalar_advection` 33.7 → 83.7 ms per
+step); the `aq_chem` stage costs 12.1 ms (92 ns per cell) including
+emissions and deposition; the r_a refresh 3.3 ms averaged over steps.
+The absolute numbers depend on the load: a first pair run alongside
+five other measurements gave 325.7 → 509.0 ms per step. (Remeasured at
+`2895fed` with 300 steps of 2 s: 135.5 → 169.2 ms. At #135, before
+#129, the step went from 43.1 to 101.1 ms.) The chemistry stays on by default because
 the flagship is meant to exercise all the physics, and `:off` exists for
 runs that do not need air quality.
 
