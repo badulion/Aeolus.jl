@@ -122,3 +122,20 @@ end
     end
     @test decoded == frames
 end
+
+@testset "examples/viz: 5x7 font covers printable ASCII with distinct glyphs" begin
+    # A hand-typed table used to draw '2' as '7' ("12:02" read "17:07"),
+    # 'p' as 'e', 'q' as 'a' and 'r' as 'c'.
+    printable = Char.(0x20:0x7e)
+    @test all(c -> haskey(_FONT5x7, c), printable)
+    glyphs = [_FONT5x7[c] for c in printable]
+    @test length(unique(glyphs)) == length(glyphs)           # no two characters look alike
+    @test _FONT5x7['2'] == (0x42, 0x61, 0x51, 0x49, 0x46)     # bottom bar: not a '7'
+    @test _FONT5x7['7'] == (0x01, 0x71, 0x09, 0x05, 0x03)
+    @test _FONT5x7['p'] == (0x7c, 0x14, 0x14, 0x14, 0x08)
+    @test _FONT5x7['e'] == (0x38, 0x54, 0x54, 0x54, 0x18)
+    # an unknown character is drawn as '?', never silently dropped
+    a = fill(UInt8(0), 7, 5, 3); b = fill(UInt8(0), 7, 5, 3)
+    add_label!(a, "°"; row = 1, col = 1); add_label!(b, "?"; row = 1, col = 1)
+    @test a == b && any(!=(0), a)
+end
