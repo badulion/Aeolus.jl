@@ -248,8 +248,9 @@ first-order driver of the urban heat island, and a sky-view-factor
 approximation cannot represent it.
 
 **Measured on the real Alexanderplatz geometry** — 322 OpenStreetMap
-buildings, 64 × 64 × 32 cells, 24 h at Δt = 2 s from 06:00 on 20 June,
-every default coupling on (run on master `2895fed`):
+buildings, 64 × 64 × 32 cells, 24 h from 06:00 on 20 June with the
+default adaptive time step (57,597 steps, Δt 1.0–3.4 s, mean 1.50 s),
+every default coupling on (run on master `915bd49`):
 
 | | |
 |:--|:--|
@@ -259,22 +260,26 @@ every default coupling on (run on master `2895fed`):
 | Radiating facets | 5,810 |
 | View-factor reciprocity / closure | `4.5e-17` / `2.4e-15` |
 | Sky-view factor (min / mean / max) | `0.149` / `0.794` / `1.000` |
-| Surface temperature spread at the end of the day (max − min *T*<sub>s</sub>) | `35.4 K` |
-| Divergence after 43,200 steps | `3.4e-15` |
-| Surface energy ledger closure, 24 h, domain | `4.5e-10 W/m²` |
-| Water ledger residual, 24 h | `−6.3e-15 kg/m²` |
+| Surface temperature spread at the end of the day (max − min *T*<sub>s</sub>) | `35.5 K` ‡ |
+| Divergence after 57,597 steps | `1.7e-15` |
+| Surface energy ledger closure, 24 h, domain | `−3.2e-11 W/m²` |
+| Water ledger residual, 24 h | `−1.6e-14 kg/m²` |
 | Wall-clock, one Julia process | **95 min** |
 | Output | 316 MB NetCDF, 48 time levels |
 
 † From the radiosity scene before the per-class ground materials of #128;
 not remeasured.
+‡ The minimum is 285.0 K, the initial *T*<sub>s</sub>, in 36 of the 48
+records: some surface does not move off its initial value, so this row is
+in effect the maximum *T*<sub>s</sub> minus 285 K. Not yet investigated.
 
 A full day of a city block, with resolved turbulence, facet-level
 radiation, a soil column under every open cell, fog and dew, and five
 reactive species, takes about an hour and a half on one process (2 GB
-resident; measured on a shared 24-core machine). Over half of it is the
-WENO-Z5 transport of the seven advected tracers (qv, ql and the five species; 77 ms of 132 ms per
-step); the dynamics `step!` is 11 ms per step.
+resident; measured on a 24-core machine in its performance power
+profile, none of the other measurements running alongside). Over half of it is the WENO-Z5
+transport of the seven advected tracers (qv, ql and the five species;
+57 ms of 99 ms per step); the dynamics `step!` is 12 ms per step.
 
 ### Run your own city
 
