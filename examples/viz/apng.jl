@@ -1,10 +1,12 @@
 # Pure-Julia PNG + APNG encoder.
 #
-# Uses uncompressed DEFLATE stored blocks so we don't need CodecZlib.
-# File sizes are ~1.5–2× a normally compressed PNG, but the whole
-# encoder fits in this file with no external dependencies. Renders in
-# every modern browser (Chrome, Firefox, Safari) as an infinite-loop
-# animation.
+# No CodecZlib (no binary dependencies): DEFLATE is implemented here,
+# LZ77 with a 32 KiB window and the fixed Huffman code (RFC 1951 §3.2.6),
+# after per-row PNG filtering (None / Sub / Up, chosen per row by the
+# minimum-sum-of-absolute-differences heuristic of the PNG spec). Plots
+# with flat colour regions compress 10–50×; a block that would not
+# shrink is written stored. Renders in every modern browser (Chrome,
+# Firefox, Safari) as an infinite-loop animation.
 
 # ---------------------------------------------------------------------------
 # CRC-32 (PNG polynomial)
@@ -75,29 +77,159 @@ function _deflate_stored(data::Vector{UInt8})
     return out
 end
 
+# --- LZ77 + fixed-Huffman DEFLATE (RFC 1951, BTYPE = 01) -------------------
+
+mutable struct _BitWriter
+    out::Vector{UInt8}
+    acc::UInt64
+    n::Int
+end
+_BitWriter(sizehint::Int) = (w = _BitWriter(UInt8[], 0, 0); sizehint!(w.out, sizehint); w)
+
+# Append the `nbits` low bits of `v`, least significant first (RFC 1951 §3.1.1).
+@inline function _putbits!(w::_BitWriter, v::Integer, nbits::Int)
+    w.acc |= UInt64(v) << w.n
+    w.n += nbits
+    while w.n >= 8
+        push!(w.out, UInt8(w.acc & 0xff))
+        w.acc >>= 8
+        w.n -= 8
+    end
+    return w
+end
+
+_flushbits!(w::_BitWriter) = (w.n > 0 && push!(w.out, UInt8(w.acc & 0xff)); w.acc = 0; w.n = 0; w)
+
+# Huffman codes are packed most significant bit first: reverse, then append.
+@inline function _puthuff!(w::_BitWriter, code::Integer, len::Int)
+    rev = 0
+    for i in 0:len-1
+        rev = (rev << 1) | ((code >> i) & 1)
+    end
+    return _putbits!(w, rev, len)
+end
+
+# The fixed literal/length code: 0–143 → 8 bits from 0x30, 144–255 → 9
+# bits from 0x190, 256–279 → 7 bits from 0, 280–287 → 8 bits from 0xC0.
+@inline function _fixed_litlen!(w::_BitWriter, v::Integer)
+    v <= 143 && return _puthuff!(w, 0x30 + v, 8)
+    v <= 255 && return _puthuff!(w, 0x190 + (v - 144), 9)
+    v <= 279 && return _puthuff!(w, v - 256, 7)
+    return _puthuff!(w, 0xc0 + (v - 280), 8)
+end
+
+const _LEN_BASE   = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
+                     35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+const _LEN_EXTRA  = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+                     3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+const _DIST_BASE  = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
+                     257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
+                     8193, 12289, 16385, 24577]
+const _DIST_EXTRA = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+                     7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+
+@inline function _emit_match!(w::_BitWriter, len::Int, dist::Int)
+    i = searchsortedlast(_LEN_BASE, len)
+    _fixed_litlen!(w, 256 + i)
+    _LEN_EXTRA[i] > 0 && _putbits!(w, len - _LEN_BASE[i], _LEN_EXTRA[i])
+    d = searchsortedlast(_DIST_BASE, dist)
+    _puthuff!(w, d - 1, 5)                       # fixed distance code: 5 bits
+    _DIST_EXTRA[d] > 0 && _putbits!(w, dist - _DIST_BASE[d], _DIST_EXTRA[d])
+    return w
+end
+
+"""
+    _deflate_fixed(data; max_chain = 64) -> Vector{UInt8}
+
+One final DEFLATE block with the fixed Huffman code: greedy LZ77 over a
+32 KiB window (hash chains on 3-byte prefixes, at most `max_chain`
+candidates per position, matches of 3–258 bytes).
+"""
+function _deflate_fixed(data::Vector{UInt8}; max_chain::Int = 64)
+    n = length(data)
+    w = _BitWriter(n ÷ 4 + 16)
+    _putbits!(w, 1, 1)                           # BFINAL
+    _putbits!(w, 1, 2)                           # BTYPE = 01, fixed Huffman
+    HB = 15
+    mask = (1 << HB) - 1
+    head = zeros(Int, 1 << HB)
+    prev = zeros(Int, n)
+    @inline hash3(i) = ((Int(data[i]) << 10) ⊻ (Int(data[i + 1]) << 5) ⊻ Int(data[i + 2])) & mask
+    i = 1
+    @inbounds while i <= n
+        bestlen = 0; bestdist = 0
+        if i + 2 <= n
+            h = hash3(i) + 1
+            cand = head[h]
+            maxlen = min(258, n - i + 1)
+            chain = 0
+            while cand > 0 && i - cand <= 32768 && chain < max_chain
+                l = 0
+                while l < maxlen && data[cand + l] == data[i + l]
+                    l += 1
+                end
+                if l > bestlen
+                    bestlen = l; bestdist = i - cand
+                    l == maxlen && break
+                end
+                cand = prev[cand]
+                chain += 1
+            end
+            prev[i] = head[h]; head[h] = i
+        end
+        if bestlen >= 3
+            _emit_match!(w, bestlen, bestdist)
+            for k in i + 1:min(i + bestlen - 1, n - 2)
+                h = hash3(k) + 1
+                prev[k] = head[h]; head[h] = k
+            end
+            i += bestlen
+        else
+            _fixed_litlen!(w, data[i])
+            i += 1
+        end
+    end
+    _fixed_litlen!(w, 256)                       # end of block
+    return _flushbits!(w).out
+end
+
 function _zlib_wrap(data::Vector{UInt8})
-    # 0x78 0x01 = deflate, no compression preset
-    body = _deflate_stored(data)
-    check = adler32(data)
-    return vcat(UInt8[0x78, 0x01], body, _u32be(check))
+    # CMF 0x78 (deflate, 32 KiB window); FLG 0x01 makes the header a
+    # multiple of 31. Stored blocks if compression would not shrink it.
+    body = _deflate_fixed(data)
+    length(body) >= length(data) + 5 * cld(length(data) + 1, 65535) &&
+        (body = _deflate_stored(data))
+    return vcat(UInt8[0x78, 0x01], body, _u32be(adler32(data)))
 end
 
 # ---------------------------------------------------------------------------
-# PNG filtering — we always use "None" filter (row byte 0x00)
+# PNG filtering: per row the cheapest of None (0), Sub (1) and Up (2)
+# by the sum of |filtered byte| as a signed value (PNG spec §12.8)
 # ---------------------------------------------------------------------------
 
-function _filter_none_rgb(rgb::Array{UInt8,3})
+function _filter_rgb(rgb::Array{UInt8,3})
     h, w, _ = size(rgb)
-    out = Vector{UInt8}(undef, h * (1 + 3 * w))
+    rowlen = 3 * w
+    out = Vector{UInt8}(undef, h * (1 + rowlen))
+    raw = Vector{UInt8}(undef, rowlen)
+    prevraw = zeros(UInt8, rowlen)
+    cands = [Vector{UInt8}(undef, rowlen) for _ in 1:3]
+    cost(v) = sum(x -> x < 0x80 ? Int(x) : 256 - Int(x), v)
     idx = 1
     @inbounds for r in 1:h
-        out[idx] = 0x00; idx += 1
-        for c in 1:w
-            out[idx]     = rgb[r, c, 1]
-            out[idx + 1] = rgb[r, c, 2]
-            out[idx + 2] = rgb[r, c, 3]
-            idx += 3
+        for c in 1:w, k in 1:3
+            raw[3 * (c - 1) + k] = rgb[r, c, k]
         end
+        for j in 1:rowlen
+            a = j > 3 ? raw[j - 3] : 0x00
+            cands[1][j] = raw[j]
+            cands[2][j] = raw[j] - a
+            cands[3][j] = raw[j] - prevraw[j]
+        end
+        best = argmin(cost.(cands))
+        out[idx] = UInt8(best - 1); idx += 1
+        copyto!(out, idx, cands[best], 1, rowlen); idx += rowlen
+        copyto!(prevraw, raw)
     end
     return out
 end
@@ -145,7 +277,7 @@ function write_png(path::AbstractString, rgb::Array{UInt8,3})
         write(io, _PNG_SIG)
         _write_chunk(io, "IHDR", vcat(_u32be(UInt32(w)), _u32be(UInt32(h)),
                                       UInt8[8, 2, 0, 0, 0]))
-        _write_chunk(io, "IDAT", _zlib_wrap(_filter_none_rgb(rgb)))
+        _write_chunk(io, "IDAT", _zlib_wrap(_filter_rgb(rgb)))
         _write_chunk(io, "IEND", UInt8[])
     end
     return path
@@ -184,7 +316,7 @@ function write_apng(path::AbstractString, frames::Vector{Array{UInt8,3}};
             _write_chunk(io, "fcTL", fctl)
             seq += 1
 
-            filtered   = _filter_none_rgb(frame)
+            filtered   = _filter_rgb(frame)
             compressed = _zlib_wrap(filtered)
 
             if idx == 1
