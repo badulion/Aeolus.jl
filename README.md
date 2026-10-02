@@ -30,7 +30,7 @@ building height · resolved vertical velocity at 30 m.</sub>
   kernel constants, Wiscombe's Mie benchmark, Golovin's analytic coalescence
   solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
   CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
-- **80,328 tests.** 62,000 lines of source, 31,000 lines of tests.
+- **80,661 tests.** 62,000 lines of source, 32,000 lines of tests.
 - **FFTW is the only non-stdlib dependency.** Everything else — NetCDF, PNG,
   Mie scattering, error and Bessel functions — is written in the package.
 - Single-node CPU. MPI and GPU are planned, not present.
@@ -324,7 +324,7 @@ ends with a validation target. Full plan:
 
 - [x] **Era I** — LES core, physics scaffolds, urban flagship *(Phases 1–20)*
 - [x] **Era II** — numerical foundations: cut-cell IBM, IMEX, WENO-Z/TENO,
-      anelastic, multigrid, nesting, AMR *(21–31)* · 2,116 tests
+      anelastic, multigrid, nesting, AMR *(21–31)* · 2,148 tests
 - [x] **Era III** — high-fidelity radiation: gas optics, two-stream,
       Monte-Carlo, radiosity, BRDF, aerosol, solar geometry *(32–38)* · 4,912 tests
 - [x] **Era IV** — clouds and microphysics *(39–45)* · 47,392 tests

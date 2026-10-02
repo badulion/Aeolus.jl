@@ -187,7 +187,7 @@ weeks because nobody viewed the image at size.
 
 ```
 src/            55 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
-test/           runtests.jl + era*_*.jl + berlin_*.jl, 80,328 tests
+test/           runtests.jl + era*_*.jl + berlin_*.jl, 80,661 tests
 examples/       worked cases; examples/urban/ is the flagship
 docs/src/       theory, design, API reference
 .worktrees/     agent worktrees (gitignored)
