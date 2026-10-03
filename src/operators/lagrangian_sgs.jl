@@ -82,7 +82,7 @@ dynamic subgrid-scale model of turbulence*, J. Fluid Mech. 319, 353–385;
 Germano, Piomelli, Moin & Cabot (1991), *Phys. Fluids A* 3, 1760; Lilly
 (1992), *Phys. Fluids A* 4, 633.
 """
-struct LagrangianDynamicSmagorinsky{T<:AbstractFloat, W<:DynamicSmagorinskyWorkspace{T}, P, M} <: AbstractEddyViscosityClosure
+struct LagrangianDynamicSmagorinsky{T<:AbstractFloat, W<:DynamicSmagorinskyWorkspace{T}, P, M, S} <: AbstractEddyViscosityClosure
     workspace::W
     I_LM::Array{T,3}
     I_MM::Array{T,3}
@@ -96,21 +96,46 @@ struct LagrangianDynamicSmagorinsky{T<:AbstractFloat, W<:DynamicSmagorinskyWorks
     memory_time::Union{Nothing, T}
     Pr_t::P
     mask::M
+    # scale dependence (Bou-Zeid, Meneveau & Parlange 2005; P54-e, #186)
+    scale_dependent::Bool
+    second::S                                         # _SecondTestFilter, or nothing
+    I_QN::Array{T,3}; I_NN::Array{T,3}
+    new_QN::Array{T,3}; new_NN::Array{T,3}
+    beta::Array{T,3}                                  # β of the last coefficient call
+    filter_ratio2::T
+    beta_min::T
+    beta_max::T
+    beta_fixed::Union{Nothing, T}
 end
 
 function LagrangianDynamicSmagorinsky(g::RegularGrid{T}; filter_ratio::Real = 3,
                                       cs_max::Real = 0.5, C0::Real = 0.16, θ::Real = 1.5,
                                       memory_time = nothing, Pr_t = nothing,
-                                      mask = nothing) where {T}
+                                      mask = nothing, scale_dependent::Bool = false,
+                                      filter_ratio2::Real = 5, beta_min::Real = 0.125,
+                                      beta_max::Real = 8.0, beta = nothing) where {T}
     min(g.Hx, g.Hy, g.Hz) >= 2 ||
         throw(ArgumentError("LagrangianDynamicSmagorinsky: needs halo ≥ 2, mesh has $((g.Hx, g.Hy, g.Hz))"))
     memory_time === nothing || memory_time > 0 ||
         throw(ArgumentError("memory_time must be positive (or nothing for MLC96's T), got $memory_time"))
+    filter_ratio2 > filter_ratio ||
+        throw(ArgumentError("filter_ratio2 ($filter_ratio2) must exceed filter_ratio ($filter_ratio)"))
+    0 < beta_min <= 1 <= beta_max ||
+        throw(ArgumentError("need 0 < beta_min ≤ 1 ≤ beta_max, got ($beta_min, $beta_max)"))
+    beta === nothing || beta > 0 ||
+        throw(ArgumentError("a fixed beta must be positive, got $beta"))
+    beta === nothing || scale_dependent ||
+        throw(ArgumentError("a fixed beta needs scale_dependent = true"))
     i() = zeros(T, g.Nx, g.Ny, g.Nz)
+    sd() = scale_dependent ? i() : zeros(T, 0, 0, 0)
+    second = scale_dependent ? _SecondTestFilter(g) : nothing
     return LagrangianDynamicSmagorinsky(DynamicSmagorinskyWorkspace(g), i(), i(), i(), i(), i(),
                                         i(), i(), Ref(false), T(filter_ratio), T(cs_max), T(C0),
                                         T(θ), memory_time === nothing ? nothing : T(memory_time),
-                                        Pr_t, _LazyMask(mask, T))
+                                        Pr_t, _LazyMask(mask, T), scale_dependent, second,
+                                        sd(), sd(), sd(), sd(), sd(), T(filter_ratio2),
+                                        T(beta_min), T(beta_max),
+                                        beta === nothing ? nothing : T(beta))
 end
 
 turbulent_prandtl(c::LagrangianDynamicSmagorinsky, sim) = _prandtl(c.Pr_t, sim)
@@ -126,13 +151,16 @@ function sgs_viscosity!(νt, c::LagrangianDynamicSmagorinsky{T}, sim) where {T}
     _strain_magnitude!(ws, ub, vb, wb, g)
     cs2max = c.cs_max^2
     cell = _cellmask(m)
-    if c.initialised[]
+    if !c.initialised[]
+        fill!(ws.cs2, min(c.C0^2, cs2max))       # I_LM = C₀² I_MM (MLC96 §3)
+        c.scale_dependent && fill!(c.beta, one(T))
+    elseif c.scale_dependent
+        _scale_dependent_cs2!(ws.cs2, c.beta, c, cs2max)
+    else
         @inbounds for I in eachindex(ws.cs2)
             mm = c.I_MM[I]
             ws.cs2[I] = mm > 0 ? clamp(c.I_LM[I] / mm, zero(T), cs2max) : zero(T)
         end
-    else
-        fill!(ws.cs2, min(c.C0^2, cs2max))       # I_LM = C₀² I_MM (MLC96 §3)
     end
     if cell !== nothing
         @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
@@ -141,6 +169,55 @@ function sgs_viscosity!(νt, c::LagrangianDynamicSmagorinsky{T}, sim) where {T}
     end
     _dynamic_νt!(νt.data, ws, g, cell)
     return νt
+end
+
+"""
+    _scale_dependent_cs2!(cs2, beta, c, cs2max)
+
+The coefficient of the scale-dependent model (Bou-Zeid, Meneveau &
+Parlange 2005) from the committed memories: ``C^2_{αΔ} = \\mathcal
+I_{LM}/\\mathcal I_{MM}`` and ``C^2_{α_2Δ} = \\mathcal I_{QN}/\\mathcal
+I_{NN}`` are the Lagrangian coefficients at the two test-filter scales;
+assuming the power law ``C^2(aΔ) = C^2(Δ)\\,a^φ`` between them,
+
+```math
+φ = \\frac{\\ln(C^2_{α_2Δ}/C^2_{αΔ})}{\\ln(α_2/α)}, \\qquad
+β = 2^φ \\in [β_{\\min}, β_{\\max}], \\qquad
+C^2_Δ = C^2_{αΔ}\\,α^{-φ} = C^2_{αΔ}\\,β^{-\\log_2 α},
+```
+
+with ``φ = \\log_2 β`` after the clip, so for ``α = 2``, ``α_2 = 4``
+(Bou-Zeid's filters) ``β = C^2_{4Δ}/C^2_{2Δ}`` and ``C^2_Δ =
+C^2_{2Δ}/β`` as in Bou-Zeid et al. ``β`` is the coefficient ratio per doubling
+of the filter width at any ``α, α_2``. Where ``C^2_{αΔ} = 0`` the
+coefficient is 0 and ``β`` is stored as 1 (no scale information); where
+only ``C^2_{α_2Δ} = 0``, ``β = β_{\\min}``. With a fixed `beta` the same
+formula runs with that β (``β = 1`` is the scale-invariant model, bit
+for bit). ``C^2_Δ`` is clipped to ``[0, c_{s,\\max}^2]``.
+"""
+function _scale_dependent_cs2!(cs2, beta, c::LagrangianDynamicSmagorinsky{T}, cs2max) where {T}
+    lnα = log(c.filter_ratio)
+    inv_lr = one(T) / log2(c.filter_ratio2 / c.filter_ratio)     # φ per log₂ of the ratio
+    φmin, φmax = log2(c.beta_min), log2(c.beta_max)
+    φfix = c.beta_fixed === nothing ? zero(T) : log2(c.beta_fixed)
+    @inbounds for I in eachindex(cs2)
+        mm = c.I_MM[I]
+        ca = mm > 0 ? c.I_LM[I] / mm : zero(T)              # C²(αΔ)
+        if !(ca > 0)
+            cs2[I] = zero(T); beta[I] = one(T)
+            continue
+        end
+        φ = if c.beta_fixed !== nothing
+            φfix
+        else
+            nn = c.I_NN[I]
+            cb = nn > 0 ? c.I_QN[I] / nn : zero(T)          # C²(α₂Δ)
+            cb > 0 ? clamp(log2(cb / ca) * inv_lr, φmin, φmax) : φmin
+        end
+        beta[I] = clamp(exp2(φ), c.beta_min, c.beta_max)    # β = 2^φ
+        cs2[I] = clamp(ca * exp(-φ * lnα), zero(T), cs2max) # C²(αΔ) α^(-φ)
+    end
+    return nothing
 end
 
 """
@@ -161,15 +238,27 @@ function advance_sgs!(c::LagrangianDynamicSmagorinsky{T}, sim, dt) where {T}
         fill_halos!(f, sim.bcs)
     end
     m = _sgs_mask(c.mask, sim)
+    per = _periodic_flags(sim.bcs)
+    cell = _cellmask(m)
     _germano_identity!(ws, sim.u.data, sim.v.data, sim.w.data, g, c.filter_ratio^2, m)
+    sf = c.second
+    sf === nothing || _second_test_filter!(sf, ws, g, c.filter_ratio2^2, cell, per)
     if c.initialised[]
         _lagrangian_relax!(c.new_LM, c.new_MM, c.I_LM, c.I_MM, ws.LM, ws.MM,
-                           c.Up, c.Vp, c.Wp, T(dt), g, c.θ, c.memory_time,
-                           _cellmask(m), _periodic_flags(sim.bcs))
+                           c.Up, c.Vp, c.Wp, T(dt), g, c.θ, c.memory_time, cell, per)
         copyto!(c.I_LM, c.new_LM); copyto!(c.I_MM, c.new_MM)
+        if sf !== nothing
+            _lagrangian_relax!(c.new_QN, c.new_NN, c.I_QN, c.I_NN, sf.QN, sf.NN,
+                               c.Up, c.Vp, c.Wp, T(dt), g, c.θ, c.memory_time, cell, per)
+            copyto!(c.I_QN, c.new_QN); copyto!(c.I_NN, c.new_NN)
+        end
     else
         c.I_MM .= ws.MM
         c.I_LM .= c.C0^2 .* ws.MM
+        if sf !== nothing                           # β = 1 at the start
+            c.I_NN .= sf.NN
+            c.I_QN .= c.C0^2 .* sf.NN
+        end
         c.initialised[] = true
     end
     inner = (2:g.Nx+1, 2:g.Ny+1, 2:g.Nz+1)
@@ -180,12 +269,14 @@ function advance_sgs!(c::LagrangianDynamicSmagorinsky{T}, sim, dt) where {T}
 end
 
 sgs_state(c::LagrangianDynamicSmagorinsky) =
-    (copy(c.I_LM), copy(c.I_MM), copy(c.Up), copy(c.Vp), copy(c.Wp), c.initialised[])
+    (copy(c.I_LM), copy(c.I_MM), copy(c.Up), copy(c.Vp), copy(c.Wp), c.initialised[],
+     copy(c.I_QN), copy(c.I_NN))
 
 function restore_sgs_state!(c::LagrangianDynamicSmagorinsky, s)
     copyto!(c.I_LM, s[1]); copyto!(c.I_MM, s[2])
     copyto!(c.Up, s[3]); copyto!(c.Vp, s[4]); copyto!(c.Wp, s[5])
     c.initialised[] = s[6]
+    copyto!(c.I_QN, s[7]); copyto!(c.I_NN, s[8])
     return c
 end
 
@@ -263,6 +354,162 @@ function _lagrangian_relax!(LMn, MMn, ILM, IMM, LM, MM, U, V, W, dt, g, θ, memo
         end
         LMn[i,j,k] = max(ε * LM[i,j,k] + (1 - ε) * lm, zero(T))
         MMn[i,j,k] = ε * MM[i,j,k] + (1 - ε) * mm
+    end
+    return nothing
+end
+
+# -------------------------------------------------------------------------
+# The second test filter of the scale-dependent model (P54-e, #186)
+# -------------------------------------------------------------------------
+
+"""
+    _SecondTestFilter(mesh)
+
+Scratch storage of the second (wider) test filter of the scale-dependent
+Lagrangian model. The 21 Germano quantities of [`_germano_terms`](@ref)
+plus the fluid indicator (22 components, component first) are box-summed
+plane by plane: `Ap` (one shell plane), `Bp` (after the x pass), `C`
+(every plane after the y pass), `Ep` (one plane after the z pass); the
+interior-sized results are `QN` ``= Q^d_{ij}N_{ij}`` and `NN` ``=
+N_{ij}N_{ij}``.
+"""
+struct _SecondTestFilter{T}
+    Ap::Array{T,3}
+    Bp::Array{T,3}
+    C::Array{T,4}
+    Ep::Array{T,3}
+    QN::Array{T,3}
+    NN::Array{T,3}
+end
+
+function _SecondTestFilter(g::RegularGrid{T}) where {T}
+    Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
+    return _SecondTestFilter{T}(zeros(T, 22, Nx + 2, Ny + 2), zeros(T, 22, Nx, Ny + 2),
+                                zeros(T, 22, Nx, Ny, Nz + 2), zeros(T, 22, Nx, Ny),
+                                zeros(T, Nx, Ny, Nz), zeros(T, Nx, Ny, Nz))
+end
+
+# The shell indices of the 5-cell box around interior index i (shell index
+# l = interior index + 1; 0 = dropped). Periodic: the stencil wraps on the
+# interior. Bounded: it stays in the interior and the points beyond are
+# dropped (their weight and their fluid count both, so the result stays a
+# renormalised average); the halo cell of a free-slip wall carries the
+# mirrored, reversed shear, which the 5-cell box would otherwise reach two
+# cells from the wall.
+function _box5_stencil(N, per)
+    return [ntuple(m -> begin
+                       s = i + m - 3
+                       per ? mod1(s, N) + 1 : (1 <= s <= N ? s + 1 : 0)
+                   end, 5) for i in 1:N]
+end
+
+# dst[:, i, …] = Σ_s src[:, s, …] over the stencil of i, along the first
+# spatial dimension (`dim = 2`) or the second (`dim = 3`) of a plane.
+function _box5_plane_pass!(dst::AbstractArray{T,3}, src::AbstractArray{T,3}, st, dim) where {T}
+    D = size(dst, 1)
+    @inbounds if dim == 2
+        for c2 in axes(dst, 3), i in axes(dst, 2)
+            first = true
+            for s in st[i]
+                s == 0 && continue
+                if first
+                    @simd for c in 1:D; dst[c, i, c2] = src[c, s, c2]; end
+                    first = false
+                else
+                    @simd for c in 1:D; dst[c, i, c2] += src[c, s, c2]; end
+                end
+            end
+        end
+    else
+        for j in axes(dst, 3)
+            first = true
+            for s in st[j]
+                s == 0 && continue
+                for c1 in axes(dst, 2)
+                    if first
+                        @simd for c in 1:D; dst[c, c1, j] = src[c, c1, s]; end
+                    else
+                        @simd for c in 1:D; dst[c, c1, j] += src[c, c1, s]; end
+                    end
+                end
+                first = false
+            end
+        end
+    end
+    return dst
+end
+
+"""
+    _second_test_filter!(sf, ws, g, α2sq, cell, per)
+
+The Germano identity at the second test-filter scale of the
+scale-dependent model (Porté-Agel, Meneveau & Parlange 2000; Bou-Zeid,
+Meneveau & Parlange 2005): with ``\\hat{·}`` the 5 × 5 × 5 box average
+of cell-centred quantities,
+
+```math
+Q_{ij} = \\widehat{u_i u_j} - \\hat u_i \\hat u_j, \\qquad
+N_{ij} = 2Δ^2\\left(\\widehat{|S| S_{ij}} - α_2^2 |\\hat S| \\hat S_{ij}\\right),
+```
+
+and `sf.QN` ``= Q^d_{ij}N_{ij}``, `sf.NN` ``= N_{ij}N_{ij}`` at every
+interior cell, from the shell-indexed velocity and strain that
+[`_germano_identity!`](@ref) left in `ws` (call it first). The box is
+separable and summed in three passes; a 5-point box has second moment
+``2Δ^2``, so with the implicit grid filter its width is ``\\sqrt{Δ^2 +
+12·2Δ^2} = 5Δ`` (the convention that gives the first filter's ``α = 3``),
+`α2sq` ``= α_2^2 = 25``. In a periodic direction the box wraps; in a
+bounded one it stays in the interior and the points beyond are dropped
+(renormalised; unlike the 3-cell first filter, which reads the halo
+cell, the 5-cell box would reach the mirrored halo two cells from a
+free-slip wall). With a cell mask the box
+runs over fluid cells only and `QN = NN = 0` in solid cells.
+"""
+function _second_test_filter!(sf::_SecondTestFilter{T}, ws::DynamicSmagorinskyWorkspace{T},
+                              g, α2sq, cell, per) where {T}
+    Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
+    oH = (g.Hx - 1, g.Hy - 1, g.Hz - 1)             # shell → data index
+    stx = _box5_stencil(Nx, per[1]); sty = _box5_stencil(Ny, per[2])
+    stz = _box5_stencil(Nz, per[3])
+    Ap, Bp, C, Ep = sf.Ap, sf.Bp, sf.C, sf.Ep
+    # x and y passes, one shell plane at a time (the plane stays in cache)
+    @inbounds for c in 1:Nz+2
+        for b in 1:Ny+2, a in 1:Nx+2
+            fluid = cell === nothing || !cell[oH[1] + a, oH[2] + b, oH[3] + c]
+            t = _germano_terms(ws, a, b, c)
+            for q in 1:21
+                Ap[q, a, b] = fluid ? t[q] : zero(T)
+            end
+            Ap[22, a, b] = fluid ? one(T) : zero(T)
+        end
+        _box5_plane_pass!(Bp, Ap, stx, 2)
+        _box5_plane_pass!(view(C, :, :, :, c), Bp, sty, 3)
+    end
+    # z pass and the identity, one interior plane at a time
+    Δ2 = (g.dx * g.dy * g.dz)^(2/3)
+    D = 22
+    @inbounds for k in 1:Nz
+        first = true
+        for s in stz[k]
+            s == 0 && continue
+            for j in 1:Ny, i in 1:Nx
+                if first
+                    @simd for q in 1:D; Ep[q, i, j] = C[q, i, j, s]; end
+                else
+                    @simd for q in 1:D; Ep[q, i, j] += C[q, i, j, s]; end
+                end
+            end
+            first = false
+        end
+        for j in 1:Ny, i in 1:Nx
+            n = Ep[22, i, j]
+            if (cell !== nothing && cell[g.Hx + i, g.Hy + j, g.Hz + k]) || !(n > 0)
+                sf.QN[i,j,k] = zero(T); sf.NN[i,j,k] = zero(T)
+                continue
+            end
+            t = ntuple(q -> Ep[q, i, j], Val(21))
+            sf.QN[i,j,k], sf.NN[i,j,k] = _germano_LM_MM(t, one(T) / n, Δ2, α2sq)
+        end
     end
     return nothing
 end
