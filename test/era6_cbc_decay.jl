@@ -12,6 +12,8 @@
 #   dynamic           +1.3 %      −15.7 %       0.085 / 0.099           1.23 / 1.00
 #   Smagorinsky .17   +2.5 %      −14.2 %       0.088 / 0.097           1.27 / 1.08
 #   no model         +78.3 %     +121.1 %       0.216 / 0.316           5.25 / 10.4
+#   AMD (C = 0.3)     +9.9 %       −4.7 %       0.097 / 0.091           1.50 / 1.47   (P55-d, #176)
+#   Vreman (c=.0723)  +4.9 %      −12.7 %       0.094 / 0.104           1.38 / 1.22   (P55-d, #176)
 #
 # The proposed ±10 % on K(171)/K(42) is NOT met (≈ −15 %); the RMS
 # log-error at station 171 sits on the 0.1-decade target (0.099 for seeds
@@ -31,6 +33,12 @@
 # the ±10 % expectation (from spectral-code LES, Kang et al. 2003) does not
 # transfer to this set-up; the cause is not pinned down further here.
 # The target is kept below as @test_broken, the assertion is ±20 %.
+# AMD (#176) is the first closure that meets ±10 % at station 171
+# (−4.7 %), so for it the target is a plain @test; it does so with less
+# small-scale dissipation (E(k_c)/CBC 1.5 against 1.1–1.3), which is
+# consistent with ν_t = 0 in a quarter of the cells (where the resolved
+# strain does not produce subgrid energy) leaving more energy in the
+# large scales.
 
 using Test
 using Aeolus
@@ -57,11 +65,11 @@ include("cbc_benchmark_driver.jl")
     end
 
     res = Dict{Symbol,Any}()
-    t_total = @elapsed for c in (:dynamic, :smagorinsky, :none)
+    t_total = @elapsed for c in (:dynamic, :smagorinsky, :none, :amd, :vreman)
         res[c] = cbc_benchmark(c; N = 32)
         @info "  " * cbc_summary(String(c), res[c])
     end
-    @info @sprintf("  CBC 32³ (3 closures × 3 seeds): %.1f s", t_total)
+    @info @sprintf("  CBC 32³ (5 closures × 3 seeds): %.1f s", t_total)
 
     @testset "set-up: station-1 spectrum exact in every resolved shell" begin
         r = res[:dynamic]
@@ -73,11 +81,15 @@ include("cbc_benchmark_driver.jl")
         @test r.K_ratio_ref[2] > (urms[3] / urms[1])^2
     end
 
-    @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :smagorinsky)
+    @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :smagorinsky, :amd, :vreman)
         r = res[c]
         @test abs(r.K_err[1]) < 0.10                               # K(98)/K(42) within ±10 %
         @test abs(r.K_err[2]) < 0.20                               # K(171)/K(42): see header
-        @test_broken abs(r.K_err[2]) < 0.10                        # the proposed target
+        if c === :amd                                              # the proposed target:
+            @test abs(r.K_err[2]) < 0.10                           #   met by AMD (−4.7 %)
+        else
+            @test_broken abs(r.K_err[2]) < 0.10                    #   not by the others
+        end
         @test r.rms_log_err[1] <= 0.10
         @test r.rms_log_err[2] <= 0.11                             # 0.099 (seeds 1–3), 0.101 (1–6)
         @test r.E_kc_ratio[1] < 2 && r.E_kc_ratio[2] < 2           # no pile-up
