@@ -11,6 +11,7 @@ tested at are in
 [Smagorinsky-Lilly SGS → Closure contract](../theory/sgs.md#Closure-contract).
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
+- Lagrangian dynamic Smagorinsky (P54-b, #173; below) — `Aeolus.Operators`
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -51,4 +52,33 @@ Aeolus.Operators.DynamicSmagorinsky
 Aeolus.Operators.FunctionSGS
 Aeolus.Operators._velocity_gradient_at
 Aeolus.Operators._strain_at
+```
+
+## Lagrangian dynamic Smagorinsky (P54-b)
+
+The Germano identity averaged along pathlines (Meneveau, Lund & Cabot
+1996), a stateful closure on the contract above. It takes an optional
+solid mask, and the plane / local [`DynamicSmagorinsky`](@ref
+Aeolus.Operators.DynamicSmagorinsky) take the same one. Theory, tests and
+numbers:
+[Smagorinsky-Lilly SGS → Lagrangian dynamic averaging](../theory/sgs.md#Lagrangian-dynamic-averaging-(Meneveau,-Lund-and-Cabot-1996)).
+
+```julia
+using Aeolus
+g = RegularGrid(; size = (32, 32, 16), extent = (32.0, 32.0, 16.0), halo = (3, 3, 3))
+sm = SolidMask(g); mark_solid!(sm, (x, y, z) -> 12 < x < 20 && 12 < y < 20 && z < 6)
+sim = BoussinesqSimulation(g; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+lag = LagrangianDynamicSmagorinsky(g; mask = sm.mask)
+step!(sim, 0.05; sgs = lag)          # memory committed once per accepted step
+lag.workspace.cs2                    # the coefficient C_s² of the last call
+```
+
+```@docs
+Aeolus.Operators.LagrangianDynamicSmagorinsky
+Aeolus.Operators.advance_sgs!(::Aeolus.Operators.LagrangianDynamicSmagorinsky, ::Any, ::Any)
+Aeolus.Operators._germano_identity!
+Aeolus.Operators._lagrangian_relax!
+Aeolus.Operators._upstream
+Aeolus.Operators._SGSMask
+Aeolus.Operators._masked_velocities!
 ```
