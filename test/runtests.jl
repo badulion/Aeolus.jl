@@ -966,6 +966,16 @@ end
 end
 
 # =========================================================================
+# Era VI — high-fidelity turbulence closure (Phases 54-59)
+# =========================================================================
+# The SGS closure contract (P54-a, #167) is the era contract; later issues
+# append one include line each here.
+
+@testset "Era VI" begin
+    include("era6_sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
+end
+
+# =========================================================================
 # The Berlin (Alexanderplatz) flagship case — examples/urban/BerlinCase.jl
 
 @testset "Berlin case" begin
