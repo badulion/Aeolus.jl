@@ -131,4 +131,20 @@ end
     @test p.viscous[2] ≈ 1e-3 * (sum(u.data[ii, jj, 4]) - sum(u.data[ii, jj, 3])) / 120 / g.dz
 end
 
+@testset "step_rk3!: body_force! / post_predictor! hooks run in every substage" begin
+    g = RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0))
+    sim = BoussinesqSimulation(g)
+    Random.seed!(2)
+    ii, jj, kk = Aeolus.Grids.interior(g)
+    sim.u.data[ii, jj, kk] .= randn(8, 8, 8)
+    G = 0.37; dt = 1e-3; calls = Ref(0)
+    m0 = sum(sim.u.data[ii, jj, kk]) / 512
+    step_rk3!(sim, dt; body_force! = (s, h) -> (s.tu.data[ii, jj, kk] .+= G),
+              post_predictor! = (s, h) -> (calls[] += 1))
+    # each substage adds G·dt; the SSP-RK3 weights 1/6 + 1/6 + 2/3 sum to 1
+    @test abs(sum(sim.u.data[ii, jj, kk]) / 512 - m0 - G * dt) < 1e-14
+    @test calls[] == 3
+    @test sim.t ≈ dt
+end
+
 end # top testset
