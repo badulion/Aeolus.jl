@@ -26,6 +26,20 @@
 # `sgs_step_options`. The cores' default stays `:laplacian`; the flagship
 # opts in. νh = νv (the closures are isotropic) until P55-e (#187).
 #
+# The scalar (θ) SGS flux goes through the closure contract's diagonal
+# operator, add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv) (P55-c, #181), which
+# for these isotropic closures is the κh = κv case, bit for bit the
+# pre-P55-c run. Option `scalar_tensor = :isentropic` (every provider, via
+# `sgs_scalar_closure`) wraps the closure in Operators.IsentropicDiffusion:
+# the rotated Redi tensor of θ in the triad form of Griffies et al. (1998),
+# κh along the isentropes and κv = `diapycnal`·κh across them (the
+# closure's own κv = κh when `diapycnal = nothing`), tapered above
+# `slope_max` and isotropic where N² ≤ 0. It is option-only: the flagship is
+# a daytime convective case where the isentropic direction is ill-defined
+# (N² ≤ 0) over most of the domain, and the closures have no κv < κh of
+# their own until P55-e (#187). It lives in Operators (exempt), so no
+# coverage list changes.
+#
 # A new SGS provider goes in its own file, couplings/sgs_<name>.jl (the
 # couplings load in sorted order, after this file, which defines the slot).
 
@@ -41,6 +55,57 @@ sgs_step_options(closure, stress::Symbol) =
 
 "The option every `:sgs` provider takes: the form of the SGS momentum divergence."
 const SGS_STRESS_DEFAULT = (stress = :symmetric,)
+
+"""
+The scalar-flux options every `:sgs` provider takes (P55-c, #181):
+`scalar_tensor` (`:diagonal`, the contract's diagonal operator, or
+`:isentropic`, the rotated tensor of `Operators.IsentropicDiffusion`),
+and, for `:isentropic`, `diapycnal` (κv/κh across the isentropes;
+`nothing` = the closure's own κv) and `slope_max` (the taper slope).
+"""
+const SGS_SCALAR_DEFAULT = (scalar_tensor = :diagonal, diapycnal = nothing, slope_max = 1.0)
+
+"""
+    sgs_scalar_closure(closure, o, case) -> AbstractSGSClosure
+
+The closure a provider hands the dynamics for the scalar options `o`
+(`SGS_SCALAR_DEFAULT`): `closure` itself for `scalar_tensor =
+:diagonal`, or `IsentropicDiffusion(closure, case.mesh; slope_max,
+diapycnal)` for `:isentropic`.
+"""
+function sgs_scalar_closure(closure, o, case)
+    o.scalar_tensor === :diagonal && return closure
+    o.scalar_tensor === :isentropic ||
+        throw(ArgumentError("scalar_tensor must be :diagonal or :isentropic, got $(repr(o.scalar_tensor))"))
+    return IsentropicDiffusion(closure, case.mesh; slope_max = o.slope_max, diapycnal = o.diapycnal)
+end
+
+"""
+    isentropic_fraction(c::IsentropicDiffusion) -> Float64
+
+Fraction of the interior cells whose isentropic tensor is rotated
+(`K13² + K23² > 0`: stably stratified with a horizontal θ gradient, and not
+fully tapered), from the closure's last coefficients.
+"""
+function isentropic_fraction(c::IsentropicDiffusion)
+    a = interior_view(c.K.K13); b = interior_view(c.K.K23)
+    return count(i -> a[i]^2 + b[i]^2 > 0, eachindex(a)) / length(a)
+end
+
+# the scalar-tensor checks every provider adds to its smoke_check: every
+# cell's K is positive semi-definite (the down-gradient condition)
+function sgs_scalar_checks(closure, case)
+    closure isa IsentropicDiffusion || return Pair{String,Bool}[]
+    K = closure.K
+    v(f) = interior_view(f)
+    psd = all(i -> (k11 = v(K.K11)[i]; k22 = v(K.K22)[i]; k33 = v(K.K33)[i];
+                    k12 = v(K.K12)[i]; k13 = v(K.K13)[i]; k23 = v(K.K23)[i];
+                    tol = 1e-12 * max(k11, k22, k33, eps());
+                    k11 >= -tol && k22 >= -tol && k33 >= -tol &&
+                    k11 * k22 - k12^2 >= -tol^2 && k11 * k33 - k13^2 >= -tol^2 &&
+                    k22 * k33 - k23^2 >= -tol^2), eachindex(v(K.K11)))
+    return ["isentropic scalar tensor K positive semi-definite in every cell" => psd]
+end
 
 """
     sgs_dissipation(case) -> W kg⁻¹
@@ -82,23 +147,33 @@ built in, bit for bit — with the stress-form momentum divergence (option
 `stress = :symmetric`; `:laplacian` is the cores' built-in form). With
 `C_s = 0` there is no closure (no SGS terms), as before.
 """
-struct SGSSmagorinsky <: AbstractCoupling
+struct SGSSmagorinsky{C} <: AbstractCoupling
     stress::Symbol
+    closure::C                 # nothing when C_s = 0
 end
-coupling_name(::Type{SGSSmagorinsky}) = :sgs_smagorinsky
-slot(::Type{SGSSmagorinsky}) = :sgs
-provider(::Type{SGSSmagorinsky}) = :smagorinsky
-modules_used(::Type{SGSSmagorinsky}) = (:Simulations, :Operators)
-default_options(::Type{SGSSmagorinsky}) = SGS_STRESS_DEFAULT
-build(::Type{SGSSmagorinsky}, case, o) = SGSSmagorinsky(o.stress)
+coupling_name(::Type{<:SGSSmagorinsky}) = :sgs_smagorinsky
+slot(::Type{<:SGSSmagorinsky}) = :sgs
+provider(::Type{<:SGSSmagorinsky}) = :smagorinsky
+modules_used(::Type{<:SGSSmagorinsky}) = (:Simulations, :Operators)
+default_options(::Type{<:SGSSmagorinsky}) = (; SGS_STRESS_DEFAULT..., SGS_SCALAR_DEFAULT...)
+build(::Type{<:SGSSmagorinsky}, case, o) =
+    SGSSmagorinsky(o.stress, case.sim.C_s == 0 ? nothing :
+                             sgs_scalar_closure(StaticSmagorinsky(case.sim.C_s), o, case))
 step_options(c::SGSSmagorinsky, case) =
-    case.sim.C_s == 0 ? (;) : sgs_step_options(StaticSmagorinsky(case.sim.C_s), c.stress)
-smoke_variants(::Type{SGSSmagorinsky}) =
-    ((label = "SGS Laplacian form", options = Dict(:sgs_smagorinsky => (stress = :laplacian,))),)
+    c.closure === nothing ? (;) : sgs_step_options(c.closure, c.stress)
+smoke_variants(::Type{<:SGSSmagorinsky}) =
+    ((label = "SGS Laplacian form", options = Dict(:sgs_smagorinsky => (stress = :laplacian,))),
+     (label = "SGS isentropic scalar tensor",
+      options = Dict(:sgs_smagorinsky => (scalar_tensor = :isentropic, diapycnal = 0.1))))
 smoke_check(c::SGSSmagorinsky, case) =
     ["ν_t ≥ 0" => minimum(interior_view(case.sim.νt)) >= 0,
      "ν_t > 0 where the flow is strained" => core_max_νt(case.sim) > 0,
-     sgs_stress_checks(c.stress, case)...]
+     sgs_stress_checks(c.stress, case)..., sgs_scalar_checks(c.closure, case)...]
+function report(c::SGSSmagorinsky, case)
+    c.closure isa IsentropicDiffusion || return nothing
+    return @sprintf("isentropic SGS scalar tensor: %.1f %% of the cells rotated",
+                    100 * isentropic_fraction(c.closure))
+end
 # the built-in closure of either core (the sound-proof cores, #133, have no max_νt)
 core_max_νt(sim::BoussinesqSimulation) = Aeolus.Simulations.max_νt(sim)
 core_max_νt(sim) = maximum(interior_view(sim.νt))
@@ -126,11 +201,13 @@ provider(::Type{<:SGSDynamic}) = :dynamic
 is_default(::Type{<:SGSDynamic}) = false
 modules_used(::Type{<:SGSDynamic}) = (:Operators,)
 default_options(::Type{<:SGSDynamic}) =
-    (averaging = :plane, filter_ratio = 3.0, cs_max = 0.5, SGS_STRESS_DEFAULT...)
+    (averaging = :plane, filter_ratio = 3.0, cs_max = 0.5, SGS_STRESS_DEFAULT...,
+     SGS_SCALAR_DEFAULT...)
 function build(::Type{<:SGSDynamic}, case, o)
     ws = DynamicSmagorinskyWorkspace(case.mesh)
     opts = (averaging = o.averaging, filter_ratio = o.filter_ratio, cs_max = o.cs_max)
-    return SGSDynamic(ws, opts, DynamicSmagorinsky(ws; opts...), o.stress)
+    return SGSDynamic(ws, opts, sgs_scalar_closure(DynamicSmagorinsky(ws; opts...), o, case),
+                      o.stress)
 end
 
 step_options(c::SGSDynamic, case) = sgs_step_options(c.closure, c.stress)
@@ -160,7 +237,7 @@ smoke_check(c::SGSDynamic, case) =
     ["dynamic C_s² within the clip [0, cs_max²]" =>
          all(x -> 0 <= x <= c.opts.cs_max^2, c.ws.cs2),
      "ν_t ≥ 0 (no backscatter)" => minimum(interior_view(case.sim.νt)) >= 0,
-     sgs_stress_checks(c.stress, case)...]
+     sgs_stress_checks(c.stress, case)..., sgs_scalar_checks(c.closure, case)...]
 
 """
     SGSMLSGS
@@ -171,24 +248,26 @@ Option `fn` (`fn(νt, u, v, w, mesh)`); `nothing` (default) means the
 Smagorinsky closure with `cfg.C_s`, which reproduces the default run bit
 for bit. Option `stress = :symmetric` (as for `SGSSmagorinsky`).
 """
-struct SGSMLSGS{M} <: AbstractCoupling
+struct SGSMLSGS{M, C} <: AbstractCoupling
     ml::M
     C_s::Float64
     stress::Symbol
+    closure::C                 # ml, or ml wrapped for scalar_tensor = :isentropic
 end
 coupling_name(::Type{<:SGSMLSGS}) = :sgs_mlsgs
 slot(::Type{<:SGSMLSGS}) = :sgs
 provider(::Type{<:SGSMLSGS}) = :mlsgs
 is_default(::Type{<:SGSMLSGS}) = false
 modules_used(::Type{<:SGSMLSGS}) = (:ML,)
-default_options(::Type{<:SGSMLSGS}) = (fn = nothing, SGS_STRESS_DEFAULT...)
+default_options(::Type{<:SGSMLSGS}) = (fn = nothing, SGS_STRESS_DEFAULT..., SGS_SCALAR_DEFAULT...)
 function build(::Type{<:SGSMLSGS}, case, o)
     C_s = case.cfg.C_s
     fn = o.fn === nothing ? ((νt, u, v, w, m) -> compute_smagorinsky_νt!(νt, u, v, w, C_s)) : o.fn
-    return SGSMLSGS(MLSGS(fn), C_s, o.stress)
+    ml = MLSGS(fn)
+    return SGSMLSGS(ml, C_s, o.stress, sgs_scalar_closure(ml, o, case))
 end
 
-step_options(c::SGSMLSGS, case) = sgs_step_options(c.ml, c.stress)
+step_options(c::SGSMLSGS, case) = sgs_step_options(c.closure, c.stress)
 
 function smoke_check(c::SGSMLSGS, case)
     sim = case.sim
@@ -202,7 +281,7 @@ function smoke_check(c::SGSMLSGS, case)
     return ["MLSGS ν_t ≥ 0" => minimum(interior_view(sim.νt)) >= 0,
             "default MLSGS(Smagorinsky) ν_t == the built-in ν_t (bitwise)" =>
                 c.ml.fn isa Function && interior_view(a) == interior_view(b),
-            sgs_stress_checks(c.stress, case)...]
+            sgs_stress_checks(c.stress, case)..., sgs_scalar_checks(c.closure, case)...]
 end
 
 register!(SGSSmagorinsky)
