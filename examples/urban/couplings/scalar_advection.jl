@@ -130,7 +130,7 @@ function TracerSGSDiffusion(case)
     sim = case.sim
     w = sim isa Aeolus.Anelastic.MassWeightedSimulation ?
         Aeolus.Anelastic.constraint_weights(sim) : nothing
-    return TracerSGSDiffusion(Field(CellCenter(), mesh), mf.data .> 0.5, w, bcs,
+    return TracerSGSDiffusion(Field(CellCenter(), mesh), Array{Bool}(mf.data .> 0.5), w, bcs,
                               Ref(0.0), Ref(0.0), Ref(0.0))
 end
 
