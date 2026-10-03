@@ -4,10 +4,14 @@
 # Physics asserted: Spalding's law and its inversion (round trip, the
 # viscous and logarithmic limits), the delegation of the rough laws to
 # SurfaceExchange (κ, ψ_m, the surface-layer solver bit for bit), the
-# viscous limit against the resolved cut-cell stress.
+# viscous limit against the resolved cut-cell stress; the operator's
+# momentum budget (the momentum removed is the wall stress at the
+# end-of-step velocity times area and Δt) and its unconditional
+# stability, and the three formulations.
 
 using Test
 using Printf
+using Random
 using Aeolus
 using Aeolus.WallModels
 using Aeolus.SurfaceExchange: BusingerDyerBeljaarsHoltslag, solve_surface_layer, von_karman
@@ -154,6 +158,173 @@ end
     # and the drag coefficient's U → 0 limit is ν/h
     @test wall_drag(law, 0.0, 0.01; ν = ν) == ν / 0.01
     @test wall_drag(law, 1e-9, 0.01; ν = ν) ≈ ν / 0.01 rtol = 1e-9
+end
+
+
+# -------------------------------------------------------------------------
+# The operator
+# -------------------------------------------------------------------------
+
+# A small channel: periodic in x, y, free-slip (ImpermeableWall) z-walls.
+function wall_sim(; N = (8, 6, 5), extent = (8.0, 6.0, 2.5))
+    g = RegularGrid(; size = N, extent = extent, halo = (2, 2, 2))
+    return BoussinesqSimulation(g; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+end
+
+function fill_random!(sim; seed = 1)
+    rng = Random.MersenneTwister(seed)
+    for f in (sim.u, sim.v, sim.w)
+        iv = Aeolus.Fields.interior_view(f)
+        iv .= 2 .+ randn(rng, size(iv))
+    end
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+    return sim
+end
+
+# The expected stress per face, computed independently of the operator:
+# column speeds from the start-of-step velocity, the law's drag per
+# column, the mean of the two columns' drags on each face, times the
+# END-of-step face velocity (the implicit stress).
+function expected_impulse(sim0, sim1, law, Δt, k; ν = 1.5e-5)
+    g = sim0.mesh
+    Nx, Ny, dz = g.Nx, g.Ny, g.dz
+    u0, v0 = Aeolus.Fields.interior_view(sim0.u), Aeolus.Fields.interior_view(sim0.v)
+    u1, v1 = Aeolus.Fields.interior_view(sim1.u), Aeolus.Fields.interior_view(sim1.v)
+    D = [wall_drag(law, hypot((u0[i, j, k] + u0[mod1(i + 1, Nx), j, k]) / 2,
+                              (v0[i, j, k] + v0[i, mod1(j + 1, Ny), k]) / 2), dz / 2; ν = ν)
+         for i in 1:Nx, j in 1:Ny]
+    dA = g.dx * g.dy
+    Ix = sum((D[i, j] + D[mod1(i - 1, Nx), j]) / 2 * u1[i, j, k] for i in 1:Nx, j in 1:Ny) * dA * Δt
+    Iy = sum((D[i, j] + D[i, mod1(j - 1, Ny)]) / 2 * v1[i, j, k] for i in 1:Nx, j in 1:Ny) * dA * Δt
+    return Ix, Iy
+end
+
+@testset "Operator: momentum removed = Σ τ_w ΔA Δt with the end-of-step velocity" begin
+    for (law, name) in ((SpaldingLaw(), "Spalding"), (RoughLogLaw(0.01), "rough log"),
+                        (MOSTWallLaw(0.01, 50.0), "MOST stable"))
+        for side in (:bottom, :top, :both)
+            sim = fill_random!(wall_sim())
+            g = sim.mesh
+            ref = deepcopy(sim)
+            wm = WallModel(law; ν = 1.5e-5)
+            Δt = 0.7
+            F = apply_wall_stress!(sim, wm, Δt; side = side)
+            dV = g.dx * g.dy * g.dz
+            u0, u1 = Aeolus.Fields.interior_view(ref.u), Aeolus.Fields.interior_view(sim.u)
+            v0, v1 = Aeolus.Fields.interior_view(ref.v), Aeolus.Fields.interior_view(sim.v)
+            ΔMx = sum(u1 .- u0) * dV
+            ΔMy = sum(v1 .- v0) * dV
+            levels = side === :both ? (1, g.Nz) : side === :bottom ? (1,) : (g.Nz,)
+            Ix = sum(expected_impulse(ref, sim, law, Δt, k)[1] for k in levels)
+            Iy = sum(expected_impulse(ref, sim, law, Δt, k)[2] for k in levels)
+            ex = abs(ΔMx + Ix) / abs(Ix); ey = abs(ΔMy + Iy) / abs(Iy)
+            side === :both && @info @sprintf("  %-11s Δ momentum vs −Σ τ_w ΔA Δt: rel %.1e, %.1e", name, ex, ey)
+            @test ex < 1e-12 && ey < 1e-12
+            @test F.Fx * Δt ≈ ΔMx rtol = 1e-12
+            @test F.Fy * Δt ≈ ΔMy rtol = 1e-12
+            # w and every level without a wall are untouched, bit for bit
+            @test Aeolus.Fields.interior_view(sim.w) == Aeolus.Fields.interior_view(ref.w)
+            inner = setdiff(1:g.Nz, levels)
+            @test u1[:, :, inner] == u0[:, :, inner] && v1[:, :, inner] == v0[:, :, inner]
+            @test all(abs.(u1[:, :, collect(levels)]) .< abs.(u0[:, :, collect(levels)]))
+        end
+    end
+end
+
+@testset "Operator: implicit, stable at 100× the explicit limit" begin
+    for law in (RoughLogLaw(0.05), SpaldingLaw())
+        sim = wall_sim()
+        g = sim.mesh
+        u = Aeolus.Fields.interior_view(sim.u); v = Aeolus.Fields.interior_view(sim.v)
+        u .= 3.0; v .= -1.0
+        U0 = hypot(3.0, 1.0)
+        ν = law isa SpaldingLaw ? 1e-2 : 1.5e-5
+        wm = WallModel(law; ν = ν)
+        # explicit Euler u ← u (1 − Δt D/Δz) is stable for Δt D/Δz < 2 and
+        # changes sign beyond Δt D/Δz = 1
+        Δt_exp = g.dz / wall_drag(law, U0, g.dz / 2; ν = ν)
+        Δt = 100 * Δt_exp
+        @test 1 - Δt * wall_drag(law, U0, g.dz / 2; ν = ν) / g.dz < -1    # explicit: unstable
+        us, vs = [3.0], [-1.0]
+        for n in 1:40
+            apply_wall_stress!(sim, wm, Δt)
+            push!(us, u[1, 1, 1]); push!(vs, v[1, 1, 1])
+            @test all(==(u[1, 1, 1]), u[:, :, 1]) && all(==(3.0), u[:, :, 2:end])
+        end
+        @info @sprintf("  %s, Δt = 100 Δt_explicit = %.3g s: u_1 %.3f → %.3e after 40 steps (monotone, no sign change)",
+                       nameof(typeof(law)), Δt, us[1], us[end])
+        @test all(diff(us) .< 0) && all(>(0), us)
+        @test all(diff(vs) .> 0) && all(<(0), vs)
+        # the direction of the stress is the wind's: u/v keeps its ratio
+        @test all(i -> us[i] / vs[i] ≈ -3.0, eachindex(us))
+    end
+end
+
+@testset "Operator: formulations, masks, held wind" begin
+    law = RoughLogLaw(0.02)
+    h = 2.5 / 5 / 2
+    # uniform wind: the three formulations coincide
+    outs = map((:local, :schumann, :moeng)) do form
+        sim = wall_sim()
+        Aeolus.Fields.interior_view(sim.u) .= 2.0
+        Aeolus.Fields.interior_view(sim.v) .= 1.0
+        us = zeros(8, 6)
+        apply_wall_stress!(sim, law, 0.5; formulation = form, ustar = us)
+        (copy(Aeolus.Fields.interior_view(sim.u)[:, :, 1]), us)
+    end
+    @test outs[2][1] ≈ outs[1][1] rtol = 1e-14
+    @test outs[3][1] ≈ outs[1][1] rtol = 1e-14
+    @test all(≈(friction_velocity(law, hypot(2.0, 1.0), h)), outs[1][2])
+    # Schumann: one drag for the plane, from the plane-mean speed; Moeng:
+    # the plane-mean stress is ⟨τ_w⟩ along the mean wind (small Δt, so the
+    # implicit factor is 1 to 1e-8)
+    sim = fill_random!(wall_sim(); seed = 3)
+    u0 = copy(Aeolus.Fields.interior_view(sim.u)[:, :, 1])
+    v0 = copy(Aeolus.Fields.interior_view(sim.v)[:, :, 1])
+    Uc = [hypot((u0[i, j] + u0[mod1(i + 1, 8), j]) / 2, (v0[i, j] + v0[i, mod1(j + 1, 6)]) / 2)
+          for i in 1:8, j in 1:6]
+    Ubar = sum(Uc) / length(Uc)
+    s2 = deepcopy(sim)
+    apply_wall_stress!(s2, law, 1e-6; formulation = :schumann)
+    D = wall_drag(law, Ubar, h)
+    @test Aeolus.Fields.interior_view(s2.u)[:, :, 1] ≈ u0 ./ (1 + 1e-6 * D / 0.5) rtol = 1e-14
+    Δt = 1e-6
+    F = apply_wall_stress!(sim, law, Δt; formulation = :moeng)
+    ub, vb = sum(u0) / length(u0), sum(v0) / length(v0)
+    τm = wall_stress(law, Ubar, h)
+    A = 8.0 * 6.0
+    @test -F.Fx / A ≈ τm * ub / hypot(ub, vb) rtol = 1e-6
+    @test -F.Fy / A ≈ τm * vb / hypot(ub, vb) rtol = 1e-6
+    # a Bool mask: only masked columns' faces change; half the drag on a face
+    # with one walled neighbour
+    sim = wall_sim()
+    Aeolus.Fields.interior_view(sim.u) .= 2.0; Aeolus.Fields.interior_view(sim.v) .= 0.0
+    m = falses(8, 6); m[3:4, 2] .= true
+    apply_wall_stress!(sim, law, 0.5; mask = m)
+    u = Aeolus.Fields.interior_view(sim.u)
+    a = wall_drag(law, 2.0, h)
+    @test u[4, 2, 1] ≈ 2 / (1 + 0.5 * a / 0.5) rtol = 1e-14            # both sides walled
+    @test u[3, 2, 1] ≈ 2 / (1 + 0.5 * (a / 2) / 0.5) rtol = 1e-14      # one side
+    @test u[5, 2, 1] ≈ 2 / (1 + 0.5 * (a / 2) / 0.5) rtol = 1e-14
+    @test count(!=(2.0), u) == 3
+    # a level mask (an immersed floor): the wall acts at each column's level
+    sim = wall_sim()
+    Aeolus.Fields.interior_view(sim.u) .= 2.0; Aeolus.Fields.interior_view(sim.v) .= 0.0
+    lv = ones(Int, 8, 6); lv[5:8, :] .= 3; lv[1, 1] = 99           # 99: no wall
+    us, Uo = zeros(8, 6), zeros(8, 6)
+    apply_wall_stress!(sim, law, 0.5; mask = lv, ustar = us, wind_out = Uo)
+    u = Aeolus.Fields.interior_view(sim.u)
+    @test u[6, 3, 3] < 2 && u[6, 3, 1] == 2 && u[2, 3, 1] < 2 && u[2, 3, 3] == 2
+    @test u[5, 3, 1] < 2 && u[5, 3, 3] < 2                          # shared face, two levels
+    @test us[1, 1] == 0 && all(us[I] > 0 for I in CartesianIndices(us) if I != CartesianIndex(1, 1))
+    @test Uo[2, 2] == 2.0
+    # a held wind: the law at that speed, the direction of the resolved one
+    sim = wall_sim()
+    Aeolus.Fields.interior_view(sim.u) .= 2.0; Aeolus.Fields.interior_view(sim.v) .= 0.0
+    apply_wall_stress!(sim, law, 0.5; wind = fill(5.0, 8, 6))
+    @test Aeolus.Fields.interior_view(sim.u)[1, 1, 1] ≈ 2 / (1 + 0.5 * wall_drag(law, 5.0, h) / 0.5) rtol = 1e-14
+    @test_throws ArgumentError apply_wall_stress!(sim, law, 0.5; formulation = :bogus)
+    @test_throws ArgumentError apply_wall_stress!(sim, law, 0.5; side = :top, mask = lv)
 end
 
 end

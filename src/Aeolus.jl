@@ -906,6 +906,7 @@ export effective_roughness, effective_scalar_roughness,
 # (CutCell, the resolved stress).
 export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
        friction_velocity, wall_stress, wall_drag,
-       spalding_yplus, spalding_uplus, matching_obukhov_length
+       spalding_yplus, spalding_uplus, matching_obukhov_length,
+       WallModel, apply_wall_stress!
 
 end # module

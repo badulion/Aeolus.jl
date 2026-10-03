@@ -56,5 +56,6 @@ using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltsla
 # Each file exports its own names, so a later phase adds a file and an
 # include line here and nothing else.
 include("wall_models/laws.jl")
+include("wall_models/operator.jl")
 
 end # module
