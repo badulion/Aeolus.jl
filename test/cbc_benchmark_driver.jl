@@ -103,14 +103,17 @@ end
 _cbc_closure(::Nothing, mesh) = ((;), (;))
 _cbc_closure(C_s::Real, mesh) = ((C_s = C_s,), (;))
 _cbc_closure(f::Function, mesh) = ((;), (eddy_viscosity! = f,))
+_cbc_closure(c::AbstractSGSClosure, mesh) = ((;), (sgs = c,))   # any Era VI closure (#167)
 function _cbc_closure(s::Symbol, mesh)
     s === :none && return _cbc_closure(nothing, mesh)
     s === :smagorinsky && return _cbc_closure(0.17, mesh)
+    s === :sigma && return _cbc_closure(SigmaModel(1.35), mesh)      # P59-b (#184)
     if s === :dynamic
         ws = DynamicSmagorinskyWorkspace(mesh)
         return _cbc_closure((νt, u, v, w) -> compute_dynamic_smagorinsky_νt!(νt, u, v, w; workspace = ws), mesh)
     end
-    throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, a C_s, or f(νt, u, v, w)"))
+    throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, :sigma, a C_s, " *
+                        "an AbstractSGSClosure, or f(νt, u, v, w)"))
 end
 
 """
@@ -121,6 +124,8 @@ Run the Comte-Bellot–Corrsin decay at N³ with `closure`:
 * `:none` / `nothing` — no SGS model (molecular ν only);
 * `:smagorinsky` or a number `C_s` — the built-in static Smagorinsky;
 * `:dynamic` — plane-averaged dynamic Smagorinsky (Germano–Lilly);
+* `:sigma` — the σ-model, `SigmaModel(1.35)` (Nicoud et al. 2011; #184);
+* any `AbstractSGSClosure` — passed as `step!`'s `sgs`;
 * a function `f(νt, u, v, w)` — any closure accepted by `step!`'s
   `eddy_viscosity!`.
 
