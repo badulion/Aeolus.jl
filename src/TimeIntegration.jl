@@ -48,6 +48,7 @@ using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence
 using ..TimeSteppers: step!
+using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 
 export CFLConstraints, cfl_diagnostics, adaptive_dt,
        SubsteppingSchedule, substeps_for,
@@ -158,15 +159,15 @@ function _max_advective_rate(ud, vd, wd, m::RegularGrid{T}) where {T}
     return r
 end
 
-# Brunt-Väisälä frequency from the horizontal-mean (resolved) θ profile.
-# Allocation-free: carries the previous level's mean in a scalar.
+# Brunt-Väisälä frequency from the horizontal-mean (resolved) θ profile:
+# the largest N² across the faces between the plane means, from the
+# TurbulenceStability contract (Boussinesq form, g/θ₀). Allocation-free:
+# carries the previous level's mean in a scalar.
 function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
     sim.has_buoyancy || return zero(T)
     m = sim.mesh
     ii, jj, kk = interior(m)
     n_h = length(ii) * length(jj)
-    invdz = 1 / m.dz
-    coef  = sim.g_accel / sim.θ₀
     N²max = zero(T)
     prev  = zero(T)
     d = sim.θ.data
@@ -177,7 +178,8 @@ function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
         end
         mean_k = s / n_h
         if kc > 1
-            N²max = max(N²max, coef * (mean_k - prev) * invdz)
+            N²max = max(N²max, buoyancy_frequency_squared(prev, mean_k, m.dz,
+                                                          sim.g_accel, sim.θ₀))
         end
         prev = mean_k
     end

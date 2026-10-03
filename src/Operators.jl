@@ -5,6 +5,8 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Locat
 using ..Fields
 using ..Fields: Field, mesh
 using ..BoundaryConditions: BoundaryConditions, fill_halos!, Periodic, FieldBoundaryConditions
+using ..Grids: interior
+using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
@@ -30,6 +32,7 @@ export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
 export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
        sgs_scalar_tensor, IsentropicDiffusion
+export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -507,5 +510,8 @@ include("operators/sgs_stress.jl")
 # Era VI: the tensorial scalar eddy diffusivity (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/scalar_tensor.jl")
+
+# Pointwise N² and Ri_g (Era VI, P58-a).
+include("operators/stratification.jl")
 
 end # module
