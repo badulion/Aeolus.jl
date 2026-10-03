@@ -522,7 +522,7 @@ struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, SF, Q, CT, WS, AS} <: Abst
     snapstats::Vector{T}
 end
 
-const _NRSTATS = 11
+const _NRSTATS = 12
 
 function ReynoldsStressClosure(g::RegularGrid{T}; τ = nothing, e0::Real = 0,
                                C1::Real = 1.8, C2::Real = 0.6, C3::Real = 0.5, C_θ = :tke,
@@ -882,7 +882,7 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     E = _Edges(c.mask, bounded_directions(sim.bcs), g)
     C1, C2, C3 = c.C1, c.C2, c.C3
     sP = zero(T); sB = zero(T); sε = zero(T); sT = zero(T)
-    nclip = zero(T); eclip = zero(T); nsplit = 0
+    nclip = zero(T); eclip = zero(T); nsplit = 0; nin = 0
     @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
         I, J, K = Hx + i, Hy + j, Hz + k
         if _solid(c.mask, I, J, K)
@@ -900,6 +900,7 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
             τs = ntuple(m -> τn[m] + Δt * tr[m], Val(6))
         end
         rot && (τs = rotate_stress(τs, R))
+        is_realizable(τs) || (nin += 1)
         Gc = _dual_gradient(ud, vd, wd, I, J, K, idx, idy, idz, E)
         dθ = _θv_gradient(θd, qd, I, J, K, idx, idy, idz)
         if e > 0
@@ -935,6 +936,7 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     st[8] = nclip
     st[9] = eclip
     st[10] = nsplit
+    st[12] = nin
     return c
 end
 
@@ -972,13 +974,18 @@ the volume integrals of the last step (m⁵ s⁻³, at ``τ^{n+1}``): `shear`
 (``Σ ε V``, the rate the implicit step applied), `transport`; `steps`;
 `surface_energy` (the SGS energy setting the surface value added, m⁵ s⁻²,
 cumulative); `step_split_cells` (cells of the last step whose source update
-was sub-stepped, see [`reynolds_stress_step`](@ref)).
+was sub-stepped, see [`reynolds_stress_step`](@ref));
+`step_unrealizable_input` (cells of the last step whose stresses were
+already unrealizable before the source update — after the transport,
+whether the closure's own or a driver's — the share of `step_clips` the
+transport causes).
 """
 reynolds_stress_statistics(c::ReynoldsStressClosure) =
     (clips = Int(c.stats[1]), clipped_energy = c.stats[2], shear = c.stats[3],
      buoyancy = c.stats[4], dissipation = c.stats[5], transport = c.stats[6],
      steps = Int(c.stats[7]), step_clips = Int(c.stats[8]), step_clipped_energy = c.stats[9],
-     surface_energy = c.stats[11], step_split_cells = Int(c.stats[10]))
+     surface_energy = c.stats[11], step_split_cells = Int(c.stats[10]),
+     step_unrealizable_input = Int(c.stats[12]))
 
 """
     reynolds_stress_budget(c::ReynoldsStressClosure, sim) -> NamedTuple
