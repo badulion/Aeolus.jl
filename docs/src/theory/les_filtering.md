@@ -86,6 +86,61 @@ common starting value; for engineering `Prₜ ≈ 0.7 – 1` is typical.
 
 See the [Smagorinsky-Lilly](sgs.md) page for the discrete implementation.
 
+## Explicit filters and spectra
+
+The LES filter above is implicit: the grid and the discrete operators
+decide what "resolved" means. Analysis, the dynamic procedure and
+filtered-DNS comparisons need *explicit* filters and a spectrum, which
+`Aeolus.Operators` provides (Phase 54; API in
+[Operators](../api/operators.md#LES-analysis-toolbox-(Phase-54))).
+
+**Box (top-hat) filter.** [`box_filter!`](@ref Aeolus.Operators.box_filter!)
+averages over ``n`` cells per direction (``n`` odd). On a Fourier mode
+``e^{ikx}`` the three-point box acts as
+
+```math
+\hat G_{\text{box}}(k) = \frac{1 + 2\cos kΔ}{3},
+```
+
+and its second moment ``(n^2-1)Δ^2/12`` is what sets the test-to-grid
+width ratio of the dynamic model (``\sqrt{1 + 12 \cdot 2/3} = 3`` for
+``n = 3``, see [the SGS page](sgs.md)). It is the dynamic model's test
+filter: `compute_dynamic_smagorinsky_νt!` sums the same stencil, so the
+two cannot drift (the refactor is bit for bit). With a solid mask the
+average runs over fluid neighbours only and is renormalised by their
+number, so values inside buildings never leak into the filtered field;
+[`staggered_solid_mask`](@ref Aeolus.Operators.staggered_solid_mask)
+builds the face masks (a face is solid if either cell is).
+
+**Gaussian and sharp spectral filters** (periodic, FFTW). The Gaussian of
+width ``Δ`` has ``\hat G = \exp(-k^2Δ^2/24)``, the same second moment as
+a top hat of width ``Δ`` (Pope 2000, §13.2). The sharp cut-off keeps
+``|\mathbf k| ≤ k_c`` and is a projection (idempotent).
+
+**Energy spectrum.** [`isotropic_energy_spectrum`](@ref Aeolus.Operators.isotropic_energy_spectrum)
+interpolates the staggered velocity to cell centres, Fourier transforms
+it and sums ``\tfrac12|\hat{\mathbf u}|^2`` over shells of unit width
+``Δk = 2π/L``, normalised so that ``\sum E Δk = \tfrac12⟨u_iu_i⟩``
+exactly (Parseval; shell 0 is the mean flow).
+
+**Initial fields.** [`isotropic_random_field!`](@ref Aeolus.Operators.isotropic_random_field!)
+draws random phases and projects each mode so that the *discrete* C-grid
+divergence vanishes. With face amplitudes ``a_j`` the centre average has
+amplitude ``\hat c_j = a_j e^{ik_jΔ_j/2}\cos(k_jΔ_j/2)`` and the
+divergence is ``2i\sum_j \hat c_j \tan(k_jΔ_j/2)/Δ_j``, so ``\hat c`` is
+projected normal to ``\tan(k_jΔ_j/2)/Δ_j`` (the continuous projection
+normal to ``\mathbf k`` is recovered as ``kΔ → 0``). Each shell is then
+scaled to hold exactly ``E(k)Δk``: the field is divergence-free to
+``10^{-15}`` of its gradients and its spectrum equals the request to
+round-off. A random-phase field has the right spectrum but no energy
+transfer; [`rescale_to_spectrum!`](@ref Aeolus.Operators.rescale_to_spectrum!)
+supports the usual "evolve, then rescale the shells back" preparation
+(Rogallo 1981), which keeps the phases a run has built.
+
+The benchmark built on these tools — decaying grid turbulence of
+Comte-Bellot & Corrsin (1971) — is described on the
+[SGS page](sgs.md#Decaying-grid-turbulence-(Comte-Bellot-and-Corrsin)).
+
 ## What LES buys us — and what it doesn't
 
 **Buys us:** the ability to run turbulence at meteorological Reynolds
@@ -110,4 +165,7 @@ Aeolus has them in `Aeolus.WallModels` (Phase 57; see
     in numerical simulation experiments*, IBM Sci. Comp. Symp.
   * Sagaut, P. (2006), *Large Eddy Simulation for Incompressible Flows*,
     ch. 4 (SGS models).
-  * Pope, S. B. (2000), *Turbulent Flows*, ch. 13.
+  * Pope, S. B. (2000), *Turbulent Flows*, ch. 6 (spectra) and 13
+    (filters).
+  * Rogallo, R. S. (1981), *Numerical experiments in homogeneous
+    turbulence*, NASA TM 81315.

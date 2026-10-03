@@ -65,3 +65,20 @@ Aeolus.Operators.advect_weno5!
 Aeolus.Operators.add_surface_flux!
 Aeolus.Operators.add_sponge!
 ```
+
+## LES analysis toolbox (Phase 54)
+
+Explicit filters, the isotropic energy spectrum and the isotropic
+random-field initialiser (see [LES filtering & closure](../theory/les_filtering.md#Explicit-filters-and-spectra)).
+The box filter is the test filter of the dynamic Smagorinsky model; the
+Fourier tools treat the interior as triply periodic.
+
+```@docs
+Aeolus.Operators.box_filter!
+Aeolus.Operators.staggered_solid_mask
+Aeolus.Operators.gaussian_filter!
+Aeolus.Operators.spectral_cutoff_filter!
+Aeolus.Operators.isotropic_energy_spectrum
+Aeolus.Operators.isotropic_random_field!
+Aeolus.Operators.rescale_to_spectrum!
+```
