@@ -253,6 +253,27 @@ function stress_anisotropy(τ)
     return b, II, III
 end
 
+"""
+    reynolds_stress_shear_equilibrium(; C1 = 1.8, C2 = 0.6) -> (a11, a22, a13)
+
+The LRR-IP equilibrium of a homogeneous shear ``∂u_1/∂x_3`` at production
+= dissipation (the equilibrium of the SGS closure, whose ``ε/e`` grows
+with ``e``): ``τ_{11}/e = a11``, ``τ_{22}/e = τ_{33}/e = a22`` and
+``−τ_{13}/e = a13``, from ``P_{ij} + Φ_{ij} = \\tfrac23 εδ_{ij}`` with
+``P = ε``:
+
+``a22 = \\tfrac23 − \\tfrac23(1 − C_2)/C_1``,
+``a11 = \\tfrac23 + (2(1 − C_2) + \\tfrac23 C_2 − \\tfrac23)/C_1``,
+``a13 = \\sqrt{(1 − C_2) a22/C_1}`` — 0.962963, 0.518519, 0.339450 for
+the LRR-IP constants. The surface value of [`ReynoldsStressClosure`](@ref)
+uses it.
+"""
+function reynolds_stress_shear_equilibrium(; C1 = 1.8, C2 = 0.6)
+    a22 = 2 / 3 - (2 / 3) * (1 - C2) / C1
+    a11 = 2 / 3 + (2 * (1 - C2) + (2 / 3) * C2 - 2 / 3) / C1
+    return a11, a22, sqrt((1 - C2) * a22 / C1)
+end
+
 # -------------------------------------------------------------------------
 # The grid: edge stresses and their dual velocity gradient
 # -------------------------------------------------------------------------
@@ -402,8 +423,8 @@ end
                           C3 = 0.5, C_θ = :tke, c_k = 0.1, c_ε0 = 0.19, c_ε1 = 0.51,
                           c_l = 0.76, κ = 0.4, surface_factor = 3.9, Ω = :auto,
                           wall_distance = nothing, first_level = nothing, mask = nothing,
-                          θ₀ = nothing, g_accel = nothing, qv = :auto, transport = true,
-                          advection = :auto)
+                          surface = nothing, θ₀ = nothing, g_accel = nothing, qv = :auto,
+                          transport = true, advection = :auto)
 
 A differential subgrid-scale Reynolds-stress closure (Deardorff 1973):
 six prognostic cell-centred stresses ``τ_{ij}`` (m² s⁻²) with
@@ -443,6 +464,14 @@ six prognostic cell-centred stresses ``τ_{ij}`` (m² s⁻²) with
 
 `Ω` is the rotation vector (rad s⁻¹): `:auto` takes ``(0, 0, f/2)`` from a
 simulation with Coriolis (the f-plane the momentum uses), else zero.
+`surface` — `nothing`, or `(u_star = M, k = K)` as for [`TKEClosure`](@ref):
+after each step the first air cell of every column takes the
+constant-stress surface-layer equilibrium — ``τ_{13}, τ_{23} = −u_*^2
+(\\cos α, \\sin α)`` against the cell's wind direction ``α``, the normal
+stresses ``(a_{11}, a_{22}, a_{22})e_s`` in the wind frame with
+``e_s = u_*^2/a_{13}`` ([`reynolds_stress_shear_equilibrium`](@ref)), the
+LRR-IP counterpart of the TKE closure's ``e_s`` (booked:
+`surface_energy`).
 `τ` passes in six fields to share (the Berlin case passes its tracers);
 else they are allocated isotropic, ``τ = \\tfrac23 e_0 I``. Seed them with
 [`initialize_reynolds_stress!`](@ref). `transport = false` when a driver
@@ -461,7 +490,7 @@ Fluids Eng. 95, 429–438; Launder, B. E., Reece, G. J. & Rodi, W. (1975),
 Fluid Mech. 68, 537–566; Schumann, U. (1977), *Realizability of
 Reynolds-stress turbulence models*, Phys. Fluids 20, 721–725.
 """
-struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, Q, CT, WS, AS} <: AbstractSGSClosure
+struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, SF, Q, CT, WS, AS} <: AbstractSGSClosure
     τ::NTuple{6,F}
     C1::T; C2::T; C3::T
     C_θ::CT                 # :tke or a number
@@ -475,6 +504,7 @@ struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, Q, CT, WS, AS} <: Abstract
     l_wall::LW
     first_level::FL
     mask::MK
+    surface::SF             # nothing or (u_star, k)
     transport::Bool
     advection::Symbol
     # scratch
@@ -484,6 +514,7 @@ struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, Q, CT, WS, AS} <: Abstract
     tend::NTuple{6,F}
     ws::WS
     adv::AS
+    L6::Matrix{T}
     A6::Matrix{T}
     b6::Vector{T}
     snap::NTuple{6,Array{T,3}}
@@ -491,22 +522,22 @@ struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, Q, CT, WS, AS} <: Abstract
     snapstats::Vector{T}
 end
 
-const _NRSTATS = 10
+const _NRSTATS = 11
 
 function ReynoldsStressClosure(g::RegularGrid{T}; τ = nothing, e0::Real = 0,
                                C1::Real = 1.8, C2::Real = 0.6, C3::Real = 0.5, C_θ = :tke,
                                c_k::Real = 0.1, c_ε0::Real = 0.19, c_ε1::Real = 0.51,
                                c_l::Real = 0.76, κ::Real = 0.4, surface_factor::Real = 3.9,
                                Ω = :auto, wall_distance = nothing, first_level = nothing,
-                               mask = nothing, θ₀ = nothing, g_accel = nothing, qv = :auto,
-                               transport::Bool = true, advection::Symbol = :auto) where {T}
+                               mask = nothing, surface = nothing, θ₀ = nothing, g_accel = nothing,
+                               qv = :auto, transport::Bool = true, advection::Symbol = :auto) where {T}
     (C_θ === :tke || C_θ isa Real) ||
         throw(ArgumentError("C_θ must be :tke or a number, got $(repr(C_θ))"))
     mkf() = Field(CellCenter(), g)
     τf = if τ === nothing
         fs = ntuple(_ -> mkf(), 6)
         for m in 1:3
-            fs[m].data .= T(2e0 / 3)
+            fs[m].data .= T(2 * e0 / 3)
         end
         fs
     else
@@ -531,10 +562,10 @@ function ReynoldsStressClosure(g::RegularGrid{T}; τ = nothing, e0::Real = 0,
                                  T(c_k), T(c_ε0), T(c_ε1), T(c_l), T(κ), T(surface_factor), Δ,
                                  θ₀ === nothing ? T(NaN) : T(θ₀),
                                  g_accel === nothing ? T(NaN) : T(g_accel),
-                                 Ωt, Ωa, qv, lw, fl, mk, transport, advs,
+                                 Ωt, Ωa, qv, lw, fl, mk, surface, transport, advs,
                                  mkf(), mkf(), mkf(), DiffusivityTensor(g), StressTensor(g),
                                  ntuple(_ -> mkf(), 6), ws, adv,
-                                 zeros(T, 6, 6), zeros(T, 6),
+                                 zeros(T, 6, 6), zeros(T, 6, 6), zeros(T, 6),
                                  ntuple(_ -> similar(τf[1].data), 6),
                                  zeros(T, _NRSTATS), zeros(T, _NRSTATS))
 end
@@ -666,6 +697,41 @@ function advance_sgs!(c::ReynoldsStressClosure{T}, sim, dt) where {T}
         _rsm_transport!(c, sim, Δt, sbcs)
     end
     _rsm_update!(c, sim, Δt)
+    c.surface === nothing || _rsm_surface!(c, sim)
+    return c
+end
+
+function _rsm_surface!(c::ReynoldsStressClosure{T}, sim) where {T}
+    g = mesh(c.τ[1])
+    us, kk = c.surface.u_star, c.surface.k
+    a11, a22, a13 = reynolds_stress_shear_equilibrium(; C1 = c.C1, C2 = c.C2)
+    V = g.dx * g.dy * g.dz
+    τd = map(x -> x.data, c.τ)
+    ud, vd = sim.u.data, sim.v.data
+    de = zero(T)
+    @inbounds for j in 1:g.Ny, i in 1:g.Nx
+        k = kk[i, j]
+        1 <= k <= g.Nz || continue
+        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
+        _solid(c.mask, I, J, K) && continue
+        u = us[i, j]
+        isfinite(u) || continue
+        uc = (ud[I, J, K] + ud[I+1, J, K]) / 2
+        vc = (vd[I, J, K] + vd[I, J+1, K]) / 2
+        sp = sqrt(uc^2 + vc^2)
+        sp > 0 || continue
+        ca, sa = uc / sp, vc / sp
+        u2 = T(u)^2
+        es = u2 / a13
+        tss, tnn = a11 * es, a22 * es
+        new = (tss * ca^2 + tnn * sa^2, tss * sa^2 + tnn * ca^2, a22 * es,
+               (tss - tnn) * ca * sa, -u2 * ca, -u2 * sa)
+        de += (es - _tke(_τat(τd, I, J, K))) * V
+        for m in 1:6
+            τd[m][I, J, K] = new[m]
+        end
+    end
+    c.stats[11] += de
     return c
 end
 
@@ -737,28 +803,64 @@ end
 const _UNIT6 = ntuple(m -> ntuple(n -> Float64(n == m), 6), 6)
 
 """
-    reynolds_stress_step(τ, G, dθ, r, cθ, β, dt; C1, C2, C3, A = zeros(6, 6),
-                         b = zeros(6)) -> τ′
+    reynolds_stress_step(τ, G, dθ, r, cθ, β, dt; C1 = 1.8, C2 = 0.6, C3 = 0.5) -> τ′
 
-One backward-Euler step of the local source operator,
-``(I − dt\\,L)τ′ = τ`` with ``L`` the linear map of
-[`reynolds_stress_terms`](@ref) at frozen `r`, `cθ` (no Coriolis): the
-update [`ReynoldsStressClosure`](@ref) applies in every cell. A fixed point
-``τ′ = τ`` is a root of the stress equations. `A`, `b` are scratch.
+The local source update [`ReynoldsStressClosure`](@ref) applies in every
+cell: backward Euler, ``(I − h\\,L)τ_{k+1} = τ_k``, with ``L`` the linear
+map of [`reynolds_stress_terms`](@ref) at frozen `r`, `cθ` (no Coriolis).
+A fixed point ``τ′ = τ`` is a root of the stress equations.
+
+Backward Euler inverts a *growing* mode (production faster than the
+sinks) once ``h λ ≥ 1`` — the update changes sign and a realizable stress
+becomes wildly unrealizable. So the step is split into
+``n = \\lceil 2\\,dt\\,μ_∞(L) \\rceil`` equal sub-steps when the logarithmic norm
+``μ_∞(L) = \\max_i (L_{ii} + Σ_{j≠i}|L_{ij}|)`` — an upper bound on the
+growth rate of every mode — is positive, which keeps ``1 − hλ ≥ ½``. Same
+operator in every sub-step, so the fixed point is unchanged.
 """
-function reynolds_stress_step(τ, G, dθ, r, cθ, β, dt; C1 = 1.8, C2 = 0.6, C3 = 0.5,
-                              A::Matrix = zeros(6, 6), b::Vector = zeros(6))
-    T = eltype(A)
+function reynolds_stress_step(τ, G, dθ, r, cθ, β, dt; C1 = 1.8, C2 = 0.6, C3 = 0.5)
+    T = float(promote_type(eltype(τ), typeof(dt)))
+    τ1, _, _ = _rsm_substeps!(τ, G, dθ, r, cθ, β, dt, C1, C2, C3,
+                              zeros(T, 6, 6), zeros(T, 6, 6), zeros(T, 6))
+    return τ1
+end
+
+# the sub-stepped backward Euler: returns (τ′, τ̄, n) with τ̄ the mean of the
+# sub-step results, so Σₖ h ℓ(τₖ) = dt ℓ(τ̄) for the (linear) ½-trace ℓ —
+# the exact budget of the update
+function _rsm_substeps!(τ, G, dθ, r, cθ, β, dt, C1, C2, C3, L::Matrix{T}, A::Matrix{T},
+                        b::Vector{T}) where {T}
     z3 = (zero(T), zero(T), zero(T))
     @inbounds for m in 1:6
         col = reynolds_stress_rhs(_UNIT6[m], G, dθ, r, cθ, β; C1 = C1, C2 = C2, C3 = C3, Ω = z3)
-        for n in 1:6
-            A[n, m] = (n == m) - dt * col[n]
+        for q in 1:6
+            L[q, m] = col[q]
         end
-        b[m] = τ[m]
     end
-    _solve!(A, b)
-    return @inbounds (b[1], b[2], b[3], b[4], b[5], b[6])
+    μ = typemin(T)
+    @inbounds for q in 1:6
+        s = L[q, q]
+        for m in 1:6
+            m == q || (s += abs(L[q, m]))
+        end
+        μ = max(μ, s)
+    end
+    n = μ > 0 ? max(1, ceil(Int, min(2 * dt * μ, T(10_000)))) : 1
+    h = T(dt) / n
+    x = τ
+    acc = ntuple(_ -> zero(T), Val(6))
+    for _ in 1:n
+        @inbounds for m in 1:6, q in 1:6
+            A[q, m] = (q == m) - h * L[q, m]
+        end
+        @inbounds for m in 1:6
+            b[m] = x[m]
+        end
+        _solve!(A, b)
+        x = @inbounds (b[1], b[2], b[3], b[4], b[5], b[6])
+        acc = acc .+ x
+    end
+    return x, acc ./ n, n
 end
 
 function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
@@ -780,7 +882,7 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     E = _Edges(c.mask, bounded_directions(sim.bcs), g)
     C1, C2, C3 = c.C1, c.C2, c.C3
     sP = zero(T); sB = zero(T); sε = zero(T); sT = zero(T)
-    nclip = zero(T); eclip = zero(T); nproj = 0
+    nclip = zero(T); eclip = zero(T); nsplit = 0
     @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
         I, J, K = Hx + i, Hy + j, Hz + k
         if _solid(c.mask, I, J, K)
@@ -802,11 +904,11 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
         dθ = _θv_gradient(θd, qd, I, J, K, idx, idy, idz)
         if e > 0
             _, r, _, cθ = _rsm_local(c, e, n2[I, J, K], i, j, k)
-            τ1 = reynolds_stress_step(τs, Gc, dθ, r, cθ, β, Δt; C1 = C1, C2 = C2, C3 = C3,
-                                      A = c.A6, b = c.b6)
+            τ1, τb, nsub = _rsm_substeps!(τs, Gc, dθ, r, cθ, β, Δt, C1, C2, C3, c.L6, c.A6, c.b6)
+            nsub > 1 && (nsplit += 1)
         else
             r = zero(T); cθ = zero(T)
-            τ1 = τs
+            τ1 = τs; τb = τs
         end
         τp, changed = project_realizable(τ1)
         if changed
@@ -816,13 +918,14 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
         for m in 1:6
             τd[m][I, J, K] = τp[m]
         end
-        # the budget of the step, at τ^{n+1} before the correction: ½ tr of
-        # the implicit update is exactly Δt (P + βh₃ − r e) at τ1
+        # the budget of the step, before the correction: ½ tr of the
+        # (sub-stepped) implicit update is exactly Δt (P + βh₃ − r e) at the
+        # mean τb of the sub-step results (τb = τ^{n+1} without sub-steps)
         if e > 0
-            sP -= τ1[1] * Gc[1] + τ1[2] * Gc[5] + τ1[3] * Gc[9] +
-                  τ1[4] * (Gc[2] + Gc[4]) + τ1[5] * (Gc[3] + Gc[7]) + τ1[6] * (Gc[6] + Gc[8])
-            sB += -β * cθ * (τ1[5] * dθ[1] + τ1[6] * dθ[2] + τ1[3] * dθ[3])
-            sε += r * _tke(τ1)
+            sP -= τb[1] * Gc[1] + τb[2] * Gc[5] + τb[3] * Gc[9] +
+                  τb[4] * (Gc[2] + Gc[4]) + τb[5] * (Gc[3] + Gc[7]) + τb[6] * (Gc[6] + Gc[8])
+            sB += -β * cθ * (τb[5] * dθ[1] + τb[6] * dθ[2] + τb[3] * dθ[3])
+            sε += r * _tke(τb)
         end
     end
     st = c.stats
@@ -831,6 +934,7 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     st[7] += 1
     st[8] = nclip
     st[9] = eclip
+    st[10] = nsplit
     return c
 end
 
@@ -865,12 +969,16 @@ the realizable set, cumulative) and `clipped_energy` (the SGS energy
 cumulative); `step_clips`, `step_clipped_energy` (the last step's); and
 the volume integrals of the last step (m⁵ s⁻³, at ``τ^{n+1}``): `shear`
 (``Σ −τ_{ik}G_{ik} V``), `buoyancy` (``Σ βh_3 V``), `dissipation`
-(``Σ ε V``, the rate the implicit step applied), `transport`; `steps`.
+(``Σ ε V``, the rate the implicit step applied), `transport`; `steps`;
+`surface_energy` (the SGS energy setting the surface value added, m⁵ s⁻²,
+cumulative); `step_split_cells` (cells of the last step whose source update
+was sub-stepped, see [`reynolds_stress_step`](@ref)).
 """
 reynolds_stress_statistics(c::ReynoldsStressClosure) =
     (clips = Int(c.stats[1]), clipped_energy = c.stats[2], shear = c.stats[3],
      buoyancy = c.stats[4], dissipation = c.stats[5], transport = c.stats[6],
-     steps = Int(c.stats[7]), step_clips = Int(c.stats[8]), step_clipped_energy = c.stats[9])
+     steps = Int(c.stats[7]), step_clips = Int(c.stats[8]), step_clipped_energy = c.stats[9],
+     surface_energy = c.stats[11], step_split_cells = Int(c.stats[10]))
 
 """
     reynolds_stress_budget(c::ReynoldsStressClosure, sim) -> NamedTuple

@@ -940,6 +940,7 @@ export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_va
 export ReynoldsStressClosure, reynolds_stress_terms, reynolds_stress_rhs, reynolds_stress_step,
        daly_harlow_coefficient, coriolis_rotation, rotate_stress, is_realizable,
        project_realizable, stress_anisotropy, stress_edges!, dual_velocity_gradient,
-       reynolds_stress_statistics, reynolds_stress_budget, initialize_reynolds_stress!
+       reynolds_stress_statistics, reynolds_stress_budget, initialize_reynolds_stress!,
+       reynolds_stress_shear_equilibrium
 
 end # module

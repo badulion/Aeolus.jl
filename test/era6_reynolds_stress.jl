@@ -429,6 +429,35 @@ end
     @test interior_view(rsm.K.K13) ≈ interior_view(rsm.K.K11) .* 0.3 rtol = 1e-14
 end
 
+@testset "surface value: the constant-stress layer of LRR-IP" begin
+    a11, a22, a13 = reynolds_stress_shear_equilibrium()
+    t11, t22, t12 = lrr_shear_equilibrium()
+    @test collect((a11, a22, a13)) ≈ collect((t11, t22, t12)) rtol = 1e-15
+    m = RegularGrid(; size = (4, 4, 6), extent = (40.0, 40.0, 60.0))
+    sim = BoussinesqSimulation(m; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall),
+                               θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    α = deg2rad(30)
+    set!(sim.u, (x, y, z) -> 2cos(α)); set!(sim.v, (x, y, z) -> 2sin(α))
+    us = fill(0.3, 4, 4); kair = fill(1, 4, 4)
+    c = ReynoldsStressClosure(m; e0 = 0.01, transport = false, surface = (u_star = us, k = kair))
+    @test all(k -> all(==(2 * 0.01 / 3), interior_view(c.τ[k])), 1:3)   # τ = (2/3) e₀ I
+    advance_sgs!(c, sim, 1.0)
+    τs = ntuple(k -> interior_view(c.τ[k])[2, 3, 1], 6)
+    # the stress against the wind with magnitude u*², e_s = u*²/a13, realizable
+    @test τs[5] ≈ -0.09 * cos(α) rtol = 1e-12
+    @test τs[6] ≈ -0.09 * sin(α) rtol = 1e-12
+    @test half_trace(τs) ≈ 0.09 / a13 rtol = 1e-12
+    @test is_realizable(τs)
+    # in the wind frame the normal stresses are (a11, a22, a22) e_s
+    R = [cos(α) sin(α) 0; -sin(α) cos(α) 0; 0 0 1]
+    Tw = R * full(τs) * R'
+    @test Tw[1, 1] ≈ a11 * 0.09 / a13 rtol = 1e-12
+    @test Tw[2, 2] ≈ a22 * 0.09 / a13 rtol = 1e-12
+    @test abs(Tw[1, 2]) < 1e-14 && abs(Tw[2, 3]) < 1e-14
+    @test reynolds_stress_statistics(c).surface_energy > 0
+    @test interior_view(c.τ[5])[2, 3, 2] != τs[5]          # only the first air cell
+end
+
 @testset "realizability projection, rollback, IMEX refusal" begin
     # Schumann's conditions and the nearest PSD tensor
     @test is_realizable((1.0, 1.0, 1.0, 0.0, 0.0, 0.0))
@@ -447,6 +476,30 @@ end
         @test minimum(λp) >= -1e-12 * maximum(abs, λ)
         @test sort(λp) ≈ sort(max.(λ, 0)) atol = 1e-12 * maximum(abs, λ)
     end
+    # a growing mode faster than 1/dt: one backward-Euler step inverts it
+    # (the bug the Berlin smoke check caught: one step of 1–2 s at a street
+    # corner added more SGS energy by projection than the domain held); the
+    # sub-stepped update stays realizable and follows the exact solution
+    τ0 = (2e-4 / 3 * 3, 2e-4 / 3 * 3, 2e-4 / 3 * 3, 0.0, 0.0, 0.0) ./ 1.5
+    G = (0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)          # du/dz = 2 s⁻¹
+    r, dt = 0.01, 2.0
+    A1 = zeros(6, 6)
+    for mm in 1:6
+        col = reynolds_stress_rhs(ntuple(q -> Float64(q == mm), 6), G, (0.0, 0.0, 0.0), r, 0.0, 0.0)
+        A1[:, mm] = [(q == mm) - dt * col[q] for q in 1:6]
+    end
+    naive = Tuple(A1 \ collect(τ0))
+    @test !is_realizable(naive)                                   # the sign inversion
+    τs = reynolds_stress_step(τ0, G, (0.0, 0.0, 0.0), r, 0.0, 0.0, dt)
+    @test is_realizable(τs)
+    Lm = zeros(6, 6)
+    for mm in 1:6
+        Lm[:, mm] = collect(reynolds_stress_rhs(ntuple(q -> Float64(q == mm), 6), G, (0.0, 0.0, 0.0), r, 0.0, 0.0))
+    end
+    ex = exp(dt * Lm) * collect(τ0)                               # frozen-coefficient exact
+    @test half_trace(τs) > half_trace(τ0)
+    @info @sprintf("  growing mode (dt·|G| = 4): one backward-Euler step e = %.2e (unrealizable), sub-stepped %.2e, exact %.2e",
+                   half_trace(naive), half_trace(τs), half_trace(ex))
     # a rejected adaptive step: the state rolls back bit for bit
     sim = rsm_flow_box(0.3; N = 8, L = 80.0)
     c = ReynoldsStressClosure(sim.mesh)
