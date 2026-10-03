@@ -11,6 +11,7 @@ tested at are in
 [Smagorinsky-Lilly SGS → Closure contract](../theory/sgs.md#Closure-contract).
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
+- AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -51,4 +52,24 @@ Aeolus.Operators.DynamicSmagorinsky
 Aeolus.Operators.FunctionSGS
 Aeolus.Operators._velocity_gradient_at
 Aeolus.Operators._strain_at
+```
+
+## Anisotropic minimum-dissipation and Vreman closures (P55-d)
+
+Two closures on the contract that weight each direction with its own grid
+spacing and vanish in laminar flow (`src/operators/sgs_amd_vreman.jl`,
+#176). The theory, the constants and the measured numbers are in
+[Smagorinsky-Lilly SGS → AMD and Vreman](../theory/sgs.md#Anisotropic-minimum-dissipation-and-Vreman-closures).
+
+```julia
+step!(sim, dt; sgs = AMDClosure())            # C = 0.3, own κ_t, buoyancy term with g/θ₀
+step!(sim, dt; sgs = VremanClosure(0.17))     # c = 2.5 C_s², κ_t = ν_t/Pr_t
+```
+
+```@docs
+Aeolus.Operators.AMDClosure
+Aeolus.Operators.VremanClosure
+Aeolus.Operators.compute_amd_coefficients!
+Aeolus.Operators.compute_vreman_νt!
+Aeolus.Operators.sgs_buoyancy_parameter
 ```

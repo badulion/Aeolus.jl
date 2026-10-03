@@ -303,7 +303,7 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, bit for bit the cores' built-in closure), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167); every core and stepper takes it |
+| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, bit for bit the cores' built-in closure), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167); every core and stepper takes it |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, option `scheme = :weno_z5`) | the `:transport` stage |
 
@@ -340,6 +340,38 @@ integration](#Dynamical-core-and-time-integration).
   the default `fn` (the Smagorinsky closure with `cfg.C_s`) the run is
   bit for bit the default run (tested over 100 smoke steps). There is no
   trained model.
+  `:amd` and `:vreman` (`couplings/sgs_amd_vreman.jl`, #176) are the
+  anisotropic minimum-dissipation and Vreman closures (see [the SGS
+  theory page](../theory/sgs.md#Anisotropic-minimum-dissipation-and-Vreman-closures)).
+  AMD runs with C = 0.3, its own κ_t and the buoyancy term with the
+  core's g/θ₀. It is set to zero in the building cells: there the
+  resolved velocity is ≈ 0, so the denominator ∂_l u_m ∂_l u_m vanishes
+  while θ still varies, and the buoyancy term gave ν_t up to 19 m²/s
+  inside buildings, against a fluid maximum of 1.6 m²/s. That only
+  shortened the adaptive step: 20 steps instead of 12 for the 24 s smoke
+  run. Vreman uses c = 2.5 C_s² with the case's C_s. Their `smoke_check`
+  evaluates the closure on the laminar version of the current flow (u and
+  v replaced by their level means, w = 0). It requires ν_t = 0 exactly in
+  the free stream above the inversion, where Smagorinsky gives up to
+  0.013 m²/s. `report` prints the canopy and free-stream mean ν_t against
+  Smagorinsky with `cfg.C_s`. Neither is the default; flipping it is the
+  maintainer's call.
+  Measured in `:smoke` after 24 s (adaptive stepper), mean ν_t over the
+  fluid cells, canopy / free stream (the levels from the highest roof + 2
+  to the sponge, which include the convective layer below the 60 m
+  inversion):
+
+  | closure | canopy | free stream | steps |
+  | :-- | --: | --: | --: |
+  | AMD | 0.082 | 0.033 | 12 |
+  | Vreman | 0.017 | 0.0033 | 9 |
+  | Smagorinsky, C_s = 0.1 | 0.030 | 0.0063 | 9 |
+
+  All values are in m²/s. AMD is above Smagorinsky in the heated canopy
+  and in the mixed layer because of the buoyancy term, and it is zero in
+  half of the fluid cells. From 72 m up its level means fall to
+  4–25 × 10⁻⁴ m²/s, against 1.2–4.1 × 10⁻² m²/s for Smagorinsky
+  (whose top levels include the sponge).
 * **Scalar advection.** Every tracer registered with `advect = true`;
   `positive` tracers go through the flux limiter (`advect_positive!`).
   `:weno_z7` needs `CaseConfig(halo = (4, 4, 4))`, `:teno8` halo 5; the

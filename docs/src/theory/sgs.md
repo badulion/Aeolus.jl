@@ -250,6 +250,92 @@ In the Berlin case the SGS slot's providers are closure objects passed as
 `sgs`, so `:dynamic` and `:mlsgs` now also run on the sound-proof cores
 (see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
 
+## Anisotropic minimum-dissipation and Vreman closures
+
+Era VI, P55-d (#176), `src/operators/sgs_amd_vreman.jl`. Two closures on
+the contract that use the spacing of each direction instead of one
+``Δ = (ΔxΔyΔz)^{1/3}``, which matters on the Berlin grid (15.6 × 15.6 ×
+6.25 m), and that vanish in laminar flow, where Smagorinsky's
+``(C_sΔ)^2|S|`` does not. Both read the one gradient stencil,
+`_velocity_gradient_at`; the θ gradient is the centred difference over
+two cells (exact for a linear field, like the off-diagonal velocity
+gradients).
+
+**AMD** ([`AMDClosure`](@ref Aeolus.Operators.AMDClosure),
+[`compute_amd_coefficients!`](@ref Aeolus.Operators.compute_amd_coefficients!)).
+The anisotropic minimum-dissipation model of Rozema, Bae, Moin &
+Verstappen (2015) bounds the energy of the subfilter scales in a grid box
+with the Poincaré inequality and takes the smallest eddy viscosity that
+keeps it from growing. With the scalar model of Abkar, Bae & Moin (2016)
+and the buoyancy term of Abkar & Moin (2017):
+
+```math
+ν_t = C\,\frac{\max\!\left(0,\; -(δ_k∂_k u_i)(δ_k∂_k u_j)S_{ij}
+      + \frac{g}{θ_0}(δ_k∂_k w)(δ_k∂_k θ)\right)}{∂_l u_m\,∂_l u_m},
+\qquad
+κ_t = C\,\frac{\max\!\left(0,\; -(δ_k∂_k u_i)(δ_k∂_k θ)\,∂_i θ\right)}{∂_l θ\,∂_l θ},
+```
+
+``δ_k = (Δx, Δy, Δz)``, summed over ``k`` inside each product. The
+numerators are the gradient-model estimates of the subfilter shear
+production and of the subfilter buoyancy flux. ``κ_t`` is AMD's own
+(not ``ν_t/Pr_t``); where ``∂_lθ∂_lθ = 0`` it falls back to
+``ν_t/Pr_t``. ``C = 0.3`` is the modified Poincaré constant for a
+second-order central discretisation from Rozema et al. (2015) (their
+decaying-turbulence tests; 1/12 for a spectral method, 0.212 for fourth
+order), as restated by Gadde, Stieren & Stevens (2021, §2.3). Abkar & Moin
+(2017) used 1/3 on their mixed spectral / second-order grid. The
+buoyancy parameter is the core's: ``g/θ_0`` on the Boussinesq core and
+``g/\bar θ(z)`` on the sound-proof cores
+([`sgs_buoyancy_parameter`](@ref Aeolus.Operators.sgs_buoyancy_parameter)).
+No separate Richardson-number correction is applied: the buoyancy term is
+AMD's stratification response, and a stability wrapper (P55-e, #187) is
+not stacked on it by default.
+
+What the buoyancy term does is set by the sign of ``∂w/∂z``, not by the
+stratification alone: on ``θ = θ_s + Γz`` it is ``(g/θ_0)Δz^2(∂w/∂z)Γ``,
+which lowers ``ν_t`` where the resolved flow is compressed vertically and
+raises it where it is stretched. On a random velocity field with
+``Γ = 3`` K/km it lowered ``ν_t`` in 1341 cells and raised it in 450 (of
+3584). The monotone decrease with ``N^2`` that the issue asked for holds
+for ``∂w/∂z < 0`` (the test uses ``u = ax + Sz``, ``v = ay``,
+``w = -2az``).
+
+**Vreman** ([`VremanClosure`](@ref Aeolus.Operators.VremanClosure),
+[`compute_vreman_νt!`](@ref Aeolus.Operators.compute_vreman_νt!)).
+Vreman (2004): ``ν_t = c\sqrt{B_β/(α_{ij}α_{ij})}`` with
+``α_{ij} = ∂_i u_j``, ``β_{ij} = Δ_m^2 α_{mi}α_{mj}``,
+``B_β = β_{11}β_{22} - β_{12}^2 + β_{11}β_{33} - β_{13}^2 + β_{22}β_{33} - β_{23}^2``
+and ``c = 2.5C_s^2`` (0.0723 for ``C_s = 0.17``); ``κ_t = ν_t/Pr_t``.
+``B_β`` is the sum of the principal 2 × 2 minors of ``β`` and is computed
+in the equivalent Cauchy–Binet form
+``Σ_{m<n} Δ_m^2Δ_n^2 |∂_m\mathbf u × ∂_n\mathbf u|^2``. That form is
+non-negative by construction and exactly zero for any flow that varies in
+one direction only. The minor form leaves round-off on a two-component
+shear ``u(z), v(z)``, and the square root turned that into
+``ν_t ≈ 10^{-10}`` m²/s in the Berlin laminar check.
+
+**What was measured** (`test/era6_amd_vreman.jl`, `test/era6_cbc_decay.jl`):
+
+| property | AMD | Vreman | Smagorinsky 0.17 |
+| :-- | :-- | :-- | :-- |
+| linear field on (15.625, 15.625, 6.25) m vs closed form | ``ν_t``: 9.9e-15, ``κ_t``: 7.2e-14 relative | 4.1e-16 relative | |
+| uniform flow / ``u = Sz`` (S = 0.02 s⁻¹) / ``u(z), v(z)`` | 0 / 0 / 0 (exactly) | 0 / 0 / 0 (exactly) | 0 / 0.0766 m²/s / ≠ 0 |
+| solid-body rotation, Ω = 0.01 s⁻¹ | 0 (exactly) | 0.125 m²/s ``= c\sqrt{Δx^2Δy^2Ω^2/2}`` | ≈ 0 (6.6e-18) |
+| ``u = ax + Sz``, ``v = ay``, ``w = -2az`` (a = 0.01, S = 0.05 s⁻¹), ``N^2/N^2_* = 0, ¼, ½, ¾, 1, 1.5`` | 7.75e-2, 5.81e-2, 3.87e-2, 1.94e-2, 2.3e-15, 0 m²/s; ``N^2_* = 1.025×10^{-3}`` s⁻² analytic | | |
+| uniform shift (7, −4, 1.5) m/s, random field | ``ν_t`` 4.8e-16, ``κ_t`` 3.9e-16 relative | 3.5e-16 | |
+| decaying turbulence 32³, t = 1: ``⟨2ν_tS_{ij}S_{ij}⟩`` / Smagorinsky | 1.27 (``ν_t = 0`` in 27 % of cells) | 0.82 | 1 |
+| CBC 32³: ``K_{98}/K_{42}``, ``K_{171}/K_{42}`` vs CBC | +9.9 %, −4.7 % | +4.9 %, −12.7 % | +2.5 %, −14.2 % |
+| ``compute_sgs!`` on 64 × 64 × 32 (one thread; a `step!` is 6.2 ms) | 0.71 ms | 2.13 ms | 1.52 ms |
+
+AMD is the first closure here that meets the proposed ±10 % on both CBC
+energy ratios, with ``K_{98}/K_{42}`` just inside (+9.9 %). It leaves more
+energy at the cut-off (``E(k_c)``/CBC 1.50 / 1.47, against 1.27 / 1.08 for
+Smagorinsky), since ``ν_t = 0`` wherever the resolved strain does not
+produce subfilter energy. In the Berlin case both are providers of the
+`:sgs` slot (`:amd`, `:vreman`; see
+[The Berlin case](../design/berlin_case.md#Numerics-slots)).
+
 ## Decaying grid turbulence (Comte-Bellot and Corrsin)
 
 The Era VI benchmark for SGS closures (Phase 54) is the wind-tunnel decay
@@ -277,11 +363,13 @@ Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
 | 32³ | dynamic (plane)     | +1.3 % | −15.7 % | 0.085 / 0.099 | 1.23 / 1.00 |
 | 32³ | Smagorinsky 0.17    | +2.5 % | −14.2 % | 0.088 / 0.097 | 1.27 / 1.08 |
 | 32³ | no model            | +78.3 % | +121.1 % | 0.216 / 0.316 | 5.25 / 10.4 |
+| 32³ | AMD, C = 0.3 (#176) | +9.9 % | −4.7 % | 0.097 / 0.091 | 1.50 / 1.47 |
+| 32³ | Vreman, c = 0.0723 (#176) | +4.9 % | −12.7 % | 0.094 / 0.104 | 1.38 / 1.22 |
 | 64³ | dynamic (plane)     | −13.4 % | −23.5 % | 0.062 / 0.118 | 0.72 / 0.61 |
 | 64³ | Smagorinsky 0.17    | −14.2 % | −24.3 % | 0.065 / 0.124 | 0.67 / 0.52 |
 | 64³ | no model            | +32.7 % | +15.7 % | 0.226 / 0.346 | 5.66 / 8.02 |
 
-CI cost at 32³: 14 s for the three closures × three seeds.
+CI cost at 32³: 19 s for the five closures × three seeds.
 
 Without a model the energy piles up at the cut-off (5–10 × CBC), which
 is what the test uses to show it can fail. With either eddy-viscosity
@@ -291,9 +379,10 @@ at ``k ≈ 0.2–0.3`` cm⁻¹ at station 171), where the measured large scales
 barely decay and the ``11M`` box holds only a few dozen modes. At 64³
 the closures are also too dissipative at the small scales. The
 proposed ±10 % on both TKE ratios (a figure from spectral-code LES) is
-therefore not met; the test asserts ±20 % at station 171 and keeps ±10 %
-as a broken test, so a closure that reaches it (Lagrangian dynamic,
-AMD, …: one line each in the test) shows up. Starting from the random-
+therefore not met by them; the test asserts ±20 % at station 171 and
+keeps ±10 % as a broken test, so a closure that reaches it shows up. AMD
+(#176) is the first that does (−4.7 %), so for AMD the ±10 % is a plain
+test. Starting from the random-
 phase field without the rescale cycles instead gives +21 % / −3 % at
 32³ (no transfer during the first turnover).
 
@@ -334,6 +423,21 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Deardorff, J. W. (1980), *Stratocumulus-capped mixed layers derived
     from a three-dimensional model*, Boundary-Layer Meteorol. 18, 495
     (prognostic SGS TKE).
+  * Rozema, W., Bae, H. J., Moin, P. & Verstappen, R. (2015),
+    *Minimum-dissipation models for large-eddy simulation*, Phys. Fluids
+    27, 085107.
+  * Abkar, M., Bae, H. J. & Moin, P. (2016), *Minimum-dissipation scalar
+    transport model for large-eddy simulation of turbulent flows*, Phys.
+    Rev. Fluids 1, 041701(R).
+  * Abkar, M. & Moin, P. (2017), *Large-eddy simulation of thermally
+    stratified atmospheric boundary-layer flow using a minimum
+    dissipation model*, Boundary-Layer Meteorol. 165, 405.
+  * Gadde, S. N., Stieren, A. & Stevens, R. J. A. M. (2021), *Large-eddy
+    simulations of stratified atmospheric boundary layers: comparison of
+    different subgrid models*, Boundary-Layer Meteorol. 178, 363.
+  * Vreman, A. W. (2004), *An eddy-viscosity subgrid-scale model for
+    turbulent shear flow: algebraic theory and applications*, Phys.
+    Fluids 16, 3670.
   * Comte-Bellot, G. & Corrsin, S. (1971), *Simple Eulerian time
     correlation of full- and narrow-band velocity signals in
     grid-generated, 'isotropic' turbulence*, JFM 48, 273.
