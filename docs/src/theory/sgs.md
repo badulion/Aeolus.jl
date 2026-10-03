@@ -106,7 +106,9 @@ The scalar tendency is
 
 Because `θ` is cell-centered, its diffusive flux lives at faces. The
 kernel `_add_eddy_diffusion_scalar!` interpolates `νₜ` linearly from
-cell centers to each face.
+cell centers to each face. The same tendency, with the same coefficient,
+is applied to `qv` and to every tracer the Berlin case transports (see
+*Every transported scalar uses κ_t* below).
 
 ## Choice of coefficients
 
@@ -213,8 +215,42 @@ for bit (face averages of ``ν_t/Pr_t`` are not bitwise ``1/Pr_t`` times
 face averages of ``ν_t``). A closure with its own ``κ_t`` (a stability
 function, a TKE closure) gets the three-argument
 [`add_eddy_diffusion_scalar!`](@ref Aeolus.Operators.add_eddy_diffusion_scalar!)
-by default. qv and the passive tracers keep their current treatment
-(P56-a, #177).
+by default.
+
+**Every transported scalar uses κ_t** (P56-a, #177). The scalar flux of
+the closure is applied, with the same coefficients, to every scalar a core
+or the Berlin case transports, not only to θ:
+
+  * `step!` and `step_rk3!` add it to `qv` when `moisture = true`
+    (`add_sgs_scalar!(tqv, qv, closure, f, sim)`), together with the
+    molecular `ν∇²qv` that θ gets; `step_imex!` already diffused `qv`
+    implicitly with `ν + κ_t`. Before #177 `step!` advected `qv` but
+    never diffused it — a code bug: a moist run's vapour saw no SGS
+    mixing at all — and `step_rk3!` did not even combine `qv` over its
+    substages. Dry runs are unchanged bit for bit. (The anelastic and
+    pseudo-incompressible cores carry no `qv`.)
+  * The Berlin case diffuses every tracer its `:transport` stage advects
+    (qv, ql, the chemistry species) and the pollutant with `sim.κt` of the
+    last dynamics step (see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
+
+The three-argument kernel takes two keywords for this. `mask` (a Bool
+solid mask, e.g. `IBM.SolidMask(…).mask`) closes every face with a solid
+cell on either side and leaves the solid cells' tendency untouched, so a
+tracer neither diffuses into a building nor draws on the stale value held
+inside it; the fluid ``Σϕ\,dV`` is conserved because every open face
+carries the unmasked flux. `weights = (W_c, W_f)` gives the sound-proof
+form ``(1/W)\,∂_j(W κ_t ∂_jϕ)`` with the constraint weight (``ρ̄`` or
+``ρ̄θ̄``) at cell centres and ``z`` faces; it conserves ``Σ W ϕ\,dV``.
+Without either keyword the kernel is the unmasked one, bit for bit.
+
+| property (`test/era6_scalar_sgs_diffusion.jl`) | result |
+| :-- | :-- |
+| `qv = sin(2πz/L_z)`, constant `κ₀`, `moisture = true`: amplitude vs the discrete amplification factor, `step!` / `step_rk3!` (100 steps) / ARK2 (20 steps) | 1.8e-15 / 2.6e-15 / 4.4e-16 relative (before #177: `step!` and `step_rk3!` left `qv` at amplitude 1, error 2.3) |
+| random positive `κ_t`, no-flux walls, 100 `step!`s: ``Σ qv``; ``Σ qv^2`` | conserved to 3.5e-15 relative; non-increasing at every step |
+| steady state of ``∂_z(κ ∂_zϕ) = 0``, ``κ = κ_0(1+z/H)``, flux below, value above, vs ``ϕ_{top} + (FH/κ_0)\ln\frac{1+L/H}{1+z/H}`` | max error 1.42e-5 (``N_z = 32``), 3.64e-6 (64): ratio 3.90, 2nd order |
+| blob next to a solid block (and one across the periodic seam), masked, 100 steps | fluid ``Σϕ`` to 2.5e-16 relative, solid cells unchanged (`==`), all-false mask `==` unmasked kernel |
+| mass-weighted form | ``Σ W ϕ`` to round-off; a uniform field stays uniform (`== 0` tendency) |
+| `moisture = true` vs `false` with ``θ_0 = 0`` (no route back), built-in Smagorinsky | ``u, v, w, θ, ν_t, κ_t`` identical (`==`) |
 
 **One gradient stencil.** `Operators._velocity_gradient_at` returns the
 full resolved gradient ``g_{ij} = ∂u_i/∂x_j`` at a cell centre (diagonal:
