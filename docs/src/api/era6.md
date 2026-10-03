@@ -12,6 +12,7 @@ tested at are in
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
 - Stress-form momentum divergence (P55-b, #175; below) — `Aeolus.Operators`
+- Tensorial scalar eddy diffusivity (P55-c, #181; below) — `Aeolus.Operators`
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -75,4 +76,31 @@ Aeolus.Operators.add_stress_divergence!
 Aeolus.Operators.sgs_stress_tensor!
 Aeolus.Operators.add_sgs_stress_divergence!
 Aeolus.Operators.sgs_stress_dissipation
+```
+
+## Tensorial scalar eddy diffusivity (P55-c)
+
+The scalar SGS flux `∂ᵢ(Kᵢⱼ ∂ⱼϕ)`. The diagonal `(κh, κv)` is the
+contract's default. A general symmetric `K` at cell centres uses the triad
+discretisation of Griffies et al. (1998), which is conservative, symmetric
+and dissipates variance for positive semi-definite K. The rotated isentropic
+(Redi) tensor has a slope taper and an isotropic fallback where N² ≤ 0.
+Under `step_imex!` the diagonal is implicit and the cross terms explicit.
+Theory: [Smagorinsky-Lilly SGS → Tensorial scalar diffusivity](../theory/sgs.md#Tensorial-scalar-diffusivity).
+
+```julia
+add_eddy_diffusion_scalar!(tθ, θ, κh, κv)                     # diag(κh, κh, κv); docs in Operators
+K = isentropic_tensor!(DiffusivityTensor(mesh), θ, κh, 0.0; bcs = bcs)
+add_tensor_diffusion_scalar!(tϕ, ϕ, K; bounded = bounded_directions(bcs))
+step!(sim, 0.5; sgs = IsentropicDiffusion(StaticSmagorinsky(0.17), sim.mesh; diapycnal = 0.1))
+```
+
+```@docs
+Aeolus.Operators.DiffusivityTensor
+Aeolus.Operators.diagonal_tensor!
+Aeolus.Operators.bounded_directions
+Aeolus.Operators.add_tensor_diffusion_scalar!
+Aeolus.Operators.isentropic_tensor!
+Aeolus.Operators.sgs_scalar_tensor
+Aeolus.Operators.IsentropicDiffusion
 ```

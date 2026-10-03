@@ -201,6 +201,133 @@ Because `θ` is cell-centered, its diffusive flux lives at faces. The
 kernel `_add_eddy_diffusion_scalar!` interpolates `νₜ` linearly from
 cell centers to each face.
 
+## Tensorial scalar diffusivity
+
+P55-c (#181) generalises the scalar flux to a diffusivity tensor,
+``\partial_t\phi \supset \partial_i(K_{ij}\,\partial_j\phi)``, through one
+operator family in `Aeolus.Operators` (`src/operators/scalar_tensor.jl`).
+P55-e (κ_h ≠ κ_v under stratification) and P56-d (the Daly–Harlow heat
+flux ``K_{ij} = C\,(e/\varepsilon)\,\tau_{ij}``) reuse it.
+
+**Diagonal.** `add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv)` puts κ_h on the
+x and y faces and κ_v on the z faces (each the 2-point average of the
+cell values), the tensor ``\mathrm{diag}(\kappa_h, \kappa_h, \kappa_v)``.
+The isotropic three-argument form is the same kernel with κ_h ≡ κ_v, bit
+for bit. The contract's default `add_sgs_scalar!` calls it with the
+closure's `f.κh`, `f.κv`; before P55-c the explicit cores used `f.κh`
+alone while `step_imex!` already used the pair, so a closure with a
+separate κ_v was diffused differently by the two paths.
+
+**General symmetric tensor: the triad form.** `add_tensor_diffusion_scalar!(tϕ, ϕ, K)`
+takes the six components of K at cell centres
+([`DiffusivityTensor`](@ref Aeolus.Operators.DiffusivityTensor)). The cross
+terms need gradients that are not co-located with the flux they enter.
+The discretisation follows Griffies et al. (1998). Each cell is split into
+eight octants. Octant ``(a,b,c)`` pairs one x-face, one y-face and one
+z-face gradient of the cell, ``g = (g_x, g_y, g_z)``. The operator is
+defined as the gradient of a discrete functional:
+
+```math
+F[\phi] = -\tfrac12 \sum_{\text{cells}} \frac{\Delta V}{8} \sum_{\text{octants}}
+          g^{\mathsf T} K_{\text{cell}}\, g,
+\qquad \Delta V\, \partial_t \phi_n = \frac{\partial F}{\partial \phi_n}.
+```
+
+In flux form, the flux through a face is the mean of ``(Kg)_n`` over the
+eight octants that touch it. Because K is per cell, the four octant terms
+of a cell collapse to the average of its two cross gradients:
+
+```math
+F_x^{\,i+1/2} = \tfrac12\left(K_{11}^{i} + K_{11}^{i+1}\right)\delta_x\phi
+ + \tfrac14 \sum_{c\in\{i,i+1\}}\left[K_{12}^{c}\,(g_{y,S}+g_{y,N})_c
+                                     + K_{13}^{c}\,(g_{z,B}+g_{z,T})_c\right].
+```
+
+``F_y`` and ``F_z`` follow the same pattern. The tendency is
+``\delta_x F_x + \delta_y F_y + \delta_z F_z``. Its diagonal part is exactly
+the face-averaged diagonal kernel. Three properties follow from the
+functional, hold to round-off for any K, and do not depend on resolution:
+
+* **conservation**: ``\sum \Delta V\,\partial_t\phi = 0``, because F is
+  invariant under a constant shift of ϕ;
+* **down-gradient**: ``\sum \Delta V\,\phi\,\partial_t\phi = 2F \le 0`` when
+  every cell's K is positive semi-definite (Griffies et al. 1998, Sec. 3);
+* **symmetry** of the discrete operator.
+
+For constant K, a plane wave ``\cos(\mathbf k\cdot\mathbf x)`` is an exact
+eigenfunction. Its rate is
+``K_{11}\hat k_x^2 + K_{22}\hat k_y^2 + K_{33}\hat k_z^2 + 2K_{12}s_x s_y + 2K_{13}s_x s_z + 2K_{23}s_y s_z``,
+where ``\hat k = 2\sin(k\Delta/2)/\Delta`` and ``s = \sin(k\Delta)/\Delta``:
+the diagonal terms see the compact second difference and the cross terms
+the centred one.
+
+The `bounded` keyword (from the scalar boundary conditions,
+`bounded_directions(bcs)`) handles walls. A wall face's gradient is left
+out of the cross terms. The wall flux keeps only its diagonal part from
+the halo, as in the diagonal operator, which is zero for a no-flux halo.
+With no-flux halos the three properties hold with walls as well.
+Prescribed surface fluxes are added separately.
+
+**Rotated isentropic tensor.** `isentropic_tensor!(K, θ, κh, κv; slope_max, grad_min)`
+builds the Redi (1982) tensor, with κ_h along the isentropes and κ_v
+across them. With ``\mathbf n = \nabla\theta/|\nabla\theta|``:
+
+```math
+K = \kappa_h(I - \mathbf n\mathbf n^{\mathsf T}) + \kappa_v\,\mathbf n\mathbf n^{\mathsf T}
+  \;\to\; K = \kappa_h I - f\,(\kappa_h-\kappa_v)\,\mathbf n\mathbf n^{\mathsf T}.
+```
+
+Here ``f\in[0,1]`` blends the rotated tensor toward the isotropic κ_h:
+
+* the small-slope taper (the slope clipping of Gerdes, Köberle &
+  Willebrand 1991; see Danabasoglu & McWilliams 1995): with
+  ``S = |\nabla_h\theta|/\partial_z\theta``, ``f = 1`` for ``S \le S_{max}``
+  and ``f = (S_{max}/S)^2`` above it;
+* the isotropic fallback ``f = 0`` where ``N^2 \propto \partial_z\theta \le 0``.
+  This is the limit of the taper as S → ∞, so K is continuous across
+  N² = 0. f also ramps linearly to 0 as ``|\nabla\theta|`` drops below
+  `grad_min`.
+
+∇θ is the centred gradient at the cell centre. The eigenvalues are
+``\kappa_h, \kappa_h, \kappa_h - f(\kappa_h-\kappa_v)``, so K is positive
+semi-definite and the triad operator dissipates variance. Where ∇θ is
+uniform, the triad gradients of θ are the cell's ∇θ, which K annihilates
+when κ_v = 0. Isentropic diffusion therefore leaves θ unchanged (the
+"triad property"). With ``\mathbf n = \hat z``, K is
+``\mathrm{diag}(\kappa_h,\kappa_h,\kappa_v)``.
+
+**In the closure contract.** `sgs_scalar_tensor(c, f, sim)` (default
+`nothing`) exposes a closure's full tensor. `IsentropicDiffusion(inner, mesh; slope_max, grad_min, diapycnal)`
+runs `inner` for the coefficients, the momentum and the memory, builds K
+from `sim.θ` in `sgs_coefficients!`, and applies it in `add_sgs_scalar!`.
+κ_v is the closure's own `f.κv`, or `diapycnal·f.κh` when `diapycnal` is
+given. **IMEX:** `step_imex!` solves the diagonal
+``(\nu+K_{11}, \nu+K_{22}, \nu+K_{33})`` implicitly, each component on the
+faces of its own direction (exactly the `part = :diagonal` of the explicit
+operator). In a stable boundary layer κ_v sits there, which is the stiff
+term. The off-diagonal part (`part = :offdiagonal`) is added explicitly on
+θ and qv. K is frozen at the start of the step, the same lagged
+linearisation as ν_t. The explicit cross terms are bounded by
+``|K_{13}| \le \sqrt{K_{11}K_{33}}``, which the taper keeps at or below
+``\kappa_h S_{max}/(1+S_{max}^2)``. They therefore do not tighten the
+explicit advective limit the IMEX step runs at.
+
+**Validation** (`test/era6_tensor_diffusion.jl`, Berlin spacing
+15.625 × 15.625 × 6.25 m):
+
+| check | result |
+| :-- | :-- |
+| diagonal, κ_h/κ_v = 10³: mode decay vs κ_h(k̂ₓ²+k̂_y²)+κ_v k̂_z² | operator 1.1e-15 (vertical mode alone 9.7e-16); Euler hλ = 0.05 × 40 2.2e-15; ARK2 hλ = 5 × 4 2.9e-14 |
+| constant general K, plane-wave eigenvalue (cross terms 11 % of λ) | 4.9e-15 |
+| random PSD K: ``|\sum t\,\Delta V| / \sum|t|\Delta V`` (periodic / no-flux walls) | 1.4e-17 / 7.5e-18; symmetry 3.9e-18 / 8.0e-18 |
+| random PSD K, 200 explicit steps, no-flux walls | Σϕ² non-increasing every step (1.47e6 → 1.37e5); Σϕ dV drift 2.1e-17 |
+| isentropic, slope 0.05, κ_v = 0, κ_h varying 10×: max ``|t_\theta|/(\kappa_h|\nabla\theta|/\Delta)`` | 2.2e-13 (isotropic κ_h: 0.43) |
+| blob in the tilted stratification, κ_h/κ_v = 100: ΔM/(2κt) along / across | 0.9977 / 1.0067 (2 % tolerance) |
+| random tilted θ (stable, tapered and unstable cells), 200 steps | Σϕ² non-increasing; Σϕ dV drift 2.5e-16 |
+| n = ẑ vs diagonal operator | K 4.7e-16 m²/s, tendency 4.5e-16 |
+| tensor closure under `step!` / `step_imex!` (ARK2, diag implicit + cross explicit) | 3.2e-15 / 8.2e-15 from the exact split amplification factor (dropping the cross part would give 0.00129 instead of 0.04702) |
+
+## Choice of coefficients
 ## Choice of coefficients
 
   * `Cₛ = 0.17` for isotropic free turbulence (Lilly 1967). Reduced to
@@ -375,6 +502,18 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Kosović, B. (1997), *Subgrid-scale modelling for the large-eddy
     simulation of high-Reynolds-number boundary layers*, J. Fluid Mech.
     336, 151.
+  * Redi, M. H. (1982), *Oceanic isopycnal mixing by coordinate rotation*,
+    J. Phys. Oceanogr. 12, 1154 (the rotated diffusivity tensor).
+  * Gerdes, R., Köberle, C. & Willebrand, J. (1991), *The influence of
+    numerical advection schemes on the results of ocean general circulation
+    models*, Clim. Dyn. 5, 211 (slope clipping).
+  * Danabasoglu, G. & McWilliams, J. C. (1995), *Sensitivity of the global
+    ocean circulation to parameterizations of mesoscale tracer transports*,
+    J. Climate 8, 2967 (tapering of the rotated tensor).
+  * Griffies, S. M., Gnanadesikan, A., Pacanowski, R. C., Larichev, V. D.,
+    Dukowicz, J. K. & Smith, R. D. (1998), *Isoneutral diffusion in a
+    z-coordinate ocean model*, J. Phys. Oceanogr. 28, 805 (the triad
+    discretisation and its variance property).
   * Deardorff, J. W. (1970), *A numerical study of three-dimensional
     turbulent channel flow at large Reynolds numbers*, J. Fluid Mech. 41,
     453 (the stress form on a staggered grid).
