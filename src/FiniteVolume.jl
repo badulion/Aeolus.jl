@@ -557,28 +557,28 @@ end
 #   (a, b) = (0, 1) the transposed part ∂ⱼ(νᵢⱼ∂ᵢuⱼ), the explicit remainder.
 
 # 4-cell averages of a cell-centred ν onto the edge with index (i, j, k)
-@inline _νe12(n, i, j, k) = 0.25 * (n[i-1,j-1,k] + n[i,j-1,k] + n[i-1,j,k] + n[i,j,k])
-@inline _νe13(n, i, j, k) = 0.25 * (n[i-1,j,k-1] + n[i,j,k-1] + n[i-1,j,k] + n[i,j,k])
-@inline _νe23(n, i, j, k) = 0.25 * (n[i,j-1,k-1] + n[i,j,k-1] + n[i,j-1,k] + n[i,j,k])
+Base.@propagate_inbounds _νe12(n, i, j, k) = 0.25 * (n[i-1,j-1,k] + n[i,j-1,k] + n[i-1,j,k] + n[i,j,k])
+Base.@propagate_inbounds _νe13(n, i, j, k) = 0.25 * (n[i-1,j,k-1] + n[i,j,k-1] + n[i-1,j,k] + n[i,j,k])
+Base.@propagate_inbounds _νe23(n, i, j, k) = 0.25 * (n[i,j-1,k-1] + n[i,j,k-1] + n[i,j-1,k] + n[i,j,k])
 
 # diagonal stresses at the centre of cell (i, j, k): −(a+b) ν ∂uᵢ/∂xᵢ
-@inline _τ11(u, nh, i, j, k, idx, a, b) = -(nh[i,j,k] * ((a + b) * ((u[i+1,j,k] - u[i,j,k]) * idx)))
-@inline _τ22(v, nh, i, j, k, idy, a, b) = -(nh[i,j,k] * ((a + b) * ((v[i,j+1,k] - v[i,j,k]) * idy)))
-@inline _τ33(w, nv, i, j, k, idz, a, b) = -(nv[i,j,k] * ((a + b) * ((w[i,j,k+1] - w[i,j,k]) * idz)))
+Base.@propagate_inbounds _τ11(u, nh, i, j, k, idx, a, b) = -(nh[i,j,k] * ((a + b) * ((u[i+1,j,k] - u[i,j,k]) * idx)))
+Base.@propagate_inbounds _τ22(v, nh, i, j, k, idy, a, b) = -(nh[i,j,k] * ((a + b) * ((v[i,j+1,k] - v[i,j,k]) * idy)))
+Base.@propagate_inbounds _τ33(w, nv, i, j, k, idz, a, b) = -(nv[i,j,k] * ((a + b) * ((w[i,j,k+1] - w[i,j,k]) * idz)))
 
 # off-diagonal stresses of row `own` on the edge (i, j, k):
 # −ν_e (a ∂u_own/∂x_other + b ∂u_other/∂x_own)
-@inline _τ12_u(u, v, nh, i, j, k, idx, idy, a, b) =
+Base.@propagate_inbounds _τ12_u(u, v, nh, i, j, k, idx, idy, a, b) =
     -(_νe12(nh, i, j, k) * (a * ((u[i,j,k] - u[i,j-1,k]) * idy) + b * ((v[i,j,k] - v[i-1,j,k]) * idx)))
-@inline _τ12_v(u, v, nh, i, j, k, idx, idy, a, b) =
+Base.@propagate_inbounds _τ12_v(u, v, nh, i, j, k, idx, idy, a, b) =
     -(_νe12(nh, i, j, k) * (a * ((v[i,j,k] - v[i-1,j,k]) * idx) + b * ((u[i,j,k] - u[i,j-1,k]) * idy)))
-@inline _τ13_u(u, w, nv, i, j, k, idx, idz, a, b) =
+Base.@propagate_inbounds _τ13_u(u, w, nv, i, j, k, idx, idz, a, b) =
     -(_νe13(nv, i, j, k) * (a * ((u[i,j,k] - u[i,j,k-1]) * idz) + b * ((w[i,j,k] - w[i-1,j,k]) * idx)))
-@inline _τ13_w(u, w, nv, i, j, k, idx, idz, a, b) =
+Base.@propagate_inbounds _τ13_w(u, w, nv, i, j, k, idx, idz, a, b) =
     -(_νe13(nv, i, j, k) * (a * ((w[i,j,k] - w[i-1,j,k]) * idx) + b * ((u[i,j,k] - u[i,j,k-1]) * idz)))
-@inline _τ23_v(v, w, nv, i, j, k, idy, idz, a, b) =
+Base.@propagate_inbounds _τ23_v(v, w, nv, i, j, k, idy, idz, a, b) =
     -(_νe23(nv, i, j, k) * (a * ((v[i,j,k] - v[i,j,k-1]) * idz) + b * ((w[i,j,k] - w[i,j-1,k]) * idy)))
-@inline _τ23_w(v, w, nv, i, j, k, idy, idz, a, b) =
+Base.@propagate_inbounds _τ23_w(v, w, nv, i, j, k, idy, idz, a, b) =
     -(_νe23(nv, i, j, k) * (a * ((w[i,j,k] - w[i,j-1,k]) * idy) + b * ((v[i,j,k] - v[i,j,k-1]) * idz)))
 
 # −∂τᵢⱼ/∂xⱼ into (tu, tv, tw), with the stresses formed on the fly from
