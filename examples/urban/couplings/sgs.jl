@@ -10,6 +10,10 @@
 #
 #   :tke         (default, couplings/sgs_tke.jl) PrognosticSGS.TKEClosure —
 #                the Deardorff/Moeng prognostic SGS TKE closure (#182).
+#   :reynolds_stress (option, couplings/sgs_reynolds_stress.jl)
+#                PrognosticSGS.ReynoldsStressClosure — the Deardorff (1973)
+#                differential Reynolds-stress closure with LRR-IP (#188);
+#                its momentum flux is its own stress (no `stress` option).
 #   :smagorinsky Operators.StaticSmagorinsky(cfg.C_s) — the
 #                Smagorinsky–Lilly closure, C_s = cfg.C_s (0.1); bit for
 #                bit the built-in closure of the cores (the default before
