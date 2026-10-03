@@ -11,6 +11,7 @@ tested at are in
 [Smagorinsky-Lilly SGS → Closure contract](../theory/sgs.md#Closure-contract).
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
+- Stress-form momentum divergence (P55-b, #175; below) — `Aeolus.Operators`
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -51,4 +52,27 @@ Aeolus.Operators.DynamicSmagorinsky
 Aeolus.Operators.FunctionSGS
 Aeolus.Operators._velocity_gradient_at
 Aeolus.Operators._strain_at
+```
+
+## Stress-form momentum divergence (P55-b)
+
+The SGS momentum tendency in the stress form `∂ⱼ(2νᵢⱼSᵢⱼ)`, with
+horizontal and vertical eddy viscosities, and the generic operator for
+any symmetric stress τ on the C-grid. Every core selects the form with
+`sgs_stress = :laplacian` (default) or `:symmetric`; under `step_imex!`
+the diagonal part is implicit and the cross terms explicit. Theory:
+[Smagorinsky-Lilly SGS → Stress form vs Laplacian form](../theory/sgs.md#Stress-form-vs-Laplacian-form).
+
+```julia
+step!(sim, 0.5; sgs = StaticSmagorinsky(0.17), sgs_stress = :symmetric)
+τ = sgs_stress_tensor!(StressTensor(sim.mesh), sim.u, sim.v, sim.w, νh, νv)
+add_stress_divergence!(sim.tu, sim.tv, sim.tw, τ)   # == add_sgs_stress_divergence!(…, νh, νv)
+```
+
+```@docs
+Aeolus.Operators.StressTensor
+Aeolus.Operators.add_stress_divergence!
+Aeolus.Operators.sgs_stress_tensor!
+Aeolus.Operators.add_sgs_stress_divergence!
+Aeolus.Operators.sgs_stress_dissipation
 ```

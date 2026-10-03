@@ -82,7 +82,9 @@ retain the term with `∂uᵢ/∂xⱼ` and drop the transposed piece
 `∂uⱼ/∂xᵢ` from the full stress divergence. For a well-resolved LES with
 modest `νₜ` variation, the omitted piece is small (and it disappears
 exactly for incompressible flow when `νₜ` is constant). PALM makes the
-same choice.
+same choice. It is the default of every core (`sgs_stress = :laplacian`);
+the full stress form is `sgs_stress = :symmetric`, below, and the Berlin
+case runs it.
 
 For u-momentum at `FaceX`:
 
@@ -93,6 +95,97 @@ For u-momentum at `FaceX`:
 
 with `νₜ` already at cell centers. The y- and z-flux terms need `νₜ`
 at x-y and x-z edges respectively — again a 4-point average.
+
+## Stress form vs Laplacian form
+
+The SGS stress of an eddy-viscosity closure is `τᵢⱼ = −2νᵢⱼSᵢⱼ`, and its
+divergence
+
+```math
+-\frac{\partial \tau_{ij}}{\partial x_j}
+= \frac{\partial}{\partial x_j}\left[\nu_{ij}\left(\frac{\partial u_i}{\partial x_j}
+  + \frac{\partial u_j}{\partial x_i}\right)\right]
+```
+
+differs from the Laplacian form above by the transposed term
+`∂ⱼ(νᵢⱼ ∂uⱼ/∂xᵢ)`. For constant ν that term is `ν ∂ᵢ(∇·u) = 0`; where ν
+varies (the canopy, the surface layer, the edge of a wake) it does not
+vanish, and the Laplacian form then has three defects: it is not the
+divergence of a symmetric stress (so it does not conserve angular
+momentum), it gives a tendency for a solid-body rotation, and its
+kinetic-energy tendency is not a negative-definite dissipation. The stress
+form fixes all three. `add_sgs_stress_divergence!` (in `Aeolus.Operators`,
+`src/operators/sgs_stress.jl`) implements it, and
+`add_stress_divergence!(tu, tv, tw, τ)` is the generic operator for any
+symmetric stress — P56-d's Reynolds-stress model passes its prognostic τ
+there.
+
+**Placement.** The stresses sit where the eddy-viscosity fluxes of the
+Laplacian kernels already live: `τ11, τ22, τ33` at cell centres, `τ12` on
+the xy-edges (where u-face `i` meets v-face `j`), `τ13` on the xz-edges,
+`τ23` on the yz-edges. Each stress enters the two faces it separates with
+opposite signs, so the operator conserves momentum exactly for any τ.
+
+**Strain.** At each location the compact face difference: `Sᵢᵢ` is the
+diagonal of `_velocity_gradient_at` (face to face through the cell), and
+on the xy-edge `S12 = ½((u_{i,j} − u_{i,j−1})/Δy + (v_{i,j} − v_{i−1,j})/Δx)`
+from the four velocities adjacent to it. The cell-centred off-diagonal
+`Sᵢⱼ` of `_velocity_gradient_at` (two-cell centred differences, used for
+`|S|` in the closures) is *not* used for the fluxes: interpolated to the
+edges it would not commute with the discrete divergence, and the
+constant-ν identity below would fail at truncation order.
+
+**Edge interpolation.** ν is the cell value for the diagonals and the
+4-cell average onto the edge for the off-diagonals, exactly as in
+`add_eddy_viscosity_u!`, so the stress form is the Laplacian kernel plus
+the transposed term, and the two agree to round-off when ν is constant.
+
+**Anisotropy.** `ν11 = ν22 = ν12 = ν_h` and `ν33 = ν13 = ν23 = ν_v`: ν_h
+for the horizontal pairs, ν_v for every pair involving z. This is the
+convention of CM1 (Bryan & Fritsch 2002, `turbnmod`), which also matches
+the split of horizontal and vertical mixing in Kosović (1997)'s
+anisotropic model. The isotropic closure is `ν_h = ν_v`. Through the
+closure contract the two come from `SGSFields.νh` and `SGSFields.νv`
+(aliased for every closure so far; P55-e supplies the split).
+
+**Discrete dissipation.** Summation by parts on a periodic domain gives the
+kinetic-energy tendency exactly:
+
+```math
+\sum_{\rm faces} u_i\, \frac{\partial}{\partial x_j}(2\nu_{ij}S_{ij})\, \Delta V
+= -\sum 2\nu_{ij} S_{ij} S_{ij}\, \Delta V \le 0,
+```
+
+with the diagonal terms summed over cells and each off-diagonal over its
+edges, counted for `ij` and `ji` (`sgs_stress_dissipation`).
+
+**IMEX split.** `step_imex!` with `sgs_stress = :symmetric` treats the
+diagonal part `∂ⱼ(νᵢⱼ ∂uᵢ/∂xⱼ)` implicitly and the transposed part
+explicitly. The implicit operator takes a per-direction coefficient per
+velocity component (`ν + ν_h` on the faces of the 11, 22, 12 fluxes,
+`ν + ν_v` on those of 33, 13, 23) with the explicit kernel's edge
+interpolation, so it is identical to the explicit `part = :diagonal` and
+stays symmetric (`I − γΔt L` is SPD for CG). The cross terms carry no
+second derivative of a component along its own direction, so they are not
+stiff; they vanish for constant ν on the projected stage values, which is
+why the split is exact in that limit. With `:laplacian` the implicit
+operator is unchanged (the co-located Phase-25 approximation). A pair
+`(ν_h, ν_v)` is also accepted as the coefficient of
+`solve_implicit_diffusion!` (ν_h on the x/y faces, ν_v on the z faces),
+and a closure with a separate `κv` gets it for the scalars.
+
+Measured (`test/era6_sgs_stress_form.jl`; spacing (15.625, 15.625, 6.25) m):
+
+| test | result |
+| :-- | :-- |
+| projected random field, constant ν = 0.37 m²/s: `:symmetric` vs `:laplacian` | 2.2e-16 of max\|tendency\| |
+| solid-body rotation Ω = 0.01 s⁻¹, ν = 0.5–5 m²/s: max\|t\| / (Ω ν_max/Δ²) | 0 (`:symmetric`), 2.33 (`:laplacian`) |
+| random u, random ν_h ∈ [0,2], ν_v ∈ [0,0.2]: KE tendency vs −Σ2νSS ΔV | 2.8e-16 relative, ≤ 0 (4 seeds) |
+| shear modes, ν_h/ν_v = 100: tendency vs −(ν_h k̂² + ν_v k̂_z²) | 2.4e-16, 2.4e-15 |
+| same, time-stepped: Euler hλ = 0.05 × 40 / ARK2 hλ = 5 × 4 | 3.3e-15 / 9.5e-14 from the discrete amplification factor |
+| Σu, Σv over 20 steps with Smagorinsky ν | 5.6e-16, 2.8e-15 relative |
+| `add_stress_divergence!(sgs_stress_tensor!)` vs fused | bitwise equal |
+| cost on 64 × 64 × 32 (momentum kernels) | 0.62 ms vs 0.44 ms Laplacian |
 
 ## Applying the SGS tendency to a scalar
 
@@ -276,6 +369,15 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Meneveau, C., Lund, T. S. & Cabot, W. H. (1996), *A Lagrangian dynamic
     subgrid-scale model of turbulence*, J. Fluid Mech. 319, 353 (the
     stateful closure the commit contract is designed for).
+  * Bryan, G. H. & Fritsch, J. M. (2002), *A benchmark simulation for moist
+    nonhydrostatic numerical models*, Mon. Wea. Rev. 130, 2917 (CM1; the
+    ν_h / ν_v convention of the stress form).
+  * Kosović, B. (1997), *Subgrid-scale modelling for the large-eddy
+    simulation of high-Reynolds-number boundary layers*, J. Fluid Mech.
+    336, 151.
+  * Deardorff, J. W. (1970), *A numerical study of three-dimensional
+    turbulent channel flow at large Reynolds numbers*, J. Fluid Mech. 41,
+    453 (the stress form on a staggered grid).
   * Deardorff, J. W. (1980), *Stratocumulus-capped mixed layers derived
     from a three-dimensional model*, Boundary-Layer Meteorol. 18, 495
     (prognostic SGS TKE).
