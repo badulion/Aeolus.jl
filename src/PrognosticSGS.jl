@@ -64,6 +64,11 @@ export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_va
        tke_eddy_coefficients,
        tke_critical_richardson, tke_equilibrium, dual_strain!, shear_production!,
        buoyancy_production!, tke_budget, initialize_tke!, tke_statistics
+# P56-d (#188): the differential Reynolds-stress closure (prognostic_sgs/reynolds_stress.jl)
+export ReynoldsStressClosure, reynolds_stress_terms, reynolds_stress_rhs, reynolds_stress_step,
+       daly_harlow_coefficient, coriolis_rotation, rotate_stress, is_realizable,
+       project_realizable, stress_anisotropy, stress_edges!, dual_velocity_gradient,
+       reynolds_stress_statistics, reynolds_stress_budget, initialize_reynolds_stress!
 
 # =========================================================================
 # Pointwise physics (the one definition; the 3-D kernels call these)
@@ -759,5 +764,7 @@ function initialize_tke!(c::TKEClosure{T}, sim; e_min::Real = 0) where {T}
     end
     return c
 end
+
+include("prognostic_sgs/reynolds_stress.jl")
 
 end # module

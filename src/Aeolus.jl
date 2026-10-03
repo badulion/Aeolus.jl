@@ -934,6 +934,12 @@ export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 # closure (an AbstractSGSClosure) and its pointwise physics.
 export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_value,
        tke_critical_richardson, tke_equilibrium, dual_strain!, shear_production!,
-       buoyancy_production!, tke_budget, initialize_tke!, tke_statistics
+       buoyancy_production!, tke_budget, initialize_tke!, tke_statistics,
+       tke_eddy_coefficients
+# P56-d (#188): the differential SGS Reynolds-stress closure.
+export ReynoldsStressClosure, reynolds_stress_terms, reynolds_stress_rhs, reynolds_stress_step,
+       daly_harlow_coefficient, coriolis_rotation, rotate_stress, is_realizable,
+       project_realizable, stress_anisotropy, stress_edges!, dual_velocity_gradient,
+       reynolds_stress_statistics, reynolds_stress_budget, initialize_reynolds_stress!
 
 end # module
