@@ -10,7 +10,14 @@
 #   4. the a-priori Smagorinsky numbers at Δ = 4h on the filtered-DNS
 #      fixture (test/fixtures/dns_decay.jl, 96³) against the published ranges;
 #   5. the ranking Bardina > Smagorinsky in stress correlation, and the
-#      dynamic C_s against the dissipation-matched one.
+#      dynamic C_s against the dissipation-matched one;
+#   6. the offline filtered-DNS record (hybrid-DNS decision on #208): the
+#      pipeline DNS → statistics → TOML → read-back at 32³ on every run;
+#      the 256³ regeneration only with AEOLUS_DNS256=1 (≈ 3 h, ≈ 9 GB;
+#      examples/validation/dns256_generate.jl is the same call); and, when
+#      test/fixtures/dns256_apriori.toml exists, the literature band at
+#      4h and the fall of ρ_Π with Re_λ at fixed Δ/η (48³ > 96³ > 256³).
+#      Until that file lands the last testset is a no-op (it says so).
 # The fixture itself is checked as a DNS first (skewness, energy budget,
 # k_max η, Re_λ).
 #
@@ -52,6 +59,15 @@
 # dominate both. At Re_λ ≈ 64 the 4h value is inside the band, which is
 # asserted again, together with the 48³ → 96³ fall at 4h and 8h.
 #
+# How strong the Re_λ trend is beyond 48³ is open. The generator runs
+# (past the peak, ν with a 3.5 % margin; examples/validation/
+# dns256_generate.jl header) give ρ_Π at 4h of 0.819 (32³, Re_λ 21,
+# 7.6η), 0.869 (48³, 31, 7.8η), 0.811 (64³, 45, 7.5η) and 0.822 (96³, 52,
+# 7.7η), against 0.810 for this fixture (Re_λ 64, 7.8η). From 64³ on the
+# values agree within ±0.01, the realization scatter of one seed, so the
+# 256³ comparison (Re_λ ≈ 2× this fixture's) is a real test: if it
+# fails, the expectation of a monotone fall would be what was wrong.
+#
 # Expectation that proved wrong with the 96³ fixture: "t = 2 is past the
 # dissipation peak". The peak moves later as Re_λ grows (measured
 # t ≈ 0.99, 1.45, 1.85, 2.41 at 32³, 48³, 64³, 96³, ν ∝ N^{-4/3}): the
@@ -80,23 +96,21 @@ using Aeolus.Fields: interior_view
 using Printf
 using LinearAlgebra: eigvals, Symmetric
 
-include(joinpath(@__DIR__, "fixtures", "dns_decay.jl"))
+include(joinpath(@__DIR__, "fixtures", "dns_apriori.jl"))   # includes dns_decay.jl
 
-# Periodic centred derivative of a cell-centred interior array.
-function _ddx(a, d, h)
-    s = ntuple(i -> i == d ? 1 : 0, 3)
-    return (circshift(a, .-s) .- circshift(a, s)) ./ (2h)
-end
+const DNS256_TOML = joinpath(@__DIR__, "fixtures", "dns256_apriori.toml")
+# ρ_Π of the old 48³ fixture (Re_λ = 32), (r, Δ/η, ρ_Π): the history in the header
+const RHO_PI_48 = ((4, 8.0, 0.867), (8, 15.9, 0.814))
 
-# Clark gradient model τᴳ = (Δ²/12) ∂ₖūᵢ ∂ₖūⱼ (evidence for the header).
-function _gradient_model(ub, Δ, h)
-    a = map(interior_view, ub)
-    G = [_ddx(a[i], k, h) for i in 1:3, k in 1:3]
-    τ = SymmetricTensorField{Float64}(size(a[1])...)
-    for (n, (i, j)) in enumerate(((1,1),(2,2),(3,3),(1,2),(1,3),(2,3)))
-        Aeolus.Operators.components(τ)[n] .= (Δ^2 / 12) .* (G[i,1] .* G[j,1] .+ G[i,2] .* G[j,2] .+ G[i,3] .* G[j,3])
-    end
-    return τ
+# ρ_Π(Δ/η) of a TOML record, linear in log(Δ/η) between its widths;
+# `nothing` outside the recorded range (not comparable).
+function _rho_pi_at(rec, x)
+    rows = sort([(f["delta_over_eta"], f["smagorinsky"]["rho_Pi"]) for f in values(rec["filter"])])
+    xs = first.(rows); ys = last.(rows)
+    (x < xs[1] || x > xs[end]) && return nothing
+    i = min(searchsortedlast(xs, x), length(xs) - 1)
+    w = log(x / xs[i]) / log(xs[i+1] / xs[i])
+    return (1 - w) * ys[i] + w * ys[i+1]
 end
 
 @testset "Era VI — a-priori SGS-stress harness (P56-c, #178)" begin
@@ -162,7 +176,7 @@ end
         τs = SymmetricTensorField(g); smagorinsky_stress!(τs, S, cs, Δ)
         τb = SymmetricTensorField(g); bardina_stress!(τb, ub..., filt)
         res[r] = (; Δ, filt, ub, τe, S, cs, smag = apriori_metrics(τs, τe, S), bard = apriori_metrics(τb, τe, S),
-                    grad = apriori_metrics(_gradient_model(ub, Δ, h), τe, S))
+                    grad = apriori_metrics(clark_gradient_stress(ub, Δ, h), τe, S))
         m = res[r].smag; b = res[r].bard
         @info @sprintf("  Gaussian Δ = %dh: C_s(Π-matched) %.3f; Smagorinsky ρ(12,13,23) %.3f %.3f %.3f, ρ_Π %.3f; Bardina ρ(12,13,23) %.3f %.3f %.3f, ρ_Π %.3f; gradient ρ_12 %.3f; backscatter %.1f%%; II %.3f III %.4f",
                        r, cs, m.ρ.xy, m.ρ.xz, m.ρ.yz, m.ρ_Π, b.ρ.xy, b.ρ.xz, b.ρ.yz, b.ρ_Π, res[r].grad.ρ.xy,
@@ -220,7 +234,7 @@ end
         @test all(0.1 .< (m.ρ.xy, m.ρ.xz, m.ρ.yz) .< 0.45)
         @test 0.4 < m.ρ_Π < 0.85                      # see header: 0.810 (0.867 at 48³)
         # Re_λ trend at the same Δ/η (header): below the 48³ values
-        @test m.ρ_Π < 0.867 && res[8].smag.ρ_Π < 0.814
+        @test m.ρ_Π < RHO_PI_48[1][3] && res[8].smag.ρ_Π < RHO_PI_48[2][3]
         @test 0.08 < res[4].cs < 0.22                 # Lilly 0.17 at high Re; lower at low Re_λ
         @test res[8].smag.ρ_Π < 0.85                  # inside the band once Δ ≈ 16η
         # consistency of the harness: the matched C_s matches the mean
@@ -253,6 +267,92 @@ end
             @info @sprintf("    Δ = %dh: dynamic C_s %.3f, dissipation-matched %.3f (%+.1f%%)",
                            r, cs_dyn, res[r].cs, 100(cs_dyn / res[r].cs - 1))
             @test abs(cs_dyn / res[r].cs - 1) < 0.30
+        end
+    end
+
+    # ---------------------------------------------------------------- 6
+    # The offline 256³ record (hybrid-DNS decision on #208). The pipeline
+    # (DNS → statistics → TOML → read back) is proven here at 32³ on every
+    # run; the 256³ run itself is offline (examples/validation/
+    # dns256_generate.jl, or AEOLUS_DNS256=1 for the regeneration testset).
+    @testset "offline a-priori record: pipeline at 32³" begin
+        path = joinpath(mktempdir(), "dns32_apriori.toml")
+        rec, d32 = generate_dns_apriori(; N = 32, out = path, ratios = (4, 8), verbose = false)
+        back = read_dns_apriori(path)
+        @test back["dns"] == rec["dns"] && back["checks"] == rec["checks"]
+        @test back["filter"]["4h"]["smagorinsky"]["rho"] == rec["filter"]["4h"]["smagorinsky"]["rho"]
+        @test back["spectrum"]["k"] == rec["spectrum"]["k"] && back["spectrum"]["E"] == rec["spectrum"]["E"]
+        @test sort(collect(keys(back["filter"]))) == ["4h", "8h"]
+        @test all(values(back["checks"]))
+        @test back["dns"]["kmax_eta_min"] >= 1.5                           # the ν margin
+        @test back["dns"]["t_end"] > back["dns"]["t_eps_peak"] + 0.2      # run on past the peak
+        # Parseval: the recorded spectrum carries the energy of the centred
+        # field it is defined on, which is the staggered K less the little
+        # the two-point centring removes near the grid scale (a resolved DNS)
+        Kspec = sum(back["spectrum"]["E"]) * (back["spectrum"]["k"][2] - back["spectrum"]["k"][1])
+        Kc = 0.5 * sum(sum(abs2, Aeolus.Operators._to_center_periodic(f)) / 32^3 for f in (d32.sim.u, d32.sim.v, d32.sim.w))
+        @test Kspec ≈ Kc rtol = 1e-10
+        @test Kspec ≈ back["dns"]["K_end"] rtol = 0.05
+        # one source of truth: the record's 4h numbers are the harness's
+        f = back["filter"]["4h"]
+        @test 0 < f["smagorinsky"]["rho_Pi"] < 1 && f["bardina"]["rho_Pi"] > f["smagorinsky"]["rho_Pi"]
+        @test f["delta_over_eta"] ≈ 4 * (2π / 32) / d32.η
+        # a failed DNS check keeps the record out of the suite's path
+        bad = joinpath(dirname(path), "bad.toml")
+        @test_throws ErrorException generate_dns_apriori(; N = 32, out = bad, ν = 0.02, ratios = (4,), verbose = false)
+        @test !isfile(bad) && isfile(bad * ".failed")
+        @test read_dns_apriori(bad * ".failed")["checks"]["kmax_eta_ge_1.5"] == false
+    end
+
+    @testset "offline a-priori record: 256³ regeneration (AEOLUS_DNS256=1)" begin
+        if get(ENV, "AEOLUS_DNS256", "0") == "1"
+            rec, _ = generate_dns_apriori(; N = 256, out = DNS256_TOML)
+            @test isfile(DNS256_TOML)
+            @test all(v for (k, v) in rec["checks"] if k ∉ ADVISORY_CHECKS)
+        else
+            @info "  256³ regeneration skipped (set AEOLUS_DNS256=1; ≈ 3 h, ≈ 9 GB)"
+        end
+    end
+
+    # No-op until test/fixtures/dns256_apriori.toml exists.
+    @testset "offline a-priori record: 256³ against the literature" begin
+        if isfile(DNS256_TOML)
+            rec = read_dns_apriori(DNS256_TOML)
+            dn = rec["dns"]
+            @info @sprintf("  256³ record: Re_λ %.1f, k_max η ≥ %.2f, S %.3f, ρ_Π(4h) %.3f",
+                           dn["Re_lambda"], dn["kmax_eta_min"], dn["skewness_end"],
+                           rec["filter"]["4h"]["smagorinsky"]["rho_Pi"])
+            @test dn["N"] == 256
+            @test all(v for (k, v) in rec["checks"] if k ∉ ADVISORY_CHECKS)
+            @test dn["kmax_eta_min"] >= 1.5 && -0.6 <= dn["skewness_end"] <= -0.35
+            @test dn["budget_err_max"] <= 0.02
+            @test dn["Re_lambda"] > d.Re_λ                                   # above the 96³ fixture
+            f = rec["filter"]["4h"]; m = f["smagorinsky"]
+            # Clark et al. (1979); Liu, Meneveau & Katz (1994)
+            @test 0.4 < m["rho_Pi"] < 0.85
+            @test all(0.1 .< (m["rho"]["xy"], m["rho"]["xz"], m["rho"]["yz"]) .< 0.45)
+            @test 0.08 < f["cs_matched"] < 0.22
+            @test 0 < f["backscatter"] < 0.5
+            for (key, fr) in rec["filter"]
+                fr["bardina"]["rho_Pi"] > fr["smagorinsky"]["rho_Pi"] || @info "  Bardina ≤ Smagorinsky at $key"
+                @test fr["bardina"]["rho_Pi"] > fr["smagorinsky"]["rho_Pi"]
+            end
+            # ρ_Π falls with Re_λ at fixed Δ/η: 48³ (Re_λ 32) > 96³ (64) > 256³,
+            # compared where Δ ≤ L/12 on the coarser grid (at 16h the 48³ box
+            # bounds the filter and 48³ = 96³) and the 256³ record spans its Δ/η
+            refs = [(48, x, ρ) for (_, x, ρ) in RHO_PI_48]
+            append!(refs, [(96, res[r].Δ / d.η, res[r].smag.ρ_Π) for r in (4, 8)])
+            ncomp = 0
+            for (Nref, x, ρref) in refs
+                ρ256 = _rho_pi_at(rec, x)
+                ρ256 === nothing && (@info @sprintf("    Δ/η = %.1f outside the 256³ record: not compared", x); continue)
+                @info @sprintf("    Δ/η = %.1f: ρ_Π %d³ %.3f, 256³ %.3f", x, Nref, ρref, ρ256)
+                @test ρ256 < ρref
+                ncomp += 1
+            end
+            @test ncomp >= 2
+        else
+            @info "  test/fixtures/dns256_apriori.toml absent: 256³ literature testset is a no-op"
         end
     end
 end
