@@ -40,7 +40,15 @@ A horizontally periodic, pressure-driven wall-bounded LES built by
     momentum the wall operator removed (the SSP-RK3 combination of its
     three substages), so the plane-mean momentum budget of a step is
     exact: ``Δ⟨u⟩ H_{tot} = (G H_{tot} - τ_b - τ_t)Δt``;
-  * `nsteps` — accepted steps so far.
+  * `nsteps` — accepted steps so far;
+  * `roughness` — `nothing`, or the [`DynamicRoughness`](@ref) of a
+    partially resolved rough bottom (P57-e, #190): its resolved relief
+    exerts the [`surface_gradient_drag`](@ref) on the first cell, its
+    sub-filter relief sets the per-column roughness of the wall law,
+    updated once per step; `τ_form` — the plane-mean kinematic form drag
+    (x component, m² s⁻²) of the resolved relief in the last step (the
+    SSP-RK3 combination), so the budget reads
+    ``Δ⟨u⟩ H_{tot} = (G H_{tot} - τ_b - τ_t - τ_{form})Δt``.
 
 Advance with [`advance_channel!`](@ref) or [`run_channel!`](@ref).
 Instantaneous diagnostics: `phi_m_profile(case)` (Operators'
@@ -66,6 +74,8 @@ mutable struct WallBoundedCase{S, C, W<:WallModel, T<:AbstractFloat}
     τ_wall_top::T
     nsteps::Int
     _stage::Int
+    roughness::Any
+    τ_form::T
 end
 
 _dims(N::Integer) = (Int(N), Int(N), Int(N))
@@ -135,7 +145,8 @@ end
 const _DEFAULT_TF = 0.5
 
 function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
-                     u_star, height, noise, seed, stepper, inputs = nothing)
+                     u_star, height, noise, seed, stepper, inputs = nothing,
+                     roughness = nothing)
     walls in (:bottom, :both) ||
         throw(ArgumentError("walls must be :bottom or :both, got :$walls"))
     formulation in (:local, :schumann, :moeng) ||
@@ -148,11 +159,23 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
     bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
     sim = BoussinesqSimulation(mesh; ν = ν, bcs = bcs)
     _initialise!(sim, law, u_star, ν, walls, noise, seed)
-    wm = WallModel(law; ν = ν > 0 ? ν : 1.5e-5)
+    if roughness === nothing
+        wm = WallModel(law; ν = ν > 0 ? ν : 1.5e-5)
+    else
+        roughness isa DynamicRoughness ||
+            throw(ArgumentError("roughness must be a DynamicRoughness, got $(typeof(roughness))"))
+        size(roughness.stats) == (mesh.Nx, mesh.Ny) ||
+            throw(DimensionMismatch("roughness: surface $(size(roughness.stats)) ≠ grid $((mesh.Nx, mesh.Ny))"))
+        (roughness.stats.periodic && roughness.stats.dx ≈ mesh.dx && roughness.stats.dy ≈ mesh.dy) ||
+            throw(ArgumentError("roughness: the surface statistics must be periodic with the grid spacing"))
+        (law isa RoughLogLaw || law isa MOSTWallLaw) ||
+            throw(ArgumentError("roughness: the wall law must be a RoughLogLaw or MOSTWallLaw"))
+        wm = WallModel(dynamic_wall_laws(roughness, law); ν = ν > 0 ? ν : 1.5e-5)
+    end
     T = typeof(float(mesh.dz))
     return WallBoundedCase(sim, closure, wm, walls, formulation, inputs,
                            T(u_star^2 / height), T(u_star), T(height), kind, stepper,
-                           zero(T), zero(T), 0, 0)
+                           zero(T), zero(T), 0, 0, roughness, zero(T))
 end
 
 """
@@ -161,7 +184,7 @@ end
                       z0_over_H = 1e-4, h_wm = nothing, h_wm_cells = 1,
                       filter = :none, T_f = nothing, H = 1.0,
                       u_star = 1.0, noise = 3.0, seed = 1,
-                      stepper = :rk3,
+                      stepper = :rk3, roughness = nothing,
                       surface_heat_flux = nothing, bottom_bc = :wall_model,
                       θ_walls = nothing) -> WallBoundedCase
 
@@ -203,6 +226,16 @@ high-Reynolds-number surface layer for testing an SGS closure's log law.
 
 The defaults reproduce the first-cell, unfiltered input bit for bit.
 
+**Partially resolved roughness** (P57-e, #190): `roughness` — a
+[`DynamicRoughness`](@ref) on the `(N, N)` surface grid (periodic, the
+grid's spacing). The resolved relief ``h_Δ`` of its statistics exerts
+[`surface_gradient_drag`](@ref) on the first cell (a body force
+``f_i/Δz`` on the faces, the mean of the two adjacent columns), and the
+wall law (`wall_law`, a `RoughLogLaw` or `MOSTWallLaw`, as a template)
+gets, per column, the dynamic roughness ``\\sqrt{z_{0,f}^2+α^2σ_Δ^2}``,
+with α solved once per step from the first-cell (or matching-height)
+velocity (Anderson & Meneveau 2011). `τ_form` holds the form drag.
+
 Keyword hooks reserved for later Era VI issues — documented, **not
 implemented** (any value other than the default raises an
 `ArgumentError`):
@@ -234,7 +267,7 @@ function half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
                            filter::Symbol = :none, T_f = nothing,
                            H::Real = 1.0, u_star::Real = 1.0,
                            noise::Real = 3.0, seed::Integer = 1,
-                           stepper::Symbol = :rk3,
+                           stepper::Symbol = :rk3, roughness = nothing,
                            surface_heat_flux = nothing, bottom_bc::Symbol = :wall_model,
                            θ_walls = nothing)
     _reserved("surface_heat_flux", surface_heat_flux, nothing, "P58-e (#193)")
@@ -245,7 +278,8 @@ function half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
         throw(ArgumentError("wall_law must be an AbstractWallLaw, got $(typeof(law))"))
     return _build_case(:half_channel, _dims(N), (2π * H, 2π * H, H), closure, law,
                        0.0, :bottom, formulation, u_star, H, noise, seed, stepper,
-                       _case_inputs(:bottom, h_wm, h_wm_cells, filter, T_f, u_star, H))
+                       _case_inputs(:bottom, h_wm, h_wm_cells, filter, T_f, u_star, H),
+                       roughness)
 end
 
 """
@@ -356,12 +390,20 @@ function advance_channel!(case::WallBoundedCase{S, C, W, T}, dt::Real) where {S,
     G = case.forcing
     A = g.Lx * g.Ly
     case._stage = 0
-    τb = Ref(zero(T)); τt = Ref(zero(T))
+    τb = Ref(zero(T)); τt = Ref(zero(T)); τf = Ref(zero(T))
     rk3 = case.stepper === :rk3
+    dr = case.roughness
+    dr === nothing || _update_case_roughness!(case, dr)
+    nforce = Ref(0)
     force! = function (sim, Δt)
         ii, jj, kk = Grids.interior(sim.mesh)
         @inbounds for k in kk, j in jj, i in ii
             sim.tu.data[i, j, k] += G
+        end
+        if dr !== nothing
+            nforce[] += 1
+            wgt = rk3 ? _RK3_WEIGHTS[mod1(nforce[], 3)] : 1.0
+            τf[] += wgt * _form_drag!(sim, dr)
         end
         return nothing
     end
@@ -387,6 +429,7 @@ function advance_channel!(case::WallBoundedCase{S, C, W, T}, dt::Real) where {S,
     end
     case.τ_wall_bottom = τb[]
     case.τ_wall_top = τt[]
+    case.τ_form = τf[]
     case.nsteps += 1
     return case
 end
@@ -398,6 +441,61 @@ function _apply_case_wall!(case, sim, Δt, side)
     wind, height = matching_input!(mi, sim; side = side)
     return apply_wall_stress!(sim, case.wall, Δt; side = side, formulation = case.formulation,
                               wind = wind, height = height)
+end
+
+# P57-e: the dynamic roughness of the bottom from the start-of-step
+# velocity at the wall-model input (first cell, or the matching height and
+# filters of the case's MatchingInput), and the per-column laws.
+function _update_case_roughness!(case, dr::DynamicRoughness)
+    s = case.sim; g = s.mesh
+    if case.inputs === nothing
+        uc, vc = _first_cell_velocity(s)
+        h = g.dz / 2
+    else
+        uc, vc, h = _sample_matching(case.inputs.bottom, s, :bottom, nothing)
+    end
+    update_dynamic_roughness!(dr, uc, vc, h)
+    dynamic_wall_laws!(case.wall.law, dr)
+    return dr
+end
+
+# Cell-centre (u, v) of the first level of a horizontally periodic sim.
+function _first_cell_velocity(sim)
+    g = sim.mesh
+    Nx, Ny, Hx, Hy, Hz = g.Nx, g.Ny, g.Hx, g.Hy, g.Hz
+    u, v = sim.u.data, sim.v.data
+    T = eltype(u)
+    uc = zeros(T, Nx, Ny); vc = zeros(T, Nx, Ny)
+    @inbounds for j in 1:Ny, i in 1:Nx
+        ie = i == Nx ? 1 : i + 1; jn = j == Ny ? 1 : j + 1
+        uc[i, j] = (u[Hx+i, Hy+j, Hz+1] + u[Hx+ie, Hy+j, Hz+1]) / 2
+        vc[i, j] = (v[Hx+i, Hy+j, Hz+1] + v[Hx+i, Hy+jn, Hz+1]) / 2
+    end
+    return uc, vc
+end
+
+# The form drag of the resolved relief, f/Δz on the first-level faces
+# (the mean of the two adjacent columns' surface_gradient_drag), added to
+# the tendencies; returns its plane-mean kinematic x stress (m² s⁻²).
+function _form_drag!(sim, dr::DynamicRoughness)
+    g = sim.mesh
+    Nx, Ny, Hx, Hy, Hz, dz = g.Nx, g.Ny, g.Hx, g.Hy, g.Hz, g.dz
+    st = dr.stats
+    uc, vc = _first_cell_velocity(sim)
+    T = eltype(uc)
+    fx = zeros(T, Nx, Ny); fy = zeros(T, Nx, Ny)
+    @inbounds for I in eachindex(uc)
+        fx[I], fy[I] = surface_gradient_drag(uc[I], vc[I], st.dhx[I], st.dhy[I]; C_d = dr.C_d)
+    end
+    τ = zero(T)
+    @inbounds for j in 1:Ny, i in 1:Nx
+        iw = i == 1 ? Nx : i - 1; js = j == 1 ? Ny : j - 1
+        ax = (fx[i, j] + fx[iw, j]) / 2
+        sim.tu.data[Hx+i, Hy+j, Hz+1] += ax / dz
+        sim.tv.data[Hx+i, Hy+j, Hz+1] += (fy[i, j] + fy[i, js]) / 2 / dz
+        τ -= ax
+    end
+    return τ / (Nx * Ny)
 end
 
 # plane means of the interior of u and v

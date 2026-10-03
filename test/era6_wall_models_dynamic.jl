@@ -186,4 +186,65 @@ end
                                              fill(U0, Nx, Ny), zeros(Nx, Ny), 0.05)
 end
 
+@testset "Grid invariance (reduced): rough half channel, 32² vs 16²" begin
+    # A random k⁻² surface (256² map, 1 ≤ k ≤ 128, σ_h = 0.04 H), resolved
+    # through the surface-gradient drag (C_d = 4), the rest sub-filter.
+    # Half channel 2πH × 2πH × H, 32 × 32 × 8, StaticSmagorinsky(0.1), with
+    # the dynamic roughness, run to 6 H/u*; at t = 4, 5, 6 the first-cell
+    # wind is taken as is (32²) and block-averaged 2 × 2 (16²), and the
+    # plane-mean u_* = √(wall + form drag) of the model is evaluated at both
+    # resolutions with the dynamic α of each, and with α fixed at its 32²
+    # value.
+    Nf, L, H = 256, 2π, 1.0
+    hf = _k2_surface(Nf, L, 0.04)
+    C_d, z0f, Nz = 4.0, 1e-5, 8
+    st32 = subfilter_height(hf, Nf ÷ 32; dx = L / 32, dy = L / 32)
+    st16 = subfilter_height(hf, Nf ÷ 16; dx = L / 16, dy = L / 16)
+    @test st32.filter === :spectral
+    @test mean(st16.σ2) > mean(st32.σ2)            # more of the relief is sub-filter at 16²
+    dr = DynamicRoughness(st32; z0_floor = z0f, C_d = C_d)
+    case = half_channel_case(; N = (32, 32, Nz), roughness = dr, z0_over_H = 0.01)
+    z = case.sim.mesh.dz / 2
+    # the momentum budget with the form drag closes to round-off
+    sim = case.sim; A = sim.mesh.Lx * sim.mesh.Ly
+    um() = sum(Aeolus.Fields.interior_view(sim.u)) / (sim.mesh.Nx * sim.mesh.Ny * Nz)
+    budget_err = 0.0
+    t0 = time()
+    run_channel!(case, 1.0)
+    for _ in 1:5
+        u0 = um(); dt = channel_dt(case)
+        advance_channel!(case, dt)
+        lhs = (um() - u0) * H / dt
+        rhs = case.forcing * H - case.τ_wall_bottom - case.τ_form
+        budget_err = max(budget_err, abs(lhs - rhs))
+    end
+    @info @sprintf("  half channel with form drag: plane-mean budget error %.1e (τ_w %.3f, τ_form %.3f u*²)",
+                   budget_err, case.τ_wall_bottom, case.τ_form)
+    @test budget_err < 1e-10
+    @test case.τ_form > 0 && dr.converged
+    run_channel!(case, 4.0)
+    dr32 = DynamicRoughness(st32; z0_floor = z0f, C_d = C_d)
+    dr16 = DynamicRoughness(st16; z0_floor = z0f, C_d = C_d)
+    us = Dict(k => Float64[] for k in (:d32, :d16, :f16)); αs = Dict(k => Float64[] for k in (:a32, :a16))
+    for t in (4.0, 5.0, 6.0)
+        run_channel!(case, t)
+        uc, vc = _WM._first_cell_velocity(case.sim)
+        u16, v16 = _blockmean(uc, 2), _blockmean(vc, 2)
+        a32, c32 = dynamic_alpha(dr32, uc, vc, z)
+        a16, c16 = dynamic_alpha(dr16, u16, v16, z)
+        @test c32 && c16
+        push!(αs[:a32], a32); push!(αs[:a16], a16)
+        push!(us[:d32], sqrt(roughness_surface_drag(dr32, uc, vc, z; α = a32).total))
+        push!(us[:d16], sqrt(roughness_surface_drag(dr16, u16, v16, z; α = a16).total))
+        push!(us[:f16], sqrt(roughness_surface_drag(dr16, u16, v16, z; α = a32).total))
+    end
+    u32, ud, uf = mean(us[:d32]), mean(us[:d16]), mean(us[:f16])
+    ed, ef = ud / u32 - 1, uf / u32 - 1
+    @info @sprintf("  grid invariance: α(32²) = %.3f, α(16²) = %.3f; u*(32²) = %.4f, u*(16²) dynamic = %.4f (%+.1f %%), fixed α = %.4f (%+.1f %%); %.1f s",
+                   mean(αs[:a32]), mean(αs[:a16]), u32, ud, 100ed, uf, 100ef, time() - t0)
+    @test abs(ed) < 0.05
+    @test abs(ef) > abs(ed)
+    @test mean(αs[:a16]) < mean(αs[:a32])          # α is scale dependent: the point of the dynamic model
+end
+
 end
