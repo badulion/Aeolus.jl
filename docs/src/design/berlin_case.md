@@ -303,7 +303,7 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`); each with options `stress = :symmetric` (`:laplacian`) and `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
+| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`); each wrapped in `StabilityCorrected` (P55-e, `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and with options `stress = :symmetric` (`:laplacian`) and `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, option `scheme = :weno_z5`) | the `:transport` stage |
 
@@ -324,19 +324,37 @@ not the cores' default Laplacian form `∂ⱼ(νₜ∂ⱼuᵢ)`; option
 `stress = :laplacian` restores that (a smoke variant), and each provider's
 `smoke_check` asserts that the stress-form dissipation Σ2νSᵢⱼSᵢⱼ is
 non-negative. Under the IMEX steppers the diagonal part is implicit and
-the cross terms explicit. ν_h = ν_v until P55-e (#187).
+the cross terms explicit.
+
+**Stability correction** (P55-e, #187; on by default). The one builder
+`sgs_provider_closure` wraps every provider's eddy-viscosity closure in
+`StabilityCorrected` ([Stability correction](../theory/sgs.md#Stability-correction)):
+ν_h = ν ℓ_h, ν_v = ν ℓ_v f_m(Ri_g), κ_h = ν ℓ_h/Pr_t,
+κ_v = ν ℓ_v f_h(Ri_g)/Pr_t, with the TurbulenceStability functions of
+`CaseConfig.sgs_stability` (`:brown94` default, `:lilly`, `:long_tail`,
+`:short_tail`, `:most`; `:none` = the bare closure, the pre-P55-e run),
+the anisotropic length scales Δ_h = √(dx dy), Δ_v = dz (ℓ_h = 1.842,
+ℓ_v = 0.2947 at dx/dz = 2.5), Ri_g from the θ_v of the `qv` tracer and
+the core's own reference θ (θ₀, or θ̄(z) on the sound-proof cores, so it
+runs with `core = :anelastic`). `:dynamic` gets no f_m on the momentum
+(only Pr_t(Ri)). Each provider's `smoke_check` asserts κ_v, ν_v ≥ 0;
+κ_v ≤ κ_h and ν_v ≤ ν_h ℓ_v/ℓ_h where Ri ≥ 0; ν_v ≥ ν_h ℓ_v/ℓ_h where
+Ri ≤ 0 (the convective enhancement of Brown et al.; not for `:dynamic`);
+κ_v = 0 where Ri ≥ Ri_c; its `report` prints the supercritical fraction
+and the mean κ_v/κ_h. Smoke variants: `sgs_stability = :none`, `:lilly`.
 The scalar (θ) flux is the contract's diagonal operator
-`add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv)` (P55-c, #181), which for the
-isotropic closures is κ_h = κ_v, bit for bit the earlier run. Option
+`add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv)` (P55-c, #181) with these
+κ_h ≠ κ_v. Option
 `scalar_tensor = :isentropic` wraps the closure in
 `IsentropicDiffusion`: the rotated (Redi) tensor of θ in the triad form,
-with κ_v = `diapycnal`·κ_h across the isentropes (`nothing`: the closure's
-own κ_v, so K = κ_h I today), tapered above `slope_max` and isotropic where
+with κ_v = `diapycnal`·κ_h across the isentropes (`nothing`: the
+stability-corrected closure's own κ_v, < κ_h in stable air), tapered above
+`slope_max` and isotropic where
 N² ≤ 0 ([Tensorial scalar diffusivity](../theory/sgs.md#Tensorial-scalar-diffusivity)).
-It is option-only, a smoke variant with `diapycnal = 0.1` that checks K is
-positive semi-definite in every cell. The flagship is a daytime convective
-case in which N² ≤ 0 over most of the domain, and no closure supplies
-κ_v < κ_h before P55-e. A stateful closure (Lagrangian dynamic, prognostic
+It is option-only, with smoke variants (`diapycnal = 0.1`, and the
+corrected κ_v) that check K is positive semi-definite in every cell. The
+flagship is a daytime convective case in which N² ≤ 0 over most of the
+domain. A stateful closure (Lagrangian dynamic, prognostic
 TKE) keeps its memory in that object; the cores commit it once per
 accepted step and `step_adaptive!` rolls it back with the state on a
 rejected step. A new provider goes in its own file,
