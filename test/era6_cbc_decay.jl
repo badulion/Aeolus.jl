@@ -39,6 +39,44 @@
 # consistent with ν_t = 0 in a quarter of the cells (where the resolved
 # strain does not produce subgrid energy) leaving more energy in the
 # large scales.
+#
+# AMD margin at station 98 (maintainer review of #215). AMD's +9.85 % on
+# K(98)/K(42) sits on the proposed ±10 %. Investigated:
+#   * Constant and filter width are Rozema et al. (2015)'s: §II.C, after
+#     their eq. 23, "δx_i = Δx_i" and "C = 0.300 for a central second-order
+#     accurate method" (0.212 fourth order), tuned on this same CBC case
+#     at 64³. C = 1/3 in that paper is the QR model's corrected constant,
+#     not AMD's; 1/12 is the spectral value (Abkar, Bae & Moin 2016). The
+#     CBC grid is isotropic, so δ_i = Δ and the anisotropic definition
+#     cannot enter. No bug, so C stays 0.3.
+#   * The margin is set by C (32³, seeds 1–3, K98 / K171 error):
+#       C = 0.212 +20.9/+5.9 %, 0.25 +15.7/+0.8, 0.30 +9.9/−4.7,
+#       1/3 +6.5/−7.7, 0.40 +0.6/−12.5 %.
+#     No C meets ±10 % at both stations with margin: K98err − K171err is
+#     13–15 points for every C and 16.7 / 17.5 / 17.0 for Smagorinsky,
+#     Vreman and dynamic. That spread is the set-up deficit described
+#     above, common to all closures. C only slides along it, and C = 0.3
+#     lands K98 near the +10 % end.
+#   * Resolution: at 64³ (seeds 1–3) the sign flips for every closure:
+#     AMD 0.3 −11.0/−21.3 %, AMD 1/3 −12.2/−20.8, Smagorinsky
+#     −14.2/−24.3, Vreman −13.9/−25.9. The ±10 % at 32³ is therefore a
+#     property of 32³ on this 2nd-order grid, not a converged quantity.
+#   * Seeds: per-seed K98 error at 32³ for seeds 1–10 is +10.00 % mean,
+#     sd 0.41, and 4 of the 10 seeds are above 10 %. The 10-seed ensemble
+#     is +10.00 % (seeds 1–3: +9.85 %). So `< 0.10` would pass or fail
+#     depending on which seeds are drawn.
+#   * Reference: at 32³ the first shell, k = 0.112 cm⁻¹, lies below CBC's
+#     first tabulated k (0.20 cm⁻¹ at stations 42 and 98). It is
+#     extrapolated, and holding E flat there instead of log-linear
+#     changes the filtered reference K(98)/K(42) by +3.2 % (K171 by
+#     +0.4 %). A 10 % criterion at station 98 is not resolved to better
+#     than about 3 %.
+# The original expectation, AMD within ±10 % at station 98 with the
+# chosen seeds, holds only by chance. It is not physically wrong, but it
+# is not resolvable at this resolution. AMD is therefore asserted at
+# ±13 %: the ±10 % target widened by the 3 % reference uncertainty. The
+# other closures keep ±10 %. The C sweep and the shared station spread
+# are asserted below.
 
 using Test
 using Aeolus
@@ -83,7 +121,11 @@ include("cbc_benchmark_driver.jl")
 
     @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :smagorinsky, :amd, :vreman)
         r = res[c]
-        @test abs(r.K_err[1]) < 0.10                               # K(98)/K(42) within ±10 %
+        if c === :amd                                              # +9.85 %; 10 seeds +10.00 %:
+            @test abs(r.K_err[1]) < 0.13                           #   ±10 % + 3 % reference (header)
+        else
+            @test abs(r.K_err[1]) < 0.10                           # K(98)/K(42) within ±10 %
+        end
         @test abs(r.K_err[2]) < 0.20                               # K(171)/K(42): see header
         if c === :amd                                              # the proposed target:
             @test abs(r.K_err[2]) < 0.10                           #   met by AMD (−4.7 %)
@@ -93,6 +135,22 @@ include("cbc_benchmark_driver.jl")
         @test r.rms_log_err[1] <= 0.10
         @test r.rms_log_err[2] <= 0.11                             # 0.099 (seeds 1–3), 0.101 (1–6)
         @test r.E_kc_ratio[1] < 2 && r.E_kc_ratio[2] < 2           # no pile-up
+    end
+
+    @testset "AMD: the station-98 margin is set by C, the station spread by the set-up" begin
+        ra = Dict(C => cbc_benchmark(AMDClosure(C = C); N = 32) for C in (0.25, 0.4))
+        for C in (0.25, 0.4)
+            @info "  " * cbc_summary("AMD C=$C", ra[C])
+        end
+        # more eddy viscosity → more decay → lower K(98)/K(42): strictly
+        # monotone (+15.7, +9.9, +0.6 %), so the margin is the constant's
+        @test ra[0.25].K_err[1] > res[:amd].K_err[1] + 0.03 > ra[0.4].K_err[1] + 0.06
+        # the gap between the two stations is the shared set-up deficit:
+        # 13–15 points for AMD at every C, 16.7–17.5 for the others
+        spread(r) = r.K_err[1] - r.K_err[2]
+        for r in (ra[0.25], res[:amd], ra[0.4], res[:smagorinsky], res[:vreman], res[:dynamic])
+            @test 0.12 < spread(r) < 0.19
+        end
     end
 
     @testset "discrimination: without a model energy piles up at k_c" begin
