@@ -247,13 +247,16 @@ function DynamicSmagorinskyWorkspace(g::RegularGrid{T}) where {T}
                                           i(), i(), i())
 end
 
-# Strain-rate components and |S| = √(2 SᵢⱼSᵢⱼ) at cell centre (i,j,k) of the
-# data arrays: the stencil of the built-in `compute_smagorinsky_νt!`.
-@inline function _strain_at(u, v, w, i, j, k, idx, idy, idz)
+# The nine velocity-gradient components at cell centre (i,j,k) of the data
+# arrays, the centred stencil of the built-in `compute_smagorinsky_νt!`
+# (diagonal: face differences; off-diagonal: four-point averages over 2Δ).
+# Shared by the strain rate (`_strain_at`) and the cell-centred vorticity
+# (`_vorticity_at`, used by `Transition`), so both see the same gradients.
+@inline function _velocity_gradients_at(u, v, w, i, j, k, idx, idy, idz)
     @inbounds begin
-        S11 = (u[i+1,j,k] - u[i,j,k]) * idx
-        S22 = (v[i,j+1,k] - v[i,j,k]) * idy
-        S33 = (w[i,j,k+1] - w[i,j,k]) * idz
+        du_dx = (u[i+1,j,k] - u[i,j,k]) * idx
+        dv_dy = (v[i,j+1,k] - v[i,j,k]) * idy
+        dw_dz = (w[i,j,k+1] - w[i,j,k]) * idz
         du_dy = ((u[i,j+1,k] + u[i+1,j+1,k]) - (u[i,j-1,k] + u[i+1,j-1,k])) * (0.25 * idy)
         dv_dx = ((v[i+1,j,k] + v[i+1,j+1,k]) - (v[i-1,j,k] + v[i-1,j+1,k])) * (0.25 * idx)
         du_dz = ((u[i,j,k+1] + u[i+1,j,k+1]) - (u[i,j,k-1] + u[i+1,j,k-1])) * (0.25 * idz)
@@ -261,6 +264,21 @@ end
         dv_dz = ((v[i,j,k+1] + v[i,j+1,k+1]) - (v[i,j,k-1] + v[i,j+1,k-1])) * (0.25 * idz)
         dw_dy = ((w[i,j+1,k] + w[i,j+1,k+1]) - (w[i,j-1,k] + w[i,j-1,k+1])) * (0.25 * idy)
     end
+    return du_dx, dv_dy, dw_dz, du_dy, dv_dx, du_dz, dw_dx, dv_dz, dw_dy
+end
+
+# Vorticity ω = ∇×u at cell centre (i,j,k) from the same gradients.
+@inline function _vorticity_at(u, v, w, i, j, k, idx, idy, idz)
+    _, _, _, du_dy, dv_dx, du_dz, dw_dx, dv_dz, dw_dy =
+        _velocity_gradients_at(u, v, w, i, j, k, idx, idy, idz)
+    return dw_dy - dv_dz, du_dz - dw_dx, dv_dx - du_dy
+end
+
+# Strain-rate components and |S| = √(2 SᵢⱼSᵢⱼ) at cell centre (i,j,k) of the
+# data arrays: the stencil of the built-in `compute_smagorinsky_νt!`.
+@inline function _strain_at(u, v, w, i, j, k, idx, idy, idz)
+    S11, S22, S33, du_dy, dv_dx, du_dz, dw_dx, dv_dz, dw_dy =
+        _velocity_gradients_at(u, v, w, i, j, k, idx, idy, idz)
     S12 = 0.5 * (du_dy + dv_dx)
     S13 = 0.5 * (du_dz + dw_dx)
     S23 = 0.5 * (dv_dz + dw_dy)
