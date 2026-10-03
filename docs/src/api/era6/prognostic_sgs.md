@@ -1,4 +1,4 @@
-# Prognostic SGS TKE — PrognosticSGS
+# Prognostic SGS TKE and Reynolds stress — PrognosticSGS
 
 `PrognosticSGS` is the Deardorff (1980) 1.5-order closure with a
 prognostic subgrid-scale turbulent kinetic energy ``e`` and the Moeng
@@ -25,6 +25,21 @@ tke = TKEClosure(m; first_level = first_level_cells(SolidMask(m)))
 initialize_tke!(tke, sim; e_min = 1e-3)      # e = 0 is a fixed point: seed it
 step_rk3!(sim, 2.0; sgs = tke)
 tke_budget(tke, sim)                          # Σ P_s V, Σ P_b V, Σ ε V, transport, Σ e V
+```
+
+`ReynoldsStressClosure` (P56-d, #188) carries the six subgrid stresses
+``τ_{ij}`` instead: exact production, Daly–Harlow buoyancy through the
+P55-c tensor operator, exact Coriolis, LRR-IP pressure–strain, the
+momentum flux ``−∂_jτ^{dev}_{ij}`` through the P55-b stress operator, and
+Schumann realizability, with ``l``, ``ε`` and ``ν_t`` the TKE closure's
+functions (theory: the Reynolds-stress section of the same page).
+
+```julia
+rsm = ReynoldsStressClosure(m; first_level = first_level_cells(SolidMask(m)))
+initialize_reynolds_stress!(rsm, sim; e_min = 1e-3)   # isotropic seed
+step_rk3!(sim, 2.0; sgs = rsm)                         # not step_imex!: sgs_explicit_stress
+reynolds_stress_budget(rsm, sim)                       # Σ −τ:∇u V, Σ βh₃ V, Σ ε V, Σ e V
+reynolds_stress_statistics(rsm)                        # realizability corrections, booked
 ```
 
 ```@autodocs

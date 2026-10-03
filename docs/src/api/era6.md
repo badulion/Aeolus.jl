@@ -12,7 +12,7 @@ tested at are in
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
-- [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182; [theory](../theory/sgs_tke.md))
+- [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182) and the differential `ReynoldsStressClosure` (P56-d, #188; [theory](../theory/sgs_tke.md))
 - Stress-form momentum divergence (P55-b, #175; below) — `Aeolus.Operators`
 - Tensorial scalar eddy diffusivity (P55-c, #181; below) — `Aeolus.Operators`
 
@@ -45,6 +45,7 @@ Aeolus.Operators.sgs_state
 Aeolus.Operators.restore_sgs_state!
 Aeolus.Operators.add_sgs_momentum!
 Aeolus.Operators.add_sgs_scalar!
+Aeolus.Operators.sgs_explicit_stress
 Aeolus.Operators.compute_sgs!
 Aeolus.Operators.sgs_closure
 Aeolus.Operators.AbstractEddyViscosityClosure
