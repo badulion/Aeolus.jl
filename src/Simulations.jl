@@ -351,14 +351,17 @@ end
 # Cost: 3× the pressure solves per step.
 
 """
-    step_rk3!(sim::BoussinesqSimulation, dt)
+    step_rk3!(sim::BoussinesqSimulation, dt; body_force! = nothing)
 
 Advance one Shu-Osher SSP-RK3 step with a pressure projection at each of
 the three substages. Third-order-accurate in time for divergence-free
 motion. Costs three Poisson solves per step (vs. one for `step!`), so
-use only when the extra accuracy is needed.
+use only when the extra accuracy is needed. `body_force!(sim, Δt)` is
+passed to each substage's [`step!`](@ref) (e.g. the forcing that holds a
+base flow against viscous diffusion in a linear-stability run).
 """
-function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real) where {T}
+function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
+                   body_force!::Union{Nothing, Function} = nothing) where {T}
     Δt = T(dt)
 
     # Save current state
@@ -367,12 +370,12 @@ function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real) where {T}
     u0 = copy(sim.u.data); v0 = copy(sim.v.data); w0 = copy(sim.w.data)
     θ0 = copy(sim.θ.data)
 
-    _rk3_substep!(sim, Δt)              # u1 = uⁿ + Δt L(uⁿ), then project
+    _rk3_substep!(sim, Δt, body_force!)              # u1 = uⁿ + Δt L(uⁿ), then project
     # combine into u1 (already there); save
     u1 = copy(sim.u.data); v1 = copy(sim.v.data); w1 = copy(sim.w.data)
     θ1 = copy(sim.θ.data)
 
-    _rk3_substep!(sim, Δt)              # u1 → u1 + Δt L(u1), then project
+    _rk3_substep!(sim, Δt, body_force!)              # u1 → u1 + Δt L(u1), then project
     # combine to u2 = 3/4 uⁿ + 1/4 (…)
     @views begin
         sim.u.data .= 0.75 .* u0 .+ 0.25 .* sim.u.data
@@ -381,7 +384,7 @@ function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real) where {T}
         sim.θ.data .= 0.75 .* θ0 .+ 0.25 .* sim.θ.data
     end
 
-    _rk3_substep!(sim, Δt)              # u2 → u2 + Δt L(u2), then project
+    _rk3_substep!(sim, Δt, body_force!)              # u2 → u2 + Δt L(u2), then project
     # combine to uⁿ⁺¹ = 1/3 uⁿ + 2/3 (…)
     inv3 = one(T)/3; two3 = 2*inv3
     @views begin
@@ -398,7 +401,8 @@ end
 
 # One projected Euler-like substep — factored out of step! so both
 # schemes can share the pressure projection.
-_rk3_substep!(sim::BoussinesqSimulation, Δt) = step!(sim, Δt)
+_rk3_substep!(sim::BoussinesqSimulation, Δt, body_force! = nothing) =
+    step!(sim, Δt; body_force! = body_force!)
 
 # -------------------------------------------------------------------------
 # Diagnostics
