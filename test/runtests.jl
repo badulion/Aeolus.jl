@@ -971,6 +971,7 @@ end
 @testset "Era VI" begin
     include("era6_stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
     include("era6_transition_kh.jl")       # Phase 59 Transition diagnostics, KH / Miles-Howard (#180)
+    include("era6_walls.jl")               # P59-a NoSlipWall, laminar wall-flow verification (#172)
 end
 
 # =========================================================================
