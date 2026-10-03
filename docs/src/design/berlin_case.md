@@ -1017,6 +1017,40 @@ filled the negative qv it left aloft, +8.9e-5 kg m⁻²). On master both
 are zero to round-off in both runs: transport ≤ 3e-18 kg m⁻² in
 magnitude, qv clamp 0; the water ledger closes to −1.7e-14 kg m⁻².
 
+## Facade wall model (#179)
+
+The building facades are walls of `Aeolus.WallModels`
+(`couplings/wall_model_facades.jl`, addon, on by default). Before #179
+the facades had no wall model: the direct-forcing IBM zeroes the
+velocity inside the buildings, and the facade momentum flux was the
+viscous and eddy-viscosity stencils' ``(ν + ν_t)(u - 0)/Δ`` — an
+unresolved no-slip at `cfg.ν` = 2 m² s⁻¹ and Δ = 15.6 m.
+
+| | |
+| :-- | :-- |
+| walls | `immersed_walls` on `case.geom.sm` at `init!`: u faces across ±y, v across ±x, w across ±x/±y (the ground and roofs stay with `surface_exchange`, #169) |
+| law | `RoughLogLaw(z0m)` at ``h = Δ/2``; `z0m` from `bus.z0m_class` (the surface exchange's per-class table, put on the bus in its `build`): `SURFACE_GLASS` for a glass-tagged building column, `SURFACE_WALL` otherwise (0.01 m / 0.05 m by default) |
+| `:body_force` (40) | `remove_stencil_wall_flux!`: the stencil's facade flux out of the tendency (with ``ν_t`` when the step has an eddy viscosity) |
+| `:post_predictor` (12) | `apply_immersed_wall_stress!`, implicit, after the `ibm` direct forcing (10) and before the ground's wall stress (15) |
+| checks | facade ``τ_w ≥ 0``; no stress written into a solid cell's face; the total facade drag and the removed stencil drag oppose the mean canopy wind |
+
+Measured in `:smoke` after 1 h (3600 s, adaptive step), on vs off
+(`physics = Dict(:wall_model_facades => false)`):
+
+| | facades off | facades on |
+| :-- | --: | --: |
+| facade ``Σ τ_w ΔA`` (m⁴ s⁻²) | — | 25.7 (⟨τ_w⟩ = 8.3e-4 m² s⁻² over 30 859 m²) |
+| ground + roof ``Σ u_*^2 ΔxΔy`` (m⁴ s⁻²) | | 250.5 |
+| facade share of the surface drag | | 9.3 % (26.3 % after 12 steps) |
+| stencil facade drag removed (m⁴ s⁻²) | | 504 (the modelled drag is 15.5: the stencil was 33× it) |
+| pedestrian-level (k = 1) mean wind, 106 street columns (m s⁻¹) | 0.4780 | 0.4793 (+0.3 %) |
+| k = 1 mean wind, all 187 open columns (m s⁻¹) | 0.3791 | 0.3854 (+1.7 %) |
+| ground mean ``u_*`` (m s⁻¹) | 0.0564 | 0.0571 |
+
+The coupling took 2.2 s of a 5567 s run (0.04 %; machine heavily
+loaded). The cut-cell method of #179 is not wired: the case has no
+cut-cell provider (CutCell is pending on #152), which picks it up.
+
 ## Radiation (#130)
 
 Two couplings put the Era III radiation stack into the case. Both run at

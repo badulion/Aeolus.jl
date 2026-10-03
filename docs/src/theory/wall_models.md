@@ -188,6 +188,12 @@ first-air wind every step (see [The Berlin case](../design/berlin_case.md)).
 With ``L`` and the wind frozen it reproduced the drag the example used
 to carry (``u_*^2/U`` held between surface steps) exactly.
 
+The facades are the immersed-boundary walls above (addon
+`wall_model_facades`, #179): a `RoughLogLaw` with the wall (or glass)
+roughness of the surface exchange's class table, the stencil's no-slip
+flux removed. In the 1 h smoke run the facades carry 9.3 % of the
+surface drag; the stencil drag they replace was 33× the modelled one.
+
 ## Not yet here
 
 Matching height and input filtering (P57-b), the thin-boundary-layer
