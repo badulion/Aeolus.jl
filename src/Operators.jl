@@ -19,6 +19,9 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_surface_flux!, add_sponge!,
        advect_weno5!
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
+# The one damping-profile implementation behind add_sponge! and the fringe (P59-d, #185).
+export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
+       DampingProfile, sponge_profile, damping_rate
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -181,6 +184,10 @@ add_surface_flux!(tϕ, F_bot, F_top) = _add_surface_flux!(tϕ, F_bot, F_top, mes
 Rayleigh damping toward `f_ref` in the region `z ≥ z_start`. Damping rate
 grows smoothly `α(z) = α_max sin²(π/2 (z - z_start)/(z_top - z_start))`.
 Adds `-α(z)·(f - f_ref)` to `tf` for cells inside the sponge region.
+
+The rate is [`damping_rate`](@ref) of [`sponge_profile`](@ref)`(α_max,
+z_start, z_top)`, the damping-profile implementation the fringe region of
+`Transition` (P59-d) shares.
 """
 add_sponge!(tf, f, α_max, z_start, z_top; f_ref = 0) =
     _add_sponge!(tf, f, α_max, z_start, z_top, f_ref, mesh(f))
@@ -443,6 +450,10 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                      _add_eddy_diffusion_scalar!,
                      _add_surface_flux!, _add_sponge!,
                      _advect_weno5!
+# The shared damping profile (sponge + fringe, P59-d #185).
+using .FiniteVolume: AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
+                     DampingProfile, sponge_profile, in_damping, damping_rate,
+                     _add_damping!
 
 # Pointwise N² and Ri_g (Era VI, P58-a).
 include("operators/stratification.jl")
