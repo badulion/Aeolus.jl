@@ -918,6 +918,11 @@ export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        turbulence_velocity_scale, growth_rate, supercritical_fraction,
        grid_reynolds_number
 
+# P59-d (#185) — spatially developing flat-plate boundary layer: Blasius,
+# fringe region, free-stream disturbances, BL integral diagnostics.
+export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
+       blasius_skin_friction, turbulent_skin_friction
+
 # P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
 # method of the CutCell generic (no new name).
 export NoSlipWall

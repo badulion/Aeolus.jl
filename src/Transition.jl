@@ -61,6 +61,9 @@ export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
        turbulence_velocity_scale, growth_rate, supercritical_fraction,
        grid_reynolds_number
+# P59-d (#185) — spatially developing flat-plate boundary layer.
+export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
+       blasius_skin_friction, turbulent_skin_friction
 
 # =========================================================================
 # Turbulent fraction γ(z)
@@ -505,5 +508,11 @@ function _linfit(x, y)
     r2 = cyy > 0 ? cxy^2 / (cxx * cyy) : 1.0
     return σ, my - σ * mx, r2
 end
+
+# =========================================================================
+# Spatially developing flat-plate boundary layer (P59-d, #185)
+# =========================================================================
+
+include("transition/blasius.jl")
 
 end # module

@@ -79,3 +79,46 @@ end
     end
     @test !in_damping(sp, 0.99) && in_damping(sp, 1.0)
 end
+
+# ---------------------------------------------------------------------------
+# 1. Blasius (RK4 shooting + secant, in-package)
+# ---------------------------------------------------------------------------
+
+@testset "P59-d Blasius solution" begin
+    s = blasius_solution()
+    # Howarth (1938) / Schlichting & Gersten (2017, Table 6.1): f″(0) = 0.332057,
+    # η₉₉ = 4.91, δ* constant 1.7208, θ constant 0.664, H = 2.59.
+    @test s.fpp0 ≈ 0.332057 atol = 1e-6
+    @test s.eta99 ≈ 4.91 atol = 1e-2
+    @test s.delta_star ≈ 1.7208 atol = 1e-4
+    @test abs(s.residual) < 1e-12                        # far-field f′ = 1 met
+    # Momentum-integral identity for the zero-pressure-gradient plate:
+    # dθ/dx = c_f/2 ⇒ θ constant = 2 f″(0) (an independent quadrature check).
+    @test s.theta ≈ 2s.fpp0 rtol = 1e-10
+    @test s.H ≈ 2.5911 atol = 1e-4
+    # Converged in the step and in η_max.
+    @test abs(blasius_solution(n = 6000).fpp0 - s.fpp0) < 1e-12
+    @test abs(blasius_solution(η_max = 15, n = 15000).delta_star - s.delta_star) < 1e-10
+    # The interpolant satisfies the ODE f‴ = −½ f f″ (finite difference of f″).
+    for η in (0.4, 1.3, 2.75, 4.1, 6.0)
+        h = 1e-4
+        fppp = (blasius_profile(η + h)[3] - blasius_profile(η - h)[3]) / 2h
+        f, _, fpp = blasius_profile(η)
+        @test fppp ≈ -0.5f * fpp atol = 1e-8
+    end
+    # Tabulated values (Howarth 1938): f′(1) = 0.32979, f′(3) = 0.84605, f″(3) = 0.16136.
+    @test blasius_profile(1.0)[2] ≈ 0.32979 atol = 1e-5
+    @test blasius_profile(3.0)[2] ≈ 0.84605 atol = 1e-5
+    @test blasius_profile(3.0)[3] ≈ 0.16136 atol = 1e-5
+    @test blasius_profile(20.0) == (20.0 - s.delta_star, 1.0, 0.0)
+    # Velocity: u = U f′, the far-field w → 0.8604 U/√Re_x (= ½ δ*_c U/√Re_x).
+    ν = 1.5e-5; U = 2.0; x = 0.3
+    u, w = blasius_velocity(x, 0.0; U∞ = U, ν = ν)
+    @test u == 0 && w == 0
+    u, w = blasius_velocity(x, 0.05; U∞ = U, ν = ν)
+    @test u ≈ U atol = 1e-12
+    @test w ≈ 0.5 * s.delta_star * U / sqrt(U * x / ν) rtol = 1e-10
+    @test blasius_skin_friction(1e5) ≈ 0.664 / sqrt(1e5) rtol = 2e-4
+    @printf("    Blasius: f″(0) = %.10f, δ*_c = %.10f, θ_c = %.10f, η99 = %.5f, H = %.5f (%d secant its)\n",
+            s.fpp0, s.delta_star, s.theta, s.eta99, s.H, s.iterations)
+end
