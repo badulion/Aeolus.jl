@@ -13,9 +13,9 @@
 # fluxes are then held as tendencies until the next surface step:
 # H → θ, E → qv of that air cell every step. The surface stress is the
 # ground's wall model (Aeolus.WallModels, #169): a MOSTWallLaw per
-# column with the Obukhov length of the last surface step, applied by
-# apply_wall_stress! as an implicit drag on the air cell's horizontal
-# velocity.
+# column with the Obukhov length of the last surface step, evaluated
+# every step at the instantaneous wind of the first air cell and applied
+# by apply_wall_stress! as an implicit drag on its horizontal velocity.
 #
 # This replaces the slab scheme of #126 (constant C_h = 1e-3 at a fixed
 # 3 m/s, fluxes into k = 1 of EVERY column — inside the building on roof
@@ -70,15 +70,19 @@ Slot `:surface_exchange`, provider `:most` (default).
   first-air-cell face multiplied by ``1/(1 + Δt\\,τ_w/(U\\,Δz))``, stable
   for any `Δt`), along the resolved wind; a face between two columns
   gets the mean of the two columns' stresses (a column contributes only
-  at its own air level). The law is evaluated at the wind of the last
-  surface step.
+  at its own air level). The law is evaluated **every step** at the
+  instantaneous first-air-cell wind (L held from the surface step), and
+  `bus.u_star` is that step's ``u_τ`` (before #169 the stress
+  ``u_*^2/U`` of the surface step was held between surface steps).
 * **Extra energy.** `bus.sensible` (energy other couplings take from the
   surfaces, W m⁻²) is collected every step in `:surface_update` and
   handed to the surfaces as `Q_extra` at their next step.
 
 Options: `U_min` (m s⁻¹, the minimum wind of the surface-layer solve),
 `z0m` (per class, m), `z0h_ratio` (``z_{0h} = z_{0m}``·ratio),
-`period` (s, overrides the cadence).
+`period` (s, overrides the cadence), `wall_formulation` (`:local`,
+default; `:schumann` or `:moeng`, the plane-mean forms of
+`apply_wall_stress!`, over all ground and roof columns).
 """
 mutable struct SurfaceExchangeMOST <: AbstractCoupling
     P::Float64                 # surface step period (s)
@@ -93,6 +97,8 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     laws::Matrix{GroundWallLaw} # the ground's wall law per column (z0m, L of the last surface step)
     wm::WallModel{Matrix{GroundWallLaw},Float64} # the WallModels wall of the ground (per-column laws)
     L::Matrix{Float64}         # Obukhov length of the last surface step (m)
+    U_wall::Matrix{Float64}    # wind bus.u_star is the wall law at (m s⁻¹): this step's, or the surface step's
+    formulation::Symbol        # apply_wall_stress! formulation
     pending::Matrix{Float64}   # extra energy into the surface not yet delivered (J m⁻²)
     Q::Matrix{Float64}         # Q_extra of the last surface step (W m⁻²)
     # this step, for the ledger (J m⁻²; zero on steps without a surface step
@@ -117,11 +123,14 @@ provider(::Type{SurfaceExchangeMOST}) = :most
 modules_used(::Type{SurfaceExchangeMOST}) = (:SurfaceExchange, :Radiation, :MoistThermodynamics,
                                               :WallModels)
 default_options(::Type{SurfaceExchangeMOST}) =
-    (U_min = 0.1, z0h_ratio = 0.1, period = nothing,
+    (U_min = 0.1, z0h_ratio = 0.1, period = nothing, wall_formulation = :local,
      # momentum roughness per class (m): the sub-grid roughness of the
      # surface itself — buildings and park trees are resolved (IBM, drag)
      z0m = Dict(SURFACE_STREET => 0.05, SURFACE_ROOF => 0.05, SURFACE_PARK => 0.1,
                 SURFACE_WATER => 1e-4, SURFACE_WALL => 0.05, UInt8(6) => 0.01))
+smoke_variants(::Type{SurfaceExchangeMOST}) =
+    ((label = "Schumann wall stress", options = Dict(:surface_exchange => (wall_formulation = :schumann,))),
+     (label = "Moeng wall stress", options = Dict(:surface_exchange => (wall_formulation = :moeng,))))
 stages(::Type{SurfaceExchangeMOST}) = ((:surface_flux, 10, EVERY_STEP),
                                        (:post_predictor, 15, EVERY_STEP),
                                        (:surface_update, 10, EVERY_STEP))
@@ -154,6 +163,8 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
     P = o.period === nothing ?
         get(case.cfg.cadence, :surface, cadence_period(case.cfg, :soil)) : Float64(o.period)
     P > 0 || error("surface_exchange: the surface step period must be > 0, got $P")
+    o.wall_formulation in (:local, :schumann, :moeng) ||
+        error("surface_exchange: wall_formulation must be :local, :schumann or :moeng, got $(o.wall_formulation)")
     bus.k_air = first_air_level(case.geom.sm, mesh)
     fill!(bus.z_ref, mesh.dz / 2)
     z() = zeros(Nx, Ny)
@@ -161,6 +172,7 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
     laws = GroundWallLaw[MOSTWallLaw(0.05, Inf; U_min = o.U_min) for _ in 1:Nx, _ in 1:Ny]
     return SurfaceExchangeMOST(P, o.U_min, Dict{UInt8,Float64}(o.z0m), o.z0h_ratio,
                                false, 0.0, 0.0, 0.0, z(), laws, WallModel(laws), fill(Inf, Nx, Ny),
+                               z(), Symbol(o.wall_formulation),
                                z(), z(), z(), z(), z(), z(), z(),
                                0.0, 0, 0.0, 0, 0.0, 0)
 end
@@ -252,6 +264,7 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
                                     U_min = c.U_min)
         c.L[i, j] = L
         c.laws[i, j] = MOSTWallLaw(z0m, L; U_min = c.U_min)
+        c.U_wall[i, j] = U          # u* is the law at this wind until the next step
         c.cp[i, j] = heat_capacity_moist(qa)
         bus.Ts[i, j] = surface_temperature(s)
         # ledger: the whole interval P is booked on this step
@@ -327,10 +340,10 @@ end
 
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:post_predictor}, dt)
     # the ground is a WallModels wall at every column's first air level
-    # (k_air > Nz: no surface, no wall), its law evaluated at the wind of
-    # the last surface step
+    # (k_air > Nz: no surface, no wall); u_τ from this step's wind
     apply_wall_stress!(case.sim, c.wm, dt; side = :bottom, mask = case.bus.k_air,
-                       wind = case.bus.U)
+                       formulation = c.formulation, ustar = case.bus.u_star,
+                       wind_out = c.U_wall)
     return nothing
 end
 
@@ -409,8 +422,11 @@ function smoke_check(c::SurfaceExchangeMOST, case)
                 c.interval_err <= 1e-9 * c.P,
             "per column, the surface stored G·P (|Δstore/P − G| < 1e-6 W/m²)" =>
                 c.store_err < 1e-6,
-            "u* > 0; above its neutral value κU/ln(z_ref/z0m) where H > 5 and E ≥ 0 (unstable), below it where H < −5 and E ≤ 0 (stable)" =>
-                all(I -> _ustar_ok(bus, I, c.U_min), have),
+            "u* > 0; above its neutral value κU/ln(z_ref/z0m) where H > 5 and E ≥ 0 (unstable), below it where H < −5 and E ≤ 0 (stable), U the wind of this step's wall law" =>
+                all(I -> _ustar_ok(bus, I, c.U_wall[I], c.U_min), have),
+            "u* is the ground's MOSTWallLaw at this step's wind (1e-12)" =>
+                all(I -> abs(bus.u_star[I] - friction_velocity(c.laws[I], c.U_wall[I], bus.z_ref[I])) <=
+                         1e-12 * bus.u_star[I], have),
             # the fluxes that go into the air are those of the surface step
             "Rn − H − LE = G − Q_extra per column (1e-9 W/m²)" =>
                 all(I -> abs(bus.Rn[I] - bus.H[I] - bus.LE[I] - bus.G[I] + c.Q[I]) <=
@@ -419,10 +435,10 @@ function smoke_check(c::SurfaceExchangeMOST, case)
                 all(I -> _h_sign_ok(bus, I, case), have)]
 end
 
-function _ustar_ok(bus, I, U_min)
+function _ustar_ok(bus, I, U, U_min)
     us = bus.u_star[I]
     us > 0 || return false
-    neutral = 0.4 * max(bus.U[I], U_min) / log(bus.z_ref[I] / roughness_lengths(bus.surface[I]).z0m)
+    neutral = 0.4 * max(U, U_min) / log(bus.z_ref[I] / roughness_lengths(bus.surface[I]).z0m)
     bus.H[I] > 5 && bus.E[I] >= 0 && return us >= neutral * (1 - 1e-9)
     bus.H[I] < -5 && bus.E[I] <= 0 && return us <= neutral * (1 + 1e-9)
     return true

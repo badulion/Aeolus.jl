@@ -82,55 +82,37 @@ const BC = Main.BerlinCase
         interior_view(BC.tracer(case, :qv)) .= q0
     end
 
-    # The drag of #129 (examples/urban/couplings/surface_exchange.jl
-    # before #169), kept here as the regression oracle: rate u*²/U/Δz per
-    # column at its first air level, a face gets the mean of its two
-    # columns' rates, applied implicitly.
-    function drag_129!(u, v, drag, kair, Nx, Ny, Nz, dz, dt)
-        rate(i, j, k) = kair[i, j] == k ? drag[i, j] / dz : 0.0
-        function face!(f, i, j, iw, jw)
-            a, b = kair[iw, jw], kair[i, j]
-            for k in (a, b)
-                k > Nz && continue
-                r = (rate(iw, jw, k) + rate(i, j, k)) / 2
-                r > 0 && (f[i, j, k] /= 1 + dt * r)
-                a == b && break
-            end
-        end
-        for j in 1:Ny, i in 1:Nx
-            face!(u, i, j, mod1(i - 1, Nx), j)
-            face!(v, i, j, i, mod1(j - 1, Ny))
-        end
-    end
-
-    @testset "momentum: the ground's wall model (WallModels) removes u*² along the wind" begin
+    @testset "momentum: the ground's wall model (WallModels) removes τ_w(U_now) along the wind" begin
         u, v = interior_view(sim.u), interior_view(sim.v)
         u0, v0 = copy(u), copy(v)
+        ustar0 = copy(bus.u_star)
         u .= 1.0; v .= 0.5
         dt = 2.0
-        # the held drag of the last surface step, u*²/max(U, U_min)
-        drag = bus.u_star .^ 2 ./ max.(bus.U, se.U_min)
-        uo, vo = copy(u), copy(v)
-        drag_129!(uo, vo, drag, bus.k_air, Nx, Ny, Nz, dz, dt)
-        BC.run_stage!(se, case, Val(:post_predictor), dt)
-        # regression: with L and the wind of the surface step frozen, the
-        # MOSTWallLaw per column and apply_wall_stress! give the drag of #129
-        reg = max(maximum(abs.(u .- uo) ./ abs.(uo)), maximum(abs.(v .- vo) ./ abs.(vo)))
-        @info @sprintf("  ground wall model vs the #129 held drag (L, wind frozen): max rel difference %.1e", reg)
-        @test reg < 1e-12
-        # the law of each column gives back the u* of its surface step
         h = dz / 2
-        @test all(I -> abs(friction_velocity(se.laws[I], bus.U[I], h) - bus.u_star[I]) <=
-                       1e-12 * bus.u_star[I], CartesianIndices(bus.u_star))
+        Unow = hypot(1.0, 0.5)                   # the instantaneous first-air wind
+        # each column's law, at the wind of its surface step, gives back the
+        # u* of that step (the L handed over by matching_obukhov_length)
+        @test all(I -> abs(friction_velocity(se.laws[I], bus.U[I], h) - ustar0[I]) <=
+                       1e-12 * ustar0[I], CartesianIndices(ustar0))
+        BC.run_stage!(se, case, Val(:post_predictor), dt)
+        # u_τ is re-evaluated at THIS step's wind (before #169: the u*²/U of
+        # the surface step was held); the stress is wall_stress(MOSTWallLaw, U_now)
+        @test all(==(Unow), se.U_wall)
+        @test all(I -> bus.u_star[I]^2 ≈ wall_stress(se.laws[I], Unow, h) && bus.u_star[I] > 0,
+                  CartesianIndices(bus.u_star))
+        nchanged = count(I -> abs(bus.u_star[I] - ustar0[I]) > 1e-6 * ustar0[I], CartesianIndices(ustar0))
+        @info @sprintf("  ground u*: surface step %.4f, at U_now = %.3f m/s %.4f m/s (domain mean; %d of %d columns changed)",
+                       sum(ustar0) / length(ustar0), Unow, sum(bus.u_star) / length(bus.u_star),
+                       nchanged, length(ustar0))
         # kinematic momentum removed, per unit plan area: Σ Δu dz dx dy / (dx dy)
         Mx = -sum(1.0 .- u) * dz
         My = -sum(0.5 .- v) * dz
-        # the stress of each column's surface step, u*² along its wind (u_c, v_c)/U,
-        # evaluated with the wind this test imposed
+        # the stress τ_w(U_now) along the wind (u, v)/U_now, per column
+        drag = [wall_drag(se.laws[I], Unow, h) for I in CartesianIndices(bus.u_star)]
         τx = sum(drag[I] * 1.0 for I in CartesianIndices(drag)) * dt
         τy = sum(drag[I] * 0.5 for I in CartesianIndices(drag)) * dt
         amax = maximum(drag) / dz * dt
-        @info @sprintf("  drag: momentum removed (%.5e, %.5e) m²/s vs Σ u*²(u,v)/U dt (%.5e, %.5e); max dt·rate %.1e",
+        @info @sprintf("  drag: momentum removed (%.5e, %.5e) m²/s vs Σ τ_w(U_now)(u,v)/U dt (%.5e, %.5e); max dt·rate %.1e",
                        -Mx, -My, τx, τy, amax)
         # implicit: 1 − 1/(1 + a dt) = a dt − (a dt)² + …, so the relative
         # difference is below the largest a dt
@@ -141,6 +123,7 @@ const BC = Main.BerlinCase
         touched = [(i, j, k) for i in 1:Nx, j in 1:Ny, k in 1:Nz if u[i, j, k] != 1.0]
         @test all(t -> t[3] in (bus.k_air[t[1], t[2]], bus.k_air[mod1(t[1] - 1, Nx), t[2]]), touched)
         u .= u0; v .= v0
+        bus.u_star .= ustar0
     end
 
     @testset "extra surface energy (bus.sensible) reaches the surface at its next step" begin
