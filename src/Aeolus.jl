@@ -168,6 +168,9 @@ export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
 export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
        sgs_scalar_tensor, IsentropicDiffusion
+# Era VI (P55-e, #187): the stability-corrected anisotropic closure
+export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
+       sgs_stratification!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!

@@ -6,7 +6,9 @@ using ..Fields
 using ..Fields: Field, mesh
 using ..BoundaryConditions: BoundaryConditions, fill_halos!, Periodic, FieldBoundaryConditions
 using ..Grids: interior
-using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
+using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR,
+                             AbstractRiStability, BrownEtAl1994,
+                             stability_factor_m, stability_factor_h
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
@@ -33,6 +35,9 @@ export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
        sgs_scalar_tensor, IsentropicDiffusion
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
+# Era VI (P55-e, #187): the stability-corrected anisotropic closure (operators/sgs_stability.jl)
+export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
+       sgs_stratification!
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -513,5 +518,9 @@ include("operators/scalar_tensor.jl")
 
 # Pointwise N² and Ri_g (Era VI, P58-a).
 include("operators/stratification.jl")
+
+# Era VI: the stability-corrected anisotropic eddy viscosity / diffusivity
+# (P55-e; uses the contract, the scalar operators and the N² / Ri_g stencils).
+include("operators/sgs_stability.jl")
 
 end # module
