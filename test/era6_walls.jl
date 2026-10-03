@@ -243,4 +243,123 @@ end
         ϕ = -angle.(A[sel]); ϕ .-= ϕ[1]
         @test ϕ[end] ≈ (z[sel[end]] - z[sel[1]]) / δ rtol = 0.02
     end
+
+    @testset "momentum budget of a 3-D flow, to 1e-12 per step" begin
+        # Random 3-D velocity between a stationary floor and a moving lid,
+        # with advection, a body force and the pressure projection all on.
+        # Periodic x, y and w = 0 on the walls leave only the wall stresses
+        # and the forcing in the plane-integrated budget:
+        #   Δ∫ū dz = Δt [τ(top) − τ(bottom) + G Lz] .
+        U, ν, G = 0.5, 0.02, 0.3
+        m = RegularGrid(size = (8, 8, 16), extent = (1.0, 1.0, 1.0))
+        bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip,
+                                      top = NoSlipWall(U, -0.2))
+        sim = BoussinesqSimulation(m; ν = ν, bcs = bcs)
+        @test sim.solver isa CosineFFTPoissonSolver        # pressure problem unchanged
+        rng = MersenneTwister(7)
+        for f in (sim.u, sim.v, sim.w)
+            interior_view(f) .= 0.2 .* randn(rng, size(interior_view(f)))
+        end
+        drive!(s, Δt) = (interior_view(s.tu) .+= G; nothing)
+        step!(sim, 1e-3; body_force! = drive!)          # project the random field
+        @test max_divergence(sim) < 1e-12
+        colint(f) = sum(plane_mean(f)) * m.dz
+        dt = 2e-3
+        worst_u = worst_v = 0.0
+        for _ in 1:20
+            Mu, Mv = colint(sim.u), colint(sim.v)
+            fu = wall_shear_stress(sim; side = :top) - wall_shear_stress(sim) + G * m.Lz
+            fv = wall_shear_stress(sim; side = :top, component = :v) -
+                 wall_shear_stress(sim; component = :v)
+            step!(sim, dt; body_force! = drive!)
+            worst_u = max(worst_u, abs(colint(sim.u) - Mu - dt * fu))
+            worst_v = max(worst_v, abs(colint(sim.v) - Mv - dt * fv))
+        end
+        @printf("    momentum budget residual per step: u %.1e, v %.1e (|Δt·forcing| ≈ %.1e)\n",
+                worst_u, worst_v, dt * G)
+        @test worst_u < 1e-12
+        @test worst_v < 1e-12
+        @test max_divergence(sim) < 1e-12
+    end
+
+    @testset "IMEX with :noslip matches explicit in the Couette steady state" begin
+        # The moving lid makes the implicit diffusion operator affine; the CG
+        # iterates with the stationary wall and carries the wall term on the
+        # right-hand side (ARK2: the unknown is the state), or drops it
+        # (Rosenbrock2: the unknown is an increment).
+        U, ν = 1.0, 0.01
+        m = wall_mesh(16)
+        bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip,
+                                      top = NoSlipWall(U, 0))
+        ex = BoussinesqSimulation(m; ν = ν, bcs = bcs)
+        dt = 0.3 * m.dz^2 / ν
+        for _ in 1:ceil(Int, 4 / ν / dt); step!(ex, dt); end
+        for scheme in (ARK2(), Rosenbrock2())
+            im = BoussinesqSimulation(m; ν = ν, bcs = bcs)
+            for _ in 1:200                              # Δt = 2 s ≈ 13× the explicit limit
+                step_imex!(im, 2.0, scheme; tol = 1e-14)
+            end
+            d = maximum(abs.(plane_mean(im.u) .- plane_mean(ex.u)))
+            @printf("    IMEX %s vs explicit Couette: %.2e U, τ_b = %.15f\n",
+                    nameof(typeof(scheme)), d, wall_shear_stress(im))
+            @test d < 1e-10 * U
+            @test abs(wall_shear_stress(im) - ν * U) < 1e-10 * ν * U
+        end
+        # the implicit solve alone: one backward-Euler step from rest gives the
+        # discrete solution of (I − Δt ν ∂zz) u = 0 with the lid at U, which
+        # is nonzero only because of the wall term
+        f = Field(FaceX(), m); fill!(f.data, 0)
+        st = solve_implicit_diffusion!(f, f, ν, 1.0, m, bcs; tol = 1e-14)
+        @test st.converged
+        u1 = plane_mean(f)
+        @test u1[end] > u1[end-1] > 0 && u1[1] ≥ 0
+        tmp = Field(FaceX(), m); tmp.data .= f.data; fill_halos!(tmp, bcs)
+        lap = Field(FaceX(), m); laplacian(lap, tmp)
+        @test maximum(abs.(interior_view(f) .- ν .* interior_view(lap))) < 1e-12
+        # w is still pinned to zero on the wall face
+        wz = Field(FaceZ(), m); interior_view(wz) .= 1.0
+        solve_implicit_diffusion!(wz, wz, ν, 1.0, m, bcs; tol = 1e-14)
+        @test all(iszero, wz.data[:, :, m.Hz + 1])
+    end
+
+    @testset "other dispatch sites accept NoSlipWall" begin
+        U, ν = 1.0, 0.01
+        m = wall_mesh(16)
+        bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip,
+                                      top = NoSlipWall(U, 0))
+        dt = 0.3 * m.dz^2 / ν
+        n = ceil(Int, 4 / ν / dt)
+        # cut-cell velocity BC as the post-predictor hook (all-fluid geometry):
+        # apply_cutcell_velocity_bc! acts on apertures only, so the wall BC
+        # comes through fill_halos! untouched
+        geom = cut_cell_geometry(m, (x, y, z) -> 1.0)
+        sim = BoussinesqSimulation(m; ν = ν, bcs = bcs)
+        hook!(s, Δt) = apply_cutcell_velocity_bc!(s, geom)
+        for _ in 1:n; step!(sim, dt; post_predictor! = hook!); end
+        @test maximum(abs.(plane_mean(sim.u) .- U .* wall_zc(m))) < 1e-10
+        # anelastic core: the same halo through fill_halos!
+        ma = RegularGrid(size = (4, 4, 16), extent = (100.0, 100.0, 100.0))
+        an = AnelasticSimulation(ma; ν = 10.0, buoyancy = false, bcs = bcs)
+        dta = 0.3 * ma.dz^2 / 10.0
+        for _ in 1:ceil(Int, 4 * 100^2 / 10.0 / dta); step_anelastic!(an, dta); end
+        @test maximum(abs.(plane_mean(an.u) .- wall_zc(ma) ./ 100)) < 1e-10
+    end
+
+    @testset "regression: `:wall` runs take the unchanged code path" begin
+        # The free-slip path does not touch the new code: halo fill
+        # dispatches to the original methods (tested above), the IMEX solve
+        # sees the very same BC object (no affine term), and the pinned
+        # w-row of the implicit solve is the one it always was. (Bitwise
+        # equality with master of a 3-D :wall run, explicit and ARK2, was
+        # checked when this landed; see the PR.)
+        free = FieldBoundaryConditions(:periodic, :periodic, :wall)
+        @test homogeneous_bcs(free) === free
+        m = wall_mesh(8)
+        TI = Aeolus.TimeIntegration
+        @test TI._constraint_index(FaceZ(), m, free) == m.Hz + 1
+        @test TI._constraint_index(FaceZ(), m,
+                  FieldBoundaryConditions(:periodic, :periodic, :noslip)) == m.Hz + 1
+        @test TI._constraint_index(FaceZ(), m, FieldBoundaryConditions(:periodic)) == 0
+        @test TI._constraint_index(FaceX(), m, free) == 0
+    end
 end
