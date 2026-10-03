@@ -973,6 +973,7 @@ end
 
 @testset "Era VI" begin
     include("era6_sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
+    include("era6_sgs_stress_form.jl")   # P55-b: stress-form SGS momentum divergence, anisotropic ν, IMEX split (#175)
 end
 
 # =========================================================================

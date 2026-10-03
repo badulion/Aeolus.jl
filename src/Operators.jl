@@ -23,6 +23,9 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+# Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
+export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
+       add_sgs_stress_divergence!, sgs_stress_dissipation
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -476,6 +479,13 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                      _add_eddy_viscosity_u!, _add_eddy_viscosity_v!, _add_eddy_viscosity_w!,
                      _add_eddy_diffusion_scalar!,
                      _add_surface_flux!, _add_sponge!,
-                     _advect_weno5!
+                     _advect_weno5!,
+                     _add_sgs_stress_divergence!, _add_stress_divergence!,
+                     _sgs_stress_tensor!, _sgs_stress_dissipation
+
+# -------------------------------------------------------------------------
+# Era VI: the stress-form SGS momentum divergence (wraps the kernels above).
+# -------------------------------------------------------------------------
+include("operators/sgs_stress.jl")
 
 end # module
