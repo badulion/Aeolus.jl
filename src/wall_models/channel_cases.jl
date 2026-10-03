@@ -372,8 +372,10 @@ pressure gradient as `body_force!` and the wall stress as
 `post_predictor!` ([`apply_wall_stress!`](@ref) at each modelled wall, in
 every substage, with the `wind` / `height` of the case's
 [`MatchingInput`](@ref)s when it has them; their temporal filters are
-advanced once, after the step). Updates `case.τ_wall_bottom` / `case.τ_wall_top` with the
-plane-mean stress the step applied.
+advanced once, after the step; a [`TBLEWallModel`](@ref)'s columns are
+then advanced with [`update_wall_model!`](@ref), with the mean pressure
+gradient ``-G`` plus the resolved one). Updates `case.τ_wall_bottom` /
+`case.τ_wall_top` with the plane-mean stress the step applied.
 """
 function advance_channel!(case::WallBoundedCase{S, C, W, T}, dt::Real) where {S, C, W, T}
     s = case.sim; g = s.mesh

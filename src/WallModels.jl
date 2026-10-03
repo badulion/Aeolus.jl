@@ -32,7 +32,15 @@ roughness) only add files and include lines:
      2012) and filtered in time (Yang, Park & Moin 2017) and along the
      wall (Bou-Zeid, Meneveau & Parlange 2005), against log-layer
      mismatch.
-  4. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
+  4. **The non-equilibrium model** (`tble.jl`, P57-c #189) —
+     [`TBLEWallModel`](@ref): the thin-boundary-layer equations on an
+     embedded wall-normal grid under every wall column (Balaras, Benocci
+     & Piomelli 1996; Wang & Moin 2002; Kawai & Larsson 2012; Park & Moin
+     2014), its upper boundary condition the `MatchingInput` velocity,
+     with the dynamic ``κ_{wm}`` of Wang & Moin; an
+     [`AbstractWallModel`](@ref) applied by the same face loop as the
+     equilibrium [`WallModel`](@ref).
+  5. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
      [`half_channel_case`](@ref) (the neutral ABL half channel of
      Porté-Agel et al. 2000 / Bou-Zeid et al. 2005) and
      [`channel_case`](@ref) (the two-wall channel at a given Re_τ), with
@@ -68,6 +76,13 @@ roughness) only add files and include lines:
   * Lee, M. & Moser, R. D. (2015). Direct numerical simulation of
     turbulent channel flow up to Re_τ ≈ 5200. *J. Fluid Mech.*, 774,
     395-415.
+  * Balaras, E., Benocci, C. & Piomelli, U. (1996). Two-layer
+    approximate boundary conditions for large-eddy simulations.
+    *AIAA J.*, 34, 1111-1119.
+  * Wang, M. & Moin, P. (2002). Dynamic wall modeling for large-eddy
+    simulation of complex turbulent flows. *Phys. Fluids*, 14, 2043-2051.
+  * Park, G. I. & Moin, P. (2014). An improved dynamic non-equilibrium
+    wall-model for large eddy simulation. *Phys. Fluids*, 26, 015108.
 """
 module WallModels
 

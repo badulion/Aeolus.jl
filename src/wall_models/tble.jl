@@ -230,7 +230,7 @@ equations
     ODE of the equilibrium models, solved directly (`Δt` and the pressure
     gradient are ignored);
   * `:pressure_gradient` — the unsteady equation with the pressure
-    gradient and no convection (the "TBLE-PG" of Kawai & Larsson 2012);
+    gradient and no convection;
   * `:full` — plus the convective tendency `col.cx`, `col.cy`, set by
     the caller ([`update_wall_model!`](@ref) computes it from the
     neighbouring columns, Park & Moin 2014).
@@ -555,6 +555,21 @@ function _prime_columns!(wm, w, uin, vin, hh; everything::Bool = false)
     return w
 end
 
+"""
+    apply_wall_stress!(sim, wm::TBLEWallModel, Δt; side = :bottom, mask = nothing,
+                       input = nothing, formulation = :local,
+                       ustar = nothing, wind_out = nothing) -> (Fx, Fy)
+
+Apply the wall stress of the TBLE columns of `wm` (their state after the
+last [`update_wall_model!`](@ref); primed with the equilibrium solution
+on first use) with the implicit face loop of the equilibrium operator:
+per column ``τ_{w,i} = a u_i + b_i``, ``a = \\max(\\boldsymbol τ_w·\\hat{\\mathbf
+u}, 0)/U`` along the resolved first-cell velocity, ``b_i`` the rest
+(see [`TBLEWallModel`](@ref)). `side`, `mask` and the return value are
+those of the equilibrium method; `input` is the [`MatchingInput`](@ref)
+whose velocity primes the columns; `ustar` / `wind_out` receive each
+column's ``u_τ`` and the speed at its matching point.
+"""
 function apply_wall_stress!(sim, wm::TBLEWallModel, Δt::Real; side::Symbol = :bottom,
                             mask = nothing, input = nothing, formulation::Symbol = :local,
                             ustar = nothing, wind_out = nothing)

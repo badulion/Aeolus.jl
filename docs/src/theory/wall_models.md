@@ -284,6 +284,111 @@ drops from 1.189 to 1.106 (by 0.07-0.10 over seeds 1-4), but the peak,
 that the input fix lowers it is a broken test, and the remedy is the
 closure (P54-e, #186).
 
+## Non-equilibrium wall model: the thin-boundary-layer equations (P57-c)
+
+An equilibrium law assumes the stress is constant between the wall and
+the matching point, so the wall stress follows the matching-point speed
+and nothing else. The non-equilibrium model of Balaras, Benocci &
+Piomelli (1996) and Wang & Moin (2002) instead integrates the
+thin-boundary-layer equations (TBLE) on an embedded wall-normal grid
+under every wall column,
+
+```math
+\frac{∂u_i}{∂t} + \mathrm{conv}_i = -\frac{∂p}{∂x_i}
+  + \frac{∂}{∂y}\left[(ν + ν_{t,wm})\frac{∂u_i}{∂y}\right],
+\qquad u_i(0) = 0,\quad u_i(h_{wm}) = u_i^{LES}(h_{wm}),
+```
+
+with the eddy viscosity of Cabot & Moin (2000)
+
+```math
+ν_{t,wm} = κ_{wm}\,y\,u_τ\left(1 - e^{-y^+/A^+}\right)^2, \qquad A^+ = 17,
+```
+
+(``κ_{wm}u_τ(y + z_0)`` over a rough wall). `TBLEWallModel` is an
+`AbstractWallModel`: the upper boundary condition is the velocity
+sampled by P57-b's `MatchingInput` (matching height, time and
+wall-parallel filters), and the stress is applied by the same implicit
+face loop as the equilibrium `WallModel`. The eddy viscosity is a
+generic (`AbstractTBLEEddyViscosity`, `tble_eddy_viscosity`) so P58 can
+add buoyancy by a subtype; the test file adds a channel mixing length
+that way.
+
+`terms` selects the equation:
+
+| `terms` | equation |
+| :-- | :-- |
+| `:equilibrium_ode` | ``∂_y[(ν + ν_t)∂_y u_i] = 0``, solved directly (the ODE of the equilibrium models) |
+| `:pressure_gradient` | unsteady, with ``∂p/∂x_i`` (the mean forcing plus the resolved ``p`` at the matching cell) |
+| `:full` | plus ``u∂_x u_i + v∂_y u_i + w∂_y u_i`` from the neighbouring columns (Park & Moin 2014): first-order upwind, ``w`` from continuity |
+
+**Discretisation.** 30 nodes with geometric stretching (ratio 1.2; the
+first node at ``8.5·10^{-4}h``), finite volumes, backward Euler (any Δt)
+and one tridiagonal solve per component. The flux of a segment is
+``G(u_{j+1} - u_j)`` with the conductance ``G = [∫dy/(ν + ν_t)]^{-1}``
+integrated exactly (4-point Gauss–Legendre), so the steady unforced
+solution is the quadrature of the equilibrium ODE at the nodes whatever
+the grid, and with ``ν_t ≡ 0`` the scheme is exact for quadratic
+profiles. The wall stress is the first segment's flux carried to the wall
+with the wall value of ``∂τ/∂y = ∂p/∂x``. ``ν_t`` depends on the
+column's own ``u_τ``: each step is iterated (secant on
+``u_τ = |τ_w(u_τ)|^{1/2}``, each iterate a full implicit solve).
+
+**Coupling.** In every substage `apply_wall_stress!` applies the
+columns' current stress ``\boldsymbol τ_w``, split as
+``τ_{w,i} = a u_i + b_i`` with the implicit part
+``a = \max(\boldsymbol τ_w·\hat{\mathbf u}, 0)/U`` along the resolved
+first-cell velocity and the explicit rest ``b_i`` (a pressure gradient
+can turn the stress away from the flow). `update_wall_model!` advances
+the columns once per accepted step with the end-of-step velocity and
+pressure. The first use primes them with the equilibrium solution.
+
+### Measured (`test/era6_wall_models_tble.jl`)
+
+| test | result |
+| :-- | :-- |
+| equilibrium vs `SpaldingLaw()` (κ = 0.41), ``u_τ`` at ``h^+`` = 30 / 300 / 3000 | −3.0 % / −0.003 % / +0.22 % |
+| equilibrium ODE vs adaptive quadrature of ``U = u_τ^2∫dy/(ν+ν_t)`` | ≤ 7e-11 |
+| Stokes' first problem (``ν_t ≡ 0``), ``τ_w = νU/\sqrt{πνt}`` for ``t`` = 10…1000 ``Δy^2/ν`` | error ≤ 2.7e-3, ratio 4.00-4.19 under halving |
+| Poiseuille (``ν_t ≡ 0``, stretched grid) | profile 1e-10, ``τ = τ_w + y\,∂p/∂x`` to 1e-12 |
+| column momentum, 200 random steps (`:pressure_gradient`, `:full`) | ≤ 6e-16 |
+| channel Re_τ = 1000, 24×12×16, Smagorinsky 0.1, ``h_{wm} = 3Δz``, time filter, `:pressure_gradient` | U_b⁺ 19.253 (−3.68 % vs Lee & Moser), ⟨τ_w⟩ 1.054 |
+| … the same with `:full` / `:equilibrium_ode` (example runs) | −3.38 % / −1.58 % (the equilibrium `SpaldingLaw`: −1.49 %) |
+| ``∂p/∂x`` tripled (1-D resolved-channel reference, ``h_{wm} = 0.1δ``): ``τ_w`` half-way to ``3τ_0`` | reference 5.960, TBLE 5.965, equilibrium 6.255 δ/u_τ |
+| … rise of ``τ_w`` at 0.25 δ/u_τ | reference 0.072, TBLE 0.071, equilibrium 0.051 ``u_τ^2`` |
+
+The response test follows He & Seddighi (2013) qualitatively: after a
+step increase of the flow rate the wall stress first rises in a thin
+Stokes-like layer driven by the pressure gradient, before the core
+accelerates. The TBLE sees the pressure gradient and reproduces that
+early rise (within 1.4 %); the equilibrium law sees only the matching
+speed and lags it.
+
+**Expectation that proved wrong: within 1 % of Spalding at h⁺ = 30.**
+At ``h^+ = 30`` the matching point is in the buffer layer, where the
+van Driest-damped viscosity (A⁺ = 17) and Spalding's fit are two
+different profiles: −3.0 % (A⁺ = 19: −6.6 %; A⁺ = 25: −14 %). In the
+log layer they agree to 0.2 %. Kept as a broken test.
+
+**Dynamic κ (Wang & Moin 2002).** `dynamic_kappa = :total` makes the
+TBLE eddy viscosity at ``h_{wm}`` equal the LES's effective one there,
+(resolved + SGS stress)/(resolved mean shear), in the plane mean;
+`:sgs` matches the SGS viscosity alone (Wang & Moin's form). A first
+version matched the *stress* instead; that is degenerate: in a
+statistically steady flow both sides equal ``τ_w + h\,∂p/∂x`` by the
+momentum balance whatever κ is, and κ drifted to the clamp. With the
+viscosity matching, the channel above gives κ_wm = 0.27 (averaged over
+5-8 δ/u_τ, not fed back), close to ``0.41(1 - h/δ) = 0.26`` — the
+outer-layer decrease of the stress that the mixing-length viscosity
+lacks — and to Wang & Moin's ≈ 0.2. Fed back into `:pressure_gradient`,
+which has no resolved convection to carry the difference, it lowers the
+viscosity near the wall as well: U_b⁺ +6.5 % at 8 δ/u_τ and +15.9 % over
+16-24 δ/u_τ (κ_wm 0.27, ⟨τ_w⟩ 0.99); with `:full` +7.4 % at 8 δ/u_τ. So
+the default is `:off` (κ_wm = κ of the law), and
+`κ_feedback = false` reports the dynamic value without using it.
+
+**Not modelled.** No Monin–Obukhov correction in ``ν_{t,wm}`` (neutral).
+
 ## In the Berlin case
 
 The ground of the flagship is this operator with a `MOSTWallLaw` per
@@ -305,10 +410,31 @@ mean 7.8e-3), and the filter changes the ground mean ``u_*`` by +0.7 %
 (0.05225 → 0.05260 m s⁻¹); it costs 0.07 ms per step on a 64 × 64
 plane.
 
+Since P57-c the option `wall_model = :nonequilibrium` of the
+`surface_exchange` coupling replaces the ground's `MOSTWallLaw` by a
+`TBLEWallModel` (default stays `:equilibrium`): a 30-point column under
+every ground and roof column, rough (the surface's own ``z_{0m}``),
+driven by the same time-filtered first-air-cell wind and by the resolved
+pressure gradient at the first air level (one-sided next to a building),
+with `tble_terms = :pressure_gradient`. It is neutral: the Monin–Obukhov
+correction of the equilibrium law is not carried into the TBLE. A smoke
+variant runs it. Measured on the flagship (`CaseConfig(:summer)`,
+64 × 64 × 32, 100 steps after 300 steps of spin-up): the coupling's own
+stages cost 15.6 ms per step more (9.4 % of the 166.5 ms equilibrium
+step; the whole step measured 3.3 % slower on a loaded machine), so it
+is not proposed as the default (the issue's bar was 5 %). On the 1690
+street columns the TBLE and the equilibrium stress at the same input
+differ in sign on 11.1 % and in sign or by more than 30 % on 77.3 %
+(median ratio 1.03, interquartile 0.48-2.16; mean 4.5e-3 against
+3.0e-3 m² s⁻²): the resolved pressure gradient at the first air level
+of a street canyon (median 3.3e-3, 90th percentile 7.4e-3 m s⁻²) times
+the 3.1 m matching height is of the order of the stress itself, which
+is exactly the non-equilibrium the law cannot see.
+
 ## Not yet here
 
-The thin-boundary-layer equations (P57-c), facade walls (P57-d) and dynamic roughness (P57-e)
-add files under `src/wall_models/`.
+Facade walls (P57-d) and dynamic roughness (P57-e) add files under
+`src/wall_models/`; buoyancy in the TBLE eddy viscosity is P58.
 
 ## References
 
@@ -337,6 +463,19 @@ add files under `src/wall_models/`.
     51-78.
   * Moin, P. & Kim, J. (1982). Numerical investigation of turbulent
     channel flow. *J. Fluid Mech.*, 118, 341-377.
+  * Balaras, E., Benocci, C. & Piomelli, U. (1996). Two-layer
+    approximate boundary conditions for large-eddy simulations.
+    *AIAA J.*, 34, 1111-1119.
+  * Cabot, W. & Moin, P. (2000). Approximate wall boundary conditions in
+    the large-eddy simulation of high Reynolds number flow. *Flow
+    Turbul. Combust.*, 63, 269-291.
+  * Wang, M. & Moin, P. (2002). Dynamic wall modeling for large-eddy
+    simulation of complex turbulent flows. *Phys. Fluids*, 14,
+    2043-2051.
+  * Park, G. I. & Moin, P. (2014). An improved dynamic non-equilibrium
+    wall-model for large eddy simulation. *Phys. Fluids*, 26, 015108.
+  * He, S. & Seddighi, M. (2013). Turbulence in transient channel flow.
+    *J. Fluid Mech.*, 715, 60-102.
   * Lee, M. & Moser, R. D. (2015). Direct numerical simulation of
     turbulent channel flow up to Re_τ ≈ 5200. *J. Fluid Mech.*, 774,
     395-415.

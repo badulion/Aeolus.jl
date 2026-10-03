@@ -24,6 +24,17 @@ Era VI. Theory: [Wall models](../../theory/wall_models.md).
   `exponential_filter_weight`, `wall_parallel_filter!`; the case
   builders take `h_wm`, `h_wm_cells`, `filter`, `T_f`. Theory:
   [Wall models → Log-layer mismatch](../../theory/wall_models.md).
+- **Non-equilibrium wall model** (P57-c, #189): `AbstractWallModel`
+  (`WallModel` and `TBLEWallModel` share the operator's implicit face
+  loop); `TBLEWallModel` (the thin-boundary-layer equations under every
+  wall column, `terms = :equilibrium_ode | :pressure_gradient | :full`,
+  dynamic ``κ_{wm}`` of Wang & Moin 2002) with `update_wall_model!`,
+  `tble_kappa`, `tble_columns`; the column solver `TBLEColumn`,
+  `tble_solve!`, `tble_grid`, `tble_column_momentum`; the eddy-viscosity
+  generic `AbstractTBLEEddyViscosity` / `tble_eddy_viscosity` with
+  `DampedMixingLength` and `NoEddyViscosity`. `channel_case(wall_model =
+  :nonequilibrium, tble = (...))`. Theory:
+  [Wall models → Non-equilibrium wall model](../../theory/wall_models.md).
 
 ```@autodocs
 Modules = [Aeolus.WallModels]

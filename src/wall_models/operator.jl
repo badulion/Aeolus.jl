@@ -123,6 +123,11 @@ to the first velocity level (Kawai & Larsson 2012).
 column with a wall, the friction velocity of the law and the speed it
 was evaluated at (one side only).
 
+A [`TBLEWallModel`](@ref) (P57-c) is applied by the same face loop
+with the stress of its columns (`apply_wall_stress!(sim, wm::TBLEWallModel,
+Δt; side, mask, input, ustar, wind_out)`; `input` a
+[`MatchingInput`](@ref), `formulation = :local` only).
+
 Returns the volume-integrated kinematic force of the step,
 ``\\sum (u' - u)/Δt\\,ΔV`` (m⁴ s⁻²) per component, negative for a flow
 in the positive direction; divided by the wall area it is the mean
