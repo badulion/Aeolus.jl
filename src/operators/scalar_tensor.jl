@@ -205,3 +205,95 @@ end
 _kdata(x::Real) = x
 _kdata(x::Field) = x.data
 _kdata(x::AbstractArray) = x
+
+# -------------------------------------------------------------------------
+# The tensor in the closure contract
+# -------------------------------------------------------------------------
+
+"""
+    sgs_scalar_tensor(c::AbstractSGSClosure, f::SGSFields, sim)
+        -> Union{Nothing, DiffusivityTensor}
+
+The full scalar diffusivity tensor of the closure `c`, valid after
+[`compute_sgs!`](@ref) (interior and halos), or `nothing` (the default) for
+a closure whose scalar flux is the diagonal `(f.κh, f.κv)`. The IMEX cores
+read it: they solve the diagonal `K11, K22, K33` implicitly and add the
+off-diagonal part explicitly (`add_tensor_diffusion_scalar!(…; part =
+:offdiagonal)`) with the tensor frozen at the start of the step, the same
+lagged linearisation as the eddy coefficients. A closure that returns a
+tensor also adds an [`add_sgs_scalar!`](@ref) method applying it (the
+explicit cores call that).
+"""
+sgs_scalar_tensor(::AbstractSGSClosure, f::SGSFields, sim) = nothing
+
+# the boundary conditions of the scalars (θ) of a core
+_scalar_bcs(sim) = hasproperty(sim, :θ_bcs) ? sim.θ_bcs : sim.bcs
+
+"""
+    IsentropicDiffusion(inner::AbstractSGSClosure, mesh; slope_max = 1.0,
+                        grad_min = 1e-6, diapycnal = nothing)
+
+A closure that runs `inner` unchanged for the eddy coefficients and the
+momentum, and diffuses the scalars with the rotated isentropic tensor
+[`isentropic_tensor!`](@ref)`(K, sim.θ, κh, κv; slope_max, grad_min)` in
+the triad form [`add_tensor_diffusion_scalar!`](@ref): `κh = f.κh` along
+the isentropes and, across them, `κv = f.κv` (`diapycnal = nothing`, the
+closure's own vertical diffusivity) or `κv = diapycnal · f.κh`
+(`0 ≤ diapycnal ≤ 1`). The tensor is built in [`sgs_coefficients!`](@ref)
+from the current `θ` (its halos are filled by every core before the
+coefficients are formed) and its halos are filled with `sim.bcs`, like the
+other coefficients; walls are taken from the scalar boundary conditions
+(`sim.θ_bcs`, [`bounded_directions`](@ref)).
+
+`inner`'s memory and its commit cadence are untouched (`advance_sgs!`,
+`sgs_state`, `restore_sgs_state!` forward to it). Under `step_imex!` the
+diagonal of K is implicit and the off-diagonal part explicit (see
+[`sgs_scalar_tensor`](@ref)).
+
+With an isotropic `inner` and `diapycnal = nothing`, `κv = κh` and K is the
+isotropic `κh I` (the triad operator then reproduces the default diagonal
+operator to round-off): the rotation matters once a closure supplies
+`κv < κh` (P55-e, #187) or `diapycnal < 1` is given.
+"""
+struct IsentropicDiffusion{C<:AbstractSGSClosure, D<:DiffusivityTensor, F, R} <: AbstractSGSClosure
+    inner::C
+    K::D
+    κv::F                    # scratch for κv = diapycnal · κh
+    slope_max::Float64
+    grad_min::Float64
+    diapycnal::R
+end
+function IsentropicDiffusion(inner::AbstractSGSClosure, g::RegularGrid; slope_max::Real = 1.0,
+                             grad_min::Real = 1e-6, diapycnal::Union{Nothing,Real} = nothing)
+    slope_max > 0 || throw(ArgumentError("slope_max must be positive, got $slope_max"))
+    diapycnal === nothing || 0 <= diapycnal <= 1 ||
+        throw(ArgumentError("diapycnal must be in [0, 1] or nothing, got $diapycnal"))
+    return IsentropicDiffusion(inner, DiffusivityTensor(g), Field(CellCenter(), g),
+                               Float64(slope_max), Float64(grad_min), diapycnal)
+end
+
+sgs_fields(c::IsentropicDiffusion, sim) = sgs_fields(c.inner, sim)
+function sgs_coefficients!(f::SGSFields, c::IsentropicDiffusion, sim)
+    sgs_coefficients!(f, c.inner, sim)
+    κv = if c.diapycnal === nothing
+        f.κv
+    else
+        c.κv.data .= c.diapycnal .* f.κh.data
+        c.κv
+    end
+    isentropic_tensor!(c.K, sim.θ, f.κh, κv; slope_max = c.slope_max, grad_min = c.grad_min)
+    return f
+end
+function _fill_sgs_halos!(f::SGSFields, c::IsentropicDiffusion, sim)
+    _fill_sgs_halos!(f, c.inner, sim)
+    fill_halos!(c.K, sim.bcs)
+    return f
+end
+advance_sgs!(c::IsentropicDiffusion, sim, dt) = (advance_sgs!(c.inner, sim, dt); c)
+sgs_state(c::IsentropicDiffusion) = sgs_state(c.inner)
+restore_sgs_state!(c::IsentropicDiffusion, s) = (restore_sgs_state!(c.inner, s); c)
+add_sgs_momentum!(tu, tv, tw, c::IsentropicDiffusion, f::SGSFields, sim; stress::Symbol = :laplacian) =
+    add_sgs_momentum!(tu, tv, tw, c.inner, f, sim; stress = stress)
+sgs_scalar_tensor(c::IsentropicDiffusion, f::SGSFields, sim) = c.K
+add_sgs_scalar!(tϕ, ϕ, c::IsentropicDiffusion, f::SGSFields, sim) =
+    add_tensor_diffusion_scalar!(tϕ, ϕ, c.K; bounded = bounded_directions(_scalar_bcs(sim)))

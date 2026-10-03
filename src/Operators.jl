@@ -28,7 +28,8 @@ export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
        add_sgs_stress_divergence!, sgs_stress_dissipation
 # Era VI (P55-c, #181): the tensorial scalar eddy diffusivity (operators/scalar_tensor.jl)
 export DiffusivityTensor, diagonal_tensor!, bounded_directions,
-       add_tensor_diffusion_scalar!, isentropic_tensor!
+       add_tensor_diffusion_scalar!, isentropic_tensor!,
+       sgs_scalar_tensor, IsentropicDiffusion
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.

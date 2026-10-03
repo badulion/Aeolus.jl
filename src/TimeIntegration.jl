@@ -42,7 +42,8 @@ using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    add_surface_flux!, add_sponge!,
                    AbstractSGSClosure, SGSFields, compute_sgs!, sgs_fields, advance_sgs!,
                    sgs_state, restore_sgs_state!, sgs_closure, _active_sgs,
-                   add_sgs_stress_divergence!, _check_sgs_stress
+                   add_sgs_stress_divergence!, _check_sgs_stress,
+                   sgs_scalar_tensor, add_tensor_diffusion_scalar!, bounded_directions
 using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence
@@ -736,7 +737,23 @@ const _SCX = _StressCoef{FaceX}; const _SCY = _StressCoef{FaceY}; const _SCZ = _
 @inline _νzp(c::_SCZ, i, j, k) = _at(c.v, i, j, k)
 @inline _νzm(c::_SCZ, i, j, k) = _at(c.v, i, j, k-1)
 
-_coef(c::Union{_DirCoef,_StressCoef}, ::RegularGrid) = c
+# (Kxx, Kyy, Kzz) for a cell-centred unknown: the diagonal of a diffusivity
+# tensor (P55-c, #181), each on the faces of its own direction with the
+# 2-point average — exactly the `part = :diagonal` of
+# `add_tensor_diffusion_scalar!`.
+struct _DirCoef3{X,Y,Z}
+    x::X
+    y::Y
+    z::Z
+end
+@inline _νxp(c::_DirCoef3, i, j, k) = _νxp(c.x, i, j, k)
+@inline _νxm(c::_DirCoef3, i, j, k) = _νxm(c.x, i, j, k)
+@inline _νyp(c::_DirCoef3, i, j, k) = _νyp(c.y, i, j, k)
+@inline _νym(c::_DirCoef3, i, j, k) = _νym(c.y, i, j, k)
+@inline _νzp(c::_DirCoef3, i, j, k) = _νzp(c.z, i, j, k)
+@inline _νzm(c::_DirCoef3, i, j, k) = _νzm(c.z, i, j, k)
+
+_coef(c::Union{_DirCoef,_DirCoef3,_StressCoef}, ::RegularGrid) = c
 # a pair (νh, νv): νh on the x and y faces, νv on the z faces
 _coef(ν::Tuple{Any,Any}, m::RegularGrid) = _DirCoef(_coef(ν[1], m), _coef(ν[2], m))
 
@@ -1162,6 +1179,7 @@ mutable struct IMEXWorkspace{T,S<:NamedTuple,D<:NamedTuple}
     ν_scal::Union{Nothing,Array{T,3}}
     ν_mom_v::Union{Nothing,Array{T,3}}    # vertical ν_eff (sgs_stress = :symmetric)
     ν_scal_v::Union{Nothing,Array{T,3}}   # vertical κ_eff (a closure with κv ≢ κh)
+    ν_scal_y::Union{Nothing,Array{T,3}}   # y κ_eff (a closure with a scalar tensor)
     total_iterations::Int
     max_residual::T
 end
@@ -1176,7 +1194,7 @@ function IMEXWorkspace(sim::BoussinesqSimulation{T}) where {T}
               w = DiffusionWorkspace(sim.w), c = DiffusionWorkspace(sim.θ))
     return IMEXWorkspace{T,typeof(state0),typeof(diff)}(
         state0, aux, nothing, Field(CellCenter(), m), diff, nothing, nothing,
-        nothing, nothing, 0, zero(T))
+        nothing, nothing, nothing, 0, zero(T))
 end
 
 const _IMEX_WORKSPACES = WeakKeyDict{Any,Any}()
@@ -1208,10 +1226,15 @@ end
 # `sgs_transpose = (νh, νv)` (arrays, halos filled) adds the explicit half of
 # the stress-form SGS split (`sgs_stress = :symmetric`): the transposed part
 # ∂ⱼ(νᵢⱼ ∂uⱼ/∂xᵢ), whose diagonal partner ∂ⱼ(νᵢⱼ ∂uᵢ/∂xⱼ) is implicit.
+#
+# `scalar_tensor` (a DiffusivityTensor, halos filled) adds the explicit half
+# of a tensorial scalar diffusivity (P55-c): its off-diagonal (cross) part on
+# θ and qv, whose diagonal partner is implicit.
 function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
                                body_force!::Union{Nothing,Function} = nothing,
                                momentum_advection = momentum_advect!,
-                               sgs_transpose = nothing) where {T}
+                               sgs_transpose = nothing,
+                               scalar_tensor = nothing) where {T}
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
@@ -1228,6 +1251,12 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
     sgs_transpose === nothing ||
         add_sgs_stress_divergence!(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w,
                                    sgs_transpose[1], sgs_transpose[2]; part = :transpose)
+    if scalar_tensor !== nothing
+        bnd = bounded_directions(sim.θ_bcs)
+        add_tensor_diffusion_scalar!(sim.tθ, sim.θ, scalar_tensor; bounded = bnd, part = :offdiagonal)
+        sim.has_moisture &&
+            add_tensor_diffusion_scalar!(sim.tqv, sim.qv, scalar_tensor; bounded = bnd, part = :offdiagonal)
+    end
 
     if sim.has_buoyancy
         if sim.has_moisture
@@ -1264,12 +1293,16 @@ end
 # exactly the Laplacian part of the explicit stress divergence; the
 # transposed part is returned as `sgs_transpose` for the explicit side.
 # Scalars: ν + κh, or the per-direction pair (ν + κh, ν + κv) when the
-# closure has a separate κv.
+# closure has a separate κv, or — for a closure with a scalar diffusivity
+# tensor (`sgs_scalar_tensor`, P55-c) — the per-direction diagonal
+# (ν + K11, ν + K22, ν + K33), with the off-diagonal part returned as
+# `scalar_tensor` for the explicit side.
 #
-# Returns (νm, νs, sgs_transpose): νm a coefficient or a NamedTuple (u, v, w).
+# Returns (νm, νs, sgs_transpose, scalar_tensor): νm a coefficient or a
+# NamedTuple (u, v, w).
 function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
                             closure, stress::Symbol = :laplacian) where {T}
-    closure === nothing && return (T(sim.ν), T(sim.ν), nothing)
+    closure === nothing && return (T(sim.ν), T(sim.ν), nothing, nothing)
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
@@ -1282,7 +1315,16 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     @inbounds νm .= sim.ν .+ f.νh.data
     @inbounds νs .= sim.ν .+ f.κh.data
     m = sim.mesh
-    cs = if f.κv === f.κh
+    Ks = sgs_scalar_tensor(closure, f, sim)
+    cs = if Ks !== nothing
+        ws.ν_scal_v === nothing && (ws.ν_scal_v = similar(sim.νt.data))
+        ws.ν_scal_y === nothing && (ws.ν_scal_y = similar(sim.νt.data))
+        νsy = ws.ν_scal_y::Array{T,3}; νsz = ws.ν_scal_v::Array{T,3}
+        @inbounds νs  .= sim.ν .+ Ks.K11.data
+        @inbounds νsy .= sim.ν .+ Ks.K22.data
+        @inbounds νsz .= sim.ν .+ Ks.K33.data
+        _DirCoef3(_coef(νs, m), _coef(νsy, m), _coef(νsz, m))
+    elseif f.κv === f.κh
         _coef(νs, m)
     else
         ws.ν_scal_v === nothing && (ws.ν_scal_v = similar(sim.νt.data))
@@ -1290,7 +1332,7 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
         @inbounds νsv .= sim.ν .+ f.κv.data
         _DirCoef(_coef(νs, m), _coef(νsv, m))
     end
-    stress === :symmetric || return (_coef(νm, m), cs, nothing)
+    stress === :symmetric || return (_coef(νm, m), cs, nothing, Ks)
     νmv = if f.νv === f.νh
         νm
     else
@@ -1302,7 +1344,7 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     h = _coef(νm, m); v = _coef(νmv, m)
     cm = (u = _StressCoef(FaceX(), h, v), v = _StressCoef(FaceY(), h, v),
           w = _StressCoef(FaceZ(), h, v))
-    return (cm, cs, (νm, νmv))
+    return (cm, cs, (νm, νmv), Ks)
 end
 
 # The implicit coefficient of the field `name`.
@@ -1495,13 +1537,13 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     ws.max_residual = zero(T)
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
-    νm, νs, sgsT = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
+    νm, νs, sgsT, Ks = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
 
     # ---- stage 1: (I - γΔt D) U₁ = uⁿ + γΔt E(uⁿ) ------------------------
     _explicit_tendencies!(sim, γ * Δt; body_force! = body_force!,
                           momentum_advection = momentum_advection,
-                          sgs_transpose = sgsT)
+                          sgs_transpose = sgsT, scalar_tensor = Ks)
     _copy_tendencies!(ws.aux, sim, names)                 # E(uⁿ)
     for name in names
         f = getfield(sim, name)
@@ -1525,7 +1567,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     # ---- stage 2 --------------------------------------------------------
     _explicit_tendencies!(sim, Δt; body_force! = body_force!,
                           momentum_advection = momentum_advection,
-                          sgs_transpose = sgsT)   # E(U₁) → sim.t*
+                          sgs_transpose = sgsT, scalar_tensor = Ks)   # E(U₁) → sim.t*
     for name in names
         f = getfield(sim, name)
         _combine4!(f, one(T), getfield(ws.state0, name),
@@ -1564,14 +1606,14 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     ws.max_residual = zero(T)
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
-    νm, νs, sgsT = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
+    νm, νs, sgsT, Ks = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
     k2set = _k2_set!(ws)
 
     # ---- k₁: (I - γΔt J) k₁ = Δt F(uⁿ) ----------------------------------
     _explicit_tendencies!(sim, Δt; body_force! = body_force!,
                           momentum_advection = momentum_advection,
-                          sgs_transpose = sgsT)
+                          sgs_transpose = sgsT, scalar_tensor = Ks)
     _add_diffusion_tendencies!(sim, ws, νm, νs, names)
     for name in names
         k1 = getfield(ws.aux, name)
@@ -1591,7 +1633,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     # ---- k₂: (I - γΔt J) k₂ = Δt F(u+k₁) + c₂₁ k₁ ------------------------
     _explicit_tendencies!(sim, Δt; body_force! = body_force!,
                           momentum_advection = momentum_advection,
-                          sgs_transpose = sgsT)
+                          sgs_transpose = sgsT, scalar_tensor = Ks)
     _add_diffusion_tendencies!(sim, ws, νm, νs, names)
     for name in names
         k2 = getfield(k2set, name)

@@ -11,6 +11,10 @@
 #     2κv t, Σϕ² non-increasing over 200 steps for random ϕ and θ,
 #     n = ẑ reduces to the diagonal operator, the slope taper and the
 #     N² ≤ 0 fallback;
+#   * the contract: a closure's scalar tensor (sgs_scalar_tensor) under
+#     step! (explicit) and step_imex! (diagonal implicit, off-diagonal
+#     explicit) decays a plane wave at the exact discrete amplification
+#     factors; IsentropicDiffusion forwards everything but the scalar flux.
 
 using Test
 using Aeolus
@@ -92,6 +96,28 @@ end
 
 tensor_tend181(ϕ, K; kw...) = (t = Field(CellCenter(), ϕ.mesh);
                                 add_tensor_diffusion_scalar!(t, ϕ, K; kw...); t)
+
+# A closure with a constant general scalar tensor (ν = 0): the contract's
+# sgs_scalar_tensor / add_sgs_scalar! pair, as a tensor closure provides it.
+struct ConstTensor181{D,F} <: AbstractSGSClosure
+    K::D
+    fv::F
+end
+function const_tensor181(sim, comps)
+    K = DiffusivityTensor(sim.mesh)
+    for (c, x) in zip((K.K11, K.K22, K.K33, K.K12, K.K13, K.K23), comps)
+        fill!(c.data, x)
+    end
+    return ConstTensor181(K, Field(CellCenter(), sim.mesh))
+end
+Aeolus.Operators.sgs_fields(c::ConstTensor181, sim) = SGSFields(sim.νt, sim.νt, sim.κt, c.fv)
+function Aeolus.Operators.sgs_coefficients!(f::SGSFields, c::ConstTensor181, sim)
+    fill!(f.νh.data, 0); copyto!(f.κh.data, c.K.K11.data); copyto!(f.κv.data, c.K.K33.data)
+    return f
+end
+Aeolus.Operators.sgs_scalar_tensor(c::ConstTensor181, f::SGSFields, sim) = c.K
+Aeolus.Operators.add_sgs_scalar!(tϕ, ϕ, c::ConstTensor181, f::SGSFields, sim) =
+    add_tensor_diffusion_scalar!(tϕ, ϕ, c.K)
 
 @testset "Era VI — tensorial scalar eddy diffusivity (P55-c, #181)" begin
 
@@ -445,5 +471,129 @@ tensor_tend181(ϕ, K; kw...) = (t = Field(CellCenter(), ϕ.mesh);
         Kb = isentropic_tensor!(DiffusivityTensor(g1), θ1, kh, kv; slope_max = S * (1 + 1e-9))
         @test abs(Ka.K33.data[c...] - Kb.K33.data[c...]) <= 1e-8 * kh
         @test_throws ArgumentError isentropic_tensor!(DiffusivityTensor(g1), θ1, kh, kv; slope_max = 0)
+    end
+    # ---------------------------------------------------------------------
+    # the closure contract and the cores
+    # ---------------------------------------------------------------------
+    @testset "contract: tensor closure under step! and step_imex! (diag implicit, cross explicit)" begin
+        g = grid181((16, 4, 16))
+        kv = (2π * 2 / g.Lx, 0.0, 2π * 3 / g.Lz)
+        comps = (2.0, 2.0, 0.05, 0.0, -0.25, 0.0)          # K13 couples x and z
+        mode(x, y, z) = cos(kv[1] * x + kv[3] * z + 0.2)
+        kh = khat2_181.(kv, (g.dx, g.dy, g.dz))
+        sn = sin.(kv .* (g.dx, g.dy, g.dz)) ./ (g.dx, g.dy, g.dz)
+        λd = comps[1] * kh[1] + comps[3] * kh[3]           # implicit (diagonal)
+        λo = 2 * comps[5] * sn[1] * sn[3]                  # explicit (cross)
+        λ = λd + λo
+        @test λ > 0 && abs(λo) / λ > 0.2
+        function run(stepper, h, n; moist = false)
+            sim = BoussinesqSimulation(g; ν = 0.0, moisture = moist)
+            setfield181!(sim.θ, g, mode)
+            moist && setfield181!(sim.qv, g, mode)
+            θ0 = copy(iv181(sim.θ))
+            c = const_tensor181(sim, comps)
+            for _ in 1:n
+                stepper(sim, h, c)
+            end
+            return θ0, sim
+        end
+        # explicit Euler: G = (1 − hλ)ⁿ
+        hex = 0.05 / λ
+        θ0, sim = run((s, h, c) -> step!(s, h; sgs = c), hex, 40)
+        G = (1 - hex * λ)^40
+        e_ex = maximum(abs, iv181(sim.θ) .- G .* θ0) / (G * maximum(abs, θ0))
+        @test e_ex <= 1e-10
+        # ARK2 with I = −λd, E = −λo: U₁ = r u, r = (1 − γhλo)/(1 + γhλd),
+        # uⁿ⁺¹ = [1 − δhλo − (1−δ)hλo r − (1−γ)hλd r]/(1 + γhλd) uⁿ
+        sch = ARK2(); γ = sch.γ; δ = sch.δ
+        him = 0.5 / λ
+        θ0, sim = run((s, h, c) -> step_imex!(s, h, ARK2(); sgs = c, tol = 1e-14, maxit = 500),
+                      him, 6; moist = true)
+        r = (1 - γ * him * λo) / (1 + γ * him * λd)
+        R = (1 - δ * him * λo - (1 - δ) * him * λo * r - (1 - γ) * him * λd * r) / (1 + γ * him * λd)
+        Gim = R^6
+        e_im = maximum(abs, iv181(sim.θ) .- Gim .* θ0) / (abs(Gim) * maximum(abs, θ0))
+        e_q = maximum(abs, iv181(sim.qv) .- Gim .* θ0) / (abs(Gim) * maximum(abs, θ0))
+        # had the cross part been dropped, the factor would be the λo = 0 one
+        r0 = 1 / (1 + γ * him * λd)
+        R0 = (1 - (1 - γ) * him * λd * r0) / (1 + γ * him * λd)
+        @info @sprintf("P55-c tensor closure: λ = %.4e s⁻¹ (cross %.4e); Euler ×40 rel. err %.1e; ARK2 ×6 rel. err θ %.1e, qv %.1e (G = %.5f; without the cross part %.5f)",
+                       λ, λo, e_ex, e_im, e_q, Gim, R0^6)
+        @test e_im <= 1e-10
+        @test e_q <= 1e-10
+        @test abs(R0^6 - Gim) > 1e-3
+    end
+
+    @testset "IsentropicDiffusion: forwards the inner closure; tendency = triad isentropic operator" begin
+        g = grid181((12, 10, 8))
+        wall = FieldBoundaryConditions(:periodic, :periodic, :wall)
+        function mk()
+            sim = BoussinesqSimulation(g; ν = 0.0, θ₀ = 300.0, bcs = wall)
+            rng = Xoshiro(18140)
+            for f in (sim.u, sim.v)
+                iv181(f) .= 0.5 .* randn(rng, g.Nx, g.Ny, g.Nz)
+            end
+            # a stable, tilted θ with noise: stable, tapered and unstable cells
+            iv181(sim.θ) .= [300 + 0.01 * (k - 0.5) * g.dz - 0.002 * (i - 0.5) * g.dx +
+                             0.02 * randn(rng) for i in 1:g.Nx, j in 1:g.Ny, k in 1:g.Nz]
+            return sim
+        end
+        inner = StaticSmagorinsky(0.17)
+        # 1. coefficients and momentum: identical to the inner closure
+        s1 = mk(); s2 = mk()
+        c2 = IsentropicDiffusion(inner, g; diapycnal = 0.1, slope_max = 0.5)
+        for s in (s1, s2)
+            fill_halos!(s.u, s.bcs); fill_halos!(s.v, s.bcs); fill_halos!(s.w, s.bcs)
+            fill_halos!(s.θ, s.θ_bcs)
+        end
+        f1 = compute_sgs!(inner, s1); f2 = compute_sgs!(c2, s2)
+        @test f1.νh.data == f2.νh.data && f1.κh.data == f2.κh.data
+        tm1 = (Field(FaceX(), g), Field(FaceY(), g), Field(FaceZ(), g))
+        tm2 = (Field(FaceX(), g), Field(FaceY(), g), Field(FaceZ(), g))
+        add_sgs_momentum!(tm1..., inner, f1, s1; stress = :symmetric)
+        add_sgs_momentum!(tm2..., c2, f2, s2; stress = :symmetric)
+        @test all(tm1[i].data == tm2[i].data for i in 1:3)
+        @test sgs_state(c2) === sgs_state(inner)
+        # 2. the scalar tendency is the triad operator with the isentropic K of θ
+        K = isentropic_tensor!(DiffusivityTensor(g), s2.θ, f2.κh, 0.1 .* f2.κh.data;
+                               slope_max = 0.5, bcs = s2.bcs)
+        te = tensor_tend181(s2.θ, K; bounded = (false, false, true))
+        t2 = Field(CellCenter(), g); add_sgs_scalar!(t2, s2.θ, c2, f2, s2)
+        @test t2.data == te.data
+        @test sgs_scalar_tensor(c2, f2, s2) === c2.K
+        @test maximum(abs, iv181(c2.K.K13)) > 0           # rotated somewhere
+        # 3. with an isotropic inner and diapycnal = nothing, K = κh I: the
+        #    default diagonal operator to round-off
+        c3 = IsentropicDiffusion(inner, g)
+        s3 = mk(); for f in (s3.u, s3.v, s3.w); fill_halos!(f, s3.bcs); end
+        fill_halos!(s3.θ, s3.θ_bcs)
+        f3 = compute_sgs!(c3, s3)
+        t3 = Field(CellCenter(), g); add_sgs_scalar!(t3, s3.θ, c3, f3, s3)
+        t1 = Field(CellCenter(), g); add_sgs_scalar!(t1, s1.θ, inner, f1, s1)
+        e3 = maxabs181(iv181(t3) .- iv181(t1)) / maxabs181(t1)
+        @info @sprintf("P55-c IsentropicDiffusion(isotropic inner): θ tendency vs default rel. diff %.1e", e3)
+        @test e3 <= 1e-12
+        # 4. the cores run it (step!, step_imex!): at rest and without
+        #    buoyancy θ changes by the SGS flux alone, so Σθ is conserved
+        #    (no flux through the walls) and Σθ'² does not grow
+        for (label, stepper) in (("step!", (s, c) -> step!(s, 2.0; sgs = c)),
+                                 ("step_imex!", (s, c) -> step_imex!(s, 2.0, ARK2(); sgs = c,
+                                                                    tol = 1e-13, maxit = 500)))
+            s = BoussinesqSimulation(g; ν = 0.0, bcs = wall)
+            iv181(s.θ) .= iv181(mk().θ)
+            c = IsentropicDiffusion(ConstDiag181(s, 1.0, 1.0), g; diapycnal = 0.1, slope_max = 0.5)
+            m0 = sum(iv181(s.θ)); var(θ) = sum(abs2, iv181(θ) .- sum(iv181(θ)) / length(iv181(θ)))
+            v0 = var(s.θ)
+            for _ in 1:5
+                stepper(s, c)
+            end
+            dm = abs(sum(iv181(s.θ)) - m0) / abs(m0)
+            @info @sprintf("P55-c IsentropicDiffusion under %s, 5 steps of 2 s: |ΔΣθ|/Σθ = %.1e, var %.4e → %.4e",
+                           label, dm, v0, var(s.θ))
+            @test dm <= 1e-13
+            @test var(s.θ) < v0
+            @test maximum(abs, iv181(s.u)) == 0
+        end
+        @test_throws ArgumentError IsentropicDiffusion(inner, g; diapycnal = 2.0)
     end
 end
