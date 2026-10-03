@@ -971,6 +971,7 @@ end
 
 @testset "Era VI" begin
     include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
+    include("era6_wall_models_immersed.jl") # Phase 57: wall model on IBM and cut-cell walls (#179)
 end
 
 # =========================================================================

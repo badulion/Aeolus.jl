@@ -57,5 +57,6 @@ using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltsla
 # include line here and nothing else.
 include("wall_models/laws.jl")
 include("wall_models/operator.jl")
+include("wall_models/immersed.jl")
 
 end # module
