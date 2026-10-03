@@ -195,6 +195,40 @@ khat2(k, Δ) = (2 * sin(k * Δ / 2) / Δ)^2
         @test ev <= 1e-10
         @test maxabs(t[3]) <= 1e-12 * λv
 
+        # time stepping: explicit Euler and IMEX ARK2 decay the v-mode at the
+        # discrete amplification factor of λv
+        function decay_run(stepper, h, n)
+            sim = BoussinesqSimulation(g; ν = 0.0, θ₀ = 300.0)
+            fill!(sim.θ.data, 300.0)                # no buoyancy
+            setmode!(sim.v, modev)
+            v0 = copy(iv(sim.v))
+            c = ConstAniso175(sim, νh, νv)
+            for _ in 1:n
+                stepper(sim, h, c)
+            end
+            return v0, copy(iv(sim.v)), sim
+        end
+        # Euler: hλ_v = 0.05, so that h·λ_max ≈ 0.7 for the grid-scale
+        # round-off modes (stability needs ≤ 2)
+        hex = 0.05 / λv
+        v0, v1, sim = decay_run((s, h, c) -> step!(s, h; sgs = c, sgs_stress = :symmetric), hex, 40)
+        G = (1 - hex * λv)^40
+        e_ex = maximum(abs, v1 .- G .* v0) / (G * maximum(abs, v0))
+        @test e_ex <= 1e-10
+        @test maxabs(sim.u) <= 1e-12 && maxabs(sim.w) <= 1e-12
+
+        γ = 1 - 1 / sqrt(2)
+        him = 5.0 / λv                      # hλ = 5: 25× the explicit limit
+        v0, v1, sim = decay_run((s, h, c) -> step_imex!(s, h, ARK2(); sgs = c, sgs_stress = :symmetric,
+                                                         tol = 1e-14, maxit = 500), him, 4)
+        a = him * λv
+        r1 = 1 / (1 + γ * a)
+        Rimex = (1 - (1 - γ) * a * r1) / (1 + γ * a)
+        Gim = Rimex^4       # 4 steps: |G| ≈ 1e-3 stays far above the round-off of the O(1) start
+        e_im = maximum(abs, v1 .- Gim .* v0) / (abs(Gim) * maximum(abs, v0))
+        @info @sprintf("P55-b anisotropic decay: Euler hλ=0.05 ×40 rel. err %.1e; ARK2 hλ=5 ×4 rel. err %.1e (G = %.4e)",
+                       e_ex, e_im, Gim)
+        @test e_im <= 1e-10
     end
 
     @testset "momentum conservation" begin
@@ -207,6 +241,20 @@ khat2(k, Δ) = (2 * sin(k * Δ / 2) / Δ)^2
         for f in t
             @test abs(sum(iv(f))) <= 1e-13 * sum(abs, iv(f))
         end
+        # through the core: 20 explicit steps with the stress form
+        sim = BoussinesqSimulation(grid175((16, 16, 16)); ν = 0.0, θ₀ = 300.0)
+        fill!(sim.θ.data, 300.0)
+        uu, vv, ww = solenoidal175(sim.mesh, Xoshiro(17502))
+        iv(sim.u) .= iv(uu); iv(sim.v) .= iv(vv); iv(sim.w) .= iv(ww)
+        iv(sim.u) .+= 0.3; iv(sim.v) .-= 0.2               # a mean wind
+        Su0, Sv0 = sum(iv(sim.u)), sum(iv(sim.v))
+        for _ in 1:20
+            step!(sim, 0.5; sgs = StaticSmagorinsky(0.17), sgs_stress = :symmetric)
+        end
+        du = abs(sum(iv(sim.u)) - Su0) / abs(Su0); dv = abs(sum(iv(sim.v)) - Sv0) / abs(Sv0)
+        @info @sprintf("P55-b momentum: |ΔΣu|/|Σu| = %.1e, |ΔΣv|/|Σv| = %.1e after 20 steps", du, dv)
+        @test du <= 1e-13
+        @test dv <= 1e-13
     end
 
     @testset "generic operator: add_stress_divergence!(τ = −2νS) == fused" begin
@@ -239,4 +287,108 @@ khat2(k, Δ) = (2 * sin(k * Δ / 2) / Δ)^2
         @test all(abs(sum(iv(f))) <= 1e-13 * sum(abs, iv(f)) for f in tr)
     end
 
+    @testset "IMEX split: implicit = explicit diagonal part, symmetric; diag + transpose = full" begin
+        g = grid175((12, 10, 8))
+        rng = Xoshiro(17504)
+        u, v, w = random_velocity175(g, rng)
+        νh = random_ν175(g, rng; lo = 0.1, hi = 2.0); νv = random_ν175(g, rng; lo = 0.01, hi = 0.2)
+        # diagonal + transpose == full
+        tf = tend175(g); td = tend175(g)
+        add_sgs_stress_divergence!(tf..., u, v, w, νh, νv)
+        add_sgs_stress_divergence!(td..., u, v, w, νh, νv; part = :diagonal)
+        add_sgs_stress_divergence!(td..., u, v, w, νh, νv; part = :transpose)
+        @test maximum(maxabs(iv(td[i]) .- iv(tf[i])) for i in 1:3) <= 1e-13 * maxabs(tf...)
+        # with νh = νv the diagonal part is the Laplacian kernel
+        tl = tend175(g); tdi = tend175(g)
+        add_eddy_viscosity_u!(tl[1], u, νh); add_eddy_viscosity_v!(tl[2], v, νh)
+        add_eddy_viscosity_w!(tl[3], w, νh)
+        add_sgs_stress_divergence!(tdi..., u, v, w, νh; part = :diagonal)
+        @test maximum(maxabs(iv(tdi[i]) .- iv(tl[i])) for i in 1:3) <= 1e-13 * maxabs(tl...)
+        # the implicit operator of each component == the explicit diagonal part
+        h = TI175._coef(νh.data, g); vv = TI175._coef(νv.data, g)
+        td2 = tend175(g)
+        add_sgs_stress_divergence!(td2..., u, v, w, νh, νv; part = :diagonal)
+        for (f, L, t) in ((u, FaceX(), td2[1]), (v, FaceY(), td2[2]), (w, FaceZ(), td2[3]))
+            out = Field(L, g)
+            TI175._diffusion!(out, f, TI175._StressCoef(L, h, vv), g)
+            @test maxabs(iv(out) .- iv(t)) <= 1e-12 * maxabs(t)
+            # symmetric: ⟨x, L y⟩ == ⟨L x, y⟩ (periodic)
+            x = Field(L, g); y = Field(L, g)
+            iv(x) .= randn(rng, g.Nx, g.Ny, g.Nz); iv(y) .= randn(rng, g.Nx, g.Ny, g.Nz)
+            pfill!(x, y)
+            Lx = Field(L, g); Ly = Field(L, g)
+            TI175._diffusion!(Lx, x, TI175._StressCoef(L, h, vv), g)
+            TI175._diffusion!(Ly, y, TI175._StressCoef(L, h, vv), g)
+            a1 = sum(iv(x) .* iv(Ly)); a2 = sum(iv(Lx) .* iv(y))
+            @test abs(a1 - a2) <= 1e-12 * abs(a1)
+            @test sum(iv(x) .* iv(Lx)) < 0                 # negative definite
+        end
+        # the per-direction scalar coefficient (νh, νv): x/y faces νh, z faces νv
+        θ = Field(CellCenter(), g); kz = 2π / g.Lz
+        for k in axes(θ.data, 3); θ.data[:, :, k] .= sin(kz * (k - g.Hz - 0.5) * g.dz); end
+        out = Field(CellCenter(), g)
+        TI175._diffusion!(out, θ, (3.0, 0.04), g)
+        @test maxabs(iv(out) .+ 0.04 * khat2(kz, g.dz) .* iv(θ)) <= 1e-12 * 0.04 * khat2(kz, g.dz)
+    end
+
+    @testset "the cores' sgs_stress keyword" begin
+        function mk()
+            sim = BoussinesqSimulation(grid175((16, 16, 16)); ν = 1e-5, θ₀ = 300.0, C_s = 0.17)
+            fill!(sim.θ.data, 300.0)
+            uu, vv, ww = solenoidal175(sim.mesh, Xoshiro(17505))
+            iv(sim.u) .= iv(uu); iv(sim.v) .= iv(vv); iv(sim.w) .= iv(ww)
+            return sim
+        end
+        st(s) = (copy(iv(s.u)), copy(iv(s.v)), copy(iv(s.w)))
+        a = mk(); b = mk(); c = mk()
+        for _ in 1:5
+            step!(a, 0.5); step!(b, 0.5; sgs_stress = :laplacian)
+            step!(c, 0.5; sgs_stress = :symmetric)
+        end
+        @test st(a) == st(b)                          # the default is :laplacian, bit for bit
+        @test st(a) != st(c)
+        # with constant νt the forms agree; with Smagorinsky νt(x) they differ by
+        # the transposed term only — small next to the Laplacian part
+        d = maximum(maximum(abs, x .- y) for (x, y) in zip(st(a), st(c)))
+        @test 0 < d < 1e-2
+        @test_throws ArgumentError step!(mk(), 0.5; sgs_stress = :bogus)
+        @test_throws ArgumentError step_rk3!(mk(), 0.5; sgs_stress = :bogus)
+        @test_throws ArgumentError step_imex!(mk(), 0.5, ARK2(); sgs_stress = :bogus)
+        # step_rk3!, step_imex!, step_adaptive! take it
+        r = mk(); step_rk3!(r, 0.5; sgs_stress = :symmetric); @test all(isfinite, iv(r.u))
+        i1 = mk(); step_imex!(i1, 0.5, ARK2(); sgs_stress = :symmetric)
+        @test max_divergence(i1) < 1e-10
+        i2 = mk(); step_imex!(i2, 0.5, Rosenbrock2(); sgs_stress = :symmetric)
+        @test max_divergence(i2) < 1e-10
+        # IMEX :symmetric vs explicit :symmetric at a small dt: same physics
+        e = mk(); im = mk()
+        for _ in 1:4
+            step!(e, 0.05; sgs_stress = :symmetric)
+            step_imex!(im, 0.05, ARK2(); sgs_stress = :symmetric, tol = 1e-12)
+        end
+        dd = maximum(maximum(abs, x .- y) for (x, y) in zip(st(e), st(im)))
+        @info @sprintf("P55-b IMEX vs explicit (:symmetric, 4 × 0.05 s): max|Δu| = %.2e m/s", dd)
+        @test dd < 1e-3
+        ad = mk()
+        _, h, nr = step_adaptive!(ad, CFLConstraints(); sgs_stress = :symmetric)
+        @test nr == 0 && h > 0
+        # the anelastic core (walls in z): default == :laplacian bit for bit,
+        # :symmetric runs
+        ga = RegularGrid(; size = (16, 16, 12), extent = (800.0, 800.0, 600.0), halo = (3, 3, 3))
+        bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
+        rng = Xoshiro(17506)
+        U = (0.3 .* randn(rng, 16, 16, 12), 0.3 .* randn(rng, 16, 16, 12), 0.3 .* randn(rng, 16, 16, 12))
+        function mka()
+            s = AnelasticSimulation(ga; bcs = bcs, C_s = 0.17)
+            iv(s.u) .= U[1]; iv(s.v) .= U[2]; iv(s.w) .= U[3]; iv(s.w)[:, :, 1] .= 0
+            return s
+        end
+        a1 = mka(); a2 = mka(); a3 = mka()
+        for _ in 1:3
+            step!(a1, 0.5); step!(a2, 0.5; sgs_stress = :laplacian); step!(a3, 0.5; sgs_stress = :symmetric)
+        end
+        @test st(a1) == st(a2)
+        @test st(a1) != st(a3) && all(isfinite, iv(a3.u))
+        @test_throws ArgumentError step!(mka(), 0.5; sgs_stress = :bogus)
+    end
 end

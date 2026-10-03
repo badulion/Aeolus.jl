@@ -41,7 +41,8 @@ using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    add_buoyancy!, add_coriolis!, compute_smagorinsky_νt!,
                    add_surface_flux!, add_sponge!,
                    AbstractSGSClosure, SGSFields, compute_sgs!, sgs_fields, advance_sgs!,
-                   sgs_state, restore_sgs_state!, sgs_closure, _active_sgs
+                   sgs_state, restore_sgs_state!, sgs_closure, _active_sgs,
+                   add_sgs_stress_divergence!, _check_sgs_stress
 using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence
@@ -507,7 +508,8 @@ step is rejected — the commit ([`advance_sgs!`](@ref
 Aeolus.Operators.advance_sgs!)) a rejected step made is undone, so after a
 retry the closure's memory is that of a run that took the short step
 directly. A custom `stepper` is called without `sgs` and must pass the same
-closure to the step it takes itself.
+closure to the step it takes itself. `sgs_stress` (`:laplacian` |
+`:symmetric`) is passed to the default stepper with the closure.
 
 `fast_processes` accepts a `NamedTuple`, `Dict`, vector/tuple of
 `:name => callback` pairs, or a bare callback (registered as
@@ -537,6 +539,7 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
                         divergence_tol::Real = 1e-6,
                         max_velocity::Real = Inf,
                         sgs = nothing,
+                        sgs_stress::Symbol = :laplacian,
                         verbose::Bool = false) where {T}
 
     closure = sgs_closure(sgs)
@@ -545,9 +548,9 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
     take_step! = if stepper !== nothing
         stepper
     elseif scheme isa IMEXScheme
-        (s, h; kw...) -> step_imex!(s, h, scheme; kw..., sgs = closure)
+        (s, h; kw...) -> step_imex!(s, h, scheme; kw..., sgs = closure, sgs_stress = sgs_stress)
     else
-        (s, h; kw...) -> step!(s, h; kw..., sgs = closure)
+        (s, h; kw...) -> step!(s, h; kw..., sgs = closure, sgs_stress = sgs_stress)
     end
 
     save_state!(snapshot, sim)
@@ -663,13 +666,87 @@ _coef(c::_Coef, ::RegularGrid) = c
 @inline _νf(c::_Coef, i1, j1, k1, i2, j2, k2) =
     (_at(c, i1, j1, k1) + _at(c, i2, j2, k2)) / 2
 
+# --- per-direction coefficients (P55-b, #175) ----------------------------
+# A coefficient answers, for the unknown at (i, j, k), the six face values
+# `_νxp … _νzm` the flux-form operator uses (x+, x−, y+, y−, z+, z−). The
+# face between unknowns n and n+1 gets the same value from both sides, so
+# every coefficient below gives a symmetric operator (SPD in I − Δt L).
+
+# Scalar or one array: the 2-point average of the two adjacent cells — the
+# Phase-25 operator, unchanged.
+@inline _νxp(ν, i, j, k) = _νf(ν, i,   j, k, i+1, j, k)
+@inline _νxm(ν, i, j, k) = _νf(ν, i-1, j, k, i,   j, k)
+@inline _νyp(ν, i, j, k) = _νf(ν, i, j,   k, i, j+1, k)
+@inline _νym(ν, i, j, k) = _νf(ν, i, j-1, k, i, j,   k)
+@inline _νzp(ν, i, j, k) = _νf(ν, i, j, k,   i, j, k+1)
+@inline _νzm(ν, i, j, k) = _νf(ν, i, j, k-1, i, j, k  )
+
+# (νh, νv) for a cell-centred unknown: νh on the x and y faces, νv on the
+# z faces, each the 2-point average.
+struct _DirCoef{H,V}
+    h::H
+    v::V
+end
+@inline _νxp(c::_DirCoef, i, j, k) = _νxp(c.h, i, j, k)
+@inline _νxm(c::_DirCoef, i, j, k) = _νxm(c.h, i, j, k)
+@inline _νyp(c::_DirCoef, i, j, k) = _νyp(c.h, i, j, k)
+@inline _νym(c::_DirCoef, i, j, k) = _νym(c.h, i, j, k)
+@inline _νzp(c::_DirCoef, i, j, k) = _νzp(c.v, i, j, k)
+@inline _νzm(c::_DirCoef, i, j, k) = _νzm(c.v, i, j, k)
+
+# (νh, νv) for a staggered velocity component at location L: the
+# coefficients of the diagonal (Laplacian) part ∂ⱼ(νᵢⱼ ∂ⱼuᵢ) of the stress
+# form, `add_sgs_stress_divergence!(…; part = :diagonal)`, with the same
+# interpolation — the cell value for the normal flux, the 4-cell edge
+# average for the tangential ones, νh for the pairs (11, 22, 12) and νv
+# for the pairs involving z (33, 13, 23; the CM1 convention).
+struct _StressCoef{L<:Location,H<:_Coef,V<:_Coef}
+    h::H
+    v::V
+end
+_StressCoef(::L, h::_Coef, v::_Coef) where {L<:Location} =
+    _StressCoef{L,typeof(h),typeof(v)}(h, v)
+@inline _e4(c::_Coef, i1, j1, k1, i2, j2, k2, i3, j3, k3, i4, j4, k4) =
+    0.25 * (_at(c, i1, j1, k1) + _at(c, i2, j2, k2) + _at(c, i3, j3, k3) + _at(c, i4, j4, k4))
+# the edge averages of FiniteVolume._νe12/_νe13/_νe23 (same order of terms)
+@inline _e12(c, i, j, k) = _e4(c, i-1, j-1, k, i, j-1, k, i-1, j, k, i, j, k)
+@inline _e13(c, i, j, k) = _e4(c, i-1, j, k-1, i, j, k-1, i-1, j, k, i, j, k)
+@inline _e23(c, i, j, k) = _e4(c, i, j-1, k-1, i, j, k-1, i, j-1, k, i, j, k)
+
+const _SCX = _StressCoef{FaceX}; const _SCY = _StressCoef{FaceY}; const _SCZ = _StressCoef{FaceZ}
+# u @ FaceX: x faces are the cells i-1, i; y faces xy-edges; z faces xz-edges
+@inline _νxp(c::_SCX, i, j, k) = _at(c.h, i, j, k)
+@inline _νxm(c::_SCX, i, j, k) = _at(c.h, i-1, j, k)
+@inline _νyp(c::_SCX, i, j, k) = _e12(c.h, i, j+1, k)
+@inline _νym(c::_SCX, i, j, k) = _e12(c.h, i, j, k)
+@inline _νzp(c::_SCX, i, j, k) = _e13(c.v, i, j, k+1)
+@inline _νzm(c::_SCX, i, j, k) = _e13(c.v, i, j, k)
+# v @ FaceY
+@inline _νxp(c::_SCY, i, j, k) = _e12(c.h, i+1, j, k)
+@inline _νxm(c::_SCY, i, j, k) = _e12(c.h, i, j, k)
+@inline _νyp(c::_SCY, i, j, k) = _at(c.h, i, j, k)
+@inline _νym(c::_SCY, i, j, k) = _at(c.h, i, j-1, k)
+@inline _νzp(c::_SCY, i, j, k) = _e23(c.v, i, j, k+1)
+@inline _νzm(c::_SCY, i, j, k) = _e23(c.v, i, j, k)
+# w @ FaceZ
+@inline _νxp(c::_SCZ, i, j, k) = _e13(c.v, i+1, j, k)
+@inline _νxm(c::_SCZ, i, j, k) = _e13(c.v, i, j, k)
+@inline _νyp(c::_SCZ, i, j, k) = _e23(c.v, i, j+1, k)
+@inline _νym(c::_SCZ, i, j, k) = _e23(c.v, i, j, k)
+@inline _νzp(c::_SCZ, i, j, k) = _at(c.v, i, j, k)
+@inline _νzm(c::_SCZ, i, j, k) = _at(c.v, i, j, k-1)
+
+_coef(c::Union{_DirCoef,_StressCoef}, ::RegularGrid) = c
+# a pair (νh, νv): νh on the x and y faces, νv on the z faces
+_coef(ν::Tuple{Any,Any}, m::RegularGrid) = _DirCoef(_coef(ν[1], m), _coef(ν[2], m))
+
 # ∇·(ν ∇f) at a single cell, face-averaged ν (symmetric ⇒ SPD operator).
 @inline function _diff_at(d, ν, i, j, k, idx2, idy2, idz2)
     @inbounds begin
         c   = d[i, j, k]
-        νxp = _νf(ν, i,   j, k, i+1, j, k); νxm = _νf(ν, i-1, j, k, i, j, k)
-        νyp = _νf(ν, i, j,   k, i, j+1, k); νym = _νf(ν, i, j-1, k, i, j, k)
-        νzp = _νf(ν, i, j, k,   i, j, k+1); νzm = _νf(ν, i, j, k-1, i, j, k)
+        νxp = _νxp(ν, i, j, k); νxm = _νxm(ν, i, j, k)
+        νyp = _νyp(ν, i, j, k); νym = _νym(ν, i, j, k)
+        νzp = _νzp(ν, i, j, k); νzm = _νzm(ν, i, j, k)
         return (νxp * (d[i+1, j, k] - c) - νxm * (c - d[i-1, j, k])) * idx2 +
                (νyp * (d[i, j+1, k] - c) - νym * (c - d[i, j-1, k])) * idy2 +
                (νzp * (d[i, j, k+1] - c) - νzm * (c - d[i, j, k-1])) * idz2
@@ -678,9 +755,9 @@ end
 
 # Diagonal of (I - Δt ∇·(ν∇)) — the Jacobi preconditioner.
 @inline function _diag_at(ν, i, j, k, idx2, idy2, idz2, Δt)
-    s = (_νf(ν, i,   j, k, i+1, j, k) + _νf(ν, i-1, j, k, i, j, k)) * idx2 +
-        (_νf(ν, i, j,   k, i, j+1, k) + _νf(ν, i, j-1, k, i, j, k)) * idy2 +
-        (_νf(ν, i, j, k,   i, j, k+1) + _νf(ν, i, j, k-1, i, j, k)) * idz2
+    s = (_νxp(ν, i, j, k) + _νxm(ν, i, j, k)) * idx2 +
+        (_νyp(ν, i, j, k) + _νym(ν, i, j, k)) * idy2 +
+        (_νzp(ν, i, j, k) + _νzm(ν, i, j, k)) * idz2
     return one(Δt) + Δt * s
 end
 
@@ -793,7 +870,9 @@ matrix-free, with Jacobi-preconditioned conjugate gradients.
     viscosity, given at full storage size (halos included) or at interior
     size. Arrays use the face average `ν_{i+1/2} = ½(νᵢ + ν_{i+1})`,
     which keeps the operator symmetric, hence CG-legal (`I − dt L` with
-    `L` symmetric negative-semidefinite is SPD for `dt ≥ 0`).
+    `L` symmetric negative-semidefinite is SPD for `dt ≥ 0`). A pair
+    `(ν_h, ν_v)` of such coefficients is a per-direction coefficient:
+    `ν_h` on the x and y faces, `ν_v` on the z faces (P55-b, #175).
   * Boundary conditions are applied by calling `fill_halos!(·, bcs)` on
     the search direction inside every matrix-vector product, so exactly
     the BC types `fill_halos!` supports are supported here: `Periodic`,
@@ -1081,6 +1160,8 @@ mutable struct IMEXWorkspace{T,S<:NamedTuple,D<:NamedTuple}
     diff::D
     ν_mom::Union{Nothing,Array{T,3}}
     ν_scal::Union{Nothing,Array{T,3}}
+    ν_mom_v::Union{Nothing,Array{T,3}}    # vertical ν_eff (sgs_stress = :symmetric)
+    ν_scal_v::Union{Nothing,Array{T,3}}   # vertical κ_eff (a closure with κv ≢ κh)
     total_iterations::Int
     max_residual::T
 end
@@ -1094,7 +1175,8 @@ function IMEXWorkspace(sim::BoussinesqSimulation{T}) where {T}
     diff   = (u = DiffusionWorkspace(sim.u), v = DiffusionWorkspace(sim.v),
               w = DiffusionWorkspace(sim.w), c = DiffusionWorkspace(sim.θ))
     return IMEXWorkspace{T,typeof(state0),typeof(diff)}(
-        state0, aux, nothing, Field(CellCenter(), m), diff, nothing, nothing, 0, zero(T))
+        state0, aux, nothing, Field(CellCenter(), m), diff, nothing, nothing,
+        nothing, nothing, 0, zero(T))
 end
 
 const _IMEX_WORKSPACES = WeakKeyDict{Any,Any}()
@@ -1122,9 +1204,14 @@ end
 # Everything except diffusion: advection, buoyancy, Coriolis, prescribed
 # surface flux, sponge and the user body force. Mirrors Simulations.step!
 # with the viscous/SGS terms removed — those are the implicit half.
+#
+# `sgs_transpose = (νh, νv)` (arrays, halos filled) adds the explicit half of
+# the stress-form SGS split (`sgs_stress = :symmetric`): the transposed part
+# ∂ⱼ(νᵢⱼ ∂uⱼ/∂xᵢ), whose diagonal partner ∂ⱼ(νᵢⱼ ∂uᵢ/∂xⱼ) is implicit.
 function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
                                body_force!::Union{Nothing,Function} = nothing,
-                               momentum_advection = momentum_advect!) where {T}
+                               momentum_advection = momentum_advect!,
+                               sgs_transpose = nothing) where {T}
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
@@ -1138,6 +1225,9 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
     momentum_advection(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w)
     advect_centered!(sim.tθ, sim.u, sim.v, sim.w, sim.θ)
     sim.has_moisture && advect_centered!(sim.tqv, sim.u, sim.v, sim.w, sim.qv)
+    sgs_transpose === nothing ||
+        add_sgs_stress_divergence!(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w,
+                                   sgs_transpose[1], sgs_transpose[2]; part = :transpose)
 
     if sim.has_buoyancy
         if sim.has_moisture
@@ -1163,11 +1253,23 @@ end
 # the step — the standard lagged-coefficient linearization; the implicit
 # operator stays linear and SPD. νt, κt are the SGS closure's coefficients
 # (`compute_sgs!`: the built-in Smagorinsky, κt = νt/Prₜ, or the `sgs`
-# keyword, the same rule as `step!`). The implicit operator is isotropic, so
-# an anisotropic closure contributes its horizontal coefficients.
+# keyword, the same rule as `step!`).
+#
+# Momentum, `stress = :laplacian`: one isotropic coefficient ν + νh with the
+# Phase-25 co-located 2-point face average for all three components (an
+# anisotropic closure contributes its horizontal νh). `stress = :symmetric`
+# (P55-b): per component, the coefficients of the diagonal part of the
+# stress form (`_StressCoef`: νh on the 11/22/12 faces, νv on 33/13/23,
+# with the explicit kernel's edge interpolation), so the implicit operator is
+# exactly the Laplacian part of the explicit stress divergence; the
+# transposed part is returned as `sgs_transpose` for the explicit side.
+# Scalars: ν + κh, or the per-direction pair (ν + κh, ν + κv) when the
+# closure has a separate κv.
+#
+# Returns (νm, νs, sgs_transpose): νm a coefficient or a NamedTuple (u, v, w).
 function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
-                            closure) where {T}
-    closure === nothing && return (T(sim.ν), T(sim.ν))
+                            closure, stress::Symbol = :laplacian) where {T}
+    closure === nothing && return (T(sim.ν), T(sim.ν), nothing)
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
@@ -1179,8 +1281,33 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     νm = ws.ν_mom::Array{T,3}; νs = ws.ν_scal::Array{T,3}
     @inbounds νm .= sim.ν .+ f.νh.data
     @inbounds νs .= sim.ν .+ f.κh.data
-    return (_coef(νm, sim.mesh), _coef(νs, sim.mesh))
+    m = sim.mesh
+    cs = if f.κv === f.κh
+        _coef(νs, m)
+    else
+        ws.ν_scal_v === nothing && (ws.ν_scal_v = similar(sim.νt.data))
+        νsv = ws.ν_scal_v::Array{T,3}
+        @inbounds νsv .= sim.ν .+ f.κv.data
+        _DirCoef(_coef(νs, m), _coef(νsv, m))
+    end
+    stress === :symmetric || return (_coef(νm, m), cs, nothing)
+    νmv = if f.νv === f.νh
+        νm
+    else
+        ws.ν_mom_v === nothing && (ws.ν_mom_v = similar(sim.νt.data))
+        a = ws.ν_mom_v::Array{T,3}
+        @inbounds a .= sim.ν .+ f.νv.data
+        a
+    end
+    h = _coef(νm, m); v = _coef(νmv, m)
+    cm = (u = _StressCoef(FaceX(), h, v), v = _StressCoef(FaceY(), h, v),
+          w = _StressCoef(FaceZ(), h, v))
+    return (cm, cs, (νm, νmv))
 end
+
+# The implicit coefficient of the field `name`.
+@inline _coef_for(νm, νs, name::Symbol) =
+    _is_scalar_name(name) ? νs : (νm isa NamedTuple ? getfield(νm, name) : νm)
 
 _diffusion_buffer(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbol) =
     name === :u ? sim.lap_u : name === :v ? sim.lap_v : name === :w ? sim.lap_w :
@@ -1193,7 +1320,7 @@ function _add_diffusion_tendencies!(sim::BoussinesqSimulation{T}, ws::IMEXWorksp
     for name in names
         f   = getfield(sim, name)
         buf = _diffusion_buffer(sim, ws, name)
-        ν   = _is_scalar_name(name) ? νs : νm
+        ν   = _coef_for(νm, νs, name)
         _diffusion!(buf, f, ν, sim.mesh)
         _axpy_interior!(_tendency(sim, name), one(T), buf, sim.mesh)
     end
@@ -1267,7 +1394,7 @@ end
 function _solve_field!(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbol,
                        f::Field, νm, νs, dtγ, tol, maxit)
     scalar = _is_scalar_name(name)
-    ν   = scalar ? νs : νm
+    ν   = _coef_for(νm, νs, name)
     bcs = scalar ? sim.θ_bcs : sim.bcs
     dw  = scalar ? ws.diff.c : getfield(ws.diff, name)
     stats = solve_implicit_diffusion!(f, f, ν, dtγ, sim.mesh, bcs;
@@ -1285,7 +1412,8 @@ end
     step_imex!(sim, dt, scheme::IMEXScheme; body_force! = nothing,
                post_predictor! = nothing, workspace = imex_workspace(sim),
                tol = 1e-10, maxit = 200,
-               momentum_advection = momentum_advect!, sgs = nothing)
+               momentum_advection = momentum_advect!, sgs = nothing,
+               sgs_stress = :laplacian)
 
 Advance `sim` by `dt` with a semi-implicit IMEX scheme
 ([`ARK2`](@ref) or [`Rosenbrock2`](@ref)):
@@ -1324,12 +1452,25 @@ Notes and limitations:
   * The implicit operator is `∇·(ν_eff ∇·)` with `ν_eff` face-averaged
     from cell centers. With `C_s = 0` this is exactly the molecular term
     `ν∇²` that `step!` applies explicitly, so the two drivers differ only
-    by truncation error. With SGS on, the implicit operator is a
-    co-located approximation of the full Smagorinsky stress divergence
-    (the cross-derivative eddy-viscosity terms that
-    `add_eddy_viscosity_u!` forms at edges are not reproduced exactly);
-    it is 2nd-order consistent and SPD, which is what the implicit solve
-    needs, and the coefficient is lagged by one step either way.
+    by truncation error. With SGS on and `sgs_stress = :laplacian` (the
+    default), the implicit operator is a co-located approximation of the
+    Laplacian eddy-viscosity divergence (the edge interpolation that
+    `add_eddy_viscosity_u!` uses is not reproduced exactly); it is
+    2nd-order consistent and SPD, which is what the implicit solve needs,
+    and the coefficient is lagged by one step either way.
+  * `sgs_stress = :symmetric` (P55-b) splits the stress-form divergence
+    `∂ⱼ[νᵢⱼ(∂ⱼuᵢ + ∂ᵢuⱼ)]` of `step!` into its diagonal part
+    `∂ⱼ(νᵢⱼ∂ⱼuᵢ)`, **implicit**, with per-direction coefficients (`ν + νh`
+    on the x/y faces of the 11, 22, 12 fluxes, `ν + νv` on the 33, 13, 23
+    ones) and exactly the interpolation of the explicit kernel — the
+    operator is the explicit `part = :diagonal` of
+    [`add_sgs_stress_divergence!`](@ref Aeolus.Operators.add_sgs_stress_divergence!)
+    and stays symmetric, so `I − γΔt L` is SPD — and the transposed cross
+    terms `∂ⱼ(νᵢⱼ∂ᵢuⱼ)`, **explicit**, evaluated at each stage value with
+    the same frozen coefficients. For constant ν the cross terms are
+    `ν∂ᵢ(∇·u)`, zero on the projected stage values, so the split is exact
+    there; they matter only where ν varies, where they are not stiff (no
+    second derivative of `uᵢ` along `xⱼ` of its own component).
   * `ν_eff` is frozen at `uⁿ` for the whole step.
   * Returns `sim`. The step's solver statistics are in
     `workspace.total_iterations` and `workspace.max_residual`.
@@ -1341,7 +1482,8 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
                     tol::Real = 1e-10, maxit::Integer = 200,
                     momentum_advection::F = momentum_advect!,
                     sgs = nothing,
-                    eddy_viscosity! = nothing) where {T, F}
+                    eddy_viscosity! = nothing,
+                    sgs_stress::Symbol = :laplacian) where {T, F}
     Δt = T(dt)
     γ  = T(scheme.γ)
     δ  = T(scheme.δ)
@@ -1353,12 +1495,13 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     ws.max_residual = zero(T)
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
-    νm, νs = _freeze_viscosity!(sim, ws, closure)
+    νm, νs, sgsT = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
 
     # ---- stage 1: (I - γΔt D) U₁ = uⁿ + γΔt E(uⁿ) ------------------------
     _explicit_tendencies!(sim, γ * Δt; body_force! = body_force!,
-                          momentum_advection = momentum_advection)
+                          momentum_advection = momentum_advection,
+                          sgs_transpose = sgsT)
     _copy_tendencies!(ws.aux, sim, names)                 # E(uⁿ)
     for name in names
         f = getfield(sim, name)
@@ -1376,12 +1519,13 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
     for name in names
         _diffusion!(_diffusion_buffer(sim, ws, name), getfield(sim, name),
-                    _is_scalar_name(name) ? νs : νm, m)
+                    _coef_for(νm, νs, name), m)
     end
 
     # ---- stage 2 --------------------------------------------------------
     _explicit_tendencies!(sim, Δt; body_force! = body_force!,
-                          momentum_advection = momentum_advection)   # E(U₁) → sim.t*
+                          momentum_advection = momentum_advection,
+                          sgs_transpose = sgsT)   # E(U₁) → sim.t*
     for name in names
         f = getfield(sim, name)
         _combine4!(f, one(T), getfield(ws.state0, name),
@@ -1405,7 +1549,8 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
                     tol::Real = 1e-10, maxit::Integer = 200,
                     momentum_advection::F = momentum_advect!,
                     sgs = nothing,
-                    eddy_viscosity! = nothing) where {T, F}
+                    eddy_viscosity! = nothing,
+                    sgs_stress::Symbol = :laplacian) where {T, F}
     Δt  = T(dt)
     γ   = T(scheme.γ)
     a21 = T(scheme.a21)
@@ -1419,13 +1564,14 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     ws.max_residual = zero(T)
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
-    νm, νs = _freeze_viscosity!(sim, ws, closure)
+    νm, νs, sgsT = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
     k2set = _k2_set!(ws)
 
     # ---- k₁: (I - γΔt J) k₁ = Δt F(uⁿ) ----------------------------------
     _explicit_tendencies!(sim, Δt; body_force! = body_force!,
-                          momentum_advection = momentum_advection)
+                          momentum_advection = momentum_advection,
+                          sgs_transpose = sgsT)
     _add_diffusion_tendencies!(sim, ws, νm, νs, names)
     for name in names
         k1 = getfield(ws.aux, name)
@@ -1444,7 +1590,8 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
 
     # ---- k₂: (I - γΔt J) k₂ = Δt F(u+k₁) + c₂₁ k₁ ------------------------
     _explicit_tendencies!(sim, Δt; body_force! = body_force!,
-                          momentum_advection = momentum_advection)
+                          momentum_advection = momentum_advection,
+                          sgs_transpose = sgsT)
     _add_diffusion_tendencies!(sim, ws, νm, νs, names)
     for name in names
         k2 = getfield(k2set, name)
