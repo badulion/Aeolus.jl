@@ -23,7 +23,9 @@ A horizontally periodic, pressure-driven wall-bounded LES built by
   * `sim` — the `BoussinesqSimulation` (free-slip `ImpermeableWall`
     z-boundaries; the wall model supplies the wall stress);
   * `closure` — the SGS closure (an `AbstractSGSClosure`, or `nothing`);
-  * `wall` — the [`WallModel`](@ref); `walls` — `:bottom` or `:both`;
+  * `wall` — the wall model: a [`WallModel`](@ref) (equilibrium law) or
+    a [`TBLEWallModel`](@ref) (non-equilibrium, P57-c); `walls` —
+    `:bottom` or `:both`;
     `formulation` — `:local`, `:schumann` or `:moeng`;
   * `inputs` — `nothing` (first-cell matching, unfiltered), or a named
     tuple `(bottom, top)` of [`MatchingInput`](@ref)s (`top` is `nothing`
@@ -50,7 +52,7 @@ eddy viscosity recomputed from the current state with the case's closure
 — pure, nothing is committed — the simulation's ν, and the wall stresses
 the last step applied).
 """
-mutable struct WallBoundedCase{S, C, W<:WallModel, T<:AbstractFloat}
+mutable struct WallBoundedCase{S, C, W<:AbstractWallModel, T<:AbstractFloat}
     sim::S
     closure::C
     wall::W
@@ -135,7 +137,8 @@ end
 const _DEFAULT_TF = 0.5
 
 function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
-                     u_star, height, noise, seed, stepper, inputs = nothing)
+                     u_star, height, noise, seed, stepper, inputs = nothing,
+                     wall_model::Symbol = :equilibrium, tble = (;))
     walls in (:bottom, :both) ||
         throw(ArgumentError("walls must be :bottom or :both, got :$walls"))
     formulation in (:local, :schumann, :moeng) ||
@@ -148,7 +151,17 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
     bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
     sim = BoussinesqSimulation(mesh; ν = ν, bcs = bcs)
     _initialise!(sim, law, u_star, ν, walls, noise, seed)
-    wm = WallModel(law; ν = ν > 0 ? ν : 1.5e-5)
+    wall_model in (:equilibrium, :nonequilibrium) ||
+        throw(ArgumentError("wall_model must be :equilibrium or :nonequilibrium, got :$wall_model"))
+    wm = if wall_model === :equilibrium
+        WallModel(law; ν = ν > 0 ? ν : 1.5e-5)
+    else
+        formulation === :local ||
+            throw(ArgumentError("wall_model = :nonequilibrium is local per column (formulation = :local)"))
+        # κ_wm starts from the law's κ, so the primed columns are that law's
+        κ0 = law isa SpaldingLaw ? law.κ : von_karman()
+        TBLEWallModel(; ν = ν > 0 ? ν : 1.5e-5, κ = κ0, tble...)
+    end
     T = typeof(float(mesh.dz))
     return WallBoundedCase(sim, closure, wm, walls, formulation, inputs,
                            T(u_star^2 / height), T(u_star), T(height), kind, stepper,
@@ -253,7 +266,7 @@ end
                  wall_law = SpaldingLaw(), walls = :both, formulation = :local,
                  δ = 1.0, u_τ = 1.0, extent = (2π*δ, π*δ, 2δ), noise = 3.0,
                  seed = 1, stepper = :rk3, h_wm = nothing, h_wm_cells = 1,
-                 filter = :none, T_f = nothing,
+                 filter = :none, T_f = nothing, wall_model = :equilibrium, tble = (;),
                  bottom_bc = :wall_model, θ_walls = nothing) -> WallBoundedCase
 
 The smooth-wall, pressure-driven **plane channel** of half-height δ at
@@ -282,6 +295,15 @@ The wall-model input keywords `h_wm`, `h_wm_cells`, `filter` and `T_f`
 (P57-b) are those of [`half_channel_case`](@ref), applied at each
 modelled wall (`T_f` default ``0.5\\,δ/u_τ``).
 
+`wall_model = :nonequilibrium` (P57-c, #189) replaces the equilibrium
+law by a [`TBLEWallModel`](@ref) at each modelled wall, built with
+`ν`, ``κ_{wm}`` initially the law's κ (`SpaldingLaw`), and the keywords
+in the named tuple `tble` (`terms`, `dynamic_kappa`, `T_κ`, `N`, `r`,
+…). Its columns take the input of the matching-height and filter
+keywords, the case's mean pressure gradient ``∂p/∂x = -u_τ^2/δ`` plus
+the resolved one, and are advanced once per step after the projection.
+`formulation` must be `:local`.
+
 Reserved hooks (not implemented; see [`half_channel_case`](@ref)):
 `bottom_bc = :wall_model`, `θ_walls = nothing` (P55-f, #191; P59-e, #195).
 
@@ -301,6 +323,7 @@ function channel_case(; Re_τ::Real = 1000, N = (16, 8, 16),
                       extent = (2π * δ, π * δ, 2δ), noise::Real = 3.0,
                       seed::Integer = 1, stepper::Symbol = :rk3,
                       h_wm = nothing, h_wm_cells = 1, filter::Symbol = :none, T_f = nothing,
+                      wall_model::Symbol = :equilibrium, tble = (;),
                       bottom_bc::Symbol = :wall_model, θ_walls = nothing)
     _reserved("bottom_bc", bottom_bc, :wall_model, "P55-f (#191) / P59-e (#195)")
     _reserved("θ_walls", θ_walls, nothing, "P55-f (#191) / P59-e (#195)")
@@ -308,7 +331,8 @@ function channel_case(; Re_τ::Real = 1000, N = (16, 8, 16),
     ν = u_τ * δ / Re_τ
     return _build_case(:channel, _dims(N), Tuple(float.(extent)), closure, wall_law,
                        ν, walls, formulation, u_τ, δ, noise, seed, stepper,
-                       _case_inputs(walls, h_wm, h_wm_cells, filter, T_f, u_τ, δ))
+                       _case_inputs(walls, h_wm, h_wm_cells, filter, T_f, u_τ, δ),
+                       wall_model, tble)
 end
 
 # ---------------------------------------------------------------------------
@@ -385,6 +409,14 @@ function advance_channel!(case::WallBoundedCase{S, C, W, T}, dt::Real) where {S,
         update_input_filter!(case.inputs.bottom, s, dt; side = :bottom)
         case.inputs.top === nothing || update_input_filter!(case.inputs.top, s, dt; side = :top)
     end
+    if case.wall isa TBLEWallModel
+        # the TBLE columns, to the end of the step: the mean pressure
+        # gradient −G plus the resolved one
+        for side in (case.walls === :both ? (:bottom, :top) : (:bottom,))
+            mi = case.inputs === nothing ? nothing : getfield(case.inputs, side)
+            update_wall_model!(case.wall, s, dt; side = side, input = mi, dpdx = -G)
+        end
+    end
     case.τ_wall_bottom = τb[]
     case.τ_wall_top = τt[]
     case.nsteps += 1
@@ -392,6 +424,10 @@ function advance_channel!(case::WallBoundedCase{S, C, W, T}, dt::Real) where {S,
 end
 
 function _apply_case_wall!(case, sim, Δt, side)
+    if case.wall isa TBLEWallModel
+        mi = case.inputs === nothing ? nothing : getfield(case.inputs, side)
+        return apply_wall_stress!(sim, case.wall, Δt; side = side, input = mi)
+    end
     case.inputs === nothing &&
         return apply_wall_stress!(sim, case.wall, Δt; side = side, formulation = case.formulation)
     mi = getfield(case.inputs, side)

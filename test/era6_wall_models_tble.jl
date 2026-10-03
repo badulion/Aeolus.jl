@@ -209,4 +209,77 @@ end
     @test_throws ArgumentError TBLEWallModel(; terms = :bogus)
 end
 
+@testset "5. Channel Re_τ = 1000 (24×12×16, h_wm = 3Δz, time filter, :pressure_gradient)" begin
+    Ub_LM = lm2015_ub_plus(1000)
+    dz = 2 / 16
+    c = channel_case(; Re_τ = 1000, N = (24, 12, 16), closure = StaticSmagorinsky(0.1),
+                     wall_law = SpaldingLaw(), seed = 1, h_wm = 3dz, filter = :temporal,
+                     wall_model = :nonequilibrium,
+                     tble = (terms = :pressure_gradient, dynamic_kappa = :total, κ_feedback = false,
+                             T_κ = 0.5))
+    ks = Float64[]
+    st = run_channel!(c, 8.0; average_from = 5.0,
+                      callback = cc -> cc.sim.t >= 5 && push!(ks, (tble_kappa(cc.wall, :bottom; dynamic = true) +
+                                                                  tble_kappa(cc.wall, :top; dynamic = true)) / 2))
+    Ub = sum(st.U) / length(st.U)
+    κd = sum(ks) / length(ks)
+    @info @sprintf("  channel Re_τ=1000 TBLE-PG: U_b⁺ %.3f (%+.2f %% vs Lee & Moser %.2f), ⟨τ_w⟩ %.3f, Φ_m(Δz) %.3f, dynamic κ_wm %.3f (%.1f s)",
+                   Ub, 100(Ub / Ub_LM - 1), Ub_LM, st.τ_wall, st.phi_m[1], κd, st.wall_time)
+    @test abs(Ub / Ub_LM - 1) < 0.05
+    @test abs(st.τ_wall - 1) < 0.07
+    # the dynamic κ_wm (Wang & Moin 2002: ≈ 0.2): the effective LES eddy
+    # viscosity at h = 0.375δ, close to 0.41(1 − h/δ) = 0.256, the
+    # outer-layer stress decrease the mixing-length ν_t,wm lacks
+    @test 0.15 < κd < 0.32
+    @test tble_kappa(c.wall) == 0.41                  # not fed back
+end
+
+@testset "6. Non-equilibrium response to a sudden tripling of ∂p/∂x (He & Seddighi 2013)" begin
+    # Reference: a resolved 1-D RANS of the whole channel (2δ, the same
+    # damped mixing length in the distance to the nearer wall; a test-only
+    # AbstractTBLEEddyViscosity), steady at ∂p/∂x = −u_τ²/δ, then −3u_τ²/δ.
+    # Its velocity at h_wm = 0.1δ drives the equilibrium ODE (the
+    # equilibrium model) and a TBLE column with the pressure gradient.
+    δ, ν, κ = 1.0, 1e-3, 0.41                         # Re_τ = 1000
+    ref = TBLEColumn(2δ; N = 400, r = 1.0)
+    eddy_ref = ChannelMixingLength(δ)
+    tble_solve!(ref, 0.0, 0.0, -1.0, 0.0, Inf; ν = ν, κ = κ, eddy = eddy_ref)
+    @test ref.τx ≈ 1 rtol = 1e-8                      # τ_w = −δ ∂p/∂x
+    jh = 21; hwm = ref.y[jh]
+    @test hwm ≈ 0.1δ
+    eq = TBLEColumn(hwm); tb = TBLEColumn(hwm)
+    tble_solve!(eq, ref.u[jh], 0.0, 0, 0, Inf; ν = ν, κ = κ, terms = :equilibrium_ode)
+    tble_solve!(tb, ref.u[jh], 0.0, -1.0, 0, Inf; ν = ν, κ = κ)
+    τ0 = (ref = ref.τx, eq = eq.τx, tb = tb.τx)
+    @test abs(τ0.eq - 1) < 0.1 && abs(τ0.tb - 1) < 0.01
+    dt = 0.005; t = 0.0
+    thalf = Dict(:ref => NaN, :eq => NaN, :tb => NaN)
+    early = Dict{Symbol,Float64}()                    # τ_w − τ₀ at t = 0.25 δ/u_τ
+    while t < 10 && any(isnan, values(thalf))
+        tble_solve!(ref, 0.0, 0.0, -3.0, 0.0, dt; ν = ν, κ = κ, eddy = eddy_ref)
+        tble_solve!(eq, ref.u[jh], 0.0, 0, 0, Inf; ν = ν, κ = κ, terms = :equilibrium_ode)
+        tble_solve!(tb, ref.u[jh], 0.0, -3.0, 0, dt; ν = ν, κ = κ)
+        t += dt
+        for (k, c) in ((:ref, ref), (:eq, eq), (:tb, tb))
+            isnan(thalf[k]) && c.τx >= getfield(τ0, k) + 1 && (thalf[k] = t)   # half-way to 3τ₀
+            abs(t - 0.25) < dt / 2 && (early[k] = c.τx - getfield(τ0, k))
+        end
+    end
+    @info @sprintf("  ∂p/∂x × 3: τ_w − τ₀ at t = 0.25 δ/u_τ: %.3f (resolved channel), %.3f (TBLE), %.3f (equilibrium) u_τ²",
+                   early[:ref], early[:tb], early[:eq])
+    @info @sprintf("  ∂p/∂x × 3: τ_w half-way (τ₀ + u_τ²) at t = %.3f (resolved channel), %.3f (TBLE), %.3f (equilibrium) δ/u_τ",
+                   thalf[:ref], thalf[:tb], thalf[:eq])
+    @test all(!isnan, values(thalf))
+    # the TBLE lags the step less than the equilibrium model, and follows the
+    # resolved near-wall response
+    @test thalf[:tb] < thalf[:eq]
+    @test abs(thalf[:tb] - thalf[:ref]) < 0.25 * abs(thalf[:eq] - thalf[:ref])
+    # the first response is the near-wall (Stokes-layer) one the pressure
+    # gradient drives directly: the TBLE has it, the equilibrium law, which
+    # sees only U(h_wm), does not
+    # (measured: 0.072 / 0.071 / 0.051 u_τ² at 0.25 δ/u_τ)
+    @test abs(early[:tb] / early[:ref] - 1) < 0.05
+    @test early[:eq] < 0.8 * early[:ref]
+end
+
 end
