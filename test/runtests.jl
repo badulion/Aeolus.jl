@@ -966,6 +966,14 @@ end
 end
 
 # =========================================================================
+# Era VI — high-fidelity turbulence closure (Phases 54-59)
+# =========================================================================
+
+@testset "Era VI" begin
+    include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
+end
+
+# =========================================================================
 # The Berlin (Alexanderplatz) flagship case — examples/urban/BerlinCase.jl
 
 @testset "Berlin case" begin

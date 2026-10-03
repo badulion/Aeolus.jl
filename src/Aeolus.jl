@@ -890,4 +890,11 @@ export effective_roughness, effective_scalar_roughness,
        AbstractIBLModel, ElliottIBL, PowerLawIBL, DiffusionIBL, ibl_height,
        BlendingHeightSolution, blended_forcing, BlendedMosaic, last_blending
 
+# =========================================================================
+# Era VI — high-fidelity turbulence closure (Phases 54-59)
+# =========================================================================
+
+# P59-a (#172) — no-slip / moving walls
+export NoSlipWall
+
 end # module
