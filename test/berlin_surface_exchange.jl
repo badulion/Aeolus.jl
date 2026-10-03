@@ -5,9 +5,9 @@
 #
 # Physics asserted: the air gains exactly the energy and water the
 # surfaces give (and nothing lands in a solid cell); the momentum the
-# drag removes is the kinematic surface stress u*² along the wind; the
-# extra energy other couplings put on the surfaces reaches them; and
-# street β follows the soil water.
+# ground's wall model (WallModels, #169) removes is the kinematic surface
+# stress u*² along the wind; the extra energy other couplings put on the
+# surfaces reaches them; and street β follows the soil water.
 
 using Test
 using Aeolus
@@ -82,21 +82,54 @@ const BC = Main.BerlinCase
         interior_view(BC.tracer(case, :qv)) .= q0
     end
 
-    @testset "momentum: the drag removes the surface stress u*² along the wind" begin
+    # The drag of #129 (examples/urban/couplings/surface_exchange.jl
+    # before #169), kept here as the regression oracle: rate u*²/U/Δz per
+    # column at its first air level, a face gets the mean of its two
+    # columns' rates, applied implicitly.
+    function drag_129!(u, v, drag, kair, Nx, Ny, Nz, dz, dt)
+        rate(i, j, k) = kair[i, j] == k ? drag[i, j] / dz : 0.0
+        function face!(f, i, j, iw, jw)
+            a, b = kair[iw, jw], kair[i, j]
+            for k in (a, b)
+                k > Nz && continue
+                r = (rate(iw, jw, k) + rate(i, j, k)) / 2
+                r > 0 && (f[i, j, k] /= 1 + dt * r)
+                a == b && break
+            end
+        end
+        for j in 1:Ny, i in 1:Nx
+            face!(u, i, j, mod1(i - 1, Nx), j)
+            face!(v, i, j, i, mod1(j - 1, Ny))
+        end
+    end
+
+    @testset "momentum: the ground's wall model (WallModels) removes u*² along the wind" begin
         u, v = interior_view(sim.u), interior_view(sim.v)
         u0, v0 = copy(u), copy(v)
         u .= 1.0; v .= 0.5
         dt = 2.0
+        # the held drag of the last surface step, u*²/max(U, U_min)
+        drag = bus.u_star .^ 2 ./ max.(bus.U, se.U_min)
+        uo, vo = copy(u), copy(v)
+        drag_129!(uo, vo, drag, bus.k_air, Nx, Ny, Nz, dz, dt)
         BC.run_stage!(se, case, Val(:post_predictor), dt)
+        # regression: with L and the wind of the surface step frozen, the
+        # MOSTWallLaw per column and apply_wall_stress! give the drag of #129
+        reg = max(maximum(abs.(u .- uo) ./ abs.(uo)), maximum(abs.(v .- vo) ./ abs.(vo)))
+        @info @sprintf("  ground wall model vs the #129 held drag (L, wind frozen): max rel difference %.1e", reg)
+        @test reg < 1e-12
+        # the law of each column gives back the u* of its surface step
+        h = dz / 2
+        @test all(I -> abs(friction_velocity(se.laws[I], bus.U[I], h) - bus.u_star[I]) <=
+                       1e-12 * bus.u_star[I], CartesianIndices(bus.u_star))
         # kinematic momentum removed, per unit plan area: Σ Δu dz dx dy / (dx dy)
         Mx = -sum(1.0 .- u) * dz
         My = -sum(0.5 .- v) * dz
         # the stress of each column's surface step, u*² along its wind (u_c, v_c)/U,
         # evaluated with the wind this test imposed
-        U = hypot(1.0, 0.5)
-        τx = sum(se.drag[I] * 1.0 for I in CartesianIndices(se.drag)) * dt
-        τy = sum(se.drag[I] * 0.5 for I in CartesianIndices(se.drag)) * dt
-        amax = maximum(se.drag) / dz * dt
+        τx = sum(drag[I] * 1.0 for I in CartesianIndices(drag)) * dt
+        τy = sum(drag[I] * 0.5 for I in CartesianIndices(drag)) * dt
+        amax = maximum(drag) / dz * dt
         @info @sprintf("  drag: momentum removed (%.5e, %.5e) m²/s vs Σ u*²(u,v)/U dt (%.5e, %.5e); max dt·rate %.1e",
                        -Mx, -My, τx, τy, amax)
         # implicit: 1 − 1/(1 + a dt) = a dt − (a dt)² + …, so the relative
@@ -107,8 +140,6 @@ const BC = Main.BerlinCase
         # only faces at a first air level were touched
         touched = [(i, j, k) for i in 1:Nx, j in 1:Ny, k in 1:Nz if u[i, j, k] != 1.0]
         @test all(t -> t[3] in (bus.k_air[t[1], t[2]], bus.k_air[mod1(t[1] - 1, Nx), t[2]]), touched)
-        # the kinematic stress of the surface step: u*² = drag · max(U, U_min)
-        @test all(I -> se.drag[I] * max(bus.U[I], se.U_min) ≈ bus.u_star[I]^2, CartesianIndices(se.drag))
         u .= u0; v .= v0
     end
 
