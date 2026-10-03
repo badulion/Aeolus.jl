@@ -918,4 +918,9 @@ export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        turbulence_velocity_scale, growth_rate, supercritical_fraction,
        grid_reynolds_number
 
+# P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
+# method of the CutCell generic (no new name).
+export NoSlipWall
+include("wall_shear_stress.jl")
+
 end # module

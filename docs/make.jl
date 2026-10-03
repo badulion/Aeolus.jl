@@ -66,7 +66,7 @@ makedocs(
             "Blending height"             => "theory/blending_height.md",
             "Heterogeneous-surface validation" => "theory/heterogeneous_surface.md",
             "Stability functions and Ri_g" => "theory/turbulence_stability.md",
-            "Laminar–turbulent transition" => "theory/transition.md",
+            "Transition and wall-bounded flow" => "theory/transition.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

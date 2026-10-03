@@ -893,7 +893,10 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
 * **Momentum.** The surface stress ``ρu_*^2`` is applied as an implicit
   drag on the first-air-cell velocity faces, after the IBM. The momentum
   removed equals ``Σ u_*^2\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in
-  the test). The `:wall` ground used to be free-slip.
+  the test). The `:wall` ground used to be free-slip. It stays a
+  free-slip `:wall` carrying the MOST drag, not a resolved `NoSlipWall`
+  (#172): at Δx = 15.6 m a resolved no-slip wall would be unphysical
+  ([Transition and wall-bounded flow](../theory/transition.md#The-Berlin-case)).
 * **Extra surface energy.** `bus.sensible` (window sun, glazing
   transmission, dew heat) is collected every step and delivered to the
   surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`
