@@ -11,6 +11,8 @@ module Aeolus
 include("Grids.jl")
 include("Fields.jl")
 include("BoundaryConditions.jl")
+# Era VI stability contract (Phase 58): pure, and needed by Operators.
+include("TurbulenceStability.jl")
 include("Operators.jl")
 include("TimeSteppers.jl")
 include("PressureSolvers.jl")
@@ -137,6 +139,9 @@ using .IceThermodynamics           # Era V, Phase 51 (#37)
 using .OceanMixedLayer             # Phase 52 (#38)
 using .AirSeaFlux                  # Phase 52 (#39)
 using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
+
+# --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
+using .TurbulenceStability         # Phase 58 stability contract (#170)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -895,5 +900,19 @@ export effective_roughness, effective_scalar_roughness,
        blending_height,
        AbstractIBLModel, ElliottIBL, PowerLawIBL, DiffusionIBL, ibl_height,
        BlendingHeightSolution, blended_forcing, BlendedMosaic, last_blending
+
+# =========================================================================
+# Era VI — high-fidelity turbulence closure (Phases 54-60)
+# =========================================================================
+
+# Phase 58 — TurbulenceStability contract (#170): gradient-Richardson
+# stability functions, N² and Ri_g (pointwise fields live in Operators).
+export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_prandtl,
+       LillyCutoff, BrownEtAl1994, ShortTail, LongTail,
+       gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR
+# SurfaceExchange's implementer of the contract (MOST-consistent factors).
+export MOSTConsistent, most_gradient_richardson, most_stability_parameter
+# Operators' pointwise fields of the contract.
+export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 
 end # module
