@@ -563,6 +563,50 @@ function _add_eddy_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCente
     return tϕ
 end
 
+# Masked and/or mass-weighted form of the same flux divergence (P56-a, #177):
+#
+#   * `mask` (Bool, storage-sized, halos consistent with ϕ's BCs; or nothing):
+#     a face with a solid cell on either side carries no flux, and a solid
+#     cell's tendency is left untouched. The flux on every open face is the
+#     unmasked one, so Σ_fluid tϕ dV telescopes to zero.
+#   * `wc`, `wf` (per storage level; or nothing): the sound-proof form
+#     (1/W_k) ∇·(W κ ∇ϕ) with the cell weight `wc[k]` and the z-face weight
+#     `wf[k]` (bottom face of cell k, the FaceZ storage index). The cell
+#     weight cancels in the horizontal fluxes, so only the vertical flux is
+#     weighted; Σ W_k tϕ_k telescopes to zero.
+#
+# Kept separate from the kernel above so the unmasked, unweighted path stays
+# bit for bit what it was.
+function _add_eddy_diffusion_scalar_masked!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
+                                             K::Field{CellCenter}, g::RegularGrid,
+                                             mask, wc, wf)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    ii, jj, kk = interior(g)
+    Kd = K.data; ϕd = ϕ.data
+    hasmask = mask !== nothing
+    weighted = wc !== nothing
+    @inbounds for k in kk, j in jj, i in ii
+        hasmask && mask[i,j,k] && continue
+        oE = !hasmask || !mask[i+1,j,k]
+        oW = !hasmask || !mask[i-1,j,k]
+        oN = !hasmask || !mask[i,j+1,k]
+        oS = !hasmask || !mask[i,j-1,k]
+        oT = !hasmask || !mask[i,j,k+1]
+        oB = !hasmask || !mask[i,j,k-1]
+
+        fxE = oE ? 0.5 * (Kd[i,j,k]   + Kd[i+1,j,k]) * (ϕd[i+1,j,k] - ϕd[i,  j,k]) * idx : zero(eltype(ϕd))
+        fxW = oW ? 0.5 * (Kd[i-1,j,k] + Kd[i,j,k])   * (ϕd[i,  j,k] - ϕd[i-1,j,k]) * idx : zero(eltype(ϕd))
+        fyN = oN ? 0.5 * (Kd[i,j,k]   + Kd[i,j+1,k]) * (ϕd[i,j+1,k] - ϕd[i,j,  k]) * idy : zero(eltype(ϕd))
+        fyS = oS ? 0.5 * (Kd[i,j-1,k] + Kd[i,j,k])   * (ϕd[i,j,  k] - ϕd[i,j-1,k]) * idy : zero(eltype(ϕd))
+        fzT = oT ? 0.5 * (Kd[i,j,k]   + Kd[i,j,k+1]) * (ϕd[i,j,k+1] - ϕd[i,j,k  ]) * idz : zero(eltype(ϕd))
+        fzB = oB ? 0.5 * (Kd[i,j,k-1] + Kd[i,j,k])   * (ϕd[i,j,k  ] - ϕd[i,j,k-1]) * idz : zero(eltype(ϕd))
+
+        vert = weighted ? (wf[k+1] * fzT - wf[k] * fzB) * idz / wc[k] : (fzT - fzB) * idz
+        tϕ.data[i,j,k] += (fxE - fxW)*idx + (fyN - fyS)*idy + vert
+    end
+    return tϕ
+end
+
 # =========================================================================
 # WENO-5 scalar advection (Phase 10) — staggered.
 # =========================================================================

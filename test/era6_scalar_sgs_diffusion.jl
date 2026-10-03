@@ -7,6 +7,8 @@
 #   3. The flux-divergence kernel against the analytic steady state of
 #      d/dz(κ dϕ/dz) = 0 with κ = κ₀(1 + z/H), fixed flux below, fixed value
 #      above; 2nd-order convergence.
+#   4. The solid mask: no flux through faces next to solids, fluid Σϕ
+#      conserved, solid cells untouched; the mass-weighted (anelastic) form.
 #   5. θ and momentum are unchanged by the qv diffusion.
 
 using Test
@@ -150,6 +152,102 @@ end
         @test 3.5 <= e32 / e64 <= 4.5
         @printf("  [κ(z)] steady state: max error %.2e (Nz=32), %.2e (Nz=64), ratio %.2f\n",
                 e32, e64, e32 / e64)
+    end
+
+    @testset "4. solid mask and the mass-weighted form" begin
+        g = RegularGrid(; size = (16, 12, 10), extent = (1.6, 1.2, 1.0), halo = (2, 2, 2))
+        Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
+        bc = FieldBoundaryConditions(:periodic, :periodic, :noflux)
+        sm = SolidMask(g)
+        # a block in the middle, and one straddling the periodic x seam
+        mark_solid!(sm, (x, y, z) -> (0.6 < x < 1.0 && 0.4 < y < 0.8 && z < 0.5) ||
+                                     ((x < 0.2 || x > 1.4) && y < 0.3 && z < 0.3))
+        # mask halos consistent with the periodic x, y BCs
+        mf = Field(CellCenter(), g)
+        mf.data .= sm.mask
+        Aeolus.BoundaryConditions.fill_halos!(mf, bc)
+        mask = mf.data .> 0.5
+        solid = view(mask, Hx+1:Hx+g.Nx, Hy+1:Hy+g.Ny, Hz+1:Hz+g.Nz)
+        fluid = .!solid
+
+        rng = Xoshiro(56)
+        # a blob next to the central block's west face, plus noise; solids
+        # hold a different (stale) value that must neither leak nor change
+        xs = [(i - 0.5) * g.dx for i in 1:g.Nx]; ys = [(j - 0.5) * g.dy for j in 1:g.Ny]
+        zs = [(k - 0.5) * g.dz for k in 1:g.Nz]
+        ϕ = Field(CellCenter(), g)
+        interior_view(ϕ) .= [exp(-((x - 0.5)^2 + (y - 0.6)^2 + (z - 0.25)^2) / 0.02)
+                             for x in xs, y in ys, z in zs] .+ 1e-3 .* rand(rng, g.Nx, g.Ny, g.Nz)
+        interior_view(ϕ)[solid] .= 5.0
+        κ = Field(CellCenter(), g)
+        interior_view(κ) .= 1e-3 .* (0.5 .+ rand(rng, g.Nx, g.Ny, g.Nz))
+        fill_halos!(κ, bc)
+        solid0 = copy(interior_view(ϕ)[solid])
+        S0 = sum(interior_view(ϕ)[fluid])
+
+        t = Field(CellCenter(), g)
+        # the unmasked kernel pulls the stale solid value into the fluid
+        fill_halos!(ϕ, bc); fill!(t.data, 0)
+        add_eddy_diffusion_scalar!(t, ϕ, κ)
+        leak = sum(interior_view(t)[fluid])
+        @test leak > 1e-3
+
+        # all-false mask == unmasked kernel, bit for bit
+        t2 = Field(CellCenter(), g)
+        add_eddy_diffusion_scalar!(t2, ϕ, κ; mask = falses(size(ϕ.data)))
+        @test t2.data == t.data
+
+        # masked: no flux through solid faces; check one face directly
+        fill!(t.data, 0)
+        add_eddy_diffusion_scalar!(t, ϕ, κ; mask = mask)
+        @test sum(interior_view(t)[fluid]) / S0 |> abs <= 1e-14
+        @test all(iszero, interior_view(t)[solid])
+        # a fluid cell with exactly one solid neighbour (east): its tendency is
+        # the unmasked one minus the east-face flux divergence
+        I = findfirst(I -> fluid[I] && (I[1] < g.Nx && solid[I[1]+1, I[2], I[3]]) &&
+                           !solid[mod1(I[1]-1, g.Nx), I[2], I[3]] &&
+                           !solid[I[1], mod1(I[2]+1, g.Ny), I[3]] && !solid[I[1], mod1(I[2]-1, g.Ny), I[3]] &&
+                           (I[3] == g.Nz || !solid[I[1], I[2], I[3]+1]) &&
+                           (I[3] == 1 || !solid[I[1], I[2], I[3]-1]), CartesianIndices(solid))
+        @test I !== nothing
+        i, j, k = I[1] + Hx, I[2] + Hy, I[3] + Hz
+        tu = Field(CellCenter(), g); add_eddy_diffusion_scalar!(tu, ϕ, κ)
+        fE = 0.5 * (κ.data[i, j, k] + κ.data[i+1, j, k]) * (ϕ.data[i+1, j, k] - ϕ.data[i, j, k]) / g.dx
+        @test t.data[i, j, k] ≈ tu.data[i, j, k] - fE / g.dx rtol = 1e-12
+
+        # 100 explicit steps: fluid Σϕ conserved, solids untouched, Σϕ² decays
+        # explicit limit 1/(2κ_max Σ 1/Δ²) ≈ 1.1 s here (Δ = 0.1, κ_max ≤ 1.5e-3)
+        h = 0.5
+        maxrel = 0.0; monotone = true; prev = sum(abs2, interior_view(ϕ)[fluid])
+        V0 = prev
+        for _ in 1:100
+            fill_halos!(ϕ, bc); fill!(t.data, 0)
+            add_eddy_diffusion_scalar!(t, ϕ, κ; mask = mask)
+            interior_view(ϕ) .+= h .* interior_view(t)
+            maxrel = max(maxrel, abs(sum(interior_view(ϕ)[fluid]) - S0) / S0)
+            V = sum(abs2, interior_view(ϕ)[fluid]); monotone &= V <= prev; prev = V
+        end
+        @test maxrel <= 1e-12
+        @test interior_view(ϕ)[solid] == solid0
+        @test monotone && prev < V0
+        @printf("  [mask] 100 steps: max|ΔΣϕ_fluid|/Σϕ = %.1e, solid cells unchanged, unmasked leak would be %.2e /s\n",
+                maxrel, leak)
+
+        # mass-weighted form (1/W)∇·(Wκ∇ϕ): Σ W ϕ conserved, uniform ϕ stays uniform
+        an = AnelasticSimulation(g)                  # isentropic ρ̄(z)
+        Wc, Wf = Aeolus.Anelastic.constraint_weights(an)
+        fill_halos!(ϕ, bc); fill!(t.data, 0)
+        add_eddy_diffusion_scalar!(t, ϕ, κ; mask = mask, weights = (Wc, Wf))
+        Wk = reshape(Wc[Hz+1:Hz+g.Nz], 1, 1, :)
+        SW = sum((Wk .* interior_view(ϕ))[fluid])
+        @test abs(sum((Wk .* interior_view(t))[fluid])) / SW <= 1e-14
+        @test abs(sum(interior_view(t)[fluid])) > 1e-6 * abs(sum(interior_view(t)[fluid] .|> abs))   # Σϕ itself is not what it conserves
+        @test all(iszero, interior_view(t)[solid])
+        u1 = Field(CellCenter(), g); interior_view(u1) .= 0.37; fill_halos!(u1, bc)
+        fill!(t.data, 0)
+        add_eddy_diffusion_scalar!(t, u1, κ; mask = mask, weights = (Wc, Wf))
+        @test maximum(abs, interior_view(t)) == 0
+        @test_throws DimensionMismatch add_eddy_diffusion_scalar!(t, ϕ, κ; mask = falses(3, 3, 3))
     end
 
     @testset "5. θ and momentum unchanged" begin
