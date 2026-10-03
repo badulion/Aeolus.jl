@@ -483,7 +483,7 @@ end
     _SecondTestFilter(mesh)
 
 Scratch storage of the second (wider) test filter of the scale-dependent
-Lagrangian model. The 21 Germano quantities of [`_germano_terms`](@ref)
+Lagrangian model. The 21 Germano quantities of `_germano_terms`
 plus the fluid indicator (22 components, component first) are box-summed
 plane by plane: `Ap` (one shell plane), `Bp` (after the x pass), `C`
 (every plane after the y pass), `Ep` (one plane after the z pass); the

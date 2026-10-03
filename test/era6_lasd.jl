@@ -298,8 +298,12 @@ _geomean(β) = exp2(mean(log2, β))
         @test abs(βz[k5] - 1) < 0.15
         @test mean(βz[zc .<= 0.3]) < mean(βz[0.3 .< zc .<= 0.5])
         # The issue's "β → 1 above z/H ≈ 0.2" is not met at 24³: β is
-        # 0.55-0.69 at z/H = 0.2-0.3 and crosses 1 near z/H = 0.45 (32³:
-        # the same). See sgs.md (LASD) for the discussion.
+        # 0.55-0.69 at z/H = 0.2-0.3 and crosses 1 near z/H = 0.45. At 32³
+        # it crosses near z/H = 0.32 (β = 0.71-0.86 at z/H = 0.2-0.27): the
+        # crossing sits at a fixed z ≈ 10Δ (10.8 and 10.3 cells), i.e. where
+        # the wider test filter (5Δ) is about half the distance to the wall,
+        # so "above 0.2 H" needs N ≳ 50 with these filters. The expectation
+        # assumed a resolution-independent height; see sgs.md (LASD).
         @test_broken abs(βz[findfirst(>=(0.25), zc)] - 1) < 0.15
         # the P54-d momentum budget
         @test abs(st.τ_wall - 1) < 0.05
