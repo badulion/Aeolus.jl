@@ -40,6 +40,12 @@ A horizontally periodic, pressure-driven wall-bounded LES built by
   * `nsteps` — accepted steps so far.
 
 Advance with [`advance_channel!`](@ref) or [`run_channel!`](@ref).
+Instantaneous diagnostics: `phi_m_profile(case)` (Operators'
+`phi_m_profile` with the case's `u_star` and κ =
+`SurfaceExchange.von_karman()`) and `total_stress_profile(case)` (the
+eddy viscosity recomputed from the current state with the case's closure
+— pure, nothing is committed — the simulation's ν, and the wall stresses
+the last step applied).
 """
 mutable struct WallBoundedCase{S, C, W<:WallModel, T<:AbstractFloat}
     sim::S
@@ -352,24 +358,15 @@ function _uv_means(sim)
     return um ./ (Nx * Ny), vm ./ (Nx * Ny)
 end
 
-"""
-    phi_m_profile(case::WallBoundedCase) -> (z, Φ)
-
-The instantaneous Φ_m profile of the case (Operators' `phi_m_profile`
-with the case's `u_star` and κ = `SurfaceExchange.von_karman()`).
-"""
+# phi_m_profile(case): the instantaneous Φ_m profile, with the case's u_star
+# and κ = SurfaceExchange.von_karman() (documented on WallBoundedCase; the
+# docstring of the generic is Operators').
 phi_m_profile(case::WallBoundedCase) =
     phi_m_profile(case.sim.u, case.sim.v, case.u_star; κ = von_karman())
 
-"""
-    total_stress_profile(case::WallBoundedCase) -> (z, resolved, sgs, viscous, wall, total)
-
-The instantaneous momentum-flux profile of the case (Operators'
-`total_stress_profile`): the eddy viscosity is recomputed from the
-current state with the case's closure (pure, nothing is committed), the
-molecular ν is the simulation's, and the wall stresses are the ones the
-last step applied (`case.τ_wall_bottom`, `case.τ_wall_top`).
-"""
+# total_stress_profile(case): the instantaneous flux profile; νt recomputed
+# from the current state with the case's closure (pure, nothing committed),
+# the wall stresses of the last step (documented on WallBoundedCase).
 function total_stress_profile(case::WallBoundedCase)
     s = case.sim
     fill_halos!(s.u, s.bcs); fill_halos!(s.v, s.bcs); fill_halos!(s.w, s.bcs)

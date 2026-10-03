@@ -11,6 +11,7 @@ tested at are in
 [Smagorinsky-Lilly SGS → Closure contract](../theory/sgs.md#Closure-contract).
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
+- Wall-bounded flow diagnostics (P54-d, #174; below) — `Aeolus.Operators`
 - [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; [theory](../theory/wall_models.md))
 
 ## Shared contract — SGS closures (P54-a)
@@ -52,4 +53,27 @@ Aeolus.Operators.DynamicSmagorinsky
 Aeolus.Operators.FunctionSGS
 Aeolus.Operators._velocity_gradient_at
 Aeolus.Operators._strain_at
+```
+
+## Wall-bounded flow diagnostics (P54-d)
+
+Plane-averaged diagnostics of a horizontally periodic, wall-bounded run,
+shared by every Era VI benchmark. The cases that produce the flows —
+`half_channel_case` (the neutral ABL half channel of Porté-Agel et al.
+2000) and `channel_case` (the two-wall channel) — are in
+[WallModels](era6/wall_models.md); theory and measured numbers in
+[Wall models → Wall-bounded benchmark cases](../theory/wall_models.md#Wall-bounded-benchmark-cases).
+
+```julia
+using Aeolus
+hc = half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1))
+run_channel!(hc, 8.0)                                   # spin-up, H/u* = 1
+st = run_channel!(hc, 20.0; average_from = 8.0)         # st.τ_wall, st.phi_m, st.stress
+E = streamwise_spectrum(hc.sim.u, [3, 6, 12])           # E11(k1) at three levels
+```
+
+```@docs
+Aeolus.Operators.phi_m_profile
+Aeolus.Operators.total_stress_profile
+Aeolus.Operators.streamwise_spectrum
 ```
