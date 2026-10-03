@@ -51,10 +51,11 @@ as the strain rate of the Smagorinsky closure.
 """
 module Transition
 
-using ..Grids: RegularGrid, CellCenter, FaceX, FaceY, FaceZ, interior
+using ..Grids: RegularGrid, CellCenter, FaceX, FaceY, FaceZ, interior, xnodes, ynodes, znodes
 using ..Fields: Field, interior_view, mesh
-using ..BoundaryConditions: fill_halos!
+using ..BoundaryConditions: fill_halos!, NoSlipWall, FreeStreamBoundary, FieldBoundaryConditions
 using ..Operators: _vorticity_at, _strain_at
+using ..Operators: DampingProfile, NordstromRamp, damping_rate, smooth_step, _add_damping!   # P59-d
 using ..Simulations: BoussinesqSimulation
 
 export turbulent_fraction, turbulent_indicator!, laminar_mask!,
@@ -63,7 +64,12 @@ export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        grid_reynolds_number
 # P59-d (#185) — spatially developing flat-plate boundary layer.
 export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
-       blasius_skin_friction, turbulent_skin_friction
+       blasius_skin_friction, turbulent_skin_friction,
+       FringeRegion, fringe_rate, add_fringe!, fringe_forcing,
+       blasius_target, set_blasius!, blasius_freestream, fringe_distance, flat_plate_setup,
+       streamwise_profile, edge_velocity, skin_friction, displacement_thickness,
+       momentum_thickness, shape_factor, transition_onset,
+       onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw
 
 # =========================================================================
 # Turbulent fraction γ(z)
@@ -514,5 +520,6 @@ end
 # =========================================================================
 
 include("transition/blasius.jl")
+include("transition/flat_plate.jl")
 
 end # module

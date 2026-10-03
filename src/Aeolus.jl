@@ -921,7 +921,12 @@ export turbulent_fraction, turbulent_indicator!, laminar_mask!,
 # P59-d (#185) — spatially developing flat-plate boundary layer: Blasius,
 # fringe region, free-stream disturbances, BL integral diagnostics.
 export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
-       blasius_skin_friction, turbulent_skin_friction
+       blasius_skin_friction, turbulent_skin_friction,
+       FringeRegion, fringe_rate, add_fringe!, fringe_forcing,
+       blasius_target, set_blasius!, blasius_freestream, fringe_distance, flat_plate_setup,
+       streamwise_profile, edge_velocity, skin_friction, displacement_thickness,
+       momentum_thickness, shape_factor, transition_onset,
+       onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw
 
 # P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
 # method of the CutCell generic (no new name).

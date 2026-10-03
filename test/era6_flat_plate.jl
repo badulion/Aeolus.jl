@@ -161,3 +161,128 @@ end
     fill_halos!(sim.w, sim.bcs)
     @test sim.w.data[:, 1, kw] == wb
 end
+
+# ---------------------------------------------------------------------------
+# 3. Fringe region: momentum budget (one explicit step, exact)
+# ---------------------------------------------------------------------------
+
+# Interior sum of a field times the cell volume.
+_vsum(f, g) = sum(interior_view(f)) * g.dx * g.dy * g.dz
+
+@testset "P59-d fringe momentum budget" begin
+    for top in (:wall, :freestream)
+        c = flat_plate_setup(; Nx = 64, Nz = 16, Lx = 128, H = 8, fringe_length = 40,
+                             rise = 10, fall = 8, Re_δ0 = 150, top = top)
+        sim, g = c.sim, c.sim.mesh
+        sim.u.data .= 1.0                                  # impulsively started plate
+        rng = MersenneTwister(11)
+        sim.w.data .+= 1e-3 .* randn(rng, size(sim.w.data))
+        step_rk3!(sim, 0.5; body_force! = c.forcing!)      # a developed, non-trivial state
+        # Terms of d/dt ∫u dV over the next explicit step, all on the pre-step state:
+        fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+        tu = Field(FaceX(), g); tv = Field(FaceY(), g); tw = Field(FaceZ(), g)
+        add_fringe!(tu, tv, tw, sim.u, sim.v, sim.w, c.fringe, c.target)
+        F_fringe = _vsum(tu, g)
+        τw = wall_shear_stress(sim; side = :bottom)        # kinematic, +∂u/∂z at the wall
+        A = g.Lx * g.Ly
+        # momentum carried out through the top face: u_face w_top with the
+        # mirror u halo (u_face = u_N), w averaged to the u point
+        flux_top = 0.0
+        if top === :freestream
+            wb = sim.bcs.top.w_top; kN = g.Hz + g.Nz
+            for j in (g.Hy+1):(g.Hy+g.Ny), i in (g.Hx+1):(g.Hx+g.Nx)
+                flux_top += sim.u.data[i, j, kN] * 0.5 * (wb[i-1] + wb[i]) * g.dx * g.dy
+            end
+        end
+        M0 = _vsum(sim.u, g)
+        dt = 0.25
+        step!(sim, dt; body_force! = c.forcing!)
+        dMdt = (_vsum(sim.u, g) - M0) / dt
+        resid = dMdt - (F_fringe - τw * A - flux_top)
+        scale = abs(F_fringe) + abs(τw * A) + abs(flux_top)
+        @printf("    budget (%s top): dM/dt = %.10f, fringe = %.10f, -τA = %.10f, -top flux = %.10f, residual = %.2e\n",
+                top, dMdt, F_fringe, -τw * A, -flux_top, resid)
+        @test abs(F_fringe) > 1e-2 && abs(τw * A) > 1e-2       # both terms active
+        @test abs(resid) < 1e-10
+        @test abs(resid) / scale < 1e-12
+    end
+end
+
+# ---------------------------------------------------------------------------
+# 4. Laminar plate (Tu = 0, 2-D, Re_x 1.35e4 → 1e5, NoSlipWall from P59-a)
+# ---------------------------------------------------------------------------
+#
+# 256 × 1 × 64 on 512 × 16 δ*₀, dx = 2 δ*₀, dz = δ*₀/4, Re_δ*₀ = 200; RK3 at
+# CFL 0.5, 1200 steps (2.3 flow-through times) from a uniform stream, so the
+# boundary layer develops from the fringe inflow instead of being imposed.
+
+@testset "P59-d laminar flat plate" begin
+    c = flat_plate_setup()
+    sim, g = c.sim, c.sim.mesh
+    sim.u.data .= 1.0
+    t0 = time()
+    for n in 1:1200
+        step_rk3!(sim, 1.0; body_force! = c.forcing!)
+    end
+    wall = time() - t0
+    @test max_divergence(sim) < 1e-12
+    x = collect(Aeolus.Grids.xnodes(g, FaceX()))
+    Lp = g.Lx - (c.fringe.profile.stop - c.fringe.profile.start)     # plate length
+    mid = findall(xi -> 0.2Lp <= xi <= 0.8Lp, x)
+    Re_x = (x .- c.x_le) ./ c.ν
+    cf = skin_friction(sim; U_e = 1.0)
+    H = shape_factor(sim)
+    ratio = cf[mid] ./ blasius_skin_friction.(Re_x[mid])
+    @printf("    laminar plate (%.0f s): c_f/c_f,Blasius ∈ [%.4f, %.4f] over Re_x ∈ [%.0f, %.0f]; H ∈ [%.3f, %.3f]\n",
+            wall, minimum(ratio), maximum(ratio), Re_x[mid[1]], Re_x[mid[end]],
+            minimum(H[mid]), maximum(H[mid]))
+    @test all(abs.(ratio .- 1) .< 0.05)
+    @test all(abs.(H[mid] .- 2.59) .< 0.1)
+    # The plane mean of τ_w(x) is the P59-a wall_shear_stress (one definition).
+    τx = cf .* 0.5                                            # U_e = 1
+    @test sum(τx) / length(τx) ≈ wall_shear_stress(sim) rtol = 1e-12
+    # Fringe: the target is recovered at the fringe exit (x = 0) to 1 % of U.
+    ub = streamwise_profile(sim)
+    ut = interior_view(c.target.u)[:, 1, :]
+    err_exit = maximum(abs, ub[1, :] .- ut[1, :])
+    @printf("    fringe exit: max|u − u_target| = %.2e U; inflow δ* = %.4f δ*₀, θ = %.4f δ*₀\n",
+            err_exit, displacement_thickness(ub, g.dz)[1], momentum_thickness(ub, g.dz)[1])
+    @test err_exit < 0.01
+    # The free stream enters the plate at U∞ (the transpiration top keeps
+    # it from accelerating by Δδ*/H).
+    Ue = edge_velocity(ub)
+    @test maximum(abs.(Ue[mid] .- 1)) < 0.005
+end
+
+@testset "P59-d integral diagnostics on analytic profiles" begin
+    # Sampled Blasius profiles at three stations: δ*, θ, H, c_f from the
+    # midpoint-rule quadrature match the similarity constants.
+    ν = 1 / 200; dz = 0.025; Nz = 800
+    xs = [100.0, 300.0, 500.0]
+    ū = [blasius_velocity(x, (k - 0.5) * dz; ν = ν)[1] for x in xs, k in 1:Nz]
+    s = blasius_solution()
+    δs = displacement_thickness(ū, dz; U_e = 1.0)
+    θ = momentum_thickness(ū, dz; U_e = 1.0)
+    for (n, x) in enumerate(xs)
+        @test δs[n] ≈ s.delta_star * sqrt(ν * x) rtol = 1e-4
+        @test θ[n] ≈ s.theta * sqrt(ν * x) rtol = 1e-4
+    end
+    @test all(abs.(shape_factor(ū, dz; U_e = 1.0) .- s.H) .< 1e-3)
+    cf = skin_friction(ū, dz, ν; U_e = 1.0)
+    @test all(abs.(cf ./ blasius_skin_friction.(xs ./ ν) .- 1) .< 1e-3)
+    @test edge_velocity(ū) ≈ ones(3) atol = 1e-12
+
+    # Onset finder on a synthetic laminar → turbulent c_f distribution: the
+    # minimum of c_f upstream of the persistent departure from laminar.
+    Re = range(2e4, 6e5; length = 400)
+    γ = @. 0.5 * (1 + tanh((Re - 2.5e5) / 3e4))
+    cfs = @. (1 - γ) * blasius_skin_friction(Re) + γ * turbulent_skin_friction(Re)
+    xo, io = transition_onset(collect(Re), cfs, blasius_skin_friction.(Re))
+    @test io == argmin(cfs)
+    @test 1.8e5 < xo < 2.5e5
+    @test isequal(transition_onset(collect(Re), blasius_skin_friction.(Re), blasius_skin_friction.(Re)), (NaN, 0))
+    # The correlations at the T3A level Tu = 3.3 % (issue #185: ≈ 190 and ≈ 200).
+    @test onset_reynolds_theta_mayle(3.3) ≈ 189.7 atol = 0.5
+    @test onset_reynolds_theta_abu_ghannam_shaw(3.3) ≈ 200.0 atol = 0.5
+    @test turbulent_skin_friction(1e6) ≈ 0.0576 / 10^1.2 rtol = 1e-12
+end
