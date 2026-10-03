@@ -13,6 +13,7 @@ tested at are in
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
 - Wall-bounded flow diagnostics (P54-d, #174; below) — `Aeolus.Operators`
 - [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #183: matching height and input filtering against log-layer mismatch; [theory](../theory/wall_models.md))
+- Lagrangian dynamic Smagorinsky (P54-b, #173; below) — `Aeolus.Operators`
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -76,4 +77,33 @@ E = streamwise_spectrum(hc.sim.u, [3, 6, 12])           # E11(k1) at three level
 Aeolus.Operators.phi_m_profile
 Aeolus.Operators.total_stress_profile
 Aeolus.Operators.streamwise_spectrum
+```
+
+## Lagrangian dynamic Smagorinsky (P54-b)
+
+The Germano identity averaged along pathlines (Meneveau, Lund & Cabot
+1996), a stateful closure on the contract above. It takes an optional
+solid mask, and the plane / local [`DynamicSmagorinsky`](@ref
+Aeolus.Operators.DynamicSmagorinsky) take the same one. Theory, tests and
+numbers:
+[Smagorinsky-Lilly SGS → Lagrangian dynamic averaging](../theory/sgs.md#Lagrangian-dynamic-averaging-(Meneveau,-Lund-and-Cabot-1996)).
+
+```julia
+using Aeolus
+g = RegularGrid(; size = (32, 32, 16), extent = (32.0, 32.0, 16.0), halo = (3, 3, 3))
+sm = SolidMask(g); mark_solid!(sm, (x, y, z) -> 12 < x < 20 && 12 < y < 20 && z < 6)
+sim = BoussinesqSimulation(g; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+lag = LagrangianDynamicSmagorinsky(g; mask = sm.mask)
+step!(sim, 0.05; sgs = lag)          # memory committed once per accepted step
+lag.workspace.cs2                    # the coefficient C_s² of the last call
+```
+
+```@docs
+Aeolus.Operators.LagrangianDynamicSmagorinsky
+Aeolus.Operators.advance_sgs!(::Aeolus.Operators.LagrangianDynamicSmagorinsky, ::Any, ::Any)
+Aeolus.Operators._germano_identity!
+Aeolus.Operators._lagrangian_relax!
+Aeolus.Operators._upstream
+Aeolus.Operators._SGSMask
+Aeolus.Operators._masked_velocities!
 ```

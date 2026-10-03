@@ -164,6 +164,8 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
 # Era VI (P54-d, #174): wall-bounded flow diagnostics
 export phi_m_profile, total_stress_profile, streamwise_spectrum
+# Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
+export LagrangianDynamicSmagorinsky
 # Era VI, Phase 54 (P54-c): LES analysis toolbox
 export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
