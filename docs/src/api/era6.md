@@ -16,6 +16,7 @@ own):
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
 - [Transition diagnostics — Transition](era6/transition.md) — `Aeolus.Transition` (Phase 59, #180; [theory](../theory/transition.md))
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
+- σ-model SGS closure (P59-b, #184; below) — `Aeolus.Operators`
 - Walls (P59-a, #172; below) — `Aeolus.BoundaryConditions`
 
 ## Shared contract — SGS closures (P54-a)
@@ -57,6 +58,31 @@ Aeolus.Operators.DynamicSmagorinsky
 Aeolus.Operators.FunctionSGS
 Aeolus.Operators._velocity_gradient_at
 Aeolus.Operators._strain_at
+```
+
+## σ-model SGS closure (P59-b, #184)
+
+`SigmaModel(C_σ = 1.35)` is an `AbstractEddyViscosityClosure` of the
+contract above, with
+``ν_t = (C_σΔ)^2 σ_3(σ_1 − σ_2)(σ_2 − σ_3)/σ_1^2`` built from the singular
+values of `_velocity_gradient_at` (Nicoud et al. 2011). It is zero in
+pure shear, solid-body rotation, any 2-D flow, isotropic expansion and
+axisymmetric strain, and it scales as ``z^3`` at a no-slip wall. Theory and
+measured numbers:
+[Smagorinsky-Lilly SGS → σ-model](../theory/sgs.md#σ-model). The Berlin
+case selects it with `physics[:sgs] = :sigma`.
+
+```julia
+step!(sim, dt; sgs = SigmaModel())             # C_σ = 1.35, κ_t = ν_t/Pr_t
+```
+
+```@docs
+Aeolus.Operators.SigmaModel
+Aeolus.Operators.compute_sigma_νt!
+Aeolus.Operators.sigma_operator
+Aeolus.Operators.sigma_singular_values
+Aeolus.Operators._sigma_operator_raw
+Aeolus.Operators._sym3_eigvals
 ```
 
 ## Walls (P59-a, #172)

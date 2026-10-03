@@ -277,6 +277,7 @@ Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
 | 32³ | dynamic (plane)     | +1.3 % | −15.7 % | 0.085 / 0.099 | 1.23 / 1.00 |
 | 32³ | Smagorinsky 0.17    | +2.5 % | −14.2 % | 0.088 / 0.097 | 1.27 / 1.08 |
 | 32³ | no model            | +78.3 % | +121.1 % | 0.216 / 0.316 | 5.25 / 10.4 |
+| 32³ | σ-model 1.35 (#184)  | +6.6 % | −11.1 % | 0.096 / 0.105 | 1.43 / 1.31 |
 | 64³ | dynamic (plane)     | −13.4 % | −23.5 % | 0.062 / 0.118 | 0.72 / 0.61 |
 | 64³ | Smagorinsky 0.17    | −14.2 % | −24.3 % | 0.065 / 0.124 | 0.67 / 0.52 |
 | 64³ | no model            | +32.7 % | +15.7 % | 0.226 / 0.346 | 5.66 / 8.02 |
@@ -297,15 +298,114 @@ AMD, …: one line each in the test) shows up. Starting from the random-
 phase field without the rescale cycles instead gives +21 % / −3 % at
 32³ (no transfer during the first turnover).
 
+## σ-model
+
+The σ-model of Nicoud, Baya Toda, Cabrit, Bose & Lee (2011) is a
+closure of the [contract](#Closure-contract),
+[`SigmaModel`](@ref Aeolus.Operators.SigmaModel)`(C_σ = 1.35)`, P59-b
+(#184). It builds the eddy viscosity from the singular values
+``σ_1 ≥ σ_2 ≥ σ_3 ≥ 0`` of the resolved velocity gradient
+``g_{ij} = ∂u_i/∂x_j``:
+
+```math
+ν_t = (C_σ Δ)^2\, D_σ, \qquad
+D_σ = \frac{σ_3\,(σ_1 - σ_2)\,(σ_2 - σ_3)}{σ_1^2}, \qquad
+Δ = (Δx\,Δy\,Δz)^{1/3},
+```
+
+with ``κ_t = ν_t/Pr_t``. The design goal is an operator that is zero
+wherever the flow cannot be turbulent. Smagorinsky's ``|S|`` sees only
+the strain, so it is on in any laminar shear. ``D_σ`` vanishes in these
+cases (Nicoud et al. 2011, Sec. II):
+
+* ``σ_3 = 0`` whenever ``g`` has rank ≤ 2: any two-dimensional flow, pure
+  shear, solid-body rotation;
+* ``σ_1 = σ_2`` or ``σ_2 = σ_3``: isotropic expansion or contraction,
+  axisymmetric strain.
+
+At a no-slip wall ``u, v = O(z)`` and ``w = O(z^2)``, so ``σ_1 = O(1)``,
+``σ_2 = O(z)``, ``σ_3 = O(z^2)`` and ``D_σ = O(z^3)``. This is the
+near-wall behaviour of the true SGS dissipation, and it comes without a
+damping function. ``C_σ = 1.35`` is Nicoud et al.'s value from isotropic
+turbulence.
+
+**Computing the singular values.** ``σ_i^2`` are the eigenvalues of
+``G = g^Tg``. They are found in closed form, with no LAPACK call per
+cell, from the trigonometric solution of the characteristic cubic (Smith
+1961; the form Nicoud et al. take from Hasan, Basri & Kopp 2010). The
+cubic is written in the deviator ``G' = G - \tfrac13 \mathrm{tr}G\,I``,
+with ``α_1 = \mathrm{tr}(G'^2)/6`` and ``α_2 = \det G'/2``, so neither is
+formed by cancellation. ``D_σ`` is a product of eigenvalue *gaps*, and
+near a double eigenvalue the cubic gives a gap only to ``\sqrt ε``,
+because the arccos argument is near ±1. A plain implementation therefore
+returns ``ν_t ≈ 10^{-8}(C_σΔ)^2|g|`` for axisymmetric strain instead of
+zero. Two steps fix this:
+
+1. Where the smaller gap is below 1 % of the spread, the simple
+   eigenvalue is deflated. Its eigenvector is the largest cross product
+   of two rows of ``G − λI``, and the close pair is recomputed from the
+   2 × 2 compression of ``G`` on the orthogonal complement, whose gap is
+   accurate to ``ε\|G\|`` (Kopp 2008).
+2. The smallest singular value is ``σ_3 = |\det g|/(σ_1σ_2)``, which is
+   exactly zero for a rank-2 ``g`` rather than the square root of a
+   round-off eigenvalue.
+
+``σ_1 − σ_2`` is formed as ``(λ_1 − λ_2)/(σ_1 + σ_2)``. Round-off can
+still leave ``σ_3`` a few ulp above ``σ_2`` when the two coincide; the
+operator is clipped at zero there. The gradient is
+`_velocity_gradient_at`, the one stencil of the contract, so there is no
+second stencil.
+
+**What was measured** (`test/era6_sigma_sgs.jl`; KH in
+`test/era6_transition_kh.jl`; CBC in `test/era6_cbc_decay.jl`):
+
+| property | σ-model | Smagorinsky |
+| :-- | :-- | :-- |
+| 16³ linear fields, ``\max ν_t/(Δ^2\|g\|)``: uniform shear / solid-body rotation / isotropic expansion / axisymmetric strain (also rotated off the grid axes) | 0 / 0 / 1.7e-30 / 5.0e-16 (rotated: 3.3e-18 / 1.5e-30 / 1.1e-15) | 0.0289 / 0 / 0.0409 / 0.0409 (``C_s = 0.17``) |
+| 2-D flow (16³, ``w = 0``, no ``z`` dependence) | exactly 0 | max 1.44e-3 |
+| closed form vs `svdvals`, 1e4 random ``g`` over six decades | ``\max\|Δσ\|/σ_1`` = 2.5e-14 | — |
+| near-degenerate ``Q\,\mathrm{diag}(a, a(1+δ), b)\,Q^T``, δ = 1e-1 … 1e-8 | ``\max\|ΔD_σ\|/σ_1 ≤`` 2.1e-15 | — |
+| clip: degenerate ``g`` (two equal singular values), 1e4 | raw ``D_σ < 0`` in 431, ``\|D_σ\| ≤`` 3.8e-16 ``σ_1``, clipped to 0 | — |
+| ``d\log ν_t/d\log z``, first 8 of 64 cells, Taylor wall field | 2.955 | 0.0025 |
+| laminar Couette, Re = 100, ``N_z = 32``, from rest | wall stress ``νU/h`` to 2.8e-14, ``ν_t ≡ 0`` | stress excess ``(C_sΔ)^2(U/h)/ν`` = 4.5156e-2, measured 4.5156e-2 |
+| decaying HIT 32³ (``ν = 10^{-4}``), exponent ``n`` of ``K ∝ t^{-n}`` on ``t ∈ [1, 3]``, seeds 1 / 2 | 0.5823 / 0.4746 | 0.5840 / 0.4848 |
+| CBC 32³ (3 seeds): ``K_{98}/K_{42}``, ``K_{171}/K_{42}`` vs CBC; RMS ``\log_{10}E`` (98 / 171); ``E(k_c)``/CBC | +6.6 %, −11.1 %; 0.096 / 0.105; 1.43 / 1.31 | +2.5 %, −14.2 %; 0.088 / 0.097; 1.27 / 1.08 |
+| KH 64×1×128 growth rate (no SGS 0.1820) | 0.1820 (``ν_t ≡ 0``: the layer is 2-D) | 0.1769 (−2.82 %, ``C_s = 0.1``) |
+| kernel cost, 64×64×32 | 6.7 ms | 0.85 ms |
+
+The issue expected Smagorinsky to be nonzero in all five laminar cases.
+That expectation is wrong for solid-body rotation, which has no strain,
+so Smagorinsky is zero there too. The test asserts that.
+
+**Berlin.** The `:sgs` slot's provider `:sigma`
+(`examples/urban/couplings/sgs_sigma.jl`) is off by default; flipping
+the default from Smagorinsky is the maintainer's call. After 100 steps
+of the `:smoke` window, the mean ``ν_t`` is 2.7e-2 m²/s in the canopy,
+against 2.4e-2 for Smagorinsky on the same flow. Above the sponge start
+it is 5.3e-4 against 2.0e-2 m²/s. The Transition indicator finds that
+free stream laminar (γ = 0). It is not *exactly* parallel, though: weak
+3-D disturbances from the canopy reach it, below the γ threshold, so
+``σ_3 ≠ 0`` and ``ν_t`` is small rather than zero. For an exactly
+parallel profile on the Berlin mesh it is zero to the bit
+(`test/berlin_numerics.jl`). The smoke step costs 16.4 ms against
+15.8 ms with Smagorinsky.
+
 ## Limitations and planned upgrades
 
 The current implementation is deliberately the *simplest* working
 Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
 
-  * No wall damping (Van Driest / Piomelli). Needed only when walls
-    exist — Phase 1b.
+  * No wall damping (Van Driest / Piomelli) for Smagorinsky. Needed only
+    when walls exist. The [σ-model](#σ-model) needs none: its ``ν_t``
+    falls off as ``z^3`` at a no-slip wall (measured slope 2.955).
   * The constant coefficient is too dissipative in transitional / stably
-    stratified regimes. The dynamic coefficient below is the alternative.
+    stratified regimes. The dynamic coefficient and the σ-model, which is
+    zero in laminar shear and in 2-D flow, are the alternatives.
+  * The σ-model costs about 8 times the Smagorinsky kernel (6.7 against
+    0.85 ms on 64×64×32). It is zero only in *exactly* laminar
+    (parallel, 2-D, pure-strain) flow; a laminar but weakly 3-D free
+    stream gets a small ``ν_t`` (Berlin: 2.6 % of Smagorinsky's above
+    the sponge start). It is not stability-aware.
   * The **stability correction** for stably stratified flow
     (Deardorff / Lilly closure with a Richardson-number reduction) is
     not applied — it will matter when we do stably stratified boundary
@@ -339,3 +439,11 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Deardorff, J. W. (1980), *Stratocumulus-capped mixed layers derived
     from a three-dimensional model*, Boundary-Layer Meteorol. 18, 495
     (prognostic SGS TKE).
+  * Nicoud, F., Baya Toda, H., Cabrit, O., Bose, S. & Lee, J. (2011),
+    *Using singular values to build a subgrid-scale model for large eddy
+    simulations*, Phys. Fluids 23, 085106 (the σ-model).
+  * Hasan, K. M., Basri, A. H. & Kopp, J. (2010), as cited by Nicoud et
+    al. (2011) for the closed-form eigenvalues; Smith, O. K. (1961),
+    *Eigenvalues of a symmetric 3 × 3 matrix*, Commun. ACM 4, 168.
+  * Kopp, J. (2008), *Efficient numerical diagonalization of Hermitian
+    3 × 3 matrices*, Int. J. Mod. Phys. C 19, 523.

@@ -41,14 +41,19 @@ stepping is projected SSP-RK3 (`step_rk3!` with `body_force!`) at CFL 0.6.
 | ``J = 0.30``, ``αδ = 0.7071`` | 128 × 1 × 256 | ``A(5τ_0)/A(τ_0) = 0.223``, fitted ``σ = -0.054`` | stable: ``Ri_g > 1/4`` everywhere |
 | ``J = 0``, ``αδ = 0.4446``, no SGS | 64 × 1 × 128 | ``σ = 0.1820`` | quoted |
 | the same, Smagorinsky ``C_s = 0.1`` | 64 × 1 × 128 | ``σ = 0.1769`` (−2.8 %) | quoted |
+| the same, σ-model ``C_σ = 1.35`` (P59-b, #184) | 64 × 1 × 128 | ``σ = 0.1820`` (``ν_t ≡ 0``) | within 3 % of no SGS |
 
 The 1.76 % shortfall at ``J = 0`` is the sum of the viscous reduction at
 ``Re = 1000`` and the discretisation error of the second-order operators
 at ``Δx = 0.11δ``. At ``64 × 128`` (``Δx = 0.22δ``) the shortfall grows
 to 4.1 %, so most of it is numerical. The Smagorinsky closure removes
 another 2.8 %, because its ``ν_t`` acts on the laminar shear of the base
-flow. Comparing it with the σ closure, which is zero for a pure shear,
-is P59-b's job.
+flow. The [σ-model](sgs.md#σ-model) (P59-b, #184) does not. Its
+``ν_t`` is zero for any 2-D flow (``σ_3 = 0``), so the layer grows at
+exactly the no-SGS rate. The same property keeps the molecular wall
+stress of a laminar Couette flow (below) unchanged with the SGS on: σ
+gives ``νU/h`` to 2.8e-14, while Smagorinsky adds
+``(C_sΔ)^2(U/h)/ν`` = 4.5 % at ``Re = 100``, ``N_z = 32``.
 
 ### The turbulent fraction γ(z)
 

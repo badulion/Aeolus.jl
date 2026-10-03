@@ -303,7 +303,7 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, bit for bit the cores' built-in closure), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167); every core and stepper takes it |
+| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, bit for bit the cores' built-in closure), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167); every core and stepper takes it |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, option `scheme = :weno_z5`) | the `:transport` stage |
 
@@ -339,7 +339,15 @@ integration](#Dynamical-core-and-time-integration).
   the highest roof + 1 and the sponge). `:mlsgs` wraps `ML.MLSGS`; with
   the default `fn` (the Smagorinsky closure with `cfg.C_s`) the run is
   bit for bit the default run (tested over 100 smoke steps). There is no
-  trained model.
+  trained model. `:sigma` (`couplings/sgs_sigma.jl`, #184) is the σ-model of
+  Nicoud et al. (2011), option `C_σ = 1.35`. Its ``ν_t`` vanishes in
+  laminar shear and 2-D flow; `report` prints the canopy and free-stream
+  mean ``ν_t`` next to Smagorinsky's on the same flow. After 100 smoke
+  steps that is 2.7e-2 (Smagorinsky 2.4e-2) m²/s in the canopy and 5.3e-4
+  (2.0e-2) above the sponge start, where γ = 0. It costs 16.4 against
+  15.8 ms per smoke step. It is off by default, and switching the default
+  is the maintainer's call. `Operators` is exempt, so no coverage list
+  changes.
 * **Scalar advection.** Every tracer registered with `advect = true`;
   `positive` tracers go through the flux limiter (`advect_positive!`).
   `:weno_z7` needs `CaseConfig(halo = (4, 4, 4))`, `:teno8` halo 5; the
