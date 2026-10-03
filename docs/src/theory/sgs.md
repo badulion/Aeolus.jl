@@ -27,7 +27,8 @@ and the filter width is
 ```
 
 For the scalar (potential temperature) the SGS diffusivity is
-`ν_t / Prₜ`.
+`κ_t = ν_t / Prₜ`, kept in its own field `sim.κt` (see [Closure
+contract](#Closure-contract): other closures set `κ_t` independently).
 
 ## Discretization on the C-grid
 
@@ -166,11 +167,88 @@ procedure — which measures that transfer — correctly gives
 for a linear velocity profile), where the constant-coefficient model
 still dissipates. These are the tests in `test/era2_sgs_numerics.jl`.
 
-**Using it.** `step!(sim, dt; eddy_viscosity! = (νt, u, v, w) ->
-compute_dynamic_smagorinsky_νt!(νt, u, v, w; workspace = ws))` replaces
+**Using it.** `step!(sim, dt; sgs = DynamicSmagorinsky(ws))` replaces
 the built-in closure (the eddy-viscosity terms are added where the
-built-in ones are); `ML.MLSGS` closures plug in the same way. The
-Berlin case selects it with `physics[:sgs] = :dynamic`.
+built-in ones are); it is bit for bit the pre-contract
+`eddy_viscosity! = (νt, u, v, w) -> compute_dynamic_smagorinsky_νt!(νt,
+u, v, w; workspace = ws)`, which still works. `ML.MLSGS` closures plug in
+the same way. The Berlin case selects it with `physics[:sgs] = :dynamic`,
+on any dynamical core.
+
+## Closure contract
+
+Era VI (#167) defines the interface between an SGS closure and the
+dynamical cores **once**, in `src/operators/sgs_closures.jl`, so that
+closures that need more than the velocity — buoyancy-aware mixing, a
+prognostic TKE, Reynolds-stress transport, a Lagrangian-averaged dynamic
+coefficient — plug into every core the same way. A closure is an
+[`AbstractSGSClosure`](@ref Aeolus.Operators.AbstractSGSClosure) passed as
+`sgs = closure` to `step!`, `step_rk3!`, `step_imex!`, `step_adaptive!`
+and the anelastic / pseudo-incompressible `step!`.
+
+| generic | contract |
+| :-- | :-- |
+| `sgs_coefficients!(f, c, sim)` | fill the eddy viscosity and diffusivity `f = SGSFields(νh, νv, κh, κv)` (isotropic: `νv === νh`, `κv === κh`; by default `sim.νt`, `sim.κt`) from the current state — `u, v, w`, `θ`, `qv` with filled halos, the mesh, `θ₀`, `g` — and the closure's committed memory. **Pure.** |
+| `advance_sgs!(c, sim, dt)` | commit the memory over an accepted step of length `dt`, after the projection. Default no-op. |
+| `sgs_state(c)`, `restore_sgs_state!(c, s)` | snapshot / restore the memory around a step that may be rejected. Default no-op. |
+| `add_sgs_momentum!(tu, tv, tw, c, f, sim)` | the stress divergence; default the Laplacian eddy-viscosity form with `νh` |
+| `add_sgs_scalar!(tϕ, ϕ, c, f, sim)` | the scalar flux divergence; default `∂ⱼ(κh ∂ⱼϕ)` |
+
+**Why `sgs_coefficients!` must be pure.** The cores evaluate the
+coefficients more often than once per step: once per RK3 substage, once
+for the adaptive stepper's CFL limit, and again on every retried try of
+a rejected step. Before the contract the closure hook `f(νt, u, v, w)`
+was called at each of these, so a closure with memory would have
+advanced it two to four times per step and never rolled it back. Under
+the contract the memory changes only in `advance_sgs!`, which every core
+calls exactly once per accepted step (RK3: once with `dt` after the
+third substage, not three times), and `step_adaptive!` brackets each try
+with `sgs_state` / `restore_sgs_state!`, so after a rejection the memory
+is bit for bit that of a run that took the shorter step directly.
+
+**κ_t is a field.** The simulations carry `κt` next to `νt`. The θ
+tendency is formed with it, the CFL limit is
+``\Delta t_{sgs} = C_{diff}\, Δ^2_{harm} / \max(ν_{t,\max}, κ_{t,\max})``
+(rather than ``ν_{t,\max} \max(1, 1/Pr_t)``), and the IMEX implicit
+operator freezes ``ν + κ_t`` for the scalars. The Smagorinsky-type
+closures ([`AbstractEddyViscosityClosure`](@ref
+Aeolus.Operators.AbstractEddyViscosityClosure): `StaticSmagorinsky`,
+`DynamicSmagorinsky`, `ML.MLSGS`, and `FunctionSGS`, which wraps a
+legacy `f(νt, u, v, w)`) set ``κ_t = ν_t/Pr_t``; they apply it as
+``(1/Pr_t)\,∂_j(ν_t ∂_jθ)`` through the same kernel, the order of
+operations of the pre-contract code, so the default run is unchanged bit
+for bit (face averages of ``ν_t/Pr_t`` are not bitwise ``1/Pr_t`` times
+face averages of ``ν_t``). A closure with its own ``κ_t`` (a stability
+function, a TKE closure) gets the three-argument
+[`add_eddy_diffusion_scalar!`](@ref Aeolus.Operators.add_eddy_diffusion_scalar!)
+by default. qv and the passive tracers keep their current treatment
+(P56-a, #177).
+
+**One gradient stencil.** `Operators._velocity_gradient_at` returns the
+full resolved gradient ``g_{ij} = ∂u_i/∂x_j`` at a cell centre (diagonal:
+the face-to-face difference; off-diagonal: the centred difference over
+two cells of the component averaged to the centre); the strain rate of
+both Smagorinsky closures is built from it, and the Era VI closures that
+need the gradient (AMD / Vreman, σ, the gradient Richardson number, TKE
+shear production) read the same tensor.
+
+**What was measured** (`test/era6_sgs_closure.jl`):
+
+| property | result |
+| :-- | :-- |
+| `StaticSmagorinsky(C_s)`, a legacy `f(νt, u, v, w)` vs the built-in `C_s` run, 50 steps of 16³ decaying turbulence, `step!` / `step_rk3!` / `step_imex!` | identical `u, v, w, θ` (`==`) |
+| `DynamicSmagorinsky(ws)` vs `eddy_viscosity! = (…) -> compute_dynamic_smagorinsky_νt!(…)` | identical (`==`), same `cs2` |
+| commits over 6 steps: Euler / RK3 / IMEX / adaptive | 6 / 6 (18 coefficient evaluations) / 6 / 6 |
+| adaptive, one forced retry | memory `(1, [dt/2])` = the run that took `dt/2` directly, state bitwise equal |
+| `θ = sin(2πz/L_z)`, constant `κ₀ ≠ ν_t/Pr_t`: amplitude vs the discrete amplification factor, explicit (100 steps) / ARK2 (20 steps, 25× the explicit limit) | 1.8e-15 / 4.4e-16 relative |
+| `κ_t = 5ν_t`: `dt_sgs` | `C_diff Δ²_harm / κ_{t,max}` exactly |
+| random positive `κ_t`, no-flux walls, 100 steps: ``Σθ`` | conserved to 0 (Euler), 6e-14 (ARK2) relative |
+| linear velocity field on (15.625, 15.625, 6.25) m: `_velocity_gradient_at` | 5.6e-17 s⁻¹ from the prescribed tensor |
+| anelastic vs Boussinesq core, `DynamicSmagorinsky`, same velocity | identical `ν_t`, `κ_t` (`==`) |
+
+In the Berlin case the SGS slot's providers are closure objects passed as
+`sgs`, so `:dynamic` and `:mlsgs` now also run on the sound-proof cores
+(see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
 
 ## Decaying grid turbulence (Comte-Bellot and Corrsin)
 
@@ -258,3 +336,6 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Kang, H. S., Chester, S. & Meneveau, C. (2003), *Decaying turbulence
     in an active-grid-generated flow and comparisons with large-eddy
     simulation*, JFM 480, 129.
+  * Deardorff, J. W. (1980), *Stratocumulus-capped mixed layers derived
+    from a three-dimensional model*, Boundary-Layer Meteorol. 18, 495
+    (prognostic SGS TKE).
