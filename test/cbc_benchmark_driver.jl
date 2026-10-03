@@ -114,7 +114,8 @@ function _cbc_closure(s::Symbol, mesh)
         return _cbc_closure((νt, u, v, w) -> compute_dynamic_smagorinsky_νt!(νt, u, v, w; workspace = ws), mesh)
     end
     s === :lagrangian && return ((;), (sgs = LagrangianDynamicSmagorinsky(mesh),))
-    throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, :lagrangian, " *
+    s === :lasd && return ((;), (sgs = LagrangianDynamicSmagorinsky(mesh; scale_dependent = true),))
+    throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, :lagrangian, :lasd, " *
                         "a C_s, f(νt, u, v, w) or an AbstractSGSClosure"))
 end
 # a closure object: a fresh copy per realisation (its memory must not leak between seeds)
@@ -131,6 +132,8 @@ Run the Comte-Bellot–Corrsin decay at N³ with `closure`:
 * `:lagrangian` — [`LagrangianDynamicSmagorinsky`](@ref) (Meneveau, Lund &
   Cabot 1996), stepped with `step_rk3!(sim, dt; sgs)` so its memory is
   committed once per step;
+* `:lasd` — the same closure with `scale_dependent = true` (Bou-Zeid,
+  Meneveau & Parlange 2005; P54-e, #186);
 * an `AbstractSGSClosure` — any closure of the Era VI contract (copied per
   realisation), stepped the same way;
 * a function `f(νt, u, v, w)` — any closure accepted by `step!`'s

@@ -11,6 +11,7 @@
 #   closure        K98/K42 err  K171/K42 err  rms log10 E (98 / 171)  E(k_c)/CBC (98 / 171)
 #   dynamic           +1.3 %      −15.7 %       0.085 / 0.099           1.23 / 1.00
 #   Lagrangian (#173) +0.7 %      −14.5 %       0.076 / 0.087           1.18 / 1.00
+#   LASD (#186)       −9.6 %      −19.7 %       0.066 / 0.092           0.92 / 0.81
 #   Smagorinsky .17   +2.5 %      −14.2 %       0.088 / 0.097           1.27 / 1.08
 #   no model         +78.3 %     +121.1 %       0.216 / 0.316           5.25 / 10.4
 #
@@ -32,6 +33,12 @@
 # the ±10 % expectation (from spectral-code LES, Kang et al. 2003) does not
 # transfer to this set-up; the cause is not pinned down further here.
 # The target is kept below as @test_broken, the assertion is ±20 %.
+#
+# LASD (P54-e, #186) is more dissipative than LASI at 32³ (its domain-mean
+# C_s is above LASI's in isotropic flow, era6_lasd.jl test 1): K(98)/K(42)
+# is 9.6 % and K(171)/K(42) 19.7 % low, inside ±10 % / ±20 % with little
+# margin, and its small scales are slightly under CBC (E(k_c)/CBC 0.92 /
+# 0.81) instead of above it.
 
 using Test
 using Aeolus
@@ -63,6 +70,9 @@ include("cbc_benchmark_driver.jl")
         @info "  " * cbc_summary(String(c), res[c])
     end
     @info @sprintf("  CBC 32³ (4 closures × 3 seeds): %.1f s", t_total)
+    # the scale-dependent Lagrangian model (P54-e, #186), timed on its own
+    t_lasd = @elapsed res[:lasd] = cbc_benchmark(:lasd; N = 32)
+    @info "  " * cbc_summary("lasd", res[:lasd])
 
     @testset "set-up: station-1 spectrum exact in every resolved shell" begin
         r = res[:dynamic]
@@ -74,7 +84,7 @@ include("cbc_benchmark_driver.jl")
         @test r.K_ratio_ref[2] > (urms[3] / urms[1])^2
     end
 
-    @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :lagrangian, :smagorinsky)
+    @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :lagrangian, :lasd, :smagorinsky)
         r = res[c]
         @test abs(r.K_err[1]) < 0.10                               # K(98)/K(42) within ±10 %
         @test abs(r.K_err[2]) < 0.20                               # K(171)/K(42): see header
@@ -91,7 +101,9 @@ include("cbc_benchmark_driver.jl")
         # and the models are distinguishable from it
         @test res[:dynamic].E_kc_ratio[2] < r.E_kc_ratio[2] / 4
         @test res[:lagrangian].E_kc_ratio[2] < r.E_kc_ratio[2] / 4
+        @test res[:lasd].E_kc_ratio[2] < r.E_kc_ratio[2] / 4
     end
 
     @test t_total < 60                                             # CI budget
+    @test t_lasd < 60
 end
