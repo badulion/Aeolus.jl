@@ -51,8 +51,16 @@ The AMD numerators and denominators at one point from the velocity gradient
         2 * (_sdot(g[1], g[2], d2) * S12 + _sdot(g[1], g[3], d2) * S13 +
              _sdot(g[2], g[3], d2) * S23)
     B = βg * _sdot(g[3], gθ, d2)
-    Q = _sdot(g[1], gθ, d2) * gθ[1] + _sdot(g[2], gθ, d2) * gθ[2] + _sdot(g[3], gθ, d2) * gθ[3]
-    return (-P + B, _gsq(g), -Q, gθ[1]^2 + gθ[2]^2 + gθ[3]^2)
+    κn, κd = _amd_scalar_point(g, gθ, d2)
+    return (-P + B, _gsq(g), κn, κd)
+end
+
+# The AMD scalar numerator −(δ_k∂_k u_i)(δ_k∂_k ϕ)∂_i ϕ and denominator ∂_lϕ ∂_lϕ
+# for any scalar ϕ (Abkar, Bae & Moin 2016): homogeneous of degree 2 in ϕ,
+# so κ_t is unchanged by ϕ → aϕ + b.
+@inline function _amd_scalar_point(g, gϕ, d2)
+    Q = _sdot(g[1], gϕ, d2) * gϕ[1] + _sdot(g[2], gϕ, d2) * gϕ[2] + _sdot(g[3], gϕ, d2) * gϕ[3]
+    return (-Q, gϕ[1]^2 + gϕ[2]^2 + gϕ[3]^2)
 end
 
 @inline _cross2(a, b) = (a[2] * b[3] - a[3] * b[2])^2 + (a[3] * b[1] - a[1] * b[3])^2 +
@@ -157,6 +165,45 @@ function _amd_kernel!(nd, kd, ud, vd, wd, θd, g, C, Pr, buoy)
 end
 
 """
+    compute_amd_scalar_diffusivity!(κt, νt, u, v, w, ϕ; C = 0.3, Pr_t = 1/3) -> κt
+
+The AMD eddy diffusivity of a scalar `ϕ` (Abkar, Bae & Moin 2016) on the
+interior of `κt`: the `κ_t` of [`compute_amd_coefficients!`](@ref) with `ϕ`
+in place of θ,
+
+```math
+κ_t = C\\,\\frac{\\max\\!\\left(0,\\; -(δ_k ∂_k u_i)(δ_k ∂_k ϕ)\\, ∂_i ϕ\\right)}{∂_l ϕ\\, ∂_l ϕ},
+```
+
+and `κ_t = ν_t/Pr_t` (from the interior of `νt`) where `ϕ` has no resolved
+gradient. Each scalar gets its own diffusivity: the model bounds the
+subfilter variance of that scalar, so `qv` is not diffused with θ's `κ_t`.
+`κ_t` is unchanged under `ϕ → aϕ + b` (`a ≠ 0`). Halos of `u, v, w, ϕ`
+must be filled.
+"""
+function compute_amd_scalar_diffusivity!(κt::Field, νt::Field, u::Field, v::Field, w::Field,
+                                         ϕ::Field; C::Real = 0.3, Pr_t::Real = 1/3)
+    g = _check_regular(u, "compute_amd_scalar_diffusivity!")
+    _amd_scalar_kernel!(κt.data, νt.data, u.data, v.data, w.data, ϕ.data, g,
+                        float(C), float(Pr_t))
+    return κt
+end
+
+function _amd_scalar_kernel!(kd, nd, ud, vd, wd, ϕd, g, C, Pr)
+    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    d2 = (g.dx^2, g.dy^2, g.dz^2)
+    @inbounds for kk in 1:g.Nz, jj in 1:g.Ny, ii in 1:g.Nx
+        i = Hx + ii; j = Hy + jj; k = Hz + kk
+        G = _velocity_gradient_at(ud, vd, wd, i, j, k, idx, idy, idz)
+        gϕ = _scalar_gradient_at(ϕd, i, j, k, idx, idy, idz)
+        κn, κd_ = _amd_scalar_point(G, gϕ, d2)
+        kd[i,j,k] = κd_ > 0 ? C * max(zero(κn), κn) / κd_ : nd[i,j,k] / Pr
+    end
+    return nothing
+end
+
+"""
     compute_vreman_νt!(νt, u, v, w, C_s = 0.17) -> νt
 
 The eddy viscosity of Vreman (2004) on the interior of `νt`:
@@ -214,8 +261,11 @@ where the resolved θ gradient vanishes, `nothing` → the simulation's
 `g/θ₀` on the Boussinesq core (`0` when it was built with `θ₀ = 0`),
 `g/θ̄(z)` of the reference state on the anelastic / pseudo-incompressible
 cores (`0` with `buoyancy = false`). The θ gradient is that of the
-simulation's θ (dry: moisture does not enter the buoyancy term).
-Stateless. Do not stack a Richardson-number stability correction on it:
+simulation's θ (dry: moisture does not enter the buoyancy term), and
+the stored `κ_t` is θ's. Another scalar gets its **own** AMD diffusivity
+from its own gradient ([`sgs_tracer_diffusivity!`](@ref) →
+[`compute_amd_scalar_diffusivity!`](@ref)); that is how `qv` is diffused
+by [`step_imex!`](@ref Aeolus.TimeIntegration.step_imex!). Stateless. Do not stack a Richardson-number stability correction on it:
 the buoyancy term is its stratification response.
 
 References: Rozema et al. (2015), Abkar, Bae & Moin (2016), Abkar & Moin
@@ -250,6 +300,13 @@ function sgs_coefficients!(f::SGSFields, c::AMDClosure, sim)
     compute_amd_coefficients!(f.νh, f.κh, sim.u, sim.v, sim.w, sim.θ;
                               C = c.C, Pr_t = _prandtl(c.Pr_t, sim), buoyancy = βg)
     return f
+end
+
+function sgs_tracer_diffusivity!(κ, c::AMDClosure, f::SGSFields, sim, ϕ)
+    compute_amd_scalar_diffusivity!(κ, f.νh, sim.u, sim.v, sim.w, ϕ;
+                                    C = c.C, Pr_t = _prandtl(c.Pr_t, sim))
+    fill_halos!(κ, sim.bcs)
+    return κ
 end
 
 """

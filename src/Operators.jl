@@ -24,11 +24,13 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
 # Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
+       sgs_tracer_diffusivity!,
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
 # Era VI (P55-d, #176): AMD and Vreman closures (operators/sgs_amd_vreman.jl)
-export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_vreman_νt!,
+export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
+       compute_vreman_νt!,
        sgs_buoyancy_parameter
 
 # -------------------------------------------------------------------------

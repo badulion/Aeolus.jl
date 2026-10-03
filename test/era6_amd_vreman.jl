@@ -304,5 +304,49 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
         end
         @test all(isfinite, interior_view(an.u)) && minimum(interior_view(an.νt)) >= 0
         @test maximum(interior_view(an.νt)) > 0
+
+        # ---- qv gets its own AMD diffusivity, not θ's (PR #215 review) ----
+        # The AMD scalar model bounds the subfilter variance of the scalar it
+        # is evaluated for (Abkar, Bae & Moin 2016), so κ_t is per scalar.
+        x = fresh(moisture = true)
+        Q = 0.008 .+ 1e-4 .* randn(rng, 16, 16, 16)              # uncorrelated with θ
+        interior_view(x.qv) .= Q; fill_halos!(x.qv, x.θ_bcs)
+        f = compute_sgs!(AMDClosure(), x)
+        κq = sgs_tracer_diffusivity!(Field(CellCenter(), m), AMDClosure(), f, x, x.qv)
+        κref = Field(CellCenter(), m)
+        compute_amd_scalar_diffusivity!(κref, x.νt, x.u, x.v, x.w, x.qv; Pr_t = x.Pr_t)
+        @test interior_view(κq) == interior_view(κref)
+        # the θ kernel and the generic scalar kernel are one formula
+        compute_amd_scalar_diffusivity!(κref, x.νt, x.u, x.v, x.w, x.θ; Pr_t = x.Pr_t)
+        @test interior_view(κref) == interior_view(x.κt)
+        nq = count(interior_view(κq) .!= interior_view(x.κt))
+        @test nq > 0.5 * 16^3                                     # differs from θ's
+        # κ_t is invariant under ϕ → aϕ + b: qv = a θ + b diffuses with θ's κ_t
+        interior_view(x.qv) .= 0.01 .- 2e-5 .* (interior_view(x.θ) .- 300); fill_halos!(x.qv, x.θ_bcs)
+        κa = sgs_tracer_diffusivity!(Field(CellCenter(), m), AMDClosure(), f, x, x.qv)
+        @test interior_view(κa) ≈ interior_view(x.κt) rtol = 1e-9
+        # no resolved qv gradient → ν_t/Pr_t
+        x.qv.data .= 0.008
+        κu = sgs_tracer_diffusivity!(Field(CellCenter(), m), AMDClosure(), f, x, x.qv)
+        @test interior_view(κu) == interior_view(x.νt) ./ x.Pr_t
+        # a Prandtl-number closure shares one coefficient (returned as is)
+        fv = compute_sgs!(VremanClosure(), x)
+        @test sgs_tracer_diffusivity!(Field(CellCenter(), m), VremanClosure(), fv, x, x.qv) === fv.κh
+        # step_imex! freezes qv's own coefficient for AMD, the shared one for Vreman
+        ws = Aeolus.TimeIntegration.IMEXWorkspace(x)
+        interior_view(x.qv) .= Q; fill_halos!(x.qv, x.θ_bcs)
+        _, cs = Aeolus.TimeIntegration._freeze_viscosity!(x, ws, AMDClosure())
+        @test cs isa NamedTuple && cs.qv.a == x.ν .+ κq.data && cs.θ.a == x.ν .+ x.κt.data
+        _, cv = Aeolus.TimeIntegration._freeze_viscosity!(x, ws, VremanClosure())
+        @test !(cv isa NamedTuple)
+        # and conserves Σqv through the iterative solve (tol 1e-10)
+        Sq = sum(interior_view(x.qv))
+        for _ in 1:5
+            step_imex!(x, 0.5, ARK2(); sgs = AMDClosure())
+        end
+        dq = abs(sum(interior_view(x.qv)) - Sq) / Sq
+        @test dq <= 1e-10 && all(isfinite, interior_view(x.qv))
+        @printf("  [contract] AMD κ_t(qv) ≠ κ_t(θ) in %d / %d cells; mean κ_t(qv) %.4f vs κ_t(θ) %.4f m²/s; IMEX 5 steps |ΔΣqv|/Σqv %.1e\n",
+                nq, 16^3, mean(interior_view(κq)), mean(interior_view(f.κh)), dq)
     end
 end

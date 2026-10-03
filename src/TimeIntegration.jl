@@ -41,7 +41,8 @@ using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    add_buoyancy!, add_coriolis!, compute_smagorinsky_νt!,
                    add_surface_flux!, add_sponge!,
                    AbstractSGSClosure, SGSFields, compute_sgs!, sgs_fields, advance_sgs!,
-                   sgs_state, restore_sgs_state!, sgs_closure, _active_sgs
+                   sgs_state, restore_sgs_state!, sgs_closure, _active_sgs,
+                   sgs_tracer_diffusivity!
 using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence
@@ -75,6 +76,12 @@ _active(sim::BoussinesqSimulation) =
     sim.has_moisture ? (:u, :v, :w, :θ, :qv) : (:u, :v, :w, :θ)
 
 _is_scalar_name(name::Symbol) = name === :θ || name === :qv
+
+# The frozen implicit-diffusion coefficient of field `name`: momentum `νm`;
+# scalars `νs`, which is one coefficient for θ and qv, or `(θ = …, qv = …)`
+# when the SGS closure gives qv its own diffusivity (AMD).
+_ν_of(name::Symbol, νm, νs) = _is_scalar_name(name) ? νs : νm
+_ν_of(name::Symbol, νm, νs::NamedTuple) = name === :θ ? νs.θ : name === :qv ? νs.qv : νm
 
 # =========================================================================
 # Phase 23 — CFL constraints and diagnostics
@@ -1081,6 +1088,7 @@ mutable struct IMEXWorkspace{T,S<:NamedTuple,D<:NamedTuple}
     diff::D
     ν_mom::Union{Nothing,Array{T,3}}
     ν_scal::Union{Nothing,Array{T,3}}
+    ν_qv::Union{Nothing,Array{T,3}}       # qv's own frozen coefficient (AMD)
     total_iterations::Int
     max_residual::T
 end
@@ -1094,7 +1102,7 @@ function IMEXWorkspace(sim::BoussinesqSimulation{T}) where {T}
     diff   = (u = DiffusionWorkspace(sim.u), v = DiffusionWorkspace(sim.v),
               w = DiffusionWorkspace(sim.w), c = DiffusionWorkspace(sim.θ))
     return IMEXWorkspace{T,typeof(state0),typeof(diff)}(
-        state0, aux, nothing, Field(CellCenter(), m), diff, nothing, nothing, 0, zero(T))
+        state0, aux, nothing, Field(CellCenter(), m), diff, nothing, nothing, nothing, 0, zero(T))
 end
 
 const _IMEX_WORKSPACES = WeakKeyDict{Any,Any}()
@@ -1179,7 +1187,16 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     νm = ws.ν_mom::Array{T,3}; νs = ws.ν_scal::Array{T,3}
     @inbounds νm .= sim.ν .+ f.νh.data
     @inbounds νs .= sim.ν .+ f.κh.data
-    return (_coef(νm, sim.mesh), _coef(νs, sim.mesh))
+    cm, cs = _coef(νm, sim.mesh), _coef(νs, sim.mesh)
+    sim.has_moisture || return (cm, cs)
+    # qv: the closure's diffusivity for a scalar other than θ — f.κh for a
+    # Prandtl-number closure (shared coefficient), its own for AMD.
+    κq = sgs_tracer_diffusivity!(ws.scratch, closure, f, sim, sim.qv)
+    κq === f.κh && return (cm, cs)
+    ws.ν_qv === nothing && (ws.ν_qv = similar(sim.νt.data))
+    νq = ws.ν_qv::Array{T,3}
+    @inbounds νq .= sim.ν .+ κq.data
+    return (cm, (θ = cs, qv = _coef(νq, sim.mesh)))
 end
 
 _diffusion_buffer(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbol) =
@@ -1193,7 +1210,7 @@ function _add_diffusion_tendencies!(sim::BoussinesqSimulation{T}, ws::IMEXWorksp
     for name in names
         f   = getfield(sim, name)
         buf = _diffusion_buffer(sim, ws, name)
-        ν   = _is_scalar_name(name) ? νs : νm
+        ν   = _ν_of(name, νm, νs)
         _diffusion!(buf, f, ν, sim.mesh)
         _axpy_interior!(_tendency(sim, name), one(T), buf, sim.mesh)
     end
@@ -1267,7 +1284,7 @@ end
 function _solve_field!(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbol,
                        f::Field, νm, νs, dtγ, tol, maxit)
     scalar = _is_scalar_name(name)
-    ν   = scalar ? νs : νm
+    ν   = _ν_of(name, νm, νs)
     bcs = scalar ? sim.θ_bcs : sim.bcs
     dw  = scalar ? ws.diff.c : getfield(ws.diff, name)
     stats = solve_implicit_diffusion!(f, f, ν, dtγ, sim.mesh, bcs;
@@ -1294,7 +1311,9 @@ Advance `sim` by `dt` with a semi-implicit IMEX scheme
     prescribed surface flux, Rayleigh sponge, and the user `body_force!`;
   * **implicit**: diffusion of `u, v, w, θ` (and `qv` when moist) with
     the frozen effective viscosity `ν + νₜ` (`ν + κₜ` for scalars;
-    `κₜ = νₜ/Prₜ` for the Smagorinsky closures),
+    `κₜ = νₜ/Prₜ` for the Smagorinsky closures; `qv` takes the closure's
+    [`sgs_tracer_diffusivity!`](@ref Aeolus.Operators.sgs_tracer_diffusivity!),
+    which for AMD is its own diffusivity from the `qv` gradient),
     solved by [`solve_implicit_diffusion!`](@ref);
   * **pressure projection at the end of every stage**, so each stage
     value — and therefore the returned state — is discretely
@@ -1376,7 +1395,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
     for name in names
         _diffusion!(_diffusion_buffer(sim, ws, name), getfield(sim, name),
-                    _is_scalar_name(name) ? νs : νm, m)
+                    _ν_of(name, νm, νs), m)
     end
 
     # ---- stage 2 --------------------------------------------------------

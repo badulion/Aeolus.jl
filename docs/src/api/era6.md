@@ -42,6 +42,7 @@ Aeolus.Operators.sgs_state
 Aeolus.Operators.restore_sgs_state!
 Aeolus.Operators.add_sgs_momentum!
 Aeolus.Operators.add_sgs_scalar!
+Aeolus.Operators.sgs_tracer_diffusivity!
 Aeolus.Operators.compute_sgs!
 Aeolus.Operators.sgs_closure
 Aeolus.Operators.AbstractEddyViscosityClosure
@@ -70,6 +71,7 @@ step!(sim, dt; sgs = VremanClosure(0.17))     # c = 2.5 C_s², κ_t = ν_t/Pr_t
 Aeolus.Operators.AMDClosure
 Aeolus.Operators.VremanClosure
 Aeolus.Operators.compute_amd_coefficients!
+Aeolus.Operators.compute_amd_scalar_diffusivity!
 Aeolus.Operators.compute_vreman_νt!
 Aeolus.Operators.sgs_buoyancy_parameter
 ```
