@@ -3,8 +3,10 @@ module Operators
 using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
-using ..Fields: Field, mesh
+using ..Fields: Field, mesh, interior_view
 using ..BoundaryConditions: fill_halos!
+using FFTW: rfft, irfft, fft, ifft, fftfreq
+using Random: AbstractRNG, default_rng, randn
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
@@ -16,7 +18,9 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_eddy_viscosity_u!, add_eddy_viscosity_v!, add_eddy_viscosity_w!,
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
-       advect_weno5!
+       advect_weno5!,
+       box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
+       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
 # Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
@@ -398,22 +402,20 @@ function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T
     inv27 = one(T) / 27
     @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
         li = i + 1; lj = j + 1; lk = k + 1
-        Ut = zero(T); Vt = zero(T); Wt = zero(T)
-        UU = zero(T); VV = zero(T); WW = zero(T); UV = zero(T); UW = zero(T); VW = zero(T)
-        A11 = zero(T); A22 = zero(T); A33 = zero(T); A12 = zero(T); A13 = zero(T); A23 = zero(T)
-        B11 = zero(T); B22 = zero(T); B33 = zero(T); B12 = zero(T); B13 = zero(T); B23 = zero(T)
-        for dk in -1:1, dj in -1:1, di in -1:1
-            a = li + di; b = lj + dj; c = lk + dk
-            uu = Uc[a,b,c]; vv = Vc[a,b,c]; ww = Wc[a,b,c]
-            Ut += uu; Vt += vv; Wt += ww
-            UU += uu*uu; VV += vv*vv; WW += ww*ww
-            UV += uu*vv; UW += uu*ww; VW += vv*ww
-            s11 = S11[a,b,c]; s22 = S22[a,b,c]; s33 = S33[a,b,c]
-            s12 = S12[a,b,c]; s13 = S13[a,b,c]; s23 = S23[a,b,c]
-            ms = magS[a,b,c]
-            A11 += s11; A22 += s22; A33 += s33; A12 += s12; A13 += s13; A23 += s23
-            B11 += ms*s11; B22 += ms*s22; B33 += ms*s33
-            B12 += ms*s12; B13 += ms*s13; B23 += ms*s23
+        # The test filter: the 3 × 3 × 3 box of `box_filter!`, summed for
+        # all 21 quantities in one sweep of the shared stencil.
+        Ut, Vt, Wt, UU, VV, WW, UV, UW, VW,
+        A11, A22, A33, A12, A13, A23,
+        B11, B22, B33, B12, B13, B23 = _box_stencil_sum(li, lj, lk, 1, 1, 1) do a, b, c
+            @inbounds begin
+                uu = Uc[a,b,c]; vv = Vc[a,b,c]; ww = Wc[a,b,c]
+                s11 = S11[a,b,c]; s22 = S22[a,b,c]; s33 = S33[a,b,c]
+                s12 = S12[a,b,c]; s13 = S13[a,b,c]; s23 = S23[a,b,c]
+                ms = magS[a,b,c]
+            end
+            (uu, vv, ww, uu*uu, vv*vv, ww*ww, uu*vv, uu*ww, vv*ww,
+             s11, s22, s33, s12, s13, s23,
+             ms*s11, ms*s22, ms*s33, ms*s12, ms*s13, ms*s23)
         end
         Ut *= inv27; Vt *= inv27; Wt *= inv27
         L11 = UU*inv27 - Ut*Ut; L22 = VV*inv27 - Vt*Vt; L33 = WW*inv27 - Wt*Wt
@@ -457,6 +459,10 @@ function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T
     end
     return nothing
 end
+
+# Explicit filters, energy spectrum and isotropic initialiser (Phase 54, P54-c).
+include("operators/filters.jl")
+include("operators/spectra.jl")
 
 # -------------------------------------------------------------------------
 # Era VI: the SGS closure contract (wraps the kernels above).
