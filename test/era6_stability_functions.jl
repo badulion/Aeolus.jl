@@ -172,24 +172,27 @@ function _ri_field(Nz, Lz, ufun, θfun; qv = nothing, θ₀ = 300.0, g = 9.81, N
         buoyancy_frequency_squared!(N2, θ, q; θ₀ = θ₀, g = g)
     end
     gradient_richardson!(Ri, N2, u, v, w)
-    return m, N2, Ri
+    S2 = strain_rate_squared!(Field(CellCenter(), m), u, v, w)
+    @test interior_view(Ri) == gradient_richardson.(interior_view(N2), interior_view(S2))
+    return m, N2, Ri, S2
 end
 
 @testset "4. pointwise N² and Ri_g fields" begin
     θ₀, g, S, Γ = 300.0, 9.81, 0.02, 0.03
     # linear profiles on 16³: Ri_g = gΓ/(θ₀S²) everywhere
-    m, N2, Ri = _ri_field(16, 160.0, z -> S * z, z -> θ₀ + Γ * z)
+    m, N2, Ri, S2f = _ri_field(16, 160.0, z -> S * z, z -> θ₀ + Γ * z)
     Ri_exact = g * Γ / (θ₀ * S^2)
     err = maximum(abs, interior_view(Ri) .- Ri_exact) / Ri_exact
     @test err < 1e-12
+    @test maximum(abs, interior_view(S2f) .- S^2) < 1e-12 * S^2   # |S|² = (∂u/∂z)²
     @test maximum(abs, interior_view(N2) .- g * Γ / θ₀) < 1e-12 * g * Γ / θ₀
     # moist: θ_v = θ (1 + 0.61 q_v), as in the moist buoyancy
     q = 0.01
-    _, N2q, _ = _ri_field(16, 160.0, z -> S * z, z -> θ₀ + Γ * z; qv = q)
+    _, N2q, _, _ = _ri_field(16, 160.0, z -> S * z, z -> θ₀ + Γ * z; qv = q)
     @test maximum(abs, interior_view(N2q) .- g * Γ * (1 + 0.61q) / θ₀) <
           1e-12 * g * Γ / θ₀
     # no shear: the floor keeps Ri finite
-    _, _, Ri0 = _ri_field(8, 80.0, z -> 1.0, z -> θ₀ + Γ * z)
+    _, _, Ri0, _ = _ri_field(8, 80.0, z -> 1.0, z -> θ₀ + Γ * z)
     @test all(isfinite, interior_view(Ri0))
     @test interior_view(Ri0)[1] ≈ g * Γ / θ₀ / RI_SHEAR2_FLOOR
 
@@ -199,7 +202,7 @@ end
     J = N2c * δ^2 / U^2
     errs = Float64[]
     for Nz in (32, 64, 128)
-        mm, _, Rt = _ri_field(Nz, Lz, z -> U * tanh((z - zc) / δ),
+        mm, _, Rt, _ = _ri_field(Nz, Lz, z -> U * tanh((z - zc) / δ),
                               z -> θ₀ * (1 + N2c * z / g))
         zs = [(k - 0.5) * mm.dz for k in 1:Nz]
         R = interior_view(Rt)[1, 1, :]

@@ -18,7 +18,7 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
        advect_weno5!
-export buoyancy_frequency_squared!, gradient_richardson!   # P58-a (#170)
+export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.

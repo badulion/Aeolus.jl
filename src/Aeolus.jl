@@ -907,6 +907,6 @@ export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_pran
 # SurfaceExchange's implementer of the contract (MOST-consistent factors).
 export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # Operators' pointwise fields of the contract.
-export buoyancy_frequency_squared!, gradient_richardson!
+export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 
 end # module

@@ -82,3 +82,25 @@ function _gradient_richardson!(Ri::Field{CellCenter}, N2::Field{CellCenter},
     end
     return Ri
 end
+
+"""
+    strain_rate_squared!(S2, u, v, w)
+
+``|S|^2 = 2 S_{ij} S_{ij}`` at cell centres, the strain-rate stencil of
+[`compute_smagorinsky_νt!`](@ref) and the ``S^2`` of
+[`gradient_richardson!`](@ref). Halos of `u, v, w` must be filled.
+Interior cells only. Returns `S2`.
+"""
+strain_rate_squared!(S2::Field, u::Field, v::Field, w::Field) =
+    _strain_rate_squared!(S2, u, v, w, mesh(u))
+
+function _strain_rate_squared!(S2::Field{CellCenter}, u::Field{FaceX}, v::Field{FaceY},
+                               w::Field{FaceZ}, m::RegularGrid)
+    idx = 1 / m.dx; idy = 1 / m.dy; idz = 1 / m.dz
+    ud, vd, wd, sd = u.data, v.data, w.data, S2.data
+    ii, jj, kk = interior(m)
+    @inbounds for k in kk, j in jj, i in ii
+        sd[i, j, k] = _strain_at(ud, vd, wd, i, j, k, idx, idy, idz)[7]^2
+    end
+    return S2
+end
