@@ -25,6 +25,16 @@ Era VI. Theory: [Wall models](../../theory/wall_models.md).
   builders take `h_wm`, `h_wm_cells`, `filter`, `T_f`. Theory:
   [Wall models → Log-layer mismatch](../../theory/wall_models.md).
 
+- **Dynamic roughness** (P57-e, #190): `SubfilterHeight` /
+  `subfilter_height` (sub-filter height statistics at the grid and
+  test-filter scale), `DynamicRoughness` (``z_0 = \sqrt{z_{0,f}^2 +
+  α^2σ_Δ^2}``, α from total-drag invariance, Anderson & Meneveau 2011),
+  `dynamic_alpha`, `update_dynamic_roughness!`, `roughness_drag_residual`,
+  `roughness_surface_drag`, `surface_gradient_drag`, and the parameter
+  provider `with_roughness` / `dynamic_wall_laws(!)` for `RoughLogLaw` and
+  `MOSTWallLaw`; `half_channel_case(; roughness)`. Theory:
+  [Wall models → Dynamic roughness](../../theory/wall_models.md).
+
 ```@autodocs
 Modules = [Aeolus.WallModels]
 ```

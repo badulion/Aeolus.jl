@@ -32,7 +32,13 @@ roughness) only add files and include lines:
      2012) and filtered in time (Yang, Park & Moin 2017) and along the
      wall (Bou-Zeid, Meneveau & Parlange 2005), against log-layer
      mismatch.
-  4. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
+  4. **Dynamic roughness** (`dynamic_roughness.jl`, P57-e #190) —
+     [`DynamicRoughness`](@ref): the roughness length of partially
+     resolved relief, ``z_0 = \\sqrt{z_{0,f}^2 + α^2σ_Δ^2}`` with α from the
+     invariance of the total surface drag between the grid and the test
+     filter (Anderson & Meneveau 2011), as a parameter provider for
+     `RoughLogLaw` / `MOSTWallLaw` ([`with_roughness`](@ref)).
+  5. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
      [`half_channel_case`](@ref) (the neutral ABL half channel of
      Porté-Agel et al. 2000 / Bou-Zeid et al. 2005) and
      [`channel_case`](@ref) (the two-wall channel at a given Re_τ), with
@@ -68,6 +74,9 @@ roughness) only add files and include lines:
   * Lee, M. & Moser, R. D. (2015). Direct numerical simulation of
     turbulent channel flow up to Re_τ ≈ 5200. *J. Fluid Mech.*, 774,
     395-415.
+  * Anderson, W. & Meneveau, C. (2011). Dynamic roughness model for
+    large-eddy simulation of turbulent flow over multiscale, fractal-like
+    rough surfaces. *J. Fluid Mech.*, 679, 288-314.
 """
 module WallModels
 
