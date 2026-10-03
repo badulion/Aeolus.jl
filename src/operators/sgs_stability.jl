@@ -251,11 +251,15 @@ function _stability_correct!(νh, νv, κh, κv, av, Ri, scheme, ℓh, ℓv, Pr,
     return nothing
 end
 
+# Three halo fills (νh, νv, a_v); κh, κv = νh/Prₜ, a_v/Prₜ on the whole array
+# afterwards, as the base closure forms κt (the halo copies commute with the
+# division, so this is what filling κh, κv would give).
 function _fill_sgs_halos!(f::SGSFields, c::StabilityCorrected, sim)
     bcs = sim.bcs
-    fill_halos!(f.νh, bcs); fill_halos!(f.νv, bcs)
-    fill_halos!(f.κh, bcs); fill_halos!(f.κv, bcs)
-    fill_halos!(c.av, bcs)
+    fill_halos!(f.νh, bcs); fill_halos!(f.νv, bcs); fill_halos!(c.av, bcs)
+    Pr = turbulent_prandtl(c.base, sim)
+    f.κh.data .= f.νh.data ./ Pr
+    f.κv.data .= c.av.data ./ Pr
     return f
 end
 
