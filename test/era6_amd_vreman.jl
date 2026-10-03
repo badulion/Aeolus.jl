@@ -114,6 +114,13 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
         Δ = prod(δ)^(1/3)
         @test all(x -> relerr(x, (0.17Δ)^2 * S) < 1e-12, νs)               # (C_s Δ)² S ≠ 0
 
+        # a two-component shear u(z), v(z): β is rank one, so B_β = 0; the
+        # Cauchy–Binet form makes it exactly 0 (the minor form β₁₁β₂₂ − β₁₂²
+        # leaves round-off, which √ turns into ν_t ~ 1e-10 m²/s)
+        set_linear!(sim, [0 0 0.02; 0 0 -0.013; 0 0 0])
+        νa, _, νv, _ = closures!(sim)
+        @test all(==(0), νa) && all(==(0), νv)
+
         Ω = 0.01                                                           # solid-body rotation
         set_linear!(sim, [0 -Ω 0; Ω 0 0; 0 0 0])
         νa, _, νv, νs = closures!(sim)

@@ -55,17 +55,26 @@ The AMD numerators and denominators at one point from the velocity gradient
     return (-P + B, _gsq(g), -Q, gθ[1]^2 + gθ[2]^2 + gθ[3]^2)
 end
 
+@inline _cross2(a, b) = (a[2] * b[3] - a[3] * b[2])^2 + (a[3] * b[1] - a[1] * b[3])^2 +
+                        (a[1] * b[2] - a[2] * b[1])^2
+
 """
     _vreman_point(g, d2) -> (B_β, α_ij α_ij)
 
 Vreman's (2004) invariants at one point: with `α_ij = ∂u_j/∂x_i` and
-`β_ij = Σ_m Δ_m² α_mi α_mj`, `B_β = β₁₁β₂₂ − β₁₂² + β₁₁β₃₃ − β₁₃² + β₂₂β₃₃ − β₂₃²`.
-In terms of `g[a][b] = ∂u_a/∂x_b = α_ba`, `β_ij = Σ_m Δ_m² g[i][m] g[j][m]`.
+`β_ij = Σ_m Δ_m² α_mi α_mj`, `B_β = β₁₁β₂₂ − β₁₂² + β₁₁β₃₃ − β₁₃² + β₂₂β₃₃ − β₂₃²`,
+the sum of the principal 2 × 2 minors of `β`. Evaluated in the equivalent
+Cauchy–Binet form `B_β = Σ_{m<n} Δ_m²Δ_n² |a_m × a_n|²`, with `a_m = ∂_m u`
+the derivative of the velocity vector in direction `m` (row `m` of `α`):
+non-negative by construction, and exactly zero (not round-off) whenever the
+velocity varies in one direction only, e.g. any shear flow `u(z), v(z)`.
 """
 @inline function _vreman_point(g, d2)
-    b11 = _sdot(g[1], g[1], d2); b22 = _sdot(g[2], g[2], d2); b33 = _sdot(g[3], g[3], d2)
-    b12 = _sdot(g[1], g[2], d2); b13 = _sdot(g[1], g[3], d2); b23 = _sdot(g[2], g[3], d2)
-    Bβ = b11 * b22 - b12^2 + b11 * b33 - b13^2 + b22 * b33 - b23^2
+    a1 = (g[1][1], g[2][1], g[3][1])
+    a2 = (g[1][2], g[2][2], g[3][2])
+    a3 = (g[1][3], g[2][3], g[3][3])
+    Bβ = d2[1] * d2[2] * _cross2(a1, a2) + d2[1] * d2[3] * _cross2(a1, a3) +
+         d2[2] * d2[3] * _cross2(a2, a3)
     return (Bβ, _gsq(g))
 end
 
@@ -160,8 +169,10 @@ B_β = β_{11}β_{22} - β_{12}^2 + β_{11}β_{33} - β_{13}^2 + β_{22}β_{33} 
 
 `c = 2.5 C_s²` (Vreman's eq. 9 relation to the Smagorinsky constant;
 `C_s = 0.17` gives `c = 0.0723`), `Δ_m = (Δx, Δy, Δz)`; `ν_t = 0` where
-`α_ij α_ij = 0`. `B_β` vanishes for every flow with fewer than two non-zero
-rows of `β`, e.g. pure shear `u = Sz` (the laminar switch-off). The
+`α_ij α_ij = 0`. `B_β` vanishes for every flow whose velocity varies in
+one direction only, e.g. the shear flow `u(z), v(z)` (the laminar
+switch-off); it is evaluated in a Cauchy–Binet form that makes this zero
+exact. The
 gradient is [`_velocity_gradient_at`](@ref). Halos of `u, v, w` must be
 filled.
 
@@ -183,7 +194,7 @@ function _vreman_kernel!(nd, ud, vd, wd, g, c)
         i = Hx + ii; j = Hy + jj; k = Hz + kk
         G = _velocity_gradient_at(ud, vd, wd, i, j, k, idx, idy, idz)
         Bβ, aa = _vreman_point(G, d2)
-        nd[i,j,k] = aa > 0 ? c * sqrt(max(zero(Bβ), Bβ) / aa) : zero(Bβ)
+        nd[i,j,k] = aa > 0 ? c * sqrt(Bβ / aa) : zero(Bβ)
     end
     return nothing
 end
