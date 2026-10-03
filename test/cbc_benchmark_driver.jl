@@ -74,6 +74,12 @@ end
 # closure; the same combination as `step_rk3!`, which on this master does
 # not forward the `eddy_viscosity!` keyword. (After the Era VI closure
 # contract, #167, `step_rk3!(sim, dt; sgs)` replaces this.)
+# A stateful closure of the Era VI contract (#167) goes through `step_rk3!`,
+# which commits its memory once per RK3 step (three `step!` calls would
+# commit it three times); the pre-contract closures keep the loop below,
+# so their benchmark numbers are unchanged.
+_cbc_rk3!(sim, dt, kw::NamedTuple{(:sgs,), <:Tuple{AbstractSGSClosure}}) =
+    step_rk3!(sim, dt; sgs = kw.sgs)
 function _cbc_rk3!(sim, dt, kw)
     u0 = copy(sim.u.data); v0 = copy(sim.v.data); w0 = copy(sim.w.data)
     step!(sim, dt; kw...)
@@ -106,11 +112,12 @@ _cbc_closure(f::Function, mesh) = ((;), (eddy_viscosity! = f,))
 function _cbc_closure(s::Symbol, mesh)
     s === :none && return _cbc_closure(nothing, mesh)
     s === :smagorinsky && return _cbc_closure(0.17, mesh)
+    s === :tke && return ((;), (sgs = TKEClosure(mesh),))       # P56-b (#182), Moeng 1984
     if s === :dynamic
         ws = DynamicSmagorinskyWorkspace(mesh)
         return _cbc_closure((νt, u, v, w) -> compute_dynamic_smagorinsky_νt!(νt, u, v, w; workspace = ws), mesh)
     end
-    throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, a C_s, or f(νt, u, v, w)"))
+    throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, :tke, a C_s, or f(νt, u, v, w)"))
 end
 
 """
@@ -121,6 +128,9 @@ Run the Comte-Bellot–Corrsin decay at N³ with `closure`:
 * `:none` / `nothing` — no SGS model (molecular ν only);
 * `:smagorinsky` or a number `C_s` — the built-in static Smagorinsky;
 * `:dynamic` — plane-averaged dynamic Smagorinsky (Germano–Lilly);
+* `:tke` — the Deardorff (1980) / Moeng (1984) prognostic SGS TKE closure
+  (`TKEClosure`, P56-b), ``e`` seeded with its local equilibrium
+  (`initialize_tke!`) and carried through the evolve-and-rescale cycles;
 * a function `f(νt, u, v, w)` — any closure accepted by `step!`'s
   `eddy_viscosity!`.
 
@@ -172,6 +182,7 @@ function _cbc_run(closure, N, cfl, seed, spinup, t_spin, Eref)
     ckw, skw = _cbc_closure(closure, mesh)
     sim = BoussinesqSimulation(mesh; ν = CBC_NU, ckw...)
     isotropic_random_field!(sim, Eref[1]; rng = Random.Xoshiro(seed))
+    haskey(skw, :sgs) && skw.sgs isa TKEClosure && initialize_tke!(skw.sgs, sim)
     # evolve-and-rescale: build the phase correlations of a cascade, then
     # put the station-1 spectrum back (Rogallo 1981; Kang et al. 2003)
     for _ in 1:spinup

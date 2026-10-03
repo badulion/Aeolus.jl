@@ -12,6 +12,7 @@
 #   dynamic           +1.3 %      −15.7 %       0.085 / 0.099           1.23 / 1.00
 #   Smagorinsky .17   +2.5 %      −14.2 %       0.088 / 0.097           1.27 / 1.08
 #   no model         +78.3 %     +121.1 %       0.216 / 0.316           5.25 / 10.4
+#   tke (P56-b)      −18.5 %      −34.4 %       0.084 / 0.172           0.58 / 0.25
 #
 # The proposed ±10 % on K(171)/K(42) is NOT met (≈ −15 %); the RMS
 # log-error at station 171 sits on the 0.1-decade target (0.099 for seeds
@@ -92,4 +93,27 @@ include("cbc_benchmark_driver.jl")
     end
 
     @test t_total < 60                                             # CI budget
+
+    # P56-b (#182): the Deardorff/Moeng prognostic SGS TKE closure. Measured
+    # at 32³, seeds 1–3: K98/K42 −18.5 %, K171/K42 −34.4 %, RMS log10 E
+    # 0.084 / 0.172, E(k_c)/CBC 0.58 / 0.25 — over-dissipative. Two causes,
+    # both measured: (i) its neutral equilibrium is Smagorinsky with
+    # C_s = c_k^{3/4} c_ε^{-1/4} = 0.194, not 0.17 (Smagorinsky at 0.194
+    # gives −6.3 % / −19.8 %); (ii) e lags the fast decay of the grid
+    # turbulence: its relaxation time l/(c_ε √e) ≈ 0.2 s is close to the
+    # 0.28 s between stations, and the mean e is 1.8–2.6 × its local
+    # equilibrium with the decaying strain from station 98 on, so ν_t is
+    # 1.3–1.6 × too large. No target was set for TKE in #182; the test
+    # pins the measured behaviour (no pile-up, too much decay, bounded).
+    @testset "tke (P56-b): measured against CBC" begin
+        t_tke = @elapsed (r = cbc_benchmark(:tke; N = 32))
+        @info "  " * cbc_summary("tke", r)
+        @test r.E_les[1][2:17] ≈ r.E_ref[1][2:17] rtol = 1e-10     # same initial spectrum
+        @test -0.30 < r.K_err[1] < 0                               # −18.5 %
+        @test -0.45 < r.K_err[2] < 0                               # −34.4 %
+        @test r.E_kc_ratio[1] < 1 && r.E_kc_ratio[2] < 1           # no pile-up (0.58 / 0.25)
+        @test r.rms_log_err[1] <= 0.10                             # 0.084
+        @test r.E_kc_ratio[2] < res[:none].E_kc_ratio[2] / 4       # distinguishable from no model
+        @test t_tke < 30
+    end
 end
