@@ -928,5 +928,11 @@ export WallBoundedCase, half_channel_case, channel_case,
 # wall-parallel filters (log-layer mismatch).
 export MatchingInput, matching_distance, matching_input!, update_input_filter!,
        exponential_filter_weight, wall_parallel_filter!
+# P57-e (#190): the dynamic roughness of partially resolved relief
+# (Anderson & Meneveau 2011). `surface_gradient_drag` does not collide
+# with `CutCell.wall_shear_stress` or the PlantCanopy `canopy_drag_*` names.
+export SubfilterHeight, subfilter_height, DynamicRoughness,
+       surface_gradient_drag, roughness_surface_drag, roughness_drag_residual, dynamic_alpha,
+       update_dynamic_roughness!, with_roughness, dynamic_wall_laws, dynamic_wall_laws!
 
 end # module

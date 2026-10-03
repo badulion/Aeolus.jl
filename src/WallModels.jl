@@ -74,8 +74,9 @@ module WallModels
 using ..Grids
 using ..Grids: RegularGrid
 using ..BoundaryConditions: fill_halos!, Periodic, FieldBoundaryConditions
-using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!, box_filter!
-using ..Fields: Field
+using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!, box_filter!,
+                   spectral_cutoff_filter!
+using ..Fields: Field, interior_view
 import ..Operators: phi_m_profile, total_stress_profile
 using ..Simulations: BoussinesqSimulation, step_rk3!
 using ..TimeSteppers: step!
@@ -89,6 +90,7 @@ using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltsla
 include("wall_models/laws.jl")
 include("wall_models/operator.jl")
 include("wall_models/matching.jl")        # P57-b (#183): matching height, input filters
+include("wall_models/dynamic_roughness.jl") # P57-e (#190): dynamic z0 of partially resolved roughness
 include("wall_models/channel_cases.jl")   # P54-d (#174): half channel, channel
 
 end # module
