@@ -973,6 +973,7 @@ end
 
 @testset "Era VI" begin
     include("era6_sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
+    include("era6_scalar_sgs_diffusion.jl") # P56-a: SGS diffusion of qv and tracers with κ_t, solid mask (#177)
 end
 
 # =========================================================================
