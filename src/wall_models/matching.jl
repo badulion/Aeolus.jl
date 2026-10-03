@@ -151,7 +151,7 @@ end
     side === :bottom ? _level(mask, i, j, 1, Nz) : _level(mask, i, j, Nz, Nz)
 
 # Cell-centre (u, v) of every walled column at the matching point, the
-# matching distance, and the number of walled columns. Instantaneous, or
+# matching distance. Instantaneous, or
 # from the wall-parallel filtered field.
 function _sample_matching(mi::MatchingInput, sim, side::Symbol, mask)
     side in (:bottom, :top) ||
@@ -168,12 +168,30 @@ function _sample_matching(mi::MatchingInput, sim, side::Symbol, mask)
         uF, vF = wall_parallel_filter!(mi.work[1], mi.work[2], sim)
         u, v = uF.data, vF.data
     else
-        fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
+        # Read-only: a periodic neighbour is taken from the interior, so the
+        # simulation's halos are not touched (a non-periodic side reads
+        # its halo, which is filled here).
+        (sim.bcs.west isa Periodic && sim.bcs.south isa Periodic) ||
+            (fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs))
         u, v = sim.u.data, sim.v.data
     end
-    s = side === :bottom ? 1 : -1
+    xper = sim.bcs.west isa Periodic; yper = sim.bcs.south isa Periodic
     uc = zeros(T, Nx, Ny); vc = zeros(T, Nx, Ny); hh = zeros(T, Nx, Ny)
-    cen(K, I, J) = ((u[I, J, K] + u[I+1, J, K]) / 2, (v[I, J, K] + v[I, J+1, K]) / 2)
+    _sample_loop!(uc, vc, hh, u, v, mi, g, side, mask, xper, yper)
+    return uc, vc, hh
+end
+
+# function barrier: `u`, `v` have a concrete type here
+function _sample_loop!(uc, vc, hh, u::AbstractArray{T,3}, v::AbstractArray{T,3}, mi, g, side, mask,
+                       xper, yper) where {T}
+    Nx, Ny, Nz, Hx, Hy, Hz, dz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz, g.dz
+    s = side === :bottom ? 1 : -1
+    # the cell-centre (u, v) of storage cell (I, J, K)
+    @inline function cen(K, I, J)
+        Ie = (xper && I == Hx + Nx) ? Hx + 1 : I + 1
+        Jn = (yper && J == Hy + Ny) ? Hy + 1 : J + 1
+        return (@inbounds((u[I, J, K] + u[Ie, J, K]) / 2), @inbounds((v[I, J, K] + v[I, Jn, K]) / 2))
+    end
     @inbounds for j in 1:Ny, i in 1:Nx
         kw = _wall_level(side, mask, i, j, Nz)
         kw == 0 && continue
@@ -196,7 +214,7 @@ function _sample_matching(mi::MatchingInput, sim, side::Symbol, mask)
         end
         hh[i, j] = h
     end
-    return uc, vc, hh
+    return nothing
 end
 
 function _prime!(mi::MatchingInput, uc, vc)
