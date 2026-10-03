@@ -904,5 +904,7 @@ export effective_roughness, effective_scalar_roughness,
 export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_prandtl,
        LillyCutoff, BrownEtAl1994, ShortTail, LongTail,
        gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR
+# SurfaceExchange's implementer of the contract (MOST-consistent factors).
+export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 
 end # module

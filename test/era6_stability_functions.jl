@@ -13,11 +13,27 @@
 
 using Aeolus.TurbulenceStability
 using Aeolus.TurbulenceStability: AbstractRiStability
+import Aeolus.SurfaceExchange: phi_m, phi_h, psi_m, psi_h
+
+# The log-linear similarity functions, φ = 1 + αζ in stable air (Webb 1970;
+# Businger et al. 1971 with α ≈ 5), Businger–Dyer (γ = 16) in unstable air.
+struct LogLinearMOST <: AbstractStabilityFunctions
+    α::Float64
+end
+const _BDBH = BusingerDyerBeljaarsHoltslag()
+phi_m(s::LogLinearMOST, ζ::Real) = ζ < 0 ? phi_m(_BDBH, ζ) : 1 + s.α * ζ
+phi_h(s::LogLinearMOST, ζ::Real) = ζ < 0 ? phi_h(_BDBH, ζ) : 1 + s.α * ζ
+psi_m(s::LogLinearMOST, ζ::Real) = ζ < 0 ? psi_m(_BDBH, ζ) : -s.α * ζ
+psi_h(s::LogLinearMOST, ζ::Real) = ζ < 0 ? psi_h(_BDBH, ζ) : -s.α * ζ
+
+# 4th-order centred first derivative
+_d4(f, z, h) = (8 * (f(z + h) - f(z - h)) - (f(z + 2h) - f(z - 2h))) / (12h)
 
 @testset "Era VI — TurbulenceStability (P58-a, #170)" begin
 
 @testset "1. limits of every implementer" begin
-    impls = [LillyCutoff(), BrownEtAl1994(), ShortTail(), LongTail()]
+    impls = [LillyCutoff(), BrownEtAl1994(), ShortTail(), LongTail(),
+             MOSTConsistent(), MOSTConsistent(LogLinearMOST(5.0))]
     Ris = vcat(range(-5, 0; length = 201), range(0, 10; length = 2001), [1e2, 1e4])
     for sf in impls
         for fac in (stability_factor_m, stability_factor_h)
@@ -84,6 +100,52 @@ using Aeolus.TurbulenceStability: AbstractRiStability
     @test buoyancy_frequency_squared(300.0, 301.0, 100.0, 9.81, 300.0) ≈ 9.81 / 300 / 100
     @test buoyancy_frequency_squared(300.0, 301.0, 100.0, 9.81) ≈
           buoyancy_frequency_squared(300.0, 301.0, 100.0, 9.81, 300.5) rtol = 1e-5
+end
+
+@testset "2. MOST round trip (MOSTConsistent)" begin
+    κ, g, θ₀, u_star, z0, z = 0.4, 9.81, 290.0, 0.3, 0.1, 10.0
+    worst_m = 0.0; worst_h = 0.0
+    for sf in (BusingerDyerBeljaarsHoltslag(), LogLinearMOST(5.0))
+        most = MOSTConsistent(sf)
+        @test stability_factor_m(most, 0.0) == 1 && stability_factor_h(most, 0.0) == 1
+        for ζ in range(-2, 10; length = 49)
+            L = ζ == 0 ? Inf : z / ζ
+            θ_star = ζ == 0 ? 0.0 : u_star^2 * θ₀ / (κ * g * L)
+            u(zz) = u_star / κ * (log(zz / z0) - psi_m(sf, zz / L) + psi_m(sf, z0 / L))
+            θ(zz) = θ₀ + θ_star / κ * (log(zz / z0) - psi_h(sf, zz / L) + psi_h(sf, z0 / L))
+            S  = _d4(u, z, 1e-2)
+            θz = _d4(θ, z, 1e-2)
+            Ri = gradient_richardson(g / θ₀ * θz, S^2)
+            # the inversion recovers ζ
+            @test most_stability_parameter(most, Ri) ≈ ζ atol = 1e-7
+            Km = (κ * z)^2 * S * stability_factor_m(most, Ri)
+            Kh = (κ * z)^2 * S * stability_factor_h(most, Ri)
+            em = abs(Km - u_star^2 / S) / (u_star^2 / S)
+            eh = ζ == 0 ? abs(Kh * θz) : abs(Kh * θz - u_star * θ_star) / abs(u_star * θ_star)
+            worst_m = max(worst_m, em); worst_h = max(worst_h, eh)
+            @test em < 1e-6
+            @test eh < 1e-6
+        end
+    end
+    @info "P58-a MOST round trip, ζ ∈ [−2, 10], BDBH and log-linear α = 5" max_rel_err_Km = worst_m max_rel_err_KhΘz = worst_h
+end
+
+@testset "3. critical Richardson number" begin
+    ll = LogLinearMOST(5.0)
+    Ri_ll = most_gradient_richardson(ll, 1e4)
+    @test abs(Ri_ll - 0.2) < 1e-3
+    @test Ri_ll < 0.2                                   # approached from below
+    # beyond the critical value the MOST-consistent factors vanish
+    @test stability_factor_m(MOSTConsistent(ll), 0.2) == 0
+    @test stability_factor_h(MOSTConsistent(ll), 0.25) == 0
+    @test stability_factor_m(MOSTConsistent(ll), 0.19) > 0
+    # Beljaars–Holtslag has no critical value
+    Ri_bh = most_gradient_richardson(BusingerDyerBeljaarsHoltslag(), 100.0)
+    @test Ri_bh > 1
+    @test stability_factor_m(MOSTConsistent(), 5.0) > 0
+    # unstable Businger–Dyer with γ_m = γ_h: Ri = ζ exactly
+    @test most_gradient_richardson(BusingerDyerBeljaarsHoltslag(), -1.5) ≈ -1.5 rtol = 1e-14
+    @info "P58-a critical Ri" log_linear_Ri_at_ζ_1e4 = Ri_ll BDBH_Ri_at_ζ_100 = Ri_bh
 end
 
 end # testset
