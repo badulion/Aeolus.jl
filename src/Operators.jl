@@ -20,7 +20,7 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_surface_flux!, add_sponge!,
        advect_weno5!,
        box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
-       isotropic_energy_spectrum, isotropic_random_field!
+       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.

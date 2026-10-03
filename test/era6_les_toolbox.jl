@@ -302,4 +302,28 @@ end
         @test all(abs.(E2[2:n30+1] ./ exp.(-k2[2:n30+1] ./ 20) .- 1) .< 1e-10)
         @test maximum(E2[n30+2:end]) < 1e-25
     end
+
+    @testset "rescale_to_spectrum!: shells set, phases and solenoidality kept" begin
+        mesh = RegularGrid(; size = (24, 24, 24), extent = (1.0, 1.0, 1.0), halo = (2, 2, 2))
+        sim = BoussinesqSimulation(mesh; ν = 1e-3)
+        isotropic_random_field!(sim, k -> 1e-4 * k^2 * exp(-k / 20); rng = Xoshiro(3))
+        for _ in 1:10
+            step!(sim, 2e-3)                    # build some phase structure
+        end
+        # phases kept: asking for 4 × the current spectrum doubles the field
+        u0 = copy(interior_view(sim.u))
+        kk, E0 = isotropic_energy_spectrum(sim.u, sim.v, sim.w)
+        Δk = kk[2] - kk[1]
+        rescale_to_spectrum!(sim.u, sim.v, sim.w, k -> 4 * E0[round(Int, k / Δk) + 1]; kmax = 1e3)
+        @test maximum(abs, interior_view(sim.u) .- 2 .* u0) < 1e-12 * maximum(abs, u0)
+        Enew(k) = 0.01 * k^(-5/3)
+        rescale_to_spectrum!(sim.u, sim.v, sim.w, Enew)
+        fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+        k, E = isotropic_energy_spectrum(sim.u, sim.v, sim.w)
+        @test E[2:13] ≈ Enew.(k[2:13]) rtol = 1e-10
+        @test max_divergence(sim) < 1e-12 * maximum(abs, interior_view(sim.u)) / mesh.dx
+        a = copy(interior_view(sim.u))
+        rescale_to_spectrum!(sim.u, sim.v, sim.w, Enew)       # idempotent
+        @test interior_view(sim.u) ≈ a rtol = 1e-12
+    end
 end

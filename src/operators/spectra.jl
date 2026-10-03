@@ -184,3 +184,40 @@ function isotropic_random_field!(sim, E; kw...)
 end
 
 _default_kmax(g::RegularGrid) = min(π / g.dx, π / g.dy, π / g.dz)
+
+"""
+    rescale_to_spectrum!(u, v, w, E; kmax) -> (u, v, w)
+
+Multiply every Fourier shell of the staggered, triply periodic velocity
+`u @ FaceX, v @ FaceY, w @ FaceZ` by the factor that makes its
+[`isotropic_energy_spectrum`](@ref) equal to `E(k)` (shells
+``1 ≤ n ≤ k_{max}/Δk``; the mean and the shells above are zeroed).
+Phases, and hence the triadic correlations a run has built, are kept;
+the scaling is per Fourier mode, so a field that is discretely
+divergence-free stays so. Halos are not filled.
+
+This is the "evolve and rescale" preparation of an initial field with
+realistic phases (Rogallo 1981; used for the Comte-Bellot–Corrsin case by
+Kang, Chester & Meneveau 2003): a random-phase field has the right
+spectrum but no energy transfer, and relaxes for about one eddy turnover
+before the cascade is established.
+"""
+function rescale_to_spectrum!(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}, E;
+                              kmax::Real = _default_kmax(mesh(u)))
+    g = mesh(u)
+    Δk = _shell_width(g)
+    nmax = floor(Int, kmax / Δk + 1e-9)
+    k, Enow = isotropic_energy_spectrum(u, v, w)
+    kx = _fft_k(g.Nx, g.Lx); ky = _fft_k(g.Ny, g.Ly); kz = _fft_k(g.Nz, g.Lz)
+    scale = [1 <= n <= nmax && Enow[n+1] > 0 ? sqrt(max(float(E(n * Δk)), 0.0) / Enow[n+1]) : 0.0
+             for n in 0:length(k)-1]
+    for f in (u, v, w)
+        F = fft(Array(interior_view(f)))
+        @inbounds for c in 1:g.Nz, b in 1:g.Ny, a in 1:g.Nx
+            n = round(Int, sqrt(kx[a]^2 + ky[b]^2 + kz[c]^2) / Δk)
+            F[a,b,c] *= scale[n+1]
+        end
+        interior_view(f) .= real.(ifft(F))
+    end
+    return u, v, w
+end
