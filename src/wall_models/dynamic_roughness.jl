@@ -419,7 +419,9 @@ matrix) from the surface: the root of [`roughness_drag_residual`](@ref)
 on ``(0, α_{max})`` by the Illinois iteration of `SurfaceExchange` (the
 shared root solver; a log-spaced scan of 48 points finds the first
 bracket with ``F < 0 < F``). A flat surface (``σ ≡ 0``), or a residual
-with no sign change, returns `(dr.α_fallback, false)`; a fixed-α model
+with no sign change (including one that vanishes identically, e.g. a
+periodic relief the grid cannot resolve: then α is undetermined),
+returns `(dr.α_fallback, false)`; a fixed-α model
 returns `(α, true)`.
 """
 function dynamic_alpha(dr::DynamicRoughness{T}, uc::AbstractMatrix, vc::AbstractMatrix, h;
@@ -452,8 +454,8 @@ function dynamic_alpha(dr::DynamicRoughness{T}, uc::AbstractMatrix, vc::Abstract
         if fa < 0 && fb > 0
             α, _, conv = SurfaceExchange._illinois(F, a, b, fa, fb, maxiter)
             return (α, conv)
-        elseif fa == 0
-            return (a, true)
+        elseif fa < 0 && fb == 0
+            return (b, true)
         end
         a, fa = b, fb
     end
