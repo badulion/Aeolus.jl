@@ -25,15 +25,16 @@ entries, in closed form: no LAPACK call.
    appendix). It is written in the deviator `G' = G − (tr G/3) I`, so that
    `α₁ = tr(G'²)/6` and `α₂ = det(G')/2` are formed without cancellation and
    `G ∝ I` gives exactly `α₁ = 0` (three equal eigenvalues).
-2. One deflation step. Near a double eigenvalue the cubic determines the
-   *gap* between the pair only to `√ε` (the arccos argument is near ±1),
-   which is far too coarse for `D_σ`, a product of such gaps. The simple
-   eigenvalue (the one further from the other two) is well conditioned, so
-   its eigenvector is taken as the largest cross product of two rows of
-   `G − λI`, and the pair is recomputed from the 2 × 2 compression of `G` on
-   the orthogonal complement, `μ± = (p + r)/2 ± ½ hypot(p − r, 2q)`, whose
-   gap is accurate to `ε‖G‖`. The simple eigenvalue itself is replaced by
-   its Rayleigh quotient.
+2. One deflation step where the smaller gap is below 1 % of the spread
+   `λ₁ − λ₃`. Near a double eigenvalue the cubic determines the *gap*
+   between the pair only to `√ε` (the arccos argument is near ±1), far too
+   coarse for `D_σ`, a product of such gaps; above 1 % the gap error is
+   `≲ ε/(gap/spread)² ≤ 1e-12` relative. The simple eigenvalue (the one
+   further from the other two) is well conditioned, so its eigenvector is
+   taken as the largest cross product of two rows of `G − λI`, and the pair
+   is recomputed from the 2 × 2 compression of `G` on the orthogonal
+   complement, `μ± = (p + r)/2 ± ½√((p − r)² + 4q²)`, whose gap is accurate
+   to `ε‖G‖`. The simple eigenvalue is replaced by its Rayleigh quotient.
 
 References: Smith, O. K. (1961), *Eigenvalues of a symmetric 3 × 3 matrix*,
 Commun. ACM 4, 168; Hasan, K. M., Basri, A. H. & Kopp, J. (2010) as cited by
@@ -50,13 +51,17 @@ of Hermitian 3 × 3 matrices*, Int. J. Mod. Phys. C 19, 523.
     detd = a * (b * c - G23^2) - G12 * (G12 * c - G23 * G13) + G13 * (G12 * G23 - b * G13)
     α2 = detd / 2
     r = clamp(α2 / (α1 * sqrt(α1)), -one(T), one(T))
-    φ = acos(r) / 3
+    sφ, cφ = sincos(acos(r) / 3)
     s = 2 * sqrt(α1)
-    λ1 = m + s * cos(φ)
-    λ3 = m + s * cos(φ + T(2π) / 3)
+    λ1 = m + s * cφ
+    λ3 = m - s * (cφ + sqrt(T(3)) * sφ) / 2        # cos(φ + 2π/3)
     λ2 = 3m - λ1 - λ3
 
-    # deflate the simple eigenvalue and recompute the close pair
+    # Well-separated eigenvalues are accurate as they are: the error of a
+    # gap from the arccos is ~ε/(gap/spread)², i.e. ≤ 1e-12 relative of the
+    # gap when both gaps exceed 1 % of the spread. Otherwise deflate the
+    # simple eigenvalue and recompute the close pair.
+    min(λ1 - λ2, λ2 - λ3) >= T(0.01) * (λ1 - λ3) && return (λ1, λ2, λ3)
     top = (λ1 - λ2) >= (λ2 - λ3)     # the simple eigenvalue is λ₁ (else λ₃)
     iso = top ? λ1 : λ3
     # rows of G − iso·I
@@ -81,7 +86,7 @@ of Hermitian 3 × 3 matrices*, Int. J. Mod. Phys. C 19, 523.
     Ge2 = _symmul3(G11, G22, G33, G12, G13, G23, e2)
     λiso = _dot3(v, Gv)
     p = _dot3(e1, Ge1); q = _dot3(e1, Ge2); rr = _dot3(e2, Ge2)
-    h = hypot(p - rr, 2q) / 2
+    h = sqrt((p - rr)^2 + 4q^2) / 2
     μp = (p + rr) / 2 + h
     μm = (p + rr) / 2 - h
     if top

@@ -113,6 +113,21 @@ end
         @test esv < 1e-11
         @test eD < 1e-11
 
+        # near-degenerate pairs, both sides of the 1 % deflation switch:
+        # g = Q diag(a, a(1 + δ), b) Qᵀ has the exactly known singular values
+        # |a|, |a(1 + δ)|, |b| (g symmetric), so D_σ is known in closed form
+        for δ in (1e-1, 1.1e-2, 0.9e-2, 1e-4, 1e-8)
+            e = 0.0
+            for _ in 1:2000
+                Q = Matrix(_LA.qr(randn(rng, 3, 3)).Q); aa = 0.5 + rand(rng); b = 2.5 + rand(rng)
+                d = sort([aa, aa * (1 + δ), b]; rev = true)
+                g = σ_tuple(Q * _LA.Diagonal(d) * Q')
+                e = max(e, abs(sigma_operator(g) - σ_ref(d)) / d[1])
+            end
+            @printf("    near-degenerate pair, relative splitting δ = %.1e: max|ΔD_σ|/σ₁ = %.1e\n", δ, e)
+            @test e < 1e-13
+        end
+
         # ν_t ≥ 0 on 1e4 random gradient samples
         Ds = [sigma_operator(σ_tuple(randn(rng, 3, 3))) for _ in 1:10_000]
         @printf("    1e4 random g (unit normal entries): min D_σ = %.3e, mean D_σ = %.3f\n", minimum(Ds), mean(Ds))
