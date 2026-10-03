@@ -470,7 +470,7 @@ _fast_process_pairs(nt::NamedTuple) = Tuple(k => getfield(nt, k) for k in keys(n
                    fast_processes = nothing, schedule = SubsteppingSchedule(),
                    max_retries = 3, stepper = step!, scheme = nothing,
                    snapshot = state_snapshot(sim),
-                   divergence_tol = 1e-6, max_velocity = Inf)
+                   divergence_tol = 1e-6, max_velocity = Inf, sgs = nothing)
     -> (sim, dt_used, n_retries)
 
 Production adaptive driver. One call:
@@ -494,6 +494,20 @@ Production adaptive driver. One call:
     restored and an error is thrown.
  5. runs each fast process `substeps_for(schedule, name)` times with
     `dt/n`.
+
+**SGS closure.** `sgs` is the closure the step runs (an
+[`AbstractSGSClosure`](@ref Aeolus.Operators.AbstractSGSClosure) or a
+function `f(νt, u, v, w)`; default: the built-in Smagorinsky when
+`C_s ≠ 0`). It sets the diffusive limit of the `dt` pick, it is passed to
+the default stepper (`step!` / `step_imex!`), and its memory is saved with
+[`sgs_state`](@ref Aeolus.Operators.sgs_state) next to the prognostic
+snapshot and restored with
+[`restore_sgs_state!`](@ref Aeolus.Operators.restore_sgs_state!) whenever a
+step is rejected — the commit ([`advance_sgs!`](@ref
+Aeolus.Operators.advance_sgs!)) a rejected step made is undone, so after a
+retry the closure's memory is that of a run that took the short step
+directly. A custom `stepper` is called without `sgs` and must pass the same
+closure to the step it takes itself.
 
 `fast_processes` accepts a `NamedTuple`, `Dict`, vector/tuple of
 `:name => callback` pairs, or a bare callback (registered as
@@ -522,18 +536,24 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
                         snapshot::StateSnapshot = state_snapshot(sim),
                         divergence_tol::Real = 1e-6,
                         max_velocity::Real = Inf,
+                        sgs = nothing,
                         verbose::Bool = false) where {T}
 
-    Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev, scheme = scheme) : T(dt)
+    closure = sgs_closure(sgs)
+    Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev, scheme = scheme,
+                                      sgs = closure) : T(dt)
     take_step! = if stepper !== nothing
         stepper
     elseif scheme isa IMEXScheme
-        (s, h; kw...) -> step_imex!(s, h, scheme; kw...)
+        (s, h; kw...) -> step_imex!(s, h, scheme; kw..., sgs = closure)
     else
-        step!
+        (s, h; kw...) -> step!(s, h; kw..., sgs = closure)
     end
 
     save_state!(snapshot, sim)
+    # the closure's memory: the step commits it once (advance_sgs!); a
+    # rejected step's commit is rolled back with the prognostic state
+    sgs_snap = closure === nothing ? nothing : sgs_state(closure)
     div_tol = T(divergence_tol)
     u_cap   = T(max_velocity)
     n_retries = 0
@@ -567,11 +587,13 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
 
         if n_retries >= max_retries
             restore_state!(sim, snapshot)
+            closure === nothing || restore_sgs_state!(closure, sgs_snap)
             error("step_adaptive!: step failed ($reason) after $max_retries " *
                   "retries; last dt = $Δt. State has been restored to the " *
                   "beginning of the step.")
         end
         restore_state!(sim, snapshot)
+        closure === nothing || restore_sgs_state!(closure, sgs_snap)
         Δt_new = max(Δt / 2, constraints.dt_min)
         if Δt_new == Δt
             error("step_adaptive!: step failed ($reason) at dt_min = " *
