@@ -232,6 +232,8 @@ The closure's `Pr_t` field when it has one that is not `nothing`, else
 `sim.Pr_t`.
 """
 turbulent_prandtl(c::AbstractEddyViscosityClosure, sim) = sim.Pr_t
+_prandtl(::Nothing, sim) = sim.Pr_t
+_prandtl(Pr_t::Real, sim) = Pr_t
 
 function sgs_coefficients!(f::SGSFields, c::AbstractEddyViscosityClosure, sim)
     sgs_viscosity!(f.νh, c, sim)
@@ -264,8 +266,7 @@ StaticSmagorinsky(C_s::Real = 0.17; Pr_t = nothing) = StaticSmagorinsky(C_s, Pr_
 
 sgs_viscosity!(νt, c::StaticSmagorinsky, sim) =
     compute_smagorinsky_νt!(νt, sim.u, sim.v, sim.w, c.C_s)
-turbulent_prandtl(c::StaticSmagorinsky{T,Nothing}, sim) where {T} = sim.Pr_t
-turbulent_prandtl(c::StaticSmagorinsky, sim) = c.Pr_t
+turbulent_prandtl(c::StaticSmagorinsky, sim) = _prandtl(c.Pr_t, sim)
 
 """
     DynamicSmagorinsky(workspace::DynamicSmagorinskyWorkspace; averaging = :plane,
@@ -304,8 +305,7 @@ sgs_viscosity!(νt, c::DynamicSmagorinsky, sim) =
     compute_dynamic_smagorinsky_νt!(νt, sim.u, sim.v, sim.w; workspace = c.workspace,
                                     averaging = c.averaging, filter_ratio = c.filter_ratio,
                                     cs_max = c.cs_max)
-turbulent_prandtl(c::DynamicSmagorinsky{W,R,C,Nothing}, sim) where {W,R,C} = sim.Pr_t
-turbulent_prandtl(c::DynamicSmagorinsky, sim) = c.Pr_t
+turbulent_prandtl(c::DynamicSmagorinsky, sim) = _prandtl(c.Pr_t, sim)
 
 """
     FunctionSGS(f)
