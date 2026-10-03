@@ -6,7 +6,7 @@ of every modelled wall stress in the code base**: the channel harness,
 the stable-boundary-layer cases, the TKE surface value and the Berlin
 ground drag all call this module rather than writing their own.
 
-Two parts, each in its own file under `src/wall_models/` so the later
+The parts, each in its own file under `src/wall_models/` so the later
 Phase 57 issues (matching height and filtering, TBLE, facades, dynamic
 roughness) only add files and include lines:
 
@@ -26,7 +26,13 @@ roughness) only add files and include lines:
      `post_predictor!` hook; halos and the finite-volume operators are
      untouched, so the wall model is the only momentum flux through a
      free-slip (`ImpermeableWall`) wall face.
-  3. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
+  3. **The wall-model input** (`matching.jl`, P57-b #183) —
+     [`MatchingInput`](@ref): the velocity the law is evaluated with,
+     sampled at a matching height off the first cell (Kawai & Larsson
+     2012) and filtered in time (Yang, Park & Moin 2017) and along the
+     wall (Bou-Zeid, Meneveau & Parlange 2005), against log-layer
+     mismatch.
+  4. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
      [`half_channel_case`](@ref) (the neutral ABL half channel of
      Porté-Agel et al. 2000 / Bou-Zeid et al. 2005) and
      [`channel_case`](@ref) (the two-wall channel at a given Re_τ), with
@@ -50,6 +56,15 @@ roughness) only add files and include lines:
     planetary boundary-layer turbulence. *J. Atmos. Sci.*, 41, 2052-2062.
   * Piomelli, U. & Balaras, E. (2002). Wall-layer models for large-eddy
     simulations. *Annu. Rev. Fluid Mech.*, 34, 349-374.
+  * Kawai, S. & Larsson, J. (2012). Wall-modeling in large eddy
+    simulation: length scales, grid resolution, and accuracy.
+    *Phys. Fluids*, 24, 015105.
+  * Yang, X. I. A., Park, G. I. & Moin, P. (2017). Log-layer mismatch
+    and modeling of the fluctuating wall stress in wall-modeled
+    large-eddy simulations. *Phys. Rev. Fluids*, 2, 104601.
+  * Bou-Zeid, E., Meneveau, C. & Parlange, M. B. (2005). A
+    scale-dependent Lagrangian dynamic model for large eddy simulation
+    of complex turbulent flows. *Phys. Fluids*, 17, 025105.
   * Lee, M. & Moser, R. D. (2015). Direct numerical simulation of
     turbulent channel flow up to Re_τ ≈ 5200. *J. Fluid Mech.*, 774,
     395-415.
@@ -59,7 +74,8 @@ module WallModels
 using ..Grids
 using ..Grids: RegularGrid
 using ..BoundaryConditions: fill_halos!, Periodic, FieldBoundaryConditions
-using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!
+using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!, box_filter!
+using ..Fields: Field
 import ..Operators: phi_m_profile, total_stress_profile
 using ..Simulations: BoussinesqSimulation, step_rk3!
 using ..TimeSteppers: step!
@@ -72,6 +88,7 @@ using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltsla
 # include line here and nothing else.
 include("wall_models/laws.jl")
 include("wall_models/operator.jl")
+include("wall_models/matching.jl")        # P57-b (#183): matching height, input filters
 include("wall_models/channel_cases.jl")   # P54-d (#174): half channel, channel
 
 end # module
