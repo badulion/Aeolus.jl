@@ -491,7 +491,8 @@ end
 `Operators.buoyancy_frequency_squared!` (on a uniform grid the average of
 the two face gradients) this is the discrete dual of the κ_t scalar
 operator: ``Σ P_b V = (g/θ_0) Σ z\\, T_θ V``, the potential-energy change
-of the SGS heat flux.
+of the SGS heat flux. (A prescribed surface heat flux adds ``(g/θ_0)F/2``
+to the boundary cells inside `advance_sgs!`; not here.)
 """
 function buoyancy_production!(P::Field, κt::Field, N2::Field)
     g = mesh(P)
@@ -669,7 +670,8 @@ tke_statistics(c::TKEClosure) =
 
 Instantaneous volume-integrated terms of the TKE equation at the current
 state and ``e`` (m⁵ s⁻³; pure: no memory changes): `shear` ``Σ P_s V``,
-`buoyancy` ``Σ P_b V``, `dissipation` ``Σ ε V`` (``ε = c_ε e^{3/2}/l``),
+`buoyancy` ``Σ P_b V`` (with the half-face share of a prescribed surface
+heat flux, as in `advance_sgs!`), `dissipation` ``Σ ε V`` (``ε = c_ε e^{3/2}/l``),
 `transport` (``Σ V`` of the flux-limited advection and the ``2ν_t``
 diffusion: zero up to boundary fluxes), and `tke` ``Σ e V`` (m⁵ s⁻²).
 """
