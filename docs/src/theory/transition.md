@@ -79,9 +79,10 @@ silently fall back to free slip:
 | Site | Treatment of `NoSlipWall` |
 | :--- | :--- |
 | `fill_halos!` (`_fill_z!`) | new wall-pair methods; the `ImpermeableWall` pair keeps its own |
-| `FieldBoundaryConditions`, `nest_bcs` | `:noslip` symbol, `bottom`/`top` keywords |
+| `FieldBoundaryConditions`, `nest_bcs` | `:noslip` symbol, `bottom`/`top` keywords; a mixed z pair must be two walls, anything else is an `ArgumentError` |
 | pressure solver choice (`_default_solver`) | non-periodic → `CosineFFTPoissonSolver`, unchanged |
-| IMEX implicit diffusion | affine wall term, `is_wall` for the pinned `w` row |
+| IMEX implicit diffusion | affine wall term (`homogeneous_bcs`) |
+| IMEX pinned `w` row (`_constraint_index`) | **behaviour change:** was "`bottom` or `top` is an `ImpermeableWall`", now `is_wall(bcs.bottom)`. The pinned row is the bottom wall face `Hz + 1`; the top wall face sits in the halo, so only the bottom decides. The old symbol constructor could not build a case where the two differ |
 | `apply_cutcell_velocity_bc!` | acts on apertures only; the wall comes through `fill_halos!` |
 | anelastic / pseudo-incompressible cores | through `fill_halos!`; only z-periodic is rejected |
 
@@ -106,7 +107,11 @@ reference: the top's image term is ``\mathrm{erfc}(2h/\sqrt{4νt}) ≈ 8\times10
 In a domain only ``h`` deep, the top wall reflects ``2.5\,\%\,U`` by
 ``t = 0.1h^2/ν``. That 2.5 % is a finite-domain effect of the reference,
 not a solver error. A `:wall` run (explicit, ARK2 and Rosenbrock2, SGS on)
-is bitwise identical to the code before the change.
+is bitwise identical to the code before the change. That comparison
+against the previous `master` was made by hand. The suite does not
+automate it. It checks only that `:wall` keeps the original `fill_halos!`
+methods and that `_constraint_index` and `homogeneous_bcs` leave it
+unchanged.
 
 ### The Berlin case
 
