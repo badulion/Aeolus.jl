@@ -42,6 +42,38 @@ end
 _lsf_mean(f) = sum(interior_view(f)) / length(interior_view(f))
 _lsf_level(f, k) = (iv = interior_view(f); sum(@view iv[:, :, k]) / (size(iv, 1) * size(iv, 2)))
 
+isdefined(Main, :BerlinCase) ||
+    include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
+
+# The Berlin case's geostrophic forcing before #171
+# (examples/urban/couplings/geostrophic.jl at cc4a150), kept verbatim as
+# the oracle of the bit-for-bit test. It is a test fixture, not a second
+# implementation: nothing outside this file calls it.
+function _legacy_add_geostrophic_wind!(sim, U_g::Real, V_g::Real, τ_relax::Real)
+    Nx, Ny = sim.mesh.Nx, sim.mesh.Ny
+    Hx, Hy, Hz = sim.mesh.Hx, sim.mesh.Hy, sim.mesh.Hz
+    Nz = sim.mesh.Nz
+    invτ = 1 / τ_relax
+    @inbounds for k in 1:Nz
+        ū = 0.0; v̄ = 0.0
+        for j in 1:Ny, i in 1:Nx
+            ū += sim.u.data[Hx+i, Hy+j, Hz+k]
+            v̄ += sim.v.data[Hx+i, Hy+j, Hz+k]
+        end
+        ū /= (Nx * Ny); v̄ /= (Nx * Ny)
+        for j in 1:Ny, i in 1:Nx
+            sim.tu.data[Hx+i, Hy+j, Hz+k] -= invτ * (ū - U_g)
+            sim.tv.data[Hx+i, Hy+j, Hz+k] -= invτ * (v̄ - V_g)
+        end
+    end
+    return sim
+end
+
+struct _LegacyGeostrophic <: Main.BerlinCase.AbstractCoupling end
+Main.BerlinCase.coupling_name(::Type{_LegacyGeostrophic}) = :legacy_geostrophic
+Main.BerlinCase.run_stage!(::_LegacyGeostrophic, case, ::Val{:body_force}, dt) =
+    (_legacy_add_geostrophic_wind!(case.sim, 1.0, 0.0, 1800.0); nothing)
+
 @testset "Era VI — LargeScaleForcing (#171)" begin
 
     @testset "ForcingTable: interpolation, end values, exact step mean" begin
@@ -225,6 +257,32 @@ _lsf_level(f, k) = (iv = interior_view(f); sum(@view iv[:, :, k]) / (size(iv, 1)
         # no humidity field to receive a q tendency: an error, not a no-op
         Fq = AdvectiveTendencies(; q = 1e-8)
         @test_throws ArgumentError apply_forcing!(sim, Fq, 0.0, 1.0)
+    end
+
+
+    @testset "bit for bit: GeostrophicNudging == the former add_geostrophic_wind! (100 Berlin smoke steps)" begin
+        BC = Main.BerlinCase
+        # the fixed stepper, so that the run is 100 steps (the default
+        # adaptive one covers the same 200 s in 59)
+        cfg() = BC.CaseConfig(:smoke; verbose = false, output_path = nothing, nsteps = 100,
+                              physics = Dict{Symbol,Any}(:timestepper => :fixed),
+                              options = Dict{Symbol,Any}(:geostrophic => (mode = :nudging,)))
+        new = BC.build_case(cfg(); io = devnull)
+        old = BC.build_case(cfg(); io = devnull)
+        # swap the coupling of the :body_force entry for the legacy function
+        bf = old.schedule[:body_force]
+        i = findfirst(e -> BC.coupling_name(e.coupling) === :geostrophic, bf)
+        @test i !== nothing
+        bf[i] = BC.ScheduleEntry(_LegacyGeostrophic(), bf[i].order, bf[i].cadence)
+        BC.run_case!(new)
+        BC.run_case!(old)
+        @test new.clock.n == old.clock.n == 100 && new.sim.t == old.sim.t
+        same = all(getfield(new.sim, x).data == getfield(old.sim, x).data for x in (:u, :v, :w, :θ, :p))
+        same_tr = all(a.field.data == b.field.data for (a, b) in zip(new.tracers.list, old.tracers.list))
+        @info @sprintf("Nudging bit for bit over %d smoke steps (t = %.1f s): u, v, w, θ, p identical: %s; tracers identical: %s",
+                       new.clock.n, new.sim.t, same, same_tr)
+        @test same
+        @test same_tr
     end
 
 end
