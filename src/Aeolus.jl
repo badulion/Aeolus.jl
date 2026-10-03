@@ -894,7 +894,9 @@ export effective_roughness, effective_scalar_roughness,
 # Era VI — high-fidelity turbulence closure (Phases 54-59)
 # =========================================================================
 
-# P59-a (#172) — no-slip / moving walls
+# P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
+# method of the CutCell generic (no new name).
 export NoSlipWall
+include("wall_shear_stress.jl")
 
 end # module

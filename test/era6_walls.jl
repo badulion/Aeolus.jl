@@ -117,4 +117,130 @@ end
         @test homogeneous_bcs(FieldBoundaryConditions(:periodic, :periodic, :noslip)) isa
               FieldBoundaryConditions
     end
+
+    # ---------------------------------------------------------------------
+    # Laminar wall flows. Explicit step!, dt = 0.3 Δz²/ν (diffusive limit
+    # 0.5); every flow is horizontally uniform, so the pressure correction
+    # is identically zero and the column obeys ∂u/∂t = ν ∂²u/∂z² + G.
+    # ---------------------------------------------------------------------
+
+    @testset "Couette, Re = 100" begin
+        U, h, Re = 1.0, 1.0, 100
+        ν = U * h / Re
+        m = wall_mesh(16; Lz = h)
+        bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip,
+                                      top = NoSlipWall(U, 0))
+        sim = BoussinesqSimulation(m; ν = ν, bcs = bcs)
+        dt = 0.3 * m.dz^2 / ν
+        for _ in 1:ceil(Int, 4h^2 / ν / dt)        # from rest; slowest mode e^{-π²νt/h²} ≈ 1e-17
+            step!(sim, dt)
+        end
+        err = maximum(abs.(plane_mean(sim.u) .- U .* wall_zc(m) ./ h))
+        τb = wall_shear_stress(sim; side = :bottom)
+        τt = wall_shear_stress(sim; side = :top)
+        @printf("    Couette Re=100: ‖u − Uz/h‖∞ = %.2e U, τ_b = %.15f (νU/h = %.15f), τ_t − τ_b = %.1e\n",
+                err, τb, ν * U / h, τt - τb)
+        @test err < 1e-10 * U
+        @test abs(τb - ν * U / h) < 1e-10 * (ν * U / h)
+        @test abs(τt - ν * U / h) < 1e-10 * (ν * U / h)   # uniform stress across the gap
+        @test maximum(abs, interior_view(sim.w)) < 1e-12
+        @test wall_shear_stress(sim; component = :v) == 0
+        @test_throws ArgumentError wall_shear_stress(sim; side = :west)
+        psim = BoussinesqSimulation(m; ν = ν)                  # triply periodic
+        @test_throws ArgumentError wall_shear_stress(psim)
+        # a free-slip wall carries no stress
+        fsim = BoussinesqSimulation(m; ν = ν, bcs = FieldBoundaryConditions(:periodic,
+                                    :periodic; bottom = NoSlipWall(U, 0), top = :wall))
+        set_profile!(fsim.u, 0.3 .+ wall_zc(m))
+        @test wall_shear_stress(fsim; side = :top) == 0
+        @test wall_shear_stress(fsim; side = :bottom) ≈ ν * (2 * (0.3 + m.dz / 2 - U) / m.dz)
+    end
+
+    @testset "plane Poiseuille: second order, bulk velocity Gh²/(12ν)" begin
+        G, ν, h = 1.0, 1.0, 1.0
+        drive!(s, Δt) = (interior_view(s.tu) .+= G; nothing)
+        res = map((16, 32, 64)) do Nz
+            m = wall_mesh(Nz; Lz = h)
+            sim = BoussinesqSimulation(m; ν = ν,
+                                       bcs = FieldBoundaryConditions(:periodic, :periodic, :noslip))
+            z = wall_zc(m)
+            ue = G / (2ν) .* z .* (h .- z)
+            set_profile!(sim.u, ue)        # start on the parabola; relax to the discrete steady state
+            dt = 0.3 * m.dz^2 / ν
+            for _ in 1:ceil(Int, 2.5h^2 / ν / dt)
+                step!(sim, dt; body_force! = drive!)
+            end
+            u = plane_mean(sim.u)
+            (L2 = sqrt(sum(abs2, u .- ue) / Nz), ub = sum(u) / Nz,
+             τb = wall_shear_stress(sim), τt = wall_shear_stress(sim; side = :top))
+        end
+        p1 = log2(res[1].L2 / res[2].L2); p2 = log2(res[2].L2 / res[3].L2)
+        ub_exact = G * h^2 / (12ν)
+        rel_ub = abs(res[3].ub - ub_exact) / ub_exact
+        @printf("    Poiseuille L2 errors %.3e %.3e %.3e → orders %.4f %.4f; bulk at Nz=64 off by %.2e\n",
+                res[1].L2, res[2].L2, res[3].L2, p1, p2, rel_ub)
+        @test abs(p1 - 2) < 0.1
+        @test abs(p2 - 2) < 0.1
+        @test rel_ub < 1e-3
+        # steady force balance: the two walls carry the whole driving force G h
+        for r in res
+            @test r.τb - r.τt ≈ G * h rtol = 1e-10
+            @test r.τb ≈ G * h / 2 rtol = 1e-10
+        end
+    end
+
+    @testset "Stokes' first problem: U erfc(z / 2√(νt))" begin
+        # The plate starts impulsively at t = 0. The reference is the
+        # semi-infinite solution, so the domain is 2h deep (free-slip top):
+        # at t = 0.1 h²/ν the top's image term is erfc(2h/√(4νt)) ≈ 8e-6.
+        # (In a domain only h deep the top reflects 2.5 % U by then — a
+        # property of the reference, not of the solver.)
+        ν, h, U = 1.0, 1.0, 1.0
+        m = wall_mesh(128; Lz = 2h)
+        sim = BoussinesqSimulation(m; ν = ν, bcs = FieldBoundaryConditions(:periodic,
+                                   :periodic; bottom = NoSlipWall(U, 0), top = :wall))
+        tend = 0.1 * h^2 / ν
+        n = ceil(Int, tend / (0.3 * m.dz^2 / ν))
+        for _ in 1:n
+            step!(sim, tend / n)
+        end
+        ue = U .* erfc_series.(wall_zc(m) ./ (2 * sqrt(ν * sim.t)))
+        err = maximum(abs.(plane_mean(sim.u) .- ue)) / U
+        τ_exact = -ν * U / sqrt(π * ν * sim.t)       # ν ∂u/∂z at the plate
+        τ = wall_shear_stress(sim)
+        @printf("    Stokes I (Nz=128, t=0.1h²/ν): L∞ error %.2e U; wall stress %.5f vs %.5f\n",
+                err, τ, τ_exact)
+        @test sim.t ≈ tend
+        @test err < 0.01
+        @test τ ≈ τ_exact rtol = 0.01
+    end
+
+    @testset "Stokes' second problem: decay length √(2ν/ω)" begin
+        # Plate oscillating as U cos ωt, from rest; the amplitude of the ω
+        # harmonic over the 6th period is fitted to e^{-z/δ} on 0.5δ ≤ z ≤ 3δ.
+        ν, ω, U = 1.0, 2π, 1.0
+        δ = sqrt(2ν / ω)
+        m = wall_mesh(128; Lz = 5.0)                   # ≈ 8.9 δ, free-slip top
+        wall(t) = FieldBoundaryConditions(:periodic, :periodic;
+                                          bottom = NoSlipWall(U * cos(ω * t), 0), top = :wall)
+        sim = BoussinesqSimulation(m; ν = ν, bcs = wall(0.0))
+        T = 2π / ω
+        nper = ceil(Int, T / (0.3 * m.dz^2 / ν)); dt = T / nper
+        A = zeros(ComplexF64, m.Nz)
+        for p in 1:6, _ in 1:nper
+            sim.bcs = wall(sim.t)                     # the wall velocity at the step start
+            step!(sim, dt)
+            p == 6 && (A .+= plane_mean(sim.u) .* cis(-ω * sim.t) .* (2dt / T))
+        end
+        z = wall_zc(m)
+        sel = findall(zz -> 0.5δ <= zz <= 3δ, z)
+        c = [ones(length(sel)) z[sel]] \ log.(abs.(A[sel]))
+        δfit = -1 / c[2]
+        @printf("    Stokes II: fitted decay length %.5f vs √(2ν/ω) = %.5f (%.2e relative)\n",
+                δfit, δ, abs(δfit - δ) / δ)
+        @test abs(δfit - δ) / δ < 0.02
+        # the phase lags by z/δ as well (the wave travels away from the plate)
+        ϕ = -angle.(A[sel]); ϕ .-= ϕ[1]
+        @test ϕ[end] ≈ (z[sel[end]] - z[sel[1]]) / δ rtol = 0.02
+    end
 end
