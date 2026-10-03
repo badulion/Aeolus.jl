@@ -253,8 +253,9 @@ target ``\\mathbf u_{\\rm base} + \\mathbf u'(x - U_∞ t, y, z)``: the
 free-stream disturbance advected through the fringe, superposed on the
 (Blasius) base target. Only the storage columns where ``λ(x) > 0`` are
 recomputed. `damping` as in [`disturbance_velocity!`](@ref) (e.g.
-`z -> smooth_step(z / (3δ_{99}))` keeps the forcing out of the inflow
-boundary layer). The target is refreshed when `t` differs by at least
+`z -> smooth_step(z / (2δ_{99}))`, as in `examples/transition/flat_plate_t3a.jl`,
+keeps the forcing out of the inflow boundary layer; the bypass test in
+`test/era6_flat_plate.jl` uses `1.5δ_{99}`). The target is refreshed when `t` differs by at least
 `interval` from the time of the last refresh (`0`, the default: every
 call). Note that `step_rk3!` calls `body_force!` with `sim.t` = ``t``,
 ``t + Δt``, ``t + 2Δt`` on its three sub-stages (it advances the clock
