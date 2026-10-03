@@ -95,6 +95,7 @@ Aeolus.Operators.components
 Aeolus.Operators.subfilter_stress!
 Aeolus.Operators.bardina_stress!
 Aeolus.Operators.filtered_strain
+Aeolus.Operators.filtered_strain!
 Aeolus.Operators.eddy_viscosity_stress!
 Aeolus.Operators.smagorinsky_stress!
 Aeolus.Operators.sgs_dissipation

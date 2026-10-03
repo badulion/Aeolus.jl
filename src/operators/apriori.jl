@@ -160,14 +160,6 @@ end
 # Filtered strain rate, eddy-viscosity model stresses
 # -------------------------------------------------------------------------
 
-"""
-    filtered_strain(ū, v̄, w̄) -> S̄::SymmetricTensorField
-    filtered_strain!(S̄, ū, v̄, w̄) -> S̄
-
-Strain rate ``\\bar S_{ij} = \\tfrac12(∂_j\\bar u_i + ∂_i\\bar u_j)`` of a
-cell-centred (filtered) velocity, by second-order centred differences
-with periodic wrap-around on the interior (halos are not used).
-"""
 function filtered_strain!(S::SymmetricTensorField, ub::Field{CellCenter}, vb::Field{CellCenter}, wb::Field{CellCenter})
     g = mesh(ub)
     a = (interior_view(ub), interior_view(vb), interior_view(wb))
@@ -186,6 +178,17 @@ function filtered_strain!(S::SymmetricTensorField, ub::Field{CellCenter}, vb::Fi
 end
 filtered_strain(ub::Field{CellCenter}, vb::Field{CellCenter}, wb::Field{CellCenter}) =
     filtered_strain!(SymmetricTensorField(mesh(ub)), ub, vb, wb)
+# Both names are exported and share one docstring.
+const _FILTERED_STRAIN_DOC = """
+    filtered_strain(ū, v̄, w̄) -> S̄::SymmetricTensorField
+    filtered_strain!(S̄, ū, v̄, w̄) -> S̄
+
+Strain rate ``\\bar S_{ij} = \\tfrac12(∂_j\\bar u_i + ∂_i\\bar u_j)`` of a
+cell-centred (filtered) velocity, by second-order centred differences
+with periodic wrap-around on the interior (halos are not used).
+"""
+@doc _FILTERED_STRAIN_DOC filtered_strain!
+@doc _FILTERED_STRAIN_DOC filtered_strain
 
 # Pointwise contraction A_ij B_ij of two symmetric tensors.
 _contract(A, B, I) = A.xx[I]*B.xx[I] + A.yy[I]*B.yy[I] + A.zz[I]*B.zz[I] +
