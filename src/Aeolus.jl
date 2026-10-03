@@ -908,5 +908,11 @@ export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
        friction_velocity, wall_stress, wall_drag,
        spalding_yplus, spalding_uplus, matching_obukhov_length,
        WallModel, apply_wall_stress!
+# Phase 57-d (#179): the wall model on immersed (IBM mask) and cut-cell
+# walls. The cut-cell stress is a method of CutCell.wall_shear_stress, not
+# a new name.
+export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
+       apply_immersed_wall_stress!, immersed_wall_count,
+       wall_slip_velocity, slip_wall_value
 
 end # module
