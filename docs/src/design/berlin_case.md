@@ -349,7 +349,13 @@ integration](#Dynamical-core-and-time-integration).
   while θ still varies, and the buoyancy term gave ν_t up to 19 m²/s
   inside buildings, against a fluid maximum of 1.6 m²/s. That only
   shortened the adaptive step: 20 steps instead of 12 for the 24 s smoke
-  run. Vreman uses c = 2.5 C_s² with the case's C_s. Their `smoke_check`
+  run. In the smoke matrix's everything-on run the two maxima are 8.6
+  (solid) and 8.9 m²/s (fluid). The large values are the published
+  model's: ν_t grows like 1/|∇u| wherever |∇u| → 0 while θ varies, and
+  that can happen in fluid too. The wrapper (`SolidMaskedSGS`) forwards
+  every contract generic to the closure and zeroes νh, νv, κh, κv and the
+  tracer diffusivity in solid cells only. Its `smoke_check` asserts that
+  the fluid cells match the bare closure bit for bit. Vreman uses c = 2.5 C_s² with the case's C_s. Their `smoke_check`
   evaluates the closure on the laminar version of the current flow (u and
   v replaced by their level means, w = 0). It requires ν_t = 0 exactly in
   the free stream above the inversion, where Smagorinsky gives up to
