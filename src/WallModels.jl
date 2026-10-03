@@ -26,6 +26,15 @@ roughness) only add files and include lines:
      `post_predictor!` hook; halos and the finite-volume operators are
      untouched, so the wall model is the only momentum flux through a
      free-slip (`ImpermeableWall`) wall face.
+  3. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
+     [`half_channel_case`](@ref) (the neutral ABL half channel of
+     Porté-Agel et al. 2000 / Bou-Zeid et al. 2005) and
+     [`channel_case`](@ref) (the two-wall channel at a given Re_τ), with
+     [`advance_channel!`](@ref) and [`run_channel!`](@ref): the shared
+     wall-bounded harness every Era VI closure is validated on. They add
+     no wall physics; the diagnostics they report (Φ_m, the stress budget,
+     E11) are `Operators.phi_m_profile`, `total_stress_profile` and
+     `streamwise_spectrum`.
 
 # References
 
@@ -47,8 +56,14 @@ roughness) only add files and include lines:
 """
 module WallModels
 
+using ..Grids
 using ..Grids: RegularGrid
-using ..BoundaryConditions: fill_halos!, Periodic
+using ..BoundaryConditions: fill_halos!, Periodic, FieldBoundaryConditions
+using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!
+import ..Operators: phi_m_profile, total_stress_profile
+using ..Simulations: BoussinesqSimulation, step_rk3!
+using ..TimeSteppers: step!
+using Random
 using ..SurfaceExchange
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
                          SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, von_karman
@@ -57,5 +72,6 @@ using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltsla
 # include line here and nothing else.
 include("wall_models/laws.jl")
 include("wall_models/operator.jl")
+include("wall_models/channel_cases.jl")   # P54-d (#174): half channel, channel
 
 end # module

@@ -916,5 +916,10 @@ export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
        friction_velocity, wall_stress, wall_drag,
        spalding_yplus, spalding_uplus, matching_obukhov_length,
        WallModel, apply_wall_stress!
+# P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
+# `advance_channel!` / `run_channel!` do not collide with the Berlin case's
+# `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
+export WallBoundedCase, half_channel_case, channel_case,
+       advance_channel!, run_channel!, channel_dt
 
 end # module
