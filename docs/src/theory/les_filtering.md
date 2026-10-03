@@ -99,7 +99,8 @@ under-resolved unless we place many grid points inside the surface
 layer, which for atmospheric applications is impractical. This is why
 LES codes couple to *wall models* (MOST — Monin–Obukhov Similarity
 Theory in the atmosphere; equilibrium wall models in engineering).
-Aeolus will grow one in Phase 1b.
+Aeolus has them in `Aeolus.WallModels` (Phase 57; see
+[Wall models](wall_models.md)).
 
 ## Reading list
 
