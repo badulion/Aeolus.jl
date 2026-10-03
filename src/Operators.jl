@@ -547,17 +547,20 @@ end
 function _germano_pass2!(ws::DynamicSmagorinskyWorkspace{T}, g, α2, cell) where {T}
     Δ2 = (g.dx * g.dy * g.dz)^(2/3)
     oH = (g.Hx - 1, g.Hy - 1, g.Hz - 1)                 # shell → data index
-    z21 = ntuple(_ -> zero(T), 21)
+    z21 = ntuple(_ -> zero(T), Val(21))
     @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
         if cell[g.Hx + i, g.Hy + j, g.Hz + k]
             ws.LM[i,j,k] = zero(T); ws.MM[i,j,k] = zero(T)
             continue
         end
         s = _box_stencil_sum(i + 1, j + 1, k + 1, 1, 1, 1) do a, b, c
-            @inbounds cell[oH[1] + a, oH[2] + b, oH[3] + c] ? (z21..., 0) :
-                                                             (_germano_terms(ws, a, b, c)..., 1)
+            t = _germano_terms(ws, a, b, c)
+            @inbounds cell[oH[1] + a, oH[2] + b, oH[3] + c] ? z21 : t
         end
-        ws.LM[i,j,k], ws.MM[i,j,k] = _germano_LM_MM(Base.front(s), one(T) / s[22], Δ2, α2)
+        (n,) = _box_stencil_sum(i + 1, j + 1, k + 1, 1, 1, 1) do a, b, c
+            @inbounds (cell[oH[1] + a, oH[2] + b, oH[3] + c] ? 0 : 1,)
+        end
+        ws.LM[i,j,k], ws.MM[i,j,k] = _germano_LM_MM(s, one(T) / n, Δ2, α2)
     end
     return nothing
 end
