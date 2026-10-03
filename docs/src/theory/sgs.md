@@ -148,8 +148,8 @@ coefficient is too large for this filter:
 | field (32³, triply periodic, ``u_{rms} = 1``) | ``α = 3`` | ``α = 2`` |
 | :-- | --: | --: |
 | random phases, ``E(k) ∝ k^{-5/3}`` | 0.012 | — |
-| same field after ``t = 1`` (≈ 1 turnover) of LES | 0.129 | 0.220 |
-| after ``t = 3`` | 0.154 | 0.267 |
+| same field after ``t = 1`` (≈ 1 turnover) of LES | 0.128 | 0.219 |
+| after ``t = 3`` | 0.155 | 0.268 |
 
 The initial field is drawn by
 [`isotropic_random_field!`](@ref Aeolus.Operators.isotropic_random_field!)
@@ -157,7 +157,10 @@ The initial field is drawn by
 projection, amplitude ``∝ k^{-5/3}`` per mode); that field gave 0.018,
 0.129 / 0.222 and 0.153 / 0.265. The difference is the random
 realisation, not the closure: with the old field the refactored
-dynamic model reproduces the old numbers bit for bit.
+dynamic model reproduces the old numbers bit for bit. (With the
+initialiser's first, centre-averaged normalisation, before the fix
+described under the CBC benchmark below, the same seed gave 0.012,
+0.129 / 0.220 and 0.154 / 0.267.)
 
 Lilly's inertial-range value is 0.17. The random-phase field has the
 right spectrum but no energy transfer to small scales, and the dynamic
@@ -196,28 +199,85 @@ Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
 
 | ``N^3`` | closure | ``K_{98}/K_{42}`` vs CBC | ``K_{171}/K_{42}`` vs CBC | RMS ``\log_{10}E``, ``k ≤ \tfrac23 k_c`` (98 / 171) | ``E(k_c)``/CBC (98 / 171) |
 | :-- | :-- | --: | --: | --: | --: |
-| 32³ | dynamic (plane)     | +1.3 % | −15.7 % | 0.085 / 0.099 | 1.23 / 1.00 |
-| 32³ | Smagorinsky 0.17    | +2.5 % | −14.2 % | 0.088 / 0.097 | 1.27 / 1.08 |
-| 32³ | no model            | +78.3 % | +121.1 % | 0.216 / 0.316 | 5.25 / 10.4 |
-| 64³ | dynamic (plane)     | −13.4 % | −23.5 % | 0.062 / 0.118 | 0.72 / 0.61 |
-| 64³ | Smagorinsky 0.17    | −14.2 % | −24.3 % | 0.065 / 0.124 | 0.67 / 0.52 |
-| 64³ | no model            | +32.7 % | +15.7 % | 0.226 / 0.346 | 5.66 / 8.02 |
+| 32³ | dynamic (plane)     | +13.2 % | −3.6 % | 0.100 / 0.084 | 1.64 / 1.47 |
+| 32³ | Smagorinsky 0.17    | +13.2 % | −2.6 % | 0.102 / 0.085 | 1.62 / 1.51 |
+| 32³ | no model            | +98.2 % | +160.6 % | 0.224 / 0.315 | 6.67 / 15.2 |
+| 64³ | dynamic (plane)     | −4.9 % | −17.6 % | 0.055 / 0.083 | 1.06 / 0.93 |
+| 64³ | Smagorinsky 0.17    | −5.9 % | −17.6 % | 0.052 / 0.085 | 0.94 / 0.80 |
+| 64³ | no model            | +54.5 % | +38.6 % | 0.236 / 0.353 | 7.85 / 12.0 |
 
-CI cost at 32³: 14 s for the three closures × three seeds.
+CI cost at 32³: about 10 s (20 s under load) for the three closures ×
+three seeds.
 
-Without a model the energy piles up at the cut-off (5–10 × CBC), which
-is what the test uses to show it can fail. With either eddy-viscosity
-closure the first interval is right at 32³ but the second decays too
-fast: the deficit is in the energy-containing shells (LES/CBC 0.65–0.71
-at ``k ≈ 0.2–0.3`` cm⁻¹ at station 171), where the measured large scales
-barely decay and the ``11M`` box holds only a few dozen modes. At 64³
-the closures are also too dissipative at the small scales. The
-proposed ±10 % on both TKE ratios (a figure from spectral-code LES) is
-therefore not met; the test asserts ±20 % at station 171 and keeps ±10 %
-as a broken test, so a closure that reaches it (Lagrangian dynamic,
-AMD, …: one line each in the test) shows up. Starting from the random-
-phase field without the rescale cycles instead gives +21 % / −3 % at
-32³ (no transfer during the first turnover).
+Without a model the energy piles up at the cut-off (7–15 × CBC). The
+test uses this to show that it can fail.
+
+**A defect found in review (#205).** The first version of this table read
++1.3 % / −15.7 % (32³, dynamic) and −13.4 % / −23.5 % (64³). The spectrum
+diagnostic then measured the centre average of the staggered velocity,
+and the initialiser compensated by dividing by ``\cos(k_jΔ_j/2)`` (see
+[filtering](les_filtering.md)). The run was therefore started with more
+kinetic energy than CBC in the energy the solver carries: +12.8 % at
+32³ and +8.7 % at 64³ after the rescale cycles, and ×2.1 in the cut-off
+shell. Measured in that energy, the old 32³ run was +12.8 / +13.8 /
+−6.3 % against CBC at stations 42 / 98 / 171. With the face spectrum
+the start is exact, and the table above is the corrected run.
+
+**What remains.** The proposed ±10 % on both ratios (a figure from
+spectral-code LES) still does not hold across resolutions. Dynamic
+model, three seeds:
+
+| ``N`` | 32 | 40 | 48 | 64 |
+| :-- | --: | --: | --: | --: |
+| ``K_{98}/K_{42}`` error | +13.2 % | +7.5 % | +1.8 % | −4.9 % |
+| ``K_{171}/K_{42}`` error | −3.6 % | −9.5 % | −13.9 % | −17.6 % |
+| ``E(k_c)``/CBC at 98 | 1.64 | 1.42 | 1.21 | 1.06 |
+
+So the 32³ CI case meets ±10 % at station 171 only because two errors
+cancel there. 40³ meets it at both stations, but only because it falls
+between the two error trends. Neither result is evidence that the
+target is reached.
+
+- **Station 98 at 32³.** The excess is the coarse grid. Here
+  ``k_c = 1.8`` cm⁻¹ is only 3.6 × the station-42 peak, and energy
+  piles up at the cut-off. The pile-up is gone at 64³.
+- **Station 171.** The deficit grows with ``N``. Each of the following
+  was varied alone and is ruled out as the cause:
+
+  | Varied | Values tried | ``K_{171}/K_{42}`` error |
+  | :-- | :-- | :-- |
+  | time step (cfl) | 0.5, 0.25 | equal to 0.1 % |
+  | spin-up cycles | 1, 2, 4 | −4.0 / −3.6 / −4.2 % at 32³ |
+  | seeds | 3, 8 | −3.6 / −3.4 % |
+  | box side, same ``Δ`` | 22M at 64³, 11M at 32³ | −1.5 / −3.6 % |
+  | ``C_s`` at 64³ | 0.12, 0.17, 0.22 | −17.5 / −17.6 / −16.8 % |
+
+The spectrum shows where the energy is missing. Shells 2–3
+(``k = 0.22``–``0.34`` cm⁻¹) end at 0.62–0.77 of CBC at station 171.
+This holds for every closure tried, including none, at every resolution
+and in both boxes, and on its own it costs about 6 % of ``K_{171}``.
+The rest is a 10–20 % deficit in shells 4–12 at 48³–64³.
+
+The table data are not the cause: they were re-checked against the
+printed table 3. CBC (§6, appendix E) do state that their large-eddy
+data are the least certain, because of a.c. coupling and the Taylor
+approximation at long times. The low-``k`` part of ``E(k)`` also comes
+from graphical differentiation of the one-dimensional spectra.
+
+Two candidates in the numerics remain open:
+
+- the second-order truncation and aliasing errors of an implicitly
+  filtered finite-difference LES, which are comparable to the SGS term
+  near the cut-off (Ghosal 1996; Kravchenko & Moin 1997);
+- the eddy-viscosity term in the Laplacian form ``∂_j(ν_t ∂_j u_i)``
+  instead of ``∂_j(2ν_t S_{ij})`` (stress-form SGS, #175).
+
+The test therefore asserts ±10 % at station 171 (32³) and ±20 % at
+station 98, and keeps ±10 % at station 98 as a broken test. A closure
+or numerics change that moves the 64³ numbers is checked with
+`examples/validation/cbc_decay.jl`. Starting from the random-phase field
+without the rescale cycles gives +33.5 % / +10.5 % at 32³, because the
+field transfers no energy during the first turnover.
 
 ## Limitations and planned upgrades
 
@@ -258,3 +318,8 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Kang, H. S., Chester, S. & Meneveau, C. (2003), *Decaying turbulence
     in an active-grid-generated flow and comparisons with large-eddy
     simulation*, JFM 480, 129.
+  * Ghosal, S. (1996), *An analysis of numerical errors in large-eddy
+    simulations of turbulence*, J. Comput. Phys. 125, 187.
+  * Kravchenko, A. G. & Moin, P. (1997), *On the effect of numerical
+    errors in large eddy simulations of turbulent flows*, J. Comput.
+    Phys. 131, 310.

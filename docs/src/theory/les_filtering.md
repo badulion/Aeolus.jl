@@ -118,22 +118,33 @@ a top hat of width ``Δ`` (Pope 2000, §13.2). The sharp cut-off keeps
 ``|\mathbf k| ≤ k_c`` and is a projection (idempotent).
 
 **Energy spectrum.** [`isotropic_energy_spectrum`](@ref Aeolus.Operators.isotropic_energy_spectrum)
-interpolates the staggered velocity to cell centres, Fourier transforms
-it and sums ``\tfrac12|\hat{\mathbf u}|^2`` over shells of unit width
+Fourier transforms each velocity component on its own staggered grid and
+sums ``\tfrac12|\hat{\mathbf u}|^2`` over shells of unit width
 ``Δk = 2π/L``, normalised so that ``\sum E Δk = \tfrac12⟨u_iu_i⟩``
-exactly (Parseval; shell 0 is the mean flow).
+exactly (Parseval; shell 0 is the mean flow). The average is over the
+stored face values, so the shell sum is the kinetic energy the solver
+carries and conserves (`kinetic_energy(sim)` per unit volume). A
+half-cell shift only changes the phase of a mode, so no interpolation is
+needed. Interpolating to cell centres first, as the first version did,
+damps mode ``\mathbf k`` by ``\prod_j\cos^2(k_jΔ_j/2)``, which is 1/2
+along an axis at ``k_c/2`` and 0 at ``k_c``. That is a filter, not a
+spectrum of the model state.
 
 **Initial fields.** [`isotropic_random_field!`](@ref Aeolus.Operators.isotropic_random_field!)
 draws random phases and projects each mode so that the *discrete* C-grid
-divergence vanishes. With face amplitudes ``a_j`` the centre average has
-amplitude ``\hat c_j = a_j e^{ik_jΔ_j/2}\cos(k_jΔ_j/2)`` and the
-divergence is ``2i\sum_j \hat c_j \tan(k_jΔ_j/2)/Δ_j``, so ``\hat c`` is
-projected normal to ``\tan(k_jΔ_j/2)/Δ_j`` (the continuous projection
+divergence vanishes. Face amplitudes ``a_j = \hat b_j e^{-ik_jΔ_j/2}``
+have divergence ``2i\sum_j \hat b_j \sin(k_jΔ_j/2)/Δ_j``, so ``\hat b``
+is projected normal to ``\sin(k_jΔ_j/2)/Δ_j`` (the continuous projection
 normal to ``\mathbf k`` is recovered as ``kΔ → 0``). Each shell is then
 scaled to hold exactly ``E(k)Δk``: the field is divergence-free to
-``10^{-15}`` of its gradients and its spectrum equals the request to
-round-off. A random-phase field has the right spectrum but no energy
-transfer; [`rescale_to_spectrum!`](@ref Aeolus.Operators.rescale_to_spectrum!)
+``10^{-15}`` of its gradients, its spectrum equals the request to
+round-off, and so does its kinetic energy. The first version matched the
+request in the centre-averaged spectrum and divided the face amplitudes
+by ``\cos(k_jΔ_j/2)``. In the solver's energy it started the CBC case
+22 % (32³) and 14 % (64³) too energetic, ×2.1 in the cut-off shell (see
+[the SGS page](sgs.md#Decaying-grid-turbulence-(Comte-Bellot-and-Corrsin))).
+A random-phase field has the right spectrum but no energy transfer.
+[`rescale_to_spectrum!`](@ref Aeolus.Operators.rescale_to_spectrum!)
 supports the usual "evolve, then rescale the shells back" preparation
 (Rogallo 1981), which keeps the phases a run has built.
 
