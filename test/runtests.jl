@@ -972,6 +972,7 @@ end
 @testset "Era VI" begin
     include("era6_les_toolbox.jl")       # Phase 54  filters, spectrum, initialiser (#168)
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
+    include("era6_apriori_sgs.jl")       # Phase 56  a-priori SGS stress, filtered-DNS fixture (#178)
 end
 
 # =========================================================================
