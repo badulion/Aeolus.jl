@@ -60,7 +60,12 @@ The SGS momentum tendency in the stress form `∂ⱼ(2νᵢⱼSᵢⱼ)`, with
 horizontal and vertical eddy viscosities, and the generic operator for
 any symmetric stress τ on the C-grid. Every core selects the form with
 `sgs_stress = :laplacian` (default) or `:symmetric`; under `step_imex!`
-the diagonal part is implicit and the cross terms explicit. Theory:
+the diagonal part is implicit and the cross terms explicit. With
+`sgs_stress = :symmetric`, `cfl_diagnostics`, `adaptive_dt`,
+`step_adaptive!` and `imex_stability_limit` take the stress form's own
+explicit diffusive limit,
+[`stress_form_cfl_viscosity`](@ref Aeolus.TimeIntegration.stress_form_cfl_viscosity)
+(`2νt` for `νh = νv`). Theory:
 [Smagorinsky-Lilly SGS → Stress form vs Laplacian form](../theory/sgs.md#Stress-form-vs-Laplacian-form).
 
 ```julia

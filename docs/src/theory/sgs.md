@@ -174,6 +174,41 @@ operator is unchanged (the co-located Phase-25 approximation). A pair
 `solve_implicit_diffusion!` (ν_h on the x/y faces, ν_v on the z faces),
 and a closure with a separate `κv` gets it for the scalars.
 
+**Explicit stability of the stress form.** The explicit operator `L` is
+symmetric and negative semi-definite, with `−⟨u, Lu⟩ = Σ 2νᵢⱼSᵢⱼSᵢⱼ ΔV`.
+Forward Euler is therefore stable for `Δt ρ(L) ≤ 2`, where `ρ(L)` is the
+largest Rayleigh quotient. To bound it, write each diagonal strain as one
+difference, `(u_{i+1} − u_i)²/Δx² ≤ 2(u_{i+1}² + u_i²)/Δx²`, and split each
+off-diagonal pair with `(a + b)² ≤ 2a² + 2b²`. Every face value enters two
+differences per direction, which gives
+
+```math
+\rho(L) \le 8\max\Bigl(\nu_h^{\max}(\Delta x^{-2} + \Delta y^{-2}) + \nu_v^{\max}\Delta z^{-2},\;
+              \nu_v^{\max}(\Delta x^{-2} + \Delta y^{-2} + \Delta z^{-2})\Bigr).
+```
+
+The first entry is the u and v rows. The second is the w row, which sees only ν_v.
+For `ν_h = ν_v = ν` this is `8ν ΣΔ⁻²`, twice the radius `4ν ΣΔ⁻²` of the
+7-point Laplacian. The factor 2 is the 2 in the normal stress
+`τᵢᵢ = −2ν∂uᵢ/∂xᵢ`, and the bound is sharp. With constant ν, `L = ν(∇² + ∇∇·)`
+on the grid, and on the irrotational checkerboard mode `u = ∇φ` both terms
+give `−4ν ΣΔ⁻²`. Power iteration measures `ρ = 8ν ΣΔ⁻²` to 1e-6.
+
+The factor applies to the unprojected operator. The cores project every
+predictor, `uⁿ⁺¹ = P(uⁿ + Δt Luⁿ) = (I + Δt PLP)uⁿ`. For solenoidal periodic
+`u`, `Σ 2S:S = Σ|∇u|²`, so `ρ(PLP) ≤ 4ν_max ΣΔ⁻²`, the old Laplacian bound.
+Power iteration confirms this for every ν field tested (table below). Even so,
+`cfl_diagnostics` and `adaptive_dt` use the unprojected bound with
+`sgs_stress = :symmetric`: `νt_cfl = stress_form_cfl_viscosity(ν_h^max, ν_v^max, mesh)`
+in place of `νt_max` in `C_diffusive Δ²_harm / (ν + νt_cfl)` and in the
+SGS-only limit. The reason is that the projected bound needs an exact,
+orthogonal projection of a periodic field. Several parts of the code do not
+have one: the immersed-boundary masking of the Berlin run, an iterative
+pressure solve stopped at a tolerance, wall boundaries, and the anelastic
+ρ-weighted projection. Only the unprojected bound holds for every velocity
+field. `:laplacian` keeps `νt_cfl = νt_max`, so its limits are unchanged bit
+for bit.
+
 Measured (`test/era6_sgs_stress_form.jl`; spacing (15.625, 15.625, 6.25) m):
 
 | test | result |
@@ -186,6 +221,10 @@ Measured (`test/era6_sgs_stress_form.jl`; spacing (15.625, 15.625, 6.25) m):
 | Σu, Σv over 20 steps with Smagorinsky ν | 5.6e-16, 2.8e-15 relative |
 | `add_stress_divergence!(sgs_stress_tensor!)` vs fused | bitwise equal |
 | cost on 64 × 64 × 32 (momentum kernels) | 0.62 ms vs 0.44 ms Laplacian |
+| ρ(L) / 4ν_max ΣΔ⁻², 12 × 12 × 8, power iteration: ν constant / log-uniform 0.01–1 / checkerboard 0.01‖1 / Gaussian blob 100× | 2.000 / 1.159 / 1.010 / 1.426 (old limit at C = ½: Δt ρ = 4.00 / 2.32 / 2.02 / 2.85 > 2, unstable; new limit: Δt ρ ≤ 2) |
+| ρ(PLP) / 4ν_max ΣΔ⁻², same fields | 1.000 / 0.555 / 0.505 / 0.706 (stable at the old limit) |
+| 20 Euler steps at C = ½ from the leading mode, constant ν | growth 1 (new limit), 3.5e9 (old limit), 1 (old limit, projected) |
+| anisotropic ν_h ∈ [0,1], ν_v ∈ [0,0.05]: ρ(L) vs bound | 0.0488 ≤ 0.0757 s⁻¹ (ν_cfl = 0.56 vs 2 max ν = 2.00) |
 
 ## Applying the SGS tendency to a scalar
 
