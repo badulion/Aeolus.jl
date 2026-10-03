@@ -4,7 +4,7 @@ using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: Field, mesh
-using ..BoundaryConditions: fill_halos!
+using ..BoundaryConditions: BoundaryConditions, fill_halos!, Periodic, FieldBoundaryConditions
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
@@ -26,6 +26,9 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
 # Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
 export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
        add_sgs_stress_divergence!, sgs_stress_dissipation
+# Era VI (P55-c, #181): the tensorial scalar eddy diffusivity (operators/scalar_tensor.jl)
+export DiffusivityTensor, diagonal_tensor!, bounded_directions,
+       add_tensor_diffusion_scalar!
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -491,11 +494,17 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                      _add_surface_flux!, _add_sponge!,
                      _advect_weno5!,
                      _add_sgs_stress_divergence!, _add_stress_divergence!,
-                     _sgs_stress_tensor!, _sgs_stress_dissipation
+                     _sgs_stress_tensor!, _sgs_stress_dissipation,
+                     _add_tensor_diffusion_scalar!, _isentropic_tensor!
 
 # -------------------------------------------------------------------------
 # Era VI: the stress-form SGS momentum divergence (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/sgs_stress.jl")
+
+# -------------------------------------------------------------------------
+# Era VI: the tensorial scalar eddy diffusivity (wraps the kernels above).
+# -------------------------------------------------------------------------
+include("operators/scalar_tensor.jl")
 
 end # module
