@@ -61,6 +61,7 @@ import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_stat
 using ..AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 
 export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_value,
+       tke_eddy_coefficients,
        tke_critical_richardson, tke_equilibrium, dual_strain!, shear_production!,
        buoyancy_production!, tke_budget, initialize_tke!, tke_statistics
 
@@ -99,6 +100,20 @@ Moeng's (1984) ``c_ε = (c_{ε0} + c_{ε1} l/Δ) × factor`` (0.70 at ``l = Δ``
 """
 @inline tke_dissipation_coefficient(l, Δ; c_ε0 = 0.19, c_ε1 = 0.51, factor = 1) =
     (c_ε0 + c_ε1 * l / Δ) * factor
+
+"""
+    tke_eddy_coefficients(e, l, Δ; c_k = 0.1) -> (ν_t, κ_t)
+
+Deardorff's (1980) eddy viscosity ``ν_t = c_k l \\sqrt e`` and diffusivity
+``κ_t = (1 + 2l/Δ) ν_t`` (Moeng 1984) for the mixing length `l` of
+[`tke_length_scale`](@ref). The one definition: [`TKEClosure`](@ref) and
+[`ReynoldsStressClosure`](@ref) (its ``ν_t`` for the ``2ν_t`` transport and
+the calibration of its Daly–Harlow coefficient) both call it.
+"""
+@inline function tke_eddy_coefficients(e, l, Δ; c_k = 0.1)
+    ν = c_k * l * sqrt(max(e, zero(e)))
+    return ν, (1 + 2l / Δ) * ν
+end
 
 """
     tke_surface_value(u_star, c_ε; c_k = 0.1) -> e_s
@@ -268,14 +283,14 @@ Base.show(io::IO, c::TKEClosure) =
           "dissipation = :$(c.dissipation), transport = $(c.transport))")
 c_k(c::TKEClosure) = c.c_k
 
-# --- buoyancy reference ---------------------------------------------------
-_θref(c::TKEClosure, sim) = isnan(c.θ₀) ? (hasproperty(sim, :θ₀) ? float(sim.θ₀) : zero(c.θ₀)) : c.θ₀
-_gref(c::TKEClosure, sim) = isnan(c.g) ? (hasproperty(sim, :g_accel) ? float(sim.g_accel) : zero(c.g)) : c.g
-_qv(c::TKEClosure, sim) = c.qv === :auto ?
+# --- buoyancy reference (shared with ReynoldsStressClosure: c.θ₀, c.g, c.qv, c.N2)
+_θref(c, sim) = isnan(c.θ₀) ? (hasproperty(sim, :θ₀) ? float(sim.θ₀) : zero(c.θ₀)) : c.θ₀
+_gref(c, sim) = isnan(c.g) ? (hasproperty(sim, :g_accel) ? float(sim.g_accel) : zero(c.g)) : c.g
+_qv(c, sim) = c.qv === :auto ?
     (hasproperty(sim, :has_moisture) && sim.has_moisture ? sim.qv : nothing) : c.qv
 
 # N² at cell centres (zero without buoyancy). Fills the θ (and qv) halos.
-function _stratification!(c::TKEClosure, sim)
+function _stratification!(c, sim)
     θ₀ = _θref(c, sim); g = _gref(c, sim)
     if θ₀ > 0 && g > 0
         fill_halos!(sim.θ, sim.θ_bcs)
@@ -325,9 +340,9 @@ function _coefficients!(ν::Field, κt::Field, c::TKEClosure{T}, N2::Field) wher
         end
         e = ed[I, J, K]
         l, _ = tke_length_scale(e, n2[I, J, K], Δ; l_wall = _lwall(c.l_wall, i, j, k, T), c_l = cl)
-        νv = ck * l * sqrt(max(e, zero(T)))
+        νv, κv = tke_eddy_coefficients(e, l, Δ; c_k = ck)
         nd[I, J, K] = νv
-        kd[I, J, K] = (1 + 2l / Δ) * νv
+        kd[I, J, K] = κv
     end
     return ν, κt
 end

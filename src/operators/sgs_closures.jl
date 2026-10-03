@@ -153,6 +153,18 @@ function add_sgs_momentum!(tu, tv, tw, c::AbstractSGSClosure, f::SGSFields, sim;
 end
 
 """
+    sgs_explicit_stress(c::AbstractSGSClosure) -> Bool
+
+`true` for a closure whose momentum tendency is its own stress (an
+[`add_sgs_momentum!`](@ref) method that is not an eddy viscosity, e.g. the
+prognostic Reynolds stress of P56-d, #188). `step_imex!` treats the SGS
+momentum implicitly as the eddy viscosity `f.νh` and has no explicit hook
+for such a stress, so it refuses these closures instead of silently
+replacing the stress with `ν_t`. Default `false`.
+"""
+sgs_explicit_stress(::AbstractSGSClosure) = false
+
+"""
     add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim)
 
 Add the SGS scalar flux divergence `∂/∂xⱼ(κⱼₖ ∂ϕ/∂xₖ)` to `tϕ`. Default: the

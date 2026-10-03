@@ -43,7 +43,8 @@ using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    AbstractSGSClosure, SGSFields, compute_sgs!, sgs_fields, advance_sgs!,
                    sgs_state, restore_sgs_state!, sgs_closure, _active_sgs,
                    add_sgs_stress_divergence!, _check_sgs_stress,
-                   sgs_scalar_tensor, add_tensor_diffusion_scalar!, bounded_directions
+                   sgs_scalar_tensor, add_tensor_diffusion_scalar!, bounded_directions,
+                   sgs_explicit_stress
 using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence
@@ -1305,6 +1306,10 @@ end
 function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
                             closure, stress::Symbol = :laplacian) where {T}
     closure === nothing && return (T(sim.ν), T(sim.ν), nothing, nothing)
+    sgs_explicit_stress(closure) &&
+        throw(ArgumentError("step_imex!: the SGS closure $(nameof(typeof(closure))) has its own " *
+                            "momentum stress (sgs_explicit_stress), which the implicit eddy-viscosity " *
+                            "operator cannot represent; use step! or step_rk3!"))
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
