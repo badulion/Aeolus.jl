@@ -966,6 +966,13 @@ end
 end
 
 # =========================================================================
+# Era VI — high-fidelity turbulence closure (Phases 54-60)
+
+@testset "Era VI" begin
+    include("era6_stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
+end
+
+# =========================================================================
 # The Berlin (Alexanderplatz) flagship case — examples/urban/BerlinCase.jl
 
 @testset "Berlin case" begin
