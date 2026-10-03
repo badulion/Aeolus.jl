@@ -156,6 +156,9 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+# Era VI (P55-d, #176): AMD and Vreman closures
+export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_vreman_νt!,
+       sgs_buoyancy_parameter
 # Era VI, Phase 54 (P54-c): LES analysis toolbox
 export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!

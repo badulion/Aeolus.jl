@@ -27,6 +27,9 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+# Era VI (P55-d, #176): AMD and Vreman closures (operators/sgs_amd_vreman.jl)
+export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_vreman_νt!,
+       sgs_buoyancy_parameter
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -468,6 +471,8 @@ include("operators/spectra.jl")
 # Era VI: the SGS closure contract (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/sgs_closures.jl")
+# Era VI, P55-d (#176): AMD and Vreman closures on the contract.
+include("operators/sgs_amd_vreman.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.
