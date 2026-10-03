@@ -4,7 +4,9 @@ using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: Field, mesh, interior_view
-using FFTW: rfft, irfft, fftfreq
+using ..BoundaryConditions: fill_halos!
+using FFTW: rfft, irfft, fft, ifft, fftfreq
+using Random: AbstractRNG, default_rng, randn
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
@@ -17,7 +19,8 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
        advect_weno5!,
-       box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask
+       box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
+       isotropic_energy_spectrum, isotropic_random_field!
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -408,8 +411,9 @@ function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T
     return nothing
 end
 
-# Explicit filters (Phase 54, P54-c).
+# Explicit filters, energy spectrum and isotropic initialiser (Phase 54, P54-c).
 include("operators/filters.jl")
+include("operators/spectra.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.

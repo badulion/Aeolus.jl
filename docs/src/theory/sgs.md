@@ -147,9 +147,17 @@ coefficient is too large for this filter:
 
 | field (32³, triply periodic, ``u_{rms} = 1``) | ``α = 3`` | ``α = 2`` |
 | :-- | --: | --: |
-| random phases, ``E(k) ∝ k^{-5/3}`` | 0.018 | — |
-| same field after ``t = 1`` (≈ 1 turnover) of LES | 0.129 | 0.222 |
-| after ``t = 3`` | 0.153 | 0.265 |
+| random phases, ``E(k) ∝ k^{-5/3}`` | 0.012 | — |
+| same field after ``t = 1`` (≈ 1 turnover) of LES | 0.129 | 0.220 |
+| after ``t = 3`` | 0.154 | 0.267 |
+
+The initial field is drawn by
+[`isotropic_random_field!`](@ref Aeolus.Operators.isotropic_random_field!)
+(Phase 54). Up to #168 it came from a test-local generator (continuous
+projection, amplitude ``∝ k^{-5/3}`` per mode); that field gave 0.018,
+0.129 / 0.222 and 0.153 / 0.265. The difference is the random
+realisation, not the closure: with the old field the refactored
+dynamic model reproduces the old numbers bit for bit.
 
 Lilly's inertial-range value is 0.17. The random-phase field has the
 right spectrum but no energy transfer to small scales, and the dynamic

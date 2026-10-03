@@ -234,4 +234,72 @@ end
             @test sum(abs2, interior_view(o3)) < sum(abs2, interior_view(ff))
         end
     end
+
+    @testset "energy spectrum: Parseval and a single Fourier mode" begin
+        for (sz, ext) in (((32, 32, 32), (2π, 2π, 2π)), ((24, 16, 20), (3.0, 2.0, 2.5)))
+            mesh = RegularGrid(; size = sz, extent = ext, halo = (2, 2, 2))
+            _, u, v, w = _random_fields(mesh, Xoshiro(5))
+            interior_view(u) .+= 0.3                         # a mean flow lands in shell 0
+            k, E = isotropic_energy_spectrum(u, v, w)
+            Δk = k[2] - k[1]
+            ctr(f, s) = 0.5 .* (interior_view(f) .+ circshift(interior_view(f), s))
+            KE = 0.5 * mean(ctr(u, (-1, 0, 0)) .^ 2 .+ ctr(v, (0, -1, 0)) .^ 2 .+ ctr(w, (0, 0, -1)) .^ 2)
+            @test abs(sum(E) * Δk - KE) < 1e-12 * KE
+            @test Δk ≈ 2π / maximum(ext)
+            @test E[1] * Δk ≈ 0.5 * sum(f -> mean(interior_view(f))^2, (u, v, w)) rtol = 1e-12   # shell 0 = the mean flow
+        end
+        # u = sin(k0 y): all of ½⟨u²⟩ = 1/4 in shell k0
+        mesh = RegularGrid(; size = (32, 32, 32), extent = (2π, 2π, 2π), halo = (2, 2, 2))
+        u = Field(FaceX(), mesh); v = Field(FaceY(), mesh); w = Field(FaceZ(), mesh)
+        for k0 in (1, 5, 12)
+            set!(u, (x, y, z) -> sin(k0 * y))
+            k, E = isotropic_energy_spectrum(u, v, w)
+            @test E[k0 + 1] ≈ 0.25 rtol = 1e-12
+            @test maximum(abs, E[[1:k0; k0+2:end]]) < 1e-12
+        end
+        # a w = cos(k0 x) on z-faces: the centre interpolation in z is exact
+        set!(u, 0.0); set!(w, (x, y, z) -> cos(3x))
+        k, E = isotropic_energy_spectrum(u, v, w)
+        @test E[4] ≈ 0.25 rtol = 1e-12
+    end
+
+    @testset "isotropic random field: solenoidal, spectrum as requested" begin
+        mesh = RegularGrid(; size = (32, 32, 32), extent = (2π, 2π, 2π), halo = (3, 3, 3))
+        sim = BoussinesqSimulation(mesh)
+        # von Kármán–Pao-like target with a peak at k = 3
+        Etarget(k) = k^4 / (1 + (k / 3)^2)^(17 / 6)
+        isotropic_random_field!(sim, Etarget; rng = Xoshiro(9))
+        # discretely divergence-free under the C-grid divergence of the
+        # pressure projection, relative to the velocity-gradient scale
+        gscale = maximum(abs, diff(interior_view(sim.u); dims = 1)) / mesh.dx
+        @test max_divergence(sim) < 1e-12 * gscale
+        @test max_divergence(sim) < 1e-12
+        # every shell holds exactly E(k) Δk (construction), at all k up to π/Δ
+        k, E = isotropic_energy_spectrum(sim.u, sim.v, sim.w)
+        rel = abs.(E[2:17] ./ Etarget.(k[2:17]) .- 1)
+        @info @sprintf("  random field 32³: max shell error %.1e (k = 1–16), max|∇·u|/|∂u/∂x| %.1e",
+                       maximum(rel), max_divergence(sim) / gscale)
+        @test maximum(rel[4:end]) < 0.05                    # the issue's criterion, k ≥ 4
+        @test maximum(rel) < 1e-10                          # it is exact by construction
+        @test maximum(E[18:end]) < 1e-20                    # spherical truncation at π/Δ
+        @test abs(E[1]) < 1e-25                             # no mean flow
+        # isotropy: the components share the energy (random, ~3 % at 32³)
+        ke = [mean(abs2, interior_view(f)) for f in (sim.u, sim.v, sim.w)]
+        @test maximum(ke) / minimum(ke) < 1.15
+        # halos filled; another seed gives another field with the same spectrum
+        @test sim.u.data[1:3, 4:35, 4:35] == sim.u.data[33:35, 4:35, 4:35]
+        u1 = copy(sim.u.data)
+        isotropic_random_field!(sim, Etarget; rng = Xoshiro(10))
+        @test sim.u.data != u1
+        @test isotropic_energy_spectrum(sim.u, sim.v, sim.w)[2] ≈ E rtol = 1e-10
+        # a non-cubic box: still solenoidal; a kmax below π/Δ is honoured
+        m2 = RegularGrid(; size = (32, 16, 24), extent = (2.0, 1.0, 1.5), halo = (2, 2, 2))
+        s2 = BoussinesqSimulation(m2)
+        isotropic_random_field!(s2, k -> exp(-k / 20); rng = Xoshiro(1), kmax = 30.0)
+        k2, E2 = isotropic_energy_spectrum(s2.u, s2.v, s2.w)
+        @test max_divergence(s2) < 1e-12
+        n30 = floor(Int, 30.0 / (k2[2] - k2[1]))
+        @test all(abs.(E2[2:n30+1] ./ exp.(-k2[2:n30+1] ./ 20) .- 1) .< 1e-10)
+        @test maximum(E2[n30+2:end]) < 1e-25
+    end
 end
