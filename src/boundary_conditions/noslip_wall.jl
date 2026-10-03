@@ -53,7 +53,7 @@ end
 _noslip_default() = NoSlipWall()
 _is_noslip(bc) = bc isa NoSlipWall
 
-"The tangential wall velocity a wall imposes on a field at `loc` (zero for free slip)."
+# The tangential wall velocity a wall imposes on a field at `loc` (zero for free slip).
 _wall_velocity(::ImpermeableWall, ::Location, ::Type{T}) where {T} = zero(T)
 _wall_velocity(bc::NoSlipWall, ::FaceX, ::Type{T}) where {T} = T(bc.u_wall)
 _wall_velocity(bc::NoSlipWall, ::FaceY, ::Type{T}) where {T} = T(bc.v_wall)

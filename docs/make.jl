@@ -65,6 +65,8 @@ makedocs(
             "Sub-grid surface tiles"      => "theory/surface_tiles.md",
             "Blending height"             => "theory/blending_height.md",
             "Heterogeneous-surface validation" => "theory/heterogeneous_surface.md",
+            # Era VI — high-fidelity turbulence closure
+            "Transition and wall-bounded flow" => "theory/transition.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -131,6 +133,9 @@ makedocs(
                 "OceanMixedLayer"              => "api/era5/ocean_mixed_layer.md",
                 "AirSeaFlux"                   => "api/era5/air_sea_flux.md",
                 "SurfaceTiles"                 => "api/era5/surface_tiles.md",
+            ],
+            "Era VI — turbulence closure" => [
+                "Overview"                     => "api/era6.md",
             ],
         ],
         "Examples" => [
