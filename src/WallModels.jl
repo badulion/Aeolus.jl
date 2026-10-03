@@ -89,6 +89,7 @@ using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltsla
 include("wall_models/laws.jl")
 include("wall_models/operator.jl")
 include("wall_models/matching.jl")        # P57-b (#183): matching height, input filters
+include("wall_models/tble.jl")            # P57-c (#189): non-equilibrium (TBLE) wall model, dynamic κ
 include("wall_models/channel_cases.jl")   # P54-d (#174): half channel, channel
 
 end # module
