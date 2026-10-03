@@ -18,24 +18,13 @@
 using Aeolus
 using Aeolus.Fields: interior_view
 using Printf
-include(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns_decay.jl"))
+include(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns_apriori.jl"))   # + dns_decay.jl
 
 N = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 96
 
 d = dns_decay(; N)
 @printf("DNS %d³: ν = %.4g, %d steps, %.0f s; Re_λ %.1f; k_max η ≥ %.2f (%.2f at t = %.1f); S = %.3f; max |budget err| %.1e\n",
         N, d.ν, d.nsteps, d.wall, d.Re_λ, d.kmax_eta, d.kmax_eta_end, d.t[end], d.S[end], maximum(abs, d.budget_err))
-
-function gradient_model(ub, Δ, h)
-    a = map(interior_view, ub)
-    D(f, k) = (s = ntuple(i -> i == k ? 1 : 0, 3); (circshift(f, .-s) .- circshift(f, s)) ./ (2h))
-    G = [D(a[i], k) for i in 1:3, k in 1:3]
-    τ = SymmetricTensorField{Float64}(size(a[1])...)
-    for (n, (i, j)) in enumerate(((1,1),(2,2),(3,3),(1,2),(1,3),(2,3)))
-        Aeolus.Operators.components(τ)[n] .= (Δ^2 / 12) .* sum(G[i,k] .* G[j,k] for k in 1:3)
-    end
-    return τ
-end
 
 sim = d.sim; g = sim.mesh; h = g.dx
 bcs = FieldBoundaryConditions(:periodic)
@@ -53,7 +42,7 @@ for r in (4, 8, 16)
     τb = SymmetricTensorField(g); bardina_stress!(τb, ub..., filt)
     λ1, _, _ = stress_eigvals(τe)
     minλ = minimum(λ1 ./ (τe.xx .+ τe.yy .+ τe.zz))
-    for (name, τm) in (("Smagorinsky", τs), ("Bardina", τb), ("gradient", gradient_model(ub, Δ, h)))
+    for (name, τm) in (("Smagorinsky", τs), ("Bardina", τb), ("gradient", clark_gradient_stress(ub, Δ, h)))
         m = apriori_metrics(τm, τe, S)
         push!(rows, @sprintf("| %2dh | %-11s | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.1f%% | %.3f | %.4f |",
                              r, name, m.ρ.xx, m.ρ.yy, m.ρ.zz, m.ρ.xy, m.ρ.xz, m.ρ.yz, m.ρ_Π, m.Π_ratio,
@@ -66,7 +55,7 @@ for r in (4, 8, 16)
     end
     ws = DynamicSmagorinskyWorkspace(g)
     compute_dynamic_smagorinsky_νt!(Field(CellCenter(), g), ff...; workspace = ws, filter_ratio = sqrt(1 + 8h^2 / Δ^2))
-    cs_fine = sqrt(sum(ws.LM) / sum(ws.MM)) * h / Δ
+    cs_fine = germano_lilly_cs(ws) * h / Δ
     # (b) LES grid of spacing Δ
     cs_coarse = N ÷ r >= 8 ? first(dynamic_cs_on_coarse_grid(sim, r, Δ)) : NaN
     coarse = isnan(cs_coarse) ? "— (grid < 8³)" : @sprintf("%.3f (%+.1f%%)", cs_coarse, 100(cs_coarse / cs - 1))

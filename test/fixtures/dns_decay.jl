@@ -74,16 +74,23 @@ function velocity_derivative_skewness(sim)
 end
 
 """
-    dns_decay(; N = 48, seed = 1, t_end = 2.0, cfl = 0.5) -> NamedTuple
+    dns_decay(; N = 48, seed = 1, t_end = 2.0, cfl = 0.5, ν = 0.018 (48/N)^{4/3},
+              past_peak = 0, t_max = 3t_end) -> NamedTuple
 
 Run the decaying-turbulence DNS fixture (see the file header). Returns
-the simulation `sim` at `t_end`, the history `t, K, ε, S` (one entry per
-RK3 step), `budget_err` (per step, dK/dt / (−ε̄) − 1 with ε̄ the mean of the
-start and end values), `kmax_eta` (its minimum over the run), and at
-`t_end` `Re_λ`, `u_rms`, `λ`, `η`, plus `nsteps` and `wall` (s).
+the simulation `sim` at the final time, the history `t, K, ε, S` (one
+entry per RK3 step), `budget_err` (per step, dK/dt / (−ε̄) − 1 with ε̄ the
+mean of the start and end values), `kmax_eta` (its minimum over the
+run), and at the final time `Re_λ`, `u_rms`, `λ`, `η`, plus `nsteps` and
+`wall` (s).
+
+With `past_peak > 0` the run continues beyond `t_end` until it is
+`past_peak` time units past the maximum of ε (capped at `t_max`); the
+peak moves later as Re_λ grows (file header), so a fixed `t_end` is
+before it at large N. The default (`past_peak = 0`) stops at `t_end`.
 """
 function dns_decay(; N::Integer = 48, seed::Integer = 1, t_end::Real = DNS_T_END, cfl::Real = 0.5,
-                   ν::Real = DNS_NU48 * (48 / N)^(4 / 3))
+                   ν::Real = DNS_NU48 * (48 / N)^(4 / 3), past_peak::Real = 0, t_max::Real = 3t_end)
     L = 2π
     mesh = RegularGrid(; size = (N, N, N), extent = (L, L, L), halo = (3, 3, 3))
     sim = BoussinesqSimulation(mesh; ν = ν)
@@ -98,9 +105,11 @@ function dns_decay(; N::Integer = 48, seed::Integer = 1, t_end::Real = DNS_T_END
         t = [0.0]; K = [kinetic_energy(sim) / L^3]; ε = [_dns_epsilon(sim, lap)]
         S = [velocity_derivative_skewness(sim)]
         budget_err = Float64[]
-        while sim.t < t_end - 1e-12
+        running() = sim.t < t_end - 1e-12 ||
+                    (past_peak > 0 && sim.t < min(t[argmax(ε)] + past_peak, t_max) - 1e-12)
+        while running()
             umax = maximum(f -> maximum(abs, interior_view(f)), (sim.u, sim.v, sim.w))
-            dt = min(cfl * mesh.dx / umax, t_end - sim.t)
+            dt = min(cfl * mesh.dx / umax, (sim.t < t_end - 1e-12 ? t_end : t_max) - sim.t)
             step_rk3!(sim, dt)
             push!(t, sim.t); push!(K, kinetic_energy(sim) / L^3); push!(ε, _dns_epsilon(sim, lap))
             push!(S, velocity_derivative_skewness(sim))
@@ -158,7 +167,7 @@ components filtered in place of their location), coarse-grain it by `r`
 (`coarse_grain`) and evaluate `compute_dynamic_smagorinsky_νt!` (default
 3-cell box test filter, `filter_ratio = 3`) on that grid of spacing
 ``rh``. Returns the volume-averaged Germano–Lilly coefficient
-``C_s = (⟨L_{ij}M_{ij}⟩/⟨M_{ij}M_{ij}⟩)^{1/2}`` (no clip) and the clipped
+``C_s = (⟨L_{ij}M_{ij}⟩/⟨M_{ij}M_{ij}⟩)^{1/2}`` (no clip, `germano_lilly_cs`) and the clipped
 plane-averaged ``C_s^2`` profile the routine stores.
 """
 function dynamic_cs_on_coarse_grid(sim, r::Integer, Δ_filter::Real)
@@ -175,5 +184,18 @@ function dynamic_cs_on_coarse_grid(sim, r::Integer, Δ_filter::Real)
     νt = Field(CellCenter(), cmesh)
     ws = DynamicSmagorinskyWorkspace(cmesh)
     compute_dynamic_smagorinsky_νt!(νt, cf...; workspace = ws)
-    return sqrt(sum(ws.LM) / sum(ws.MM)), ws.cs2[1, 1, :]
+    return germano_lilly_cs(ws), ws.cs2[1, 1, :]
+end
+
+"""
+    germano_lilly_cs(ws::DynamicSmagorinskyWorkspace) -> C_s
+
+``(⟨L_{ij}M_{ij}⟩/⟨M_{ij}M_{ij}⟩)^{1/2}`` from the workspace of the last
+`compute_dynamic_smagorinsky_νt!` call, volume-averaged and unclipped;
+`NaN` when the mean ``L_{ij}M_{ij}`` is negative (net backscatter between
+the two filter levels, e.g. a filter width near the box size).
+"""
+function germano_lilly_cs(ws)
+    r = sum(ws.LM) / sum(ws.MM)
+    return r >= 0 ? sqrt(r) : NaN
 end
