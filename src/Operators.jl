@@ -4,7 +4,7 @@ using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: Field, mesh, interior_view
-using ..BoundaryConditions: fill_halos!
+using ..BoundaryConditions: fill_halos!, FieldBoundaryConditions
 using FFTW: rfft, irfft, fft, ifft, fftfreq
 using Random: AbstractRNG, default_rng, randn
 
@@ -20,7 +20,10 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_surface_flux!, add_sponge!,
        advect_weno5!,
        box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
-       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!,
+       SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
+       eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
+       lumley_invariants, apriori_metrics, dissipation_matched_cs
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -414,6 +417,8 @@ end
 # Explicit filters, energy spectrum and isotropic initialiser (Phase 54, P54-c).
 include("operators/filters.jl")
 include("operators/spectra.jl")
+# A-priori SGS-stress analysis (Phase 56, P56-c).
+include("operators/apriori.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.

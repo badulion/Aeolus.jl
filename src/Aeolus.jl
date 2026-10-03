@@ -153,6 +153,10 @@ export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!
 # Era VI, Phase 54 (P54-c): LES analysis toolbox
 export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+# Era VI, Phase 56 (P56-c): a-priori SGS-stress analysis
+export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
+       eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
+       lumley_invariants, apriori_metrics, dissipation_matched_cs
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
