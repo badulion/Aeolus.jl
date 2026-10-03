@@ -30,16 +30,19 @@
 #   backscatter     22 %      22 %       (points with Π_exact < 0)
 #
 # Expectation that proved wrong: the Π-correlation band 0.4–0.85 at
-# Δ = 4h. Measured 0.867. The code is not at fault, as the checks below
-# show: at Δ = 4h ≈ 8η the filter sits in the near-dissipation range,
-# where τ is given to leading order by its Taylor expansion, the gradient
-# model τ ≈ (Δ²/12) ∂ₖūᵢ ∂ₖūⱼ (Clark et al. 1979). The test measures
-# that model's correlation with the exact τ (ρ₁₂) at 0.97 (4h; 0.92 at 8h). Π of the
-# gradient model is a cubic in the velocity gradient, as
-# (C_sΔ)²|S̄|³ is, so the two dissipations correlate more strongly than
-# at the high Re_λ of the published ranges. At 8h ≈ 16η the value
-# (0.814) is inside the band. The assertion at 4h is therefore
-# 0.4 < ρ_Π < 0.9; the 0.85 bound is kept as @test_broken.
+# Δ = 4h. Measured 0.867. The code is not at fault: the band comes from
+# high-Re data, and ρ_Π falls both with Re_λ and with Δ/η. The 96³
+# example (Re_λ = 64) gives 0.810 / 0.734 / 0.669 at 4h / 8h / 16h, where
+# this 48³ fixture (Re_λ = 32) gives 0.867 / 0.814. At Δ = 4h ≈ 8η the
+# filter sits in the near-dissipation range, where τ is given to leading
+# order by its Taylor expansion, the gradient model
+# τ ≈ (Δ²/12) ∂ₖūᵢ ∂ₖūⱼ (Clark et al. 1979). The test measures that
+# model's correlation with the exact τ (ρ₁₂) at 0.97 (4h; 0.92 at 8h).
+# Π of the gradient model is a cubic in the velocity gradient, as
+# (C_sΔ)²|S̄|³ is, and at low Re_λ the few energetic gradient structures
+# dominate both. At 8h (0.814) the value is inside the band. The
+# assertion at 4h is therefore 0.4 < ρ_Π < 0.9; the 0.85 bound is kept as
+# @test_broken.
 #
 # The dynamic C_s: `compute_dynamic_smagorinsky_νt!` is applied to the
 # Gaussian-filtered field on the DNS grid (spacing h, where the

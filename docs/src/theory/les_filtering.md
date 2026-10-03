@@ -141,6 +141,123 @@ The benchmark built on these tools — decaying grid turbulence of
 Comte-Bellot & Corrsin (1971) — is described on the
 [SGS page](sgs.md#Decaying-grid-turbulence-(Comte-Bellot-and-Corrsin)).
 
+## A-priori tests: the exact subfilter stress (Phase 56)
+
+An *a-priori* test evaluates a closure on a resolved (DNS) field, without
+running an LES with it (Clark, Ferziger & Reynolds 1979). The DNS field is
+filtered explicitly, the **exact** subfilter stress
+``τ_{ij} = \overline{u_iu_j} - \bar u_i\bar u_j`` is computed, and the
+model stress, evaluated from ``\bar u`` alone, is compared with it point
+by point. The tools live in `Aeolus.Operators` (API in
+[Operators](../api/operators.md#A-priori-SGS-stress-analysis-(Phase-56))):
+
+* [`subfilter_stress!`](@ref Aeolus.Operators.subfilter_stress!) computes
+  ``τ_{ij}`` at cell centres under any of the filters above (passed as a
+  callable). For a filter with a positive kernel, ``τ`` is a covariance
+  under the kernel weights, so it is positive semi-definite at every point
+  (Vreman, Geurts & Kuerten 1994). The sharp spectral filter has a sinc
+  kernel with negative lobes and gives no such guarantee.
+  ``τ`` is Galilean invariant for every filter that preserves constants.
+* [`sgs_dissipation`](@ref Aeolus.Operators.sgs_dissipation) gives
+  ``Π = -τ_{ij}\bar S_{ij}``, the transfer from resolved to subfilter
+  scales (positive for forward scatter).
+* Model stresses: [`smagorinsky_stress!`](@ref Aeolus.Operators.smagorinsky_stress!),
+  [`eddy_viscosity_stress!`](@ref Aeolus.Operators.eddy_viscosity_stress!)
+  for any ``ν_t``, and [`bardina_stress!`](@ref Aeolus.Operators.bardina_stress!).
+  The Bardina model (Bardina et al. 1980) is the scale-similarity model
+  ``\overline{\bar u_i\bar u_j} - \bar{\bar u}_i\bar{\bar u}_j``. It is a
+  *reference* for comparisons only and not a closure.
+* [`apriori_metrics`](@ref Aeolus.Operators.apriori_metrics) returns:
+  - the per-component correlations of the deviatoric stresses;
+  - the correlation of ``Π``;
+  - the ratio of mean ``Π``;
+  - the backscatter fraction (points with ``Π < 0``);
+  - the Lumley invariants ``II = b_{ij}b_{ji}``, ``III = b_{ij}b_{jk}b_{ki}``
+    of ``b = τ/τ_{kk} - I/3``, and the fraction of points inside the
+    Lumley triangle.
+
+  [`dissipation_matched_cs`](@ref Aeolus.Operators.dissipation_matched_cs)
+  gives the ``C_s`` whose mean dissipation is the exact one,
+  ``C_s^2 = ⟨Π⟩/(Δ^2⟨|\bar S|^3⟩)``.
+
+**The filtered-DNS fixture.** The reference field is decaying isotropic
+turbulence that Aeolus computes itself (`test/fixtures/dns_decay.jl`).
+An external database would need binary I/O and a download, so the
+fixture is generated in-package instead. Set-up:
+
+- 48³ on a 2π box;
+- ``E(k) ∝ k^4 e^{-2(k/1.5)^2}``, ``u' = 1``, fixed seed;
+- ``ν = 0.018``;
+- `step_rk3!` with the energy-conserving centred scheme, run to
+  ``t = 2``, past the dissipation peak at ``t ≈ 1.45``.
+
+It is checked as a DNS:
+
+| Check | Measured |
+| :-- | --: |
+| ``k_{max}η`` (minimum over the run) | 1.54 |
+| velocity-derivative skewness, ``t ≥ 1.5`` | −0.43 … −0.45 |
+| discrete energy budget ``\lvert \mathrm{d}K/\mathrm{d}t / (-ε) - 1 \rvert`` per step | ≤ 2.5·10⁻⁴ |
+| ``Re_λ`` at ``t = 2`` | 32 |
+| CI time (99 steps) | ≈ 5–7 s |
+
+There is no inertial range at this ``Re_λ``, which is the price of a
+fixture that runs in CI.
+
+**Measured a-priori numbers** (Gaussian filter, `test/era6_apriori_sgs.jl`):
+
+| | Δ = 4h (≈ 8η) | Δ = 8h (≈ 16η) |
+| :-- | --: | --: |
+| Smagorinsky ``ρ(τ_{12}, τ_{13}, τ_{23})`` | 0.23, 0.16, 0.18 | 0.27, 0.23, 0.20 |
+| Smagorinsky ``ρ_Π`` | 0.867 | 0.814 |
+| dissipation-matched ``C_s`` | 0.101 | 0.105 |
+| dynamic ``C_s`` (DNS grid) | 0.109 (+8.6 %) | 0.107 (+1.7 %) |
+| Bardina ``ρ`` (all components) | 0.95–0.96 | 0.86–0.93 |
+| backscatter (points with ``Π < 0``) | 22 % | 22 % |
+| min ``λ_1/τ_{kk}`` | 4.2·10⁻³ | 2.2·10⁻² |
+
+The stress correlations of the Smagorinsky model (0.16–0.27) are in the
+range of Clark et al. (1979) and Liu, Meneveau & Katz (1994). The Bardina
+model correlates much better but dissipates too little: its mean ``Π``
+ratio is 0.72 at 4h and 0.47 at 8h.
+
+Two points need care.
+
+**The ``Π`` correlation at Δ = 4h.** It is above the 0.85 that the
+high-Re literature suggests. The correlation falls both with ``Re_λ``
+and with ``Δ/η``: the 96³ example (``Re_λ = 64``) gives 0.810, 0.734 and
+0.669 at 4h, 8h and 16h. At Δ ≈ 8η the filter sits in the
+near-dissipation range. There ``τ`` is given by its Taylor expansion, the
+gradient model ``(Δ^2/12)∂_k\bar u_i∂_k\bar u_j``, which correlates
+with the exact ``τ`` at 0.97. Both its ``Π`` and the Smagorinsky
+``(C_sΔ)^2|\bar S|^3`` are cubic in the velocity gradient. The expected
+band, not the code, was wrong for ``Re_λ = 32`` at this ``Δ/η``. At 8h
+the correlation is inside the band.
+
+**The dynamic coefficient depends on the filter-width ratio.** The
+coefficient from `compute_dynamic_smagorinsky_νt!` is comparable to the
+dissipation-matched one only when the test-to-grid width ratio describes
+the filters actually applied. On the DNS grid, the 3-cell box test filter
+(second moment ``2h^2/3``) acts on top of the Gaussian (``Δ^2/12``), so
+``α = \sqrt{1 + 8h^2/Δ^2}``. The routine's default ``α = 3`` assumes the
+grid is the filter. On the coarse LES grid of spacing ``Δ`` (field
+coarse-grained by Fourier truncation) the dynamic ``C_s`` is 0.133 at 4h
+(+33 %), because the coarse second-order strain underestimates
+``|\bar S|``.
+
+**At 96³** (`examples/validation/apriori_sgs.jl`, ``ν = 7.1·10^{-3}``,
+``Re_λ = 64``, ``k_{max}η ≥ 1.61``, 227 steps, 88 s), the example writes
+the full tables for 4h, 8h and 16h. The Smagorinsky ``ρ(τ_{12})`` is
+0.20, 0.22 and 0.24. The dissipation-matched ``C_s`` is 0.094, 0.097
+and 0.111. The dynamic ``C_s`` on the DNS grid is +6 %, +3 % and −14 %
+from it, and on the LES grid +24 % and +47 % (4h, 8h).
+
+References: Clark, R. A., Ferziger, J. H. & Reynolds, W. C. (1979),
+*J. Fluid Mech.* 91, 1; Liu, S., Meneveau, C. & Katz, J. (1994), *J. Fluid
+Mech.* 275, 83; Vreman, B., Geurts, B. & Kuerten, H. (1994), *J. Fluid
+Mech.* 278, 351; Bardina, J., Ferziger, J. H. & Reynolds, W. C. (1980),
+AIAA 80-1357; Lumley, J. L. (1978), *Adv. Appl. Mech.* 18, 123.
+
 ## What LES buys us — and what it doesn't
 
 **Buys us:** the ability to run turbulence at meteorological Reynolds
