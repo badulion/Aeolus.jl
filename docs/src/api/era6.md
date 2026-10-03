@@ -12,6 +12,7 @@ tested at are in
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
+- [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182; [theory](../theory/sgs_tke.md))
 
 ## Shared contract — SGS closures (P54-a)
 

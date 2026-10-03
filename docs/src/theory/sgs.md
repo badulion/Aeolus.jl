@@ -333,6 +333,19 @@ AMD, …: one line each in the test) shows up. Starting from the random-
 phase field without the rescale cycles instead gives +21 % / −3 % at
 32³ (no transfer during the first turnover).
 
+## Prognostic TKE closure (P56-b)
+
+`PrognosticSGS.TKEClosure` (#182) is the first stateful closure of the
+contract: the Deardorff (1980) / Moeng (1984) 1.5-order model with the SGS
+TKE ``e`` as its memory, ``ν_t = c_k l\sqrt e`` and ``κ_t = (1 + 2l/Δ)ν_t``.
+Its shear production is the exact discrete dual of the momentum operator
+above, so the resolved kinetic energy the closure removes is the energy
+``e`` gains; its neutral equilibrium is this page's model with
+``C_s = 0.194``; its stability length ``0.76\sqrt e/N`` gives a critical
+Richardson number of 0.233, so no stability function is applied to it.
+In the CBC benchmark above it decays too fast (−18.5 % / −34.4 % at 32³).
+Everything else is on [Prognostic SGS TKE](sgs_tke.md).
+
 ## Limitations and planned upgrades
 
 The current implementation is deliberately the *simplest* working
@@ -344,8 +357,8 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
     stratified regimes. The dynamic coefficient below is the alternative.
   * The **stability correction** for stably stratified flow
     (Deardorff / Lilly closure with a Richardson-number reduction) is
-    not applied — it will matter when we do stably stratified boundary
-    layers.
+    not applied to the Smagorinsky closures; the prognostic TKE closure
+    (P56-b, above) has its own stability length.
   * No **near-surface roughness** treatment (MOST) — Phase 1b.
 
 ## References

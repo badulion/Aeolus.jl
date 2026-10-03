@@ -66,6 +66,7 @@ makedocs(
             "Blending height"             => "theory/blending_height.md",
             "Heterogeneous-surface validation" => "theory/heterogeneous_surface.md",
             "Stability functions and Ri_g" => "theory/turbulence_stability.md",
+            "Prognostic SGS TKE (Deardorff–Moeng)" => "theory/sgs_tke.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -136,6 +137,7 @@ makedocs(
             "Era VI — turbulence closure" => [
                 "Overview"                     => "api/era6.md",
                 "TurbulenceStability"          => "api/era6/turbulence_stability.md",
+                "PrognosticSGS"                => "api/era6/prognostic_sgs.md",
             ],
         ],
         "Examples" => [

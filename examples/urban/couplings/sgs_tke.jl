@@ -86,19 +86,20 @@ budget!(c::SGSTKE, case, l) = nothing
 """
     tke_profile(c::SGSTKE, case) -> (canopy, free, νt_canopy)
 
-Mean SGS TKE (m² s⁻²) over the fluid cells of the levels with buildings and
-of the free stream (above the highest roof + 1, below the sponge), and the
-mean ``ν_t`` of the canopy levels.
+Mean SGS TKE (m² s⁻²) over the fluid cells of the canopy levels (more than
+5 % of the level solid) and of the levels above them up to the sponge, and
+the mean ``ν_t`` of the canopy levels. (A few towers of the flagship reach
+the lid, so "below the highest roof" would be the whole domain.)
 """
 function tke_profile(c::SGSTKE, case)
     m = case.mesh
-    kr = highest_solid_level(case)
     ksp = floor(Int, case.cfg.sponge_frac * m.Nz)
     solid = view(case.geom.sm.mask, m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz)
+    kr = something(findlast(k -> count(view(solid, :, :, k)) > 0.05 * m.Nx * m.Ny, 1:m.Nz), 0)
     e = interior_view(c.closure.e); ν = interior_view(case.sim.νt)
     lvl(a, ks) = (sel = [(i, j, k) for k in ks for j in 1:m.Ny for i in 1:m.Nx if !solid[i, j, k]];
                   isempty(sel) ? NaN : mean(a[i, j, k] for (i, j, k) in sel))
-    return (canopy = lvl(e, 1:kr), free = lvl(e, kr+2:ksp), νt_canopy = lvl(ν, 1:kr))
+    return (canopy = lvl(e, 1:kr), free = lvl(e, kr+1:ksp), νt_canopy = lvl(ν, 1:kr))
 end
 
 function report(c::SGSTKE, case)
