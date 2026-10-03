@@ -185,54 +185,76 @@ turbulence that Aeolus computes itself (`test/fixtures/dns_decay.jl`).
 An external database would need binary I/O and a download, so the
 fixture is generated in-package instead. Set-up:
 
-- 48³ on a 2π box;
+- 96³ on a 2π box (48³ before the review of #208, see below);
 - ``E(k) ∝ k^4 e^{-2(k/1.5)^2}``, ``u' = 1``, fixed seed;
-- ``ν = 0.018``;
+- ``ν = 7.14·10^{-3}`` (``0.018·(48/N)^{4/3}``, which holds ``k_{max}η``
+  fixed across ``N``);
 - `step_rk3!` with the energy-conserving centred scheme, run to
-  ``t = 2``, past the dissipation peak at ``t ≈ 1.45``.
+  ``t = 2``.
 
 It is checked as a DNS:
 
 | Check | Measured |
 | :-- | --: |
-| ``k_{max}η`` (minimum over the run) | 1.54 |
-| velocity-derivative skewness, ``t ≥ 1.5`` | −0.43 … −0.45 |
-| discrete energy budget ``\lvert \mathrm{d}K/\mathrm{d}t / (-ε) - 1 \rvert`` per step | ≤ 2.5·10⁻⁴ |
-| ``Re_λ`` at ``t = 2`` | 32 |
-| CI time (99 steps) | ≈ 5–7 s |
+| ``k_{max}η`` (minimum over the run) | 1.61 (1.598 at the ε peak, ``t = 2.41``, run continued to ``t = 3``) |
+| velocity-derivative skewness at ``t = 2`` | −0.483 |
+| discrete energy budget ``\lvert \mathrm{d}K/\mathrm{d}t / (-ε) - 1 \rvert`` per step | ≤ 1.7·10⁻⁴ |
+| ``Re_λ`` at ``t = 2`` | 63.6 |
+| ``\mathrm{d}\ln ε/\mathrm{d}t`` over ``t = 1.75``–2 (0.70 at ``t = 1``–1.25) | 0.16 |
+| CI time (227 steps, 3 threads, shared machine) | 88–138 s |
+
+The dissipation peak moves later as ``Re_λ`` grows: at
+``ν ∝ N^{-4/3}`` it is at ``t ≈ 0.99, 1.45, 1.85, 2.41`` at 32³, 48³,
+64³ and 96³, because the cascade needs longer to fill a wider range of
+scales. At 96³, ``t = 2`` is on the plateau, 1.8 % below the peak, and the
+fixture is kept there so that ``Re_λ ≈ 64``. The test checks the plateau
+rather than "past the peak", the 48³ criterion.
 
 There is no inertial range at this ``Re_λ``, which is the price of a
 fixture that runs in CI.
 
 **Measured a-priori numbers** (Gaussian filter, `test/era6_apriori_sgs.jl`):
 
-| | Δ = 4h (≈ 8η) | Δ = 8h (≈ 16η) |
+| | Δ = 4h (7.8η) | Δ = 8h (15.7η) |
 | :-- | --: | --: |
-| Smagorinsky ``ρ(τ_{12}, τ_{13}, τ_{23})`` | 0.23, 0.16, 0.18 | 0.27, 0.23, 0.20 |
-| Smagorinsky ``ρ_Π`` | 0.867 | 0.814 |
-| dissipation-matched ``C_s`` | 0.101 | 0.105 |
-| dynamic ``C_s`` (DNS grid) | 0.109 (+8.6 %) | 0.107 (+1.7 %) |
-| Bardina ``ρ`` (all components) | 0.95–0.96 | 0.86–0.93 |
-| backscatter (points with ``Π < 0``) | 22 % | 22 % |
-| min ``λ_1/τ_{kk}`` | 4.2·10⁻³ | 2.2·10⁻² |
+| Smagorinsky ``ρ(τ_{12}, τ_{13}, τ_{23})`` | 0.20, 0.15, 0.14 | 0.22, 0.13, 0.12 |
+| Smagorinsky ``ρ_Π`` | 0.810 | 0.734 |
+| dissipation-matched ``C_s`` | 0.094 | 0.097 |
+| dynamic ``C_s`` (DNS grid) | 0.100 (+6.3 %) | 0.099 (+2.8 %) |
+| Bardina ``ρ`` (all components) | 0.96–0.97 | 0.91–0.93 |
+| gradient model ``ρ(τ_{12})`` | 0.980 | 0.949 |
+| backscatter (points with ``Π < 0``) | 21 % | 20 % |
+| min ``λ_1/τ_{kk}`` | 5.2·10⁻⁴ | 4.0·10⁻³ |
 
-The stress correlations of the Smagorinsky model (0.16–0.27) are in the
-range of Clark et al. (1979) and Liu, Meneveau & Katz (1994). The Bardina
-model correlates much better but dissipates too little: its mean ``Π``
-ratio is 0.72 at 4h and 0.47 at 8h.
+The stress correlations of the Smagorinsky model (0.12–0.22) are in the
+range of Clark et al. (1979) and Liu, Meneveau & Katz (1994), and
+``ρ_Π`` at 4h is inside the 0.4–0.85 band of the high-Re literature. The
+Bardina model correlates much better but dissipates too little: its mean
+``Π`` ratio is 0.79 at 4h and 0.60 at 8h.
 
 Two points need care.
 
-**The ``Π`` correlation at Δ = 4h.** It is above the 0.85 that the
-high-Re literature suggests. The correlation falls both with ``Re_λ``
-and with ``Δ/η``: the 96³ example (``Re_λ = 64``) gives 0.810, 0.734 and
-0.669 at 4h, 8h and 16h. At Δ ≈ 8η the filter sits in the
-near-dissipation range. There ``τ`` is given by its Taylor expansion, the
-gradient model ``(Δ^2/12)∂_k\bar u_i∂_k\bar u_j``, which correlates
-with the exact ``τ`` at 0.97. Both its ``Π`` and the Smagorinsky
-``(C_sΔ)^2|\bar S|^3`` are cubic in the velocity gradient. The expected
-band, not the code, was wrong for ``Re_λ = 32`` at this ``Δ/η``. At 8h
-the correlation is inside the band.
+**The ``Π`` correlation falls with ``Re_λ`` and ``Δ/η``.** The fixture
+was 48³ (``Re_λ = 32``) until the review of #208. There ``ρ_Π`` at 4h
+was 0.867, above the 0.85 of the literature band, and the test carried a
+widened bound. The expected band was not wrong in general, and neither
+was the code: the band holds at higher ``Re_λ``. At fixed ``Δ/η``
+(``k_{max}η`` is held fixed by the choice of ``ν``):
+
+| Δ | 48³, ``Re_λ = 32`` | 96³, ``Re_λ = 64`` |
+| :-- | --: | --: |
+| 4h | 0.867 (8.0η) | 0.810 (7.8η) |
+| 8h | 0.814 (15.9η) | 0.734 (15.7η) |
+| 16h | 0.669 (31.9η) | 0.669 (31.3η) |
+
+At 16h the filter is a third of the 48³ box, and the two agree. At
+Δ ≈ 8η the filter sits in the near-dissipation range. There ``τ`` is
+given by its Taylor expansion, the gradient model
+``(Δ^2/12)∂_k\bar u_i∂_k\bar u_j``, which correlates with the exact
+``τ`` at 0.97 (48³) and 0.98 (96³). Both its ``Π`` and the Smagorinsky
+``(C_sΔ)^2|\bar S|^3`` are cubic in the velocity gradient, and at low
+``Re_λ`` the few energetic gradient structures dominate both. The test
+asserts the band at 96³ and the fall from 48³ at 4h and 8h.
 
 **The dynamic coefficient depends on the filter-width ratio.** The
 coefficient from `compute_dynamic_smagorinsky_νt!` is comparable to the
@@ -241,13 +263,12 @@ the filters actually applied. On the DNS grid, the 3-cell box test filter
 (second moment ``2h^2/3``) acts on top of the Gaussian (``Δ^2/12``), so
 ``α = \sqrt{1 + 8h^2/Δ^2}``. The routine's default ``α = 3`` assumes the
 grid is the filter. On the coarse LES grid of spacing ``Δ`` (field
-coarse-grained by Fourier truncation) the dynamic ``C_s`` is 0.133 at 4h
-(+33 %), because the coarse second-order strain underestimates
-``|\bar S|``.
+coarse-grained by Fourier truncation) the dynamic ``C_s`` is 0.116 at 4h
+(+24 %; 0.133, +33 %, at 48³), because the coarse second-order strain
+underestimates ``|\bar S|``.
 
-**At 96³** (`examples/validation/apriori_sgs.jl`, ``ν = 7.1·10^{-3}``,
-``Re_λ = 64``, ``k_{max}η ≥ 1.61``, 227 steps, 88 s), the example writes
-the full tables for 4h, 8h and 16h. The Smagorinsky ``ρ(τ_{12})`` is
+**The example** (`examples/validation/apriori_sgs.jl`, the same 96³
+fixture) writes the full tables for 4h, 8h and 16h. The Smagorinsky ``ρ(τ_{12})`` is
 0.20, 0.22 and 0.24. The dissipation-matched ``C_s`` is 0.094, 0.097
 and 0.111. The dynamic ``C_s`` on the DNS grid is +6 %, +3 % and −14 %
 from it, and on the LES grid +24 % and +47 % (4h, 8h).
