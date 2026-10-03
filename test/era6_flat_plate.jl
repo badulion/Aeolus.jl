@@ -122,3 +122,42 @@ end
     @printf("    Blasius: f″(0) = %.10f, δ*_c = %.10f, θ_c = %.10f, η99 = %.5f, H = %.5f (%d secant its)\n",
             s.fpp0, s.delta_star, s.theta, s.eta99, s.H, s.iterations)
 end
+
+# ---------------------------------------------------------------------------
+# 2. The free-stream (transpiration) top boundary
+# ---------------------------------------------------------------------------
+
+@testset "P59-d FreeStreamBoundary" begin
+    g = RegularGrid(size = (32, 4, 16), extent = (8.0, 1.0, 2.0))
+    xs = [g.x0 + (i - g.Hx - 0.5) * g.dx for i in 1:(g.Nx + 2g.Hx)]
+    wb = 0.01 .* sin.(2π .* xs ./ g.Lx)                     # zero net transpiration
+    top = FreeStreamBoundary(wb)
+    bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = top)
+    @test bcs.top === top
+    @test FieldBoundaryConditions(:periodic, :periodic; bottom = :wall, top = top).top === top
+    @test_throws ArgumentError FieldBoundaryConditions(:periodic, :periodic; bottom = top, top = :noslip)
+    @test_throws ArgumentError FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = top)
+    @test_throws ArgumentError FieldBoundaryConditions(:periodic, :periodic; bottom = top, top = top)
+
+    # Halo fill: the prescribed w on the top face, zero shear (mirror) for u.
+    w = Field(FaceZ(), g); u = Field(FaceX(), g)
+    rng = MersenneTwister(3)
+    w.data .= randn(rng, size(w.data)); u.data .= randn(rng, size(u.data))
+    fill_halos!(w, bcs); fill_halos!(u, bcs)
+    kw = g.Hz + g.Nz + 1
+    @test all(w.data[i, j, kw] == wb[i] for i in axes(w.data, 1), j in axes(w.data, 2))
+    @test all(w.data[:, :, kw+1] .≈ 2 .* wb .- w.data[:, :, kw-1])
+    @test u.data[:, :, g.Hz+g.Nz+1] == u.data[:, :, g.Hz+g.Nz]
+    @test all(w.data[:, :, g.Hz+1] .== 0)                     # the no-slip bottom
+    @test_throws DimensionMismatch fill_halos!(w, FieldBoundaryConditions(:periodic, :periodic;
+                                       bottom = :noslip, top = FreeStreamBoundary(wb[1:end-1])))
+
+    # The projection makes the field divergence-free *with* the transpiration
+    # and leaves the prescribed face velocity untouched.
+    sim = BoussinesqSimulation(g; ν = 1e-3, bcs = bcs)
+    sim.u.data .= 1 .+ 0.1 .* randn(rng, size(sim.u.data))
+    step!(sim, 1e-3)
+    @test max_divergence(sim) < 1e-12
+    fill_halos!(sim.w, sim.bcs)
+    @test sim.w.data[:, 1, kw] == wb
+end

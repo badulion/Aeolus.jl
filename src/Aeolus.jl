@@ -927,5 +927,7 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
 # method of the CutCell generic (no new name).
 export NoSlipWall
 include("wall_shear_stress.jl")
+# P59-d (#185) — free-stream (transpiration) top of a spatial boundary layer.
+export FreeStreamBoundary
 
 end # module
