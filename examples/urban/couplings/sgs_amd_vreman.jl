@@ -97,21 +97,48 @@ end
 """
     SolidMaskedSGS(closure, solid)
 
-`closure` with `ν_t = κ_t = 0` in the solid cells `solid` (the IBM mask,
-halo-padded). For AMD: inside buildings the resolved velocity is ≈ 0, so
-the denominator `∂_l u_m ∂_l u_m` → 0 while θ still varies, and the
-buoyancy term gives ν_t up to 19 m²/s there (`:smoke`, after 24 s; 1.7 m²/s
-is the fluid maximum), which only shortens the diffusive time step.
+`closure` with every eddy coefficient zero in the solid cells `solid` (the
+IBM mask, halo-padded): `νh, νv, κh, κv` and the diffusivity of any other
+scalar. Every other generic of the closure contract is forwarded to
+`closure` unchanged (storage, memory commit and rollback, the momentum and
+scalar tendencies), so a stateful or anisotropic closure can be wrapped
+too; only the coefficients in solid cells change, the fluid cells are bit
+for bit those of `closure` (`smoke_check` of [`SGSAMD`](@ref)).
+
+Why AMD needs it: its buoyancy term `(g/θ₀)(δ_k∂_k w)(δ_k∂_k θ)` is divided
+by `∂_l u_m ∂_l u_m`, so `ν_t` grows like `1/|∇u|` where the velocity
+gradient vanishes while θ still varies, which is the state inside a
+building (IBM forces u ≈ 0, θ keeps diffusing). On `:smoke` after 24 s
+that gave `ν_t` up to 19 m²/s in solid cells against a fluid maximum of
+1.7 m²/s, which only shortened the adaptive step (24 s in 20 steps
+instead of 12). This is a property of the published model (Abkar & Moin
+2017), not of a cell being solid: a quiescent, unstably stratified fluid
+region gets the same large `ν_t`, and the mask does not touch fluid cells.
 """
 struct SolidMaskedSGS{C<:AbstractSGSClosure, M} <: AbstractSGSClosure
     closure::C
     solid::M
 end
-function Aeolus.Operators.sgs_coefficients!(f::SGSFields, c::SolidMaskedSGS, sim)
-    sgs_coefficients!(f, c.closure, sim)
-    f.νh.data[c.solid] .= 0
-    f.κh.data[c.solid] .= 0
+const _OPS = Aeolus.Operators
+_OPS.sgs_fields(c::SolidMaskedSGS, sim) = _OPS.sgs_fields(c.closure, sim)
+function _OPS.sgs_coefficients!(f::SGSFields, c::SolidMaskedSGS, sim)
+    _OPS.sgs_coefficients!(f, c.closure, sim)
+    for x in unique!(Any[f.νh, f.νv, f.κh, f.κv])     # aliased fields once
+        x.data[c.solid] .= 0
+    end
     return f
+end
+_OPS.advance_sgs!(c::SolidMaskedSGS, sim, dt) = (_OPS.advance_sgs!(c.closure, sim, dt); c)
+_OPS.sgs_state(c::SolidMaskedSGS) = _OPS.sgs_state(c.closure)
+_OPS.restore_sgs_state!(c::SolidMaskedSGS, s) = (_OPS.restore_sgs_state!(c.closure, s); c)
+_OPS.add_sgs_momentum!(tu, tv, tw, c::SolidMaskedSGS, f::SGSFields, sim) =
+    _OPS.add_sgs_momentum!(tu, tv, tw, c.closure, f, sim)
+_OPS.add_sgs_scalar!(tϕ, ϕ, c::SolidMaskedSGS, f::SGSFields, sim) =
+    _OPS.add_sgs_scalar!(tϕ, ϕ, c.closure, f, sim)
+function _OPS.sgs_tracer_diffusivity!(κ, c::SolidMaskedSGS, f::SGSFields, sim, ϕ)
+    k = _OPS.sgs_tracer_diffusivity!(κ, c.closure, f, sim, ϕ)
+    k === f.κh || (k.data[c.solid] .= 0)              # f.κh is masked already
+    return k
 end
 
 function sgs_compare_report(name, case)
@@ -147,10 +174,25 @@ function build(::Type{<:SGSAMD}, case, o)
 end
 step_options(c::SGSAMD, case) = (sgs = c.sgs,)
 report(c::SGSAMD, case) = sgs_compare_report("AMD", case)
-smoke_check(c::SGSAMD, case) =
-    [sgs_switchoff_checks(case, c.closure);
-     "ν_t = κ_t = 0 in the solid cells" =>
-         all(==(0), case.sim.νt.data[c.sgs.solid]) && all(==(0), case.sim.κt.data[c.sgs.solid])]
+function smoke_check(c::SGSAMD, case)
+    sim = case.sim
+    foreach(f -> fill_halos!(f, sim.bcs), (sim.u, sim.v, sim.w))
+    fill_halos!(sim.θ, sim.θ_bcs)
+    # the wrapper against the bare closure on the current state, into
+    # scratch fields (sim.νt / sim.κt are left as the last step wrote them)
+    fm = SGSFields(Field(CellCenter(), case.mesh), Field(CellCenter(), case.mesh))
+    fb = SGSFields(Field(CellCenter(), case.mesh), Field(CellCenter(), case.mesh))
+    sgs_coefficients!(fm, c.sgs, sim); sgs_coefficients!(fb, c.closure, sim)
+    fluid = .!c.sgs.solid
+    in_interior = falses(size(fluid)); m = case.mesh
+    in_interior[m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz] .= true
+    fl = fluid .& in_interior; so = c.sgs.solid .& in_interior
+    return [sgs_switchoff_checks(case, c.closure);
+            "ν_t = κ_t = 0 in the solid cells" =>
+                all(==(0), sim.νt.data[c.sgs.solid]) && all(==(0), sim.κt.data[c.sgs.solid]);
+            "fluid cells unchanged by the solid mask (bare AMD in solids: max ν_t $(round(maximum(fb.νh.data[so]; init = 0.0), sigdigits = 3)) m²/s, fluid max $(round(maximum(fb.νh.data[fl]), sigdigits = 3)))" =>
+                fm.νh.data[fl] == fb.νh.data[fl] && fm.κh.data[fl] == fb.κh.data[fl]]
+end
 
 """
     SGSVreman
