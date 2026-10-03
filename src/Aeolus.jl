@@ -215,7 +215,7 @@ export StretchedGrid, TerrainFollowingGrid, terrain_following_grid,
        set_physical!, hydrostatic_balance_error
 
 # Phases 23, 25 — adaptive time stepping + IMEX integration
-export CFLConstraints, cfl_diagnostics, adaptive_dt,
+export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
        SubsteppingSchedule, substeps_for,
        StateSnapshot, state_snapshot, save_state!, restore_state!,
        step_adaptive!,

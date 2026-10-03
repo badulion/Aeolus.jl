@@ -48,7 +48,7 @@ using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence
 using ..TimeSteppers: step!
 
-export CFLConstraints, cfl_diagnostics, adaptive_dt,
+export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
        SubsteppingSchedule, substeps_for,
        StateSnapshot, state_snapshot, save_state!, restore_state!,
        step_adaptive!,
@@ -93,7 +93,7 @@ allowed to use:
 | Field         | Limit enforced                                                |
 | :------------ | :------------------------------------------------------------ |
 | `C_advective` | `dt (|u|/Δx + |v|/Δy + |w|/Δz) ≤ C_advective` (per cell)      |
-| `C_diffusive` | `dt (ν+νₜ) (Δx⁻²+Δy⁻²+Δz⁻²) ≤ C_diffusive`                    |
+| `C_diffusive` | `dt (ν+νₜ) (Δx⁻²+Δy⁻²+Δz⁻²) ≤ C_diffusive` (2νₜ, stress form) |
 | `C_buoyancy`  | `N dt ≤ C_buoyancy` (Brunt–Väisälä / gravity-wave limit)      |
 | `C_coriolis`  | `|f| dt ≤ C_coriolis`                                         |
 
@@ -185,7 +185,8 @@ end
 
 """
     cfl_diagnostics(sim, constraints = CFLConstraints(); sgs = nothing,
-                    update_νt = true, sgs_active = <closure present>)
+                    update_νt = true, sgs_active = <closure present>,
+                    sgs_stress = :laplacian)
 
 Report the time-step limit imposed by *each* process separately. Returns a
 `NamedTuple`:
@@ -196,14 +197,15 @@ Report the time-step limit imposed by *each* process separately. Returns a
 | `dt_diff`           | total (molecular + SGS) momentum-diffusion limit               |
 | `dt_buoy`           | `C_buoyancy / N` from the resolved mean θ profile               |
 | `dt_cor`            | `C_coriolis / |f|`                                             |
-| `dt_sgs`            | SGS-only limit `C_diffusive Δ²_harm / max(νt_max, κt_max)`      |
+| `dt_sgs`            | SGS-only limit `C_diffusive Δ²_harm / max(νt_cfl, κt_max)`      |
 | `dt_limiting`       | `min` of the five                                              |
 | `limiter`           | `:advective`, `:diffusive`, `:buoyancy`, `:coriolis` or `:sgs`  |
 | `advective_rate`    | `max_cell Σ|uᵢ|/Δxᵢ` (so the CFL number is `dt · rate`)         |
 | `N`                 | Brunt–Väisälä frequency (0 when buoyancy is off)                |
 | `νt_max`            | maximum SGS eddy viscosity                                     |
 | `κt_max`            | maximum SGS eddy diffusivity (θ)                               |
-| `ν_total`           | `ν + νt_max`                                                   |
+| `νt_cfl`            | SGS viscosity of the momentum limits (see `sgs_stress`)        |
+| `ν_total`           | `ν + νt_cfl`                                                   |
 
 The SGS closure is the one the next step will run: the `sgs` keyword (an
 [`AbstractSGSClosure`](@ref Aeolus.Operators.AbstractSGSClosure) or a
@@ -215,7 +217,14 @@ advances, so the estimate can be made any number of times per step; pass
 `false` to reuse what is in `sim.νt` / `sim.κt`. `sgs_active` (default:
 a closure is present) says whether an eddy viscosity acts on the step at all.
 
-The SGS limit uses the larger of the eddy viscosity and the eddy
+`sgs_stress` is the form of the SGS momentum divergence the step runs
+(the cores' keyword). For `:laplacian` (the default), `νt_cfl = νt_max`.
+For `:symmetric`, the stress form's factor 2 on the normal stresses can
+double the operator's spectral radius, so `νt_cfl =`
+[`stress_form_cfl_viscosity`](@ref)`(νh_max, νv_max, mesh)`, which equals
+`2 νt_max` when `νh = νv`.
+
+The SGS limit uses the larger of the momentum viscosity `νt_cfl` and the eddy
 diffusivity, each as stored: for a Prandtl-number closure `κt = νt/Prₜ`,
 for a closure with its own κ (Era VI) whatever it computed.
 
@@ -226,7 +235,8 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
                          c::CFLConstraints = CFLConstraints(T);
                          sgs = nothing,
                          update_νt::Bool = true,
-                         sgs_active::Union{Nothing,Bool} = nothing) where {T}
+                         sgs_active::Union{Nothing,Bool} = nothing,
+                         sgs_stress::Symbol = :laplacian) where {T}
     m = sim.mesh
     INF = T(Inf)
 
@@ -249,15 +259,21 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
         compute_sgs!(closure, sim)
     end
     f = closure === nothing ? SGSFields(sim.νt, sim.κt) : sgs_fields(closure, sim)
-    νt_max  = active ? max(_max_interior(f.νh), _max_interior(f.νv)) : zero(T)
+    νh_max  = active ? _max_interior(f.νh) : zero(T)
+    νv_max  = active ? _max_interior(f.νv) : zero(T)
+    νt_max  = max(νh_max, νv_max)
     κt_max  = active ? max(_max_interior(f.κh), _max_interior(f.κv)) : zero(T)
     Δ²harm  = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
-    ν_total = sim.ν + νt_max
+    # the SGS viscosity of the momentum limit: νt_max for the Laplacian form,
+    # the stress form's own spectral bound (≤ 2 νt_max) for `:symmetric`
+    νt_cfl  = _check_sgs_stress(sgs_stress) === :symmetric ?
+              stress_form_cfl_viscosity(νh_max, νv_max, m) : νt_max
+    ν_total = sim.ν + νt_cfl
     dt_diff = ν_total > 0 ? c.C_diffusive * Δ²harm / ν_total : INF
 
     # SGS on its own: the larger of the eddy viscosity and the scalar eddy
     # diffusivity (κt = νt/Prₜ exceeds νt for Prₜ < 1).
-    κ_sgs  = max(νt_max, κt_max)
+    κ_sgs  = max(νt_cfl, κt_max)
     dt_sgs = κ_sgs > 0 ? c.C_diffusive * Δ²harm / κ_sgs : INF
 
     # --- buoyancy (gravity-wave / Brunt-Väisälä) --------------------------
@@ -280,14 +296,52 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
             dt_cor = dt_cor, dt_sgs = dt_sgs,
             dt_limiting = dt_limiting, limiter = limiter,
             advective_rate = rate, N = N, νt_max = νt_max, κt_max = κt_max,
-            ν_total = ν_total)
+            νt_cfl = νt_cfl, ν_total = ν_total)
+end
+
+"""
+    stress_form_cfl_viscosity(νh_max, νv_max, mesh) -> ν_cfl
+
+The eddy viscosity that, put into the Laplacian diffusive limit
+`dt ν (Δx⁻²+Δy⁻²+Δz⁻²) ≤ 2` of forward Euler, bounds the explicit stress-form
+SGS momentum operator `−∂ⱼτᵢⱼ`, `τᵢⱼ = −2νᵢⱼSᵢⱼ`
+([`add_sgs_stress_divergence!`](@ref Aeolus.Operators.add_sgs_stress_divergence!)),
+for *any* velocity field and any `0 ≤ νh ≤ νh_max`, `0 ≤ νv ≤ νv_max`:
+
+    ν_cfl = 2 max(νh_max (Δx⁻²+Δy⁻²) + νv_max Δz⁻²,  νv_max (Δx⁻²+Δy⁻²+Δz⁻²))
+              / (Δx⁻²+Δy⁻²+Δz⁻²)
+
+so `ν_cfl = 2 νt` when `νh = νv`. Derivation: the operator is symmetric
+negative semi-definite, `−⟨u, L u⟩ = Σ 2νᵢⱼSᵢⱼSᵢⱼ ΔV`, so its spectral radius
+is the largest Rayleigh quotient. Each diagonal strain is one difference,
+`(u_{i+1}−u_i)²/Δx² ≤ 2(u_{i+1}²+u_i²)/Δx²`, and each off-diagonal pair is
+bounded by `(a+b)² ≤ 2a²+2b²`; every face value enters two differences per
+direction, so the `u` and `v` rows contribute at most
+`8(νh_max Δx⁻² + νh_max Δy⁻² + νv_max Δz⁻²)` and the `w` row (which sees
+only `νv`) `8 νv_max (Δx⁻²+Δy⁻²+Δz⁻²)`. That is twice the 7-point-Laplacian
+radius `4ν(Δx⁻²+Δy⁻²+Δz⁻²)`. The factor 2 comes from the normal stresses
+`τᵢᵢ = −2ν∂uᵢ/∂xᵢ`. The bound is sharp: with constant ν it is reached by the
+irrotational grid-scale mode `u = ∇φ`, φ a 3-D checkerboard, where the
+operator is `ν(∇² + ∇∇·)` and both terms give `−4ν(Δx⁻²+Δy⁻²+Δz⁻²)`.
+
+On *projected* fields the radius of the projected operator `P L P` is no
+larger than the Laplacian bound, because `Σ 2S:S = Σ|∇u|²` for solenoidal
+periodic `u`. [`cfl_diagnostics`](@ref) still uses this unprojected bound
+for `sgs_stress = :symmetric`: it holds for every velocity field, not just
+for one an exact orthogonal projection has made divergence-free (see the
+theory page, "Explicit stability of the stress form").
+"""
+function stress_form_cfl_viscosity(νh_max::Real, νv_max::Real, m)
+    ix2, iy2, iz2 = 1 / m.dx^2, 1 / m.dy^2, 1 / m.dz^2
+    s = ix2 + iy2 + iz2
+    return 2 * max(νh_max * (ix2 + iy2) + νv_max * iz2, νv_max * s) / s
 end
 
 _max_interior(f::Field) = maximum(interior_view(f))
 
 """
     adaptive_dt(sim, constraints; dt_prev = nothing, diagnostics = nothing,
-                scheme = nothing)
+                scheme = nothing, sgs = nothing, sgs_stress = :laplacian)
 
 The time step to take next: the smallest per-process limit from
 [`cfl_diagnostics`](@ref) — or, when `scheme` is an [`IMEXScheme`](@ref),
@@ -303,12 +357,15 @@ A non-finite limit (which only happens if the state already contains
 `NaN`/`Inf`) collapses to `dt_min`, so `step_adaptive!`'s retry logic sees
 a usable number rather than propagating the `NaN`. Pass `diagnostics` to
 reuse a `cfl_diagnostics` result instead of recomputing it; `sgs` is the
-closure the step will run (see [`cfl_diagnostics`](@ref)).
+closure the step will run and `sgs_stress` the form of its momentum
+divergence (see [`cfl_diagnostics`](@ref)).
 """
 function adaptive_dt(sim::BoussinesqSimulation{T}, c::CFLConstraints;
                      dt_prev = nothing, diagnostics = nothing,
-                     scheme = nothing, sgs = nothing) where {T}
-    d  = diagnostics === nothing ? cfl_diagnostics(sim, c; sgs = sgs) : diagnostics
+                     scheme = nothing, sgs = nothing,
+                     sgs_stress::Symbol = :laplacian) where {T}
+    d  = diagnostics === nothing ? cfl_diagnostics(sim, c; sgs = sgs, sgs_stress = sgs_stress) :
+                                   diagnostics
     dt = scheme isa IMEXScheme ? first(_explicit_limit(d, scheme)) : d.dt_limiting
     isnan(dt) && return c.dt_min
     if dt_prev !== nothing
@@ -509,7 +566,8 @@ Aeolus.Operators.advance_sgs!)) a rejected step made is undone, so after a
 retry the closure's memory is that of a run that took the short step
 directly. A custom `stepper` is called without `sgs` and must pass the same
 closure to the step it takes itself. `sgs_stress` (`:laplacian` |
-`:symmetric`) is passed to the default stepper with the closure.
+`:symmetric`) is passed to the default stepper with the closure, and to
+[`adaptive_dt`](@ref) for the stress form's diffusive limit.
 
 `fast_processes` accepts a `NamedTuple`, `Dict`, vector/tuple of
 `:name => callback` pairs, or a bare callback (registered as
@@ -544,7 +602,7 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
 
     closure = sgs_closure(sgs)
     Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev, scheme = scheme,
-                                      sgs = closure) : T(dt)
+                                      sgs = closure, sgs_stress = sgs_stress) : T(dt)
     take_step! = if stepper !== nothing
         stepper
     elseif scheme isa IMEXScheme
@@ -1625,7 +1683,8 @@ function _explicit_limit(d, scheme::IMEXScheme)
 end
 
 """
-    imex_stability_limit(sim, scheme; constraints = CFLConstraints(), sgs = nothing)
+    imex_stability_limit(sim, scheme; constraints = CFLConstraints(), sgs = nothing,
+                         sgs_stress = :laplacian)
     -> (; dt_explicit, dt_diffusive, dt_fully_explicit, speedup, limiter,
           explicit_limiter, diagnostics)
 
@@ -1645,12 +1704,13 @@ Quantify what treating diffusion implicitly buys.
 
 `limiter` names the process that binds the IMEX step, `explicit_limiter`
 the one that binds a fully explicit step, and `diagnostics` is the full
-[`cfl_diagnostics`](@ref) result (with the SGS closure `sgs`, as there).
+[`cfl_diagnostics`](@ref) result (with the SGS closure `sgs` and the
+momentum form `sgs_stress`, as there).
 """
 function imex_stability_limit(sim::BoussinesqSimulation{T}, scheme::IMEXScheme;
                               constraints::CFLConstraints = CFLConstraints(T),
-                              sgs = nothing) where {T}
-    d = cfl_diagnostics(sim, constraints; sgs = sgs)
+                              sgs = nothing, sgs_stress::Symbol = :laplacian) where {T}
+    d = cfl_diagnostics(sim, constraints; sgs = sgs, sgs_stress = sgs_stress)
     dt_explicit, limiter = _explicit_limit(d, scheme)
 
     dt_diffusive = min(d.dt_diff, d.dt_sgs)
