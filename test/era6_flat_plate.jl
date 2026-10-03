@@ -366,17 +366,17 @@ end
 # 6. Bypass sanity (coarse 3-D): Tu = 6 % transitions, Tu = 0 stays laminar
 # ---------------------------------------------------------------------------
 #
-# Re_δ*₀ = 300, 600 × 36 × 24 δ*₀ on 144 × 24 × 48 (dx = 4.2, dy = 1.5,
-# dz = 0.5 δ*₀), plate Re_x = 3.0e4 → 1.9e5, no SGS model (a coarse DNS:
+# Re_δ*₀ = 300, 400 × 36 × 24 δ*₀ on 96 × 24 × 48 (dx = 4.2, dy = 1.5,
+# dz = 0.5 δ*₀), 80 δ*₀ fringe, plate Re_x = 3.0e4 → 1.26e5 at the fringe
+# start; c_f is averaged over the last 200 of 700 steps (Δt = 1.5) in the
+# window 0.75–0.9 of the plate, Re_x ≈ 1.03e5–1.17e5. No SGS model (a coarse DNS:
 # the Smagorinsky ν_t of the laminar wall shear alone would be ≈ 4ν here).
 # Free-stream turbulence (L11 = 10 δ*₀, 200 modes, κ_max = 2π/3Δ) enters
 # through the fringe target, kept out of the inflow layer below 1.5 δ₉₉.
 # The Tu = 0 run is the same plate with Ny = 1: without a seed the 3-D run
 # stays exactly 2-D, so the 2-D run is the same calculation at 1/24 the cost.
 
-function _bypass_run(Tu; Ny, nsteps = parse(Int, get(ENV, "BP_NS", "700")),
-                     navg = parse(Int, get(ENV, "BP_NAVG", "200")), dt = 1.5,
-                     Lx = parse(Float64, get(ENV, "BP_LX", "400")))
+function _bypass_run(Tu; Ny, nsteps = 700, navg = 200, dt = 1.5, Lx = 400.0)
     c = flat_plate_setup(; Re_δ0 = 300, Lx = Lx, Ly = 36, H = 24, Nx = round(Int, Lx / 4.1667),
                          Ny = Ny, Nz = 48, fringe_length = 80)
     sim, g = c.sim, c.sim.mesh
