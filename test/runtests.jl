@@ -966,6 +966,15 @@ end
 end
 
 # =========================================================================
+# Era VI — high-fidelity turbulence closure (Phases 54-59)
+# =========================================================================
+
+@testset "Era VI" begin
+    include("era6_les_toolbox.jl")       # Phase 54  filters, spectrum, initialiser (#168)
+    include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
+end
+
+# =========================================================================
 # The Berlin (Alexanderplatz) flagship case — examples/urban/BerlinCase.jl
 
 @testset "Berlin case" begin
