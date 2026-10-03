@@ -4,6 +4,8 @@ using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: Field, mesh
+using ..Grids: interior
+using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
@@ -16,6 +18,7 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
        advect_weno5!
+export buoyancy_frequency_squared!, gradient_richardson!   # P58-a (#170)
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -422,5 +425,8 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                      _add_eddy_diffusion_scalar!,
                      _add_surface_flux!, _add_sponge!,
                      _advect_weno5!
+
+# Pointwise N² and Ri_g (Era VI, P58-a).
+include("operators/stratification.jl")
 
 end # module

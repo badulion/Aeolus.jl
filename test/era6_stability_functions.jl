@@ -148,4 +148,68 @@ end
     @info "P58-a critical Ri" log_linear_Ri_at_ζ_1e4 = Ri_ll BDBH_Ri_at_ζ_100 = Ri_bh
 end
 
+# Fill every data point (halos included) of a field from f(z) of its
+# cell-centre height (u on FaceX and v on FaceY share the centre z).
+function _fill_z!(fld, f)
+    m = fld.mesh
+    for k in axes(fld.data, 3)
+        z = (k - m.Hz - 0.5) * m.dz
+        fld.data[:, :, k] .= f(z)
+    end
+    return fld
+end
+
+function _ri_field(Nz, Lz, ufun, θfun; qv = nothing, θ₀ = 300.0, g = 9.81, N = 4)
+    m = RegularGrid(; size = (N, N, Nz), extent = (Lz, Lz, Lz), halo = (1, 1, 1))
+    u = _fill_z!(Field(FaceX(), m), ufun)
+    v = Field(FaceY(), m); w = Field(FaceZ(), m)
+    θ = _fill_z!(Field(CellCenter(), m), θfun)
+    N2 = Field(CellCenter(), m); Ri = Field(CellCenter(), m)
+    if qv === nothing
+        buoyancy_frequency_squared!(N2, θ; θ₀ = θ₀, g = g)
+    else
+        q = _fill_z!(Field(CellCenter(), m), z -> qv)
+        buoyancy_frequency_squared!(N2, θ, q; θ₀ = θ₀, g = g)
+    end
+    gradient_richardson!(Ri, N2, u, v, w)
+    return m, N2, Ri
+end
+
+@testset "4. pointwise N² and Ri_g fields" begin
+    θ₀, g, S, Γ = 300.0, 9.81, 0.02, 0.03
+    # linear profiles on 16³: Ri_g = gΓ/(θ₀S²) everywhere
+    m, N2, Ri = _ri_field(16, 160.0, z -> S * z, z -> θ₀ + Γ * z)
+    Ri_exact = g * Γ / (θ₀ * S^2)
+    err = maximum(abs, interior_view(Ri) .- Ri_exact) / Ri_exact
+    @test err < 1e-12
+    @test maximum(abs, interior_view(N2) .- g * Γ / θ₀) < 1e-12 * g * Γ / θ₀
+    # moist: θ_v = θ (1 + 0.61 q_v), as in the moist buoyancy
+    q = 0.01
+    _, N2q, _ = _ri_field(16, 160.0, z -> S * z, z -> θ₀ + Γ * z; qv = q)
+    @test maximum(abs, interior_view(N2q) .- g * Γ * (1 + 0.61q) / θ₀) <
+          1e-12 * g * Γ / θ₀
+    # no shear: the floor keeps Ri finite
+    _, _, Ri0 = _ri_field(8, 80.0, z -> 1.0, z -> θ₀ + Γ * z)
+    @test all(isfinite, interior_view(Ri0))
+    @test interior_view(Ri0)[1] ≈ g * Γ / θ₀ / RI_SHEAR2_FLOOR
+
+    # tanh shear layer, constant N²: Ri = J cosh⁴((z − z_c)/δ), J = N²δ²/U²
+    U, δ, N2c = 2.0, 10.0, 1e-4
+    Lz = 8δ; zc = Lz / 2
+    J = N2c * δ^2 / U^2
+    errs = Float64[]
+    for Nz in (32, 64, 128)
+        mm, _, Rt = _ri_field(Nz, Lz, z -> U * tanh((z - zc) / δ),
+                              z -> θ₀ * (1 + N2c * z / g))
+        zs = [(k - 0.5) * mm.dz for k in 1:Nz]
+        R = interior_view(Rt)[1, 1, :]
+        sel = abs.(zs .- zc) .<= 2δ
+        push!(errs, maximum(abs.(R[sel] .- J .* cosh.((zs[sel] .- zc) ./ δ) .^ 4) ./
+                            (J .* cosh.((zs[sel] .- zc) ./ δ) .^ 4)))
+    end
+    orders = log2.(errs[1:end-1] ./ errs[2:end])
+    @test all(o -> abs(o - 2) <= 0.15, orders)
+    @info "P58-a Ri_g fields" linear_rel_err = err tanh_rel_errs = errs tanh_orders = orders
+end
+
 end # testset
