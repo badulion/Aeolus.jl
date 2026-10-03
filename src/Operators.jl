@@ -4,7 +4,7 @@ using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: Field, mesh, interior_view
-using ..BoundaryConditions: fill_halos!
+using ..BoundaryConditions: BoundaryConditions, fill_halos!, Periodic, FieldBoundaryConditions
 using ..Grids: interior
 using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
 using FFTW: rfft, irfft, fft, ifft, fftfreq
@@ -30,6 +30,13 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
+# Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
+export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
+       add_sgs_stress_divergence!, sgs_stress_dissipation
+# Era VI (P55-c, #181): the tensorial scalar eddy diffusivity (operators/scalar_tensor.jl)
+export DiffusivityTensor, diagonal_tensor!, bounded_directions,
+       add_tensor_diffusion_scalar!, isentropic_tensor!,
+       sgs_scalar_tensor, IsentropicDiffusion
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -173,13 +180,21 @@ add_eddy_viscosity_u!(tu, u, νt) = _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
 """
     add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
     add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t)
+    add_eddy_diffusion_scalar!(tϕ, ϕ, κh::Field, κv::Field)
 
 Add the conservative eddy-diffusion tendency `∂/∂xⱼ(κₜ ∂ϕ/∂xⱼ)` to the
 cell-centred scalar tendency `tϕ`, with the cell-centred diffusivity `κt`
-averaged linearly to each face. The four-argument form is
+averaged linearly to each face. The four-argument form with a number is
 `(1/Prₜ) ∂/∂xⱼ(νₜ ∂ϕ/∂xⱼ)`: the same kernel, with the turbulent Prandtl
-number applied as a factor after the flux divergence. Halos of `ϕ` and of
-the coefficient field must be filled.
+number applied as a factor after the flux divergence.
+
+The form with two fields is the **diagonal** operator (P55-c, #181):
+`∂/∂x(κh ∂ϕ/∂x) + ∂/∂y(κh ∂ϕ/∂y) + ∂/∂z(κv ∂ϕ/∂z)`, `κh` on the x and y
+faces and `κv` on the z faces. It is the diffusivity tensor
+`diag(κh, κh, κv)`; the three-argument isotropic form is its case
+`κv = κh`, bit for bit (one kernel). The general symmetric tensor is
+[`add_tensor_diffusion_scalar!`](@ref). Halos of `ϕ` and of the
+coefficient fields must be filled.
 
 Keywords of the three-argument form (P56-a, #177):
 
@@ -217,6 +232,8 @@ function add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights
 end
 add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t::Real) =
     _add_eddy_diffusion_scalar!(tϕ, ϕ, νt, 1 / Pr_t, mesh(ϕ))
+add_eddy_diffusion_scalar!(tϕ, ϕ, κh::Field, κv::Field) =
+    _add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv, one(eltype(κh.data)), mesh(ϕ))
 
 """
     add_surface_flux!(tϕ, F_bot, F_top)
@@ -517,7 +534,20 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                      _add_eddy_viscosity_u!, _add_eddy_viscosity_v!, _add_eddy_viscosity_w!,
                      _add_eddy_diffusion_scalar!, _add_eddy_diffusion_scalar_masked!,
                      _add_surface_flux!, _add_sponge!,
-                     _advect_weno5!
+                     _advect_weno5!,
+                     _add_sgs_stress_divergence!, _add_stress_divergence!,
+                     _sgs_stress_tensor!, _sgs_stress_dissipation,
+                     _add_tensor_diffusion_scalar!, _isentropic_tensor!
+
+# -------------------------------------------------------------------------
+# Era VI: the stress-form SGS momentum divergence (wraps the kernels above).
+# -------------------------------------------------------------------------
+include("operators/sgs_stress.jl")
+
+# -------------------------------------------------------------------------
+# Era VI: the tensorial scalar eddy diffusivity (wraps the kernels above).
+# -------------------------------------------------------------------------
+include("operators/scalar_tensor.jl")
 
 # Pointwise N² and Ri_g (Era VI, P58-a).
 include("operators/stratification.jl")
