@@ -347,8 +347,23 @@ end
     @printf("    FST: Tu = %.4f (requested %.4f), u/v/w rms = %.4f/%.4f/%.4f, L11 = %.3f (requested %.3f), max|∇·u′| = %.1e\n",
             Tu_m, Tu, rms(ui), rms(vi), rms(wi), L11, L, divmax)
     @test abs(Tu_m / Tu - 1) < 0.10
-    @test abs(L11 / L - 1) < 0.15
     @test divmax < 1e-13                    # divergence-free to round-off (|∂u′/∂x| ~ 0.5)
+    # L11 of one realisation scatters with the seed (16 seeds: 0.82–1.43 L,
+    # standard deviation 0.14 L; seed 1 gives 1.04 L, seed 2 1.14 L), so the
+    # calibration is asserted on the ensemble mean of seeds 1–16 (1.027 L,
+    # standard error 0.036 L): the 15 % bound is then ~4 standard errors,
+    # independent of which seed happens to be drawn.
+    L11s = map(1:16) do s
+        fs = FreeStreamDisturbance(Tu, L, 400; seed = s)
+        us = Field(FaceX(), g); vs = Field(FaceY(), g); ws = Field(FaceZ(), g)
+        disturbance_velocity!(us, vs, ws, fs)
+        _longitudinal_integral_scale(interior_view(us), g.dx)
+    end
+    L11_mean = sum(L11s) / length(L11s)
+    @printf("    FST: L11 over seeds 1–16 = %.3f–%.3f, mean %.3f (requested %.3f)\n",
+            minimum(L11s), maximum(L11s), L11_mean, L)
+    @test L11s[1] ≈ L11                     # seed 1 reproduces the measurement above
+    @test abs(L11_mean / L - 1) < 0.15
 
     # Spanwise quantisation: periodic in y with the domain width.
     fy = FreeStreamDisturbance(Tu, L, 100; seed = 2, period_y = 4.0)

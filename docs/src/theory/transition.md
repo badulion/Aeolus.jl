@@ -354,7 +354,10 @@ discrete divergence is zero to round-off (3.9e-16 measured); the energy
 is scaled to ``q = \tfrac32 (Tu\,U)^2`` and the spectrum length
 calibrated so the discrete mode set has the requested ``L_{11}``
 (measured on a 512 × 32 × 32 box with 400 modes: Tu 0.0497 for 0.05,
-``L_{11}`` 1.042 for 1.0). The disturbances enter through the fringe
+``L_{11}`` 1.042 for 1.0 with seed 1; one realisation scatters with the
+seed — 0.82–1.43 over seeds 1–16, standard deviation 0.14 — and the
+ensemble mean over those 16 seeds is 1.027, which is what the test
+asserts). The disturbances enter through the fringe
 target as Taylor's frozen turbulence
 ([`disturbance_fringe_update`](@ref Aeolus.Transition.disturbance_fringe_update)),
 kept out of the inflow layer by a damping of the vector potential.
