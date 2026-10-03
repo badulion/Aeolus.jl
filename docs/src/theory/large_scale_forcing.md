@@ -170,6 +170,45 @@ so it works with every dynamical core, the anelastic ones included.
 * **Berlin case**: the `:geostrophic` coupling, with
   `mode = :pressure_gradient` by default and `mode = :nudging` as an
   option. See [The Berlin case](../design/berlin_case.md).
+
+### The Berlin case and the sponge
+
+The cores' Rayleigh sponge (top 25 % of the domain,
+``α_{max} = 0.05`` s⁻¹) relaxes ``u, v`` toward zero. Nudging hid this,
+because it pulls the mean back toward ``U_g`` at every level. A pressure
+gradient does not. The sponge is then a momentum sink of ``α⟨u⟩``, and
+the forcing ``fU_g = 10^{-4}`` m s⁻² cannot balance it. In the 24 h run
+with the sponge still targeting zero, the domain-mean wind collapsed to
+0.12 m/s, and the top level fell to 0.003 m/s.
+
+So in the pressure-gradient mode the coupling retargets the sponge at
+``(U_g, V_g)``. This is option `sponge_to_geostrophic`, and it is on by
+default. The coupling adds ``+α(z)U_g`` using the core's own sponge
+profile (`add_sponge!` on a zero field with `f_ref = U_g`). The sum is
+then ``-α(z)(u - U_g)``, the usual sponge of a pressure-gradient-forced
+LES. The nudging mode is left exactly as it was.
+
+*24 h flagship run* (`alexanderplatz`, 06–06 h local, ``U_g = 1`` m/s,
+32 levels of 6.25 m, sponge above 150 m). The values are domain means,
+building cells included:
+
+| Mode | Night (20–06 h) wind maximum below the sponge | ``(ū, v̄)`` at 100 m, 06 h | top level |
+| :-- | :-- | :-- | :-- |
+| pressure gradient, sponge → ``U_g`` (default) | 0.81 m/s at 147 m (22.5 h) | (0.446, +0.054) | 0.997 m/s |
+| pressure gradient, sponge → 0 | 0.12 m/s at 91 m (21.8 h) | (0.012, +0.115) | 0.003 m/s |
+| nudging (before #171) | 0.47 m/s at 91 m (06 h) | (0.464, −0.044) | 0.014 m/s |
+
+With the pressure gradient, the mean wind crosses the isobars toward low
+pressure (``v̄ > 0``), as the Ekman balance requires. Under nudging
+there is no pressure gradient to oppose Coriolis, so the mean wind turns
+the wrong way (``v̄ < 0``).
+
+**No low-level jet forms in this domain.** In every mode the night
+profile increases monotonically up to the sponge. The domain is 200 m
+deep, its top 50 m are sponge, and the city canopy keeps the whole
+column coupled to the surface. That leaves no decoupled residual layer
+in which an inertial oscillation could run. To resolve the jet, the
+domain would need to be deeper than the nocturnal boundary layer.
 * **Patchy-surface validation driver**
   (`examples/validation/patchy_surface/driver.jl`): it now delegates its
   ``+fU_g`` to `GeostrophicPressureGradient`. After 60 steps of the
