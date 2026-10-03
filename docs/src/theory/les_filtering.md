@@ -273,6 +273,36 @@ fixture) writes the full tables for 4h, 8h and 16h. The Smagorinsky ``ρ(τ_{12}
 and 0.111. The dynamic ``C_s`` on the DNS grid is +6 %, +3 % and −14 %
 from it, and on the LES grid +24 % and +47 % (4h, 8h).
 
+**The offline 256³ record.** The 96³ fixture is the CI reference; a
+256³ run of the same fixture is made once, offline, by
+`examples/validation/dns256_generate.jl` (or by the suite with
+`AEOLUS_DNS256=1`). It writes `test/fixtures/dns256_apriori.toml`: the
+DNS checks, ``Re_λ``, ``k_{max}η``, skewness, energy budget, the energy
+spectrum, and per Gaussian width 4h, 8h, 16h and 32h the per-component
+correlations, ``ρ_Π`` and ``⟨Π⟩`` ratio of the Smagorinsky, Bardina and
+gradient models, the matched and dynamic ``C_s`` and the backscatter. The
+file is plain TOML, written by the standard library Aeolus already uses.
+Two choices differ from the fixture:
+
+- ``ν = 1.035·0.018(48/N)^{4/3}`` (``2.00·10^{-3}``): the plain scaling
+  gave ``k_{max}η = 1.494`` at 32³, so the generator keeps a margin
+  (``k_{max}η`` × 1.026), and it refuses to write the record (writing
+  `<out>.failed` instead) if ``k_{max}η < 1.5`` or another required DNS
+  check fails;
+- the run continues past the dissipation peak (extrapolated
+  ``t ≈ 3.7`` at 256³), where ``k_{max}η`` has its minimum.
+
+The pipeline is proven at 32³ in every suite run and was validated end to
+end at 32³–96³. From these runs, the 256³ case needs ≈ 2.8 h on three
+threads and 8–10 GB. The suite's 256³ testset is a no-op until the file
+exists. When it exists, the testset asserts the literature band at 4h
+and that ``ρ_Π`` at fixed ``Δ/η`` lies below the 48³ and 96³ values.
+That trend is not yet secure beyond 48³. At 4h (≈ 7.5–7.8η) the
+generator gives 0.811 at ``Re_λ = 45`` (64³) and 0.822 at 52 (96³, past
+the peak), and the fixture gives 0.810 at 64. These agree within the
+±0.01 scatter of a single seed. The 256³ comparison is therefore a real
+test of the trend.
+
 References: Clark, R. A., Ferziger, J. H. & Reynolds, W. C. (1979),
 *J. Fluid Mech.* 91, 1; Liu, S., Meneveau, C. & Katz, J. (1994), *J. Fluid
 Mech.* 275, 83; Vreman, B., Geurts, B. & Kuerten, H. (1994), *J. Fluid
