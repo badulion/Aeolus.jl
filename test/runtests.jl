@@ -977,6 +977,7 @@ end
     include("era6_stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
     include("era6_les_toolbox.jl")       # Phase 54  filters, spectrum, initialiser (#168)
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
+    include("era6_tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
 end
 
 # =========================================================================
