@@ -78,6 +78,9 @@ include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
 include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
 include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 
+# --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
+include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, advective, T_s(t)
+
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -137,6 +140,8 @@ using .IceThermodynamics           # Era V, Phase 51 (#37)
 using .OceanMixedLayer             # Phase 52 (#38)
 using .AirSeaFlux                  # Phase 52 (#39)
 using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
+
+using .LargeScaleForcing           # Era VI, Phase 58 (#171)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -889,5 +894,17 @@ export effective_roughness, effective_scalar_roughness,
        blending_height,
        AbstractIBLModel, ElliottIBL, PowerLawIBL, DiffusionIBL, ibl_height,
        BlendingHeightSolution, blended_forcing, BlendedMosaic, last_blending
+
+# =========================================================================
+# Era VI — high-fidelity turbulence closure (Phases 54-60)
+# =========================================================================
+
+# Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
+# nudging, prescribed advective tendencies, surface-temperature series.
+# `surface_temperature(series, t)` is a method of the SurfaceExchange
+# generic, already exported.
+export ForcingTable, forcing_value, forcing_mean,
+       AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
+       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
 
 end # module
