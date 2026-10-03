@@ -26,6 +26,17 @@ roughness) only add files and include lines:
      `post_predictor!` hook; halos and the finite-volume operators are
      untouched, so the wall model is the only momentum flux through a
      free-slip (`ImpermeableWall`) wall face.
+  3. **Immersed walls** (`immersed.jl`, P57-d) — [`immersed_walls`](@ref),
+     [`remove_stencil_wall_flux!`](@ref) and
+     [`apply_immersed_wall_stress!`](@ref): the stress of a law on the
+     tangential walls of an IBM solid mask (Tessicini et al. 2002;
+     Chester, Meneveau & Parlange 2007), the stencil's own wall flux
+     removed so the two are not counted twice. The Berlin facades.
+  4. **Cut-cell walls** (`cutcell.jl`, P57-d) — the method
+     `wall_shear_stress(u, v, w, stencils, geom, law; ν)` of
+     `CutCell.wall_shear_stress` (the law at the image-point probe) and
+     [`wall_slip_velocity`](@ref) / [`slip_wall_value`](@ref), the slip
+     wall value of `CutCell.reconstruct_wall_velocity!`.
 
 # References
 
@@ -41,6 +52,12 @@ roughness) only add files and include lines:
     planetary boundary-layer turbulence. *J. Atmos. Sci.*, 41, 2052-2062.
   * Piomelli, U. & Balaras, E. (2002). Wall-layer models for large-eddy
     simulations. *Annu. Rev. Fluid Mech.*, 34, 349-374.
+  * Tessicini, F., Iaccarino, G., Fatica, M., Wang, M. & Verzicco, R.
+    (2002). Wall modeling for large-eddy simulation using an immersed
+    boundary method. *Annual Research Briefs 2002*, CTR Stanford, 181-187.
+  * Chester, S., Meneveau, C. & Parlange, M. B. (2007). Modeling
+    turbulent flow over fractal trees with renormalized numerical
+    simulation. *J. Comput. Phys.*, 225, 427-448.
   * Lee, M. & Moser, R. D. (2015). Direct numerical simulation of
     turbulent channel flow up to Re_τ ≈ 5200. *J. Fluid Mech.*, 774,
     395-415.
