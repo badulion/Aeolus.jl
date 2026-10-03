@@ -966,6 +966,14 @@ end
 end
 
 # =========================================================================
+# Era VI — high-fidelity turbulence closure (Phases 54-59)
+# =========================================================================
+
+@testset "Era VI" begin
+    include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
+end
+
+# =========================================================================
 # The Berlin (Alexanderplatz) flagship case — examples/urban/BerlinCase.jl
 
 @testset "Berlin case" begin
