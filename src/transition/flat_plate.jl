@@ -268,49 +268,77 @@ end
     edge_velocity(ū; level = size(ū, 2)) -> Vector
 
 The local free-stream (edge) velocity ``U_e(x)``: `ū` at the interior
-level `level` (default the top one, which in a closed-lid domain lies
-outside the boundary layer).
+level `level` (an integer, or one level per `x`, e.g. from
+[`boundary_layer_edge`](@ref); default the top level).
 """
-edge_velocity(ū::AbstractMatrix; level::Integer = size(ū, 2)) = ū[:, level]
-
-_edge(ū, U_e::Nothing) = edge_velocity(ū)
-_edge(ū, U_e::Real) = fill(float(U_e), size(ū, 1))
-_edge(ū, U_e::AbstractVector) = U_e
+edge_velocity(ū::AbstractMatrix; level = size(ū, 2)) =
+    [ū[i, _kmax(level, i)] for i in axes(ū, 1)]
 
 """
-    displacement_thickness(ū, dz; U_e = edge_velocity(ū)) -> δ*(x)
-    displacement_thickness(sim; U_e = nothing) -> δ*(x)
+    boundary_layer_edge(ū; fraction = 0.99) -> Vector{Int}
 
-``δ^*(x) = ∫_0^H (1 - ū/U_e)\\,dz`` (midpoint rule on the cell-centred
-values, the wall at the bottom face). `U_e` is a number, a vector over
-`x`, or `nothing` for the local edge velocity.
+Per `x`, the first interior level at which `ū` reaches `fraction` of its
+maximum over the column: the ``δ_{99}`` edge (for `fraction = 0.99`).
+Integrating the thicknesses only up to this level (`kmax`) keeps a weak
+mean deficit of a disturbed free stream (free-stream turbulence fed
+through a fringe leaves ``ū`` ≈ 0.995 ``U_∞`` above the layer) out of
+``δ^*`` and ``θ``. Pass the free-stream velocity explicitly as `U_e`
+(e.g. the column maximum of `ū`): for the sampled Blasius layer the
+truncation at ``δ_{99.5}`` then costs 0.33 % of ``θ``, whereas
+normalising by ``ū`` at the edge level itself (the `U_e = nothing`
+default) costs 2.0 %.
 """
-function displacement_thickness(ū::AbstractMatrix, dz::Real; U_e = nothing)
-    Ue = _edge(ū, U_e)
-    return [dz * sum(1 - ū[i, k] / Ue[i] for k in axes(ū, 2)) for i in axes(ū, 1)]
+function boundary_layer_edge(ū::AbstractMatrix; fraction::Real = 0.99)
+    return [something(findfirst(>=(fraction * maximum(view(ū, i, :))), view(ū, i, :)),
+                      size(ū, 2)) for i in axes(ū, 1)]
+end
+
+_kmax(k::Integer, i) = k
+_kmax(k::AbstractVector, i) = k[i]
+
+_edge(ū, U_e::Nothing, kmax) = edge_velocity(ū; level = kmax)
+_edge(ū, U_e::Real, kmax) = fill(float(U_e), size(ū, 1))
+_edge(ū, U_e::AbstractVector, kmax) = U_e
+
+"""
+    displacement_thickness(ū, dz; U_e = nothing, kmax = size(ū, 2)) -> δ*(x)
+    displacement_thickness(sim; U_e = nothing, kmax) -> δ*(x)
+
+``δ^*(x) = ∫_0^{z_{k_{\\max}}} (1 - ū/U_e)\\,dz`` (midpoint rule on the
+cell-centred values, the wall at the bottom face). `kmax` is the top
+level integrated (an integer, or one per `x`); `U_e` is a number, a
+vector over `x`, or `nothing` for `ū` at level `kmax`.
+"""
+function displacement_thickness(ū::AbstractMatrix, dz::Real; U_e = nothing,
+                                kmax = size(ū, 2))
+    Ue = _edge(ū, U_e, kmax)
+    return [dz * sum(1 - ū[i, k] / Ue[i] for k in 1:_kmax(kmax, i)) for i in axes(ū, 1)]
 end
 
 """
-    momentum_thickness(ū, dz; U_e = edge_velocity(ū)) -> θ(x)
-    momentum_thickness(sim; U_e = nothing) -> θ(x)
+    momentum_thickness(ū, dz; U_e = nothing, kmax = size(ū, 2)) -> θ(x)
+    momentum_thickness(sim; U_e = nothing, kmax) -> θ(x)
 
-``θ(x) = ∫_0^H (ū/U_e)(1 - ū/U_e)\\,dz`` (midpoint rule).
+``θ(x) = ∫_0^{z_{k_{\\max}}} (ū/U_e)(1 - ū/U_e)\\,dz`` (midpoint rule;
+arguments as for [`displacement_thickness`](@ref)).
 """
-function momentum_thickness(ū::AbstractMatrix, dz::Real; U_e = nothing)
-    Ue = _edge(ū, U_e)
-    return [dz * sum((ū[i, k] / Ue[i]) * (1 - ū[i, k] / Ue[i]) for k in axes(ū, 2))
+function momentum_thickness(ū::AbstractMatrix, dz::Real; U_e = nothing,
+                            kmax = size(ū, 2))
+    Ue = _edge(ū, U_e, kmax)
+    return [dz * sum((ū[i, k] / Ue[i]) * (1 - ū[i, k] / Ue[i]) for k in 1:_kmax(kmax, i))
             for i in axes(ū, 1)]
 end
 
 """
-    shape_factor(ū, dz; U_e = edge_velocity(ū)) -> H(x)
-    shape_factor(sim; U_e = nothing) -> H(x)
+    shape_factor(ū, dz; U_e = nothing, kmax = size(ū, 2)) -> H(x)
+    shape_factor(sim; U_e = nothing, kmax) -> H(x)
 
 ``H = δ^*/θ``: 2.59 for the Blasius layer, ≈ 1.4 for a turbulent
 zero-pressure-gradient layer.
 """
-shape_factor(ū::AbstractMatrix, dz::Real; U_e = nothing) =
-    displacement_thickness(ū, dz; U_e = U_e) ./ momentum_thickness(ū, dz; U_e = U_e)
+shape_factor(ū::AbstractMatrix, dz::Real; U_e = nothing, kmax = size(ū, 2)) =
+    displacement_thickness(ū, dz; U_e = U_e, kmax = kmax) ./
+    momentum_thickness(ū, dz; U_e = U_e, kmax = kmax)
 
 """
     skin_friction(ū, dz, ν; U_e = edge_velocity(ū), u_wall = 0) -> c_f(x)
@@ -325,8 +353,8 @@ The `sim` method requires a `NoSlipWall` at the bottom and uses its
 `u_wall`.
 """
 function skin_friction(ū::AbstractMatrix, dz::Real, ν::Real; U_e = nothing,
-                       u_wall::Real = 0)
-    Ue = _edge(ū, U_e)
+                       u_wall::Real = 0, kmax = size(ū, 2))
+    Ue = _edge(ū, U_e, kmax)
     return [2 * ν * 2 * (ū[i, 1] - u_wall) / dz / Ue[i]^2 for i in axes(ū, 1)]
 end
 
@@ -338,12 +366,12 @@ function skin_friction(sim::BoussinesqSimulation; U_e = nothing)
                          u_wall = bc.u_wall)
 end
 
-displacement_thickness(sim::BoussinesqSimulation; U_e = nothing) =
-    displacement_thickness(streamwise_profile(sim), sim.mesh.dz; U_e = U_e)
-momentum_thickness(sim::BoussinesqSimulation; U_e = nothing) =
-    momentum_thickness(streamwise_profile(sim), sim.mesh.dz; U_e = U_e)
-shape_factor(sim::BoussinesqSimulation; U_e = nothing) =
-    shape_factor(streamwise_profile(sim), sim.mesh.dz; U_e = U_e)
+displacement_thickness(sim::BoussinesqSimulation; U_e = nothing, kmax = sim.mesh.Nz) =
+    displacement_thickness(streamwise_profile(sim), sim.mesh.dz; U_e = U_e, kmax = kmax)
+momentum_thickness(sim::BoussinesqSimulation; U_e = nothing, kmax = sim.mesh.Nz) =
+    momentum_thickness(streamwise_profile(sim), sim.mesh.dz; U_e = U_e, kmax = kmax)
+shape_factor(sim::BoussinesqSimulation; U_e = nothing, kmax = sim.mesh.Nz) =
+    shape_factor(streamwise_profile(sim), sim.mesh.dz; U_e = U_e, kmax = kmax)
 
 """
     transition_onset(x, cf, cf_laminar; rise = 0.1) -> (x_onset, index)

@@ -48,7 +48,10 @@ modes (Jacobs & Durbin 2001; Brandt, Schlatter & Henningson 2004).
   total kinetic energy is exactly ``q = \\tfrac32 (Tu\\,U_∞)^2``, and the
   spectrum length is iterated so that the integral scale of the
   *discrete* mode set, ``\\tfrac{π}{2u'^2}\\sum_s E_sΔκ_s/κ_s``, equals `L`
-  (the finite ``κ`` range otherwise biases it).
+  (the finite ``κ`` range otherwise biases it). An `ArgumentError` is
+  thrown if no spectrum length can give `L` with modes in
+  ``[κ_{\\min}, κ_{\\max}]`` (e.g. an integral length close to the grid
+  spacing when `κ_max` is set by the grid).
 * Fields are sampled with [`disturbance_velocity!`](@ref) (divergence-free
   to round-off on the staggered grid) and fed into a spatially developing
   boundary layer through the fringe target with
@@ -117,13 +120,23 @@ function FreeStreamDisturbance(Tu::Real, L::Real, nmodes::Integer; seed::Integer
     Δκ = [exp(lk[s+1]) - exp(lk[s]) for s in 1:nsh]
     q = 1.5 * (Tu * U∞)^2
     # calibrate the spectrum length so the discrete integral scale is L
+    L11_of(Lv) = (Es = [von_karman_spectrum(κs[s], Lv, 1.0) * Δκ[s] for s in 1:nsh];
+                  (π / 2) * sum(Es ./ κs) / ((2 / 3) * sum(Es)))
+    # the discrete set can only represent L11 between its all-at-κ_max and
+    # all-at-κ_min limits; outside that range the κ window is too narrow
+    lo, hi = L11_of(1e-6 / κ_max), L11_of(1e6 / κ_min)
+    lo < L < hi ||
+        throw(ArgumentError("FreeStreamDisturbance: L11 = $L is not representable by modes in " *
+                            "κ ∈ [$κ_min, $κ_max] (attainable ≈ $(round(lo; sigdigits = 3)) to " *
+                            "$(round(hi; sigdigits = 3))); widen the κ range or change L"))
     L_vk = L / 0.643
-    for _ in 1:50
-        Es = [von_karman_spectrum(κs[s], L_vk, 1.0) * Δκ[s] for s in 1:nsh]
-        L11 = (π / 2) * sum(Es ./ κs) / ((2 / 3) * sum(Es))
+    for _ in 1:200
+        L11 = L11_of(L_vk)
+        abs(L11 / L - 1) < 1e-12 && break
         L_vk *= L / L11
-        abs(L11 / L - 1) < 1e-13 && break
     end
+    abs(L11_of(L_vk) / L - 1) < 1e-8 ||
+        error("FreeStreamDisturbance: integral-scale calibration did not converge")
     Es = [von_karman_spectrum(κs[s], L_vk, 1.0) * Δκ[s] for s in 1:nsh]
     Es .*= 1 / sum(Es)                         # shell fractions of q
     dirs = _dodecahedron_half()

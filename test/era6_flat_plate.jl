@@ -6,7 +6,7 @@
 using Aeolus
 using Aeolus.Fields: set!, interior_view
 using Aeolus.Operators
-using Aeolus.Operators: add_sponge!
+using Aeolus.Operators: add_sponge!, smooth_step
 using Aeolus.Operators.FiniteVolume: in_damping
 using Aeolus.StretchedGrids
 using Random
@@ -271,6 +271,15 @@ end
     cf = skin_friction(ū, dz, ν; U_e = 1.0)
     @test all(abs.(cf ./ blasius_skin_friction.(xs ./ ν) .- 1) .< 1e-3)
     @test edge_velocity(ū) ≈ ones(3) atol = 1e-12
+    # δ99 edge: the first level with ū ≥ 0.99 max ū sits at η99 = 4.91.
+    ke = boundary_layer_edge(ū)
+    for (n, x) in enumerate(xs)
+        @test abs((ke[n] - 0.5) * dz - s.eta99 * sqrt(ν * x)) <= dz
+    end
+    # Integrating to the δ99.5 edge with U_e = U∞ costs < 0.5 % of θ (the
+    # Blasius tail; measured 0.33 %).
+    θe = momentum_thickness(ū, dz; U_e = 1.0, kmax = boundary_layer_edge(ū; fraction = 0.995))
+    @test all(0 .< (θ .- θe) ./ θ .< 5e-3)
 
     # Onset finder on a synthetic laminar → turbulent c_f distribution: the
     # minimum of c_f upstream of the persistent departure from laminar.
@@ -351,4 +360,62 @@ end
     u3 = Field(FaceX(), g); v3 = Field(FaceY(), g); w3 = Field(FaceZ(), g)
     disturbance_velocity!(u3, v3, w3, fy, 8 * g.dx)               # U∞ = 1
     @test maximum(abs, u3.data[20:200, :, :] .- u2.data[12:192, :, :]) < 1e-12
+end
+
+# ---------------------------------------------------------------------------
+# 6. Bypass sanity (coarse 3-D): Tu = 6 % transitions, Tu = 0 stays laminar
+# ---------------------------------------------------------------------------
+#
+# Re_δ*₀ = 300, 600 × 36 × 24 δ*₀ on 144 × 24 × 48 (dx = 4.2, dy = 1.5,
+# dz = 0.5 δ*₀), plate Re_x = 3.0e4 → 1.9e5, no SGS model (a coarse DNS:
+# the Smagorinsky ν_t of the laminar wall shear alone would be ≈ 4ν here).
+# Free-stream turbulence (L11 = 10 δ*₀, 200 modes, κ_max = 2π/3Δ) enters
+# through the fringe target, kept out of the inflow layer below 1.5 δ₉₉.
+# The Tu = 0 run is the same plate with Ny = 1: without a seed the 3-D run
+# stays exactly 2-D, so the 2-D run is the same calculation at 1/24 the cost.
+
+function _bypass_run(Tu; Ny, nsteps = parse(Int, get(ENV, "BP_NS", "700")),
+                     navg = parse(Int, get(ENV, "BP_NAVG", "200")), dt = 1.5,
+                     Lx = parse(Float64, get(ENV, "BP_LX", "400")))
+    c = flat_plate_setup(; Re_δ0 = 300, Lx = Lx, Ly = 36, H = 24, Nx = round(Int, Lx / 4.1667),
+                         Ny = Ny, Nz = 48, fringe_length = 80)
+    sim, g = c.sim, c.sim.mesh
+    force! = c.forcing!
+    if Tu > 0
+        fst = FreeStreamDisturbance(Tu, 10.0, 200; seed = 1, period_y = g.Ly,
+                                    κ_max = 2π / (3 * max(g.dx, g.dy, g.dz)))
+        δ99 = blasius_solution().eta99 * sqrt(c.ν * c.x_in)
+        tgt = deepcopy(c.target)
+        upd = disturbance_fringe_update(fst, c.fringe, c.target;
+                                        damping = z -> smooth_step(z / (1.5δ99)))
+        force! = fringe_forcing(c.fringe, tgt; update! = upd)
+    end
+    # both runs start from the laminar Blasius layer: the disturbances must trip it
+    set_blasius!(sim; x_le = c.x_le, x_min = c.x_in)
+    cf = zeros(g.Nx)
+    for n in 1:nsteps
+        step_rk3!(sim, dt; body_force! = force!)
+        n > nsteps - navg && (cf .+= skin_friction(sim; U_e = 1.0))
+    end
+    cf ./= navg
+    x = collect(Aeolus.Grids.xnodes(g, FaceX()))
+    Lp = g.Lx - 80
+    out = findall(xi -> 0.75Lp <= xi <= 0.9Lp, x)
+    Re_x = (x[out] .- c.x_le) ./ c.ν
+    return sum(cf[out]) / sum(blasius_skin_friction.(Re_x)), max_divergence(sim),
+           (Re_x[1], Re_x[end])
+end
+
+@testset "P59-d bypass transition sanity (coarse 3-D)" begin
+    t0 = time()
+    r6, div6, rng = _bypass_run(0.06; Ny = 24)
+    t6 = time() - t0
+    t0 = time()
+    r0, div0, _ = _bypass_run(0.0; Ny = 1)
+    t00 = time() - t0
+    @printf("    bypass: outlet c_f / c_f,Blasius (Re_x %.0f–%.0f) = %.3f at Tu = 6 %% (%.0f s), %.4f at Tu = 0 (%.0f s)\n",
+            rng[1], rng[2], r6, t6, r0, t00)
+    @test r6 > 1.5
+    @test abs(r0 - 1) < 0.05
+    @test div6 < 1e-12 && div0 < 1e-12
 end
