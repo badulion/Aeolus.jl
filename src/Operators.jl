@@ -169,18 +169,28 @@ add_eddy_viscosity_u!(tu, u, νt) = _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
 """
     add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field)
     add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t)
+    add_eddy_diffusion_scalar!(tϕ, ϕ, κh::Field, κv::Field)
 
 Add the conservative eddy-diffusion tendency `∂/∂xⱼ(κₜ ∂ϕ/∂xⱼ)` to the
 cell-centred scalar tendency `tϕ`, with the cell-centred diffusivity `κt`
-averaged linearly to each face. The four-argument form is
+averaged linearly to each face. The four-argument form with a number is
 `(1/Prₜ) ∂/∂xⱼ(νₜ ∂ϕ/∂xⱼ)`: the same kernel, with the turbulent Prandtl
-number applied as a factor after the flux divergence. Halos of `ϕ` and of
-the coefficient field must be filled.
+number applied as a factor after the flux divergence.
+
+The form with two fields is the **diagonal** operator (P55-c, #181):
+`∂/∂x(κh ∂ϕ/∂x) + ∂/∂y(κh ∂ϕ/∂y) + ∂/∂z(κv ∂ϕ/∂z)`, `κh` on the x and y
+faces and `κv` on the z faces. It is the diffusivity tensor
+`diag(κh, κh, κv)`; the three-argument isotropic form is its case
+`κv = κh`, bit for bit (one kernel). The general symmetric tensor is
+[`add_tensor_diffusion_scalar!`](@ref). Halos of `ϕ` and of the
+coefficient fields must be filled.
 """
 add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field) =
     _add_eddy_diffusion_scalar!(tϕ, ϕ, κt, one(eltype(κt.data)), mesh(ϕ))
 add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t::Real) =
     _add_eddy_diffusion_scalar!(tϕ, ϕ, νt, 1 / Pr_t, mesh(ϕ))
+add_eddy_diffusion_scalar!(tϕ, ϕ, κh::Field, κv::Field) =
+    _add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv, one(eltype(κh.data)), mesh(ϕ))
 
 """
     add_surface_flux!(tϕ, F_bot, F_top)

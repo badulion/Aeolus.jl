@@ -686,23 +686,31 @@ function _sgs_stress_dissipation(u::Field{FaceX}, v::Field{FaceY}, w::Field{Face
 end
 
 # --- eddy diffusion for a cell-centered scalar --------------------------
-# s · ∂/∂x_j (K ∂ϕ/∂x_j), K applied conservatively at faces (interpolated
-# linearly from cell centres). The single kernel behind both public forms:
-# `add_eddy_diffusion_scalar!(tϕ, ϕ, κt)` (K = κt, s = 1, exact) and
-# `add_eddy_diffusion_scalar!(tϕ, ϕ, νt, Pr_t)` (K = νt, s = 1/Pr_t).
+# s · [∂/∂x(Kh ∂ϕ/∂x) + ∂/∂y(Kh ∂ϕ/∂y) + ∂/∂z(Kv ∂ϕ/∂z)], each coefficient
+# applied conservatively at the faces (interpolated linearly from cell
+# centres). The single kernel behind every public form:
+# `add_eddy_diffusion_scalar!(tϕ, ϕ, κt)` (Kh = Kv = κt, s = 1, exact),
+# `add_eddy_diffusion_scalar!(tϕ, ϕ, νt, Pr_t)` (Kh = Kv = νt, s = 1/Pr_t)
+# and the diagonal `add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv)` (P55-c,
+# #181). With Kh === Kv the arithmetic is the pre-P55-c kernel's, bit for bit.
+
+_add_eddy_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
+                            K::Field{CellCenter}, s::Real, g::RegularGrid) =
+    _add_eddy_diffusion_scalar!(tϕ, ϕ, K, K, s, g)
 
 function _add_eddy_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
-                                      K::Field{CellCenter}, s::Real,
-                                      g::RegularGrid)
+                                      Kh::Field{CellCenter}, Kv::Field{CellCenter},
+                                      s::Real, g::RegularGrid)
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
     ii, jj, kk = interior(g)
+    H = Kh.data; V = Kv.data
     @inbounds for k in kk, j in jj, i in ii
-        νE = 0.5 * (K.data[i,j,k]   + K.data[i+1,j,k])
-        νW = 0.5 * (K.data[i-1,j,k] + K.data[i,j,k])
-        νN = 0.5 * (K.data[i,j,k]   + K.data[i,j+1,k])
-        νS = 0.5 * (K.data[i,j-1,k] + K.data[i,j,k])
-        νT = 0.5 * (K.data[i,j,k]   + K.data[i,j,k+1])
-        νB = 0.5 * (K.data[i,j,k-1] + K.data[i,j,k])
+        νE = 0.5 * (H[i,j,k]   + H[i+1,j,k])
+        νW = 0.5 * (H[i-1,j,k] + H[i,j,k])
+        νN = 0.5 * (H[i,j,k]   + H[i,j+1,k])
+        νS = 0.5 * (H[i,j-1,k] + H[i,j,k])
+        νT = 0.5 * (V[i,j,k]   + V[i,j,k+1])
+        νB = 0.5 * (V[i,j,k-1] + V[i,j,k])
 
         fxE = νE * (ϕ.data[i+1,j,k] - ϕ.data[i,  j,k]) * idx
         fxW = νW * (ϕ.data[i,  j,k] - ϕ.data[i-1,j,k]) * idx
