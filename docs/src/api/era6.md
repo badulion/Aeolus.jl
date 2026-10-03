@@ -12,7 +12,7 @@ tested at are in
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
 - Wall-bounded flow diagnostics (P54-d, #174; below) — `Aeolus.Operators`
-- [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; [theory](../theory/wall_models.md))
+- [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #183: matching height and input filtering against log-layer mismatch; [theory](../theory/wall_models.md))
 
 ## Shared contract — SGS closures (P54-a)
 

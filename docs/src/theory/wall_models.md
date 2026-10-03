@@ -198,6 +198,92 @@ Berlin run (a stated exception, #174): the wall physics they exercise is
 `apply_wall_stress!`, which is already the default Berlin ground stress,
 and their diagnostics live in Operators (infrastructure, exempt).
 
+## Log-layer mismatch: matching height and input filtering (P57-b)
+
+An equilibrium law fed with the velocity of the wall-adjacent cell gives
+a wall stress that is consistent with that cell, but the LES velocity in
+the first one or two cells is itself wrong: the eddies there are not
+resolved and the SGS model is at its least accurate. The result is the
+*log-layer mismatch* (LLM): the mean profile has a kink next to the wall
+and is shifted against the log law above it, which shows as Φ_m ≠ 1 at
+the first faces and, in a pressure-driven channel, as an error in the
+bulk velocity. Two remedies, both in `src/wall_models/matching.jl`
+(`MatchingInput`), change only *what goes into the law*; the stress is
+still applied at the wall face by `apply_wall_stress!` (its `wind` and
+`height` keywords):
+
+* **Matching height off the first cell** (Kawai & Larsson 2012). The
+  velocity is sampled at ``h_{wm}`` (`h_wm` in metres, linearly
+  interpolated between cell centres, or `h_wm_cells = n`, the n-th cell
+  centre at ``(n-½)Δz``) and the law is evaluated there:
+  ``τ_w = τ_w(U(h_{wm}), h_{wm})``, applied along the first-cell
+  velocity, ``τ_{w,i} = τ_w\,u_i/U_1``.
+* **Input filtering.** In time, the exponential filter of Yang, Park &
+  Moin (2017),
+  ``\tilde u ← \tilde u + ε(u - \tilde u)``, ``ε = 1 - e^{-Δt/T_f}``,
+  advanced once per accepted step (so all Runge-Kutta substages see the
+  same input); the weight is the exact solution of
+  ``T_f \dot{\tilde u} = u - \tilde u`` for a held input, so a step is
+  followed by ``1 - e^{-t/T_f}`` whatever the Δt (measured 1.1e-16 over
+  60 random steps). Along the wall, the 3 × 3 box of
+  `Operators.box_filter!` (`n = (3, 3, 1)`, the dynamic model's test
+  filter; second moment ``2Δ^2/3``), the discrete form of the 2Δ input
+  filter of Bou-Zeid, Meneveau & Parlange (2005). It preserves the plane
+  mean (1e-12) and has the exact transfer function
+  ``(1 + 2\cos kΔ)/3`` per direction (1e-13).
+
+**Input wind, corrected.** Before P57-b, `apply_wall_stress!` with a
+`wind` used the coefficient ``τ_w(U_{in})/U_{in}``, i.e. a stress of
+magnitude ``τ_w(U_{in})\,U_1/U_{in}``; now it is ``τ_w(U_{in})/U_1``,
+so the magnitude is the law's at the input wind, as documented. The
+#169 test encoded the old formula; both were wrong. Nothing used `wind`
+before this phase.
+
+**Channel, Re_τ = 1000** (`test/era6_wall_models_channel.jl`: 24 × 12 ×
+16, `StaticSmagorinsky(0.1)`, `SpaldingLaw`, averaged over 5-8 δ/u_τ,
+seed 1; Lee & Moser U_b⁺ = 19.99):
+
+| input | U_b⁺ (error) | Φ_m(Δz) | max\|Φ_m − 1\|, 0.1δ < z < 0.3δ |
+| :-- | --: | --: | --: |
+| first cell | 19.845 (−0.73 %) | 1.323 | 0.323 |
+| ``h_{wm} = 3Δz`` + time filter (``T_f = 0.5\,δ/u_τ``) | 19.691 (−1.49 %) | 0.969 | 0.036 |
+
+Over seeds 1-6 first-cell Φ_m(Δz) is 1.26-1.44 and 0.97-1.18 with the
+fix; max|Φ_m − 1| with the fix 0.04-0.22. The fix meets the 5 % U_b⁺
+target, but **not** the expected "error reduced at least 2×": first-cell
+matching is already within 1 % (−0.75 to +0.02 %), because its mismatch
+is a kink in the two wall cells (``U^+ - U^+_{LM} = -0.51, +0.21``) that
+nearly cancels in the bulk integral, while U_b⁺ is set by the coarse
+grid's outer-layer deficit (−0.8 at the centre), which the wall-model
+input cannot change. That expectation is a broken test.
+
+**Four Reynolds numbers** (`examples/validation/log_layer_mismatch.jl`,
+same grid, averaged over 10-20 δ/u_τ; reference data from the headers of
+the published Lee & Moser profiles, `test/data/lee_moser_2015.jl`):
+
+| Re_τ | U_b⁺ LM | Dean (1978) | first cell | ``h_{wm} = 3Δz`` + ``T_f`` | Φ_m(Δz) first / fix |
+| --: | --: | --: | --: | --: | --: |
+| 182 | 15.69 | 15.40 | +5.58 % | −1.24 % | 1.70 / 1.47 |
+| 544 | 18.40 | 18.00 | −0.50 % | −1.19 % | 1.35 / 1.11 |
+| 1000 | 19.99 | 19.64 | −0.59 % | −1.40 % | 1.34 / 1.04 |
+| 5186 | 24.10 | 24.85 | −1.41 % | −1.45 % | 1.24 / 0.93 |
+
+All four are within 5 % with the fix. Only at Re_τ = 182, where the first
+cell centre is at y⁺ = 11 (buffer layer), does first-cell matching miss
+by more than 5 %; there the fix reduces the error 4.5×. With
+`DynamicSmagorinsky` (plane averaging) at Re_τ = 1000 the error goes from
+−2.99 % to −1.22 %. The result is insensitive to the filter scale:
+``T_f = 0.1, 0.5, 2\,δ/u_τ`` give −1.45, −1.44, −1.30 %.
+
+**Neutral rough half channel** (24³, `RoughLogLaw`, z0/H = 1e-4, 6-12
+H/u*): with ``h_{wm} = 3Δz`` and both filters, Φ_m at the first face
+drops from 1.189 to 1.106 (by 0.07-0.10 over seeds 1-4), but the peak,
+1.65-1.72 at z ≈ 3Δz, does not move beyond the seed scatter (1.685 →
+1.694 for seed 1). That peak is the Smagorinsky overshoot of the closure
+(Mason & Thomson 1992), not a wall-model error: the issue's expectation
+that the input fix lowers it is a broken test, and the remedy is the
+closure (P54-e, #186).
+
 ## In the Berlin case
 
 The ground of the flagship is this operator with a `MOSTWallLaw` per
@@ -207,10 +293,21 @@ first-air wind every step (see [The Berlin case](../design/berlin_case.md)).
 With ``L`` and the wind frozen it reproduced the drag the example used
 to carry (``u_*^2/U`` held between surface steps) exactly.
 
+Since P57-b the wind the law is evaluated at is time-filtered by default
+(`input_T_f = 10 s`, of the order of the eddy time ``z_{ref}/u_*`` of
+the 6.25 m first cell). The matching height stays at the first air cell:
+three cells above a street (18.75 m) lie in or above the canyon, where
+no log law holds; `h_wm_cells = 3` over park and water columns is a
+smoke variant. In `CaseConfig(:smoke)` (1 h, last 30 min) the street
+wall stress has almost no sub-minute fluctuation for the filter to
+remove (RMS of the part faster than 60 s: 2.2e-6 m² s⁻², 0.03 % of the
+mean 7.8e-3), and the filter changes the ground mean ``u_*`` by +0.7 %
+(0.05225 → 0.05260 m s⁻¹); it costs 0.07 ms per step on a 64 × 64
+plane.
+
 ## Not yet here
 
-Matching height and input filtering (P57-b), the thin-boundary-layer
-equations (P57-c), facade walls (P57-d) and dynamic roughness (P57-e)
+The thin-boundary-layer equations (P57-c), facade walls (P57-d) and dynamic roughness (P57-e)
 add files under `src/wall_models/`.
 
 ## References
@@ -243,3 +340,12 @@ add files under `src/wall_models/`.
   * Lee, M. & Moser, R. D. (2015). Direct numerical simulation of
     turbulent channel flow up to Re_τ ≈ 5200. *J. Fluid Mech.*, 774,
     395-415.
+  * Kawai, S. & Larsson, J. (2012). Wall-modeling in large eddy
+    simulation: length scales, grid resolution, and accuracy.
+    *Phys. Fluids*, 24, 015105.
+  * Yang, X. I. A., Park, G. I. & Moin, P. (2017). Log-layer mismatch
+    and modeling of the fluctuating wall stress in wall-modeled
+    large-eddy simulations. *Phys. Rev. Fluids*, 2, 104601.
+  * Dean, R. B. (1978). Reynolds number dependence of skin friction and
+    other bulk flow variables in two-dimensional rectangular duct flow.
+    *J. Fluids Eng.*, 100, 215-223.
