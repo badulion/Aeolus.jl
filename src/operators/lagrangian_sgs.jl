@@ -1,18 +1,22 @@
 # =========================================================================
-# Era VI, Phase 54 (P54-b, #173) — Lagrangian-averaged dynamic Smagorinsky.
+# Era VI, Phase 54 (P54-b, #173) — Lagrangian-averaged dynamic Smagorinsky,
+# and its scale-dependent form (P54-e, #186; Bou-Zeid et al. 2005).
 # =========================================================================
 #
 # Included into `module Operators`, after the closure contract
 # (sgs_closures.jl). The Germano identity is the shared kernel
 # `_germano_identity!` of Operators.jl (also behind the plane / local
 # averaging of `compute_dynamic_smagorinsky_νt!`); this file adds only the
-# averaging along pathlines of Meneveau, Lund & Cabot (1996) and the
-# closure that carries its memory through the contract.
+# averaging along pathlines of Meneveau, Lund & Cabot (1996), the second
+# test filter and power law of the scale-dependent model, and the closure
+# that carries the memories through the contract.
 
 """
     LagrangianDynamicSmagorinsky(mesh; filter_ratio = 3, cs_max = 0.5, C0 = 0.16,
                                  θ = 1.5, memory_time = nothing, Pr_t = nothing,
-                                 mask = nothing)
+                                 mask = nothing, scale_dependent = false,
+                                 filter_ratio2 = 5, beta_min = 0.125, beta_max = 8.0,
+                                 beta = nothing, cadence = 1)
 
 The Lagrangian-averaged dynamic Smagorinsky closure of Meneveau, Lund &
 Cabot (1996): the Germano identity is averaged backwards along fluid
@@ -74,11 +78,56 @@ replaced by the cell itself, and solid corners of the trilinear stencil
 are dropped with the remaining weights renormalised. Nothing stored
 inside an obstacle can reach a fluid coefficient.
 
+**Scale dependence** (`scale_dependent = true`; LASD, Bou-Zeid,
+Meneveau & Parlange 2005; P54-e, #186). The scale-invariant model above
+(LASI) assumes ``C_s`` is the same at the grid and the test-filter
+scales; near a wall, where the filter widths reach the distance to it,
+the coefficient falls toward the grid scale and LASI under-predicts it.
+LASD adds a second test filter (the 5 × 5 × 5 box, width
+`filter_ratio2` ``= α_2 = 5`` from its second moment; see
+[`_second_test_filter!`](@ref)) and two more memories
+
+```math
+\\mathcal I_{QN}^{n+1} = ε\\,[Q^d_{ij}N_{ij}]^{n+1}
+    + (1-ε)\\,\\mathcal I_{QN}^{n}(\\mathbf x - \\mathbf u^n Δt), \\qquad
+\\mathcal I_{NN}^{n+1} = ε\\,[N_{ij}N_{ij}]^{n+1}
+    + (1-ε)\\,\\mathcal I_{NN}^{n}(\\mathbf x - \\mathbf u^n Δt),
+```
+
+with the same ``ε`` and ``T`` (from ``\\mathcal I_{QN}\\mathcal I_{NN}``)
+and the same pathlines. ``\\mathcal I_{LM}/\\mathcal I_{MM}`` and
+``\\mathcal I_{QN}/\\mathcal I_{NN}`` are the coefficients at ``αΔ`` and
+``α_2Δ``; a power law between them gives the grid-scale coefficient
+([`_scale_dependent_cs2!`](@ref)):
+``φ = \\ln(C^2_{α_2Δ}/C^2_{αΔ})/\\ln(α_2/α)``, ``β = 2^φ`` clipped to
+`[beta_min, beta_max]` (Bou-Zeid's ``β ≥ 0.125``; the upper clip 8 is
+ours, symmetric in ``φ``), ``C^2_Δ = C^2_{αΔ} α^{-φ}``. For Bou-Zeid's
+filters (``α = 2``, ``α_2 = 4``) this is their ``β = C^2_{4Δ}/C^2_{2Δ}``,
+``C^2_Δ = C^2_{2Δ}/β``; here ``β`` is the coefficient ratio per doubling
+of the filter width. `closure.beta` holds the ``β`` of the last call.
+`beta` (a number) fixes ``β``; `beta = 1` is LASI bit for bit. The
+memories initialise with ``\\mathcal I_{QN} = C_0^2 \\mathcal I_{NN}``
+(``β = 1``). No wall damping is applied: the near-wall coefficient comes
+from the scale dependence, the wall stress from the wall model.
+
+**Cadence** (`cadence = N`, default 1): the Germano identities (the
+expensive part) are evaluated every `N` commits; at the commits between,
+the memories are only transported along the pathlines (``ε = 0``), and at
+the next evaluation ``ε`` uses the time since the last one. This is the
+usual practice of Lagrangian dynamic codes; `N = 1` is the exact model.
+
 The coefficient of the last call is in `closure.workspace.cs2`, the
-memories in `closure.I_LM`, `closure.I_MM` (interior-sized arrays).
+memories in `closure.I_LM`, `closure.I_MM` (and `closure.I_QN`,
+`closure.I_NN`; interior-sized arrays).
 
 References: Meneveau, C., Lund, T. S. & Cabot, W. H. (1996), *A Lagrangian
 dynamic subgrid-scale model of turbulence*, J. Fluid Mech. 319, 353–385;
+Bou-Zeid, E., Meneveau, C. & Parlange, M. B. (2005), *A scale-dependent
+Lagrangian dynamic model for large eddy simulation of complex turbulent
+flows*, Phys. Fluids 17, 025105; Porté-Agel, F., Meneveau, C. & Parlange,
+M. B. (2000), *A scale-dependent dynamic model for large-eddy simulation:
+application to a neutral atmospheric boundary layer*, J. Fluid Mech. 415,
+261–284;
 Germano, Piomelli, Moin & Cabot (1991), *Phys. Fluids A* 3, 1760; Lilly
 (1992), *Phys. Fluids A* 4, 633.
 """
@@ -106,6 +155,11 @@ struct LagrangianDynamicSmagorinsky{T<:AbstractFloat, W<:DynamicSmagorinskyWorks
     beta_min::T
     beta_max::T
     beta_fixed::Union{Nothing, T}
+    # coefficient cadence: the Germano identities every `cadence` commits,
+    # the pathline transport of the memories at every one
+    cadence::Int
+    since::Base.RefValue{Int}                         # commits since the last identity
+    acc_dt::Base.RefValue{T}                          # time since the last identity
 end
 
 function LagrangianDynamicSmagorinsky(g::RegularGrid{T}; filter_ratio::Real = 3,
@@ -113,7 +167,8 @@ function LagrangianDynamicSmagorinsky(g::RegularGrid{T}; filter_ratio::Real = 3,
                                       memory_time = nothing, Pr_t = nothing,
                                       mask = nothing, scale_dependent::Bool = false,
                                       filter_ratio2::Real = 5, beta_min::Real = 0.125,
-                                      beta_max::Real = 8.0, beta = nothing) where {T}
+                                      beta_max::Real = 8.0, beta = nothing,
+                                      cadence::Integer = 1) where {T}
     min(g.Hx, g.Hy, g.Hz) >= 2 ||
         throw(ArgumentError("LagrangianDynamicSmagorinsky: needs halo ≥ 2, mesh has $((g.Hx, g.Hy, g.Hz))"))
     memory_time === nothing || memory_time > 0 ||
@@ -126,6 +181,7 @@ function LagrangianDynamicSmagorinsky(g::RegularGrid{T}; filter_ratio::Real = 3,
         throw(ArgumentError("a fixed beta must be positive, got $beta"))
     beta === nothing || scale_dependent ||
         throw(ArgumentError("a fixed beta needs scale_dependent = true"))
+    cadence >= 1 || throw(ArgumentError("cadence must be ≥ 1, got $cadence"))
     i() = zeros(T, g.Nx, g.Ny, g.Nz)
     sd() = scale_dependent ? i() : zeros(T, 0, 0, 0)
     second = scale_dependent ? _SecondTestFilter(g) : nothing
@@ -135,7 +191,8 @@ function LagrangianDynamicSmagorinsky(g::RegularGrid{T}; filter_ratio::Real = 3,
                                         Pr_t, _LazyMask(mask, T), scale_dependent, second,
                                         sd(), sd(), sd(), sd(), sd(), T(filter_ratio2),
                                         T(beta_min), T(beta_max),
-                                        beta === nothing ? nothing : T(beta))
+                                        beta === nothing ? nothing : T(beta),
+                                        Int(cadence), Ref(0), Ref(zero(T)))
 end
 
 turbulent_prandtl(c::LagrangianDynamicSmagorinsky, sim) = _prandtl(c.Pr_t, sim)
@@ -240,19 +297,15 @@ function advance_sgs!(c::LagrangianDynamicSmagorinsky{T}, sim, dt) where {T}
     m = _sgs_mask(c.mask, sim)
     per = _periodic_flags(sim.bcs)
     cell = _cellmask(m)
-    _germano_identity!(ws, sim.u.data, sim.v.data, sim.w.data, g, c.filter_ratio^2, m)
     sf = c.second
-    sf === nothing || _second_test_filter!(sf, ws, g, c.filter_ratio2^2, cell, per)
-    if c.initialised[]
-        _lagrangian_relax!(c.new_LM, c.new_MM, c.I_LM, c.I_MM, ws.LM, ws.MM,
-                           c.Up, c.Vp, c.Wp, T(dt), g, c.θ, c.memory_time, cell, per)
-        copyto!(c.I_LM, c.new_LM); copyto!(c.I_MM, c.new_MM)
-        if sf !== nothing
-            _lagrangian_relax!(c.new_QN, c.new_NN, c.I_QN, c.I_NN, sf.QN, sf.NN,
-                               c.Up, c.Vp, c.Wp, T(dt), g, c.θ, c.memory_time, cell, per)
-            copyto!(c.I_QN, c.new_QN); copyto!(c.I_NN, c.new_NN)
-        end
-    else
+    c.since[] += 1
+    c.acc_dt[] += T(dt)
+    full = !c.initialised[] || c.since[] >= c.cadence
+    if full                                         # the Germano identities at the new state
+        _germano_identity!(ws, sim.u.data, sim.v.data, sim.w.data, g, c.filter_ratio^2, m)
+        sf === nothing || _second_test_filter!(sf, ws, g, c.filter_ratio2^2, cell, per)
+    end
+    if !c.initialised[]
         c.I_MM .= ws.MM
         c.I_LM .= c.C0^2 .* ws.MM
         if sf !== nothing                           # β = 1 at the start
@@ -260,23 +313,57 @@ function advance_sgs!(c::LagrangianDynamicSmagorinsky{T}, sim, dt) where {T}
             c.I_QN .= c.C0^2 .* sf.NN
         end
         c.initialised[] = true
+    else
+        # with the sources: relax over the time since they were last
+        # computed; between them (cadence > 1): transport only (ε = 0)
+        mt = full ? c.memory_time : T(Inf)
+        dtε = full ? c.acc_dt[] : T(dt)
+        lmp = (c.new_LM, c.new_MM, c.I_LM, c.I_MM, ws.LM, ws.MM)
+        pairs = sf === nothing ? (lmp,) :
+                (lmp, (c.new_QN, c.new_NN, c.I_QN, c.I_NN, sf.QN, sf.NN))
+        _lagrangian_relax!(pairs, c.Up, c.Vp, c.Wp, T(dt), g, c.θ, mt, cell, per, dtε)
+        copyto!(c.I_LM, c.new_LM); copyto!(c.I_MM, c.new_MM)
+        if sf !== nothing
+            copyto!(c.I_QN, c.new_QN); copyto!(c.I_NN, c.new_NN)
+        end
     end
-    inner = (2:g.Nx+1, 2:g.Ny+1, 2:g.Nz+1)
-    copyto!(c.Up, view(ws.Uc, inner...))
-    copyto!(c.Vp, view(ws.Vc, inner...))
-    copyto!(c.Wp, view(ws.Wc, inner...))
+    if full
+        c.since[] = 0; c.acc_dt[] = zero(T)
+        inner = (2:g.Nx+1, 2:g.Ny+1, 2:g.Nz+1)
+        copyto!(c.Up, view(ws.Uc, inner...))
+        copyto!(c.Vp, view(ws.Vc, inner...))
+        copyto!(c.Wp, view(ws.Wc, inner...))
+    else
+        _cell_velocity!(c.Up, c.Vp, c.Wp, m, sim, g)
+    end
     return c
+end
+
+# The cell-centred velocity of the state (solid faces read as 0), as the
+# Germano pass leaves it in the workspace: the departure velocity of the
+# next commit when the identity is skipped (cadence > 1).
+function _cell_velocity!(U, V, W, m, sim, g)
+    ud, vd, wd = _masked_velocities!(m, sim.u.data, sim.v.data, sim.w.data)
+    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
+    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
+        I, J, K = Hx + i, Hy + j, Hz + k
+        U[i,j,k] = 0.5 * (ud[I,J,K] + ud[I+1,J,K])
+        V[i,j,k] = 0.5 * (vd[I,J,K] + vd[I,J+1,K])
+        W[i,j,k] = 0.5 * (wd[I,J,K] + wd[I,J,K+1])
+    end
+    return nothing
 end
 
 sgs_state(c::LagrangianDynamicSmagorinsky) =
     (copy(c.I_LM), copy(c.I_MM), copy(c.Up), copy(c.Vp), copy(c.Wp), c.initialised[],
-     copy(c.I_QN), copy(c.I_NN))
+     copy(c.I_QN), copy(c.I_NN), c.since[], c.acc_dt[])
 
 function restore_sgs_state!(c::LagrangianDynamicSmagorinsky, s)
     copyto!(c.I_LM, s[1]); copyto!(c.I_MM, s[2])
     copyto!(c.Up, s[3]); copyto!(c.Vp, s[4]); copyto!(c.Wp, s[5])
     c.initialised[] = s[6]
     copyto!(c.I_QN, s[7]); copyto!(c.I_NN, s[8])
+    c.since[] = s[9]; c.acc_dt[] = s[10]
     return c
 end
 
@@ -294,34 +381,42 @@ the point is clamped to `[1, N]`. With a cell mask: a point whose nearest
 cell is solid returns the values of cell `(i, j, k)`; solid corners are
 dropped and the remaining weights renormalised.
 """
-@inline function _upstream(ILM, IMM, x, y, z, i, j, k, g, per, cell)
+@inline _upstream(ILM, IMM, x, y, z, i, j, k, g, per, cell) =
+    _upstream_n((ILM, IMM), x, y, z, i, j, k, g, per, cell)
+
+# The same for a tuple of memories (one stencil, one set of weights).
+@inline function _upstream_n(mems::NTuple{M}, x, y, z, i, j, k, g, per, cell) where {M}
     N = (g.Nx, g.Ny, g.Nz)
     q = (per[1] ? x : clamp(x, 1, N[1]), per[2] ? y : clamp(y, 1, N[2]),
          per[3] ? z : clamp(z, 1, N[3]))
     q0 = floor.(Int, q)
     f = q .- q0
+    own() = @inbounds map(A -> A[i,j,k], mems)
     if cell !== nothing
         ir = _wrapidx(round(Int, q[1]), N[1], per[1])
         jr = _wrapidx(round(Int, q[2]), N[2], per[2])
         kr = _wrapidx(round(Int, q[3]), N[3], per[3])
-        @inbounds cell[g.Hx+ir, g.Hy+jr, g.Hz+kr] && return ILM[i,j,k], IMM[i,j,k]
+        @inbounds cell[g.Hx+ir, g.Hy+jr, g.Hz+kr] && return own()
     end
-    lm = zero(eltype(ILM)); mm = zero(eltype(IMM)); wsum = zero(eltype(ILM))
+    Tm = eltype(first(mems))
+    acc = ntuple(_ -> zero(Tm), Val(M)); wsum = zero(Tm)
     @inbounds for dk in 0:1, dj in 0:1, di in 0:1
         a = _wrapidx(q0[1] + di, N[1], per[1])
         b = _wrapidx(q0[2] + dj, N[2], per[2])
         c = _wrapidx(q0[3] + dk, N[3], per[3])
         w = (di == 0 ? 1 - f[1] : f[1]) * (dj == 0 ? 1 - f[2] : f[2]) * (dk == 0 ? 1 - f[3] : f[3])
         cell !== nothing && cell[g.Hx+a, g.Hy+b, g.Hz+c] && continue
-        lm += w * ILM[a,b,c]; mm += w * IMM[a,b,c]; wsum += w
+        acc = map((s, A) -> s + w * A[a,b,c], acc, mems); wsum += w
     end
-    cell === nothing && return lm, mm
-    wsum > 0 || return ILM[i,j,k], IMM[i,j,k]
-    return lm / wsum, mm / wsum
+    cell === nothing && return acc
+    wsum > 0 || return own()
+    wt = wsum                                       # (a fresh binding: no Core.Box)
+    return map(s -> s / wt, acc)
 end
 
 """
-    _lagrangian_relax!(LMn, MMn, ILM, IMM, LM, MM, U, V, W, dt, g, θ, memory_time, cell, per)
+    _lagrangian_relax!(LMn, MMn, ILM, IMM, LM, MM, U, V, W, dt, g, θ, memory_time, cell, per,
+                       dtε = dt)
 
 One step of the Lagrangian averaging (MLC96 eqs. 3.1–3.3) on interior-sized
 arrays: `LMn = max(ε LM + (1-ε) ILM(x - UΔt), 0)`,
@@ -329,33 +424,55 @@ arrays: `LMn = max(ε LM + (1-ε) ILM(x - UΔt), 0)`,
 of the old memory, [`_upstream`](@ref) interpolation, and
 `ε = (Δt/T)/(1 + Δt/T)`; `T = θΔ(I_LM I_MM)^{-1/8}` from the upstream
 memories (with `I_LM ≥ 10⁻⁸ I_MM` in the time scale; `ε = 1` where
-`I_MM = 0`), or the fixed `memory_time`. Solid cells get 0.
+`I_MM = 0`), or the fixed `memory_time`. Solid cells get 0. The departure
+point is `x - U dt`; `ε` uses `dtε` (the time since the sources were last
+computed, under a coefficient cadence; `dt` otherwise).
 """
-function _lagrangian_relax!(LMn, MMn, ILM, IMM, LM, MM, U, V, W, dt, g, θ, memory_time,
-                            cell, per)
-    T = eltype(LMn)
+_lagrangian_relax!(LMn, MMn, ILM, IMM, LM, MM, U, V, W, dt, g, θ, memory_time,
+                   cell, per, dtε = dt) =
+    _lagrangian_relax!(((LMn, MMn, ILM, IMM, LM, MM),), U, V, W, dt, g, θ, memory_time,
+                       cell, per, dtε)
+
+# Several memory pairs (LM, MM) and (QN, NN) along the same pathlines in one
+# sweep: one departure point and one set of trilinear weights per cell,
+# each pair with its own time scale T.
+function _lagrangian_relax!(pairs::Tuple, U, V, W, dt, g, θ, memory_time, cell, per, dtε)
+    T = eltype(first(first(pairs)))
     Δ = (g.dx * g.dy * g.dz)^(1/3)
     cx = dt / g.dx; cy = dt / g.dy; cz = dt / g.dz
-    εfix = memory_time === nothing ? zero(T) : (dt / memory_time) / (1 + dt / memory_time)
+    εfix = memory_time === nothing ? zero(T) : (dtε / memory_time) / (1 + dtε / memory_time)
+    mems = _relax_memories(pairs)
     @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
         if cell !== nothing && cell[g.Hx+i, g.Hy+j, g.Hz+k]
-            LMn[i,j,k] = zero(T); MMn[i,j,k] = zero(T)
+            foreach(p -> (p[1][i,j,k] = zero(T); p[2][i,j,k] = zero(T)), pairs)
             continue
         end
-        lm, mm = _upstream(ILM, IMM, i - U[i,j,k] * cx, j - V[i,j,k] * cy, k - W[i,j,k] * cz,
-                           i, j, k, g, per, cell)
-        ε = if memory_time !== nothing
-            εfix
-        elseif mm > 0
-            Tl = θ * Δ * (max(lm, T(1e-8) * mm) * mm)^(-T(1) / 8)
-            (dt / Tl) / (1 + dt / Tl)
-        else
-            one(T)
-        end
-        LMn[i,j,k] = max(ε * LM[i,j,k] + (1 - ε) * lm, zero(T))
-        MMn[i,j,k] = ε * MM[i,j,k] + (1 - ε) * mm
+        up = _upstream_n(mems, i - U[i,j,k] * cx, j - V[i,j,k] * cy, k - W[i,j,k] * cz,
+                         i, j, k, g, per, cell)
+        _relax_pairs!(pairs, up, 1, i, j, k, θ, Δ, εfix, memory_time, dtε)
     end
     return nothing
+end
+
+_relax_memories(pairs::Tuple{}) = ()
+_relax_memories(pairs::Tuple) = (first(pairs)[3], first(pairs)[4], _relax_memories(Base.tail(pairs))...)
+
+@inline _relax_pairs!(::Tuple{}, up, n, i, j, k, θ, Δ, εfix, memory_time, dtε) = nothing
+@inline function _relax_pairs!(pairs::Tuple, up, n, i, j, k, θ, Δ, εfix, memory_time, dtε)
+    LMn, MMn, _, _, LM, MM = first(pairs)
+    T = eltype(LMn)
+    lm = up[n]; mm = up[n+1]
+    ε = if memory_time !== nothing
+        εfix
+    elseif mm > 0
+        Tl = θ * Δ * (max(lm, T(1e-8) * mm) * mm)^(-T(1) / 8)
+        (dtε / Tl) / (1 + dtε / Tl)
+    else
+        one(T)
+    end
+    @inbounds LMn[i,j,k] = max(ε * LM[i,j,k] + (1 - ε) * lm, zero(T))
+    @inbounds MMn[i,j,k] = ε * MM[i,j,k] + (1 - ε) * mm
+    _relax_pairs!(Base.tail(pairs), up, n + 2, i, j, k, θ, Δ, εfix, memory_time, dtε)
 end
 
 # -------------------------------------------------------------------------

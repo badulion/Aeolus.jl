@@ -135,6 +135,48 @@ _geomean(β) = exp2(mean(log2, β))
         @test_throws ArgumentError LagrangianDynamicSmagorinsky(g; beta = 1.0)
     end
 
+    @testset "0d. cadence: transport between evaluations, ε over the elapsed time" begin
+        g = RegularGrid(; size = (12, 10, 8), extent = (2π, 2.0, 1.0), halo = (2, 2, 2))
+        sim = BoussinesqSimulation(g; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+        _lasd_kolmogorov!(sim, Xoshiro(5); kc = 3)
+        interior_view(sim.u) .+= 1.0
+        for f in (sim.u, sim.v, sim.w); fill_halos!(f, sim.bcs); end
+        dt = 0.01; N = 4
+        c = LagrangianDynamicSmagorinsky(g; scale_dependent = true, cadence = N)
+        ref = LagrangianDynamicSmagorinsky(g; scale_dependent = true)
+        advance_sgs!(c, sim, dt); advance_sgs!(ref, sim, dt)        # initialisation
+        @test sgs_state(c)[1:8] == sgs_state(ref)[1:8]
+        per = (true, true, false)
+        z = zeros(size(c.I_LM))
+        for n in 1:N-1                                           # transport only
+            L, M, Q, R = copy(c.I_LM), copy(c.I_MM), copy(c.I_QN), copy(c.I_NN)
+            a1, a2, b1, b2 = similar(L), similar(L), similar(L), similar(L)
+            advance_sgs!(c, sim, dt)
+            LOPS._lagrangian_relax!(a1, a2, L, M, z, z, c.Up, c.Vp, c.Wp, dt, g, 1.5, Inf, nothing, per)
+            LOPS._lagrangian_relax!(b1, b2, Q, R, z, z, c.Up, c.Vp, c.Wp, dt, g, 1.5, Inf, nothing, per)
+            @test c.I_LM == a1 && c.I_MM == a2 && c.I_QN == b1 && c.I_NN == b2
+            @test c.since[] == n && c.acc_dt[] ≈ n * dt
+        end
+        # the evaluation commit: sources at the new state, ε from N dt
+        L, M, Q, R = copy(c.I_LM), copy(c.I_MM), copy(c.I_QN), copy(c.I_NN)
+        U, V, W = copy(c.Up), copy(c.Vp), copy(c.Wp)
+        acc = c.acc_dt[] + dt
+        advance_sgs!(c, sim, dt)
+        a1, a2, b1, b2 = similar(L), similar(L), similar(L), similar(L)
+        LOPS._lagrangian_relax!(a1, a2, L, M, c.workspace.LM, c.workspace.MM, U, V, W, dt, g, 1.5,
+                                nothing, nothing, per, acc)
+        LOPS._lagrangian_relax!(b1, b2, Q, R, c.second.QN, c.second.NN, U, V, W, dt, g, 1.5,
+                                nothing, nothing, per, acc)
+        @test c.I_LM == a1 && c.I_MM == a2 && c.I_QN == b1 && c.I_NN == b2
+        @test c.since[] == 0 && c.acc_dt[] == 0
+        # the counters are part of the state a rejected step restores
+        s0 = sgs_state(c); advance_sgs!(c, sim, dt)
+        @test c.since[] == 1
+        restore_sgs_state!(c, s0)
+        @test sgs_state(c) == s0 && c.since[] == 0
+        @test_throws ArgumentError LagrangianDynamicSmagorinsky(g; cadence = 0)
+    end
+
     mesh = RegularGrid(; size = (32, 32, 32), extent = (2π, 2π, 2π), halo = (3, 3, 3))
 
     @testset "1. scale invariance: isotropic turbulence, 32³, t = 3" begin
