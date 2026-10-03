@@ -150,6 +150,8 @@ export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
        advect_weno5!
+# Era VI, Phase 54 (P54-c): LES analysis toolbox
+export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
