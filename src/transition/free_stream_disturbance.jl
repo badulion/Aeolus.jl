@@ -254,9 +254,14 @@ free-stream disturbance advected through the fringe, superposed on the
 (Blasius) base target. Only the storage columns where ``λ(x) > 0`` are
 recomputed. `damping` as in [`disturbance_velocity!`](@ref) (e.g.
 `z -> smooth_step(z / (3δ_{99}))` keeps the forcing out of the inflow
-boundary layer). The target is refreshed when `t` has advanced by at
-least `interval` since the last refresh (`0`: every call; the RK3
-sub-stages of one step then share a target when `interval` is the step).
+boundary layer). The target is refreshed when `t` differs by at least
+`interval` from the time of the last refresh (`0`, the default: every
+call). Note that `step_rk3!` calls `body_force!` with `sim.t` = ``t``,
+``t + Δt``, ``t + 2Δt`` on its three sub-stages (it advances the clock
+by one Euler step per sub-stage), so the disturbance pattern of the last
+sub-stage is ``1.5Δt\\,U_∞`` ahead of the SSP-RK3 stage time
+``t + Δt/2`` — a phase error of the frozen pattern, small against its
+integral length when ``U_∞Δt ≪ L``.
 """
 function disturbance_fringe_update(fst::FreeStreamDisturbance, fr::FringeRegion,
                                    base; damping = nothing, interval::Real = 0)
