@@ -166,6 +166,8 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+# Era VI (P59-b, #184): the σ-model closure
+export SigmaModel, compute_sigma_νt!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!

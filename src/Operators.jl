@@ -30,6 +30,8 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+# Era VI (P59-b, #184): the σ-model closure (operators/sigma_closure.jl)
+export SigmaModel, compute_sigma_νt!
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -478,6 +480,8 @@ include("operators/spectra.jl")
 # Era VI: the SGS closure contract (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/sgs_closures.jl")
+# The σ-model closure (P59-b, #184).
+include("operators/sigma_closure.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.
