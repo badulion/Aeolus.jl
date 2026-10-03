@@ -194,7 +194,9 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         # The sound-proof step takes the contract's `sgs` closure: the dynamic
         # coefficient runs on the anelastic core, and MLSGS(Smagorinsky) is
         # the core's built-in closure bit for bit.
-        an = run_smoke(physics = soundproof(:anelastic))
+        # (MLSGS(Smagorinsky) is compared with the :smagorinsky provider; the
+        # default is the TKE closure since #182)
+        an = run_smoke(physics = merge(soundproof(:anelastic), Dict(:sgs => :smagorinsky)))
         for core in (:anelastic, :pseudo_incompressible)
             dyn = run_smoke(physics = merge(soundproof(core), Dict(:sgs => :dynamic)))
             c = BC.find_coupling(dyn, :sgs_dynamic)
@@ -255,12 +257,17 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         dt_diff = k.C_diffusive * Δ² / cfg.ν
         @test isapprox(dt_diff, 3.70; atol = 0.01)
         @test case.sim.t ≈ 24.0 && s.dt_sum ≈ 24.0
-        @test s.n < 12                          # measured 9 steps for 24 s
+        @test s.n < 12                          # measured 8 steps for 24 s (9 with :smagorinsky)
         @test s.retries == 0
         @test s.dt_max <= dt_diff + 1e-12       # never above the diffusive limit
         @test s.dt_max > cfg.dt                 # but longer than the fixed 2 s
         @test s.cfl_max <= k.C_advective
-        @test get(s.limiters, :diffusive, 0) + get(s.limiters, :sgs, 0) == s.n   # diffusion binds
+        # diffusion binds (the molecular ν = 2 m²/s: 3.70 s), except where the
+        # flow reaches the advective limit, 4 % below it (≈ 3.55 s). Measured
+        # with the default TKE closure (#182): 7 diffusive + 1 advective of 8
+        # steps; with :smagorinsky (the default before #182) all 9 diffusive.
+        @test keys(s.limiters) ⊆ Set([:diffusive, :sgs, :advective])
+        @test get(s.limiters, :diffusive, 0) + get(s.limiters, :sgs, 0) >= s.n - 1
         # the ledgers close with a varying dt (they book with ledger.dt)
         @test case.ledger.elapsed ≈ 24.0
         for r in BC.surface_budget(case.ledger)
@@ -349,13 +356,15 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         # accepted step whatever the stepper (fixed: one step!; IMEX: one
         # step_imex!; adaptive: one step_adaptive! piece, after the CFL
         # estimate, which evaluates the closure without committing).
+        # (on the :smagorinsky provider, the default before #182: the counter
+        # wraps StaticSmagorinsky, so its flow is that provider's bit for bit)
         C_s = BC.CaseConfig(:smoke).C_s
-        plain = Dict(ts => run_smoke(physics = Dict(:timestepper => ts)) for ts in (:adaptive, :imex))
-        plain[:fixed] = bous
+        smag(ts) = Dict(:timestepper => ts, :sgs => :smagorinsky)
+        plain = Dict(ts => run_smoke(physics = smag(ts)) for ts in (:fixed, :adaptive, :imex))
         state(c) = (interior_view(c.sim.u), interior_view(c.sim.w), interior_view(c.sim.θ))
         for ts in (:fixed, :adaptive, :imex)
-            case = BC.build_case(smoke(physics = Dict(:timestepper => ts)); io = devnull)
-            @test case.step_kwargs.sgs isa StaticSmagorinsky       # the default provider's closure
+            case = BC.build_case(smoke(physics = smag(ts)); io = devnull)
+            @test case.step_kwargs.sgs isa StaticSmagorinsky       # the provider's closure
             cnt = CommitCounter(C_s)
             case.step_kwargs = merge(case.step_kwargs, (sgs = cnt,))
             BC.run_case!(case)
@@ -370,7 +379,7 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         # rejected after it committed; the commit is rolled back with the
         # state, so the commits are exactly the accepted pieces, each with
         # its own dt, and they add up to the simulated time
-        case = BC.build_case(smoke(physics = Dict(:timestepper => :adaptive)); io = devnull)
+        case = BC.build_case(smoke(physics = smag(:adaptive)); io = devnull)
         cnt = CommitCounter(C_s)
         case.step_kwargs = merge(case.step_kwargs, (sgs = cnt,))
         ad = BC.find_coupling(case, :timestep_adaptive)

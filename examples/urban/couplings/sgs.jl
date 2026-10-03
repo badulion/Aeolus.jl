@@ -8,9 +8,12 @@
 # added where the built-in Smagorinsky adds them; its memory is committed
 # once per accepted step.
 #
-#   :smagorinsky (default) Operators.StaticSmagorinsky(cfg.C_s) — the
+#   :tke         (default, couplings/sgs_tke.jl) PrognosticSGS.TKEClosure —
+#                the Deardorff/Moeng prognostic SGS TKE closure (#182).
+#   :smagorinsky Operators.StaticSmagorinsky(cfg.C_s) — the
 #                Smagorinsky–Lilly closure, C_s = cfg.C_s (0.1); bit for
-#                bit the built-in closure of the cores.
+#                bit the built-in closure of the cores (the default before
+#                #182).
 #   :dynamic     Operators.DynamicSmagorinsky — the Germano–Lilly dynamic
 #                coefficient, plane-averaged, from the resolved flow
 #                (moved to src from the example's dead
@@ -34,7 +37,8 @@ end
 """
     SGSSmagorinsky
 
-Slot `:sgs`, provider `:smagorinsky` (default): `StaticSmagorinsky(C_s)`
+Slot `:sgs`, provider `:smagorinsky` (the default before #182; now
+`:tke`, couplings/sgs_tke.jl): `StaticSmagorinsky(C_s)`
 with the core's `C_s` (`cfg.C_s`) and turbulent Prandtl number, passed as
 the `sgs` of every step — the closure the cores run built in, bit for
 bit. With `C_s = 0` there is no closure (no SGS terms), as before.
@@ -43,6 +47,7 @@ struct SGSSmagorinsky <: AbstractCoupling end
 coupling_name(::Type{SGSSmagorinsky}) = :sgs_smagorinsky
 slot(::Type{SGSSmagorinsky}) = :sgs
 provider(::Type{SGSSmagorinsky}) = :smagorinsky
+is_default(::Type{SGSSmagorinsky}) = false
 modules_used(::Type{SGSSmagorinsky}) = (:Simulations, :Operators)
 step_options(c::SGSSmagorinsky, case) =
     case.sim.C_s == 0 ? (;) : (sgs = StaticSmagorinsky(case.sim.C_s),)

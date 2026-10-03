@@ -35,6 +35,10 @@
 # IBM correction applied after the projection leaves the velocity
 # slightly convergent there (the flux form still conserves the total).
 #
+# A tracer may name its own diffusivity (`ensure_tracer!(…; diffusivity)`):
+# the SGS TKE `e` of the `:sgs => :tke` provider is diffused with 2ν_t, the
+# TKE flux of the Deardorff closure (#182).
+#
 # SGS diffusion (P56-a, #177). Before #177 nothing in the case diffused a
 # tracer: θ got the closure's scalar flux inside step!, but qv, ql, the
 # chemistry species and the pollutant saw only the implicit dissipation of
@@ -135,21 +139,22 @@ function TracerSGSDiffusion(case)
 end
 
 """
-    sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water = false) -> q
+    sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water = false, κ = case.sim.κt) -> q
 
 Advance the tracer field `q` by the SGS diffusion over `dt` (see
-[`TracerSGSDiffusion`](@ref)). With `water = true` the increment is booked
+[`TracerSGSDiffusion`](@ref)) with the eddy diffusivity `κ` (the
+closure's `κt`; a tracer can name another, see `tracer_diffusivity`). With `water = true` the increment is booked
 in `d.dW` / `d.dWρ` (`ledger_water_split`), and the relative change of the
 conserved total (`Σ q` over fluid cells, or `Σ W q`) is recorded in
 `d.resid`.
 """
-function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false)
+function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false, κ = case.sim.κt)
     sim, mesh = case.sim, case.mesh
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     fill_halos!(q, d.bcs)
     fill!(d.tend.data, 0)
-    add_eddy_diffusion_scalar!(d.tend, q, sim.κt; mask = d.mask, weights = d.weights)
+    add_eddy_diffusion_scalar!(d.tend, q, κ; mask = d.mask, weights = d.weights)
     tend = view(d.tend.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
     qi = interior_view(q)
     Wk = d.weights === nothing ? nothing : view(d.weights[1], Hz+1:Hz+Nz)
@@ -277,7 +282,7 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
             c.dW[] += dt * flat; c.dWρ[] += dt * redis
         end
         # SGS diffusion with κt, after the advective update (#177)
-        d === nothing || sgs_diffuse!(d, case, q, dt; water = iswater)
+        d === nothing || sgs_diffuse!(d, case, q, dt; water = iswater, κ = tracer_diffusivity(t, case))
     end
     return nothing
 end

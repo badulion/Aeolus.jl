@@ -1,0 +1,135 @@
+# The prognostic SGS TKE closure (Aeolus.PrognosticSGS, Era VI P56-b, #182)
+# in the `:sgs` slot, provider `:tke` (the default).
+#
+# Deardorff (1980) with the Moeng (1984) coefficients: ν_t = c_k l √e,
+# κ_t = (1 + 2l/Δ) ν_t, l = min(Δ, 0.76 √e/N, κ d_wall), ε = c_ε e^{3/2}/l.
+# It is PALM's urban-LES default and the only closure here whose mixing
+# responds prognostically to stratification (the stable nights).
+#
+# How it is wired:
+#
+#   * the closure object is the `sgs` of every dynamics step
+#     (`step_options`), so every core and time stepper runs it through the
+#     P54-a contract: the coefficients from e, one commit of the sources
+#     (shear production — the exact dual of the SGS momentum operator —,
+#     buoyancy production with the θ_v of the qv tracer, the implicit
+#     sinks) per accepted step, and an exact rollback of a rejected
+#     adaptive step;
+#   * e is the registered tracer `:e` (`advect = true, positive = true`):
+#     the `:transport` stage advects it with the case's scheme and
+#     positivity limiter (W-weighted on a sound-proof core) and diffuses it
+#     with 2ν_t (`diffusivity`), mask-aware; the closure itself runs with
+#     `transport = false`, so e is transported once;
+#   * the mixing length is capped at κ · `IBM.wall_distance` (floor, roofs
+#     and facades) and c_ε gets Moeng's 3.9 at the first level above a
+#     surface (`IBM.first_level_cells`); e = 0 in the buildings;
+#   * the first air cell of every column (`bus.k_air`) holds the surface
+#     value e_s = u*²/√(c_k c_ε) with the friction velocity of the surface
+#     exchange (`bus.u_star`, MOST): no second log law here.
+#
+# A TKE closure has its own stability length scale, so no TurbulenceStability
+# stability function (nor the StabilityCorrected wrapper of P55-e, #187) is
+# applied on top of it.
+
+"""
+    SGSTKE
+
+Slot `:sgs`, provider `:tke` (default): `PrognosticSGS.TKEClosure`, the
+Deardorff (1980) / Moeng (1984) prognostic-TKE closure, passed as the `sgs`
+of every step, with the SGS TKE as the advected, positive tracer `:e`
+(m² s⁻², written to the NetCDF file) diffused with `2ν_t` by the
+`:transport` stage.
+
+Options: `wall_cap = true` (cap ``l`` at ``κ d_{wall}``, `IBM.wall_distance`),
+`surface = true` (the first air cell takes ``e_s = u_*^2/\\sqrt{c_k c_ε}``
+from `bus.u_star`), `e_min = 1e-4` (m² s⁻²: the floor of the initial
+local-equilibrium ``e``; ``e = 0`` is a fixed point of the TKE equation).
+"""
+struct SGSTKE{C, F} <: AbstractCoupling
+    closure::C
+    K2::F                       # 2ν_t, the diffusivity of :e in the :transport stage
+    e_min::Float64
+end
+coupling_name(::Type{<:SGSTKE}) = :sgs_tke
+slot(::Type{<:SGSTKE}) = :sgs
+provider(::Type{<:SGSTKE}) = :tke
+is_default(::Type{<:SGSTKE}) = true
+modules_used(::Type{<:SGSTKE}) = (:PrognosticSGS, :IBM)
+default_options(::Type{<:SGSTKE}) = (wall_cap = true, surface = true, e_min = 1e-4)
+
+function build(::Type{<:SGSTKE}, case, o)
+    m, cfg, sm = case.mesh, case.cfg, case.geom.sm
+    K2 = Field(CellCenter(), m)
+    diffusivity = cs -> (K2.data .= 2 .* cs.sim.νt.data; K2)
+    e = ensure_tracer!(case, :e; advect = true, positive = true, units = "m2 s-2",
+                       long_name = "subgrid-scale turbulent kinetic energy",
+                       diffusivity = diffusivity)
+    closure = TKEClosure(m; e = e, mask = sm.mask,
+                         wall_distance = o.wall_cap ? wall_distance(sm; bottom = true) : nothing,
+                         first_level = first_level_cells(sm; bottom = true),
+                         surface = o.surface ? (u_star = case.bus.u_star, k = case.bus.k_air) : nothing,
+                         θ₀ = cfg.θ₀, g_accel = cfg.g, qv = tracer(case, :qv),
+                         transport = false)
+    return SGSTKE(closure, K2, Float64(o.e_min))
+end
+
+# the local equilibrium of the initial flow (at least e_min) once the
+# geometry and the initial state exist
+init!(c::SGSTKE, case) = (initialize_tke!(c.closure, case.sim; e_min = c.e_min); nothing)
+
+step_options(c::SGSTKE, case) = (sgs = c.closure,)
+
+# The SGS TKE carries no surface energy and no water: nothing for the ledger
+# (its dissipation heating is neglected, as with every closure of the case).
+budget!(c::SGSTKE, case, l) = nothing
+
+"""
+    tke_profile(c::SGSTKE, case) -> (canopy, free, νt_canopy)
+
+Mean SGS TKE (m² s⁻²) over the fluid cells of the levels with buildings and
+of the free stream (above the highest roof + 1, below the sponge), and the
+mean ``ν_t`` of the canopy levels.
+"""
+function tke_profile(c::SGSTKE, case)
+    m = case.mesh
+    kr = highest_solid_level(case)
+    ksp = floor(Int, case.cfg.sponge_frac * m.Nz)
+    solid = view(case.geom.sm.mask, m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz)
+    e = interior_view(c.closure.e); ν = interior_view(case.sim.νt)
+    lvl(a, ks) = (sel = [(i, j, k) for k in ks for j in 1:m.Ny for i in 1:m.Nx if !solid[i, j, k]];
+                  isempty(sel) ? NaN : mean(a[i, j, k] for (i, j, k) in sel))
+    return (canopy = lvl(e, 1:kr), free = lvl(e, kr+2:ksp), νt_canopy = lvl(ν, 1:kr))
+end
+
+function report(c::SGSTKE, case)
+    p = tke_profile(c, case)
+    st = tke_statistics(c.closure)
+    return @sprintf("SGS TKE: mean e canopy %.3f, free stream %.3f m²/s²; mean ν_t canopy %.3f m²/s; %d clips",
+                    p.canopy, p.free, p.νt_canopy, st.clips)
+end
+
+function smoke_check(c::SGSTKE, case)
+    sim, m = case.sim, case.mesh
+    cl = c.closure
+    e = interior_view(cl.e)
+    solid = view(case.geom.sm.mask, m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz)
+    checks = ["e ≥ 0 and ν_t ≥ 0" => minimum(e) >= 0 && minimum(interior_view(sim.νt)) >= 0,
+              "e = 0 in the buildings" => all(e[solid] .== 0),
+              "κ_t ≥ ν_t" => all(interior_view(sim.κt) .>= interior_view(sim.νt)),
+              "e > 0 in the air (the closure is active)" => maximum(e) > 0,
+              "TKE equation advanced once per accepted step" => tke_statistics(cl).steps > 0]
+    if sim isa BoussinesqSimulation
+        # Σ P_s V is the resolved-KE sink of the SGS momentum operator
+        b = kinetic_energy_budget(sim; sgs = cl)
+        tb = tke_budget(cl, sim)
+        push!(checks, "Σ P_s V = −(resolved-KE SGS sink) to 1e-8" =>
+                          b.sgs < 0 && abs(tb.shear + b.sgs) <= 1e-8 * abs(b.sgs))
+    end
+    return checks
+end
+
+smoke_variants(::Type{<:SGSTKE}) =
+    ((label = "TKE without the wall cap and the surface value",
+      options = Dict(:sgs_tke => (wall_cap = false, surface = false))),)
+
+register!(SGSTKE)
