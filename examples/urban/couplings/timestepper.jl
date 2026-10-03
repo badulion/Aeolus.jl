@@ -23,11 +23,13 @@
 # on a retry or an IMEX stage is safe.
 #
 # Every provider passes the numerics slots' step keywords
-# (`case.step_kwargs`: `momentum_advection`, `eddy_viscosity!`, #132) to
-# the step it takes — `step!`, or `step_imex!`, which takes the same
-# keywords — so the momentum-advection and SGS choices hold under every
-# time stepper. The adaptive provider estimates the diffusive limit with
-# the selected SGS closure's ν_t, not with Smagorinsky's.
+# (`case.step_kwargs`: `momentum_advection` (#132), `sgs` (#167)) to the
+# step it takes — `step!`, or `step_imex!`, which takes the same keywords —
+# so the momentum-advection and SGS choices hold under every time stepper.
+# The SGS closure commits its memory once per accepted step: the adaptive
+# provider also hands it to `step_adaptive!`, which rolls it back with the
+# state when a step is rejected, and estimates the diffusive limit with the
+# closure's pure `compute_sgs!` (νt and κt of the current flow; no commit).
 #
 # `adaptive_dt`, `step_adaptive!` and `step_imex!` are typed on
 # BoussinesqSimulation, so both providers are incompatible with the
@@ -105,9 +107,10 @@ failure (`max_retries`, `divergence_tol`, `max_velocity`). With
 limited only by the explicitly treated processes.
 
 Each step (and each retried piece) is `step!` — or `step_imex!` — with
-the numerics slots' `case.step_kwargs`. With an `eddy_viscosity!` closure
-selected (`sgs = :dynamic`, `:mlsgs`) the diffusive limit is computed
-from that closure's ν_t of the current flow.
+the numerics slots' `case.step_kwargs`. The diffusive limit is computed
+from the selected SGS closure's ν_t and κ_t of the current flow, and the
+closure's memory is snapshot / restored by `step_adaptive!` around a
+rejected step, so it commits exactly once per accepted piece.
 
 `dt_max` is further capped at the shortest period in `cfg.cadence`, so a
 step never skips a firing of a cadence (the soil and building couplings
@@ -155,25 +158,13 @@ end
 """
     sgs_cfl_diagnostics(case, constraints)
 
-`cfl_diagnostics` of the case's core with the SGS viscosity of the
-selected closure: the `eddy_viscosity!` of `case.step_kwargs` fills
-`sim.νt` from the current flow when there is one (it is what the next
-step will use, with or without `C_s ≠ 0`), otherwise the built-in
-Smagorinsky ν_t is recomputed.
+`cfl_diagnostics` of the case's core with the SGS closure the next step
+will run (the `sgs` of `case.step_kwargs`; none when `C_s = 0` and no
+other closure is selected). The closure's coefficients are recomputed
+from the current flow with the pure `compute_sgs!`: no closure memory
+advances, however often the limit is estimated.
 """
-function sgs_cfl_diagnostics(case, k)
-    sim = case.sim
-    ev = get(case.step_kwargs, :eddy_viscosity!, nothing)
-    ev === nothing && return cfl_diagnostics(sim, k)
-    for f in (sim.u, sim.v, sim.w)
-        fill_halos!(f, sim.bcs)
-    end
-    ev(sim.νt, sim.u, sim.v, sim.w)
-    fill_halos!(sim.νt, sim.bcs)
-    # `step!` applies the closure whatever `C_s` is, so its ν_t limits
-    # the step even when the built-in Smagorinsky is off (`C_s = 0`)
-    return cfl_diagnostics(sim, k; update_νt = false, sgs_active = true)
-end
+sgs_cfl_diagnostics(case, k) = cfl_diagnostics(case.sim, k; sgs = get(case.step_kwargs, :sgs, nothing))
 
 function next_dt(c::AdaptiveStep, case)
     sim, k = case.sim, c.constraints
@@ -181,7 +172,8 @@ function next_dt(c::AdaptiveStep, case)
         d = sgs_cfl_diagnostics(case, k)
         lim = d.limiter
     else
-        l = imex_stability_limit(sim, c.scheme; constraints = k)
+        l = imex_stability_limit(sim, c.scheme; constraints = k,
+                                 sgs = get(case.step_kwargs, :sgs, nothing))
         d, lim = l.diagnostics, l.limiter
     end
     dt = adaptive_dt(sim, k; dt_prev = c.dt_prev, diagnostics = d, scheme = c.scheme)
@@ -193,6 +185,7 @@ end
 function advance_dynamics!(c::AdaptiveStep, case, dt)
     sim, s = case.sim, c.stats
     skw, scheme = case.step_kwargs, c.scheme
+    sgs = get(skw, :sgs, nothing)      # step_adaptive! snapshots its memory
     # the step (and every retry) with the numerics slots' keywords
     stepper = scheme === nothing ? ((m, h; kw...) -> step!(m, h; kw..., skw...)) :
                                    ((m, h; kw...) -> step_imex!(m, h, scheme; kw..., skw...))
@@ -204,7 +197,7 @@ function advance_dynamics!(c::AdaptiveStep, case, dt)
                                     stepper = stepper,
                                     max_retries = c.max_retries, scheme = c.scheme,
                                     divergence_tol = c.divergence_tol,
-                                    max_velocity = c.max_velocity)
+                                    max_velocity = c.max_velocity, sgs = sgs)
         remaining -= used
         nretry += r
         piece_min = min(piece_min, used)
@@ -259,7 +252,7 @@ Slot `:timestepper`, provider `:imex`: `step_imex!(sim, cfg.dt, ARK2())`
 — the diffusion (molecular + SGS, frozen ν_eff) implicit, the rest
 explicit, a projection after each of the two stages. The numerics slots'
 step keywords are passed on: the momentum-advection operator is the
-explicit one, and an `eddy_viscosity!` closure supplies the frozen ν_t. Options `tol`
+explicit one, and the `sgs` closure supplies the frozen ν_t and κ_t. Options `tol`
 and `maxit` of the implicit CG solves. Buys nothing at a dt the explicit
 step is stable at (it costs two projections and four implicit solves per
 step); it is what lets `cfg.dt` exceed the diffusive limit Δ²/ν_eff.
