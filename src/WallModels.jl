@@ -52,11 +52,16 @@ using ..BoundaryConditions: fill_halos!, Periodic
 using ..SurfaceExchange
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
                          SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, von_karman
+using ..Grids: CellCenter, FaceX, FaceY, FaceZ
+using ..Fields: Field
+using ..CutCell: GhostCellStencil, CutCellGeometry, _center_velocity, _image_value
+import ..CutCell: wall_shear_stress
 
 # Each file exports its own names, so a later phase adds a file and an
 # include line here and nothing else.
 include("wall_models/laws.jl")
 include("wall_models/operator.jl")
 include("wall_models/immersed.jl")
+include("wall_models/cutcell.jl")
 
 end # module

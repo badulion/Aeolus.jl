@@ -258,4 +258,103 @@ end
     @test abs(o16.Ub - UB_LM) / UB_LM > 0.10
 end
 
+
+# -------------------------------------------------------------------------
+# Cut-cell walls: wall_shear_stress(…, law; ν) at the image-point probe
+# -------------------------------------------------------------------------
+
+@testset "Laminar limit, cut cell: h⁺ < 1 gives the ν-linear stress (1e-3)" begin
+    law = SpaldingLaw()
+    # a linear profile over a flat cut floor, Spalding vs ν-linear
+    νc = 1.5e-2
+    gc = RegularGrid(; size = (4, 4, 32), extent = (1.0, 1.0, 1.0), halo = (2, 2, 2))
+    zw = (32 ÷ 4 + 0.7) * gc.dz
+    geom = Aeolus.CutCell.cut_cell_geometry(gc, (x, y, z) -> z - zw)
+    st = Aeolus.CutCell.build_ghost_stencils(geom, gc)
+    α = 2.5
+    u = Field(FaceX(), gc); v = Field(FaceY(), gc); w = Field(FaceZ(), gc)
+    for k in axes(u.data, 3), j in axes(u.data, 2), i in axes(u.data, 1)
+        u.data[i, j, k] = α * ((k - gc.Hz - 0.5) * gc.dz - zw)
+    end
+    τl = wall_shear_stress(u, v, w, st, geom, νc)
+    τn = wall_shear_stress(u, v, w, st, geom, nothing; ν = νc)
+    τs = wall_shear_stress(u, v, w, st, geom, law; ν = νc)
+    valid = [s.valid for s in st]
+    hpc = maximum(s.probe * sqrt(τs[m]) / νc for (m, s) in enumerate(st) if s.valid)
+    errc = maximum(abs(τs[m] - τl[m]) / τl[m] for m in eachindex(st) if valid[m])
+    @info @sprintf("  cut cell: h⁺ ≤ %.2f, max |τ_Spalding − τ_ν-linear|/τ_ν-linear = %.1e", hpc, errc)
+    @test τn == τl                                       # law = nothing is the ν-linear method
+    @test hpc < 1
+    @test errc < 1e-3
+    # and the slip velocity of the reconstruction vanishes there (no-slip)
+    slip = wall_slip_velocity(u, v, w, st, geom, law; ν = νc)
+    ut = [τl[m] * s.probe / νc for (m, s) in enumerate(st)]
+    @test maximum(abs(slip[m][1]) / ut[m] for m in eachindex(st) if valid[m]) < 1e-3
+end
+
+@testset "Cut-cell channel inclined at 30°: ⟨τ_w⟩ = δ dp/dx; ν-linear far below" begin
+    # A channel of half-width δ = 1 inclined at 30° in the x-y plane, cut
+    # through a 4 × 4 box (60 × 60 cells, Δ = 1/15), carrying the mean
+    # profile of Re_τ = 1000 (Spalding's u⁺(y⁺) with u_τ = 1, ν = 1e-3)
+    # along the channel. In a fully developed channel τ_w = δ dp/dx = u_τ²
+    # = 1. The plane mean is area-weighted (geom.area) over the stencils
+    # whose foot point is away from the box edges.
+    law = SpaldingLaw()
+    ν, δ, uτ, θ = 1e-3, 1.0, 1.0, π / 6
+    n = (-sin(θ), cos(θ)); t = (cos(θ), sin(θ))
+    N, L = 60, 4.0
+    g = RegularGrid(; size = (N, N, 4), extent = (L, L, 4L / N), halo = (2, 2, 2))
+    φ(x, y, z) = δ - abs((x - L / 2) * n[1] + (y - L / 2) * n[2])
+    geom = Aeolus.CutCell.cut_cell_geometry(g, φ)
+    U(x, y, z) = (d = φ(x, y, z); d <= 0 ? 0.0 : uτ * spalding_uplus(law, d * uτ / ν))
+    u = Field(FaceX(), g); v = Field(FaceY(), g); w = Field(FaceZ(), g)
+    for I in CartesianIndices(u.data)
+        i, j, k = Tuple(I)
+        zc = (k - g.Hz - 0.5) * g.dz
+        u.data[I] = U((i - g.Hx - 1) * g.dx, (j - g.Hy - 0.5) * g.dy, zc) * t[1]
+        v.data[I] = U((i - g.Hx - 0.5) * g.dx, (j - g.Hy - 1) * g.dy, zc) * t[2]
+    end
+    function plane_mean(st, τ)
+        sel = [m for (m, s) in enumerate(st) if s.valid && geom.area[s.i, s.j, s.k] > 0 &&
+               L / 4 < s.xw[1] < 3L / 4 && L / 4 < s.xw[2] < 3L / 4]
+        A = [geom.area[st[m].i, st[m].j, st[m].k] for m in sel]
+        return sum(A .* τ[sel]) / sum(A), length(sel), st[sel[1]].probe
+    end
+    # the image point two cells out (probe_factor = 2): there trilinear
+    # interpolation of the logarithmic profile is accurate; at the default
+    # one cell out (probe_factor = 1) the concave profile is interpolated
+    # 5–7 % low (measured ⟨τ_w⟩ = 0.947 at Δ = 0.1, 0.931 at Δ = 1/15 and 0.05)
+    st = Aeolus.CutCell.build_ghost_stencils(geom, g; probe_factor = 2)
+    τm, nsel, probe = plane_mean(st, wall_shear_stress(u, v, w, st, geom, law; ν = ν))
+    τl, _, _ = plane_mean(st, wall_shear_stress(u, v, w, st, geom, ν))
+    st1 = Aeolus.CutCell.build_ghost_stencils(geom, g)
+    τm1, _, _ = plane_mean(st1, wall_shear_stress(u, v, w, st1, geom, law; ν = ν))
+    @info @sprintf("  30° cut-cell channel, %d stencils, probe⁺ = %.0f: ⟨τ_w⟩ Spalding %.4f, ν-linear %.4f (−%.0f %%); δ dp/dx = 1; probe_factor 1: %.4f",
+                   nsel, probe * uτ / ν, τm, τl, 100 * (1 - τl), τm1)
+    @test abs(τm - δ * uτ^2) / (δ * uτ^2) < 0.05
+    @test τl < 0.5 * δ * uτ^2                       # the ν-linear underpredicts by > 50 %
+    # the slip velocity carries the modelled stress through the linear
+    # ghost-cell profile: ν_eff (u_t − u_s)/probe = τ_w, to round-off
+    ν_eff = 0.05
+    τs = wall_shear_stress(u, v, w, st, geom, law; ν = ν)
+    slip = wall_slip_velocity(u, v, w, st, geom, law; ν = ν, ν_eff = ν_eff)
+    uc, vc, wc = Aeolus.CutCell._center_velocity(u, v, w, geom, g)
+    err = 0.0
+    for (m, s) in enumerate(st)
+        (s.valid && τs[m] > 0) || continue
+        ui = Aeolus.CutCell._image_value(uc, s); vi = Aeolus.CutCell._image_value(vc, s)
+        un = ui * s.n[1] + vi * s.n[2]
+        ut = hypot(ui - un * s.n[1], vi - un * s.n[2])
+        us = hypot(slip[m][1], slip[m][2]) * sign((ui - un * s.n[1]) * slip[m][1] + (vi - un * s.n[2]) * slip[m][2])
+        err = max(err, abs(ν_eff * (ut - us) / s.probe - τs[m]) / τs[m])
+    end
+    @test err < 1e-12
+    # and slip_wall_value hands one component to reconstruct_wall_velocity!
+    wv = slip_wall_value(slip, st, geom, 1)
+    s1 = st[findfirst(s -> s.valid, st)]
+    @test wv(s1.xw...) == slip[findfirst(s -> s.valid, st)][1]
+    su = Aeolus.CutCell.build_ghost_stencils(geom, g, FaceX())
+    @test Aeolus.CutCell.reconstruct_wall_velocity!(deepcopy(u), su, geom; wall_value = wv) isa Field
+end
+
 end
