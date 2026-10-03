@@ -1315,7 +1315,7 @@ inversion (z = 65.6 m and 71.9 m) `Ri_g` of the means is 0.273 and
 Richardson number). Below the inversion θ is uniform, and the vapour
 lapse of the initial state (``q_v ∝ e^{-z/800\,{\rm m}}``) makes
 ``θ_v`` decrease with height: ``N^2 ≈ -7 × 10^{-5}`` s⁻² at step 0, and
-−6 to −16 × 10⁻⁵ s⁻² after 12 steps of noon heating, so `Ri_g` < 0 and
+−2 to −16 × 10⁻⁵ s⁻² after 12 steps of noon heating, so `Ri_g` < 0 and
 `f_m` = 2.5–10. The same vapour lapse removes about 2/3 of the dry
 ``gΓ/θ_0 = 1.0 × 10^{-4}`` s⁻² above the inversion (3.3 × 10⁻⁵ at step 0).
 Cost per evaluation (compiled): 0.15 ms on the 16³ smoke grid
