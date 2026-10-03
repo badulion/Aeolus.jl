@@ -150,3 +150,58 @@ function add_tensor_diffusion_scalar!(tϕ, ϕ, K::DiffusivityTensor;
                                   part !== :offdiagonal, part !== :diagonal, mesh(ϕ))
     return nothing
 end
+
+"""
+    isentropic_tensor!(K::DiffusivityTensor, θ, κh, κv; slope_max = 1.0,
+                       grad_min = 1e-6, bcs = nothing) -> K
+
+The rotated (isentropic, Redi 1982) diffusivity tensor
+
+    K = κh (I − n nᵀ) + κv n nᵀ,   n = ∇θ / |∇θ|,
+
+κh along the isentropes and κv across them, written as
+`K = κh I − f (κh − κv) n nᵀ` with the taper factor `f ∈ [0, 1]` that blends
+it toward the isotropic `κh I`:
+
+* **small-slope taper** (the `(S_max/S)²` slope clipping of Gerdes,
+  Köberle & Willebrand 1991; Danabasoglu & McWilliams 1995 discuss
+  tapering the rotated tensor at steep slopes): with the
+  isentropic slope `S = |∇ₕθ| / ∂θ/∂z`, `f = 1` for `S ≤ slope_max` and
+  `f = (slope_max/S)²` above it;
+* **isotropic fallback**: `f = 0`, `K = κh I`, where `N² ∝ ∂θ/∂z ≤ 0`
+  (n is not a stable-stratification direction; this is the limit of the
+  taper as `S → ∞`, so K is continuous across `N² = 0`), and `f` ramps
+  linearly to 0 as `|∇θ| → 0` below `grad_min` (K m⁻¹, a numerical floor
+  under which the direction of ∇θ is noise).
+
+`∇θ` is the centred gradient at the cell centre, so the halos of `θ` must be
+filled. `κh`, `κv` are `Field{CellCenter}`s or numbers (m² s⁻¹; `κv = 0` is
+the pure isentropic operator). The interior of `K` is set; with `bcs` the
+halos are then filled with it. Every cell's K has the eigenvalues
+`κh, κh, κh − f (κh − κv)`, so it is positive semi-definite for
+`κh, κv ≥ 0` and [`add_tensor_diffusion_scalar!`](@ref) dissipates variance.
+
+Applied to `θ` itself with `κv = 0` the operator gives zero tendency where
+∇θ is uniform (the discrete triad gradients are then the cell's ∇θ, which
+K annihilates): diffusion along the isentropes does not move them.
+
+For `n = ẑ` (horizontally uniform θ) `K = diag(κh, κh, κv)`, the diagonal
+operator. The flagship's daytime convective boundary layer has `N² ≤ 0`
+over most of the domain, where this is the isotropic `κh`.
+
+References: Redi (1982), *J. Phys. Oceanogr.* 12, 1154; Gerdes, Köberle &
+Willebrand (1991), *Clim. Dyn.* 5, 211; Danabasoglu & McWilliams (1995),
+*J. Climate* 8, 2967; Griffies et al. (1998), *J. Phys. Oceanogr.* 28, 805.
+"""
+function isentropic_tensor!(K::DiffusivityTensor, θ, κh, κv;
+                            slope_max::Real = 1.0, grad_min::Real = 1e-6, bcs = nothing)
+    slope_max > 0 || throw(ArgumentError("slope_max must be positive, got $slope_max"))
+    grad_min >= 0 || throw(ArgumentError("grad_min must be ≥ 0, got $grad_min"))
+    _isentropic_tensor!(K.K11.data, K.K22.data, K.K33.data, K.K12.data, K.K13.data,
+                        K.K23.data, θ, _kdata(κh), _kdata(κv), slope_max, grad_min, mesh(θ))
+    bcs === nothing || fill_halos!(K, bcs)
+    return K
+end
+_kdata(x::Real) = x
+_kdata(x::Field) = x.data
+_kdata(x::AbstractArray) = x

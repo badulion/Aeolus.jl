@@ -6,6 +6,11 @@
 #     eigenvalue for constant K, conservation, the down-gradient property
 #     for random positive semi-definite K (one step and 200 steps), symmetry,
 #     reduction of diag(κh, κh, κv) to the diagonal operator, walls;
+#   * the rotated isentropic tensor: no tendency of θ along tilted
+#     isentropes (κv = 0), principal-axis spreading of a blob at 2κh t and
+#     2κv t, Σϕ² non-increasing over 200 steps for random ϕ and θ,
+#     n = ẑ reduces to the diagonal operator, the slope taper and the
+#     N² ≤ 0 fallback;
 
 using Test
 using Aeolus
@@ -272,5 +277,173 @@ tensor_tend181(ϕ, K; kw...) = (t = Field(CellCenter(), ϕ.mesh);
         add_tensor_diffusion_scalar!(ts, ϕ, K; part = :offdiagonal)
         @test maxabs181(iv181(ts) .- iv181(tf)) <= 1e-13 * maxabs181(tf)
         @test_throws ArgumentError add_tensor_diffusion_scalar!(ts, ϕ, K; part = :bogus)
+    end
+    # ---------------------------------------------------------------------
+    # the rotated isentropic tensor
+    # ---------------------------------------------------------------------
+    # a tilted stable stratification θ = θ₀ + Γ (z − s (x cos φ + y sin φ)):
+    # the isentropes have slope s, n ∝ (−s cos φ, −s sin φ, 1)
+    tilted181(θ0, Γ, s, φ) = (x, y, z) -> θ0 + Γ * (z - s * (x * cos(φ) + y * sin(φ)))
+
+    @testset "isentropic: no tendency of θ along tilted isentropes (κv = 0)" begin
+        g = grid181((16, 12, 10))
+        Γ, s, φ = 0.01, 0.05, 0.6                      # K m⁻¹, slope 0.05
+        θ = setfield181!(Field(CellCenter(), g), g, tilted181(300.0, Γ, s, φ))  # halos analytic
+        rng = Xoshiro(18110)
+        κh = Field(CellCenter(), g)
+        κh.data .= 0.5 .+ 4.5 .* rand(rng, size(κh.data)...)   # varying 10×, halos too
+        K = isentropic_tensor!(DiffusivityTensor(g), θ, κh, 0.0)
+        # K's halos: the interior pattern does not matter for the property;
+        # copy the interior periodically
+        fill_halos!(K, PBC181)
+        t = tensor_tend181(θ, K)
+        gradθ = Γ * sqrt(1 + s^2)
+        scale = maximum(iv181(κh)) * gradθ / min(g.dx, g.dy, g.dz)
+        r = maxabs181(t) / scale
+        # the same field under the isotropic κh diffuses: an O(1) ratio
+        # where κh varies (∂ₓκh ∂ₓθ ≠ 0)
+        ti = Field(CellCenter(), g); add_eddy_diffusion_scalar!(ti, θ, κh)
+        ri = maxabs181(ti) / scale
+        @info @sprintf("P55-c isentropic invariance (slope 0.05, κh 0.5–5, κv = 0): max|tθ|/(κh|∇θ|/Δ) = %.1e (isotropic κh: %.2e)",
+                       r, ri)
+        @test r <= 1e-12
+        @test ri > 1e-3
+    end
+
+    @testset "isentropic: principal-axis spreading at 2κh t and 2κv t" begin
+        g = grid181((64, 4, 64))
+        Γ, s, φ = 0.01, 0.05, 0.0
+        κh, κv = 5.0, 0.05
+        θ = setfield181!(Field(CellCenter(), g), g, tilted181(300.0, Γ, s, φ))
+        K = isentropic_tensor!(DiffusivityTensor(g), θ, κh, κv)
+        fill_halos!(K, PBC181)                         # uniform K
+        # unit vectors along (x–z plane) and across the isentropes
+        ta = (1.0, 0.0, s) ./ sqrt(1 + s^2)
+        na = (-s, 0.0, 1.0) ./ sqrt(1 + s^2)
+        @test K.K11.data[10, 3, 10] * na[1] + K.K13.data[10, 3, 10] * na[3] ≈ κv * na[1] rtol = 1e-12
+        x0, z0, σ0 = g.Lx / 2, g.Lz / 2, 40.0
+        ϕ = setfield181!(Field(CellCenter(), g), g,
+                         (x, y, z) -> exp(-((x - x0)^2 + (z - z0)^2) / (2σ0^2)))
+        pfill181!(ϕ)
+        function moments(ϕ)
+            m = 0.0; Ma = 0.0; Mn = 0.0
+            for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
+                c = ϕ.data[i + g.Hx, j + g.Hy, k + g.Hz]
+                x = (i - 0.5) * g.dx - x0; z = (k - 0.5) * g.dz - z0
+                m += c; Ma += c * (x * ta[1] + z * ta[3])^2; Mn += c * (x * na[1] + z * na[3])^2
+            end
+            return m, Ma / m, Mn / m
+        end
+        m0, Ma0, Mn0 = moments(ϕ)
+        h = 0.1 * g.dx^2 / κh
+        nsteps = 400
+        t = Field(CellCenter(), g)
+        for n in 1:nsteps
+            fill!(t.data, 0)
+            add_tensor_diffusion_scalar!(t, ϕ, K)
+            iv181(ϕ) .+= h .* iv181(t)
+            pfill181!(ϕ)
+        end
+        m1, Ma1, Mn1 = moments(ϕ)
+        T = nsteps * h
+        ga = (Ma1 - Ma0) / (2κh * T); gn = (Mn1 - Mn0) / (2κv * T)
+        @info @sprintf("P55-c principal-axis spreading (slope 0.05, κh/κv = 100, t = %.0f s): ΔM_along/(2κh t) = %.6f, ΔM_across/(2κv t) = %.6f; mass rel. change %.1e",
+                       T, ga, gn, abs(m1 - m0) / m0)
+        @test abs(ga - 1) <= 0.02
+        @test abs(gn - 1) <= 0.02
+        @test abs(m1 - m0) <= 1e-13 * m0
+    end
+
+    @testset "isentropic: Σϕ² non-increasing over 200 steps (random ϕ, random tilted θ)" begin
+        g = grid181((12, 10, 8))
+        ΔV = g.dx * g.dy * g.dz
+        wall = FieldBoundaryConditions(:periodic, :periodic, :noflux)
+        for seed in 1:3
+            rng = Xoshiro(18120 + seed)
+            # tilted stable θ with random perturbations: some cells are
+            # unstable (fallback), some above slope_max (taper)
+            θ = Field(CellCenter(), g)
+            iv181(θ) .= [300 + 0.01 * (k - 0.5) * g.dz - 0.0005 * (i - 0.5) * g.dx +
+                         0.05 * randn(rng) for i in 1:g.Nx, j in 1:g.Ny, k in 1:g.Nz]
+            fill_halos!(θ, wall)
+            κh = Field(CellCenter(), g); iv181(κh) .= 2 .* rand(rng, g.Nx, g.Ny, g.Nz)
+            fill_halos!(κh, wall)
+            K = isentropic_tensor!(DiffusivityTensor(g), θ, κh, 0.01; slope_max = 0.3, bcs = wall)
+            ϕ = random_scalar181(g, rng; bcs = wall)
+            h = 0.1 * g.dz^2 / 2.0
+            v = sum(abs2, iv181(ϕ)) * ΔV; v0 = v; m0 = sum(iv181(ϕ)) * ΔV
+            nonincr = true
+            t = Field(CellCenter(), g)
+            for n in 1:200
+                fill!(t.data, 0)
+                add_tensor_diffusion_scalar!(t, ϕ, K; bounded = bounded_directions(wall))
+                iv181(ϕ) .+= h .* iv181(t)
+                fill_halos!(ϕ, wall)
+                vn = sum(abs2, iv181(ϕ)) * ΔV
+                nonincr &= vn <= v
+                v = vn
+            end
+            dm = abs(sum(iv181(ϕ)) * ΔV - m0) / (sum(abs, iv181(ϕ)) * ΔV)
+            seed == 1 && @info @sprintf("P55-c isentropic, 200 steps (random tilted θ): Σϕ² %.4e → %.4e; |ΔΣϕ dV|/Σ|ϕ|dV = %.1e",
+                                        v0, v, dm)
+            @test nonincr
+            @test dm <= 1e-13
+        end
+    end
+
+    @testset "isentropic: n = ẑ is the diagonal operator; taper; N² ≤ 0 fallback" begin
+        g = grid181((12, 10, 8))
+        wall = FieldBoundaryConditions(:periodic, :periodic, :noflux)
+        rng = Xoshiro(18130)
+        κh = Field(CellCenter(), g); κv = Field(CellCenter(), g)
+        iv181(κh) .= 1 .+ rand(rng, g.Nx, g.Ny, g.Nz); iv181(κv) .= 0.01 .* rand(rng, g.Nx, g.Ny, g.Nz)
+        fill_halos!(κh, wall); fill_halos!(κv, wall)
+        # horizontally uniform stable θ(z): n = ẑ
+        θ = setfield181!(Field(CellCenter(), g), g, (x, y, z) -> 300 + 0.004z + 1e-5z^2)
+        K = isentropic_tensor!(DiffusivityTensor(g), θ, κh, κv; bcs = wall)
+        D = diagonal_tensor!(DiffusivityTensor(g), κh, κv)
+        dK = maximum(maximum(abs, iv181(a) .- iv181(b)) for (a, b) in
+                     zip((K.K11, K.K22, K.K33, K.K12, K.K13, K.K23), (D.K11, D.K22, D.K33, D.K12, D.K13, D.K23)))
+        @test dK <= 1e-12 * maximum(iv181(κh))
+        ϕ = random_scalar181(g, rng; bcs = wall)
+        tr = tensor_tend181(ϕ, K; bounded = bounded_directions(wall))
+        td = Field(CellCenter(), g); add_eddy_diffusion_scalar!(td, ϕ, κh, κv)
+        e = maxabs181(iv181(tr) .- iv181(td)) / maxabs181(td)
+        @info @sprintf("P55-c n = ẑ: max|K − diag(κh,κh,κv)| = %.1e m²/s; operator rel. diff %.1e", dK, e)
+        @test e <= 1e-12
+
+        # one cell, by hand: slope S = 2 with slope_max = 0.5 → f = 1/16
+        g1 = grid181((4, 4, 4))
+        kh, kv = 3.0, 0.3
+        Γ, S = 0.01, 2.0
+        θ1 = setfield181!(Field(CellCenter(), g1), g1, tilted181(300.0, Γ, S, 0.0))
+        K1 = isentropic_tensor!(DiffusivityTensor(g1), θ1, kh, kv; slope_max = 0.5)
+        n = (-S, 0.0, 1.0) ./ sqrt(1 + S^2); f = (0.5 / S)^2
+        c = (3, 3, 3)
+        @test K1.K11.data[c...] ≈ kh - f * (kh - kv) * n[1]^2 rtol = 1e-13
+        @test K1.K33.data[c...] ≈ kh - f * (kh - kv) * n[3]^2 rtol = 1e-13
+        @test K1.K13.data[c...] ≈ -f * (kh - kv) * n[1] * n[3] rtol = 1e-13
+        @test K1.K12.data[c...] == 0 && K1.K23.data[c...] == 0
+        # below slope_max: untapered; the along-isentrope eigenvalue is κh, the
+        # across one κv
+        K2 = isentropic_tensor!(DiffusivityTensor(g1), θ1, kh, kv; slope_max = 3.0)
+        M = [K2.K11.data[c...] K2.K12.data[c...] K2.K13.data[c...];
+             K2.K12.data[c...] K2.K22.data[c...] K2.K23.data[c...];
+             K2.K13.data[c...] K2.K23.data[c...] K2.K33.data[c...]]
+        @test M * collect(n) ≈ kv .* collect(n) rtol = 1e-12
+        tdir = [1.0, 0.0, S] ./ sqrt(1 + S^2)
+        @test M * tdir ≈ kh .* tdir rtol = 1e-12
+        # N² ≤ 0 (θ decreasing upward) and neutral: K = κh I exactly
+        for Γu in (-0.01, 0.0)
+            θu = setfield181!(Field(CellCenter(), g1), g1, (x, y, z) -> 300 + Γu * z + 0.001x)
+            Ku = isentropic_tensor!(DiffusivityTensor(g1), θu, kh, kv)
+            @test all(iv181(Ku.K11) .== kh) && all(iv181(Ku.K33) .== kh) &&
+                  all(iv181(Ku.K13) .== 0) && all(iv181(Ku.K12) .== 0)
+        end
+        # the taper is continuous: just above slope_max the tensor matches
+        Ka = isentropic_tensor!(DiffusivityTensor(g1), θ1, kh, kv; slope_max = S * (1 - 1e-9))
+        Kb = isentropic_tensor!(DiffusivityTensor(g1), θ1, kh, kv; slope_max = S * (1 + 1e-9))
+        @test abs(Ka.K33.data[c...] - Kb.K33.data[c...]) <= 1e-8 * kh
+        @test_throws ArgumentError isentropic_tensor!(DiffusivityTensor(g1), θ1, kh, kv; slope_max = 0)
     end
 end
