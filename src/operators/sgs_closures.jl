@@ -161,6 +161,12 @@ estimate make; like `sgs_coefficients!`, it changes no closure memory.
 function compute_sgs!(c::AbstractSGSClosure, sim)
     f = sgs_fields(c, sim)
     sgs_coefficients!(f, c, sim)
+    _fill_sgs_halos!(f, c, sim)
+    return f
+end
+
+# Halos of each distinct coefficient field, with the velocity BCs.
+function _fill_sgs_halos!(f::SGSFields, c::AbstractSGSClosure, sim)
     bcs = sim.bcs
     fill_halos!(f.νh, bcs)
     f.νv === f.νh || fill_halos!(f.νv, bcs)
@@ -239,6 +245,15 @@ function sgs_coefficients!(f::SGSFields, c::AbstractEddyViscosityClosure, sim)
     sgs_viscosity!(f.νh, c, sim)
     # κt = νt/Prₜ by division (not by multiplication with 1/Prₜ): the frozen
     # scalar viscosity of step_imex! has always been formed this way.
+    f.κh.data .= f.νh.data ./ turbulent_prandtl(c, sim)
+    return f
+end
+
+# κt = νt/Prₜ on the whole array once the halos of νt are filled: one halo
+# fill instead of two (κt's halos are then νt's divided by Prₜ, which is what
+# fill_halos! would give for the periodic / no-flux / wall copies anyway).
+function _fill_sgs_halos!(f::SGSFields, c::AbstractEddyViscosityClosure, sim)
+    fill_halos!(f.νh, sim.bcs)
     f.κh.data .= f.νh.data ./ turbulent_prandtl(c, sim)
     return f
 end
