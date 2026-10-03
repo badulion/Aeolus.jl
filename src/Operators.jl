@@ -5,6 +5,7 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Locat
 using ..Fields
 using ..Fields: Field, mesh
 using ..BoundaryConditions: fill_halos!
+using FFTW: plan_rfft
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
@@ -462,6 +463,8 @@ end
 # Era VI: the SGS closure contract (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/sgs_closures.jl")
+# Era VI (P54-d, #174): wall-bounded flow diagnostics (Φ_m, stress budget, E11)
+include("operators/abl_diagnostics.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.
