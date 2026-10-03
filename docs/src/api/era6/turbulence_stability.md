@@ -33,8 +33,6 @@ Modules = [Aeolus.TurbulenceStability]
 
 ## The SurfaceExchange implementer
 
-```@docs
-Aeolus.SurfaceExchange.MOSTConsistent
-Aeolus.SurfaceExchange.most_gradient_richardson
-Aeolus.SurfaceExchange.most_stability_parameter
-```
+`MOSTConsistent`, `most_gradient_richardson` and
+`most_stability_parameter` belong to `Aeolus.SurfaceExchange` and are
+documented with it, on [Shared contract — SurfaceExchange](../era5/surface_exchange.md).
