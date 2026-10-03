@@ -13,14 +13,24 @@
 #   Smagorinsky .17   +2.5 %      −14.2 %       0.088 / 0.097           1.27 / 1.08
 #   no model         +78.3 %     +121.1 %       0.216 / 0.316           5.25 / 10.4
 #
-# The proposed ±10 % on K(171)/K(42) is NOT met (≈ −15 %). The expectation,
-# not the code, was too tight for this set-up: the deficit sits in shells
-# 2–3 (k = 0.22–0.34 cm⁻¹, the spectral peak), is the same at 64³ (so it
-# is not the SGS model at the cut-off), while the solver conserves energy
-# to 0.14 % over the run without viscosity and the initial spectrum is
-# exact. An 11M box holds the energy-containing range in three shells and
-# none of the k < 2π/11M range that feeds them in the tunnel. The ±10 %
-# target is kept below as @test_broken; the assertion is ±20 %.
+# The proposed ±10 % on K(171)/K(42) is NOT met (≈ −15 %); the RMS
+# log-error at station 171 sits on the 0.1-decade target (0.099 for seeds
+# 1–3, 0.101 for 1–6). The code checks out on the exact properties: the
+# solver conserves energy to 0.14 % over the run without viscosity, the
+# initial spectrum is CBC's to 1e-10 in every shell, and K(98)/K(42) is
+# within 2.5 %. The deficit sits in the energy-containing range: LES/CBC
+# is 0.71 and 0.65 in shells 2–3 (k = 0.22–0.34 cm⁻¹, the spectral peak)
+# and 0.78–0.87 in shells 4–8, where CBC's large scales barely decay
+# from 98 to 171 and the 11M box holds only a few dozen modes and
+# none of the k < 2π/11M range; it is also present at 64³, which is
+# further low at all k (examples/validation/cbc_decay.jl: −13 % / −24 %,
+# E(k_c)/CBC ≈ 0.6–0.7, consistent with eddy viscosity on this 2nd-order
+# grid over-dissipating once the cut-off is in the inertial range).
+# Without the evolve-and-rescale start the errors swap (32³: +21 % /
+# −3 %), the random-phase field decaying too slowly for one turnover. So
+# the ±10 % expectation (from spectral-code LES, Kang et al. 2003) does not
+# transfer to this set-up; the cause is not pinned down further here.
+# The target is kept below as @test_broken, the assertion is ±20 %.
 
 using Test
 using Aeolus
