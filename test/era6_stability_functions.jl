@@ -212,4 +212,97 @@ end
     @info "P58-a Ri_g fields" linear_rel_err = err tanh_rel_errs = errs tanh_orders = orders
 end
 
+# The pre-#170 implementations, verbatim, as references for "bit for bit".
+_fstab_old(Ri) = Ri >= 0 ? 1 / (1 + 5Ri)^2 : sqrt(1 - 16Ri)
+
+function _fog_K_old(col; c = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS)
+    κ = Aeolus.RadiationFog._KARMAN
+    s = col.set; nz = length(col.T)
+    K = zeros(nz + 1)
+    for k in 1:nz - 1
+        zi = col.zf[k + 1]
+        Δz = col.z[k + 1] - col.z[k]
+        l  = κ * zi / (1 + κ * zi / s.λ)
+        S2 = ((col.u[k + 1] - col.u[k])^2 + (col.v[k + 1] - col.v[k])^2) / Δz^2
+        S2 = max(S2, 1e-8)
+        N2 = moist_stability(col, k; c = c)
+        Ri = N2 / S2
+        K[k + 1] = l^2 * sqrt(S2) * _fstab_old(Ri) + s.K_min
+    end
+    return K
+end
+
+function _brunt_vaisala_old(sim::BoussinesqSimulation{T}) where {T}
+    sim.has_buoyancy || return zero(T)
+    m = sim.mesh
+    ii, jj, kk = interior(m)
+    n_h = length(ii) * length(jj)
+    invdz = 1 / m.dz
+    coef  = sim.g_accel / sim.θ₀
+    N²max = zero(T)
+    prev  = zero(T)
+    d = sim.θ.data
+    @inbounds for (kc, k) in enumerate(kk)
+        s = zero(T)
+        for j in jj, i in ii
+            s += d[i, j, k]
+        end
+        mean_k = s / n_h
+        if kc > 1
+            N²max = max(N²max, coef * (mean_k - prev) * invdz)
+        end
+        prev = mean_k
+    end
+    return sqrt(max(N²max, zero(T)))
+end
+
+function _brunt_vaisala_profile_old(θ̄::Vector{T}, dz::T, g::T) where {T}
+    Nz = length(θ̄)
+    N² = zeros(T, Nz)
+    Nz == 1 && return N²
+    lθ = log.(θ̄)
+    N²[1] = g * (lθ[2] - lθ[1]) / dz
+    for k in 2:Nz-1
+        N²[k] = g * (lθ[k+1] - lθ[k-1]) / (2dz)
+    end
+    N²[Nz] = g * (lθ[Nz] - lθ[Nz-1]) / dz
+    return N²
+end
+
+@testset "5. the fog column delegates to ShortTail bit for bit" begin
+    @test !isdefined(Aeolus.RadiationFog, :_fstab)
+    Ris = vcat(.-(10.0 .^ range(-8, 2; length = 300)), 0.0, 10.0 .^ range(-8, 4; length = 300))
+    @test all(stability_factor_m(ShortTail(), Ri) === _fstab_old(Ri) for Ri in Ris)
+    @test all(stability_factor_h(ShortTail(), Ri) === _fstab_old(Ri) for Ri in Ris)
+    col = parisfog_2011_column()
+    run!(col, 3600)                                      # 1 h of the ParisFog case
+    K = eddy_diffusivity(col)
+    @test K == _fog_K_old(col)
+    ex = surface_exchange(col)
+    lm = log(col.z[1] / col.set.z0m)
+    @test ex.C_D == Aeolus.RadiationFog._KARMAN^2 / lm^2 * _fstab_old(ex.Ri_b)
+    @info "P58-a ParisFog 1 h: K profile (m² s⁻¹), first interfaces" K = K[1:6] Ri_b = ex.Ri_b
+end
+
+@testset "6. mean-profile N² of TimeIntegration and Anelastic, bit for bit" begin
+    rng = Xoshiro(170)
+    g = RegularGrid(; size = (6, 5, 24), extent = (60.0, 50.0, 240.0), halo = (2, 2, 2))
+    sim = BoussinesqSimulation(g; θ₀ = 300.0)
+    set!(sim.θ, (x, y, z) -> 300.0 + 0.004z + 0.3 * sin(z / 17))
+    interior_view(sim.θ) .+= 0.05 .* randn(rng, 6, 5, 24)
+    N_new = Aeolus.TimeIntegration._brunt_vaisala(sim)
+    @test N_new > 0
+    @test N_new === _brunt_vaisala_old(sim)
+    @test cfl_diagnostics(sim, CFLConstraints()).N === _brunt_vaisala_old(sim)
+    for θ̄ in (300.0 .* exp.(1e-4 .* (0:39) .* 25 ./ 9.81),     # constant N² = 1e-4
+              290.0 .+ 0.01 .* (0:39) .* 25 .+ 0.5 .* rand(rng, 40))
+        @test Aeolus.Anelastic._brunt_vaisala(θ̄, 25.0, 9.81) ==
+              _brunt_vaisala_profile_old(θ̄, 25.0, 9.81)
+    end
+    @test Aeolus.Anelastic._brunt_vaisala([300.0], 25.0, 9.81) == [0.0]
+    # the exactness that motivated the log form survives
+    N2 = Aeolus.Anelastic._brunt_vaisala(300.0 .* exp.(1e-4 .* (0:39) .* 25 ./ 9.81), 25.0, 9.81)
+    @test maximum(abs, N2 .- 1e-4) < 1e-15
+end
+
 end # testset

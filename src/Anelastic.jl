@@ -73,6 +73,7 @@ import ..TimeSteppers: step!
 import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
 
 using ..Simulations: horizontal_mean, horizontal_variance
+using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 
 export ReferenceState,
        isothermal_reference, isentropic_reference,
@@ -292,19 +293,20 @@ the Exner relation: `ρ = (p₀/(Rθ)) (p/p₀)^{cᵥ/cₚ}`.
 the interior and one-sided differences at the two end levels. Using the
 *logarithmic* derivative (rather than `g/θ̄ · Δθ̄/Δz`) makes the result exact
 to round-off for the analytic constant-`N²` profile `θ̄ = θ_s e^{N²z/g}`,
-which is what [`constant_stability_reference`](@ref) prescribes.
+which is what [`constant_stability_reference`](@ref) prescribes. The
+difference is the logarithmic form of
+`TurbulenceStability.buoyancy_frequency_squared`.
 """
 function _brunt_vaisala(θ̄::Vector{T}, dz::T, g::T) where {T}
     Nz = length(θ̄)
     N² = zeros(T, Nz)
     Nz == 1 && return N²
-    lθ = log.(θ̄)
     @inbounds begin
-        N²[1] = g * (lθ[2] - lθ[1]) / dz
+        N²[1] = buoyancy_frequency_squared(θ̄[1], θ̄[2], dz, g)
         for k in 2:Nz-1
-            N²[k] = g * (lθ[k+1] - lθ[k-1]) / (2dz)
+            N²[k] = buoyancy_frequency_squared(θ̄[k-1], θ̄[k+1], 2dz, g)
         end
-        N²[Nz] = g * (lθ[Nz] - lθ[Nz-1]) / dz
+        N²[Nz] = buoyancy_frequency_squared(θ̄[Nz-1], θ̄[Nz], dz, g)
     end
     return N²
 end
