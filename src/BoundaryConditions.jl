@@ -87,7 +87,10 @@ symbol or as a BC object — e.g. an open channel
 `FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = :wall)`
 or a Couette lid
 `FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = NoSlipWall(U, 0))`.
-A z-periodic face cannot be mixed with a non-periodic one.
+A z-periodic face cannot be mixed with a non-periodic one, and a mixed
+bottom/top pair must be two walls (`:wall`, `:noslip`, `NoSlipWall`);
+anything else, e.g. `bottom = :noslip, top = :noflux`, throws an
+`ArgumentError` rather than failing at the first halo fill.
 """
 struct FieldBoundaryConditions{W,E,S,N,B,T}
     west::W; east::E
@@ -106,8 +109,17 @@ function FieldBoundaryConditions(hkind::Symbol=:periodic,
     (hb isa Periodic) == (ht isa Periodic) ||
         throw(ArgumentError("a z-periodic face cannot be mixed with a non-periodic one " *
                             "(bottom = $(nameof(typeof(hb))), top = $(nameof(typeof(ht))))"))
+    _z_pair_supported(hb, ht) ||
+        throw(ArgumentError("unsupported z boundary pair bottom = $(nameof(typeof(hb))), " *
+                            "top = $(nameof(typeof(ht))): the two z faces must be the same " *
+                            "kind, or both walls (:wall / :noslip / NoSlipWall)"))
     return FieldBoundaryConditions(hx, hx, hy, hy, hb, ht)
 end
+
+# The z pairs `fill_halos!` has methods for: two faces of the same kind,
+# or any two impermeable walls (free slip and/or no slip, mixed allowed).
+_z_pair_supported(b, t) = nameof(typeof(b)) === nameof(typeof(t)) ||
+                          (is_wall(b) && is_wall(t))
 
 _bc(bc::AbstractBC) = bc
 _bc(s::Symbol) = s === :periodic ? Periodic()        :

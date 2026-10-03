@@ -50,6 +50,16 @@ end
         @test_throws ArgumentError FieldBoundaryConditions(:noslip)          # x, y: z only
         @test_throws ArgumentError FieldBoundaryConditions(:periodic, :periodic;
                                                            bottom = :noslip, top = :periodic)
+        # Mixed pairs fill_halos! has no method for are rejected at construction
+        # (they used to build and then throw a MethodError at the first halo fill).
+        @test_throws ArgumentError FieldBoundaryConditions(:periodic, :periodic;
+                                                           bottom = :noslip, top = :noflux)
+        @test_throws ArgumentError FieldBoundaryConditions(:periodic, :periodic;
+                                                           bottom = :wall, top = :noflux)
+        @test_throws ArgumentError FieldBoundaryConditions(:periodic, :periodic;
+                                                           bottom = :noflux, top = NoSlipWall(1.0, 0))
+        @test FieldBoundaryConditions(:periodic, :periodic; bottom = :wall, top = :noslip).top == NoSlipWall()
+        @test FieldBoundaryConditions(:periodic, :periodic, :noflux).bottom isa NoFlux
         @test is_wall(NoSlipWall()) && is_wall(ImpermeableWall()) && !is_wall(Periodic())
         # the nest helper understands the symbol too
         @test Aeolus.AdaptiveMesh.nest_bcs(:periodic, :periodic, :noslip).bottom isa NoSlipWall
