@@ -27,6 +27,8 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+# Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
+export LagrangianDynamicSmagorinsky
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -629,6 +631,7 @@ include("operators/spectra.jl")
 # Era VI: the SGS closure contract (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/sgs_closures.jl")
+include("operators/lagrangian_sgs.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.

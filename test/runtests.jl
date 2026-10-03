@@ -974,6 +974,7 @@ end
 @testset "Era VI" begin
     include("era6_sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
     include("era6_les_toolbox.jl")       # Phase 54  filters, spectrum, initialiser (#168)
+    include("era6_lagrangian_sgs.jl")    # P54-b: Lagrangian dynamic Smagorinsky, mask-aware (#173)
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
 end
 
