@@ -181,6 +181,18 @@ end
     dr0 = DynamicRoughness(st; z0_floor = z0f, C_d = 0.0, α_fallback = 0.05)
     α0, c0 = dynamic_alpha(dr0, fill(U0, Nx, Ny), zeros(Nx, Ny), z)
     @test (α0, c0) == (0.05, false)
+    # a relief with one full period inside every grid cell: the grid sees
+    # no slope and the same σ at both scales → the residual vanishes identically,
+    # α is undetermined → fallback, unconverged (not a spurious root)
+    hp = [isodd(i ÷ r) ? 0.0 : 0.1 for i in 0:Nx*r-1, _ in 1:Ny*r]
+    stp = subfilter_height(hp, 2r; dx = 2dx, dy = 2dy)
+    drp = DynamicRoughness(stp; z0_floor = z0f, α_fallback = 0.0)
+    @test all(==(0), stp.dhx) && maximum(stp.σ2) > 0
+    @test dynamic_alpha(drp, fill(U0, Nx ÷ 2, Ny ÷ 2), zeros(Nx ÷ 2, Ny ÷ 2), z) == (0.0, false)
+    # a per-column floor: z0 = floor exactly where σ = 0
+    zf = fill(2e-4, Nx, Ny); zf[1:4, :] .= 3e-3
+    drf = DynamicRoughness(st; z0_floor = zf, α = 0.2)
+    @test drf.z0 ≈ sqrt.(zf .^ 2 .+ 0.04 .* st.σ2) rtol = 1e-14
     @test_throws ArgumentError DynamicRoughness(st; z0_floor = 0.0)
     @test_throws ArgumentError dynamic_alpha(DynamicRoughness(st; z0_floor = 0.1),
                                              fill(U0, Nx, Ny), zeros(Nx, Ny), 0.05)

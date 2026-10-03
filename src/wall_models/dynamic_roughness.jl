@@ -216,7 +216,7 @@ length proportional to the RMS sub-filter height,
 z_{0,Δ}(x, y) = \\sqrt{z_{0,f}^2 + α^2 σ_Δ^2(x, y)} ,
 ```
 
-where ``z_{0,f}`` (`z0_floor`, m) is the roughness of the scales below
+where ``z_{0,f}`` (`z0_floor`, m; a number or an `(Nx, Ny)` matrix) is the roughness of the scales below
 the height map itself (the per-class table of the Berlin case; for the
 pure Anderson & Meneveau model a negligible value). A flat surface
 (``σ_Δ ≡ 0``) returns ``z_{0,f}`` exactly.
@@ -269,7 +269,7 @@ per-column [`RoughLogLaw`](@ref) or [`MOSTWallLaw`](@ref).
 """
 mutable struct DynamicRoughness{T<:AbstractFloat, C<:SurfaceConstants}
     stats::SubfilterHeight{T}
-    z0_floor::T
+    z0_floor::Matrix{T}
     C_d::T
     fixed_α::Union{Nothing, T}
     α_fallback::T
@@ -283,17 +283,20 @@ mutable struct DynamicRoughness{T<:AbstractFloat, C<:SurfaceConstants}
     nfail::Int
 end
 
-function DynamicRoughness(stats::SubfilterHeight{T}; z0_floor::Real, C_d::Real = 1.0,
+function DynamicRoughness(stats::SubfilterHeight{T}; z0_floor, C_d::Real = 1.0,
                           α = nothing, α_fallback::Real = 0.0, mask = nothing,
                           α_max = nothing,
                           c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) where {T}
-    z0_floor > 0 || throw(ArgumentError("DynamicRoughness: z0_floor must be > 0"))
+    zf = z0_floor isa Real ? fill(T(z0_floor), size(stats)) : Matrix{T}(z0_floor)
+    size(zf) == size(stats) ||
+        throw(DimensionMismatch("DynamicRoughness: z0_floor size $(size(zf)) ≠ $(size(stats))"))
+    all(>(0), zf) || throw(ArgumentError("DynamicRoughness: z0_floor must be > 0"))
     C_d >= 0 || throw(ArgumentError("DynamicRoughness: C_d must be ≥ 0"))
     mask === nothing || size(mask) == size(stats) ||
         throw(DimensionMismatch("DynamicRoughness: mask size $(size(mask)) ≠ $(size(stats))"))
     fa = α === nothing ? nothing : T(α)
     a0 = fa === nothing ? T(α_fallback) : fa
-    dr = DynamicRoughness{T, typeof(c)}(stats, T(z0_floor), T(C_d), fa, T(α_fallback),
+    dr = DynamicRoughness{T, typeof(c)}(stats, zf, T(C_d), fa, T(α_fallback),
                                         α_max === nothing ? nothing : T(α_max),
                                         mask === nothing ? nothing : Matrix{Bool}(mask), c,
                                         a0, fa !== nothing, zeros(T, size(stats)), 0, 0)
@@ -307,7 +310,7 @@ end
 function _set_z0!(dr::DynamicRoughness, α)
     s = dr.stats
     @inbounds for I in eachindex(dr.z0)
-        dr.z0[I] = _z0(dr.z0_floor, α, s.σ2[I])
+        dr.z0[I] = _z0(dr.z0_floor[I], α, s.σ2[I])
     end
     dr.α = α
     return dr
@@ -354,7 +357,7 @@ function _residual(dr::DynamicRoughness{T}, α, A1, A2, R1, R2, n, h) where {T}
     @inbounds for I in eachindex(A1)
         _in(dr.mask, I) || continue
         z = T(_hval(h, I))
-        W += A2[I] / log(z / _z0(z0f, α, s.σ2t[I]))^2 - A1[I] / log(z / _z0(z0f, α, s.σ2[I]))^2
+        W += A2[I] / log(z / _z0(z0f[I], α, s.σ2t[I]))^2 - A1[I] / log(z / _z0(z0f[I], α, s.σ2[I]))^2
     end
     return W / n + (R2 - R1)
 end
@@ -389,7 +392,7 @@ function roughness_surface_drag(dr::DynamicRoughness{T}, uc::AbstractMatrix, vc:
     W = zero(T)
     @inbounds for I in eachindex(A)
         _in(dr.mask, I) || continue
-        W += A[I] / log(T(_hval(h, I)) / _z0(dr.z0_floor, T(α), σ2[I]))^2
+        W += A[I] / log(T(_hval(h, I)) / _z0(dr.z0_floor[I], T(α), σ2[I]))^2
     end
     return (wall = W / n, form = R, total = W / n + R)
 end
@@ -433,11 +436,11 @@ function dynamic_alpha(dr::DynamicRoughness{T}, uc::AbstractMatrix, vc::Abstract
     @inbounds for I in eachindex(s.σ2)
         _in(dr.mask, I) || continue
         z = T(_hval(h, I))
-        z > z0f || throw(ArgumentError("DynamicRoughness: z0_floor = $z0f ≥ matching height $z"))
+        z > z0f[I] || throw(ArgumentError("DynamicRoughness: z0_floor = $(z0f[I]) ≥ matching height $z"))
         smax = max(s.σ2[I], s.σ2t[I])
         smax > 0 || continue
         rough = true
-        amax = min(amax, sqrt((z^2 - z0f^2) / smax))
+        amax = min(amax, sqrt((z^2 - z0f[I]^2) / smax))
     end
     rough || return (dr.α_fallback, false)               # flat: no sub-filter relief
     amax *= 1 - T(1e-6)
