@@ -3,16 +3,19 @@
 #
 # Included by test/era6_apriori_sgs.jl and examples/validation/apriori_sgs.jl.
 #
-# Set-up. A triply periodic 2π box at N³ (48³ in the test, 96³ in the
-# example) is filled by `isotropic_random_field!` with the spectrum
+# Set-up. A triply periodic 2π box at N³ (96³ in the test and the
+# example; 48³ was the test's size before the review of #208) is filled
+# by `isotropic_random_field!` with the spectrum
 # E(k) ∝ k⁴ exp(−2(k/k_p)²), k_p = 1.5, scaled to u' = 1 (K = 3/2), and
 # integrated with the projected SSP-RK3 of `step_rk3!` (2nd-order
 # energy-conserving centred advection, no SGS model, CFL 0.5) to
-# t = 2.0, past the dissipation peak (t ≈ 1.5): the derivative skewness
-# reaches ≈ −0.5 within t ≈ 0.4 and stays in −0.55 … −0.40 afterwards.
+# t = 2.0. The dissipation peak moves later as Re_λ grows (t ≈ 0.99,
+# 1.45, 1.85, 2.41 at 32³, 48³, 64³, 96³): t = 2 is past it at 48³ and on
+# its plateau (1.8 % below) at 96³. The derivative skewness reaches ≈ −0.5
+# within t ≈ 0.4 and stays in −0.6 … −0.35 afterwards.
 # The viscosity ν = 0.018 at 48³ (scaled as N^{-4/3} for other N, which
 # keeps k_max η fixed) is the smallest for which k_max η ≥ 1.5 holds over
-# the whole run (minimum 1.55 at the dissipation peak).
+# the whole run (minimum 1.54 at the dissipation peak at 48³, 1.60 at 96³).
 #
 # It is a DNS only if it is checked as one, so `dns_decay` records:
 #   * the derivative skewness S = ⟨(∂u/∂x)³⟩/⟨(∂u/∂x)²⟩^{3/2}, from the

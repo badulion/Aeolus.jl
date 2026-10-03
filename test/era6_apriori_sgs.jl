@@ -8,41 +8,57 @@
 #   3. the closed form of τ₁₁ for u = A sin(kx) under the box and Gaussian
 #      filters, in their transfer functions;
 #   4. the a-priori Smagorinsky numbers at Δ = 4h on the filtered-DNS
-#      fixture (test/fixtures/dns_decay.jl) against the published ranges;
+#      fixture (test/fixtures/dns_decay.jl, 96³) against the published ranges;
 #   5. the ranking Bardina > Smagorinsky in stress correlation, and the
 #      dynamic C_s against the dissipation-matched one.
 # The fixture itself is checked as a DNS first (skewness, energy budget,
 # k_max η, Re_λ).
 #
-# Measured (48³, seed 1, t = 2.0; quoted in docs/src/theory/les_filtering.md):
+# Measured (96³, Re_λ ≈ 64, seed 1, t = 2.0; quoted in
+# docs/src/theory/les_filtering.md):
 #
-#   fixture: 99 RK3 steps, 4.9–6.7 s; Re_λ = 32.0; k_max η ≥ 1.54 (minimum,
-#   at the dissipation peak t ≈ 1.45), 1.58 at t = 2; skewness −0.452 at
-#   t = 2, −0.43 … −0.45 for t ≥ 1.5; |dK/dt / (−ε) − 1| ≤ 2.5e-4 per step.
+#   fixture: 227 RK3 steps, 88–138 s (3 threads, shared machine);
+#   ν = 7.14e-3; Re_λ = 63.6; k_max η ≥ 1.61 over the run (1.598 at the
+#   dissipation peak, t = 2.41, in a run continued to t = 3); skewness
+#   −0.483 at t = 2; |dK/dt / (−ε) − 1| ≤ 1.7e-4 per step.
 #
-#   Gaussian Δ      4h        8h
-#   min λ₁/tr τ     4.2e-3    2.2e-2     (PSD; box filters likewise)
-#   ρ(τ12,13,23)    .23 .16 .18   .27 .23 .20    Smagorinsky
-#   ρ_Π (Smag.)     0.867     0.814
-#   C_s matched     0.101     0.105
-#   ρ (Bardina)     0.95–0.96 0.86–0.93
-#   C_s dynamic     0.109     0.107      (fine grid, α² = 1 + 8h²/Δ²)
-#   backscatter     22 %      22 %       (points with Π_exact < 0)
+#   Gaussian Δ      4h (7.8η)       8h (15.7η)
+#   min λ₁/tr τ     5.2e-4          4.0e-3     (PSD; box 3: 7.4e-5)
+#   ρ(τ12,13,23)    .20 .15 .14     .22 .13 .12     Smagorinsky
+#   ρ_Π (Smag.)     0.810           0.734
+#   C_s matched     0.094           0.097
+#   ρ (Bardina)     0.96–0.97       0.91–0.93
+#   ρ12 (gradient)  0.980           0.949
+#   C_s dynamic     0.100 (+6.3 %)  0.099 (+2.8 %)  (fine grid, α² = 1 + 8h²/Δ²)
+#   backscatter     21 %            20 %       (points with Π_exact < 0)
 #
-# Expectation that proved wrong: the Π-correlation band 0.4–0.85 at
-# Δ = 4h. Measured 0.867. The code is not at fault: the band comes from
-# high-Re data, and ρ_Π falls both with Re_λ and with Δ/η. The 96³
-# example (Re_λ = 64) gives 0.810 / 0.734 / 0.669 at 4h / 8h / 16h, where
-# this 48³ fixture (Re_λ = 32) gives 0.867 / 0.814. At Δ = 4h ≈ 8η the
-# filter sits in the near-dissipation range, where τ is given to leading
-# order by its Taylor expansion, the gradient model
-# τ ≈ (Δ²/12) ∂ₖūᵢ ∂ₖūⱼ (Clark et al. 1979). The test measures that
-# model's correlation with the exact τ (ρ₁₂) at 0.97 (4h; 0.92 at 8h).
-# Π of the gradient model is a cubic in the velocity gradient, as
+# History: the 48³ fixture and the Π-correlation band. Until the
+# maintainer's review of #208 the fixture was 48³ (Re_λ = 32, 99 steps,
+# 5–7 s). There ρ_Π = 0.867 at 4h, above the literature band 0.4–0.85,
+# and the assertion had been widened to 0.9 with the 0.85 bound kept as
+# @test_broken. The code was not at fault: ρ_Π falls both with Re_λ and
+# with Δ/η. At fixed Δ/η (k_max η is held fixed by ν ∝ N^{-4/3}):
+#
+#   Δ        48³ (Re_λ 32)     96³ (Re_λ 64)
+#   4h       0.867 (8.0η)      0.810 (7.8η)
+#   8h       0.814 (15.9η)     0.734 (15.7η)
+#   16h      0.669 (31.9η)     0.669 (31.3η)   (Δ = L/3 at 48³: box-bound)
+#
+# At Δ ≈ 8η the filter sits in the near-dissipation range, where τ is
+# given to leading order by its Taylor expansion, the gradient model
+# τ ≈ (Δ²/12) ∂ₖūᵢ ∂ₖūⱼ (Clark et al. 1979; ρ₁₂ = 0.97 at 48³, 0.98 at
+# 96³). Π of the gradient model is a cubic in the velocity gradient, as
 # (C_sΔ)²|S̄|³ is, and at low Re_λ the few energetic gradient structures
-# dominate both. At 8h (0.814) the value is inside the band. The
-# assertion at 4h is therefore 0.4 < ρ_Π < 0.9; the 0.85 bound is kept as
-# @test_broken.
+# dominate both. At Re_λ ≈ 64 the 4h value is inside the band, which is
+# asserted again, together with the 48³ → 96³ fall at 4h and 8h.
+#
+# Expectation that proved wrong with the 96³ fixture: "t = 2 is past the
+# dissipation peak". The peak moves later as Re_λ grows (measured
+# t ≈ 0.99, 1.45, 1.85, 2.41 at 32³, 48³, 64³, 96³, ν ∝ N^{-4/3}): the
+# cascade needs longer to fill the wider range of scales. At 96³, t = 2
+# is 1.8 % below the peak ε. The fixture is kept at t = 2 (Re_λ ≈ 64, as
+# the example), and the check is that ε is on its plateau: d ln ε/dt over
+# the last 0.25 time units is 0.16, against 0.70 at t = 1–1.25.
 #
 # The dynamic C_s: `compute_dynamic_smagorinsky_νt!` is applied to the
 # Gaussian-filtered field on the DNS grid (spacing h, where the
@@ -52,10 +68,11 @@
 # Δ is the routine's coefficient times h/Δ. With the routine's default
 # α = 3 (right when the grid filter *is* the grid, Δ = h) C_s would be
 # 0.026: the ratio is a property of the filters, not a tuning knob.
-# On a 12³ grid of spacing 4h (Fourier-coarse-grained filtered field,
-# `dynamic_cs_on_coarse_grid`) the dynamic C_s is 0.133 (+33 %), the
-# coarse second-order strain underestimating |S̄|; that number is
-# reported, not asserted (examples/validation/apriori_sgs.jl).
+# On a 24³ grid of spacing 4h (Fourier-coarse-grained filtered field,
+# `dynamic_cs_on_coarse_grid`) the dynamic C_s is 0.116 (+24 %; 0.133,
+# +33 %, on the 12³ grid of the old 48³ fixture), the coarse second-order
+# strain underestimating |S̄|; that number is reported, not asserted
+# (examples/validation/apriori_sgs.jl).
 
 using Test
 using Aeolus
@@ -111,8 +128,8 @@ end
     end
 
     # ---------------------------------------------------------------- fixture
-    d = dns_decay(; N = 48)
-    @info @sprintf("  DNS fixture 48³: %d steps, %.1f s; Re_λ %.1f; k_max η ≥ %.2f (%.2f at end); S %.3f; max |budget err| %.1e",
+    d = dns_decay(; N = 96)
+    @info @sprintf("  DNS fixture 96³: %d steps, %.1f s; Re_λ %.1f; k_max η ≥ %.2f (%.2f at end); S %.3f; max |budget err| %.1e",
                    d.nsteps, d.wall, d.Re_λ, d.kmax_eta, d.kmax_eta_end, d.S[end], maximum(abs, d.budget_err))
 
     @testset "fixture is a DNS of decaying isotropic turbulence" begin
@@ -121,11 +138,15 @@ end
         @test all(s -> -0.6 <= s <= -0.35, d.S[late])         # Batchelor & Townsend; Pope fig. 6.30
         last = d.t .>= d.t[end] - 0.5
         @test maximum(d.S[last]) - minimum(d.S[last]) < 0.05  # settled
-        @test d.t[argmax(d.ε)] < d.t[end] - 0.25              # past the dissipation peak
+        # at the dissipation plateau: the peak moves later with Re_λ (t ≈ 1.45
+        # at 48³, 2.41 at 96³; header), so t = 2 is 1.8 % below it at 96³ and
+        # d ln ε/dt has fallen from 0.70 (t = 1–1.25) to 0.16 (t = 1.75–2)
+        i = argmin(abs.(d.t .- (d.t[end] - 0.25)))
+        @test log(d.ε[end] / d.ε[i]) / (d.t[end] - d.t[i]) < 0.25
         @test maximum(abs, d.budget_err) <= 0.02              # dK/dt = −ε to ≤ 2 %
-        @test 25 <= d.Re_λ <= 35                              # no inertial range
+        @test 55 <= d.Re_λ <= 72                              # Re_λ ≈ 64: no inertial range yet
         @test d.K[end] < d.K[1] && all(diff(d.K) .< 0)        # monotone decay, no forcing
-        @test d.wall < 60                                     # CI budget
+        @test d.wall < 300                                    # CI budget (88–138 s measured)
     end
 
     sim = d.sim; g = sim.mesh; h = g.dx
@@ -172,7 +193,7 @@ end
         tr = τc.xx .+ τc.yy .+ τc.zz
         @test count(λ1 .< -1e-6 .* abs.(tr)) > 0
         # the eigenvalue routine against LinearAlgebra on a few points
-        for I in (CartesianIndex(1, 1, 1), CartesianIndex(17, 30, 5), CartesianIndex(48, 2, 41))
+        for I in (CartesianIndex(1, 1, 1), CartesianIndex(17, 30, 5), CartesianIndex(48, 2, 41), CartesianIndex(96, 64, 77))
             M = [r4.τe[i, j][I] for i in 1:3, j in 1:3]
             @test collect(getindex.(stress_eigvals(r4.τe), Ref(I))) ≈ eigvals(Symmetric(M)) rtol = 1e-10
         end
@@ -197,8 +218,9 @@ end
         m = res[4].smag
         # Clark, Ferziger & Reynolds (1979); Liu, Meneveau & Katz (1994)
         @test all(0.1 .< (m.ρ.xy, m.ρ.xz, m.ρ.yz) .< 0.45)
-        @test 0.4 < m.ρ_Π < 0.9                       # see header: 0.867
-        @test_broken m.ρ_Π < 0.85                     # the proposed band (expectation wrong at Δ ≈ 8η)
+        @test 0.4 < m.ρ_Π < 0.85                      # see header: 0.810 (0.867 at 48³)
+        # Re_λ trend at the same Δ/η (header): below the 48³ values
+        @test m.ρ_Π < 0.867 && res[8].smag.ρ_Π < 0.814
         @test 0.08 < res[4].cs < 0.22                 # Lilly 0.17 at high Re; lower at low Re_λ
         @test res[8].smag.ρ_Π < 0.85                  # inside the band once Δ ≈ 16η
         # consistency of the harness: the matched C_s matches the mean
