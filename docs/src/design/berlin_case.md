@@ -1366,6 +1366,23 @@ issue. Cost per evaluation of the whole addon: 0.28–0.55 ms on the smoke
 grid and 7.0 ms on the flagship grid (3.6 ms before #180), once per
 output record.
 
+### Flat-plate transition (#185): stated exception
+
+The spatially developing boundary layer of P59-d (fringe region,
+`FreeStreamBoundary` top, Blasius inflow, `FreeStreamDisturbance`) is not
+coupled: the Berlin domain is laterally periodic with geostrophic forcing
+and has no inflow direction, so a fringe and an inflow generator have no
+place in it. Inflow boundaries arrive with nesting / ERA5 driving
+(Phase 68). Transition stays coupled through `turbulence_diag` above. The
+one shared piece that does run in every Berlin step is the damping
+profile: the Rayleigh sponge (`sponge_α_max` = 0.05 s⁻¹ from 75 m in
+`:smoke`) now takes its rate from `Operators.DampingProfile`, the
+implementation the fringe also uses. The smoke run's final state is
+bit-identical with the verbatim Phase-7 kernel reinstalled; the sponge's
+column kinetic-energy sink ``∫α|\mathbf u_h|^2dz`` after the 12 smoke
+steps is 0.139 m³ s⁻³. No Berlin list changed (`BERLIN_DEFAULT_OFF` stays
+empty).
+
 ## Cost of per-facet surfaces (#138)
 
 The flagship radiosity scene has this many facets:
