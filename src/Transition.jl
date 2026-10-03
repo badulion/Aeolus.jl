@@ -57,6 +57,7 @@ using ..BoundaryConditions: fill_halos!, NoSlipWall, FreeStreamBoundary, FieldBo
 using ..Operators: _vorticity_at, _strain_at
 using ..Operators: DampingProfile, NordstromRamp, damping_rate, smooth_step, _add_damping!   # P59-d
 using ..Simulations: BoussinesqSimulation
+import Random
 
 export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
@@ -69,7 +70,9 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
        blasius_target, set_blasius!, blasius_freestream, fringe_distance, flat_plate_setup,
        streamwise_profile, edge_velocity, skin_friction, displacement_thickness,
        momentum_thickness, shape_factor, transition_onset,
-       onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw
+       onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw,
+       FreeStreamDisturbance, von_karman_spectrum, disturbance_velocity!,
+       disturbance_fringe_update
 
 # =========================================================================
 # Turbulent fraction γ(z)
@@ -521,5 +524,6 @@ end
 
 include("transition/blasius.jl")
 include("transition/flat_plate.jl")
+include("transition/free_stream_disturbance.jl")
 
 end # module

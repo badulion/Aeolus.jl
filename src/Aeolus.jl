@@ -926,7 +926,9 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
        blasius_target, set_blasius!, blasius_freestream, fringe_distance, flat_plate_setup,
        streamwise_profile, edge_velocity, skin_friction, displacement_thickness,
        momentum_thickness, shape_factor, transition_onset,
-       onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw
+       onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw,
+       FreeStreamDisturbance, von_karman_spectrum, disturbance_velocity!,
+       disturbance_fringe_update
 
 # P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
 # method of the CutCell generic (no new name).

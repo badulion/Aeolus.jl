@@ -286,3 +286,69 @@ end
     @test onset_reynolds_theta_abu_ghannam_shaw(3.3) ≈ 200.0 atol = 0.5
     @test turbulent_skin_friction(1e6) ≈ 0.0576 / 10^1.2 rtol = 1e-12
 end
+
+# ---------------------------------------------------------------------------
+# 5. Free-stream disturbances (random Fourier modes, von Kármán spectrum)
+# ---------------------------------------------------------------------------
+
+_VK_TAIL(κ) = 1.606 * κ^(-2 / 3)      # ∫_κ^∞ (2/3)a x^{-5/3} dx, the far tail of E
+
+# Longitudinal correlation f(r) = ⟨u(x)u(x+r)⟩/⟨u²⟩ along x (array index 1),
+# integrated (trapezoid) up to its first zero crossing.
+function _longitudinal_integral_scale(ui, dx)
+    Nx = size(ui, 1); f = zeros(Nx ÷ 2)
+    for r in 0:(Nx÷2 - 1)
+        s = 0.0; n = 0
+        @inbounds for k in axes(ui, 3), j in axes(ui, 2), i in 1:(Nx-r)
+            s += ui[i, j, k] * ui[i+r, j, k]; n += 1
+        end
+        f[r+1] = s / n
+    end
+    f ./= f[1]
+    iz = findfirst(<(0), f)
+    return dx * (sum(f[1:iz-1]) - 0.5)
+end
+
+@testset "P59-d FreeStreamDisturbance" begin
+    # Spectrum normalisation (Brandt et al. 2004): ∫E dκ = q and
+    # L11 = (π/2u'²)∫E/κ dκ = 0.643 L (trapezoid on a log grid).
+    κ = exp.(range(log(1e-4), log(1e4); length = 200_001))
+    E = von_karman_spectrum.(κ, 1.0, 1.0)
+    trap(y) = sum(0.5 .* (y[1:end-1] .+ y[2:end]) .* diff(κ))
+    # the κ^{-5/3} tail beyond κ = 1e4 carries a·(1e4)^{-2/3} = 3.5e-3 of q
+    @test trap(E) + _VK_TAIL(1e4) ≈ 1.0 rtol = 1e-3
+    @test (π / 2) * trap(E ./ κ) / (2 / 3) ≈ 0.643 rtol = 2e-3
+
+    Tu, L = 0.05, 1.0
+    fst = FreeStreamDisturbance(Tu, L, 400; seed = 1)
+    @test length(fst.A) == 400
+    @test all(abs(sum(fst.k[:, m] .* fst.σ[:, m])) < 1e-12 for m in 1:400)   # σ ⊥ k
+    @test sum(fst.A .^ 2) / 4 ≈ 1.5 * Tu^2 rtol = 1e-12                    # energy = q
+
+    g = RegularGrid(size = (512, 32, 32), extent = (64.0, 4.0, 4.0))
+    u = Field(FaceX(), g); v = Field(FaceY(), g); w = Field(FaceZ(), g)
+    disturbance_velocity!(u, v, w, fst)
+    d = Field(CellCenter(), g)
+    Aeolus.Operators.divergence(d, u, v, w)
+    ui = interior_view(u); vi = interior_view(v); wi = interior_view(w)
+    rms(a) = sqrt(sum(abs2, a) / length(a))
+    Tu_m = sqrt((rms(ui)^2 + rms(vi)^2 + rms(wi)^2) / 3)
+    divmax = maximum(abs, interior_view(d))
+    L11 = _longitudinal_integral_scale(ui, g.dx)
+    @printf("    FST: Tu = %.4f (requested %.4f), u/v/w rms = %.4f/%.4f/%.4f, L11 = %.3f (requested %.3f), max|∇·u′| = %.1e\n",
+            Tu_m, Tu, rms(ui), rms(vi), rms(wi), L11, L, divmax)
+    @test abs(Tu_m / Tu - 1) < 0.10
+    @test abs(L11 / L - 1) < 0.15
+    @test divmax < 1e-13                    # divergence-free to round-off (|∂u′/∂x| ~ 0.5)
+
+    # Spanwise quantisation: periodic in y with the domain width.
+    fy = FreeStreamDisturbance(Tu, L, 100; seed = 2, period_y = 4.0)
+    @test all(abs(mod(fy.k[2, m] / (2π / 4.0) + 0.5, 1) - 0.5) < 1e-12 for m in 1:100)
+    u2 = Field(FaceX(), g); v2 = Field(FaceY(), g); w2 = Field(FaceZ(), g)
+    disturbance_velocity!(u2, v2, w2, fy)
+    @test maximum(abs, u2.data[:, 1, :] .- u2.data[:, g.Ny+1, :]) < 1e-12
+    # Frozen advection: the pattern at t is the t = 0 pattern shifted by U t.
+    u3 = Field(FaceX(), g); v3 = Field(FaceY(), g); w3 = Field(FaceZ(), g)
+    disturbance_velocity!(u3, v3, w3, fy, 8 * g.dx)               # U∞ = 1
+    @test maximum(abs, u3.data[20:200, :, :] .- u2.data[12:192, :, :]) < 1e-12
+end
