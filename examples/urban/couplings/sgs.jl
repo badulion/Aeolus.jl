@@ -1,18 +1,27 @@
-# The subgrid-scale (SGS) closure, in the `:sgs` slot. The closure fills
-# `sim.νt` inside `step!`; the eddy-viscosity and eddy-diffusion terms are
-# then added where the built-in Smagorinsky adds them. The alternatives
-# act through the `eddy_viscosity!` keyword of `step!` (`step_options`).
+# The subgrid-scale (SGS) closure, in the `:sgs` slot. Every provider
+# hands the dynamics an `AbstractSGSClosure` (the Era VI contract,
+# src/operators/sgs_closures.jl, #167) through the `sgs` keyword of the
+# step (`step_options`); every core and time stepper takes it — step!,
+# step_imex!, step_adaptive! (which also rolls the closure's memory back on
+# a rejected step), and the anelastic / pseudo-incompressible step!. The
+# closure's coefficients fill `sim.νt` / `sim.κt` and its tendencies are
+# added where the built-in Smagorinsky adds them; its memory is committed
+# once per accepted step.
 #
-#   :smagorinsky (default) the built-in Smagorinsky–Lilly closure of
-#                step!, C_s = cfg.C_s (0.1).
-#   :dynamic     Operators.compute_dynamic_smagorinsky_νt! — the Germano–
-#                Lilly dynamic coefficient, plane-averaged, from the
-#                resolved flow (moved to src from the example's dead
+#   :smagorinsky (default) Operators.StaticSmagorinsky(cfg.C_s) — the
+#                Smagorinsky–Lilly closure, C_s = cfg.C_s (0.1); bit for
+#                bit the built-in closure of the cores.
+#   :dynamic     Operators.DynamicSmagorinsky — the Germano–Lilly dynamic
+#                coefficient, plane-averaged, from the resolved flow
+#                (moved to src from the example's dead
 #                turbulence_addons.jl by #132).
 #   :mlsgs       ML.MLSGS — a user closure `fn(νt, u, v, w, mesh)`. There
 #                is no trained model: the default `fn` is the Smagorinsky
 #                closure with cfg.C_s, which reproduces the default run
 #                bit for bit (the hook is the test).
+#
+# A new SGS provider goes in its own file, couplings/sgs_<name>.jl (the
+# couplings load in sorted order, after this file, which defines the slot).
 
 "Highest k (1-based interior level) with a solid cell, 0 without buildings."
 function highest_solid_level(case)
@@ -25,14 +34,18 @@ end
 """
     SGSSmagorinsky
 
-Slot `:sgs`, provider `:smagorinsky` (default): the built-in closure of
-`step!` with `cfg.C_s`; nothing to add.
+Slot `:sgs`, provider `:smagorinsky` (default): `StaticSmagorinsky(C_s)`
+with the core's `C_s` (`cfg.C_s`) and turbulent Prandtl number, passed as
+the `sgs` of every step — the closure the cores run built in, bit for
+bit. With `C_s = 0` there is no closure (no SGS terms), as before.
 """
 struct SGSSmagorinsky <: AbstractCoupling end
 coupling_name(::Type{SGSSmagorinsky}) = :sgs_smagorinsky
 slot(::Type{SGSSmagorinsky}) = :sgs
 provider(::Type{SGSSmagorinsky}) = :smagorinsky
-modules_used(::Type{SGSSmagorinsky}) = (:Simulations,)
+modules_used(::Type{SGSSmagorinsky}) = (:Simulations, :Operators)
+step_options(c::SGSSmagorinsky, case) =
+    case.sim.C_s == 0 ? (;) : (sgs = StaticSmagorinsky(case.sim.C_s),)
 smoke_check(c::SGSSmagorinsky, case) =
     ["ν_t ≥ 0" => minimum(interior_view(case.sim.νt)) >= 0,
      "ν_t > 0 where the flow is strained" => core_max_νt(case.sim) > 0]
@@ -43,15 +56,16 @@ core_max_νt(sim) = maximum(interior_view(sim.νt))
 """
     SGSDynamic
 
-Slot `:sgs`, provider `:dynamic`: `compute_dynamic_smagorinsky_νt!` as the
-`eddy_viscosity!` closure of `step!`. Options `averaging = :plane`,
-`filter_ratio = 3.0`, `cs_max = 0.5`. `report` prints the mean `C_s` in
-the free stream (the levels between the highest roof and the sponge) and
-in the canopy (the levels with buildings).
+Slot `:sgs`, provider `:dynamic`: the `DynamicSmagorinsky` closure
+(`compute_dynamic_smagorinsky_νt!`) as the `sgs` of every step, on any
+core. Options `averaging = :plane`, `filter_ratio = 3.0`, `cs_max = 0.5`.
+`report` prints the mean `C_s` in the free stream (the levels between the
+highest roof and the sponge) and in the canopy (the levels with buildings).
 """
-struct SGSDynamic{W, O} <: AbstractCoupling
+struct SGSDynamic{W, O, C} <: AbstractCoupling
     ws::W
     opts::O
+    closure::C
 end
 coupling_name(::Type{<:SGSDynamic}) = :sgs_dynamic
 slot(::Type{<:SGSDynamic}) = :sgs
@@ -59,15 +73,13 @@ provider(::Type{<:SGSDynamic}) = :dynamic
 is_default(::Type{<:SGSDynamic}) = false
 modules_used(::Type{<:SGSDynamic}) = (:Operators,)
 default_options(::Type{<:SGSDynamic}) = (averaging = :plane, filter_ratio = 3.0, cs_max = 0.5)
-build(::Type{<:SGSDynamic}, case, o) =
-    SGSDynamic(DynamicSmagorinskyWorkspace(case.mesh),
-               (averaging = o.averaging, filter_ratio = o.filter_ratio, cs_max = o.cs_max))
-
-function step_options(c::SGSDynamic, case)
-    ws, o = c.ws, c.opts
-    return (eddy_viscosity! = (νt, u, v, w) ->
-                compute_dynamic_smagorinsky_νt!(νt, u, v, w; workspace = ws, o...),)
+function build(::Type{<:SGSDynamic}, case, o)
+    ws = DynamicSmagorinskyWorkspace(case.mesh)
+    opts = (averaging = o.averaging, filter_ratio = o.filter_ratio, cs_max = o.cs_max)
+    return SGSDynamic(ws, opts, DynamicSmagorinsky(ws; opts...))
 end
+
+step_options(c::SGSDynamic, case) = (sgs = c.closure,)
 
 """
     dynamic_cs_profile(c::SGSDynamic, case) -> (canopy, free)
@@ -98,10 +110,11 @@ smoke_check(c::SGSDynamic, case) =
 """
     SGSMLSGS
 
-Slot `:sgs`, provider `:mlsgs`: an `MLSGS` closure through
-`apply_mlsgs!` as the `eddy_viscosity!` of `step!`. Option `fn`
-(`fn(νt, u, v, w, mesh)`); `nothing` (default) means the Smagorinsky
-closure with `cfg.C_s`, which reproduces the default run bit for bit.
+Slot `:sgs`, provider `:mlsgs`: an `MLSGS` closure (an
+`AbstractEddyViscosityClosure`, `κt = νt/Prₜ`) as the `sgs` of every step.
+Option `fn` (`fn(νt, u, v, w, mesh)`); `nothing` (default) means the
+Smagorinsky closure with `cfg.C_s`, which reproduces the default run bit
+for bit.
 """
 struct SGSMLSGS{M} <: AbstractCoupling
     ml::M
@@ -119,10 +132,7 @@ function build(::Type{<:SGSMLSGS}, case, o)
     return SGSMLSGS(MLSGS(fn), C_s)
 end
 
-function step_options(c::SGSMLSGS, case)
-    sim, ml = case.sim, c.ml
-    return (eddy_viscosity! = (νt, u, v, w) -> (apply_mlsgs!(sim, ml); nothing),)
-end
+step_options(c::SGSMLSGS, case) = (sgs = c.ml,)
 
 function smoke_check(c::SGSMLSGS, case)
     sim = case.sim

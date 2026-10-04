@@ -99,7 +99,7 @@ default.
 | `smoke_variants(::Type{C})` | extra smoke-test configurations, a tuple of `NamedTuple`s (see [the smoke test](#Smoke-test-and-coverage-test)) |
 | `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run |
 | `sim_options(::Type{C}, cfg, mesh, opts)` | keywords of the dynamical core's constructor (the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of a sound-proof core), before the core is built (see [numerics slots](#Numerics-slots)) |
-| `step_options(c, case)` | keywords added to every dynamics step, `step!` or `step_imex!` (e.g. `momentum_advection`, `eddy_viscosity!`) |
+| `step_options(c, case)` | keywords added to every dynamics step, `step!` or `step_imex!` (e.g. `momentum_advection`, `sgs`) |
 | `incompatible_reason(::Type{C})` | why the `incompatible` pairs fail, appended to the selection error |
 
 Two slots drive the dynamics itself and have four more methods
@@ -303,15 +303,25 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, the built-in closure with `cfg.C_s`), `:dynamic` (`sgs_dynamic`), `:mlsgs` (`sgs_mlsgs`) | `step_options`: `eddy_viscosity!` |
+| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, bit for bit the cores' built-in closure), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167); every core and stepper takes it |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, option `scheme = :weno_z5`) | the `:transport` stage |
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every
 dynamics step (`step!`, or `step_imex!` under the IMEX steppers, which
-takes the same `momentum_advection` and `eddy_viscosity!`); two
-couplings may not set the same keyword. Which providers combine with the
+takes the same `momentum_advection` and `sgs`); two
+couplings may not set the same keyword.
+
+**SGS providers** are closure objects of the Era VI contract
+([Closure contract](../theory/sgs.md#Closure-contract)): a provider
+builds its `AbstractSGSClosure` once and `step_options` returns
+`(sgs = closure,)`. A stateful closure (Lagrangian dynamic, prognostic
+TKE) keeps its memory in that object; the cores commit it once per
+accepted step and `step_adaptive!` rolls it back with the state on a
+rejected step. A new provider goes in its own file,
+`couplings/sgs_<name>.jl`: the couplings are included in sorted order,
+so it loads after `sgs.jl`, which defines the slot. Which providers combine with the
 `:core` and `:timestepper` slots is in [Dynamical core and time
 integration](#Dynamical-core-and-time-integration).
 
@@ -436,15 +446,20 @@ with `ledger.dt`, the current step's length, not `cfg.dt`.
 `dynamics_step!` (`step!` with the hooks and `case.step_kwargs`). The
 `:adaptive` stepper hands `step_adaptive!` a stepper that calls `step!`
 (or `step_imex!` with `imex = true`) with `case.step_kwargs`, so every
-retried piece carries them; with an `eddy_viscosity!` closure (`sgs =
-:dynamic`, `:mlsgs`) its diffusive limit uses that closure's ν_t of the
-current flow (`sgs_cfl_diagnostics`), also with `C_s = 0`, since
+retried piece carries them, and it passes the `sgs` closure to
+`step_adaptive!` too, which snapshots the closure's memory with the state
+and restores both on a rejected step. The diffusive limit uses the
+selected closure's ν_t and κ_t of the current flow (`sgs_cfl_diagnostics`,
+the pure `compute_sgs!`: it commits nothing), also with `C_s = 0`, since
 `step!` applies the closure whatever `C_s` is. `:imex` passes them to
 `step_imex!`, whose `momentum_advection` is the explicit operator and
-whose `eddy_viscosity!` supplies the frozen ν_eff. Tested with an MLSGS
-closure that is Smagorinsky plus a call counter: called once per step
-(fixed, IMEX) or twice (adaptive: the dt limit and the step), and the
-flow is bit for bit the plain run of each stepper.
+whose `sgs` supplies the frozen ν_eff and κ_eff. Tested with a stateful
+closure that is Smagorinsky plus a commit counter in its memory: one
+commit per accepted step under every stepper (12 fixed, 9 adaptive,
+12 IMEX in the smoke window), the flow bit for bit the plain run of each
+stepper; and with a forced retry (one rejected try at 10⁶ × ν_t) the
+rejected commit is rolled back, so the commits equal the accepted pieces
+(6 after 5 steps, one of them halved).
 
 **Incompatible pairs** (declared, so selecting one is an error that
 says why, and the smoke matrix steers around them):
@@ -454,11 +469,13 @@ says why, and the smoke matrix steers around them):
 | `timestepper = :adaptive`, `:imex` | `core = :anelastic`, `:pseudo_incompressible` | `adaptive_dt`, `step_adaptive!`, `step_imex!` are typed on `BoussinesqSimulation` |
 | `core = :anelastic`, `:pseudo_incompressible` | `pressure_solver = :cosine_fft`, `:multigrid`, `:mg_cg` | those solve the constant-coefficient ∇²φ = ∇·u*, not the weighted projection; select `:density_weighted_cg` |
 | | `momentum_advection = :weno_z` | an unweighted operator; the core advects momentum in its W-weighted centred flux form (`:centered` passes no keyword to it) |
-| | `sgs = :dynamic`, `:mlsgs` | they act through `eddy_viscosity!`, which the sound-proof step does not take; the core's closure is the built-in Smagorinsky |
 | `pressure_solver = :density_weighted_cg` | `core = :boussinesq` | it solves only the weighted projection of the sound-proof cores |
 
 Behind the declarations, `build_core` of a sound-proof core rejects any
-`sim_options` keyword other than `tol` and `maxit`.
+`sim_options` keyword other than `tol` and `maxit`. Every `:sgs` provider
+combines with every core: the sound-proof step takes the contract's
+`sgs` closure like the Boussinesq one (#167; before it, `:dynamic` and
+`:mlsgs` were incompatible with the sound-proof cores).
 
 **Measured** (flagship 64 × 64 × 32, 1000 m × 1000 m × 200 m,
 20 June 06:00–07:00, 1 h, first-call compilation included; #133,

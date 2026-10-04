@@ -65,7 +65,9 @@ using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    add_coriolis!, compute_smagorinsky_νt!,
                    add_eddy_viscosity_u!, add_eddy_viscosity_v!,
                    add_eddy_viscosity_w!, add_eddy_diffusion_scalar!,
-                   add_surface_flux!, add_sponge!
+                   add_surface_flux!, add_sponge!,
+                   compute_sgs!, add_sgs_momentum!, add_sgs_scalar!, advance_sgs!,
+                   _active_sgs
 using ..PressureSolvers: AbstractPressureSolver
 
 import ..PressureSolvers: solve!
@@ -1232,6 +1234,7 @@ mutable struct MassWeightedSimulation{S<:MassWeighting,
     lap_w::Field{FaceZ,        T, Array{T,3}, M}
     lap_θ::Field{CellCenter,   T, Array{T,3}, M}
     νt::Field{CellCenter,      T, Array{T,3}, M}
+    κt::Field{CellCenter,      T, Array{T,3}, M}   # SGS scalar diffusivity (Era VI, #167)
 end
 
 """
@@ -1251,7 +1254,7 @@ is `0`):
 | `ν` | `0` | molecular viscosity |
 | `buoyancy` | `true` | enable `g(θ−θ̄)/θ̄` |
 | `f_coriolis` | `0` | f-plane Coriolis |
-| `C_s` | `0` | Smagorinsky coefficient |
+| `C_s` | `0` | Smagorinsky coefficient (the built-in closure; `step!(…; sgs)` replaces it) |
 | `Pr_t` | `1/3` | turbulent Prandtl number |
 | `θ_flux_bottom`, `θ_flux_top` | `0` | prescribed surface fluxes |
 | `sponge_α_max`, `sponge_z_start` | off | Rayleigh sponge |
@@ -1371,6 +1374,7 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
     dφdx = Field(FaceX(), mesh); dφdy = Field(FaceY(), mesh); dφdz = Field(FaceZ(), mesh)
     lu = Field(FaceX(), mesh); lv = Field(FaceY(), mesh); lw = Field(FaceZ(), mesh)
     lθ = Field(CellCenter(), mesh); νt = Field(CellCenter(), mesh)
+    κt = Field(CellCenter(), mesh)
 
     has_sponge = sponge_α_max != 0 && sponge_z_start < (mesh.z0 + mesh.Lz)
 
@@ -1383,7 +1387,7 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
         θ_flux_bottom != 0 || θ_flux_top != 0, has_sponge,
         zero(T),
         u, v, w, p, θ, tu, tv, tw, tθ,
-        div_buf, φ, dφdx, dφdy, dφdz, lu, lv, lw, lθ, νt)
+        div_buf, φ, dφdx, dφdy, dφdz, lu, lv, lw, lθ, νt, κt)
 
     initialize_θ && set_reference_state!(sim)
     return sim
@@ -1462,7 +1466,15 @@ Steps 5–7 are *discretely consistent*: the divergence in 5 and the operator
 in 6 are built from the same face weights and the same differences, so the
 post-step `∇·(ρ̄u)` is bounded by the CG tolerance, not by truncation error.
 The callbacks have the same contract as for
-[`step!`](@ref Aeolus.Simulations.step!).
+[`step!`](@ref Aeolus.Simulations.step!), and so does the SGS closure: the
+keyword `sgs` (any [`AbstractSGSClosure`](@ref
+Aeolus.Operators.AbstractSGSClosure), or a function `f(νt, u, v, w)`; the
+legacy alias `eddy_viscosity!` is accepted) replaces the built-in
+Smagorinsky closure (`C_s`), its coefficients go into `sim.νt` / `sim.κt`,
+its tendencies are added in step 3 where the built-in ones are, and its
+memory is committed once after the projection. The SGS stress is applied in
+the unweighted form, like the built-in closure (the `O(∂ln ρ̄/∂z)` weighting
+correction is omitted for the same reason as for the molecular term).
 """
 step_anelastic!(sim::AnelasticSimulation, dt::Real; kwargs...) =
     _step_mass_weighted!(sim, dt; kwargs...)
@@ -1488,8 +1500,11 @@ step!(sim::MassWeightedSimulation, dt::Real; kwargs...) =
 
 function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
                               body_force!::Union{Nothing,Function} = nothing,
-                              post_predictor!::Union{Nothing,Function} = nothing) where {S,T}
+                              post_predictor!::Union{Nothing,Function} = nothing,
+                              sgs = nothing,
+                              eddy_viscosity! = nothing) where {S,T}
     Δt = T(dt)
+    closure = _active_sgs(sim, sgs, eddy_viscosity!)
     m  = sim.mesh
     Wc = _weight_c(sim.weighting, sim.ref)
     Wf = _weight_f(sim.weighting, sim.ref)
@@ -1518,14 +1533,12 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
         _axpy_interior!(sim.tθ, sim.ν, sim.lap_θ, m)
     end
 
-    # 4. Smagorinsky-Lilly SGS (shared with the Boussinesq core).
-    if sim.has_sgs
-        compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, sim.C_s)
-        fill_halos!(sim.νt, sim.bcs)
-        add_eddy_viscosity_u!(sim.tu, sim.u, sim.νt)
-        add_eddy_viscosity_v!(sim.tv, sim.v, sim.νt)
-        add_eddy_viscosity_w!(sim.tw, sim.w, sim.νt)
-        add_eddy_diffusion_scalar!(sim.tθ, sim.θ, sim.νt, sim.Pr_t)
+    # 4. SGS closure (the contract shared with the Boussinesq core: the
+    #    built-in Smagorinsky, or the `sgs` keyword).
+    if closure !== nothing
+        f = compute_sgs!(closure, sim)
+        add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim)
+        add_sgs_scalar!(sim.tθ, sim.θ, closure, f, sim)
     end
 
     # 5. buoyancy with the height-dependent reference θ̄(z)
@@ -1571,6 +1584,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     ii, jj, kk = interior(m)
     @inbounds @views sim.p.data[ii, jj, kk] .= sim.φ.data[ii, jj, kk] ./ Δt
     sim.t += Δt
+    closure === nothing || advance_sgs!(closure, sim, Δt)   # once per step
     return sim
 end
 

@@ -155,6 +155,12 @@ export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
        advect_weno5!
+# Era VI (P54-a, #167): the SGS closure contract
+export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
+       sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
+       compute_sgs!, sgs_closure,
+       AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
+       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
