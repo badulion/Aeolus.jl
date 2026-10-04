@@ -82,6 +82,30 @@ using Aeolus.SurfaceExchange: _Φm, von_karman, grav
         end
     end
 
+    @testset "surface_mshf_ratio: the coupled fluxes against the MSHF" begin
+        # a moist slab cooled below the air (night): the ratio is the
+        # buoyancy flux u*θv* of the solver over Q_max, so ≤ 1, and it
+        # matches a direct solve_surface_layer to round-off
+        worst = 0.0
+        for Ts in (270.0, 280.0, 285.0, 287.0), U in (0.3, 1.0, 3.0, 8.0), β in (0.0, 1.0)
+            slab = SlabLand(; T = Ts, C_s = 1e5, albedo = 0.2, emissivity = 0.95,
+                            z0m = 0.05, z0h = 0.005, β = β)
+            f = SurfaceForcing(; T_air = 288.0, q_air = 0.006, U = U, p = 1e5, z_ref = 3.0)
+            fl = turbulent_fluxes(slab, f; U_min = 0.1)
+            r = surface_mshf_ratio(BDBH, fl, f, 0.05; U_min = 0.1)
+            qa = Aeolus.MoistThermodynamics.PhasePartition(0.006)
+            θa = 288.0 + Aeolus.MoistThermodynamics.dry_adiabatic_lapse_rate(qa) * 3.0
+            qs = surface_specific_humidity(slab, f)
+            sol = solve_surface_layer(BDBH; U = U, z_m = 3.0, θ_a = θa, θ_s = Ts, q_a = 0.006,
+                                      q_s = qs, z0m = 0.05, z0h = 0.005, U_min = 0.1)
+            @test r.Q_down ≈ sol.u_star * sol.θv_star rtol = 1e-10
+            @test r.Q_down > 0 && r.ratio <= 1 + 1e-10
+            @test r.H_max > 0
+            worst = max(worst, r.ratio)
+        end
+        @test worst > 0.9                      # the strongest cases come close to the bound
+    end
+
     @testset "flux-prescribed friction velocity" begin
         U, z, z0m, θ = 5.0, 10.0, 0.1, 290.0
         Λ = log(z / z0m)

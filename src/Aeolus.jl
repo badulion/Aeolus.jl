@@ -935,7 +935,7 @@ export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # P58-e (#193): the maximum sustainable heat flux (Van de Wiel et al. 2012)
 # and the flux-prescribed MOST friction velocity, in SurfaceExchange.
 export log_linear_slope, MSHFSolution, mshf_solution, max_sustainable_heat_flux,
-       flux_friction_velocity
+       flux_friction_velocity, surface_mshf_ratio
 # Operators' pointwise fields of the contract.
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 

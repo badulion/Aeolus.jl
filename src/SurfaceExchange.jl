@@ -78,7 +78,7 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        net_radiation, turbulent_fluxes, step_surface!,
        MOSTConsistent, most_gradient_richardson, most_stability_parameter,
        log_linear_slope, MSHFSolution, mshf_solution, max_sustainable_heat_flux,
-       flux_friction_velocity
+       flux_friction_velocity, surface_mshf_ratio
 
 # =========================================================================
 # 1. Material constants
@@ -935,6 +935,53 @@ function turbulent_fluxes(s::AbstractSurface, f::SurfaceForcing;
     LE = surface_latent_heat(s; c = c) * E
     Rn = net_radiation(s, f; c = c)
     return SurfaceFluxes(promote(Rn, H, LE, Rn - H - LE, ρ * sol.u_star^2, E)...)
+end
+
+"""
+    surface_mshf_ratio(sf, fl::SurfaceFluxes, forcing::SurfaceForcing, z0m;
+                       U_min = 0.1, gustiness = 0, Q_max = nothing,
+                       c = DEFAULT_SURFACE_CONSTANTS)
+        -> (ratio, Q_down, Q_max, H_max)
+
+How close the surface fluxes `fl` of a column are to its maximum
+sustainable heat flux (P58-e, #193). With the air state of `forcing`
+converted exactly as in [`turbulent_fluxes`](@ref) — ``ρ``, ``c_{pm}``,
+``θ_a = T_a + Γ_d z_{ref}``, ``θ_{va} = θ_a(1 + ε' q_a)`` — the downward
+kinematic buoyancy flux is
+
+```math
+Q_{down} = -\\overline{w'θ_v'} = -\\frac{H}{ρ c_{pm}}(1 + ε' q_a) - ε' θ_a \\frac{E}{ρ}
+\\;(= u_* θ_{v*}),
+```
+
+and ``Q_{max}`` = [`max_sustainable_heat_flux`](@ref)`(sf, U_e, z_ref, z0m,
+z0m, θ_va)` at the effective wind ``U_e = \\max(\\sqrt{U^2 + w_g^2},
+U_{min})`` of [`solve_surface_layer`](@ref). Returns `ratio = Q_down/Q_max`
+(negative for an upward, unstable flux), both fluxes, and
+``H_{max} = ρ c_{pm} Q_{max}`` (W m⁻²). For fluxes that
+`turbulent_fluxes` computed with the same `sf`, `U_min` and `gustiness`
+the ratio is at most 1 (the solver's solutions lie on the MSHF curve);
+the moisture term makes it the buoyancy flux, which is what MOST
+constrains, rather than the sensible heat flux alone. `Q_max` (K m s⁻¹)
+skips the maximisation and uses a value already computed for the same
+column and forcing (the Berlin coupling compares two sets of fluxes of
+one column against one MSHF).
+"""
+function surface_mshf_ratio(sf::AbstractStabilityFunctions, fl::SurfaceFluxes,
+                            f::SurfaceForcing, z0m::Real; U_min::Real = 0.1,
+                            gustiness::Real = 0.0, Q_max = nothing,
+                            c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    qa = PhasePartition(f.q_air)
+    ε = _virtual_coefficient(c)
+    θ_a = f.T_air + dry_adiabatic_lapse_rate(qa, c.thermo) * f.z_ref
+    θva = θ_a * (1 + ε * f.q_air)
+    ρ = air_density(f.T_air, f.p, qa, c.thermo)
+    cp = heat_capacity_moist(qa, c.thermo)
+    Qdown = -(fl.H / (ρ * cp)) * (1 + ε * f.q_air) - ε * θ_a * fl.E / ρ
+    Ue = max(sqrt(f.U^2 + gustiness^2), U_min)
+    Qmax = Q_max === nothing ? max_sustainable_heat_flux(sf, Ue, f.z_ref, z0m, z0m, θva; c = c) :
+           oftype(Qdown, Q_max)
+    return (ratio = Qdown / Qmax, Q_down = Qdown, Q_max = Qmax, H_max = ρ * cp * Qmax)
 end
 
 end # module
