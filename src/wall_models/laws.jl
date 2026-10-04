@@ -3,7 +3,7 @@
 
 export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
        friction_velocity, wall_stress, wall_drag,
-       spalding_yplus, spalding_uplus, matching_obukhov_length
+       spalding_yplus, spalding_uplus, matching_obukhov_length, MOSTFluxWallLaw
 
 """
     AbstractWallLaw
@@ -316,3 +316,55 @@ function matching_obukhov_length(sf::AbstractStabilityFunctions, u_star::Real, U
     ζ, _, _ = SurfaceExchange._illinois(F, a, b, fa, fb, 200)
     return ζ == 0 ? T(Inf) : T(h) / ζ
 end
+
+"""
+    MOSTFluxWallLaw(sf, z0m, Q, θ_ref; U_min = 0.1, c = DEFAULT_SURFACE_CONSTANTS)
+    MOSTFluxWallLaw(z0m, Q, θ_ref; kwargs...)   # sf = BusingerDyerBeljaarsHoltslag()
+
+The rough-wall Monin–Obukhov law for a **prescribed** surface buoyancy
+flux: `Q` is the upward kinematic flux ``\\overline{w'θ'}`` (K m s⁻¹,
+negative = surface cooling) and `θ_ref` (K) the reference potential
+temperature of ``g/θ_{ref}``. Unlike [`MOSTWallLaw`](@ref), which holds
+the Obukhov length, the stability follows the wind: ``L = -u_τ^3
+θ_{ref}/(κ g Q)`` with the ``u_τ`` of the law itself, so
+
+```math
+u_τ = \\frac{κ\\,\\max(U, U_{min})}{\\ln(h/z_{0m}) - ψ_m(h/L) + ψ_m(z_{0m}/L)},
+\\qquad L = -\\frac{u_τ^3 θ_{ref}}{κ g Q},
+```
+
+solved by `SurfaceExchange.flux_friction_velocity` (one source of
+truth). Under cooling the relation has a turbulent solution only while
+``-Q`` is at most the maximum sustainable heat flux of the wind at
+height h (`SurfaceExchange.max_sustainable_heat_flux`, Van de Wiel et
+al. 2012); then ``u_τ`` is on the weakly stable branch. Beyond it the
+law gives ``u_τ = 0``: the wall stops exerting stress — the collapse of
+the surface layer. This is the wall law of the flux-cooled half channel
+(`half_channel_case(surface_heat_flux = Q)`, P58-e, #193).
+"""
+struct MOSTFluxWallLaw{S<:AbstractStabilityFunctions, T<:AbstractFloat, C<:SurfaceConstants} <: AbstractWallLaw
+    sf::S
+    z0m::T
+    Q::T
+    θ_ref::T
+    U_min::T
+    c::C
+end
+function MOSTFluxWallLaw(sf::AbstractStabilityFunctions, z0m::Real, Q::Real, θ_ref::Real;
+                         U_min::Real = 0.1, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    θ_ref > 0 || throw(ArgumentError("MOSTFluxWallLaw: θ_ref must be > 0, got $θ_ref"))
+    z0, q, θ, Um = promote(float(z0m), float(Q), float(θ_ref), float(U_min))
+    return MOSTFluxWallLaw(sf, z0, q, θ, Um, c)
+end
+MOSTFluxWallLaw(z0m::Real, Q::Real, θ_ref::Real; kwargs...) =
+    MOSTFluxWallLaw(BusingerDyerBeljaarsHoltslag(), z0m, Q, θ_ref; kwargs...)
+
+function friction_velocity(law::MOSTFluxWallLaw, U::Real, h::Real; ν = nothing)
+    h > law.z0m || throw(ArgumentError("MOSTFluxWallLaw: need h > z0m, got h = $h, z0m = $(law.z0m)"))
+    Ue = max(abs(float(U)), law.U_min)
+    return SurfaceExchange.flux_friction_velocity(law.sf, Ue, h, law.z0m, law.Q, law.θ_ref;
+                                                  c = law.c)
+end
+
+wall_drag(law::MOSTFluxWallLaw, U::Real, h::Real; ν = nothing) =
+    friction_velocity(law, U, h)^2 / max(abs(float(U)), law.U_min)
