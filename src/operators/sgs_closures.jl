@@ -33,8 +33,8 @@ the anelastic / pseudo-incompressible `step!`). A closure implements
 | [`sgs_coefficients!`](@ref)`(f, c, sim)` | each time the tendencies are formed (every RK substage, every IMEX step, the CFL estimate) | **required** |
 | [`advance_sgs!`](@ref)`(c, sim, dt)` | once per **accepted** step, after the projection | no-op |
 | [`sgs_state`](@ref)`(c)`, [`restore_sgs_state!`](@ref)`(c, s)` | around a step [`step_adaptive!`](@ref Aeolus.TimeIntegration.step_adaptive!) may reject | no-op |
-| [`add_sgs_momentum!`](@ref)`(tu, tv, tw, c, f, sim)` | momentum tendency | Laplacian eddy-viscosity form with `f.νh` |
-| [`add_sgs_scalar!`](@ref)`(tϕ, ϕ, c, f, sim)` | θ tendency | eddy diffusion with `f.κh` |
+| [`add_sgs_momentum!`](@ref)`(tu, tv, tw, c, f, sim; stress)` | momentum tendency | Laplacian eddy-viscosity form with `f.νh` (`stress = :laplacian`), or the stress form with `f.νh`, `f.νv` (`:symmetric`) |
+| [`add_sgs_scalar!`](@ref)`(tϕ, ϕ, c, f, sim)` | θ tendency | diagonal eddy diffusion with `f.κh` (x, y faces), `f.κv` (z faces) |
 | [`sgs_fields`](@ref)`(c, sim)` | the storage `f` the coefficients go into | `SGSFields(sim.νt, sim.κt)` |
 
 `sgs_coefficients!` must be **pure** in the closure's memory: it may read the
@@ -121,30 +121,72 @@ Restore the memory saved by [`sgs_state`](@ref) (no-op by default).
 restore_sgs_state!(c::AbstractSGSClosure, s) = c
 
 """
-    add_sgs_momentum!(tu, tv, tw, c::AbstractSGSClosure, f::SGSFields, sim)
+    add_sgs_momentum!(tu, tv, tw, c::AbstractSGSClosure, f::SGSFields, sim;
+                      stress = :laplacian)
 
-Add the SGS stress divergence to the momentum tendencies. Default: the
-Laplacian eddy-viscosity flux form `∂/∂xⱼ(ν ∂uᵢ/∂xⱼ)` of
-[`add_eddy_viscosity_u!`](@ref) (and `_v!`, `_w!`) with `f.νh`. A closure
-with a different stress (full stress form, `νh ≠ νv`, an explicit Reynolds
-stress) adds a method. Halos of `sim.u, sim.v, sim.w` and of `f` are filled.
+Add the SGS stress divergence to the momentum tendencies. `stress` is the
+`sgs_stress` keyword of the cores:
+
+* `:laplacian` (default): the Laplacian eddy-viscosity flux form
+  `∂/∂xⱼ(ν ∂uᵢ/∂xⱼ)` of [`add_eddy_viscosity_u!`](@ref) (and `_v!`, `_w!`)
+  with `f.νh` — the pre-Era-VI operator, bit for bit;
+* `:symmetric`: the stress form `∂/∂xⱼ(2νᵢⱼSᵢⱼ)` of
+  [`add_sgs_stress_divergence!`](@ref) with `νh = f.νh`, `νv = f.νv`
+  (P55-b, #175).
+
+A closure with its own stress (an explicit Reynolds stress) adds a method
+and may call [`add_stress_divergence!`](@ref). Halos of `sim.u, sim.v,
+sim.w` and of `f` are filled.
 """
-function add_sgs_momentum!(tu, tv, tw, c::AbstractSGSClosure, f::SGSFields, sim)
-    add_eddy_viscosity_u!(tu, sim.u, f.νh)
-    add_eddy_viscosity_v!(tv, sim.v, f.νh)
-    add_eddy_viscosity_w!(tw, sim.w, f.νh)
+function add_sgs_momentum!(tu, tv, tw, c::AbstractSGSClosure, f::SGSFields, sim;
+                           stress::Symbol = :laplacian)
+    if stress === :laplacian
+        add_eddy_viscosity_u!(tu, sim.u, f.νh)
+        add_eddy_viscosity_v!(tv, sim.v, f.νh)
+        add_eddy_viscosity_w!(tw, sim.w, f.νh)
+    elseif stress === :symmetric
+        add_sgs_stress_divergence!(tu, tv, tw, sim.u, sim.v, sim.w, f.νh, f.νv)
+    else
+        _check_sgs_stress(stress)
+    end
     return nothing
 end
 
 """
     add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim)
 
-Add the SGS scalar flux divergence `∂/∂xⱼ(κ ∂ϕ/∂xⱼ)` to `tϕ`. Default: the
-three-argument [`add_eddy_diffusion_scalar!`](@ref)`(tϕ, ϕ, f.κh)`. Halos of
-`ϕ` and of `f` are filled.
+Add the SGS scalar flux divergence `∂/∂xⱼ(κⱼₖ ∂ϕ/∂xₖ)` to `tϕ`. Default: the
+diagonal operator [`add_eddy_diffusion_scalar!`](@ref)`(tϕ, ϕ, f.κh, f.κv)`
+(P55-c, #181), `κh` on the x and y faces and `κv` on the z faces; for an
+isotropic closure (`f.κv === f.κh`) that is the three-argument form
+`(tϕ, ϕ, f.κh)`, bit for bit the pre-P55-c operator. A closure with a full
+diffusivity tensor adds a method that calls
+[`add_tensor_diffusion_scalar!`](@ref) (see [`IsentropicDiffusion`](@ref)).
+Halos of `ϕ` and of `f` are filled.
 """
-add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim) =
-    (add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh); nothing)
+function add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim)
+    if f.κv === f.κh
+        add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh)
+    else
+        add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh, f.κv)
+    end
+    return nothing
+end
+
+"""
+    sgs_tracer_diffusivity!(κ, c::AbstractSGSClosure, f::SGSFields, sim, ϕ) -> Field
+
+The cell-centred SGS diffusivity of a scalar `ϕ` other than θ (on the
+Boussinesq core: `qv`, in the explicit SGS flux of `step!` / `step_rk3!`
+and the implicit diffusion of
+[`step_imex!`](@ref Aeolus.TimeIntegration.step_imex!)), after
+[`compute_sgs!`](@ref) has filled `f`. Default: `f.κh`, returned as is and
+`κ` untouched, which is right for every closure whose `κ_t` is a property of
+the flow alone (`κ_t = ν_t/Prₜ`). A closure whose `κ_t` is built from θ's own
+gradient (the AMD scalar model, [`AMDClosure`](@ref)) computes `ϕ`'s into the
+scratch field `κ` (halos filled with `sim.bcs`) and returns `κ`.
+"""
+sgs_tracer_diffusivity!(κ, c::AbstractSGSClosure, f::SGSFields, sim, ϕ) = f.κh
 
 # -------------------------------------------------------------------------
 # What the cores call
@@ -285,7 +327,7 @@ turbulent_prandtl(c::StaticSmagorinsky, sim) = _prandtl(c.Pr_t, sim)
 
 """
     DynamicSmagorinsky(workspace::DynamicSmagorinskyWorkspace; averaging = :plane,
-                       filter_ratio = 3, cs_max = 0.5, Pr_t = nothing)
+                       filter_ratio = 3, cs_max = 0.5, Pr_t = nothing, mask = nothing)
     DynamicSmagorinsky(mesh::RegularGrid; kwargs...)
 
 The Germano–Lilly dynamic Smagorinsky closure,
@@ -297,21 +339,31 @@ recomputed from the resolved field at every call, so
 is bit for bit the legacy `eddy_viscosity! = (νt, u, v, w) ->
 compute_dynamic_smagorinsky_νt!(νt, u, v, w; workspace = ws)`.
 
+`averaging` is `:plane` or `:local`; the Lagrangian average along
+pathlines is the stateful [`LagrangianDynamicSmagorinsky`](@ref).
+`mask` (optional, storage-sized cell mask, `true` = solid, e.g.
+`IBM.SolidMask.mask`) makes the procedure obstacle aware (see
+[`compute_dynamic_smagorinsky_νt!`](@ref)); its halos are filled from the
+simulation's boundary conditions on first use (wrapped where periodic).
+
 References: Germano, Piomelli, Moin & Cabot (1991), *Phys. Fluids A* 3,
 1760; Lilly (1992), *Phys. Fluids A* 4, 633.
 """
-struct DynamicSmagorinsky{W<:DynamicSmagorinskyWorkspace, R<:Real, C<:Real, P} <: AbstractEddyViscosityClosure
+struct DynamicSmagorinsky{W<:DynamicSmagorinskyWorkspace, R<:Real, C<:Real, P, M} <: AbstractEddyViscosityClosure
     workspace::W
     averaging::Symbol
     filter_ratio::R
     cs_max::C
     Pr_t::P
+    mask::M
 end
-function DynamicSmagorinsky(ws::DynamicSmagorinskyWorkspace; averaging::Symbol = :plane,
-                            filter_ratio::Real = 3, cs_max::Real = 0.5, Pr_t = nothing)
+function DynamicSmagorinsky(ws::DynamicSmagorinskyWorkspace{T}; averaging::Symbol = :plane,
+                            filter_ratio::Real = 3, cs_max::Real = 0.5, Pr_t = nothing,
+                            mask = nothing) where {T}
     averaging in (:plane, :local) ||
-        throw(ArgumentError("averaging must be :plane or :local, got $(repr(averaging))"))
-    return DynamicSmagorinsky(ws, averaging, filter_ratio, cs_max, Pr_t)
+        throw(ArgumentError("averaging must be :plane or :local (the Lagrangian average is " *
+                            "LagrangianDynamicSmagorinsky), got $(repr(averaging))"))
+    return DynamicSmagorinsky(ws, averaging, filter_ratio, cs_max, Pr_t, _LazyMask(mask, T))
 end
 DynamicSmagorinsky(g::RegularGrid; kwargs...) =
     DynamicSmagorinsky(DynamicSmagorinskyWorkspace(g); kwargs...)
@@ -319,8 +371,26 @@ DynamicSmagorinsky(g::RegularGrid; kwargs...) =
 sgs_viscosity!(νt, c::DynamicSmagorinsky, sim) =
     compute_dynamic_smagorinsky_νt!(νt, sim.u, sim.v, sim.w; workspace = c.workspace,
                                     averaging = c.averaging, filter_ratio = c.filter_ratio,
-                                    cs_max = c.cs_max)
+                                    cs_max = c.cs_max, mask = _sgs_mask(c.mask, sim))
 turbulent_prandtl(c::DynamicSmagorinsky, sim) = _prandtl(c.Pr_t, sim)
+
+# A solid mask whose halos are filled from the simulation's boundary
+# conditions the first time a closure sees the simulation (a cache, not
+# closure memory: it never changes once built).
+struct _LazyMask{A, T}
+    src::A
+    cache::Base.RefValue{Union{Nothing, _SGSMask{BitArray{3}, T}}}
+end
+_LazyMask(src, ::Type{T}) where {T} =
+    _LazyMask(src, Base.RefValue{Union{Nothing, _SGSMask{BitArray{3}, T}}}(nothing))
+_sgs_mask(::_LazyMask{Nothing}, sim) = nothing
+function _sgs_mask(m::_LazyMask, sim)
+    c = m.cache[]
+    c === nothing || return c
+    b = sim.bcs
+    per = (b.west isa Periodic, b.south isa Periodic, b.bottom isa Periodic)
+    return m.cache[] = _SGSMask(m.src, mesh(sim.u), per)
+end
 
 """
     FunctionSGS(f)

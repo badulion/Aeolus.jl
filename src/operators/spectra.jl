@@ -2,36 +2,31 @@
 # (Phase 54, P54-c). Included into `Operators`; triply periodic fields on a
 # `RegularGrid`, FFTW only.
 #
-# Both work with the same object: the DFT of the velocity interpolated to
-# cell centres (the two-point average of `interpolate_to_center!`, taken
-# with periodic wrap-around so halos are not needed). The initialiser
-# builds face values whose centre interpolation has exactly the requested
-# shell spectrum and whose staggered (C-grid) divergence vanishes, so the
-# spectrum the diagnostic reports for a fresh field is the one asked for.
+# Both work with the same object: the DFT of each velocity component on its
+# own staggered grid. A half-cell shift changes only the phase of a Fourier
+# mode, so |û_j(k)|² is the energy the solver carries in that mode, and the
+# shell sum is the solver's kinetic energy ½⟨u² + v² + w²⟩ (face values, as
+# `kinetic_energy` and the energy-conserving C-grid advection count it).
+# An earlier version transformed the two-point centre average instead,
+# which weights every mode by Π_j cos²(k_jΔ_j/2) (→ 0 at the cut-off); the
+# initialiser then divided by that factor, so a field "with the CBC
+# spectrum" carried 22 % (32³) / 14 % (64³) more kinetic energy than CBC,
+# ×2.1 in the cut-off shell (P54-c review, #205).
 
 # Shell width: the fundamental wavenumber of the longest box side.
 _shell_width(g::RegularGrid) = 2π / max(g.Lx, g.Ly, g.Lz)
-
-# Cell-centred copy of a staggered component, periodic wrap-around.
-function _to_center_periodic(f::Field{L}) where {L}
-    a = interior_view(f)
-    Nx, Ny, Nz = size(a)
-    s = L === FaceX ? (1, 0, 0) : L === FaceY ? (0, 1, 0) : L === FaceZ ? (0, 0, 1) : (0, 0, 0)
-    s == (0, 0, 0) && return Array(a)
-    c = similar(a, Nx, Ny, Nz)
-    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
-        c[i,j,k] = 0.5 * (a[i,j,k] + a[mod1(i + s[1], Nx), mod1(j + s[2], Ny), mod1(k + s[3], Nz)])
-    end
-    return c
-end
 
 """
     isotropic_energy_spectrum(u, v, w; Δk = 2π / max(Lx, Ly, Lz)) -> (k, E)
 
 Shell-summed kinetic-energy spectrum of a triply periodic velocity field.
-`u, v, w` (staggered `FaceX/FaceY/FaceZ` or all `CellCenter`) are first
-interpolated to cell centres (two-point average, periodic wrap; halos are
-not used), then Fourier transformed (FFTW `rfft`). The energy
+Each component `u, v, w` (staggered `FaceX/FaceY/FaceZ` or all
+`CellCenter`) is Fourier transformed on its own grid (FFTW `rfft` of the
+interior; halos are not used). The staggering only shifts the phase of a
+mode, so no interpolation is needed, and none is done: a two-point
+average to cell centres would damp mode ``\\mathbf k`` by
+``\\prod_j \\cos^2(k_jΔ_j/2)``, a filter that vanishes at the cut-off. The
+energy
 ``\\tfrac12 |\\hat{\\mathbf u}(\\mathbf k)|^2`` of every mode is added to
 the shell ``n = \\mathrm{round}(|\\mathbf k|/Δk)``, and
 
@@ -42,7 +37,8 @@ E(k_n) = \\frac{1}{Δk} \\sum_{n - 1/2 \\,≤\\, |\\mathbf k|/Δk \\,<\\, n + 1/
 ```
 
 normalised so that ``\\sum_n E(k_n)\\,Δk = \\tfrac12⟨u_i u_i⟩`` exactly
-(Parseval), the average taken over the cell-centred field. `k` runs from
+(Parseval), the average taken over the stored (face) values, i.e. the
+kinetic energy of `kinetic_energy(sim)` divided by the volume. `k` runs from
 0 (the mean flow, shell 0) to the shell of the corner mode, in rad m⁻¹;
 `E` is in m³ s⁻². Unit-width (``Δk``) bins are the standard of
 Rogallo (1981) and Pope (2000, §6.5).
@@ -60,7 +56,7 @@ function isotropic_energy_spectrum(u::Field, v::Field, w::Field; Δk::Real = _sh
     shell = zeros(Float64, nmax + 1)
     norm = 0.5 / (Nx * Ny * Nz)^2
     for f in (u, v, w)
-        F = rfft(_to_center_periodic(f))
+        F = rfft(Array(interior_view(f)))      # native staggered values
         @inbounds for c in 1:size(F, 3), b in 1:size(F, 2), a in 1:size(F, 1)
             # rfft keeps kx ≥ 0 only: the modes with a conjugate partner
             # (0 < kx < Nyquist) count twice.
@@ -85,18 +81,18 @@ method writes `sim.u, sim.v, sim.w` and fills their halos with
 `sim.bcs`.
 
 Construction (Rogallo 1981, adapted to the C-grid). For every Fourier
-mode a complex Gaussian vector ``\\hat c(\\mathbf k)`` is drawn and
-projected so that the **discrete** staggered divergence vanishes:
-for face values with Fourier amplitude ``a_j`` the cell-centred average
-is ``\\hat c_j = a_j e^{ik_jΔ_j/2}\\cos(k_jΔ_j/2)`` and the divergence
-``2i\\sum_j \\hat c_j \\tan(k_jΔ_j/2)/Δ_j``, so ``\\hat c`` is projected
-normal to ``T_j = \\tan(k_jΔ_j/2)/Δ_j`` (→ ``k_j/2`` as ``k_jΔ_j → 0``,
-the continuous projection). Hermitian symmetry is imposed, every shell is
-rescaled to hold exactly ``E(k_n)Δk``, and the faces are recovered as
-``a_j = \\hat c_j e^{-ik_jΔ_j/2}/\\cos(k_jΔ_j/2)``. Modes on a Nyquist
-plane (where the centre average is blind) are left empty. The result is
-divergence-free to round-off under the C-grid divergence of the pressure
-projection, so no projection step is needed before a run.
+mode a complex Gaussian vector ``\\hat b(\\mathbf k)`` is drawn and
+projected so that the **discrete** staggered divergence vanishes: for
+face values with Fourier amplitude ``a_j = \\hat b_j e^{-ik_jΔ_j/2}`` the
+divergence ``(u_{i+1} - u_i)/Δx + …`` has amplitude
+``2i\\sum_j \\hat b_j \\sin(k_jΔ_j/2)/Δ_j``, so ``\\hat b`` is projected
+normal to ``S_j = \\sin(k_jΔ_j/2)/Δ_j`` (→ ``k_j/2`` as ``k_jΔ_j → 0``,
+the continuous projection). Hermitian symmetry is imposed and every shell
+is rescaled to hold exactly ``E(k_n)Δk`` of face energy
+(``|a_j| = |\\hat b_j|``). Modes on a Nyquist plane are left empty. The
+result is divergence-free to round-off under the C-grid divergence of the
+pressure projection, so no projection step is needed before a run, and
+its kinetic energy (`kinetic_energy(sim)`/volume) is ``\\sum_n E(k_n)Δk``.
 
 `kmax` defaults to the largest sphere inside the grid,
 ``\\min_j π/Δ_j``.
@@ -119,7 +115,7 @@ function isotropic_random_field!(u::Field{FaceX}, v::Field{FaceY}, w::Field{Face
     C = (zeros(ComplexF64, Nx, Ny, Nz), zeros(ComplexF64, Nx, Ny, Nz), zeros(ComplexF64, Nx, Ny, Nz))
     shell_of = zeros(Int, Nx, Ny, Nz)          # 0 = mode left empty
 
-    # 1. random vectors, discrete-solenoidal projection
+    # 1. random vectors, discrete-solenoidal projection (normal to S_j)
     nyq(m, N) = iseven(N) && abs(m) == N ÷ 2
     for c in 1:Nz, b in 1:Ny, a in 1:Nx
         (nyq(mx[a], Nx) || nyq(my[b], Ny) || nyq(mz[c], Nz)) && continue
@@ -127,15 +123,15 @@ function isotropic_random_field!(u::Field{FaceX}, v::Field{FaceY}, w::Field{Face
         n = round(Int, sqrt(sum(abs2, kv)) / Δk)
         (n == 0 || n > nmax) && continue
         shell_of[a,b,c] = n
-        T = ntuple(j -> tan(kv[j] * Δ[j] / 2) / Δ[j], 3)
+        S = ntuple(j -> sin(kv[j] * Δ[j] / 2) / Δ[j], 3)
         r = (randn(rng, ComplexF64), randn(rng, ComplexF64), randn(rng, ComplexF64))
-        α = (T[1] * r[1] + T[2] * r[2] + T[3] * r[3]) / (T[1]^2 + T[2]^2 + T[3]^2)
+        α = (S[1] * r[1] + S[2] * r[2] + S[3] * r[3]) / (S[1]^2 + S[2]^2 + S[3]^2)
         for j in 1:3
-            C[j][a,b,c] = r[j] - α * T[j]
+            C[j][a,b,c] = r[j] - α * S[j]
         end
     end
 
-    # 2. Hermitian symmetry (the projection commutes with it: T(-k) = -T(k))
+    # 2. Hermitian symmetry (the projection commutes with it: S(-k) = -S(k))
     neg(i, N) = mod(N - (i - 1), N) + 1
     for j in 1:3
         Cj = C[j]; S = similar(Cj)
@@ -145,7 +141,7 @@ function isotropic_random_field!(u::Field{FaceX}, v::Field{FaceY}, w::Field{Face
         Cj .= S
     end
 
-    # 3. rescale every shell to E(k_n) Δk (energy of the centre field)
+    # 3. rescale every shell to E(k_n) Δk (face energy: |a_j| = |b_j|)
     norm = 0.5 / (Nx * Ny * Nz)^2
     have = zeros(Float64, nmax)
     for I in CartesianIndices(shell_of)
@@ -161,14 +157,14 @@ function isotropic_random_field!(u::Field{FaceX}, v::Field{FaceY}, w::Field{Face
         end
     end
 
-    # 4. centre amplitudes → face amplitudes, back to physical space
+    # 4. phase shift to the faces, a_j = b_j e^{-ik_jΔ_j/2}, back to physical space
     for (j, f, kj) in ((1, u, kx), (2, v, ky), (3, w, kz))
         A = C[j]
         for c in 1:Nz, b in 1:Ny, a in 1:Nx
             shell_of[a,b,c] == 0 && continue
             k = j == 1 ? kj[a] : j == 2 ? kj[b] : kj[c]
             h = k * Δ[j] / 2
-            A[a,b,c] *= cis(-h) / cos(h)
+            A[a,b,c] *= cis(-h)
         end
         interior_view(f) .= real.(ifft(A))
     end

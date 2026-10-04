@@ -430,7 +430,11 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         @test d0.νt_max > 0
         @test d0.νt_max == maximum(interior_view(case0.sim.νt))
         @test isfinite(d0.dt_sgs)
-        @test d0.dt_diff ≈ k0.C_diffusive * Δ²harm / (case0.sim.ν + d0.νt_max)
+        # the Berlin providers run the stress form (P55-b): its momentum limit
+        # uses stress_form_cfl_viscosity, 2νt_max for νh = νv
+        @test get(case0.step_kwargs, :sgs_stress, nothing) === :symmetric
+        @test d0.νt_cfl ≈ 2 * d0.νt_max
+        @test d0.dt_diff ≈ k0.C_diffusive * Δ²harm / (case0.sim.ν + d0.νt_cfl)
         @test d0.dt_diff < k0.C_diffusive * Δ²harm / case0.sim.ν       # shorter than molecular-only
         @printf("  [adaptive, C_s = 0] closure νt_max = %.3e m²/s, dt_diff = %.3f s, dt_sgs = %.3f s\n",
                 d0.νt_max, d0.dt_diff, d0.dt_sgs)

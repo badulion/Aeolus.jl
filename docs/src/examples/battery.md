@@ -78,7 +78,8 @@ showcase over a real-format OSM city.
   * Smagorinsky-Lilly SGS closure
   * Rayleigh sponge in the top 25 % of the domain
   * f-plane Coriolis (`f = 1e-4 s⁻¹`)
-  * Geostrophic wind Rayleigh-nudging
+  * Geostrophic forcing (`LargeScaleForcing` since #171: a pressure
+    gradient by default, Rayleigh nudging of the mean wind as an option)
   * Cosine-FFT pressure solver (walls in z, periodic in xy)
   * **Moisture**: prognostic `qv` as a passive tracer (advected by the
     same staggered scheme as θ), with `Kessler` microphysics processing
