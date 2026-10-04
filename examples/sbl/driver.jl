@@ -415,24 +415,65 @@ end
 # =========================================================================
 
 """
-    stratified_channel_run(Ri, stab; N = (32, 32, 48), T_end = 40, T_avg = 15, seed = 1) -> NamedTuple
+    stratified_channel_case(Ri, stab; N, seed = 1) -> WallBoundedCase
 
-One wall-resolved channel at Re_τ = 180 and `Ri` (0: θ passive, g = 0)
-with the dynamic Smagorinsky closure, stability-corrected for
-`stab = :brown94`. Returns the time-averaged mean profile `U` (cell
+The wall-resolved channel at Re_τ = 180 on 2πδ × πδ × 2δ: no-slip walls,
+θ walls at `stratified_channel_walls(Ri)` (for `Ri = 0` θ is passive: walls
+(0, 1) and g = 0), Pr = 0.71, the plane-averaged dynamic Smagorinsky
+closure (Germano et al. 1991), wrapped in `StabilityCorrected` (Brown et
+al. 1994, anisotropic length scales: the Berlin default) for
+`stab = :brown94`, stress-form momentum divergence.
+"""
+function stratified_channel_case(Ri, stab; N = (32, 32, 48), seed = 1)
+    mesh = RegularGrid(; size = N, extent = (2π, π, 2.0))
+    base = DynamicSmagorinsky(mesh)
+    closure = stab === :none ? base : StabilityCorrected(base, mesh)
+    walls = Ri == 0 ? (0.0, 1.0) : stratified_channel_walls(Ri)
+    return channel_case(; Re_τ = 180, N = N, closure = closure, bottom_bc = :noslip,
+                        sgs_stress = :symmetric, θ_walls = walls, Pr = 0.71,
+                        g_accel = Ri == 0 ? 0.0 : 1.0, seed = seed)
+end
+
+"""
+    stratified_channel_spinup(; N = (32, 32, 48), T_spin = 10, seed = 1) -> snapshot
+
+The neutral spin-up the stratified runs start from (García-Villalba & del
+Álamo 2011 switch the stratification on in a developed neutral channel):
+the uncorrected dynamic closure with θ walls (0, 1) and no buoyancy, from
+the law-of-the-wall profile plus noise, for `T_spin` δ/u_τ. Returns the
+fields `u, v, w, θ` (normalised θ, 0 at the bottom wall and 1 at the top)
+and the time `t`.
+"""
+function stratified_channel_spinup(; N = (32, 32, 48), T_spin = 10.0, seed = 1)
+    c = stratified_channel_case(0.0, :none; N = N, seed = seed)
+    run_channel!(c, T_spin)
+    s = c.sim
+    return (u = copy(s.u.data), v = copy(s.v.data), w = copy(s.w.data), θ = copy(s.θ.data), t = s.t)
+end
+
+"""
+    stratified_channel_run(Ri, stab; N = (32, 32, 48), T_end = 40, T_avg = 20, seed = 1,
+                           spinup = nothing) -> NamedTuple
+
+One wall-resolved channel ([`stratified_channel_case`](@ref)) at
+Re_τ = 180 and `Ri`, run to `T_end` and averaged from `T_avg` (δ/u_τ),
+started from `spinup` (a [`stratified_channel_spinup`](@ref) snapshot, θ
+rescaled to the walls) or, with `spinup = nothing`, from noise. Returns the time-averaged mean profile `U` (cell
 centres `zc`), bulk velocity `Ub` (u_τ units), Nusselt number `Nu` (wall
 heat flux over the laminar ``κΔθ/2δ``), mean wall stress, the averaged
 total stress profile and the momentum-budget residual
 ``\\max_z|τ(z) - τ(0) - ∫_0^z(∂⟨U⟩/∂t - G)dz'|``.
 """
-function stratified_channel_run(Ri, stab; N = (32, 32, 48), T_end = 40.0, T_avg = 15.0, seed = 1)
-    mesh = RegularGrid(; size = N, extent = (2π, π, 2.0))
-    base = DynamicSmagorinsky(mesh)
-    closure = stab === :none ? base : StabilityCorrected(base, mesh)
-    walls = Ri == 0 ? (0.0, 1.0) : stratified_channel_walls(Ri)
-    c = channel_case(; Re_τ = 180, N = N, closure = closure, bottom_bc = :noslip,
-                     sgs_stress = :symmetric, θ_walls = walls, Pr = 0.71,
-                     g_accel = Ri == 0 ? 0.0 : 1.0, seed = seed)
+function stratified_channel_run(Ri, stab; N = (32, 32, 48), T_end = 40.0, T_avg = 20.0,
+                                seed = 1, spinup = nothing)
+    c = stratified_channel_case(Ri, stab; N = N, seed = seed)
+    walls = c.θ_walls
+    if spinup !== nothing          # start from the developed neutral channel
+        s = c.sim
+        s.u.data .= spinup.u; s.v.data .= spinup.v; s.w.data .= spinup.w
+        s.θ.data .= walls[1] .+ (walls[2] - walls[1]) .* spinup.θ
+        s.t = spinup.t
+    end
     run_channel!(c, T_avg)
     U0 = Aeolus.WallModels._uv_means(c.sim)[1]; t0 = c.sim.t
     q = Ref(0.0); nq = Ref(0)

@@ -15,11 +15,15 @@
 # affordable wall-resolved here (≈ 3× the points per direction), and at
 # Re_τ = 180 the DNS bulk Reynolds and Nusselt numbers are tabulated
 # (examples/sbl/data/stratified_channel_gv11_re180.csv) rather than
-# digitised. Ri_τ ∈ {0 (passive θ), 18, 60}.
+# digitised. Ri_τ ∈ {0 (passive θ), 18, 60}. As in the DNS, the
+# stratification is switched on in a developed neutral channel: one neutral
+# spin-up (T_SPIN, default T_END/4), then every run to T_END, statistics
+# from T_AVG (default T_END/2).
 #
 #   julia --project=. examples/sbl/stratified_channel.jl            # 32×32×48, T = 40
-#   N=24,16,32 T_END=16 julia --project=. examples/sbl/stratified_channel.jl
-#   RUNS=60:brown94 julia … & RUNS=60:none julia … ; REUSE=1 julia …   # in parallel, then combine
+#   N=24,16,32 T_END=16 T_SPIN=6 T_AVG=10 julia --project=. examples/sbl/stratified_channel.jl
+#   RUNS=0:none julia … (makes the spin-up); then RUNS=60:brown94 julia … &
+#   RUNS=60:none julia … & …; REUSE=1 julia …     # in parallel, then combine
 #
 # writes examples/sbl/output/stratified_channel_<N>.svg and the per-run
 # results (.jls); prints U_b⁺, Nu and the momentum-budget residual against
@@ -33,17 +37,28 @@ include(joinpath(@__DIR__, "driver.jl"))          # stratified_channel_run, sbl_
 
 const NN = Tuple(parse.(Int, split(get(ENV, "N", "32,32,48"), ",")))
 const T_END = parse(Float64, get(ENV, "T_END", "40"))
-const T_AVG = parse(Float64, get(ENV, "T_AVG", string(0.375 * T_END)))
+const T_AVG = parse(Float64, get(ENV, "T_AVG", string(0.5 * T_END)))
+const T_SPIN = parse(Float64, get(ENV, "T_SPIN", string(0.25 * T_END)))
 const RUNS = [(parse(Float64, split(r, ":")[1]), Symbol(split(r, ":")[2]))
               for r in split(get(ENV, "RUNS", "0:none,0:brown94,18:none,18:brown94,60:none,60:brown94"), ",")]
 const DNS = sbl_read_csv(joinpath(@__DIR__, "data", "stratified_channel_gv11_re180.csv"))
 const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 const TAG = join(NN, "x")
 
+# The neutral spin-up every run starts from, computed once and cached
+# (run one process first when running the closures in parallel).
+function spinup()
+    path = joinpath(OUTDIR, "stratified_channel_$(TAG)_spinup_T$(round(Int, T_SPIN)).jls")
+    isfile(path) && return deserialize(path)
+    sp = stratified_channel_spinup(; N = NN, T_spin = T_SPIN)
+    serialize(path, sp)
+    return sp
+end
+
 function cached(Ri, stab)
     path = joinpath(OUTDIR, "stratified_channel_$(TAG)_Ri$(round(Int, Ri))_$(stab).jls")
     get(ENV, "REUSE", "0") == "1" && isfile(path) && return deserialize(path)
-    r = stratified_channel_run(Ri, stab; N = NN, T_end = T_END, T_avg = T_AVG)
+    r = stratified_channel_run(Ri, stab; N = NN, T_end = T_END, T_avg = T_AVG, spinup = spinup())
     serialize(path, r)
     return r
 end
@@ -51,8 +66,8 @@ end
 if abspath(PROGRAM_FILE) == @__FILE__
     results = [cached(Ri, s) for (Ri, s) in RUNS]
     dns(Ri, col) = sbl_csv_value(DNS, Ri, col)
-    @printf("Stratified channel, Re_τ = 180, %s, averaged over %.0f-%.0f δ/u_τ (DNS: García-Villalba & del Álamo 2011)\n",
-            TAG, T_AVG, T_END)
+    @printf("Stratified channel, Re_τ = 180, %s, neutral spin-up to %.0f, averaged over %.0f-%.0f δ/u_τ (DNS: García-Villalba & del Álamo 2011)\n",
+            TAG, T_SPIN, T_AVG, T_END)
     @printf("%6s %-8s %8s %8s %7s %7s %8s %8s %7s\n", "Ri_τ", "closure", "U_b⁺", "DNS", "Nu", "DNS", "⟨τ_w⟩", "budget", "ΔU_b")
     for r in results
         @printf("%6.0f %-8s %8.3f %8.3f %7.3f %7.2f %8.3f %8.4f %7.3f\n", r.Ri, r.stab, r.Ub,
