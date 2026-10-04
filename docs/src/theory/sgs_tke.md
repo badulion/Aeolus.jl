@@ -398,7 +398,8 @@ time* with filtered DNS, with Smagorinsky (``C_s = 0.17``) and dynamic
 Smagorinsky as baselines (the Lagrangian scale-dependent model, #186, is
 not in this branch's stack). Fixture: `test/fixtures/sgs_validation.jl`;
 CI test: `test/era6_sgs_validation.jl`; example at 96³:
-`examples/sgs/rotating_stratified_decay.jl`.
+`examples/sgs/rotating_stratified_decay.jl`; a wall-bounded case:
+`examples/sgs/surface_mounted_cube.jl` (below).
 
 **Method.** The P56-c DNS of decaying isotropic turbulence (2π box,
 spun up from a fixed seed to ``t_0 = 2``; see
@@ -526,6 +527,53 @@ of the mean invariants. The exact stress sits close to the axisymmetric
 closure starts there, because it is seeded with the exact ``τ``, and then
 relaxes towards isotropy along that boundary. The TKE closure's implied
 stress starts much closer to the isotropic corner.
+
+### Surface-mounted cube (example)
+
+`examples/sgs/surface_mounted_cube.jl` compares the three closures on
+the wall-bounded case of Martinuzzi & Tropea (1993): a cube of height
+``H`` in a channel of height ``2H`` at ``\mathrm{Re}_H = 40\,000``, where
+the mean flow reattaches behind the cube at ``x_R/H = 1.612`` (from the
+rear face, on the centre line) and the horseshoe vortex separates the
+floor flow ``x_F/H = 1.04`` ahead of the front face.
+
+*Set-up.* A periodic box of ``10H × 6H × 2H`` at 16 cells per ``H``
+(160 × 96 × 32 fluid levels), with the cube at ``x = 3H``–``4H``. The cube
+and the floor are the immersed boundary of `IBM`, applied by direct
+forcing (`implicit_ibm_correction!`) after every RK3 predictor through the
+`post_predictor!` hook of `step_rk3!`. The lid at ``z = 2H`` is free-slip:
+the channel's upper wall is replaced by a symmetry plane. A PI-controlled
+streamwise body force holds ``U_b = 1``. The closures run as in Berlin:
+TKE and Reynolds stress with the wall cap ``κ d`` from
+`IBM.wall_distance` and Moeng's 3.9 at the first level, Smagorinsky with
+``C_s = 0.1``. The statistics are averaged over ``30\,H/U_b`` after a
+``30\,H/U_b`` spin-up. ``x_R`` and ``x_F`` are the sign changes of the mean
+``u`` at the first fluid level on the centre line.
+
+| 16 cells per ``H``, one run each | ``x_R/H`` | ``x_F/H`` | steps | wall time | s/step |
+| :-- | --: | --: | --: | --: | --: |
+| Martinuzzi & Tropea (1993) | 1.612 | 1.04 | | | |
+| Smagorinsky (``C_s = 0.1``) | 1.82 (+13 %) | 0.51 | 4469 | 1063 s | 0.24 |
+| TKE | 1.80 (+11 %) | 0.21 | 4152 | 1323 s | 0.32 |
+| Reynolds stress | 1.97 (+22 %) | 0.26 | 4536 | 4743 s | 1.05 |
+
+The runs shared a heavily loaded machine, so the costs are rough; the
+Reynolds-stress run was the slowest by 3–4×, more than its 2× in Berlin.
+
+* All three closures place the reattachment 11–22 % too far
+  downstream. TKE is closest and the Reynolds-stress closure furthest.
+  The differential stress model does not improve the recirculation length
+  at this resolution.
+* The front separation is far too short under every closure (0.2–0.5 H
+  against 1.04 H). At 16 cells per ``H`` the floor boundary layer
+  approaching the cube is resolved by a few cells with no wall model, so
+  the horseshoe vortex is too weak and too close to the cube.
+* The P57-d facade wall model (#179) that the issue asks for is not in
+  this branch's stack (PR #211 is open), so the cube walls are no-slip
+  with the SGS stress as the only wall treatment. With that model the
+  comparison should be repeated. The 30 ``H/U_b`` average is short;
+  the curves in `examples/sgs/output/surface_mounted_cube_16.svg` are not
+  yet smooth behind ``x = 6H``.
 
 ## Berlin coupling
 
