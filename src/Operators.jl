@@ -9,6 +9,7 @@ using ..Grids: interior
 using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR,
                              AbstractRiStability, BrownEtAl1994,
                              stability_factor_m, stability_factor_h
+using FFTW: plan_rfft
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
@@ -487,6 +488,8 @@ end
 # Era VI: the SGS closure contract (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/sgs_closures.jl")
+# Era VI (P54-d, #174): wall-bounded flow diagnostics (Φ_m, stress budget, E11)
+include("operators/abl_diagnostics.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.
