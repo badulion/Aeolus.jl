@@ -64,6 +64,7 @@ end
     @testset "SGS scalar_tensor = :isentropic (P55-c, #181)" begin
         function run_opts(o)
             cfg = BC.CaseConfig(:smoke; verbose = false, nsteps = N,
+                                physics = Dict{Symbol,Any}(:sgs => :smagorinsky),
                                 options = Dict{Symbol,Any}(:sgs_smagorinsky => o))
             case = BC.build_case(cfg; io = devnull)
             BC.run_case!(case)

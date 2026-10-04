@@ -262,12 +262,18 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         @test s.dt_max <= dt_diff + 1e-12       # never above the diffusive limit
         @test s.dt_max > cfg.dt                 # but longer than the fixed 2 s
         @test s.cfl_max <= k.C_advective
-        # diffusion binds (the molecular ν = 2 m²/s: 3.70 s), except where the
-        # flow reaches the advective limit, 4 % below it (≈ 3.55 s). Measured
-        # with the default TKE closure (#182): 7 diffusive + 1 advective of 8
-        # steps; with :smagorinsky (the default before #182) all 9 diffusive.
+        # diffusion (the molecular ν = 2 m²/s: 3.70 s) and advection (≈ 3.54 s,
+        # 4 % below it) are the two binding limits. Measured with the default
+        # TKE closure (#182) and the facade wall model (#179): 4 diffusive +
+        # 4 advective of 8 steps, dt_max 3.543 s; with :smagorinsky all 9
+        # diffusive. (Before #179 was merged the TKE run was 7 + 1: the
+        # facade log-law stress replaces the stencil's no-slip facade drag,
+        # and with the TKE closure's lower canopy ν_t the canopy flow is
+        # faster, max CFL 0.499 against 0.458 with :smagorinsky.)
         @test keys(s.limiters) ⊆ Set([:diffusive, :sgs, :advective])
-        @test get(s.limiters, :diffusive, 0) + get(s.limiters, :sgs, 0) >= s.n - 1
+        @test sum(values(s.limiters)) == s.n
+        @test get(s.limiters, :diffusive, 0) + get(s.limiters, :sgs, 0) >= s.n ÷ 2
+        @test s.dt_max >= 0.95 * dt_diff        # the advective limit sits just below
         # the ledgers close with a varying dt (they book with ledger.dt)
         @test case.ledger.elapsed ≈ 24.0
         for r in BC.surface_budget(case.ledger)
