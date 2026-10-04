@@ -137,7 +137,7 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
                      bottom_bc::Symbol = :wall_model, sgs_stress::Symbol = :laplacian,
                      θ_walls = nothing, Pr::Real = 0.71, θ₀::Real = 1.0, g_accel::Real = 1.0,
                      init_law = law, θ_ref::Real = 0.0, θ_flux_bottom::Real = 0.0,
-                     c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+                     flux_g = nothing, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
     walls in (:bottom, :both) ||
         throw(ArgumentError("walls must be :bottom or :both, got :$walls"))
     formulation in (:local, :schumann, :moeng) ||
@@ -174,7 +174,9 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
     if θ_ref > 0          # prescribed bottom θ flux (P58-e, #193)
         θb === nothing ||
             throw(ArgumentError("θ_walls and a surface heat flux are exclusive"))
-        sim = BoussinesqSimulation(mesh; ν = ν, bcs = bcs, θ₀ = θ_ref, g_accel = grav(c),
+        Pr > 0 || throw(ArgumentError("Pr must be positive, got $Pr"))
+        sim = BoussinesqSimulation(mesh; ν = ν, bcs = bcs, θ₀ = θ_ref,
+                                   g_accel = flux_g === nothing ? grav(c) : flux_g,
                                    θ_flux_bottom = θ_flux_bottom, θ_bcs = θbcs)
         fill!(sim.θ.data, θ_ref)
     else
@@ -185,7 +187,10 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
     _initialise!(sim, init_law, u_star, ν, walls, noise, seed)
     θb === nothing || _initialise_θ!(sim, θb, walls)
     wm = WallModel(law; ν = ν > 0 ? ν : 1.5e-5)
-    lapθ = θb === nothing ? nothing : Field(Grids.CellCenter(), mesh)
+    # the (1/Pr − 1)ν∇²θ scratch of a viscous run with an active θ (θ walls,
+    # or a prescribed surface flux on a resolved wall, P59-e)
+    lapθ = (θb !== nothing || (θ_ref > 0 && ν > 0 && Pr != 1)) ?
+           Field(Grids.CellCenter(), mesh) : nothing
     return WallBoundedCase(sim, closure, wm, walls, formulation,
                            T(u_star^2 / height), T(u_star), T(height), kind, stepper,
                            zero(T), zero(T), 0, 0, bottom_bc, sgs_stress, θb, T(Pr),
@@ -342,7 +347,8 @@ end
                  δ = 1.0, u_τ = 1.0, extent = (2π*δ, π*δ, 2δ), noise = 3.0,
                  seed = 1, stepper = :rk3,
                  bottom_bc = :wall_model, θ_walls = nothing,
-                 sgs_stress = :laplacian, Pr = 0.71, θ₀ = 1, g_accel = 1) -> WallBoundedCase
+                 sgs_stress = :laplacian, Pr = 0.71, θ₀ = 1, g_accel = 1,
+                 surface_heat_flux = nothing) -> WallBoundedCase
 
 The smooth-wall, pressure-driven **plane channel** of half-height δ at
 friction Reynolds number ``Re_τ = u_τ δ/ν`` (``ν = u_τ δ/Re_τ``, used
@@ -394,8 +400,25 @@ the log-layer-mismatch study (Kawai & Larsson 2012; P57-b, #183).
     reaches the momentum equation; `:laplacian` (default) uses `νh`
     only.
 
+**Flux-cooled open channel** (P59-e, #195): `surface_heat_flux = Q`
+(K m s⁻¹, the upward kinematic flux ``\\overline{w'θ'}_0``; negative
+cools) with `bottom_bc = :noslip` (and, for the open channel of
+Nieuwstadt 2005, `walls = :bottom` and a depth `extent[3] = δ`) is the
+stable-channel collapse case: buoyancy on with reference `θ₀` and gravity
+`g_accel`, θ uniform at `θ₀` initially, `Q` added to the wall-adjacent
+cells as the prescribed bottom θ flux of the simulation (the top and the
+bottom are otherwise insulated), molecular diffusivity ``ν/Pr`` as above.
+`q_wall_bottom` is then `Q`. The Obukhov length of the flux and the
+nominal ``u_τ`` gives ``h/L = κ g |Q| δ/(θ_0 u_τ^3)``
+(`relaminarisation_criteria` of `Aeolus.Transition`). Exclusive with
+`θ_walls`; a wall-modelled flux-cooled case is
+[`half_channel_case`](@ref)`(surface_heat_flux = Q)`.
+
 # References (stratified channel)
 
+  * Nieuwstadt, F. T. M. (2005). Direct numerical simulation of stable
+    channel flow at large stability. *Boundary-Layer Meteorol.*, 116,
+    277-299.
   * García-Villalba, M. & del Álamo, J. C. (2011). Turbulence modification
     by stable stratification in channel flow. *Phys. Fluids*, 23, 045104.
   * Armenio, V. & Sarkar, S. (2002). An investigation of stably stratified
@@ -419,9 +442,25 @@ function channel_case(; Re_τ::Real = 1000, N = (16, 8, 16),
                       seed::Integer = 1, stepper::Symbol = :rk3,
                       bottom_bc::Symbol = :wall_model, θ_walls = nothing,
                       sgs_stress::Symbol = :laplacian, Pr::Real = 0.71,
-                      θ₀::Real = 1.0, g_accel::Real = 1.0)
+                      θ₀::Real = 1.0, g_accel::Real = 1.0,
+                      surface_heat_flux = nothing)
     Re_τ > 0 || throw(ArgumentError("Re_τ must be positive, got $Re_τ"))
     ν = u_τ * δ / Re_τ
+    if surface_heat_flux !== nothing
+        surface_heat_flux isa Real ||
+            throw(ArgumentError("surface_heat_flux must be a number (K m/s) or nothing"))
+        bottom_bc === :noslip ||
+            throw(ArgumentError("channel_case: surface_heat_flux needs bottom_bc = :noslip " *
+                                "(the wall-modelled, flux-cooled case is half_channel_case)"))
+        θ_walls === nothing ||
+            throw(ArgumentError("channel_case: θ_walls and surface_heat_flux are exclusive"))
+        θ₀ > 0 || throw(ArgumentError("θ₀ must be positive, got $θ₀"))
+        return _build_case(:channel, _dims(N), Tuple(float.(extent)), closure, wall_law,
+                           ν, walls, formulation, u_τ, δ, noise, seed, stepper;
+                           bottom_bc = bottom_bc, sgs_stress = sgs_stress, Pr = Pr,
+                           θ_ref = θ₀, θ_flux_bottom = float(surface_heat_flux),
+                           flux_g = g_accel)
+    end
     return _build_case(:channel, _dims(N), Tuple(float.(extent)), closure, wall_law,
                        ν, walls, formulation, u_τ, δ, noise, seed, stepper;
                        bottom_bc = bottom_bc, sgs_stress = sgs_stress, θ_walls = θ_walls,
@@ -523,7 +562,7 @@ function advance_channel!(case::WallBoundedCase{S, C, W, T}, dt::Real) where {S,
     noslip = case.bottom_bc === :noslip
     qb = Ref(zero(T)); qt = Ref(zero(T))
     hstage = Ref(0)
-    if case.θ_walls !== nothing
+    if case.θ_walls !== nothing || case._lapθ !== nothing
         force_θ! = function (sim, Δt)
             force!(sim, Δt)
             hstage[] += 1
@@ -550,7 +589,8 @@ function advance_channel!(case::WallBoundedCase{S, C, W, T}, dt::Real) where {S,
         case.τ_wall_bottom = τb[]
         case.τ_wall_top = τt[]
     end
-    case.q_wall_bottom = qb[]
+    # a prescribed surface flux (P58-e / P59-e) enters exactly as given
+    case.q_wall_bottom = case.θ_walls === nothing ? T(s.θ_flux_bottom) : qb[]
     case.q_wall_top = qt[]
     case.nsteps += 1
     return case
@@ -558,7 +598,9 @@ end
 
 # The θ walls of a stage: the molecular diffusion beyond the core's ν∇²θ,
 # (ν/Pr − ν)∇²θ, and the conduction through each isothermal wall face into
-# the wall-adjacent cells. Returns the plane-mean kinematic heat fluxes
+# the wall-adjacent cells (none for a prescribed surface flux, P59-e: the
+# mirrored θ halos make the correction's wall flux zero, so the flux
+# through the wall stays exactly the prescribed one). Returns the plane-mean kinematic heat fluxes
 # (upward positive) through the bottom and top walls. The θ halos were
 # filled (mirror) by the core before the body force.
 function _add_θ_walls!(case::WallBoundedCase, sim)
@@ -574,6 +616,7 @@ function _add_θ_walls!(case::WallBoundedCase, sim)
             tθ[Hx+i, Hy+j, Hz+k] += a * L.data[Hx+i, Hy+j, Hz+k]
         end
     end
+    case.θ_walls === nothing && return zero(eltype(θ)), zero(eltype(θ))
     θb, θt = case.θ_walls
     c = 2κ / g.dz                       # conduction across the half cell, per kelvin
     fb = zero(eltype(θ)); ft = zero(eltype(θ))

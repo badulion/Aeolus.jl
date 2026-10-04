@@ -988,6 +988,7 @@ end
     include("era6_gabls1.jl")            # P55-f: GABLS1 on the shared SBL driver, reduced (#191)
     include("era6_stratified_channel.jl") # P55-f: wall-resolved stably stratified channel vs DNS (#191)
     include("era6_collapse.jl")          # P58-e: maximum sustainable heat flux, LES collapse regime (#193)
+    include("era6_relaminarisation.jl")  # P59-e: laminar stratified flow, decaying stratified turbulence, criteria (#195)
 end
 
 # =========================================================================

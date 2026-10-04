@@ -952,6 +952,8 @@ export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
        turbulence_velocity_scale, growth_rate, supercritical_fraction,
        grid_reynolds_number
+# P59-e (#195): relaminarisation criteria (L is SurfaceExchange.obukhov_length)
+export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
 # Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
 # nudging, prescribed advective tendencies, surface-temperature series.
 # `surface_temperature(series, t)` is a method of the SurfaceExchange
