@@ -434,8 +434,9 @@ every prognostic field, the tracers and the surface temperatures `==`).
 ## Choice of coefficients
 
   * `Cₛ = 0.17` for isotropic free turbulence (Lilly 1967). Reduced to
-    ~0.1 near walls — but Aeolus currently has only periodic BCs, so
-    the constant-`Cₛ` form is used.
+    ~0.1 near walls; the constant-`Cₛ` form is used everywhere (no
+    near-wall damping), with the wall stress from a
+    [wall model](wall_models.md).
   * `Prₜ = 1/3` is standard for atmospheric ABL (Deardorff 1972).
     Engineering flows often use `Prₜ ≈ 0.7 – 1`.
 
@@ -577,7 +578,11 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
     in stable stratification the Richardson-number reduction of
     [Stability correction](#Stability-correction) (P55-e) applies, on by
     default in the Berlin case.
-  * No **near-surface roughness** treatment (MOST) — Phase 1b.
+  * The SGS closure itself has no wall treatment: at a free-slip z-wall
+    its flux through the wall face is zero. The wall stress — smooth
+    (Spalding), rough (log law) or Monin–Obukhov — is supplied by the
+    wall model, `apply_wall_stress!` of `Aeolus.WallModels` (Phase 57,
+    #169; see [Wall models](wall_models.md)); the Berlin ground uses it.
 
 ## References
 

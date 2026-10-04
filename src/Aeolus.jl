@@ -82,6 +82,7 @@ include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 
 # --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
 include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, advective, T_s(t)
+include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wall-stress operator
 
 using .Grids
 using .Fields
@@ -146,6 +147,7 @@ using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 # --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
 using .TurbulenceStability         # Phase 58 stability contract (#170)
 using .LargeScaleForcing           # Era VI, Phase 58 (#171)
+using .WallModels                  # Phase 57 (#169)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -175,6 +177,8 @@ export DiffusivityTensor, diagonal_tensor!, bounded_directions,
 # Era VI (P55-e, #187): the stability-corrected anisotropic closure
 export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
        sgs_stratification!
+# Era VI (P54-d, #174): wall-bounded flow diagnostics
+export phi_m_profile, total_stress_profile, streamwise_spectrum
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
@@ -940,5 +944,19 @@ export ForcingTable, forcing_value, forcing_mean,
 # method of the CutCell generic (no new name).
 export NoSlipWall
 include("wall_shear_stress.jl")
+
+# Phase 57 — wall models (#169): equilibrium wall laws and the implicit
+# wall-stress operator. `friction_velocity` / `wall_stress` do not collide
+# with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
+# (CutCell, the resolved stress).
+export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
+       friction_velocity, wall_stress, wall_drag,
+       spalding_yplus, spalding_uplus, matching_obukhov_length,
+       WallModel, apply_wall_stress!
+# P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
+# `advance_channel!` / `run_channel!` do not collide with the Berlin case's
+# `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
+export WallBoundedCase, half_channel_case, channel_case,
+       advance_channel!, run_channel!, channel_dt
 
 end # module

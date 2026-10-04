@@ -979,6 +979,8 @@ end
     include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected, Ri_g-dependent anisotropic ν/κ (#187)
     include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)
     include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
+    include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
+    include("era6_neutral_abl.jl")       # P54-d: half-channel ABL / channel harness + Φ_m, stress, E11 (#174)
 end
 
 # =========================================================================
