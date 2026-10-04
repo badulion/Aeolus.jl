@@ -100,15 +100,19 @@ any symmetric stress τ on the C-grid. Every core selects the form with
 the diagonal part is implicit and the cross terms explicit. Theory:
 [Smagorinsky-Lilly SGS → Stress form vs Laplacian form](../theory/sgs.md#Stress-form-vs-Laplacian-form).
 
+```julia
 step!(sim, 0.5; sgs = StaticSmagorinsky(0.17), sgs_stress = :symmetric)
 τ = sgs_stress_tensor!(StressTensor(sim.mesh), sim.u, sim.v, sim.w, νh, νv)
 add_stress_divergence!(sim.tu, sim.tv, sim.tw, τ)   # == add_sgs_stress_divergence!(…, νh, νv)
+```
 
+```@docs
 Aeolus.Operators.StressTensor
 Aeolus.Operators.add_stress_divergence!
 Aeolus.Operators.sgs_stress_tensor!
 Aeolus.Operators.add_sgs_stress_divergence!
 Aeolus.Operators.sgs_stress_dissipation
+```
 
 ## Tensorial scalar eddy diffusivity (P55-c)
 
@@ -120,11 +124,14 @@ and dissipates variance for positive semi-definite K. The rotated isentropic
 Under `step_imex!` the diagonal is implicit and the cross terms explicit.
 Theory: [Smagorinsky-Lilly SGS → Tensorial scalar diffusivity](../theory/sgs.md#Tensorial-scalar-diffusivity).
 
+```julia
 add_eddy_diffusion_scalar!(tθ, θ, κh, κv)                     # diag(κh, κh, κv); docs in Operators
 K = isentropic_tensor!(DiffusivityTensor(mesh), θ, κh, 0.0; bcs = bcs)
 add_tensor_diffusion_scalar!(tϕ, ϕ, K; bounded = bounded_directions(bcs))
 step!(sim, 0.5; sgs = IsentropicDiffusion(StaticSmagorinsky(0.17), sim.mesh; diapycnal = 0.1))
+```
 
+```@docs
 Aeolus.Operators.DiffusivityTensor
 Aeolus.Operators.diagonal_tensor!
 Aeolus.Operators.bounded_directions
@@ -132,6 +139,7 @@ Aeolus.Operators.add_tensor_diffusion_scalar!
 Aeolus.Operators.isentropic_tensor!
 Aeolus.Operators.sgs_scalar_tensor
 Aeolus.Operators.IsentropicDiffusion
+```
 
 ## Stability-corrected anisotropic eddy viscosity (P55-e)
 
@@ -143,16 +151,20 @@ contract (Brown et al. 1994 by default) and the anisotropic length scales
 closure bit for bit. Theory:
 [Smagorinsky-Lilly SGS → Stability correction](../theory/sgs.md#Stability-correction).
 
+```julia
 c = StabilityCorrected(StaticSmagorinsky(0.17), sim.mesh)          # Brown 1994, :anisotropic
 step!(sim, 0.5; sgs = c, sgs_stress = :symmetric)                   # νv reaches the stress form
 c.Ri, c.νv, c.κv                                                    # the last Ri_g, νv, κv
 StabilityCorrected(DynamicSmagorinsky(sim.mesh), sim.mesh; scheme = LillyCutoff())
 IsentropicDiffusion(StabilityCorrected(StaticSmagorinsky(0.17), sim.mesh), sim.mesh)
+```
 
+```@docs
 Aeolus.Operators.StabilityCorrected
 Aeolus.Operators.dynamic_sgs_coefficient
 Aeolus.Operators.anisotropic_length_factors
 Aeolus.Operators.sgs_stratification!
+```
 
 The theory is developed in
 [Transition and wall-bounded flow](../theory/transition.md).
@@ -190,4 +202,5 @@ E = streamwise_spectrum(hc.sim.u, [3, 6, 12])           # E11(k1) at three level
 Aeolus.Operators.phi_m_profile
 Aeolus.Operators.total_stress_profile
 Aeolus.Operators.streamwise_spectrum
+Aeolus.Operators.resolved_tke_profile
 ```

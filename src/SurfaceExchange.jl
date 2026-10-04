@@ -76,7 +76,9 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        surface_temperature, roughness_lengths, surface_albedo, surface_emissivity,
        moisture_availability, surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!,
-       MOSTConsistent, most_gradient_richardson, most_stability_parameter
+       MOSTConsistent, most_gradient_richardson, most_stability_parameter,
+       log_linear_slope, MSHFSolution, mshf_solution, max_sustainable_heat_flux,
+       flux_friction_velocity, surface_mshf_ratio
 
 # =========================================================================
 # 1. Material constants
@@ -533,6 +535,255 @@ function _illinois(f, a::T, b::T, fa::T, fb::T, maxiter::Integer) where {T}
 end
 
 # =========================================================================
+# 3b. Maximum sustainable heat flux (Era VI, P58-e)
+# =========================================================================
+#
+# With the wind U at height z held fixed, Monin–Obukhov similarity ties
+# the downward buoyancy flux to u_* through the momentum relation alone:
+# u_* = κU/Φ_m(ζ) and ζ = z/L = z κ g Q/(u_*³ θ_ref) for the downward
+# kinematic flux Q = -w'θ_v' > 0. Eliminating u_*,
+#
+#     Q(ζ) = κ² U³ θ_ref ζ / (g z Φ_m(ζ)³),
+#
+# a curve that rises from 0 at neutral, peaks, and falls again: there is a
+# largest downward flux the surface layer can carry at that wind (Van de
+# Wiel et al. 2012). The derivation for the log-linear closed form is on
+# the theory page `theory/turbulence_stability.md`.
+
+"""
+    log_linear_slope(sf::AbstractStabilityFunctions) -> α or nothing
+
+The slope α of a *log-linear* stable branch, ``φ_m = 1 + αζ`` and
+``ψ_m = -αζ`` for ``ζ ≥ 0``, or `nothing` if `sf` is not log-linear
+there. [`max_sustainable_heat_flux`](@ref) uses the closed form when it
+is a number. The default is `nothing`; a family with a log-linear stable
+branch extends it: [`BusingerDyerLogLinear`](@ref) returns its momentum
+slope `β_m` (the MSHF depends on ψ_m only).
+"""
+log_linear_slope(::AbstractStabilityFunctions) = nothing
+# the stable branch is log-linear: the closed-form MSHF applies (P58-e)
+log_linear_slope(sf::BusingerDyerLogLinear) = sf.β_m
+
+"""
+    MSHFSolution{T}
+
+The maximum of the Monin–Obukhov flux curve, from [`mshf_solution`](@ref):
+
+  * `Q_max` — the maximum sustainable *kinematic* downward buoyancy flux
+    ``-\\overline{w'θ_v'}`` (K m s⁻¹, positive); ``ρc_p Q_{max}`` is
+    ``H_{max}`` in W m⁻²;
+  * `u_star` — the friction velocity at which it is attained (m s⁻¹);
+  * `ζ`, `L` — the stability ``ζ = z/L`` and the Obukhov length there;
+  * `method` — `:closed_form` (log-linear) or `:numerical`;
+  * `interior` — `false` when the maximum lay at the search bound
+    `ζ_max` (a family whose flux curve does not turn over there: no
+    finite MSHF up to that stability).
+"""
+struct MSHFSolution{T<:AbstractFloat}
+    Q_max::T
+    u_star::T
+    ζ::T
+    L::T
+    method::Symbol
+    interior::Bool
+end
+
+# ζ/Φ_m(ζ)³ — the shape of the flux curve Q(ζ) (Q = κ²U³θ/(g z)·this).
+_mshf_shape(sf, ζ, z, z0m) = ζ / _Φm(sf, ζ, z, z0m)^3
+
+"""
+    mshf_solution(sf, U, z, z0m, θ_ref; c = DEFAULT_SURFACE_CONSTANTS,
+                  method = :auto, ζ_max = 1000) -> MSHFSolution
+
+The maximum sustainable heat flux and where it is attained; see
+[`max_sustainable_heat_flux`](@ref) for the physics and the arguments.
+`method = :auto` uses the closed form when [`log_linear_slope`](@ref)
+returns a number and the numerical maximisation otherwise;
+`:numerical` forces the maximisation (used to validate it against the
+closed form); `:closed_form` requires a log-linear `sf`.
+
+The numerical maximum of ``f(ζ) = ζ/Φ_m(ζ)^3`` is found in ``s = \\ln ζ``:
+a 48-point scan of ``ζ ∈ [10^{-6}, ζ_{max}]`` brackets the largest
+sample, then golden-section search narrows the bracket to
+``|Δs| ≤ 10^{-12}``. One maximisation costs about 120 evaluations of
+``ψ_m``.
+"""
+function mshf_solution(sf::AbstractStabilityFunctions, U::Real, z::Real, z0m::Real,
+                       θ_ref::Real; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                       method::Symbol = :auto, ζ_max::Real = 1000.0)
+    (z > z0m > 0) || throw(ArgumentError("mshf_solution: need z > z0m > 0, got z = $z, z0m = $z0m"))
+    U >= 0 || throw(ArgumentError("mshf_solution: need U ≥ 0, got $U"))
+    θ_ref > 0 || throw(ArgumentError("mshf_solution: need θ_ref > 0, got $θ_ref"))
+    method in (:auto, :numerical, :closed_form) ||
+        throw(ArgumentError("mshf_solution: method must be :auto, :numerical or :closed_form"))
+    T = float(promote_type(typeof(U), typeof(z), typeof(z0m), typeof(θ_ref)))
+    κ, g = T(c.κ), T(grav(c))
+    Ut, zt, z0t, θt = T(U), T(z), T(z0m), T(θ_ref)
+    pre = κ^2 * Ut^3 * θt / (g * zt)            # Q = pre · ζ/Φ_m³
+    α = log_linear_slope(sf)
+    if method === :closed_form && α === nothing
+        throw(ArgumentError("mshf_solution: method = :closed_form needs a log-linear stable branch " *
+                            "(log_linear_slope(sf) returned nothing)"))
+    end
+    if α !== nothing && method !== :numerical
+        # Φ_m(ζ) = Λ + β ζ with β = α (z - z0m)/z (ψ_m(ζ) - ψ_m(ζ z0m/z) = -β ζ):
+        # d/dζ [ζ/(Λ + βζ)³] = 0 at ζ* = Λ/(2β), where Φ_m = 3Λ/2, so
+        # u* = 2κU/(3Λ) and Q_max = (4/27) κ² U³ θ_ref/(α g (z - z0m) Λ²).
+        Λ = log(zt / z0t)
+        β = T(α) * (zt - z0t) / zt
+        ζs = Λ / (2β)
+        Qm = 4 * κ^2 * Ut^3 * θt / (27 * T(α) * g * (zt - z0t) * Λ^2)
+        return MSHFSolution{T}(Qm, 2κ * Ut / (3Λ), ζs, zt / ζs, :closed_form, true)
+    end
+    # numerical: maximise f(s) = e^s/Φ_m(e^s)³ in s = ln ζ
+    f(s) = _mshf_shape(sf, exp(s), zt, z0t)
+    smin, smax = log(T(1e-6)), log(T(ζ_max))
+    n = 48
+    ds = (smax - smin) / (n - 1)
+    ib, fb = 1, f(smin)
+    for i in 2:n
+        fi = f(smin + (i - 1) * ds)
+        fi > fb && ((ib, fb) = (i, fi))
+    end
+    interior = 1 < ib < n
+    a = smin + (max(ib - 1, 1) - 1) * ds; b = smin + (min(ib + 1, n) - 1) * ds
+    # golden-section search on [a, b]
+    r = (sqrt(T(5)) - 1) / 2
+    x1 = b - r * (b - a); x2 = a + r * (b - a)
+    f1, f2 = f(x1), f(x2)
+    while b - a > T(1e-12) * max(one(T), abs(a))
+        if f1 >= f2
+            b, x2, f2 = x2, x1, f1
+            x1 = b - r * (b - a); f1 = f(x1)
+        else
+            a, x1, f1 = x1, x2, f2
+            x2 = a + r * (b - a); f2 = f(x2)
+        end
+    end
+    s = f1 >= f2 ? x1 : x2
+    ib == n && (s = smax)                        # no turn-over below ζ_max
+    ζs = exp(s)
+    return MSHFSolution{T}(pre * f(s), κ * Ut / _Φm(sf, ζs, zt, z0t), ζs, zt / ζs,
+                           :numerical, interior)
+end
+
+"""
+    max_sustainable_heat_flux(sf, U, z, z0m, z0h, θ_ref;
+                              c = DEFAULT_SURFACE_CONSTANTS, method = :auto,
+                              ζ_max = 1000) -> Q_max
+
+The **maximum sustainable heat flux** (MSHF) of Van de Wiel et al. (2012):
+the largest *downward* kinematic buoyancy flux
+``Q = -\\overline{w'θ_v'}`` (K m s⁻¹, positive; multiply by ``ρc_p`` for
+W m⁻²) that Monin–Obukhov similarity with the stability functions `sf`
+can carry when the wind speed at height `z` (m) over roughness `z0m` (m)
+is `U` (m s⁻¹); `θ_ref` (K) is the reference (virtual) potential
+temperature of the buoyancy parameter ``g/θ_{ref}``.
+
+With `U` fixed, ``u_* = κU/Φ_m(ζ)`` and ``ζ = zκgQ/(u_*^3θ_{ref})``
+give the flux as a function of the stability alone,
+
+```math
+Q(ζ) = \\frac{κ^2 U^3 θ_{ref}}{g z}\\,\\frac{ζ}{Φ_m(ζ)^3},
+\\qquad Φ_m = \\ln\\frac{z}{z_{0m}} - ψ_m(ζ) + ψ_m\\!\\left(ζ\\frac{z_{0m}}{z}\\right),
+```
+
+which is zero at neutral, rises to a maximum and falls as the very
+stable regime is approached. A surface that has to give away more than
+``Q_{max}`` (radiative cooling of a skin with little heat supply from
+below) cannot be in a turbulent equilibrium at that wind: the
+turbulence collapses (Van de Wiel et al. 2012; Donda et al. 2015).
+
+*Log-linear* ``φ_m = 1 + αζ`` ([`log_linear_slope`](@ref) returns α):
+``Φ_m = Λ + α(z - z_{0m})ζ/z`` with ``Λ = \\ln(z/z_{0m})``, and in terms
+of ``u_*``, ``Q = (κU u_*^2 - Λu_*^3)θ_{ref}/(α g (z - z_{0m}) κ)``, a
+cubic whose maximum is
+
+```math
+Q_{max} = \\frac{4}{27}\\,\\frac{κ^2 U^3 θ_{ref}}{α\\, g\\,(z - z_{0m})\\,Λ^2}
+\\quad\\text{at}\\quad u_* = \\frac{2κU}{3Λ},\\; ζ = \\frac{Λ\\,z}{2α(z - z_{0m})}
+```
+
+(for ``z_{0m} ≪ z`` the form of Van de Wiel et al. 2012 with ``z`` in
+place of ``z - z_{0m}``). Other families are maximised numerically
+([`mshf_solution`](@ref)).
+
+`z0h` does not enter: with the wind (not the temperature difference)
+held, the flux–stability relation is the momentum half of
+Monin–Obukhov similarity, so ``Q_{max}`` is independent of the heat
+roughness. It is accepted so that the call has the same surface
+parameters as [`solve_surface_layer`](@ref). Every solution of that
+solver with wind `U` (its effective wind, `sol.U`), `z = z_m` and
+``θ_{ref} = θ_{va}`` lies on the curve, so its downward buoyancy flux
+``u_*θ_{v*}`` is at most `Q_max`.
+
+# References
+
+  * Van de Wiel, B. J. H., Moene, A. F., Jonker, H. J. J., Baas, P.,
+    Basu, S., Donda, J. M. M., Sun, J. & Holtslag, A. A. M. (2012). The
+    minimum wind speed for sustainable turbulence in the nocturnal
+    boundary layer. *J. Atmos. Sci.*, 69, 3116-3127.
+  * Donda, J. M. M., van Hooijdonk, I. G. S., Moene, A. F., Jonker,
+    H. J. J., van Heijst, G. J. F., Clercx, H. J. H. & van de Wiel,
+    B. J. H. (2015). Collapse of turbulence in stably stratified channel
+    flow: a transient phenomenon. *Q. J. R. Meteorol. Soc.*, 141,
+    2137-2147.
+"""
+max_sustainable_heat_flux(sf::AbstractStabilityFunctions, U::Real, z::Real, z0m::Real,
+                          z0h::Real, θ_ref::Real; kwargs...) =
+    mshf_solution(sf, U, z, z0m, θ_ref; kwargs...).Q_max
+
+"""
+    flux_friction_velocity(sf, U, z, z0m, Q, θ_ref; c = DEFAULT_SURFACE_CONSTANTS,
+                           ζ_min = -1000, ζ_max = 1000) -> u_*
+
+The friction velocity of Monin–Obukhov similarity for a **prescribed**
+upward kinematic buoyancy flux `Q` (K m s⁻¹; negative = surface cooling)
+at wind `U` and height `z` over roughness `z0m`: the root of
+``u_* = κU/Φ_m(ζ)`` with ``ζ = -zκgQ/(u_*^3θ_{ref})``.
+
+  * ``Q ≥ 0`` (neutral or unstable): the unique root, ``u_* ≥ κU/Λ``
+    (ζ clamped at `ζ_min`).
+  * ``0 < -Q ≤ Q_{max}`` ([`mshf_solution`](@ref)): two roots; the
+    *weakly stable* one, on the rising branch of the flux curve between
+    neutral and the MSHF point, which is the one continuously connected
+    to the neutral state.
+  * ``-Q > Q_{max}``: no turbulent solution — the surface layer cannot
+    carry the flux; returns `0` (collapse; Van de Wiel et al. 2012).
+
+This is the flux-prescribed wall law of a stably stratified LES
+(`WallModels.MOSTFluxWallLaw`) and the Berlin MSHF diagnostic's
+definition of collapse.
+"""
+function flux_friction_velocity(sf::AbstractStabilityFunctions, U::Real, z::Real,
+                                z0m::Real, Q::Real, θ_ref::Real;
+                                c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                                ζ_min::Real = -1000.0, ζ_max::Real = 1000.0)
+    T = float(promote_type(typeof(U), typeof(z), typeof(z0m), typeof(Q), typeof(θ_ref)))
+    κ, g = T(c.κ), T(grav(c))
+    Ut, zt, z0t = T(U), T(z), T(z0m)
+    Ut > 0 || return zero(T)
+    Q == 0 && return κ * Ut / log(zt / z0t)
+    pre = κ^2 * Ut^3 * T(θ_ref) / (g * zt)
+    target = -T(Q) / pre                        # ζ/Φ_m³ at the root (sign of ζ)
+    if Q > 0
+        # -ζ/Φ_m³ increases without bound as ζ → -∞ (Φ_m falls): unique root
+        F(ζ) = _mshf_shape(sf, ζ, zt, z0t) - target        # increasing in ζ ≤ 0
+        fa, fb = F(T(ζ_min)), F(zero(T))
+        fa >= 0 && return κ * Ut / _Φm(sf, T(ζ_min), zt, z0t)
+        ζ, _, _ = _illinois(F, T(ζ_min), zero(T), fa, fb, 200)
+        return κ * Ut / _Φm(sf, ζ, zt, z0t)
+    end
+    m = mshf_solution(sf, Ut, zt, z0t, T(θ_ref); c = c, ζ_max = ζ_max)
+    -T(Q) > m.Q_max && return zero(T)
+    G(ζ) = _mshf_shape(sf, ζ, zt, z0t) - target            # increasing on [0, ζ*]
+    ga, gb = G(zero(T)), G(m.ζ)
+    gb <= 0 && return m.u_star
+    ζ, _, _ = _illinois(G, zero(T), m.ζ, ga, gb, 200)
+    return κ * Ut / _Φm(sf, ζ, zt, z0t)
+end
+
+# =========================================================================
 # 4. The surface interface
 # =========================================================================
 
@@ -722,6 +973,62 @@ function turbulent_fluxes(s::AbstractSurface, f::SurfaceForcing;
     LE = surface_latent_heat(s; c = c) * E
     Rn = net_radiation(s, f; c = c)
     return SurfaceFluxes(promote(Rn, H, LE, Rn - H - LE, ρ * sol.u_star^2, E)...)
+end
+
+"""
+    surface_mshf_ratio(sf, fl::SurfaceFluxes, forcing::SurfaceForcing, z0m;
+                       U_min = 0.1, gustiness = 0, Q_max = nothing,
+                       c = DEFAULT_SURFACE_CONSTANTS)
+        -> (ratio, Q_down, Q_max, H_max, ζ_mshf)
+
+How close the surface fluxes `fl` of a column are to its maximum
+sustainable heat flux (P58-e, #193). With the air state of `forcing`
+converted exactly as in [`turbulent_fluxes`](@ref) — ``ρ``, ``c_{pm}``,
+``θ_a = T_a + Γ_d z_{ref}``, ``θ_{va} = θ_a(1 + ε' q_a)`` — the downward
+kinematic buoyancy flux is
+
+```math
+Q_{down} = -\\overline{w'θ_v'} = -\\frac{H}{ρ c_{pm}}(1 + ε' q_a) - ε' θ_a \\frac{E}{ρ}
+\\;(= u_* θ_{v*}),
+```
+
+and ``Q_{max}`` = [`max_sustainable_heat_flux`](@ref)`(sf, U_e, z_ref, z0m,
+z0m, θ_va)` at the effective wind ``U_e = \\max(\\sqrt{U^2 + w_g^2},
+U_{min})`` of [`solve_surface_layer`](@ref). Returns `ratio = Q_down/Q_max`
+(negative for an upward, unstable flux), both fluxes, and
+``H_{max} = ρ c_{pm} Q_{max}`` (W m⁻²). For fluxes that
+`turbulent_fluxes` computed with the same `sf`, `U_min` and `gustiness`
+the ratio is at most 1 (the solver's solutions lie on the MSHF curve);
+`ζ_mshf` is the stability ``z_{ref}/L`` at which the curve peaks
+(`NaN` when `Q_max` is passed in): a column whose ``z_{ref}/L`` exceeds it
+is on the *very stable* branch, beyond the MSHF point, where a stronger
+temperature contrast carries less heat — the collapsed regime;
+the moisture term makes it the buoyancy flux, which is what MOST
+constrains, rather than the sensible heat flux alone. `Q_max` (K m s⁻¹)
+skips the maximisation and uses a value already computed for the same
+column and forcing (the Berlin coupling compares two sets of fluxes of
+one column against one MSHF).
+"""
+function surface_mshf_ratio(sf::AbstractStabilityFunctions, fl::SurfaceFluxes,
+                            f::SurfaceForcing, z0m::Real; U_min::Real = 0.1,
+                            gustiness::Real = 0.0, Q_max = nothing,
+                            c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+    qa = PhasePartition(f.q_air)
+    ε = _virtual_coefficient(c)
+    θ_a = f.T_air + dry_adiabatic_lapse_rate(qa, c.thermo) * f.z_ref
+    θva = θ_a * (1 + ε * f.q_air)
+    ρ = air_density(f.T_air, f.p, qa, c.thermo)
+    cp = heat_capacity_moist(qa, c.thermo)
+    Qdown = -(fl.H / (ρ * cp)) * (1 + ε * f.q_air) - ε * θ_a * fl.E / ρ
+    Ue = max(sqrt(f.U^2 + gustiness^2), U_min)
+    if Q_max === nothing
+        m = mshf_solution(sf, Ue, f.z_ref, z0m, θva; c = c)
+        Qmax, ζs = m.Q_max, m.ζ
+    else
+        Qmax, ζs = oftype(Qdown, Q_max), oftype(Qdown, NaN)
+    end
+    return (ratio = Qdown / Qmax, Q_down = Qdown, Q_max = Qmax, H_max = ρ * cp * Qmax,
+            ζ_mshf = ζs)
 end
 
 end # module

@@ -70,7 +70,7 @@ using ..TimeSteppers: step!
 using Random
 using ..SurfaceExchange
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
-                         SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, von_karman
+                         SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, von_karman, grav
 
 # Each file exports its own names, so a later phase adds a file and an
 # include line here and nothing else.

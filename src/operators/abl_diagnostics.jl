@@ -15,6 +15,8 @@
 # operators; κ, u*, the wall stress and the eddy viscosity are arguments.
 
 export phi_m_profile, total_stress_profile, streamwise_spectrum
+# P58-e (#193): the resolved TKE profile of the collapse runs
+export resolved_tke_profile
 
 # plane means of the interior of a field, one per level k = 1..Nz
 function _plane_means(f::Field)
@@ -224,4 +226,47 @@ function streamwise_spectrum(u::Field, levels; remove_mean::Bool = true)
     end
     k1 = T[2π * (n - 1) / g.Lx for n in 1:nk]
     return (k1 = k1, E11 = E)
+end
+
+"""
+    resolved_tke_profile(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}) -> e
+
+The plane-averaged **resolved turbulent kinetic energy** per level,
+
+```math
+e_k = \\tfrac12\\left(⟨u'^2⟩_k + ⟨v'^2⟩_k + ⟨w'^2⟩_k\\right),
+\\qquad ϕ' = ϕ - ⟨ϕ⟩_k ,
+```
+
+(m² s⁻²), the fluctuations taken about the plane mean of each staggered
+component on its own level: `u`, `v` at the cell-centre height of level
+`k`, `w` on the bottom face of cell `k` (zero on a wall face). Mean flow
+and its shear do not count, so a laminar parallel flow has ``e = 0`` to
+round-off. The volume mean of a uniform grid is `sum(e)/Nz`.
+
+Used by the turbulence-collapse runs of P58-e (#193): the resolved TKE of
+a flux-cooled half channel relative to the neutral run (Donda et al.
+2015, Fig. 3).
+"""
+function resolved_tke_profile(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ})
+    g = mesh(u)
+    Nx, Ny, Nz, Hx, Hy, Hz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz
+    T = float(eltype(u.data))
+    e = zeros(T, Nz)
+    n = Nx * Ny
+    @inbounds for k in 1:Nz
+        for f in (u.data, v.data, w.data)
+            s = zero(T); s2 = zero(T)
+            for j in 1:Ny, i in 1:Nx
+                x = f[Hx+i, Hy+j, Hz+k]
+                s += x
+            end
+            m = s / n
+            for j in 1:Ny, i in 1:Nx
+                s2 += (f[Hx+i, Hy+j, Hz+k] - m)^2
+            end
+            e[k] += s2 / (2n)
+        end
+    end
+    return e
 end

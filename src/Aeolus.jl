@@ -186,6 +186,8 @@ export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
        sgs_stratification!
 # Era VI (P54-d, #174): wall-bounded flow diagnostics
 export phi_m_profile, total_stress_profile, streamwise_spectrum
+# P58-e (#193): resolved TKE profile (turbulence-collapse runs)
+export resolved_tke_profile
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
@@ -937,6 +939,10 @@ export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_pran
        gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR
 # SurfaceExchange's implementer of the contract (MOST-consistent factors).
 export MOSTConsistent, most_gradient_richardson, most_stability_parameter
+# P58-e (#193): the maximum sustainable heat flux (Van de Wiel et al. 2012)
+# and the flux-prescribed MOST friction velocity, in SurfaceExchange.
+export log_linear_slope, MSHFSolution, mshf_solution, max_sustainable_heat_flux,
+       flux_friction_velocity, surface_mshf_ratio
 # Operators' pointwise fields of the contract.
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 
@@ -967,6 +973,8 @@ export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
        friction_velocity, wall_stress, wall_drag,
        spalding_yplus, spalding_uplus, matching_obukhov_length,
        WallModel, apply_wall_stress!
+# P58-e (#193): the flux-prescribed MOST wall law (collapses beyond the MSHF)
+export MOSTFluxWallLaw
 # P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
 # `advance_channel!` / `run_channel!` do not collide with the Berlin case's
 # `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
