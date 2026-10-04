@@ -64,7 +64,7 @@ _pcorr(a, b) = (m = isfinite.(a) .& isfinite.(b); x = a[m] .- vmean(a[m]); y = b
                 sum(x .* y) / sqrt(sum(abs2, x) * sum(abs2, y)))
 _rel(a, b) = a / b - 1
 
-@testset "P56-e: API — step_rk3! body force, closures seeded from a stress" begin
+@testset "P56-e: API — step_rk3! hooks, closures seeded from a stress" begin
     g = RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
     # body_force! runs at each of the three substages: a constant θ
     # tendency q advances θ by exactly q·dt over one SSP-RK3 step
@@ -73,6 +73,13 @@ _rel(a, b) = a / b - 1
     step_rk3!(sim, 0.1; body_force! = (s, Δt) -> (interior_view(s.tθ) .+= q; nothing))
     @test all(x -> isapprox(x, q * 0.1; rtol = 1e-14), interior_view(sim.θ))
     @test sim.t ≈ 0.1
+    # post_predictor! runs after each predictor, before the projection: a
+    # hook that zeroes u makes every stage value 0, so the Shu–Osher
+    # combination leaves uⁿ⁺¹ = ⅓uⁿ + ⅔·0 = ⅓ from uⁿ = 1
+    sim2 = BoussinesqSimulation(g)
+    interior_view(sim2.u) .= 1.0
+    step_rk3!(sim2, 0.1; post_predictor! = (s, Δt) -> (interior_view(s.u) .= 0; nothing))
+    @test all(x -> isapprox(x, 1 / 3; atol = 1e-14), interior_view(sim2.u))
     # seeding from a subfilter stress: e = ½ tr τ; a non-PSD cell is
     # projected (its negative eigenvalue clipped), a PSD cell is copied
     τ = SymmetricTensorField(g)
