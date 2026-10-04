@@ -979,6 +979,7 @@ end
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
     include("era6_tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
     include("era6_reynolds_stress.jl")   # P56-d: differential SGS Reynolds-stress closure (#188)
+    include("era6_sgs_validation.jl")    # P56-e: TKE and RSM against filtered DNS (#192)
     include("era6_sgs_stress_form.jl")   # P55-b: stress-form SGS momentum divergence, anisotropic ν, IMEX split (#175)
     include("era6_tensor_diffusion.jl")  # P55-c: diagonal / tensor / isentropic scalar eddy diffusivity (#181)
     include("era6_apriori_sgs.jl")       # Phase 56  a-priori SGS stress, filtered-DNS fixture (#178)

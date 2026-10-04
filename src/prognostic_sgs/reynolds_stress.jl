@@ -1064,3 +1064,39 @@ function initialize_reynolds_stress!(c::ReynoldsStressClosure{T}, sim; e_min::Re
     end
     return c
 end
+
+"""
+    initialize_reynolds_stress!(c::ReynoldsStressClosure, τ::SymmetricTensorField) -> (c, n)
+
+Copy a subfilter stress (e.g. the exact one of a filtered DNS,
+`Operators.subfilter_stress!`, P56-c, resampled to the LES grid) into the
+closure's six stresses — the a-priori-in-time start of the P56-e
+validation (#192). Every cell is projected onto the realizable set
+([`project_realizable`](@ref)): the exact stress of a positive filter is
+positive semi-definite (Vreman, Geurts & Kuerten 1994), but a spectral
+resampling need not keep it so. Returns the closure and `n`, the number
+of cells the projection changed. Solid cells get ``τ = 0``.
+"""
+function initialize_reynolds_stress!(c::ReynoldsStressClosure{T}, τ::SymmetricTensorField) where {T}
+    g = mesh(c.τ[1])
+    size(τ) == (g.Nx, g.Ny, g.Nz) ||
+        throw(DimensionMismatch("initialize_reynolds_stress!: τ is $(size(τ)), interior $((g.Nx, g.Ny, g.Nz))"))
+    src = (τ.xx, τ.yy, τ.zz, τ.xy, τ.xz, τ.yz)
+    n = 0
+    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
+        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
+        if _solid(c.mask, I, J, K)
+            for m in 1:6
+                c.τ[m].data[I, J, K] = zero(T)
+            end
+            continue
+        end
+        t = ntuple(m -> T(src[m][i, j, k]), Val(6))
+        tp, changed = project_realizable(t)
+        n += changed
+        for m in 1:6
+            c.τ[m].data[I, J, K] = tp[m]
+        end
+    end
+    return c, n
+end
