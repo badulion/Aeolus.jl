@@ -11,6 +11,8 @@ module Aeolus
 include("Grids.jl")
 include("Fields.jl")
 include("BoundaryConditions.jl")
+# Era VI stability contract (Phase 58): pure, and needed by Operators.
+include("TurbulenceStability.jl")
 include("Operators.jl")
 include("TimeSteppers.jl")
 include("PressureSolvers.jl")
@@ -78,6 +80,9 @@ include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
 include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
 include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 
+# Era VI — high-fidelity turbulence closure (Phases 54-59)
+include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wall-stress operator
+
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -138,6 +143,10 @@ using .OceanMixedLayer             # Phase 52 (#38)
 using .AirSeaFlux                  # Phase 52 (#39)
 using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 
+# --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
+using .TurbulenceStability         # Phase 58 stability contract (#170)
+using .WallModels                  # Phase 57 (#169)
+
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
 export Field, CellCenter, FaceX, FaceY, FaceZ
@@ -150,6 +159,12 @@ export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
        advect_weno5!
+# Era VI (P54-a, #167): the SGS closure contract
+export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
+       sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
+       compute_sgs!, sgs_closure,
+       AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
+       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
 # Era VI, Phase 54 (P54-c): LES analysis toolbox
 export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
@@ -892,5 +907,28 @@ export effective_roughness, effective_scalar_roughness,
        blending_height,
        AbstractIBLModel, ElliottIBL, PowerLawIBL, DiffusionIBL, ibl_height,
        BlendingHeightSolution, blended_forcing, BlendedMosaic, last_blending
+
+# =========================================================================
+# Era VI — high-fidelity turbulence closure (Phases 54-60)
+# =========================================================================
+
+# Phase 58 — TurbulenceStability contract (#170): gradient-Richardson
+# stability functions, N² and Ri_g (pointwise fields live in Operators).
+export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_prandtl,
+       LillyCutoff, BrownEtAl1994, ShortTail, LongTail,
+       gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR
+# SurfaceExchange's implementer of the contract (MOST-consistent factors).
+export MOSTConsistent, most_gradient_richardson, most_stability_parameter
+# Operators' pointwise fields of the contract.
+export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
+
+# Phase 57 — wall models (#169): equilibrium wall laws and the implicit
+# wall-stress operator. `friction_velocity` / `wall_stress` do not collide
+# with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
+# (CutCell, the resolved stress).
+export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
+       friction_velocity, wall_stress, wall_drag,
+       spalding_yplus, spalding_uplus, matching_obukhov_length,
+       WallModel, apply_wall_stress!
 
 end # module

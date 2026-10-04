@@ -99,7 +99,7 @@ default.
 | `smoke_variants(::Type{C})` | extra smoke-test configurations, a tuple of `NamedTuple`s (see [the smoke test](#Smoke-test-and-coverage-test)) |
 | `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run |
 | `sim_options(::Type{C}, cfg, mesh, opts)` | keywords of the dynamical core's constructor (the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of a sound-proof core), before the core is built (see [numerics slots](#Numerics-slots)) |
-| `step_options(c, case)` | keywords added to every dynamics step, `step!` or `step_imex!` (e.g. `momentum_advection`, `eddy_viscosity!`) |
+| `step_options(c, case)` | keywords added to every dynamics step, `step!` or `step_imex!` (e.g. `momentum_advection`, `sgs`) |
 | `incompatible_reason(::Type{C})` | why the `incompatible` pairs fail, appended to the selection error |
 
 Two slots drive the dynamics itself and have four more methods
@@ -166,7 +166,7 @@ in the integer `order` their couplings declare.
 | `:column_tendency` | `column_radiation` (10) |
 | `:sanity` | the core finiteness check |
 | (ledger) | every coupling's `budget!`, and the change of water in the air (core) |
-| `:output` (1800 s) | NetCDF record and log line (core), then coupling entries |
+| `:output` (1800 s) | NetCDF record and log line (core), then coupling entries: `turbulence_diag` (10) |
 
 The order was the order of the pre-refactor loop, floating-point order
 included (#126). The surface exchange (#129) replaced the slab, whose
@@ -303,15 +303,25 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, the built-in closure with `cfg.C_s`), `:dynamic` (`sgs_dynamic`), `:mlsgs` (`sgs_mlsgs`) | `step_options`: `eddy_viscosity!` |
+| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, bit for bit the cores' built-in closure), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167); every core and stepper takes it |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, option `scheme = :weno_z5`) | the `:transport` stage |
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every
 dynamics step (`step!`, or `step_imex!` under the IMEX steppers, which
-takes the same `momentum_advection` and `eddy_viscosity!`); two
-couplings may not set the same keyword. Which providers combine with the
+takes the same `momentum_advection` and `sgs`); two
+couplings may not set the same keyword.
+
+**SGS providers** are closure objects of the Era VI contract
+([Closure contract](../theory/sgs.md#Closure-contract)): a provider
+builds its `AbstractSGSClosure` once and `step_options` returns
+`(sgs = closure,)`. A stateful closure (Lagrangian dynamic, prognostic
+TKE) keeps its memory in that object; the cores commit it once per
+accepted step and `step_adaptive!` rolls it back with the state on a
+rejected step. A new provider goes in its own file,
+`couplings/sgs_<name>.jl`: the couplings are included in sorted order,
+so it loads after `sgs.jl`, which defines the slot. Which providers combine with the
 `:core` and `:timestepper` slots is in [Dynamical core and time
 integration](#Dynamical-core-and-time-integration).
 
@@ -436,15 +446,20 @@ with `ledger.dt`, the current step's length, not `cfg.dt`.
 `dynamics_step!` (`step!` with the hooks and `case.step_kwargs`). The
 `:adaptive` stepper hands `step_adaptive!` a stepper that calls `step!`
 (or `step_imex!` with `imex = true`) with `case.step_kwargs`, so every
-retried piece carries them; with an `eddy_viscosity!` closure (`sgs =
-:dynamic`, `:mlsgs`) its diffusive limit uses that closure's ν_t of the
-current flow (`sgs_cfl_diagnostics`), also with `C_s = 0`, since
+retried piece carries them, and it passes the `sgs` closure to
+`step_adaptive!` too, which snapshots the closure's memory with the state
+and restores both on a rejected step. The diffusive limit uses the
+selected closure's ν_t and κ_t of the current flow (`sgs_cfl_diagnostics`,
+the pure `compute_sgs!`: it commits nothing), also with `C_s = 0`, since
 `step!` applies the closure whatever `C_s` is. `:imex` passes them to
 `step_imex!`, whose `momentum_advection` is the explicit operator and
-whose `eddy_viscosity!` supplies the frozen ν_eff. Tested with an MLSGS
-closure that is Smagorinsky plus a call counter: called once per step
-(fixed, IMEX) or twice (adaptive: the dt limit and the step), and the
-flow is bit for bit the plain run of each stepper.
+whose `sgs` supplies the frozen ν_eff and κ_eff. Tested with a stateful
+closure that is Smagorinsky plus a commit counter in its memory: one
+commit per accepted step under every stepper (12 fixed, 9 adaptive,
+12 IMEX in the smoke window), the flow bit for bit the plain run of each
+stepper; and with a forced retry (one rejected try at 10⁶ × ν_t) the
+rejected commit is rolled back, so the commits equal the accepted pieces
+(6 after 5 steps, one of them halved).
 
 **Incompatible pairs** (declared, so selecting one is an error that
 says why, and the smoke matrix steers around them):
@@ -454,11 +469,13 @@ says why, and the smoke matrix steers around them):
 | `timestepper = :adaptive`, `:imex` | `core = :anelastic`, `:pseudo_incompressible` | `adaptive_dt`, `step_adaptive!`, `step_imex!` are typed on `BoussinesqSimulation` |
 | `core = :anelastic`, `:pseudo_incompressible` | `pressure_solver = :cosine_fft`, `:multigrid`, `:mg_cg` | those solve the constant-coefficient ∇²φ = ∇·u*, not the weighted projection; select `:density_weighted_cg` |
 | | `momentum_advection = :weno_z` | an unweighted operator; the core advects momentum in its W-weighted centred flux form (`:centered` passes no keyword to it) |
-| | `sgs = :dynamic`, `:mlsgs` | they act through `eddy_viscosity!`, which the sound-proof step does not take; the core's closure is the built-in Smagorinsky |
 | `pressure_solver = :density_weighted_cg` | `core = :boussinesq` | it solves only the weighted projection of the sound-proof cores |
 
 Behind the declarations, `build_core` of a sound-proof core rejects any
-`sim_options` keyword other than `tol` and `maxit`.
+`sim_options` keyword other than `tol` and `maxit`. Every `:sgs` provider
+combines with every core: the sound-proof step takes the contract's
+`sgs` closure like the Boussinesq one (#167; before it, `:dynamic` and
+`:mlsgs` were incompatible with the sound-proof cores).
 
 **Measured** (flagship 64 × 64 × 32, 1000 m × 1000 m × 200 m,
 20 June 06:00–07:00, 1 h, first-call compilation included; #133,
@@ -890,10 +907,24 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   seconds (30 s in the flagship, 4 s in `:smoke`; a `:surface` key
   overrides it) and their fluxes are held as tendencies until the next
   surface step, so the air receives exactly what the surface gave.
-* **Momentum.** The surface stress ``ρu_*^2`` is applied as an implicit
-  drag on the first-air-cell velocity faces, after the IBM. The momentum
-  removed equals ``Σ u_*^2\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in
-  the test). The `:wall` ground used to be free-slip.
+* **Momentum.** The ground is a wall of `Aeolus.WallModels` (#169):
+  every surface step hands each column a `MOSTWallLaw` with its `z0m`
+  and the Obukhov length of that step (`matching_obukhov_length`, the
+  `L` for which the law gives back the step's ``u_*``), and every step
+  `apply_wall_stress!` evaluates it at the instantaneous first-air-cell
+  wind and applies the stress as an implicit drag on the first-air-cell
+  velocity faces (over the `k_air` level mask, after the IBM);
+  `bus.u_star` is that step's ``u_τ``. The momentum removed equals
+  ``Σ τ_w(U)\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in the test). With
+  `L` and the wind frozen the operator reproduced the drag of #129
+  (``u_*^2/U`` held between surface steps) exactly (0.0 relative
+  difference). Option `wall_formulation` selects the local form
+  (default), Schumann's or Moeng's plane-mean form (smoke variants). In
+  `:smoke` (surfaces every 4 s) per-step evaluation changes the ground
+  mean ``u_*`` after 1 h from 0.05647 to 0.05644 m s⁻¹ and the street
+  wind from 0.47784 to 0.47796 m s⁻¹; the operator costs 1.2 ms per call
+  on the 64 × 64 flagship plane. The `:wall` ground used to be
+  free-slip.
 * **Extra surface energy.** `bus.sensible` (window sun, glazing
   transmission, dew heat) is collected every step and delivered to the
   surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`
@@ -1280,6 +1311,47 @@ PlantCanopy (by veg_drag)"; making `chem_off` the `:chemistry` default
 fails "slot :chemistry defaults to an off switch (chem_off)"; and
 declaring `cloud_shadow` incompatible with `fog_dew` fails 'smoke run
 "summer, everything on" does not run: cloud_shadow, fog_dew'.
+
+## Turbulence diagnostics (#170)
+
+`turbulence_diag` (`couplings/turbulence_diag.jl`, addon, on by default)
+is the Berlin coupling of the Era VI stability contract
+`TurbulenceStability` (see [the theory page](../theory/turbulence_stability.md)).
+At the output cadence it evaluates, on copies of `u, v, w, θ, q_v` whose
+halos it fills with the core's boundary conditions (the model state is
+not touched):
+
+* the pointwise ``N^2`` of ``θ_v = θ(1 + 0.61 q_v)``
+  (`buoyancy_frequency_squared!`, the z-interpolation of the core's
+  buoyancy), ``|S|^2`` (`strain_rate_squared!`, the Smagorinsky stencil)
+  and ``Ri_g`` (`gradient_richardson!`);
+* per level, over the fluid cells: the mean ``N^2`` (`N2_mean`), the
+  Richardson number of the means ``⟨N^2⟩/⟨|S|^2⟩`` (`Ri_g_mean`; the mean
+  of the pointwise ratio is dominated by shear-free cells, where the
+  ``S^2`` floor makes it huge) and the mean ``f_m(Ri_g)`` (`f_m_mean`).
+  These are written as `(z, time)` profiles (`OutputField` dims `:z`)
+  and summarised in the log line.
+
+Option `stability`: `:brown` (`BrownEtAl1994`, the LEM / MONC functions,
+default), `:lilly`, `:short_tail`, `:long_tail`, `:most`
+(`MOSTConsistent` with the surface exchange's BDBH functions; the smoke
+variant). `budget!` is a no-op: the coupling changes no state. P59-c
+(#180) extends this addon with the transition diagnostics.
+
+**Measured** (`:smoke`, after its 12 steps, noon, capping inversion at
+60 m, `Γ = 3 K km⁻¹` above). In the first two levels above the
+inversion (z = 65.6 m and 71.9 m) `Ri_g` of the means is 0.273 and
+0.196 and the mean `f_m` (Brown et al.) 0.049 and 0.0057; with
+`stability = :most` the same cells give 0.101 and 0.069 (no critical
+Richardson number). Below the inversion θ is uniform, and the vapour
+lapse of the initial state (``q_v ∝ e^{-z/800\,{\rm m}}``) makes
+``θ_v`` decrease with height: ``N^2 ≈ -7 × 10^{-5}`` s⁻² at step 0, and
+−2 to −16 × 10⁻⁵ s⁻² after 12 steps of noon heating, so `Ri_g` < 0 and
+`f_m` = 2.5–10. The same vapour lapse removes about 2/3 of the dry
+``gΓ/θ_0 = 1.0 × 10^{-4}`` s⁻² above the inversion (3.3 × 10⁻⁵ at step 0).
+Cost per evaluation (compiled): 0.15 ms on the 16³ smoke grid
+(`:most`: 0.89 ms, a root find per cell), 3.6 ms on the 64 × 64 × 32
+flagship grid, once per output record (every 1800 s).
 
 ## Cost of per-facet surfaces (#138)
 
