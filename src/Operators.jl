@@ -40,6 +40,9 @@ export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
        sgs_scalar_tensor, IsentropicDiffusion
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
+# The one damping-profile implementation behind add_sponge! and the fringe (P59-d, #185).
+export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
+       DampingProfile, sponge_profile, damping_rate
 # Era VI (P55-d, #176): AMD and Vreman closures (operators/sgs_amd_vreman.jl)
 export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
        compute_vreman_νt!,
@@ -263,6 +266,10 @@ add_surface_flux!(tϕ, F_bot, F_top) = _add_surface_flux!(tϕ, F_bot, F_top, mes
 Rayleigh damping toward `f_ref` in the region `z ≥ z_start`. Damping rate
 grows smoothly `α(z) = α_max sin²(π/2 (z - z_start)/(z_top - z_start))`.
 Adds `-α(z)·(f - f_ref)` to `tf` for cells inside the sponge region.
+
+The rate is [`damping_rate`](@ref) of [`sponge_profile`](@ref)`(α_max,
+z_start, z_top)`, the damping-profile implementation the fringe region of
+`Transition` (P59-d) shares.
 """
 add_sponge!(tf, f, α_max, z_start, z_top; f_ref = 0) =
     _add_sponge!(tf, f, α_max, z_start, z_top, f_ref, mesh(f))
@@ -736,6 +743,10 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                      _add_sgs_stress_divergence!, _add_stress_divergence!,
                      _sgs_stress_tensor!, _sgs_stress_dissipation,
                      _add_tensor_diffusion_scalar!, _isentropic_tensor!
+# The shared damping profile (sponge + fringe, P59-d #185).
+using .FiniteVolume: AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
+                     DampingProfile, sponge_profile, in_damping, damping_rate,
+                     _add_damping!
 
 # -------------------------------------------------------------------------
 # Era VI: the stress-form SGS momentum divergence (wraps the kernels above).

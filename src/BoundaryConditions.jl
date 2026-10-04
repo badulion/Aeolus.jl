@@ -8,6 +8,7 @@ using ..Fields: location, Field
 export AbstractBC, Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
        FieldBoundaryConditions, fill_halos!
 export NoSlipWall, is_wall, homogeneous_bcs     # P59-a (#172)
+export FreeStreamBoundary                        # P59-d (#185)
 
 """
     AbstractBC
@@ -22,6 +23,8 @@ Concrete types:
     for scalars.
   * [`NoSlipWall`](@ref) — rigid wall with a prescribed tangential
     velocity (no slip, or a moving wall).
+  * [`FreeStreamBoundary`](@ref) — top face with zero shear and a
+    prescribed normal (transpiration) velocity.
   * [`ValueBC`](@ref) — Dirichlet with prescribed value.
   * [`FluxBC`](@ref) — Neumann with prescribed flux `∂/∂n = f`.
 """
@@ -88,7 +91,8 @@ symbol or as a BC object — e.g. an open channel
 or a Couette lid
 `FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = NoSlipWall(U, 0))`.
 A z-periodic face cannot be mixed with a non-periodic one, and a mixed
-bottom/top pair must be two walls (`:wall`, `:noslip`, `NoSlipWall`);
+bottom/top pair must be two walls (`:wall`, `:noslip`, `NoSlipWall`) or a
+wall below a [`FreeStreamBoundary`](@ref) top;
 anything else, e.g. `bottom = :noslip, top = :noflux`, throws an
 `ArgumentError` rather than failing at the first halo fill.
 """
@@ -243,5 +247,6 @@ function _fill_z!(d::AbstractArray{T,3}, ::ImpermeableWall, ::ImpermeableWall,
 end
 
 include("boundary_conditions/noslip_wall.jl")   # P59-a (#172)
+include("boundary_conditions/free_stream.jl")   # P59-d (#185)
 
 end # module

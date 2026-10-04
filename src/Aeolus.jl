@@ -964,6 +964,17 @@ export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        turbulence_velocity_scale, growth_rate, supercritical_fraction,
        grid_reynolds_number
 
+# P59-d (#185) — spatially developing flat-plate boundary layer: Blasius,
+# fringe region, free-stream disturbances, BL integral diagnostics.
+export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
+       blasius_skin_friction, turbulent_skin_friction,
+       FringeRegion, fringe_rate, add_fringe!, fringe_forcing,
+       blasius_target, set_blasius!, blasius_freestream, fringe_distance, flat_plate_setup,
+       streamwise_profile, edge_velocity, boundary_layer_edge, skin_friction, displacement_thickness,
+       momentum_thickness, shape_factor, transition_onset,
+       onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw,
+       FreeStreamDisturbance, von_karman_spectrum, disturbance_velocity!,
+       disturbance_fringe_update
 # Phase 57 — wall models (#169): equilibrium wall laws and the implicit
 # wall-stress operator. `friction_velocity` / `wall_stress` do not collide
 # with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
@@ -992,6 +1003,8 @@ export MatchingInput, matching_distance, matching_input!, update_input_filter!,
 # method of the CutCell generic (no new name).
 export NoSlipWall
 include("wall_shear_stress.jl")
+# P59-d (#185) — free-stream (transpiration) top of a spatial boundary layer.
+export FreeStreamBoundary
 
 # Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
 # nudging, prescribed advective tendencies, surface-temperature series.
