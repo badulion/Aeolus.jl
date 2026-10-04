@@ -4,17 +4,9 @@ Era VI resolves the near-wall layer instead of modelling it wherever a
 case is small enough to afford it: laminar and transitional channels,
 the wall-resolved stratified channel, and the laminar checks of the
 turbulence closures. This page collects the wall treatment those runs
-share. Wall-*modelled* runs (the Berlin case among them) keep the
+share and the laminar–turbulent transition diagnostics
+(`Aeolus.Transition`). Wall-*modelled* runs (the Berlin case among them) keep the
 free-slip wall and add the wall-model stress on top.
-
-Phase 59 (#180) also gives the repository one owner for the
-laminar/turbulent and intermittency diagnostics, the module
-`Aeolus.Transition`. The stable-boundary-layer collapse (P58-e), the
-CASES-99 "hockey stick" (P58-d) and relaminarisation (P59-e) use these
-functions and do not redefine them. Transition defines no Richardson
-number: ``N^2`` and ``Ri_g`` come from the
-[stability contract](turbulence_stability.md) and its pointwise fields
-(`buoyancy_frequency_squared!`, `gradient_richardson!`).
 
 ## Walls
 
@@ -125,16 +117,27 @@ unchanged.
 ### The Berlin case
 
 The Berlin ground is not a `NoSlipWall`. It is a rough, wall-modelled
-surface: the MOST stress ``ρu_*^2`` is applied as an implicit drag over a
-free-slip `:wall`, see [The Berlin case](../design/berlin_case.md). A
+surface: the `MOSTWallLaw` stress of `Aeolus.WallModels` (#169) is
+applied as an implicit drag over a free-slip `:wall`, see [The Berlin case](../design/berlin_case.md). A
 resolved no-slip wall at ``Δx = 15.6`` m would put the first velocity
 point ``Δz/2 ≈ 3`` m from the wall, with a viscous sublayer of
 ``ν/u_* ∼ 10^{-4}`` m. `BoundaryConditions` is exempt infrastructure in
 the coverage test, so no Berlin list changes.
 
-## Shear instability and intermittency
+## Laminar–turbulent transition
 
-### The tanh shear layer
+Era VI (Phase 59, #180) gives the repository one owner for the
+laminar/turbulent and intermittency diagnostics, the module
+`Aeolus.Transition`. The stable-boundary-layer collapse (P58-e), the
+CASES-99 "hockey stick" (P58-d) and relaminarisation (P59-e) use these
+functions and do not redefine them. Transition defines no Richardson
+number: ``N^2`` and ``Ri_g`` come from the
+[stability contract](turbulence_stability.md) and its pointwise fields
+(`buoyancy_frequency_squared!`, `gradient_richardson!`).
+
+### Shear instability and intermittency
+
+#### The tanh shear layer
 
 The parallel shear layer ``U(z) = U\tanh(z/δ)`` is inviscidly unstable to
 waves ``e^{iα(x - ct)}``. Its most unstable wavenumber is ``αδ = 0.4446``,
@@ -164,16 +167,21 @@ stepping is projected SSP-RK3 (`step_rk3!` with `body_force!`) at CFL 0.6.
 | ``J = 0.30``, ``αδ = 0.7071`` | 128 × 1 × 256 | ``A(5τ_0)/A(τ_0) = 0.223``, fitted ``σ = -0.054`` | stable: ``Ri_g > 1/4`` everywhere |
 | ``J = 0``, ``αδ = 0.4446``, no SGS | 64 × 1 × 128 | ``σ = 0.1820`` | quoted |
 | the same, Smagorinsky ``C_s = 0.1`` | 64 × 1 × 128 | ``σ = 0.1769`` (−2.8 %) | quoted |
+| the same, σ-model ``C_σ = 1.35`` (P59-b, #184) | 64 × 1 × 128 | ``σ = 0.1820`` (``ν_t ≡ 0``) | within 3 % of no SGS |
 
 The 1.76 % shortfall at ``J = 0`` is the sum of the viscous reduction at
 ``Re = 1000`` and the discretisation error of the second-order operators
 at ``Δx = 0.11δ``. At ``64 × 128`` (``Δx = 0.22δ``) the shortfall grows
 to 4.1 %, so most of it is numerical. The Smagorinsky closure removes
 another 2.8 %, because its ``ν_t`` acts on the laminar shear of the base
-flow. Comparing it with the σ closure, which is zero for a pure shear,
-is P59-b's job.
+flow. The [σ-model](sgs.md#σ-model) (P59-b, #184) does not. Its
+``ν_t`` is zero for any 2-D flow (``σ_3 = 0``), so the layer grows at
+exactly the no-SGS rate. The same property keeps the molecular wall
+stress of a laminar Couette flow ([Walls](#Walls), above) unchanged with
+the SGS on: σ gives ``νU/h`` to 2.8e-14, while Smagorinsky adds
+``(C_sΔ)^2(U/h)/ν`` = 4.5 % at ``Re = 100``, ``N_z = 32``.
 
-### The turbulent fraction γ(z)
+#### The turbulent fraction γ(z)
 
 A cell is turbulent when the vorticity fluctuation exceeds a fraction of
 the mean vorticity magnitude of its level,
@@ -208,7 +216,7 @@ at 0.92 at saturation (``t = 75``):
 ![γ of the shear layer](../assets/transition/kh_gamma.svg)
 ![spanwise vorticity at t = 60, 90, 140](../assets/transition/kh_vorticity.png)
 
-### Time-series intermittency
+#### Time-series intermittency
 
 The intermittency factor is the fraction of time a signal spends above a
 threshold (Townsend 1976): `intermittency_factor(series; threshold)`
@@ -216,7 +224,7 @@ counts samples, and `intermittency_factor(t, series; threshold)` weights
 each sample by the interval it starts. An on/off signal with duty cycle
 0.3 gives 0.3 exactly.
 
-### Flux Richardson number, buoyancy Reynolds number, V_TKE
+#### Flux Richardson number, buoyancy Reynolds number, V_TKE
 
 ```math
 Ri_f = -\frac{B}{P}, \qquad B = \frac{g}{θ_0}⟨w'θ'⟩, \qquad
@@ -241,7 +249,7 @@ Moum 2000). The turbulence velocity scale of Sun et al. (2012) is
 field) are the transition diagnostics of the Berlin
 [`turbulence_diag` addon](../design/berlin_case.md).
 
-### Growth-rate fit
+#### Growth-rate fit
 
 `growth_rate(t, A)` fits ``\ln A = σt + c`` by least squares. Without an
 explicit window it picks the longest run of samples that meets two
@@ -340,8 +348,11 @@ the case in units of the inflow ``δ^*_0`` and ``U_∞``. In 2-D at
 1200 RK3 steps (12 s), the layer develops from the fringe inflow to
 ``c_f/c_{f,\rm Blasius} ∈ [0.9982, 1.0001]`` and ``H ∈ [2.574, 2.583]``
 over the middle 60 % of the plate; the target is recovered at the fringe
-exit to 5.2e-4 ``U``. The issue's σ-model variant of this check waits for
-P59-b (#184), which has not merged.
+exit to 5.2e-4 ``U``. The issue's σ-model variant of this check is not
+run separately: P59-b (#184) merged after this section was written, and
+in this 2-D flow (``N_y = 1``, ``v = 0``) the velocity gradient has rank
+≤ 2, so ``σ_3 = 0`` and the [σ-model](sgs.md#σ-model)'s ``ν_t`` vanishes
+identically; the variant would reproduce the run above.
 
 ### Free-stream turbulence and bypass transition
 
@@ -481,6 +492,16 @@ run). No Berlin list changed.
 
 ## References
 
+### Wall treatment
+
+- Ferziger, J. H. & Perić, M. (2002). *Computational Methods for Fluid
+  Dynamics*, 3rd ed., Springer, §8.10.
+- Pope, S. B. (2000). *Turbulent Flows*, Cambridge University Press, §7.1.
+- Schlichting, H. (1979). *Boundary-Layer Theory*, 7th ed., McGraw-Hill,
+  ch. V (Stokes' first and second problems).
+
+### Transition diagnostics
+
 * Brandt, L., Schlatter, P. & Henningson, D. S. (2004). Transition in
   boundary layers subject to free-stream turbulence. *J. Fluid Mech.*,
   517, 167-198.
@@ -505,11 +526,9 @@ run). No Berlin list changed.
   during CASES-99. *J. Atmos. Sci.*, 69, 338-351.
 * Townsend, A. A. (1976). *The Structure of Turbulent Shear Flow*, 2nd
   ed. Cambridge University Press.
-* Ferziger, J. H. & Perić, M. (2002). *Computational Methods for Fluid
-  Dynamics*, 3rd ed., Springer, §8.10.
-* Pope, S. B. (2000). *Turbulent Flows*, Cambridge University Press, §7.1.
-* Schlichting, H. (1979). *Boundary-Layer Theory*, 7th ed., McGraw-Hill,
-  ch. V (Stokes' first and second problems).
+
+### Flat-plate boundary layer
+
 * Abu-Ghannam, B. J. & Shaw, R. (1980). Natural transition of boundary
   layers — the effects of turbulence, pressure gradient, and flow
   history. *J. Mech. Eng. Sci.*, 22, 213-228.

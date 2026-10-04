@@ -5,9 +5,9 @@
 #
 # Physics asserted: the air gains exactly the energy and water the
 # surfaces give (and nothing lands in a solid cell); the momentum the
-# drag removes is the kinematic surface stress u*² along the wind; the
-# extra energy other couplings put on the surfaces reaches them; and
-# street β follows the soil water.
+# ground's wall model (WallModels, #169) removes is the kinematic surface
+# stress u*² along the wind; the extra energy other couplings put on the
+# surfaces reaches them; and street β follows the soil water.
 
 using Test
 using Aeolus
@@ -82,22 +82,37 @@ const BC = Main.BerlinCase
         interior_view(BC.tracer(case, :qv)) .= q0
     end
 
-    @testset "momentum: the drag removes the surface stress u*² along the wind" begin
+    @testset "momentum: the ground's wall model (WallModels) removes τ_w(U_now) along the wind" begin
         u, v = interior_view(sim.u), interior_view(sim.v)
         u0, v0 = copy(u), copy(v)
+        ustar0 = copy(bus.u_star)
         u .= 1.0; v .= 0.5
         dt = 2.0
+        h = dz / 2
+        Unow = hypot(1.0, 0.5)                   # the instantaneous first-air wind
+        # each column's law, at the wind of its surface step, gives back the
+        # u* of that step (the L handed over by matching_obukhov_length)
+        @test all(I -> abs(friction_velocity(se.laws[I], bus.U[I], h) - ustar0[I]) <=
+                       1e-12 * ustar0[I], CartesianIndices(ustar0))
         BC.run_stage!(se, case, Val(:post_predictor), dt)
+        # u_τ is re-evaluated at THIS step's wind (before #169: the u*²/U of
+        # the surface step was held); the stress is wall_stress(MOSTWallLaw, U_now)
+        @test all(==(Unow), se.U_wall)
+        @test all(I -> bus.u_star[I]^2 ≈ wall_stress(se.laws[I], Unow, h) && bus.u_star[I] > 0,
+                  CartesianIndices(bus.u_star))
+        nchanged = count(I -> abs(bus.u_star[I] - ustar0[I]) > 1e-6 * ustar0[I], CartesianIndices(ustar0))
+        @info @sprintf("  ground u*: surface step %.4f, at U_now = %.3f m/s %.4f m/s (domain mean; %d of %d columns changed)",
+                       sum(ustar0) / length(ustar0), Unow, sum(bus.u_star) / length(bus.u_star),
+                       nchanged, length(ustar0))
         # kinematic momentum removed, per unit plan area: Σ Δu dz dx dy / (dx dy)
         Mx = -sum(1.0 .- u) * dz
         My = -sum(0.5 .- v) * dz
-        # the stress of each column's surface step, u*² along its wind (u_c, v_c)/U,
-        # evaluated with the wind this test imposed
-        U = hypot(1.0, 0.5)
-        τx = sum(se.drag[I] * 1.0 for I in CartesianIndices(se.drag)) * dt
-        τy = sum(se.drag[I] * 0.5 for I in CartesianIndices(se.drag)) * dt
-        amax = maximum(se.drag) / dz * dt
-        @info @sprintf("  drag: momentum removed (%.5e, %.5e) m²/s vs Σ u*²(u,v)/U dt (%.5e, %.5e); max dt·rate %.1e",
+        # the stress τ_w(U_now) along the wind (u, v)/U_now, per column
+        drag = [wall_drag(se.laws[I], Unow, h) for I in CartesianIndices(bus.u_star)]
+        τx = sum(drag[I] * 1.0 for I in CartesianIndices(drag)) * dt
+        τy = sum(drag[I] * 0.5 for I in CartesianIndices(drag)) * dt
+        amax = maximum(drag) / dz * dt
+        @info @sprintf("  drag: momentum removed (%.5e, %.5e) m²/s vs Σ τ_w(U_now)(u,v)/U dt (%.5e, %.5e); max dt·rate %.1e",
                        -Mx, -My, τx, τy, amax)
         # implicit: 1 − 1/(1 + a dt) = a dt − (a dt)² + …, so the relative
         # difference is below the largest a dt
@@ -107,9 +122,8 @@ const BC = Main.BerlinCase
         # only faces at a first air level were touched
         touched = [(i, j, k) for i in 1:Nx, j in 1:Ny, k in 1:Nz if u[i, j, k] != 1.0]
         @test all(t -> t[3] in (bus.k_air[t[1], t[2]], bus.k_air[mod1(t[1] - 1, Nx), t[2]]), touched)
-        # the kinematic stress of the surface step: u*² = drag · max(U, U_min)
-        @test all(I -> se.drag[I] * max(bus.U[I], se.U_min) ≈ bus.u_star[I]^2, CartesianIndices(se.drag))
         u .= u0; v .= v0
+        bus.u_star .= ustar0
     end
 
     @testset "extra surface energy (bus.sensible) reaches the surface at its next step" begin
