@@ -171,7 +171,10 @@ end
     @test_throws ArgumentError half_channel_case(; bottom_bc = :noslip)
     @test_throws ArgumentError half_channel_case(; θ_walls = (300.0, 290.0))
     @test_throws ArgumentError half_channel_case(; filter = :box)
-    @test_throws ArgumentError channel_case(; bottom_bc = :noslip)
+    # channel_case's bottom_bc = :noslip and θ_walls are implemented by
+    # P55-f (#191, test/era6_stratified_channel.jl); only invalid values throw
+    @test_throws ArgumentError channel_case(; bottom_bc = :bogus)
+    @test_throws ArgumentError channel_case(; θ_walls = (0.0, 1.0))   # θ walls need :noslip
     @test_throws ArgumentError channel_case(; walls = :top)
     @test_throws ArgumentError half_channel_case(; formulation = :bogus)
     # closure and wall law are arguments: MOST and a Moeng wall run as given

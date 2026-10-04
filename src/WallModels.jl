@@ -62,6 +62,10 @@ using ..BoundaryConditions: fill_halos!, Periodic, FieldBoundaryConditions
 using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!
 import ..Operators: phi_m_profile, total_stress_profile
 using ..Simulations: BoussinesqSimulation, step_rk3!
+using ..Operators: laplacian
+using ..BoundaryConditions: NoSlipWall
+using ..Fields: Field
+using ..CutCell: wall_shear_stress   # its BoussinesqSimulation method (P59-a) is added at load time
 using ..TimeSteppers: step!
 using Random
 using ..SurfaceExchange

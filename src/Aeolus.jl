@@ -957,6 +957,7 @@ export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
 # `advance_channel!` / `run_channel!` do not collide with the Berlin case's
 # `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
 export WallBoundedCase, half_channel_case, channel_case,
-       advance_channel!, run_channel!, channel_dt
+       advance_channel!, run_channel!, channel_dt,
+       channel_richardson, stratified_channel_walls   # P55-f (#191): stratified channel
 
 end # module
