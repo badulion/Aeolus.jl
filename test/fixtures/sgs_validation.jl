@@ -206,12 +206,11 @@ case_params(base, case::Symbol) =
     case === :isotropic ? (f = 0.0, Γ = 0.0) :
     case === :rotating ? (f = base.f, Γ = 0.0) :
     case === :stratified ? (f = 0.0, Γ = base.Γ) :
-    throw(ArgumentError("case must be :isotropic, :rotating or :stratified"))
+    case === :rotating_stratified ? (f = base.f, Γ = base.Γ) :
+    throw(ArgumentError("case must be :isotropic, :rotating, :stratified or :rotating_stratified"))
 
-function _new_sim(mesh, ν, f, Γ)
-    return Γ > 0 ? BoussinesqSimulation(mesh; ν = ν, θ₀ = VAL_θ0, g_accel = VAL_G) :
-                   BoussinesqSimulation(mesh; ν = ν, f_coriolis = f)
-end
+_new_sim(mesh, ν, f, Γ) =
+    BoussinesqSimulation(mesh; ν = ν, f_coriolis = f, θ₀ = Γ > 0 ? VAL_θ0 : 0.0, g_accel = VAL_G)
 
 _field_like(f::Field{L}, g) where {L} = Field(L(), g)
 
@@ -224,7 +223,8 @@ Gaussian-filtered (Δ = rh) velocity and θ′ resampled by `coarse_grain`
 stress τᵢⱼ (`τ::SymmetricTensorField`, coarse) and vertical heat flux
 `hw = (wθ′)‾ − w̄θ̄′` (coarse, cell centres), and the volume means `K`
 (resolved KE per unit volume of the coarse field), `e_sgs = ½⟨τₖₖ⟩`,
-`hw_mean`, and `II_mean` (the Lumley II of the exact stress, volume mean),
+`hw_mean`, `II_mean` and `III_mean` (the Lumley invariants of the exact
+stress, volume means),
 `r33` (⟨τ₃₃⟩/⟨τ₁₁⟩).
 """
 function filtered_snapshot(sim, r::Integer, Γ)
@@ -257,10 +257,11 @@ function filtered_snapshot(sim, r::Integer, Γ)
         hw = cg(interior_view(fp) .- interior_view(fw) .* interior_view(fθ))
     end
     K = 0.5 * (vmean(abs2, out[1]) + vmean(abs2, out[2]) + vmean(abs2, out[3]))
-    II, _ = lumley_invariants(τ)
+    II, III = lumley_invariants(τ)
     return (; u = out[1], v = out[2], w = out[3], θ = out[4], τ, hw, K,
               e_sgs = 0.5 * (vmean(τ.xx) + vmean(τ.yy) + vmean(τ.zz)),
               hw_mean = vmean(hw), II_mean = vmean(filter(isfinite, II)),
+              III_mean = vmean(filter(isfinite, III)),
               r33 = vmean(τ.zz) / vmean(τ.xx))
 end
 
@@ -442,7 +443,7 @@ The LES of `model` on the r-times-coarser grid from the filtered DNS at
 t₀ of `dnsrun`, advanced to each save time of the DNS run. Returns per
 save time: resolved KE `K`, SGS energy `e` (½⟨tr τ⟩ of the carried or
 implied stress; NaN for the Smagorinsky closures), mean ν_t, the volume
-mean Lumley II and ⟨τ₃₃⟩/⟨τ₁₁⟩ of the model stress, the mean vertical
+mean Lumley invariants II, III and ⟨τ₃₃⟩/⟨τ₁₁⟩ of the model stress, the mean vertical
 heat flux `hw`, and the model stresses `τs`. `wall` is the LES time.
 """
 function run_les(base, dnsrun, model::Symbol; r::Integer = 4, cfl::Real = 0.4)
@@ -456,7 +457,8 @@ function run_les(base, dnsrun, model::Symbol; r::Integer = 4, cfl::Real = 0.4)
     _project!(sim)
     c = les_closure(model, sim, s0, dnsrun.Γ)
     bf = dnsrun.Γ > 0 ? background_advection(dnsrun.Γ) : nothing
-    K = Float64[]; e = Float64[]; νt = Float64[]; II = Float64[]; r33 = Float64[]; hw = Float64[]
+    K = Float64[]; e = Float64[]; νt = Float64[]; II = Float64[]; III = Float64[]
+    r33 = Float64[]; hw = Float64[]
     τs = SymmetricTensorField{Float64}[]
     function record!()
         τ = les_stress(c, sim)
@@ -466,8 +468,8 @@ function run_les(base, dnsrun, model::Symbol; r::Integer = 4, cfl::Real = 0.4)
         push!(e, ci isa TKEClosure ? vmean(interior_view(ci.e)) :
                  ci isa ReynoldsStressClosure ? 0.5 * (vmean(τ.xx) + vmean(τ.yy) + vmean(τ.zz)) : NaN)
         push!(νt, vmean(interior_view(sim.νt)))
-        I2, _ = lumley_invariants(τ)
-        push!(II, vmean(filter(isfinite, I2)))
+        I2, I3 = lumley_invariants(τ)
+        push!(II, vmean(filter(isfinite, I2))); push!(III, vmean(filter(isfinite, I3)))
         push!(r33, vmean(τ.zz) / vmean(τ.xx))
         push!(hw, dnsrun.Γ > 0 ? vmean(les_heat_flux(c, sim)) : 0.0)
     end
@@ -482,5 +484,5 @@ function run_les(base, dnsrun, model::Symbol; r::Integer = 4, cfl::Real = 0.4)
         end
         record!()
     end
-    return (; model, sim, closure = c, K, e, νt, II, r33, hw, τs, wall)
+    return (; model, sim, closure = c, K, e, νt, II, III, r33, hw, τs, wall)
 end
