@@ -532,6 +532,159 @@ function _add_eddy_viscosity_w!(tw::Field{FaceZ}, w::Field{FaceZ},
     return tw
 end
 
+# --- stress-form SGS momentum divergence (Era VI, P55-b, #175) -----------
+# −∂τᵢⱼ/∂xⱼ with τᵢⱼ = −2νᵢⱼSᵢⱼ on the C-grid. Placement (the locations
+# where the Laplacian kernels above form their fluxes):
+#
+#   τ11, τ22, τ33 at cell centres            τ11[i,j,k] at (xᵢ, yⱼ, zₖ)
+#   τ12 on xy-edges                          τ12[i,j,k] at (x_{i-½}, y_{j-½}, zₖ)
+#   τ13 on xz-edges                          τ13[i,j,k] at (x_{i-½}, yⱼ, z_{k-½})
+#   τ23 on yz-edges                          τ23[i,j,k] at (xᵢ, y_{j-½}, z_{k-½})
+#
+# i.e. the edge with index (i, j) is the south-west corner of cell (i, j),
+# where u-face i and v-face j meet. The strain at each location is the
+# compact face difference: Sᵢᵢ is the diagonal of `_velocity_gradient_at`
+# (face to face through the cell), and S12 = ½(∂u/∂y + ∂v/∂x) on the edge
+# from the two velocities adjacent to it. ν is the cell-centred value for
+# the diagonals and the 4-cell average onto the edge for the off-diagonals,
+# exactly as in `_add_eddy_viscosity_*!`. Anisotropy (the CM1 convention,
+# Bryan 2002): ν11 = ν22 = ν12 = νh, ν33 = ν13 = ν23 = νv.
+#
+# The flux of row i is split as τᵢⱼ = −νᵢⱼ(a ∂uᵢ/∂xⱼ + b ∂uⱼ/∂xᵢ):
+#   (a, b) = (1, 1) the full stress −2νᵢⱼSᵢⱼ;
+#   (a, b) = (1, 0) the Laplacian ("diagonal") part ∂ⱼ(νᵢⱼ∂ⱼuᵢ), which is the
+#                   operator the IMEX steppers treat implicitly;
+#   (a, b) = (0, 1) the transposed part ∂ⱼ(νᵢⱼ∂ᵢuⱼ), the explicit remainder.
+
+# 4-cell averages of a cell-centred ν onto the edge with index (i, j, k)
+Base.@propagate_inbounds _νe12(n, i, j, k) = 0.25 * (n[i-1,j-1,k] + n[i,j-1,k] + n[i-1,j,k] + n[i,j,k])
+Base.@propagate_inbounds _νe13(n, i, j, k) = 0.25 * (n[i-1,j,k-1] + n[i,j,k-1] + n[i-1,j,k] + n[i,j,k])
+Base.@propagate_inbounds _νe23(n, i, j, k) = 0.25 * (n[i,j-1,k-1] + n[i,j,k-1] + n[i,j-1,k] + n[i,j,k])
+
+# diagonal stresses at the centre of cell (i, j, k): −(a+b) ν ∂uᵢ/∂xᵢ
+Base.@propagate_inbounds _τ11(u, nh, i, j, k, idx, a, b) = -(nh[i,j,k] * ((a + b) * ((u[i+1,j,k] - u[i,j,k]) * idx)))
+Base.@propagate_inbounds _τ22(v, nh, i, j, k, idy, a, b) = -(nh[i,j,k] * ((a + b) * ((v[i,j+1,k] - v[i,j,k]) * idy)))
+Base.@propagate_inbounds _τ33(w, nv, i, j, k, idz, a, b) = -(nv[i,j,k] * ((a + b) * ((w[i,j,k+1] - w[i,j,k]) * idz)))
+
+# off-diagonal stresses of row `own` on the edge (i, j, k):
+# −ν_e (a ∂u_own/∂x_other + b ∂u_other/∂x_own)
+Base.@propagate_inbounds _τ12_u(u, v, nh, i, j, k, idx, idy, a, b) =
+    -(_νe12(nh, i, j, k) * (a * ((u[i,j,k] - u[i,j-1,k]) * idy) + b * ((v[i,j,k] - v[i-1,j,k]) * idx)))
+Base.@propagate_inbounds _τ12_v(u, v, nh, i, j, k, idx, idy, a, b) =
+    -(_νe12(nh, i, j, k) * (a * ((v[i,j,k] - v[i-1,j,k]) * idx) + b * ((u[i,j,k] - u[i,j-1,k]) * idy)))
+Base.@propagate_inbounds _τ13_u(u, w, nv, i, j, k, idx, idz, a, b) =
+    -(_νe13(nv, i, j, k) * (a * ((u[i,j,k] - u[i,j,k-1]) * idz) + b * ((w[i,j,k] - w[i-1,j,k]) * idx)))
+Base.@propagate_inbounds _τ13_w(u, w, nv, i, j, k, idx, idz, a, b) =
+    -(_νe13(nv, i, j, k) * (a * ((w[i,j,k] - w[i-1,j,k]) * idx) + b * ((u[i,j,k] - u[i,j,k-1]) * idz)))
+Base.@propagate_inbounds _τ23_v(v, w, nv, i, j, k, idy, idz, a, b) =
+    -(_νe23(nv, i, j, k) * (a * ((v[i,j,k] - v[i,j,k-1]) * idz) + b * ((w[i,j,k] - w[i,j-1,k]) * idy)))
+Base.@propagate_inbounds _τ23_w(v, w, nv, i, j, k, idy, idz, a, b) =
+    -(_νe23(nv, i, j, k) * (a * ((w[i,j,k] - w[i,j-1,k]) * idy) + b * ((v[i,j,k] - v[i,j,k-1]) * idz)))
+
+# −∂τᵢⱼ/∂xⱼ into (tu, tv, tw), with the stresses formed on the fly from
+# (u, v, w) and the cell-centred (νh, νv) arrays (halos filled), part (a, b).
+function _add_sgs_stress_divergence!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
+                                     u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                                     nh::AbstractArray{<:Real,3}, nv::AbstractArray{<:Real,3},
+                                     a::Real, b::Real, g::RegularGrid)
+    T = eltype(tu.data)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    A = T(a); B = T(b)
+    ii, jj, kk = interior(g)
+    ud, vd, wd = u.data, v.data, w.data
+    tud, tvd, twd = tu.data, tv.data, tw.data
+    @inbounds for k in kk, j in jj, i in ii
+        tud[i,j,k] += -((_τ11(ud, nh, i, j, k, idx, A, B) - _τ11(ud, nh, i-1, j, k, idx, A, B)) * idx +
+                        (_τ12_u(ud, vd, nh, i, j+1, k, idx, idy, A, B) -
+                         _τ12_u(ud, vd, nh, i, j, k, idx, idy, A, B)) * idy +
+                        (_τ13_u(ud, wd, nv, i, j, k+1, idx, idz, A, B) -
+                         _τ13_u(ud, wd, nv, i, j, k, idx, idz, A, B)) * idz)
+        tvd[i,j,k] += -((_τ12_v(ud, vd, nh, i+1, j, k, idx, idy, A, B) -
+                         _τ12_v(ud, vd, nh, i, j, k, idx, idy, A, B)) * idx +
+                        (_τ22(vd, nh, i, j, k, idy, A, B) - _τ22(vd, nh, i, j-1, k, idy, A, B)) * idy +
+                        (_τ23_v(vd, wd, nv, i, j, k+1, idy, idz, A, B) -
+                         _τ23_v(vd, wd, nv, i, j, k, idy, idz, A, B)) * idz)
+        twd[i,j,k] += -((_τ13_w(ud, wd, nv, i+1, j, k, idx, idz, A, B) -
+                         _τ13_w(ud, wd, nv, i, j, k, idx, idz, A, B)) * idx +
+                        (_τ23_w(vd, wd, nv, i, j+1, k, idy, idz, A, B) -
+                         _τ23_w(vd, wd, nv, i, j, k, idy, idz, A, B)) * idy +
+                        (_τ33(wd, nv, i, j, k, idz, A, B) - _τ33(wd, nv, i, j, k-1, idz, A, B)) * idz)
+    end
+    return nothing
+end
+
+# −∂τᵢⱼ/∂xⱼ from a stored stress (six cell-centre-shaped arrays, placement
+# above). Reads τ11 on i ∈ first-1:last, τ12 on i, j ∈ first:last+1, etc.
+function _add_stress_divergence!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
+                                 τ11, τ22, τ33, τ12, τ13, τ23, g::RegularGrid)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    ii, jj, kk = interior(g)
+    tud, tvd, twd = tu.data, tv.data, tw.data
+    @inbounds for k in kk, j in jj, i in ii
+        tud[i,j,k] += -((τ11[i,j,k] - τ11[i-1,j,k]) * idx +
+                        (τ12[i,j+1,k] - τ12[i,j,k]) * idy +
+                        (τ13[i,j,k+1] - τ13[i,j,k]) * idz)
+        tvd[i,j,k] += -((τ12[i+1,j,k] - τ12[i,j,k]) * idx +
+                        (τ22[i,j,k] - τ22[i,j-1,k]) * idy +
+                        (τ23[i,j,k+1] - τ23[i,j,k]) * idz)
+        twd[i,j,k] += -((τ13[i+1,j,k] - τ13[i,j,k]) * idx +
+                        (τ23[i,j+1,k] - τ23[i,j,k]) * idy +
+                        (τ33[i,j,k] - τ33[i,j,k-1]) * idz)
+    end
+    return nothing
+end
+
+# τ = −2νᵢⱼSᵢⱼ into the six arrays, on exactly the index ranges
+# `_add_stress_divergence!` reads (the interior plus the shell below for
+# the diagonals, plus the shell above for the edges).
+function _sgs_stress_tensor!(τ11, τ22, τ33, τ12, τ13, τ23,
+                             u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                             nh::AbstractArray{<:Real,3}, nv::AbstractArray{<:Real,3},
+                             g::RegularGrid)
+    T = eltype(τ11)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    o = one(T)
+    ii, jj, kk = interior(g)
+    ud, vd, wd = u.data, v.data, w.data
+    xm = first(ii)-1:last(ii); ym = first(jj)-1:last(jj); zm = first(kk)-1:last(kk)
+    xp = first(ii):last(ii)+1; yp = first(jj):last(jj)+1; zp = first(kk):last(kk)+1
+    @inbounds begin
+        for k in kk, j in jj, i in xm; τ11[i,j,k] = _τ11(ud, nh, i, j, k, idx, o, o); end
+        for k in kk, j in ym, i in ii; τ22[i,j,k] = _τ22(vd, nh, i, j, k, idy, o, o); end
+        for k in zm, j in jj, i in ii; τ33[i,j,k] = _τ33(wd, nv, i, j, k, idz, o, o); end
+        for k in kk, j in yp, i in xp; τ12[i,j,k] = _τ12_u(ud, vd, nh, i, j, k, idx, idy, o, o); end
+        for k in zp, j in jj, i in xp; τ13[i,j,k] = _τ13_u(ud, wd, nv, i, j, k, idx, idz, o, o); end
+        for k in zp, j in yp, i in ii; τ23[i,j,k] = _τ23_v(vd, wd, nv, i, j, k, idy, idz, o, o); end
+    end
+    return nothing
+end
+
+# Σ 2νᵢⱼSᵢⱼSᵢⱼ ΔV over the interior cells (diagonals) and the edges with
+# interior indices (off-diagonals, each counted for both ij and ji):
+# the exact discrete dissipation of `_add_sgs_stress_divergence!` (a = b = 1)
+# on a periodic domain.
+function _sgs_stress_dissipation(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                                 nh::AbstractArray{<:Real,3}, nv::AbstractArray{<:Real,3},
+                                 g::RegularGrid)
+    T = eltype(u.data)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    ii, jj, kk = interior(g)
+    ud, vd, wd = u.data, v.data, w.data
+    s = zero(T)
+    @inbounds for k in kk, j in jj, i in ii
+        S11 = (ud[i+1,j,k] - ud[i,j,k]) * idx
+        S22 = (vd[i,j+1,k] - vd[i,j,k]) * idy
+        S33 = (wd[i,j,k+1] - wd[i,j,k]) * idz
+        S12 = 0.5 * ((ud[i,j,k] - ud[i,j-1,k]) * idy + (vd[i,j,k] - vd[i-1,j,k]) * idx)
+        S13 = 0.5 * ((ud[i,j,k] - ud[i,j,k-1]) * idz + (wd[i,j,k] - wd[i-1,j,k]) * idx)
+        S23 = 0.5 * ((vd[i,j,k] - vd[i,j,k-1]) * idz + (wd[i,j,k] - wd[i,j-1,k]) * idy)
+        s += 2 * (nh[i,j,k] * (S11^2 + S22^2) + nv[i,j,k] * S33^2) +
+             4 * (_νe12(nh, i, j, k) * S12^2 + _νe13(nv, i, j, k) * S13^2 +
+                  _νe23(nv, i, j, k) * S23^2)
+    end
+    return s * (g.dx * g.dy * g.dz)
+end
+
 # --- eddy diffusion for a cell-centered scalar --------------------------
 # s · ∂/∂x_j (K ∂ϕ/∂x_j), K applied conservatively at faces (interpolated
 # linearly from cell centres). The single kernel behind both public forms:

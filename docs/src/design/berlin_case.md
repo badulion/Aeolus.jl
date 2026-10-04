@@ -303,7 +303,7 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, bit for bit the cores' built-in closure), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167); every core and stepper takes it |
+| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`); each with option `stress = :symmetric` (`:laplacian`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177) |
 
@@ -316,7 +316,15 @@ couplings may not set the same keyword.
 **SGS providers** are closure objects of the Era VI contract
 ([Closure contract](../theory/sgs.md#Closure-contract)): a provider
 builds its `AbstractSGSClosure` once and `step_options` returns
-`(sgs = closure,)`. A stateful closure (Lagrangian dynamic, prognostic
+`sgs_step_options(closure, stress) = (sgs = closure, sgs_stress = stress)`.
+Every provider runs the **stress-form** momentum divergence
+`∂ⱼ(2νᵢⱼSᵢⱼ)` (`sgs_stress = :symmetric`, P55-b #175; see
+[Stress form vs Laplacian form](../theory/sgs.md#Stress-form-vs-Laplacian-form)),
+not the cores' default Laplacian form `∂ⱼ(νₜ∂ⱼuᵢ)`; option
+`stress = :laplacian` restores that (a smoke variant), and each provider's
+`smoke_check` asserts that the stress-form dissipation Σ2νSᵢⱼSᵢⱼ is
+non-negative. Under the IMEX steppers the diagonal part is implicit and
+the cross terms explicit. ν_h = ν_v until P55-e (#187). A stateful closure (Lagrangian dynamic, prognostic
 TKE) keeps its memory in that object; the cores commit it once per
 accepted step and `step_adaptive!` rolls it back with the state on a
 rejected step. A new provider goes in its own file,

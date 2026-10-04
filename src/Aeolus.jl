@@ -167,6 +167,9 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+# Era VI (P55-b, #175): the stress-form SGS momentum divergence
+export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
+       add_sgs_stress_divergence!, sgs_stress_dissipation
 # Era VI, Phase 54 (P54-c): LES analysis toolbox
 export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
@@ -226,7 +229,7 @@ export StretchedGrid, TerrainFollowingGrid, terrain_following_grid,
        set_physical!, hydrostatic_balance_error
 
 # Phases 23, 25 — adaptive time stepping + IMEX integration
-export CFLConstraints, cfl_diagnostics, adaptive_dt,
+export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
        SubsteppingSchedule, substeps_for,
        StateSnapshot, state_snapshot, save_state!, restore_state!,
        step_adaptive!,
