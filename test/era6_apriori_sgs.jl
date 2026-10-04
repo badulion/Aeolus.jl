@@ -306,13 +306,13 @@ end
         @test all(values(back["checks"]))
         @test back["dns"]["kmax_eta_min"] >= 1.5                           # the ν margin
         @test back["dns"]["t_end"] > back["dns"]["t_eps_peak"] + 0.2      # run on past the peak
-        # Parseval: the recorded spectrum carries the energy of the centred
-        # field it is defined on, which is the staggered K less the little
-        # the two-point centring removes near the grid scale (a resolved DNS)
+        # Parseval: the recorded spectrum is taken on the stored (face)
+        # values (isotropic_energy_spectrum since #205), so it carries the
+        # solver's kinetic energy exactly: the face K and the DNS's K_end
         Kspec = sum(back["spectrum"]["E"]) * (back["spectrum"]["k"][2] - back["spectrum"]["k"][1])
-        Kc = 0.5 * sum(sum(abs2, Aeolus.Operators._to_center_periodic(f)) / 32^3 for f in (d32.sim.u, d32.sim.v, d32.sim.w))
-        @test Kspec ≈ Kc rtol = 1e-10
-        @test Kspec ≈ back["dns"]["K_end"] rtol = 0.05
+        Kf = 0.5 * sum(sum(abs2, interior_view(f)) / 32^3 for f in (d32.sim.u, d32.sim.v, d32.sim.w))
+        @test Kspec ≈ Kf rtol = 1e-10
+        @test Kspec ≈ back["dns"]["K_end"] rtol = 1e-10
         # one source of truth: the record's 4h numbers are the harness's
         f = back["filter"]["4h"]
         @test 0 < f["smagorinsky"]["rho_Pi"] < 1 && f["bardina"]["rho_Pi"] > f["smagorinsky"]["rho_Pi"]

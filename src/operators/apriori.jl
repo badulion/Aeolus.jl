@@ -49,6 +49,22 @@ Base.getindex(τ::SymmetricTensorField, i::Integer, j::Integer) = components(τ)
 # Exact subfilter stress
 # -------------------------------------------------------------------------
 
+# Cell-centred copy of a staggered component: the two-point average with
+# periodic wrap-around (halos not needed). It lived in spectra.jl until the
+# energy spectrum stopped centring (#205, P54-c review); the a-priori
+# analysis is collocated by construction and is now its only user.
+function _to_center_periodic(f::Field{L}) where {L}
+    a = interior_view(f)
+    Nx, Ny, Nz = size(a)
+    s = L === FaceX ? (1, 0, 0) : L === FaceY ? (0, 1, 0) : L === FaceZ ? (0, 0, 1) : (0, 0, 0)
+    s == (0, 0, 0) && return Array(a)
+    c = similar(a, Nx, Ny, Nz)
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        c[i,j,k] = 0.5 * (a[i,j,k] + a[mod1(i + s[1], Nx), mod1(j + s[2], Ny), mod1(k + s[3], Nz)])
+    end
+    return c
+end
+
 # Cell-centred copy of a velocity component into `out` (a CellCenter field):
 # the two-point average with periodic wrap for a staggered component.
 function _center_into!(out::Field{CellCenter}, f::Field)
