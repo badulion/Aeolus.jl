@@ -67,7 +67,7 @@ using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    add_eddy_viscosity_w!, add_eddy_diffusion_scalar!,
                    add_surface_flux!, add_sponge!,
                    compute_sgs!, add_sgs_momentum!, add_sgs_scalar!, advance_sgs!,
-                   _active_sgs
+                   _active_sgs, _check_sgs_stress
 using ..PressureSolvers: AbstractPressureSolver
 
 import ..PressureSolvers: solve!
@@ -1472,8 +1472,9 @@ Aeolus.Operators.AbstractSGSClosure), or a function `f(νt, u, v, w)`; the
 legacy alias `eddy_viscosity!` is accepted) replaces the built-in
 Smagorinsky closure (`C_s`), its coefficients go into `sim.νt` / `sim.κt`,
 its tendencies are added in step 3 where the built-in ones are, and its
-memory is committed once after the projection. The SGS stress is applied in
-the unweighted form, like the built-in closure (the `O(∂ln ρ̄/∂z)` weighting
+memory is committed once after the projection; `sgs_stress = :laplacian |
+:symmetric` selects the form of its momentum divergence as for `step!`. The
+SGS stress is applied in the unweighted form, like the built-in closure (the `O(∂ln ρ̄/∂z)` weighting
 correction is omitted for the same reason as for the molecular term).
 """
 step_anelastic!(sim::AnelasticSimulation, dt::Real; kwargs...) =
@@ -1502,9 +1503,11 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
                               body_force!::Union{Nothing,Function} = nothing,
                               post_predictor!::Union{Nothing,Function} = nothing,
                               sgs = nothing,
-                              eddy_viscosity! = nothing) where {S,T}
+                              eddy_viscosity! = nothing,
+                              sgs_stress::Symbol = :laplacian) where {S,T}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
+    _check_sgs_stress(sgs_stress)
     m  = sim.mesh
     Wc = _weight_c(sim.weighting, sim.ref)
     Wf = _weight_f(sim.weighting, sim.ref)
@@ -1537,7 +1540,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     #    built-in Smagorinsky, or the `sgs` keyword).
     if closure !== nothing
         f = compute_sgs!(closure, sim)
-        add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim)
+        add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim; stress = sgs_stress)
         add_sgs_scalar!(sim.tθ, sim.θ, closure, f, sim)
     end
 

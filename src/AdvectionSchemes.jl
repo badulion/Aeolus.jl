@@ -54,6 +54,7 @@ using ..Operators: advect_centered!, momentum_advect!, laplacian, ∂x, ∂y, �
                    add_buoyancy!, add_coriolis!, compute_smagorinsky_νt!,
                    add_eddy_viscosity_u!, add_eddy_viscosity_v!, add_eddy_viscosity_w!,
                    add_eddy_diffusion_scalar!, add_surface_flux!, advect_weno5!
+using ..Operators: compute_sgs!, add_sgs_momentum!, sgs_closure
 using ..Simulations
 using ..Simulations: BoussinesqSimulation
 
@@ -1245,7 +1246,7 @@ function _accumulate!(dest::Field, a::Real, src::Field, g::RegularGrid)
 end
 
 """
-    kinetic_energy_budget(sim; momentum_advection! = momentum_advect!) -> NamedTuple
+    kinetic_energy_budget(sim; momentum_advection! = momentum_advect!, sgs = nothing) -> NamedTuple
 
 Term-by-term budget of the resolved kinetic energy
 `E = ∫½(u²+v²+w²) dV` for the current state of `sim`, evaluated with the
@@ -1268,11 +1269,20 @@ Pass `momentum_advection! = momentum_advect_skew!` (or
 `momentum_advect_weno_z!`) to budget an alternative operator: the
 `advection` entry then measures that operator's energy conservation.
 
+`sgs`: an SGS closure of the Era VI contract (`Operators.AbstractSGSClosure`,
+or a function `f(νt, u, v, w)`) to budget instead of the built-in
+Smagorinsky: its coefficients are computed with `compute_sgs!` (pure: no
+closure memory changes; `sim.νt`, `sim.κt` are overwritten) and its
+momentum tendency `add_sgs_momentum!` gives the `sgs` entry. This is the
+resolved-KE sink the prognostic TKE closure's shear production must equal
+(P56-b, #182).
+
 Diagnostic routine — it allocates its own scratch fields and does not
 touch `sim`'s prognostic state (halos are refilled as a side effect).
 """
 function kinetic_energy_budget(sim::BoussinesqSimulation{T};
-                               momentum_advection! = momentum_advect!) where {T}
+                               momentum_advection! = momentum_advect!,
+                               sgs = nothing) where {T}
     m = sim.mesh
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
@@ -1325,8 +1335,15 @@ function kinetic_energy_budget(sim::BoussinesqSimulation{T};
     end
 
     # --- SGS -------------------------------------------------------------
+    closure = sgs_closure(sgs)
     sgs = zero(T)
-    if sim.has_sgs
+    if closure !== nothing
+        f = compute_sgs!(closure, sim)
+        _zero!(tu, tv, tw)
+        add_sgs_momentum!(tu, tv, tw, closure, f, sim)
+        sgs = _uvw_dot(u, v, w, tu, tv, tw, m)
+        _accumulate!(au, one(T), tu, m); _accumulate!(av, one(T), tv, m); _accumulate!(aw, one(T), tw, m)
+    elseif sim.has_sgs
         compute_smagorinsky_νt!(sim.νt, u, v, w, sim.C_s)
         fill_halos!(sim.νt, sim.bcs)
         _zero!(tu, tv, tw)
