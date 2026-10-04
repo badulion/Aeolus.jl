@@ -195,6 +195,8 @@ export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_
 export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
        eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
        lumley_invariants, apriori_metrics, dissipation_matched_cs
+# Era VI (P59-b, #184): the σ-model closure
+export SigmaModel, compute_sigma_νt!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!

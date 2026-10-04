@@ -39,7 +39,7 @@
 #   :momentum_advection  `:centered` (the core's weighted centred form; the
 #                        provider passes no keyword to a sound-proof core);
 #                        `:weno_z` is an unweighted operator: incompatible;
-#   :sgs                 every provider (`:smagorinsky`, `:dynamic`, `:mlsgs`):
+#   :sgs                 every provider (`:smagorinsky`, `:dynamic`, `:mlsgs`, `:sigma`):
 #                        the closure is passed as `sgs` to every core.
 #
 # `build_core` also refuses any `sim_options` keyword other than `tol` /

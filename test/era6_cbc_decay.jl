@@ -16,6 +16,7 @@
 #   AMD (C = 0.3)    +20.0 %       +7.7 %       0.113 / 0.095           1.86 / 1.94   (#176)
 #   Vreman (c=.0723) +16.1 %       −0.3 %       0.109 / 0.093           1.77 / 1.72   (#176)
 #   tke (P56-b)       −9.4 %      −26.9 %       0.065 / 0.120           0.81 / 0.38   (#182)
+#   σ-model 1.35    +17.8 %       +1.5 %       0.112 / 0.097           1.83 / 1.81   (P59-b, #184)
 #
 # History (P54-c review on #205). The first version of this benchmark
 # missed K(171)/K(42) by −15.7 % (dynamic) and K(98)/K(42) passed at
@@ -116,6 +117,10 @@ include("cbc_benchmark_driver.jl")
         @info "  " * cbc_summary(String(c), res[c])
     end
     @info @sprintf("  CBC 32³ (6 closures × 3 seeds): %.1f s", t_total)
+    # the σ-model (P59-b, #184): same targets; timed outside the CI budget
+    # of the closures above
+    res[:sigma] = cbc_benchmark(:sigma; N = 32)
+    @info "  " * cbc_summary("sigma", res[:sigma])
 
     @testset "set-up: station-1 spectrum exact in every resolved shell" begin
         r = res[:dynamic]
@@ -135,6 +140,31 @@ include("cbc_benchmark_driver.jl")
         @test r.rms_log_err[1] <= 0.11                             # 0.100 / 0.102 (seeds 1–3)
         @test r.rms_log_err[2] <= 0.10
         @test r.E_kc_ratio[1] < 2 && r.E_kc_ratio[2] < 2           # no pile-up
+    end
+
+    # The σ-model (P59-b, #184). On the pre-#205 set-up it passed the shared
+    # assertions above (+6.6 % / −11.1 %, rms 0.096 / 0.105). The #205
+    # spectrum fix starts every run with the energy the solver actually
+    # carries, which raised every closure's station-98 error by the same
+    # ~11 points and its rms by ~0.015 (Smagorinsky 0.088 → 0.102). For σ
+    # the rms at 98 lands at 0.112, just above the shared 0.11, for the
+    # same reason as AMD's 0.113: at C_σ = 1.35 it dissipates less at the
+    # cut-off than Smagorinsky 0.17 (E(k_c)/CBC 1.83 against 1.62), as
+    # Nicoud et al. (2011) calibrated C_σ on HIT to match Smagorinsky's mean
+    # dissipation, not its distribution over k. So σ gets AMD's
+    # station-98 bounds, and the less-dissipative-at-k_c behaviour is
+    # asserted against Smagorinsky.
+    @testset "sigma: TKE decay and spectra against CBC (see header)" begin
+        r = res[:sigma]
+        @test r.E_les[1][2:17] ≈ r.E_ref[1][2:17] rtol = 1e-10     # same initial spectrum
+        @test abs(r.K_err[1]) < 0.20                               # +17.8 %
+        @test_broken abs(r.K_err[1]) < 0.10                        # the proposed target at 98
+        @test abs(r.K_err[2]) < 0.10                               # +1.5 %
+        @test r.rms_log_err[1] <= 0.12                             # 0.112
+        @test r.rms_log_err[2] <= 0.10                             # 0.097
+        @test r.E_kc_ratio[1] < 2 && r.E_kc_ratio[2] < 2           # 1.83 / 1.81, no pile-up
+        @test r.E_kc_ratio[1] > res[:smagorinsky].E_kc_ratio[1]    # less dissipation at k_c
+        @test r.E_kc_ratio[2] < res[:none].E_kc_ratio[2] / 4       # distinguishable from no model
     end
 
     @testset "amd: TKE decay and spectra against CBC (32³ and 48³, see header)" begin

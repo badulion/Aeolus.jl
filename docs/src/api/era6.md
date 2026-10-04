@@ -22,6 +22,7 @@ tested at are in
 - Walls — `NoSlipWall` and the resolved wall stress (P59-a, #172; below; [theory](../theory/transition.md))
 - AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`
 - [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182; [theory](../theory/sgs_tke.md))
+- σ-model SGS closure (P59-b, #184; below) — `Aeolus.Operators`
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -148,6 +149,31 @@ Aeolus.Operators.add_tensor_diffusion_scalar!
 Aeolus.Operators.isentropic_tensor!
 Aeolus.Operators.sgs_scalar_tensor
 Aeolus.Operators.IsentropicDiffusion
+```
+
+## σ-model SGS closure (P59-b, #184)
+
+`SigmaModel(C_σ = 1.35)` is an `AbstractEddyViscosityClosure` of the
+contract above, with
+``ν_t = (C_σΔ)^2 σ_3(σ_1 − σ_2)(σ_2 − σ_3)/σ_1^2`` built from the singular
+values of `_velocity_gradient_at` (Nicoud et al. 2011). It is zero in
+pure shear, solid-body rotation, any 2-D flow, isotropic expansion and
+axisymmetric strain, and it scales as ``z^3`` at a no-slip wall. Theory and
+measured numbers:
+[Smagorinsky-Lilly SGS → σ-model](../theory/sgs.md#σ-model). The Berlin
+case selects it with `physics[:sgs] = :sigma`.
+
+```julia
+step!(sim, dt; sgs = SigmaModel())             # C_σ = 1.35, κ_t = ν_t/Pr_t
+```
+
+```@docs
+Aeolus.Operators.SigmaModel
+Aeolus.Operators.compute_sigma_νt!
+Aeolus.Operators.sigma_operator
+Aeolus.Operators.sigma_singular_values
+Aeolus.Operators._sigma_operator_raw
+Aeolus.Operators._sym3_eigvals
 ```
 
 ## Walls (P59-a, #172)

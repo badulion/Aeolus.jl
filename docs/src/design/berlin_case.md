@@ -306,7 +306,7 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`); all but `:tke` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
+| `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184); all but `:tke` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177) |
 
@@ -452,6 +452,20 @@ unmasked.
   half of the fluid cells. From 72 m up its level means fall to
   4–25 × 10⁻⁴ m²/s, against 1.2–4.1 × 10⁻² m²/s for Smagorinsky
   (whose top levels include the sponge).
+  `:sigma` (`couplings/sgs_sigma.jl`, #184) is the σ-model of
+  Nicoud et al. (2011), option `C_σ = 1.35`. Its ``ν_t`` vanishes in
+  laminar shear and 2-D flow; `report` prints the canopy and free-stream
+  mean ``ν_t`` next to Smagorinsky's on the same flow. After 100 smoke
+  steps that is 3.1e-2 (Smagorinsky 2.5e-2) m²/s in the canopy and 4.0e-3
+  (2.3e-3) above the sponge start, where the sponge now holds a nearly
+  uniform geostrophic stream with weak 3-D fluctuations (γ = 0.96); with
+  `sponge_to_geostrophic = false` that region is a laminar sheared layer
+  (γ = 0) and σ gives 5.3e-4 against 2.0e-2. Its `smoke_check` is the
+  laminar-reference check AMD and Vreman share (``ν_t = 0`` exactly on
+  the level-mean flow). It runs the stress form (option `stress`) and
+  costs 17.8 against 16.5 ms per smoke step. It is off by default, and
+  switching the default is the maintainer's call. `Operators` is exempt,
+  so no coverage list changes.
 * **Scalar advection.** Every tracer registered with `advect = true`;
   `positive` tracers go through the flux limiter (`advect_positive!`).
   `:weno_z7` needs `CaseConfig(halo = (4, 4, 4))`, `:teno8` halo 5; the

@@ -810,6 +810,7 @@ Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
 | 32³ | no model            | +98.2 % | +160.6 % | 0.224 / 0.315 | 6.67 / 15.2 |
 | 32³ | AMD, C = 0.3 (#176) | +20.0 % | +7.7 % | 0.113 / 0.095 | 1.86 / 1.94 |
 | 32³ | Vreman, c = 0.0723 (#176) | +16.1 % | −0.3 % | 0.109 / 0.093 | 1.77 / 1.72 |
+| 32³ | σ-model 1.35 (#184) | +17.8 % | +1.5 % | 0.112 / 0.097 | 1.83 / 1.81 |
 | 48³ | AMD, C = 0.3 (#176) | +5.0 % | −8.7 % | 0.079 / 0.065 | 1.21 / 1.19 |
 | 48³ | Vreman, c = 0.0723 (#176) | +2.7 % | −13.9 % | 0.084 / 0.083 | 1.28 / 1.17 |
 | 48³ | Smagorinsky 0.17    | +0.8 % | −14.4 % | 0.076 / 0.078 | 1.14 / 1.02 |
@@ -823,7 +824,8 @@ CI cost at 32³: about 10 s (20 s under load) for the three closures ×
 three seeds, plus 2.2 s for the Lagrangian model, which runs through
 `step_rk3!(sim, dt; sgs)` so that its memory is committed once per step;
 it was not run at 64³. AMD and Vreman add about 2 s each, and the AMD
-checks a further 48³ run (about 10 s) and the two C-sweep runs.
+checks a further 48³ run (about 10 s) and the two C-sweep runs. The
+σ-model (#184) adds about 6.5 s.
 
 Without a model the energy piles up at the cut-off (7–15 × CBC). The
 test uses this to show that it can fail.
@@ -908,15 +910,122 @@ Richardson number of 0.233, so no stability function is applied to it.
 In the CBC benchmark above it decays too fast (−9.4 % / −26.9 % at 32³).
 Everything else is on [Prognostic SGS TKE](sgs_tke.md).
 
+## σ-model
+
+The σ-model of Nicoud, Baya Toda, Cabrit, Bose & Lee (2011) is a
+closure of the [contract](#Closure-contract),
+[`SigmaModel`](@ref Aeolus.Operators.SigmaModel)`(C_σ = 1.35)`, P59-b
+(#184). It builds the eddy viscosity from the singular values
+``σ_1 ≥ σ_2 ≥ σ_3 ≥ 0`` of the resolved velocity gradient
+``g_{ij} = ∂u_i/∂x_j``:
+
+```math
+ν_t = (C_σ Δ)^2\, D_σ, \qquad
+D_σ = \frac{σ_3\,(σ_1 - σ_2)\,(σ_2 - σ_3)}{σ_1^2}, \qquad
+Δ = (Δx\,Δy\,Δz)^{1/3},
+```
+
+with ``κ_t = ν_t/Pr_t``. The design goal is an operator that is zero
+wherever the flow cannot be turbulent. Smagorinsky's ``|S|`` sees only
+the strain, so it is on in any laminar shear. ``D_σ`` vanishes in these
+cases (Nicoud et al. 2011, Sec. II):
+
+* ``σ_3 = 0`` whenever ``g`` has rank ≤ 2: any two-dimensional flow, pure
+  shear, solid-body rotation;
+* ``σ_1 = σ_2`` or ``σ_2 = σ_3``: isotropic expansion or contraction,
+  axisymmetric strain.
+
+At a no-slip wall ``u, v = O(z)`` and ``w = O(z^2)``, so ``σ_1 = O(1)``,
+``σ_2 = O(z)``, ``σ_3 = O(z^2)`` and ``D_σ = O(z^3)``. This is the
+near-wall behaviour of the true SGS dissipation, and it comes without a
+damping function. ``C_σ = 1.35`` is Nicoud et al.'s value from isotropic
+turbulence.
+
+**Computing the singular values.** ``σ_i^2`` are the eigenvalues of
+``G = g^Tg``. They are found in closed form, with no LAPACK call per
+cell, from the trigonometric solution of the characteristic cubic (Smith
+1961; the form Nicoud et al. take from Hasan, Basri & Kopp 2010). The
+cubic is written in the deviator ``G' = G - \tfrac13 \mathrm{tr}G\,I``,
+with ``α_1 = \mathrm{tr}(G'^2)/6`` and ``α_2 = \det G'/2``, so neither is
+formed by cancellation. ``D_σ`` is a product of eigenvalue *gaps*, and
+near a double eigenvalue the cubic gives a gap only to ``\sqrt ε``,
+because the arccos argument is near ±1. A plain implementation therefore
+returns ``ν_t ≈ 10^{-8}(C_σΔ)^2|g|`` for axisymmetric strain instead of
+zero. Two steps fix this:
+
+1. Where the smaller gap is below 1 % of the spread, the simple
+   eigenvalue is deflated. Its eigenvector is the largest cross product
+   of two rows of ``G − λI``, and the close pair is recomputed from the
+   2 × 2 compression of ``G`` on the orthogonal complement, whose gap is
+   accurate to ``ε\|G\|`` (Kopp 2008).
+2. The smallest singular value is ``σ_3 = |\det g|/(σ_1σ_2)``, which is
+   exactly zero for a rank-2 ``g`` rather than the square root of a
+   round-off eigenvalue.
+
+``σ_1 − σ_2`` is formed as ``(λ_1 − λ_2)/(σ_1 + σ_2)``. Round-off can
+still leave ``σ_3`` a few ulp above ``σ_2`` when the two coincide; the
+operator is clipped at zero there. The gradient is
+`_velocity_gradient_at`, the one stencil of the contract, so there is no
+second stencil.
+
+**What was measured** (`test/era6_sigma_sgs.jl`; KH in
+`test/era6_transition_kh.jl`; CBC in `test/era6_cbc_decay.jl`):
+
+| property | σ-model | Smagorinsky |
+| :-- | :-- | :-- |
+| 16³ linear fields, ``\max ν_t/(Δ^2\|g\|)``: uniform shear / solid-body rotation / isotropic expansion / axisymmetric strain (also rotated off the grid axes) | 0 / 0 / 1.7e-30 / 5.0e-16 (rotated: 3.3e-18 / 1.5e-30 / 1.1e-15) | 0.0289 / 0 / 0.0409 / 0.0409 (``C_s = 0.17``) |
+| 2-D flow (16³, ``w = 0``, no ``z`` dependence) | exactly 0 | max 1.44e-3 |
+| closed form vs `svdvals`, 1e4 random ``g`` over six decades | ``\max\|Δσ\|/σ_1`` = 2.5e-14 | — |
+| near-degenerate ``Q\,\mathrm{diag}(a, a(1+δ), b)\,Q^T``, δ = 1e-1 … 1e-8 | ``\max\|ΔD_σ\|/σ_1 ≤`` 2.1e-15 | — |
+| clip: degenerate ``g`` (two equal singular values), 1e4 | raw ``D_σ < 0`` in 431, ``\|D_σ\| ≤`` 3.8e-16 ``σ_1``, clipped to 0 | — |
+| ``d\log ν_t/d\log z``, first 8 of 64 cells, Taylor wall field | 2.955 | 0.0025 |
+| laminar Couette, Re = 100, ``N_z = 32``, from rest | wall stress ``νU/h`` to 2.8e-14, ``ν_t ≡ 0`` | stress excess ``(C_sΔ)^2(U/h)/ν`` = 4.5156e-2, measured 4.5156e-2 |
+| decaying HIT 32³ (``ν = 10^{-4}``), exponent ``n`` of ``K ∝ t^{-n}`` on ``t ∈ [1, 3]``, seeds 1 / 2 | 0.5823 / 0.4746 | 0.5840 / 0.4848 |
+| CBC 32³ (3 seeds): ``K_{98}/K_{42}``, ``K_{171}/K_{42}`` vs CBC; RMS ``\log_{10}E`` (98 / 171); ``E(k_c)``/CBC | +17.8 %, +1.5 %; 0.112 / 0.097; 1.83 / 1.81 (on the #205-corrected set-up; +6.6 %, −11.1 % before it) | +13.2 %, −2.6 %; 0.102 / 0.085; 1.62 / 1.51 |
+| KH 64×1×128 growth rate (no SGS 0.1820) | 0.1820 (``ν_t ≡ 0``: the layer is 2-D) | 0.1769 (−2.82 %, ``C_s = 0.1``) |
+| kernel cost, 64×64×32 | 6.7 ms | 0.85 ms |
+
+The issue expected Smagorinsky to be nonzero in all five laminar cases.
+That expectation is wrong for solid-body rotation, which has no strain,
+so Smagorinsky is zero there too. The test asserts that.
+
+**Berlin.** The `:sgs` slot's provider `:sigma`
+(`examples/urban/couplings/sgs_sigma.jl`) is off by default; flipping
+the default (`:tke` since #182) is the maintainer's call. Like every
+eddy-viscosity provider it runs the stress-form momentum divergence
+(option `stress`, #175). After 100 steps of the `:smoke` window, the mean
+``ν_t`` is 3.1e-2 m²/s in the canopy, against 2.5e-2 for Smagorinsky on
+the same flow. Above the sponge start it is 4.0e-3 against 2.3e-3 m²/s:
+since #171 the sponge relaxes toward the geostrophic wind, so that region
+is a nearly uniform stream (ū = 1.0 m/s) with weak 3-D residual
+fluctuations (γ = 0.96), not a laminar shear layer, and σ has no laminar
+gradient to discount. With the sponge relaxing to zero
+(`sponge_to_geostrophic = false`, the pre-#171 flow) the same region is a
+laminar sheared layer (γ = 0), and σ gives 5.3e-4 against 2.0e-2 m²/s
+(2.7 %). On the laminar version of the current flow (level means of u, v;
+``w = 0``) σ's ``ν_t`` is zero to the bit where Smagorinsky is on (the
+smoke check AMD and Vreman share), and for an exactly parallel turning
+profile on the Berlin mesh too (`test/berlin_numerics.jl`). The smoke step
+costs 17.8 ms against 16.5 ms with Smagorinsky.
+
 ## Limitations and planned upgrades
 
 The current implementation is deliberately the *simplest* working
 Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
 
-  * No wall damping (Van Driest / Piomelli). Needed only when walls
-    exist — Phase 1b.
+  * No wall damping (Van Driest / Piomelli) for Smagorinsky. Needed only
+    when walls exist. The [σ-model](#σ-model) needs none: its ``ν_t``
+    falls off as ``z^3`` at a no-slip wall (measured slope 2.955).
   * The constant coefficient is too dissipative in transitional / stably
-    stratified regimes. The dynamic coefficient below is the alternative.
+    stratified regimes. The dynamic coefficient and the σ-model, which is
+    zero in laminar shear and in 2-D flow, are the alternatives.
+  * The σ-model costs about 8 times the Smagorinsky kernel (6.7 against
+    0.85 ms on 64×64×32). It is zero only in *exactly* laminar
+    (parallel, 2-D, pure-strain) flow; a laminar but weakly 3-D free
+    stream gets a small ``ν_t`` (Berlin, sponge relaxing to zero: 2.7 % of
+    Smagorinsky's above the sponge start), and in a weakly turbulent,
+    nearly unsheared stream it can exceed Smagorinsky's (Berlin default:
+    1.7 ×, both small). It is not stability-aware.
   * The **stability correction** for stably stratified flow
     (Deardorff / Lilly closure with a Richardson-number reduction) is
     not applied to the Smagorinsky closures; the prognostic TKE closure
@@ -996,3 +1105,11 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Vreman, A. W. (2004), *An eddy-viscosity subgrid-scale model for
     turbulent shear flow: algebraic theory and applications*, Phys.
     Fluids 16, 3670.
+  * Nicoud, F., Baya Toda, H., Cabrit, O., Bose, S. & Lee, J. (2011),
+    *Using singular values to build a subgrid-scale model for large eddy
+    simulations*, Phys. Fluids 23, 085106 (the σ-model).
+  * Hasan, K. M., Basri, A. H. & Kopp, J. (2010), as cited by Nicoud et
+    al. (2011) for the closed-form eigenvalues; Smith, O. K. (1961),
+    *Eigenvalues of a symmetric 3 × 3 matrix*, Commun. ACM 4, 168.
+  * Kopp, J. (2008), *Efficient numerical diagonalization of Hermitian
+    3 × 3 matrices*, Int. J. Mod. Phys. C 19, 523.

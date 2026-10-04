@@ -26,6 +26,9 @@
 #                is no trained model: the default `fn` is the Smagorinsky
 #                closure with cfg.C_s, which reproduces the default run
 #                bit for bit (the hook is the test).
+#   :sigma       Operators.SigmaModel — the σ-model of Nicoud et al. (2011),
+#                ν_t from the singular values of the resolved gradient; in
+#                couplings/sgs_sigma.jl (#184).
 #
 # Every eddy-viscosity provider (:smagorinsky, :dynamic, :mlsgs, :amd,
 # :vreman) runs its closure with the stress-form momentum divergence,

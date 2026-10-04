@@ -48,6 +48,8 @@ export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_
 export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
        eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
        lumley_invariants, apriori_metrics, dissipation_matched_cs
+# Era VI (P59-b, #184): the σ-model closure (operators/sigma_closure.jl)
+export SigmaModel, compute_sigma_νt!
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -714,6 +716,8 @@ include("operators/lagrangian_sgs.jl")
 include("operators/abl_diagnostics.jl")
 # Era VI, P55-d (#176): AMD and Vreman closures on the contract.
 include("operators/sgs_amd_vreman.jl")
+# The σ-model closure (P59-b, #184).
+include("operators/sigma_closure.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.

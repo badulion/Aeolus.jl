@@ -109,6 +109,7 @@ _cbc_closure(f::Function, mesh) = ((;), (eddy_viscosity! = f,))
 function _cbc_closure(s::Symbol, mesh)
     s === :none && return _cbc_closure(nothing, mesh)
     s === :smagorinsky && return _cbc_closure(0.17, mesh)
+    s === :sigma && return _cbc_closure(SigmaModel(1.35), mesh)      # P59-b (#184)
     s === :tke && return ((;), (sgs = TKEClosure(mesh),))       # P56-b (#182), Moeng 1984
     if s === :dynamic
         ws = DynamicSmagorinskyWorkspace(mesh)
@@ -118,7 +119,7 @@ function _cbc_closure(s::Symbol, mesh)
     s === :vreman && return _cbc_closure(VremanClosure(0.17), mesh) # c = 2.5·0.17² (P55-d, #176)
     s === :lagrangian && return ((;), (sgs = LagrangianDynamicSmagorinsky(mesh),))
     throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, :lagrangian, :tke, " *
-                        ":amd, :vreman, a C_s, f(νt, u, v, w) or an AbstractSGSClosure"))
+                        ":amd, :vreman, :sigma, a C_s, f(νt, u, v, w) or an AbstractSGSClosure"))
 end
 # a closure object: a fresh copy per realisation (its memory must not leak between seeds)
 _cbc_closure(c::AbstractSGSClosure, mesh) = ((;), (sgs = deepcopy(c),))
@@ -138,6 +139,7 @@ Run the Comte-Bellot–Corrsin decay at N³ with `closure`:
 * `:lagrangian` — [`LagrangianDynamicSmagorinsky`](@ref) (Meneveau, Lund &
   Cabot 1996), stepped with `step_rk3!(sim, dt; sgs)` so its memory is
   committed once per step;
+* `:sigma` — the σ-model, `SigmaModel(1.35)` (Nicoud et al. 2011; #184);
 * an `AbstractSGSClosure` — any closure of the Era VI contract (copied per
   realisation), stepped the same way;
 * a function `f(νt, u, v, w)` — any closure accepted by `step!`'s
