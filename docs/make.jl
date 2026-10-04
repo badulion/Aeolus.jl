@@ -132,6 +132,9 @@ makedocs(
                 "AirSeaFlux"                   => "api/era5/air_sea_flux.md",
                 "SurfaceTiles"                 => "api/era5/surface_tiles.md",
             ],
+            "Era VI — turbulence closure" => [
+                "Overview"                     => "api/era6.md",
+            ],
         ],
         "Examples" => [
             "Scalar advection 2D"           => "examples/scalar_advection.md",

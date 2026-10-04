@@ -24,12 +24,19 @@ changing the algorithm (both default to the built-in one):
 * `momentum_advection = f(tu, tv, tw, u, v, w)` — the momentum-advection
   operator, e.g. `(tu, tv, tw, u, v, w) -> momentum_advect_weno_z!(tu, tv, tw, u, v, w)`
   from `AdvectionSchemes`;
-* `eddy_viscosity! = f(νt, u, v, w)` — the SGS closure that fills `νt`,
-  e.g. [`compute_dynamic_smagorinsky_νt!`](@ref Aeolus.Operators.compute_dynamic_smagorinsky_νt!)
-  or an `ML.MLSGS` via `apply_mlsgs!`. It switches the SGS terms on even
-  with `C_s = 0`, and they are added where the built-in closure adds
-  them, so an `MLSGS` wrapping the Smagorinsky closure reproduces the
-  built-in run bit for bit.
+* `sgs = closure` — the subgrid-scale closure, any
+  [`AbstractSGSClosure`](@ref Aeolus.Operators.AbstractSGSClosure) of the
+  Era VI contract ([`StaticSmagorinsky`](@ref Aeolus.Operators.StaticSmagorinsky),
+  [`DynamicSmagorinsky`](@ref Aeolus.Operators.DynamicSmagorinsky), an
+  `ML.MLSGS`, …) or a plain function `f(νt, u, v, w)` that fills `νt`
+  (wrapped in a [`FunctionSGS`](@ref Aeolus.Operators.FunctionSGS),
+  `κt = νt/Prₜ`). It switches the SGS terms on even with `C_s = 0`, and
+  they are added where the built-in closure adds them, so
+  `StaticSmagorinsky(C_s)` — or an `MLSGS` wrapping the Smagorinsky
+  closure — reproduces the built-in run bit for bit. The pre-contract
+  keyword name `eddy_viscosity! = f(νt, u, v, w)` is still accepted.
+  `step_rk3!`, `step_imex!`, `step_adaptive!` and the sound-proof cores
+  take the same keyword; see [Era VI](era6.md).
 
 The pressure solver is chosen at construction (`solver = …`, any
 `AbstractPressureSolver`, e.g. `MultigridPoissonSolver` or
