@@ -981,6 +981,7 @@ end
     include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
     include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
     include("era6_neutral_abl.jl")       # P54-d: half-channel ABL / channel harness + Φ_m, stress, E11 (#174)
+    include("era6_gabls1.jl")            # P55-f: GABLS1 on the shared SBL driver, reduced (#191)
     include("era6_stratified_channel.jl") # P55-f: wall-resolved stably stratified channel vs DNS (#191)
 end
 
