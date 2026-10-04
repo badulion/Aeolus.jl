@@ -106,8 +106,8 @@ end
     @test b.sgs_share < 0.9 * n.sgs_share
     # The issue expected h(:brown94) < h(:none) here. The expectation was
     # wrong at this resolution, not the code: over 1.0-1.25 h the two BL
-    # heights agree within their scatter (measured 178.8 ± 3.4 m and
-    # 178.4 ± 3.9 m), and at 32³ after 9 h the corrected run is deeper
+    # heights agree within their scatter (measured 178.7 ± 3.4 m and
+    # 178.2 ± 3.9 m), and at 32³ after 9 h the corrected run is deeper
     # (222.5 m against 210.2 m; examples/sbl/gabls1.jl). Resolved eddies
     # carry ~85-90 % of the heat flux at 12.5 m, and the weaker SGS mixing
     # of the corrected closure lets them carry more. No assertion on the
