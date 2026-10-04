@@ -13,6 +13,15 @@
 # with Ri_g > 1/4 (of the same Ri_g field) and the grid Reynolds number
 # U Δ/(ν + ⟨ν_t⟩).
 #
+# P59-e (#195) adds the relaminarised share of the stable layer
+# (`Transition.relaminarised_fraction`): among the fluid cells with
+# Ri_g > 1/4, those that are γ-laminar and carry ν_t/ν < 1e-2 (ν_t the
+# larger of the active closure's horizontal and vertical viscosity). In
+# `:winter` before sunrise this is the relaminarisation diagnostic of the
+# stable night-time layer. Its smoke check asserts, for a laminar-consistent
+# closure (`Operators.laminar_consistent`: the σ-model, `:sigma`), that ν_t
+# vanishes identically in a laminar (parallel) flow on the Berlin mesh.
+#
 # A diagnostic: it changes no state, so `budget!` is a no-op.
 
 """
@@ -44,6 +53,15 @@ ratio of the plane means, ``⟨N^2⟩/⟨|S|^2⟩`` (the pointwise ratio is
 dominated by the shear-free cells, where the floor makes it huge).
 Option `stability` (see [`turbulence_stability_family`](@ref)).
 
+Relaminarisation (P59-e, #195): `relam` per level and `relam_frac`
+over the whole stable layer — the fraction of the fluid cells with
+``Ri_g > 1/4`` that are γ-laminar (the `γ` indicator below, normalised
+by the option `relam_normalization`, default `:volume`) **and** have
+``ν_t/ν <`` `relam_νt_ratio` (default ``10^{-2}``), with ``ν_t`` the larger
+of the active SGS closure's ``ν_h`` and ``ν_v`` (`Operators.sgs_fields`)
+and ``ν`` = `cfg.ν` (`Transition.relaminarised_fraction`); `relam_nstable`
+counts the stable cells.
+
 Transition diagnostics (`Aeolus.Transition`, P59-c #180), per level over
 the fluid cells: the turbulent fraction `γ` (`turbulent_indicator!` with
 options `gamma_threshold`, default 0.2, and `gamma_normalization`,
@@ -73,6 +91,13 @@ mutable struct TurbulenceDiag{S<:AbstractRiStability, FU, FV, FW, FC, B, BT} <: 
     γ::Vector{Float64}
     Rsup::Vector{Float64}
     Re_grid::Vector{Float64}
+    relam_νt_ratio::Float64
+    relam_normalization::Symbol
+    lam::Array{Bool,3}
+    νmax::Array{Float64,3}
+    relam::Vector{Float64}
+    relam_frac::Float64
+    relam_nstable::Int
     t_eval::Float64
     ncalls::Int
     seconds::Float64
@@ -81,7 +106,8 @@ end
 coupling_name(::Type{<:TurbulenceDiag}) = :turbulence_diag
 modules_used(::Type{<:TurbulenceDiag}) = (:TurbulenceStability, :Transition)
 default_options(::Type{<:TurbulenceDiag}) =
-    (stability = :brown, gamma_threshold = 0.2, gamma_normalization = :plane)
+    (stability = :brown, gamma_threshold = 0.2, gamma_normalization = :plane,
+     relam_νt_ratio = 1e-2, relam_normalization = :volume)
 stages(::Type{<:TurbulenceDiag}) = ((:output, 10, Cadence(:output)),)
 smoke_variants(::Type{<:TurbulenceDiag}) =
     ((label = "turbulence_diag, MOST-consistent stability",
@@ -99,7 +125,9 @@ function build(::Type{<:TurbulenceDiag}, case, o)
                           cc(), cc(), cc(), p.bcs, p.θ_bcs, fluid,
                           z(), z(), z(), z(), Float64(o.gamma_threshold),
                           Symbol(o.gamma_normalization), zeros(Bool, m.Nx, m.Ny, m.Nz),
-                          z(), z(), z(), NaN, 0, 0.0)
+                          z(), z(), z(), Float64(o.relam_νt_ratio),
+                          Symbol(o.relam_normalization), zeros(Bool, m.Nx, m.Ny, m.Nz), zeros(m.Nx, m.Ny, m.Nz), z(), NaN, 0,
+                          NaN, 0, 0.0)
 end
 
 """
@@ -143,6 +171,7 @@ function turbulence_diagnostics!(c::TurbulenceDiag, case)
     c.γ .= turbulent_fraction(c.ind; fluid = c.fluid)
     c.Rsup .= supercritical_fraction(c.Rif; fluid = c.fluid)
     transition_grid_reynolds!(c, case)
+    relaminarisation!(c, case)
     c.t_eval = sim.t
     c.ncalls += 1
     c.seconds += time() - t0
@@ -174,6 +203,80 @@ function transition_grid_reynolds!(c::TurbulenceDiag, case)
     return c
 end
 
+"""
+    active_sgs_closure(case) -> closure or nothing
+
+The SGS closure the case hands the core (`sgs` of the step keywords of the
+`:sgs` provider), or `nothing` for a provider that uses the legacy
+`eddy_viscosity!` hook (`:mlsgs`).
+"""
+active_sgs_closure(case) = get(case.step_kwargs, :sgs, nothing)
+
+"""
+    relaminarisation!(c::TurbulenceDiag, case)
+
+The relaminarised share of the stable layer (`relam`, `relam_frac`,
+`relam_nstable`): `Transition.relaminarised_fraction` of the γ-laminar
+fluid cells (`laminar_mask!` with the option `relam_normalization`,
+default `:volume`: the vorticity fluctuation against the domain-mean
+``|ω|``, so that a quiet, shear-free free stream is laminar — with the
+plane normalisation of `γ` it is not, as the indicator is scale-free), the
+`Rif` field and the
+larger of the closure's ``ν_h``, ``ν_v`` (`Operators.sgs_fields`; `sim.νt`
+without a contract closure), against `cfg.ν`.
+"""
+function relaminarisation!(c::TurbulenceDiag, case)
+    sim = case.sim
+    cl = active_sgs_closure(case)
+    νh = interior_view(sim.νt); νv = νh
+    if cl isa AbstractSGSClosure
+        f = sgs_fields(cl, sim)
+        νh = interior_view(f.νh); νv = interior_view(f.νv)
+    end
+    @inbounds for I in eachindex(c.νmax)
+        c.νmax[I] = max(νh[I], νv[I])
+    end
+    if c.relam_normalization === c.gamma_normalization
+        @inbounds for I in eachindex(c.lam)
+            c.lam[I] = c.fluid[I] && !c.ind[I]
+        end
+    else
+        laminar_mask!(c.lam, c.u, c.v, c.w; threshold = c.gamma_threshold, fluid = c.fluid,
+                      normalization = c.relam_normalization)
+    end
+    r = relaminarised_fraction(c.lam, c.Rif, c.νmax, case.cfg.ν; fluid = c.fluid,
+                               νt_ratio = c.relam_νt_ratio)
+    c.relam .= r.profile
+    c.relam_frac = r.fraction
+    c.relam_nstable = r.nstable
+    return c
+end
+
+"""
+    laminar_flow_νt(closure, case) -> (νh_max, νv_max)
+
+The closure's eddy viscosity in a laminar flow on the Berlin mesh: a copy
+of the closure (`deepcopy`, so the case's closure state is untouched) on a
+scratch core whose wind is the current plane-mean profile ``(U(z), V(z),
+0)`` — a parallel, turning shear flow — and whose θ is uniform. A
+laminar-consistent closure gives exactly 0.
+"""
+function laminar_flow_νt(closure, case)
+    m = case.mesh; sim = case.sim; cfg = case.cfg
+    s = boussinesq_core(cfg, m)
+    fill!(s.θ.data, cfg.θ₀)
+    ui = interior_view(sim.u); vi = interior_view(sim.v)
+    for k in 1:m.Nz
+        K = m.Hz + k
+        s.u.data[:, :, K] .= mean(view(ui, :, :, k)); s.v.data[:, :, K] .= mean(view(vi, :, :, k))
+    end
+    fill!(s.w.data, 0.0)
+    cl = deepcopy(closure)
+    hasproperty(cl, :qv) && cl.qv !== nothing && fill!(cl.qv.data, 0.0)
+    f = compute_sgs!(cl, s)
+    return maximum(abs, interior_view(f.νh)), maximum(abs, interior_view(f.νv))
+end
+
 run_stage!(c::TurbulenceDiag, case, ::Val{:output}, dt) =
     (turbulence_diagnostics!(c, case); nothing)
 
@@ -195,7 +298,10 @@ output_fields(c::TurbulenceDiag, case) = [
                 :z, cs -> turbulence_diagnostics!(c, cs).Rsup),
     OutputField("Re_grid", "1",
                 "grid Reynolds number |U_h| Delta / (nu + <nu_t>)",
-                :z, cs -> turbulence_diagnostics!(c, cs).Re_grid)]
+                :z, cs -> turbulence_diagnostics!(c, cs).Re_grid),
+    OutputField("relam_fraction", "1",
+                "fraction of the Ri_g > 1/4 fluid cells that are gamma-laminar with nu_t/nu < 1e-2",
+                :z, cs -> turbulence_diagnostics!(c, cs).relam)]
 
 """
     transition_summary(c::TurbulenceDiag, case) -> NamedTuple
@@ -225,9 +331,10 @@ function report(c::TurbulenceDiag, case)
     prof = join([@sprintf("z=%.0f: N2=%.2e Ri=%.3g fm=%.3f", (k - 0.5) * dz, c.N2[k], c.Ri[k], c.fm[k])
                  for k in ks], "; ")
     t = transition_summary(c, case)
-    return @sprintf("  turbulence (%s, %.2f ms/call): %s\n  transition: γ canopy %.3f free %.3f; Ri_g>1/4 fraction canopy %.3f free %.3f; Re_grid canopy %.1f free %.1f",
+    return @sprintf("  turbulence (%s, %.2f ms/call): %s\n  transition: γ canopy %.3f free %.3f; Ri_g>1/4 fraction canopy %.3f free %.3f; Re_grid canopy %.1f free %.1f\n  relaminarised: %.1f %% of the %d stable cells (Ri_g > 1/4) are γ-laminar with ν_t/ν < %.0e (ν = %.3g m²/s)",
                     nameof(typeof(c.stability)), 1e3 * c.seconds / max(c.ncalls, 1), prof,
-                    t.γ_canopy, t.γ_free, t.Rsup_canopy, t.Rsup_free, t.Re_canopy, t.Re_free)
+                    t.γ_canopy, t.γ_free, t.Rsup_canopy, t.Rsup_free, t.Re_canopy, t.Re_free,
+                    100 * c.relam_frac, c.relam_nstable, c.relam_νt_ratio, case.cfg.ν)
 end
 
 function smoke_check(c::TurbulenceDiag, case)
@@ -255,7 +362,23 @@ function smoke_check(c::TurbulenceDiag, case)
             "0 ≤ γ ≤ 1 on every level" => all(x -> 0 <= x <= 1, c.γ),
             "γ = 0 in solids (no solid cell is turbulent)" => !any(c.ind .& .!fl),
             "0 ≤ fraction of Ri_g > 1/4 ≤ 1" => all(x -> 0 <= x <= 1, c.Rsup),
-            "grid Reynolds number finite and positive" => all(x -> isfinite(x) && x > 0, c.Re_grid)]
+            "grid Reynolds number finite and positive" => all(x -> isfinite(x) && x > 0, c.Re_grid),
+            relam_checks(c, case)...]
+end
+
+# P59-e: the relaminarised fraction is a fraction of the stable cells; and a
+# laminar-consistent closure gives ν_t ≡ 0 in a laminar flow on this mesh.
+function relam_checks(c::TurbulenceDiag, case)
+    ok = (c.relam_nstable == 0 ? isnan(c.relam_frac) : 0 <= c.relam_frac <= 1) &&
+         all(x -> isnan(x) || 0 <= x <= 1, c.relam)
+    checks = Pair{String,Bool}["0 ≤ relaminarised fraction of the stable layer ≤ 1" => ok]
+    cl = active_sgs_closure(case)
+    if cl isa AbstractSGSClosure && Aeolus.Operators.laminar_consistent(cl)
+        νh, νv = laminar_flow_νt(cl, case)
+        push!(checks, "laminar-consistent closure: ν_t ≡ 0 in the parallel plane-mean flow" =>
+                      νh == 0 && νv == 0)
+    end
+    return checks
 end
 
 register!(TurbulenceDiag)
