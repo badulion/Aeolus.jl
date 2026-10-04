@@ -26,9 +26,11 @@
 # The numerics slots (#132) and the sound-proof cores. A sound-proof core
 # is its own projection and its own momentum operator: the projection
 # solves ∇·(W∇φ) = ∇·(W u*) with a density-weighted CG built from the
-# core's base state and weighting, momentum is advected in the W-weighted
-# centred flux form, and the SGS closure is the built-in Smagorinsky
-# (`_step_mass_weighted!` takes no operator keywords). Hence:
+# core's base state and weighting, and momentum is advected in the
+# W-weighted centred flux form (`_step_mass_weighted!` takes no
+# momentum-advection keyword). The SGS closure is the Era VI contract's
+# (`sgs`, #167), which the sound-proof step takes like the Boussinesq one.
+# Hence:
 #
 #   :pressure_solver     only `:density_weighted_cg` (its `tol`, `maxit`
 #                        reach the core's own solver); the Boussinesq
@@ -37,9 +39,8 @@
 #   :momentum_advection  `:centered` (the core's weighted centred form; the
 #                        provider passes no keyword to a sound-proof core);
 #                        `:weno_z` is an unweighted operator: incompatible;
-#   :sgs                 `:smagorinsky`; `:dynamic` and `:mlsgs` act through
-#                        `eddy_viscosity!`, which the sound-proof step does
-#                        not take: incompatible.
+#   :sgs                 every provider (`:smagorinsky`, `:dynamic`, `:mlsgs`):
+#                        the closure is passed as `sgs` to every core.
 #
 # `build_core` also refuses any `sim_options` keyword other than `tol` /
 # `maxit`, so a future solver provider that forgets to declare itself
@@ -100,12 +101,11 @@ is_default(::Type{<:MassWeightedCore}) = false
 modules_used(::Type{<:MassWeightedCore}) = (:Anelastic,)
 incompatible(::Type{<:MassWeightedCore}) =
     (:pressure_solver => :cosine_fft, :pressure_solver => :multigrid, :pressure_solver => :mg_cg,
-     :momentum_advection => :weno_z, :sgs => :dynamic, :sgs => :mlsgs)
+     :momentum_advection => :weno_z)
 incompatible_reason(::Type{<:MassWeightedCore}) =
     "a sound-proof core projects with its own density-weighted CG (select " *
-    "pressure_solver = :density_weighted_cg), advects momentum in its weighted centred " *
-    "flux form (momentum_advection = :centered) and takes no eddy_viscosity! closure " *
-    "(sgs = :smagorinsky)"
+    "pressure_solver = :density_weighted_cg) and advects momentum in its weighted centred " *
+    "flux form (momentum_advection = :centered)"
 
 "The `sim_options` keywords a sound-proof core takes (those of its default projection solver)."
 const MASS_WEIGHTED_SIM_KEYWORDS = (:tol, :maxit)

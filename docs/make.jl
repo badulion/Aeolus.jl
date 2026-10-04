@@ -67,6 +67,8 @@ makedocs(
             "Heterogeneous-surface validation" => "theory/heterogeneous_surface.md",
             # Era VI — high-fidelity turbulence closure
             "Transition and wall-bounded flow" => "theory/transition.md",
+            "Stability functions and Ri_g" => "theory/turbulence_stability.md",
+            "Wall models"                 => "theory/wall_models.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -136,6 +138,8 @@ makedocs(
             ],
             "Era VI — turbulence closure" => [
                 "Overview"                     => "api/era6.md",
+                "TurbulenceStability"          => "api/era6/turbulence_stability.md",
+                "WallModels"                   => "api/era6/wall_models.md",
             ],
         ],
         "Examples" => [

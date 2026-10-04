@@ -116,8 +116,8 @@ unchanged.
 ### The Berlin case
 
 The Berlin ground is not a `NoSlipWall`. It is a rough, wall-modelled
-surface: the MOST stress ``ρu_*^2`` is applied as an implicit drag over a
-free-slip `:wall`, see [The Berlin case](../design/berlin_case.md). A
+surface: the `MOSTWallLaw` stress of `Aeolus.WallModels` (#169) is
+applied as an implicit drag over a free-slip `:wall`, see [The Berlin case](../design/berlin_case.md). A
 resolved no-slip wall at ``Δx = 15.6`` m would put the first velocity
 point ``Δz/2 ≈ 3`` m from the wall, with a viscous sublayer of
 ``ν/u_* ∼ 10^{-4}`` m. `BoundaryConditions` is exempt infrastructure in
