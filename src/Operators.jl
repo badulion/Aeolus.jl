@@ -7,7 +7,7 @@ using ..Fields: Field, mesh, interior_view
 using ..Grids: interior
 using ..BoundaryConditions: fill_halos!, Periodic
 using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
-using FFTW: rfft, irfft, fft, ifft, fftfreq
+using FFTW: rfft, irfft, fft, ifft, fftfreq, plan_rfft
 using Random: AbstractRNG, default_rng, randn
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
@@ -673,6 +673,8 @@ include("operators/spectra.jl")
 # -------------------------------------------------------------------------
 include("operators/sgs_closures.jl")
 include("operators/lagrangian_sgs.jl")
+# Era VI (P54-d, #174): wall-bounded flow diagnostics (Φ_m, stress budget, E11)
+include("operators/abl_diagnostics.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.

@@ -175,6 +175,8 @@ export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
 # Era VI, Phase 54 (P54-c): LES analysis toolbox
 export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+# Era VI (P54-d, #174): wall-bounded flow diagnostics
+export phi_m_profile, total_stress_profile, streamwise_spectrum
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
@@ -937,6 +939,11 @@ export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
        friction_velocity, wall_stress, wall_drag,
        spalding_yplus, spalding_uplus, matching_obukhov_length,
        WallModel, apply_wall_stress!
+# P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
+# `advance_channel!` / `run_channel!` do not collide with the Berlin case's
+# `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
+export WallBoundedCase, half_channel_case, channel_case,
+       advance_channel!, run_channel!, channel_dt
 
 # P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
 # method of the CutCell generic (no new name).
