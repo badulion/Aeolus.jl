@@ -166,7 +166,7 @@ in the integer `order` their couplings declare.
 | `:column_tendency` | `column_radiation` (10) |
 | `:sanity` | the core finiteness check |
 | (ledger) | every coupling's `budget!`, and the change of water in the air (core) |
-| `:output` (1800 s) | NetCDF record and log line (core), then coupling entries |
+| `:output` (1800 s) | NetCDF record and log line (core), then coupling entries: `turbulence_diag` (10) |
 
 The order was the order of the pre-refactor loop, floating-point order
 included (#126). The surface exchange (#129) replaced the slab, whose
@@ -303,9 +303,9 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, bit for bit the cores' built-in closure), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167); every core and stepper takes it |
+| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`); each with option `stress = :symmetric` (`:laplacian`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
-| `:scalar_advection` | `:advection_schemes` (`scalar_advection`, option `scheme = :weno_z5`) | the `:transport` stage |
+| `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177) |
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every
@@ -316,7 +316,15 @@ couplings may not set the same keyword.
 **SGS providers** are closure objects of the Era VI contract
 ([Closure contract](../theory/sgs.md#Closure-contract)): a provider
 builds its `AbstractSGSClosure` once and `step_options` returns
-`(sgs = closure,)`. A stateful closure (Lagrangian dynamic, prognostic
+`sgs_step_options(closure, stress) = (sgs = closure, sgs_stress = stress)`.
+Every provider runs the **stress-form** momentum divergence
+`∂ⱼ(2νᵢⱼSᵢⱼ)` (`sgs_stress = :symmetric`, P55-b #175; see
+[Stress form vs Laplacian form](../theory/sgs.md#Stress-form-vs-Laplacian-form)),
+not the cores' default Laplacian form `∂ⱼ(νₜ∂ⱼuᵢ)`; option
+`stress = :laplacian` restores that (a smoke variant), and each provider's
+`smoke_check` asserts that the stress-form dissipation Σ2νSᵢⱼSᵢⱼ is
+non-negative. Under the IMEX steppers the diagonal part is implicit and
+the cross terms explicit. ν_h = ν_v until P55-e (#187). A stateful closure (Lagrangian dynamic, prognostic
 TKE) keeps its memory in that object; the cores commit it once per
 accepted step and `step_adaptive!` rolls it back with the state on a
 rejected step. A new provider goes in its own file,
@@ -324,6 +332,38 @@ rejected step. A new provider goes in its own file,
 so it loads after `sgs.jl`, which defines the slot. Which providers combine with the
 `:core` and `:timestepper` slots is in [Dynamical core and time
 integration](#Dynamical-core-and-time-integration).
+
+**SGS diffusion of the tracers (#177).** The closure's eddy diffusivity
+reaches every scalar the case transports. θ gets it inside `step!`; the
+tracers get it in the `:transport` stage: after its advective update each
+tracer with `advect = true` (qv, ql, the chemistry species) is advanced by
+`dt · ∇·(κt ∇q)` with `sim.κt` of the last dynamics step
+(`TracerSGSDiffusion`, `sgs_diffuse!`). The pollutant, which has its own
+`:tracers` stage, calls the same helper. The flux divergence is the src
+kernel `add_eddy_diffusion_scalar!` with the case's solid mask (periodic
+lateral halos): no flux through a face next to a building and solid cells
+untouched, so vapour neither leaks into the building interiors nor draws
+on the stale value they hold. On a sound-proof core it passes the
+constraint weights, giving `(1/W)∇·(W κt ∇q)`, which conserves `Σ W q`;
+on the anelastic core that is the ledger's `Σ ρ̄ q`. The diffusion books
+its change of water as `sgs_diffusion` (zero to round-off) plus
+`density_redistribution`. Its `smoke_check` asserts that the diffusion
+alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`. Before
+#177 no tracer was diffused at all: they saw only the implicit
+dissipation of WENO, a missing-physics bug. `sgs_diffusion = false`
+reproduces that transport for comparison. Measured over the first hour of the summer flagship (06:00–07:00,
+adaptive steps, 64×64×32), with vs without the diffusion: the mean qv of
+the lowest fluid level 9.496e-3 vs 9.572e-3 kg/kg and its horizontal
+standard deviation 4.18e-4 vs 4.96e-4 kg/kg (−16 %); the ground-level
+pollutant maximum 5.01 vs 6.88 (−27 %, domain maximum 13.6 vs 21.5); in
+the 1669 wall-nook cells (fluid with two or more solid lateral
+neighbours) the largest vapour excess over the level mean 1.42e-3 vs
+1.86e-3 kg/kg, so the diffusion relieves the IBM nook residual noted in
+`scalar_advection.jl` but does not remove it; water residual −1.8e-14
+kg/m², `sgs_diffusion` −6.1e-19 kg/m². Cost: +1.0 ms per advected tracer
+and step (7 tracers: `scalar_advection` 57.3 → 64.3 ms/step), +0.9 ms for
+the pollutant; the masked kernel takes 0.58 ms per call against 0.10 ms
+unmasked.
 
 * **Pressure solvers.** All three solve the same 7-point Laplacian with
   the same boundary conditions (periodic, periodic, Neumann); the
@@ -728,9 +768,10 @@ terms per step and its Ts clamp as `clamp`; nothing is clamped now.
 Sources in the default case: `evaporation` (surface exchange; negative
 where the surface takes up dew), `building_vapour`,
 `dew` (deposition, negative), `precipitation` (Kessler rain out of the
-bottom), `qv_clamp` (the Kessler coupling's clamp) and `transport` (the
+bottom), `qv_clamp` (the Kessler coupling's clamp), `transport` (the
 change of water the transport stage makes; zero for a conservative
-scheme, and measured at ~1e-19 kg m⁻² at ρ = 1 since #132). The ledger
+scheme, and measured at ~1e-19 kg m⁻² at ρ = 1 since #132) and
+`sgs_diffusion` (the same for the tracers' SGS diffusion, #177; ~1e-19). The ledger
 integrates the water with `ledger.ρ`, one density
 per level, the reference density `case.ref.ρ̄` (#131). A coupling that
 puts a flux into the air with a different density than the ledger's
@@ -924,10 +965,27 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   seconds (30 s in the flagship, 4 s in `:smoke`; a `:surface` key
   overrides it) and their fluxes are held as tendencies until the next
   surface step, so the air receives exactly what the surface gave.
-* **Momentum.** The surface stress ``ρu_*^2`` is applied as an implicit
-  drag on the first-air-cell velocity faces, after the IBM. The momentum
-  removed equals ``Σ u_*^2\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in
-  the test). The `:wall` ground used to be free-slip.
+* **Momentum.** The ground is a wall of `Aeolus.WallModels` (#169):
+  every surface step hands each column a `MOSTWallLaw` with its `z0m`
+  and the Obukhov length of that step (`matching_obukhov_length`, the
+  `L` for which the law gives back the step's ``u_*``), and every step
+  `apply_wall_stress!` evaluates it at the instantaneous first-air-cell
+  wind and applies the stress as an implicit drag on the first-air-cell
+  velocity faces (over the `k_air` level mask, after the IBM);
+  `bus.u_star` is that step's ``u_τ``. The momentum removed equals
+  ``Σ τ_w(U)\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in the test). With
+  `L` and the wind frozen the operator reproduced the drag of #129
+  (``u_*^2/U`` held between surface steps) exactly (0.0 relative
+  difference). Option `wall_formulation` selects the local form
+  (default), Schumann's or Moeng's plane-mean form (smoke variants). In
+  `:smoke` (surfaces every 4 s) per-step evaluation changes the ground
+  mean ``u_*`` after 1 h from 0.05647 to 0.05644 m s⁻¹ and the street
+  wind from 0.47784 to 0.47796 m s⁻¹; the operator costs 1.2 ms per call
+  on the 64 × 64 flagship plane. The `:wall` ground used to be
+  free-slip. It stays a free-slip `:wall` carrying the wall-model drag,
+  not a resolved `NoSlipWall` (#172): at Δx = 15.6 m a resolved no-slip
+  wall would be unphysical
+  ([Transition and wall-bounded flow](../theory/transition.md#The-Berlin-case)).
 * **Extra surface energy.** `bus.sensible` (window sun, glazing
   transmission, dew heat) is collected every step and delivered to the
   surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`
@@ -1314,6 +1372,47 @@ PlantCanopy (by veg_drag)"; making `chem_off` the `:chemistry` default
 fails "slot :chemistry defaults to an off switch (chem_off)"; and
 declaring `cloud_shadow` incompatible with `fog_dew` fails 'smoke run
 "summer, everything on" does not run: cloud_shadow, fog_dew'.
+
+## Turbulence diagnostics (#170)
+
+`turbulence_diag` (`couplings/turbulence_diag.jl`, addon, on by default)
+is the Berlin coupling of the Era VI stability contract
+`TurbulenceStability` (see [the theory page](../theory/turbulence_stability.md)).
+At the output cadence it evaluates, on copies of `u, v, w, θ, q_v` whose
+halos it fills with the core's boundary conditions (the model state is
+not touched):
+
+* the pointwise ``N^2`` of ``θ_v = θ(1 + 0.61 q_v)``
+  (`buoyancy_frequency_squared!`, the z-interpolation of the core's
+  buoyancy), ``|S|^2`` (`strain_rate_squared!`, the Smagorinsky stencil)
+  and ``Ri_g`` (`gradient_richardson!`);
+* per level, over the fluid cells: the mean ``N^2`` (`N2_mean`), the
+  Richardson number of the means ``⟨N^2⟩/⟨|S|^2⟩`` (`Ri_g_mean`; the mean
+  of the pointwise ratio is dominated by shear-free cells, where the
+  ``S^2`` floor makes it huge) and the mean ``f_m(Ri_g)`` (`f_m_mean`).
+  These are written as `(z, time)` profiles (`OutputField` dims `:z`)
+  and summarised in the log line.
+
+Option `stability`: `:brown` (`BrownEtAl1994`, the LEM / MONC functions,
+default), `:lilly`, `:short_tail`, `:long_tail`, `:most`
+(`MOSTConsistent` with the surface exchange's BDBH functions; the smoke
+variant). `budget!` is a no-op: the coupling changes no state. P59-c
+(#180) extends this addon with the transition diagnostics.
+
+**Measured** (`:smoke`, after its 12 steps, noon, capping inversion at
+60 m, `Γ = 3 K km⁻¹` above). In the first two levels above the
+inversion (z = 65.6 m and 71.9 m) `Ri_g` of the means is 0.273 and
+0.196 and the mean `f_m` (Brown et al.) 0.049 and 0.0057; with
+`stability = :most` the same cells give 0.101 and 0.069 (no critical
+Richardson number). Below the inversion θ is uniform, and the vapour
+lapse of the initial state (``q_v ∝ e^{-z/800\,{\rm m}}``) makes
+``θ_v`` decrease with height: ``N^2 ≈ -7 × 10^{-5}`` s⁻² at step 0, and
+−2 to −16 × 10⁻⁵ s⁻² after 12 steps of noon heating, so `Ri_g` < 0 and
+`f_m` = 2.5–10. The same vapour lapse removes about 2/3 of the dry
+``gΓ/θ_0 = 1.0 × 10^{-4}`` s⁻² above the inversion (3.3 × 10⁻⁵ at step 0).
+Cost per evaluation (compiled): 0.15 ms on the 16³ smoke grid
+(`:most`: 0.89 ms, a root find per cell), 3.6 ms on the 64 × 64 × 32
+flagship grid, once per output record (every 1800 s).
 
 ## Cost of per-facet surfaces (#138)
 

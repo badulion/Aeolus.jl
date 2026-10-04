@@ -4,7 +4,9 @@ using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: Field, mesh, interior_view
+using ..Grids: interior
 using ..BoundaryConditions: fill_halos!, Periodic
+using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
 using FFTW: rfft, irfft, fft, ifft, fftfreq
 using Random: AbstractRNG, default_rng, randn
 
@@ -29,6 +31,10 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
 # Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
 export LagrangianDynamicSmagorinsky
+# Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
+export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
+       add_sgs_stress_divergence!, sgs_stress_dissipation
+export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -170,7 +176,7 @@ add_eddy_viscosity_u!(tu, u, νt) = _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
 @doc (@doc add_eddy_viscosity_u!) add_eddy_viscosity_w!(tw, w, νt) = _add_eddy_viscosity_w!(tw, w, νt, mesh(w))
 
 """
-    add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field)
+    add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
     add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t)
 
 Add the conservative eddy-diffusion tendency `∂/∂xⱼ(κₜ ∂ϕ/∂xⱼ)` to the
@@ -179,9 +185,41 @@ averaged linearly to each face. The four-argument form is
 `(1/Prₜ) ∂/∂xⱼ(νₜ ∂ϕ/∂xⱼ)`: the same kernel, with the turbulent Prandtl
 number applied as a factor after the flux divergence. Halos of `ϕ` and of
 the coefficient field must be filled.
+
+Keywords of the three-argument form (P56-a, #177):
+
+  * `mask` — a storage-sized `AbstractArray{Bool,3}` of solid cells (e.g.
+    `IBM.SolidMask(...).mask`). A face with a solid cell on either side
+    carries **no flux**, so a scalar does not diffuse into or out of a
+    building, and the tendency of a solid cell is left untouched. Every
+    open face carries the unmasked flux, so the fluid integral `Σ ϕ dV` is
+    conserved exactly (up to round-off). The halo entries of `mask` must
+    be consistent with the boundary conditions of `ϕ` (periodic copies
+    across a periodic seam; a `false` halo next to a no-flux wall is
+    harmless, since that face carries no gradient).
+  * `weights = (Wc, Wf)` — the sound-proof (anelastic / pseudo-incompressible)
+    form `(1/W) ∇·(W κₜ ∇ϕ)`, with a cell weight `Wc[k]` and a z-face weight
+    `Wf[k]` (bottom face of cell `k`) per storage level (`Anelastic.constraint_weights`).
+    It conserves `Σ W ϕ dV` instead of `Σ ϕ dV`.
+
+With both `nothing` (default) this is bit for bit the unmasked kernel.
 """
-add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field) =
-    _add_eddy_diffusion_scalar!(tϕ, ϕ, κt, one(eltype(κt.data)), mesh(ϕ))
+function add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
+    mask === nothing && weights === nothing &&
+        return _add_eddy_diffusion_scalar!(tϕ, ϕ, κt, one(eltype(κt.data)), mesh(ϕ))
+    g = mesh(ϕ)
+    if mask !== nothing
+        size(mask) == size(ϕ.data) ||
+            throw(DimensionMismatch("mask has size $(size(mask)); expected the storage size $(size(ϕ.data))"))
+    end
+    wc, wf = weights === nothing ? (nothing, nothing) : weights
+    if weights !== nothing
+        n = size(ϕ.data, 3)
+        (length(wc) >= n && length(wf) >= n) ||
+            throw(DimensionMismatch("weights: need Wc and Wf per storage level ($n), got $(length(wc)), $(length(wf))"))
+    end
+    return _add_eddy_diffusion_scalar_masked!(tϕ, ϕ, κt, g, mask, wc, wf)
+end
 add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t::Real) =
     _add_eddy_diffusion_scalar!(tϕ, ϕ, νt, 1 / Pr_t, mesh(ϕ))
 
@@ -647,8 +685,18 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                      _add_buoyancy!, _add_buoyancy_moist!, _add_coriolis!,
                      _compute_smagorinsky_νt!,
                      _add_eddy_viscosity_u!, _add_eddy_viscosity_v!, _add_eddy_viscosity_w!,
-                     _add_eddy_diffusion_scalar!,
+                     _add_eddy_diffusion_scalar!, _add_eddy_diffusion_scalar_masked!,
                      _add_surface_flux!, _add_sponge!,
-                     _advect_weno5!
+                     _advect_weno5!,
+                     _add_sgs_stress_divergence!, _add_stress_divergence!,
+                     _sgs_stress_tensor!, _sgs_stress_dissipation
+
+# -------------------------------------------------------------------------
+# Era VI: the stress-form SGS momentum divergence (wraps the kernels above).
+# -------------------------------------------------------------------------
+include("operators/sgs_stress.jl")
+
+# Pointwise N² and Ri_g (Era VI, P58-a).
+include("operators/stratification.jl")
 
 end # module
