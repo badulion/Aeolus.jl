@@ -966,14 +966,22 @@ end
 end
 
 # =========================================================================
-# Era VI — high-fidelity turbulence closure (Phases 54-59)
+# Era VI — high-fidelity turbulence closure (Phases 54-60)
 # =========================================================================
 # The SGS closure contract (P54-a, #167) is the era contract; later issues
 # append one include line each here.
 
 @testset "Era VI" begin
     include("era6_sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
+    include("era6_sgs_stress_form.jl")   # P55-b: stress-form SGS momentum divergence, anisotropic ν, IMEX split (#175)
+    include("era6_stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
     include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
+    include("era6_les_toolbox.jl")       # Phase 54  filters, spectrum, initialiser (#168)
+    include("era6_lagrangian_sgs.jl")    # P54-b: Lagrangian dynamic Smagorinsky, mask-aware (#173)
+    include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
+    include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
+    include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)
+    include("era6_scalar_sgs_diffusion.jl") # P56-a: SGS diffusion of qv and tracers with κ_t, solid mask (#177)
     include("era6_neutral_abl.jl")       # P54-d: half-channel ABL / channel harness + Φ_m, stress, E11 (#174)
 end
 

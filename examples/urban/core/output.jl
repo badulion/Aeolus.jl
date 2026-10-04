@@ -17,8 +17,8 @@
     OutputField(name, units, long_name, dims, getter)
 
 One output variable a coupling contributes: `dims` is `:xyz` (3-D, per
-record) or `:xy` (2-D, per record); `getter(case)` returns the
-interior-sized array to write.
+record), `:xy` (2-D, per record) or `:z` (a vertical profile, per record);
+`getter(case)` returns the interior-sized array to write.
 """
 struct OutputField
     name::String
@@ -105,10 +105,12 @@ function open_output!(case)
     for f in fields
         dims = f.dims === :xyz ? ("x", "y", "z", "time") :
                f.dims === :xy  ? ("x", "y", "time") :
-               error("output field $(f.name): dims must be :xyz or :xy")
+               f.dims === :z   ? ("z", "time") :
+               error("output field $(f.name): dims must be :xyz, :xy or :z")
         nc_defvar!(ncf, f.name, Float32, dims;
                    attributes = Dict("units" => f.units, "long_name" => f.long_name,
-                                     "coordinates" => f.dims === :xyz ? "x y z" : "x y"))
+                                     "coordinates" => f.dims === :xyz ? "x y z" :
+                                                      f.dims === :z ? "z" : "x y"))
     end
     nc_endef!(ncf)
     nc_write!(ncf, "x", Float32[(i - 0.5) * mesh.dx for i in 1:Nx])
