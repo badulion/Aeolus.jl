@@ -115,13 +115,13 @@ function sgs_scalar_checks(closure, case)
 end
 
 """
-    sgs_dissipation(case) -> W kg⁻¹
+    sgs_domain_dissipation(case) -> W kg⁻¹
 
 Domain-mean resolved-to-subgrid kinetic-energy transfer of the stress-form
 closure, `Σ 2νᵢⱼSᵢⱼSᵢⱼ ΔV / V` (`sgs_stress_dissipation` with the current
 `ν_t`, `νh = νv`). Fills the velocity halos.
 """
-function sgs_dissipation(case)
+function sgs_domain_dissipation(case)
     sim = case.sim
     for f in (sim.u, sim.v, sim.w)
         fill_halos!(f, sim.bcs)
@@ -133,7 +133,7 @@ end
 # the stress-form checks every provider adds to its smoke_check
 sgs_stress_checks(stress, case) =
     stress === :symmetric ?
-        ["stress-form SGS dissipation Σ2νSᵢⱼSᵢⱼ ≥ 0" => sgs_dissipation(case) >= 0] :
+        ["stress-form SGS dissipation Σ2νSᵢⱼSᵢⱼ ≥ 0" => sgs_domain_dissipation(case) >= 0] :
         Pair{String,Bool}[]
 
 # -------------------------------------------------------------------------
