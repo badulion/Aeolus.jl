@@ -80,7 +80,9 @@ stretched by 8 % per layer to at most 25 m, up to 1000 m. Each step of
 3. Turbulence. A first-order K closure,
    ``K = l^2 |\partial U/\partial z| f(Ri) + K_\min``, with the
    Blackadar length (``\lambda`` = 30 m) and
-   ``f = (1+5Ri)^{-2}`` for ``Ri > 0``, ``\sqrt{1-16Ri}`` for ``Ri < 0``.
+   ``f = (1+5Ri)^{-2}`` for ``Ri > 0``, ``\sqrt{1-16Ri}`` for ``Ri < 0``
+   (the `ShortTail` family of the Era VI stability contract,
+   [`TurbulenceStability`](turbulence_stability.md), since #170).
    ``Ri`` uses a *moist* ``N^2``, measured by displacing a parcel
    across each interface with conserved ``s = h + gz`` and total water,
    saturation-adjusting it with `fog_equilibrium`, and comparing

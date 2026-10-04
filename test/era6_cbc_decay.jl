@@ -9,74 +9,46 @@
 # Measured at 32³, three random seeds (the numbers in docs/src/theory/sgs.md):
 #
 #   closure        K98/K42 err  K171/K42 err  rms log10 E (98 / 171)  E(k_c)/CBC (98 / 171)
-#   dynamic           +1.3 %      −15.7 %       0.085 / 0.099           1.23 / 1.00
-#   Smagorinsky .17   +2.5 %      −14.2 %       0.088 / 0.097           1.27 / 1.08
-#   no model         +78.3 %     +121.1 %       0.216 / 0.316           5.25 / 10.4
-#   AMD (C = 0.3)     +9.9 %       −4.7 %       0.097 / 0.091           1.50 / 1.47   (P55-d, #176)
-#   Vreman (c=.0723)  +4.9 %      −12.7 %       0.094 / 0.104           1.38 / 1.22   (P55-d, #176)
+#   dynamic          +13.2 %       −3.6 %       0.100 / 0.084           1.64 / 1.47
+#   Lagrangian (#173) +12.8 %      −2.8 %       0.095 / 0.077           1.61 / 1.43
+#   Smagorinsky .17  +13.2 %       −2.6 %       0.102 / 0.085           1.62 / 1.51
+#   no model         +98.2 %     +160.6 %       0.224 / 0.315           6.67 / 15.2
 #
-# The proposed ±10 % on K(171)/K(42) is NOT met (≈ −15 %); the RMS
-# log-error at station 171 sits on the 0.1-decade target (0.099 for seeds
-# 1–3, 0.101 for 1–6). The code checks out on the exact properties: the
-# solver conserves energy to 0.14 % over the run without viscosity, the
-# initial spectrum is CBC's to 1e-10 in every shell, and K(98)/K(42) is
-# within 2.5 %. The deficit sits in the energy-containing range: LES/CBC
-# is 0.71 and 0.65 in shells 2–3 (k = 0.22–0.34 cm⁻¹, the spectral peak)
-# and 0.78–0.87 in shells 4–8, where CBC's large scales barely decay
-# from 98 to 171 and the 11M box holds only a few dozen modes and
-# none of the k < 2π/11M range; it is also present at 64³, which is
-# further low at all k (examples/validation/cbc_decay.jl: −13 % / −24 %,
-# E(k_c)/CBC ≈ 0.6–0.7, consistent with eddy viscosity on this 2nd-order
-# grid over-dissipating once the cut-off is in the inertial range).
-# Without the evolve-and-rescale start the errors swap (32³: +21 % /
-# −3 %), the random-phase field decaying too slowly for one turnover. So
-# the ±10 % expectation (from spectral-code LES, Kang et al. 2003) does not
-# transfer to this set-up; the cause is not pinned down further here.
-# The target is kept below as @test_broken, the assertion is ±20 %.
-# AMD (#176) is the first closure that meets ±10 % at station 171
-# (−4.7 %), so for it the target is a plain @test; it does so with less
-# small-scale dissipation (E(k_c)/CBC 1.5 against 1.1–1.3), which is
-# consistent with ν_t = 0 in a quarter of the cells (where the resolved
-# strain does not produce subgrid energy) leaving more energy in the
-# large scales.
+# History (P54-c review on #205). The first version of this benchmark
+# missed K(171)/K(42) by −15.7 % (dynamic) and K(98)/K(42) passed at
+# +1.3 %. Part of that was a defect, now fixed: the spectrum diagnostic
+# (and with it the initialiser and `rescale_to_spectrum!`) measured the
+# two-point centre average of the staggered velocity, which damps mode k
+# by Π cos²(k_jΔ/2), and the initialiser divided by that factor. The model
+# was therefore started with 13–22 % more kinetic energy than CBC (×2.1 in
+# the cut-off shell); measured in the solver's own (face) energy the old
+# 32³ run was +12.8 / +13.8 / −6.3 % against CBC at stations 42 / 98 / 171.
+# With the spectrum of the face values the start is exact in the energy
+# the solver carries, and the errors above are the corrected ones.
 #
-# AMD margin at station 98 (maintainer review of #215). AMD's +9.85 % on
-# K(98)/K(42) sits on the proposed ±10 %. Investigated:
-#   * Constant and filter width are Rozema et al. (2015)'s: §II.C, after
-#     their eq. 23, "δx_i = Δx_i" and "C = 0.300 for a central second-order
-#     accurate method" (0.212 fourth order), tuned on this same CBC case
-#     at 64³. C = 1/3 in that paper is the QR model's corrected constant,
-#     not AMD's; 1/12 is the spectral value (Abkar, Bae & Moin 2016). The
-#     CBC grid is isotropic, so δ_i = Δ and the anisotropic definition
-#     cannot enter. No bug, so C stays 0.3.
-#   * The margin is set by C (32³, seeds 1–3, K98 / K171 error):
-#       C = 0.212 +20.9/+5.9 %, 0.25 +15.7/+0.8, 0.30 +9.9/−4.7,
-#       1/3 +6.5/−7.7, 0.40 +0.6/−12.5 %.
-#     No C meets ±10 % at both stations with margin: K98err − K171err is
-#     13–15 points for every C and 16.7 / 17.5 / 17.0 for Smagorinsky,
-#     Vreman and dynamic. That spread is the set-up deficit described
-#     above, common to all closures. C only slides along it, and C = 0.3
-#     lands K98 near the +10 % end.
-#   * Resolution: at 64³ (seeds 1–3) the sign flips for every closure:
-#     AMD 0.3 −11.0/−21.3 %, AMD 1/3 −12.2/−20.8, Smagorinsky
-#     −14.2/−24.3, Vreman −13.9/−25.9. The ±10 % at 32³ is therefore a
-#     property of 32³ on this 2nd-order grid, not a converged quantity.
-#   * Seeds: per-seed K98 error at 32³ for seeds 1–10 is +10.00 % mean,
-#     sd 0.41, and 4 of the 10 seeds are above 10 %. The 10-seed ensemble
-#     is +10.00 % (seeds 1–3: +9.85 %). So `< 0.10` would pass or fail
-#     depending on which seeds are drawn.
-#   * Reference: at 32³ the first shell, k = 0.112 cm⁻¹, lies below CBC's
-#     first tabulated k (0.20 cm⁻¹ at stations 42 and 98). It is
-#     extrapolated, and holding E flat there instead of log-linear
-#     changes the filtered reference K(98)/K(42) by +3.2 % (K171 by
-#     +0.4 %). A 10 % criterion at station 98 is not resolved to better
-#     than about 3 %.
-# The original expectation, AMD within ±10 % at station 98 with the
-# chosen seeds, holds only by chance. It is not physically wrong, but it
-# is not resolvable at this resolution. AMD is therefore asserted at
-# ±13 %: the ±10 % target widened by the 3 % reference uncertainty. The
-# other closures keep ±10 %. The C sweep and the shared station spread
-# are asserted below.
+# What remains (resolution sweep, dynamic, 3 seeds; examples/validation/
+# cbc_decay.jl and sgs.md): K98/K42 +13.2 / +7.5 / +1.8 / −4.9 % and
+# K171/K42 −3.6 / −9.5 / −13.9 / −17.6 % at N = 32 / 40 / 48 / 64. The
+# 32³ station-98 excess is the coarse grid: k_c = 1.8 cm⁻¹ is only 3.6×
+# the station-42 peak and energy piles up at the cut-off (E(k_c)/CBC 1.64,
+# 1.06 at 64³). The station-171 deficit grows with N and is not the time
+# step (cfl 0.25: identical to 0.1 %), the spin-up (1, 2 or 4 cycles:
+# −4.0 / −3.6 / −4.2 %), the seeds (3 vs 8: −3.6 / −3.4 %), the box (22M
+# at 64³ vs 11M at 32³, same Δ: −1.5 vs −3.6 %) or the closure constant
+# (64³: C_s 0.12 / 0.17 / 0.22 all −17 to −18 %). Shells 2–3
+# (k = 0.22–0.34 cm⁻¹) end at 0.62–0.77 of CBC at 171 for EVERY closure
+# (including none), resolution and box tried, which alone costs ≈ 6 % of
+# K171; the rest is a 10–20 % deficit in shells 4–12 at 48³–64³. So the
+# 32³ result below meets ±10 % at station 171 by cancellation of two
+# errors, and the proposed ±10 % holds neither at both stations nor across
+# resolutions. The cause of the residual is not pinned down; see sgs.md.
+#
+# Assertions: K171/K42 within the proposed ±10 % (met at 32³ as measured);
+# K98/K42 within ±20 %, its ±10 % kept as @test_broken. The RMS log error
+# meets the 0.1-decade target at 171 and sits on it at 98 (0.100 / 0.102
+# for seeds 1–3, 0.100 / 0.101 for 1–6), so that assertion is <= 0.11:
+# the former <= 0.10 at 98 was met only with the over-energetic start,
+# whose extra small-scale energy drained K faster and hid the 32³ pile-up.
 
 using Test
 using Aeolus
@@ -103,11 +75,11 @@ include("cbc_benchmark_driver.jl")
     end
 
     res = Dict{Symbol,Any}()
-    t_total = @elapsed for c in (:dynamic, :smagorinsky, :none, :amd, :vreman)
+    t_total = @elapsed for c in (:dynamic, :lagrangian, :smagorinsky, :none, :amd, :vreman)
         res[c] = cbc_benchmark(c; N = 32)
         @info "  " * cbc_summary(String(c), res[c])
     end
-    @info @sprintf("  CBC 32³ (5 closures × 3 seeds): %.1f s", t_total)
+    @info @sprintf("  CBC 32³ (6 closures × 3 seeds): %.1f s", t_total)
 
     @testset "set-up: station-1 spectrum exact in every resolved shell" begin
         r = res[:dynamic]
@@ -119,21 +91,13 @@ include("cbc_benchmark_driver.jl")
         @test r.K_ratio_ref[2] > (urms[3] / urms[1])^2
     end
 
-    @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :smagorinsky, :amd, :vreman)
+    @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :lagrangian, :smagorinsky, :amd, :vreman)
         r = res[c]
-        if c === :amd                                              # +9.85 %; 10 seeds +10.00 %:
-            @test abs(r.K_err[1]) < 0.13                           #   ±10 % + 3 % reference (header)
-        else
-            @test abs(r.K_err[1]) < 0.10                           # K(98)/K(42) within ±10 %
-        end
-        @test abs(r.K_err[2]) < 0.20                               # K(171)/K(42): see header
-        if c === :amd                                              # the proposed target:
-            @test abs(r.K_err[2]) < 0.10                           #   met by AMD (−4.7 %)
-        else
-            @test_broken abs(r.K_err[2]) < 0.10                    #   not by the others
-        end
-        @test r.rms_log_err[1] <= 0.10
-        @test r.rms_log_err[2] <= 0.11                             # 0.099 (seeds 1–3), 0.101 (1–6)
+        @test abs(r.K_err[1]) < 0.20                               # K(98)/K(42): +13.2 %, see header
+        @test_broken abs(r.K_err[1]) < 0.10                        # the proposed target at 98
+        @test abs(r.K_err[2]) < 0.10                               # K(171)/K(42) within ±10 % (32³ only)
+        @test r.rms_log_err[1] <= 0.11                             # 0.100 / 0.102 (seeds 1–3)
+        @test r.rms_log_err[2] <= 0.10
         @test r.E_kc_ratio[1] < 2 && r.E_kc_ratio[2] < 2           # no pile-up
     end
 
@@ -159,6 +123,7 @@ include("cbc_benchmark_driver.jl")
         @test r.K_err[1] > 0.5                                     # far too little decay
         # and the models are distinguishable from it
         @test res[:dynamic].E_kc_ratio[2] < r.E_kc_ratio[2] / 4
+        @test res[:lagrangian].E_kc_ratio[2] < r.E_kc_ratio[2] / 4
     end
 
     @test t_total < 60                                             # CI budget

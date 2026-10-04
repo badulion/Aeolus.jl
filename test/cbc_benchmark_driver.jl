@@ -74,6 +74,9 @@ end
 # closure; the same combination as `step_rk3!`, which on this master does
 # not forward the `eddy_viscosity!` keyword. (After the Era VI closure
 # contract, #167, `step_rk3!(sim, dt; sgs)` replaces this.)
+# A closure object (stateful closures included) goes through `step_rk3!`,
+# which commits its memory once per step (the Era VI contract, #167).
+_cbc_rk3!(sim, dt, kw::NamedTuple{(:sgs,)}) = step_rk3!(sim, dt; sgs = kw.sgs)
 function _cbc_rk3!(sim, dt, kw)
     u0 = copy(sim.u.data); v0 = copy(sim.v.data); w0 = copy(sim.w.data)
     step!(sim, dt; kw...)
@@ -103,7 +106,6 @@ end
 _cbc_closure(::Nothing, mesh) = ((;), (;))
 _cbc_closure(C_s::Real, mesh) = ((C_s = C_s,), (;))
 _cbc_closure(f::Function, mesh) = ((;), (eddy_viscosity! = f,))
-_cbc_closure(c::AbstractSGSClosure, mesh) = ((;), (sgs = c,))
 function _cbc_closure(s::Symbol, mesh)
     s === :none && return _cbc_closure(nothing, mesh)
     s === :smagorinsky && return _cbc_closure(0.17, mesh)
@@ -113,8 +115,12 @@ function _cbc_closure(s::Symbol, mesh)
     end
     s === :amd && return _cbc_closure(AMDClosure(), mesh)          # C = 0.3 (P55-d, #176)
     s === :vreman && return _cbc_closure(VremanClosure(0.17), mesh) # c = 2.5·0.17² (P55-d, #176)
-    throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, :amd, :vreman, a C_s, an AbstractSGSClosure, or f(νt, u, v, w)"))
+    s === :lagrangian && return ((;), (sgs = LagrangianDynamicSmagorinsky(mesh),))
+    throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, :lagrangian, " *
+                        ":amd, :vreman, a C_s, f(νt, u, v, w) or an AbstractSGSClosure"))
 end
+# a closure object: a fresh copy per realisation (its memory must not leak between seeds)
+_cbc_closure(c::AbstractSGSClosure, mesh) = ((;), (sgs = deepcopy(c),))
 
 """
     cbc_benchmark(closure; N = 32, seeds = 1:3, spinup = 2, t_spin, cfl = 0.5) -> NamedTuple
@@ -125,7 +131,11 @@ Run the Comte-Bellot–Corrsin decay at N³ with `closure`:
 * `:smagorinsky` or a number `C_s` — the built-in static Smagorinsky;
 * `:dynamic` — plane-averaged dynamic Smagorinsky (Germano–Lilly);
 * `:amd`, `:vreman` — `AMDClosure()` (C = 0.3), `VremanClosure(0.17)`;
-* an `AbstractSGSClosure` — passed as `step!`'s `sgs`;
+* `:lagrangian` — [`LagrangianDynamicSmagorinsky`](@ref) (Meneveau, Lund &
+  Cabot 1996), stepped with `step_rk3!(sim, dt; sgs)` so its memory is
+  committed once per step;
+* an `AbstractSGSClosure` — any closure of the Era VI contract (copied per
+  realisation), stepped the same way;
 * a function `f(νt, u, v, w)` — any closure accepted by `step!`'s
   `eddy_viscosity!`.
 
