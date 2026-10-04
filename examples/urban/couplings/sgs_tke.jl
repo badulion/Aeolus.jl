@@ -102,12 +102,37 @@ function tke_profile(c::SGSTKE, case)
     return (canopy = lvl(e, 1:kr), free = lvl(e, kr+1:ksp), νt_canopy = lvl(ν, 1:kr))
 end
 
+"""
+    tke_model_stress(c::SGSTKE, case) -> (τ, e)
+
+The subfilter stress the closure implies at the cell centres,
+``τ_{ij} = \\tfrac23 e δ_{ij} − 2ν_t \\bar S_{ij}`` (current ``ν_t``, the
+centred resolved strain), as a `SymmetricTensorField`, and the interior
+``e`` (P56-e, #192: the a-priori metrics and the `II_sgs` output).
+"""
+function tke_model_stress(c::SGSTKE, case)
+    m = case.mesh
+    τ = SymmetricTensorField(m)
+    eddy_viscosity_stress!(τ, _sgs_centre_strain(case), Array(interior_view(case.sim.νt)))
+    e = Array(interior_view(c.closure.e))
+    τ.xx .+= 2 .* e ./ 3; τ.yy .+= 2 .* e ./ 3; τ.zz .+= 2 .* e ./ 3
+    return τ, e
+end
+
 function report(c::SGSTKE, case)
     p = tke_profile(c, case)
     st = tke_statistics(c.closure)
+    τ, e = tke_model_stress(c, case)
     return @sprintf("SGS TKE: mean e canopy %.3f, free stream %.3f m²/s²; mean ν_t canopy %.3f m²/s; %d clips",
-                    p.canopy, p.free, p.νt_canopy, st.clips)
+                    p.canopy, p.free, p.νt_canopy, st.clips) *
+           "\n    SGS TKE " * sgs_apriori_line(sgs_test_filter_metrics(case, τ, e))
 end
+
+# e is the registered tracer :e (written already); II of the implied stress
+output_fields(c::SGSTKE, case) =
+    [OutputField("II_sgs", "1",
+                 "second invariant of the anisotropy of the implied SGS stress 2/3 e I - 2 nu_t S (0 in solids)",
+                 :xyz, cs -> replace(lumley_invariants(first(tke_model_stress(c, cs)))[1], NaN => 0.0))]
 
 function smoke_check(c::SGSTKE, case)
     sim, m = case.sim, case.mesh
@@ -119,6 +144,13 @@ function smoke_check(c::SGSTKE, case)
               "κ_t ≥ ν_t" => all(interior_view(sim.κt) .>= interior_view(sim.νt)),
               "e > 0 in the air (the closure is active)" => maximum(e) > 0,
               "TKE equation advanced once per accepted step" => tke_statistics(cl).steps > 0]
+    # P56-e (#192): the a-priori metrics and the II output
+    τ, ee = tke_model_stress(c, case)
+    a = sgs_test_filter_metrics(case, τ, ee)
+    II = lumley_invariants(τ)[1]
+    push!(checks, "test-filter energy k_test > 0 and e/k_test finite (a priori)" =>
+                      a.k_test > 0 && isfinite(a.ratio) && a.ratio > 0)
+    push!(checks, "implied-stress II ≥ 0 where e > 0" => all(x -> isnan(x) || x >= -1e-12, II))
     if sim isa BoussinesqSimulation
         # Σ P_s V is the resolved-KE sink of the SGS momentum operator
         b = kinetic_energy_budget(sim; sgs = cl)
