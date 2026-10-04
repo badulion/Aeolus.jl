@@ -391,6 +391,142 @@ Further tests:
   7.1 × 10⁻⁴.
 * Rollback is bit for bit, and `step_imex!` refuses the closure.
 
+## Validation against filtered DNS (P56-e, #192)
+
+The TKE closure and the Reynolds-stress closure are compared *a priori in
+time* with filtered DNS, with Smagorinsky (``C_s = 0.17``) and dynamic
+Smagorinsky as baselines (the Lagrangian scale-dependent model, #186, is
+not in this branch's stack). Fixture: `test/fixtures/sgs_validation.jl`;
+CI test: `test/era6_sgs_validation.jl`; example at 96³:
+`examples/sgs/rotating_stratified_decay.jl`.
+
+**Method.** The P56-c DNS of decaying isotropic turbulence (2π box,
+spun up from a fixed seed to ``t_0 = 2``; see
+[LES filtering](les_filtering.md)) is continued from ``t_0`` for two
+turnovers ``T = L/u'`` (``u'`` and the integral scale ``L`` measured at
+``t_0``) in three ways: unchanged; with f-plane rotation
+``f = u'/(\mathrm{Ro}\,L)``, Ro = 0.2; and with a uniform background
+stratification ``N = u'/(\mathrm{Fr}\,L)``, Fr = 0.3. The DNS velocity is
+filtered with the Gaussian of width ``Δ = 4h`` and resampled on the
+four-times-coarser grid by Fourier truncation. The exact subfilter stress
+``τ_{ij} = \overline{u_iu_j} − \bar u_i\bar u_j`` and the subfilter heat
+flux are sampled at the coarse centres by the 2×2×2 mean, which keeps
+``τ`` positive semi-definite (a Fourier resample of ``τ`` does not). Every
+LES (``Δ = 4h``, the same ν, f and N) starts from the filtered DNS at
+``t_0``. The TKE closure gets ``e = ½τ_{kk}`` (`initialize_tke!(c, τ)`) and
+the Reynolds-stress closure gets ``τ_{ij}`` (`initialize_reynolds_stress!(c, τ)`;
+no cell needed a realizability correction).
+
+*Stratification in a periodic box.* The simulations carry
+``θ = θ_0 + θ'`` with ``θ'`` periodic. The background ``Γz``
+(``Γ = N^2θ_0/g``) enters as the body force ``−Γ\bar w`` on ``θ'``,
+through the `body_force!` hook of `step_rk3!`. The face average of θ in
+the w equation and the centre average of w in the θ equation are
+adjoint, so ``K + PE`` falls at every step (asserted). The closures need
+the full θ for ``N^2`` and for the flux ``−K∇θ``, so a fixture wrapper
+hands them θ₀ + Γ(z − z_mid) + θ′, with halos continued across the
+periodic boundary with the jump ``ΓL_z``.
+
+**Measured** (48³ DNS, Re_λ = 32 at ``t_0``; LES 12³; 44 s in CI):
+
+| resolved-KE error at ``t_0 + 2T`` | isotropic | rotating | stratified |
+| :-- | --: | --: | --: |
+| Smagorinsky | +2.2 % | −11.9 % | −0.8 % |
+| dynamic Smagorinsky | +9.2 % | +7.5 % | +11.6 % |
+| TKE | −11.6 % | −22.6 % | +28.4 % |
+| Reynolds stress | −11.7 % | +6.4 % | +15.9 % |
+
+| quantity | filtered DNS | TKE | Reynolds stress |
+| :-- | --: | --: | --: |
+| isotropic: ``e`` at ``t_0 + 2T`` | 0.0443 | 0.125 | 0.125 |
+| stratified: ``⟨τ_{33}⟩/⟨τ_{11}⟩``, mean over ``(t_0, t_0+2T]`` | 0.70 | 1.00 | 0.76 |
+| stratified: pointwise ``ρ(τ_{33}/τ_{11})`` at ``t_0 + T/8`` | — | 0.17 | 0.71 |
+| stratified: Lumley II at ``t_0 + 2T`` | 0.270 | 0.0012 | 0.049 |
+| stratified: mean ``⟨w'θ'⟩_{sgs}`` over ``(t_0, t_0+2T]`` | −0.232 | −0.315 | −0.347 |
+
+* **Rotation.** Rotation slows the DNS decay, as Bardina, Ferziger &
+  Rogallo (1985) found: ``K(t_0+2T)/K(t_0)`` is 0.389 against 0.295
+  without rotation. The Reynolds-stress closure has the smallest KE error
+  of the four closures (6.4 %, against 11.9 % for Smagorinsky and 22.6 %
+  for TKE). It is the only closure that sees the rotation through its own
+  equations. The Coriolis term leaves ``\operatorname{tr}τ`` unchanged in
+  3-D: the same anisotropic stress field advanced at rest with and without
+  Ω has traces that agree to 1e-15, while ``τ_{11}`` differs by 0.28.
+* **Stratification.** The Reynolds-stress closure reproduces the
+  suppressed vertical subfilter stress. The mean ``τ_{33}/τ_{11}`` is 0.76,
+  against 0.70 for the DNS; an eddy viscosity cannot do this (TKE: 1.00).
+  Its II is closer to the DNS's than TKE's, although both are well below
+  the pointwise anisotropy of the exact stress (0.27).
+
+**Expectations of the issue that failed at this Re_λ.** The tests keep
+them as `@test_broken`, with the numbers.
+
+* *Resolved KE within 10 % at ``t_0 + 2T``* holds for both Smagorinsky
+  baselines but not for TKE (−11.6 %) or Reynolds stress (−11.7 %).
+  *TKE: e within 25 % of ½⟨τ_kk⟩* fails too: ``e`` is 2.8 times the DNS
+  value. Both failures have the same cause, which the test asserts. The
+  Deardorff constants (``c_k = 0.1``, and ``c_ε = 0.70`` at ``l = Δ``;
+  Moeng & Wyngaard 1988) are inertial-range values, but ``Δ = 4h ≈ 8η``
+  sits in the near-dissipation range. With the exact ``e`` at ``t_0``:
+  * the production ``c_kΔ\sqrt e\,2⟨\bar S\bar S⟩ = 0.184`` is 1.9 times
+    the exact transfer ``Π = −⟨τ_{ij}\bar S_{ij}⟩ = 0.096``;
+  * the dissipation ``c_εe^{3/2}/Δ = 0.073`` is 0.68 times the viscous
+    dissipation of the subfilter scales, ``2ν(⟨SS⟩ − ⟨\bar S\bar S⟩) = 0.109``.
+
+  So ``e`` grows for a turnover while the DNS's decays, and ``ν_t``
+  follows it. The trace of the Reynolds-stress equation is the same TKE
+  equation, so its ``e`` grows the same way (0.125 at ``2T``).
+* *The τ₃₃/τ₁₁ of the Reynolds-stress closure correlates with the DNS,
+  ρ > 0.5.* Pointwise, this holds while the LES still follows the DNS:
+  0.71 at ``T/8`` and 0.56 at ``T/4``, against 0.17 and 0.20 for TKE. It
+  then falls to 0.02 at ``2T``. Every LES decorrelates pointwise from the
+  DNS within a turnover: the correlation of ``τ_{33}`` itself is 0.15 at
+  ``2T``. The test therefore asserts it at ``T/8`` and ``T/4``, and
+  asserts the mean ratio over the whole run.
+* *The Reynolds-stress heat flux is closer to the DNS than TKE's.* Both
+  are within 2×, but TKE is closer (1.35× against 1.49×). The DNS flux
+  oscillates with the buoyancy period ``2π/N = 1.9T`` and is
+  counter-gradient for about a third of the run, reaching +1.4. No
+  down-gradient closure follows this. The Reynolds-stress ``e`` also
+  decays more slowly (0.029 against 0.015 at ``2T``), which makes its flux
+  larger.
+
+**96³** (the example, Re_λ = 64, LES 24³, one run):
+
+| 96³, resolved-KE error at ``t_0 + 2T`` | isotropic | rotating | stratified | rotating + stratified |
+| :-- | --: | --: | --: | --: |
+| Smagorinsky | −5.1 % | −7.4 % | −6.1 % | −10.2 % |
+| dynamic Smagorinsky | +1.0 % | +2.6 % | +3.4 % | +3.6 % |
+| TKE | −13.6 % | −14.0 % | +9.8 % | +5.5 % |
+| Reynolds stress | −22.0 % | +1.4 % | −0.8 % | +5.7 % |
+| DNS ``K(t_0+2T)/K(t_0)`` | 0.373 | 0.461 | 0.295 | 0.382 |
+
+At 96³ (``u' = 0.864``, ``L = 1.208``, ``T = 1.398``; DNS 68 s spin-up
+and 60–83 s per continuation, LES 0.4–5 s):
+
+* Rotation again slows the DNS decay (0.461 against 0.373). The
+  Reynolds-stress closure has the smallest rotating KE error (1.4 %).
+* In the stratified case the mean ``τ_{33}/τ_{11}`` is 0.80 for the DNS,
+  0.75 for the Reynolds-stress closure and 1.005 for TKE.
+* The isotropic ``e`` at ``2T`` is still too large: DNS 0.050, TKE 0.108,
+  Reynolds stress 0.116. The isotropic KE errors of TKE (−13.6 %) and
+  Reynolds stress (−22.0 %) still miss 10 %. ``Δ/η`` is the same as at
+  48³ (``ν ∝ N^{−4/3}``), so the near-dissipation-range argument above
+  applies unchanged.
+* The heat-flux expectation fails more clearly here. The mean DNS
+  subfilter flux is −0.086, against −0.374 (TKE) and −0.361 (Reynolds
+  stress), so both closures are outside 2×. At this Re the DNS flux
+  spends more of the run counter-gradient.
+
+The figure the example writes (`examples/sgs/output/rotating_stratified_decay_96.svg`)
+has one row per case. The panels are the resolved KE, the SGS energy,
+and the Lumley-triangle trajectory ``(ξ, η) = ((III/6)^{1/3}, (II/6)^{1/2})``
+of the mean invariants. The exact stress sits close to the axisymmetric
+(rod-like) boundary at ``η ≈ 0.21`` and hardly moves. The Reynolds-stress
+closure starts there, because it is seeded with the exact ``τ``, and then
+relaxes towards isotropy along that boundary. The TKE closure's implied
+stress starts much closer to the isotropic corner.
+
 ## Berlin coupling
 
 `examples/urban/couplings/sgs_tke.jl`, provider `:tke` of the `:sgs` slot
@@ -399,8 +535,13 @@ the advected tracer `:e`, the wall cap from the building mask, and the
 surface value from the MOST friction velocity. The Reynolds-stress closure
 is the option `:reynolds_stress` (`examples/urban/couplings/sgs_reynolds_stress.jl`):
 the six stresses are the advected tracers `:tau11 … :tau23`, with the same
-wall cap and an LRR-IP surface value. Measured numbers are in the Berlin
-design page.
+wall cap and an LRR-IP surface value. Both providers report a-priori
+metrics at the test-filter scale (P56-e): the closure's subfilter energy
+against the resolved energy between the grid and the 3-cell box test
+filter, ``k_{test} = ½⟨L_{kk}⟩`` with ``L_{ij}`` the resolved (Germano)
+stress, the correlation of the model stress with ``L_{ij}``, and the
+median Lumley II of both. They also write ``e`` and ``II`` (`II_sgs`) to
+the NetCDF file. Measured numbers are in the Berlin design page.
 
 ## References
 
@@ -439,6 +580,20 @@ design page.
   * Tavoularis, S. & Corrsin, S. (1981), *Experiments in nearly
     homogeneous turbulent shear flow with a uniform mean temperature
     gradient. Part 1*, J. Fluid Mech. 104, 311–347.
+  * Bardina, J., Ferziger, J. H. & Rogallo, R. S. (1985), *Effect of
+    rotation on isotropic turbulence: computation and modelling*, J.
+    Fluid Mech. 154, 321–336.
+  * Riley, J. J., Metcalfe, R. W. & Weissman, M. A. (1981), *Direct
+    numerical simulations of homogeneous turbulence in density-stratified
+    fluids*, AIP Conf. Proc. 76, 79–112.
+  * Germano, M., Piomelli, U., Moin, P. & Cabot, W. H. (1991), *A dynamic
+    subgrid-scale eddy viscosity model*, Phys. Fluids A 3, 1760–1765.
+  * Liu, S., Meneveau, C. & Katz, J. (1994), *On the properties of
+    similarity subgrid-scale models as deduced from measurements in a
+    turbulent jet*, J. Fluid Mech. 275, 83–119.
+  * Martinuzzi, R. & Tropea, C. (1993), *The flow around surface-mounted,
+    prismatic obstacles placed in a fully developed channel flow*, J.
+    Fluids Eng. 115, 85–92.
   * Maronga, B. et al. (2015), *The Parallelized Large-Eddy Simulation
     Model (PALM) version 4.0*, Geosci. Model Dev. 8, 2515–2551 (the TKE
     closure as the urban-LES default).
