@@ -251,3 +251,4 @@ SigmaModel(C_σ::Real = 1.35; Pr_t = nothing) = SigmaModel(C_σ, Pr_t)
 
 sgs_viscosity!(νt, c::SigmaModel, sim) = compute_sigma_νt!(νt, sim.u, sim.v, sim.w, c.C_σ)
 turbulent_prandtl(c::SigmaModel, sim) = _prandtl(c.Pr_t, sim)
+laminar_consistent(::SigmaModel) = true      # zero in shear, rotation, 2-D flow (P59-e)

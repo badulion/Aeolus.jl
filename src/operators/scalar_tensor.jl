@@ -273,6 +273,7 @@ function IsentropicDiffusion(inner::AbstractSGSClosure, g::RegularGrid; slope_ma
 end
 
 sgs_fields(c::IsentropicDiffusion, sim) = sgs_fields(c.inner, sim)
+laminar_consistent(c::IsentropicDiffusion) = laminar_consistent(c.inner)
 function sgs_coefficients!(f::SGSFields, c::IsentropicDiffusion, sim)
     sgs_coefficients!(f, c.inner, sim)
     κv = if c.diapycnal === nothing
