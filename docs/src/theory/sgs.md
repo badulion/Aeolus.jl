@@ -417,8 +417,26 @@ At 32³ (same set-up, seed 1) ``Φ_m`` at ``z/H = k/32``, ``k = 1 … 8`` is
   these filters, "above 0.2 H" needs ``N ≳ 50``. The expectation assumed
   a resolution-independent height, and it is kept as a broken test.
 
-Spectra and the CBC decay: see the half-channel example and the CBC
-table below.
+**Spectra** (`examples/validation/neutral_abl.jl`, seed 1, averaged over
+18-30 ``H/u_*``; slopes are least-squares fits in log-log):
+
+| run | ``Φ_m``, ``0.05 ≤ z/H ≤ 0.3`` | ``E_{11}`` slope near the wall, ``k_1H ∈ [1, 6]`` | slope at ``z/H ≈ 0.24``, ``k_1H ∈ [4, N/3]`` |
+| :-- | :-- | :-- | --: |
+| Smagorinsky 0.1, 32³ | [0.965, 1.589] | −2.01 (``z/H`` 0.047), −1.28 (0.109) | −5.14 |
+| LASD, 32³ | [0.935, 1.133] | −0.66 (0.047), −0.79 (0.109) | −4.27 |
+| LASD, 48³ | [0.961, 1.094] | −0.43 (0.052), −0.61 (0.094) | −3.48 |
+
+``Φ_m`` approaches 1 as the grid is refined. Near the wall LASD gives the
+shallow production-range spectrum, where Bou-Zeid et al. (2005) expect
+``k_1^{-1}``; the Smagorinsky overshoot steepens it. The
+``k_1^{-5/3}`` range at ``z/H ≈ 0.25`` (``k_1 z > 1``, so ``k_1H > 4``)
+is **not** reproduced at 32³-48³. Those wavelengths are below 8-12 ``Δx``,
+where the second-order scheme and the closure damp. The fitted slope
+steepens on coarser grids (−3.5 at 48³, −4.3 at 32³, −5.1 for
+Smagorinsky at 32³), which points to numerical dissipation rather than
+to the closure.
+
+The CBC decay with LASD is in the CBC table below.
 
 ## Closure contract
 
