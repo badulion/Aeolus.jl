@@ -1469,7 +1469,7 @@ Option `stability`: `:brown` (`BrownEtAl1994`, the LEM / MONC functions,
 default), `:lilly`, `:short_tail`, `:long_tail`, `:most`
 (`MOSTConsistent` with the surface exchange's BDBH functions; the smoke
 variant). `budget!` is a no-op: the coupling changes no state. P59-c
-(#180) extends this addon with the transition diagnostics.
+(#180) extends this addon with the transition diagnostics (below).
 
 **Measured** (`:smoke`, after its 12 steps, noon, capping inversion at
 60 m, `Γ = 3 K km⁻¹` above). In the first two levels above the
@@ -1485,6 +1485,47 @@ lapse of the initial state (``q_v ∝ e^{-z/800\,{\rm m}}``) makes
 Cost per evaluation (compiled): 0.15 ms on the 16³ smoke grid
 (`:most`: 0.89 ms, a root find per cell), 3.6 ms on the 64 × 64 × 32
 flagship grid, once per output record (every 1800 s).
+
+### Transition diagnostics (#180)
+
+P59-c extends the same addon (there is no second diagnostic addon;
+`modules_used = (:TurbulenceStability, :Transition)`) with the
+laminar/turbulent diagnostics of `Aeolus.Transition` (see
+[the theory page](../theory/transition.md)), written as `(z, time)`
+profiles at the output cadence:
+
+* `gamma_turb` — the turbulent fraction ``γ(z)`` of the fluid cells,
+  `turbulent_indicator!` with ``|ω'|/⟨|ω|⟩ >`` `gamma_threshold`
+  (option, default 0.2) and the plane normalisation
+  (`gamma_normalization = :plane`, or `:volume`); solid cells are never
+  turbulent;
+* `Ri_supercritical_fraction` — the fraction of fluid cells with
+  ``Ri_g > 1/4`` (`supercritical_fraction` of the `gradient_richardson!`
+  field above: Transition does not define a Richardson number);
+* `Re_grid` — ``|U_h| Δ/(ν + ⟨ν_t⟩)`` (`grid_reynolds_number`) with the
+  plane-mean horizontal wind speed, ``Δ = (Δx Δy Δz)^{1/3}`` and `cfg.ν`.
+
+The log line adds canopy (levels with buildings) and free-stream (above
+the highest roof + 1, below the sponge) means
+(`transition_summary`). `smoke_check` adds ``0 ≤ γ ≤ 1``, no turbulent
+solid cell, the supercritical fraction in [0, 1] and a finite positive
+grid Reynolds number.
+
+**Measured** (`:smoke`, after 12 steps). Summer noon: ``γ`` = 0.74–0.99
+on the nine canopy levels (mean 0.871), 0.02 at z = 59 m and 0 above the
+60 m inversion, where the initial state is still laminar (free-stream
+mean 0.438 because it includes the 53 m and 59 m levels); the
+supercritical fraction is 0 in the canopy and 0.61 / 0.10 in the two
+levels above the inversion (domain mean 0.044). Winter (`:winter`
+initial state) at 06:00: domain-mean supercritical fraction 0.244, with
+0.88–1.0 in the four levels from 53 to 72 m — drier air, so the vapour
+lapse removes less of the inversion's ``N^2``. Grid Reynolds number at
+``ν = 2`` m² s⁻¹: 4.0–5.7 on the smoke grid (Δ = 15.6 m × 15.6 m × 6.25 m);
+on the 64 × 64 × 32 flagship grid after 60 steps it peaks at 5.7 (2.4 at
+the ground, 0.14 at the top) — below the "about 8" estimated in the
+issue. Cost per evaluation of the whole addon: 0.28–0.55 ms on the smoke
+grid and 7.0 ms on the flagship grid (3.6 ms before #180), once per
+output record.
 
 ## Cost of per-facet surfaces (#138)
 

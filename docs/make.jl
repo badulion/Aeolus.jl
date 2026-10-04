@@ -141,6 +141,7 @@ makedocs(
                 "Overview"                     => "api/era6.md",
                 "LargeScaleForcing"            => "api/era6/large_scale_forcing.md",
                 "TurbulenceStability"          => "api/era6/turbulence_stability.md",
+                "Transition"                   => "api/era6/transition.md",
                 "WallModels"                   => "api/era6/wall_models.md",
             ],
         ],

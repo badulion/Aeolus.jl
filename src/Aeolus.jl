@@ -83,6 +83,7 @@ include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 # Era VI — high-fidelity turbulence closure (Phases 54-59)
 include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wall-stress operator
 include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, advective, T_s(t)
+include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 
 using .Grids
 using .Fields
@@ -146,6 +147,7 @@ using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 
 # --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
 using .TurbulenceStability         # Phase 58 stability contract (#170)
+using .Transition                  # Phase 59 transition diagnostics (#180)
 using .WallModels                  # Phase 57 (#169)
 using .LargeScaleForcing           # Era VI, Phase 58 (#171)
 
@@ -939,6 +941,13 @@ export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_pran
 export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # Operators' pointwise fields of the contract.
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
+
+# Phase 59 — Transition (#180): turbulent fraction γ(z), intermittency,
+# Ri_f / Re_b / V_TKE diagnostics, growth-rate fit. Ri_g is P58-a's.
+export turbulent_fraction, turbulent_indicator!, laminar_mask!,
+       intermittency_factor, flux_richardson, buoyancy_reynolds,
+       turbulence_velocity_scale, growth_rate, supercritical_fraction,
+       grid_reynolds_number
 
 # Phase 57 — wall models (#169): equilibrium wall laws and the implicit
 # wall-stress operator. `friction_velocity` / `wall_stress` do not collide
