@@ -21,6 +21,7 @@ tested at are in
 - [Large-scale forcing — LargeScaleForcing](era6/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; [theory](../theory/large_scale_forcing.md))
 - Walls — `NoSlipWall` and the resolved wall stress (P59-a, #172; below; [theory](../theory/transition.md))
 - AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`
+- [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182; [theory](../theory/sgs_tke.md))
 
 ## Shared contract — SGS closures (P54-a)
 

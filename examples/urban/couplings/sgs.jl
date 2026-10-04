@@ -8,9 +8,12 @@
 # added where the built-in Smagorinsky adds them; its memory is committed
 # once per accepted step.
 #
-#   :smagorinsky (default) Operators.StaticSmagorinsky(cfg.C_s) — the
+#   :tke         (default, couplings/sgs_tke.jl) PrognosticSGS.TKEClosure —
+#                the Deardorff/Moeng prognostic SGS TKE closure (#182).
+#   :smagorinsky Operators.StaticSmagorinsky(cfg.C_s) — the
 #                Smagorinsky–Lilly closure, C_s = cfg.C_s (0.1); bit for
-#                bit the built-in closure of the cores.
+#                bit the built-in closure of the cores (the default before
+#                #182).
 #   :dynamic     the Germano–Lilly dynamic coefficient from the resolved
 #                flow, obstacle aware (the buildings' solid mask, #173).
 #                Default averaging :lagrangian —
@@ -24,10 +27,15 @@
 #                closure with cfg.C_s, which reproduces the default run
 #                bit for bit (the hook is the test).
 #
-# Every provider runs its closure with the stress-form momentum divergence,
+# Every eddy-viscosity provider (:smagorinsky, :dynamic, :mlsgs, :amd,
+# :vreman) runs its closure with the stress-form momentum divergence,
 # `sgs_stress = :symmetric` (∂ⱼ(2νᵢⱼSᵢⱼ), P55-b #175; option `stress`,
 # `:laplacian` for the pre-Era-VI ∂ⱼ(νₜ∂ⱼuᵢ)), through the one helper
-# `sgs_step_options`. The cores' default stays `:laplacian`; the flagship
+# `sgs_step_options`. The :tke provider (couplings/sgs_tke.jl) keeps the
+# Laplacian form: its shear production is built as the exact discrete dual
+# of that operator (PrognosticSGS.shear_production!), which is what makes
+# the resolved-KE sink and the TKE source agree to round-off; with the
+# stress form the two would no longer balance. The cores' default stays `:laplacian`; the flagship
 # opts in. νh = νv (the closures are isotropic) until P55-e (#187).
 #
 # The scalar (θ) SGS flux goes through the closure contract's diagonal
@@ -144,7 +152,8 @@ end
 """
     SGSSmagorinsky
 
-Slot `:sgs`, provider `:smagorinsky` (default): `StaticSmagorinsky(C_s)`
+Slot `:sgs`, provider `:smagorinsky` (the default before #182; now
+`:tke`, couplings/sgs_tke.jl): `StaticSmagorinsky(C_s)`
 with the core's `C_s` (`cfg.C_s`) and turbulent Prandtl number, passed as
 the `sgs` of every step — the coefficients of the closure the cores run
 built in, bit for bit — with the stress-form momentum divergence (option
@@ -158,6 +167,7 @@ end
 coupling_name(::Type{<:SGSSmagorinsky}) = :sgs_smagorinsky
 slot(::Type{<:SGSSmagorinsky}) = :sgs
 provider(::Type{<:SGSSmagorinsky}) = :smagorinsky
+is_default(::Type{<:SGSSmagorinsky}) = false
 modules_used(::Type{<:SGSSmagorinsky}) = (:Simulations, :Operators)
 default_options(::Type{<:SGSSmagorinsky}) = (; SGS_STRESS_DEFAULT..., SGS_SCALAR_DEFAULT...)
 build(::Type{<:SGSSmagorinsky}, case, o) =

@@ -80,10 +80,12 @@ include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
 include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
 include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 
-# Era VI — high-fidelity turbulence closure (Phases 54-59)
+# Era VI — high-fidelity turbulence closure (Phases 54-60)
+# (TurbulenceStability is included before Operators, above.)
 include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wall-stress operator
 include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, advective, T_s(t)
 include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
+include("PrognosticSGS.jl")        # Phase 56 Deardorff prognostic SGS TKE (#182)
 
 using .Grids
 using .Fields
@@ -150,6 +152,7 @@ using .TurbulenceStability         # Phase 58 stability contract (#170)
 using .Transition                  # Phase 59 transition diagnostics (#180)
 using .WallModels                  # Phase 57 (#169)
 using .LargeScaleForcing           # Era VI, Phase 58 (#171)
+using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -206,7 +209,7 @@ export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_attributes, nc_nrecords
 export apply_kessler_step!, KESSLER_N0, kessler_rain_number, kessler_fall_speed
 export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
-       implicit_ibm_correction!
+       implicit_ibm_correction!, wall_distance, first_level_cells   # + P56-b (#182)
 export AbstractPartition, SerialPartition, PencilPartition,
        nranks, is_serial, exchange_halos_distributed!
 export NestSpec, apply_one_way_forcing!, apply_two_way_feedback!
@@ -945,6 +948,12 @@ export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_pran
 export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # Operators' pointwise fields of the contract.
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
+
+# Phase 56 — PrognosticSGS (#182): the Deardorff 1.5-order prognostic SGS TKE
+# closure (an AbstractSGSClosure) and its pointwise physics.
+export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_value,
+       tke_critical_richardson, tke_equilibrium, dual_strain!, shear_production!,
+       buoyancy_production!, tke_budget, initialize_tke!, tke_statistics
 
 # Phase 59 — Transition (#180): turbulent fraction γ(z), intermittency,
 # Ri_f / Re_b / V_TKE diagnostics, growth-rate fit. Ri_g is P58-a's.

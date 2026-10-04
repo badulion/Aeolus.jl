@@ -988,6 +988,7 @@ end
     include("era6_amd_vreman.jl")        # P55-d: AMD and Vreman closures (#176)
     include("era6_apriori_sgs.jl")       # Phase 56  a-priori SGS stress, filtered-DNS fixture (#178)
     include("era6_transition_kh.jl")       # Phase 59 Transition diagnostics, KH / Miles-Howard (#180)
+    include("era6_tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
 end
 
 # =========================================================================

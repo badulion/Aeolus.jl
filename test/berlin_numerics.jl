@@ -3,8 +3,8 @@
 #
 #   * the multigrid-preconditioned CG pressure solve gives the cosine-FFT
 #     result to 1e-8 after 100 steps and keeps the flow divergence-free;
-#   * MLSGS with the Smagorinsky closure reproduces the default run bit
-#     for bit (the eddy_viscosity! hook of step! adds its terms where the
+#   * MLSGS with the Smagorinsky closure reproduces the `:smagorinsky` run
+#     (the default provider before #182) bit for bit (the eddy_viscosity! hook of step! adds its terms where the
 #     built-in closure does);
 #   * the SGS option scalar_tensor = :isentropic (P55-c, #181): with the
 #     closure's own κv (= κh) the tensor is κh I and the run is the default
@@ -31,11 +31,14 @@ end
 
 @testset "Berlin numerics swap-ins (#132)" begin
     N = 100
-    ref = _run_smoke(N)
+    # the Smagorinsky provider (the default before #182): the MLSGS check
+    # below is its bit-for-bit equivalence, and the MG-CG numbers were
+    # measured with it; the default :tke provider is run by the smoke test
+    ref = _run_smoke(N; sgs = :smagorinsky)
     @test ref.sim.solver isa CosineFFTPoissonSolver
 
     @testset "MG-preconditioned CG: FFT result to 1e-8 after $N steps, divergence-free" begin
-        mg = _run_smoke(N; pressure_solver = :mg_cg)
+        mg = _run_smoke(N; pressure_solver = :mg_cg, sgs = :smagorinsky)
         @test mg.sim.solver isa MGPreconditionedCG
         d = Dict(f => maximum(abs, interior_view(getfield(mg.sim, f)) .- interior_view(getfield(ref.sim, f)))
                  for f in (:u, :v, :w, :θ))
@@ -61,6 +64,7 @@ end
     @testset "SGS scalar_tensor = :isentropic (P55-c, #181)" begin
         function run_opts(o)
             cfg = BC.CaseConfig(:smoke; verbose = false, nsteps = N,
+                                physics = Dict{Symbol,Any}(:sgs => :smagorinsky),
                                 options = Dict{Symbol,Any}(:sgs_smagorinsky => o))
             case = BC.build_case(cfg; io = devnull)
             BC.run_case!(case)

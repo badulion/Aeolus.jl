@@ -15,6 +15,7 @@
 #   no model         +98.2 %     +160.6 %       0.224 / 0.315           6.67 / 15.2
 #   AMD (C = 0.3)    +20.0 %       +7.7 %       0.113 / 0.095           1.86 / 1.94   (#176)
 #   Vreman (c=.0723) +16.1 %       −0.3 %       0.109 / 0.093           1.77 / 1.72   (#176)
+#   tke (P56-b)       −9.4 %      −26.9 %       0.065 / 0.120           0.81 / 0.38   (#182)
 #
 # History (P54-c review on #205). The first version of this benchmark
 # missed K(171)/K(42) by −15.7 % (dynamic) and K(98)/K(42) passed at
@@ -185,4 +186,31 @@ include("cbc_benchmark_driver.jl")
     end
 
     @test t_total < 60                                             # CI budget
+
+    # P56-b (#182): the Deardorff/Moeng prognostic SGS TKE closure. Measured
+    # at 32³, seeds 1–3, with the corrected (face-spectrum, #205) set-up:
+    # K98/K42 −9.4 %, K171/K42 −26.9 %, RMS log10 E 0.065 / 0.120,
+    # E(k_c)/CBC 0.81 / 0.38 — over-dissipative. (Before the #205 spectrum
+    # fix, which started every closure with 13–22 % too much energy, it was
+    # −18.5 / −34.4 %; the assertions below were set then and still hold.)
+    # Two causes: (i) its neutral equilibrium is Smagorinsky with
+    # C_s = c_k^{3/4} c_ε^{-1/4} = 0.194, not 0.17 (static Smagorinsky at
+    # 0.194 gives +3.2 % / −10.1 % on the corrected set-up, against +13.2 /
+    # −2.6 % at 0.17); (ii) e lags the fast decay of the grid turbulence:
+    # its relaxation time l/(c_ε √e) ≈ 0.2 s is close to the 0.28 s between
+    # stations (on the pre-fix set-up the mean e was 1.8–2.6 × its local
+    # equilibrium from station 98 on, so ν_t was 1.3–1.6 × too large). No
+    # target was set for TKE in #182; the test pins the measured behaviour
+    # (no pile-up, too much decay, bounded).
+    @testset "tke (P56-b): measured against CBC" begin
+        t_tke = @elapsed (r = cbc_benchmark(:tke; N = 32))
+        @info "  " * cbc_summary("tke", r)
+        @test r.E_les[1][2:17] ≈ r.E_ref[1][2:17] rtol = 1e-10     # same initial spectrum
+        @test -0.30 < r.K_err[1] < 0                               # −9.4 %
+        @test -0.45 < r.K_err[2] < 0                               # −26.9 %
+        @test r.E_kc_ratio[1] < 1 && r.E_kc_ratio[2] < 1           # no pile-up (0.81 / 0.38)
+        @test r.rms_log_err[1] <= 0.10                             # 0.065
+        @test r.E_kc_ratio[2] < res[:none].E_kc_ratio[2] / 4       # distinguishable from no model
+        @test t_tke < 30
+    end
 end

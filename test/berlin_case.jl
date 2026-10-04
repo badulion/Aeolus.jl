@@ -62,13 +62,14 @@ const BC = Main.BerlinCase
         # the default couplings: the initial ones of the refactor (#129
         # replaced the slab and the soil adapter by the surface exchange
         # and the soil ground), with #130's radiation and #170's turbulence
-        # diagnostics
+        # diagnostics; #182 made the prognostic TKE (:sgs_tke) the default
+        # SGS provider in place of :sgs_smagorinsky
         @test Set(BC.coupling_name.(sel)) ==
               Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_exchange,
                    :ground_soil, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :scalar_advection,
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
                    :column_radiation, :cloud_shadow, :traffic_heat, :moist_buoyancy,
-                   :pressure_fft, :sgs_smagorinsky, :momentum_centered,
+                   :pressure_fft, :sgs_tke, :momentum_centered,
                    :core_boussinesq, :timestep_adaptive, :turbulence_diag,
                    :wall_model_facades])                       # facade wall model (#179)
         # every coupling names only real Aeolus submodules
@@ -121,9 +122,10 @@ const BC = Main.BerlinCase
             (:surface_update, :aq_chem),              # r_a / v_d refresh (#135)
             (:column_tendency, :column_radiation),
             (:output, :turbulence_diag)]
-        # the chemistry species are advected tracers since #135
-        @test [t.name for t in case.tracers] == [:qv, :ql, :qr, :NO, :NO2, :O3, :VOC, :HNO3, :pollutant]
-        @test [t.name for t in case.tracers if t.advect] == [:qv, :ql, :NO, :NO2, :O3, :VOC, :HNO3]
+        # the chemistry species are advected tracers since #135, the SGS
+        # TKE of the default :sgs => :tke provider since #182
+        @test [t.name for t in case.tracers] == [:qv, :ql, :qr, :NO, :NO2, :O3, :VOC, :HNO3, :pollutant, :e]
+        @test [t.name for t in case.tracers if t.advect] == [:qv, :ql, :NO, :NO2, :O3, :VOC, :HNO3, :e]
     end
 
     @testset "tracer registry: ensure_tracer! is idempotent and ORs the flags" begin
@@ -152,9 +154,12 @@ const BC = Main.BerlinCase
     @testset "transport stage: flux-form conservation; the stale-halo leak it fixes (#132)" begin
         # The leak is a property of step! (it leaves the velocity halos at
         # the predictor values), so this uses the fixed stepper: the
-        # adaptive default refreshes the halos in its CFL diagnostics.
+        # adaptive default refreshes the halos in its CFL diagnostics. And
+        # the Smagorinsky closure: the default TKE closure (#182) refreshes
+        # them too, when it commits its sources after the projection.
         local case = BC.build_case(BC.CaseConfig(:smoke; verbose = false,
-                                                 physics = Dict{Symbol,Any}(:timestepper => :fixed));
+                                                 physics = Dict{Symbol,Any}(:timestepper => :fixed,
+                                                                            :sgs => :smagorinsky));
                                    io = devnull)
         # give the flow some structure first
         for _ in 1:4

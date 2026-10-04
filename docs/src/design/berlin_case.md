@@ -212,6 +212,9 @@ needs.
   The `:transport` stage advects every tracer with `advect = true` in
   registration order, and every tracer with `output = true` is written to
   the NetCDF file. The core registers `qv`, `ql` (advected) and `qr`.
+  A tracer diffuses with the closure's `κt` unless it names its own
+  diffusivity (`ensure_tracer!(…; diffusivity = case -> field)`): the SGS
+  TKE `e` of the `:tke` provider diffuses with `2ν_t` (#182).
 * **Geometry** (`case.geom`): mask, surface classes, scene, view factors.
   Couplings may add classes at `init!` (the glass coupling does). The
   scene is built with `class_map = scene_class_map(sfc)`, so the ground
@@ -303,7 +306,7 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`); each with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
+| `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`); all but `:tke` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177) |
 
@@ -384,7 +387,9 @@ unmasked.
   6.1e-10 m s⁻¹ in u, v, w and 2.1e-9 K in θ, with max|∇·u| = 1.9e-13
   s⁻¹ (`test/berlin_numerics.jl`). They are here for the stretched-grid
   and cut-cell solver work (#151, #152), not for speed.
-* **SGS.** `:dynamic` is the Germano–Lilly coefficient, test-filter
+* **SGS.** `:tke` (default since #182) is described in
+  [Prognostic SGS TKE (#182)](#Prognostic-SGS-TKE-(#182)) below.
+  `:dynamic` is the Germano–Lilly coefficient, test-filter
   ratio 3, with the buildings' solid mask (`case.geom.sm.mask`): ν_t = 0
   in buildings, and the test filter and the averages see air cells only
   (#173). The default `averaging = :lagrangian` is
@@ -407,7 +412,7 @@ unmasked.
   plane model, because it runs the Germano kernel once per step instead
   of once per substage. `:mlsgs` wraps `ML.MLSGS`; with
   the default `fn` (the Smagorinsky closure with `cfg.C_s`) the run is
-  bit for bit the default run (tested over 100 smoke steps). There is no
+  bit for bit the `:smagorinsky` run (tested over 100 smoke steps). There is no
   trained model.
   `:amd` and `:vreman` (`couplings/sgs_amd_vreman.jl`, #176) are the
   anisotropic minimum-dissipation and Vreman closures (see [the SGS
@@ -1538,6 +1543,70 @@ the ground, 0.14 at the top) — below the "about 8" estimated in the
 issue. Cost per evaluation of the whole addon: 0.28–0.55 ms on the smoke
 grid and 7.0 ms on the flagship grid (3.6 ms before #180), once per
 output record.
+
+## Prognostic SGS TKE (#182)
+
+`sgs_tke` (`couplings/sgs_tke.jl`) is the `:tke` provider of the `:sgs`
+slot and its default: `PrognosticSGS.TKEClosure`, the Deardorff (1980) /
+Moeng (1984) closure (see [the theory page](../theory/sgs_tke.md)). It is
+PALM's urban-LES default and the only closure here whose mixing responds
+prognostically to stratification (its ``0.76\sqrt e/N`` length scale; no
+stability function is applied on top of it).
+
+* The closure is the `sgs` of every dynamics step, so the cores evaluate
+  ``ν_t = c_k l\sqrt e``, ``κ_t = (1 + 2l/Δ)ν_t`` from the committed ``e``
+  and commit the sources (shear production, the exact dual of the SGS
+  momentum operator; buoyancy production with the ``θ_v`` of the `qv`
+  tracer; the implicit sinks) once per accepted step; `step_adaptive!`
+  rolls ``e`` back with the state.
+* ``e`` is the tracer `:e` (`advect = true`, `positive = true`, m² s⁻²,
+  written to the NetCDF file). The `:transport` stage advects it with the
+  case's scheme and limiter and diffuses it with ``2ν_t`` (its
+  `diffusivity`), mask-aware; the closure runs with `transport = false`.
+* ``l`` is capped at ``κ`` × `IBM.wall_distance` of the building mask and
+  the floor (option `wall_cap = true`), ``c_ε`` gets Moeng's 3.9 above the
+  floor and the roofs (`IBM.first_level_cells`), ``e = 0`` inside the
+  buildings.
+* The first air cell of each column (`bus.k_air`) holds
+  ``e_s = u_*^2/\sqrt{c_k c_ε}`` with the friction velocity of the MOST
+  surface exchange (`bus.u_star`, option `surface = true`).
+* `init!` seeds ``e`` with the local equilibrium of the initial flow, at
+  least `e_min = 1e-4` m² s⁻² (``e = 0`` is a fixed point).
+* `budget!` books nothing: ``e`` carries no surface energy or water (its
+  dissipation heating is neglected, as with every closure here).
+* `smoke_check`: ``e ≥ 0``, ``ν_t ≥ 0``, ``e = 0`` in the buildings,
+  ``κ_t ≥ ν_t``, and (Boussinesq core) ``Σ P_s V`` equal to the SGS sink of
+  `kinetic_energy_budget(sim; sgs = closure)` to 1e-8. The smoke variant
+  runs it without the wall cap and the surface value.
+
+The default changed from `:smagorinsky` to `:tke` because the coverage
+ratchet requires a new src module to run by default and no frozen list
+may grow; whether it stays the default is decided at review (#46).
+Berlin tests that pinned the Smagorinsky default now select
+`:smagorinsky` explicitly where they test its bit-for-bit equivalences
+(MLSGS, the commit counter, the stale-halo demonstration).
+
+**Measured** (summer flagship, 64 × 64 × 32, adaptive step, 30 min from
+12:00 and from 02:00 local, `:tke` vs `:smagorinsky` with `cfg.C_s = 0.1`;
+"street canopy" is the fluid cells of levels 1–3, 0–18.75 m):
+
+| | noon `:tke` | noon `:smagorinsky` | 02:00 `:tke` | 02:00 `:smagorinsky` |
+| :-- | --: | --: | --: | --: |
+| street-canopy mean ``e`` (m² s⁻²) | 0.0110 | — | 0.0011 | — |
+| street-canopy mean ``ν_t`` (m² s⁻¹) | 0.0275 | 0.0326 | 0.0086 | 0.0174 |
+| domain mean ``ν_t`` (m² s⁻¹) | 0.0756 | 0.0220 | 0.0412 | 0.0118 |
+| whole step (ms) | 161.6 | 131.9 | 131.9 | 116.1 |
+
+At night the street-canopy ``ν_t`` is 51 % below Smagorinsky's (16 % at
+noon) and the canopy ``e`` is a tenth of its noon value: the stability
+length and the wall cap act where the static closure only sees the
+strain. Higher up the TKE closure mixes more: its neutral equilibrium is
+Smagorinsky with ``C_s = 0.194``, against the case's ``C_s = 0.1``
+(``(0.194/0.1)^2 = 3.8``). No clip was booked. Cost per call on this grid:
+`advance_sgs!` 7.2–7.4 ms, the TKE coefficients 0.9 ms (Smagorinsky
+1.0 ms); the `:e` tracer adds 8–11 ms to `scalar_advection` (80.1 vs
+69.1, 71.8 vs 63.7 ms/step); whole steps +30 ms (+23 %) at noon and
++16 ms (+14 %) at night (loaded machine, sequential runs).
 
 ## Cost of per-facet surfaces (#138)
 
