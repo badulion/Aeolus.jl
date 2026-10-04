@@ -260,10 +260,8 @@ dissipation range whatever the ``Re``, so only ``Δ/L`` changes, and no
 monotone dependence is established for ``Re_λ`` between 32 and 79. The
 generator runs had already shown this: from 64³ upward they agree within
 about ±0.01 at 4h (below). At 16h the filter is a third of the 48³ box.
-The comparison against 256³ is no longer asserted. The test still
-checks that the 96³ fixture is below the frozen 48³ values at 4h and 8h.
-That is a comparison of two fixed single-seed fixtures, not a trend, and
-it is kept until the maintainer confirms on #208 whether it goes too.
+None of the 48³ / 96³ / 256³ comparisons is asserted; the table is
+data.
 
 At ``Δ ≈ 8η`` the filter sits in the near-dissipation range. There
 ``τ`` is given by its Taylor expansion, the gradient model

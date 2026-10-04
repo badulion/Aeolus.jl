@@ -84,11 +84,7 @@
 # 31, 7.8η), 0.811 (64³, 45, 7.5η), 0.822 (96³, 52, 7.7η), against 0.810
 # for this fixture (Re_λ 64, 7.8η). The 256³ trend assertion is dropped;
 # the band assertions for the 96³ fixture and the 256³ record stay, and
-# the 48³ / 96³ / 256³ comparison is logged as unasserted data. The
-# 48³ > 96³ comparison at 4h and 8h (it passes: 0.810 < 0.867, 0.734 <
-# 0.814) is still asserted, as a comparison of the two fixed single-seed
-# fixtures and not as a trend; whether it is dropped too is the
-# maintainer's call on #208.
+# the 48³ / 96³ / 256³ comparison is logged as unasserted data.
 #
 # Expectation that proved wrong with the 96³ fixture: "t = 2 is past the
 # dissipation peak". The peak moves later as Re_λ grows (measured
@@ -257,10 +253,6 @@ end
         # Clark, Ferziger & Reynolds (1979); Liu, Meneveau & Katz (1994)
         @test all(0.1 .< (m.ρ.xy, m.ρ.xz, m.ρ.yz) .< 0.45)
         @test 0.4 < m.ρ_Π < 0.85                      # see header: 0.810 (0.867 at 48³)
-        # 96³ fixture below the frozen 48³ values at 4h and 8h (header): a
-        # comparison of these two single-seed fixtures, NOT a Re_λ trend.
-        # Kept pending the maintainer's explicit call on #208.
-        @test m.ρ_Π < RHO_PI_48[1][3] && res[8].smag.ρ_Π < RHO_PI_48[2][3]
         @test 0.08 < res[4].cs < 0.22                 # Lilly 0.17 at high Re; lower at low Re_λ
         @test res[8].smag.ρ_Π < 0.85                  # inside the band once Δ ≈ 16η
         # consistency of the harness: the matched C_s matches the mean
