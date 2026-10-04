@@ -325,6 +325,18 @@ same tensor. Halos of `u, v, w` must be filled.
 end
 
 """
+    _vorticity_at(u, v, w, i, j, k, idx, idy, idz) -> (ωx, ωy, ωz)
+
+Vorticity `ω = ∇×u` at the centre of cell `(i, j, k)`, from the same
+gradient tensor as [`_strain_at`](@ref) ([`_velocity_gradient_at`](@ref)),
+so strain and vorticity see identical gradients (used by `Transition`).
+"""
+@inline function _vorticity_at(u, v, w, i, j, k, idx, idy, idz)
+    g = _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz)
+    return g[3][2] - g[2][3], g[1][3] - g[3][1], g[2][1] - g[1][2]
+end
+
+"""
     _strain_at(u, v, w, i, j, k, idx, idy, idz) -> (S11, S22, S33, S12, S13, S23, |S|)
 
 Strain-rate components `Sᵢⱼ = ½(gᵢⱼ + gⱼᵢ)` and `|S| = √(2 SᵢⱼSᵢⱼ)` at the
