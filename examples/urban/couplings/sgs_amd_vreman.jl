@@ -131,8 +131,8 @@ end
 _OPS.advance_sgs!(c::SolidMaskedSGS, sim, dt) = (_OPS.advance_sgs!(c.closure, sim, dt); c)
 _OPS.sgs_state(c::SolidMaskedSGS) = _OPS.sgs_state(c.closure)
 _OPS.restore_sgs_state!(c::SolidMaskedSGS, s) = (_OPS.restore_sgs_state!(c.closure, s); c)
-_OPS.add_sgs_momentum!(tu, tv, tw, c::SolidMaskedSGS, f::SGSFields, sim) =
-    _OPS.add_sgs_momentum!(tu, tv, tw, c.closure, f, sim)
+_OPS.add_sgs_momentum!(tu, tv, tw, c::SolidMaskedSGS, f::SGSFields, sim; kw...) =
+    _OPS.add_sgs_momentum!(tu, tv, tw, c.closure, f, sim; kw...)   # `stress` (#175)
 _OPS.add_sgs_scalar!(tϕ, ϕ, c::SolidMaskedSGS, f::SGSFields, sim) =
     _OPS.add_sgs_scalar!(tϕ, ϕ, c.closure, f, sim)
 function _OPS.sgs_tracer_diffusivity!(κ, c::SolidMaskedSGS, f::SGSFields, sim, ϕ)
@@ -155,24 +155,27 @@ Slot `:sgs`, provider `:amd`: the anisotropic minimum-dissipation closure
 `AMDClosure(C = 0.3)` with its own κ_t and the core's buoyancy parameter, as
 the `sgs` of every step, on any core, with ν_t = κ_t = 0 in the building
 cells ([`SolidMaskedSGS`](@ref)). Option `C` (default 0.3, the value of
-Rozema et al. 2015 for second-order central differences). `report` prints
+Rozema et al. 2015 for second-order central differences) and `stress =
+:symmetric`, the stress-form momentum divergence every `:sgs` provider runs
+(`sgs_step_options`, #175; `:laplacian` the Laplacian form). `report` prints
 the canopy and free-stream mean ν_t against Smagorinsky with `cfg.C_s`.
 """
 struct SGSAMD{C, S} <: AbstractCoupling
     closure::C          # the AMDClosure
     sgs::S              # what the steps run: it, zero in the solid cells
+    stress::Symbol      # the form of the momentum divergence (#175)
 end
 coupling_name(::Type{<:SGSAMD}) = :sgs_amd
 slot(::Type{<:SGSAMD}) = :sgs
 provider(::Type{<:SGSAMD}) = :amd
 is_default(::Type{<:SGSAMD}) = false
 modules_used(::Type{<:SGSAMD}) = (:Operators,)
-default_options(::Type{<:SGSAMD}) = (C = 0.3,)
+default_options(::Type{<:SGSAMD}) = (C = 0.3, SGS_STRESS_DEFAULT...)
 function build(::Type{<:SGSAMD}, case, o)
     c = AMDClosure(; C = o.C)
-    return SGSAMD(c, SolidMaskedSGS(c, copy(case.geom.sm.mask)))
+    return SGSAMD(c, SolidMaskedSGS(c, copy(case.geom.sm.mask)), o.stress)
 end
-step_options(c::SGSAMD, case) = (sgs = c.sgs,)
+step_options(c::SGSAMD, case) = sgs_step_options(c.sgs, c.stress)
 report(c::SGSAMD, case) = sgs_compare_report("AMD", case)
 function smoke_check(c::SGSAMD, case)
     sim = case.sim
@@ -191,7 +194,8 @@ function smoke_check(c::SGSAMD, case)
             "ν_t = κ_t = 0 in the solid cells" =>
                 all(==(0), sim.νt.data[c.sgs.solid]) && all(==(0), sim.κt.data[c.sgs.solid]);
             "fluid cells unchanged by the solid mask (bare AMD in solids: max ν_t $(round(maximum(fb.νh.data[so]; init = 0.0), sigdigits = 3)) m²/s, fluid max $(round(maximum(fb.νh.data[fl]), sigdigits = 3)))" =>
-                fm.νh.data[fl] == fb.νh.data[fl] && fm.κh.data[fl] == fb.κh.data[fl]]
+                fm.νh.data[fl] == fb.νh.data[fl] && fm.κh.data[fl] == fb.κh.data[fl];
+            sgs_stress_checks(c.stress, case)]
 end
 
 """
@@ -199,23 +203,25 @@ end
 
 Slot `:sgs`, provider `:vreman`: `VremanClosure(C_s)` (`c = 2.5 C_s²`,
 `κ_t = ν_t/Pr_t`) as the `sgs` of every step, on any core. Option `C_s`
-(`nothing`, the default, takes the case's `cfg.C_s`). `report` as for
-[`SGSAMD`](@ref).
+(`nothing`, the default, takes the case's `cfg.C_s`) and `stress`, as for
+[`SGSAMD`](@ref). `report` as for [`SGSAMD`](@ref).
 """
 struct SGSVreman{C} <: AbstractCoupling
     closure::C
+    stress::Symbol
 end
 coupling_name(::Type{<:SGSVreman}) = :sgs_vreman
 slot(::Type{<:SGSVreman}) = :sgs
 provider(::Type{<:SGSVreman}) = :vreman
 is_default(::Type{<:SGSVreman}) = false
 modules_used(::Type{<:SGSVreman}) = (:Operators,)
-default_options(::Type{<:SGSVreman}) = (C_s = nothing,)
+default_options(::Type{<:SGSVreman}) = (C_s = nothing, SGS_STRESS_DEFAULT...)
 build(::Type{<:SGSVreman}, case, o) =
-    SGSVreman(VremanClosure(o.C_s === nothing ? case.cfg.C_s : o.C_s))
-step_options(c::SGSVreman, case) = (sgs = c.closure,)
+    SGSVreman(VremanClosure(o.C_s === nothing ? case.cfg.C_s : o.C_s), o.stress)
+step_options(c::SGSVreman, case) = sgs_step_options(c.closure, c.stress)
 report(c::SGSVreman, case) = sgs_compare_report("Vreman", case)
-smoke_check(c::SGSVreman, case) = sgs_switchoff_checks(case, c.closure)
+smoke_check(c::SGSVreman, case) =
+    [sgs_switchoff_checks(case, c.closure); sgs_stress_checks(c.stress, case)]
 
 register!(SGSAMD)
 register!(SGSVreman)
