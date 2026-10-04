@@ -82,6 +82,7 @@ include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 
 # Era VI — high-fidelity turbulence closure (Phases 54-59)
 include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wall-stress operator
+include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, advective, T_s(t)
 
 using .Grids
 using .Fields
@@ -146,6 +147,7 @@ using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 # --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
 using .TurbulenceStability         # Phase 58 stability contract (#170)
 using .WallModels                  # Phase 57 (#169)
+using .LargeScaleForcing           # Era VI, Phase 58 (#171)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -935,5 +937,13 @@ export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
 # method of the CutCell generic (no new name).
 export NoSlipWall
 include("wall_shear_stress.jl")
+
+# Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
+# nudging, prescribed advective tendencies, surface-temperature series.
+# `surface_temperature(series, t)` is a method of the SurfaceExchange
+# generic, already exported.
+export ForcingTable, forcing_value, forcing_mean,
+       AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
+       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
 
 end # module

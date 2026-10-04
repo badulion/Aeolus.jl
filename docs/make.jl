@@ -69,6 +69,7 @@ makedocs(
             "Transition and wall-bounded flow" => "theory/transition.md",
             "Stability functions and Ri_g" => "theory/turbulence_stability.md",
             "Wall models"                 => "theory/wall_models.md",
+            "Large-scale forcing"         => "theory/large_scale_forcing.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -138,6 +139,7 @@ makedocs(
             ],
             "Era VI — turbulence closure" => [
                 "Overview"                     => "api/era6.md",
+                "LargeScaleForcing"            => "api/era6/large_scale_forcing.md",
                 "TurbulenceStability"          => "api/era6/turbulence_stability.md",
                 "WallModels"                   => "api/era6/wall_models.md",
             ],
