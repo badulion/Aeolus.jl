@@ -166,7 +166,7 @@ in the integer `order` their couplings declare.
 | `:column_tendency` | `column_radiation` (10) |
 | `:sanity` | the core finiteness check |
 | (ledger) | every coupling's `budget!`, and the change of water in the air (core) |
-| `:output` (1800 s) | NetCDF record and log line (core), then coupling entries |
+| `:output` (1800 s) | NetCDF record and log line (core), then coupling entries: `turbulence_diag` (10) |
 
 The order was the order of the pre-refactor loop, floating-point order
 included (#126). The surface exchange (#129) replaced the slab, whose
@@ -940,10 +940,27 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   seconds (30 s in the flagship, 4 s in `:smoke`; a `:surface` key
   overrides it) and their fluxes are held as tendencies until the next
   surface step, so the air receives exactly what the surface gave.
-* **Momentum.** The surface stress ``ρu_*^2`` is applied as an implicit
-  drag on the first-air-cell velocity faces, after the IBM. The momentum
-  removed equals ``Σ u_*^2\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in
-  the test). The `:wall` ground used to be free-slip.
+* **Momentum.** The ground is a wall of `Aeolus.WallModels` (#169):
+  every surface step hands each column a `MOSTWallLaw` with its `z0m`
+  and the Obukhov length of that step (`matching_obukhov_length`, the
+  `L` for which the law gives back the step's ``u_*``), and every step
+  `apply_wall_stress!` evaluates it at the instantaneous first-air-cell
+  wind and applies the stress as an implicit drag on the first-air-cell
+  velocity faces (over the `k_air` level mask, after the IBM);
+  `bus.u_star` is that step's ``u_τ``. The momentum removed equals
+  ``Σ τ_w(U)\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in the test). With
+  `L` and the wind frozen the operator reproduced the drag of #129
+  (``u_*^2/U`` held between surface steps) exactly (0.0 relative
+  difference). Option `wall_formulation` selects the local form
+  (default), Schumann's or Moeng's plane-mean form (smoke variants). In
+  `:smoke` (surfaces every 4 s) per-step evaluation changes the ground
+  mean ``u_*`` after 1 h from 0.05647 to 0.05644 m s⁻¹ and the street
+  wind from 0.47784 to 0.47796 m s⁻¹; the operator costs 1.2 ms per call
+  on the 64 × 64 flagship plane. The `:wall` ground used to be
+  free-slip. It stays a free-slip `:wall` carrying the wall-model drag,
+  not a resolved `NoSlipWall` (#172): at Δx = 15.6 m a resolved no-slip
+  wall would be unphysical
+  ([Transition and wall-bounded flow](../theory/transition.md#The-Berlin-case)).
 * **Extra surface energy.** `bus.sensible` (window sun, glazing
   transmission, dew heat) is collected every step and delivered to the
   surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`
@@ -1330,6 +1347,47 @@ PlantCanopy (by veg_drag)"; making `chem_off` the `:chemistry` default
 fails "slot :chemistry defaults to an off switch (chem_off)"; and
 declaring `cloud_shadow` incompatible with `fog_dew` fails 'smoke run
 "summer, everything on" does not run: cloud_shadow, fog_dew'.
+
+## Turbulence diagnostics (#170)
+
+`turbulence_diag` (`couplings/turbulence_diag.jl`, addon, on by default)
+is the Berlin coupling of the Era VI stability contract
+`TurbulenceStability` (see [the theory page](../theory/turbulence_stability.md)).
+At the output cadence it evaluates, on copies of `u, v, w, θ, q_v` whose
+halos it fills with the core's boundary conditions (the model state is
+not touched):
+
+* the pointwise ``N^2`` of ``θ_v = θ(1 + 0.61 q_v)``
+  (`buoyancy_frequency_squared!`, the z-interpolation of the core's
+  buoyancy), ``|S|^2`` (`strain_rate_squared!`, the Smagorinsky stencil)
+  and ``Ri_g`` (`gradient_richardson!`);
+* per level, over the fluid cells: the mean ``N^2`` (`N2_mean`), the
+  Richardson number of the means ``⟨N^2⟩/⟨|S|^2⟩`` (`Ri_g_mean`; the mean
+  of the pointwise ratio is dominated by shear-free cells, where the
+  ``S^2`` floor makes it huge) and the mean ``f_m(Ri_g)`` (`f_m_mean`).
+  These are written as `(z, time)` profiles (`OutputField` dims `:z`)
+  and summarised in the log line.
+
+Option `stability`: `:brown` (`BrownEtAl1994`, the LEM / MONC functions,
+default), `:lilly`, `:short_tail`, `:long_tail`, `:most`
+(`MOSTConsistent` with the surface exchange's BDBH functions; the smoke
+variant). `budget!` is a no-op: the coupling changes no state. P59-c
+(#180) extends this addon with the transition diagnostics.
+
+**Measured** (`:smoke`, after its 12 steps, noon, capping inversion at
+60 m, `Γ = 3 K km⁻¹` above). In the first two levels above the
+inversion (z = 65.6 m and 71.9 m) `Ri_g` of the means is 0.273 and
+0.196 and the mean `f_m` (Brown et al.) 0.049 and 0.0057; with
+`stability = :most` the same cells give 0.101 and 0.069 (no critical
+Richardson number). Below the inversion θ is uniform, and the vapour
+lapse of the initial state (``q_v ∝ e^{-z/800\,{\rm m}}``) makes
+``θ_v`` decrease with height: ``N^2 ≈ -7 × 10^{-5}`` s⁻² at step 0, and
+−2 to −16 × 10⁻⁵ s⁻² after 12 steps of noon heating, so `Ri_g` < 0 and
+`f_m` = 2.5–10. The same vapour lapse removes about 2/3 of the dry
+``gΓ/θ_0 = 1.0 × 10^{-4}`` s⁻² above the inversion (3.3 × 10⁻⁵ at step 0).
+Cost per evaluation (compiled): 0.15 ms on the 16³ smoke grid
+(`:most`: 0.89 ms, a root find per cell), 3.6 ms on the 64 × 64 × 32
+flagship grid, once per output record (every 1800 s).
 
 ## Cost of per-facet surfaces (#138)
 
