@@ -67,6 +67,7 @@ makedocs(
             "Heterogeneous-surface validation" => "theory/heterogeneous_surface.md",
             "Stability functions and Ri_g" => "theory/turbulence_stability.md",
             "Large-scale forcing"         => "theory/large_scale_forcing.md",
+            "Transition and wall-bounded flow" => "theory/transition.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

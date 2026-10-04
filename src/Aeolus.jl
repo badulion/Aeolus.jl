@@ -936,4 +936,9 @@ export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
        AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
 
+# P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
+# method of the CutCell generic (no new name).
+export NoSlipWall
+include("wall_shear_stress.jl")
+
 end # module
