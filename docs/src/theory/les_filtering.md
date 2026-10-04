@@ -249,7 +249,8 @@ the choice of ``ν``) is shown here as data. It is **not asserted**:
 | ≈ 32η (16h) | 0.669 (31.9η) | 0.669 (31.3η) | 0.756 (32.2η) |
 | ≈ 64η (32h) | — | — | 0.728 (64.4η) |
 
-Each column is a single seed. Earlier versions of this page and of the
+Each column is a single seed. The 256³ record starts at 8.05η, so its
+≈ 8η entry is the 4h value. Earlier versions of this page and of the
 test said that ``ρ_Π`` falls with ``Re_λ``, and the test asserted
 48³ > 96³ > 256³ at fixed ``Δ/η``. The 256³ record broke that, and the
 *expectation* was what was wrong, not the code. It was extrapolated from
@@ -259,6 +260,10 @@ dissipation range whatever the ``Re``, so only ``Δ/L`` changes, and no
 monotone dependence is established for ``Re_λ`` between 32 and 79. The
 generator runs had already shown this: from 64³ upward they agree within
 about ±0.01 at 4h (below). At 16h the filter is a third of the 48³ box.
+The comparison against 256³ is no longer asserted. The test still
+checks that the 96³ fixture is below the frozen 48³ values at 4h and 8h.
+That is a comparison of two fixed single-seed fixtures, not a trend, and
+it is kept until the maintainer confirms on #208 whether it goes too.
 
 At ``Δ ≈ 8η`` the filter sits in the near-dissipation range. There
 ``τ`` is given by its Taylor expansion, the gradient model
@@ -315,7 +320,7 @@ DNS check:
 | discrete energy budget, max per step | 3.4·10⁻⁴ |
 | ε peak; end of run | ``t = 3.60``; ``t = 3.85`` (1264 RK3 steps) |
 | run time | 7397 s = 2.05 h on a single core |
-| peak memory (RSS) | 9.9 GB |
+| peak memory (max RSS, reported by the run; not stored in the TOML) | 9.9 GB |
 
 The solver is single-threaded, so the run time is that of one core
 however many threads Julia is given.

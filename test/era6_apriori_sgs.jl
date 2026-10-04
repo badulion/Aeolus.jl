@@ -14,7 +14,8 @@
 #   6. the offline filtered-DNS record (hybrid-DNS decision on #208): the
 #      pipeline DNS → statistics → TOML → read-back at 32³ on every run;
 #      the 256³ regeneration only with AEOLUS_DNS256=1 (measured 2.05 h
-#      on one core, the solver is single-threaded; 9.9 GB RSS;
+#      on one core, the solver is single-threaded; 9.9 GB max RSS as
+#      reported by the run, not stored in the TOML;
 #      examples/validation/dns256_generate.jl is the same call); and, when
 #      test/fixtures/dns256_apriori.toml exists, the literature band at
 #      4h. The ρ_Π comparison 48³ / 96³ / 256³ is logged, not asserted
@@ -58,13 +59,14 @@
 # given to leading order by its Taylor expansion, the gradient model
 # τ ≈ (Δ²/12) ∂ₖūᵢ ∂ₖūⱼ (Clark et al. 1979; ρ₁₂ = 0.97 at 48³, 0.98 at
 # 96³). Π of the gradient model is a cubic in the velocity gradient, as
-# (C_sΔ)²|S̄|³ is, and at low Re_λ the few energetic gradient structures
-# dominate both. At Re_λ ≈ 64 the 4h value is inside the band, which is
+# (C_sΔ)²|S̄|³ is. At Re_λ ≈ 64 the 4h value is inside the band, which is
 # asserted again.
 #
 # Expectation that proved wrong with the 256³ record: "ρ_Π falls
 # monotonically with Re_λ at fixed Δ/η". It was asserted (48³ > 96³ at 4h
-# and 8h; 48³, 96³ > 256³ at the same Δ/η) and the 256³ record broke it:
+# and 8h; 48³, 96³ > 256³ at the same Δ/η) and the 256³ record broke it
+# (the ≈ 8η row is the 256³ value at 4h, 8.1η; the record starts at
+# 8.05η, so the 48³ and 96³ points just below it are not interpolated):
 #
 #   Δ/η      48³ (Re_λ 32)   96³ (Re_λ 64)   256³ (Re_λ 78.7)
 #   ≈ 8η     0.867           0.810           0.832
@@ -80,9 +82,13 @@
 # validation/dns256_generate.jl header) already agreed within about
 # ±0.01 at 4h from 64³ upward: 0.819 (32³, Re_λ 21, 7.6η), 0.869 (48³,
 # 31, 7.8η), 0.811 (64³, 45, 7.5η), 0.822 (96³, 52, 7.7η), against 0.810
-# for this fixture (Re_λ 64, 7.8η). The trend assertions are dropped; the
-# band assertions for the 96³ fixture and the 256³ record stay, and the
-# 48³ / 96³ / 256³ comparison is logged as unasserted data.
+# for this fixture (Re_λ 64, 7.8η). The 256³ trend assertion is dropped;
+# the band assertions for the 96³ fixture and the 256³ record stay, and
+# the 48³ / 96³ / 256³ comparison is logged as unasserted data. The
+# 48³ > 96³ comparison at 4h and 8h (it passes: 0.810 < 0.867, 0.734 <
+# 0.814) is still asserted, as a comparison of the two fixed single-seed
+# fixtures and not as a trend; whether it is dropped too is the
+# maintainer's call on #208.
 #
 # Expectation that proved wrong with the 96³ fixture: "t = 2 is past the
 # dissipation peak". The peak moves later as Re_λ grows (measured
@@ -120,6 +126,8 @@ const RHO_PI_48 = ((4, 8.0, 0.867), (8, 15.9, 0.814))
 
 # ρ_Π(Δ/η) of a TOML record, linear in log(Δ/η) between its widths;
 # `nothing` outside the recorded range (not comparable).
+_delta_eta_range(rec) = extrema(f["delta_over_eta"] for f in values(rec["filter"]))
+
 function _rho_pi_at(rec, x)
     rows = sort([(f["delta_over_eta"], f["smagorinsky"]["rho_Pi"]) for f in values(rec["filter"])])
     xs = first.(rows); ys = last.(rows)
@@ -249,7 +257,10 @@ end
         # Clark, Ferziger & Reynolds (1979); Liu, Meneveau & Katz (1994)
         @test all(0.1 .< (m.ρ.xy, m.ρ.xz, m.ρ.yz) .< 0.45)
         @test 0.4 < m.ρ_Π < 0.85                      # see header: 0.810 (0.867 at 48³)
-        # no Re_λ trend is asserted against the 48³ values (header)
+        # 96³ fixture below the frozen 48³ values at 4h and 8h (header): a
+        # comparison of these two single-seed fixtures, NOT a Re_λ trend.
+        # Kept pending the maintainer's explicit call on #208.
+        @test m.ρ_Π < RHO_PI_48[1][3] && res[8].smag.ρ_Π < RHO_PI_48[2][3]
         @test 0.08 < res[4].cs < 0.22                 # Lilly 0.17 at high Re; lower at low Re_λ
         @test res[8].smag.ρ_Π < 0.85                  # inside the band once Δ ≈ 16η
         # consistency of the harness: the matched C_s matches the mean
@@ -358,7 +369,8 @@ end
             append!(refs, [(96, res[r].Δ / d.η, res[r].smag.ρ_Π) for r in (4, 8)])
             for (Nref, x, ρref) in refs
                 ρ256 = _rho_pi_at(rec, x)
-                ρ256 === nothing && (@info @sprintf("    Δ/η = %.1f outside the 256³ record", x); continue)
+                ρ256 === nothing && (@info @sprintf("    Δ/η = %.1f outside the 256³ record (%.2f–%.2f η; not extrapolated)",
+                                                     x, _delta_eta_range(rec)...); continue)
                 @info @sprintf("    Δ/η = %.1f: ρ_Π %d³ %.3f, 256³ %.3f (unasserted)", x, Nref, ρref, ρ256)
             end
         else
