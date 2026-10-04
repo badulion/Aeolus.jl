@@ -175,6 +175,10 @@ export LagrangianDynamicSmagorinsky
 # Era VI (P55-b, #175): the stress-form SGS momentum divergence
 export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
        add_sgs_stress_divergence!, sgs_stress_dissipation
+# Era VI (P55-c, #181): the tensorial scalar eddy diffusivity
+export DiffusivityTensor, diagonal_tensor!, bounded_directions,
+       add_tensor_diffusion_scalar!, isentropic_tensor!,
+       sgs_scalar_tensor, IsentropicDiffusion
 # Era VI, Phase 54 (P54-c): LES analysis toolbox
 export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!

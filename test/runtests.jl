@@ -974,6 +974,7 @@ end
 @testset "Era VI" begin
     include("era6_sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
     include("era6_sgs_stress_form.jl")   # P55-b: stress-form SGS momentum divergence, anisotropic ν, IMEX split (#175)
+    include("era6_tensor_diffusion.jl")  # P55-c: diagonal / tensor / isentropic scalar eddy diffusivity (#181)
     include("era6_stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
     include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
     include("era6_wall_models_immersed.jl") # Phase 57: wall model on IBM and cut-cell walls (#179)

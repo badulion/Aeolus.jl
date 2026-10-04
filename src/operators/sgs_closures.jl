@@ -34,7 +34,7 @@ the anelastic / pseudo-incompressible `step!`). A closure implements
 | [`advance_sgs!`](@ref)`(c, sim, dt)` | once per **accepted** step, after the projection | no-op |
 | [`sgs_state`](@ref)`(c)`, [`restore_sgs_state!`](@ref)`(c, s)` | around a step [`step_adaptive!`](@ref Aeolus.TimeIntegration.step_adaptive!) may reject | no-op |
 | [`add_sgs_momentum!`](@ref)`(tu, tv, tw, c, f, sim; stress)` | momentum tendency | Laplacian eddy-viscosity form with `f.νh` (`stress = :laplacian`), or the stress form with `f.νh`, `f.νv` (`:symmetric`) |
-| [`add_sgs_scalar!`](@ref)`(tϕ, ϕ, c, f, sim)` | θ tendency | eddy diffusion with `f.κh` |
+| [`add_sgs_scalar!`](@ref)`(tϕ, ϕ, c, f, sim)` | θ tendency | diagonal eddy diffusion with `f.κh` (x, y faces), `f.κv` (z faces) |
 | [`sgs_fields`](@ref)`(c, sim)` | the storage `f` the coefficients go into | `SGSFields(sim.νt, sim.κt)` |
 
 `sgs_coefficients!` must be **pure** in the closure's memory: it may read the
@@ -155,12 +155,23 @@ end
 """
     add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim)
 
-Add the SGS scalar flux divergence `∂/∂xⱼ(κ ∂ϕ/∂xⱼ)` to `tϕ`. Default: the
-three-argument [`add_eddy_diffusion_scalar!`](@ref)`(tϕ, ϕ, f.κh)`. Halos of
-`ϕ` and of `f` are filled.
+Add the SGS scalar flux divergence `∂/∂xⱼ(κⱼₖ ∂ϕ/∂xₖ)` to `tϕ`. Default: the
+diagonal operator [`add_eddy_diffusion_scalar!`](@ref)`(tϕ, ϕ, f.κh, f.κv)`
+(P55-c, #181), `κh` on the x and y faces and `κv` on the z faces; for an
+isotropic closure (`f.κv === f.κh`) that is the three-argument form
+`(tϕ, ϕ, f.κh)`, bit for bit the pre-P55-c operator. A closure with a full
+diffusivity tensor adds a method that calls
+[`add_tensor_diffusion_scalar!`](@ref) (see [`IsentropicDiffusion`](@ref)).
+Halos of `ϕ` and of `f` are filled.
 """
-add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim) =
-    (add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh); nothing)
+function add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim)
+    if f.κv === f.κh
+        add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh)
+    else
+        add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh, f.κv)
+    end
+    return nothing
+end
 
 """
     sgs_tracer_diffusivity!(κ, c::AbstractSGSClosure, f::SGSFields, sim, ϕ) -> Field

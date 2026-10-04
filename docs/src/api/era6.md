@@ -14,6 +14,7 @@ tested at are in
 - Wall-bounded flow diagnostics (P54-d, #174; below) — `Aeolus.Operators`
 - Lagrangian dynamic Smagorinsky (P54-b, #173; below) — `Aeolus.Operators`
 - Stress-form momentum divergence (P55-b, #175; below) — `Aeolus.Operators`
+- Tensorial scalar eddy diffusivity (P55-c, #181; below) — `Aeolus.Operators`
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
 - [Transition diagnostics — Transition](era6/transition.md) — `Aeolus.Transition` (Phase 59, #180; [theory](../theory/transition.md#Laminar–turbulent-transition))
 - [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #179: wall model on immersed and cut-cell walls; [theory](../theory/wall_models.md))
@@ -119,6 +120,33 @@ Aeolus.Operators.add_stress_divergence!
 Aeolus.Operators.sgs_stress_tensor!
 Aeolus.Operators.add_sgs_stress_divergence!
 Aeolus.Operators.sgs_stress_dissipation
+```
+
+## Tensorial scalar eddy diffusivity (P55-c)
+
+The scalar SGS flux `∂ᵢ(Kᵢⱼ ∂ⱼϕ)`. The diagonal `(κh, κv)` is the
+contract's default. A general symmetric `K` at cell centres uses the triad
+discretisation of Griffies et al. (1998), which is conservative, symmetric
+and dissipates variance for positive semi-definite K. The rotated isentropic
+(Redi) tensor has a slope taper and an isotropic fallback where N² ≤ 0.
+Under `step_imex!` the diagonal is implicit and the cross terms explicit.
+Theory: [Smagorinsky-Lilly SGS → Tensorial scalar diffusivity](../theory/sgs.md#Tensorial-scalar-diffusivity).
+
+```julia
+add_eddy_diffusion_scalar!(tθ, θ, κh, κv)                     # diag(κh, κh, κv); docs in Operators
+K = isentropic_tensor!(DiffusivityTensor(mesh), θ, κh, 0.0; bcs = bcs)
+add_tensor_diffusion_scalar!(tϕ, ϕ, K; bounded = bounded_directions(bcs))
+step!(sim, 0.5; sgs = IsentropicDiffusion(StaticSmagorinsky(0.17), sim.mesh; diapycnal = 0.1))
+```
+
+```@docs
+Aeolus.Operators.DiffusivityTensor
+Aeolus.Operators.diagonal_tensor!
+Aeolus.Operators.bounded_directions
+Aeolus.Operators.add_tensor_diffusion_scalar!
+Aeolus.Operators.isentropic_tensor!
+Aeolus.Operators.sgs_scalar_tensor
+Aeolus.Operators.IsentropicDiffusion
 ```
 
 ## Walls (P59-a, #172)

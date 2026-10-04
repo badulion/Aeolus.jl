@@ -6,6 +6,9 @@
 #   * MLSGS with the Smagorinsky closure reproduces the default run bit
 #     for bit (the eddy_viscosity! hook of step! adds its terms where the
 #     built-in closure does);
+#   * the SGS option scalar_tensor = :isentropic (P55-c, #181): with the
+#     closure's own κv (= κh) the tensor is κh I and the run is the default
+#     one to round-off; with diapycnal = 0.1 it rotates and changes θ;
 #   * configuration errors (halo too small for a scheme, a step! keyword
 #     claimed by two couplings) are caught.
 
@@ -53,6 +56,31 @@ end
                   (:u, :v, :w, :θ, :p, :νt))
         @test all(((a, b),) -> interior_view(a.field) == interior_view(b.field), zip(ml.tracers, ref.tracers))
         @test ml.bus.Ts == ref.bus.Ts
+    end
+
+    @testset "SGS scalar_tensor = :isentropic (P55-c, #181)" begin
+        function run_opts(o)
+            cfg = BC.CaseConfig(:smoke; verbose = false, nsteps = N,
+                                options = Dict{Symbol,Any}(:sgs_smagorinsky => o))
+            case = BC.build_case(cfg; io = devnull)
+            BC.run_case!(case)
+            return case
+        end
+        iso = run_opts((scalar_tensor = :isentropic,))
+        c = BC.find_coupling(iso, :sgs_smagorinsky)
+        @test c.closure isa IsentropicDiffusion
+        # κv = κh: K = κh I, the triad operator is the diagonal one to round-off
+        dθ = maximum(abs, interior_view(iso.sim.θ) .- interior_view(ref.sim.θ))
+        rot = run_opts((scalar_tensor = :isentropic, diapycnal = 0.1))
+        dθr = maximum(abs, interior_view(rot.sim.θ) .- interior_view(ref.sim.θ))
+        fr = BC.isentropic_fraction(BC.find_coupling(rot, :sgs_smagorinsky).closure)
+        @info @sprintf("  isentropic scalar tensor after %d steps: max|Δθ| vs default %.1e K (κv = κh), %.1e K (κv = 0.1 κh, %.1f %% of the cells rotated)",
+                       N, dθ, dθr, 100fr)
+        @test dθ < 1e-9
+        @test dθr > 1e-6
+        @test 0 < fr < 1
+        @test all(isfinite, interior_view(rot.sim.θ))
+        @test_throws ArgumentError run_opts((scalar_tensor = :bogus,))
     end
 
     @testset "SGS diffusion of the tracers with κt, mask-aware (#177)" begin
