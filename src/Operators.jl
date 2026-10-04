@@ -22,7 +22,10 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_surface_flux!, add_sponge!,
        advect_weno5!,
        box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
-       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!,
+       SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
+       eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
+       lumley_invariants, apriori_metrics, dissipation_matched_cs
 # Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
@@ -515,6 +518,8 @@ end
 # Explicit filters, energy spectrum and isotropic initialiser (Phase 54, P54-c).
 include("operators/filters.jl")
 include("operators/spectra.jl")
+# A-priori SGS-stress analysis (Phase 56, P56-c).
+include("operators/apriori.jl")
 
 # -------------------------------------------------------------------------
 # Era VI: the SGS closure contract (wraps the kernels above).

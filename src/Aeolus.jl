@@ -176,6 +176,10 @@ export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
 export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
        sgs_scalar_tensor, IsentropicDiffusion
+# Era VI, Phase 56 (P56-c): a-priori SGS-stress analysis
+export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
+       eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
+       lumley_invariants, apriori_metrics, dissipation_matched_cs
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
