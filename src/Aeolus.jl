@@ -79,6 +79,7 @@ include("Snowpack.jl")             # Phase 51 (#34): layered snowpack, Era V sur
 include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
 include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
 include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
+include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 
 # Era VI — high-fidelity turbulence closure (Phases 54-59)
 include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wall-stress operator
@@ -146,6 +147,7 @@ using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 # --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
 using .TurbulenceStability         # Phase 58 stability contract (#170)
 using .WallModels                  # Phase 57 (#169)
+using .Transition                  # Phase 59 transition diagnostics (#180)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -944,5 +946,12 @@ export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
 # `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
 export WallBoundedCase, half_channel_case, channel_case,
        advance_channel!, run_channel!, channel_dt
+
+# Phase 59 — Transition (#180): turbulent fraction γ(z), intermittency,
+# Ri_f / Re_b / V_TKE diagnostics, growth-rate fit. Ri_g is P58-a's.
+export turbulent_fraction, turbulent_indicator!, laminar_mask!,
+       intermittency_factor, flux_richardson, buoyancy_reynolds,
+       turbulence_velocity_scale, growth_rate, supercritical_fraction,
+       grid_reynolds_number
 
 end # module

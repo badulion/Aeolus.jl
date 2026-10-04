@@ -324,6 +324,14 @@ same tensor. Halos of `u, v, w` must be filled.
             (dw_dx, dw_dy, dw_dz))
 end
 
+# Vorticity ω = ∇×u at the centre of cell (i,j,k) from the same gradient
+# tensor as the strain rate (`_velocity_gradient_at`), so `Transition`'s
+# turbulent fraction and the SGS closures see one stencil.
+@inline function _vorticity_at(u, v, w, i, j, k, idx, idy, idz)
+    g = _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz)
+    return g[3][2] - g[2][3], g[1][3] - g[3][1], g[2][1] - g[1][2]
+end
+
 """
     _strain_at(u, v, w, i, j, k, idx, idy, idz) -> (S11, S22, S33, S12, S13, S23, |S|)
 
