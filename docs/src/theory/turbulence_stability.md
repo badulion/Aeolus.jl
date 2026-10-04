@@ -308,7 +308,12 @@ every surface step: one maximisation for the column's wind, forcing
 height, ``z_{0m}`` and ``θ_{va}``, through
 `SurfaceExchange.surface_mshf_ratio`. It writes the fields `H_max_sfc`
 and `mshf_ratio`. Its report gives the mean ratio of downward buoyancy
-flux to MSHF over the stable columns of each class (street, roof, park).
+flux to MSHF over the stable columns of each class (street, roof, park),
+and the share of those columns *beyond* the MSHF point: ``z_{ref}/L``
+past the peak of the flux curve, on the very stable branch where a
+stronger temperature contrast carries less heat (output `mshf_beyond`).
+A small ratio alone does not mean a column is far from collapse: a
+collapsed column also has a small ratio, on the other side of the peak.
 
 Its smoke check asserts ``|H| ≤ H_{max}(1 + 10^{-8})`` for every column
 and every surface step, on the Monin–Obukhov fluxes of the skin at the

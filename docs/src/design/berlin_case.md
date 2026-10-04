@@ -982,7 +982,9 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   `z_ref`, `z0m` and ``θ_{va}``. It stores `H_max` (W m⁻², output
   `H_max_sfc`) and the ratio of the downward buoyancy flux to it
   (`mshf_ratio`, negative where unstable). The report prints the mean
-  ratio over the stable street, roof and park columns. The smoke check
+  ratio over the stable street, roof and park columns and the share of
+  them beyond the MSHF point (``z_{ref}/L`` past the peak of the flux
+  curve, output `mshf_beyond`). The smoke check
   asserts ratio ≤ 1 + 1e-8 for every column on the MOST fluxes of the
   step's start. The fluxes a soil column returns are linearised in
   ``T_{skin}`` and may overshoot by O(ΔT²): measured ≤ 3.1 % in the smoke
