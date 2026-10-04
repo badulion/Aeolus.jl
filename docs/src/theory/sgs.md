@@ -472,16 +472,20 @@ the closure is applied, with the same coefficients, to every scalar a core
 or the Berlin case transports, not only to θ:
 
   * `step!` and `step_rk3!` add it to `qv` when `moisture = true`
-    (`add_sgs_scalar!(tqv, qv, closure, f, sim)`), together with the
-    molecular `ν∇²qv` that θ gets; `step_imex!` already diffused `qv`
-    implicitly with `ν + κ_t`. Before #177 `step!` advected `qv` but
+    (`add_sgs_scalar!(tqv, qv, closure, f, sim)`, or eddy diffusion with
+    `qv`'s own diffusivity for a closure that has one — AMD,
+    [`sgs_tracer_diffusivity!`](@ref Aeolus.Operators.sgs_tracer_diffusivity!),
+    #176 — the same rule as `step_imex!`'s implicit `qv` coefficient),
+    together with the molecular `ν∇²qv` that θ gets; `step_imex!` already
+    diffused `qv` implicitly with `ν + κ_t`. Before #177 `step!` advected `qv` but
     never diffused it — a code bug: a moist run's vapour saw no SGS
     mixing at all — and `step_rk3!` did not even combine `qv` over its
     substages. Dry runs are unchanged bit for bit. (The anelastic and
     pseudo-incompressible cores carry no `qv`.)
   * The Berlin case diffuses every tracer its `:transport` stage advects
     (qv, ql, the chemistry species) and the pollutant with `sim.κt` of the
-    last dynamics step (see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
+    last dynamics step (θ's κ_t, also under the `:amd` provider, whose own
+    per-scalar diffusivity the Berlin tracers do not use yet) (see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
 
 The three-argument kernel takes two keywords for this. `mask` (a Bool
 solid mask, e.g. `IBM.SolidMask(…).mask`) closes every face with a solid
@@ -609,36 +613,43 @@ shear ``u(z), v(z)``, and the square root turned that into
 | ``u = ax + Sz``, ``v = ay``, ``w = -2az`` (a = 0.01, S = 0.05 s⁻¹), ``N^2/N^2_* = 0, ¼, ½, ¾, 1, 1.5`` | 7.75e-2, 5.81e-2, 3.87e-2, 1.94e-2, 2.3e-15, 0 m²/s; ``N^2_* = 1.025×10^{-3}`` s⁻² analytic | | |
 | uniform shift (7, −4, 1.5) m/s, random field | ``ν_t`` 4.8e-16, ``κ_t`` 3.9e-16 relative | 3.5e-16 | |
 | decaying turbulence 32³, t = 1: ``⟨2ν_tS_{ij}S_{ij}⟩`` / Smagorinsky | 1.27 (``ν_t = 0`` in 27 % of cells) | 0.82 | 1 |
-| CBC 32³: ``K_{98}/K_{42}``, ``K_{171}/K_{42}`` vs CBC | +9.9 %, −4.7 % | +4.9 %, −12.7 % | +2.5 %, −14.2 % |
+| CBC ``K_{98}/K_{42}``, ``K_{171}/K_{42}`` vs CBC, 32³ / 48³ / 64³ | +20.0, +7.7 / +5.0, −8.7 / −3.0, −14.2 % | +16.1, −0.3 / +2.7, −13.9 / −5.1, −18.5 % | +13.2, −2.6 / +0.8, −14.4 / −5.9, −17.6 % |
 | ``compute_sgs!`` on 64 × 64 × 32 (one thread; a `step!` is 6.2 ms) | 0.71 ms | 2.13 ms | 1.52 ms |
 
-AMD is the first closure here that meets the proposed ±10 % at station
-171. At station 98 it sits on the edge: +9.85 % with seeds 1–3, and
-+10.00 % for the 10-seed ensemble (per-seed sd 0.41 %, 4 of 10 seeds
-above 10 %). This was investigated, and it is not a bug:
+The CBC numbers are those of the corrected benchmark (the #205 spectrum
+fix; see [below](#Decaying-grid-turbulence-(Comte-Bellot-and-Corrsin))),
+three seeds. At 32³ both closures leave more energy at the cut-off than
+Smagorinsky (``E(k_c)``/CBC 1.86 for AMD and 1.77 for Vreman, against
+1.62), AMD because ``ν_t = 0`` wherever the resolved strain does not
+produce subfilter energy, so the 32³ station-98 excess that every closure
+shows is larger for them. That excess is the coarse grid's: at 48³ AMD is
+the only closure within the proposed ±10 % at both stations (RMS log
+error 0.079 / 0.065), and at 64³ it is the closest to CBC at both.
 
 * Rozema et al. (2015, §II.C) set ``δx_i = Δx_i`` and ``C = 0.300`` for
   second-order central schemes, tuned on this CBC case at 64³. Their
-  ``C = 1/3`` is the QR model's constant, not AMD's.
-* The CBC grid is isotropic, so the anisotropic ``δ_i`` cannot enter.
-* The margin is the constant's. At 32³ the K98 / K171 errors are
-  +15.7 / +0.8 % for C = 0.25, +9.9 / −4.7 % for 0.3, +6.5 / −7.7 % for
-  1/3 and +0.6 / −12.5 % for 0.4.
-* The gap between the two stations is 13–15 points for every C, and 17
-  for Smagorinsky, Vreman and dynamic. It belongs to the set-up (see
-  below), not to AMD.
-* At 64³ the sign flips for every closure: AMD −11.0 / −21.3 %,
-  Smagorinsky −14.2 / −24.3 %, Vreman −13.9 / −25.9 %.
-* The filtered reference itself moves by 3.2 % at station 98 depending
-  on how CBC is extrapolated into the unmeasured first shell
-  (k = 0.112 cm⁻¹).
+  ``C = 1/3`` is the QR model's constant, not AMD's. The CBC grid is
+  isotropic, so the anisotropic ``δ_i`` cannot enter.
+* At 32³ the station-98 error is set by the constant: K98 / K171 errors
+  +26.9 / +14.6 % for C = 0.25, +20.0 / +7.7 % for 0.3 and +9.2 / −2.4 %
+  for 0.4. The gap between the two stations is 11.5–12.3 points for every
+  C and 15.6–16.8 for Smagorinsky, Vreman and dynamic: it belongs to the
+  set-up (see below), not to AMD.
 
-The test therefore asserts AMD at station 98 to ±13 % (the target plus
-the reference uncertainty), and it asserts the C sweep and the shared
-station spread. It leaves more
-energy at the cut-off (``E(k_c)``/CBC 1.50 / 1.47, against 1.27 / 1.08 for
-Smagorinsky), since ``ν_t = 0`` wherever the resolved strain does not
-produce subfilter energy. In the Berlin case both are providers of the
+The test asserts Vreman like the other closures, and AMD at 32³ to what
+the grid allows (station 171 within ±10 %, station 98 within ±25 % with
+its ±10 % kept as a broken test, more energy at ``k_c`` than
+Smagorinsky) and at 48³ to the proposed ±10 % at both stations. It also
+asserts the C sweep and the shared station spread.
+
+**An expectation that proved wrong.** Before the #205 fix the 32³ run
+gave AMD +9.9 % / −4.7 % (Vreman +4.9 % / −12.7 %), and AMD was taken to be
+the first closure that meets ±10 % at station 171. That came from the
+over-energetic start, whose extra small-scale energy the closures
+drained faster. With the exact start the AMD errors moved by +10 / +12
+points. The closure and its constant did not change.
+
+In the Berlin case both are providers of the
 `:sgs` slot (`:amd`, `:vreman`; see
 [The Berlin case](../design/berlin_case.md#Numerics-slots)).
 
@@ -670,14 +681,22 @@ Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
 | 32³ | dynamic (Lagrangian, #173) | +12.8 % | −2.8 % | 0.095 / 0.077 | 1.61 / 1.43 |
 | 32³ | Smagorinsky 0.17    | +13.2 % | −2.6 % | 0.102 / 0.085 | 1.62 / 1.51 |
 | 32³ | no model            | +98.2 % | +160.6 % | 0.224 / 0.315 | 6.67 / 15.2 |
+| 32³ | AMD, C = 0.3 (#176) | +20.0 % | +7.7 % | 0.113 / 0.095 | 1.86 / 1.94 |
+| 32³ | Vreman, c = 0.0723 (#176) | +16.1 % | −0.3 % | 0.109 / 0.093 | 1.77 / 1.72 |
+| 48³ | AMD, C = 0.3 (#176) | +5.0 % | −8.7 % | 0.079 / 0.065 | 1.21 / 1.19 |
+| 48³ | Vreman, c = 0.0723 (#176) | +2.7 % | −13.9 % | 0.084 / 0.083 | 1.28 / 1.17 |
+| 48³ | Smagorinsky 0.17    | +0.8 % | −14.4 % | 0.076 / 0.078 | 1.14 / 1.02 |
 | 64³ | dynamic (plane)     | −4.9 % | −17.6 % | 0.055 / 0.083 | 1.06 / 0.93 |
 | 64³ | Smagorinsky 0.17    | −5.9 % | −17.6 % | 0.052 / 0.085 | 0.94 / 0.80 |
+| 64³ | AMD, C = 0.3 (#176) | −3.0 % | −14.2 % | 0.052 / 0.074 | 0.94 / 0.80 |
+| 64³ | Vreman, c = 0.0723 (#176) | −5.1 % | −18.5 % | 0.055 / 0.088 | 1.08 / 0.91 |
 | 64³ | no model            | +54.5 % | +38.6 % | 0.236 / 0.353 | 7.85 / 12.0 |
 
 CI cost at 32³: about 10 s (20 s under load) for the three closures ×
 three seeds, plus 2.2 s for the Lagrangian model, which runs through
 `step_rk3!(sim, dt; sgs)` so that its memory is committed once per step;
-it was not run at 64³.
+it was not run at 64³. AMD and Vreman add about 2 s each, and the AMD
+checks a further 48³ run (about 10 s) and the two C-sweep runs.
 
 Without a model the energy piles up at the cut-off (7–15 × CBC). The
 test uses this to show that it can fail.
