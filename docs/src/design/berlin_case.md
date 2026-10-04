@@ -456,11 +456,16 @@ unmasked.
   Nicoud et al. (2011), option `C_σ = 1.35`. Its ``ν_t`` vanishes in
   laminar shear and 2-D flow; `report` prints the canopy and free-stream
   mean ``ν_t`` next to Smagorinsky's on the same flow. After 100 smoke
-  steps that is 2.7e-2 (Smagorinsky 2.4e-2) m²/s in the canopy and 5.3e-4
-  (2.0e-2) above the sponge start, where γ = 0. It costs 16.4 against
-  15.8 ms per smoke step. It is off by default, and switching the default
-  is the maintainer's call. `Operators` is exempt, so no coverage list
-  changes.
+  steps that is 3.1e-2 (Smagorinsky 2.5e-2) m²/s in the canopy and 4.0e-3
+  (2.3e-3) above the sponge start, where the sponge now holds a nearly
+  uniform geostrophic stream with weak 3-D fluctuations (γ = 0.96); with
+  `sponge_to_geostrophic = false` that region is a laminar sheared layer
+  (γ = 0) and σ gives 5.3e-4 against 2.0e-2. Its `smoke_check` is the
+  laminar-reference check AMD and Vreman share (``ν_t = 0`` exactly on
+  the level-mean flow). It runs the stress form (option `stress`) and
+  costs 17.8 against 16.5 ms per smoke step. It is off by default, and
+  switching the default is the maintainer's call. `Operators` is exempt,
+  so no coverage list changes.
 * **Scalar advection.** Every tracer registered with `advect = true`;
   `positive` tracers go through the flux limiter (`advect_positive!`).
   `:weno_z7` needs `CaseConfig(halo = (4, 4, 4))`, `:teno8` halo 5; the

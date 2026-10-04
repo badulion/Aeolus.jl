@@ -991,16 +991,22 @@ so Smagorinsky is zero there too. The test asserts that.
 
 **Berlin.** The `:sgs` slot's provider `:sigma`
 (`examples/urban/couplings/sgs_sigma.jl`) is off by default; flipping
-the default (`:tke` since #182) is the maintainer's call. After 100 steps
-of the `:smoke` window, the mean ``ν_t`` is 2.7e-2 m²/s in the canopy,
-against 2.4e-2 for Smagorinsky on the same flow. Above the sponge start
-it is 5.3e-4 against 2.0e-2 m²/s. The Transition indicator finds that
-free stream laminar (γ = 0). It is not *exactly* parallel, though: weak
-3-D disturbances from the canopy reach it, below the γ threshold, so
-``σ_3 ≠ 0`` and ``ν_t`` is small rather than zero. For an exactly
-parallel profile on the Berlin mesh it is zero to the bit
-(`test/berlin_numerics.jl`). The smoke step costs 16.4 ms against
-15.8 ms with Smagorinsky.
+the default (`:tke` since #182) is the maintainer's call. Like every
+eddy-viscosity provider it runs the stress-form momentum divergence
+(option `stress`, #175). After 100 steps of the `:smoke` window, the mean
+``ν_t`` is 3.1e-2 m²/s in the canopy, against 2.5e-2 for Smagorinsky on
+the same flow. Above the sponge start it is 4.0e-3 against 2.3e-3 m²/s:
+since #171 the sponge relaxes toward the geostrophic wind, so that region
+is a nearly uniform stream (ū = 1.0 m/s) with weak 3-D residual
+fluctuations (γ = 0.96), not a laminar shear layer, and σ has no laminar
+gradient to discount. With the sponge relaxing to zero
+(`sponge_to_geostrophic = false`, the pre-#171 flow) the same region is a
+laminar sheared layer (γ = 0), and σ gives 5.3e-4 against 2.0e-2 m²/s
+(2.7 %). On the laminar version of the current flow (level means of u, v;
+``w = 0``) σ's ``ν_t`` is zero to the bit where Smagorinsky is on (the
+smoke check AMD and Vreman share), and for an exactly parallel turning
+profile on the Berlin mesh too (`test/berlin_numerics.jl`). The smoke step
+costs 17.8 ms against 16.5 ms with Smagorinsky.
 
 ## Limitations and planned upgrades
 
@@ -1016,8 +1022,10 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * The σ-model costs about 8 times the Smagorinsky kernel (6.7 against
     0.85 ms on 64×64×32). It is zero only in *exactly* laminar
     (parallel, 2-D, pure-strain) flow; a laminar but weakly 3-D free
-    stream gets a small ``ν_t`` (Berlin: 2.6 % of Smagorinsky's above
-    the sponge start). It is not stability-aware.
+    stream gets a small ``ν_t`` (Berlin, sponge relaxing to zero: 2.7 % of
+    Smagorinsky's above the sponge start), and in a weakly turbulent,
+    nearly unsheared stream it can exceed Smagorinsky's (Berlin default:
+    1.7 ×, both small). It is not stability-aware.
   * The **stability correction** for stably stratified flow
     (Deardorff / Lilly closure with a Richardson-number reduction) is
     not applied to the Smagorinsky closures; the prognostic TKE closure

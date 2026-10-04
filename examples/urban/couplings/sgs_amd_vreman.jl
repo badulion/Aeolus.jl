@@ -50,9 +50,10 @@ The closure's `ν_t` on a laminar version of the current flow: `u` and `v`
 replaced by their horizontal means at each level (a horizontally uniform
 shear flow `u(z), v(z)`), `w = 0`, the case's θ. `cells` are the interior
 cells above the inversion (`z > cfg.θ_inversion_z`), above the highest roof
-+ 1 and below the sponge: the laminar free stream. AMD and Vreman must give
-`ν_t = 0` there exactly (pure shear has no AMD production and a rank-one
-Vreman `β`), where Smagorinsky gives `(C_s Δ)² |∂u/∂z|`.
++ 1 and below the sponge: the laminar free stream. AMD, Vreman and the
+σ-model must give `ν_t = 0` there exactly (pure shear has no AMD
+production, a rank-one Vreman `β` and σ₃ = 0), where Smagorinsky gives
+`(C_s Δ)² |∂u/∂z|`.
 """
 function laminar_reference_νt(case, closure)
     sim, m = case.sim, case.mesh
@@ -72,6 +73,8 @@ function laminar_reference_νt(case, closure)
                                   buoyancy = sgs_buoyancy_parameter(sim))
     elseif closure isa VremanClosure
         compute_vreman_νt!(ν, u, v, w, closure.C_s)
+    elseif closure isa SigmaModel                      # :sigma (#184, couplings/sgs_sigma.jl)
+        compute_sigma_νt!(ν, u, v, w, closure.C_σ)
     else
         compute_smagorinsky_νt!(ν, u, v, w, closure)
     end

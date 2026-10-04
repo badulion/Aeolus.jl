@@ -6,9 +6,9 @@
 #   * MLSGS with the Smagorinsky closure reproduces the `:smagorinsky` run
 #     (the default provider before #182) bit for bit (the eddy_viscosity! hook of step! adds its terms where the
 #     built-in closure does);
-#   * the σ-model provider (`sgs = :sigma`, #184): ν_t ≥ 0, exactly 0 in a
-#     laminar parallel flow on the Berlin mesh, and far below Smagorinsky
-#     in the (γ-laminar) free stream above the sponge start;
+#   * the σ-model provider (`sgs = :sigma`, #184): ν_t ≥ 0, exactly 0 on
+#     the laminar version of the current flow and in a laminar parallel
+#     flow on the Berlin mesh, where Smagorinsky is on;
 #   * the SGS option scalar_tensor = :isentropic (P55-c, #181): with the
 #     closure's own κv (= κh) the tensor is κh I and the run is the default
 #     one to round-off; with diapycnal = 0.1 it rotates and changes θ;
@@ -65,31 +65,58 @@ end
         @test ml.bus.Ts == ref.bus.Ts
     end
 
-    @testset "σ-model provider (#184): ν_t ≥ 0, laminar free stream" begin
+    @testset "σ-model provider (#184): ν_t ≥ 0, zero in laminar flow" begin
         sg = _run_smoke(N; sgs = :sigma)
         c = BC.find_coupling(sg, :sgs_sigma)
         @test c !== nothing && c.closure isa SigmaModel
+        @test get(sg.step_kwargs, :sgs_stress, nothing) === :symmetric   # like every eddy-viscosity provider (#175)
         sim, m = sg.sim, sg.mesh
         @test minimum(interior_view(sim.νt)) >= 0
         @test all(isfinite, interior_view(sim.u))
         p = BC.sigma_νt_profile(c, sg)
         @test p.min_σ >= 0
-        # the free stream above the sponge start is laminar by the
-        # Transition indicator (γ = 0 there) …
+        @test p.canopy_σ > 0
         for f in (sim.u, sim.v, sim.w)
             fill_halos!(f, sim.bcs)
         end
         lam = falses(m.Nx, m.Ny, m.Nz)
         laminar_mask!(lam, sim.u, sim.v, sim.w)
         γfree = 1 - mean(lam[:, :, p.ksp:end])
-        @info @sprintf("  σ-model after %d steps: mean ν_t canopy %.3e (Smagorinsky on the same flow %.3e), above the sponge start %.3e (%.3e; ratio %.2e, max %.2e) m²/s; γ there %.3f",
+        @info @sprintf("  σ-model after %d steps: mean ν_t canopy %.3e (Smagorinsky on the same flow %.3e), above the sponge start %.3e (%.3e; ratio %.2f, max %.2e) m²/s; γ there %.3f",
                        N, p.canopy_σ, p.canopy_smag, p.free_σ, p.free_smag, p.free_σ / p.free_smag, p.free_σ_max, γfree)
-        @test γfree == 0
-        # … but not an exactly parallel flow: the canopy's weak 3-D
-        # disturbances reach it (|ω′| below the γ threshold), so σ₃ ≠ 0
-        # and ν_t is small, not zero. Smagorinsky sees the mean shear.
-        @test p.free_σ <= 0.05 * p.free_smag
-        @test p.canopy_σ > 0
+        # Before the merge with #171 this testset asserted γ = 0 above the
+        # sponge start and σ's ν_t ≤ 5 % of Smagorinsky's there in the
+        # default run (2.6 % measured). That no longer describes the default
+        # flow: #171 retargets the sponge at the geostrophic wind (U_g, V_g)
+        # instead of zero, so the region above the sponge start is now a
+        # nearly uniform stream (top level ū = 1.00 m/s against 0.05 m/s
+        # before, little mean shear) carrying weak 3-D residual
+        # fluctuations. The level-normalised γ is 0.96 there and the
+        # σ-model, which only discounts *laminar* gradients, gives 1.7 ×
+        # Smagorinsky's (small, 2.3e-3 m²/s) ν_t. The old assertion is kept
+        # on the flow it was written for (the sponge relaxing to zero,
+        # `sponge_to_geostrophic = false`: a laminar sheared layer), and the
+        # laminar-consistency property is asserted exactly on the default
+        # flow's laminar version (level means of u, v; w = 0), the check AMD
+        # and Vreman share:
+        ν, cells = BC.laminar_reference_νt(sg, c.closure)
+        νs, _ = BC.laminar_reference_νt(sg, sg.cfg.C_s)
+        @test count(cells) > 0
+        @test all(==(0), ν[cells]) && maximum(νs[cells]) > 0
+        sz = BC.build_case(BC.CaseConfig(:smoke; verbose = false, nsteps = N,
+                                         physics = Dict{Symbol,Any}(:sgs => :sigma),
+                                         options = Dict{Symbol,Any}(:geostrophic => (sponge_to_geostrophic = false,)));
+                           io = devnull)
+        BC.run_case!(sz)
+        pz = BC.sigma_νt_profile(BC.find_coupling(sz, :sgs_sigma), sz)
+        foreach(f -> fill_halos!(f, sz.sim.bcs), (sz.sim.u, sz.sim.v, sz.sim.w))
+        lz = falses(m.Nx, m.Ny, m.Nz)
+        laminar_mask!(lz, sz.sim.u, sz.sim.v, sz.sim.w)
+        γz = 1 - mean(lz[:, :, pz.ksp:end])
+        @info @sprintf("  σ-model, sponge relaxing to zero: above the sponge start %.3e (Smagorinsky %.3e; ratio %.3f) m²/s; γ there %.3f",
+                       pz.free_σ, pz.free_smag, pz.free_σ / pz.free_smag, γz)
+        @test γz == 0                                  # a laminar sheared layer …
+        @test pz.free_σ <= 0.05 * pz.free_smag         # … where σ stays far below Smagorinsky
         # exactly zero for an exactly laminar parallel flow on the Berlin
         # mesh, through the provider's closure object (compute_sgs!, the
         # call every core makes): a turning, sheared profile u(z), v(z), w = 0
