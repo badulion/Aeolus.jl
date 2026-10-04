@@ -34,9 +34,10 @@
 # `bottom_bc = :noslip` and θ walls; P59-e (#195) reuses that builder.
 #
 # There is no private log law, no private geostrophic forcing and no
-# private stability function family beyond the case's prescribed
-# coefficients (`SBLLogLinear`, an implementer of the SurfaceExchange
-# contract). This file only defines functions (prefix `sbl_`); it is
+# private stability function family: the GABLS1 surface-layer functions
+# are `SurfaceExchange.BusingerDyerLogLinear(β_m = 4.8, β_h = 7.8)`
+# (`SBL_GABLS1_STABILITY`), the same family the ocean warm layer uses.
+# This file only defines functions and constants (prefix `sbl_`/`SBL_`); it is
 # included by `examples/sbl/gabls1.jl` and `test/era6_gabls1.jl`. P58-d
 # (#194) extends it for GABLS2/3/4 and CASES-99 (time-dependent U_g,
 # advective tendencies and an observed T_s series are already accepted).
@@ -45,31 +46,18 @@
 using Aeolus
 using Aeolus.Fields: set!
 using Aeolus.Operators: add_sponge!, total_stress_profile, interior_view
-import Aeolus.SurfaceExchange: phi_m, phi_h, psi_m, psi_h
 using Random
 using Statistics: mean
 
 """
-    SBLLogLinear(; β_m = 4.8, β_h = 7.8)
+    SBL_GABLS1_STABILITY
 
-The log-linear Monin–Obukhov functions with separate momentum and heat
-coefficients, ``φ_m = 1 + β_m ζ``, ``φ_h = 1 + β_h ζ``,
-``ψ = -β ζ`` for ``ζ ≥ 0``; the unstable branch is delegated to
-`SurfaceExchange.BusingerDyerBeljaarsHoltslag`. The GABLS1 protocol
-prescribes ``β_m = 4.8``, ``β_h = 7.8`` (Beare et al. 2006; quoted by
-Basu & Porté-Agel 2006, JAS 63, 2074, §4a: "the constants b_m and b_h were
-set to 4.8 and 7.8"). An implementer of the SurfaceExchange stability
-contract, so `solve_surface_layer` and `MOSTWallLaw` use it unchanged.
+The GABLS1 surface-layer functions, the package's
+`SurfaceExchange.BusingerDyerLogLinear` with ``β_m = 4.8``, ``β_h = 7.8``
+(Beare et al. 2006; quoted by Basu & Porté-Agel 2006, JAS 63, 2074, §4a:
+"the constants b_m and b_h were set to 4.8 and 7.8").
 """
-Base.@kwdef struct SBLLogLinear <: Aeolus.SurfaceExchange.AbstractStabilityFunctions
-    β_m::Float64 = 4.8
-    β_h::Float64 = 7.8
-end
-const _SBL_UNSTABLE = BusingerDyerBeljaarsHoltslag()
-phi_m(s::SBLLogLinear, ζ::Real) = ζ < 0 ? phi_m(_SBL_UNSTABLE, ζ) : 1 + s.β_m * ζ
-phi_h(s::SBLLogLinear, ζ::Real) = ζ < 0 ? phi_h(_SBL_UNSTABLE, ζ) : 1 + s.β_h * ζ
-psi_m(s::SBLLogLinear, ζ::Real) = ζ < 0 ? psi_m(_SBL_UNSTABLE, ζ) : -s.β_m * ζ
-psi_h(s::SBLLogLinear, ζ::Real) = ζ < 0 ? psi_h(_SBL_UNSTABLE, ζ) : -s.β_h * ζ
+const SBL_GABLS1_STABILITY = BusingerDyerLogLinear(β_m = 4.8, β_h = 7.8)
 
 mutable struct SBLCase
     sim::Any
@@ -100,7 +88,7 @@ end
              f = 1.39e-4, z0m = 0.1, z0h = z0m, θ_ml = 265, z_ml = 100,
              Γ = 0.01, θ₀ = 263.5, T_s0 = 265, cooling = 0.25/3600,
              T_s = nothing, base = StaticSmagorinsky(0.1),
-             sgs_stability = :brown94, stability = SBLLogLinear(),
+             sgs_stability = :brown94, stability = SBL_GABLS1_STABILITY,
              sponge_z = 300, sponge_α = 0.01, perturbation = 0.1,
              z_pert = 50, seed = 1, extra_forcing = ()) -> SBLCase
 
@@ -120,7 +108,7 @@ function sbl_case(; N = (32, 32, 32), extent = (400.0, 400.0, 400.0),
                   θ_ml = 265.0, z_ml = 100.0, Γ = 0.01, θ₀ = 263.5,
                   T_s0 = 265.0, cooling = 0.25 / 3600, T_s = nothing,
                   base = StaticSmagorinsky(0.1), sgs_stability::Symbol = :brown94,
-                  stability = SBLLogLinear(), sponge_z = 300.0, sponge_α = 0.01,
+                  stability = SBL_GABLS1_STABILITY, sponge_z = 300.0, sponge_α = 0.01,
                   perturbation = 0.1, z_pert = 50.0, seed = 1, extra_forcing = ())
     Nx, Ny, Nz = N
     mesh = RegularGrid(; size = (Nx, Ny, Nz), extent = Float64.(extent))

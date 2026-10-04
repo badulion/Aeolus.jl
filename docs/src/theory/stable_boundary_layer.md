@@ -23,10 +23,12 @@ over a cooled surface, every piece delegated:
 | SGS closure | any eddy-viscosity closure in `StabilityCorrected` (`sgs_stability = :brown94` default, `:lilly`, `:none`), stress-form divergence (`sgs_stress = :symmetric`) so that ``ν_v`` reaches the momentum |
 | top damping | the core's Rayleigh sponge, retargeted at ``(U_g, V_g)`` with its own `add_sponge!(…; f_ref)` profile, as the Berlin `:geostrophic` coupling does |
 
-The only case-specific "physics" is the GABLS1 surface-layer functions,
-``φ_m = 1 + 4.8ζ``, ``φ_h = 1 + 7.8ζ`` (`SBLLogLinear`), an implementer of
-the SurfaceExchange stability contract, so the solver and the wall law
-use it unchanged. The surface layer is solved once per step from the
+The GABLS1 surface-layer functions, ``φ_m = 1 + 4.8ζ``,
+``φ_h = 1 + 7.8ζ``, are the package's log-linear family
+`SurfaceExchange.BusingerDyerLogLinear(β_m = 4.8, β_h = 7.8)` — the same
+type the ocean warm layer uses with ``β = 5`` — so the solver and the wall
+law use it unchanged and the driver defines no stability functions of its
+own. The surface layer is solved once per step from the
 start-of-step state at the mid-step surface temperature; the heat flux is
 held over the step (the RK3 weights sum to one), so exactly
 ``⟨w'θ'_0⟩Δt`` enters the column.

@@ -62,7 +62,8 @@ end
 @testset "GABLS1 on the shared SBL driver (P55-f)" begin
 
 @testset "Driver: package physics only" begin
-    s = SBLLogLinear()
+    s = SBL_GABLS1_STABILITY                                # the package family, no private copy
+    @test s isa BusingerDyerLogLinear && s === BusingerDyerLogLinear(β_m = 4.8, β_h = 7.8)
     @test phi_m(s, 0.1) ≈ 1.48 && phi_h(s, 0.1) ≈ 1.78     # GABLS1: β_m = 4.8, β_h = 7.8
     @test psi_m(s, 0.5) ≈ -2.4 && psi_h(s, 0.5) ≈ -3.9
     @test phi_m(s, -0.3) == phi_m(BusingerDyerBeljaarsHoltslag(), -0.3)
