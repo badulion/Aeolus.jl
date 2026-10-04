@@ -989,6 +989,7 @@ end
     include("era6_apriori_sgs.jl")       # Phase 56  a-priori SGS stress, filtered-DNS fixture (#178)
     include("era6_transition_kh.jl")       # Phase 59 Transition diagnostics, KH / Miles-Howard (#180)
     include("era6_tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
+    include("era6_wall_models_channel.jl") # P57-b: matching height, time / wall-parallel input filters, LLM (#183)
 end
 
 # =========================================================================

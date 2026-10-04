@@ -1041,6 +1041,22 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   not a resolved `NoSlipWall` (#172): at Δx = 15.6 m a resolved no-slip
   wall would be unphysical
   ([Transition and wall-bounded flow](../theory/transition.md#The-Berlin-case)).
+* **Wall-model input** (P57-b, #183). The wind the ground law is
+  evaluated at is passed through the exponential time filter of Yang,
+  Park & Moin (2017) (`WallModels.MatchingInput`), on by default with
+  `input_T_f = 10 s` and advanced once per accepted step in
+  `:surface_update`; the stress keeps the direction of the instantaneous
+  first-cell wind. The matching height stays at the first air cell
+  (`h_wm_cells = 1`): three cells above a street (18.75 m) lie in or
+  above the canyon, where no log law holds. `h_wm_cells = 3` samples the
+  third air cell of the park and water columns (`h_wm_classes`) — a
+  smoke variant. The smoke checks require `bus.u_star` to be the wall
+  law at the step's wind and matching height (1e-12), the matching cells
+  to be air and the filter state to be finite. Measured in `:smoke` (1 h,
+  last 30 min): street ``τ_w`` 7.77e-3 vs 7.61e-3 m² s⁻² without the
+  filter, temporal RMS 1.054e-3 vs 1.029e-3, sub-60 s RMS 2.24e-6 vs
+  2.18e-6 (the smoke flow has almost no fast fluctuation to filter);
+  ground ``u_*`` 0.05260 vs 0.05225 m s⁻¹.
 * **Extra surface energy.** `bus.sensible` (window sun, glazing
   transmission, dew heat) is collected every step and delivered to the
   surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`

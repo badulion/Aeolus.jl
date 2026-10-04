@@ -981,6 +981,10 @@ export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
 # `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
 export WallBoundedCase, half_channel_case, channel_case,
        advance_channel!, run_channel!, channel_dt
+# P57-b (#183): the wall-model input — matching height, temporal and
+# wall-parallel filters (log-layer mismatch).
+export MatchingInput, matching_distance, matching_input!, update_input_filter!,
+       exponential_filter_weight, wall_parallel_filter!
 
 # P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
 # method of the CutCell generic (no new name).

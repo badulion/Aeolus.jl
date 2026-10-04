@@ -6,7 +6,7 @@ of every modelled wall stress in the code base**: the channel harness,
 the stable-boundary-layer cases, the TKE surface value and the Berlin
 ground drag all call this module rather than writing their own.
 
-Two parts, each in its own file under `src/wall_models/` so the later
+The parts, each in its own file under `src/wall_models/` so the later
 Phase 57 issues (matching height and filtering, TBLE, facades, dynamic
 roughness) only add files and include lines:
 
@@ -26,18 +26,24 @@ roughness) only add files and include lines:
      `post_predictor!` hook; halos and the finite-volume operators are
      untouched, so the wall model is the only momentum flux through a
      free-slip (`ImpermeableWall`) wall face.
-  3. **Immersed walls** (`immersed.jl`, P57-d) — [`immersed_walls`](@ref),
+  3. **The wall-model input** (`matching.jl`, P57-b #183) —
+     [`MatchingInput`](@ref): the velocity the law is evaluated with,
+     sampled at a matching height off the first cell (Kawai & Larsson
+     2012) and filtered in time (Yang, Park & Moin 2017) and along the
+     wall (Bou-Zeid, Meneveau & Parlange 2005), against log-layer
+     mismatch.
+  4. **Immersed walls** (`immersed.jl`, P57-d) — [`immersed_walls`](@ref),
      [`remove_stencil_wall_flux!`](@ref) and
      [`apply_immersed_wall_stress!`](@ref): the stress of a law on the
      tangential walls of an IBM solid mask (Tessicini et al. 2002;
      Chester, Meneveau & Parlange 2007), the stencil's own wall flux
      removed so the two are not counted twice. The Berlin facades.
-  4. **Cut-cell walls** (`cutcell.jl`, P57-d) — the method
+  5. **Cut-cell walls** (`cutcell.jl`, P57-d) — the method
      `wall_shear_stress(u, v, w, stencils, geom, law; ν)` of
      `CutCell.wall_shear_stress` (the law at the image-point probe) and
      [`wall_slip_velocity`](@ref) / [`slip_wall_value`](@ref), the slip
      wall value of `CutCell.reconstruct_wall_velocity!`.
-  3. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
+  6. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
      [`half_channel_case`](@ref) (the neutral ABL half channel of
      Porté-Agel et al. 2000 / Bou-Zeid et al. 2005) and
      [`channel_case`](@ref) (the two-wall channel at a given Re_τ), with
@@ -61,6 +67,15 @@ roughness) only add files and include lines:
     planetary boundary-layer turbulence. *J. Atmos. Sci.*, 41, 2052-2062.
   * Piomelli, U. & Balaras, E. (2002). Wall-layer models for large-eddy
     simulations. *Annu. Rev. Fluid Mech.*, 34, 349-374.
+  * Kawai, S. & Larsson, J. (2012). Wall-modeling in large eddy
+    simulation: length scales, grid resolution, and accuracy.
+    *Phys. Fluids*, 24, 015105.
+  * Yang, X. I. A., Park, G. I. & Moin, P. (2017). Log-layer mismatch
+    and modeling of the fluctuating wall stress in wall-modeled
+    large-eddy simulations. *Phys. Rev. Fluids*, 2, 104601.
+  * Bou-Zeid, E., Meneveau, C. & Parlange, M. B. (2005). A
+    scale-dependent Lagrangian dynamic model for large eddy simulation
+    of complex turbulent flows. *Phys. Fluids*, 17, 025105.
   * Tessicini, F., Iaccarino, G., Fatica, M., Wang, M. & Verzicco, R.
     (2002). Wall modeling for large-eddy simulation using an immersed
     boundary method. *Annual Research Briefs 2002*, CTR Stanford, 181-187.
@@ -76,7 +91,8 @@ module WallModels
 using ..Grids
 using ..Grids: RegularGrid
 using ..BoundaryConditions: fill_halos!, Periodic, FieldBoundaryConditions
-using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!
+using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!, box_filter!
+using ..Fields: Field
 import ..Operators: phi_m_profile, total_stress_profile
 using ..Simulations: BoussinesqSimulation, step_rk3!
 using ..TimeSteppers: step!
@@ -93,6 +109,7 @@ import ..CutCell: wall_shear_stress
 # include line here and nothing else.
 include("wall_models/laws.jl")
 include("wall_models/operator.jl")
+include("wall_models/matching.jl")        # P57-b (#183): matching height, input filters
 include("wall_models/immersed.jl")
 include("wall_models/cutcell.jl")
 include("wall_models/channel_cases.jl")   # P54-d (#174): half channel, channel

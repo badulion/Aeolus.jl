@@ -318,11 +318,38 @@ end
     @test u[5, 3, 1] < 2 && u[5, 3, 3] < 2                          # shared face, two levels
     @test us[1, 1] == 0 && all(us[I] > 0 for I in CartesianIndices(us) if I != CartesianIndex(1, 1))
     @test Uo[2, 2] == 2.0
-    # a held wind: the law at that speed, the direction of the resolved one
+    # a held wind: the stress has the MAGNITUDE of the law at that speed
+    # and the direction of the resolved velocity, τ_i = τ_w(5) u_i/U with
+    # U = 2, so a = τ_w(5)/2. (P57-b: the #169 expectation here was
+    # a = wall_drag(law, 5) = τ_w(5)/5, a stress magnitude τ_w(5)·2/5,
+    # contradicting the docstring; the code and this expectation were
+    # both wrong and are fixed together.)
     sim = wall_sim()
     Aeolus.Fields.interior_view(sim.u) .= 2.0; Aeolus.Fields.interior_view(sim.v) .= 0.0
-    apply_wall_stress!(sim, law, 0.5; wind = fill(5.0, 8, 6))
-    @test Aeolus.Fields.interior_view(sim.u)[1, 1, 1] ≈ 2 / (1 + 0.5 * wall_drag(law, 5.0, h) / 0.5) rtol = 1e-14
+    F = apply_wall_stress!(sim, law, 0.5; wind = fill(5.0, 8, 6))
+    @test Aeolus.Fields.interior_view(sim.u)[1, 1, 1] ≈ 2 / (1 + 0.5 * (wall_stress(law, 5.0, h) / 2) / 0.5) rtol = 1e-14
+    # small Δt: the explicit limit of the plane-mean stress is τ_w(5) itself
+    sim = wall_sim()
+    Aeolus.Fields.interior_view(sim.u) .= 2.0; Aeolus.Fields.interior_view(sim.v) .= 0.0
+    F = apply_wall_stress!(sim, law, 1e-8; wind = fill(5.0, 8, 6))
+    @test -F.Fx / (8.0 * 6.0) ≈ wall_stress(law, 5.0, h) rtol = 1e-7
+    # Schumann with an input wind: ⟨τ⟩ = τ_w(⟨U_in⟩)
+    sim = wall_sim()
+    Aeolus.Fields.interior_view(sim.u) .= 2.0; Aeolus.Fields.interior_view(sim.v) .= 0.0
+    F = apply_wall_stress!(sim, law, 1e-8; wind = fill(5.0, 8, 6), formulation = :schumann)
+    @test -F.Fx / (8.0 * 6.0) ≈ wall_stress(law, 5.0, h) rtol = 1e-7
+    # a matching height: the law evaluated at `height`, applied at the
+    # first level; for the log law τ_w ∝ [κU/ln(h/z0)]²
+    for hm in (0.75, fill(1.25, 8, 6))
+        sim = wall_sim()
+        Aeolus.Fields.interior_view(sim.u) .= 2.0; Aeolus.Fields.interior_view(sim.v) .= 0.0
+        us = zeros(8, 6)
+        F = apply_wall_stress!(sim, law, 1e-8; wind = fill(3.0, 8, 6), height = hm, ustar = us)
+        hh = hm isa Real ? hm : hm[1]
+        @test us[3, 3] ≈ Aeolus.SurfaceExchange.von_karman() * 3.0 / log(hh / 0.02) rtol = 1e-12
+        @test -F.Fx / (8.0 * 6.0) ≈ (Aeolus.SurfaceExchange.von_karman() * 3.0 / log(hh / 0.02))^2 rtol = 1e-7
+        @test all(==(2.0), Aeolus.Fields.interior_view(sim.u)[:, :, 2:end])   # only level 1 changes
+    end
     @test_throws ArgumentError apply_wall_stress!(sim, law, 0.5; formulation = :bogus)
     @test_throws ArgumentError apply_wall_stress!(sim, law, 0.5; side = :top, mask = lv)
 end
