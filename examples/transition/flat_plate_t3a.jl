@@ -5,8 +5,10 @@
 # Brierley 1992), in units of the inflow displacement thickness δ*₀ and
 # U∞ = 1, Re_δ*₀ = 300 (Re_x = 3.0e4 at the inflow):
 #
-#   * x-periodic domain 600 × 36 × 24 δ*₀, 288 × 32 × 48 cells
-#     (dx = 2.08, dy = 1.13, dz = 0.5 δ*₀); the plate spans Re_x = 3.0e4 →
+#   * x-periodic domain 600 × 36 × 24 δ*₀, 576 × 64 × 96 cells
+#     (dx = 1.04, dy = 0.56, dz = 0.25 δ*₀; Δx⁺ ≈ 17, Δy⁺ ≈ 9, Δz⁺ ≈ 4 with
+#     the downstream u_τ — coarser grids over-predict the turbulent c_f, see
+#     docs/src/theory/transition.md); the plate spans Re_x = 3.0e4 →
 #     1.9e5, the last 80 δ*₀ are the fringe (Nordström et al. 1999) that
 #     relaxes the outflow to the Blasius inflow and carries the free-stream
 #     turbulence in (Brandt, Schlatter & Henningson 2004);
@@ -28,7 +30,7 @@
 # Figures (docs/src/assets/transition/): t3a_cf.svg (c_f vs Re_x with the
 # laminar and turbulent correlations), t3a_shape_factor.svg, t3a_tu.svg.
 #
-#   JULIA_NUM_THREADS=4 julia --project=. examples/transition/flat_plate_t3a.jl
+#   JULIA_NUM_THREADS=8 julia --project=. examples/transition/flat_plate_t3a.jl   (~2.2 h)
 
 using Aeolus
 using Aeolus.Fields: interior_view
@@ -43,7 +45,7 @@ mkpath(OUT)
 const Tu = 0.033
 nsteps = parse(Int, get(ENV, "T3A_STEPS", "1500")); navg = 600; dt = 1.0
 
-c = flat_plate_setup(; Re_δ0 = 300, Lx = 600, Ly = 36, H = 24, Nx = 288, Ny = 32, Nz = 48,
+c = flat_plate_setup(; Re_δ0 = 300, Lx = 600, Ly = 36, H = 24, Nx = 576, Ny = 64, Nz = 96,
                      fringe_length = 80)
 sim, g = c.sim, c.sim.mesh
 fst = FreeStreamDisturbance(Tu, 10.0, 200; seed = 1, period_y = g.Ly,
