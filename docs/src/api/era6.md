@@ -15,6 +15,7 @@ tested at are in
 - Tensorial scalar eddy diffusivity (P55-c, #181; below) — `Aeolus.Operators`
 - Stability-corrected anisotropic eddy viscosity (P55-e, #187; below) — `Aeolus.Operators`
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
+- [Large-scale forcing — LargeScaleForcing](era6/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; [theory](../theory/large_scale_forcing.md))
 
 ## Shared contract — SGS closures (P54-a)
 

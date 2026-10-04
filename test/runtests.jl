@@ -977,6 +977,7 @@ end
     include("era6_tensor_diffusion.jl")  # P55-c: diagonal / tensor / isentropic scalar eddy diffusivity (#181)
     include("era6_stability_functions.jl") # P58-a: TurbulenceStability contract (#170)
     include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected, Ri_g-dependent anisotropic ν/κ (#187)
+    include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)
 end
 
 # =========================================================================
