@@ -17,7 +17,13 @@ mean. It holds three things:
   hierarchy (`AbstractStabilityFunctions`, default
   `BusingerDyerBeljaarsHoltslag`) and the surface-layer solver
   `solve_surface_layer`. A new family only needs `psi_m`/`psi_h` (and
-  `phi_m`/`phi_h` for diagnostics) to plug into the solver.
+  `phi_m`/`phi_h` for diagnostics) to plug into the solver. The
+  **maximum sustainable heat flux** (Era VI, P58-e, #193:
+  `max_sustainable_heat_flux`, `mshf_solution`, `flux_friction_velocity`,
+  `surface_mshf_ratio`; closed form where `log_linear_slope` is defined)
+  is the largest downward buoyancy flux MOST can carry at a given wind
+  (Van de Wiel et al. 2012). See
+  [the derivation](../../theory/turbulence_stability.md#Maximum-sustainable-heat-flux-(P58-e)).
 - **The surface interface**: `AbstractSurface` and the generics an
   implementer extends. `surface_albedo` and `surface_emissivity` are the
   `RadiationCore` generics; the one-argument methods are broadband.

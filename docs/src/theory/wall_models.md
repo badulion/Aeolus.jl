@@ -190,8 +190,22 @@ model's excess dissipation near the filter scale, which the
 scale-dependent model of P54-e is meant to reduce.
 
 Hooks reserved for later issues (documented, refusing non-default
-values): `filter` (P57-b), `surface_heat_flux` (P58-e), `bottom_bc =
-:noslip` and `θ_walls` (P55-f, P59-e).
+values): `filter` (P57-b), `bottom_bc = :noslip` and `θ_walls` (P55-f,
+P59-e).
+
+**Surface heat flux (P58-e, #193).** `surface_heat_flux = Q` (K m s⁻¹,
+upward kinematic; negative cools) turns the half channel into the
+flux-cooled channel of the stable-boundary-layer collapse studies. It
+switches buoyancy on (``θ_{ref}`` = 300 K by default), adds `Q` to the
+first cell as the prescribed bottom θ flux, and makes the wall
+`MOSTFluxWallLaw`: Monin–Obukhov with the stability set by `Q` and the
+wall's own ``u_τ``. That law gives no stress where ``-Q`` exceeds the
+maximum sustainable heat flux of the local wind
+(`SurfaceExchange.flux_friction_velocity`). The initial wind is the
+neutral log law, so neutral and cooled runs start from the same state.
+θ is conserved to the prescribed flux: ``ΔΣθ\,dV = Q\,A\,Δt`` to
+``10^{-10}``. The collapse regime is in
+[Stability functions → Maximum sustainable heat flux](turbulence_stability.md#Maximum-sustainable-heat-flux-(P58-e)).
 
 The cases are idealised validation set-ups and are not coupled to the
 Berlin run (a stated exception, #174): the wall physics they exercise is

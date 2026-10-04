@@ -17,6 +17,11 @@ Era VI. Theory: [Wall models](../../theory/wall_models.md).
   (time-averaged U, Φ_m, stress budget, ⟨τ_w⟩), with the step size of
   `channel_dt`. Closure, wall law, formulation and stepper are keyword
   arguments; the diagnostics are Operators' (see [Era VI](../era6.md)).
+- **Flux-cooled half channel** (P58-e, #193): `half_channel_case(surface_heat_flux = Q)`
+  with `MOSTFluxWallLaw`, the flux-prescribed Monin–Obukhov wall law
+  that exerts no stress beyond the maximum sustainable heat flux
+  (`SurfaceExchange.max_sustainable_heat_flux`; theory:
+  [Maximum sustainable heat flux](../../theory/turbulence_stability.md#Maximum-sustainable-heat-flux-(P58-e))).
 
 ```@autodocs
 Modules = [Aeolus.WallModels]
