@@ -80,6 +80,9 @@ include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
 include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
 include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 
+# Era VI — high-fidelity turbulence closure (Phases 54-59)
+include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wall-stress operator
+
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -142,6 +145,7 @@ using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 
 # --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
 using .TurbulenceStability         # Phase 58 stability contract (#170)
+using .WallModels                  # Phase 57 (#169)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -914,5 +918,14 @@ export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_pran
 export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # Operators' pointwise fields of the contract.
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
+
+# Phase 57 — wall models (#169): equilibrium wall laws and the implicit
+# wall-stress operator. `friction_velocity` / `wall_stress` do not collide
+# with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
+# (CutCell, the resolved stress).
+export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
+       friction_velocity, wall_stress, wall_drag,
+       spalding_yplus, spalding_uplus, matching_obukhov_length,
+       WallModel, apply_wall_stress!
 
 end # module

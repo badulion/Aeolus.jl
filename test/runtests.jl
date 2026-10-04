@@ -974,6 +974,7 @@ end
 @testset "Era VI" begin
     include("era6_sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
     include("era6_stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
+    include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
 end
 
 # =========================================================================
