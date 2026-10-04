@@ -941,7 +941,7 @@ end
     surface_mshf_ratio(sf, fl::SurfaceFluxes, forcing::SurfaceForcing, z0m;
                        U_min = 0.1, gustiness = 0, Q_max = nothing,
                        c = DEFAULT_SURFACE_CONSTANTS)
-        -> (ratio, Q_down, Q_max, H_max)
+        -> (ratio, Q_down, Q_max, H_max, ζ_mshf)
 
 How close the surface fluxes `fl` of a column are to its maximum
 sustainable heat flux (P58-e, #193). With the air state of `forcing`
@@ -961,6 +961,10 @@ U_{min})`` of [`solve_surface_layer`](@ref). Returns `ratio = Q_down/Q_max`
 ``H_{max} = ρ c_{pm} Q_{max}`` (W m⁻²). For fluxes that
 `turbulent_fluxes` computed with the same `sf`, `U_min` and `gustiness`
 the ratio is at most 1 (the solver's solutions lie on the MSHF curve);
+`ζ_mshf` is the stability ``z_{ref}/L`` at which the curve peaks
+(`NaN` when `Q_max` is passed in): a column whose ``z_{ref}/L`` exceeds it
+is on the *very stable* branch, beyond the MSHF point, where a stronger
+temperature contrast carries less heat — the collapsed regime;
 the moisture term makes it the buoyancy flux, which is what MOST
 constrains, rather than the sensible heat flux alone. `Q_max` (K m s⁻¹)
 skips the maximisation and uses a value already computed for the same
@@ -979,9 +983,14 @@ function surface_mshf_ratio(sf::AbstractStabilityFunctions, fl::SurfaceFluxes,
     cp = heat_capacity_moist(qa, c.thermo)
     Qdown = -(fl.H / (ρ * cp)) * (1 + ε * f.q_air) - ε * θ_a * fl.E / ρ
     Ue = max(sqrt(f.U^2 + gustiness^2), U_min)
-    Qmax = Q_max === nothing ? max_sustainable_heat_flux(sf, Ue, f.z_ref, z0m, z0m, θva; c = c) :
-           oftype(Qdown, Q_max)
-    return (ratio = Qdown / Qmax, Q_down = Qdown, Q_max = Qmax, H_max = ρ * cp * Qmax)
+    if Q_max === nothing
+        m = mshf_solution(sf, Ue, f.z_ref, z0m, θva; c = c)
+        Qmax, ζs = m.Q_max, m.ζ
+    else
+        Qmax, ζs = oftype(Qdown, Q_max), oftype(Qdown, NaN)
+    end
+    return (ratio = Qdown / Qmax, Q_down = Qdown, Q_max = Qmax, H_max = ρ * cp * Qmax,
+            ζ_mshf = ζs)
 end
 
 end # module

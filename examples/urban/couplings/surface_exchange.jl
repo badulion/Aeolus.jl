@@ -83,7 +83,9 @@ Slot `:surface_exchange`, provider `:most` (default).
   maximisation at the column's wind, `z_ref`, `z0m` and ``θ_{va}``
   (Van de Wiel et al. 2012). `H_max` (W m⁻²) and the ratio of the downward
   buoyancy flux to the MSHF are output fields; the report prints the
-  mean ratio of the stable street, roof and park columns; the smoke
+  mean ratio of the stable street, roof and park columns and the share
+  of them beyond the MSHF point (``z_{ref}/L`` past the peak of the flux
+  curve: the very stable, collapsed branch); the smoke
   check asserts ratio ≤ 1 + 1e-8 everywhere (and < 1.1 for the fluxes
   the surface returned, which a soil skin linearises in ``T_{skin}``).
 
@@ -127,6 +129,7 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     # P58-e (#193): maximum sustainable heat flux per column, last surface step
     H_max::Matrix{Float64}     # ρ c_p Q_max (W m⁻²; SurfaceExchange.max_sustainable_heat_flux)
     mshf_ratio::Matrix{Float64} # downward buoyancy flux / Q_max (< 0: upward, unstable)
+    mshf_beyond::Matrix{Bool}  # z_ref/L beyond the MSHF point: the very stable (collapsed) branch
     mshf_worst::Float64        # max ratio of the MOST fluxes of the step's start, all columns and steps
     mshf_worst_delivered::Float64 # the same for the fluxes step_surface! returned (linearised soil skin)
     mshf_time::Float64         # wall time spent in the MSHF maximisations (s)
@@ -190,7 +193,8 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
                                z(), Symbol(o.wall_formulation),
                                z(), z(), z(), z(), z(), z(), z(),
                                0.0, 0, 0.0, 0, 0.0, 0,
-                               fill(NaN, Nx, Ny), fill(NaN, Nx, Ny), -Inf, -Inf, 0.0)
+                               fill(NaN, Nx, Ny), fill(NaN, Nx, Ny), fill(false, Nx, Ny),
+                               -Inf, -Inf, 0.0)
 end
 
 "The `SlabLand` for a column of class `cls` nobody registered a factory for."
@@ -296,6 +300,7 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         end
         c.H_max[i, j] = r.H_max
         c.mshf_ratio[i, j] = r.ratio
+        c.mshf_beyond[i, j] = r.ratio > 0 && bus.z_ref[i, j] / L > r.ζ_mshf
         c.mshf_worst = max(c.mshf_worst, r.ratio)
         c.mshf_worst_delivered = max(c.mshf_worst_delivered, rd.ratio)
         c.U_wall[i, j] = U          # u* is the law at this wind until the next step
@@ -427,7 +432,8 @@ function report(c::SurfaceExchangeMOST, case)
     stable(cls) = [I for I in have if sfc[I] == cls && c.mshf_ratio[I] > 0]
     rs = map((SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK)) do cls
         idx = stable(cls)
-        isempty(idx) ? "   –" : @sprintf("%.2f", mean(c.mshf_ratio[idx]))
+        isempty(idx) ? "–" : @sprintf("%.2f (%.0f%% beyond)", mean(c.mshf_ratio[idx]),
+                                      100 * count(I -> c.mshf_beyond[I], idx) / length(idx))
     end
     return @sprintf("           surface: H %6.1f LE %6.1f G %6.1f W/m²  u* roof %.2f ground %.2f m/s\n",
                     m(bus.H, have), m(bus.LE, have), m(bus.G, have),
@@ -449,6 +455,8 @@ function output_fields(c::SurfaceExchangeMOST, case)
                     :xy, cs -> masked(c.H_max)),
         OutputField("mshf_ratio", "1", "downward surface buoyancy flux / maximum sustainable heat flux (<0: unstable)",
                     :xy, cs -> masked(c.mshf_ratio)),
+        OutputField("mshf_beyond", "1", "1 where z_ref/L is beyond the MSHF point (very stable, collapsed branch)",
+                    :xy, cs -> masked(Float64.(c.mshf_beyond))),
         OutputField("beta_sfc", "1", "surface moisture availability",
                     :xy, cs -> [s === nothing ? NaN : moisture_availability(s) for s in bus.surface])]
 end

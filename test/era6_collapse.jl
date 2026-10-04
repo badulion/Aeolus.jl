@@ -104,6 +104,18 @@ using Aeolus.SurfaceExchange: _Φm, von_karman, grav
             worst = max(worst, r.ratio)
         end
         @test worst > 0.9                      # the strongest cases come close to the bound
+        # the MSHF point splits the ΔT sweep: below ζ* the flux grows with
+        # ΔT (weakly stable), beyond it the flux falls (very stable, collapsed)
+        U = 2.0; z = 10.0; z0 = 0.1; θa = 290.0
+        m = mshf_solution(BDBH, U, z, z0, θa)
+        sols = [solve_surface_layer(BDBH; U = U, z_m = z, θ_a = θa, θ_s = θa - ΔT, z0m = z0,
+                                    z0h = 0.01) for ΔT in range(0.05, 30; length = 300)]
+        ζs = [x.ζ for x in sols]; Qs = [x.u_star * x.θv_star for x in sols]
+        @test all(diff(ζs) .> 0)
+        below = findall(<(m.ζ), ζs); beyond = findall(>(m.ζ), ζs)
+        @test length(below) > 10 && length(beyond) > 10
+        @test all(diff(Qs[below]) .> 0) && all(diff(Qs[beyond]) .< 0)
+        @test maximum(Qs) <= m.Q_max * (1 + 1e-10)
     end
 
     @testset "flux-prescribed friction velocity" begin
