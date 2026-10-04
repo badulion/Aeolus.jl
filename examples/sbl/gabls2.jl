@@ -121,11 +121,11 @@ svg_panel(fig, 840, 50, 300, 280; xlim = xl, ylim = (0.0, 0.6), xticks = xt, yti
           xlabel = "local time (h)", ylabel = "u* (m/s)", tag = "(c)",
           curves = [(th(r, s -> s.u_star)..., i) for (i, r) in enumerate(results)],
           points = [([30.0, 30.0], [sbl_csv_value(ref, "scm_u_star", "low"), sbl_csv_value(ref, "scm_u_star", "high")], 8, :square)])
-svg_panel(fig, 80, 420, 300, 260; xlim = xl, ylim = (-60.0, 200.0), xticks = xt, yticks = -50:50:200,
+svg_panel(fig, 80, 420, 300, 260; xlim = xl, ylim = (-100.0, 250.0), xticks = xt, yticks = -100:50:250,
           xlabel = "local time (h)", ylabel = "H (W/m²)", tag = "(d)",
           curves = [(th(r, s -> s.H)..., i) for (i, r) in enumerate(results)],
           points = [([30.0, 30.0], [sbl_csv_value(ref, "scm_heat_flux", "low"), sbl_csv_value(ref, "scm_heat_flux", "high")], 8, :square)])
-svg_panel(fig, 460, 420, 300, 260; xlim = xl, ylim = (0.0, 1200.0), xticks = xt, yticks = 0:200:1200,
+svg_panel(fig, 460, 420, 300, 260; xlim = xl, ylim = (0.0, 1600.0), xticks = xt, yticks = 0:400:1600,
           xlabel = "local time (h)", ylabel = "h (m, 5 % stress)", tag = "(e)",
           curves = [(th(r, s -> s.h)..., i) for (i, r) in enumerate(results)],
           points = [([30.0, 30.0], [sbl_csv_value(ref, "scm_h", "low"), sbl_csv_value(ref, "scm_h", "high")], 8, :square)])
@@ -156,8 +156,9 @@ open(joinpath(OUTDIR, "cases99_hockey_$(TAG).csv"), "w") do io
         if length(b.V) >= 4
             h = sbl_hockey_threshold(b.V, b.V_TKE; weights = Float64.(b.n))
             push!(hock, (stab = r.stab, z = z, h = h, bins = b))
-            @printf("  %-8s z = %5.1f m: V_s = %.2f m/s (Sun log fit %.2f m/s), slopes %.3f / %.3f (Sun regime 2: ~0.25), V range %.1f-%.1f m/s, %d samples\n",
-                    r.stab, z, h.V_s, Vs_sun(z), h.slope1, h.slope2, minimum(b.V), maximum(b.V), sum(b.n))
+            shape = (h.slope2 > h.slope1 && h.slope2 > 0 && h.slope1 >= 0) ? "hockey stick" : "no hockey-stick shape"
+            @printf("  %-8s z = %5.1f m: V_s = %.2f m/s (Sun log fit %.2f m/s), slopes %.3f / %.3f (Sun regime 2: ~0.25): %s; V range %.1f-%.1f m/s, %d samples\n",
+                    r.stab, z, h.V_s, Vs_sun(z), h.slope1, h.slope2, shape, minimum(b.V), maximum(b.V), sum(b.n))
         end
     end
 end
@@ -182,6 +183,7 @@ svg_panel(fig, 840, 50, 300, 320; xlim = (0.0, 12.0), ylim = (0.0, 60.0), xticks
                         [([h.h.V_s for h in hock if h.stab == r.stab], [h.z for h in hock if h.stab == r.stab], i) for (i, r) in enumerate(results)]),
           points = vcat([(sun.V_s, sun.z, 8, :circle)],
                         [([h.h.V_s for h in hock if h.stab == r.stab], [h.z for h in hock if h.stab == r.stab], i, :square) for (i, r) in enumerate(results)]),
-          legend = vcat([("Sun et al. 2012", 8, "5,3")], [(string(r.stab), i, "") for (i, r) in enumerate(results)]))
+          legend = vcat([("Sun et al. 2012", 8, "5,3")], [(string(r.stab), i, "") for (i, r) in enumerate(results)]),
+          legend_x = 40)
 svg_text(fig, 80, 440, "(a, b) solid: bin means of V_TKE = √e (resolved + SGS) per tower level; dashed: the fitted two-segment line. (c) circles: Sun et al. (2012) Fig. 3a (digitised), dashed: its log fit; squares: fitted V_s.", size = 11)
 println("wrote ", svg_write(fig, joinpath(OUTDIR, "cases99_hockey_$(TAG).svg")))

@@ -30,13 +30,15 @@ _fmt(v) = abs(v - round(v)) < 1e-9 ? string(round(Int, v)) : string(round(v; sig
               curves = [], bands = [], hbands = [], points = [], legend = [])
 
 One panel at pixel origin `(x0, y0)` of size `pw × ph`. `curves` are
-`(xs, ys, color_index[, dash])`, `bands` vertical-profile envelopes
+`(xs, ys, color_index[, dash])` (legend entries `(label, color_index, dash)` at
+`legend_x` px from the left edge), `bands` vertical-profile envelopes
 `(lo_xs, hi_xs, ys)` shaded in grey, `hbands` horizontal bands
 `(ylo, yhi)`, `points` markers `(xs, ys, color_index, shape)` with shape
 `:circle` or `:square`. Values outside the limits are clipped to the frame.
 """
 function svg_panel(fig::SVGFigure, x0, y0, pw, ph; xlim, ylim, xticks, yticks, xlabel = "", ylabel = "",
-                   tag = "", curves = [], bands = [], hbands = [], vbands = [], points = [], legend = [])
+                   tag = "", curves = [], bands = [], hbands = [], vbands = [], points = [], legend = [],
+                   legend_x = pw - 130)
     io = fig.io
     X(x) = x0 + (clamp(x, xlim...) - xlim[1]) / (xlim[2] - xlim[1]) * pw
     Y(y) = y0 + ph - (clamp(y, ylim...) - ylim[1]) / (ylim[2] - ylim[1]) * ph
@@ -84,8 +86,8 @@ function svg_panel(fig::SVGFigure, x0, y0, pw, ph; xlim, ylim, xticks, yticks, x
     for (i, (label, ci, dash)) in enumerate(legend)
         ly = y0 + 14 + 16 * i
         da = isempty(dash) ? "" : """ stroke-dasharray="$dash\""""
-        println(io, """<line x1="$(x0+pw-130)" y1="$(ly-4)" x2="$(x0+pw-108)" y2="$(ly-4)" stroke="$(SVG_COLORS[ci])" stroke-width="2"$da/>""")
-        println(io, """<text x="$(x0+pw-104)" y="$ly" font-size="11">$(svg_escape(label))</text>""")
+        println(io, """<line x1="$(x0+legend_x)" y1="$(ly-4)" x2="$(x0+legend_x+22)" y2="$(ly-4)" stroke="$(SVG_COLORS[ci])" stroke-width="2"$da/>""")
+        println(io, """<text x="$(x0+legend_x+26)" y="$ly" font-size="11">$(svg_escape(label))</text>""")
     end
     return nothing
 end
