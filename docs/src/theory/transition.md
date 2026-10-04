@@ -366,8 +366,56 @@ The onset is located by
 [`transition_onset`](@ref Aeolus.Transition.transition_onset): the
 minimum of ``c_f`` upstream of the point from which ``c_f`` stays 10 %
 above laminar. In the coarse 3-D sanity test (96 × 24 × 48,
-``Re_{δ^*_0} = 300``) Tu = 6 % raises the outlet ``c_f`` to 3.47 times
-Blasius while the undisturbed plate stays within 1.5 %.
+``Re_{δ^*_0} = 300``, plate ``Re_x`` = 3.0e4 to 1.26e5, ``c_f`` averaged
+over the last 200 of 700 steps) Tu = 6 % raises the outlet ``c_f``
+(``Re_x`` 1.03e5–1.17e5) to 3.47 times Blasius. Two laminar controls
+run beside it:
+
+* **Tu = 0 in 2-D** (``N_y = 1``), the cheap exact check: without a seed
+  the 3-D run stays exactly 2-D. Outlet ``c_f`` 1.015 times Blasius
+  (2 s).
+* **Tu = 0.1 % in 3-D** on the same grid, seeded by the same
+  `FreeStreamDisturbance` generator at 1/60 of the amplitude (55 s on
+  3 threads). This checks that the laminar layer survives small 3-D
+  disturbances. It does not transition:
+
+| quantity (seeded 3-D control) | measured | asserted |
+| :-- | :-- | :-- |
+| ``c_f / c_f(\text{2-D}, Tu = 0)``, pointwise, ``Re_x`` 3.5e4–1.17e5 | 0.9981–0.9995 | within 1 % |
+| ``[1\,2\,1]``-filtered ``c_f`` / Blasius, ``Re_x`` 3.5e4–1.12e5 | 0.9805–1.0074 | within 5 % |
+| the same at 0.9 of the plate (``Re_x`` 1.17e5) | 1.052 | — |
+| ``v_{\rm rms}`` in the layer, sampled every 50 steps | rises to 1.97e-3 by step 500, then falls to 1.34e-3 | < 5e-3 throughout |
+| mean layer ``v_{\rm rms}``, steps 550–700 over steps 400–550 | 0.795 | < 1.2 |
+| free-stream ``v_{\rm rms}`` | 0.90e-3 | 0.5e-3–1.5e-3 |
+| layer ``v_{\rm rms}`` at Tu = 6 % (for scale) | 8.2e-2 | > 10× the control |
+
+The disturbances need about one flow-through (≈ 270 steps) to fill the
+plate. After that, the spanwise velocity in the layer stays at about
+twice the free-stream value and decays over the last 300 steps. It does
+not grow. ``Re_{δ^*}`` reaches 589 at 0.9 of the plate, which is above
+the Tollmien–Schlichting critical value of 520 (``Re_x ≈ 9.1\times10^4``).
+The unstable stretch is too short for TS waves to grow anywhere near
+transition amplitudes, and the measured ``c_f`` shows no sign of them.
+The 5 % tolerance matches the 2-D laminar plate. Blasius is a
+parallel-flow similarity solution, the two ends of the plate feel the
+inflow (−2 %) and the fringe, and transition would add 50 % or more. At
+0.9 of the plate the fringe alone raises ``c_f`` by 5 %: a 2-D Tu = 0 run
+at ``Δx = 2.1`` gives 1.053 at the same point. That is why the Blasius
+window stops 48 ``δ^*_0`` before the fringe. A first version ran to 0.9
+of the plate and failed there; the expectation was wrong, not the code.
+
+**Finding: a grid-scale wiggle on the coarse grid.** At
+``Δx = 4.2\,δ^*_0`` both laminar runs, with and without the seed, carry
+the same stationary ``2Δx`` (odd–even) oscillation in ``c_f``. It is
+±0.6 % near the inflow and grows to ±17 % just upstream of the fringe,
+so the unfiltered ``c_f``/Blasius is 0.88–1.22 over the plate. The
+outlet-window average used for the Tu = 0 number (1.015) hides it. It is
+a resolution artefact: the 2-D control at ``Δx = 2.1\,δ^*_0`` has it at
+±0.03 % and stays within 1.6 % of Blasius up to ``x ≈ 265\,δ^*_0``. The
+``[1\,2\,1]/4`` filter removes exactly this mode, which is why the
+Blasius comparison uses filtered ``c_f``. The grids of the 2-D laminar
+plate (``Δx = 2``) and of the T3A-like example (``Δx = 1.04``) are fine
+enough not to need it.
 
 The T3A-like example (`examples/transition/flat_plate_t3a.jl`, Tu = 3.3 %
 as in Roach & Brierley 1992) runs 576 × 64 × 96 cells on
