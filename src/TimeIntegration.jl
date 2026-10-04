@@ -34,7 +34,8 @@ using ..Fields
 using ..Fields: Field, interior_view, location
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
-                            Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC
+                            Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
+                            is_wall, homogeneous_bcs
 using ..Operators
 using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    momentum_advect!, advect_centered!,
@@ -47,6 +48,7 @@ using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence
 using ..TimeSteppers: step!
+using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 
 export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
        SubsteppingSchedule, substeps_for,
@@ -157,15 +159,15 @@ function _max_advective_rate(ud, vd, wd, m::RegularGrid{T}) where {T}
     return r
 end
 
-# Brunt-Väisälä frequency from the horizontal-mean (resolved) θ profile.
-# Allocation-free: carries the previous level's mean in a scalar.
+# Brunt-Väisälä frequency from the horizontal-mean (resolved) θ profile:
+# the largest N² across the faces between the plane means, from the
+# TurbulenceStability contract (Boussinesq form, g/θ₀). Allocation-free:
+# carries the previous level's mean in a scalar.
 function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
     sim.has_buoyancy || return zero(T)
     m = sim.mesh
     ii, jj, kk = interior(m)
     n_h = length(ii) * length(jj)
-    invdz = 1 / m.dz
-    coef  = sim.g_accel / sim.θ₀
     N²max = zero(T)
     prev  = zero(T)
     d = sim.θ.data
@@ -176,7 +178,8 @@ function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
         end
         mean_k = s / n_h
         if kc > 1
-            N²max = max(N²max, coef * (mean_k - prev) * invdz)
+            N²max = max(N²max, buoyancy_frequency_squared(prev, mean_k, m.dz,
+                                                          sim.g_accel, sim.θ₀))
         end
         prev = mean_k
     end
@@ -842,10 +845,11 @@ end
 
 # Rows that are *not* unknowns: `w` on an impermeable wall face is pinned
 # to zero by the BC, so it is removed from the CG system (keeping the
-# reduced operator SPD) instead of being solved for.
+# reduced operator SPD) instead of being solved for. Free-slip and no-slip
+# walls (`is_wall`) pin it alike; the top wall face lies in the halo.
 _constraint_index(::Location, ::RegularGrid, ::FieldBoundaryConditions) = 0
 _constraint_index(::FaceZ, m::RegularGrid, bcs::FieldBoundaryConditions) =
-    (bcs.bottom isa ImpermeableWall || bcs.top isa ImpermeableWall) ? m.Hz + 1 : 0
+    is_wall(bcs.bottom) ? m.Hz + 1 : 0
 
 function _apply_constraint!(a::AbstractArray{T,3}, kc::Int) where {T}
     kc == 0 && return a
@@ -858,7 +862,7 @@ function _assert_supported_bcs(bcs::FieldBoundaryConditions)
         if bc isa ValueBC || bc isa FluxBC
             throw(ArgumentError(
                 "solve_implicit_diffusion! supports the homogeneous BC types " *
-                "handled by fill_halos! (Periodic, NoFlux, ImpermeableWall). " *
+                "handled by fill_halos! (Periodic, NoFlux, ImpermeableWall, NoSlipWall). " *
                 "$(typeof(bc)) makes the operator affine; move the " *
                 "inhomogeneous part into `rhs` and pass a homogeneous BC."))
         end
@@ -934,10 +938,17 @@ matrix-free, with Jacobi-preconditioned conjugate gradients.
   * Boundary conditions are applied by calling `fill_halos!(·, bcs)` on
     the search direction inside every matrix-vector product, so exactly
     the BC types `fill_halos!` supports are supported here: `Periodic`,
-    `NoFlux` and `ImpermeableWall`. `ValueBC`/`FluxBC` make the operator
-    affine and are rejected with an explanatory error. For `w` on an
-    impermeable wall the pinned wall-face row is eliminated from the
-    system.
+    `NoFlux`, `ImpermeableWall` and `NoSlipWall`. `ValueBC`/`FluxBC` make
+    the operator affine and are rejected with an explanatory error. For
+    `w` on an impermeable wall the pinned wall-face row is eliminated from
+    the system.
+  * A *moving* `NoSlipWall` (`u_wall` or `v_wall ≠ 0`) also makes the
+    operator affine, `∇·(ν∇φ) = L₀φ + g`; this one is handled: the CG
+    iterates with the stationary wall ([`homogeneous_bcs`](@ref
+    Aeolus.BoundaryConditions.homogeneous_bcs)) and the wall term
+    `dt·g` is added to the right-hand side, so `φ` is the solution with
+    the wall moving. Pass `homogeneous_bcs(bcs)` yourself when `φ` is an
+    *increment* (a Rosenbrock stage), whose wall value is zero.
   * `field` doubles as the initial guess, and `rhs === field` is
     explicitly allowed (build the right-hand side in place, then solve
     over it — that is what [`step_imex!`](@ref) does).
@@ -984,11 +995,15 @@ end
 
 # Function barrier: specializes on the concrete type of ν.
 function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
-                       m::RegularGrid{T}, bcs::FieldBoundaryConditions,
+                       m::RegularGrid{T}, bcs_full::FieldBoundaryConditions,
                        ws::DiffusionWorkspace, τ::T, maxit::Int,
                        precondition::Symbol, warn::Bool) where {L,T}
     ii, jj, kk = interior(m)
     idx2 = 1 / m.dx^2; idy2 = 1 / m.dy^2; idz2 = 1 / m.dz^2
+    # A moving no-slip wall makes the operator affine: iterate with the
+    # stationary wall and carry the wall term in the right-hand side.
+    bcs = homogeneous_bcs(bcs_full)
+    affine = bcs !== bcs_full
     kc = _constraint_index(L(), m, bcs)
     jacobi = precondition === :jacobi
 
@@ -999,6 +1014,16 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
 
     _apply_constraint!(x, kc)
 
+    # Wall term g = ∇·(ν∇0) with the moving-wall halo, into z (free until
+    # the preconditioner first writes it): b_eff = b + Δt g.
+    if affine
+        fill!(p, zero(T))
+        fill_halos!(pf, bcs_full)
+        @inbounds for k in kk, j in jj, i in ii
+            z[i, j, k] = Δt * _diff_at(p, ν, i, j, k, idx2, idy2, idz2)
+        end
+    end
+
     # r = b - A x   (safe when b === x: A x is formed into Ap first)
     _apply_implicit!(Ap, field, ν, Δt, m, bcs, kc)
     bnorm² = zero(T)
@@ -1007,7 +1032,7 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
             r[i, j, k] = zero(T)
             continue
         end
-        bv = b[i, j, k]
+        bv = affine ? b[i, j, k] + z[i, j, k] : b[i, j, k]
         r[i, j, k] = bv - Ap[i, j, k]
         bnorm² += bv * bv
     end
@@ -1449,11 +1474,14 @@ function _combine4!(out::Field, a, A::Field, b, B::Field, c, C::Field,
 end
 
 # Solve (I - dtγ ∇·(ν∇)) f = f in place, recording solver statistics.
+# `increment = true` (Rosenbrock stages k₁, k₂) solves for a change of the
+# state, whose wall value is zero: the moving-wall term is dropped.
 function _solve_field!(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbol,
-                       f::Field, νm, νs, dtγ, tol, maxit)
+                       f::Field, νm, νs, dtγ, tol, maxit; increment::Bool = false)
     scalar = _is_scalar_name(name)
     ν   = _coef_for(νm, νs, name)
     bcs = scalar ? sim.θ_bcs : sim.bcs
+    increment && (bcs = homogeneous_bcs(bcs))
     dw  = scalar ? ws.diff.c : getfield(ws.diff, name)
     stats = solve_implicit_diffusion!(f, f, ν, dtγ, sim.mesh, bcs;
                                       tol = tol, maxit = maxit, workspace = dw)
@@ -1634,7 +1662,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     for name in names
         k1 = getfield(ws.aux, name)
         _combine2!(k1, zero(T), k1, Δt, _tendency(sim, name), m)
-        _solve_field!(sim, ws, name, k1, νm, νs, γ * Δt, tol, maxit)
+        _solve_field!(sim, ws, name, k1, νm, νs, γ * Δt, tol, maxit; increment = true)
     end
 
     # ---- stage state uⁿ + a₂₁k₁, projected ------------------------------
@@ -1654,7 +1682,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     for name in names
         k2 = getfield(k2set, name)
         _combine2!(k2, Δt, _tendency(sim, name), c21, getfield(ws.aux, name), m)
-        _solve_field!(sim, ws, name, k2, νm, νs, γ * Δt, tol, maxit)
+        _solve_field!(sim, ws, name, k2, νm, νs, γ * Δt, tol, maxit; increment = true)
     end
 
     # ---- update ---------------------------------------------------------

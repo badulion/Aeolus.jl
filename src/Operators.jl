@@ -3,8 +3,12 @@ module Operators
 using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
-using ..Fields: Field, mesh
+using ..Fields: Field, mesh, interior_view
+using ..Grids: interior
 using ..BoundaryConditions: fill_halos!
+using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
+using FFTW: rfft, irfft, fft, ifft, fftfreq
+using Random: AbstractRNG, default_rng, randn
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
@@ -16,7 +20,9 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_eddy_viscosity_u!, add_eddy_viscosity_v!, add_eddy_viscosity_w!,
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
-       advect_weno5!
+       advect_weno5!,
+       box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
+       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
 # Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
@@ -26,6 +32,7 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
 # Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
 export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
        add_sgs_stress_divergence!, sgs_stress_dissipation
+export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -167,7 +174,7 @@ add_eddy_viscosity_u!(tu, u, νt) = _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
 @doc (@doc add_eddy_viscosity_u!) add_eddy_viscosity_w!(tw, w, νt) = _add_eddy_viscosity_w!(tw, w, νt, mesh(w))
 
 """
-    add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field)
+    add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
     add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t)
 
 Add the conservative eddy-diffusion tendency `∂/∂xⱼ(κₜ ∂ϕ/∂xⱼ)` to the
@@ -176,9 +183,41 @@ averaged linearly to each face. The four-argument form is
 `(1/Prₜ) ∂/∂xⱼ(νₜ ∂ϕ/∂xⱼ)`: the same kernel, with the turbulent Prandtl
 number applied as a factor after the flux divergence. Halos of `ϕ` and of
 the coefficient field must be filled.
+
+Keywords of the three-argument form (P56-a, #177):
+
+  * `mask` — a storage-sized `AbstractArray{Bool,3}` of solid cells (e.g.
+    `IBM.SolidMask(...).mask`). A face with a solid cell on either side
+    carries **no flux**, so a scalar does not diffuse into or out of a
+    building, and the tendency of a solid cell is left untouched. Every
+    open face carries the unmasked flux, so the fluid integral `Σ ϕ dV` is
+    conserved exactly (up to round-off). The halo entries of `mask` must
+    be consistent with the boundary conditions of `ϕ` (periodic copies
+    across a periodic seam; a `false` halo next to a no-flux wall is
+    harmless, since that face carries no gradient).
+  * `weights = (Wc, Wf)` — the sound-proof (anelastic / pseudo-incompressible)
+    form `(1/W) ∇·(W κₜ ∇ϕ)`, with a cell weight `Wc[k]` and a z-face weight
+    `Wf[k]` (bottom face of cell `k`) per storage level (`Anelastic.constraint_weights`).
+    It conserves `Σ W ϕ dV` instead of `Σ ϕ dV`.
+
+With both `nothing` (default) this is bit for bit the unmasked kernel.
 """
-add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field) =
-    _add_eddy_diffusion_scalar!(tϕ, ϕ, κt, one(eltype(κt.data)), mesh(ϕ))
+function add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
+    mask === nothing && weights === nothing &&
+        return _add_eddy_diffusion_scalar!(tϕ, ϕ, κt, one(eltype(κt.data)), mesh(ϕ))
+    g = mesh(ϕ)
+    if mask !== nothing
+        size(mask) == size(ϕ.data) ||
+            throw(DimensionMismatch("mask has size $(size(mask)); expected the storage size $(size(ϕ.data))"))
+    end
+    wc, wf = weights === nothing ? (nothing, nothing) : weights
+    if weights !== nothing
+        n = size(ϕ.data, 3)
+        (length(wc) >= n && length(wf) >= n) ||
+            throw(DimensionMismatch("weights: need Wc and Wf per storage level ($n), got $(length(wc)), $(length(wf))"))
+    end
+    return _add_eddy_diffusion_scalar_masked!(tϕ, ϕ, κt, g, mask, wc, wf)
+end
 add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t::Real) =
     _add_eddy_diffusion_scalar!(tϕ, ϕ, νt, 1 / Pr_t, mesh(ϕ))
 
@@ -401,22 +440,20 @@ function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T
     inv27 = one(T) / 27
     @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
         li = i + 1; lj = j + 1; lk = k + 1
-        Ut = zero(T); Vt = zero(T); Wt = zero(T)
-        UU = zero(T); VV = zero(T); WW = zero(T); UV = zero(T); UW = zero(T); VW = zero(T)
-        A11 = zero(T); A22 = zero(T); A33 = zero(T); A12 = zero(T); A13 = zero(T); A23 = zero(T)
-        B11 = zero(T); B22 = zero(T); B33 = zero(T); B12 = zero(T); B13 = zero(T); B23 = zero(T)
-        for dk in -1:1, dj in -1:1, di in -1:1
-            a = li + di; b = lj + dj; c = lk + dk
-            uu = Uc[a,b,c]; vv = Vc[a,b,c]; ww = Wc[a,b,c]
-            Ut += uu; Vt += vv; Wt += ww
-            UU += uu*uu; VV += vv*vv; WW += ww*ww
-            UV += uu*vv; UW += uu*ww; VW += vv*ww
-            s11 = S11[a,b,c]; s22 = S22[a,b,c]; s33 = S33[a,b,c]
-            s12 = S12[a,b,c]; s13 = S13[a,b,c]; s23 = S23[a,b,c]
-            ms = magS[a,b,c]
-            A11 += s11; A22 += s22; A33 += s33; A12 += s12; A13 += s13; A23 += s23
-            B11 += ms*s11; B22 += ms*s22; B33 += ms*s33
-            B12 += ms*s12; B13 += ms*s13; B23 += ms*s23
+        # The test filter: the 3 × 3 × 3 box of `box_filter!`, summed for
+        # all 21 quantities in one sweep of the shared stencil.
+        Ut, Vt, Wt, UU, VV, WW, UV, UW, VW,
+        A11, A22, A33, A12, A13, A23,
+        B11, B22, B33, B12, B13, B23 = _box_stencil_sum(li, lj, lk, 1, 1, 1) do a, b, c
+            @inbounds begin
+                uu = Uc[a,b,c]; vv = Vc[a,b,c]; ww = Wc[a,b,c]
+                s11 = S11[a,b,c]; s22 = S22[a,b,c]; s33 = S33[a,b,c]
+                s12 = S12[a,b,c]; s13 = S13[a,b,c]; s23 = S23[a,b,c]
+                ms = magS[a,b,c]
+            end
+            (uu, vv, ww, uu*uu, vv*vv, ww*ww, uu*vv, uu*ww, vv*ww,
+             s11, s22, s33, s12, s13, s23,
+             ms*s11, ms*s22, ms*s33, ms*s12, ms*s13, ms*s23)
         end
         Ut *= inv27; Vt *= inv27; Wt *= inv27
         L11 = UU*inv27 - Ut*Ut; L22 = VV*inv27 - Vt*Vt; L33 = WW*inv27 - Wt*Wt
@@ -461,6 +498,10 @@ function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T
     return nothing
 end
 
+# Explicit filters, energy spectrum and isotropic initialiser (Phase 54, P54-c).
+include("operators/filters.jl")
+include("operators/spectra.jl")
+
 # -------------------------------------------------------------------------
 # Era VI: the SGS closure contract (wraps the kernels above).
 # -------------------------------------------------------------------------
@@ -477,7 +518,7 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                      _add_buoyancy!, _add_buoyancy_moist!, _add_coriolis!,
                      _compute_smagorinsky_νt!,
                      _add_eddy_viscosity_u!, _add_eddy_viscosity_v!, _add_eddy_viscosity_w!,
-                     _add_eddy_diffusion_scalar!,
+                     _add_eddy_diffusion_scalar!, _add_eddy_diffusion_scalar_masked!,
                      _add_surface_flux!, _add_sponge!,
                      _advect_weno5!,
                      _add_sgs_stress_divergence!, _add_stress_divergence!,
@@ -487,5 +528,8 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
 # Era VI: the stress-form SGS momentum divergence (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/sgs_stress.jl")
+
+# Pointwise N² and Ri_g (Era VI, P58-a).
+include("operators/stratification.jl")
 
 end # module
