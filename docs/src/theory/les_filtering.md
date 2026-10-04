@@ -234,27 +234,39 @@ Bardina model correlates much better but dissipates too little: its mean
 
 Two points need care.
 
-**The ``Π`` correlation falls with ``Re_λ`` and ``Δ/η``.** The fixture
-was 48³ (``Re_λ = 32``) until the review of #208. There ``ρ_Π`` at 4h
-was 0.867, above the 0.85 of the literature band, and the test carried a
-widened bound. The expected band was not wrong in general, and neither
-was the code: the band holds at higher ``Re_λ``. At fixed ``Δ/η``
-(``k_{max}η`` is held fixed by the choice of ``ν``):
+**The ``Π`` correlation, ``Δ/η`` and ``Re_λ``.** The fixture was 48³
+(``Re_λ = 32``) until the review of #208. There ``ρ_Π`` at 4h was 0.867,
+above the 0.85 of the literature band, and the test carried a widened
+bound. Neither the band nor the code was wrong: at 96³ the 4h value is
+inside the band. ``ρ_Π`` falls with ``Δ/η`` at every resolution. Its
+dependence on ``Re_λ`` at fixed ``Δ/η`` (``k_{max}η`` is held fixed by
+the choice of ``ν``) is shown here as data. It is **not asserted**:
 
-| Δ | 48³, ``Re_λ = 32`` | 96³, ``Re_λ = 64`` |
-| :-- | --: | --: |
-| 4h | 0.867 (8.0η) | 0.810 (7.8η) |
-| 8h | 0.814 (15.9η) | 0.734 (15.7η) |
-| 16h | 0.669 (31.9η) | 0.669 (31.3η) |
+| Δ/η | 48³, ``Re_λ = 32`` | 96³, ``Re_λ = 64`` | 256³, ``Re_λ = 78.7`` |
+| :-- | --: | --: | --: |
+| ≈ 8η (4h) | 0.867 (8.0η) | 0.810 (7.8η) | 0.832 (8.1η) |
+| ≈ 16η (8h) | 0.814 (15.9η) | 0.734 (15.7η) | 0.787 (16.1η) |
+| ≈ 32η (16h) | 0.669 (31.9η) | 0.669 (31.3η) | 0.756 (32.2η) |
+| ≈ 64η (32h) | — | — | 0.728 (64.4η) |
 
-At 16h the filter is a third of the 48³ box, and the two agree. At
-Δ ≈ 8η the filter sits in the near-dissipation range. There ``τ`` is
-given by its Taylor expansion, the gradient model
+Each column is a single seed. Earlier versions of this page and of the
+test said that ``ρ_Π`` falls with ``Re_λ``, and the test asserted
+48³ > 96³ > 256³ at fixed ``Δ/η``. The 256³ record broke that, and the
+*expectation* was what was wrong, not the code. It was extrapolated from
+two single-seed points (48³ → 96³), and the physical argument does not
+hold at fixed ``Δ/η``. The filter sits at the same distance from the
+dissipation range whatever the ``Re``, so only ``Δ/L`` changes, and no
+monotone dependence is established for ``Re_λ`` between 32 and 79. The
+generator runs had already shown this: from 64³ upward they agree within
+about ±0.01 at 4h (below). At 16h the filter is a third of the 48³ box.
+
+At ``Δ ≈ 8η`` the filter sits in the near-dissipation range. There
+``τ`` is given by its Taylor expansion, the gradient model
 ``(Δ^2/12)∂_k\bar u_i∂_k\bar u_j``, which correlates with the exact
-``τ`` at 0.97 (48³) and 0.98 (96³). Both its ``Π`` and the Smagorinsky
-``(C_sΔ)^2|\bar S|^3`` are cubic in the velocity gradient, and at low
-``Re_λ`` the few energetic gradient structures dominate both. The test
-asserts the band at 96³ and the fall from 48³ at 4h and 8h.
+``τ`` at 0.97 (48³), 0.98 (96³) and 0.977 (256³). Both its ``Π`` and
+the Smagorinsky ``(C_sΔ)^2|\bar S|^3`` are cubic in the velocity
+gradient, which is why ``ρ_Π`` is high at small ``Δ/η``. The test asserts
+the literature band at 4h for the 96³ fixture and for the 256³ record.
 
 **The dynamic coefficient depends on the filter-width ratio.** The
 coefficient from `compute_dynamic_smagorinsky_νt!` is comparable to the
@@ -273,7 +285,7 @@ fixture) writes the full tables for 4h, 8h and 16h. The Smagorinsky ``ρ(τ_{12}
 and 0.111. The dynamic ``C_s`` on the DNS grid is +6 %, +3 % and −14 %
 from it, and on the LES grid +24 % and +47 % (4h, 8h).
 
-**The offline 256³ record.** The 96³ fixture is the CI reference; a
+**The offline 256³ record.** The 96³ fixture is the CI reference. A
 256³ run of the same fixture is made once, offline, by
 `examples/validation/dns256_generate.jl` (or by the suite with
 `AEOLUS_DNS256=1`). It writes `test/fixtures/dns256_apriori.toml`: the
@@ -289,19 +301,49 @@ Two choices differ from the fixture:
   (``k_{max}η`` × 1.026), and it refuses to write the record (writing
   `<out>.failed` instead) if ``k_{max}η < 1.5`` or another required DNS
   check fails;
-- the run continues past the dissipation peak (extrapolated
-  ``t ≈ 3.7`` at 256³), where ``k_{max}η`` has its minimum.
+- the run continues past the dissipation peak, where ``k_{max}η`` has
+  its minimum.
 
-The pipeline is proven at 32³ in every suite run and was validated end to
-end at 32³–96³. From these runs, the 256³ case needs ≈ 2.8 h on three
-threads and 8–10 GB. The suite's 256³ testset is a no-op until the file
-exists. When it exists, the testset asserts the literature band at 4h
-and that ``ρ_Π`` at fixed ``Δ/η`` lies below the 48³ and 96³ values.
-That trend is not yet secure beyond 48³. At 4h (≈ 7.5–7.8η) the
-generator gives 0.811 at ``Re_λ = 45`` (64³) and 0.822 at 52 (96³, past
-the peak), and the fixture gives 0.810 at 64. These agree within the
-±0.01 scatter of a single seed. The 256³ comparison is therefore a real
-test of the trend.
+The record in the repository (seed 1, created 2026-10-04) passed every
+DNS check:
+
+| Check | 256³ record |
+| :-- | --: |
+| ``Re_λ`` at the end | 78.7 |
+| ``k_{max}η`` (minimum over the run; at the end) | 1.555; 1.561 |
+| velocity-derivative skewness at the end | −0.505 |
+| discrete energy budget, max per step | 3.4·10⁻⁴ |
+| ε peak; end of run | ``t = 3.60``; ``t = 3.85`` (1264 RK3 steps) |
+| run time | 7397 s = 2.05 h on a single core |
+| peak memory (RSS) | 9.9 GB |
+
+The solver is single-threaded, so the run time is that of one core
+however many threads Julia is given.
+
+| Gaussian Δ | 4h (8.1η) | 8h (16.1η) | 16h (32.2η) | 32h (64.4η) |
+| :-- | --: | --: | --: | --: |
+| Smagorinsky ``ρ_Π`` | 0.832 | 0.787 | 0.756 | 0.728 |
+| Smagorinsky ``ρ(τ_{12}, τ_{13}, τ_{23})`` | 0.24, 0.24, 0.25 | 0.27, 0.27, 0.27 | 0.34, 0.32, 0.31 | 0.43, 0.42, 0.36 |
+| dissipation-matched ``C_s`` | 0.099 | 0.104 | 0.118 | 0.142 |
+| dynamic ``C_s`` (DNS grid) | 0.105 | 0.103 | 0.097 | 0.089 |
+| dynamic ``C_s`` (LES grid) | 0.122 | 0.137 | 0.150 | 0.164 |
+| Bardina ``ρ_Π`` | 0.956 | 0.895 | 0.817 | 0.761 |
+| gradient model ``ρ(τ_{12})`` | 0.977 | 0.944 | 0.891 | 0.804 |
+| backscatter (points with ``Π < 0``) | 21 % | 20 % | 18 % | 14 % |
+| min ``λ_1/τ_{kk}`` | 4.9·10⁻⁴ | 3.7·10⁻³ | 1.4·10⁻² | 5.6·10⁻² |
+
+At 4h the record is inside the literature bands, which the suite asserts
+(``0.4 < ρ_Π < 0.85``, component correlations 0.1–0.45, ``C_s``
+0.08–0.22, backscatter below 50 %, Bardina above Smagorinsky in ``ρ_Π``
+at every width). The comparison of ``ρ_Π`` with the 48³ and 96³ values
+at the same ``Δ/η`` is logged but not asserted (the table above).
+
+The pipeline is proven at 32³ in every suite run and was validated end
+to end at 32³–96³. The suite's 256³ testset is a no-op when the file is
+absent. At 4h (≈ 7.5–7.8η) the generator gives 0.819 at ``Re_λ = 21``
+(32³), 0.869 at 31 (48³), 0.811 at 45 (64³) and 0.822 at 52 (96³, past
+the peak), and the fixture gives 0.810 at 64. From 64³ upward these
+agree within about ±0.01, the scatter of a single seed.
 
 References: Clark, R. A., Ferziger, J. H. & Reynolds, W. C. (1979),
 *J. Fluid Mech.* 91, 1; Liu, S., Meneveau, C. & Katz, J. (1994), *J. Fluid
