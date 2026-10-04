@@ -305,7 +305,7 @@ options go under the coupling name in `options`.
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
 | `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, bit for bit the cores' built-in closure), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167); every core and stepper takes it |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
-| `:scalar_advection` | `:advection_schemes` (`scalar_advection`, option `scheme = :weno_z5`) | the `:transport` stage |
+| `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177) |
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every
@@ -324,6 +324,38 @@ rejected step. A new provider goes in its own file,
 so it loads after `sgs.jl`, which defines the slot. Which providers combine with the
 `:core` and `:timestepper` slots is in [Dynamical core and time
 integration](#Dynamical-core-and-time-integration).
+
+**SGS diffusion of the tracers (#177).** The closure's eddy diffusivity
+reaches every scalar the case transports. θ gets it inside `step!`; the
+tracers get it in the `:transport` stage: after its advective update each
+tracer with `advect = true` (qv, ql, the chemistry species) is advanced by
+`dt · ∇·(κt ∇q)` with `sim.κt` of the last dynamics step
+(`TracerSGSDiffusion`, `sgs_diffuse!`). The pollutant, which has its own
+`:tracers` stage, calls the same helper. The flux divergence is the src
+kernel `add_eddy_diffusion_scalar!` with the case's solid mask (periodic
+lateral halos): no flux through a face next to a building and solid cells
+untouched, so vapour neither leaks into the building interiors nor draws
+on the stale value they hold. On a sound-proof core it passes the
+constraint weights, giving `(1/W)∇·(W κt ∇q)`, which conserves `Σ W q`;
+on the anelastic core that is the ledger's `Σ ρ̄ q`. The diffusion books
+its change of water as `sgs_diffusion` (zero to round-off) plus
+`density_redistribution`. Its `smoke_check` asserts that the diffusion
+alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`. Before
+#177 no tracer was diffused at all: they saw only the implicit
+dissipation of WENO, a missing-physics bug. `sgs_diffusion = false`
+reproduces that transport for comparison. Measured over the first hour of the summer flagship (06:00–07:00,
+adaptive steps, 64×64×32), with vs without the diffusion: the mean qv of
+the lowest fluid level 9.496e-3 vs 9.572e-3 kg/kg and its horizontal
+standard deviation 4.18e-4 vs 4.96e-4 kg/kg (−16 %); the ground-level
+pollutant maximum 5.01 vs 6.88 (−27 %, domain maximum 13.6 vs 21.5); in
+the 1669 wall-nook cells (fluid with two or more solid lateral
+neighbours) the largest vapour excess over the level mean 1.42e-3 vs
+1.86e-3 kg/kg, so the diffusion relieves the IBM nook residual noted in
+`scalar_advection.jl` but does not remove it; water residual −1.8e-14
+kg/m², `sgs_diffusion` −6.1e-19 kg/m². Cost: +1.0 ms per advected tracer
+and step (7 tracers: `scalar_advection` 57.3 → 64.3 ms/step), +0.9 ms for
+the pollutant; the masked kernel takes 0.58 ms per call against 0.10 ms
+unmasked.
 
 * **Pressure solvers.** All three solve the same 7-point Laplacian with
   the same boundary conditions (periodic, periodic, Neumann); the
@@ -711,9 +743,10 @@ terms per step and its Ts clamp as `clamp`; nothing is clamped now.
 Sources in the default case: `evaporation` (surface exchange; negative
 where the surface takes up dew), `building_vapour`,
 `dew` (deposition, negative), `precipitation` (Kessler rain out of the
-bottom), `qv_clamp` (the Kessler coupling's clamp) and `transport` (the
+bottom), `qv_clamp` (the Kessler coupling's clamp), `transport` (the
 change of water the transport stage makes; zero for a conservative
-scheme, and measured at ~1e-19 kg m⁻² at ρ = 1 since #132). The ledger
+scheme, and measured at ~1e-19 kg m⁻² at ρ = 1 since #132) and
+`sgs_diffusion` (the same for the tracers' SGS diffusion, #177; ~1e-19). The ledger
 integrates the water with `ledger.ρ`, one density
 per level, the reference density `case.ref.ρ̄` (#131). A coupling that
 puts a flux into the air with a different density than the ledger's

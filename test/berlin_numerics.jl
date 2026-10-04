@@ -11,7 +11,7 @@
 
 using Test
 using Aeolus
-using Aeolus.Fields: interior_view
+using Aeolus.Fields: interior_view, Field
 using Printf
 
 isdefined(Main, :BerlinCase) ||
@@ -53,6 +53,49 @@ end
                   (:u, :v, :w, :θ, :p, :νt))
         @test all(((a, b),) -> interior_view(a.field) == interior_view(b.field), zip(ml.tracers, ref.tracers))
         @test ml.bus.Ts == ref.bus.Ts
+    end
+
+    @testset "SGS diffusion of the tracers with κt, mask-aware (#177)" begin
+        # The :transport stage diffuses every advected tracer with sim.κt of the
+        # last dynamics step through the src kernel, with the solid mask.
+        sa = BC.find_coupling(ref, :scalar_advection)
+        d = sa.diffusion
+        @test d isa BC.TracerSGSDiffusion && d.weights === nothing   # Boussinesq core
+        m = ref.mesh
+        @test maximum(interior_view(ref.sim.κt)) > 0 && minimum(interior_view(ref.sim.κt)) >= 0
+        # one diffusion step of qv from the state after N steps
+        q = deepcopy(BC.tracer(ref, :qv))
+        q0 = copy(interior_view(q))
+        solid = view(ref.geom.sm.mask, m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz)
+        fluid = .!solid
+        @test count(solid) > 0
+        BC.sgs_diffuse!(d, ref, q, 2.0)
+        dq = interior_view(q) .- q0
+        # one source of truth: the increment is dt × the src kernel with the mask
+        t = Field(CellCenter(), m); qq = deepcopy(q); interior_view(qq) .= q0
+        fill_halos!(qq, d.bcs)
+        add_eddy_diffusion_scalar!(t, qq, ref.sim.κt; mask = d.mask)
+        @test interior_view(q) == q0 .+ 2.0 .* interior_view(t)     # bit for bit
+        @test maximum(abs, dq) > 0                                  # it does something
+        @test all(iszero, dq[solid])                                # buildings untouched
+        @test abs(sum(dq[fluid])) <= 1e-12 * sum(q0[fluid])         # Σ q V conserved
+        # the fluctuation about each level's fluid mean decays
+        var(x) = sum(k -> (v = x[:, :, k][fluid[:, :, k]]; isempty(v) ? 0.0 :
+                          sum(abs2, v .- sum(v) / length(v))), 1:m.Nz)
+        @test var(interior_view(q)) < var(q0)
+        # the unmasked kernel would exchange vapour with the building interiors
+        tu = Field(CellCenter(), m)
+        add_eddy_diffusion_scalar!(tu, qq, ref.sim.κt)
+        leak = 2.0 * sum(interior_view(tu)[fluid])
+        @info @sprintf("  SGS tracer diffusion (2 s, qv): max|Δq| %.2e kg/kg, Σ_fluid Δq/Σ_fluid q %.1e masked vs %.1e unmasked (vapour from the building interiors)",
+                       maximum(abs, dq), sum(dq[fluid]) / sum(q0[fluid]), leak / sum(q0[fluid]))
+        @test abs(leak) > 1e3 * abs(sum(dq[fluid]))
+        # off switch: the pre-#177 transport (no tracer diffusion)
+        off = BC.build_case(BC.CaseConfig(:smoke; verbose = false, nsteps = 1,
+                                          options = Dict{Symbol,Any}(:scalar_advection => (sgs_diffusion = false,)));
+                            io = devnull)
+        @test BC.find_coupling(off, :scalar_advection).diffusion === nothing
+        @test BC.tracer_sgs_diffusion(off) === nothing
     end
 
     @testset "configuration errors" begin
