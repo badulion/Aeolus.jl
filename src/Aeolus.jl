@@ -164,6 +164,7 @@ export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!
 # Era VI (P54-a, #167): the SGS closure contract
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
+       sgs_tracer_diffusivity!,
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
@@ -177,6 +178,10 @@ export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_m
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
 # Era VI (P54-d, #174): wall-bounded flow diagnostics
 export phi_m_profile, total_stress_profile, streamwise_spectrum
+# Era VI (P55-d, #176): AMD and Vreman closures
+export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
+       compute_vreman_νt!,
+       sgs_buoyancy_parameter
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!

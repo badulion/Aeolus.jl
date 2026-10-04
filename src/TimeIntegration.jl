@@ -43,7 +43,8 @@ using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    add_surface_flux!, add_sponge!,
                    AbstractSGSClosure, SGSFields, compute_sgs!, sgs_fields, advance_sgs!,
                    sgs_state, restore_sgs_state!, sgs_closure, _active_sgs,
-                   add_sgs_stress_divergence!, _check_sgs_stress
+                   add_sgs_stress_divergence!, _check_sgs_stress,
+                   sgs_tracer_diffusivity!
 using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence
@@ -78,6 +79,7 @@ _active(sim::BoussinesqSimulation) =
     sim.has_moisture ? (:u, :v, :w, :θ, :qv) : (:u, :v, :w, :θ)
 
 _is_scalar_name(name::Symbol) = name === :θ || name === :qv
+
 
 # =========================================================================
 # Phase 23 — CFL constraints and diagnostics
@@ -1245,6 +1247,7 @@ mutable struct IMEXWorkspace{T,S<:NamedTuple,D<:NamedTuple}
     ν_scal::Union{Nothing,Array{T,3}}
     ν_mom_v::Union{Nothing,Array{T,3}}    # vertical ν_eff (sgs_stress = :symmetric)
     ν_scal_v::Union{Nothing,Array{T,3}}   # vertical κ_eff (a closure with κv ≢ κh)
+    ν_qv::Union{Nothing,Array{T,3}}       # qv's own frozen coefficient (AMD)
     total_iterations::Int
     max_residual::T
 end
@@ -1259,7 +1262,7 @@ function IMEXWorkspace(sim::BoussinesqSimulation{T}) where {T}
               w = DiffusionWorkspace(sim.w), c = DiffusionWorkspace(sim.θ))
     return IMEXWorkspace{T,typeof(state0),typeof(diff)}(
         state0, aux, nothing, Field(CellCenter(), m), diff, nothing, nothing,
-        nothing, nothing, 0, zero(T))
+        nothing, nothing, nothing, 0, zero(T))
 end
 
 const _IMEX_WORKSPACES = WeakKeyDict{Any,Any}()
@@ -1373,6 +1376,18 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
         @inbounds νsv .= sim.ν .+ f.κv.data
         _DirCoef(_coef(νs, m), _coef(νsv, m))
     end
+    if sim.has_moisture
+        # qv: the closure's diffusivity for a scalar other than θ — f.κh for a
+        # Prandtl-number closure (shared coefficient, so qv shares `cs`,
+        # including a separate κv), its own isotropic one for AMD.
+        κq = sgs_tracer_diffusivity!(ws.scratch, closure, f, sim, sim.qv)
+        if κq !== f.κh
+            ws.ν_qv === nothing && (ws.ν_qv = similar(sim.νt.data))
+            νq = ws.ν_qv::Array{T,3}
+            @inbounds νq .= sim.ν .+ κq.data
+            cs = (θ = cs, qv = _coef(νq, m))
+        end
+    end
     stress === :symmetric || return (_coef(νm, m), cs, nothing)
     νmv = if f.νv === f.νh
         νm
@@ -1388,9 +1403,15 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     return (cm, cs, (νm, νmv))
 end
 
-# The implicit coefficient of the field `name`.
+# The implicit coefficient of the field `name`: momentum `νm` (one coefficient,
+# or `(u, v, w)` for the stress form); scalars `νs`, which is one coefficient
+# for θ and qv, or `(θ = …, qv = …)` when the SGS closure gives qv its own
+# diffusivity (AMD, `sgs_tracer_diffusivity!`).
 @inline _coef_for(νm, νs, name::Symbol) =
-    _is_scalar_name(name) ? νs : (νm isa NamedTuple ? getfield(νm, name) : νm)
+    _is_scalar_name(name) ? _scalar_coef(νs, name) :
+                            (νm isa NamedTuple ? getfield(νm, name) : νm)
+@inline _scalar_coef(νs, ::Symbol) = νs
+@inline _scalar_coef(νs::NamedTuple{(:θ, :qv)}, name::Symbol) = getfield(νs, name)
 
 _diffusion_buffer(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbol) =
     name === :u ? sim.lap_u : name === :v ? sim.lap_v : name === :w ? sim.lap_w :
@@ -1508,7 +1529,9 @@ Advance `sim` by `dt` with a semi-implicit IMEX scheme
     prescribed surface flux, Rayleigh sponge, and the user `body_force!`;
   * **implicit**: diffusion of `u, v, w, θ` (and `qv` when moist) with
     the frozen effective viscosity `ν + νₜ` (`ν + κₜ` for scalars;
-    `κₜ = νₜ/Prₜ` for the Smagorinsky closures),
+    `κₜ = νₜ/Prₜ` for the Smagorinsky closures; `qv` takes the closure's
+    [`sgs_tracer_diffusivity!`](@ref Aeolus.Operators.sgs_tracer_diffusivity!),
+    which for AMD is its own diffusivity from the `qv` gradient),
     solved by [`solve_implicit_diffusion!`](@ref);
   * **pressure projection at the end of every stage**, so each stage
     value — and therefore the returned state — is discretely

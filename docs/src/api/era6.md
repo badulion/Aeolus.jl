@@ -18,6 +18,7 @@ tested at are in
 - [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; [theory](../theory/wall_models.md))
 - [Large-scale forcing — LargeScaleForcing](era6/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; [theory](../theory/large_scale_forcing.md))
 - Walls — `NoSlipWall` and the resolved wall stress (P59-a, #172; below; [theory](../theory/transition.md))
+- AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -48,6 +49,7 @@ Aeolus.Operators.sgs_state
 Aeolus.Operators.restore_sgs_state!
 Aeolus.Operators.add_sgs_momentum!
 Aeolus.Operators.add_sgs_scalar!
+Aeolus.Operators.sgs_tracer_diffusivity!
 Aeolus.Operators.compute_sgs!
 Aeolus.Operators.sgs_closure
 Aeolus.Operators.AbstractEddyViscosityClosure
@@ -152,4 +154,25 @@ E = streamwise_spectrum(hc.sim.u, [3, 6, 12])           # E11(k1) at three level
 Aeolus.Operators.phi_m_profile
 Aeolus.Operators.total_stress_profile
 Aeolus.Operators.streamwise_spectrum
+```
+
+## Anisotropic minimum-dissipation and Vreman closures (P55-d)
+
+Two closures on the contract that weight each direction with its own grid
+spacing and vanish in laminar flow (`src/operators/sgs_amd_vreman.jl`,
+#176). The theory, the constants and the measured numbers are in
+[Smagorinsky-Lilly SGS → AMD and Vreman](../theory/sgs.md#Anisotropic-minimum-dissipation-and-Vreman-closures).
+
+```julia
+step!(sim, dt; sgs = AMDClosure())            # C = 0.3, own κ_t, buoyancy term with g/θ₀
+step!(sim, dt; sgs = VremanClosure(0.17))     # c = 2.5 C_s², κ_t = ν_t/Pr_t
+```
+
+```@docs
+Aeolus.Operators.AMDClosure
+Aeolus.Operators.VremanClosure
+Aeolus.Operators.compute_amd_coefficients!
+Aeolus.Operators.compute_amd_scalar_diffusivity!
+Aeolus.Operators.compute_vreman_νt!
+Aeolus.Operators.sgs_buoyancy_parameter
 ```

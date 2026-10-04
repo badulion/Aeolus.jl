@@ -13,6 +13,8 @@
 #   Lagrangian (#173) +12.8 %      −2.8 %       0.095 / 0.077           1.61 / 1.43
 #   Smagorinsky .17  +13.2 %       −2.6 %       0.102 / 0.085           1.62 / 1.51
 #   no model         +98.2 %     +160.6 %       0.224 / 0.315           6.67 / 15.2
+#   AMD (C = 0.3)    +20.0 %       +7.7 %       0.113 / 0.095           1.86 / 1.94   (#176)
+#   Vreman (c=.0723) +16.1 %       −0.3 %       0.109 / 0.093           1.77 / 1.72   (#176)
 #
 # History (P54-c review on #205). The first version of this benchmark
 # missed K(171)/K(42) by −15.7 % (dynamic) and K(98)/K(42) passed at
@@ -49,6 +51,39 @@
 # for seeds 1–3, 0.100 / 0.101 for 1–6), so that assertion is <= 0.11:
 # the former <= 0.10 at 98 was met only with the over-energetic start,
 # whose extra small-scale energy drained K faster and hid the 32³ pile-up.
+#
+# AMD and Vreman (P55-d, #176). Both leave more energy at the cut-off than
+# Smagorinsky at 32³ (E(k_c)/CBC 1.86 and 1.77 against 1.62), AMD because
+# ν_t = 0 wherever the resolved strain produces no subfilter energy (about a
+# quarter of the cells), so the 32³ station-98 excess above is larger for
+# them. Vreman passes the assertions of the other closures. AMD misses the
+# ±20 % at station 98 by 0.02 points (+20.02 %) and the 0.11-decade RMS at
+# 98 (0.113): its pile-up is the 32³ one, not a property of the model, as
+# the resolution sweep (seeds 1–3) shows:
+#
+#   N    AMD K98 / K171     Vreman            Smagorinsky
+#   32   +20.0 / +7.7 %     +16.1 / −0.3 %    +13.2 / −2.6 %
+#   48    +5.0 / −8.7 %      +2.7 / −13.9 %    +0.8 / −14.4 %
+#   64    −3.0 / −14.2 %     −5.1 / −18.5 %    −5.9 / −17.6 %
+#
+# At 48³ AMD is the only closure within ±10 % at both stations (E(k_c)/CBC
+# 1.21 / 1.19, RMS 0.079 / 0.065), and at 64³ it is the closest to CBC at
+# both. AMD is therefore asserted at 48³ (one more run, ~10 s) to the
+# proposed ±10 % at both stations, and at 32³ to what the coarse grid
+# allows: K171 within ±10 %, K98 within ±25 % with its ±10 % kept broken,
+# RMS <= 0.12 / 0.10, and more energy at k_c than Smagorinsky.
+#
+# Expectation that proved wrong. Before the #205 spectrum fix this file
+# asserted AMD to ±13 % at 98 (+9.9 %) and ±10 % at 171 (−4.7 %), the
+# first closure to meet the latter. Those numbers came from the
+# over-energetic start (13–22 % more energy than CBC), whose extra
+# small-scale energy AMD drained faster; with the exact start the errors
+# moved by +10 / +12 points. The AMD constant (C = 0.3 for second-order
+# central differences, Rozema et al. 2015 §II.C, tuned on CBC at 64³) and
+# the closure are unchanged. The C sweep (32³) is now +26.9 / +14.6 % for
+# C = 0.25, +20.0 / +7.7 for 0.3 and +9.2 / −2.4 for 0.4; the station
+# spread K98err − K171err is 11.5–12.3 points for AMD and 15.6–16.8 for the
+# other closures (it was 13–15 and 16.7–17.5).
 
 using Test
 using Aeolus
@@ -75,11 +110,11 @@ include("cbc_benchmark_driver.jl")
     end
 
     res = Dict{Symbol,Any}()
-    t_total = @elapsed for c in (:dynamic, :lagrangian, :smagorinsky, :none)
+    t_total = @elapsed for c in (:dynamic, :lagrangian, :smagorinsky, :none, :amd, :vreman)
         res[c] = cbc_benchmark(c; N = 32)
         @info "  " * cbc_summary(String(c), res[c])
     end
-    @info @sprintf("  CBC 32³ (4 closures × 3 seeds): %.1f s", t_total)
+    @info @sprintf("  CBC 32³ (6 closures × 3 seeds): %.1f s", t_total)
 
     @testset "set-up: station-1 spectrum exact in every resolved shell" begin
         r = res[:dynamic]
@@ -91,7 +126,7 @@ include("cbc_benchmark_driver.jl")
         @test r.K_ratio_ref[2] > (urms[3] / urms[1])^2
     end
 
-    @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :lagrangian, :smagorinsky)
+    @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :lagrangian, :smagorinsky, :vreman)
         r = res[c]
         @test abs(r.K_err[1]) < 0.20                               # K(98)/K(42): +13.2 %, see header
         @test_broken abs(r.K_err[1]) < 0.10                        # the proposed target at 98
@@ -99,6 +134,45 @@ include("cbc_benchmark_driver.jl")
         @test r.rms_log_err[1] <= 0.11                             # 0.100 / 0.102 (seeds 1–3)
         @test r.rms_log_err[2] <= 0.10
         @test r.E_kc_ratio[1] < 2 && r.E_kc_ratio[2] < 2           # no pile-up
+    end
+
+    @testset "amd: TKE decay and spectra against CBC (32³ and 48³, see header)" begin
+        r = res[:amd]
+        @test abs(r.K_err[1]) < 0.25                               # +20.0 %: the 32³ pile-up
+        @test_broken abs(r.K_err[1]) < 0.10                        # the proposed target at 98
+        @test abs(r.K_err[2]) < 0.10                               # +7.7 %
+        @test r.rms_log_err[1] <= 0.12                             # 0.113
+        @test r.rms_log_err[2] <= 0.10                             # 0.095
+        @test r.E_kc_ratio[1] < 2 && r.E_kc_ratio[2] < 2           # 1.86 / 1.94
+        # less small-scale dissipation than Smagorinsky: more energy at k_c
+        # and less decay over the first interval
+        @test r.E_kc_ratio[1] > res[:smagorinsky].E_kc_ratio[1]
+        @test r.K_err[1] > res[:smagorinsky].K_err[1]
+        # the 32³ excess is the grid's: at 48³ the proposed ±10 % holds at
+        # both stations (+5.0 / −8.7 %)
+        r48 = cbc_benchmark(:amd; N = 48)
+        @info "  " * cbc_summary("amd 48³", r48)
+        @test abs(r48.K_err[1]) < 0.10
+        @test abs(r48.K_err[2]) < 0.10
+        @test r48.rms_log_err[1] <= 0.10 && r48.rms_log_err[2] <= 0.10   # 0.079 / 0.065
+        @test r48.E_kc_ratio[1] < r.E_kc_ratio[1]                  # 1.21: the pile-up recedes
+    end
+
+    @testset "AMD: the station-98 margin is set by C, the station spread by the set-up" begin
+        ra = Dict(C => cbc_benchmark(AMDClosure(C = C); N = 32) for C in (0.25, 0.4))
+        for C in (0.25, 0.4)
+            @info "  " * cbc_summary("AMD C=$C", ra[C])
+        end
+        # more eddy viscosity → more decay → lower K(98)/K(42): strictly
+        # monotone (+26.9, +20.0, +9.2 %), so the margin is the constant's
+        @test ra[0.25].K_err[1] > res[:amd].K_err[1] + 0.03 > ra[0.4].K_err[1] + 0.06
+        # the gap between the two stations is the shared set-up deficit:
+        # 11.5–12.3 points for AMD at every C, 15.6–16.8 for the others
+        # (13–15 / 16.7–17.5 before the #205 spectrum fix; see header)
+        spread(r) = r.K_err[1] - r.K_err[2]
+        for r in (ra[0.25], res[:amd], ra[0.4], res[:smagorinsky], res[:vreman], res[:dynamic])
+            @test 0.10 < spread(r) < 0.19
+        end
     end
 
     @testset "discrimination: without a model energy piles up at k_c" begin

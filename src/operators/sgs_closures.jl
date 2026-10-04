@@ -162,6 +162,21 @@ three-argument [`add_eddy_diffusion_scalar!`](@ref)`(tϕ, ϕ, f.κh)`. Halos of
 add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim) =
     (add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh); nothing)
 
+"""
+    sgs_tracer_diffusivity!(κ, c::AbstractSGSClosure, f::SGSFields, sim, ϕ) -> Field
+
+The cell-centred SGS diffusivity of a scalar `ϕ` other than θ (on the
+Boussinesq core: `qv`, in the explicit SGS flux of `step!` / `step_rk3!`
+and the implicit diffusion of
+[`step_imex!`](@ref Aeolus.TimeIntegration.step_imex!)), after
+[`compute_sgs!`](@ref) has filled `f`. Default: `f.κh`, returned as is and
+`κ` untouched, which is right for every closure whose `κ_t` is a property of
+the flow alone (`κ_t = ν_t/Prₜ`). A closure whose `κ_t` is built from θ's own
+gradient (the AMD scalar model, [`AMDClosure`](@ref)) computes `ϕ`'s into the
+scratch field `κ` (halos filled with `sim.bcs`) and returns `κ`.
+"""
+sgs_tracer_diffusivity!(κ, c::AbstractSGSClosure, f::SGSFields, sim, ϕ) = f.κh
+
 # -------------------------------------------------------------------------
 # What the cores call
 # -------------------------------------------------------------------------

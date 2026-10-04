@@ -113,9 +113,11 @@ function _cbc_closure(s::Symbol, mesh)
         ws = DynamicSmagorinskyWorkspace(mesh)
         return _cbc_closure((νt, u, v, w) -> compute_dynamic_smagorinsky_νt!(νt, u, v, w; workspace = ws), mesh)
     end
+    s === :amd && return _cbc_closure(AMDClosure(), mesh)          # C = 0.3 (P55-d, #176)
+    s === :vreman && return _cbc_closure(VremanClosure(0.17), mesh) # c = 2.5·0.17² (P55-d, #176)
     s === :lagrangian && return ((;), (sgs = LagrangianDynamicSmagorinsky(mesh),))
     throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, :lagrangian, " *
-                        "a C_s, f(νt, u, v, w) or an AbstractSGSClosure"))
+                        ":amd, :vreman, a C_s, f(νt, u, v, w) or an AbstractSGSClosure"))
 end
 # a closure object: a fresh copy per realisation (its memory must not leak between seeds)
 _cbc_closure(c::AbstractSGSClosure, mesh) = ((;), (sgs = deepcopy(c),))
@@ -128,6 +130,7 @@ Run the Comte-Bellot–Corrsin decay at N³ with `closure`:
 * `:none` / `nothing` — no SGS model (molecular ν only);
 * `:smagorinsky` or a number `C_s` — the built-in static Smagorinsky;
 * `:dynamic` — plane-averaged dynamic Smagorinsky (Germano–Lilly);
+* `:amd`, `:vreman` — `AMDClosure()` (C = 0.3), `VremanClosure(0.17)`;
 * `:lagrangian` — [`LagrangianDynamicSmagorinsky`](@ref) (Meneveau, Lund &
   Cabot 1996), stepped with `step_rk3!(sim, dt; sgs)` so its memory is
   committed once per step;

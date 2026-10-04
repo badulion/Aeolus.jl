@@ -26,6 +26,7 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
 # Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
+       sgs_tracer_diffusivity!,
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
@@ -35,6 +36,10 @@ export LagrangianDynamicSmagorinsky
 export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
        add_sgs_stress_divergence!, sgs_stress_dissipation
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
+# Era VI (P55-d, #176): AMD and Vreman closures (operators/sgs_amd_vreman.jl)
+export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
+       compute_vreman_νt!,
+       sgs_buoyancy_parameter
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -675,6 +680,8 @@ include("operators/sgs_closures.jl")
 include("operators/lagrangian_sgs.jl")
 # Era VI (P54-d, #174): wall-bounded flow diagnostics (Φ_m, stress budget, E11)
 include("operators/abl_diagnostics.jl")
+# Era VI, P55-d (#176): AMD and Vreman closures on the contract.
+include("operators/sgs_amd_vreman.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.
