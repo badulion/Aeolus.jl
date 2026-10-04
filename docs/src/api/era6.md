@@ -13,6 +13,7 @@ tested at are in
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
 - [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; [theory](../theory/wall_models.md))
+- Walls — `NoSlipWall` and the resolved wall stress (P59-a, #172; below; [theory](../theory/transition.md))
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -53,4 +54,18 @@ Aeolus.Operators.DynamicSmagorinsky
 Aeolus.Operators.FunctionSGS
 Aeolus.Operators._velocity_gradient_at
 Aeolus.Operators._strain_at
+```
+
+## Walls (P59-a, #172)
+
+The theory is developed in
+[Transition and wall-bounded flow](../theory/transition.md).
+The no-slip / moving-wall condition
+[`NoSlipWall`](@ref Aeolus.BoundaryConditions.NoSlipWall) lives in
+`BoundaryConditions` ([API](boundary_conditions.md), together with
+`is_wall` and `homogeneous_bcs`). Its plane-mean wall stress is a method
+of the cut-cell generic `wall_shear_stress`:
+
+```@docs
+Aeolus.CutCell.wall_shear_stress(::Aeolus.Simulations.BoussinesqSimulation)
 ```

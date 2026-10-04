@@ -2,9 +2,11 @@
 
 Per-face boundary conditions, grouped into a
 [`FieldBoundaryConditions`](@ref Aeolus.BoundaryConditions.FieldBoundaryConditions)
-container. Currently only `Periodic` and `NoFlux` are fully applied by
-`fill_halos!`; `ValueBC` and `FluxBC` are declared but await
-Phase 1b's wall implementation.
+container. `fill_halos!` applies `Periodic` and `NoFlux` on every face
+and the two impermeable z-walls, free-slip `ImpermeableWall` and no-slip /
+moving `NoSlipWall` (P59-a, #172; theory in
+[Transition and wall-bounded flow](../theory/transition.md#Walls)).
+`ValueBC` and `FluxBC` are declared for scalar surface conditions.
 
 ## BC types
 
@@ -32,4 +34,7 @@ Aeolus.BoundaryConditions.fill_halos!
 
 ```@docs
 Aeolus.BoundaryConditions.ImpermeableWall
+Aeolus.BoundaryConditions.NoSlipWall
+Aeolus.BoundaryConditions.is_wall
+Aeolus.BoundaryConditions.homogeneous_bcs
 ```

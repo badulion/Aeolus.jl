@@ -931,4 +931,9 @@ export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
        spalding_yplus, spalding_uplus, matching_obukhov_length,
        WallModel, apply_wall_stress!
 
+# P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
+# method of the CutCell generic (no new name).
+export NoSlipWall
+include("wall_shear_stress.jl")
+
 end # module

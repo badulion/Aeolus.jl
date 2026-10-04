@@ -924,7 +924,10 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   mean ``u_*`` after 1 h from 0.05647 to 0.05644 m s⁻¹ and the street
   wind from 0.47784 to 0.47796 m s⁻¹; the operator costs 1.2 ms per call
   on the 64 × 64 flagship plane. The `:wall` ground used to be
-  free-slip.
+  free-slip. It stays a free-slip `:wall` carrying the wall-model drag,
+  not a resolved `NoSlipWall` (#172): at Δx = 15.6 m a resolved no-slip
+  wall would be unphysical
+  ([Transition and wall-bounded flow](../theory/transition.md#The-Berlin-case)).
 * **Extra surface energy.** `bus.sensible` (window sun, glazing
   transmission, dew heat) is collected every step and delivered to the
   surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`

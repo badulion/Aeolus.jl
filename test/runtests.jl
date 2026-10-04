@@ -977,6 +977,7 @@ end
     include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
     include("era6_les_toolbox.jl")       # Phase 54  filters, spectrum, initialiser (#168)
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
+    include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
 end
 
 # =========================================================================
