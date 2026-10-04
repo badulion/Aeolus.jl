@@ -65,19 +65,20 @@ function critical(rs)
     surv = [r.h_over_L for r in rs if r.tke_end > 0.5]
     coll = [r.h_over_L for r in rs if r.tke_end < 0.1]
     (isempty(surv) || isempty(coll)) && return NaN
-    a = maximum(surv); b = minimum(filter(>(a), coll); init = NaN)
-    return isnan(b) ? NaN : sqrt(a * b)
+    a = maximum(surv); bs = filter(>(a), coll)
+    return isempty(bs) ? NaN : sqrt(a * minimum(bs))
 end
 
 function figure(Re, rs)
-    W, H = 960, 420; pw, ph = 360, 300; y0 = 60
-    pal = ["#2563eb", "#059669", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#be185d"]
+    W, H = 1080, 430; pw, ph = 360, 300; y0 = 60
+    pal = ["#1d4ed8", "#059669", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#be185d",
+           "#65a30d", "#6b7280", "#92400e"]
     io = IOBuffer()
     println(io, """<?xml version="1.0" encoding="UTF-8"?>""")
     println(io, """<svg xmlns="http://www.w3.org/2000/svg" width="$W" height="$H" font-family="DejaVu Sans, sans-serif">""")
     println(io, """<rect width="100%" height="100%" fill="white"/>""")
     println(io, """<text x="$(W/2)" y="28" font-size="17" text-anchor="middle" font-weight="bold">Cooled open channel, Re_τ = $Re, $(join(grid(Re), "×")), σ-model + stability correction</text>""")
-    # (a) TKE ratio (log) against time
+    # (a) TKE ratio (log) against time; legend to its right
     x0 = 80
     X(t) = x0 + t / T_END * pw; Y(e) = y0 + ph - (log10(clamp(e, 1e-4, 10)) + 4) / 5 * ph
     println(io, """<rect x="$x0" y="$y0" width="$pw" height="$ph" fill="none" stroke="#333"/>""")
@@ -90,17 +91,20 @@ function figure(Re, rs)
     for e in (0.1, 0.5)
         println(io, """<line x1="$x0" y1="$(Y(e))" x2="$(x0+pw)" y2="$(Y(e))" stroke="#999" stroke-dasharray="4,4"/>""")
     end
+    xl = x0 + pw + 14
+    println(io, """<text x="$xl" y="$(y0+10)" font-size="12" font-weight="bold">h/L</text>""")
     for (i, r) in enumerate(rs)
+        col = pal[mod1(i, length(pal))]
         pts = join(("$(X(t)),$(Y(e))" for (t, e) in zip(r.t, r.tke)), " ")
-        println(io, """<polyline fill="none" stroke="$(pal[mod1(i, 7)])" stroke-width="2" points="$pts"/>""")
-        println(io, """<line x1="$(x0+pw-120)" y1="$(y0+14+16i)" x2="$(x0+pw-98)" y2="$(y0+14+16i)" stroke="$(pal[mod1(i, 7)])" stroke-width="2"/><text x="$(x0+pw-92)" y="$(y0+18+16i)" font-size="12">h/L = $(r.h_over_L)</text>""")
+        println(io, """<polyline fill="none" stroke="$col" stroke-width="2" points="$pts"/>""")
+        println(io, """<line x1="$xl" y1="$(y0+10+18i)" x2="$(xl+22)" y2="$(y0+10+18i)" stroke="$col" stroke-width="2.5"/><text x="$(xl+28)" y="$(y0+14+18i)" font-size="12">$(r.h_over_L)</text>""")
     end
     println(io, """<text x="$(x0+pw/2)" y="$(y0+ph+38)" font-size="14" text-anchor="middle">t u_τ/h after the switch-on</text>""")
     println(io, """<text x="$(x0-52)" y="$(y0+ph/2)" font-size="14" text-anchor="middle" transform="rotate(-90 $(x0-52),$(y0+ph/2))">resolved TKE / TKE(0)</text>""")
-    println(io, """<text x="$(x0+6)" y="$(y0+18)" font-size="14" font-weight="bold">(a)</text>""")
-    # (b) final TKE ratio and γ against h/L
-    x0 = 560
-    hmax = 1.1 * maximum(r.h_over_L for r in rs)
+    println(io, """<text x="$(x0+8)" y="$(y0+20)" font-size="14" font-weight="bold">(a)</text>""")
+    # (b) final TKE ratio and γ against h/L, with the reference thresholds
+    x0 = 640
+    hmax = max(1.1 * maximum(r.h_over_L for r in rs), 1.4)
     XH(h) = x0 + h / hmax * pw; YE(e) = y0 + ph - e / 1.2 * ph
     println(io, """<rect x="$x0" y="$y0" width="$pw" height="$ph" fill="none" stroke="#333"/>""")
     for e in 0:0.2:1.2
@@ -109,16 +113,24 @@ function figure(Re, rs)
     for h in 0:0.5:hmax
         println(io, """<text x="$(XH(h))" y="$(y0+ph+18)" font-size="12" text-anchor="middle">$h</text>""")
     end
-    hN = 1.23                               # Nieuwstadt (2005) at Re_τ = 360
-    println(io, """<line x1="$(XH(hN))" y1="$y0" x2="$(XH(hN))" y2="$(y0+ph)" stroke="#dc2626" stroke-dasharray="5,4"/><text x="$(XH(hN)+4)" y="$(y0+ph-8)" font-size="11" fill="#dc2626">Nieuwstadt 2005 (Re_τ = 360)</text>""")
-    hF = Re / 100                           # Flores & Riley (2011): L⁺ = 100
-    hF < hmax && println(io, """<line x1="$(XH(hF))" y1="$y0" x2="$(XH(hF))" y2="$(y0+ph)" stroke="#7c3aed" stroke-dasharray="2,3"/><text x="$(XH(hF)+4)" y="$(y0+ph-24)" font-size="11" fill="#7c3aed">L⁺ = 100 (Flores &amp; Riley 2011)</text>""")
-    for r in rs
-        println(io, """<circle cx="$(XH(r.h_over_L))" cy="$(YE(min(r.tke_end, 1.2)))" r="5" fill="#2563eb"/><rect x="$(XH(r.h_over_L)-4)" y="$(YE(r.γ_end)-4)" width="8" height="8" fill="none" stroke="#059669" stroke-width="1.5"/>""")
+    for e in (0.1, 0.5)
+        println(io, """<line x1="$x0" y1="$(YE(e))" x2="$(x0+pw)" y2="$(YE(e))" stroke="#999" stroke-dasharray="4,4"/>""")
     end
-    println(io, """<text x="$(x0+30)" y="$(y0+18)" font-size="12" fill="#2563eb">● TKE(T)/TKE(0)</text><text x="$(x0+30)" y="$(y0+34)" font-size="12" fill="#059669">□ γ, lower half, at T</text>""")
+    hN = 1.23                               # Nieuwstadt (2005) at Re_τ = 360
+    println(io, """<line x1="$(XH(hN))" y1="$y0" x2="$(XH(hN))" y2="$(y0+ph)" stroke="#dc2626" stroke-dasharray="5,4"/><text x="$(XH(hN)-4)" y="$(y0+ph/2)" font-size="11" fill="#dc2626" text-anchor="end">Nieuwstadt 2005</text><text x="$(XH(hN)-4)" y="$(y0+ph/2+14)" font-size="11" fill="#dc2626" text-anchor="end">(Re_τ = 360)</text>""")
+    hF = Re / 100                           # Flores & Riley (2011): L⁺ = 100
+    if hF < hmax
+        println(io, """<line x1="$(XH(hF))" y1="$y0" x2="$(XH(hF))" y2="$(y0+ph)" stroke="#7c3aed" stroke-dasharray="2,3"/><text x="$(XH(hF)-4)" y="$(y0+ph/2+40)" font-size="11" fill="#7c3aed" text-anchor="end">L⁺ = 100</text><text x="$(XH(hF)-4)" y="$(y0+ph/2+54)" font-size="11" fill="#7c3aed" text-anchor="end">(Flores &amp; Riley)</text>""")
+    else
+        println(io, """<text x="$(XH(hN)-4)" y="$(y0+ph/2+40)" font-size="11" fill="#7c3aed" text-anchor="end">L⁺ = 100 (Flores &amp; Riley)</text><text x="$(XH(hN)-4)" y="$(y0+ph/2+54)" font-size="11" fill="#7c3aed" text-anchor="end">at h/L = $(round(hF, digits = 2)), off scale</text>""")
+    end
+    for r in rs
+        println(io, """<circle cx="$(XH(r.h_over_L))" cy="$(YE(min(r.tke_end, 1.2)))" r="5" fill="#1d4ed8"/><rect x="$(XH(r.h_over_L)-4)" y="$(YE(r.γ_end)-4)" width="8" height="8" fill="none" stroke="#059669" stroke-width="1.5"/>""")
+    end
+    xg = x0 + 0.17pw; yg = YE(0.8)
+    println(io, """<text x="$xg" y="$yg" font-size="12" fill="#1d4ed8">● TKE(T)/TKE(0)</text><text x="$xg" y="$(yg+16)" font-size="12" fill="#059669">□ γ of the lower half at T</text>""")
     println(io, """<text x="$(x0+pw/2)" y="$(y0+ph+38)" font-size="14" text-anchor="middle">h/L</text>""")
-    println(io, """<text x="$(x0+6)" y="$(y0+18)" font-size="14" font-weight="bold">(b)</text>""")
+    println(io, """<text x="$(x0+8)" y="$(y0+20)" font-size="14" font-weight="bold">(b)</text>""")
     println(io, "</svg>")
     path = joinpath(OUTDIR, "relaminarisation_$(tag(Re)).svg")
     write(path, String(take!(io)))
@@ -131,10 +143,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
         @printf("\nRe_τ = %d on %s: neutral spin-up to %.0f h/u_τ: TKE %.3f u_τ², ⟨τ_w⟩ %.3f u_τ², U_b %.2f u_τ\n",
                 Re, join(grid(Re), "×"), T_SPIN, sp.tke, sp.τ_wall, sp.Ub)
         rs = [cached(Re, hL) for hL in HLS]
-        @printf("%6s %8s %8s %8s %10s %8s %8s %8s %8s\n", "h/L", "L⁺", "Ri_b", "Q", "TKE(T)/0", "γ(T)", "τ_w(T)", "steps", "wall s")
+        @printf("%6s %8s %8s %10s %8s %8s %8s %8s\n", "h/L", "L⁺", "Q", "TKE(T)/0", "γ(T)", "τ_w(T)", "steps", "wall s")
         for r in rs
-            @printf("%6.2f %8.1f %8.3f %8.3f %10.3f %8.3f %8.3f %8d %8.0f   %s\n", r.h_over_L, r.crit.L_plus,
-                    r.crit.Ri_b, relam_heat_flux(r.h_over_L), r.tke_end, r.γ_end, r.τ_wall[end],
+            @printf("%6.2f %8.1f %8.3f %10.3f %8.3f %8.3f %8d %8.0f   %s\n", r.h_over_L, r.crit.L_plus,
+                    relam_heat_flux(r.h_over_L), r.tke_end, r.γ_end, r.τ_wall[end],
                     r.nsteps, r.wall_time,
                     r.tke_end < 0.1 ? "collapsed" : r.tke_end > 0.5 ? "survived" : "intermediate")
         end

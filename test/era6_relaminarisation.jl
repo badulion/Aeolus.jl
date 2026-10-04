@@ -11,10 +11,13 @@
 #      switches its vertical viscosity off, Smagorinsky does not.
 #
 # Test 3 of the issue (the 32³ open channel at Re_τ = 180, collapse at
-# h/L = 2 and survival at h/L = 0.3 over 20 h/u_τ) costs ≈ 4.5 min per run
-# here (27 ms/step, 9600 steps), over the 2-min CI budget the issue sets: it
-# is examples/sbl/relaminarisation_channel.jl, which also sweeps h/L at
+# h/L = 2 and survival at h/L = 0.3 over 20 h/u_τ) costs 4.5–9 min per run
+# here (6200–9900 SSP-RK3 steps), over the 2-min CI budget the issue sets:
+# it is examples/sbl/relaminarisation_channel.jl, which also sweeps h/L at
 # Re_τ = 180 and 360 against Nieuwstadt (2005) and Flores & Riley (2011).
+# Measured there: h/L = 2 collapses, but so does h/L = 0.3 (critical h/L
+# 0.12 at Re_τ = 180 on 32³, 0.39 at Re_τ = 360 on 48³; Nieuwstadt 1.23) —
+# see docs/src/theory/transition.md, "The cooled open channel".
 
 using Test
 using Aeolus
