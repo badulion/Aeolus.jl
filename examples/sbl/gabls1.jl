@@ -113,7 +113,7 @@ function write_figure(path, results)
             println(io, """<line x1="$(X(xv))" y1="$(y0+ph)" x2="$(X(xv))" y2="$(y0+ph+5)" stroke="#333"/><text x="$(X(xv))" y="$(y0+ph+19)" font-size="12" text-anchor="middle">$(xv)</text>""")
         end
         for zv in range(ylo, yhi; length = 5)
-            lab = yhi > 10 ? string(round(Int, zv)) : string(round(zv; digits = 2))
+            lab = yhi > 10 ? string(round(Int, zv)) : string(round(zv; digits = 3))
             println(io, """<line x1="$(x0-5)" y1="$(Y(zv))" x2="$x0" y2="$(Y(zv))" stroke="#333"/><text x="$(x0-8)" y="$(Y(zv)+4)" font-size="12" text-anchor="end">$lab</text>""")
         end
         for (i, (xs, zs)) in enumerate(curves)
