@@ -80,7 +80,7 @@ using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, grav,
 import ..SurfaceExchange: surface_temperature, roughness_lengths, surface_albedo,
                           surface_emissivity, step_surface!, moisture_availability,
                           surface_specific_humidity, phi_m, phi_h, psi_m, psi_h,
-                          column_heat_content
+                          column_heat_content, log_linear_slope
 using ..SurfaceOptics: material_emissivity
 
 export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
@@ -432,6 +432,8 @@ phi_m(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? phi_m(_unstable(sf), ζ) :
 phi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? phi_h(_unstable(sf), ζ) : 1 + sf.β * ζ
 psi_m(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_m(_unstable(sf), ζ) : -sf.β * ζ
 psi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_h(_unstable(sf), ζ) : -sf.β * ζ
+# the stable branch is log-linear: SurfaceExchange's closed-form MSHF applies (P58-e)
+log_linear_slope(sf::BusingerDyerLogLinear) = sf.β
 
 """
     AbstractWarmLayer

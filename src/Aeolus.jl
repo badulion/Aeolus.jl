@@ -930,6 +930,10 @@ export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_pran
        gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR
 # SurfaceExchange's implementer of the contract (MOST-consistent factors).
 export MOSTConsistent, most_gradient_richardson, most_stability_parameter
+# P58-e (#193): the maximum sustainable heat flux (Van de Wiel et al. 2012)
+# and the flux-prescribed MOST friction velocity, in SurfaceExchange.
+export log_linear_slope, MSHFSolution, mshf_solution, max_sustainable_heat_flux,
+       flux_friction_velocity
 # Operators' pointwise fields of the contract.
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 

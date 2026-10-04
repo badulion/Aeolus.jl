@@ -980,6 +980,7 @@ end
     include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
     include("era6_neutral_abl.jl")       # P54-d: half-channel ABL / channel harness + Φ_m, stress, E11 (#174)
     include("era6_transition_kh.jl")       # Phase 59 Transition diagnostics, KH / Miles-Howard (#180)
+    include("era6_collapse.jl")            # P58-e: maximum sustainable heat flux, LES collapse regime (#193)
 end
 
 # =========================================================================
