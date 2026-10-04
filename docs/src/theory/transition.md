@@ -370,32 +370,48 @@ above laminar. In the coarse 3-D sanity test (96 × 24 × 48,
 Blasius while the undisturbed plate stays within 1.5 %.
 
 The T3A-like example (`examples/transition/flat_plate_t3a.jl`, Tu = 3.3 %
-as in Roach & Brierley 1992) runs 288 × 32 × 48 cells on
-600 × 36 × 24 ``δ^*_0`` (``Re_x`` = 3.0e4 to 1.9e5) without an SGS model —
+as in Roach & Brierley 1992) runs 576 × 64 × 96 cells on
+600 × 36 × 24 ``δ^*_0`` (``Re_x`` = 3.0e4 to 1.9e5; ``Δx = 1.04``,
+``Δy = 0.56``, ``Δz = 0.25\,δ^*_0``, i.e. ``Δx^+ ≈ 17``, ``Δy^+ ≈ 9``,
+``Δz^+ ≈ 4`` with the downstream ``u_τ``) without an SGS model —
 a Smagorinsky ``ν_t`` from the laminar wall shear alone would be several
 times ``ν`` and keep the layer laminar.
 
 Measured (1500 RK3 steps at ``Δt = 1\,δ^*_0/U``, statistics over the
-last 600; 332 s, 0.22 s per step on 4 threads):
+last 600; 8034 s, 5.4 s per step on 8 threads of a shared machine):
 
 | quantity | result | reference |
 | :-- | :-- | :-- |
-| free-stream Tu (streamwise) | 3.29 % at the inflow, 2.66 % at ``Re_x = 10^5``, 2.77 % at the plate end | 3.3 % requested |
-| onset (minimum of ``c_f``) | ``x = 54\,δ^*_0``, ``Re_x = 4.66\times10^4`` | — |
-| ``Re_θ`` at onset, measured ``θ`` | 190 | Mayle (1991) 190 (+0 %), Abu-Ghannam & Shaw (1980) 200 (−5 %) |
-| ``Re_θ`` at onset, Blasius ``θ`` at that ``Re_x`` | 143 | −25 % / −29 % |
-| downstream ``c_f/(0.0576\,Re_x^{-1/5})``, ``Re_x`` 1.2e5–1.8e5 | 1.26–1.39 (mean 1.30) | issue target: within 20 % — **not met** |
-| downstream ``H`` | 1.41–1.45 | ≈ 1.4 |
+| free-stream Tu (streamwise) | 3.23 % at the inflow, 2.77 % at ``Re_x = 10^5``, 2.60 % at the plate end | 3.3 % requested |
+| onset (minimum of ``c_f``) | ``x = 48\,δ^*_0``, ``Re_x = 4.48\times10^4`` | — |
+| ``Re_θ`` at onset, measured ``θ`` | 198 | Mayle (1991) 190 (+5 %), Abu-Ghannam & Shaw (1980) 200 (−1 %) |
+| ``Re_θ`` at onset, Blasius ``θ`` at that ``Re_x`` | 141 | −26 % / −30 % |
+| downstream ``c_f/(0.0576\,Re_x^{-1/5})``, ``Re_x`` 1.2e5–1.8e5 | 1.057–1.135 (mean 1.084) | issue target: within 20 % — met |
+| downstream ``H`` | 1.45–1.50 | ≈ 1.4 |
 
 The onset is within the ±30 % band of both correlations whichever ``θ`` is
 used (the free-stream turbulence thickens the pre-transitional layer, so
-the measured ``θ`` at onset is 33 % above Blasius). The turbulent ``c_f``
-is 26–39 % above the correlation. The coarse, model-free calculation
-over-predicts it, and the excess falls with resolution (1.20–1.26 with
-``N_z = 96``, ``Δz = 0.25\,δ^*_0``, in a 1500-step trial run). The
-short plate (a virtual-origin effect) is not the reason: against the
-``Re_θ`` form ``0.024\,Re_θ^{-1/4}`` (Kays & Crawford) at the measured
-``Re_θ`` = 437–578 the ratio is 1.33–1.45.
+the measured ``θ`` at onset is 40 % above Blasius). Against the ``Re_θ``
+form ``0.024\,Re_θ^{-1/4}`` (Kays & Crawford) at the measured
+``Re_θ`` = 443–552 the ratio is 1.12–1.17.
+
+The turbulent ``c_f`` of this model-free calculation is
+resolution-limited. Refining ``z`` alone saturates near 1.2 at the
+coarse ``Δx, Δy``; the streamwise and spanwise spacing has to come down
+with it. Same case, same seed, same 1500-step protocol:
+
+| grid ``N_x × N_y × N_z`` | ``Δx, Δy, Δz`` (``δ^*_0``) | ``c_f/(0.0576\,Re_x^{-1/5})``, ``Re_x`` 1.2e5–1.8e5 | onset ``Re_θ`` |
+| :-- | :-- | :-- | :-- |
+| 288 × 32 × 48 | 2.08, 1.13, 0.50 | 1.260–1.387 (mean 1.297) | 190 |
+| 288 × 32 × 96 | 2.08, 1.13, 0.25 | 1.180–1.248 (mean 1.211) | 191 |
+| 288 × 32 × 128 | 2.08, 1.13, 0.19 | 1.156–1.258 (mean 1.204) | 191 |
+| 432 × 48 × 96 | 1.39, 0.75, 0.25 | 1.122–1.200 (mean 1.173) | 232 |
+| 576 × 64 × 64 | 1.04, 0.56, 0.38 | 1.135–1.197 (mean 1.162) | 199 |
+| **576 × 64 × 96** (the example) | 1.04, 0.56, 0.25 | **1.057–1.135 (mean 1.084)** | 198 |
+
+The first row is what the example ran before; it missed the 20 % target.
+The local edge velocity is within 0.5 % of ``U_∞`` downstream on every
+grid, so normalising by it changes none of these ratios by more than 0.01.
 
 ![c_f of the T3A-like plate](../assets/transition/t3a_cf.svg)
 
