@@ -342,6 +342,9 @@ runs with `core = :anelastic`). `:dynamic` gets no f_m on the momentum
 Ri ≤ 0 (the convective enhancement of Brown et al.; not for `:dynamic`);
 κ_v = 0 where Ri ≥ Ri_c; its `report` prints the supercritical fraction
 and the mean κ_v/κ_h. Smoke variants: `sgs_stability = :none`, `:lilly`.
+Its validation on GABLS1 and the stably stratified channel (P55-f,
+#191) adds no Berlin coupling — no new physics, a stated exception — and
+is in [Stable boundary layers](../theory/stable_boundary_layer.md).
 The scalar (θ) flux is the contract's diagonal operator
 `add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv)` (P55-c, #181) with these
 κ_h ≠ κ_v. Option

@@ -577,7 +577,9 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
     stratified regimes. The dynamic coefficient above is one alternative;
     in stable stratification the Richardson-number reduction of
     [Stability correction](#Stability-correction) (P55-e) applies, on by
-    default in the Berlin case.
+    default in the Berlin case; its validation on GABLS1 and the
+    stratified channel (P55-f) is in
+    [Stable boundary layers](stable_boundary_layer.md).
   * The SGS closure itself has no wall treatment: at a free-slip z-wall
     its flux through the wall face is zero. The wall stress — smooth
     (Spalding), rough (log law) or Monin–Obukhov — is supplied by the

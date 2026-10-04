@@ -17,6 +17,11 @@ Era VI. Theory: [Wall models](../../theory/wall_models.md).
   (time-averaged U, Φ_m, stress budget, ⟨τ_w⟩), with the step size of
   `channel_dt`. Closure, wall law, formulation and stepper are keyword
   arguments; the diagnostics are Operators' (see [Era VI](../era6.md)).
+- **Wall-resolved, stratified channel** (P55-f, #191):
+  `channel_case(bottom_bc = :noslip, θ_walls = (θ_b, θ_t))` with
+  `stratified_channel_walls(Ri_τ)` and `channel_richardson(case)`; the
+  validation against the DNS of García-Villalba & del Álamo (2011) is in
+  [Stable boundary layers](../../theory/stable_boundary_layer.md).
 
 ```@autodocs
 Modules = [Aeolus.WallModels]

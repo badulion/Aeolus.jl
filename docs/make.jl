@@ -69,6 +69,7 @@ makedocs(
             "Large-scale forcing"         => "theory/large_scale_forcing.md",
             "Transition and wall-bounded flow" => "theory/transition.md",
             "Wall models"                 => "theory/wall_models.md",
+            "Stable BLs: GABLS1, stratified channel" => "theory/stable_boundary_layer.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
