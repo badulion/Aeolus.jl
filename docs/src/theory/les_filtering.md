@@ -261,7 +261,9 @@ monotone dependence is established for ``Re_λ`` between 32 and 79. The
 generator runs had already shown this: from 64³ upward they agree within
 about ±0.01 at 4h (below). At 16h the filter is a third of the 48³ box.
 None of the 48³ / 96³ / 256³ comparisons is asserted; the table is
-data.
+data. On the maintainer's decision on #208 both trend checks were
+removed: 48³, 96³ > 256³, and 48³ > 96³, which still passes but rests on
+the same claim.
 
 At ``Δ ≈ 8η`` the filter sits in the near-dissipation range. There
 ``τ`` is given by its Taylor expansion, the gradient model

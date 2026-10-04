@@ -82,9 +82,11 @@
 # validation/dns256_generate.jl header) already agreed within about
 # ±0.01 at 4h from 64³ upward: 0.819 (32³, Re_λ 21, 7.6η), 0.869 (48³,
 # 31, 7.8η), 0.811 (64³, 45, 7.5η), 0.822 (96³, 52, 7.7η), against 0.810
-# for this fixture (Re_λ 64, 7.8η). The 256³ trend assertion is dropped;
-# the band assertions for the 96³ fixture and the 256³ record stay, and
-# the 48³ / 96³ / 256³ comparison is logged as unasserted data.
+# for this fixture (Re_λ 64, 7.8η). Both trend assertions are dropped
+# (maintainer decision on #208): 48³, 96³ > 256³ and 48³ > 96³, the
+# latter although it still passes, since it rests on the same claim. The
+# band assertions for the 96³ fixture and the 256³ record stay, and the
+# 48³ / 96³ / 256³ comparison is logged as unasserted data.
 #
 # Expectation that proved wrong with the 96³ fixture: "t = 2 is past the
 # dissipation peak". The peak moves later as Re_λ grows (measured
