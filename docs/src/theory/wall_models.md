@@ -103,6 +103,82 @@ changes: `w`, the other levels and the halo and finite-volume code are
 untouched, so on a free-slip `ImpermeableWall` the wall model is the
 only momentum flux through the wall face.
 
+## Immersed-boundary walls
+
+A direct-forcing immersed boundary (`Aeolus.IBM`) zeroes every velocity
+face of a solid cell. A fluid face whose tangential neighbour is such a
+face then sees, through the viscous and eddy-viscosity stencils, the
+flux ``(ν + ν_{t,e})(0 - q)/Δ``: an unresolved no-slip wall a distance
+``Δ`` away, with no log law. Tessicini et al. (2002) and Chester,
+Meneveau & Parlange (2007) replace it with the stress of a wall law at
+the first fluid point; Aeolus does the same in its equilibrium form
+(`src/wall_models/immersed.jl`, P57-d, #179).
+
+`immersed_walls(sim, sm, law)` finds every (face, wall) pair of the mask:
+
+| face | walls | tangential partner interpolated to the face |
+| :-- | :-- | :-- |
+| u | ±y | w (4 faces) |
+| v | ±x | w (4 faces) |
+| w | ±x | v (4 faces) |
+| w | ±y | u (4 faces) |
+
+The ±z walls of u and v (ground, roofs) are the z-walls of
+`apply_wall_stress!`. The law (any `AbstractWallLaw`, or a function of
+the solid cell behind the wall) is evaluated at ``h = Δ_d/2``: the solid
+cell's face is the wall, as for the roofs of the z-wall operator, and
+the face centre is half a cell from it. Two hooks act on every step:
+
+1. **`remove_stencil_wall_flux!`** (`body_force!`): after the tendencies
+   are formed, the stencil's own wall flux
+   ``(ν + ν_{t,e})(q_N - q_F)/Δ_d^2`` (``ν_{t,e}`` the mean of the four
+   cell-centre ``ν_t`` around the edge) is subtracted, from the same
+   start-of-step velocity and ``ν_t`` the stencil used.
+2. **`apply_immersed_wall_stress!`** (`post_predictor!`, after the IBM's
+   direct forcing): ``q ← q/(1 + Δt \sum_{walls} a/Δ_d)``,
+   ``a = τ_w(U)/U``, implicit as for the z-walls; a corner face (two
+   walls) gets the sum.
+
+The correction of a step is therefore the modelled stress minus the
+stencil stress, and the momentum the step removes at the walls is
+exactly ``Σ τ_w ΔA Δt`` (measured to 1e-14 for u, v and the w faces of
+an L-shaped corner, `test/era6_wall_models_immersed.jl`). With the IMEX
+stepper the diffusion is implicit; the explicit removal is then
+first-order in time.
+
+**Rotated channel.** A channel at ``Re_τ = 1000`` whose walls in ``y``
+are an IBM mask reaches the bulk velocity of the same channel with
+z-walls and the z-wall operator to round-off (3e-15), ``U_b^+ = 19.18``
+at 16 cells across ``2δ`` (first face at ``h^+ = 62.5``), 4.0 % below
+Lee & Moser (2015), 19.98. With the wall model off — the stencil's
+no-slip flux, as the Berlin facades had before #179 — it is 13.86. The
+eddy viscosity there is the parabolic ``ν_t = κ u_τ d(1 - d/δ)`` (the
+exact profile is then the log law), not an LES. The reference itself
+falls below Lee & Moser as the grid is refined (``U_b^+`` = 19.38,
+19.18, 18.86, 18.58, 18.10 for 12, 16, 24, 32, 48 cells): the
+log-layer mismatch of a wall model matched at the first point (Kawai &
+Larsson 2012), which matching away from the wall (P57-b) addresses.
+
+## Cut-cell walls
+
+On a cut-cell geometry (`Aeolus.CutCell`) the ghost-cell stencils
+already carry a probe off the true surface along its normal.
+`wall_shear_stress(u, v, w, stencils, geom, law; ν)` — a method of
+`CutCell.wall_shear_stress` — evaluates the law there: the tangential
+speed at the image point, at the probe distance ``h``. `law = nothing`
+is the resolved ν-linear stress ``ν u_t/h``. `wall_slip_velocity` turns
+the modelled stress into the slip wall value
+``u_s = u_t - τ_w h/ν_{eff}`` that makes the linear ghost-cell
+reconstruction (`reconstruct_wall_velocity!`) carry it; in the viscous
+sublayer it is zero (no-slip).
+
+On a channel inclined at 30° (``Re_τ = 1000``, ``Δ = δ/15``) the
+plane-mean modelled stress is 0.990 ``δ\,dp/dx`` with the image point
+two cells out (`probe_factor = 2`, ``h^+ = 133``); the ν-linear stress
+is 0.127 of it. At the default `probe_factor = 1` the trilinear
+interpolation of the concave log profile at one cell gives 0.931: for
+wall modelling the probe should be built at least two cells out.
+
 ## Wall-bounded benchmark cases
 
 `src/wall_models/channel_cases.jl` (P54-d, #174) is the shared harness
@@ -207,11 +283,18 @@ first-air wind every step (see [The Berlin case](../design/berlin_case.md)).
 With ``L`` and the wind frozen it reproduced the drag the example used
 to carry (``u_*^2/U`` held between surface steps) exactly.
 
+The facades are the immersed-boundary walls above (addon
+`wall_model_facades`, #179): a `RoughLogLaw` with the wall (or glass)
+roughness of the surface exchange's class table, the stencil's no-slip
+flux removed. In the 1 h smoke run the facades carry 9.3 % of the
+surface drag; the stencil drag they replace was 33× the modelled one.
+
 ## Not yet here
 
 Matching height and input filtering (P57-b), the thin-boundary-layer
-equations (P57-c), facade walls (P57-d) and dynamic roughness (P57-e)
-add files under `src/wall_models/`.
+equations (P57-c) and dynamic roughness (P57-e) add files under
+`src/wall_models/`. The cut-cell method is not in the Berlin case: the
+case has no cut-cell provider yet (CutCell is pending on #152).
 
 ## References
 
@@ -228,6 +311,17 @@ add files under `src/wall_models/`.
     2052-2062.
   * Piomelli, U. & Balaras, E. (2002). Wall-layer models for large-eddy
     simulations. *Annu. Rev. Fluid Mech.*, 34, 349-374.
+  * Tessicini, F., Iaccarino, G., Fatica, M., Wang, M. & Verzicco, R.
+    (2002). Wall modeling for large-eddy simulation using an immersed
+    boundary method. *Annual Research Briefs 2002*, Center for
+    Turbulence Research, Stanford, 181-187.
+  * Chester, S., Meneveau, C. & Parlange, M. B. (2007). Modeling
+    turbulent flow over fractal trees with renormalized numerical
+    simulation. *J. Comput. Phys.*, 225, 427-448.
+  * Kawai, S. & Larsson, J. (2012). Wall-modeling in large eddy
+    simulation: length scales, grid resolution, and accuracy. *Phys.
+    Fluids*, 24, 015105.
+
   * Porté-Agel, F., Meneveau, C. & Parlange, M. B. (2000). A
     scale-dependent dynamic model for large-eddy simulation: application
     to a neutral atmospheric boundary layer. *J. Fluid Mech.*, 415,

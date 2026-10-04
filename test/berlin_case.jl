@@ -69,7 +69,8 @@ const BC = Main.BerlinCase
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
                    :column_radiation, :cloud_shadow, :traffic_heat, :moist_buoyancy,
                    :pressure_fft, :sgs_smagorinsky, :momentum_centered,
-                   :core_boussinesq, :timestep_adaptive, :turbulence_diag])
+                   :core_boussinesq, :timestep_adaptive, :turbulence_diag,
+                   :wall_model_facades])                       # facade wall model (#179)
         # every coupling names only real Aeolus submodules
         for C in BC.REGISTRY, m in BC.modules_used(C)
             @test isdefined(Aeolus, m) && getfield(Aeolus, m) isa Module
@@ -112,7 +113,9 @@ const BC = Main.BerlinCase
             (:tracers, :pollutant),
             (:fog_dew, :fog_dew),
             (:body_force, :geostrophic), (:body_force, :moist_buoyancy),
-            (:post_predictor, :ibm), (:post_predictor, :surface_exchange),
+            (:body_force, :wall_model_facades),       # stencil facade flux out (#179)
+            (:post_predictor, :ibm), (:post_predictor, :wall_model_facades),
+            (:post_predictor, :surface_exchange),
             (:post_predictor, :veg_drag),
             (:surface_update, :surface_exchange), (:surface_update, :snow_legacy),
             (:surface_update, :aq_chem),              # r_a / v_d refresh (#135)

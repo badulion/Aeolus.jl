@@ -170,7 +170,11 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
     z() = zeros(Nx, Ny)
     # neutral until the first surface step
     laws = GroundWallLaw[MOSTWallLaw(0.05, Inf; U_min = o.U_min) for _ in 1:Nx, _ in 1:Ny]
-    return SurfaceExchangeMOST(P, o.U_min, Dict{UInt8,Float64}(o.z0m), o.z0h_ratio,
+    # the per-class roughness table goes on the bus: the facade wall model
+    # (#179) reads the wall and glass z0m from it
+    z0m = Dict{UInt8,Float64}(o.z0m)
+    bus.z0m_class = z0m
+    return SurfaceExchangeMOST(P, o.U_min, z0m, o.z0h_ratio,
                                false, 0.0, 0.0, 0.0, z(), laws, WallModel(laws), fill(Inf, Nx, Ny),
                                z(), Symbol(o.wall_formulation),
                                z(), z(), z(), z(), z(), z(), z(),
