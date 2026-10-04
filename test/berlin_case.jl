@@ -61,14 +61,16 @@ const BC = Main.BerlinCase
         end
         # the default couplings: the initial ones of the refactor (#129
         # replaced the slab and the soil adapter by the surface exchange
-        # and the soil ground), with #130's radiation
+        # and the soil ground), with #130's radiation and #170's turbulence
+        # diagnostics
         @test Set(BC.coupling_name.(sel)) ==
               Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_exchange,
                    :ground_soil, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :scalar_advection,
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
                    :column_radiation, :cloud_shadow, :traffic_heat, :moist_buoyancy,
                    :pressure_fft, :sgs_smagorinsky, :momentum_centered,
-                   :core_boussinesq, :timestep_adaptive])
+                   :core_boussinesq, :timestep_adaptive, :turbulence_diag,
+                   :wall_model_facades])                       # facade wall model (#179)
         # every coupling names only real Aeolus submodules
         for C in BC.REGISTRY, m in BC.modules_used(C)
             @test isdefined(Aeolus, m) && getfield(Aeolus, m) isa Module
@@ -96,7 +98,8 @@ const BC = Main.BerlinCase
         # are stepped in :surface_update. #130 added the column radiation
         # before and the cloud shadow after the radiosity solve, moved the
         # cloud shadow out of :sw_modifiers and replaced the prescribed
-        # cooling.
+        # cooling. #170 added the turbulence diagnostics at the output
+        # cadence.
         @test order == [
             (:radiation, :column_radiation), (:radiation, :radiosity_sun),
             (:radiation, :cloud_shadow), (:radiation, :buildings_citymean),
@@ -110,11 +113,14 @@ const BC = Main.BerlinCase
             (:tracers, :pollutant),
             (:fog_dew, :fog_dew),
             (:body_force, :geostrophic), (:body_force, :moist_buoyancy),
-            (:post_predictor, :ibm), (:post_predictor, :surface_exchange),
+            (:body_force, :wall_model_facades),       # stencil facade flux out (#179)
+            (:post_predictor, :ibm), (:post_predictor, :wall_model_facades),
+            (:post_predictor, :surface_exchange),
             (:post_predictor, :veg_drag),
             (:surface_update, :surface_exchange), (:surface_update, :snow_legacy),
             (:surface_update, :aq_chem),              # r_a / v_d refresh (#135)
-            (:column_tendency, :column_radiation)]
+            (:column_tendency, :column_radiation),
+            (:output, :turbulence_diag)]
         # the chemistry species are advected tracers since #135
         @test [t.name for t in case.tracers] == [:qv, :ql, :qr, :NO, :NO2, :O3, :VOC, :HNO3, :pollutant]
         @test [t.name for t in case.tracers if t.advect] == [:qv, :ql, :NO, :NO2, :O3, :VOC, :HNO3]

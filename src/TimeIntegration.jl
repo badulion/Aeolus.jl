@@ -34,7 +34,8 @@ using ..Fields
 using ..Fields: Field, interior_view, location
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
-                            Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC
+                            Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
+                            is_wall, homogeneous_bcs
 using ..Operators
 using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    momentum_advect!, advect_centered!,
@@ -43,13 +44,15 @@ using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    AbstractSGSClosure, SGSFields, compute_sgs!, sgs_fields, advance_sgs!,
                    sgs_state, restore_sgs_state!, sgs_closure, _active_sgs,
                    add_sgs_stress_divergence!, _check_sgs_stress,
+                   sgs_tracer_diffusivity!,
                    sgs_scalar_tensor, add_tensor_diffusion_scalar!, bounded_directions
 using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence
 using ..TimeSteppers: step!
+using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 
-export CFLConstraints, cfl_diagnostics, adaptive_dt,
+export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
        SubsteppingSchedule, substeps_for,
        StateSnapshot, state_snapshot, save_state!, restore_state!,
        step_adaptive!,
@@ -78,6 +81,7 @@ _active(sim::BoussinesqSimulation) =
 
 _is_scalar_name(name::Symbol) = name === :θ || name === :qv
 
+
 # =========================================================================
 # Phase 23 — CFL constraints and diagnostics
 # =========================================================================
@@ -94,7 +98,7 @@ allowed to use:
 | Field         | Limit enforced                                                |
 | :------------ | :------------------------------------------------------------ |
 | `C_advective` | `dt (|u|/Δx + |v|/Δy + |w|/Δz) ≤ C_advective` (per cell)      |
-| `C_diffusive` | `dt (ν+νₜ) (Δx⁻²+Δy⁻²+Δz⁻²) ≤ C_diffusive`                    |
+| `C_diffusive` | `dt (ν+νₜ) (Δx⁻²+Δy⁻²+Δz⁻²) ≤ C_diffusive` (2νₜ, stress form) |
 | `C_buoyancy`  | `N dt ≤ C_buoyancy` (Brunt–Väisälä / gravity-wave limit)      |
 | `C_coriolis`  | `|f| dt ≤ C_coriolis`                                         |
 
@@ -158,15 +162,15 @@ function _max_advective_rate(ud, vd, wd, m::RegularGrid{T}) where {T}
     return r
 end
 
-# Brunt-Väisälä frequency from the horizontal-mean (resolved) θ profile.
-# Allocation-free: carries the previous level's mean in a scalar.
+# Brunt-Väisälä frequency from the horizontal-mean (resolved) θ profile:
+# the largest N² across the faces between the plane means, from the
+# TurbulenceStability contract (Boussinesq form, g/θ₀). Allocation-free:
+# carries the previous level's mean in a scalar.
 function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
     sim.has_buoyancy || return zero(T)
     m = sim.mesh
     ii, jj, kk = interior(m)
     n_h = length(ii) * length(jj)
-    invdz = 1 / m.dz
-    coef  = sim.g_accel / sim.θ₀
     N²max = zero(T)
     prev  = zero(T)
     d = sim.θ.data
@@ -177,7 +181,8 @@ function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
         end
         mean_k = s / n_h
         if kc > 1
-            N²max = max(N²max, coef * (mean_k - prev) * invdz)
+            N²max = max(N²max, buoyancy_frequency_squared(prev, mean_k, m.dz,
+                                                          sim.g_accel, sim.θ₀))
         end
         prev = mean_k
     end
@@ -186,7 +191,8 @@ end
 
 """
     cfl_diagnostics(sim, constraints = CFLConstraints(); sgs = nothing,
-                    update_νt = true, sgs_active = <closure present>)
+                    update_νt = true, sgs_active = <closure present>,
+                    sgs_stress = :laplacian)
 
 Report the time-step limit imposed by *each* process separately. Returns a
 `NamedTuple`:
@@ -197,14 +203,15 @@ Report the time-step limit imposed by *each* process separately. Returns a
 | `dt_diff`           | total (molecular + SGS) momentum-diffusion limit               |
 | `dt_buoy`           | `C_buoyancy / N` from the resolved mean θ profile               |
 | `dt_cor`            | `C_coriolis / |f|`                                             |
-| `dt_sgs`            | SGS-only limit `C_diffusive Δ²_harm / max(νt_max, κt_max)`      |
+| `dt_sgs`            | SGS-only limit `C_diffusive Δ²_harm / max(νt_cfl, κt_max)`      |
 | `dt_limiting`       | `min` of the five                                              |
 | `limiter`           | `:advective`, `:diffusive`, `:buoyancy`, `:coriolis` or `:sgs`  |
 | `advective_rate`    | `max_cell Σ|uᵢ|/Δxᵢ` (so the CFL number is `dt · rate`)         |
 | `N`                 | Brunt–Väisälä frequency (0 when buoyancy is off)                |
 | `νt_max`            | maximum SGS eddy viscosity                                     |
 | `κt_max`            | maximum SGS eddy diffusivity (θ)                               |
-| `ν_total`           | `ν + νt_max`                                                   |
+| `νt_cfl`            | SGS viscosity of the momentum limits (see `sgs_stress`)        |
+| `ν_total`           | `ν + νt_cfl`                                                   |
 
 The SGS closure is the one the next step will run: the `sgs` keyword (an
 [`AbstractSGSClosure`](@ref Aeolus.Operators.AbstractSGSClosure) or a
@@ -216,7 +223,14 @@ advances, so the estimate can be made any number of times per step; pass
 `false` to reuse what is in `sim.νt` / `sim.κt`. `sgs_active` (default:
 a closure is present) says whether an eddy viscosity acts on the step at all.
 
-The SGS limit uses the larger of the eddy viscosity and the eddy
+`sgs_stress` is the form of the SGS momentum divergence the step runs
+(the cores' keyword). For `:laplacian` (the default), `νt_cfl = νt_max`.
+For `:symmetric`, the stress form's factor 2 on the normal stresses can
+double the operator's spectral radius, so `νt_cfl =`
+[`stress_form_cfl_viscosity`](@ref)`(νh_max, νv_max, mesh)`, which equals
+`2 νt_max` when `νh = νv`.
+
+The SGS limit uses the larger of the momentum viscosity `νt_cfl` and the eddy
 diffusivity, each as stored: for a Prandtl-number closure `κt = νt/Prₜ`,
 for a closure with its own κ (Era VI) whatever it computed.
 
@@ -227,7 +241,8 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
                          c::CFLConstraints = CFLConstraints(T);
                          sgs = nothing,
                          update_νt::Bool = true,
-                         sgs_active::Union{Nothing,Bool} = nothing) where {T}
+                         sgs_active::Union{Nothing,Bool} = nothing,
+                         sgs_stress::Symbol = :laplacian) where {T}
     m = sim.mesh
     INF = T(Inf)
 
@@ -250,15 +265,21 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
         compute_sgs!(closure, sim)
     end
     f = closure === nothing ? SGSFields(sim.νt, sim.κt) : sgs_fields(closure, sim)
-    νt_max  = active ? max(_max_interior(f.νh), _max_interior(f.νv)) : zero(T)
+    νh_max  = active ? _max_interior(f.νh) : zero(T)
+    νv_max  = active ? _max_interior(f.νv) : zero(T)
+    νt_max  = max(νh_max, νv_max)
     κt_max  = active ? max(_max_interior(f.κh), _max_interior(f.κv)) : zero(T)
     Δ²harm  = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
-    ν_total = sim.ν + νt_max
+    # the SGS viscosity of the momentum limit: νt_max for the Laplacian form,
+    # the stress form's own spectral bound (≤ 2 νt_max) for `:symmetric`
+    νt_cfl  = _check_sgs_stress(sgs_stress) === :symmetric ?
+              stress_form_cfl_viscosity(νh_max, νv_max, m) : νt_max
+    ν_total = sim.ν + νt_cfl
     dt_diff = ν_total > 0 ? c.C_diffusive * Δ²harm / ν_total : INF
 
     # SGS on its own: the larger of the eddy viscosity and the scalar eddy
     # diffusivity (κt = νt/Prₜ exceeds νt for Prₜ < 1).
-    κ_sgs  = max(νt_max, κt_max)
+    κ_sgs  = max(νt_cfl, κt_max)
     dt_sgs = κ_sgs > 0 ? c.C_diffusive * Δ²harm / κ_sgs : INF
 
     # --- buoyancy (gravity-wave / Brunt-Väisälä) --------------------------
@@ -281,14 +302,52 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
             dt_cor = dt_cor, dt_sgs = dt_sgs,
             dt_limiting = dt_limiting, limiter = limiter,
             advective_rate = rate, N = N, νt_max = νt_max, κt_max = κt_max,
-            ν_total = ν_total)
+            νt_cfl = νt_cfl, ν_total = ν_total)
+end
+
+"""
+    stress_form_cfl_viscosity(νh_max, νv_max, mesh) -> ν_cfl
+
+The eddy viscosity that, put into the Laplacian diffusive limit
+`dt ν (Δx⁻²+Δy⁻²+Δz⁻²) ≤ 2` of forward Euler, bounds the explicit stress-form
+SGS momentum operator `−∂ⱼτᵢⱼ`, `τᵢⱼ = −2νᵢⱼSᵢⱼ`
+([`add_sgs_stress_divergence!`](@ref Aeolus.Operators.add_sgs_stress_divergence!)),
+for *any* velocity field and any `0 ≤ νh ≤ νh_max`, `0 ≤ νv ≤ νv_max`:
+
+    ν_cfl = 2 max(νh_max (Δx⁻²+Δy⁻²) + νv_max Δz⁻²,  νv_max (Δx⁻²+Δy⁻²+Δz⁻²))
+              / (Δx⁻²+Δy⁻²+Δz⁻²)
+
+so `ν_cfl = 2 νt` when `νh = νv`. Derivation: the operator is symmetric
+negative semi-definite, `−⟨u, L u⟩ = Σ 2νᵢⱼSᵢⱼSᵢⱼ ΔV`, so its spectral radius
+is the largest Rayleigh quotient. Each diagonal strain is one difference,
+`(u_{i+1}−u_i)²/Δx² ≤ 2(u_{i+1}²+u_i²)/Δx²`, and each off-diagonal pair is
+bounded by `(a+b)² ≤ 2a²+2b²`; every face value enters two differences per
+direction, so the `u` and `v` rows contribute at most
+`8(νh_max Δx⁻² + νh_max Δy⁻² + νv_max Δz⁻²)` and the `w` row (which sees
+only `νv`) `8 νv_max (Δx⁻²+Δy⁻²+Δz⁻²)`. That is twice the 7-point-Laplacian
+radius `4ν(Δx⁻²+Δy⁻²+Δz⁻²)`. The factor 2 comes from the normal stresses
+`τᵢᵢ = −2ν∂uᵢ/∂xᵢ`. The bound is sharp: with constant ν it is reached by the
+irrotational grid-scale mode `u = ∇φ`, φ a 3-D checkerboard, where the
+operator is `ν(∇² + ∇∇·)` and both terms give `−4ν(Δx⁻²+Δy⁻²+Δz⁻²)`.
+
+On *projected* fields the radius of the projected operator `P L P` is no
+larger than the Laplacian bound, because `Σ 2S:S = Σ|∇u|²` for solenoidal
+periodic `u`. [`cfl_diagnostics`](@ref) still uses this unprojected bound
+for `sgs_stress = :symmetric`: it holds for every velocity field, not just
+for one an exact orthogonal projection has made divergence-free (see the
+theory page, "Explicit stability of the stress form").
+"""
+function stress_form_cfl_viscosity(νh_max::Real, νv_max::Real, m)
+    ix2, iy2, iz2 = 1 / m.dx^2, 1 / m.dy^2, 1 / m.dz^2
+    s = ix2 + iy2 + iz2
+    return 2 * max(νh_max * (ix2 + iy2) + νv_max * iz2, νv_max * s) / s
 end
 
 _max_interior(f::Field) = maximum(interior_view(f))
 
 """
     adaptive_dt(sim, constraints; dt_prev = nothing, diagnostics = nothing,
-                scheme = nothing)
+                scheme = nothing, sgs = nothing, sgs_stress = :laplacian)
 
 The time step to take next: the smallest per-process limit from
 [`cfl_diagnostics`](@ref) — or, when `scheme` is an [`IMEXScheme`](@ref),
@@ -304,12 +363,15 @@ A non-finite limit (which only happens if the state already contains
 `NaN`/`Inf`) collapses to `dt_min`, so `step_adaptive!`'s retry logic sees
 a usable number rather than propagating the `NaN`. Pass `diagnostics` to
 reuse a `cfl_diagnostics` result instead of recomputing it; `sgs` is the
-closure the step will run (see [`cfl_diagnostics`](@ref)).
+closure the step will run and `sgs_stress` the form of its momentum
+divergence (see [`cfl_diagnostics`](@ref)).
 """
 function adaptive_dt(sim::BoussinesqSimulation{T}, c::CFLConstraints;
                      dt_prev = nothing, diagnostics = nothing,
-                     scheme = nothing, sgs = nothing) where {T}
-    d  = diagnostics === nothing ? cfl_diagnostics(sim, c; sgs = sgs) : diagnostics
+                     scheme = nothing, sgs = nothing,
+                     sgs_stress::Symbol = :laplacian) where {T}
+    d  = diagnostics === nothing ? cfl_diagnostics(sim, c; sgs = sgs, sgs_stress = sgs_stress) :
+                                   diagnostics
     dt = scheme isa IMEXScheme ? first(_explicit_limit(d, scheme)) : d.dt_limiting
     isnan(dt) && return c.dt_min
     if dt_prev !== nothing
@@ -510,7 +572,8 @@ Aeolus.Operators.advance_sgs!)) a rejected step made is undone, so after a
 retry the closure's memory is that of a run that took the short step
 directly. A custom `stepper` is called without `sgs` and must pass the same
 closure to the step it takes itself. `sgs_stress` (`:laplacian` |
-`:symmetric`) is passed to the default stepper with the closure.
+`:symmetric`) is passed to the default stepper with the closure, and to
+[`adaptive_dt`](@ref) for the stress form's diffusive limit.
 
 `fast_processes` accepts a `NamedTuple`, `Dict`, vector/tuple of
 `:name => callback` pairs, or a bare callback (registered as
@@ -545,7 +608,7 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
 
     closure = sgs_closure(sgs)
     Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev, scheme = scheme,
-                                      sgs = closure) : T(dt)
+                                      sgs = closure, sgs_stress = sgs_stress) : T(dt)
     take_step! = if stepper !== nothing
         stepper
     elseif scheme isa IMEXScheme
@@ -801,10 +864,11 @@ end
 
 # Rows that are *not* unknowns: `w` on an impermeable wall face is pinned
 # to zero by the BC, so it is removed from the CG system (keeping the
-# reduced operator SPD) instead of being solved for.
+# reduced operator SPD) instead of being solved for. Free-slip and no-slip
+# walls (`is_wall`) pin it alike; the top wall face lies in the halo.
 _constraint_index(::Location, ::RegularGrid, ::FieldBoundaryConditions) = 0
 _constraint_index(::FaceZ, m::RegularGrid, bcs::FieldBoundaryConditions) =
-    (bcs.bottom isa ImpermeableWall || bcs.top isa ImpermeableWall) ? m.Hz + 1 : 0
+    is_wall(bcs.bottom) ? m.Hz + 1 : 0
 
 function _apply_constraint!(a::AbstractArray{T,3}, kc::Int) where {T}
     kc == 0 && return a
@@ -817,7 +881,7 @@ function _assert_supported_bcs(bcs::FieldBoundaryConditions)
         if bc isa ValueBC || bc isa FluxBC
             throw(ArgumentError(
                 "solve_implicit_diffusion! supports the homogeneous BC types " *
-                "handled by fill_halos! (Periodic, NoFlux, ImpermeableWall). " *
+                "handled by fill_halos! (Periodic, NoFlux, ImpermeableWall, NoSlipWall). " *
                 "$(typeof(bc)) makes the operator affine; move the " *
                 "inhomogeneous part into `rhs` and pass a homogeneous BC."))
         end
@@ -893,10 +957,17 @@ matrix-free, with Jacobi-preconditioned conjugate gradients.
   * Boundary conditions are applied by calling `fill_halos!(·, bcs)` on
     the search direction inside every matrix-vector product, so exactly
     the BC types `fill_halos!` supports are supported here: `Periodic`,
-    `NoFlux` and `ImpermeableWall`. `ValueBC`/`FluxBC` make the operator
-    affine and are rejected with an explanatory error. For `w` on an
-    impermeable wall the pinned wall-face row is eliminated from the
-    system.
+    `NoFlux`, `ImpermeableWall` and `NoSlipWall`. `ValueBC`/`FluxBC` make
+    the operator affine and are rejected with an explanatory error. For
+    `w` on an impermeable wall the pinned wall-face row is eliminated from
+    the system.
+  * A *moving* `NoSlipWall` (`u_wall` or `v_wall ≠ 0`) also makes the
+    operator affine, `∇·(ν∇φ) = L₀φ + g`; this one is handled: the CG
+    iterates with the stationary wall ([`homogeneous_bcs`](@ref
+    Aeolus.BoundaryConditions.homogeneous_bcs)) and the wall term
+    `dt·g` is added to the right-hand side, so `φ` is the solution with
+    the wall moving. Pass `homogeneous_bcs(bcs)` yourself when `φ` is an
+    *increment* (a Rosenbrock stage), whose wall value is zero.
   * `field` doubles as the initial guess, and `rhs === field` is
     explicitly allowed (build the right-hand side in place, then solve
     over it — that is what [`step_imex!`](@ref) does).
@@ -943,11 +1014,15 @@ end
 
 # Function barrier: specializes on the concrete type of ν.
 function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
-                       m::RegularGrid{T}, bcs::FieldBoundaryConditions,
+                       m::RegularGrid{T}, bcs_full::FieldBoundaryConditions,
                        ws::DiffusionWorkspace, τ::T, maxit::Int,
                        precondition::Symbol, warn::Bool) where {L,T}
     ii, jj, kk = interior(m)
     idx2 = 1 / m.dx^2; idy2 = 1 / m.dy^2; idz2 = 1 / m.dz^2
+    # A moving no-slip wall makes the operator affine: iterate with the
+    # stationary wall and carry the wall term in the right-hand side.
+    bcs = homogeneous_bcs(bcs_full)
+    affine = bcs !== bcs_full
     kc = _constraint_index(L(), m, bcs)
     jacobi = precondition === :jacobi
 
@@ -958,6 +1033,16 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
 
     _apply_constraint!(x, kc)
 
+    # Wall term g = ∇·(ν∇0) with the moving-wall halo, into z (free until
+    # the preconditioner first writes it): b_eff = b + Δt g.
+    if affine
+        fill!(p, zero(T))
+        fill_halos!(pf, bcs_full)
+        @inbounds for k in kk, j in jj, i in ii
+            z[i, j, k] = Δt * _diff_at(p, ν, i, j, k, idx2, idy2, idz2)
+        end
+    end
+
     # r = b - A x   (safe when b === x: A x is formed into Ap first)
     _apply_implicit!(Ap, field, ν, Δt, m, bcs, kc)
     bnorm² = zero(T)
@@ -966,7 +1051,7 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
             r[i, j, k] = zero(T)
             continue
         end
-        bv = b[i, j, k]
+        bv = affine ? b[i, j, k] + z[i, j, k] : b[i, j, k]
         r[i, j, k] = bv - Ap[i, j, k]
         bnorm² += bv * bv
     end
@@ -1180,6 +1265,7 @@ mutable struct IMEXWorkspace{T,S<:NamedTuple,D<:NamedTuple}
     ν_mom_v::Union{Nothing,Array{T,3}}    # vertical ν_eff (sgs_stress = :symmetric)
     ν_scal_v::Union{Nothing,Array{T,3}}   # vertical κ_eff (a closure with κv ≢ κh)
     ν_scal_y::Union{Nothing,Array{T,3}}   # y κ_eff (a closure with a scalar tensor)
+    ν_qv::Union{Nothing,Array{T,3}}       # qv's own frozen coefficient (AMD)
     total_iterations::Int
     max_residual::T
 end
@@ -1194,7 +1280,7 @@ function IMEXWorkspace(sim::BoussinesqSimulation{T}) where {T}
               w = DiffusionWorkspace(sim.w), c = DiffusionWorkspace(sim.θ))
     return IMEXWorkspace{T,typeof(state0),typeof(diff)}(
         state0, aux, nothing, Field(CellCenter(), m), diff, nothing, nothing,
-        nothing, nothing, nothing, 0, zero(T))
+        nothing, nothing, nothing, nothing, 0, zero(T))
 end
 
 const _IMEX_WORKSPACES = WeakKeyDict{Any,Any}()
@@ -1332,6 +1418,19 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
         @inbounds νsv .= sim.ν .+ f.κv.data
         _DirCoef(_coef(νs, m), _coef(νsv, m))
     end
+    if sim.has_moisture
+        # qv: the closure's diffusivity for a scalar other than θ — f.κh for a
+        # Prandtl-number closure (shared coefficient, so qv shares `cs`,
+        # including a separate κv or a scalar tensor, P55-c), its own
+        # isotropic one for AMD.
+        κq = sgs_tracer_diffusivity!(ws.scratch, closure, f, sim, sim.qv)
+        if κq !== f.κh
+            ws.ν_qv === nothing && (ws.ν_qv = similar(sim.νt.data))
+            νq = ws.ν_qv::Array{T,3}
+            @inbounds νq .= sim.ν .+ κq.data
+            cs = (θ = cs, qv = _coef(νq, m))
+        end
+    end
     stress === :symmetric || return (_coef(νm, m), cs, nothing, Ks)
     νmv = if f.νv === f.νh
         νm
@@ -1347,9 +1446,15 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     return (cm, cs, (νm, νmv), Ks)
 end
 
-# The implicit coefficient of the field `name`.
+# The implicit coefficient of the field `name`: momentum `νm` (one coefficient,
+# or `(u, v, w)` for the stress form); scalars `νs`, which is one coefficient
+# for θ and qv, or `(θ = …, qv = …)` when the SGS closure gives qv its own
+# diffusivity (AMD, `sgs_tracer_diffusivity!`).
 @inline _coef_for(νm, νs, name::Symbol) =
-    _is_scalar_name(name) ? νs : (νm isa NamedTuple ? getfield(νm, name) : νm)
+    _is_scalar_name(name) ? _scalar_coef(νs, name) :
+                            (νm isa NamedTuple ? getfield(νm, name) : νm)
+@inline _scalar_coef(νs, ::Symbol) = νs
+@inline _scalar_coef(νs::NamedTuple{(:θ, :qv)}, name::Symbol) = getfield(νs, name)
 
 _diffusion_buffer(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbol) =
     name === :u ? sim.lap_u : name === :v ? sim.lap_v : name === :w ? sim.lap_w :
@@ -1433,11 +1538,14 @@ function _combine4!(out::Field, a, A::Field, b, B::Field, c, C::Field,
 end
 
 # Solve (I - dtγ ∇·(ν∇)) f = f in place, recording solver statistics.
+# `increment = true` (Rosenbrock stages k₁, k₂) solves for a change of the
+# state, whose wall value is zero: the moving-wall term is dropped.
 function _solve_field!(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbol,
-                       f::Field, νm, νs, dtγ, tol, maxit)
+                       f::Field, νm, νs, dtγ, tol, maxit; increment::Bool = false)
     scalar = _is_scalar_name(name)
     ν   = _coef_for(νm, νs, name)
     bcs = scalar ? sim.θ_bcs : sim.bcs
+    increment && (bcs = homogeneous_bcs(bcs))
     dw  = scalar ? ws.diff.c : getfield(ws.diff, name)
     stats = solve_implicit_diffusion!(f, f, ν, dtγ, sim.mesh, bcs;
                                       tol = tol, maxit = maxit, workspace = dw)
@@ -1464,7 +1572,9 @@ Advance `sim` by `dt` with a semi-implicit IMEX scheme
     prescribed surface flux, Rayleigh sponge, and the user `body_force!`;
   * **implicit**: diffusion of `u, v, w, θ` (and `qv` when moist) with
     the frozen effective viscosity `ν + νₜ` (`ν + κₜ` for scalars;
-    `κₜ = νₜ/Prₜ` for the Smagorinsky closures),
+    `κₜ = νₜ/Prₜ` for the Smagorinsky closures; `qv` takes the closure's
+    [`sgs_tracer_diffusivity!`](@ref Aeolus.Operators.sgs_tracer_diffusivity!),
+    which for AMD is its own diffusivity from the `qv` gradient),
     solved by [`solve_implicit_diffusion!`](@ref);
   * **pressure projection at the end of every stage**, so each stage
     value — and therefore the returned state — is discretely
@@ -1618,7 +1728,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     for name in names
         k1 = getfield(ws.aux, name)
         _combine2!(k1, zero(T), k1, Δt, _tendency(sim, name), m)
-        _solve_field!(sim, ws, name, k1, νm, νs, γ * Δt, tol, maxit)
+        _solve_field!(sim, ws, name, k1, νm, νs, γ * Δt, tol, maxit; increment = true)
     end
 
     # ---- stage state uⁿ + a₂₁k₁, projected ------------------------------
@@ -1638,7 +1748,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     for name in names
         k2 = getfield(k2set, name)
         _combine2!(k2, Δt, _tendency(sim, name), c21, getfield(ws.aux, name), m)
-        _solve_field!(sim, ws, name, k2, νm, νs, γ * Δt, tol, maxit)
+        _solve_field!(sim, ws, name, k2, νm, νs, γ * Δt, tol, maxit; increment = true)
     end
 
     # ---- update ---------------------------------------------------------
@@ -1667,7 +1777,8 @@ function _explicit_limit(d, scheme::IMEXScheme)
 end
 
 """
-    imex_stability_limit(sim, scheme; constraints = CFLConstraints(), sgs = nothing)
+    imex_stability_limit(sim, scheme; constraints = CFLConstraints(), sgs = nothing,
+                         sgs_stress = :laplacian)
     -> (; dt_explicit, dt_diffusive, dt_fully_explicit, speedup, limiter,
           explicit_limiter, diagnostics)
 
@@ -1687,12 +1798,13 @@ Quantify what treating diffusion implicitly buys.
 
 `limiter` names the process that binds the IMEX step, `explicit_limiter`
 the one that binds a fully explicit step, and `diagnostics` is the full
-[`cfl_diagnostics`](@ref) result (with the SGS closure `sgs`, as there).
+[`cfl_diagnostics`](@ref) result (with the SGS closure `sgs` and the
+momentum form `sgs_stress`, as there).
 """
 function imex_stability_limit(sim::BoussinesqSimulation{T}, scheme::IMEXScheme;
                               constraints::CFLConstraints = CFLConstraints(T),
-                              sgs = nothing) where {T}
-    d = cfl_diagnostics(sim, constraints; sgs = sgs)
+                              sgs = nothing, sgs_stress::Symbol = :laplacian) where {T}
+    d = cfl_diagnostics(sim, constraints; sgs = sgs, sgs_stress = sgs_stress)
     dt_explicit, limiter = _explicit_limit(d, scheme)
 
     dt_diffusive = min(d.dt_diff, d.dt_sgs)

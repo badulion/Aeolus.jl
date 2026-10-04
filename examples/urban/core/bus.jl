@@ -118,6 +118,13 @@ Surface exchange (#129):
 * `dew_mask` — the columns whose surface has no vapour exchange of its
   own (moisture availability 0), where the RadiationFog dew reservoir
   acts; elsewhere dew is the negative evaporation of the surface model.
+
+Wall models (#179):
+
+* `z0m_class` — the momentum roughness length per surface class (m),
+  the table of the `:surface_exchange` provider (its `z0m` option),
+  which it puts here in its `build`; the facade wall model reads the
+  wall and glass roughness from it rather than keeping a copy.
 """
 mutable struct SurfaceBus
     Ts::Matrix{Float64}
@@ -147,6 +154,8 @@ mutable struct SurfaceBus
     E::Matrix{Float64}
     u_star::Matrix{Float64}
     dew_mask::BitMatrix
+    # wall models (#179)
+    z0m_class::Dict{UInt8,Float64}
 end
 
 function SurfaceBus(Nx::Integer, Ny::Integer; Ts0::Real = 285.0)
@@ -156,7 +165,8 @@ function SurfaceBus(Nx::Integer, Ny::Integer; Ts0::Real = 285.0)
                       NaN, NaN, NaN,
                       Matrix{Union{Nothing,AbstractSurface}}(nothing, Nx, Ny),
                       Dict{UInt8,Tuple{Symbol,Any}}(), ones(Int, Nx, Ny), z(),
-                      z(), z(), z(), z(), z(), z(), z(), z(), z(), trues(Nx, Ny))
+                      z(), z(), z(), z(), z(), z(), z(), z(), z(), trues(Nx, Ny),
+                      Dict{UInt8,Float64}())
 end
 
 """

@@ -1,0 +1,33 @@
+# Wall models — WallModels
+
+`Aeolus.WallModels` (Phase 57, #169) owns every modelled wall stress of
+Era VI. Theory: [Wall models](../../theory/wall_models.md).
+
+- **Laws**: `AbstractWallLaw` with `friction_velocity`, `wall_stress`
+  (kinematic, m² s⁻²) and `wall_drag` (``τ_w/U``); `SpaldingLaw`
+  (smooth wall; `LEE_MOSER_2015` constants), `RoughLogLaw` and
+  `MOSTWallLaw` (κ and ``ψ_m`` delegated to `SurfaceExchange`), and
+  `matching_obukhov_length`.
+- **Operator**: `apply_wall_stress!` on the z-walls of a `RegularGrid`,
+  implicit, `:local` / `:schumann` / `:moeng`, with Bool or level masks.
+  A `post_predictor!` hook; the Berlin ground drag is this operator.
+- **Immersed walls** (P57-d, #179): `immersed_walls` (the tangential
+  walls of an IBM solid mask), `remove_stencil_wall_flux!` (a
+  `body_force!` hook: the stencil's own facade flux out) and
+  `apply_immersed_wall_stress!` (a `post_predictor!` hook: the modelled
+  stress, implicit, corners summed). The Berlin facade drag is this.
+- **Cut-cell walls** (P57-d, #179): the method
+  `wall_shear_stress(u, v, w, stencils, geom, law; ν)` of
+  `CutCell.wall_shear_stress` (modelled stress at the image-point
+  probe), `wall_slip_velocity` and `slip_wall_value` (the slip wall
+  value of `reconstruct_wall_velocity!`).
+- **Benchmark cases** (P54-d, #174): `half_channel_case` (neutral ABL
+  half channel) and `channel_case` (two-wall channel at a given Re_τ),
+  a `WallBoundedCase` advanced by `advance_channel!` / `run_channel!`
+  (time-averaged U, Φ_m, stress budget, ⟨τ_w⟩), with the step size of
+  `channel_dt`. Closure, wall law, formulation and stepper are keyword
+  arguments; the diagnostics are Operators' (see [Era VI](../era6.md)).
+
+```@autodocs
+Modules = [Aeolus.WallModels]
+```
