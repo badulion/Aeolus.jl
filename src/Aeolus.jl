@@ -167,6 +167,8 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+# Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
+export LagrangianDynamicSmagorinsky
 # Era VI (P55-b, #175): the stress-form SGS momentum divergence
 export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
        add_sgs_stress_divergence!, sgs_stress_dissipation

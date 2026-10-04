@@ -11,10 +11,14 @@
 #   :smagorinsky (default) Operators.StaticSmagorinsky(cfg.C_s) — the
 #                Smagorinsky–Lilly closure, C_s = cfg.C_s (0.1); bit for
 #                bit the built-in closure of the cores.
-#   :dynamic     Operators.DynamicSmagorinsky — the Germano–Lilly dynamic
-#                coefficient, plane-averaged, from the resolved flow
-#                (moved to src from the example's dead
-#                turbulence_addons.jl by #132).
+#   :dynamic     the Germano–Lilly dynamic coefficient from the resolved
+#                flow, obstacle aware (the buildings' solid mask, #173).
+#                Default averaging :lagrangian —
+#                Operators.LagrangianDynamicSmagorinsky (Meneveau, Lund &
+#                Cabot 1996: averaged along pathlines, no homogeneous
+#                planes needed); `averaging = :plane` / `:local` run
+#                Operators.DynamicSmagorinsky (moved to src from the
+#                example's dead turbulence_addons.jl by #132).
 #   :mlsgs       ML.MLSGS — a user closure `fn(νt, u, v, w, mesh)`. There
 #                is no trained model: the default `fn` is the Smagorinsky
 #                closure with cfg.C_s, which reproduces the default run
@@ -106,13 +110,25 @@ core_max_νt(sim) = maximum(interior_view(sim.νt))
 """
     SGSDynamic
 
-Slot `:sgs`, provider `:dynamic`: the `DynamicSmagorinsky` closure
-(`compute_dynamic_smagorinsky_νt!`) as the `sgs` of every step, on any
-core. Options `averaging = :plane`, `filter_ratio = 3.0`, `cs_max = 0.5`.
-`report` prints the mean `C_s` in the free stream (the levels between the
-highest roof and the sponge) and in the canopy (the levels with buildings).
-Option `stress = :symmetric` (the momentum divergence, as for
-`SGSSmagorinsky`).
+Slot `:sgs`, provider `:dynamic`: the dynamic Smagorinsky coefficient as
+the `sgs` of every step, on any core, with the buildings' solid mask
+(`case.geom.sm.mask`): `ν_t = 0` in buildings, the test filter and the
+averages run over air cells only, and nothing stored inside a building
+reaches the coefficient. Options:
+
+* `averaging = :lagrangian` (default) — `LagrangianDynamicSmagorinsky`,
+  the Germano identity averaged along pathlines (Meneveau, Lund & Cabot
+  1996); its memory is committed once per accepted step and rolled back
+  with a rejected adaptive step;
+* `averaging = :plane` / `:local` — `DynamicSmagorinsky` (horizontal
+  average over the air cells of each level / pointwise);
+* `filter_ratio = 3.0`, `cs_max = 0.5`;
+* `stress = :symmetric` — the form of the momentum divergence, as for
+  `SGSSmagorinsky`.
+
+`report` prints the mean `C_s` over the air cells in the canopy (the
+levels with buildings) and in the free stream (between the highest roof
+and the sponge).
 """
 struct SGSDynamic{W, O, C} <: AbstractCoupling
     ws::W
@@ -126,41 +142,73 @@ provider(::Type{<:SGSDynamic}) = :dynamic
 is_default(::Type{<:SGSDynamic}) = false
 modules_used(::Type{<:SGSDynamic}) = (:Operators,)
 default_options(::Type{<:SGSDynamic}) =
-    (averaging = :plane, filter_ratio = 3.0, cs_max = 0.5, SGS_STRESS_DEFAULT...)
+    (averaging = :lagrangian, filter_ratio = 3.0, cs_max = 0.5, SGS_STRESS_DEFAULT...)
 function build(::Type{<:SGSDynamic}, case, o)
-    ws = DynamicSmagorinskyWorkspace(case.mesh)
     opts = (averaging = o.averaging, filter_ratio = o.filter_ratio, cs_max = o.cs_max)
-    return SGSDynamic(ws, opts, DynamicSmagorinsky(ws; opts...), o.stress)
+    mask = case.geom.sm.mask
+    closure = if o.averaging === :lagrangian
+        LagrangianDynamicSmagorinsky(case.mesh; filter_ratio = o.filter_ratio,
+                                     cs_max = o.cs_max, mask)
+    else
+        DynamicSmagorinsky(DynamicSmagorinskyWorkspace(case.mesh); averaging = o.averaging,
+                           filter_ratio = o.filter_ratio, cs_max = o.cs_max, mask)
+    end
+    return SGSDynamic(closure.workspace, opts, closure, o.stress)
 end
 
 step_options(c::SGSDynamic, case) = sgs_step_options(c.closure, c.stress)
 
+"Interior view of the buildings' solid mask."
+function interior_solid(case)
+    m = case.mesh
+    return view(case.geom.sm.mask, m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz)
+end
+
 """
     dynamic_cs_profile(c::SGSDynamic, case) -> (canopy, free)
 
-Mean `C_s = √(C_s²)` of the last step over the levels with buildings and
-over the free-stream levels (above the highest roof + 1 and below the
-sponge).
+Mean `C_s = √(C_s²)` of the last coefficient evaluation over the air cells
+of the levels with buildings and of the free-stream levels (above the
+highest roof + 1 and below the sponge). Building cells are excluded.
 """
 function dynamic_cs_profile(c::SGSDynamic, case)
     m = case.mesh
     kr = highest_solid_level(case)
     ksp = floor(Int, case.cfg.sponge_frac * m.Nz)
     Cs = sqrt.(c.ws.cs2)
-    lvl(ks) = isempty(ks) ? NaN : mean(view(Cs, :, :, ks))
+    air = .!interior_solid(case)
+    function lvl(ks)
+        isempty(ks) && return NaN
+        a = view(air, :, :, ks)
+        return sum(view(Cs, :, :, ks)[a]) / count(a)
+    end
     return (canopy = lvl(1:kr), free = lvl(kr+2:ksp))
 end
 
 function report(c::SGSDynamic, case)
     p = dynamic_cs_profile(c, case)
-    return @sprintf("dynamic SGS: mean C_s canopy %.3f, free stream %.3f", p.canopy, p.free)
+    return @sprintf("dynamic SGS (%s): mean C_s canopy %.3f, free stream %.3f (air cells)",
+                    c.opts.averaging, p.canopy, p.free)
 end
 
-smoke_check(c::SGSDynamic, case) =
-    ["dynamic C_s² within the clip [0, cs_max²]" =>
-         all(x -> 0 <= x <= c.opts.cs_max^2, c.ws.cs2),
-     "ν_t ≥ 0 (no backscatter)" => minimum(interior_view(case.sim.νt)) >= 0,
-     sgs_stress_checks(c.stress, case)...]
+smoke_variants(::Type{<:SGSDynamic}) =
+    ((label = "plane averaging", physics = Dict(:sgs => :dynamic),
+      options = Dict(:sgs_dynamic => (averaging = :plane,))),)
+
+function smoke_check(c::SGSDynamic, case)
+    solid = interior_solid(case)
+    checks = ["dynamic C_s² within the clip [0, cs_max²]" =>
+                  all(x -> 0 <= x <= c.opts.cs_max^2, c.ws.cs2),
+              "ν_t ≥ 0 (no backscatter)" => minimum(interior_view(case.sim.νt)) >= 0,
+              "ν_t = 0 in the buildings" => all(==(0), interior_view(case.sim.νt)[solid])]
+    if c.closure isa LagrangianDynamicSmagorinsky
+        push!(checks, "Lagrangian memory I_LM ≥ 0, I_MM ≥ 0" =>
+                          minimum(c.closure.I_LM) >= 0 && minimum(c.closure.I_MM) >= 0)
+        push!(checks, "Lagrangian memory initialised" => c.closure.initialised[])
+    end
+    append!(checks, sgs_stress_checks(c.stress, case))
+    return checks
+end
 
 """
     SGSMLSGS

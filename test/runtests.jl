@@ -977,6 +977,7 @@ end
     include("era6_stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
     include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
     include("era6_les_toolbox.jl")       # Phase 54  filters, spectrum, initialiser (#168)
+    include("era6_lagrangian_sgs.jl")    # P54-b: Lagrangian dynamic Smagorinsky, mask-aware (#173)
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
     include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
     include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)

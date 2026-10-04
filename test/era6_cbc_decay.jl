@@ -10,6 +10,7 @@
 #
 #   closure        K98/K42 err  K171/K42 err  rms log10 E (98 / 171)  E(k_c)/CBC (98 / 171)
 #   dynamic          +13.2 %       −3.6 %       0.100 / 0.084           1.64 / 1.47
+#   Lagrangian (#173) +12.8 %      −2.8 %       0.095 / 0.077           1.61 / 1.43
 #   Smagorinsky .17  +13.2 %       −2.6 %       0.102 / 0.085           1.62 / 1.51
 #   no model         +98.2 %     +160.6 %       0.224 / 0.315           6.67 / 15.2
 #
@@ -74,11 +75,11 @@ include("cbc_benchmark_driver.jl")
     end
 
     res = Dict{Symbol,Any}()
-    t_total = @elapsed for c in (:dynamic, :smagorinsky, :none)
+    t_total = @elapsed for c in (:dynamic, :lagrangian, :smagorinsky, :none)
         res[c] = cbc_benchmark(c; N = 32)
         @info "  " * cbc_summary(String(c), res[c])
     end
-    @info @sprintf("  CBC 32³ (3 closures × 3 seeds): %.1f s", t_total)
+    @info @sprintf("  CBC 32³ (4 closures × 3 seeds): %.1f s", t_total)
 
     @testset "set-up: station-1 spectrum exact in every resolved shell" begin
         r = res[:dynamic]
@@ -90,7 +91,7 @@ include("cbc_benchmark_driver.jl")
         @test r.K_ratio_ref[2] > (urms[3] / urms[1])^2
     end
 
-    @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :smagorinsky)
+    @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :lagrangian, :smagorinsky)
         r = res[c]
         @test abs(r.K_err[1]) < 0.20                               # K(98)/K(42): +13.2 %, see header
         @test_broken abs(r.K_err[1]) < 0.10                        # the proposed target at 98
@@ -106,6 +107,7 @@ include("cbc_benchmark_driver.jl")
         @test r.K_err[1] > 0.5                                     # far too little decay
         # and the models are distinguishable from it
         @test res[:dynamic].E_kc_ratio[2] < r.E_kc_ratio[2] / 4
+        @test res[:lagrangian].E_kc_ratio[2] < r.E_kc_ratio[2] / 4
     end
 
     @test t_total < 60                                             # CI budget

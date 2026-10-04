@@ -303,7 +303,7 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`); each with option `stress = :symmetric` (`:laplacian`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
+| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`); each with option `stress = :symmetric` (`:laplacian`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177) |
 
@@ -372,11 +372,28 @@ unmasked.
   6.1e-10 m s⁻¹ in u, v, w and 2.1e-9 K in θ, with max|∇·u| = 1.9e-13
   s⁻¹ (`test/berlin_numerics.jl`). They are here for the stretched-grid
   and cut-cell solver work (#151, #152), not for speed.
-* **SGS.** `:dynamic` is the Germano–Lilly coefficient of
-  `Operators.compute_dynamic_smagorinsky_νt!`, plane-averaged, test-filter
-  ratio 3 (see [the SGS theory page](../theory/sgs.md)); `report` prints
-  the mean C_s in the canopy and in the free stream (the levels between
-  the highest roof + 1 and the sponge). `:mlsgs` wraps `ML.MLSGS`; with
+* **SGS.** `:dynamic` is the Germano–Lilly coefficient, test-filter
+  ratio 3, with the buildings' solid mask (`case.geom.sm.mask`): ν_t = 0
+  in buildings, and the test filter and the averages see air cells only
+  (#173). The default `averaging = :lagrangian` is
+  `Operators.LagrangianDynamicSmagorinsky` (Meneveau, Lund & Cabot 1996:
+  averaged along pathlines, no homogeneous planes needed).
+  `averaging = :plane` (a smoke variant) and `:local` run
+  `Operators.DynamicSmagorinsky`. See [the SGS theory page](../theory/sgs.md).
+  `report` prints the mean C_s over air cells in the canopy and in the
+  free stream (the levels between the highest roof + 1 and the sponge).
+  `CaseConfig(:smoke)`, 100 fixed steps:
+
+  | averaging | canopy C_s | free-stream C_s | cost per Euler step |
+  | :-- | --: | --: | --: |
+  | Lagrangian | 0.037 | 0.033 | 1.2 ms (0.11 ms coefficient + 1.1 ms commit) |
+  | plane | 0.032 | 0.018 | 0.70 ms |
+
+  On the 64 × 64 × 32 flagship mesh the Lagrangian model costs 34 ms per
+  Euler step against 26 ms for the plane model, both measured on a
+  loaded machine. Under RK3 the Lagrangian model is cheaper than the
+  plane model, because it runs the Germano kernel once per step instead
+  of once per substage. `:mlsgs` wraps `ML.MLSGS`; with
   the default `fn` (the Smagorinsky closure with `cfg.C_s`) the run is
   bit for bit the default run (tested over 100 smoke steps). There is no
   trained model.

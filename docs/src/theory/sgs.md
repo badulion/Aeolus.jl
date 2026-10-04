@@ -313,6 +313,112 @@ u, v, w; workspace = ws)`, which still works. `ML.MLSGS` closures plug in
 the same way. The Berlin case selects it with `physics[:sgs] = :dynamic`,
 on any dynamical core.
 
+## Lagrangian dynamic averaging (Meneveau, Lund & Cabot 1996)
+
+The plane average of the Germano identity needs horizontally homogeneous
+statistics, which an urban canopy does not have. Before P54-b (#173)
+the plane average also ran over the solid cells of the immersed
+buildings. [`LagrangianDynamicSmagorinsky`](@ref Aeolus.Operators.LagrangianDynamicSmagorinsky)
+averages the identity backwards in time along fluid pathlines instead
+(MLC96), so the coefficient is local and needs no homogeneous direction.
+The averages obey
+
+```math
+\mathcal I_{LM}^{n+1}(\mathbf x) = ε\,[L^d_{ij}M_{ij}]^{n+1}(\mathbf x)
+  + (1-ε)\,\mathcal I_{LM}^{n}(\mathbf x - \mathbf u^n Δt),
+\qquad
+\mathcal I_{MM}^{n+1}(\mathbf x) = ε\,[M_{ij}M_{ij}]^{n+1}(\mathbf x)
+  + (1-ε)\,\mathcal I_{MM}^{n}(\mathbf x - \mathbf u^n Δt),
+```
+
+```math
+ε = \frac{Δt/T}{1+Δt/T}, \qquad
+T = θ\,Δ\,(\mathcal I_{LM}\mathcal I_{MM})^{-1/8},\ θ = 1.5, \qquad
+C_s^2 = \mathcal I_{LM}/\mathcal I_{MM}.
+```
+
+This is the exponentially weighted pathline average of MLC96 eqs.
+2.10–2.13, in the time discretisation of their eqs. 3.1–3.3. The details:
+
+* The upstream values come from trilinear interpolation. Periodic
+  directions wrap, and in a bounded direction the departure point is
+  clamped to the boundary cell.
+* ``\mathcal I_{LM}`` is clipped at 0.
+* ``T`` uses the upstream memories. Where ``\mathcal I_{LM}`` has been
+  clipped to 0, ``T`` is evaluated with ``\mathcal I_{LM} ≥
+  10^{-8}\mathcal I_{MM}``, so the point can recover; with ``T = ∞`` it
+  would freeze. Where ``\mathcal I_{MM} = 0``, ``ε = 1``.
+* Initialisation (MLC96 §3): ``\mathcal I_{MM} = M_{ij}M_{ij}`` and
+  ``\mathcal I_{LM} = C_0^2\mathcal I_{MM}`` with ``C_0 = 0.16``.
+* ``C_s^2`` is clipped to ``[0, 0.5^2]``. No damping function is applied
+  anywhere.
+
+**One Germano kernel.** ``L^d_{ij}M_{ij}`` and ``M_{ij}M_{ij}`` come from
+`_germano_identity!`. That kernel also computes the plane and local
+averages of
+[`compute_dynamic_smagorinsky_νt!`](@ref Aeolus.Operators.compute_dynamic_smagorinsky_νt!),
+and its test filter is the stencil of
+[`box_filter!`](@ref Aeolus.Operators.box_filter!). The refactor is bit
+for bit: LM, MM, ``C_s^2`` and ``ν_t`` on the evolved field below are
+`==` the pre-refactor values for both averagings and both filter ratios.
+
+**Contract.** The memory advances only in `advance_sgs!`, once per
+accepted step, from the state after the step. The departure point uses
+the cell-centred velocity committed with the previous memory,
+``\mathbf u^n``. `sgs_coefficients!` is pure: it takes ``C_s^2`` from the
+committed memory and ``|S|`` from the current state. So the three RK3
+substages and the CFL estimate see one coefficient, and between commits a
+coefficient call costs only a strain evaluation. `sgs_state` copies the
+memory, and a rejected adaptive step is rolled back bit for bit.
+
+**Solids.** `mask` is a cell mask, e.g. `IBM.SolidMask.mask`. Its halos
+are filled from the boundary conditions. The plane / local
+`DynamicSmagorinsky` take the same mask.
+
+* ``ν_t = 0`` and the memories are 0 in solid cells.
+* The dynamic procedure reads the velocity with the no-slip value 0 on
+  every face that touches a solid.
+* The test filter runs over fluid neighbours only, renormalised by their
+  number.
+* A departure point whose nearest cell is solid takes the value of the
+  cell itself.
+* Solid corners of the trilinear stencil are dropped and the remaining
+  weights renormalised.
+
+Nothing stored inside an obstacle reaches a fluid coefficient: test 6
+below sets every solid face to NaN and to 1e30 and gets the same bits.
+
+Measured (`test/era6_lagrangian_sgs.jl`):
+
+| test | result |
+| :-- | :-- |
+| relaxation to a frozen source, ``u = 0``, fixed ``T`` (40 steps) | ``\big\lvert\lvert I^n - S\rvert - (1-ε)^n\lvert I^0-S\rvert\big\rvert ≤ 1.4×10^{-15}`` |
+| pathline transport, ``ε = 0``, 32³ periodic, CFL 0.4, 50 steps | domain sum to 1.4e-14, centroid moves ``\mathbf U t`` to 3.7e-13 m, max 0.911 → 0.171 (never grows) |
+| laminar shear ``u = 3z`` | ``L^d_{ij}M_{ij} = 0`` exactly; ``C_s^2/C_0^2`` decays monotonically to 1.4e-8 after ``St = 45`` |
+| isotropic, 32³ (field of the table above), ``t = 1`` | mean ``C_s`` 0.1228 against the plane 0.1291 (−4.8 %) |
+| same, ``t = 3`` | 0.1500 against 0.1539 (−2.5 %) |
+| 200 steps with the closure driving the flow | ``\mathcal I_{LM} ≥ 0``, ``\min \mathcal I_{MM} = 1.33``, ``ν_t ≥ 0``, clip fraction 0, ``\mathcal I_{LM} = 0`` in 0.59 % of cells |
+| wall-mounted cube, 32×32×16 periodic channel, 200 steps | ``ν_t = 0`` in solids, no NaN/Inf, ``C_s^2 ∈ [0, 0.25]`` next to the cube (mean ``C_s`` 0.098 there, 0.152 over all fluid) |
+
+As in MLC96 fig. 6, the Lagrangian coefficient follows the plane value in
+isotropic turbulence. In laminar shear it does not drop to 0 at once, as
+the plane value does. It relaxes there, with ``T`` growing as
+``\mathcal I_{LM} → 0``. ``C_s^2`` and ``ν_t`` therefore reach 0 only as
+``t → ∞``; the test asserts ``< 10^{-6}`` of the initial value. In the
+CBC decay below the Lagrangian model is slightly closer to the
+measurements than the plane model.
+
+In the Berlin case it is the default averaging of the `:dynamic` SGS
+provider. There, `CaseConfig(:smoke)` after 100 fixed steps of 2 s gives
+these mean ``C_s`` over air cells:
+
+| averaging | canopy | free stream | max ``ν_t`` (m²/s) |
+| :-- | --: | --: | --: |
+| Lagrangian | 0.037 | 0.033 | 0.38 |
+| plane (solids now excluded) | 0.032 | 0.018 | 0.037 |
+
+There is no clipping in either run.
+
 ## Closure contract
 
 Era VI (#167) defines the interface between an SGS closure and the
@@ -447,6 +553,7 @@ Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
 | ``N^3`` | closure | ``K_{98}/K_{42}`` vs CBC | ``K_{171}/K_{42}`` vs CBC | RMS ``\log_{10}E``, ``k ≤ \tfrac23 k_c`` (98 / 171) | ``E(k_c)``/CBC (98 / 171) |
 | :-- | :-- | --: | --: | --: | --: |
 | 32³ | dynamic (plane)     | +13.2 % | −3.6 % | 0.100 / 0.084 | 1.64 / 1.47 |
+| 32³ | dynamic (Lagrangian, #173) | +12.8 % | −2.8 % | 0.095 / 0.077 | 1.61 / 1.43 |
 | 32³ | Smagorinsky 0.17    | +13.2 % | −2.6 % | 0.102 / 0.085 | 1.62 / 1.51 |
 | 32³ | no model            | +98.2 % | +160.6 % | 0.224 / 0.315 | 6.67 / 15.2 |
 | 64³ | dynamic (plane)     | −4.9 % | −17.6 % | 0.055 / 0.083 | 1.06 / 0.93 |
@@ -454,7 +561,9 @@ Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
 | 64³ | no model            | +54.5 % | +38.6 % | 0.236 / 0.353 | 7.85 / 12.0 |
 
 CI cost at 32³: about 10 s (20 s under load) for the three closures ×
-three seeds.
+three seeds, plus 2.2 s for the Lagrangian model, which runs through
+`step_rk3!(sim, dt; sgs)` so that its memory is committed once per step;
+it was not run at 64³.
 
 Without a model the energy piles up at the cut-off (7–15 × CBC). The
 test uses this to show that it can fail.
