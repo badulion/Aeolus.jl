@@ -74,7 +74,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
                 dns(r.Ri, "U_b_plus"), r.Nu, dns(r.Ri, "Nu"), r.τ_wall, r.budget, r.ΔUb)
     end
     # the figure: (a) mean profiles U⁺(y⁺) of the lower half, (b) U_b⁺ and Nu against Ri_τ
-    W, H = 1000, 460; pw, ph = 380, 330
+    W, H = 1060, 460; pw, ph = 380, 330
     cols = Dict(0.0 => "#2563eb", 18.0 => "#059669", 60.0 => "#dc2626")
     io = IOBuffer()
     println(io, """<?xml version="1.0" encoding="UTF-8"?>""")
@@ -82,12 +82,13 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println(io, """<rect width="100%" height="100%" fill="white"/>""")
     println(io, """<text x="$(W/2)" y="26" font-size="17" text-anchor="middle" font-weight="bold">Stratified channel, Re_τ = 180, $TAG, dynamic Smagorinsky: solid ± correction (dashed: none)</text>""")
     x0, y0 = 80, 55
-    X(yp) = x0 + (log10(yp) - log10(1)) / (log10(180) - log10(1)) * pw; Y(u) = y0 + ph - u / 25 * ph
+    X(yp) = x0 + (log10(yp) - log10(1)) / (log10(180) - log10(1)) * pw; Y(u) = y0 + ph - u / 30 * ph
+    println(io, """<defs><clipPath id="pa"><rect x="$x0" y="$y0" width="$pw" height="$ph"/></clipPath></defs>""")
     println(io, """<rect x="$x0" y="$y0" width="$pw" height="$ph" fill="none" stroke="#333"/>""")
     for yp in (1, 10, 100)
         println(io, """<line x1="$(X(yp))" y1="$(y0+ph)" x2="$(X(yp))" y2="$(y0+ph+5)" stroke="#333"/><text x="$(X(yp))" y="$(y0+ph+19)" font-size="12" text-anchor="middle">$yp</text>""")
     end
-    for u in 0:5:25
+    for u in 0:5:30
         println(io, """<line x1="$(x0-5)" y1="$(Y(u))" x2="$x0" y2="$(Y(u))" stroke="#333"/><text x="$(x0-8)" y="$(Y(u)+4)" font-size="12" text-anchor="end">$u</text>""")
     end
     for r in results
@@ -95,7 +96,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
         Us = 0.5 .* (r.U[1:n2] .+ reverse(r.U)[1:n2])            # fold the two halves
         pts = join(("$(X(180z)),$(Y(u))" for (z, u) in zip(r.zc[1:n2], Us)), " ")
         dash = r.stab === :none ? """ stroke-dasharray="6,4\"""" : ""
-        println(io, """<polyline fill="none" stroke="$(cols[r.Ri])" stroke-width="2"$dash points="$pts"/>""")
+        println(io, """<polyline clip-path="url(#pa)" fill="none" stroke="$(cols[r.Ri])" stroke-width="2"$dash points="$pts"/>""")
     end
     for (i, Ri) in enumerate((0.0, 18.0, 60.0))
         println(io, """<line x1="$(x0+15)" y1="$(y0+20i)" x2="$(x0+40)" y2="$(y0+20i)" stroke="$(cols[Ri])" stroke-width="2"/><text x="$(x0+47)" y="$(y0+20i+4)" font-size="12">Ri_τ = $(round(Int, Ri)) (DNS U_b⁺ = $(dns(Ri, "U_b_plus")))</text>""")
@@ -105,7 +106,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println(io, """<text x="$(x0+6)" y="$(y0+ph-8)" font-size="14" font-weight="bold">(a)</text>""")
     # (b) Nu and U_b against Ri
     x0 = 580
-    XR(Ri) = x0 + Ri / 70 * pw; YN(nu) = y0 + ph - nu / 8 * ph; YU(u) = y0 + ph - (u - 12) / 10 * ph
+    XR(Ri) = x0 + Ri / 70 * pw; YN(nu) = y0 + ph - nu / 8 * ph; YU(u) = y0 + ph - (u - 12) / 16 * ph
     println(io, """<rect x="$x0" y="$y0" width="$pw" height="$ph" fill="none" stroke="#333"/>""")
     for Ri in 0:10:70
         println(io, """<line x1="$(XR(Ri))" y1="$(y0+ph)" x2="$(XR(Ri))" y2="$(y0+ph+5)" stroke="#333"/><text x="$(XR(Ri))" y="$(y0+ph+19)" font-size="12" text-anchor="middle">$Ri</text>""")
@@ -113,7 +114,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     for nu in 0:2:8
         println(io, """<text x="$(x0-8)" y="$(YN(nu)+4)" font-size="12" text-anchor="end" fill="#7c3aed">$nu</text>""")
     end
-    for u in 12:2:22
+    for u in 12:4:28
         println(io, """<text x="$(x0+pw+8)" y="$(YU(u)+4)" font-size="12" fill="#b45309">$u</text>""")
     end
     dRi = [r[1] for r in DNS.rows]
