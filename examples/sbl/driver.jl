@@ -484,9 +484,10 @@ end
 # builder: `channel_case(bottom_bc = :noslip, walls = :bottom,
 # surface_heat_flux = Q)`. Wall units: h = u_τ = 1, ν = 1/Re_τ, and the
 # buoyancy parameter g/θ₀ = 1 (θ₀ = g = 1000, so θ stays positive while the
-# channel cools by |Q| per h/u_τ and the bulk Richardson number of
-# `relaminarisation_criteria`, which divides by the upper θ, is the
-# Boussinesq one to < 2 %). Shared by examples/sbl/relaminarisation_channel.jl.
+# channel cools by |Q| per h/u_τ — at most 100 over 20 h/u_τ at h/L = 2 —
+# and the bulk Richardson number of `relaminarisation_criteria`, which
+# divides by the upper θ, stays within |Q|t/θ₀ ≤ 10 % of the Boussinesq
+# one). Shared by examples/sbl/relaminarisation_channel.jl.
 # =========================================================================
 
 const SBL_RELAM_θ₀ = 1000.0
@@ -507,9 +508,10 @@ relam_heat_flux(h_over_L; κ = Aeolus.SurfaceExchange.von_karman(), u_τ = 1.0, 
 
 The open channel at `Re_τ` cooled at `h/L`: no-slip bottom, free-slip
 insulated top, Pr = 0.71, the σ-model (Nicoud et al. 2011) wrapped in
-`StabilityCorrected` (Brown et al. 1994, isotropic length scales: with the
-anisotropic ones the neutral 2π×π×1 channel on 32³ relaminarises, as P58-e
-found for its half channel), stress-form momentum divergence.
+`StabilityCorrected` (Brown et al. 1994) with isotropic length scales, as
+P58-e's collapse runs use (there the anisotropic Δh relaminarised even the
+neutral half channel; not re-measured for this channel), stress-form
+momentum divergence.
 """
 function relam_case(Re_τ, h_over_L; N = (32, 32, 32), extent = (2π, π, 1.0), seed = 1)
     mesh = RegularGrid(; size = N, extent = extent)
