@@ -348,5 +348,33 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
         @test dq <= 1e-10 && all(isfinite, interior_view(x.qv))
         @printf("  [contract] AMD κ_t(qv) ≠ κ_t(θ) in %d / %d cells; mean κ_t(qv) %.4f vs κ_t(θ) %.4f m²/s; IMEX 5 steps |ΔΣqv|/Σqv %.1e\n",
                 nq, 16^3, mean(interior_view(κq)), mean(interior_view(f.κh)), dq)
+
+        # step! / step_rk3! diffuse qv explicitly (#177) by the same rule
+        # (merge train, #215): qv's own AMD diffusivity, f.κh (bit for bit
+        # add_sgs_scalar!) for a Prandtl-number closure
+        interior_view(x.qv) .= Q; fill_halos!(x.qv, x.θ_bcs)
+        foreach(g -> fill_halos!(g, x.bcs), (x.u, x.v, x.w)); fill_halos!(x.θ, x.θ_bcs)
+        fa = compute_sgs!(AMDClosure(), x)
+        tq = Field(CellCenter(), m); tref = Field(CellCenter(), m); tθκ = Field(CellCenter(), m)
+        Aeolus.Simulations._add_sgs_tracer!(tq, x.qv, AMDClosure(), fa, x, Field(CellCenter(), m))
+        κe = sgs_tracer_diffusivity!(Field(CellCenter(), m), AMDClosure(), fa, x, x.qv)
+        Aeolus.Operators.add_eddy_diffusion_scalar!(tref, x.qv, κe)
+        @test interior_view(tq) == interior_view(tref)
+        add_sgs_scalar!(tθκ, x.qv, AMDClosure(), fa, x)                # with θ's κ_t
+        @test interior_view(tq) != interior_view(tθκ)
+        fs = compute_sgs!(StaticSmagorinsky(0.17), x)
+        ts = Field(CellCenter(), m); tsr = Field(CellCenter(), m)
+        Aeolus.Simulations._add_sgs_tracer!(ts, x.qv, StaticSmagorinsky(0.17), fs, x, Field(CellCenter(), m))
+        add_sgs_scalar!(tsr, x.qv, StaticSmagorinsky(0.17), fs, x)
+        @test ts.data == tsr.data
+        # Σqv conserved by the explicit steppers with qv's own κ_t
+        Sq = sum(interior_view(x.qv))
+        for _ in 1:5
+            step!(x, 0.2; sgs = AMDClosure()); step_rk3!(x, 0.2; sgs = AMDClosure())
+        end
+        dqe = abs(sum(interior_view(x.qv)) - Sq) / Sq
+        @test dqe <= 1e-12 && all(isfinite, interior_view(x.qv))
+        @printf("  [contract] step!/step_rk3! with AMD: qv tendency ≠ θ-κ_t one in %d cells; 10 steps |ΔΣqv|/Σqv %.1e\n",
+                count(interior_view(tq) .!= interior_view(tθκ)), dqe)
     end
 end

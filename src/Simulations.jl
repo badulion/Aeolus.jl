@@ -15,7 +15,7 @@ using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    add_eddy_diffusion_scalar!,
                    add_surface_flux!, add_sponge!,
                    AbstractSGSClosure, compute_sgs!, add_sgs_momentum!, add_sgs_scalar!,
-                   advance_sgs!, _active_sgs, _check_sgs_stress
+                   advance_sgs!, _active_sgs, _check_sgs_stress, sgs_tracer_diffusivity!
 using ..PressureSolvers
 using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver, solve!
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
@@ -257,6 +257,22 @@ function step!(sim::BoussinesqSimulation{T}, dt::Real;
     return sim
 end
 
+# The SGS flux of a transported scalar other than θ (qv): the closure's
+# `add_sgs_scalar!` when it diffuses every scalar with θ's κ_t (the default
+# `sgs_tracer_diffusivity!` returns `f.κh`, so a Prandtl-number closure is
+# bit for bit unchanged), else eddy diffusion with the scalar's own
+# diffusivity, computed into `scratch` (AMD, #176). The same rule as
+# `step_imex!`'s frozen qv coefficient. Halos of `ϕ` must be filled.
+function _add_sgs_tracer!(tϕ, ϕ, closure, f, sim, scratch)
+    κ = sgs_tracer_diffusivity!(scratch, closure, f, sim, ϕ)
+    if κ === f.κh
+        add_sgs_scalar!(tϕ, ϕ, closure, f, sim)
+    else
+        add_eddy_diffusion_scalar!(tϕ, ϕ, κ)
+    end
+    return tϕ
+end
+
 # One forward-Euler predictor + projection with the SGS closure `closure`
 # (or none). No commit: the drivers (step!, step_rk3!) commit once per step.
 function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
@@ -301,7 +317,7 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
         f = compute_sgs!(closure, sim)
         add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim; stress = sgs_stress)
         add_sgs_scalar!(sim.tθ, sim.θ, closure, f, sim)
-        sim.has_moisture && add_sgs_scalar!(sim.tqv, sim.qv, closure, f, sim)
+        sim.has_moisture && _add_sgs_tracer!(sim.tqv, sim.qv, closure, f, sim, sim.lap_θ)
     end
 
     # 5. Buoyancy on w-momentum. Moist buoyancy uses virtual θ when qv is on.

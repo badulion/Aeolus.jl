@@ -265,7 +265,7 @@ simulation's θ (dry: moisture does not enter the buoyancy term), and
 the stored `κ_t` is θ's. Another scalar gets its **own** AMD diffusivity
 from its own gradient ([`sgs_tracer_diffusivity!`](@ref) →
 [`compute_amd_scalar_diffusivity!`](@ref)); that is how `qv` is diffused
-by [`step_imex!`](@ref Aeolus.TimeIntegration.step_imex!). Stateless. Do not stack a Richardson-number stability correction on it:
+by `step!`, `step_rk3!` and [`step_imex!`](@ref Aeolus.TimeIntegration.step_imex!). Stateless. Do not stack a Richardson-number stability correction on it:
 the buoyancy term is its stratification response.
 
 References: Rozema et al. (2015), Abkar, Bae & Moin (2016), Abkar & Moin

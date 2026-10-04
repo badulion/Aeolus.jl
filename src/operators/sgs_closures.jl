@@ -166,7 +166,8 @@ add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim) =
     sgs_tracer_diffusivity!(κ, c::AbstractSGSClosure, f::SGSFields, sim, ϕ) -> Field
 
 The cell-centred SGS diffusivity of a scalar `ϕ` other than θ (on the
-Boussinesq core: `qv` in the implicit diffusion of
+Boussinesq core: `qv`, in the explicit SGS flux of `step!` / `step_rk3!`
+and the implicit diffusion of
 [`step_imex!`](@ref Aeolus.TimeIntegration.step_imex!)), after
 [`compute_sgs!`](@ref) has filled `f`. Default: `f.κh`, returned as is and
 `κ` untouched, which is right for every closure whose `κ_t` is a property of
