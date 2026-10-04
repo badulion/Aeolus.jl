@@ -966,13 +966,14 @@ end
 end
 
 # =========================================================================
-# Era VI — high-fidelity turbulence closure (Phases 54-59)
+# Era VI — high-fidelity turbulence closure (Phases 54-60)
 # =========================================================================
 # The SGS closure contract (P54-a, #167) is the era contract; later issues
 # append one include line each here.
 
 @testset "Era VI" begin
     include("era6_sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
+    include("era6_stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
 end
 
 # =========================================================================

@@ -11,6 +11,7 @@ tested at are in
 [Smagorinsky-Lilly SGS → Closure contract](../theory/sgs.md#Closure-contract).
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
+- [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
 
 ## Shared contract — SGS closures (P54-a)
 
