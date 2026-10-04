@@ -988,7 +988,13 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   asserts ratio ≤ 1 + 1e-8 for every column on the MOST fluxes of the
   step's start. The fluxes a soil column returns are linearised in
   ``T_{skin}`` and may overshoot by O(ΔT²): measured ≤ 3.1 % in the smoke
-  run, checked < 10 %. See
+  run, checked < 10 %. Over the 21 h flagship the delivered ratio reaches
+  2684. This happens on calm soil columns where ``H_{max}`` is below
+  0.1 W m⁻² and a linearised step turns an upward buoyancy flux into dew,
+  so the excess is a few W m⁻². At 03:00 the report reads street 0.02,
+  roof 0.04, park 0.00, with 100 % of the stable columns beyond the MSHF
+  point. The MSHF costs 48–63 ms per surface step (every 30 s), about 2 % of
+  the run's wall time. See
   [Stability functions → MSHF in the Berlin case](../theory/turbulence_stability.md#MSHF-in-the-Berlin-case).
 
 ### Measured (flagship, 64 × 64 × 32, adaptive step, 1 h)

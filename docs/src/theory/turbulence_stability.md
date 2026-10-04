@@ -322,7 +322,21 @@ extrapolation in ``T_{skin}`` to the step's mean skin temperature. Near
 the maximum of the concave ``H(T_{skin})`` this extrapolation overshoots
 by ``O(ΔT^2)``: up to 3.1 % in the smoke run, on shaded street columns
 with ``U ≈ 0.6`` m/s and ``H_{max} ≈ 1`` W m⁻². Those fluxes are checked
-against 10 %, and the measured worst case is reported.
+against 10 % in the 12-step smoke run, and the measured worst case is
+reported.
+
+That bound does not hold over a full day. In the 06:00→03:00 flagship
+run the delivered ratio reached 402 in the first half hour and 2684 by
+the evening. Instrumenting the worst columns showed why: soil columns at
+near-calm wind (``U ≈ 0.1``–0.3 m/s), where ``H_{max} ∝ U^3`` is only
+0.004–0.07 W m⁻². At the start of the step MOST gives an *upward*
+buoyancy flux (ratio −15 to −72, evaporation). The linearised step then
+delivers dew (``LE ≈ −10`` W m⁻²) and ``H ≈ −1.5`` W m⁻², a small
+downward buoyancy flux that is many times the tiny ``H_{max}``. The
+excess is a few W m⁻² in absolute terms. It is a property of the soil
+skin's linearisation in ``T_{skin}`` and ``q_s``, not of MOST, whose own
+fluxes stay at or below ``H_{max}`` (worst 1.000) all day. The
+diagnostic exposes it; it does not fix it.
 
 ## In the Berlin case
 
