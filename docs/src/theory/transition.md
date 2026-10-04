@@ -257,6 +257,165 @@ point ``Δz/2 ≈ 3`` m from the wall, with a viscous sublayer of
 ``ν/u_* ∼ 10^{-4}`` m. `BoundaryConditions` is exempt infrastructure in
 the coverage test, so no Berlin list changes.
 
+## Relaminarisation in strongly stable stratification
+
+P59-e (#195) validates laminar–turbulent coexistence and collapse with
+the closures that exist — the σ-model (P59-b), the stability correction
+(P55-e) on the TurbulenceStability functions (P58-a) — and adds no
+closure and no stability function. Transition gains the three numbers
+the collapse studies use, all from existing definitions:
+
+* `friction_reynolds(sim)` — ``Re_τ = u_τ h/ν``, ``u_τ`` from the
+  molecular wall stress of the no-slip bottom (`wall_shear_stress`,
+  P59-a) or the nominal value;
+* `relaminarisation_criteria(sim; heat_flux)` — ``h/L`` with the Obukhov
+  length of the surface flux (`SurfaceExchange.obukhov_length`, there is
+  no second one), ``L^+ = L u_τ/ν = Re_τ/(h/L)``, and the bulk
+  Richardson number of the top and bottom cell layers and the bulk
+  velocity (`SurfaceExchange.bulk_richardson`);
+* `relaminarised_fraction(laminar, Ri, νt, ν)` — the share of the
+  ``Ri_g > 1/4`` cells that are γ-laminar with ``ν_t/ν < 10^{-2}``.
+
+`Operators.laminar_consistent(closure)` marks the closures whose
+``ν_t`` vanishes identically in laminar flow (σ, and the wrappers around
+it). The cases are the P54-d builder with `bottom_bc = :noslip` (P55-f)
+and the new `channel_case(surface_heat_flux = Q)` hook: the flux-cooled
+open channel of Nieuwstadt (2005), no-slip bottom, free-slip insulated
+top, the prescribed bottom θ flux of the core, molecular ``Pr = 0.71``.
+
+### Laminar stratified Poiseuille flow (exact)
+
+`test/era6_relaminarisation.jl`, test 1. At ``Re_τ = 10`` the steady
+closed-channel Poiseuille flow with the stable conduction profile
+(``Ri_τ = 50``) gives ``ν_t ≡ 0`` (exactly, ``ν_h``, ``ν_v`` and
+``κ_v``) with σ, σ + correction (isotropic and anisotropic length
+scales); the velocity equals the closure-free run and the unstratified
+(``g = 0``) run to < 1e-10 (measured 0: buoyancy is balanced by the
+hydrostatic pressure). The wall stress is ``u_τ^2`` to 1.4e-7.
+Smagorinsky 0.17 keeps max ``ν_t = 0.53 ν`` and lowers the molecular
+wall stress to 0.659 ``u_τ^2``. The flux-cooled open channel (``Q = -0.05``)
+reproduces the long-time conduction solution under a constant flux and
+an insulated top, ``θ = \bar θ(t) + Q(z - h)^2/(2κh)``,
+``d\bar θ/dt = Q/h``, to 1.6e-11 of ``|Q|h/κ``; θ is conserved to the
+prescribed flux to 1.5e-10 (round-off at θ ≈ 10³); u is unchanged by
+the buoyancy (measured 0). The criteria match their closed forms to
+1e-12 (``h/L = κg|Q|h/(θ_0 u_τ^3)``, ``L^+ = Re_τ/(h/L)``, ``Ri_b`` of a
+linear θ).
+
+### Decaying stratified turbulence
+
+Test 2: a laminar shear ``S`` held fixed (the plane mean of ``u`` is
+reset to ``S(z - H/2)`` after each step — a function of ``z`` only, so
+``∇·u`` is untouched) under a random-phase perturbation
+(``E ∝ k^4 e^{-2(k/k_p)^2}``, ``k_p = 8π/H``, ``u_{rms} = 0.05 SH``),
+free-slip walls, 32³, ``ν = 3 × 10^{-4} SH^2``, σ + correction
+(isotropic). The homogeneous stratified shear flow decays above a
+stationary Richardson number ``Ri_s ≈ 0.1–0.2`` and grows below it
+(Holt, Koseff & Ferziger 1992; Jacobitz, Sarkar & Van Atta 1997).
+Measured at ``Ri = N^2/S^2 = 1`` against the neutral control:
+
+| | ``Ri = 1`` | neutral |
+| :-- | --: | --: |
+| resolved ``⟨w'θ'⟩``, peak down-gradient | ``-7.5 × 10^{-4}`` | — |
+| reversed (counter-gradient) peak, at ``tN`` | ``+9.5 × 10^{-5}``, 2.5 | — |
+| γ (volume-normalised) < 0.1 at ``tN`` | 11.1 | never (min 0.959) |
+| resolved TKE at ``tS = 12`` | ``3.5 × 10^{-5}`` | ``2.4 × 10^{-3}`` |
+| collapsed max ``ν_v/ν``, σ + correction | 0 | |
+| collapsed max ``ν_h/ν``, σ + correction | 0.017 | |
+| collapsed max ``ν_t/ν``, Smagorinsky 0.17 (same field) | 0.118 | |
+
+The issue expected γ < 0.1 "within about 10 ``N^{-1}``": measured 11.1,
+asserted ≤ 12. The time is set by the viscous decay of the residual
+wave field rather than by ``N``: at ``Ri`` = 2 and 4 (``ν = 3 × 10^{-4}``)
+γ falls below 0.1 at ``tS ≈ 11`` in both, i.e. 16 and 22 ``N^{-1}``
+(scan, not in CI). The issue expected max ``ν_t/ν < 10^{-2}`` for σ +
+correction in the collapsed state; that holds for the corrected
+(vertical) viscosity, not for the horizontal one (0.017), which the
+correction does not touch and which σ keeps on the three-dimensional
+residual waves. Smagorinsky stays at 0.12 ν, ``10^2``–``10^3`` times the
+corrected value (at this ``ν``; it scales as ``1/ν``).
+
+### The cooled open channel (example)
+
+Test 3 of the issue — the 32³ open channel at ``Re_τ = 180``, collapse at
+``h/L = 2.0`` and survival at ``h/L = 0.3`` after 20 ``h/u_τ`` — costs
+4.5–9 min per 20 ``h/u_τ`` run (6 200–9 900 SSP-RK3 steps; 267–521 s wall
+time on the shared machine), plus a 2-min neutral spin-up,, over the 2-min CI budget, so it is
+`examples/sbl/relaminarisation_channel.jl` (with the sweep against the
+references) and is not in the suite. Set-up: ``2πh × πh × h``, ``Re_τ``
+by the forcing ``u_τ^2/h``, σ + correction (isotropic length scales),
+stress form, ``Pr = 0.71``, ``g/θ_0 = 1``. A neutral spin-up of 10
+``h/u_τ`` from the law of the wall plus a smooth random perturbation
+(white grid-scale noise does not trip the 32³ channel: from
+`noise = 3` the σ and the dynamic-Smagorinsky runs relaminarise,
+``⟨τ_w⟩ → 0.44 u_τ^2``) reaches TKE 2.24 ``u_τ^2``,
+``⟨τ_w⟩ = 0.94 u_τ^2``, ``U_b = 15.5 u_τ``; the neutral restart keeps
+TKE at 0.76–1.04 of its switch-on value over 5 ``h/u_τ``. Each ``h/L``
+then runs 20 ``h/u_τ``; *collapsed* means the volume-mean resolved TKE
+ends below 10 % of the switch-on value, *survived* above 50 %.
+
+| ``Re_τ``, grid | ``h/L`` survived (TKE(20)/TKE(0)) | ``h/L`` collapsed | critical ``h/L`` | ``L^+_c`` |
+| :-- | :-- | :-- | --: | --: |
+| 180, 32³ (``Δx^+ = 35``, ``Δz^+ = 5.6``) | 0.05 (0.94), 0.10 (0.87) | 0.15, 0.2, 0.3, 0.6, 1, 1.5, 2 (all ≤ 0.002) | 0.12 | 1470 |
+| 180, 48³ | — | 0.15 (0.001), 0.3 (0.000) | < 0.15 | > 1200 |
+| 360, 48³ (``Δx^+ = 47``, ``Δz^+ = 7.5``) | 0.10 (0.96), 0.30 (1.12) | 0.5, 0.7, 1.0 (all 0.001) | 0.39 | 930 |
+| Nieuwstadt (2005), DNS | | | 1.23 at ``Re_τ = 360`` | |
+| Flores & Riley (2011), DNS | | | | ≈ 100 |
+
+The critical ``h/L`` is the geometric mean of the largest surviving and
+the smallest collapsed value. Collapse is complete in every collapsed
+run: γ of the lower half is 0.000 at ``T`` and the wall stress falls to
+0.51–0.53 ``u_τ^2`` (``Re_τ = 180``) and 0.37 ``u_τ^2`` (360) while the
+flow accelerates. In the surviving runs γ stays at 0.96–0.97. The
+neutral spin-ups reach TKE 2.24 / 1.46 / 1.68 ``u_τ^2`` and
+``⟨τ_w⟩`` = 0.94 / 0.86 / 0.94 ``u_τ^2`` (180 at 32³ and 48³, 360 at 48³).
+
+![relaminarisation sweep, Re_τ = 180](../assets/transition/relaminarisation_Re180.svg)
+
+![relaminarisation sweep, Re_τ = 360](../assets/transition/relaminarisation_Re360.svg)
+
+**Against the references: a miss.** The issue's targets were ±30 % on
+the critical ``h/L`` and a factor 1.5 on ``L^+``. At ``Re_τ = 360`` the
+measured 0.39 is 0.31 of Nieuwstadt's 1.23 (−69 %); ``L^+_c`` = 930
+(360) and 1470 (180) are 9 and 15 times the ≈ 100 of Flores & Riley.
+Test 3 of the issue — collapse at ``h/L = 2.0``, survival at
+``h/L = 0.3`` at ``Re_τ = 180`` — holds for the collapse and fails for
+the survival: ``h/L = 0.3`` collapses on 32³ and on 48³. The trend is
+right — the threshold rises with ``Re_τ`` (0.12 → 0.39 for a doubling;
+a constant ``L^+_c`` would give a factor 2) — and the collapse itself is
+the physical one (the near-wall shear production cannot keep up with
+the buoyancy sink, the wall stress drops and the flow accelerates
+laminar-like; Donda et al. 2015).
+
+Whether the code or the expectation is wrong could not be settled here.
+The flux boundary condition, the molecular ``Pr`` and the buoyancy are
+verified exactly by test 1 (θ budget 1.5e-10, the conduction profile
+1.6e-11, u blind to the hydrostatic buoyancy), and the definitions are
+the references' (``L`` of the surface flux and the nominal ``u_τ``,
+``L^+ = Re_τ/(h/L)``). What differs is resolution: the DNS thresholds are
+for a resolved near-wall cycle, and these grids are coarse wall-resolved
+LES (``Δx^+`` = 35–47). The collapse at ``h/L = 0.3``, ``Re_τ = 180``, is
+insensitive to the closure, ``Pr`` and ``Pr_t``: σ + correction, σ with
+``Pr_t = 1`` (instead of the core's 1/3) and no SGS model at all end at
+TKE ratios 0.001, 0.001 and 0.001 after 20 ``h/u_τ`` (without a model
+the decay is slower: 0.46 at 5 ``h/u_τ``, against 0.06); plain σ,
+Smagorinsky 0.1 and ``Pr = 1`` are at 0.06, 0.10 and 0.05 after
+5 ``h/u_τ``, on the same path. Refining 32³ → 48³ did not move
+``h/L = 0.15`` or 0.3 to survival. A resolution study that reaches the
+DNS grids (≈ 128³ at ``Re_τ = 180``, beyond the budget of this phase)
+is the open step; until then the example documents the coarse-LES
+threshold and is not a validation against the DNS numbers.
+
+The command lines are in the header of the example; every run is cached,
+`REUSE=1` reprints the table and redraws the figures.
+
+### The Berlin case
+
+`turbulence_diag` reports the relaminarised fraction of the stable layer
+(see [The Berlin case](../design/berlin_case.md#Relaminarisation-of-the-stable-layer-(#195))):
+in `:winter` at 06:00, 4.0 % of the 49 056 stable cells (Smagorinsky;
+4.1 % with σ), 0.1 % of 15 392 with ``ν`` reduced from 2 to 0.2 m² s⁻¹.
+
 ## References
 
 * Brandt, L., Schlatter, P. & Henningson, D. S. (2004). Transition in
@@ -284,6 +443,20 @@ the coverage test, so no Berlin list changes.
 * Townsend, A. A. (1976). *The Structure of Turbulent Shear Flow*, 2nd
   ed. Cambridge University Press.
 
+* Donda, J. M. M. et al. (2015). Collapse of turbulence in stably stratified channel flow: a transient
+  phenomenon. *Q. J. R. Meteorol. Soc.*, 141, 2137-2147.
+* Flores, O. & Riley, J. J. (2011). Analysis of turbulence collapse in the
+  stably stratified surface layer using direct numerical simulation.
+  *Boundary-Layer Meteorol.*, 139, 241-259.
+* Holt, S. E., Koseff, J. R. & Ferziger, J. H. (1992). A numerical study
+  of the evolution and structure of homogeneous stably stratified sheared
+  turbulence. *J. Fluid Mech.*, 237, 499-539.
+* Jacobitz, F. G., Sarkar, S. & Van Atta, C. W. (1997). Direct numerical
+  simulations of the turbulence evolution in a uniformly sheared and
+  stably stratified flow. *J. Fluid Mech.*, 342, 231-261.
+* Nieuwstadt, F. T. M. (2005). Direct numerical simulation of stable
+  channel flow at large stability. *Boundary-Layer Meteorol.*, 116,
+  277-299.
 * Ferziger, J. H. & Perić, M. (2002). *Computational Methods for Fluid
   Dynamics*, 3rd ed., Springer, §8.10.
 * Pope, S. B. (2000). *Turbulent Flows*, Cambridge University Press, §7.1.

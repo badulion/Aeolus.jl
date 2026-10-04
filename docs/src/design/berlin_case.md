@@ -385,7 +385,10 @@ integration](#Dynamical-core-and-time-integration).
   laminar shear and 2-D flow; `report` prints the canopy and free-stream
   mean ``ν_t`` next to Smagorinsky's on the same flow. After 100 smoke
   steps that is 2.7e-2 (Smagorinsky 2.4e-2) m²/s in the canopy and 5.3e-4
-  (2.0e-2) above the sponge start, where γ = 0. It costs 16.4 against
+  (2.0e-2) above the sponge start, where γ = 0 (on a base whose sponge
+  relaxed the wind to rest; with #171's geostrophic sponge that free stream
+  is shear free: σ 4.2e-3 against Smagorinsky 2.3e-3 m²/s, both below
+  1e-2 ν, the smoke check since P59-e). It costs 16.4 against
   15.8 ms per smoke step. It is off by default, and switching the default
   is the maintainer's call. `Operators` is exempt, so no coverage list
   changes.
@@ -1466,6 +1469,47 @@ the ground, 0.14 at the top) — below the "about 8" estimated in the
 issue. Cost per evaluation of the whole addon: 0.28–0.55 ms on the smoke
 grid and 7.0 ms on the flagship grid (3.6 ms before #180), once per
 output record.
+
+### Relaminarisation of the stable layer (#195)
+
+P59-e extends the same addon once more (no new module, no list change):
+`relam_fraction` — per level, and `relam_frac` over the whole stable
+layer, the fraction of the fluid cells with ``Ri_g > 1/4`` that are
+relaminarised, i.e. γ-laminar **and** carry ``ν_t/ν < 10^{-2}``
+(`Transition.relaminarised_fraction`; ``ν_t`` the larger of the active
+closure's ``ν_h`` and ``ν_v``, `Operators.sgs_fields`; ``ν`` = `cfg.ν`).
+The laminar mask uses the volume normalisation (option
+`relam_normalization = :volume`): a quiet, shear-free free stream is
+laminar against the domain-mean ``|ω|``, while the plane-normalised
+indicator, being scale-free, marks its weak disturbances turbulent. The
+log line adds the percentage and the number of stable cells. For a
+laminar-consistent closure (`Operators.laminar_consistent`: `:sigma`)
+`smoke_check` asserts that ``ν_t ≡ 0`` (bitwise) in the parallel flow of
+the current plane-mean wind on the Berlin mesh (a `deepcopy` of the
+closure on a scratch core, so the case's closure is untouched). The
+issue asked for ``ν_t = 0`` "in laminar cells" of the running flow; the
+γ-laminar cells of the smoke run are not exactly laminar (weakly 3-D),
+so σ's ``ν_t`` there is small but not zero (12 steps: max 0.117 ν, mean
+0.007 ν over the 251 plane-γ laminar cells, the same as Smagorinsky's
+0.086 ν / 0.010 ν) — the exact statement is the parallel-flow one. AMD
+(`:amd`, P55-d) is not on this stack; it will extend
+`laminar_consistent`.
+
+**Measured** — `:winter` from 05:00 to 06:00 (1800 steps of 2 s, before
+the 08:15 sunrise), 64 × 64 × 32: the lowest 50 m are convective (the
+warm city under 271 K air: ``N^2 = -7 × 10^{-4}`` s⁻² at 9 m) and an
+elevated stable layer lies above (supercritical fraction 0.48–0.69
+between 60 and 140 m). Of the 49 056 stable fluid cells 4.0 % are
+relaminarised with the default Smagorinsky closure and 4.1 % (48 750
+cells) with `:sigma` — mostly at the ground level (0.42) and in the
+quiet top levels inside the sponge (0.61 and 0.91 at z = 184 and 197 m);
+the stable layer between them is γ-turbulent. The background viscosity
+``ν = 2`` m² s⁻¹ dominates the result: with ``ν = 0.2`` m² s⁻¹ (not the
+default; same hour) the stable cells drop to 15 392 and only 0.1 % of
+them are relaminarised (grid Reynolds number 28.7 against 3.8 in the
+canopy). Cost of the added evaluation: one more `laminar_mask!` per
+output record (the addon measured 34.6 ms per call with Smagorinsky,
+43.2 ms with `:sigma`, on the flagship grid under a shared load).
 
 ## Cost of per-facet surfaces (#138)
 

@@ -714,6 +714,18 @@ parallel profile on the Berlin mesh it is zero to the bit
 (`test/berlin_numerics.jl`). The smoke step costs 16.4 ms against
 15.8 ms with Smagorinsky.
 
+Those free-stream numbers were measured with a sponge that relaxed the
+wind towards rest, which sheared the free stream (U fell from 0.52 to
+0.07 U_g over the top four levels). With the geostrophic sponge of the
+large-scale forcing (#171) the free stream above the sponge start is the
+geostrophic wind and shear free (U = 0.98–1.00 U_g). Measured on that
+stack (P59-e, #195): σ's mean ``ν_t`` there is 4.2e-3 m²/s against
+2.3e-3 for Smagorinsky, which now has no mean shear to see; both are
+below 1e-2 ν (``ν`` = 2 m²/s). The plane-normalised γ marks the weak
+disturbances turbulent (0.96: the indicator is scale-free), the
+volume-normalised γ laminar (0.02). The test asserts the latter and
+``ν_t/ν < 10^{-2}`` there.
+
 ## Limitations and planned upgrades
 
 The current implementation is deliberately the *simplest* working
@@ -733,9 +745,22 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * The σ-model costs about 8 times the Smagorinsky kernel (6.7 against
     0.85 ms on 64×64×32). It is zero only in *exactly* laminar
     (parallel, 2-D, pure-strain) flow; a laminar but weakly 3-D free
-    stream gets a small ``ν_t`` (Berlin: 2.6 % of Smagorinsky's above
-    the sponge start). On its own it is not stability-aware; wrap it in
-    `StabilityCorrected` for that.
+    stream gets a small ``ν_t`` (Berlin, shear-free free stream above the
+    sponge start: 2e-3 ν). On its own it is not stability-aware; wrap it
+    in `StabilityCorrected` for that.
+  * **Relaminarised stable regions** (P59-e, #195; see
+    [Transition → Relaminarisation](transition.md#Relaminarisation-in-strongly-stable-stratification)).
+    In decaying turbulence on a held laminar shear at ``Ri = 1`` the
+    collapsed state keeps Smagorinsky at max ``ν_t/ν`` = 0.118 (its
+    ``(C_sΔ)^2|S|`` sees the laminar shear), the σ-model's horizontal
+    viscosity at 0.017 ν (the residual internal waves are 3-D, so
+    ``σ_3 ≠ 0``), and the σ-model + stability correction's vertical
+    viscosity at exactly 0 (``Ri_g > Ri_c``, ``f_m = 0`` in Brown et al.
+    1994). Only the vertical viscosity is stability-corrected; the
+    horizontal one is not. Coarse wall-resolved LES of the cooled open
+    channel relaminarises at a much smaller ``h/L`` than DNS, with any of
+    the closures and without one (see the transition page): the critical
+    stability of a resolved near-wall cycle is resolution-limited.
   * The SGS closure itself has no wall treatment: at a free-slip z-wall
     its flux through the wall face is zero. The wall stress — smooth
     (Spalding), rough (log law) or Monin–Obukhov — is supplied by the
