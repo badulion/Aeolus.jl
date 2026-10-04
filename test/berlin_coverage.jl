@@ -148,8 +148,8 @@ const BERLIN_OPTION_ONLY = Dict{Symbol,String}(
     :Anelastic => "core = :anelastic / :pseudo_incompressible (with pressure_solver = " *
                   ":density_weighted_cg and timestepper = :fixed): in the flagship's 200 m deep " *
                   "domain the density changes by 2 % and the sound-proof cores give the Boussinesq " *
-                  "mean profile to 0.002-0.004 K after 1 h at 2.2x the cost, without the dynamic / ML " *
-                  "SGS, WENO-Z momentum or the adaptive step (#133, #166); the maintainer kept the " *
+                  "mean profile to 0.002-0.004 K after 1 h at 2.2x the cost, without " *
+                  "WENO-Z momentum or the adaptive step (#133, #166); the maintainer kept the " *
                   "Boussinesq core as the default",
 )
 
