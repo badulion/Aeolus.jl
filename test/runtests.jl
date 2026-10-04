@@ -967,15 +967,26 @@ end
 
 # =========================================================================
 # Era VI — high-fidelity turbulence closure (Phases 54-60)
+# =========================================================================
+# The SGS closure contract (P54-a, #167) is the era contract; later issues
+# append one include line each here.
 
 @testset "Era VI" begin
-    include("era6_stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
-    include("era6_transition_kh.jl")       # Phase 59 Transition diagnostics, KH / Miles-Howard (#180)
-    include("era6_walls.jl")               # P59-a NoSlipWall, laminar wall-flow verification (#172)
-    include("era6_les_toolbox.jl")         # Phase 54  filters, spectrum, initialiser (#168)
-    include("era6_cbc_decay.jl")           # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
-    include("era6_sgs_closure.jl")         # P54-a SGS closure contract, κ_t, commit cadence (#167)
-    include("era6_sigma_sgs.jl")           # P59-b σ-model closure: invariants, z³ wall scaling, Couette, HIT (#184)
+    include("era6_sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
+    include("era6_sgs_stress_form.jl")   # P55-b: stress-form SGS momentum divergence, anisotropic ν, IMEX split (#175)
+    include("era6_tensor_diffusion.jl")  # P55-c: diagonal / tensor / isentropic scalar eddy diffusivity (#181)
+    include("era6_stability_functions.jl") # P58-a: TurbulenceStability contract (#170)
+    include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected, Ri_g-dependent anisotropic ν/κ (#187)
+    include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)
+    include("era6_transition_kh.jl")     # Phase 59 Transition diagnostics, KH / Miles-Howard (#180)
+    include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
+    include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
+    include("era6_neutral_abl.jl")       # P54-d: half-channel ABL / channel harness + Φ_m, stress, E11 (#174)
+    include("era6_les_toolbox.jl")       # Phase 54  filters, spectrum, initialiser (#168)
+    include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
+    include("era6_sigma_sgs.jl")         # P59-b σ-model closure: invariants, z³ wall scaling, Couette, HIT (#184)
+    include("era6_gabls1.jl")            # P55-f: GABLS1 on the shared SBL driver, reduced (#191)
+    include("era6_stratified_channel.jl") # P55-f: wall-resolved stably stratified channel vs DNS (#191)
 end
 
 # =========================================================================

@@ -303,7 +303,7 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, bit for bit the cores' built-in closure), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167); every core and stepper takes it |
+| `:sgs` | `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`), `:dynamic` (`sgs_dynamic`, `DynamicSmagorinsky`), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184, unwrapped); the first three each wrapped in `StabilityCorrected` (P55-e, `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and with options `stress = :symmetric` (`:laplacian`) and `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, option `scheme = :weno_z5`) | the `:transport` stage |
 
@@ -316,7 +316,48 @@ couplings may not set the same keyword.
 **SGS providers** are closure objects of the Era VI contract
 ([Closure contract](../theory/sgs.md#Closure-contract)): a provider
 builds its `AbstractSGSClosure` once and `step_options` returns
-`(sgs = closure,)`. A stateful closure (Lagrangian dynamic, prognostic
+`sgs_step_options(closure, stress) = (sgs = closure, sgs_stress = stress)`.
+Every provider runs the **stress-form** momentum divergence
+`∂ⱼ(2νᵢⱼSᵢⱼ)` (`sgs_stress = :symmetric`, P55-b #175; see
+[Stress form vs Laplacian form](../theory/sgs.md#Stress-form-vs-Laplacian-form)),
+not the cores' default Laplacian form `∂ⱼ(νₜ∂ⱼuᵢ)`; option
+`stress = :laplacian` restores that (a smoke variant), and each provider's
+`smoke_check` asserts that the stress-form dissipation Σ2νSᵢⱼSᵢⱼ is
+non-negative. Under the IMEX steppers the diagonal part is implicit and
+the cross terms explicit.
+
+**Stability correction** (P55-e, #187; on by default). The one builder
+`sgs_provider_closure` wraps every provider's eddy-viscosity closure in
+`StabilityCorrected` ([Stability correction](../theory/sgs.md#Stability-correction)):
+ν_h = ν ℓ_h, ν_v = ν ℓ_v f_m(Ri_g), κ_h = ν ℓ_h/Pr_t,
+κ_v = ν ℓ_v f_h(Ri_g)/Pr_t, with the TurbulenceStability functions of
+`CaseConfig.sgs_stability` (`:brown94` default, `:lilly`, `:long_tail`,
+`:short_tail`, `:most`; `:none` = the bare closure, the pre-P55-e run),
+the anisotropic length scales Δ_h = √(dx dy), Δ_v = dz (ℓ_h = 1.842,
+ℓ_v = 0.2947 at dx/dz = 2.5), Ri_g from the θ_v of the `qv` tracer and
+the core's own reference θ (θ₀, or θ̄(z) on the sound-proof cores, so it
+runs with `core = :anelastic`). `:dynamic` gets no f_m on the momentum
+(only Pr_t(Ri)). Each provider's `smoke_check` asserts κ_v, ν_v ≥ 0;
+κ_v ≤ κ_h and ν_v ≤ ν_h ℓ_v/ℓ_h where Ri ≥ 0; ν_v ≥ ν_h ℓ_v/ℓ_h where
+Ri ≤ 0 (the convective enhancement of Brown et al.; not for `:dynamic`);
+κ_v = 0 where Ri ≥ Ri_c; its `report` prints the supercritical fraction
+and the mean κ_v/κ_h. Smoke variants: `sgs_stability = :none`, `:lilly`.
+Its validation on GABLS1 and the stably stratified channel (P55-f,
+#191) adds no Berlin coupling — no new physics, a stated exception — and
+is in [Stable boundary layers](../theory/stable_boundary_layer.md).
+The scalar (θ) flux is the contract's diagonal operator
+`add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv)` (P55-c, #181) with these
+κ_h ≠ κ_v. Option
+`scalar_tensor = :isentropic` wraps the closure in
+`IsentropicDiffusion`: the rotated (Redi) tensor of θ in the triad form,
+with κ_v = `diapycnal`·κ_h across the isentropes (`nothing`: the
+stability-corrected closure's own κ_v, < κ_h in stable air), tapered above
+`slope_max` and isotropic where
+N² ≤ 0 ([Tensorial scalar diffusivity](../theory/sgs.md#Tensorial-scalar-diffusivity)).
+It is option-only, with smoke variants (`diapycnal = 0.1`, and the
+corrected κ_v) that check K is positive semi-definite in every cell. The
+flagship is a daytime convective case in which N² ≤ 0 over most of the
+domain. A stateful closure (Lagrangian dynamic, prognostic
 TKE) keeps its memory in that object; the cores commit it once per
 accepted step and `step_adaptive!` rolls it back with the state on a
 rejected step. A new provider goes in its own file,
@@ -915,12 +956,26 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   seconds (30 s in the flagship, 4 s in `:smoke`; a `:surface` key
   overrides it) and their fluxes are held as tendencies until the next
   surface step, so the air receives exactly what the surface gave.
-* **Momentum.** The surface stress ``ρu_*^2`` is applied as an implicit
-  drag on the first-air-cell velocity faces, after the IBM. The momentum
-  removed equals ``Σ u_*^2\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in
-  the test). The `:wall` ground used to be free-slip. It stays a
-  free-slip `:wall` carrying the MOST drag, not a resolved `NoSlipWall`
-  (#172): at Δx = 15.6 m a resolved no-slip wall would be unphysical
+* **Momentum.** The ground is a wall of `Aeolus.WallModels` (#169):
+  every surface step hands each column a `MOSTWallLaw` with its `z0m`
+  and the Obukhov length of that step (`matching_obukhov_length`, the
+  `L` for which the law gives back the step's ``u_*``), and every step
+  `apply_wall_stress!` evaluates it at the instantaneous first-air-cell
+  wind and applies the stress as an implicit drag on the first-air-cell
+  velocity faces (over the `k_air` level mask, after the IBM);
+  `bus.u_star` is that step's ``u_τ``. The momentum removed equals
+  ``Σ τ_w(U)\,\mathbf{u}/U\,Δt`` to ``O(aΔt)`` (1e-4 in the test). With
+  `L` and the wind frozen the operator reproduced the drag of #129
+  (``u_*^2/U`` held between surface steps) exactly (0.0 relative
+  difference). Option `wall_formulation` selects the local form
+  (default), Schumann's or Moeng's plane-mean form (smoke variants). In
+  `:smoke` (surfaces every 4 s) per-step evaluation changes the ground
+  mean ``u_*`` after 1 h from 0.05647 to 0.05644 m s⁻¹ and the street
+  wind from 0.47784 to 0.47796 m s⁻¹; the operator costs 1.2 ms per call
+  on the 64 × 64 flagship plane. The `:wall` ground used to be
+  free-slip. It stays a free-slip `:wall` carrying the wall-model drag,
+  not a resolved `NoSlipWall` (#172): at Δx = 15.6 m a resolved no-slip
+  wall would be unphysical
   ([Transition and wall-bounded flow](../theory/transition.md#The-Berlin-case)).
 * **Extra surface energy.** `bus.sensible` (window sun, glazing
   transmission, dew heat) is collected every step and delivered to the

@@ -99,6 +99,31 @@ const SE = Aeolus.SurfaceExchange
         @test phi_m(sf, 100.0) ≈ 101 rtol = 1e-3
         @info "MOST published values" ψm_m1 = psi_m(sf, -1.0) ψh_m1 = psi_h(sf, -1.0) ψm_p1 = psi_m(sf, 1.0) ψh_p1 = psi_h(sf, 1.0) φm_p10 = phi_m(sf, 10.0) φh_p10 = phi_h(sf, 10.0)
     end
+
+    @testset "Log-linear family: separate β_m, β_h; one β is both" begin
+        # Businger et al. (1971) / Dyer (1974) stable branch. One family
+        # serves the water-side φ_t (β = 5, OceanMixedLayer) and the GABLS1
+        # surface layer (β_m = 4.8, β_h = 7.8, Beare et al. 2006).
+        ll = BusingerDyerLogLinear()
+        @test ll.β_m == 5.0 && ll.β_h == 5.0
+        @test BusingerDyerLogLinear(β = 0.0).β_h == 0.0
+        g1 = BusingerDyerLogLinear(β_m = 4.8, β_h = 7.8)
+        @test phi_m(g1, 0.1) ≈ 1.48 && phi_h(g1, 0.1) ≈ 1.78
+        @test psi_m(g1, 0.5) ≈ -2.4 && psi_h(g1, 0.5) ≈ -3.9
+        # φ–ψ consistency on the stable side, both coefficients: ψ = -∫(φ-1)/ζ dζ
+        for (φ, ψ) in ((phi_m, psi_m), (phi_h, psi_h))
+            @test (ψ(g1, 0.41) - ψ(g1, 0.39)) / 0.02 ≈ (1 - φ(g1, 0.4)) / 0.4
+        end
+        # Neutral normalisation and the unstable branch is BDBH with the same γ, bit for bit
+        @test phi_m(g1, 0.0) == 1 && psi_h(g1, 0.0) == 0
+        bd = BusingerDyerBeljaarsHoltslag(γ_m = 15.0, γ_h = 9.0)
+        g2 = BusingerDyerLogLinear(γ_m = 15.0, γ_h = 9.0, β_m = 4.8, β_h = 7.8)
+        for ζ in (-3.0, -0.5, -0.01), f in (phi_m, phi_h, psi_m, psi_h)
+            @test f(g2, ζ) == f(bd, ζ)
+        end
+        # Heat more strongly damped than momentum: φ_h > φ_m for ζ > 0 when β_h > β_m
+        @test phi_h(g1, 1.0) - phi_m(g1, 1.0) ≈ 3.0
+    end
     @testset "Surface-layer solver: neutral limit is exact" begin
         κ = von_karman()
         worst = 0.0
@@ -316,6 +341,7 @@ const SE = Aeolus.SurfaceExchange
     end
     @testset "Exports: one binding per name, no ambiguities" begin
         for n in (:SurfaceConstants, :DEFAULT_SURFACE_CONSTANTS, :BusingerDyerBeljaarsHoltslag,
+                  :BusingerDyerLogLinear,
                   :psi_m, :psi_h, :phi_m, :phi_h, :solve_surface_layer, :obukhov_length,
                   :bulk_richardson, :AbstractSurface, :SurfaceForcing, :SurfaceFluxes,
                   :surface_temperature, :roughness_lengths, :surface_albedo,

@@ -10,14 +10,20 @@ contract** (P54-a, #167), defined once in `Aeolus.Operators`
 tested at are in
 [Smagorinsky-Lilly SGS → Closure contract](../theory/sgs.md#Closure-contract).
 
-The parts of the era (the first two have generated API pages of their
-own):
+The parts of the era (those with a link have generated API pages of
+their own):
 
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
 - [Transition diagnostics — Transition](era6/transition.md) — `Aeolus.Transition` (Phase 59, #180; [theory](../theory/transition.md))
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
 - σ-model SGS closure (P59-b, #184; below) — `Aeolus.Operators`
 - Walls (P59-a, #172; below) — `Aeolus.BoundaryConditions`
+- Stress-form momentum divergence (P55-b, #175; below) — `Aeolus.Operators`
+- Tensorial scalar eddy diffusivity (P55-c, #181; below) — `Aeolus.Operators`
+- Stability-corrected anisotropic eddy viscosity (P55-e, #187; below) — `Aeolus.Operators`
+- [Large-scale forcing — LargeScaleForcing](era6/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; [theory](../theory/large_scale_forcing.md))
+- Wall-bounded flow diagnostics (P54-d, #174; below) — `Aeolus.Operators`
+- [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; [theory](../theory/wall_models.md))
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -85,6 +91,72 @@ Aeolus.Operators._sigma_operator_raw
 Aeolus.Operators._sym3_eigvals
 ```
 
+## Stress-form momentum divergence (P55-b)
+
+The SGS momentum tendency in the stress form `∂ⱼ(2νᵢⱼSᵢⱼ)`, with
+horizontal and vertical eddy viscosities, and the generic operator for
+any symmetric stress τ on the C-grid. Every core selects the form with
+`sgs_stress = :laplacian` (default) or `:symmetric`; under `step_imex!`
+the diagonal part is implicit and the cross terms explicit. Theory:
+[Smagorinsky-Lilly SGS → Stress form vs Laplacian form](../theory/sgs.md#Stress-form-vs-Laplacian-form).
+
+step!(sim, 0.5; sgs = StaticSmagorinsky(0.17), sgs_stress = :symmetric)
+τ = sgs_stress_tensor!(StressTensor(sim.mesh), sim.u, sim.v, sim.w, νh, νv)
+add_stress_divergence!(sim.tu, sim.tv, sim.tw, τ)   # == add_sgs_stress_divergence!(…, νh, νv)
+
+Aeolus.Operators.StressTensor
+Aeolus.Operators.add_stress_divergence!
+Aeolus.Operators.sgs_stress_tensor!
+Aeolus.Operators.add_sgs_stress_divergence!
+Aeolus.Operators.sgs_stress_dissipation
+
+## Tensorial scalar eddy diffusivity (P55-c)
+
+The scalar SGS flux `∂ᵢ(Kᵢⱼ ∂ⱼϕ)`. The diagonal `(κh, κv)` is the
+contract's default. A general symmetric `K` at cell centres uses the triad
+discretisation of Griffies et al. (1998), which is conservative, symmetric
+and dissipates variance for positive semi-definite K. The rotated isentropic
+(Redi) tensor has a slope taper and an isotropic fallback where N² ≤ 0.
+Under `step_imex!` the diagonal is implicit and the cross terms explicit.
+Theory: [Smagorinsky-Lilly SGS → Tensorial scalar diffusivity](../theory/sgs.md#Tensorial-scalar-diffusivity).
+
+add_eddy_diffusion_scalar!(tθ, θ, κh, κv)                     # diag(κh, κh, κv); docs in Operators
+K = isentropic_tensor!(DiffusivityTensor(mesh), θ, κh, 0.0; bcs = bcs)
+add_tensor_diffusion_scalar!(tϕ, ϕ, K; bounded = bounded_directions(bcs))
+step!(sim, 0.5; sgs = IsentropicDiffusion(StaticSmagorinsky(0.17), sim.mesh; diapycnal = 0.1))
+
+Aeolus.Operators.DiffusivityTensor
+Aeolus.Operators.diagonal_tensor!
+Aeolus.Operators.bounded_directions
+Aeolus.Operators.add_tensor_diffusion_scalar!
+Aeolus.Operators.isentropic_tensor!
+Aeolus.Operators.sgs_scalar_tensor
+Aeolus.Operators.IsentropicDiffusion
+
+## Stability-corrected anisotropic eddy viscosity (P55-e)
+
+`StabilityCorrected` wraps an eddy-viscosity closure: `νh = ν ℓh`,
+`νv = ν ℓv f_m(Ri)`, `κh = ν ℓh/Prₜ`, `κv = ν ℓv f_h(Ri)/Prₜ`, with Ri_g
+from `gradient_richardson!`, `f_m, f_h` from the TurbulenceStability
+contract (Brown et al. 1994 by default) and the anisotropic length scales
+`Δh = √(dx dy)`, `Δv = dz`. Neutral flow (`N² = 0`, `ℓ = 1`) is the base
+closure bit for bit. Theory:
+[Smagorinsky-Lilly SGS → Stability correction](../theory/sgs.md#Stability-correction).
+
+c = StabilityCorrected(StaticSmagorinsky(0.17), sim.mesh)          # Brown 1994, :anisotropic
+step!(sim, 0.5; sgs = c, sgs_stress = :symmetric)                   # νv reaches the stress form
+c.Ri, c.νv, c.κv                                                    # the last Ri_g, νv, κv
+StabilityCorrected(DynamicSmagorinsky(sim.mesh), sim.mesh; scheme = LillyCutoff())
+IsentropicDiffusion(StabilityCorrected(StaticSmagorinsky(0.17), sim.mesh), sim.mesh)
+
+Aeolus.Operators.StabilityCorrected
+Aeolus.Operators.dynamic_sgs_coefficient
+Aeolus.Operators.anisotropic_length_factors
+Aeolus.Operators.sgs_stratification!
+
+The theory is developed in
+[Transition and wall-bounded flow](../theory/transition.md).
+
 ## Walls (P59-a, #172)
 
 The no-slip / moving-wall condition
@@ -95,4 +167,27 @@ of the cut-cell generic `wall_shear_stress`:
 
 ```@docs
 Aeolus.CutCell.wall_shear_stress(::Aeolus.Simulations.BoussinesqSimulation)
+```
+
+## Wall-bounded flow diagnostics (P54-d)
+
+Plane-averaged diagnostics of a horizontally periodic, wall-bounded run,
+shared by every Era VI benchmark. The cases that produce the flows —
+`half_channel_case` (the neutral ABL half channel of Porté-Agel et al.
+2000) and `channel_case` (the two-wall channel) — are in
+[WallModels](era6/wall_models.md); theory and measured numbers in
+[Wall models → Wall-bounded benchmark cases](../theory/wall_models.md#Wall-bounded-benchmark-cases).
+
+```julia
+using Aeolus
+hc = half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1))
+run_channel!(hc, 8.0)                                   # spin-up, H/u* = 1
+st = run_channel!(hc, 20.0; average_from = 8.0)         # st.τ_wall, st.phi_m, st.stress
+E = streamwise_spectrum(hc.sim.u, [3, 6, 12])           # E11(k1) at three levels
+```
+
+```@docs
+Aeolus.Operators.phi_m_profile
+Aeolus.Operators.total_stress_profile
+Aeolus.Operators.streamwise_spectrum
 ```

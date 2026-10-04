@@ -69,7 +69,7 @@ import ..TurbulenceStability: AbstractRiStability, stability_factor_m, stability
 
 export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        LH_v0, LH_s0, LH_f0, grav, cp_water, cp_ice, von_karman,
-       AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
+       AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag, BusingerDyerLogLinear,
        phi_m, phi_h, psi_m, psi_h,
        SurfaceLayerSolution, solve_surface_layer, bulk_richardson, obukhov_length,
        AbstractSurface, SurfaceForcing, SurfaceFluxes,
@@ -226,6 +226,41 @@ function psi_h(sf::BusingerDyerBeljaarsHoltslag, ζ::Real)
     a, b, c, d = sf.a, sf.b, sf.c, sf.d
     return -((1 + 2 * a * ζ / 3)^(3 / 2) + b * (ζ - c / d) * exp(-d * ζ) + b * c / d - 1)
 end
+
+"""
+    BusingerDyerLogLinear(; γ_m = 16, γ_h = 16, β = 5, β_m = β, β_h = β)
+
+Monin–Obukhov functions with the classical *log-linear* stable branch,
+``φ_m = 1 + β_m ζ``, ``φ_h = 1 + β_h ζ`` and ``ψ_m = -β_m ζ``,
+``ψ_h = -β_h ζ`` for ``ζ ≥ 0`` (Businger et al. 1971; Dyer 1974). The
+unstable branch is delegated to [`BusingerDyerBeljaarsHoltslag`](@ref)
+with the same γ, so the two families agree exactly for ``ζ < 0``.
+
+`β` sets both coefficients; `β_m`, `β_h` set them separately. Uses:
+
+  * ``β_m = β_h = 5`` — the water-side ``φ_t`` of Zeng & Beljaars (2005)
+    (IFS Cy43r1 eq. 8.158), used by `OceanMixedLayer.ZengBeljaarsWarmLayer`;
+  * ``β_m = 4.8``, ``β_h = 7.8`` — the surface-layer functions prescribed
+    by the GABLS1 LES intercomparison (Beare et al. 2006, BLM 118, 247;
+    quoted by Basu & Porté-Agel 2006, JAS 63, 2074, §4a), used by the
+    stable-boundary-layer driver `examples/sbl/driver.jl`.
+"""
+struct BusingerDyerLogLinear{T<:AbstractFloat} <: AbstractStabilityFunctions
+    γ_m::T
+    γ_h::T
+    β_m::T
+    β_h::T
+end
+function BusingerDyerLogLinear(; γ_m::Real = 16.0, γ_h::Real = 16.0, β::Real = 5.0,
+                               β_m::Real = β, β_h::Real = β)
+    T = float(promote_type(typeof(γ_m), typeof(γ_h), typeof(β_m), typeof(β_h)))
+    return BusingerDyerLogLinear{T}(γ_m, γ_h, β_m, β_h)
+end
+_unstable(sf::BusingerDyerLogLinear) = BusingerDyerBeljaarsHoltslag(γ_m = sf.γ_m, γ_h = sf.γ_h)
+phi_m(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? phi_m(_unstable(sf), ζ) : 1 + sf.β_m * ζ
+phi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? phi_h(_unstable(sf), ζ) : 1 + sf.β_h * ζ
+psi_m(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_m(_unstable(sf), ζ) : -sf.β_m * ζ
+psi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_h(_unstable(sf), ζ) : -sf.β_h * ζ
 
 # -------------------------------------------------------------------------
 # MOST-consistent gradient-Richardson stability factors (Era VI, P58-a)

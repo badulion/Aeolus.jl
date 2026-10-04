@@ -349,13 +349,20 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         # accepted step whatever the stepper (fixed: one step!; IMEX: one
         # step_imex!; adaptive: one step_adaptive! piece, after the CFL
         # estimate, which evaluates the closure without committing).
+        #
+        # The counter replicates the bare StaticSmagorinsky, so these runs use
+        # sgs_stability = :none (the stability correction, P55-e, is on by
+        # default and is tested in berlin_numerics.jl / the smoke matrix; the
+        # stepper plumbing tested here is the same for any closure).
         C_s = BC.CaseConfig(:smoke).C_s
-        plain = Dict(ts => run_smoke(physics = Dict(:timestepper => ts)) for ts in (:adaptive, :imex))
-        plain[:fixed] = bous
+        nos = :none
+        plain = Dict(ts => run_smoke(physics = Dict(:timestepper => ts), sgs_stability = nos)
+                     for ts in (:fixed, :adaptive, :imex))
         state(c) = (interior_view(c.sim.u), interior_view(c.sim.w), interior_view(c.sim.θ))
+        @test BC.build_case(smoke(); io = devnull).step_kwargs.sgs isa StabilityCorrected   # the default
         for ts in (:fixed, :adaptive, :imex)
-            case = BC.build_case(smoke(physics = Dict(:timestepper => ts)); io = devnull)
-            @test case.step_kwargs.sgs isa StaticSmagorinsky       # the default provider's closure
+            case = BC.build_case(smoke(physics = Dict(:timestepper => ts), sgs_stability = nos); io = devnull)
+            @test case.step_kwargs.sgs isa StaticSmagorinsky       # the default provider's bare closure
             cnt = CommitCounter(C_s)
             case.step_kwargs = merge(case.step_kwargs, (sgs = cnt,))
             BC.run_case!(case)
@@ -370,7 +377,7 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         # rejected after it committed; the commit is rolled back with the
         # state, so the commits are exactly the accepted pieces, each with
         # its own dt, and they add up to the simulated time
-        case = BC.build_case(smoke(physics = Dict(:timestepper => :adaptive)); io = devnull)
+        case = BC.build_case(smoke(physics = Dict(:timestepper => :adaptive), sgs_stability = nos); io = devnull)
         cnt = CommitCounter(C_s)
         case.step_kwargs = merge(case.step_kwargs, (sgs = cnt,))
         ad = BC.find_coupling(case, :timestep_adaptive)
@@ -389,7 +396,7 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
                 ad.stats.retries, cnt.dts[5], cnt.n, ad.stats.pieces)
         # the WENO-Z momentum operator reaches the adaptive and IMEX steps
         for ts in (:adaptive, :imex)
-            wz = run_smoke(physics = Dict(:timestepper => ts, :momentum_advection => :weno_z))
+            wz = run_smoke(physics = Dict(:timestepper => ts, :momentum_advection => :weno_z), sgs_stability = nos)
             Δu = maximum(abs.(interior_view(wz.sim.u) .- interior_view(plain[ts].sim.u)))
             @test Δu > 1e-6
             @test max_divergence(wz.sim) < 1e-10
@@ -400,7 +407,8 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         quad(νt, u, v, w, mesh) = (Aeolus.Operators.compute_smagorinsky_νt!(νt, u, v, w, C_s);
                                    interior_view(νt) .*= 4; nothing)
         case = BC.build_case(smoke(physics = Dict(:timestepper => :adaptive, :sgs => :mlsgs),
-                                   options = Dict(:sgs_mlsgs => (fn = quad,))); io = devnull)
+                                   options = Dict(:sgs_mlsgs => (fn = quad,)), sgs_stability = nos);
+                             io = devnull)
         BC.step_case!(case); BC.step_case!(case)
         k = BC.find_coupling(case, :timestep_adaptive).constraints
         d4 = BC.sgs_cfl_diagnostics(case, k)
@@ -410,7 +418,8 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         # ... also with the built-in Smagorinsky off (C_s = 0): step! still
         # applies the closure, so its ν_t must still bound the step
         case0 = BC.build_case(smoke(physics = Dict(:timestepper => :adaptive, :sgs => :mlsgs),
-                                    options = Dict(:sgs_mlsgs => (fn = quad,)), C_s = 0.0);
+                                    options = Dict(:sgs_mlsgs => (fn = quad,)), C_s = 0.0,
+                                    sgs_stability = nos);
                               io = devnull)
         @test !case0.sim.has_sgs
         BC.step_case!(case0); BC.step_case!(case0)

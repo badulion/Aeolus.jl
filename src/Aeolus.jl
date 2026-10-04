@@ -81,6 +81,10 @@ include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
 include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 
+# --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
+include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, advective, T_s(t)
+include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wall-stress operator
+
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -144,6 +148,8 @@ using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 # --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
 using .TurbulenceStability         # Phase 58 stability contract (#170)
 using .Transition                  # Phase 59 transition diagnostics (#180)
+using .LargeScaleForcing           # Era VI, Phase 58 (#171)
+using .WallModels                  # Phase 57 (#169)
 
 # Re-exports for the user-facing API.
 export AbstractMesh, RegularGrid
@@ -168,6 +174,18 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
 # Era VI (P59-b, #184): the σ-model closure
 export SigmaModel, compute_sigma_νt!
+# Era VI (P55-b, #175): the stress-form SGS momentum divergence
+export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
+       add_sgs_stress_divergence!, sgs_stress_dissipation
+# Era VI (P55-c, #181): the tensorial scalar eddy diffusivity
+export DiffusivityTensor, diagonal_tensor!, bounded_directions,
+       add_tensor_diffusion_scalar!, isentropic_tensor!,
+       sgs_scalar_tensor, IsentropicDiffusion
+# Era VI (P55-e, #187): the stability-corrected anisotropic closure
+export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
+       sgs_stratification!
+# Era VI (P54-d, #174): wall-bounded flow diagnostics
+export phi_m_profile, total_stress_profile, streamwise_spectrum
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
@@ -645,7 +663,7 @@ export fog_effective_radius, FogRadiation, fog_radiation,
 # Constant accessors (LH_v0, grav, cp_water, …) stay qualified:
 # `Aeolus.SurfaceExchange.grav(c)`.
 export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
-       AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
+       AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag, BusingerDyerLogLinear,
        phi_m, phi_h, psi_m, psi_h,
        SurfaceLayerSolution, solve_surface_layer,
        bulk_richardson, obukhov_length,
@@ -860,7 +878,7 @@ export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
        water_density, water_thermal_expansion, water_haline_contraction,
        SolarBands, jerlov_water, soloviev_solar,
        solar_transmission, solar_absorbed_between, solar_mean_transmission,
-       CoolSkin, cool_skin, BusingerDyerLogLinear,
+       CoolSkin, cool_skin,
        AbstractWarmLayer, NoWarmLayer, FairallWarmLayer, ZengBeljaarsWarmLayer,
        step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth,
        KrausTurnerMixing, WaterColumn, layer_depths,
@@ -928,10 +946,32 @@ export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
        turbulence_velocity_scale, growth_rate, supercritical_fraction,
        grid_reynolds_number
+# Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
+# nudging, prescribed advective tendencies, surface-temperature series.
+# `surface_temperature(series, t)` is a method of the SurfaceExchange
+# generic, already exported.
+export ForcingTable, forcing_value, forcing_mean,
+       AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
+       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
 
 # P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
 # method of the CutCell generic (no new name).
 export NoSlipWall
 include("wall_shear_stress.jl")
+
+# Phase 57 — wall models (#169): equilibrium wall laws and the implicit
+# wall-stress operator. `friction_velocity` / `wall_stress` do not collide
+# with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
+# (CutCell, the resolved stress).
+export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
+       friction_velocity, wall_stress, wall_drag,
+       spalding_yplus, spalding_uplus, matching_obukhov_length,
+       WallModel, apply_wall_stress!
+# P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
+# `advance_channel!` / `run_channel!` do not collide with the Berlin case's
+# `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
+export WallBoundedCase, half_channel_case, channel_case,
+       advance_channel!, run_channel!, channel_dt,
+       channel_richardson, stratified_channel_walls   # P55-f (#191): stratified channel
 
 end # module

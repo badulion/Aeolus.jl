@@ -82,7 +82,9 @@ retain the term with `∂uᵢ/∂xⱼ` and drop the transposed piece
 `∂uⱼ/∂xᵢ` from the full stress divergence. For a well-resolved LES with
 modest `νₜ` variation, the omitted piece is small (and it disappears
 exactly for incompressible flow when `νₜ` is constant). PALM makes the
-same choice.
+same choice. It is the default of every core (`sgs_stress = :laplacian`);
+the full stress form is `sgs_stress = :symmetric`, below, and the Berlin
+case runs it.
 
 For u-momentum at `FaceX`:
 
@@ -93,6 +95,97 @@ For u-momentum at `FaceX`:
 
 with `νₜ` already at cell centers. The y- and z-flux terms need `νₜ`
 at x-y and x-z edges respectively — again a 4-point average.
+
+## Stress form vs Laplacian form
+
+The SGS stress of an eddy-viscosity closure is `τᵢⱼ = −2νᵢⱼSᵢⱼ`, and its
+divergence
+
+```math
+-\frac{\partial \tau_{ij}}{\partial x_j}
+= \frac{\partial}{\partial x_j}\left[\nu_{ij}\left(\frac{\partial u_i}{\partial x_j}
+  + \frac{\partial u_j}{\partial x_i}\right)\right]
+```
+
+differs from the Laplacian form above by the transposed term
+`∂ⱼ(νᵢⱼ ∂uⱼ/∂xᵢ)`. For constant ν that term is `ν ∂ᵢ(∇·u) = 0`; where ν
+varies (the canopy, the surface layer, the edge of a wake) it does not
+vanish, and the Laplacian form then has three defects: it is not the
+divergence of a symmetric stress (so it does not conserve angular
+momentum), it gives a tendency for a solid-body rotation, and its
+kinetic-energy tendency is not a negative-definite dissipation. The stress
+form fixes all three. `add_sgs_stress_divergence!` (in `Aeolus.Operators`,
+`src/operators/sgs_stress.jl`) implements it, and
+`add_stress_divergence!(tu, tv, tw, τ)` is the generic operator for any
+symmetric stress — P56-d's Reynolds-stress model passes its prognostic τ
+there.
+
+**Placement.** The stresses sit where the eddy-viscosity fluxes of the
+Laplacian kernels already live: `τ11, τ22, τ33` at cell centres, `τ12` on
+the xy-edges (where u-face `i` meets v-face `j`), `τ13` on the xz-edges,
+`τ23` on the yz-edges. Each stress enters the two faces it separates with
+opposite signs, so the operator conserves momentum exactly for any τ.
+
+**Strain.** At each location the compact face difference: `Sᵢᵢ` is the
+diagonal of `_velocity_gradient_at` (face to face through the cell), and
+on the xy-edge `S12 = ½((u_{i,j} − u_{i,j−1})/Δy + (v_{i,j} − v_{i−1,j})/Δx)`
+from the four velocities adjacent to it. The cell-centred off-diagonal
+`Sᵢⱼ` of `_velocity_gradient_at` (two-cell centred differences, used for
+`|S|` in the closures) is *not* used for the fluxes: interpolated to the
+edges it would not commute with the discrete divergence, and the
+constant-ν identity below would fail at truncation order.
+
+**Edge interpolation.** ν is the cell value for the diagonals and the
+4-cell average onto the edge for the off-diagonals, exactly as in
+`add_eddy_viscosity_u!`, so the stress form is the Laplacian kernel plus
+the transposed term, and the two agree to round-off when ν is constant.
+
+**Anisotropy.** `ν11 = ν22 = ν12 = ν_h` and `ν33 = ν13 = ν23 = ν_v`: ν_h
+for the horizontal pairs, ν_v for every pair involving z. This is the
+convention of CM1 (Bryan & Fritsch 2002, `turbnmod`), which also matches
+the split of horizontal and vertical mixing in Kosović (1997)'s
+anisotropic model. The isotropic closure is `ν_h = ν_v`. Through the
+closure contract the two come from `SGSFields.νh` and `SGSFields.νv`
+(aliased for every closure so far; P55-e supplies the split).
+
+**Discrete dissipation.** Summation by parts on a periodic domain gives the
+kinetic-energy tendency exactly:
+
+```math
+\sum_{\rm faces} u_i\, \frac{\partial}{\partial x_j}(2\nu_{ij}S_{ij})\, \Delta V
+= -\sum 2\nu_{ij} S_{ij} S_{ij}\, \Delta V \le 0,
+```
+
+with the diagonal terms summed over cells and each off-diagonal over its
+edges, counted for `ij` and `ji` (`sgs_stress_dissipation`).
+
+**IMEX split.** `step_imex!` with `sgs_stress = :symmetric` treats the
+diagonal part `∂ⱼ(νᵢⱼ ∂uᵢ/∂xⱼ)` implicitly and the transposed part
+explicitly. The implicit operator takes a per-direction coefficient per
+velocity component (`ν + ν_h` on the faces of the 11, 22, 12 fluxes,
+`ν + ν_v` on those of 33, 13, 23) with the explicit kernel's edge
+interpolation, so it is identical to the explicit `part = :diagonal` and
+stays symmetric (`I − γΔt L` is SPD for CG). The cross terms carry no
+second derivative of a component along its own direction, so they are not
+stiff; they vanish for constant ν on the projected stage values, which is
+why the split is exact in that limit. With `:laplacian` the implicit
+operator is unchanged (the co-located Phase-25 approximation). A pair
+`(ν_h, ν_v)` is also accepted as the coefficient of
+`solve_implicit_diffusion!` (ν_h on the x/y faces, ν_v on the z faces),
+and a closure with a separate `κv` gets it for the scalars.
+
+Measured (`test/era6_sgs_stress_form.jl`; spacing (15.625, 15.625, 6.25) m):
+
+| test | result |
+| :-- | :-- |
+| projected random field, constant ν = 0.37 m²/s: `:symmetric` vs `:laplacian` | 2.2e-16 of max\|tendency\| |
+| solid-body rotation Ω = 0.01 s⁻¹, ν = 0.5–5 m²/s: max\|t\| / (Ω ν_max/Δ²) | 0 (`:symmetric`), 2.33 (`:laplacian`) |
+| random u, random ν_h ∈ [0,2], ν_v ∈ [0,0.2]: KE tendency vs −Σ2νSS ΔV | 2.8e-16 relative, ≤ 0 (4 seeds) |
+| shear modes, ν_h/ν_v = 100: tendency vs −(ν_h k̂² + ν_v k̂_z²) | 2.4e-16, 2.4e-15 |
+| same, time-stepped: Euler hλ = 0.05 × 40 / ARK2 hλ = 5 × 4 | 3.3e-15 / 9.5e-14 from the discrete amplification factor |
+| Σu, Σv over 20 steps with Smagorinsky ν | 5.6e-16, 2.8e-15 relative |
+| `add_stress_divergence!(sgs_stress_tensor!)` vs fused | bitwise equal |
+| cost on 64 × 64 × 32 (momentum kernels) | 0.62 ms vs 0.44 ms Laplacian |
 
 ## Applying the SGS tendency to a scalar
 
@@ -108,11 +201,242 @@ Because `θ` is cell-centered, its diffusive flux lives at faces. The
 kernel `_add_eddy_diffusion_scalar!` interpolates `νₜ` linearly from
 cell centers to each face.
 
+## Tensorial scalar diffusivity
+
+P55-c (#181) generalises the scalar flux to a diffusivity tensor,
+``\partial_t\phi \supset \partial_i(K_{ij}\,\partial_j\phi)``, through one
+operator family in `Aeolus.Operators` (`src/operators/scalar_tensor.jl`).
+P55-e (κ_h ≠ κ_v under stratification) and P56-d (the Daly–Harlow heat
+flux ``K_{ij} = C\,(e/\varepsilon)\,\tau_{ij}``) reuse it.
+
+**Diagonal.** `add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv)` puts κ_h on the
+x and y faces and κ_v on the z faces (each the 2-point average of the
+cell values), the tensor ``\mathrm{diag}(\kappa_h, \kappa_h, \kappa_v)``.
+The isotropic three-argument form is the same kernel with κ_h ≡ κ_v, bit
+for bit. The contract's default `add_sgs_scalar!` calls it with the
+closure's `f.κh`, `f.κv`; before P55-c the explicit cores used `f.κh`
+alone while `step_imex!` already used the pair, so a closure with a
+separate κ_v was diffused differently by the two paths.
+
+**General symmetric tensor: the triad form.** `add_tensor_diffusion_scalar!(tϕ, ϕ, K)`
+takes the six components of K at cell centres
+([`DiffusivityTensor`](@ref Aeolus.Operators.DiffusivityTensor)). The cross
+terms need gradients that are not co-located with the flux they enter.
+The discretisation follows Griffies et al. (1998). Each cell is split into
+eight octants. Octant ``(a,b,c)`` pairs one x-face, one y-face and one
+z-face gradient of the cell, ``g = (g_x, g_y, g_z)``. The operator is
+defined as the gradient of a discrete functional:
+
+```math
+F[\phi] = -\tfrac12 \sum_{\text{cells}} \frac{\Delta V}{8} \sum_{\text{octants}}
+          g^{\mathsf T} K_{\text{cell}}\, g,
+\qquad \Delta V\, \partial_t \phi_n = \frac{\partial F}{\partial \phi_n}.
+```
+
+In flux form, the flux through a face is the mean of ``(Kg)_n`` over the
+eight octants that touch it. Because K is per cell, the four octant terms
+of a cell collapse to the average of its two cross gradients:
+
+```math
+F_x^{\,i+1/2} = \tfrac12\left(K_{11}^{i} + K_{11}^{i+1}\right)\delta_x\phi
+ + \tfrac14 \sum_{c\in\{i,i+1\}}\left[K_{12}^{c}\,(g_{y,S}+g_{y,N})_c
+                                     + K_{13}^{c}\,(g_{z,B}+g_{z,T})_c\right].
+```
+
+``F_y`` and ``F_z`` follow the same pattern. The tendency is
+``\delta_x F_x + \delta_y F_y + \delta_z F_z``. Its diagonal part is exactly
+the face-averaged diagonal kernel. Three properties follow from the
+functional, hold to round-off for any K, and do not depend on resolution:
+
+* **conservation**: ``\sum \Delta V\,\partial_t\phi = 0``, because F is
+  invariant under a constant shift of ϕ;
+* **down-gradient**: ``\sum \Delta V\,\phi\,\partial_t\phi = 2F \le 0`` when
+  every cell's K is positive semi-definite (Griffies et al. 1998, Sec. 3);
+* **symmetry** of the discrete operator.
+
+For constant K, a plane wave ``\cos(\mathbf k\cdot\mathbf x)`` is an exact
+eigenfunction. Its rate is
+``K_{11}\hat k_x^2 + K_{22}\hat k_y^2 + K_{33}\hat k_z^2 + 2K_{12}s_x s_y + 2K_{13}s_x s_z + 2K_{23}s_y s_z``,
+where ``\hat k = 2\sin(k\Delta/2)/\Delta`` and ``s = \sin(k\Delta)/\Delta``:
+the diagonal terms see the compact second difference and the cross terms
+the centred one.
+
+The `bounded` keyword (from the scalar boundary conditions,
+`bounded_directions(bcs)`) handles walls. A wall face's gradient is left
+out of the cross terms. The wall flux keeps only its diagonal part from
+the halo, as in the diagonal operator, which is zero for a no-flux halo.
+With no-flux halos the three properties hold with walls as well.
+Prescribed surface fluxes are added separately.
+
+**Rotated isentropic tensor.** `isentropic_tensor!(K, θ, κh, κv; slope_max, grad_min)`
+builds the Redi (1982) tensor, with κ_h along the isentropes and κ_v
+across them. With ``\mathbf n = \nabla\theta/|\nabla\theta|``:
+
+```math
+K = \kappa_h(I - \mathbf n\mathbf n^{\mathsf T}) + \kappa_v\,\mathbf n\mathbf n^{\mathsf T}
+  \;\to\; K = \kappa_h I - f\,(\kappa_h-\kappa_v)\,\mathbf n\mathbf n^{\mathsf T}.
+```
+
+Here ``f\in[0,1]`` blends the rotated tensor toward the isotropic κ_h:
+
+* the small-slope taper (the slope clipping of Gerdes, Köberle &
+  Willebrand 1991; see Danabasoglu & McWilliams 1995): with
+  ``S = |\nabla_h\theta|/\partial_z\theta``, ``f = 1`` for ``S \le S_{max}``
+  and ``f = (S_{max}/S)^2`` above it;
+* the isotropic fallback ``f = 0`` where ``N^2 \propto \partial_z\theta \le 0``.
+  This is the limit of the taper as S → ∞, so K is continuous across
+  N² = 0. f also ramps linearly to 0 as ``|\nabla\theta|`` drops below
+  `grad_min`.
+
+∇θ is the centred gradient at the cell centre. The eigenvalues are
+``\kappa_h, \kappa_h, \kappa_h - f(\kappa_h-\kappa_v)``, so K is positive
+semi-definite and the triad operator dissipates variance. Where ∇θ is
+uniform, the triad gradients of θ are the cell's ∇θ, which K annihilates
+when κ_v = 0. Isentropic diffusion therefore leaves θ unchanged (the
+"triad property"). With ``\mathbf n = \hat z``, K is
+``\mathrm{diag}(\kappa_h,\kappa_h,\kappa_v)``.
+
+**In the closure contract.** `sgs_scalar_tensor(c, f, sim)` (default
+`nothing`) exposes a closure's full tensor. `IsentropicDiffusion(inner, mesh; slope_max, grad_min, diapycnal)`
+runs `inner` for the coefficients, the momentum and the memory, builds K
+from `sim.θ` in `sgs_coefficients!`, and applies it in `add_sgs_scalar!`.
+κ_v is the closure's own `f.κv`, or `diapycnal·f.κh` when `diapycnal` is
+given. **IMEX:** `step_imex!` solves the diagonal
+``(\nu+K_{11}, \nu+K_{22}, \nu+K_{33})`` implicitly, each component on the
+faces of its own direction (exactly the `part = :diagonal` of the explicit
+operator). In a stable boundary layer κ_v sits there, which is the stiff
+term. The off-diagonal part (`part = :offdiagonal`) is added explicitly on
+θ and qv. K is frozen at the start of the step, the same lagged
+linearisation as ν_t. The explicit cross terms are bounded by
+``|K_{13}| \le \sqrt{K_{11}K_{33}}``, which the taper keeps at or below
+``\kappa_h S_{max}/(1+S_{max}^2)``. They therefore do not tighten the
+explicit advective limit the IMEX step runs at.
+
+**Validation** (`test/era6_tensor_diffusion.jl`, Berlin spacing
+15.625 × 15.625 × 6.25 m):
+
+| check | result |
+| :-- | :-- |
+| diagonal, κ_h/κ_v = 10³: mode decay vs κ_h(k̂ₓ²+k̂_y²)+κ_v k̂_z² | operator 1.1e-15 (vertical mode alone 9.7e-16); Euler hλ = 0.05 × 40 2.2e-15; ARK2 hλ = 5 × 4 2.9e-14 |
+| constant general K, plane-wave eigenvalue (cross terms 11 % of λ) | 4.9e-15 |
+| random PSD K: ``|\sum t\,\Delta V| / \sum|t|\Delta V`` (periodic / no-flux walls) | 1.4e-17 / 7.5e-18; symmetry 3.9e-18 / 8.0e-18 |
+| random PSD K, 200 explicit steps, no-flux walls | Σϕ² non-increasing every step (1.47e6 → 1.37e5); Σϕ dV drift 2.1e-17 |
+| isentropic, slope 0.05, κ_v = 0, κ_h varying 10×: max ``|t_\theta|/(\kappa_h|\nabla\theta|/\Delta)`` | 2.2e-13 (isotropic κ_h: 0.43) |
+| blob in the tilted stratification, κ_h/κ_v = 100: ΔM/(2κt) along / across | 0.9977 / 1.0067 (2 % tolerance) |
+| random tilted θ (stable, tapered and unstable cells), 200 steps | Σϕ² non-increasing; Σϕ dV drift 2.5e-16 |
+| n = ẑ vs diagonal operator | K 4.7e-16 m²/s, tendency 4.5e-16 |
+| tensor closure under `step!` / `step_imex!` (ARK2, diag implicit + cross explicit) | 3.2e-15 / 8.2e-15 from the exact split amplification factor (dropping the cross part would give 0.00129 instead of 0.04702) |
+
+## Stability correction
+
+P55-e (#187) is the one stability-corrected closure of Era VI (the
+"stratification-dependent anisotropic" closure of P55 merged with the
+former "buoyancy-aware Smagorinsky" of P58). The constant-``C_s`` closure
+mixes at the same rate whatever the stratification: it keeps mixing where
+``Ri \gg 1/4``, damps internal gravity waves and keeps a stable boundary
+layer artificially turbulent. `StabilityCorrected(base, mesh; scheme,
+length_scales)` (`src/operators/sgs_stability.jl`) wraps any
+eddy-viscosity closure (`StaticSmagorinsky`, `DynamicSmagorinsky`,
+`FunctionSGS`, `ML.MLSGS`, …) and returns four coefficients:
+
+```math
+\nu_h = \nu_{base}\,\ell_h, \qquad
+\nu_v = \nu_{base}\,\ell_v\,f_m(Ri), \qquad
+\kappa_h = \frac{\nu_{base}\,\ell_h}{Pr_t}, \qquad
+\kappa_v = \frac{\nu_{base}\,\ell_v\,f_h(Ri)}{Pr_t}.
+```
+
+* ``Ri = N^2/\max(|S|^2, S^2_{min})`` is the gradient Richardson number of
+  `gradient_richardson!` with the strain ``|S|^2 = 2S_{ij}S_{ij}`` the
+  Smagorinsky closure sees, and ``N^2`` from `buoyancy_frequency_squared!`
+  (of ``\theta_v`` when a humidity is known; about the core's own
+  reference, ``\theta_0`` on the Boussinesq core and ``\bar\theta(z)`` on
+  the anelastic / pseudo-incompressible cores).
+* ``f_m, f_h`` are the stability functions of the TurbulenceStability
+  contract (P58-a; [theory](turbulence_stability.md)); nothing is redefined
+  here. The default is Brown, Derbyshire & Mason (1994) (the LEM/MONC
+  functions: ``(1 - Ri/Ri_c)^4`` with ``Ri_c = 1/4`` in stable air,
+  enhanced ``\sqrt{1 - cRi}`` mixing in unstable air); `LillyCutoff()` is
+  Lilly (1962) / Mason (1989). Both are 1 at ``Ri = 0``, so the correction
+  leaves a neutral flow alone, and the neutral ``Pr_t`` is the base
+  closure's.
+* **Anisotropic length scales** (`length_scales = :anisotropic`, the
+  default). The filter width of the horizontal coefficients is
+  ``\Delta_h = \sqrt{\Delta x\,\Delta y}`` and of the vertical ones
+  ``\Delta_v = \Delta z`` (Bryan & Fritsch 2002, CM1) instead of
+  ``\Delta = (\Delta x\Delta y\Delta z)^{1/3}``. For ``\nu \propto \Delta^2``
+  this is the factor ``\ell_h = (\Delta_h/\Delta)^2``,
+  ``\ell_v = (\Delta_v/\Delta)^2`` — on the Berlin grid
+  (``\Delta x/\Delta z = 2.5``) 1.842 and 0.2947. On cubic cells both are
+  exactly 1.
+* **Horizontal coefficients keep no stability factor.** ``\nu_h`` and
+  ``\kappa_h`` are the base values (with ``\ell_h``): the correction
+  targets the vertical exchange that the stratification suppresses. The
+  horizontal part of the SGS damping of a gravity wave therefore remains
+  (see the numbers below).
+* **Dynamic bases.** A coefficient from the Germano identity already sees
+  the damping of the resolved motion by the stratification, so a second
+  ``f_m`` would count it twice. For `dynamic_sgs_coefficient(base) = true`
+  the momentum gets no factor (``\nu_v = \nu_{base}\ell_v``) and only the
+  scalar is corrected, through ``Pr_t(Ri) = Pr_t f_m/f_h``:
+  ``\kappa_v = \nu_{base}\ell_v (f_h/f_m)/Pr_t`` (0 where ``f_m = 0``).
+* **Not every closure is wrapped.** A closure with its own buoyancy term
+  (the anisotropic minimum-dissipation model, P55-d) or its own length
+  scale (prognostic TKE, P56-b) already accounts for the stratification;
+  the constructor accepts eddy-viscosity closures only.
+
+The four fields reach every core through the contract defaults: the
+stress form ``\partial_j(2\nu_{ij}S_{ij})`` with ``\nu_h, \nu_v`` (P55-b,
+`sgs_stress = :symmetric`; the Laplacian form uses ``\nu_h`` only) and the
+diagonal scalar operator with ``\kappa_h, \kappa_v`` (P55-c), explicit or —
+under `step_imex!` — in the implicit operator. The scalar tendency keeps
+the base closure's order of operations,
+``(1/Pr_t)\,\partial_j(a_j\,\partial_j\phi)``, so with ``N^2 = 0`` and
+``\ell_h = \ell_v = 1`` the wrapper is the base closure **bit for bit**.
+`IsentropicDiffusion(StabilityCorrected(base, mesh), mesh)` gives the
+rotated tensor the corrected ``\kappa_v`` across the isentropes.
+
+Measured (`test/era6_stratified_sgs.jl`):
+
+| test | result |
+| :-- | :-- |
+| ``N^2 = 0``: coefficients, tendencies (both stress forms), `step!`, `step_rk3!`, `step_imex!`, `step_adaptive!`, anelastic `step!` | `==` the base closure (Static and Dynamic Smagorinsky) |
+| ``u = Sz``, ``\theta = \theta_0 + \Gamma z``, ``Ri \in \{-0.5, 0, 0.1, 0.2, 0.25, 0.5, 5\}`` (Brown) | worst relative error of ``\nu_h, \nu_v, \kappa_h, \kappa_v`` 6.1e-14; ``\nu_v = \kappa_v = 0`` for ``Ri > Ri_c``; ``\nu_h`` independent of ``Ri`` to ≤ 1e-14 |
+| same, `LillyCutoff` | to 1e-12; at ``Ri = Ri_c`` exactly the discrete ``Ri`` is 0.25 − O(1e-13) and ``f = \sqrt{\delta/Ri_c}`` ≈ 1e-6 (the √ singularity of P58-a) |
+| anelastic core, ``N^2 = (g/\bar\theta(z))\,\Gamma`` | to 1e-12 |
+| standing internal wave, ``N = 0.01`` s⁻¹, 32 × 4 × 32, ``\Delta x/\Delta z = 2``, steepness 0.05, min ``Ri`` = 256 | ``\omega`` within 0.46 % of ``N k_x/|k|``; energy decay over 5 periods 0.62 % more than ``C_s = 0`` (uncorrected: 0.82 %; ``\nu_v \equiv 0``, the rest is the retained ``\nu_h, \kappa_h``) |
+| breaking wave, steepness 0.3 / 1.5 | ``\nu_v \equiv 0`` for 3 periods / ``\nu_v > 0`` from the first step; wave energy −23.4 % in 3 periods (−5.5 % without SGS) |
+| Σθ dV, no-flux walls, 200 steps of the corrected scalar flux | drift 4.4e-15; θ variance non-increasing at every step |
+| surface-cooled column, ``Ri \gg Ri_c`` | θ-flux divergence exactly 0 in the 22 interior levels (uncorrected: 1.1e-3 K/s) |
+| the correction's θ change, `step_imex!` vs `step!` | relative mismatch 3.8e-3 (dt = 0.1 s), 1.5e-3 (dt = 0.05 s) |
+
+Two expectations of the issue proved wrong, not the code: the breaking
+wave loses 23.4 %, not "more than 30 %", of its energy in 3 periods at
+this resolution with ``C_s = 0.17`` (the test asserts > 20 % and more than
+3× the resolved loss); and the Berlin smoke check "``\nu_v = \nu_h`` where
+``Ri \le 0``" ignores both the anisotropic length scales and the
+unstable-side enhancement of Brown et al. (``f_m > 1``), so the check is
+``\nu_v \ge \nu_h\,\ell_v/\ell_h`` there (and ``\le`` where ``Ri \ge 0``).
+
+**Cost** (64 × 64 × 32, one `compute_sgs!`, single thread, machine under
+load): 4.5 ms against 1.0 ms for `StaticSmagorinsky` on a random field;
+4.8 ms (minimum; median 8.5 ms) against 1.1 ms on the Berlin flagship state
+after 300 s, where a dynamics step takes about 98 ms and the closure is
+evaluated twice per step (CFL estimate and step), so about +8 %. The extra
+work is the strain of ``Ri`` (`gradient_richardson!` evaluates it a second
+time, 1.2 ms), the stability functions per cell (1.4–1.8 ms; the Float64
+``x^4`` and the branches of the Brown functions) and two more halo fills.
+The bare closure (`sgs_stability = :none` in the Berlin case) reproduces the
+pre-P55-e run bit for bit (100 nominal smoke steps, 59 adaptive steps:
+every prognostic field, the tracers and the surface temperatures `==`).
+
+## Choice of coefficients
 ## Choice of coefficients
 
   * `Cₛ = 0.17` for isotropic free turbulence (Lilly 1967). Reduced to
-    ~0.1 near walls — but Aeolus currently has only periodic BCs, so
-    the constant-`Cₛ` form is used.
+    ~0.1 near walls; the constant-`Cₛ` form is used everywhere (no
+    near-wall damping), with the wall stress from a
+    [wall model](wall_models.md).
   * `Prₜ = 1/3` is standard for atmospheric ABL (Deardorff 1972).
     Engineering flows often use `Prₜ ≈ 0.7 – 1`.
 
@@ -400,17 +724,23 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
     falls off as ``z^3`` at a no-slip wall (measured slope 2.955).
   * The constant coefficient is too dissipative in transitional / stably
     stratified regimes. The dynamic coefficient and the σ-model, which is
-    zero in laminar shear and in 2-D flow, are the alternatives.
+    zero in laminar shear and in 2-D flow, are the alternatives; in
+    stable stratification the Richardson-number reduction of
+    [Stability correction](#Stability-correction) (P55-e) applies, on by
+    default in the Berlin case; its validation on GABLS1 and the
+    stratified channel (P55-f) is in
+    [Stable boundary layers](stable_boundary_layer.md).
   * The σ-model costs about 8 times the Smagorinsky kernel (6.7 against
     0.85 ms on 64×64×32). It is zero only in *exactly* laminar
     (parallel, 2-D, pure-strain) flow; a laminar but weakly 3-D free
     stream gets a small ``ν_t`` (Berlin: 2.6 % of Smagorinsky's above
-    the sponge start). It is not stability-aware.
-  * The **stability correction** for stably stratified flow
-    (Deardorff / Lilly closure with a Richardson-number reduction) is
-    not applied — it will matter when we do stably stratified boundary
-    layers.
-  * No **near-surface roughness** treatment (MOST) — Phase 1b.
+    the sponge start). On its own it is not stability-aware; wrap it in
+    `StabilityCorrected` for that.
+  * The SGS closure itself has no wall treatment: at a free-slip z-wall
+    its flux through the wall face is zero. The wall stress — smooth
+    (Spalding), rough (log law) or Monin–Obukhov — is supplied by the
+    wall model, `apply_wall_stress!` of `Aeolus.WallModels` (Phase 57,
+    #169; see [Wall models](wall_models.md)); the Berlin ground uses it.
 
 ## References
 
@@ -431,11 +761,42 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Comte-Bellot, G. & Corrsin, S. (1971), *Simple Eulerian time
     correlation of full- and narrow-band velocity signals in
     grid-generated, 'isotropic' turbulence*, JFM 48, 273.
-  * Meneveau, C., Lund, T. S. & Cabot, W. H. (1996), *A Lagrangian
-    dynamic subgrid-scale model of turbulence*, JFM 319, 353.
   * Kang, H. S., Chester, S. & Meneveau, C. (2003), *Decaying turbulence
     in an active-grid-generated flow and comparisons with large-eddy
     simulation*, JFM 480, 129.
+  * Meneveau, C., Lund, T. S. & Cabot, W. H. (1996), *A Lagrangian dynamic
+    subgrid-scale model of turbulence*, J. Fluid Mech. 319, 353 (the
+    stateful closure the commit contract is designed for).
+  * Bryan, G. H. & Fritsch, J. M. (2002), *A benchmark simulation for moist
+    nonhydrostatic numerical models*, Mon. Wea. Rev. 130, 2917 (CM1; the
+    ν_h / ν_v convention of the stress form and the anisotropic length
+    scales Δh = √(dx dy), Δv = dz of `StabilityCorrected`).
+  * Lilly, D. K. (1962), *On the numerical simulation of buoyant
+    convection*, Tellus 14, 148 (the Richardson-number reduction).
+  * Mason, P. J. (1989), *Large-eddy simulation of the convective
+    atmospheric boundary layer*, J. Atmos. Sci. 46, 1492.
+  * Brown, A. R., Derbyshire, S. H. & Mason, P. J. (1994), *Large-eddy
+    simulation of stable atmospheric boundary layers with a revised
+    stochastic subgrid model*, Q. J. R. Meteorol. Soc. 120, 1485 (the
+    default stability functions of `StabilityCorrected`).
+  * Kosović, B. (1997), *Subgrid-scale modelling for the large-eddy
+    simulation of high-Reynolds-number boundary layers*, J. Fluid Mech.
+    336, 151.
+  * Redi, M. H. (1982), *Oceanic isopycnal mixing by coordinate rotation*,
+    J. Phys. Oceanogr. 12, 1154 (the rotated diffusivity tensor).
+  * Gerdes, R., Köberle, C. & Willebrand, J. (1991), *The influence of
+    numerical advection schemes on the results of ocean general circulation
+    models*, Clim. Dyn. 5, 211 (slope clipping).
+  * Danabasoglu, G. & McWilliams, J. C. (1995), *Sensitivity of the global
+    ocean circulation to parameterizations of mesoscale tracer transports*,
+    J. Climate 8, 2967 (tapering of the rotated tensor).
+  * Griffies, S. M., Gnanadesikan, A., Pacanowski, R. C., Larichev, V. D.,
+    Dukowicz, J. K. & Smith, R. D. (1998), *Isoneutral diffusion in a
+    z-coordinate ocean model*, J. Phys. Oceanogr. 28, 805 (the triad
+    discretisation and its variance property).
+  * Deardorff, J. W. (1970), *A numerical study of three-dimensional
+    turbulent channel flow at large Reynolds numbers*, J. Fluid Mech. 41,
+    453 (the stress form on a staggered grid).
   * Deardorff, J. W. (1980), *Stratocumulus-capped mixed layers derived
     from a three-dimensional model*, Boundary-Layer Meteorol. 18, 495
     (prognostic SGS TKE).
