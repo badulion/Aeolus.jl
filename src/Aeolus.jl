@@ -182,6 +182,10 @@ export phi_m_profile, total_stress_profile, streamwise_spectrum
 export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
        compute_vreman_νt!,
        sgs_buoyancy_parameter
+# Era VI, Phase 56 (P56-c): a-priori SGS-stress analysis
+export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
+       eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
+       lumley_invariants, apriori_metrics, dissipation_matched_cs
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!

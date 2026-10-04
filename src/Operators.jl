@@ -5,7 +5,7 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Locat
 using ..Fields
 using ..Fields: Field, mesh, interior_view
 using ..Grids: interior
-using ..BoundaryConditions: fill_halos!, Periodic
+using ..BoundaryConditions: fill_halos!, Periodic, FieldBoundaryConditions
 using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
 using FFTW: rfft, irfft, fft, ifft, fftfreq, plan_rfft
 using Random: AbstractRNG, default_rng, randn
@@ -40,6 +40,10 @@ export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!  
 export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
        compute_vreman_νt!,
        sgs_buoyancy_parameter
+# Era VI, Phase 56 (P56-c, #178): a-priori SGS-stress analysis (operators/apriori.jl)
+export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
+       eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
+       lumley_invariants, apriori_metrics, dissipation_matched_cs
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -672,6 +676,8 @@ end
 # Explicit filters, energy spectrum and isotropic initialiser (Phase 54, P54-c).
 include("operators/filters.jl")
 include("operators/spectra.jl")
+# A-priori SGS-stress analysis (Phase 56, P56-c).
+include("operators/apriori.jl")
 
 # -------------------------------------------------------------------------
 # Era VI: the SGS closure contract (wraps the kernels above).
