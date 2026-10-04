@@ -1,0 +1,31 @@
+# GABLS2 reference values: single-column-model spread at the end of the first night and digitised observed / LES
+#   screen-level values.
+# (1) scm_* rows: Holtslag, Steeneveld & van de Wiel (2007), Boundary-Layer Meteorol. 125, 361-376, sec. 3, text:
+#   with prescribed surface temperature their parameter sweep gives "a range of -10 to -40 W m-2 for the sensible heat
+#   flux, a range of 0.19 to 0.25 m s-1 for friction velocity and boundary-layer depths varying between 80 and 220 m (all
+#   ... at the end of the first night e.g. at the indicated time of 30 h)" (h = 5 % stress height / 0.95), stated to be
+#   "comparable to the variety within the GABLS2 intercomparison". Text values: digitisation uncertainty 0. Time 30 h =
+#   06 LT 23 October 1999 (hours from 00 LT 22 October).
+# (2) obs_* and les_* rows: Holtslag et al. (2012), "Overview of the GEWEX Atmospheric Boundary Layer Study (GABLS)",
+#   Proc. ECMWF GABLS Workshop 2011, 11-23, Figures 3 (2 m temperature, deg C) and 4 (10 m wind), "adapted from
+#   Svensson et al. (2011)"; observations = the thick dark-grey curve, LES = the thick black dashed curve (Kumar et al.
+#   2010). Read by eye from 650 x 488 px rasters (panel a) against the axis ticks: digitisation uncertainty +-0.7 K,
+#   +-0.4 m/s, +-0.3 h. Coarse, for orientation only; the Aeolus example quotes these, the tests do not assert them.
+quantity,t_h,low,high,unit,source
+scm_heat_flux,30,-40,-10,W m-2,Holtslag et al. 2007 sec. 3
+scm_u_star,30,0.19,0.25,m s-1,Holtslag et al. 2007 sec. 3
+scm_h,30,80,220,m,Holtslag et al. 2007 sec. 3
+obs_T2m,24,7.9,9.3,degC,Holtslag et al. 2012 Fig. 3a
+les_T2m,24,4.6,6.0,degC,Holtslag et al. 2012 Fig. 3a
+obs_T2m,32,-0.7,0.7,degC,Holtslag et al. 2012 Fig. 3a (morning minimum)
+les_T2m,32,0.0,1.4,degC,Holtslag et al. 2012 Fig. 3a (morning minimum)
+obs_T2m,39,13.1,14.5,degC,Holtslag et al. 2012 Fig. 3a (afternoon maximum)
+les_T2m,39,10.9,12.3,degC,Holtslag et al. 2012 Fig. 3a (afternoon maximum)
+obs_T2m,48,1.4,2.8,degC,Holtslag et al. 2012 Fig. 3a
+les_T2m,48,2.4,3.8,degC,Holtslag et al. 2012 Fig. 3a
+obs_U10,26,3.5,4.3,m s-1,Holtslag et al. 2012 Fig. 4a
+les_U10,26,4.4,5.2,m s-1,Holtslag et al. 2012 Fig. 4a
+obs_U10,39,5.2,6.0,m s-1,Holtslag et al. 2012 Fig. 4a
+les_U10,39,5.4,6.2,m s-1,Holtslag et al. 2012 Fig. 4a
+obs_U10,48,2.4,3.2,m s-1,Holtslag et al. 2012 Fig. 4a
+les_U10,48,4.6,5.4,m s-1,Holtslag et al. 2012 Fig. 4a
