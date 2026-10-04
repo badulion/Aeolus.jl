@@ -4,6 +4,9 @@ using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: Field, mesh
+using ..Grids: interior
+using ..BoundaryConditions: fill_halos!
+using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
@@ -16,6 +19,13 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
        advect_weno5!
+# Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
+export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
+       sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
+       compute_sgs!, sgs_closure,
+       AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
+       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -157,11 +167,20 @@ add_eddy_viscosity_u!(tu, u, νt) = _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
 @doc (@doc add_eddy_viscosity_u!) add_eddy_viscosity_w!(tw, w, νt) = _add_eddy_viscosity_w!(tw, w, νt, mesh(w))
 
 """
-    add_eddy_diffusion_scalar!(tϕ, ϕ, νt, Pr_t)
+    add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field)
+    add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t)
 
-Add `∂/∂xⱼ((νₜ/Prₜ) ∂ϕ/∂xⱼ)` to the cell-centered scalar tendency.
+Add the conservative eddy-diffusion tendency `∂/∂xⱼ(κₜ ∂ϕ/∂xⱼ)` to the
+cell-centred scalar tendency `tϕ`, with the cell-centred diffusivity `κt`
+averaged linearly to each face. The four-argument form is
+`(1/Prₜ) ∂/∂xⱼ(νₜ ∂ϕ/∂xⱼ)`: the same kernel, with the turbulent Prandtl
+number applied as a factor after the flux divergence. Halos of `ϕ` and of
+the coefficient field must be filled.
 """
-add_eddy_diffusion_scalar!(tϕ, ϕ, νt, Pr_t) = _add_eddy_diffusion_scalar!(tϕ, ϕ, νt, Pr_t, mesh(ϕ))
+add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field) =
+    _add_eddy_diffusion_scalar!(tϕ, ϕ, κt, one(eltype(κt.data)), mesh(ϕ))
+add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t::Real) =
+    _add_eddy_diffusion_scalar!(tϕ, ϕ, νt, 1 / Pr_t, mesh(ϕ))
 
 """
     add_surface_flux!(tϕ, F_bot, F_top)
@@ -244,13 +263,32 @@ function DynamicSmagorinskyWorkspace(g::RegularGrid{T}) where {T}
                                           i(), i(), i())
 end
 
-# Strain-rate components and |S| = √(2 SᵢⱼSᵢⱼ) at cell centre (i,j,k) of the
-# data arrays: the stencil of the built-in `compute_smagorinsky_νt!`.
-@inline function _strain_at(u, v, w, i, j, k, idx, idy, idz)
+"""
+    _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz) -> g
+
+The full resolved velocity-gradient tensor at the centre of cell `(i, j, k)`
+(indices into the halo-padded `data` arrays of the staggered `u @ FaceX`,
+`v @ FaceY`, `w @ FaceZ`), with `idx = 1/Δx` etc. Returns the 3 × 3 tensor
+as a tuple of rows, `g[a][b] = ∂u_a/∂x_b`:
+
+* diagonal: the face-to-face difference through the cell (`∂u/∂x =
+  (u[i+1] − u[i])/Δx`), exact for a linear field and the stencil of the
+  discrete divergence;
+* off-diagonal: the centred difference over two cells of the component
+  averaged to the cell centre in its own direction (`∂u/∂y = ((u[i,j+1] +
+  u[i+1,j+1]) − (u[i,j−1] + u[i+1,j−1]))/(4Δy)`), also exact for a linear
+  field.
+
+The single gradient stencil of the SGS closures: [`_strain_at`](@ref) (and so
+the static and dynamic Smagorinsky ν_t) is built from it, and the AMD /
+Vreman, σ, gradient-Richardson and TKE-production closures of Era VI read the
+same tensor. Halos of `u, v, w` must be filled.
+"""
+@inline function _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz)
     @inbounds begin
-        S11 = (u[i+1,j,k] - u[i,j,k]) * idx
-        S22 = (v[i,j+1,k] - v[i,j,k]) * idy
-        S33 = (w[i,j,k+1] - w[i,j,k]) * idz
+        du_dx = (u[i+1,j,k] - u[i,j,k]) * idx
+        dv_dy = (v[i,j+1,k] - v[i,j,k]) * idy
+        dw_dz = (w[i,j,k+1] - w[i,j,k]) * idz
         du_dy = ((u[i,j+1,k] + u[i+1,j+1,k]) - (u[i,j-1,k] + u[i+1,j-1,k])) * (0.25 * idy)
         dv_dx = ((v[i+1,j,k] + v[i+1,j+1,k]) - (v[i-1,j,k] + v[i-1,j+1,k])) * (0.25 * idx)
         du_dz = ((u[i,j,k+1] + u[i+1,j,k+1]) - (u[i,j,k-1] + u[i+1,j,k-1])) * (0.25 * idz)
@@ -258,9 +296,24 @@ end
         dv_dz = ((v[i,j,k+1] + v[i,j+1,k+1]) - (v[i,j,k-1] + v[i,j+1,k-1])) * (0.25 * idz)
         dw_dy = ((w[i,j+1,k] + w[i,j+1,k+1]) - (w[i,j-1,k] + w[i,j-1,k+1])) * (0.25 * idy)
     end
-    S12 = 0.5 * (du_dy + dv_dx)
-    S13 = 0.5 * (du_dz + dw_dx)
-    S23 = 0.5 * (dv_dz + dw_dy)
+    return ((du_dx, du_dy, du_dz),
+            (dv_dx, dv_dy, dv_dz),
+            (dw_dx, dw_dy, dw_dz))
+end
+
+"""
+    _strain_at(u, v, w, i, j, k, idx, idy, idz) -> (S11, S22, S33, S12, S13, S23, |S|)
+
+Strain-rate components `Sᵢⱼ = ½(gᵢⱼ + gⱼᵢ)` and `|S| = √(2 SᵢⱼSᵢⱼ)` at the
+centre of cell `(i, j, k)`, from [`_velocity_gradient_at`](@ref). The stencil
+of [`compute_smagorinsky_νt!`](@ref) and [`compute_dynamic_smagorinsky_νt!`](@ref).
+"""
+@inline function _strain_at(u, v, w, i, j, k, idx, idy, idz)
+    g = _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz)
+    S11 = g[1][1]; S22 = g[2][2]; S33 = g[3][3]
+    S12 = 0.5 * (g[1][2] + g[2][1])
+    S13 = 0.5 * (g[1][3] + g[3][1])
+    S23 = 0.5 * (g[2][3] + g[3][2])
     S2 = 2 * (S11^2 + S22^2 + S33^2) + 4 * (S12^2 + S13^2 + S23^2)
     return S11, S22, S33, S12, S13, S23, sqrt(S2)
 end
@@ -409,6 +462,11 @@ function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T
 end
 
 # -------------------------------------------------------------------------
+# Era VI: the SGS closure contract (wraps the kernels above).
+# -------------------------------------------------------------------------
+include("operators/sgs_closures.jl")
+
+# -------------------------------------------------------------------------
 # Load backend kernels.
 # -------------------------------------------------------------------------
 include("FiniteVolume.jl")
@@ -422,5 +480,8 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                      _add_eddy_diffusion_scalar!,
                      _add_surface_flux!, _add_sponge!,
                      _advect_weno5!
+
+# Pointwise N² and Ri_g (Era VI, P58-a).
+include("operators/stratification.jl")
 
 end # module

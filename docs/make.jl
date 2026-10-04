@@ -65,6 +65,7 @@ makedocs(
             "Sub-grid surface tiles"      => "theory/surface_tiles.md",
             "Blending height"             => "theory/blending_height.md",
             "Heterogeneous-surface validation" => "theory/heterogeneous_surface.md",
+            "Stability functions and Ri_g" => "theory/turbulence_stability.md",
             "Wall models"                 => "theory/wall_models.md",
         ],
         "Design" => [
@@ -135,6 +136,7 @@ makedocs(
             ],
             "Era VI — turbulence closure" => [
                 "Overview"                     => "api/era6.md",
+                "TurbulenceStability"          => "api/era6/turbulence_stability.md",
                 "WallModels"                   => "api/era6/wall_models.md",
             ],
         ],

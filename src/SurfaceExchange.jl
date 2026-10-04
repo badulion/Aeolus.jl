@@ -63,6 +63,9 @@ using ..RadiationCore: STEFAN_BOLTZMANN
 # The broadband albedo / emissivity of an AbstractSurface are further
 # methods of the RadiationCore generics — one function, not two.
 import ..RadiationCore: surface_albedo, surface_emissivity
+# MOST-consistent gradient-Richardson factors are an implementer of the
+# Era VI stability contract (P58-a, #170).
+import ..TurbulenceStability: AbstractRiStability, stability_factor_m, stability_factor_h
 
 export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        LH_v0, LH_s0, LH_f0, grav, cp_water, cp_ice, von_karman,
@@ -72,7 +75,8 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        AbstractSurface, SurfaceForcing, SurfaceFluxes,
        surface_temperature, roughness_lengths, surface_albedo, surface_emissivity,
        moisture_availability, surface_specific_humidity, surface_latent_heat,
-       net_radiation, turbulent_fluxes, step_surface!
+       net_radiation, turbulent_fluxes, step_surface!,
+       MOSTConsistent, most_gradient_richardson, most_stability_parameter
 
 # =========================================================================
 # 1. Material constants
@@ -221,6 +225,93 @@ function psi_h(sf::BusingerDyerBeljaarsHoltslag, ζ::Real)
     end
     a, b, c, d = sf.a, sf.b, sf.c, sf.d
     return -((1 + 2 * a * ζ / 3)^(3 / 2) + b * (ζ - c / d) * exp(-d * ζ) + b * c / d - 1)
+end
+
+# -------------------------------------------------------------------------
+# MOST-consistent gradient-Richardson stability factors (Era VI, P58-a)
+# -------------------------------------------------------------------------
+
+"""
+    most_gradient_richardson(sf::AbstractStabilityFunctions, ζ) -> Ri
+
+The gradient Richardson number of the Monin–Obukhov profiles at
+``ζ = z/L``:
+
+```math
+Ri = \\frac{(g/θ_0)\\,∂θ/∂z}{(∂u/∂z)^2} = ζ\\,\\frac{φ_h(ζ)}{φ_m(ζ)^2},
+```
+
+from ``∂u/∂z = u_* φ_m/(κz)``, ``∂θ/∂z = θ_* φ_h/(κz)`` and
+``L = u_*^2 θ_0/(κ g θ_*)``. For the log-linear ``φ = 1 + αζ`` it tends to
+the critical value ``1/α`` as ``ζ → ∞``; for Beljaars–Holtslag it grows
+without bound (no critical Richardson number).
+"""
+most_gradient_richardson(sf::AbstractStabilityFunctions, ζ::Real) =
+    ζ * phi_h(sf, ζ) / phi_m(sf, ζ)^2
+
+"""
+    MOSTConsistent(sf = BusingerDyerBeljaarsHoltslag(); ζ_min = -1e3, ζ_max = 1e4)
+
+The gradient-Richardson stability factors that make a local closure
+``K = (κz)^2 |∂u/∂z| f(Ri)`` reproduce Monin–Obukhov similarity with the
+functions `sf` exactly:
+
+```math
+f_m = φ_m(ζ)^{-2}, \\qquad f_h = [φ_m(ζ)\\, φ_h(ζ)]^{-1}, \\qquad
+Ri = ζ\\,φ_h(ζ)/φ_m(ζ)^2 .
+```
+
+With ``∂u/∂z = u_*φ_m/(κz)`` this gives ``K_m ∂u/∂z = u_*^2`` and
+``K_h ∂θ/∂z = u_*θ_*`` at every height (the derivation is on the theory
+page `theory/turbulence_stability.md`). The factor needs ``ζ(Ri)``,
+the inverse of [`most_gradient_richardson`](@ref), found by the same
+Illinois solver as [`solve_surface_layer`](@ref) on ``[ζ_{\\min}, 0]``
+or ``[0, ζ_{\\max}]`` (``Ri(ζ)`` is monotone for BDBH and the log-linear
+form). A stable ``Ri`` at or above ``Ri(ζ_{\\max})`` — beyond the
+critical Richardson number of a log-linear family — gives ``f = 0``; an
+unstable ``Ri`` below ``Ri(ζ_{\\min})`` is evaluated at ``ζ_{\\min}``.
+``Pr_n = φ_h(0)/φ_m(0) = 1``.
+"""
+Base.@kwdef struct MOSTConsistent{S<:AbstractStabilityFunctions, T<:AbstractFloat} <: AbstractRiStability
+    sf::S = BusingerDyerBeljaarsHoltslag()
+    ζ_min::T = -1e3
+    ζ_max::T = 1e4
+end
+MOSTConsistent(sf::AbstractStabilityFunctions; kw...) = MOSTConsistent(; sf = sf, kw...)
+
+"""
+    most_stability_parameter(m::MOSTConsistent, Ri) -> ζ
+
+``ζ = z/L`` with ``Ri = ζφ_h/φ_m^2`` (see [`MOSTConsistent`](@ref));
+`Inf` for a stable `Ri` at or beyond ``Ri(ζ_{\\max})``.
+"""
+function most_stability_parameter(m::MOSTConsistent, Ri::Real)
+    T = float(typeof(Ri))
+    Ri == 0 && return zero(T)
+    F(ζ) = most_gradient_richardson(m.sf, ζ) - Ri
+    if Ri > 0
+        fb = F(T(m.ζ_max))
+        fb <= 0 && return T(Inf)
+        ζ, _, _ = _illinois(F, zero(T), T(m.ζ_max), T(-Ri), T(fb), 200)
+        return ζ
+    else
+        fa = F(T(m.ζ_min))
+        fa >= 0 && return T(m.ζ_min)
+        ζ, _, _ = _illinois(F, T(m.ζ_min), zero(T), T(fa), T(-Ri), 200)
+        return ζ
+    end
+end
+
+function stability_factor_m(m::MOSTConsistent, Ri::Real)
+    ζ = most_stability_parameter(m, Ri)
+    isinf(ζ) && return zero(ζ)
+    return 1 / phi_m(m.sf, ζ)^2
+end
+
+function stability_factor_h(m::MOSTConsistent, Ri::Real)
+    ζ = most_stability_parameter(m, Ri)
+    isinf(ζ) && return zero(ζ)
+    return 1 / (phi_m(m.sf, ζ) * phi_h(m.sf, ζ))
 end
 
 # =========================================================================

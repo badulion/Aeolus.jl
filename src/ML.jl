@@ -10,6 +10,8 @@ module ML
 using ..Grids: RegularGrid, interior
 using ..Fields: Field
 using ..Simulations: BoussinesqSimulation
+using ..Operators: AbstractEddyViscosityClosure
+import ..Operators: sgs_viscosity!
 
 export MLSGS, apply_mlsgs!
 
@@ -29,10 +31,17 @@ apply_mlsgs!(sim, mlsgs)      # populates sim.νt from the callable
 Aeolus then feeds `sim.νt` into the existing `add_eddy_viscosity_*!`
 and `add_eddy_diffusion_scalar!` kernels — the ML kernel is a *drop-in
 replacement* for `compute_smagorinsky_νt!`.
+
+An `MLSGS` is an [`AbstractEddyViscosityClosure`](@ref
+Aeolus.Operators.AbstractEddyViscosityClosure) of the Era VI SGS contract, so
+it is passed to any core directly, `step!(sim, dt; sgs = mlsgs)`, with
+`κt = νt / sim.Pr_t`. It is stateless.
 """
-struct MLSGS{F}
+struct MLSGS{F} <: AbstractEddyViscosityClosure
     fn::F
 end
+
+sgs_viscosity!(νt, m::MLSGS, sim) = (m.fn(νt, sim.u, sim.v, sim.w, sim.mesh); νt)
 
 """
     apply_mlsgs!(sim, mlsgs)

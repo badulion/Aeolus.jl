@@ -18,6 +18,7 @@ module FiniteVolume
 using ..Grids
 using ..Grids: RegularGrid, interior, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields: Field
+using ..Operators: _strain_at
 
 # =========================================================================
 # First derivatives
@@ -436,31 +437,11 @@ function _compute_smagorinsky_νt!(νt::Field{CellCenter},
     Δ   = (g.dx * g.dy * g.dz) ^ (1/3)
     coef = (C_s * Δ) ^ 2
     ii, jj, kk = interior(g)
+    ud, vd, wd = u.data, v.data, w.data
     @inbounds for k in kk, j in jj, i in ii
-        S11 = (u.data[i+1,j,k] - u.data[i,j,k]) * idx
-        S22 = (v.data[i,j+1,k] - v.data[i,j,k]) * idy
-        S33 = (w.data[i,j,k+1] - w.data[i,j,k]) * idz
-
-        du_dy = ((u.data[i,j+1,k] + u.data[i+1,j+1,k]) -
-                 (u.data[i,j-1,k] + u.data[i+1,j-1,k])) * (0.25 * idy)
-        dv_dx = ((v.data[i+1,j,k] + v.data[i+1,j+1,k]) -
-                 (v.data[i-1,j,k] + v.data[i-1,j+1,k])) * (0.25 * idx)
-        S12 = 0.5 * (du_dy + dv_dx)
-
-        du_dz = ((u.data[i,j,k+1] + u.data[i+1,j,k+1]) -
-                 (u.data[i,j,k-1] + u.data[i+1,j,k-1])) * (0.25 * idz)
-        dw_dx = ((w.data[i+1,j,k] + w.data[i+1,j,k+1]) -
-                 (w.data[i-1,j,k] + w.data[i-1,j,k+1])) * (0.25 * idx)
-        S13 = 0.5 * (du_dz + dw_dx)
-
-        dv_dz = ((v.data[i,j,k+1] + v.data[i,j+1,k+1]) -
-                 (v.data[i,j,k-1] + v.data[i,j+1,k-1])) * (0.25 * idz)
-        dw_dy = ((w.data[i,j+1,k] + w.data[i,j+1,k+1]) -
-                 (w.data[i,j-1,k] + w.data[i,j-1,k+1])) * (0.25 * idy)
-        S23 = 0.5 * (dv_dz + dw_dy)
-
-        S2 = 2*(S11^2 + S22^2 + S33^2) + 4*(S12^2 + S13^2 + S23^2)
-        νt.data[i,j,k] = coef * sqrt(S2)
+        # the one strain stencil (Operators._strain_at / _velocity_gradient_at)
+        ms = _strain_at(ud, vd, wd, i, j, k, idx, idy, idz)[7]
+        νt.data[i,j,k] = coef * ms
     end
     return νt
 end
@@ -552,21 +533,23 @@ function _add_eddy_viscosity_w!(tw::Field{FaceZ}, w::Field{FaceZ},
 end
 
 # --- eddy diffusion for a cell-centered scalar --------------------------
-# (ν_t / Pr_t) applied conservatively at faces (ν_t interpolated to face).
+# s · ∂/∂x_j (K ∂ϕ/∂x_j), K applied conservatively at faces (interpolated
+# linearly from cell centres). The single kernel behind both public forms:
+# `add_eddy_diffusion_scalar!(tϕ, ϕ, κt)` (K = κt, s = 1, exact) and
+# `add_eddy_diffusion_scalar!(tϕ, ϕ, νt, Pr_t)` (K = νt, s = 1/Pr_t).
 
 function _add_eddy_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
-                                      νt::Field{CellCenter}, Pr_t::Real,
+                                      K::Field{CellCenter}, s::Real,
                                       g::RegularGrid)
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
-    inv_Pr = 1 / Pr_t
     ii, jj, kk = interior(g)
     @inbounds for k in kk, j in jj, i in ii
-        νE = 0.5 * (νt.data[i,j,k]   + νt.data[i+1,j,k])
-        νW = 0.5 * (νt.data[i-1,j,k] + νt.data[i,j,k])
-        νN = 0.5 * (νt.data[i,j,k]   + νt.data[i,j+1,k])
-        νS = 0.5 * (νt.data[i,j-1,k] + νt.data[i,j,k])
-        νT = 0.5 * (νt.data[i,j,k]   + νt.data[i,j,k+1])
-        νB = 0.5 * (νt.data[i,j,k-1] + νt.data[i,j,k])
+        νE = 0.5 * (K.data[i,j,k]   + K.data[i+1,j,k])
+        νW = 0.5 * (K.data[i-1,j,k] + K.data[i,j,k])
+        νN = 0.5 * (K.data[i,j,k]   + K.data[i,j+1,k])
+        νS = 0.5 * (K.data[i,j-1,k] + K.data[i,j,k])
+        νT = 0.5 * (K.data[i,j,k]   + K.data[i,j,k+1])
+        νB = 0.5 * (K.data[i,j,k-1] + K.data[i,j,k])
 
         fxE = νE * (ϕ.data[i+1,j,k] - ϕ.data[i,  j,k]) * idx
         fxW = νW * (ϕ.data[i,  j,k] - ϕ.data[i-1,j,k]) * idx
@@ -575,7 +558,7 @@ function _add_eddy_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCente
         fzT = νT * (ϕ.data[i,j,k+1] - ϕ.data[i,j,k  ]) * idz
         fzB = νB * (ϕ.data[i,j,k  ] - ϕ.data[i,j,k-1]) * idz
 
-        tϕ.data[i,j,k] += inv_Pr * ((fxE - fxW)*idx + (fyN - fyS)*idy + (fzT - fzB)*idz)
+        tϕ.data[i,j,k] += s * ((fxE - fxW)*idx + (fyN - fyS)*idy + (fzT - fzB)*idz)
     end
     return tϕ
 end
