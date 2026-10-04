@@ -10,7 +10,7 @@ Reynolds number, the supercritical fraction of a ``Ri_g`` field, and a
 log-linear `growth_rate` fit. It defines no Richardson number: ``Ri_g``
 comes from [TurbulenceStability](turbulence_stability.md). The theory
 and the Kelvin–Helmholtz / Miles–Howard validation are on
-[Laminar–turbulent transition](../../theory/transition.md).
+[Laminar–turbulent transition](../../theory/transition.md#Laminar–turbulent-transition).
 
 ```julia
 using Aeolus
