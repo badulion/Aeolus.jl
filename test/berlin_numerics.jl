@@ -7,8 +7,8 @@
 #     for bit (the eddy_viscosity! hook of step! adds its terms where the
 #     built-in closure does);
 #   * the σ-model provider (`sgs = :sigma`, #184): ν_t ≥ 0, exactly 0 in a
-#     laminar parallel flow on the Berlin mesh, and far below Smagorinsky
-#     in the (γ-laminar) free stream above the sponge start;
+#     laminar parallel flow on the Berlin mesh, and below 1e-2 ν in the
+#     (volume-γ laminar) free stream above the sponge start;
 #   * the SGS option scalar_tensor = :isentropic (P55-c, #181): with the
 #     closure's own κv (= κh) the tensor is κh I and the run is the default
 #     one to round-off; with diapycnal = 0.1 it rotates and changes θ;
@@ -73,21 +73,36 @@ end
         @test all(isfinite, interior_view(sim.u))
         p = BC.sigma_νt_profile(c, sg)
         @test p.min_σ >= 0
-        # the free stream above the sponge start is laminar by the
-        # Transition indicator (γ = 0 there) …
+        # The free stream above the sponge start. #184 measured it on a base
+        # whose sponge relaxed the wind towards rest, so the free stream was
+        # strongly sheared (U falls from 0.52 to 0.07 U_g over the top four
+        # levels) and asserted γ = 0 there (plane-normalised indicator) and
+        # σ's ν_t ≤ 5 % of Smagorinsky's ("Smagorinsky sees the mean shear").
+        # On the stack with #171 (LargeScaleForcing: the sponge relaxes to the
+        # geostrophic wind) that free stream is the geostrophic wind, shear
+        # free (U = 0.98–1.00 U_g): the premise of both assertions is gone,
+        # not the closure's behaviour. The plane-normalised γ is scale-free —
+        # with no mean vorticity the weak 3-D disturbances (σ_w 2–5 mm/s)
+        # count as turbulent (γ = 0.96) — and Smagorinsky has no mean shear
+        # to see (σ 4.2e-3 vs Smagorinsky 2.3e-3 m²/s, measured). What holds,
+        # and is asserted instead (P59-e, #195): the free stream is laminar
+        # against the domain-mean vorticity (volume-normalised γ, the
+        # Transition setting for a quiet free stream), and σ's ν_t there is
+        # negligible against the background ν (the relaminarisation
+        # criterion ν_t/ν < 1e-2).
         for f in (sim.u, sim.v, sim.w)
             fill_halos!(f, sim.bcs)
         end
         lam = falses(m.Nx, m.Ny, m.Nz)
         laminar_mask!(lam, sim.u, sim.v, sim.w)
         γfree = 1 - mean(lam[:, :, p.ksp:end])
-        @info @sprintf("  σ-model after %d steps: mean ν_t canopy %.3e (Smagorinsky on the same flow %.3e), above the sponge start %.3e (%.3e; ratio %.2e, max %.2e) m²/s; γ there %.3f",
-                       N, p.canopy_σ, p.canopy_smag, p.free_σ, p.free_smag, p.free_σ / p.free_smag, p.free_σ_max, γfree)
-        @test γfree == 0
-        # … but not an exactly parallel flow: the canopy's weak 3-D
-        # disturbances reach it (|ω′| below the γ threshold), so σ₃ ≠ 0
-        # and ν_t is small, not zero. Smagorinsky sees the mean shear.
-        @test p.free_σ <= 0.05 * p.free_smag
+        laminar_mask!(lam, sim.u, sim.v, sim.w; normalization = :volume)
+        γfree_vol = 1 - mean(lam[:, :, p.ksp:end])
+        @info @sprintf("  σ-model after %d steps: mean ν_t canopy %.3e (Smagorinsky on the same flow %.3e), above the sponge start %.3e (%.3e; ratio %.2e, max %.2e) m²/s = %.1e ν; γ there %.3f (plane), %.3f (volume)",
+                       N, p.canopy_σ, p.canopy_smag, p.free_σ, p.free_smag, p.free_σ / p.free_smag,
+                       p.free_σ_max, p.free_σ / sg.cfg.ν, γfree, γfree_vol)
+        @test γfree_vol < 0.1
+        @test p.free_σ / sg.cfg.ν < 1e-2
         @test p.canopy_σ > 0
         # exactly zero for an exactly laminar parallel flow on the Berlin
         # mesh, through the provider's closure object (compute_sgs!, the
