@@ -410,8 +410,8 @@ with it. Same case, same seed, same 1500-step protocol:
 | **576 × 64 × 96** (the example) | 1.04, 0.56, 0.25 | **1.057–1.135 (mean 1.084)** | 198 |
 
 The first row is what the example ran before; it missed the 20 % target.
-The local edge velocity is within 0.5 % of ``U_∞`` downstream on every
-grid, so normalising by it changes none of these ratios by more than 0.01.
+The local edge velocity is within 0.7 % of ``U_∞`` downstream on every
+grid, so normalising by it changes none of these ratios by more than 0.012.
 
 ![c_f of the T3A-like plate](../assets/transition/t3a_cf.svg)
 
