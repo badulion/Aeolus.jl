@@ -204,11 +204,9 @@ function _patchy_body_force!(pl::PatchyLES, sim, Δt)
         sim.tv.data[I, J, K] -= 0.5 * (pl.τy[i, jm] + pl.τy[i, j]) * inv_dz
     end
     if sim.f_coriolis != 0 && pl.Ug != 0
-        # du/dt = f v, dv/dt = -f (u - Ug): add +f Ug to the v tendency.
-        ii, jj, kk = Aeolus.Grids.interior(m)
-        @inbounds for k in kk, j in jj, i in ii
-            sim.tv.data[i, j, k] += sim.f_coriolis * pl.Ug
-        end
+        # du/dt = f v, dv/dt = -f (u - Ug): the geostrophic pressure gradient
+        # (+f Ug on the v tendency), from LargeScaleForcing (#171).
+        apply_forcing!(sim, GeostrophicPressureGradient(pl.Ug, 0.0), sim.t, Δt)
     end
     pl.applied_heat += pl.stage_weight * Δt * sum(pl.wθ) / length(pl.wθ)
     return nothing

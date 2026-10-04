@@ -13,7 +13,9 @@ using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    compute_smagorinsky_νt!,
                    add_eddy_viscosity_u!, add_eddy_viscosity_v!, add_eddy_viscosity_w!,
                    add_eddy_diffusion_scalar!,
-                   add_surface_flux!, add_sponge!
+                   add_surface_flux!, add_sponge!,
+                   AbstractSGSClosure, compute_sgs!, add_sgs_momentum!, add_sgs_scalar!,
+                   advance_sgs!, _active_sgs, _check_sgs_stress, sgs_tracer_diffusivity!
 using ..PressureSolvers
 using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver, solve!
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
@@ -45,6 +47,13 @@ its parameter is `0`):
 | `f_coriolis`  | `0`                          | Coriolis parameter.                 |
 | `C_s`         | `0`                          | Smagorinsky coefficient (`0` → off).|
 | `Pr_t`        | `1/3`                        | Turbulent Prandtl number.           |
+
+The SGS coefficients of the last tendency evaluation are kept in
+`sim.νt` (eddy viscosity) and `sim.κt` (eddy diffusivity of θ and, with `moisture = true`, of qv), both
+cell-centred: with `C_s ≠ 0` and no `sgs` keyword the built-in closure is
+[`StaticSmagorinsky`](@ref Aeolus.Operators.StaticSmagorinsky)`(C_s)`,
+`κt = νt/Prₜ`; any [`AbstractSGSClosure`](@ref
+Aeolus.Operators.AbstractSGSClosure) passed as `sgs` replaces it.
 | `bcs`         | `FieldBoundaryConditions(:periodic)` | Velocity BCs.               |
 | `θ_bcs`       | `bcs`                        | Scalar BCs (may differ from velocity). |
 | `solver`      | `FFTPoissonSolver(mesh)`     | Any `AbstractPressureSolver`.       |
@@ -116,6 +125,7 @@ mutable struct BoussinesqSimulation{T,
     lap_w::Field{FaceZ,        T, Array{T,3}, M}
     lap_θ::Field{CellCenter,   T, Array{T,3}, M}
     νt::Field{CellCenter,      T, Array{T,3}, M}
+    κt::Field{CellCenter,      T, Array{T,3}, M}   # SGS scalar diffusivity (Era VI, #167)
 end
 
 function BoussinesqSimulation(mesh::RegularGrid{T};
@@ -149,6 +159,7 @@ function BoussinesqSimulation(mesh::RegularGrid{T};
     lu   = Field(FaceX(), mesh); lv = Field(FaceY(), mesh); lw = Field(FaceZ(), mesh)
     lθ   = Field(CellCenter(), mesh)
     νt   = Field(CellCenter(), mesh)
+    κt   = Field(CellCenter(), mesh)
 
     has_visc = ν != 0
     has_buoy = θ₀ != 0
@@ -169,7 +180,7 @@ function BoussinesqSimulation(mesh::RegularGrid{T};
                                 u, v, w, p, θ, qv,
                                 tu, tv, tw, tθ, tqv,
                                 div_buf, φ, dφdx, dφdy, dφdz,
-                                lu, lv, lw, lθ, νt)
+                                lu, lv, lw, lθ, νt, κt)
 end
 
 # -------------------------------------------------------------------------
@@ -177,7 +188,9 @@ end
 # -------------------------------------------------------------------------
 
 """
-    step!(sim::BoussinesqSimulation, dt; body_force! = nothing, post_predictor! = nothing)
+    step!(sim::BoussinesqSimulation, dt; body_force! = nothing, post_predictor! = nothing,
+          momentum_advection = momentum_advect!, sgs = nothing,
+          sgs_stress = :laplacian)
 
 Advance `sim` by `dt`. Two optional callbacks are supported:
 
@@ -202,23 +215,70 @@ Two keywords swap numerical operators without changing the algorithm:
     `(tu, tv, tw, u, v, w) -> momentum_advect_weno_z!(tu, tv, tw, u, v, w)`
     (`AdvectionSchemes`) selects the WENO-Z form.
 
-  * `eddy_viscosity! = nothing` — the SGS closure `f(νt, u, v, w)` that
-    fills the cell-centred eddy viscosity `νt` from the velocity (halos
-    filled). When given, it replaces the built-in
-    `compute_smagorinsky_νt!(νt, u, v, w, C_s)` and switches the SGS
-    terms on even if `C_s = 0`; the eddy-viscosity and eddy-diffusion
-    terms are then added at the same place in the tendency sum as for
-    the built-in closure, so a closure that computes the Smagorinsky
-    `νt` reproduces the built-in run bit for bit. Examples:
-    `compute_dynamic_smagorinsky_νt!` (`Operators`) or an `ML.MLSGS`.
+  * `sgs = nothing` — the subgrid-scale closure, any
+    [`AbstractSGSClosure`](@ref Aeolus.Operators.AbstractSGSClosure)
+    (`StaticSmagorinsky`, `DynamicSmagorinsky`, `ML.MLSGS`, …) or a plain
+    function `f(νt, u, v, w)`. When given it replaces the built-in
+    Smagorinsky closure and switches the SGS terms on even if `C_s = 0`.
+    The closure's coefficients are computed from the current state (halos
+    filled) into `sim.νt`/`sim.κt`, its momentum and scalar tendencies are
+    added where the built-in closure adds them (the scalar flux to θ and,
+    with `moisture = true`, to qv, which also gets `ν∇²qv`), and
+    [`advance_sgs!`](@ref Aeolus.Operators.advance_sgs!) commits its memory
+    once, after the projection. `StaticSmagorinsky(sim.C_s)` reproduces the
+    built-in run bit for bit.
+
+  * `eddy_viscosity! = nothing` — the pre-contract name of `sgs` for a
+    function `f(νt, u, v, w)`; still accepted (it is wrapped in a
+    `FunctionSGS`, `κt = νt/Prₜ`). Pass one of `sgs`, `eddy_viscosity!`.
+
+  * `sgs_stress = :laplacian` — the form of the SGS momentum divergence,
+    passed to [`add_sgs_momentum!`](@ref Aeolus.Operators.add_sgs_momentum!):
+    `:laplacian` is `∂ⱼ(νₜ∂ⱼuᵢ)` (the default; the pre-Era-VI runs bit for
+    bit), `:symmetric` the stress form `∂ⱼ(2νᵢⱼSᵢⱼ)` with the closure's
+    horizontal and vertical viscosities
+    ([`add_sgs_stress_divergence!`](@ref Aeolus.Operators.add_sgs_stress_divergence!),
+    P55-b). `step_rk3!`, `step_imex!`, `step_adaptive!` and the
+    sound-proof cores take the same keyword.
 """
 function step!(sim::BoussinesqSimulation{T}, dt::Real;
                body_force!::Union{Nothing, Function} = nothing,
                post_predictor!::Union{Nothing, Function} = nothing,
                momentum_advection::F = momentum_advect!,
-               eddy_viscosity!::E = nothing) where {T, F, E<:Union{Nothing, Function}}
+               sgs = nothing,
+               eddy_viscosity! = nothing,
+               sgs_stress::Symbol = :laplacian) where {T, F}
     Δt = T(dt)
+    closure = _active_sgs(sim, sgs, eddy_viscosity!)
+    _euler_projection!(sim, Δt, closure, body_force!, post_predictor!, momentum_advection,
+                       _check_sgs_stress(sgs_stress))
+    # the one commit of the closure's memory, after the projection
+    closure === nothing || advance_sgs!(closure, sim, Δt)
+    return sim
+end
 
+# The SGS flux of a transported scalar other than θ (qv): the closure's
+# `add_sgs_scalar!` when it diffuses every scalar with θ's κ_t (the default
+# `sgs_tracer_diffusivity!` returns `f.κh`, so a Prandtl-number closure is
+# bit for bit unchanged), else eddy diffusion with the scalar's own
+# diffusivity, computed into `scratch` (AMD, #176). The same rule as
+# `step_imex!`'s frozen qv coefficient. Halos of `ϕ` must be filled.
+function _add_sgs_tracer!(tϕ, ϕ, closure, f, sim, scratch)
+    κ = sgs_tracer_diffusivity!(scratch, closure, f, sim, ϕ)
+    if κ === f.κh
+        add_sgs_scalar!(tϕ, ϕ, closure, f, sim)
+    else
+        add_eddy_diffusion_scalar!(tϕ, ϕ, κ)
+    end
+    return tϕ
+end
+
+# One forward-Euler predictor + projection with the SGS closure `closure`
+# (or none). No commit: the drivers (step!, step_rk3!) commit once per step.
+function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
+                            closure::C, body_force!, post_predictor!,
+                            momentum_advection::F,
+                            sgs_stress::Symbol = :laplacian) where {T, C, F}
     # 1. Halo fill so all stencils see valid neighbours.
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
@@ -242,20 +302,22 @@ function step!(sim::BoussinesqSimulation{T}, dt::Real;
         _axpy_interior!(sim.tv, sim.ν, sim.lap_v, sim.mesh)
         _axpy_interior!(sim.tw, sim.ν, sim.lap_w, sim.mesh)
         _axpy_interior!(sim.tθ, sim.ν, sim.lap_θ, sim.mesh)
+        if sim.has_moisture                 # qv: the same molecular diffusivity as θ (#177)
+            laplacian(sim.lap_θ, sim.qv)
+            _axpy_interior!(sim.tqv, sim.ν, sim.lap_θ, sim.mesh)
+        end
     end
 
-    # 4. Smagorinsky-Lilly SGS (or the closure passed as `eddy_viscosity!`).
-    if sim.has_sgs || eddy_viscosity! !== nothing
-        if eddy_viscosity! === nothing
-            compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, sim.C_s)
-        else
-            eddy_viscosity!(sim.νt, sim.u, sim.v, sim.w)
-        end
-        fill_halos!(sim.νt, sim.bcs)
-        add_eddy_viscosity_u!(sim.tu, sim.u, sim.νt)
-        add_eddy_viscosity_v!(sim.tv, sim.v, sim.νt)
-        add_eddy_viscosity_w!(sim.tw, sim.w, sim.νt)
-        add_eddy_diffusion_scalar!(sim.tθ, sim.θ, sim.νt, sim.Pr_t)
+    # 4. SGS closure (the built-in Smagorinsky, or the `sgs` keyword): the
+    #    coefficients from the current state, then the tendencies. Every
+    #    transported scalar gets the closure's scalar flux: θ and, when
+    #    moist, qv (P56-a, #177 — before it qv was advected but never
+    #    diffused, a code bug).
+    if closure !== nothing
+        f = compute_sgs!(closure, sim)
+        add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim; stress = sgs_stress)
+        add_sgs_scalar!(sim.tθ, sim.θ, closure, f, sim)
+        sim.has_moisture && _add_sgs_tracer!(sim.tqv, sim.qv, closure, f, sim, sim.lap_θ)
     end
 
     # 5. Buoyancy on w-momentum. Moist buoyancy uses virtual θ when qv is on.
@@ -351,37 +413,64 @@ end
 # Cost: 3× the pressure solves per step.
 
 """
-    step_rk3!(sim::BoussinesqSimulation, dt)
+    step_rk3!(sim::BoussinesqSimulation, dt; sgs = nothing, eddy_viscosity! = nothing,
+              body_force! = nothing, post_predictor! = nothing,
+              sgs_stress = :laplacian)
 
 Advance one Shu-Osher SSP-RK3 step with a pressure projection at each of
 the three substages. Third-order-accurate in time for divergence-free
 motion. Costs three Poisson solves per step (vs. one for `step!`), so
 use only when the extra accuracy is needed.
+
+`sgs` is the SGS closure, as for [`step!`](@ref): its coefficients are
+recomputed at each substage from the substage state, and its memory is
+committed ([`advance_sgs!`](@ref Aeolus.Operators.advance_sgs!)) once, with
+`dt`, after the third substage — not three times. With `moisture = true`
+`qv` is combined over the substages like `θ` (before #177 it was not, so
+`qv` advanced by three Euler steps per call).
+
+`body_force!(sim, Δt)` and `post_predictor!(sim, Δt)` are `step!`'s hooks
+(added for the Era VI wall-bounded cases, P54-d #174): each SSP-RK3
+substage is one forward-Euler predictor + projection of length `dt`, and
+the hooks run inside every substage exactly where `step!` runs them (a
+tendency before the predictor; an implicit correction such as
+`WallModels.apply_wall_stress!` after it, before the projection). The
+step's net effect of a hook is the SSP-RK3 combination of its three
+substage effects, with weights 1/6, 1/6, 2/3.
 """
-function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real) where {T}
+function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
+                   sgs = nothing, eddy_viscosity! = nothing,
+                   body_force!::Union{Nothing, Function} = nothing,
+                   post_predictor!::Union{Nothing, Function} = nothing,
+                   sgs_stress::Symbol = :laplacian) where {T}
     Δt = T(dt)
+    closure = _active_sgs(sim, sgs, eddy_viscosity!)
+    _check_sgs_stress(sgs_stress)
 
     # Save current state
     m  = sim.mesh
     ii, jj, kk = interior(m)
     u0 = copy(sim.u.data); v0 = copy(sim.v.data); w0 = copy(sim.w.data)
     θ0 = copy(sim.θ.data)
+    moist = sim.has_moisture
+    q0 = moist ? copy(sim.qv.data) : θ0      # qv is combined like θ (#177)
 
-    _rk3_substep!(sim, Δt)              # u1 = uⁿ + Δt L(uⁿ), then project
+    _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress)     # u1 = uⁿ + Δt L(uⁿ), then project
     # combine into u1 (already there); save
     u1 = copy(sim.u.data); v1 = copy(sim.v.data); w1 = copy(sim.w.data)
     θ1 = copy(sim.θ.data)
 
-    _rk3_substep!(sim, Δt)              # u1 → u1 + Δt L(u1), then project
+    _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress)     # u1 → u1 + Δt L(u1), then project
     # combine to u2 = 3/4 uⁿ + 1/4 (…)
     @views begin
         sim.u.data .= 0.75 .* u0 .+ 0.25 .* sim.u.data
         sim.v.data .= 0.75 .* v0 .+ 0.25 .* sim.v.data
         sim.w.data .= 0.75 .* w0 .+ 0.25 .* sim.w.data
         sim.θ.data .= 0.75 .* θ0 .+ 0.25 .* sim.θ.data
+        moist && (sim.qv.data .= 0.75 .* q0 .+ 0.25 .* sim.qv.data)
     end
 
-    _rk3_substep!(sim, Δt)              # u2 → u2 + Δt L(u2), then project
+    _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress)     # u2 → u2 + Δt L(u2), then project
     # combine to uⁿ⁺¹ = 1/3 uⁿ + 2/3 (…)
     inv3 = one(T)/3; two3 = 2*inv3
     @views begin
@@ -389,16 +478,21 @@ function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real) where {T}
         sim.v.data .= inv3 .* v0 .+ two3 .* sim.v.data
         sim.w.data .= inv3 .* w0 .+ two3 .* sim.w.data
         sim.θ.data .= inv3 .* θ0 .+ two3 .* sim.θ.data
+        moist && (sim.qv.data .= inv3 .* q0 .+ two3 .* sim.qv.data)
     end
 
     # sim.t was advanced 3× by _rk3_substep!; correct to one nominal step
     sim.t = sim.t - 2Δt
+    closure === nothing || advance_sgs!(closure, sim, Δt)   # once per step
     return sim
 end
 
-# One projected Euler-like substep — factored out of step! so both
-# schemes can share the pressure projection.
-_rk3_substep!(sim::BoussinesqSimulation, Δt) = step!(sim, Δt)
+# One projected Euler-like substep — shared with step! (the pressure
+# projection), without step!'s commit of the closure memory.
+_rk3_substep!(sim::BoussinesqSimulation, Δt, closure, body_force! = nothing,
+              post_predictor! = nothing, sgs_stress::Symbol = :laplacian) =
+    _euler_projection!(sim, Δt, closure, body_force!, post_predictor!, momentum_advect!,
+                       sgs_stress)
 
 # -------------------------------------------------------------------------
 # Diagnostics

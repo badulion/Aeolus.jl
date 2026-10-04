@@ -42,7 +42,7 @@ using ..Fields
 using ..Fields: Field, location, interior_view, set!
 using ..BoundaryConditions
 using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
-                            Periodic, NoFlux, ImpermeableWall
+                            Periodic, NoFlux, ImpermeableWall, NoSlipWall
 using ..Simulations
 using ..Simulations: BoussinesqSimulation
 using ..Operators: divergence
@@ -92,13 +92,14 @@ _bck(s::Symbol) = s === :nest     ? NestBC()          :
                   s === :periodic ? Periodic()        :
                   s === :noflux   ? NoFlux()          :
                   s === :wall     ? ImpermeableWall() :
+                  s === :noslip   ? NoSlipWall()      :
                   error("nest_bcs: unknown BC kind $s")
 
 """
     nest_bcs(x=:nest, y=:nest, z=:nest)
 
 `FieldBoundaryConditions` for a nested child. `:nest` faces are left
-alone by `fill_halos!`; `:periodic`, `:noflux`, `:wall` behave as usual.
+alone by `fill_halos!`; `:periodic`, `:noflux`, `:wall`, `:noslip` behave as usual.
 A child that spans the parent's full extent in a direction should use the
 parent's BC there rather than `:nest`.
 """

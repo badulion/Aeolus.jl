@@ -49,6 +49,33 @@ mean_θ(case) = vec(mean(interior_view(case.sim.θ); dims = (1, 2)))
 checkerboard(case, k) = (θ = interior_view(case.sim.θ);
                          abs(mean(θ[i, j, k] * (-1)^(i + j) for i in axes(θ, 1), j in axes(θ, 2))))
 
+"""
+Smagorinsky with a commit count and the committed dt in its memory (rolled
+back on a retry). Instrumentation outside the memory: `calls` counts the
+coefficient evaluations, and evaluation number `sabotage_at` returns 10⁶ ×
+the Smagorinsky ν_t (an explicit step with it blows up, so the adaptive
+stepper rejects it after the step has committed).
+"""
+mutable struct CommitCounter <: AbstractSGSClosure
+    inner::StaticSmagorinsky{Float64,Nothing}
+    n::Int
+    dts::Vector{Float64}
+    calls::Int
+    sabotage_at::Int
+end
+CommitCounter(C_s) = CommitCounter(StaticSmagorinsky(C_s), 0, Float64[], 0, 0)
+function Aeolus.Operators.sgs_coefficients!(f::SGSFields, c::CommitCounter, sim)
+    c.calls += 1
+    sgs_coefficients!(f, c.inner, sim)
+    c.calls == c.sabotage_at && (f.νh.data .*= 1e6; f.κh.data .*= 1e6)
+    return f
+end
+Aeolus.Operators.add_sgs_scalar!(tϕ, ϕ, c::CommitCounter, f::SGSFields, sim) =
+    add_sgs_scalar!(tϕ, ϕ, c.inner, f, sim)        # the (νt, Pr_t) form: bit for bit the default
+Aeolus.Operators.advance_sgs!(c::CommitCounter, sim, dt) = (c.n += 1; push!(c.dts, dt); c)
+Aeolus.Operators.sgs_state(c::CommitCounter) = (c.n, copy(c.dts))
+Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = copy(s[2]); c)
+
 @testset "Berlin dynamics options (#133)" begin
 
     @testset "slots, defaults, and the incompatible pairs are rejected with the reason" begin
@@ -84,10 +111,13 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
                 @test err !== nothing && occursin("incompatible", err) &&
                       occursin("density_weighted_cg", err)
             end
-            # unweighted WENO-Z momentum and the eddy_viscosity! closures
-            for (s, p) in ((:momentum_advection, :weno_z), (:sgs, :dynamic), (:sgs, :mlsgs))
-                err = selection_error(merge(soundproof(core), Dict(s => p)))
-                @test err !== nothing && occursin("incompatible", err)
+            # unweighted WENO-Z momentum
+            err = selection_error(merge(soundproof(core), Dict(:momentum_advection => :weno_z)))
+            @test err !== nothing && occursin("incompatible", err)
+            # every SGS closure: the sound-proof step takes the `sgs` of the
+            # Era VI contract like the Boussinesq one (#167)
+            for p in (:dynamic, :mlsgs)
+                @test selection_error(merge(soundproof(core), Dict(:sgs => p))) === nothing
             end
         end
         # the weighted solver on the Boussinesq core
@@ -158,6 +188,29 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
             @printf("  [%s] 24 s: max|Δ⟨θ⟩| = %.1e K, max|Δw| = %.1e m/s (max|w| %.2f), ∇·(Wu) %.1e, ∇·u %.1e s⁻¹, Hρ = %.0f m\n",
                     core, Δθ, Δw, wmax, Aeolus.Anelastic.constraint_residual(sim), max_divergence(sim), Hρ)
         end
+    end
+
+    @testset "sound-proof core × dynamic / ML SGS (#167)" begin
+        # The sound-proof step takes the contract's `sgs` closure: the dynamic
+        # coefficient runs on the anelastic core, and MLSGS(Smagorinsky) is
+        # the core's built-in closure bit for bit.
+        an = run_smoke(physics = soundproof(:anelastic))
+        for core in (:anelastic, :pseudo_incompressible)
+            dyn = run_smoke(physics = merge(soundproof(core), Dict(:sgs => :dynamic)))
+            c = BC.find_coupling(dyn, :sgs_dynamic)
+            @test dyn.clock.n == 12 && !dyn.clock.blowup
+            @test all(x -> 0 <= x <= c.opts.cs_max^2, c.ws.cs2)
+            @test maximum(interior_view(dyn.sim.νt)) > 0
+            @test interior_view(dyn.sim.κt) == interior_view(dyn.sim.νt) ./ dyn.sim.Pr_t
+            p = BC.dynamic_cs_profile(c, dyn)
+            core === :anelastic &&
+                @test maximum(abs.(interior_view(dyn.sim.u) .- interior_view(an.sim.u))) > 1e-6
+            @printf("  [%s + dynamic SGS] 24 s: mean C_s canopy %.3f, free stream %.3f; max ν_t %.2f m²/s\n",
+                    core, p.canopy, p.free, maximum(interior_view(dyn.sim.νt)))
+        end
+        ml = run_smoke(physics = merge(soundproof(:anelastic), Dict(:sgs => :mlsgs)))
+        @test all(f -> interior_view(getfield(ml.sim, f)) == interior_view(getfield(an.sim, f)),
+                  (:u, :v, :w, :θ, :νt, :κt))
     end
 
     @testset "sound-proof core: W-weighted tracer transport" begin
@@ -289,27 +342,51 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
     end
 
     @testset "every time stepper carries the numerics slots' step! keywords" begin
-        # An MLSGS closure that is Smagorinsky with a call counter: the
-        # flow is the default one bit for bit, and the count shows whether
-        # the stepper passed `eddy_viscosity!` on (a dropped keyword would
-        # leave it at 0).
-        calls = Ref(0)
+        # A stateful closure that is Smagorinsky with a commit counter in its
+        # memory: the flow is the default one bit for bit, and the count
+        # shows that the stepper passed `sgs` on (a dropped keyword would
+        # leave it at 0) and that the closure commits exactly once per
+        # accepted step whatever the stepper (fixed: one step!; IMEX: one
+        # step_imex!; adaptive: one step_adaptive! piece, after the CFL
+        # estimate, which evaluates the closure without committing).
         C_s = BC.CaseConfig(:smoke).C_s
-        counting(νt, u, v, w, mesh) =
-            (calls[] += 1; Aeolus.Operators.compute_smagorinsky_νt!(νt, u, v, w, C_s); nothing)
-        mlsgs = Dict{Symbol,Any}(:sgs_mlsgs => (fn = counting,))
         plain = Dict(ts => run_smoke(physics = Dict(:timestepper => ts)) for ts in (:adaptive, :imex))
         plain[:fixed] = bous
         state(c) = (interior_view(c.sim.u), interior_view(c.sim.w), interior_view(c.sim.θ))
         for ts in (:fixed, :adaptive, :imex)
-            calls[] = 0
-            case = run_smoke(physics = Dict(:timestepper => ts, :sgs => :mlsgs), options = mlsgs)
+            case = BC.build_case(smoke(physics = Dict(:timestepper => ts)); io = devnull)
+            @test case.step_kwargs.sgs isa StaticSmagorinsky       # the default provider's closure
+            cnt = CommitCounter(C_s)
+            case.step_kwargs = merge(case.step_kwargs, (sgs = cnt,))
+            BC.run_case!(case)
             n = case.clock.n
-            # fixed: once per step!; IMEX: once per step (ν_eff frozen);
-            # adaptive: once in next_dt (the diffusive limit) and once per step!
-            @test calls[] == (ts === :adaptive ? 2n : n)
-            @test state(case) == state(plain[ts])                    # bitwise
+            ts === :adaptive && @test BC.find_coupling(case, :timestep_adaptive).stats.pieces == n
+            @test cnt.n == n                                        # one commit per accepted step
+            @test sum(cnt.dts) ≈ case.sim.t
+            @test state(case) == state(plain[ts])                   # bitwise
+            @printf("  [%s] %d steps: %d SGS commits\n", ts, n, cnt.n)
         end
+        # a forced retry: the first try of step 5 runs with 10⁶ × ν_t and is
+        # rejected after it committed; the commit is rolled back with the
+        # state, so the commits are exactly the accepted pieces, each with
+        # its own dt, and they add up to the simulated time
+        case = BC.build_case(smoke(physics = Dict(:timestepper => :adaptive)); io = devnull)
+        cnt = CommitCounter(C_s)
+        case.step_kwargs = merge(case.step_kwargs, (sgs = cnt,))
+        ad = BC.find_coupling(case, :timestep_adaptive)
+        for _ in 1:4
+            BC.step_case!(case)
+        end
+        @test cnt.n == 4 && ad.stats.retries == 0
+        cnt.sabotage_at = cnt.calls + 2           # +1: the CFL estimate, +2: the step
+        BC.step_case!(case)
+        @test ad.stats.retries == 1
+        @test ad.stats.pieces == 6                 # step 5 in two halves
+        @test cnt.n == ad.stats.pieces == 6
+        @test cnt.dts[5] == cnt.dts[6] && isapprox(sum(cnt.dts), case.sim.t; rtol = 1e-14)
+        @test all(isfinite, interior_view(case.sim.u)) && maximum(abs, interior_view(case.sim.u)) < 10
+        @printf("  [adaptive, forced retry] step 5: %d retry, 2 accepted pieces of %.3f s; commits %d = pieces %d\n",
+                ad.stats.retries, cnt.dts[5], cnt.n, ad.stats.pieces)
         # the WENO-Z momentum operator reaches the adaptive and IMEX steps
         for ts in (:adaptive, :imex)
             wz = run_smoke(physics = Dict(:timestepper => ts, :momentum_advection => :weno_z))
@@ -344,7 +421,11 @@ checkerboard(case, k) = (θ = interior_view(case.sim.θ);
         @test d0.νt_max > 0
         @test d0.νt_max == maximum(interior_view(case0.sim.νt))
         @test isfinite(d0.dt_sgs)
-        @test d0.dt_diff ≈ k0.C_diffusive * Δ²harm / (case0.sim.ν + d0.νt_max)
+        # the Berlin providers run the stress form (P55-b): its momentum limit
+        # uses stress_form_cfl_viscosity, 2νt_max for νh = νv
+        @test get(case0.step_kwargs, :sgs_stress, nothing) === :symmetric
+        @test d0.νt_cfl ≈ 2 * d0.νt_max
+        @test d0.dt_diff ≈ k0.C_diffusive * Δ²harm / (case0.sim.ν + d0.νt_cfl)
         @test d0.dt_diff < k0.C_diffusive * Δ²harm / case0.sim.ν       # shorter than molecular-only
         @printf("  [adaptive, C_s = 0] closure νt_max = %.3e m²/s, dt_diff = %.3f s, dt_sgs = %.3f s\n",
                 d0.νt_max, d0.dt_diff, d0.dt_sgs)

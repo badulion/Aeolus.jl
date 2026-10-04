@@ -179,6 +179,101 @@ is 0.127 of it. At the default `probe_factor = 1` the trilinear
 interpolation of the concave log profile at one cell gives 0.931: for
 wall modelling the probe should be built at least two cells out.
 
+## Wall-bounded benchmark cases
+
+`src/wall_models/channel_cases.jl` (P54-d, #174) is the shared harness
+every Era VI closure is validated on. It adds no wall physics: the
+wall stress is `apply_wall_stress!` above, the SGS model is whatever
+`AbstractSGSClosure` is passed, and the diagnostics are Operators'
+`phi_m_profile`, `total_stress_profile` and `streamwise_spectrum`.
+
+**`half_channel_case`** — the neutral ABL of Porté-Agel, Meneveau &
+Parlange (2000) and Bou-Zeid, Meneveau & Parlange (2005): a
+``2πH × 2πH × H`` box, periodic in x and y, driven by the mean pressure
+gradient ``-∂p/∂x/ρ = u_*^2/H`` (a body force on ``u``), free-slip top,
+`RoughLogLaw(z0)` wall stress at the bottom (``z_0/H = 10^{-4}``),
+inviscid, no Coriolis and **no wall-damping function**. In statistically
+steady state the plane-mean momentum budget is
+
+```math
+τ_{res}(z) + τ_{sgs}(z) = u_*^2\Big(1 - \frac{z}{H}\Big), \qquad τ_{wall} = u_*^2 ,
+```
+
+and in the surface layer ``Φ_m = (κz/u_*)∂⟨U⟩/∂z = 1``.
+
+**`channel_case`** — the smooth two-wall channel at ``Re_τ = u_τδ/ν``
+(``2πδ × πδ × 2δ``, `SpaldingLaw` at both walls, forcing ``u_τ^2/δ``),
+for the log-layer-mismatch study (P57-b) and the stratified and
+relaminarising channels (P55-f, P59-e).
+
+Both return a `WallBoundedCase`; `run_channel!` advances it with SSP-RK3
+(`step_rk3!` now takes `step!`'s `body_force!`/`post_predictor!` hooks)
+and returns time averages. `advance_channel!` records the stress the wall
+operator applied in each step, with the SSP-RK3 weights 1/6, 1/6, 2/3 of
+its three substages, so the plane-mean momentum budget closes per step:
+``L_z Δ⟨u⟩ = (G L_z - τ_b - τ_t)Δt`` to 1e-11 relative (RK3, Euler, one
+and two walls, local and Schumann).
+
+The **staggered-consistent Φ_m** differences the plane-mean speed of two
+cell centres and places the result on the w-face between them, so for
+the exact log law it is ``(z/Δz)\ln[(z + Δz/2)/(z - Δz/2)] =
+1 + (Δz/z)^2/12 + (Δz/z)^4/80 + …`` — `ln 3 = 1.099` at the first face;
+the test checks this to 1e-12 and the observed order (2.042, 2.010,
+2.003). The **stress profile** is formed with the stencils the solver
+integrates (the centred flux product of `momentum_advect!`, the edge
+viscosity of `add_eddy_viscosity_u!`), so its divergence equals the
+plane-mean tendency to round-off (1e-12). **E11** is Parseval-normalised
+(``Σ E_{11} Δk_1 = ⟨u'^2⟩`` to 1e-12).
+
+Measured in `test/era6_neutral_abl.jl` (seed 1; about 60 s in all):
+
+| case | quantity | measured | expected |
+| :-- | :-- | :-- | :-- |
+| half channel 24³, `StaticSmagorinsky(0.1)`, 8-20 H/u* | ⟨τ_w⟩ | 0.972 u*² (12 seeds: 0.961-0.991) | u*² ± 5 % |
+| same | max ``\|τ_{tot} - u_*^2(1 - z/H)\|`` | 0.027 u*² (12 seeds: ≤ 0.040) | ≤ 0.1 u*² |
+| then `StaticSmagorinsky(0.17)`, 25-30 H/u* | max Φ_m, first 3 faces | 1.621 (0.760, 1.134, 1.621; 12 seeds: 1.45-1.65) | > 1.3; ≈ 1.5-2 (Mason & Thomson 1992) |
+| channel 16×8×16, Re_τ = 1000, `StaticSmagorinsky(0.065)`, 2-10 δ/u_τ | ⟨τ_w⟩, both walls | 0.994 u_τ² (bottom 0.977, top 1.011) | u_τ² ± 2 % |
+
+Two expectations of the plan proved wrong and were changed, with the
+tolerances kept. (1) A 10 H/u* run averaged over the last 5 is too
+short: the mean wall stress over 5-10 H/u* scattered over 0.946-1.027 u*²
+across 10 seeds, because the flow is still accelerating toward its
+Smagorinsky equilibrium and 5 H/u* averages of a 24³ box fluctuate by a
+few per cent; averaging over 8-20 H/u* gives 0.961-0.991. (2) At 24³ a
+`StaticSmagorinsky(0.17)` run started from noise stays laminar-like
+(``τ_w`` 0.68-0.93 u*² for 40 H/u*), so the overshoot is measured after
+switching the closure of the developed C_s = 0.1 flow. In the channel,
+C_s = 0.1 at 16×8×16 is likewise too dissipative (⟨τ_w⟩ 0.77-0.86 u_τ²
+over 2-10 δ/u_τ); the default is the channel value 0.065 of Moin & Kim
+(1982), which gives 0.994-1.007 over four seeds.
+
+The initial state is the law's profile plus seeded uniform noise of
+amplitude `noise·u*` (default 3, rms 1.7 u*); with `noise = 0.3` the
+24³ half channel never becomes turbulent in 30 H/u* (``τ_w`` ≈ 0.5-0.7
+u*²): the eddy viscosity damps weak noise.
+
+`examples/validation/neutral_abl.jl` runs `StaticSmagorinsky(0.1)` at 32³
+and 48³ for 50 H/u* and plots Φ_m(z) and E11(k1):
+averaged over 30-50 H/u*, ⟨τ_w⟩ = 1.002 u*² (32³, 28,157 steps, 188 s)
+and 1.001 u*² (48³, 45,999 steps, 904 s) — the 2-3 % deficit of the
+shorter test window is the start-up transient, gone by 30 H/u*. The
+Smagorinsky overshoot peaks at Φ_m = 1.58 (32³, z/H = 0.094) and 1.49
+(48³, z/H = 0.062), at the third face in both, and Φ_m falls below 1
+above z/H ≈ 0.25 (32³) and 0.15 (48³): the Porté-Agel et al. (2000,
+Fig. 7) shape. E11 follows k₁^(-5/3) only up to k₁H ≈ 8 at 48³ and then
+falls by four decades to the Nyquist wavenumber (k₁H = 24): the static
+model's excess dissipation near the filter scale, which the
+scale-dependent model of P54-e is meant to reduce.
+
+Hooks reserved for later issues (documented, refusing non-default
+values): `filter` (P57-b), `surface_heat_flux` (P58-e), `bottom_bc =
+:noslip` and `θ_walls` (P55-f, P59-e).
+
+The cases are idealised validation set-ups and are not coupled to the
+Berlin run (a stated exception, #174): the wall physics they exercise is
+`apply_wall_stress!`, which is already the default Berlin ground stress,
+and their diagnostics live in Operators (infrastructure, exempt).
+
 ## In the Berlin case
 
 The ground of the flagship is this operator with a `MOSTWallLaw` per
@@ -226,6 +321,19 @@ case has no cut-cell provider yet (CutCell is pending on #152).
   * Kawai, S. & Larsson, J. (2012). Wall-modeling in large eddy
     simulation: length scales, grid resolution, and accuracy. *Phys.
     Fluids*, 24, 015105.
+
+  * Porté-Agel, F., Meneveau, C. & Parlange, M. B. (2000). A
+    scale-dependent dynamic model for large-eddy simulation: application
+    to a neutral atmospheric boundary layer. *J. Fluid Mech.*, 415,
+    261-284.
+  * Bou-Zeid, E., Meneveau, C. & Parlange, M. B. (2005). A scale-dependent
+    Lagrangian dynamic model for large eddy simulation of complex
+    turbulent flows. *Phys. Fluids*, 17, 025105.
+  * Mason, P. J. & Thomson, D. J. (1992). Stochastic backscatter in
+    large-eddy simulations of boundary layers. *J. Fluid Mech.*, 242,
+    51-78.
+  * Moin, P. & Kim, J. (1982). Numerical investigation of turbulent
+    channel flow. *J. Fluid Mech.*, 118, 341-377.
   * Lee, M. & Moser, R. D. (2015). Direct numerical simulation of
     turbulent channel flow up to Re_τ ≈ 5200. *J. Fluid Mech.*, 774,
     395-415.
