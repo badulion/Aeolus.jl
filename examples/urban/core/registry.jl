@@ -123,7 +123,7 @@ sim_options(::Type{<:AbstractCoupling}, cfg, mesh, opts) = (;)
     step_options(c, case) -> NamedTuple
 
 Keywords `c` adds to every dynamics step (e.g. `momentum_advection`,
-`eddy_viscosity!`), collected into `case.step_kwargs` when the schedule
+`sgs`), collected into `case.step_kwargs` when the schedule
 is built and passed by the `:timestepper` provider to `step!` (or to
 `step_imex!`, which takes the same keywords). Two couplings may not set
 the same keyword.

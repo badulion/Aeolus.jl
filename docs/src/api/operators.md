@@ -53,6 +53,17 @@ Aeolus.Operators.add_eddy_viscosity_w!
 Aeolus.Operators.add_eddy_diffusion_scalar!
 ```
 
+## Stratification (Era VI, P58-a)
+
+Pointwise fields of the [`TurbulenceStability`](era6/turbulence_stability.md)
+contract.
+
+```@docs
+Aeolus.Operators.buoyancy_frequency_squared!
+Aeolus.Operators.strain_rate_squared!
+Aeolus.Operators.gradient_richardson!
+```
+
 ## Advection schemes
 
 ```@docs

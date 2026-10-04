@@ -242,8 +242,10 @@ end
             interior_view(u) .+= 0.3                         # a mean flow lands in shell 0
             k, E = isotropic_energy_spectrum(u, v, w)
             Δk = k[2] - k[1]
-            ctr(f, s) = 0.5 .* (interior_view(f) .+ circshift(interior_view(f), s))
-            KE = 0.5 * mean(ctr(u, (-1, 0, 0)) .^ 2 .+ ctr(v, (0, -1, 0)) .^ 2 .+ ctr(w, (0, 0, -1)) .^ 2)
+            # Parseval against the stored face values: the solver's kinetic
+            # energy, not that of a cell-centre interpolation (which damps
+            # mode k by Π cos²(k_jΔ_j/2), see the P54-c review on #205)
+            KE = 0.5 * mean(interior_view(u) .^ 2 .+ interior_view(v) .^ 2 .+ interior_view(w) .^ 2)
             @test abs(sum(E) * Δk - KE) < 1e-12 * KE
             @test Δk ≈ 2π / maximum(ext)
             @test E[1] * Δk ≈ 0.5 * sum(f -> mean(interior_view(f))^2, (u, v, w)) rtol = 1e-12   # shell 0 = the mean flow
@@ -257,10 +259,19 @@ end
             @test E[k0 + 1] ≈ 0.25 rtol = 1e-12
             @test maximum(abs, E[[1:k0; k0+2:end]]) < 1e-12
         end
-        # a w = cos(k0 x) on z-faces: the centre interpolation in z is exact
+        # a w = cos(k0 x) on z-faces
         set!(u, 0.0); set!(w, (x, y, z) -> cos(3x))
         k, E = isotropic_energy_spectrum(u, v, w)
         @test E[4] ≈ 0.25 rtol = 1e-12
+        # a mode along the staggered direction keeps its full energy at
+        # every k, up to the last resolved one (a centre average would
+        # report cos²(kΔ/2) of it: 0.5 at k = k_c/2, 0.0096 at k = 15)
+        set!(w, 0.0)
+        for k0 in (8, 15)
+            set!(u, (x, y, z) -> sin(k0 * x))
+            k, E = isotropic_energy_spectrum(u, v, w)
+            @test E[k0 + 1] ≈ 0.25 rtol = 1e-12
+        end
     end
 
     @testset "isotropic random field: solenoidal, spectrum as requested" begin
@@ -274,6 +285,10 @@ end
         gscale = maximum(abs, diff(interior_view(sim.u); dims = 1)) / mesh.dx
         @test max_divergence(sim) < 1e-12 * gscale
         @test max_divergence(sim) < 1e-12
+        # the solver's kinetic energy is the requested Σ E(k_n) Δk: the
+        # spectrum is that of the face values the model carries
+        Kreq = sum(Etarget.(1:16))                          # Δk = 1
+        @test kinetic_energy(sim) / (2π)^3 ≈ Kreq rtol = 1e-10
         # every shell holds exactly E(k) Δk (construction), at all k up to π/Δ
         k, E = isotropic_energy_spectrum(sim.u, sim.v, sim.w)
         rel = abs.(E[2:17] ./ Etarget.(k[2:17]) .- 1)
