@@ -200,7 +200,11 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
     cells, nfb = matching_cells(case.geom, bus.k_air, mesh, o.h_wm_cells, o.h_wm_classes)
     input = MatchingInput(; h_wm_cells = cells, T_f = o.input_T_f)
     plain = o.input_T_f == 0 && all(==(1), cells)
-    return SurfaceExchangeMOST(P, o.U_min, Dict{UInt8,Float64}(o.z0m), o.z0h_ratio,
+    # the per-class roughness table goes on the bus: the facade wall model
+    # (#179) reads the wall and glass z0m from it
+    z0m = Dict{UInt8,Float64}(o.z0m)
+    bus.z0m_class = z0m
+    return SurfaceExchangeMOST(P, o.U_min, z0m, o.z0h_ratio,
                                false, 0.0, 0.0, 0.0, z(), laws, WallModel(laws), fill(Inf, Nx, Ny),
                                z(), Symbol(o.wall_formulation), input, plain,
                                fill(mesh.dz / 2, Nx, Ny), fill(mesh.dz / 2, Nx, Ny), nfb,

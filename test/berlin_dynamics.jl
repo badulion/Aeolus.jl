@@ -194,7 +194,9 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         # The sound-proof step takes the contract's `sgs` closure: the dynamic
         # coefficient runs on the anelastic core, and MLSGS(Smagorinsky) is
         # the core's built-in closure bit for bit.
-        an = run_smoke(physics = soundproof(:anelastic))
+        # (MLSGS(Smagorinsky) is compared with the :smagorinsky provider; the
+        # default is the TKE closure since #182)
+        an = run_smoke(physics = merge(soundproof(:anelastic), Dict(:sgs => :smagorinsky)))
         for core in (:anelastic, :pseudo_incompressible)
             dyn = run_smoke(physics = merge(soundproof(core), Dict(:sgs => :dynamic)))
             c = BC.find_coupling(dyn, :sgs_dynamic)
@@ -255,12 +257,23 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         dt_diff = k.C_diffusive * Δ² / cfg.ν
         @test isapprox(dt_diff, 3.70; atol = 0.01)
         @test case.sim.t ≈ 24.0 && s.dt_sum ≈ 24.0
-        @test s.n < 12                          # measured 9 steps for 24 s
+        @test s.n < 12                          # measured 8 steps for 24 s (9 with :smagorinsky)
         @test s.retries == 0
         @test s.dt_max <= dt_diff + 1e-12       # never above the diffusive limit
         @test s.dt_max > cfg.dt                 # but longer than the fixed 2 s
         @test s.cfl_max <= k.C_advective
-        @test get(s.limiters, :diffusive, 0) + get(s.limiters, :sgs, 0) == s.n   # diffusion binds
+        # diffusion (the molecular ν = 2 m²/s: 3.70 s) and advection (≈ 3.54 s,
+        # 4 % below it) are the two binding limits. Measured with the default
+        # TKE closure (#182) and the facade wall model (#179): 4 diffusive +
+        # 4 advective of 8 steps, dt_max 3.543 s; with :smagorinsky all 9
+        # diffusive. (Before #179 was merged the TKE run was 7 + 1: the
+        # facade log-law stress replaces the stencil's no-slip facade drag,
+        # and with the TKE closure's lower canopy ν_t the canopy flow is
+        # faster, max CFL 0.499 against 0.458 with :smagorinsky.)
+        @test keys(s.limiters) ⊆ Set([:diffusive, :sgs, :advective])
+        @test sum(values(s.limiters)) == s.n
+        @test get(s.limiters, :diffusive, 0) + get(s.limiters, :sgs, 0) >= s.n ÷ 2
+        @test s.dt_max >= 0.95 * dt_diff        # the advective limit sits just below
         # the ledgers close with a varying dt (they book with ledger.dt)
         @test case.ledger.elapsed ≈ 24.0
         for r in BC.surface_budget(case.ledger)
@@ -349,13 +362,15 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         # accepted step whatever the stepper (fixed: one step!; IMEX: one
         # step_imex!; adaptive: one step_adaptive! piece, after the CFL
         # estimate, which evaluates the closure without committing).
+        # (on the :smagorinsky provider, the default before #182: the counter
+        # wraps StaticSmagorinsky, so its flow is that provider's bit for bit)
         C_s = BC.CaseConfig(:smoke).C_s
-        plain = Dict(ts => run_smoke(physics = Dict(:timestepper => ts)) for ts in (:adaptive, :imex))
-        plain[:fixed] = bous
+        smag(ts) = Dict(:timestepper => ts, :sgs => :smagorinsky)
+        plain = Dict(ts => run_smoke(physics = smag(ts)) for ts in (:fixed, :adaptive, :imex))
         state(c) = (interior_view(c.sim.u), interior_view(c.sim.w), interior_view(c.sim.θ))
         for ts in (:fixed, :adaptive, :imex)
-            case = BC.build_case(smoke(physics = Dict(:timestepper => ts)); io = devnull)
-            @test case.step_kwargs.sgs isa StaticSmagorinsky       # the default provider's closure
+            case = BC.build_case(smoke(physics = smag(ts)); io = devnull)
+            @test case.step_kwargs.sgs isa StaticSmagorinsky       # the provider's closure
             cnt = CommitCounter(C_s)
             case.step_kwargs = merge(case.step_kwargs, (sgs = cnt,))
             BC.run_case!(case)
@@ -370,7 +385,7 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         # rejected after it committed; the commit is rolled back with the
         # state, so the commits are exactly the accepted pieces, each with
         # its own dt, and they add up to the simulated time
-        case = BC.build_case(smoke(physics = Dict(:timestepper => :adaptive)); io = devnull)
+        case = BC.build_case(smoke(physics = smag(:adaptive)); io = devnull)
         cnt = CommitCounter(C_s)
         case.step_kwargs = merge(case.step_kwargs, (sgs = cnt,))
         ad = BC.find_coupling(case, :timestep_adaptive)
@@ -421,7 +436,11 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
         @test d0.νt_max > 0
         @test d0.νt_max == maximum(interior_view(case0.sim.νt))
         @test isfinite(d0.dt_sgs)
-        @test d0.dt_diff ≈ k0.C_diffusive * Δ²harm / (case0.sim.ν + d0.νt_max)
+        # the Berlin providers run the stress form (P55-b): its momentum limit
+        # uses stress_form_cfl_viscosity, 2νt_max for νh = νv
+        @test get(case0.step_kwargs, :sgs_stress, nothing) === :symmetric
+        @test d0.νt_cfl ≈ 2 * d0.νt_max
+        @test d0.dt_diff ≈ k0.C_diffusive * Δ²harm / (case0.sim.ν + d0.νt_cfl)
         @test d0.dt_diff < k0.C_diffusive * Δ²harm / case0.sim.ν       # shorter than molecular-only
         @printf("  [adaptive, C_s = 0] closure νt_max = %.3e m²/s, dt_diff = %.3f s, dt_sgs = %.3f s\n",
                 d0.νt_max, d0.dt_diff, d0.dt_sgs)
