@@ -4,8 +4,10 @@ using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: Field, mesh, interior_view
-using ..BoundaryConditions: fill_halos!, Periodic
-using FFTW: plan_rfft, rfft, irfft, fft, ifft, fftfreq
+using ..Grids: interior
+using ..BoundaryConditions: BoundaryConditions, fill_halos!, Periodic, FieldBoundaryConditions
+using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
+using FFTW: rfft, irfft, fft, ifft, fftfreq, plan_rfft
 using Random: AbstractRNG, default_rng, randn
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
@@ -24,11 +26,33 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
 # Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
+       sgs_tracer_diffusivity!,
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
 # Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
 export LagrangianDynamicSmagorinsky
+# Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
+export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
+       add_sgs_stress_divergence!, sgs_stress_dissipation
+# Era VI (P55-c, #181): the tensorial scalar eddy diffusivity (operators/scalar_tensor.jl)
+export DiffusivityTensor, diagonal_tensor!, bounded_directions,
+       add_tensor_diffusion_scalar!, isentropic_tensor!,
+       sgs_scalar_tensor, IsentropicDiffusion
+export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
+# The one damping-profile implementation behind add_sponge! and the fringe (P59-d, #185).
+export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
+       DampingProfile, sponge_profile, damping_rate
+# Era VI (P55-d, #176): AMD and Vreman closures (operators/sgs_amd_vreman.jl)
+export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
+       compute_vreman_νt!,
+       sgs_buoyancy_parameter
+# Era VI, Phase 56 (P56-c, #178): a-priori SGS-stress analysis (operators/apriori.jl)
+export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
+       eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
+       lumley_invariants, apriori_metrics, dissipation_matched_cs
+# Era VI (P59-b, #184): the σ-model closure (operators/sigma_closure.jl)
+export SigmaModel, compute_sigma_νt!
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -170,20 +194,62 @@ add_eddy_viscosity_u!(tu, u, νt) = _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
 @doc (@doc add_eddy_viscosity_u!) add_eddy_viscosity_w!(tw, w, νt) = _add_eddy_viscosity_w!(tw, w, νt, mesh(w))
 
 """
-    add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field)
+    add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
     add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t)
+    add_eddy_diffusion_scalar!(tϕ, ϕ, κh::Field, κv::Field)
 
 Add the conservative eddy-diffusion tendency `∂/∂xⱼ(κₜ ∂ϕ/∂xⱼ)` to the
 cell-centred scalar tendency `tϕ`, with the cell-centred diffusivity `κt`
-averaged linearly to each face. The four-argument form is
+averaged linearly to each face. The four-argument form with a number is
 `(1/Prₜ) ∂/∂xⱼ(νₜ ∂ϕ/∂xⱼ)`: the same kernel, with the turbulent Prandtl
-number applied as a factor after the flux divergence. Halos of `ϕ` and of
-the coefficient field must be filled.
+number applied as a factor after the flux divergence.
+
+The form with two fields is the **diagonal** operator (P55-c, #181):
+`∂/∂x(κh ∂ϕ/∂x) + ∂/∂y(κh ∂ϕ/∂y) + ∂/∂z(κv ∂ϕ/∂z)`, `κh` on the x and y
+faces and `κv` on the z faces. It is the diffusivity tensor
+`diag(κh, κh, κv)`; the three-argument isotropic form is its case
+`κv = κh`, bit for bit (one kernel). The general symmetric tensor is
+[`add_tensor_diffusion_scalar!`](@ref). Halos of `ϕ` and of the
+coefficient fields must be filled.
+
+Keywords of the three-argument form (P56-a, #177):
+
+  * `mask` — a storage-sized `AbstractArray{Bool,3}` of solid cells (e.g.
+    `IBM.SolidMask(...).mask`). A face with a solid cell on either side
+    carries **no flux**, so a scalar does not diffuse into or out of a
+    building, and the tendency of a solid cell is left untouched. Every
+    open face carries the unmasked flux, so the fluid integral `Σ ϕ dV` is
+    conserved exactly (up to round-off). The halo entries of `mask` must
+    be consistent with the boundary conditions of `ϕ` (periodic copies
+    across a periodic seam; a `false` halo next to a no-flux wall is
+    harmless, since that face carries no gradient).
+  * `weights = (Wc, Wf)` — the sound-proof (anelastic / pseudo-incompressible)
+    form `(1/W) ∇·(W κₜ ∇ϕ)`, with a cell weight `Wc[k]` and a z-face weight
+    `Wf[k]` (bottom face of cell `k`) per storage level (`Anelastic.constraint_weights`).
+    It conserves `Σ W ϕ dV` instead of `Σ ϕ dV`.
+
+With both `nothing` (default) this is bit for bit the unmasked kernel.
 """
-add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field) =
-    _add_eddy_diffusion_scalar!(tϕ, ϕ, κt, one(eltype(κt.data)), mesh(ϕ))
+function add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
+    mask === nothing && weights === nothing &&
+        return _add_eddy_diffusion_scalar!(tϕ, ϕ, κt, one(eltype(κt.data)), mesh(ϕ))
+    g = mesh(ϕ)
+    if mask !== nothing
+        size(mask) == size(ϕ.data) ||
+            throw(DimensionMismatch("mask has size $(size(mask)); expected the storage size $(size(ϕ.data))"))
+    end
+    wc, wf = weights === nothing ? (nothing, nothing) : weights
+    if weights !== nothing
+        n = size(ϕ.data, 3)
+        (length(wc) >= n && length(wf) >= n) ||
+            throw(DimensionMismatch("weights: need Wc and Wf per storage level ($n), got $(length(wc)), $(length(wf))"))
+    end
+    return _add_eddy_diffusion_scalar_masked!(tϕ, ϕ, κt, g, mask, wc, wf)
+end
 add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t::Real) =
     _add_eddy_diffusion_scalar!(tϕ, ϕ, νt, 1 / Pr_t, mesh(ϕ))
+add_eddy_diffusion_scalar!(tϕ, ϕ, κh::Field, κv::Field) =
+    _add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv, one(eltype(κh.data)), mesh(ϕ))
 
 """
     add_surface_flux!(tϕ, F_bot, F_top)
@@ -200,6 +266,10 @@ add_surface_flux!(tϕ, F_bot, F_top) = _add_surface_flux!(tϕ, F_bot, F_top, mes
 Rayleigh damping toward `f_ref` in the region `z ≥ z_start`. Damping rate
 grows smoothly `α(z) = α_max sin²(π/2 (z - z_start)/(z_top - z_start))`.
 Adds `-α(z)·(f - f_ref)` to `tf` for cells inside the sponge region.
+
+The rate is [`damping_rate`](@ref) of [`sponge_profile`](@ref)`(α_max,
+z_start, z_top)`, the damping-profile implementation the fringe region of
+`Transition` (P59-d) shares.
 """
 add_sponge!(tf, f, α_max, z_start, z_top; f_ref = 0) =
     _add_sponge!(tf, f, α_max, z_start, z_top, f_ref, mesh(f))
@@ -302,6 +372,18 @@ same tensor. Halos of `u, v, w` must be filled.
     return ((du_dx, du_dy, du_dz),
             (dv_dx, dv_dy, dv_dz),
             (dw_dx, dw_dy, dw_dz))
+end
+
+"""
+    _vorticity_at(u, v, w, i, j, k, idx, idy, idz) -> (ω_x, ω_y, ω_z)
+
+Vorticity `ω = ∇×u` at the centre of cell `(i, j, k)`, from the same
+[`_velocity_gradient_at`](@ref) tensor as the strain rate (`ω_x = ∂w/∂y −
+∂v/∂z`, …). Used by `Transition` (turbulent fraction γ(z)).
+"""
+@inline function _vorticity_at(u, v, w, i, j, k, idx, idy, idz)
+    g = _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz)
+    return g[3][2] - g[2][3], g[1][3] - g[3][1], g[2][1] - g[1][2]
 end
 
 """
@@ -629,14 +711,20 @@ end
 # Explicit filters, energy spectrum and isotropic initialiser (Phase 54, P54-c).
 include("operators/filters.jl")
 include("operators/spectra.jl")
+# A-priori SGS-stress analysis (Phase 56, P56-c).
+include("operators/apriori.jl")
 
 # -------------------------------------------------------------------------
 # Era VI: the SGS closure contract (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/sgs_closures.jl")
+include("operators/lagrangian_sgs.jl")
 # Era VI (P54-d, #174): wall-bounded flow diagnostics (Φ_m, stress budget, E11)
 include("operators/abl_diagnostics.jl")
-include("operators/lagrangian_sgs.jl")
+# Era VI, P55-d (#176): AMD and Vreman closures on the contract.
+include("operators/sgs_amd_vreman.jl")
+# The σ-model closure (P59-b, #184).
+include("operators/sigma_closure.jl")
 
 # -------------------------------------------------------------------------
 # Load backend kernels.
@@ -649,8 +737,27 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                      _add_buoyancy!, _add_buoyancy_moist!, _add_coriolis!,
                      _compute_smagorinsky_νt!,
                      _add_eddy_viscosity_u!, _add_eddy_viscosity_v!, _add_eddy_viscosity_w!,
-                     _add_eddy_diffusion_scalar!,
+                     _add_eddy_diffusion_scalar!, _add_eddy_diffusion_scalar_masked!,
                      _add_surface_flux!, _add_sponge!,
-                     _advect_weno5!
+                     _advect_weno5!,
+                     _add_sgs_stress_divergence!, _add_stress_divergence!,
+                     _sgs_stress_tensor!, _sgs_stress_dissipation,
+                     _add_tensor_diffusion_scalar!, _isentropic_tensor!
+# The shared damping profile (sponge + fringe, P59-d #185).
+using .FiniteVolume: AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
+                     DampingProfile, sponge_profile, in_damping, damping_rate,
+                     _add_damping!
+
+# -------------------------------------------------------------------------
+# Era VI: the stress-form SGS momentum divergence (wraps the kernels above).
+# -------------------------------------------------------------------------
+include("operators/sgs_stress.jl")
+
+# -------------------------------------------------------------------------
+# Era VI: the tensorial scalar eddy diffusivity (wraps the kernels above).
+# -------------------------------------------------------------------------
+include("operators/scalar_tensor.jl")
+# Pointwise N² and Ri_g (Era VI, P58-a).
+include("operators/stratification.jl")
 
 end # module

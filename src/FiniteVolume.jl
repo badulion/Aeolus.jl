@@ -20,6 +20,9 @@ using ..Grids: RegularGrid, interior, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields: Field
 using ..Operators: _strain_at
 
+export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
+       DampingProfile, sponge_profile, in_damping, damping_rate
+
 # =========================================================================
 # First derivatives
 # =========================================================================
@@ -245,6 +248,167 @@ function _add_surface_flux!(tϕ::Field{CellCenter},
 end
 
 # =========================================================================
+# Damping profiles — the one implementation of relaxation rates.
+# =========================================================================
+# Every relaxation term `-λ(ξ)·(φ - φ_target)` in Aeolus (the Rayleigh
+# sponge of Phase 7 on every mesh type, the fringe region of the
+# spatially developing boundary layer, P59-d #185) takes its rate λ(ξ) from
+# a `DampingProfile`. The profile is a 1-D function of one coordinate ξ
+# (z for a sponge, x for a fringe) built from a ramp shape:
+#
+#   * `SinSquaredRamp` — λ = λ_max sin²(½π (ξ - ξ_start)/w) for ξ ≥ ξ_start
+#     (Klemp & Lilly 1978 style top sponge; no fall, the ramp ends at the
+#     domain top);
+#   * `NordstromRamp`  — λ = λ_max [S((ξ - ξ_s)/Δ_rise) - S((ξ - ξ_e)/Δ_fall + 1)]
+#     with the smooth step S of Nordström, Nordin & Henningson (1999),
+#     eq. (2.3): C^∞, zero outside [ξ_s, ξ_e], λ_max on the plateau.
+#
+# The sin² rate is evaluated with exactly the arithmetic of the original
+# Phase-7 kernels, `s = sin(½π·(z - z_start)·inv_width); α = α_max·s·s`, so
+# `add_sponge!` results are unchanged bit for bit.
+
+"""
+    AbstractRamp
+
+Shape of a [`DampingProfile`](@ref): [`SinSquaredRamp`](@ref) (Rayleigh
+sponge) or [`NordstromRamp`](@ref) (fringe region).
+"""
+abstract type AbstractRamp end
+
+"""
+    SinSquaredRamp()
+
+Rise-only ramp `λ(ξ) = λ_max sin²(½π (ξ − ξ_start)/w)` for `ξ ≥ ξ_start`
+(zero below). The shape of the Phase-7 Rayleigh sponge
+[`add_sponge!`](@ref Aeolus.Operators.add_sponge!), whose width `w` is the
+distance from `z_start` to the domain top. Reference: Klemp, J. B. &
+Lilly, D. K. (1978), *J. Atmos. Sci.*, 35, 78-107.
+"""
+struct SinSquaredRamp <: AbstractRamp end
+
+"""
+    NordstromRamp()
+
+Rise-plateau-fall ramp of Nordström, Nordin & Henningson (1999), eq. (2.3),
+
+    λ(ξ) = λ_max [ S((ξ − ξ_start)/Δ_rise) − S((ξ − ξ_end)/Δ_fall + 1) ],
+
+with the smooth step `S(x) = 0` (x ≤ 0), `1/(1 + exp(1/(x − 1) + 1/x))`
+(0 < x < 1), `1` (x ≥ 1) — see [`smooth_step`](@ref). Infinitely
+differentiable; zero outside `[ξ_start, ξ_end]`.
+
+Reference: Nordström, J., Nordin, N. & Henningson, D. (1999). The fringe
+region technique and the Fourier method used in the direct numerical
+simulation of spatially evolving viscous flows. *SIAM J. Sci. Comput.*,
+20(4), 1365-1393.
+"""
+struct NordstromRamp <: AbstractRamp end
+
+"""
+    smooth_step(x) -> Real
+
+The C^∞ step of Nordström et al. (1999), eq. (2.3):
+`0` for `x ≤ 0`, `1/(1 + exp(1/(x − 1) + 1/x))` for `0 < x < 1`, `1` for
+`x ≥ 1`. `smooth_step(1/2) = 1/2` and `S(x) + S(1 − x) = 1`.
+"""
+function smooth_step(x::Real)
+    x <= 0 && return zero(float(x))
+    x >= 1 && return one(float(x))
+    return 1 / (1 + exp(1 / (x - 1) + 1 / x))
+end
+
+"""
+    DampingProfile(ramp, rate, start, rise; stop = Inf, fall = rise)
+
+A one-dimensional relaxation-rate profile `λ(ξ)` (s⁻¹) for the
+relaxation term `−λ(ξ)(φ − φ_target)`. `rate` is the plateau / maximum
+value, `start` the coordinate where the rise begins, `rise` its width;
+`stop` (where the fall *ends*) and `fall` are used by
+[`NordstromRamp`](@ref) only. Evaluate with [`damping_rate`](@ref).
+
+This is the single damping-profile implementation shared by the Rayleigh
+sponge ([`add_sponge!`](@ref Aeolus.Operators.add_sponge!), every mesh
+type) and the fringe region (`Transition.FringeRegion`, P59-d).
+The fields keep the argument types (no promotion) so that the sponge
+arithmetic is that of the original kernels.
+"""
+struct DampingProfile{R<:AbstractRamp, A, S, W, E, F}
+    ramp::R
+    rate::A
+    start::S
+    inv_rise::W
+    stop::E
+    inv_fall::F
+end
+
+DampingProfile(ramp::AbstractRamp, rate, start, rise; stop = Inf, fall = rise) =
+    DampingProfile(ramp, rate, start, 1 / rise, stop, 1 / fall)
+
+"""
+    sponge_profile(α_max, z_start, z_top) -> DampingProfile
+
+The Rayleigh-sponge profile of [`add_sponge!`](@ref Aeolus.Operators.add_sponge!):
+a [`SinSquaredRamp`](@ref) from `z_start` to `z_top`.
+"""
+sponge_profile(α_max, z_start, z_top) =
+    DampingProfile(SinSquaredRamp(), α_max, z_start, 1 / (z_top - z_start), Inf, 0)
+
+"""
+    in_damping(p::DampingProfile, ξ) -> Bool
+
+`true` where the profile can be non-zero (the kernels skip other cells, so
+a cell outside the region is never touched).
+"""
+in_damping(p::DampingProfile{SinSquaredRamp}, ξ) = ξ >= p.start
+in_damping(p::DampingProfile{NordstromRamp}, ξ) = p.start < ξ < p.stop
+
+"""
+    damping_rate(p::DampingProfile, ξ) -> Real
+
+The relaxation rate `λ(ξ)` of profile `p` at coordinate `ξ` (zero outside
+the region).
+"""
+function damping_rate(p::DampingProfile{SinSquaredRamp}, ξ)
+    in_damping(p, ξ) || return zero(p.rate * p.inv_rise)
+    half_π = 0.5 * π
+    s = sin(half_π * (ξ - p.start) * p.inv_rise)
+    return p.rate * s * s
+end
+
+function damping_rate(p::DampingProfile{NordstromRamp}, ξ)
+    in_damping(p, ξ) || return zero(float(p.rate))
+    return p.rate * (smooth_step((ξ - p.start) * p.inv_rise) -
+                     smooth_step((ξ - p.stop) * p.inv_fall + 1))
+end
+
+# Relaxation target: a constant, or an array / Field indexed like the field.
+@inline _damping_target(t::Real, i, j, k) = t
+@inline _damping_target(t::Field, i, j, k) = @inbounds t.data[i, j, k]
+@inline _damping_target(t::AbstractArray{<:Real,3}, i, j, k) = @inbounds t[i, j, k]
+
+"""
+    _add_damping!(tf, f, profile, coords, axis, target, g::RegularGrid)
+
+Add `−λ(ξ)(f − target)` to `tf` on the interior cells where
+`in_damping(profile, ξ)`, with `ξ = coords[n]` the coordinate of the
+`n`-th interior index along `axis` (`1` = x, `3` = z). The one kernel
+behind the sponge (`axis = 3`) and the fringe (`axis = 1`).
+"""
+function _add_damping!(tf::Field{L}, f::Field{L}, p::DampingProfile,
+                       coords::AbstractVector, axis::Int, target,
+                       g::RegularGrid) where {L}
+    ii, jj, kk = interior(g)
+    i0, j0, k0 = first(ii) - 1, first(jj) - 1, first(kk) - 1
+    @inbounds for k in kk, j in jj, i in ii
+        ξ = axis == 3 ? coords[k - k0] : axis == 1 ? coords[i - i0] : coords[j - j0]
+        in_damping(p, ξ) || continue
+        λ = damping_rate(p, ξ)
+        tf.data[i, j, k] -= λ * (f.data[i, j, k] - _damping_target(target, i, j, k))
+    end
+    return tf
+end
+
+# =========================================================================
 # Rayleigh sponge damping — Phase 7.
 # =========================================================================
 # Adds  -α(z) · (φ - φ_ref)  to the tendency inside a top-of-domain
@@ -252,24 +416,13 @@ end
 #     α(z) = α_max · sin²( π/2 · (z - z_start) / (z_top - z_start) ).
 # Below `z_start` the damping is zero. Used to absorb gravity waves and
 # turbulent structures that would otherwise reflect off the rigid lid.
+# The rate comes from the shared `DampingProfile` above.
 
 function _add_sponge!(tf::Field{L}, f::Field{L},
                       α_max::Real, z_start::Real, z_top::Real,
                       f_ref::Real, g::RegularGrid) where {L}
-    L() isa Location || nothing
     zs = _znodes_for(g, L())
-    ii, jj, kk = interior(g)
-    inv_width = 1 / (z_top - z_start)
-    half_π = 0.5 * π
-    @inbounds for (kk_, kv) in enumerate(kk), j in jj, i in ii
-        z = zs[kk_]
-        if z >= z_start
-            s = sin(half_π * (z - z_start) * inv_width)
-            α = α_max * s * s
-            tf.data[i, j, kv] -= α * (f.data[i, j, kv] - f_ref)
-        end
-    end
-    return tf
+    return _add_damping!(tf, f, sponge_profile(α_max, z_start, z_top), zs, 3, f_ref, g)
 end
 
 # helper — dispatch to `znodes` for a location, since `L` here is a type
@@ -532,24 +685,185 @@ function _add_eddy_viscosity_w!(tw::Field{FaceZ}, w::Field{FaceZ},
     return tw
 end
 
-# --- eddy diffusion for a cell-centered scalar --------------------------
-# s · ∂/∂x_j (K ∂ϕ/∂x_j), K applied conservatively at faces (interpolated
-# linearly from cell centres). The single kernel behind both public forms:
-# `add_eddy_diffusion_scalar!(tϕ, ϕ, κt)` (K = κt, s = 1, exact) and
-# `add_eddy_diffusion_scalar!(tϕ, ϕ, νt, Pr_t)` (K = νt, s = 1/Pr_t).
+# --- stress-form SGS momentum divergence (Era VI, P55-b, #175) -----------
+# −∂τᵢⱼ/∂xⱼ with τᵢⱼ = −2νᵢⱼSᵢⱼ on the C-grid. Placement (the locations
+# where the Laplacian kernels above form their fluxes):
+#
+#   τ11, τ22, τ33 at cell centres            τ11[i,j,k] at (xᵢ, yⱼ, zₖ)
+#   τ12 on xy-edges                          τ12[i,j,k] at (x_{i-½}, y_{j-½}, zₖ)
+#   τ13 on xz-edges                          τ13[i,j,k] at (x_{i-½}, yⱼ, z_{k-½})
+#   τ23 on yz-edges                          τ23[i,j,k] at (xᵢ, y_{j-½}, z_{k-½})
+#
+# i.e. the edge with index (i, j) is the south-west corner of cell (i, j),
+# where u-face i and v-face j meet. The strain at each location is the
+# compact face difference: Sᵢᵢ is the diagonal of `_velocity_gradient_at`
+# (face to face through the cell), and S12 = ½(∂u/∂y + ∂v/∂x) on the edge
+# from the two velocities adjacent to it. ν is the cell-centred value for
+# the diagonals and the 4-cell average onto the edge for the off-diagonals,
+# exactly as in `_add_eddy_viscosity_*!`. Anisotropy (the CM1 convention,
+# Bryan 2002): ν11 = ν22 = ν12 = νh, ν33 = ν13 = ν23 = νv.
+#
+# The flux of row i is split as τᵢⱼ = −νᵢⱼ(a ∂uᵢ/∂xⱼ + b ∂uⱼ/∂xᵢ):
+#   (a, b) = (1, 1) the full stress −2νᵢⱼSᵢⱼ;
+#   (a, b) = (1, 0) the Laplacian ("diagonal") part ∂ⱼ(νᵢⱼ∂ⱼuᵢ), which is the
+#                   operator the IMEX steppers treat implicitly;
+#   (a, b) = (0, 1) the transposed part ∂ⱼ(νᵢⱼ∂ᵢuⱼ), the explicit remainder.
 
-function _add_eddy_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
-                                      K::Field{CellCenter}, s::Real,
-                                      g::RegularGrid)
+# 4-cell averages of a cell-centred ν onto the edge with index (i, j, k)
+Base.@propagate_inbounds _νe12(n, i, j, k) = 0.25 * (n[i-1,j-1,k] + n[i,j-1,k] + n[i-1,j,k] + n[i,j,k])
+Base.@propagate_inbounds _νe13(n, i, j, k) = 0.25 * (n[i-1,j,k-1] + n[i,j,k-1] + n[i-1,j,k] + n[i,j,k])
+Base.@propagate_inbounds _νe23(n, i, j, k) = 0.25 * (n[i,j-1,k-1] + n[i,j,k-1] + n[i,j-1,k] + n[i,j,k])
+
+# diagonal stresses at the centre of cell (i, j, k): −(a+b) ν ∂uᵢ/∂xᵢ
+Base.@propagate_inbounds _τ11(u, nh, i, j, k, idx, a, b) = -(nh[i,j,k] * ((a + b) * ((u[i+1,j,k] - u[i,j,k]) * idx)))
+Base.@propagate_inbounds _τ22(v, nh, i, j, k, idy, a, b) = -(nh[i,j,k] * ((a + b) * ((v[i,j+1,k] - v[i,j,k]) * idy)))
+Base.@propagate_inbounds _τ33(w, nv, i, j, k, idz, a, b) = -(nv[i,j,k] * ((a + b) * ((w[i,j,k+1] - w[i,j,k]) * idz)))
+
+# off-diagonal stresses of row `own` on the edge (i, j, k):
+# −ν_e (a ∂u_own/∂x_other + b ∂u_other/∂x_own)
+Base.@propagate_inbounds _τ12_u(u, v, nh, i, j, k, idx, idy, a, b) =
+    -(_νe12(nh, i, j, k) * (a * ((u[i,j,k] - u[i,j-1,k]) * idy) + b * ((v[i,j,k] - v[i-1,j,k]) * idx)))
+Base.@propagate_inbounds _τ12_v(u, v, nh, i, j, k, idx, idy, a, b) =
+    -(_νe12(nh, i, j, k) * (a * ((v[i,j,k] - v[i-1,j,k]) * idx) + b * ((u[i,j,k] - u[i,j-1,k]) * idy)))
+Base.@propagate_inbounds _τ13_u(u, w, nv, i, j, k, idx, idz, a, b) =
+    -(_νe13(nv, i, j, k) * (a * ((u[i,j,k] - u[i,j,k-1]) * idz) + b * ((w[i,j,k] - w[i-1,j,k]) * idx)))
+Base.@propagate_inbounds _τ13_w(u, w, nv, i, j, k, idx, idz, a, b) =
+    -(_νe13(nv, i, j, k) * (a * ((w[i,j,k] - w[i-1,j,k]) * idx) + b * ((u[i,j,k] - u[i,j,k-1]) * idz)))
+Base.@propagate_inbounds _τ23_v(v, w, nv, i, j, k, idy, idz, a, b) =
+    -(_νe23(nv, i, j, k) * (a * ((v[i,j,k] - v[i,j,k-1]) * idz) + b * ((w[i,j,k] - w[i,j-1,k]) * idy)))
+Base.@propagate_inbounds _τ23_w(v, w, nv, i, j, k, idy, idz, a, b) =
+    -(_νe23(nv, i, j, k) * (a * ((w[i,j,k] - w[i,j-1,k]) * idy) + b * ((v[i,j,k] - v[i,j,k-1]) * idz)))
+
+# −∂τᵢⱼ/∂xⱼ into (tu, tv, tw), with the stresses formed on the fly from
+# (u, v, w) and the cell-centred (νh, νv) arrays (halos filled), part (a, b).
+function _add_sgs_stress_divergence!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
+                                     u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                                     nh::AbstractArray{<:Real,3}, nv::AbstractArray{<:Real,3},
+                                     a::Real, b::Real, g::RegularGrid)
+    T = eltype(tu.data)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    A = T(a); B = T(b)
+    ii, jj, kk = interior(g)
+    ud, vd, wd = u.data, v.data, w.data
+    tud, tvd, twd = tu.data, tv.data, tw.data
+    @inbounds for k in kk, j in jj, i in ii
+        tud[i,j,k] += -((_τ11(ud, nh, i, j, k, idx, A, B) - _τ11(ud, nh, i-1, j, k, idx, A, B)) * idx +
+                        (_τ12_u(ud, vd, nh, i, j+1, k, idx, idy, A, B) -
+                         _τ12_u(ud, vd, nh, i, j, k, idx, idy, A, B)) * idy +
+                        (_τ13_u(ud, wd, nv, i, j, k+1, idx, idz, A, B) -
+                         _τ13_u(ud, wd, nv, i, j, k, idx, idz, A, B)) * idz)
+        tvd[i,j,k] += -((_τ12_v(ud, vd, nh, i+1, j, k, idx, idy, A, B) -
+                         _τ12_v(ud, vd, nh, i, j, k, idx, idy, A, B)) * idx +
+                        (_τ22(vd, nh, i, j, k, idy, A, B) - _τ22(vd, nh, i, j-1, k, idy, A, B)) * idy +
+                        (_τ23_v(vd, wd, nv, i, j, k+1, idy, idz, A, B) -
+                         _τ23_v(vd, wd, nv, i, j, k, idy, idz, A, B)) * idz)
+        twd[i,j,k] += -((_τ13_w(ud, wd, nv, i+1, j, k, idx, idz, A, B) -
+                         _τ13_w(ud, wd, nv, i, j, k, idx, idz, A, B)) * idx +
+                        (_τ23_w(vd, wd, nv, i, j+1, k, idy, idz, A, B) -
+                         _τ23_w(vd, wd, nv, i, j, k, idy, idz, A, B)) * idy +
+                        (_τ33(wd, nv, i, j, k, idz, A, B) - _τ33(wd, nv, i, j, k-1, idz, A, B)) * idz)
+    end
+    return nothing
+end
+
+# −∂τᵢⱼ/∂xⱼ from a stored stress (six cell-centre-shaped arrays, placement
+# above). Reads τ11 on i ∈ first-1:last, τ12 on i, j ∈ first:last+1, etc.
+function _add_stress_divergence!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
+                                 τ11, τ22, τ33, τ12, τ13, τ23, g::RegularGrid)
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
     ii, jj, kk = interior(g)
+    tud, tvd, twd = tu.data, tv.data, tw.data
     @inbounds for k in kk, j in jj, i in ii
-        νE = 0.5 * (K.data[i,j,k]   + K.data[i+1,j,k])
-        νW = 0.5 * (K.data[i-1,j,k] + K.data[i,j,k])
-        νN = 0.5 * (K.data[i,j,k]   + K.data[i,j+1,k])
-        νS = 0.5 * (K.data[i,j-1,k] + K.data[i,j,k])
-        νT = 0.5 * (K.data[i,j,k]   + K.data[i,j,k+1])
-        νB = 0.5 * (K.data[i,j,k-1] + K.data[i,j,k])
+        tud[i,j,k] += -((τ11[i,j,k] - τ11[i-1,j,k]) * idx +
+                        (τ12[i,j+1,k] - τ12[i,j,k]) * idy +
+                        (τ13[i,j,k+1] - τ13[i,j,k]) * idz)
+        tvd[i,j,k] += -((τ12[i+1,j,k] - τ12[i,j,k]) * idx +
+                        (τ22[i,j,k] - τ22[i,j-1,k]) * idy +
+                        (τ23[i,j,k+1] - τ23[i,j,k]) * idz)
+        twd[i,j,k] += -((τ13[i+1,j,k] - τ13[i,j,k]) * idx +
+                        (τ23[i,j+1,k] - τ23[i,j,k]) * idy +
+                        (τ33[i,j,k] - τ33[i,j,k-1]) * idz)
+    end
+    return nothing
+end
+
+# τ = −2νᵢⱼSᵢⱼ into the six arrays, on exactly the index ranges
+# `_add_stress_divergence!` reads (the interior plus the shell below for
+# the diagonals, plus the shell above for the edges).
+function _sgs_stress_tensor!(τ11, τ22, τ33, τ12, τ13, τ23,
+                             u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                             nh::AbstractArray{<:Real,3}, nv::AbstractArray{<:Real,3},
+                             g::RegularGrid)
+    T = eltype(τ11)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    o = one(T)
+    ii, jj, kk = interior(g)
+    ud, vd, wd = u.data, v.data, w.data
+    xm = first(ii)-1:last(ii); ym = first(jj)-1:last(jj); zm = first(kk)-1:last(kk)
+    xp = first(ii):last(ii)+1; yp = first(jj):last(jj)+1; zp = first(kk):last(kk)+1
+    @inbounds begin
+        for k in kk, j in jj, i in xm; τ11[i,j,k] = _τ11(ud, nh, i, j, k, idx, o, o); end
+        for k in kk, j in ym, i in ii; τ22[i,j,k] = _τ22(vd, nh, i, j, k, idy, o, o); end
+        for k in zm, j in jj, i in ii; τ33[i,j,k] = _τ33(wd, nv, i, j, k, idz, o, o); end
+        for k in kk, j in yp, i in xp; τ12[i,j,k] = _τ12_u(ud, vd, nh, i, j, k, idx, idy, o, o); end
+        for k in zp, j in jj, i in xp; τ13[i,j,k] = _τ13_u(ud, wd, nv, i, j, k, idx, idz, o, o); end
+        for k in zp, j in yp, i in ii; τ23[i,j,k] = _τ23_v(vd, wd, nv, i, j, k, idy, idz, o, o); end
+    end
+    return nothing
+end
+
+# Σ 2νᵢⱼSᵢⱼSᵢⱼ ΔV over the interior cells (diagonals) and the edges with
+# interior indices (off-diagonals, each counted for both ij and ji):
+# the exact discrete dissipation of `_add_sgs_stress_divergence!` (a = b = 1)
+# on a periodic domain.
+function _sgs_stress_dissipation(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                                 nh::AbstractArray{<:Real,3}, nv::AbstractArray{<:Real,3},
+                                 g::RegularGrid)
+    T = eltype(u.data)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    ii, jj, kk = interior(g)
+    ud, vd, wd = u.data, v.data, w.data
+    s = zero(T)
+    @inbounds for k in kk, j in jj, i in ii
+        S11 = (ud[i+1,j,k] - ud[i,j,k]) * idx
+        S22 = (vd[i,j+1,k] - vd[i,j,k]) * idy
+        S33 = (wd[i,j,k+1] - wd[i,j,k]) * idz
+        S12 = 0.5 * ((ud[i,j,k] - ud[i,j-1,k]) * idy + (vd[i,j,k] - vd[i-1,j,k]) * idx)
+        S13 = 0.5 * ((ud[i,j,k] - ud[i,j,k-1]) * idz + (wd[i,j,k] - wd[i-1,j,k]) * idx)
+        S23 = 0.5 * ((vd[i,j,k] - vd[i,j,k-1]) * idz + (wd[i,j,k] - wd[i,j-1,k]) * idy)
+        s += 2 * (nh[i,j,k] * (S11^2 + S22^2) + nv[i,j,k] * S33^2) +
+             4 * (_νe12(nh, i, j, k) * S12^2 + _νe13(nv, i, j, k) * S13^2 +
+                  _νe23(nv, i, j, k) * S23^2)
+    end
+    return s * (g.dx * g.dy * g.dz)
+end
+
+# --- eddy diffusion for a cell-centered scalar --------------------------
+# s · [∂/∂x(Kh ∂ϕ/∂x) + ∂/∂y(Kh ∂ϕ/∂y) + ∂/∂z(Kv ∂ϕ/∂z)], each coefficient
+# applied conservatively at the faces (interpolated linearly from cell
+# centres). The single kernel behind every public form:
+# `add_eddy_diffusion_scalar!(tϕ, ϕ, κt)` (Kh = Kv = κt, s = 1, exact),
+# `add_eddy_diffusion_scalar!(tϕ, ϕ, νt, Pr_t)` (Kh = Kv = νt, s = 1/Pr_t)
+# and the diagonal `add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv)` (P55-c,
+# #181). With Kh === Kv the arithmetic is the pre-P55-c kernel's, bit for bit.
+
+_add_eddy_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
+                            K::Field{CellCenter}, s::Real, g::RegularGrid) =
+    _add_eddy_diffusion_scalar!(tϕ, ϕ, K, K, s, g)
+
+function _add_eddy_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
+                                      Kh::Field{CellCenter}, Kv::Field{CellCenter},
+                                      s::Real, g::RegularGrid)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    ii, jj, kk = interior(g)
+    H = Kh.data; V = Kv.data
+    @inbounds for k in kk, j in jj, i in ii
+        νE = 0.5 * (H[i,j,k]   + H[i+1,j,k])
+        νW = 0.5 * (H[i-1,j,k] + H[i,j,k])
+        νN = 0.5 * (H[i,j,k]   + H[i,j+1,k])
+        νS = 0.5 * (H[i,j-1,k] + H[i,j,k])
+        νT = 0.5 * (V[i,j,k]   + V[i,j,k+1])
+        νB = 0.5 * (V[i,j,k-1] + V[i,j,k])
 
         fxE = νE * (ϕ.data[i+1,j,k] - ϕ.data[i,  j,k]) * idx
         fxW = νW * (ϕ.data[i,  j,k] - ϕ.data[i-1,j,k]) * idx
@@ -562,6 +876,187 @@ function _add_eddy_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCente
     end
     return tϕ
 end
+
+# --- tensor eddy diffusion for a cell-centred scalar (P55-c, #181) ------
+# ∂ᵢ(Kᵢⱼ ∂ⱼϕ) with the six components of a symmetric K at cell centres, in
+# the triad (functional) form of Griffies et al. (1998, JPO 28, 805): each
+# cell is split into eight octants, octant (a, b, c) pairing one x-face,
+# one y-face and one z-face gradient of the cell, g = (gx, gy, gz), and
+#
+#     F[ϕ] = −½ Σ_cells (ΔV/8) Σ_octants gᵀ K_cell g,   ΔV ∂ₜϕₙ = ∂F/∂ϕₙ.
+#
+# Differentiating gives the flux form below, with the flux on a face the
+# mean of (K g)ₙ over the eight octants that touch it. Because K is per
+# cell, the four octant terms of a cell collapse to
+#
+#   Fx(i+½) = ½(K11ᵢ + K11ᵢ₊₁) gxᵢ₊½
+#           + ¼ Σ_{c ∈ {i, i+1}} [K12_c (gy_c,S + gy_c,N) + K13_c (gz_c,B + gz_c,T)]
+#
+# and likewise Fy, Fz. The diagonal part is exactly the 2-point face average
+# of `_add_eddy_diffusion_scalar!` (K11 on x, K22 on y, K33 on z faces).
+# Consequences of the functional form: Σ ΔV ∂ₜϕ = 0 (F is shift-invariant),
+# Σ ΔV ϕ ∂ₜϕ = 2F ≤ 0 when every K_cell is positive semi-definite, and
+# the operator is symmetric.
+#
+# `bounded[d]`: the faces at the two ends of direction d are walls. Their
+# gradient is not used in the cross terms of the interior faces and the wall
+# flux has no cross part; its diagonal part K_nn g_n (from the halo) is
+# kept, exactly as in the diagonal kernel (zero for a no-flux halo, for
+# which the functional properties above hold with walls).
+# `dodiag`, `dooff` select the diagonal and the off-diagonal part (IMEX).
+# Fx, Fy, Fz: face-flux scratch, shaped like a CellCenter field's data;
+# `Fx[i, j, k]` is the flux through the face between cells i and i+1.
+
+function _add_tensor_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
+                                       K11, K22, K33, K12, K13, K23, Fx, Fy, Fz,
+                                       bounded::NTuple{3,Bool}, dodiag::Bool, dooff::Bool,
+                                       g::RegularGrid)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    d = ϕ.data
+    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
+    i1, i2 = Hx + 1, Hx + g.Nx
+    j1, j2 = Hy + 1, Hy + g.Ny
+    k1, k2 = Hz + 1, Hz + g.Nz
+    bx, by, bz = bounded
+    T = eltype(d)
+    # the face gradients of cell (i, j, k), zero on a wall (bounded direction)
+    @inline gW(i, j, k) = @inbounds((bx && i == i1) ? zero(T) : (d[i, j, k] - d[i-1, j, k]) * idx)
+    @inline gE(i, j, k) = @inbounds((bx && i == i2) ? zero(T) : (d[i+1, j, k] - d[i, j, k]) * idx)
+    @inline gS(i, j, k) = @inbounds((by && j == j1) ? zero(T) : (d[i, j, k] - d[i, j-1, k]) * idy)
+    @inline gN(i, j, k) = @inbounds((by && j == j2) ? zero(T) : (d[i, j+1, k] - d[i, j, k]) * idy)
+    @inline gB(i, j, k) = @inbounds((bz && k == k1) ? zero(T) : (d[i, j, k] - d[i, j, k-1]) * idz)
+    @inline gT(i, j, k) = @inbounds((bz && k == k2) ? zero(T) : (d[i, j, k+1] - d[i, j, k]) * idz)
+    @inbounds begin
+        # x faces i+½, i ∈ Hx:i2
+        for k in k1:k2, j in j1:j2, i in Hx:i2
+            f = zero(T)
+            dodiag && (f += 0.5 * (K11[i, j, k] + K11[i+1, j, k]) * (d[i+1, j, k] - d[i, j, k]) * idx)
+            if dooff && !(bx && (i == Hx || i == i2))
+                f += 0.25 * (K12[i,   j, k] * (gS(i,   j, k) + gN(i,   j, k)) +
+                             K12[i+1, j, k] * (gS(i+1, j, k) + gN(i+1, j, k)) +
+                             K13[i,   j, k] * (gB(i,   j, k) + gT(i,   j, k)) +
+                             K13[i+1, j, k] * (gB(i+1, j, k) + gT(i+1, j, k)))
+            end
+            Fx[i, j, k] = f
+        end
+        # y faces j+½
+        for k in k1:k2, j in Hy:j2, i in i1:i2
+            f = zero(T)
+            dodiag && (f += 0.5 * (K22[i, j, k] + K22[i, j+1, k]) * (d[i, j+1, k] - d[i, j, k]) * idy)
+            if dooff && !(by && (j == Hy || j == j2))
+                f += 0.25 * (K12[i, j,   k] * (gW(i, j,   k) + gE(i, j,   k)) +
+                             K12[i, j+1, k] * (gW(i, j+1, k) + gE(i, j+1, k)) +
+                             K23[i, j,   k] * (gB(i, j,   k) + gT(i, j,   k)) +
+                             K23[i, j+1, k] * (gB(i, j+1, k) + gT(i, j+1, k)))
+            end
+            Fy[i, j, k] = f
+        end
+        # z faces k+½
+        for k in Hz:k2, j in j1:j2, i in i1:i2
+            f = zero(T)
+            dodiag && (f += 0.5 * (K33[i, j, k] + K33[i, j, k+1]) * (d[i, j, k+1] - d[i, j, k]) * idz)
+            if dooff && !(bz && (k == Hz || k == k2))
+                f += 0.25 * (K13[i, j, k  ] * (gW(i, j, k  ) + gE(i, j, k  )) +
+                             K13[i, j, k+1] * (gW(i, j, k+1) + gE(i, j, k+1)) +
+                             K23[i, j, k  ] * (gS(i, j, k  ) + gN(i, j, k  )) +
+                             K23[i, j, k+1] * (gS(i, j, k+1) + gN(i, j, k+1)))
+            end
+            Fz[i, j, k] = f
+        end
+        t = tϕ.data
+        for k in k1:k2, j in j1:j2, i in i1:i2
+            t[i, j, k] += (Fx[i, j, k] - Fx[i-1, j, k]) * idx +
+                          (Fy[i, j, k] - Fy[i, j-1, k]) * idy +
+                          (Fz[i, j, k] - Fz[i, j, k-1]) * idz
+        end
+    end
+    return tϕ
+end
+
+# Masked and/or mass-weighted form of the same flux divergence (P56-a, #177):
+#
+#   * `mask` (Bool, storage-sized, halos consistent with ϕ's BCs; or nothing):
+#     a face with a solid cell on either side carries no flux, and a solid
+#     cell's tendency is left untouched. The flux on every open face is the
+#     unmasked one, so Σ_fluid tϕ dV telescopes to zero.
+#   * `wc`, `wf` (per storage level; or nothing): the sound-proof form
+#     (1/W_k) ∇·(W κ ∇ϕ) with the cell weight `wc[k]` and the z-face weight
+#     `wf[k]` (bottom face of cell k, the FaceZ storage index). The cell
+#     weight cancels in the horizontal fluxes, so only the vertical flux is
+#     weighted; Σ W_k tϕ_k telescopes to zero.
+#
+# Kept separate from the kernel above so the unmasked, unweighted path stays
+# bit for bit what it was.
+function _add_eddy_diffusion_scalar_masked!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
+                                             K::Field{CellCenter}, g::RegularGrid,
+                                             mask, wc, wf)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    ii, jj, kk = interior(g)
+    Kd = K.data; ϕd = ϕ.data
+    T = eltype(ϕd)
+    @inbounds for k in kk, j in jj, i in ii
+        # branchless: each face flux times its openness (1 or 0), the cell's
+        # whole tendency times its own (a solid cell gets + 0)
+        oC = _open(T, mask, i, j, k)
+        oE = oC * _open(T, mask, i+1, j, k); oW = oC * _open(T, mask, i-1, j, k)
+        oN = oC * _open(T, mask, i, j+1, k); oS = oC * _open(T, mask, i, j-1, k)
+        oT = oC * _open(T, mask, i, j, k+1); oB = oC * _open(T, mask, i, j, k-1)
+
+        fxE = oE * (0.5 * (Kd[i,j,k]   + Kd[i+1,j,k]) * (ϕd[i+1,j,k] - ϕd[i,  j,k]) * idx)
+        fxW = oW * (0.5 * (Kd[i-1,j,k] + Kd[i,j,k])   * (ϕd[i,  j,k] - ϕd[i-1,j,k]) * idx)
+        fyN = oN * (0.5 * (Kd[i,j,k]   + Kd[i,j+1,k]) * (ϕd[i,j+1,k] - ϕd[i,j,  k]) * idy)
+        fyS = oS * (0.5 * (Kd[i,j-1,k] + Kd[i,j,k])   * (ϕd[i,j,  k] - ϕd[i,j-1,k]) * idy)
+        fzT = oT * (0.5 * (Kd[i,j,k]   + Kd[i,j,k+1]) * (ϕd[i,j,k+1] - ϕd[i,j,k  ]) * idz)
+        fzB = oB * (0.5 * (Kd[i,j,k-1] + Kd[i,j,k])   * (ϕd[i,j,k  ] - ϕd[i,j,k-1]) * idz)
+
+        vert = _vertical_divergence(fzT, fzB, idz, wc, wf, k)
+        tϕ.data[i,j,k] += (fxE - fxW)*idx + (fyN - fyS)*idy + vert
+    end
+    return tϕ
+end
+
+# --- the rotated isentropic tensor (P55-c, #181) --------------------------
+# K = κh I − f (κh − κv) n nᵀ, n = ∇θ/|∇θ| (centred differences), with
+# f = f_slope · f_grad: f_slope = min(1, (S_max/S)²), S = |∇ₕθ|/∂zθ
+# (Gerdes et al. 1991), 0 where ∂zθ ≤ 0 (N² ≤ 0); f_grad = min(1, |∇θ|/g_min).
+# κh, κv: cell-centred arrays or numbers (`_kval`).
+@inline _kval(a::AbstractArray, i, j, k) = @inbounds a[i, j, k]
+@inline _kval(a::Real, i, j, k) = a
+
+function _isentropic_tensor!(K11, K22, K33, K12, K13, K23, θ::Field{CellCenter},
+                             κh, κv, slope_max::Real, grad_min::Real, g::RegularGrid)
+    d = θ.data
+    i2dx = 1 / (2 * g.dx); i2dy = 1 / (2 * g.dy); i2dz = 1 / (2 * g.dz)
+    ii, jj, kk = interior(g)
+    @inbounds for k in kk, j in jj, i in ii
+        gx = (d[i+1, j, k] - d[i-1, j, k]) * i2dx
+        gy = (d[i, j+1, k] - d[i, j-1, k]) * i2dy
+        gz = (d[i, j, k+1] - d[i, j, k-1]) * i2dz
+        kh = _kval(κh, i, j, k); kv = _kval(κv, i, j, k)
+        G2h = gx * gx + gy * gy
+        G = sqrt(G2h + gz * gz)
+        f = zero(G)
+        if gz > 0 && G > 0
+            # S² = |∇ₕθ|²/∂zθ²; taper (S_max/S)² above S_max
+            S2 = G2h / (gz * gz)
+            f = S2 <= slope_max^2 ? one(G) : slope_max^2 / S2
+            G < grad_min && (f *= G / grad_min)
+        end
+        a = f * (kh - kv) / (G > 0 ? G * G : one(G))     # f (κh − κv) / |∇θ|²
+        K11[i, j, k] = kh - a * gx * gx
+        K22[i, j, k] = kh - a * gy * gy
+        K33[i, j, k] = kh - a * gz * gz
+        K12[i, j, k] = -a * gx * gy
+        K13[i, j, k] = -a * gx * gz
+        K23[i, j, k] = -a * gy * gz
+    end
+    return nothing
+end
+
+@inline _open(::Type{T}, ::Nothing, i, j, k) where {T} = one(T)
+@inline _open(::Type{T}, mask, i, j, k) where {T} = T(!mask[i,j,k])
+@inline _vertical_divergence(fzT, fzB, idz, ::Nothing, ::Nothing, k) = (fzT - fzB) * idz
+@inline _vertical_divergence(fzT, fzB, idz, wc, wf, k) = (wf[k+1] * fzT - wf[k] * fzB) * idz / wc[k]
 
 # =========================================================================
 # WENO-5 scalar advection (Phase 10) — staggered.

@@ -109,14 +109,18 @@ _cbc_closure(f::Function, mesh) = ((;), (eddy_viscosity! = f,))
 function _cbc_closure(s::Symbol, mesh)
     s === :none && return _cbc_closure(nothing, mesh)
     s === :smagorinsky && return _cbc_closure(0.17, mesh)
+    s === :sigma && return _cbc_closure(SigmaModel(1.35), mesh)      # P59-b (#184)
+    s === :tke && return ((;), (sgs = TKEClosure(mesh),))       # P56-b (#182), Moeng 1984
     if s === :dynamic
         ws = DynamicSmagorinskyWorkspace(mesh)
         return _cbc_closure((νt, u, v, w) -> compute_dynamic_smagorinsky_νt!(νt, u, v, w; workspace = ws), mesh)
     end
+    s === :amd && return _cbc_closure(AMDClosure(), mesh)          # C = 0.3 (P55-d, #176)
+    s === :vreman && return _cbc_closure(VremanClosure(0.17), mesh) # c = 2.5·0.17² (P55-d, #176)
     s === :lagrangian && return ((;), (sgs = LagrangianDynamicSmagorinsky(mesh),))
     s === :lasd && return ((;), (sgs = LagrangianDynamicSmagorinsky(mesh; scale_dependent = true),))
     throw(ArgumentError("unknown closure $(repr(s)): use :none, :smagorinsky, :dynamic, :lagrangian, :lasd, " *
-                        "a C_s, f(νt, u, v, w) or an AbstractSGSClosure"))
+                        ":tke, :amd, :vreman, :sigma, a C_s, f(νt, u, v, w) or an AbstractSGSClosure"))
 end
 # a closure object: a fresh copy per realisation (its memory must not leak between seeds)
 _cbc_closure(c::AbstractSGSClosure, mesh) = ((;), (sgs = deepcopy(c),))
@@ -129,11 +133,16 @@ Run the Comte-Bellot–Corrsin decay at N³ with `closure`:
 * `:none` / `nothing` — no SGS model (molecular ν only);
 * `:smagorinsky` or a number `C_s` — the built-in static Smagorinsky;
 * `:dynamic` — plane-averaged dynamic Smagorinsky (Germano–Lilly);
+* `:tke` — the Deardorff (1980) / Moeng (1984) prognostic SGS TKE closure
+  (`TKEClosure`, P56-b), ``e`` seeded with its local equilibrium
+  (`initialize_tke!`) and carried through the evolve-and-rescale cycles;
+* `:amd`, `:vreman` — `AMDClosure()` (C = 0.3), `VremanClosure(0.17)`;
 * `:lagrangian` — [`LagrangianDynamicSmagorinsky`](@ref) (Meneveau, Lund &
   Cabot 1996), stepped with `step_rk3!(sim, dt; sgs)` so its memory is
   committed once per step;
 * `:lasd` — the same closure with `scale_dependent = true` (Bou-Zeid,
   Meneveau & Parlange 2005; P54-e, #186);
+* `:sigma` — the σ-model, `SigmaModel(1.35)` (Nicoud et al. 2011; #184);
 * an `AbstractSGSClosure` — any closure of the Era VI contract (copied per
   realisation), stepped the same way;
 * a function `f(νt, u, v, w)` — any closure accepted by `step!`'s
@@ -187,6 +196,7 @@ function _cbc_run(closure, N, cfl, seed, spinup, t_spin, Eref)
     ckw, skw = _cbc_closure(closure, mesh)
     sim = BoussinesqSimulation(mesh; ν = CBC_NU, ckw...)
     isotropic_random_field!(sim, Eref[1]; rng = Random.Xoshiro(seed))
+    haskey(skw, :sgs) && skw.sgs isa TKEClosure && initialize_tke!(skw.sgs, sim)
     # evolve-and-rescale: build the phase correlations of a cascade, then
     # put the station-1 spectrum back (Rogallo 1981; Kang et al. 2003)
     for _ in 1:spinup

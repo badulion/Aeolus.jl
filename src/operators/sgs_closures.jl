@@ -33,8 +33,8 @@ the anelastic / pseudo-incompressible `step!`). A closure implements
 | [`sgs_coefficients!`](@ref)`(f, c, sim)` | each time the tendencies are formed (every RK substage, every IMEX step, the CFL estimate) | **required** |
 | [`advance_sgs!`](@ref)`(c, sim, dt)` | once per **accepted** step, after the projection | no-op |
 | [`sgs_state`](@ref)`(c)`, [`restore_sgs_state!`](@ref)`(c, s)` | around a step [`step_adaptive!`](@ref Aeolus.TimeIntegration.step_adaptive!) may reject | no-op |
-| [`add_sgs_momentum!`](@ref)`(tu, tv, tw, c, f, sim)` | momentum tendency | Laplacian eddy-viscosity form with `f.νh` |
-| [`add_sgs_scalar!`](@ref)`(tϕ, ϕ, c, f, sim)` | θ tendency | eddy diffusion with `f.κh` |
+| [`add_sgs_momentum!`](@ref)`(tu, tv, tw, c, f, sim; stress)` | momentum tendency | Laplacian eddy-viscosity form with `f.νh` (`stress = :laplacian`), or the stress form with `f.νh`, `f.νv` (`:symmetric`) |
+| [`add_sgs_scalar!`](@ref)`(tϕ, ϕ, c, f, sim)` | θ tendency | diagonal eddy diffusion with `f.κh` (x, y faces), `f.κv` (z faces) |
 | [`sgs_fields`](@ref)`(c, sim)` | the storage `f` the coefficients go into | `SGSFields(sim.νt, sim.κt)` |
 
 `sgs_coefficients!` must be **pure** in the closure's memory: it may read the
@@ -121,30 +121,72 @@ Restore the memory saved by [`sgs_state`](@ref) (no-op by default).
 restore_sgs_state!(c::AbstractSGSClosure, s) = c
 
 """
-    add_sgs_momentum!(tu, tv, tw, c::AbstractSGSClosure, f::SGSFields, sim)
+    add_sgs_momentum!(tu, tv, tw, c::AbstractSGSClosure, f::SGSFields, sim;
+                      stress = :laplacian)
 
-Add the SGS stress divergence to the momentum tendencies. Default: the
-Laplacian eddy-viscosity flux form `∂/∂xⱼ(ν ∂uᵢ/∂xⱼ)` of
-[`add_eddy_viscosity_u!`](@ref) (and `_v!`, `_w!`) with `f.νh`. A closure
-with a different stress (full stress form, `νh ≠ νv`, an explicit Reynolds
-stress) adds a method. Halos of `sim.u, sim.v, sim.w` and of `f` are filled.
+Add the SGS stress divergence to the momentum tendencies. `stress` is the
+`sgs_stress` keyword of the cores:
+
+* `:laplacian` (default): the Laplacian eddy-viscosity flux form
+  `∂/∂xⱼ(ν ∂uᵢ/∂xⱼ)` of [`add_eddy_viscosity_u!`](@ref) (and `_v!`, `_w!`)
+  with `f.νh` — the pre-Era-VI operator, bit for bit;
+* `:symmetric`: the stress form `∂/∂xⱼ(2νᵢⱼSᵢⱼ)` of
+  [`add_sgs_stress_divergence!`](@ref) with `νh = f.νh`, `νv = f.νv`
+  (P55-b, #175).
+
+A closure with its own stress (an explicit Reynolds stress) adds a method
+and may call [`add_stress_divergence!`](@ref). Halos of `sim.u, sim.v,
+sim.w` and of `f` are filled.
 """
-function add_sgs_momentum!(tu, tv, tw, c::AbstractSGSClosure, f::SGSFields, sim)
-    add_eddy_viscosity_u!(tu, sim.u, f.νh)
-    add_eddy_viscosity_v!(tv, sim.v, f.νh)
-    add_eddy_viscosity_w!(tw, sim.w, f.νh)
+function add_sgs_momentum!(tu, tv, tw, c::AbstractSGSClosure, f::SGSFields, sim;
+                           stress::Symbol = :laplacian)
+    if stress === :laplacian
+        add_eddy_viscosity_u!(tu, sim.u, f.νh)
+        add_eddy_viscosity_v!(tv, sim.v, f.νh)
+        add_eddy_viscosity_w!(tw, sim.w, f.νh)
+    elseif stress === :symmetric
+        add_sgs_stress_divergence!(tu, tv, tw, sim.u, sim.v, sim.w, f.νh, f.νv)
+    else
+        _check_sgs_stress(stress)
+    end
     return nothing
 end
 
 """
     add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim)
 
-Add the SGS scalar flux divergence `∂/∂xⱼ(κ ∂ϕ/∂xⱼ)` to `tϕ`. Default: the
-three-argument [`add_eddy_diffusion_scalar!`](@ref)`(tϕ, ϕ, f.κh)`. Halos of
-`ϕ` and of `f` are filled.
+Add the SGS scalar flux divergence `∂/∂xⱼ(κⱼₖ ∂ϕ/∂xₖ)` to `tϕ`. Default: the
+diagonal operator [`add_eddy_diffusion_scalar!`](@ref)`(tϕ, ϕ, f.κh, f.κv)`
+(P55-c, #181), `κh` on the x and y faces and `κv` on the z faces; for an
+isotropic closure (`f.κv === f.κh`) that is the three-argument form
+`(tϕ, ϕ, f.κh)`, bit for bit the pre-P55-c operator. A closure with a full
+diffusivity tensor adds a method that calls
+[`add_tensor_diffusion_scalar!`](@ref) (see [`IsentropicDiffusion`](@ref)).
+Halos of `ϕ` and of `f` are filled.
 """
-add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim) =
-    (add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh); nothing)
+function add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim)
+    if f.κv === f.κh
+        add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh)
+    else
+        add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh, f.κv)
+    end
+    return nothing
+end
+
+"""
+    sgs_tracer_diffusivity!(κ, c::AbstractSGSClosure, f::SGSFields, sim, ϕ) -> Field
+
+The cell-centred SGS diffusivity of a scalar `ϕ` other than θ (on the
+Boussinesq core: `qv`, in the explicit SGS flux of `step!` / `step_rk3!`
+and the implicit diffusion of
+[`step_imex!`](@ref Aeolus.TimeIntegration.step_imex!)), after
+[`compute_sgs!`](@ref) has filled `f`. Default: `f.κh`, returned as is and
+`κ` untouched, which is right for every closure whose `κ_t` is a property of
+the flow alone (`κ_t = ν_t/Prₜ`). A closure whose `κ_t` is built from θ's own
+gradient (the AMD scalar model, [`AMDClosure`](@ref)) computes `ϕ`'s into the
+scratch field `κ` (halos filled with `sim.bcs`) and returns `κ`.
+"""
+sgs_tracer_diffusivity!(κ, c::AbstractSGSClosure, f::SGSFields, sim, ϕ) = f.κh
 
 # -------------------------------------------------------------------------
 # What the cores call

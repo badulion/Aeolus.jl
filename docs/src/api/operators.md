@@ -53,6 +53,17 @@ Aeolus.Operators.add_eddy_viscosity_w!
 Aeolus.Operators.add_eddy_diffusion_scalar!
 ```
 
+## Stratification (Era VI, P58-a)
+
+Pointwise fields of the [`TurbulenceStability`](era6/turbulence_stability.md)
+contract.
+
+```@docs
+Aeolus.Operators.buoyancy_frequency_squared!
+Aeolus.Operators.strain_rate_squared!
+Aeolus.Operators.gradient_richardson!
+```
+
 ## Advection schemes
 
 ```@docs
@@ -64,6 +75,23 @@ Aeolus.Operators.advect_weno5!
 ```@docs
 Aeolus.Operators.add_surface_flux!
 Aeolus.Operators.add_sponge!
+```
+
+## Damping profiles
+
+The one implementation of relaxation rates, shared by the Rayleigh sponge
+(every mesh type, and the `:cos2` nest sponge) and the fringe region of
+`Transition` (P59-d, #185).
+
+```@docs
+Aeolus.Operators.AbstractRamp
+Aeolus.Operators.SinSquaredRamp
+Aeolus.Operators.NordstromRamp
+Aeolus.Operators.smooth_step
+Aeolus.Operators.DampingProfile
+Aeolus.Operators.sponge_profile
+Aeolus.Operators.damping_rate
+Aeolus.Operators.FiniteVolume.in_damping
 ```
 
 ## LES analysis toolbox (Phase 54)
@@ -81,4 +109,26 @@ Aeolus.Operators.spectral_cutoff_filter!
 Aeolus.Operators.isotropic_energy_spectrum
 Aeolus.Operators.isotropic_random_field!
 Aeolus.Operators.rescale_to_spectrum!
+```
+
+## A-priori SGS-stress analysis (Phase 56)
+
+The exact subfilter stress of a resolved field under an explicit filter,
+model stresses for comparison, the SGS dissipation and the a-priori
+metrics (see [LES filtering & closure](../theory/les_filtering.md#A-priori-tests:-the-exact-subfilter-stress-(Phase-56))).
+
+```@docs
+Aeolus.Operators.SymmetricTensorField
+Aeolus.Operators.components
+Aeolus.Operators.subfilter_stress!
+Aeolus.Operators.bardina_stress!
+Aeolus.Operators.filtered_strain
+Aeolus.Operators.filtered_strain!
+Aeolus.Operators.eddy_viscosity_stress!
+Aeolus.Operators.smagorinsky_stress!
+Aeolus.Operators.sgs_dissipation
+Aeolus.Operators.stress_eigvals
+Aeolus.Operators.lumley_invariants
+Aeolus.Operators.apriori_metrics
+Aeolus.Operators.dissipation_matched_cs
 ```

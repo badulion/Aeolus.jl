@@ -12,8 +12,17 @@ tested at are in
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
 - Wall-bounded flow diagnostics (P54-d, #174; below) — `Aeolus.Operators`
-- [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #183: matching height and input filtering against log-layer mismatch; [theory](../theory/wall_models.md))
 - Lagrangian dynamic Smagorinsky (P54-b, #173) and its scale-dependent form (LASD, P54-e, #186; below) — `Aeolus.Operators`
+- Stress-form momentum divergence (P55-b, #175; below) — `Aeolus.Operators`
+- Tensorial scalar eddy diffusivity (P55-c, #181; below) — `Aeolus.Operators`
+- [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
+- [Transition diagnostics — Transition](era6/transition.md) — `Aeolus.Transition` (Phase 59, #180; flat-plate boundary layer, P59-d, #185; [theory](../theory/transition.md#Laminar–turbulent-transition), [flat plate](../theory/transition.md#Flat-plate-transition))
+- [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #179: wall model on immersed and cut-cell walls; #183: matching height and input filtering against log-layer mismatch; [theory](../theory/wall_models.md))
+- [Large-scale forcing — LargeScaleForcing](era6/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; [theory](../theory/large_scale_forcing.md))
+- Walls — `NoSlipWall` and the resolved wall stress (P59-a, #172; below; [theory](../theory/transition.md))
+- AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`
+- [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182; [theory](../theory/sgs_tke.md))
+- σ-model SGS closure (P59-b, #184; below) — `Aeolus.Operators`
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -44,6 +53,7 @@ Aeolus.Operators.sgs_state
 Aeolus.Operators.restore_sgs_state!
 Aeolus.Operators.add_sgs_momentum!
 Aeolus.Operators.add_sgs_scalar!
+Aeolus.Operators.sgs_tracer_diffusivity!
 Aeolus.Operators.compute_sgs!
 Aeolus.Operators.sgs_closure
 Aeolus.Operators.AbstractEddyViscosityClosure
@@ -54,29 +64,7 @@ Aeolus.Operators.DynamicSmagorinsky
 Aeolus.Operators.FunctionSGS
 Aeolus.Operators._velocity_gradient_at
 Aeolus.Operators._strain_at
-```
-
-## Wall-bounded flow diagnostics (P54-d)
-
-Plane-averaged diagnostics of a horizontally periodic, wall-bounded run,
-shared by every Era VI benchmark. The cases that produce the flows —
-`half_channel_case` (the neutral ABL half channel of Porté-Agel et al.
-2000) and `channel_case` (the two-wall channel) — are in
-[WallModels](era6/wall_models.md); theory and measured numbers in
-[Wall models → Wall-bounded benchmark cases](../theory/wall_models.md#Wall-bounded-benchmark-cases).
-
-```julia
-using Aeolus
-hc = half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1))
-run_channel!(hc, 8.0)                                   # spin-up, H/u* = 1
-st = run_channel!(hc, 20.0; average_from = 8.0)         # st.τ_wall, st.phi_m, st.stress
-E = streamwise_spectrum(hc.sim.u, [3, 6, 12])           # E11(k1) at three levels
-```
-
-```@docs
-Aeolus.Operators.phi_m_profile
-Aeolus.Operators.total_stress_profile
-Aeolus.Operators.streamwise_spectrum
+Aeolus.Operators._vorticity_at
 ```
 
 ## Lagrangian dynamic Smagorinsky (P54-b)
@@ -122,4 +110,142 @@ Aeolus.Operators._second_test_filter!
 Aeolus.Operators._SecondTestFilter
 Aeolus.Operators._SGSMask
 Aeolus.Operators._masked_velocities!
+```
+
+## Stress-form momentum divergence (P55-b)
+
+The SGS momentum tendency in the stress form `∂ⱼ(2νᵢⱼSᵢⱼ)`, with
+horizontal and vertical eddy viscosities, and the generic operator for
+any symmetric stress τ on the C-grid. Every core selects the form with
+`sgs_stress = :laplacian` (default) or `:symmetric`; under `step_imex!`
+the diagonal part is implicit and the cross terms explicit. With
+`sgs_stress = :symmetric`, `cfl_diagnostics`, `adaptive_dt`,
+`step_adaptive!` and `imex_stability_limit` take the stress form's own
+explicit diffusive limit,
+[`stress_form_cfl_viscosity`](@ref Aeolus.TimeIntegration.stress_form_cfl_viscosity)
+(`2νt` for `νh = νv`). Theory:
+[Smagorinsky-Lilly SGS → Stress form vs Laplacian form](../theory/sgs.md#Stress-form-vs-Laplacian-form).
+
+```julia
+step!(sim, 0.5; sgs = StaticSmagorinsky(0.17), sgs_stress = :symmetric)
+τ = sgs_stress_tensor!(StressTensor(sim.mesh), sim.u, sim.v, sim.w, νh, νv)
+add_stress_divergence!(sim.tu, sim.tv, sim.tw, τ)   # == add_sgs_stress_divergence!(…, νh, νv)
+```
+
+```@docs
+Aeolus.Operators.StressTensor
+Aeolus.Operators.add_stress_divergence!
+Aeolus.Operators.sgs_stress_tensor!
+Aeolus.Operators.add_sgs_stress_divergence!
+Aeolus.Operators.sgs_stress_dissipation
+```
+
+## Tensorial scalar eddy diffusivity (P55-c)
+
+The scalar SGS flux `∂ᵢ(Kᵢⱼ ∂ⱼϕ)`. The diagonal `(κh, κv)` is the
+contract's default. A general symmetric `K` at cell centres uses the triad
+discretisation of Griffies et al. (1998), which is conservative, symmetric
+and dissipates variance for positive semi-definite K. The rotated isentropic
+(Redi) tensor has a slope taper and an isotropic fallback where N² ≤ 0.
+Under `step_imex!` the diagonal is implicit and the cross terms explicit.
+Theory: [Smagorinsky-Lilly SGS → Tensorial scalar diffusivity](../theory/sgs.md#Tensorial-scalar-diffusivity).
+
+```julia
+add_eddy_diffusion_scalar!(tθ, θ, κh, κv)                     # diag(κh, κh, κv); docs in Operators
+K = isentropic_tensor!(DiffusivityTensor(mesh), θ, κh, 0.0; bcs = bcs)
+add_tensor_diffusion_scalar!(tϕ, ϕ, K; bounded = bounded_directions(bcs))
+step!(sim, 0.5; sgs = IsentropicDiffusion(StaticSmagorinsky(0.17), sim.mesh; diapycnal = 0.1))
+```
+
+```@docs
+Aeolus.Operators.DiffusivityTensor
+Aeolus.Operators.diagonal_tensor!
+Aeolus.Operators.bounded_directions
+Aeolus.Operators.add_tensor_diffusion_scalar!
+Aeolus.Operators.isentropic_tensor!
+Aeolus.Operators.sgs_scalar_tensor
+Aeolus.Operators.IsentropicDiffusion
+```
+
+## σ-model SGS closure (P59-b, #184)
+
+`SigmaModel(C_σ = 1.35)` is an `AbstractEddyViscosityClosure` of the
+contract above, with
+``ν_t = (C_σΔ)^2 σ_3(σ_1 − σ_2)(σ_2 − σ_3)/σ_1^2`` built from the singular
+values of `_velocity_gradient_at` (Nicoud et al. 2011). It is zero in
+pure shear, solid-body rotation, any 2-D flow, isotropic expansion and
+axisymmetric strain, and it scales as ``z^3`` at a no-slip wall. Theory and
+measured numbers:
+[Smagorinsky-Lilly SGS → σ-model](../theory/sgs.md#σ-model). The Berlin
+case selects it with `physics[:sgs] = :sigma`.
+
+```julia
+step!(sim, dt; sgs = SigmaModel())             # C_σ = 1.35, κ_t = ν_t/Pr_t
+```
+
+```@docs
+Aeolus.Operators.SigmaModel
+Aeolus.Operators.compute_sigma_νt!
+Aeolus.Operators.sigma_operator
+Aeolus.Operators.sigma_singular_values
+Aeolus.Operators._sigma_operator_raw
+Aeolus.Operators._sym3_eigvals
+```
+
+## Walls (P59-a, #172)
+
+The theory is developed in
+[Transition and wall-bounded flow](../theory/transition.md).
+The no-slip / moving-wall condition
+[`NoSlipWall`](@ref Aeolus.BoundaryConditions.NoSlipWall) lives in
+`BoundaryConditions` ([API](boundary_conditions.md), together with
+`is_wall` and `homogeneous_bcs`). Its plane-mean wall stress is a method
+of the cut-cell generic `wall_shear_stress`:
+
+```@docs
+Aeolus.CutCell.wall_shear_stress(::Aeolus.Simulations.BoussinesqSimulation)
+```
+
+## Wall-bounded flow diagnostics (P54-d)
+
+Plane-averaged diagnostics of a horizontally periodic, wall-bounded run,
+shared by every Era VI benchmark. The cases that produce the flows —
+`half_channel_case` (the neutral ABL half channel of Porté-Agel et al.
+2000) and `channel_case` (the two-wall channel) — are in
+[WallModels](era6/wall_models.md); theory and measured numbers in
+[Wall models → Wall-bounded benchmark cases](../theory/wall_models.md#Wall-bounded-benchmark-cases).
+
+```julia
+using Aeolus
+hc = half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1))
+run_channel!(hc, 8.0)                                   # spin-up, H/u* = 1
+st = run_channel!(hc, 20.0; average_from = 8.0)         # st.τ_wall, st.phi_m, st.stress
+E = streamwise_spectrum(hc.sim.u, [3, 6, 12])           # E11(k1) at three levels
+```
+
+```@docs
+Aeolus.Operators.phi_m_profile
+Aeolus.Operators.total_stress_profile
+Aeolus.Operators.streamwise_spectrum
+```
+
+## Anisotropic minimum-dissipation and Vreman closures (P55-d)
+
+Two closures on the contract that weight each direction with its own grid
+spacing and vanish in laminar flow (`src/operators/sgs_amd_vreman.jl`,
+#176). The theory, the constants and the measured numbers are in
+[Smagorinsky-Lilly SGS → AMD and Vreman](../theory/sgs.md#Anisotropic-minimum-dissipation-and-Vreman-closures).
+
+```julia
+step!(sim, dt; sgs = AMDClosure())            # C = 0.3, own κ_t, buoyancy term with g/θ₀
+step!(sim, dt; sgs = VremanClosure(0.17))     # c = 2.5 C_s², κ_t = ν_t/Pr_t
+```
+
+```@docs
+Aeolus.Operators.AMDClosure
+Aeolus.Operators.VremanClosure
+Aeolus.Operators.compute_amd_coefficients!
+Aeolus.Operators.compute_amd_scalar_diffusivity!
+Aeolus.Operators.compute_vreman_νt!
+Aeolus.Operators.sgs_buoyancy_parameter
 ```

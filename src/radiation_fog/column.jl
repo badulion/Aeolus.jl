@@ -422,17 +422,21 @@ function moist_stability(col::FogColumn, k::Int;
     return (N2_up + N2_dn) / 2
 end
 
-# Stability functions: `(1 + 5 Ri)⁻²` in stable air — a short-tailed form
-# that lets turbulence collapse in a strong inversion, as radiation fog
-# needs — and `sqrt(1 − 16 Ri)` in unstable air (Businger-Dyer).
-@inline _fstab(Ri) = Ri >= 0 ? 1 / (1 + 5Ri)^2 : sqrt(1 - 16Ri)
+# Stability function: `TurbulenceStability.ShortTail` — `(1 + 5 Ri)⁻²` in
+# stable air, a short-tailed form that lets turbulence collapse in a strong
+# inversion, as radiation fog needs, and `sqrt(1 − 16 Ri)` in unstable air
+# (Businger-Dyer). The column has one K for heat, water and momentum, so
+# it uses the momentum factor throughout (ShortTail's f_h is the same).
+const _FOG_STABILITY = ShortTail()
 
 """
     eddy_diffusivity(col) -> K (m² s⁻¹) at interfaces 2..nz
 
 First-order local closure `K = l² |∂U/∂z| f(Ri) + K_min`, Blackadar
 mixing length `l = κ z / (1 + κ z / λ)`, gradient Richardson number from
-[`moist_stability`](@ref). The same `K` mixes heat, water and momentum.
+[`moist_stability`](@ref), and `f` the short-tailed stability function
+`TurbulenceStability.ShortTail` (through `stability_factor_m`). The same
+`K` mixes heat, water and momentum.
 """
 function eddy_diffusivity(col::FogColumn;
                           c::ThermodynamicConstants = DEFAULT_CONSTANTS)
@@ -445,8 +449,8 @@ function eddy_diffusivity(col::FogColumn;
         S2 = ((col.u[k + 1] - col.u[k])^2 + (col.v[k + 1] - col.v[k])^2) / Δz^2
         S2 = max(S2, 1e-8)
         N2 = moist_stability(col, k; c = c)
-        Ri = N2 / S2
-        K[k + 1] = l^2 * sqrt(S2) * _fstab(Ri) + s.K_min
+        Ri = gradient_richardson(N2, S2)
+        K[k + 1] = l^2 * sqrt(S2) * stability_factor_m(_FOG_STABILITY, Ri) + s.K_min
     end
     return K
 end
@@ -485,8 +489,8 @@ end
 
 Bulk transfer coefficients between the surface and the lowest layer:
 neutral values `κ²/ln(z/z0m)²` and `κ²/(ln(z/z0m) ln(z/z0h))`, times
-the same stability function as the interior with the bulk Richardson
-number of the surface layer.
+the same stability function as the interior (`ShortTail`) with the bulk
+Richardson number of the surface layer.
 """
 function surface_exchange(col::FogColumn;
                           c::ThermodynamicConstants = DEFAULT_CONSTANTS)
@@ -499,7 +503,7 @@ function surface_exchange(col::FogColumn;
                                         PhasePartition(col.qv[1]), c)
     Ri_b = c.grav * z1 * (θv1 - θvs) / (θv1 * U^2)
     lm = log(z1 / s.z0m); lh = log(z1 / s.z0h)
-    f = _fstab(Ri_b)
+    f = stability_factor_m(_FOG_STABILITY, Ri_b)
     return (C_D = _KARMAN^2 / lm^2 * f, C_H = _KARMAN^2 / (lm * lh) * f,
             U = U, Ri_b = Ri_b)
 end
