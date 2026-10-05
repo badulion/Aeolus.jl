@@ -67,6 +67,8 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        mismatch_l1, mismatch_area,
        NestSponge, apply_nest_sponge!,
        NestInterpState, nest_interp_state, interpolate_parent_state!,
+       nest_scalar_names, apply_nest_boundary!,
+       restrict_state_to_parent!, reflux!, reflux_scalars!,
        step_nested!, nest_conservation_error, composite_integral
 
 include("nesting/grid.jl")

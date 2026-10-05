@@ -59,46 +59,156 @@ function _sponge_weight(sp::NestSponge, cm::RegularGrid, i::Int, j::Int, k::Int)
 end
 
 # =========================================================================
-# Parent state interpolated onto the child mesh
+# Parent state interpolated onto the child mesh: a generic field set
 # =========================================================================
+
+const _CCField{T,M} = Field{CellCenter, T, Array{T,3}, M}
 
 """
     NestInterpState
 
-The parent solution (`u, v, w, θ`) interpolated onto the child mesh —
-boundary data for the child and the relaxation target for
-[`apply_nest_sponge!`](@ref). Build with [`nest_interp_state`](@ref),
-fill with [`interpolate_parent_state!`](@ref).
+The parent solution interpolated onto the child mesh — boundary data for
+the child and the relaxation target for [`apply_nest_sponge!`](@ref).
+It is a state over a *named field set*:
+
+  * the velocities `u, v, w` (fields `s.u`, `s.v`, `s.w`);
+  * `θ` (field `s.θ`);
+  * `qv`, when built from moist simulations with
+    `nest_interp_state(nest, parent_sim, child_sim)`;
+  * any extra cell-centred scalars, passed as
+    `scalars = (:co2 => (child_field, parent_field), …)`.
+
+Every cell-centred scalar of the set other than `θ` is bound to its
+child and parent fields; read the interpolated buffer of any member
+with `s[name]` (e.g. `s[:qv]`, `s[:co2]`, `s[:u]`) and list the scalar
+names with [`nest_scalar_names`](@ref). Prolongation
+([`interpolate_parent_state!`](@ref)), the halo write
+([`apply_nest_boundary!`](@ref)), the sponge, restriction
+([`restrict_state_to_parent!`](@ref)), [`composite_integral`](@ref) and
+refluxing ([`reflux_scalars!`](@ref)) all iterate over the whole set,
+through the same operator per member — so a tracer initialised equal to
+`θ` stays bit-identical to `θ` through all of them.
 """
 struct NestInterpState{T, M<:RegularGrid{T}}
     u::Field{FaceX,      T, Array{T,3}, M}
     v::Field{FaceY,      T, Array{T,3}, M}
     w::Field{FaceZ,      T, Array{T,3}, M}
     θ::Field{CellCenter, T, Array{T,3}, M}
+    names::Vector{Symbol}               # extra scalars (qv first, when moist)
+    bufs::Vector{_CCField{T,M}}         # parent value interpolated to the child mesh
+    child::Vector{Field}                # bound child field per extra scalar
+    parent::Vector{Field}               # bound parent field per extra scalar
 end
 
-function nest_interp_state(nest::NestedGrid{T}) where {T}
+const _RESERVED_NEST_NAMES = (:u, :v, :w, :θ, :theta)
+
+function _check_scalar_pair(nest::NestedGrid, name::Symbol, cf, pf)
+    name in _RESERVED_NEST_NAMES &&
+        error("nest_interp_state: scalar name :$name is reserved (u, v, w and θ are " *
+              "always part of the set)")
+    (cf isa Field && pf isa Field) ||
+        error("nest_interp_state: scalar :$name must be given as " *
+              ":$name => (child_field, parent_field)")
+    (location(cf) isa CellCenter && location(pf) isa CellCenter) ||
+        error("nest_interp_state: scalar :$name must be cell-centred on both meshes")
+    size(cf.data) == totalsize(nest.child_mesh) ||
+        error("nest_interp_state: the child field of :$name is not on the nest's child mesh")
+    size(pf.data) == totalsize(nest.parent_mesh) ||
+        error("nest_interp_state: the parent field of :$name is not on the nest's parent mesh")
+    return nothing
+end
+
+"""
+    nest_interp_state(nest; scalars=())
+    nest_interp_state(nest, parent_sim, child_sim; scalars=())
+
+Allocate a [`NestInterpState`](@ref) on `nest`'s child mesh. The field
+set always holds `u, v, w, θ`. The second form adds `qv` (bound to
+`child_sim.qv` / `parent_sim.qv`) when both simulations carry moisture,
+and errors when only one does. `scalars` adds extra cell-centred
+scalars, `name => (child_field, parent_field)`, in the order given.
+"""
+function nest_interp_state(nest::NestedGrid{T}; scalars=()) where {T}
     cm = nest.child_mesh
+    names = Symbol[]; bufs = _CCField{T,typeof(cm)}[]
+    child = Field[]; parent = Field[]
+    for pr in scalars
+        name, fs = first(pr), last(pr)
+        name isa Symbol || error("nest_interp_state: scalar names must be Symbols")
+        length(fs) == 2 || error("nest_interp_state: scalar :$name must be given as " *
+                                 ":$name => (child_field, parent_field)")
+        cf, pf = fs
+        _check_scalar_pair(nest, name, cf, pf)
+        name in names && error("nest_interp_state: scalar :$name given twice")
+        push!(names, name); push!(bufs, Field(CellCenter(), cm))
+        push!(child, cf); push!(parent, pf)
+    end
     return NestInterpState(Field(FaceX(), cm), Field(FaceY(), cm),
-                           Field(FaceZ(), cm), Field(CellCenter(), cm))
+                           Field(FaceZ(), cm), Field(CellCenter(), cm),
+                           names, bufs, child, parent)
+end
+
+function nest_interp_state(nest::NestedGrid, psim::BoussinesqSimulation,
+                           csim::BoussinesqSimulation; scalars=())
+    psim.has_moisture == csim.has_moisture ||
+        error("nest_interp_state: parent has_moisture = $(psim.has_moisture) but child " *
+              "has_moisture = $(csim.has_moisture); a nest must carry qv on both grids or " *
+              "on neither")
+    moist = psim.has_moisture ? (:qv => (csim.qv, psim.qv),) : ()
+    return nest_interp_state(nest; scalars=(moist..., scalars...))
+end
+
+"""
+    nest_scalar_names(state) -> Vector{Symbol}
+
+Names of the cell-centred scalars in the [`NestInterpState`](@ref)
+field set: `:θ` first, then `:qv` (if present) and the extra scalars.
+"""
+nest_scalar_names(s::NestInterpState) = Symbol[:θ; s.names]
+
+function Base.getindex(s::NestInterpState, name::Symbol)
+    name === :u && return s.u
+    name === :v && return s.v
+    name === :w && return s.w
+    (name === :θ || name === :theta) && return s.θ
+    i = findfirst(==(name), s.names)
+    i === nothing && throw(KeyError(name))
+    return s.bufs[i]
+end
+
+# (name, interpolated buffer, child field, parent field) for every
+# cell-centred scalar of the set; θ is bound to the simulations.
+function _scalar_entries(s::NestInterpState, psim, csim)
+    θc = csim === nothing ? nothing : csim.θ
+    θp = psim === nothing ? nothing : psim.θ
+    out = Any[(:θ, s.θ, θc, θp)]
+    for i in eachindex(s.names)
+        push!(out, (s.names[i], s.bufs[i], s.child[i], s.parent[i]))
+    end
+    return out
 end
 
 """
     interpolate_parent_state!(state, parent_sim, nest; order=3, region=:all)
 
-Interpolate `parent_sim`'s `u, v, w, θ` onto the child mesh into `state`.
-`region=:all` fills the whole child field (needed for the sponge);
-`region=:halo` fills only halos. Parent halos are filled first.
+Interpolate every member of `state`'s field set from the parent onto the
+child mesh: `parent_sim`'s `u, v, w, θ`, plus each bound scalar's parent
+field (`qv`, tracers). `region=:all` fills the whole child field (needed
+for the sponge); `region=:halo` fills only halos. Parent halos are filled
+first (scalars with `parent_sim.θ_bcs`, as `step!` does for `qv`).
 """
 function interpolate_parent_state!(s::NestInterpState, psim::BoussinesqSimulation,
                                    nest::NestedGrid; order::Int=3,
                                    region::Symbol=:all)
     fill_halos!(psim.u, psim.bcs); fill_halos!(psim.v, psim.bcs)
-    fill_halos!(psim.w, psim.bcs); fill_halos!(psim.θ, psim.θ_bcs)
+    fill_halos!(psim.w, psim.bcs)
     _interp_child!(s.u, psim.u, nest; order, region)
     _interp_child!(s.v, psim.v, nest; order, region)
     _interp_child!(s.w, psim.w, nest; order, region)
-    _interp_child!(s.θ, psim.θ, nest; order, region)
+    for (_, buf, _, pf) in _scalar_entries(s, psim, nothing)
+        fill_halos!(pf, psim.θ_bcs)
+        _interp_child!(buf, pf, nest; order, region)
+    end
     return s
 end
 
@@ -106,6 +216,9 @@ function _blend_state!(dst::NestInterpState, a::NestInterpState,
                        b::NestInterpState, τ::Real)
     for f in (:u, :v, :w, :θ)
         getfield(dst, f).data .= (1 - τ) .* getfield(a, f).data .+ τ .* getfield(b, f).data
+    end
+    for i in eachindex(dst.bufs)
+        dst.bufs[i].data .= (1 - τ) .* a.bufs[i].data .+ τ .* b.bufs[i].data
     end
     return dst
 end
@@ -127,16 +240,33 @@ end
 """
     apply_nest_boundary!(child_sim, state; impose_interface=false)
 
-Write the interpolated parent `state` into `child_sim`'s halo cells (and,
-optionally, the boundary-normal interior face planes).
+Write the interpolated parent `state` into the halo cells of every member
+of the field set: `child_sim`'s `u, v, w, θ` and each bound scalar's
+child field. With `impose_interface=true` the velocities'
+boundary-normal interior face planes are overwritten too (Dirichlet
+inflow faces).
 """
 function apply_nest_boundary!(csim::BoussinesqSimulation, s::NestInterpState;
                               impose_interface::Bool=false)
     _copy_halo!(csim.u, s.u; interface=impose_interface)
     _copy_halo!(csim.v, s.v; interface=impose_interface)
     _copy_halo!(csim.w, s.w; interface=impose_interface)
-    _copy_halo!(csim.θ, s.θ)
+    for (_, buf, cf, _) in _scalar_entries(s, nothing, csim)
+        _copy_halo!(cf, buf)
+    end
     return csim
+end
+
+function _sponge_field!(cf::Field, gf::Field, sp::NestSponge, cm, αdt)
+    ii, jj, kk = interior(cm)
+    cd = cf.data; gd = gf.data
+    @inbounds for k in kk, j in jj, i in ii
+        wgt = _sponge_weight(sp, cm, i, j, k)
+        wgt == 0.0 && continue
+        β = clamp(αdt * wgt, 0.0, 1.0)
+        cd[i, j, k] = (1 - β) * cd[i, j, k] + β * gd[i, j, k]
+    end
+    return cf
 end
 
 """
@@ -144,21 +274,18 @@ end
 
 Relax the child solution toward `parent_interp` inside the sponge zone:
 `f ← (1-β) f + β f_parent` with `β = clamp(α_max·dt·ramp, 0, 1)`.
-Applied to `u, v, w, θ`. Call once per child substep, after `step!`.
+Applied to every member of the field set (`u, v, w, θ`, `qv`, tracers).
+Call once per child substep, after `step!`.
 """
 function apply_nest_sponge!(csim::BoussinesqSimulation, s::NestInterpState,
                             sp::NestSponge; dt::Real=1.0)
     cm = csim.mesh
-    ii, jj, kk = interior(cm)
     αdt = sp.α_max * dt
-    for (cf, gf) in ((csim.u, s.u), (csim.v, s.v), (csim.w, s.w), (csim.θ, s.θ))
-        cd = cf.data; gd = gf.data
-        @inbounds for k in kk, j in jj, i in ii
-            wgt = _sponge_weight(sp, cm, i, j, k)
-            wgt == 0.0 && continue
-            β = clamp(αdt * wgt, 0.0, 1.0)
-            cd[i, j, k] = (1 - β) * cd[i, j, k] + β * gd[i, j, k]
-        end
+    for (cf, gf) in ((csim.u, s.u), (csim.v, s.v), (csim.w, s.w))
+        _sponge_field!(cf, gf, sp, cm, αdt)
+    end
+    for (_, buf, cf, _) in _scalar_entries(s, nothing, csim)
+        _sponge_field!(cf, buf, sp, cm, αdt)
     end
     return csim
 end

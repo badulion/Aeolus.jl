@@ -302,7 +302,7 @@ export MultigridPoissonSolver, MGPreconditionedCG,
        mg_vcycle!, mg_solve!, mg_residual_norm,
        mg_level_count, mg_iteration_history
 
-# Phases 30-31 — production nesting + block-structured AMR
+# Phase 30 — parent-child nesting (Aeolus.Nesting); Phase 31 — block-structured AMR
 export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
        NestBC, nest_bcs,
@@ -312,6 +312,8 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        mismatch_l1, mismatch_area,
        NestSponge, apply_nest_sponge!,
        NestInterpState, nest_interp_state, interpolate_parent_state!,
+       nest_scalar_names, apply_nest_boundary!,
+       restrict_state_to_parent!, reflux!, reflux_scalars!,
        step_nested!, nest_conservation_error, composite_integral,
        RefinementBlock, AMRHierarchy, amr_hierarchy,
        refinement_criterion_gradient, refinement_criterion_vorticity,
