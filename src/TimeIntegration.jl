@@ -876,9 +876,12 @@ end
 # (N-open-b) to its boundary value, so they are removed from the CG system
 # (keeping the reduced operator SPD) instead of being solved for. Free-slip
 # and no-slip walls (`is_wall`) pin `w` alike; the top, east and north
-# faces lie in the halo. `(ic, jc, kc)`, 0 = none.
-_constraint_index(loc::Location, m::RegularGrid, bcs::FieldBoundaryConditions) =
+# faces lie in the halo. `_constraint_planes` gives `(ic, jc, kc)`, 0 =
+# none; `_constraint_index` is its z entry (the wall row), as before.
+_constraint_planes(loc::Location, m::RegularGrid, bcs::FieldBoundaryConditions) =
     pinned_face_indices(loc, m, bcs)
+_constraint_index(loc::Location, m::RegularGrid, bcs::FieldBoundaryConditions) =
+    _constraint_planes(loc, m, bcs)[3]
 
 @inline _pinned(c::NTuple{3,Int}, i, j, k) = i == c[1] || j == c[2] || k == c[3]
 
@@ -1047,7 +1050,7 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
     # stationary wall and carry the wall term in the right-hand side.
     bcs = homogeneous_bcs(bcs_full)
     affine = bcs !== bcs_full
-    kc = _constraint_index(L(), m, bcs)
+    kc = _constraint_planes(L(), m, bcs)
     jacobi = precondition === :jacobi
 
     x  = field.data
