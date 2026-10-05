@@ -26,9 +26,11 @@
 # parent grid that is uniform to 500 m and then stretched has an odd or
 # 2·odd level count (53 levels for 25 m to 500 m, ×1.08 to 100 m, 3 km):
 # one or two levels, i.e. a smoother, not a multigrid. Measured on that
-# grid (#151): the bare V-cycle missed 1e-12 after 500 cycles (8.6 s at
-# 32×32×53); multigrid-preconditioned CG took 39 iterations, 2.6 s, at
-# 64×64×53. This direct solve is the default; the multigrid route stays
+# grid (#151, one thread, random compatible source, tol 1e-12): the bare
+# V-cycle stalls (relative residual 1.9e-6 after 500 cycles, 10 s, at
+# 32×32×53; 1.2e-4 at 64×64×53); multigrid-preconditioned CG converges in
+# 34 iterations (0.72 s) at 32×32×53 and 64 (5.5 s) at 64×64×53; this
+# direct solve takes 0.4 ms and 1.2 ms. It is the default; the multigrid route stays
 # available for a coefficient field (cut cells) the transform cannot
 # diagonalise.
 
