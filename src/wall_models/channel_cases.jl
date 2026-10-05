@@ -185,6 +185,14 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
         throw(ArgumentError("sgs_stress must be :laplacian or :symmetric, got :$sgs_stress"))
     if bottom_bc === :noslip
         ν > 0 || throw(ArgumentError("bottom_bc = :noslip needs a viscous flow (ν > 0)"))
+        # a resolved wall has no wall model: its input, TBLE columns and
+        # dynamic roughness do not apply
+        inputs === nothing ||
+            throw(ArgumentError("bottom_bc = :noslip has no wall model: h_wm, h_wm_cells and filter do not apply"))
+        wall_model === :equilibrium ||
+            throw(ArgumentError("bottom_bc = :noslip has no wall model: wall_model = :nonequilibrium does not apply"))
+        roughness === nothing ||
+            throw(ArgumentError("bottom_bc = :noslip has no wall model: roughness does not apply"))
     end
     if θ_walls !== nothing
         bottom_bc === :noslip ||
@@ -410,7 +418,9 @@ the resolved one, and are advanced once per step after the projection.
     cells, plus the SGS flux there (the closures carry no wall damping;
     resolve the viscous sublayer or use a dynamic closure);
     `τ_wall_bottom`/`τ_wall_top` report the molecular part,
-    `wall_shear_stress` of P59-a.
+    `wall_shear_stress` of P59-a. The wall-model keywords (`h_wm`,
+    `h_wm_cells`, `filter`, `wall_model = :nonequilibrium`) do not apply
+    and raise an `ArgumentError`.
   * `θ_walls = (θ_bottom, θ_top)` — isothermal walls (needs
     `bottom_bc = :noslip`). θ is an active Boussinesq scalar with
     reference `θ₀` and gravity `g_accel` (the friction Richardson number
