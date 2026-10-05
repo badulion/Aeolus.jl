@@ -201,11 +201,17 @@ needs.
   surface last saw (`T_air`, `q_air`, `U`, `z_ref`), the fluxes it
   returned (`Rn`, `H`, `LE`, `G`, `E`, `u_star`) and the `dew_mask`.
 * **Surface factories.** A coupling that provides the surface of a
-  class registers `register_surface_factory!(case, class, name, (case, I) -> surface)`
-  in its `build`; the surface exchange builds every column's surface
-  from these in its `init!` (a `SlabLand` for a class nobody claims).
-  This is how the park (#140), water (#141) and facet (#139) couplings
-  replace a class's surface without touching the surface exchange.
+  class registers `register_surface_factory!(case, class, name, (case, site) -> surface)`
+  in its `build`, where `site::SurfaceSite` carries the class, the
+  initial skin temperature, the child column (`nothing` for a tile of a
+  parent column) and an optional roughness override (take the roughness
+  from `class_roughness(case, site)`). `class_surface(case, site)` is the
+  one class-to-surface factory: the surface exchange builds every child
+  column's surface with it in its `init!` (a `SlabLand` for a class
+  nobody claims), and the parent's tiled surface (#249, below) every
+  tile. This is how the park (#140), water (#141) and facet (#139)
+  couplings replace a class's surface — in the child and the parent at
+  once — without touching the surface exchange.
 * **Tracers** (`case.tracers`): `ensure_tracer!(case, :qi; advect = true,
   positive = true, units = …, long_name = …)` creates or returns a
   cell-centred field; flags are OR-ed, so two couplings share one `ql`.

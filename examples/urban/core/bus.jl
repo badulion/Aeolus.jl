@@ -102,8 +102,10 @@ Surface exchange (#129):
 * `surface` — the `AbstractSurface` of every column (`nothing` where the
   column is solid up to the lid), built by the surface exchange from the
   per-class `factories`;
-* `factories` — `class => (owner, f)`: `f(case, I) -> AbstractSurface`
-  builds the surface of column `I`; see [`register_surface_factory!`](@ref);
+* `factories` — `class => (owner, f)`: `f(case, site::SurfaceSite) ->
+  AbstractSurface` builds the surface of a [`SurfaceSite`](@ref) (a child
+  column, or a tile of a parent column); see
+  [`register_surface_factory!`](@ref) and [`class_surface`](@ref);
 * `k_air` — the first air level above each column (1 on open ground, one
   above the roof on building columns, `Nz + 1` for a column solid to the
   lid): every surface flux goes into this cell;
@@ -170,15 +172,40 @@ function SurfaceBus(Nx::Integer, Ny::Integer; Ts0::Real = 285.0)
 end
 
 """
+    SurfaceSite(class; T_skin, column = nothing, z0m = nothing)
+
+Where a surface is built: a surface `class` (`SURFACE_*`) with its
+initial skin temperature `T_skin` (K), and either the child `column`
+(`CartesianIndex{2}`) it belongs to, or `nothing` for a tile of a
+parent column (#249), which has no child column. `z0m` (m), when given,
+overrides the class's momentum roughness: a parent tile over
+unresolved buildings takes the Macdonald et al. (1998) roughness
+(`SurfaceTiles.macdonald_roughness`) instead of the child's table, which
+describes the surface between resolved buildings.
+"""
+struct SurfaceSite
+    class::UInt8
+    T_skin::Float64
+    column::Union{Nothing,CartesianIndex{2}}
+    z0m::Union{Nothing,Float64}
+end
+SurfaceSite(class::Integer; T_skin::Real, column = nothing, z0m = nothing) =
+    SurfaceSite(UInt8(class), Float64(T_skin), column, z0m === nothing ? nothing : Float64(z0m))
+
+"""
     register_surface_factory!(case, class, owner, f) -> case
 
 Make coupling `owner` responsible for the surfaces of class `class`
-(`SURFACE_*`): the surface exchange builds the surface of every column of
-that class with `f(case, I::CartesianIndex{2}) -> AbstractSurface`. Call
-it from the coupling's `build` (every `build` runs before any `init!`,
-and the surfaces are built in the surface exchange's `init!`). Two
-owners for one class are an error. Classes without a factory get the
-surface exchange's `SlabLand` fallback.
+(`SURFACE_*`): [`class_surface`](@ref) builds every surface of that class
+— each child column's, in the surface exchange's `init!`, and each tile
+of the parent's tiled surface (#249) — with
+`f(case, site::SurfaceSite) -> AbstractSurface` (see [`SurfaceSite`](@ref);
+`site.column` is `nothing` for a parent tile, and `site.z0m`, when set,
+replaces the class's roughness: use [`class_roughness`](@ref)). Call it
+from the coupling's `build` (every `build` runs before any `init!`, and
+the surfaces are built in the surface exchange's `init!`). Two owners for
+one class are an error. Classes without a factory get the surface
+exchange's `SlabLand` fallback.
 """
 function register_surface_factory!(case, class::Integer, owner::Symbol, f)
     fs = case.bus.factories
