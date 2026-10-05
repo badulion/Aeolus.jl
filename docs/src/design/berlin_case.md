@@ -835,7 +835,8 @@ natural one — the configuration it was measured in, and the cost from
 ## The budget ledger
 
 `case.ledger` integrates, step by step, the surface energy balance of
-every surface class and the water budget of the air. The core calls
+every surface class, the water budget of the air and the heat of the
+air ([below](#The-heat-of-the-air), #253). The core calls
 `ledger_begin_step!` before `:clock` (it snapshots `bus.Ts` into
 `ledger.Ts_start` and the water in the air) and `ledger_end_step!` after
 `:sanity` (it calls every coupling's `budget!` and books the change of
@@ -921,6 +922,89 @@ the surface exchange's smoke check counts writes into solid cells
 The cost is about 1 ms/step on the flagship grid (the two water
 integrals), plus about 0.4 ms/step for the Kessler coupling's own
 bookkeeping.
+
+### The heat of the air
+
+`ledger.heat`, an `AirHeatLedger`, closes the heat of the air
+
+``H_{air} = Σ_k ρ̄_k c_p Π̄_k Σ_{ij ∈ fluid} θ_{ijk} Δz_k / (N_x N_y)``  (J m⁻²),
+
+the dry enthalpy ``c_p T`` (``T = θ Π̄``) of the air above a unit of
+ground, with the case's one reference state (`case.ref`) and without the
+solid cells. The meter (`AirHeatMeter`, `core/air_heat.jl`) and the
+ledger (`core/air_heat_ledger.jl`) are functions of (mesh or sim,
+reference state, solid mask) and of the θ field, not of the Berlin
+`Case`, so the parent run of the nesting epic (#246) keeps its own with
+the same code.
+
+**Every heater converts with the same weight.** A heat flux `q` (W m⁻²
+into level `k`) raises θ by ``q Δt / (ρ̄_k c_p Π̄_k Δz_k)``:
+`ref_θ_per_heat(case, k)` is that conversion, the inverse of the
+meter's weight, and every coupling that heats the air uses it
+(`surface_exchange`, `buildings_citymean`, `traffic_heat`,
+`column_radiation`). Before #253 they divided by ``ρ̄ c_p`` only and the
+air received Π̄₁ ≈ 1.004 times the flux at the ground.
+
+**Attribution is automatic.** Couplings book nothing. Every schedule
+entry `timed_run!` runs, and the dynamics step, is an attribution
+*context* `(stage, coupling)`: the ledger measures ``H_{air}`` per level
+when the context closes (the value it opened with is the previous
+close) and books the difference. Contexts nest: the `:body_force` and
+`:post_predictor` entries run inside `step!` and are taken out of the
+dynamics' share. The dynamics' rest is split into
+`(:dynamics, :transport)`, what the core's transport conserves
+(``Σ W θ ΔV``, ``W = 1`` on the Boussinesq core), whose column total is
+the numerics residual, `(:dynamics, :redistribution)`, the change of
+``H_{air}`` because the transport conserves ``Σ W θ`` and not
+``Σ ρ̄ Π̄ θ`` (moving warm air up into levels of lower ρ̄Π̄ lowers
+``H``; the heat analogue of `density_redistribution`), and
+`(:dynamics, :solid_exchange)`, the heat the transport and diffusion move
+into the building cells (θ is carried through the immersed boundary, so
+the solid cells' θ evolves and exchanges heat with the air through the
+numerics alone). A change of θ outside every context is still caught:
+as `(:core, :unattributed)` within a step, as `(:output, :between_steps)`
+between two steps. The smoke test asserts both stay empty.
+
+**Booked terms.** `add_heat!(ledger, term, J; k)` books `J` J m⁻² under
+`(stage, term)` from inside a running context and takes it out of that
+context's own share, so a context's entry becomes the residual of the
+terms named inside it. The nesting epic books `:top_flux` (N-parent-b),
+`:boundary_heat`, `:relaxation`, `:mass_correction` (N-open-d) and
+`:feedback_heat` (N-berlin-twoway) this way. Called outside a step it is
+an error: that heat would have no place in the balance.
+
+**Layers and windows.** Every term is kept per level and per local hour
+of the step's start, so `heat_budget(ledger; window = (20, 5), layer =
+:canopy)` returns the 20:00–05:00 integrals of #238 for the canopy
+(`(0, cfg.canopy_top)`; `NaN`, the default, takes the tallest roof),
+or for `layer = (0, 100)`, `:column`. For a sub-layer
+`(:dynamics, :transport)` is the heat the dynamics carried across the
+layer's top. `ledger_report` prints the whole-run table (column,
+canopy, 0–100 m); `heat_report(ledger; window = (20, 5))` the night one.
+
+In the Alexanderplatz scene the tallest roof is the Fernsehturm, clipped
+at the 200 m domain top (the next tallest roof is 143.75 m, the
+90th percentile of the built columns 37.5 m, the mean 21.2 m), so the
+default `:canopy` is the whole column there; set `cfg.canopy_top` for the
+street canyons.
+
+**Tests** (`test/berlin_air_heat.jl`, `test/berlin_smoke.jl`). The meter
+against the analytic heat of a uniform-θ hydrostatic layer
+(``c_p^2 θ p_0/(R g)\,[Π^{c_p/R+1}/(c_p/R+1)]``: 3.1e-8 at Nz = 16,
+2.0e-9 at Nz = 64, second order). A closed box (every θ source off):
+the transport's column change is ≤ 2e-16 of ``H`` per step; ``H``
+itself changes by up to 3.7e-7 per step, all of it `redistribution`.
+(The issue expected ``|ΔH_{air}|/H_{air} ≤ 10^{-13}`` per step for a
+flux-form θ advection. That holds for what the flux-form Boussinesq
+transport conserves, ``Σ θ ΔV``; for ``H``, which weights θ with ρ̄Π̄,
+the expectation was wrong.) H₀ = 100 W m⁻² into the lowest level of a
+flat, motionless variant: the attributed term and ``ΔH_{air}`` equal
+H₀Δt to 7.8e-13. Every smoke run (everything on included) closes to
+≤ 1e-10 W m⁻² (measured ≤ 3.8e-14).
+
+**Cost.** One measurement is one pass over the interior (≈ 20 µs on
+64 × 64 × 32); the flagship step opens ≈ 29 contexts, ≈ 31
+measurements, about 1.2 ms/step (0.4 % of the step).
 
 ### Baseline (measured, #127)
 
