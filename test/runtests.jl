@@ -988,6 +988,8 @@ end
     include("era6_collapse.jl")            # P58-e: maximum sustainable heat flux, LES collapse regime (#193)
     include("era6_gabls3.jl")            # P58-d: GABLS3 on the SBL driver: budgets, MOST, LLJ (#194)
     include("era6_relaminarisation.jl")  # P59-e: laminar stratified flow, decaying stratified turbulence, criteria (#195)
+    include("era6_open_pressure.jl")     # N-open-a: per-axis Neumann Poisson solves, BC-aware default solver (#251)
+    include("era6_open_boundaries.jl")   # N-open-b: open faces, boundary-data contract, mass-flux correction (#255)
 end
 
 # =========================================================================

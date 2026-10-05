@@ -118,6 +118,87 @@ et al. fix this by projecting `pⁿ⁺¹ - pⁿ` instead of `pⁿ⁺¹`. Aeolus 
 periodic-only for now, so this refinement is deferred to Phase 1b when
 walls arrive.
 
+## Prescribed-flux faces (open boundaries)
+
+A nested child, or any domain driven by outside data, prescribes the
+velocity on every face (N-open-b, #255; `OpenBoundary`). The normal
+component is written into the boundary-face slot of `u*` *before* the
+divergence is formed, and `φ` obeys the homogeneous Neumann condition
+`∂φ/∂n = 0` (Kim & Moin 1985). Then
+
+```math
+u^{n+1}\cdot n = u^*\cdot n - Δt\,\frac{∂φ}{∂n} = g^{n+1}\cdot n ,
+```
+
+so the projection leaves the prescribed face value exactly unchanged (the
+code asserts that `∂φ/∂n` is exactly zero at the west and south faces,
+whose face slots lie inside the interior index range). This is not an
+approximation: with ``u^* = u(t+Δt) + Δt∇p`` in the interior and the face
+value ``g`` on the boundary, the discrete Neumann problem is solved by
+``φ = Δt\,p`` — the face's missing ``Δt\,∂p/∂n`` is exactly the term the
+mirror halo drops from the boundary cell's Laplacian.
+
+### Compatibility and the mass-flux correction
+
+With every normal velocity prescribed, the Neumann problem is solvable
+only if ``\sum ∇·u^*\,ΔV = \oint u·n\,dA = 0``
+([compatibility](poisson.md#The-discrete-compatibility-condition)).
+Interpolated or analytic data never balance to round-off, and the
+solvers would leave the uniform residual ``∇·u = Q/V`` in every cell.
+`update_open_boundaries!` therefore applies, once per projected
+(sub)step and before the projection, the only boundary mass correction
+in the code base (`correct_boundary_mass_flux!`; Hellsten et al. 2021,
+§3.3, Eq. 2):
+
+```math
+Q = \sum_{\text{open faces}} W\,u·n\,A, \qquad
+δ = \frac{Q}{\sum W A}, \qquad u·n \leftarrow u·n - δ ,
+```
+
+with ``W = 1`` for the Boussinesq core and the constraint weight
+(``ρ̄`` anelastic, ``ρ̄θ̄`` pseudo-incompressible) for the sound-proof
+cores, taken exactly as the projection's divergence takes it (``W_c(k)``
+on lateral faces, ``W_f`` on the top). `correction = :outflow_only`
+adjusts only the outflow faces. Measured (`test/era6_open_boundaries.jl`,
+16 × 12 × 8 box, ``Q = 4.8 × 10^4`` m³ s⁻¹ of net outflow): without the
+correction ``\max|∇·u| = Q/V = 2.5 × 10^{-4}`` s⁻¹ in every core, to
+1e-12; with it ``\max|∇·u| < 10^{-12}`` s⁻¹ in `step!`, `step_rk3!`,
+`step_imex!` (ARK2, ROS2) and `step_adaptive!`, and
+``\max|(1/W)∇·(Wu)| < 10^{-9}`` s⁻¹ in the anelastic and
+pseudo-incompressible cores; the boundary faces equal the corrected data
+bit for bit.
+
+### Where the boundary data enter a step
+
+The buffers belong to the state: the halo fill at the start of a
+(sub)step reads them, so they must hold the boundary values of the
+(sub)step's start state. `update_open_boundaries!(sim, t, dt)` is
+called after the predictor with the time `t` the projected velocity
+belongs to — `t + Δt` for an Euler step; `t + Δt`, `t + 2Δt` and
+`t + 3Δt/2` for the three Shu–Osher substages of `step_rk3!`, whose
+buffers are then combined with the fields' own weights (3/4, 1/4 and
+1/3, 2/3); the stage times of ARK2 and ROS2. `step_adaptive!`
+restores the buffers with the fields when it rejects a step.
+
+### Implicit diffusion: the intermediate-velocity condition
+
+With an implicit viscous term (`step_imex!`) the diffusion solve needs
+boundary values for the *intermediate* velocity ``u^* = u^{n+1} + ∇φ``,
+``φ ≈ τ p`` (``τ`` the stage's projection step). Imposing the data
+``g`` itself on the tangential components leaves, after the projection, a
+viscous boundary layer of amplitude ``τ\,∂p/∂s`` — a first-order
+splitting error that shows up as order reduction. Kim & Moin's (1985)
+remedy is the condition ``u^*_s = g_s + τ\,∂p/∂s``, with the latest
+pressure; `open_intermediate_velocity!` applies it around each ARK2
+stage (the projection itself sees ``g``). Measured on the
+Dirichlet-everywhere Taylor–Green window (``ν Δt/h^2 = 0.2``,
+``N = 16, 32, 64``): with ``g`` alone the observed order was 1.60 and
+1.65, the time error growing with ``ν Δt/h^2`` (at 0.4 the ``N = 32``
+error was 2.2 times the spatial one); with the Kim & Moin condition it is
+2.005 and 2.006 and independent of ``ν Δt/h^2`` up to 0.4. The
+explicit drivers need no such condition (their tendencies use the
+step-start halos): `step_rk3!` measures 2.035 and 2.022.
+
 ## Alternative: pressure-Poisson-per-substage
 
 For RK3 (or higher-order Runge-Kutta), the divergence-free constraint
@@ -137,3 +218,12 @@ accumulation. This is what Oceananigans.jl and NCAR-LES do.
     projection methods for incompressible flows*, CMAME 195, 6011.
   * Ferziger, J. H. & Perić, M. (2020), *Computational Methods for
     Fluid Dynamics*, ch. 8.
+  * Kim, J. & Moin, P. (1985), *Application of a fractional-step method
+    to incompressible Navier–Stokes equations*, J. Comput. Phys. 59,
+    308–323.
+  * Hellsten, A., Ketelsen, K., Sühring, M. et al. (2021), *A nested
+    multi-scale system implemented in the large-eddy simulation model
+    PALM model system 6.0*, Geosci. Model Dev. 14, 3185–3214.
+  * Kadasch, E., Sühring, M., Gronemeier, T. & Raasch, S. (2021),
+    *Mesoscale nesting interface of the PALM model system 6.0*, Geosci.
+    Model Dev. 14, 5435–5465.
