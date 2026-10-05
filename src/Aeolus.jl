@@ -1039,6 +1039,8 @@ export FreeStreamBoundary
 export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
        AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
+# #248 (N-parent-c): plane-mean nudging of u, v, θ, qv.
+export ProfileNudging, NudgingWeight, nudging_weight, tendency_integrals
 
 # P57-e (#190): the dynamic roughness of partially resolved relief
 # (Anderson & Meneveau 2011). `surface_gradient_drag` does not collide

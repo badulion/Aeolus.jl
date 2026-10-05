@@ -984,6 +984,7 @@ end
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
     include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
     include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)
+    include("era6_nudging_subsidence.jl") # N-parent-c: plane-mean nudging of u, v, θ, qv; large-scale subsidence (#248)
     include("era6_scalar_sgs_diffusion.jl") # P56-a: SGS diffusion of qv and tracers with κ_t, solid mask (#177)
     include("era6_neutral_abl.jl")       # P54-d: half-channel ABL / channel harness + Φ_m, stress, E11 (#174)
     include("era6_amd_vreman.jl")        # P55-d: AMD and Vreman closures (#176)
