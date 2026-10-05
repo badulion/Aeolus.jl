@@ -263,6 +263,9 @@ phi_m(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? phi_m(_unstable(sf), ζ) :
 phi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? phi_h(_unstable(sf), ζ) : 1 + sf.β_h * ζ
 psi_m(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_m(_unstable(sf), ζ) : -sf.β_m * ζ
 psi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_h(_unstable(sf), ζ) : -sf.β_h * ζ
+# the stable momentum branch is log-linear: the closed-form MSHF applies
+# with α = β_m (only φ_m enters the flux curve; P58-e, #193)
+log_linear_slope(sf::BusingerDyerLogLinear) = sf.β_m
 
 # -------------------------------------------------------------------------
 # MOST-consistent gradient-Richardson stability factors (Era VI, P58-a)
@@ -510,6 +513,10 @@ function solve_surface_layer(sf::AbstractStabilityFunctions = BusingerDyerBeljaa
 end
 
 # Illinois (modified regula falsi) on a bracket with f(a) < 0 < f(b).
+# The shared internal root solver of the code base: solve_surface_layer,
+# PlantCanopy, Photosynthesis, AirSeaFlux and WallModels (the Obukhov
+# length of a wall law; the dynamic roughness α of P57-e) all call this
+# one, none carries a copy. Returns (x, iterations, converged).
 function _illinois(f, a::T, b::T, fa::T, fb::T, maxiter::Integer) where {T}
     side = 0
     x = (a + b) / 2
@@ -557,12 +564,9 @@ The slope α of a *log-linear* stable branch, ``φ_m = 1 + αζ`` and
 ``ψ_m = -αζ`` for ``ζ ≥ 0``, or `nothing` if `sf` is not log-linear
 there. [`max_sustainable_heat_flux`](@ref) uses the closed form when it
 is a number. The default is `nothing`; a family with a log-linear stable
-branch extends it: [`BusingerDyerLogLinear`](@ref) returns its momentum
-slope `β_m` (the MSHF depends on ψ_m only).
+branch (e.g. [`BusingerDyerLogLinear`](@ref), with ``α = β_m``) extends it.
 """
 log_linear_slope(::AbstractStabilityFunctions) = nothing
-# the stable branch is log-linear: the closed-form MSHF applies (P58-e)
-log_linear_slope(sf::BusingerDyerLogLinear) = sf.β_m
 
 """
     MSHFSolution{T}

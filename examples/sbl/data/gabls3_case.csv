@@ -1,0 +1,98 @@
+# GABLS3 LES case (Cabauw, 00-09 UTC 2 July 2006): initial profiles, surface boundary values and forcing.
+# Source: S. Basu, "GABLS3 LES INTERCOMPARISON Case Description (Revised: October 6, 2008)", Tables 1-7, distributed as
+#   GABLS3_LES_Revised.docx (sha256 c1f815de95c22b413ca5d1728d90ae470a5e1b8b86b2c96e29880818ee07c6ee) in
+#   https://github.com/Sukantabasu/jax-alfa/tree/aa7baebf99282711416dadbde7dfdfcba8940524/examples/SBL_GABLS3
+#   (read for this file on 2026-10-04; transcribed by hand and cross-checked value by value against the independent
+#   transcription in https://github.com/glwagner/BreezeEvaluation.jl data/gabls3/reference/*.csv: no differences).
+# Set-up summarised in Basu, Holtslag & Bosveld (2012), "GABLS3-LES intercomparison study", Proc. ECMWF GABLS
+#   Workshop on Diurnal Cycles and the Stable Boundary Layer, 7-10 Nov 2011, 75-82, section 3; case paper Bosveld et
+#   al. (2014a), Boundary-Layer Meteorol. 152, 133-156 (Part A) and 157-187 (Part B, results).
+# Copied from tables, not digitised: digitisation uncertainty 0.
+# Case constants (Case Description): Cabauw 51.9711 N 4.9267 E; domain 800 x 800 x 800 m; reference resolution
+#   6.25 m isotropic; z0 = 0.15 m; the surface heat flux from MOST between the prescribed 0.25 m potential temperature
+#   and the first model level (i.e. a scalar roughness/reference height of 0.25 m); stable MOST psi_M = psi_H = -5 z/L;
+#   damping layer lower limit around 550-600 m; free-slip, w = 0 top; periodic laterally.
+# Perturbations (Case Description): u, v ~ N(0, 0.2 (1 - z/200)^2) [variance, m2 s-2] and theta ~ N(0, 0.1) [variance,
+#   K2] for z <= 200 m.
+# Geostrophic wind: the surface value (table "geostrophic") is linear in time and linear in height from the surface
+#   value to (Ug, Vg) = (-2.0, 2.0) m/s at 2000 m.
+# Advective tendencies (table "advection"): constant for 200-800 m, linear to zero at 0 m; linear in time. The
+#   Case Description lists step changes as two rows at the same time ("before"/"after"); here the "after" row is
+#   placed 1 s later (the forcing tables need strictly increasing times; the effect is < 1e-3 of one hour's forcing).
+# Times are seconds from 00 UTC 2 July 2006. Units: z m, p Pa, theta K, q kg/kg, u v m/s, tendencies per second.
+table,t_or_z,a,b,c,d
+# initial wind: table=wind, z, u, v
+wind,10,-3.35,-0.04,,
+wind,20,-4.31,0.08,,
+wind,40,-6.13,0.32,,
+wind,80,-9.00,0.90,,
+wind,140,-11.48,3.50,,
+wind,200,-10.16,5.58,,
+wind,203,-10.08,5.57,,
+wind,257,-9.15,5.47,,
+wind,308,-8.75,5.54,,
+wind,310,-8.74,5.55,,
+wind,363,-8.57,5.64,,
+wind,408,-8.46,5.64,,
+wind,426,-8.41,5.61,,
+wind,465,-8.23,5.47,,
+wind,520,-7.82,5.10,,
+wind,541,-7.60,4.90,,
+wind,575,-7.17,4.53,,
+wind,635,-6.22,3.76,,
+wind,657,-5.82,3.47,,
+wind,694,-5.14,3.00,,
+wind,715,-4.77,2.76,,
+wind,749,-4.19,2.46,,
+wind,772,-3.86,2.34,,
+wind,801,-3.54,2.31,,
+wind,830,-3.37,2.46,,
+# initial thermodynamics: table=thermo, z, p, theta, q
+thermo,10,102091,292.72,0.0098,
+thermo,20,101973,293.02,0.0097,
+thermo,40,101737,293.41,0.0096,
+thermo,80,101267,294.30,0.0096,
+thermo,140,100567,295.68,0.0092,
+thermo,200,99874,297.35,0.0089,
+thermo,203,99850,297.35,0.0089,
+thermo,257,99240,297.51,0.0089,
+thermo,308,98660,297.66,0.0089,
+thermo,363,98040,297.81,0.0089,
+thermo,408,97540,297.94,0.0089,
+thermo,465,96900,298.11,0.0089,
+thermo,520,96280,298.27,0.0088,
+thermo,575,95670,298.42,0.0088,
+thermo,635,95020,298.60,0.0088,
+thermo,694,94370,298.77,0.0088,
+thermo,749,93780,298.93,0.0088,
+thermo,801,93210,299.08,0.0088,
+thermo,854,92640,299.23,0.0087,
+# surface: table=surface, t, p0, theta at 0.25 m, q at 0.25 m
+surface,0,102210,291.28,0.0100,
+surface,3600,102200,290.34,0.0099,
+surface,7200,102200,289.45,0.0100,
+surface,10800,102180,288.62,0.0099,
+surface,14400,102190,288.43,0.0099,
+surface,18000,102210,289.95,0.0104,
+surface,21600,102230,292.38,0.0109,
+surface,25200,102230,294.16,0.0113,
+surface,28800,102230,296.55,0.0121,
+surface,32400,102220,298.45,0.0129,
+# surface geostrophic wind: table=geostrophic, t, Ug, Vg
+geostrophic,-3600,-6.5,4.5,,
+geostrophic,10800,-5.0,4.5,,
+geostrophic,21600,-5.0,4.5,,
+geostrophic,43200,-6.5,2.5,,
+# advective tendencies (200-800 m): table=advection, t, u_adv, v_adv, theta_adv, q_adv
+advection,-43200,5.0e-4,0.0,-2.5e-5,0.0
+advection,3600,5.0e-4,0.0,-2.5e-5,0.0
+advection,3601,5.0e-4,0.0,7.5e-5,0.0
+advection,7200,5.0e-4,0.0,7.5e-5,0.0
+advection,7201,5.0e-4,0.0,7.5e-5,-8.0e-8
+advection,10800,5.0e-4,0.0,7.5e-5,-8.0e-8
+advection,10801,0.0,0.0,7.5e-5,-8.0e-8
+advection,18000,0.0,0.0,7.5e-5,-8.0e-8
+advection,18001,0.0,0.0,7.5e-5,0.0
+advection,21600,0.0,0.0,7.5e-5,0.0
+advection,21601,0.0,0.0,0.0,0.0
+advection,43200,0.0,0.0,0.0,0.0

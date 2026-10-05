@@ -1,0 +1,144 @@
+# =========================================================================
+# GABLS3 — the Cabauw low-level-jet night of 1-2 July 2006 (Basu 2008 case
+# description; Bosveld et al. 2014a,b; LES results: Basu, Holtslag &
+# Bosveld 2012), P58-d (#194)
+#
+# Built on the shared SBL driver through examples/sbl/cases.jl
+# (`gabls3_case`): time-height geostrophic wind and advective tendencies
+# from LargeScaleForcing, the prescribed 0.25 m θ as a
+# SurfaceTemperatureSeries, MOST surface fluxes (SurfaceExchange) and
+# stress (WallModels.MOSTWallLaw), Smagorinsky C_s = 0.1 with the P55-e
+# stability correction (`brown94`) or without it (`none`). Dry (see
+# cases.jl).
+#
+# Runs 00 UTC -> T_END (default 04 UTC: the published LES envelope is for
+# 03-04 UTC), averages the profiles over 03-04 UTC and compares the jet
+# with the digitised ensemble (examples/sbl/data/gabls3_reference.csv,
+# gabls3_envelope.csv).
+#
+#   NX=64 NZ=64 L=400 julia --project=. examples/sbl/gabls3.jl            # 6.25 m on 400 m
+#   NX=64 NZ=128 LX=200 L=400 julia --project=. examples/sbl/gabls3.jl    # 3.125 m on 200 x 200 x 400 m
+#   NX=128 NZ=128 L=800 julia --project=. examples/sbl/gabls3.jl          # the reference 800 m cube at 6.25 m
+#   CLOSURES=brown94 ... ; REUSE=1 ... (combine separately run closures)
+#
+# writes examples/sbl/output/gabls3_<tag>.svg, _profiles.csv, _series.csv
+# =========================================================================
+
+include(joinpath(@__DIR__, "cases.jl"))
+include(joinpath(@__DIR__, "svgplot.jl"))
+using Printf
+using Serialization
+
+const NX = parse(Int, get(ENV, "NX", "64"))
+const NZ = parse(Int, get(ENV, "NZ", "64"))
+const LZ = parse(Float64, get(ENV, "L", "400"))
+const LX = parse(Float64, get(ENV, "LX", string(LZ)))
+const T_END = parse(Float64, get(ENV, "T_END", string(4 * 3600)))
+const CLOSURES = Symbol.(split(get(ENV, "CLOSURES", "brown94,none"), ","))
+const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))"
+const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
+const T_AVG = (3 * 3600.0, 4 * 3600.0)
+
+function run_closure(stab)
+    c = gabls3_case(; N = (NX, NX, NZ), extent = (LX, LX, LZ), sponge_z = 0.75 * LZ,
+                    sgs_stability = stab)
+    series = NamedTuple[]
+    nextt = Ref(0.0)
+    cb = function (c)
+        c.sim.t >= nextt[] || return
+        nextt[] += 300.0
+        p = sbl_profiles(c)
+        k = argmax(p.S)
+        scr = sbl_screen(c)
+        push!(series, (t = c.sim.t, u_star = sqrt(hypot(c.τx, c.τy)), wθ = mean(c.wθ),
+                       H = c.ρcp * mean(c.wθ), h = sbl_bl_height(p.zf, p.τ), S_max = p.S[k],
+                       z_jet = p.z[k], θ2 = scr.θ_screen, U10 = scr.U_screen,
+                       Ts = surface_temperature(c.Ts, c.sim.t)))
+    end
+    st = sbl_run!(c, min(T_END, T_AVG[2]); average_from = T_AVG[1], sample_every = 5, callback = cb)
+    T_END > T_AVG[2] && sbl_run!(c, T_END; callback = cb)
+    @printf("%-8s %s: 03-04 UTC h = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  L = %5.1f m  h/L = %4.1f  LLJ %.2f m/s at %3.0f m  (%d steps, %.0f s)\n",
+            stab, TAG, st.h, st.u_star, st.H0, st.L, st.h / st.L, st.S_max, st.z_jet, c.nsteps, c.wall_time)
+    return (stab = stab, st = st, series = series, nsteps = c.nsteps, wall = c.wall_time)
+end
+
+function cached(stab)
+    path = joinpath(OUTDIR, "gabls3_$(TAG)_$(stab).jls")
+    if get(ENV, "REUSE", "0") == "1" && isfile(path)
+        println("$stab: cached $path")
+        return deserialize(path)
+    end
+    r = run_closure(stab)
+    serialize(path, r)
+    return r
+end
+results = [cached(s) for s in CLOSURES]
+
+# ---- jet against the digitised LES ensemble (03-04 UTC) ---------------------
+ref = sbl_read_csv(joinpath(SBL_DATA, "gabls3_reference.csv"))
+env = gabls3_envelope()
+col(name) = [r[findfirst(==(name), ref.columns)] for r in ref.rows]
+zr = col("z_m")
+jetlo, jethi = sbl_csv_value(env, "jet_height", "low"), sbl_csv_value(env, "jet_height", "high")
+spdlo, spdhi = sbl_csv_value(env, "jet_speed", "low"), sbl_csv_value(env, "jet_speed", "high")
+function jet_refined(z, S)
+    k = clamp(argmax(S), 2, length(S) - 1)
+    a, b, d = S[k-1], S[k], S[k+1]
+    δ = (a - d) / (2 * (a - 2b + d))
+    return z[k] + δ * (z[2] - z[1]), b - (a - d) * δ / 4
+end
+println("\n03-04 UTC jet against the LES ensemble (Basu et al. 2012 Fig. 1, digitised): height ∈ [$jetlo, $jethi] m, speed ∈ [$spdlo, $spdhi] m/s")
+for r in results
+    zj, Sj = jet_refined(r.st.z, r.st.S)
+    @printf("  %-8s jet %.2f m/s at %.1f m: height %s (margin %+.1f m), speed %s\n", r.stab, Sj, zj,
+            jetlo <= zj <= jethi ? "inside" : "OUTSIDE", min(zj - jetlo, jethi - zj),
+            spdlo <= Sj <= spdhi ? "inside" : "OUTSIDE")
+    s34 = [s for s in r.series if T_AVG[1] <= s.t <= T_AVG[2]]
+    @printf("           03-04 UTC means: θ(2 m) = %.2f K (θ_0.25 = %.2f K), U(10 m) = %.2f m/s\n",
+            mean(s.θ2 for s in s34), mean(s.Ts for s in s34), mean(s.U10 for s in s34))
+end
+
+# ---- CSV output ---------------------------------------------------------------
+open(joinpath(OUTDIR, "gabls3_$(TAG)_profiles.csv"), "w") do io
+    println(io, "# GABLS3 03-04 UTC mean profiles, Aeolus.jl SBL driver, $TAG (P58-d, #194). Model output, not reference data.")
+    println(io, "closure,z_m,U,V,speed,theta")
+    for r in results, k in eachindex(r.st.z)
+        @printf(io, "%s,%.3f,%.4f,%.4f,%.4f,%.4f\n", r.stab, r.st.z[k], r.st.U[k], r.st.V[k], r.st.S[k], r.st.θ[k])
+    end
+end
+open(joinpath(OUTDIR, "gabls3_$(TAG)_series.csv"), "w") do io
+    println(io, "# GABLS3 time series (every 300 s), Aeolus.jl SBL driver, $TAG. Model output.")
+    println(io, "closure,t_s,u_star,wtheta,H_Wm2,h_m,S_max,z_jet,theta_2m,U_10m,theta_0p25")
+    for r in results, s in r.series
+        @printf(io, "%s,%.0f,%.4f,%.5f,%.2f,%.1f,%.3f,%.1f,%.3f,%.3f,%.3f\n", r.stab, s.t, s.u_star, s.wθ,
+                s.H, s.h, s.S_max, s.z_jet, s.θ2, s.U10, s.Ts)
+    end
+end
+
+# ---- the figure ---------------------------------------------------------------
+fig = svg_figure(1180, 760, "GABLS3, $(NX)×$(NX)×$(NZ) (Δx = $(LX/NX) m, Δz = $(round(LZ/NZ; digits = 2)) m): Smagorinsky C_s = 0.1 ± stability correction")
+leg = [(string(r.stab), i, "") for (i, r) in enumerate(results)]
+ylim = (0.0, 300.0); yt = 0:50:300
+svg_panel(fig, 80, 50, 300, 280; xlim = (-9.0, 0.0), ylim = ylim, xticks = -9:3:0, yticks = yt,
+          xlabel = "U (m/s), 03-04 UTC", ylabel = "z (m)", tag = "(a)",
+          bands = [(col("U_p10"), col("U_p90"), zr)], curves = vcat([(col("U_p50"), zr, 8, "5,3")],
+          [(r.st.U, r.st.z, i) for (i, r) in enumerate(results)]), legend = leg)
+svg_panel(fig, 460, 50, 300, 280; xlim = (0.0, 8.0), ylim = ylim, xticks = 0:2:8, yticks = yt,
+          xlabel = "V (m/s), 03-04 UTC", tag = "(b)",
+          bands = [(col("V_p10"), col("V_p90"), zr)], curves = vcat([(col("V_p50"), zr, 8, "5,3")],
+          [(r.st.V, r.st.z, i) for (i, r) in enumerate(results)]))
+svg_panel(fig, 840, 50, 300, 280; xlim = (286.0, 300.0), ylim = ylim, xticks = 286:4:298, yticks = yt,
+          xlabel = "θ (K), 03-04 UTC", tag = "(c)", curves = [(r.st.θ, r.st.z, i) for (i, r) in enumerate(results)])
+th(r, f) = ([s.t / 3600 for s in r.series], [f(s) for s in r.series])
+xl = (0.0, T_END / 3600); xt = 0:1:round(Int, T_END / 3600)
+svg_panel(fig, 80, 420, 300, 260; xlim = xl, ylim = (0.0, 0.4), xticks = xt, yticks = 0:0.1:0.4,
+          xlabel = "time (h UTC)", ylabel = "u* (m/s)", tag = "(d)",
+          curves = [(th(r, s -> s.u_star)..., i) for (i, r) in enumerate(results)])
+svg_panel(fig, 460, 420, 300, 260; xlim = xl, ylim = (-60.0, 10.0), xticks = xt, yticks = -60:10:10,
+          xlabel = "time (h UTC)", ylabel = "H (W/m²)", tag = "(e)",
+          curves = [(th(r, s -> s.H)..., i) for (i, r) in enumerate(results)])
+svg_panel(fig, 840, 420, 300, 260; xlim = xl, ylim = (0.0, 300.0), xticks = xt, yticks = 0:50:300,
+          xlabel = "time (h UTC)", ylabel = "jet height (m)", tag = "(f)",
+          hbands = [(jetlo, jethi)], curves = [(th(r, s -> s.z_jet)..., i) for (i, r) in enumerate(results)])
+svg_text(fig, 80, 735, "(a, b) grey: 10-90th percentile, dashed: median of the 6.25 m LES ensemble at 03-04 UTC (Basu, Holtslag & Bosveld 2012, Fig. 1, digitised). (f) grey: jet-height envelope 100-130 m.", size = 11)
+println("wrote ", svg_write(fig, joinpath(OUTDIR, "gabls3_$(TAG).svg")))

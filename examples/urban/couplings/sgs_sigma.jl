@@ -8,8 +8,12 @@
 #            any 2-D flow, and falls off as z³ at a no-slip wall, where
 #            Smagorinsky stays on.
 #
-# Off by default: the Smagorinsky provider stays the default (flipping it
-# is the maintainer's call, #184). Operators is exempt infrastructure in
+# Like every eddy-viscosity provider of the slot it runs the stress-form
+# momentum divergence, `sgs_stress = :symmetric` (P55-b #175, through
+# `sgs_step_options`; option `stress = :laplacian` for the Laplacian form).
+#
+# Off by default: `:tke` is the default provider (#182; flipping it is the
+# maintainer's call, #184). Operators is exempt infrastructure in
 # the coverage test, so no Berlin list changes; the smoke matrix runs this
 # provider automatically (one run per non-default provider).
 
@@ -18,23 +22,25 @@
 
 Slot `:sgs`, provider `:sigma`: the σ-model closure `SigmaModel(C_σ)`
 (option `C_σ`, default 1.35, Nicoud et al. 2011) passed as the `sgs` of
-every step, on any core and time stepper. `report` prints the mean ν_t in
+every step, on any core and time stepper, with the stress-form momentum
+divergence (option `stress = :symmetric`, as for `SGSSmagorinsky`; #175). `report` prints the mean ν_t in
 the canopy (levels with buildings) and in the free stream above the sponge
 start, next to what the Smagorinsky closure (`cfg.C_s`) gives on the same
 flow.
 """
 struct SGSSigma{C} <: AbstractCoupling
     closure::C
+    stress::Symbol      # the form of the momentum divergence (#175)
 end
 coupling_name(::Type{<:SGSSigma}) = :sgs_sigma
 slot(::Type{<:SGSSigma}) = :sgs
 provider(::Type{<:SGSSigma}) = :sigma
 is_default(::Type{<:SGSSigma}) = false
 modules_used(::Type{<:SGSSigma}) = (:Operators,)
-default_options(::Type{<:SGSSigma}) = (C_σ = 1.35,)
-build(::Type{<:SGSSigma}, case, o) = SGSSigma(SigmaModel(o.C_σ))
+default_options(::Type{<:SGSSigma}) = (C_σ = 1.35, SGS_STRESS_DEFAULT...)
+build(::Type{<:SGSSigma}, case, o) = SGSSigma(SigmaModel(o.C_σ), o.stress)
 
-step_options(c::SGSSigma, case) = (sgs = c.closure,)
+step_options(c::SGSSigma, case) = sgs_step_options(c.closure, c.stress)
 
 """
     sigma_νt_profile(c::SGSSigma, case) -> NamedTuple
@@ -71,8 +77,13 @@ end
 
 function smoke_check(c::SGSSigma, case)
     p = sigma_νt_profile(c, case)
-    return ["σ-model ν_t ≥ 0" => p.min_σ >= 0 && minimum(interior_view(case.sim.νt)) >= 0,
+    # laminar consistency on the laminar version of the current flow (level
+    # means of u, v; w = 0): ν_t = 0 exactly where Smagorinsky is on, the
+    # check AMD and Vreman share (sgs_switchoff_checks, sgs_amd_vreman.jl)
+    return ["σ-model ν_t ≥ 0" => p.min_σ >= 0,
             "σ-model ν_t > 0 in the canopy" => p.canopy_σ > 0,
+            sgs_switchoff_checks(case, c.closure)...,
+            sgs_stress_checks(c.stress, case)...,
             # relaminarisation criterion of P59-e (#195): negligible against
             # the background ν in the free stream above the sponge start
             # (with the geostrophic sponge of #171 that free stream is shear

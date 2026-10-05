@@ -1311,10 +1311,13 @@ obtained by aperture-weighted averaging of the two bounding faces, which
 is the consistent reconstruction on a cut cell (a blocked face contributes
 neither value nor weight).
 
-This is the quantity a wall model consumes: replace the linear
-`ν·u_t/probe` law with a log-law or Moeng-type relation for `u_τ` at the
-same probe point and feed the result back through
-[`reconstruct_wall_velocity!`](@ref) as an effective wall value.
+This is the resolved (ν-linear) stress. The modelled stress at the same
+probe point is the method `wall_shear_stress(u, v, w, stencils, geom,
+law; ν)` of `Aeolus.WallModels` (Phase 57, #179), for any
+`WallModels.AbstractWallLaw` (Spalding, rough log law, MOST); with
+`law = nothing` it is this ν-linear stress. `WallModels.wall_slip_velocity`
+turns the modelled stress into the slip `wall_value` of
+[`reconstruct_wall_velocity!`](@ref).
 """
 function wall_shear_stress(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                            stencils::AbstractVector{<:GhostCellStencil{CellCenter}},
@@ -1338,6 +1341,19 @@ function wall_shear_stress(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
     end
     return τ
 end
+
+"""
+    wall_shear_stress(u, v, w, stencils, geom, nothing; ν) -> Vector
+
+The ν-linear stress `ν |u_t(ximg)| / probe` of
+`wall_shear_stress(u, v, w, stencils, geom, ν)`: the `law = nothing`
+case of the wall-model method `wall_shear_stress(…, law; ν)` of
+`Aeolus.WallModels`.
+"""
+wall_shear_stress(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                  stencils::AbstractVector{<:GhostCellStencil{CellCenter}},
+                  geom::CutCellGeometry, ::Nothing; ν::Real) =
+    wall_shear_stress(u, v, w, stencils, geom, ν)
 
 # Aperture-weighted face-to-center velocity reconstruction.
 function _center_velocity(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},

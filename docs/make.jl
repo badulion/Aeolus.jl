@@ -65,11 +65,13 @@ makedocs(
             "Sub-grid surface tiles"      => "theory/surface_tiles.md",
             "Blending height"             => "theory/blending_height.md",
             "Heterogeneous-surface validation" => "theory/heterogeneous_surface.md",
-            "Stability functions and Ri_g" => "theory/turbulence_stability.md",
+            # Era VI — high-fidelity turbulence closure
             "Transition and wall-bounded flow" => "theory/transition.md",
-            "Large-scale forcing"         => "theory/large_scale_forcing.md",
+            "Stability functions and Ri_g" => "theory/turbulence_stability.md",
             "Wall models"                 => "theory/wall_models.md",
-            "Stable BLs: GABLS1, stratified channel" => "theory/stable_boundary_layer.md",
+            "Large-scale forcing"         => "theory/large_scale_forcing.md",
+            "Prognostic SGS TKE and Reynolds stress" => "theory/sgs_tke.md",
+            "Stable BLs: GABLS1-4, CASES-99, channel" => "theory/stable_boundary_layer.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -139,9 +141,10 @@ makedocs(
             ],
             "Era VI — turbulence closure" => [
                 "Overview"                     => "api/era6.md",
+                "LargeScaleForcing"            => "api/era6/large_scale_forcing.md",
+                "PrognosticSGS"                => "api/era6/prognostic_sgs.md",
                 "TurbulenceStability"          => "api/era6/turbulence_stability.md",
                 "Transition"                   => "api/era6/transition.md",
-                "LargeScaleForcing"            => "api/era6/large_scale_forcing.md",
                 "WallModels"                   => "api/era6/wall_models.md",
             ],
         ],

@@ -1,0 +1,27 @@
+# GABLS4 LES intercomparison: the stable boundary layer at 17 UTC 11 Dec 2009 (Dome C), one-hour averages.
+# Source: Couvreux et al. (2020), Boundary-Layer Meteorol. 176, 369-400, Table 4 (experiments 2 and 3) (author version
+#   https://edepot.wur.nl/528755, read 2026-10-04). Copied from the table, not digitised: digitisation uncertainty 0.
+# Columns: h = boundary-layer height (Beare et al. 2006 definition: 5 % of the surface stress, / 0.95), L = Obukhov
+#   length, u_star, H = surface sensible heat flux, theta_star. Table 4's header gives H in "K m s-1", but the values are
+#   W m-2: e.g. PALM exp. 3, -u* theta* = -0.09 x 0.08 = -7.2e-3 K m/s, times rho c_p = 0.93 x 1005 J m-3 K-1 at
+#   651 hPa and 245 K is -6.7 W m-2 against the tabulated -7.2.
+# Experiment 2: 5 m horizontal, 2 m vertical resolution, 1 km domain, from 00 UTC; experiment 3: 1 m isotropic
+#   (MesoNH 0.5 / 0.25 m tests exist), 500 x 500 x 150 m domain or smaller, from 10 UTC; both z0m = 1e-3 m, z0h = 1e-4 m.
+# envelope rows: min and max over the seven models of Table 4 (experiment 3).
+kind,model,h_m,L_m,u_star,H_Wm2,theta_star
+exp2,MesoNH,29,15.5,0.11,-6.8,0.06
+exp2,PALM,19,7.9,0.09,-8.1,0.09
+exp2,UConn,17.0,8.2,0.08,-4.9,0.06
+exp2,MicroHH,27,10.5,0.15,-22.3,0.16
+exp2,DALES,23,9.3,0.10,-8.2,0.09
+exp2,MONC,17,8.0,0.08,-4.7,0.06
+exp2,CSIRO-LES,39,8.1,0.11,-13.0,0.12
+exp3,MesoNH,19,8.4,0.09,-5.6,0.07
+exp3,PALM,17.5,7.3,0.09,-7.2,0.08
+exp3,UConn,17.5,9.0,0.09,-6.0,0.07
+exp3,MicroHH,16.5,9.9,0.12,-13.5,0.12
+exp3,DALES,19.5,7.2,0.09,-8.0,0.08
+exp3,MONC,14.5,6.5,0.08,-5.3,0.07
+exp3,CSIRO-LES,25,7.7,0.10,-10.5,0.10
+envelope_low,exp3,14.5,6.5,0.08,-13.5,0.07
+envelope_high,exp3,25,9.9,0.12,-5.3,0.12

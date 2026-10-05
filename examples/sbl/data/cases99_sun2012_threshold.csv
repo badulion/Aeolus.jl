@@ -1,0 +1,22 @@
+# CASES-99 "hockey stick": the threshold wind speed V_s above which the turbulence velocity scale V_TKE = sqrt(TKE)
+#   increases rapidly with the wind speed (regime 2), at the nine sonic levels of the 60 m tower.
+# Source: Sun, Mahrt, Banta & Pichugina (2012), "Turbulence regimes and turbulence intermittency in the stable boundary
+#   layer during CASES-99", J. Atmos. Sci. 69, 338-351, Figure 3a ("the threshold wind speed as a function of height
+#   (solid line with circles)"); data: all nights 1800-0600 LST, 5-29 October 1999, 5-min segments, bin averages.
+#   Text: V_s "increases with height approximately logarithmically"; in regime 2 V_TKE increases linearly with V "at a
+#   slope of ~0.25 at all the observation levels" (sec. 3a).
+# Digitised from the vector figure rendered at 330 dpi (pdftoppm): circle centres located by matching a ring of radius
+#   10 px to the dark pixels (best match 100 % of the ring for every circle), axes from the panel frame (x: 0-10 m/s,
+#   67.95 px per m/s; z: 0-60 m, 8.658 px per m; the circle heights come out within 0.06 m of the stated sonic
+#   levels). Digitisation uncertainty: +-0.05 m/s in V_s (+-3 px); heights are the stated sonic levels (0.5 m from
+#   20 October, 1.5 m before).
+z_m,V_s_ms
+0.5,1.0
+1.5,1.5
+5,3.0
+10,4.5
+20,5.8
+30,6.5
+40,7.5
+50,8.5
+55,9.1

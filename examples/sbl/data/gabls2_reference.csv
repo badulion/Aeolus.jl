@@ -1,0 +1,34 @@
+# GABLS2 reference values: single-column-model spread at the end of the first night and digitised observed / LES
+#   screen-level values.
+# (1) scm_* rows: Holtslag, Steeneveld & van de Wiel (2007), Boundary-Layer Meteorol. 125, 361-376, sec. 3, text:
+#   with prescribed surface temperature their parameter sweep gives "a range of -10 to -40 W m-2 for the sensible heat
+#   flux, a range of 0.19 to 0.25 m s-1 for friction velocity and boundary-layer depths varying between 80 and 220 m (all
+#   ... at the end of the first night e.g. at the indicated time of 30 h)" (h = 5 % stress height / 0.95), stated to be
+#   "comparable to the variety within the GABLS2 intercomparison". Text values: digitisation uncertainty 0. Time 30 h =
+#   06 LT 23 October 1999 (hours from 00 LT 22 October).
+# (2) obs_* and les_* rows: Holtslag et al. (2012), "Overview of the GEWEX Atmospheric Boundary Layer Study (GABLS)",
+#   Proc. ECMWF GABLS Workshop 2011, 11-23, Figures 3 (2 m temperature, deg C) and 4 (10 m wind), "adapted from
+#   Svensson et al. (2011)"; observations = the thick dark-grey curve, LES = the thick black dashed curve (Kumar et al.
+#   2010). Read by eye from the 650 x 488 px rasters (panel a) against an overlaid 3 h x 2 K (1 m/s) grid; axes
+#   calibrated from the tick marks (7.5 px per hour, 00 LT 23 Oct at x = 93 px) and the tick labels (9.67 px per K,
+#   19.2 px per m/s). Each low/high pair is the read value +-0.7 K or +-0.4 m/s (digitisation uncertainty); time +-0.3 h.
+#   The figure's morning minimum is at 08 h on its "Local Time" axis, the prescribed formula's at 06 h (30 h): the two
+#   time bases may differ by up to 2 h. Coarse, for orientation only; the example quotes these, the tests do not.
+quantity,t_h,low,high,unit,source
+scm_heat_flux,30,-40,-10,W m-2,Holtslag et al. 2007 sec. 3
+scm_u_star,30,0.19,0.25,m s-1,Holtslag et al. 2007 sec. 3
+scm_h,30,80,220,m,Holtslag et al. 2007 sec. 3
+obs_T2m,24,7.4,8.8,degC,Holtslag et al. 2012 Fig. 3a
+les_T2m,24,5.5,6.9,degC,Holtslag et al. 2012 Fig. 3a
+obs_T2m,32,-1.0,0.4,degC,Holtslag et al. 2012 Fig. 3a (morning minimum)
+les_T2m,32,-0.2,1.2,degC,Holtslag et al. 2012 Fig. 3a (morning minimum)
+obs_T2m,40,12.9,14.3,degC,Holtslag et al. 2012 Fig. 3a (afternoon maximum)
+les_T2m,40,10.9,12.3,degC,Holtslag et al. 2012 Fig. 3a (afternoon maximum)
+obs_T2m,48,1.2,2.6,degC,Holtslag et al. 2012 Fig. 3a
+les_T2m,48,1.9,3.3,degC,Holtslag et al. 2012 Fig. 3a
+obs_U10,26,3.7,4.5,m s-1,Holtslag et al. 2012 Fig. 4a
+les_U10,26,4.3,5.1,m s-1,Holtslag et al. 2012 Fig. 4a
+obs_U10,40,5.5,6.3,m s-1,Holtslag et al. 2012 Fig. 4a
+les_U10,40,5.4,6.2,m s-1,Holtslag et al. 2012 Fig. 4a
+obs_U10,48,2.1,2.9,m s-1,Holtslag et al. 2012 Fig. 4a
+les_U10,48,4.2,5.0,m s-1,Holtslag et al. 2012 Fig. 4a

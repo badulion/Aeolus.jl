@@ -174,6 +174,41 @@ operator is unchanged (the co-located Phase-25 approximation). A pair
 `solve_implicit_diffusion!` (ν_h on the x/y faces, ν_v on the z faces),
 and a closure with a separate `κv` gets it for the scalars.
 
+**Explicit stability of the stress form.** The explicit operator `L` is
+symmetric and negative semi-definite, with `−⟨u, Lu⟩ = Σ 2νᵢⱼSᵢⱼSᵢⱼ ΔV`.
+Forward Euler is therefore stable for `Δt ρ(L) ≤ 2`, where `ρ(L)` is the
+largest Rayleigh quotient. To bound it, write each diagonal strain as one
+difference, `(u_{i+1} − u_i)²/Δx² ≤ 2(u_{i+1}² + u_i²)/Δx²`, and split each
+off-diagonal pair with `(a + b)² ≤ 2a² + 2b²`. Every face value enters two
+differences per direction, which gives
+
+```math
+\rho(L) \le 8\max\Bigl(\nu_h^{\max}(\Delta x^{-2} + \Delta y^{-2}) + \nu_v^{\max}\Delta z^{-2},\;
+              \nu_v^{\max}(\Delta x^{-2} + \Delta y^{-2} + \Delta z^{-2})\Bigr).
+```
+
+The first entry is the u and v rows. The second is the w row, which sees only ν_v.
+For `ν_h = ν_v = ν` this is `8ν ΣΔ⁻²`, twice the radius `4ν ΣΔ⁻²` of the
+7-point Laplacian. The factor 2 is the 2 in the normal stress
+`τᵢᵢ = −2ν∂uᵢ/∂xᵢ`, and the bound is sharp. With constant ν, `L = ν(∇² + ∇∇·)`
+on the grid, and on the irrotational checkerboard mode `u = ∇φ` both terms
+give `−4ν ΣΔ⁻²`. Power iteration measures `ρ = 8ν ΣΔ⁻²` to 1e-6.
+
+The factor applies to the unprojected operator. The cores project every
+predictor, `uⁿ⁺¹ = P(uⁿ + Δt Luⁿ) = (I + Δt PLP)uⁿ`. For solenoidal periodic
+`u`, `Σ 2S:S = Σ|∇u|²`, so `ρ(PLP) ≤ 4ν_max ΣΔ⁻²`, the old Laplacian bound.
+Power iteration confirms this for every ν field tested (table below). Even so,
+`cfl_diagnostics` and `adaptive_dt` use the unprojected bound with
+`sgs_stress = :symmetric`: `νt_cfl = stress_form_cfl_viscosity(ν_h^max, ν_v^max, mesh)`
+in place of `νt_max` in `C_diffusive Δ²_harm / (ν + νt_cfl)` and in the
+SGS-only limit. The reason is that the projected bound needs an exact,
+orthogonal projection of a periodic field. Several parts of the code do not
+have one: the immersed-boundary masking of the Berlin run, an iterative
+pressure solve stopped at a tolerance, wall boundaries, and the anelastic
+ρ-weighted projection. Only the unprojected bound holds for every velocity
+field. `:laplacian` keeps `νt_cfl = νt_max`, so its limits are unchanged bit
+for bit.
+
 Measured (`test/era6_sgs_stress_form.jl`; spacing (15.625, 15.625, 6.25) m):
 
 | test | result |
@@ -186,6 +221,10 @@ Measured (`test/era6_sgs_stress_form.jl`; spacing (15.625, 15.625, 6.25) m):
 | Σu, Σv over 20 steps with Smagorinsky ν | 5.6e-16, 2.8e-15 relative |
 | `add_stress_divergence!(sgs_stress_tensor!)` vs fused | bitwise equal |
 | cost on 64 × 64 × 32 (momentum kernels) | 0.62 ms vs 0.44 ms Laplacian |
+| ρ(L) / 4ν_max ΣΔ⁻², 12 × 12 × 8, power iteration: ν constant / log-uniform 0.01–1 / checkerboard 0.01‖1 / Gaussian blob 100× | 2.000 / 1.159 / 1.010 / 1.426 (old limit at C = ½: Δt ρ = 4.00 / 2.32 / 2.02 / 2.85 > 2, unstable; new limit: Δt ρ ≤ 2) |
+| ρ(PLP) / 4ν_max ΣΔ⁻², same fields | 1.000 / 0.555 / 0.505 / 0.706 (stable at the old limit) |
+| 20 Euler steps at C = ½ from the leading mode, constant ν | growth 1 (new limit), 3.5e9 (old limit), 1 (old limit, projected) |
+| anisotropic ν_h ∈ [0,1], ν_v ∈ [0,0.05]: ρ(L) vs bound | 0.0488 ≤ 0.0757 s⁻¹ (ν_cfl = 0.56 vs 2 max ν = 2.00) |
 
 ## Applying the SGS tendency to a scalar
 
@@ -199,7 +238,9 @@ The scalar tendency is
 
 Because `θ` is cell-centered, its diffusive flux lives at faces. The
 kernel `_add_eddy_diffusion_scalar!` interpolates `νₜ` linearly from
-cell centers to each face.
+cell centers to each face. The same tendency, with the same coefficient,
+is applied to `qv` and to every tracer the Berlin case transports (see
+*Every transported scalar uses κ_t* below).
 
 ## Tensorial scalar diffusivity
 
@@ -473,8 +514,8 @@ coefficient is too large for this filter:
 | field (32³, triply periodic, ``u_{rms} = 1``) | ``α = 3`` | ``α = 2`` |
 | :-- | --: | --: |
 | random phases, ``E(k) ∝ k^{-5/3}`` | 0.012 | — |
-| same field after ``t = 1`` (≈ 1 turnover) of LES | 0.129 | 0.220 |
-| after ``t = 3`` | 0.154 | 0.267 |
+| same field after ``t = 1`` (≈ 1 turnover) of LES | 0.128 | 0.219 |
+| after ``t = 3`` | 0.155 | 0.268 |
 
 The initial field is drawn by
 [`isotropic_random_field!`](@ref Aeolus.Operators.isotropic_random_field!)
@@ -482,7 +523,10 @@ The initial field is drawn by
 projection, amplitude ``∝ k^{-5/3}`` per mode); that field gave 0.018,
 0.129 / 0.222 and 0.153 / 0.265. The difference is the random
 realisation, not the closure: with the old field the refactored
-dynamic model reproduces the old numbers bit for bit.
+dynamic model reproduces the old numbers bit for bit. (With the
+initialiser's first, centre-averaged normalisation, before the fix
+described under the CBC benchmark below, the same seed gave 0.012,
+0.129 / 0.220 and 0.154 / 0.267.)
 
 Lilly's inertial-range value is 0.17. The random-phase field has the
 right spectrum but no energy transfer to small scales, and the dynamic
@@ -498,6 +542,274 @@ built-in ones are); it is bit for bit the pre-contract
 u, v, w; workspace = ws)`, which still works. `ML.MLSGS` closures plug in
 the same way. The Berlin case selects it with `physics[:sgs] = :dynamic`,
 on any dynamical core.
+
+## Lagrangian dynamic averaging (Meneveau, Lund & Cabot 1996)
+
+The plane average of the Germano identity needs horizontally homogeneous
+statistics, which an urban canopy does not have. Before P54-b (#173)
+the plane average also ran over the solid cells of the immersed
+buildings. [`LagrangianDynamicSmagorinsky`](@ref Aeolus.Operators.LagrangianDynamicSmagorinsky)
+averages the identity backwards in time along fluid pathlines instead
+(MLC96), so the coefficient is local and needs no homogeneous direction.
+The averages obey
+
+```math
+\mathcal I_{LM}^{n+1}(\mathbf x) = ε\,[L^d_{ij}M_{ij}]^{n+1}(\mathbf x)
+  + (1-ε)\,\mathcal I_{LM}^{n}(\mathbf x - \mathbf u^n Δt),
+\qquad
+\mathcal I_{MM}^{n+1}(\mathbf x) = ε\,[M_{ij}M_{ij}]^{n+1}(\mathbf x)
+  + (1-ε)\,\mathcal I_{MM}^{n}(\mathbf x - \mathbf u^n Δt),
+```
+
+```math
+ε = \frac{Δt/T}{1+Δt/T}, \qquad
+T = θ\,Δ\,(\mathcal I_{LM}\mathcal I_{MM})^{-1/8},\ θ = 1.5, \qquad
+C_s^2 = \mathcal I_{LM}/\mathcal I_{MM}.
+```
+
+This is the exponentially weighted pathline average of MLC96 eqs.
+2.10–2.13, in the time discretisation of their eqs. 3.1–3.3. The details:
+
+* The upstream values come from trilinear interpolation. Periodic
+  directions wrap, and in a bounded direction the departure point is
+  clamped to the boundary cell.
+* ``\mathcal I_{LM}`` is clipped at 0.
+* ``T`` uses the upstream memories. Where ``\mathcal I_{LM}`` has been
+  clipped to 0, ``T`` is evaluated with ``\mathcal I_{LM} ≥
+  10^{-8}\mathcal I_{MM}``, so the point can recover; with ``T = ∞`` it
+  would freeze. Where ``\mathcal I_{MM} = 0``, ``ε = 1``.
+* Initialisation (MLC96 §3): ``\mathcal I_{MM} = M_{ij}M_{ij}`` and
+  ``\mathcal I_{LM} = C_0^2\mathcal I_{MM}`` with ``C_0 = 0.16``.
+* ``C_s^2`` is clipped to ``[0, 0.5^2]``. No damping function is applied
+  anywhere.
+
+**One Germano kernel.** ``L^d_{ij}M_{ij}`` and ``M_{ij}M_{ij}`` come from
+`_germano_identity!`. That kernel also computes the plane and local
+averages of
+[`compute_dynamic_smagorinsky_νt!`](@ref Aeolus.Operators.compute_dynamic_smagorinsky_νt!),
+and its test filter is the stencil of
+[`box_filter!`](@ref Aeolus.Operators.box_filter!). The refactor is bit
+for bit: LM, MM, ``C_s^2`` and ``ν_t`` on the evolved field below are
+`==` the pre-refactor values for both averagings and both filter ratios.
+
+**Contract.** The memory advances only in `advance_sgs!`, once per
+accepted step, from the state after the step. The departure point uses
+the cell-centred velocity committed with the previous memory,
+``\mathbf u^n``. `sgs_coefficients!` is pure: it takes ``C_s^2`` from the
+committed memory and ``|S|`` from the current state. So the three RK3
+substages and the CFL estimate see one coefficient, and between commits a
+coefficient call costs only a strain evaluation. `sgs_state` copies the
+memory, and a rejected adaptive step is rolled back bit for bit.
+
+**Solids.** `mask` is a cell mask, e.g. `IBM.SolidMask.mask`. Its halos
+are filled from the boundary conditions. The plane / local
+`DynamicSmagorinsky` take the same mask.
+
+* ``ν_t = 0`` and the memories are 0 in solid cells.
+* The dynamic procedure reads the velocity with the no-slip value 0 on
+  every face that touches a solid.
+* The test filter runs over fluid neighbours only, renormalised by their
+  number.
+* A departure point whose nearest cell is solid takes the value of the
+  cell itself.
+* Solid corners of the trilinear stencil are dropped and the remaining
+  weights renormalised.
+
+Nothing stored inside an obstacle reaches a fluid coefficient: test 6
+below sets every solid face to NaN and to 1e30 and gets the same bits.
+
+Measured (`test/era6_lagrangian_sgs.jl`):
+
+| test | result |
+| :-- | :-- |
+| relaxation to a frozen source, ``u = 0``, fixed ``T`` (40 steps) | ``\big\lvert\lvert I^n - S\rvert - (1-ε)^n\lvert I^0-S\rvert\big\rvert ≤ 1.4×10^{-15}`` |
+| pathline transport, ``ε = 0``, 32³ periodic, CFL 0.4, 50 steps | domain sum to 1.4e-14, centroid moves ``\mathbf U t`` to 3.7e-13 m, max 0.911 → 0.171 (never grows) |
+| laminar shear ``u = 3z`` | ``L^d_{ij}M_{ij} = 0`` exactly; ``C_s^2/C_0^2`` decays monotonically to 1.4e-8 after ``St = 45`` |
+| isotropic, 32³ (field of the table above), ``t = 1`` | mean ``C_s`` 0.1228 against the plane 0.1291 (−4.8 %) |
+| same, ``t = 3`` | 0.1500 against 0.1539 (−2.5 %) |
+| 200 steps with the closure driving the flow | ``\mathcal I_{LM} ≥ 0``, ``\min \mathcal I_{MM} = 1.33``, ``ν_t ≥ 0``, clip fraction 0, ``\mathcal I_{LM} = 0`` in 0.59 % of cells |
+| wall-mounted cube, 32×32×16 periodic channel, 200 steps | ``ν_t = 0`` in solids, no NaN/Inf, ``C_s^2 ∈ [0, 0.25]`` next to the cube (mean ``C_s`` 0.098 there, 0.152 over all fluid) |
+
+As in MLC96 fig. 6, the Lagrangian coefficient follows the plane value in
+isotropic turbulence. In laminar shear it does not drop to 0 at once, as
+the plane value does. It relaxes there, with ``T`` growing as
+``\mathcal I_{LM} → 0``. ``C_s^2`` and ``ν_t`` therefore reach 0 only as
+``t → ∞``; the test asserts ``< 10^{-6}`` of the initial value. In the
+CBC decay below the Lagrangian model is slightly closer to the
+measurements than the plane model.
+
+In the Berlin case it is the default averaging of the `:dynamic` SGS
+provider. There, `CaseConfig(:smoke)` after 100 fixed steps of 2 s gives
+these mean ``C_s`` over air cells:
+
+| averaging | canopy | free stream | max ``ν_t`` (m²/s) |
+| :-- | --: | --: | --: |
+| Lagrangian | 0.037 | 0.033 | 0.38 |
+| plane (solids now excluded) | 0.032 | 0.018 | 0.037 |
+
+There is no clipping in either run.
+
+## Scale-dependent Lagrangian dynamic model (Bou-Zeid, Meneveau and Parlange 2005)
+
+The scale-invariant dynamic procedure assumes that the coefficient is the
+same at the grid scale ``Δ`` and at the test-filter scale ``αΔ``. Near a
+wall, where the filter widths are comparable to the distance to it, the
+coefficient falls toward the grid scale, so the procedure underestimates
+``C_s`` there and the mean shear comes out too large or too small
+depending on the closure (Porté-Agel, Meneveau & Parlange 2000). Static
+Smagorinsky overshoots (``Φ_m`` up to 1.45-1.65 at 24³ with ``C_s =
+0.17``, P54-d), and in the half channel below LASI undershoots (``Φ_m ≈
+0.7`` in the log layer, mean ``C_s`` 0.04-0.06 near the wall). The
+classical fix is a damping function; Era VI uses none.
+
+`LagrangianDynamicSmagorinsky(mesh; scale_dependent = true)` (P54-e,
+#186) is the scale-dependent Lagrangian model (LASD) of Bou-Zeid,
+Meneveau & Parlange (2005), as an option of the same type. It adds a
+second test filter, the 5 × 5 × 5 box. Its second moment is ``2Δ^2``, so
+with the convention that makes the 3-cell box ``α = 3`` (implicit grid
+filter plus the discrete box, ``\sqrt{Δ^2 + 12σ^2}``) its width is
+``α_2 = 5``. It also adds two memories transported along the same
+pathlines, with the same ``ε`` and ``T``:
+
+```math
+Q_{ij} = \widehat{u_i u_j} - \hat u_i \hat u_j, \qquad
+N_{ij} = 2Δ^2\left(\widehat{|S| S_{ij}} - α_2^2 |\hat S| \hat S_{ij}\right),
+```
+
+```math
+\mathcal I_{QN}^{n+1} = ε\,[Q^d_{ij}N_{ij}]^{n+1}
+  + (1-ε)\,\mathcal I_{QN}^{n}(\mathbf x - \mathbf u^n Δt),
+\qquad
+\mathcal I_{NN}^{n+1} = ε\,[N_{ij}N_{ij}]^{n+1}
+  + (1-ε)\,\mathcal I_{NN}^{n}(\mathbf x - \mathbf u^n Δt).
+```
+
+``C^2_{αΔ} = \mathcal I_{LM}/\mathcal I_{MM}`` and ``C^2_{α_2Δ} =
+\mathcal I_{QN}/\mathcal I_{NN}`` are the coefficients at the two
+test-filter scales. With a power law ``C^2(aΔ) = C^2_Δ a^φ`` between them,
+
+```math
+φ = \frac{\ln(C^2_{α_2Δ}/C^2_{αΔ})}{\ln(α_2/α)}, \qquad
+β = 2^φ \in [1/8,\ 8], \qquad
+C^2_Δ = C^2_{αΔ}\,α^{-φ}.
+```
+
+For Bou-Zeid's filters (``α = 2``, ``α_2 = 4``) this is their ``β =
+C^2_{4Δ}/C^2_{2Δ}`` and ``C^2_Δ = C^2_{2Δ}/β``. In general ``β`` is the
+coefficient ratio per doubling of the filter width. The lower clip
+``β ≥ 1/8`` is Bou-Zeid's. The upper clip, 8, is ours: it is symmetric
+in ``φ`` and keeps the diagnostic finite. The details:
+
+* The box is separable and summed plane by plane. In a periodic direction
+  it wraps. In a bounded direction it stays in the interior, and the
+  points beyond are dropped (renormalised). The 3-cell first filter reads
+  the halo cell, but at a free-slip wall that cell holds the mirrored,
+  reversed shear, and the 5-cell box would reach it two cells from the
+  wall. The first version did read it; the second level then had
+  ``β ≈ 1`` and a ``C_s`` dip (0.066 against 0.13-0.16 around it).
+* With a solid mask the box runs over fluid cells only, and the memories
+  are 0 in solids.
+* Where ``C^2_{αΔ} = 0`` the coefficient is 0 and ``β`` is stored as 1.
+  Where only ``C^2_{α_2Δ} = 0``, ``β = 1/8``.
+* Initialisation: ``\mathcal I_{QN} = C_0^2 \mathcal I_{NN}``, so ``β = 1``.
+* `beta = 1` (a fixed ``β``) reproduces LASI bit for bit (test 2).
+* `cadence = N`: the Germano identities, which are the expensive part,
+  are evaluated every ``N`` commits. In between, the memories are only
+  transported (``ε = 0``), and the next evaluation relaxes over the
+  elapsed time. This is common practice in Lagrangian dynamic codes.
+  ``N = 1`` is the exact model, and the counters are part of
+  `sgs_state`.
+
+**No wall damping.** No damping function is applied anywhere. The
+near-wall coefficient comes from the scale dependence, and the wall
+stress from the wall model (`WallModels`, #169, with the P57-b matching
+input, #183).
+
+Measured (`test/era6_lasd.jl`):
+
+| test | result |
+| :-- | :-- |
+| separable 5-cell filter against a direct 5³ sum (periodic and bounded, with and without mask) | relative difference < 1e-12 |
+| laminar shear ``u = 3z`` | ``Q^d_{ij}N_{ij} = 0`` to 1e-12 of ``N_{ij}N_{ij}`` |
+| prescribed power law ``C^2(aΔ) = C^2_Δ a^φ``, ``\lvert φ\rvert < 3`` | ``C^2_Δ`` and ``β = 2^φ`` recovered to 1e-12 (``α = 3, 5`` and ``2, 4``) |
+| isotropic 32³, ``t = 3`` (the P54-b protocol) | ``β`` geometric mean 1.058 (seeds 1-3: 1.058 / 1.028 / 1.030), median 1.107, arithmetic mean 1.335 |
+| same, ``C_s`` against LASI | median pointwise ratio 0.921; domain mean 0.1657 against 0.1500 (+10.5 %; seeds 2, 3: +13.6, +14.2 %) |
+| ``β ≡ 1`` | LASI bit for bit (u, ν_t, ``C_s^2``, ``\mathcal I_{LM}``) over 30 RK3 steps |
+| half channel 24³, 10-20 ``H/u_*`` (below) | ``Φ_m ∈ [0.934, 1.151]`` over ``0.05 ≤ z/H ≤ 0.3`` |
+| 500 steps, isotropic and wall-mounted cube | ``ν_t ≥ 0``, ``β ≥ 1/8``, no NaN, ``ν_t = 0`` in solids |
+
+Isotropic turbulence is scale invariant, and the mean exponent agrees:
+``⟨φ⟩ = 0.04-0.08``, ``2^{⟨φ⟩} = 1.03-1.06``. Pointwise, though, ``φ`` is a
+log-ratio of two noisy averages, with a standard deviation of about 1.2.
+The **arithmetic** mean of ``β`` is therefore biased, ``E[2^φ] ≈ 2^{⟨φ⟩}
+e^{(σ\ln 2)^2/2}``, which gives 1.3. That reading of the issue's "domain-mean
+β within 1 ± 0.15" was the wrong statistic, not a code error; it is
+kept as a broken test. For the same reason the domain-mean ``C_s`` is
+10-14 % above LASI while the median pointwise ratio is 0.92-0.93, the
+``3^{-⟨φ⟩}`` the mean exponent predicts. ``C^2_Δ = C^2_{αΔ}α^{-φ}`` is
+convex in ``φ``, and the 2-3 % of cells at the ``β = 1/8`` clip carry
+``27 C^2_{αΔ}``. The issue's ±10 % on the mean is not met at 32³ and is
+kept broken; ±15 % is asserted.
+
+**Log-law recovery** (the headline test). This is the P54-d half channel
+at 24³, with the P57-b 2Δ input filter of the wall model (`filter =
+:spatial`, the 3 × 3 wall-parallel box of Bou-Zeid et al. 2005). LASD
+starts from the noise and is averaged over 10-20 ``H/u_*``:
+
+| ``z/H`` | 0.042 | 0.083 | 0.125 | 0.167 | 0.208 | 0.250 | 0.292 | 0.333 | 0.417 | 0.500 |
+| :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| ``Φ_m``, LASD 24³ | 0.878 | 0.934 | 1.033 | 0.989 | 1.140 | 1.114 | 1.151 | 1.116 | 1.072 | 1.011 |
+| ``Φ_m``, LASI 24³, same set-up | 1.505 | 1.003 | 1.031 | 0.741 | 0.795 | 0.711 | 0.723 | 0.690 | 0.666 | 0.632 |
+
+At 32³ (same set-up, seed 1) ``Φ_m`` at ``z/H = k/32``, ``k = 1 … 8`` is
+0.890, 0.943, 1.042, 0.993, 1.107, 1.119, 1.137, 1.104.
+
+* ``Φ_m`` stays in [0.8, 1.2] over ``0.05 ≤ z/H ≤ 0.3`` (Bou-Zeid et al.
+  2005, Figs. 5-6): [0.934, 1.151] at 24³, [0.943, 1.137] at 32³, and
+  [1.042, 1.141] for seed 2 at 24³.
+* max ``\lvert Φ_m - 1\rvert`` is 0.151 over the band and 0.122 over
+  the first three faces. Static Smagorinsky 0.17 gives max ``Φ_m``
+  1.45-1.65 on those faces (P54-d, 12 seeds), so LASD is within a third
+  of it; the test asserts less than half, < 0.225.
+* The momentum budget closes: ``⟨τ_w⟩ = 1.028 u_*^2`` and the total
+  stress stays within 0.032 ``u_*^2`` of ``u_*^2(1 - z/H)``.
+* The geometric plane mean of ``β`` is 0.36-0.73 below ``z/H = 0.3``.
+  Away from the wall it rises through 1 and above 1 toward the free-slip
+  top. Mean ``C_s`` is 0.13-0.16 in the log layer, against 0.04-0.08 for
+  LASI.
+* The issue's "β → 1 above ``z/H ≈ 0.2``" is not met at these
+  resolutions. ``β`` crosses 1 near ``z/H = 0.45`` at 24³ and near 0.32
+  at 32³. That is a fixed height in grid cells (10.8 and 10.3), where the
+  wider test filter (``5Δ``) is about half the distance to the wall. With
+  these filters, "above 0.2 H" needs ``N ≳ 50``. The expectation assumed
+  a resolution-independent height, and it is kept as a broken test.
+
+**Spectra** (`examples/validation/neutral_abl.jl`, seed 1, averaged over
+18-30 ``H/u_*``; slopes are least-squares fits in log-log):
+
+| run | ``Φ_m``, ``0.05 ≤ z/H ≤ 0.3`` | ``E_{11}`` slope near the wall, ``k_1H ∈ [1, 6]`` | slope at ``z/H ≈ 0.24``, ``k_1H ∈ [4, N/3]`` |
+| :-- | :-- | :-- | --: |
+| Smagorinsky 0.1, 32³ | [0.965, 1.589] | −2.01 (``z/H`` 0.047), −1.28 (0.109) | −5.14 |
+| LASD, 32³ | [0.935, 1.133] | −0.66 (0.047), −0.79 (0.109) | −4.27 |
+| LASD, 48³ | [0.961, 1.094] | −0.43 (0.052), −0.61 (0.094) | −3.48 |
+
+``Φ_m`` approaches 1 as the grid is refined. Near the wall LASD gives the
+shallow production-range spectrum, where Bou-Zeid et al. (2005) expect
+``k_1^{-1}``; the Smagorinsky overshoot steepens it. The
+``k_1^{-5/3}`` range at ``z/H ≈ 0.25`` (``k_1 z > 1``, so ``k_1H > 4``)
+is **not** reproduced at 32³-48³. Those wavelengths are below 8-12 ``Δx``,
+where the second-order scheme and the closure damp. The fitted slope
+steepens on coarser grids (−3.5 at 48³, −4.3 at 32³, −5.1 for
+Smagorinsky at 32³), which points to numerical dissipation rather than
+to the closure.
+
+The CBC decay with LASD is in the CBC table below. On the corrected
+(#205) set-up it gives +0.2 % / −10.1 % at 32³, the only closure there
+within the proposed ±10 % at station 98; it misses ±10 % at station 171
+by 0.1 points. Its errors sit about 12.5 points below LASI's at both
+stations because its isotropic ``C_s`` is higher (above). On the
+pre-#205 set-up it read −9.6 % / −19.7 %; the exact start moved it by the
+same ~10 points as every other closure.
 
 ## Closure contract
 
@@ -517,6 +829,7 @@ and the anelastic / pseudo-incompressible `step!`.
 | `sgs_state(c)`, `restore_sgs_state!(c, s)` | snapshot / restore the memory around a step that may be rejected. Default no-op. |
 | `add_sgs_momentum!(tu, tv, tw, c, f, sim)` | the stress divergence; default the Laplacian eddy-viscosity form with `νh` |
 | `add_sgs_scalar!(tϕ, ϕ, c, f, sim)` | the scalar flux divergence; default `∂ⱼ(κh ∂ⱼϕ)` |
+| `sgs_explicit_stress(c)` | `true` for a closure whose momentum flux is its own stress (the Reynolds-stress closure, P56-d #188); `step_imex!`, whose implicit operator is an eddy viscosity, then refuses it. Default `false`. |
 
 **Why `sgs_coefficients!` must be pure.** The cores evaluate the
 coefficients more often than once per step: once per RK3 substage, once
@@ -545,8 +858,46 @@ for bit (face averages of ``ν_t/Pr_t`` are not bitwise ``1/Pr_t`` times
 face averages of ``ν_t``). A closure with its own ``κ_t`` (a stability
 function, a TKE closure) gets the three-argument
 [`add_eddy_diffusion_scalar!`](@ref Aeolus.Operators.add_eddy_diffusion_scalar!)
-by default. qv and the passive tracers keep their current treatment
-(P56-a, #177).
+by default.
+
+**Every transported scalar uses κ_t** (P56-a, #177). The scalar flux of
+the closure is applied, with the same coefficients, to every scalar a core
+or the Berlin case transports, not only to θ:
+
+  * `step!` and `step_rk3!` add it to `qv` when `moisture = true`
+    (`add_sgs_scalar!(tqv, qv, closure, f, sim)`, or eddy diffusion with
+    `qv`'s own diffusivity for a closure that has one — AMD,
+    [`sgs_tracer_diffusivity!`](@ref Aeolus.Operators.sgs_tracer_diffusivity!),
+    #176 — the same rule as `step_imex!`'s implicit `qv` coefficient),
+    together with the molecular `ν∇²qv` that θ gets; `step_imex!` already
+    diffused `qv` implicitly with `ν + κ_t`. Before #177 `step!` advected `qv` but
+    never diffused it — a code bug: a moist run's vapour saw no SGS
+    mixing at all — and `step_rk3!` did not even combine `qv` over its
+    substages. Dry runs are unchanged bit for bit. (The anelastic and
+    pseudo-incompressible cores carry no `qv`.)
+  * The Berlin case diffuses every tracer its `:transport` stage advects
+    (qv, ql, the chemistry species) and the pollutant with `sim.κt` of the
+    last dynamics step (θ's κ_t, also under the `:amd` provider, whose own
+    per-scalar diffusivity the Berlin tracers do not use yet) (see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
+
+The three-argument kernel takes two keywords for this. `mask` (a Bool
+solid mask, e.g. `IBM.SolidMask(…).mask`) closes every face with a solid
+cell on either side and leaves the solid cells' tendency untouched, so a
+tracer neither diffuses into a building nor draws on the stale value held
+inside it; the fluid ``Σϕ\,dV`` is conserved because every open face
+carries the unmasked flux. `weights = (W_c, W_f)` gives the sound-proof
+form ``(1/W)\,∂_j(W κ_t ∂_jϕ)`` with the constraint weight (``ρ̄`` or
+``ρ̄θ̄``) at cell centres and ``z`` faces; it conserves ``Σ W ϕ\,dV``.
+Without either keyword the kernel is the unmasked one, bit for bit.
+
+| property (`test/era6_scalar_sgs_diffusion.jl`) | result |
+| :-- | :-- |
+| `qv = sin(2πz/L_z)`, constant `κ₀`, `moisture = true`: amplitude vs the discrete amplification factor, `step!` / `step_rk3!` (100 steps) / ARK2 (20 steps) | 1.8e-15 / 2.6e-15 / 4.4e-16 relative (before #177: `step!` and `step_rk3!` left `qv` at amplitude 1, error 2.3) |
+| random positive `κ_t`, no-flux walls, 100 `step!`s: ``Σ qv``; ``Σ qv^2`` | conserved to 3.5e-15 relative; non-increasing at every step |
+| steady state of ``∂_z(κ ∂_zϕ) = 0``, ``κ = κ_0(1+z/H)``, flux below, value above, vs ``ϕ_{top} + (FH/κ_0)\ln\frac{1+L/H}{1+z/H}`` | max error 1.42e-5 (``N_z = 32``), 3.64e-6 (64): ratio 3.90, 2nd order |
+| blob next to a solid block (and one across the periodic seam), masked, 100 steps | fluid ``Σϕ`` to 2.5e-16 relative, solid cells unchanged (`==`), all-false mask `==` unmasked kernel |
+| mass-weighted form | ``Σ W ϕ`` to round-off; a uniform field stays uniform (`== 0` tendency) |
+| `moisture = true` vs `false` with ``θ_0 = 0`` (no route back), built-in Smagorinsky | ``u, v, w, θ, ν_t, κ_t`` identical (`==`) |
 
 **One gradient stencil.** `Operators._velocity_gradient_at` returns the
 full resolved gradient ``g_{ij} = ∂u_i/∂x_j`` at a cell centre (diagonal:
@@ -574,6 +925,127 @@ In the Berlin case the SGS slot's providers are closure objects passed as
 `sgs`, so `:dynamic` and `:mlsgs` now also run on the sound-proof cores
 (see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
 
+## Anisotropic minimum-dissipation and Vreman closures
+
+Era VI, P55-d (#176), `src/operators/sgs_amd_vreman.jl`. Two closures on
+the contract that use the spacing of each direction instead of one
+``Δ = (ΔxΔyΔz)^{1/3}``, which matters on the Berlin grid (15.6 × 15.6 ×
+6.25 m), and that vanish in laminar flow, where Smagorinsky's
+``(C_sΔ)^2|S|`` does not. Both read the one gradient stencil,
+`_velocity_gradient_at`; the θ gradient is the centred difference over
+two cells (exact for a linear field, like the off-diagonal velocity
+gradients).
+
+**AMD** ([`AMDClosure`](@ref Aeolus.Operators.AMDClosure),
+[`compute_amd_coefficients!`](@ref Aeolus.Operators.compute_amd_coefficients!)).
+The anisotropic minimum-dissipation model of Rozema, Bae, Moin &
+Verstappen (2015) bounds the energy of the subfilter scales in a grid box
+with the Poincaré inequality and takes the smallest eddy viscosity that
+keeps it from growing. With the scalar model of Abkar, Bae & Moin (2016)
+and the buoyancy term of Abkar & Moin (2017):
+
+```math
+ν_t = C\,\frac{\max\!\left(0,\; -(δ_k∂_k u_i)(δ_k∂_k u_j)S_{ij}
+      + \frac{g}{θ_0}(δ_k∂_k w)(δ_k∂_k θ)\right)}{∂_l u_m\,∂_l u_m},
+\qquad
+κ_t = C\,\frac{\max\!\left(0,\; -(δ_k∂_k u_i)(δ_k∂_k θ)\,∂_i θ\right)}{∂_l θ\,∂_l θ},
+```
+
+``δ_k = (Δx, Δy, Δz)``, summed over ``k`` inside each product. The
+numerators are the gradient-model estimates of the subfilter shear
+production and of the subfilter buoyancy flux. ``κ_t`` is AMD's own
+(not ``ν_t/Pr_t``); where ``∂_lθ∂_lθ = 0`` it falls back to
+``ν_t/Pr_t``. It is per scalar: another scalar ``ϕ`` gets the same formula
+with its own gradient
+([`compute_amd_scalar_diffusivity!`](@ref Aeolus.Operators.compute_amd_scalar_diffusivity!),
+reached through the contract generic
+[`sgs_tracer_diffusivity!`](@ref Aeolus.Operators.sgs_tracer_diffusivity!)).
+This is how `step_imex!` diffuses ``q_v``. The formula is unchanged under
+``ϕ → aϕ + b``. ``C = 0.3`` is the modified Poincaré constant for a
+second-order central discretisation from Rozema et al. (2015) (their
+decaying-turbulence tests; 1/12 for a spectral method, 0.212 for fourth
+order), as restated by Gadde, Stieren & Stevens (2021, §2.3). Abkar & Moin
+(2017) used 1/3 on their mixed spectral / second-order grid. The
+buoyancy parameter is the core's: ``g/θ_0`` on the Boussinesq core and
+``g/\bar θ(z)`` on the sound-proof cores
+([`sgs_buoyancy_parameter`](@ref Aeolus.Operators.sgs_buoyancy_parameter)).
+No separate Richardson-number correction is applied: the buoyancy term is
+AMD's stratification response, and a stability wrapper (P55-e, #187) is
+not stacked on it by default.
+
+What the buoyancy term does is set by the sign of ``∂w/∂z``, not by the
+stratification alone: on ``θ = θ_s + Γz`` it is ``(g/θ_0)Δz^2(∂w/∂z)Γ``,
+which lowers ``ν_t`` where the resolved flow is compressed vertically and
+raises it where it is stretched. On a random velocity field with
+``Γ = 3`` K/km it lowered ``ν_t`` in 1341 cells and raised it in 450 (of
+3584). The monotone decrease with ``N^2`` that the issue asked for holds
+for ``∂w/∂z < 0`` (the test uses ``u = ax + Sz``, ``v = ay``,
+``w = -2az``).
+
+**Vreman** ([`VremanClosure`](@ref Aeolus.Operators.VremanClosure),
+[`compute_vreman_νt!`](@ref Aeolus.Operators.compute_vreman_νt!)).
+Vreman (2004): ``ν_t = c\sqrt{B_β/(α_{ij}α_{ij})}`` with
+``α_{ij} = ∂_i u_j``, ``β_{ij} = Δ_m^2 α_{mi}α_{mj}``,
+``B_β = β_{11}β_{22} - β_{12}^2 + β_{11}β_{33} - β_{13}^2 + β_{22}β_{33} - β_{23}^2``
+and ``c = 2.5C_s^2`` (0.0723 for ``C_s = 0.17``); ``κ_t = ν_t/Pr_t``.
+``B_β`` is the sum of the principal 2 × 2 minors of ``β`` and is computed
+in the equivalent Cauchy–Binet form
+``Σ_{m<n} Δ_m^2Δ_n^2 |∂_m\mathbf u × ∂_n\mathbf u|^2``. That form is
+non-negative by construction and exactly zero for any flow that varies in
+one direction only. The minor form leaves round-off on a two-component
+shear ``u(z), v(z)``, and the square root turned that into
+``ν_t ≈ 10^{-10}`` m²/s in the Berlin laminar check.
+
+**What was measured** (`test/era6_amd_vreman.jl`, `test/era6_cbc_decay.jl`):
+
+| property | AMD | Vreman | Smagorinsky 0.17 |
+| :-- | :-- | :-- | :-- |
+| linear field on (15.625, 15.625, 6.25) m vs closed form | ``ν_t``: 9.9e-15, ``κ_t``: 7.2e-14 relative | 4.1e-16 relative | |
+| uniform flow / ``u = Sz`` (S = 0.02 s⁻¹) / ``u(z), v(z)`` | 0 / 0 / 0 (exactly) | 0 / 0 / 0 (exactly) | 0 / 0.0766 m²/s / ≠ 0 |
+| solid-body rotation, Ω = 0.01 s⁻¹ | 0 (exactly) | 0.125 m²/s ``= c\sqrt{Δx^2Δy^2Ω^2/2}`` | ≈ 0 (6.6e-18) |
+| ``u = ax + Sz``, ``v = ay``, ``w = -2az`` (a = 0.01, S = 0.05 s⁻¹), ``N^2/N^2_* = 0, ¼, ½, ¾, 1, 1.5`` | 7.75e-2, 5.81e-2, 3.87e-2, 1.94e-2, 2.3e-15, 0 m²/s; ``N^2_* = 1.025×10^{-3}`` s⁻² analytic | | |
+| uniform shift (7, −4, 1.5) m/s, random field | ``ν_t`` 4.8e-16, ``κ_t`` 3.9e-16 relative | 3.5e-16 | |
+| decaying turbulence 32³, t = 1: ``⟨2ν_tS_{ij}S_{ij}⟩`` / Smagorinsky | 1.27 (``ν_t = 0`` in 27 % of cells) | 0.82 | 1 |
+| CBC ``K_{98}/K_{42}``, ``K_{171}/K_{42}`` vs CBC, 32³ / 48³ / 64³ | +20.0, +7.7 / +5.0, −8.7 / −3.0, −14.2 % | +16.1, −0.3 / +2.7, −13.9 / −5.1, −18.5 % | +13.2, −2.6 / +0.8, −14.4 / −5.9, −17.6 % |
+| ``compute_sgs!`` on 64 × 64 × 32 (one thread; a `step!` is 6.2 ms) | 0.71 ms | 2.13 ms | 1.52 ms |
+
+The CBC numbers are those of the corrected benchmark (the #205 spectrum
+fix; see [below](#Decaying-grid-turbulence-(Comte-Bellot-and-Corrsin))),
+three seeds. At 32³ both closures leave more energy at the cut-off than
+Smagorinsky (``E(k_c)``/CBC 1.86 for AMD and 1.77 for Vreman, against
+1.62), AMD because ``ν_t = 0`` wherever the resolved strain does not
+produce subfilter energy, so the 32³ station-98 excess that every closure
+shows is larger for them. That excess is the coarse grid's: at 48³ AMD is
+the only closure within the proposed ±10 % at both stations (RMS log
+error 0.079 / 0.065), and at 64³ it is the closest to CBC at both.
+
+* Rozema et al. (2015, §II.C) set ``δx_i = Δx_i`` and ``C = 0.300`` for
+  second-order central schemes, tuned on this CBC case at 64³. Their
+  ``C = 1/3`` is the QR model's constant, not AMD's. The CBC grid is
+  isotropic, so the anisotropic ``δ_i`` cannot enter.
+* At 32³ the station-98 error is set by the constant: K98 / K171 errors
+  +26.9 / +14.6 % for C = 0.25, +20.0 / +7.7 % for 0.3 and +9.2 / −2.4 %
+  for 0.4. The gap between the two stations is 11.5–12.3 points for every
+  C and 15.6–16.8 for Smagorinsky, Vreman and dynamic: it belongs to the
+  set-up (see below), not to AMD.
+
+The test asserts Vreman like the other closures, and AMD at 32³ to what
+the grid allows (station 171 within ±10 %, station 98 within ±25 % with
+its ±10 % kept as a broken test, more energy at ``k_c`` than
+Smagorinsky) and at 48³ to the proposed ±10 % at both stations. It also
+asserts the C sweep and the shared station spread.
+
+**An expectation that proved wrong.** Before the #205 fix the 32³ run
+gave AMD +9.9 % / −4.7 % (Vreman +4.9 % / −12.7 %), and AMD was taken to be
+the first closure that meets ±10 % at station 171. That came from the
+over-energetic start, whose extra small-scale energy the closures
+drained faster. With the exact start the AMD errors moved by +10 / +12
+points. The closure and its constant did not change.
+
+In the Berlin case both are providers of the
+`:sgs` slot (`:amd`, `:vreman`; see
+[The Berlin case](../design/berlin_case.md#Numerics-slots)).
+
 ## Decaying grid turbulence (Comte-Bellot and Corrsin)
 
 The Era VI benchmark for SGS closures (Phase 54) is the wind-tunnel decay
@@ -598,29 +1070,112 @@ Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
 
 | ``N^3`` | closure | ``K_{98}/K_{42}`` vs CBC | ``K_{171}/K_{42}`` vs CBC | RMS ``\log_{10}E``, ``k ≤ \tfrac23 k_c`` (98 / 171) | ``E(k_c)``/CBC (98 / 171) |
 | :-- | :-- | --: | --: | --: | --: |
-| 32³ | dynamic (plane)     | +1.3 % | −15.7 % | 0.085 / 0.099 | 1.23 / 1.00 |
-| 32³ | Smagorinsky 0.17    | +2.5 % | −14.2 % | 0.088 / 0.097 | 1.27 / 1.08 |
-| 32³ | no model            | +78.3 % | +121.1 % | 0.216 / 0.316 | 5.25 / 10.4 |
-| 32³ | σ-model 1.35 (#184)  | +6.6 % | −11.1 % | 0.096 / 0.105 | 1.43 / 1.31 |
-| 64³ | dynamic (plane)     | −13.4 % | −23.5 % | 0.062 / 0.118 | 0.72 / 0.61 |
-| 64³ | Smagorinsky 0.17    | −14.2 % | −24.3 % | 0.065 / 0.124 | 0.67 / 0.52 |
-| 64³ | no model            | +32.7 % | +15.7 % | 0.226 / 0.346 | 5.66 / 8.02 |
+| 32³ | dynamic (plane)     | +13.2 % | −3.6 % | 0.100 / 0.084 | 1.64 / 1.47 |
+| 32³ | dynamic (Lagrangian, #173) | +12.8 % | −2.8 % | 0.095 / 0.077 | 1.61 / 1.43 |
+| 32³ | LASD (scale-dependent Lagrangian, #186) | +0.2 % | −10.1 % | 0.063 / 0.064 | 1.27 / 1.15 |
+| 32³ | Smagorinsky 0.17    | +13.2 % | −2.6 % | 0.102 / 0.085 | 1.62 / 1.51 |
+| 32³ | no model            | +98.2 % | +160.6 % | 0.224 / 0.315 | 6.67 / 15.2 |
+| 32³ | AMD, C = 0.3 (#176) | +20.0 % | +7.7 % | 0.113 / 0.095 | 1.86 / 1.94 |
+| 32³ | Vreman, c = 0.0723 (#176) | +16.1 % | −0.3 % | 0.109 / 0.093 | 1.77 / 1.72 |
+| 32³ | σ-model 1.35 (#184) | +17.8 % | +1.5 % | 0.112 / 0.097 | 1.83 / 1.81 |
+| 48³ | AMD, C = 0.3 (#176) | +5.0 % | −8.7 % | 0.079 / 0.065 | 1.21 / 1.19 |
+| 48³ | Vreman, c = 0.0723 (#176) | +2.7 % | −13.9 % | 0.084 / 0.083 | 1.28 / 1.17 |
+| 48³ | Smagorinsky 0.17    | +0.8 % | −14.4 % | 0.076 / 0.078 | 1.14 / 1.02 |
+| 64³ | dynamic (plane)     | −4.9 % | −17.6 % | 0.055 / 0.083 | 1.06 / 0.93 |
+| 64³ | Smagorinsky 0.17    | −5.9 % | −17.6 % | 0.052 / 0.085 | 0.94 / 0.80 |
+| 64³ | AMD, C = 0.3 (#176) | −3.0 % | −14.2 % | 0.052 / 0.074 | 0.94 / 0.80 |
+| 64³ | Vreman, c = 0.0723 (#176) | −5.1 % | −18.5 % | 0.055 / 0.088 | 1.08 / 0.91 |
+| 64³ | no model            | +54.5 % | +38.6 % | 0.236 / 0.353 | 7.85 / 12.0 |
 
-CI cost at 32³: 14 s for the three closures × three seeds.
+CI cost at 32³: about 10 s (20 s under load) for the three closures ×
+three seeds, plus 2.2 s for the Lagrangian model, which runs through
+`step_rk3!(sim, dt; sgs)` so that its memory is committed once per step;
+it was not run at 64³. AMD and Vreman add about 2 s each, and the AMD
+checks a further 48³ run (about 10 s) and the two C-sweep runs. The
+σ-model (#184) adds about 6.5 s, LASD (#186) about 4–13 s.
 
-Without a model the energy piles up at the cut-off (5–10 × CBC), which
-is what the test uses to show it can fail. With either eddy-viscosity
-closure the first interval is right at 32³ but the second decays too
-fast: the deficit is in the energy-containing shells (LES/CBC 0.65–0.71
-at ``k ≈ 0.2–0.3`` cm⁻¹ at station 171), where the measured large scales
-barely decay and the ``11M`` box holds only a few dozen modes. At 64³
-the closures are also too dissipative at the small scales. The
-proposed ±10 % on both TKE ratios (a figure from spectral-code LES) is
-therefore not met; the test asserts ±20 % at station 171 and keeps ±10 %
-as a broken test, so a closure that reaches it (Lagrangian dynamic,
-AMD, …: one line each in the test) shows up. Starting from the random-
-phase field without the rescale cycles instead gives +21 % / −3 % at
-32³ (no transfer during the first turnover).
+Without a model the energy piles up at the cut-off (7–15 × CBC). The
+test uses this to show that it can fail.
+
+**A defect found in review (#205).** The first version of this table read
++1.3 % / −15.7 % (32³, dynamic) and −13.4 % / −23.5 % (64³). The spectrum
+diagnostic then measured the centre average of the staggered velocity,
+and the initialiser compensated by dividing by ``\cos(k_jΔ_j/2)`` (see
+[filtering](les_filtering.md)). The run was therefore started with more
+kinetic energy than CBC in the energy the solver carries: +12.8 % at
+32³ and +8.7 % at 64³ after the rescale cycles, and ×2.1 in the cut-off
+shell. Measured in that energy, the old 32³ run was +12.8 / +13.8 /
+−6.3 % against CBC at stations 42 / 98 / 171. With the face spectrum
+the start is exact, and the table above is the corrected run.
+
+**What remains.** The proposed ±10 % on both ratios (a figure from
+spectral-code LES) still does not hold across resolutions. Dynamic
+model, three seeds:
+
+| ``N`` | 32 | 40 | 48 | 64 |
+| :-- | --: | --: | --: | --: |
+| ``K_{98}/K_{42}`` error | +13.2 % | +7.5 % | +1.8 % | −4.9 % |
+| ``K_{171}/K_{42}`` error | −3.6 % | −9.5 % | −13.9 % | −17.6 % |
+| ``E(k_c)``/CBC at 98 | 1.64 | 1.42 | 1.21 | 1.06 |
+
+So the 32³ CI case meets ±10 % at station 171 only because two errors
+cancel there. 40³ meets it at both stations, but only because it falls
+between the two error trends. Neither result is evidence that the
+target is reached.
+
+- **Station 98 at 32³.** The excess is the coarse grid. Here
+  ``k_c = 1.8`` cm⁻¹ is only 3.6 × the station-42 peak, and energy
+  piles up at the cut-off. The pile-up is gone at 64³.
+- **Station 171.** The deficit grows with ``N``. Each of the following
+  was varied alone and is ruled out as the cause:
+
+  | Varied | Values tried | ``K_{171}/K_{42}`` error |
+  | :-- | :-- | :-- |
+  | time step (cfl) | 0.5, 0.25 | equal to 0.1 % |
+  | spin-up cycles | 1, 2, 4 | −4.0 / −3.6 / −4.2 % at 32³ |
+  | seeds | 3, 8 | −3.6 / −3.4 % |
+  | box side, same ``Δ`` | 22M at 64³, 11M at 32³ | −1.5 / −3.6 % |
+  | ``C_s`` at 64³ | 0.12, 0.17, 0.22 | −17.5 / −17.6 / −16.8 % |
+
+The spectrum shows where the energy is missing. Shells 2–3
+(``k = 0.22``–``0.34`` cm⁻¹) end at 0.62–0.77 of CBC at station 171.
+This holds for every closure tried, including none, at every resolution
+and in both boxes, and on its own it costs about 6 % of ``K_{171}``.
+The rest is a 10–20 % deficit in shells 4–12 at 48³–64³.
+
+The table data are not the cause: they were re-checked against the
+printed table 3. CBC (§6, appendix E) do state that their large-eddy
+data are the least certain, because of a.c. coupling and the Taylor
+approximation at long times. The low-``k`` part of ``E(k)`` also comes
+from graphical differentiation of the one-dimensional spectra.
+
+Two candidates in the numerics remain open:
+
+- the second-order truncation and aliasing errors of an implicitly
+  filtered finite-difference LES, which are comparable to the SGS term
+  near the cut-off (Ghosal 1996; Kravchenko & Moin 1997);
+- the eddy-viscosity term in the Laplacian form ``∂_j(ν_t ∂_j u_i)``
+  instead of ``∂_j(2ν_t S_{ij})`` (stress-form SGS, #175).
+
+The test therefore asserts ±10 % at station 171 (32³) and ±20 % at
+station 98, and keeps ±10 % at station 98 as a broken test. A closure
+or numerics change that moves the 64³ numbers is checked with
+`examples/validation/cbc_decay.jl`. Starting from the random-phase field
+without the rescale cycles gives +33.5 % / +10.5 % at 32³, because the
+field transfers no energy during the first turnover.
+
+## Prognostic TKE closure (P56-b)
+
+`PrognosticSGS.TKEClosure` (#182) is the first stateful closure of the
+contract: the Deardorff (1980) / Moeng (1984) 1.5-order model with the SGS
+TKE ``e`` as its memory, ``ν_t = c_k l\sqrt e`` and ``κ_t = (1 + 2l/Δ)ν_t``.
+Its shear production is the exact discrete dual of the momentum operator
+above, so the resolved kinetic energy the closure removes is the energy
+``e`` gains; its neutral equilibrium is this page's model with
+``C_s = 0.194``; its stability length ``0.76\sqrt e/N`` gives a critical
+Richardson number of 0.233, so no stability function is applied to it.
+In the CBC benchmark above it decays too fast (−9.4 % / −26.9 % at 32³).
+Everything else is on [Prognostic SGS TKE](sgs_tke.md).
 
 ## σ-model
 
@@ -693,7 +1248,7 @@ second stencil.
 | ``d\log ν_t/d\log z``, first 8 of 64 cells, Taylor wall field | 2.955 | 0.0025 |
 | laminar Couette, Re = 100, ``N_z = 32``, from rest | wall stress ``νU/h`` to 2.8e-14, ``ν_t ≡ 0`` | stress excess ``(C_sΔ)^2(U/h)/ν`` = 4.5156e-2, measured 4.5156e-2 |
 | decaying HIT 32³ (``ν = 10^{-4}``), exponent ``n`` of ``K ∝ t^{-n}`` on ``t ∈ [1, 3]``, seeds 1 / 2 | 0.5823 / 0.4746 | 0.5840 / 0.4848 |
-| CBC 32³ (3 seeds): ``K_{98}/K_{42}``, ``K_{171}/K_{42}`` vs CBC; RMS ``\log_{10}E`` (98 / 171); ``E(k_c)``/CBC | +6.6 %, −11.1 %; 0.096 / 0.105; 1.43 / 1.31 | +2.5 %, −14.2 %; 0.088 / 0.097; 1.27 / 1.08 |
+| CBC 32³ (3 seeds): ``K_{98}/K_{42}``, ``K_{171}/K_{42}`` vs CBC; RMS ``\log_{10}E`` (98 / 171); ``E(k_c)``/CBC | +17.8 %, +1.5 %; 0.112 / 0.097; 1.83 / 1.81 (on the #205-corrected set-up; +6.6 %, −11.1 % before it) | +13.2 %, −2.6 %; 0.102 / 0.085; 1.62 / 1.51 |
 | KH 64×1×128 growth rate (no SGS 0.1820) | 0.1820 (``ν_t ≡ 0``: the layer is 2-D) | 0.1769 (−2.82 %, ``C_s = 0.1``) |
 | kernel cost, 64×64×32 | 6.7 ms | 0.85 ms |
 
@@ -703,16 +1258,22 @@ so Smagorinsky is zero there too. The test asserts that.
 
 **Berlin.** The `:sgs` slot's provider `:sigma`
 (`examples/urban/couplings/sgs_sigma.jl`) is off by default; flipping
-the default from Smagorinsky is the maintainer's call. After 100 steps
-of the `:smoke` window, the mean ``ν_t`` is 2.7e-2 m²/s in the canopy,
-against 2.4e-2 for Smagorinsky on the same flow. Above the sponge start
-it is 5.3e-4 against 2.0e-2 m²/s. The Transition indicator finds that
-free stream laminar (γ = 0). It is not *exactly* parallel, though: weak
-3-D disturbances from the canopy reach it, below the γ threshold, so
-``σ_3 ≠ 0`` and ``ν_t`` is small rather than zero. For an exactly
-parallel profile on the Berlin mesh it is zero to the bit
-(`test/berlin_numerics.jl`). The smoke step costs 16.4 ms against
-15.8 ms with Smagorinsky.
+the default (`:tke` since #182) is the maintainer's call. Like every
+eddy-viscosity provider it runs the stress-form momentum divergence
+(option `stress`, #175). After 100 steps of the `:smoke` window, the mean
+``ν_t`` is 3.1e-2 m²/s in the canopy, against 2.5e-2 for Smagorinsky on
+the same flow. Above the sponge start it is 4.0e-3 against 2.3e-3 m²/s:
+since #171 the sponge relaxes toward the geostrophic wind, so that region
+is a nearly uniform stream (ū = 1.0 m/s) with weak 3-D residual
+fluctuations (γ = 0.96), not a laminar shear layer, and σ has no laminar
+gradient to discount. With the sponge relaxing to zero
+(`sponge_to_geostrophic = false`, the pre-#171 flow) the same region is a
+laminar sheared layer (γ = 0), and σ gives 5.3e-4 against 2.0e-2 m²/s
+(2.7 %). On the laminar version of the current flow (level means of u, v;
+``w = 0``) σ's ``ν_t`` is zero to the bit where Smagorinsky is on (the
+smoke check AMD and Vreman share), and for an exactly parallel turning
+profile on the Berlin mesh too (`test/berlin_numerics.jl`). The smoke step
+costs 17.8 ms against 16.5 ms with Smagorinsky.
 
 Those free-stream numbers were measured with a sponge that relaxed the
 wind towards rest, which sheared the free stream (U fell from 0.52 to
@@ -731,23 +1292,37 @@ volume-normalised γ laminar (0.02). The test asserts the latter and
 The current implementation is deliberately the *simplest* working
 Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
 
-  * No wall damping (Van Driest / Piomelli) for Smagorinsky. Needed only
-    when walls exist. The [σ-model](#σ-model) needs none: its ``ν_t``
-    falls off as ``z^3`` at a no-slip wall (measured slope 2.955).
+  * No wall damping function (Van Driest / Piomelli) for Smagorinsky, by
+    design. The static closure has none; near walls it overshoots
+    (``Φ_m`` up to 1.45-1.65 at ``C_s = 0.17``, P54-d). The dynamic
+    closures replace damping with the dynamic procedure: the
+    scale-dependent Lagrangian model (LASD, #186, above) recovers the log
+    law (``Φ_m ∈ [0.93, 1.15]`` in the half channel at 24³) without a
+    damping function, and the wall stress comes from the wall model. The
+    plane-averaged `DynamicSmagorinsky` is kept as an option of the same
+    Germano kernel; it is not scale dependent. The [σ-model](#σ-model)
+    needs none either: its ``ν_t`` falls off as ``z^3`` at a no-slip wall
+    (measured slope 2.955).
   * The constant coefficient is too dissipative in transitional / stably
     stratified regimes. The dynamic coefficient and the σ-model, which is
-    zero in laminar shear and in 2-D flow, are the alternatives; in
-    stable stratification the Richardson-number reduction of
-    [Stability correction](#Stability-correction) (P55-e) applies, on by
-    default in the Berlin case; its validation on GABLS1 and the
+    zero in laminar shear and in 2-D flow, are the alternatives; in stable
+    stratification the Richardson-number reduction of
+    [Stability correction](#Stability-correction) (P55-e) applies to the
+    Smagorinsky, dynamic and MLSGS closures, on by default for those
+    providers in the Berlin case; its validation on GABLS1 and the
     stratified channel (P55-f) is in
     [Stable boundary layers](stable_boundary_layer.md).
   * The σ-model costs about 8 times the Smagorinsky kernel (6.7 against
     0.85 ms on 64×64×32). It is zero only in *exactly* laminar
     (parallel, 2-D, pure-strain) flow; a laminar but weakly 3-D free
-    stream gets a small ``ν_t`` (Berlin, shear-free free stream above the
-    sponge start: 2e-3 ν). On its own it is not stability-aware; wrap it
-    in `StabilityCorrected` for that.
+    stream gets a small ``ν_t`` (Berlin, sponge relaxing to zero: 2.7 % of
+    Smagorinsky's above the sponge start), and in a weakly turbulent,
+    nearly unsheared stream it can exceed Smagorinsky's (Berlin default:
+    1.7 ×, both small, 2e-3 ν). It is not stability-aware by itself; it can be
+    wrapped in `StabilityCorrected` like any eddy-viscosity closure, but
+    the Berlin `:sigma` provider runs it unwrapped. The prognostic TKE
+    closure (P56-b, above) has its own stability length and is not
+    wrapped.
   * **Relaminarised stable regions** (P59-e, #195; see
     [Transition → Relaminarisation](transition.md#Relaminarisation-in-strongly-stable-stratification)).
     In decaying turbulence on a held laminar shear at ``Ri = 1`` the
@@ -779,6 +1354,12 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Pope, S. B. (2000), *Turbulent Flows*, ch. 13.
   * Germano, M., Piomelli, U., Moin, P. & Cabot, W. H. (1991), *A dynamic
     subgrid-scale eddy viscosity model*, Phys. Fluids A 3, 1760.
+  * Porté-Agel, F., Meneveau, C. & Parlange, M. B. (2000), *A
+    scale-dependent dynamic model for large-eddy simulation: application
+    to a neutral atmospheric boundary layer*, JFM 415, 261.
+  * Bou-Zeid, E., Meneveau, C. & Parlange, M. B. (2005), *A
+    scale-dependent Lagrangian dynamic model for large eddy simulation of
+    complex turbulent flows*, Phys. Fluids 17, 025105.
   * Lilly, D. K. (1992), *A proposed modification of the Germano subgrid-scale
     closure method*, Phys. Fluids A 4, 633.
   * Lund, T. S. (1997), *On the use of discrete filters for large eddy
@@ -786,9 +1367,6 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Comte-Bellot, G. & Corrsin, S. (1971), *Simple Eulerian time
     correlation of full- and narrow-band velocity signals in
     grid-generated, 'isotropic' turbulence*, JFM 48, 273.
-  * Kang, H. S., Chester, S. & Meneveau, C. (2003), *Decaying turbulence
-    in an active-grid-generated flow and comparisons with large-eddy
-    simulation*, JFM 480, 129.
   * Meneveau, C., Lund, T. S. & Cabot, W. H. (1996), *A Lagrangian dynamic
     subgrid-scale model of turbulence*, J. Fluid Mech. 319, 353 (the
     stateful closure the commit contract is designed for).
@@ -822,9 +1400,32 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Deardorff, J. W. (1970), *A numerical study of three-dimensional
     turbulent channel flow at large Reynolds numbers*, J. Fluid Mech. 41,
     453 (the stress form on a staggered grid).
+  * Kang, H. S., Chester, S. & Meneveau, C. (2003), *Decaying turbulence
+    in an active-grid-generated flow and comparisons with large-eddy
+    simulation*, JFM 480, 129.
+  * Ghosal, S. (1996), *An analysis of numerical errors in large-eddy
+    simulations of turbulence*, J. Comput. Phys. 125, 187.
+  * Kravchenko, A. G. & Moin, P. (1997), *On the effect of numerical
+    errors in large eddy simulations of turbulent flows*, J. Comput.
+    Phys. 131, 310.
   * Deardorff, J. W. (1980), *Stratocumulus-capped mixed layers derived
     from a three-dimensional model*, Boundary-Layer Meteorol. 18, 495
     (prognostic SGS TKE).
+  * Rozema, W., Bae, H. J., Moin, P. & Verstappen, R. (2015),
+    *Minimum-dissipation models for large-eddy simulation*, Phys. Fluids
+    27, 085107.
+  * Abkar, M., Bae, H. J. & Moin, P. (2016), *Minimum-dissipation scalar
+    transport model for large-eddy simulation of turbulent flows*, Phys.
+    Rev. Fluids 1, 041701(R).
+  * Abkar, M. & Moin, P. (2017), *Large-eddy simulation of thermally
+    stratified atmospheric boundary-layer flow using a minimum
+    dissipation model*, Boundary-Layer Meteorol. 165, 405.
+  * Gadde, S. N., Stieren, A. & Stevens, R. J. A. M. (2021), *Large-eddy
+    simulations of stratified atmospheric boundary layers: comparison of
+    different subgrid models*, Boundary-Layer Meteorol. 178, 363.
+  * Vreman, A. W. (2004), *An eddy-viscosity subgrid-scale model for
+    turbulent shear flow: algebraic theory and applications*, Phys.
+    Fluids 16, 3670.
   * Nicoud, F., Baya Toda, H., Cabrit, O., Bose, S. & Lee, J. (2011),
     *Using singular values to build a subgrid-scale model for large eddy
     simulations*, Phys. Fluids 23, 085106 (the σ-model).
