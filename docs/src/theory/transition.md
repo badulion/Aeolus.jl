@@ -591,7 +591,7 @@ ends below 10 % of the switch-on value, *survived* above 50 %.
 | :-- | :-- | :-- | --: | --: |
 | 180, 32³ (``Δx^+ = 35``, ``Δz^+ = 5.6``) | 0.05 (0.94), 0.10 (0.87) | 0.15, 0.2, 0.3, 0.6, 1, 1.5, 2 (all ≤ 0.002) | 0.12 | 1470 |
 | 180, 48³ | — | 0.15 (0.001), 0.3 (0.000) | < 0.15 | > 1200 |
-| 360, 48³ (``Δx^+ = 47``, ``Δz^+ = 7.5``) | 0.10 (0.96), 0.30 (1.12) | 0.5, 0.7, 1.0 (all 0.001) | 0.39 | 930 |
+| 360, 48³ (``Δx^+ = 47``, ``Δz^+ = 7.5``) | 0.10 (0.96), 0.30 (1.12), 0.40 (1.28), 0.45 (1.46) | 0.5, 0.7, 1.0 (all 0.001) | 0.47 | 760 |
 | Nieuwstadt (2005), DNS, ``L`` without ``κ`` | | | 1.23 at ``Re_τ = 360`` | 293 |
 | the same, this page's ``L`` (with ``κ``) | | | ``1.23 κ`` = 0.49 at ``Re_τ = 360`` | 730 |
 | Flores & Riley (2011), DNS | | | | ≈ 100 |
@@ -603,8 +603,20 @@ which **includes** ``κ`` (as does `relam_heat_flux` of the example
 driver). Nieuwstadt (2005) defines ``L`` without ``κ``, so his
 ``h/L = 1.23`` is ``h/L = 1.23 κ = 0.49`` (``κ = 0.40``) here — the
 comparison value that Donda's thesis (TU/e) states for this
-convention. Before #236 this page compared 0.39 against 1.23 directly
-and reported a factor-3 miss that was a convention error. Collapse is complete in every collapsed
+convention. Before #236 this page compared the 48³ critical value
+(then 0.39, from the bracket 0.30–0.50) against 1.23 directly and
+reported a factor-3 miss that was a convention error.
+
+The runs at ``h/L = 0.40`` and 0.45 (#236) survive through a transient
+collapse: the TKE ratio falls to a minimum of 0.28 at ``t = 5.0 h/u_τ``
+(0.40) and 0.21 at 5.5 (0.45), the wall stress to 0.46 and 0.43
+``u_τ^2``, and both recover by ``t ≈ 10`` to end at 1.28 and 1.46 with
+``⟨τ_w⟩`` = 1.09 and 1.15 ``u_τ^2`` (the stratified flow has a higher
+TKE than the neutral switch-on state). At 0.50 the same descent does not
+turn: TKE 0.05 at ``t = 6``, 0.001 at 20, ``⟨τ_w⟩`` 0.37. A transient
+collapse followed by recovery just below the threshold is what Donda et
+al. (2015) describe for this channel. Each run took 1 380–1 430 s
+(18 070 steps). Collapse is complete in every collapsed
 run: γ of the lower half is 0.000 at ``T`` and the wall stress falls to
 0.51–0.53 ``u_τ^2`` (``Re_τ = 180``) and 0.37 ``u_τ^2`` (360) while the
 flow accelerates. In the surviving runs γ stays at 0.96–0.97. The
@@ -617,10 +629,15 @@ neutral spin-ups reach TKE 2.24 / 1.46 / 1.68 ``u_τ^2`` and
 
 **Against the references.** The issue's targets were ±30 % on the
 critical ``h/L`` and a factor 1.5 on ``L^+``. At ``Re_τ = 360``, in one
-convention (``L`` with ``κ``), the measured 0.39 is 0.79 of Nieuwstadt's
-``1.23 κ = 0.49`` (−21 %, inside the ±30 %), and the reference lies at
-the top edge of the measured bracket (survived 0.30, collapsed 0.50).
-``L^+_c`` = 930 (360) and 1470 (180) are 9 and 15 times the ≈ 100 of
+convention (``L`` with ``κ``), the measured 0.47 is 0.96 of Nieuwstadt's
+``1.23 κ = 0.49`` (−4 %, inside the ±30 %). The reference lies inside
+the measured bracket (survived 0.45, collapsed 0.50) but at its top
+edge, 2 % below the smallest collapsed value. There is residual
+tension: Donda's runs at ``h/L = 0.49`` (this convention) survive, ours
+collapse at 0.50, so either the threshold of this coarse LES lies in
+0.45–0.49, slightly below the DNS one, or the two agree to within the
+2 % between 0.49 and 0.50 that the bracket cannot resolve.
+``L^+_c`` = 760 (360) and 1470 (180) are 7.6 and 15 times the ≈ 100 of
 Flores & Riley. That ``L^+`` target is **not consistent** with
 Nieuwstadt's at ``Re_τ = 360`` either: his threshold is
 ``L^+ = 360/0.49 ≈ 730`` with ``κ`` in ``L`` (293 without). ``L^+ = 100``
@@ -633,7 +650,7 @@ inconsistency; the ``h/L`` comparison with Nieuwstadt, at the same
 Test 3 of the issue — collapse at ``h/L = 2.0``, survival at
 ``h/L = 0.3`` at ``Re_τ = 180`` — holds for the collapse and fails for
 the survival: ``h/L = 0.3`` collapses on 32³ and on 48³. The trend is
-right — the threshold rises with ``Re_τ`` (0.12 → 0.39 for a doubling;
+right — the threshold rises with ``Re_τ`` (0.12 → 0.47 for a doubling;
 a constant ``L^+_c`` would give a factor 2) — and the collapse itself is
 the physical one (the near-wall shear production cannot keep up with
 the buoyancy sink, the wall stress drops and the flow accelerates

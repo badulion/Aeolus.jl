@@ -112,9 +112,10 @@ function figure(Re, rs)
     # (b) final TKE ratio and γ against h/L, with the reference thresholds
     x0 = 640
     hmax = max(1.1 * maximum(r.h_over_L for r in rs), 1.4)
-    XH(h) = x0 + h / hmax * pw; YE(e) = y0 + ph - e / 1.2 * ph
+    ymax = max(1.2, 0.2 * ceil(1.05 * maximum(r.tke_end for r in rs) / 0.2))
+    XH(h) = x0 + h / hmax * pw; YE(e) = y0 + ph - e / ymax * ph
     println(io, """<rect x="$x0" y="$y0" width="$pw" height="$ph" fill="none" stroke="#333"/>""")
-    for e in 0:0.2:1.2
+    for e in 0:0.2:ymax
         println(io, """<text x="$(x0-8)" y="$(YE(e)+4)" font-size="12" text-anchor="end">$(round(e, digits = 1))</text>""")
     end
     for h in 0:0.5:hmax
@@ -124,17 +125,17 @@ function figure(Re, rs)
         println(io, """<line x1="$x0" y1="$(YE(e))" x2="$(x0+pw)" y2="$(YE(e))" stroke="#999" stroke-dasharray="4,4"/>""")
     end
     hN = H_NIEUWSTADT                       # Nieuwstadt (2005) at Re_τ = 360, κ convention
-    println(io, """<line x1="$(XH(hN))" y1="$y0" x2="$(XH(hN))" y2="$(y0+ph)" stroke="#dc2626" stroke-dasharray="5,4"/><text x="$(XH(hN)-4)" y="$(y0+ph/2)" font-size="11" fill="#dc2626" text-anchor="end">Nieuwstadt 2005</text><text x="$(XH(hN)-4)" y="$(y0+ph/2+14)" font-size="11" fill="#dc2626" text-anchor="end">(Re_τ = 360: 1.23 κ)</text>""")
+    println(io, """<line x1="$(XH(hN))" y1="$y0" x2="$(XH(hN))" y2="$(y0+ph)" stroke="#dc2626" stroke-dasharray="5,4"/><text x="$(XH(hN)+6)" y="$(YE(0.72))" font-size="11" fill="#dc2626">Nieuwstadt 2005</text><text x="$(XH(hN)+6)" y="$(YE(0.72)+14)" font-size="11" fill="#dc2626">(Re_τ = 360: 1.23 κ)</text>""")
     hF = Re / 100                           # Flores & Riley (2011): L⁺ = 100
     if hF < hmax
         println(io, """<line x1="$(XH(hF))" y1="$y0" x2="$(XH(hF))" y2="$(y0+ph)" stroke="#7c3aed" stroke-dasharray="2,3"/><text x="$(XH(hF)-4)" y="$(y0+ph/2+40)" font-size="11" fill="#7c3aed" text-anchor="end">L⁺ = 100</text><text x="$(XH(hF)-4)" y="$(y0+ph/2+54)" font-size="11" fill="#7c3aed" text-anchor="end">(Flores &amp; Riley)</text>""")
     else
-        println(io, """<text x="$(XH(hN)-4)" y="$(y0+ph/2+40)" font-size="11" fill="#7c3aed" text-anchor="end">L⁺ = 100 (Flores &amp; Riley)</text><text x="$(XH(hN)-4)" y="$(y0+ph/2+54)" font-size="11" fill="#7c3aed" text-anchor="end">at h/L = $(round(hF, digits = 2)), off scale</text>""")
+        println(io, """<text x="$(XH(hN)+6)" y="$(YE(0.36))" font-size="11" fill="#7c3aed">L⁺ = 100 (Flores &amp; Riley)</text><text x="$(XH(hN)+6)" y="$(YE(0.36)+14)" font-size="11" fill="#7c3aed">at h/L = $(round(hF, digits = 2)), off scale</text>""")
     end
     for r in rs
-        println(io, """<circle cx="$(XH(r.h_over_L))" cy="$(YE(min(r.tke_end, 1.2)))" r="5" fill="#1d4ed8"/><rect x="$(XH(r.h_over_L)-4)" y="$(YE(r.γ_end)-4)" width="8" height="8" fill="none" stroke="#059669" stroke-width="1.5"/>""")
+        println(io, """<circle cx="$(XH(r.h_over_L))" cy="$(YE(min(r.tke_end, ymax)))" r="5" fill="#1d4ed8"/><rect x="$(XH(r.h_over_L)-4)" y="$(YE(r.γ_end)-4)" width="8" height="8" fill="none" stroke="#059669" stroke-width="1.5"/>""")
     end
-    xg = x0 + 0.17pw; yg = YE(0.8)
+    xg = XH(hN) + 6; yg = y0 + 30
     println(io, """<text x="$xg" y="$yg" font-size="12" fill="#1d4ed8">● TKE(T)/TKE(0)</text><text x="$xg" y="$(yg+16)" font-size="12" fill="#059669">□ γ of the lower half at T</text>""")
     println(io, """<text x="$(x0+pw/2)" y="$(y0+ph+38)" font-size="14" text-anchor="middle">h/L</text>""")
     println(io, """<text x="$(x0+8)" y="$(y0+20)" font-size="14" font-weight="bold">(b)</text>""")
