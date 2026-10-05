@@ -126,7 +126,7 @@ using ..TimeSteppers: step!
 using Random
 using ..SurfaceExchange
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
-                         SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, von_karman
+                         SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, von_karman, grav
 using ..Grids: CellCenter, FaceX, FaceY, FaceZ
 using ..Fields: Field
 using ..CutCell: GhostCellStencil, CutCellGeometry, _center_velocity, _image_value

@@ -1000,6 +1000,7 @@ end
     include("era6_wall_models_dynamic.jl") # P57-e: dynamic z0 of partially resolved roughness (#190)
     include("era6_gabls1.jl")            # P55-f: GABLS1 on the shared SBL driver, reduced (#191)
     include("era6_stratified_channel.jl") # P55-f: wall-resolved stably stratified channel vs DNS (#191)
+    include("era6_collapse.jl")            # P58-e: maximum sustainable heat flux, LES collapse regime (#193)
 end
 
 # =========================================================================

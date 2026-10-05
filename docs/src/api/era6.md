@@ -254,6 +254,7 @@ E = streamwise_spectrum(hc.sim.u, [3, 6, 12])           # E11(k1) at three level
 Aeolus.Operators.phi_m_profile
 Aeolus.Operators.total_stress_profile
 Aeolus.Operators.streamwise_spectrum
+Aeolus.Operators.resolved_tke_profile
 ```
 
 ## Anisotropic minimum-dissipation and Vreman closures (P55-d)

@@ -107,6 +107,17 @@ Slot `:surface_exchange`, provider `:most` (default).
 * **Extra energy.** `bus.sensible` (energy other couplings take from the
   surfaces, W m⁻²) is collected every step in `:surface_update` and
   handed to the surfaces as `Q_extra` at their next step.
+* **Maximum sustainable heat flux** (P58-e, #193), every surface step:
+  per column, `SurfaceExchange.surface_mshf_ratio` of the MOST fluxes of
+  the skin at the start of the step (`turbulent_fluxes`), one 1-D
+  maximisation at the column's wind, `z_ref`, `z0m` and ``θ_{va}``
+  (Van de Wiel et al. 2012). `H_max` (W m⁻²) and the ratio of the downward
+  buoyancy flux to the MSHF are output fields; the report prints the
+  mean ratio of the stable street, roof and park columns and the share
+  of them beyond the MSHF point (``z_{ref}/L`` past the peak of the flux
+  curve: the very stable, collapsed branch); the smoke
+  check asserts ratio ≤ 1 + 1e-8 everywhere (and < 1.1 for the fluxes
+  the surface returned, which a soil skin linearises in ``T_{skin}``).
 
 * **Dynamic roughness** (P57-e, #190; option `z0m = :dynamic`, off by
   default): the ground wall law's momentum roughness becomes the dynamic
@@ -178,6 +189,13 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     dyn::Any                   # WallModels.DynamicRoughness, built in init!
     dyn_opts::NamedTuple
     t_dyn::Float64             # wall time spent in the dynamic solve (s)
+    # P58-e (#193): maximum sustainable heat flux per column, last surface step
+    H_max::Matrix{Float64}     # ρ c_p Q_max (W m⁻²; SurfaceExchange.max_sustainable_heat_flux)
+    mshf_ratio::Matrix{Float64} # downward buoyancy flux / Q_max (< 0: upward, unstable)
+    mshf_beyond::Matrix{Bool}  # z_ref/L beyond the MSHF point: the very stable (collapsed) branch
+    mshf_worst::Float64        # max ratio of the MOST fluxes of the step's start, all columns and steps
+    mshf_worst_delivered::Float64 # the same for the fluxes step_surface! returned (linearised soil skin)
+    mshf_time::Float64         # wall time spent in the MSHF maximisations (s)
 end
 
 coupling_name(::Type{SurfaceExchangeMOST}) = :surface_exchange
@@ -281,7 +299,9 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
                                0.0, 0, 0.0, 0, 0.0, 0,
                                dynamic, nothing,
                                (refine = Int(o.dynamic_refine), filter = Symbol(o.dynamic_filter),
-                                C_d = Float64(o.dynamic_C_d)), 0.0)
+                                C_d = Float64(o.dynamic_C_d)), 0.0,
+                               fill(NaN, Nx, Ny), fill(NaN, Nx, Ny), fill(false, Nx, Ny),
+                               -Inf, -Inf, 0.0)
 end
 
 """
@@ -440,6 +460,9 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         c.Q[i, j] = Q
         c.pending[i, j] = 0.0
         E0 = surface_store_energy(s)
+        # P58-e: the Monin–Obukhov fluxes of the skin at the start of the
+        # step, before step_surface! (which may linearise them in T_skin)
+        c.mshf_time += @elapsed (f_most = _most_fluxes(s, f, c.U_min))
         fl = _step_one(s, f, P, Q, c.U_min)
         E1 = surface_store_energy(s)
         E0 === nothing || (c.store_err = max(c.store_err, abs((E1 - E0) / P - fl.G)))
@@ -461,6 +484,22 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         # the law reproduces the surface step's u* with the table z0m; with the
         # dynamic z0 bus.u_star is the wall law's at this wind and height
         dyn === nothing || (bus.u_star[i, j] = friction_velocity(c.laws[i, j], U, bus.z_ref[i, j]))
+        # P58-e: how far the column is from its maximum sustainable heat
+        # flux (Van de Wiel et al. 2012) — one 1-D maximisation per column.
+        # MOST bounds the fluxes it defines (f_most) by Q_max exactly; the
+        # fluxes a soil column returns are its first-order extrapolation in
+        # T_skin to the step's mean skin temperature, which can overshoot
+        # the maximum of the concave H(T_skin) by O(ΔT²) (tracked apart).
+        c.mshf_time += @elapsed begin
+            r = surface_mshf_ratio(BusingerDyerBeljaarsHoltslag(), f_most, f, z0m; U_min = c.U_min)
+            rd = surface_mshf_ratio(BusingerDyerBeljaarsHoltslag(), fl, f, z0m; U_min = c.U_min,
+                                    Q_max = r.Q_max)
+        end
+        c.H_max[i, j] = r.H_max
+        c.mshf_ratio[i, j] = r.ratio
+        c.mshf_beyond[i, j] = r.ratio > 0 && bus.z_ref[i, j] / L > r.ζ_mshf
+        c.mshf_worst = max(c.mshf_worst, r.ratio)
+        c.mshf_worst_delivered = max(c.mshf_worst_delivered, rd.ratio)
         c.U_wall[i, j] = U          # u* is the law at this wind and height until the next step
         c.h_wall[i, j] = bus.z_ref[i, j]
         c.cp[i, j] = heat_capacity_moist(qa)
@@ -485,6 +524,7 @@ end
 
 # function barrier: one dynamic dispatch per column
 _step_one(s, f, P, Q, U_min) = step_surface!(s, f, P; Q_extra = Q, U_min = U_min)
+_most_fluxes(s, f, U_min) = turbulent_fluxes(s, f; U_min = U_min)
 
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
     c.stepped || step_all_surfaces!(c, case)          # step 1: the first surface step
@@ -614,9 +654,19 @@ function report(c::SurfaceExchangeMOST, case)
     dyn = c.dyn === nothing ? "" :
           @sprintf("  dynamic z0: α %.3g, street %.3g m", c.dyn.α,
                    m(c.dyn.z0, [I for I in have if sfc[I] == SURFACE_STREET]))
-    return @sprintf("           surface: H %6.1f LE %6.1f G %6.1f W/m²  u* roof %.2f ground %.2f m/s%s",
+    # P58-e: the stable columns' downward buoyancy flux over their MSHF,
+    # per class (|H|/H_max; at night every column is stable)
+    stable(cls) = [I for I in have if sfc[I] == cls && c.mshf_ratio[I] > 0]
+    rs = map((SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK)) do cls
+        idx = stable(cls)
+        isempty(idx) ? "–" : @sprintf("%.2f (%.0f%% beyond)", mean(c.mshf_ratio[idx]),
+                                      100 * count(I -> c.mshf_beyond[I], idx) / length(idx))
+    end
+    return @sprintf("           surface: H %6.1f LE %6.1f G %6.1f W/m²  u* roof %.2f ground %.2f m/s%s\n",
                     m(bus.H, have), m(bus.LE, have), m(bus.G, have),
-                    m(bus.u_star, roof), m(bus.u_star, ground), dyn)
+                    m(bus.u_star, roof), m(bus.u_star, ground), dyn) *
+           @sprintf("              MSHF: |H|/H_max (stable cols) street %s roof %s park %s; max %.3f (delivered %.3f); %.1f ms/surface step",
+                    rs..., c.mshf_worst, c.mshf_worst_delivered, 1e3 * c.mshf_time / max(c.nsurface_steps, 1))
 end
 
 function output_fields(c::SurfaceExchangeMOST, case)
@@ -628,6 +678,12 @@ function output_fields(c::SurfaceExchangeMOST, case)
         OutputField("LE_sfc", "W m-2", "surface latent heat flux (upward), last surface step",
                     :xy, cs -> masked(bus.LE)),
         OutputField("u_star", "m s-1", "surface friction velocity", :xy, cs -> masked(bus.u_star)),
+        OutputField("H_max_sfc", "W m-2", "maximum sustainable heat flux (Van de Wiel et al. 2012), last surface step",
+                    :xy, cs -> masked(c.H_max)),
+        OutputField("mshf_ratio", "1", "downward surface buoyancy flux / maximum sustainable heat flux (<0: unstable)",
+                    :xy, cs -> masked(c.mshf_ratio)),
+        OutputField("mshf_beyond", "1", "1 where z_ref/L is beyond the MSHF point (very stable, collapsed branch)",
+                    :xy, cs -> masked(Float64.(c.mshf_beyond))),
         OutputField("beta_sfc", "1", "surface moisture availability",
                     :xy, cs -> [s === nothing ? NaN : moisture_availability(s) for s in bus.surface])]
 end
@@ -662,6 +718,12 @@ function smoke_check(c::SurfaceExchangeMOST, case)
                          1e-9 * (1 + abs(bus.Rn[I])), have),
             "H has the sign of T_skin − θ_air referred to the surface, where they differ by > 1 K and |H| > 1 W/m²" =>
                 all(I -> _h_sign_ok(bus, I, case), have),
+            "the MSHF was evaluated for every column with a surface (0 < H_max < ∞)" =>
+                all(I -> 0 < c.H_max[I] < Inf, have),
+            "|H| ≤ H_max (1 + 1e-8) for every column: the downward MOST buoyancy flux ≤ MSHF (Van de Wiel et al. 2012), every surface step" =>
+                c.mshf_worst <= 1 + 1e-8,
+            "the delivered fluxes (a soil skin's linearisation in T_skin) exceed H_max by < 10 % (measured ≤ 3.1 %)" =>
+                c.mshf_worst_delivered < 1.1,
             "the wall law's z0m is the surface's (table) or, with z0m = :dynamic, √(z0f² + α²σ_Δ²) of the dynamic roughness, solved every surface step (1e-12)" =>
                 (c.dyn === nothing ? all(I -> c.laws[I].z0m == roughness_lengths(bus.surface[I]).z0m, have) :
                  c.dyn.nsolves == c.nsurface_steps &&

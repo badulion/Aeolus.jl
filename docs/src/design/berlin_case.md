@@ -1156,6 +1156,27 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   β = 0 (roofs, glass), above the roof.
 * **No clamps.** H, LE and Ts are not clipped (the Kessler qv clamp
   stays for #143).
+* **Maximum sustainable heat flux (P58-e, #193).** Every surface step also
+  evaluates each column's MSHF (Van de Wiel et al. 2012;
+  `SurfaceExchange.surface_mshf_ratio`): one maximisation of the
+  Monin–Obukhov flux curve at the column's wind ``\max(U, U_{min})``,
+  `z_ref`, `z0m` and ``θ_{va}``. It stores `H_max` (W m⁻², output
+  `H_max_sfc`) and the ratio of the downward buoyancy flux to it
+  (`mshf_ratio`, negative where unstable). The report prints the mean
+  ratio over the stable street, roof and park columns and the share of
+  them beyond the MSHF point (``z_{ref}/L`` past the peak of the flux
+  curve, output `mshf_beyond`). The smoke check
+  asserts ratio ≤ 1 + 1e-8 for every column on the MOST fluxes of the
+  step's start. The fluxes a soil column returns are linearised in
+  ``T_{skin}`` and may overshoot by O(ΔT²): measured ≤ 3.1 % in the smoke
+  run, checked < 10 %. Over the 21 h flagship the delivered ratio reaches
+  2684. This happens on calm soil columns where ``H_{max}`` is below
+  0.1 W m⁻² and a linearised step turns an upward buoyancy flux into dew,
+  so the excess is a few W m⁻². At 03:00 the report reads street 0.02,
+  roof 0.04, park 0.00, with 100 % of the stable columns beyond the MSHF
+  point. The MSHF costs 48–63 ms per surface step (every 30 s), about 2 % of
+  the run's wall time. See
+  [Stability functions → MSHF in the Berlin case](../theory/turbulence_stability.md#MSHF-in-the-Berlin-case).
 
 ### Measured (flagship, 64 × 64 × 32, adaptive step, 1 h)
 

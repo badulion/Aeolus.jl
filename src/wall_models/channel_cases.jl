@@ -170,7 +170,9 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
                      u_star, height, noise, seed, stepper, inputs = nothing,
                      roughness = nothing, wall_model::Symbol = :equilibrium, tble = (;);
                      bottom_bc::Symbol = :wall_model, sgs_stress::Symbol = :laplacian,
-                     θ_walls = nothing, Pr::Real = 0.71, θ₀::Real = 1.0, g_accel::Real = 1.0)
+                     θ_walls = nothing, Pr::Real = 0.71, θ₀::Real = 1.0, g_accel::Real = 1.0,
+                     init_law = law, θ_ref::Real = 0.0, θ_flux_bottom::Real = 0.0,
+                     c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
     walls in (:bottom, :both) ||
         throw(ArgumentError("walls must be :bottom or :both, got :$walls"))
     formulation in (:local, :schumann, :moeng) ||
@@ -197,12 +199,19 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
     if θ_walls !== nothing
         bottom_bc === :noslip ||
             throw(ArgumentError("θ_walls needs bottom_bc = :noslip (a wall-modelled heat flux " *
-                                "is the surface_heat_flux hook of P58-e, #193)"))
+                                "is half_channel_case(surface_heat_flux), P58-e, #193)"))
         length(θ_walls) == 2 || throw(ArgumentError("θ_walls must be (θ_bottom, θ_top)"))
         Pr > 0 || throw(ArgumentError("Pr must be positive, got $Pr"))
         θ₀ > 0 || throw(ArgumentError("θ₀ must be positive, got $θ₀"))
     end
+    # a prescribed bottom θ flux with buoyancy g(θ - θ_ref)/θ_ref (P58-e, #193)
+    θ_ref >= 0 || throw(ArgumentError("θ_ref must be ≥ 0 (0: no flux-driven buoyancy), got $θ_ref"))
+    θ_ref > 0 && θ_walls !== nothing &&
+        throw(ArgumentError("θ_walls and a surface heat flux (θ_ref > 0) are exclusive"))
+    θ_flux_bottom == 0 || θ_ref > 0 ||
+        throw(ArgumentError("θ_flux_bottom needs θ_ref > 0 (buoyancy reference)"))
     mesh = RegularGrid(; size = dims, extent = extent)
+
     T = typeof(float(mesh.dz))
     if bottom_bc === :noslip
         bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip,
@@ -211,10 +220,12 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
         bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
     end
     θb = θ_walls === nothing ? nothing : (T(θ_walls[1]), T(θ_walls[2]))
+    θ0_sim, g_sim = θ_ref > 0 ? (θ_ref, grav(c)) : (θb === nothing ? 0.0 : θ₀, g_accel)
     sim = BoussinesqSimulation(mesh; ν = ν, bcs = bcs,
-                               θ₀ = θb === nothing ? 0.0 : θ₀, g_accel = g_accel,
+                               θ₀ = θ0_sim, g_accel = g_sim, θ_flux_bottom = θ_flux_bottom,
                                θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-    _initialise!(sim, law, u_star, ν, walls, noise, seed)
+    θ_ref > 0 && fill!(sim.θ.data, θ_ref)
+    _initialise!(sim, init_law, u_star, ν, walls, noise, seed)
     θb === nothing || _initialise_θ!(sim, θb, walls)
     wall_model in (:equilibrium, :nonequilibrium) ||
         throw(ArgumentError("wall_model must be :equilibrium or :nonequilibrium, got :$wall_model"))
@@ -265,7 +276,9 @@ end
                       filter = :none, T_f = nothing, H = 1.0,
                       u_star = 1.0, noise = 3.0, seed = 1,
                       stepper = :rk3, roughness = nothing,
-                      surface_heat_flux = nothing, bottom_bc = :wall_model,
+                      surface_heat_flux = nothing, θ_ref = 300.0,
+                      stability = BusingerDyerBeljaarsHoltslag(),
+                      bottom_bc = :wall_model,
                       θ_walls = nothing) -> WallBoundedCase
 
 The neutral, pressure-driven **half channel** of Porté-Agel, Meneveau &
@@ -320,12 +333,35 @@ Keyword hooks reserved for later Era VI issues — documented, **not
 implemented** (any value other than the default raises an
 `ArgumentError`):
 
-  * `surface_heat_flux = nothing` — a bottom θ flux for the stratified
-    and collapsing cases (P58-e, #193);
   * `bottom_bc = :wall_model` and `θ_walls = nothing` — the half channel
     is inviscid, so it has no resolved wall; the resolved no-slip,
     θ-walled flow is [`channel_case`](@ref)`(bottom_bc = :noslip,
     θ_walls = …)` (P55-f, #191).
+
+**Surface heat flux** (P58-e, #193). `surface_heat_flux = Q` (K m s⁻¹,
+the upward kinematic flux ``\\overline{w'θ'}``; negative cools the
+surface) turns the case into the flux-cooled (or heated) half channel of
+the stable-boundary-layer collapse studies (Nieuwstadt 2005; Flores &
+Riley 2011; Donda et al. 2015):
+
+  * buoyancy on, ``g(θ - θ_{ref})/θ_{ref}`` with `θ_ref` (default
+    300 K) and ``g`` of `SurfaceExchange`; θ starts uniform at `θ_ref`;
+  * `Q` enters the first cell as the prescribed bottom θ flux
+    (`θ_flux_bottom` of the simulation); the top and the bottom are
+    otherwise adiabatic;
+  * `wall_law = nothing` becomes
+    [`MOSTFluxWallLaw`](@ref)`(stability, z0, Q, θ_ref)`: the wall stress
+    of Monin–Obukhov similarity with the stability set by `Q` and the
+    wall's own ``u_τ``, which drops to zero where ``-Q`` exceeds the
+    maximum sustainable heat flux of the local wind
+    (`max_sustainable_heat_flux`, Van de Wiel et al. 2012);
+  * the initial velocity is the *neutral* log law (`RoughLogLaw(z0)`)
+    plus noise, so a neutral and a cooled run start from the same state.
+
+`max_sustainable_heat_flux(stability, U₁, Δz/2, z0, z0, θ_ref)` with the
+neutral first-level wind ``U_1 = (u_*/κ)\\ln(Δz/(2z_0))`` is the MSHF the
+collapse sweep is normalised by (`examples/sbl/collapse_channel.jl`,
+`test/era6_collapse.jl`).
 
 Measured with `StaticSmagorinsky(0.1)` at 24³ (`test/era6_neutral_abl.jl`)
 and `StaticSmagorinsky(0.17)` (the Mason & Thomson 1992 overshoot): see
@@ -342,6 +378,15 @@ the *Wall models* theory page, section "Wall-bounded benchmark cases".
   * Mason, P. J. & Thomson, D. J. (1992). Stochastic backscatter in
     large-eddy simulations of boundary layers. *J. Fluid Mech.*, 242,
     51-78.
+  * Nieuwstadt, F. T. M. (2005). Direct numerical simulation of stable
+    channel flow at large stability. *Boundary-Layer Meteorol.*, 116,
+    277-299.
+  * Flores, O. & Riley, J. J. (2011). Analysis of turbulence collapse in
+    the stably stratified surface layer using direct numerical
+    simulation. *Boundary-Layer Meteorol.*, 139, 241-259.
+  * Donda, J. M. M. et al. (2015). Collapse of turbulence in stably
+    stratified channel flow: a transient phenomenon. *Q. J. R. Meteorol.
+    Soc.*, 141, 2137-2147.
 """
 function half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
                            wall_law = nothing, formulation::Symbol = :local,
@@ -350,18 +395,34 @@ function half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
                            H::Real = 1.0, u_star::Real = 1.0,
                            noise::Real = 3.0, seed::Integer = 1,
                            stepper::Symbol = :rk3, roughness = nothing,
-                           surface_heat_flux = nothing, bottom_bc::Symbol = :wall_model,
+                           surface_heat_flux = nothing, θ_ref::Real = 300.0,
+                           stability::AbstractStabilityFunctions = BusingerDyerBeljaarsHoltslag(),
+                           bottom_bc::Symbol = :wall_model,
                            θ_walls = nothing)
-    _reserved("surface_heat_flux", surface_heat_flux, nothing, "P58-e (#193)")
     _reserved("bottom_bc", bottom_bc, :wall_model, "channel_case (the half channel is inviscid)")
     _reserved("θ_walls", θ_walls, nothing, "channel_case (the half channel is inviscid)")
-    law = wall_law === nothing ? RoughLogLaw(z0_over_H * H) : wall_law
+    neutral = RoughLogLaw(z0_over_H * H)
+    if surface_heat_flux === nothing
+        law = wall_law === nothing ? neutral : wall_law
+    else
+        surface_heat_flux isa Real ||
+            throw(ArgumentError("surface_heat_flux must be a number (K m/s) or nothing"))
+        θ_ref > 0 || throw(ArgumentError("θ_ref must be > 0, got $θ_ref"))
+        law = wall_law === nothing ?
+              MOSTFluxWallLaw(stability, z0_over_H * H, surface_heat_flux, θ_ref) : wall_law
+    end
     law isa AbstractWallLaw ||
         throw(ArgumentError("wall_law must be an AbstractWallLaw, got $(typeof(law))"))
+    surface_heat_flux === nothing &&
+        return _build_case(:half_channel, _dims(N), (2π * H, 2π * H, H), closure, law,
+                           0.0, :bottom, formulation, u_star, H, noise, seed, stepper,
+                           _case_inputs(:bottom, h_wm, h_wm_cells, filter, T_f, u_star, H),
+                           roughness)
     return _build_case(:half_channel, _dims(N), (2π * H, 2π * H, H), closure, law,
                        0.0, :bottom, formulation, u_star, H, noise, seed, stepper,
                        _case_inputs(:bottom, h_wm, h_wm_cells, filter, T_f, u_star, H),
-                       roughness)
+                       roughness; init_law = neutral, θ_ref = θ_ref,
+                       θ_flux_bottom = float(surface_heat_flux))
 end
 
 """
