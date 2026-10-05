@@ -1002,9 +1002,40 @@ flat, motionless variant: the attributed term and ``ΔH_{air}`` equal
 H₀Δt to 7.8e-13. Every smoke run (everything on included) closes to
 ≤ 1e-10 W m⁻² (measured ≤ 3.8e-14).
 
-**Cost.** One measurement is one pass over the interior (≈ 20 µs on
-64 × 64 × 32); the flagship step opens ≈ 29 contexts, ≈ 31
-measurements, about 1.2 ms/step (0.4 % of the step).
+**Cost.** One measurement is one pass over the interior (20 µs on
+64 × 64 × 32); the flagship step opens ≈ 29 contexts, 31.1
+measurements per step: 1.06 ms/step warm (0.7 % of a 150 ms step;
+1.27 ms of 178 ms over the 24 h run on a shared machine). The issue's
+target was < 1 ms/step; the measurements are memory-bound, so the rest
+would need fewer contexts.
+
+**Night budget of the flagship (measured, #253).** The 24 h
+Alexanderplatz run (20 June 2024 from 06:00, every default coupling,
+adaptive step, 61 902 steps), 20:00–05:00 local (32 401 s), mean W m⁻²
+over the window (J m⁻² = W m⁻² × 32 401 s):
+
+| term | column 0–200 m | 0–100 m | 0–37.5 m |
+| :-- | --: | --: | --: |
+| storage ``ΔH_{air}`` | −52.79 | −26.35 | −9.26 |
+| `column_tendency / column_radiation` | −52.70 | −42.73 | −32.61 |
+| `anthropogenic / buildings_citymean` | −10.31 | −10.71 | −14.80 |
+| `anthropogenic / traffic_heat` | +8.00 | +8.00 | +8.00 |
+| `surface_flux / surface_exchange` | +0.12 | +0.12 | +0.11 |
+| `dynamics / transport` (across the layer top) | −5e-11 | +17.28 | +28.44 |
+| `dynamics / solid_exchange` | +1.70 | +1.39 | +1.26 |
+| `dynamics / redistribution` | +0.40 | +0.30 | +0.34 |
+| `fog_dew / fog_dew` | 0 | 0 | 0 |
+| closure | −7.2e-15 | −1.8e-14 | −1.1e-14 |
+
+The default `:canopy` is the whole column here (the Fernsehturm); 37.5 m
+is the 90th percentile of the roof heights. At night the air of the
+column loses 52.8 W m⁻², almost all of it to the column radiation; the
+surface exchange gives the air almost nothing (+0.12 W m⁻²), the
+city-mean buildings take heat out of it (−10.3) and the traffic heat
+puts 8 W m⁻² in. Inside the canyons the transport brings down from
+above most of what the radiation removes (+28.4 of −32.6 W m⁻² below
+37.5 m). This is the #238 budget and the baseline of N-berlin-validate
+(#270).
 
 ### Baseline (measured, #127)
 
