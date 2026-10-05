@@ -14,4 +14,5 @@ validation results behind each.
 - [WENO-Z / TENO advection and conservative operators (Phases 26, 28)](era2/advection.md) — `Aeolus.AdvectionSchemes`
 - [Anelastic and pseudo-incompressible dynamics (Phase 27)](era2/anelastic.md) — `Aeolus.Anelastic`
 - [Geometric multigrid pressure solver (Phase 29)](era2/multigrid.md) — `Aeolus.Multigrid`
-- [Production nesting and block-structured AMR (Phases 30–31)](era2/adaptive_mesh.md) — `Aeolus.AdaptiveMesh`
+- [Parent ↔ child grid nesting (Phase 30)](era2/nesting.md) — `Aeolus.Nesting`
+- [Block-structured AMR (Phase 31)](era2/adaptive_mesh.md) — `Aeolus.AdaptiveMesh`
