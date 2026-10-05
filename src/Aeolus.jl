@@ -1029,4 +1029,11 @@ export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
        AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
 
+# P57-e (#190): the dynamic roughness of partially resolved relief
+# (Anderson & Meneveau 2011). `surface_gradient_drag` does not collide
+# with `CutCell.wall_shear_stress` or the PlantCanopy `canopy_drag_*` names.
+export SubfilterHeight, subfilter_height, DynamicRoughness,
+       surface_gradient_drag, roughness_surface_drag, roughness_drag_residual, dynamic_alpha,
+       update_dynamic_roughness!, with_roughness, dynamic_wall_laws, dynamic_wall_laws!
+
 end # module

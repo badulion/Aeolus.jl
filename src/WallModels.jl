@@ -51,7 +51,13 @@ roughness) only add files and include lines:
      `CutCell.wall_shear_stress` (the law at the image-point probe) and
      [`wall_slip_velocity`](@ref) / [`slip_wall_value`](@ref), the slip
      wall value of `CutCell.reconstruct_wall_velocity!`.
-  7. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
+  7. **Dynamic roughness** (`dynamic_roughness.jl`, P57-e #190) —
+     [`DynamicRoughness`](@ref): the roughness length of partially
+     resolved relief, ``z_0 = \\sqrt{z_{0,f}^2 + α^2σ_Δ^2}`` with α from the
+     invariance of the total surface drag between the grid and the test
+     filter (Anderson & Meneveau 2011), as a parameter provider for
+     `RoughLogLaw` / `MOSTWallLaw` ([`with_roughness`](@ref)).
+  8. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
      [`half_channel_case`](@ref) (the neutral ABL half channel of
      Porté-Agel et al. 2000 / Bou-Zeid et al. 2005) and
      [`channel_case`](@ref) (the two-wall channel at a given Re_τ), with
@@ -100,14 +106,18 @@ roughness) only add files and include lines:
     simulation of complex turbulent flows. *Phys. Fluids*, 14, 2043-2051.
   * Park, G. I. & Moin, P. (2014). An improved dynamic non-equilibrium
     wall-model for large eddy simulation. *Phys. Fluids*, 26, 015108.
+  * Anderson, W. & Meneveau, C. (2011). Dynamic roughness model for
+    large-eddy simulation of turbulent flow over multiscale, fractal-like
+    rough surfaces. *J. Fluid Mech.*, 679, 288-314.
 """
 module WallModels
 
 using ..Grids
 using ..Grids: RegularGrid
 using ..BoundaryConditions: fill_halos!, Periodic, FieldBoundaryConditions
-using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!, box_filter!
-using ..Fields: Field
+using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!, box_filter!,
+                   spectral_cutoff_filter!
+using ..Fields: Field, interior_view
 import ..Operators: phi_m_profile, total_stress_profile
 using ..Simulations: BoussinesqSimulation, step_rk3!
 using ..TimeSteppers: step!
@@ -128,6 +138,7 @@ include("wall_models/matching.jl")        # P57-b (#183): matching height, input
 include("wall_models/tble.jl")            # P57-c (#189): non-equilibrium (TBLE) wall model, dynamic κ
 include("wall_models/immersed.jl")
 include("wall_models/cutcell.jl")
+include("wall_models/dynamic_roughness.jl") # P57-e (#190): dynamic z0 of partially resolved roughness
 include("wall_models/channel_cases.jl")   # P54-d (#174): half channel, channel
 
 end # module

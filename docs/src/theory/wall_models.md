@@ -465,6 +465,122 @@ the default is `:off` (κ_wm = κ of the law), and
 
 **Not modelled.** No Monin–Obukhov correction in ``ν_{t,wm}`` (neutral).
 
+## Dynamic roughness of partially resolved relief (P57-e)
+
+`DynamicRoughness` (`src/wall_models/dynamic_roughness.jl`, #190) is the
+dynamic surface roughness model of Anderson & Meneveau (2011) for a
+surface whose relief is only partly resolved by the grid. The height
+field ``h`` is split at the grid scale Δ: the resolved part ``h_Δ``
+exerts the surface-gradient drag
+
+```math
+f_i = -C_d\,(\tilde{\mathbf u}\cdot∇h_Δ)^2\,H(\tilde{\mathbf u}\cdot∇h_Δ)\,∂_i h_Δ
+```
+
+on the first cell (pressure drag on windward slopes only), and the rest
+enters the wall law as a roughness length proportional to the RMS
+sub-filter height, ``z_{0,Δ} = \sqrt{z_{0,f}^2 + α^2σ_Δ^2}``. The floor
+``z_{0,f}`` is the roughness of scales below the height map; on a flat
+surface ``z_0 = z_{0,f}`` exactly. α comes from requiring that the total
+plane-mean drag along the mean wind (modelled stress plus form drag) is
+the same at Δ and at the test-filter scale ``\hat Δ``:
+
+```math
+\Big\langle\Big[\frac{κ}{\ln(z/z_{0,\hat Δ})}\Big]^2|\hat{\mathbf u}|\,\hat{\mathbf u}\cdot\hat{\mathbf e}\Big\rangle + R_{\hat Δ}
+= \Big\langle\Big[\frac{κ}{\ln(z/z_{0,Δ})}\Big]^2|\tilde{\mathbf u}|\,\tilde{\mathbf u}\cdot\hat{\mathbf e}\Big\rangle + R_Δ .
+```
+
+This is solved per plane with `SurfaceExchange`'s Illinois iteration,
+the root solver also used by `solve_surface_layer`, PlantCanopy,
+Photosynthesis and AirSeaFlux. A log-spaced scan finds the first bracket
+on ``(0, α_{max})``, where ``α_{max}`` is the largest α that keeps every
+``z_0`` below the matching height. If the residual has no sign change, or
+vanishes identically (relief the grid cannot see), the solver keeps
+`α_fallback` and flags the solve unconverged.
+
+**Sub-filter statistics.** `subfilter_height` builds them from a height
+map that is `r` times finer than the grid, using its cell moments
+``m_1 = \bar h`` and ``m_2 = \overline{h^2}``:
+
+  * ``σ_Δ^2 = m_2 - 2h_Δ m_1 + h_Δ^2``, where ``h_Δ`` defaults to
+    ``m_1``. The Berlin case passes the IBM staircase instead.
+  * At the test scale, ``σ_{\hat Δ}^2 = \hat m_2 - 2h_{\hat Δ}\hat m_1 + h_{\hat Δ}^2``.
+
+For the box filter, ``σ_{\hat Δ}^2`` is the exact variance of the fine
+surface over the composite kernel (tested to 1e-12). The test filter is
+`Operators.spectral_cutoff_filter!` at ``k_c = π/(2Δ)`` (ratio 2, the
+default on a periodic surface) or `Operators.box_filter!` (3 × 3, ratio
+3). Neither is reimplemented.
+
+**Parameter provider.** `with_roughness`, `dynamic_wall_laws` and
+`dynamic_wall_laws!` turn the per-column ``z_0`` into `RoughLogLaw` or
+`MOSTWallLaw` matrices for a `WallModel`. `half_channel_case(; roughness)`
+applies the form drag as a first-cell body force (budget term `τ_form`)
+and updates α once per step.
+
+**Measured** (`test/era6_wall_models_dynamic.jl`, about 25-30 s):
+
+  * **Analytic invariance.** On a two-mode sinusoid with a uniform
+    log-law wind, the block means, transfer functions and central
+    differences have closed forms. With ``C_d`` set so that α\* = 0.3
+    balances the drag, the solver returns α\* within 2.7e-15 (box) and
+    9.5e-15 (spectral). A flat surface returns ``z_{0,f}`` exactly.
+  * **Momentum budget.** The half channel's plane-mean budget with the
+    form drag closes to 7.9e-12.
+  * **Grid invariance (reduced, a priori).** The surface is a random
+    ``k^{-2}`` surface (256² map, ``1 ≤ k ≤ 128``, σ_h = 0.04 H, C_d = 4).
+    The wind is a 32 × 32 × 8 half-channel LES at t = 4, 5, 6 H/u\*,
+    block-averaged 2 × 2 for the 16² grid. Comparing the plane-mean
+    ``u_* = \sqrt{\text{wall} + \text{form}}`` of 16² against 32²:
+
+    | Seed | 16² vs 32², dynamic α | 16² vs 32², α fixed at its 32² value |
+    | :-- | --: | --: |
+    | 1 | +1.2 % (α = 0.253 / 0.193) | +10.6 % |
+    | 2 | +0.1 % | +9.0 % |
+    | 3 | −2.6 % | +9.3 % |
+    | 4 | −4.5 % | +9.3 % |
+
+**Where the issue's expectations do not hold** (measured, not asserted):
+
+  * **Box test filter.** At ratio 3 the dynamic α collapses (0.002 at
+    32²), and the dynamic model is worse than a fixed α: −12.5 % against
+    −2.8 % (seed 1). The spectral ratio-2 filter is therefore the
+    default.
+  * **Strength of the resolved relief.** The result depends on it,
+    through ``C_d σ_h^3``. In a single-snapshot sweep:
+
+    | ``C_d σ_h^3`` | dynamic | fixed α |
+    | --: | --: | --: |
+    | 6.4e-5 | +9.7 % | +11.1 % |
+    | 1.3e-4 to 5e-4 | −1.2 to −1.5 % | +9.4 to +11.5 % |
+    | 1e-3 to 4e-3 | −7.8 to −13.7 % | +9.0 to +3.2 % |
+
+    So the 5 % agreement holds for moderate resolved drag only.
+  * **A posteriori LES.** Comparing the 16² and 32² LES directly (mean
+    over 10-20 H/u\*) does not test the roughness model. The bulk
+    velocity differs by 25 % (dynamic) and 19 % (fixed α), but the flat
+    walls also differ by 6 %. In addition, the 16² run has not reached
+    equilibrium (total stress 0.76 u\*², against 0.94 at 32²). The
+    difference is dominated by how the SGS closure depends on the
+    horizontal resolution, not by the roughness. The test therefore
+    compares the model's u\* a priori, on the same LES wind.
+  * **Example 3, staggered cubes** (`examples/validation/dynamic_roughness_cubes.jl`,
+    λ_p = 0.25, uniform log-law wind at 2h). At Δ = h/2 with C_d = 1:
+      * α = 2.26 and ⟨z_0⟩/h = 0.53;
+      * the effective ``z_0/h`` from the total drag, with the
+        Macdonald displacement, is 0.71;
+      * that is 5.8× Macdonald et al. (1998), whose formula gives
+        0.123, and 13.5× Cheng & Castro (2002), 0.053. The Cheng &
+        Castro value comes from secondary sources and was not checked
+        against the paper's table.
+
+    With C_d = 0.25 and 4 the ratio to Macdonald is 2.6 and 8.9. At
+    Δ = h there is no root: the resolved drag of the cube walls exceeds
+    what any admissible ``z_0`` can balance. At Δ = 2h the lattice is
+    unresolved and α is undetermined. The surface-gradient model, built
+    for gently sloping multiscale relief, overpredicts the drag of
+    sharp-edged cubes.
+
 ## In the Berlin case
 
 The ground of the flagship is this operator with a `MOSTWallLaw` per
@@ -513,12 +629,32 @@ roughness of the surface exchange's class table, the stencil's no-slip
 flux removed. In the 1 h smoke run the facades carry 9.3 % of the
 surface drag; the stencil drag they replace was 33× the modelled one.
 
+Since P57-e the option `z0m = :dynamic` of `surface_exchange` (a smoke
+variant, off by default) replaces the ground law's ``z_{0m}`` with the
+dynamic roughness of the OSM height map. The sub-filter heights are the
+true building heights, rasterised 4× finer, about the IBM staircase
+``(k_{air}-1)Δz``, so they are only staircase loss. The floor is each
+column's table value, and α is solved every surface step.
+
+Measured in `CaseConfig(:smoke)` over 30 min (900 steps):
+
+  * α = 0.043;
+  * street ``z_0`` averages 0.0555 m against the table's 0.05 m
+    (range 0.05-0.37 m), and all columns lie between 0.024 and 0.89 m,
+    inside [1e-3, 2] m;
+  * street ``u_*`` rises from 0.0802 to 0.0814 m s⁻¹ (+1.5 %), ground
+    ``u_*`` from 0.0495 to 0.0523 m s⁻¹ (+5.7 %);
+  * the cost is 1.1 ms per surface step on the 16 × 16 plane, 1.5 % of
+    the run.
+
+The table stays the default because the dynamic value's Berlin
+calibration has not been reviewed.
+
 ## Not yet here
 
-Dynamic roughness (P57-e) adds files under `src/wall_models/`; buoyancy
-in the TBLE eddy viscosity is P58. The cut-cell method is not in the
-Berlin case: the case has no cut-cell provider yet (CutCell is pending
-on #152).
+Buoyancy in the TBLE eddy viscosity is P58. The cut-cell method is not in
+the Berlin case: the case has no cut-cell provider yet (CutCell is
+pending on #152).
 
 ## References
 
@@ -577,6 +713,14 @@ on #152).
   * Kawai, S. & Larsson, J. (2012). Wall-modeling in large eddy
     simulation: length scales, grid resolution, and accuracy.
     *Phys. Fluids*, 24, 015105.
+  * Anderson, W. & Meneveau, C. (2011). Dynamic roughness model for
+    large-eddy simulation of turbulent flow over multiscale, fractal-like
+    rough surfaces. *J. Fluid Mech.*, 679, 288-314.
+  * Macdonald, R. W., Griffiths, R. F. & Hall, D. J. (1998). An improved
+    method for the estimation of surface roughness of obstacle arrays.
+    *Atmos. Environ.*, 32, 1857-1864.
+  * Cheng, H. & Castro, I. P. (2002). Near wall flow over urban-like
+    roughness. *Boundary-Layer Meteorol.*, 104, 229-259.
   * Yang, X. I. A., Park, G. I. & Moin, P. (2017). Log-layer mismatch
     and modeling of the fluctuating wall stress in wall-modeled
     large-eddy simulations. *Phys. Rev. Fluids*, 2, 104601.

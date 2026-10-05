@@ -473,6 +473,10 @@ function solve_surface_layer(sf::AbstractStabilityFunctions = BusingerDyerBeljaa
 end
 
 # Illinois (modified regula falsi) on a bracket with f(a) < 0 < f(b).
+# The shared internal root solver of the code base: solve_surface_layer,
+# PlantCanopy, Photosynthesis, AirSeaFlux and WallModels (the Obukhov
+# length of a wall law; the dynamic roughness α of P57-e) all call this
+# one, none carries a copy. Returns (x, iterations, converged).
 function _illinois(f, a::T, b::T, fa::T, fb::T, maxiter::Integer) where {T}
     side = 0
     x = (a + b) / 2

@@ -18,7 +18,7 @@ tested at are in
 - Stability-corrected anisotropic eddy viscosity (P55-e, #187; below) — `Aeolus.Operators`
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
 - [Transition diagnostics — Transition](era6/transition.md) — `Aeolus.Transition` (Phase 59, #180; flat-plate boundary layer, P59-d, #185; [theory](../theory/transition.md#Laminar–turbulent-transition), [flat plate](../theory/transition.md#Flat-plate-transition))
-- [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #179: wall model on immersed and cut-cell walls; #183: matching height and input filtering against log-layer mismatch; #189: the non-equilibrium (TBLE) wall model with dynamic κ; [theory](../theory/wall_models.md))
+- [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #179: wall model on immersed and cut-cell walls; #183: matching height and input filtering against log-layer mismatch; #189: the non-equilibrium (TBLE) wall model with dynamic κ; #190: dynamic roughness of partially resolved relief; [theory](../theory/wall_models.md))
 - [Large-scale forcing — LargeScaleForcing](era6/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; [theory](../theory/large_scale_forcing.md))
 - Walls — `NoSlipWall` and the resolved wall stress (P59-a, #172; below; [theory](../theory/transition.md))
 - AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`

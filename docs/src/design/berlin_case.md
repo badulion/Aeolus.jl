@@ -1127,6 +1127,20 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   equilibrium stresses differ in sign on 11.1 % and in sign or by > 30 %
   on 77.3 %: the canyon pressure gradient (median 3.3e-3 m s⁻²) times the
   3.1 m matching height is as large as the stress.
+* **Dynamic roughness** (P57-e, #190; option `z0m = :dynamic`, a smoke
+  variant, off by default). The ground law's ``z_{0m}`` becomes
+  `WallModels.DynamicRoughness`, ``\sqrt{z_{0,f}^2 + α^2σ_Δ^2}``:
+  ``σ_Δ`` is the RMS of the OSM building heights (`osm_height_map`,
+  `dynamic_refine = 4` times finer, true heights) about the IBM
+  staircase, ``z_{0,f}`` is the column's table value (still the
+  roughness of the surface-layer solve), and α is solved every surface
+  step from the first-air wind. The smoke checks require the law's
+  ``z_0`` to equal the model's (1e-12), and it must be finite, at least
+  the table value and below the matching height. Measured in `:smoke`
+  over 30 min:
+  * street ``z_0`` 0.0555 m against 0.05 m (range 0.05-0.37 m);
+  * street ``u_*`` +1.5 %, ground ``u_*`` +5.7 %;
+  * cost 1.1 ms per surface step.
 * **Extra surface energy.** `bus.sensible` (window sun, glazing
   transmission, dew heat) is collected every step and delivered to the
   surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`
