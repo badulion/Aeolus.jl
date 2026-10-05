@@ -25,8 +25,8 @@
     dynamic_sgs_coefficient(c::AbstractEddyViscosityClosure) -> Bool
 
 `true` for a closure whose coefficient is computed dynamically from the
-resolved flow (the Germano identity: [`DynamicSmagorinsky`](@ref), and the
-Lagrangian / scale-dependent dynamic closures that extend this trait).
+resolved flow (the Germano identity: [`DynamicSmagorinsky`](@ref) and
+[`LagrangianDynamicSmagorinsky`](@ref), scale invariant or scale dependent).
 [`StabilityCorrected`](@ref) applies no `f_m` multiplier on top of such a
 coefficient: the dynamic procedure already sees the damping of the resolved
 motions by the stratification, and multiplying by `f_m` would count it
@@ -35,6 +35,7 @@ Prandtl number `Prₜ(Ri) = Prₜ f_m(Ri)/f_h(Ri)`. Default `false`.
 """
 dynamic_sgs_coefficient(::AbstractEddyViscosityClosure) = false
 dynamic_sgs_coefficient(::DynamicSmagorinsky) = true
+dynamic_sgs_coefficient(::LagrangianDynamicSmagorinsky) = true   # P54-b / LASD P54-e
 
 """
     anisotropic_length_factors(mesh::RegularGrid) -> (ℓh, ℓv)

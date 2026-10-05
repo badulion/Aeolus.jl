@@ -148,6 +148,10 @@ end
     @test StabilityCorrected(StaticSmagorinsky(0.17), g; length_scales = :isotropic).ℓh === 1.0
     @test !dynamic_sgs_coefficient(StaticSmagorinsky(0.17))
     @test dynamic_sgs_coefficient(DynamicSmagorinsky(g))
+    # the Lagrangian (P54-b) and scale-dependent (LASD, P54-e) dynamic closures
+    # are dynamic too: no f_m on top of their coefficient (merge train with #173/#186)
+    @test dynamic_sgs_coefficient(LagrangianDynamicSmagorinsky(g))
+    @test dynamic_sgs_coefficient(LagrangianDynamicSmagorinsky(g; scale_dependent = true))
     @test_throws ArgumentError StabilityCorrected(StaticSmagorinsky(0.17), g; length_scales = :bogus)
     # not a closure with ν_base and Prₜ (IsentropicDiffusion is a wrapper, not an eddy-viscosity closure)
     @test_throws ArgumentError StabilityCorrected(IsentropicDiffusion(StaticSmagorinsky(0.17), g), g)
