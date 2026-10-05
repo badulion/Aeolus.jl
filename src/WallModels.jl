@@ -32,18 +32,26 @@ roughness) only add files and include lines:
      2012) and filtered in time (Yang, Park & Moin 2017) and along the
      wall (Bou-Zeid, Meneveau & Parlange 2005), against log-layer
      mismatch.
-  4. **Immersed walls** (`immersed.jl`, P57-d) — [`immersed_walls`](@ref),
+  4. **The non-equilibrium model** (`tble.jl`, P57-c #189) —
+     [`TBLEWallModel`](@ref): the thin-boundary-layer equations on an
+     embedded wall-normal grid under every wall column (Balaras, Benocci
+     & Piomelli 1996; Wang & Moin 2002; Kawai & Larsson 2012; Park & Moin
+     2014), its upper boundary condition the `MatchingInput` velocity,
+     with the dynamic ``κ_{wm}`` of Wang & Moin; an
+     [`AbstractWallModel`](@ref) applied by the same face loop as the
+     equilibrium [`WallModel`](@ref).
+  5. **Immersed walls** (`immersed.jl`, P57-d) — [`immersed_walls`](@ref),
      [`remove_stencil_wall_flux!`](@ref) and
      [`apply_immersed_wall_stress!`](@ref): the stress of a law on the
      tangential walls of an IBM solid mask (Tessicini et al. 2002;
      Chester, Meneveau & Parlange 2007), the stencil's own wall flux
      removed so the two are not counted twice. The Berlin facades.
-  5. **Cut-cell walls** (`cutcell.jl`, P57-d) — the method
+  6. **Cut-cell walls** (`cutcell.jl`, P57-d) — the method
      `wall_shear_stress(u, v, w, stencils, geom, law; ν)` of
      `CutCell.wall_shear_stress` (the law at the image-point probe) and
      [`wall_slip_velocity`](@ref) / [`slip_wall_value`](@ref), the slip
      wall value of `CutCell.reconstruct_wall_velocity!`.
-  6. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
+  7. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
      [`half_channel_case`](@ref) (the neutral ABL half channel of
      Porté-Agel et al. 2000 / Bou-Zeid et al. 2005) and
      [`channel_case`](@ref) (the two-wall channel at a given Re_τ), with
@@ -85,6 +93,13 @@ roughness) only add files and include lines:
   * Lee, M. & Moser, R. D. (2015). Direct numerical simulation of
     turbulent channel flow up to Re_τ ≈ 5200. *J. Fluid Mech.*, 774,
     395-415.
+  * Balaras, E., Benocci, C. & Piomelli, U. (1996). Two-layer
+    approximate boundary conditions for large-eddy simulations.
+    *AIAA J.*, 34, 1111-1119.
+  * Wang, M. & Moin, P. (2002). Dynamic wall modeling for large-eddy
+    simulation of complex turbulent flows. *Phys. Fluids*, 14, 2043-2051.
+  * Park, G. I. & Moin, P. (2014). An improved dynamic non-equilibrium
+    wall-model for large eddy simulation. *Phys. Fluids*, 26, 015108.
 """
 module WallModels
 
@@ -110,6 +125,7 @@ import ..CutCell: wall_shear_stress
 include("wall_models/laws.jl")
 include("wall_models/operator.jl")
 include("wall_models/matching.jl")        # P57-b (#183): matching height, input filters
+include("wall_models/tble.jl")            # P57-c (#189): non-equilibrium (TBLE) wall model, dynamic κ
 include("wall_models/immersed.jl")
 include("wall_models/cutcell.jl")
 include("wall_models/channel_cases.jl")   # P54-d (#174): half channel, channel

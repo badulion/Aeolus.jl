@@ -87,6 +87,23 @@ Slot `:surface_exchange`, provider `:most` (default).
   the columns whose class is in `h_wm_classes` (default park and water,
   the open surfaces; a column whose `n`-th cell is not air falls back to
   its first) — a smoke variant.
+* **Non-equilibrium wall model** (P57-c, #189; option `wall_model =
+  :nonequilibrium`, default `:equilibrium`): the ground stress is that of
+  a `WallModels.TBLEWallModel` instead of the `MOSTWallLaw` — the
+  thin-boundary-layer equations on a 30-point column under every ground
+  and roof column, between the surface (u = 0, the column's own `z0m`,
+  rough-wall eddy viscosity ``κu_τ(y + z_{0m})``) and the matching point
+  of the same `MatchingInput` (time-filtered wind), with the pressure
+  gradient of the resolved `p` at the first air level (one-sided next to
+  a building) and the terms of `tble_terms` (default
+  `:pressure_gradient`). The columns' stress is applied by the same
+  `apply_wall_stress!` face loop in `:post_predictor`; the columns are
+  advanced once per step in `:surface_update`; `bus.u_star` is their
+  ``u_τ`` (set again after a surface step, whose MOST ``u_*`` stays
+  internal to its heat and moisture fluxes). **Neutral:** the Monin–Obukhov stability correction of the
+  equilibrium law is not carried into the TBLE (its eddy viscosity has no
+  buoyancy term until P58). The surface-layer heat and moisture fluxes
+  are unchanged (MOST). A smoke variant runs it.
 * **Extra energy.** `bus.sensible` (energy other couplings take from the
   surfaces, W m⁻²) is collected every step in `:surface_update` and
   handed to the surfaces as `Q_extra` at their next step.
@@ -97,7 +114,9 @@ Options: `U_min` (m s⁻¹, the minimum wind of the surface-layer solve),
 default; `:schumann` or `:moeng`, the plane-mean forms of
 `apply_wall_stress!`, over all ground and roof columns), `input_T_f`
 (s, the time filter of the wall-model input; 0 = off), `h_wm_cells`
-and `h_wm_classes` (the matching height of the open columns).
+and `h_wm_classes` (the matching height of the open columns),
+`wall_model` (`:equilibrium` or `:nonequilibrium`) and `tble_terms`
+(`:pressure_gradient`, `:full` or `:equilibrium_ode`).
 """
 mutable struct SurfaceExchangeMOST <: AbstractCoupling
     P::Float64                 # surface step period (s)
@@ -119,6 +138,7 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     h_wall::Matrix{Float64}    # height (m above the surface) bus.u_star is the wall law at
     h_match::Matrix{Float64}   # matching height of the last wall-stress evaluation (m)
     n_h_fallback::Int          # open columns whose h_wm_cells-th cell is not air (matched at the first)
+    tble::Union{Nothing,TBLEWallModel} # the non-equilibrium ground wall model (P57-c), or nothing
     pending::Matrix{Float64}   # extra energy into the surface not yet delivered (J m⁻²)
     Q::Matrix{Float64}         # Q_extra of the last surface step (W m⁻²)
     # this step, for the ledger (J m⁻²; zero on steps without a surface step
@@ -146,6 +166,8 @@ default_options(::Type{SurfaceExchangeMOST}) =
     (U_min = 0.1, z0h_ratio = 0.1, period = nothing, wall_formulation = :local,
      # the wall-model input (P57-b): time filter on, matching at the first air cell
      input_T_f = 10.0, h_wm_cells = 1, h_wm_classes = (SURFACE_PARK, SURFACE_WATER),
+     # the ground wall model (P57-c): the MOST law, or the TBLE columns
+     wall_model = :equilibrium, tble_terms = :pressure_gradient,
      # momentum roughness per class (m): the sub-grid roughness of the
      # surface itself — buildings and park trees are resolved (IBM, drag)
      z0m = Dict(SURFACE_STREET => 0.05, SURFACE_ROOF => 0.05, SURFACE_PARK => 0.1,
@@ -154,7 +176,9 @@ smoke_variants(::Type{SurfaceExchangeMOST}) =
     ((label = "Schumann wall stress", options = Dict(:surface_exchange => (wall_formulation = :schumann,))),
      (label = "Moeng wall stress", options = Dict(:surface_exchange => (wall_formulation = :moeng,))),
      (label = "matching height 3 cells over park and water",
-      options = Dict(:surface_exchange => (h_wm_cells = 3,))))
+      options = Dict(:surface_exchange => (h_wm_cells = 3,))),
+     (label = "non-equilibrium (TBLE) ground wall model",
+      options = Dict(:surface_exchange => (wall_model = :nonequilibrium,))))
 stages(::Type{SurfaceExchangeMOST}) = ((:surface_flux, 10, EVERY_STEP),
                                        (:post_predictor, 15, EVERY_STEP),
                                        (:surface_update, 10, EVERY_STEP))
@@ -200,6 +224,15 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
     cells, nfb = matching_cells(case.geom, bus.k_air, mesh, o.h_wm_cells, o.h_wm_classes)
     input = MatchingInput(; h_wm_cells = cells, T_f = o.input_T_f)
     plain = o.input_T_f == 0 && all(==(1), cells)
+    o.wall_model in (:equilibrium, :nonequilibrium) ||
+        error("surface_exchange: wall_model must be :equilibrium or :nonequilibrium, got $(o.wall_model)")
+    tble = nothing
+    if o.wall_model === :nonequilibrium
+        o.wall_formulation === :local ||
+            error("surface_exchange: wall_model = :nonequilibrium needs wall_formulation = :local")
+        # z0 per column is set in init!, from each surface's own roughness
+        tble = TBLEWallModel(; terms = Symbol(o.tble_terms), z0 = zeros(Nx, Ny))
+    end
     # the per-class roughness table goes on the bus: the facade wall model
     # (#179) reads the wall and glass z0m from it
     z0m = Dict{UInt8,Float64}(o.z0m)
@@ -207,7 +240,7 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
     return SurfaceExchangeMOST(P, o.U_min, z0m, o.z0h_ratio,
                                false, 0.0, 0.0, 0.0, z(), laws, WallModel(laws), fill(Inf, Nx, Ny),
                                z(), Symbol(o.wall_formulation), input, plain,
-                               fill(mesh.dz / 2, Nx, Ny), fill(mesh.dz / 2, Nx, Ny), nfb,
+                               fill(mesh.dz / 2, Nx, Ny), fill(mesh.dz / 2, Nx, Ny), nfb, tble,
                                z(), z(), z(), z(), z(), z(), z(),
                                0.0, 0, 0.0, 0, 0.0, 0)
 end
@@ -257,6 +290,7 @@ function init!(c::SurfaceExchangeMOST, case)
         bus.surface[I] = s
         bus.Ts[I] = surface_temperature(s)
         bus.dew_mask[I] = moisture_availability(s) == 0
+        c.tble === nothing || (c.tble.z0[I] = roughness_lengths(s).z0m)
     end
     if case.cfg.verbose
         kinds = Dict{String,Int}()
@@ -399,7 +433,15 @@ end
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:post_predictor}, dt)
     # the ground is a WallModels wall at every column's first air level
     # (k_air > Nz: no surface, no wall); u_τ from this step's (filtered) wind
-    if c.plain_input
+    if c.tble !== nothing
+        # the non-equilibrium wall model: the TBLE columns' stress (P57-c)
+        apply_wall_stress!(case.sim, c.tble, dt; side = :bottom, mask = case.bus.k_air,
+                           input = c.input, ustar = case.bus.u_star, wind_out = c.U_wall)
+        cols, act = tble_columns(c.tble, :bottom)
+        @inbounds for I in eachindex(act)
+            act[I] && (c.h_wall[I] = c.h_match[I] = cols[I].y[end])
+        end
+    elseif c.plain_input
         apply_wall_stress!(case.sim, c.wm, dt; side = :bottom, mask = case.bus.k_air,
                            formulation = c.formulation, ustar = case.bus.u_star,
                            wind_out = c.U_wall)
@@ -419,6 +461,9 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_update}, dt)
     bus = case.bus
     # the time filter of the wall-model input: once per accepted step
     update_input_filter!(c.input, case.sim, dt; side = :bottom, mask = bus.k_air)
+    # the TBLE columns of the non-equilibrium ground, to the end of the step
+    c.tble === nothing ||
+        update_wall_model!(c.tble, case.sim, dt; side = :bottom, mask = bus.k_air, input = c.input)
     # collect the extra energy other couplings took from the surfaces this step
     @inbounds for I in eachindex(bus.sensible)
         # (a column solid to the lid keeps it pending: it has no surface)
@@ -429,6 +474,9 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_update}, dt)
     end
     t_new = case.sim.t
     t_new >= c.t_next - 1e-9 * c.P && step_all_surfaces!(c, case)
+    # with the TBLE ground, bus.u_star is the stress the ground applies (the
+    # columns' u_τ at the end of the step), not the surface step's MOST u*
+    c.tble === nothing || _tble_ustar!(c, case)
     return nothing
 end
 
@@ -492,11 +540,7 @@ function smoke_check(c::SurfaceExchangeMOST, case)
                 c.interval_err <= 1e-9 * c.P,
             "per column, the surface stored G·P (|Δstore/P − G| < 1e-6 W/m²)" =>
                 c.store_err < 1e-6,
-            "u* > 0; above its neutral value κU/ln(h/z0m) where H > 5 and E ≥ 0 (unstable), below it where H < −5 and E ≤ 0 (stable), U and h the wind and height of this step's wall law" =>
-                all(I -> _ustar_ok(bus, I, c.U_wall[I], c.U_min, c.h_wall[I]), have),
-            "u* is the ground's MOSTWallLaw at this step's wind and matching height (1e-12)" =>
-                all(I -> abs(bus.u_star[I] - friction_velocity(c.laws[I], c.U_wall[I], c.h_wall[I])) <=
-                         1e-12 * bus.u_star[I], have),
+            _wall_checks(c, case, have)...,
             "the wall law is evaluated at the centre of the column's matching air cell, (n − ½)Δz (1e-12)" =>
                 all(I -> abs(c.h_match[I] - (c.input.cells[I] - 0.5) * case.mesh.dz) <= 1e-12 * case.mesh.dz, have),
             "matching cells are air: solid-free from k_air to k_air + n − 1" =>
@@ -509,6 +553,43 @@ function smoke_check(c::SurfaceExchangeMOST, case)
                          1e-9 * (1 + abs(bus.Rn[I])), have),
             "H has the sign of T_skin − θ_air referred to the surface, where they differ by > 1 K and |H| > 1 W/m²" =>
                 all(I -> _h_sign_ok(bus, I, case), have)]
+end
+
+function _tble_ustar!(c::SurfaceExchangeMOST, case)
+    cols, act = tble_columns(c.tble, :bottom)
+    @inbounds for I in eachindex(act)
+        act[I] || continue
+        case.bus.u_star[I] = cols[I].u_τ
+        c.U_wall[I] = hypot(cols[I].u[end], cols[I].v[end])
+        c.h_wall[I] = cols[I].y[end]
+    end
+    return nothing
+end
+
+# the checks of the ground's wall model: the MOST law (equilibrium) or the
+# TBLE columns (non-equilibrium, P57-c)
+function _wall_checks(c::SurfaceExchangeMOST, case, have)
+    bus = case.bus
+    if c.tble === nothing
+        return ["u* > 0; above its neutral value κU/ln(h/z0m) where H > 5 and E ≥ 0 (unstable), below it where H < −5 and E ≤ 0 (stable), U and h the wind and height of this step's wall law" =>
+                    all(I -> _ustar_ok(bus, I, c.U_wall[I], c.U_min, c.h_wall[I]), have),
+                "u* is the ground's MOSTWallLaw at this step's wind and matching height (1e-12)" =>
+                    all(I -> abs(bus.u_star[I] - friction_velocity(c.laws[I], c.U_wall[I], c.h_wall[I])) <=
+                             1e-12 * bus.u_star[I], have)]
+    end
+    cols, act = tble_columns(c.tble, :bottom)
+    return ["TBLE ground: every column with a surface has a TBLE column, and only those" =>
+                all(I -> act[I] == (bus.k_air[I] <= case.mesh.Nz), eachindex(act)),
+            "TBLE ground: u* > 0 and finite, the columns' |τ_w|^½ (1e-12)" =>
+                all(I -> bus.u_star[I] > 0 && isfinite(bus.u_star[I]) &&
+                         abs(bus.u_star[I] - sqrt(hypot(cols[I].τx, cols[I].τy))) <= 1e-12 * bus.u_star[I], have),
+            "TBLE ground: the column profiles are finite and 0 at the surface" =>
+                all(I -> all(isfinite, cols[I].u) && all(isfinite, cols[I].v) &&
+                         cols[I].u[1] == 0 && cols[I].v[1] == 0, have),
+            "TBLE ground: each column's roughness is its surface's z0m" =>
+                all(I -> cols[I].z0 == roughness_lengths(bus.surface[I]).z0m, have),
+            "TBLE ground: the columns were advanced every step after the first" =>
+                c.tble.walls[:bottom].nupdates >= 1]
 end
 
 function _matching_air(sm, mesh, I, k, n)

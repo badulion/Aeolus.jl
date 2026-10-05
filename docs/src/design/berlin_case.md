@@ -1108,6 +1108,25 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
   filter, temporal RMS 1.054e-3 vs 1.029e-3, sub-60 s RMS 2.24e-6 vs
   2.18e-6 (the smoke flow has almost no fast fluctuation to filter);
   ground ``u_*`` 0.05260 vs 0.05225 m s⁻¹.
+* **Non-equilibrium ground** (P57-c, #189). `wall_model =
+  :nonequilibrium` (default `:equilibrium`) makes the ground stress that
+  of a `WallModels.TBLEWallModel`: the thin-boundary-layer equations on a
+  30-point column under every ground and roof column (rough, the
+  surface's `z0m`), between the surface and the same filtered matching
+  wind, with the resolved pressure gradient at the first air level
+  (one-sided next to a building) and `tble_terms` (default
+  `:pressure_gradient`). Applied by the same `apply_wall_stress!` face
+  loop in `:post_predictor`, advanced once per step in
+  `:surface_update`; `bus.u_star` is the columns' ``u_τ``; the surface
+  heat and moisture fluxes stay MOST. Neutral (no stability correction in
+  the TBLE). A smoke variant runs it, with checks that every surface
+  column has a finite TBLE column with its surface's roughness and that
+  `bus.u_star` is ``|τ_w|^{1/2}`` of the columns. Flagship (64 × 64 × 32,
+  100 steps after 300): +15.6 ms per step in the coupling's stages (9.4 %;
+  not proposed as default), and on the street columns the TBLE and
+  equilibrium stresses differ in sign on 11.1 % and in sign or by > 30 %
+  on 77.3 %: the canyon pressure gradient (median 3.3e-3 m s⁻²) times the
+  3.1 m matching height is as large as the stress.
 * **Extra surface energy.** `bus.sensible` (window sun, glazing
   transmission, dew heat) is collected every step and delivered to the
   surfaces as `Q_extra` at their next step (`step_surface!` of `SlabLand`

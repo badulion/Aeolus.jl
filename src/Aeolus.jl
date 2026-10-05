@@ -1008,6 +1008,11 @@ export WallBoundedCase, half_channel_case, channel_case,
 # wall-parallel filters (log-layer mismatch).
 export MatchingInput, matching_distance, matching_input!, update_input_filter!,
        exponential_filter_weight, wall_parallel_filter!
+# P57-c (#189): the non-equilibrium (TBLE) wall model with dynamic κ_wm.
+# `update_wall_model!` / `tble_*` collide with nothing.
+export AbstractWallModel, AbstractTBLEEddyViscosity, DampedMixingLength, NoEddyViscosity,
+       tble_eddy_viscosity, TBLEColumn, tble_grid, tble_solve!, tble_column_momentum,
+       TBLEWallModel, update_wall_model!, tble_kappa, tble_columns
 
 # P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
 # method of the CutCell generic (no new name).
