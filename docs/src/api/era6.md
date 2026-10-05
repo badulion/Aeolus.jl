@@ -22,7 +22,7 @@ tested at are in
 - [Large-scale forcing — LargeScaleForcing](era6/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; [theory](../theory/large_scale_forcing.md))
 - Walls — `NoSlipWall` and the resolved wall stress (P59-a, #172; below; [theory](../theory/transition.md))
 - AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`
-- [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182; [theory](../theory/sgs_tke.md))
+- [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182) and the differential `ReynoldsStressClosure` (P56-d, #188; [theory](../theory/sgs_tke.md))
 - σ-model SGS closure (P59-b, #184; below) — `Aeolus.Operators`
 
 ## Shared contract — SGS closures (P54-a)
@@ -54,6 +54,7 @@ Aeolus.Operators.sgs_state
 Aeolus.Operators.restore_sgs_state!
 Aeolus.Operators.add_sgs_momentum!
 Aeolus.Operators.add_sgs_scalar!
+Aeolus.Operators.sgs_explicit_stress
 Aeolus.Operators.sgs_tracer_diffusivity!
 Aeolus.Operators.compute_sgs!
 Aeolus.Operators.sgs_closure

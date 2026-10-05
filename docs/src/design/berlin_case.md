@@ -306,7 +306,7 @@ options go under the coupling name in `options`.
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
-| `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184); all but `:tke` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` are each wrapped in `StabilityCorrected` (P55-e, #187; `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`); `:tke` and `:amd` carry their own stability treatment (TKE length scale, AMD buoyancy term) and are not wrapped, nor are `:vreman` and `:sigma` | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
+| `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184), `:reynolds_stress` (`sgs_reynolds_stress`, `PrognosticSGS.ReynoldsStressClosure`, the differential Reynolds-stress closure, #188; not with `timestepper = :imex`); all but `:tke` and `:reynolds_stress` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` are each wrapped in `StabilityCorrected` (P55-e, #187; `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`); `:tke` and `:amd` carry their own stability treatment (TKE length scale, AMD buoyancy term) and are not wrapped, nor are `:vreman`, `:sigma` and `:reynolds_stress` (its stresses carry the buoyancy production directly) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177; with a stability-corrected `:sgs` closure κh on the x, y faces and its κv on the z faces, as for θ) |
 
@@ -1691,6 +1691,99 @@ Smagorinsky with ``C_s = 0.194``, against the case's ``C_s = 0.1``
 1.0 ms); the `:e` tracer adds 8–11 ms to `scalar_advection` (80.1 vs
 69.1, 71.8 vs 63.7 ms/step); whole steps +30 ms (+23 %) at noon and
 +16 ms (+14 %) at night (loaded machine, sequential runs).
+
+## Differential Reynolds stress (#188)
+
+`sgs_reynolds_stress` (`couplings/sgs_reynolds_stress.jl`) is the
+`:reynolds_stress` provider of the `:sgs` slot. It is an option, a genuine
+alternative to the default `:tke`, and it uses the same module
+(`PrognosticSGS`), so no coverage list changes. The closure is
+`ReynoldsStressClosure` (see the Reynolds-stress section of
+[the theory page](../theory/sgs_tke.md)).
+
+* The closure is the `sgs` of every dynamics step. The cores take three
+  things from the committed stresses: ``ν_t``, the Daly–Harlow tensor
+  ``K = c_θτ`` (θ goes through the P55-c tensor operator), and the
+  momentum ``−∂_jτ^{dev}_{ij}`` through the P55-b stress operator.
+  `advance_sgs!` is the source stage, run once per accepted step: implicit
+  sources (sub-stepped for growing modes), exact Coriolis, the
+  realizability projection and the booking. `step_adaptive!` rolls it back
+  with the state. A separate case stage could not be rolled back.
+* The six stresses are the tracers `:tau11 … :tau23` (m² s⁻², written to
+  the NetCDF file). The `:transport` stage advects them, with the
+  diagonals `positive` and therefore flux-limited, and diffuses them with
+  ``2ν_t`` (their `diffusivity`), mask-aware. The closure runs with
+  `transport = false`.
+* The wall cap ``κ d_{wall}`` (option `wall_cap`) and Moeng's 3.9 come from
+  the TKE closure's functions. ``τ = 0`` in the buildings, and an edge that
+  touches a building or the ground carries no stress.
+* The first air cell of each column (`bus.k_air`, option `surface`) holds
+  the LRR-IP constant-stress layer:
+  * ``τ_{13}, τ_{23} = −u_*^2(\cos α, \sin α)`` against the cell's wind,
+    with `bus.u_star` from the MOST exchange;
+  * ``e_s = u_*^2/0.3395``.
+* `budget!` books nothing, because the stresses carry no surface energy or
+  water.
+* **Incompatible** with `timestepper = :imex`: `step_imex!` represents the
+  SGS momentum by an implicit eddy viscosity, and it refuses the closure
+  (`Operators.sgs_explicit_stress`).
+* **Stated exception.** The other tracers (qv, ql, the species, the
+  pollutant) are diffused by the `:transport` stage with the isotropic
+  ``κ_t = \operatorname{tr}K/3`` (`sim.κt`), not with the full tensor.
+* `smoke_check`:
+  * ``τ`` is positive semi-definite in every cell and ``τ = 0`` in the
+    buildings;
+  * the realizability corrections are below 1e-3 of the SGS energy;
+  * ``Σ e V > 0`` and ``ν_t ≥ 0``;
+  * the closure commits once per accepted step;
+  * on the Boussinesq core, ``Σ P V`` equals the SGS sink of
+    `kinetic_energy_budget(sim; sgs = closure)` to 1e-6.
+
+  The smoke variant runs the closure without the wall cap and without the
+  surface value. That variant caught a code bug: a single backward-Euler
+  source step inverted a growing mode at a street corner, and the
+  projection then added more SGS energy than the domain held. The fix is
+  the sub-stepping.
+
+**Measured.** Summer flagship, 64 × 64 × 32, adaptive step, 30 min from
+12:00 and from 02:00 local time. "Canopy" means the fluid cells of the
+levels that are more than 5 % solid, as for `:tke`.
+
+| | noon `:reynolds_stress` | noon `:tke` | 02:00 `:reynolds_stress` | 02:00 `:tke` |
+| :-- | --: | --: | --: | --: |
+| canopy mean ``e`` (m² s⁻²) | 0.0133 | 0.0099 | 0.0025 | 0.0013 |
+| canopy anisotropy ``II = b_{ij}b_{ji}`` | 0.068 | — | 0.066 | — |
+| canopy ``τ_{33}/τ_{11}`` | 1.35 | — | 1.35 | — |
+| canopy mean ``ν_t`` (m² s⁻¹) | 0.043 | 0.034 | 0.017 | 0.012 |
+| domain mean ``ν_t`` (m² s⁻¹) | 0.096 | 0.074 | 0.056 | 0.040 |
+| realizability corrections (30 min) | 203 383 | — | 502 282 | — |
+| `step!` (ms/step) | 141.5 | 69.7 | 118.0 | 35.8 |
+| `scalar_advection` (ms/step) | 196.7 | 140.9 | 171.1 | 94.6 |
+| whole step (ms) | 462.4 | 344.1 | 388.8 | 193.4 |
+
+The canopy stresses are anisotropic, with ``II ≈ 0.07``; in the neutral
+shear equilibrium of the LRR-IP model ``II = 0.091``. The vertical
+component dominates: ``τ_{33}/τ_{11} = 1.35`` at noon, where the canopy is
+convective and buoyancy produces ``τ_{33}``.
+
+The 02:00 value is the same, and that is physical in this case, not a
+defect. The canopy at night is still unstably stratified: the city
+surfaces stay warmer than the air, and a 5-minute diagnostic run from
+02:00 has θ falling by 0.22 K over the lowest 75 m. Above the roofs, where
+the night air is stable, ``τ_{33}/τ_{11} = 0.43`` (level 24).
+
+The realizability corrections come from the component-wise transport. In
+the last step, 127 cells reached the source update already unrealizable
+at noon and 126 were corrected; at night the numbers were 632 and 616, or
+0.1–0.5 % of the 131 072 cells. Over 30 min the corrections added
+2.1e3 m⁵ s⁻² at noon and 1.5e3 m⁵ s⁻² at night. That is 0.09 % and
+0.16 % of the final SGS energy ``Σ e V`` (2.38e6 and 8.85e5 m⁵ s⁻²).
+
+The closure is a cost option. Its `advance_sgs!` adds 72–82 ms per step
+to `step!`, from a 6×6 solve in every cell. The five extra tracers add
+56–76 ms to `scalar_advection`. The whole step is 1.3× the `:tke` cost at
+noon and 2.0× at night. These were sequential runs on a heavily loaded
+machine, so the ratios are rough.
 
 ## Cost of per-facet surfaces (#138)
 

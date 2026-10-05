@@ -829,6 +829,7 @@ and the anelastic / pseudo-incompressible `step!`.
 | `sgs_state(c)`, `restore_sgs_state!(c, s)` | snapshot / restore the memory around a step that may be rejected. Default no-op. |
 | `add_sgs_momentum!(tu, tv, tw, c, f, sim)` | the stress divergence; default the Laplacian eddy-viscosity form with `νh` |
 | `add_sgs_scalar!(tϕ, ϕ, c, f, sim)` | the scalar flux divergence; default `∂ⱼ(κh ∂ⱼϕ)` |
+| `sgs_explicit_stress(c)` | `true` for a closure whose momentum flux is its own stress (the Reynolds-stress closure, P56-d #188); `step_imex!`, whose implicit operator is an eddy viscosity, then refuses it. Default `false`. |
 
 **Why `sgs_coefficients!` must be pure.** The cores evaluate the
 coefficients more often than once per step: once per RK3 substage, once

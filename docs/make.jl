@@ -70,7 +70,7 @@ makedocs(
             "Stability functions and Ri_g" => "theory/turbulence_stability.md",
             "Wall models"                 => "theory/wall_models.md",
             "Large-scale forcing"         => "theory/large_scale_forcing.md",
-            "Prognostic SGS TKE (Deardorff–Moeng)" => "theory/sgs_tke.md",
+            "Prognostic SGS TKE and Reynolds stress" => "theory/sgs_tke.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
