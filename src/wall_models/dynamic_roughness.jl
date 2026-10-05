@@ -305,12 +305,12 @@ function DynamicRoughness(stats::SubfilterHeight{T}; z0_floor, C_d::Real = 1.0,
 end
 
 # z0 = √(z0f² + α²σ²); exactly z0f where σ = 0.
-@inline _z0(z0f, α, σ2) = σ2 > 0 ? sqrt(z0f^2 + α^2 * σ2) : z0f
+@inline _dyn_z0(z0f, α, σ2) = σ2 > 0 ? sqrt(z0f^2 + α^2 * σ2) : z0f
 
 function _set_z0!(dr::DynamicRoughness, α)
     s = dr.stats
     @inbounds for I in eachindex(dr.z0)
-        dr.z0[I] = _z0(dr.z0_floor[I], α, s.σ2[I])
+        dr.z0[I] = _dyn_z0(dr.z0_floor[I], α, s.σ2[I])
     end
     dr.α = α
     return dr
@@ -357,7 +357,7 @@ function _residual(dr::DynamicRoughness{T}, α, A1, A2, R1, R2, n, h) where {T}
     @inbounds for I in eachindex(A1)
         _in(dr.mask, I) || continue
         z = T(_hval(h, I))
-        W += A2[I] / log(z / _z0(z0f[I], α, s.σ2t[I]))^2 - A1[I] / log(z / _z0(z0f[I], α, s.σ2[I]))^2
+        W += A2[I] / log(z / _dyn_z0(z0f[I], α, s.σ2t[I]))^2 - A1[I] / log(z / _dyn_z0(z0f[I], α, s.σ2[I]))^2
     end
     return W / n + (R2 - R1)
 end
@@ -392,7 +392,7 @@ function roughness_surface_drag(dr::DynamicRoughness{T}, uc::AbstractMatrix, vc:
     W = zero(T)
     @inbounds for I in eachindex(A)
         _in(dr.mask, I) || continue
-        W += A[I] / log(T(_hval(h, I)) / _z0(dr.z0_floor[I], T(α), σ2[I]))^2
+        W += A[I] / log(T(_hval(h, I)) / _dyn_z0(dr.z0_floor[I], T(α), σ2[I]))^2
     end
     return (wall = W / n, form = R, total = W / n + R)
 end
