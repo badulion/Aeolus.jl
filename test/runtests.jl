@@ -1018,4 +1018,5 @@ end
     include("berlin_chemistry.jl")       # NOx–O3–VOC on tracers, r_a-based dry / wet deposition (#135)
     include("berlin_numerics.jl")        # pressure solver, SGS, advection slots (#132)
     include("berlin_dynamics.jl")        # core / timestepper slots: anelastic, adaptive, IMEX (#133)
+    include("berlin_parent_surface.jl")  # parent tiled surface: OSM 6 km mosaic, Macdonald roughness, footprint (#249)
 end

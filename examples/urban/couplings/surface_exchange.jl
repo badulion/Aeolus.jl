@@ -380,16 +380,16 @@ end
 The roughness lengths (m) of a surface of class `site.class`: `site.z0m`
 if set (a parent tile over unresolved buildings), otherwise the
 `:surface_exchange` provider's per-class `z0m` table (0.05 m for a class
-not in it, or when no provider is selected); ``z_{0h} = z_{0m}`` times
-its `z0h_ratio` (0.1 without a provider). Every surface factory takes
-its roughness from here.
+not in it, or when no provider is selected); `site.z0h` if set,
+otherwise ``z_{0h} = z_{0m}`` times its `z0h_ratio` (0.1 without a
+provider). Every surface factory takes its roughness from here.
 """
 function class_roughness(case, site::SurfaceSite)
     se = find_coupling(case, :surface_exchange)
     z0m = site.z0m !== nothing ? site.z0m :
           se === nothing ? 0.05 : get(se.z0m, site.class, 0.05)
     ratio = se === nothing ? 0.1 : se.z0h_ratio
-    return z0m, ratio * z0m
+    return z0m, site.z0h !== nothing ? site.z0h : ratio * z0m
 end
 
 "The `SlabLand` for a site of a class nobody registered a factory for."

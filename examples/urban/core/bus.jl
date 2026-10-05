@@ -172,25 +172,28 @@ function SurfaceBus(Nx::Integer, Ny::Integer; Ts0::Real = 285.0)
 end
 
 """
-    SurfaceSite(class; T_skin, column = nothing, z0m = nothing)
+    SurfaceSite(class; T_skin, column = nothing, z0m = nothing, z0h = nothing)
 
 Where a surface is built: a surface `class` (`SURFACE_*`) with its
 initial skin temperature `T_skin` (K), and either the child `column`
 (`CartesianIndex{2}`) it belongs to, or `nothing` for a tile of a
-parent column (#249), which has no child column. `z0m` (m), when given,
-overrides the class's momentum roughness: a parent tile over
-unresolved buildings takes the Macdonald et al. (1998) roughness
-(`SurfaceTiles.macdonald_roughness`) instead of the child's table, which
-describes the surface between resolved buildings.
+parent column (#249), which has no child column. `z0m` and `z0h` (m),
+when given, override the class's roughness lengths for momentum and for
+heat and moisture (see [`class_roughness`](@ref)): a parent tile over
+unresolved buildings takes the Macdonald et al. (1998) momentum
+roughness (`SurfaceTiles.macdonald_roughness`) but keeps the scalar
+roughness of its own surface.
 """
 struct SurfaceSite
     class::UInt8
     T_skin::Float64
     column::Union{Nothing,CartesianIndex{2}}
     z0m::Union{Nothing,Float64}
+    z0h::Union{Nothing,Float64}
 end
-SurfaceSite(class::Integer; T_skin::Real, column = nothing, z0m = nothing) =
-    SurfaceSite(UInt8(class), Float64(T_skin), column, z0m === nothing ? nothing : Float64(z0m))
+_maybe(x) = x === nothing ? nothing : Float64(x)
+SurfaceSite(class::Integer; T_skin::Real, column = nothing, z0m = nothing, z0h = nothing) =
+    SurfaceSite(UInt8(class), Float64(T_skin), column, _maybe(z0m), _maybe(z0h))
 
 """
     register_surface_factory!(case, class, owner, f) -> case
