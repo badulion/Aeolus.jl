@@ -50,6 +50,9 @@
 #     tendencies, at the plane mean (`sponge_target = :mean`: only the
 #     fluctuations are damped);
 #   * the θ budget books the advective tendencies (`adv_heat_applied`);
+#   * #248: the θ budget books the state-dependent large-scale forcings
+#     (`Subsidence`, `ProfileNudging`) from their `tendency_integrals`,
+#     weighted by the SSP-RK3 stage weights (`ls_heat_applied`);
 #   * diagnostics: the mean-momentum budget (`SBLMomentumBudget`), screen-
 #     level 2 m θ and 10 m wind from the package ψ functions (`sbl_screen`),
 #     tower samples of V_TKE (`Transition.turbulence_velocity_scale`) against
@@ -95,6 +98,7 @@ mutable struct SBLCase
     τy::Float64
     heat_applied::Float64             # ∫ ⟨w'θ'⟩_0 dt actually applied (K m)
     adv_heat_applied::Float64         # ∫∫ (∂θ/∂t)_adv dz dt of the prescribed advective tendencies (K m)
+    ls_heat_applied::Float64          # ∫∫ (∂θ/∂t) dz dt of the state-dependent forcings (Subsidence, ProfileNudging; K m)
     nsteps::Int
     wall_time::Float64
     budget::Any                       # nothing, or an SBLMomentumBudget fed in every substage
@@ -194,7 +198,7 @@ function sbl_case(; N = (32, 32, 32), extent = (400.0, 400.0, 400.0),
     zv = Aeolus.Fields.Field(Aeolus.Grids.FaceY(), mesh)
     return SBLCase(sim, closure, sgs_stability, F, Ts, stability, Float64(z0m), Float64(z0h),
                    U_g, V_g, sponge_target, Float64(ρcp), laws, copy(z), copy(z),
-                   fill(Inf, Nx, Ny), zu, zv, 0.0, 0.0, 0.0, 0.0, 0, 0.0, nothing, Float64(t_start))
+                   fill(Inf, Nx, Ny), zu, zv, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, nothing, Float64(t_start))
 end
 
 _sbl_scheme(s::Symbol) = s === :brown94 ? BrownEtAl1994() :
@@ -280,12 +284,16 @@ function sbl_step!(c::SBLCase, dt::Real)
     wm = WallModel(c.laws)
     z_top = m.z0 + m.Lz
     fstage = Ref(0)
+    ls_heat = Ref(0.0)
     force! = function (sim, Δt)
         fstage[] += 1
+        wst = _SBL_RK3_WEIGHTS[mod1(fstage[], 3)]
         # the momentum budget sees the built-in tendencies of this substage
-        c.budget === nothing ||
-            _sbl_budget_stage!(c.budget, c, sim, _SBL_RK3_WEIGHTS[mod1(fstage[], 3)] * dt, t0, dt)
+        c.budget === nothing || _sbl_budget_stage!(c.budget, c, sim, wst * dt, t0, dt)
         apply_forcing!(sim, c.forcing, t0, dt)
+        # the state-dependent forcings (subsidence, nudging) depend on the
+        # substage state: book each substage's ∫(∂θ/∂t) dV with its RK3 weight
+        ls_heat[] += wst * dt * tendency_integrals(c.forcing, :θ) / A
         K = m.Hz + 1
         @inbounds for j in 1:m.Ny, i in 1:m.Nx
             sim.tθ.data[m.Hx+i, m.Hy+j, K] += c.wθ[i, j] / m.dz
@@ -320,6 +328,7 @@ function sbl_step!(c::SBLCase, dt::Real)
     c.τx = τx[]; c.τy = τy[]
     c.heat_applied += mean(c.wθ) * dt
     c.adv_heat_applied += _sbl_advective_heat(c.forcing, m, t0, dt)
+    c.ls_heat_applied += ls_heat[]
     c.nsteps += 1
     return c
 end
