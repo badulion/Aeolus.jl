@@ -6,7 +6,9 @@ using ..Fields
 using ..Fields: Field, mesh, interior_view
 using ..Grids: interior
 using ..BoundaryConditions: BoundaryConditions, fill_halos!, Periodic, FieldBoundaryConditions
-using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR
+using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR,
+                             AbstractRiStability, BrownEtAl1994,
+                             stability_factor_m, stability_factor_h
 using FFTW: rfft, irfft, fft, ifft, fftfreq, plan_rfft
 using Random: AbstractRNG, default_rng, randn
 
@@ -53,6 +55,9 @@ export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain
        lumley_invariants, apriori_metrics, dissipation_matched_cs
 # Era VI (P59-b, #184): the σ-model closure (operators/sigma_closure.jl)
 export SigmaModel, compute_sigma_νt!
+# Era VI (P55-e, #187): the stability-corrected anisotropic closure (operators/sgs_stability.jl)
+export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
+       sgs_stratification!
 
 # -------------------------------------------------------------------------
 # Public API — dispatches on mesh type AND location combination.
@@ -196,7 +201,7 @@ add_eddy_viscosity_u!(tu, u, νt) = _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
 """
     add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
     add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t)
-    add_eddy_diffusion_scalar!(tϕ, ϕ, κh::Field, κv::Field)
+    add_eddy_diffusion_scalar!(tϕ, ϕ, κh::Field, κv::Field; mask = nothing, weights = nothing)
 
 Add the conservative eddy-diffusion tendency `∂/∂xⱼ(κₜ ∂ϕ/∂xⱼ)` to the
 cell-centred scalar tendency `tϕ`, with the cell-centred diffusivity `κt`
@@ -212,7 +217,9 @@ faces and `κv` on the z faces. It is the diffusivity tensor
 [`add_tensor_diffusion_scalar!`](@ref). Halos of `ϕ` and of the
 coefficient fields must be filled.
 
-Keywords of the three-argument form (P56-a, #177):
+Keywords of the three-argument form (P56-a, #177), also taken by the
+diagonal form (κh on the x, y faces and κv on the z faces, e.g. the
+coefficients of a stability-corrected closure, P55-e):
 
   * `mask` — a storage-sized `AbstractArray{Bool,3}` of solid cells (e.g.
     `IBM.SolidMask(...).mask`). A face with a solid cell on either side
@@ -233,7 +240,20 @@ With both `nothing` (default) this is bit for bit the unmasked kernel.
 function add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
     mask === nothing && weights === nothing &&
         return _add_eddy_diffusion_scalar!(tϕ, ϕ, κt, one(eltype(κt.data)), mesh(ϕ))
-    g = mesh(ϕ)
+    wc, wf = _check_mask_weights(ϕ, mask, weights)
+    return _add_eddy_diffusion_scalar_masked!(tϕ, ϕ, κt, mesh(ϕ), mask, wc, wf)
+end
+add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t::Real) =
+    _add_eddy_diffusion_scalar!(tϕ, ϕ, νt, 1 / Pr_t, mesh(ϕ))
+function add_eddy_diffusion_scalar!(tϕ, ϕ, κh::Field, κv::Field; mask = nothing, weights = nothing)
+    mask === nothing && weights === nothing &&
+        return _add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv, one(eltype(κh.data)), mesh(ϕ))
+    wc, wf = _check_mask_weights(ϕ, mask, weights)
+    return _add_eddy_diffusion_scalar_masked!(tϕ, ϕ, κh, κv, mesh(ϕ), mask, wc, wf)
+end
+
+# the storage-size mask and per-level weights of the masked / weighted form
+function _check_mask_weights(ϕ, mask, weights)
     if mask !== nothing
         size(mask) == size(ϕ.data) ||
             throw(DimensionMismatch("mask has size $(size(mask)); expected the storage size $(size(ϕ.data))"))
@@ -244,12 +264,8 @@ function add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights
         (length(wc) >= n && length(wf) >= n) ||
             throw(DimensionMismatch("weights: need Wc and Wf per storage level ($n), got $(length(wc)), $(length(wf))"))
     end
-    return _add_eddy_diffusion_scalar_masked!(tϕ, ϕ, κt, g, mask, wc, wf)
+    return wc, wf
 end
-add_eddy_diffusion_scalar!(tϕ, ϕ, νt::Field, Pr_t::Real) =
-    _add_eddy_diffusion_scalar!(tϕ, ϕ, νt, 1 / Pr_t, mesh(ϕ))
-add_eddy_diffusion_scalar!(tϕ, ϕ, κh::Field, κv::Field) =
-    _add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv, one(eltype(κh.data)), mesh(ϕ))
 
 """
     add_surface_flux!(tϕ, F_bot, F_top)
@@ -759,5 +775,9 @@ include("operators/sgs_stress.jl")
 include("operators/scalar_tensor.jl")
 # Pointwise N² and Ri_g (Era VI, P58-a).
 include("operators/stratification.jl")
+
+# Era VI: the stability-corrected anisotropic eddy viscosity / diffusivity
+# (P55-e; uses the contract, the scalar operators and the N² / Ri_g stencils).
+include("operators/sgs_stability.jl")
 
 end # module

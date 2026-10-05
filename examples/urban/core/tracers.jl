@@ -31,6 +31,23 @@ end
 "The eddy diffusivity the `:transport` stage diffuses tracer `t` with."
 tracer_diffusivity(t::Tracer, case) = t.diffusivity === nothing ? case.sim.κt : t.diffusivity(case)
 
+"""
+    tracer_vertical_diffusivity(t::Tracer, case) -> Field
+
+The diffusivity of tracer `t` on the z faces: θ's vertical κv when the
+`:sgs` closure is stability-corrected (P55-e: κv ≠ κh, so a tracer gets the
+same diagonal diffusivity θ gets), else `tracer_diffusivity(t, case)`. A
+tracer with its own `diffusivity` keeps it in every direction.
+"""
+tracer_vertical_diffusivity(t::Tracer, case) =
+    t.diffusivity === nothing ? sgs_vertical_diffusivity(case) : tracer_diffusivity(t, case)
+
+"θ's SGS diffusivity on the z faces: the stability-corrected closure's κv, else `sim.κt`."
+function sgs_vertical_diffusivity(case)
+    sc = stability_closure(get(case.step_kwargs, :sgs, nothing))
+    return sc === nothing ? case.sim.κt : sc.κv
+end
+
 "Ordered set of tracers; iteration order is registration order."
 struct TracerRegistry
     list::Vector{Tracer}

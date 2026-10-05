@@ -62,7 +62,7 @@ function run_stage!(c::PollutantCoupling, case, ::Val{:tracers}, dt)
     interior_view(pollutant) .+= dt .* view(tp.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
     # SGS diffusion with κt, the helper of the :transport stage (#177)
     d = tracer_sgs_diffusion(case)
-    d === nothing || sgs_diffuse!(d, case, pollutant, dt)
+    d === nothing || sgs_diffuse!(d, case, pollutant, dt; κv = sgs_vertical_diffusivity(case))
     clamp!(interior_view(pollutant), 0.0, 100.0)
     return nothing
 end

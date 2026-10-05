@@ -15,6 +15,7 @@ tested at are in
 - Lagrangian dynamic Smagorinsky (P54-b, #173) and its scale-dependent form (LASD, P54-e, #186; below) — `Aeolus.Operators`
 - Stress-form momentum divergence (P55-b, #175; below) — `Aeolus.Operators`
 - Tensorial scalar eddy diffusivity (P55-c, #181; below) — `Aeolus.Operators`
+- Stability-corrected anisotropic eddy viscosity (P55-e, #187; below) — `Aeolus.Operators`
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
 - [Transition diagnostics — Transition](era6/transition.md) — `Aeolus.Transition` (Phase 59, #180; flat-plate boundary layer, P59-d, #185; [theory](../theory/transition.md#Laminar–turbulent-transition), [flat plate](../theory/transition.md#Flat-plate-transition))
 - [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #179: wall model on immersed and cut-cell walls; #183: matching height and input filtering against log-layer mismatch; [theory](../theory/wall_models.md))
@@ -165,6 +166,31 @@ Aeolus.Operators.add_tensor_diffusion_scalar!
 Aeolus.Operators.isentropic_tensor!
 Aeolus.Operators.sgs_scalar_tensor
 Aeolus.Operators.IsentropicDiffusion
+```
+
+## Stability-corrected anisotropic eddy viscosity (P55-e)
+
+`StabilityCorrected` wraps an eddy-viscosity closure: `νh = ν ℓh`,
+`νv = ν ℓv f_m(Ri)`, `κh = ν ℓh/Prₜ`, `κv = ν ℓv f_h(Ri)/Prₜ`, with Ri_g
+from `gradient_richardson!`, `f_m, f_h` from the TurbulenceStability
+contract (Brown et al. 1994 by default) and the anisotropic length scales
+`Δh = √(dx dy)`, `Δv = dz`. Neutral flow (`N² = 0`, `ℓ = 1`) is the base
+closure bit for bit. Theory:
+[Smagorinsky-Lilly SGS → Stability correction](../theory/sgs.md#Stability-correction).
+
+```julia
+c = StabilityCorrected(StaticSmagorinsky(0.17), sim.mesh)          # Brown 1994, :anisotropic
+step!(sim, 0.5; sgs = c, sgs_stress = :symmetric)                   # νv reaches the stress form
+c.Ri, c.νv, c.κv                                                    # the last Ri_g, νv, κv
+StabilityCorrected(DynamicSmagorinsky(sim.mesh), sim.mesh; scheme = LillyCutoff())
+IsentropicDiffusion(StabilityCorrected(StaticSmagorinsky(0.17), sim.mesh), sim.mesh)
+```
+
+```@docs
+Aeolus.Operators.StabilityCorrected
+Aeolus.Operators.dynamic_sgs_coefficient
+Aeolus.Operators.anisotropic_length_factors
+Aeolus.Operators.sgs_stratification!
 ```
 
 ## σ-model SGS closure (P59-b, #184)

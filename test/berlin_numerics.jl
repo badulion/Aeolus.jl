@@ -12,6 +12,8 @@
 #   * the SGS option scalar_tensor = :isentropic (P55-c, #181): with the
 #     closure's own κv (= κh) the tensor is κh I and the run is the default
 #     one to round-off; with diapycnal = 0.1 it rotates and changes θ;
+#   * the SGS stability correction (P55-e, #187) is on by default; it cuts
+#     νv in the capping inversion; `sgs_stability = :none` is the bare closure;
 #   * configuration errors (halo too small for a scheme, a step! keyword
 #     claimed by two couplings) are caught.
 
@@ -64,6 +66,18 @@ end
         @test all(((a, b),) -> interior_view(a.field) == interior_view(b.field), zip(ml.tracers, ref.tracers))
         @test ml.bus.Ts == ref.bus.Ts
     end
+
+    # runs on the :smagorinsky provider (the slot default is :tke since #182)
+    function run_opts(o; kw...)
+        cfg = BC.CaseConfig(:smoke; verbose = false,
+                            physics = Dict{Symbol,Any}(:sgs => :smagorinsky),
+                            options = Dict{Symbol,Any}(:sgs_smagorinsky => o), (; nsteps = N, kw...)...)
+        case = BC.build_case(cfg; io = devnull)
+        BC.run_case!(case)
+        return case
+    end
+    # the uncorrected closure (sgs_stability = :none, P55-e): νh = νv, κh = κv
+    ref0 = run_opts((;); sgs_stability = :none)
 
     @testset "σ-model provider (#184): ν_t ≥ 0, zero in laminar flow" begin
         sg = _run_smoke(N; sgs = :sigma)
@@ -133,21 +147,16 @@ end
     end
 
     @testset "SGS scalar_tensor = :isentropic (P55-c, #181)" begin
-        function run_opts(o)
-            cfg = BC.CaseConfig(:smoke; verbose = false, nsteps = N,
-                                physics = Dict{Symbol,Any}(:sgs => :smagorinsky),
-                                options = Dict{Symbol,Any}(:sgs_smagorinsky => o))
-            case = BC.build_case(cfg; io = devnull)
-            BC.run_case!(case)
-            return case
-        end
-        iso = run_opts((scalar_tensor = :isentropic,))
+        # with the uncorrected closure (κv = κh, the setting #181 was
+        # validated in; the default closure is stability-corrected since
+        # P55-e and has κv ≠ κh)
+        iso = run_opts((scalar_tensor = :isentropic,); sgs_stability = :none)
         c = BC.find_coupling(iso, :sgs_smagorinsky)
         @test c.closure isa IsentropicDiffusion
         # κv = κh: K = κh I, the triad operator is the diagonal one to round-off
-        dθ = maximum(abs, interior_view(iso.sim.θ) .- interior_view(ref.sim.θ))
-        rot = run_opts((scalar_tensor = :isentropic, diapycnal = 0.1))
-        dθr = maximum(abs, interior_view(rot.sim.θ) .- interior_view(ref.sim.θ))
+        dθ = maximum(abs, interior_view(iso.sim.θ) .- interior_view(ref0.sim.θ))
+        rot = run_opts((scalar_tensor = :isentropic, diapycnal = 0.1); sgs_stability = :none)
+        dθr = maximum(abs, interior_view(rot.sim.θ) .- interior_view(ref0.sim.θ))
         fr = BC.isentropic_fraction(BC.find_coupling(rot, :sgs_smagorinsky).closure)
         @info @sprintf("  isentropic scalar tensor after %d steps: max|Δθ| vs default %.1e K (κv = κh), %.1e K (κv = 0.1 κh, %.1f %% of the cells rotated)",
                        N, dθ, dθr, 100fr)
@@ -156,6 +165,64 @@ end
         @test 0 < fr < 1
         @test all(isfinite, interior_view(rot.sim.θ))
         @test_throws ArgumentError run_opts((scalar_tensor = :bogus,))
+        # with the default (stability-corrected) closure the isentropic tensor
+        # gets the corrected κv < κh in stable air and rotates without `diapycnal`
+        isc = run_opts((scalar_tensor = :isentropic,))
+        cc = BC.find_coupling(isc, :sgs_smagorinsky).closure
+        @test cc isa IsentropicDiffusion && cc.inner isa StabilityCorrected
+        @test BC.isentropic_fraction(cc) > 0
+        @test all(isfinite, interior_view(isc.sim.θ))
+    end
+
+    @testset "SGS stability correction (P55-e, #187)" begin
+        c = BC.find_coupling(ref, :sgs_smagorinsky)
+        @test c.closure isa StabilityCorrected                   # on by default
+        @test c.closure.scheme isa BrownEtAl1994
+        @test c.closure.ℓh ≈ 2.5^(2 / 3) && c.closure.ℓv ≈ 2.5^(-4 / 3)
+        @test c.closure.qv === BC.tracer(ref, :qv)               # θ_v of the moist buoyancy
+        @test BC.find_coupling(ref0, :sgs_smagorinsky).closure isa StaticSmagorinsky   # :none
+        # the capping inversion of :smoke (θ lapse from 60 m), in the smoke
+        # window (12 steps; by ~50 steps the resolved overturning has mixed
+        # it away in θ_v, with or without the correction): the two levels
+        # above 60 m (z = 65.6, 71.9 m) are stable and the correction cuts νv
+        s12 = run_opts((;); nsteps = 12); s12_0 = run_opts((;); nsteps = 12, sgs_stability = :none)
+        c12 = BC.find_coupling(s12, :sgs_smagorinsky).closure
+        kinv = 11:12
+        s1 = BC.stability_stats(c12, s12; levels = kinv)
+        m = s12.mesh; sm = s12.geom.sm.mask
+        fluid = [!sm[m.Hx+i, m.Hy+j, m.Hz+k] for i in 1:m.Nx, j in 1:m.Ny, k in kinv]
+        νv0 = mean(view(interior_view(s12_0.sim.νt), :, :, kinv)[fluid])   # νv = νh uncorrected
+        @info @sprintf("  stability correction, :smoke 12 steps: mean νv in the capping inversion (z = 65.6–71.9 m) %.3e m²/s corrected vs %.3e uncorrected; %.0f %% of its cells Ri ≥ Ri_c; mean κv/κh %.3f",
+                       s1.νv, νv0, 100 * s1.supercritical, s1.κv_over_κh)
+        @test s1.νv < 0.1 * νv0
+        @test s1.supercritical > 0.3
+        @test maximum(abs, interior_view(ref.sim.θ) .- interior_view(ref0.sim.θ)) > 1e-6
+        @test all(isfinite, interior_view(ref.sim.θ))
+        # (on a provider that is stability-corrected: the slot default :tke
+        # since #182 is not wrapped and does not read sgs_stability)
+        @test_throws ErrorException BC.build_case(BC.CaseConfig(:smoke; verbose = false,
+                                                                physics = Dict{Symbol,Any}(:sgs => :smagorinsky),
+                                                                sgs_stability = :bogus); io = devnull)
+        # the tracers (#177) get θ's diagonal diffusivity: κh = sim.κt on the
+        # x, y faces and the corrected κv on the z faces
+        tq = only(t for t in ref.tracers if t.name === :qv)
+        @test BC.tracer_diffusivity(tq, ref) === ref.sim.κt
+        @test BC.tracer_vertical_diffusivity(tq, ref) === c.closure.κv
+        tq0 = only(t for t in ref0.tracers if t.name === :qv)
+        @test BC.tracer_vertical_diffusivity(tq0, ref0) === ref0.sim.κt      # :none: κv = κh
+        d = BC.find_coupling(ref, :scalar_advection).diffusion
+        q = deepcopy(BC.tracer(ref, :qv)); q0 = copy(interior_view(q))
+        BC.sgs_diffuse!(d, ref, q, 2.0; κv = c.closure.κv)
+        tt = Field(CellCenter(), ref.mesh); qq = deepcopy(q); interior_view(qq) .= q0
+        fill_halos!(qq, d.bcs)
+        add_eddy_diffusion_scalar!(tt, qq, ref.sim.κt, c.closure.κv; mask = d.mask)
+        @test interior_view(q) == q0 .+ 2.0 .* interior_view(tt)            # bit for bit
+        q1 = deepcopy(BC.tracer(ref, :qv)); BC.sgs_diffuse!(d, ref, q1, 2.0)  # isotropic κh
+        dv, dh = interior_view(q) .- q0, interior_view(q1) .- q0
+        @info @sprintf("  tracer SGS diffusion (2 s, qv) with the corrected κv: max|Δq| %.2e vs %.2e with κv = κh",
+                       maximum(abs, dv), maximum(abs, dh))
+        @test dv != dh
+        @test all(isfinite, dv)
     end
 
     @testset "SGS diffusion of the tracers with κt, mask-aware (#177)" begin

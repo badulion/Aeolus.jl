@@ -41,7 +41,23 @@
 # of that operator (PrognosticSGS.shear_production!), which is what makes
 # the resolved-KE sink and the TKE source agree to round-off; with the
 # stress form the two would no longer balance. The cores' default stays `:laplacian`; the flagship
-# opts in. νh = νv (the closures are isotropic) until P55-e (#187).
+# opts in.
+#
+# The eddy-viscosity closures of :smagorinsky, :dynamic and :mlsgs are
+# wrapped, by the one builder `sgs_provider_closure`, in
+# Operators.StabilityCorrected (P55-e, #187), on by default for these
+# providers: νh = ν ℓh, νv = ν ℓv f_m(Ri_g), κh = ν ℓh/Prₜ,
+# κv = ν ℓv f_h(Ri_g)/Prₜ with the TurbulenceStability functions
+# (`CaseConfig.sgs_stability`: `:brown94` default, Brown et al. 1994;
+# `:lilly`, `:long_tail`, `:short_tail`, `:most`; `:none` = the uncorrected
+# closure, the pre-P55-e run bit for bit) and the anisotropic length scales
+# Δh = √(dx dy), Δv = dz (dx/dz = 2.5: ℓh = 1.842, ℓv = 0.2947). Ri_g uses
+# the θ_v of the qv tracer (the moist buoyancy's θ_v) and the core's own
+# reference θ (θ₀, or θ̄(z) on the sound-proof cores). The dynamic provider
+# gets no f_m on the momentum (only Prₜ(Ri)). The :tke closure (its own
+# stability length) and :amd (its own buoyancy term) already account for
+# the stratification and are not wrapped; :vreman and :sigma keep their
+# validated isotropic form (νh = νv).
 #
 # The scalar (θ) SGS flux goes through the closure contract's diagonal
 # operator, add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv) (P55-c, #181), which
@@ -53,9 +69,10 @@
 # closure's own κv = κh when `diapycnal = nothing`), tapered above
 # `slope_max` and isotropic where N² ≤ 0. It is option-only: the flagship is
 # a daytime convective case where the isentropic direction is ill-defined
-# (N² ≤ 0) over most of the domain, and the closures have no κv < κh of
-# their own until P55-e (#187). It lives in Operators (exempt), so no
-# coverage list changes.
+# (N² ≤ 0) over most of the domain. It wraps the stability-corrected
+# closure, so its across-isentrope κv is the corrected one (κv < κh in
+# stable air) unless `diapycnal` is given. It lives in Operators (exempt),
+# so no coverage list changes.
 #
 # A new SGS provider goes in its own file, couplings/sgs_<name>.jl (the
 # couplings load in sorted order, after this file, which defines the slot).
@@ -81,6 +98,116 @@ and, for `:isentropic`, `diapycnal` (κv/κh across the isentropes;
 `nothing` = the closure's own κv) and `slope_max` (the taper slope).
 """
 const SGS_SCALAR_DEFAULT = (scalar_tensor = :diagonal, diapycnal = nothing, slope_max = 1.0)
+
+"""
+    sgs_stability_scheme(name::Symbol) -> AbstractRiStability
+
+The TurbulenceStability family of `CaseConfig.sgs_stability` (`:brown94`,
+`:lilly`, `:long_tail`, `:short_tail`, `:most`; the names of the
+`turbulence_diag` option, with `:brown94` for its `:brown`).
+"""
+sgs_stability_scheme(name::Symbol) =
+    turbulence_stability_family(name === :brown94 ? :brown : name)
+
+"""
+    sgs_stability_closure(closure, case) -> AbstractSGSClosure
+
+`closure` wrapped in `Operators.StabilityCorrected` (P55-e, #187) with the
+scheme of `case.cfg.sgs_stability`, the anisotropic length scales of the
+case grid and the θ_v of the `qv` tracer — or `closure` itself for
+`sgs_stability = :none`.
+"""
+function sgs_stability_closure(closure, case)
+    s = case.cfg.sgs_stability
+    s === :none && return closure
+    return StabilityCorrected(closure, case.mesh; scheme = sgs_stability_scheme(s),
+                              length_scales = :anisotropic, qv = tracer(case, :qv))
+end
+
+"""
+    sgs_provider_closure(base, o, case) -> AbstractSGSClosure
+
+The closure every `:sgs` provider hands the dynamics: the eddy-viscosity
+closure `base`, stability-corrected ([`sgs_stability_closure`](@ref)),
+then with the scalar options `o` ([`sgs_scalar_closure`](@ref)).
+"""
+sgs_provider_closure(base, o, case) = sgs_scalar_closure(sgs_stability_closure(base, case), o, case)
+
+"""
+    stability_closure(c) -> Union{Nothing, StabilityCorrected}
+
+The `StabilityCorrected` inside a provider's closure (itself, or the inner
+closure of an `IsentropicDiffusion`), or `nothing`.
+"""
+stability_closure(c::StabilityCorrected) = c
+stability_closure(c::IsentropicDiffusion) = stability_closure(c.inner)
+stability_closure(c) = nothing
+
+"""
+    sgs_base_closure(c) -> AbstractSGSClosure
+
+The provider's own closure inside the wrappers (`IsentropicDiffusion`,
+`StabilityCorrected`): e.g. the `LagrangianDynamicSmagorinsky` of `:dynamic`.
+"""
+sgs_base_closure(c::IsentropicDiffusion) = sgs_base_closure(c.inner)
+sgs_base_closure(c::StabilityCorrected) = sgs_base_closure(c.base)
+sgs_base_closure(c) = c
+
+"""
+    stability_stats(c::StabilityCorrected, case) -> NamedTuple
+
+From the closure's last coefficients, over the fluid cells: the fraction
+with `Ri_g ≥ Ri_c` (`supercritical`; Ri_c of the scheme, 0.25 for Brown
+and Lilly, `NaN` for a scheme without one), the means of νh, νv, κh, κv
+and the mean κv/κh where κh > 0.
+"""
+function stability_stats(c::StabilityCorrected, case; levels = nothing)
+    m = case.mesh
+    sm = case.geom.sm.mask
+    ks = levels === nothing ? (1:m.Nz) : levels
+    fluid = [!sm[m.Hx+i, m.Hy+j, m.Hz+k] for i in 1:m.Nx, j in 1:m.Ny, k in ks]
+    v(f) = view(interior_view(f), :, :, ks)[fluid]
+    Ri = v(c.Ri); νh = v(case.sim.νt); νv = v(c.νv); κh = v(case.sim.κt); κv = v(c.κv)
+    Ric = hasproperty(c.scheme, :Ri_c) ? c.scheme.Ri_c : NaN
+    pos = κh .> 0
+    return (supercritical = isnan(Ric) ? NaN : count(>=(Ric), Ri) / length(Ri),
+            νh = mean(νh), νv = mean(νv), κh = mean(κh), κv = mean(κv),
+            κv_over_κh = any(pos) ? mean(κv[pos] ./ κh[pos]) : NaN)
+end
+
+# the stability-correction checks every provider adds to its smoke_check
+function sgs_stability_checks(closure, case)
+    c = stability_closure(closure)
+    c === nothing && return Pair{String,Bool}[]
+    Ri = interior_view(c.Ri)
+    νh = interior_view(case.sim.νt); νv = interior_view(c.νv)
+    κh = interior_view(case.sim.κt); κv = interior_view(c.κv)
+    r = c.ℓv / c.ℓh                      # νv/νh of a neutral cell
+    tol(x) = 1e-12 * max(abs(x), eps())
+    st = Ri .>= 0; un = Ri .<= 0
+    checks = ["stability-corrected SGS: κv ≥ 0 and νv ≥ 0" => all(>=(0), κv) && all(>=(0), νv),
+              "stability-corrected SGS: κv ≤ κh where Ri ≥ 0" =>
+                  all(i -> κv[i] <= κh[i] + tol(κh[i]), findall(st)),
+              "stability-corrected SGS: νv ≤ νh ℓv/ℓh where Ri ≥ 0 (damped)" =>
+                  all(i -> νv[i] <= νh[i] * r + tol(νh[i]), findall(st))]
+    if !dynamic_sgs_coefficient(c.base)
+        push!(checks, "stability-corrected SGS: νv ≥ νh ℓv/ℓh where Ri ≤ 0 (convective enhancement)" =>
+                          all(i -> νv[i] >= νh[i] * r - tol(νh[i]), findall(un)))
+    end
+    if hasproperty(c.scheme, :Ri_c) && c.scheme isa Union{BrownEtAl1994,LillyCutoff}
+        push!(checks, "stability-corrected SGS: κv = 0 where Ri ≥ Ri_c" =>
+                          all(i -> κv[i] == 0, findall(>=(c.scheme.Ri_c), Ri)))
+    end
+    return checks
+end
+
+function sgs_stability_report(closure, case)
+    c = stability_closure(closure)
+    c === nothing && return nothing
+    s = stability_stats(c, case)
+    return @sprintf("stability-corrected SGS (%s): %.1f %% of fluid cells Ri ≥ Ri_c, mean νv %.3g νh %.3g m²/s, mean κv/κh %.3f",
+                    case.cfg.sgs_stability, 100 * s.supercritical, s.νv, s.νh, s.κv_over_κh)
+end
 
 """
     sgs_scalar_closure(closure, o, case) -> AbstractSGSClosure
@@ -125,25 +252,28 @@ function sgs_scalar_checks(closure, case)
 end
 
 """
-    mean_sgs_dissipation(case) -> W kg⁻¹
+    mean_sgs_dissipation(case, closure = nothing) -> W kg⁻¹
 
 Domain-mean resolved-to-subgrid kinetic-energy transfer of the stress-form
 closure, `Σ 2νᵢⱼSᵢⱼSᵢⱼ ΔV / V` (`sgs_stress_dissipation` with the current
-`ν_t`, `νh = νv`). Fills the velocity halos.
+`νh = sim.νt` and the vertical `νv` of a stability-corrected closure, or
+`νv = νh`). Fills the velocity halos.
 """
-function mean_sgs_dissipation(case)
+function mean_sgs_dissipation(case, closure = nothing)
     sim = case.sim
     for f in (sim.u, sim.v, sim.w)
         fill_halos!(f, sim.bcs)
     end
     m = case.mesh
-    return sgs_stress_dissipation(sim.u, sim.v, sim.w, sim.νt) / (m.Lx * m.Ly * m.Lz)
+    c = stability_closure(closure)
+    νv = c === nothing ? sim.νt : c.νv
+    return sgs_stress_dissipation(sim.u, sim.v, sim.w, sim.νt, νv) / (m.Lx * m.Ly * m.Lz)
 end
 
 # the stress-form checks every provider adds to its smoke_check
-sgs_stress_checks(stress, case) =
+sgs_stress_checks(stress, case, closure = nothing) =
     stress === :symmetric ?
-        ["stress-form SGS dissipation Σ2νSᵢⱼSᵢⱼ ≥ 0" => mean_sgs_dissipation(case) >= 0] :
+        ["stress-form SGS dissipation Σ2νᵢⱼSᵢⱼSᵢⱼ ≥ 0" => mean_sgs_dissipation(case, closure) >= 0] :
         Pair{String,Bool}[]
 
 "Highest k (1-based interior level) with a solid cell, 0 without buildings."
@@ -159,11 +289,13 @@ end
 
 Slot `:sgs`, provider `:smagorinsky` (the default before #182; now
 `:tke`, couplings/sgs_tke.jl): `StaticSmagorinsky(C_s)`
-with the core's `C_s` (`cfg.C_s`) and turbulent Prandtl number, passed as
-the `sgs` of every step — the coefficients of the closure the cores run
-built in, bit for bit — with the stress-form momentum divergence (option
-`stress = :symmetric`; `:laplacian` is the cores' built-in form). With
-`C_s = 0` there is no closure (no SGS terms), as before.
+with the core's `C_s` (`cfg.C_s`) and turbulent Prandtl number,
+stability-corrected (`StabilityCorrected`, `cfg.sgs_stability`, P55-e;
+with `sgs_stability = :none` the closure the cores run built in, bit for
+bit), passed as the `sgs` of every step with the stress-form momentum
+divergence (option `stress = :symmetric`; `:laplacian` is the cores'
+built-in form). With `C_s = 0` there is no closure (no SGS terms), as
+before.
 """
 struct SGSSmagorinsky{C} <: AbstractCoupling
     stress::Symbol
@@ -173,25 +305,39 @@ coupling_name(::Type{<:SGSSmagorinsky}) = :sgs_smagorinsky
 slot(::Type{<:SGSSmagorinsky}) = :sgs
 provider(::Type{<:SGSSmagorinsky}) = :smagorinsky
 is_default(::Type{<:SGSSmagorinsky}) = false
-modules_used(::Type{<:SGSSmagorinsky}) = (:Simulations, :Operators)
+modules_used(::Type{<:SGSSmagorinsky}) = (:Simulations, :Operators, :TurbulenceStability)
 default_options(::Type{<:SGSSmagorinsky}) = (; SGS_STRESS_DEFAULT..., SGS_SCALAR_DEFAULT...)
 build(::Type{<:SGSSmagorinsky}, case, o) =
     SGSSmagorinsky(o.stress, case.sim.C_s == 0 ? nothing :
-                             sgs_scalar_closure(StaticSmagorinsky(case.sim.C_s), o, case))
+                             sgs_provider_closure(StaticSmagorinsky(case.sim.C_s), o, case))
 step_options(c::SGSSmagorinsky, case) =
     c.closure === nothing ? (;) : sgs_step_options(c.closure, c.stress)
+# (each on the :smagorinsky provider: the slot default is :tke since #182,
+# which takes none of these options)
 smoke_variants(::Type{<:SGSSmagorinsky}) =
-    ((label = "SGS Laplacian form", options = Dict(:sgs_smagorinsky => (stress = :laplacian,))),
-     (label = "SGS isentropic scalar tensor",
-      options = Dict(:sgs_smagorinsky => (scalar_tensor = :isentropic, diapycnal = 0.1))))
+    ((label = "SGS Laplacian form", physics = Dict(:sgs => :smagorinsky),
+      options = Dict(:sgs_smagorinsky => (stress = :laplacian,))),
+     (label = "SGS isentropic scalar tensor", physics = Dict(:sgs => :smagorinsky),
+      options = Dict(:sgs_smagorinsky => (scalar_tensor = :isentropic, diapycnal = 0.1))),
+     (label = "SGS isentropic scalar tensor, corrected κv", physics = Dict(:sgs => :smagorinsky),
+      options = Dict(:sgs_smagorinsky => (scalar_tensor = :isentropic,))),
+     (label = "SGS stability correction off", physics = Dict(:sgs => :smagorinsky),
+      sgs_stability = :none),
+     (label = "SGS stability correction, Lilly cutoff", physics = Dict(:sgs => :smagorinsky),
+      sgs_stability = :lilly))
 smoke_check(c::SGSSmagorinsky, case) =
     ["ν_t ≥ 0" => minimum(interior_view(case.sim.νt)) >= 0,
      "ν_t > 0 where the flow is strained" => core_max_νt(case.sim) > 0,
-     sgs_stress_checks(c.stress, case)..., sgs_scalar_checks(c.closure, case)...]
+     sgs_stress_checks(c.stress, case, c.closure)..., sgs_scalar_checks(c.closure, case)...,
+     sgs_stability_checks(c.closure, case)...]
 function report(c::SGSSmagorinsky, case)
-    c.closure isa IsentropicDiffusion || return nothing
-    return @sprintf("isentropic SGS scalar tensor: %.1f %% of the cells rotated",
-                    100 * isentropic_fraction(c.closure))
+    lines = String[]
+    c.closure isa IsentropicDiffusion &&
+        push!(lines, @sprintf("isentropic SGS scalar tensor: %.1f %% of the cells rotated",
+                              100 * isentropic_fraction(c.closure)))
+    r = sgs_stability_report(c.closure, case)
+    r === nothing || push!(lines, r)
+    return isempty(lines) ? nothing : join(lines, "; ")
 end
 # the built-in closure of either core (the sound-proof cores, #133, have no max_νt)
 core_max_νt(sim::BoussinesqSimulation) = Aeolus.Simulations.max_νt(sim)
@@ -245,7 +391,7 @@ coupling_name(::Type{<:SGSDynamic}) = :sgs_dynamic
 slot(::Type{<:SGSDynamic}) = :sgs
 provider(::Type{<:SGSDynamic}) = :dynamic
 is_default(::Type{<:SGSDynamic}) = false
-modules_used(::Type{<:SGSDynamic}) = (:Operators,)
+modules_used(::Type{<:SGSDynamic}) = (:Operators, :TurbulenceStability)
 default_options(::Type{<:SGSDynamic}) =
     (averaging = :lagrangian, scale_dependent = true, cadence = 4, filter_ratio = 3.0,
      cs_max = 0.5, SGS_STRESS_DEFAULT..., SGS_SCALAR_DEFAULT...)
@@ -262,7 +408,7 @@ function build(::Type{<:SGSDynamic}, case, o)
         DynamicSmagorinsky(DynamicSmagorinskyWorkspace(case.mesh); averaging = o.averaging,
                            filter_ratio = o.filter_ratio, cs_max = o.cs_max, mask)
     end
-    return SGSDynamic(inner.workspace, opts, sgs_scalar_closure(inner, o, case), o.stress)
+    return SGSDynamic(inner.workspace, opts, sgs_provider_closure(inner, o, case), o.stress)
 end
 
 step_options(c::SGSDynamic, case) = sgs_step_options(c.closure, c.stress)
@@ -294,7 +440,7 @@ function dynamic_cs_profile(c::SGSDynamic, case)
         a = view(air, :, :, ks)
         return inv(sum(f, view(A, :, :, ks)[a]) / count(a))
     end
-    inner = c.closure isa IsentropicDiffusion ? c.closure.inner : c.closure
+    inner = sgs_base_closure(c.closure)
     sd = inner isa LagrangianDynamicSmagorinsky && inner.scale_dependent
     βl(ks) = sd ? lvl(inner.beta, ks; f = log2, inv = exp2) : NaN
     return (canopy = lvl(Cs, 1:kr), free = lvl(Cs, kr+2:ksp),
@@ -308,7 +454,8 @@ function report(c::SGSDynamic, case)
                  name, p.canopy, p.free)
     c.opts.scale_dependent &&
         (s *= @sprintf("; β canopy %.3f, free stream %.3f", p.β_canopy, p.β_free))
-    return s
+    r = sgs_stability_report(c.closure, case)
+    return r === nothing ? s : string(s, "; ", r)
 end
 
 smoke_variants(::Type{<:SGSDynamic}) =
@@ -323,7 +470,7 @@ function smoke_check(c::SGSDynamic, case)
                   all(x -> 0 <= x <= c.opts.cs_max^2, c.ws.cs2),
               "ν_t ≥ 0 (no backscatter)" => minimum(interior_view(case.sim.νt)) >= 0,
               "ν_t = 0 in the buildings" => all(==(0), interior_view(case.sim.νt)[solid])]
-    inner = c.closure isa IsentropicDiffusion ? c.closure.inner : c.closure
+    inner = sgs_base_closure(c.closure)
     if inner isa LagrangianDynamicSmagorinsky
         push!(checks, "Lagrangian memory I_LM ≥ 0, I_MM ≥ 0" =>
                           minimum(inner.I_LM) >= 0 && minimum(inner.I_MM) >= 0)
@@ -337,8 +484,9 @@ function smoke_check(c::SGSDynamic, case)
                               all(==(0), inner.I_QN[solid]))
         end
     end
-    append!(checks, sgs_stress_checks(c.stress, case))
+    append!(checks, sgs_stress_checks(c.stress, case, c.closure))
     append!(checks, sgs_scalar_checks(c.closure, case))
+    append!(checks, sgs_stability_checks(c.closure, case))
     return checks
 end
 
@@ -355,19 +503,19 @@ struct SGSMLSGS{M, C} <: AbstractCoupling
     ml::M
     C_s::Float64
     stress::Symbol
-    closure::C                 # ml, or ml wrapped for scalar_tensor = :isentropic
+    closure::C                 # ml, stability-corrected and/or wrapped for scalar_tensor = :isentropic
 end
 coupling_name(::Type{<:SGSMLSGS}) = :sgs_mlsgs
 slot(::Type{<:SGSMLSGS}) = :sgs
 provider(::Type{<:SGSMLSGS}) = :mlsgs
 is_default(::Type{<:SGSMLSGS}) = false
-modules_used(::Type{<:SGSMLSGS}) = (:ML,)
+modules_used(::Type{<:SGSMLSGS}) = (:ML, :TurbulenceStability)
 default_options(::Type{<:SGSMLSGS}) = (fn = nothing, SGS_STRESS_DEFAULT..., SGS_SCALAR_DEFAULT...)
 function build(::Type{<:SGSMLSGS}, case, o)
     C_s = case.cfg.C_s
     fn = o.fn === nothing ? ((νt, u, v, w, m) -> compute_smagorinsky_νt!(νt, u, v, w, C_s)) : o.fn
     ml = MLSGS(fn)
-    return SGSMLSGS(ml, C_s, o.stress, sgs_scalar_closure(ml, o, case))
+    return SGSMLSGS(ml, C_s, o.stress, sgs_provider_closure(ml, o, case))
 end
 
 step_options(c::SGSMLSGS, case) = sgs_step_options(c.closure, c.stress)
@@ -384,7 +532,8 @@ function smoke_check(c::SGSMLSGS, case)
     return ["MLSGS ν_t ≥ 0" => minimum(interior_view(sim.νt)) >= 0,
             "default MLSGS(Smagorinsky) ν_t == the built-in ν_t (bitwise)" =>
                 c.ml.fn isa Function && interior_view(a) == interior_view(b),
-            sgs_stress_checks(c.stress, case)..., sgs_scalar_checks(c.closure, case)...]
+            sgs_stress_checks(c.stress, case, c.closure)..., sgs_scalar_checks(c.closure, case)...,
+            sgs_stability_checks(c.closure, case)...]
 end
 
 register!(SGSSmagorinsky)

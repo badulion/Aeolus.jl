@@ -197,6 +197,9 @@ export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain
        lumley_invariants, apriori_metrics, dissipation_matched_cs
 # Era VI (P59-b, #184): the σ-model closure
 export SigmaModel, compute_sigma_νt!
+# Era VI (P55-e, #187): the stability-corrected anisotropic closure
+export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
+       sgs_stratification!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!

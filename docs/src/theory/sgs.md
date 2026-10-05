@@ -368,6 +368,109 @@ explicit advective limit the IMEX step runs at.
 | n = ẑ vs diagonal operator | K 4.7e-16 m²/s, tendency 4.5e-16 |
 | tensor closure under `step!` / `step_imex!` (ARK2, diag implicit + cross explicit) | 3.2e-15 / 8.2e-15 from the exact split amplification factor (dropping the cross part would give 0.00129 instead of 0.04702) |
 
+## Stability correction
+
+P55-e (#187) is the one stability-corrected closure of Era VI (the
+"stratification-dependent anisotropic" closure of P55 merged with the
+former "buoyancy-aware Smagorinsky" of P58). The constant-``C_s`` closure
+mixes at the same rate whatever the stratification: it keeps mixing where
+``Ri \gg 1/4``, damps internal gravity waves and keeps a stable boundary
+layer artificially turbulent. `StabilityCorrected(base, mesh; scheme,
+length_scales)` (`src/operators/sgs_stability.jl`) wraps any
+eddy-viscosity closure (`StaticSmagorinsky`, `DynamicSmagorinsky`,
+`FunctionSGS`, `ML.MLSGS`, …) and returns four coefficients:
+
+```math
+\nu_h = \nu_{base}\,\ell_h, \qquad
+\nu_v = \nu_{base}\,\ell_v\,f_m(Ri), \qquad
+\kappa_h = \frac{\nu_{base}\,\ell_h}{Pr_t}, \qquad
+\kappa_v = \frac{\nu_{base}\,\ell_v\,f_h(Ri)}{Pr_t}.
+```
+
+* ``Ri = N^2/\max(|S|^2, S^2_{min})`` is the gradient Richardson number of
+  `gradient_richardson!` with the strain ``|S|^2 = 2S_{ij}S_{ij}`` the
+  Smagorinsky closure sees, and ``N^2`` from `buoyancy_frequency_squared!`
+  (of ``\theta_v`` when a humidity is known; about the core's own
+  reference, ``\theta_0`` on the Boussinesq core and ``\bar\theta(z)`` on
+  the anelastic / pseudo-incompressible cores).
+* ``f_m, f_h`` are the stability functions of the TurbulenceStability
+  contract (P58-a; [theory](turbulence_stability.md)); nothing is redefined
+  here. The default is Brown, Derbyshire & Mason (1994) (the LEM/MONC
+  functions: ``(1 - Ri/Ri_c)^4`` with ``Ri_c = 1/4`` in stable air,
+  enhanced ``\sqrt{1 - cRi}`` mixing in unstable air); `LillyCutoff()` is
+  Lilly (1962) / Mason (1989). Both are 1 at ``Ri = 0``, so the correction
+  leaves a neutral flow alone, and the neutral ``Pr_t`` is the base
+  closure's.
+* **Anisotropic length scales** (`length_scales = :anisotropic`, the
+  default). The filter width of the horizontal coefficients is
+  ``\Delta_h = \sqrt{\Delta x\,\Delta y}`` and of the vertical ones
+  ``\Delta_v = \Delta z`` (Bryan & Fritsch 2002, CM1) instead of
+  ``\Delta = (\Delta x\Delta y\Delta z)^{1/3}``. For ``\nu \propto \Delta^2``
+  this is the factor ``\ell_h = (\Delta_h/\Delta)^2``,
+  ``\ell_v = (\Delta_v/\Delta)^2`` — on the Berlin grid
+  (``\Delta x/\Delta z = 2.5``) 1.842 and 0.2947. On cubic cells both are
+  exactly 1.
+* **Horizontal coefficients keep no stability factor.** ``\nu_h`` and
+  ``\kappa_h`` are the base values (with ``\ell_h``): the correction
+  targets the vertical exchange that the stratification suppresses. The
+  horizontal part of the SGS damping of a gravity wave therefore remains
+  (see the numbers below).
+* **Dynamic bases.** A coefficient from the Germano identity already sees
+  the damping of the resolved motion by the stratification, so a second
+  ``f_m`` would count it twice. For `dynamic_sgs_coefficient(base) = true`
+  the momentum gets no factor (``\nu_v = \nu_{base}\ell_v``) and only the
+  scalar is corrected, through ``Pr_t(Ri) = Pr_t f_m/f_h``:
+  ``\kappa_v = \nu_{base}\ell_v (f_h/f_m)/Pr_t`` (0 where ``f_m = 0``).
+* **Not every closure is wrapped.** A closure with its own buoyancy term
+  (the anisotropic minimum-dissipation model, P55-d) or its own length
+  scale (prognostic TKE, P56-b) already accounts for the stratification;
+  the constructor accepts eddy-viscosity closures only.
+
+The four fields reach every core through the contract defaults: the
+stress form ``\partial_j(2\nu_{ij}S_{ij})`` with ``\nu_h, \nu_v`` (P55-b,
+`sgs_stress = :symmetric`; the Laplacian form uses ``\nu_h`` only) and the
+diagonal scalar operator with ``\kappa_h, \kappa_v`` (P55-c), explicit or —
+under `step_imex!` — in the implicit operator. The scalar tendency keeps
+the base closure's order of operations,
+``(1/Pr_t)\,\partial_j(a_j\,\partial_j\phi)``, so with ``N^2 = 0`` and
+``\ell_h = \ell_v = 1`` the wrapper is the base closure **bit for bit**.
+`IsentropicDiffusion(StabilityCorrected(base, mesh), mesh)` gives the
+rotated tensor the corrected ``\kappa_v`` across the isentropes.
+
+Measured (`test/era6_stratified_sgs.jl`):
+
+| test | result |
+| :-- | :-- |
+| ``N^2 = 0``: coefficients, tendencies (both stress forms), `step!`, `step_rk3!`, `step_imex!`, `step_adaptive!`, anelastic `step!` | `==` the base closure (Static and Dynamic Smagorinsky) |
+| ``u = Sz``, ``\theta = \theta_0 + \Gamma z``, ``Ri \in \{-0.5, 0, 0.1, 0.2, 0.25, 0.5, 5\}`` (Brown) | worst relative error of ``\nu_h, \nu_v, \kappa_h, \kappa_v`` 6.1e-14; ``\nu_v = \kappa_v = 0`` for ``Ri > Ri_c``; ``\nu_h`` independent of ``Ri`` to ≤ 1e-14 |
+| same, `LillyCutoff` | to 1e-12; at ``Ri = Ri_c`` exactly the discrete ``Ri`` is 0.25 − O(1e-13) and ``f = \sqrt{\delta/Ri_c}`` ≈ 1e-6 (the √ singularity of P58-a) |
+| anelastic core, ``N^2 = (g/\bar\theta(z))\,\Gamma`` | to 1e-12 |
+| standing internal wave, ``N = 0.01`` s⁻¹, 32 × 4 × 32, ``\Delta x/\Delta z = 2``, steepness 0.05, min ``Ri`` = 256 | ``\omega`` within 0.46 % of ``N k_x/|k|``; energy decay over 5 periods 0.62 % more than ``C_s = 0`` (uncorrected: 0.82 %; ``\nu_v \equiv 0``, the rest is the retained ``\nu_h, \kappa_h``) |
+| breaking wave, steepness 0.3 / 1.5 | ``\nu_v \equiv 0`` for 3 periods / ``\nu_v > 0`` from the first step; wave energy −23.4 % in 3 periods (−5.5 % without SGS) |
+| Σθ dV, no-flux walls, 200 steps of the corrected scalar flux | drift 4.4e-15; θ variance non-increasing at every step |
+| surface-cooled column, ``Ri \gg Ri_c`` | θ-flux divergence exactly 0 in the 22 interior levels (uncorrected: 1.1e-3 K/s) |
+| the correction's θ change, `step_imex!` vs `step!` | relative mismatch 3.8e-3 (dt = 0.1 s), 1.5e-3 (dt = 0.05 s) |
+
+Two expectations of the issue proved wrong, not the code: the breaking
+wave loses 23.4 %, not "more than 30 %", of its energy in 3 periods at
+this resolution with ``C_s = 0.17`` (the test asserts > 20 % and more than
+3× the resolved loss); and the Berlin smoke check "``\nu_v = \nu_h`` where
+``Ri \le 0``" ignores both the anisotropic length scales and the
+unstable-side enhancement of Brown et al. (``f_m > 1``), so the check is
+``\nu_v \ge \nu_h\,\ell_v/\ell_h`` there (and ``\le`` where ``Ri \ge 0``).
+
+**Cost** (64 × 64 × 32, one `compute_sgs!`, single thread, machine under
+load): 4.5 ms against 1.0 ms for `StaticSmagorinsky` on a random field;
+4.8 ms (minimum; median 8.5 ms) against 1.1 ms on the Berlin flagship state
+after 300 s, where a dynamics step takes about 98 ms and the closure is
+evaluated twice per step (CFL estimate and step), so about +8 %. The extra
+work is the strain of ``Ri`` (`gradient_richardson!` evaluates it a second
+time, 1.2 ms), the stability functions per cell (1.4–1.8 ms; the Float64
+``x^4`` and the branches of the Brown functions) and two more halo fills.
+The bare closure (`sgs_stability = :none` in the Berlin case) reproduces the
+pre-P55-e run bit for bit (100 nominal smoke steps, 59 adaptive steps:
+every prognostic field, the tracers and the surface temperatures `==`).
+
 ## Choice of coefficients
 ## Choice of coefficients
 
@@ -1189,18 +1292,22 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
     (measured slope 2.955).
   * The constant coefficient is too dissipative in transitional / stably
     stratified regimes. The dynamic coefficient and the σ-model, which is
-    zero in laminar shear and in 2-D flow, are the alternatives.
+    zero in laminar shear and in 2-D flow, are the alternatives; in stable
+    stratification the Richardson-number reduction of
+    [Stability correction](#Stability-correction) (P55-e) applies to the
+    Smagorinsky, dynamic and MLSGS closures, on by default for those
+    providers in the Berlin case.
   * The σ-model costs about 8 times the Smagorinsky kernel (6.7 against
     0.85 ms on 64×64×32). It is zero only in *exactly* laminar
     (parallel, 2-D, pure-strain) flow; a laminar but weakly 3-D free
     stream gets a small ``ν_t`` (Berlin, sponge relaxing to zero: 2.7 % of
     Smagorinsky's above the sponge start), and in a weakly turbulent,
     nearly unsheared stream it can exceed Smagorinsky's (Berlin default:
-    1.7 ×, both small). It is not stability-aware.
-  * The **stability correction** for stably stratified flow
-    (Deardorff / Lilly closure with a Richardson-number reduction) is
-    not applied to the Smagorinsky closures; the prognostic TKE closure
-    (P56-b, above) has its own stability length.
+    1.7 ×, both small). It is not stability-aware by itself; it can be
+    wrapped in `StabilityCorrected` like any eddy-viscosity closure, but
+    the Berlin `:sigma` provider runs it unwrapped. The prognostic TKE
+    closure (P56-b, above) has its own stability length and is not
+    wrapped.
   * The SGS closure itself has no wall treatment: at a free-slip z-wall
     its flux through the wall face is zero. The wall stress — smooth
     (Spalding), rough (log law) or Monin–Obukhov — is supplied by the
@@ -1237,7 +1344,16 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
     stateful closure the commit contract is designed for).
   * Bryan, G. H. & Fritsch, J. M. (2002), *A benchmark simulation for moist
     nonhydrostatic numerical models*, Mon. Wea. Rev. 130, 2917 (CM1; the
-    ν_h / ν_v convention of the stress form).
+    ν_h / ν_v convention of the stress form and the anisotropic length
+    scales Δh = √(dx dy), Δv = dz of `StabilityCorrected`).
+  * Lilly, D. K. (1962), *On the numerical simulation of buoyant
+    convection*, Tellus 14, 148 (the Richardson-number reduction).
+  * Mason, P. J. (1989), *Large-eddy simulation of the convective
+    atmospheric boundary layer*, J. Atmos. Sci. 46, 1492.
+  * Brown, A. R., Derbyshire, S. H. & Mason, P. J. (1994), *Large-eddy
+    simulation of stable atmospheric boundary layers with a revised
+    stochastic subgrid model*, Q. J. R. Meteorol. Soc. 120, 1485 (the
+    default stability functions of `StabilityCorrected`).
   * Kosović, B. (1997), *Subgrid-scale modelling for the large-eddy
     simulation of high-Reynolds-number boundary layers*, J. Fluid Mech.
     336, 151.

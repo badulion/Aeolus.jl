@@ -987,12 +987,20 @@ end
 #
 # Kept separate from the kernel above so the unmasked, unweighted path stays
 # bit for bit what it was.
+#
+# `Kh` on the x and y faces, `Kv` on the z faces (the diagonal operator of
+# P55-c with a mask; a stability-corrected closure's κh ≠ κv, P55-e). With
+# Kh === Kv (the one-coefficient method) the arithmetic is unchanged.
+_add_eddy_diffusion_scalar_masked!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
+                                   K::Field{CellCenter}, g::RegularGrid, mask, wc, wf) =
+    _add_eddy_diffusion_scalar_masked!(tϕ, ϕ, K, K, g, mask, wc, wf)
+
 function _add_eddy_diffusion_scalar_masked!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
-                                             K::Field{CellCenter}, g::RegularGrid,
-                                             mask, wc, wf)
+                                             Kh::Field{CellCenter}, Kv::Field{CellCenter},
+                                             g::RegularGrid, mask, wc, wf)
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
     ii, jj, kk = interior(g)
-    Kd = K.data; ϕd = ϕ.data
+    Kd = Kh.data; Vd = Kv.data; ϕd = ϕ.data
     T = eltype(ϕd)
     @inbounds for k in kk, j in jj, i in ii
         # branchless: each face flux times its openness (1 or 0), the cell's
@@ -1006,8 +1014,8 @@ function _add_eddy_diffusion_scalar_masked!(tϕ::Field{CellCenter}, ϕ::Field{Ce
         fxW = oW * (0.5 * (Kd[i-1,j,k] + Kd[i,j,k])   * (ϕd[i,  j,k] - ϕd[i-1,j,k]) * idx)
         fyN = oN * (0.5 * (Kd[i,j,k]   + Kd[i,j+1,k]) * (ϕd[i,j+1,k] - ϕd[i,j,  k]) * idy)
         fyS = oS * (0.5 * (Kd[i,j-1,k] + Kd[i,j,k])   * (ϕd[i,j,  k] - ϕd[i,j-1,k]) * idy)
-        fzT = oT * (0.5 * (Kd[i,j,k]   + Kd[i,j,k+1]) * (ϕd[i,j,k+1] - ϕd[i,j,k  ]) * idz)
-        fzB = oB * (0.5 * (Kd[i,j,k-1] + Kd[i,j,k])   * (ϕd[i,j,k  ] - ϕd[i,j,k-1]) * idz)
+        fzT = oT * (0.5 * (Vd[i,j,k]   + Vd[i,j,k+1]) * (ϕd[i,j,k+1] - ϕd[i,j,k  ]) * idz)
+        fzB = oB * (0.5 * (Vd[i,j,k-1] + Vd[i,j,k])   * (ϕd[i,j,k  ] - ϕd[i,j,k-1]) * idz)
 
         vert = _vertical_divergence(fzT, fzB, idz, wc, wf, k)
         tϕ.data[i,j,k] += (fxE - fxW)*idx + (fyN - fyS)*idy + vert
