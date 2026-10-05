@@ -335,6 +335,14 @@ end
             @info @sprintf("  AMD per-scalar κ of %-3s vs θ's κ_t (same state, fluid): Σ|Δκ|/Σκ_t %.0f %%, max %.2f vs %.2f m²/s",
                            s, 100rel, maximum(v), maximum(κθ))
         end
+        # ql is zero in this dry smoke state: AMD's zero-gradient fallback
+        # gives it κ = ν_t/Pr_t (= 3ν_t) in every fluid cell, above θ's κ_t
+        ql = view(BC.tracer(am, :ql).data, I...)[fluid]
+        νf = view(f.νh.data, I...)[fluid]
+        κql = view(κown[:ql].data, I...)[fluid]
+        @info @sprintf("  ql: max %.1e kg/kg; its AMD κ / (ν_t/Pr_t) in [%.3f, %.3f] where ν_t > 0, Pr_t = %.3f",
+                       maximum(abs, ql), extrema(κql[νf .> 0] ./ νf[νf .> 0])..., sim.Pr_t)
+        maximum(abs, ql) == 0 && @test κql ≈ νf ./ sim.Pr_t
         # the alternative is not vacuous: it would split θ from qv and NO from NO₂
         @test view(κown[:qv].data, I...)[fluid] != κθ
         @test view(κown[:NO].data, I...)[fluid] != view(κown[:NO2].data, I...)[fluid]
