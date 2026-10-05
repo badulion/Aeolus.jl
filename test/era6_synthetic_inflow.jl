@@ -257,10 +257,101 @@ end
     @test_throws DimensionMismatch unit_fluctuations!(zeros(3, 3), zeros(3, 3), zeros(3, 3), g1, 0.1)
     @test_throws ArgumentError DigitalFilterGenerator(8, 8, 1.0, 1.0; L_s = 2.0, L_z = 2.0, T = 0.0)
 
+    # FreeStreamInflow: the clock is the state
+    fi = FreeStreamInflow(FreeStreamDisturbance(0.05, 1.0, 100; seed = 3), 8, 6, 0.25, 0.25)
+    fj = FreeStreamInflow(FreeStreamDisturbance(0.05, 1.0, 100; seed = 3), 8, 6, 0.25, 0.25)
+    a1, a2 = (zeros(8, 6), zeros(8, 6), zeros(8, 6)), (zeros(8, 6), zeros(8, 6), zeros(8, 6))
+    unit_fluctuations!(a1..., fi, 0.1); unit_fluctuations!(a2..., fj, 0.1)
+    s = generator_state(fi); unit_fluctuations!(a1..., fi, 0.5); restore_generator_state!(fi, s)
+    unit_fluctuations!(a1..., fi, 0.2); unit_fluctuations!(a2..., fj, 0.2)
+    @test all(a1[c] == a2[c] for c in 1:3)
+
     # cost of one generator step on a 64 × 40 face (quoted, not asserted)
     gc = DigitalFilterGenerator(64, 40, 15.625, 6.25; L_s = 62.5, L_z = 25.0, T = 30.0, seed = 1)
     pc = (zeros(64, 40), zeros(64, 40), zeros(64, 40))
     unit_fluctuations!(pc..., gc, 1.0)
     t = @elapsed for _ in 1:200; unit_fluctuations!(pc..., gc, 1.0); end
     @printf("    DF cost: %.3f ms per step on a 64 × 40 face (L_s = 4Δs, L_z = 4Δz)\n", 1e3t / 200)
+end
+
+@testset "N-inflow-a FreeStreamDisturbance as a provider" begin
+    Tu, L = 0.05, 1.0
+    # the continuous mode sum agrees with the staggered grid curl to O((κΔ)²)
+    fst = FreeStreamDisturbance(Tu, L, 200; seed = 4)
+    g = RegularGrid(size = (4, 4, 4), extent = (4 / 64, 4 / 64, 4 / 64), halo = (1, 1, 1))
+    u = Field(FaceX(), g); v = Field(FaceY(), g); w = Field(FaceZ(), g)
+    disturbance_velocity!(u, v, w, fst)
+    i = j = k = 3
+    xu = g.x0 + (i - g.Hx - 1) * g.dx; yc = g.y0 + (j - g.Hy - 0.5) * g.dy; zc = g.z0 + (k - g.Hz - 0.5) * g.dz
+    @test abs(u.data[i, j, k] - disturbance_velocity(fst, xu, yc, zc)[1]) < 0.02 * Tu
+    C = disturbance_covariance(fst)
+    @test 0.5 * (C[1, 1] + C[2, 2] + C[3, 3]) ≈ 1.5 * Tu^2 rtol = 1e-12        # ½ tr C = q
+
+    # one-point statistics over a long sweep: whitened planes, then the
+    # Panofsky-Dutton tensor through apply_lund!
+    ns = nz = 32; Δ = 0.25; Δt = 0.25; nsteps = 2000; nb = 10
+    fst = FreeStreamDisturbance(Tu, L, 400; seed = 1)
+    gen = FreeStreamInflow(fst, ns, nz, Δ, Δ)
+    R = _pd_tensor(0.3); a = lund_coefficients(R)
+    p = (zeros(ns, nz), zeros(ns, nz), zeros(ns, nz))
+    Cb = [zeros(3, 3) for _ in 1:nb]; Cu = zeros(3, 3); mu = zeros(3)
+    for n in 1:nsteps
+        unit_fluctuations!(p..., gen, Δt)
+        for c in 1:3
+            mu[c] += sum(p[c])
+            for d in 1:3
+                Cu[c, d] += sum(p[c] .* p[d])
+            end
+        end
+        apply_lund!(p..., a)
+        bb = cld(n * nb, nsteps)
+        for c in 1:3, d in 1:3
+            Cb[bb][c, d] += sum(p[c] .* p[d]) / (ns * nz * nsteps / nb)
+        end
+    end
+    Nt = ns * nz * nsteps
+    mu ./= Nt; Cu ./= Nt
+    Cr = sum(Cb) ./ nb
+    rel = [Cr[1, 1] / R[1, 1], Cr[2, 2] / R[2, 2], Cr[3, 3] / R[3, 3], Cr[1, 3] / R[1, 3]] .- 1
+    # batch-means standard error of each ratio (10 consecutive blocks)
+    se = map(((1, 1), (2, 2), (3, 3), (1, 3))) do (c, d)
+        x = [Cb[b][c, d] / R[c, d] for b in 1:nb]
+        sqrt(sum(abs2, x .- sum(x) / nb) / (nb - 1) / nb)
+    end
+    @printf("    FSD provider: unit-plane mean (%.4f, %.4f, %.4f), var (%.4f, %.4f, %.4f), cross (%.4f, %.4f, %.4f)\n",
+            mu..., Cu[1, 1], Cu[2, 2], Cu[3, 3], Cu[1, 2], Cu[1, 3], Cu[2, 3])
+    @printf("    FSD provider + Lund: R_11, R_22, R_33, u'w' deviations %.2f/%.2f/%.2f/%.2f %% (batch s.e. %.2f/%.2f/%.2f/%.2f %%)\n",
+            100 .* rel..., 100 .* se...)
+    @test all(abs.(rel) .< 0.05)
+    @test all(0.05 .>= 3 .* se)
+    @test maximum(abs, Cu .- [1.0 0 0; 0 1 0; 0 0 1]) < 0.05
+
+    # L11 from the plane time series (Taylor: r = U∞ τ), as an ensemble over
+    # mode sets. One realisation's L11 scatters with its random directions
+    # (cf. P59-d: 0.82-1.43 L over 16 seeds with 400 modes), and the
+    # correlation of the κ-band-limited von Kármán set first crosses zero
+    # only at r ≈ 8.5 L (shell-averaged f(r)), so a short record or a
+    # per-seed zero crossing is dominated by noise. Hence: 2000 modes,
+    # records of 1600 L, 80 seeds; the seed-averaged correlation is
+    # integrated to its first zero crossing, and the standard error is that
+    # of the per-seed integrals to the same cutoff.
+    nseed = 80; dt = 0.25; nst = 6400; M = 48           # lags to 12 L
+    F = map(1:nseed) do s
+        gi = FreeStreamInflow(FreeStreamDisturbance(Tu, L, 2000; seed = s), 2, 2, 0.25, 0.25)
+        q = (zeros(2, 2), zeros(2, 2), zeros(2, 2))
+        ser = zeros(4, nst)
+        for n in 1:nst
+            unit_fluctuations!(q..., gi, dt); ser[:, n] .= vec(q[1])
+        end
+        [sum(view(ser, :, 1:(nst-m)) .* view(ser, :, (1+m):nst)) / (4 * (nst - m)) for m in 0:M]
+    end
+    fbar = sum(F) ./ nseed; fbar ./= fbar[1]
+    iz = something(findfirst(<(0), fbar), M + 2)
+    L11m = fst.U∞ * dt * (sum(fbar[1:iz-1]) - 0.5)
+    Is = [fst.U∞ * dt * (sum(f[1:iz-1]) / f[1] - 0.5) for f in F]
+    sem = sqrt(sum(abs2, Is .- sum(Is) / nseed) / (nseed - 1) / nseed)
+    @printf("    FSD provider: L11 (seed-averaged correlation, 80 × 2000 modes, zero crossing at %.2f L) = %.3f ± %.3f (requested %.3f); per-seed %.3f-%.3f\n",
+            (iz - 1) * dt, L11m, sem, L, minimum(Is), maximum(Is))
+    @test 0.05 >= 3sem
+    @test abs(L11m / L - 1) < 0.05
 end

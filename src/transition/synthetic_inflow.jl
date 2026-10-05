@@ -436,3 +436,143 @@ function restore_generator_state!(gen::DigitalFilterGenerator, s)
     copy!(gen.rng, s.rng)
     return gen
 end
+
+# =========================================================================
+# FreeStreamDisturbance as a second provider
+# =========================================================================
+
+"""
+    disturbance_velocity(fst::FreeStreamDisturbance, x, y, z) -> (u, v, w)
+
+The continuous random-mode velocity of `fst` at a point,
+``u'(x) = \\sum_n A_nσ_n\\cos(k_n·x + φ_n)`` — the field whose staggered,
+divergence-free grid version [`disturbance_velocity!`](@ref) samples
+(the two agree to ``O((κΔ)^2)``). Used on inflow planes by
+[`FreeStreamInflow`](@ref), where the discrete curl's ``\\mathrm{sinc}``
+attenuation would bias the variance.
+"""
+function disturbance_velocity(fst::FreeStreamDisturbance, x::Real, y::Real, z::Real)
+    u = v = w = 0.0
+    @inbounds for m in axes(fst.k, 2)
+        c = fst.A[m] * cos(fst.k[1, m] * x + fst.k[2, m] * y + fst.k[3, m] * z + fst.φ[m])
+        u += c * fst.σ[1, m]; v += c * fst.σ[2, m]; w += c * fst.σ[3, m]
+    end
+    return u, v, w
+end
+
+"""
+    disturbance_covariance(fst::FreeStreamDisturbance) -> C::Matrix{Float64}
+
+The exact one-point covariance of the mode set,
+``C_{ij} = \\sum_n \\tfrac12 A_n^2 σ_{n,i}σ_{n,j}`` (the space average of
+``u'_iu'_j`` for distinct wavevectors); ``\\tfrac12\\operatorname{tr}C = q``.
+A finite mode set is only approximately isotropic: the diagonal scatters
+around ``(Tu\\,U_∞)^2`` and the off-diagonals around 0 by
+``O(n_{\\rm modes}^{-1/2})``.
+"""
+function disturbance_covariance(fst::FreeStreamDisturbance)
+    C = zeros(3, 3)
+    for m in eachindex(fst.A), j in 1:3, i in 1:3
+        C[i, j] += 0.5 * fst.A[m]^2 * fst.σ[i, m] * fst.σ[j, m]
+    end
+    return C
+end
+
+"""
+    FreeStreamInflow(fst::FreeStreamDisturbance, ns, nz, Δs, Δz;
+                     origin = (0, 0), x = 0, t = 0)
+
+[`FreeStreamDisturbance`](@ref) as an [`AbstractInflowGenerator`](@ref):
+the frozen random-mode field advected at `fst.U∞` (Taylor) through an
+inflow plane at `x`, with plane points ``s_j = s_0 + (j - ½)Δs``,
+``z_k = z_0 + (k - ½)Δz`` (`origin = (s_0, z_0)`; ``s`` is the ``y`` of the
+mode set). Each step evaluates the continuous mode sum
+([`disturbance_velocity`](@ref)) at ``x - U_∞t`` and whitens it with the
+Cholesky factor of the exact mode-set covariance
+([`disturbance_covariance`](@ref), [`lund_coefficients`](@ref)):
+``ũ = a^{-1}u'``. The planes are then exactly zero-mean, unit-variance and
+uncorrelated over a long sweep, whatever the anisotropy of the finite
+mode set; since ``a`` is lower triangular, ``ũ`` is ``u'`` rescaled, so its
+longitudinal integral scale is that of `fst` (``L_{11}``). Requires
+`Tu > 0` and `U∞ > 0`. The state is the clock `t`. Unlike
+[`DigitalFilterGenerator`](@ref) it is isotropic with a single scale.
+"""
+mutable struct FreeStreamInflow <: AbstractInflowGenerator
+    fst::FreeStreamDisturbance
+    ns::Int
+    nz::Int
+    s::Vector{Float64}
+    z::Vector{Float64}
+    x::Float64
+    t::Float64
+    ainv::Matrix{Float64}            # whitening a⁻¹ (lower triangular)
+    ey::Matrix{ComplexF64}           # cis(k_y s_j) per mode, ns × nmodes
+    ez::Matrix{ComplexF64}           # cis(k_z z_k) per mode, nz × nmodes
+    snapt::Float64
+end
+
+# Inverse of a non-singular lower-triangular 3 × 3 matrix (forward substitution).
+function _lower_inverse(a)
+    all(>(0), (a[1, 1], a[2, 2], a[3, 3])) ||
+        throw(ArgumentError("FreeStreamInflow: the mode-set covariance is singular"))
+    b = zeros(3, 3)
+    for j in 1:3
+        for i in j:3
+            s = i == j ? 1.0 : 0.0
+            for m in j:(i-1)
+                s -= a[i, m] * b[m, j]
+            end
+            b[i, j] = s / a[i, i]
+        end
+    end
+    return b
+end
+
+function FreeStreamInflow(fst::FreeStreamDisturbance, ns::Integer, nz::Integer,
+                          Δs::Real, Δz::Real; origin = (0.0, 0.0), x::Real = 0.0,
+                          t::Real = 0.0)
+    fst.Tu > 0 && fst.U∞ > 0 ||
+        throw(ArgumentError("FreeStreamInflow: need Tu > 0 and U∞ > 0 (unit fluctuations of a zero field)"))
+    s = [origin[1] + (j - 0.5) * Δs for j in 1:ns]
+    z = [origin[2] + (k - 0.5) * Δz for k in 1:nz]
+    a = lund_coefficients(disturbance_covariance(fst))
+    nm = length(fst.A)
+    ey = [cis(fst.k[2, m] * s[j]) for j in 1:ns, m in 1:nm]
+    ez = [cis(fst.k[3, m] * z[k]) for k in 1:nz, m in 1:nm]
+    return FreeStreamInflow(fst, ns, nz, s, z, Float64(x), Float64(t), _lower_inverse(a), ey, ez,
+                            Float64(t))
+end
+
+function unit_fluctuations!(ũ::AbstractMatrix, ṽ::AbstractMatrix, w̃::AbstractMatrix,
+                            gen::FreeStreamInflow, Δt::Real)
+    _check_planes(gen, ũ, ṽ, w̃)
+    Δt >= 0 || throw(ArgumentError("unit_fluctuations!: Δt must be ≥ 0"))
+    gen.t += Δt
+    fst = gen.fst
+    fill!(ũ, 0); fill!(ṽ, 0); fill!(w̃, 0)
+    xs = gen.x - fst.U∞ * gen.t
+    # Σ_m A_m σ_m Re[e^{i(k_x x + φ)} e^{i k_y s} e^{i k_z z}], separable in s and z
+    @inbounds for m in eachindex(fst.A)
+        ex = fst.A[m] * cis(fst.k[1, m] * xs + fst.φ[m])
+        σ1, σ2, σ3 = fst.σ[1, m], fst.σ[2, m], fst.σ[3, m]
+        for k in 1:gen.nz
+            exz = ex * gen.ez[k, m]
+            for j in 1:gen.ns
+                c = real(exz * gen.ey[j, m])
+                ũ[j, k] += c * σ1; ṽ[j, k] += c * σ2; w̃[j, k] += c * σ3
+            end
+        end
+    end
+    # whiten: ũ ← a⁻¹ u′ (lower triangular, in place)
+    A = gen.ainv
+    @inbounds for k in 1:gen.nz, j in 1:gen.ns
+        u, v, w = ũ[j, k], ṽ[j, k], w̃[j, k]
+        ũ[j, k] = A[1, 1] * u
+        ṽ[j, k] = A[2, 1] * u + A[2, 2] * v
+        w̃[j, k] = A[3, 1] * u + A[3, 2] * v + A[3, 3] * w
+    end
+    return ũ, ṽ, w̃
+end
+
+generator_state(gen::FreeStreamInflow) = (gen.snapt = gen.t; (t = gen.snapt,))
+restore_generator_state!(gen::FreeStreamInflow, s) = (gen.t = s.t; gen)

@@ -90,7 +90,8 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
        disturbance_fringe_update
 # N-inflow-a (#252): synthetic inflow turbulence (digital filter, Lund transform)
 export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_generator_state!,
-       inflow_plane_size, lund_coefficients, apply_lund!, DigitalFilterGenerator, digital_filter_kernel
+       inflow_plane_size, DigitalFilterGenerator, digital_filter_kernel, lund_coefficients, apply_lund!,
+       FreeStreamInflow, disturbance_velocity, disturbance_covariance
 # P59-e (#195): relaminarisation in strongly stable stratification
 export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
 

@@ -997,7 +997,8 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
 # the Xie & Castro (2008) digital filter, the Lund (1998) transform, and
 # FreeStreamDisturbance as a second provider.
 export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_generator_state!,
-       inflow_plane_size, lund_coefficients, apply_lund!, DigitalFilterGenerator, digital_filter_kernel
+       inflow_plane_size, DigitalFilterGenerator, digital_filter_kernel, lund_coefficients,
+       apply_lund!, FreeStreamInflow, disturbance_velocity, disturbance_covariance
 # Phase 57 — wall models (#169): equilibrium wall laws and the implicit
 # wall-stress operator. `friction_velocity` / `wall_stress` do not collide
 # with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
