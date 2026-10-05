@@ -7,7 +7,7 @@ using Test, Printf, Random
 using Aeolus
 using Aeolus.Fields: interior_view
 using LinearAlgebra: eigvals, Symmetric
-eigvals_sym(R) = eigvals(Symmetric([R[1] R[4] R[5]; R[4] R[2] R[6]; R[5] R[6] R[3]]))
+_ib_eigvals(R) = eigvals(Symmetric([R[1] R[4] R[5]; R[4] R[2] R[6]; R[5] R[6] R[3]]))
 
 @testset "N-inflow-b sgs_tke!: every closure's subgrid TKE" begin
     m = RegularGrid(; size = (8, 8, 8), extent = (80.0, 80.0, 40.0), halo = (3, 3, 3))
@@ -44,22 +44,22 @@ eigvals_sym(R) = eigvals(Symmetric([R[1] R[4] R[5]; R[4] R[2] R[6]; R[5] R[6] R[
 end
 
 # a fully periodic parent on unit spacing
-function _parent(Nx, Ny, Nz; Δ = 1.0, C_s = 0.0)
+function _ib_parent(Nx, Ny, Nz; Δ = 1.0, C_s = 0.0)
     m = RegularGrid(; size = (Nx, Ny, Nz), extent = (Nx * Δ, Ny * Δ, Nz * Δ), halo = (3, 3, 3))
     sim = BoussinesqSimulation(m; C_s = C_s,
                                bcs = FieldBoundaryConditions(:periodic, :periodic, :periodic))
     return m, sim
 end
-_yc(m) = [(j - 0.5) * m.dy for j in 1:m.Ny]
-_zc(m) = [(k - 0.5) * m.dz for k in 1:m.Nz]
+_ib_yc(m) = [(j - 0.5) * m.dy for j in 1:m.Ny]
+_ib_zc(m) = [(k - 0.5) * m.dz for k in 1:m.Nz]
 
 @testset "N-inflow-b analytic field: σ_u² = A²/4, u'w' = 0" begin
-    m, sim = _parent(8, 64, 4)
+    m, sim = _ib_parent(8, 64, 4)
     U, A, B = 5.0, 0.8, 0.3
     ky = 2π * 2 / m.Ly
     P = 120.0; ω = 2π / P; nper = 16
     src = ParentResolvedStatistics(sim; τ_avg = Inf, mode = :full)
-    y = _yc(m)
+    y = _ib_yc(m)
     for n in 0:3nper-1
         t = n * P / nper
         for j in 1:m.Ny
@@ -87,8 +87,8 @@ _zc(m) = [(k - 0.5) * m.dz for k in 1:m.Nz]
 end
 
 @testset "N-inflow-b running mean: e-folding = τ_avg" begin
-    m, sim = _parent(4, 8, 2)
-    ky = 2π / m.Ly; y = _yc(m)
+    m, sim = _ib_parent(4, 8, 2)
+    ky = 2π / m.Ly; y = _ib_yc(m)
     τ = 600.0
     for adaptive in (false, true)
         rng = Random.Xoshiro(3)
@@ -120,7 +120,7 @@ end
 end
 
 @testset "N-inflow-b SGS part: tr R^SGS = 2e, (2/3)e δ when S = 0" begin
-    m, sim = _parent(8, 8, 8; Δ = 10.0)
+    m, sim = _ib_parent(8, 8, 8; Δ = 10.0)
     rng = Random.Xoshiro(11)
     for f in (sim.u, sim.v, sim.w)
         interior_view(f) .= randn(rng, size(interior_view(f)))
@@ -149,8 +149,8 @@ end
 end
 
 @testset "N-inflow-b scale gap: band, refine → 1, laminar parent" begin
-    m, sim = _parent(8, 24, 4; Δ = 30.0)
-    y = _yc(m)
+    m, sim = _ib_parent(8, 24, 4; Δ = 30.0)
+    y = _ib_yc(m)
     A, Bm = 0.6, 1.1
     # λ = 3Δ is inside the gap (c_gap Δ/r, c_gap Δ] = (2Δ, 4Δ] for r = 2; λ = 8Δ is not
     k3 = 2π / (3m.dy); k8 = 2π / (8m.dy)
@@ -191,7 +191,7 @@ end
     # generator step (Δt = 1 s, U = 1 m/s, so x is Taylor-frozen time and
     # L_x = U T), with the Panofsky & Dutton neutral tensor imposed by Lund.
     Nx, Ny, Nz = 240, 64, 40
-    m, sim = _parent(Nx, Ny, Nz)
+    m, sim = _ib_parent(Nx, Ny, Nz)
     us = 0.3
     R = [(2.39us)^2 0 -us^2; 0 (1.92us)^2 0; -us^2 0 (1.25us)^2]
     a = lund_coefficients(R)
@@ -245,8 +245,8 @@ end
     # the nearest PSD tensor: eigenvalues 2.5, 1, -0.5 → 2.5, 1, ~0; change = 0.5
     @test ch ≈ 0.5 rtol = 1e-6
     # an SGS stress that is not realizable: strong laminar shear, tiny e
-    m, sim = _parent(4, 4, 8; Δ = 10.0)
-    zc = _zc(m)
+    m, sim = _ib_parent(4, 4, 8; Δ = 10.0)
+    zc = _ib_zc(m)
     for k in 1:m.Nz
         sim.u.data[:, :, m.Hz+k] .= 0.05 * zc[k]
     end
@@ -296,7 +296,7 @@ end
             Rs = inflow_stresses(pr, collect(range(0, 1.5zi; length = 301)), 0.0)
             @test isempty(inflow_projection_log(pr))
             @test all(R -> (lund_coefficients(R); true), Rs)
-            @test all(R -> minimum(eigvals_sym(R)) >= -1e-14 * (R[1] + R[2] + R[3]), Rs)
+            @test all(R -> minimum(_ib_eigvals(R)) >= -1e-14 * (R[1] + R[2] + R[3]), Rs)
         end
     end
     # the rotation keeps the trace and turns u'w' into the face frame
@@ -323,7 +323,7 @@ end
 end
 
 @testset "N-inflow-b region = :ring around the child footprint" begin
-    m, sim = _parent(16, 12, 3; Δ = 25.0)
+    m, sim = _ib_parent(16, 12, 3; Δ = 25.0)
     rng = Random.Xoshiro(21)
     for f in (sim.u, sim.v, sim.w)
         interior_view(f) .= randn(rng, size(interior_view(f)))
