@@ -151,11 +151,14 @@ boundary layer is meant to evolve under the prescribed advection.
   ``0.61 Δq\,θ ≈ 0.23`` K. That is 3 % of the 6.5 K θ range of the
   initial sounding. GABLS2's q (2.5 g/kg) is not carried either. GABLS4
   is dry by design.
-* **No subsidence in GABLS2.** `LargeScaleForcing` has no
-  state-dependent subsidence by design (its `AdvectiveTendencies`
-  docstring says so). The GABLS2 subsidence (−5 mm s⁻¹ at 1 km) only
-  starts at 40 h local time, after the first night that the SCM ranges
-  refer to. Adding it is a `src` change and is outside this issue.
+* **GABLS2 subsidence (since #248).** The case's subsidence
+  (−5 mm s⁻¹ at 1 km, ``w_s ∝ z`` below) starts at 40 h local time, after
+  the first night that the SCM ranges refer to. Until #248 it was not
+  applied, because `LargeScaleForcing` had no state-dependent
+  subsidence; `gabls2_case` now applies it to θ with
+  `LargeScaleForcing.Subsidence` (see
+  [Large-scale forcing](large_scale_forcing.md#GABLS2)). The first-night
+  numbers below are unaffected by it.
 * **Sources that were not accessible.** Bosveld et al. (2014b) and
   Svensson et al. (2011) were behind a publisher JavaScript challenge.
   The GABLS3 envelope therefore comes from the same LES ensemble as
