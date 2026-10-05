@@ -1001,6 +1001,11 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
 export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_generator_state!,
        inflow_plane_size, DigitalFilterGenerator, digital_filter_kernel, lund_coefficients,
        apply_lund!, FreeStreamInflow, disturbance_velocity, disturbance_covariance
+# N-inflow-b (#258) — statistics for the synthetic inflow: parent-resolved
+# (resolved + SGS, scale gap) and parametrized (Rotach et al. 1996 blend).
+export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statistics!,
+       inflow_projection_log, realizable_stress, inflow_lund_coefficients,
+       ParentResolvedStatistics, inflow_stress_parts
 # Phase 57 — wall models (#169): equilibrium wall laws and the implicit
 # wall-stress operator. `friction_velocity` / `wall_stress` do not collide
 # with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
