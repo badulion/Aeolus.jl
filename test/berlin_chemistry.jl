@@ -46,7 +46,7 @@ _aq_sums(c) = Dict(s => sum(BC._aq_sp(c, s)) for s in BC.AQ_SPECIES)
 
     @testset "initial state: photostationary at the start hour" begin
         NO, NO2, O3 = BC._aq_sp(c, :NO), BC._aq_sp(c, :NO2), BC._aq_sp(c, :O3)
-        @test c.J > 5e-3                                                   # noon, 20 June
+        @test c.J > 5e-3                                                   # noon, 29 June
         for k in (1, Nz)
             k1 = ppb_rate_constant(k_NO_O3(c.T_col[k]), c.p_col[k], c.T_col[k])
             @test leighton_ratio(NO[1, 1, k], NO2[1, 1, k], O3[1, 1, k], c.J, k1) ≈ 1 rtol = 1e-10

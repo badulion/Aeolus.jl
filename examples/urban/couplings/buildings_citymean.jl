@@ -77,7 +77,8 @@ ratio 0.33, chosen to be close to the DOE medium-office reference
 building (Deru et al. 2011) but not checked against it here; the illustrative
 `UrbanSurface` example wall and roof; window U = 2.8 W m⁻² K⁻¹;
 infiltration 0.3 h⁻¹; a packaged DX unit (COP 3.0) and a gas boiler.
-`start_weekday = 4`: the run starts on a Thursday (20 June 2024).
+`start_weekday` (1 = Monday): the weekday of day 1; the coupling passes
+`case_weekday(cfg)` (29 June 2019, the case day, is a Saturday).
 """
 function city_buildings(heightmap::AbstractMatrix, sfc::AbstractMatrix{UInt8},
                         dx::Real, dy::Real, dz::Real, wall_area::Real;
@@ -215,7 +216,8 @@ function init!(c::CityMeanBuildings, case)
     g, mesh = case.geom, case.mesh
     scene = g.scene
     c.bem = city_buildings(g.heightmap, g.sfc, mesh.dx, mesh.dy, mesh.dz,
-                           sum(scene.facets[i].area for i in g.wall_ids))
+                           sum(scene.facets[i].area for i in g.wall_ids);
+                           start_weekday = case_weekday(case.cfg))
     bem = c.bem
     case.cfg.verbose &&
         @printf(case.io, "City-mean building: %.0f m² floor area, %.0f m² walls, %.0f m² roofs\n",
