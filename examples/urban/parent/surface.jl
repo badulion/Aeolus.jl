@@ -301,8 +301,9 @@ momentum exchange, and heat has no pressure-drag analogue — the
 transfer of heat from bluff obstacles stays governed by their facets,
 which is why urban arrays have large ``kB^{-1} = \\ln(z_{0m}/z_{0h})``
 (Kanda et al. 2007). Inheriting ``z_{0h} = 0.1 z_{0m}`` from the child's
-ratio instead raised the parent's footprint-mean sensible heat flux by
-11 % over the child's (test 4 of #249). Park and water tiles keep both
+ratio instead puts the parent's footprint-mean sensible heat flux
++8.8 % above the child's at 13:00 and +9.8 % over 06-18 h (+2.8 % and
++3.8 % with the class z0h; offline run of test 4 of #249). Park and water tiles keep both
 of their own roughness lengths.
 
 Reference: Kanda, M., Kanega, M., Kawai, T., Moriwaki, R. & Sugawara, H.
