@@ -592,11 +592,19 @@ ends below 10 % of the switch-on value, *survived* above 50 %.
 | 180, 32³ (``Δx^+ = 35``, ``Δz^+ = 5.6``) | 0.05 (0.94), 0.10 (0.87) | 0.15, 0.2, 0.3, 0.6, 1, 1.5, 2 (all ≤ 0.002) | 0.12 | 1470 |
 | 180, 48³ | — | 0.15 (0.001), 0.3 (0.000) | < 0.15 | > 1200 |
 | 360, 48³ (``Δx^+ = 47``, ``Δz^+ = 7.5``) | 0.10 (0.96), 0.30 (1.12) | 0.5, 0.7, 1.0 (all 0.001) | 0.39 | 930 |
-| Nieuwstadt (2005), DNS | | | 1.23 at ``Re_τ = 360`` | |
+| Nieuwstadt (2005), DNS, ``L`` without ``κ`` | | | 1.23 at ``Re_τ = 360`` | 293 |
+| the same, this page's ``L`` (with ``κ``) | | | ``1.23 κ`` = 0.49 at ``Re_τ = 360`` | 730 |
 | Flores & Riley (2011), DNS | | | | ≈ 100 |
 
 The critical ``h/L`` is the geometric mean of the largest surviving and
-the smallest collapsed value. Collapse is complete in every collapsed
+the smallest collapsed value. Every ``L`` on this page is the Obukhov
+length of `SurfaceExchange.obukhov_length`, ``L = u_τ^3 θ_0/(κ g |Q|)``,
+which **includes** ``κ`` (as does `relam_heat_flux` of the example
+driver). Nieuwstadt (2005) defines ``L`` without ``κ``, so his
+``h/L = 1.23`` is ``h/L = 1.23 κ = 0.49`` (``κ = 0.40``) here — the
+comparison value that Donda's thesis (TU/e) states for this
+convention. Before #236 this page compared 0.39 against 1.23 directly
+and reported a factor-3 miss that was a convention error. Collapse is complete in every collapsed
 run: γ of the lower half is 0.000 at ``T`` and the wall stress falls to
 0.51–0.53 ``u_τ^2`` (``Re_τ = 180``) and 0.37 ``u_τ^2`` (360) while the
 flow accelerates. In the surviving runs γ stays at 0.96–0.97. The
@@ -607,10 +615,21 @@ neutral spin-ups reach TKE 2.24 / 1.46 / 1.68 ``u_τ^2`` and
 
 ![relaminarisation sweep, Re_τ = 360](../assets/transition/relaminarisation_Re360.svg)
 
-**Against the references: a miss.** The issue's targets were ±30 % on
-the critical ``h/L`` and a factor 1.5 on ``L^+``. At ``Re_τ = 360`` the
-measured 0.39 is 0.31 of Nieuwstadt's 1.23 (−69 %); ``L^+_c`` = 930
-(360) and 1470 (180) are 9 and 15 times the ≈ 100 of Flores & Riley.
+**Against the references.** The issue's targets were ±30 % on the
+critical ``h/L`` and a factor 1.5 on ``L^+``. At ``Re_τ = 360``, in one
+convention (``L`` with ``κ``), the measured 0.39 is 0.79 of Nieuwstadt's
+``1.23 κ = 0.49`` (−21 %, inside the ±30 %), and the reference lies at
+the top edge of the measured bracket (survived 0.30, collapsed 0.50).
+``L^+_c`` = 930 (360) and 1470 (180) are 9 and 15 times the ≈ 100 of
+Flores & Riley. That ``L^+`` target is **not consistent** with
+Nieuwstadt's at ``Re_τ = 360`` either: his threshold is
+``L^+ = 360/0.49 ≈ 730`` with ``κ`` in ``L`` (293 without). ``L^+ = 100``
+in this convention would need ``h/L = 3.6``; read as a ``κ``-free
+``L^+`` (250 here) it would need ``h/L = 1.44`` — either way 3–7 times
+Nieuwstadt's 0.49, so the two DNS thresholds cannot both be met at this
+``Re_τ``. This page does not resolve the
+inconsistency; the ``h/L`` comparison with Nieuwstadt, at the same
+``Re_τ`` and in the same set-up, is the one used here.
 Test 3 of the issue — collapse at ``h/L = 2.0``, survival at
 ``h/L = 0.3`` at ``Re_τ = 180`` — holds for the collapse and fails for
 the survival: ``h/L = 0.3`` collapses on 32³ and on 48³. The trend is
@@ -620,12 +639,14 @@ the physical one (the near-wall shear production cannot keep up with
 the buoyancy sink, the wall stress drops and the flow accelerates
 laminar-like; Donda et al. 2015).
 
-Whether the code or the expectation is wrong could not be settled here.
-The flux boundary condition, the molecular ``Pr`` and the buoyancy are
-verified exactly by test 1 (θ budget 1.5e-10, the conduction profile
-1.6e-11, u blind to the hydrostatic buoyancy), and the definitions are
-the references' (``L`` of the surface flux and the nominal ``u_τ``,
-``L^+ = Re_τ/(h/L)``). What differs is resolution: the DNS thresholds are
+At ``Re_τ = 180`` test 3's survival at ``h/L = 0.3`` still fails, and
+there is no Nieuwstadt threshold at that ``Re_τ`` to set against the
+0.12. The flux boundary condition, the
+molecular ``Pr`` and the buoyancy are verified exactly by test 1 (θ
+budget 1.5e-10, the conduction profile 1.6e-11, u blind to the
+hydrostatic buoyancy); ``L`` is that of the surface flux and the nominal
+``u_τ``, with ``κ`` (Nieuwstadt's is without), and
+``L^+ = Re_τ/(h/L)``. What differs is resolution: the DNS thresholds are
 for a resolved near-wall cycle, and these grids are coarse wall-resolved
 LES (``Δx^+`` = 35–47). The collapse at ``h/L = 0.3``, ``Re_τ = 180``, is
 insensitive to the closure, ``Pr`` and ``Pr_t``: σ + correction, σ with
