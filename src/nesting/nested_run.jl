@@ -202,7 +202,8 @@ Keywords:
     with it, it ran 1000 adaptive parent steps (test/era2_nested_run.jl);
   * `max_retries` (3), `divergence_tol` (`Inf`, parent only, through
     `max_divergence`), `max_velocity` (`Inf`), `validate` (true) — the
-    step-rejection test, as in [`step_adaptive!`](@ref);
+    step-rejection test, as in
+    [`step_adaptive!`](@ref Aeolus.TimeIntegration.step_adaptive!);
   * `reuse_boundary` (true) — in one-way runs, take the boundary data at
     the start of a parent step from the end of the previous one instead of
     prolongating again (valid as long as nothing but `advance_parent`
