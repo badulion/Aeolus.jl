@@ -49,6 +49,10 @@
 # with load) plus ≈ 5 min of statistics (58 s at 160³). Peak memory
 # ≈ 8–10 GB: max RSS 1.00, 1.68, 2.60 GB at 96, 128, 160³ with the
 # solver's work arrays dropped before the statistics (≈ 500 B per cell).
+# Measured (test/fixtures/dns256_apriori.toml): 1264 steps to t = 3.85
+# (ε peak at t = 3.60), wall_s = 7397 s = 2.05 h on one core (the solver
+# is single-threaded); max RSS 9.9 GB as printed by this script, not
+# stored in the TOML.
 #
 # The equivalent through the suite: AEOLUS_DNS256=1 julia --project=.
 # test/runtests.jl (the regeneration testset of era6_apriori_sgs.jl).

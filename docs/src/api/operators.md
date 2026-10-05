@@ -77,6 +77,23 @@ Aeolus.Operators.add_surface_flux!
 Aeolus.Operators.add_sponge!
 ```
 
+## Damping profiles
+
+The one implementation of relaxation rates, shared by the Rayleigh sponge
+(every mesh type, and the `:cos2` nest sponge) and the fringe region of
+`Transition` (P59-d, #185).
+
+```@docs
+Aeolus.Operators.AbstractRamp
+Aeolus.Operators.SinSquaredRamp
+Aeolus.Operators.NordstromRamp
+Aeolus.Operators.smooth_step
+Aeolus.Operators.DampingProfile
+Aeolus.Operators.sponge_profile
+Aeolus.Operators.damping_rate
+Aeolus.Operators.FiniteVolume.in_damping
+```
+
 ## LES analysis toolbox (Phase 54)
 
 Explicit filters, the isotropic energy spectrum and the isotropic

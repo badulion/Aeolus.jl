@@ -29,7 +29,11 @@ Groups of fields:
   `:radiation`, `:soil` and `:output` are used by the initial couplings;
   a coupling may add its own key;
 * **dynamics** — `ν`, `θ₀`, `g`, `f_coriolis`, `C_s`, `Pr_t`,
-  `sponge_α_max`, `sponge_frac` (sponge starts at `sponge_frac·Lz`);
+  `sponge_α_max`, `sponge_frac` (sponge starts at `sponge_frac·Lz`),
+  `sgs_stability` (the stability correction every eddy-viscosity `:sgs`
+  provider wraps its closure in, `Operators.StabilityCorrected`, P55-e
+  #187: `:brown94` (default, Brown et al. 1994), `:lilly`, `:long_tail`,
+  `:short_tail`, `:most`, or `:none` for the uncorrected closure);
 * **initial state** — `θ_surface`, `θ_inversion_z`, `θ_lapse` (θ(z) =
   θ_surface + max(0, z − θ_inversion_z)·θ_lapse), `u0`, `qv0`, `qv_scale`
   (qv(z) = qv0·exp(−z/qv_scale)), `Ts0` and `Ts_water_offset` (surface
@@ -75,6 +79,7 @@ Base.@kwdef mutable struct CaseConfig
     f_coriolis::Float64               = 1e-4
     C_s::Float64                      = 0.1
     Pr_t::Float64                     = 1 / 3
+    sgs_stability::Symbol             = :brown94
     sponge_α_max::Float64             = 0.05
     sponge_frac::Float64              = 0.75
     # initial state

@@ -49,6 +49,22 @@ Base.getindex(τ::SymmetricTensorField, i::Integer, j::Integer) = components(τ)
 # Exact subfilter stress
 # -------------------------------------------------------------------------
 
+# Cell-centred copy of a staggered component: the two-point average with
+# periodic wrap-around (halos not needed). It lived in spectra.jl until the
+# energy spectrum stopped centring (#205, P54-c review); the a-priori
+# analysis is collocated by construction and is now its only user.
+function _to_center_periodic(f::Field{L}) where {L}
+    a = interior_view(f)
+    Nx, Ny, Nz = size(a)
+    s = L === FaceX ? (1, 0, 0) : L === FaceY ? (0, 1, 0) : L === FaceZ ? (0, 0, 1) : (0, 0, 0)
+    s == (0, 0, 0) && return Array(a)
+    c = similar(a, Nx, Ny, Nz)
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        c[i,j,k] = 0.5 * (a[i,j,k] + a[mod1(i + s[1], Nx), mod1(j + s[2], Ny), mod1(k + s[3], Nz)])
+    end
+    return c
+end
+
 # Cell-centred copy of a velocity component into `out` (a CellCenter field):
 # the two-point average with periodic wrap for a staggered component.
 function _center_into!(out::Field{CellCenter}, f::Field)
@@ -280,40 +296,21 @@ function _corr(a, b)
     return (saa > 0 && sbb > 0) ? sab / sqrt(saa * sbb) : NaN
 end
 
-# Eigenvalues (ascending) of a symmetric 3 × 3 matrix, trigonometric
-# closed form (Smith 1961, Comm. ACM 4, 168).
-function _sym3_eigvals(a11, a22, a33, a12, a13, a23)
-    p1 = a12^2 + a13^2 + a23^2
-    q = (a11 + a22 + a33) / 3
-    if p1 == 0                                   # already diagonal
-        e = sort([a11, a22, a33])
-        return (e[1], e[2], e[3])
-    end
-    p2 = (a11 - q)^2 + (a22 - q)^2 + (a33 - q)^2 + 2p1
-    p = sqrt(p2 / 6)
-    p == 0 && return (q, q, q)
-    b11 = (a11 - q) / p; b22 = (a22 - q) / p; b33 = (a33 - q) / p
-    b12 = a12 / p; b13 = a13 / p; b23 = a23 / p
-    r = (b11 * (b22 * b33 - b23^2) - b12 * (b12 * b33 - b23 * b13) + b13 * (b12 * b23 - b22 * b13)) / 2
-    φ = r <= -1 ? π / 3 : r >= 1 ? 0.0 : acos(r) / 3
-    e1 = q + 2p * cos(φ)
-    e3 = q + 2p * cos(φ + 2π / 3)
-    e2 = 3q - e1 - e3
-    return (e3, e2, e1)
-end
-
 """
     stress_eigvals(τ::SymmetricTensorField) -> (λ1, λ2, λ3)
 
 Pointwise eigenvalues (ascending, three arrays) of a symmetric tensor
-field, by the closed form of Smith (1961). For the subfilter stress of a
-positive filter ``λ_1 ≥ 0`` (Vreman et al. 1994).
+field, by the closed form of Smith (1961) with a deflation step for
+near-degenerate pairs: the package's one 3 × 3 symmetric eigensolver,
+[`_sym3_eigvals`](@ref) (`operators/sigma_closure.jl`, shared with the
+σ-model). For the subfilter stress of a positive filter ``λ_1 ≥ 0``
+(Vreman et al. 1994).
 """
 function stress_eigvals(τ::SymmetricTensorField{T}) where {T}
     λ = ntuple(_ -> similar(τ.xx), 3)
     @inbounds for I in eachindex(τ.xx)
-        e = _sym3_eigvals(τ.xx[I], τ.yy[I], τ.zz[I], τ.xy[I], τ.xz[I], τ.yz[I])
-        λ[1][I] = e[1]; λ[2][I] = e[2]; λ[3][I] = e[3]
+        e = _sym3_eigvals(τ.xx[I], τ.yy[I], τ.zz[I], τ.xy[I], τ.xz[I], τ.yz[I])   # descending
+        λ[1][I] = e[3]; λ[2][I] = e[2]; λ[3][I] = e[1]
     end
     return λ
 end

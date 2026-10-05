@@ -15,7 +15,7 @@ using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    add_eddy_diffusion_scalar!,
                    add_surface_flux!, add_sponge!,
                    AbstractSGSClosure, compute_sgs!, add_sgs_momentum!, add_sgs_scalar!,
-                   advance_sgs!, _active_sgs, _check_sgs_stress
+                   advance_sgs!, _active_sgs, _check_sgs_stress, sgs_tracer_diffusivity!
 using ..PressureSolvers
 using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver, solve!
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
@@ -257,6 +257,22 @@ function step!(sim::BoussinesqSimulation{T}, dt::Real;
     return sim
 end
 
+# The SGS flux of a transported scalar other than θ (qv): the closure's
+# `add_sgs_scalar!` when it diffuses every scalar with θ's κ_t (the default
+# `sgs_tracer_diffusivity!` returns `f.κh`, so a Prandtl-number closure is
+# bit for bit unchanged), else eddy diffusion with the scalar's own
+# diffusivity, computed into `scratch` (AMD, #176). The same rule as
+# `step_imex!`'s frozen qv coefficient. Halos of `ϕ` must be filled.
+function _add_sgs_tracer!(tϕ, ϕ, closure, f, sim, scratch)
+    κ = sgs_tracer_diffusivity!(scratch, closure, f, sim, ϕ)
+    if κ === f.κh
+        add_sgs_scalar!(tϕ, ϕ, closure, f, sim)
+    else
+        add_eddy_diffusion_scalar!(tϕ, ϕ, κ)
+    end
+    return tϕ
+end
+
 # One forward-Euler predictor + projection with the SGS closure `closure`
 # (or none). No commit: the drivers (step!, step_rk3!) commit once per step.
 function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
@@ -301,7 +317,7 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
         f = compute_sgs!(closure, sim)
         add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim; stress = sgs_stress)
         add_sgs_scalar!(sim.tθ, sim.θ, closure, f, sim)
-        sim.has_moisture && add_sgs_scalar!(sim.tqv, sim.qv, closure, f, sim)
+        sim.has_moisture && _add_sgs_tracer!(sim.tqv, sim.qv, closure, f, sim, sim.lap_θ)
     end
 
     # 5. Buoyancy on w-momentum. Moist buoyancy uses virtual θ when qv is on.
@@ -398,7 +414,8 @@ end
 
 """
     step_rk3!(sim::BoussinesqSimulation, dt; sgs = nothing, eddy_viscosity! = nothing,
-              sgs_stress = :laplacian, body_force! = nothing, post_predictor! = nothing)
+              body_force! = nothing, post_predictor! = nothing,
+              sgs_stress = :laplacian)
 
 Advance one Shu-Osher SSP-RK3 step with a pressure projection at each of
 the three substages. Third-order-accurate in time for divergence-free
@@ -412,18 +429,24 @@ committed ([`advance_sgs!`](@ref Aeolus.Operators.advance_sgs!)) once, with
 `qv` is combined over the substages like `θ` (before #177 it was not, so
 `qv` advanced by three Euler steps per call).
 
-`body_force!(sim, Δt)` is called at every substage after the built-in
-tendencies are assembled and before the predictor, and
-`post_predictor!(sim, Δt)` after the predictor and before the projection,
-exactly as in [`step!`](@ref) (P56-e: the advection of a uniform
-background gradient, ``-w\\,∂_zΘ``, in a triply periodic box; the
-immersed-boundary direct forcing of the surface-mounted cube).
+`body_force!(sim, Δt)` and `post_predictor!(sim, Δt)` are `step!`'s hooks
+(added for the Era VI wall-bounded cases, P54-d #174): each SSP-RK3
+substage is one forward-Euler predictor + projection of length `dt`, and
+the hooks run inside every substage exactly where `step!` runs them (a
+tendency before the predictor; an implicit correction such as
+`WallModels.apply_wall_stress!` after it, before the projection). The
+step's net effect of a hook is the SSP-RK3 combination of its three
+substage effects, with weights 1/6, 1/6, 2/3.
+
+In P56-e (#192) the same hooks carry the advection of a uniform
+background gradient, ``-w\\,∂_zΘ``, in a triply periodic box, and the
+immersed-boundary direct forcing of the surface-mounted cube.
 """
 function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
                    sgs = nothing, eddy_viscosity! = nothing,
-                   sgs_stress::Symbol = :laplacian,
                    body_force!::Union{Nothing, Function} = nothing,
-                   post_predictor!::Union{Nothing, Function} = nothing) where {T}
+                   post_predictor!::Union{Nothing, Function} = nothing,
+                   sgs_stress::Symbol = :laplacian) where {T}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     _check_sgs_stress(sgs_stress)
@@ -436,12 +459,12 @@ function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
     moist = sim.has_moisture
     q0 = moist ? copy(sim.qv.data) : θ0      # qv is combined like θ (#177)
 
-    _rk3_substep!(sim, Δt, closure, sgs_stress, body_force!, post_predictor!)     # u1 = uⁿ + Δt L(uⁿ), then project
+    _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress)     # u1 = uⁿ + Δt L(uⁿ), then project
     # combine into u1 (already there); save
     u1 = copy(sim.u.data); v1 = copy(sim.v.data); w1 = copy(sim.w.data)
     θ1 = copy(sim.θ.data)
 
-    _rk3_substep!(sim, Δt, closure, sgs_stress, body_force!, post_predictor!)     # u1 → u1 + Δt L(u1), then project
+    _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress)     # u1 → u1 + Δt L(u1), then project
     # combine to u2 = 3/4 uⁿ + 1/4 (…)
     @views begin
         sim.u.data .= 0.75 .* u0 .+ 0.25 .* sim.u.data
@@ -451,7 +474,7 @@ function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
         moist && (sim.qv.data .= 0.75 .* q0 .+ 0.25 .* sim.qv.data)
     end
 
-    _rk3_substep!(sim, Δt, closure, sgs_stress, body_force!, post_predictor!)     # u2 → u2 + Δt L(u2), then project
+    _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress)     # u2 → u2 + Δt L(u2), then project
     # combine to uⁿ⁺¹ = 1/3 uⁿ + 2/3 (…)
     inv3 = one(T)/3; two3 = 2*inv3
     @views begin
@@ -470,9 +493,10 @@ end
 
 # One projected Euler-like substep — shared with step! (the pressure
 # projection), without step!'s commit of the closure memory.
-_rk3_substep!(sim::BoussinesqSimulation, Δt, closure, sgs_stress::Symbol = :laplacian,
-              body_force! = nothing, post_predictor! = nothing) =
-    _euler_projection!(sim, Δt, closure, body_force!, post_predictor!, momentum_advect!, sgs_stress)
+_rk3_substep!(sim::BoussinesqSimulation, Δt, closure, body_force! = nothing,
+              post_predictor! = nothing, sgs_stress::Symbol = :laplacian) =
+    _euler_projection!(sim, Δt, closure, body_force!, post_predictor!, momentum_advect!,
+                       sgs_stress)
 
 # -------------------------------------------------------------------------
 # Diagnostics

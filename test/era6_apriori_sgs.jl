@@ -13,10 +13,13 @@
 #      dynamic C_s against the dissipation-matched one;
 #   6. the offline filtered-DNS record (hybrid-DNS decision on #208): the
 #      pipeline DNS → statistics → TOML → read-back at 32³ on every run;
-#      the 256³ regeneration only with AEOLUS_DNS256=1 (≈ 3 h, ≈ 9 GB;
+#      the 256³ regeneration only with AEOLUS_DNS256=1 (measured 2.05 h
+#      on one core, the solver is single-threaded; 9.9 GB max RSS as
+#      reported by the run, not stored in the TOML;
 #      examples/validation/dns256_generate.jl is the same call); and, when
 #      test/fixtures/dns256_apriori.toml exists, the literature band at
-#      4h and the fall of ρ_Π with Re_λ at fixed Δ/η (48³ > 96³ > 256³).
+#      4h. The ρ_Π comparison 48³ / 96³ / 256³ is logged, not asserted
+#      ("Expectation that proved wrong with the 256³ record", below).
 #      Until that file lands the last testset is a no-op (it says so).
 # The fixture itself is checked as a DNS first (skewness, energy budget,
 # k_max η, Re_λ).
@@ -43,8 +46,9 @@
 # maintainer's review of #208 the fixture was 48³ (Re_λ = 32, 99 steps,
 # 5–7 s). There ρ_Π = 0.867 at 4h, above the literature band 0.4–0.85,
 # and the assertion had been widened to 0.9 with the 0.85 bound kept as
-# @test_broken. The code was not at fault: ρ_Π falls both with Re_λ and
-# with Δ/η. At fixed Δ/η (k_max η is held fixed by ν ∝ N^{-4/3}):
+# @test_broken. The code was not at fault: ρ_Π falls with Δ/η, and the
+# 48³ value at 4h is above the band. At fixed Δ/η (k_max η is held fixed
+# by ν ∝ N^{-4/3}):
 #
 #   Δ        48³ (Re_λ 32)     96³ (Re_λ 64)
 #   4h       0.867 (8.0η)      0.810 (7.8η)
@@ -55,18 +59,34 @@
 # given to leading order by its Taylor expansion, the gradient model
 # τ ≈ (Δ²/12) ∂ₖūᵢ ∂ₖūⱼ (Clark et al. 1979; ρ₁₂ = 0.97 at 48³, 0.98 at
 # 96³). Π of the gradient model is a cubic in the velocity gradient, as
-# (C_sΔ)²|S̄|³ is, and at low Re_λ the few energetic gradient structures
-# dominate both. At Re_λ ≈ 64 the 4h value is inside the band, which is
-# asserted again, together with the 48³ → 96³ fall at 4h and 8h.
+# (C_sΔ)²|S̄|³ is. At Re_λ ≈ 64 the 4h value is inside the band, which is
+# asserted again.
 #
-# How strong the Re_λ trend is beyond 48³ is open. The generator runs
-# (past the peak, ν with a 3.5 % margin; examples/validation/
-# dns256_generate.jl header) give ρ_Π at 4h of 0.819 (32³, Re_λ 21,
-# 7.6η), 0.869 (48³, 31, 7.8η), 0.811 (64³, 45, 7.5η) and 0.822 (96³, 52,
-# 7.7η), against 0.810 for this fixture (Re_λ 64, 7.8η). From 64³ on the
-# values agree within ±0.01, the realization scatter of one seed, so the
-# 256³ comparison (Re_λ ≈ 2× this fixture's) is a real test: if it
-# fails, the expectation of a monotone fall would be what was wrong.
+# Expectation that proved wrong with the 256³ record: "ρ_Π falls
+# monotonically with Re_λ at fixed Δ/η". It was asserted (48³ > 96³ at 4h
+# and 8h; 48³, 96³ > 256³ at the same Δ/η) and the 256³ record broke it
+# (the ≈ 8η row is the 256³ value at 4h, 8.1η; the record starts at
+# 8.05η, so the 48³ and 96³ points just below it are not interpolated):
+#
+#   Δ/η      48³ (Re_λ 32)   96³ (Re_λ 64)   256³ (Re_λ 78.7)
+#   ≈ 8η     0.867           0.810           0.832
+#   ≈ 16η    0.814           0.734           0.787
+#   ≈ 32η    0.669           0.669           0.756
+#
+# The EXPECTATION was wrong, not the code (maintainer decision on #208).
+# It was an extrapolation from two single-seed points (48³ → 96³), and
+# the physical argument does not hold at fixed Δ/η: the filter sits at
+# the same distance from the dissipation range whatever the Re, so only
+# Δ/L changes, and no monotone dependence is established at Re_λ 32–79.
+# The generator runs (past the peak, ν with a 3.5 % margin; examples/
+# validation/dns256_generate.jl header) already agreed within about
+# ±0.01 at 4h from 64³ upward: 0.819 (32³, Re_λ 21, 7.6η), 0.869 (48³,
+# 31, 7.8η), 0.811 (64³, 45, 7.5η), 0.822 (96³, 52, 7.7η), against 0.810
+# for this fixture (Re_λ 64, 7.8η). Both trend assertions are dropped
+# (maintainer decision on #208): 48³, 96³ > 256³ and 48³ > 96³, the
+# latter although it still passes, since it rests on the same claim. The
+# band assertions for the 96³ fixture and the 256³ record stay, and the
+# 48³ / 96³ / 256³ comparison is logged as unasserted data.
 #
 # Expectation that proved wrong with the 96³ fixture: "t = 2 is past the
 # dissipation peak". The peak moves later as Re_λ grows (measured
@@ -104,6 +124,8 @@ const RHO_PI_48 = ((4, 8.0, 0.867), (8, 15.9, 0.814))
 
 # ρ_Π(Δ/η) of a TOML record, linear in log(Δ/η) between its widths;
 # `nothing` outside the recorded range (not comparable).
+_delta_eta_range(rec) = extrema(f["delta_over_eta"] for f in values(rec["filter"]))
+
 function _rho_pi_at(rec, x)
     rows = sort([(f["delta_over_eta"], f["smagorinsky"]["rho_Pi"]) for f in values(rec["filter"])])
     xs = first.(rows); ys = last.(rows)
@@ -233,8 +255,6 @@ end
         # Clark, Ferziger & Reynolds (1979); Liu, Meneveau & Katz (1994)
         @test all(0.1 .< (m.ρ.xy, m.ρ.xz, m.ρ.yz) .< 0.45)
         @test 0.4 < m.ρ_Π < 0.85                      # see header: 0.810 (0.867 at 48³)
-        # Re_λ trend at the same Δ/η (header): below the 48³ values
-        @test m.ρ_Π < RHO_PI_48[1][3] && res[8].smag.ρ_Π < RHO_PI_48[2][3]
         @test 0.08 < res[4].cs < 0.22                 # Lilly 0.17 at high Re; lower at low Re_λ
         @test res[8].smag.ρ_Π < 0.85                  # inside the band once Δ ≈ 16η
         # consistency of the harness: the matched C_s matches the mean
@@ -286,13 +306,13 @@ end
         @test all(values(back["checks"]))
         @test back["dns"]["kmax_eta_min"] >= 1.5                           # the ν margin
         @test back["dns"]["t_end"] > back["dns"]["t_eps_peak"] + 0.2      # run on past the peak
-        # Parseval: the recorded spectrum carries the energy of the centred
-        # field it is defined on, which is the staggered K less the little
-        # the two-point centring removes near the grid scale (a resolved DNS)
+        # Parseval: the recorded spectrum is taken on the stored (face)
+        # values (isotropic_energy_spectrum since #205), so it carries the
+        # solver's kinetic energy exactly: the face K and the DNS's K_end
         Kspec = sum(back["spectrum"]["E"]) * (back["spectrum"]["k"][2] - back["spectrum"]["k"][1])
-        Kc = 0.5 * sum(sum(abs2, Aeolus.Operators._to_center_periodic(f)) / 32^3 for f in (d32.sim.u, d32.sim.v, d32.sim.w))
-        @test Kspec ≈ Kc rtol = 1e-10
-        @test Kspec ≈ back["dns"]["K_end"] rtol = 0.05
+        Kf = 0.5 * sum(sum(abs2, interior_view(f)) / 32^3 for f in (d32.sim.u, d32.sim.v, d32.sim.w))
+        @test Kspec ≈ Kf rtol = 1e-10
+        @test Kspec ≈ back["dns"]["K_end"] rtol = 1e-10
         # one source of truth: the record's 4h numbers are the harness's
         f = back["filter"]["4h"]
         @test 0 < f["smagorinsky"]["rho_Pi"] < 1 && f["bardina"]["rho_Pi"] > f["smagorinsky"]["rho_Pi"]
@@ -310,7 +330,7 @@ end
             @test isfile(DNS256_TOML)
             @test all(v for (k, v) in rec["checks"] if k ∉ ADVISORY_CHECKS)
         else
-            @info "  256³ regeneration skipped (set AEOLUS_DNS256=1; ≈ 3 h, ≈ 9 GB)"
+            @info "  256³ regeneration skipped (set AEOLUS_DNS256=1; ≈ 2 h on one core, ≈ 10 GB)"
         end
     end
 
@@ -337,20 +357,16 @@ end
                 fr["bardina"]["rho_Pi"] > fr["smagorinsky"]["rho_Pi"] || @info "  Bardina ≤ Smagorinsky at $key"
                 @test fr["bardina"]["rho_Pi"] > fr["smagorinsky"]["rho_Pi"]
             end
-            # ρ_Π falls with Re_λ at fixed Δ/η: 48³ (Re_λ 32) > 96³ (64) > 256³,
-            # compared where Δ ≤ L/12 on the coarser grid (at 16h the 48³ box
-            # bounds the filter and 48³ = 96³) and the 256³ record spans its Δ/η
+            # ρ_Π against Re_λ at fixed Δ/η: logged, NOT asserted. The
+            # monotone fall was an expectation that proved wrong (header).
             refs = [(48, x, ρ) for (_, x, ρ) in RHO_PI_48]
             append!(refs, [(96, res[r].Δ / d.η, res[r].smag.ρ_Π) for r in (4, 8)])
-            ncomp = 0
             for (Nref, x, ρref) in refs
                 ρ256 = _rho_pi_at(rec, x)
-                ρ256 === nothing && (@info @sprintf("    Δ/η = %.1f outside the 256³ record: not compared", x); continue)
-                @info @sprintf("    Δ/η = %.1f: ρ_Π %d³ %.3f, 256³ %.3f", x, Nref, ρref, ρ256)
-                @test ρ256 < ρref
-                ncomp += 1
+                ρ256 === nothing && (@info @sprintf("    Δ/η = %.1f outside the 256³ record (%.2f–%.2f η; not extrapolated)",
+                                                     x, _delta_eta_range(rec)...); continue)
+                @info @sprintf("    Δ/η = %.1f: ρ_Π %d³ %.3f, 256³ %.3f (unasserted)", x, Nref, ρref, ρ256)
             end
-            @test ncomp >= 2
         else
             @info "  test/fixtures/dns256_apriori.toml absent: 256³ literature testset is a no-op"
         end

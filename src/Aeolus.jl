@@ -80,8 +80,11 @@ include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
 include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
 include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 
-# --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
+# Era VI — high-fidelity turbulence closure (Phases 54-60)
 # (TurbulenceStability is included before Operators, above.)
+include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wall-stress operator
+include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, advective, T_s(t)
+include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 include("PrognosticSGS.jl")        # Phase 56 Deardorff prognostic SGS TKE (#182)
 
 using .Grids
@@ -146,6 +149,9 @@ using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 
 # --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
 using .TurbulenceStability         # Phase 58 stability contract (#170)
+using .Transition                  # Phase 59 transition diagnostics (#180)
+using .WallModels                  # Phase 57 (#169)
+using .LargeScaleForcing           # Era VI, Phase 58 (#171)
 using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 
 # Re-exports for the user-facing API.
@@ -163,12 +169,12 @@ export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!
 # Era VI (P54-a, #167): the SGS closure contract
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
+       sgs_tracer_diffusivity!,
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
-# Era VI, Phase 54 (P54-c): LES analysis toolbox
-export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
-       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+# Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
+export LagrangianDynamicSmagorinsky
 # Era VI (P55-b, #175): the stress-form SGS momentum divergence
 export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
        add_sgs_stress_divergence!, sgs_stress_dissipation
@@ -176,10 +182,24 @@ export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
 export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
        sgs_scalar_tensor, IsentropicDiffusion
+# Era VI, Phase 54 (P54-c): LES analysis toolbox
+export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
+       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+# Era VI (P54-d, #174): wall-bounded flow diagnostics
+export phi_m_profile, total_stress_profile, streamwise_spectrum
+# Era VI (P55-d, #176): AMD and Vreman closures
+export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
+       compute_vreman_νt!,
+       sgs_buoyancy_parameter
 # Era VI, Phase 56 (P56-c): a-priori SGS-stress analysis
 export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
        eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
        lumley_invariants, apriori_metrics, dissipation_matched_cs
+# Era VI (P59-b, #184): the σ-model closure
+export SigmaModel, compute_sigma_νt!
+# Era VI (P55-e, #187): the stability-corrected anisotropic closure
+export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
+       sgs_stratification!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
@@ -236,7 +256,7 @@ export StretchedGrid, TerrainFollowingGrid, terrain_following_grid,
        set_physical!, hydrostatic_balance_error
 
 # Phases 23, 25 — adaptive time stepping + IMEX integration
-export CFLConstraints, cfl_diagnostics, adaptive_dt,
+export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
        SubsteppingSchedule, substeps_for,
        StateSnapshot, state_snapshot, save_state!, restore_state!,
        step_adaptive!,
@@ -657,7 +677,7 @@ export fog_effective_radius, FogRadiation, fog_radiation,
 # Constant accessors (LH_v0, grav, cp_water, …) stay qualified:
 # `Aeolus.SurfaceExchange.grav(c)`.
 export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
-       AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
+       AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag, BusingerDyerLogLinear,
        phi_m, phi_h, psi_m, psi_h,
        SurfaceLayerSolution, solve_surface_layer,
        bulk_richardson, obukhov_length,
@@ -872,7 +892,7 @@ export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
        water_density, water_thermal_expansion, water_haline_contraction,
        SolarBands, jerlov_water, soloviev_solar,
        solar_transmission, solar_absorbed_between, solar_mean_transmission,
-       CoolSkin, cool_skin, BusingerDyerLogLinear,
+       CoolSkin, cool_skin,
        AbstractWarmLayer, NoWarmLayer, FairallWarmLayer, ZengBeljaarsWarmLayer,
        step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth,
        KrausTurnerMixing, WaterColumn, layer_depths,
@@ -946,5 +966,75 @@ export ReynoldsStressClosure, reynolds_stress_terms, reynolds_stress_rhs, reynol
        project_realizable, stress_anisotropy, stress_edges!, dual_velocity_gradient,
        reynolds_stress_statistics, reynolds_stress_budget, initialize_reynolds_stress!,
        reynolds_stress_shear_equilibrium
+
+# Phase 59 — Transition (#180): turbulent fraction γ(z), intermittency,
+# Ri_f / Re_b / V_TKE diagnostics, growth-rate fit. Ri_g is P58-a's.
+export turbulent_fraction, turbulent_indicator!, laminar_mask!,
+       intermittency_factor, flux_richardson, buoyancy_reynolds,
+       turbulence_velocity_scale, growth_rate, supercritical_fraction,
+       grid_reynolds_number
+
+# P59-d (#185) — spatially developing flat-plate boundary layer: Blasius,
+# fringe region, free-stream disturbances, BL integral diagnostics.
+export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
+       blasius_skin_friction, turbulent_skin_friction,
+       FringeRegion, fringe_rate, add_fringe!, fringe_forcing,
+       blasius_target, set_blasius!, blasius_freestream, fringe_distance, flat_plate_setup,
+       streamwise_profile, edge_velocity, boundary_layer_edge, skin_friction, displacement_thickness,
+       momentum_thickness, shape_factor, transition_onset,
+       onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw,
+       FreeStreamDisturbance, von_karman_spectrum, disturbance_velocity!,
+       disturbance_fringe_update
+# Phase 57 — wall models (#169): equilibrium wall laws and the implicit
+# wall-stress operator. `friction_velocity` / `wall_stress` do not collide
+# with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
+# (CutCell, the resolved stress).
+export AbstractWallLaw, SpaldingLaw, RoughLogLaw, MOSTWallLaw, LEE_MOSER_2015,
+       friction_velocity, wall_stress, wall_drag,
+       spalding_yplus, spalding_uplus, matching_obukhov_length,
+       WallModel, apply_wall_stress!
+# Phase 57-d (#179): the wall model on immersed (IBM mask) and cut-cell
+# walls. The cut-cell stress is a method of CutCell.wall_shear_stress, not
+# a new name.
+export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
+       apply_immersed_wall_stress!, immersed_wall_count,
+       wall_slip_velocity, slip_wall_value
+# P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
+# `advance_channel!` / `run_channel!` do not collide with the Berlin case's
+# `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
+export WallBoundedCase, half_channel_case, channel_case,
+       advance_channel!, run_channel!, channel_dt,
+       channel_richardson, stratified_channel_walls   # P55-f (#191): stratified channel
+# P57-b (#183): the wall-model input — matching height, temporal and
+# wall-parallel filters (log-layer mismatch).
+export MatchingInput, matching_distance, matching_input!, update_input_filter!,
+       exponential_filter_weight, wall_parallel_filter!
+# P57-c (#189): the non-equilibrium (TBLE) wall model with dynamic κ_wm.
+# `update_wall_model!` / `tble_*` collide with nothing.
+export AbstractWallModel, AbstractTBLEEddyViscosity, DampedMixingLength, NoEddyViscosity,
+       tble_eddy_viscosity, TBLEColumn, tble_grid, tble_solve!, tble_column_momentum,
+       TBLEWallModel, update_wall_model!, tble_kappa, tble_columns
+
+# P59-a (#172) — no-slip / moving walls; wall_shear_stress(sim; side) is a
+# method of the CutCell generic (no new name).
+export NoSlipWall
+include("wall_shear_stress.jl")
+# P59-d (#185) — free-stream (transpiration) top of a spatial boundary layer.
+export FreeStreamBoundary
+
+# Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
+# nudging, prescribed advective tendencies, surface-temperature series.
+# `surface_temperature(series, t)` is a method of the SurfaceExchange
+# generic, already exported.
+export ForcingTable, forcing_value, forcing_mean,
+       AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
+       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
+
+# P57-e (#190): the dynamic roughness of partially resolved relief
+# (Anderson & Meneveau 2011). `surface_gradient_drag` does not collide
+# with `CutCell.wall_shear_stress` or the PlantCanopy `canopy_drag_*` names.
+export SubfilterHeight, subfilter_height, DynamicRoughness,
+       surface_gradient_drag, roughness_surface_drag, roughness_drag_residual, dynamic_alpha,
+       update_dynamic_roughness!, with_roughness, dynamic_wall_laws, dynamic_wall_laws!
 
 end # module
