@@ -320,7 +320,7 @@ function osm_height_map(city, mesh, r::Integer)
     hf = zeros(Nf, Mf)
     for b in city.buildings
         isempty(b.polygon) && continue
-        xmin, xmax = extrema(first.(b.polygon)); ymin, ymax = extrema(last.(b.polygon))
+        xmin, xmax, ymin, ymax = polygon_bbox(b.polygon)
         i0 = max(1, floor(Int, (xmin - mesh.x0) / dxf)); i1 = min(Nf, ceil(Int, (xmax - mesh.x0) / dxf) + 1)
         j0 = max(1, floor(Int, (ymin - mesh.y0) / dyf)); j1 = min(Mf, ceil(Int, (ymax - mesh.y0) / dyf) + 1)
         for j in j0:j1, i in i0:i1
