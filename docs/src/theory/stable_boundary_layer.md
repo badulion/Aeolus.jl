@@ -188,7 +188,7 @@ only accessible LES envelope is for 03-04 UTC. Checks 1-3 use the
 | 4. surface heat flux 00-04 UTC | ≤ −0.011 K m s⁻¹ at every step | < 0 |
 | 4. jet at 03-04 UTC | 9.07 m s⁻¹ at 94.9 m; geostrophic speed 6.54 m s⁻¹ | supergeostrophic, below 400 m |
 | 4. jet speed vs envelope 7.8-9.3 m s⁻¹ | inside | inside |
-| 4. jet height vs envelope 100-130 m | **−5.1 m outside** run alone; +0.9997 m inside in the full suite | reported; within one Δz |
+| 4. jet height vs envelope 100-130 m | **−5.1 m outside** (+0.9997 m inside in 2 of 4 runs) | reported; within one Δz |
 
 How the momentum budget is formed: every term is evaluated in every
 SSP-RK3 substage, from the same state the dynamics see, and weighted
@@ -207,12 +207,13 @@ here, not the code. With the same code the jet rises with resolution:
 102.7 m at 12.5 m / 4.2 m, 126.8 m at 6.25 m and 118.9 m at 3.125 m
 (table below). The strict assertion was kept as `@test_broken` until
 #248, which found that marker to be the wrong expectation: the same code
-gives 94.93 m when the test file runs alone and 100.9997 m inside the
-full suite (identically on master and on the #248 branch; the run is
-chaotic and the suite context changes its round-off), so the strict
-check was an unexpected pass there. It is now reported, not asserted.
-The test asserts the resolution-aware statement that the jet lies within
-one Δz of the envelope, which holds in both contexts.
+gave 94.93 m when the test file ran alone and in one full suite, and
+100.9997 m in two other full suites (one on master, one on the #248
+branch). The run is chaotic and not reproducible bit for bit from
+process to process, so the strict check was sometimes an unexpected
+pass. It is now reported, not asserted. The test asserts the
+resolution-aware statement that the jet lies within one Δz of the
+envelope, which holds in every run.
 
 ### GABLS3: full runs
 

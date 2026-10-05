@@ -163,11 +163,12 @@ end
     # The jet rises toward the 6.25 m ensemble as the grid is refined.
     # This was a @test_broken, and the broken marker was the wrong
     # expectation (#248): the reduced run sits on the 100 m bound to within
-    # round-off-amplified chaos. The same code gives 94.93 m run alone and
-    # 100.9997 m inside the full suite (identically on master 3a23110 and
-    # on the #248 branch), so the envelope check is an unexpected pass in
-    # one context and a failure in the other. It is reported, not asserted;
-    # the within-one-Δz bound below holds in both.
+    # round-off-amplified chaos, and the result is not reproducible from
+    # process to process. The same code gave 94.93 m run alone and in one
+    # full suite, and 100.9997 m in two other full suites (one on master
+    # 3a23110, one on the #248 branch), so the envelope check is sometimes
+    # an unexpected pass. It is reported, not asserted; the within-one-Δz
+    # bound below holds in every run.
     @info "GABLS3 reduced: jet inside the 03-04 UTC envelope" inside = (lo <= J.z <= hi)
     @test lo - st.z[2] + st.z[1] <= J.z <= hi        # within one Δz of the envelope
 end
