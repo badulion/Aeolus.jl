@@ -321,3 +321,32 @@ end
     g = DigitalFilterGenerator(16, 2, 50.0, 50.0; inflow_lengths(l, [25.0, 75.0], 0.0)...)
     @test g.L_s[1, 1] == 200.0
 end
+
+@testset "N-inflow-b region = :ring around the child footprint" begin
+    m, sim = _parent(16, 12, 3; Δ = 25.0)
+    rng = Random.Xoshiro(21)
+    for f in (sim.u, sim.v, sim.w)
+        interior_view(f) .= randn(rng, size(interior_view(f)))
+    end
+    src = ParentResolvedStatistics(sim; τ_avg = Inf, mode = :full, region = :ring,
+                                   footprint = (6:11, 2:5), ring_width = 2)
+    # columns within 2 cells of the footprint edge, both sides, periodic in y:
+    # i ∈ 4:13, j ∈ {12, 1, …, 7}; the footprint is 4 wide in y, so no inner hole
+    @test src.columns == [(4 <= i <= 13) && (j <= 7 || j == 12) for i in 1:16, j in 1:12]
+    big = ParentResolvedStatistics(sim; region = :ring, footprint = (6:11, 3:10), ring_width = 2)
+    @test big.columns == [(4 <= i <= 13) && (1 <= j <= 12) && !((8 <= i <= 9) && (5 <= j <= 8))
+                          for i in 1:16, j in 1:12]
+    update_inflow_statistics!(src, 1.0)
+    p = inflow_stress_parts(src)
+    # the same covariance computed by hand over the ring columns (cell centres)
+    Aeolus.BoundaryConditions.fill_halos!(sim.u, sim.bcs)
+    Aeolus.BoundaryConditions.fill_halos!(sim.w, sim.bcs)
+    H = m.Hx; k = 2
+    uc = [(sim.u.data[H+i, H+j, H+k] + sim.u.data[H+i+1, H+j, H+k]) / 2 for i in 1:16, j in 1:12]
+    wc = [(sim.w.data[H+i, H+j, H+k] + sim.w.data[H+i, H+j, H+k+1]) / 2 for i in 1:16, j in 1:12]
+    us, ws = uc[src.columns], wc[src.columns]
+    mu, mw = sum(us) / length(us), sum(ws) / length(ws)
+    @test p.resolved[1, k] ≈ sum((us .- mu) .^ 2) / length(us) rtol = 1e-12
+    @test p.resolved[5, k] ≈ sum((us .- mu) .* (ws .- mw)) / length(us) rtol = 1e-12
+    @test p.U[1, k] ≈ mu rtol = 1e-12
+end
