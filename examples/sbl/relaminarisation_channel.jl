@@ -27,6 +27,8 @@
 #   julia --project=. examples/sbl/relaminarisation_channel.jl
 #   RE=180 HL=0.3,2 julia --project=. examples/sbl/relaminarisation_channel.jl
 #   RE=360 N=48,48,48 HL=1 julia … &  (one process per run; then REUSE=1)
+#   RE=360 N=96,96,96 HL=0.5 julia …   (#236: 10 750 s spin-up + 12 909 s run;
+#                                     collapses as on 48³)
 #
 # writes examples/sbl/output/relaminarisation_<Re>_<N>.svg and caches every
 # run (.jls); prints the table quoted on the theory page

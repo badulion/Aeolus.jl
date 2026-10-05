@@ -18,7 +18,8 @@
 # Measured there: h/L = 2 collapses, but so does h/L = 0.3 (critical h/L
 # 0.12 at Re_τ = 180 on 32³, 0.47 at Re_τ = 360 on 48³; Nieuwstadt's 1.23
 # is for an L without κ, i.e. 1.23 κ ≈ 0.49 with the κ-including L of
-# `relaminarisation_criteria`) — see docs/src/theory/transition.md,
+# `relaminarisation_criteria`; h/L = 0.5 collapses on 96³ too) — see
+# docs/src/theory/transition.md,
 # "The cooled open channel".
 
 using Test

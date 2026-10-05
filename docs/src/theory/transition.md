@@ -592,6 +592,7 @@ ends below 10 % of the switch-on value, *survived* above 50 %.
 | 180, 32³ (``Δx^+ = 35``, ``Δz^+ = 5.6``) | 0.05 (0.94), 0.10 (0.87) | 0.15, 0.2, 0.3, 0.6, 1, 1.5, 2 (all ≤ 0.002) | 0.12 | 1470 |
 | 180, 48³ | — | 0.15 (0.001), 0.3 (0.000) | < 0.15 | > 1200 |
 | 360, 48³ (``Δx^+ = 47``, ``Δz^+ = 7.5``) | 0.10 (0.96), 0.30 (1.12), 0.40 (1.28), 0.45 (1.46) | 0.5, 0.7, 1.0 (all 0.001) | 0.47 | 760 |
+| 360, 96³ (``Δx^+ = 24``, ``Δz^+ = 3.8``) | — | 0.5 (0.001) | < 0.5 | > 720 |
 | Nieuwstadt (2005), DNS, ``L`` without ``κ`` | | | 1.23 at ``Re_τ = 360`` | 293 |
 | the same, this page's ``L`` (with ``κ``) | | | ``1.23 κ`` = 0.49 at ``Re_τ = 360`` | 730 |
 | Flores & Riley (2011), DNS | | | | ≈ 100 |
@@ -616,12 +617,26 @@ TKE than the neutral switch-on state). At 0.50 the same descent does not
 turn: TKE 0.05 at ``t = 6``, 0.001 at 20, ``⟨τ_w⟩`` 0.37. A transient
 collapse followed by recovery just below the threshold is what Donda et
 al. (2015) describe for this channel. Each run took 1 380–1 430 s
-(18 070 steps). Collapse is complete in every collapsed
-run: γ of the lower half is 0.000 at ``T`` and the wall stress falls to
-0.51–0.53 ``u_τ^2`` (``Re_τ = 180``) and 0.37 ``u_τ^2`` (360) while the
-flow accelerates. In the surviving runs γ stays at 0.96–0.97. The
-neutral spin-ups reach TKE 2.24 / 1.46 / 1.68 ``u_τ^2`` and
-``⟨τ_w⟩`` = 0.94 / 0.86 / 0.94 ``u_τ^2`` (180 at 32³ and 48³, 360 at 48³).
+(18 070 steps).
+
+**96³ at the collapsed edge (#236).** One run at ``h/L = 0.50`` on 96³
+(``Δx^+ = 24``, ``Δy^+ = 12``, ``Δz^+ = 3.8``, twice the 48³
+resolution in each direction), from its own 10 ``h/u_τ`` neutral
+spin-up (TKE 1.80 ``u_τ^2``, ``⟨τ_w⟩ = 1.02 u_τ^2``, ``U_b = 16.7 u_τ``;
+10 750 s), also collapses: TKE ratio 0.001 and γ 0.000 at
+``T = 20 h/u_τ``, ``⟨τ_w⟩ = 0.37 u_τ^2`` (48³: 0.001, 0.000, 0.37);
+22 855 steps, 12 909 s. The finer grid delays the collapse slightly
+(γ of the lower half falls below 0.1 at ``t ≈ 9`` instead of ≈ 7; TKE
+0.13 against 0.08 at ``t = 5``) but does not stop it. Doubling the
+resolution does not move the collapsed edge of the bracket.
+
+Collapse is complete in every collapsed run: γ of the lower half is
+0.000 at ``T`` and the wall stress falls to 0.51–0.53 ``u_τ^2``
+(``Re_τ = 180``) and 0.37 ``u_τ^2`` (360, both grids) while the flow
+accelerates. In the surviving runs γ stays at 0.96–0.97. The neutral
+spin-ups reach TKE 2.24 / 1.46 / 1.68 / 1.80 ``u_τ^2`` and ``⟨τ_w⟩`` =
+0.94 / 0.86 / 0.94 / 1.02 ``u_τ^2`` (180 at 32³ and 48³, 360 at 48³ and
+96³).
 
 ![relaminarisation sweep, Re_τ = 180](../assets/transition/relaminarisation_Re180.svg)
 
@@ -634,9 +649,12 @@ convention (``L`` with ``κ``), the measured 0.47 is 0.96 of Nieuwstadt's
 the measured bracket (survived 0.45, collapsed 0.50) but at its top
 edge, 2 % below the smallest collapsed value. There is residual
 tension: Donda's runs at ``h/L = 0.49`` (this convention) survive, ours
-collapse at 0.50, so either the threshold of this coarse LES lies in
+collapse at 0.50 on 48³ and on 96³, so either the threshold here lies in
 0.45–0.49, slightly below the DNS one, or the two agree to within the
-2 % between 0.49 and 0.50 that the bracket cannot resolve.
+2 % between 0.49 and 0.50 that the bracket does not resolve. The 96³ run
+rules out the 48³ grid spacing as the cause of the collapse at 0.50
+(96³ is still coarser than the DNS); whether 0.45 still survives on 96³
+was not run.
 ``L^+_c`` = 760 (360) and 1470 (180) are 7.6 and 15 times the ≈ 100 of
 Flores & Riley. That ``L^+`` target is **not consistent** with
 Nieuwstadt's at ``Re_τ = 360`` either: his threshold is
@@ -663,19 +681,20 @@ molecular ``Pr`` and the buoyancy are verified exactly by test 1 (θ
 budget 1.5e-10, the conduction profile 1.6e-11, u blind to the
 hydrostatic buoyancy); ``L`` is that of the surface flux and the nominal
 ``u_τ``, with ``κ`` (Nieuwstadt's is without), and
-``L^+ = Re_τ/(h/L)``. What differs is resolution: the DNS thresholds are
-for a resolved near-wall cycle, and these grids are coarse wall-resolved
-LES (``Δx^+`` = 35–47). The collapse at ``h/L = 0.3``, ``Re_τ = 180``, is
+``L^+ = Re_τ/(h/L)``. The remaining candidate is resolution: the DNS
+thresholds are for a resolved near-wall cycle, and these grids are
+coarse wall-resolved LES (``Δx^+`` = 35–47). The collapse at ``h/L = 0.3``, ``Re_τ = 180``, is
 insensitive to the closure, ``Pr`` and ``Pr_t``: σ + correction, σ with
 ``Pr_t = 1`` (instead of the core's 1/3) and no SGS model at all end at
 TKE ratios 0.001, 0.001 and 0.001 after 20 ``h/u_τ`` (without a model
 the decay is slower: 0.46 at 5 ``h/u_τ``, against 0.06); plain σ,
 Smagorinsky 0.1 and ``Pr = 1`` are at 0.06, 0.10 and 0.05 after
 5 ``h/u_τ``, on the same path. Refining 32³ → 48³ did not move
-``h/L = 0.15`` or 0.3 to survival. A resolution study that reaches the
-DNS grids (≈ 128³ at ``Re_τ = 180``, beyond the budget of this phase)
-is the open step; until then the example documents the coarse-LES
-threshold and is not a validation against the DNS numbers.
+``h/L = 0.15`` or 0.3 to survival. At ``Re_τ = 360`` the coarse LES
+agrees with Nieuwstadt's threshold (−4 %, collapse at 0.50 unchanged
+from 48³ to 96³); at ``Re_τ = 180`` the example documents the
+coarse-LES threshold (0.12) only, with no DNS value at that ``Re_τ``
+to validate it against.
 
 The command lines are in the header of the example; every run is cached,
 `REUSE=1` reprints the table and redraws the figures.
