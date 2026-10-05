@@ -91,6 +91,107 @@ function _plan(nest::NestedGrid, kind::Symbol, d::Int, order::Int)
     return p
 end
 
+# --- coordinate plans (N-nest-b, #256) ------------------------------------
+# The same two rules on arbitrary node positions: the vertical of a
+# z-stretched parent (nodes = actual parent face heights) and the mass
+# coordinate μ = ∫W dz of the sound-proof systems. Coordinates are shifted
+# to the first stencil node and scaled by the mean stencil spacing before
+# the Lagrange products are formed, so a child face that *is* a parent face
+# (bitwise, see `_child_zfaces`) gives a basis of exactly 0 and 1.
+
+"Lagrange basis values at `x` for the nodes `t` (any distinct positions)."
+function _lagrange_basis_nodes(t::AbstractVector{Float64}, x::Float64)
+    n = length(t)
+    l = Vector{Float64}(undef, n)
+    @inbounds for q in 1:n
+        p = 1.0
+        for s in 1:n
+            s == q && continue
+            p *= (x - t[s]) / (t[q] - t[s])
+        end
+        l[q] = p
+    end
+    return l
+end
+
+"""
+    _cons_weights_nodes(x, a, b) -> Vector{Float64}
+
+Conservative-prolongation weights on non-uniform parent faces `x`
+(`ns + 1` positions bounding `ns` stencil cells): the average over
+`[a, b]` of the derivative of the degree-`ns` polynomial that
+interpolates the primitive `F(x_j) = Σ_{q≤j} φ_q (x_q − x_{q−1})`.
+The weight of cell `q` is `h_q Σ_{j≥q} (L_j(b) − L_j(a)) / (b − a)`;
+with unit spacing this is [`_cons_weights`](@ref) exactly.
+"""
+function _cons_weights_nodes(x::AbstractVector{Float64}, a::Float64, b::Float64)
+    ns = length(x) - 1
+    x0 = x[1]; H = (x[end] - x0) / ns
+    t  = [(xi - x0) / H for xi in x]
+    ta = (a - x0) / H; tb = (b - x0) / H
+    la = _lagrange_basis_nodes(t, ta)
+    lb = _lagrange_basis_nodes(t, tb)
+    w = Vector{Float64}(undef, ns)
+    acc = 0.0
+    @inbounds for q in ns:-1:1
+        acc += lb[q+1] - la[q+1]
+        w[q] = (t[q+1] - t[q]) * acc / (tb - ta)
+    end
+    return w
+end
+
+"Nodal Lagrange weights at `z` over the non-uniform nodes `x`."
+function _nodal_weights_nodes(x::AbstractVector{Float64}, z::Float64)
+    n = length(x)
+    x0 = x[1]; H = n > 1 ? (x[end] - x0) / (n - 1) : 1.0
+    return _lagrange_basis_nodes([(xi - x0) / H for xi in x], (z - x0) / H)
+end
+
+# For every child storage cell (:avg) or face (:nodal) along z, the parent
+# storage index where the stencil starts and the weights. `pc`, `cc` are
+# the parent / child face coordinates (storage-indexed, length N + 2H + 1).
+function _build_coord_plan(kind::Symbol, order::Int, pc::Vector{Float64},
+                           cc::Vector{Float64})
+    ns = max(order, 1)
+    npc = length(pc) - 1                 # parent storage cells
+    ncc = length(cc) - 1                 # child storage cells (= faces in a Face array)
+    plan = Vector{Tuple{Int,Vector{Float64}}}(undef, ncc)
+    @inbounds for ic in 1:ncc
+        if kind === :avg
+            a = cc[ic]; b = cc[ic+1]
+            I  = clamp(searchsortedlast(pc, (a + b) / 2), 1, npc)
+            s0 = clamp(I - ((ns - 1) ÷ 2), 1, max(1, npc - ns + 1))
+            plan[ic] = (s0, _cons_weights_nodes(view(pc, s0:s0+ns), a, b))
+        else
+            z  = cc[ic]
+            F  = clamp(searchsortedlast(pc, z), 1, npc)
+            s0 = clamp(F - ((ns - 1) ÷ 2), 1, max(1, npc - ns + 1))
+            plan[ic] = (s0, _nodal_weights_nodes(view(pc, s0:s0+ns-1), z))
+        end
+    end
+    return plan
+end
+
+"""
+    _zplan(nest, kind, order, measure)
+
+The vertical 1-D plan. On a uniform parent in the volume measure it is
+the N-nest-a integer plan ([`_plan`](@ref)); otherwise the coordinate
+plan of the measure: `:avg` in the measure coordinate (height, or the
+reference mass `μ`), `:nodal` (the point value `w`) in height.
+"""
+function _zplan(nest::NestedGrid, kind::Symbol, order::Int, measure)
+    _uses_integer_z(nest, measure) && return _plan(nest, kind, 3, order)
+    m = _resolve(nest, measure)
+    key = (kind, order)
+    p = get(m.plans, key, nothing)
+    p === nothing || return p
+    p = kind === :avg ? _build_coord_plan(:avg, order, m.pc, m.cc) :
+                        _build_coord_plan(:nodal, order, m.ph, m.ch)
+    m.plans[key] = p
+    return p
+end
+
 # Which 1-D rule applies in each direction, per staggered location:
 # `:avg` = the field is a cell/face-area average there (conservative rule);
 # `:nodal` = the field is a point value there (Lagrange rule).
@@ -109,7 +210,7 @@ _interface_plane(::FaceZ, cm, i, j, k) = (k == cm.Hz + 1)
 # =========================================================================
 
 function _interp_child!(cf::Field, pf::Field, nest::NestedGrid;
-                        order::Int=3, region::Symbol=:halo)
+                        order::Int=3, region::Symbol=:halo, measure=nothing)
     cm = nest.child_mesh
     cf.mesh === cm || size(cf.data) == totalsize(cm) ||
         error("_interp_child!: child field is not on the nest's child mesh")
@@ -119,7 +220,7 @@ function _interp_child!(cf::Field, pf::Field, nest::NestedGrid;
     kinds = _dim_kinds(loc)
     px = _plan(nest, kinds[1], 1, order)
     py = _plan(nest, kinds[2], 2, order)
-    pz = _plan(nest, kinds[3], 3, order)
+    pz = _zplan(nest, kinds[3], order, measure)
     cd = cf.data; pd = pf.data
     ii, jj, kk = interior(cm)
     T = eltype(cd)
@@ -173,10 +274,17 @@ in each direction follows the field's [`Location`](@ref):
 `impose_interface=true` the child's boundary-normal interior face plane
 (e.g. `i = Hx+1` for `FaceX`) is also overwritten with the parent value,
 i.e. a Dirichlet inflow face.
+
+On a z-stretched parent the vertical stencils use the parent's actual
+face heights. `measure` (a [`NestMeasure`](@ref)) selects the vertical
+measure; with the mass measure of a sound-proof pair
+([`nest_measure`](@ref)) the conservative directions conserve `∫ W φ dV`
+(`W = ρ̄` or `ρ̄θ̄`) instead of `∫ φ dV`. The default is the volume measure.
 """
 interpolate_to_nest_boundary!(cf::Field, pf::Field, nest::NestedGrid;
-                              order::Int=3, impose_interface::Bool=false) =
-    _interp_child!(cf, pf, nest; order,
+                              order::Int=3, impose_interface::Bool=false,
+                              measure=nothing) =
+    _interp_child!(cf, pf, nest; order, measure,
                    region = impose_interface ? :halo_interface : :halo)
 
 """
@@ -185,23 +293,26 @@ interpolate_to_nest_boundary!(cf::Field, pf::Field, nest::NestedGrid;
 As [`interpolate_to_nest_boundary!`](@ref) but fills the child field
 *everywhere* (interior included). This is the AMR prolongation operator —
 used to initialize newly refined blocks and to build the reference state
-for [`apply_nest_sponge!`](@ref).
+for [`apply_nest_sponge!`](@ref). Accepts the same `measure` keyword.
 """
-interpolate_parent_to_child!(cf::Field, pf::Field, nest::NestedGrid; order::Int=3) =
-    _interp_child!(cf, pf, nest; order, region=:all)
+interpolate_parent_to_child!(cf::Field, pf::Field, nest::NestedGrid; order::Int=3,
+                             measure=nothing) =
+    _interp_child!(cf, pf, nest; order, measure, region=:all)
 
 # =========================================================================
 # Restriction: child -> parent
 # =========================================================================
 
 """
-    restrict_to_parent!(parent_field, child_field, nest)
+    restrict_to_parent!(parent_field, child_field, nest; measure=nothing, solid=nothing)
+    restrict_to_parent!(parent_face_field, child_face_field, nest;
+                        include_boundary=false, measure=nothing, solid=nothing)
 
 Conservative restriction.
 
   * `CellCenter` — volume-weighted average of the `rx·ry·rz` child cells
     inside each covered parent cell. Since `V_parent = rx·ry·rz · V_child`
-    on a uniform mesh, `∫` over the overlap is preserved to machine
+    in the (uniform) overlap, `∫` over the overlap is preserved to machine
     precision.
   * `FaceX`/`FaceY`/`FaceZ` — area-weighted average of the `r·r` child
     faces covering each aligned parent face, i.e. flux-preserving. By
@@ -209,9 +320,47 @@ Conservative restriction.
     interface planes are owned by the flux correction
     ([`apply_flux_correction!`](@ref)). Pass `include_boundary=true` to
     overwrite them as well.
+
+`measure` — with the mass measure of a sound-proof pair
+([`nest_measure`](@ref)) the averages are weighted by the child cell
+mass `W Δz` (`W = ρ̄` anelastic, `ρ̄θ̄` pseudo-incompressible): a scalar
+becomes `Σ W φ ΔV / Σ W ΔV`, so `∫ W φ dV` is preserved, and a
+horizontal-normal velocity (`u`, `v`) becomes `Σ W u A / Σ W A`, so the
+parent face carries the child's summed mass flux. `w` faces are
+horizontal planes at one height, where `W` is common to all `r·r`
+children and cancels: the plain area mean is already the mass-flux mean.
+
+`solid` — the child's IBM [`SolidMask`](@ref) (or a storage-sized
+Boolean array, `true` = solid, such as the Berlin `solid` field) makes
+the restriction **solid-aware** (Hellsten et al. 2021, GMD 14, 3185,
+§3.5): only fluid child cells, and only fluid child faces (both
+neighbouring cells fluid), enter the average, so no parent value is ever
+averaged from the zero velocity inside a building. A parent cell or face
+with no fluid child keeps its value. The fluid-weighted integral
+`Σ_fluid W φ ΔV` is what is preserved.
 """
 function restrict_to_parent!(pf::Field{CellCenter}, cf::Field{CellCenter},
-                             nest::NestedGrid)
+                             nest::NestedGrid; measure=nothing, solid=nothing)
+    χ = _fluid(nest, solid)
+    ωz = _zweights(measure)
+    (χ === nothing && ωz === nothing) && return _restrict_cc_volume!(pf, cf, nest)
+    return _restrict_cc_weighted!(pf, cf, nest, ωz === nothing ? _ones_z(nest) : ωz, χ)
+end
+
+restrict_to_parent!(pf::Field{L}, cf::Field{L}, nest::NestedGrid;
+                    include_boundary::Bool=false, measure=nothing,
+                    solid=nothing) where {L<:Union{FaceX,FaceY,FaceZ}} =
+    _restrict_face_any!(pf, cf, nest, _axis_of(L), include_boundary,
+                        _zweights(measure), _fluid(nest, solid))
+
+# z weights of a restriction: `nothing` for the volume measure (the child
+# layers of a parent layer are equally thick), the child cell masses W Δz
+# for the mass measure.
+_zweights(::Nothing) = nothing
+_zweights(m::NestMeasure) = m.kind === :volume ? nothing : m.cw
+_ones_z(nest::NestedGrid) = ones(Float64, nest.child_mesh.Nz + 2nest.child_mesh.Hz)
+
+function _restrict_cc_volume!(pf::Field, cf::Field, nest::NestedGrid)
     pm = nest.parent_mesh; cm = nest.child_mesh
     rx, ry, rz = nest.rx, nest.ry, nest.rz
     inv = 1 / (rx * ry * rz)
@@ -227,9 +376,76 @@ function restrict_to_parent!(pf::Field{CellCenter}, cf::Field{CellCenter},
     return pf
 end
 
-restrict_to_parent!(pf::Field{L}, cf::Field{L}, nest::NestedGrid;
-                    include_boundary::Bool=false) where {L<:Union{FaceX,FaceY,FaceZ}} =
-    _restrict_face!(pf, cf, nest, _axis_of(L), include_boundary)
+function _restrict_cc_weighted!(pf::Field, cf::Field, nest::NestedGrid,
+                                ωz::Vector{Float64}, χ)
+    pm = nest.parent_mesh; cm = nest.child_mesh
+    rx, ry, rz = nest.rx, nest.ry, nest.rz
+    pd = pf.data; cd = cf.data
+    @inbounds for K in 1:nest.nz, J in 1:nest.ny, I in 1:nest.nx
+        num = 0.0; den = 0.0
+        for kc in 1:rz
+            k = cm.Hz + (K-1)*rz + kc
+            wz = ωz[k]
+            for jc in 1:ry, ic in 1:rx
+                i = cm.Hx + (I-1)*rx + ic; j = cm.Hy + (J-1)*ry + jc
+                (χ === nothing || χ[i, j, k]) || continue
+                num += wz * cd[i, j, k]; den += wz
+            end
+        end
+        den > 0 || continue                 # no fluid child: keep the parent value
+        pd[pm.Hx + nest.ix + I - 1, pm.Hy + nest.iy + J - 1, pm.Hz + nest.iz + K - 1] =
+            num / den
+    end
+    return pf
+end
+
+function _restrict_face_any!(pf::Field, cf::Field, nest::NestedGrid, ax::Int,
+                             include_boundary::Bool, ωz, χ)
+    # w faces are horizontal: W is common to the children and cancels
+    ωe = ax == 3 ? nothing : ωz
+    (ωe === nothing && χ === nothing) &&
+        return _restrict_face!(pf, cf, nest, ax, include_boundary)
+    return _restrict_face_weighted!(pf, cf, nest, ax, include_boundary,
+                                    ωe === nothing ? _ones_z(nest) : ωe, χ)
+end
+
+function _restrict_face_weighted!(pf::Field, cf::Field, nest::NestedGrid, ax::Int,
+                                  include_boundary::Bool, ωz::Vector{Float64}, χ)
+    pm = nest.parent_mesh; cm = nest.child_mesh
+    r  = (nest.rx, nest.ry, nest.rz)
+    nn = (nest.nx, nest.ny, nest.nz)
+    oo = (nest.ix, nest.iy, nest.iz)
+    Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (cm.Hx, cm.Hy, cm.Hz)
+    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+    q0 = include_boundary ? 0 : 1
+    q1 = include_boundary ? nn[ax] : nn[ax] - 1
+    pd = pf.data; cd = cf.data
+    pidx = [0, 0, 0]; cidx = [0, 0, 0]; bidx = [0, 0, 0]
+    @inbounds for q in q0:q1
+        pidx[ax] = Hp[ax] + oo[ax] + q
+        cidx[ax] = Hc[ax] + q * r[ax] + 1
+        for B in 1:nn[t2], A in 1:nn[t1]
+            pidx[t1] = Hp[t1] + oo[t1] + A - 1
+            pidx[t2] = Hp[t2] + oo[t2] + B - 1
+            num = 0.0; den = 0.0
+            for b in 1:r[t2], a in 1:r[t1]
+                cidx[t1] = Hc[t1] + (A-1)*r[t1] + a
+                cidx[t2] = Hc[t2] + (B-1)*r[t2] + b
+                if χ !== nothing
+                    bidx[1] = cidx[1]; bidx[2] = cidx[2]; bidx[3] = cidx[3]
+                    bidx[ax] -= 1
+                    (χ[cidx[1], cidx[2], cidx[3]] && χ[bidx[1], bidx[2], bidx[3]]) ||
+                        continue
+                end
+                w = ωz[cidx[3]]
+                num += w * cd[cidx[1], cidx[2], cidx[3]]; den += w
+            end
+            den > 0 || continue             # no fluid child face: keep the parent value
+            pd[pidx[1], pidx[2], pidx[3]] = num / den
+        end
+    end
+    return pf
+end
 
 _axis_of(::Type{FaceX}) = 1
 _axis_of(::Type{FaceY}) = 2
@@ -303,16 +519,40 @@ mismatch_l1(m::NestFluxMismatch) =
     sum(x -> isempty(x) ? 0.0 : sum(abs, x),
         (m.west, m.east, m.south, m.north, m.bottom, m.top))
 
+# Parent layer "thickness" in a measure: the height Δz (volume; the actual
+# layer thickness of a stretched parent) or the reference mass Δμ = W Δz.
+_pthick(nest::NestedGrid, ::Nothing, K::Integer) = _dzp(nest.parent_mesh, K)
+function _pthick(nest::NestedGrid, m::NestMeasure, K::Integer)
+    m.kind === :volume && return _dzp(nest.parent_mesh, K)
+    P = nest.parent_mesh.Hz + K
+    return m.pc[P+1] - m.pc[P]
+end
+
+# Mass (or thickness) of an *uncovered* parent cell at interior level K: the
+# parent's own W_p Δz_p, which is what the parent simulation conserves (see
+# NestMeasure). Used by the composite integral and the refluxing correction.
+_pcell(nest::NestedGrid, ::Nothing, K::Integer) = _dzp(nest.parent_mesh, K)
+_pcell(nest::NestedGrid, m::NestMeasure, K::Integer) =
+    m.kind === :volume ? _dzp(nest.parent_mesh, K) : m.pw[nest.parent_mesh.Hz + K]
+
+# Area of the parent interface face (A, B) of a plane normal to `ax`, in the
+# measure (A, B index the two tangential directions in increasing order).
+function _face_area(nest::NestedGrid, m, ax::Int, B::Integer)
+    pm = nest.parent_mesh
+    ax == 3 && return pm.dx * pm.dy
+    return (ax == 1 ? pm.dy : pm.dx) * _pthick(nest, m, nest.iz + B - 1)
+end
+
 "Total area of the six nest-interface planes."
 function mismatch_area(nest::NestedGrid)
     pm = nest.parent_mesh
-    return 2 * (nest.ny * nest.nz * pm.dy * pm.dz +
-                nest.nx * nest.nz * pm.dx * pm.dz +
+    hz = sum(_dzp(pm, nest.iz + K - 1) for K in 1:nest.nz)
+    return 2 * (nest.ny * hz * pm.dy + nest.nx * hz * pm.dx +
                 nest.nx * nest.ny * pm.dx * pm.dy)
 end
 
 """
-    compute_nest_flux_mismatch(parent_field, child_field, nest)
+    compute_nest_flux_mismatch(parent_field, child_field, nest; measure=nothing)
 
 `coarse flux − Σ fine fluxes` across each nest-boundary face patch, for a
 face-located field (a velocity, or a time-accumulated flux register
@@ -320,22 +560,26 @@ face-located field (a velocity, or a time-accumulated flux register
 
 A nonzero value is exactly the amount by which the two grids disagree
 about the transport through the interface — i.e. the leak that
-[`apply_flux_correction!`](@ref) removes.
+[`apply_flux_correction!`](@ref) removes. Face areas use the parent's
+actual layer thickness (stretched parents). With the mass `measure` of a
+sound-proof pair, a velocity's fine flux is the `W`-area-weighted one
+and the mismatch is in mass-flux units (pass the same `measure` to
+[`apply_flux_correction!`](@ref)); leave it `nothing` for flux registers
+that already carry `W` (refluxing).
 """
-compute_nest_flux_mismatch(pf::Field{L}, cf::Field{L},
-                           nest::NestedGrid) where {L<:Union{FaceX,FaceY,FaceZ}} =
-    _face_mismatch(pf, cf, nest, _axis_of(L))
+compute_nest_flux_mismatch(pf::Field{L}, cf::Field{L}, nest::NestedGrid;
+                           measure=nothing) where {L<:Union{FaceX,FaceY,FaceZ}} =
+    _face_mismatch(pf, cf, nest, _axis_of(L), measure)
 
-function _face_mismatch(pf::Field, cf::Field, nest::NestedGrid, ax::Int)
+function _face_mismatch(pf::Field, cf::Field, nest::NestedGrid, ax::Int, measure=nothing)
     T  = eltype(pf.data)
     pm = nest.parent_mesh; cm = nest.child_mesh
     r  = (nest.rx, nest.ry, nest.rz)
     nn = (nest.nx, nest.ny, nest.nz)
     oo = (nest.ix, nest.iy, nest.iz)
     Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (cm.Hx, cm.Hy, cm.Hz)
-    dp = (pm.dx, pm.dy, pm.dz)
     t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
-    Ap  = dp[t1] * dp[t2]
+    ωz = ax == 3 ? nothing : _zweights(measure)
     inv = 1 / (r[t1] * r[t2])
     pd = pf.data; cd = cf.data
     lowm  = zeros(T, nn[t1], nn[t2])
@@ -347,13 +591,20 @@ function _face_mismatch(pf::Field, cf::Field, nest::NestedGrid, ax::Int)
         @inbounds for B in 1:nn[t2], A in 1:nn[t1]
             pidx[t1] = Hp[t1] + oo[t1] + A - 1
             pidx[t2] = Hp[t2] + oo[t2] + B - 1
-            s = 0.0
+            Ap = _face_area(nest, measure, ax, B)
+            s = 0.0; den = 0.0
             for b in 1:r[t2], a in 1:r[t1]
                 cidx[t1] = Hc[t1] + (A-1)*r[t1] + a
                 cidx[t2] = Hc[t2] + (B-1)*r[t2] + b
-                s += cd[cidx[1], cidx[2], cidx[3]]
+                if ωz === nothing
+                    s += cd[cidx[1], cidx[2], cidx[3]]
+                else
+                    w = ωz[cidx[3]]
+                    s += w * cd[cidx[1], cidx[2], cidx[3]]; den += w
+                end
             end
-            M[A, B] = (pd[pidx[1], pidx[2], pidx[3]] - s * inv) * Ap
+            fine = ωz === nothing ? s * inv : s / den
+            M[A, B] = (pd[pidx[1], pidx[2], pidx[3]] - fine) * Ap
         end
     end
     e = zeros(T, 0, 0)
@@ -363,7 +614,7 @@ function _face_mismatch(pf::Field, cf::Field, nest::NestedGrid, ax::Int)
 end
 
 """
-    apply_flux_correction!(parent_field, mismatch, nest)
+    apply_flux_correction!(parent_field, mismatch, nest; measure=nothing)
 
 Remove the coarse-fine flux inconsistency recorded in `mismatch`.
 
@@ -377,16 +628,23 @@ Remove the coarse-fine flux inconsistency recorded in `mismatch`.
     conserved scalar exactly invariant across a nested step. Indices wrap
     periodically, so a nest touching the parent boundary still works.
 
+`A_p` and `V_p` use the parent's actual layer thickness (stretched
+parents). With the mass `measure` of a sound-proof pair they are the
+reference *mass* of the face and cell (`W Δz`; for the corrected cells,
+which lie outside the nest, the parent's own `W_p Δz_p`, see
+[`NestMeasure`](@ref)): a face correction then
+matches the parent's mass flux to the child's, and refluxing with
+mass-flux registers (`Φ = ∫W F dt`) preserves the composite `∫ W θ dV`.
+Use the `measure` the mismatch was computed with (face fields).
+
 Without this correction two-way nesting leaks: the parent kept the coarse
 flux while the child used the fine ones.
 """
 function apply_flux_correction!(pf::Field{L}, m::NestFluxMismatch,
-                                nest::NestedGrid) where {L<:Union{FaceX,FaceY,FaceZ}}
+                                nest::NestedGrid; measure=nothing) where {L<:Union{FaceX,FaceY,FaceZ}}
     ax = _axis_of(L)
     pm = nest.parent_mesh
-    dp = (pm.dx, pm.dy, pm.dz)
     t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
-    Ap = dp[t1] * dp[t2]
     lowm, highm = ax == 1 ? (m.west, m.east) : ax == 2 ? (m.south, m.north) :
                                                (m.bottom, m.top)
     (isempty(lowm) || isempty(highm)) && return pf
@@ -398,16 +656,15 @@ function apply_flux_correction!(pf::Field{L}, m::NestFluxMismatch,
         @inbounds for B in 1:nn[t2], A in 1:nn[t1]
             pidx[t1] = Hp[t1] + oo[t1] + A - 1
             pidx[t2] = Hp[t2] + oo[t2] + B - 1
-            pd[pidx[1], pidx[2], pidx[3]] -= M[A, B] / Ap
+            pd[pidx[1], pidx[2], pidx[3]] -= M[A, B] / _face_area(nest, measure, ax, B)
         end
     end
     return pf
 end
 
 function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
-                                nest::NestedGrid)
+                                nest::NestedGrid; measure=nothing)
     pm = nest.parent_mesh
-    Vp = pm.dx * pm.dy * pm.dz
     Np = (pm.Nx, pm.Ny, pm.Nz); Hp = (pm.Hx, pm.Hy, pm.Hz)
     nn = (nest.nx, nest.ny, nest.nz); oo = (nest.ix, nest.iy, nest.iz)
     pd = pf.data
@@ -424,6 +681,8 @@ function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
             @inbounds for B in 1:nn[t2], A in 1:nn[t1]
                 idx[t1] = Hp[t1] + oo[t1] + A - 1
                 idx[t2] = Hp[t2] + oo[t2] + B - 1
+                K = idx[3] - Hp[3]
+                Vp = pm.dx * pm.dy * _pcell(nest, measure, K)
                 pd[idx[1], idx[2], idx[3]] += sgn * M[A, B] / Vp
             end
         end

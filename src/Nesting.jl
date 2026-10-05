@@ -37,11 +37,20 @@ module Nesting
 # the summed fine fluxes through a parent face equal the parent flux).
 # That combination is what makes the prolongation flux-preserving.
 #
-# Files: nesting/grid.jl (NestBC, NestedGrid), nesting/operators.jl
+# N-nest-b (#256) generalises the three primitives to a z-stretched parent
+# (Lagrange nodes on the actual parent face heights), to the reference-mass
+# measure of the sound-proof systems (W-weighted restriction, prolongation
+# conserving ∫Wφ dV, W = ρ̄ or ρ̄θ̄ from the sims' ReferenceState), and to
+# solid-aware restriction (child cells / faces inside IBM buildings are
+# left out of the parent average, Hellsten et al. 2021, GMD 14, 3185, §3.5).
+#
+# Files: nesting/grid.jl (NestBC, NestedGrid), nesting/measure.jl
+# (NestMeasure, fluid mask), nesting/operators.jl
 # (weights, prolongation, restriction, refluxing), nesting/interp_state.jl
 # (NestSponge, NestInterpState), nesting/step.jl (composite diagnostics,
 # step_nested!).
 
+using Printf: @sprintf
 using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ,
                Location, interior, totalsize
@@ -52,6 +61,9 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall, NoSlipWall
 using ..Simulations
 using ..Simulations: BoussinesqSimulation
+using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness
+using ..Anelastic: MassWeightedSimulation, ReferenceState, constraint_weights
+using ..IBM: SolidMask
 using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
@@ -69,9 +81,11 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        NestInterpState, nest_interp_state, interpolate_parent_state!,
        nest_scalar_names, apply_nest_boundary!,
        restrict_state_to_parent!, reflux!, reflux_scalars!,
-       step_nested!, nest_conservation_error, composite_integral
+       step_nested!, nest_conservation_error, composite_integral,
+       NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask
 
 include("nesting/grid.jl")
+include("nesting/measure.jl")
 include("nesting/operators.jl")
 include("nesting/interp_state.jl")
 include("nesting/step.jl")
