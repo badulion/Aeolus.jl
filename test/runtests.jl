@@ -996,6 +996,7 @@ end
     include("era6_wall_models_tble.jl")  # P57-c: non-equilibrium (TBLE) wall model, dynamic κ (#189)
     include("era6_sigma_sgs.jl")         # P59-b σ-model closure: invariants, z³ wall scaling, Couette, HIT (#184)
     include("era6_flat_plate.jl")        # P59-d flat-plate BL: fringe, Blasius, FST, transition (#185)
+    include("era6_synthetic_inflow.jl")  # N-inflow-a: digital-filter inflow, Lund transform (#252)
     include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected, Ri_g-dependent anisotropic ν/κ (#187)
     include("era6_wall_models_dynamic.jl") # P57-e: dynamic z0 of partially resolved roughness (#190)
     include("era6_gabls1.jl")            # P55-f: GABLS1 on the shared SBL driver, reduced (#191)
