@@ -575,10 +575,14 @@ end
 # interior sums (per unit cell volume) of the stencil production removed,
 # Σ ν ΔD, and of the wall-stress work, Σ Pw.
 function _wall_production!(c::TKEClosure{T}, sim, bcs) where {T}
-    pw = c.Pw.data
-    fill!(pw, zero(T))
+    fill!(c.Pw.data, zero(T))
     iw = c.walls[]
     iw === nothing && return (zero(T), zero(T))
+    return _wall_production!(c, iw, sim, bcs)      # (function barrier: c.walls is a Ref{Any})
+end
+
+function _wall_production!(c::TKEClosure{T}, iw::ImmersedWalls, sim, bcs) where {T}
+    pw, dd, nd = c.Pw.data, c.D.data, c.ν.data
     g = mesh(c.e)
     q = (sim.u.data, sim.v.data, sim.w.data)
     Δ = (T(g.dx), T(g.dy), T(g.dz))
@@ -588,15 +592,19 @@ function _wall_production!(c::TKEClosure{T}, sim, bcs) where {T}
         I, J, K = Int(f.I), Int(f.J), Int(f.K)
         Ni, Nj, Nk = I + s * (d == 1), J + s * (d == 2), K
         ci, cj, ck = Int(c_ == 1), Int(c_ == 2), Int(c_ == 3)
-        qF = q[c_][I, J, K]
-        a4 = T(0.25) * (-qF * (q[c_][Ni, Nj, Nk] - qF) / Δ[d]^2)
+        qc = q[c_]
+        qF = qc[I, J, K]
+        a4 = T(0.25) * (-qF * (qc[Ni, Nj, Nk] - qF) / Δ[d]^2)
         pw[I, J, K] += a4;  pw[I-ci, J-cj, K-ck] += a4
         pw[Ni, Nj, Nk] += a4; pw[Ni-ci, Nj-cj, Nk-ck] += a4
     end
     _fold_halos!(pw, bcs, g)
     ii, jj, kk = interior(g)
-    @inbounds @views c.D.data[ii, jj, kk] .-= pw[ii, jj, kk]
-    @inbounds stencil = @views sum(c.ν.data[ii, jj, kk] .* pw[ii, jj, kk])
+    stencil = zero(T)
+    @inbounds for K in kk, J in jj, I in ii
+        dd[I, J, K] -= pw[I, J, K]
+        stencil += nd[I, J, K] * pw[I, J, K]
+    end
     fill!(pw, zero(T))
     # 2. the wall-stress work a q_F², half to each cell the face separates
     a = immersed_wall_drag!(c.adrag, iw, q...)
@@ -608,7 +616,10 @@ function _wall_production!(c::TKEClosure{T}, sim, bcs) where {T}
         pw[I, J, K] += h; pw[I-ci, J-cj, K-ck] += h
     end
     _fold_halos!(pw, bcs, g)
-    @inbounds work = @views sum(pw[ii, jj, kk])
+    work = zero(T)
+    @inbounds for K in kk, J in jj, I in ii
+        work += pw[I, J, K]
+    end
     return (stencil, work)
 end
 
