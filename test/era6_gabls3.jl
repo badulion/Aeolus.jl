@@ -161,7 +161,14 @@ end
     # Δx = 12.5 m, Δz = 4.2 m puts it at 102.7 m and at 6.25 m at 126.8 m
     # (both inside; examples/sbl/gabls3.jl, numbers on the theory page).
     # The jet rises toward the 6.25 m ensemble as the grid is refined.
-    @test_broken lo <= J.z <= hi
+    # This was a @test_broken, and the broken marker was the wrong
+    # expectation (#248): the reduced run sits on the 100 m bound to within
+    # round-off-amplified chaos. The same code gives 94.93 m run alone and
+    # 100.9997 m inside the full suite (identically on master 3a23110 and
+    # on the #248 branch), so the envelope check is an unexpected pass in
+    # one context and a failure in the other. It is reported, not asserted;
+    # the within-one-Δz bound below holds in both.
+    @info "GABLS3 reduced: jet inside the 03-04 UTC envelope" inside = (lo <= J.z <= hi)
     @test lo - st.z[2] + st.z[1] <= J.z <= hi        # within one Δz of the envelope
 end
 
