@@ -1041,7 +1041,7 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
        prepare_open_boundaries!, correct_boundary_mass_flux!, open_boundary_flux,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
        open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
-       assert_open_face_correction
+       assert_open_face_correction, open_intermediate_velocity!
 
 # Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
 # nudging, prescribed advective tendencies, surface-temperature series.

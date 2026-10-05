@@ -336,6 +336,43 @@ end
 end
 
 # ---------------------------------------------------------------------------
+# 5. Taylor–Green vortex u = sin kx cos ky F(t), v = −cos kx sin ky F(t),
+# F = exp(−2νk²t), an exact Navier–Stokes solution, in a window that cuts
+# it at arbitrary phase: every lateral face is open with the exact data.
+const _TG_k = 2π
+const _TG_ν = 0.05
+_tgF(t) = exp(-2 * _TG_ν * _TG_k^2 * t)
+_tgu(x, y, z, t) = sin(_TG_k * x) * cos(_TG_k * y) * _tgF(t)
+_tgv(x, y, z, t) = -cos(_TG_k * x) * sin(_TG_k * y) * _tgF(t)
+
+function _tg_error(N, adv!; c = 0.2, T = 0.1)
+    m = RegularGrid(size = (N, N, 2), extent = (1.0, 1.0, 2.0 / N), origin = (0.13, 0.31, 0.0))
+    bcs = open_boundary_conditions(m, FunctionBoundaryData(u = _tgu, v = _tgv, w = 0.0, θ = 0.0);
+                                   top = :wall)
+    s = BoussinesqSimulation(m; bcs = bcs, ν = _TG_ν)
+    set!(s.u, (x, y, z) -> _tgu(x, y, z, 0.0)); set!(s.v, (x, y, z) -> _tgv(x, y, z, 0.0))
+    n = ceil(Int, T / (c / N^2 / _TG_ν)); dt = T / n      # ν dt / h² = c
+    for _ in 1:n; adv!(s, dt); end
+    xs = xnodes(m, FaceX()); ys = ynodes(m, FaceX())
+    ui = interior_view(s.u)
+    return maximum(abs(ui[i, j, 1] - _tgu(xs[i], ys[j], 0, s.t)) for i in 1:N, j in 1:N),
+           max_divergence(s)
+end
+
+@testset "Dirichlet-everywhere Taylor–Green: second order" begin
+    for (name, adv!) in (("step_rk3!", (s, dt) -> step_rk3!(s, dt)),
+                         ("step_imex! ARK2", (s, dt) -> step_imex!(s, dt, ARK2())))
+        r = [_tg_error(N, adv!) for N in (16, 32, 64)]
+        e = first.(r)
+        p1 = log2(e[1] / e[2]); p2 = log2(e[2] / e[3])
+        @printf("    TG window %-16s max|u-u_exact| = %.3e %.3e %.3e   order %.3f %.3f\n",
+                name, e..., p1, p2)
+        @test abs(p1 - 2) < 0.2 && abs(p2 - 2) < 0.2
+        @test all(x -> x[2] < 1e-12, r)
+    end
+end
+
+# ---------------------------------------------------------------------------
 @testset "closed boundaries: the hooks are no-ops" begin
     m = RegularGrid(size = (8, 8, 8), extent = (1.0, 1.0, 1.0))
     for bcs in (FieldBoundaryConditions(:periodic),

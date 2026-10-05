@@ -824,3 +824,57 @@ function open_boundary_ledger(sim)
     return (Q = st.Q, residual = st.residual, δ = st.δ, t = st.t)
 end
 
+"""
+    open_intermediate_velocity!(sim, τ) -> sim
+
+Kim & Moin's (1985) boundary condition for the **intermediate** velocity
+of a pressure-correction step whose viscous term is implicit. The
+projection `u = u* − ∇φ` with `φ ≈ τ p` changes the tangential velocity
+next to an open face by `τ ∂p/∂s`, so an implicit diffusion solve for
+`u*` that imposes the end-of-step data `g` on the tangential halos leaves
+a viscous boundary layer of amplitude `τ ∂p/∂s` after the projection
+(first-order splitting error, order reduction in time). The consistent
+condition is `u*_s = g_s + τ ∂p/∂s`: this adds `τ ∂p/∂s` (from the
+latest pressure `sim.p`, extrapolated from the first interior layer) to
+the tangential-velocity buffers of every open face. The caller restores
+the buffers ([`restore_open_boundaries!`](@ref)) before the projection,
+which must see the data `g` itself. Normal velocities and scalars are not
+touched (`∂φ/∂n = 0`). `step_imex!` (`ARK2`) applies it around each
+implicit stage.
+
+Reference: Kim, J. & Moin, P. (1985), *J. Comput. Phys.* 59, 308–323,
+§3 (boundary condition for the intermediate velocity).
+"""
+function open_intermediate_velocity!(sim, τ::Real)
+    has_open_boundaries(sim.bcs) || return sim
+    pf = sim.p
+    fill_halos!(pf, sim.bcs)
+    pd = pf.data
+    m = pf.mesh
+    T = eltype(pd)
+    τT = T(τ)
+    Hs = (m.Hx, m.Hy, m.Hz); Ns = (m.Nx, m.Ny, m.Nz); Δs = (m.dx, m.dy, m.dz)
+    for st in open_boundary_states(sim.bcs), p in st.planes
+        p.normal && continue
+        dir = p.name === :u ? 1 : p.name === :v ? 2 : p.name === :w ? 3 : 0
+        dir == 0 && continue
+        # the interior layer the gradient is taken from, along the face normal
+        lay = p.high ? Hs[p.axis] + Ns[p.axis] : Hs[p.axis] + 1
+        inv = 1 / Δs[dir]
+        rngs = (p.irange, p.jrange, p.krange)
+        @inbounds for (c, k) in enumerate(rngs[3]), (b, j) in enumerate(rngs[2]),
+                      (a, i) in enumerate(rngs[1])
+            I = (i, j, k)
+            # clamp: normal index to the interior layer; the others to the
+            # range where the face gradient has two interior neighbours
+            q = ntuple(3) do d
+                d == p.axis ? lay :
+                d == dir ? clamp(I[d], Hs[d] + 2, Hs[d] + Ns[d]) :
+                           clamp(I[d], Hs[d] + 1, Hs[d] + Ns[d])
+            end
+            qm = ntuple(d -> d == dir ? q[d] - 1 : q[d], 3)
+            p.data[a, b, c] += τT * (pd[q...] - pd[qm...]) * inv
+        end
+    end
+    return sim
+end

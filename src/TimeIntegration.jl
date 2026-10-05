@@ -38,7 +38,8 @@ using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             is_wall, homogeneous_bcs, pinned_face_indices,
                             has_open_boundaries, update_open_boundaries!,
                             prepare_open_boundaries!, assert_open_face_correction,
-                            open_boundary_snapshot, restore_open_boundaries!
+                            open_boundary_snapshot, restore_open_boundaries!,
+                            open_intermediate_velocity!
 using ..Operators
 using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    momentum_advect!, advect_centered!,
@@ -1504,6 +1505,17 @@ function _add_diffusion_tendencies!(sim::BoussinesqSimulation{T}, ws::IMEXWorksp
     return sim
 end
 
+# Open faces (N-open-b): the implicit stage solves for the intermediate
+# velocity u* = u + τ∇p, so its tangential boundary data get Kim & Moin's
+# τ ∂p/∂s; the data themselves are restored (from the returned snapshot)
+# before the projection. `nothing` and a no-op for closed boundaries.
+function _open_intermediate!(sim::BoussinesqSimulation, τ)
+    has_open_boundaries(sim) || return nothing
+    snap = open_boundary_snapshot(sim)
+    open_intermediate_velocity!(sim, τ)
+    return snap
+end
+
 # Chorin projection — identical to the one inside Simulations.step!, but
 # callable per IMEX stage so every stage value is discretely
 # divergence-free.
@@ -1689,12 +1701,14 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
                           sgs_transpose = sgsT, scalar_tensor = Ks)
     _copy_tendencies!(ws.aux, sim, names)                 # E(uⁿ)
     update_open_boundaries!(sim, t0 + γ * Δt, γ * Δt)     # stage-1 boundary data (lift)
+    bsnap = _open_intermediate!(sim, γ * Δt)
     for name in names
         f = getfield(sim, name)
         _combine2!(f, one(T), getfield(ws.state0, name),
                       γ * Δt, getfield(ws.aux, name), m)
         _solve_field!(sim, ws, name, f, νm, νs, γ * Δt, tol, maxit)
     end
+    restore_open_boundaries!(sim, bsnap)
     post_predictor! === nothing || post_predictor!(sim, γ * Δt)
     _project!(sim, γ * Δt)
     sim.t = t0 + γ * Δt
@@ -1713,6 +1727,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
                           momentum_advection = momentum_advection,
                           sgs_transpose = sgsT, scalar_tensor = Ks)   # E(U₁) → sim.t*
     update_open_boundaries!(sim, t0 + Δt, Δt)
+    bsnap = _open_intermediate!(sim, Δt)
     for name in names
         f = getfield(sim, name)
         _combine4!(f, one(T), getfield(ws.state0, name),
@@ -1721,6 +1736,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
                       (one(T) - γ) * Δt, _diffusion_buffer(sim, ws, name), m)
         _solve_field!(sim, ws, name, f, νm, νs, γ * Δt, tol, maxit)
     end
+    restore_open_boundaries!(sim, bsnap)
     post_predictor! === nothing || post_predictor!(sim, Δt)
     _project!(sim, Δt)
     sim.t = t0 + Δt
