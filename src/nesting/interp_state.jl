@@ -263,6 +263,12 @@ function _blend_halo!(dst::Field, a::Field, b::Field, τ::Real; interface::Bool=
     return _halo_map!((i, j, k) -> τ1 * ad[i, j, k] + τT * bd[i, j, k], dst, interface)
 end
 
+# The velocity components whose boundary-normal interior plane a nest may
+# impose: only along a direction whose low face is a nest face. On a
+# periodic (or wall) direction the plane is the child's own interior face.
+_nest_dirs(sim) = (sim.bcs.west isa NestBC, sim.bcs.south isa NestBC,
+                   sim.bcs.bottom isa NestBC)
+
 """
     apply_nest_boundary!(child_sim, state; impose_interface=false)
 
@@ -270,13 +276,15 @@ Write the interpolated parent `state` into the halo cells of every member
 of the field set: `child_sim`'s `u, v, w, θ` and each bound scalar's
 child field. With `impose_interface=true` the velocities'
 boundary-normal interior face planes are overwritten too (Dirichlet
-inflow faces).
+inflow faces) — along the directions whose faces are nest faces
+(`NestBC`) only.
 """
 function apply_nest_boundary!(csim::_NestSim, s::NestInterpState;
                               impose_interface::Bool=false)
-    _copy_halo!(csim.u, s.u; interface=impose_interface)
-    _copy_halo!(csim.v, s.v; interface=impose_interface)
-    _copy_halo!(csim.w, s.w; interface=impose_interface)
+    dx, dy, dz = _nest_dirs(csim)
+    _copy_halo!(csim.u, s.u; interface=impose_interface && dx)
+    _copy_halo!(csim.v, s.v; interface=impose_interface && dy)
+    _copy_halo!(csim.w, s.w; interface=impose_interface && dz)
     for (_, buf, cf, _) in _scalar_entries(s, nothing, csim)
         _copy_halo!(cf, buf)
     end
