@@ -52,6 +52,7 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall, NoSlipWall
 using ..Simulations
 using ..Simulations: BoussinesqSimulation
+using ..Anelastic: MassWeightedSimulation
 using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
@@ -70,6 +71,12 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_scalar_names, apply_nest_boundary!,
        restrict_state_to_parent!, reflux!, reflux_scalars!,
        step_nested!, nest_conservation_error, composite_integral
+
+"The dynamical cores a nest can couple (Boussinesq, anelastic, pseudo-incompressible)."
+const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
+
+_moist(sim::BoussinesqSimulation) = sim.has_moisture
+_moist(::MassWeightedSimulation)  = false
 
 include("nesting/grid.jl")
 include("nesting/operators.jl")

@@ -51,7 +51,7 @@ covered by the nest plus all child cells.
     [`nest_conservation_error`](@ref) from the interface flux imbalance
     instead.
 """
-function composite_integral(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
+function composite_integral(psim::_NestSim, csim::_NestSim,
                             nest::NestedGrid, quantity::Symbol;
                             state::Union{Nothing,NestInterpState}=nothing)
     pm = nest.parent_mesh; cm = nest.child_mesh
@@ -105,8 +105,8 @@ inside the nest (the interface planes belong to
 [`apply_flux_correction!`](@ref)). Without a `state` only `u, v, w, θ`
 are restricted.
 """
-function restrict_state_to_parent!(psim::BoussinesqSimulation,
-                                   csim::BoussinesqSimulation, nest::NestedGrid,
+function restrict_state_to_parent!(psim::_NestSim,
+                                   csim::_NestSim, nest::NestedGrid,
                                    s::Union{Nothing,NestInterpState}=nothing)
     restrict_to_parent!(psim.θ, csim.θ, nest)
     if s !== nothing
@@ -156,7 +156,7 @@ has an entry in `registers`, a mapping
 other names to their bound parent fields). Scalars without registers are
 left untouched. Returns the names that were refluxed.
 """
-function reflux_scalars!(psim::BoussinesqSimulation, nest::NestedGrid,
+function reflux_scalars!(psim::_NestSim, nest::NestedGrid,
                          s::NestInterpState, registers)
     done = Symbol[]
     for (name, _, _, pf) in _scalar_entries(s, psim, nothing)
@@ -171,7 +171,7 @@ function reflux_scalars!(psim::BoussinesqSimulation, nest::NestedGrid,
 end
 
 "Interface mass-flux imbalance, normalized by (velocity scale × interface area)."
-function _interface_imbalance(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
+function _interface_imbalance(psim::_NestSim, csim::_NestSim,
                               nest::NestedGrid)
     m = compute_nest_flux_mismatch(psim.u, csim.u, nest) +
         compute_nest_flux_mismatch(psim.v, csim.v, nest) +
@@ -203,7 +203,7 @@ step, as recorded by the most recent [`step_nested!`](@ref).
 If no step has been recorded, `:mass` is evaluated instantaneously and the
 other quantities raise an error.
 """
-function nest_conservation_error(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
+function nest_conservation_error(psim::_NestSim, csim::_NestSim,
                                  nest::NestedGrid, quantity::Symbol)
     quantity === :θ && (quantity = :theta)
     haskey(nest.ledger, quantity) && return nest.ledger[quantity]
@@ -253,7 +253,7 @@ them with [`nest_conservation_error`](@ref). Returns
 re-allocating the boundary buffers every step; it then defines the field
 set and `scalars` is ignored.
 """
-function step_nested!(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
+function step_nested!(psim::_NestSim, csim::_NestSim,
                       nest::NestedGrid, dt::Real;
                       substeps::Union{Nothing,Integer}=nothing,
                       order::Int=3,
