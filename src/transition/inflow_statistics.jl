@@ -630,3 +630,167 @@ function inflow_lengths(s::ParentResolvedStatistics, z::AbstractVector, t::Real)
     f(M) = [_interp(s.z, @view(M[c, :]), zz) for c in 1:3, zz in z]
     return (L_s = f(L.L_s), L_z = f(L.L_z), T = f(L.T))
 end
+
+# =========================================================================
+# Parametrized statistics (a parent without resolved turbulence)
+# =========================================================================
+
+"""
+    ParametrizedStatistics(u_star, w_star, z_i, L_Ob; length_scale, U_n = 0,
+                           wind_angle = 0, U_min = 0.1)
+    ParametrizedStatistics(; u_star, z_i, L_Ob = Inf, w_star = nothing, kwargs...)
+    ParametrizedStatistics(; u_star, z_i, θv_star, θv_ref, kwargs...)  # L_Ob from the fluxes
+
+Similarity profiles for a parent that resolves no turbulence (a
+mesoscale model, #58), implementing [`InflowStatistics`](@ref). The
+scales may be numbers or functions of time `t`. `w_star = nothing`
+derives the convective velocity from the Obukhov length,
+``w_*^3 = -z_iu_*^3/(κL)`` for ``L < 0`` and ``0`` otherwise (κ =
+`SurfaceExchange.von_karman()`); the flux form (``θ_{v*}`` and the
+reference ``θ_v``, both K) takes ``L`` from
+`SurfaceExchange.obukhov_length(u_star, θv_star, θv_ref)`. No Obukhov
+length is computed here.
+
+With ``x = \\min(z/z_i, 1)``, in the frame of the mean wind (along,
+cross, vertical), the shear-generated and the convective variances are
+added (the blend of Rotach, Gryning & Tassone 1996, as PALM's
+synthetic-turbulence generator applies it):
+
+```math
+\\begin{aligned}
+σ_u^2 &= (2.39u_*)^2(1 - 0.8x) + 0.35w_*^2, &
+σ_v^2 &= (1.92u_*)^2(1 - 0.8x) + 0.35w_*^2,\\\\
+σ_w^2 &= (1.25u_*)^2\\left(1 - \\frac{x}{1.7}\\right) + 1.8\\,x^{2/3}(1 - 0.8x)^2w_*^2, &
+\\overline{u'w'} &= -u_*^2(1 - x),
+\\end{aligned}
+```
+
+``\\overline{u'v'} = \\overline{v'w'} = 0``. The surface values of the shear
+part are the neutral surface-layer ratios of Panofsky & Dutton (1984,
+§7.4: ``σ_{u,v,w}/u_* = 2.39, 1.92, 1.25``); their decay with height is
+Rotach et al.'s (``u_*^2(5 - 4x)`` and ``u_*^2(1.7 - x)``, normalised to
+the surface value); the convective horizontal variance ``0.35w_*^2`` is
+Rotach et al.'s; the convective ``σ_w^2`` is the mixed-layer fit of
+Lenschow, Wyngaard & Pennell (1980, *J. Atmos. Sci.* 37, 1313, Eq. 3),
+maximal ``σ_w/w_* = 0.683`` at ``z/z_i = 0.3125``; ``\\overline{u'w'}``
+is linear to zero at ``z_i`` (Rotach et al.; PALM). Above ``z_i`` every
+component decays by 10 per `length_scale` (PALM's blend). The tensor is
+rotated by `wind_angle` (rad, the mean wind's direction from the face
+normal towards the along-face axis) into the face frame. It is realizable
+for every stability (``σ_u^2σ_w^2 ≥ 8.9u_*^4(1-x)^2``).
+
+Lengths, as in PALM (Kadasch et al. 2021): one `length_scale` (m) for
+every component and direction — a numerical choice (perturbations
+shorter than ~8Δ of the receiving grid are dissipated), not a
+similarity law — with ``L_z ≤ z_i``, and ``T = ℓ/\\max(|U_n|, U_{\\min})``,
+`U_n` the normal velocity (a number or a function of `z`).
+
+Stable stratification (``L > 0``) has ``w_* = 0`` and keeps the neutral
+shear profile scaled by ``u_*`` and ``z_i``: the blend has no stable
+correction (Rotach et al. is a daytime model).
+
+References: Panofsky, H. A. & Dutton, J. A. (1984). *Atmospheric
+Turbulence*. Wiley. Lenschow, D. H., Wyngaard, J. C. & Pennell, W. T.
+(1980). Mean-field and second-moment budgets in a baroclinic, convective
+boundary layer. *J. Atmos. Sci.*, 37, 1313-1326. Rotach, M. W.,
+Gryning, S.-E. & Tassone, C. (1996). A two-dimensional Lagrangian
+stochastic dispersion model for daytime conditions. *Q. J. R. Meteorol.
+Soc.*, 122, 367-389. Kadasch, E. et al. (2021). *Geosci. Model Dev.*,
+14, 5435-5465.
+"""
+struct ParametrizedStatistics{A, B, C, D, U} <: InflowStatistics
+    u_star::A
+    w_star::B          # nothing: from L_Ob
+    z_i::C
+    L_Ob::D
+    length_scale::Float64
+    U_n::U
+    wind_angle::Float64
+    U_min::Float64
+    κ::Float64
+    log::_ProjectionLog
+end
+
+function ParametrizedStatistics(u_star, w_star, z_i, L_Ob; length_scale::Real, U_n = 0.0,
+                                wind_angle::Real = 0.0, U_min::Real = 0.1,
+                                surface::SurfaceConstants = SurfaceConstants())
+    length_scale > 0 || throw(ArgumentError("ParametrizedStatistics: length_scale must be > 0"))
+    return ParametrizedStatistics(u_star, w_star, z_i, L_Ob, Float64(length_scale), U_n,
+                                  Float64(wind_angle), Float64(U_min),
+                                  Float64(von_karman(surface)), _ProjectionLog())
+end
+function ParametrizedStatistics(; u_star, z_i, L_Ob = nothing, w_star = nothing,
+                                θv_star = nothing, θv_ref = nothing,
+                                surface::SurfaceConstants = SurfaceConstants(), kwargs...)
+    L = if L_Ob !== nothing
+        θv_star === nothing || throw(ArgumentError("ParametrizedStatistics: give L_Ob or θv_star, not both"))
+        L_Ob
+    elseif θv_star !== nothing
+        θv_ref === nothing && throw(ArgumentError("ParametrizedStatistics: θv_star needs θv_ref"))
+        θv_star == 0 ? Inf : obukhov_length(u_star, θv_star, θv_ref; c = surface)
+    else
+        Inf
+    end
+    return ParametrizedStatistics(u_star, w_star, z_i, L; surface = surface, kwargs...)
+end
+
+_at(x, t) = x isa Function ? x(t) : x
+
+"""
+    parametrized_scales(src::ParametrizedStatistics, t) -> (u_star, w_star, z_i, L_Ob)
+
+The scales at time `t`, with ``w_*`` derived from ``L`` when not given.
+"""
+function parametrized_scales(s::ParametrizedStatistics, t::Real)
+    us = Float64(_at(s.u_star, t)); zi = Float64(_at(s.z_i, t)); L = Float64(_at(s.L_Ob, t))
+    zi > 0 || throw(ArgumentError("ParametrizedStatistics: z_i must be > 0"))
+    ws = s.w_star === nothing ? (L < 0 ? cbrt(-zi * us^3 / (s.κ * L)) : 0.0) :
+         Float64(_at(s.w_star, t))
+    return (u_star = us, w_star = ws, z_i = zi, L_Ob = L)
+end
+
+# the wind-frame tensor (11 22 33 12 13 23) at z
+function _parametrized_tensor(s::ParametrizedStatistics, z::Real, t::Real)
+    p = parametrized_scales(s, t)
+    us, ws, zi = p.u_star, p.w_star, p.z_i
+    x = clamp(z / zi, 0.0, 1.0)
+    b = z > zi ? 10.0^(-(z - zi) / s.length_scale) : 1.0
+    su2 = ((2.39us)^2 * (1 - 0.8x) + 0.35ws^2) * b
+    sv2 = ((1.92us)^2 * (1 - 0.8x) + 0.35ws^2) * b
+    sw2 = ((1.25us)^2 * (1 - x / 1.7) + 1.8 * x^(2 / 3) * (1 - 0.8x)^2 * ws^2) * b
+    uw = -us^2 * (1 - x) * b
+    return (su2, sv2, sw2, 0.0, uw, 0.0)
+end
+
+# rotate the wind frame by φ about z into the face frame: R' = Q R Qᵀ
+function _rotate(R::NTuple{6,Float64}, φ::Float64)
+    φ == 0 && return R
+    c, s = cos(φ), sin(φ)
+    M = [R[1] R[4] R[5]; R[4] R[2] R[6]; R[5] R[6] R[3]]
+    Q = [c -s 0.0; s c 0.0; 0.0 0.0 1.0]
+    P = Q * M * Q'
+    return (P[1, 1], P[2, 2], P[3, 3], (P[1, 2] + P[2, 1]) / 2, (P[1, 3] + P[3, 1]) / 2,
+            (P[2, 3] + P[3, 2]) / 2)
+end
+
+inflow_stresses(s::ParametrizedStatistics, z::Real, t::Real) =
+    _book!(s.log, t, z, _rotate(_parametrized_tensor(s, z, t), s.wind_angle))
+inflow_stresses(s::ParametrizedStatistics, z::AbstractVector, t::Real) =
+    [inflow_stresses(s, zz, t) for zz in z]
+
+function _param_lengths(s::ParametrizedStatistics, z::Real, t::Real)
+    zi = parametrized_scales(s, t).z_i
+    ℓ = s.length_scale
+    Un = Float64(s.U_n isa Function ? s.U_n(z) : s.U_n)
+    T = ℓ / max(abs(Un), s.U_min)
+    return ℓ, min(ℓ, zi), T
+end
+function inflow_lengths(s::ParametrizedStatistics, z::Real, t::Real)
+    ls, lz, T = _param_lengths(s, z, t)
+    return (L_s = (ls, ls, ls), L_z = (lz, lz, lz), T = (T, T, T))
+end
+function inflow_lengths(s::ParametrizedStatistics, z::AbstractVector, t::Real)
+    v = [_param_lengths(s, zz, t) for zz in z]
+    f(q) = [v[k][q] for c in 1:3, k in eachindex(z)]
+    return (L_s = f(1), L_z = f(2), T = f(3))
+end

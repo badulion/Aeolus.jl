@@ -6,6 +6,8 @@
 using Test, Printf, Random
 using Aeolus
 using Aeolus.Fields: interior_view
+using LinearAlgebra: eigvals, Symmetric
+eigvals_sym(R) = eigvals(Symmetric([R[1] R[4] R[5]; R[4] R[2] R[6]; R[5] R[6] R[3]]))
 
 @testset "N-inflow-b sgs_tke!: every closure's subgrid TKE" begin
     m = RegularGrid(; size = (8, 8, 8), extent = (80.0, 80.0, 40.0), halo = (3, 3, 3))
@@ -260,4 +262,62 @@ end
     @test all(e -> e.t == 7.0 && e.change > 0.1, inflow_projection_log(src))
     a_s = inflow_lund_coefficients(src, zs, 7.0)              # every tensor now factorises
     @test length(a_s) == length(zs)
+end
+
+@testset "N-inflow-b parametrized statistics (mesoscale parent)" begin
+    zi = 1000.0
+    # Lenschow et al. (1980): σ_w²/w*² = 1.8 x^{2/3}(1 - 0.8x)², maximal at x = 0.3125
+    s = ParametrizedStatistics(0.0, 2.0, zi, -1.0; length_scale = 200.0)
+    σw(z) = sqrt(inflow_stresses(s, z, 0.0)[3]) / 2.0
+    xm = 0.3125
+    @test σw(xm * zi) ≈ sqrt(1.8 * xm^(2 / 3)) * (1 - 0.8xm) atol = 1e-10
+    @test abs(σw(xm * zi) - 0.683) < 5e-4                     # the published 0.683
+    @test σw((xm - 1e-4) * zi) < σw(xm * zi) && σw((xm + 1e-4) * zi) < σw(xm * zi)
+    @test maximum(σw, range(0, zi; length = 2001)) ≈ σw(xm * zi) atol = 1e-6
+    # neutral surface layer (Panofsky & Dutton 1984): 2.39, 1.92, 1.25, u'w' = -u*²
+    us = 0.4
+    n = ParametrizedStatistics(; u_star = us, z_i = zi, L_Ob = Inf, length_scale = 200.0)
+    R0 = inflow_stresses(n, 0.0, 0.0)
+    @test sqrt(R0[1]) / us ≈ 2.39 atol = 1e-12
+    @test sqrt(R0[2]) / us ≈ 1.92 atol = 1e-12
+    @test sqrt(R0[3]) / us ≈ 1.25 atol = 1e-12
+    @test R0[5] ≈ -us^2 atol = 1e-15
+    @test parametrized_scales(n, 0.0).w_star == 0
+    # w* from L (SurfaceExchange's κ): w*³ = -z_i u*³/(κ L)
+    κ = Aeolus.SurfaceExchange.von_karman()
+    for zL in (0.0, 1.0, 10.0, 100.0)
+        L = zL == 0 ? Inf : -zi / zL
+        p = ParametrizedStatistics(; u_star = us, z_i = zi, L_Ob = L, length_scale = 200.0)
+        ws = parametrized_scales(p, 0.0).w_star
+        @test ws ≈ cbrt(zL * us^3 / κ) rtol = 1e-14
+        # every tensor realizable (passes lund_coefficients unchanged), also rotated
+        for φ in (0.0, 0.7)
+            pr = ParametrizedStatistics(us, nothing, zi, L; length_scale = 200.0, wind_angle = φ)
+            Rs = inflow_stresses(pr, collect(range(0, 1.5zi; length = 301)), 0.0)
+            @test isempty(inflow_projection_log(pr))
+            @test all(R -> (lund_coefficients(R); true), Rs)
+            @test all(R -> minimum(eigvals_sym(R)) >= -1e-14 * (R[1] + R[2] + R[3]), Rs)
+        end
+    end
+    # the rotation keeps the trace and turns u'w' into the face frame
+    a0 = ParametrizedStatistics(us, 1.0, zi, -100.0; length_scale = 200.0)
+    a1 = ParametrizedStatistics(us, 1.0, zi, -100.0; length_scale = 200.0, wind_angle = π / 2)
+    Ra, Rb = inflow_stresses(a0, 100.0, 0.0), inflow_stresses(a1, 100.0, 0.0)
+    @test Ra[1] + Ra[2] + Ra[3] ≈ Rb[1] + Rb[2] + Rb[3] rtol = 1e-14
+    @test Rb[6] ≈ Ra[5] rtol = 1e-12                               # along-face u'w' after 90°
+    @test abs(Rb[5]) < 1e-15
+    # L_Ob from the surface fluxes through SurfaceExchange.obukhov_length
+    f = ParametrizedStatistics(; u_star = us, θv_star = -0.1, θv_ref = 300.0, z_i = zi, length_scale = 200.0)
+    @test f.L_Ob == Aeolus.SurfaceExchange.obukhov_length(us, -0.1, 300.0)
+    # lengths: PALM's single scale, L_z ≤ z_i, T = ℓ/max(|U_n|, U_min)
+    l = ParametrizedStatistics(us, nothing, 150.0, -50.0; length_scale = 200.0, U_n = z -> 4.0)
+    Ln = inflow_lengths(l, [10.0, 100.0], 0.0)
+    @test size(Ln.L_s) == (3, 2) && all(==(200.0), Ln.L_s) && all(==(150.0), Ln.L_z)
+    @test all(==(50.0), Ln.T)
+    # time-dependent scales
+    td = ParametrizedStatistics(t -> 0.1 + t / 1000, nothing, zi, Inf; length_scale = 100.0)
+    @test inflow_stresses(td, 0.0, 300.0)[5] ≈ -0.4^2 rtol = 1e-14
+    # the scales feed the generator directly
+    g = DigitalFilterGenerator(16, 2, 50.0, 50.0; inflow_lengths(l, [25.0, 75.0], 0.0)...)
+    @test g.L_s[1, 1] == 200.0
 end

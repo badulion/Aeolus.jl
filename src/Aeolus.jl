@@ -1005,7 +1005,7 @@ export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_gen
 # (resolved + SGS, scale gap) and parametrized (Rotach et al. 1996 blend).
 export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statistics!,
        inflow_projection_log, realizable_stress, inflow_lund_coefficients,
-       ParentResolvedStatistics, inflow_stress_parts
+       ParentResolvedStatistics, inflow_stress_parts, ParametrizedStatistics, parametrized_scales
 # Phase 57 — wall models (#169): equilibrium wall laws and the implicit
 # wall-stress operator. `friction_velocity` / `wall_stress` do not collide
 # with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`

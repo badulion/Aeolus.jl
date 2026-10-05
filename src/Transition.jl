@@ -98,7 +98,7 @@ export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_gen
 # N-inflow-b (#258): statistics for the synthetic inflow (parent-resolved, parametrized)
 export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statistics!,
        inflow_projection_log, realizable_stress, inflow_lund_coefficients,
-       ParentResolvedStatistics, inflow_stress_parts
+       ParentResolvedStatistics, inflow_stress_parts, ParametrizedStatistics, parametrized_scales
 # P59-e (#195): relaminarisation in strongly stable stratification
 export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
 
