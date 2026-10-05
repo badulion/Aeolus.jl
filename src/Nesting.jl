@@ -40,7 +40,9 @@ module Nesting
 # Files: nesting/grid.jl (NestBC, NestedGrid), nesting/operators.jl
 # (weights, prolongation, restriction, refluxing), nesting/interp_state.jl
 # (NestSponge, NestInterpState), nesting/step.jl (composite diagnostics,
-# step_nested!).
+# restriction / refluxing of the field set), nesting/nested_run.jl (NestedRun:
+# per-domain advance closures, subcycling under adaptive steppers,
+# temporal interpolation of the boundary data, step_nested!; N-nest-c #257).
 
 using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ,
@@ -51,7 +53,11 @@ using ..BoundaryConditions
 using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall, NoSlipWall
 using ..Simulations
-using ..Simulations: BoussinesqSimulation
+using ..Simulations: BoussinesqSimulation, step_rk3!
+using ..Operators: sgs_closure, sgs_state, restore_sgs_state!
+using ..TimeIntegration: CFLConstraints, adaptive_dt, StateSnapshot, save_state!, state_snapshot,
+                         restore_state!, IMEXScheme, ARK2, Rosenbrock2, step_imex!,
+                         _all_finite, _max_advective_rate
 using ..Anelastic: MassWeightedSimulation
 using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
@@ -70,7 +76,9 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        NestInterpState, nest_interp_state, interpolate_parent_state!,
        nest_scalar_names, apply_nest_boundary!,
        restrict_state_to_parent!, reflux!, reflux_scalars!,
-       step_nested!, nest_conservation_error, composite_integral
+       step_nested!, nest_conservation_error, composite_integral,
+       DomainAdvance, domain_advance, stage_times,
+       NestedRun, NestRunStats, boundary_time
 
 "The dynamical cores a nest can couple (Boussinesq, anelastic, pseudo-incompressible)."
 const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
@@ -82,5 +90,6 @@ include("nesting/grid.jl")
 include("nesting/operators.jl")
 include("nesting/interp_state.jl")
 include("nesting/step.jl")
+include("nesting/nested_run.jl")
 
 end # module
