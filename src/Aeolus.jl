@@ -204,7 +204,7 @@ export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
 export resolved_tke_profile
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
-       CGPoissonSolver, solve!
+       CGPoissonSolver, solve!, poisson_axis_bcs
 export ImpermeableWall
 export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile,
