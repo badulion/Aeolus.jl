@@ -310,6 +310,15 @@ options go under the coupling name in `options`.
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177; with a stability-corrected `:sgs` closure κh on the x, y faces and its κv on the z faces, as for θ) |
 
+**Lateral boundaries.** The case is periodic in `x` and `y`. Open
+(Dirichlet-from-boundary-data) faces exist since N-open-b (#255:
+`OpenBoundary`, `open_boundary_conditions`, the `AbstractBoundaryData`
+contract and the global mass-flux correction, called from every core
+through `update_open_boundaries!`), but the case does not use them yet:
+`BoundaryConditions` is exempt infrastructure, the default run is bit for
+bit unchanged, the `:open` option arrives with N-open-d (#262) and the
+nested default with N-berlin-nest (#265).
+
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every
 dynamics step (`step!`, or `step_imex!` under the IMEX steppers, which

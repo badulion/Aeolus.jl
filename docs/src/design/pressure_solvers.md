@@ -87,7 +87,8 @@ The pressure condition is not chosen separately: it follows from the
 velocity faces. `BoundaryConditions.axis_poisson_bc(face)` returns
 `:periodic` for `Periodic` and `:neumann` for every face on which the
 normal velocity is prescribed (`ImpermeableWall`, `NoSlipWall`, `NoFlux`,
-`FreeStreamBoundary`; the `OpenBoundary` of N-open-b adds a method). A
+and every `AbstractOpenBoundary`: `FreeStreamBoundary` and the
+data-driven `OpenBoundary` of N-open-b). A
 face type with no method throws, so a solver is never silently built for
 the wrong problem. `PressureSolvers.poisson_axis_bcs(bcs)` pairs the two
 faces of each axis and rejects periodic-against-Neumann.
