@@ -244,4 +244,19 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         @test night.storage + day.storage ≈ all_.storage rtol = 1e-14
         @test occursin("local 20-05 h", BC.heat_report(case.ledger; window = (20, 5)))
     end
+
+    @testset "canopy layer: the tallest roof, or cfg.canopy_top" begin
+        for ct in (NaN, 30.0)
+            case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
+                                               canopy_top = ct); io = devnull)
+            BC.run_case!(case; nsteps = 2)
+            hl = case.ledger.heat
+            roof = maximum(BC.building_height(case.geom, case.mesh))
+            @test roof > 0
+            @test hl.canopy_top == (isnan(ct) ? roof : ct)
+            a = BC.heat_budget(case.ledger; layer = :canopy)
+            b = BC.heat_budget(case.ledger; layer = (0.0, hl.canopy_top))
+            @test a.storage == b.storage && a.terms == b.terms
+        end
+    end
 end

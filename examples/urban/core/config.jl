@@ -46,6 +46,9 @@ Groups of fields:
   default;
 * **options** — `options::Dict{Symbol,Any}`: `coupling_name => NamedTuple`
   merged over that coupling's `default_options`;
+* **ledger** — `canopy_top` (m): top of the `:canopy` layer of the
+  air-heat budget (`heat_budget(…; layer = :canopy)`); `NaN` (default)
+  takes the tallest roof of the scene;
 * **output** — `output_path` (`nothing` disables NetCDF output),
   `verbose`.
 """
@@ -97,6 +100,7 @@ Base.@kwdef mutable struct CaseConfig
     physics::Dict{Symbol,Any}         = Dict{Symbol,Any}()
     options::Dict{Symbol,Any}         = Dict{Symbol,Any}()
     # output
+    canopy_top::Float64               = NaN
     output_path::Union{Nothing,String} = joinpath(URBAN_DIR, "output", "alexanderplatz.nc")
     verbose::Bool                     = true
 end

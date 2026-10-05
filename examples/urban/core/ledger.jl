@@ -225,12 +225,20 @@ end
 """
     canopy_top(case) -> m
 
-Top of the `:canopy` layer of the air-heat budget: the tallest roof of
-the scene (the top of its highest solid cell), or one level for a scene
-without buildings.
+Top of the `:canopy` layer of the air-heat budget: `case.cfg.canopy_top`
+if it is set (finite), otherwise the tallest roof of the scene (the top
+of its highest solid cell), or one level for a scene without buildings.
+
+In the Alexanderplatz scene the tallest roof is the Fernsehturm, clipped
+at the domain top (200 m on the 64 × 64 × 32 grid), so the default
+`:canopy` layer is the whole column there; set `cfg.canopy_top` (e.g. to
+the 90th percentile of the roof heights, 37.5 m) for the street canyons.
 """
-canopy_top(case) = max(maximum(building_height(case.geom, case.mesh); init = 0.0),
-                       Float64(level_thickness(case.mesh)[1]))
+function canopy_top(case)
+    isfinite(case.cfg.canopy_top) && return Float64(case.cfg.canopy_top)
+    return max(maximum(building_height(case.geom, case.mesh); init = 0.0),
+               Float64(level_thickness(case.mesh)[1]))
+end
 
 _time_ledger!(case, t0) =
     (case.timing[(:ledger, :ledger)] = get(case.timing, (:ledger, :ledger), 0.0) + (time_ns() - t0) * 1e-9)
