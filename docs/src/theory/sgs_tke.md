@@ -86,6 +86,38 @@ momentum kernels, not from `Operators._velocity_gradient_at`: that
 tensor's off-diagonal entries are centred over two cells, and their
 square is not the dual of the edge-flux operator.
 
+**Shear production at wall-modelled walls (#232).** Where a wall model
+replaces the stencil's flux through an immersed wall
+(`WallModels.remove_stencil_wall_flux!` takes
+``ν_{t,e}(q_N − q_F)/Δ_d^2`` out of the tendency of a wall face ``F``,
+``N`` the IBM-zeroed neighbour, and `apply_immersed_wall_stress!`
+applies ``τ = a Δ_d q_F``), the dual above would still book the removed
+stencil share ``ν_{t,e} q_F(q_F − q_N)/Δ_d^2`` as production — energy
+the resolved flow never lost — and none of the work of the wall stress.
+With the walls attached
+([`attach_immersed_walls!`](@ref Aeolus.PrognosticSGS.attach_immersed_walls!))
+that share is taken out of ``D`` at the four cells around the edge, as
+`dual_strain!` put it there, and the wall stress times the resolved
+shear across the wall, ``τ\,q_F/Δ_d = a q_F^2`` per unit volume (``a``
+from `WallModels.immersed_wall_drag!`, the one evaluation of the law), is
+added, half to each cell the face separates:
+
+```math
+\sum_c P_s V = −\sum \mathbf u·\big(\mathbf T_{sgs} − \mathbf T_{sgs}^{wall}\big) V
+             + \sum_{\text{wall faces}} a\, q_F^2\, ΔV ,
+```
+
+the kinetic energy the SGS operator the step applies and the wall stress
+take out of the resolved flow. Booking all of the wall stress's work as
+production is the constant-stress log layer: its shear production
+integrated from ``z_0`` to the first face, ``∫ τ_w\,∂U/∂n\,dn = τ_w U``,
+is the work of the wall stress at the face velocity. The test
+(`test/era6_tke_facades.jl`) checks the budget to 0 relative error, the
+removed share to 4.6e-15, the wall work against the energy
+`apply_immersed_wall_stress!` removes to 4.7e-8 (``δt = 10^{-6}``), and,
+for uniform flow along a wall, ``Σ P_s V/A = u_*^3 \ln(h/z_0)/κ`` to
+round-off.
+
 **Buoyancy production — the dual of the κ_t operator.**
 ``P_b = −κ_t N^2``. On the uniform grid the ``N^2`` of
 `buoyancy_frequency_squared!` is the average of the two face gradients
@@ -582,8 +614,13 @@ Reynolds-stress run was the slowest by 3–4×, more than its 2× in Berlin.
 
 `examples/urban/couplings/sgs_tke.jl`, provider `:tke` of the `:sgs` slot
 (see [the Berlin case](../design/berlin_case.md#Numerics-slots)), with ``e``
-the advected tracer `:e`, the wall cap from the building mask, and the
-surface value from the MOST friction velocity. The Reynolds-stress closure
+the advected tracer `:e`, the wall cap from the building mask, the
+surface value from the MOST friction velocity, and the facade walls of
+`wall_model_facades` attached, so the facade production is the wall
+stress times the resolved shear (#232; on the summer flagship the
+stencil production it replaces was 27 % of the canopy ``Σ P_s V``, and
+near-facade ``ν_t`` rises by 5.3 %: see the facade section of
+[the Berlin case](../design/berlin_case.md)). The Reynolds-stress closure
 is the option `:reynolds_stress` (`examples/urban/couplings/sgs_reynolds_stress.jl`):
 the six stresses are the advected tracers `:tau11 … :tau23`, with the same
 wall cap and an LRR-IP surface value. Both providers report a-priori

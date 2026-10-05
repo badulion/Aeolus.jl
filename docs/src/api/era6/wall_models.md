@@ -16,6 +16,9 @@ Era VI. Theory: [Wall models](../../theory/wall_models.md).
   `body_force!` hook: the stencil's own facade flux out) and
   `apply_immersed_wall_stress!` (a `post_predictor!` hook: the modelled
   stress, implicit, corners summed). The Berlin facade drag is this.
+  `immersed_wall_drag!` is the one evaluation of the law per (face,
+  wall) pair (the drag rate ``a``); the TKE closure books ``a q^2`` as
+  the facade shear production (#232, `attach_immersed_walls!`).
 - **Cut-cell walls** (P57-d, #179): the method
   `wall_shear_stress(u, v, w, stencils, geom, law; ν)` of
   `CutCell.wall_shear_stress` (modelled stress at the image-point
