@@ -173,3 +173,186 @@ end
     @test_throws ArgumentError open_boundary_conditions(m, d; correction = :bogus)
     @test_throws ArgumentError open_boundary_conditions(m, d; fields = (:u, :θ))
 end
+
+# ---------------------------------------------------------------------------
+# 3. A prescribed net imbalance: u = 1 + 0.2 x/Lx on the faces gives an
+# outflow Q = 0.2 Ly Lz through the east face (plus nothing else).
+const _Lx, _Ly, _Lz = 800.0, 600.0, 400.0
+const _Q_IMB = 0.2 * _Ly * _Lz
+_imb_data() = FunctionBoundaryData(u = (x, y, z, t) -> 1.0 + 0.2 * x / _Lx,
+                                   v = 0.0, w = 0.0, θ = 300.0)
+
+# The contract's plug point: any subtype that fills the planes. Velocity from
+# the analytic imbalance, θ from a storage-indexed reference profile.
+struct _ImbalancedReference <: AbstractBoundaryData
+    θ̄::Vector{Float64}
+end
+function Aeolus.BoundaryConditions.boundary_values!(planes::AbstractVector{<:OpenPlane},
+                                                    d::_ImbalancedReference, t)
+    boundary_values!(filter(p -> p.name !== :θ, planes), _imb_data(), t)
+    boundary_values!(filter(p -> p.name === :θ, planes), ProfileBoundaryData(θ = d.θ̄), t)
+    return planes
+end
+
+function _faces_equal_buffers(sim)
+    m = sim.mesh; H = m.Hx
+    jj = m.Hy+1:m.Hy+m.Ny; kk = m.Hz+1:m.Hz+m.Nz; ii = m.Hx+1:m.Hx+m.Nx
+    b = sim.bcs
+    return sim.u.data[H+1, jj, kk] == b.west.planes[:u].data[H+1, jj, kk] &&
+           sim.u.data[H+m.Nx+1, jj, kk] == b.east.planes[:u].data[1, jj, kk] &&
+           sim.v.data[ii, H+1, kk] == b.south.planes[:v].data[ii, H+1, kk] &&
+           sim.v.data[ii, H+m.Ny+1, kk] == b.north.planes[:v].data[ii, 1, kk] &&
+           sim.w.data[ii, jj, H+m.Nz+1] == b.top.planes[:w].data[ii, jj, 1]
+end
+
+@testset "mass-flux correction: Q/V failure mode and the fix, every core" begin
+    m = RegularGrid(size = (16, 12, 8), extent = (_Lx, _Ly, _Lz))
+    V = _Lx * _Ly * _Lz
+    bous(corr) = (s = BoussinesqSimulation(m; bcs = open_boundary_conditions(m, _imb_data();
+                                                    correction = corr, record = true),
+                                           θ₀ = 300.0, C_s = 0.18);
+                  set!(s.θ, 300.0); set!(s.u, 1.0); s)
+    cores = (
+        ("step!",          s -> step!(s, 1.0)),
+        ("step_rk3!",      s -> step_rk3!(s, 1.0)),
+        ("step_imex! ARK2", s -> step_imex!(s, 1.0, ARK2())),
+        ("step_imex! ROS2", s -> step_imex!(s, 1.0, Rosenbrock2())),
+    )
+    # Every core starts from a projected state (one Euler step), as a run
+    # does after its first step: SSP-RK3 combines the step-start state into
+    # its result, so a non-solenoidal initial condition would survive one
+    # step in any domain, open or closed.
+    for (name, adv!) in cores
+        @testset "$name" begin
+            s0 = bous(:none)
+            step!(s0, 1.0)
+            adv!(s0)
+            L = open_boundary_ledger(s0)
+            @test L.Q ≈ _Q_IMB rtol = 1e-12
+            @test L.residual == L.Q                         # nothing corrected
+            # the failure mode exists: a uniform divergence Q/V everywhere
+            @test abs(max_divergence(s0) - _Q_IMB / V) < 1e-12
+            s1 = bous(:uniform)
+            step!(s1, 1.0)
+            adv!(s1)
+            L1 = open_boundary_ledger(s1)
+            @test L1.Q ≈ _Q_IMB rtol = 1e-12
+            @test abs(L1.residual) < 1e-9 * _Q_IMB
+            @test L1.δ ≈ _Q_IMB / (2 * (_Ly * _Lz + _Lx * _Lz) + _Lx * _Ly) rtol = 1e-12
+            @test max_divergence(s1) < 1e-12
+            @test _faces_equal_buffers(s1)                  # bit for bit
+            @test !isempty(only(open_boundary_states(s1)).log)
+        end
+    end
+    @testset "step_adaptive!" begin
+        c = CFLConstraints(dt_max = 1.0)
+        s0 = bous(:none)
+        # the uncorrected run cannot pass the divergence check: it is rejected
+        # every time and throws, restoring the state
+        @test_throws ErrorException step_adaptive!(s0, c; max_retries = 2)
+        @test s0.t == 0.0
+        s1 = bous(:uniform)
+        _, dt, nr = step_adaptive!(s1, c)
+        @test nr == 0 && max_divergence(s1) < 1e-12
+        @test _faces_equal_buffers(s1)
+        @test open_boundary_ledger(s1).t ≈ dt
+    end
+    @testset "outflow_only leaves the inflow untouched" begin
+        s = BoussinesqSimulation(m; bcs = open_boundary_conditions(m, _imb_data();
+                                                                  correction = :outflow_only))
+        set!(s.u, 1.0)
+        step!(s, 1.0)
+        H = m.Hx
+        @test all(==(1.0), s.u.data[H+1, H+1:H+m.Ny, H+1:H+m.Nz])     # inflow face as given
+        @test all(≈(1.0; atol = 1e-12), s.u.data[H+m.Nx+1, H+1:H+m.Ny, H+1:H+m.Nz]) # outflow cut back
+        @test max_divergence(s) < 1e-12
+    end
+    for (name, ctor, divf) in (
+            ("anelastic", AnelasticSimulation, max_anelastic_divergence),
+            ("pseudo-incompressible", PseudoIncompressibleSimulation,
+             max_pseudo_incompressible_divergence))
+        @testset "$name" begin
+            mk(corr) = begin
+                s = ctor(m; bcs = open_boundary_conditions(m, _imb_data(); correction = corr))
+                # a user-defined AbstractBoundaryData: the imbalanced u, θ = θ̄(z)
+                set_boundary_data!(s.bcs, _ImbalancedReference(s.ref.θ̄c_pad))
+                set!(s.u, 1.0)
+                s
+            end
+            s0 = mk(:none)
+            step!(s0, 1.0)
+            Wc, Wf = constraint_weights(s0)
+            QW = sum(0.2 * Wc[k] * _Ly * m.dz for k in m.Hz+1:m.Hz+m.Nz)
+            @test open_boundary_ledger(s0).Q ≈ QW rtol = 1e-12
+            # failure mode: ∇·(W u) = Q_W / V uniform
+            dv = Field(CellCenter(), m)
+            fill_halos!(s0.u, s0.bcs); fill_halos!(s0.v, s0.bcs); fill_halos!(s0.w, s0.bcs)
+            weighted_divergence!(dv, s0.u, s0.v, s0.w, Wc, Wf, m)
+            @test maximum(abs, interior_view(dv) .- QW / V) < 1e-9 * QW / V
+            s1 = mk(:uniform)
+            step!(s1, 1.0)
+            @test divf(s1) < 1e-9
+            @test abs(open_boundary_ledger(s1).residual) < 1e-9 * QW
+            @test _faces_equal_buffers(s1)
+        end
+    end
+end
+
+# ---------------------------------------------------------------------------
+@testset "uniform flow U = (5, 2, 0): 200 steps, every core, buoyancy and SGS" begin
+    m = RegularGrid(size = (12, 10, 8), extent = (600.0, 500.0, 400.0))
+    U, Vv = 5.0, 2.0
+    data = ProfileBoundaryData(u = U, v = Vv, w = 0.0, θ = 300.0)
+    function bous()
+        s = BoussinesqSimulation(m; bcs = open_boundary_conditions(m, data),
+                                 θ₀ = 300.0, C_s = 0.18, ν = 1e-5)
+        set!(s.u, U); set!(s.v, Vv); set!(s.θ, 300.0)
+        return s
+    end
+    check(s, θref) = (maximum(abs, interior_view(s.u) .- U) < 1e-12 &&
+                      maximum(abs, interior_view(s.v) .- Vv) < 1e-12 &&
+                      maximum(abs, interior_view(s.w)) < 1e-12 &&
+                      maximum(abs, interior_view(s.θ) .- θref) < 1e-12 &&
+                      (maximum(interior_view(s.p)) - minimum(interior_view(s.p))) < 1e-12)
+    for (name, adv!) in (("step!", s -> step!(s, 2.0)),
+                         ("step_rk3!", s -> step_rk3!(s, 2.0)),
+                         ("step_imex! ARK2", s -> step_imex!(s, 2.0, ARK2())),
+                         ("step_imex! ROS2", s -> step_imex!(s, 2.0, Rosenbrock2())),
+                         ("step_adaptive!", s -> step_adaptive!(s, CFLConstraints(dt_max = 2.0))))
+        s = bous()
+        θ0 = copy(interior_view(s.θ))
+        for _ in 1:200; adv!(s); end
+        @test check(s, θ0)
+        @test abs(open_boundary_ledger(s).residual) < 1e-9
+    end
+    for ctor in (AnelasticSimulation, PseudoIncompressibleSimulation)
+        s = ctor(m; bcs = open_boundary_conditions(m, data), C_s = 0.18)
+        only(open_boundary_states(s)).data = ProfileBoundaryData(u = U, v = Vv, θ = s.ref.θ̄c_pad)
+        set!(s.u, U); set!(s.v, Vv)
+        θ0 = copy(interior_view(s.θ))                 # θ̄(z) from the constructor
+        for _ in 1:200; step!(s, 2.0); end
+        @test check(s, θ0)
+    end
+end
+
+# ---------------------------------------------------------------------------
+@testset "closed boundaries: the hooks are no-ops" begin
+    m = RegularGrid(size = (8, 8, 8), extent = (1.0, 1.0, 1.0))
+    for bcs in (FieldBoundaryConditions(:periodic),
+                FieldBoundaryConditions(:periodic, :periodic, :wall),
+                FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = :wall))
+        @test !has_open_boundaries(bcs)
+        @test homogeneous_bcs(bcs) === bcs
+        @test pinned_face_indices(FaceX(), m, bcs) == (0, 0, 0)
+        s = BoussinesqSimulation(m; bcs = bcs)
+        @test update_open_boundaries!(s, 1.0, 1.0) === s
+        @test open_boundary_snapshot(s) === nothing
+        @test isempty(open_boundary_states(s))
+    end
+    # the face assertion fires if ∂φ/∂n ≠ 0 at an open west face
+    bo = open_boundary_conditions(m, _OB_LIN)
+    gx = Field(FaceX(), m); gy = Field(FaceY(), m)
+    @test assert_open_face_correction(bo, gx, gy) === nothing
+    gx.data[m.Hx + 1, m.Hy + 2, m.Hz + 2] = 1e-3
+    @test_throws ErrorException assert_open_face_correction(bo, gx, gy)
+end
