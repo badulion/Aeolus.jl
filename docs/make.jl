@@ -29,6 +29,7 @@ makedocs(
             "Smagorinsky-Lilly SGS"       => "theory/sgs.md",
             "Discrete Poisson & FFT"      => "theory/poisson.md",
             "Grid nesting: conservative staggered prolongation" => "theory/nesting.md",
+            "Stretched vertical grid"     => "theory/stretched_grid.md",
             "Radiative transfer"          => "theory/radiation.md",
             "Era IV overview: clouds and microphysics" => "theory/era4_overview.md",
             "P3 microphysics"             => "theory/p3.md",

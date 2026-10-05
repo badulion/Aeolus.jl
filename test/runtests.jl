@@ -871,6 +871,7 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
 @testset "Era II" begin
     include("era2_cutcell.jl")     # Phases 21-22  cut-cell IBM, ghost cells
     include("era2_stretched.jl")   # Phase  24     stretched / terrain-following
+    include("era2_stretched_boussinesq.jl") # #151 Boussinesq core + Poisson on a StretchedGrid
     include("era2_timeint.jl")     # Phases 23, 25 adaptive dt, IMEX
     include("era2_advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
     include("era2_anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
