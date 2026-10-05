@@ -66,7 +66,8 @@ export StretchedGrid, TerrainFollowingGrid,
        zfaces, zcenters, cell_thickness, center_spacing,
        metric_jacobian, terrain_height, physical_heights,
        set_physical!,
-       hydrostatic_balance_error
+       hydrostatic_balance_error,
+       StretchedPoissonSolver
 
 # =========================================================================
 # StretchedGrid
@@ -1766,5 +1767,8 @@ function hydrostatic_balance_error(θ::Field, p::Field, grid::AbstractMesh = mes
     end
     return worst
 end
+
+# #151 — the Boussinesq core and its pressure solve on a StretchedGrid
+include("stretched/poisson.jl")
 
 end # module
