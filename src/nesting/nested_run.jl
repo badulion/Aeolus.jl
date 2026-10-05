@@ -242,6 +242,7 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     validate::Bool
     reuse_boundary::Bool
     record::Bool
+    synced::Bool                   # the child runs on the parent's clock
     # clock and the current parent-step window [t0, t0 + Δt]
     t::Float64
     t0::Float64
@@ -296,7 +297,8 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                     cfl_parent, cfl_child, feedback, sync, order, region, sponge,
                     impose_interface, flux_correction, ns, Int(max_retries),
                     Float64(divergence_tol), Float64(max_velocity), validate,
-                    reuse_boundary, record, t, t, 0.0, NaN, nothing, nothing, nothing,
+                    reuse_boundary, record, check_clocks, t, t, 0.0, NaN, nothing, nothing,
+                    nothing,
                     NestRunStats())
     run.hook = _BoundaryHook(run, 0, 0.0, 0.0)
     return run
@@ -441,7 +443,8 @@ Advance `run` by one parent step:
     hold the linearly interpolated boundary data at every stage time of
     its core ([`stage_times`](@ref), [`boundary_time`](@ref)). A rejected
     child substep rolls back **only the child** (its `StateSnapshot`, its
-    bound scalars and its SGS memory) and is redone as two half pieces;
+    bound scalars and its SGS memory); the rejected piece is redone at
+    half its size and the remaining time is re-divided;
  6. two-way: conservative restriction and interface flux correction.
 
 The child clock is set to the parent's at the end (the discrepancy it
@@ -490,13 +493,14 @@ function step_nested!(run::NestedRun; dt = nothing)
     interpolate_parent_state!(run.s_new, p, nest; order=run.order, region=run.region)
     run.new_valid_at = t_end
     st.wall_boundary += (time_ns() - tb) / 1e9
-    # the window in the child's clock (the parent's, in a synchronised run)
+    # the window in the child's clock (the parent's, in a synchronised run,
+    # where the child lands on the parent's clock bit for bit)
     run.t0 = Float64(c.t)
     run.Δt = t_end - t_p
 
     # --- 5. child substeps --------------------------------------------------
     tw = time_ns()
-    _subcycle_child!(run, run.t0 + run.Δt)
+    _subcycle_child!(run, run.synced ? t_end : run.t0 + run.Δt)
     st.wall_child += (time_ns() - tw) / 1e9
 
     # --- 6. feedback ---------------------------------------------------------
