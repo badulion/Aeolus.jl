@@ -21,8 +21,10 @@
 #     momentum roughness `z0` of the column's building morphometry
 #     (`SurfaceTiles.macdonald_roughness`; never less than the class's
 #     own z0m; the scalar roughness stays the class's), and exchange
-#     with the air at a height measured from the displacement `d`; park
-#     and water tiles keep their own roughness and d = 0.
+#     with the air at the first level above the mean roof height, at a
+#     height measured from the displacement `d`; park and water tiles
+#     keep their own roughness and d = 0 and exchange with the first
+#     level.
 #
 # Nothing here is coupled to a 3-D run yet: the parent case (N-parent-e,
 # #259) builds it and the nest (N-berlin-nest, #265) makes it default;
@@ -213,13 +215,24 @@ end
 One parent column's surface: `surface` (a `SurfaceMosaic`, or a
 `BlendedMosaic` of one), the class of each tile (`classes`), the
 displacement height `d` (m) under each tile (Macdonald's `d` for built
-tiles, 0 for park and water), and the forcing level `k`
-([`parent_forcing_level`](@ref)).
+tiles, 0 for park and water), the level `ktile` whose air state forces
+each tile, and the column's forcing level `k = maximum(ktile)` (the one
+level of a `BlendedMosaic`).
+
+Built tiles are forced at the first level above the mean roof height
+([`parent_forcing_level`](@ref)); park and water tiles, which have no
+canopy of their own, at the first level (`k = 1`). Forcing a smooth
+tile above the neighbouring roofs instead decoupled it: a pure water
+column next to 58 m buildings, forced at 62.5 m with its own
+``z_0 = 2·10^{-4}`` m, had a bulk Richardson number of about 1.8 at
+13:00 (skin 8 K below the air) and returned LE = 0.7 W m⁻² (offline run
+of #249).
 """
 struct ParentColumn{S}
     surface::S
     classes::Vector{UInt8}
     d::Vector{Float64}
+    ktile::Vector{Int}
     k::Int
 end
 
@@ -268,11 +281,12 @@ Build the parent's tiled surface.
   uniform Δz = 25 m of the maintainer's grid; only the lowest levels are
   looked at).
 * `window` — the morphometry window ([`parent_morphometry`](@ref)).
-* `blending` — `nothing` for a plain `SurfaceMosaic` per column (every
-  tile forced at the column's forcing level, measured from its own
-  displacement), or an `AbstractBlendingHeight` for a `BlendedMosaic`,
-  whose tiles are forced at the blending height (one forcing per column,
-  at the forcing level above the area-mean displacement).
+* `blending` — `nothing` for a plain `SurfaceMosaic` per column (each
+  tile forced at its own level, measured from its own displacement; see
+  [`ParentColumn`](@ref)), or an `AbstractBlendingHeight` for a
+  `BlendedMosaic`, whose tiles are forced at the blending height (one
+  forcing per column, at the column level above the area-mean
+  displacement).
 * `macdonald` — keyword overrides for
   `SurfaceTiles.macdonald_roughness` (`A`, `β`, `C_D`, `κ`).
 * `unresolved = false` switches the unresolved-building treatment off
@@ -326,7 +340,9 @@ function build_parent_surface(case, pl::ParentLanduse = read_parent_landuse();
         end
         m = SurfaceMosaic(tiles, frac[I, present])
         s = blending === nothing ? m : BlendedMosaic(m, blending)
-        cols[I] = ParentColumn(s, UInt8.(present), dd, unresolved ? parent_forcing_level(zc, h[I]) : 1)
+        kb = unresolved ? parent_forcing_level(zc, h[I]) : 1
+        kt = [is_built_class(c) ? kb : 1 for c in present]
+        cols[I] = ParentColumn(s, UInt8.(present), dd, kt, maximum(kt))
     end
     return ParentSurface(pl, frac, λp, λf, h, z0, d, zc, fp, cols)
 end
@@ -335,42 +351,44 @@ _mosaic(col::ParentColumn{<:SurfaceMosaic}) = col.surface
 _mosaic(col::ParentColumn{<:BlendedMosaic}) = col.surface.mosaic
 
 """
-    parent_tile_forcings(ps, col, f) -> Vector{SurfaceForcing}
+    parent_tile_forcings(ps, col, air) -> Vector{SurfaceForcing}
 
-The forcing of each tile of `col`: the air state of `f` (its `T_air`,
-`q_air`, `U`, `p`, radiation), taken at the column's forcing level
-`ps.z_centres[col.k]`, with each tile's reference height measured from
-its own displacement, ``z_{ref,i} = z_k - d_i`` (`f.z_ref` is ignored).
+The forcing of each tile of `col`. `air` is the air state the column
+sees: one `SurfaceForcing` (the same `T_air`, `q_air`, `U`, `p` and
+radiation at every level, as in the offline tests) or a vector of them
+indexed by parent level. Tile `i` takes the state of its level
+`col.ktile[i]`, with its reference height measured from its own
+displacement, ``z_{ref,i} = z_{k_i} - d_i`` (`z_ref` of `air` is ignored).
 """
-function parent_tile_forcings(ps::ParentSurface, col::ParentColumn, f::SurfaceForcing)
-    zk = ps.z_centres[col.k]
-    return [SurfaceForcing(; sw_down = f.sw_down, lw_down = f.lw_down, T_air = f.T_air,
-                           q_air = f.q_air, U = f.U, p = f.p, z_ref = zk - di,
-                           rain = f.rain, snow = f.snow) for di in col.d]
+function parent_tile_forcings(ps::ParentSurface, col::ParentColumn, air)
+    return [_at_height(_air_at(air, k), ps.z_centres[k] - di) for (k, di) in zip(col.ktile, col.d)]
 end
 
-"""
-    step_parent_column!(ps, col, f, dt; kwargs...) -> SurfaceFluxes
+_air_at(f::SurfaceForcing, k) = f
+_air_at(fs::AbstractVector{<:SurfaceForcing}, k) = fs[k]
+_at_height(f::SurfaceForcing, z) =
+    SurfaceForcing(; sw_down = f.sw_down, lw_down = f.lw_down, T_air = f.T_air, q_air = f.q_air,
+                   U = f.U, p = f.p, z_ref = z, rain = f.rain, snow = f.snow)
 
-Advance every tile of `col` by `dt` under the air state `f` at the
-column's forcing level and return the fraction-weighted fluxes
+"""
+    step_parent_column!(ps, col, air, dt; kwargs...) -> SurfaceFluxes
+
+Advance every tile of `col` by `dt` under the air state `air` (see
+[`parent_tile_forcings`](@ref)) and return the fraction-weighted fluxes
 ``\\sum_i f_i F_i`` (`SurfaceTiles`). A plain mosaic forces each tile at
-``z_k - d_i`` ([`parent_tile_forcings`](@ref)); a blended one forces the
-cell at ``z_k - \\bar d`` (``\\bar d`` the fraction-weighted displacement)
-and its tiles at the blending height. `kwargs` (`U_min`, `Q_extra`, …)
-go to every tile's `step_surface!`.
+its own level and ``z_{k_i} - d_i``; a blended one forces the cell at the
+column level `col.k`, ``z_k - \\bar d`` (``\\bar d`` the
+fraction-weighted displacement), and its tiles at the blending height.
+`kwargs` (`U_min`, `Q_extra`, …) go to every tile's `step_surface!`.
 """
 function step_parent_column!(ps::ParentSurface, col::ParentColumn{<:SurfaceMosaic},
-                             f::SurfaceForcing, dt::Real; kwargs...)
-    return step_surface!(col.surface, parent_tile_forcings(ps, col, f), dt; kwargs...)
+                             air, dt::Real; kwargs...)
+    return step_surface!(col.surface, parent_tile_forcings(ps, col, air), dt; kwargs...)
 end
 function step_parent_column!(ps::ParentSurface, col::ParentColumn{<:BlendedMosaic},
-                             f::SurfaceForcing, dt::Real; kwargs...)
+                             air, dt::Real; kwargs...)
     dbar = sum(mosaic_fractions(col.surface) .* col.d)
-    zk = ps.z_centres[col.k]
-    fc = SurfaceForcing(; sw_down = f.sw_down, lw_down = f.lw_down, T_air = f.T_air,
-                        q_air = f.q_air, U = f.U, p = f.p, z_ref = zk - dbar,
-                        rain = f.rain, snow = f.snow)
+    fc = _at_height(_air_at(air, col.k), ps.z_centres[col.k] - dbar)
     return step_surface!(col.surface, fc, dt; kwargs...)
 end
 
