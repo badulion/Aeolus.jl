@@ -36,7 +36,7 @@ const URBAN_DIR = @__DIR__
 const DATA_DIR = joinpath(URBAN_DIR, "data")
 
 for f in ("config", "scenarios", "registry", "geometry", "osm_ingest", "bus",
-          "tracers", "ledger", "reference_state", "output", "case", "stages")
+          "tracers", "air_heat", "ledger", "reference_state", "output", "case", "stages")
     include(joinpath(@__DIR__, "core", f * ".jl"))
 end
 
@@ -49,7 +49,8 @@ end
 export CaseConfig, SCENARIOS, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
-       Ledger, ledger_report, surface_budget, water_budget, register_surface_factory!,
+       Ledger, ledger_report, surface_budget, water_budget,
+       AirHeatMeter, air_heat, register_surface_factory!,
        CaseReference, ref_pressure, ref_density, ref_exner, surface_pressure
 
 end # module BerlinCase
