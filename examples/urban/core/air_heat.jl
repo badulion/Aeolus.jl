@@ -55,7 +55,7 @@ struct AirHeatMeter
     w::Vector{Float64}        # J m⁻² K⁻¹ per K of level sum Σ_ij θ: ρ̄ c_p Π̄ Δz / (Nx Ny)
     v::Vector{Float64}        # conserved-weight analogue: W Δz / (Nx Ny)
     zf::Vector{Float64}       # level faces (m above the domain bottom), length Nz + 1
-    fluid::Array{Bool,3}      # interior-sized: true = air
+    fluid::Array{Float64,3}   # interior-sized: 1.0 = air, 0.0 = solid (a Float64 mask: the sum vectorizes)
     S::Vector{Float64}        # scratch: per-level fluid sums of θ
     Ssolid::Vector{Float64}   # scratch: per-level sums of θ over the solid cells
 end
@@ -85,7 +85,7 @@ function AirHeatMeter(mesh, ρ̄::AbstractVector, π̄::AbstractVector, cp::Real
     if solid !== nothing
         fluid = .!collect(Bool, view(solid, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz))
     end
-    return AirHeatMeter(Nx, Ny, Nz, Hx, Hy, Hz, w, v, zf, collect(Bool, fluid), zeros(Nz), zeros(Nz))
+    return AirHeatMeter(Nx, Ny, Nz, Hx, Hy, Hz, w, v, zf, collect(Float64, fluid), zeros(Nz), zeros(Nz))
 end
 
 "The per-level weight of the conserved transport quantity of `sim` (`nothing`: 1)."
@@ -120,9 +120,9 @@ function air_heat_levels!(out::AbstractVector, m::AirHeatMeter, θ)
         for j in 1:m.Ny
             @simd for i in 1:m.Nx
                 x = d[Hx+i, Hy+j, Hz+k]
-                f = fl[i, j, k]
-                s += ifelse(f, x, 0.0)
-                a += ifelse(f, 0.0, x)
+                y = fl[i, j, k] * x          # x or 0, exactly
+                s += y
+                a += x - y                   # 0 or x, exactly
             end
         end
         m.S[k] = s
