@@ -219,7 +219,6 @@ export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
        implicit_ibm_correction!, wall_distance, first_level_cells   # + P56-b (#182)
 export AbstractPartition, SerialPartition, PencilPartition,
        nranks, is_serial, exchange_halos_distributed!
-export NestSpec, apply_one_way_forcing!, apply_two_way_feedback!
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
