@@ -61,6 +61,46 @@ function _fv_update!(f, Φ)
     return f
 end
 
+# --- smooth separable test function f = Π_d sin(k x_d + φ_d), with exact
+# --- cell / face averages so the prolongation error can be measured
+const _K = 2π                              # one wavelength over L = 1
+const _PHI = (0.3, 1.1, 0.7)
+_avg1(a, b, φ) = (cos(_K * a + φ) - cos(_K * b + φ)) / (_K * (b - a))
+_pt1(x, φ)     = sin(_K * x + φ)
+
+"Exact value of the test function for the array cell (i,j,k) of a field at `loc` on `m`."
+function _exact(loc, m, i, j, k)
+    x0 = m.x0 + (i - m.Hx - 1) * m.dx; y0 = m.y0 + (j - m.Hy - 1) * m.dy
+    z0 = m.z0 + (k - m.Hz - 1) * m.dz
+    fx = loc isa FaceX ? _pt1(x0, _PHI[1]) : _avg1(x0, x0 + m.dx, _PHI[1])
+    fy = loc isa FaceY ? _pt1(y0, _PHI[2]) : _avg1(y0, y0 + m.dy, _PHI[2])
+    fz = loc isa FaceZ ? _pt1(z0, _PHI[3]) : _avg1(z0, z0 + m.dz, _PHI[3])
+    return fx * fy * fz
+end
+
+function _fill_exact!(f)
+    loc = Aeolus.Fields.location(f); m = f.mesh
+    for k in axes(f.data, 3), j in axes(f.data, 2), i in axes(f.data, 1)
+        f.data[i, j, k] = _exact(loc, m, i, j, k)
+    end
+    return f
+end
+
+"Max error over the halo cells only (where the prolongation wrote)."
+function _halo_err(f)
+    loc = Aeolus.Fields.location(f); m = f.mesh
+    ii, jj, kk = interior(m)
+    e = 0.0
+    for k in axes(f.data, 3), j in axes(f.data, 2), i in axes(f.data, 1)
+        (i in ii) && (j in jj) && (k in kk) && continue
+        e = max(e, abs(f.data[i, j, k] - _exact(loc, m, i, j, k)))
+    end
+    return e
+end
+
+_rstr(r) = string(r)
+
+
 @testset "Era II — Nesting operators (#250)" begin
 
 # -------------------------------------------------------------------------
@@ -260,6 +300,123 @@ end
     end
     @test nest_conservation_error(psim, csim, nest, :θ) ==
           nest_conservation_error(psim, csim, nest, :theta)
+end
+
+# -------------------------------------------------------------------------
+# Any integer refinement per direction (odd, even, mixed). The halo error
+# of the prolongation of a smooth field converges at the requested order p:
+# the primitive-function reconstruction over p parent cells is exact for
+# polynomials of degree p-1 (conservative directions), and so is the nodal
+# Lagrange stencil with p nodes (the face-normal direction of a velocity).
+@testset "prolongation order: r ∈ {2,3,4,5,(2,2,4)}, p ∈ {2,3,4}, all locations" begin
+    rates = Dict{Tuple{Any,Int,String},Float64}()
+    for r in (2, 3, 4, 5, (2, 2, 4)), p in (2, 3, 4)
+        for (lname, loc) in (("C", CellCenter()), ("u", FaceX()), ("v", FaceY()),
+                             ("w", FaceZ()))
+            errs = Float64[]
+            for Np in (8, 16, 32)
+                pm = RegularGrid(Float64; size=(Np, Np, Np), extent=(1.0, 1.0, 1.0),
+                                 halo=(4, 4, 4))
+                nest = nested_grid(pm, ((0.25, 0.5), (0.5, 0.75), (0.25, 0.5)), r;
+                                   halo=(3, 3, 3))
+                pf = _fill_exact!(Field(loc, pm))
+                cf = Field(loc, nest_child_mesh(nest))
+                interpolate_to_nest_boundary!(cf, pf, nest; order=p)
+                push!(errs, _halo_err(cf))
+            end
+            rate = log2(errs[2] / errs[3])
+            rates[(r, p, lname)] = rate
+            @test rate > p - 0.45
+            @test errs[3] < errs[1]
+        end
+        @printf("  r=%-9s p=%d : measured halo order C %.2f  u %.2f  v %.2f  w %.2f\n",
+                _rstr(r), p, (rates[(r, p, l)] for l in ("C", "u", "v", "w"))...)
+    end
+end
+
+# -------------------------------------------------------------------------
+@testset "exact conservation for any r: restrict ∘ prolong = id, face fluxes" begin
+    Random.seed!(250_3)
+    worst_rp = 0.0; worst_flux = 0.0
+    for r in (2, 3, 4, 5, (2, 2, 4), (3, 2, 5)), p in (2, 3, 4)
+        pm = RegularGrid(Float64; size=(10, 10, 10), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
+        nest = nested_grid(pm, ((0.3, 0.6), (0.2, 0.5), (0.4, 0.7)), r; halo=(3, 3, 3))
+        cm = nest_child_mesh(nest)
+        cov = nest_covered_range(nest)
+        Hp = (pm.Hx, pm.Hy, pm.Hz)
+        for (ax, loc) in ((0, CellCenter()), (1, FaceX()), (2, FaceY()), (3, FaceZ()))
+            pf = Field(loc, pm); pf.data .= 1 .+ randn(size(pf.data))
+            cf = Field(loc, cm)
+            interpolate_parent_to_child!(cf, pf, nest; order=p)
+            back = Field(loc, pm)
+            # covered parent cells, plus both interface planes for a face field
+            rng = ntuple(d -> Hp[d] .+ (first(cov[d]):last(cov[d]) + (d == ax ? 1 : 0)), 3)
+            if ax == 0
+                restrict_to_parent!(back, cf, nest)
+            else
+                restrict_to_parent!(back, cf, nest; include_boundary=true)
+                # the summed child fluxes through every parent face of the
+                # interface planes equal the parent flux
+                mm = compute_nest_flux_mismatch(pf, cf, nest)
+                Ap = ax == 1 ? pm.dy * pm.dz : ax == 2 ? pm.dx * pm.dz : pm.dx * pm.dy
+                planes = ax == 1 ? (mm.west, mm.east) : ax == 2 ? (mm.south, mm.north) :
+                                                         (mm.bottom, mm.top)
+                fl = maximum(maximum(abs, P) for P in planes) /
+                     (maximum(abs, pf.data[rng...]) * Ap)
+                worst_flux = max(worst_flux, fl)
+                @test fl < 1e-13
+            end
+            rel = maximum(abs, back.data[rng...] .- pf.data[rng...]) /
+                  maximum(abs, pf.data[rng...])
+            worst_rp = max(worst_rp, rel)
+            @test rel < 1e-14
+        end
+    end
+    @printf("  random data, all r/p/locations: max |restrict(prolong f) − f|/max|f| = %.2e, max face-flux mismatch / (max|u|·A) = %.2e\n", worst_rp, worst_flux)
+end
+
+# -------------------------------------------------------------------------
+# A child face that lies on a parent face. In the face-normal direction
+# the prolongation is nodal Lagrange, and at a node the Lagrange basis is
+# exactly 0 or 1 — so with no tangential refinement the coincident child
+# face is the parent face bit for bit; with tangential refinement its
+# r×r face-area mean is the parent value to round-off.
+@testset "odd-ratio coincident faces (r = 3, 5) reproduce the parent face" begin
+    Random.seed!(250_4)
+    worst_bit = 0.0; worst_mean = 0.0
+    for r in (3, 5), p in (2, 3, 4), (ax, loc) in ((1, FaceX()), (2, FaceY()), (3, FaceZ()))
+        pm = RegularGrid(Float64; size=(10, 10, 10), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
+        ext = ((0.3, 0.6), (0.2, 0.5), (0.4, 0.7))
+        Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (3, 3, 3)
+        pf = Field(loc, pm); pf.data .= 300 .+ randn(size(pf.data))
+        # (a) refinement only along the face normal: bit for bit
+        nest = nested_grid(pm, ext, ntuple(d -> d == ax ? r : 1, 3); halo=Hc)
+        cf = Field(loc, nest_child_mesh(nest))
+        interpolate_parent_to_child!(cf, pf, nest; order=p)
+        nn = (nest.nx, nest.ny, nest.nz); oo = nest_offset(nest)
+        psl(q) = ntuple(d -> d == ax ? (Hp[d] + oo[d] + q:Hp[d] + oo[d] + q) :
+                                       (Hp[d] + oo[d]:Hp[d] + oo[d] + nn[d] - 1), 3)
+        for q in 0:nn[ax]
+            csl = ntuple(d -> d == ax ? (Hc[d] + q * r + 1:Hc[d] + q * r + 1) :
+                                        (Hc[d] + 1:Hc[d] + nn[d]), 3)
+            worst_bit = max(worst_bit,
+                            maximum(abs, cf.data[csl...] .- pf.data[psl(q)...]) / 300)
+            @test cf.data[csl...] == pf.data[psl(q)...]
+        end
+        # (b) isotropic r: the r×r mean over each coincident parent face
+        nest_r = nested_grid(pm, ext, r; halo=Hc)
+        cf_r = Field(loc, nest_child_mesh(nest_r))
+        interpolate_parent_to_child!(cf_r, pf, nest_r; order=p)
+        mean_back = Field(loc, pm)
+        restrict_to_parent!(mean_back, cf_r, nest_r; include_boundary=true)
+        for q in 0:nn[ax]
+            d = maximum(abs, mean_back.data[psl(q)...] .- pf.data[psl(q)...]) /
+                maximum(abs, pf.data[psl(q)...])
+            worst_mean = max(worst_mean, d)
+            @test d < 1e-15
+        end
+    end
+    @printf("  coincident faces: normal-only refinement max rel diff = %.1e (bitwise); isotropic r×r face mean max rel diff = %.2e\n", worst_bit, worst_mean)
 end
 
 end # Era II — Nesting operators
