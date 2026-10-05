@@ -1573,11 +1573,15 @@ cross terms vanish, `J = 1`, `G^{σσ} = 1`, and the result is identical to
 the stretched-grid Laplacian.
 
 !!! note "Face-located inputs"
-    For `L ∈ {FaceX, FaceY, FaceZ}` the cell-centre metrics are reused
-    rather than re-interpolated to the staggered position; that is an
-    `O(Δ·∂²h)` approximation of the metric (exact for flat or
-    constant-slope terrain) and is intended for diffusion-type terms, not
-    for the pressure Poisson operator, which acts on cell-centred fields.
+    For `L ∈ {FaceX, FaceY, FaceZ}` the cell-centre terrain metrics (`J`,
+    `σ_x`, `σ_y`) are reused rather than re-interpolated to the staggered
+    position; that is an `O(Δ·∂²h)` approximation of the metric (exact for
+    flat or constant-slope terrain) and is intended for diffusion-type
+    terms, not for the pressure Poisson operator, which acts on
+    cell-centred fields. The *vertical* σ-metrics do follow the location:
+    a z-face field has control volumes of height `Δσ_f[k]` and neighbours
+    `Δσ_c` apart (before #151 the centre metrics were used for it too, a
+    first-order error on a stretched base grid even over flat terrain).
 
 !!! note "Allocation"
     Three flux scratch arrays of `totalsize(g)` are allocated per call.
@@ -1586,7 +1590,7 @@ the stretched-grid Laplacian.
 """
 function _laplacian!(out::Field{L}, f::Field{L}, g::TerrainFollowingGrid{T}) where {L<:Location, T}
     dx, dy = g.dx, g.dy
-    dzc, dzf = g.base.dzc, g.base.dzf
+    dzc, dzf = _σ_metrics(g.base, L())
     ii, jj, kk = interior(g)
     i1, i2 = first(ii), last(ii)
     j1, j2 = first(jj), last(jj)
@@ -1623,6 +1627,18 @@ function _laplacian!(out::Field{L}, f::Field{L}, g::TerrainFollowingGrid{T}) whe
                            (Fs[i,j,k+1] - Fs[i,j,k]) / dzc[k]) / g.J[i,j,k]
     end
     return out
+end
+
+# The vertical σ-metrics seen by a field at `L`: (control-volume height,
+# spacing to the neighbour below), indexed like `dzc`, `dzf`. Centre-located
+# in z (CellCenter, FaceX, FaceY): the grid's own. On z-faces: the volume of
+# face k is Δσ_f[k] and its neighbour below sits Δσ_c[k-1] away.
+_σ_metrics(b::StretchedGrid, ::Union{CellCenter,FaceX,FaceY}) = (b.dzc, b.dzf)
+function _σ_metrics(b::StretchedGrid{T}, ::FaceZ) where {T}
+    n = length(b.dzc)
+    vol = T[b.dzf[k] for k in 1:n]
+    sp  = T[k == 1 ? b.dzc[1] : b.dzc[k-1] for k in 1:n+1]
+    return vol, sp
 end
 
 # --- physics kernels carrying the terrain metric ------------------------
