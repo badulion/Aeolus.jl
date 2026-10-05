@@ -198,6 +198,7 @@ allfinite(x) = all(isfinite, x)
             @test hb.elapsed > 0
             @test abs(hb.closure / hb.elapsed) <= 1e-10     # W/m²
             @test !haskey(hb.terms, (:core, :unattributed))
+            @test !haskey(hb.terms, (:output, :between_steps))
             @info @sprintf("  %-26s %5.1f s  domain Rn %7.2f H %6.2f LE %5.2f G %7.2f dS %7.2f W/m², Rn−H−LE−G−dS %7.3f, closure %.1e; water residual %.1e kg/m², transport %.2e kg/m²; air heat closure %.1e W/m²",
                            label, time() - t0, dom.Rn, dom.H, dom.LE, dom.G, dom.dS, dom.residual,
                            dom.closure, w.residual, get(w.sources, :transport, 0.0),

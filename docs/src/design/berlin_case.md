@@ -944,6 +944,11 @@ meter's weight, and every coupling that heats the air uses it
 (`surface_exchange`, `buildings_citymean`, `traffic_heat`,
 `column_radiation`). Before #253 they divided by ``ρ̄ c_p`` only and the
 air received Π̄₁ ≈ 1.004 times the flux at the ground.
+The meter weights θ with the dry ``c_{pd}``; the surface exchange
+converts with the moist ``c_p`` of the first air cell, so the ledger
+books its heating as ``H Δt\, c_{pd}/c_p``, about 0.8 % below the
+surface's ``H Δt`` at ``q_v ≈ 0.01`` (exactly ``H Δt`` in dry air). The
+ledger still closes, because it books what it measures.
 
 **Attribution is automatic.** Couplings book nothing. Every schedule
 entry `timed_run!` runs, and the dynamics step, is an attribution
@@ -963,7 +968,7 @@ into the building cells (θ is carried through the immersed boundary, so
 the solid cells' θ evolves and exchanges heat with the air through the
 numerics alone). A change of θ outside every context is still caught:
 as `(:core, :unattributed)` within a step, as `(:output, :between_steps)`
-between two steps. The smoke test asserts both stay empty.
+between two steps. The smoke test asserts that neither is booked.
 
 **Booked terms.** `add_heat!(ledger, term, J; k)` books `J` J m⁻² under
 `(stage, term)` from inside a running context and takes it out of that
@@ -999,8 +1004,8 @@ flux-form θ advection. That holds for what the flux-form Boussinesq
 transport conserves, ``Σ θ ΔV``; for ``H``, which weights θ with ρ̄Π̄,
 the expectation was wrong.) H₀ = 100 W m⁻² into the lowest level of a
 flat, motionless variant: the attributed term and ``ΔH_{air}`` equal
-H₀Δt to 7.8e-13. Every smoke run (everything on included) closes to
-≤ 1e-10 W m⁻² (measured ≤ 3.8e-14).
+H₀Δt to 3.9e-13 (relative). Every smoke run (everything on included) closes to
+≤ 1e-10 W m⁻² (measured ≤ 1.9e-14 in all 39 smoke runs).
 
 **Cost.** One measurement is one pass over the interior (20 µs on
 64 × 64 × 32); the flagship step opens ≈ 29 contexts, 31.1
