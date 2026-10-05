@@ -44,7 +44,9 @@
 # chemistry species and the pollutant saw only the implicit dissipation of
 # the advection scheme — a missing-physics bug. Every tracer this stage
 # advects is now also diffused with the closure's κt of the last dynamics
-# step (`sim.κt`, the same diffusivity θ gets), after its advective update
+# step (`sim.κt`, the same diffusivity θ gets; with a stability-corrected
+# closure, P55-e, κh = sim.κt on the x, y faces and its κv on the z faces,
+# as for θ), after its advective update
 # (Lie splitting, so each half keeps q ≥ 0 on its own), through the one
 # src kernel `add_eddy_diffusion_scalar!` with the case's solid mask (no
 # flux into or out of buildings, solid cells untouched) and, on a
@@ -139,22 +141,30 @@ function TracerSGSDiffusion(case)
 end
 
 """
-    sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water = false, κ = case.sim.κt) -> q
+    sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water = false, κ = case.sim.κt, κv = κ) -> q
 
 Advance the tracer field `q` by the SGS diffusion over `dt` (see
 [`TracerSGSDiffusion`](@ref)) with the eddy diffusivity `κ` (the
-closure's `κt`; a tracer can name another, see `tracer_diffusivity`). With `water = true` the increment is booked
+closure's `κt`; a tracer can name another, see `tracer_diffusivity`) on
+the x and y faces and `κv` on the z faces (the stability-corrected
+closure's κv, P55-e, see `tracer_vertical_diffusivity`; `κv === κ` is the
+isotropic operator, bit for bit). With `water = true` the increment is booked
 in `d.dW` / `d.dWρ` (`ledger_water_split`), and the relative change of the
 conserved total (`Σ q` over fluid cells, or `Σ W q`) is recorded in
 `d.resid`.
 """
-function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false, κ = case.sim.κt)
+function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false, κ = case.sim.κt,
+                     κv = κ)
     sim, mesh = case.sim, case.mesh
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     fill_halos!(q, d.bcs)
     fill!(d.tend.data, 0)
-    add_eddy_diffusion_scalar!(d.tend, q, κ; mask = d.mask, weights = d.weights)
+    if κv === κ
+        add_eddy_diffusion_scalar!(d.tend, q, κ; mask = d.mask, weights = d.weights)
+    else
+        add_eddy_diffusion_scalar!(d.tend, q, κ, κv; mask = d.mask, weights = d.weights)
+    end
     tend = view(d.tend.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
     qi = interior_view(q)
     Wk = d.weights === nothing ? nothing : view(d.weights[1], Hz+1:Hz+Nz)
@@ -281,8 +291,10 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
             flat, redis = ledger_water_split(case, tend, wt === nothing ? nothing : wt.W)
             c.dW[] += dt * flat; c.dWρ[] += dt * redis
         end
-        # SGS diffusion with κt, after the advective update (#177)
-        d === nothing || sgs_diffuse!(d, case, q, dt; water = iswater, κ = tracer_diffusivity(t, case))
+        # SGS diffusion with κt (κh, κv of a stability-corrected closure),
+        # after the advective update (#177)
+        d === nothing || sgs_diffuse!(d, case, q, dt; water = iswater, κ = tracer_diffusivity(t, case),
+                                      κv = tracer_vertical_diffusivity(t, case))
     end
     return nothing
 end

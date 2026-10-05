@@ -8,7 +8,9 @@
 #   * the generic operator add_stress_divergence! with τ = −2νS;
 #   * the IMEX split: the implicit operator is the explicit diagonal part,
 #     symmetric; diagonal + transpose = full;
-#   * the cores' `sgs_stress` keyword.
+#   * the cores' `sgs_stress` keyword;
+#   * the explicit CFL limit of the stress form: power-iterated spectral
+#     radius vs `stress_form_cfl_viscosity` and the old Laplacian limit.
 
 using Test
 using Aeolus
@@ -87,6 +89,66 @@ end
 
 # k̂² = (2 sin(kΔ/2)/Δ)², the eigenvalue of the 3-point second difference
 khat2(k, Δ) = (2 * sin(k * Δ / 2) / Δ)^2
+
+# A closure whose νh = νv is a prescribed field (κ = 0), so the CFL estimate
+# sees exactly the ν the operator under test is built with.
+struct GivenNu175{F} <: AbstractSGSClosure
+    ν::F
+end
+Aeolus.Operators.sgs_fields(c::GivenNu175, sim) = SGSFields(sim.νt, sim.κt)
+function Aeolus.Operators.sgs_coefficients!(f::SGSFields, c::GivenNu175, sim)
+    copyto!(f.νh.data, c.ν.data); fill!(f.κh.data, 0)
+    return f
+end
+
+# The largest eigenvalue magnitude of the explicit SGS momentum operator L
+# (symmetric, negative semi-definite), by power iteration on −L; with
+# `project = true`, of P L P, P the core's own pressure projection. Returns
+# the Rayleigh quotient ⟨x, −Lx⟩/⟨x, x⟩ (a lower bound on ρ that converges to
+# it) and the converged vector, left in (sim.u, sim.v, sim.w).
+function spectral_radius175(sim, νh, νv, stress::Symbol; project = false, iters = 1500,
+                            rng = Xoshiro(17507))
+    g = sim.mesh
+    u, v, w = sim.u, sim.v, sim.w
+    for f in (u, v, w); iv(f) .= randn(rng, g.Nx, g.Ny, g.Nz); end
+    t = tend175(g)
+    λ = 0.0
+    for _ in 1:iters
+        project && TI175._project!(sim, 1.0)
+        pfill!(u, v, w)
+        foreach(x -> fill!(x.data, 0), t)
+        if stress === :symmetric
+            add_sgs_stress_divergence!(t..., u, v, w, νh, νv)
+        else
+            add_eddy_viscosity_u!(t[1], u, νh); add_eddy_viscosity_v!(t[2], v, νh)
+            add_eddy_viscosity_w!(t[3], w, νh)
+        end
+        x2 = sum(abs2, iv(u)) + sum(abs2, iv(v)) + sum(abs2, iv(w))
+        λ = -(sum(iv(u) .* iv(t[1])) + sum(iv(v) .* iv(t[2])) + sum(iv(w) .* iv(t[3]))) / x2
+        n = sqrt(sum(abs2, iv(t[1])) + sum(abs2, iv(t[2])) + sum(abs2, iv(t[3])))
+        iv(u) .= .-iv(t[1]) ./ n; iv(v) .= .-iv(t[2]) ./ n; iv(w) .= .-iv(t[3]) ./ n
+    end
+    project && TI175._project!(sim, 1.0)
+    pfill!(u, v, w)
+    return λ
+end
+
+# ‖u‖ after `n` forward-Euler steps uⁿ⁺¹ = (P)(uⁿ + dt L uⁿ) from the state in
+# sim, relative to the start.
+function euler_growth175(sim, ν, dt, n; project = false)
+    g = sim.mesh
+    nrm() = sqrt(sum(abs2, iv(sim.u)) + sum(abs2, iv(sim.v)) + sum(abs2, iv(sim.w)))
+    n0 = nrm()
+    t = tend175(g)
+    for _ in 1:n
+        pfill!(sim.u, sim.v, sim.w)
+        foreach(x -> fill!(x.data, 0), t)
+        add_sgs_stress_divergence!(t..., sim.u, sim.v, sim.w, ν)
+        iv(sim.u) .+= dt .* iv(t[1]); iv(sim.v) .+= dt .* iv(t[2]); iv(sim.w) .+= dt .* iv(t[3])
+        project && TI175._project!(sim, dt)
+    end
+    return nrm() / n0
+end
 
 @testset "Era VI — stress-form SGS momentum divergence (P55-b, #175)" begin
 
@@ -390,5 +452,92 @@ khat2(k, Δ) = (2 * sin(k * Δ / 2) / Δ)^2
         @test st(a1) == st(a2)
         @test st(a1) != st(a3) && all(isfinite, iv(a3.u))
         @test_throws ArgumentError step!(mka(), 0.5; sgs_stress = :bogus)
+    end
+
+    @testset "explicit CFL limit of the stress form (power iteration)" begin
+        g = grid175((12, 12, 8))
+        S = 1 / g.dx^2 + 1 / g.dy^2 + 1 / g.dz^2
+        Δ²harm = 1 / S
+        sim = BoussinesqSimulation(g)           # periodic; ν = 0, so dt_diff = dt_sgs
+        # C_diffusive = 1/2 puts the limit *on* the forward-Euler boundary
+        # dt ρ = 2, so a limit is right exactly when dt ρ ≤ 2 there
+        k = CFLConstraints(; C_diffusive = 0.5)
+        rng = Xoshiro(17508)
+        νfields = (
+            "constant 1"            => (_, _, _) -> 1.0,
+            "log-uniform 0.01–1"    => (_, _, _) -> 10.0^(-2 * rand(rng)),
+            "checkerboard 0.01 / 1" => (i, j, l) -> isodd(i + j + l) ? 1.0 : 0.01,
+            "blob, 100×"            => (i, j, l) -> 0.01 + exp(-((i - 6.5)^2 + (j - 6.5)^2 + 4 * (l - 4.5)^2) / 4))
+        for (name, fν) in νfields
+            ν = Field(CellCenter(), g)
+            iv(ν) .= [fν(i, j, l) for i in 1:g.Nx, j in 1:g.Ny, l in 1:g.Nz]
+            pfill!(ν)
+            νmax = maxabs(ν)
+            c = GivenNu175(ν)
+            d_old = cfl_diagnostics(sim, k; sgs = c)                       # :laplacian
+            d_new = cfl_diagnostics(sim, k; sgs = c, sgs_stress = :symmetric)
+            @test d_old.νt_max == d_new.νt_max == νmax
+            @test d_old.νt_cfl == νmax                                       # unchanged
+            @test d_new.νt_cfl ≈ 2νmax                                       # νh = νv
+            @test d_new.dt_sgs ≈ d_old.dt_sgs / 2
+            @test d_old.dt_sgs == 0.5 * Δ²harm / νmax                        # old formula, bit for bit
+            ρ  = spectral_radius175(sim, ν, ν, :symmetric)
+            ρL = spectral_radius175(sim, ν, ν, :laplacian)
+            ρP = spectral_radius175(sim, ν, ν, :symmetric; project = true)
+            @info @sprintf("P55-b CFL [%s]: ρ(L_sym) = %.5f, ρ(L_lap) = %.5f, ρ(P L_sym P) = %.5f s⁻¹; 4νmaxΣΔ⁻² = %.5f; dt_old·ρ = %.3f, dt_new·ρ = %.3f (Euler bound 2)",
+                           name, ρ, ρL, ρP, 4νmax * S, d_old.dt_sgs * ρ, d_new.dt_sgs * ρ)
+            # the derived bound holds and the new limit is stable for L_sym
+            @test ρ <= 4 * d_new.νt_cfl * S * (1 + 1e-12)
+            @test d_new.dt_sgs * ρ <= 2 * (1 + 1e-12)
+            # the old (Laplacian) limit is beyond the Euler boundary for L_sym
+            @test d_old.dt_sgs * ρ > 2
+            # ρ(L_sym) is twice ρ(L_lap) here: the grid-scale gradient modes,
+            # on which the stress form adds ν∇(∇·u) ≈ ν∇² again
+            @test 1.9 < ρ / ρL < 2 + 1e-9
+            # on the projected (solenoidal) subspace the old bound suffices:
+            # Σ 2S:S = Σ|∇u|² there, so ρ(P L P) ≤ 4νmax ΣΔ⁻²
+            @test ρP <= 4νmax * S * (1 + 1e-12)
+            @test d_old.dt_sgs * ρP <= 2 * (1 + 1e-12)
+        end
+        # sharpness: with constant ν the bound is attained, ρ = 8νΣΔ⁻²
+        # (the checkerboard gradient mode)
+        ν1 = constfield175(g, 1.0)
+        @test spectral_radius175(sim, ν1, ν1, :symmetric; iters = 3000) ≈ 8S rtol = 1e-6
+        # time stepping, unprojected: from the leading mode, 20 Euler steps
+        # at the new limit do not grow, at the old limit grow by |1 − 4|²⁰
+        c1 = GivenNu175(ν1)
+        dtn = cfl_diagnostics(sim, k; sgs = c1, sgs_stress = :symmetric).dt_sgs
+        dto = cfl_diagnostics(sim, k; sgs = c1).dt_sgs
+        lead = (copy(sim.u.data), copy(sim.v.data), copy(sim.w.data))
+        setlead!() = (copyto!(sim.u.data, lead[1]); copyto!(sim.v.data, lead[2]);
+                      copyto!(sim.w.data, lead[3]))
+        gn = euler_growth175(sim, ν1, dtn, 20)
+        setlead!(); go = euler_growth175(sim, ν1, dto, 20)
+        # projected (the cores' predictor + projection), from the leading
+        # mode of P L P: no growth at the old limit
+        spectral_radius175(sim, ν1, ν1, :symmetric; project = true)
+        gp = euler_growth175(sim, ν1, dto, 20; project = true)
+        @info @sprintf("P55-b CFL, constant ν, 20 Euler steps from the leading mode: growth %.3g at the new limit, %.3g at the old limit; %.3g at the old limit with the projection (leading mode of P L P)",
+                       gn, go, gp)
+        @test gn <= 1 + 1e-6
+        @test go > 1e6
+        @test gp <= 1 + 1e-6
+        # anisotropic: random νh ∈ [0, 1], νv ∈ [0, 0.05]
+        νh = random_ν175(g, Xoshiro(17509); hi = 1.0)
+        νv = random_ν175(g, Xoshiro(17510); hi = 0.05)
+        νc = stress_form_cfl_viscosity(maxabs(νh), maxabs(νv), g)
+        ρa = spectral_radius175(sim, νh, νv, :symmetric)
+        @info @sprintf("P55-b CFL anisotropic: ρ = %.5f, 4 ν_cfl ΣΔ⁻² = %.5f (ν_cfl = %.4f, 2 max ν = %.4f)",
+                       ρa, 4νc * S, νc, 2 * max(maxabs(νh), maxabs(νv)))
+        @test ρa <= 4νc * S * (1 + 1e-12)
+        @test νc < 2 * max(maxabs(νh), maxabs(νv))          # tighter than 2 max(νh, νv)
+        # adaptive_dt and imex_stability_limit pass the form through
+        sim2 = BoussinesqSimulation(g; ν = 1e-5)
+        cν = GivenNu175(ν1)
+        k2 = CFLConstraints(; C_advective = 1e9)              # diffusion binds
+        @test adaptive_dt(sim2, k2; sgs = cν, sgs_stress = :symmetric) ≈
+              adaptive_dt(sim2, k2; sgs = cν) * (1e-5 + 1) / (1e-5 + 2)
+        @test imex_stability_limit(sim2, ARK2(); constraints = k2, sgs = cν,
+                                   sgs_stress = :symmetric).diagnostics.νt_cfl ≈ 2
     end
 end

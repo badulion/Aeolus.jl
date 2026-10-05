@@ -22,14 +22,24 @@ temperature ``θ_v = θ(1 + 0.61 q_v)`` of the moist buoyancy is used
 difference ``(g/θ_0)(θ_{k+1} - θ_{k-1})/(2Δz)``. The difference itself is
 `TurbulenceStability.buoyancy_frequency_squared`.
 
+`θ₀` is a number (the constant reference of the Boussinesq core) or a
+vector indexed by the storage level `k` of the cell (length `Nz + 2Hz`):
+the height-dependent reference ``\bar θ(z)`` of the sound-proof cores,
+whose buoyancy is ``g(θ - \bar θ)/\bar θ`` (`ReferenceState.θ̄c_pad`; used
+by `StabilityCorrected`, P55-e).
+
 `N2`, `θ` (and `qv`) live at `CellCenter`; the halos of `θ` and `qv`
 must be filled (at a wall the mirror halo halves the boundary gradient).
 Interior cells only. Returns `N2`.
 """
-buoyancy_frequency_squared!(N2::Field, θ::Field; θ₀::Real, g::Real) =
+buoyancy_frequency_squared!(N2::Field, θ::Field; θ₀::Union{Real,AbstractVector}, g::Real) =
     _buoyancy_frequency_squared!(N2, θ, nothing, θ₀, g, mesh(θ))
-buoyancy_frequency_squared!(N2::Field, θ::Field, qv; θ₀::Real, g::Real) =
+buoyancy_frequency_squared!(N2::Field, θ::Field, qv; θ₀::Union{Real,AbstractVector}, g::Real) =
     _buoyancy_frequency_squared!(N2, θ, qv, θ₀, g, mesh(θ))
+
+# the reference θ of storage level k: a constant, or a profile
+@inline _θref(θ₀::Real, k) = θ₀
+@inline _θref(θ₀::AbstractVector, k) = @inbounds θ₀[k]
 
 # θ_v on the face below cell (i, j, k) in direction (di, dj, dk) — the one
 # definition of the moist buoyancy variable at a face (also the horizontal
@@ -51,7 +61,7 @@ function _buoyancy_frequency_squared!(N2::Field{CellCenter}, θ::Field{CellCente
     @inbounds for k in kk, j in jj, i in ii
         lo = _θv_face(θd, qd, i, j, k)
         hi = _θv_face(θd, qd, i, j, k + 1)
-        nd[i, j, k] = buoyancy_frequency_squared(lo, hi, dz, g, θ₀)
+        nd[i, j, k] = buoyancy_frequency_squared(lo, hi, dz, g, _θref(θ₀, k))
     end
     return N2
 end

@@ -178,14 +178,17 @@ closure's default; the cap is there for walls Moeng's floor factor cannot
 reach — the Berlin facades — and the Berlin case uses it.
 
 **Decaying grid turbulence** (Comte-Bellot & Corrsin, `test/era6_cbc_decay.jl`,
-32³, three seeds): ``K_{98}/K_{42}`` −18.5 %, ``K_{171}/K_{42}`` −34.4 %,
-RMS ``\log_{10}E`` 0.084 / 0.172, ``E(k_c)``/CBC 0.58 / 0.25: too
-dissipative, for two measured reasons. Its equilibrium is Smagorinsky with
-``C_s = 0.194`` (static Smagorinsky at 0.194 gives −6.3 % / −19.8 %), and
-``e`` lags the fast decay: its relaxation time ``l/(c_ε\sqrt e) ≈ 0.2`` s
-is close to the 0.28 s between stations, and from station 98 on the mean
-``e`` is 1.8–2.6 times its equilibrium with the decaying strain, so
-``ν_t`` is 1.3–1.6 times too large.
+32³, three seeds, with the corrected face-spectrum set-up of #205):
+``K_{98}/K_{42}`` −9.4 %, ``K_{171}/K_{42}`` −26.9 %, RMS ``\log_{10}E``
+0.065 / 0.120, ``E(k_c)``/CBC 0.81 / 0.38: too dissipative (before the
+#205 fix, which started every closure with 13–22 % too much energy, it
+was −18.5 % / −34.4 %). Two reasons. Its equilibrium is Smagorinsky with
+``C_s = 0.194`` (static Smagorinsky at 0.194 gives +3.2 % / −10.1 %,
+against +13.2 % / −2.6 % at 0.17), and ``e`` lags the fast decay: its
+relaxation time ``l/(c_ε\sqrt e) ≈ 0.2`` s is close to the 0.28 s between
+stations; on the pre-fix set-up the mean ``e`` was 1.8–2.6 times its
+equilibrium with the decaying strain from station 98 on, so ``ν_t`` was
+1.3–1.6 times too large.
 
 ## Differential Reynolds-stress closure (P56-d, #188)
 

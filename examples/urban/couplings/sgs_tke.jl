@@ -77,6 +77,9 @@ end
 # geometry and the initial state exist
 init!(c::SGSTKE, case) = (initialize_tke!(c.closure, case.sim; e_min = c.e_min); nothing)
 
+# The Laplacian SGS momentum form (the cores' default `sgs_stress`), not the
+# stress form of the other providers (#175): the shear production is the
+# exact dual of the Laplacian operator, so Σ P_s V balances the resolved-KE sink.
 step_options(c::SGSTKE, case) = (sgs = c.closure,)
 
 # The SGS TKE carries no surface energy and no water: nothing for the ledger
