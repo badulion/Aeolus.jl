@@ -372,17 +372,24 @@ The single gradient stencil of the SGS closures: [`_strain_at`](@ref) (and so
 the static and dynamic Smagorinsky ν_t) is built from it, and the AMD /
 Vreman, σ, gradient-Richardson and TKE-production closures of Era VI read the
 same tensor. Halos of `u, v, w` must be filled.
+
+`idz_off` (default `idz`) is the inverse of the vertical distance used by
+the off-diagonal `∂/∂z` terms: on a vertically stretched grid the
+diagonal `∂w/∂z` spans the cell (`idz = 1/Δz_c[k]`) while `∂u/∂z`, `∂v/∂z`
+span the two neighbouring centres, `idz_off = 2/(Δz_f[k] + Δz_f[k+1])`
+(the `StretchedGrid` Smagorinsky kernel, #151). With the default the
+uniform stencil is unchanged, bit for bit.
 """
-@inline function _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz)
+@inline function _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz, idz_off = idz)
     @inbounds begin
         du_dx = (u[i+1,j,k] - u[i,j,k]) * idx
         dv_dy = (v[i,j+1,k] - v[i,j,k]) * idy
         dw_dz = (w[i,j,k+1] - w[i,j,k]) * idz
         du_dy = ((u[i,j+1,k] + u[i+1,j+1,k]) - (u[i,j-1,k] + u[i+1,j-1,k])) * (0.25 * idy)
         dv_dx = ((v[i+1,j,k] + v[i+1,j+1,k]) - (v[i-1,j,k] + v[i-1,j+1,k])) * (0.25 * idx)
-        du_dz = ((u[i,j,k+1] + u[i+1,j,k+1]) - (u[i,j,k-1] + u[i+1,j,k-1])) * (0.25 * idz)
+        du_dz = ((u[i,j,k+1] + u[i+1,j,k+1]) - (u[i,j,k-1] + u[i+1,j,k-1])) * (0.25 * idz_off)
         dw_dx = ((w[i+1,j,k] + w[i+1,j,k+1]) - (w[i-1,j,k] + w[i-1,j,k+1])) * (0.25 * idx)
-        dv_dz = ((v[i,j,k+1] + v[i,j+1,k+1]) - (v[i,j,k-1] + v[i,j+1,k-1])) * (0.25 * idz)
+        dv_dz = ((v[i,j,k+1] + v[i,j+1,k+1]) - (v[i,j,k-1] + v[i,j+1,k-1])) * (0.25 * idz_off)
         dw_dy = ((w[i,j+1,k] + w[i,j+1,k+1]) - (w[i,j-1,k] + w[i,j-1,k+1])) * (0.25 * idy)
     end
     return ((du_dx, du_dy, du_dz),
@@ -403,14 +410,14 @@ Vorticity `ω = ∇×u` at the centre of cell `(i, j, k)`, from the same
 end
 
 """
-    _strain_at(u, v, w, i, j, k, idx, idy, idz) -> (S11, S22, S33, S12, S13, S23, |S|)
+    _strain_at(u, v, w, i, j, k, idx, idy, idz[, idz_off]) -> (S11, S22, S33, S12, S13, S23, |S|)
 
 Strain-rate components `Sᵢⱼ = ½(gᵢⱼ + gⱼᵢ)` and `|S| = √(2 SᵢⱼSᵢⱼ)` at the
 centre of cell `(i, j, k)`, from [`_velocity_gradient_at`](@ref). The stencil
 of [`compute_smagorinsky_νt!`](@ref) and [`compute_dynamic_smagorinsky_νt!`](@ref).
 """
-@inline function _strain_at(u, v, w, i, j, k, idx, idy, idz)
-    g = _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz)
+@inline function _strain_at(u, v, w, i, j, k, idx, idy, idz, idz_off = idz)
+    g = _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz, idz_off)
     S11 = g[1][1]; S22 = g[2][2]; S33 = g[3][3]
     S12 = 0.5 * (g[1][2] + g[2][1])
     S13 = 0.5 * (g[1][3] + g[3][1])
