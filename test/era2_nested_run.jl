@@ -15,27 +15,27 @@ using Aeolus.PressureSolvers: FFTPoissonSolver
 # =========================================================================
 
 # --- coordinates of a cell centre / x-face (storage index, halos included)
-_xc(m, i) = m.x0 + (i - m.Hx - 0.5) * m.dx
-_yc(m, j) = m.y0 + (j - m.Hy - 0.5) * m.dy
-_zc(m, k) = m.z0 + (k - m.Hz - 0.5) * m.dz
-_xf(m, i) = m.x0 + (i - m.Hx - 1) * m.dx
+_nr_xc(m, i) = m.x0 + (i - m.Hx - 0.5) * m.dx
+_nr_yc(m, j) = m.y0 + (j - m.Hy - 0.5) * m.dy
+_nr_zc(m, k) = m.z0 + (k - m.Hz - 0.5) * m.dz
+_nr_xf(m, i) = m.x0 + (i - m.Hx - 1) * m.dx
 
 "Set every storage cell of the four prognostics from `f(name, x, y, z)`."
-function _set_fields!(sim, f)
+function _nr_set_fields!(sim, f)
     m = sim.mesh
     for k in axes(sim.θ.data, 3), j in axes(sim.θ.data, 2), i in axes(sim.θ.data, 1)
-        x = _xc(m, i); y = _yc(m, j); z = _zc(m, k)
+        x = _nr_xc(m, i); y = _nr_yc(m, j); z = _nr_zc(m, k)
         sim.θ.data[i, j, k] = f(:θ, x, y, z)
     end
     for k in axes(sim.u.data, 3), j in axes(sim.u.data, 2), i in axes(sim.u.data, 1)
-        sim.u.data[i, j, k] = f(:u, _xf(m, i), _yc(m, j), _zc(m, k))
+        sim.u.data[i, j, k] = f(:u, _nr_xf(m, i), _nr_yc(m, j), _nr_zc(m, k))
     end
     fill!(sim.v.data, 0.0); fill!(sim.w.data, 0.0)
     return sim
 end
 
 "Copy the parent prolongated over the whole child (a smooth initial child)."
-function _init_child_from_parent!(csim, psim, nest)
+function _nr_init_child_from_parent!(csim, psim, nest)
     st = nest_interp_state(nest)
     interpolate_parent_state!(st, psim, nest; order=3, region=:all)
     for (cf, sf) in ((csim.u, st.u), (csim.v, st.v), (csim.w, st.w), (csim.θ, st.θ))
@@ -45,14 +45,14 @@ function _init_child_from_parent!(csim, psim, nest)
 end
 
 "A user core that sets the parent analytically: fields `f(name, x, y, z, t)`."
-analytic_core(f) = (sim, dt; kw...) -> begin
+_nr_analytic_core(f) = (sim, dt; kw...) -> begin
     sim.t += dt
     tt = sim.t
-    _set_fields!(sim, (n, x, y, z) -> f(n, x, y, z, tt))
+    _nr_set_fields!(sim, (n, x, y, z) -> f(n, x, y, z, tt))
     sim
 end
 
-_mean_u(sim) = sum(interior_view(sim.u)) / length(interior_view(sim.u))
+_nr_mean_u(sim) = sum(interior_view(sim.u)) / length(interior_view(sim.u))
 
 # =========================================================================
 @testset "Era II — NestedRun time coupling (N-nest-c, #257)" begin
@@ -114,16 +114,16 @@ end
 # -------------------------------------------------------------------------
 # Parent 16³ on the unit cube, child (0.25, 0.75)³ at r = 2. The parent is
 # advanced by a user core that sets it analytically, linear in x, y, z, t.
-function _linear_case(child_adv; substeps=3, dt=1e-3, nsteps=4)
+function _nr_linear_case(child_adv; substeps=3, dt=1e-3, nsteps=4)
     pm = RegularGrid(Float64; size=(16, 16, 16), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
     nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     f(n, x, y, z, t) = n === :θ ? 300.0 + 2x - 3y + z + 7.0 * t :
                                   1.0 + 0.5x + 0.25y - 0.125z - 4.0 * t
     psim = BoussinesqSimulation(pm)
-    _set_fields!(psim, (n, x, y, z) -> f(n, x, y, z, 0.0))
+    _nr_set_fields!(psim, (n, x, y, z) -> f(n, x, y, z, 0.0))
     csim = BoussinesqSimulation(cm; bcs=nest_bcs(:nest), solver=FFTPoissonSolver(cm))
-    _init_child_from_parent!(csim, psim, nest)
+    _nr_init_child_from_parent!(csim, psim, nest)
     # stage halos, recorded where the core reads them (body_force! runs after
     # the tendencies, before anything writes the halos again)
     RUN = Ref{Any}(nothing)
@@ -135,9 +135,9 @@ function _linear_case(child_adv; substeps=3, dt=1e-3, nsteps=4)
         ts = run.hook.t0 + cs[run.hook.k + 1] * run.hook.dt
         for k in axes(sim.θ.data, 3), j in axes(sim.θ.data, 2), i in axes(sim.θ.data, 1)
             (i in ii) && (j in jj) && (k in kk) && continue
-            ex = f(:θ, _xc(cm, i), _yc(cm, j), _zc(cm, k), ts)
+            ex = f(:θ, _nr_xc(cm, i), _nr_yc(cm, j), _nr_zc(cm, k), ts)
             err[] = max(err[], abs(sim.θ.data[i, j, k] - ex) / abs(ex))
-            exu = f(:u, _xf(cm, i), _yc(cm, j), _zc(cm, k), ts)
+            exu = f(:u, _nr_xf(cm, i), _nr_yc(cm, j), _nr_zc(cm, k), ts)
             err[] = max(err[], abs(sim.u.data[i, j, k] - exu) / abs(exu))
         end
         nrec[] += 1
@@ -145,7 +145,7 @@ function _linear_case(child_adv; substeps=3, dt=1e-3, nsteps=4)
     end
     adv = domain_advance(child_adv.core, child_adv.args...;
                          child_adv.kwargs..., body_force! = record!)
-    run = NestedRun(psim, csim, nest; advance_parent = domain_advance(analytic_core(f)),
+    run = NestedRun(psim, csim, nest; advance_parent = domain_advance(_nr_analytic_core(f)),
                     advance_child = adv, cfl_parent = nothing, cfl_child = nothing,
                     substeps)
     RUN[] = run
@@ -159,7 +159,7 @@ function _linear_case(child_adv; substeps=3, dt=1e-3, nsteps=4)
         s = boundary_time(run, t)
         for k in axes(s.θ.data, 3), j in axes(s.θ.data, 2), i in axes(s.θ.data, 1)
             (i in ii) && (j in jj) && (k in kk) && continue
-            ex = f(:θ, _xc(cm, i), _yc(cm, j), _zc(cm, k), t)
+            ex = f(:θ, _nr_xc(cm, i), _nr_yc(cm, j), _nr_zc(cm, k), t)
             eb = max(eb, abs(s.θ.data[i, j, k] - ex) / abs(ex))
         end
     end
@@ -171,7 +171,7 @@ end
                              ("step_rk3!", domain_advance(step_rk3!), 3),
                              ("step_imex! ARK2", domain_advance(step_imex!, ARK2()), 2),
                              ("step_imex! Rosenbrock2", domain_advance(step_imex!, Rosenbrock2()), 2))
-        r = _linear_case(adv)
+        r = _nr_linear_case(adv)
         @printf("  %-24s %2d stage evaluations: max rel. halo error %.2e, boundary_time %.2e\n",
                 name, r.nrec, r.err, r.eb)
         @test r.nrec == 4 * 3 * nst           # 4 parent steps × 3 substeps × stages
@@ -189,9 +189,9 @@ end
         nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
         cm = nest_child_mesh(nest)
         f(n, x, y, z, t) = n === :θ ? 300.0 + A * sin(ω * t) : 0.0
-        psim = BoussinesqSimulation(pm); _set_fields!(psim, (n, x, y, z) -> f(n, x, y, z, 0.0))
+        psim = BoussinesqSimulation(pm); _nr_set_fields!(psim, (n, x, y, z) -> f(n, x, y, z, 0.0))
         csim = BoussinesqSimulation(cm; bcs=nest_bcs(:nest), solver=FFTPoissonSolver(cm))
-        _init_child_from_parent!(csim, psim, nest)
+        _nr_init_child_from_parent!(csim, psim, nest)
         RUN = Ref{Any}(nothing); err = Ref(0.0)
         function rec!(sim, Δt)
             run = RUN[]
@@ -199,7 +199,7 @@ end
             err[] = max(err[], abs(sim.θ.data[1, 1, 1] - (300.0 + A * sin(ω * ts))))
             sim
         end
-        run = NestedRun(psim, csim, nest; advance_parent = domain_advance(analytic_core(f)),
+        run = NestedRun(psim, csim, nest; advance_parent = domain_advance(_nr_analytic_core(f)),
                         advance_child = domain_advance(step_rk3!; body_force! = rec!),
                         cfl_parent = nothing, cfl_child = nothing, substeps = 2)
         RUN[] = run
@@ -247,7 +247,7 @@ end
 # Uniform flow along x, w = 0, no viscosity: the child spans the parent
 # horizontally (periodic) and is nested only in z, where w = 0 means the
 # halos cannot act on u. A drag hook then has an exact answer.
-function _drag_case(; drag_on::Symbol, child_core::Symbol = :boussinesq, c = 1.0,
+function _nr_drag_case(; drag_on::Symbol, child_core::Symbol = :boussinesq, c = 1.0,
                     T = 1.0, U0 = 1.0)
     pm = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
     nest = nested_grid(pm, ((0.0, 1.0), (0.0, 1.0), (0.25, 0.75)), 2; halo=(3, 3, 3))
@@ -280,11 +280,11 @@ end
 @testset "hooks reach both domains (linear drag), other domain unchanged" begin
     for (drag_on, core) in ((:child, :boussinesq), (:parent, :boussinesq),
                             (:child, :anelastic))
-        run = _drag_case(; drag_on, child_core = core)
+        run = _nr_drag_case(; drag_on, child_core = core)
         p, c = run.parent, run.child
         dragged, other = drag_on === :child ? (c, p) : (p, c)
-        e = abs(_mean_u(dragged) / exp(-run.t) - 1.0)
-        o = abs(_mean_u(other) - 1.0)
+        e = abs(_nr_mean_u(dragged) / exp(-run.t) - 1.0)
+        o = abs(_nr_mean_u(other) - 1.0)
         @printf("  drag on %-6s (%s child): t = %.3f, |ū/e^{-ct} − 1| = %.2e, other domain |ū − 1| = %.2e\n",
                 drag_on, core, run.t, e, o)
         @test run.t ≈ 1.0 rtol = 1e-14
@@ -301,7 +301,7 @@ relaxes toward the parent in a 3-cell sponge: with the periodic FFT
 projection the child has today (open-boundary projection: N-open-a/b), a
 child with neither blows up within ~10 steps.
 """
-function _tg_case(; Np = 16, r = 2, U = 0.5, seed = 1, ν = 5e-3,
+function _nr_tg_case(; Np = 16, r = 2, U = 0.5, seed = 1, ν = 5e-3,
                   impose_interface = true, sponge = NestSponge(width = 3, α_max = 20.0),
                   kwargs...)
     L = 1.0
@@ -311,7 +311,7 @@ function _tg_case(; Np = 16, r = 2, U = 0.5, seed = 1, ν = 5e-3,
     psim = BoussinesqSimulation(pm; ν = ν)
     Random.seed!(seed)
     for k in axes(psim.u.data, 3), j in axes(psim.u.data, 2), i in axes(psim.u.data, 1)
-        x = _xf(pm, i); xc = _xc(pm, i); y = _yc(pm, j)
+        x = _nr_xf(pm, i); xc = _nr_xc(pm, i); y = _nr_yc(pm, j)
         yf = pm.y0 + (j - pm.Hy - 1) * pm.dy
         psim.u.data[i, j, k] = U + sin(2π * x) * cos(2π * y)
         psim.v.data[i, j, k] = -cos(2π * xc) * sin(2π * yf)
@@ -320,12 +320,12 @@ function _tg_case(; Np = 16, r = 2, U = 0.5, seed = 1, ν = 5e-3,
     step!(psim, 1e-6); psim.t = 0.0           # project once
     csim = BoussinesqSimulation(cm; ν = ν, bcs = nest_bcs(:nest, :nest, :periodic),
                                 solver = FFTPoissonSolver(cm))
-    _init_child_from_parent!(csim, psim, nest)
+    _nr_init_child_from_parent!(csim, psim, nest)
     return NestedRun(psim, csim, nest; impose_interface, sponge, kwargs...)
 end
 
 "KE of the parent over the cells the child covers (u, v, w averaged to centres)."
-function _covered_ke(p, nest)
+function _nr_covered_ke(p, nest)
     m = p.mesh; cx, cy, cz = nest_covered_range(nest)
     s = 0.0
     for k in cz, j in cy, i in cx
@@ -339,7 +339,7 @@ function _covered_ke(p, nest)
 end
 
 @testset "one-way: the parent is bit-identical to a standalone run" begin
-    run = _tg_case(; feedback = :one_way, cfl_parent = CFLConstraints())
+    run = _nr_tg_case(; feedback = :one_way, cfl_parent = CFLConstraints())
     alone = deepcopy(run.parent)
     c = CFLConstraints(); dtp = nothing
     for _ in 1:20
@@ -360,7 +360,7 @@ end
 # -------------------------------------------------------------------------
 @testset "clock alignment and child CFL over 1000 adaptive parent steps" begin
     for fb in (:one_way, :two_way)
-        run = _tg_case(; feedback = fb, cfl_parent = CFLConstraints(C_advective = 0.5))
+        run = _nr_tg_case(; feedback = fb, cfl_parent = CFLConstraints(C_advective = 0.5))
         kep0 = kinetic_energy(run.parent)
         maxdrift = 0.0; kepmax = kep0; mass = 0.0
         rmin = Inf; rmax = 0.0
@@ -368,7 +368,7 @@ end
             step_nested!(run)
             maxdrift = max(maxdrift, abs(run.child.t - run.parent.t) / run.parent.t)
             kepmax = max(kepmax, kinetic_energy(run.parent))
-            r = kinetic_energy(run.child) / _covered_ke(run.parent, run.nest)
+            r = kinetic_energy(run.child) / _nr_covered_ke(run.parent, run.nest)
             rmin = min(rmin, r); rmax = max(rmax, r)
             fb === :two_way && (mass = max(mass, nest_conservation_error(run.parent, run.child,
                                                                         run.nest, :mass)))
@@ -400,7 +400,7 @@ end
 
 # -------------------------------------------------------------------------
 @testset "sync = :shared_min_dt: one dt for both domains (PALM)" begin
-    run = _tg_case(; cfl_parent = CFLConstraints(), sync = :shared_min_dt)
+    run = _nr_tg_case(; cfl_parent = CFLConstraints(), sync = :shared_min_dt)
     for _ in 1:10
         step_nested!(run)
     end
@@ -413,7 +413,7 @@ end
     @test st.dt_parent_max ≈ st.dt_child_max rtol = 1e-12
     @test st.max_child_cfl <= 0.5 * (1 + 1e-9)
     # the shared step is the child's (finer) limit, below the parent's own
-    sub = _tg_case(; cfl_parent = CFLConstraints())
+    sub = _nr_tg_case(; cfl_parent = CFLConstraints())
     step_nested!(sub)
     @test st.dt_parent_max < sub.stats.dt_parent_max
 end
@@ -430,8 +430,8 @@ end
         psim = BoussinesqSimulation(pm)
         Random.seed!(7)
         for k in axes(psim.u.data, 3), j in axes(psim.u.data, 2), i in axes(psim.u.data, 1)
-            psim.u.data[i, j, k] = 1.0 + 0.3 * sin(2π * _xf(pm, i)) * cos(2π * _yc(pm, j))
-            psim.v.data[i, j, k] = -0.3 * cos(2π * _xc(pm, i)) *
+            psim.u.data[i, j, k] = 1.0 + 0.3 * sin(2π * _nr_xf(pm, i)) * cos(2π * _nr_yc(pm, j))
+            psim.v.data[i, j, k] = -0.3 * cos(2π * _nr_xc(pm, i)) *
                                    sin(2π * (pm.y0 + (j - pm.Hy - 1) * pm.dy))
         end
         psim.θ.data .= 300.0 .+ randn(size(psim.θ.data))
