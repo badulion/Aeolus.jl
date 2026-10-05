@@ -8,7 +8,8 @@ module LargeScaleForcing
 # advective tendencies and a prescribed surface-temperature series.
 # #248 (N-parent-c) generalised the nudging to the plane mean of any of
 # u, v, θ, qv (`ProfileNudging`, of which `GeostrophicNudging` is now a
-# constructor).
+# constructor) and added the state-dependent large-scale subsidence
+# (`Subsidence`).
 # GABLS1-4, CASES-99 and (Phase 67) ERA5-forced cases are built from
 # these types; this module only defines them and applies them.
 #
@@ -24,7 +25,7 @@ using ..StretchedGrids: StretchedGrid
 export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
        AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
-export ProfileNudging, NudgingWeight, nudging_weight, tendency_integrals
+export ProfileNudging, NudgingWeight, nudging_weight, Subsidence, tendency_integrals
 
 # =========================================================================
 # Tables and their interpolation
@@ -334,6 +335,69 @@ function GeostrophicNudging(U_g, V_g, τ::Real)
 end
 
 """
+    Subsidence(w_s; fields = (:θ, :qv), form = :mean_gradient)
+
+Large-scale subsidence (vertical advection by the prescribed large-scale
+vertical velocity ``w_s(z, t)``, m s⁻¹, negative downward) of the fields
+`fields` (any of `:u`, `:v`, `:θ`, `:qv`):
+
+```math
+\\left.\\frac{\\partial φ}{\\partial t}\\right|_{s} =
+-\\,w_s(z, t)\\,\\frac{\\partial \\langle φ\\rangle_{xy}}{\\partial z}
+\\quad (\\texttt{form = :mean\\_gradient}), \\qquad
+-\\,w_s(z, t)\\,\\frac{\\partial φ}{\\partial z}
+\\quad (\\texttt{form = :local}).
+```
+
+`:mean_gradient` (the default; DALES, Heus et al. 2010, GMD 3, 415,
+Eq. 91; MicroHH, van Heerwaarden et al. 2017, GMD 10, 3145) uses the
+centred gradient of the plane mean,
+``(⟨φ⟩_{k+1} - ⟨φ⟩_{k-1})/(z_{k+1} - z_{k-1})``, and adds the tendency
+uniformly per level, so it moves the mean profile and leaves the
+fluctuations alone; it is exact for a linear profile on any grid.
+`:local` (Heinze et al. 2017, ACP 17, 7083, Eq. 3) uses each column's own
+gradient, first-order upwind with respect to ``w_s``. On the bottom and
+top levels the gradient is the one-sided difference toward the interior.
+A centred `:mean_gradient` needs a time scheme stable for centred
+advection (SSP-RK3); with forward Euler use `:local` or a small
+``|w_s|Δt/Δz``.
+
+`w_s` is any forcing quantity (number, profile, height-time
+[`ForcingTable`](@ref), function `(z, t) -> value`), applied as its step
+mean. The default `fields = (:θ, :qv)` subsides `qv` only when the
+simulation carries moisture; a field named explicitly that the
+simulation does not carry is an error.
+
+Unlike the prescribed [`AdvectiveTendencies`](@ref), the tendency
+depends on the state and does not conserve ``\\int φ\\,dV``:
+[`apply_forcing!`](@ref) returns the volume integrals
+``\\int (\\partial φ/\\partial t)_s\\,dV`` it added, a `NamedTuple` keyed
+by field (also kept for [`tendency_integrals`](@ref)), for the ledgers.
+"""
+struct Subsidence{W} <: AbstractLargeScaleForcing
+    w_s::W
+    fields::Tuple{Vararg{Symbol}}
+    explicit::Bool
+    form::Symbol
+    buf::Vector{Float64}
+    last::Base.RefValue{NamedTuple}
+    function Subsidence(w_s::W, fields, explicit::Bool, form::Symbol) where {W}
+        form in (:mean_gradient, :local) ||
+            throw(ArgumentError("Subsidence: form must be :mean_gradient or :local, got :$form"))
+        fs = Tuple(Symbol.(fields))
+        isempty(fs) && throw(ArgumentError("Subsidence: no fields"))
+        for k in fs
+            k in _LSF_FIELDS ||
+                throw(ArgumentError("Subsidence: cannot subside :$k (supported: $(_LSF_FIELDS))"))
+        end
+        return new{W}(w_s, fs, explicit, form, Float64[], Ref{NamedTuple}(NamedTuple()))
+    end
+end
+Subsidence(w_s; fields = nothing, form::Symbol = :mean_gradient) =
+    fields === nothing ? Subsidence(w_s, (:θ, :qv), false, form) :
+                         Subsidence(w_s, fields, true, form)
+
+"""
     AdvectiveTendencies(z, t, dθdt, dqdt, dudt, dvdt)
     AdvectiveTendencies(; θ = nothing, q = nothing, u = nothing, v = nothing)
 
@@ -347,7 +411,8 @@ height-time grid; in the second each is any forcing quantity (number,
 The tendency is added uniformly over each model level. With no surface
 flux it changes ``\\int θ\\,dV`` by exactly ``\\iint (∂θ/∂t)_{adv}\\,dV\\,dt``
 (the step mean is used, see [`forcing_mean`](@ref)). Large-scale
-subsidence, which depends on the model state, is not part of it.
+subsidence, which depends on the model state, is not part of it: it is
+[`Subsidence`](@ref).
 
 Reference: the GABLS2 and DICE intercomparison forcing (Svensson et al.
 2011, Bound.-Layer Meteor. 140, 177–206; Best et al. 2013, DICE
@@ -482,13 +547,14 @@ end
 
 The volume integrals ``\\int (\\partial φ/\\partial t)\\,dV`` (units of φ
 times m³ s⁻¹) that the last [`apply_forcing!`](@ref) of the
-state-dependent forcing `F` ([`ProfileNudging`](@ref)) added, keyed by field; an empty `NamedTuple` for
+state-dependent forcing `F` ([`ProfileNudging`](@ref),
+[`Subsidence`](@ref)) added, keyed by field; an empty `NamedTuple` for
 forcings that keep no record and before the first call.
 `tendency_integrals(F::Tuple, name)` sums the entry `name` over a tuple
 of forcings (0 when none has it). Multiplied by the stage's weight times
 Δt they are what a ledger books.
 """
-tendency_integrals(F::ProfileNudging) = F.last[]
+tendency_integrals(F::Union{ProfileNudging,Subsidence}) = F.last[]
 tendency_integrals(::AbstractLargeScaleForcing) = NamedTuple()
 tendency_integrals(F::Tuple, name::Symbol) =
     sum((Float64(get(tendency_integrals(f), name, 0.0)) for f in F); init = 0.0)
@@ -533,6 +599,78 @@ function _nudge_levels!(d, td, m, ref, invτ, wfn, t, t1)
             td[Hx+i, Hy+j, Hz+k] -= c
         end
         I -= c * dA * _dzc(m, k)
+    end
+    return I
+end
+
+function apply_forcing!(sim, F::Subsidence, t, Δt; kw...)
+    m = sim.mesh
+    t1 = t + Δt
+    names = F.explicit ? F.fields :
+            Tuple(f for f in F.fields if f !== :qv || _has_moisture(sim))
+    vals = map(names) do name
+        φ, tφ = _state_tendency(sim, name, "Subsidence")
+        F.form === :mean_gradient ?
+            _subside_mean!(φ.data, tφ.data, m, F.w_s, t, t1, F.buf) :
+            _subside_local!(φ.data, tφ.data, m, F.w_s, t, t1)
+    end
+    res = NamedTuple{names}(vals)
+    F.last[] = res
+    return res
+end
+
+# indices of the two levels of the gradient at level k: centred inside,
+# one-sided toward the interior on the bottom and top levels
+@inline _grad_levels(k, Nz) = (k == 1 ? 1 : k - 1, k == Nz ? Nz : k + 1)
+
+function _subside_mean!(d, td, m, w_s, t, t1, buf)
+    Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
+    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
+    Nz >= 2 || return 0.0
+    resize!(buf, Nz)
+    @inbounds for k in 1:Nz
+        s = 0.0
+        for j in 1:Ny, i in 1:Nx
+            s += d[Hx+i, Hy+j, Hz+k]
+        end
+        buf[k] = s / (Nx * Ny)
+    end
+    dA = m.dx * m.dy * (Nx * Ny)
+    I = 0.0
+    @inbounds for k in 1:Nz
+        kl, ku = _grad_levels(k, Nz)
+        G = (buf[ku] - buf[kl]) / (_zc(m, ku) - _zc(m, kl))
+        z = _zc(m, k)
+        s = -forcing_mean(w_s, z, t, t1) * G
+        for j in 1:Ny, i in 1:Nx
+            td[Hx+i, Hy+j, Hz+k] += s
+        end
+        I += s * dA * _dzc(m, k)
+    end
+    return I
+end
+
+function _subside_local!(d, td, m, w_s, t, t1)
+    Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
+    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
+    Nz >= 2 || return 0.0
+    dAc = m.dx * m.dy
+    I = 0.0
+    @inbounds for k in 1:Nz
+        z = _zc(m, k)
+        w = forcing_mean(w_s, z, t, t1)
+        # upwind: from above for descent (w < 0), from below for ascent;
+        # one-sided toward the interior where the upwind level is missing
+        kl, ku = w < 0 ? (k == Nz ? (Nz - 1, Nz) : (k, k + 1)) :
+                         (k == 1 ? (1, 2) : (k - 1, k))
+        idz = 1 / (_zc(m, ku) - _zc(m, kl))
+        Ik = 0.0
+        for j in 1:Ny, i in 1:Nx
+            s = -w * (d[Hx+i, Hy+j, Hz+ku] - d[Hx+i, Hy+j, Hz+kl]) * idz
+            td[Hx+i, Hy+j, Hz+k] += s
+            Ik += s
+        end
+        I += Ik * dAc * _dzc(m, k)
     end
     return I
 end

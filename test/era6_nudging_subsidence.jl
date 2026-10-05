@@ -159,4 +159,150 @@ end
         end
     end
 
+    @testset "4. linear profile: −w_s Γ at every level (regular and stretched)" begin
+        Γ, ws = 0.003, -0.01
+        sim = _ns_box(Nz = 16)
+        m = sim.mesh
+        iθ = interior_view(sim.θ)
+        for k in 1:16, j in 1:8, i in 1:8   # θ₀ + Γz plus fluctuations of zero plane mean
+            iθ[i, j, k] = 290 + Γ * (k - 0.5) * m.dz + 0.2 * sinpi(2i / 8) * cospi(2j / 8)
+        end
+        for form in (:mean_gradient, :local)
+            fill!(sim.tθ.data, 0)
+            S = Subsidence(ws; fields = (:θ,), form = form)
+            I = apply_forcing!(sim, S, 0.0, 1.0)
+            t = [_ns_level(sim.tθ, k) for k in 1:16]
+            err = maximum(abs, t .+ ws * Γ) / abs(ws * Γ)
+            @info @sprintf("Linear profile, %s: tendency %.10e K/s at every level (−w_sΓ = %.10e), max relative error %.1e",
+                           form, mean(t), -ws * Γ, err)
+            @test err < 1e-10
+            @test I.θ ≈ -ws * Γ * m.Lx * m.Ly * m.Lz rtol = 1e-10
+        end
+        # a geometric StretchedGrid: the cell centres come from the mesh
+        g = StretchedGrid(; size = (4, 4, 12), extent = (100.0, 100.0, 1200.0), stretching = (:geometric, 1.15))
+        θ = Aeolus.Fields.Field(CellCenter(), g); tθ = Aeolus.Fields.Field(CellCenter(), g)
+        zc = znodes(g, CellCenter())
+        @test zc[2] - zc[1] < zc[end] - zc[end-1]        # really stretched
+        interior_view(θ) .= [290 + Γ * zc[k] for _ in 1:4, _ in 1:4, k in 1:12]
+        mock = (mesh = g, θ = θ, tθ = tθ)
+        wprof = ForcingTable([0.0, 1200.0], [0.0, -0.012])   # w_s = −1e-5 z
+        for form in (:mean_gradient, :local)
+            fill!(tθ.data, 0)
+            I = apply_forcing!(mock, Subsidence(wprof; fields = (:θ,), form = form), 0.0, 1.0)
+            t = [_ns_level(tθ, k) for k in 1:12]
+            exact = [1e-5 * zc[k] * Γ for k in 1:12]
+            err = maximum(abs, t .- exact) / maximum(exact)
+            vol = sum(cell_thickness(g)[g.Hz+k] * exact[k] for k in 1:12) * g.Lx * g.Ly
+            @info @sprintf("StretchedGrid (geometric 1.15, Δz %.1f-%.1f m), %s: max relative error of −w_s(z)Γ %.1e; ∫ dV error %.1e",
+                           zc[2] - zc[1], zc[end] - zc[end-1], form, err, abs(I.θ - vol) / vol)
+            @test err < 1e-10
+            @test I.θ ≈ vol rtol = 1e-10
+        end
+        # and the nudging integral on the stretched mesh: ∫ dV = Σ Δz_k A c_k
+        fill!(tθ.data, 0)
+        I = apply_forcing!(mock, ProfileNudging((θ = 290.0,), 100.0), 0.0, 1.0)
+        @test I.θ ≈ -sum(Γ * zc[k] / 100 * cell_thickness(g)[g.Hz+k] for k in 1:12) * 1e4 rtol = 1e-10
+        @test _ns_level(tθ, 7) ≈ -Γ * zc[7] / 100 rtol = 1e-10
+    end
+
+    @testset "5. inversion descent: z₁ + w_s t within one Δz over 6 h" begin
+        ws, z1, Δθ = -0.01, 1000.0, 4.0
+        T = 6 * 3600.0
+        for form in (:mean_gradient, :local)
+            sim = _ns_quiet(64; Lz = 1600.0, θ₀ = 292.0)
+            dz = sim.mesh.dz
+            set!(sim.θ, (x, y, z) -> z < z1 ? 290.0 : 290.0 + Δθ)
+            S = Subsidence(ws; fields = (:θ,), form = form)
+            dt = 60.0
+            for _ in 1:round(Int, T / dt)
+                step_rk3!(sim, dt; body_force! = (s, Δt) -> apply_forcing!(s, S, s.t, Δt))
+            end
+            θm = [_ns_level(sim.θ, k) for k in 1:64]
+            zc = [(k - 0.5) * dz for k in 1:64]
+            # the height where ⟨θ⟩ crosses the middle of the jump (from below)
+            k = findfirst(>=(290 + Δθ / 2), θm)
+            zx = zc[k-1] + (290 + Δθ / 2 - θm[k-1]) / (θm[k] - θm[k-1]) * dz
+            @info @sprintf("Inversion descent (%s, Δz = %.0f m, 6 h, w_s = %.3f m/s): mid-jump at %.1f m, expected z₁ + w_s t = %.1f m (error %.1f m = %.2f Δz); ⟨θ⟩ range %.3f-%.3f K",
+                           form, dz, ws, zx, z1 + ws * T, zx - (z1 + ws * T), (zx - (z1 + ws * T)) / dz,
+                           minimum(θm), maximum(θm))
+            @test abs(zx - (z1 + ws * T)) < dz
+            @test maximum(abs, interior_view(sim.w)) < 1e-10   # no turbulence: pure subsidence
+        end
+    end
+
+    @testset "6. mixed layer: no subsidence tendency where ⟨θ⟩ is constant" begin
+        sim = _ns_box(Nz = 16)
+        m = sim.mesh
+        iθ = interior_view(sim.θ)
+        zi = 200.0
+        for k in 1:16, j in 1:8, i in 1:8
+            z = (k - 0.5) * m.dz
+            iθ[i, j, k] = (z < zi ? 300.0 : 300.0 + 0.01 * (z - zi)) + 0.05 * sinpi(2i / 8 + j / 4)
+        end
+        S = Subsidence(-0.02; fields = (:θ,))
+        fill!(sim.tθ.data, 0)
+        apply_forcing!(sim, S, 0.0, 1.0)
+        kml = [k for k in 2:16 if (k + 0.5) * m.dz < zi]      # both neighbours inside the layer
+        tml = maximum(abs, [_ns_level(sim.tθ, k) for k in kml])
+        tabove = _ns_level(sim.tθ, 14)
+        @info @sprintf("Mixed layer (θ = 300 K ± 0.05 K fluctuations, z < %.0f m): max |tendency| %.1e K/s on %d levels; above: %.3e K/s (−w_sΓ = %.3e)",
+                       zi, tml, length(kml), tabove, 0.02 * 0.01)
+        @test tml <= 0.02 * 4eps(300.0) / m.dz        # round-off of the plane means at most
+        @test tabove ≈ 0.02 * 0.01 rtol = 1e-10
+    end
+
+    @testset "7. ledger: Δ∫θ dV = booked nudging + subsidence, to 1e-10" begin
+        zt = [0.0, 200.0, 400.0]
+        tt = [0.0, 300.0, 900.0]
+        wtab = ForcingTable(zt, tt, [0.0 0.0 0.0; -0.004 -0.01 -0.002; -0.006 -0.02 -0.004])
+        θref = ForcingTable([0.0, 400.0], [299.0, 303.0])
+        for (stepper, form) in ((:euler, :mean_gradient), (:euler, :local), (:rk3, :mean_gradient), (:rk3, :local))
+            sim = _ns_box(moisture = stepper === :euler)
+            F = (ProfileNudging((θ = θref,), 300.0; weight = NudgingWeight(100.0; depth = 100.0)),
+                 Subsidence(wtab; form = form))
+            dV = sim.mesh.dx * sim.mesh.dy * sim.mesh.dz
+            H0 = sum(interior_view(sim.θ)) * dV
+            Q0 = sum(interior_view(sim.qv)) * dV
+            booked = 0.0; booked_q = 0.0; nudged = 0.0; subsided = 0.0
+            dt = 6.0
+            for _ in 1:100
+                if stepper === :euler
+                    step!(sim, dt; body_force! = function (s, Δt)
+                        apply_forcing!(s, F, s.t, Δt)
+                        nudged += Δt * tendency_integrals(F[1]).θ
+                        subsided += Δt * tendency_integrals(F[2]).θ
+                        booked_q += Δt * tendency_integrals(F, :qv)
+                    end)
+                else
+                    stage = Ref(0); t0 = sim.t
+                    step_rk3!(sim, dt; body_force! = function (s, Δt)
+                        stage[] += 1
+                        wst = (1 / 6, 1 / 6, 2 / 3)[stage[]]
+                        apply_forcing!(s, F, t0, dt)
+                        nudged += wst * dt * tendency_integrals(F[1]).θ
+                        subsided += wst * dt * tendency_integrals(F[2]).θ
+                    end)
+                end
+            end
+            booked = nudged + subsided
+            ΔH = sum(interior_view(sim.θ)) * dV - H0
+            rel = abs(ΔH - booked) / abs(booked)
+            msg = @sprintf("Ledger (%s, %s, 600 s): Δ∫θ dV = %.12e, booked = %.12e (nudging %.4e + subsidence %.4e) K m³, relative difference %.1e",
+                           stepper, form, ΔH, booked, nudged, subsided, rel)
+            if stepper === :euler
+                ΔQ = sum(interior_view(sim.qv)) * dV - Q0
+                relq = abs(ΔQ - booked_q) / abs(booked_q)
+                msg *= @sprintf("; qv: Δ∫q dV = %.6e, booked %.6e, relative difference %.1e", ΔQ, booked_q, relq)
+                @test relq < 1e-10
+                @test keys(tendency_integrals(F[2])) == (:θ, :qv)   # moist: qv subsided by default
+            else
+                @test keys(tendency_integrals(F[2])) == (:θ,)       # dry: θ only
+            end
+            @info msg
+            @test rel < 1e-10
+            @test abs(nudged) > 0 && subsided > 0                    # both terms act; descent warms
+            @test maximum(abs, interior_view(sim.w)) > 1e-3          # the flow really mixed
+        end
+    end
+
 end
