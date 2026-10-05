@@ -127,6 +127,33 @@ end
     end
 end
 
+@testset "3. cross-solver agreement, all Neumann" begin
+    rng = MersenneTwister(2510)
+    r = randn(rng, g.Nx, g.Ny, g.Nz)
+    nb = (bc_x = :neumann, bc_y = :neumann, bc_z = :neumann)
+    p_dct = _op_solve(CosineFFTPoissonSolver(g; nb...), g, r)
+    mg    = MultigridPoissonSolver(g; nb..., tol = 1e-12, maxcycles = 200)
+    p_mg  = _op_solve(mg, g, r)
+    mgcg  = MGPreconditionedCG(g; nb..., tol = 1e-12, maxit = 200)
+    p_mgcg = _op_solve(mgcg, g, r)
+    cg    = CGPoissonSolver(g; tol = 1e-13, maxit = 5000, bc_x = :neumann, bc_y = :neumann)
+    p_cg  = _op_solve(cg, g, r)
+    dw    = DensityWeightedPoissonSolver(g, 1.0; tol = 1e-13, maxit = 5000,
+                                         bc_x = :neumann, bc_y = :neumann)
+    p_dw  = _op_solve(dw, g, r)
+    d = Dict("multigrid" => _op_rel(_op_demean(p_mg), p_dct),
+             "MG-CG"     => _op_rel(_op_demean(p_mgcg), p_dct),
+             "CG"        => _op_rel(p_cg, p_dct),
+             "DW(ρ̄=1)"  => _op_rel(p_dw, p_dct))
+    for (k, v) in sort(collect(d))
+        @printf("  [N-open-a] all-Neumann: %-10s vs DCT, max rel. diff %.2e\n", k, v)
+        @test v < 1e-9
+    end
+    @test abs(mean(p_dct)) < 1e-14 * maximum(abs, p_dct)    # the zero-mean solution
+    @test poisson_axis_bcs(mg) == nb && poisson_axis_bcs(mgcg) == nb
+    @test poisson_axis_bcs(cg) == nb && poisson_axis_bcs(dw) == nb
+end
+
 @testset "4. CG bug regression: bc_x/bc_y = :neumann is honoured" begin
     # On 3a23110 CGPoissonSolver stored `bc_xy` and wrapped x and y
     # periodically regardless, so bc_xy = :neumann returned the periodic
@@ -147,6 +174,39 @@ end
     p_xd = _op_solve(CosineFFTPoissonSolver(g; bc_x = :neumann), g, r)
     @test _op_rel(p_x, p_xd) < 1e-9
     @test_throws ArgumentError CGPoissonSolver(g; bc_x = :open)
+end
+
+@testset "5. variable coefficient: isothermal ρ̄, Neumann sides" begin
+    gv  = RegularGrid(; size = (16, 12, 24), extent = (800.0, 600.0, 6000.0), halo = (2, 2, 2))
+    ref = isothermal_reference(gv)
+    tol = 1e-12
+    s   = DensityWeightedPoissonSolver(gv, ref; tol = tol, maxit = 5000,
+                                       bc_x = :neumann, bc_y = :neumann)
+    sp  = DensityWeightedPoissonSolver(gv, ref; tol = tol, maxit = 5000)
+    ratio = maximum(ref.ρ̄) / minimum(ref.ρ̄)
+    φ = Field(CellCenter(), gv); f = Field(CellCenter(), gv); out = Field(CellCenter(), gv)
+    set!(φ, (x, y, z) -> cos(π * x / 800) * cos(2π * y / 600) * cos(π * z / 6000) +
+                         0.5 * (x / 800)^2 * (1 - 2x / 2400) * cos(2π * z / 6000))
+    apply_weighted_laplacian!(f, φ, s)
+    # Discrete Gauss: with zero flux through every face the weighted
+    # divergence sums to zero over the domain (to round-off).
+    fsum = sum(interior_view(f)) / (length(interior_view(f)) * maximum(abs, interior_view(f)))
+    solve!(out, f, s)
+    Lout = Field(CellCenter(), gv); apply_weighted_laplacian!(Lout, out, s)
+    fi = collect(interior_view(f)); fi .-= mean(fi)
+    res = sqrt(sum(abs2, collect(interior_view(Lout)) .- fi)) / sqrt(sum(abs2, fi))
+    e   = _op_rel(_op_demean(collect(interior_view(out))), _op_demean(collect(interior_view(φ))))
+    # The same data through the periodic-side operator is a different problem.
+    Lp = Field(CellCenter(), gv); apply_weighted_laplacian!(Lp, φ, sp)
+    dop = _op_rel(collect(interior_view(Lp)), collect(interior_view(f)))
+    @printf("  [N-open-a] DW isothermal, Neumann sides: ρ̄ ratio %.2f, ‖Lφ−f‖/‖f‖ %.2e (tol %.0e), φ rel. err %.2e, %d iterations, Σf/(N max|f|) %.1e, periodic-vs-Neumann operator %.2f\n",
+            ratio, res, tol, e, solver_iterations(s), fsum, dop)
+    @test ratio > 1.5
+    @test res < 10tol
+    @test e < 1e-8
+    @test abs(fsum) < 1e-14
+    @test dop > 0.1
+
 end
 
 @testset "6. compatibility: residual −s̄" begin
