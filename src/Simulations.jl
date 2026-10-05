@@ -36,8 +36,8 @@ latter every operator of the core (momentum and scalar advection, molecular
 and SGS diffusion, the Smagorinsky length scale, buoyancy, the projection)
 uses the local cell thickness `cell_thickness(mesh)[k]` and centre spacing
 `center_spacing(mesh)[k]`, and the default pressure solver is the direct
-stretched-z solver (see the *Stretched and terrain-following grids* theory
-page). A `:uniform` `StretchedGrid` reproduces the `RegularGrid` run.
+stretched-z solver (see the [Stretched vertical grid](@ref) theory page).
+A `:uniform` `StretchedGrid` reproduces the `RegularGrid` run.
 
 Prognostic state:
 
