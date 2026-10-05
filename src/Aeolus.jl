@@ -158,6 +158,7 @@ using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 export AbstractMesh, RegularGrid
 export Field, CellCenter, FaceX, FaceY, FaceZ
 export Periodic, NoFlux, ValueBC, FluxBC, FieldBoundaryConditions, fill_halos!
+export axis_poisson_bc                # N-open-a (#251)
 export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!,
        interpolate_to_face!, interpolate_to_center!, momentum_advect!,
        add_buoyancy!, add_coriolis!, compute_smagorinsky_νt!,

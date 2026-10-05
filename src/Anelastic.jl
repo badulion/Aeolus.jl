@@ -1381,10 +1381,13 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
     refstate isa ReferenceState{T} ||
         error("ReferenceState element type $(eltype(refstate.ρ̄)) does not match mesh eltype $T")
 
+    # The projection's per-axis closure comes from the velocity faces
+    # (periodic, or Neumann for walls and prescribed-velocity sides).
+    ax = poisson_axis_bcs(bcs)
     ps = solver === nothing ?
         DensityWeightedPoissonSolver(mesh, refstate;
                                      weighting = _weighting_symbol(S),
-                                     tol = tol, maxit = maxit, bc_z = :neumann) :
+                                     tol = tol, maxit = maxit, ax...) :
         solver
 
     u = Field(FaceX(), mesh); v = Field(FaceY(), mesh); w = Field(FaceZ(), mesh)

@@ -6,6 +6,7 @@ using ..Grids
 using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields
 using ..Fields: Field
+using ..BoundaryConditions: FieldBoundaryConditions, axis_poisson_bc
 
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!, poisson_axis_bcs
@@ -269,6 +270,31 @@ was built with.
 """
 poisson_axis_bcs(s::CosineFFTPoissonSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = s.bc_z)
 poisson_axis_bcs(::FFTPoissonSolver) = (bc_x = :periodic, bc_y = :periodic, bc_z = :periodic)
+
+"""
+    poisson_axis_bcs(bcs::FieldBoundaryConditions) -> (bc_x, bc_y, bc_z)
+
+The per-axis pressure-Poisson kinds implied by the six *velocity* faces
+of `bcs`, each read through
+[`axis_poisson_bc`](@ref Aeolus.BoundaryConditions.axis_poisson_bc). The
+two faces of an axis must give the same kind; a periodic face opposite a
+Neumann one is not a well-defined Poisson problem for these solvers and
+throws an `ArgumentError`. Splat the result into a solver constructor:
+`CosineFFTPoissonSolver(mesh; poisson_axis_bcs(bcs)...)`.
+"""
+function poisson_axis_bcs(bcs::FieldBoundaryConditions)
+    pair(name, lo, hi) = begin
+        a, b = axis_poisson_bc(lo), axis_poisson_bc(hi)
+        a === b || throw(ArgumentError(
+            "unsupported $name boundary pair for the pressure solve: " *
+            "$(nameof(typeof(lo))) (:$a) against $(nameof(typeof(hi))) (:$b); " *
+            "both faces of an axis must be periodic or both Neumann"))
+        a
+    end
+    return (bc_x = pair("x", bcs.west, bcs.east),
+            bc_y = pair("y", bcs.south, bcs.north),
+            bc_z = pair("z", bcs.bottom, bcs.top))
+end
 
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::CosineFFTPoissonSolver{T}) where {T}

@@ -25,6 +25,8 @@ using Aeolus.Fields: interior_view, set!
 using Aeolus.Multigrid: MultigridPoissonSolver, MGPreconditionedCG
 using Aeolus.Anelastic: DensityWeightedPoissonSolver, apply_weighted_laplacian!,
                         isothermal_reference, AnelasticSimulation, solver_iterations
+using Aeolus.BoundaryConditions: ImpermeableWall, NoSlipWall, axis_poisson_bc
+using Aeolus.Simulations: _default_solver
 using FFTW
 using LinearAlgebra: mul!
 using Printf, Random
@@ -207,6 +209,11 @@ end
     @test abs(fsum) < 1e-14
     @test dop > 0.1
 
+    # The sound-proof core builds its solver from its velocity faces.
+    a_def = AnelasticSimulation(gv)
+    @test poisson_axis_bcs(a_def.solver) == (bc_x = :periodic, bc_y = :periodic, bc_z = :neumann)
+    a_box = AnelasticSimulation(gv; bcs = FieldBoundaryConditions(:noflux, :noflux, :wall))
+    @test poisson_axis_bcs(a_box.solver) == (bc_x = :neumann, bc_y = :neumann, bc_z = :neumann)
 end
 
 @testset "6. compatibility: residual −s̄" begin
@@ -225,6 +232,56 @@ end
     cg  = CGPoissonSolver(g; tol = 1e-14, maxit = 5000, bc_xy = :neumann)
     res = _op_ref_lap(_op_solve(cg, g, src), Δ, (:neumann, :neumann, :neumann)) .- src
     @test maximum(abs, res .+ s̄) < 1e-10
+end
+
+@testset "7. default solver from the six faces" begin
+    # Current defaults: unchanged solver types.
+    @test _default_solver(g, FieldBoundaryConditions(:periodic)) isa FFTPoissonSolver
+    ch = _default_solver(g, FieldBoundaryConditions(:periodic, :periodic, :wall))
+    @test ch isa CosineFFTPoissonSolver
+    @test poisson_axis_bcs(ch) == (bc_x = :periodic, bc_y = :periodic, bc_z = :neumann)
+    @test poisson_axis_bcs(BoussinesqSimulation(g).solver) ==
+          (bc_x = :periodic, bc_y = :periodic, bc_z = :periodic)
+    # Every z wall pair (free slip, no slip, mixed) is Neumann.
+    for (b, t) in ((:noslip, :wall), (:noslip, :noslip), (:wall, :wall))
+        @test poisson_axis_bcs(FieldBoundaryConditions(:periodic, :periodic; bottom = b, top = t)) ==
+              (bc_x = :periodic, bc_y = :periodic, bc_z = :neumann)
+    end
+    # The closed box of a child (prescribed normal velocity on every face;
+    # NoFlux sides stand in for the OpenBoundary of N-open-b, which extends
+    # axis_poisson_bc with :neumann) → all-Neumann DCT.
+    box = _default_solver(g, FieldBoundaryConditions(:noflux, :noflux, :wall))
+    @test box isa CosineFFTPoissonSolver
+    @test poisson_axis_bcs(box) == (bc_x = :neumann, bc_y = :neumann, bc_z = :neumann)
+    @test poisson_axis_bcs(BoussinesqSimulation(g; bcs = FieldBoundaryConditions(:noflux, :noflux, :wall)).solver) ==
+          (bc_x = :neumann, bc_y = :neumann, bc_z = :neumann)
+    # Unsupported: a periodic face opposite a Neumann one; a face with no
+    # Poisson kind.
+    @test_throws ArgumentError _default_solver(g,
+        FieldBoundaryConditions(Periodic(), NoFlux(), Periodic(), Periodic(), ImpermeableWall(), ImpermeableWall()))
+    @test_throws ArgumentError _default_solver(g,
+        FieldBoundaryConditions(ValueBC(1.0), ValueBC(1.0), Periodic(), Periodic(), ImpermeableWall(), ImpermeableWall()))
+    @test axis_poisson_bc(NoSlipWall(1.0, 0.0)) === :neumann
+
+    # Bit for bit: the channel default is the construction of 3a23110 —
+    # DCT-II along z, rfft along (x, y), the same eigenvalues, 1/(2Nz).
+    T = Float64; Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
+    rb = zeros(T, Nx, Ny, Nz); rb2 = similar(rb); hb = zeros(Complex{T}, Nx ÷ 2 + 1, Ny, Nz)
+    pdf = FFTW.plan_r2r(rb, FFTW.REDFT10, 3; flags = FFTW.MEASURE)
+    pdi = FFTW.plan_r2r(rb, FFTW.REDFT01, 3; flags = FFTW.MEASURE)
+    pff = FFTW.plan_rfft(rb, (1, 2); flags = FFTW.MEASURE)
+    pfi = FFTW.plan_irfft(hb, Nx, (1, 2); flags = FFTW.MEASURE)
+    kx² = [4 / g.dx^2 * sin(π * (m - 1) / Nx)^2 for m in 1:Nx ÷ 2 + 1]
+    ky² = [4 / g.dy^2 * sin(π * (n - 1) / Ny)^2 for n in 1:Ny]
+    kz² = [4 / g.dz^2 * sin(π * (l - 1) / (2Nz))^2 for l in 1:Nz]
+    invλ = [(λ = -(kx²[m] + ky²[n] + kz²[l]); λ == 0 ? 0.0 : 1 / λ)
+            for m in 1:Nx ÷ 2 + 1, n in 1:Ny, l in 1:Nz]
+    rb .= randn(MersenneTwister(9), Nx, Ny, Nz)
+    src = copy(rb)
+    mul!(rb2, pdf, rb); mul!(hb, pff, rb2); hb .*= invλ; mul!(rb2, pfi, hb); mul!(rb, pdi, rb2)
+    rb .*= 1 / T(2Nz)
+    @test ch.inv_eigenvalues == invλ
+    @test _op_solve(ch, g, src) == rb
 end
 
 @testset "8. cost per solve" begin
