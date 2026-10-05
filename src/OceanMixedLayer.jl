@@ -73,14 +73,14 @@ corrections that hold no heat of their own.
 module OceanMixedLayer
 
 using ..MoistThermodynamics: saturation_specific_humidity, latent_heat_vapor
-using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, grav,
+using ..SurfaceExchange: BusingerDyerLogLinear, SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, grav,
                          cp_water, von_karman, AbstractSurface, SurfaceForcing,
                          SurfaceFluxes, turbulent_fluxes, AbstractStabilityFunctions,
                          BusingerDyerBeljaarsHoltslag
 import ..SurfaceExchange: surface_temperature, roughness_lengths, surface_albedo,
                           surface_emissivity, step_surface!, moisture_availability,
                           surface_specific_humidity, phi_m, phi_h, psi_m, psi_h,
-                          column_heat_content, log_linear_slope
+                          column_heat_content
 using ..SurfaceOptics: material_emissivity
 
 export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
@@ -88,7 +88,6 @@ export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
        SolarBands, jerlov_water, soloviev_solar,
        solar_transmission, solar_absorbed_between, solar_mean_transmission,
        CoolSkin, cool_skin,
-       BusingerDyerLogLinear,
        AbstractWarmLayer, NoWarmLayer, FairallWarmLayer, ZengBeljaarsWarmLayer,
        step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth,
        KrausTurnerMixing, WaterColumn, layer_depths,
@@ -412,28 +411,9 @@ end
 # 4. Diurnal warm layer
 # =========================================================================
 
-"""
-    BusingerDyerLogLinear(; γ_m = 16, γ_h = 16, β = 5)
-
-Monin–Obukhov functions with the classical *log-linear* stable branch,
-``φ_m = φ_h = 1 + βζ`` and ``ψ = -βζ`` for ``ζ ≥ 0`` (Businger et al.
-1971; Dyer 1974). The unstable branch is delegated to
-`SurfaceExchange.BusingerDyerBeljaarsHoltslag` with the same γ, so the
-two families agree exactly for ``ζ < 0``. This is the water-side
-``φ_t`` of Zeng & Beljaars (2005) (IFS Cy43r1 eq. 8.158).
-"""
-Base.@kwdef struct BusingerDyerLogLinear{T<:AbstractFloat} <: AbstractStabilityFunctions
-    γ_m::T = 16.0
-    γ_h::T = 16.0
-    β::T = 5.0
-end
-_unstable(sf::BusingerDyerLogLinear) = BusingerDyerBeljaarsHoltslag(γ_m = sf.γ_m, γ_h = sf.γ_h)
-phi_m(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? phi_m(_unstable(sf), ζ) : 1 + sf.β * ζ
-phi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? phi_h(_unstable(sf), ζ) : 1 + sf.β * ζ
-psi_m(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_m(_unstable(sf), ζ) : -sf.β * ζ
-psi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_h(_unstable(sf), ζ) : -sf.β * ζ
-# the stable branch is log-linear: SurfaceExchange's closed-form MSHF applies (P58-e)
-log_linear_slope(sf::BusingerDyerLogLinear) = sf.β
+# `BusingerDyerLogLinear` (the water-side φ_t of Zeng & Beljaars 2005)
+# lives in SurfaceExchange with the other Monin–Obukhov families; the
+# warm layer uses it from there.
 
 """
     AbstractWarmLayer

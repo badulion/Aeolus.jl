@@ -1,0 +1,20 @@
+# GABLS1 LES intercomparison, quasi-steady state, hours 8-9 (Beare et al. 2006, Boundary-Layer Meteorol. 118, 247-272)
+# The ensemble ranges below are NOT read from Beare et al. (2006) directly (the paper was not available to this
+# change); they are the ranges Basu & Porte-Agel (2006, J. Atmos. Sci. 63, 2074-2091; arXiv:physics/0502134) quote
+# from the intercomparison (their section 4c-3: "at the surface the mean momentum and buoyancy fluxes range from
+# 0.06 to 0.08 m2 s-2 and -3.5 to -5.5 x10-4 m2 s-3"), and their own LASD 32^3 / 64^3 / 80^3 results (their Table 1).
+# Text and table values, not digitised: digitisation uncertainty 0. Derived columns use g = 9.81 m s-2, theta_0 = 263.5 K
+# (u_star = sqrt(momentum flux); w'theta' = buoyancy flux * theta_0 / g; H = 1.3 * 1005 * w'theta' W m-2).
+# h is the BL height: (1/0.95) x the height where the mean stress falls to 5 % of its surface value (Kosovic & Curry 2000).
+# The low-level-jet maximum is not quoted by this source: no reference value is given for it.
+quantity,low,high,unit,source
+surface_momentum_flux,0.06,0.08,m2 s-2,Beare et al. 2006 ensemble via Basu & Porte-Agel 2006 sec. 4c-3
+u_star,0.245,0.283,m s-1,derived from surface_momentum_flux
+surface_buoyancy_flux,-5.5e-4,-3.5e-4,m2 s-3,Beare et al. 2006 ensemble via Basu & Porte-Agel 2006 sec. 4c-3
+surface_wtheta,-0.0148,-0.0094,K m s-1,derived from surface_buoyancy_flux
+surface_heat_flux,-19.3,-12.3,W m-2,derived from surface_wtheta
+h_LASD_32,205,205,m,Basu & Porte-Agel 2006 Table 1 (32^3)
+h_LASD_64,185,185,m,Basu & Porte-Agel 2006 Table 1 (64^3)
+u_star_LASD_32,0.283,0.283,m s-1,Basu & Porte-Agel 2006 Table 1 (32^3)
+u_star_LASD_64,0.276,0.276,m s-1,Basu & Porte-Agel 2006 Table 1 (64^3)
+L_LASD_64,114,114,m,Basu & Porte-Agel 2006 Table 1 (64^3)

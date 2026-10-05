@@ -20,6 +20,9 @@ using ..Grids: RegularGrid, interior, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields: Field
 using ..Operators: _strain_at
 
+export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
+       DampingProfile, sponge_profile, in_damping, damping_rate
+
 # =========================================================================
 # First derivatives
 # =========================================================================
@@ -245,6 +248,167 @@ function _add_surface_flux!(tϕ::Field{CellCenter},
 end
 
 # =========================================================================
+# Damping profiles — the one implementation of relaxation rates.
+# =========================================================================
+# Every relaxation term `-λ(ξ)·(φ - φ_target)` in Aeolus (the Rayleigh
+# sponge of Phase 7 on every mesh type, the fringe region of the
+# spatially developing boundary layer, P59-d #185) takes its rate λ(ξ) from
+# a `DampingProfile`. The profile is a 1-D function of one coordinate ξ
+# (z for a sponge, x for a fringe) built from a ramp shape:
+#
+#   * `SinSquaredRamp` — λ = λ_max sin²(½π (ξ - ξ_start)/w) for ξ ≥ ξ_start
+#     (Klemp & Lilly 1978 style top sponge; no fall, the ramp ends at the
+#     domain top);
+#   * `NordstromRamp`  — λ = λ_max [S((ξ - ξ_s)/Δ_rise) - S((ξ - ξ_e)/Δ_fall + 1)]
+#     with the smooth step S of Nordström, Nordin & Henningson (1999),
+#     eq. (2.3): C^∞, zero outside [ξ_s, ξ_e], λ_max on the plateau.
+#
+# The sin² rate is evaluated with exactly the arithmetic of the original
+# Phase-7 kernels, `s = sin(½π·(z - z_start)·inv_width); α = α_max·s·s`, so
+# `add_sponge!` results are unchanged bit for bit.
+
+"""
+    AbstractRamp
+
+Shape of a [`DampingProfile`](@ref): [`SinSquaredRamp`](@ref) (Rayleigh
+sponge) or [`NordstromRamp`](@ref) (fringe region).
+"""
+abstract type AbstractRamp end
+
+"""
+    SinSquaredRamp()
+
+Rise-only ramp `λ(ξ) = λ_max sin²(½π (ξ − ξ_start)/w)` for `ξ ≥ ξ_start`
+(zero below). The shape of the Phase-7 Rayleigh sponge
+[`add_sponge!`](@ref Aeolus.Operators.add_sponge!), whose width `w` is the
+distance from `z_start` to the domain top. Reference: Klemp, J. B. &
+Lilly, D. K. (1978), *J. Atmos. Sci.*, 35, 78-107.
+"""
+struct SinSquaredRamp <: AbstractRamp end
+
+"""
+    NordstromRamp()
+
+Rise-plateau-fall ramp of Nordström, Nordin & Henningson (1999), eq. (2.3),
+
+    λ(ξ) = λ_max [ S((ξ − ξ_start)/Δ_rise) − S((ξ − ξ_end)/Δ_fall + 1) ],
+
+with the smooth step `S(x) = 0` (x ≤ 0), `1/(1 + exp(1/(x − 1) + 1/x))`
+(0 < x < 1), `1` (x ≥ 1) — see [`smooth_step`](@ref). Infinitely
+differentiable; zero outside `[ξ_start, ξ_end]`.
+
+Reference: Nordström, J., Nordin, N. & Henningson, D. (1999). The fringe
+region technique and the Fourier method used in the direct numerical
+simulation of spatially evolving viscous flows. *SIAM J. Sci. Comput.*,
+20(4), 1365-1393.
+"""
+struct NordstromRamp <: AbstractRamp end
+
+"""
+    smooth_step(x) -> Real
+
+The C^∞ step of Nordström et al. (1999), eq. (2.3):
+`0` for `x ≤ 0`, `1/(1 + exp(1/(x − 1) + 1/x))` for `0 < x < 1`, `1` for
+`x ≥ 1`. `smooth_step(1/2) = 1/2` and `S(x) + S(1 − x) = 1`.
+"""
+function smooth_step(x::Real)
+    x <= 0 && return zero(float(x))
+    x >= 1 && return one(float(x))
+    return 1 / (1 + exp(1 / (x - 1) + 1 / x))
+end
+
+"""
+    DampingProfile(ramp, rate, start, rise; stop = Inf, fall = rise)
+
+A one-dimensional relaxation-rate profile `λ(ξ)` (s⁻¹) for the
+relaxation term `−λ(ξ)(φ − φ_target)`. `rate` is the plateau / maximum
+value, `start` the coordinate where the rise begins, `rise` its width;
+`stop` (where the fall *ends*) and `fall` are used by
+[`NordstromRamp`](@ref) only. Evaluate with [`damping_rate`](@ref).
+
+This is the single damping-profile implementation shared by the Rayleigh
+sponge ([`add_sponge!`](@ref Aeolus.Operators.add_sponge!), every mesh
+type) and the fringe region (`Transition.FringeRegion`, P59-d).
+The fields keep the argument types (no promotion) so that the sponge
+arithmetic is that of the original kernels.
+"""
+struct DampingProfile{R<:AbstractRamp, A, S, W, E, F}
+    ramp::R
+    rate::A
+    start::S
+    inv_rise::W
+    stop::E
+    inv_fall::F
+end
+
+DampingProfile(ramp::AbstractRamp, rate, start, rise; stop = Inf, fall = rise) =
+    DampingProfile(ramp, rate, start, 1 / rise, stop, 1 / fall)
+
+"""
+    sponge_profile(α_max, z_start, z_top) -> DampingProfile
+
+The Rayleigh-sponge profile of [`add_sponge!`](@ref Aeolus.Operators.add_sponge!):
+a [`SinSquaredRamp`](@ref) from `z_start` to `z_top`.
+"""
+sponge_profile(α_max, z_start, z_top) =
+    DampingProfile(SinSquaredRamp(), α_max, z_start, 1 / (z_top - z_start), Inf, 0)
+
+"""
+    in_damping(p::DampingProfile, ξ) -> Bool
+
+`true` where the profile can be non-zero (the kernels skip other cells, so
+a cell outside the region is never touched).
+"""
+in_damping(p::DampingProfile{SinSquaredRamp}, ξ) = ξ >= p.start
+in_damping(p::DampingProfile{NordstromRamp}, ξ) = p.start < ξ < p.stop
+
+"""
+    damping_rate(p::DampingProfile, ξ) -> Real
+
+The relaxation rate `λ(ξ)` of profile `p` at coordinate `ξ` (zero outside
+the region).
+"""
+function damping_rate(p::DampingProfile{SinSquaredRamp}, ξ)
+    in_damping(p, ξ) || return zero(p.rate * p.inv_rise)
+    half_π = 0.5 * π
+    s = sin(half_π * (ξ - p.start) * p.inv_rise)
+    return p.rate * s * s
+end
+
+function damping_rate(p::DampingProfile{NordstromRamp}, ξ)
+    in_damping(p, ξ) || return zero(float(p.rate))
+    return p.rate * (smooth_step((ξ - p.start) * p.inv_rise) -
+                     smooth_step((ξ - p.stop) * p.inv_fall + 1))
+end
+
+# Relaxation target: a constant, or an array / Field indexed like the field.
+@inline _damping_target(t::Real, i, j, k) = t
+@inline _damping_target(t::Field, i, j, k) = @inbounds t.data[i, j, k]
+@inline _damping_target(t::AbstractArray{<:Real,3}, i, j, k) = @inbounds t[i, j, k]
+
+"""
+    _add_damping!(tf, f, profile, coords, axis, target, g::RegularGrid)
+
+Add `−λ(ξ)(f − target)` to `tf` on the interior cells where
+`in_damping(profile, ξ)`, with `ξ = coords[n]` the coordinate of the
+`n`-th interior index along `axis` (`1` = x, `3` = z). The one kernel
+behind the sponge (`axis = 3`) and the fringe (`axis = 1`).
+"""
+function _add_damping!(tf::Field{L}, f::Field{L}, p::DampingProfile,
+                       coords::AbstractVector, axis::Int, target,
+                       g::RegularGrid) where {L}
+    ii, jj, kk = interior(g)
+    i0, j0, k0 = first(ii) - 1, first(jj) - 1, first(kk) - 1
+    @inbounds for k in kk, j in jj, i in ii
+        ξ = axis == 3 ? coords[k - k0] : axis == 1 ? coords[i - i0] : coords[j - j0]
+        in_damping(p, ξ) || continue
+        λ = damping_rate(p, ξ)
+        tf.data[i, j, k] -= λ * (f.data[i, j, k] - _damping_target(target, i, j, k))
+    end
+    return tf
+end
+
+# =========================================================================
 # Rayleigh sponge damping — Phase 7.
 # =========================================================================
 # Adds  -α(z) · (φ - φ_ref)  to the tendency inside a top-of-domain
@@ -252,24 +416,13 @@ end
 #     α(z) = α_max · sin²( π/2 · (z - z_start) / (z_top - z_start) ).
 # Below `z_start` the damping is zero. Used to absorb gravity waves and
 # turbulent structures that would otherwise reflect off the rigid lid.
+# The rate comes from the shared `DampingProfile` above.
 
 function _add_sponge!(tf::Field{L}, f::Field{L},
                       α_max::Real, z_start::Real, z_top::Real,
                       f_ref::Real, g::RegularGrid) where {L}
-    L() isa Location || nothing
     zs = _znodes_for(g, L())
-    ii, jj, kk = interior(g)
-    inv_width = 1 / (z_top - z_start)
-    half_π = 0.5 * π
-    @inbounds for (kk_, kv) in enumerate(kk), j in jj, i in ii
-        z = zs[kk_]
-        if z >= z_start
-            s = sin(half_π * (z - z_start) * inv_width)
-            α = α_max * s * s
-            tf.data[i, j, kv] -= α * (f.data[i, j, kv] - f_ref)
-        end
-    end
-    return tf
+    return _add_damping!(tf, f, sponge_profile(α_max, z_start, z_top), zs, 3, f_ref, g)
 end
 
 # helper — dispatch to `znodes` for a location, since `L` here is a type
@@ -820,6 +973,56 @@ function _add_tensor_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCen
     return tϕ
 end
 
+# Masked and/or mass-weighted form of the same flux divergence (P56-a, #177):
+#
+#   * `mask` (Bool, storage-sized, halos consistent with ϕ's BCs; or nothing):
+#     a face with a solid cell on either side carries no flux, and a solid
+#     cell's tendency is left untouched. The flux on every open face is the
+#     unmasked one, so Σ_fluid tϕ dV telescopes to zero.
+#   * `wc`, `wf` (per storage level; or nothing): the sound-proof form
+#     (1/W_k) ∇·(W κ ∇ϕ) with the cell weight `wc[k]` and the z-face weight
+#     `wf[k]` (bottom face of cell k, the FaceZ storage index). The cell
+#     weight cancels in the horizontal fluxes, so only the vertical flux is
+#     weighted; Σ W_k tϕ_k telescopes to zero.
+#
+# Kept separate from the kernel above so the unmasked, unweighted path stays
+# bit for bit what it was.
+#
+# `Kh` on the x and y faces, `Kv` on the z faces (the diagonal operator of
+# P55-c with a mask; a stability-corrected closure's κh ≠ κv, P55-e). With
+# Kh === Kv (the one-coefficient method) the arithmetic is unchanged.
+_add_eddy_diffusion_scalar_masked!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
+                                   K::Field{CellCenter}, g::RegularGrid, mask, wc, wf) =
+    _add_eddy_diffusion_scalar_masked!(tϕ, ϕ, K, K, g, mask, wc, wf)
+
+function _add_eddy_diffusion_scalar_masked!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
+                                             Kh::Field{CellCenter}, Kv::Field{CellCenter},
+                                             g::RegularGrid, mask, wc, wf)
+    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
+    ii, jj, kk = interior(g)
+    Kd = Kh.data; Vd = Kv.data; ϕd = ϕ.data
+    T = eltype(ϕd)
+    @inbounds for k in kk, j in jj, i in ii
+        # branchless: each face flux times its openness (1 or 0), the cell's
+        # whole tendency times its own (a solid cell gets + 0)
+        oC = _open(T, mask, i, j, k)
+        oE = oC * _open(T, mask, i+1, j, k); oW = oC * _open(T, mask, i-1, j, k)
+        oN = oC * _open(T, mask, i, j+1, k); oS = oC * _open(T, mask, i, j-1, k)
+        oT = oC * _open(T, mask, i, j, k+1); oB = oC * _open(T, mask, i, j, k-1)
+
+        fxE = oE * (0.5 * (Kd[i,j,k]   + Kd[i+1,j,k]) * (ϕd[i+1,j,k] - ϕd[i,  j,k]) * idx)
+        fxW = oW * (0.5 * (Kd[i-1,j,k] + Kd[i,j,k])   * (ϕd[i,  j,k] - ϕd[i-1,j,k]) * idx)
+        fyN = oN * (0.5 * (Kd[i,j,k]   + Kd[i,j+1,k]) * (ϕd[i,j+1,k] - ϕd[i,j,  k]) * idy)
+        fyS = oS * (0.5 * (Kd[i,j-1,k] + Kd[i,j,k])   * (ϕd[i,j,  k] - ϕd[i,j-1,k]) * idy)
+        fzT = oT * (0.5 * (Vd[i,j,k]   + Vd[i,j,k+1]) * (ϕd[i,j,k+1] - ϕd[i,j,k  ]) * idz)
+        fzB = oB * (0.5 * (Vd[i,j,k-1] + Vd[i,j,k])   * (ϕd[i,j,k  ] - ϕd[i,j,k-1]) * idz)
+
+        vert = _vertical_divergence(fzT, fzB, idz, wc, wf, k)
+        tϕ.data[i,j,k] += (fxE - fxW)*idx + (fyN - fyS)*idy + vert
+    end
+    return tϕ
+end
+
 # --- the rotated isentropic tensor (P55-c, #181) --------------------------
 # K = κh I − f (κh − κv) n nᵀ, n = ∇θ/|∇θ| (centred differences), with
 # f = f_slope · f_grad: f_slope = min(1, (S_max/S)²), S = |∇ₕθ|/∂zθ
@@ -857,6 +1060,11 @@ function _isentropic_tensor!(K11, K22, K33, K12, K13, K23, θ::Field{CellCenter}
     end
     return nothing
 end
+
+@inline _open(::Type{T}, ::Nothing, i, j, k) where {T} = one(T)
+@inline _open(::Type{T}, mask, i, j, k) where {T} = T(!mask[i,j,k])
+@inline _vertical_divergence(fzT, fzB, idz, ::Nothing, ::Nothing, k) = (fzT - fzB) * idz
+@inline _vertical_divergence(fzT, fzB, idz, wc, wf, k) = (wf[k+1] * fzT - wf[k] * fzB) * idz / wc[k]
 
 # =========================================================================
 # WENO-5 scalar advection (Phase 10) — staggered.

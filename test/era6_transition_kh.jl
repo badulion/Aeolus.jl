@@ -13,8 +13,9 @@
 #   4. time-series diagnostics: intermittency 0.3 exactly for a 0.3 duty
 #      cycle; Re_b, V_TKE and Ri_f (resolved + SGS) against hand values;
 #      growth_rate on a synthetic series;
-#   5. the SGS effect on the KH growth rate (Smagorinsky C_s = 0.1 at
-#      64×1×128 vs no SGS), quoted and not asserted.
+#   5. the SGS effect on the KH growth rate at 64×1×128: Smagorinsky
+#      C_s = 0.1 vs no SGS, quoted and not asserted; the σ-model (P59-b,
+#      #184), whose ν_t vanishes in any 2-D flow, within 3 % of no SGS.
 #
 # The KH runs hold the base state (u = U tanh(z/δ), θ = θ₀ + Δθ tanh(z/δ))
 # against its own viscous diffusion with a body force −ν∇²(base), the
@@ -40,7 +41,7 @@ return the times and the rms of w (the perturbation amplitude; w has no
 base-state part).
 """
 function kh_run(; αδ = 0.4446, J = 0.0, Re = 1000.0, Nx = 128, Nz = 256, ε = 1e-4,
-                tend = 45.0, cfl = 0.6, C_s = 0.0)
+                tend = 45.0, cfl = 0.6, C_s = 0.0, sgs = nothing)
     δ = 1.0; U = 1.0
     Lx = 2π * δ / αδ; dx = Lx / Nx; Lz = Nz * dx
     mesh = RegularGrid(; size = (Nx, 1, Nz), extent = (Lx, dx, Lz),
@@ -62,7 +63,7 @@ function kh_run(; αδ = 0.4446, J = 0.0, Re = 1000.0, Nx = 128, Nz = 256, ε = 
     dt = cfl * dx / U; n = ceil(Int, tend / dt); dt = tend / n
     ts = Float64[]; As = Float64[]
     for _ in 1:n
-        step_rk3!(sim, dt; body_force! = hold_base!)
+        step_rk3!(sim, dt; body_force! = hold_base!, sgs = sgs)
         wi = interior_view(sim.w)
         push!(ts, sim.t); push!(As, sqrt(sum(abs2, wi) / length(wi)))
     end
@@ -264,13 +265,20 @@ end
     end
 
     # -----------------------------------------------------------------------
-    @testset "5. SGS effect on the KH growth rate (quoted, not asserted)" begin
+    @testset "5. SGS effect on the KH growth rate (Smagorinsky quoted; σ-model asserted)" begin
         t0 = time()
         ts, A, _ = kh_run(; Nx = 64, Nz = 128)
         tss, As, _ = kh_run(; Nx = 64, Nz = 128, C_s = 0.1)
-        f = growth_rate(ts, A); fs = growth_rate(tss, As)
-        @printf("    KH 64×1×128: σ no SGS = %.4f, Smagorinsky C_s=0.1 = %.4f (%.2f %%); %.1f s\n",
-                f.rate, fs.rate, 100 * (fs.rate - f.rate) / f.rate, time() - t0)
+        tsσ, Aσ, simσ = kh_run(; Nx = 64, Nz = 128, sgs = SigmaModel())
+        f = growth_rate(ts, A); fs = growth_rate(tss, As); fσ = growth_rate(tsσ, Aσ)
+        @printf("    KH 64×1×128: σ no SGS = %.4f, Smagorinsky C_s=0.1 = %.4f (%.2f %%), σ-model C_σ=1.35 = %.4f (%.2e %%), max ν_t(σ) = %.1e; %.1f s\n",
+                f.rate, fs.rate, 100 * (fs.rate - f.rate) / f.rate, fσ.rate,
+                100 * (fσ.rate - f.rate) / f.rate, maximum(interior_view(simσ.νt)), time() - t0)
         @test isfinite(f.rate) && isfinite(fs.rate)
+        # P59-b (#184): the flow is 2-D (N_y = 1, v = 0), so g has rank ≤ 2,
+        # σ₃ = 0 and the σ-model adds nothing; the growth rate is the
+        # molecular one (target: within 3 %)
+        @test abs(fσ.rate - f.rate) <= 0.03 * f.rate
+        @test maximum(interior_view(simσ.νt)) == 0
     end
 end
