@@ -121,4 +121,127 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         @test BC.air_heat(m_all, case.sim.θ) - BC.air_heat(m_fl, case.sim.θ) ≈ Hsolid rtol = 1e-10
         @test BC.air_heat(case.sim, case.ref, mask) == BC.air_heat(m_fl, case.sim.θ)
     end
+
+    @testset "closed box: the transport conserves Σθ; H changes only by redistribution" begin
+        case = flat_case(; u0 = 1.0)
+        @test Set(BC.coupling_name.(case.couplings)) ⊆ Set(NO_THETA)
+        # structure: θ noise in the lowest 8 levels and a random w
+        rng = Xoshiro(253)
+        θ = interior_view(case.sim.θ)
+        θ[:, :, 1:8] .+= 0.5 .* (rand(rng, size(θ, 1), size(θ, 2), 8) .- 0.5)
+        interior_view(case.sim.w)[:, :, 2:end] .+= 0.2 .* (rand(rng, size(θ, 1), size(θ, 2), size(θ, 3) - 1) .- 0.5)
+        H0 = BC.air_heat(case.sim, case.ref)
+        prev = Dict{Tuple{Symbol,Symbol},Float64}()
+        worst_tr, worst_tot, sum_red = 0.0, 0.0, 0.0
+        other = 0.0
+        for n in 1:12
+            Hb = BC.air_heat(case.sim, case.ref)
+            BC.step_case!(case, 2.0)
+            b = BC.heat_budget(case.ledger)
+            d = step_terms(prev, b.terms); prev = b.terms
+            ΔH = BC.air_heat(case.sim, case.ref) - Hb
+            tr = get(d, (:dynamics, :transport), 0.0)
+            red = get(d, (:dynamics, :redistribution), 0.0)
+            worst_tr = max(worst_tr, abs(tr) / Hb)
+            worst_tot = max(worst_tot, abs(ΔH) / Hb)
+            sum_red += red
+            # nothing but the dynamics changed θ: every other entry books 0
+            other += sum(abs(v) for (k, v) in d if k[1] !== :dynamics; init = 0.0)
+            @test abs(ΔH - (tr + red)) <= 1e-15 * Hb    # round-off of two summation orders
+        end
+        b = BC.heat_budget(case.ledger)
+        @info @sprintf("  closed box, 12 steps: max |transport|/H %.1e per step, max |ΔH|/H %.1e per step (redistribution %.3e J/m² in 24 s), closure %.1e W/m²",
+                       worst_tr, worst_tot, sum_red, b.closure / b.elapsed)
+        # The issue's expectation, |ΔH_air|/H_air ≤ 1e-13 per step, holds
+        # for what the flux-form transport conserves (Σ θ ΔV on the
+        # Boussinesq core). H itself weights θ with ρ̄Π̄, which falls with
+        # height, so vertical motion changes it: that part is
+        # `redistribution`, physical in a Boussinesq model, not round-off.
+        @test worst_tr <= 1e-13
+        @test other == 0
+        @test worst_tot > 1e-9             # the redistribution is real (measured 3.7e-7 per step)
+        @test abs(b.closure / b.elapsed) <= 1e-10
+        @test !haskey(b.terms, (:core, :unattributed))
+        @test !haskey(b.terms, (:dynamics, :solid_exchange))     # no solid cells
+    end
+
+    @testset "analytic surface heating H₀ = 100 W m⁻² on a flat, motionless variant" begin
+        H0 = 100.0
+        # no motion (u0 = 0, no Coriolis, no viscosity, Smagorinsky at zero
+        # strain): θ changes only by the plate
+        keep = (:core_boussinesq, :timestep_fixed, :pressure_fft, :sgs_smagorinsky, :momentum_centered)
+        case = flat_case(; keep = keep, extra = BC.AbstractCoupling[_HeatPlate(H0, 0.0)], u0 = 0.0,
+                         f_coriolis = 0.0, ν = 0.0, qv0 = 0.0,
+                         physics = Dict{Symbol,Any}(:timestepper => :fixed, :sgs => :smagorinsky))
+        Hs = BC.air_heat(case.sim, case.ref)
+        BC.run_case!(case; nsteps = 12)
+        b = BC.heat_budget(case.ledger)
+        E = H0 * b.elapsed
+        plate = b.terms[(:surface_flux, :heat_plate)]
+        @info @sprintf("  H₀ = 100 W/m² over %.0f s: attributed %.12e, ΔH_air %.12e, H₀Δt %.12e J/m² (rel %.1e, %.1e)",
+                       b.elapsed, plate, b.storage, E, abs(plate / E - 1), abs(b.storage / E - 1))
+        @test b.elapsed == 24.0
+        @test plate ≈ E rtol = 1e-10
+        @test b.storage ≈ E rtol = 1e-10
+        @test BC.air_heat(case.sim, case.ref) - Hs ≈ E rtol = 1e-10
+        # all of it in the lowest level: the canopy and 0–100 m layers see it too
+        @test BC.heat_budget(case.ledger; layer = (0, 100)).storage ≈ E rtol = 1e-10
+        @test abs(BC.heat_budget(case.ledger; layer = (case.mesh.dz, Inf)).storage) <= 1e-9 * E
+        @test abs(b.closure) <= 1e-10 * b.elapsed
+    end
+
+    @testset "add_heat! splits a context; nested body-force contexts leave the dynamics" begin
+        keep = (:core_boussinesq, :timestep_fixed, :pressure_fft, :sgs_smagorinsky, :momentum_centered)
+        case = flat_case(; keep = keep,
+                         extra = BC.AbstractCoupling[_HeatPlate(100.0, 0.25), _BodyHeat(40.0)],
+                         u0 = 0.0, f_coriolis = 0.0, ν = 0.0, qv0 = 0.0,
+                         physics = Dict{Symbol,Any}(:timestepper => :fixed, :sgs => :smagorinsky))
+        BC.run_case!(case; nsteps = 6)
+        b = BC.heat_budget(case.ledger)
+        el = b.elapsed
+        @test b.terms[(:surface_flux, :plate_named)] ≈ 0.25 * 100 * el rtol = 1e-12
+        @test b.terms[(:surface_flux, :heat_plate)] ≈ 0.75 * 100 * el rtol = 1e-10
+        @test b.terms[(:body_force, :body_heat)] ≈ 40 * el rtol = 1e-10
+        @test abs(b.terms[(:dynamics, :transport)]) <= 1e-9 * 40 * el
+        @test b.storage ≈ 140 * el rtol = 1e-10
+        @test abs(b.closure) <= 1e-10 * el
+        # the body heat went into level 2: the layer of level 2 sees it
+        dz = case.mesh.dz
+        lv2 = BC.heat_budget(case.ledger; layer = (dz, 2dz))
+        @test lv2.terms[(:body_force, :body_heat)] ≈ 40 * el rtol = 1e-10
+        @test get(lv2.terms, (:surface_flux, :heat_plate), 0.0) == 0
+        # outside a step there is no context to book into
+        @test_throws ErrorException BC.add_heat!(case.ledger, :late, 1.0)
+        # an unlocated term counts in the column only
+        hl = case.ledger.heat
+        BC.heat_begin_step!(hl, case.sim.θ, 12.0)
+        BC.heat_open!(hl, :anthropogenic, :test, case.sim.θ)
+        BC.add_heat!(case.ledger, :somewhere, 5.0)
+        BC.heat_close!(hl, case.sim.θ)
+        BC.heat_end_step!(hl, case.sim.θ, 0.0)
+        b2 = BC.heat_budget(case.ledger)
+        @test b2.terms[(:anthropogenic, :somewhere)] == 5.0
+        @test b2.terms[(:anthropogenic, :test)] == -5.0          # θ did not change
+        @test abs(b2.closure) <= 1e-10 * el
+        @test BC.heat_budget(case.ledger; layer = (0, 50)).unlocated == 0.0   # 5 − 5
+    end
+
+    @testset "night window: hour bins of the step start" begin
+        @test BC._hour_bins((20, 5)) == [21, 22, 23, 24, 1, 2, 3, 4, 5]
+        @test BC._hour_bins((6, 9)) == [7, 8, 9]
+        @test length(BC._hour_bins(nothing)) == 24
+        keep = (:core_boussinesq, :timestep_fixed, :pressure_fft, :sgs_smagorinsky, :momentum_centered)
+        # 04:59:44 + 12 × 2 s: 8 steps start before 05:00, 4 after
+        case = flat_case(; keep = keep, extra = BC.AbstractCoupling[_HeatPlate(100.0, 0.0)],
+                         u0 = 0.0, f_coriolis = 0.0, ν = 0.0, qv0 = 0.0, start_h = 5 - 16 / 3600,
+                         physics = Dict{Symbol,Any}(:timestepper => :fixed, :sgs => :smagorinsky))
+        BC.run_case!(case; nsteps = 12)
+        night = BC.heat_budget(case.ledger; window = (20, 5))
+        day = BC.heat_budget(case.ledger; window = (5, 20))
+        all_ = BC.heat_budget(case.ledger)
+        @test night.elapsed == 16.0 && day.elapsed == 8.0
+        @test night.storage ≈ 100 * 16 rtol = 1e-10
+        @test night.storage + day.storage ≈ all_.storage rtol = 1e-14
+        @test occursin("local 20-05 h", BC.heat_report(case.ledger; window = (20, 5)))
+    end
 end
