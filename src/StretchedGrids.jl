@@ -1769,6 +1769,7 @@ function hydrostatic_balance_error(θ::Field, p::Field, grid::AbstractMesh = mes
 end
 
 # #151 — the Boussinesq core and its pressure solve on a StretchedGrid
+include("stretched/boussinesq.jl")
 include("stretched/poisson.jl")
 
 end # module
