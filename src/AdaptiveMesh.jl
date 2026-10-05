@@ -46,6 +46,7 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
 using ..Simulations
 using ..Simulations: BoussinesqSimulation
 using ..Operators: divergence
+using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
 
 import ..BoundaryConditions: _fill_x!, _fill_y!, _fill_z!
@@ -708,8 +709,12 @@ function NestSponge(; width::Int=4, α_max::Real=1.0, profile::Symbol=:cos2,
     return NestSponge{Float64}(width, Float64(α_max), profile, sides)
 end
 
+# The :cos2 weight is the shared sin² damping ramp (Operators.FiniteVolume),
+# evaluated on s ∈ (0, 1]; bit-identical to the former sin(0.5π s)^2.
+const _NEST_SIN2 = DampingProfile(SinSquaredRamp(), 1.0, 0.0, 1.0, Inf, 0)
+
 _sponge_prof(sp::NestSponge, s::Float64) =
-    sp.profile === :cos2 ? sin(0.5π * s)^2 : s
+    sp.profile === :cos2 ? damping_rate(_NEST_SIN2, s) : s
 
 function _sponge_ramp(sp::NestSponge, d::Int)
     d < 1 && return 1.0                 # halo side of the boundary

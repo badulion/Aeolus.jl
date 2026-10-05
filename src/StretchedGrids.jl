@@ -58,6 +58,7 @@ import ..Grids: totalsize, interior, xnodes, ynodes, znodes
 import ..Operators.FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                                  _interp_to_face!, _interp_to_center!,
                                  _add_surface_flux!, _add_sponge!, _add_buoyancy!
+using ..Operators.FiniteVolume: sponge_profile, in_damping, damping_rate
 
 export StretchedGrid, TerrainFollowingGrid,
        terrain_following_grid,
@@ -876,13 +877,11 @@ function _add_sponge!(tf::Field{L}, f::Field{L},
                       f_ref::Real, g::StretchedGrid) where {L<:Location}
     zs = _zloc_coords(g, L())
     ii, jj, kk = interior(g)
-    inv_width = 1 / (z_top - z_start)
-    half_π = 0.5 * π
+    prof = sponge_profile(α_max, z_start, z_top)   # the shared damping profile
     @inbounds for k in kk
         z = zs[k]
-        z >= z_start || continue
-        s = sin(half_π * (z - z_start) * inv_width)
-        α = α_max * s * s
+        in_damping(prof, z) || continue
+        α = damping_rate(prof, z)
         for j in jj, i in ii
             tf.data[i, j, k] -= α * (f.data[i, j, k] - f_ref)
         end
@@ -1658,13 +1657,11 @@ function _add_sponge!(tf::Field{L}, f::Field{L},
                       f_ref::Real, g::TerrainFollowingGrid) where {L<:Location}
     zs = physical_heights(g, L())
     ii, jj, kk = interior(g)
-    inv_width = 1 / (z_top - z_start)
-    half_π = 0.5 * π
+    prof = sponge_profile(α_max, z_start, z_top)   # the shared damping profile
     @inbounds for k in kk, j in jj, i in ii
         z = zs[i,j,k]
-        z >= z_start || continue
-        s = sin(half_π * (z - z_start) * inv_width)
-        α = α_max * s * s
+        in_damping(prof, z) || continue
+        α = damping_rate(prof, z)
         tf.data[i,j,k] -= α * (f.data[i,j,k] - f_ref)
     end
     return tf

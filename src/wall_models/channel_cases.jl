@@ -24,8 +24,13 @@ A horizontally periodic, pressure-driven wall-bounded LES built by
   * `sim` — the `BoussinesqSimulation` (free-slip `ImpermeableWall`
     z-boundaries; the wall model supplies the wall stress);
   * `closure` — the SGS closure (an `AbstractSGSClosure`, or `nothing`);
-  * `wall` — the [`WallModel`](@ref); `walls` — `:bottom` or `:both`;
+  * `wall` — the wall model: a [`WallModel`](@ref) (equilibrium law) or
+    a [`TBLEWallModel`](@ref) (non-equilibrium, P57-c); `walls` —
+    `:bottom` or `:both`;
     `formulation` — `:local`, `:schumann` or `:moeng`;
+  * `inputs` — `nothing` (first-cell matching, unfiltered), or a named
+    tuple `(bottom, top)` of [`MatchingInput`](@ref)s (`top` is `nothing`
+    for one wall): the matching height and input filters of P57-b;
   * `forcing` — the mean pressure gradient ``-∂p/∂x/ρ = u_*^2/H``
     (m s⁻²), applied as a uniform body force on ``u``;
   * `u_star`, `height` — the friction velocity the forcing balances and
@@ -39,6 +44,14 @@ A horizontally periodic, pressure-driven wall-bounded LES built by
     three substages), so the plane-mean momentum budget of a step is
     exact: ``Δ⟨u⟩ H_{tot} = (G H_{tot} - τ_b - τ_t)Δt``;
   * `nsteps` — accepted steps so far;
+  * `roughness` — `nothing`, or the [`DynamicRoughness`](@ref) of a
+    partially resolved rough bottom (P57-e, #190): its resolved relief
+    exerts the [`surface_gradient_drag`](@ref) on the first cell, its
+    sub-filter relief sets the per-column roughness of the wall law,
+    updated once per step; `τ_form` — the plane-mean kinematic form drag
+    (x component, m² s⁻²) of the resolved relief in the last step (the
+    SSP-RK3 combination), so the budget reads
+    ``Δ⟨u⟩ H_{tot} = (G H_{tot} - τ_b - τ_t - τ_{form})Δt``;
   * `bottom_bc` — `:wall_model` (free-slip walls carrying the modelled
     stress) or `:noslip` (resolved [`NoSlipWall`](@ref)s, no wall model;
     `τ_wall_bottom`/`τ_wall_top` are then the molecular wall stress
@@ -60,12 +73,13 @@ eddy viscosity recomputed from the current state with the case's closure
 — pure, nothing is committed — the simulation's ν, and the wall stresses
 the last step applied).
 """
-mutable struct WallBoundedCase{S, C, W<:WallModel, T<:AbstractFloat}
+mutable struct WallBoundedCase{S, C, W<:AbstractWallModel, T<:AbstractFloat}
     sim::S
     closure::C
     wall::W
     walls::Symbol
     formulation::Symbol
+    inputs::Any
     forcing::T
     u_star::T
     height::T
@@ -75,6 +89,8 @@ mutable struct WallBoundedCase{S, C, W<:WallModel, T<:AbstractFloat}
     τ_wall_top::T
     nsteps::Int
     _stage::Int
+    roughness::Any
+    τ_form::T
     bottom_bc::Symbol
     sgs_stress::Symbol
     θ_walls::Union{Nothing, NTuple{2, T}}
@@ -132,8 +148,27 @@ function _initialise!(sim, law, u_star, ν, walls, noise, seed)
     return sim
 end
 
+# The wall-model inputs of the case's keywords (P57-b): `nothing` for the
+# classical first-cell, unfiltered input (the pre-P57-b path, bit for bit).
+function _case_inputs(walls, h_wm, h_wm_cells, filter, T_f, u_star, height)
+    filter in (:none, :temporal, :spatial, :both) ||
+        throw(ArgumentError("filter must be :none, :temporal, :spatial or :both, got :$filter"))
+    temporal = filter in (:temporal, :both)
+    T_f !== nothing && !temporal &&
+        throw(ArgumentError("T_f is the time scale of filter = :temporal or :both"))
+    h_wm === nothing && h_wm_cells == 1 && filter === :none && return nothing
+    Tf = temporal ? (T_f === nothing ? _DEFAULT_TF * height / u_star : float(T_f)) : 0.0
+    mk() = MatchingInput(; h_wm = h_wm, h_wm_cells = h_wm_cells, T_f = Tf,
+                         spatial_filter = filter in (:spatial, :both))
+    return (bottom = mk(), top = walls === :both ? mk() : nothing)
+end
+
+# Default time scale of the temporal input filter, in units of H/u_* (δ/u_τ).
+const _DEFAULT_TF = 0.5
+
 function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
-                     u_star, height, noise, seed, stepper;
+                     u_star, height, noise, seed, stepper, inputs = nothing,
+                     roughness = nothing, wall_model::Symbol = :equilibrium, tble = (;);
                      bottom_bc::Symbol = :wall_model, sgs_stress::Symbol = :laplacian,
                      θ_walls = nothing, Pr::Real = 0.71, θ₀::Real = 1.0, g_accel::Real = 1.0)
     walls in (:bottom, :both) ||
@@ -173,12 +208,34 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
                                θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
     _initialise!(sim, law, u_star, ν, walls, noise, seed)
     θb === nothing || _initialise_θ!(sim, θb, walls)
-    wm = WallModel(law; ν = ν > 0 ? ν : 1.5e-5)
+    wall_model in (:equilibrium, :nonequilibrium) ||
+        throw(ArgumentError("wall_model must be :equilibrium or :nonequilibrium, got :$wall_model"))
+    roughness === nothing || wall_model === :equilibrium ||
+        throw(ArgumentError("roughness (a DynamicRoughness) needs wall_model = :equilibrium"))
+    wm = if wall_model === :nonequilibrium
+        formulation === :local ||
+            throw(ArgumentError("wall_model = :nonequilibrium is local per column (formulation = :local)"))
+        # κ_wm starts from the law's κ, so the primed columns are that law's
+        κ0 = law isa SpaldingLaw ? law.κ : von_karman()
+        TBLEWallModel(; ν = ν > 0 ? ν : 1.5e-5, κ = κ0, tble...)
+    elseif roughness === nothing
+        WallModel(law; ν = ν > 0 ? ν : 1.5e-5)
+    else
+        roughness isa DynamicRoughness ||
+            throw(ArgumentError("roughness must be a DynamicRoughness, got $(typeof(roughness))"))
+        size(roughness.stats) == (mesh.Nx, mesh.Ny) ||
+            throw(DimensionMismatch("roughness: surface $(size(roughness.stats)) ≠ grid $((mesh.Nx, mesh.Ny))"))
+        (roughness.stats.periodic && roughness.stats.dx ≈ mesh.dx && roughness.stats.dy ≈ mesh.dy) ||
+            throw(ArgumentError("roughness: the surface statistics must be periodic with the grid spacing"))
+        (law isa RoughLogLaw || law isa MOSTWallLaw) ||
+            throw(ArgumentError("roughness: the wall law must be a RoughLogLaw or MOSTWallLaw"))
+        WallModel(dynamic_wall_laws(roughness, law); ν = ν > 0 ? ν : 1.5e-5)
+    end
     lapθ = θb === nothing ? nothing : Field(Grids.CellCenter(), mesh)
-    return WallBoundedCase(sim, closure, wm, walls, formulation,
+    return WallBoundedCase(sim, closure, wm, walls, formulation, inputs,
                            T(u_star^2 / height), T(u_star), T(height), kind, stepper,
-                           zero(T), zero(T), 0, 0, bottom_bc, sgs_stress, θb, T(Pr),
-                           zero(T), zero(T), lapθ)
+                           zero(T), zero(T), 0, 0, roughness, zero(T),
+                           bottom_bc, sgs_stress, θb, T(Pr), zero(T), zero(T), lapθ)
 end
 
 # The conduction profile between the two θ walls (linear in z), or a
@@ -196,9 +253,10 @@ end
 """
     half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
                       wall_law = nothing, formulation = :local,
-                      z0_over_H = 1e-4, filter = :none, H = 1.0,
+                      z0_over_H = 1e-4, h_wm = nothing, h_wm_cells = 1,
+                      filter = :none, T_f = nothing, H = 1.0,
                       u_star = 1.0, noise = 3.0, seed = 1,
-                      stepper = :rk3,
+                      stepper = :rk3, roughness = nothing,
                       surface_heat_flux = nothing, bottom_bc = :wall_model,
                       θ_walls = nothing) -> WallBoundedCase
 
@@ -228,12 +286,32 @@ high-Reynolds-number surface layer for testing an SGS closure's log law.
     laminar (the eddy viscosity damps the noise) and its wall stress sits
     at 0.5-0.7 u*² for 30 H/u*.
 
+**Wall-model input** (P57-b, #183; see [`MatchingInput`](@ref)):
+
+  * `h_wm` (m) or `h_wm_cells` — the matching height: the law is
+    evaluated with the velocity there and its stress applied at the wall
+    face (Kawai & Larsson 2012). Default: the first cell centre;
+  * `filter` — `:none`, `:temporal` (the exponential time filter of Yang,
+    Park & Moin 2017, time scale `T_f`, default ``0.5\\,H/u_*``),
+    `:spatial` (the 3 × 3 wall-parallel box of Bou-Zeid et al. 2005) or
+    `:both`.
+
+The defaults reproduce the first-cell, unfiltered input bit for bit.
+
+**Partially resolved roughness** (P57-e, #190): `roughness` — a
+[`DynamicRoughness`](@ref) on the `(N, N)` surface grid (periodic, the
+grid's spacing). The resolved relief ``h_Δ`` of its statistics exerts
+[`surface_gradient_drag`](@ref) on the first cell (a body force
+``f_i/Δz`` on the faces, the mean of the two adjacent columns), and the
+wall law (`wall_law`, a `RoughLogLaw` or `MOSTWallLaw`, as a template)
+gets, per column, the dynamic roughness ``\\sqrt{z_{0,f}^2+α^2σ_Δ^2}``,
+with α solved once per step from the first-cell (or matching-height)
+velocity (Anderson & Meneveau 2011). `τ_form` holds the form drag.
+
 Keyword hooks reserved for later Era VI issues — documented, **not
 implemented** (any value other than the default raises an
 `ArgumentError`):
 
-  * `filter = :none` — the wall-model input filtering / matching height
-    of Phase 57 (P57-b, #183);
   * `surface_heat_flux = nothing` — a bottom θ flux for the stratified
     and collapsing cases (P58-e, #193);
   * `bottom_bc = :wall_model` and `θ_walls = nothing` — the half channel
@@ -259,13 +337,13 @@ the *Wall models* theory page, section "Wall-bounded benchmark cases".
 """
 function half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
                            wall_law = nothing, formulation::Symbol = :local,
-                           z0_over_H::Real = 1e-4, filter::Symbol = :none,
+                           z0_over_H::Real = 1e-4, h_wm = nothing, h_wm_cells = 1,
+                           filter::Symbol = :none, T_f = nothing,
                            H::Real = 1.0, u_star::Real = 1.0,
                            noise::Real = 3.0, seed::Integer = 1,
-                           stepper::Symbol = :rk3,
+                           stepper::Symbol = :rk3, roughness = nothing,
                            surface_heat_flux = nothing, bottom_bc::Symbol = :wall_model,
                            θ_walls = nothing)
-    _reserved("filter", filter, :none, "P57-b (#183)")
     _reserved("surface_heat_flux", surface_heat_flux, nothing, "P58-e (#193)")
     _reserved("bottom_bc", bottom_bc, :wall_model, "channel_case (the half channel is inviscid)")
     _reserved("θ_walls", θ_walls, nothing, "channel_case (the half channel is inviscid)")
@@ -273,14 +351,17 @@ function half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
     law isa AbstractWallLaw ||
         throw(ArgumentError("wall_law must be an AbstractWallLaw, got $(typeof(law))"))
     return _build_case(:half_channel, _dims(N), (2π * H, 2π * H, H), closure, law,
-                       0.0, :bottom, formulation, u_star, H, noise, seed, stepper)
+                       0.0, :bottom, formulation, u_star, H, noise, seed, stepper,
+                       _case_inputs(:bottom, h_wm, h_wm_cells, filter, T_f, u_star, H),
+                       roughness)
 end
 
 """
     channel_case(; Re_τ = 1000, N = (16, 8, 16), closure = StaticSmagorinsky(0.065),
                  wall_law = SpaldingLaw(), walls = :both, formulation = :local,
                  δ = 1.0, u_τ = 1.0, extent = (2π*δ, π*δ, 2δ), noise = 3.0,
-                 seed = 1, stepper = :rk3,
+                 seed = 1, stepper = :rk3, h_wm = nothing, h_wm_cells = 1,
+                 filter = :none, T_f = nothing, wall_model = :equilibrium, tble = (;),
                  bottom_bc = :wall_model, θ_walls = nothing,
                  sgs_stress = :laplacian, Pr = 0.71, θ₀ = 1, g_accel = 1) -> WallBoundedCase
 
@@ -305,6 +386,19 @@ the log-layer-mismatch study (Kawai & Larsson 2012; P57-b, #183).
     keeps the flow laminar-like for more than 10 δ/u_τ: its mean wall
     stress over 2-10 δ/u_τ was 0.77-0.86 u_τ², against 0.994-1.007 u_τ²
     with 0.065 (four seeds each).
+
+The wall-model input keywords `h_wm`, `h_wm_cells`, `filter` and `T_f`
+(P57-b) are those of [`half_channel_case`](@ref), applied at each
+modelled wall (`T_f` default ``0.5\\,δ/u_τ``).
+
+`wall_model = :nonequilibrium` (P57-c, #189) replaces the equilibrium
+law by a [`TBLEWallModel`](@ref) at each modelled wall, built with
+`ν`, ``κ_{wm}`` initially the law's κ (`SpaldingLaw`), and the keywords
+in the named tuple `tble` (`terms`, `dynamic_kappa`, `T_κ`, `N`, `r`,
+…). Its columns take the input of the matching-height and filter
+keywords, the case's mean pressure gradient ``∂p/∂x = -u_τ^2/δ`` plus
+the resolved one, and are advanced once per step after the projection.
+`formulation` must be `:local`.
 
 **Wall-resolved, stratified channel** (P55-f, #191; reused by P59-e,
 #195):
@@ -357,13 +451,17 @@ function channel_case(; Re_τ::Real = 1000, N = (16, 8, 16),
                       formulation::Symbol = :local, δ::Real = 1.0, u_τ::Real = 1.0,
                       extent = (2π * δ, π * δ, 2δ), noise::Real = 3.0,
                       seed::Integer = 1, stepper::Symbol = :rk3,
+                      h_wm = nothing, h_wm_cells = 1, filter::Symbol = :none, T_f = nothing,
+                      wall_model::Symbol = :equilibrium, tble = (;),
                       bottom_bc::Symbol = :wall_model, θ_walls = nothing,
                       sgs_stress::Symbol = :laplacian, Pr::Real = 0.71,
                       θ₀::Real = 1.0, g_accel::Real = 1.0)
     Re_τ > 0 || throw(ArgumentError("Re_τ must be positive, got $Re_τ"))
     ν = u_τ * δ / Re_τ
     return _build_case(:channel, _dims(N), Tuple(float.(extent)), closure, wall_law,
-                       ν, walls, formulation, u_τ, δ, noise, seed, stepper;
+                       ν, walls, formulation, u_τ, δ, noise, seed, stepper,
+                       _case_inputs(walls, h_wm, h_wm_cells, filter, T_f, u_τ, δ),
+                       nothing, wall_model, tble;
                        bottom_bc = bottom_bc, sgs_stress = sgs_stress, θ_walls = θ_walls,
                        Pr = Pr, θ₀ = θ₀, g_accel = g_accel)
 end
@@ -430,32 +528,42 @@ One step of length `dt` with the case's stepper (`:rk3`: `step_rk3!`,
 `:euler`: `step!`), its SGS closure (`sgs = case.closure`), the mean
 pressure gradient as `body_force!` and the wall stress as
 `post_predictor!` ([`apply_wall_stress!`](@ref) at each modelled wall, in
-every substage). Updates `case.τ_wall_bottom` / `case.τ_wall_top` with the
-plane-mean stress the step applied.
+every substage, with the `wind` / `height` of the case's
+[`MatchingInput`](@ref)s when it has them; their temporal filters are
+advanced once, after the step; a [`TBLEWallModel`](@ref)'s columns are
+then advanced with [`update_wall_model!`](@ref), with the mean pressure
+gradient ``-G`` plus the resolved one). Updates `case.τ_wall_bottom` /
+`case.τ_wall_top` with the plane-mean stress the step applied.
 """
 function advance_channel!(case::WallBoundedCase{S, C, W, T}, dt::Real) where {S, C, W, T}
     s = case.sim; g = s.mesh
     G = case.forcing
     A = g.Lx * g.Ly
     case._stage = 0
-    τb = Ref(zero(T)); τt = Ref(zero(T))
+    τb = Ref(zero(T)); τt = Ref(zero(T)); τf = Ref(zero(T))
     rk3 = case.stepper === :rk3
+    dr = case.roughness
+    dr === nothing || _update_case_roughness!(case, dr)
+    nforce = Ref(0)
     force! = function (sim, Δt)
         ii, jj, kk = Grids.interior(sim.mesh)
         @inbounds for k in kk, j in jj, i in ii
             sim.tu.data[i, j, k] += G
+        end
+        if dr !== nothing
+            nforce[] += 1
+            wgt = rk3 ? _RK3_WEIGHTS[mod1(nforce[], 3)] : 1.0
+            τf[] += wgt * _form_drag!(sim, dr)
         end
         return nothing
     end
     wall! = function (sim, Δt)
         case._stage += 1
         wgt = rk3 ? _RK3_WEIGHTS[mod1(case._stage, 3)] : 1.0
-        Fb = apply_wall_stress!(sim, case.wall, Δt; side = :bottom,
-                                formulation = case.formulation)
+        Fb = _apply_case_wall!(case, sim, Δt, :bottom)
         τb[] += wgt * (-Fb.Fx) / A
         if case.walls === :both
-            Ft = apply_wall_stress!(sim, case.wall, Δt; side = :top,
-                                    formulation = case.formulation)
+            Ft = _apply_case_wall!(case, sim, Δt, :top)
             τt[] += wgt * (-Ft.Fx) / A
         end
         return nothing
@@ -483,6 +591,18 @@ function advance_channel!(case::WallBoundedCase{S, C, W, T}, dt::Real) where {S,
         step!(s, dt; sgs = case.closure, sgs_stress = case.sgs_stress,
               body_force! = force_θ!, post_predictor! = post!)
     end
+    if case.inputs !== nothing
+        update_input_filter!(case.inputs.bottom, s, dt; side = :bottom)
+        case.inputs.top === nothing || update_input_filter!(case.inputs.top, s, dt; side = :top)
+    end
+    if case.wall isa TBLEWallModel
+        # the TBLE columns, to the end of the step: the mean pressure
+        # gradient −G plus the resolved one
+        for side in (case.walls === :both ? (:bottom, :top) : (:bottom,))
+            mi = case.inputs === nothing ? nothing : getfield(case.inputs, side)
+            update_wall_model!(case.wall, s, dt; side = side, input = mi, dpdx = -G)
+        end
+    end
     if noslip
         case.τ_wall_bottom = wall_shear_stress(s; side = :bottom)
         case.τ_wall_top = case.walls === :both ? -wall_shear_stress(s; side = :top) : zero(T)
@@ -490,6 +610,7 @@ function advance_channel!(case::WallBoundedCase{S, C, W, T}, dt::Real) where {S,
         case.τ_wall_bottom = τb[]
         case.τ_wall_top = τt[]
     end
+    case.τ_form = τf[]
     case.q_wall_bottom = qb[]
     case.q_wall_top = qt[]
     case.nsteps += 1
@@ -530,6 +651,74 @@ function _add_θ_walls!(case::WallBoundedCase, sim)
         end
     end
     return fb / (Nx * Ny), ft / (Nx * Ny)
+end
+
+function _apply_case_wall!(case, sim, Δt, side)
+    if case.wall isa TBLEWallModel
+        mi = case.inputs === nothing ? nothing : getfield(case.inputs, side)
+        return apply_wall_stress!(sim, case.wall, Δt; side = side, input = mi)
+    end
+    case.inputs === nothing &&
+        return apply_wall_stress!(sim, case.wall, Δt; side = side, formulation = case.formulation)
+    mi = getfield(case.inputs, side)
+    wind, height = matching_input!(mi, sim; side = side)
+    return apply_wall_stress!(sim, case.wall, Δt; side = side, formulation = case.formulation,
+                              wind = wind, height = height)
+end
+
+# P57-e: the dynamic roughness of the bottom from the start-of-step
+# velocity at the wall-model input (first cell, or the matching height and
+# filters of the case's MatchingInput), and the per-column laws.
+function _update_case_roughness!(case, dr::DynamicRoughness)
+    s = case.sim; g = s.mesh
+    if case.inputs === nothing
+        uc, vc = _first_cell_velocity(s)
+        h = g.dz / 2
+    else
+        uc, vc, h = _sample_matching(case.inputs.bottom, s, :bottom, nothing)
+    end
+    update_dynamic_roughness!(dr, uc, vc, h)
+    dynamic_wall_laws!(case.wall.law, dr)
+    return dr
+end
+
+# Cell-centre (u, v) of the first level of a horizontally periodic sim.
+function _first_cell_velocity(sim)
+    g = sim.mesh
+    Nx, Ny, Hx, Hy, Hz = g.Nx, g.Ny, g.Hx, g.Hy, g.Hz
+    u, v = sim.u.data, sim.v.data
+    T = eltype(u)
+    uc = zeros(T, Nx, Ny); vc = zeros(T, Nx, Ny)
+    @inbounds for j in 1:Ny, i in 1:Nx
+        ie = i == Nx ? 1 : i + 1; jn = j == Ny ? 1 : j + 1
+        uc[i, j] = (u[Hx+i, Hy+j, Hz+1] + u[Hx+ie, Hy+j, Hz+1]) / 2
+        vc[i, j] = (v[Hx+i, Hy+j, Hz+1] + v[Hx+i, Hy+jn, Hz+1]) / 2
+    end
+    return uc, vc
+end
+
+# The form drag of the resolved relief, f/Δz on the first-level faces
+# (the mean of the two adjacent columns' surface_gradient_drag), added to
+# the tendencies; returns its plane-mean kinematic x stress (m² s⁻²).
+function _form_drag!(sim, dr::DynamicRoughness)
+    g = sim.mesh
+    Nx, Ny, Hx, Hy, Hz, dz = g.Nx, g.Ny, g.Hx, g.Hy, g.Hz, g.dz
+    st = dr.stats
+    uc, vc = _first_cell_velocity(sim)
+    T = eltype(uc)
+    fx = zeros(T, Nx, Ny); fy = zeros(T, Nx, Ny)
+    @inbounds for I in eachindex(uc)
+        fx[I], fy[I] = surface_gradient_drag(uc[I], vc[I], st.dhx[I], st.dhy[I]; C_d = dr.C_d)
+    end
+    τ = zero(T)
+    @inbounds for j in 1:Ny, i in 1:Nx
+        iw = i == 1 ? Nx : i - 1; js = j == 1 ? Ny : j - 1
+        ax = (fx[i, j] + fx[iw, j]) / 2
+        sim.tu.data[Hx+i, Hy+j, Hz+1] += ax / dz
+        sim.tv.data[Hx+i, Hy+j, Hz+1] += (fy[i, j] + fy[i, js]) / 2 / dz
+        τ -= ax
+    end
+    return τ / (Nx * Ny)
 end
 
 # plane means of the interior of u and v

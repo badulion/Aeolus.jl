@@ -1,7 +1,20 @@
 # The wall-stress operator: the stress of a wall law applied, implicitly,
 # to the first velocity level next to the z-walls of a RegularGrid.
 
-export WallModel, apply_wall_stress!
+export AbstractWallModel, WallModel, apply_wall_stress!
+
+"""
+    AbstractWallModel
+
+A wall model: whatever decides the stress [`apply_wall_stress!`](@ref)
+applies at a wall. [`WallModel`](@ref) is the equilibrium (algebraic)
+one — a wall law evaluated at the matching point; `TBLEWallModel`
+(P57-c, #189) integrates the thin-boundary-layer equations under every
+wall column and carries per-column state. Both hand per-column
+coefficients ``τ_{w,i} = a\\,u_i + b_i`` to the same implicit,
+face-by-face application, so the operator exists once.
+"""
+abstract type AbstractWallModel end
 
 """
     WallModel(law; ν = 1.5e-5)
@@ -12,7 +25,7 @@ near 15 °C; only smooth-wall laws use it). `law` is one
 laws, one per column (a [`MOSTWallLaw`](@ref) per column with its own
 roughness and Obukhov length, as the Berlin ground uses).
 """
-struct WallModel{L, T<:AbstractFloat}
+struct WallModel{L, T<:AbstractFloat} <: AbstractWallModel
     law::L
     ν::T
 end
@@ -32,7 +45,7 @@ end
 
 """
     apply_wall_stress!(sim, wm, Δt; side = :bottom, mask = nothing,
-                       formulation = :local, wind = nothing,
+                       formulation = :local, wind = nothing, height = nothing,
                        ustar = nothing, wind_out = nothing) -> (Fx, Fy)
 
 Apply the modelled wall stress of `wm` (a [`WallModel`](@ref), or a bare
@@ -93,11 +106,27 @@ Halos and the finite-volume operators are not modified: on a free-slip
 model is the only momentum flux through the wall face.
 
 **Keywords.** `wind` — an `(Nx, Ny)` matrix of speeds to evaluate the
-law at instead of the resolved ``U`` (a held or filtered wind; the
-direction of the stress is still that of the resolved velocity).
+law at instead of the resolved ``U`` (a held or filtered wind, or the
+speed at a matching height off the first cell: see
+[`MatchingInput`](@ref)). The stress then has the magnitude of the law at
+that speed and the direction of the resolved first-cell velocity,
+``τ_{w,i} = τ_w(U_{in})\\,u_i/U`` (`:local`; `:schumann`:
+``τ_w(⟨U_{in}⟩)\\,u_i/⟨U⟩``), so the implicit coefficient is
+``a = τ_w(U_{in})/U``. (Before P57-b it was ``τ_w(U_{in})/U_{in}``,
+which scaled the magnitude by ``U/U_{in}``.) `:moeng` uses the input
+speeds for ``U`` and ``⟨U⟩``. `height` — the distance from the wall
+(m) at which the law is evaluated, a number or an `(Nx, Ny)` matrix
+(default ``Δz/2``, the first cell centre; the matching height of
+[`MatchingInput`](@ref)); the stress is still applied at the wall face,
+to the first velocity level (Kawai & Larsson 2012).
 `ustar` / `wind_out` — `(Nx, Ny)` matrices that receive, for every
 column with a wall, the friction velocity of the law and the speed it
 was evaluated at (one side only).
+
+A [`TBLEWallModel`](@ref) (P57-c) is applied by the same face loop
+with the stress of its columns (`apply_wall_stress!(sim, wm::TBLEWallModel,
+Δt; side, mask, input, ustar, wind_out)`; `input` a
+[`MatchingInput`](@ref), `formulation = :local` only).
 
 Returns the volume-integrated kinematic force of the step,
 ``\\sum (u' - u)/Δt\\,ΔV`` (m⁴ s⁻²) per component, negative for a flow
@@ -112,10 +141,14 @@ kinematic stress.
   * Moeng, C.-H. (1984). *J. Atmos. Sci.*, 41, 2052-2062.
   * Piomelli, U. & Balaras, E. (2002). *Annu. Rev. Fluid Mech.*, 34,
     349-374.
+  * Kawai, S. & Larsson, J. (2012). Wall-modeling in large eddy
+    simulation: length scales, grid resolution, and accuracy.
+    *Phys. Fluids*, 24, 015105.
 """
 function apply_wall_stress!(sim, wm::WallModel, Δt::Real; side::Symbol = :bottom,
                             mask = nothing, formulation::Symbol = :local,
-                            wind = nothing, ustar = nothing, wind_out = nothing)
+                            wind = nothing, height = nothing,
+                            ustar = nothing, wind_out = nothing)
     side in (:bottom, :top, :both) ||
         throw(ArgumentError("apply_wall_stress!: side must be :bottom, :top or :both, got :$side"))
     formulation in (:local, :schumann, :moeng) ||
@@ -130,7 +163,7 @@ function apply_wall_stress!(sim, wm::WallModel, Δt::Real; side::Symbol = :botto
     Fx = Fy = zero(float(mesh.dz))
     for (s, kw) in ((:bottom, 1), (:top, mesh.Nz))
         (side === s || side === :both) || continue
-        fx, fy = _wall_side!(sim, wm, Δt, kw, mask, formulation, wind, ustar, wind_out)
+        fx, fy = _wall_side!(sim, wm, Δt, kw, mask, formulation, wind, height, ustar, wind_out)
         Fx += fx; Fy += fy
     end
     return (Fx = Fx, Fy = Fy)
@@ -138,12 +171,21 @@ end
 apply_wall_stress!(sim, law::AbstractWallLaw, Δt::Real; kwargs...) =
     apply_wall_stress!(sim, WallModel(law), Δt; kwargs...)
 
-function _wall_side!(sim, wm::WallModel, Δt, kw, mask, formulation, wind, ustar, wind_out)
+# Implicit coefficient a = τ_w(U_in)/U_res for a law evaluated at an input
+# speed other than the resolved one (the stress magnitude is the law's).
+@inline _input_drag(L, Uin, Ures, h, ν) =
+    Ures > 0 ? wall_stress(L, Uin, h; ν = ν) / Ures : wall_drag(L, Uin, h; ν = ν)
+
+@inline _height(::Nothing, i, j, h0) = h0
+@inline _height(h::Real, i, j, h0) = oftype(h0, h)
+@inline _height(h::AbstractMatrix, i, j, h0) = oftype(h0, @inbounds h[i, j])
+
+function _wall_side!(sim, wm::WallModel, Δt, kw, mask, formulation, wind, height, ustar, wind_out)
     mesh = sim.mesh
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     Hx, Hy, Hz, dz = mesh.Hx, mesh.Hy, mesh.Hz, mesh.dz
     T = typeof(float(dz))
-    h = dz / 2
+    h0 = dz / 2
     ν = wm.ν
     u, v = sim.u.data, sim.v.data
     xper = sim.bcs.west isa Periodic
@@ -175,9 +217,10 @@ function _wall_side!(sim, wm::WallModel, Δt, kw, mask, formulation, wind, ustar
 
     # 2. the plane means a non-local formulation needs
     form = formulation
-    Ubar = zero(T); ubar = zero(T); vbar = zero(T); M = zero(T)
+    Ubar = zero(T); ubar = zero(T); vbar = zero(T); M = zero(T); Ures = zero(T)
     if form !== :local
         Ubar = sum(Ue) / nact
+        Ures = sum(Uc) / nact
         if form === :moeng
             # face means, each face weighted by the share of it that has a wall
             su = sv = wu = wv = zero(T)
@@ -202,11 +245,14 @@ function _wall_side!(sim, wm::WallModel, Δt, kw, mask, formulation, wind, ustar
     @inbounds for j in 1:Ny, i in 1:Nx
         lev(i, j) == 0 && continue
         L = _law(wm.law, i, j)
+        h = _height(height, i, j, h0)
         if form === :local
-            a[i, j] = wall_drag(L, Ue[i, j], h; ν = ν)
+            a[i, j] = wind === nothing ? wall_drag(L, Ue[i, j], h; ν = ν) :
+                                         _input_drag(L, Ue[i, j], Uc[i, j], h, ν)
             Uu = Ue[i, j]
         elseif form === :schumann
-            a[i, j] = wall_drag(L, Ubar, h; ν = ν)
+            a[i, j] = wind === nothing ? wall_drag(L, Ubar, h; ν = ν) :
+                                         _input_drag(L, Ubar, Ures, h, ν)
             Uu = Ubar
         else                                    # :moeng
             τm = wall_stress(L, Ubar, h; ν = ν)
@@ -220,6 +266,27 @@ function _wall_side!(sim, wm::WallModel, Δt, kw, mask, formulation, wind, ustar
     end
 
     # 4. apply, face by face, with the mean of the two columns' coefficients
+    return _apply_coefficients!(sim, a, bx, by, Δt, kw, mask)
+end
+
+# Apply the per-column stress τ_i = a u_i + b_i (kinematic, removed from
+# the flow) implicitly to the first velocity level of every walled
+# column, face by face, with the mean of the two columns' coefficients
+# (a column contributes only at its own wall level). Shared by every
+# AbstractWallModel. Returns the volume-integrated force (Fx, Fy).
+function _apply_coefficients!(sim, a, bx, by, Δt, kw, mask)
+    mesh = sim.mesh
+    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    Hx, Hy, Hz, dz = mesh.Hx, mesh.Hy, mesh.Hz, mesh.dz
+    T = typeof(float(dz))
+    u, v = sim.u.data, sim.v.data
+    xper = sim.bcs.west isa Periodic
+    yper = sim.bcs.south isa Periodic
+    lev(i, j) = _level(mask, i, j, kw, Nz)
+    west(i) = i > 1 ? i - 1 : (xper ? Nx : 0)
+    south(j) = j > 1 ? j - 1 : (yper ? Ny : 0)
+    levw(i, j) = (iw = west(i); iw == 0 ? 0 : lev(iw, j))
+    levs(i, j) = (js = south(j); js == 0 ? 0 : lev(i, js))
     Fx = Fy = zero(T)
     @inbounds for j in 1:Ny, i in 1:Nx
         iw, js = west(i), south(j)
