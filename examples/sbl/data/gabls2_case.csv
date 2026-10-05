@@ -1,0 +1,46 @@
+# GABLS2 (CASES-99, Leon, Kansas, 37.6 N 96.7 W; 22-24 October 1999): initial profile, forcing and surface temperature.
+# PROVENANCE WARNING: the case paper, Svensson et al. (2011), Boundary-Layer Meteorol. 140, 177-206, and the original
+#   case description (Svensson & Holtslag 2006) were NOT accessible to this change (publisher JavaScript challenge;
+#   no open copy found). The values below are taken from a participant implementation and checked against what the
+#   accessible literature states; each entry names its source and any disagreement.
+# Primary transcription: CLUBB (larson-group/clubb_release, a GABLS2 SCM participant), input/case_setups/
+#   gabls2_sounding.in and gabls2_model.in, src/Benchmark_cases/gabls2.F90 (read 2026-10-04).
+# Checks: Holtslag, Steeneveld & van de Wiel (2007), Boundary-Layer Meteorol. 125, 361-376, sec. 2-3 (geostrophic
+#   wind 9.5 m/s "as in Svensson and Holtslag 2006"; z0m = 30 mm, z0h = 3 mm; GABLS2 runs start at 1600 LT on
+#   22 October 1999 and last 59 h); van Hooft's Basilisk GABLS2 page (comphy-lab/basilisk-C, sandbox/Antoonvh/GABLS2.c):
+#   the same theta profile below 1000 m and the same surface-temperature formula, start at 1600 LT.
+# Disagreements (resolved as stated):
+#   - geostrophic wind: CLUBB (Ug, Vg) = (3, -9) m/s, |G| = 9.49 m/s, matches Holtslag et al. 2007's 9.5 m/s; Basilisk
+#     uses (-8, 3), |G| = 8.5 m/s. CLUBB's value is used.
+#   - start time: CLUBB starts at 1400 LT; Holtslag et al. 2007 state 1600 LT for the GABLS2 runs (and 1400 LT for
+#     their own); Basilisk 1600 LT. 1600 LT is used (t_start = 57600 s after 00 LT 22 Oct).
+#   - theta above 1000 m: CLUBB 300 K at 2000 m (8 K/km); Basilisk 292 + 20 (z - 1000)/3000 (6.7 K/km). CLUBB is used.
+#   - roughness: CLUBB z0 = 0.03 m (momentum); Basilisk 0.01 m for both; Holtslag et al. 2007 z0m = 0.03, z0h = 0.003 m
+#     (used).
+#   - the formula below is a surface TEMPERATURE (CLUBB converts it to potential temperature with p_sfc = 972 hPa,
+#     (1000/972)^(R/cp)); Basilisk uses it directly as theta. CLUBB's reading is used (a 2.3 K difference).
+# Surface temperature, deg C, h = local time in hours from 00 LT 22 Oct 1999 (CLUBB gabls2.F90 == Basilisk T1bottom):
+#   h <= 17.4: -10 - 25 cos(0.22 h + 0.2);  h <= 30: -0.54 h + 15.2;  h <= 41.9: -7 - 25 cos(0.21 h + 1.8);
+#   h <= 53.3: -0.37 h + 18.0;  h <= 65.6: -4 - 25 cos(0.22 h + 2.5);  else 4.4.
+# Large-scale subsidence (CLUBB): w = -0.005 z/1000 m/s below 1000 m (-0.005 above) from 26 h after a 1400 LT start
+#   (40 h local); "a small subsidence rate (0.005 m/s) ... starting in the afternoon of 23 October" (as quoted in the
+#   literature). Not applied by the Aeolus runs (LargeScaleForcing has no state-dependent subsidence; see the theory page).
+# Other constants: f = 8.8983571e-5 s-1 (CLUBB; 2 Omega sin 37.6 deg); p_sfc = 972 hPa; q = 2.5 g/kg below 900 m (dry
+#   runs here: q is not carried, see the theory page).
+# Copied from source files, not digitised: digitisation uncertainty 0.
+table,a,b
+theta,0,288.0
+theta,200,286.0
+theta,850,286.0
+theta,900,288.0
+theta,1000,292.0
+theta,2000,300.0
+theta,3500,310.0
+theta,4000,312.0
+constant,U_g,3.0
+constant,V_g,-9.0
+constant,f,8.8983571e-5
+constant,z0m,0.03
+constant,z0h,0.003
+constant,p_sfc,97200
+constant,t_start,57600

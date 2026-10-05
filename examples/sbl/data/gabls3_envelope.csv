@@ -1,0 +1,11 @@
+# GABLS3 LES ensemble envelope, 03-04 UTC 2 July 2006: quantities derived from the digitised Figure 1 of Basu, Holtslag &
+#   Bosveld (2012, Proc. ECMWF GABLS Workshop 2011, 75-82; examples/sbl/data/gabls3_reference.csv holds the digitised
+#   profiles and the digitisation method). Bosveld et al. (2014b) was not accessible to this change.
+# jet_height / jet_speed: the 10-90th percentile range of the LES ensemble low-level jet, as bounded by the speed maxima
+#   of the digitised percentile curves (median 110 m / 8.42 m/s; percentile combinations 120 m, 7.91-9.21 m/s), widened
+#   by one 5 m sample and the digitisation uncertainty (+-2 m, +-0.05 m/s). Digitisation uncertainty: +-5 m, +-0.1 m/s.
+# h_over_L: the text of section 5 ("on the order of 5"); an order of magnitude, not a range: low/high = 2.5/10 here.
+quantity,low,high,unit,source
+jet_height,100,130,m,Basu et al. 2012 Fig. 1 (digitised; median jet 110 m)
+jet_speed,7.8,9.3,m s-1,Basu et al. 2012 Fig. 1 (digitised; median jet 8.42 m/s)
+h_over_L,2.5,10,1,Basu et al. 2012 sec. 5 text ("on the order of 5")

@@ -1,0 +1,78 @@
+# GABLS4 LES case (Dome C, Antarctic Plateau, 11 December 2009): initial profiles, geostrophic wind and the prescribed
+#   surface temperature.
+# Source: Couvreux et al. (2020), "Intercomparison of large-eddy simulations of the Antarctic boundary layer for very
+#   stable stratification", Boundary-Layer Meteorol. 176, 369-400, doi:10.1007/s10546-020-00539-4, Appendix 1, Table 5
+#   (read from the author version https://edepot.wur.nl/528755 on 2026-10-04). Copied from the table, not digitised:
+#   digitisation uncertainty 0.
+# Cross-check: the official case file GABLS4_SCM_LES_STAGE3.nc (Meteo-France CNRM/GAME, E. Bazile, 19-02-2015;
+#   sha256 bbff2dc32a3b08156bbab0c5c2b68330cb2048dd22deee71a2d395ffe3e4766b, from
+#   https://github.com/Sukantabasu/jax-alfa/tree/aa7baebf99282711416dadbde7dfdfcba8940524/examples/SBL_GABLS4) read with
+#   Aeolus.NetCDFIO (z0m = 0.01 m, psurf = 65100 Pa, the 00 UTC theta/u/v/Ug/Vg profiles agree with exp1 below).
+# SURFACE TEMPERATURE: the "surface" rows are the case file's Tg (37 hourly values, 00 UTC 11 Dec to 12 UTC 12 Dec),
+#   NOT Table 5 of the paper. Table 5 lists 25 values for 00-24 UTC but omits the 15 UTC value (233.04 K): from 15 UTC
+#   on its entries are the case file's values one hour later (its "15 UTC 231.92" is Tg at 16 UTC, ..., its "24 UTC
+#   243.23" is Tg at 25 h). The paper's table, not the case file, is wrong (the case file is continuous and was the
+#   input of the intercomparison). The .nc is not redistributed here (*.nc is gitignored).
+# Case constants (Couvreux et al. 2020, sec. 2): Dome C 75.10 S 123.30 E, 3233 m; dry; no advection or subsidence;
+#   surface pressure 651 hPa; roughness z0m = 1e-2 m, z0h = 1e-3 m (experiment 1) or z0m = 1e-3 m, z0h = 1e-4 m
+#   (experiments 2 and 3). Experiment 3 starts at 10 UTC from the experiment-2 ensemble mean, on a 500 x 500 x 150 m
+#   domain (or smaller) at 1 m isotropic resolution; experiments 1-2: 1 x 1 x 1 km, 5 m horizontal, 2 m vertical.
+# T is the surface (skin) TEMPERATURE in K; the potential temperature is T (1000/651)^0.286 (the exponent used by the
+#   jax-alfa GABLS4 set-up, CreateSurfaceBC_GABLS4.py).
+# table: exp1 = profiles for the runs initialised at 00 UTC; exp3 = at 10 UTC; columns z(m), theta(K), U, V, Ug, Vg (m/s).
+#        surface = t (s from 00 UTC 11 Dec 2009), T (K).
+table,a,b,c,d,e,f
+exp1,0,271.3,0,0,0,0
+exp1,2.5,271.3,1.25,4.5,1.25,4.5
+exp1,7.5,271.1,1.25,4.5,1.25,4.5
+exp1,43.4,275.4,1.25,4.5,1.25,4.5
+exp1,296.2,278.4,1.25,4.5,1.25,4.5
+exp1,655.,281.1,1.25,4.5,1.25,4.5
+exp1,702.,281.5,1.27,4.7,1.27,4.7
+exp1,1043.,284.2,2.13,5.35,2.13,5.35
+exp3,0,276.58,0,0,0,0
+exp3,2.5,276.58,1.42,1.62,1.25,4.5
+exp3,12.7,277.15,2.07,2.81,1.25,4.5
+exp3,17.9,277.34,2.22,3.32,1.25,4.5
+exp3,33.4,277.63,2.34,4.32,1.25,4.5
+exp3,49.6,277.69,2.31,4.64,1.25,4.5
+exp3,61.2,277.7,2.30,4.71,1.25,4.5
+exp3,120.2,277.71,2.27,4.84,1.25,4.5
+exp3,150.,277.71,2.25,4.87,1.25,4.5
+surface,0,241.5,,,,
+surface,3600,243.29,,,,
+surface,7200,245.0,,,,
+surface,10800,246.35,,,,
+surface,14400,247.07,,,,
+surface,18000,247.44,,,,
+surface,21600,247.43,,,,
+surface,25200,247.05,,,,
+surface,28800,246.4,,,,
+surface,32400,245.1,,,,
+surface,36000,243.31,,,,
+surface,39600,241.21,,,,
+surface,43200,238.86,,,,
+surface,46800,236.67,,,,
+surface,50400,234.43,,,,
+surface,54000,233.04,,,,
+surface,57600,231.92,,,,
+surface,61200,231.24,,,,
+surface,64800,231.15,,,,
+surface,68400,231.71,,,,
+surface,72000,232.79,,,,
+surface,75600,234.58,,,,
+surface,79200,236.5,,,,
+surface,82800,238.82,,,,
+surface,86400,241.25,,,,
+surface,90000,243.23,,,,
+surface,93600,244.88,,,,
+surface,97200,246.17,,,,
+surface,100800,247.0,,,,
+surface,104400,247.46,,,,
+surface,108000,247.36,,,,
+surface,111600,246.67,,,,
+surface,115200,245.8,,,,
+surface,118800,244.38,,,,
+surface,122400,242.71,,,,
+surface,126000,240.54,,,,
+surface,129600,237.69,,,,
