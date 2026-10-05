@@ -152,6 +152,25 @@ halo error of the child, rate from the finest pair):
 | ``r\times r`` mean of coincident child faces, ``r = 3, 5`` | ``5.7\times10^{-16}`` | ``10^{-15}`` |
 | composite ``\int θ``, ``\int q_v``, ``\int`` tracer after refluxing, ``r = (2,3,4)`` | ``0.9 - 3.5\times10^{-15}`` (drift without: ``2.6\times10^{-5} - 4.3\times10^{-4}``) | ``10^{-13}`` |
 
+## Cost for the Berlin child
+
+Measured with a 192 × 192 × 120 parent (6 × 6 × 3 km, uniform 25 m in
+the vertical, the region the child sits in) and a 1 × 1 km child at
+refinement ``(2, 2, 4)``, order 3, moist with one extra tracer, on one
+core of the development machine (minimum of 5 calls):
+
+| child | plan memory (6 plans) | one scalar, halo / whole field | field set ``u,v,w,θ,q_v,``tracer, halo / whole | restriction of the set |
+| :-- | :-- | :-- | :-- | :-- |
+| 64 × 64 × 32 | 28.7 KiB | 0.92 / 2.86 ms | 21.9 / 33.3 ms | 0.48 ms |
+| 64 × 64 × 64 (~400 m deep) | 33.7 KiB | 1.40 / 5.26 ms | 19.0 / 39.9 ms | 1.02 ms |
+
+The field-set halo cost is dominated by filling the six parent fields'
+halos (192 × 192 × 120 each, 2.49 ms per field, about 15 ms of the
+~20 ms), not by the interpolation; a bare child
+`step!` without physics costs 4.4 ms (32 levels) and 9.0 ms (64 levels)
+for comparison. The plans are built once per (location, axis, order) and
+cached on the `NestedGrid`.
+
 ## References
 
 - Berger, M. J. & Colella, P. (1989). Local adaptive mesh refinement for
