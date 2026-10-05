@@ -71,6 +71,7 @@ makedocs(
             "Wall models"                 => "theory/wall_models.md",
             "Large-scale forcing"         => "theory/large_scale_forcing.md",
             "Prognostic SGS TKE and Reynolds stress" => "theory/sgs_tke.md",
+            "Stable BLs: GABLS1, stratified channel" => "theory/stable_boundary_layer.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",

@@ -677,7 +677,7 @@ export fog_effective_radius, FogRadiation, fog_radiation,
 # Constant accessors (LH_v0, grav, cp_water, …) stay qualified:
 # `Aeolus.SurfaceExchange.grav(c)`.
 export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
-       AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
+       AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag, BusingerDyerLogLinear,
        phi_m, phi_h, psi_m, psi_h,
        SurfaceLayerSolution, solve_surface_layer,
        bulk_richardson, obukhov_length,
@@ -892,7 +892,7 @@ export AbstractWaterEOS, UNESCOWaterEOS, LinearWaterEOS,
        water_density, water_thermal_expansion, water_haline_contraction,
        SolarBands, jerlov_water, soloviev_solar,
        solar_transmission, solar_absorbed_between, solar_mean_transmission,
-       CoolSkin, cool_skin, BusingerDyerLogLinear,
+       CoolSkin, cool_skin,
        AbstractWarmLayer, NoWarmLayer, FairallWarmLayer, ZengBeljaarsWarmLayer,
        step_warm_layer!, reset_warm_layer!, warm_layer_warming, warm_layer_depth,
        KrausTurnerMixing, WaterColumn, layer_depths,
@@ -1003,7 +1003,8 @@ export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
 # `advance_channel!` / `run_channel!` do not collide with the Berlin case's
 # `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
 export WallBoundedCase, half_channel_case, channel_case,
-       advance_channel!, run_channel!, channel_dt
+       advance_channel!, run_channel!, channel_dt,
+       channel_richardson, stratified_channel_walls   # P55-f (#191): stratified channel
 # P57-b (#183): the wall-model input — matching height, temporal and
 # wall-parallel filters (log-layer mismatch).
 export MatchingInput, matching_distance, matching_input!, update_input_filter!,

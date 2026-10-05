@@ -1297,7 +1297,9 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
     stratification the Richardson-number reduction of
     [Stability correction](#Stability-correction) (P55-e) applies to the
     Smagorinsky, dynamic and MLSGS closures, on by default for those
-    providers in the Berlin case.
+    providers in the Berlin case; its validation on GABLS1 and the
+    stratified channel (P55-f) is in
+    [Stable boundary layers](stable_boundary_layer.md).
   * The σ-model costs about 8 times the Smagorinsky kernel (6.7 against
     0.85 ms on 64×64×32). It is zero only in *exactly* laminar
     (parallel, 2-D, pure-strain) flow; a laminar but weakly 3-D free

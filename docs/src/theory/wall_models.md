@@ -266,8 +266,12 @@ model's excess dissipation near the filter scale, which the
 scale-dependent model of P54-e is meant to reduce.
 
 Hooks reserved for later issues (documented, refusing non-default
-values): `filter` (P57-b), `surface_heat_flux` (P58-e), `bottom_bc =
-:noslip` and `θ_walls` (P55-f, P59-e).
+values): `filter` (P57-b), `surface_heat_flux` (P58-e). `channel_case`'s
+`bottom_bc = :noslip` and `θ_walls` are implemented by P55-f (#191): a
+wall-resolved channel with `NoSlipWall`s and isothermal θ walls, molecular
+Prandtl number `Pr`, buoyancy reference `θ₀`/`g_accel` and the stress-form
+switch `sgs_stress`; see [Stable boundary layers](stable_boundary_layer.md#The-stably-stratified-channel).
+P59-e (#195) reuses it for the relaminarisation study.
 
 The cases are idealised validation set-ups and are not coupled to the
 Berlin run (a stated exception, #174): the wall physics they exercise is

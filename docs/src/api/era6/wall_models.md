@@ -55,6 +55,11 @@ Era VI. Theory: [Wall models](../../theory/wall_models.md).
   provider `with_roughness` / `dynamic_wall_laws(!)` for `RoughLogLaw` and
   `MOSTWallLaw`; `half_channel_case(; roughness)`. Theory:
   [Wall models → Dynamic roughness](../../theory/wall_models.md).
+- **Wall-resolved, stratified channel** (P55-f, #191):
+  `channel_case(bottom_bc = :noslip, θ_walls = (θ_b, θ_t))` with
+  `stratified_channel_walls(Ri_τ)` and `channel_richardson(case)`; the
+  validation against the DNS of García-Villalba & del Álamo (2011) is in
+  [Stable boundary layers](../../theory/stable_boundary_layer.md).
 
 ```@autodocs
 Modules = [Aeolus.WallModels]

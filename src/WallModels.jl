@@ -120,6 +120,8 @@ using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!, box_filt
 using ..Fields: Field, interior_view
 import ..Operators: phi_m_profile, total_stress_profile
 using ..Simulations: BoussinesqSimulation, step_rk3!
+using ..Operators: laplacian
+using ..BoundaryConditions: NoSlipWall
 using ..TimeSteppers: step!
 using Random
 using ..SurfaceExchange

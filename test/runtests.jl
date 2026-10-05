@@ -997,6 +997,8 @@ end
     include("era6_flat_plate.jl")        # P59-d flat-plate BL: fringe, Blasius, FST, transition (#185)
     include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected, Ri_g-dependent anisotropic ν/κ (#187)
     include("era6_wall_models_dynamic.jl") # P57-e: dynamic z0 of partially resolved roughness (#190)
+    include("era6_gabls1.jl")            # P55-f: GABLS1 on the shared SBL driver, reduced (#191)
+    include("era6_stratified_channel.jl") # P55-f: wall-resolved stably stratified channel vs DNS (#191)
 end
 
 # =========================================================================
