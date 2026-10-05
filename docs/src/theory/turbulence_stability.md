@@ -149,6 +149,195 @@ delegation (test 6).
   discrete ``Ri`` converges to ``J\cosh^4(z/δ)`` with orders 1.92 and
   1.98 (``N_z`` = 32 → 64 → 128, over ``|z| ≤ 2δ``).
 
+## Maximum sustainable heat flux (P58-e)
+
+Monin–Obukhov similarity, read with the **wind held fixed**, limits how
+much heat a stable surface layer can carry downward (Van de Wiel et al.
+2012). With the wind ``U`` at height ``z`` over roughness ``z_{0m}``,
+
+```math
+u_* = \frac{κU}{Φ_m(ζ)}, \qquad
+Φ_m(ζ) = \ln\frac{z}{z_{0m}} - ψ_m(ζ) + ψ_m\!\left(ζ\frac{z_{0m}}{z}\right),
+\qquad ζ = \frac{z}{L} = \frac{zκgQ}{u_*^3θ_{ref}},
+```
+
+for the downward kinematic buoyancy flux ``Q = -\overline{w'θ_v'} > 0``.
+Eliminating ``u_*`` gives the flux as a function of the stability alone:
+
+```math
+Q(ζ) = \frac{κ^2U^3θ_{ref}}{g z}\,\frac{ζ}{Φ_m(ζ)^3}.
+```
+
+``Q = 0`` at neutral (``ζ = 0``). As ``ζ`` grows, ``Q`` rises, because a
+stronger temperature contrast is mixed. ``Q`` then falls, because the
+stratification suppresses ``u_*`` faster than the contrast grows. The
+maximum is the **maximum sustainable heat flux** (MSHF). A surface that
+must lose more heat than this by turbulence, for example a skin under
+strong radiative cooling with little heat from below, has no turbulent
+equilibrium at that wind. Its surface layer collapses.
+
+**Log-linear closed form.** For ``φ_m = 1 + αζ`` the integrated function
+is ``ψ_m = -αζ``, so ``Φ_m = Λ + α(z - z_{0m})ζ/z`` with ``Λ = \ln(z/z_{0m})``.
+In terms of ``u_*`` (use ``κU/u_* = Φ_m``):
+
+```math
+Q(u_*) = \frac{θ_{ref}}{α g (z - z_{0m}) κ}\left(κU\,u_*^2 - Λ\,u_*^3\right).
+```
+
+This is a cubic in ``u_*``. Setting ``dQ/du_* = 2κUu_* - 3Λu_*^2 = 0``
+gives the maximum at
+
+```math
+u_* = \frac{2κU}{3Λ}, \qquad
+Q_{max} = \frac{4}{27}\,\frac{κ^2U^3θ_{ref}}{α\,g\,(z - z_{0m})\,Λ^2},
+\qquad ζ = \frac{Λz}{2α(z - z_{0m})}.
+```
+
+At the maximum ``Φ_m = 3Λ/2``. For ``z_{0m} ≪ z`` this is the form of
+Van de Wiel et al. (2012), with ``z`` in place of ``z - z_{0m}``. Here
+``ψ_m(z_{0m}/L)`` is kept exactly. Note that ``Q_{max} ∝ U^3``: read the
+other way round, ``U_{min} = (Q/Q_{max}(1))^{1/3}`` is the *minimum wind
+for sustainable turbulence* of the paper's title.
+
+**Other families.** `max_sustainable_heat_flux` maximises
+``ζ/Φ_m(ζ)^3`` numerically. A 48-point scan in ``\ln ζ`` over
+``[10^{-6}, 10^3]`` brackets the maximum, then golden-section search
+narrows it to ``|Δ\ln ζ| ≤ 10^{-12}``. This takes about 120 evaluations
+of ``ψ_m``, about 3 µs. For BDBH (Beljaars–Holtslag stable branch) the
+curve is unimodal with an interior maximum. Its MSHF lies between those
+of log-linear ``α = 5`` and ``α = 1``, because ``φ_m`` starts like
+``1 + 5ζ`` and tends to ``1 + ζ``.
+
+The heat roughness ``z_{0h}`` does not enter. With the wind held fixed,
+the flux–stability relation is the momentum half of MOST. Every
+`solve_surface_layer` solution with effective wind ``U`` lies on the
+curve, so its buoyancy flux ``u_*θ_{v*}`` never exceeds ``Q_{max}``.
+
+**Measured (`test/era6_collapse.jl`).**
+
+* *Log-linear ``α = 5``.* The numerical maximum agrees with the closed
+  form to ``5 × 10^{-16}`` (requirement ``10^{-8}``) at four
+  ``(U, z, z_{0m})``. The numerical argmax ``u_*`` matches ``2κU/(3Λ)``
+  to ``7 × 10^{-9}``.
+* *Solver consistency.* Over ``ΔT ∈ [0, 20]`` K, ``U ∈ [0.5, 10]`` m/s
+  (41 × 39 points, ``z = 10`` m, ``z_{0m} = 0.1`` m), the largest ratio
+  ``u_*θ_{v*}/Q_{max}`` is 0.99999976 for BDBH and 0.9999995 for
+  log-linear. The surface flux, as a function of ``ΔT``, comes up to the
+  bound and stops there.
+
+**Flux-prescribed wall law.** `flux_friction_velocity` solves
+``u_* = κU/Φ_m(ζ)`` for a *prescribed* flux. It takes the weakly stable
+root between neutral and the MSHF point, which is the root continuously
+connected to the neutral state. When ``Q > Q_{max}`` it returns 0.
+`WallModels.MOSTFluxWallLaw` is this relation as a wall law. It is the
+wall of `half_channel_case(surface_heat_flux = Q)`, and it exerts **no
+stress** in a column whose wind is too weak for the flux.
+
+### The collapse regime in LES
+
+The flux-cooled half channel is built from three pieces:
+
+* the P54-d case, 16 × 16 × 32 cells on ``2πH × 2πH × H``, with
+  ``z_0/H = 10^{-4}`` and ``-∂p/∂x = u_*^2/H``;
+* the wall law above;
+* `StabilityCorrected(StaticSmagorinsky(0.1); length_scales = :isotropic)`
+  (P55-e).
+
+The anisotropic default length scales give ``Δ_h = 12.6Δz`` on this grid.
+With them even the neutral run relaminarises (resolved TKE falls from
+0.18 to 0.0035 ``u_*^2`` over 20 ``H/u_*``), so the collapse runs use the
+isotropic scales.
+
+Each run starts from a neutral run spun up for 10 ``H/u_*``, and the
+cooling is switched on at that point. The case has **two MSHFs**, both
+taken for the neutral state:
+
+* ``Q_{wall}`` at the wall model's height ``Δz/2 = H/64``, where
+  ``U_0 = 12.63\,u_*``;
+* ``Q_{bulk}`` at ``z = H``, the channel-scale criterion of Donda et al.
+  (2015), who normalise by the half height.
+
+Their ratio is ``Q_{bulk}/Q_{wall} = 0.032``. The table is
+`examples/sbl/collapse_channel.jl`, averaged over 15–20 ``H/u_*``, with
+γ at 20 ``H/u_*``:
+
+| ``H/H_{max}^{wall}`` | ``H/H_{max}^{bulk}`` | TKE/TKE₀ | TKE/TKE₀ lowest third | levels with γ < 0.2 (of 11) | ``U_1/U_0`` | ``τ_w/u_*^2`` |
+| --: | --: | --: | --: | --: | --: | --: |
+| 0 | 0 | 1 | 1 | 0 | 0.993 | 1.02 |
+| 0.0159 | 0.5 | 0.830 | 0.782 | 0 | 0.982 | 0.99 |
+| 0.0636 | 2 | 0.292 | 0.207 | 5 | 0.841 | 0.69 |
+| 0.25 | 7.9 | 0.123 | 0.062 | 11 | 0.859 | 0.64 |
+| 0.5 | 15.7 | 0.114 | 0.071 | 11 | 0.916 | 0.63 |
+| 1 | 31.4 | 0.055 | 0.020 | 11 | 1.027 | 0.60 |
+| 2 | 62.9 | 0.136 | 0.040 | 11 | 1.254 | 0.50 |
+
+TKE₀ = 2.98 ``u_*^2``. The table shows three regimes.
+
+* **Below ``Q_{bulk}``** the channel stays turbulent. At 0.5 ``H_{max}^{bulk}``
+  the TKE is 83 % of neutral.
+* **Between ``Q_{bulk}`` and ``Q_{wall}``** the lowest third is laminar
+  (γ < 0.2 on all 11 levels from 8 ``H_{max}^{bulk}``), but the wall
+  model still exerts stress. The TKE is intermittent: global bursts
+  reach about 2× the neutral TKE (at 8 ``H_{max}^{bulk}``, 6.9 ``u_*^2``
+  near 22 ``H/u_*`` in a 40 ``H/u_*`` run) and decay again.
+  This is the transient collapse of Donda et al. (2015).
+* **Above ``Q_{wall}``** the wall layer itself collapses. The first-level
+  wind accelerates until it is the minimum wind for sustainable
+  turbulence, ``U_1 = (H/H_{max}^{wall})^{1/3}U_0``. At 2
+  ``H_{max}^{wall}`` it is held at 1.253–1.257 ``U_0`` against the
+  predicted ``2^{1/3} = 1.260``, from 5 to 40 ``H/u_*``.
+
+So a single ``H_{max}`` cannot separate the regimes of the issue in this
+case. The test asserts each threshold at the MSHF it belongs to:
+
+* ``H = 0.5H_{max}^{bulk}``: TKE ≥ 30 % of neutral. Measured: 83 %.
+* ``H = 2H_{max}^{wall}``:
+  * γ < 0.2 on all 11 levels of the lowest third;
+  * lowest-third TKE 2.8 % of neutral at 20 ``H/u_*``;
+  * whole-domain TKE 3.6 % at 40 ``H/u_*``.
+
+The whole-domain TKE at 20 ``H/u_*`` is 13 %, not below 5 %. The upper
+two thirds, cut off from the wall shear, decay on their own turnover
+time. So the issue's "< 5 % at 20 turnovers" was the wrong time for the
+whole domain, and the test checks it at 40.
+
+### MSHF in the Berlin case
+
+The `:surface_exchange` coupling evaluates the MSHF of every column at
+every surface step: one maximisation for the column's wind, forcing
+height, ``z_{0m}`` and ``θ_{va}``, through
+`SurfaceExchange.surface_mshf_ratio`. It writes the fields `H_max_sfc`
+and `mshf_ratio`. Its report gives the mean ratio of downward buoyancy
+flux to MSHF over the stable columns of each class (street, roof, park),
+and the share of those columns *beyond* the MSHF point: ``z_{ref}/L``
+past the peak of the flux curve, on the very stable branch where a
+stronger temperature contrast carries less heat (output `mshf_beyond`).
+A small ratio alone does not mean a column is far from collapse: a
+collapsed column also has a small ratio, on the other side of the peak.
+
+Its smoke check asserts ``|H| ≤ H_{max}(1 + 10^{-8})`` for every column
+and every surface step, on the Monin–Obukhov fluxes of the skin at the
+start of the step. The fluxes a soil column *returns* are its linear
+extrapolation in ``T_{skin}`` to the step's mean skin temperature. Near
+the maximum of the concave ``H(T_{skin})`` this extrapolation overshoots
+by ``O(ΔT^2)``: up to 3.1 % in the smoke run, on shaded street columns
+with ``U ≈ 0.6`` m/s and ``H_{max} ≈ 1`` W m⁻². Those fluxes are checked
+against 10 % in the 12-step smoke run, and the measured worst case is
+reported.
+
+That bound does not hold over a full day. In the 06:00→03:00 flagship
+run the delivered ratio reached 402 in the first half hour and 2684 by
+the evening. Instrumenting the worst columns showed why: soil columns at
+near-calm wind (``U ≈ 0.1``–0.3 m/s), where ``H_{max} ∝ U^3`` is only
+0.004–0.07 W m⁻². At the start of the step MOST gives an *upward*
+buoyancy flux (ratio −15 to −72, evaporation). The linearised step then
+delivers dew (``LE ≈ −10`` W m⁻²) and ``H ≈ −1.5`` W m⁻², a small
+downward buoyancy flux that is many times the tiny ``H_{max}``. The
+excess is a few W m⁻² in absolute terms. It is a property of the soil
+skin's linearisation in ``T_{skin}`` and ``q_s``, not of MOST, whose own
+fluxes stay at or below ``H_{max}`` (worst 1.000) all day. The
+diagnostic exposes it; it does not fix it.
+
 ## In the Berlin case
 
 The `turbulence_diag` addon writes the plane-mean ``N^2``, ``Ri_g`` and
@@ -159,6 +348,15 @@ the smoke case.
 
 ## References
 
+* Donda, J. M. M., van Hooijdonk, I. G. S., Moene, A. F., Jonker,
+  H. J. J., van Heijst, G. J. F., Clercx, H. J. H. & van de Wiel,
+  B. J. H. (2015). Collapse of turbulence in stably stratified channel
+  flow: a transient phenomenon. *Q. J. R. Meteorol. Soc.*, 141,
+  2137-2147.
+* Van de Wiel, B. J. H., Moene, A. F., Jonker, H. J. J., Baas, P.,
+  Basu, S., Donda, J. M. M., Sun, J. & Holtslag, A. A. M. (2012). The
+  minimum wind speed for sustainable turbulence in the nocturnal
+  boundary layer. *J. Atmos. Sci.*, 69, 3116-3127.
 * Brown, A. R., Derbyshire, S. H. & Mason, P. J. (1994). Large-eddy
   simulation of stable atmospheric boundary layers with a revised
   stochastic subgrid model. *Q. J. R. Meteorol. Soc.*, 120, 1485-1512.

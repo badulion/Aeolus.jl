@@ -41,10 +41,14 @@ buoyancy_frequency_squared!(N2::Field, θ::Field, qv; θ₀::Union{Real,Abstract
 @inline _θref(θ₀::Real, k) = θ₀
 @inline _θref(θ₀::AbstractVector, k) = @inbounds θ₀[k]
 
-@inline _θv_face(θ, ::Nothing, i, j, k) = 0.5 * (θ[i, j, k-1] + θ[i, j, k])
-@inline function _θv_face(θ, qv, i, j, k)
-    θface  = 0.5 * (θ[i, j, k-1]  + θ[i, j, k])
-    qvface = 0.5 * (qv[i, j, k-1] + qv[i, j, k])
+# θ_v on the face below cell (i, j, k) in direction (di, dj, dk) — the one
+# definition of the moist buoyancy variable at a face (also the horizontal
+# θ_v gradient of the Reynolds-stress closure, P56-d)
+@inline _θv_face(θ, qv, i, j, k) = _θv_face_dir(θ, qv, i, j, k, 0, 0, 1)
+@inline _θv_face_dir(θ, ::Nothing, i, j, k, di, dj, dk) = 0.5 * (θ[i-di, j-dj, k-dk] + θ[i, j, k])
+@inline function _θv_face_dir(θ, qv, i, j, k, di, dj, dk)
+    θface  = 0.5 * (θ[i-di, j-dj, k-dk]  + θ[i, j, k])
+    qvface = 0.5 * (qv[i-di, j-dj, k-dk] + qv[i, j, k])
     return θface * (1 + 0.61 * qvface)
 end
 

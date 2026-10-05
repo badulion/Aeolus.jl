@@ -4,7 +4,8 @@ Era VI resolves the near-wall layer instead of modelling it wherever a
 case is small enough to afford it: laminar and transitional channels,
 the wall-resolved stratified channel, and the laminar checks of the
 turbulence closures. This page collects the wall treatment those runs
-share. Wall-*modelled* runs (the Berlin case among them) keep the
+share and the laminar–turbulent transition diagnostics
+(`Aeolus.Transition`). Wall-*modelled* runs (the Berlin case among them) keep the
 free-slip wall and add the wall-model stress on top.
 
 ## Walls
@@ -116,20 +117,12 @@ unchanged.
 ### The Berlin case
 
 The Berlin ground is not a `NoSlipWall`. It is a rough, wall-modelled
-surface: the MOST stress ``ρu_*^2`` is applied as an implicit drag over a
-free-slip `:wall`, see [The Berlin case](../design/berlin_case.md). A
+surface: the `MOSTWallLaw` stress of `Aeolus.WallModels` (#169) is
+applied as an implicit drag over a free-slip `:wall`, see [The Berlin case](../design/berlin_case.md). A
 resolved no-slip wall at ``Δx = 15.6`` m would put the first velocity
 point ``Δz/2 ≈ 3`` m from the wall, with a viscous sublayer of
 ``ν/u_* ∼ 10^{-4}`` m. `BoundaryConditions` is exempt infrastructure in
 the coverage test, so no Berlin list changes.
-
-### References
-
-- Ferziger, J. H. & Perić, M. (2002). *Computational Methods for Fluid
-  Dynamics*, 3rd ed., Springer, §8.10.
-- Pope, S. B. (2000). *Turbulent Flows*, Cambridge University Press, §7.1.
-- Schlichting, H. (1979). *Boundary-Layer Theory*, 7th ed., McGraw-Hill,
-  ch. V (Stokes' first and second problems).
 
 ## Laminar–turbulent transition
 
@@ -142,9 +135,9 @@ number: ``N^2`` and ``Ri_g`` come from the
 [stability contract](turbulence_stability.md) and its pointwise fields
 (`buoyancy_frequency_squared!`, `gradient_richardson!`).
 
-## Shear instability and intermittency
+### Shear instability and intermittency
 
-### The tanh shear layer
+#### The tanh shear layer
 
 The parallel shear layer ``U(z) = U\tanh(z/δ)`` is inviscidly unstable to
 waves ``e^{iα(x - ct)}``. Its most unstable wavenumber is ``αδ = 0.4446``,
@@ -174,16 +167,21 @@ stepping is projected SSP-RK3 (`step_rk3!` with `body_force!`) at CFL 0.6.
 | ``J = 0.30``, ``αδ = 0.7071`` | 128 × 1 × 256 | ``A(5τ_0)/A(τ_0) = 0.223``, fitted ``σ = -0.054`` | stable: ``Ri_g > 1/4`` everywhere |
 | ``J = 0``, ``αδ = 0.4446``, no SGS | 64 × 1 × 128 | ``σ = 0.1820`` | quoted |
 | the same, Smagorinsky ``C_s = 0.1`` | 64 × 1 × 128 | ``σ = 0.1769`` (−2.8 %) | quoted |
+| the same, σ-model ``C_σ = 1.35`` (P59-b, #184) | 64 × 1 × 128 | ``σ = 0.1820`` (``ν_t ≡ 0``) | within 3 % of no SGS |
 
 The 1.76 % shortfall at ``J = 0`` is the sum of the viscous reduction at
 ``Re = 1000`` and the discretisation error of the second-order operators
 at ``Δx = 0.11δ``. At ``64 × 128`` (``Δx = 0.22δ``) the shortfall grows
 to 4.1 %, so most of it is numerical. The Smagorinsky closure removes
 another 2.8 %, because its ``ν_t`` acts on the laminar shear of the base
-flow. Comparing it with the σ closure, which is zero for a pure shear,
-is P59-b's job.
+flow. The [σ-model](sgs.md#σ-model) (P59-b, #184) does not. Its
+``ν_t`` is zero for any 2-D flow (``σ_3 = 0``), so the layer grows at
+exactly the no-SGS rate. The same property keeps the molecular wall
+stress of a laminar Couette flow ([Walls](#Walls), above) unchanged with
+the SGS on: σ gives ``νU/h`` to 2.8e-14, while Smagorinsky adds
+``(C_sΔ)^2(U/h)/ν`` = 4.5 % at ``Re = 100``, ``N_z = 32``.
 
-### The turbulent fraction γ(z)
+#### The turbulent fraction γ(z)
 
 A cell is turbulent when the vorticity fluctuation exceeds a fraction of
 the mean vorticity magnitude of its level,
@@ -218,7 +216,7 @@ at 0.92 at saturation (``t = 75``):
 ![γ of the shear layer](../assets/transition/kh_gamma.svg)
 ![spanwise vorticity at t = 60, 90, 140](../assets/transition/kh_vorticity.png)
 
-### Time-series intermittency
+#### Time-series intermittency
 
 The intermittency factor is the fraction of time a signal spends above a
 threshold (Townsend 1976): `intermittency_factor(series; threshold)`
@@ -226,7 +224,7 @@ counts samples, and `intermittency_factor(t, series; threshold)` weights
 each sample by the interval it starts. An on/off signal with duty cycle
 0.3 gives 0.3 exactly.
 
-### Flux Richardson number, buoyancy Reynolds number, V_TKE
+#### Flux Richardson number, buoyancy Reynolds number, V_TKE
 
 ```math
 Ri_f = -\frac{B}{P}, \qquad B = \frac{g}{θ_0}⟨w'θ'⟩, \qquad
@@ -251,7 +249,7 @@ Moum 2000). The turbulence velocity scale of Sun et al. (2012) is
 field) are the transition diagnostics of the Berlin
 [`turbulence_diag` addon](../design/berlin_case.md).
 
-### Growth-rate fit
+#### Growth-rate fit
 
 `growth_rate(t, A)` fits ``\ln A = σt + c`` by least squares. Without an
 explicit window it picks the longest run of samples that meets two
@@ -262,7 +260,247 @@ saturation still passes 0.999, but its rate is biased: 0.1859 instead of
 0.1864 in the KH test, and 2.8 % low on a synthetic saturating series,
 where the thirds criterion is 0.3 % low.
 
+## Flat-plate transition
+
+P59-d (#185) adds the spatially developing zero-pressure-gradient
+flat-plate boundary layer: the Blasius solution, the fringe region that
+makes such a layer possible on the `x`-periodic FFT grid, a free-stream
+top boundary, free-stream turbulence, and the integral diagnostics that
+locate transition. Everything lives in `Aeolus.Transition`, except the
+damping profile (`Operators`) and the top boundary (`BoundaryConditions`).
+
+### The Blasius layer
+
+[`blasius_solution`](@ref Aeolus.Transition.blasius_solution) integrates
+``f''' + \tfrac12 f f'' = 0``, ``f(0) = f'(0) = 0``, ``f'(∞) = 1`` with
+classical RK4 (12 000 steps on ``0 ≤ η ≤ 12``) and finds ``s = f''(0)``
+by a secant iteration on ``f'(η_{\max}; s) - 1``. Five iterations give
+``f''(0) = 0.3320573362`` (Howarth 1938: 0.332057), the displacement
+constant ``∫(1 - f')dη = 1.7207876575``, ``θ`` constant ``0.6641146724
+= 2f''(0)`` to 1e-10 (the momentum-integral identity, checked by an
+independent Simpson quadrature), ``η_{99} = 4.90999`` and
+``H = 2.59110``. [`blasius_profile`](@ref Aeolus.Transition.blasius_profile)
+is the cubic Hermite interpolant of the table (``f'``, ``f''`` and
+``f''' = -\tfrac12 f f''`` are all tabulated, so each interpolant is C¹),
+and [`blasius_velocity`](@ref Aeolus.Transition.blasius_velocity) returns
+``u = U f'``, ``w = \tfrac12\sqrt{νU/x}\,(ηf' - f)``.
+
+### The fringe region
+
+A spatially developing layer grows downstream, so a periodic domain needs
+a region that returns the outflow to the inflow. The fringe of
+Nordström, Nordin & Henningson (1999) adds
+``-λ(x)(\mathbf u - \mathbf u_{\rm target})`` with
+
+```math
+λ(x) = λ_{\max}\Big[S\Big(\frac{x - x_{\rm start}}{Δ_{\rm rise}}\Big)
+                    - S\Big(\frac{x - x_{\rm end}}{Δ_{\rm fall}} + 1\Big)\Big],
+\qquad
+S(x) = \frac{1}{1 + \exp\big(\frac{1}{x - 1} + \frac{1}{x}\big)}\ (0 < x < 1),
+```
+
+``S = 0`` below and ``1`` above (their eq. 2.3). The rate comes from the
+`Operators.DampingProfile` with a `NordstromRamp`, the same type, rate
+function and kernel (`_add_damping!`) that the Rayleigh sponge
+[`add_sponge!`](@ref Aeolus.Operators.add_sponge!) uses with its
+`SinSquaredRamp`: one damping-profile implementation for every
+relaxation term. `add_sponge!` is bit for bit unchanged on all three mesh
+types (asserted against the verbatim Phase-7 kernel; the Berlin smoke run
+gives an identical state with either kernel).
+
+The target is the Blasius layer at the
+[`fringe_distance`](@ref Aeolus.Transition.fringe_distance) — the
+distance from the leading edge of the upstream periodic image inside the
+fringe — so the profile the fringe releases is already developing at the
+right rate and its ``w`` satisfies continuity. A target frozen at the
+inflow ``x_{in}`` released a layer with ``H = 2.37`` instead of 2.59 at
+the inflow, and ``c_f`` stayed 4–5 % low for half the plate.
+
+### The free-stream boundary
+
+A closed lid cannot hold a growing layer: the free stream must
+accelerate by ``Δδ^*/H`` and the layer feels a favourable pressure
+gradient. On the 2-D test grid (``H = 16δ^*_0``) a free-slip lid gave
+``c_f`` 16–28 % above Blasius, even normalised by the local edge
+velocity. [`FreeStreamBoundary`](@ref Aeolus.BoundaryConditions.FreeStreamBoundary)
+is the far-field condition of the spatial DNS of Spalart (1988) and
+Brandt et al. (2004): zero shear for ``u, v`` and a prescribed
+transpiration ``w = W(x)`` on the top face. The pressure problem stays a
+Neumann problem (the face value enters the divergence of the top cell),
+so the cosine FFT solver remains exact, provided the net transpiration
+vanishes. [`blasius_freestream`](@ref Aeolus.Transition.blasius_freestream)
+prescribes the displacement velocity
+``W_∞ = U\,dδ^*/dx = 0.8604\,U/\sqrt{Re_x}`` and returns the plate's
+outflow through a bump confined to the fringe rise, upstream of the
+plateau where the velocity is pinned.
+
+The momentum budget of one explicit step closes exactly:
+``\frac{d}{dt}∫u\,dV = ∫F_{\rm fringe}dV - τ_w A - ∮u\,w_{\rm top}dA``,
+residual 5e-12 (2e-13 relative) with the lid and with the free-stream
+top.
+
+### Laminar plate
+
+[`flat_plate_setup`](@ref Aeolus.Transition.flat_plate_setup) assembles
+the case in units of the inflow ``δ^*_0`` and ``U_∞``. In 2-D at
+``Re_{δ^*_0} = 200`` (256 × 64 cells on 512 × 16 ``δ^*_0``, plate
+``Re_x`` = 1.35e4 to 1.0e5), started from a uniform stream and run for
+1200 RK3 steps (12 s), the layer develops from the fringe inflow to
+``c_f/c_{f,\rm Blasius} ∈ [0.9982, 1.0001]`` and ``H ∈ [2.574, 2.583]``
+over the middle 60 % of the plate; the target is recovered at the fringe
+exit to 5.2e-4 ``U``. The issue's σ-model variant of this check is not
+run separately: P59-b (#184) merged after this section was written, and
+in this 2-D flow (``N_y = 1``, ``v = 0``) the velocity gradient has rank
+≤ 2, so ``σ_3 = 0`` and the [σ-model](sgs.md#σ-model)'s ``ν_t`` vanishes
+identically; the variant would reproduce the run above.
+
+### Free-stream turbulence and bypass transition
+
+[`FreeStreamDisturbance`](@ref Aeolus.Transition.FreeStreamDisturbance)
+represents isotropic turbulence by random Fourier modes
+(Jacobs & Durbin 2001; Brandt et al. 2004) with the von Kármán spectrum
+``E(κ) = \tfrac23 a (κL)^4/(b + (κL)^2)^{17/6}\,Lq``. The velocity is the
+grid curl of a vector potential sampled on the cell edges, so its
+discrete divergence is zero to round-off (3.9e-16 measured); the energy
+is scaled to ``q = \tfrac32 (Tu\,U)^2`` and the spectrum length
+calibrated so the discrete mode set has the requested ``L_{11}``
+(measured on a 512 × 32 × 32 box with 400 modes: Tu 0.0497 for 0.05,
+``L_{11}`` 1.042 for 1.0 with seed 1; one realisation scatters with the
+seed — 0.82–1.43 over seeds 1–16, standard deviation 0.14 — and the
+ensemble mean over those 16 seeds is 1.027, which is what the test
+asserts). The disturbances enter through the fringe
+target as Taylor's frozen turbulence
+([`disturbance_fringe_update`](@ref Aeolus.Transition.disturbance_fringe_update)),
+kept out of the inflow layer by a damping of the vector potential.
+
+The onset is located by
+[`transition_onset`](@ref Aeolus.Transition.transition_onset): the
+minimum of ``c_f`` upstream of the point from which ``c_f`` stays 10 %
+above laminar. In the coarse 3-D sanity test (96 × 24 × 48,
+``Re_{δ^*_0} = 300``, plate ``Re_x`` = 3.0e4 to 1.26e5, ``c_f`` averaged
+over the last 200 of 700 steps) Tu = 6 % raises the outlet ``c_f``
+(``Re_x`` 1.03e5–1.17e5) to 3.47 times Blasius. Two laminar controls
+run beside it:
+
+* **Tu = 0 in 2-D** (``N_y = 1``), the cheap exact check: without a seed
+  the 3-D run stays exactly 2-D. Outlet ``c_f`` 1.015 times Blasius
+  (2 s).
+* **Tu = 0.1 % in 3-D** on the same grid, seeded by the same
+  `FreeStreamDisturbance` generator at 1/60 of the amplitude (55 s on
+  3 threads). This checks that the laminar layer survives small 3-D
+  disturbances. It does not transition:
+
+| quantity (seeded 3-D control) | measured | asserted |
+| :-- | :-- | :-- |
+| ``c_f / c_f(\text{2-D}, Tu = 0)``, pointwise, ``Re_x`` 3.5e4–1.17e5 | 0.9981–0.9995 | within 1 % |
+| ``[1\,2\,1]``-filtered ``c_f`` / Blasius, ``Re_x`` 3.5e4–1.12e5 | 0.9805–1.0074 | within 5 % |
+| the same at 0.9 of the plate (``Re_x`` 1.17e5) | 1.052 | — |
+| ``v_{\rm rms}`` in the layer, sampled every 50 steps | rises to 1.97e-3 by step 500, then falls to 1.34e-3 | < 5e-3 throughout |
+| mean layer ``v_{\rm rms}``, steps 550–700 over steps 400–550 | 0.795 | < 1.2 |
+| free-stream ``v_{\rm rms}`` | 0.90e-3 | 0.5e-3–1.5e-3 |
+| layer ``v_{\rm rms}`` at Tu = 6 % (for scale) | 8.2e-2 | > 10× the control |
+
+The disturbances need about one flow-through (≈ 270 steps) to fill the
+plate. After that, the spanwise velocity in the layer stays at about
+twice the free-stream value and decays over the last 300 steps. It does
+not grow. ``Re_{δ^*}`` reaches 589 at 0.9 of the plate, which is above
+the Tollmien–Schlichting critical value of 520 (``Re_x ≈ 9.1\times10^4``).
+The unstable stretch is too short for TS waves to grow anywhere near
+transition amplitudes, and the measured ``c_f`` shows no sign of them.
+The 5 % tolerance matches the 2-D laminar plate. Blasius is a
+parallel-flow similarity solution, the two ends of the plate feel the
+inflow (−2 %) and the fringe, and transition would add 50 % or more. At
+0.9 of the plate the fringe alone raises ``c_f`` by 5 %: a 2-D Tu = 0 run
+at ``Δx = 2.1`` gives 1.053 at the same point. That is why the Blasius
+window stops 48 ``δ^*_0`` before the fringe. A first version ran to 0.9
+of the plate and failed there; the expectation was wrong, not the code.
+
+**Finding: a grid-scale wiggle on the coarse grid.** At
+``Δx = 4.2\,δ^*_0`` both laminar runs, with and without the seed, carry
+the same stationary ``2Δx`` (odd–even) oscillation in ``c_f``. It is
+±0.6 % near the inflow and grows to ±17 % just upstream of the fringe,
+so the unfiltered ``c_f``/Blasius is 0.88–1.22 over the plate. The
+outlet-window average used for the Tu = 0 number (1.015) hides it. It is
+a resolution artefact: the 2-D control at ``Δx = 2.1\,δ^*_0`` has it at
+±0.03 % and stays within 1.6 % of Blasius up to ``x ≈ 265\,δ^*_0``. The
+``[1\,2\,1]/4`` filter removes exactly this mode, which is why the
+Blasius comparison uses filtered ``c_f``. The grids of the 2-D laminar
+plate (``Δx = 2``) and of the T3A-like example (``Δx = 1.04``) are fine
+enough not to need it.
+
+The T3A-like example (`examples/transition/flat_plate_t3a.jl`, Tu = 3.3 %
+as in Roach & Brierley 1992) runs 576 × 64 × 96 cells on
+600 × 36 × 24 ``δ^*_0`` (``Re_x`` = 3.0e4 to 1.9e5; ``Δx = 1.04``,
+``Δy = 0.56``, ``Δz = 0.25\,δ^*_0``, i.e. ``Δx^+ ≈ 17``, ``Δy^+ ≈ 9``,
+``Δz^+ ≈ 4`` with the downstream ``u_τ``) without an SGS model —
+a Smagorinsky ``ν_t`` from the laminar wall shear alone would be several
+times ``ν`` and keep the layer laminar.
+
+Measured (1500 RK3 steps at ``Δt = 1\,δ^*_0/U``, statistics over the
+last 600; 8034 s, 5.4 s per step on 8 threads of a shared machine):
+
+| quantity | result | reference |
+| :-- | :-- | :-- |
+| free-stream Tu (streamwise) | 3.23 % at the inflow, 2.77 % at ``Re_x = 10^5``, 2.60 % at the plate end | 3.3 % requested |
+| onset (minimum of ``c_f``) | ``x = 48\,δ^*_0``, ``Re_x = 4.48\times10^4`` | — |
+| ``Re_θ`` at onset, measured ``θ`` | 198 | Mayle (1991) 190 (+5 %), Abu-Ghannam & Shaw (1980) 200 (−1 %) |
+| ``Re_θ`` at onset, Blasius ``θ`` at that ``Re_x`` | 141 | −26 % / −30 % |
+| downstream ``c_f/(0.0576\,Re_x^{-1/5})``, ``Re_x`` 1.2e5–1.8e5 | 1.057–1.135 (mean 1.084) | issue target: within 20 % — met |
+| downstream ``H`` | 1.45–1.50 | ≈ 1.4 |
+
+The onset is within the ±30 % band of both correlations whichever ``θ`` is
+used (the free-stream turbulence thickens the pre-transitional layer, so
+the measured ``θ`` at onset is 40 % above Blasius). Against the ``Re_θ``
+form ``0.024\,Re_θ^{-1/4}`` (Kays & Crawford) at the measured
+``Re_θ`` = 443–552 the ratio is 1.12–1.17.
+
+The turbulent ``c_f`` of this model-free calculation is
+resolution-limited. Refining ``z`` alone saturates near 1.2 at the
+coarse ``Δx, Δy``; the streamwise and spanwise spacing has to come down
+with it. Same case, same seed, same 1500-step protocol:
+
+| grid ``N_x × N_y × N_z`` | ``Δx, Δy, Δz`` (``δ^*_0``) | ``c_f/(0.0576\,Re_x^{-1/5})``, ``Re_x`` 1.2e5–1.8e5 | onset ``Re_θ`` |
+| :-- | :-- | :-- | :-- |
+| 288 × 32 × 48 | 2.08, 1.13, 0.50 | 1.260–1.387 (mean 1.297) | 190 |
+| 288 × 32 × 96 | 2.08, 1.13, 0.25 | 1.180–1.248 (mean 1.211) | 191 |
+| 288 × 32 × 128 | 2.08, 1.13, 0.19 | 1.156–1.258 (mean 1.204) | 191 |
+| 432 × 48 × 96 | 1.39, 0.75, 0.25 | 1.122–1.200 (mean 1.173) | 232 |
+| 576 × 64 × 64 | 1.04, 0.56, 0.38 | 1.135–1.197 (mean 1.162) | 199 |
+| **576 × 64 × 96** (the example) | 1.04, 0.56, 0.25 | **1.057–1.135 (mean 1.084)** | 198 |
+
+The first row is what the example ran before; it missed the 20 % target.
+The local edge velocity is within 0.7 % of ``U_∞`` downstream on every
+grid, so normalising by it changes none of these ratios by more than 0.012.
+
+![c_f of the T3A-like plate](../assets/transition/t3a_cf.svg)
+
+The boundary-layer integrals of a disturbed layer are taken to its
+[`boundary_layer_edge`](@ref Aeolus.Transition.boundary_layer_edge): the
+fringe-fed free stream carries a ≈ 0.5 % mean deficit, and integrating
+to the top inflated ``θ`` by 50 % at the inflow.
+
+### The Berlin case
+
+Stated exception (#185): the Berlin domain is laterally periodic with
+geostrophic forcing and has no inflow direction, so a fringe, a
+free-stream top and an inflow generator have no place in it; inflow
+boundaries arrive with nesting and ERA5 driving (Phase 68). Transition
+stays coupled through the `turbulence_diag` addon (P59-c), and the
+Rayleigh sponge of every Berlin step now takes its rate from the shared
+damping profile (state bit-identical to the Phase-7 kernel in the smoke
+run). No Berlin list changed.
+
 ## References
+
+### Wall treatment
+
+- Ferziger, J. H. & Perić, M. (2002). *Computational Methods for Fluid
+  Dynamics*, 3rd ed., Springer, §8.10.
+- Pope, S. B. (2000). *Turbulent Flows*, Cambridge University Press, §7.1.
+- Schlichting, H. (1979). *Boundary-Layer Theory*, 7th ed., McGraw-Hill,
+  ch. V (Stokes' first and second problems).
+
+### Transition diagnostics
 
 * Brandt, L., Schlatter, P. & Henningson, D. S. (2004). Transition in
   boundary layers subject to free-stream turbulence. *J. Fluid Mech.*,
@@ -288,3 +526,29 @@ where the thirds criterion is 0.3 % low.
   during CASES-99. *J. Atmos. Sci.*, 69, 338-351.
 * Townsend, A. A. (1976). *The Structure of Turbulent Shear Flow*, 2nd
   ed. Cambridge University Press.
+
+### Flat-plate boundary layer
+
+* Abu-Ghannam, B. J. & Shaw, R. (1980). Natural transition of boundary
+  layers — the effects of turbulence, pressure gradient, and flow
+  history. *J. Mech. Eng. Sci.*, 22, 213-228.
+* Blasius, H. (1908). Grenzschichten in Flüssigkeiten mit kleiner
+  Reibung. *Z. Math. Phys.*, 56, 1-37.
+* Howarth, L. (1938). On the solution of the laminar boundary layer
+  equations. *Proc. R. Soc. Lond. A*, 164, 547-579.
+* Jacobs, R. G. & Durbin, P. A. (2001). Simulations of bypass
+  transition. *J. Fluid Mech.*, 428, 185-212.
+* Kays, W. M. & Crawford, M. E. (1993). *Convective Heat and Mass
+  Transfer*, 3rd ed., McGraw-Hill.
+* Mayle, R. E. (1991). The role of laminar-turbulent transition in gas
+  turbine engines. *J. Turbomach.*, 113, 509-537.
+* Nordström, J., Nordin, N. & Henningson, D. (1999). The fringe region
+  technique and the Fourier method used in the direct numerical
+  simulation of spatially evolving viscous flows. *SIAM J. Sci.
+  Comput.*, 20(4), 1365-1393.
+* Roach, P. E. & Brierley, D. H. (1992). The influence of a turbulent
+  free-stream on zero pressure gradient transitional boundary layer
+  development. Part I. In *Numerical Simulation of Unsteady Flows and
+  Transition to Turbulence*, Cambridge University Press, 319-347.
+* Spalart, P. R. (1988). Direct simulation of a turbulent boundary
+  layer up to R_θ = 1410. *J. Fluid Mech.*, 187, 61-98.

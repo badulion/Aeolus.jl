@@ -38,3 +38,13 @@ Aeolus.BoundaryConditions.NoSlipWall
 Aeolus.BoundaryConditions.is_wall
 Aeolus.BoundaryConditions.homogeneous_bcs
 ```
+
+## Free-stream top (P59-d, #185)
+
+The top face of a spatially developing boundary layer: zero shear and a
+prescribed transpiration velocity (theory in
+[Transition and wall-bounded flow](../theory/transition.md#Flat-plate-transition)).
+
+```@docs
+Aeolus.BoundaryConditions.FreeStreamBoundary
+```

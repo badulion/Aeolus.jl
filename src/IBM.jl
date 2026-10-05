@@ -16,7 +16,7 @@ using ..Fields: Field, interior_view
 using ..Simulations: BoussinesqSimulation
 
 export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
-       implicit_ibm_correction!
+       implicit_ibm_correction!, wall_distance, first_level_cells
 
 """
     SolidMask(mesh; init = zeros)
@@ -149,6 +149,150 @@ function implicit_ibm_correction!(sim, sm::SolidMask; τ::Real = 0.0, dt::Real =
         end
     end
     return sim
+end
+
+# =========================================================================
+# Wall distance (Era VI, P56-b #182) — the one source of truth for the
+# distance from a cell centre to the nearest solid surface.
+# =========================================================================
+
+"""
+    wall_distance(sm::SolidMask; bottom = true, top = false,
+                  periodic = (true, true, false), maxsweeps = 50) -> Array{T,3}
+
+Distance (m) from the centre of every interior cell to the nearest solid
+surface, an interior-sized `Nx × Ny × Nz` array (0 in solid cells). The
+surfaces are the faces of the solid cells of `sm` (each solid cell is the
+box it occupies) and, with `bottom = true` (`top = true`), the domain floor
+(lid).
+
+A **vector distance transform** (Danielsson 1980), the chamfer-type
+raster-sweep algorithm that propagates the nearest surface *point* rather
+than a scalar distance, with no dependencies:
+
+1. *Seed.* A fluid cell next to a surface stores the displacement to the
+   exact nearest point of it: the centre clamped into the box of each solid
+   neighbour among its 26 (`Δz/2` above a floor or roof, `Δx/2` beside a
+   wall, `√(Δx² + Δz²)/2` off a roof edge), or the foot point on the floor
+   (lid) for level 1 (`Nz`).
+2. *Propagate.* Forward and backward raster sweeps over the
+   26-neighbourhood offer each cell its neighbours' nearest points,
+   `r(c) ← r(n) + (x_n − x_c)`, and keep the closest, until nothing changes
+   (`periodic` wraps the lateral neighbours across the seam).
+
+The distance is exact for a plane surface aligned with the grid
+(`d = Δz/2 + (k−1)Δz` above a floor) and next to every surface; elsewhere
+the raster propagation can miss the true nearest point only in rare
+configurations (Danielsson 1980). Around a cube on a 2:2:1 grid it equals
+the Euclidean distance to the box to round-off (`test/era6_tke.jl`); a
+plain chamfer transform with the 26 step lengths overestimated it there by
+up to 24 %.
+
+The TKE closure (`PrognosticSGS.TKEClosure`) caps its mixing length at
+`κ · wall_distance`; every Era VI closure that needs a wall distance takes
+it from here.
+
+References: Danielsson, P.-E. (1980), *Euclidean distance mapping*, Comput.
+Graph. Image Process. 14, 227; Borgefors, G. (1986), *Distance
+transformations in digital images*, Comput. Vision Graph. Image Process.
+34, 344.
+"""
+function wall_distance(sm::SolidMask; bottom::Bool = true, top::Bool = false,
+                       periodic::NTuple{3,Bool} = (true, true, false), maxsweeps::Integer = 50)
+    m = sm.mesh
+    T = typeof(m.dx)
+    Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
+    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
+    dx, dy, dz = m.dx, m.dy, m.dz
+    solid = Array{Bool}(undef, Nx, Ny, Nz)
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        solid[i, j, k] = sm.mask[Hx+i, Hy+j, Hz+k]
+    end
+    offs = [(a, b, c) for c in -1:1 for b in -1:1 for a in -1:1 if (a, b, c) != (0, 0, 0)]
+    # neighbour index with wrap-around (or `0` outside a non-periodic edge)
+    @inline wrap(i, N, p) = 1 <= i <= N ? i : (p ? mod1(i, N) : 0)
+    # displacement from the cell centre to its nearest surface point
+    inf = T(Inf)
+    rx = fill(inf, Nx, Ny, Nz); ry = fill(inf, Nx, Ny, Nz); rz = fill(inf, Nx, Ny, Nz)
+    n2(x, y, z) = x * x + y * y + z * z
+    # 1. seed: the exact nearest point of every adjacent surface
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        if solid[i, j, k]
+            rx[i, j, k] = ry[i, j, k] = rz[i, j, k] = zero(T)
+            continue
+        end
+        bx, by, bz = inf, inf, inf
+        if bottom && k == 1
+            bx, by, bz = zero(T), zero(T), -dz / 2
+        end
+        if top && k == Nz && n2(0, 0, dz / 2) < n2(bx, by, bz)
+            bx, by, bz = zero(T), zero(T), dz / 2
+        end
+        for o in offs
+            ii = wrap(i + o[1], Nx, periodic[1]); jj = wrap(j + o[2], Ny, periodic[2])
+            kk = wrap(k + o[3], Nz, periodic[3])
+            (ii == 0 || jj == 0 || kk == 0) && continue
+            solid[ii, jj, kk] || continue
+            # the centre clamped into the neighbour's box: offset o·(Δ/2) per axis
+            cx, cy, cz = o[1] * dx / 2, o[2] * dy / 2, o[3] * dz / 2
+            n2(cx, cy, cz) < n2(bx, by, bz) && ((bx, by, bz) = (cx, cy, cz))
+        end
+        rx[i, j, k], ry[i, j, k], rz[i, j, k] = bx, by, bz
+    end
+    # 2. propagate the nearest points: forward (neighbours earlier in raster
+    #    order), then backward, until no displacement changes
+    fwd = [o for o in offs if (o[3], o[2], o[1]) < (0, 0, 0)]
+    bwd = [o for o in offs if (o[3], o[2], o[1]) > (0, 0, 0)]
+    function sweep!(order, os)
+        changed = false
+        @inbounds for k in order[3], j in order[2], i in order[1]
+            solid[i, j, k] && continue
+            bx, by, bz = rx[i, j, k], ry[i, j, k], rz[i, j, k]
+            best = n2(bx, by, bz)
+            for o in os
+                ii = wrap(i + o[1], Nx, periodic[1]); jj = wrap(j + o[2], Ny, periodic[2])
+                kk = wrap(k + o[3], Nz, periodic[3])
+                (ii == 0 || jj == 0 || kk == 0) && continue
+                solid[ii, jj, kk] && continue            # seeds already hold solid boxes
+                isfinite(rx[ii, jj, kk]) || continue
+                cx = rx[ii, jj, kk] + o[1] * dx
+                cy = ry[ii, jj, kk] + o[2] * dy
+                cz = rz[ii, jj, kk] + o[3] * dz
+                c = n2(cx, cy, cz)
+                if c < best
+                    best = c; bx, by, bz = cx, cy, cz; changed = true
+                end
+            end
+            rx[i, j, k], ry[i, j, k], rz[i, j, k] = bx, by, bz
+        end
+        return changed
+    end
+    for _ in 1:maxsweeps
+        a = sweep!((1:Nx, 1:Ny, 1:Nz), fwd)
+        b = sweep!((Nx:-1:1, Ny:-1:1, Nz:-1:1), bwd)
+        (a || b) || break
+    end
+    return sqrt.(rx .^ 2 .+ ry .^ 2 .+ rz .^ 2)
+end
+
+"""
+    first_level_cells(sm::SolidMask; bottom = true) -> Array{Bool,3}
+
+The fluid cells at the first grid level above a surface: those with a solid
+cell directly below, and (with `bottom = true`) every fluid cell of level 1
+(above the domain floor). Interior-sized. The TKE closure multiplies its
+dissipation coefficient there by Moeng's (1984) factor 3.9.
+"""
+function first_level_cells(sm::SolidMask; bottom::Bool = true)
+    m = sm.mesh
+    Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
+    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
+    f = falses(Nx, Ny, Nz)
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        sm.mask[Hx+i, Hy+j, Hz+k] && continue
+        f[i, j, k] = k == 1 ? bottom : sm.mask[Hx+i, Hy+j, Hz+k-1]
+    end
+    return Array{Bool}(f)
 end
 
 end # module

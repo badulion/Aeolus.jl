@@ -167,7 +167,8 @@ end
     @test Uc ≈ reverse(Uc)                         # symmetric about the centreline
     @test abs(friction_velocity(ch.wall.law, Uc[1], ch.sim.mesh.dz / 2; ν = ch.sim.ν) - 0.2) < 1e-12
     # reserved hooks of later issues are documented but refuse to run
-    @test_throws ArgumentError half_channel_case(; surface_heat_flux = 0.1)
+    # (surface_heat_flux was reserved here; P58-e (#193) implemented it — see era6_collapse.jl)
+    @test_throws ArgumentError half_channel_case(; surface_heat_flux = :cooling)
     @test_throws ArgumentError half_channel_case(; bottom_bc = :noslip)
     @test_throws ArgumentError half_channel_case(; θ_walls = (300.0, 290.0))
     @test_throws ArgumentError half_channel_case(; filter = :box)
@@ -175,6 +176,11 @@ end
     # P55-f (#191, test/era6_stratified_channel.jl); only invalid values throw
     @test_throws ArgumentError channel_case(; bottom_bc = :bogus)
     @test_throws ArgumentError channel_case(; θ_walls = (0.0, 1.0))   # θ walls need :noslip
+    # a resolved (:noslip) wall has no wall model, so the wall-model keywords
+    # of P57-b / P57-c (#183, #189) do not combine with it
+    @test_throws ArgumentError channel_case(; bottom_bc = :noslip, h_wm_cells = 2)
+    @test_throws ArgumentError channel_case(; bottom_bc = :noslip, filter = :temporal)
+    @test_throws ArgumentError channel_case(; bottom_bc = :noslip, wall_model = :nonequilibrium)
     @test_throws ArgumentError channel_case(; walls = :top)
     @test_throws ArgumentError half_channel_case(; formulation = :bogus)
     # closure and wall law are arguments: MOST and a Moeng wall run as given

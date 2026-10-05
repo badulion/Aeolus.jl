@@ -74,15 +74,78 @@ Slot `:surface_exchange`, provider `:most` (default).
   instantaneous first-air-cell wind (L held from the surface step), and
   `bus.u_star` is that step's ``u_τ`` (before #169 the stress
   ``u_*^2/U`` of the surface step was held between surface steps).
+* **Wall-model input** (P57-b, #183; `WallModels.MatchingInput`): the
+  wind the law is evaluated at is the first-air-cell wind passed through
+  the exponential time filter of Yang, Park & Moin (2017), time scale
+  `input_T_f` (default 10 s, the order of the eddy time ``z_{ref}/u_*``
+  of the 6.25 m first cell in a daytime wind; `0` switches it off),
+  advanced once per accepted step in `:surface_update`. The stress keeps
+  the direction of the instantaneous first-cell wind. The matching
+  height stays at the first air cell (`h_wm_cells = 1`): three cells
+  above a street (18.75 m) lie in or above the canyon, where no log law
+  holds. `h_wm_cells = n` samples the `n`-th air cell (``(n-½)Δz``) of
+  the columns whose class is in `h_wm_classes` (default park and water,
+  the open surfaces; a column whose `n`-th cell is not air falls back to
+  its first) — a smoke variant.
+* **Non-equilibrium wall model** (P57-c, #189; option `wall_model =
+  :nonequilibrium`, default `:equilibrium`): the ground stress is that of
+  a `WallModels.TBLEWallModel` instead of the `MOSTWallLaw` — the
+  thin-boundary-layer equations on a 30-point column under every ground
+  and roof column, between the surface (u = 0, the column's own `z0m`,
+  rough-wall eddy viscosity ``κu_τ(y + z_{0m})``) and the matching point
+  of the same `MatchingInput` (time-filtered wind), with the pressure
+  gradient of the resolved `p` at the first air level (one-sided next to
+  a building) and the terms of `tble_terms` (default
+  `:pressure_gradient`). The columns' stress is applied by the same
+  `apply_wall_stress!` face loop in `:post_predictor`; the columns are
+  advanced once per step in `:surface_update`; `bus.u_star` is their
+  ``u_τ`` (set again after a surface step, whose MOST ``u_*`` stays
+  internal to its heat and moisture fluxes). **Neutral:** the Monin–Obukhov stability correction of the
+  equilibrium law is not carried into the TBLE (its eddy viscosity has no
+  buoyancy term until P58). The surface-layer heat and moisture fluxes
+  are unchanged (MOST). A smoke variant runs it.
 * **Extra energy.** `bus.sensible` (energy other couplings take from the
   surfaces, W m⁻²) is collected every step in `:surface_update` and
   handed to the surfaces as `Q_extra` at their next step.
+* **Maximum sustainable heat flux** (P58-e, #193), every surface step:
+  per column, `SurfaceExchange.surface_mshf_ratio` of the MOST fluxes of
+  the skin at the start of the step (`turbulent_fluxes`), one 1-D
+  maximisation at the column's wind, `z_ref`, `z0m` and ``θ_{va}``
+  (Van de Wiel et al. 2012). `H_max` (W m⁻²) and the ratio of the downward
+  buoyancy flux to the MSHF are output fields; the report prints the
+  mean ratio of the stable street, roof and park columns and the share
+  of them beyond the MSHF point (``z_{ref}/L`` past the peak of the flux
+  curve: the very stable, collapsed branch); the smoke
+  check asserts ratio ≤ 1 + 1e-8 everywhere (and < 1.1 for the fluxes
+  the surface returned, which a soil skin linearises in ``T_{skin}``).
+
+* **Dynamic roughness** (P57-e, #190; option `z0m = :dynamic`, off by
+  default): the ground wall law's momentum roughness becomes the dynamic
+  roughness of Anderson & Meneveau (2011), `WallModels.DynamicRoughness`:
+  ``z_0 = \\sqrt{z_{0,f}^2 + α^2σ_Δ^2}``, ``σ_Δ`` the RMS of the OSM
+  building heights *below* the grid — the footprints rasterised on a grid
+  `dynamic_refine` times finer, with their true heights, about the
+  immersed-boundary staircase the LES resolves (``(k_{air}-1)Δz``), i.e.
+  the staircase loss — and ``z_{0,f}`` each column's own roughness
+  (the per-class table, which stays the roughness of the surface-layer
+  solve, so H, LE and the Obukhov length are unchanged). α is solved at
+  every surface step (the `period` cadence, not every step) from the
+  first-air-cell wind, test filter `dynamic_filter` (`:spectral`,
+  default, or `:box`), resolved-relief drag coefficient `dynamic_C_d`.
+  The default stays the table: the dynamic value's Berlin calibration has
+  not been reviewed, and with buildings resolved at 15.6 m the sub-filter
+  relief is only staircase loss. A smoke variant.
 
 Options: `U_min` (m s⁻¹, the minimum wind of the surface-layer solve),
-`z0m` (per class, m), `z0h_ratio` (``z_{0h} = z_{0m}``·ratio),
+`z0m` (per class, m; or `:dynamic`, above), `z0h_ratio` (``z_{0h} = z_{0m}``·ratio),
 `period` (s, overrides the cadence), `wall_formulation` (`:local`,
 default; `:schumann` or `:moeng`, the plane-mean forms of
-`apply_wall_stress!`, over all ground and roof columns).
+`apply_wall_stress!`, over all ground and roof columns), `input_T_f`
+(s, the time filter of the wall-model input; 0 = off), `h_wm_cells`
+and `h_wm_classes` (the matching height of the open columns),
+`wall_model` (`:equilibrium` or `:nonequilibrium`) and `tble_terms`
+(`:pressure_gradient`, `:full` or `:equilibrium_ode`),
+`dynamic_refine`, `dynamic_filter`, `dynamic_C_d` (the dynamic roughness).
 """
 mutable struct SurfaceExchangeMOST <: AbstractCoupling
     P::Float64                 # surface step period (s)
@@ -99,6 +162,12 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     L::Matrix{Float64}         # Obukhov length of the last surface step (m)
     U_wall::Matrix{Float64}    # wind bus.u_star is the wall law at (m s⁻¹): this step's, or the surface step's
     formulation::Symbol        # apply_wall_stress! formulation
+    input::MatchingInput       # the wall-model input (matching height, time filter), P57-b
+    plain_input::Bool          # first air cell, no filter: the pre-P57-b call, bit for bit
+    h_wall::Matrix{Float64}    # height (m above the surface) bus.u_star is the wall law at
+    h_match::Matrix{Float64}   # matching height of the last wall-stress evaluation (m)
+    n_h_fallback::Int          # open columns whose h_wm_cells-th cell is not air (matched at the first)
+    tble::Union{Nothing,TBLEWallModel} # the non-equilibrium ground wall model (P57-c), or nothing
     pending::Matrix{Float64}   # extra energy into the surface not yet delivered (J m⁻²)
     Q::Matrix{Float64}         # Q_extra of the last surface step (W m⁻²)
     # this step, for the ledger (J m⁻²; zero on steps without a surface step
@@ -115,6 +184,18 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     nsurface_steps::Int
     interval_err::Float64      # max |delivered air time − P| over the completed surface intervals (s)
     n_split::Int               # steps that ran past the end of a surface interval (variable dt only)
+    # P57-e (#190): the dynamic roughness of the ground (z0m = :dynamic), or nothing
+    dynamic::Bool
+    dyn::Any                   # WallModels.DynamicRoughness, built in init!
+    dyn_opts::NamedTuple
+    t_dyn::Float64             # wall time spent in the dynamic solve (s)
+    # P58-e (#193): maximum sustainable heat flux per column, last surface step
+    H_max::Matrix{Float64}     # ρ c_p Q_max (W m⁻²; SurfaceExchange.max_sustainable_heat_flux)
+    mshf_ratio::Matrix{Float64} # downward buoyancy flux / Q_max (< 0: upward, unstable)
+    mshf_beyond::Matrix{Bool}  # z_ref/L beyond the MSHF point: the very stable (collapsed) branch
+    mshf_worst::Float64        # max ratio of the MOST fluxes of the step's start, all columns and steps
+    mshf_worst_delivered::Float64 # the same for the fluxes step_surface! returned (linearised soil skin)
+    mshf_time::Float64         # wall time spent in the MSHF maximisations (s)
 end
 
 coupling_name(::Type{SurfaceExchangeMOST}) = :surface_exchange
@@ -124,13 +205,25 @@ modules_used(::Type{SurfaceExchangeMOST}) = (:SurfaceExchange, :Radiation, :Mois
                                               :WallModels)
 default_options(::Type{SurfaceExchangeMOST}) =
     (U_min = 0.1, z0h_ratio = 0.1, period = nothing, wall_formulation = :local,
+     # the wall-model input (P57-b): time filter on, matching at the first air cell
+     input_T_f = 10.0, h_wm_cells = 1, h_wm_classes = (SURFACE_PARK, SURFACE_WATER),
+     # the ground wall model (P57-c): the MOST law, or the TBLE columns
+     wall_model = :equilibrium, tble_terms = :pressure_gradient,
+     # P57-e: z0m = :dynamic → the dynamic roughness of the OSM height map
+     dynamic_refine = 4, dynamic_filter = :spectral, dynamic_C_d = 1.0,
      # momentum roughness per class (m): the sub-grid roughness of the
      # surface itself — buildings and park trees are resolved (IBM, drag)
      z0m = Dict(SURFACE_STREET => 0.05, SURFACE_ROOF => 0.05, SURFACE_PARK => 0.1,
                 SURFACE_WATER => 1e-4, SURFACE_WALL => 0.05, UInt8(6) => 0.01))
 smoke_variants(::Type{SurfaceExchangeMOST}) =
     ((label = "Schumann wall stress", options = Dict(:surface_exchange => (wall_formulation = :schumann,))),
-     (label = "Moeng wall stress", options = Dict(:surface_exchange => (wall_formulation = :moeng,))))
+     (label = "Moeng wall stress", options = Dict(:surface_exchange => (wall_formulation = :moeng,))),
+     (label = "matching height 3 cells over park and water",
+      options = Dict(:surface_exchange => (h_wm_cells = 3,))),
+     (label = "non-equilibrium (TBLE) ground wall model",
+      options = Dict(:surface_exchange => (wall_model = :nonequilibrium,))),
+     (label = "dynamic z0 from the OSM height map (Anderson & Meneveau 2011)",
+      options = Dict(:surface_exchange => (z0m = :dynamic,))))
 stages(::Type{SurfaceExchangeMOST}) = ((:surface_flux, 10, EVERY_STEP),
                                        (:post_predictor, 15, EVERY_STEP),
                                        (:surface_update, 10, EVERY_STEP))
@@ -170,11 +263,115 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
     z() = zeros(Nx, Ny)
     # neutral until the first surface step
     laws = GroundWallLaw[MOSTWallLaw(0.05, Inf; U_min = o.U_min) for _ in 1:Nx, _ in 1:Ny]
-    return SurfaceExchangeMOST(P, o.U_min, Dict{UInt8,Float64}(o.z0m), o.z0h_ratio,
+    o.input_T_f >= 0 || error("surface_exchange: input_T_f must be ≥ 0, got $(o.input_T_f)")
+    (o.h_wm_cells isa Integer && o.h_wm_cells >= 1) ||
+        error("surface_exchange: h_wm_cells must be an integer ≥ 1, got $(o.h_wm_cells)")
+    cells, nfb = matching_cells(case.geom, bus.k_air, mesh, o.h_wm_cells, o.h_wm_classes)
+    input = MatchingInput(; h_wm_cells = cells, T_f = o.input_T_f)
+    plain = o.input_T_f == 0 && all(==(1), cells)
+    o.wall_model in (:equilibrium, :nonequilibrium) ||
+        error("surface_exchange: wall_model must be :equilibrium or :nonequilibrium, got $(o.wall_model)")
+    dynamic = o.z0m === :dynamic
+    o.z0m isa Symbol && !dynamic &&
+        error("surface_exchange: z0m must be a per-class Dict or :dynamic, got :$(o.z0m)")
+    dynamic && o.wall_model !== :equilibrium &&
+        error("surface_exchange: z0m = :dynamic is a roughness of the equilibrium wall law (wall_model = :equilibrium)")
+    table = dynamic ? default_options(SurfaceExchangeMOST).z0m : o.z0m
+    dynamic && !(o.dynamic_refine isa Integer && o.dynamic_refine >= 1) &&
+        error("surface_exchange: dynamic_refine must be an integer ≥ 1")
+    tble = nothing
+    if o.wall_model === :nonequilibrium
+        o.wall_formulation === :local ||
+            error("surface_exchange: wall_model = :nonequilibrium needs wall_formulation = :local")
+        # z0 per column is set in init!, from each surface's own roughness
+        tble = TBLEWallModel(; terms = Symbol(o.tble_terms), z0 = zeros(Nx, Ny))
+    end
+    # the per-class roughness table goes on the bus: the facade wall model
+    # (#179) reads the wall and glass z0m from it (with z0m = :dynamic, the
+    # default table, which also stays the floor and the surface-layer z0m)
+    z0m = Dict{UInt8,Float64}(table)
+    bus.z0m_class = z0m
+    return SurfaceExchangeMOST(P, o.U_min, z0m, o.z0h_ratio,
                                false, 0.0, 0.0, 0.0, z(), laws, WallModel(laws), fill(Inf, Nx, Ny),
-                               z(), Symbol(o.wall_formulation),
+                               z(), Symbol(o.wall_formulation), input, plain,
+                               fill(mesh.dz / 2, Nx, Ny), fill(mesh.dz / 2, Nx, Ny), nfb, tble,
                                z(), z(), z(), z(), z(), z(), z(),
-                               0.0, 0, 0.0, 0, 0.0, 0)
+                               0.0, 0, 0.0, 0, 0.0, 0,
+                               dynamic, nothing,
+                               (refine = Int(o.dynamic_refine), filter = Symbol(o.dynamic_filter),
+                                C_d = Float64(o.dynamic_C_d)), 0.0,
+                               fill(NaN, Nx, Ny), fill(NaN, Nx, Ny), fill(false, Nx, Ny),
+                               -Inf, -Inf, 0.0)
+end
+
+"""
+    osm_height_map(city, mesh, r) -> Matrix{Float64}
+
+The building height (m) of the OSM `city` on a grid `r` times finer than
+`mesh` in x and y (`(r Nx, r Ny)`, cell centres), with each footprint's
+true height (the tallest where footprints overlap) — the surface the
+IBM staircase of `rasterize_city!` represents at the grid scale.
+"""
+function osm_height_map(city, mesh, r::Integer)
+    Nf, Mf = mesh.Nx * r, mesh.Ny * r
+    dxf, dyf = mesh.Lx / Nf, mesh.Ly / Mf
+    xs = [mesh.x0 + (i - 0.5) * dxf for i in 1:Nf]
+    ys = [mesh.y0 + (j - 0.5) * dyf for j in 1:Mf]
+    hf = zeros(Nf, Mf)
+    for b in city.buildings
+        isempty(b.polygon) && continue
+        xmin, xmax = extrema(first.(b.polygon)); ymin, ymax = extrema(last.(b.polygon))
+        i0 = max(1, floor(Int, (xmin - mesh.x0) / dxf)); i1 = min(Nf, ceil(Int, (xmax - mesh.x0) / dxf) + 1)
+        j0 = max(1, floor(Int, (ymin - mesh.y0) / dyf)); j1 = min(Mf, ceil(Int, (ymax - mesh.y0) / dyf) + 1)
+        for j in j0:j1, i in i0:i1
+            _point_in_polygon(xs[i], ys[j], b.polygon) && (hf[i, j] = max(hf[i, j], b.height))
+        end
+    end
+    return hf
+end
+
+"""
+    build_dynamic_roughness(c, case) -> DynamicRoughness
+
+The dynamic roughness of the ground (`z0m = :dynamic`): the sub-filter
+statistics of [`osm_height_map`](@ref) about the IBM staircase
+``(k_{air}-1)Δz``, each column's surface `z0m` as the floor, the plane
+means over the columns with a surface.
+"""
+function build_dynamic_roughness(c::SurfaceExchangeMOST, case)
+    mesh, bus = case.mesh, case.bus
+    Nz, dz = mesh.Nz, mesh.dz
+    r = c.dyn_opts.refine
+    hf = osm_height_map(case.geom.city, mesh, r)
+    resolved = [min(k - 1, Nz) * dz for k in bus.k_air]
+    st = subfilter_height(hf, r; dx = mesh.dx, dy = mesh.dy, resolved = resolved,
+                          filter = c.dyn_opts.filter)
+    have = [bus.surface[I] !== nothing for I in CartesianIndices(bus.k_air)]
+    floor_ = [have[I] ? roughness_lengths(bus.surface[I]).z0m : 0.05
+              for I in CartesianIndices(bus.k_air)]
+    return DynamicRoughness(st; z0_floor = floor_, C_d = c.dyn_opts.C_d, mask = have)
+end
+
+"""
+    matching_cells(geom, k_air, mesh, n, classes) -> (cells, nfallback)
+
+The matching cell count of the ground wall model per column: `n` for the
+columns of a class in `classes` whose air levels `k_air … k_air+n-1` are
+all air (inside the domain), 1 elsewhere; `nfallback` counts the columns
+of those classes that fall back to 1.
+"""
+function matching_cells(geom, k_air, mesh, n, classes)
+    Nx, Ny, Nz, Hx, Hy, Hz = mesh.Nx, mesh.Ny, mesh.Nz, mesh.Hx, mesh.Hy, mesh.Hz
+    cells = ones(Int, Nx, Ny)
+    n == 1 && return cells, 0
+    nfb = 0
+    for j in 1:Ny, i in 1:Nx
+        geom.sfc[i, j] in classes || continue
+        k = k_air[i, j]
+        ok = k + n - 1 <= Nz && all(kk -> !geom.sm.mask[Hx+i, Hy+j, Hz+kk], k:k+n-1)
+        ok ? (cells[i, j] = n) : (nfb += 1)
+    end
+    return cells, nfb
 end
 
 "The `SlabLand` for a column of class `cls` nobody registered a factory for."
@@ -200,7 +397,9 @@ function init!(c::SurfaceExchangeMOST, case)
         bus.surface[I] = s
         bus.Ts[I] = surface_temperature(s)
         bus.dew_mask[I] = moisture_availability(s) == 0
+        c.tble === nothing || (c.tble.z0[I] = roughness_lengths(s).z0m)
     end
+    c.dynamic && (c.dyn = build_dynamic_roughness(c, case))
     if case.cfg.verbose
         kinds = Dict{String,Int}()
         for s in bus.surface
@@ -231,6 +430,19 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
     # τ_interval seconds; it must be P (not checked before the first step)
     c.stepped && (c.interval_err = max(c.interval_err, abs(c.τ_interval - P)))
     c.τ_interval = 0.0
+    # P57-e: the dynamic roughness from this surface step's first-air-cell wind
+    dyn = c.dyn
+    if dyn !== nothing
+        t0 = time()
+        ucs = zeros(Nx, Ny); vcs = zeros(Nx, Ny)
+        @inbounds for j in 1:Ny, i in 1:Nx
+            k = min(bus.k_air[i, j], mesh.Nz)
+            ucs[i, j] = (u[i, j, k] + u[mod1(i + 1, Nx), j, k]) / 2
+            vcs[i, j] = (v[i, j, k] + v[i, mod1(j + 1, Ny), k]) / 2
+        end
+        update_dynamic_roughness!(dyn, ucs, vcs, bus.z_ref)
+        c.t_dyn += time() - t0
+    end
     @inbounds for j in 1:Ny, i in 1:Nx
         s = bus.surface[i, j]
         s === nothing && continue
@@ -248,6 +460,9 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         c.Q[i, j] = Q
         c.pending[i, j] = 0.0
         E0 = surface_store_energy(s)
+        # P58-e: the Monin–Obukhov fluxes of the skin at the start of the
+        # step, before step_surface! (which may linearise them in T_skin)
+        c.mshf_time += @elapsed (f_most = _most_fluxes(s, f, c.U_min))
         fl = _step_one(s, f, P, Q, c.U_min)
         E1 = surface_store_energy(s)
         E0 === nothing || (c.store_err = max(c.store_err, abs((E1 - E0) / P - fl.G)))
@@ -263,8 +478,30 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         L = matching_obukhov_length(BusingerDyerBeljaarsHoltslag(), us, U, bus.z_ref[i, j], z0m;
                                     U_min = c.U_min)
         c.L[i, j] = L
-        c.laws[i, j] = MOSTWallLaw(z0m, L; U_min = c.U_min)
-        c.U_wall[i, j] = U          # u* is the law at this wind until the next step
+        # (z0m = :dynamic: the law's roughness is the dynamic one; L is the
+        # stability of this surface step, recovered with the surface's z0m)
+        c.laws[i, j] = MOSTWallLaw(dyn === nothing ? z0m : dyn.z0[i, j], L; U_min = c.U_min)
+        # the law reproduces the surface step's u* with the table z0m; with the
+        # dynamic z0 bus.u_star is the wall law's at this wind and height
+        dyn === nothing || (bus.u_star[i, j] = friction_velocity(c.laws[i, j], U, bus.z_ref[i, j]))
+        # P58-e: how far the column is from its maximum sustainable heat
+        # flux (Van de Wiel et al. 2012) — one 1-D maximisation per column.
+        # MOST bounds the fluxes it defines (f_most) by Q_max exactly; the
+        # fluxes a soil column returns are its first-order extrapolation in
+        # T_skin to the step's mean skin temperature, which can overshoot
+        # the maximum of the concave H(T_skin) by O(ΔT²) (tracked apart).
+        c.mshf_time += @elapsed begin
+            r = surface_mshf_ratio(BusingerDyerBeljaarsHoltslag(), f_most, f, z0m; U_min = c.U_min)
+            rd = surface_mshf_ratio(BusingerDyerBeljaarsHoltslag(), fl, f, z0m; U_min = c.U_min,
+                                    Q_max = r.Q_max)
+        end
+        c.H_max[i, j] = r.H_max
+        c.mshf_ratio[i, j] = r.ratio
+        c.mshf_beyond[i, j] = r.ratio > 0 && bus.z_ref[i, j] / L > r.ζ_mshf
+        c.mshf_worst = max(c.mshf_worst, r.ratio)
+        c.mshf_worst_delivered = max(c.mshf_worst_delivered, rd.ratio)
+        c.U_wall[i, j] = U          # u* is the law at this wind and height until the next step
+        c.h_wall[i, j] = bus.z_ref[i, j]
         c.cp[i, j] = heat_capacity_moist(qa)
         bus.Ts[i, j] = surface_temperature(s)
         # ledger: the whole interval P is booked on this step
@@ -287,6 +524,7 @@ end
 
 # function barrier: one dynamic dispatch per column
 _step_one(s, f, P, Q, U_min) = step_surface!(s, f, P; Q_extra = Q, U_min = U_min)
+_most_fluxes(s, f, U_min) = turbulent_fluxes(s, f; U_min = U_min)
 
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
     c.stepped || step_all_surfaces!(c, case)          # step 1: the first surface step
@@ -340,15 +578,38 @@ end
 
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:post_predictor}, dt)
     # the ground is a WallModels wall at every column's first air level
-    # (k_air > Nz: no surface, no wall); u_τ from this step's wind
-    apply_wall_stress!(case.sim, c.wm, dt; side = :bottom, mask = case.bus.k_air,
-                       formulation = c.formulation, ustar = case.bus.u_star,
-                       wind_out = c.U_wall)
+    # (k_air > Nz: no surface, no wall); u_τ from this step's (filtered) wind
+    if c.tble !== nothing
+        # the non-equilibrium wall model: the TBLE columns' stress (P57-c)
+        apply_wall_stress!(case.sim, c.tble, dt; side = :bottom, mask = case.bus.k_air,
+                           input = c.input, ustar = case.bus.u_star, wind_out = c.U_wall)
+        cols, act = tble_columns(c.tble, :bottom)
+        @inbounds for I in eachindex(act)
+            act[I] && (c.h_wall[I] = c.h_match[I] = cols[I].y[end])
+        end
+    elseif c.plain_input
+        apply_wall_stress!(case.sim, c.wm, dt; side = :bottom, mask = case.bus.k_air,
+                           formulation = c.formulation, ustar = case.bus.u_star,
+                           wind_out = c.U_wall)
+    else
+        wind, height = matching_input!(c.input, case.sim; side = :bottom, mask = case.bus.k_air)
+        apply_wall_stress!(case.sim, c.wm, dt; side = :bottom, mask = case.bus.k_air,
+                           formulation = c.formulation, ustar = case.bus.u_star,
+                           wind_out = c.U_wall, wind = wind, height = height)
+        @inbounds for I in eachindex(height)
+            case.bus.k_air[I] <= case.mesh.Nz && (c.h_wall[I] = c.h_match[I] = height[I])
+        end
+    end
     return nothing
 end
 
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_update}, dt)
     bus = case.bus
+    # the time filter of the wall-model input: once per accepted step
+    update_input_filter!(c.input, case.sim, dt; side = :bottom, mask = bus.k_air)
+    # the TBLE columns of the non-equilibrium ground, to the end of the step
+    c.tble === nothing ||
+        update_wall_model!(c.tble, case.sim, dt; side = :bottom, mask = bus.k_air, input = c.input)
     # collect the extra energy other couplings took from the surfaces this step
     @inbounds for I in eachindex(bus.sensible)
         # (a column solid to the lid keeps it pending: it has no surface)
@@ -359,6 +620,9 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_update}, dt)
     end
     t_new = case.sim.t
     t_new >= c.t_next - 1e-9 * c.P && step_all_surfaces!(c, case)
+    # with the TBLE ground, bus.u_star is the stress the ground applies (the
+    # columns' u_τ at the end of the step), not the surface step's MOST u*
+    c.tble === nothing || _tble_ustar!(c, case)
     return nothing
 end
 
@@ -387,9 +651,22 @@ function report(c::SurfaceExchangeMOST, case)
     roof = [I for I in have if sfc[I] == SURFACE_ROOF]
     ground = [I for I in have if sfc[I] != SURFACE_ROOF]
     m(x, idx) = isempty(idx) ? NaN : mean(x[idx])
-    return @sprintf("           surface: H %6.1f LE %6.1f G %6.1f W/m²  u* roof %.2f ground %.2f m/s",
+    dyn = c.dyn === nothing ? "" :
+          @sprintf("  dynamic z0: α %.3g, street %.3g m", c.dyn.α,
+                   m(c.dyn.z0, [I for I in have if sfc[I] == SURFACE_STREET]))
+    # P58-e: the stable columns' downward buoyancy flux over their MSHF,
+    # per class (|H|/H_max; at night every column is stable)
+    stable(cls) = [I for I in have if sfc[I] == cls && c.mshf_ratio[I] > 0]
+    rs = map((SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK)) do cls
+        idx = stable(cls)
+        isempty(idx) ? "–" : @sprintf("%.2f (%.0f%% beyond)", mean(c.mshf_ratio[idx]),
+                                      100 * count(I -> c.mshf_beyond[I], idx) / length(idx))
+    end
+    return @sprintf("           surface: H %6.1f LE %6.1f G %6.1f W/m²  u* roof %.2f ground %.2f m/s%s\n",
                     m(bus.H, have), m(bus.LE, have), m(bus.G, have),
-                    m(bus.u_star, roof), m(bus.u_star, ground))
+                    m(bus.u_star, roof), m(bus.u_star, ground), dyn) *
+           @sprintf("              MSHF: |H|/H_max (stable cols) street %s roof %s park %s; max %.3f (delivered %.3f); %.1f ms/surface step",
+                    rs..., c.mshf_worst, c.mshf_worst_delivered, 1e3 * c.mshf_time / max(c.nsurface_steps, 1))
 end
 
 function output_fields(c::SurfaceExchangeMOST, case)
@@ -401,6 +678,12 @@ function output_fields(c::SurfaceExchangeMOST, case)
         OutputField("LE_sfc", "W m-2", "surface latent heat flux (upward), last surface step",
                     :xy, cs -> masked(bus.LE)),
         OutputField("u_star", "m s-1", "surface friction velocity", :xy, cs -> masked(bus.u_star)),
+        OutputField("H_max_sfc", "W m-2", "maximum sustainable heat flux (Van de Wiel et al. 2012), last surface step",
+                    :xy, cs -> masked(c.H_max)),
+        OutputField("mshf_ratio", "1", "downward surface buoyancy flux / maximum sustainable heat flux (<0: unstable)",
+                    :xy, cs -> masked(c.mshf_ratio)),
+        OutputField("mshf_beyond", "1", "1 where z_ref/L is beyond the MSHF point (very stable, collapsed branch)",
+                    :xy, cs -> masked(Float64.(c.mshf_beyond))),
         OutputField("beta_sfc", "1", "surface moisture availability",
                     :xy, cs -> [s === nothing ? NaN : moisture_availability(s) for s in bus.surface])]
 end
@@ -422,23 +705,83 @@ function smoke_check(c::SurfaceExchangeMOST, case)
                 c.interval_err <= 1e-9 * c.P,
             "per column, the surface stored G·P (|Δstore/P − G| < 1e-6 W/m²)" =>
                 c.store_err < 1e-6,
-            "u* > 0; above its neutral value κU/ln(z_ref/z0m) where H > 5 and E ≥ 0 (unstable), below it where H < −5 and E ≤ 0 (stable), U the wind of this step's wall law" =>
-                all(I -> _ustar_ok(bus, I, c.U_wall[I], c.U_min), have),
-            "u* is the ground's MOSTWallLaw at this step's wind (1e-12)" =>
-                all(I -> abs(bus.u_star[I] - friction_velocity(c.laws[I], c.U_wall[I], bus.z_ref[I])) <=
-                         1e-12 * bus.u_star[I], have),
+            _wall_checks(c, case, have)...,
+            "the wall law is evaluated at the centre of the column's matching air cell, (n − ½)Δz (1e-12)" =>
+                all(I -> abs(c.h_match[I] - (c.input.cells[I] - 0.5) * case.mesh.dz) <= 1e-12 * case.mesh.dz, have),
+            "matching cells are air: solid-free from k_air to k_air + n − 1" =>
+                all(I -> _matching_air(sm, mesh, I, bus.k_air[I], c.input.cells[I]), have),
+            "the time-filtered wall input is primed and finite (or the filter is off)" =>
+                (c.input.T_f == 0 || (c.input.primed && all(isfinite, c.input.uf) && all(isfinite, c.input.vf))),
             # the fluxes that go into the air are those of the surface step
             "Rn − H − LE = G − Q_extra per column (1e-9 W/m²)" =>
                 all(I -> abs(bus.Rn[I] - bus.H[I] - bus.LE[I] - bus.G[I] + c.Q[I]) <=
                          1e-9 * (1 + abs(bus.Rn[I])), have),
             "H has the sign of T_skin − θ_air referred to the surface, where they differ by > 1 K and |H| > 1 W/m²" =>
-                all(I -> _h_sign_ok(bus, I, case), have)]
+                all(I -> _h_sign_ok(bus, I, case), have),
+            "the MSHF was evaluated for every column with a surface (0 < H_max < ∞)" =>
+                all(I -> 0 < c.H_max[I] < Inf, have),
+            "|H| ≤ H_max (1 + 1e-8) for every column: the downward MOST buoyancy flux ≤ MSHF (Van de Wiel et al. 2012), every surface step" =>
+                c.mshf_worst <= 1 + 1e-8,
+            "the delivered fluxes (a soil skin's linearisation in T_skin) exceed H_max by < 10 % (measured ≤ 3.1 %)" =>
+                c.mshf_worst_delivered < 1.1,
+            "the wall law's z0m is the surface's (table) or, with z0m = :dynamic, √(z0f² + α²σ_Δ²) of the dynamic roughness, solved every surface step (1e-12)" =>
+                (c.dyn === nothing ? all(I -> c.laws[I].z0m == roughness_lengths(bus.surface[I]).z0m, have) :
+                 c.dyn.nsolves == c.nsurface_steps &&
+                 all(I -> c.laws[I].z0m == c.dyn.z0[I] &&
+                          abs(c.dyn.z0[I] - sqrt(c.dyn.z0_floor[I]^2 + c.dyn.α^2 * c.dyn.stats.σ2[I])) <=
+                          1e-12 * c.dyn.z0[I], have)),
+            "dynamic z0 (if on) is finite, ≥ the column's table z0m and below the matching height" =>
+                (c.dyn === nothing || all(I -> isfinite(c.dyn.z0[I]) &&
+                                               c.dyn.z0[I] >= roughness_lengths(bus.surface[I]).z0m &&
+                                               c.dyn.z0[I] < c.h_wall[I], have))]
 end
 
-function _ustar_ok(bus, I, U, U_min)
+function _tble_ustar!(c::SurfaceExchangeMOST, case)
+    cols, act = tble_columns(c.tble, :bottom)
+    @inbounds for I in eachindex(act)
+        act[I] || continue
+        case.bus.u_star[I] = cols[I].u_τ
+        c.U_wall[I] = hypot(cols[I].u[end], cols[I].v[end])
+        c.h_wall[I] = cols[I].y[end]
+    end
+    return nothing
+end
+
+# the checks of the ground's wall model: the MOST law (equilibrium) or the
+# TBLE columns (non-equilibrium, P57-c)
+function _wall_checks(c::SurfaceExchangeMOST, case, have)
+    bus = case.bus
+    if c.tble === nothing
+        return ["u* > 0; above its neutral value κU/ln(h/z0m) where H > 5 and E ≥ 0 (unstable), below it where H < −5 and E ≤ 0 (stable), U and h the wind and height of this step's wall law" =>
+                    all(I -> _ustar_ok(bus, I, c.U_wall[I], c.U_min, c.h_wall[I], c.laws[I].z0m), have),
+                "u* is the ground's MOSTWallLaw at this step's wind and matching height (1e-12)" =>
+                    all(I -> abs(bus.u_star[I] - friction_velocity(c.laws[I], c.U_wall[I], c.h_wall[I])) <=
+                             1e-12 * bus.u_star[I], have)]
+    end
+    cols, act = tble_columns(c.tble, :bottom)
+    return ["TBLE ground: every column with a surface has a TBLE column, and only those" =>
+                all(I -> act[I] == (bus.k_air[I] <= case.mesh.Nz), eachindex(act)),
+            "TBLE ground: u* > 0 and finite, the columns' |τ_w|^½ (1e-12)" =>
+                all(I -> bus.u_star[I] > 0 && isfinite(bus.u_star[I]) &&
+                         abs(bus.u_star[I] - sqrt(hypot(cols[I].τx, cols[I].τy))) <= 1e-12 * bus.u_star[I], have),
+            "TBLE ground: the column profiles are finite and 0 at the surface" =>
+                all(I -> all(isfinite, cols[I].u) && all(isfinite, cols[I].v) &&
+                         cols[I].u[1] == 0 && cols[I].v[1] == 0, have),
+            "TBLE ground: each column's roughness is its surface's z0m" =>
+                all(I -> cols[I].z0 == roughness_lengths(bus.surface[I]).z0m, have),
+            "TBLE ground: the columns were advanced every step after the first" =>
+                c.tble.walls[:bottom].nupdates >= 1]
+end
+
+function _matching_air(sm, mesh, I, k, n)
+    i, j = Tuple(CartesianIndices((mesh.Nx, mesh.Ny))[I])
+    return all(kk -> !sm.mask[mesh.Hx+i, mesh.Hy+j, mesh.Hz+kk], k:k+n-1)
+end
+
+function _ustar_ok(bus, I, U, U_min, h = bus.z_ref[I], z0m = roughness_lengths(bus.surface[I]).z0m)
     us = bus.u_star[I]
     us > 0 || return false
-    neutral = 0.4 * max(U, U_min) / log(bus.z_ref[I] / roughness_lengths(bus.surface[I]).z0m)
+    neutral = 0.4 * max(U, U_min) / log(h / z0m)
     bus.H[I] > 5 && bus.E[I] >= 0 && return us >= neutral * (1 - 1e-9)
     bus.H[I] < -5 && bus.E[I] <= 0 && return us <= neutral * (1 + 1e-9)
     return true
