@@ -198,7 +198,10 @@ end
         @test s1.supercritical > 0.3
         @test maximum(abs, interior_view(ref.sim.θ) .- interior_view(ref0.sim.θ)) > 1e-6
         @test all(isfinite, interior_view(ref.sim.θ))
+        # (on a provider that is stability-corrected: the slot default :tke
+        # since #182 is not wrapped and does not read sgs_stability)
         @test_throws ErrorException BC.build_case(BC.CaseConfig(:smoke; verbose = false,
+                                                                physics = Dict{Symbol,Any}(:sgs => :smagorinsky),
                                                                 sgs_stability = :bogus); io = devnull)
     end
 
