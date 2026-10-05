@@ -309,6 +309,25 @@ profile has a surface-based inversion, so the parcel z_i
 AMD/Vreman/σ switch-off take the capping inversion from
 `initial_inversion_height`, not from `cfg.θ_inversion_z`.
 
+**Effect on the standalone run** (flagship 64 × 64 × 32, 200 m deep,
+06:00 to 18:00 CEST on 29 June 2019, default couplings, adaptive step;
+the only difference between the two runs is `sounding` against
+`sounding = nothing`). Plane-mean θ of the fluid cells below 30 m:
+
+| | 06:00 | 12:00 | 18:00 |
+| :-- | --: | --: | --: |
+| sounding | 289.06 K | 303.81 K | 313.89 K |
+| former analytic profile | 293.00 K | 305.35 K | 315.22 K |
+| difference | −3.94 K | −1.54 K | −1.33 K |
+
+The colder and drier observed morning column stays 1.3 K cooler at
+18:00. In both runs the 200 m box warms by about 25 K, and by 10:00 it
+is mixed to the lid. The observed mixed layer is 1.2 km deep, so the
+box cannot hold it: entrainment of free-tropospheric air through a
+capping inversion is missing. Supplying that air is the job of the
+nesting parent (#246). Each run took 1.7–1.8 h of wall time with 2
+threads on a shared machine.
+
 **Idealised profile.** `sounding = nothing` selects the former analytic
 profile (`θ_surface`, `θ_inversion_z`, `θ_lapse`, `qv0`, `qv_scale`) and
 101 325 Pa. `:winter` uses it, explicitly labelled as idealised, until a
