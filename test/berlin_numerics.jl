@@ -203,6 +203,26 @@ end
         @test_throws ErrorException BC.build_case(BC.CaseConfig(:smoke; verbose = false,
                                                                 physics = Dict{Symbol,Any}(:sgs => :smagorinsky),
                                                                 sgs_stability = :bogus); io = devnull)
+        # the tracers (#177) get θ's diagonal diffusivity: κh = sim.κt on the
+        # x, y faces and the corrected κv on the z faces
+        tq = only(t for t in ref.tracers if t.name === :qv)
+        @test BC.tracer_diffusivity(tq, ref) === ref.sim.κt
+        @test BC.tracer_vertical_diffusivity(tq, ref) === c.closure.κv
+        tq0 = only(t for t in ref0.tracers if t.name === :qv)
+        @test BC.tracer_vertical_diffusivity(tq0, ref0) === ref0.sim.κt      # :none: κv = κh
+        d = BC.find_coupling(ref, :scalar_advection).diffusion
+        q = deepcopy(BC.tracer(ref, :qv)); q0 = copy(interior_view(q))
+        BC.sgs_diffuse!(d, ref, q, 2.0; κv = c.closure.κv)
+        tt = Field(CellCenter(), ref.mesh); qq = deepcopy(q); interior_view(qq) .= q0
+        fill_halos!(qq, d.bcs)
+        add_eddy_diffusion_scalar!(tt, qq, ref.sim.κt, c.closure.κv; mask = d.mask)
+        @test interior_view(q) == q0 .+ 2.0 .* interior_view(tt)            # bit for bit
+        q1 = deepcopy(BC.tracer(ref, :qv)); BC.sgs_diffuse!(d, ref, q1, 2.0)  # isotropic κh
+        dv, dh = interior_view(q) .- q0, interior_view(q1) .- q0
+        @info @sprintf("  tracer SGS diffusion (2 s, qv) with the corrected κv: max|Δq| %.2e vs %.2e with κv = κh",
+                       maximum(abs, dv), maximum(abs, dh))
+        @test dv != dh
+        @test all(isfinite, dv)
     end
 
     @testset "SGS diffusion of the tracers with κt, mask-aware (#177)" begin

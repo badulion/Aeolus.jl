@@ -449,6 +449,46 @@ end
 # ---------------------------------------------------------------------------
 # every core: the four fields reach the momentum and scalar operators
 # ---------------------------------------------------------------------------
+@testset "masked diagonal operator (κh, κv; mask, weights) for tracers (with #177)" begin
+    # The tracers of the Berlin case are diffused by the masked kernel of
+    # #177; with a stability-corrected closure they get κh on the x, y faces
+    # and κv on the z faces, as θ does.
+    rng = Xoshiro(1877)
+    g = RegularGrid(; size = (8, 6, 10), extent = (200.0, 150.0, 50.0), halo = (3, 3, 3))
+    bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux)
+    q = Field(CellCenter(), g); interior_view(q) .= 1 .+ rand(rng, 8, 6, 10)
+    κh = Field(CellCenter(), g); interior_view(κh) .= 2 .+ rand(rng, 8, 6, 10)
+    κv = Field(CellCenter(), g); interior_view(κv) .= 0.1 .* interior_view(κh)
+    foreach(f -> fill_halos!(f, bcs), (q, κh, κv))
+    mask = falses(size(q.data)); mask[6:7, 5:6, 4:8] .= true       # a building (interior cells)
+    t(f) = (x = Field(CellCenter(), g); f(x); interior_view(x))
+    # κv === κh: the one-coefficient masked operator, bit for bit
+    @test t(x -> add_eddy_diffusion_scalar!(x, q, κh, κh; mask)) ==
+          t(x -> add_eddy_diffusion_scalar!(x, q, κh; mask))
+    # no keywords: the unmasked diagonal operator, bit for bit
+    @test t(x -> add_eddy_diffusion_scalar!(x, q, κh, κv; mask = nothing)) ==
+          t(x -> add_eddy_diffusion_scalar!(x, q, κh, κv))
+    # without a solid cell the masked kernel is the unmasked one (to round-off)
+    @test t(x -> add_eddy_diffusion_scalar!(x, q, κh, κv; mask = falses(size(q.data)))) ≈
+          t(x -> add_eddy_diffusion_scalar!(x, q, κh, κv)) rtol = 1e-13
+    # masked: solid cells untouched, Σ_fluid q conserved, and κv acts on the
+    # z faces only (κh = 0 leaves a purely vertical, column-wise operator)
+    d = t(x -> add_eddy_diffusion_scalar!(x, q, κh, κv; mask))
+    solid = mask[4:11, 4:9, 4:13]
+    @test all(iszero, d[solid])
+    @test abs(sum(d[.!solid])) <= 1e-13 * sum(abs, d)
+    z = Field(CellCenter(), g)
+    dz = t(x -> add_eddy_diffusion_scalar!(x, q, z, κv; mask))
+    @test all(abs.(sum(dz; dims = 3)[:, :, 1]) .<= 1e-13 .* sum(abs.(dz); dims = 3)[:, :, 1] .+ 1e-300)
+    @test maximum(abs, dz) > 0
+    # weighted (sound-proof) form: Σ W q conserved with κh ≠ κv
+    n = size(q.data, 3)
+    wc = collect(range(1.2, 0.8; length = n)); wf = collect(range(1.25, 0.75; length = n + 1))
+    dw = t(x -> add_eddy_diffusion_scalar!(x, q, κh, κv; mask, weights = (wc, wf)))
+    Wk = reshape(wc[4:13], 1, 1, :)
+    @test abs(sum((dw .* Wk)[.!solid])) <= 1e-13 * sum(abs, dw .* Wk)
+end
+
 @testset "every core runs the correction; IMEX and explicit agree; composes with IsentropicDiffusion" begin
     g = RegularGrid(; size = (12, 10, 16), extent = (300.0, 250.0, 100.0), halo = (3, 3, 3))
     function strat_sim(; T = BoussinesqSimulation)
