@@ -127,6 +127,28 @@ end
     end
 end
 
+@testset "4. CG bug regression: bc_x/bc_y = :neumann is honoured" begin
+    # On 3a23110 CGPoissonSolver stored `bc_xy` and wrapped x and y
+    # periodically regardless, so bc_xy = :neumann returned the periodic
+    # solution. A code bug, not a test expectation.
+    rng = MersenneTwister(77)
+    r = randn(rng, g.Nx, g.Ny, g.Nz)
+    p_per = _op_solve(CGPoissonSolver(g; tol = 1e-13, maxit = 5000, bc_xy = :periodic), g, r)
+    p_neu = _op_solve(CGPoissonSolver(g; tol = 1e-13, maxit = 5000, bc_xy = :neumann), g, r)
+    p_dct = _op_solve(CosineFFTPoissonSolver(g; bc_x = :neumann, bc_y = :neumann), g, r)
+    p_cos = _op_solve(CosineFFTPoissonSolver(g), g, r)
+    @printf("  [N-open-a] CG bc_xy=:neumann vs periodic rel. diff %.3f; vs Neumann DCT %.2e; periodic CG vs channel DCT %.2e\n",
+            _op_rel(p_neu, p_per), _op_rel(p_neu, p_dct), _op_rel(p_per, p_cos))
+    @test _op_rel(p_neu, p_per) > 0.1
+    @test _op_rel(p_neu, p_dct) < 1e-9
+    @test _op_rel(p_per, p_cos) < 1e-9          # the periodic path is unchanged
+    # Per-axis: Neumann x only.
+    p_x  = _op_solve(CGPoissonSolver(g; tol = 1e-13, maxit = 5000, bc_x = :neumann), g, r)
+    p_xd = _op_solve(CosineFFTPoissonSolver(g; bc_x = :neumann), g, r)
+    @test _op_rel(p_x, p_xd) < 1e-9
+    @test_throws ArgumentError CGPoissonSolver(g; bc_x = :open)
+end
+
 @testset "6. compatibility: residual −s̄" begin
     rng = MersenneTwister(5)
     r0 = randn(rng, g.Nx, g.Ny, g.Nz); r0 .-= mean(r0)
@@ -140,6 +162,9 @@ end
                 string(bcs), mean(res), -s̄, dev)
         @test dev < 1e-12
     end
+    cg  = CGPoissonSolver(g; tol = 1e-14, maxit = 5000, bc_xy = :neumann)
+    res = _op_ref_lap(_op_solve(cg, g, src), Δ, (:neumann, :neumann, :neumann)) .- src
+    @test maximum(abs, res .+ s̄) < 1e-10
 end
 
 @testset "8. cost per solve" begin

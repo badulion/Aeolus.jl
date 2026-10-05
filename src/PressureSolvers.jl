@@ -310,17 +310,23 @@ end
 """
     CGPoissonSolver(mesh::RegularGrid; tol=1e-8, maxit=200,
                     bc_top=:neumann, bc_bottom=:neumann,
-                    bc_xy=:periodic)
+                    bc_xy=:periodic, bc_x=bc_xy, bc_y=bc_xy)
 
 Matrix-free conjugate-gradient Poisson solver on the 7-point discrete
-Laplacian. Handles any BC combination that keeps the operator symmetric
-positive semi-definite (periodic / Neumann; Dirichlet needs a Modified
-kernel — not implemented). Slower than the FFT direct solvers but works
-on immersed geometry, non-uniform stretching, etc.
+Laplacian. Every axis is periodic or homogeneous Neumann: `bc_x`, `bc_y`
+(`bc_xy` sets both) and `bc_bottom`, `bc_top` in `z` (any value other than
+`:periodic` there is Neumann; the two z faces must agree). A Neumann face
+uses the mirror ghost `φ₀ = φ₁`, i.e. zero flux through the face — the
+same discrete operator [`CosineFFTPoissonSolver`](@ref) diagonalises with
+the matching `bc_x`, `bc_y`, `bc_z`. Slower than the direct solvers; its
+use is as an independent check and for operators they cannot diagonalise.
 
-Preconditioner: diagonal-Jacobi (constant `-2(1/dx² + 1/dy² + 1/dz²)`),
-which for a uniform-grid Laplacian is just a scaling. Cheap and always
-positive-definite.
+Before #251 `bc_xy` was stored but ignored: x and y were wrapped
+periodically whatever it said, so `bc_xy = :neumann` silently returned
+the periodic solution.
+
+Preconditioner: none (the diagonal of the uniform-grid Laplacian is
+constant in the interior, so Jacobi would only rescale).
 
 Convergence: `‖r‖ < tol · ‖b‖`. Not guaranteed within `maxit`; a warning
 is emitted if the iteration hits the cap.
@@ -331,7 +337,8 @@ mutable struct CGPoissonSolver{T, RA<:Array{T,3}} <: AbstractPressureSolver
     maxit::Int
     bc_top::Symbol
     bc_bottom::Symbol
-    bc_xy::Symbol
+    bc_x::Symbol
+    bc_y::Symbol
     # scratch buffers on interior sizes
     r::RA
     p_dir::RA
@@ -345,45 +352,49 @@ function CGPoissonSolver(mesh::RegularGrid{T};
                          tol::Real = 1e-8, maxit::Int = 200,
                          bc_top::Symbol = :neumann,
                          bc_bottom::Symbol = :neumann,
-                         bc_xy::Symbol = :periodic) where {T}
+                         bc_xy::Symbol = :periodic,
+                         bc_x::Symbol = bc_xy,
+                         bc_y::Symbol = bc_xy) where {T}
+    _check_axis_bc("bc_x", bc_x); _check_axis_bc("bc_y", bc_y)
+    (bc_top === :periodic) == (bc_bottom === :periodic) ||
+        throw(ArgumentError("CGPoissonSolver: bc_top and bc_bottom must both be periodic or both not"))
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     r    = zeros(T, Nx, Ny, Nz)
     p_dir= zeros(T, Nx, Ny, Nz)
     Ap   = zeros(T, Nx, Ny, Nz)
     z    = zeros(T, Nx, Ny, Nz)
     return CGPoissonSolver{T, typeof(r)}(mesh, T(tol), maxit,
-                                          bc_top, bc_bottom, bc_xy,
+                                          bc_top, bc_bottom, bc_x, bc_y,
                                           r, p_dir, Ap, z,
                                           Ref(0), Ref(zero(T)))
 end
 
+poisson_axis_bcs(s::CGPoissonSolver) =
+    (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = s.bc_top === :periodic ? :periodic : :neumann)
+
+# Neighbour index across a face of an axis of length N: periodic wrap, or
+# the cell itself (Neumann mirror ghost ⇒ zero flux through the face).
+@inline _nbr_hi(i, N, periodic::Bool) = i < N ? i + 1 : (periodic ? 1 : N)
+@inline _nbr_lo(i, N, periodic::Bool) = i > 1 ? i - 1 : (periodic ? N : 1)
+
 # 7-point Laplacian evaluated on an interior-sized array, applying BCs
-# implicitly (periodic wrap or Neumann mirror).
+# implicitly (periodic wrap or Neumann mirror) on every axis.
 function _apply_laplacian!(out::Array{T,3}, u::Array{T,3},
                            dx::T, dy::T, dz::T,
-                           bc_top::Symbol, bc_bottom::Symbol, bc_xy::Symbol) where {T}
+                           bc_top::Symbol, bc_bottom::Symbol,
+                           bc_x::Symbol, bc_y::Symbol) where {T}
     Nx, Ny, Nz = size(u)
     idx2 = 1 / dx^2
     idy2 = 1 / dy^2
     idz2 = 1 / dz^2
+    px = bc_x === :periodic
+    py = bc_y === :periodic
+    pt = bc_top === :periodic
+    pb = bc_bottom === :periodic
     @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
-        # x neighbours (periodic wrap always)
-        ip = i == Nx ? 1  : i + 1
-        im = i == 1  ? Nx : i - 1
-        # y neighbours
-        jp = j == Ny ? 1  : j + 1
-        jm = j == 1  ? Ny : j - 1
-        # z neighbours
-        kp = if k == Nz
-                bc_top == :periodic ? 1 : k     # Neumann mirror ⇒ same index
-             else
-                k + 1
-             end
-        km = if k == 1
-                bc_bottom == :periodic ? Nz : k
-             else
-                k - 1
-             end
+        ip = _nbr_hi(i, Nx, px); im = _nbr_lo(i, Nx, px)
+        jp = _nbr_hi(j, Ny, py); jm = _nbr_lo(j, Ny, py)
+        kp = _nbr_hi(k, Nz, pt); km = _nbr_lo(k, Nz, pb)
         c = u[i, j, k]
         out[i, j, k] = (u[ip, j, k] - 2c + u[im, j, k]) * idx2 +
                        (u[i, jp, k] - 2c + u[i, jm, k]) * idy2 +
@@ -413,7 +424,7 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
 
     for k in 1:solver.maxit
         _apply_laplacian!(solver.Ap, pdir, m.dx, m.dy, m.dz,
-                          solver.bc_top, solver.bc_bottom, solver.bc_xy)
+                          solver.bc_top, solver.bc_bottom, solver.bc_x, solver.bc_y)
         pap = sum(pdir .* solver.Ap)
         α   = rz_old / pap
         @. x = x + α * pdir
