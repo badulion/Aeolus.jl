@@ -170,6 +170,7 @@ StabilityCorrected(base::AbstractSGSClosure, g; kwargs...) =
                         "Closures with their own buoyancy term or length scale are not wrapped."))
 
 sgs_fields(c::StabilityCorrected, sim) = SGSFields(sim.νt, c.νv, sim.κt, c.κv)
+laminar_consistent(c::StabilityCorrected) = laminar_consistent(c.base)
 
 # The reference θ and gravity of the core's buoyancy: the constant θ₀ of the
 # Boussinesq core, or the θ̄(z) profile of a sound-proof core's ReferenceState

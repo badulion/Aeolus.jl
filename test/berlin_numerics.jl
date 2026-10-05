@@ -8,7 +8,8 @@
 #     built-in closure does);
 #   * the σ-model provider (`sgs = :sigma`, #184): ν_t ≥ 0, exactly 0 on
 #     the laminar version of the current flow and in a laminar parallel
-#     flow on the Berlin mesh, where Smagorinsky is on;
+#     flow on the Berlin mesh, where Smagorinsky is on; below 1e-2 ν in the
+#     (volume-γ laminar) free stream above the sponge start (P59-e, #195);
 #   * the SGS option scalar_tensor = :isentropic (P55-c, #181): with the
 #     closure's own κv (= κh) the tensor is κh I and the run is the default
 #     one to round-off; with diapycnal = 0.1 it rotates and changes θ;
@@ -131,6 +132,19 @@ end
                        pz.free_σ, pz.free_smag, pz.free_σ / pz.free_smag, γz)
         @test γz == 0                                  # a laminar sheared layer …
         @test pz.free_σ <= 0.05 * pz.free_smag         # … where σ stays far below Smagorinsky
+        # The relaminarisation view of the same default free stream (P59-e,
+        # #195): it is laminar against the domain-mean vorticity
+        # (volume-normalised γ, the Transition setting for a quiet free
+        # stream — the plane-normalised γ above is scale-free and counts the
+        # weak 3-D residual disturbances, σ_w 2–5 mm/s, as turbulent), and
+        # σ's ν_t there is negligible against the background ν (the
+        # relaminarisation criterion ν_t/ν < 1e-2).
+        laminar_mask!(lam, sim.u, sim.v, sim.w; normalization = :volume)
+        γfree_vol = 1 - mean(lam[:, :, p.ksp:end])
+        @info @sprintf("  σ-model, default free stream: ν_t %.3e m²/s = %.1e ν; γ there %.3f (plane), %.3f (volume)",
+                       p.free_σ, p.free_σ / sg.cfg.ν, γfree, γfree_vol)
+        @test γfree_vol < 0.1
+        @test p.free_σ / sg.cfg.ν < 1e-2
         # exactly zero for an exactly laminar parallel flow on the Berlin
         # mesh, through the provider's closure object (compute_sgs!, the
         # call every core makes): a turning, sheared profile u(z), v(z), w = 0

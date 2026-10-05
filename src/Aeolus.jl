@@ -979,6 +979,8 @@ export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
        turbulence_velocity_scale, growth_rate, supercritical_fraction,
        grid_reynolds_number
+# P59-e (#195): relaminarisation criteria (L is SurfaceExchange.obukhov_length)
+export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
 
 # P59-d (#185) — spatially developing flat-plate boundary layer: Blasius,
 # fringe region, free-stream disturbances, BL integral diagnostics.

@@ -83,7 +83,12 @@ function smoke_check(c::SGSSigma, case)
     return ["σ-model ν_t ≥ 0" => p.min_σ >= 0,
             "σ-model ν_t > 0 in the canopy" => p.canopy_σ > 0,
             sgs_switchoff_checks(case, c.closure)...,
-            sgs_stress_checks(c.stress, case)...]
+            sgs_stress_checks(c.stress, case)...,
+            # relaminarisation criterion of P59-e (#195): negligible against
+            # the background ν in the free stream above the sponge start
+            # (with the geostrophic sponge of #171 that free stream is shear
+            # free, so Smagorinsky's ν_t there is no longer the larger one)
+            "σ-model ν_t/ν < 1e-2 above the sponge start" => p.free_σ < 1e-2 * case.cfg.ν]
 end
 
 register!(SGSSigma)

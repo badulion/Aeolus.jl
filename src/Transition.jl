@@ -17,8 +17,13 @@ does not redefine them.
 | [`growth_rate`](@ref) | log-linear least-squares growth rate, ``R^2`` window | — |
 | [`supercritical_fraction`](@ref) | plane fraction with ``Ri_g > 1/4`` | Miles (1961); Howard (1961) |
 | [`grid_reynolds_number`](@ref) | ``U Δ/(ν + ν_t)`` | — |
+| [`friction_reynolds`](@ref) | ``Re_τ = u_τ h/ν`` of a no-slip wall | Pope (2000), §7.1 |
+| [`relaminarisation_criteria`](@ref) | ``h/L``, ``L^+ = L u_τ/ν``, bulk ``Ri_b`` of a cooled channel | Nieuwstadt (2005); Flores & Riley (2011) |
+| [`relaminarised_fraction`](@ref) | fraction of the ``Ri_g > 1/4`` cells that are γ-laminar with ``ν_t/ν < 10^{-2}`` | — |
 
-The module defines **no Richardson number of its own**: ``N^2`` and
+The module defines **no Richardson number and no Obukhov length of its
+own**: ``L`` is `SurfaceExchange.obukhov_length`, the bulk Richardson
+number is `SurfaceExchange.bulk_richardson`, and ``N^2`` and
 ``Ri_g`` come from the `TurbulenceStability` contract (P58-a, #170) and
 its pointwise fields `Operators.buoyancy_frequency_squared!` /
 `Operators.gradient_richardson!`; [`supercritical_fraction`](@ref) only
@@ -48,6 +53,13 @@ as the strain rate of the Smagorinsky closure.
     *J. Fluid Mech.*, 10, 496-508.
   * Howard, L. N. (1961). Note on a paper of John W. Miles. *J. Fluid
     Mech.*, 10, 509-512.
+  * Nieuwstadt, F. T. M. (2005). Direct numerical simulation of stable
+    channel flow at large stability. *Boundary-Layer Meteorol.*, 116,
+    277-299.
+  * Flores, O. & Riley, J. J. (2011). Analysis of turbulence collapse in
+    the stably stratified surface layer using direct numerical
+    simulation. *Boundary-Layer Meteorol.*, 139, 241-259.
+  * Pope, S. B. (2000). *Turbulent Flows*. Cambridge University Press.
 """
 module Transition
 
@@ -58,6 +70,9 @@ using ..Operators: _vorticity_at, _strain_at
 using ..Operators: DampingProfile, NordstromRamp, damping_rate, smooth_step, _add_damping!   # P59-d
 using ..Simulations: BoussinesqSimulation
 import Random
+using ..CutCell: wall_shear_stress
+using ..MoistThermodynamics: ThermodynamicConstants
+using ..SurfaceExchange: obukhov_length, bulk_richardson, SurfaceConstants
 
 export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
@@ -73,6 +88,8 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
        onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw,
        FreeStreamDisturbance, von_karman_spectrum, disturbance_velocity!,
        disturbance_fringe_update
+# P59-e (#195): relaminarisation in strongly stable stratification
+export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
 
 # =========================================================================
 # Turbulent fraction γ(z)
@@ -419,6 +436,134 @@ function supercritical_fraction(Ri::AbstractArray{<:Real,3}; fluid = nothing,
         n > 0 && (f[k] = s / n)
     end
     return f
+end
+
+# =========================================================================
+# Relaminarisation in strongly stable stratification (P59-e, #195)
+# =========================================================================
+
+# SurfaceConstants whose gravity is the simulation's (the channels are run
+# in wall units with g = 1); κ stays the package's von Kármán constant.
+_constants_with_gravity(g::Real) =
+    SurfaceConstants(thermo = ThermodynamicConstants(grav = Float64(g)))
+
+# u_τ of the bottom wall from the molecular wall stress (P59-a)
+_wall_friction_velocity(sim) = sqrt(abs(wall_shear_stress(sim; side = :bottom)))
+
+"""
+    friction_reynolds(sim::BoussinesqSimulation; u_τ = nothing, h = sim.mesh.Lz) -> Re_τ
+
+The friction Reynolds number ``Re_τ = u_τ h/ν`` of a channel with a
+resolved no-slip bottom wall: `u_τ` defaults to the square root of the
+plane-mean molecular wall stress of the bottom wall
+(`wall_shear_stress(sim; side = :bottom)`, P59-a), `h` to the domain
+height (the depth of an open channel; pass the half-height δ for a closed
+one). Pass `u_τ` to use the nominal value that a mean pressure gradient
+``u_τ^2/h`` imposes (Nieuwstadt 2005), as the collapse studies do.
+"""
+function friction_reynolds(sim::BoussinesqSimulation; u_τ = nothing, h::Real = sim.mesh.Lz)
+    sim.ν > 0 || throw(ArgumentError("friction_reynolds: the simulation is inviscid (ν = 0)"))
+    uτ = u_τ === nothing ? _wall_friction_velocity(sim) : float(u_τ)
+    return uτ * h / sim.ν
+end
+
+"""
+    relaminarisation_criteria(sim::BoussinesqSimulation; heat_flux = sim.θ_flux_bottom,
+                              u_τ = nothing, h = sim.mesh.Lz)
+        -> (h_over_L, L_plus, Ri_b, L, u_τ, Re_τ)
+
+The three parameters that the stable-channel collapse studies use to
+predict relaminarisation of a channel of depth `h` cooled at the bottom
+by the kinematic heat flux `heat_flux` ``= \\overline{w'θ'}_0`` (K m s⁻¹,
+negative for cooling; default the simulation's prescribed bottom flux):
+
+  * ``h/L`` with the Obukhov length of the surface flux,
+    ``L = u_τ^2 θ_0/(κ g θ_*)``, ``θ_* = -\\overline{w'θ'}_0/u_τ``
+    (`SurfaceExchange.obukhov_length` with the simulation's ``g`` and
+    ``θ_0``; positive for cooling). Nieuwstadt (2005) finds the
+    turbulence of an open channel collapses for ``h/L ≳ 1.23`` at
+    ``Re_τ = 360``;
+  * ``L^+ = L u_τ/ν``, the Obukhov length in wall units; Flores & Riley
+    (2011) find collapse for ``L^+ ≲ 100`` (``L^+ = Re_τ/(h/L)``);
+  * the bulk Richardson number ``Ri_b = g h (Θ_{top} - Θ_{bot})/(Θ_{top} U_b^2)``
+    (`SurfaceExchange.bulk_richardson`) of the plane-mean θ of the top
+    and the bottom cell layers and the bulk (volume-mean) streamwise
+    velocity ``U_b``.
+
+`u_τ` defaults to the measured friction velocity of the bottom wall (see
+[`friction_reynolds`](@ref)); pass the nominal value to evaluate the
+criteria of a case set up by its forcing, as the published thresholds
+are. Needs buoyancy (``θ_0 > 0``). A neutral flux gives ``h/L = 0`` and
+``L^+ = Inf``.
+"""
+function relaminarisation_criteria(sim::BoussinesqSimulation;
+                                   heat_flux::Real = sim.θ_flux_bottom,
+                                   u_τ = nothing, h::Real = sim.mesh.Lz)
+    sim.has_buoyancy ||
+        throw(ArgumentError("relaminarisation_criteria: the simulation has no buoyancy (θ₀ = 0)"))
+    sim.ν > 0 || throw(ArgumentError("relaminarisation_criteria: the simulation is inviscid (ν = 0)"))
+    uτ = u_τ === nothing ? _wall_friction_velocity(sim) : float(u_τ)
+    c = _constants_with_gravity(sim.g_accel)
+    θ₀ = float(sim.θ₀)
+    L = heat_flux == 0 ? Inf : obukhov_length(uτ, -heat_flux / uτ, θ₀; c = c)
+    m = sim.mesh
+    Nx, Ny, Nz, Hx, Hy, Hz = m.Nx, m.Ny, m.Nz, m.Hx, m.Hy, m.Hz
+    ud, θd = sim.u.data, sim.θ.data
+    Ub = 0.0; θb = 0.0; θt = 0.0
+    @inbounds for j in 1:Ny, i in 1:Nx
+        for k in 1:Nz
+            Ub += 0.5 * (ud[Hx+i, Hy+j, Hz+k] + ud[Hx+i+1, Hy+j, Hz+k])
+        end
+        θb += θd[Hx+i, Hy+j, Hz+1]; θt += θd[Hx+i, Hy+j, Hz+Nz]
+    end
+    n = Nx * Ny
+    Ub /= n * Nz; θb /= n; θt /= n
+    Ri_b = bulk_richardson(h, Ub, θt, θb; c = c)
+    return (h_over_L = h / L, L_plus = L * uτ / sim.ν, Ri_b = Ri_b, L = L, u_τ = uτ,
+            Re_τ = uτ * h / sim.ν)
+end
+
+"""
+    relaminarised_fraction(laminar, Ri, νt, ν; fluid = nothing, Ri_c = 0.25,
+                           νt_ratio = 1e-2) -> (profile, fraction, nstable)
+
+The relaminarised share of the stable layer: among the fluid cells whose
+gradient Richardson number exceeds `Ri_c` (default the Miles–Howard 1/4),
+the fraction that are laminar by the vorticity-fluctuation indicator
+(`laminar`, a `Bool` array from [`laminar_mask!`](@ref), i.e. ``γ = 0``
+there) **and** carry a negligible eddy viscosity, ``ν_t/ν <`` `νt_ratio`.
+A laminar-consistent closure (the σ-model) switches itself off in such
+cells; Smagorinsky does not, as long as the resolved strain is non-zero.
+
+`Ri` and `νt` are `CellCenter` fields or arrays of the interior size
+(the Richardson number comes from `Operators.gradient_richardson!`; none
+is recomputed here). Returns the per-level fraction (`NaN` on a level
+with no stable cell), the fraction over the whole stable layer (`NaN` if
+it is empty) and the number of stable cells.
+"""
+function relaminarised_fraction(laminar::AbstractArray{Bool,3}, Ri, νt, ν::Real;
+                                fluid = nothing, Ri_c::Real = 0.25, νt_ratio::Real = 1e-2)
+    R = Ri isa Field ? interior_view(Ri) : Ri
+    V = νt isa Field ? interior_view(νt) : νt
+    Nx, Ny, Nz = size(laminar)
+    size(R) == size(V) == (Nx, Ny, Nz) ||
+        throw(DimensionMismatch("laminar, Ri and νt must have the interior size $((Nx, Ny, Nz))"))
+    ν > 0 || throw(ArgumentError("relaminarised_fraction: ν must be positive"))
+    prof = fill(NaN, Nz)
+    nst = 0; nrel = 0
+    lim = νt_ratio * ν
+    @inbounds for k in 1:Nz
+        n = 0; r = 0
+        for j in 1:Ny, i in 1:Nx
+            _fluid_ok(fluid, i, j, k) || continue
+            R[i, j, k] > Ri_c || continue
+            n += 1
+            r += laminar[i, j, k] && V[i, j, k] < lim
+        end
+        n > 0 && (prof[k] = r / n)
+        nst += n; nrel += r
+    end
+    return (profile = prof, fraction = nst > 0 ? nrel / nst : NaN, nstable = nst)
 end
 
 # =========================================================================

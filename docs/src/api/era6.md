@@ -114,6 +114,18 @@ Aeolus.Operators._SGSMask
 Aeolus.Operators._masked_velocities!
 ```
 
+`laminar_consistent(closure)` (P59-e, #195) is the contract's trait for
+closures whose ``ν_t`` vanishes identically in laminar flow: `true` for
+the σ-model and for `StabilityCorrected` / `IsentropicDiffusion` around
+it, `false` for Smagorinsky. The Berlin `turbulence_diag` asks it to
+decide which closures must give ``ν_t = 0`` in a laminar flow on its
+mesh; the relaminarisation study is in
+[Transition → Relaminarisation](../theory/transition.md#Relaminarisation-in-strongly-stable-stratification).
+
+```@docs
+Aeolus.Operators.laminar_consistent
+```
+
 ## Stress-form momentum divergence (P55-b)
 
 The SGS momentum tendency in the stress form `∂ⱼ(2νᵢⱼSᵢⱼ)`, with

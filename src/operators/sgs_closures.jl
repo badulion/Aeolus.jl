@@ -417,3 +417,19 @@ struct FunctionSGS{F} <: AbstractEddyViscosityClosure
     f::F
 end
 sgs_viscosity!(νt, c::FunctionSGS, sim) = (c.f(νt, sim.u, sim.v, sim.w); νt)
+
+"""
+    laminar_consistent(closure) -> Bool
+
+Whether the eddy viscosity of `closure` vanishes identically in laminar
+flow — pure shear, solid-body rotation and any two-dimensional flow —
+so that a relaminarised region carries no SGS mixing (P59-e, #195). The
+σ-model is (Nicoud et al. 2011); Smagorinsky is not (its ``ν_t ∝ |S|``
+stays on in laminar shear). Wrappers (`StabilityCorrected`,
+`IsentropicDiffusion`) are laminar-consistent when their base closure
+is. The Berlin `turbulence_diag` diagnostic asks this to decide which
+closures must give ``ν_t = 0`` in a laminar flow on its mesh. A
+closure added later (AMD, P55-d) extends it.
+"""
+laminar_consistent(::AbstractSGSClosure) = false
+laminar_consistent(::Nothing) = false

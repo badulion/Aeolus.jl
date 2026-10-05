@@ -903,3 +903,127 @@ function stratified_channel_run(Ri, stab; N = (32, 32, 48), T_end = 40.0, T_avg 
             ΔUb = mean(U1) - mean(U0), nsteps = c.nsteps, wall_time = st.wall_time)
 end
 
+
+# =========================================================================
+# The flux-cooled open channel of the relaminarisation study (P59-e, #195;
+# Nieuwstadt 2005, Flores & Riley 2011, Donda et al. 2015) on the same
+# builder: `channel_case(bottom_bc = :noslip, walls = :bottom,
+# surface_heat_flux = Q)`. Wall units: h = u_τ = 1, ν = 1/Re_τ, and the
+# buoyancy parameter g/θ₀ = 1 (θ₀ = g = 1000, so θ stays positive while the
+# channel cools by |Q| per h/u_τ — at most 100 over 20 h/u_τ at h/L = 2 —
+# and the bulk Richardson number of `relaminarisation_criteria`, which
+# divides by the upper θ, stays within |Q|t/θ₀ ≤ 10 % of the Boussinesq
+# one). Shared by examples/sbl/relaminarisation_channel.jl.
+# =========================================================================
+
+const SBL_RELAM_θ₀ = 1000.0
+
+"""
+    relam_heat_flux(h_over_L; κ = von_karman(), u_τ = 1, h = 1, θ₀ = SBL_RELAM_θ₀, g = θ₀)
+
+The kinematic surface heat flux ``Q = -(h/L)\\,θ_0 u_τ^3/(κ g h)`` that puts
+a channel of depth `h` and friction velocity `u_τ` at the stability `h/L`
+(the inverse of the Obukhov length of `relaminarisation_criteria`).
+"""
+relam_heat_flux(h_over_L; κ = Aeolus.SurfaceExchange.von_karman(), u_τ = 1.0, h = 1.0,
+                θ₀ = SBL_RELAM_θ₀, g = θ₀) = -h_over_L * θ₀ * u_τ^3 / (κ * g * h)
+
+"""
+    relam_case(Re_τ, h_over_L; N = (32, 32, 32), extent = (2π, π, 1), seed = 1)
+        -> WallBoundedCase
+
+The open channel at `Re_τ` cooled at `h/L`: no-slip bottom, free-slip
+insulated top, Pr = 0.71, the σ-model (Nicoud et al. 2011) wrapped in
+`StabilityCorrected` (Brown et al. 1994) with isotropic length scales, as
+P58-e's collapse runs use (there the anisotropic Δh relaminarised even the
+neutral half channel; not re-measured for this channel), stress-form
+momentum divergence.
+"""
+function relam_case(Re_τ, h_over_L; N = (32, 32, 32), extent = (2π, π, 1.0), seed = 1)
+    mesh = RegularGrid(; size = N, extent = extent)
+    closure = StabilityCorrected(SigmaModel(), mesh; length_scales = :isotropic)
+    return channel_case(; Re_τ = Re_τ, N = N, closure = closure, bottom_bc = :noslip,
+                        walls = :bottom, extent = extent, sgs_stress = :symmetric, Pr = 0.71,
+                        θ₀ = SBL_RELAM_θ₀, g_accel = SBL_RELAM_θ₀,
+                        surface_heat_flux = relam_heat_flux(h_over_L), noise = 0.0, seed = seed)
+end
+
+# A smooth, solenoidal random perturbation (`isotropic_random_field!`,
+# E ∝ k⁴ e^{-2(k/k_p)²}, k_p = 3·2π/h) of rms `amp`·u_τ in u, damped to the
+# wall over z⁺ ≈ 10 (tanh), added to the law-of-the-wall profile. White
+# grid-scale noise (`channel_case(noise = …)`) is dissipated before it can
+# trip the 32³ open channel: from noise = 3 the σ and dynamic-Smagorinsky
+# runs relaminarise (⟨τ_w⟩ → 0.44 u_τ² by 5 h/u_τ, measured), from this
+# perturbation they reach ⟨τ_w⟩ = 0.9-1.0 u_τ² (P59-e).
+function relam_perturb!(c; amp = 2.0, kp = 3.0, seed = 1)
+    s = c.sim; g = s.mesh
+    tmp = BoussinesqSimulation(RegularGrid(; size = (g.Nx, g.Ny, g.Nz), extent = (g.Lx, g.Ly, g.Lz));
+                               ν = 0.0)
+    k_p = kp * 2π / g.Lz
+    isotropic_random_field!(tmp.u, tmp.v, tmp.w, k -> k^4 * exp(-2 * (k / k_p)^2);
+                            rng = Random.Xoshiro(seed))
+    ii, jj, _ = Aeolus.Grids.interior(g)
+    r = sqrt(mean(abs2, view(tmp.u.data, ii, jj, g.Hz+1:g.Hz+g.Nz)))
+    zp = c.u_star / s.ν                                 # z⁺ per unit height
+    for k in 1:g.Nz
+        K = g.Hz + k
+        dc = tanh((k - 0.5) * g.dz * zp / 10); df = tanh((k - 1) * g.dz * zp / 10)
+        s.u.data[ii, jj, K] .+= (amp / r * dc) .* view(tmp.u.data, ii, jj, K)
+        s.v.data[ii, jj, K] .+= (amp / r * dc) .* view(tmp.v.data, ii, jj, K)
+        s.w.data[ii, jj, K] .+= (amp / r * df) .* view(tmp.w.data, ii, jj, K)
+    end
+    return c
+end
+
+"""
+    relam_spinup(Re_τ; N = (32, 32, 32), T_spin = 10, seed = 1) -> snapshot
+
+The neutral open channel (`relam_case(Re_τ, 0)`, θ uniform) from the
+law-of-the-wall profile plus `relam_perturb!`, run for `T_spin` h/u_τ.
+Returns `u, v, w`, the time `t` and the resolved TKE, wall stress and
+bulk velocity at the end.
+"""
+function relam_spinup(Re_τ; N = (32, 32, 32), T_spin = 10.0, seed = 1)
+    c = relam_case(Re_τ, 0.0; N = N, seed = seed)
+    relam_perturb!(c; seed = seed)
+    run_channel!(c, T_spin)
+    s = c.sim
+    return (u = copy(s.u.data), v = copy(s.v.data), w = copy(s.w.data), t = s.t,
+            tke = mean(resolved_tke_profile(s.u, s.v, s.w)), τ_wall = c.τ_wall_bottom,
+            Ub = mean(Aeolus.WallModels._uv_means(s)[1]), Re_τ = Re_τ, N = N)
+end
+
+"""
+    relam_run(Re_τ, h_over_L, spinup; T_end = 20, sample = 0.5) -> NamedTuple
+
+Switch the cooling `h/L` on in the developed neutral open channel
+`spinup` (θ reset to θ₀) and run `T_end` h/u_τ. Samples every `sample`:
+the volume-mean resolved TKE (`resolved_tke_profile`) relative to its
+value at the switch-on, the turbulent fraction γ of the lower half
+(`turbulent_fraction`, volume normalisation), the bottom wall stress and
+the bulk velocity. Returns the series, the final TKE ratio, the
+relaminarisation criteria at the switch-on (`relaminarisation_criteria`
+with the nominal u_τ = 1) and the wall time.
+"""
+function relam_run(Re_τ, h_over_L, spinup; T_end = 20.0, sample = 0.5)
+    c = relam_case(Re_τ, h_over_L; N = spinup.N)
+    s = c.sim
+    s.u.data .= spinup.u; s.v.data .= spinup.v; s.w.data .= spinup.w
+    crit = relaminarisation_criteria(s; u_τ = 1.0, h = 1.0)
+    tke() = mean(resolved_tke_profile(s.u, s.v, s.w))
+    Nz = s.mesh.Nz
+    γlow() = mean(turbulent_fraction(s; normalization = :volume)[1:Nz÷2])
+    e0 = tke()
+    ts = [0.0]; es = [1.0]; γs = [γlow()]; τs = [NaN]; Ubs = [mean(Aeolus.WallModels._uv_means(s)[1])]
+    nxt = Ref(sample)
+    t00 = time()
+    run_channel!(c, T_end; callback = function (c)
+        s.t + 1e-9 >= nxt[] || return
+        push!(ts, s.t); push!(es, tke() / e0); push!(γs, γlow()); push!(τs, c.τ_wall_bottom)
+        push!(Ubs, mean(Aeolus.WallModels._uv_means(s)[1]))
+        nxt[] += sample
+    end)
+    return (Re_τ = Re_τ, h_over_L = h_over_L, crit = crit, t = ts, tke = es, γ = γs,
+            τ_wall = τs, Ub = Ubs, tke_end = es[end], γ_end = γs[end],
+            nsteps = c.nsteps, wall_time = time() - t00)
+end

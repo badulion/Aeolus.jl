@@ -272,8 +272,12 @@ values) are all implemented now: `filter` (P57-b), `surface_heat_flux`
 wall-resolved channel with `NoSlipWall`s and isothermal θ walls, molecular
 Prandtl number `Pr`, buoyancy reference `θ₀`/`g_accel` and the stress-form
 switch `sgs_stress`; see [Stable boundary layers](stable_boundary_layer.md#The-stably-stratified-channel).
-P59-e (#195) reuses it for the relaminarisation study. The half channel
-is inviscid and keeps refusing `bottom_bc` and `θ_walls`.
+P59-e (#195) reuses it for the relaminarisation study and adds
+`channel_case(surface_heat_flux = Q)` on the resolved wall: the
+flux-cooled open channel (`walls = :bottom`) of Nieuwstadt (2005), with
+the prescribed bottom θ flux of the core and molecular Pr; see
+[Transition → Relaminarisation](transition.md#Relaminarisation-in-strongly-stable-stratification).
+The half channel is inviscid and keeps refusing `bottom_bc` and `θ_walls`.
 
 **Surface heat flux (P58-e, #193).** `surface_heat_flux = Q` (K m s⁻¹,
 upward kinematic; negative cools) turns the half channel into the
