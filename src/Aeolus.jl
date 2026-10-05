@@ -21,7 +21,6 @@ include("IO.jl")
 include("NetCDFIO.jl")        # dependency-free NetCDF-3 reader/writer
 include("IBM.jl")
 include("Parallel.jl")
-include("Nesting.jl")
 include("Backends.jl")
 include("SpectralElement.jl")
 include("Chemistry.jl")
@@ -36,7 +35,8 @@ include("AdvectionSchemes.jl")  # Phases 26, 28
 include("TimeIntegration.jl")   # Phases 23, 25
 include("Anelastic.jl")         # Phase 27
 include("Multigrid.jl")         # Phase 29
-include("AdaptiveMesh.jl")      # Phases 30-31
+include("Nesting.jl")          # Phase 30 parent-child operators (N-nest-a, #250)
+include("AdaptiveMesh.jl")      # Phase 31 AMR (delegates to Nesting)
 
 # --- Era III: high-fidelity radiation (Phases 32-38) ---------------------
 # MoistThermodynamics (Era IV, Phase 39) is dependency-free and defines the
@@ -99,7 +99,6 @@ using .NetCDFIO
 using .Microphysics
 using .IBM
 using .Parallel
-using .Nesting
 using .Backends
 using .SpectralElement
 using .Radiation
@@ -114,6 +113,7 @@ using .AdvectionSchemes
 using .TimeIntegration
 using .Anelastic
 using .Multigrid
+using .Nesting
 using .AdaptiveMesh
 
 using .RadiationCore
