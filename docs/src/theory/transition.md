@@ -655,7 +655,7 @@ An open inflow face fed by an interpolated coarse parent (the Berlin nest,
 epic #246) carries no energy below about two parent cells; without
 perturbations the child's inflow stays quasi-laminar over a long fetch.
 `Transition` owns the generator contract and two providers (N-inflow-a,
-#252); the inflow statistics (N-inflow-b) and the coupling to an open face
+#252); the inflow statistics (N-inflow-b, #258) and the coupling to an open face
 (N-inflow-e) build on them.
 
 ### The contract and the Lund transform
@@ -746,13 +746,176 @@ changed: 80 seeds × 2000 modes, 1600 L records). The digital filter
 remains the general provider: the mode field is isotropic with one
 intensity, one length and one advection speed.
 
+### Inflow statistics (N-inflow-b)
+
+The generator needs, at every child face, ``R_{ij}(z)``, ``L_s(z)``,
+``L_z(z)`` and ``T(z)``. An
+[`InflowStatistics`](@ref Aeolus.Transition.InflowStatistics) source
+supplies them through
+[`inflow_stresses`](@ref Aeolus.Transition.inflow_stresses)`(src, z, t)` and
+[`inflow_lengths`](@ref Aeolus.Transition.inflow_lengths)`(src, z, t)`, in
+the generator's face frame (normal, along the face, vertical), whatever
+the parent is. Every tensor returned has passed
+[`lund_coefficients`](@ref Aeolus.Transition.lund_coefficients); one that
+did not is replaced by its nearest positive-semidefinite tensor
+([`realizable_stress`](@ref Aeolus.Transition.realizable_stress),
+eigenvalues clipped) and the correction is booked in
+[`inflow_projection_log`](@ref Aeolus.Transition.inflow_projection_log).
+The resolved part is always realizable. The SGS part is not when
+``ν_t|S|`` exceeds ``e`` (a strongly sheared, weakly turbulent cell), and
+the test exercises that case.
+
+**An Aeolus parent:
+[`ParentResolvedStatistics`](@ref Aeolus.Transition.ParentResolvedStatistics).**
+After each parent step,
+[`update_inflow_statistics!`](@ref Aeolus.Transition.update_inflow_statistics!)`(src, Δt)`
+folds the state into a running exponential mean,
+``S ← ρS + τ(1-ρ)x``, ``W ← ρW + τ(1-ρ)``, ``ρ = e^{-Δt/τ_{\rm avg}}``,
+statistic ``S/W``. The weight is the exact integral of the kernel over
+the step, so the memory e-folds in exactly ``τ_{\rm avg}`` (600 s by
+default) for any sequence of adaptive steps, and the first sample is not
+biased towards zero.
+
+* *Resolved part.* The velocities are interpolated to the cell centres,
+  and ``R^{\rm res}_{ij} = ⟨u_i'u_j'⟩`` is averaged over the whole plane
+  (`region = :plane`) or over the parent columns within `ring_width`
+  cells of the edge of the child footprint (`region = :ring`).
+* *SGS part.* ``R^{\rm SGS}_{ij} = \tfrac23 e\,δ_{ij} - 2ν_t\bar S_{ij}``,
+  with ``\bar S`` the deviatoric cell-centred strain (`Operators._strain_at`),
+  so ``\operatorname{tr}R^{\rm SGS} = 2e`` exactly. ``e`` comes from the
+  new closure generic [`sgs_tke!`](@ref Aeolus.Operators.sgs_tke!): the
+  TKE closure's ``e``, the Reynolds-stress closure's ``\tfrac12τ_{ii}``,
+  or, for any eddy-viscosity closure, the closure's own estimate. That
+  estimate is the Deardorff (1980) relation ``ν_t = c_kΔ\sqrt e`` inverted
+  (``c_k = 0.1``, Moeng 1984).
+* *Scale gap* (the default). The interpolated boundary values already
+  carry the parent's well-resolved eddies, so the generator adds only
+  what is missing:
+
+  ```math
+  R^{\rm gen} = R^{\rm SGS} + R^{\rm res}(k_c < |k_h| ≤ r\,k_c),
+  \qquad k_c = \frac{2π}{c_{\rm gap}Δ_p}.
+  ```
+
+  The band runs from the parent's effective resolution (wavelength
+  ``c_{\rm gap}Δ_p``, with ``c_{\rm gap} = 4``, the upper end of the 2–4
+  ``Δ_p`` in the issue) to the child's, ``c_{\rm gap}Δ_p/r``. It is cut
+  out of each level by an FFT band-pass of the laterally periodic parent.
+  At ``r = 1`` the band is empty, so ``R^{\rm gen} = R^{\rm SGS}``; at the
+  Berlin ``r = 2`` it covers everything shorter than ``4Δ_p``. The lengths
+  are those of the band-passed field, capped at ``c_{\rm len}Δ_p``
+  (``c_{\rm len} = c_{\rm gap}/2``, half the cutoff wavelength).
+  `mode = :full` gives ``R^{\rm SGS} + R^{\rm res}``.
+* *Lengths and time.* The horizontal autocovariances come from the same
+  spectra (Wiener–Khinchin). The vertical ones are the plane covariances
+  with the `lag_z = 16` levels above. Each length is the integral of the
+  correlation coefficient up to its first zero crossing. The time is
+  ``T = L_n/\max(|U_n|, 0.1\ {\rm m\,s^{-1}})``, with ``L_n`` the length
+  along the face normal (Taylor).
+
+**A parent without resolved turbulence:
+[`ParametrizedStatistics`](@ref Aeolus.Transition.ParametrizedStatistics).**
+This is for #58. The scales are ``u_*``, ``w_*``, ``z_i`` and ``L``.
+``w_*`` is derived from ``L`` (``w_*^3 = -z_iu_*^3/(κL)``, with
+`SurfaceExchange`'s κ) unless given, and ``L`` may come from the surface
+fluxes through `SurfaceExchange.obukhov_length`. The shear and convective
+variances are added, as in Rotach, Gryning & Tassone (1996) and PALM's
+generator. With ``x = \min(z/z_i, 1)``:
+``σ_u^2 = (2.39u_*)^2(1 - 0.8x) + 0.35w_*^2``,
+``σ_v^2 = (1.92u_*)^2(1 - 0.8x) + 0.35w_*^2``,
+``σ_w^2 = (1.25u_*)^2(1 - x/1.7) + 1.8x^{2/3}(1-0.8x)^2w_*^2``,
+``\overline{u'w'} = -u_*^2(1 - x)``. The coefficients have these sources:
+
+* the surface values of the shear part are the neutral ratios of
+  Panofsky & Dutton (1984);
+* the decay of the shear part is Rotach's (``5 - 4x`` and ``1.7 - x``,
+  normalised);
+* the convective ``σ_w^2`` is Lenschow et al. (1980).
+
+The tensor is rotated by the mean-wind angle and decays by a factor 10
+per `length_scale` above ``z_i``. The lengths follow PALM (Kadasch et al.
+2021): a single `length_scale`, ``L_z ≤ z_i``, and ``T = ℓ/|U_n|``. This
+is a numerical choice, not a similarity law. The blend has no
+stable-stratification correction.
+
+Measured (`test/era6_inflow_statistics.jl`):
+
+| test | measured | asserted |
+| :-- | :-- | :-- |
+| ``u = U + A\sin(ky)\cos(ωt)``, 3 periods × 16 samples: ``σ_u^2/(A^2/4) - 1`` | 2.4e-15 | 1e-10 |
+| same, ``\overline{u'w'}`` with ``w = B\sin(ky)\sin(ωt)`` | 7.9e-18 | 1e-12 ``AB`` |
+| same, ``L_s`` of the sine to its zero crossing / ``(λ/2π)``, ``λ = 32Δ`` | 0.9968 | 0.5 % |
+| e-folding of the running mean / ``τ_{\rm avg}`` (fixed and random steps) | 1.0000000000 | 2 % (and 1e-9) |
+| ``\operatorname{tr}R^{\rm SGS} - 2e`` (random field, TKE closure) | round-off | 1e-14 ``e`` |
+| ``S = 0``: ``R^{\rm SGS} - \tfrac23 e δ_{ij}`` | 0 | 1e-15 |
+| band ``R_{11}`` of ``\sin`` at ``λ = 3Δ`` (in the gap) + ``λ = 8Δ`` (not) / ``A^2/2`` | 1 to 1e-12 | 1e-12 |
+| ``r = 1``: ``R^{\rm gen} - R^{\rm SGS}`` | 0 | 1e-12 |
+| laminar parent, ``e = e_0``: ``R - \tfrac23e_0δ_{ij}`` | 0 | 1e-15 |
+| generator-filled parent (240 × 64 × 40, 30 fills): ``R_{11,22,33}``, ``\overline{u'w'}`` / attenuated target | 0.984, 0.982, 0.980, 0.981 | 3 % |
+| same: ``L_s`` / 4 Δ (u, v, w) | 0.937, 1.006, 0.936 | 10 % |
+| same: ``L_z`` / 4 Δ | 1.008, 0.999, 1.056 | 10 % |
+| same: ``T`` / 6 Δt | 1.027, 0.939, 0.939 | 10 % |
+| Lenschow ``σ_w/w_*`` at ``z/z_i = 0.3125`` (``u_* = 0``) | 0.6828325099 (analytic to 1e-10; the maximum) | 0.683 ± 5e-4 |
+| neutral ``σ_{u,v,w}/u_*`` at the surface | 2.39, 1.92, 1.25 | 1e-12 |
+| realizable for ``-z_i/L`` ∈ {0, 1, 10, 100}, 301 heights, two wind angles | no projection | — |
+
+**The generator-filled parent (an expectation that needed care).** The
+parent's x-slices are successive generator planes (``Δt`` = 1 s,
+``U`` = 1 m/s), with the Panofsky & Dutton tensor imposed. Measured at the
+cell centres, each staggered component is the two-point mean along its
+own direction. That attenuates the generator's field by ``(1 + ρ_1)/2``,
+where ``ρ_1`` is the lag-1 correlation (``e^{-1/6}`` in x, the filter's
+discrete ``R_1`` in y and z). Against the imposed tensor the measured
+values are 8–14 % low; against the exactly attenuated target they are
+within 2 %. The test asserts the attenuated target, which is computed
+from the generator's own kernels.
+
+The remaining 1.6–2.0 % deficit, the same sign for every component, is
+consistent with two sources:
+
+* the plane-mean removal bias, about ``1/N_{\rm eff} ≈ 0.6`` % per plane;
+* the sampling error, about 0.8 %.
+
+**Cost.** One update on a 64 × 64 plane with 20 levels and `lag_z = 16`
+takes 5.5 ms (7.3 ms inside the CBL run below). On 192 × 192, the Berlin
+parent, it takes 56 ms on one core. With ``τ_{\rm avg}`` = 600 s, a
+cadence of tens of seconds of parent time is enough.
+
+**A convective Aeolus parent** (`examples/nesting/cbl_inflow_statistics.jl`).
+The parent is the 64³ CBL of `examples/sgs/cbl_tke.jl`: ``Δx = 50`` m,
+``Δz = 25`` m, ``Q = 0.1`` K m/s, Deardorff–Moeng TKE, 2 h, ``z_i = 1175`` m,
+``w_* = 1.57`` m/s. The last 30 min are folded into the running mean
+(τ_avg = 600 s, refine (2, 2, 4), so the band is 100–200 m). Values at
+the west face:
+
+| z (m) | ``σ_u`` resolved | ``σ_u`` missing (band + SGS variance) | ``σ_w`` resolved | ``σ_w`` missing | ``\overline{u'w'}`` resolved / missing | ``e_{\rm SGS}`` | ``L_z`` full / band | ``L_s`` band |
+| --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| 38 | 0.886 | 0.430 (0.046 + 0.139) | 0.524 | 0.505 | 0.0032 / −0.0003 | 0.209 | 188 / 91 | 19.7 |
+| 88 | 0.760 | 0.405 (0.039 + 0.125) | 0.743 | 0.504 | 0.0065 / 0.0013 | 0.187 | 179 / 89 | 19.8 |
+| 188 | 0.609 | 0.376 (0.032 + 0.109) | 0.937 | 0.459 | 0.0058 / 0.0010 | 0.163 | 176 / 86 | 19.8 |
+| 288 | 0.576 | 0.364 (0.029 + 0.104) | 1.015 | 0.449 | −0.0011 / −0.0002 | 0.157 | 167 / 79 | 19.9 |
+| 388 | 0.568 | 0.358 (0.027 + 0.101) | 1.040 | 0.440 | −0.0019 / −0.0011 | 0.152 | 157 / 75 | 20.1 |
+
+(σ in m s⁻¹, variances in m² s⁻², ``e_{\rm SGS}`` in m² s⁻², lengths of
+``u`` in m.) The SGS part dominates what is missing: ``R^{\rm SGS}_{11}``
+is three to four times the band variance. Near the ground the missing
+``σ_w^2`` (0.26 m² s⁻²) is as large as the resolved one (0.27 m² s⁻²).
+Higher up the parent resolves most of ``σ_w`` (1.04 against 0.44 m/s
+missing at 388 m). There is no mean wind, so ``\overline{u'w'}`` is
+noise at the 1e-3 level. The band lengths are well inside the cap
+(``2Δ_p`` = 100 m) and above the child's ``Δ/2``.
+
 ### The Berlin case
 
 Stated exception (as in #185): the Berlin run is laterally periodic and
-has no inflow face, so no generator is coupled yet. The coupling to the
-nested child's open faces is N-inflow-e (#268). Transition stays coupled
-through `turbulence_diag`; no Berlin list changed. One digital-filter step
-on a 64 × 40 face costs 0.10 ms.
+has no inflow face, so no generator or statistics source is coupled yet.
+The coupling to the nested child's open faces is N-inflow-e (#268), which
+will also quote the Berlin day and night statistics. Transition stays
+coupled through `turbulence_diag`; no Berlin list changed. One
+digital-filter step on a 64 × 40 face costs 0.10 ms. One update of
+`ParentResolvedStatistics` on the 192 × 192 Berlin parent (20 levels)
+costs 56 ms, so it belongs on a cadence. The convective-parent numbers
+above stand in for the Berlin numbers until then.
 
 ## References
 
@@ -836,17 +999,28 @@ on a 64 × 40 face costs 0.10 ms.
 
 ### Synthetic inflow
 
+* Deardorff, J. W. (1980). Stratocumulus-capped mixed layers derived
+  from a three-dimensional model. *Boundary-Layer Meteorol.*, 18,
+  495-527.
 * Kadasch, E., Sühring, M., Gronemeier, T. & Raasch, S. (2021). Mesoscale
   nesting interface of the PALM model system 6.0. *Geosci. Model Dev.*, 14,
   5435-5465.
 * Klein, M., Sadiki, A. & Janicka, J. (2003). A digital filter based
   generation of inflow data for spatially developing direct numerical or
   large eddy simulations. *J. Comput. Phys.*, 186, 652-665.
+* Lenschow, D. H., Wyngaard, J. C. & Pennell, W. T. (1980). Mean-field
+  and second-moment budgets in a baroclinic, convective boundary layer.
+  *J. Atmos. Sci.*, 37, 1313-1326.
 * Lund, T. S., Wu, X. & Squires, K. D. (1998). Generation of turbulent
   inflow data for spatially-developing boundary layer simulations.
   *J. Comput. Phys.*, 140, 233-258.
+* Moeng, C.-H. (1984). A large-eddy-simulation model for the study of
+  planetary boundary-layer turbulence. *J. Atmos. Sci.*, 41, 2052-2062.
 * Panofsky, H. A. & Dutton, J. A. (1984). *Atmospheric Turbulence*.
   Wiley.
+* Rotach, M. W., Gryning, S.-E. & Tassone, C. (1996). A two-dimensional
+  Lagrangian stochastic dispersion model for daytime conditions. *Q. J.
+  R. Meteorol. Soc.*, 122, 367-389.
 * Schumann, U. (1977). Realizability of Reynolds-stress turbulence
   models. *Phys. Fluids*, 20, 721-725.
 * Xie, Z.-T. & Castro, I. P. (2008). Efficient generation of inflow

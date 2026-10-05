@@ -673,7 +673,7 @@ part are the neutral surface-layer ratios of Panofsky & Dutton (1984,
 Rotach et al.'s (``u_*^2(5 - 4x)`` and ``u_*^2(1.7 - x)``, normalised to
 the surface value); the convective horizontal variance ``0.35w_*^2`` is
 Rotach et al.'s; the convective ``σ_w^2`` is the mixed-layer fit of
-Lenschow, Wyngaard & Pennell (1980, *J. Atmos. Sci.* 37, 1313, Eq. 3),
+Lenschow, Wyngaard & Pennell (1980, *J. Atmos. Sci.* 37, 1313),
 maximal ``σ_w/w_* = 0.683`` at ``z/z_i = 0.3125``; ``\\overline{u'w'}``
 is linear to zero at ``z_i`` (Rotach et al.; PALM). Above ``z_i`` every
 component decays by 10 per `length_scale` (PALM's blend). The tensor is
