@@ -40,7 +40,18 @@ roughness) only add files and include lines:
      with the dynamic ``κ_{wm}`` of Wang & Moin; an
      [`AbstractWallModel`](@ref) applied by the same face loop as the
      equilibrium [`WallModel`](@ref).
-  5. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
+  5. **Immersed walls** (`immersed.jl`, P57-d) — [`immersed_walls`](@ref),
+     [`remove_stencil_wall_flux!`](@ref) and
+     [`apply_immersed_wall_stress!`](@ref): the stress of a law on the
+     tangential walls of an IBM solid mask (Tessicini et al. 2002;
+     Chester, Meneveau & Parlange 2007), the stencil's own wall flux
+     removed so the two are not counted twice. The Berlin facades.
+  6. **Cut-cell walls** (`cutcell.jl`, P57-d) — the method
+     `wall_shear_stress(u, v, w, stencils, geom, law; ν)` of
+     `CutCell.wall_shear_stress` (the law at the image-point probe) and
+     [`wall_slip_velocity`](@ref) / [`slip_wall_value`](@ref), the slip
+     wall value of `CutCell.reconstruct_wall_velocity!`.
+  7. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
      [`half_channel_case`](@ref) (the neutral ABL half channel of
      Porté-Agel et al. 2000 / Bou-Zeid et al. 2005) and
      [`channel_case`](@ref) (the two-wall channel at a given Re_τ), with
@@ -73,6 +84,12 @@ roughness) only add files and include lines:
   * Bou-Zeid, E., Meneveau, C. & Parlange, M. B. (2005). A
     scale-dependent Lagrangian dynamic model for large eddy simulation
     of complex turbulent flows. *Phys. Fluids*, 17, 025105.
+  * Tessicini, F., Iaccarino, G., Fatica, M., Wang, M. & Verzicco, R.
+    (2002). Wall modeling for large-eddy simulation using an immersed
+    boundary method. *Annual Research Briefs 2002*, CTR Stanford, 181-187.
+  * Chester, S., Meneveau, C. & Parlange, M. B. (2007). Modeling
+    turbulent flow over fractal trees with renormalized numerical
+    simulation. *J. Comput. Phys.*, 225, 427-448.
   * Lee, M. & Moser, R. D. (2015). Direct numerical simulation of
     turbulent channel flow up to Re_τ ≈ 5200. *J. Fluid Mech.*, 774,
     395-415.
@@ -98,6 +115,10 @@ using Random
 using ..SurfaceExchange
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
                          SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, von_karman
+using ..Grids: CellCenter, FaceX, FaceY, FaceZ
+using ..Fields: Field
+using ..CutCell: GhostCellStencil, CutCellGeometry, _center_velocity, _image_value
+import ..CutCell: wall_shear_stress
 
 # Each file exports its own names, so a later phase adds a file and an
 # include line here and nothing else.
@@ -105,6 +126,8 @@ include("wall_models/laws.jl")
 include("wall_models/operator.jl")
 include("wall_models/matching.jl")        # P57-b (#183): matching height, input filters
 include("wall_models/tble.jl")            # P57-c (#189): non-equilibrium (TBLE) wall model, dynamic κ
+include("wall_models/immersed.jl")
+include("wall_models/cutcell.jl")
 include("wall_models/channel_cases.jl")   # P54-d (#174): half channel, channel
 
 end # module

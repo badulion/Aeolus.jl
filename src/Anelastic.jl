@@ -67,7 +67,7 @@ using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    add_eddy_viscosity_w!, add_eddy_diffusion_scalar!,
                    add_surface_flux!, add_sponge!,
                    compute_sgs!, add_sgs_momentum!, add_sgs_scalar!, advance_sgs!,
-                   _active_sgs
+                   _active_sgs, _check_sgs_stress
 using ..PressureSolvers: AbstractPressureSolver
 
 import ..PressureSolvers: solve!
@@ -75,6 +75,7 @@ import ..TimeSteppers: step!
 import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
 
 using ..Simulations: horizontal_mean, horizontal_variance
+using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 
 export ReferenceState,
        isothermal_reference, isentropic_reference,
@@ -294,19 +295,20 @@ the Exner relation: `ρ = (p₀/(Rθ)) (p/p₀)^{cᵥ/cₚ}`.
 the interior and one-sided differences at the two end levels. Using the
 *logarithmic* derivative (rather than `g/θ̄ · Δθ̄/Δz`) makes the result exact
 to round-off for the analytic constant-`N²` profile `θ̄ = θ_s e^{N²z/g}`,
-which is what [`constant_stability_reference`](@ref) prescribes.
+which is what [`constant_stability_reference`](@ref) prescribes. The
+difference is the logarithmic form of
+`TurbulenceStability.buoyancy_frequency_squared`.
 """
 function _brunt_vaisala(θ̄::Vector{T}, dz::T, g::T) where {T}
     Nz = length(θ̄)
     N² = zeros(T, Nz)
     Nz == 1 && return N²
-    lθ = log.(θ̄)
     @inbounds begin
-        N²[1] = g * (lθ[2] - lθ[1]) / dz
+        N²[1] = buoyancy_frequency_squared(θ̄[1], θ̄[2], dz, g)
         for k in 2:Nz-1
-            N²[k] = g * (lθ[k+1] - lθ[k-1]) / (2dz)
+            N²[k] = buoyancy_frequency_squared(θ̄[k-1], θ̄[k+1], 2dz, g)
         end
-        N²[Nz] = g * (lθ[Nz] - lθ[Nz-1]) / dz
+        N²[Nz] = buoyancy_frequency_squared(θ̄[Nz-1], θ̄[Nz], dz, g)
     end
     return N²
 end
@@ -1470,8 +1472,9 @@ Aeolus.Operators.AbstractSGSClosure), or a function `f(νt, u, v, w)`; the
 legacy alias `eddy_viscosity!` is accepted) replaces the built-in
 Smagorinsky closure (`C_s`), its coefficients go into `sim.νt` / `sim.κt`,
 its tendencies are added in step 3 where the built-in ones are, and its
-memory is committed once after the projection. The SGS stress is applied in
-the unweighted form, like the built-in closure (the `O(∂ln ρ̄/∂z)` weighting
+memory is committed once after the projection; `sgs_stress = :laplacian |
+:symmetric` selects the form of its momentum divergence as for `step!`. The
+SGS stress is applied in the unweighted form, like the built-in closure (the `O(∂ln ρ̄/∂z)` weighting
 correction is omitted for the same reason as for the molecular term).
 """
 step_anelastic!(sim::AnelasticSimulation, dt::Real; kwargs...) =
@@ -1500,9 +1503,11 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
                               body_force!::Union{Nothing,Function} = nothing,
                               post_predictor!::Union{Nothing,Function} = nothing,
                               sgs = nothing,
-                              eddy_viscosity! = nothing) where {S,T}
+                              eddy_viscosity! = nothing,
+                              sgs_stress::Symbol = :laplacian) where {S,T}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
+    _check_sgs_stress(sgs_stress)
     m  = sim.mesh
     Wc = _weight_c(sim.weighting, sim.ref)
     Wf = _weight_f(sim.weighting, sim.ref)
@@ -1535,7 +1540,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     #    built-in Smagorinsky, or the `sgs` keyword).
     if closure !== nothing
         f = compute_sgs!(closure, sim)
-        add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim)
+        add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim; stress = sgs_stress)
         add_sgs_scalar!(sim.tθ, sim.θ, closure, f, sim)
     end
 

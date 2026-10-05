@@ -7,6 +7,8 @@ using ..Fields: location, Field
 
 export AbstractBC, Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
        FieldBoundaryConditions, fill_halos!
+export NoSlipWall, is_wall, homogeneous_bcs     # P59-a (#172)
+export FreeStreamBoundary                        # P59-d (#185)
 
 """
     AbstractBC
@@ -19,6 +21,10 @@ Concrete types:
   * [`NoFlux`](@ref) — homogeneous Neumann (ghost = mirror interior).
   * [`ImpermeableWall`](@ref) — free-slip rigid wall for velocity, mirror
     for scalars.
+  * [`NoSlipWall`](@ref) — rigid wall with a prescribed tangential
+    velocity (no slip, or a moving wall).
+  * [`FreeStreamBoundary`](@ref) — top face with zero shear and a
+    prescribed normal (transpiration) velocity.
   * [`ValueBC`](@ref) — Dirichlet with prescribed value.
   * [`FluxBC`](@ref) — Neumann with prescribed flux `∂/∂n = f`.
 """
@@ -70,12 +76,25 @@ end
 
 """
     FieldBoundaryConditions(west, east, south, north, bottom, top)
+    FieldBoundaryConditions(x = :periodic, y = x, z = y; bottom = z, top = z)
 
 Six BCs, one per face. Convenience constructor
 `FieldBoundaryConditions(:periodic)` gives triply-periodic BCs;
 `FieldBoundaryConditions(:periodic, :periodic, :wall)` gives periodic
 in `x, y` and impermeable walls at `z=0` and `z=Lz`. Recognized symbols:
-`:periodic`, `:noflux`, `:wall`.
+`:periodic`, `:noflux`, `:wall` (free slip) and, in `z` only, `:noslip`
+(a stationary [`NoSlipWall`](@ref)).
+
+The `bottom` and `top` keywords set the two z faces separately, as a
+symbol or as a BC object — e.g. an open channel
+`FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = :wall)`
+or a Couette lid
+`FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = NoSlipWall(U, 0))`.
+A z-periodic face cannot be mixed with a non-periodic one, and a mixed
+bottom/top pair must be two walls (`:wall`, `:noslip`, `NoSlipWall`) or a
+wall below a [`FreeStreamBoundary`](@ref) top;
+anything else, e.g. `bottom = :noslip, top = :noflux`, throws an
+`ArgumentError` rather than failing at the first halo fill.
 """
 struct FieldBoundaryConditions{W,E,S,N,B,T}
     west::W; east::E
@@ -85,15 +104,33 @@ end
 
 function FieldBoundaryConditions(hkind::Symbol=:periodic,
                                  vkind::Symbol=hkind,
-                                 zkind::Symbol=vkind)
-    hx = _bc(hkind); hy = _bc(vkind); hz = _bc(zkind)
-    return FieldBoundaryConditions(hx, hx, hy, hy, hz, hz)
+                                 zkind::Symbol=vkind;
+                                 bottom = zkind, top = zkind)
+    hx = _bc(hkind); hy = _bc(vkind)
+    (_is_noslip(hx) || _is_noslip(hy)) &&
+        throw(ArgumentError(":noslip is a z-wall condition; use it for bottom/top only"))
+    hb = _bc(bottom); ht = _bc(top)
+    (hb isa Periodic) == (ht isa Periodic) ||
+        throw(ArgumentError("a z-periodic face cannot be mixed with a non-periodic one " *
+                            "(bottom = $(nameof(typeof(hb))), top = $(nameof(typeof(ht))))"))
+    _z_pair_supported(hb, ht) ||
+        throw(ArgumentError("unsupported z boundary pair bottom = $(nameof(typeof(hb))), " *
+                            "top = $(nameof(typeof(ht))): the two z faces must be the same " *
+                            "kind, or both walls (:wall / :noslip / NoSlipWall)"))
+    return FieldBoundaryConditions(hx, hx, hy, hy, hb, ht)
 end
 
+# The z pairs `fill_halos!` has methods for: two faces of the same kind,
+# or any two impermeable walls (free slip and/or no slip, mixed allowed).
+_z_pair_supported(b, t) = nameof(typeof(b)) === nameof(typeof(t)) ||
+                          (is_wall(b) && is_wall(t))
+
+_bc(bc::AbstractBC) = bc
 _bc(s::Symbol) = s === :periodic ? Periodic()        :
                  s === :noflux   ? NoFlux()          :
                  s === :wall     ? ImpermeableWall() :
-                 error("Unknown BC kind $s (use :periodic, :noflux, :wall)")
+                 s === :noslip   ? _noslip_default() :
+                 error("Unknown BC kind $s (use :periodic, :noflux, :wall, :noslip)")
 
 # =========================================================================
 # Halo filling
@@ -208,5 +245,8 @@ function _fill_z!(d::AbstractArray{T,3}, ::ImpermeableWall, ::ImpermeableWall,
     end
     return d
 end
+
+include("boundary_conditions/noslip_wall.jl")   # P59-a (#172)
+include("boundary_conditions/free_stream.jl")   # P59-d (#185)
 
 end # module

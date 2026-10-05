@@ -233,7 +233,11 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
         # z0 per column is set in init!, from each surface's own roughness
         tble = TBLEWallModel(; terms = Symbol(o.tble_terms), z0 = zeros(Nx, Ny))
     end
-    return SurfaceExchangeMOST(P, o.U_min, Dict{UInt8,Float64}(o.z0m), o.z0h_ratio,
+    # the per-class roughness table goes on the bus: the facade wall model
+    # (#179) reads the wall and glass z0m from it
+    z0m = Dict{UInt8,Float64}(o.z0m)
+    bus.z0m_class = z0m
+    return SurfaceExchangeMOST(P, o.U_min, z0m, o.z0h_ratio,
                                false, 0.0, 0.0, 0.0, z(), laws, WallModel(laws), fill(Inf, Nx, Ny),
                                z(), Symbol(o.wall_formulation), input, plain,
                                fill(mesh.dz / 2, Nx, Ny), fill(mesh.dz / 2, Nx, Ny), nfb, tble,

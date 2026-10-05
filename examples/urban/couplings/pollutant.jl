@@ -12,7 +12,8 @@ Additive coupling: registers the tracer `:pollutant` (output, not on the
 `:transport` stage) and advances it every step in `:tracers` with
 `advect_centered!`, `apply_linear_chemistry!` (τ = `tau`, 3600 s) and
 the stack sources (`0.5 × dayboost` per second, dayboost 1 between 07
-and 20 h, else 0.3). `stacks` are `(x, y, z)` in metres relative to the
+and 20 h, else 0.3), then the SGS diffusion with `κt` of the
+`:scalar_advection` coupling ([`sgs_diffuse!`](@ref), #177). `stacks` are `(x, y, z)` in metres relative to the
 OSM anchor (`cfg.lat0/lon0`); stacks outside the domain are dropped.
 """
 struct PollutantCoupling{F} <: AbstractCoupling
@@ -59,6 +60,9 @@ function run_stage!(c::PollutantCoupling, case, ::Val{:tracers}, dt)
         tp.data[Hx+ci, Hy+cj, Hz+ck] += 0.5 * dayboost
     end
     interior_view(pollutant) .+= dt .* view(tp.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
+    # SGS diffusion with κt, the helper of the :transport stage (#177)
+    d = tracer_sgs_diffusion(case)
+    d === nothing || sgs_diffuse!(d, case, pollutant, dt; κv = sgs_vertical_diffusivity(case))
     clamp!(interior_view(pollutant), 0.0, 100.0)
     return nothing
 end
