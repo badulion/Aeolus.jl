@@ -1821,6 +1821,73 @@ to `step!`, from a 6×6 solve in every cell. The five extra tracers add
 noon and 2.0× at night. These were sequential runs on a heavily loaded
 machine, so the ratios are rough.
 
+### A-priori metrics, outputs and a 1 h comparison (P56-e, #192)
+
+No new physics. Both prognostic providers now add an a-priori line to
+their `report`. It comes from `sgs_test_filter_metrics` in
+`couplings/sgs.jl`, which compares the closure's subfilter stress over the
+canopy fluid cells with the resolved (Germano) stress at the test-filter
+scale. That stress is ``L_{ij} = \widehat{\bar u_i\bar u_j} − \hat{\bar u}_i\hat{\bar u}_j``,
+computed by `subfilter_stress!` of the LES velocity under the 3-cell
+masked box filter (P56-c). The line reports:
+
+* ``k_{test} = ½⟨L_{kk}⟩``;
+* the ratio ``e/k_{test}``;
+* the off-diagonal correlation ``ρ(τ, L)``;
+* the median II of ``L`` and of the model stress;
+* the fraction of cells whose model stress lies outside the Lumley
+  triangle.
+
+For `:tke` the model stress is the implied ``\tfrac23 e δ − 2ν_t\bar S``;
+for `:reynolds_stress` it is ``τ``.
+
+There are new `output_fields`. `:tke` writes `II_sgs`; its ``e`` is
+already the tracer `e`. `:reynolds_stress` writes `e` (``½ τ_{kk}``) and
+`II_sgs`. The smoke checks now also require ``k_{test} > 0``, a finite
+ratio, TKE II ≥ 0, and RSM II in ``[0, 2/3]``.
+
+**Measured.** 1 h runs of the summer flagship (64 × 64 × 32, adaptive
+step) from 02:00 and from 12:00. The four runs ran at the same time on a
+shared machine, so the costs compare with each other.
+
+| | 02:00 `:tke` | 02:00 `:reynolds_stress` | 12:00 `:tke` | 12:00 `:reynolds_stress` |
+| :-- | --: | --: | --: | --: |
+| canopy mean ``e`` (m² s⁻²) | 0.001 | 0.0014 | 0.012 | 0.016 |
+| canopy mean ``ν_t`` (m² s⁻¹) | 0.008 | 0.011 | 0.036 | — |
+| ``k_{test}`` (m² s⁻²) | 0.0043 | 0.0042 | 0.0203 | 0.0202 |
+| ``e/k_{test}`` | 0.18 | 0.33 | 0.58 | 0.78 |
+| ``ρ(τ, L)`` | 0.07 | 0.25 | 0.21 | 0.13 |
+| median II: ``L`` / model | 0.294 / 0.008 | 0.295 / 0.079 | 0.252 / 0.006 | 0.255 / 0.077 |
+| model cells outside the Lumley triangle | 10 % | 0 % | 2 % | 0 % |
+| realizability corrections (1 h) | — | 917 442 | — | 361 796 |
+| steps | 1397 | 1379 | 2097 | 2094 |
+| wall time (s) | 261 | 510 | 382 | 748 |
+| `step!` (ms/step) | 33.1 | 112.5 | 32.4 | 108.9 |
+| `scalar_advection` (ms/step) | 89.3 | 157.5 | 89.2 | 159.0 |
+
+The canopy ``ν_t`` of the noon Reynolds-stress run was not recorded; the
+night value is the one the issue asks for. The `:tke` values are the
+report's three-decimal ones.
+
+* Under both closures the resolved stress at the test filter is far more
+  anisotropic (median II ≈ 0.25–0.30) than either closure's stress. The
+  Reynolds-stress closure is ten times closer (0.08 against 0.006–0.008).
+  In 2–10 % of the canopy cells the TKE closure's implied stress is not
+  realizable.
+* At night the Reynolds-stress stress correlates better with ``L``
+  (0.25 against 0.07). At noon TKE's does (0.21 against 0.13).
+* The Reynolds-stress closure costs 2.0× the whole step. It also makes
+  ~10⁶ realizability corrections per hour at night.
+
+**Recommendation for the maintainer.** Keep `:tke` as the default. The
+Reynolds-stress closure wins clearly only where its physics is
+structural. It reproduces the stress anisotropy in stratified decay
+(``⟨τ_{33}⟩/⟨τ_{11}⟩`` 0.76 against DNS 0.70; TKE 1.00) and has the
+smallest KE error under rotation. It does not win on resolved KE in
+isotropic decay, and its heat flux is not closer to the DNS (see the
+[validation](../theory/sgs_tke.md)). At 2× the cost that is not a clear
+win, so this PR does not change the default.
+
 ## Cost of per-facet surfaces (#138)
 
 The flagship radiosity scene has this many facets:

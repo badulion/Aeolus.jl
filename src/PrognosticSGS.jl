@@ -56,7 +56,7 @@ using ..Grids: RegularGrid, CellCenter, interior
 using ..Fields: Field, interior_view, mesh
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
-                   buoyancy_frequency_squared!
+                   buoyancy_frequency_squared!, SymmetricTensorField
 import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_state!
 using ..AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 
@@ -762,6 +762,28 @@ function initialize_tke!(c::TKEClosure{T}, sim; e_min::Real = 0) where {T}
                              c_k = c.c_k, c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, c_l = c.c_l,
                              l_wall = _lwall(c.l_wall, i, j, k, T), factor = fac)
         c.e.data[I, J, K] = max(T(eq), T(e_min))
+    end
+    return c
+end
+
+"""
+    initialize_tke!(c::TKEClosure, τ::SymmetricTensorField) -> c
+
+Seed ``e = \\tfrac12 τ_{kk}`` from a subfilter stress on the closure's
+interior, e.g. the exact one of a filtered DNS
+(`Operators.subfilter_stress!`, P56-c), resampled to the LES grid — the
+a-priori-in-time start of the P56-e validation (#192). Negative traces
+(possible after a spectral resampling) are set to zero and solid cells
+to zero.
+"""
+function initialize_tke!(c::TKEClosure{T}, τ::SymmetricTensorField) where {T}
+    g = mesh(c.e)
+    size(τ) == (g.Nx, g.Ny, g.Nz) ||
+        throw(DimensionMismatch("initialize_tke!: τ is $(size(τ)), interior $((g.Nx, g.Ny, g.Nz))"))
+    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
+        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
+        e = (τ.xx[i, j, k] + τ.yy[i, j, k] + τ.zz[i, j, k]) / 2
+        c.e.data[I, J, K] = _solid(c.mask, I, J, K) ? zero(T) : max(T(e), zero(T))
     end
     return c
 end

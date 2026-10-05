@@ -437,6 +437,10 @@ tendency before the predictor; an implicit correction such as
 `WallModels.apply_wall_stress!` after it, before the projection). The
 step's net effect of a hook is the SSP-RK3 combination of its three
 substage effects, with weights 1/6, 1/6, 2/3.
+
+In P56-e (#192) the same hooks carry the advection of a uniform
+background gradient, ``-w\\,∂_zΘ``, in a triply periodic box, and the
+immersed-boundary direct forcing of the surface-mounted cube.
 """
 function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
                    sgs = nothing, eddy_viscosity! = nothing,

@@ -280,6 +280,87 @@ sgs_stress_checks(stress, case, closure = nothing) =
         ["stress-form SGS dissipation Σ2νᵢⱼSᵢⱼSᵢⱼ ≥ 0" => mean_sgs_dissipation(case, closure) >= 0] :
         Pair{String,Bool}[]
 
+# -------------------------------------------------------------------------
+# A-priori metrics at the test-filter scale (P56-e, #192), shared by the
+# prognostic providers (:tke, :reynolds_stress)
+# -------------------------------------------------------------------------
+
+"""
+    sgs_canopy_cells(case) -> (cells, solid)
+
+The interior fluid cells `(i, j, k)` of the canopy levels (more than 5 % of
+the level solid) and the interior solid mask.
+"""
+function sgs_canopy_cells(case)
+    m = case.mesh
+    solid = view(case.geom.sm.mask, m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz)
+    kr = something(findlast(k -> count(view(solid, :, :, k)) > 0.05 * m.Nx * m.Ny, 1:m.Nz), 0)
+    return [(i, j, k) for k in 1:kr for j in 1:m.Ny for i in 1:m.Nx if !solid[i, j, k]], solid
+end
+
+# the resolved strain rate at cell centres (Operators.filtered_strain of the
+# centred velocity)
+function _sgs_centre_strain(case)
+    sim, m = case.sim, case.mesh
+    U = map((sim.u, sim.v, sim.w)) do f
+        F = Field(CellCenter(), m)
+        interior_view(F) .= Aeolus.Operators._to_center_periodic(f)
+        F
+    end
+    return filtered_strain(U...)
+end
+
+"""
+    sgs_test_filter_metrics(case, τ_model::SymmetricTensorField, e) -> NamedTuple
+
+A-priori metrics of a closure's subfilter stress against the resolved
+stress at the test-filter scale (Germano et al. 1991),
+``L_{ij} = \\widehat{\\bar u_i \\bar u_j} − \\hat{\\bar u}_i \\hat{\\bar u}_j``
+(`subfilter_stress!` of the LES velocity with the 3-cell masked box test
+filter, `box_filter!`, P56-c), over the fluid cells of the canopy levels:
+
+* `k_test` — ``½⟨L_{kk}⟩``, the resolved energy between the grid and the
+  test-filter scale; `e` — the closure's mean subfilter energy;
+  `ratio = e/k_test` (scale similarity: a fixed ratio in an inertial range);
+* `ρ` — the correlation of the deviatoric model stress with the
+  deviatoric ``L_{ij}``, averaged over the three off-diagonal components
+  (the scale-similarity correlation of Liu, Meneveau & Katz 1994);
+* `II_L`, `II_model` — median Lumley invariants II (`lumley_invariants`)
+  of ``L`` and of the model stress (cells with a positive trace), and
+  `outside`, the fraction of cells whose model stress has II > 2/3, i.e.
+  lies outside the Lumley triangle (an eddy-viscosity stress with a small
+  ``e`` is not realizable; the Reynolds-stress closure's never is).
+"""
+function sgs_test_filter_metrics(case, τm, e)
+    sim, m = case.sim, case.mesh
+    cells, _ = sgs_canopy_cells(case)
+    isempty(cells) && return (k_test = NaN, e = NaN, ratio = NaN, ρ = NaN, II_L = NaN, II_model = NaN, outside = NaN)
+    mask = case.geom.sm.mask
+    bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux)
+    L = SymmetricTensorField(m)
+    subfilter_stress!(L, sim.u, sim.v, sim.w, (o, f) -> box_filter!(o, f, 3; mask = mask); bcs = bcs)
+    pick(a) = [a[i, j, k] for (i, j, k) in cells]
+    trL = pick(L.xx) .+ pick(L.yy) .+ pick(L.zz)
+    k_test = mean(trL) / 2
+    em = mean(pick(e))
+    ρs = map(((L.xy, τm.xy), (L.xz, τm.xz), (L.yz, τm.yz))) do (a, b)
+        x = pick(a); y = pick(b)
+        x = x .- mean(x); y = y .- mean(y)
+        d = sqrt(sum(abs2, x) * sum(abs2, y))
+        d > 0 ? sum(x .* y) / d : NaN
+    end
+    IIL, _ = lumley_invariants(L); IIm, _ = lumley_invariants(τm)
+    med(a) = (v = sort!(filter(isfinite, pick(a))); isempty(v) ? NaN : v[(length(v) + 1) ÷ 2])
+    vm = filter(isfinite, pick(IIm))
+    return (k_test = k_test, e = em, ratio = em / k_test, ρ = mean(ρs),
+            II_L = med(IIL), II_model = med(IIm),
+            outside = isempty(vm) ? NaN : count(>(2 / 3), vm) / length(vm))
+end
+
+sgs_apriori_line(a) =
+    @sprintf("a priori at the test filter (3-cell box, canopy): k_test %.4f m²/s², e/k_test %.2f, ρ(τ, L) %.2f, median II: L %.3f, model %.3f (%.0f %% of cells II > 2/3)",
+             a.k_test, a.ratio, a.ρ, a.II_L, a.II_model, 100a.outside)
+
 "Highest k (1-based interior level) with a solid cell, 0 without buildings."
 function highest_solid_level(case)
     m = case.mesh

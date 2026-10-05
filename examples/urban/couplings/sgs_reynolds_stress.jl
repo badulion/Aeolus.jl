@@ -100,13 +100,6 @@ step_options(c::SGSReynoldsStress, case) = (sgs = c.closure,)
 # are booked by the closure (reynolds_stress_statistics) and checked below.
 budget!(c::SGSReynoldsStress, case, l) = nothing
 
-# the interior fluid cells of the canopy levels (more than 5 % solid)
-function _rsm_canopy_cells(case)
-    m = case.mesh
-    solid = view(case.geom.sm.mask, m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz)
-    kr = something(findlast(k -> count(view(solid, :, :, k)) > 0.05 * m.Nx * m.Ny, 1:m.Nz), 0)
-    return [(i, j, k) for k in 1:kr for j in 1:m.Ny for i in 1:m.Nx if !solid[i, j, k]], solid
-end
 
 """
     rsm_canopy_profile(c::SGSReynoldsStress, case) -> NamedTuple
@@ -117,7 +110,7 @@ of the anisotropy ``b_{ij}`` (cells with ``e > 0``), and the ratio
 `τ33_τ11` of the mean vertical to the mean streamwise-x normal stress.
 """
 function rsm_canopy_profile(c::SGSReynoldsStress, case)
-    cells, _ = _rsm_canopy_cells(case)
+    cells, _ = sgs_canopy_cells(case)
     τv = map(interior_view, c.closure.τ)
     e = 0.0; II = 0.0; n2 = 0; s11 = 0.0; s33 = 0.0
     for (i, j, k) in cells
@@ -132,12 +125,32 @@ function rsm_canopy_profile(c::SGSReynoldsStress, case)
     return (e = e / n, II = II / max(n2, 1), τ33_τ11 = s33 / s11)
 end
 
+"""
+    rsm_model_stress(c::SGSReynoldsStress, case) -> (τ, e)
+
+The closure's prognostic stresses as a `SymmetricTensorField` (interior)
+and ``e = ½ τ_{kk}`` (P56-e, #192: the a-priori metrics and the outputs).
+"""
+function rsm_model_stress(c::SGSReynoldsStress, case)
+    τ = SymmetricTensorField((Array(interior_view(f)) for f in c.closure.τ)...)
+    return τ, (τ.xx .+ τ.yy .+ τ.zz) ./ 2
+end
+
 function report(c::SGSReynoldsStress, case)
     p = rsm_canopy_profile(c, case)
     st = reynolds_stress_statistics(c.closure)
+    τ, e = rsm_model_stress(c, case)
     return @sprintf("SGS Reynolds stress: canopy e %.4f m²/s², II %.4f, τ33/τ11 %.3f; %d realizability corrections",
-                    p.e, p.II, p.τ33_τ11, st.clips)
+                    p.e, p.II, p.τ33_τ11, st.clips) *
+           "\n    SGS Reynolds stress " * sgs_apriori_line(sgs_test_filter_metrics(case, τ, e))
 end
+
+# the six stresses are tracers (written already); e and II of τ
+output_fields(c::SGSReynoldsStress, case) =
+    [OutputField("e", "m2 s-2", "subgrid-scale turbulent kinetic energy, tr(tau)/2",
+                 :xyz, cs -> last(rsm_model_stress(c, cs))),
+     OutputField("II_sgs", "1", "second invariant of the anisotropy of the SGS Reynolds stress (0 in solids)",
+                 :xyz, cs -> replace(lumley_invariants(first(rsm_model_stress(c, cs)))[1], NaN => 0.0))]
 
 function smoke_check(c::SGSReynoldsStress, case)
     sim, m = case.sim, case.mesh
@@ -154,6 +167,16 @@ function smoke_check(c::SGSReynoldsStress, case)
               "SGS energy > 0 (the closure is active)" => esgs > 0,
               "ν_t ≥ 0" => minimum(interior_view(sim.νt)) >= 0,
               "stresses advanced once per accepted step" => st.steps > 0]
+    # P56-e (#192): the a-priori metrics and the outputs (a realizable τ
+    # lies in the Lumley triangle, 0 ≤ II ≤ 2/3)
+    τm, em = rsm_model_stress(c, case)
+    a = sgs_test_filter_metrics(case, τm, em)
+    II = lumley_invariants(τm)[1]
+    push!(checks, "test-filter energy k_test > 0 and e/k_test finite (a priori)" =>
+                      a.k_test > 0 && isfinite(a.ratio) && a.ratio > 0)
+    push!(checks, "II of τ in [0, 2/3] (Lumley triangle)" =>
+                      all(x -> isnan(x) || -1e-10 <= x <= 2/3 + 1e-10, II))
+    push!(checks, "output e = ½ tr τ = 0 in the buildings" => all(iszero, em[solid]))
     if sim isa BoussinesqSimulation
         # the resolved-KE sink of the stress divergence is the SGS production
         # (the dual gradient); they differ by Σ (2/3) e ∇·u V only
