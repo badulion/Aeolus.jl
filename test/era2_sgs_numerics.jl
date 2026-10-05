@@ -9,32 +9,17 @@
 using Test
 using Aeolus
 using Aeolus.Fields: interior_view, set!
-using FFTW: ifft, fftfreq
 using Random: Xoshiro, randn
 using Statistics: mean
 using Printf
 
-# A solenoidal random field with E(k) ∝ k^(-5/3) up to k_c and random
-# phases, sampled at the staggered face positions.
+# A solenoidal random field with E(k) ∝ k^(-5/3) up to k_c (in units of
+# the fundamental wavenumber) and random phases, scaled to u_rms = 1. The
+# field is built by the src initialiser `isotropic_random_field!` (#168),
+# which replaced the test-local construction that used to live here.
 function _kolmogorov_field!(sim, rng; kc = sim.mesh.Nx / 4)
-    m = sim.mesh; N = m.Nx; L = m.Lx; d = L / N
-    ks = fftfreq(N, N)
-    û = zeros(ComplexF64, N, N, N); v̂ = zero(û); ŵ = zero(û)
-    for c in CartesianIndices(û)
-        kv = (ks[c[1]], ks[c[2]], ks[c[3]])
-        k = sqrt(sum(abs2, kv))
-        (k == 0 || k > kc) && continue
-        a = randn(rng, ComplexF64, 3)
-        n = collect(kv) ./ k
-        a .-= n .* sum(n .* a)                     # ⟂ k: divergence-free
-        amp = sqrt(k^(-5/3) / (4π * k^2))
-        û[c], v̂[c], ŵ[c] = amp .* a
-    end
-    shift(h, sx, sy, sz) = [h[c] * cis(2π / L * (ks[c[1]] * sx + ks[c[2]] * sy + ks[c[3]] * sz))
-                            for c in CartesianIndices(h)]
-    interior_view(sim.u) .= real.(ifft(shift(û, 0, d/2, d/2)))
-    interior_view(sim.v) .= real.(ifft(shift(v̂, d/2, 0, d/2)))
-    interior_view(sim.w) .= real.(ifft(shift(ŵ, d/2, d/2, 0)))
+    k0 = 2π / sim.mesh.Lx
+    isotropic_random_field!(sim, k -> (k / k0)^(-5/3); rng, kmax = kc * k0)
     s = 1 / sqrt(mean(abs2, interior_view(sim.u)))
     for f in (sim.u, sim.v, sim.w)
         interior_view(f) .*= s                     # u_rms = 1

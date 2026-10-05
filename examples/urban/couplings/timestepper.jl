@@ -108,7 +108,9 @@ limited only by the explicitly treated processes.
 
 Each step (and each retried piece) is `step!` — or `step_imex!` — with
 the numerics slots' `case.step_kwargs`. The diffusive limit is computed
-from the selected SGS closure's ν_t and κ_t of the current flow, and the
+from the selected SGS closure's ν_t and κ_t of the current flow (with the
+stress form, `sgs_stress = :symmetric`, the momentum part uses 2ν_t, the
+bound of `stress_form_cfl_viscosity`), and the
 closure's memory is snapshot / restored by `step_adaptive!` around a
 rejected step, so it commits exactly once per accepted piece.
 
@@ -160,11 +162,13 @@ end
 
 `cfl_diagnostics` of the case's core with the SGS closure the next step
 will run (the `sgs` of `case.step_kwargs`; none when `C_s = 0` and no
-other closure is selected). The closure's coefficients are recomputed
+other closure is selected) and the form of its momentum divergence (the
+`sgs_stress` there: the stress form's limit is `2νt`, not `νt`). The closure's coefficients are recomputed
 from the current flow with the pure `compute_sgs!`: no closure memory
 advances, however often the limit is estimated.
 """
-sgs_cfl_diagnostics(case, k) = cfl_diagnostics(case.sim, k; sgs = get(case.step_kwargs, :sgs, nothing))
+sgs_cfl_diagnostics(case, k) = cfl_diagnostics(case.sim, k; sgs = get(case.step_kwargs, :sgs, nothing),
+                                               sgs_stress = get(case.step_kwargs, :sgs_stress, :laplacian))
 
 function next_dt(c::AdaptiveStep, case)
     sim, k = case.sim, c.constraints
@@ -173,7 +177,8 @@ function next_dt(c::AdaptiveStep, case)
         lim = d.limiter
     else
         l = imex_stability_limit(sim, c.scheme; constraints = k,
-                                 sgs = get(case.step_kwargs, :sgs, nothing))
+                                 sgs = get(case.step_kwargs, :sgs, nothing),
+                                 sgs_stress = get(case.step_kwargs, :sgs_stress, :laplacian))
         d, lim = l.diagnostics, l.limiter
     end
     dt = adaptive_dt(sim, k; dt_prev = c.dt_prev, diagnostics = d, scheme = c.scheme)
