@@ -1,7 +1,20 @@
 # The wall-stress operator: the stress of a wall law applied, implicitly,
 # to the first velocity level next to the z-walls of a RegularGrid.
 
-export WallModel, apply_wall_stress!
+export AbstractWallModel, WallModel, apply_wall_stress!
+
+"""
+    AbstractWallModel
+
+A wall model: whatever decides the stress [`apply_wall_stress!`](@ref)
+applies at a wall. [`WallModel`](@ref) is the equilibrium (algebraic)
+one — a wall law evaluated at the matching point; `TBLEWallModel`
+(P57-c, #189) integrates the thin-boundary-layer equations under every
+wall column and carries per-column state. Both hand per-column
+coefficients ``τ_{w,i} = a\\,u_i + b_i`` to the same implicit,
+face-by-face application, so the operator exists once.
+"""
+abstract type AbstractWallModel end
 
 """
     WallModel(law; ν = 1.5e-5)
@@ -12,7 +25,7 @@ near 15 °C; only smooth-wall laws use it). `law` is one
 laws, one per column (a [`MOSTWallLaw`](@ref) per column with its own
 roughness and Obukhov length, as the Berlin ground uses).
 """
-struct WallModel{L, T<:AbstractFloat}
+struct WallModel{L, T<:AbstractFloat} <: AbstractWallModel
     law::L
     ν::T
 end
@@ -109,6 +122,11 @@ to the first velocity level (Kawai & Larsson 2012).
 `ustar` / `wind_out` — `(Nx, Ny)` matrices that receive, for every
 column with a wall, the friction velocity of the law and the speed it
 was evaluated at (one side only).
+
+A [`TBLEWallModel`](@ref) (P57-c) is applied by the same face loop
+with the stress of its columns (`apply_wall_stress!(sim, wm::TBLEWallModel,
+Δt; side, mask, input, ustar, wind_out)`; `input` a
+[`MatchingInput`](@ref), `formulation = :local` only).
 
 Returns the volume-integrated kinematic force of the step,
 ``\\sum (u' - u)/Δt\\,ΔV`` (m⁴ s⁻²) per component, negative for a flow
@@ -248,6 +266,27 @@ function _wall_side!(sim, wm::WallModel, Δt, kw, mask, formulation, wind, heigh
     end
 
     # 4. apply, face by face, with the mean of the two columns' coefficients
+    return _apply_coefficients!(sim, a, bx, by, Δt, kw, mask)
+end
+
+# Apply the per-column stress τ_i = a u_i + b_i (kinematic, removed from
+# the flow) implicitly to the first velocity level of every walled
+# column, face by face, with the mean of the two columns' coefficients
+# (a column contributes only at its own wall level). Shared by every
+# AbstractWallModel. Returns the volume-integrated force (Fx, Fy).
+function _apply_coefficients!(sim, a, bx, by, Δt, kw, mask)
+    mesh = sim.mesh
+    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    Hx, Hy, Hz, dz = mesh.Hx, mesh.Hy, mesh.Hz, mesh.dz
+    T = typeof(float(dz))
+    u, v = sim.u.data, sim.v.data
+    xper = sim.bcs.west isa Periodic
+    yper = sim.bcs.south isa Periodic
+    lev(i, j) = _level(mask, i, j, kw, Nz)
+    west(i) = i > 1 ? i - 1 : (xper ? Nx : 0)
+    south(j) = j > 1 ? j - 1 : (yper ? Ny : 0)
+    levw(i, j) = (iw = west(i); iw == 0 ? 0 : lev(iw, j))
+    levs(i, j) = (js = south(j); js == 0 ? 0 : lev(i, js))
     Fx = Fy = zero(T)
     @inbounds for j in 1:Ny, i in 1:Nx
         iw, js = west(i), south(j)
