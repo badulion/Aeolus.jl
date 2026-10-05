@@ -30,7 +30,8 @@ Hydrostatic reference state of a case (see `core/reference_state.jl`).
 * `cp` — the specific heat of dry air the conversions use, J kg⁻¹ K⁻¹.
 
 Accessors: [`ref_pressure`](@ref), [`ref_density`](@ref),
-[`ref_exner`](@ref), [`surface_pressure`](@ref), [`ref_ρcp`](@ref).
+[`ref_exner`](@ref), [`surface_pressure`](@ref), [`ref_ρcp`](@ref),
+[`ref_θ_per_heat`](@ref).
 """
 struct CaseReference
     p̄::Vector{Float64}
@@ -87,8 +88,27 @@ ref_density(case) = case.ref.ρ̄
 ref_exner(case, k::Integer) = case.ref.π̄[k]
 "Pressure at the ground (Pa)."
 surface_pressure(case) = case.ref.p_surface
-"``ρ̄_k c_{pd}`` (J m⁻³ K⁻¹): converts a heat flux into level `k` to a θ increment."
+"``ρ̄_k c_{pd}`` (J m⁻³ K⁻¹): the heat that raises the *temperature* of level `k` by 1 K."
 ref_ρcp(case, k::Integer) = case.ref.ρ̄[k] * case.ref.cp
+
+"""
+    ref_θ_per_heat(case, k; cp = case.ref.cp) -> K m³ J⁻¹
+
+The potential-temperature increment of level `k` per J m⁻³ of heat,
+``1 / (ρ̄_k c_p Π̄_k)``. Heat raises the temperature by ``q / (ρ̄ c_p)``
+and, since ``T = θ Π̄``, θ by that over ``Π̄``. A flux `F` (W m⁻²) into a
+cell of thickness `Δz` over `τ` s raises θ by
+`F * τ / Δz * ref_θ_per_heat(case, k)`. The one conversion every
+coupling that heats the air uses, and the inverse of the weight with
+which the air-heat ledger (`core/air_heat.jl`) counts θ, so a flux `F`
+appears in the ledger as exactly `F τ`. (Before #253 the couplings
+divided by ``ρ̄ c_p`` only and the air received ``Π̄_k F`` — 0.4 % too
+much at the ground, where ``Π̄ ≈ 1.004``.) `cp` defaults to the case's
+dry-air value; the surface exchange passes the moist heat capacity of
+the first air cell.
+"""
+ref_θ_per_heat(case, k::Integer; cp::Real = case.ref.cp) =
+    1 / (case.ref.ρ̄[k] * cp * case.ref.π̄[k])
 
 """
     hydrostatic_check(cfg, ref, mesh; nsub = 1000) -> max relative |p̄ − p_hyd| / p_hyd

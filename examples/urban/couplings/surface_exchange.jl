@@ -542,7 +542,7 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
         k = bus.k_air[I]
         sm.mask[Hx+i, Hy+j, Hz+k] && (nsolid += 1)
         ρk = ref_density(case, k)
-        θ[i, j, k] += bus.H[I] * τ / (ρk * c.cp[I] * dz)
+        θ[i, j, k] += bus.H[I] * τ / dz * ref_θ_per_heat(case, k; cp = c.cp[I])
         qv[i, j, k] += bus.E[I] * τ / (ρk * dz)
         evap += bus.E[I] * τ
     end

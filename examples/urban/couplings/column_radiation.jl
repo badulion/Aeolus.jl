@@ -235,21 +235,22 @@ function _les_levels(f, Nz)
     return RadiativeFluxes{Float64,1}(f.flux_up[r], f.flux_dn[r], f.flux_dn_dir[r], f.flux_net[r])
 end
 
+# the heating is dT/dt; θ = T/Π̄ gets it divided by Π̄_k (#253)
 function run_stage!(c::ColumnRadiation, case, ::Val{:column_tendency}, dt)
-    c.buf .= c.heat .* dt
+    c.buf .= c.heat .* dt ./ case.ref.π̄
     apply_radiative_cooling!(case.sim.θ, c.buf; solid = case.geom.sm.mask)
     c.dt_applied = dt
     return nothing
 end
 
 # Apply the stage's increment to a copy of θ and compare what changed
-# with heating·dt: exactly that in every fluid cell, nothing in a solid
+# with heating·dt/Π̄: exactly that in every fluid cell, nothing in a solid
 # one. (Measured on the field, so it tests the masked application, not
 # the bookkeeping.)
 function _applied_increment_ok(c::ColumnRadiation, case)
     θ = deepcopy(case.sim.θ)
     dt = c.dt_applied > 0 ? c.dt_applied : 1.0
-    c.buf .= c.heat .* dt
+    c.buf .= c.heat .* dt ./ case.ref.π̄
     apply_radiative_cooling!(θ, c.buf; solid = case.geom.sm.mask)
     m, mask = case.mesh, case.geom.sm.mask
     a, a0 = interior_view(θ), interior_view(case.sim.θ)
@@ -259,7 +260,7 @@ function _applied_increment_ok(c::ColumnRadiation, case)
         if mask[m.Hx + i, m.Hy + j, m.Hz + k]
             ok &= d == 0                                  # untouched
         else
-            ok &= abs(d - c.heat[k] * dt) <= 1e-12        # ≈ 20 ulp of θ ≈ 300 K
+            ok &= abs(d - c.heat[k] * dt / case.ref.π̄[k]) <= 1e-12   # ≈ 20 ulp of θ ≈ 300 K
         end
     end
     return ok
@@ -293,7 +294,7 @@ function smoke_check(c::ColumnRadiation, case)
     checks = [
         "LES-layer heating ∫ρc_p Ḣ dz = net flux convergence (rel. 1e-10)" =>
             isapprox(Q, ΔF; rtol = 1e-10, atol = 1e-10),
-        "θ increment applied = heating·dt in every fluid cell, 0 in the solid ones" =>
+        "θ increment applied = heating·dt/Π̄ in every fluid cell, 0 in the solid ones" =>
             _applied_increment_ok(c, case),
         "0 < L_sky < σ T_max⁴ of the column" => 0 < case.bus.L_sky < σ * Tmax^4,
         "sky longwave on the bus is the column's" => case.bus.L_sky == c.flw.flux_dn[1],
