@@ -182,3 +182,257 @@ function apply_lund!(u::AbstractMatrix, v::AbstractMatrix, w::AbstractMatrix, a)
     end
     return u, v, w
 end
+
+# =========================================================================
+# Digital filter (Xie & Castro 2008)
+# =========================================================================
+
+# Normalised exponential filter b_k ∝ exp(-π|k|/(2n)), k = -N..N, Σb² = 1.
+function _df_kernel(n::Real, N::Integer)
+    n <= 0 && return [1.0]
+    b = [exp(-π * abs(k) / (2n)) for k in -N:N]
+    return b ./ sqrt(sum(abs2, b))
+end
+
+# Autocorrelation R_r = Σ_k b_k b_{k+r} (r = 0..2N) of a normalised kernel.
+function _df_autocorrelation(b)
+    m = length(b)
+    return [sum(b[i] * b[i+r] for i in 1:(m-r)) for r in 0:(m-1)]
+end
+
+# Integral length of the discrete correlation (trapezoid, R_0 = 1):
+# Δ (½ R_0 + Σ_{r≥1} R_r) — the measured ∫_0^∞ R dr of the filtered field.
+_df_integral(b, Δ) = (R = _df_autocorrelation(b); Δ * (sum(R) - 0.5 * R[1]))
+
+"""
+    digital_filter_kernel(L, Δ) -> (b, n, N)
+
+The normalised filter coefficients ``b_k ∝ \\exp(-π|k|/(2n))``,
+``k = -N … N``, ``\\sum b_k^2 = 1`` (Xie & Castro 2008, Eq. 11) whose
+filtered white noise has the integral length ``∫_0^∞ R\\,dr = L`` on a grid
+of spacing `Δ` (trapezoid on the discrete correlation
+``R_r = \\sum_k b_kb_{k+r}``).
+
+**The length convention.** Xie & Castro take ``n = L/Δ`` and state
+``R(r) = \\exp(-πr/(2nΔ))``. Neither holds for the integral length: the
+autocorrelation of the exponential filter is (continuous limit)
+``R(r) = (1 + πr/(2nΔ))\\exp(-πr/(2nΔ))``, with ``∫_0^∞ R\\,dr = 4nΔ/π``,
+so the nominal ``n = L/Δ`` gives ``4L/π ≈ 1.27L`` untruncated, and
+1.11 L to 1.17 L (for ``L/Δ`` = 2 to 16) with X&C's truncation
+``N = 2n``. The width `n` is therefore calibrated (bisection to 1e-13)
+so the discrete integral is `L` to 1e-10. The support is
+``N = ⌈2L/Δ⌉`` (≈ 2.4 n); it is fixed by `L`, not `n`, so the integral is
+continuous in `n` during the calibration. The calibrated widths are
+``n/(πL/(4Δ))`` = 1.14, 1.07, 1.05, 1.04 for ``L/Δ`` = 2, 4, 8, 16 (the
+truncation shortens the correlation slightly), and the correlation shape
+is ``R(r) ≈ (1 + 2r/L)\\,e^{-2r/L}`` (RMS difference 0.012 to 0.019 over
+``r ≤ 2L`` for ``L/Δ ≥ 1``).
+
+An `ArgumentError` is thrown for ``L ≤ Δ/2``: the white-noise limit
+(``n → 0``) already has the trapezoid integral ``Δ/2``.
+"""
+function digital_filter_kernel(L::Real, Δ::Real)
+    Δ > 0 || throw(ArgumentError("digital_filter_kernel: Δ must be > 0"))
+    L > Δ / 2 || throw(ArgumentError("digital_filter_kernel: integral length L = $L ≤ Δ/2 = $(Δ / 2) " *
+                                     "is not representable on spacing Δ = $Δ"))
+    N = ceil(Int, 2L / Δ)
+    f(n) = _df_integral(_df_kernel(n, N), Δ) - L
+    lo, hi = 1e-3, 4.0 * L / Δ + 1
+    while f(hi) < 0
+        hi *= 2
+        hi > 1e6 && error("digital_filter_kernel: calibration failed for L = $L, Δ = $Δ")
+    end
+    for _ in 1:200
+        mid = 0.5 * (lo + hi)
+        f(mid) < 0 ? (lo = mid) : (hi = mid)
+        hi - lo < 1e-13 * hi && break
+    end
+    n = 0.5 * (lo + hi)
+    b = _df_kernel(n, N)
+    abs(_df_integral(b, Δ) / L - 1) < 1e-10 ||
+        error("digital_filter_kernel: calibration did not converge for L = $L, Δ = $Δ")
+    return b, n, N
+end
+
+# Expand a scale specification to a 3 × nz matrix: scalar; 3-tuple
+# (per component); vector of length nz (per height); 3-tuple of
+# scalars/vectors; or a 3 × nz matrix.
+function _scale_matrix(x, nz, name)
+    M = zeros(3, nz)
+    if x isa Real
+        M .= x
+    elseif x isa AbstractMatrix
+        size(x) == (3, nz) || throw(DimensionMismatch("$name: matrix must be 3 × $nz"))
+        M .= x
+    elseif x isa Tuple
+        length(x) == 3 || throw(ArgumentError("$name: a tuple must have 3 entries (u, v, w)"))
+        for c in 1:3
+            M[c, :] .= _scale_matrix(x[c], nz, name)[1, :]
+        end
+    elseif x isa AbstractVector
+        length(x) == nz || throw(DimensionMismatch("$name: vector must have nz = $nz entries"))
+        for c in 1:3
+            M[c, :] .= x
+        end
+    else
+        throw(ArgumentError("$name: give a number, a vector over height, a 3-tuple or a 3 × nz matrix"))
+    end
+    return M
+end
+
+"""
+    DigitalFilterGenerator(ns, nz, Δs, Δz; L_s, L_z, T, seed = 1)
+
+The digital-filter inflow generator of Xie & Castro (2008), as in PALM
+(Kadasch et al. 2021), on an `ns × nz` inflow plane with spacings `Δs`
+(along the face) and `Δz` (vertical). Implements
+[`AbstractInflowGenerator`](@ref).
+
+* `L_s`, `L_z` (m) are the integral lengths along the face and in the
+  vertical, `T` (s) the integral time; each may be a number, a vector over
+  the `nz` levels, a 3-tuple (one entry — number or vector — per component
+  ``ũ, ṽ, w̃``) or a 3 × `nz` matrix.
+* **Space.** A fresh plane of Gaussian white noise ``r`` is filtered with
+  the separable kernel of [`digital_filter_kernel`](@ref),
+  ``ψ_{\\rm new}(j,k) = \\sum_{j'}\\sum_{k'} b^s_{j'}(k)\\,b^z_{k'}(k)\\,r(j+j', k+k')``,
+  the coefficients those of the output level ``k`` (so the scales may
+  vary with height). The kernels are calibrated so the measured
+  ``∫_0^∞R\\,ds = L_s`` and ``∫_0^∞R\\,dz = L_z`` (the X&C nominal
+  ``n = L/Δ`` gives 1.11-1.17 L; see [`digital_filter_kernel`](@ref)).
+* **Time.** ``ψ(t) = ψ(t-Δt)\\,ρ + ψ_{\\rm new}\\sqrt{1-ρ^2}``, ``ρ = e^{-Δt/T}``
+  — the blend of X&C (2008, Eq. 13), ``e^{-πΔt/(2T_{XC})}`` and
+  ``(1 - e^{-πΔt/T_{XC}})^{1/2}``, with ``T_{XC} = πT/2``: their
+  ``T_{XC}`` is not the integral time (``∫_0^∞e^{-πτ/(2T_{XC})}dτ = 2T_{XC}/π``),
+  so ``T`` here is, and the correlation is ``R(τ) = e^{-τ/T}`` for any
+  sequence of (adaptive) steps. ``ρ^2 + (1-ρ^2) = 1`` keeps unit variance.
+* The first planes are drawn spatially filtered (stationary start).
+  Components are independent, so ``⟨ũ_iũ_j⟩ = δ_{ij}``; impose ``R_{ij}``
+  with [`apply_lund!`](@ref).
+
+`seed` seeds a `Random.Xoshiro`. [`generator_state`](@ref) /
+[`restore_generator_state!`](@ref) snapshot the three planes and the
+random-number generator. Cost: one step on a 64 × 40 face with
+``L = 4Δ`` is quoted in `docs/src/theory/transition.md`.
+
+References: Xie, Z.-T. & Castro, I. P. (2008). Efficient generation of
+inflow conditions for large eddy simulation of street-scale flows.
+*Flow Turbul. Combust.*, 81, 449-470. Kadasch, E. et al. (2021). Mesoscale
+nesting interface of the PALM model system 6.0. *Geosci. Model Dev.*, 14,
+5435-5465. Klein, M., Sadiki, A. & Janicka, J. (2003). A digital filter
+based generation of inflow data for spatially developing direct numerical
+or large eddy simulations. *J. Comput. Phys.*, 186, 652-665.
+"""
+mutable struct DigitalFilterGenerator <: AbstractInflowGenerator
+    ns::Int
+    nz::Int
+    Δs::Float64
+    Δz::Float64
+    L_s::Matrix{Float64}             # requested, 3 × nz
+    L_z::Matrix{Float64}
+    T::Matrix{Float64}
+    n_s::Matrix{Float64}             # calibrated filter widths
+    n_z::Matrix{Float64}
+    bs::Matrix{Vector{Float64}}      # kernels per (component, level)
+    bz::Matrix{Vector{Float64}}
+    Ms::Int                          # max support along s / z
+    Mz::Int
+    ψ::NTuple{3,Matrix{Float64}}     # current planes
+    r::Matrix{Float64}               # white noise, (ns + 2Ms) × (nz + 2Mz)
+    tmp::Matrix{Float64}             # z-filtered noise, (ns + 2Ms) × nz
+    new::Matrix{Float64}             # freshly filtered plane
+    rng::Random.Xoshiro
+    snapψ::NTuple{3,Matrix{Float64}}
+    snaprng::Random.Xoshiro
+end
+
+function DigitalFilterGenerator(ns::Integer, nz::Integer, Δs::Real, Δz::Real;
+                                L_s, L_z, T, seed::Integer = 1)
+    ns >= 1 && nz >= 1 || throw(ArgumentError("DigitalFilterGenerator: need ns, nz ≥ 1"))
+    Ls = _scale_matrix(L_s, nz, "L_s"); Lz = _scale_matrix(L_z, nz, "L_z")
+    Tm = _scale_matrix(T, nz, "T")
+    all(>(0), Tm) || throw(ArgumentError("DigitalFilterGenerator: T must be > 0"))
+    cache = Dict{Tuple{Float64,Float64},Tuple{Vector{Float64},Float64}}()
+    kern(L, Δ) = get!(cache, (L, Δ)) do
+        b, n, _ = digital_filter_kernel(L, Δ); (b, n)
+    end
+    bs = Matrix{Vector{Float64}}(undef, 3, nz); bz = similar(bs)
+    n_s = zeros(3, nz); n_z = zeros(3, nz)
+    for k in 1:nz, c in 1:3
+        bs[c, k], n_s[c, k] = kern(Ls[c, k], Float64(Δs))
+        bz[c, k], n_z[c, k] = kern(Lz[c, k], Float64(Δz))
+    end
+    Ms = maximum(b -> length(b) ÷ 2, bs); Mz = maximum(b -> length(b) ÷ 2, bz)
+    rng = Random.Xoshiro(seed)
+    ψ = ntuple(_ -> zeros(ns, nz), 3)
+    gen = DigitalFilterGenerator(ns, nz, Float64(Δs), Float64(Δz), Ls, Lz, Tm, n_s, n_z,
+                                 bs, bz, Ms, Mz, ψ, zeros(ns + 2Ms, nz + 2Mz),
+                                 zeros(ns + 2Ms, nz), zeros(ns, nz), rng,
+                                 ntuple(_ -> zeros(ns, nz), 3), copy(rng))
+    for c in 1:3
+        _df_filtered_noise!(gen, c)
+        copyto!(gen.ψ[c], gen.new)
+    end
+    return gen
+end
+
+# gen.new ← spatially filtered fresh white noise for component c.
+function _df_filtered_noise!(gen::DigitalFilterGenerator, c::Int)
+    r, tmp, new = gen.r, gen.tmp, gen.new
+    Random.randn!(gen.rng, r)
+    ns, nz, Ms, Mz = gen.ns, gen.nz, gen.Ms, gen.Mz
+    nj = ns + 2Ms
+    @inbounds for k in 1:nz
+        b = gen.bz[c, k]; N = length(b) ÷ 2
+        for jj in 1:nj
+            s = 0.0
+            for q in -N:N
+                s += b[q+N+1] * r[jj, k+Mz+q]
+            end
+            tmp[jj, k] = s
+        end
+        b = gen.bs[c, k]; N = length(b) ÷ 2
+        for j in 1:ns
+            s = 0.0
+            for q in -N:N
+                s += b[q+N+1] * tmp[j+Ms+q, k]
+            end
+            new[j, k] = s
+        end
+    end
+    return new
+end
+
+function unit_fluctuations!(ũ::AbstractMatrix, ṽ::AbstractMatrix, w̃::AbstractMatrix,
+                            gen::DigitalFilterGenerator, Δt::Real)
+    _check_planes(gen, ũ, ṽ, w̃)
+    Δt >= 0 || throw(ArgumentError("unit_fluctuations!: Δt must be ≥ 0"))
+    if Δt > 0
+        for c in 1:3
+            _df_filtered_noise!(gen, c)
+            ψ = gen.ψ[c]
+            @inbounds for k in 1:gen.nz
+                ρ = exp(-Δt / gen.T[c, k]); σ = sqrt(1 - ρ^2)
+                for j in 1:gen.ns
+                    ψ[j, k] = ρ * ψ[j, k] + σ * gen.new[j, k]
+                end
+            end
+        end
+    end
+    copyto!(ũ, gen.ψ[1]); copyto!(ṽ, gen.ψ[2]); copyto!(w̃, gen.ψ[3])
+    return ũ, ṽ, w̃
+end
+
+function generator_state(gen::DigitalFilterGenerator)
+    for c in 1:3
+        copyto!(gen.snapψ[c], gen.ψ[c])
+    end
+    copy!(gen.snaprng, gen.rng)
+    return (ψ = gen.snapψ, rng = gen.snaprng)
+end
+function restore_generator_state!(gen::DigitalFilterGenerator, s)
+    for c in 1:3
+        copyto!(gen.ψ[c], s.ψ[c])
+    end
+    copy!(gen.rng, s.rng)
+    return gen
+end
