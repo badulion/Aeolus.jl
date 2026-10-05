@@ -260,7 +260,7 @@ Kadasch, E. et al. (2021), *Geosci. Model Dev.* 14, 5435 (the PALM
 mesoscale nesting with synthetic turbulence at the boundaries). Deardorff
 (1980), *Boundary-Layer Meteorol.* 18, 495 (``e`` and ``ν_t``).
 """
-mutable struct ParentResolvedStatistics{P, C, F, PL} <: InflowStatistics
+mutable struct ParentResolvedStatistics{P, C, F, PL, IPL} <: InflowStatistics
     parent::P
     closure::C
     face::Symbol
@@ -300,8 +300,11 @@ mutable struct ParentResolvedStatistics{P, C, F, PL} <: InflowStatistics
     buf::Array{Float64,4}            # Nx × Ny × 3 × (lag_z+1) plane fluctuations
     bbuf::Array{Float64,4}           # band-passed
     plan::PL
+    iplan::IPL
     spec::Matrix{ComplexF64}
     tmp::Matrix{Float64}
+    cosx::Matrix{Float64}            # w_kx cos(2π kx r/Nx), nkx × (Nx÷2+1)
+    cosy::Matrix{Float64}            # cos(2π ky r/Ny), Ny × (Ny÷2+1)
     log::_ProjectionLog
 end
 
@@ -357,6 +360,7 @@ function ParentResolvedStatistics(parent; closure = nothing, face::Symbol = :wes
     z = [g.z0 + (k - 0.5) * g.dz for k in lev]
     tmp = zeros(Nx, Ny)
     plan = plan_rfft(tmp)
+    iplan = plan_irfft(zeros(ComplexF64, Nx ÷ 2 + 1, Ny), Nx)
     return ParentResolvedStatistics(parent, closure, face, Float64(τ_avg), region, cols, mode, r,
                                     Float64(c_gap), Float64(c_len), Float64(U_min), Float64(c_k),
                                     lev, L, z, Δh, band, 0.0, 0.0, 0,
@@ -366,8 +370,14 @@ function ParentResolvedStatistics(parent; closure = nothing, face::Symbol = :wes
                                     zeros(3, nl, nkx), zeros(3, nl, Ny ÷ 2 + 1), zeros(3, nl, L + 1),
                                     zeros(3, nl + L),
                                     Field(CellCenter(), g), zeros(Nx, Ny, 3, L + 1), zeros(Nx, Ny, 3, L + 1),
-                                    plan, zeros(ComplexF64, nkx, Ny), tmp, _ProjectionLog())
+                                    plan, iplan, zeros(ComplexF64, nkx, Ny), tmp,
+                                    [_wx(i, Nx) * cos(2π * (i - 1) * r / Nx) for i in 1:nkx, r in 0:nkx-1],
+                                    [cos(2π * (j - 1) * r / Ny) for j in 1:Ny, r in 0:Ny÷2],
+                                    _ProjectionLog())
 end
+
+# weight of the half-spectrum column i (kx = i - 1): 1 for kx = 0 and the Nyquist column
+_wx(i, Nx) = (i == 1 || (iseven(Nx) && i == Nx ÷ 2 + 1)) ? 1.0 : 2.0
 
 # i ∈ [a, b] on a periodic axis of length N (a ≤ b, b - a < N)
 function _in_box(i, a, b, N)
@@ -410,7 +420,7 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
     M = L + 1
     N2 = Float64(Nx * Ny)^2
     nkx = Nx ÷ 2 + 1
-    wx = [(i == 1 || (iseven(Nx) && i == nkx)) ? 1.0 : 2.0 for i in 1:nkx]
+    wx = [_wx(i, Nx) for i in 1:nkx]
     scale_gap = s.mode === :scale_gap
     pm = zeros(3)
     for kk in k1:kend
@@ -435,15 +445,16 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
             mul!(s.spec, s.plan, s.tmp)
             s.Vz[c, l] += w * sum(abs2, f) / (Nx * Ny)
             if inlev
-                _acc_autocov!(s.Cx, s.Cy, c, l, s.spec, nothing, wx, w / N2, Nx)
+                _acc_autocov!(s.Cx, s.Cy, c, l, s.spec, nothing, wx, w / N2, s.cosx, s.cosy)
             end
             # band-passed field
             if scale_gap && any(s.band)
-                inlev && _acc_autocov!(s.Bx, s.By, c, l, s.spec, s.band, wx, w / N2, Nx)
+                inlev && _acc_autocov!(s.Bx, s.By, c, l, s.spec, s.band, wx, w / N2, s.cosx, s.cosy)
                 @inbounds for j in 1:Ny, i in 1:nkx
                     s.band[i, j] || (s.spec[i, j] = 0)
                 end
-                s.bbuf[:, :, c, slot] .= irfft(s.spec, Nx)
+                mul!(s.tmp, s.iplan, s.spec)
+                @views s.bbuf[:, :, c, slot] .= s.tmp
                 s.BVz[c, l] += w * sum(abs2, @view s.bbuf[:, :, c, slot]) / (Nx * Ny)
             else
                 @views s.bbuf[:, :, c, slot] .= 0
@@ -492,13 +503,12 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
             s0 = mod(k0 - k1, M) + 1
             l0 = k0 - k1 + 1
             for c in 1:3
-                acc = 0.0; bacc = 0.0
-                @inbounds for j in 1:Ny, i in 1:Nx
-                    acc += s.buf[i, j, c, s0] * s.buf[i, j, c, slot]
-                    bacc += s.bbuf[i, j, c, s0] * s.bbuf[i, j, c, slot]
-                end
+                acc = dot(view(s.buf, :, :, c, s0), view(s.buf, :, :, c, slot))
                 s.Cz[c, l0, m+1] += w * acc / (Nx * Ny)
-                s.Bz[c, l0, m+1] += w * bacc / (Nx * Ny)
+                if scale_gap
+                    bacc = dot(view(s.bbuf, :, :, c, s0), view(s.bbuf, :, :, c, slot))
+                    s.Bz[c, l0, m+1] += w * bacc / (Nx * Ny)
+                end
             end
         end
     end
@@ -509,7 +519,7 @@ end
 # spectrum F (rfft along x): C_x(r) = Σ_kx w_kx p_x(kx) cos(2πkx r/Nx)/N²,
 # p_x = Σ_ky |F|², and C_y(r) = Σ_ky p_y(ky) cos(2πky r/Ny)/N²,
 # p_y = Σ_kx w_kx |F|² (Wiener–Khinchin with the Hermitian half).
-function _acc_autocov!(Cx, Cy, c, l, F, band, wx, fac, Nx)
+function _acc_autocov!(Cx, Cy, c, l, F, band, wx, fac, cosx, cosy)
     nkx, Ny = size(F)
     px = zeros(nkx); py = zeros(Ny)
     @inbounds for j in 1:Ny, i in 1:nkx
@@ -518,20 +528,8 @@ function _acc_autocov!(Cx, Cy, c, l, F, band, wx, fac, Nx)
         px[i] += a
         py[j] += wx[i] * a
     end
-    @inbounds for r in 0:size(Cx, 3)-1
-        sx = 0.0
-        for i in 1:nkx
-            sx += wx[i] * px[i] * cos(2π * (i - 1) * r / Nx)
-        end
-        Cx[c, l, r+1] += fac * sx
-    end
-    @inbounds for r in 0:size(Cy, 3)-1
-        sy = 0.0
-        for j in 1:Ny
-            sy += py[j] * cos(2π * (j - 1) * r / Ny)
-        end
-        Cy[c, l, r+1] += fac * sy
-    end
+    @views Cx[c, l, :] .+= fac .* (cosx' * px)
+    @views Cy[c, l, :] .+= fac .* (cosy' * py)
     return nothing
 end
 
@@ -545,9 +543,11 @@ The running-mean profiles at the parent levels `z` (m), in the face frame:
 `resolved` (``R^{\\rm res}``, 6 × nl), `band` (the scale-gap part
 ``R^{\\rm res}(k_c < |k_h| ≤ rk_c)``), `sgs` (``R^{\\rm SGS}``), `generated`
 (what [`inflow_stresses`](@ref) returns before the realizability check:
-`sgs + band`, or `sgs + resolved` for `mode = :full`), `missing`
-(= `generated`), `e_sgs` (nl), `U` (3 × nl region-mean velocity, face
-frame) and the lengths of [`inflow_lengths`](@ref) at the levels.
+`sgs + band`, or `sgs + resolved` for `mode = :full`: the part the
+child's boundary values miss), `e_sgs` (nl), `U` (3 × nl region-mean velocity, face
+frame), the lengths of [`inflow_lengths`](@ref) at the levels (`L_s`,
+`L_z`, `L_n`, `T`; 3 × nl) and those of the full resolved field, uncapped
+(`L_s_full`, `L_z_full`, `L_n_full`).
 """
 function inflow_stress_parts(s::ParentResolvedStatistics)
     _check_samples(s)
@@ -557,19 +557,21 @@ function inflow_stress_parts(s::ParentResolvedStatistics)
     gen = s.mode === :scale_gap ? sgs .+ bnd : sgs .+ res
     U = s.Um[collect(perm), :] ./ s.W
     Ls = _lengths(s)
+    Lf = _lengths(s; band = false)
     return (z = copy(s.z), resolved = res, band = bnd, sgs = sgs, generated = gen,
-            e_sgs = s.esgs ./ s.W, U = U, L_s = Ls.L_s, L_z = Ls.L_z, L_n = Ls.L_n, T = Ls.T)
+            e_sgs = s.esgs ./ s.W, U = U, L_s = Ls.L_s, L_z = Ls.L_z, L_n = Ls.L_n, T = Ls.T,
+            L_s_full = Lf.L_s, L_z_full = Lf.L_z, L_n_full = Lf.L_n)
 end
 
 # per-level lengths in the face frame, 3 × nl
-function _lengths(s::ParentResolvedStatistics)
+function _lengths(s::ParentResolvedStatistics; band::Bool = s.mode === :scale_gap)
     g = mesh(s.parent.u)
     perm = _face_perm(s.face)
     nl = length(s.levels)
     Ls = zeros(3, nl); Lz = zeros(3, nl); Ln = zeros(3, nl); T = zeros(3, nl)
     along_x = s.face in (:south, :north)        # the along-face direction
-    useband = s.mode === :scale_gap && any(s.band)
-    cap = s.mode === :scale_gap ? s.c_len * s.Δh : Inf
+    useband = band && any(s.band)
+    cap = band ? s.c_len * s.Δh : Inf
     Nz = g.Nz
     for l in 1:nl, (fc, c) in enumerate(perm)
         band_ok = useband && s.Bx[c, l, 1] > 0

@@ -74,8 +74,8 @@ using ..CutCell: wall_shear_stress
 using ..MoistThermodynamics: ThermodynamicConstants
 using ..SurfaceExchange: obukhov_length, bulk_richardson, SurfaceConstants, von_karman
 using ..Operators: sgs_tke!, sgs_fields                                    # N-inflow-b
-using LinearAlgebra: Symmetric, Diagonal, eigen, mul!
-using FFTW: plan_rfft, irfft
+using LinearAlgebra: Symmetric, Diagonal, eigen, mul!, dot
+using FFTW: plan_rfft, plan_irfft
 
 export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
