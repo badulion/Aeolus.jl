@@ -546,6 +546,168 @@ these mean ``C_s`` over air cells:
 
 There is no clipping in either run.
 
+## Scale-dependent Lagrangian dynamic model (Bou-Zeid, Meneveau and Parlange 2005)
+
+The scale-invariant dynamic procedure assumes that the coefficient is the
+same at the grid scale ``Δ`` and at the test-filter scale ``αΔ``. Near a
+wall, where the filter widths are comparable to the distance to it, the
+coefficient falls toward the grid scale, so the procedure underestimates
+``C_s`` there and the mean shear comes out too large or too small
+depending on the closure (Porté-Agel, Meneveau & Parlange 2000). Static
+Smagorinsky overshoots (``Φ_m`` up to 1.45-1.65 at 24³ with ``C_s =
+0.17``, P54-d), and in the half channel below LASI undershoots (``Φ_m ≈
+0.7`` in the log layer, mean ``C_s`` 0.04-0.06 near the wall). The
+classical fix is a damping function; Era VI uses none.
+
+`LagrangianDynamicSmagorinsky(mesh; scale_dependent = true)` (P54-e,
+#186) is the scale-dependent Lagrangian model (LASD) of Bou-Zeid,
+Meneveau & Parlange (2005), as an option of the same type. It adds a
+second test filter, the 5 × 5 × 5 box. Its second moment is ``2Δ^2``, so
+with the convention that makes the 3-cell box ``α = 3`` (implicit grid
+filter plus the discrete box, ``\sqrt{Δ^2 + 12σ^2}``) its width is
+``α_2 = 5``. It also adds two memories transported along the same
+pathlines, with the same ``ε`` and ``T``:
+
+```math
+Q_{ij} = \widehat{u_i u_j} - \hat u_i \hat u_j, \qquad
+N_{ij} = 2Δ^2\left(\widehat{|S| S_{ij}} - α_2^2 |\hat S| \hat S_{ij}\right),
+```
+
+```math
+\mathcal I_{QN}^{n+1} = ε\,[Q^d_{ij}N_{ij}]^{n+1}
+  + (1-ε)\,\mathcal I_{QN}^{n}(\mathbf x - \mathbf u^n Δt),
+\qquad
+\mathcal I_{NN}^{n+1} = ε\,[N_{ij}N_{ij}]^{n+1}
+  + (1-ε)\,\mathcal I_{NN}^{n}(\mathbf x - \mathbf u^n Δt).
+```
+
+``C^2_{αΔ} = \mathcal I_{LM}/\mathcal I_{MM}`` and ``C^2_{α_2Δ} =
+\mathcal I_{QN}/\mathcal I_{NN}`` are the coefficients at the two
+test-filter scales. With a power law ``C^2(aΔ) = C^2_Δ a^φ`` between them,
+
+```math
+φ = \frac{\ln(C^2_{α_2Δ}/C^2_{αΔ})}{\ln(α_2/α)}, \qquad
+β = 2^φ \in [1/8,\ 8], \qquad
+C^2_Δ = C^2_{αΔ}\,α^{-φ}.
+```
+
+For Bou-Zeid's filters (``α = 2``, ``α_2 = 4``) this is their ``β =
+C^2_{4Δ}/C^2_{2Δ}`` and ``C^2_Δ = C^2_{2Δ}/β``. In general ``β`` is the
+coefficient ratio per doubling of the filter width. The lower clip
+``β ≥ 1/8`` is Bou-Zeid's. The upper clip, 8, is ours: it is symmetric
+in ``φ`` and keeps the diagnostic finite. The details:
+
+* The box is separable and summed plane by plane. In a periodic direction
+  it wraps. In a bounded direction it stays in the interior, and the
+  points beyond are dropped (renormalised). The 3-cell first filter reads
+  the halo cell, but at a free-slip wall that cell holds the mirrored,
+  reversed shear, and the 5-cell box would reach it two cells from the
+  wall. The first version did read it; the second level then had
+  ``β ≈ 1`` and a ``C_s`` dip (0.066 against 0.13-0.16 around it).
+* With a solid mask the box runs over fluid cells only, and the memories
+  are 0 in solids.
+* Where ``C^2_{αΔ} = 0`` the coefficient is 0 and ``β`` is stored as 1.
+  Where only ``C^2_{α_2Δ} = 0``, ``β = 1/8``.
+* Initialisation: ``\mathcal I_{QN} = C_0^2 \mathcal I_{NN}``, so ``β = 1``.
+* `beta = 1` (a fixed ``β``) reproduces LASI bit for bit (test 2).
+* `cadence = N`: the Germano identities, which are the expensive part,
+  are evaluated every ``N`` commits. In between, the memories are only
+  transported (``ε = 0``), and the next evaluation relaxes over the
+  elapsed time. This is common practice in Lagrangian dynamic codes.
+  ``N = 1`` is the exact model, and the counters are part of
+  `sgs_state`.
+
+**No wall damping.** No damping function is applied anywhere. The
+near-wall coefficient comes from the scale dependence, and the wall
+stress from the wall model (`WallModels`, #169, with the P57-b matching
+input, #183).
+
+Measured (`test/era6_lasd.jl`):
+
+| test | result |
+| :-- | :-- |
+| separable 5-cell filter against a direct 5³ sum (periodic and bounded, with and without mask) | relative difference < 1e-12 |
+| laminar shear ``u = 3z`` | ``Q^d_{ij}N_{ij} = 0`` to 1e-12 of ``N_{ij}N_{ij}`` |
+| prescribed power law ``C^2(aΔ) = C^2_Δ a^φ``, ``\lvert φ\rvert < 3`` | ``C^2_Δ`` and ``β = 2^φ`` recovered to 1e-12 (``α = 3, 5`` and ``2, 4``) |
+| isotropic 32³, ``t = 3`` (the P54-b protocol) | ``β`` geometric mean 1.058 (seeds 1-3: 1.058 / 1.028 / 1.030), median 1.107, arithmetic mean 1.335 |
+| same, ``C_s`` against LASI | median pointwise ratio 0.921; domain mean 0.1657 against 0.1500 (+10.5 %; seeds 2, 3: +13.6, +14.2 %) |
+| ``β ≡ 1`` | LASI bit for bit (u, ν_t, ``C_s^2``, ``\mathcal I_{LM}``) over 30 RK3 steps |
+| half channel 24³, 10-20 ``H/u_*`` (below) | ``Φ_m ∈ [0.934, 1.151]`` over ``0.05 ≤ z/H ≤ 0.3`` |
+| 500 steps, isotropic and wall-mounted cube | ``ν_t ≥ 0``, ``β ≥ 1/8``, no NaN, ``ν_t = 0`` in solids |
+
+Isotropic turbulence is scale invariant, and the mean exponent agrees:
+``⟨φ⟩ = 0.04-0.08``, ``2^{⟨φ⟩} = 1.03-1.06``. Pointwise, though, ``φ`` is a
+log-ratio of two noisy averages, with a standard deviation of about 1.2.
+The **arithmetic** mean of ``β`` is therefore biased, ``E[2^φ] ≈ 2^{⟨φ⟩}
+e^{(σ\ln 2)^2/2}``, which gives 1.3. That reading of the issue's "domain-mean
+β within 1 ± 0.15" was the wrong statistic, not a code error; it is
+kept as a broken test. For the same reason the domain-mean ``C_s`` is
+10-14 % above LASI while the median pointwise ratio is 0.92-0.93, the
+``3^{-⟨φ⟩}`` the mean exponent predicts. ``C^2_Δ = C^2_{αΔ}α^{-φ}`` is
+convex in ``φ``, and the 2-3 % of cells at the ``β = 1/8`` clip carry
+``27 C^2_{αΔ}``. The issue's ±10 % on the mean is not met at 32³ and is
+kept broken; ±15 % is asserted.
+
+**Log-law recovery** (the headline test). This is the P54-d half channel
+at 24³, with the P57-b 2Δ input filter of the wall model (`filter =
+:spatial`, the 3 × 3 wall-parallel box of Bou-Zeid et al. 2005). LASD
+starts from the noise and is averaged over 10-20 ``H/u_*``:
+
+| ``z/H`` | 0.042 | 0.083 | 0.125 | 0.167 | 0.208 | 0.250 | 0.292 | 0.333 | 0.417 | 0.500 |
+| :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| ``Φ_m``, LASD 24³ | 0.878 | 0.934 | 1.033 | 0.989 | 1.140 | 1.114 | 1.151 | 1.116 | 1.072 | 1.011 |
+| ``Φ_m``, LASI 24³, same set-up | 1.505 | 1.003 | 1.031 | 0.741 | 0.795 | 0.711 | 0.723 | 0.690 | 0.666 | 0.632 |
+
+At 32³ (same set-up, seed 1) ``Φ_m`` at ``z/H = k/32``, ``k = 1 … 8`` is
+0.890, 0.943, 1.042, 0.993, 1.107, 1.119, 1.137, 1.104.
+
+* ``Φ_m`` stays in [0.8, 1.2] over ``0.05 ≤ z/H ≤ 0.3`` (Bou-Zeid et al.
+  2005, Figs. 5-6): [0.934, 1.151] at 24³, [0.943, 1.137] at 32³, and
+  [1.042, 1.141] for seed 2 at 24³.
+* max ``\lvert Φ_m - 1\rvert`` is 0.151 over the band and 0.122 over
+  the first three faces. Static Smagorinsky 0.17 gives max ``Φ_m``
+  1.45-1.65 on those faces (P54-d, 12 seeds), so LASD is within a third
+  of it; the test asserts less than half, < 0.225.
+* The momentum budget closes: ``⟨τ_w⟩ = 1.028 u_*^2`` and the total
+  stress stays within 0.032 ``u_*^2`` of ``u_*^2(1 - z/H)``.
+* The geometric plane mean of ``β`` is 0.36-0.73 below ``z/H = 0.3``.
+  Away from the wall it rises through 1 and above 1 toward the free-slip
+  top. Mean ``C_s`` is 0.13-0.16 in the log layer, against 0.04-0.08 for
+  LASI.
+* The issue's "β → 1 above ``z/H ≈ 0.2``" is not met at these
+  resolutions. ``β`` crosses 1 near ``z/H = 0.45`` at 24³ and near 0.32
+  at 32³. That is a fixed height in grid cells (10.8 and 10.3), where the
+  wider test filter (``5Δ``) is about half the distance to the wall. With
+  these filters, "above 0.2 H" needs ``N ≳ 50``. The expectation assumed
+  a resolution-independent height, and it is kept as a broken test.
+
+**Spectra** (`examples/validation/neutral_abl.jl`, seed 1, averaged over
+18-30 ``H/u_*``; slopes are least-squares fits in log-log):
+
+| run | ``Φ_m``, ``0.05 ≤ z/H ≤ 0.3`` | ``E_{11}`` slope near the wall, ``k_1H ∈ [1, 6]`` | slope at ``z/H ≈ 0.24``, ``k_1H ∈ [4, N/3]`` |
+| :-- | :-- | :-- | --: |
+| Smagorinsky 0.1, 32³ | [0.965, 1.589] | −2.01 (``z/H`` 0.047), −1.28 (0.109) | −5.14 |
+| LASD, 32³ | [0.935, 1.133] | −0.66 (0.047), −0.79 (0.109) | −4.27 |
+| LASD, 48³ | [0.961, 1.094] | −0.43 (0.052), −0.61 (0.094) | −3.48 |
+
+``Φ_m`` approaches 1 as the grid is refined. Near the wall LASD gives the
+shallow production-range spectrum, where Bou-Zeid et al. (2005) expect
+``k_1^{-1}``; the Smagorinsky overshoot steepens it. The
+``k_1^{-5/3}`` range at ``z/H ≈ 0.25`` (``k_1 z > 1``, so ``k_1H > 4``)
+is **not** reproduced at 32³-48³. Those wavelengths are below 8-12 ``Δx``,
+where the second-order scheme and the closure damp. The fitted slope
+steepens on coarser grids (−3.5 at 48³, −4.3 at 32³, −5.1 for
+Smagorinsky at 32³), which points to numerical dissipation rather than
+to the closure.
+
+The CBC decay with LASD is in the CBC table below. On the corrected
+(#205) set-up it gives +0.2 % / −10.1 % at 32³, the only closure there
+within the proposed ±10 % at station 98; it misses ±10 % at station 171
+by 0.1 points. Its errors sit about 12.5 points below LASI's at both
+stations because its isotropic ``C_s`` is higher (above). On the
+pre-#205 set-up it read −9.6 % / −19.7 %; the exact start moved it by the
+same ~10 points as every other closure.
+
 ## Closure contract
 
 Era VI (#167) defines the interface between an SGS closure and the
@@ -806,6 +968,7 @@ Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
 | :-- | :-- | --: | --: | --: | --: |
 | 32³ | dynamic (plane)     | +13.2 % | −3.6 % | 0.100 / 0.084 | 1.64 / 1.47 |
 | 32³ | dynamic (Lagrangian, #173) | +12.8 % | −2.8 % | 0.095 / 0.077 | 1.61 / 1.43 |
+| 32³ | LASD (scale-dependent Lagrangian, #186) | +0.2 % | −10.1 % | 0.063 / 0.064 | 1.27 / 1.15 |
 | 32³ | Smagorinsky 0.17    | +13.2 % | −2.6 % | 0.102 / 0.085 | 1.62 / 1.51 |
 | 32³ | no model            | +98.2 % | +160.6 % | 0.224 / 0.315 | 6.67 / 15.2 |
 | 32³ | AMD, C = 0.3 (#176) | +20.0 % | +7.7 % | 0.113 / 0.095 | 1.86 / 1.94 |
@@ -825,7 +988,7 @@ three seeds, plus 2.2 s for the Lagrangian model, which runs through
 `step_rk3!(sim, dt; sgs)` so that its memory is committed once per step;
 it was not run at 64³. AMD and Vreman add about 2 s each, and the AMD
 checks a further 48³ run (about 10 s) and the two C-sweep runs. The
-σ-model (#184) adds about 6.5 s.
+σ-model (#184) adds about 6.5 s, LASD (#186) about 4–13 s.
 
 Without a model the energy piles up at the cut-off (7–15 × CBC). The
 test uses this to show that it can fail.
@@ -1013,9 +1176,17 @@ costs 17.8 ms against 16.5 ms with Smagorinsky.
 The current implementation is deliberately the *simplest* working
 Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
 
-  * No wall damping (Van Driest / Piomelli) for Smagorinsky. Needed only
-    when walls exist. The [σ-model](#σ-model) needs none: its ``ν_t``
-    falls off as ``z^3`` at a no-slip wall (measured slope 2.955).
+  * No wall damping function (Van Driest / Piomelli) for Smagorinsky, by
+    design. The static closure has none; near walls it overshoots
+    (``Φ_m`` up to 1.45-1.65 at ``C_s = 0.17``, P54-d). The dynamic
+    closures replace damping with the dynamic procedure: the
+    scale-dependent Lagrangian model (LASD, #186, above) recovers the log
+    law (``Φ_m ∈ [0.93, 1.15]`` in the half channel at 24³) without a
+    damping function, and the wall stress comes from the wall model. The
+    plane-averaged `DynamicSmagorinsky` is kept as an option of the same
+    Germano kernel; it is not scale dependent. The [σ-model](#σ-model)
+    needs none either: its ``ν_t`` falls off as ``z^3`` at a no-slip wall
+    (measured slope 2.955).
   * The constant coefficient is too dissipative in transitional / stably
     stratified regimes. The dynamic coefficient and the σ-model, which is
     zero in laminar shear and in 2-D flow, are the alternatives.
@@ -1048,6 +1219,12 @@ Smagorinsky-Lilly. Known deficiencies (all fixable in later phases):
   * Pope, S. B. (2000), *Turbulent Flows*, ch. 13.
   * Germano, M., Piomelli, U., Moin, P. & Cabot, W. H. (1991), *A dynamic
     subgrid-scale eddy viscosity model*, Phys. Fluids A 3, 1760.
+  * Porté-Agel, F., Meneveau, C. & Parlange, M. B. (2000), *A
+    scale-dependent dynamic model for large-eddy simulation: application
+    to a neutral atmospheric boundary layer*, JFM 415, 261.
+  * Bou-Zeid, E., Meneveau, C. & Parlange, M. B. (2005), *A
+    scale-dependent Lagrangian dynamic model for large eddy simulation of
+    complex turbulent flows*, Phys. Fluids 17, 025105.
   * Lilly, D. K. (1992), *A proposed modification of the Germano subgrid-scale
     closure method*, Phys. Fluids A 4, 633.
   * Lund, T. S. (1997), *On the use of discrete filters for large eddy

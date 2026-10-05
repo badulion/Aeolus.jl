@@ -394,21 +394,38 @@ unmasked.
   in buildings, and the test filter and the averages see air cells only
   (#173). The default `averaging = :lagrangian` is
   `Operators.LagrangianDynamicSmagorinsky` (Meneveau, Lund & Cabot 1996:
-  averaged along pathlines, no homogeneous planes needed).
-  `averaging = :plane` (a smoke variant) and `:local` run
-  `Operators.DynamicSmagorinsky`. See [the SGS theory page](../theory/sgs.md).
-  `report` prints the mean C_s over air cells in the canopy and in the
-  free stream (the levels between the highest roof + 1 and the sponge).
-  `CaseConfig(:smoke)`, 100 fixed steps:
+  averaged along pathlines, no homogeneous planes needed), and by default
+  in its scale-dependent form (`scale_dependent = true`, LASD, Bou-Zeid,
+  Meneveau & Parlange 2005; #186) with `cadence = 4` (the Germano
+  identities every 4th step, the memories transported every step).
+  `scale_dependent = false` (LASI) and `averaging = :plane` are smoke
+  variants; `:local` runs `Operators.DynamicSmagorinsky` too. See
+  [the SGS theory page](../theory/sgs.md). `report` prints the mean C_s
+  over air cells in the canopy and in the free stream (the levels
+  between the highest roof + 1 and the sponge), and with LASD the
+  geometric-mean β there. `smoke_check` asserts ν_t = 0 in buildings and
+  β ∈ [1/8, 8] in the air. `CaseConfig(:smoke)`, 100 fixed steps:
 
-  | averaging | canopy C_s | free-stream C_s | cost per Euler step |
-  | :-- | --: | --: | --: |
-  | Lagrangian | 0.037 | 0.033 | 1.2 ms (0.11 ms coefficient + 1.1 ms commit) |
-  | plane | 0.032 | 0.018 | 0.70 ms |
+  | averaging | canopy C_s | free-stream C_s | β canopy / free |
+  | :-- | --: | --: | :-- |
+  | Lagrangian, scale dependent (default, cadence 4) | 0.095 | 0.089 | 0.61 / 0.48 |
+  | Lagrangian, scale dependent, cadence 1 | 0.091 | 0.086 | 0.62 / 0.48 |
+  | Lagrangian, scale invariant (LASI) | 0.037 | 0.033 | — |
+  | plane | 0.032 | 0.018 | — |
 
-  On the 64 × 64 × 32 flagship mesh the Lagrangian model costs 34 ms per
-  Euler step against 26 ms for the plane model, both measured on a
-  loaded machine. Under RK3 the Lagrangian model is cheaper than the
+  Over the last 30 min of a 1 h smoke run, LASD gives C_s 0.090 in the
+  canopy and 0.084 in the free stream (LASI: 0.053 and 0.104), β 0.76
+  and 1.47. The time-mean wind above the roofs is 0.19 m/s with a
+  maximum at 45 m, so Φ_m there is not a log-law diagnostic, and it is
+  the same within 0.02 for LASD, LASI and Smagorinsky: the resolved
+  flow, not the closure, sets the profile in this window.
+
+  Cost on the 64 × 64 × 32 flagship mesh (loaded machine; coefficient
+  plus commit per Euler step): LASI 31-40 ms, LASD 58-72 ms at
+  `cadence = 1` (≈ 28 % of a step) and 25-33 ms at `cadence = 4`
+  (≈ 15 %). The memory time scale ``T`` is 50-100 s (10th percentile to
+  median, smoke case), so a 4-step cadence of 2 s steps is well inside it.
+  Under RK3 the Lagrangian model is cheaper than the
   plane model, because it runs the Germano kernel once per step instead
   of once per substage. `:mlsgs` wraps `ML.MLSGS`; with
   the default `fn` (the Smagorinsky closure with `cfg.C_s`) the run is

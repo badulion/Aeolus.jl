@@ -980,6 +980,7 @@ end
     include("era6_wall_models_immersed.jl") # Phase 57: wall model on IBM and cut-cell walls (#179)
     include("era6_les_toolbox.jl")       # Phase 54  filters, spectrum, initialiser (#168)
     include("era6_lagrangian_sgs.jl")    # P54-b: Lagrangian dynamic Smagorinsky, mask-aware (#173)
+    include("era6_lasd.jl")              # P54-e: scale-dependent Lagrangian dynamic model, log law (#186)
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
     include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
     include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)

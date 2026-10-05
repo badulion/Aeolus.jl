@@ -16,10 +16,12 @@
 #                #182).
 #   :dynamic     the Germano–Lilly dynamic coefficient from the resolved
 #                flow, obstacle aware (the buildings' solid mask, #173).
-#                Default averaging :lagrangian —
+#                Default averaging :lagrangian, scale_dependent = true —
 #                Operators.LagrangianDynamicSmagorinsky (Meneveau, Lund &
 #                Cabot 1996: averaged along pathlines, no homogeneous
-#                planes needed); `averaging = :plane` / `:local` run
+#                planes needed; scale dependent after Bou-Zeid, Meneveau
+#                & Parlange 2005, LASD, #186; `scale_dependent = false`
+#                is the scale-invariant LASI); `averaging = :plane` / `:local` run
 #                Operators.DynamicSmagorinsky (moved to src from the
 #                example's dead turbulence_addons.jl by #132).
 #   :mlsgs       ML.MLSGS — a user closure `fn(νt, u, v, w, mesh)`. There
@@ -208,6 +210,19 @@ reaches the coefficient. Options:
   the Germano identity averaged along pathlines (Meneveau, Lund & Cabot
   1996); its memory is committed once per accepted step and rolled back
   with a rejected adaptive step;
+* `scale_dependent = true` (default; Lagrangian only) — the
+  scale-dependent model (LASD) of Bou-Zeid, Meneveau & Parlange (2005):
+  a second test filter (5-cell box) and the power law between the two
+  test-filter scales give ``C_s^2`` at the grid scale and ``β``, the
+  coefficient ratio per doubling of the filter width, ``β ∈ [1/8, 8]``;
+  `false` is the scale-invariant model (LASI);
+* `cadence = 4` (Lagrangian only) — the Germano identities every 4th
+  accepted step, the memories transported along the pathlines at every
+  step (common Lagrangian-dynamic practice). On the 64 × 64 × 32 flagship
+  mesh LASD with `cadence = 1` costs about 28 % of a step, with 4 about
+  15 %; the memory time ``T`` (10th percentile to median) is 50-100 s
+  in the smoke case, so 4 steps of 2 s
+  are well inside it. `cadence = 1` is the exact model;
 * `averaging = :plane` / `:local` — `DynamicSmagorinsky` (horizontal
   average over the air cells of each level / pointwise);
 * `filter_ratio = 3.0`, `cs_max = 0.5`;
@@ -216,9 +231,9 @@ reaches the coefficient. Options:
 * `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`,
   `slope_max`) — the scalar flux, as for `SGSSmagorinsky`.
 
-`report` prints the mean `C_s` over the air cells in the canopy (the
-levels with buildings) and in the free stream (between the highest roof
-and the sponge).
+`report` prints the mean `C_s` (and, with LASD, the geometric-mean `β`)
+over the air cells in the canopy (the levels with buildings) and in the
+free stream (between the highest roof and the sponge).
 """
 struct SGSDynamic{W, O, C} <: AbstractCoupling
     ws::W
@@ -232,14 +247,17 @@ provider(::Type{<:SGSDynamic}) = :dynamic
 is_default(::Type{<:SGSDynamic}) = false
 modules_used(::Type{<:SGSDynamic}) = (:Operators,)
 default_options(::Type{<:SGSDynamic}) =
-    (averaging = :lagrangian, filter_ratio = 3.0, cs_max = 0.5, SGS_STRESS_DEFAULT...,
-     SGS_SCALAR_DEFAULT...)
+    (averaging = :lagrangian, scale_dependent = true, cadence = 4, filter_ratio = 3.0,
+     cs_max = 0.5, SGS_STRESS_DEFAULT..., SGS_SCALAR_DEFAULT...)
 function build(::Type{<:SGSDynamic}, case, o)
-    opts = (averaging = o.averaging, filter_ratio = o.filter_ratio, cs_max = o.cs_max)
+    sd = o.averaging === :lagrangian && o.scale_dependent
+    opts = (averaging = o.averaging, scale_dependent = sd, cadence = o.cadence,
+            filter_ratio = o.filter_ratio, cs_max = o.cs_max)
     mask = case.geom.sm.mask
     inner = if o.averaging === :lagrangian
         LagrangianDynamicSmagorinsky(case.mesh; filter_ratio = o.filter_ratio,
-                                     cs_max = o.cs_max, mask)
+                                     cs_max = o.cs_max, mask, scale_dependent = sd,
+                                     cadence = o.cadence)
     else
         DynamicSmagorinsky(DynamicSmagorinskyWorkspace(case.mesh); averaging = o.averaging,
                            filter_ratio = o.filter_ratio, cs_max = o.cs_max, mask)
@@ -256,11 +274,14 @@ function interior_solid(case)
 end
 
 """
-    dynamic_cs_profile(c::SGSDynamic, case) -> (canopy, free)
+    dynamic_cs_profile(c::SGSDynamic, case) -> (canopy, free, β_canopy, β_free)
 
 Mean `C_s = √(C_s²)` of the last coefficient evaluation over the air cells
 of the levels with buildings and of the free-stream levels (above the
-highest roof + 1 and below the sponge). Building cells are excluded.
+highest roof + 1 and below the sponge). Building cells are excluded. With
+the scale-dependent model also the geometric mean of `β` over the same
+cells, ``2^{⟨\\log_2 β⟩}`` (the mean power-law exponent; the arithmetic
+mean of a noisy ratio is biased high), `NaN` otherwise.
 """
 function dynamic_cs_profile(c::SGSDynamic, case)
     m = case.mesh
@@ -268,23 +289,33 @@ function dynamic_cs_profile(c::SGSDynamic, case)
     ksp = floor(Int, case.cfg.sponge_frac * m.Nz)
     Cs = sqrt.(c.ws.cs2)
     air = .!interior_solid(case)
-    function lvl(ks)
+    function lvl(A, ks; f = identity, inv = identity)
         isempty(ks) && return NaN
         a = view(air, :, :, ks)
-        return sum(view(Cs, :, :, ks)[a]) / count(a)
+        return inv(sum(f, view(A, :, :, ks)[a]) / count(a))
     end
-    return (canopy = lvl(1:kr), free = lvl(kr+2:ksp))
+    inner = c.closure isa IsentropicDiffusion ? c.closure.inner : c.closure
+    sd = inner isa LagrangianDynamicSmagorinsky && inner.scale_dependent
+    βl(ks) = sd ? lvl(inner.beta, ks; f = log2, inv = exp2) : NaN
+    return (canopy = lvl(Cs, 1:kr), free = lvl(Cs, kr+2:ksp),
+            β_canopy = βl(1:kr), β_free = βl(kr+2:ksp))
 end
 
 function report(c::SGSDynamic, case)
     p = dynamic_cs_profile(c, case)
-    return @sprintf("dynamic SGS (%s): mean C_s canopy %.3f, free stream %.3f (air cells)",
-                    c.opts.averaging, p.canopy, p.free)
+    name = c.opts.scale_dependent ? "lagrangian, scale dependent" : String(c.opts.averaging)
+    s = @sprintf("dynamic SGS (%s): mean C_s canopy %.3f, free stream %.3f (air cells)",
+                 name, p.canopy, p.free)
+    c.opts.scale_dependent &&
+        (s *= @sprintf("; β canopy %.3f, free stream %.3f", p.β_canopy, p.β_free))
+    return s
 end
 
 smoke_variants(::Type{<:SGSDynamic}) =
     ((label = "plane averaging", physics = Dict(:sgs => :dynamic),
-      options = Dict(:sgs_dynamic => (averaging = :plane,))),)
+      options = Dict(:sgs_dynamic => (averaging = :plane,))),
+     (label = "scale-invariant Lagrangian (LASI)", physics = Dict(:sgs => :dynamic),
+      options = Dict(:sgs_dynamic => (scale_dependent = false,))))
 
 function smoke_check(c::SGSDynamic, case)
     solid = interior_solid(case)
@@ -297,6 +328,14 @@ function smoke_check(c::SGSDynamic, case)
         push!(checks, "Lagrangian memory I_LM ≥ 0, I_MM ≥ 0" =>
                           minimum(inner.I_LM) >= 0 && minimum(inner.I_MM) >= 0)
         push!(checks, "Lagrangian memory initialised" => inner.initialised[])
+        if inner.scale_dependent
+            β = inner.beta; air = .!solid
+            push!(checks, "LASD β ∈ [β_min, β_max] in the air" =>
+                              all(b -> inner.beta_min <= b <= inner.beta_max, β[air]))
+            push!(checks, "LASD memory I_QN ≥ 0, I_NN ≥ 0, 0 in the buildings" =>
+                              minimum(inner.I_QN) >= 0 && minimum(inner.I_NN) >= 0 &&
+                              all(==(0), inner.I_QN[solid]))
+        end
     end
     append!(checks, sgs_stress_checks(c.stress, case))
     append!(checks, sgs_scalar_checks(c.closure, case))

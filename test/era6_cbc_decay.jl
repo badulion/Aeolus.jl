@@ -11,6 +11,7 @@
 #   closure        K98/K42 err  K171/K42 err  rms log10 E (98 / 171)  E(k_c)/CBC (98 / 171)
 #   dynamic          +13.2 %       −3.6 %       0.100 / 0.084           1.64 / 1.47
 #   Lagrangian (#173) +12.8 %      −2.8 %       0.095 / 0.077           1.61 / 1.43
+#   LASD (#186)       +0.2 %      −10.1 %       0.063 / 0.064           1.27 / 1.15   (P54-e)
 #   Smagorinsky .17  +13.2 %       −2.6 %       0.102 / 0.085           1.62 / 1.51
 #   no model         +98.2 %     +160.6 %       0.224 / 0.315           6.67 / 15.2
 #   AMD (C = 0.3)    +20.0 %       +7.7 %       0.113 / 0.095           1.86 / 1.94   (#176)
@@ -86,6 +87,17 @@
 # C = 0.25, +20.0 / +7.7 for 0.3 and +9.2 / −2.4 for 0.4; the station
 # spread K98err − K171err is 11.5–12.3 points for AMD and 15.6–16.8 for the
 # other closures (it was 13–15 and 16.7–17.5).
+#
+# LASD (P54-e, #186) is more dissipative than LASI at 32³ (its domain-mean
+# C_s is above LASI's in isotropic flow, era6_lasd.jl test 1), so its
+# errors sit about 12.5 points below LASI's at both stations. On the
+# pre-#205 set-up that was −9.6 % / −19.7 % (rms 0.066 / 0.092, E(k_c)/CBC
+# 0.92 / 0.81). The exact start raised both by ~10 points, the same shift
+# as every other closure, to +0.2 % / −10.1 %: LASD is the only closure
+# here that meets the proposed ±10 % at station 98, and it misses ±10 % at
+# station 171 by 0.1 points. So it gets its own testset with the bounds it
+# was first asserted to (K98 ±10 %, K171 ±20 % with ±10 % kept broken);
+# the shared set's @test_broken at 98 would pass for it.
 
 using Test
 using Aeolus
@@ -117,6 +129,9 @@ include("cbc_benchmark_driver.jl")
         @info "  " * cbc_summary(String(c), res[c])
     end
     @info @sprintf("  CBC 32³ (6 closures × 3 seeds): %.1f s", t_total)
+    # the scale-dependent Lagrangian model (P54-e, #186), timed on its own
+    t_lasd = @elapsed res[:lasd] = cbc_benchmark(:lasd; N = 32)
+    @info "  " * cbc_summary("lasd", res[:lasd])
     # the σ-model (P59-b, #184): same targets; timed outside the CI budget
     # of the closures above
     res[:sigma] = cbc_benchmark(:sigma; N = 32)
@@ -140,6 +155,21 @@ include("cbc_benchmark_driver.jl")
         @test r.rms_log_err[1] <= 0.11                             # 0.100 / 0.102 (seeds 1–3)
         @test r.rms_log_err[2] <= 0.10
         @test r.E_kc_ratio[1] < 2 && r.E_kc_ratio[2] < 2           # no pile-up
+    end
+
+    # LASD (P54-e, #186): see header. Its first interval meets the proposed
+    # ±10 % (+0.2 %), so the shared @test_broken at 98 does not apply; at
+    # 171 it is −10.1 %, ±10 % kept broken as first asserted.
+    @testset "lasd: TKE decay and spectra against CBC (see header)" begin
+        r = res[:lasd]
+        @test r.E_les[1][2:17] ≈ r.E_ref[1][2:17] rtol = 1e-10     # same initial spectrum
+        @test abs(r.K_err[1]) < 0.10                               # +0.2 %
+        @test abs(r.K_err[2]) < 0.20                               # −10.1 %
+        @test_broken abs(r.K_err[2]) < 0.10                        # misses by 0.1 points
+        @test r.rms_log_err[1] <= 0.10 && r.rms_log_err[2] <= 0.10 # 0.063 / 0.064
+        @test r.E_kc_ratio[1] < 2 && r.E_kc_ratio[2] < 2           # 1.27 / 1.15, no pile-up
+        @test r.K_err[1] < res[:lagrangian].K_err[1]               # more dissipative than LASI
+        @test r.K_err[2] < res[:lagrangian].K_err[2]
     end
 
     # The σ-model (P59-b, #184). On the pre-#205 set-up it passed the shared
@@ -213,9 +243,11 @@ include("cbc_benchmark_driver.jl")
         # and the models are distinguishable from it
         @test res[:dynamic].E_kc_ratio[2] < r.E_kc_ratio[2] / 4
         @test res[:lagrangian].E_kc_ratio[2] < r.E_kc_ratio[2] / 4
+        @test res[:lasd].E_kc_ratio[2] < r.E_kc_ratio[2] / 4
     end
 
     @test t_total < 60                                             # CI budget
+    @test t_lasd < 60
 
     # P56-b (#182): the Deardorff/Moeng prognostic SGS TKE closure. Measured
     # at 32³, seeds 1–3, with the corrected (face-spectrum, #205) set-up:

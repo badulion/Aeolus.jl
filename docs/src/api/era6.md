@@ -12,7 +12,7 @@ tested at are in
 
 - Shared contract — SGS closures (P54-a, #167; below) — `Aeolus.Operators`
 - Wall-bounded flow diagnostics (P54-d, #174; below) — `Aeolus.Operators`
-- Lagrangian dynamic Smagorinsky (P54-b, #173; below) — `Aeolus.Operators`
+- Lagrangian dynamic Smagorinsky (P54-b, #173) and its scale-dependent form (LASD, P54-e, #186; below) — `Aeolus.Operators`
 - Stress-form momentum divergence (P55-b, #175; below) — `Aeolus.Operators`
 - Tensorial scalar eddy diffusivity (P55-c, #181; below) — `Aeolus.Operators`
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
@@ -86,12 +86,28 @@ step!(sim, 0.05; sgs = lag)          # memory committed once per accepted step
 lag.workspace.cs2                    # the coefficient C_s² of the last call
 ```
 
+The scale-dependent model (Bou-Zeid, Meneveau & Parlange 2005) is the
+same type with `scale_dependent = true`: a second test filter (5-cell
+box) and the power law between the two test-filter scales; `beta` holds
+β, the coefficient ratio per doubling of the filter width. Theory and
+numbers:
+[Smagorinsky-Lilly SGS → Scale-dependent Lagrangian dynamic model](../theory/sgs.md#Scale-dependent-Lagrangian-dynamic-model-(Bou-Zeid,-Meneveau-and-Parlange-2005)).
+
+```julia
+lasd = LagrangianDynamicSmagorinsky(g; mask = sm.mask, scale_dependent = true, cadence = 1)
+step!(sim, 0.05; sgs = lasd)
+lasd.beta                            # β = 2^φ ∈ [1/8, 8] of the last call
+```
+
 ```@docs
 Aeolus.Operators.LagrangianDynamicSmagorinsky
 Aeolus.Operators.advance_sgs!(::Aeolus.Operators.LagrangianDynamicSmagorinsky, ::Any, ::Any)
 Aeolus.Operators._germano_identity!
 Aeolus.Operators._lagrangian_relax!
 Aeolus.Operators._upstream
+Aeolus.Operators._scale_dependent_cs2!
+Aeolus.Operators._second_test_filter!
+Aeolus.Operators._SecondTestFilter
 Aeolus.Operators._SGSMask
 Aeolus.Operators._masked_velocities!
 ```
