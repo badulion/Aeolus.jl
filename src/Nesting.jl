@@ -71,7 +71,8 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             has_open_boundaries, update_open_boundaries!,
                             open_boundary_snapshot, restore_open_boundaries!,
                             Periodic, NoFlux, ImpermeableWall, NoSlipWall,
-                            mark_open_boundary_solids!
+                            mark_open_boundary_solids!, WindowedBoundaryData,
+                            blend_window!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, step_rk3!, _dzf, _project_velocity!
 using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness
@@ -89,7 +90,7 @@ using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
 
-import ..BoundaryConditions: boundary_values!
+import ..BoundaryConditions: boundary_values!, snapshot_values
 
 export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,

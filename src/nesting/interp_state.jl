@@ -276,13 +276,16 @@ function interpolate_parent_state!(s::NestInterpState, psim::_NestSim,
     return s
 end
 
+# The whole field set blended in time, member by member, with the one
+# two-snapshot kernel of the open boundaries (blend_window!, #329 item 8).
 function _blend_state!(dst::NestInterpState, a::NestInterpState,
                        b::NestInterpState, τ::Real)
-    for f in (:u, :v, :w, :θ)
-        getfield(dst, f).data .= (1 - τ) .* getfield(a, f).data .+ τ .* getfield(b, f).data
-    end
+    blend_window!(dst.u.data, a.u.data, b.u.data, τ)
+    blend_window!(dst.v.data, a.v.data, b.v.data, τ)
+    blend_window!(dst.w.data, a.w.data, b.w.data, τ)
+    blend_window!(dst.θ.data, a.θ.data, b.θ.data, τ)
     for i in eachindex(dst.bufs)
-        dst.bufs[i].data .= (1 - τ) .* a.bufs[i].data .+ τ .* b.bufs[i].data
+        blend_window!(dst.bufs[i].data, a.bufs[i].data, b.bufs[i].data, τ)
     end
     return dst
 end

@@ -186,6 +186,95 @@ Fill the open-boundary buffers `planes` from `data` at time `t`; see
 """
 function boundary_values! end
 
+# -------------------------------------------------------------------------
+# Two snapshots blended in time: the one windowed boundary-data helper
+# (#329, item 8). The nest parent (Nesting.NestBoundaryData) is one
+# implementer; a mesoscale parent (#58) or reanalysis (#57) that delivers
+# its fields at discrete times is another.
+# -------------------------------------------------------------------------
+
+"""
+    WindowedBoundaryData{S}(a, b, t0, Δt) <: AbstractBoundaryData
+
+Boundary data from two **snapshots** of a source, `a` at time `t0` and
+`b` at `t0 + Δt`, blended linearly in time:
+
+    boundary_values!(planes, d, t):   p.data ← (1 − τ) A + τ B,   τ = window_fraction(d, t)
+
+for every plane `p` (except `:mirror` planes), with `A`, `B` the
+snapshots' values of field `p.name`, read at the plane's storage points.
+`Δt = 0` is steady data (`a`). The window is moved by assigning the
+fields (`d.a = …; d.b = …; d.t0 = …; d.Δt = …`).
+
+A snapshot type `S` implements one method,
+
+    snapshot_values(s::S, name::Symbol) -> AbstractArray{T,3}
+
+the storage-indexed values of field `name` on the child mesh (only the
+plane points are read). Linear interpolation in time is exact for data
+linear in time and second-order accurate otherwise, `O(Δt²)`.
+
+Implementers: the nest parent ([`NestBoundaryData`](@ref
+Aeolus.Nesting.NestBoundaryData), N-nest-d #261); a mesoscale parent
+(#58) or reanalysis forcing (#57) delivering fields at discrete times.
+"""
+mutable struct WindowedBoundaryData{S} <: AbstractBoundaryData
+    a::S
+    b::S
+    t0::Float64
+    Δt::Float64
+end
+
+"""
+    snapshot_values(snapshot, name::Symbol) -> AbstractArray{T,3}
+
+The storage-indexed values of field `name` held by one snapshot of a
+[`WindowedBoundaryData`](@ref). Implemented by each snapshot type.
+"""
+function snapshot_values end
+
+"""
+    window_fraction(d::WindowedBoundaryData, t) -> τ
+
+The blend weight of `d.b` at time `t`: `(t − t0)/Δt`, or `0` for steady
+data (`Δt = 0`).
+"""
+window_fraction(d::WindowedBoundaryData, t) = d.Δt > 0 ? (Float64(t) - d.t0) / d.Δt : 0.0
+
+"""
+    blend_window!(dst, A, B, τ[, irange, jrange, krange]) -> dst
+
+`dst ← (1 − τ) A + τ B`, the one time-blend kernel of two snapshots: over
+the whole array, or, with ranges, `dst[a, b, c]` from `A[i, j, k]`,
+`B[i, j, k]` at the storage points `irange × jrange × krange` (`a, b, c`
+counting from 1, the layout of an [`OpenPlane`](@ref)'s buffer).
+"""
+function blend_window!(dst::AbstractArray{T,3}, A::AbstractArray, B::AbstractArray, τ,
+                       irange, jrange, krange) where {T}
+    τ1 = one(T) - T(τ); τT = T(τ)
+    i0 = first(irange) - 1; j0 = first(jrange) - 1; k0 = first(krange) - 1
+    @inbounds for k in krange, j in jrange, i in irange
+        dst[i - i0, j - j0, k - k0] = τ1 * A[i, j, k] + τT * B[i, j, k]
+    end
+    return dst
+end
+
+blend_window!(dst::AbstractArray{T,3}, A::AbstractArray, B::AbstractArray, τ) where {T} =
+    blend_window!(dst, A, B, τ, axes(dst, 1), axes(dst, 2), axes(dst, 3))
+
+"Blend into an [`OpenPlane`](@ref)'s buffer at its own storage points."
+blend_window!(p::OpenPlane, A::AbstractArray, B::AbstractArray, τ) =
+    (blend_window!(p.data, A, B, τ, p.irange, p.jrange, p.krange); p)
+
+function boundary_values!(planes::AbstractVector{<:OpenPlane}, d::WindowedBoundaryData, t)
+    τ = window_fraction(d, t)
+    for p in planes
+        p.mode === :mirror && continue
+        blend_window!(p, snapshot_values(d.a, p.name), snapshot_values(d.b, p.name), τ)
+    end
+    return planes
+end
+
 """
     FunctionBoundaryData(; u = f, v = f, w = f, θ = f, …)
 

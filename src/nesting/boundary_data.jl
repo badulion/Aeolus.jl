@@ -8,7 +8,7 @@
 # is N-open-b's single `correct_boundary_mass_flux!`.
 
 """
-    NestBoundaryData <: AbstractBoundaryData
+    NestBoundaryData{S<:NestInterpState} = WindowedBoundaryData{S}
 
 The parent of a nest as the boundary data of the child's
 [`OpenBoundary`](@ref Aeolus.BoundaryConditions.OpenBoundary) faces
@@ -24,8 +24,13 @@ buffer, at the buffer's own storage points: the normal-velocity face
 planes (the boundary face and the `H` layers beyond it) and the
 tangential-velocity and scalar halos, for every member of the field set
 (`u, v, w, θ`, `qv`, extra scalars). `Δt = 0` is steady data (`a`).
-The time blend is the one of [`boundary_time`](@ref): exact for data
-linear in time, second order otherwise (N-nest-c, #257).
+It is the generic two-snapshot
+[`WindowedBoundaryData`](@ref Aeolus.BoundaryConditions.WindowedBoundaryData)
+with the prolongated field set as the snapshot (#329): the time blend is
+the one of [`boundary_time`](@ref), one kernel
+([`blend_window!`](@ref Aeolus.BoundaryConditions.blend_window!)) for
+both, exact for data linear in time, second order otherwise (N-nest-c,
+#257).
 
 Faces inside solids are not this type's business (#327, M4): a
 [`NestedRun`](@ref) built with `solid = mask` (and
@@ -47,12 +52,10 @@ the interpolated parent, mass-flux correction); Kadasch, E. et al. (2021),
 *Geosci. Model Dev.* 14, 5435–5465, §2.2–2.3 (the same interface for a
 mesoscale parent).
 """
-mutable struct NestBoundaryData{S<:NestInterpState} <: AbstractBoundaryData
-    a::S
-    b::S
-    t0::Float64
-    Δt::Float64
-end
+const NestBoundaryData{S<:NestInterpState} = WindowedBoundaryData{S}
+
+# The snapshot contract of WindowedBoundaryData: a member of the field set.
+snapshot_values(s::NestInterpState, name::Symbol) = _nest_member(s, name).data
 
 _solid_array(::Nothing) = nothing
 _solid_array(x::AbstractArray{Bool,3}) = x
@@ -70,7 +73,7 @@ here (`NestedRun(…; solid)`, [`apply_nest_boundary!`](@ref)).
 """
 function nest_boundary_data(a::NestInterpState, b::NestInterpState = a;
                             t0::Real = 0.0, Δt::Real = 0.0)
-    return NestBoundaryData(a, b, Float64(t0), Float64(Δt))
+    return WindowedBoundaryData(a, b, Float64(t0), Float64(Δt))
 end
 
 # The child's solid mask on its open faces: the single N-open-d path
@@ -96,27 +99,6 @@ function _nest_member(s::NestInterpState, name::Symbol)
                             ":$name but the nest's field set is $(nest_scalar_names(s)) " *
                             "plus u, v, w"))
     end
-end
-
-function boundary_values!(planes::AbstractVector{<:OpenPlane}, d::NestBoundaryData, t)
-    τ = d.Δt > 0 ? (Float64(t) - d.t0) / d.Δt : 0.0
-    for p in planes
-        p.mode === :mirror && continue
-        _blend_plane!(p, _nest_member(d.a, p.name).data, _nest_member(d.b, p.name).data, τ)
-    end
-    return planes
-end
-
-# p.data ← (1-τ)·A + τ·B at the plane's storage points (the blend of
-# `_blend_state!` / `boundary_time`, written out per point).
-function _blend_plane!(p::OpenPlane{T}, A::AbstractArray, B::AbstractArray, τ) where {T}
-    τ1 = one(T) - T(τ); τT = T(τ)
-    pd = p.data
-    @inbounds for (c, k) in enumerate(p.krange), (b, j) in enumerate(p.jrange),
-                  (a, i) in enumerate(p.irange)
-        pd[a, b, c] = τ1 * A[i, j, k] + τT * B[i, j, k]
-    end
-    return p
 end
 
 """

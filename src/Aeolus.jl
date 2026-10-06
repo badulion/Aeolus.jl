@@ -1081,6 +1081,8 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
        open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
        assert_open_face_correction, open_intermediate_velocity!
+# #329 — the two-snapshot (windowed) boundary data: nest parents, mesoscale (#58).
+export WindowedBoundaryData, snapshot_values, window_fraction, blend_window!
 # N-open-c (#260) — convective / Orlanski radiation outflow on open faces.
 export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow, rewind_open_boundaries!,
        mark_open_boundary_stage!
