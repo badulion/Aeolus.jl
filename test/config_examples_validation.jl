@@ -107,3 +107,84 @@ end
     @test r.fields_equal && r.diagnostics_equal && r.config_equal && r.results_equal
     @test r.runs[1].obj.case.nsteps >= 10
 end
+
+# ---------------------------------------------------------------------------
+# the column driver: dycoms_rf01.toml, parisfog_2011.toml, spectral_broadening.toml
+# ---------------------------------------------------------------------------
+
+"A digest of the bits of a Float64 array (stable across Julia versions)."
+bits_digest(x) = Aeolus.IO.fnv1a64(reinterpret(UInt8, collect(Float64, vec(x))))
+
+@testset "column driver: dycoms_rf01 equals the old script's column and solve, bit for bit" begin
+    # digests of the arrays the old examples/validation/dycoms_rf01_radiation.jl
+    # computed in main() (rf01_column, the gas and gas+cloud solves,
+    # prescribed_flux, radiative_heating!), captured from origin/master
+    # (b4f6f82) before the code moved to examples/validation/dycoms_rf01/rf01.jl
+    old = Dict("F_up_all" => 0x453794face33fc6c, "F_up_clear" => 0x2bb06aee91cc5195,
+               "F_spec" => 0x5bf8e22806a024e5, "K_day" => 0x8447ff8b88e2aebf, "ql" => 0xa3120862d449fcdb)
+    r = val_run("dycoms_rf01", nothing)
+    s = r.obj.state
+    for (k, x) in (("F_up_all", s.Fup_all), ("F_up_clear", s.Fup_clear), ("F_spec", s.Fspec),
+                   ("K_day", s.Kday), ("ql", s.col.ql))
+        @test bits_digest(x) == old[k]
+    end
+    # the physics the script reports: a cloud capped by the inversion, the
+    # prescribed flux jumping across it by (F0 − F1)(1 − e^{−κ LWP}) (outside
+    # the cloud ql = 0, so Q is constant above and below it), and longwave
+    # cooling of several K/day at its top
+    d = r.obj.cfg.dycoms_rf01; col = s.col
+    cloudy = findall(>(0), col.ql)
+    @test !isempty(cloudy) && s.z_lay[last(cloudy)] < d.zi + 5
+    kt = last(cloudy) + 1; kb = first(cloudy)
+    Q = d.kappa * sum(col.ρ[k] * col.ql[k] * col.dz[k] for k in eachindex(col.ql))
+    @test s.Fspec[kt] - s.Fspec[kb] ≈ (d.f0 - d.f1) * (1 - exp(-Q)) rtol = 1e-12
+    @test 30 < s.Fspec[kt] - s.Fspec[kb] < d.f0 - d.f1
+    @test minimum(s.Kday) < -5
+    @test isfile(joinpath(r.folder.path, "output", "results.toml"))
+end
+
+@testset "column driver: parisfog_2011 and the parcels equal the old in-code runs, bit for bit" begin
+    # parisfog_2011_radiation_fog.jl before CFG-e: parisfog_2011_column(; settings) + run!(col, t);
+    # one column step (dt = 5 s) of the reference and of the no-feedback member
+    for (label, set) in (("reference", FogColumnSettings()),
+                         ("no_feedback", FogColumnSettings(droplet_feedback = false)))
+        col = parisfog_2011_column(; settings = set)
+        Aeolus.RadiationFog.run!(col, set.dt)
+        r = val_run("parisfog_2011", label, ["fog_sounding.duration=$(set.dt)"])
+        @test r.obj.state.set == set
+        @test fields_bitwise(Base.invokelatest(state_fields, r.obj),
+                             (T = col.T, qv = col.qv, ql = col.ql, u = col.u, v = col.v))
+    end
+    # spectral_broadening.jl before CFG-e: BroadeningCase(σ_S = σ, n_sd = 8000) and the
+    # stationary case, superdroplet and bulk; shortened to 20 s / 400 superdroplets
+    short = ["parcel.t_end=20.0", "parcel.n_sd=400"]
+    for (label, case, model) in
+        (("parcel_0.1_superdroplet", BroadeningCase(σ_S = 1e-3, n_sd = 400, t_end = 20.0), :superdroplet),
+         ("parcel_0.2_bulk", BroadeningCase(σ_S = 2e-3, n_sd = 400, t_end = 20.0), :bulk),
+         ("stationary_superdroplet", BroadeningCase(ε0 = 0.0, r0 = 10e-6, w = 0.0, σ_S = 1e-3, τ = 5.0,
+                                                    t_end = 20.0, n_sd = 400), :superdroplet))
+        h = run_broadening_case(case; model)
+        r = val_run("spectral_broadening", label, short)
+        @test fields_bitwise(Base.invokelatest(state_fields, r.obj),
+                             (epsilon = h.ε, sigma_r2 = h.σ_r2, S = h.S, T = h.T))
+    end
+    # the shipped members are the old script's six runs
+    runs = load_sweep(vcfg("spectral_broadening"))
+    @test [m.label for (m, _) in runs] ==
+          ["parcel_0.0_superdroplet", "parcel_0.0_bulk", "parcel_0.1_superdroplet", "parcel_0.1_bulk",
+           "parcel_0.2_superdroplet", "parcel_0.2_bulk", "stationary_superdroplet", "stationary_bulk"]
+    @test [c.parcel.sigma_s for (_, c) in runs] == [0.0, 0.0, 1e-3, 1e-3, 2e-3, 2e-3, 1e-3, 1e-3]
+    @test all(c.parcel.n_sd == (i <= 6 ? 8000 : 4000) for (i, (_, c)) in enumerate(runs))
+    # a key of a case that is not selected is refused
+    e = try
+        load_sweep(vcfg("dycoms_rf01"); overrides = ["fog.dt=10.0"])
+    catch err
+        err
+    end
+    @test e isa ConfigError && occursin("fog.dt", sprint(showerror, e))
+end
+
+@testset "round trip from run.toml (column driver: dycoms_rf01.toml), bit-identical" begin
+    r = roundtrip_check(vcfg("dycoms_rf01"))
+    @test r.fields_equal && r.config_equal && r.results_equal
+end

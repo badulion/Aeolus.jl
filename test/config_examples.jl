@@ -122,3 +122,43 @@ end
     @test Aeolus.main(["check", p]; io = out) == 0
     @test count("ok:", String(take!(out))) == 2
 end
+
+# ---------------------------------------------------------------------------
+# examples/kernels/: 04_cloud_spinup (the column driver's kessler_box)
+# ---------------------------------------------------------------------------
+
+include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
+
+@testset "kernels: cloud_spinup.toml equals the old in-code Kessler box, bit for bit" begin
+    # examples/kernels/04_cloud_spinup.jl before CFG-e, verbatim but for the plots
+    H = 2000.0
+    mesh = RegularGrid(; size = (4, 4, 32), extent = (H, H, H), halo = (1, 1, 1))
+    qv = Field(CellCenter(), mesh); Aeolus.Fields.set!(qv, (x, y, z) -> 0.01)
+    ql = Field(CellCenter(), mesh); Aeolus.Fields.set!(ql, (x, y, z) -> 0.6H < z < 0.9H ? 3e-3 : 0.0)
+    qr = Field(CellCenter(), mesh); Aeolus.Fields.set!(qr, (x, y, z) -> 0.0)
+    q0 = sum(qv.data) + sum(ql.data)
+    for dt in (60.0, 60.0, 120.0, 120.0, 120.0)
+        apply_kessler_step!(qv, ql, qr, dt; Vt = :spectrum)
+    end
+    cfg = load_run_config(joinpath(EX_DIR, "kernels", "configs", "cloud_spinup.toml"))
+    r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
+    f = Base.invokelatest(state_fields, r.obj)
+    @test f.qv == qv.data && f.ql == ql.data && f.qr == qr.data
+    @test all(bitwise_equal(a, b) for (a, b) in ((f.qv, qv.data), (f.ql, ql.data), (f.qr, qr.data)))
+    # the physics: autoconversion turns cloud into rain (the cloud-layer
+    # maximum falls monotonically) and the rain reaches below the cloud base
+    snaps = r.obj.snapshots
+    @test [s.t for s in snaps] == [0.0, 60.0, 120.0, 240.0, 360.0, 480.0]
+    qlmax = [maximum(s.ql) for s in snaps]
+    @test issorted(qlmax; rev = true) && qlmax[end] < qlmax[1]
+    @test maximum(snaps[1].qr) == 0 && maximum(snaps[end].qr) > 1e-5
+    zc = collect(Aeolus.Grids.znodes(mesh, Aeolus.Grids.CellCenter()))
+    @test any(snaps[end].qr[k] > 0 for k in eachindex(zc) if zc[k] < 0.6H)
+    # vapour and cloud only lose water to the rain (no source of water)
+    @test sum(f.qv) + sum(f.ql) <= q0
+end
+
+@testset "round trip from run.toml (kernels: cloud_spinup.toml), bit-identical" begin
+    r = roundtrip_check(joinpath(EX_DIR, "kernels", "configs", "cloud_spinup.toml"))
+    @test r.fields_equal && r.config_equal && r.results_equal
+end

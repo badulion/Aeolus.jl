@@ -4,40 +4,23 @@
 # Kessler microphysics convert it to qr, then let rain fall out. Plot
 # vertical profiles at multiple times.
 
+# The box is examples/kernels/configs/cloud_spinup.toml (driver "column",
+# case "kessler_box"); this script runs it and plots the profiles.
+#
+#   julia --project=. examples/kernels/04_cloud_spinup.jl [--set key=value]
+
 using Aeolus
-using Aeolus.Fields: set!, interior_view
 using Printf
 
 include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 
 const OUT = joinpath(@__DIR__, "..", "urban", "output"); mkpath(OUT)
 
-Nx = Ny = 4; Nz = 32; H = 2000.0
-mesh = RegularGrid(; size=(Nx,Ny,Nz), extent=(H,H,H), halo=(1,1,1))
-
-qv = Field(CellCenter(), mesh); set!(qv, (x,y,z) -> 0.01)
-ql = Field(CellCenter(), mesh); set!(ql, (x,y,z) -> 0.6H < z < 0.9H ? 3e-3 : 0.0)
-qr = Field(CellCenter(), mesh); set!(qr, (x,y,z) -> 0.0)
-
-zs = collect(Aeolus.Grids.znodes(mesh, Aeolus.Grids.CellCenter()))
-
-function profile(f::Field)
-    v = interior_view(f)
-    return [sum(view(v, :, :, k)) / (size(v,1)*size(v,2)) for k in 1:size(v,3)]
-end
-
-# Snapshots
-ql_snap = Vector{Vector{Float64}}()
-qr_snap = Vector{Vector{Float64}}()
-labels  = String[]
-push!(ql_snap, profile(ql)); push!(qr_snap, profile(qr)); push!(labels, "t=0s")
-
-for (i, dt) in enumerate((60.0, 60.0, 120.0, 120.0, 120.0))
-    apply_kessler_step!(qv, ql, qr, dt; Vt=:spectrum)
-    push!(ql_snap, profile(ql))
-    push!(qr_snap, profile(qr))
-    push!(labels, "t=$(round(Int, sum((60.0,60.0,120.0,120.0,120.0)[1:i])))s")
-end
+box = only(run_configs(joinpath(@__DIR__, "configs", "cloud_spinup.toml"), ARGS)).obj
+zs = collect(Aeolus.Grids.znodes(box.state.mesh, Aeolus.Grids.CellCenter()))
+ql_snap = [s.ql for s in box.snapshots]
+qr_snap = [s.qr for s in box.snapshots]
+labels  = ["t=$(round(Int, s.t))s" for s in box.snapshots]
 
 save_multiline(joinpath(OUT, "04_cloud_ql_profile.svg"),
                zs, ql_snap, labels;
@@ -50,7 +33,7 @@ save_multiline(joinpath(OUT, "04_cloud_qr_profile.svg"),
                title="Rain water — Kessler spinup")
 
 @printf("Cloud spinup complete. Final ql max = %.2e, qr max = %.2e\n",
-        maximum(profile(ql)), maximum(profile(qr)))
+        maximum(ql_snap[end]), maximum(qr_snap[end]))
 @printf("output → %s , %s\n",
         joinpath(OUT, "04_cloud_ql_profile.svg"),
         joinpath(OUT, "04_cloud_qr_profile.svg"))
