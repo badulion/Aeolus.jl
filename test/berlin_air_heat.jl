@@ -10,7 +10,9 @@
 #     redistribution between levels of different ρ̄Π̄;
 #   * an analytic surface heating H₀ = 100 W m⁻² on a flat, motionless
 #     variant: the attributed term and the total are H₀Δt;
-#   * add_heat! splits a context, nested contexts, the night window.
+#   * add_heat! splits a context, nested contexts, the night window;
+#   * the fixed-gradient θ top (#254): the dynamics books the top-face
+#     flux as (:dynamics, :top_flux), leaving round-off to the transport.
 #
 # Run on its own with `julia --project=. test/berlin_air_heat.jl`.
 
@@ -123,7 +125,9 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
     end
 
     @testset "closed box: the transport conserves Σθ; H changes only by redistribution" begin
-        case = flat_case(; u0 = 1.0)
+        # a closed box: the θ top is the no-flux lid (the case default since
+        # #254 is the fixed-gradient top, whose flux is tested below)
+        case = flat_case(; u0 = 1.0, θ_top = :noflux)
         @test Set(BC.coupling_name.(case.couplings)) ⊆ Set(NO_THETA)
         # structure: θ noise in the lowest 8 levels and a random w
         rng = Xoshiro(253)
@@ -243,6 +247,43 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         @test night.storage ≈ 100 * 16 rtol = 1e-10
         @test night.storage + day.storage ≈ all_.storage rtol = 1e-14
         @test occursin("local 20-05 h", BC.heat_report(case.ledger; window = (20, 5)))
+    end
+
+    @testset "fixed-gradient θ top: the dynamics books the top flux (#254)" begin
+        cfg0 = BC.CaseConfig(:smoke; verbose = false, output_path = nothing)
+        # Γ is the initial lapse rate above the inversion (60 m < 100 m top)
+        @test BC.θ_top_gradient(cfg0) ≈ cfg0.θ_lapse rtol = 1e-10       # a difference of θ ≈ 300 K over 6 m
+        @test BC.θ_top_bc(cfg0) isa FluxBC
+        @test BC.θ_top_bc(BC.CaseConfig(:smoke; θ_top = :noflux)) isa NoFlux
+        @test BC.θ_top_bc(BC.CaseConfig(:smoke; θ_top = 0.01)).f == 0.01
+        @test_throws ErrorException BC.θ_top_bc(BC.CaseConfig(:smoke; θ_top = :open))
+        # the summer flagship: the top (200 m) is above the inversion (100 m)
+        @test BC.θ_top_gradient(BC.CaseConfig()) ≈ 3e-3 rtol = 1e-10
+        for phys in (Dict{Symbol,Any}(), Dict{Symbol,Any}(:timestepper => :fixed))
+            case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
+                                               physics = phys); io = devnull)
+            @test case.sim.θ_bcs.top isa FluxBC
+            @test case.top !== nothing
+            BC.run_case!(case; nsteps = 12)
+            b = BC.heat_budget(case.ledger)
+            top = b.terms[(:dynamics, :top_flux)]
+            tr = b.terms[(:dynamics, :transport)]
+            # downgradient into the domain: at least the molecular part
+            # ρ̄ c_p Π̄ ν Γ at the top level
+            Nz = case.mesh.Nz
+            mol = case.ref.ρ̄[Nz] * case.ref.cp * case.ref.π̄[Nz] * case.cfg.ν * cfg0.θ_lapse
+            @info @sprintf("  fixed-gradient top (%s): top flux %.4f W/m² (molecular part %.4f), transport residual %.1e W/m², closure %.1e W/m²",
+                           isempty(phys) ? "adaptive" : "fixed", top / b.elapsed, mol, tr / b.elapsed, b.closure / b.elapsed)
+            @test top / b.elapsed >= mol * (1 - 1e-12)
+            # the booked flux is the flux the core applied: what is left for the
+            # transport is round-off (8e-10 W/m² measured, against 7.2 W/m²)
+            @test abs(tr) <= 1e-8 * abs(top)
+            @test abs(b.closure) <= 1e-10 * b.elapsed
+            # the flux enters the top level only
+            below = BC.heat_budget(case.ledger; layer = (0.0, case.mesh.Lz - case.mesh.dz))
+            @test get(below.terms, (:dynamics, :top_flux), 0.0) == 0
+            @test case.top.total ≈ top rtol = 1e-12
+        end
     end
 
     @testset "canopy layer: the tallest roof, or cfg.canopy_top" begin

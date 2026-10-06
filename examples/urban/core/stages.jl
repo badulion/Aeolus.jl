@@ -50,8 +50,12 @@ function build_schedule!(case)
     end
     bf = case.schedule[:body_force]
     pp = case.schedule[:post_predictor]
-    case.body_force = isempty(bf) ? nothing :
-        (s, Δt) -> (for e in bf; timed_run!(case, e, :body_force, Δt); end; nothing)
+    # a fixed-gradient θ top: capture the top-face flux of every dynamics
+    # stage (core/top_boundary.jl) before the body-force entries run
+    tf = case.top
+    case.body_force = (isempty(bf) && tf === nothing) ? nothing :
+        (s, Δt) -> (tf === nothing || capture_top_flux!(tf, s, get(case.step_kwargs, :sgs, nothing));
+                    for e in bf; timed_run!(case, e, :body_force, Δt); end; nothing)
     case.post_predictor = isempty(pp) ? nothing :
         (s, Δt) -> (for e in pp; timed_run!(case, e, :post_predictor, Δt); end; nothing)
     case.step_kwargs = merge_keywords("step!", (coupling_name(c) => step_options(c, case)
@@ -123,11 +127,13 @@ end
 One `step!` of the dynamical core over `dt` with the composed
 `:body_force` / `:post_predictor` hooks and the numerics slots'
 `case.step_kwargs`. The fixed time stepper (and the contract default of
-`advance_dynamics!`).
+`advance_dynamics!`). Books the heat a fixed-gradient θ top carried
+([`book_top_flux!`](@ref)); a stepper that takes the step in pieces books
+each accepted piece itself.
 """
 dynamics_step!(case, dt) =
     (step!(case.sim, dt; body_force! = case.body_force, post_predictor! = case.post_predictor,
-           case.step_kwargs...); nothing)
+           case.step_kwargs...); book_top_flux!(case, dt); nothing)
 
 """
     step_dt(case) -> dt
