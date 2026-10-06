@@ -217,6 +217,10 @@ change where and whether the run starts, not its recorded config.
 Julia the package supports. In Julia, `Aeolus.main(["run", "case.toml"])`
 returns the exit code.
 
+```@docs
+Aeolus.main
+```
+
 ## The `simulation` driver
 
 `[run] driver = "simulation"` is a bare run of one dynamical core on a

@@ -163,11 +163,11 @@ Run the configuration `cfg`: the Julia API behind `aeolus run`. The chain:
 2. [`start_run`](@ref Aeolus.IO.start_run)`(cfg; …)`: a new run folder
    (or, with `resume = folder`, that run's next session), `run.toml`
    with the canonical config;
-3. [`run_checkpoints`](@ref) from `[checkpoint]` (before the build: it
+3. [`run_checkpoints`](@ref Aeolus.IO.run_checkpoints) from `[checkpoint]` (before the build: it
    imports the folder's FFTW wisdom, so a resumed run plans the same
    transforms);
 4. `build(driver, cfg)`, then `run!(driver, obj, rf, ck; callback)`;
-5. [`finish_run!`](@ref): `completed`, or `failed` / `interrupted` with
+5. [`finish_run!`](@ref Aeolus.IO.finish_run!): `completed`, or `failed` / `interrupted` with
    the error, which is then rethrown.
 
 `root` and `allow_uncommitted` override `[run]` without changing the
