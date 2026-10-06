@@ -23,7 +23,7 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        runs_serially, launch!, launch_weighted!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
-       plane_map!, apply_transform!
+       plane_map!, apply_transform!, foreach_column!, foreach_cell!, column_sums
 
 # =========================================================================
 # Backend types
@@ -955,5 +955,137 @@ function interior_all_finite(b::AbstractBackend, A::AbstractArray, (ir, jr, kr):
 end
 interior_all_finite(A::AbstractArray, ranges::NTuple{3,UnitRange{Int}}) =
     interior_all_finite(backend(A), A, ranges)
+
+# =========================================================================
+# Column physics: one work item per column (KA-m, #301)
+# =========================================================================
+#
+# A column body runs the k-sequential physics of one column (a surface
+# energy balance, a sedimentation sweep, a dew exchange) and writes only
+# its own column. What the old loops accumulated across columns (an
+# evaporation total, a worst ratio) the body *returns*; the launch stores
+# it in row `c` of `partials` (c = the linear index of the column in
+# column-major order), and the caller folds each term over the columns in
+# that order ([`column_sums`](@ref), or `foldl(max, …)` for a maximum).
+# The partials are written by one work item each, so they, and every
+# fold of them, are identical at every thread count — and equal, bit for
+# bit, to the old serial loop that accumulated `s += x` column by column
+# from zero (a skipped column stores 0, and `s + 0.0 == s`).
+
+@inline function _store_terms!(P, c, t::Tuple)
+    _store_from!(P, c, 1, t...)
+    return nothing
+end
+@inline _store_from!(P, c, n) = nothing
+@inline function _store_from!(P, c, n, x, rest...)
+    @inbounds P[c, n] = x
+    return _store_from!(P, c, n + 1, rest...)
+end
+@inline function _store_terms!(P, c, x)
+    @inbounds P[c, 1] = x
+    return nothing
+end
+
+@inline function _column_store_body!(i, j, body!::F, P, oi, ni, oj, args) where {F}
+    _store_terms!(P, (i - oi) + ni * (j - oj - 1), body!(i, j, args...))
+    return nothing
+end
+@inline function _column_store_body!(n, body!::F, P, on, args) where {F}
+    _store_terms!(P, n - on, body!(n, args...))
+    return nothing
+end
+
+"""
+    foreach_column!(backend, body!, cols, args...; partials = nothing, weight = 1)
+        -> partials
+
+Run the column body `body!(i, j, args...)` (`cols = (ir, jr)`, the
+`(i, j)` columns of a surface) or `body!(n, args...)` (`cols = (nr,)`, a
+list of column ids: the columns of one surface type, the facets of a
+building) once per column, as one work item each. The body loops over
+its column's levels itself, in its own (k-sequential) order, and writes
+only to its own column — the [`launch!`](@ref) contract with "point"
+read as "column": no two columns write the same location, and a column
+reads nothing another column writes in the same launch. Each column owns
+its scratch (a workspace per column, never one shared buffer).
+
+`partials` (optional): an `AbstractMatrix` with one row per column, in
+column-major order (`c = (i - first(ir) + 1) + length(ir) (j - first(jr))`,
+or `c = n - first(nr) + 1`) and one column per term. The body then
+returns its column's terms — a number, or an `NTuple` with one entry per
+term (zeros for a column that contributes nothing) — and the launch
+stores them in row `c`. No column body touches a shared accumulator.
+Fold them in column order with [`column_sums`](@ref) (a sum) or `foldl`
+(a maximum: `max` is exact); both are thread-invariant and equal, bit for
+bit, to the serial loop `s = 0.0; for j, for i: s += x` they replace.
+
+`weight` is the work of one column in grid points (its number of levels,
+or the cost of its root solves in point-equivalents): the backend's
+serial threshold and its points-per-task rule count `weight × ncolumns`
+points (see [`launch_weighted!`](@ref)). Serially the columns run in the
+historical `for j, for i` (or ascending `n`) order.
+"""
+function foreach_column!(b::AbstractBackend, body!::F, cols::NTuple{N,UnitRange{Int}},
+                         args::Vararg{Any,M}; partials = nothing,
+                         weight::Integer = 1) where {F, N, M}
+    N in (1, 2) || throw(ArgumentError("foreach_column!: cols must be (ir, jr) or (nr,)"))
+    if partials === nothing
+        launch_weighted!(b, weight, body!, cols, args...)
+        return nothing
+    end
+    nc = _npoints(cols)
+    size(partials, 1) == nc ||
+        throw(DimensionMismatch("partials has $(size(partials, 1)) rows, the launch $nc columns"))
+    if N == 2
+        ir, jr = cols
+        launch_weighted!(b, weight, _column_store_body!, cols, body!, partials,
+                         first(ir) - 1, length(ir), first(jr) - 1, args)
+    else
+        launch_weighted!(b, weight, _column_store_body!, cols, body!, partials,
+                         first(cols[1]) - 1, args)
+    end
+    return partials
+end
+foreach_column!(b::AbstractBackend, body!::F, cols::NTuple{N,AbstractUnitRange{<:Integer}},
+                args::Vararg{Any,M}; kw...) where {F, N, M} =
+    foreach_column!(b, body!, map(UnitRange{Int}, cols), args...; kw...)
+
+"""
+    foreach_cell!(backend, body!, ranges::NTuple{3,UnitRange{Int}}, args...;
+                  partials = nothing, weight = 1) -> partials
+
+Per-cell physics (a saturation adjustment, a conversion step): run
+`body!(i, j, k, args...)` once per cell of `ranges` — [`launch!`](@ref)
+with a `weight` (points per cell, for a body with a root solve).
+
+With `partials` (a vector, or an `NTuple` of vectors, with one entry per
+plane `k`) the body returns what each cell adds to the totals and the
+launch is [`plane_reduce!`](@ref): the canonical, thread-invariant plane
+sums (eight lanes per row), to be combined with [`ordered_sum`](@ref).
+For a fused update whose terms must be added in cell order (most cells
+contribute nothing, and the cheap ones are skipped) use
+[`plane_map!`](@ref) instead.
+"""
+function foreach_cell!(b::AbstractBackend, body!::F, ranges::NTuple{3,UnitRange{Int}},
+                       args::Vararg{Any,M}; partials = nothing,
+                       weight::Integer = 1) where {F, M}
+    if partials === nothing
+        launch_weighted!(b, weight, body!, ranges, args...)
+        return nothing
+    end
+    return plane_reduce!(partials, b, body!, ranges, args...)
+end
+foreach_cell!(b::AbstractBackend, body!::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
+              args::Vararg{Any,M}; kw...) where {F, M} =
+    foreach_cell!(b, body!, map(UnitRange{Int}, ranges), args...; kw...)
+
+"""
+    column_sums(partials) -> Vector
+
+The sum of every term (column of `partials`) over the columns (rows), in
+row order from zero ([`ordered_sum`](@ref)): the canonical total of a
+[`foreach_column!`](@ref) launch, thread-invariant.
+"""
+column_sums(P::AbstractMatrix) = [ordered_sum(view(P, :, t)) for t in axes(P, 2)]
 
 end # module
