@@ -75,6 +75,81 @@ end
 _nx_open_area(csim) = (o = nest_open_sides(csim); m = csim.mesh;
     (o[1] + o[2]) * m.Ly * m.Lz + (o[3] + o[4]) * m.Lx * m.Lz + (o[5] + o[6]) * m.Lx * m.Ly)
 
+# The Berlin pattern of a two-way nest (#267): the caller drives each core
+# itself, so the run's hooks cannot book the core-transported θ (and the
+# moist parent's qv); the core's body_force! books them explicitly
+# (book_nest_flux!: centred advection, the core's diffusion), and qv, a
+# tracer of the dry child, is booked by the separate transport that moves
+# it (forward-Euler WENO-Z5 after the dynamics, the :scalar_advection slot).
+struct _NXBookedCore{F}
+    q::F            # the tracer the slot moves after the dynamics (nothing: none)
+    book::Bool
+end
+function (c::_NXBookedCore)(sim, dt; kw...)
+    bf = (s, h) -> begin
+        c.book || return nothing
+        book_nest_flux!(s, :θ, s.θ, h; scheme = :centered, diffusivity = :theta)
+        s.has_moisture && book_nest_flux!(s, :qv, s.qv, h; scheme = :centered, diffusivity = :tracer)
+        return nothing
+    end
+    step!(sim, dt; kw..., body_force! = bf)
+    c.q === nothing && return sim
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+    fill_halos!(c.q, sim.θ_bcs)
+    c.book && book_nest_flux!(sim, :qv, c.q, dt; scheme = :weno_z5)
+    t = Field(CellCenter(), sim.mesh)
+    Aeolus.AdvectionSchemes.advection_scheme(:weno_z5)(t, sim.u, sim.v, sim.w, c.q)
+    interior_view(c.q) .+= dt .* interior_view(t)
+    return sim
+end
+
+function _nx_transport_run(; book = true, nwin = 20)
+    L = 1600.0
+    pm = RegularGrid(Float64; size = (16, 16, 16), extent = (L, L, L), halo = (3, 3, 3))
+    p = BoussinesqSimulation(pm; C_s = 0.17, ν = 2.0, moisture = true,
+                             bcs = FieldBoundaryConditions(:periodic))
+    nest = nested_grid(pm, ((400.0, 1200.0), (400.0, 1200.0), (400.0, 1200.0)), 2)
+    cm = nest_child_mesh(nest)
+    c = BoussinesqSimulation(cm; C_s = 0.17, ν = 2.0,
+                             bcs = nest_bcs(cm, :nest, :nest, :nest; scalars = (:qv,)))
+    rng = Xoshiro(267)
+    fill!(p.u.data, 3.0); fill!(p.v.data, 1.0)
+    interior_view(p.u) .+= 0.5 .* randn(rng, size(interior_view(p.u)))
+    interior_view(p.v) .+= 0.5 .* randn(rng, size(interior_view(p.v)))
+    Aeolus.Simulations._project_velocity!(p)
+    for k in axes(p.θ.data, 3), j in axes(p.θ.data, 2), i in axes(p.θ.data, 1)
+        b = exp(-((i - 8)^2 + (j - 8)^2 + (k - 8)^2) / 6)
+        p.θ.data[i, j, k] = 300.0 + 2b
+        p.qv.data[i, j, k] = 0.01 * (1 + 0.5b)
+    end
+    qc = Field(CellCenter(), cm)
+    for (cf, pf) in ((c.θ, p.θ), (c.u, p.u), (c.v, p.v), (c.w, p.w), (qc, p.qv))
+        interpolate_parent_to_child!(cf, pf, nest)
+    end
+    # a moist parent around a dry child that carries qv as a tracer: the
+    # field set is built from the pairs (nest_interp_state(nest, p, c)
+    # requires qv on both cores or neither)
+    state = ntuple(_ -> nest_interp_state(nest; scalars = (:qv => (qc, p.qv),)), 3)
+    fb = TwoWayFeedback(theta_flux = NestScalarFlux(applied_by = :transport),
+                        tracer_fluxes = (:qv => NestScalarFlux(applied_by = :transport),))
+    # the cores are closures with no declared stage weights: accepted, since
+    # every scalar is booked by its transport
+    adv_p = domain_advance(_NXBookedCore(nothing, book))
+    adv_c = domain_advance(_NXBookedCore(qc, book))
+    run = NestedRun(p, c, nest; state, feedback = fb, advance_parent = adv_p,
+                    advance_child = adv_c, cfl_parent = nothing, cfl_child = nothing)
+    I(f, g) = composite_integral(f, g, nest)
+    θ0, q0 = I(p.θ, c.θ), I(p.qv, qc)
+    dθ = dq = 0.0
+    for _ in 1:nwin
+        θa, qa = I(p.θ, c.θ), I(p.qv, qc)
+        _nx_window!(run, adv_c, 4.0, 2.0)
+        dθ = max(dθ, abs(I(p.θ, c.θ) - θa) / θ0)
+        dq = max(dq, abs(I(p.qv, qc) - qa) / q0)
+    end
+    return dθ, dq, run
+end
+
 @testset "Era II — externally driven nest child (N-berlin-nest, #265)" begin
 
 # -------------------------------------------------------------------------
@@ -439,6 +514,32 @@ end
     @test abs(change + out) <= 1e-12 * abs(change)
     @test abs(change + dt * rec.total) > 1e-6 * abs(change)    # the reconstruction is not what left
     @test minimum(qi .+ dt .* interior_view(tend)) >= 0
+end
+
+
+# -------------------------------------------------------------------------
+# The Berlin two-way pattern (#267): an externally driven child whose core θ
+# and tracer qv, and the moist parent's θ and qv, are all booked by their
+# transports (book_nest_flux!, inside begin/end_child_step!). Composite ∫θ
+# and ∫qv must be conserved to round-off per parent window; without the
+# bookings they drift. A moist parent may declare qv a transport-booked
+# tracer when the child carries it as a tracer.
+@testset "two-way, every scalar booked by its transport (the Berlin pattern, #267)" begin
+    dθ, dq, run = _nx_transport_run()
+    dθn, dqn, _ = _nx_transport_run(; book = false)
+    @printf("  externally driven two-way, 20 windows (Δt_p = 4 s, 2 child steps): composite drift per window ∫θ %.1e, ∫qv %.1e; not booked ∫θ %.1e, ∫qv %.1e\n",
+            dθ, dq, dθn, dqn)
+    @test run.regs !== nothing && run.regs.names == [:θ, :qv]
+    @test run.regs.pweights == () && run.regs.cweights == ()     # no core hook needed
+    @test dθ <= 1e-12 && dq <= 1e-12
+    @test dθn > 1e3 * max(dθ, 1e-16) && dqn > 1e3 * max(dq, 1e-16)
+    @test run.nest.ledger[:mass] <= 1e-12
+    @test all(isfinite, run.child.u.data) && all(isfinite, run.parent.θ.data)
+    # outside a child-step bracket nothing is booked
+    @test !book_nest_flux!(run.child, :θ, run.child.θ, 1.0; scheme = :centered)
+    begin_child_step!(run)
+    @test_throws ArgumentError book_nest_flux!(run.child, :θ, run.child.θ, 1.0; diffusivity = :nope)
+    end_child_step!(run)
 end
 
 end
