@@ -329,11 +329,10 @@ is complete: `π·Σ_b planck_band(T, νlo_b, νhi_b)` should approach this.
 planck_integrated(T_K::Real) = STEFAN_BOLTZMANN * T_K^4
 
 # Gauss-Legendre nodes and weights, computed by Newton iteration on the
-# Legendre polynomial. Cached for the small orders we use.
-const _GL_CACHE = Dict{Int, Tuple{Vector{Float64}, Vector{Float64}}}()
-
-function _gauss_legendre(n::Int)
-    haskey(_GL_CACHE, n) && return _GL_CACHE[n]
+# Legendre polynomial. The one source of these nodes in Aeolus
+# (SurfaceOptics and Radiosity delegate here; KA-m, #301, merged their
+# copies, which were the same arithmetic and gave the same bits).
+function _gauss_legendre_nodes(n::Int)
     x = zeros(Float64, n); w = zeros(Float64, n)
     for i in 1:n
         # initial guess (Chebyshev-like)
@@ -356,8 +355,33 @@ function _gauss_legendre(n::Int)
         x[i] = z
         w[i] = 2 / ((1 - z^2) * dp^2)
     end
-    _GL_CACHE[n] = (x, w)
     return (x, w)
+end
+
+# Orders 1-64 are computed when the module is loaded (precompiled): a
+# column kernel that asks for them only reads an immutable table, so a
+# first use under many threads cannot race (KA-m, #301). Higher orders
+# are memoised under a lock.
+const _GL_PREFILLED = 64
+const _GL_TABLE = Tuple{Vector{Float64}, Vector{Float64}}[_gauss_legendre_nodes(n) for n in 1:_GL_PREFILLED]
+const _GL_CACHE = Dict{Int, Tuple{Vector{Float64}, Vector{Float64}}}()
+const _GL_LOCK = ReentrantLock()
+
+"""
+    _gauss_legendre(n) -> (x, w)
+
+`n`-point Gauss-Legendre nodes and weights on `[-1, 1]` (Newton iteration
+on the Legendre polynomial ``P_n``). Orders up to 64 come from a table
+filled when the module loads; higher orders are memoised under a lock, so
+the function is safe to call from any thread. The returned vectors are
+shared: do not modify them.
+"""
+function _gauss_legendre(n::Int)
+    n >= 1 || error("_gauss_legendre: n must be ≥ 1, got $n")
+    n <= _GL_PREFILLED && return @inbounds _GL_TABLE[n]
+    return lock(_GL_LOCK) do
+        get!(() -> _gauss_legendre_nodes(n), _GL_CACHE, n)
+    end
 end
 
 # =========================================================================

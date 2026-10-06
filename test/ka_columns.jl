@@ -74,4 +74,49 @@ kc_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
     end
 end
 
+@testset "global caches: one Gauss-Legendre source, safe first use under threads" begin
+    RC = Aeolus.RadiationCore
+    # one source: SurfaceOptics and Radiosity return the very same nodes
+    for n in (1, 2, 5, 8, 16, 32, 64, 65, 120)
+        x, w = RC._gauss_legendre(n)
+        @test Aeolus.SurfaceOptics._gauss_legendre(n) === (x, w)
+        @test Aeolus.Radiosity._gauss_nodes(n) === RC._gauss_legendre(n)
+        @test kc_bits(x) == kc_bits(RC._gauss_legendre_nodes(n)[1]) &&
+              kc_bits(w) == kc_bits(RC._gauss_legendre_nodes(n)[2])
+        @test sum(w) ≈ 2 && issorted(x; rev = true)
+    end
+    @test_throws ErrorException RC._gauss_legendre(0)
+    # orders ≤ 64 are a table filled at load; higher ones are memoised under
+    # a lock: a first use from many tasks at once gives the serial nodes
+    empty!(RC._GL_CACHE)
+    ref = Dict(n => RC._gauss_legendre_nodes(n) for n in 60:110)
+    empty!(RC._GL_CACHE)
+    got = Vector{Any}(undef, 400)
+    @sync for t in 1:400
+        Threads.@spawn (got[t] = RC._gauss_legendre(60 + (t % 51)))
+    end
+    @test all(t -> got[t] == ref[60 + (t % 51)], 1:400)
+    @test all(t -> got[t] === RC._gauss_legendre(60 + (t % 51)), 1:400)
+    # the aerosol bulk-optics memo (locked)
+    AO = Aeolus.AerosolOptics
+    modes = [lognormal_mode(s, 100.0, 0.05 + 0.01i, 1.6) for (i, s) in enumerate((:sulphate, :sea_salt, :dust))]
+    AO.clear_optics_cache!()
+    serial = [mode_optics(m, λ; rh = rh) for m in modes, λ in (0.4, 0.55, 1.0), rh in (0.0, 0.8)]
+    AO.clear_optics_cache!()
+    res = Array{Any}(undef, size(serial)..., 4)
+    @sync for r in 1:4, I in CartesianIndices(serial)
+        m, λ, rh = modes[I[1]], (0.4, 0.55, 1.0)[I[2]], (0.0, 0.8)[I[3]]
+        Threads.@spawn (res[I, r] = mode_optics(m, λ; rh = rh))
+    end
+    @test all(r -> res[:, :, :, r] == serial, 1:4)
+    # the SNICAR ageing table: read once, the same object for every caller
+    SP = Aeolus.Snowpack
+    SP._SNICAR_TABLE[] = nothing
+    tabs = Vector{Any}(undef, 16)
+    @sync for t in 1:16
+        Threads.@spawn (tabs[t] = snicar_aging_table())
+    end
+    @test all(t -> tabs[t] === tabs[1], 1:16) && tabs[1] === snicar_aging_table()
+end
+
 end # testset KA-m

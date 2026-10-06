@@ -104,7 +104,7 @@ using LinearAlgebra
 using ..Grids
 using ..Grids: RegularGrid
 using ..RadiationCore
-using ..RadiationCore: STEFAN_BOLTZMANN, SOLAR_CONSTANT, AbstractSurfaceOptics,
+using ..RadiationCore: _gauss_legendre, STEFAN_BOLTZMANN, SOLAR_CONSTANT, AbstractSurfaceOptics,
                        SpectralGrid, shortwave_bands, longwave_bands
 import ..RadiationCore: material_albedo, material_emissivity
 using ..SurfaceOptics: TiledSurface, tiled_surface, FresnelWater,
@@ -157,50 +157,10 @@ const Vec3{T} = NTuple{3, T}
 end
 
 # -------------------------------------------------------------------------
-# Gauss-Legendre nodes (local copy)
-# -------------------------------------------------------------------------
-# `RadiationCore` has an equivalent private helper. It is duplicated here
-# deliberately: this module must not depend on another module's non-exported
-# internals, and the routine is twenty lines of Newton iteration on the
-# Legendre polynomial.
-
-const _GL_NODES = Dict{Int, Tuple{Vector{Float64}, Vector{Float64}}}()
-
-"""
-    _gauss_nodes(n) -> (x, w)
-
-`n`-point Gauss-Legendre nodes and weights on `[-1, 1]`, by Newton iteration
-on the Legendre polynomial `P_n`. Cached, because view-factor assembly calls
-it once per edge pair.
-"""
-function _gauss_nodes(n::Int)
-    haskey(_GL_NODES, n) && return _GL_NODES[n]
-    n >= 1 || error("_gauss_nodes: need n ≥ 1, got $n")
-    x = zeros(Float64, n); w = zeros(Float64, n)
-    for i in 1:n
-        z = cos(π * (i - 0.25) / (n + 0.5))      # Chebyshev-like initial guess
-        p1 = 0.0; dp = 1.0
-        for _ in 1:100
-            p0 = 1.0; p1 = z
-            for k in 2:n
-                p0, p1 = p1, ((2k - 1) * z * p1 - (k - 1) * p0) / k
-            end
-            dp = n * (z * p1 - p0) / (z^2 - 1)
-            dz = p1 / dp
-            z -= dz
-            abs(dz) < 1e-15 && break
-        end
-        p0 = 1.0; p1 = z
-        for k in 2:n
-            p0, p1 = p1, ((2k - 1) * z * p1 - (k - 1) * p0) / k
-        end
-        dp = n * (z * p1 - p0) / (z^2 - 1)
-        x[i] = z
-        w[i] = 2 / ((1 - z^2) * dp^2)
-    end
-    _GL_NODES[n] = (x, w)
-    return (x, w)
-end
+# Gauss-Legendre nodes: `RadiationCore._gauss_legendre`, the one source
+# (KA-m, #301; this module's local copy was the same arithmetic, bit for
+# bit, and its lazily filled cache was not safe under threads).
+_gauss_nodes(n::Int) = _gauss_legendre(n)
 
 # =========================================================================
 # Materials
