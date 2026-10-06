@@ -29,7 +29,11 @@ Groups of fields:
   `:radiation`, `:soil` and `:output` are used by the initial couplings;
   a coupling may add its own key;
 * **dynamics** — `ν`, `θ₀`, `g`, `f_coriolis`, `C_s`, `Pr_t`,
-  `sponge_α_max`, `sponge_frac` (sponge starts at `sponge_frac·Lz`),
+  `sponge_α_max`, `sponge_frac` (sponge starts at `sponge_frac·Lz`; it
+  damps the velocity only), `θ_top` (the θ condition of the top face:
+  `:initial_gradient` (default), the fixed-gradient top `FluxBC(Γ)` with
+  the initial ∂θ/∂z at the top face; `:noflux`, a closed lid; or a
+  gradient in K/m — see `core/top_boundary.jl`, #254),
   `sgs_stability` (the stability correction every eddy-viscosity `:sgs`
   provider wraps its closure in, `Operators.StabilityCorrected`, P55-e
   #187: `:brown94` (default, Brown et al. 1994), `:lilly`, `:long_tail`,
@@ -54,6 +58,9 @@ Groups of fields:
   default;
 * **options** — `options::Dict{Symbol,Any}`: `coupling_name => NamedTuple`
   merged over that coupling's `default_options`;
+* **ledger** — `canopy_top` (m): top of the `:canopy` layer of the
+  air-heat budget (`heat_budget(…; layer = :canopy)`); `NaN` (default)
+  takes the tallest roof of the scene;
 * **output** — `output_path` (`nothing` disables NetCDF output),
   `verbose`.
 """
@@ -91,6 +98,7 @@ Base.@kwdef mutable struct CaseConfig
     sgs_stability::Symbol             = :brown94
     sponge_α_max::Float64             = 0.05
     sponge_frac::Float64              = 0.75
+    θ_top::Union{Symbol,Float64}      = :initial_gradient
     # initial state: the observed sounding (#247) …
     sounding::Union{Nothing,String}   = joinpath(DATA_DIR, "lindenberg_10393_20190629.csv")
     # … or, with sounding = nothing, the idealised profile
@@ -108,6 +116,7 @@ Base.@kwdef mutable struct CaseConfig
     physics::Dict{Symbol,Any}         = Dict{Symbol,Any}()
     options::Dict{Symbol,Any}         = Dict{Symbol,Any}()
     # output
+    canopy_top::Float64               = NaN
     output_path::Union{Nothing,String} = joinpath(URBAN_DIR, "output", "alexanderplatz.nc")
     verbose::Bool                     = true
 end

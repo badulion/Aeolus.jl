@@ -6,7 +6,8 @@ container. `fill_halos!` applies `Periodic` and `NoFlux` on every face
 and the two impermeable z-walls, free-slip `ImpermeableWall` and no-slip /
 moving `NoSlipWall` (P59-a, #172; theory in
 [Transition and wall-bounded flow](../theory/transition.md#Walls)).
-`ValueBC` and `FluxBC` are declared for scalar surface conditions.
+`FluxBC(Γ)` is the fixed-gradient top of a cell-centred scalar
+(N-parent-b, #254; below). `ValueBC` is declared but has no halo fill.
 
 ## BC types
 
@@ -47,4 +48,20 @@ prescribed transpiration velocity (theory in
 
 ```@docs
 Aeolus.BoundaryConditions.FreeStreamBoundary
+```
+
+## Fixed-gradient scalar top (N-parent-b, #254)
+
+`FluxBC(Γ)` as the `top` face, above a wall or a no-flux bottom: the
+ghost cells continue the profile with slope `Γ`
+(`φ(N+h) = φ(N+1−h) + Γ·(z_c(N+h) − z_c(N+1−h))`, the cell-centre
+heights of a `StretchedGrid` or `dz` steps on a `RegularGrid`), so a
+diffusion with diffusivity `κ` carries `κΓ` through the top face. Its
+homogeneous part ([`homogeneous_bcs`](@ref
+Aeolus.BoundaryConditions.homogeneous_bcs)) is `FluxBC(0)`, which the
+implicit diffusion of `step_imex!` uses. Theory and measured convergence:
+[Large-scale forcing → The fixed-gradient top](../theory/large_scale_forcing.md#The-fixed-gradient-top).
+
+```julia
+θ_bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = FluxBC(3e-3))
 ```

@@ -196,6 +196,125 @@ step!(sim, dt; body_force! = (s, Δt) -> apply_forcing!(s, forcing, s.t, Δt))
 It is duck-typed on `mesh`, `u`, `v`, `tu`, `tv`, `tθ` and `f_coriolis`,
 so it works with every dynamical core, the anelastic ones included.
 
+## Free-atmosphere top: the damping layer and the fixed-gradient top
+
+A deep domain (the 3 km parent of the nesting epic, #246) ends in the
+free atmosphere, not at a lid. Two things are needed there (N-parent-b,
+#254): a layer that absorbs the gravity waves the boundary layer
+radiates upward, and a θ condition at the top face that keeps the
+stratification of the air above.
+
+### Damping toward a reference
+
+`ReferenceDamping(field, profile, target)` adds
+
+```math
+\left.\frac{\partial φ}{\partial t}\right|_{d} = -λ(z)\,\bigl(φ - φ_{ref}\bigr)
+```
+
+to `θ`, `qv` or a velocity component, with the rate ``λ(z)`` of a
+`DampingProfile` (the sin² ramp of `sponge_profile(α_max, z_start, z_top)`,
+Klemp & Lilly 1978, or the Nordström ramp of the fringe). It is an
+`AbstractLargeScaleForcing`, applied with `apply_forcing!` from the
+body-force hook, so the core's time integrator treats it like every other
+tendency. The cores' own sponge damps the velocity only; θ and qv are
+damped here and nowhere else.
+
+The target is a number, a **level vector** (one value per interior level,
+e.g. the initial ``\bar θ(z)``), a `Field` or 3-D array (the parent state
+a nest is damped toward, N-open-d), a `ForcingTable` or ``(z, t)``
+function (evaluated at the stage time), or `:mean`. With `:mean` only the
+deviations from the slab mean are damped and the mean profile evolves
+freely (DALES, Heus et al. 2010, Eqs. 40–41): every level's integral is
+zero to round-off. The arithmetic is the one kernel
+`FiniteVolume._add_damping!` that `add_sponge!` (whose `f_ref` takes the
+same targets) and the fringe region use, on a `RegularGrid` and a
+`StretchedGrid` alike; a constant level vector gives the number target's
+tendency bit for bit. After each call `damping_tendency(F)` returns the
+tendency per level and its volume integral, the term a heat ledger books.
+
+**Exact relaxation.** A uniform θ anomaly with no flow, integrated by
+SSP-RK3 with the forcing in every stage, decays per level by exactly
+``R = 1 - a + a^2/2 - a^3/6`` (``a = λΔt``) per step: after 100 steps of
+10 s the anomaly matches ``A R^{100}`` to 1.8 × 10⁻¹² K at every level,
+and the levels below `z_start` keep their tendency at zero bit for bit.
+
+**Gravity-wave absorption** (`test/era6_deep_top.jl`, test 3). A 2-D
+packet with ``N = 0.01`` s⁻¹, ``λ_x = λ_z = 1`` km (``ω = N/\sqrt2``,
+``c_{gz} = 0.56`` m s⁻¹, initialised from a C-grid stream function so its
+discrete divergence is zero) propagates upward into a sin² layer of
+``α_{max} = 10^{-3}`` s⁻¹ (``0.1N``). The reflected energy fraction is the
+time-integrated energy at ``m > 0`` over that at ``m < 0`` in the vertical
+spectrum of ``w`` below the layer (3–5.5 km, Hann window):
+
+| layer | ``u, v, w`` damped | ``+ θ`` damped |
+| :-- | --: | --: |
+| none (rigid lid) | 0.985 | — |
+| 1 ``λ_z`` deep | 0.1745 | 0.0338 |
+| 2 ``λ_z`` deep | 0.0330 | 0.0036 |
+
+Velocity-only damping leaves the buoyancy half of the wave energy
+undamped, so at this weak rate the layer absorbs much less; damping θ as
+well (PALM, WRF §4.4.3, MicroHH) brings the reflection below 5 % from one
+vertical wavelength. The advantage is a weak-damping one: in a scan of
+``α_{max}`` (not asserted) the θ damping helps up to ``α_{max} ≈ 2 × 10^{-3}``
+s⁻¹ and, for a 1 ``λ_z`` layer, reflects slightly *more* above it
+(0.0157 against 0.0049 at ``α_{max} = 10^{-2}``), where the onset of the
+damping itself begins to reflect (Klemp & Lilly 1978); the noise floor of
+the measurement is about 0.003.
+
+### The fixed-gradient top
+
+`FluxBC(Γ)` as the top face of a scalar's boundary conditions
+(`FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top =
+FluxBC(Γ))`) holds ``∂θ/∂z = Γ`` at the top, usually the initial lapse
+rate (PALM; DALES, Heus et al. 2010, Eq. 39). `fill_halos!` sets
+
+```math
+θ_{N+h} = θ_{N+1-h} + Γ\,\bigl(z_{N+h} - z_{N+1-h}\bigr), \qquad h = 1, …, H_z,
+```
+
+with the cell-centre heights (on a `StretchedGrid` the first gap is the
+face spacing ``Δz_f`` across the top face), so a linear profile of slope
+Γ is continued exactly into every halo layer and a diffusion with
+diffusivity ``κ`` carries exactly ``κΓ`` (per unit area) into the domain.
+The condition is affine in θ: its homogeneous part is `FluxBC(0)` (the
+mirror), which is what `homogeneous_bcs` returns, so the implicit
+diffusion of `step_imex!` moves ``κΓ`` to the right-hand side as it does
+for a moving wall. `qv` and the SGS TKE share θ's boundary conditions
+but not θ's prescribed gradient (they are filled with
+`homogeneous_bcs(θ_bcs)`).
+
+Measured (`test/era6_deep_top.jl`, test 4):
+
+* ``Δ∫θ\,dz = κΓΔt`` per step to 4.4 × 10⁻¹¹ (relative) with `step!`, and
+  to 1.4 × 10⁻¹² with ARK2 at 6.8 times the forward-Euler diffusion limit;
+* a linear profile of slope Γ (with the surface flux ``-κΓ`` below) is
+  steady to 0 K over 100 steps;
+* against the analytic solution of ``θ_t = κθ_{zz}``,
+  ``θ_z(0) = 0``, ``θ_z(L) = Γ``,
+  ``θ = Γ(z^2/2L + κt/L) + a\cos(πz/L)e^{-κπ^2t/L^2}``, the maximum error
+  falls by 3.98 and 4.00 under ``Δz`` halving on a `RegularGrid`
+  (9.6 × 10⁻⁵ → 6.0 × 10⁻⁶ from 16 to 64 levels), and by 3.55 and 3.78 on a
+  geometric `StretchedGrid` refined as a smooth map (ratio ``1.1^{16/N_z}``),
+  still approaching 4 from below.
+
+**Budget.** With flow, buoyancy, a surface flux ``F_s``, the gradient top
+and θ damping toward the initial profile, every `step!` changes
+``∫ρc_pθ\,dV`` by ``ρc_pΔt\,(D + κΓA + F_sA)`` (``D`` the damping
+integral) to 5.4 × 10⁻¹² relative (test 5).
+
+### In the Berlin case
+
+The 200 m child's θ top is `cfg.θ_top = :initial_gradient`
+(`FluxBC(3 × 10⁻³ K/m)`, the initial lapse rate above the 100 m
+inversion) instead of the closed lid; the dynamics books the heat it
+carries as `(:dynamics, :top_flux)` in the air-heat ledger. θ is **not**
+damped in the child: its sponge starts at 150 m, so a constant-target
+damping would clamp the top 50 m (#238, approach B), and in the nested
+run the child top comes from the parent. The θ damping layer runs in the
+parent (N-parent-e). See [The Berlin case](../design/berlin_case.md#The-θ-top).
+
 ## Users
 
 * **Berlin case**: the `:geostrophic` coupling, with
@@ -253,8 +372,23 @@ domain would need to be deeper than the nocturnal boundary layer.
   Meteor. Soc.* 38, 283–290.
 * Ekman, V. W. (1905). On the influence of the earth's rotation on
   ocean-currents. *Ark. Mat. Astron. Fys.* 2(11), 1–52.
+* Durran, D. R. (2010). *Numerical Methods for Fluid Dynamics*, 2nd ed.,
+  Springer, §8.4 (wave-absorbing layers).
+* Heus, T. et al. (2010). Formulation of the Dutch Atmospheric
+  Large-Eddy Simulation (DALES) and overview of its applications.
+  *Geosci. Model Dev.* 3, 415–444.
 * Holton, J. R. & Hakim, G. J. (2013). *An Introduction to Dynamic
   Meteorology*, 5th ed., Academic Press, §3.2 and §8.4.
+* Klemp, J. B. & Lilly, D. K. (1978). Numerical simulation of hydrostatic
+  mountain waves. *J. Atmos. Sci.* 35, 78–107.
+* Maronga, B. et al. (2015). The Parallelized Large-Eddy Simulation Model
+  (PALM) version 4.0. *Geosci. Model Dev.* 8, 2515–2551.
+* Skamarock, W. C. et al. (2019). *A Description of the Advanced Research
+  WRF Model Version 4*. NCAR/TN-556+STR, §4.4.3.
+* van Heerwaarden, C. C. et al. (2017). MicroHH 1.0: a computational
+  fluid dynamics code for direct numerical simulation and large-eddy
+  simulation of atmospheric boundary layer flows. *Geosci. Model Dev.*
+  10, 3145–3165.
 * Svensson, G. et al. (2011). Evaluation of the diurnal cycle in the
   atmospheric boundary layer over land as represented by a variety of
   single-column models: the second GABLS experiment. *Bound.-Layer

@@ -12,6 +12,9 @@
 #   * one run per non-default provider of every exclusive slot;
 #   * one run per entry of every coupling's `smoke_variants`.
 #
+# Every run must close the surface-energy, water and air-heat (#253)
+# ledgers.
+#
 # Each run is CaseConfig(:smoke): a 250 m × 250 m × 100 m window of the
 # real Alexanderplatz OSM file (16 × 16 × 16, dx = 15.6 m) at local noon,
 # 12 steps of 2 s, radiation every 8 s, soil every 4 s. A fog layer
@@ -192,9 +195,18 @@ allfinite(x) = all(isfinite, x)
             # the sum of the booked sources and sinks.
             w = BC.water_budget(case.ledger)
             @test abs(w.residual) < 1e-12            # kg/m²; measured ≲ 3e-16
-            @info @sprintf("  %-26s %5.1f s  domain Rn %7.2f H %6.2f LE %5.2f G %7.2f dS %7.2f W/m², Rn−H−LE−G−dS %7.3f, closure %.1e; water residual %.1e kg/m², transport %.2e kg/m²",
+            # The air-heat ledger closes (#253): the measured change of the
+            # heat of the air is the sum of what it attributed to the stage
+            # entries and the dynamics, and nothing changed θ outside them.
+            hb = BC.heat_budget(case.ledger)
+            @test hb.elapsed > 0
+            @test abs(hb.closure / hb.elapsed) <= 1e-10     # W/m²
+            @test !haskey(hb.terms, (:core, :unattributed))
+            @test !haskey(hb.terms, (:output, :between_steps))
+            @info @sprintf("  %-26s %5.1f s  domain Rn %7.2f H %6.2f LE %5.2f G %7.2f dS %7.2f W/m², Rn−H−LE−G−dS %7.3f, closure %.1e; water residual %.1e kg/m², transport %.2e kg/m²; air heat closure %.1e W/m²",
                            label, time() - t0, dom.Rn, dom.H, dom.LE, dom.G, dom.dS, dom.residual,
-                           dom.closure, w.residual, get(w.sources, :transport, 0.0))
+                           dom.closure, w.residual, get(w.sources, :transport, 0.0),
+                           hb.closure / hb.elapsed)
             if irun == 1
                 print(BC.ledger_report(case))
                 # Midday sun: the surfaces gain radiative energy and warm.
