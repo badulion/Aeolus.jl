@@ -427,8 +427,7 @@ end
 # --- N² of the stratification (the TKE closure's buoyancy term, #259) ------
 
 import ..Operators: _buoyancy_frequency_squared!
-using ..Operators: _θv_face, _θref
-using ..TurbulenceStability: buoyancy_frequency_squared
+using ..Operators: _n2_cell, _humidity_data, _θref
 
 """
     _buoyancy_frequency_squared!(N2, θ, qv, θ₀, g, m::StretchedGrid)
@@ -443,19 +442,20 @@ buoyancy flux of the SGS heat flux, as on the uniform grid. For a linear
 θ it is ``Γ(Δz_c[k-1]/2 + Δz_c[k] + Δz_c[k+1]/2)/(2Δz_c[k])``: Γ on the
 uniform levels, Γ(1 + 1.5e-3) on a geometric part of ratio 1.08, and
 first order where the ratio jumps (+1.7 % in the last 25 m cell under the
-first stretched one of the nesting parent, #259).
+first stretched one of the nesting parent, #259). With condensate
+(`Operators._Cloudy`, #239) the per-cell stencil is the uniform one's
+(condensate loading, the saturated N² in cells with ``q_c > 0``), over
+the same ``Δz_c[k]``.
 """
 function _buoyancy_frequency_squared!(N2::Field{CellCenter}, θ::Field{CellCenter}, qv,
                                       θ₀, g, m::StretchedGrid)
-    qd = qv === nothing ? nothing : qv.data
+    qd = _humidity_data(qv)
     θd, nd = θ.data, N2.data
     ii, jj, kk = interior(m)
     @inbounds for k in kk
         dz = m.dzc[k]
         for j in jj, i in ii
-            lo = _θv_face(θd, qd, i, j, k)
-            hi = _θv_face(θd, qd, i, j, k + 1)
-            nd[i, j, k] = buoyancy_frequency_squared(lo, hi, dz, g, _θref(θ₀, k))
+            nd[i, j, k] = _n2_cell(θd, qd, i, j, k, dz, g, _θref(θ₀, k))
         end
     end
     return N2

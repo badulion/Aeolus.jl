@@ -9,7 +9,10 @@
 #   4. the pointwise N² and Ri_g fields on analytic flows (exact for linear
 #      profiles; second order for a tanh shear layer);
 #   5. the fog column delegates to ShortTail bit for bit;
-#   6. the mean-profile N² of TimeIntegration and Anelastic bit for bit.
+#   6. the mean-profile N² of TimeIntegration and Anelastic bit for bit;
+#   7. cloudy-air N² (#239): condensate loading, the saturated N² of
+#      Durran & Klemp (1982) — ≈ 0 on a moist adiabat, within 4 % of the
+#      fog column's parcel N² — and the dry / qv forms bit for bit.
 
 using Aeolus.TurbulenceStability
 using Aeolus.TurbulenceStability: AbstractRiStability
@@ -306,6 +309,143 @@ end
     # the exactness that motivated the log form survives
     N2 = Aeolus.Anelastic._brunt_vaisala(300.0 .* exp.(1e-4 .* (0:39) .* 25 ./ 9.81), 25.0, 9.81)
     @test maximum(abs, N2 .- 1e-4) < 1e-15
+end
+
+# The pre-#239 pointwise N² kernel, verbatim, as the reference for "bit for bit".
+function _n2_field_old!(N2, θ, qv, θ₀, g)
+    m = θ.mesh
+    qd = qv === nothing ? nothing : qv.data
+    θd, nd = θ.data, N2.data
+    face(i, j, k) = qd === nothing ? 0.5 * (θd[i, j, k-1] + θd[i, j, k]) :
+        0.5 * (θd[i, j, k-1] + θd[i, j, k]) * (1 + 0.61 * (0.5 * (qd[i, j, k-1] + qd[i, j, k])))
+    ii, jj, kk = interior(m)
+    for k in kk, j in jj, i in ii
+        nd[i, j, k] = buoyancy_frequency_squared(face(i, j, k), face(i, j, k + 1), m.dz, g, θ₀)
+    end
+    return N2
+end
+
+# A saturated moist-adiabatic column (dT/dz = −Γ_m, hydrostatic dry p) at
+# the storage levels of a 1-column grid: T, p by RK4 in steps of ≤ 5 cm.
+function _moist_adiabat(zs; T0 = 285.0, p0 = 1.0e5)
+    MT = Aeolus.MoistThermodynamics; c = MT.DEFAULT_CONSTANTS
+    f(T, p) = (-MT.moist_adiabatic_lapse_rate(T, p, c), -c.grav * p / (MT.R_d(c) * T))
+    T, p, z = T0, p0, first(zs)
+    out = Tuple{Float64,Float64}[]
+    for zt in zs
+        while z < zt - 1e-12
+            h = min(0.05, zt - z)
+            k1 = f(T, p); k2 = f(T + h/2 * k1[1], p + h/2 * k1[2])
+            k3 = f(T + h/2 * k2[1], p + h/2 * k2[2]); k4 = f(T + h * k3[1], p + h * k3[2])
+            T += h / 6 * (k1[1] + 2k2[1] + 2k3[1] + k4[1])
+            p += h / 6 * (k1[2] + 2k2[2] + 2k3[2] + k4[2]); z += h
+        end
+        push!(out, (T, p))
+    end
+    return out
+end
+
+@testset "7. cloudy-air N² (#239)" begin
+    MT = Aeolus.MoistThermodynamics; c = MT.DEFAULT_CONSTANTS
+    θ₀, g = 290.0, 9.81
+
+    # (a) dry and qv-only forms unchanged bit for bit; an all-zero condensate
+    #     field gives the qv form bit for bit
+    rng = Xoshiro(239)
+    m = RegularGrid(; size = (5, 4, 12), extent = (50.0, 40.0, 120.0), halo = (1, 1, 1))
+    θ = Field(CellCenter(), m); qv = Field(CellCenter(), m)
+    θ.data .= 290.0 .+ 0.5 .* randn(rng, size(θ.data))
+    qv.data .= 0.008 .+ 1e-3 .* rand(rng, size(qv.data))
+    N2 = Field(CellCenter(), m); N2o = Field(CellCenter(), m)
+    buoyancy_frequency_squared!(N2, θ; θ₀ = θ₀, g = g)
+    @test N2.data == _n2_field_old!(N2o, θ, nothing, θ₀, g).data
+    buoyancy_frequency_squared!(N2, θ, qv; θ₀ = θ₀, g = g)
+    @test N2.data == _n2_field_old!(N2o, θ, qv, θ₀, g).data
+    N2c = Field(CellCenter(), m)
+    buoyancy_frequency_squared!(N2c, θ, qv, Field(CellCenter(), m); θ₀ = θ₀, g = g, p = 1e5)
+    @test N2c.data == N2.data
+    buoyancy_frequency_squared!(N2c, θ, qv, nothing; θ₀ = θ₀, g = g)
+    @test N2c.data == N2.data
+    @test_throws DimensionMismatch buoyancy_frequency_squared!(N2c, θ, qv, Field(CellCenter(), m);
+                                                               θ₀ = θ₀, g = g, p = zeros(3))
+
+    # (b) condensate loading in an unsaturated cell: uniform θ and qv, cloud
+    #     water only in the cell above → N² = (g/θ₀) θ (−q_c/2) / Δz exactly
+    θ.data .= 288.0; qv.data .= 0.006
+    qc = Field(CellCenter(), m)
+    k = m.Hz + 6
+    qc.data[:, :, k + 1] .= 4e-4
+    buoyancy_frequency_squared!(N2c, θ, qv, qc; θ₀ = θ₀, g = g, p = 9.5e4)
+    @test interior_view(N2c)[2, 2, 6] ≈ (g / θ₀) * 288.0 * (-0.5 * 4e-4) / m.dz rtol = 1e-12
+    @test interior_view(N2c)[2, 2, 6] < 0          # loaded air above: unstable
+    @test interior_view(N2c)[2, 2, 3] == 0          # far from the cloud: neutral as before
+
+    # (c) moist adiabat, saturated, constant total water: N² ≈ 0, second order
+    errs = Float64[]; N2_qv = 0.0
+    for Nz in (20, 40, 80)
+        mc = RegularGrid(; size = (2, 2, Nz), extent = (100.0, 100.0, 1000.0), halo = (1, 1, 1))
+        θc = Field(CellCenter(), mc); qvc = Field(CellCenter(), mc); qcc = Field(CellCenter(), mc)
+        zs = [(k - mc.Hz - 0.5) * mc.dz for k in 1:size(θc.data, 3)]
+        pv = zeros(length(zs))
+        for (k, (T, p)) in enumerate(_moist_adiabat(zs .- zs[1]))
+            qs = MT.saturation_specific_humidity(T, p, c)
+            θc.data[:, :, k] .= T / MT.exner_function(p)
+            qvc.data[:, :, k] .= qs; qcc.data[:, :, k] .= 0.012 - qs; pv[k] = p
+        end
+        @test all(>(0), qcc.data)
+        Nf = Field(CellCenter(), mc)
+        buoyancy_frequency_squared!(Nf, θc, qvc, qcc; θ₀ = θ₀, g = g, p = pv)
+        push!(errs, maximum(abs, interior_view(Nf)))
+        buoyancy_frequency_squared!(Nf, θc, qvc; θ₀ = θ₀, g = g)
+        N2_qv = minimum(interior_view(Nf))
+    end
+    @test N2_qv > 1.4e-4                            # the θ_v form calls it stable
+    @test errs[end] < 1e-6 * N2_qv                  # the saturated form: neutral
+    @test all(o -> abs(o - 2) < 0.1, log2.(errs[1:end-1] ./ errs[2:end]))
+
+    # (d) the contract function: limits and conditional instability
+    @test MT.saturated_buoyancy_frequency_squared(290.0, 9e4, 0.0, 0.01, 0.0) < 0   # neutral θ, saturated: unstable
+    Γd = MT.dry_adiabatic_lapse_rate(); Π = MT.exner_function(9e4)
+    @test MT.saturated_buoyancy_frequency_squared(280.0, 2e4, 4e-3, 0.0, 0.0) ≈
+          (c.grav / 280.0) * 4e-3 rtol = 1e-3          # 177 K: r_s → 0, the dry N²
+    T = 290.0 * Π; Γm = MT.moist_adiabatic_lapse_rate(T, 9e4)
+    # a θ gradient between the moist and the dry adiabat: dry-stable,
+    # saturated-unstable (conditional instability)
+    dθ = 0.5 * (Γd - Γm) / Π
+    @test MT.saturated_buoyancy_frequency_squared(290.0, 9e4, dθ, 0.01, 0.0) < 0
+    @test MT.saturated_buoyancy_frequency_squared(290.0, 9e4, dθ, 0.01, -1e-6) >
+          MT.saturated_buoyancy_frequency_squared(290.0, 9e4, dθ, 0.01, 0.0)   # water decreasing upward stabilises
+
+    # (e) against the fog column's parcel N² (RadiationFog.moist_stability:
+    #     enthalpy-conserving displacement with the contract's saturation
+    #     adjustment, θ_ρ): saturated layers of 8, 5 and 3 K/km
+    rels = Float64[]
+    for lapse in (8e-3, 5e-3, 3e-3)
+        zf = collect(0.0:20.0:1000.0); nz = length(zf) - 1
+        zc = (zf[1:end-1] .+ zf[2:end]) ./ 2
+        T = 276.0 .- lapse .* zc
+        p = 1.0e5 .* (T ./ 276.0) .^ (c.grav / (MT.R_d(c) * lapse))     # hydrostatic
+        wet = Aeolus.RadiationFog.FogColumn(zf, T, 1.3 .* MT.saturation_specific_humidity.(T, p))
+        @test all(wet.ql .> 1e-4)                 # both displaced parcels stay saturated
+        k = 10
+        N_parcel = 0.5 * (Aeolus.RadiationFog.moist_stability(wet, k - 1) +
+                          Aeolus.RadiationFog.moist_stability(wet, k))
+        mf = RegularGrid(; size = (1, 1, nz), extent = (20.0, 20.0, 1000.0), halo = (1, 1, 1))
+        θf = Field(CellCenter(), mf); qvf = Field(CellCenter(), mf); qlf = Field(CellCenter(), mf)
+        pv = zeros(nz + 2)
+        for kk in 1:nz
+            θf.data[:, :, kk+1] .= wet.T[kk] / MT.exner_function(wet.p[kk])
+            qvf.data[:, :, kk+1] .= wet.qv[kk]; qlf.data[:, :, kk+1] .= wet.ql[kk]; pv[kk+1] = wet.p[kk]
+        end
+        Nf = Field(CellCenter(), mf)
+        buoyancy_frequency_squared!(Nf, θf, qvf, qlf; θ₀ = θf.data[2, 2, k+1], g = c.grav, p = pv)
+        N_dk = interior_view(Nf)[1, 1, k]
+        buoyancy_frequency_squared!(Nf, θf, qvf; θ₀ = θf.data[2, 2, k+1], g = c.grav)
+        @test interior_view(Nf)[1, 1, k] > N_dk + 0.9e-4     # the θ_v form overstates it
+        push!(rels, abs(N_dk - N_parcel) / abs(N_parcel))
+    end
+    @test all(<(0.04), rels)
+    @info "#239 cloudy-air N²" moist_adiabat_maxabs = errs θv_form_on_it = N2_qv parcel_rel_diff = rels
 end
 
 end # testset

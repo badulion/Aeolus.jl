@@ -86,6 +86,7 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        moist_adiabatic_lapse_rate, dry_adiabatic_lapse_rate,
        lifting_condensation_level, level_of_free_convection,
        cape_cin, buoyancy, brunt_vaisala_frequency_moist,
+       saturated_buoyancy_frequency_squared,
        supersaturation, supersaturation_ice,
        kelvin_coefficient, kohler_supersaturation, kohler_critical_point,
        kohler_equilibrium_radius, surface_tension_water,
@@ -1127,6 +1128,61 @@ gradient. Negative means statically unstable.
 brunt_vaisala_frequency_moist(θρ::Real, dθρ_dz::Real,
                               c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
     c.grav * float(dθρ_dz) / float(θρ)
+
+"""
+    saturated_buoyancy_frequency_squared(θ, p, dθ_dz, q_w, dq_w_dz, c = DEFAULT_CONSTANTS;
+                                         θ_ref = θ, g = c.grav) -> N² in s⁻²
+
+Squared buoyancy frequency of **saturated** air (Durran & Klemp 1982,
+eq. 36),
+
+```math
+N_m^2 = \\frac{g}{T}\\Bigl(\\frac{∂T}{∂z} + Γ_m\\Bigr)
+        \\Bigl(1 + \\frac{L_v r_s}{R_d T}\\Bigr) - \\frac{g}{1 + q_w}\\frac{∂q_w}{∂z},
+```
+
+written in the potential temperature of a hydrostatic column
+(``T = θΠ``, ``θ ∂Π/∂z = -Γ_d``), so that only ``∂θ/∂z`` and
+``∂q_w/∂z`` are differenced and the pressure enters pointwise:
+
+```math
+N_m^2 = \\frac{g}{θ_{\\rm ref}}\\Bigl(1 + \\frac{L_v r_s}{R_d T}\\Bigr)
+        \\Bigl(\\frac{∂θ}{∂z} - \\frac{Γ_d - Γ_m}{Π}\\Bigr)
+        - \\frac{g}{1 + q_w}\\frac{∂q_w}{∂z}.
+```
+
+`θ` (K) is the potential temperature of the saturated cell and `p` (Pa)
+its pressure (``T = θ\\,Π(p)`` with the dry Exner function); `q_w` is the
+total water ``q_v + q_c`` (kg kg⁻¹) and `dq_w_dz` its vertical gradient.
+``Γ_m`` is [`moist_adiabatic_lapse_rate`](@ref), ``Γ_d`` the dry
+[`dry_adiabatic_lapse_rate`](@ref), ``r_s`` the
+[`saturation_mixing_ratio`](@ref) and ``L_v`` the
+[`latent_heat_vapor`](@ref) at ``(T, p)``: one source of truth with the
+rest of the contract. With `θ_ref = θ` this is Durran & Klemp's form;
+`θ_ref` set to the reference temperature ``θ_0`` of a Boussinesq core
+gives the saturated counterpart of its ``(g/θ_0)∂θ_v/∂z``. It vanishes
+on a moist adiabat of constant total water, is ``(g/θ_{\\rm ref})∂θ/∂z``
+when ``r_s → 0`` (``Γ_m → Γ_d``), and is smaller than the dry ``N^2`` of
+the same ``θ`` gradient in a stable saturated layer, because condensation
+in a rising parcel offsets part of its adiabatic cooling.
+
+Reference: Durran, D. R. & Klemp, J. B. (1982). On the effects of
+moisture on the Brunt–Väisälä frequency. *J. Atmos. Sci.*, 39,
+2152-2158.
+"""
+function saturated_buoyancy_frequency_squared(θ::Real, p::Real, dθ_dz::Real, q_w::Real,
+                                              dq_w_dz::Real,
+                                              c::ThermodynamicConstants = DEFAULT_CONSTANTS;
+                                              θ_ref::Real = θ, g::Real = c.grav)
+    Π  = exner_function(p, PhasePartition(0.0), c)
+    T  = float(θ) * Π
+    rs = saturation_mixing_ratio(T, p, c)
+    Lv = latent_heat_vapor(T, c)
+    Γd = dry_adiabatic_lapse_rate(PhasePartition(0.0), c)
+    Γm = moist_adiabatic_lapse_rate(T, p, c)
+    return (g / θ_ref) * (1 + Lv * rs / (R_d(c) * T)) * (dθ_dz - (Γd - Γm) / Π) -
+           g * dq_w_dz / (1 + q_w)
+end
 
 """
     level_of_free_convection(T_p, p_p, q_p, sounding, c) -> p_lfc or NaN

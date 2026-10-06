@@ -9,6 +9,7 @@ using ..BoundaryConditions: BoundaryConditions, fill_halos!, Periodic, FieldBoun
 using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR,
                              AbstractRiStability, BrownEtAl1994,
                              stability_factor_m, stability_factor_h
+using ..MoistThermodynamics: saturated_buoyancy_frequency_squared, DEFAULT_CONSTANTS
 using FFTW: rfft, irfft, fft, ifft, fftfreq, plan_rfft
 using Random: AbstractRNG, default_rng, randn
 

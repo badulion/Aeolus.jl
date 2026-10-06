@@ -7,6 +7,7 @@
 """
     buoyancy_frequency_squared!(N2, θ; θ₀, g)
     buoyancy_frequency_squared!(N2, θ, qv; θ₀, g)
+    buoyancy_frequency_squared!(N2, θ, qv, qc; θ₀, g, p)
 
 Squared buoyancy frequency at cell centres,
 
@@ -22,22 +23,49 @@ temperature ``θ_v = θ(1 + 0.61 q_v)`` of the moist buoyancy is used
 difference ``(g/θ_0)(θ_{k+1} - θ_{k-1})/(2Δz)``. The difference itself is
 `TurbulenceStability.buoyancy_frequency_squared`.
 
+**Cloudy air** (`qc`, #239). With a condensate field `qc` (cloud or fog
+water, kg kg⁻¹) the buoyancy variable is the density potential
+temperature with condensate loading, ``θ_ρ = θ(1 + 0.61 q_v - q_c)``
+(interpolated to the faces like θ_v), and in a **saturated** cell —
+one with ``q_c > 0``, which after a saturation adjustment means
+``q_v = q_s`` — ``N^2`` is the saturated buoyancy frequency of Durran &
+Klemp (1982), `MoistThermodynamics.saturated_buoyancy_frequency_squared`,
+with the same face differences of θ and of the total water
+``q_w = q_v + q_c`` over Δz and the cell's own θ, ``q_w`` and pressure
+`p`. Moist-adiabatic (moist-neutral) saturated air then has ``N^2 ≈ 0``
+instead of the dry ``(g/θ_0)∂θ/∂z ≈ 3 × 10^{-4}`` s⁻² of a 5 K km⁻¹
+θ gradient. Where `qc` is zero in a cell and both neighbours the result
+is the `qv` form bit for bit.
+
+`p` (Pa) is the pressure of the saturated adjustment: a number or a
+vector indexed by the storage level `k` (length `Nz + 2Hz`), like `θ₀`.
+
 `θ₀` is a number (the constant reference of the Boussinesq core) or a
 vector indexed by the storage level `k` of the cell (length `Nz + 2Hz`):
-the height-dependent reference ``\bar θ(z)`` of the sound-proof cores,
-whose buoyancy is ``g(θ - \bar θ)/\bar θ`` (`ReferenceState.θ̄c_pad`; used
+the height-dependent reference ``\\bar θ(z)`` of the sound-proof cores,
+whose buoyancy is ``g(θ - \\bar θ)/\\bar θ`` (`ReferenceState.θ̄c_pad`; used
 by `StabilityCorrected`, P55-e).
 
-`N2`, `θ` (and `qv`) live at `CellCenter`; the halos of `θ` and `qv`
-must be filled (at a wall the mirror halo halves the boundary gradient).
-Interior cells only. Returns `N2`.
+`N2`, `θ` (and `qv`, `qc`) live at `CellCenter`; the halos of `θ`, `qv`
+and `qc` must be filled (at a wall the mirror halo halves the boundary
+gradient). Interior cells only. Returns `N2`.
 """
 buoyancy_frequency_squared!(N2::Field, θ::Field; θ₀::Union{Real,AbstractVector}, g::Real) =
     _buoyancy_frequency_squared!(N2, θ, nothing, θ₀, g, mesh(θ))
 buoyancy_frequency_squared!(N2::Field, θ::Field, qv; θ₀::Union{Real,AbstractVector}, g::Real) =
     _buoyancy_frequency_squared!(N2, θ, qv, θ₀, g, mesh(θ))
+buoyancy_frequency_squared!(N2::Field, θ::Field, qv::Field, ::Nothing;
+                            θ₀::Union{Real,AbstractVector}, g::Real, p = nothing) =
+    _buoyancy_frequency_squared!(N2, θ, qv, θ₀, g, mesh(θ))
+function buoyancy_frequency_squared!(N2::Field, θ::Field, qv::Field, qc::Field;
+                                     θ₀::Union{Real,AbstractVector}, g::Real,
+                                     p::Union{Real,AbstractVector})
+    p isa AbstractVector && length(p) != size(θ.data, 3) &&
+        throw(DimensionMismatch("p must be indexed by the storage level: length $(size(θ.data, 3)), got $(length(p))"))
+    return _buoyancy_frequency_squared!(N2, θ, _Cloudy(qv.data, qc.data, p), θ₀, g, mesh(θ))
+end
 
-# the reference θ of storage level k: a constant, or a profile
+# the reference θ (or pressure) of storage level k: a constant, or a profile
 @inline _θref(θ₀::Real, k) = θ₀
 @inline _θref(θ₀::AbstractVector, k) = @inbounds θ₀[k]
 
@@ -52,16 +80,54 @@ buoyancy_frequency_squared!(N2::Field, θ::Field, qv; θ₀::Union{Real,Abstract
     return θface * (1 + 0.61 * qvface)
 end
 
+# The humidity of cloudy air (#239): vapour, condensate and the pressure of
+# the saturated N² (a number or a storage-indexed vector).
+struct _Cloudy{A,P}
+    qv::A
+    qc::A
+    p::P
+end
+
+# N² of cell (i, j, k) from the faces below and above, over Δz = dz: the one
+# per-cell stencil of the uniform and the stretched grids.
+@inline _n2_cell(θ, qv, i, j, k, dz, g, θr) =
+    buoyancy_frequency_squared(_θv_face(θ, qv, i, j, k), _θv_face(θ, qv, i, j, k + 1), dz, g, θr)
+@inline function _n2_cell(θ, w::_Cloudy, i, j, k, dz, g, θr)
+    qv, qc = w.qv, w.qc
+    if qc[i, j, k] > 0
+        # saturated: Durran & Klemp (1982) from the face differences of θ and q_w
+        dθ  = (0.5 * (θ[i, j, k] + θ[i, j, k+1]) - 0.5 * (θ[i, j, k-1] + θ[i, j, k])) / dz
+        qw  = qv[i, j, k] + qc[i, j, k]
+        dqw = (0.5 * (qv[i, j, k] + qc[i, j, k] + qv[i, j, k+1] + qc[i, j, k+1]) -
+               0.5 * (qv[i, j, k-1] + qc[i, j, k-1] + qv[i, j, k] + qc[i, j, k])) / dz
+        return saturated_buoyancy_frequency_squared(θ[i, j, k], _θref(w.p, k), dθ, qw, dqw,
+                                                    DEFAULT_CONSTANTS; θ_ref = θr, g = g)
+    end
+    return buoyancy_frequency_squared(_θρ_face(θ, qv, qc, i, j, k),
+                                      _θρ_face(θ, qv, qc, i, j, k + 1), dz, g, θr)
+end
+
+# θ_ρ = θ (1 + 0.61 q_v − q_c) on the face below cell (i, j, k): θ_v with
+# condensate loading (the linearised density potential temperature)
+@inline function _θρ_face(θ, qv, qc, i, j, k)
+    θface  = 0.5 * (θ[i, j, k-1]  + θ[i, j, k])
+    qvface = 0.5 * (qv[i, j, k-1] + qv[i, j, k])
+    qcface = 0.5 * (qc[i, j, k-1] + qc[i, j, k])
+    return θface * (1 + 0.61 * qvface - qcface)
+end
+
+_humidity_data(::Nothing) = nothing
+_humidity_data(q) = q.data
+_humidity_data(q::_Cloudy) = q
+
 function _buoyancy_frequency_squared!(N2::Field{CellCenter}, θ::Field{CellCenter}, qv,
                                       θ₀, g, m::RegularGrid)
-    qd = qv === nothing ? nothing : qv.data
+    qd = _humidity_data(qv)
     θd, nd = θ.data, N2.data
     dz = m.dz
     ii, jj, kk = interior(m)
     @inbounds for k in kk, j in jj, i in ii
-        lo = _θv_face(θd, qd, i, j, k)
-        hi = _θv_face(θd, qd, i, j, k + 1)
-        nd[i, j, k] = buoyancy_frequency_squared(lo, hi, dz, g, _θref(θ₀, k))
+        nd[i, j, k] = _n2_cell(θd, qd, i, j, k, dz, g, _θref(θ₀, k))
     end
     return N2
 end
