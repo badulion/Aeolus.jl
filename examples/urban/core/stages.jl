@@ -23,7 +23,7 @@
 #   :surface_update  surface and soil prognostics
 #   :column_tendency column (radiative) tendencies of θ
 #   :nest_feedback   the parent window closed when the child reached its end
-#                    (one-way: clock and statistics; the two-way feedback, #267)
+#                    (one-way: clock and statistics; two-way, #267: the feedback)
 #   :sanity          guards (e.g. clamps), then the core blow-up check
 #   :output          NetCDF record and log line (core)
 

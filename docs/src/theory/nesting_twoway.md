@@ -14,9 +14,14 @@ conservation and stability. The pieces it is built from:
 | subcycling, stage times, retries | `NestedRun` (N-nest-c #257) | [nested time coupling](nesting_time.md) |
 | the child's open faces | `NestBoundaryData` (N-nest-d #261) | [nested boundary conditions](nesting_boundaries.md) |
 
-The maintainer's decision for the Berlin case is one-way nesting; two-way
-is fully implemented and tested for long-run stability, and N-berlin-twoway
-(#267) couples it to the Berlin run as an option.
+The maintainer's decision for the Berlin case is one-way nesting. Two-way
+is implemented and tested on synthetic boxes (below); N-berlin-twoway
+(#267) couples it to the Berlin run as an option, `options[:nesting].mode
+= :two_way`, which is **unvalidated** in the urban setting until the
+long-run stability campaign #331 (see the
+[Berlin nesting page](../design/berlin_nesting.md#Two-way-option-(#267))).
+Only after #331 validates it does two-way become the default for
+self-nesting.
 
 ## The feedback, step by step
 

@@ -667,6 +667,13 @@ function begin_child_step!(run::NestedRun)
     return run.regs === nothing || !any(_by_core, run.regs.models) ? nothing : _hook(run, :child)
 end
 
+"""
+    end_child_step!(run::NestedRun) -> run
+
+Commit the bookings of the child step opened by
+[`begin_child_step!`](@ref) into the flux registers of a refluxing
+two-way run (a no-op otherwise).
+"""
 function end_child_step!(run::NestedRun)
     _commit!(run, :child)
     return run
