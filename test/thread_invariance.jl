@@ -18,10 +18,11 @@
 #     Every hash must agree with
 #     the 1-thread one; the differing keys are listed otherwise.
 #     AEOLUS_THREAD_SECTIONS selects sections (default
-#     "primitives,dns,reductions,smoke,flagship,nested,fft,pcg"; nested: short nested runs,
-#     KA-f #297; fft: every spectral pressure solver with FFTW on the
-#     process's threads, KA-h #298; pcg: the four CG solvers, KA-g #300).
-#     Every port PR runs and quotes it:
+#     "primitives,dns,reductions,smoke,flagship,nested,fft,pcg"; reductions: the
+#     KA-b #296 reduction call sites; nested: short nested runs, KA-f #297;
+#     fft: every spectral pressure solver with FFTW on the process's threads,
+#     KA-h #298; pcg: the four CG solvers, KA-g #300). Every port PR runs
+#     and quotes it:
 #
 #       AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
 #

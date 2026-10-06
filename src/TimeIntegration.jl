@@ -60,7 +60,6 @@ using ..Simulations: BoussinesqSimulation, max_divergence,
                      _project_velocity!       # the projection (steps 8–10 of step!)
 using ..TimeSteppers: step!
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
-using Logging: @logmsg, Warn, Info, Debug
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 
 export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
@@ -654,10 +653,11 @@ closure to the step it takes itself. `sgs_stress` (`:laplacian` |
 `:default`). Each callback is invoked as `callback(sim, dt_sub)`.
 
 Every rejected step is a structured event (`subsystem = :timestepping`,
-keys `reason`, `from`, `to`, `retry`; a throw also carries `exception`):
-at `Info`/`Warn` with `verbose = true`, else at `Debug`, so a run log
-records it while the console stays quiet. A fast process that leaves
-non-finite values is always a warning. See the Logging page (#333).
+keys `reason`, `from`, `to`, `retry`; a throw also carries `exception`)
+at `Debug`: a retry the driver recovers from is not a problem, so a run log
+records it while the console stays quiet (install a logger at `Debug` to see
+it there). A step that fails after `max_retries` throws; a fast process that
+leaves non-finite values is a warning. See the Logging page (#333, #347).
 
 ```julia
 c = CFLConstraints(dt_max = 10.0)
@@ -683,8 +683,7 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
                         divergence_tol::Real = 1e-6,
                         max_velocity::Real = Inf,
                         sgs = nothing,
-                        sgs_stress::Symbol = :laplacian,
-                        verbose::Bool = false) where {T}
+                        sgs_stress::Symbol = :laplacian) where {T}
 
     closure = sgs_closure(sgs)
     Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev, scheme = scheme,
@@ -717,8 +716,8 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
             err isa InterruptException && rethrow()
             failed = true
             reason = :exception
-            # a throw the driver recovers from: a warning when verbose, else run.log only
-            @logmsg((verbose ? Warn : Debug), "step_adaptive!: stepper threw",
+            # a throw the driver recovers from (by a retry): Debug, run.log only
+            @debug("step_adaptive!: stepper threw",
                     subsystem = :timestepping, domain = current_domain(), dt = Δt,
                     retry = n_retries, exception = err)
         end
@@ -754,8 +753,8 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
                   "$(constraints.dt_min); cannot reduce dt further. State " *
                   "has been restored to the beginning of the step.")
         end
-        # every retry is in run.log; on the console only when verbose
-        @logmsg((verbose ? Info : Debug), "step_adaptive!: retry",
+        # every retry is in run.log; the console shows it at Debug only
+        @debug("step_adaptive!: retry",
                 subsystem = :timestepping, domain = current_domain(), reason,
                 from = Δt, to = Δt_new, retry = n_retries + 1, max_retries)
         Δt = Δt_new

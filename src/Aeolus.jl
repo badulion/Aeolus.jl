@@ -16,13 +16,17 @@ include("Fields.jl")
 include("BoundaryConditions.jl")
 # Era VI stability contract (Phase 58): pure, and needed by Operators.
 include("TurbulenceStability.jl")
+# MoistThermodynamics (Era IV, Phase 39) is dependency-free. It is included
+# ahead of Operators, whose N² uses its saturated buoyancy frequency (#239),
+# and so also ahead of AerosolOptics (Kelvin coefficient, Köhler theory).
+include("MoistThermodynamics.jl")  # Phase 39
 include("Operators.jl")
 include("TimeSteppers.jl")
 include("PressureSolvers.jl")
 include("Simulations.jl")
 include("IO.jl")
 include("Config.jl")         # run configuration schema, loader, canonical run.toml (CFG-a, #356)
-include("NetCDFIO.jl")        # dependency-free NetCDF-3 reader/writer
+include("NCIO.jl")            # NetCDF-4 output policy over NCDatasets (#310)
 include("IBM.jl")
 include("Parallel.jl")
 include("SpectralElement.jl")
@@ -42,10 +46,6 @@ include("Nesting.jl")          # Phase 30 parent-child operators (N-nest-a, #250
 include("AdaptiveMesh.jl")      # Phase 31 AMR (delegates to Nesting)
 
 # --- Era III: high-fidelity radiation (Phases 32-38) ---------------------
-# MoistThermodynamics (Era IV, Phase 39) is dependency-free and defines the
-# canonical Kelvin coefficient and Köhler theory, which AerosolOptics needs,
-# so it is included ahead of the radiation stack rather than with its own era.
-include("MoistThermodynamics.jl")  # Phase 39
 include("RadiationCore.jl")     # shared spectral / optics / flux contract
 # Era V contract (surface exchange) needs MoistThermodynamics and the
 # RadiationCore albedo/emissivity generics, and SlabLand (Radiation.jl)
@@ -100,7 +100,7 @@ using .PressureSolvers
 using .Simulations
 using .IO
 using .Config
-using .NetCDFIO
+using .NCIO
 using .Microphysics
 using .IBM
 using .Parallel
@@ -249,10 +249,8 @@ export checkpoint_payload, write_checkpoint,
        BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
        check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
        RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir
-export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
-       nc_write!, nc_append_record!, nc_close!, nc_write_fields,
-       nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
-       nc_attributes, nc_nrecords
+export NCDataset, nc_create, nc_defvar!, nc_append_record!, nc_chunksizes,
+       cf_time_units, NC_DEFLATE_LEVEL                              # #310
 export apply_kessler_step!, KESSLER_N0, kessler_rain_number, kessler_fall_speed
 export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
        implicit_ibm_correction!, wall_distance, first_level_cells   # + P56-b (#182)
@@ -534,6 +532,7 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        moist_adiabatic_lapse_rate, dry_adiabatic_lapse_rate,
        lifting_condensation_level, level_of_free_convection,
        cape_cin, buoyancy, brunt_vaisala_frequency_moist,
+       saturated_buoyancy_frequency_squared,
        supersaturation, supersaturation_ice,
        kelvin_coefficient, kohler_supersaturation, kohler_critical_point,
        kohler_equilibrium_radius, surface_tension_water,

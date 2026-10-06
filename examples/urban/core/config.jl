@@ -81,8 +81,10 @@ Groups of fields:
 * **ledger** — `canopy_top` (m): top of the `:canopy` layer of the
   air-heat budget (`heat_budget(…; layer = :canopy)`); `NaN` (default)
   takes the tallest roof of the scene;
-* **output** — `output_path` (`nothing` disables NetCDF output),
-  `verbose`;
+* **output** — `output_path` (`nothing` disables NetCDF output); what
+  is printed is decided by the installed logger and its level (#347):
+  the setup summary is `Debug`, the run's start, output frames and
+  end-of-run report are `Info`, a blowup is an `Error`;
 * **backend** — `backend::AbstractBackend` (default `CPUBackend()`): the
   compute backend of the run (`Aeolus.Backends`, KA-a #294). The core
   coupling calls `init_threads!(cfg.backend)` before building the
@@ -149,7 +151,6 @@ Base.@kwdef mutable struct CaseConfig
     # output
     canopy_top::Float64               = NaN
     output_path::Union{Nothing,String} = joinpath(URBAN_DIR, "output", "alexanderplatz.nc")
-    verbose::Bool                     = true
     # compute backend (KA-a, #294)
     backend::AbstractBackend          = CPUBackend()
 end

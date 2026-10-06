@@ -19,8 +19,8 @@ out = length(ARGS) >= 1 ? ARGS[1] :
       joinpath(@__DIR__, "..", "..", "..", "docs", "src", "assets", "berlin", "parent_surface.svg")
 mkpath(dirname(out))
 
-cfg = BC.CaseConfig(; verbose = false, output_path = nothing)
-case = BC.build_case(cfg; io = devnull)
+cfg = BC.CaseConfig(; output_path = nothing)
+case = BC.build_case(cfg)
 pl = BC.read_parent_landuse()
 ps = BC.build_parent_surface(case, pl; columns = CartesianIndex{2}[])
 f = ps.fractions

@@ -29,25 +29,24 @@ using Statistics: mean
 const NCPATH = length(ARGS) >= 1 ? ARGS[1] :
                joinpath(@__DIR__, "..", "urban", "output", "alexanderplatz.nc")
 
-f = nc_open(NCPATH)
-if f.numrecs == 0          # a run still in progress: numrecs is patched only at close
-    v = f.vars["time"]
-    n = (length(f.bytes) - v.offset) ÷ f.recsize
-    f = Aeolus.NetCDFIO.NCFile(f.bytes, f.dims, f.gattrs, f.vars, n, f.recsize)
-end
-z = Float64.(nc_read(f, "z")); dz = z[2] - z[1]; Lz = z[end] + dz / 2
-bh = Float64.(nc_read(f, "building_height"))
-hour = Float64.(nc_read(f, "hour")); elev = Float64.(nc_read(f, "solar_elevation"))
-time = Float64.(nc_read(f, "time"))
+# a run still in progress has every completed record on disk (the writer
+# syncs after each one); reading it while the writer holds the file open
+# needs HDF5_USE_FILE_LOCKING=FALSE in the environment
+f = NCDataset(NCPATH)
+nrec = f.dim["time"]
+z = Float64.(Array(f["z"])); dz = z[2] - z[1]; Lz = z[end] + dz / 2
+bh = Float64.(Array(f["building_height"]))
+hour = Float64.(Array(f["hour"])); elev = Float64.(Array(f["solar_elevation"]))
+time = f["time"].var[:]                 # seconds since the case start
 hmean = mean(bh)
-println("Berlin run $(NCPATH): $(f.numrecs) records, Lz = $Lz m, dz = $dz m, mean building height $(round(hmean; digits = 1)) m, sponge from $(0.75Lz) m")
+println("Berlin run $(NCPATH): $(nrec) records, Lz = $Lz m, dz = $dz m, mean building height $(round(hmean; digits = 1)) m, sponge from $(0.75Lz) m")
 @printf("%6s %6s | %10s %8s | %8s %8s | %6s\n", "hour", "elev", "jet (m/s)", "z (m)", "γ<0.5", "θ-inv", "u*")
 function night_rows(f, z, dz, Lz, bh, hour, elev, hmean)
     rows = NamedTuple[]
-    for r in 1:f.numrecs
+    for r in 1:f.dim["time"]
         elev[r] < 0 || continue
-        u = nc_read_record(f, "u", r); v = nc_read_record(f, "v", r); θ = nc_read_record(f, "theta", r)
-        γ = Float64.(nc_read_record(f, "gamma_turb", r)); us = nc_read_record(f, "u_star", r)
+        u = f["u"][:, :, :, r]; v = f["v"][:, :, :, r]; θ = f["theta"][:, :, :, r]
+        γ = Float64.(f["gamma_turb"][:, r]); us = f["u_star"][:, :, r]
         nx, ny, nz = size(θ)
         S = zeros(nz); T = zeros(nz)
         for k in 1:nz

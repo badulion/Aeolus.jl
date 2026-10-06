@@ -30,12 +30,12 @@ end
 _finite_mean(v) = (w = filter(isfinite, v); isempty(w) ? NaN : sum(w) / length(w))
 
 function summarize(path)
-    f = nc_open(path)
-    hour = Float64.(nc_read(f, "hour"))
-    elev = Float64.(nc_read(f, "solar_elevation"))
-    sfc  = round.(Int, nc_read(f, "surface_class"))
-    Ts   = nc_read(f, "Ts")
-    has_soil = "T_soil1" in nc_varnames(f)
+    f = NCDataset(path)
+    hour = Float64.(Array(f["hour"]))
+    elev = Float64.(Array(f["solar_elevation"]))
+    sfc  = round.(Int, Array(f["surface_class"]))
+    Ts   = Array(f["Ts"])
+    has_soil = haskey(f, "T_soil1")
     # local clock hour of each record, continuous across midnight
     clock = copy(hour)
     for i in 2:length(clock)
@@ -69,13 +69,14 @@ function summarize(path)
         @printf("  %-7s %6.2f %6.1f %6.2f %6.1f %7.2f %8.2f %8.2f", name, s[imax], clock[imax] % 24,
                 s[imin], clock[imin] % 24, s[imax] - s[imin], dT, rate)
         if has_soil && c != 4
-            t1 = class_series(nc_read(f, "T_soil1"), sfc, c)
-            G = class_series(nc_read(f, "G_soil"), sfc, c)
+            t1 = class_series(Array(f["T_soil1"]), sfc, c)
+            G = class_series(Array(f["G_soil"]), sfc, c)
             @printf(" %8.2f %8.1f %8.1f", maximum(t1) - minimum(t1), maximum(G), minimum(G))
         end
         println()
         rows[name] = (s[imax], s[imin], s[imax] - s[imin], dT)
     end
+    close(f)
     return (; clock, series, rows)
 end
 

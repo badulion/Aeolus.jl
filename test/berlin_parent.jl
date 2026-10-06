@@ -40,12 +40,12 @@ end
 
 @testset "Berlin parent case (#259)" begin
 
-idealised(; kw...) = BP.ParentConfig(BP.CaseConfig(; verbose = false, output_path = nothing,
+idealised(; kw...) = BP.ParentConfig(BP.CaseConfig(; output_path = nothing,
                                                    sounding = nothing, kw...);
                                      extent = (4000.0, 4000.0, 3000.0), refinement = (8, 8, 4),
                                      surface = :prescribed, radiation = false, geostrophic = false,
                                      nudging_τ = Inf, divergence = 0.0, u_init = 0.0,
-                                     verbose = false, output_period = 900.0)
+                                     output_period = 900.0)
 
 @testset "1-2. encroachment and the heat budget" begin
     D, Γ, A = 12 * 3600.0, 3e-3, 0.2
