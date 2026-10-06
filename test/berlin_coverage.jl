@@ -50,7 +50,6 @@ const BERLIN_EXEMPT = Dict{Symbol,String}(
     :NetCDFIO           => "infrastructure: the NetCDF output writer (core/output.jl)",
     # scaffolds with no operators to couple
     :Parallel           => "scaffold: partition types with no distributed operators (no MPI); nothing to run",
-    :Backends           => "scaffold: CPU/GPU backend abstraction with no GPU kernels; nothing to run",
     :SpectralElement    => "scaffold: a spectral-element mesh type with no solver; the case is finite-volume",
 )
 
@@ -103,7 +102,7 @@ const BERLIN_PENDING = Dict{Symbol,String}(
 "Frozen: the modules of `BERLIN_EXEMPT`. Entries may only be deleted."
 const BERLIN_EXEMPT_FROZEN = Set{Symbol}([
     :Grids, :Fields, :BoundaryConditions, :Operators, :Simulations, :PressureSolvers,
-    :TimeSteppers, :NetCDFIO, :Parallel, :Backends, :SpectralElement,
+    :TimeSteppers, :NetCDFIO, :Parallel, :SpectralElement,
 ])
 
 "Frozen: the modules of `BERLIN_PENDING`. Entries may only be deleted."

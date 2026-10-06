@@ -64,12 +64,17 @@ struct BoussinesqCore <: AbstractCoupling end
 coupling_name(::Type{BoussinesqCore}) = :core_boussinesq
 slot(::Type{BoussinesqCore}) = :core
 provider(::Type{BoussinesqCore}) = :boussinesq
-modules_used(::Type{BoussinesqCore}) = (:Simulations,)
+modules_used(::Type{BoussinesqCore}) = (:Simulations, :Backends)
 build_core(::Type{BoussinesqCore}, cfg, mesh, ref, simkw) = boussinesq_core(cfg, mesh; simkw...)
+
+# Both cores run on the case's backend (`cfg.backend`): `build_case` calls
+# `init_threads!(cfg.backend)` before anything is allocated (KA-a, #294).
+_on_case_backend(case) = default_backend() == case.cfg.backend && backend(case.sim.θ) == case.cfg.backend
 
 function smoke_check(c::BoussinesqCore, case)
     sim = case.sim
     return ["the core is a BoussinesqSimulation" => sim isa BoussinesqSimulation,
+            "the case runs on cfg.backend" => _on_case_backend(case),
             "∇·u at round-off after the projection (< 1e-10 s⁻¹)" => max_divergence(sim) < 1e-10]
 end
 
@@ -98,7 +103,7 @@ coupling_name(::Type{PseudoIncompressibleCore}) = :core_pseudo_incompressible
 slot(::Type{<:MassWeightedCore}) = :core
 provider(::Type{MassWeightedCore{P}}) where {P} = P
 is_default(::Type{<:MassWeightedCore}) = false
-modules_used(::Type{<:MassWeightedCore}) = (:Anelastic,)
+modules_used(::Type{<:MassWeightedCore}) = (:Anelastic, :Backends)
 incompatible(::Type{<:MassWeightedCore}) =
     (:pressure_solver => :cosine_fft, :pressure_solver => :multigrid, :pressure_solver => :mg_cg,
      :momentum_advection => :weno_z)
@@ -137,6 +142,7 @@ function smoke_check(c::MassWeightedCore{P}, case) where {P}
     res = Aeolus.Anelastic.constraint_residual(sim)
     plain = max_divergence(sim)
     return ["the core is the $P MassWeightedSimulation" => sim isa _mass_weighted_type(typeof(c)),
+            "the case runs on cfg.backend" => _on_case_backend(case),
             "the base state is the case's reference state (case.ref.state)" => ref === case.ref.state,
             "θ̄(z) is the initial sounding" => maximum(abs.(ref.θ̄ .- θ0.(0.0, 0.0, zc))) < 1e-10,
             "the base state is in discrete hydrostatic balance (< 1e-8 Pa/m)" =>

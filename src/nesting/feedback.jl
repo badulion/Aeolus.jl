@@ -140,7 +140,12 @@ Refluxing needs a core whose stage structure is known
 ([`nest_stage_weights`](@ref)): `step!` (Boussinesq or sound-proof; one
 stage), `step_rk3!` (weights 1/6, 1/6, 2/3), or a user core that declares
 its weights; the IMEX cores (`step_imex!`, implicit θ diffusion) are
-refused with `reflux = true`. The SGS closure needs a two-point face
+refused with `reflux = true`. A run whose scalars are all booked by their
+transports (`theta_flux` and every `tracer_fluxes` entry with
+`applied_by = :transport`) needs no stage weights: any core runs, as the
+Berlin case's stage loop does (#267). `qv` can be declared in
+`tracer_fluxes` wherever it is a tracer of at least one domain (a moist
+Boussinesq parent around a child that carries `qv` as a tracer). The SGS closure needs a two-point face
 diffusivity. Exact conservation also needs `sponge = nothing` (a sponge is
 a source).
 
@@ -316,32 +321,41 @@ end
 
 function NestFluxRegisters(nest::NestedGrid, parent, child, s::NestInterpState,
                            fb::TwoWayFeedback, ap::DomainAdvance, ac::DomainAdvance)
-    wp = _stage_weights(ap); wc = _stage_weights(ac)
-    (wp === nothing || wc === nothing) &&
-        throw(ArgumentError("TwoWayFeedback: refluxing needs the stage weights of each " *
-                            "domain's core (step!, step_rk3!, or a user core declaring " *
-                            "nest_stage_weights); got parent $(_core_name(ap)), child " *
-                            "$(_core_name(ac)). The IMEX cores are not supported (implicit " *
-                            "θ diffusion). Use TwoWayFeedback(reflux = false)"))
-    _check_register_closure(parent, _sgs_keywords(ap), "parent")
-    _check_register_closure(child, _sgs_keywords(ac), "child")
     names = Symbol[:θ]
     models = NestScalarFlux[fb.theta_flux === nothing ?
                             NestScalarFlux(; molecular = true, sgs = :theta) : fb.theta_flux]
     pf = Field[parent.θ]; cf = Field[child.θ]       # narrowed to concrete types below
     declared = Dict(fb.tracer_fluxes)
     core_qv = _moist(parent)                  # qv is a core prognostic (moist Boussinesq)
-    core_qv && haskey(declared, :qv) &&
+    # qv may be declared where it is a tracer of at least one domain (a moist
+    # parent around a child that carries qv as a tracer, as in Berlin #267)
+    core_qv && _moist(child) && haskey(declared, :qv) &&
         throw(ArgumentError("TwoWayFeedback: qv is transported by the core here (a moist " *
                             "BoussinesqSimulation pair) and booked by the run; declare it in " *
                             "tracer_fluxes only where it is a tracer of the field set"))
     for i in eachindex(s.names)
         n = s.names[i]
-        model = n === :qv && core_qv ? NestScalarFlux(; molecular = true, sgs = :tracer) :
-                get(declared, n, nothing)
+        model = haskey(declared, n) ? declared[n] :
+                n === :qv && core_qv ? NestScalarFlux(; molecular = true, sgs = :tracer) : nothing
         model === nothing && continue
         push!(names, n); push!(models, model)
         push!(pf, s.parent[i]); push!(cf, s.child[i])
+    end
+    # the stage weights are needed only when the cores' hooks book a scalar:
+    # with every scalar booked by its transport (book_nest_flux!) any core runs
+    wp = _stage_weights(ap); wc = _stage_weights(ac)
+    if any(_by_core, models)
+        (wp === nothing || wc === nothing) &&
+            throw(ArgumentError("TwoWayFeedback: refluxing needs the stage weights of each " *
+                                "domain's core (step!, step_rk3!, or a user core declaring " *
+                                "nest_stage_weights); got parent $(_core_name(ap)), child " *
+                                "$(_core_name(ac)). The IMEX cores are not supported (implicit " *
+                                "θ diffusion). Use TwoWayFeedback(reflux = false), or book " *
+                                "every scalar with book_nest_flux! (applied_by = :transport)"))
+        _check_register_closure(parent, _sgs_keywords(ap), "parent")
+        _check_register_closure(child, _sgs_keywords(ac), "child")
+    else
+        wp === nothing && (wp = ()); wc === nothing && (wc = ())
     end
     for k in keys(declared)
         k in s.names || throw(ArgumentError("TwoWayFeedback: tracer :$k is not a scalar of " *
@@ -438,9 +452,9 @@ function (h::_RegisterHook)(sim, Δt)
         r.cstage += 1; st = r.cstage; ws = r.cweights; planes = r.cpend; vplanes = r.cvpend
         fields = r.cfield; kw = r.csgs; scratch = r.cscratch; vst = r.cvstage
     end
+    any(_by_core, r.models) || return nothing
     st <= length(ws) || error("NestFluxRegisters: stage $st of a core with " *
                               "$(length(ws)) stages")
-    any(_by_core, r.models) || return nothing
     w = ws[st] * Float64(Δt)
     closure = _domain_closure(sim, kw)
     f = closure === nothing ? nothing : sgs_fields(closure, sim)
@@ -576,7 +590,7 @@ _register_booker!(sim, r::NestFluxRegisters, which::Symbol, nest::NestedGrid) =
 
 """
     book_nest_flux!(sim, name, ϕ, dt; scheme = nothing, diffusivity = nothing,
-                    velocity = (sim.u, sim.v, sim.w), weights = :sim) -> Bool
+                    velocity = (sim.u, sim.v, sim.w), weights = :sim, sgs = nothing) -> Bool
 
 Book into the flux registers of the two-way [`NestedRun`](@ref) that `sim`
 belongs to (parent or child) the interface flux that a **separate
@@ -595,7 +609,16 @@ with **the state it is about to apply the flux to**, before updating `ϕ`:
   flux `−(ν + s·½(κ_L + κ_R)) ∂ϕ/∂n` (κh on the lateral, κv on the
   vertical planes: cell-centred fields, halos filled), the face form of
   `add_eddy_diffusion_scalar!`. A Lie-split transport that diffuses after
-  advecting calls it a second time with the advected `ϕ`.
+  advecting calls it a second time with the advected `ϕ`;
+* `diffusivity = :theta` or `:tracer` books the diffusive flux **the
+  core** gives the scalar inside its stages — molecular `ν` (when the
+  simulation has viscosity) plus the domain closure's θ diffusivity
+  (`:theta`) or tracer diffusivity (`:tracer`, as for `qv`), the closure
+  being `sgs` or the simulation's own — exactly what the run's hook books
+  for a core-transported scalar. A caller that drives a core itself and
+  books its `θ` and `qv` explicitly (`applied_by = :transport`, the Berlin
+  case, #267) calls it from the core's `body_force!` at every stage with
+  `dt` times the stage weight, with `scheme = :centered`.
 
 Both are formed by the one face kernel
 [`scalar_face_flux`](@ref Aeolus.AdvectionSchemes.scalar_face_flux) and
@@ -612,7 +635,7 @@ unconditionally.
 """
 function book_nest_flux!(sim, name::Symbol, ϕ::Field, dt::Real; scheme = nothing,
                          diffusivity = nothing, velocity = (sim.u, sim.v, sim.w),
-                         weights = :sim)
+                         weights = :sim, sgs = nothing)
     entry = get(_NEST_BOOKERS, sim, nothing)
     entry === nothing && return false
     r, which, nest = entry
@@ -634,7 +657,20 @@ function book_nest_flux!(sim, name::Symbol, ϕ::Field, dt::Real; scheme = nothin
                          u, v, wv)
         end
     end
-    if diffusivity !== nothing
+    if diffusivity isa Symbol
+        diffusivity in (:theta, :tracer) ||
+            throw(ArgumentError("book_nest_flux!: diffusivity = :$diffusivity; use :theta, " *
+                                ":tracer or (ν = …, κh = …, κv = …, scale = …)"))
+        closure = _active_sgs(sim, sgs, nothing)
+        f = closure === nothing ? nothing : sgs_fields(closure, sim)
+        K = _face_diffusivity(NestScalarFlux(; molecular = true, sgs = diffusivity), closure, f,
+                              sim, ϕ, par ? r.pscratch : r.cscratch)
+        ν = sim.has_viscosity ? Float64(sim.ν) : 0.0
+        for s in 1:6
+            r.sides[s] || continue
+            _book_plane!(planes[s], sim, ϕ, nothing, K, ν, W, nest, s, par, w, u, v, wv)
+        end
+    elseif diffusivity !== nothing
         ν = Float64(get(diffusivity, :ν, 0.0))
         κh = get(diffusivity, :κh, nothing); κv = get(diffusivity, :κv, κh)
         (κh === nothing) == (κv === nothing) ||

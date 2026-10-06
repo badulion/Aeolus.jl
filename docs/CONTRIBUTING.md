@@ -410,16 +410,36 @@ check from `test/berlin_*.jl` into module tests and deletes those files
 after the nesting epic (#246) merges. Until then, see the transition
 note in CLAUDE.md.
 
-### No binary dependencies
+### Minimal dependencies
 
-FFTW is the only non-stdlib dependency. NetCDF, PNG/APNG, Mie
-scattering, the error function and Bessel functions are all implemented
-in-package, because the usual binary stack does not build on every
-target platform and a package that fails to load is worse than one that
-is slightly less convenient.
+The maintainer replaced the former "no binary dependencies" rule on
+2026-10-06: "Dependencies are a good thing, no need to reinvent the
+wheel. However, keep them to a minimum."
 
-Do not add a dependency to avoid writing 150 lines. If you genuinely
-need one, raise it on the issue first.
+- **Use a package rather than reimplementing it.** If a well-maintained
+  Julia package does the job, depend on it. Binary (JLL) packages are
+  allowed.
+- **Keep the list short.** Every new dependency is justified in the PR
+  that adds it: what it replaces, why it is worth it, and its load-time
+  cost — `using Aeolus` timed in fresh processes, minimum of three, before
+  and after. A package that pulls a large tree for one function is
+  usually not worth it.
+- **Do not pin versions only to avoid a JLL.** Take the version the
+  resolver picks unless there is a real incompatibility.
+- **Existing in-package implementations stay.** NetCDF writer, PNG/APNG,
+  Mie scattering, the error function and Bessel functions were written
+  under the old rule. They are tested and validated and are not to be
+  churned in passing; replacing one with a package is fine, in a
+  dedicated PR that shows the validation still holds.
+
+Current direct dependencies: FFTW, and KernelAbstractions (admitted
+2026-10-06, #291: "single-node multithreading now, with one kernel path
+for the GPU in Phase 81"). All KernelAbstractions code lives in
+`src/Backends.jl` (`docs/src/design/ka_port.md`). Its tree resolves
+`UnsafeAtomics` 0.4, which brings `LLVM.jl` and the binary
+`LLVMExtra_jll`; the earlier `UnsafeAtomics = "0.3"` pin that kept them
+out was lifted on 2026-10-06 (maintainer: "Allow LLVMExtra_jll"). It
+costs about 37 ms of `using Aeolus` (215 → 252 ms).
 
 ### Look at what you produce
 

@@ -170,3 +170,9 @@ function load_fftw_wisdom!(path::AbstractString)
     st.wisdom_file = abspath(path)
     return true
 end
+
+# `Backends.init_threads!` (KA-a, #294) sets and reports the FFTW thread
+# count through this policy, so there is one place FFTW is configured.
+using ..Backends: Backends
+Backends._set_fftw_threads!(n::Int) = (set_fftw_policy!(threads = n); nothing)
+Backends._fftw_threads() = _fftw_policy!().threads

@@ -14,7 +14,8 @@ makedocs(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical  = "https://badulion.github.io/Aeolus.jl",
         edit_link  = "master",
-        assets     = String[],
+        assets     = [asset("assets/favicon.svg"; class = :ico, islocal = true)],
+        sidebar_sitename = true,
     ),
     pages = [
         "Home"           => "index.md",
@@ -94,6 +95,7 @@ makedocs(
             ],
             "The Berlin parent"           => "design/berlin_parent.md",
             "Checkpoint / restart and FFT planning" => "design/checkpoint_restart.md",
+            "Kernel port (KernelAbstractions)" => "design/ka_port.md",
             "Roadmap"                     => "design/roadmap.md",
             "Long-range roadmap (Eras II–XI)" => "design/longterm_roadmap.md",
         ],

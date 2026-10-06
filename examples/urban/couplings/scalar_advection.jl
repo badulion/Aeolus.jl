@@ -67,6 +67,14 @@
 # (`tracer_bcs`): qv (and the TKE `e`) take the parent's values on the nest
 # faces, the tracers the parent does not carry zero on inflow and their own
 # value on outflow; the `:boundary` term books what that carries.
+#
+# Two-way nest (#267, the M3 wiring of #327): the slot books the interface
+# flux it applies to every tracer of a refluxing two-way nest
+# (`book_nest_flux!`, a no-op otherwise): the advective flux with its own
+# scheme and velocity at the state it advects, before the update, and the
+# SGS diffusive flux with the tracer's κ at the advected state, before the
+# diffusion. Where the positivity limiter scales an interface flux the
+# booking is the unlimited one (a known residual of the slim option).
 
 "Reconstructions `advect_positive!` accepts (the flux limiter needs one)."
 const POSITIVE_SCHEMES = (:centered, :weno5, :weno_js5, :weno_z5, :weno_z7, :teno5, :teno8)
@@ -341,6 +349,9 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
         iswater = t.name in case.ledger.water_tracers
         limited = t.positive && c.positivity
         fill!(c.tend.data, 0)
+        # the two-way nest's flux registers (#267): what this update moves
+        # through the interface planes, at the state it moves it from
+        book_nest_flux!(sim, t.name, q, dt; scheme = c.scheme.name, velocity = (u, v, w))
         if limited
             advect_positive!(c.tend, u, v, w, q, dt;
                              scheme = c.recon, workspace = c.ws, bcs = c.bcs)
@@ -377,8 +388,12 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
         end
         # SGS diffusion with κt (κh, κv of a stability-corrected closure),
         # after the advective update (#177)
-        d === nothing || sgs_diffuse!(d, case, q, dt; water = iswater, κ = tracer_diffusivity(t, case),
-                                      κv = tracer_vertical_diffusivity(t, case))
+        if d !== nothing
+            κ, κv = tracer_diffusivity(t, case), tracer_vertical_diffusivity(t, case)
+            fill_halos!(q, d.bcs)       # the halos sgs_diffuse! diffuses with
+            book_nest_flux!(sim, t.name, q, dt; diffusivity = (κh = κ, κv = κv))
+            sgs_diffuse!(d, case, q, dt; water = iswater, κ = κ, κv = κv)
+        end
     end
     return nothing
 end

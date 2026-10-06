@@ -22,6 +22,7 @@ using Aeolus.Fields: set!, interior_view
 @testset "Aeolus.jl" begin
 
     include("netcdf_io.jl")
+    include("viz_png.jl")        # examples/viz PNG/APNG encoder: DEFLATE + filters round-trip
 
     @testset "RegularGrid" begin
         g = RegularGrid(Float64; size=(8, 4, 2), extent=(1.0, 2.0, 4.0), halo=(2,2,2))
@@ -661,6 +662,9 @@ using Aeolus.Fields: set!, interior_view
         @test_throws Exception allocate(gpu, Float64, (4, 4, 4))
         @test to_host(a) === a || to_host(a) == a
     end
+
+    include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
+    include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
 
     @testset "GLL nodes: endpoints exact, weights sum to 2, symmetry" begin
         for N in (2, 3, 4, 6, 8)

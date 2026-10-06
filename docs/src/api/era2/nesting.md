@@ -9,7 +9,9 @@ time coupling: [`NestedRun`](@ref), the per-domain
 [`domain_advance`](@ref) closures, [`boundary_time`](@ref) and
 [`step_nested!`](@ref) — or, for a caller that advances the child itself
 (the Berlin case, #265), [`begin_parent_step!`](@ref),
-[`subcycle_dt`](@ref) and [`end_parent_step!`](@ref) — and the child's boundary conditions:
+[`subcycle_dt`](@ref) and [`end_parent_step!`](@ref), with each child
+step bracketed by [`begin_child_step!`](@ref) and [`end_child_step!`](@ref)
+in a two-way run (#267) — and the child's boundary conditions:
 [`nest_bcs`](@ref) (`OpenBoundary` nest faces) fed by
 [`NestBoundaryData`](@ref) (the nest parent as a two-snapshot
 [`WindowedBoundaryData`](@ref Aeolus.BoundaryConditions.WindowedBoundaryData)),

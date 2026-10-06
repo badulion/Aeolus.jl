@@ -1,6 +1,9 @@
 <div align="center">
 
-# Aeolus.jl
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/src/assets/aeolus-lockup-dark.svg">
+  <img src="docs/src/assets/aeolus-lockup.svg" alt="Aeolus.jl" width="360">
+</picture>
 
 **A Julia-native large-eddy simulation framework**
 
@@ -31,8 +34,8 @@ building height · resolved vertical velocity at 30 m.</sub>
   solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
   CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
 - **80,661 tests.** 62,000 lines of source, 32,000 lines of tests.
-- **FFTW is the only non-stdlib dependency.** Everything else — NetCDF, PNG,
-  Mie scattering, error and Bessel functions — is written in the package.
+- **Few dependencies** (FFTW, KernelAbstractions). NetCDF, PNG, Mie
+  scattering, error and Bessel functions are written in the package.
 - Single-node CPU. MPI and GPU are planned, not present.
 
 ---
@@ -355,6 +358,7 @@ ends with a validation target. Full plan:
 - [ ] **Era IX** — data assimilation and inverse problems *(74–79)*
 - [ ] **Era X** — performance and scale: MPI, GPU *(80–87)*
 - [ ] **Era XI** — machine learning, applications, ecosystem *(88–100)*
+- [ ] **Era XII** *(future direction)* — kilometre-scale regional and climate modelling *(101–112)*
 
 ---
 
