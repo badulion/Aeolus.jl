@@ -391,41 +391,24 @@ Before adding a function, check whether it already exists under another
 name. A collision scan across all modules takes a minute and has caught
 a real conflict every time it has been run.
 
-### New physics lands in the Berlin example
+### Physics is tested on its own
 
-After Era V, the Berlin run called fewer than half of the physics
-modules in `src/`, several of them for only one or two functions.
-Soil, canopy drag, glazing and the building energy model were wired in.
-Per-facet wall conduction, the surface-exchange contract, photosynthesis,
-snow, water surfaces, tiles, the Era III radiation solvers and most of
-Era IV's microphysics were not.
-Every one of those modules was tested, but on its own. A module that is
-never coupled to the 3-D run hides a whole class of bugs: the Era V
-integration branch found two cross-module defects that no module's own
-tests could see. It also hides the physics from users, who run the
-example, not the unit tests.
+Physics is tested in its own module's tests, with small synthetic setups
+(analytic limits, conservation, published benchmarks). The Berlin run is
+an **example**, not a test harness: coupling new physics into it is
+welcome where it makes sense, but not required, and the example has no
+test suite of its own.
 
-The rule: **a PR that adds or changes physics wires it into the Berlin
-run in the same PR.**
-
-What counts as wired in:
-
-- The run calls the `src/` implementation. A copy in the example does
-  not count, and the example's old version of the same physics is
-  removed (one source of truth applies to examples).
-- It is **on by default**. Alternatives (Kessler, P3, superdroplets)
-  and expensive schemes may sit behind an option or a cadence. The PR
-  then quotes the measured cost per simulated hour. The option must be
-  exercised by the Berlin smoke test (`test/berlin_smoke.jl`), which
-  derives its runs from the coupling registry, and the module must come
-  off the pending list of the coverage test (`test/berlin_coverage.jl`).
-  How to add a coupling, step by step: `docs/src/design/berlin_case.md`.
-- The PR body quotes one diagnostic from the Berlin run showing the
-  coupling does something physical, with its value.
-
-Legitimate exceptions are numerics the solver cannot yet use and
-physics with no meaning in an urban scene. State them in the PR body
-with the reason. Do not skip them silently.
+*History.* From the end of Era V until 2026-10-06 the rule was the
+opposite: every physics PR had to wire its module into the Berlin run,
+enforced by `test/berlin_coverage.jl` (frozen coverage lists) and
+`test/berlin_smoke.jl`. It found real cross-module defects, but the
+Berlin tests grew to about 15 minutes of suite time spent mostly
+rebuilding the Berlin geometry, and they tested `src/` physics
+indirectly. The maintainer dropped the rule; #320 moves every physics
+check from `test/berlin_*.jl` into module tests and deletes those files
+after the nesting epic (#246) merges. Until then, see the transition
+note in CLAUDE.md.
 
 ### No binary dependencies
 
