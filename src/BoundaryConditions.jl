@@ -11,6 +11,7 @@ export NoSlipWall, is_wall, homogeneous_bcs     # P59-a (#172)
 export gradient_free_bcs                         # N-parent-b (#254) + N-open-d (#262)
 export FreeStreamBoundary                        # P59-d (#185)
 export axis_poisson_bc                           # N-open-a (#251)
+export neighbor_index, mark_open_boundary_solids!   # N-open-d (#262)
 export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,   # N-open-b (#255)
        AbstractBoundaryData, ProfileBoundaryData, FunctionBoundaryData,
        boundary_values!, open_boundary_conditions, set_boundary_data!,
@@ -338,5 +339,51 @@ axis_poisson_bc(bc::AbstractBC) =
     throw(ArgumentError("no pressure-Poisson boundary kind is defined for a " *
                         "$(nameof(typeof(bc))) velocity face; define " *
                         "BoundaryConditions.axis_poisson_bc(::$(nameof(typeof(bc))))"))
+
+# =========================================================================
+# The one BC-aware neighbour helper (N-open-d, #262)
+# =========================================================================
+
+"""
+    neighbor_index(mesh, bcs, i, axis; face = false, outside = :mirror) -> Int
+
+The interior index (`1…N` along `axis`, `1` = x, `2` = y, `3` = z) that
+stands for the neighbour index `i` of a stencil, according to the
+boundary conditions `bcs` of that axis:
+
+* inside the domain (`1 ≤ i ≤ N`; with `face = true`, a field staggered
+  along `axis`, `1 ≤ i ≤ N + 1`, whose `N + 1` is the far boundary face)
+  `i` itself;
+* across a [`Periodic`](@ref) axis, the wrapped index `mod1(i, N)`;
+* across any other face (a wall, [`NoFlux`](@ref), an
+  [`OpenBoundary`](@ref)): with `outside = :mirror` the mirror image
+  about the face — the cell-centred zero-gradient neighbour (`0 → 1`,
+  `N + 1 → N`), or for `face = true` the mirror about the boundary face
+  (`0 → 2`, `N + 2 → N`); with `outside = :none` the sentinel `0`
+  ("outside the domain: no neighbour").
+
+This replaces every hard-coded periodic wrap (`mod1(i ± 1, N)`) of code
+that must also run in an open (nested) domain: on a periodic axis it is
+`mod1` bit for bit, and on an open axis a stencil no longer reaches
+across the domain to the opposite face. With `face = true` the index
+`N + 1` of an open face is the boundary-face slot of the normal velocity
+(storage index `H + N + 1`, written by the open boundary), so
+`(u[i] + u[i+1])/2` at `i = N` reads the prescribed boundary value. A
+caller indexing the storage array adds the halo width `H`.
+"""
+function neighbor_index(m, bcs::FieldBoundaryConditions, i::Integer, axis::Integer;
+                        face::Bool = false, outside::Symbol = :mirror)
+    N, lo = axis == 1 ? (m.Nx, bcs.west) : axis == 2 ? (m.Ny, bcs.south) :
+            axis == 3 ? (m.Nz, bcs.bottom) :
+            throw(ArgumentError("neighbor_index: axis must be 1, 2 or 3, got $axis"))
+    lo isa Periodic && return mod1(i, N)
+    hi = face ? N + 1 : N
+    1 <= i <= hi && return Int(i)
+    outside === :none && return 0
+    outside === :mirror ||
+        throw(ArgumentError("neighbor_index: outside must be :mirror or :none, got :$outside"))
+    j = face ? (i < 1 ? 2 - i : 2hi - i) : (i < 1 ? 1 - i : 2N + 1 - i)
+    return clamp(j, 1, hi)
+end
 
 end # module
