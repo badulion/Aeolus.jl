@@ -55,7 +55,14 @@ one-way nest inside the Berlin parent run (see the file header and
 * `mode` — `:one_way` (the only mode here; `:two_way` is N-berlin-twoway, #267);
 * `parent` — a `NamedTuple` of [`ParentConfig`](@ref) keywords (empty:
   the #259 default, 6 km × 6 km × 3 km at refinement (2, 2, 4); the
-  `:smoke` scenario sets the 1 km × 1 km × 500 m parent at (4, 4, 8)).
+  `:smoke` scenario sets the 1 km × 1 km × 500 m parent at (4, 4, 8));
+* `parent_driver` — `:aeolus` (default: the Aeolus parent run), or any
+  `AbstractBoundaryData` (the interface a mesoscale reader of #58 or a
+  reanalysis of #57 implements), which then feeds the same nest faces
+  instead of a parent run (no windows; the tracers keep their mirror
+  halos); `:profile` is the analytic `case_boundary_data` of the case
+  (the geostrophic wind and the initial θ), the smoke variant of this
+  path.
 
 Fields: the parent configuration `pc`, the [`ParentCase`](@ref) `parent`
 and the `NestedRun` `run` (built by `init!`), the open
@@ -66,6 +73,7 @@ zero on inflow), and statistics.
 """
 mutable struct NestingCoupling <: AbstractCoupling
     mode::Symbol
+    driver::Any                   # :aeolus, or the AbstractBoundaryData that replaces the parent
     pc::Any                       # ParentConfig (examples/urban/parent/config.jl)
     parent::Any                   # ParentCase (built by init!)
     run::Any                      # Nesting.NestedRun, or nothing
@@ -81,7 +89,7 @@ end
 
 coupling_name(::Type{<:NestingCoupling}) = :nesting
 modules_used(::Type{<:NestingCoupling}) = (:Nesting, :StretchedGrids, :SurfaceTiles, :LargeScaleForcing)
-default_options(::Type{<:NestingCoupling}) = (mode = :one_way, parent = (;))
+default_options(::Type{<:NestingCoupling}) = (mode = :one_way, parent = (;), parent_driver = :aeolus)
 stages(::Type{<:NestingCoupling}) = ((:nest_parent, 10, EVERY_STEP), (:nest_feedback, 10, EVERY_STEP))
 
 """
@@ -134,9 +142,17 @@ function sim_options(::Type{<:NestingCoupling}, cfg, mesh, o)
     return (bcs = b, θ_bcs = b, sponge_target = (u = zeros(mesh.Nz), v = zeros(mesh.Nz), w = 0.0))
 end
 
-build(::Type{<:NestingCoupling}, case, o) =
-    NestingCoupling(o.mode, nest_parent_config(case.cfg), nothing, nothing, nothing, NaN,
-                    Symbol[], Symbol[], 0, 0.0, 0.0, nothing)
+function build(::Type{<:NestingCoupling}, case, o)
+    d = o.parent_driver
+    driver = d === :aeolus ? :aeolus : d === :profile ? case_boundary_data(case.cfg) :
+             d isa AbstractBoundaryData ? d :
+             error("nesting: parent_driver must be :aeolus, :profile or an AbstractBoundaryData, got $(repr(d))")
+    return NestingCoupling(o.mode, driver, nest_parent_config(case.cfg), nothing, nothing, nothing, NaN,
+                           Symbol[], Symbol[], 0, 0.0, 0.0, nothing)
+end
+
+"Whether the nest's faces are fed by boundary data other than the Aeolus parent (`parent_driver`)."
+external_driver(c::NestingCoupling) = c.driver !== :aeolus
 
 init!(c::NestingCoupling, case) = (ensure_nest!(c, case); nothing)
 # before every other coupling's init!: they initialise from the faces' data
@@ -171,6 +187,20 @@ function ensure_nest!(c::NestingCoupling, case)
     c.run === nothing || return c
     t0 = time_ns()
     sim = case.sim
+    if external_driver(c)
+        # a boundary-data driver in place of the parent (the #58 interface)
+        set_boundary_data!(sim.bcs, c.driver)
+        prepare_open_boundaries!(sim)
+        foreach(f -> fill_halos!(f, sim.bcs), (sim.u, sim.v, sim.w)); fill_halos!(sim.θ, sim.θ_bcs)
+        c.run = c.driver
+        st = sim.sponge_target
+        if st.u isa AbstractVector && c.driver isa ProfileBoundaryData
+            tgt = Aeolus.Simulations.sponge_target(c.driver, case.mesh)
+            st.u .= tgt.u; st.v .= tgt.v
+        end
+        c.wall_build += (time_ns() - t0) * 1e-9
+        return c
+    end
     p = build_parent(c.pc; child = case, io = devnull)
     pm, cm = p.mesh, case.mesh
     off = (round(Int, (cm.x0 - pm.x0) / pm.dx) + 1, round(Int, (cm.y0 - pm.y0) / pm.dy) + 1, 1)
@@ -256,6 +286,7 @@ _fixed_window(c::NestingCoupling, dt) =
 
 function limit_dt(c::NestingCoupling, case, dt)
     ensure_nest!(c, case)
+    external_driver(c) && return dt
     if c.window === nothing
         isnan(c.pending) && (c.pending = parent_dt(c.parent))
         R = c.pending
@@ -268,6 +299,7 @@ end
 
 function run_stage!(c::NestingCoupling, case, ::Val{:nest_parent}, dt)
     ensure_nest!(c, case)
+    external_driver(c) && return nothing
     t = case.sim.t
     if c.window === nothing
         Δt_p = isnan(c.pending) ? _fixed_window(c, dt) : max(c.pending, dt)
@@ -287,6 +319,7 @@ function run_stage!(c::NestingCoupling, case, ::Val{:nest_parent}, dt)
 end
 
 function run_stage!(c::NestingCoupling, case, ::Val{:nest_feedback}, dt)
+    external_driver(c) && return nothing
     w = c.window
     w === nothing && return nothing
     if abs(case.sim.t - w.t_child_end) <= 1e-9 * w.Δt
@@ -298,6 +331,7 @@ end
 
 function report(c::NestingCoupling, case)
     c.run === nothing && return "  nesting: parent not built"
+    external_driver(c) && return "  nesting: faces fed by $(nameof(typeof(c.driver))) (parent_driver)"
     st, ob, t = c.run.stats, case.open, max(case.sim.t, eps())
     return @sprintf("  nesting (one-way): %d parent windows, dt_p %.2f–%.2f s, parent %.1f s wall; boundary heat sides %.2f, top %.2f W/m² (mean), max|δ| %.1e m/s",
                     st.parent_steps + (c.window === nothing ? 0 : 1), st.dt_parent_min, st.dt_parent_max,
@@ -316,6 +350,15 @@ end
 
 function smoke_check(c::NestingCoupling, case)
     c.run === nothing && return ["the nest was built" => false]
+    if external_driver(c)
+        sim = case.sim; m = case.mesh
+        A = 2 * (m.Lx + m.Ly) * m.Lz + m.Lx * m.Ly
+        U = max(maximum(abs, interior_view(sim.u)), maximum(abs, interior_view(sim.v)), 1e-3)
+        return ["parent_driver: the nest faces carry the driver's data" =>
+                    all(st -> st.data === c.driver, open_boundary_states(sim)),
+                "child: net boundary volume flux after the correction ≤ 1e-12 U A" =>
+                    abs(open_boundary_ledger(sim).residual) <= 1e-12 * U * A]
+    end
     sim, p, run = case.sim, c.parent, c.run
     m = case.mesh
     A = 2 * (m.Lx + m.Ly) * m.Lz + m.Lx * m.Ly
@@ -359,6 +402,8 @@ end
 # The outflow options of the nest faces (N-open-c, #260); every coupling on.
 smoke_variants(::Type{<:NestingCoupling}) =
     ((label = "convective outflow", outflow = :convective),
+     (label = "parent_driver: analytic boundary data in place of the parent (the #58 interface)",
+      options = Dict(:nesting => (parent_driver = :profile,))),
      (label = "nest off: the periodic box", physics = Dict(:nesting => false)))
 
 register!(NestingCoupling)
