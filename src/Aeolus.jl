@@ -247,6 +247,8 @@ export RunConfig, ConfigError, load_run_config, with, to_toml, write_config, con
 # CFG-b (#357): the driver contract, run_config, the bare-simulation driver.
 # `Aeolus.main` (the `julia -m Aeolus` entry point) is not exported.
 export AbstractRunDriver, run_config, state_fields
+# CFG-e (#360): sweeps; the example scripts run their configs with run_configs
+export run_configs, load_sweep
 # #334: run folder and provenance
 export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
        provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,

@@ -29,13 +29,22 @@ bitwise_equal(a::AbstractArray{Float64}, b::AbstractArray{Float64}) =
     diagnostics_without_wall(path) -> Vector{String}
 
 The lines of a `diagnostics.csv` with the wall-clock columns (header
-`wall …`) removed.
+`wall …`) removed; none for a run without a run monitor (a harness
+driver of CFG-e writes no diagnostics.csv).
 """
 function diagnostics_without_wall(path::AbstractString)
+    isfile(path) || return String[]
     lines = readlines(path)
     isempty(lines) && return lines
     keep = findall(h -> !startswith(h, "wall"), split(lines[1], ','))
     return [join(split(l, ',')[keep], ',') for l in lines]
+end
+
+"The text of a run's `output/results.toml` (CFG-e drivers) without its `wall_time` lines; `\"\"` if there is none."
+function _results_text(rf)
+    p = joinpath(rf.path, "output", "results.toml")
+    isfile(p) || return ""
+    return join(filter(l -> !occursin("wall", l), readlines(p)), "\n")
 end
 
 "The `[stepper]` overrides of the simulation driver for a run of `n` steps."
@@ -50,24 +59,29 @@ Run `config_path` through [`run_config`](@ref Aeolus.Config.run_config)
 into the run root `root`, then load that run's `run.toml` and run it
 again (a new run, a new folder). `overrides` (plus
 `nsteps_overrides(nsteps)` when `nsteps` is given, and `fftw.planner =
-"estimate"`) apply to the first run only: the second run takes
+"estimate"`) apply to the first run only; `member` picks one member of a
+sweep file (index or label): the second run takes
 everything from the record. Returns
 
   * `fields_equal`: every array of `state_fields` is bitwise equal
     (`fields_differing` names the ones that are not);
   * `diagnostics_equal`: the two `diagnostics.csv` are byte-equal outside
     the wall-clock column;
+  * `results_equal`: the two `output/results.toml` (a CFG-e driver's
+    recorded results) are identical outside the wall-clock lines;
   * `config_equal`: the two `[config]` tables of `run.toml` are identical
     (and so are the `config_hash`es);
   * `runs`: the two [`RunResult`](@ref Aeolus.Config.RunResult)s.
 """
 function roundtrip_check(config_path::AbstractString; nsteps = nothing, overrides = String[],
-                         nsteps_overrides = simulation_nsteps, root = mktempdir())
+                         nsteps_overrides = simulation_nsteps, root = mktempdir(), member = nothing)
     ovr = String[overrides...]
     nsteps === nothing || append!(ovr, nsteps_overrides(nsteps))
     push!(ovr, "fftw.planner=\"estimate\"")
     kw = (; root = root, console = false, repo = mktempdir())    # outside any git tree
-    cfg1 = load_run_config(config_path; overrides = ovr)
+    # a sweep file (CFG-e): one member, given by index or label
+    cfg1 = member === nothing ? load_run_config(config_path; overrides = ovr) :
+           only(load_sweep(config_path; overrides = ovr, member = member))[2]
     r1 = run_config(cfg1; kw...)
     cfg2 = load_run_config(r1.folder.path)
     r2 = run_config(cfg2; kw...)
@@ -79,6 +93,7 @@ function roundtrip_check(config_path::AbstractString; nsteps = nothing, override
     return (fields_equal = isempty(differing), fields_differing = differing,
             diagnostics_equal = diagnostics_without_wall(diagnostics_path(r1.folder)) ==
                                 diagnostics_without_wall(diagnostics_path(r2.folder)),
+            results_equal = _results_text(r1.folder) == _results_text(r2.folder),
             config_equal = rec1["config"] == rec2["config"] && rec1["config_hash"] == rec2["config_hash"],
             runs = (r1, r2))
 end

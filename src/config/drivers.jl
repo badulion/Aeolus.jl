@@ -105,7 +105,10 @@ for `name`. Physics stays in `examples/`; nothing is moved into `src/`
 for the CLI's sake. The migrations of the example drivers (#311) add
 their entries here.
 """
-const DRIVER_FILES = Dict{String,String}()
+const DRIVER_FILES = Dict{String,String}(
+    # CFG-e (#360): the validation drivers and the remaining example scripts
+    "channel" => "examples/validation/channel_driver.jl",
+)
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))
 
@@ -203,4 +206,41 @@ function run_config(cfg::RunConfig; root = nothing, resume = nothing,
     end
     IO.finish_run!(rf)
     return RunResult(rf, obj)
+end
+
+# ---------------------------------------------------------------------------
+# helpers for drivers (CFG-e, #360)
+# ---------------------------------------------------------------------------
+
+"""
+    write_results(rf::RunFolder, data::AbstractDict; name = "results.toml") -> String
+
+Write a driver's results (numbers, strings, vectors of numbers, nested
+tables) as TOML into the run folder's `output/` (or `[output] path`) and
+return the file's path. The example drivers record what their scripts
+analyse this way, so a finished run folder holds its numbers.
+"""
+function write_results(rf::RunFolder, data::AbstractDict; name::AbstractString = "results.toml",
+                       dir = nothing)
+    d = dir === nothing ? IO.output_dir(rf) : mkpath(dir)
+    path = joinpath(d, name)
+    open(path, "w") do io
+        _emit_table(io, Dict{String,Any}(String(string(k)) => _toml_out(v) for (k, v) in data), String[])
+    end
+    return path
+end
+
+"""
+    no_checkpoints(cfg) -> Vector{ConfigError}
+
+A cross-field check for drivers whose runs cannot be checkpointed (a
+harness that runs to the end in one call): `[checkpoint]` must be off, so
+that a requested checkpoint is an error rather than silently ignored.
+"""
+function no_checkpoints(cfg)
+    c = cfg.checkpoint
+    (c.every_steps == 0 && c.every_seconds == Inf) && return ConfigError[]
+    return [ConfigError("checkpoint.every_steps",
+                        "the \"$(cfg.run.driver)\" driver runs to the end in one call and writes no checkpoints; " *
+                        "leave [checkpoint] off")]
 end

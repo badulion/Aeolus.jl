@@ -342,7 +342,7 @@ function _finish(sch::ConfigSchema, values, vorig, sources)
                     vorig, sources, _nonreplayable(values))
     probs = ConfigProblem[]
     for f in sch.checks
-        for e in f(cfg)
+        for e in Base.invokelatest(f, cfg)     # an example driver may have been loaded just now
             for p in (e isa ConfigError ? e.problems : [ConfigProblem("", "", string(e))])
                 push!(probs, isempty(p.file) ? ConfigProblem(p.key, get(vorig, p.key, ""), p.message) : p)
             end
