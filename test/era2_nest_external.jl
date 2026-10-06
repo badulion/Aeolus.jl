@@ -61,7 +61,10 @@ function _nx_window!(run, adv, Δt_p, h_lim; each = h -> nothing)
     n = 0
     while w.t_child_end - c.t > 1e-9 * Δt_p
         h = subcycle_dt(w.t_child_end - c.t, h_lim)
-        adv(c, h)
+        # the child-step bracket: a refluxing two-way run books the step
+        hook = begin_child_step!(run)
+        adv(c, h; body_force! = hook)
+        end_child_step!(run)
         each(h)
         n += 1
     end
