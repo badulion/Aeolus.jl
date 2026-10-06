@@ -1053,7 +1053,8 @@ export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow, rewind_open_boundar
 # generic, already exported.
 export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
-       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
+       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!,
+       ReferenceDamping, damping_tendency
 
 # P57-e (#190): the dynamic roughness of partially resolved relief
 # (Anderson & Meneveau 2011). `surface_gradient_drag` does not collide

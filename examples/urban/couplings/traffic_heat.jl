@@ -6,7 +6,9 @@
 
 Vehicle heat: a constant `Q_urban` W m⁻² of urban area (`n_cells`
 columns), released into the first air layer over the `road` cells
-(streets and the building-adjacent cells). The default 8.0 W m⁻² is the
+(streets and the building-adjacent cells). `ρcp` (J m⁻³ K⁻¹) is the heat
+that raises θ of that layer by 1 K, ``ρ̄_1 c_p Π̄_1`` in the case
+([`ref_θ_per_heat`](@ref)). The default 8.0 W m⁻² is the
 traffic heat Bueno et al. (2012, Geosci. Model Dev. 5, 433, Table 3)
 prescribe for the Toulouse centre (their Table 4 uses the same value for
 Athens); the tables give no source for it, and it is not a Berlin
@@ -49,6 +51,6 @@ end
 
 run_stage!(c::TrafficHeat, case, ::Val{:anthropogenic}, dt) =
     add_traffic_heat!(case.sim, c.road, length(case.geom.sfc), dt; Q_urban = c.Q_urban,
-                      ρcp = ref_ρcp(case, 1))
+                      ρcp = 1 / ref_θ_per_heat(case, 1))
 
 register!(TrafficHeat)

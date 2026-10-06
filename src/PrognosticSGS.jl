@@ -54,7 +54,7 @@ module PrognosticSGS
 
 using ..Grids: RegularGrid, CellCenter, interior
 using ..Fields: Field, interior_view, mesh
-using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!
+using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, gradient_free_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
                    buoyancy_frequency_squared!, SymmetricTensorField
 import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_state!
@@ -304,7 +304,7 @@ function _stratification!(c, sim)
         if q === nothing
             buoyancy_frequency_squared!(c.N2, sim.θ; θ₀ = θ₀, g = g)
         else
-            fill_halos!(q, sim.θ_bcs)
+            fill_halos!(q, gradient_free_bcs(sim.θ_bcs))   # qv: not θ's top gradient (#254)
             buoyancy_frequency_squared!(c.N2, sim.θ, q; θ₀ = θ₀, g = g)
         end
     else
@@ -554,7 +554,7 @@ function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     dual_strain!(c.D, sim.u, sim.v, sim.w, bcs)
     fill!(c.tend.data, 0)
     if c.transport
-        ebcs = sim.θ_bcs
+        ebcs = gradient_free_bcs(sim.θ_bcs)     # e: not θ's top gradient (#254)
         fill_halos!(c.e, ebcs)
         advect_positive!(c.tend, sim.u, sim.v, sim.w, c.e, Δt;
                          scheme = c.advection, workspace = c.ws, bcs = ebcs)
@@ -708,9 +708,10 @@ function tke_budget(c::TKEClosure{T}, sim) where {T}
     tr = zero(T)
     if c.transport
         fill!(c.tend.data, 0)
-        fill_halos!(c.e, sim.θ_bcs)
+        ebcs = gradient_free_bcs(sim.θ_bcs)
+        fill_halos!(c.e, ebcs)
         advect_positive!(c.tend, sim.u, sim.v, sim.w, c.e, one(T);
-                         scheme = c.advection, workspace = c.ws, bcs = sim.θ_bcs)
+                         scheme = c.advection, workspace = c.ws, bcs = ebcs)
         c.K2.data .= 2 .* c.ν.data
         add_eddy_diffusion_scalar!(c.tend, c.e, c.K2; mask = c.mask)
         tr = sum(interior_view(c.tend)) * V

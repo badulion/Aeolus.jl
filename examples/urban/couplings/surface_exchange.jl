@@ -56,11 +56,15 @@ Slot `:surface_exchange`, provider `:most` (default).
   fluxes only up to that end, and the time beyond it is delivered with
   the next surface step's fluxes, which cover it (`dt ≤ period` is
   assumed; the adaptive stepper caps `dt` at the shortest cadence).
-* **Air side**, every step in `:surface_flux`: ``Δθ = H\\,τ/(ρ_k c_p Δz)``,
-  ``Δq_v = E\\,τ/(ρ_k Δz)`` in the first air cell, `τ` the air time this
-  step delivers (``τ = Δt`` with a fixed step), with ``ρ_k`` the
-  reference density ``\\bar ρ_k`` of that level (`case.ref`, the density
-  the ledger integrates with) and ``c_p`` the moist heat capacity of that air.
+* **Air side**, every step in `:surface_flux`:
+  ``Δθ = H\\,τ/(\\bar ρ_k c_p \\bar Π_k Δz)`` (`ref_θ_per_heat`),
+  ``Δq_v = E\\,τ/(\\bar ρ_k Δz)`` in the first air cell, `τ` the air time
+  this step delivers (``τ = Δt`` with a fixed step), with ``\\bar ρ_k`` and
+  ``\\bar Π_k`` the reference density and Exner function of that level
+  (`case.ref`, the state the ledgers integrate with) and ``c_p`` the moist
+  heat capacity of that air. The air-heat ledger weights θ with the dry
+  ``c_{pd}``, so it books this heating as ``H τ\\, c_{pd}/c_p``, about
+  0.8 % below ``H τ`` at ``q_v ≈ 0.01``.
 * **Momentum**, every step in `:post_predictor` (after the IBM): the
   ground is a wall of `Aeolus.WallModels`. Every surface step sets, per
   column, a `MOSTWallLaw` with the column's `z0m` and the Obukhov
@@ -542,7 +546,7 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
         k = bus.k_air[I]
         sm.mask[Hx+i, Hy+j, Hz+k] && (nsolid += 1)
         ρk = ref_density(case, k)
-        θ[i, j, k] += bus.H[I] * τ / (ρk * c.cp[I] * dz)
+        θ[i, j, k] += bus.H[I] * τ / dz * ref_θ_per_heat(case, k; cp = c.cp[I])
         qv[i, j, k] += bus.E[I] * τ / (ρk * dz)
         evap += bus.E[I] * τ
     end
