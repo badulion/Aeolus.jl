@@ -216,13 +216,25 @@ end
         # exchange at z_k - d (k the first level above the roofs) with
         # Macdonald's z0, the child's surfaces at Δz/2 with their own,
         # under the same air state; MOST transfer then differs with height
-        # and stability. Measured: H +2.8 % at 13:00, +3.8 % over 06-18 h.
-        @test abs(dH13) < 0.05
+        # and stability. These bounds are margins on a model difference,
+        # not a physical law, and they depend on the forcing's timing:
+        # #249 measured H +2.8 % at 13:00, +3.8 % over 06-18 h and LE
+        # +4.7 % over 06-18 h with the case sun running 2 h early (local
+        # hour used as UTC). With the sun on UTC (#259) solar noon moves
+        # from 11:05 to 13:05 CEST, against the synthetic air temperature
+        # that peaks at 15:00, and the same comparison measures H +5.97 %
+        # at 13:00, +3.08 % over 06-18 h, LE +11.55 % over 06-18 h (the
+        # date, 2019-06-29 vs 2024-06-20, changes these by < 0.6 points;
+        # the ground pressure of the sounding by < 0.02). The old 5 % and
+        # 10 % margins were set on the wrong sun; re-measured, not a code
+        # error. The control above still agrees to 4e-12 W m⁻².
+        @test abs(dH13) < 0.08
         @test abs(dHd) < 0.05
-        # LE over 06-18 h, measured +4.7 %. At 13:00 the child's street and
-        # park soils are at their dry limit and the parent's later (−21 %
-        # at that instant), so LE at one instant is not asserted.
-        @test abs(dLEd) < 0.10
+        # LE over 06-18 h. At one instant around noon the child's street
+        # and park soils hit their dry limit at a different time from the
+        # parent's (−21 % or +893 % at 13:00, depending on the sun), so LE
+        # at one instant is not asserted.
+        @test abs(dLEd) < 0.15
     end
 
     @testset "5. energy closure per tile, 24 h" begin

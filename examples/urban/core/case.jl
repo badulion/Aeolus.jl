@@ -85,9 +85,17 @@ case_weekday(cfg::CaseConfig) =
 """
     solar_position_at(cfg, hour) -> SolarPosition
 
-The sun at local clock `hour` of `cfg.date` over the case anchor.
+The sun at local clock `hour` of `cfg.date` over the case anchor. The
+solar-position algorithm (`SolarGeometry.solar_time`) takes UTC, so the
+local clock is converted with `cfg.utc_offset` (local = UTC + offset; 2 h
+in summer, CEST). Before #259 the local hour was passed as UTC and the sun
+of the case ran `utc_offset` hours early (solar noon at 11:07 CEST instead
+of 13:07 on 29 June 2019). A local hour before `utc_offset` is a UTC hour
+of the previous day (a negative hour of `cfg.date`; the Julian day handles
+it).
 """
 function solar_position_at(cfg::CaseConfig, hour::Real)
+    hour = hour - cfg.utc_offset
     hh = floor(Int, hour)
     mi = floor(Int, (hour - hh) * 60)
     se = (hour - hh - mi / 60) * 3600

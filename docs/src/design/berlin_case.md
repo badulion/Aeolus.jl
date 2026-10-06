@@ -1632,10 +1632,11 @@ The nest (#246) puts the 1 km child inside a 6 × 6 km Aeolus parent
 with Δx = 31.25 m and Δz = 25 m. At that resolution the buildings are
 not resolved: the parent sees Berlin as a heterogeneous surface. Its
 surface is `examples/urban/parent/surface.jl`, a tiled mosaic
-(`Aeolus.SurfaceTiles`, Avissar & Pielke 1989) per parent column. It is
-not coupled to a 3-D run yet. The parent case (N-parent-e, #259) builds
-it, and the nest (N-berlin-nest, #265) makes it the default; that is
-where `:SurfaceTiles` leaves `BERLIN_PENDING`.
+(`Aeolus.SurfaceTiles`, Avissar & Pielke 1989) per parent column. The
+parent case (N-parent-e, #259; [The Berlin parent](berlin_parent.md))
+couples it to the 3-D parent run under the parent's own air and radiation;
+the nest (N-berlin-nest, #265) makes the parent the default of the Berlin
+run, and that is where `:SurfaceTiles` leaves `BERLIN_PENDING`.
 
 ![Berlin parent surface](../assets/berlin/parent_surface.svg)
 
@@ -1688,7 +1689,9 @@ forced once at z_k − d̄.
 
 **Measured** (`test/berlin_parent_surface.jl`, synthetic clear-sky
 forcing `parent_offline_forcing`: Bird SW and Brutsaert LW for 20 June,
-T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s):
+T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s; as
+measured by #249, with the case sun still 2 h early — the values on the
+corrected UTC sun of #259 and the 2019-06-29 case date follow the table):
 
 | quantity | value |
 | :-- | :-- |
@@ -1700,6 +1703,12 @@ T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s):
 | footprint-mean LE − child area-mean LE, 06–18 h (13:00) | +4.7 % (−21 %) |
 | tile closure, 1825 tiles, 24 h: Rn − H − LE − G; ΔE/Δt − mean G | 1.1e-13; 6.9e-11 W m⁻² |
 | mixed street/park column, 13:00: mosaic vs parameter-aggregated | H 191 vs 117, LE 211 vs 644 W m⁻² |
+
+With the sun on UTC (#259; solar noon at 13:05 instead of 11:05 CEST,
+against the synthetic air temperature that peaks at 15:00) the footprint
+comparison measures H +5.97 % at 13:00 and +3.08 % over 06–18 h, LE
++11.55 % over 06–18 h (+4.4 % at 13:00). The date change to 2019-06-29
+moves these by less than 0.6 points.
 
 The issue's target for the footprint mean was 2 %. That holds only for
 the control. The parent proper and the child see the same air state at
@@ -1785,8 +1794,27 @@ Two couplings put the Era III radiation stack into the case. Both run at
 the `:radiation` cadence, around the radiosity solve.
 
 **`column_radiation`** (slot `:column_radiation`, provider `:twostream`,
-the only one; it replaced `cooling_prescribed`). At order 5, before
-the radiosity:
+the only one; it replaced `cooling_prescribed`). Since #259 the coupling
+is factored into three functions that the nesting parent calls as well
+(one radiation for both domains): `column_radiation_solver(Nz, p_surf)`
+builds the optics and solvers, `stitched_column(c, θ, qv, ql, dz; T_rad)`
+the column of a model's mean profiles on layers of thickness `dz` (a
+vector, so the parent's stretched levels fit), and
+`column_radiation!(c, col, sun, ε, α)` the solve and the heating profile;
+the coupling's `:radiation` stage only gathers the child's inputs and
+sets the bus (bit for bit the former stage).
+
+**The sun** of every radiation coupling is `solar_position_at(cfg, hour)`
+at the local clock hour. `SolarGeometry.solar_time` takes UTC; before #259
+the local hour was passed to it unconverted, so the case's sun ran
+`utc_offset` hours early (2 h in summer: solar noon at 11:07 CEST instead
+of 13:07 on 29 June 2019, the 07:00 sun at the elevation of 09:00). The
+local clock is now converted with `cfg.utc_offset` (sun elevation 8.5° at
+06:00 CEST, maximum 60.7° at 13:06, sunrise 04:50, sunset 21:30). Flagship
+numbers measured before #259 (the diurnal tables of this page) carry the
+early sun.
+
+At order 5, before the radiosity:
 
 1. the mean over the fluid cells of θ, qv and ql on every LES level
    becomes a hydrostatic column (`column_from_profiles`, surface

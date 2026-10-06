@@ -997,6 +997,7 @@ end
     include("era6_apriori_sgs.jl")       # Phase 56  a-priori SGS stress, filtered-DNS fixture (#178)
     include("era6_transition_kh.jl")       # Phase 59 Transition diagnostics, KH / Miles-Howard (#180)
     include("era6_tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
+    include("era6_tke_stretched.jl")     # N-parent-e: the TKE closure on a StretchedGrid, dual on stretched levels (#259)
     include("era6_tke_facades.jl")       # #232: TKE shear production at wall-modelled facades
     include("era6_reynolds_stress.jl")   # P56-d: differential SGS Reynolds-stress closure (#188)
     include("era6_sgs_validation.jl")    # P56-e: TKE and RSM against filtered DNS (#192)
@@ -1034,4 +1035,6 @@ end
     include("berlin_numerics.jl")        # pressure solver, SGS, advection slots (#132)
     include("berlin_dynamics.jl")        # core / timestepper slots: anelastic, adaptive, IMEX (#133)
     include("berlin_parent_surface.jl")  # parent tiled surface: OSM 6 km mosaic, Macdonald roughness, footprint (#249)
+    include("berlin_parent_smoke.jl")    # parent case: every forcing, 12 steps, heat and water ledgers close (#259)
+    include("berlin_parent.jl")          # parent case: encroachment, Wangara, core sensitivity (24 h Lindenberg: examples/urban/berlin_parent_lindenberg_check.jl, #315) (#259)
 end

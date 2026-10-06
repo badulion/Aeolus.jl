@@ -188,6 +188,43 @@ layer in equilibrium (``ν_tS = u_*^2``, ``ν_tS^2 = ε``); the energy this
 sets is booked (`surface_energy`). The Berlin case takes ``u_*`` from its
 MOST surface exchange (`bus.u_star`).
 
+## On a stretched vertical grid (#259)
+
+The Berlin nesting parent runs this closure on a `StretchedGrid` (25 m
+levels to 500 m, then growing by 1.08 per level to 100 m). Four things
+change, each tested in `test/era6_tke_stretched.jl`:
+
+* **Filter width.** ``Δ_k = (Δx\,Δy\,Δz_k)^{1/3}`` per level, ``Δz_k`` the
+  cell thickness — the width the core's Smagorinsky uses there (Deardorff
+  1970). ``l``, ``c_ε``, ``κ_t = (1 + 2l/Δ_k)ν_t`` all take the local value.
+* **Shear production.** The stretched Laplacian momentum operator
+  differences the vertical fluxes of ``u, v`` over the centre spacing
+  ``Δz_f`` and divides by the cell thickness ``Δz_c`` (``w`` the other way
+  round). The duality is volume-weighted, ``Σ_c ν_c D_c V_c = −Σ_p u_p T_p V_p``,
+  so each flux's share is accumulated per unit horizontal area (multiplied
+  by the control-volume height of its velocity point), folded onto the
+  interior as on the uniform grid, and divided by ``Δz_c`` of the receiving
+  cell. Measured: the identity holds to 2.2e-16 for random fields on a
+  1.08-stretched grid. For ``u = Sz``, ``D = S^2 (z_{k+1} − z_{k−1})/(2Δz_k)``
+  (to 2.7e-15): exactly ``S^2`` on the uniform levels, ``S^2(1 + 1.5\times10^{-3})``
+  on the geometric part, +1.7 % in the last uniform cell under the first
+  stretched one.
+* **Buoyancy production.** ``N^2`` is the difference of the two face values
+  over the cell thickness, ``(θ_{k+1} − θ_{k−1})/(2Δz_c)``, the per-cell share
+  of the stretched κ_t operator's potential-energy change: ``Σ(−κN^2)V``
+  equals ``(g/θ_0)Σ z\,T_θ V`` to 4.0e-15. For a linear θ it carries the
+  same 1.5e-3 / 1.7 % factor as ``D``.
+* **Transport.** `AdvectionSchemes.advect_positive!` now runs on a
+  `StretchedGrid` with the centred reconstruction (the vertical flux
+  difference over ``Δz_c``), flux-limited toward first-order upwind so that
+  ``e`` stays positive; the WENO / TENO stencils assume uniform spacing and
+  raise an `ArgumentError` there. A 30-step stretched CBL books no clip
+  (the plain centred flux form needed 370).
+
+A `:uniform` `StretchedGrid` reproduces the `RegularGrid` closure (``e`` to
+8.5e-17 relative after 20 convective steps without transport). A solid
+mask is not supported on a stretched grid.
+
 ## Validation (`test/era6_tke.jl`, measured)
 
 | test | result |

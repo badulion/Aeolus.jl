@@ -23,18 +23,18 @@
 # replaces it.
 
 """
-    θ_top_gradient(cfg) -> K/m
+    θ_top_gradient(cfg; H = cfg.extent[3], dz = H / cfg.size[3]) -> K/m
 
 ∂θ/∂z of the initial profile [`initial_θ`](@ref) of `cfg` at the top face,
 as the centred difference across it, `(θ(z_top + Δz/2) − θ(z_top − Δz/2))/Δz`,
 the difference the ghost cell of a `FluxBC` top reproduces (exact for the
 piecewise-linear profile of the case when the inversion is below the top
-level).
+level). `H` and `dz` (the top and the thickness of the top cell) default
+to the child's grid; the nesting parent (#259) passes its own 3 km top
+and top-cell thickness.
 """
-function θ_top_gradient(cfg::CaseConfig)
+function θ_top_gradient(cfg::CaseConfig; H::Real = cfg.extent[3], dz::Real = H / cfg.size[3])
     θi = initial_θ(cfg)
-    H = cfg.extent[3]
-    dz = H / cfg.size[3]
     return (θi(0.0, 0.0, H + dz / 2) - θi(0.0, 0.0, H - dz / 2)) / dz
 end
 
