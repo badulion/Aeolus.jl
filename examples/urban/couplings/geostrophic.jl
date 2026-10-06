@@ -109,15 +109,18 @@ function _level_mean(U, sim, t, dt)
     return sum(forcing_mean(U, m.z0 + (k - 0.5) * m.dz, t, t + dt) for k in 1:m.Nz) / m.Nz
 end
 
+# the interior mean of a field, in the canonical, thread-invariant order (KA-b, #296)
+_imean(f) = interior_sum(f) / length(interior_view(f))
+
 function run_stage!(c::GeostrophicCoupling, case, ::Val{:body_force}, dt)
     sim = case.sim
     if c.forcing isa GeostrophicPressureGradient
         c.U_g = _level_mean(c.forcing.U_g, sim, sim.t, dt)
         c.V_g = _level_mean(c.forcing.V_g, sim, sim.t, dt)
     end
-    tu0, tv0 = mean(interior_view(sim.tu)), mean(interior_view(sim.tv))
+    tu0, tv0 = _imean(sim.tu), _imean(sim.tv)
     apply_forcing!(sim, c.forcing, sim.t, dt)
-    tu1, tv1 = mean(interior_view(sim.tu)), mean(interior_view(sim.tv))
+    tu1, tv1 = _imean(sim.tu), _imean(sim.tv)
     c.dtu, c.dtv = tu1 - tu0, tv1 - tv0
     if c.sponge_ref
         # −α(z)(0 − U_g) = +α(z) U_g: with the core's −α(z) u, the sponge
@@ -125,10 +128,10 @@ function run_stage!(c::GeostrophicCoupling, case, ::Val{:body_force}, dt)
         z_top = sim.mesh.z0 + sim.mesh.Lz
         add_sponge!(sim.tu, c.zero_u, sim.sponge_α_max, sim.sponge_z_start, z_top; f_ref = c.U_g)
         add_sponge!(sim.tv, c.zero_v, sim.sponge_α_max, sim.sponge_z_start, z_top; f_ref = c.V_g)
-        c.dtu_sp = mean(interior_view(sim.tu)) - tu1
-        c.dtv_sp = mean(interior_view(sim.tv)) - tv1
+        c.dtu_sp = _imean(sim.tu) - tu1
+        c.dtv_sp = _imean(sim.tv) - tv1
     end
-    c.ū, c.v̄ = mean(interior_view(sim.u)), mean(interior_view(sim.v))
+    c.ū, c.v̄ = _imean(sim.u), _imean(sim.v)
     return nothing
 end
 

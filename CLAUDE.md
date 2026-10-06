@@ -164,8 +164,8 @@ than reimplementing it; binary (JLL) packages are allowed. Keep the
 dependency list short: every new dependency is justified in its PR —
 what it replaces, why it is worth it, and its load-time cost (`using
 Aeolus`, min of 3 fresh processes, before and after). Do not pin versions
-only to avoid a JLL. The existing in-package implementations (NetCDF
-writer, PNG, Mie, error and Bessel functions) stay as they are, but may
+only to avoid a JLL. The existing in-package implementations (PNG,
+Mie, error and Bessel functions) stay as they are, but may
 be replaced by a package in a dedicated PR. Details:
 `docs/CONTRIBUTING.md`.
 

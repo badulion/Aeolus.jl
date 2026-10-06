@@ -145,8 +145,8 @@ end
 # The parent mosaic over the child's footprint, against the child
 # ---------------------------------------------------------------------------
 
-PCFG = BCP.CaseConfig(; verbose = false, output_path = nothing)
-PCASE = BCP.build_case(PCFG; io = devnull)
+PCFG = BCP.CaseConfig(; output_path = nothing)
+PCASE = BCP.build_case(PCFG)
 PL = BCP.read_parent_landuse()
 PFP = BCP.child_footprint(PL, PCFG)
 

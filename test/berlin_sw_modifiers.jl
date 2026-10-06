@@ -18,8 +18,8 @@ isdefined(Main, :BerlinCase) ||
 const BC = Main.BerlinCase
 
 @testset "Berlin: shortwave modifiers and radiosity class map (#128)" begin
-    cfg = BC.CaseConfig(:smoke; verbose = false, output_path = nothing)
-    case = BC.build_case(cfg; io = devnull)
+    cfg = BC.CaseConfig(:smoke; output_path = nothing)
+    case = BC.build_case(cfg)
     g = case.geom
     sw_mod = BC.find_coupling(case, :sw_modifiers)
     @test sw_mod !== nothing

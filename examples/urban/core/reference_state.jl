@@ -211,6 +211,20 @@ end
 "Reference pressure (Pa) at the centre of level `k`, or the whole profile."
 ref_pressure(case, k::Integer) = case.ref.p̄[k]
 ref_pressure(case) = case.ref.p̄
+"""
+    ref_pressure_storage(case) -> Vector
+
+The reference pressure indexed by the storage level `k` of the case mesh
+(length `Nz + 2Hz`, the halos take the nearest interior level): the `p`
+of the closures' cloudy-air ``N^2`` (`qc`/`p` keywords, #239), which
+evaluate the saturated ``N^2`` at ``(θ, p̄_k)``, the pressure fog is
+adjusted at.
+"""
+function ref_pressure_storage(case)
+    m = case.mesh
+    return [case.ref.p̄[clamp(k - m.Hz, 1, m.Nz)] for k in 1:m.Nz + 2m.Hz]
+end
+
 "Reference density (kg m⁻³) at the centre of level `k`, or the whole profile."
 ref_density(case, k::Integer) = case.ref.ρ̄[k]
 ref_density(case) = case.ref.ρ̄

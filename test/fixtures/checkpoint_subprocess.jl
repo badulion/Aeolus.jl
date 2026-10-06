@@ -46,7 +46,7 @@ serialize(joinpath(dir, "estimate_$(role).jls"), record(sim, c))
 
 # 2. PATIENT through a CheckpointSchedule in the run folder dir/run
 set_fftw_policy!(; planner = :patient)
-ck = CheckpointSchedule(joinpath(dir, "run"); every_steps = 1000, keep = 1, verbose = false)
+ck = CheckpointSchedule(joinpath(dir, "run"); every_steps = 1000, keep = 1)
 sim, c = sub_sim()
 st = StepperState(:rk3)
 d = resume!(ck, sim; sgs = c, stepper = st)

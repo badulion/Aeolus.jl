@@ -450,16 +450,16 @@ function init!(c::SurfaceExchangeMOST, case)
         c.tble === nothing || (c.tble.z0[I] = roughness_lengths(s).z0m)
     end
     c.dynamic && (c.dyn = build_dynamic_roughness(c, case))
-    if case.cfg.verbose
-        kinds = Dict{String,Int}()
-        for s in bus.surface
-            s === nothing && continue
-            k = string(nameof(typeof(s)))
-            kinds[k] = get(kinds, k, 0) + 1
-        end
-        @printf(case.io, "Surfaces: %s; every %.0f s\n",
-                join(("$v $k" for (k, v) in sort!(collect(kinds))), ", "), c.P)
-    end
+    @debug(begin
+               kinds = Dict{String,Int}()
+               for s in bus.surface
+                   s === nothing && continue
+                   k = string(nameof(typeof(s)))
+                   kinds[k] = get(kinds, k, 0) + 1
+               end
+               @sprintf("Surfaces: %s; every %.0f s",
+                        join(("$v $k" for (k, v) in sort!(collect(kinds))), ", "), c.P)
+           end, subsystem = :berlin, domain = current_domain(), coupling = :surface_exchange)
     return nothing
 end
 
@@ -584,6 +584,8 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
     Hx, Hy, Hz, dz = mesh.Hx, mesh.Hy, mesh.Hz, mesh.dz
     evap = 0.0
     nsolid = 0
+    # a surface sum: the columns' contributions folded in column-major order,
+    # the canonical order of a 2-D reduction (serial; KA-b, #296)
     @inbounds for I in CartesianIndices(bus.k_air)
         bus.surface[I] === nothing && continue
         i, j = Tuple(I)

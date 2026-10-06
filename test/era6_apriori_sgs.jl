@@ -300,7 +300,7 @@ end
     # dns256_generate.jl, or AEOLUS_DNS256=1 for the regeneration testset).
     @testset "offline a-priori record: pipeline at 32³" begin
         path = joinpath(mktempdir(), "dns32_apriori.toml")
-        rec, d32 = generate_dns_apriori(; N = 32, out = path, ratios = (4, 8), verbose = false)
+        rec, d32 = generate_dns_apriori(; N = 32, out = path, ratios = (4, 8))
         back = read_dns_apriori(path)
         @test back["dns"] == rec["dns"] && back["checks"] == rec["checks"]
         @test back["filter"]["4h"]["smagorinsky"]["rho"] == rec["filter"]["4h"]["smagorinsky"]["rho"]
@@ -322,7 +322,7 @@ end
         @test f["delta_over_eta"] ≈ 4 * (2π / 32) / d32.η
         # a failed DNS check keeps the record out of the suite's path
         bad = joinpath(dirname(path), "bad.toml")
-        @test_throws ErrorException generate_dns_apriori(; N = 32, out = bad, ν = 0.02, ratios = (4,), verbose = false)
+        @test_throws ErrorException generate_dns_apriori(; N = 32, out = bad, ν = 0.02, ratios = (4,))
         @test !isfile(bad) && isfile(bad * ".failed")
         @test read_dns_apriori(bad * ".failed")["checks"]["kmax_eta_ge_1.5"] == false
     end
