@@ -123,9 +123,16 @@ A column per work item can be slow on the CPU: the column walks z with
 a stride of `Nx·Ny·8` bytes, a power of two on the usual grids, so all
 its levels fall in the same L1 set. `StretchedPoissonSolver`'s Thomas
 solve with one column per item took 4.3 ms at 64×64×53 against 0.94 ms
-for the old level-by-level loop. Its work item is therefore one ky row
-(all kx, kx innermost, vectorised), 0.80 ms. A GPU backend will launch
-one column per item.
+for the whole old solve. One ky row per item (kx innermost, vectorised)
+fixed most of it, but the Thomas part alone still cost 1.2× the old loop
+at 64×64×53 and 1.6× at 192×192×53 on one thread: `Nx` contiguous values
+per level are too short a stream for the prefetcher. The work item is
+therefore a contiguous slab of ky rows, walked in the old loop order
+(level by level, kx innermost), with one slab per thread and a single
+slab, the old loop exactly, when the launch runs serially. The slab
+count may follow the thread count because every column is still solved
+by one work item with the same operations, so the bits do not depend on
+it. A GPU backend will launch one column per item.
 
 ## The reduction contract
 

@@ -61,7 +61,7 @@ a kernel, so a GPU backend can substitute its own FFT library. FFTW's
 plans are threaded (`init_threads!` sets FFTW to `Threads.nthreads()`)
 and give the same bits at every thread count under `ESTIMATE` or
 imported wisdom. The stretched solver's tridiagonal solve in z is one
-launch over the ky rows, serial in z within each work item. Measured
+launch over slabs of ky rows, serial in z within each work item. Measured
 speed-ups: [The kernel port](ka_port.md#Measured-at-KA-h).
 
 ## Planned solvers
