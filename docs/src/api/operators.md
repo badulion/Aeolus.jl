@@ -137,3 +137,18 @@ Aeolus.Operators.lumley_invariants
 Aeolus.Operators.apriori_metrics
 Aeolus.Operators.dissipation_matched_cs
 ```
+
+## FFT planning policy
+
+The one place the FFTW planner flag and thread count of every FFT plan
+(the pressure solvers, the diagnostics) are chosen (#245). Default
+`:measure`, `:patient` opt-in; the test suite uses `:estimate`. Why it matters for restarts:
+[Checkpoint / restart and FFT planning](../design/checkpoint_restart.md).
+
+```@docs
+Aeolus.Operators.set_fftw_policy!
+Aeolus.Operators.fftw_policy
+Aeolus.Operators.fftw_planner_flags
+Aeolus.Operators.save_fftw_wisdom
+Aeolus.Operators.load_fftw_wisdom!
+```

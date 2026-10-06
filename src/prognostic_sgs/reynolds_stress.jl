@@ -941,24 +941,38 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
 end
 
 """
+    sgs_tke!(e, c::ReynoldsStressClosure, sim) -> e
+
+Half the trace of the transported subgrid stress, ``e = \\tfrac12τ_{ii}``
+(N-inflow-b, #258). See `Operators.sgs_tke!` for the contract.
+"""
+function sgs_tke!(e::Field{CellCenter}, c::ReynoldsStressClosure, sim; kwargs...)
+    interior_view(e) .= (interior_view(c.τ[1]) .+ interior_view(c.τ[2]) .+
+                         interior_view(c.τ[3])) ./ 2
+    return e
+end
+
+"""
     sgs_state(c::ReynoldsStressClosure) / restore_sgs_state!(c, s)
 
 Snapshot of the six stresses and the booked statistics into buffers the
 closure owns, and its restoration (a rejected adaptive step leaves them
-bit for bit as they were).
+bit for bit as they were). The snapshot `(τ, stats)` is self-contained
+(restoring reads nothing but `s`), so a deep copy of it is what a
+checkpoint stores (#245).
 """
 function sgs_state(c::ReynoldsStressClosure)
     for m in 1:6
         copyto!(c.snap[m], c.τ[m].data)
     end
     copyto!(c.snapstats, c.stats)
-    return c.snap
+    return (c.snap, c.snapstats)
 end
 function restore_sgs_state!(c::ReynoldsStressClosure, s)
     for m in 1:6
-        copyto!(c.τ[m].data, s[m])
+        copyto!(c.τ[m].data, s[1][m])
     end
-    copyto!(c.stats, c.snapstats)
+    copyto!(c.stats, s[2])
     return c
 end
 

@@ -220,7 +220,10 @@ needs.
   the NetCDF file. The core registers `qv`, `ql` (advected) and `qr`.
   A tracer diffuses with the closure's `κt` unless it names its own
   diffusivity (`ensure_tracer!(…; diffusivity = case -> field)`): the SGS
-  TKE `e` of the `:tke` provider diffuses with `2ν_t` (#182).
+  TKE `e` of the `:tke` provider diffuses with `2ν_t` (#182). Passive
+  tracers (qv, ql, the chemistry species, the pollutant) never name one:
+  they share θ's κ_t under every `:sgs` provider, AMD included (#234, see
+  below).
 * **Geometry** (`case.geom`): mask, surface classes, scene, view factors.
   Couplings may add classes at `init!` (the glass coupling does). The
   scene is built with `class_map = scene_class_map(sfc)`, so the ground
@@ -242,6 +245,9 @@ step, and rebuilds `bus.sw = cloud(shade(sw_base))` each step. A second
 modifier added later belongs in the same pattern. Before #128 the tree
 shade and the cloud shadow multiplied `bus.sw` in place, so they
 compounded between radiation updates.
+
+Checkpointing the case's own state is #269 / #134; the hook is described
+in [Checkpoint / restart](checkpoint_restart.md#The-Berlin-case).
 
 ## Initial state: the Lindenberg sounding (#247)
 
@@ -419,10 +425,19 @@ options go under the coupling name in `options`.
 
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
-| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
+| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`, built with the per-axis Poisson kinds of the case's velocity `bcs` (`case_poisson_axes`, #251: periodic x, y and Neumann z today, all-Neumann for an open or nested child; smoke-checked); `tol`, `maxit` of the sound-proof core's own CG, whose axes the core derives from the same `bcs` |
 | `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184), `:reynolds_stress` (`sgs_reynolds_stress`, `PrognosticSGS.ReynoldsStressClosure`, the differential Reynolds-stress closure, #188; not with `timestepper = :imex`); all but `:tke` and `:reynolds_stress` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` are each wrapped in `StabilityCorrected` (P55-e, #187; `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`); `:tke` and `:amd` carry their own stability treatment (TKE length scale, AMD buoyancy term) and are not wrapped, nor are `:vreman`, `:sigma` and `:reynolds_stress` (its stresses carry the buoyancy production directly) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177; with a stability-corrected `:sgs` closure κh on the x, y faces and its κv on the z faces, as for θ) |
+
+**Lateral boundaries.** The case is periodic in `x` and `y`. Open
+(Dirichlet-from-boundary-data) faces exist since N-open-b (#255:
+`OpenBoundary`, `open_boundary_conditions`, the `AbstractBoundaryData`
+contract and the global mass-flux correction, called from every core
+through `update_open_boundaries!`), but the case does not use them yet:
+`BoundaryConditions` is exempt infrastructure, the default run is bit for
+bit unchanged, the `:open` option arrives with N-open-d (#262) and the
+nested default with N-berlin-nest (#265).
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every
@@ -500,7 +515,9 @@ constraint weights, giving `(1/W)∇·(W κt ∇q)`, which conserves `Σ W q`;
 on the anelastic core that is the ledger's `Σ ρ̄ q`. The diffusion books
 its change of water as `sgs_diffusion` (zero to round-off) plus
 `density_redistribution`. Its `smoke_check` asserts that the diffusion
-alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`. Before
+alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`.
+The core runs with `moisture = false`, so qv and ql are case tracers and
+are mixed here, with the same κ as every other tracer. Before
 #177 no tracer was diffused at all: they saw only the implicit
 dissipation of WENO, a missing-physics bug. `sgs_diffusion = false`
 reproduces that transport for comparison. Measured over the first hour of the summer flagship (06:00–07:00,
@@ -516,6 +533,27 @@ kg/m², `sgs_diffusion` −6.1e-19 kg/m². Cost: +1.0 ms per advected tracer
 and step (7 tracers: `scalar_advection` 57.3 → 64.3 ms/step), +0.9 ms for
 the pollutant; the masked kernel takes 0.58 ms per call against 0.10 ms
 unmasked.
+
+*One shared κ, also under `:amd` (#234).* AMD offers a per-scalar
+diffusivity from each scalar's own gradient
+(`Operators.sgs_tracer_diffusivity!`, forwarded by `SolidMaskedSGS`); the
+stage does not use it, by design. Real high-Re turbulence mixes all
+passive scalars alike (one turbulent Schmidt number). Per-scalar κ would
+mix NO, NO₂ and O₃ differently and move them off the photostationary
+state, and mix qv and ql differently, so `q_t` and `θ_l` would no longer
+be mixed as conserved variables. Its zero-gradient fallback
+(`κ = ν_t/Pr_t = 3ν_t`) gives a uniform or flat field the largest κ of all
+and over-mixes plume edges, and the adaptive step (`sgs_cfl_diagnostics`)
+sees θ's κ_t, not the tracers'. An earlier probe of the `:amd` run measured
+cell-wise κ differences against θ's of 54–64 % for qv and 66–92 % for the
+chemistry, 28 % between NO and NO₂, 196 % between qv and ql, and a
+fallback maximum of 5.9 against 2.6 m²/s. The design test
+(`test/berlin_numerics.jl`, *one shared κ*) pins it: under `:amd` the
+stage is bit for bit the stage with every tracer forced onto `sim.κt`, and
+on its 12-step state AMD's own κ would differ from θ's by 77–80 %
+(`Σ|Δκ|/Σκ`) for qv and the chemistry, 24 % between NO and NO₂, with ql
+(zero there) at the fallback 3ν_t everywhere, maximum 5.08 against
+2.71 m²/s. Rationale in full: [the SGS theory page](../theory/sgs.md#Closure-contract).
 
 * **Pressure solvers.** All three solve the same 7-point Laplacian with
   the same boundary conditions (periodic, periodic, Neumann); the
@@ -572,7 +610,8 @@ unmasked.
   anisotropic minimum-dissipation and Vreman closures (see [the SGS
   theory page](../theory/sgs.md#Anisotropic-minimum-dissipation-and-Vreman-closures)).
   AMD runs with C = 0.3, its own κ_t and the buoyancy term with the
-  core's g/θ₀. It is set to zero in the building cells: there the
+  core's g/θ₀; the case's tracers are diffused with that κ_t (θ's), not
+  with AMD's per-scalar diffusivity (see *One shared κ* above). It is set to zero in the building cells: there the
   resolved velocity is ≈ 0, so the denominator ∂_l u_m ∂_l u_m vanishes
   while θ still varies, and the buoyancy term gave ν_t up to 19 m²/s
   inside buildings, against a fluid maximum of 1.6 m²/s. That only
@@ -1710,6 +1749,7 @@ unresolved no-slip at `cfg.ν` = 2 m² s⁻¹ and Δ = 15.6 m.
 | law | `RoughLogLaw(z0m)` at ``h = Δ/2``; `z0m` from `bus.z0m_class` (the surface exchange's per-class table, put on the bus in its `build`): `SURFACE_GLASS` for a glass-tagged building column, `SURFACE_WALL` otherwise (0.01 m / 0.05 m by default) |
 | `:body_force` (40) | `remove_stencil_wall_flux!`: the stencil's facade flux out of the tendency (with ``ν_t`` when the step has an eddy viscosity) |
 | `:post_predictor` (12) | `apply_immersed_wall_stress!`, implicit, after the `ibm` direct forcing (10) and before the ground's wall stress (15) |
+| TKE production (#232) | at `init!` the walls are attached to the `:sgs` closure (`attach_immersed_walls!`): the `:tke` shear production at the facades is the wall stress times the resolved shear across the wall, ``a q^2``, not the production of the stencil flux removed at `:body_force` |
 | checks | facade ``τ_w ≥ 0``; no stress written into a solid cell's face; the total facade drag and the removed stencil drag oppose the mean canopy wind |
 
 Measured in `:smoke` after 1 h (3600 s, adaptive step), on vs off
@@ -1728,6 +1768,25 @@ Measured in `:smoke` after 1 h (3600 s, adaptive step), on vs off
 The coupling took 2.2 s of a 5567 s run (0.04 %; machine heavily
 loaded). The cut-cell method of #179 is not wired: the case has no
 cut-cell provider (CutCell is pending on #152), which picks it up.
+
+**TKE production at the facades (#232).** Until #232 the `:tke` closure
+booked the shear production of the stencil flux this coupling removes,
+``ν_{t,e} q_F^2/Δ^2`` per face — energy the resolved flow never lost —
+and none of the work of the modelled stress. Measured on the summer
+flagship (default couplings, 1 h from 12:00, adaptive step; means of 31
+samples over the second half hour; canopy = the fluid cells of levels
+1–4, near-facade = the 5009 canopy cells next to a facade face):
+
+| | stencil production (before) | wall stress × resolved shear (#232) |
+| :-- | --: | --: |
+| removed-stencil production booked at the facades (m⁵ s⁻³) | 227 = 27.3 % of canopy ``Σ P_s V`` (2.5 % of the domain's) | 0 |
+| facade wall-stress work ``Σ a q^2 ΔV`` (m⁵ s⁻³) | 807 (not booked) | 804 (booked) |
+| canopy ``Σ P_s V`` booked (m⁵ s⁻³) | 832 | 1420 |
+| near-facade mean ``ν_t`` / ``e`` | 0.02464 m² s⁻¹ / 0.00996 m² s⁻² | 0.02595 (+5.3 %) / 0.01081 (+8.5 %) |
+| canopy mean ``ν_t`` / ``e`` | 0.03857 / 0.01257 | 0.03946 (+2.3 %) / 0.01303 (+3.7 %) |
+
+The production kernel takes 0.55 ms per step of the 161 ms Berlin step
+(0.3 %); both runs took 611 steps for 20 min.
 
 ## Radiation (#130)
 
@@ -2133,6 +2192,13 @@ Moeng (1984) closure (see [the theory page](../theory/sgs_tke.md)). It is
 PALM's urban-LES default and the only closure here whose mixing responds
 prognostically to stratification (its ``0.76\sqrt e/N`` length scale; no
 stability function is applied on top of it).
+
+Not wrapping it in `StabilityCorrected` is by design. `:tke` has none of
+that wrapper's ``κ_h ≠ κ_v`` anisotropy (one ``Δ``, as in PALM): at
+``dx/dz = 2.5`` it mixes 3.39× more vertically and 1.84× less
+horizontally than `StabilityCorrected` Smagorinsky of equal ``C_s``, and
+no `:isentropic` tensor is offered
+([details](../theory/sgs_tke.md#The-model)). Moist ``N^2``: #239.
 
 * The closure is the `sgs` of every dynamics step, so the cores evaluate
   ``ν_t = c_k l\sqrt e``, ``κ_t = (1 + 2l/Δ)ν_t`` from the committed ``e``

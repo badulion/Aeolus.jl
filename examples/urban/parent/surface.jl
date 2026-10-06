@@ -404,7 +404,7 @@ irradiance (`SolarGeometry.clear_sky_irradiance`, default aerosol) of
 the case's solar position, an air temperature
 ``T_{mean} + T_{amp}\\sin(2π(t - 9)/24)`` (maximum at 15:00), constant
 `q_air` and wind `U`, the case's ground pressure
-[`case_surface_pressure`](@ref)`(cfg)`, and the clear-sky downwelling
+([`case_surface_pressure`](@ref)), and the clear-sky downwelling
 longwave ``ε_a σ T^4`` with Brutsaert's (1975) ``ε_a = 1.24
 (e/T)^{1/7}`` (``e`` in hPa). `z_ref` is left at 10 m: the parent sets
 its own per tile.
@@ -416,10 +416,10 @@ function parent_offline_forcing(cfg::CaseConfig, hour::Real; U::Real = 3.0, q_ai
                                 T_mean::Real = 295.0, T_amp::Real = 6.0)
     sp = solar_position_at(cfg, mod(hour, 24))
     sw = clear_sky_irradiance(sp, BirdClearSky()).ghi
+    ps = case_surface_pressure(cfg)
     T = T_mean + T_amp * sin(2π * (hour - 9) / 24)
-    p = case_surface_pressure(cfg)
-    e = q_air * p / (0.622 + 0.378 * q_air) / 100                  # hPa
+    e = q_air * ps / (0.622 + 0.378 * q_air) / 100      # hPa
     lw = 1.24 * (e / T)^(1 / 7) * STEFAN * T^4
     return SurfaceForcing(; sw_down = sw, lw_down = lw, T_air = T, q_air = q_air, U = U,
-                          p = p, z_ref = 10.0)
+                          p = ps, z_ref = 10.0)
 end

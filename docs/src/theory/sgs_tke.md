@@ -30,7 +30,10 @@ is given, and ``c_ε`` multiplied by 3.9 at the first level above a surface
 (Moeng 1984; [`IBM.first_level_cells`](@ref Aeolus.IBM.first_level_cells)).
 ``N^2`` is the one of the stability contract,
 `Operators.buoyancy_frequency_squared!` (P58-a, #170), with the virtual
-potential temperature when the case is moist.
+potential temperature when the case is moist. That ``N^2`` is the dry
+one of ``θ_v``: it ignores condensate loading and the moist-adiabatic
+stability of saturated air, a gap of the stability contract filed as
+#239 and not of this closure.
 
 Two limits fix the constants' meaning:
 
@@ -44,14 +47,29 @@ Two limits fix the constants' meaning:
   is linear in ``x``, so the equilibrium is explicit, and it has a root
   ``x > 0`` only for ``Ri = N^2/S^2 < Ri_c = 1/(1 + 0.19/(c_k\,0.76^2)) = 0.233``
   ([`tke_critical_richardson`](@ref Aeolus.PrognosticSGS.tke_critical_richardson)).
-  Above it the TKE decays to zero: the closure switches itself off
-  without a stability function.
+  Above it the equilibrium TKE is zero: in equilibrium the closure
+  switches itself off without a stability function. In a transient
+  ``ν_t`` stays positive while ``e`` decays.
 
 **No stability function on top.** The ``0.76\sqrt e/N`` length is the
 closure's own stability response, so no `TurbulenceStability` factor
 ``f_m(Ri)`` is applied to it, and the `StabilityCorrected` wrapper of
 P55-e (#187), which multiplies a Smagorinsky-type ``ν_t`` by such a
 factor, must not wrap a `TKEClosure`.
+
+**No horizontal–vertical anisotropy.** The closure has one filter width
+``Δ = (ΔxΔyΔz)^{1/3}`` and one ``ν_t``, ``κ_t`` in every direction, as in
+Deardorff (1980) and PALM; the ``κ_h ≠ κ_v`` length scales
+``Δ_h = \sqrt{ΔxΔy}``, ``Δ_v = Δz`` of `StabilityCorrected` are by design
+not part of it. On the Berlin grid (``Δx/Δz = 2.5``, ``ℓ_h = 1.842``,
+``ℓ_v = 0.2947``) the neutral equilibrium of `TKEClosure` therefore mixes
+``1/ℓ_v = 3.39×`` more vertically and ``ℓ_h = 1.84×`` less horizontally
+than a `StabilityCorrected` Smagorinsky closure of the same ``C_s = 0.194``
+(``(0.1944/C_s)^2`` more again for a smaller ``C_s``: 4.44× and 1.41× less
+for 0.17, 12.8× and 2.05× *more* for the Berlin `cfg.C_s = 0.1`;
+`tke_equilibrium`, ``S = 0.1`` s⁻¹, ``N = 0``). The rotated scalar tensor
+of `IsentropicDiffusion` is not offered for a `TKEClosure` either; both
+are possible follow-ups.
 
 ## Discretization
 
@@ -85,6 +103,38 @@ image. ``D`` is built from the face and edge differences of the
 momentum kernels, not from `Operators._velocity_gradient_at`: that
 tensor's off-diagonal entries are centred over two cells, and their
 square is not the dual of the edge-flux operator.
+
+**Shear production at wall-modelled walls (#232).** Where a wall model
+replaces the stencil's flux through an immersed wall
+(`WallModels.remove_stencil_wall_flux!` takes
+``ν_{t,e}(q_N − q_F)/Δ_d^2`` out of the tendency of a wall face ``F``,
+``N`` the IBM-zeroed neighbour, and `apply_immersed_wall_stress!`
+applies ``τ = a Δ_d q_F``), the dual above would still book the removed
+stencil share ``ν_{t,e} q_F(q_F − q_N)/Δ_d^2`` as production — energy
+the resolved flow never lost — and none of the work of the wall stress.
+With the walls attached
+([`attach_immersed_walls!`](@ref Aeolus.PrognosticSGS.attach_immersed_walls!))
+that share is taken out of ``D`` at the four cells around the edge, as
+`dual_strain!` put it there, and the wall stress times the resolved
+shear across the wall, ``τ\,q_F/Δ_d = a q_F^2`` per unit volume (``a``
+from `WallModels.immersed_wall_drag!`, the one evaluation of the law), is
+added, half to each cell the face separates:
+
+```math
+\sum_c P_s V = −\sum \mathbf u·\big(\mathbf T_{sgs} − \mathbf T_{sgs}^{wall}\big) V
+             + \sum_{\text{wall faces}} a\, q_F^2\, ΔV ,
+```
+
+the kinetic energy the SGS operator the step applies and the wall stress
+take out of the resolved flow. Booking all of the wall stress's work as
+production is the constant-stress log layer: its shear production
+integrated from ``z_0`` to the first face, ``∫ τ_w\,∂U/∂n\,dn = τ_w U``,
+is the work of the wall stress at the face velocity. The test
+(`test/era6_tke_facades.jl`) checks the budget to 0 relative error, the
+removed share to 4.6e-15, the wall work against the energy
+`apply_immersed_wall_stress!` removes to 4.7e-8 (``δt = 10^{-6}``), and,
+for uniform flow along a wall, ``Σ P_s V/A = u_*^3 \ln(h/z_0)/κ`` to
+round-off.
 
 **Buoyancy production — the dual of the κ_t operator.**
 ``P_b = −κ_t N^2``. On the uniform grid the ``N^2`` of
@@ -619,8 +669,13 @@ Reynolds-stress run was the slowest by 3–4×, more than its 2× in Berlin.
 
 `examples/urban/couplings/sgs_tke.jl`, provider `:tke` of the `:sgs` slot
 (see [the Berlin case](../design/berlin_case.md#Numerics-slots)), with ``e``
-the advected tracer `:e`, the wall cap from the building mask, and the
-surface value from the MOST friction velocity. The Reynolds-stress closure
+the advected tracer `:e`, the wall cap from the building mask, the
+surface value from the MOST friction velocity, and the facade walls of
+`wall_model_facades` attached, so the facade production is the wall
+stress times the resolved shear (#232; on the summer flagship the
+stencil production it replaces was 27 % of the canopy ``Σ P_s V``, and
+near-facade ``ν_t`` rises by 5.3 %: see the facade section of
+[the Berlin case](../design/berlin_case.md)). The Reynolds-stress closure
 is the option `:reynolds_stress` (`examples/urban/couplings/sgs_reynolds_stress.jl`):
 the six stresses are the advected tracers `:tau11 … :tau23`, with the same
 wall cap and an LRR-IP surface value. Both providers report a-priori

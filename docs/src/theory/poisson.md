@@ -157,14 +157,66 @@ Two real scratch buffers of shape `(Nx, Ny, Nz)` and one complex buffer
 of shape `(Nx/2+1, Ny, Nz)` are held by the solver. No allocation per
 solve.
 
+### Neumann on any axis: the closed box of a nested child
+
+Nothing above is specific to `z`. Each axis of the 7-point operator is
+diagonalised independently (Schumann & Sweet 1988): a periodic axis by the
+FFT with ``-4/Δ^2\sin^2(πm/N)``, a Neumann axis by the DCT-II with
+``-4/Δ^2\sin^2(πm/2N)``, and the 3-D eigenvalue is their sum.
+`CosineFFTPoissonSolver(mesh; bc_x, bc_y, bc_z)` takes the kind of every
+axis (#251). The case that needs it is a **nested or open-boundary
+child**: its normal velocity is prescribed on every face (from the parent
+or from boundary data), and since
+
+```math
+u^{n+1}\cdot n = u^*\cdot n - Δt\,\frac{∂φ}{∂n},
+```
+
+the projection keeps those face values exactly when ``∂φ/∂n = 0``: φ is
+homogeneous Neumann on all six faces, whatever the velocity condition is
+called. The solve is then DCT-II in all three directions (no complex
+buffer at all), and it costs no more than the channel solve: measured per
+solve on this machine (minimum of 5),
+
+| grid | periodic `x, y` (FFT+DCT) | all Neumann (3-D DCT) | multigrid, all Neumann, tol 1e-10 |
+| :--- | ---: | ---: | ---: |
+| 64 × 64 × 32 (Berlin child) | 1.83 ms | 1.48 ms (× 0.81) | 81 ms (24 cycles) |
+| 64 × 64 × 64 (deepened child) | 3.90 ms | 2.96 ms (× 0.76) | 144 ms (22 cycles) |
+| 160 × 160 × 64 | 37.9 ms | 25.9 ms (× 0.68) | 583 ms (12 cycles) |
+
+The default solver of `BoussinesqSimulation` (and the density-weighted CG
+of the sound-proof cores) derives the axis kinds from the six velocity
+faces through `axis_poisson_bc(face)` (`:periodic` for `Periodic`,
+`:neumann` for every face with a prescribed normal velocity); an axis
+whose two faces disagree is an error.
+
+### The discrete compatibility condition
+
+With no Dirichlet face the operator is singular: constants are its null
+space, and summing ``L_h φ`` over the domain telescopes to the net flux
+of ``∇φ`` through the boundary, which is zero for periodic and Neumann
+faces. So ``L_h φ = s`` is solvable only if ``\sum_{ijk} s_{ijk} = 0``.
+For the projection ``s = ∇·u^*/Δt``, and ``\sum ∇·u^*\,ΔV`` is the net
+volume flux through the boundary: periodic faces cancel, walls carry none,
+but **prescribed inflow and outflow on open faces need not balance**. The
+solvers project the mean out: an incompatible source with mean
+``\bar s = Q/V`` is solved as ``L_h φ = s − \bar s``, which leaves a
+uniform residual ``L_h φ − s = −\bar s`` (the test suite checks this to
+1e-14) — after the projection ``∇·u = −\bar s Δt`` in *every* cell, a
+uniform spurious source or sink. The open-boundary mass-flux correction
+(N-open-b, `correct_boundary_mass_flux!`) therefore makes the net boundary
+volume flux vanish *before* the projection, not after; see
+[Prescribed-flux faces](fractional_step.md#Prescribed-flux-faces-(open-boundaries)).
+
 ### When *this* solver stops applying
 
 The remaining cases:
 
-  * **General non-periodic BCs, immersed boundaries, cut cells**: need
-    an iterative solver — matrix-free preconditioned conjugate
-    gradient, or geometric/algebraic multigrid. Planned as
-    `CGPoissonSolver` in Phase 3.
+  * **Dirichlet pressure faces, immersed boundaries, cut cells,
+    variable coefficients**: need an iterative solver — matrix-free
+    conjugate gradient (`CGPoissonSolver`, which takes the same per-axis
+    periodic / Neumann kinds), the density-weighted CG of the sound-proof
+    cores, or geometric multigrid.
   * **Non-uniform grids**: the horizontal FFTs still work if `dx, dy`
     are uniform; for non-uniform `dz(k)`, the DCT is replaced by a
     tridiagonal solve of the same one-dimensional operator.
@@ -174,6 +226,10 @@ Aeolus.PressureSolvers.AbstractPressureSolver) interface —
 `Simulations.step!` will not need to know which one it's calling.
 
 ## References
+
+  * Schumann, U. & Sweet, R. A. (1988), *Fast Fourier transforms for
+    direct solution of Poisson's equation with staggered boundary
+    conditions*, JCP 75, 123–137.
 
   * Vanka, S. P. (1986), *Block-implicit multigrid solution of
     Navier-Stokes equations in primitive variables*, JCP 65, 138.

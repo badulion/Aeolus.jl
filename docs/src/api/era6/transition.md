@@ -39,6 +39,40 @@ for n in 1:1200; step_rk3!(c.sim, 1.0; body_force! = c.forcing!); end
 cf = skin_friction(c.sim; U_e = 1.0); H = shape_factor(c.sim)
 ```
 
+Synthetic inflow turbulence (N-inflow-a, #252): the generator contract
+(`AbstractInflowGenerator`, `unit_fluctuations!`, `generator_state`,
+`restore_generator_state!`), the Lund transform (`lund_coefficients`,
+`apply_lund!`), the Xie & Castro digital filter (`DigitalFilterGenerator`,
+`digital_filter_kernel`) and free-stream turbulence as a second provider
+(`FreeStreamInflow`, `disturbance_velocity`, `disturbance_covariance`);
+theory in [Synthetic inflow turbulence](../../theory/transition.md#Synthetic-inflow-turbulence).
+
+```julia
+gen = DigitalFilterGenerator(64, 40, 15.625, 6.25; L_s = 62.5, L_z = 25.0, T = 30.0)
+a   = lund_coefficients([0.514 0 -0.09; 0 0.332 0; -0.09 0 0.141])   # R_ij, m² s⁻²
+u, v, w = zeros(64, 40), zeros(64, 40), zeros(64, 40)
+unit_fluctuations!(u, v, w, gen, Δt); apply_lund!(u, v, w, a)
+```
+
+Inflow statistics (N-inflow-b, #258): the contract (`InflowStatistics`,
+`inflow_stresses`, `inflow_lengths`, `update_inflow_statistics!`,
+`inflow_projection_log`, `realizable_stress`, `inflow_lund_coefficients`),
+the statistics of an Aeolus LES parent (`ParentResolvedStatistics`,
+`inflow_stress_parts`: resolved, scale-gap band, SGS from
+`Operators.sgs_tke!`) and the similarity profiles for a parent without
+resolved turbulence (`ParametrizedStatistics`, `parametrized_scales`);
+theory in [Inflow statistics](../../theory/transition.md#Inflow-statistics-(N-inflow-b)).
+
+```julia
+src = ParentResolvedStatistics(parent; closure = tke, τ_avg = 600.0, refine = (2, 2, 4),
+                               levels = 1:20)
+update_inflow_statistics!(src, Δt)              # after every parent step (or at a cadence)
+z   = [(k - 0.5) * 6.25 for k in 1:64]          # the child's levels
+gen = DigitalFilterGenerator(64, 64, 15.625, 6.25; inflow_lengths(src, z, t)...)
+a   = inflow_lund_coefficients(src, z, t)       # realizable, projections booked
+unit_fluctuations!(u, v, w, gen, Δt); apply_lund!(u, v, w, a)
+```
+
 ```@autodocs
 Modules = [Aeolus.Transition]
 ```
