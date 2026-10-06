@@ -196,6 +196,69 @@ Aeolus.Config.DRIVER_FILES) maps their names to files relative to the
 package directory, and the first config that names one includes the file
 into a fresh module. The migrations of #311 add their entries.
 
+### The example drivers (CFG-e, #360)
+
+| driver | file | builds and runs | configs |
+| :-- | :-- | :-- | :-- |
+| `channel` | `examples/validation/channel_driver.jl` | `half_channel_case` / `channel_case`, `run_channel!` (wall-modelled channel LES) | `validation/configs/neutral_abl.toml`, `log_layer_mismatch.toml` |
+| `column` | `examples/validation/column_driver.jl` | `[column] case`: `dycoms_rf01` (RF01 column + longwave solve), `parisfog_2011` (the RadiationFog column), `droplet_parcel` (spectral broadening, `run_broadening_case`), `kessler_box` (Kessler microphysics, no dynamics) | `validation/configs/dycoms_rf01.toml`, `parisfog_2011.toml`, `spectral_broadening.toml`, `kernels/configs/cloud_spinup.toml` |
+| `cbc_decay` | `examples/validation/cbc_driver.jl` | `cbc_benchmark` (Comte-Bellot & Corrsin decay, spin-up and seeds) | `validation/configs/cbc_decay.toml` |
+| `patchy_surface` | `examples/validation/patchy_surface_driver.jl` | `patchy_les` / `patchy_run!` (CBL over hot and cool strips) | `validation/configs/patchy_surface.toml` |
+| `dns_decay` | `examples/validation/dns_driver.jl` | `dns_decay` (the decaying DNS the a-priori analysis filters) | `validation/configs/apriori_sgs.toml` |
+
+Each example script is now "run the config(s), then analyse or plot":
+`run_configs(path, ARGS)` takes the script's command line (`--set`,
+`--member`, `--root`, `--allow-uncommitted`) and returns one
+[`RunResult`](@ref Aeolus.Config.RunResult) per run. A driver gets a new
+section only where the case has structure of its own; a driver with a
+`case` switch keeps one section per case and refuses a key set in the
+section of a case that is not selected
+([`selected_case_sections`](@ref Aeolus.Config.selected_case_sections)).
+A section whose options are the fields of a keyword struct is made with
+[`kwdef_section`](@ref Aeolus.Config.kwdef_section) (the struct's
+defaults are the schema's: `FogColumnSettings` is `[fog]`,
+`BroadeningCase` is `[parcel]`) and read back with
+[`kwdef_value`](@ref Aeolus.Config.kwdef_value).
+
+Not runs, so without a config (`EXEMPT` in `test/config_examples.jl`,
+each with its reason): `validation/canopy_profiles.jl` (steady 1-D
+boundary-value solves), `validation/dynamic_roughness_cubes.jl`
+(a-priori roughness of a height map), `validation/dns256_generate.jl`
+(the offline fixture generator), the Poisson manufactured-solution
+checks, and the library files the drivers include. The same test lists
+every example that calls a stepping entry point and requires a config or
+an exemption; the scripts of #360's later parts are listed there until
+they move.
+
+## Sweeps
+
+A config may carry a `[sweep]`: axes (a product, the first axis
+outermost) and/or explicit members. The runner expands it into ordinary
+overrides, base < member < `--set`, and each member is its own run
+folder whose `run.toml` records the member's overrides and no `[sweep]`,
+so it replays as a single run:
+
+```toml
+extends = "base.toml"
+
+[[sweep.member]]
+label = "no_feedback"
+fog = { droplet_feedback = false }
+
+[sweep]
+axis = [ { key = "sgs.closure", values = ["smagorinsky", "lasd", "lasi"] },
+         { key = "channel.size", values = [[32, 32, 32], [48, 48, 48]] } ]
+```
+
+Members are labelled by their `label` (or index) joined with the axis
+values (`lasd_32x32x32`); the run name gets the label as a suffix.
+[`load_run_config`](@ref Aeolus.Config.load_run_config) refuses a sweep
+file and says how to run it; [`load_sweep`](@ref
+Aeolus.Config.load_sweep) and [`sweep_members`](@ref
+Aeolus.Config.sweep_members) expand it; `aeolus run/check/resolve`
+handle sweeps, and `run` and `resolve` take `--member k` (index or
+label).
+
 ## The command line
 
 | command | does |
