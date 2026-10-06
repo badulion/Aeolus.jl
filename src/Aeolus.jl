@@ -227,6 +227,10 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
        CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
        latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
        driver_checkpoints, finish_checkpoints!
+# #334: run folder and provenance
+export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
+       provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,
+       diagnostics_path, output_dir, checkpoint_dir, refresh_fftw_provenance!
 export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_write!, nc_append_record!, nc_close!, nc_write_fields,
        nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
