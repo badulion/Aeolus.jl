@@ -96,7 +96,8 @@ save_lineplot(path, xs, ys; kwargs...) =
     save_multiline(path, xs, [ys], [""]; kwargs...)
 
 """
-    save_multiline(path, xs, ys_list, labels; xlabel, ylabel, title, width, height)
+    save_multiline(path, xs, ys_list, labels; xlabel, ylabel, title, width, height,
+                   logx, logy, legend = :topright)
 
 Save several polylines to one SVG. `ys_list` is a vector of same-length
 `Vector`s; `labels` is a vector of legend strings.
@@ -107,7 +108,8 @@ function save_multiline(path::AbstractString, xs::AbstractVector,
                         ylabel::AbstractString = "",
                         title::AbstractString  = "",
                         width::Int = 640, height::Int = 400,
-                        logx::Bool = false, logy::Bool = false)
+                        logx::Bool = false, logy::Bool = false,
+                        legend::Symbol = :topright)
     pad_l, pad_r, pad_t, pad_b = 60, 20, 40, 50
     plot_w = width  - pad_l - pad_r
     plot_h = height - pad_t - pad_b
@@ -165,7 +167,8 @@ function save_multiline(path::AbstractString, xs::AbstractVector,
         end
         # legend
         legend_x = pad_l + plot_w - 100
-        legend_y = pad_t + 10
+        nlab = count(!isempty, labels)
+        legend_y = legend === :bottomright ? pad_t + plot_h - 14 * nlab - 6 : pad_t + 10
         for (li, lab) in enumerate(labels)
             isempty(lab) && continue
             col = colors[mod1(li, length(colors))]
