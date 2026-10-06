@@ -48,7 +48,7 @@ using ..Grids: AbstractMesh, RegularGrid, interior, CellCenter, FaceX, FaceY, Fa
 using ..Fields
 using ..Fields: Field, interior_view, mesh
 using ..BoundaryConditions
-using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!
+using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!, AbstractOpenBoundary, Periodic
 using ..Operators
 using ..Operators: advect_centered!, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    add_buoyancy!, add_coriolis!, compute_smagorinsky_νt!,
@@ -70,7 +70,9 @@ export # --- Phase 26: reconstructions -------------------------------------
        # --- Phase 28: conservative operators ------------------------------
        momentum_advect_skew!, advect_variance_conserving!,
        # --- Phase 28: conservation diagnostics ----------------------------
-       kinetic_energy_budget, scalar_variance_budget, enstrophy
+       kinetic_energy_budget, scalar_variance_budget, enstrophy,
+       # --- N-open-c (#260): advective flux through the open faces --------
+       boundary_scalar_flux
 
 # =========================================================================
 # 1. Smoothness indicators
@@ -1559,5 +1561,122 @@ struct _UpwindFirst <: AbstractReconstruction end
 @inline reconstruct_right(::_UpwindFirst, t::NTuple{1}) = t[1]
 required_halo(::_UpwindFirst) = 1
 scheme_name(::_UpwindFirst) = :upwind
+
+# =========================================================================
+# N-open-c (#260) — the advective flux of a scalar through the boundary
+# =========================================================================
+
+# Reconstruction descriptor of a flux-form scheme name.
+_flux_reconstruction(r::AbstractReconstruction; kwargs...) = r
+function _flux_reconstruction(name::Symbol; C_T::Real = 1e-5, p::Integer = 2)
+    name === :centered && return Centered2()
+    name === :upwind   && return _UpwindFirst()
+    name === :weno_js5 && return WENOJS(5)
+    name === :weno_z5  && return WENOZ(5, p)
+    name === :weno_z7  && return WENOZ(7, p)
+    name === :teno5    && return TENO(5; C_T = C_T)
+    name === :teno8    && return TENO(8; C_T = C_T)
+    throw(ArgumentError("boundary_scalar_flux: no flux-form face reconstruction for " *
+                        "scheme $(repr(name)); expected one of :centered, :upwind, " *
+                        ":weno_js5, :weno_z5, :weno_z7, :teno5, :teno8"))
+end
+
+@inline _wflux(::Nothing, k) = 1
+@inline _wflux(W::AbstractVector, k) = @inbounds W[k]
+
+"""
+    boundary_scalar_flux(sim, ϕ; scheme = :centered, bcs = sim.θ_bcs,
+                         weights = nothing, fill = true)
+        -> (west, east, south, north, bottom, top, total)
+
+The advective flux of the cell-centred scalar `ϕ` **out of** the domain
+through each boundary face, `∮ ϕ u·n dA` (units `[ϕ] m³ s⁻¹`; with
+`weights = (Wc, Wf)` the weighted flux `∮ W ϕ u·n dA` of a sound-proof
+core, `Wc[k]` on the lateral faces, `Wf[k]` on the bottom and top).
+
+The flux is formed from **the same face fluxes the advection scheme
+uses** — the face velocity of `sim.u, sim.v, sim.w` times the face value
+of `ϕ` reconstructed by `scheme` (`:centered` = `advect_centered!`, the
+Boussinesq core's θ and qv advection; `:upwind`, `:weno_js5`,
+`:weno_z5`, `:weno_z7`, `:teno5`, `:teno8` = the reconstructions of
+[`advect_weno_z!`](@ref), [`advect_teno!`](@ref) and
+[`advection_scheme`](@ref), or any reconstruction descriptor), upwinded on
+the sign of the face velocity. Because the scheme is in flux form, the
+interior fluxes telescope and
+
+    ∫ϕ dV (after a forward-Euler step) − ∫ϕ dV (before) = −Δt · total
+
+to round-off, for every scheme: this is the term that closes a scalar or
+energy budget of an open (nested) domain. With `fill = true` (default)
+the halos of `u, v, w` (with `sim.bcs`) and of `ϕ` (with `bcs`) are
+filled first, from the open-boundary buffers as the step itself fills
+them, so the result is the flux the next step uses. Faces of a periodic
+axis carry no flux (`0`); wall faces carry `0` because their normal
+velocity is zero.
+
+A mesh whose halo along an axis with an [`AbstractOpenBoundary`](@ref)
+face is shallower than `required_halo(scheme)` throws an `ArgumentError`.
+
+This is the only boundary-flux function of the code base: the
+nesting budgets (N-nest-d #261, N-nest-e #263), the open-boundary Berlin
+option (N-open-d #262) and the nested Berlin ledger (N-berlin-nest #265)
+use it.
+"""
+function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
+                              scheme = :centered, bcs::FieldBoundaryConditions = sim.θ_bcs,
+                              weights = nothing, fill::Bool = true)
+    r = _flux_reconstruction(scheme)
+    g = mesh(ϕ)
+    vb = sim.bcs
+    H = required_halo(r)
+    for (side, face, Hs) in ((:west, vb.west, g.Hx), (:east, vb.east, g.Hx),
+                             (:south, vb.south, g.Hy), (:north, vb.north, g.Hy),
+                             (:top, vb.top, g.Hz))
+        face isa AbstractOpenBoundary && Hs < H &&
+            throw(ArgumentError("boundary_scalar_flux: the open face :$side has a halo of " *
+                                "$Hs layers, shallower than required_halo = $H of " *
+                                "$(scheme_name(r))"))
+    end
+    _check_halo(r, g)
+    if fill
+        fill_halos!(sim.u, vb); fill_halos!(sim.v, vb); fill_halos!(sim.w, vb)
+        fill_halos!(ϕ, bcs)
+    end
+    Wc, Wf = weights === nothing ? (nothing, nothing) : weights
+    T = eltype(ϕ.data)
+    ϕd = ϕ.data; ud = sim.u.data; vd = sim.v.data; wd = sim.w.data
+    ii, jj, kk = interior(g)
+    Ax = g.dy * g.dz; Ay = g.dx * g.dz; Az = g.dx * g.dy
+    fW = fE = fS = fN = fB = fT = zero(T)
+    if !(vb.west isa Periodic)
+        iw = first(ii); ie = last(ii) + 1
+        @inbounds for k in kk, j in jj
+            w = _wflux(Wc, k) * Ax
+            uw = ud[iw, j, k]; ue = ud[ie, j, k]
+            fW -= w * uw * _face_x(r, ϕd, iw - 1, j, k, uw)
+            fE += w * ue * _face_x(r, ϕd, ie - 1, j, k, ue)
+        end
+    end
+    if !(vb.south isa Periodic)
+        js = first(jj); jn = last(jj) + 1
+        @inbounds for k in kk, i in ii
+            w = _wflux(Wc, k) * Ay
+            vs = vd[i, js, k]; vn = vd[i, jn, k]
+            fS -= w * vs * _face_y(r, ϕd, i, js - 1, k, vs)
+            fN += w * vn * _face_y(r, ϕd, i, jn - 1, k, vn)
+        end
+    end
+    if !(vb.bottom isa Periodic)
+        kb = first(kk); kt = last(kk) + 1
+        wb_ = _wflux(Wf, kb) * Az; wt_ = _wflux(Wf, kt) * Az
+        @inbounds for j in jj, i in ii
+            wb = wd[i, j, kb]; wt = wd[i, j, kt]
+            fB -= wb_ * wb * _face_z(r, ϕd, i, j, kb - 1, wb)
+            fT += wt_ * wt * _face_z(r, ϕd, i, j, kt - 1, wt)
+        end
+    end
+    return (west = fW, east = fE, south = fS, north = fN, bottom = fB, top = fT,
+            total = fW + fE + fS + fN + fB + fT)
+end
 
 end # module

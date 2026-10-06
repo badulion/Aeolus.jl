@@ -39,7 +39,8 @@ using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             has_open_boundaries, update_open_boundaries!,
                             prepare_open_boundaries!, assert_open_face_correction,
                             open_boundary_snapshot, restore_open_boundaries!,
-                            open_intermediate_velocity!
+                            open_intermediate_velocity!, rewind_open_boundaries!,
+                            has_radiating_outflow
 using ..Operators
 using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    momentum_advect!, advect_centered!,
@@ -1695,6 +1696,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     prepare_open_boundaries!(sim)
+    bc0 = has_radiating_outflow(sim) ? open_boundary_snapshot(sim) : nothing  # N-open-c
     νm, νs, sgsT, Ks = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
 
@@ -1729,6 +1731,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     _explicit_tendencies!(sim, Δt; body_force! = body_force!,
                           momentum_advection = momentum_advection,
                           sgs_transpose = sgsT, scalar_tensor = Ks)   # E(U₁) → sim.t*
+    rewind_open_boundaries!(sim, bc0)      # stage 2 restarts from uⁿ
     update_open_boundaries!(sim, t0 + Δt, Δt)
     bsnap = _open_intermediate!(sim, Δt)
     for name in names
@@ -1771,6 +1774,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     prepare_open_boundaries!(sim)
+    bc0 = has_radiating_outflow(sim) ? open_boundary_snapshot(sim) : nothing  # N-open-c
     νm, νs, sgsT, Ks = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
     k2set = _k2_set!(ws)
@@ -1813,6 +1817,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
                    b1, getfield(ws.aux, name), b2, getfield(k2set, name), m)
     end
     post_predictor! === nothing || post_predictor!(sim, Δt)
+    rewind_open_boundaries!(sim, bc0)      # stage 2 restarts from uⁿ
     update_open_boundaries!(sim, t0 + Δt, Δt)
     _project!(sim, Δt)
     sim.t = t0 + Δt
