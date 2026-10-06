@@ -282,6 +282,27 @@ step, the scalar scheme once per advected tracer — qv and ql):
 | | WENO-Z7 (halo 4) | 12.4 |
 | velocity halo refresh (the #132 fix) | | 0.3 |
 
+The table is from before #295 (KA-c), which removed the runtime integer
+power from the WENO-Z / TENO weights (Base's non-inlined `pow_body`, one
+call per candidate weight) and the plane copies from the halo fills.
+Remeasured per call on the same grid (1 thread, minimum of 2 × 15 calls,
+1-min load ≈ 10 on 24 cores; `advect_positive!` with its workspace):
+
+| operator | option | before (ms/call) | after (ms/call) |
+| :-- | :-- | --: | --: |
+| scalar advection, one positive tracer | WENO-Z5 (default) | 7.16 | 1.65 |
+| | TENO5 | 9.88 | 2.02 |
+| | WENO-Z7 (halo 4) | 12.06 | 3.47 |
+| momentum advection | WENO-Z5 | 34.96 | 6.62 |
+| pressure solve | multigrid | 60.9 | 55.3 |
+| | MG-CG | 41.9 | 39.0 |
+
+The numerics are unchanged: p = 2 is evaluated as `x*x`, which is
+Base's `x^2` bit for bit; TENO's q = 6 as `x³·x³`, which differs from
+Base's compensated `x^6` by at most 4 ulp (3.02 measured) and changed no
+value of the Berlin smoke matrix nor of 10⁵ random TENO5 stencils
+(`test/era2_advection.jl`).
+
 For scale, a whole default step cost about 40–60 ms under the same load
 at #132 (`timing_report`, radiation excluded), of which `step!` was
 12–17 ms; the surface exchange (#129) and the chemistry (#135) have

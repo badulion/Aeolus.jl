@@ -185,6 +185,25 @@ Since then `soil_urban` has been replaced by the surface exchange
 stepper, remeasured on master `915bd49`) and the chemistry (#135) adds five advected species; see the
 cost paragraphs of those sections.
 
+The serial baseline before threading (#295, KA-c) removed the runtime
+integer power from the WENO-Z / TENO weights, the plane copies from every
+halo fill and the per-level slice copies from the dew, with no change to
+any bit of the smoke matrix or of 12 flagship steps. Flagship, 1 thread,
+ms/step over 40 steps after 4 warm-up steps (minimum of 3 runs, 1-min
+load 10–20 on 24 cores; an earlier pair at load ≈ 1.5 in brackets):
+
+| entry | before | after |
+| :-- | --: | --: |
+| `scalar_advection` | 84.9 (68.6) | 34.6 (25.7) |
+| `step!` | 30.7 (23.5) | 28.6 (21.9) |
+| `fog_dew` | 10.1 (8.5) | 6.3 (5.9) |
+| whole step | 155.4 (128.3) | 99.7 (82.7) |
+
+A step of the flagship now allocates 1.0 MB (30.4 MB before), the
+scalar-advection stage 7 KB (13.3 MB). What remains of `fog_dew` is the
+fog saturation adjustment (5.7 ms on its own: one exact saturation
+humidity per cell), not the dew.
+
 ## Shared state
 
 Couplings never keep a private copy of a quantity another coupling

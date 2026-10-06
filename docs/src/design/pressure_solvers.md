@@ -120,9 +120,10 @@ scratch of the dot products live in the solver, as they do in
 dot products are still `sum(a .* b)` — the product is written into the
 scratch array first — so the pairwise summation, the bits and the
 iteration counts are those of the allocating version. On the 64 × 64 ×
-32 flagship grid a plain CG solve went from 18.7 to 8.3 ms, multigrid
-from 68.4 to 59.0 ms and MG-CG from 54.1 to 43.7 ms (1 thread, minimum
-of 5; most of the CG gain is garbage collection that no longer runs).
+32 flagship grid a plain CG solve went from 11.0 to 7.3 ms, multigrid
+from 60.9 to 55.3 ms and MG-CG from 41.9 to 39.0 ms (1 thread, minimum
+of 2 × 5 calls on a loaded 24-core machine; most of the CG gain is
+garbage collection that no longer runs).
 
 ### `SEMPoissonSolver` (Phase 5)
 

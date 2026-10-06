@@ -110,8 +110,9 @@ function run_stage!(c::FogDew, case, ::Val{:fog_dew}, dt)
     # and density of that cell (roof columns exchange tens of metres up).
     # One pass over the columns, each with RadiationFog.dew_deposition at
     # its own k_air (#295). Before, every distinct air level copied two 2-D
-    # slices and ran a full-surface dew_exchange! on them (9.4 ms/step on
-    # the flagship); the arithmetic per column is the same, bit for bit:
+    # slices and ran a full-surface dew_exchange! on them (about 2.4 of the
+    # stage's 8.5 ms/step on the flagship; the rest is the fog adjustment);
+    # the arithmetic per column is the same, bit for bit:
     # the vapour increment is still applied as qv += (q + Δqv) − q.
     dew_pass!(c.H_dew, qv, bus, case.ref.p̄, case.ref.ρ̄, case.mesh.dz, dt)
     # fog: saturation adjustment in the air
