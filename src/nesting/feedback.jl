@@ -30,7 +30,7 @@ _side_high(s::Int) = iseven(s)
 The transport of a cell-centred scalar whose interface flux a two-way
 nest books in its flux registers ([`TwoWayFeedback`](@ref)): the
 advective face flux of `scheme` (a name of
-[`boundary_scalar_flux`](@ref) or a reconstruction descriptor; the
+[`boundary_scalar_flux`](@ref Aeolus.AdvectionSchemes.boundary_scalar_flux) or a reconstruction descriptor; the
 Boussinesq and sound-proof cores advect `θ` and `qv` with `:centered`),
 plus the molecular diffusion `ν∇ϕ` of the simulation (`molecular = true`,
 when the simulation has viscosity) and the SGS flux of the domain's

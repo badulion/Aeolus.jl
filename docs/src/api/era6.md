@@ -56,6 +56,7 @@ Aeolus.Operators.add_sgs_momentum!
 Aeolus.Operators.add_sgs_scalar!
 Aeolus.Operators.sgs_explicit_stress
 Aeolus.Operators.sgs_tracer_diffusivity!
+Aeolus.Operators.sgs_scalar_face_diffusivity
 Aeolus.Operators.compute_sgs!
 Aeolus.Operators.sgs_closure
 Aeolus.Operators.AbstractEddyViscosityClosure

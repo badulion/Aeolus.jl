@@ -194,13 +194,35 @@ From `test/era2_nest_twoway.jl` and `test/era2_nest_twoway_longrun.jl`.
 | forced neutral flow (Kolmogorov, 16³ parent, r = 2), 61 eddy turnovers | KE of turnovers −40…−20 vs −20…0: ratio 1.011 |
 | outgoing Lamb–Oseen vortex harness (N-open-c), two-way, 2000 steps | child kinetic energy within 1.2e-6 of a standalone parent |
 
+### The 4 h benchmark at 50 m (`benchmarks/bench_twoway_cbl.jl`)
+
+Parent 64 × 64 × 32 at 50 m, child 72 × 72 × 48 at 16.7 m, 4 h, one core:
+
+| | one-way | two-way |
+| :-- | :-- | :-- |
+| parent steps / child substeps (substeps per step) | 4166 / 25583 (2–16) | 4153 / 25383 (2–10) |
+| retries, non-finite values | 0, none | 0, none |
+| wall time | 854 s | 989 s |
+| largest child divergence | 4.5e-16 s⁻¹ | 4.5e-16 s⁻¹ |
+| composite θ budget error | 4.7e-3 (not conserved one-way) | 3.1e-13 |
+| KE mean over hour 4 / hour 3 | 1.217 | 1.116 |
+| monotone KE growth over the last hour (12 five-minute means) | no | no |
+| child-mean ``w`` at 400 m over hour 4 | −0.247 m/s | −0.420 m/s |
+| 2Δ θ mode on the rows crossing the nest, growth over hours 3–4 | −0.123 ± 0.007 h⁻¹ | −0.019 ± 0.006 h⁻¹ |
+
+The two-way run meets "last hour within 20 % of the hour before"; the
+one-way run, whose CBL still deepens, does not (1.217).
+
 The child-mean ``w`` of a single run is dominated by where the few
 largest thermals happen to be: the child covers about one convective
-cell (1.2 km against ``1.5 z_i ≈ 1.2`` km), and the one-way run, which has
-no secondary circulation, already shows −0.16 m/s. A two-way mean of
-−0.36 m/s therefore does not establish a circulation of either sign; the
-4 h benchmark at 50 m (`benchmarks/bench_twoway_cbl.jl`) measures it over
-the last hour.
+cell (1.2 km against ``1.5 z_i ≈ 1.2``–1.5 km), and the one-way run,
+which has no secondary circulation, shows −0.16 m/s (2nd hour, 100 m) and
+−0.25 m/s (4th hour, 50 m). The two-way runs give −0.36 and −0.42 m/s: a
+mean descent over the child about twice the one-way value, of the
+magnitude but the opposite sign of the 0.4–0.9 m/s mean updraft Hellsten
+et al. (2021) report. One realisation with a one-cell child cannot
+separate a circulation from the thermal statistics; an ensemble or a
+larger child would.
 
 Two expectations of the issue did not hold as stated, for physical
 reasons, and the tests say so: the kinetic energy of a CBL deepening under
