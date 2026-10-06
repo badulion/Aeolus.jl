@@ -971,7 +971,13 @@ of `ϕ` with the *same* `dt` keeps `ϕ ≥ 0` exactly, provided
   * the first-order CFL condition `Σ_d |u_d| dt/Δx_d ≤ 1` holds.
 
 `scheme` selects the high-order reconstruction (`:weno_z5`, `:weno_z7`,
-`:teno5`, `:teno8`, `:weno5`, `:centered`). The flux correction blends
+`:teno5`, `:teno8`, `:weno5`, `:centered`), or is a reconstruction
+descriptor (`AdvectionSchemes.WENOZ(5, 2)`, `TENO(5)`, …; `C_T` and `p`
+are then ignored). A name is turned into a descriptor on every call (a
+dynamic dispatch per call, not per cell); a time loop may build it once
+with `AdvectionSchemes._reconstruction(name)` and pass that.
+
+The flux correction blends
 towards first-order upwind only in the cells that would otherwise go
 negative, so smooth regions keep the full high-order accuracy.
 
@@ -983,7 +989,8 @@ must be sign-safe themselves. Pass a [`FluxLimiterWorkspace`](@ref) as
 function advect_positive!(tend::Field{CellCenter,T}, u::Field{FaceX,T},
                           v::Field{FaceY,T}, w::Field{FaceZ,T},
                           ϕ::Field{CellCenter,T}, dt::Real;
-                          scheme::Symbol = :weno_z5, C_T::Real = 1e-5, p::Integer = 2,
+                          scheme::Union{Symbol,AbstractReconstruction} = :weno_z5,
+                          C_T::Real = 1e-5, p::Integer = 2,
                           workspace::Union{Nothing,FluxLimiterWorkspace} = nothing,
                           bcs::Union{Nothing,FieldBoundaryConditions} = nothing) where {T}
     m  = mesh(ϕ)
@@ -1513,6 +1520,7 @@ end
 # 10. Uniform scheme selection
 # =========================================================================
 
+_reconstruction(r::AbstractReconstruction; kwargs...) = r
 function _reconstruction(name::Symbol; C_T::Real = 1e-5, p::Integer = 2)
     name === :centered  && return Centered2()
     name === :weno5     && return WENOJS(5)
