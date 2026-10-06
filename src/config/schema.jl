@@ -223,7 +223,10 @@ end
 
 The schema of a driver `name`: the common sections every run has
 (`[run]`, `[fftw]`, `[logging]`, `[checkpoint]`, `[output]`; see the
-Configuration page) followed by the driver's `sections`. `[run] driver`
+Configuration page) followed by the driver's `sections`. A driver
+section named like a common one adds its options to that section (the
+`simulation` driver's `[output] fields`); an option already in the common
+section, or a driver section declared twice, is an `ArgumentError`. `[run] driver`
 defaults to, and must equal, `name`. `checks` are cross-field checks
 ([`check!`](@ref)).
 """
@@ -234,12 +237,23 @@ struct ConfigSchema
 end
 
 function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[])
-    common = _common_sections(String(name))
-    all_s = vcat(common, collect(Section, sections))
-    names = [s.name for s in all_s]
-    for n in names
-        count(==(n), names) > 1 &&
-            throw(ArgumentError("schema \"$name\": section [$n] is declared twice (or collides with a common section)"))
+    all_s = _common_sections(String(name))
+    ncommon = length(all_s)
+    for s in sections
+        i = findfirst(c -> c.name == s.name, all_s)
+        if i === nothing
+            push!(all_s, s)
+        elseif i <= ncommon                 # a driver's options added to a common section
+            c = all_s[i]
+            for o in s.options
+                any(x -> x.key == o.key, c.options) &&
+                    throw(ArgumentError("schema \"$name\": option \"$(o.key)\" of [$(s.name)] " *
+                                        "is already a common option"))
+            end
+            all_s[i] = Section(c.name, c.doc, vcat(c.options, s.options))
+        else
+            throw(ArgumentError("schema \"$name\": section [$(s.name)] is declared twice"))
+        end
     end
     return ConfigSchema(String(name), all_s, Any[checks...])
 end
