@@ -15,7 +15,10 @@ using Aeolus.Fields: interior_view
 #      at 50 m is benchmarks/bench_twoway_cbl.jl): no NaN, bounded kinetic
 #      energy, child max|∇·u| < 1e-10 every step, the composite θ budget
 #      closes, the 2Δ interface noise does not grow; the child-mean
-#      secondary-circulation updraft is measured for one-way and two-way;
+#      secondary circulation and the covered-column θ anomaly behind it are
+#      measured for one-way and two-way, and the circulation is thermally
+#      direct (#327 M5);
+#   1b. the resolution dependence of a standalone CBL that drives it (#327);
 #   2. a forced neutral flow (Kolmogorov forcing, Smagorinsky) for more
 #      than 20 eddy turnovers: bounded kinetic energy;
 #   3. N-open-c's outgoing Lamb–Oseen vortex harness (#260) in two-way
@@ -127,8 +130,11 @@ end
             join([@sprintf("%.3f", x) for x in ratios], ", "), sk, so)
     # the secondary circulation: the child-mean w at 400 m, mean over the 2nd hour
     wo = _twl_window(ow.t, ow.wc, 3600, 7200); ww = _twl_window(t, tw.wc, 3600, 7200)
-    @printf("  child-mean w at 400 m, 2nd hour: one-way %+.3f m/s, two-way %+.3f m/s (Hellsten et al. 2021: 0.4–0.9 m/s mean child updraft)\n",
-            wo, ww)
+    # and the buoyancy behind it: the parent's θ over the covered columns
+    # minus the rest, in the child's lower half (#327 M5)
+    θo = _twl_window(ow.t, ow.dθ, 3600, 7200); θw = _twl_window(t, tw.dθ, 3600, 7200)
+    @printf("  child-mean w at 400 m, 2nd hour: one-way %+.3f m/s, two-way %+.3f m/s; covered − outside parent θ (0–400 m): one-way %+.4f K, two-way %+.4f K\n",
+            wo, ww, θo, θw)
     # the 2Δ mode of θ along the parent rows that cross the nest
     sn, sen = _twl_fit(t[hr] ./ 3600, log.(tw.noise[hr]))
     @printf("  2Δ θ noise on the rows crossing the nest: %.2e K at 1 h, %.2e K at 2 h; fitted growth %.3f ± %.3f h⁻¹\n",
@@ -139,6 +145,53 @@ end
     @test tw.budget[] < 1e-10
     @test sn <= sen                                   # the 2Δ noise does not grow
     @test run2.stats.parent_retries == 0 && run2.stats.child_retries == 0
+    # #327 M5: the two-way circulation is thermally direct — the covered
+    # column is heavier than its surroundings where the mean flow over the
+    # child descends (in a 6-member ensemble of this case every member has
+    # w < 0 and a cool covered column; see the theory page)
+    @test ww * θw > 0
+    @test ww < 0 && θw < 0
+end
+
+# #327 M5: why the covered column is cool. The circulation is driven by the
+# resolution dependence of the CBL (Hellsten et al. 2021's hypothesis: a
+# different divergence of the vertical heat flux at a different grid
+# spacing). Standalone periodic CBLs of this case at the parent's and at the
+# child's spacing hold the same heat (the surface flux is prescribed), but
+# the finer one carries more of it into the entrainment zone: its layer
+# below 800 m (the child's depth) is cooler, so the anterpolated parent
+# column is cooler and sinks.
+@testset "resolution dependence of the CBL behind the secondary circulation (#327 M5)" begin
+    function sa_cbl(Δ; L = 1600.0, H = 1600.0, T = 7200.0, seed = 1)
+        N = round(Int, L / Δ); Nz = round(Int, H / Δ)
+        m = RegularGrid(Float64; size = (N, N, Nz), extent = (L, L, H), halo = (3, 3, 3))
+        s = BoussinesqSimulation(m; θ₀ = _TWL_θS, C_s = 0.17, θ_flux_bottom = 0.1,
+                                 bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+        rng = Xoshiro(seed)
+        for k in axes(s.θ.data, 3)
+            z = (k - m.Hz - 0.5) * m.dz
+            s.θ.data[:, :, k] .= _TWL_θS + (z > 600 ? 0.005 * (z - 600) : 0.0)
+        end
+        θi = interior_view(s.θ); nl = max(1, round(Int, 150 / Δ))
+        θi[:, :, 1:nl] .+= 0.2 .* (rand(rng, size(θi, 1), size(θi, 2), nl) .- 0.5)
+        c = CFLConstraints(C_advective = 0.5); dtp = nothing
+        k8 = round(Int, 800 / Δ); low = 0.0; col = 0.0; acc = 0.0
+        while s.t < T - 1e-9
+            tp = s.t
+            _, dtp, _ = step_adaptive!(s, c; dt_prev = dtp, divergence_tol = Inf)
+            s.t <= 3600 && continue
+            dt = s.t - tp; acc += dt
+            low += dt * (sum(view(θi, :, :, 1:k8)) / (N^2 * k8) - _TWL_θS)
+            col += dt * sum(θi .- _TWL_θS) * Δ / N^2
+        end
+        return low / acc, col / acc
+    end
+    lc, cc = sa_cbl(100.0)                            # the parent's spacing
+    lf, cf = sa_cbl(100.0 / 3)                        # the child's (r = 3)
+    @printf("  standalone CBL, 2nd hour: mean θ − θ_s below 800 m %.4f K at 100 m, %.4f K at 33 m (fine − coarse %+.4f K); column heat %.2f / %.2f K m\n",
+            lc, lf, lf - lc, cc, cf)
+    @test lf - lc < -0.03                             # measured −0.087 (2 seeds: −0.087, −0.072)
+    @test abs(cf - cc) / cc < 1e-3                    # the same heat, redistributed upward
 end
 
 @testset "forced neutral flow: 2 × 20 eddy turnovers, bounded kinetic energy" begin

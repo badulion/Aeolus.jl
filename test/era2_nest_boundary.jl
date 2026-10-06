@@ -395,6 +395,33 @@ end
     @test abs(led.Q) > 1e-6 * U * A_all                    # the solid faces do make an imbalance
     divergence(csim.div_buf, csim.u, csim.v, csim.w)
     @test maximum(abs, interior_view(csim.div_buf)) < 1e-10
+    # #327 M4: one solid path (mark_open_boundary_solids!), so the
+    # tangential velocities are zero at the solid points too (the retired
+    # nest-only path zeroed u·n alone), in the buffers and in the halos
+    ntan = 0; tmax = 0.0
+    for nm in (:v, :w)
+        pl = csim.bcs.east.planes[nm]
+        f = getproperty(csim, nm)
+        fill_halos!(f, csim.bcs)
+        for b in axes(pl.fluid, 2), a in axes(pl.fluid, 1)
+            pl.fluid[a, b] && continue
+            ntan += 1
+            for c in 1:length(pl.range)
+                tmax = max(tmax, abs(pl.data[c, cm.Hy + a, cm.Hz + b]),
+                           abs(f.data[pl.range[c], cm.Hy + a, cm.Hz + b]))
+            end
+        end
+    end
+    # the flags are those of mark_open_boundary_solids! on fresh bcs
+    fresh = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest)
+    mark_open_boundary_solids!(fresh, sm.mask)
+    same = all(csim.bcs.east.planes[nm].fluid == fresh.east.planes[nm].fluid for nm in (:u, :v, :w, :θ))
+    @printf("  solid points of the east face: %d tangential (v, w), max |velocity| there %.1e; flags = mark_open_boundary_solids!: %s\n",
+            ntan, tmax, same)
+    @test ntan >= 2 * nsolid
+    @test tmax == 0.0
+    @test same
+    @test !hasfield(NestBoundaryData, :solid)
 end
 
 # -------------------------------------------------------------------------

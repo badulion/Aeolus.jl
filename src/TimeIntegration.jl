@@ -65,7 +65,7 @@ using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
        SubsteppingSchedule, substeps_for,
        StateSnapshot, state_snapshot, save_state!, restore_state!,
-       step_adaptive!,
+       step_adaptive!, NumericalFailure, is_numerical_failure,
        DiffusionWorkspace, solve_implicit_diffusion!,
        IMEXScheme, ARK2, Rosenbrock2,
        IMEXWorkspace, imex_workspace, step_imex!, imex_stability_limit
@@ -532,6 +532,53 @@ cached afterwards (weakly, so it is freed with `sim`). This is what makes
 """
 state_snapshot(sim::BoussinesqSimulation) =
     get!(() -> StateSnapshot(sim), _SNAPSHOTS, sim)::StateSnapshot
+
+"""
+    NumericalFailure(msg) <: Exception
+
+The exception a dynamical core, a solver or a physics step throws when it
+fails **numerically** — an iterative solver that diverges or does not
+converge, a state that has left its physical range — as opposed to a
+programming error. Step-rejecting drivers
+([`NestedRun`](@ref Aeolus.Nesting.NestedRun)) roll back and retry at a
+smaller step on it ([`is_numerical_failure`](@ref)); any other exception is
+rethrown.
+"""
+struct NumericalFailure <: Exception
+    msg::String
+end
+Base.showerror(io::IO, e::NumericalFailure) = print(io, "NumericalFailure: ", e.msg)
+
+"""
+    is_numerical_failure(err, sim) -> Bool
+
+Whether the exception `err`, thrown by a step of `sim`, is a numerical
+failure that a smaller step may cure, rather than a bug to be reported:
+
+* a [`NumericalFailure`](@ref) (a solver that diverged);
+* a `DomainError` (`sqrt`/`log` of a negative value), an `InexactError`
+  (a non-finite value converted to an integer, e.g. a step count
+  `ceil(Int, R/Δt)` from an infinite rate) or an `OverflowError`;
+* **any** exception thrown while the prognostic state of `sim` has become
+  non-finite (the throw is a consequence of the blow-up).
+
+A `MethodError`, `BoundsError`, `ArgumentError`, `DimensionMismatch`, …
+thrown from a finite state is a programming or set-up error: retrying it at
+half the step only hides it (#327, M6). An `InterruptException` is never a
+numerical failure.
+"""
+function is_numerical_failure(err, sim)
+    err isa InterruptException && return false
+    err isa Union{NumericalFailure, DomainError, InexactError, OverflowError} && return true
+    return !_finite_state(sim)
+end
+
+# `_all_finite`, but false (not a throw) for a state it cannot inspect.
+_finite_state(sim) = try
+    _all_finite(sim)
+catch
+    false
+end
 
 function _all_finite(sim::BoussinesqSimulation)
     all(isfinite, interior_view(sim.u)) || return false
