@@ -180,6 +180,9 @@ to_host(x::AbstractArray) = Array(x)
 # Filled by Operators (the owner of the FFTW policy, #245), so that the
 # thread count is set through `set_fftw_policy!` and reported by
 # `fftw_policy()`; one source of truth for FFTW settings.
+# `_set_fftw_threads!(n; default = true)` sets `n` only if the count was
+# not chosen explicitly (AEOLUS_FFTW_THREADS, `set_fftw_policy!(threads =)`,
+# an `[fftw]` namelist table).
 function _set_fftw_threads! end
 
 """
@@ -188,17 +191,24 @@ function _set_fftw_threads! end
 
 Prepare the process to run on `backend`: makes it the
 [`default_backend`](@ref) and sets the thread counts of the two libraries
-that thread on their own.
+that thread on their own. Call it before the simulation (and so its FFT
+plans) is built: an FFTW plan keeps the thread count it was made with.
 
   * **BLAS** is pinned to one thread when Julia runs threaded
     (`Threads.nthreads() > 1`; maintainer decision on #294): BLAS threads
     would compete with the kernel tasks, and a threaded BLAS may split a
     reduction differently at different thread counts. `blas_threads`
     overrides.
-  * **FFTW**: `fftw_threads = nothing` keeps the FFTW policy
-    (`AEOLUS_FFTW_THREADS`, default 1; `Aeolus.Operators.set_fftw_policy!`);
-    an integer sets it there. Thread invariance of threaded FFTW plans
-    (under `ESTIMATE`) is established by the FFT port (KA-h), not here.
+  * **FFTW** runs on `Threads.nthreads()` threads (KA-h, #298; maintainer
+    decision on #291): FFTW's threaded plans split the independent 1-D
+    transforms between threads without changing any of them, so a solve
+    gives the same bits at every thread count under a deterministic
+    planner (`ESTIMATE`, or imported wisdom); measured in
+    docs/src/design/ka_port.md. A count chosen explicitly wins:
+    `fftw_threads = n` here, or before the call `AEOLUS_FFTW_THREADS`,
+    `Aeolus.Operators.set_fftw_policy!(threads = n)` or a namelist's
+    `[fftw] threads`. The count is set through that FFTW policy, so
+    `fftw_policy()` and the checkpoint record report it.
 
 Returns `(backend, julia_threads, blas_threads, fftw_threads)`.
 """
@@ -212,7 +222,11 @@ function init_threads!(b::AbstractBackend = default_backend();
     elseif nt > 1
         BLAS.set_num_threads(1)
     end
-    fftw_threads === nothing || _set_fftw_threads!(Int(fftw_threads))
+    if fftw_threads === nothing
+        _set_fftw_threads!(nt; default = true)
+    else
+        _set_fftw_threads!(Int(fftw_threads))
+    end
     return (backend = b, julia_threads = nt, blas_threads = BLAS.get_num_threads(),
             fftw_threads = _fftw_threads())
 end

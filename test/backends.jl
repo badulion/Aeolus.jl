@@ -214,13 +214,27 @@ end
 
         fftw0 = Aeolus.fftw_policy().threads
         blas0 = BLAS.get_num_threads()
+        st = Aeolus.Operators._FFTW_POLICY
+        explicit0 = st.threads_explicit
+        nfftw() = Aeolus.Operators.FFTW.get_num_threads()
+        # KA-h (#298): with no explicit count, FFTW runs on Julia's threads.
+        # (Until KA-h the expectation was "FFTW policy kept at 1"; changed by
+        # the maintainer decision on #291 once the FFT solves were shown to be
+        # thread-invariant.)
+        st.threads_explicit = false
         r = init_threads!(CPUBackend())
         @test r.backend == CPUBackend() && r.julia_threads == Threads.nthreads()
         Threads.nthreads() > 1 && @test BLAS.get_num_threads() == 1   # pinned when threaded
-        @test r.fftw_threads == fftw0 == Aeolus.fftw_policy().threads  # FFTW policy kept
+        @test r.fftw_threads == Threads.nthreads() == Aeolus.fftw_policy().threads == nfftw()
+        @test !st.threads_explicit                                    # still a default
+        # an explicit count (set_fftw_policy!, AEOLUS_FFTW_THREADS) is kept
+        Aeolus.set_fftw_policy!(threads = 3)
+        @test init_threads!(CPUBackend()).fftw_threads == 3 == nfftw()
         r2 = init_threads!(CPUBackend(); fftw_threads = 2)
-        @test r2.fftw_threads == 2 == Aeolus.fftw_policy().threads     # set through the policy
+        @test r2.fftw_threads == 2 == Aeolus.fftw_policy().threads == nfftw()  # through the policy
+        @test init_threads!(CPUBackend()).fftw_threads == 2
         init_threads!(CPUBackend(); fftw_threads = fftw0, blas_threads = blas0)
+        st.threads_explicit = explicit0
         @test Aeolus.fftw_policy().threads == fftw0 && BLAS.get_num_threads() == blas0
     end
 end
