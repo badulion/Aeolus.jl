@@ -276,7 +276,9 @@ end
 end
 
 """
-    interpolate_parent_state!(state, parent_sim, nest; order=3, region=:all)
+    interpolate_parent_state!(state, parent_sim, nest; order=3, region=:all,
+                              limit_scalars=:positive, limit_theta=:none,
+                              limit_momentum=:none)
 
 Interpolate every member of `state`'s field set from the parent onto the
 child mesh: `parent_sim`'s `u, v, w, θ`, plus each bound scalar's parent
