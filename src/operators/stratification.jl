@@ -28,11 +28,12 @@ water, kg kg⁻¹) the buoyancy variable is the density potential
 temperature with condensate loading, ``θ_ρ = θ(1 + 0.61 q_v - q_c)``
 (interpolated to the faces like θ_v), and in a **saturated** cell —
 one with ``q_c > 0``, which after a saturation adjustment means
-``q_v = q_s`` — ``N^2`` is the saturated buoyancy frequency of Durran &
-Klemp (1982), `MoistThermodynamics.saturated_buoyancy_frequency_squared`,
-with the same face differences of θ and of the total water
-``q_w = q_v + q_c`` over Δz and the cell's own θ, ``q_w`` and pressure
-`p`. Moist-adiabatic (moist-neutral) saturated air then has ``N^2 ≈ 0``
+``q_v = q_s`` — ``N^2`` is the saturated buoyancy frequency,
+`MoistThermodynamics.saturated_buoyancy_frequency_squared` (Durran &
+Klemp 1982 in a saturated environment, with the virtual effect of the
+humidity jump kept at a cloud edge), from the same face differences of
+θ, ``q_v`` and ``q_w = q_v + q_c`` over Δz and the cell's own θ,
+``q_v``, ``q_c`` and pressure `p`. Moist-adiabatic (moist-neutral) saturated air then has ``N^2 ≈ 0``
 instead of the dry ``(g/θ_0)∂θ/∂z ≈ 3 × 10^{-4}`` s⁻² of a 5 K km⁻¹
 θ gradient. Where `qc` is zero in a cell and both neighbours the result
 is the `qv` form bit for bit.
@@ -95,12 +96,13 @@ end
 @inline function _n2_cell(θ, w::_Cloudy, i, j, k, dz, g, θr)
     qv, qc = w.qv, w.qc
     if qc[i, j, k] > 0
-        # saturated: Durran & Klemp (1982) from the face differences of θ and q_w
+        # saturated: the moist-adiabatic parcel (Durran & Klemp 1982) against
+        # the face differences of θ, q_v and q_w
         dθ  = (0.5 * (θ[i, j, k] + θ[i, j, k+1]) - 0.5 * (θ[i, j, k-1] + θ[i, j, k])) / dz
-        qw  = qv[i, j, k] + qc[i, j, k]
-        dqw = (0.5 * (qv[i, j, k] + qc[i, j, k] + qv[i, j, k+1] + qc[i, j, k+1]) -
-               0.5 * (qv[i, j, k-1] + qc[i, j, k-1] + qv[i, j, k] + qc[i, j, k])) / dz
-        return saturated_buoyancy_frequency_squared(θ[i, j, k], _θref(w.p, k), dθ, qw, dqw,
+        dqv = (0.5 * (qv[i, j, k] + qv[i, j, k+1]) - 0.5 * (qv[i, j, k-1] + qv[i, j, k])) / dz
+        dqc = (0.5 * (qc[i, j, k] + qc[i, j, k+1]) - 0.5 * (qc[i, j, k-1] + qc[i, j, k])) / dz
+        return saturated_buoyancy_frequency_squared(θ[i, j, k], _θref(w.p, k), qv[i, j, k],
+                                                    qc[i, j, k], dθ, dqv, dqv + dqc,
                                                     DEFAULT_CONSTANTS; θ_ref = θr, g = g)
     end
     return buoyancy_frequency_squared(_θρ_face(θ, qv, qc, i, j, k),

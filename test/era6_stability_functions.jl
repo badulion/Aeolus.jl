@@ -10,9 +10,10 @@
 #      profiles; second order for a tanh shear layer);
 #   5. the fog column delegates to ShortTail bit for bit;
 #   6. the mean-profile N² of TimeIntegration and Anelastic bit for bit;
-#   7. cloudy-air N² (#239): condensate loading, the saturated N² of
-#      Durran & Klemp (1982) — ≈ 0 on a moist adiabat, within 4 % of the
-#      fog column's parcel N² — and the dry / qv forms bit for bit.
+#   7. cloudy-air N² (#239): condensate loading, the saturated N² (Durran &
+#      Klemp 1982 in a saturated environment, a lifted parcel at a cloud
+#      top) — ≈ 0 on a moist adiabat, within 4 % of the fog column's parcel
+#      N² — and the dry / qv forms bit for bit.
 
 using Aeolus.TurbulenceStability
 using Aeolus.TurbulenceStability: AbstractRiStability
@@ -380,18 +381,53 @@ isdefined(@__MODULE__, :moist_adiabat_column!) ||
     @test errs[end] < 1e-6 * N2_qv                  # the saturated form: neutral
     @test all(o -> abs(o - 2) < 0.1, log2.(errs[1:end-1] ./ errs[2:end]))
 
-    # (d) the contract function: limits and conditional instability
-    @test MT.saturated_buoyancy_frequency_squared(290.0, 9e4, 0.0, 0.01, 0.0) < 0   # neutral θ, saturated: unstable
-    Γd = MT.dry_adiabatic_lapse_rate(); Π = MT.exner_function(9e4)
-    @test MT.saturated_buoyancy_frequency_squared(280.0, 2e4, 4e-3, 0.0, 0.0) ≈
-          (c.grav / 280.0) * 4e-3 rtol = 1e-3          # 177 K: r_s → 0, the dry N²
-    T = 290.0 * Π; Γm = MT.moist_adiabatic_lapse_rate(T, 9e4)
-    # a θ gradient between the moist and the dry adiabat: dry-stable,
-    # saturated-unstable (conditional instability)
-    dθ = 0.5 * (Γd - Γm) / Π
-    @test MT.saturated_buoyancy_frequency_squared(290.0, 9e4, dθ, 0.01, 0.0) < 0
-    @test MT.saturated_buoyancy_frequency_squared(290.0, 9e4, dθ, 0.01, -1e-6) >
-          MT.saturated_buoyancy_frequency_squared(290.0, 9e4, dθ, 0.01, 0.0)   # water decreasing upward stabilises
+    # (d) the contract function
+    sbf = MT.saturated_buoyancy_frequency_squared
+    Γd = MT.dry_adiabatic_lapse_rate()
+    @test sbf(280.0, 2e4, 0.0, 0.0, 4e-3, 0.0, 0.0) ≈ (c.grav / 280.0) * 4e-3 rtol = 1e-3   # 177 K: q → 0, dry N²
+    θs, ps = 290.0, 9e4
+    Π = MT.exner_function(ps); T = θs * Π; Γm = MT.moist_adiabatic_lapse_rate(T, ps)
+    qs = MT.saturation_specific_humidity(T, ps); qcs = 1e-3
+    rs = MT.saturation_mixing_ratio(T, ps); Lv = MT.latent_heat_vapor(T); Rd = MT.R_d(c)
+    # the environment's saturated q_v gradient for a θ gradient dθ (hydrostatic, R_d T)
+    dqs_env(dθ) = (h = 1.0; dTdz = Π * dθ - Γd; dp = exp(c.grav * h / (Rd * T));
+                   (MT.saturation_specific_humidity(T + dTdz * h, ps / dp) -
+                    MT.saturation_specific_humidity(T - dTdz * h, ps * dp)) / (2h))
+    # Durran & Klemp (1982) eq. 36, by hand: (g/T)(∂T/∂z + Γ_m)(1 + L r_s/(R_d T)) − g ∂q_w/∂z/(1 + q_w)
+    dk82(dθ, dqc) = (c.grav / T) * (Π * dθ - Γd + Γm) * (1 + Lv * rs / (Rd * T)) -
+                    c.grav * (dqs_env(dθ) + dqc) / (1 + qs + qcs)
+    dk_rel = Float64[]
+    for dθ in (-2e-3, 3e-3, 6e-3, 1e-2), dqc in (0.0, -2e-6)
+        mine = sbf(θs, ps, qs, qcs, dθ, dqs_env(dθ), dqs_env(dθ) + dqc)
+        push!(dk_rel, abs(mine / dk82(dθ, dqc) - 1))
+    end
+    @test all(<(0.02), dk_rel)                    # saturated environment: DK82 to O(q)
+    # conditional instability: a θ gradient between the moist and the dry
+    # adiabat is dry-stable and saturated-unstable
+    dθc = 0.5 * (Γd - Γm) / Π
+    @test sbf(θs, ps, qs, qcs, dθc, dqs_env(dθc), dqs_env(dθc)) < 0
+    @test sbf(θs, ps, qs, qcs, 3e-3, dqs_env(3e-3), dqs_env(3e-3)) < (c.grav / θs) * 3e-3
+    # against a lifted parcel (reversible moist adiabat over 1 m, θ_ρ of the
+    # dynamics), in saturated environments and at a cloud top under drier air
+    function parcel_n2(dθ, dqv, dqc; h = 1.0)
+        dp = exp(c.grav * h / (Rd * T))
+        Tp = T - Γm * h; pp = ps / dp
+        qvp = MT.saturation_specific_humidity(Tp, pp); qcp = qs + qcs - qvp
+        θρp = Tp / MT.exner_function(pp) * (1 + 0.61qvp - qcp)
+        θρe = (θs + dθ * h) * (1 + 0.61 * (qs + dqv * h) - (qcs + dqc * h))
+        return -(c.grav / θs) * (θρp - θρe) / h
+    end
+    pc_abs = Float64[]
+    for (dθ, dqv, dqc) in ((3e-3, dqs_env(3e-3), 0.0), (-1e-3, dqs_env(-1e-3), -1e-6),
+                           (0.0, -1e-4, -1e-5), (2e-3, -2e-4, -2e-5))   # the last two: cloud top
+        push!(pc_abs, abs(sbf(θs, ps, qs, qcs, dθ, dqv, dqv + dqc) - parcel_n2(dθ, dqv, dqc)))
+    end
+    @test all(<(2e-6), pc_abs)
+    # cloud top, same θ above, 0.1 g/kg/m drier: the lifted parcel is buoyant
+    # (vapour) despite its water (loading). Durran & Klemp's form, which
+    # assumes a saturated environment, calls it stable.
+    @test sbf(θs, ps, qs, qcs, 0.0, -1e-4, -1.1e-4) < 0
+    @test (c.grav / T) * (-Γd + Γm) * (1 + Lv * rs / (Rd * T)) + c.grav * 1.1e-4 / (1 + qs + qcs) > 0
 
     # (e) against the fog column's parcel N² (RadiationFog.moist_stability:
     #     enthalpy-conserving displacement with the contract's saturation
@@ -422,7 +458,7 @@ isdefined(@__MODULE__, :moist_adiabat_column!) ||
         push!(rels, abs(N_dk - N_parcel) / abs(N_parcel))
     end
     @test all(<(0.04), rels)
-    @info "#239 cloudy-air N²" moist_adiabat_maxabs = errs θv_form_on_it = N2_qv parcel_rel_diff = rels
+    @info "#239 cloudy-air N²" moist_adiabat_maxabs = Tuple(errs) θv_form_on_it = N2_qv fogcolumn_rel_diff = Tuple(rels) dk82_rel = maximum(dk_rel) lifted_parcel_absdiff = maximum(pc_abs)
 end
 
 end # testset

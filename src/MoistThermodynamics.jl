@@ -1130,58 +1130,76 @@ brunt_vaisala_frequency_moist(θρ::Real, dθρ_dz::Real,
     c.grav * float(dθρ_dz) / float(θρ)
 
 """
-    saturated_buoyancy_frequency_squared(θ, p, dθ_dz, q_w, dq_w_dz, c = DEFAULT_CONSTANTS;
-                                         θ_ref = θ, g = c.grav) -> N² in s⁻²
+    saturated_buoyancy_frequency_squared(θ, p, q_v, q_c, dθ_dz, dq_v_dz, dq_w_dz,
+                                         c = DEFAULT_CONSTANTS; θ_ref = θ, g = c.grav) -> N² in s⁻²
 
-Squared buoyancy frequency of **saturated** air (Durran & Klemp 1982,
-eq. 36),
+Squared buoyancy frequency of a **saturated** cell: the restoring force
+on a saturated parcel displaced along the moist adiabat (reversible,
+total water ``q_w = q_v + q_c`` conserved, condensate carried along),
+measured against the environment's gradients. With the buoyancy variable
+of the dynamics, the density potential temperature
+``θ_ρ = θ(1 + 0.61 q_v - q_c)``, linearised about the cell,
+
+```math
+N^2 = \\frac{g}{θ_{\\rm ref}}\\Bigl[(1 + 0.61 q_v - q_c)
+      \\Bigl(\\frac{∂θ}{∂z} - \\frac{Γ_d - Γ_m}{Π}\\Bigr)
+      + θ\\Bigl(1.61\\Bigl(\\frac{∂q_v}{∂z} - \\frac{dq_s}{dz}\\Big|_{\\rm ad}\\Bigr)
+      - \\frac{∂q_w}{∂z}\\Bigr)\\Bigr],
+```
+
+where ``(Γ_d - Γ_m)/Π`` is the parcel's θ gradient on the moist adiabat
+(``T = θΠ``, ``θ ∂Π/∂z = -Γ_d`` in a hydrostatic column) and
+``dq_s/dz|_{\\rm ad}`` the change of its saturation humidity along it.
+In a **saturated environment** ``∂q_v/∂z - dq_s/dz|_{\\rm ad} =
+(∂q_s/∂T)(∂T/∂z + Γ_m)``, and the expression is the saturated
+Brunt–Väisälä frequency of Durran & Klemp (1982, eq. 36),
 
 ```math
 N_m^2 = \\frac{g}{T}\\Bigl(\\frac{∂T}{∂z} + Γ_m\\Bigr)
         \\Bigl(1 + \\frac{L_v r_s}{R_d T}\\Bigr) - \\frac{g}{1 + q_w}\\frac{∂q_w}{∂z},
 ```
 
-written in the potential temperature of a hydrostatic column
-(``T = θΠ``, ``θ ∂Π/∂z = -Γ_d``), so that only ``∂θ/∂z`` and
-``∂q_w/∂z`` are differenced and the pressure enters pointwise:
+to ``O(q)`` (with ``g/T → g/θ_{\\rm ref}`` per unit θ, the Boussinesq form):
+the factor ``1 + L_v r_s/(R_d T)`` is the virtual effect of the vapour
+that the displaced parcel and its saturated environment exchange. At a
+cloud **edge**, where the environment above or below is unsaturated,
+Durran & Klemp's form would still assume a saturated environment and
+drop the virtual effect of the humidity jump; there this form keeps it
+(``∂q_v/∂z`` is the environment's), so a saturated parcel lifted into
+drier air of the same θ is buoyant, as a parcel computation says.
 
-```math
-N_m^2 = \\frac{g}{θ_{\\rm ref}}\\Bigl(1 + \\frac{L_v r_s}{R_d T}\\Bigr)
-        \\Bigl(\\frac{∂θ}{∂z} - \\frac{Γ_d - Γ_m}{Π}\\Bigr)
-        - \\frac{g}{1 + q_w}\\frac{∂q_w}{∂z}.
-```
-
-`θ` (K) is the potential temperature of the saturated cell and `p` (Pa)
-its pressure (``T = θ\\,Π(p)`` with the dry Exner function); `q_w` is the
-total water ``q_v + q_c`` (kg kg⁻¹) and `dq_w_dz` its vertical gradient.
-``Γ_m`` is [`moist_adiabatic_lapse_rate`](@ref), ``Γ_d`` the dry
-[`dry_adiabatic_lapse_rate`](@ref), ``r_s`` the
-[`saturation_mixing_ratio`](@ref) and ``L_v`` the
-[`latent_heat_vapor`](@ref) at ``(T, p)``: one source of truth with the
-rest of the contract. With `θ_ref = θ` this is Durran & Klemp's form;
-`θ_ref` set to the reference temperature ``θ_0`` of a Boussinesq core
-gives the saturated counterpart of its ``(g/θ_0)∂θ_v/∂z``. It vanishes
-on a moist adiabat of constant total water, is ``(g/θ_{\\rm ref})∂θ/∂z``
-when ``r_s → 0`` (``Γ_m → Γ_d``), and is smaller than the dry ``N^2`` of
-the same ``θ`` gradient in a stable saturated layer, because condensation
-in a rising parcel offsets part of its adiabatic cooling.
+`θ` (K), `p` (Pa), `q_v`, `q_c` (kg kg⁻¹) are the cell's; ``T = θΠ(p)``
+with the dry Exner function. ``Γ_m`` is [`moist_adiabatic_lapse_rate`](@ref),
+``Γ_d`` [`dry_adiabatic_lapse_rate`](@ref), ``q_s``
+[`saturation_specific_humidity`](@ref) (``dq_s/dz|_{\\rm ad}`` by a centred
+difference over ±1 m of the adiabat, hydrostatic with ``R_d T``): one
+source of truth with the rest of the contract. `θ_ref` is the reference
+temperature of a Boussinesq core (``θ_0``; default θ). The factor 1.61
+is ``1 + 0.61``, the 0.61 of the cores' θ_v. The result vanishes on a
+moist adiabat of constant total water, is ``(g/θ_{\\rm ref})∂θ/∂z`` for
+``q → 0``, and is below the dry ``N^2`` of the same θ gradient in a stable
+saturated layer, because condensation in a rising parcel offsets part of
+its adiabatic cooling.
 
 Reference: Durran, D. R. & Klemp, J. B. (1982). On the effects of
 moisture on the Brunt–Väisälä frequency. *J. Atmos. Sci.*, 39,
 2152-2158.
 """
-function saturated_buoyancy_frequency_squared(θ::Real, p::Real, dθ_dz::Real, q_w::Real,
-                                              dq_w_dz::Real,
+function saturated_buoyancy_frequency_squared(θ::Real, p::Real, q_v::Real, q_c::Real,
+                                              dθ_dz::Real, dq_v_dz::Real, dq_w_dz::Real,
                                               c::ThermodynamicConstants = DEFAULT_CONSTANTS;
                                               θ_ref::Real = θ, g::Real = c.grav)
     Π  = exner_function(p, PhasePartition(0.0), c)
     T  = float(θ) * Π
-    rs = saturation_mixing_ratio(T, p, c)
-    Lv = latent_heat_vapor(T, c)
     Γd = dry_adiabatic_lapse_rate(PhasePartition(0.0), c)
     Γm = moist_adiabatic_lapse_rate(T, p, c)
-    return (g / θ_ref) * (1 + Lv * rs / (R_d(c) * T)) * (dθ_dz - (Γd - Γm) / Π) -
-           g * dq_w_dz / (1 + q_w)
+    # the parcel's saturation humidity along the moist adiabat, ±1 m
+    h  = 1.0
+    dp = exp(c.grav * h / (R_d(c) * T))
+    dqs_ad = (saturation_specific_humidity(T - Γm * h, p / dp, c) -
+              saturation_specific_humidity(T + Γm * h, p * dp, c)) / (2h)
+    return (g / θ_ref) * ((1 + 0.61 * q_v - q_c) * (dθ_dz - (Γd - Γm) / Π) +
+                          θ * (1.61 * (dq_v_dz - dqs_ad) - dq_w_dz))
 end
 
 """
