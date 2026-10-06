@@ -242,7 +242,8 @@ export RunFolder, start_run, finish_run!, with_run, run_checkpoints, Uncommitted
 # #335: blowup guard (diagnose, dump, stop) and the run monitor
 export checkpoint_payload, write_checkpoint,
        BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
-       check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path
+       check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
+       RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir
 export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_write!, nc_append_record!, nc_close!, nc_write_fields,
        nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
