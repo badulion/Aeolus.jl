@@ -257,6 +257,125 @@ end
     end
 end
 
+@testset "run monitor: CSV and NetCDF agree, each scalar evaluated once per row" begin
+    sim = dn_sim()
+    closure = StaticSmagorinsky(0.17)
+    cfl = CFLConstraints(dt_max = 1.0)
+    dir = mktempdir()
+    ctr = DNCounter(0, 0)
+    prof_at = Dict{Int,Vector{Float64}}()
+    with_monitor(sim; csv = joinpath(dir, "d.csv"), nc = joinpath(dir, "d.nc"),
+                 components = (; sgs = closure, c = ctr), cadence = 3.0) do mon
+        for n in 1:12
+            step_adaptive!(sim, cfl; dt = 1.0, sgs = closure)
+            monitor!(mon, sim; step = n, dt = 1.0, limiter = :advective)
+            prof_at[n] = dn_mean(dn_raw(sim.θ))
+        end
+    end
+    # one evaluation per row (12) and per costly row (t = 1, 4, 7, 10), not two
+    @test ctr.n_step == 12 && ctr.n_costly == 4
+    lines = readlines(joinpath(dir, "d.csv"))
+    header = split(lines[1], ',')
+    rows = [split(l, ',') for l in lines[2:end]]
+    col(name) = findfirst(h -> startswith(h, name * " ["), header)
+    NCDataset(joinpath(dir, "d.nc")) do ds
+        @test ds.dim["time"] == 12 && ds.dim["time_costly"] == 4
+        @test ds["c.calls"][:] == [parse(Float64, r[col("c.calls")]) for r in rows] == 1.0:12.0
+        costly_rows = [r for r in rows if r[col("ke_mean")] != ""]
+        @test [parse(Int, r[1]) for r in costly_rows] == ds["step_costly"][:] == [1, 4, 7, 10]
+        for name in ("ke_mean", "max_div", "theta_max", "sgs.nu_h_max", "c.costly_calls")
+            @test ds[name][:] == [parse(Float64, r[col(name)]) for r in costly_rows]   # bit for bit
+        end
+        @test ds["c.costly_calls"][:] == 1.0:4.0
+        for (j, n) in enumerate((1, 4, 7, 10))
+            @test ds["theta"][:, j] ≈ prof_at[n] rtol = 1e-14
+        end
+        @test ds["time"][:] == [parse(Float64, r[2]) for r in rows]
+    end
+end
+
+@testset "run folder: provenance attributes, restart appends, blowup keeps the rows" begin
+    if Sys.which("git") === nothing
+        @test_skip "git is not installed"
+    else
+        repo = dn_repo(); root = mktempdir()
+        commit = readchomp(`git -C $repo rev-parse HEAD`)
+        cfl = CFLConstraints(dt_max = 1.0)
+        sim = dn_sim()
+        rfpath = Ref("")
+        with_run("nc case"; root, repo, console = false,
+                 config = Dict("mesh" => Dict("N" => [10, 8, 6]))) do rf
+            rfpath[] = rf.path
+            with_monitor(sim; run = rf, cadence = 2.0) do mon
+                for n in 1:5
+                    step_adaptive!(sim, cfl; dt = 1.0)
+                    monitor!(mon, sim; step = n, dt = 1.0)
+                end
+            end
+        end
+        nc = joinpath(rfpath[], "diagnostics.nc")
+        @test isfile(nc) && isfile(joinpath(rfpath[], "diagnostics.csv"))
+        rec = read_run_toml(rfpath[])
+        s1 = rec["session"][1]
+        NCDataset(nc) do ds
+            a = ds.attrib
+            @test a["run_id"] == rec["run_id"] && a["case"] == "nc case"
+            @test a["session"] == 1 && a["run_folder"] == rfpath[]
+            @test a["git_commit"] == commit == s1["git"]["commit"]
+            @test a["git_dirty"] == 0
+            @test a["julia_version"] == string(VERSION)
+            @test a["manifest_fnv1a64"] == s1["manifest"]["fnv1a64"]
+            @test a["hostname"] == gethostname() && a["julia_threads"] == Threads.nthreads()
+            @test a["fftw_planner"] == s1["fftw"]["planner"]
+            @test a["bitwise_reproducible"] == Int8(s1["fftw"]["bitwise_reproducible"])
+            @test occursin("N = [10, 8, 6]", a["config"])
+            @test ds["step"][:] == 1:5 && ds["step_costly"][:] == [1, 3, 5]
+        end
+        # restart: same folder, same run ID, records appended, session 2
+        with_run("nc case"; root, repo, console = false, resume = rfpath[],
+                 config = Dict("mesh" => Dict("N" => [10, 8, 6]))) do rf
+            with_monitor(sim; run = rf, cadence = 2.0) do mon
+                for n in 6:8
+                    step_adaptive!(sim, cfl; dt = 1.0)
+                    monitor!(mon, sim; step = n, dt = 1.0)
+                end
+            end
+        end
+        NCDataset(nc) do ds
+            @test ds.attrib["run_id"] == rec["run_id"] && ds.attrib["session"] == 2
+            @test ds["step"][:] == 1:8 && ds["time"][:] == 1.0:8.0
+            @test ds["step_costly"][:] == [1, 3, 5, 6, 8]     # the cadence restarts with the session
+            @test length(split(ds.attrib["history"], '\n')) == 2
+        end
+        @test !isfile(joinpath(rfpath[], "diagnostics-2.nc"))
+
+        # a blowup: the rows before it are in the file (buffered rows flushed)
+        root2 = mktempdir()
+        bsim = dn_sim()
+        f2 = Ref("")
+        err = try
+            with_run("nc blowup"; root = root2, repo, console = false) do rf
+                f2[] = rf.path
+                with_monitor(bsim; run = rf, cadence = 100.0, check_every = 1) do mon
+                    for n in 1:10
+                        monitored_step!(mon, bsim; step = n) do
+                            step_adaptive!(bsim, cfl; dt = 1.0)
+                        end
+                        n == 6 && (bsim.θ.data[6, 6, 6] = NaN)
+                    end
+                end
+            end
+            nothing
+        catch e
+            e
+        end
+        @test err isa BlowupError && err.step == 7
+        NCDataset(joinpath(f2[], "diagnostics.nc")) do ds
+            @test ds["step"][:] == 1:6
+        end
+    end
+end
+
 @testset "the writer never prints" begin
     sim = dn_sim()
     path = joinpath(mktempdir(), "q.nc")
