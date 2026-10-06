@@ -396,7 +396,9 @@ function restore_checkpoint!(sim::BoussinesqSimulation, d::AbstractDict;
                              sgs = nothing, components = (;), stepper = nothing,
                              rng = nothing, path = "checkpoint", allow_mismatch::Bool = false)
     d[:julia_version] == string(VERSION) ||
-        @warn "restart!: $path was written by Julia $(d[:julia_version]), this is $(VERSION)"
+        @warn("restart!: $path was written by Julia $(d[:julia_version]), this is $(VERSION)",
+              subsystem = :checkpoint, domain = current_domain(), path,
+              written_by = d[:julia_version], running = string(VERSION))
     m = _mesh_record(sim.mesh); fm = d[:mesh]
     (fm.Nx, fm.Ny, fm.Nz, fm.Hx, fm.Hy, fm.Hz) == (m.Nx, m.Ny, m.Nz, m.Hx, m.Hy, m.Hz) ||
         throw(ArgumentError("restart!: mesh mismatch: file $(fm.Nx)×$(fm.Ny)×$(fm.Nz) (halo " *
@@ -413,8 +415,10 @@ function restore_checkpoint!(sim::BoussinesqSimulation, d::AbstractDict;
             throw(ArgumentError("restart!: run parameters differ from the checkpointed run in " *
                                 "$path: $list. Build the simulation with the checkpoint's " *
                                 "parameters, or pass `allow_mismatch = true` to restart anyway"))
-        @warn "restart!: restarting with allow_mismatch = true; run parameters differ from " *
-              "the checkpointed run in $path: $list"
+        @warn("restart!: restarting with allow_mismatch = true; run parameters differ from " *
+              "the checkpointed run in $path: $list",
+              subsystem = :checkpoint, domain = current_domain(), path,
+              parameters = Tuple(diff))
     end
 
     closure = sgs === nothing ? nothing : sgs_closure(sgs)
@@ -476,8 +480,10 @@ relaminarisation and SBL drivers) hook into:
    `every_seconds` of wall clock have passed since the last one, and
    deletes all but the newest `keep`.
 
-The policy and the FFTW provenance are logged (`verbose`) when the run
-starts or resumes. The `[checkpoint]` table of a TOML namelist builds one
+The policy and the FFTW provenance are logged when the run starts or
+resumes: at `Info` with `verbose = true`, else at `Debug` (only a run log
+shows it); each checkpoint written is a `Debug` event (`subsystem =
+:checkpoint`, see the Logging page). The `[checkpoint]` table of a TOML namelist builds one
 with [`checkpoint_schedule`](@ref).
 """
 mutable struct CheckpointSchedule
@@ -573,7 +579,9 @@ function resume!(ck::CheckpointSchedule, sim; sgs = nothing, components = (;),
     ck.wisdom && !isfile(wisdom_path(ck)) && save_fftw_wisdom(wisdom_path(ck))
     path = latest_checkpoint(ck)
     if path === nothing
-        ck.verbose && @info "checkpoints: fresh start in $(ck.dir); $(_fftw_line())"
+        @logmsg((ck.verbose ? Info : Debug), "checkpoints: fresh start in $(ck.dir); $(_fftw_line())",
+                subsystem = :checkpoint, domain = current_domain(), event = :fresh_start,
+                dir = ck.dir)
         ck.last_wall = time()
         return nothing
     end
@@ -583,9 +591,12 @@ function resume!(ck::CheckpointSchedule, sim; sgs = nothing, components = (;),
     ck.last_wall = time()
     ck.resumed_from = path
     d[:path] = path
-    ck.verbose && @info "checkpoints: resumed from $(basename(path)) (t = $(d[:t]), step $(ck.last_step)); " *
-                        "$(_fftw_line()); checkpoint written with planner = :$(d[:fftw].planner), " *
-                        "bitwise reproducible = $(d[:fftw].bitwise_reproducible)"
+    @logmsg((ck.verbose ? Info : Debug),
+            "checkpoints: resumed from $(basename(path)) (t = $(d[:t]), step $(ck.last_step)); " *
+            "$(_fftw_line()); checkpoint written with planner = :$(d[:fftw].planner), " *
+            "bitwise reproducible = $(d[:fftw].bitwise_reproducible)",
+            subsystem = :checkpoint, domain = current_domain(), event = :resume, path,
+            t = d[:t], step = ck.last_step)
     return d
 end
 
@@ -619,9 +630,14 @@ function maybe_checkpoint!(ck::CheckpointSchedule, sim; step::Integer, force::Bo
     ck.last_step = step
     ck.last_wall = time()
     fs = _checkpoint_files(ck)
+    removed = String[]
     for (_, f) in fs[1:end-min(ck.keep, length(fs))]
         rm(f; force = true)
+        push!(removed, basename(f))
     end
+    @debug("checkpoint written", subsystem = :checkpoint, domain = current_domain(),
+           event = :write, path, step, t = hasproperty(sim, :t) ? sim.t : nothing,
+           removed = Tuple(removed))
     return path
 end
 

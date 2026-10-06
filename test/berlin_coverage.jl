@@ -85,6 +85,7 @@ const BERLIN_PENDING = Dict{Symbol,String}(
     :CutCell               => "#152 cut-cell buildings option",
     :AdaptiveMesh          => "#153 nesting with forward hooks (AMR blocks themselves cannot carry the IBM/surfaces: exempt that part with the reason then)",
     :Nesting               => "#153 multi-domain case (legacy one-way forcing, deferred with AdaptiveMesh)",
+    :RunLog                => "awaiting #320 (#338: the Berlin console text through the logger)",
 )
 
 # --- frozen snapshots ---------------------------------------------------------
@@ -115,6 +116,7 @@ const BERLIN_PENDING_FROZEN = Set{Symbol}([
     :AerosolOptics, :P3Microphysics, :Snowpack, :IceThermodynamics, :AerosolCloud,
     :TurbulentMicrophysics, :IceNucleation, :SurfaceTiles, :Superdroplet,
     :StretchedGrids, :CutCell, :AdaptiveMesh, :Nesting,
+    :RunLog,   # #333 logging core, added under the transition rule (CLAUDE.md) until #320
 ])
 
 """

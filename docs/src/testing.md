@@ -97,11 +97,22 @@ own Julia process, plus one job, `runtests.jl`, for the inline
 | `--threads T` | `AEOLUS_TEST_THREADS` | 1 (Julia threads per job; BLAS threads follow) |
 | `--mem-per-job GB` | `AEOLUS_TEST_MEM_GB` | 1 |
 | `--only a.jl,b.jl` | | all files of the tier |
+| `--log LEVEL` | `AEOLUS_LOG` | `warn`: the jobs' log level (`debug`, `info`, `warn`, `error`, `off`) |
 | `--outdir DIR` | | `.testruns/<time>-<tier>/` |
 | `--list` | | print the plan and exit |
 
 `--threads` exists for the KernelAbstractions port (#291), after which
 heavy files can use more than one thread.
+
+## Logging in the suite
+
+The header of `runtests.jl` installs `Aeolus.test_logger()`: library
+events at warning level and up are printed (with a short timestamp and
+their `subsystem[domain]` tag), info and debug are not. Set
+`AEOLUS_LOG=debug` (or pass `--log debug` to `test/run.jl`) to see
+everything. A test that checks an event captures it with its own logger
+(`@test_logs`, `Test.TestLogger`) instead of reading stderr; see
+[Logging](api/logging.md) (#333).
 
 ## How the selection works
 

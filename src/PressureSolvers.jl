@@ -2,6 +2,7 @@ module PressureSolvers
 
 using FFTW
 using LinearAlgebra: mul!
+using ..RunLog: current_domain   # structured events (LOG-a, #333)
 using ..Grids
 using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields
@@ -471,7 +472,11 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
         β = rz_new / rz_old
         @. pdir = z + β * pdir
         rz_old = rz_new
-        k == solver.maxit && @warn "CGPoissonSolver hit maxit=$k with ‖r‖=$res_norm"
+        k == solver.maxit &&
+            @warn("CGPoissonSolver hit maxit=$k with ‖r‖=$res_norm",
+                  subsystem = :pressure, domain = current_domain(), solver = :cg,
+                  iterations = k, residual = res_norm,
+                  relative_residual = res_norm / b_norm, tol = solver.tol)
     end
     # zero-mean projection on the solution
     x .-= sum(x) / length(x)

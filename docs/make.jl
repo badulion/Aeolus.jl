@@ -105,6 +105,7 @@ makedocs(
             "PressureSolvers"      => "api/pressure_solvers.md",
             "Simulations"          => "api/simulations.md",
             "I/O and checkpoints"  => "api/io.md",
+            "Logging"              => "api/logging.md",
             "Physics modules"      => "api/physics.md",
             "Era II — numerics" => [
                 "Overview"                     => "api/era2.md",

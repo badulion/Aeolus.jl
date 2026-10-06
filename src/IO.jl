@@ -18,6 +18,8 @@ module IO
 
 using Serialization
 using TOML
+using Logging: @logmsg, Info, Debug
+using ..RunLog: current_domain   # structured events (LOG-a, #333)
 using ..Grids: interior, RegularGrid
 using ..Fields: Field, interior_view, location
 using ..Simulations: BoussinesqSimulation
