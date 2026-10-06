@@ -28,6 +28,8 @@ env:
   # so every process, including the precompile step, plans deterministically
   AEOLUS_FFTW_PLANNER: estimate
   AEOLUS_FFTW_THREADS: '1'
+  # the 4-core runner is about 2.3x slower than a development machine on berlin_smoke.jl
+  AEOLUS_SMOKE_BUDGET_S: '900'
   JULIA_NUM_THREADS: '1'
 
 jobs:
@@ -35,7 +37,7 @@ jobs:
     name: Fast tier - Julia ${{ matrix.version }}
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +70,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
