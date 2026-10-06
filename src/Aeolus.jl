@@ -8,6 +8,8 @@ module Aeolus
 # added without changing user code — it plugs in via multiple dispatch on
 # the mesh type inside the Operators layer.
 
+# Structured logging (LOG-a, #333): first, so every module can tag its events.
+include("logging/RunLog.jl")
 include("Grids.jl")
 include("Fields.jl")
 include("BoundaryConditions.jl")
@@ -87,6 +89,7 @@ include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, adve
 include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 include("PrognosticSGS.jl")        # Phase 56 Deardorff prognostic SGS TKE (#182)
 
+using .RunLog
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -155,6 +158,9 @@ using .LargeScaleForcing           # Era VI, Phase 58 (#171)
 using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 
 # Re-exports for the user-facing API.
+# Structured logging (LOG-a, #333)
+export AeolusLogger, TeeLogger, open_run_log, with_run_log, test_logger,
+       current_domain, with_domain, parse_log_level
 export AbstractMesh, RegularGrid
 export Field, CellCenter, FaceX, FaceY, FaceZ
 export Periodic, NoFlux, ValueBC, FluxBC, FieldBoundaryConditions, fill_halos!
