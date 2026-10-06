@@ -158,6 +158,11 @@ function section_reductions()
     c = copy(sim.θ.data); d = zeros(64)
     plane_reduce!(d, (i, j, k, c) -> (@inbounds (x = 1e-3 * c[i, j, k]; c[i, j, k] -= x; x)), I3, c)
     record!("reductions/plane_reduce!(fused)", d); record!("reductions/plane_reduce!(fused).field", c)
+    record!("reductions/enstrophy", AS.enstrophy(sim.u, sim.v, sim.w))
+    c = copy(sim.θ.data)
+    record!("reductions/plane_map!", plane_map!(zeros(64), (k, ir, jr, c) -> (s = 0.0;
+        @inbounds(for j in jr, i in ir; x = 1e-3 * c[i, j, k]; c[i, j, k] -= x; s += x; end); s), I3, c))
+    record!("reductions/plane_map!.field", c)
     record!("reductions/range_max", range_max((i, j, k, a) -> (@inbounds abs(a[i, j, k])), I3, sim.w.data))
     # chemistry: P/L/H and wet deposition, with the fields they update
     C = Aeolus.Chemistry

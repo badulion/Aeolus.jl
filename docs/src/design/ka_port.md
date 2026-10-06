@@ -138,7 +138,8 @@ of this rule.
 | `interior_max([b,] A, ranges)` | NaN-propagating maximum (any NaN gives NaN); `-Inf` for an empty region |
 | `interior_all_finite([b,] A, ranges)` | no NaN, no ±Inf |
 | `plane_reduce!(p, [b,] body, ranges, args...)` | `p[c]` = canonical plane sum of the *indexed* `body(i, j, k, args...)`; a tuple-valued body sums each component into `p::NTuple` of vectors (KA-b) |
-| `range_max([b,] body, ranges, args...)` | NaN-propagating maximum of an indexed body (KA-b) |
+| `range_max([b,] body, ranges, args...)` | NaN-propagating maximum of an indexed body, which must only read (KA-b) |
+| `plane_map!(p, [b,] plane, ranges, args...)` | `p[c]` = `plane(k, ranges[1], ranges[2], args...)`: a whole-plane function in its own fixed loop order, one work item per plane (KA-b) |
 
 `plane_reduce!` is the general form. Its body follows the launch
 contract: it may read a stencil (a strain rate, a centred `w`), may
@@ -148,7 +149,17 @@ coefficients as arguments indexed by `k`. A masked mean is a tuple body
 returning `(value, 1.0)` or `(0.0, 0.0)`: adding an exact `0.0` leaves
 a lane unchanged, so the masked sum is the canonical sum of the masked
 values. Ranges may be storage indices of halo-padded arrays or `axes`
-of interior-sized views.
+of interior-sized views. A `range_max` body only reads: its result type
+is inferred (`Base.promote_op`), never found by evaluating the body an
+extra time.
+
+`plane_map!` is the escape hatch for a reduction where the eight lanes
+cost more than they gain: the plane function runs its own loop (one
+running sum in cell order, `i` fastest) and each plane is still one work
+item, so the partials are thread-invariant. Its only user is
+`apply_wet_deposition!` (below): `exp` is called in the raining cells
+only, and keeping eight lanes live across that call made the fused
+update 1.3× slower than the old loop at one thread.
 
 **Implementation.** For `Float64` sums the eight lanes are the eight
 elements of one `<8 x double>` vector (an `llvmcall` `fadd`): point
@@ -292,6 +303,7 @@ canonical order once, so later threaded kernels match it bit for bit.
 | where | what | primitive |
 | :---- | :--- | :-------- |
 | `AdvectionSchemes` | `_dot_interior` (KE and scalar-variance budgets) | `interior_dot` |
+| `AdvectionSchemes` | `enstrophy` (edge vorticities) | `plane_reduce!` (stencil body) |
 | `FiniteVolume` | `_sgs_stress_dissipation` | `plane_reduce!` (strain body) |
 | `Simulations` | `kinetic_energy` (regular, stretched), `horizontal_mean` / `_variance`, `mean_θ_profile`, `resolved_flux_wθ` | `plane_partials!`, `plane_reduce!` |
 | `Simulations`, `Anelastic` | `max_divergence` | `range_max` (exact) |
@@ -301,7 +313,8 @@ canonical order once, so later threaded kernels match it bit for bit.
 | `TimeIntegration` | `_brunt_vaisala` plane means | `plane_partials!` |
 | `Nesting` | `NestedRun` speed cap, bound-field finiteness, `_covered_mean` | `range_max`, `interior_all_finite`, `plane_partials!` |
 | `abl_diagnostics` | `_plane_means`, `resolved_tke_profile` | `plane_partials!`, `plane_reduce!` |
-| `Chemistry` | `apply_photochemistry!` P / L / H, `apply_wet_deposition!` | `plane_reduce!` (fused update) |
+| `Chemistry` | `apply_photochemistry!` P / L / H | `plane_reduce!` (fused update) |
+| `Chemistry` | `apply_wet_deposition!` | `plane_map!` (fused update, cell order per plane) |
 | Berlin `core/ledger.jl` | `ledger_water`, `ledger_water_split` (`level_sums`), `add_surface!` | `plane_partials!`; per-class ordered fold |
 | Berlin `core/air_heat.jl` | `air_heat_levels!` (fluid and solid sums) | `plane_reduce!` (tuple) |
 | Berlin `parent/case.jl` | `_level_sums!` (the parent's budget levels) | `plane_partials!` |
@@ -346,6 +359,8 @@ seeded 32³ LES after three steps (before → after):
 | `sgs_stress_dissipation` | 0.74437976056020061 | 0.74437976056019994 |
 | `_brunt_vaisala` | 1.1608508246122187 | 1.1608508246121418 |
 | chemistry `P_Ox` (24×20×12) | 87.93448478692747 | 87.934484786927598 |
+| `apply_wet_deposition!` total (64³, 10 % rain; cells identical) | 6.518950163789894e-9 | 6.518950163789874e-9 |
+| `enstrophy` (seeded 64³ field) | 24548.03365630357 | 24548.033656303025 |
 | `_max_advective_rate`, `_max_speed`, `max_divergence` | identical | identical |
 
 The Berlin smoke matrix (49 runs, 12 steps) keeps every physical term to
@@ -375,13 +390,30 @@ the 64×64×64 flagship state after two steps. "1 t / old" is the gate
 | `_all_finite` | 990.2 | 574.5 | 0.58 | 5.7× | 7.9× | 5.4× |
 | `sgs_stress_dissipation` | 1030 | 905.0 | 0.88 | 4.2× | 6.3× | 7.2× |
 | `apply_photochemistry!` | 14456 | 11666 | 0.81 | 4.6× | 12.3× | 11.7× |
-| `apply_wet_deposition!` (no rain) | 58.4 | 49.2 | 0.84 | 1.2× | 1.2× | 0.6× |
-| `apply_wet_deposition!` (10 % rain) | 329.5 | 449.9 | 1.37 | 5.3× | 8.3× | 6.1× |
+| `apply_wet_deposition!` (no rain) | 109.4 | 54.5 | 0.50 | 1.2× | 1.3× | 1.2× |
+| `apply_wet_deposition!` (10 % rain) | 342.5 | 364.5 | 1.06 | 2.6× | 2.6× | 1.8× |
+| `apply_wet_deposition!` (all rain) | 840.6 | 860.0 | 1.02 | 1.7× | 3.2× | 2.5× |
+| `apply_wet_deposition!`, `Field` views (10 % rain) | 544.8 | 402.9 | 0.74 | | | |
+| `enstrophy` | 397.6 | 132.9 | 0.33 | 7.8× | 4.7× | 6.7× |
 
-`apply_wet_deposition!` with rain in 10 % of the cells misses the gate
-(1.37×, 450 vs 330 µs): the old loop skipped a dry cell entirely, the
-lane order adds its exact `0.0`. Without rain it returns early and is
-faster than before. It runs once per step (0.2 % of a flagship step).
+`apply_wet_deposition!` first went through `plane_reduce!` and missed
+the gate (1.31–1.39× at 10 % random rain, 64³). The dry cells were not
+the cause: skipping blocks of eight dry cells, or adding only the
+nonzero terms to the lanes, both stayed at 1.2× or more, and the lane
+version was 1.3× even with rain everywhere. What cost the time was
+keeping eight lanes live across the `exp` call of each raining cell,
+together with 3-index stores that make the compiler reload the array's
+size at every cell (a plain `k, j, i` loop with `c[i, j, k]` is 1.5×
+the linear loop). It now runs through `plane_map!`: one running sum
+per plane in cell order over linear indices, planes in parallel, then
+`ordered_sum` over `k` — thread-invariant, the cells bit-identical to
+master, the total a named one-time change. Plain arrays: 1.00–1.07×
+the old loop at 2, 10, 50 and 100 % rain (table: minima of 200 runs,
+three repeats, the reviewer's protocol, load 13 from other jobs); the
+`Field` views the Berlin `aq_chem` coupling passes are 0.54–0.82×,
+because the old loop indexed the views Cartesian. The no-rain pre-scan
+is kept for plain arrays only (on a view it cost more than the sweep).
+The thread columns of these two rows were measured at load 13–15.
 
 The flagship (`CaseConfig()`, 64×64×64), minimum of 3 × 10 steps at
 load 2: **238.7 ms/step on master, 213.5 ms/step with KA-b at one
