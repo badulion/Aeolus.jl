@@ -1024,6 +1024,7 @@ end
     include("era6_collapse.jl")            # P58-e: maximum sustainable heat flux, LES collapse regime (#193)
     include("era6_gabls3.jl")            # P58-d: GABLS3 on the SBL driver: budgets, MOST, LLJ (#194)
     include("era6_relaminarisation.jl")  # P59-e: laminar stratified flow, decaying stratified turbulence, criteria (#195)
+    include("era6_sounding.jl")          # N-parent-a: Lindenberg sounding → (z, t) profiles, boundary_layer_height (#247)
 end
 
 # =========================================================================

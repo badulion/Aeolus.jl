@@ -50,6 +50,8 @@ export CaseConfig, SCENARIOS, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        Ledger, ledger_report, surface_budget, water_budget, register_surface_factory!,
-       CaseReference, ref_pressure, ref_density, ref_exner, surface_pressure
+       CaseReference, ref_pressure, ref_density, ref_exner, surface_pressure,
+       initial_θ, initial_qv, case_sounding, case_start_time, case_surface_pressure,
+       initial_inversion_height, case_weekday
 
 end # module BerlinCase

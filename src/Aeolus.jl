@@ -960,6 +960,8 @@ export effective_roughness, effective_scalar_roughness,
 export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_prandtl,
        LillyCutoff, BrownEtAl1994, ShortTail, LongTail,
        gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR
+# N-parent-a (#247): the one boundary-layer-height diagnostic
+export boundary_layer_height
 # SurfaceExchange's implementer of the contract (MOST-consistent factors).
 export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # P58-e (#193): the maximum sustainable heat flux (Van de Wiel et al. 2012)
@@ -1049,6 +1051,8 @@ export FreeStreamBoundary
 export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
        AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
+# N-parent-a (#247): radiosonde soundings → (z, t) profiles
+export Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time
 
 # P57-e (#190): the dynamic roughness of partially resolved relief
 # (Anderson & Meneveau 2011). `surface_gradient_drag` does not collide
