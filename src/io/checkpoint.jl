@@ -480,8 +480,10 @@ relaminarisation and SBL drivers) hook into:
    `every_seconds` of wall clock have passed since the last one, and
    deletes all but the newest `keep`.
 
-The policy and the FFTW provenance are logged (`verbose`) when the run
-starts or resumes. The `[checkpoint]` table of a TOML namelist builds one
+The policy and the FFTW provenance are logged when the run starts or
+resumes: at `Info` with `verbose = true`, else at `Debug` (only a run log
+shows it); each checkpoint written is a `Debug` event (`subsystem =
+:checkpoint`, see the Logging page). The `[checkpoint]` table of a TOML namelist builds one
 with [`checkpoint_schedule`](@ref).
 """
 mutable struct CheckpointSchedule

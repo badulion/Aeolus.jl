@@ -610,6 +610,12 @@ closure to the step it takes itself. `sgs_stress` (`:laplacian` |
 `:name => callback` pairs, or a bare callback (registered as
 `:default`). Each callback is invoked as `callback(sim, dt_sub)`.
 
+Every rejected step is a structured event (`subsystem = :timestepping`,
+keys `reason`, `from`, `to`, `retry`; a throw also carries `exception`):
+at `Info`/`Warn` with `verbose = true`, else at `Debug`, so a run log
+records it while the console stays quiet. A fast process that leaves
+non-finite values is always a warning. See the Logging page (#333).
+
 ```julia
 c = CFLConstraints(dt_max = 10.0)
 sched = SubsteppingSchedule(microphysics = 4)
