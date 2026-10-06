@@ -53,6 +53,7 @@ References:
 module PrognosticSGS
 
 using ..Grids: RegularGrid, CellCenter, interior
+using ..StretchedGrids: StretchedGrid
 using ..Fields: Field, interior_view, mesh
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
@@ -184,7 +185,7 @@ end
 # =========================================================================
 
 """
-    TKEClosure(mesh::RegularGrid; e = nothing, e0 = 0, c_k = 0.1, c_ε0 = 0.19,
+    TKEClosure(mesh; e = nothing, e0 = 0, c_k = 0.1, c_ε0 = 0.19,
                c_ε1 = 0.51, c_l = 0.76, κ = 0.4, surface_factor = 3.9,
                wall_distance = nothing, first_level = nothing, mask = nothing,
                surface = nothing, θ₀ = nothing, g_accel = nothing, qv = :auto,
@@ -224,6 +225,18 @@ Keywords:
   `Operators.add_eddy_diffusion_scalar!`) ``e`` inside `advance_sgs!`.
   `false` when a driver transports ``e`` itself (the Berlin `:transport`
   stage) or for a sources-only box.
+* **Mesh.** A `RegularGrid`, or a vertically stretched `StretchedGrid`
+  (#259, the Berlin nesting parent): there the filter width is the local
+  ``Δ_k = (Δx Δy Δz_k)^{1/3}`` of each level (``Δz_k`` the cell thickness,
+  the width the core's Smagorinsky uses on that grid, Deardorff 1970), the
+  shear production is the dual of the stretched Laplacian momentum
+  operator (volume-weighted, see [`dual_strain!`](@ref)), ``N^2`` is the
+  face difference over the cell thickness (the dual of the stretched κ_t
+  operator), and ``e`` is transported by `AdvectionSchemes.advect_positive!`
+  with the centred reconstruction (the WENO / TENO stencils assume uniform
+  spacing), flux-limited toward first-order upwind so that it stays
+  positive. A `:uniform` `StretchedGrid` gives the `RegularGrid` closure
+  to round-off except for the transport (centred instead of WENO-Z5).
 * `dissipation` — `:semi_implicit` (default): the linearised implicit sink
   ``e^{n+1} = e^*/(1 + Δt\\,(c_ε s^n + r_b^n))`` (Patankar), ``e^*`` the
   value after transport and production, ``s^n = \\sqrt{e^n}/l^n``, ``r_b``
@@ -235,7 +248,9 @@ Keywords:
 struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, WS} <: AbstractSGSClosure
     e::F
     c_k::T; c_ε0::T; c_ε1::T; c_l::T; κ::T; surface_factor::T
-    Δ::T
+    Δ::T                  # the filter width (of the lowest level on a StretchedGrid)
+    Δk::Vector{T}         # the filter width of every interior level (≡ Δ on a RegularGrid)
+    vrel::Vector{T}       # cell volume of every interior level over that of level 1 (≡ 1 on a RegularGrid)
     θ₀::T                 # NaN: from the simulation
     g::T                  # NaN: from the simulation
     qv::Q                 # :auto, nothing or a Field
@@ -256,7 +271,23 @@ end
 
 const _NSTATS = 9
 
-function TKEClosure(g::RegularGrid{T}; e = nothing, e0::Real = 0, c_k::Real = 0.1,
+# The interior cell thickness of level k, and the filter width and relative
+# volume of every level: (Δx Δy Δz_k)^{1/3} and Δz_k/Δz_1. On a RegularGrid
+# the very expressions of the uniform closure (Δ ≡ (dx dy dz)^{1/3}, 1).
+_tke_level_dz(g::RegularGrid, k) = g.dz
+_tke_level_dz(g::StretchedGrid, k) = g.dzc[g.Hz+k]
+_tke_volume0(g) = g.dx * g.dy * _tke_level_dz(g, 1)
+function _tke_widths(g::RegularGrid{T}) where {T}
+    Δ = T((g.dx * g.dy * g.dz)^(1 / 3))
+    return Δ, fill(Δ, g.Nz), ones(T, g.Nz)
+end
+function _tke_widths(g::StretchedGrid{T}) where {T}
+    Δk = T[(g.dx * g.dy * _tke_level_dz(g, k))^(1 / 3) for k in 1:g.Nz]
+    vr = T[_tke_level_dz(g, k) / _tke_level_dz(g, 1) for k in 1:g.Nz]
+    return Δk[1], Δk, vr
+end
+
+function TKEClosure(g::Union{RegularGrid{T},StretchedGrid{T}}; e = nothing, e0::Real = 0, c_k::Real = 0.1,
                     c_ε0::Real = 0.19, c_ε1::Real = 0.51, c_l::Real = 0.76, κ::Real = 0.4,
                     surface_factor::Real = 3.9, wall_distance = nothing, first_level = nothing,
                     mask = nothing, surface = nothing, θ₀ = nothing, g_accel = nothing,
@@ -273,11 +304,18 @@ function TKEClosure(g::RegularGrid{T}; e = nothing, e0::Real = 0, c_k::Real = 0.
          throw(DimensionMismatch("first_level must be interior-sized $N")))
     mk = mask === nothing ? nothing : (size(mask) == size(ef.data) ? Array{Bool}(mask) :
          throw(DimensionMismatch("mask must be storage-sized $(size(ef.data))")))
-    adv = advection === :auto ? (min(g.Hx, g.Hy, g.Hz) >= 3 ? :weno_z5 : :centered) : advection
+    stretched = g isa StretchedGrid
+    adv = advection === :auto ? (!stretched && min(g.Hx, g.Hy, g.Hz) >= 3 ? :weno_z5 : :centered) :
+                                advection
+    stretched && transport && adv !== :centered &&
+        throw(ArgumentError("TKEClosure on a StretchedGrid transports e with the centred flux-limited " *
+                            "form (the WENO / TENO stencils assume uniform spacing); got advection = $(repr(adv))"))
+    stretched && mask !== nothing &&
+        throw(ArgumentError("TKEClosure: a solid mask is supported on a RegularGrid only"))
     ws = transport ? FluxLimiterWorkspace(g) : nothing
-    Δ = T((g.dx * g.dy * g.dz)^(1 / 3))
+    Δ, Δk, vrel = _tke_widths(g)
     mkf() = Field(CellCenter(), g)
-    return TKEClosure(ef, T(c_k), T(c_ε0), T(c_ε1), T(c_l), T(κ), T(surface_factor), Δ,
+    return TKEClosure(ef, T(c_k), T(c_ε0), T(c_ε1), T(c_l), T(κ), T(surface_factor), Δ, Δk, vrel,
                       θ₀ === nothing ? T(NaN) : T(θ₀), g_accel === nothing ? T(NaN) : T(g_accel),
                       qv, lw, fl, mk, surface, transport, dissipation, adv,
                       mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), ws,
@@ -337,9 +375,10 @@ function _coefficients!(ν::Field, κt::Field, c::TKEClosure{T}, N2::Field) wher
     g = mesh(c.e)
     Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     ed, nd, kd, n2 = c.e.data, ν.data, κt.data, N2.data
-    Δ, ck, cl = c.Δ, c.c_k, c.c_l
+    ck, cl = c.c_k, c.c_l
     @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
         I, J, K = Hx + i, Hy + j, Hz + k
+        Δ = c.Δk[k]
         if _solid(c.mask, I, J, K)
             nd[I, J, K] = zero(T); kd[I, J, K] = zero(T)
             continue
@@ -459,6 +498,87 @@ function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::RegularGr
     return D
 end
 
+# The dual on a StretchedGrid. The momentum operator there
+# (StretchedGrids: `_add_eddy_viscosity_u!/_v!/_w!`) differences the
+# vertical fluxes of u, v over the centre spacing `dzf` and divides by the
+# cell thickness `dzc` (u, v control volumes), and for w the reverse (`dzc`
+# between two z-faces, `dzf` the control volume). The identity
+# Σ_c ν_c D_c V_c = −Σ_p u_p T_p V_p is volume-weighted, so each flux's
+# share −u_p (±f)/L_p · V_p (L_p the extent of p's control volume across
+# the flux) is accumulated per unit horizontal area (× the control-volume
+# height of p), folded onto the interior like the uniform form, and divided
+# by the thickness dzc of the receiving cell at the end. On a `:uniform`
+# StretchedGrid this is the RegularGrid dual to round-off.
+function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::StretchedGrid{T}) where {T}
+    idx2 = 1 / g.dx^2; idy2 = 1 / g.dy^2
+    dzc, dzf = g.dzc, g.dzf
+    d = D.data
+    fill!(d, zero(T))
+    ud, vd, wd = u.data, v.data, w.data
+    ii, jj, kk = interior(g)
+    q4(x) = T(0.25) * x
+    @inbounds for k in kk
+        hc = dzc[k]                       # u, v control-volume height
+        hf = dzf[k]                       # w control-volume height
+        izt = 1 / dzf[k+1]; izb = 1 / dzf[k]       # u, v: vertical gradients between centres
+        iwt = 1 / dzc[k];   iwb = 1 / dzc[k-1]     # w: vertical gradients between z-faces
+        for j in jj, i in ii
+            # ---- u at FaceX (i,j,k) ----
+            up = ud[i, j, k]
+            a = -up * (ud[i+1, j, k] - ud[i, j, k]) * idx2 * hc
+            d[i, j, k] += a
+            a = up * (ud[i, j, k] - ud[i-1, j, k]) * idx2 * hc
+            d[i-1, j, k] += a
+            a = q4(-up * (ud[i, j+1, k] - ud[i, j, k]) * idy2 * hc)
+            d[i-1, j, k] += a; d[i, j, k] += a; d[i-1, j+1, k] += a; d[i, j+1, k] += a
+            a = q4(up * (ud[i, j, k] - ud[i, j-1, k]) * idy2 * hc)
+            d[i-1, j-1, k] += a; d[i, j-1, k] += a; d[i-1, j, k] += a; d[i, j, k] += a
+            a = q4(-up * (ud[i, j, k+1] - ud[i, j, k]) * izt)
+            d[i-1, j, k] += a; d[i, j, k] += a; d[i-1, j, k+1] += a; d[i, j, k+1] += a
+            a = q4(up * (ud[i, j, k] - ud[i, j, k-1]) * izb)
+            d[i-1, j, k-1] += a; d[i, j, k-1] += a; d[i-1, j, k] += a; d[i, j, k] += a
+
+            # ---- v at FaceY (i,j,k) ----
+            vp = vd[i, j, k]
+            a = -vp * (vd[i, j+1, k] - vd[i, j, k]) * idy2 * hc
+            d[i, j, k] += a
+            a = vp * (vd[i, j, k] - vd[i, j-1, k]) * idy2 * hc
+            d[i, j-1, k] += a
+            a = q4(-vp * (vd[i+1, j, k] - vd[i, j, k]) * idx2 * hc)
+            d[i, j-1, k] += a; d[i+1, j-1, k] += a; d[i, j, k] += a; d[i+1, j, k] += a
+            a = q4(vp * (vd[i, j, k] - vd[i-1, j, k]) * idx2 * hc)
+            d[i-1, j-1, k] += a; d[i, j-1, k] += a; d[i-1, j, k] += a; d[i, j, k] += a
+            a = q4(-vp * (vd[i, j, k+1] - vd[i, j, k]) * izt)
+            d[i, j-1, k] += a; d[i, j, k] += a; d[i, j-1, k+1] += a; d[i, j, k+1] += a
+            a = q4(vp * (vd[i, j, k] - vd[i, j, k-1]) * izb)
+            d[i, j-1, k-1] += a; d[i, j, k-1] += a; d[i, j-1, k] += a; d[i, j, k] += a
+
+            # ---- w at FaceZ (i,j,k) ----
+            wp = wd[i, j, k]
+            a = -wp * (wd[i, j, k+1] - wd[i, j, k]) * iwt
+            d[i, j, k] += a
+            a = wp * (wd[i, j, k] - wd[i, j, k-1]) * iwb
+            d[i, j, k-1] += a
+            a = q4(-wp * (wd[i+1, j, k] - wd[i, j, k]) * idx2 * hf)
+            d[i, j, k-1] += a; d[i+1, j, k-1] += a; d[i, j, k] += a; d[i+1, j, k] += a
+            a = q4(wp * (wd[i, j, k] - wd[i-1, j, k]) * idx2 * hf)
+            d[i-1, j, k-1] += a; d[i, j, k-1] += a; d[i-1, j, k] += a; d[i, j, k] += a
+            a = q4(-wp * (wd[i, j+1, k] - wd[i, j, k]) * idy2 * hf)
+            d[i, j, k-1] += a; d[i, j+1, k-1] += a; d[i, j, k] += a; d[i, j+1, k] += a
+            a = q4(wp * (wd[i, j, k] - wd[i, j-1, k]) * idy2 * hf)
+            d[i, j-1, k-1] += a; d[i, j, k-1] += a; d[i, j-1, k] += a; d[i, j, k] += a
+        end
+    end
+    _fold_halos!(d, bcs, g)
+    @inbounds for k in kk
+        ih = 1 / dzc[k]
+        for j in jj, i in ii
+            d[i, j, k] *= ih
+        end
+    end
+    return D
+end
+
 # Fold the first halo layer onto the interior cells it is a copy of (the
 # periodic image, or the mirror for no-flux / wall boundaries), x then y
 # then z, so that edge and corner halo shares are carried twice correctly.
@@ -556,8 +676,7 @@ function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     if c.transport
         ebcs = homogeneous_bcs(sim.θ_bcs)     # e: not θ's top gradient (#254)
         fill_halos!(c.e, ebcs)
-        advect_positive!(c.tend, sim.u, sim.v, sim.w, c.e, Δt;
-                         scheme = c.advection, workspace = c.ws, bcs = ebcs)
+        _advect_tke!(c, sim, Δt, ebcs, g)
         c.K2.data .= 2 .* c.ν.data
         add_eddy_diffusion_scalar!(c.tend, c.e, c.K2; mask = c.mask)
     end
@@ -565,12 +684,22 @@ function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     return c
 end
 
+# The advection of e into c.tend: flux-limited and positive (on a
+# StretchedGrid with the centred reconstruction, the only one allowed there).
+_advect_tke!(c, sim, Δt, ebcs, g) =
+    advect_positive!(c.tend, sim.u, sim.v, sim.w, c.e, Δt;
+                     scheme = c.advection, workspace = c.ws, bcs = ebcs)
+
+# Σ a V over the interior (a interior-sized)
+_tke_volume_sum(a, c, V0, ::RegularGrid) = sum(a) * V0
+_tke_volume_sum(a, c, V0, g::StretchedGrid) = sum(sum(view(a, :, :, k)) * c.vrel[k] for k in 1:g.Nz) * V0
+
 function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
     g = mesh(c.e)
     Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
-    V = g.dx * g.dy * g.dz
+    V0 = T(_tke_volume0(g))
     ed, nd, n2, dd, td = c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data
-    Δ, ck, cl = c.Δ, c.c_k, c.c_l
+    ck, cl = c.c_k, c.c_l
     sPs = zero(T); sPb = zero(T); sε = zero(T); sB = zero(T); sT = zero(T)
     nclip = zero(T); eclip = zero(T)
     exact = c.dissipation === :exact
@@ -580,6 +709,7 @@ function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
             ed[I, J, K] = zero(T)
             continue
         end
+        Δ = c.Δk[k]; vr = c.vrel[k]; V = V0 * vr
         e = ed[I, J, K]
         N2 = n2[I, J, K]
         l, s = tke_length_scale(e, N2, Δ; l_wall = _lwall(c.l_wall, i, j, k, T), c_l = cl)
@@ -615,12 +745,12 @@ function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
             dB = R > 0 ? rem * (rb / R) : zero(T)
         end
         ed[I, J, K] = enew
-        sPs += Ps; sPb += Pb; sT += tr
-        sε += dε; sB += dB
+        sPs += Ps * vr; sPb += Pb * vr; sT += tr * vr
+        sε += dε * vr; sB += dB * vr
     end
     st = c.stats
     st[1] += nclip; st[2] += eclip
-    st[4] = sPs * V; st[5] = sPb * V; st[6] = sε * V; st[7] = sB * V; st[8] = sT * V
+    st[4] = sPs * V0; st[5] = sPb * V0; st[6] = sε * V0; st[7] = sB * V0; st[8] = sT * V0
     st[9] += 1
     c.surface === nothing || _surface!(c, Δt)
     return c
@@ -630,7 +760,7 @@ function _surface!(c::TKEClosure{T}, Δt) where {T}
     g = mesh(c.e)
     us, kk = c.surface.u_star, c.surface.k
     Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
-    V = g.dx * g.dy * g.dz
+    V0 = T(_tke_volume0(g))
     ed = c.e.data
     de = zero(T)
     @inbounds for j in 1:g.Ny, i in 1:g.Nx
@@ -641,11 +771,12 @@ function _surface!(c::TKEClosure{T}, Δt) where {T}
         u = us[i, j]
         isfinite(u) || continue
         # c_ε at the surface value itself (l = min(Δ, κ d): neutral surface layer)
-        l, _ = tke_length_scale(zero(T), zero(T), c.Δ; l_wall = _lwall(c.l_wall, i, j, k, T))
+        Δ = c.Δk[k]
+        l, _ = tke_length_scale(zero(T), zero(T), Δ; l_wall = _lwall(c.l_wall, i, j, k, T))
         fac = _first(c.first_level, i, j, k) ? c.surface_factor : one(T)
-        cε = tke_dissipation_coefficient(l, c.Δ; c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, factor = fac)
+        cε = tke_dissipation_coefficient(l, Δ; c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, factor = fac)
         es = tke_surface_value(T(u), cε; c_k = c.c_k)
-        de += (es - ed[I, J, K]) * V
+        de += (es - ed[I, J, K]) * (V0 * c.vrel[k])
         ed[I, J, K] = es
     end
     c.stats[3] += de
@@ -704,17 +835,16 @@ function tke_budget(c::TKEClosure{T}, sim) where {T}
     _coefficients!(c.ν, c.κt, c, c.N2)
     fill_halos!(c.ν, bcs)
     dual_strain!(c.D, sim.u, sim.v, sim.w, bcs)
-    V = g.dx * g.dy * g.dz
+    V0 = T(_tke_volume0(g))
     tr = zero(T)
     if c.transport
         fill!(c.tend.data, 0)
         ebcs = homogeneous_bcs(sim.θ_bcs)
         fill_halos!(c.e, ebcs)
-        advect_positive!(c.tend, sim.u, sim.v, sim.w, c.e, one(T);
-                         scheme = c.advection, workspace = c.ws, bcs = ebcs)
+        _advect_tke!(c, sim, one(T), ebcs, g)
         c.K2.data .= 2 .* c.ν.data
         add_eddy_diffusion_scalar!(c.tend, c.e, c.K2; mask = c.mask)
-        tr = sum(interior_view(c.tend)) * V
+        tr = _tke_volume_sum(interior_view(c.tend), c, V0, g)
     end
     Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     pbs = _surface_buoyancy(c, sim)
@@ -722,17 +852,18 @@ function tke_budget(c::TKEClosure{T}, sim) where {T}
     @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
         I, J, K = Hx + i, Hy + j, Hz + k
         _solid(c.mask, I, J, K) && continue
+        Δ = c.Δk[k]; vr = c.vrel[k]
         e = c.e.data[I, J, K]; N2 = c.N2.data[I, J, K]
-        l, s = tke_length_scale(e, N2, c.Δ; l_wall = _lwall(c.l_wall, i, j, k, T), c_l = c.c_l)
+        l, s = tke_length_scale(e, N2, Δ; l_wall = _lwall(c.l_wall, i, j, k, T), c_l = c.c_l)
         fac = _first(c.first_level, i, j, k) ? c.surface_factor : one(T)
-        cε = tke_dissipation_coefficient(l, c.Δ; c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, factor = fac)
-        sP += c.ν.data[I, J, K] * c.D.data[I, J, K]
-        sB += -c.κt.data[I, J, K] * N2 + (k == 1 ? pbs[1] : zero(T)) + (k == g.Nz ? pbs[2] : zero(T))
-        sε += cε * s * e
-        se += e
+        cε = tke_dissipation_coefficient(l, Δ; c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, factor = fac)
+        sP += c.ν.data[I, J, K] * c.D.data[I, J, K] * vr
+        sB += (-c.κt.data[I, J, K] * N2 + (k == 1 ? pbs[1] : zero(T)) + (k == g.Nz ? pbs[2] : zero(T))) * vr
+        sε += cε * s * e * vr
+        se += e * vr
     end
-    return (shear = sP * V, buoyancy = sB * V, dissipation = sε * V, transport = tr,
-            tke = se * V)
+    return (shear = sP * V0, buoyancy = sB * V0, dissipation = sε * V0, transport = tr,
+            tke = se * V0)
 end
 
 """
@@ -759,7 +890,7 @@ function initialize_tke!(c::TKEClosure{T}, sim; e_min::Real = 0) where {T}
             continue
         end
         fac = _first(c.first_level, i, j, k) ? c.surface_factor : one(T)
-        eq = tke_equilibrium(max(c.D.data[I, J, K], zero(T)), c.N2.data[I, J, K], c.Δ;
+        eq = tke_equilibrium(max(c.D.data[I, J, K], zero(T)), c.N2.data[I, J, K], c.Δk[k];
                              c_k = c.c_k, c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, c_l = c.c_l,
                              l_wall = _lwall(c.l_wall, i, j, k, T), factor = fac)
         c.e.data[I, J, K] = max(T(eq), T(e_min))
