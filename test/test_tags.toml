@@ -21,6 +21,30 @@
 
 # --- full only: validation mini-simulations ---------------------------------
 
+["era2_nest_twoway_longrun.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 349
+reason = "two-way long runs (2 h CBL, neutral, 2000-step vortex); two-way nesting stays fast in era2_nest_twoway.jl"
+
+["era6_inflow_fetch.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 299
+reason = "development-length runs behind synthetic inflow vs a periodic precursor; Transition stays fast in era6_synthetic_inflow.jl, era6_inflow_statistics.jl, era6_inflow_turbulence.jl (development_length/FetchStatistics have no other fast test)"
+
+["era6_outflow_conditions.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 225
+reason = "convective/Orlanski outflow and outgoing-vortex runs; open-boundary outflow stays fast in era6_open_near_boundary.jl, era6_open_boundaries.jl"
+
+["era6_nudging_subsidence.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 151
+reason = "plane-mean nudging and large-scale subsidence runs; LargeScaleForcing stays fast in era6_large_scale_forcing.jl (nudging/subsidence otherwise only in berlin_parent_smoke.jl: #320 must keep a fast check)"
+
 ["era6_stratified_channel.jl"]
 tier = "full"
 weight = "heavy"
