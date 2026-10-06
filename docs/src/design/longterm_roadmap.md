@@ -1,4 +1,4 @@
-# Long-range roadmap — Eras II through XI
+# Long-range roadmap — Eras II through XII
 
 This document plans the next **decade** of Aeolus development. It sits
 downstream of two things already delivered:
@@ -46,6 +46,11 @@ The ordering is deliberately physics-first: Eras II–IV close every
 approximation in the current physics before the project chases scale,
 ML, or applications. A high-fidelity single-node model is more useful
 than a fast wrong one.
+
+Era XII (Phases 101–112) is a **future direction** beyond that
+decade: kilometre-scale regional and climate modelling. It is listed
+so the architecture does not close the door on it, not as a commitment
+within the 100-phase plan.
 
 ---
 
@@ -1492,6 +1497,173 @@ projects, and a governance model.
 
 ---
 
+---
+
+# Era XII — Kilometre-scale regional and climate modelling
+
+*A future direction, not part of the decade plan above (tracking
+issue #289). Through Era XI
+Aeolus is a large-eddy model: grid spacings of metres to tens of
+metres over a few kilometres, with the mesoscale entering from outside
+(Phase 68). Era XII would make Aeolus itself a convection-permitting
+regional model at about 3 km, in the class of ICON-LAM, COSMO-CLM and
+REMO-NH, so that one code and one physics library cover the scales
+from a European domain down to a Berlin street canyon.*
+
+**Why it sits here.** Every piece of it depends on something earlier:
+- the cost needs Era X (MPI and GPU);
+- the driving data needs Era VIII (reanalysis readers, Phase 67) and
+  the nesting interface of Phase 68 (#58, and the Berlin nesting epic
+  #246);
+- long-run conservation needs the full-state checkpointing of #245;
+- the grey-zone physics needs the Era VI closures to blend into.
+
+A 3 km domain the size of EURO-CORDEX is roughly 1500 × 1500 × 60
+≈ 1.4 × 10⁸ cells. On the present single-threaded solver one time step
+would take of order 10 s, and a 30-year run of order a decade of
+single-core wall time before any physics. This is an HPC-only
+capability.
+
+**What changes in kind, not degree.** At 3 km the model no longer
+resolves the energetic boundary-layer eddies, so the LES closures stop
+being valid. The full troposphere and the orography enter the
+dynamics, and the domain is a piece of a sphere driven at its edges.
+The phases below address each of these. A phase is done by the same
+standard as every other era: implemented to the reference literature,
+validated, stable at production resolution.
+
+### Phase 101 — Compressible non-hydrostatic dynamical core
+A fully compressible core for a deep atmosphere (about 30 km):
+- split-explicit acoustic substepping with a horizontally explicit,
+  vertically implicit treatment (Wicker & Skamarock 2002; Klemp,
+  Skamarock & Dudhia 2007);
+- the same physics interface as the Boussinesq and anelastic cores, so
+  every physics module runs on all three.
+
+**Validated by**: density current (Straka et al. 1993); inertia-gravity
+waves in a channel (Skamarock & Klemp 1994); warm bubble; a
+baroclinic-wave test in a channel against the published reference.
+
+### Phase 102 — Orography in the core
+A terrain-following core on the existing `TerrainFollowingGrid`
+(Phase 24), using a smooth-level coordinate (SLEVE; Schär et al. 2002)
+with metric terms and controlled pressure-gradient errors over steep
+slopes. Cut cells (Phase 21) are the alternative for very steep relief.
+
+**Validated by**: Schär et al. (2002) mountain-wave test; a resting
+atmosphere over steep idealised terrain (spurious wind below a stated
+bound); a flow-over-hill case against linear theory.
+
+### Phase 103 — Regional geometry on the sphere
+A rotated-pole latitude–longitude grid and a conformal map projection,
+with curvature and metric terms, latitude-dependent Coriolis
+parameter, and a deep-atmosphere option.
+
+**Validated by**: solid-body advection across the rotated pole;
+geostrophic balance preserved on the projected grid; a regional
+baroclinic wave against a global reference.
+
+### Phase 104 — Lateral and top boundary driving
+- Davies (1976) relaxation zones at the lateral boundaries.
+- Upper-boundary damping toward the driver.
+- Optional spectral nudging of the large scales (von Storch et al.
+  2000).
+- Driving from ERA5 and from CMIP-class global model output, built on
+  the boundary-data contract of the nesting epic (#246) and the Era
+  VIII readers.
+- Mass and energy consistency of the boundary fluxes.
+
+**Validated by**: a perfect-model "big brother" experiment (Denis et
+al. 2002); driving drift and boundary noise quantified.
+
+### Phase 105 — Grey-zone boundary-layer turbulence
+A scale-aware boundary-layer scheme, for example an eddy-diffusivity
+mass-flux (EDMF) TKE closure (Siebesma et al. 2007), blended by grid
+spacing with the Era VI LES closures (Honnert, Masson & Couvreux 2011;
+Boutle et al. 2014). The same model then runs continuously from LES to
+3 km, without switching physics by hand.
+
+**Validated by**: the resolution dependence of a convective boundary
+layer from 100 m to 3 km against coarse-grained LES; GABLS1 and a
+shallow-cumulus case (BOMEX) at mesoscale resolution.
+
+### Phase 106 — Convection and clouds at kilometre scale
+- Scale-aware shallow convection, and an optional deep-convection
+  scheme for grids coarser than about 5 km.
+- Subgrid cloud cover from a statistical cloud scheme.
+- The Era IV microphysics (two-moment, P3) and Era VII aerosol–cloud
+  coupling, at kilometre scale.
+
+**Validated by**: an idealised supercell; radiative–convective
+equilibrium; the diurnal cycle of convective precipitation (timing and
+intensity) against radar.
+
+### Phase 107 — Land surface and hydrology for climate time scales
+Multi-year soil hydrology with groundwater, frozen soil and snow,
+river routing, lakes, vegetation phenology, and land-use tiles at
+kilometre scale (`SurfaceTiles`), built on the Era V land modules.
+
+**Validated by**: multi-year eddy-covariance sites (FLUXNET); river
+discharge at gauged catchments; snow-cover duration.
+
+### Phase 108 — Radiative forcing for climate
+- Greenhouse-gas concentration scenarios.
+- Aerosol climatologies, for example MACv2-SP (Stevens et al. 2017).
+- Ozone and solar variability.
+- Sea-surface temperature and sea ice from the driver or from the
+  ocean mixed layer.
+- A radiation call frequency with a stated error.
+
+**Validated by**: offline radiative-forcing comparison against
+line-by-line reference cases; top-of-atmosphere and surface energy
+budgets against satellite and surface-radiation-network climatologies.
+
+### Phase 109 — Long-run conservation and production output
+- Domain mass, water and energy budgets closed and monitored over
+  decades.
+- Drift detection.
+- Bit-reproducible restarts (building on #245).
+- Output in the CORDEX data-request conventions, written by the
+  in-package NetCDF writer.
+
+**Validated by**: a 10-year run with stated budget closure and no
+unexplained drift.
+
+### Phase 110 — Convection-permitting evaluation
+A multi-year ERA5-driven hindcast at about 3 km over Central Europe and
+the Alps, in the protocol of the CORDEX Flagship Pilot Study on
+convective phenomena (Coppola et al. 2020; Ban et al. 2021). It is
+evaluated against gridded observations, radar and hourly station
+precipitation, with emphasis on extremes, and set beside the published
+convection-permitting ensemble (COSMO-CLM, ICON, REMO, WRF).
+
+**Validated by**: skill within the spread of that ensemble for the
+diurnal cycle, the seasonal precipitation climatology and hourly
+extremes.
+
+### Phase 111 — Scale-seamless nesting
+Online multi-level nesting inside one Aeolus run, from the 3 km
+regional domain through about 1 km to the urban LES of the Berlin case.
+Physics changes consistently with grid spacing through Phase 105, and
+there is two-way coupling with the urban scale.
+
+**Validated by**: the urban-scale result against the
+offline-driven Berlin case (#246); conservation across all levels.
+
+### Phase 112 — Climate-change downscaling
+- Scenario runs driven by CMIP-class global models.
+- The pseudo-global-warming method (Schär et al. 1996).
+- Ensembles with the Era IX uncertainty machinery.
+- Urban climate projections, for example Berlin heat-wave statistics,
+  from the full chain down to street scale.
+
+**Validated by**: historical-period skill (Phase 110) and a documented
+uncertainty budget for the projected change.
+
+**Era XII milestone.** Aeolus is a convection-permitting regional
+climate model, evaluated against the published ensemble, that nests
+seamlessly down to its own urban LES.
+
 ## Cross-cutting commitments
 
 These apply to *every* phase above, not to any one of them:
@@ -1525,6 +1697,7 @@ These apply to *every* phase above, not to any one of them:
 | Era IX (Phase 79) | an inverse-problem and uncertainty-quantification platform |
 | Era X (Phase 87) | HPC-production: MPI + GPU at scale, high-order backends |
 | Era XI (Phase 100) | a community Earth-system-scale tool with an ML-native workflow and real applications |
+| Era XII (Phase 112), future direction | a convection-permitting regional climate model (~3 km) that nests seamlessly down to its own urban LES |
 
 ## Honest assessment
 
@@ -1539,3 +1712,12 @@ first because everything downstream — assimilation, ML, applications —
 inherits their errors. Performance comes late deliberately: there is no
 value in efficiently computing the wrong answer, and optimising before
 the physics settles freezes interfaces that still need to change.
+
+Era XII changes what kind of model Aeolus is: from a large-eddy model
+with the mesoscale entering at its boundaries to a regional model that
+contains its own mesoscale. Projects of that kind (ICON, COSMO-CLM,
+REMO) are built and maintained by institutional teams over many
+years. It belongs on the roadmap because the payoff, one physics
+library from the regional domain down to the street canyon, is
+distinctive. It should be started only once Eras VIII and X are
+shipped, and broken into issues only when it comes into view.

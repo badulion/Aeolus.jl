@@ -355,6 +355,7 @@ ends with a validation target. Full plan:
 - [ ] **Era IX** — data assimilation and inverse problems *(74–79)*
 - [ ] **Era X** — performance and scale: MPI, GPU *(80–87)*
 - [ ] **Era XI** — machine learning, applications, ecosystem *(88–100)*
+- [ ] **Era XII** *(future direction)* — kilometre-scale regional and climate modelling *(101–112)*
 
 ---
 
