@@ -30,10 +30,13 @@ is given, and ``c_ε`` multiplied by 3.9 at the first level above a surface
 (Moeng 1984; [`IBM.first_level_cells`](@ref Aeolus.IBM.first_level_cells)).
 ``N^2`` is the one of the stability contract,
 `Operators.buoyancy_frequency_squared!` (P58-a, #170), with the virtual
-potential temperature when the case is moist. That ``N^2`` is the dry
-one of ``θ_v``: it ignores condensate loading and the moist-adiabatic
-stability of saturated air, a gap of the stability contract filed as
-#239 and not of this closure.
+potential temperature when the case is moist. Given a condensate field
+(`qc`, with the pressure `p`; #239) it is the ``N^2`` of cloudy air:
+condensate loading, and in saturated cells the saturated ``N^2`` of a
+moist-adiabatic parcel (Durran & Klemp 1982). That is Deardorff's (1980)
+stratocumulus buoyancy, so a moist-neutral fog or cloud layer has
+``l = Δ`` instead of the stable-layer ``0.76\sqrt e/N``
+([Turbulence stability](turbulence_stability.md#Saturated-air)).
 
 Two limits fix the constants' meaning:
 
