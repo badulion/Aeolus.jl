@@ -14,7 +14,7 @@ using Aeolus
 
 with_run_log("runs/my_case/run.log") do       # info → console, debug → run.log
     for n in 1:nsteps
-        step_adaptive!(sim, cfl; verbose = false)
+        step_adaptive!(sim, cfl)
         maybe_checkpoint!(ck, sim; step = n)
     end
 end
@@ -101,16 +101,38 @@ The events the core emits today:
 | `:pressure` | Warn | `MultigridPoissonSolver` hit `maxcycles` | `solver = :multigrid`, `cycles`, `relative_residual`, `tol` |
 | `:pressure` | Warn | `DensityWeightedPoissonSolver` breakdown / no convergence | `solver = :density_weighted_cg`, `reason = :breakdown \| :maxit`, `iterations`, `curvature` or `residual`, `relative_residual`, `tol` |
 | `:diffusion` | Warn | `solve_implicit_diffusion!` breakdown / `maxit` (when `warn = true`) | `reason`, `iterations`, `curvature` or `relative_residual`, `tol` |
-| `:timestepping` | Warn if `verbose`, else Debug | `step_adaptive!`: the stepper threw | `dt`, `retry`, `exception` |
-| `:timestepping` | Info if `verbose`, else Debug | `step_adaptive!`: retry at a smaller step | `reason`, `from`, `to`, `retry`, `max_retries` |
+| `:timestepping` | Debug | `step_adaptive!`: the stepper threw (recovered by a retry) | `dt`, `retry`, `exception` |
+| `:timestepping` | Debug | `step_adaptive!`: retry at a smaller step | `reason`, `from`, `to`, `retry`, `max_retries` |
 | `:timestepping` | Warn | `step_adaptive!`: a fast process left non-finite values | `dt`, `processes` |
 | `:checkpoint` | Warn | `restart!` across Julia versions / with `allow_mismatch` | `path`, `written_by`, `running` / `parameters` |
-| `:checkpoint` | Info if `verbose`, else Debug | `resume!`: fresh start / resumed | `event = :fresh_start \| :resume`, `dir` / `path`, `t`, `step` |
+| `:checkpoint` | Debug | `resume!`: fresh start / resumed | `event = :fresh_start \| :resume`, `dir` / `path`, `t`, `step` |
 | `:checkpoint` | Debug | `maybe_checkpoint!` wrote a checkpoint | `event = :write`, `path`, `step`, `t`, `removed` |
 
 So a healthy run emits nothing at `Info` or above: the default console
 stays quiet, and `run.log` records the retries and checkpoints. Under a
 `NullLogger` nothing reaches stdout or stderr at all.
+
+## One switch: the logger level
+
+There are no `verbose` keywords (removed outright by #347, maintainer
+decision of 2026-10-06, without a deprecation): what is shown is decided
+only by the logger the caller installs and its level. The library, the
+examples and the test fixtures follow one convention:
+
+| level | for | examples |
+| :-- | :-- | :-- |
+| `Debug` | chatter: what a run log should keep but a console need not show | adaptive-step retries, checkpoint fresh start / resume / write, a costly diagnostics row |
+| `Info` | milestones | the run header, the progress line, the Berlin setup summary, output frames and end-of-run report |
+| `Warn` | problems the run survives | a solver that did not converge, a non-finite fast process, a restart across Julia versions |
+| `Error` | the run stops | a blowup, an error that ends `with_run` |
+
+To see the retries on the console, raise the console level instead of
+passing a keyword:
+
+```julia
+with_run_log("run.log"; console_level = Logging.Debug) do … end   # or AEOLUS_LOG=debug
+with_logger(NullLogger()) do … end                                # silence everything
+```
 
 ## Run folder and provenance
 
