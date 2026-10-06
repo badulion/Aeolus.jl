@@ -17,7 +17,9 @@ const BPS = Main.BerlinCase
     child = BPS.CaseConfig(; verbose = false, output_path = nothing)
     # 10:00 LT so the sun is up and the boundary layer convective
     child.start_h = 10.0
-    pc = BPS.ParentConfig(child; refinement = (16, 16, 8), verbose = false)
+    # every forcing on: the subsidence is off by default (divergence = 0,
+    # #312), so the smoke run switches it on at the epic's D = 3e-6 s⁻¹
+    pc = BPS.ParentConfig(child; refinement = (16, 16, 8), verbose = false, divergence = 3e-6)
     p = BPS.build_parent(pc)
     @test p.mesh.Nx == 24 && p.mesh.Ny == 24
     @test all(f -> f !== nothing, values(p.forcing))

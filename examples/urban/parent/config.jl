@@ -44,11 +44,20 @@ Groups of keywords:
   `nudging_τ` (s; `Inf` = off) with `nudging_factor`, `nudging_depth`
   (the `NudgingWeight` above `nudging_factor` × the running maximum of the
   diagnosed z_i), `divergence` (s⁻¹, the large-scale divergence of the
-  subsidence ``w_s = -D z``; 0 = off), `damping_rate` (s⁻¹) and
+  subsidence ``w_s = -D z``; default 0 = off, see below), `damping_rate` (s⁻¹) and
   `damping_frac` (the θ `ReferenceDamping` toward the sounding and the
   core's velocity sponge over the top `damping_frac` of the domain),
   `θ_top` (`:initial_gradient`, the fixed-gradient top of #254, or
   `:noflux`).
+
+  The subsidence default is `divergence = 0` (maintainer decision of
+  2026-10-06). The epic's planned D = 3e-6 s⁻¹ stays available, but it is
+  currently unstable: the 24 h Lindenberg run diverges at 12:00 LT
+  (`step_adaptive!` reaches `dt_min`, z_i ≈ 1.1 km) on both the stretched
+  and the fallback grid, while D = 0 completes 24 h on the fallback grid
+  with the ledger closed to 1e-14 W/m². Tracked in issue #312; the 24 h
+  validation and the final choice of D are deferred to issue #315 (after
+  the KernelAbstractions port).
 * **initial state** — from `child`, unless `θ_init` / `qv_init` (functions
   of z) override it (the idealised tests); `u_init` (`:geostrophic` or a
   number), `perturbation` (K, uniform random amplitude in the lowest
@@ -102,7 +111,7 @@ Base.@kwdef mutable struct ParentConfig
     nudging_τ::Float64                   = 6 * 3600.0
     nudging_factor::Float64              = 1.2
     nudging_depth::Float64               = 200.0
-    divergence::Float64                  = 3e-6
+    divergence::Float64                  = 0.0       # 3e-6 diverges at midday, #312
     damping_rate::Float64                = 0.01
     damping_frac::Float64                = 0.25
     θ_top::Symbol                        = :initial_gradient
