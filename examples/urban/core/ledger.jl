@@ -188,14 +188,23 @@ vapour makes it negative. On the anelastic core the transport is
 part is exactly 0; on the pseudo-incompressible core `W = ρ̄θ̄`. With
 `ledger.ρ ≡ 1` and `W = nothing` it is exactly 0.
 """
-function ledger_water_split(case, q::AbstractArray{<:Real,3}, W = nothing)
+ledger_water_split(case, q::AbstractArray{<:Real,3}, W = nothing) =
+    ledger_water_split_levels(case, (sum(view(q, :, :, k)) for k in axes(q, 3)), W)
+
+"""
+    ledger_water_split_levels(case, S, W = nothing) -> (transport, density_redistribution)
+
+[`ledger_water_split`](@ref) of an increment given by its per-level
+column sums `S[k] = Σ_ij dq` (e.g. the water an open face moved into each
+level, #262).
+"""
+function ledger_water_split_levels(case, S, W = nothing)
     l, mesh = case.ledger, case.mesh
     isempty(l.ρ) && (l.ρ = ones(mesh.Nz))
     ρm = sum(l.ρ) / length(l.ρ)
     c = W === nothing ? ρm : ρm / (sum(W) / length(W))
     flat, redis = 0.0, 0.0
-    @inbounds for k in axes(q, 3)
-        s = sum(view(q, :, :, k))
+    @inbounds for (k, s) in enumerate(S)
         w = W === nothing ? 1.0 : W[k]
         flat += c * w * s
         redis += (l.ρ[k] - c * w) * s
