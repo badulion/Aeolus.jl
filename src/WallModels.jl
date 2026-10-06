@@ -142,5 +142,6 @@ include("wall_models/immersed.jl")
 include("wall_models/cutcell.jl")
 include("wall_models/dynamic_roughness.jl") # P57-e (#190): dynamic z0 of partially resolved roughness
 include("wall_models/channel_cases.jl")   # P54-d (#174): half channel, channel
+include("wall_models/checkpoint.jl")      # #245: checkpoint state of the wall models and the case
 
 end # module

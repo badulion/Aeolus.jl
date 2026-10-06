@@ -279,6 +279,37 @@ GABLS1, for example, uses 265 K cooling at 0.25 K/h. It is read with
 generic. It is not a surface model. It is the boundary value handed to a
 wall law (P57-a) or a surface step.
 
+## Radiosonde soundings
+
+`Sounding` holds the launches of one station. `read_sounding(path)`
+reads one from the CSV that `examples/urban/data/fetch_lindenberg.jl`
+writes, and `sounding_profiles(s; z_top)` converts it to θ, ``q_v``, u,
+v and p `ForcingTable`s on heights above the launch site and launch
+times in seconds from an epoch (`sounding_time`). These tables are the
+form that initial states, nudging targets and boundary data take
+(#247, epic #246).
+
+* **Heights** come from hypsometric integration of the virtual
+  temperature, ``z_{k+1} = z_k + (R_d/g_0)\,\bar T_v\,\ln(p_k/p_{k+1})``
+  (Wallace & Hobbs 2006, eq. 3.29). ``T_v`` comes from
+  `MoistThermodynamics.virtual_temperature`. The standard gravity
+  ``g_0`` defines the geopotential metre, so ``z`` plus the station
+  elevation can be compared directly with the reported geopotential
+  height, which is used only as a check.
+* **θ** is ``T/Π(p)`` with the dry `exner_function`.
+* **``q_v``** is the specific humidity whose vapour pressure is
+  ``e_s(T_d)`` (`specific_humidity_from_relative_humidity` at RH = 1).
+* **Interpolation.** The default height grid is the union of every
+  launch's levels, so each launch's piecewise-linear profile is held
+  exactly. `forcing_value` is linear in time between launches.
+
+Measured on the six Lindenberg launches of 29/30 June 2019: the
+computed heights of the standard levels below 3 km match IGRA's
+geopotential heights to RMS 0.8–4.3 m. The bound is 4.7–4.9 m, set by
+the whole-hPa surface pressure of the GTS message. θ equals
+``T(p_0/p)^{R_d/c_{pd}}`` to ``10^{-12}``. The table returns each
+launch's θ, ``q_v``, p, u and v exactly at its own levels.
+
 ## The one entry point
 
 `apply_forcing!(sim, forcing, t, Δt)` (also accepts a tuple of forcings)
@@ -375,3 +406,8 @@ domain would need to be deeper than the nocturnal boundary layer.
   atmospheric boundary layer over land as represented by a variety of
   single-column models: the second GABLS experiment. *Bound.-Layer
   Meteor.* 140, 177–206.
+* Durre, I., Yin, X., Vose, R. S., Applequist, S. & Arnfield, J.
+  (2018). Enhancing the data coverage in the Integrated Global
+  Radiosonde Archive. *J. Atmos. Oceanic Technol.*, 35, 1753-1770.
+* Wallace, J. M. & Hobbs, P. V. (2006). *Atmospheric Science: An
+  Introductory Survey*, 2nd ed., Academic Press, §3.2.2.

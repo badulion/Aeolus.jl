@@ -202,6 +202,8 @@ export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
        sgs_stratification!
 # P58-e (#193): resolved TKE profile (turbulence-collapse runs)
 export resolved_tke_profile
+# #245: the FFTW planning policy
+export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
@@ -210,6 +212,13 @@ export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
 export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
+# #245: full-state checkpoints with bitwise restart, periodic checkpoints
+export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint_state!,
+       fieldwise_checkpoint_state, restore_fieldwise!, checkpoint_fields,
+       StepperState, record_step!, previous_dt,
+       CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
+       latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
+       driver_checkpoints, finish_checkpoints!
 export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_write!, nc_append_record!, nc_close!, nc_write_fields,
        nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
@@ -951,6 +960,8 @@ export effective_roughness, effective_scalar_roughness,
 export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_prandtl,
        LillyCutoff, BrownEtAl1994, ShortTail, LongTail,
        gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR
+# N-parent-a (#247): the one boundary-layer-height diagnostic
+export boundary_layer_height
 # SurfaceExchange's implementer of the contract (MOST-consistent factors).
 export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # P58-e (#193): the maximum sustainable heat flux (Van de Wiel et al. 2012)
@@ -965,7 +976,8 @@ export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_value,
        tke_critical_richardson, tke_equilibrium, dual_strain!, shear_production!,
        buoyancy_production!, tke_budget, initialize_tke!, tke_statistics,
-       tke_eddy_coefficients
+       tke_eddy_coefficients,
+       attach_immersed_walls!   # #232: facade shear production from the wall-model stress
 # P56-d (#188): the differential SGS Reynolds-stress closure.
 export ReynoldsStressClosure, reynolds_stress_terms, reynolds_stress_rhs, reynolds_stress_step,
        daly_harlow_coefficient, coriolis_rotation, rotate_stress, is_realizable,
@@ -1007,7 +1019,7 @@ export MOSTFluxWallLaw
 # walls. The cut-cell stress is a method of CutCell.wall_shear_stress, not
 # a new name.
 export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
-       apply_immersed_wall_stress!, immersed_wall_count,
+       apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!,
        wall_slip_velocity, slip_wall_value
 # P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
 # `advance_channel!` / `run_channel!` do not collide with the Berlin case's
@@ -1041,6 +1053,8 @@ export ForcingTable, forcing_value, forcing_mean,
        AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
 # #248 (N-parent-c): plane-mean nudging of u, v, θ, qv and large-scale subsidence.
 export ProfileNudging, NudgingWeight, nudging_weight, Subsidence, tendency_integrals
+# N-parent-a (#247): radiosonde soundings → (z, t) profiles
+export Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time
 
 # P57-e (#190): the dynamic roughness of partially resolved relief
 # (Anderson & Meneveau 2011). `surface_gradient_drag` does not collide

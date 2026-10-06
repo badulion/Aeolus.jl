@@ -21,10 +21,14 @@ module LargeScaleForcing
 
 import ..SurfaceExchange: surface_temperature
 using ..StretchedGrids: StretchedGrid
+using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS, PhasePartition,
+                             exner_function, virtual_temperature,
+                             specific_humidity_from_relative_humidity
 
 export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
-       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
+       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!,
+       Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time
 export ProfileNudging, NudgingWeight, nudging_weight, Subsidence, tendency_integrals
 
 # =========================================================================
@@ -702,5 +706,11 @@ function _add_level_tendency!(d, m, x, t, Δt)
     end
     return d
 end
+
+# =========================================================================
+# Radiosonde soundings (N-parent-a, #247)
+# =========================================================================
+
+include("large_scale_forcing/sounding.jl")
 
 end # module

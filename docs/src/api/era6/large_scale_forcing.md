@@ -41,6 +41,12 @@ The Berlin case runs `GeostrophicPressureGradient` by default
 `GeostrophicNudging` as the option `mode = :nudging`
 ([The Berlin case](../../design/berlin_case.md)).
 
+Radiosonde soundings (#247): `read_sounding` reads a sounding CSV
+(e.g. `examples/urban/data/lindenberg_10393_20190629.csv`), and
+`sounding_profiles` turns it into θ, ``q_v``, u, v and p `ForcingTable`s
+on heights above the station. The Berlin case takes its initial state
+from them. See [Radiosonde soundings](../../theory/large_scale_forcing.md#Radiosonde-soundings).
+
 ```@autodocs
 Modules = [Aeolus.LargeScaleForcing]
 ```

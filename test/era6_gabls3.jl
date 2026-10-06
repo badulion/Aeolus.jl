@@ -205,4 +205,49 @@ end
     @test h.slope2 ≈ 0.25 atol = 1e-3
 end
 
+@testset "GABLS4 reference provenance (Couvreux et al. 2020, Tables 2-4; #237)" begin
+    ref = gabls4_reference()
+    col(name) = findfirst(==(name), ref.columns)
+    get(r, name) = r[col(name)]
+    rows(kind) = [r for r in ref.rows if r[1] == kind]
+    e3 = rows("exp3"); e2 = rows("exp2")
+    @test length(e3) == 7 && length(e2) == 7
+    # Table 2: six experiment-3 runs at 1 m isotropic, CSIRO-LES at 3.9 m / 1.17 m
+    fine = [r for r in e3 if get(r, "dx_m") == 1 && get(r, "dz_m") == 1]
+    @test length(fine) == 6 && all(r[2] != "CSIRO-LES" for r in fine)
+    csiro = only(r for r in e3 if r[2] == "CSIRO-LES")
+    @test get(csiro, "dx_m") == 3.9 && get(csiro, "dz_m") == 1.17
+    # the experiment-3 envelope is that of the six 1 m runs; CSIRO alone sets the old 25 m top
+    lo = only(rows("envelope_low")); hi = only(rows("envelope_high"))
+    for q in ("h_m", "L_m", "u_star", "H_Wm2", "theta_star")
+        @test get(lo, q) == minimum(get(r, q) for r in fine)
+        @test get(hi, q) == maximum(get(r, q) for r in fine)
+    end
+    @test (get(lo, "h_m"), get(hi, "h_m")) == (14.5, 19.5)
+    @test mean(get(r, "h_m") for r in fine) ≈ 17.4 atol = 0.05
+    @test get(csiro, "h_m") == maximum(get(r, "h_m") for r in e3) == 25
+    # experiment 2: MicroHH and DALES rows are their experiment-1 runs (z0m = 1e-2 m)
+    for m in ("MicroHH", "DALES")
+        r = only(x for x in e2 if x[2] == m)
+        @test endswith(get(r, "run"), "E1") && get(r, "z0m") == 1e-2
+    end
+    e2ref = [r for r in e2 if endswith(get(r, "run"), "E2") && get(r, "dz_m") == 2 && get(r, "z0m") == 1e-3]
+    @test sort([r[2] for r in e2ref]) == ["MONC", "MesoNH", "PALM", "UConn"]
+    lo2 = only(rows("envelope_exp2_low")); hi2 = only(rows("envelope_exp2_high"))
+    for q in ("h_m", "L_m", "u_star", "H_Wm2", "theta_star")
+        @test get(lo2, q) == minimum(get(r, q) for r in e2ref)
+        @test get(hi2, q) == maximum(get(r, q) for r in e2ref)
+    end
+    # Table 4's H is in W m-2 (its header says K m s-1): H = -ρ c_p u* θ*. Each row,
+    # with u*, θ* rounded to ±0.005, bounds ρ c_p; one ρ c_p must fit all 14 rows and
+    # be that of air at 651 hPa between 220 and 250 K (911-1036 J m-3 K-1). Measured:
+    # the rows overlap in 991-992 J m-3 K-1 (ρ = 0.99 kg m-3, 230 K).
+    ρcp(T) = 65100 / (287.05 * T) * 1005
+    b = [(-get(r, "H_Wm2") / ((get(r, "u_star") + 0.005) * (get(r, "theta_star") + 0.005)),
+          -get(r, "H_Wm2") / ((get(r, "u_star") - 0.005) * (get(r, "theta_star") - 0.005))) for r in vcat(e2, e3)]
+    lo_ρcp, hi_ρcp = maximum(first.(b)), minimum(last.(b))
+    @test lo_ρcp <= hi_ρcp
+    @test ρcp(250) <= lo_ρcp && hi_ρcp <= ρcp(220)
+end
+
 end # testset

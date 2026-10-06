@@ -6,6 +6,7 @@ using ..Grids
 using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields
 using ..Fields: Field
+using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
 
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
@@ -73,8 +74,8 @@ function FFTPoissonSolver(mesh::RegularGrid{T}) where {T}
 
     src = zeros(T, Nx, Ny, Nz)
     hat = zeros(Complex{T}, div(Nx, 2) + 1, Ny, Nz)
-    forward_plan = plan_rfft(src; flags = FFTW.MEASURE)
-    inverse_plan = plan_irfft(hat, Nx; flags = FFTW.MEASURE)
+    forward_plan = plan_rfft(src; flags = fftw_planner_flags())
+    inverse_plan = plan_irfft(hat, Nx; flags = fftw_planner_flags())
 
     kx² = [ 4/dx^2 * sin(π * (m - 1) / Nx)^2 for m in 1:div(Nx, 2) + 1 ]
     ky² = [ 4/dy^2 * sin(π * (m - 1) / Ny)^2 for m in 1:Ny ]
@@ -179,10 +180,10 @@ function CosineFFTPoissonSolver(mesh::RegularGrid{T}) where {T}
     real_buf2 = zeros(T, Nx, Ny, Nz)
     hat_buf   = zeros(Complex{T}, div(Nx, 2) + 1, Ny, Nz)
 
-    plan_dct_fwd = FFTW.plan_r2r(real_buf, FFTW.REDFT10, 3; flags = FFTW.MEASURE)
-    plan_dct_inv = FFTW.plan_r2r(real_buf, FFTW.REDFT01, 3; flags = FFTW.MEASURE)
-    plan_fft_fwd = FFTW.plan_rfft(real_buf,   (1, 2);        flags = FFTW.MEASURE)
-    plan_fft_inv = FFTW.plan_irfft(hat_buf, Nx, (1, 2);      flags = FFTW.MEASURE)
+    plan_dct_fwd = FFTW.plan_r2r(real_buf, FFTW.REDFT10, 3; flags = fftw_planner_flags())
+    plan_dct_inv = FFTW.plan_r2r(real_buf, FFTW.REDFT01, 3; flags = fftw_planner_flags())
+    plan_fft_fwd = FFTW.plan_rfft(real_buf,   (1, 2);        flags = fftw_planner_flags())
+    plan_fft_inv = FFTW.plan_irfft(hat_buf, Nx, (1, 2);      flags = fftw_planner_flags())
 
     kx² = [ 4/dx^2 * sin(π * (m - 1) / Nx)^2       for m in 1:div(Nx, 2) + 1 ]
     ky² = [ 4/dy^2 * sin(π * (n - 1) / Ny)^2       for n in 1:Ny ]
