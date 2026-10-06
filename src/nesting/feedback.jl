@@ -7,14 +7,15 @@
 #   * NestScalarFlux — the transport whose face flux a register books;
 #   * NestFluxRegisters — Berger–Colella flux registers on the interface
 #     planes, accumulated at every stage of every parent step and child
-#     substep through a body-force hook (exactly the fluxes the cores used);
+#     substep through a body-force hook (exactly the fluxes the cores used),
+#     and by separate transports through book_nest_flux! (#327 M3);
 #   * anterpolate!, two_way_feedback!, feedback_mask — the feedback itself.
 #
 # All operators come from N-nest-a (#250) / N-nest-b (#256): the restriction
 # is `restrict_to_parent!` (volume- or mass-weighted, solid-aware), the
 # refluxing `apply_flux_correction!`, the face flux of a scalar
-# `AdvectionSchemes.advective_face_flux` and the closures'
-# `sgs_scalar_face_diffusivity`.
+# `AdvectionSchemes.scalar_face_flux` (the kernel of `boundary_scalar_flux`
+# too, #327 M2) and the closures' `sgs_scalar_face_diffusivity`.
 
 const _SIDE_NAMES = (:west, :east, :south, :north, :bottom, :top)
 _side_axis(s::Int) = (s + 1) ÷ 2
@@ -25,41 +26,61 @@ _side_high(s::Int) = iseven(s)
 # =========================================================================
 
 """
-    NestScalarFlux(; scheme = :centered, molecular = false, sgs = :none)
+    NestScalarFlux(; scheme = :centered, molecular = false, sgs = :none, applied_by = :core)
 
 The transport of a cell-centred scalar whose interface flux a two-way
-nest books in its flux registers ([`TwoWayFeedback`](@ref)): the
-advective face flux of `scheme` (a name of
-[`boundary_scalar_flux`](@ref Aeolus.AdvectionSchemes.boundary_scalar_flux) or a reconstruction descriptor; the
-Boussinesq and sound-proof cores advect `θ` and `qv` with `:centered`),
-plus the molecular diffusion `ν∇ϕ` of the simulation (`molecular = true`,
-when the simulation has viscosity) and the SGS flux of the domain's
-closure: `sgs = :theta` with θ's diffusivity
+nest books in its flux registers ([`TwoWayFeedback`](@ref)).
+
+`applied_by = :core` (default): the scalar is transported **inside** the
+core's stages (the core's own `θ`/`qv` transport, or an owner that updates
+it in the `body_force!` hook), and the run's register hook books, at every
+stage with the core's stage weight, the advective face flux of `scheme` (a
+name of [`boundary_scalar_flux`](@ref Aeolus.AdvectionSchemes.boundary_scalar_flux)
+or a reconstruction descriptor; the Boussinesq and sound-proof cores
+advect `θ` and `qv` with `:centered`), plus the molecular diffusion `ν∇ϕ`
+of the simulation (`molecular = true`, when the simulation has viscosity)
+and the SGS flux of the domain's closure: `sgs = :theta` with θ's
+diffusivity
 ([`sgs_scalar_face_diffusivity`](@ref Aeolus.Operators.sgs_scalar_face_diffusivity)),
 `sgs = :tracer` with the diffusivity the core gives a tracer
 ([`sgs_tracer_diffusivity!`](@ref Aeolus.Operators.sgs_tracer_diffusivity!),
 as for `qv`), `:none` without.
 
-`θ` and `qv` get their models from the simulations; a tracer of the
-field set is refluxed only when its owner declares how it is
+`applied_by = :transport`: the scalar is transported by a separate
+transport (a WENO tracer slot after the dynamics, as in the Berlin case),
+whose state, velocity and time weight the core's stages do not see. The
+hook books nothing for it; the transport books **exactly the flux it
+applies**, at the state it applies it to, by calling
+[`book_nest_flux!`](@ref) (#327, M3). `scheme`, `molecular` and `sgs` are
+then unused.
+
+`θ` and a core-transported `qv` get their models from the simulations; a
+tracer of the field set (also `qv` when it is a tracer, as in a moist
+sound-proof nest) is refluxed only when its owner declares how it is
 transported, `TwoWayFeedback(tracer_fluxes = (:co2 => NestScalarFlux(),))`.
 """
 struct NestScalarFlux{R}
     rec::R
     molecular::Bool
     sgs::Symbol
+    applied_by::Symbol
 end
 
-function NestScalarFlux(; scheme = :centered, molecular::Bool = false, sgs::Symbol = :none)
+function NestScalarFlux(; scheme = :centered, molecular::Bool = false, sgs::Symbol = :none,
+                        applied_by::Symbol = :core)
     sgs in (:none, :theta, :tracer) ||
         throw(ArgumentError("NestScalarFlux: sgs must be :none, :theta or :tracer, got :$sgs"))
-    return NestScalarFlux(_flux_reconstruction(scheme), molecular, sgs)
+    applied_by in (:core, :transport) ||
+        throw(ArgumentError("NestScalarFlux: applied_by must be :core or :transport, got :$applied_by"))
+    return NestScalarFlux(_flux_reconstruction(scheme), molecular, sgs, applied_by)
 end
+
+_by_core(m::NestScalarFlux) = m.applied_by === :core
 
 """
     TwoWayFeedback(; buffer = 2, z_anterp = -Inf, τ = nothing, exclude_width = 0,
                    exclude_sides = :inflow, reflux = true, reproject = true,
-                   tracer_fluxes = ())
+                   tracer_fluxes = (), theta_flux = nothing)
 
 The child → parent feedback of a two-way [`NestedRun`](@ref)
 (`feedback = TwoWayFeedback(…)`, or `feedback = :two_way` for the
@@ -99,7 +120,13 @@ defaults), applied once per parent step after the child substeps:
     ([`apply_flux_correction!`](@ref)). The composite integral
     ``∫φ dV`` (``∫Wφ dV`` for a sound-proof pair) is then conserved to
     round-off. `tracer_fluxes` declares the transport of the tracers
-    (`name => NestScalarFlux(…)`); undeclared tracers are not refluxed.
+    (`name => NestScalarFlux(…)`; `:qv` too when it is a tracer of the
+    field set rather than a core prognostic); undeclared tracers are not
+    refluxed. A tracer moved by a separate transport is declared with
+    `applied_by = :transport` and booked by that transport
+    ([`book_nest_flux!`](@ref)). `theta_flux` replaces the model of `θ`
+    (default: the cores' centred advection, molecular and SGS diffusion)
+    for a user core that transports `θ` otherwise.
  6. **Re-projection** of the parent after the feedback, so ``∇·u = 0``
     holds in the parent again (anterpolated faces next to the buffer and
     the interface flux correction leave the parent divergent).
@@ -109,10 +136,13 @@ region whose two parent cells are both anterpolated; the interface faces
 themselves get the child's flux from the interface flux correction
 (`flux_correction` of the run, on the open faces only).
 
-Refluxing needs a core whose stage structure is known: `step!`
-(Boussinesq or sound-proof; one stage) or `step_rk3!` (weights 1/6, 1/6,
-2/3), and an SGS closure with a two-point face diffusivity. Exact
-conservation also needs `sponge = nothing` (a sponge is a source).
+Refluxing needs a core whose stage structure is known
+([`nest_stage_weights`](@ref)): `step!` (Boussinesq or sound-proof; one
+stage), `step_rk3!` (weights 1/6, 1/6, 2/3), or a user core that declares
+its weights; the IMEX cores (`step_imex!`, implicit θ diffusion) are
+refused with `reflux = true`. The SGS closure needs a two-point face
+diffusivity. Exact conservation also needs `sponge = nothing` (a sponge is
+a source).
 
 References: Clark, T. L. & Farley, R. D. (1984), *J. Atmos. Sci.* 41,
 329–350; Berger, M. J. & Colella, P. (1989), *J. Comput. Phys.* 82,
@@ -129,12 +159,13 @@ struct TwoWayFeedback
     reflux::Bool
     reproject::Bool
     tracer_fluxes::Vector{Pair{Symbol,NestScalarFlux}}
+    theta_flux::Union{Nothing,NestScalarFlux}
 end
 
 function TwoWayFeedback(; buffer::Integer = 2, z_anterp::Real = -Inf,
                         τ::Union{Nothing,Real} = nothing, exclude_width::Integer = 0,
                         exclude_sides = :inflow, reflux::Bool = true, reproject::Bool = true,
-                        tracer_fluxes = ())
+                        tracer_fluxes = (), theta_flux::Union{Nothing,NestScalarFlux} = nothing)
     buffer >= 0 || throw(ArgumentError("TwoWayFeedback: buffer must be ≥ 0, got $buffer"))
     exclude_width >= 0 ||
         throw(ArgumentError("TwoWayFeedback: exclude_width must be ≥ 0, got $exclude_width"))
@@ -144,14 +175,14 @@ function TwoWayFeedback(; buffer::Integer = 2, z_anterp::Real = -Inf,
     for pr in tracer_fluxes
         first(pr) isa Symbol && last(pr) isa NestScalarFlux ||
             throw(ArgumentError("TwoWayFeedback: tracer_fluxes are `name => NestScalarFlux(…)`"))
-        first(pr) in (:θ, :qv) &&
-            throw(ArgumentError("TwoWayFeedback: θ and qv take their transport from the " *
-                                "simulations; tracer_fluxes is for the extra scalars"))
+        first(pr) in (:θ, :theta) &&
+            throw(ArgumentError("TwoWayFeedback: θ is not a tracer; declare its transport " *
+                                "with theta_flux = NestScalarFlux(…)"))
         push!(tf, first(pr) => last(pr))
     end
     return TwoWayFeedback(Int(buffer), Float64(z_anterp),
                           τ === nothing ? nothing : Float64(τ), Int(exclude_width), ex,
-                          reflux, reproject, tf)
+                          reflux, reproject, tf, theta_flux)
 end
 
 _exclude_sides(s::Symbol) = s === :inflow ? s :
@@ -182,14 +213,17 @@ The Berger–Colella flux registers of a two-way [`NestedRun`](@ref): for
 every refluxed scalar (`θ`, `qv`, declared tracers) and every interface
 plane (the child's open faces), the time integral `∫ F dt` of the face
 flux density (`∫ W F dt` for a sound-proof pair) through every parent
-face of the plane and every child face of the plane. They are booked by
-a hook the run chains in front of each domain's `body_force!`, at every
-stage of every accepted step, with the stage weight of the core (a
-rejected step's bookings are discarded with it), and consumed by the
-refluxing of [`two_way_feedback!`](@ref). Only the planes are stored,
-not whole face fields. One more set of planes books the volume (mass)
-flux `∫ W u_n dt` of every face, for the volume-consistent refluxing
-(see [`two_way_feedback!`](@ref)).
+face of the plane and every child face of the plane, and the volume (mass)
+flux `∫ W u_n dt` that carried it (for the volume-consistent refluxing of
+[`two_way_feedback!`](@ref)). Scalars transported inside the cores
+(`applied_by = :core`) are booked by a hook the run chains in front of
+each domain's `body_force!`, at every stage of every attempted step, with
+the stage weight of the core; scalars moved by a separate transport
+(`applied_by = :transport`) are booked by that transport through
+[`book_nest_flux!`](@ref). A rejected step's bookings are discarded with
+it; the registers are consumed by the refluxing of
+[`two_way_feedback!`](@ref). Only the planes are stored, not whole face
+fields.
 """
 mutable struct NestFluxRegisters
     names::Vector{Symbol}
@@ -197,26 +231,54 @@ mutable struct NestFluxRegisters
     pfield::Vector{Field}
     cfield::Vector{Field}
     sides::NTuple{6,Bool}
-    pacc::Vector{Vector{Matrix{Float64}}}     # committed, per scalar (+ volume), per side
+    pacc::Vector{Vector{Matrix{Float64}}}     # committed, per scalar, per side
     cacc::Vector{Vector{Matrix{Float64}}}
     ppend::Vector{Vector{Matrix{Float64}}}    # the step being attempted
     cpend::Vector{Vector{Matrix{Float64}}}
+    pvacc::Vector{Vector{Matrix{Float64}}}    # the volume flux of each scalar's transport
+    cvacc::Vector{Vector{Matrix{Float64}}}
+    pvpend::Vector{Vector{Matrix{Float64}}}
+    cvpend::Vector{Vector{Matrix{Float64}}}
+    pvstage::Vector{Matrix{Float64}}           # scratch: one stage's volume flux
+    cvstage::Vector{Matrix{Float64}}
     pweights::Tuple
     cweights::Tuple
     pstage::Int
     cstage::Int
+    popen::Bool                                # an attempt of the domain is under way
+    copen::Bool
     psgs::Any                                  # the domains' (sgs, eddy_viscosity!) keywords
     csgs::Any
     pscratch::Field
     cscratch::Field
 end
 
-# Stage weights of a core (the SSP-RK3 combination of the three Euler
-# substages is uⁿ + Δt(L₀ + L₁)/6 + 2Δt L₂/3); `nothing` = unknown.
-_stage_weights(a::DomainAdvance) = _stage_weights(a.core, a.args)
-_stage_weights(core, args) = nothing
-_stage_weights(::typeof(step!), args) = (1.0,)
-_stage_weights(::typeof(step_rk3!), args) = (1.0 / 6, 1.0 / 6, 2.0 / 3)
+"""
+    nest_stage_weights(core, args...) -> NTuple or nothing
+
+The weights with which the stages of a dynamical core combine into its
+step, as the flux registers of a two-way [`NestedRun`](@ref) need them:
+`(1.0,)` for `step!` (Boussinesq or sound-proof), `(1/6, 1/6, 2/3)` for
+`step_rk3!` (the Shu–Osher combination of its three Euler stages), and
+`nothing` — refluxing refused — for any other core. A user core
+`f(sim, dt, args...; body_force!, kw...)` that calls `body_force!` once
+per stage (for instance one that takes a `step!` and then moves its
+tracers) declares its weights by adding a method,
+
+```julia
+Aeolus.Nesting.nest_stage_weights(::typeof(my_core), args...) = (1.0,)
+```
+
+The IMEX cores (`step_imex!`) are refused: their `θ` diffusion is
+implicit, so the diffusive interface flux is not the one the explicit
+hook would see.
+"""
+nest_stage_weights(core, args...) = nothing
+nest_stage_weights(::typeof(step!), args...) = (1.0,)
+nest_stage_weights(::typeof(step_rk3!), args...) = (1.0 / 6, 1.0 / 6, 2.0 / 3)
+
+# Stage weights of a core; `nothing` = unknown.
+_stage_weights(a::DomainAdvance) = nest_stage_weights(a.core, a.args...)
 
 _sgs_keywords(a::DomainAdvance) = (get(a.kwargs, :sgs, nothing),
                                    get(a.kwargs, :eddy_viscosity!, nothing))
@@ -245,22 +307,35 @@ function _check_register_closure(sim, kw, what)
     return nothing
 end
 
+function _core_name(a::DomainAdvance)
+    n = a.core isa Function ? nameof(a.core) : nameof(typeof(a.core))
+    return isempty(a.args) ? string(n) : string(n, "(", join(map(x -> nameof(typeof(x)), a.args), ", "), ")")
+end
+
 function NestFluxRegisters(nest::NestedGrid, parent, child, s::NestInterpState,
                            fb::TwoWayFeedback, ap::DomainAdvance, ac::DomainAdvance)
     wp = _stage_weights(ap); wc = _stage_weights(ac)
     (wp === nothing || wc === nothing) &&
         throw(ArgumentError("TwoWayFeedback: refluxing needs the stage weights of each " *
-                            "domain's core (step! or step_rk3!); got " *
-                            "$(ap.core) / $(ac.core). Use TwoWayFeedback(reflux = false)"))
+                            "domain's core (step!, step_rk3!, or a user core declaring " *
+                            "nest_stage_weights); got parent $(_core_name(ap)), child " *
+                            "$(_core_name(ac)). The IMEX cores are not supported (implicit " *
+                            "θ diffusion). Use TwoWayFeedback(reflux = false)"))
     _check_register_closure(parent, _sgs_keywords(ap), "parent")
     _check_register_closure(child, _sgs_keywords(ac), "child")
     names = Symbol[:θ]
-    models = NestScalarFlux[NestScalarFlux(; molecular = true, sgs = :theta)]
+    models = NestScalarFlux[fb.theta_flux === nothing ?
+                            NestScalarFlux(; molecular = true, sgs = :theta) : fb.theta_flux]
     pf = Field[parent.θ]; cf = Field[child.θ]
     declared = Dict(fb.tracer_fluxes)
+    core_qv = _moist(parent)                  # qv is a core prognostic (moist Boussinesq)
+    core_qv && haskey(declared, :qv) &&
+        throw(ArgumentError("TwoWayFeedback: qv is transported by the core here (a moist " *
+                            "BoussinesqSimulation pair) and booked by the run; declare it in " *
+                            "tracer_fluxes only where it is a tracer of the field set"))
     for i in eachindex(s.names)
         n = s.names[i]
-        model = n === :qv && _moist(parent) ? NestScalarFlux(; molecular = true, sgs = :tracer) :
+        model = n === :qv && core_qv ? NestScalarFlux(; molecular = true, sgs = :tracer) :
                 get(declared, n, nothing)
         model === nothing && continue
         push!(names, n); push!(models, model)
@@ -272,9 +347,11 @@ function NestFluxRegisters(nest::NestedGrid, parent, child, s::NestInterpState,
     end
     sides = nest_open_sides(child)
     _warn_internal_walls(nest, sides)
-    mk(which) = [_new_planes(nest, sides, which) for _ in 1:length(names)+1]   # + volume
+    mk(which) = [_new_planes(nest, sides, which) for _ in 1:length(names)]
     return NestFluxRegisters(names, models, pf, cf, sides, mk(1), mk(2), mk(1), mk(2),
-                             wp, wc, 0, 0, _sgs_keywords(ap), _sgs_keywords(ac),
+                             mk(1), mk(2), mk(1), mk(2),
+                             _new_planes(nest, sides, 1), _new_planes(nest, sides, 2),
+                             wp, wc, 0, 0, false, false, _sgs_keywords(ap), _sgs_keywords(ac),
                              Field(CellCenter(), nest.parent_mesh),
                              Field(CellCenter(), nest.child_mesh))
 end
@@ -301,24 +378,33 @@ end
 # --- attempts: begin / commit -----------------------------------------------
 
 function _begin_attempt!(r::NestFluxRegisters, which::Symbol)
-    planes = which === :parent ? r.ppend : r.cpend
-    for P in planes, M in P
+    for planes in (which === :parent ? (r.ppend, r.pvpend) : (r.cpend, r.cvpend)),
+        P in planes, M in P
         fill!(M, 0.0)
     end
-    which === :parent ? (r.pstage = 0) : (r.cstage = 0)
+    if which === :parent
+        r.pstage = 0; r.popen = true
+    else
+        r.cstage = 0; r.copen = true
+    end
     return r
 end
 
 function _commit_attempt!(r::NestFluxRegisters, which::Symbol)
-    acc, pend = which === :parent ? (r.pacc, r.ppend) : (r.cacc, r.cpend)
-    for n in eachindex(acc), s in 1:6
-        acc[n][s] .+= pend[n][s]
+    par = which === :parent
+    for (acc, pend) in (par ? ((r.pacc, r.ppend), (r.pvacc, r.pvpend)) :
+                              ((r.cacc, r.cpend), (r.cvacc, r.cvpend)))
+        for n in eachindex(acc), s in 1:6
+            acc[n][s] .+= pend[n][s]
+        end
     end
+    par ? (r.popen = false) : (r.copen = false)
     return r
 end
 
 function _clear_registers!(r::NestFluxRegisters)
-    for P in (r.pacc, r.cacc, r.ppend, r.cpend), Q in P, M in Q
+    for P in (r.pacc, r.cacc, r.ppend, r.cpend, r.pvacc, r.cvacc, r.pvpend, r.cvpend),
+        Q in P, M in Q
         fill!(M, 0.0)
     end
     return r
@@ -327,7 +413,7 @@ end
 # The hook chained in front of a domain's body_force!: it runs inside every
 # stage, after the tendencies and before the predictor, when the halos of
 # the state, the velocities and the SGS coefficients are those the stage
-# used.
+# used. It books the scalars the core transports (applied_by = :core).
 struct _RegisterHook <: Function
     regs::NestFluxRegisters
     nest::NestedGrid
@@ -336,34 +422,40 @@ end
 
 function (h::_RegisterHook)(sim, Δt)
     r = h.regs
-    if h.which === :parent
-        r.pstage += 1; st = r.pstage; ws = r.pweights; planes = r.ppend
-        fields = r.pfield; kw = r.psgs; scratch = r.pscratch
+    par = h.which === :parent
+    if par
+        r.pstage += 1; st = r.pstage; ws = r.pweights; planes = r.ppend; vplanes = r.pvpend
+        fields = r.pfield; kw = r.psgs; scratch = r.pscratch; vst = r.pvstage
     else
-        r.cstage += 1; st = r.cstage; ws = r.cweights; planes = r.cpend
-        fields = r.cfield; kw = r.csgs; scratch = r.cscratch
+        r.cstage += 1; st = r.cstage; ws = r.cweights; planes = r.cpend; vplanes = r.cvpend
+        fields = r.cfield; kw = r.csgs; scratch = r.cscratch; vst = r.cvstage
     end
     st <= length(ws) || error("NestFluxRegisters: stage $st of a core with " *
                               "$(length(ws)) stages")
+    any(_by_core, r.models) || return nothing
     w = ws[st] * Float64(Δt)
     closure = _domain_closure(sim, kw)
     f = closure === nothing ? nothing : sgs_fields(closure, sim)
     W = _register_weights(sim)
+    # the stage's volume (mass) flux, the same for every core-transported scalar
+    for s in 1:6
+        r.sides[s] || continue
+        fill!(vst[s], 0.0)
+        _book_plane!(vst[s], sim, nothing, nothing, nothing, 0.0, W, h.nest, s, par, w,
+                     sim.u, sim.v, sim.w)
+    end
     for n in eachindex(r.names)
+        _by_core(r.models[n]) || continue
         ϕ = fields[n]
-        n > 1 && r.names[n] !== :qv && fill_halos!(ϕ, sim.θ_bcs)   # tracers: owner-filled
+        n > 1 && !(r.names[n] === :qv && _moist(sim)) && fill_halos!(ϕ, sim.θ_bcs)   # tracers
         K = _face_diffusivity(r.models[n], closure, f, sim, ϕ, scratch)
         ν = r.models[n].molecular && sim.has_viscosity ? Float64(sim.ν) : 0.0
         for s in 1:6
             r.sides[s] || continue
-            _book_plane!(planes[n][s], sim, ϕ, r.models[n].rec, K, ν, W, h.nest, s,
-                         h.which === :parent, w)
+            _book_plane!(planes[n][s], sim, ϕ, r.models[n].rec, K, ν, W, h.nest, s, par, w,
+                         sim.u, sim.v, sim.w)
+            vplanes[n][s] .+= vst[s]
         end
-    end
-    for s in 1:6                                          # the volume (mass) flux
-        r.sides[s] || continue
-        _book_plane!(planes[end][s], sim, nothing, nothing, nothing, 0.0, W, h.nest, s,
-                     h.which === :parent, w)
     end
     return nothing
 end
@@ -379,34 +471,30 @@ function _face_diffusivity(m::NestScalarFlux, closure, f, sim, ϕ, scratch)
 end
 
 # The total flux density (advective + molecular + SGS, times W) through the
-# face of storage index (i, j, k) normal to `ax`: the face fluxes of
-# advect_centered! / weighted_scalar_advect! (advective_face_flux), of the
-# Laplacian and of add_eddy_diffusion_scalar! (two-point, coefficient
-# averaged linearly to the face).
+# face of storage index (i, j, k) normal to `ax`: the one per-face kernel
+# `AdvectionSchemes.scalar_face_flux` (#327 M2: the same numbers as
+# `boundary_scalar_flux`), with the face diffusivity ν + s·½(K_L + K_R) of
+# the closure's `sgs_scalar_face_diffusivity`.
 @inline function _face_total_flux(rec, ϕd, veld, ax::Int, i::Int, j::Int, k::Int, g,
                                   ν::Float64, K, W)
-    F = advective_face_flux(rec, ϕd, veld, ax, i, j, k)
-    il, jl, kl = ax == 1 ? (i - 1, j, k) : ax == 2 ? (i, j - 1, k) : (i, j, k - 1)
-    @inbounds dϕ = ϕd[i, j, k] - ϕd[il, jl, kl]
-    invd = ax == 1 ? 1 / g.dx : ax == 2 ? 1 / g.dy : 1 / _dzf(g, k)
-    D = ν
-    if K !== nothing
-        Kd = ax == 3 ? K[2].data : K[1].data
-        @inbounds D += K[3] * (0.5 * (Kd[il, jl, kl] + Kd[i, j, k]))
-    end
-    F -= D * dϕ * invd
+    D = K === nothing ? face_diffusivity(ν, nothing, 1.0, ax, i, j, k) :
+                        face_diffusivity(ν, ax == 3 ? K[2] : K[1], K[3], ax, i, j, k)
+    Fa, Fd, _ = scalar_face_flux(rec, ϕd, veld, ax, i, j, k, D, face_inv_spacing(g, ax, k))
+    F = Fa + Fd
     W === nothing && return F
     @inbounds return (ax == 3 ? W[2][k] : W[1][k]) * F
 end
 
 # ϕ === nothing books the volume (mass) flux W u_n instead of a scalar flux.
+# (u, v, w) is the velocity the transport used (the simulation's, unless a
+# separate transport says otherwise).
 function _book_plane!(M::Matrix{Float64}, sim, ϕ, rec, K, ν, W, nest::NestedGrid,
-                      s::Int, parent::Bool, w::Float64)
+                      s::Int, parent::Bool, w::Float64, u = sim.u, v = sim.v, wv = sim.w)
     ax = _side_axis(s); hi = _side_high(s)
     g = sim.mesh
     t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
     H = (g.Hx, g.Hy, g.Hz)
-    veld = ax == 1 ? sim.u.data : ax == 2 ? sim.v.data : sim.w.data
+    veld = ax == 1 ? u.data : ax == 2 ? v.data : wv.data
     if parent
         oo = (nest.ix, nest.iy, nest.iz); nn = (nest.nx, nest.ny, nest.nz)
         base = H[ax] + oo[ax] + (hi ? nn[ax] : 0)
@@ -454,7 +542,7 @@ function _register_mismatch(r::NestFluxRegisters, n::Int, nest::NestedGrid,
         M = zeros(psz)
         if r.sides[s]
             P = r.pacc[n][s]; C = r.cacc[n][s]
-            Pv = r.pacc[end][s]; Cv = r.cacc[end][s]
+            Pv = r.pvacc[n][s]; Cv = r.cvacc[n][s]
             t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
             r1, r2 = rr[t1], rr[t2]
             inv = 1 / (r1 * r2)
@@ -471,6 +559,91 @@ function _register_mismatch(r::NestFluxRegisters, n::Int, nest::NestedGrid,
         push!(out, M)
     end
     return NestFluxMismatch{Float64}(out...)
+end
+
+# =========================================================================
+# Bookings of a separate transport (#327, M3)
+# =========================================================================
+
+# simulation => (registers, :parent | :child, nest) of the two-way run that
+# owns it (weak keys: a discarded simulation drops out). Set by NestedRun.
+const _NEST_BOOKERS = WeakKeyDict{Any,Tuple{NestFluxRegisters,Symbol,NestedGrid}}()
+
+_register_booker!(sim, r::NestFluxRegisters, which::Symbol, nest::NestedGrid) =
+    (_NEST_BOOKERS[sim] = (r, which, nest); nothing)
+
+"""
+    book_nest_flux!(sim, name, ϕ, dt; scheme = nothing, diffusivity = nothing,
+                    velocity = (sim.u, sim.v, sim.w), weights = :sim) -> Bool
+
+Book into the flux registers of the two-way [`NestedRun`](@ref) that `sim`
+belongs to (parent or child) the interface flux that a **separate
+transport** of the tracer `name` (field `ϕ`, declared
+`TwoWayFeedback(tracer_fluxes = (name => NestScalarFlux(applied_by = :transport),))`)
+applies over the time `dt` (#327, M3): a transport that moves its tracers
+outside the core's stages — after the dynamics, with its own scheme,
+velocity and time step, as the Berlin case's WENO slot does — calls it
+with **the state it is about to apply the flux to**, before updating `ϕ`:
+
+* `scheme` (a name of `boundary_scalar_flux` or a reconstruction; `nothing`
+  for no advection) books the advective flux `u_n ϕ_f` with the
+  transport's `velocity` (halos as the transport filled them), and the
+  volume flux that carried it (volume-consistent refluxing);
+* `diffusivity = (ν = …, κh = …, κv = …, scale = 1)` books the diffusive
+  flux `−(ν + s·½(κ_L + κ_R)) ∂ϕ/∂n` (κh on the lateral, κv on the
+  vertical planes: cell-centred fields, halos filled), the face form of
+  `add_eddy_diffusion_scalar!`. A Lie-split transport that diffuses after
+  advecting calls it a second time with the advected `ϕ`.
+
+Both are formed by the one face kernel
+[`scalar_face_flux`](@ref Aeolus.AdvectionSchemes.scalar_face_flux) and
+weighted by the simulation's constraint weights `W` (`weights = :sim`;
+`nothing` for none; a tuple `(Wc, Wf)` of storage-indexed vectors to
+override) — the `∫ W ϕ` the composite conserves. A multi-stage transport
+calls it once per stage with `dt` times the stage weight.
+
+Bookings land in the step being attempted and are discarded with it if the
+step is rejected. Returns `false` (and books nothing) when `sim` is in no
+refluxing two-way run, `name` is not declared with `applied_by = :transport`,
+or no step of `sim`'s domain is under way — so a transport can call it
+unconditionally.
+"""
+function book_nest_flux!(sim, name::Symbol, ϕ::Field, dt::Real; scheme = nothing,
+                         diffusivity = nothing, velocity = (sim.u, sim.v, sim.w),
+                         weights = :sim)
+    entry = get(_NEST_BOOKERS, sim, nothing)
+    entry === nothing && return false
+    r, which, nest = entry
+    n = findfirst(==(name), r.names)
+    (n === nothing || _by_core(r.models[n])) && return false
+    par = which === :parent
+    (par ? r.popen : r.copen) || return false
+    W = weights === :sim ? _register_weights(sim) : weights
+    w = Float64(dt)
+    planes = par ? r.ppend[n] : r.cpend[n]
+    vplanes = par ? r.pvpend[n] : r.cvpend[n]
+    u, v, wv = velocity
+    if scheme !== nothing
+        rec = _flux_reconstruction(scheme)
+        for s in 1:6
+            r.sides[s] || continue
+            _book_plane!(planes[s], sim, ϕ, rec, nothing, 0.0, W, nest, s, par, w, u, v, wv)
+            _book_plane!(vplanes[s], sim, nothing, nothing, nothing, 0.0, W, nest, s, par, w,
+                         u, v, wv)
+        end
+    end
+    if diffusivity !== nothing
+        ν = Float64(get(diffusivity, :ν, 0.0))
+        κh = get(diffusivity, :κh, nothing); κv = get(diffusivity, :κv, κh)
+        (κh === nothing) == (κv === nothing) ||
+            throw(ArgumentError("book_nest_flux!: give both κh and κv, or neither"))
+        K = κh === nothing ? nothing : (κh, κv, Float64(get(diffusivity, :scale, 1.0)))
+        for s in 1:6
+            r.sides[s] || continue
+            _book_plane!(planes[s], sim, ϕ, nothing, K, ν, W, nest, s, par, w, u, v, wv)
+        end
+    end
+    return true
 end
 
 # =========================================================================
@@ -592,6 +765,7 @@ function anterpolate!(psim::_NestSim, csim::_NestSim, nest::NestedGrid, s::NestI
         throw(DimensionMismatch("anterpolate!: mask has size $(size(mask)), expected " *
                                 "$((nest.nx, nest.ny, nest.nz))"))
     0 < α <= 1 || throw(ArgumentError("anterpolate!: α = $α must be in (0, 1]"))
+    _check_two_way_pair(psim, csim, "anterpolate!", s)
     a = Float64(α)
     meas = s.measure
     χf = _fluid(nest, solid)

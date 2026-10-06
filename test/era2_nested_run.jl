@@ -497,4 +497,67 @@ end
     @test pr.child.t == pr.parent.t
 end
 
+# -------------------------------------------------------------------------
+# #327 M6: only a numerical failure is a rejected step. A bug (MethodError,
+# BoundsError, ArgumentError from a finite state) propagates at once instead
+# of being retried at half the step.
+@testset "exceptions: bugs are rethrown, numerical failures retried (#327 M6)" begin
+    function exc_case(child_throw, parent_throw = nothing)
+        pm = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
+        nest = nested_grid(pm, ((0.0, 1.0), (0.0, 1.0), (0.25, 0.75)), 2; halo=(3, 3, 3))
+        cm = nest_child_mesh(nest)
+        psim = BoussinesqSimulation(pm)
+        fill!(psim.u.data, 1.0); fill!(psim.θ.data, 300.0)
+        csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :periodic, :periodic, :nest))
+        fill!(csim.u.data, 1.0); fill!(csim.θ.data, 300.0)
+        armed_c = Ref(child_throw !== nothing); armed_p = Ref(parent_throw !== nothing)
+        ccalls = Ref(0); pcalls = Ref(0)
+        ccore(sim, dt; kw...) = (ccalls[] += 1; step!(sim, dt; kw...);
+                                 armed_c[] && (armed_c[] = false; child_throw(sim)); sim)
+        pcore(sim, dt; kw...) = (pcalls[] += 1; step!(sim, dt; kw...);
+                                 armed_p[] && (armed_p[] = false; parent_throw(sim)); sim)
+        run = NestedRun(psim, csim, nest; advance_parent = domain_advance(pcore),
+                        advance_child = domain_advance(ccore),
+                        cfl_parent = CFLConstraints(dt_max = 0.02))
+        return run, ccalls, pcalls
+    end
+    # bugs from a finite state: rethrown, no retry, nothing rolled back silently
+    for (name, thr, E) in (("BoundsError", s -> zeros(2)[3], BoundsError),
+                           ("MethodError", s -> sqrt("x"), MethodError),
+                           ("ArgumentError", s -> throw(ArgumentError("bad option")), ArgumentError),
+                           ("ErrorException", s -> error("a bug"), ErrorException))
+        run, cc, pc = exc_case(thr)
+        @test_throws E step_nested!(run)
+        @test run.stats.child_retries == 0 && cc[] == 1
+        run, cc, pc = exc_case(nothing, thr)
+        @test_throws E step_nested!(run)
+        @test run.stats.parent_retries == 0 && pc[] == 1 && cc[] == 0
+        @printf("  %s in a child / parent core: rethrown after 1 call, 0 retries\n", name)
+    end
+    # numerical failures: rolled back and retried at half the step
+    for (name, thr) in (("NumericalFailure", s -> throw(NumericalFailure("solver diverged"))),
+                        ("DomainError", s -> sqrt(-1.0)),
+                        ("InexactError", s -> ceil(Int, Inf)),
+                        ("error from a non-finite state", s -> (s.u.data[6, 6, 6] = NaN;
+                                                                error("NaN downstream"))))
+        run, cc, pc = exc_case(thr)
+        step_nested!(run)
+        @test run.stats.child_retries == 1
+        @test all(isfinite, interior_view(run.child.u)) && run.child.t == run.parent.t
+        run, cc, pc = exc_case(nothing, thr)
+        step_nested!(run)
+        @test run.stats.parent_retries == 1 && run.stats.child_retries == 0
+        @test all(isfinite, interior_view(run.parent.u))
+        @printf("  %s in a child / parent core: rolled back, 1 retry each\n", name)
+    end
+    # the predicate itself
+    g = RegularGrid(Float64; size=(4, 4, 4), extent=(1.0, 1.0, 1.0), halo=(1, 1, 1))
+    s = BoussinesqSimulation(g)
+    @test !is_numerical_failure(BoundsError(zeros(1), 2), s)
+    @test !is_numerical_failure(InterruptException(), s)
+    @test is_numerical_failure(NumericalFailure("x"), s)
+    s.θ.data[2, 2, 2] = Inf
+    @test is_numerical_failure(BoundsError(zeros(1), 2), s)
+end
+
 end # testset

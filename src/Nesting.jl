@@ -70,7 +70,8 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             set_boundary_data!, open_boundary_states,
                             has_open_boundaries, update_open_boundaries!,
                             open_boundary_snapshot, restore_open_boundaries!,
-                            Periodic, NoFlux, ImpermeableWall, NoSlipWall
+                            Periodic, NoFlux, ImpermeableWall, NoSlipWall,
+                            mark_open_boundary_solids!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, step_rk3!, _dzf, _project_velocity!
 using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness
@@ -79,10 +80,11 @@ using ..Anelastic: MassWeightedSimulation, ReferenceState, constraint_weights,
 using ..IBM: SolidMask
 using ..Operators: sgs_closure, sgs_state, restore_sgs_state!, sgs_fields,
                    sgs_scalar_face_diffusivity, sgs_tracer_diffusivity!, _active_sgs
-using ..AdvectionSchemes: advective_face_flux, _flux_reconstruction
+using ..AdvectionSchemes: advective_face_flux, _flux_reconstruction, scalar_face_flux,
+                           face_diffusivity, face_inv_spacing
 using ..TimeIntegration: CFLConstraints, adaptive_dt, StateSnapshot, save_state!, state_snapshot,
                          restore_state!, IMEXScheme, ARK2, Rosenbrock2, step_imex!,
-                         _all_finite, _max_advective_rate
+                         _all_finite, _max_advective_rate, is_numerical_failure
 using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
@@ -105,7 +107,7 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        DomainAdvance, domain_advance, stage_times,
        NestedRun, NestRunStats, boundary_time,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
-       anterpolate!, feedback_mask
+       anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights
 
 "Simulations a nest can couple: the Boussinesq core (uniform or z-stretched) and the sound-proof `MassWeightedSimulation`s (anelastic, pseudo-incompressible)."
 const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
