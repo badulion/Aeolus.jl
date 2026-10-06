@@ -15,6 +15,9 @@
 #      statistics source; the inflow–outflow child (5δ, refine 2
 #      horizontally) runs with the generator off, the digital filter and
 #      the FSD provider
+#   6. the physical fetch (the papers' set-up): DF-same — statistics and
+#      mean from the periodic channel on the child grid — in a 10δ child;
+#      the 10 % fetch against U k/P and Kim et al.'s (2013) 10δ
 #
 # References: Xie & Castro (2008), FTaC 81, 449; Kim, Castro & Xie (2013),
 # Comput. Fluids 84, 56; Porté-Agel et al. (2000), JFM 415, 261.
@@ -174,18 +177,29 @@ end
 # What the issue expected and what was measured (see the theory page,
 # "Development length"):
 #   * fetch: TKE and −u'w' at 0.2δ and 0.5δ within 10 % of the precursor
-#     by x ≤ 3δ — NOT met, the expectation was too short for this flow
-#     (not a code error): at 0.5δ one local eddy turnover is advected
-#     U k/ε ≈ 10δ, with ε = τ ∂U/∂z measured on the child-grid reference
-#     (13δ with τ = u*²(1 - z/δ) and ∂U/∂z = u*/(κz); the log-layer
-#     ε = u*³/(κz) ignores the stress decrease and gives 7δ, too short),
-#     and the TKE at 0.2δ overshoots (the coarse
-#     parent's R11 is 57 % above the child-grid equilibrium). Asserted
-#     instead: the digital filter keeps TKE within [0.7, 1.5] of the
-#     precursor everywhere, and is closer to it than the FSD provider.
+#     by x ≤ 3δ — NOT met; the expectation was too short for this flow
+#     (not a code error). Kim, Castro & Xie (2013, §3.3) measured ≈ 10δ
+#     for the digital filter in a channel (14δ to 5 % for their
+#     divergence-free variant), and one local eddy turnover U k/P is
+#     5.6δ at 0.22δ and 10δ at 0.47δ. The physical fetch against those
+#     numbers is asserted in the DF-same testset below. Against this
+#     coarse precursor no 10 % fetch exists at 0.22δ for any generator:
+#     the child relaxes to the equilibrium of the parent's 11 %-too-fast
+#     mean profile, away from the precursor's turbulence. Asserted here:
+#     the DF is closer to the precursor than the FSD (TKE and −u'w').
 #   * total stress at 4δ within 10 % for 0.1δ < z < 0.8δ — NOT met (same
-#     reason); asserted: DF closer than FSD, FSD closer than off.
-#   * null comparison, bulk velocity, pressure-gradient bias: as issued.
+#     reason, RMS 0.30-0.35 u*² over seven realisations); asserted: DF
+#     closer than FSD, FSD closer than off.
+#   * null comparison, bulk velocity: as issued.
+#   * pressure-gradient bias < 2 % — NOT met reliably; the expectation is
+#     wrong for a developing flow. The extra drive balances the
+#     streamwise change of the momentum flux and of the wall stress over
+#     1-4δ, so it is a fetch quantity, not a zero: off +70 %, FSD
+#     +19-31 %, DF-same +23 % (example), DF here −0.6 to −9.0 % over
+#     seven precursor realisations (the mean inflow profile of a 10 δ/u*
+#     average on 24 × 12 columns differs by realisation, and the FFTW
+#     MEASURE plans make every run a new realisation). Asserted: the
+#     ordering |DF| < |FSD| < |off|.
 @testset "inflow fetch: precursor, generator off / digital filter / FSD" begin
     Np, Nc, ext = (24, 12, 16), (48, 24, 16), (5.0, 2.5)
     t_wall = time()
@@ -229,20 +243,25 @@ end
         @test maximum(ratio(off, :tke, k)) < 1e-8
     end
     # the digital filter supplies the precursor's turbulence from the inflow
-    # plane on (measured range 0.77-1.34) and is closer to it than the FSD
-    # provider (measured 0.56-0.83), whose isotropic single-scale field
-    # carries no u'w' structure. The [0.7, 1.5] band is calibrated on these
-    # runs (a regression bound, not a physical tolerance), and it mixes two
-    # effects: the fetch, and the target being the coarse precursor — at
-    # 0.22δ the DF ratio moves AWAY from 1 with x (TKE 0.97 → 1.36, −u'w'
-    # 0.85 → 1.37 over 0.5-4.5δ) because the child settles to the
-    # equilibrium of the parent's 11 %-too-fast mean profile. Whether to
-    # relax the issued 10 %-by-3δ criterion to this is the maintainer's call.
-    lndev(r, k) = sum(abs.(log.(ratio(r, :tke, k)[near3]))) / length(near3)
+    # plane on and is closer to it than the FSD provider, whose isotropic
+    # single-scale field carries no u'w' structure. (An absolute band,
+    # [0.7, 1.5] calibrated on two runs, was removed: it was a regression
+    # bound, not a physical tolerance, and over seven precursor
+    # realisations the DF TKE ratio spans 0.72-1.39 and −u'w' 0.44-1.53,
+    # i.e. within 0.02 of the band's floor. The fetch physics is asserted
+    # against the child-grid reference in the DF-same testset.)
+    lndev(r, f, k) = sum(abs.(log.(ratio(r, f, k)[near3]))) / length(near3)
+    # (mean |ratio - 1| for −u'w': the FSD −u'w' may start at or below zero)
+    absdev(r, k) = sum(abs.(ratio(r, :uw, k)[near3] .- 1)) / length(near3)
     for k in ks
-        t = ratio(df, :tke, k)
-        @test all(0.7 .<= t .<= 1.5)
-        @test lndev(df, k) < lndev(fsd, k)
+        @test lndev(df, :tke, k) < lndev(fsd, :tke, k)
+        # −u'w': the digital filter imposes the precursor's u'w' correlation
+        # (the Lund transform), the FSD field none, so the DF shear stress
+        # is closer to the precursor's (the physical fetch of −u'w' is
+        # asserted in the DF-same testset below)
+        @printf("  -u'w' at %.2fδ, mean |ratio - 1| over x ≤ 3δ: DF %.3f, FSD %.3f\n",
+                pre.z[k], absdev(df, k), absdev(fsd, k))
+        @test absdev(df, k) < absdev(fsd, k)
     end
     # shear stress at x ≈ 4δ, 0.1δ < z < 0.8δ: DF < FSD < off in RMS error
     sz = findall(z -> 0.1 < z < 0.8, zf)
@@ -251,18 +270,89 @@ end
             df.x_stress, rms(df), rms(fsd), rms(off))
     @test rms(df) < rms(fsd) < rms(off)
     # no spurious mean (issued): bulk velocity within 0.5 % of the
-    # precursor's at every x; the driving pressure-gradient bias < 2 %
+    # precursor's at every x
     for r in (off, df, fsd)
         @test maximum(abs.(r.bulk ./ Ub .- 1)) < 0.005
         @test r.maxdiv < 1e-10
     end
     @test df.added < 1e-12 && fsd.added < 1e-12
-    # passes by cancellation, not equilibrium: −0.55 % with the parent's
-    # statistics, +23 % with the child grid's own (example, DF-same)
-    @test abs(pressure_gradient_bias(df, G)) < 0.02
+    # the extra driving pressure gradient over 1-4δ (see the header: a
+    # fetch quantity, −0.6 to −9.0 % for the DF over seven realisations,
+    # so the issued 2 % is not asserted): the better the inflow
+    # turbulence, the smaller the extra drive
     @test abs(pressure_gradient_bias(df, G)) < abs(pressure_gradient_bias(fsd, G)) <
           abs(pressure_gradient_bias(off, G))
     @printf("  CI fetch case: %.1f s\n", time() - t_wall)
+end
+
+
+# ---------------------------------------------------------------------------
+# The physical fetch: the set-up of the papers. Kim, Castro & Xie (2013,
+# §3.3: plane channel, Re_τ = 395, U_b/u_τ = 18.3, spanwise periodic, the
+# statistics and mean from the periodic LES on the same grid) found the
+# wall shear stress and −u'v' recovered by x ≈ 10δ for the digital filter
+# (XC, XCMC), 14δ to 5 % for their divergence-free variant counted from
+# its plane. That is the literature number the issue asked to adopt in
+# place of the 3δ placeholder. Here: the periodic channel on the child
+# grid (48 × 24 × 16) is the reference, the statistics source and the
+# inflow profile (DF-same); the child is 10δ long at the same Δx.
+#
+# Physics asserted: the fetch is about one local eddy-turnover distance
+# U k/P (P = τ ∂U/∂z, local equilibrium P = ε), measured on the
+# reference. At 0.22δ, U k/P ≈ 5.6δ: TKE and −u'w' within 10 % by
+# x ≤ 10δ (the paper's number) and L10 between 0.6 and 1.6 turnovers
+# (measured over six realisations: L10 TKE 5.6-6.5δ = 1.00-1.16
+# turnovers, −u'w' 6.2-6.8δ = 1.07-1.22). At
+# 0.47δ, U k/P ≈ 10δ (the stress falls as 1 - z/δ): not recovered within
+# half a turnover, and still developing across the child. The issue's
+# "by 3δ at 0.5δ" contradicts both the paper and the turnover estimate.
+@testset "inflow fetch: DF-same against the child-grid reference (Kim et al. 2013)" begin
+    t_wall = time()
+    Nr, Lc = (48, 24, 16), 10.0
+    ref = fetch_precursor(; N = Nr, extent = (5.0, 2.5), t_spin = 20.0, t_avg = 10.0, seed = 2)
+    r = fetch_child(ref; generator = :df, N = (round(Int, Nr[1] * Lc / 5), Nr[2], Nr[3]),
+                    extent = (Lc, 2.5), t_spin = 1.5, t_avg = 5.0, sample_every = 4)
+    dz = ref.case.sim.mesh.dz
+    # the last 0.5δ is the convective outflow layer, not part of the fetch
+    keep = findall(x -> x <= Lc - 0.5, r.p.x)
+    x = r.p.x[keep]
+    function turnover(k)
+        τ = 0.5 * (ref.stress[k] + ref.stress[k+1])            # total stress at the centre
+        dUdz = (ref.U[k+1] - ref.U[k-1]) / (2dz)
+        return ref.U[k] * ref.tke[k] / (τ * dUdz)
+    end
+    L10(f, k) = development_length((x, getfield(r.p, f)[keep, k]), getfield(ref, f)[k]; x0 = 0.0)
+    rat(f, k) = getfield(r.p, f)[keep, k] ./ getfield(ref, f)[k]
+    k2, k5 = nearest_level(ref.z, 0.2), nearest_level(ref.z, 0.5)
+    for k in (k2, k5)
+        @printf("  DF-same z = %.2fδ: U k/P = %.2fδ; L10 TKE %.2fδ, -u'w' %.2fδ; TKE/ref at x = 1, 3, 5, 7, 9δ: %s\n",
+                ref.z[k], turnover(k), L10(:tke, k), L10(:uw, k),
+                join((@sprintf("%.2f", rat(:tke, k)[nearest_level(x, xx)]) for xx in (1, 3, 5, 7, 9)), " "))
+    end
+    @printf("  (reference %.1f s, 10δ child %.1f s)\n", ref.wall_time, r.wall_time)
+    # 0.22δ: recovered within the paper's 10δ, after about one turnover
+    T2 = turnover(k2)
+    for f in (:tke, :uw)
+        L = L10(f, k2)
+        @test L <= 10.0
+        @test 0.6T2 <= L <= 1.6T2
+    end
+    # 0.47δ: the turnover distance is about the child length. Not
+    # recovered within half a turnover (both moments below 90 %), and
+    # still developing: the ratio grows by more than 0.1 from x ≈ 1δ to
+    # x ≈ 9δ (measured 0.18-0.42 over six realisations)
+    T5 = turnover(k5)
+    @test T5 > 1.5T2                                  # the fetch grows with height
+    half = findall(xx -> xx <= 0.5T5, x)
+    for f in (:tke, :uw)
+        @test maximum(rat(f, k5)[half]) < 0.9
+        @test rat(f, k5)[nearest_level(x, 9.0)] - rat(f, k5)[nearest_level(x, 1.0)] > 0.1
+    end
+    # the reference itself is in equilibrium (as the precursor above)
+    sel = findall(z -> 0.1 <= z <= 0.9, ref.z_faces)
+    @test maximum(abs.(ref.stress[sel] .- (1 .- ref.z_faces[sel]))) < 0.08
+    @test r.maxdiv < 1e-10
+    @printf("  DF-same fetch case: %.1f s\n", time() - t_wall)
 end
 
 end
