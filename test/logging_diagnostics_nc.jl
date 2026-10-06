@@ -179,7 +179,7 @@ end
              ProfileDiagnostic("other", "1", "zz", lev, () -> fill(-1.0 * k[], 3)),
              ProfileDiagnostic("faces", "1", "z", [0.0, 20.0, 40.0], () -> [1.0, 2.0, 3.0])]
     path = joinpath(dir, "d.nc")
-    w = DiagnosticsNCWriter(path, diags, profs; cadence = 2.5, flush_every = 4,
+    w = DiagnosticsNCWriter(path, diags, profs; cadence = 2.5, flush_every = 4, flush_interval = 1e9,
                             attributes = Dict("run_id" => "abc", "session" => 1),
                             time_origin = DateTime(2019, 6, 29, 4))
     lims = ["advective", "", "diffusive"]
@@ -224,6 +224,13 @@ end
         @test ds["z"].attrib["axis"] == "Z" && ds["z"].attrib["units"] == "m"
         @test NCDatasets.deflate(ds["prof"])[1]                # compressed
     end
+    # flush_interval = 0: every row is on disk at once
+    w0 = DiagnosticsNCWriter(joinpath(dir, "f0.nc"), diags; flush_interval = 0.0)
+    for n in 1:3
+        record_diagnostics!(w0, Float64(n); step = n)
+        @test w0.ds.dim["time"] == n
+    end
+    close(w0)
     # names are one namespace: scalars, profiles, axes, fixed variables
     @test_throws ArgumentError DiagnosticsNCWriter(joinpath(dir, "x.nc"),
         [Diagnostic("theta", "K", () -> 0.0)], [ProfileDiagnostic("theta", "K", "z", lev, () -> lev)])

@@ -66,8 +66,8 @@ end
 
 """
     DiagnosticsNCWriter(path, diags, profiles = ProfileDiagnostic[];
-                        cadence = 60.0, append = true, flush_every = 20,
-                        attributes = Dict(), time_origin = nothing)
+                        cadence = 60.0, append = true, flush_interval = 5.0,
+                        flush_every = 1000, attributes = Dict(), time_origin = nothing)
 
 The diagnostics of a run as NetCDF-4 (`diagnostics.nc` of the run
 folder, #337), written by [`record_diagnostics!`](@ref) at the same rows
@@ -100,9 +100,14 @@ variables, units and profile levels): a restart of the run appends its
 records, refreshes the global attributes to the new session and adds a
 `history` line. A file of another layout is left alone, and the session
 writes `<name>-2.nc` (`-3`, …) instead, with a warning. The rows of
-`time` are buffered and written as a block every `flush_every` rows, at
-every costly row and on `close`; every write ends with a `sync`, so the
-file on disk holds every flushed row even if the run dies.
+`time` are buffered and written as one block at the first row
+`flush_interval` wall seconds after the last write, after `flush_every`
+rows, at every costly row, when a blowup is thrown out of the run monitor
+and on `close`; every write ends with a `sync`, so the file on disk holds
+every written row even if the run dies. The policy is the one of
+`run.log` (epic #293, "flush every few s"): a `sync` of the HDF5 file
+costs about 3 ms, so syncing every 20 rows would cost 2 % of a 64×64×32
+step on its own (measured, see the Logging page).
 """
 mutable struct DiagnosticsNCWriter
     path::String
@@ -111,7 +116,9 @@ mutable struct DiagnosticsNCWriter
     costly_diags::Vector{Diagnostic}
     profiles::Vector{ProfileDiagnostic}
     cadence::Float64
+    flush_interval::Float64
     flush_every::Int
+    last_flush::Float64
     last_costly::Float64
     wall0::Float64
     rows::Int
@@ -223,11 +230,13 @@ end
 
 function DiagnosticsNCWriter(path::AbstractString, diags::AbstractVector{Diagnostic},
                              profiles::AbstractVector{ProfileDiagnostic} = ProfileDiagnostic[];
-                             cadence::Real = 60.0, append::Bool = true, flush_every::Integer = 20,
+                             cadence::Real = 60.0, append::Bool = true,
+                             flush_interval::Real = 5.0, flush_every::Integer = 1000,
                              attributes::AbstractDict = Dict{String,Any}(),
                              time_origin::Union{Nothing,DateTime} = nothing)
     cadence >= 0 || throw(ArgumentError("DiagnosticsNCWriter: cadence must be ≥ 0, got $cadence"))
     flush_every >= 1 || throw(ArgumentError("DiagnosticsNCWriter: flush_every must be ≥ 1"))
+    flush_interval >= 0 || throw(ArgumentError("DiagnosticsNCWriter: flush_interval must be ≥ 0"))
     axes, axis_names, axis_levels = _profile_axes(profiles)
     _nc_check_names(diags, profiles, axis_names)
     step_diags = Diagnostic[d for d in diags if d.cadence === :step]
@@ -280,7 +289,8 @@ function DiagnosticsNCWriter(path::AbstractString, diags::AbstractVector{Diagnos
         NCDatasets.sync(ds)
     end
     w = DiagnosticsNCWriter(p, ds, step_diags, costly_diags, collect(profiles), Float64(cadence),
-                            Int(flush_every), -Inf, time(), Int(ds.dim["time"]),
+                            Float64(flush_interval), Int(flush_every), time(), -Inf, time(),
+                            Int(ds.dim["time"]),
                             Int(ds.dim["time_costly"]), Int64[], Float64[], Float64[], Float64[],
                             String[], Int32[], [Float64[] for _ in step_diags])
     @debug("diagnostics.nc opened", subsystem = :diagnostics, domain = current_domain(),
@@ -335,7 +345,7 @@ function record_diagnostics!(w::DiagnosticsNCWriter, t::Real; step::Integer, dt:
         nc_append_record!(w.ds, rec; dim = "time_costly")
         w.costly_rows += 1
         w.last_costly = Float64(t)
-    elseif length(w.b_step) >= w.flush_every
+    elseif length(w.b_step) >= w.flush_every || time() - w.last_flush >= w.flush_interval
         _flush_rows!(w)
     end
     return costly
@@ -344,6 +354,7 @@ end
 # write the buffered rows of `time` as one block
 function _flush_rows!(w::DiagnosticsNCWriter; sync::Bool = true)
     n = length(w.b_step)
+    w.last_flush = time()
     n == 0 && return w
     rec = Dict{String,Any}("time" => w.b_t, "step" => w.b_step, "wall" => w.b_wall,
                            "dt" => w.b_dt, "dt_limiter" => w.b_lim, "retries" => w.b_retries)
