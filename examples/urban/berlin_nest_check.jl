@@ -96,10 +96,11 @@ function run_evening(kind; hours = 1.0)
         d(k) = (get(hb.terms, k, 0.0) - get(hb0.terms, k, 0.0)) / el
         lat, top = case.open === nothing ? (0.0, 0.0) :
                    ((case.open.lateral - ob0[1]) / el, (case.open.top - ob0[2]) / el)
-        push!(rows, @sprintf("  %02d–%02d LT: boundary heat %.2f W/m² (sides %.2f, lid %.2f; booked boundary_heat + mass_correction %.2f), relaxation %.2f, surface %.2f W/m², <θ>(0–100 m) %.3f K",
+        push!(rows, @sprintf("  %02d–%02d LT: boundary heat %.2f W/m² (sides %.2f, lid %.2f; booked boundary_heat + mass_correction %.2f), fixed-gradient top %.2f, relaxation %.2f, surface %.2f, radiation %.2f W/m², <θ>(0–100 m) %.3f K",
                              17 + h, 18 + h, lat + top, lat, top,
                              d((:dynamics, :boundary_heat)) + d((:dynamics, :mass_correction)),
-                             d((:dynamics, :relaxation)), d((:surface_flux, :surface_exchange)),
+                             d((:dynamics, :top_flux)), d((:dynamics, :relaxation)),
+                             d((:surface_flux, :surface_exchange)), d((:column_tendency, :column_radiation)),
                              mean_θ_below(case, 100.0)))
     end
     θ1 = mean_θ_below(case, 100.0)

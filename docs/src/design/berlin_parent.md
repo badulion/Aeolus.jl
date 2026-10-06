@@ -35,6 +35,20 @@ boundaries are periodic (an idealised parent), with the child's footprint
 centred. `ParentConfig(child)` takes the date, clock, location, θ₀, f,
 the sounding and the initial state from the child's `CaseConfig`.
 
+**Placement (#265).** `ParentConfig.center` (default: the child's centre,
+`child.offset`) places the parent box; the parent mesh is built at
+`parent_origin(pc)` in the child mesh's coordinates — (−2500, −2500, 0)
+m for the default, so the child covers parent cells 81–112 in x and y —
+and the land use is cropped to the box (`crop_landuse`; the 1 km parent
+of the smoke nest is a 32 × 32 crop of the 6 km table, coarsened to
+62.5 m). `step_parent!(p, dt)` takes a given step (a nest window) in
+pieces of at most the parent's own limit; `step_parent!(p)` is
+`step_parent!(p, parent_dt(p))`. The geostrophic wind has one definition,
+`parent_geostrophic(pc)`, which the nested child's `:geostrophic`
+coupling uses too; without a sounding it is the child's `(U_g, V_g)`
+options. The nest itself is the [Nesting](berlin_case.md#Nesting-(#265))
+section of the Berlin case page.
+
 ## Physics, all from src or the child
 
 | component | source | notes |
