@@ -24,11 +24,15 @@ using ..StretchedGrids: StretchedGrid
 using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS, PhasePartition,
                              exner_function, virtual_temperature,
                              specific_humidity_from_relative_humidity
+using ..Fields: location
+using ..Operators: DampingProfile
+using ..Operators.FiniteVolume: _add_damping!, damping_coordinates
 
 export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
        AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!,
-       Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time
+       Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time,
+       ReferenceDamping, damping_tendency     # N-parent-b (#254)
 export ProfileNudging, NudgingWeight, nudging_weight, Subsidence, tendency_integrals
 
 # =========================================================================
@@ -712,5 +716,7 @@ end
 # =========================================================================
 
 include("large_scale_forcing/sounding.jl")
+
+include("large_scale_forcing/reference_damping.jl")   # N-parent-b (#254)
 
 end # module

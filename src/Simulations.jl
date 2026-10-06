@@ -295,7 +295,7 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
+    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
 
     # 2. Zero tendencies and add momentum + scalar advection.
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)

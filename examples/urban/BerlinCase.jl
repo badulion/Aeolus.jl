@@ -36,7 +36,8 @@ const URBAN_DIR = @__DIR__
 const DATA_DIR = joinpath(URBAN_DIR, "data")
 
 for f in ("config", "scenarios", "registry", "geometry", "osm_ingest", "bus",
-          "tracers", "air_heat", "air_heat_ledger", "ledger", "reference_state", "output", "case", "stages")
+          "tracers", "air_heat", "air_heat_ledger", "ledger", "reference_state", "top_boundary",
+          "output", "case", "stages")
     include(joinpath(@__DIR__, "core", f * ".jl"))
 end
 
@@ -60,6 +61,7 @@ export CaseConfig, SCENARIOS, build_case, run_case!, step_case!, describe,
        build_parent_surface, parent_tile_forcings, step_parent_column!, parent_offline_forcing,
        CaseReference, ref_pressure, ref_density, ref_exner, surface_pressure,
        initial_θ, initial_qv, case_sounding, case_start_time, case_surface_pressure,
-       initial_inversion_height, case_weekday
+       initial_inversion_height, case_weekday,
+       θ_top_gradient, θ_top_bc, TopHeatFlux
 
 end # module BerlinCase

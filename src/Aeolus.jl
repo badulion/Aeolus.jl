@@ -1058,7 +1058,8 @@ export FreeStreamBoundary
 # generic, already exported.
 export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
-       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
+       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!,
+       ReferenceDamping, damping_tendency
 # #248 (N-parent-c): plane-mean nudging of u, v, θ, qv and large-scale subsidence.
 export ProfileNudging, NudgingWeight, nudging_weight, Subsidence, tendency_integrals
 # N-parent-a (#247): radiosonde soundings → (z, t) profiles
