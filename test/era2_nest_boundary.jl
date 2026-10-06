@@ -20,6 +20,8 @@
 #   7. outflow condition through nest_bcs (#329): a child-only θ pulse
 #      leaves through a convective outflow face, but is trapped by the
 #      Dirichlet (parent) one; the advection halo is checked
+#   8. a NestSponge keeps the child divergence-free (#329): the velocity is
+#      relaxed before the projection
 #
 # References: Hellsten et al. (2021), GMD 14, 3185 (PALM nesting: Dirichlet
 # child boundary from the interpolated parent, §3.2; mass-flux correction,
@@ -522,6 +524,51 @@ end
     @test nest_bcs(cm; halo = 3) isa FieldBoundaryConditions
     @test_throws ArgumentError nest_bcs(cm; halo = 4)
     @test_throws ArgumentError nest_bcs(cm; outflow = :sponge)
+end
+
+# A NestSponge relaxes the child velocity toward the prolongated parent,
+# which is flux-consistent on parent cells but not divergence-free on child
+# cells. Relaxed after the step (before #329) the child kept that
+# divergence; relaxed on the predicted velocity, before the projection, it
+# stays divergence-free to round-off.
+@testset "a NestSponge keeps the child divergence-free (#329)" begin
+    rng = Xoshiro(329)
+    pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo = (3, 3, 3))
+    cm = nest_child_mesh(nest)
+    for (name, adv) in (("step!", domain_advance()), ("step_rk3!", domain_advance(step_rk3!)))
+        psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic))
+        for f in (psim.u, psim.v, psim.w)
+            interior_view(f) .= randn(rng, size(interior_view(f)))
+        end
+        step!(psim, 1e-10); psim.t = 0.0
+        csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
+        _nb_init_child!(csim, psim, nest)
+        run = NestedRun(psim, csim, nest; advance_parent = adv, advance_child = adv,
+                        cfl_parent = nothing, cfl_child = nothing,
+                        sponge = NestSponge(; width = 3, α_max = 20.0))
+        # project the prolongated child once with its open faces attached
+        # (SSP-RK3 keeps a non-solenoidal start state, ×1/9 per step)
+        step!(csim, 1e-12); csim.t = psim.t
+        worst = 0.0; moved = 0.0
+        for _ in 1:5
+            u0 = copy(csim.u.data)
+            step_nested!(run; dt = 2e-3)
+            divergence(csim.div_buf, csim.u, csim.v, csim.w)
+            worst = max(worst, maximum(abs, interior_view(csim.div_buf)))
+            moved = max(moved, maximum(abs, interior_view(csim.u) .- view(u0, interior(cm)...)))
+        end
+        # the same relaxation applied after the step, as before #329
+        after = copy(csim.u.data), copy(csim.v.data), copy(csim.w.data)
+        apply_nest_sponge!(csim, boundary_time(run, run.t0 + run.Δt), run.sponge;
+                           dt = 2e-3, scalars = false)
+        divergence(csim.div_buf, csim.u, csim.v, csim.w)
+        broken = maximum(abs, interior_view(csim.div_buf))
+        @printf("  sponge, %-10s child max|∇·u| %.2e s⁻¹ (relaxed after the step instead: %.2e); max|Δu| per step %.2e\n",
+                name, worst, broken, moved)
+        @test worst < 1e-10
+        @test broken > 1e3 * worst        # the test can see the old placement
+    end
 end
 
 end # testset

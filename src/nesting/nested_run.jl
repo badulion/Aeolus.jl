@@ -86,8 +86,12 @@ Keywords:
   * `sponge` (`nothing`, the default, as in Kadasch et al. 2021 §2.2–2.3
     and Hellsten et al. 2021, which use none) or a [`NestSponge`](@ref):
     relaxation of every member of the field set toward the time-blended
-    parent after each child substep, on the child's open faces only
-    ([`nest_open_sides`](@ref));
+    parent (at the end of the child substep), on the child's open faces
+    only ([`nest_open_sides`](@ref)). The velocities are relaxed on the
+    predicted velocity of every stage, in the core's `post_predictor!`
+    hook, so the pressure solve that follows keeps the child
+    divergence-free; the scalars after each child substep (#329). A user
+    core must call `post_predictor!` for the velocity part to act;
   * `solid` (`nothing`) — the child's IBM [`SolidMask`](@ref) (or a
     `Bool` array). The open faces inside solids are marked with
     [`mark_open_boundary_solids!`](@ref
@@ -168,6 +172,7 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     dt_prev_child::Union{Nothing,Float64}
     sub_t0::Float64                # start and length of the current child substep
     sub_h::Float64
+    sponge_τ::Float64              # window fraction s_bc holds the sponge target at (NaN: stale)
     stats::NestRunStats
     twoway::Union{Nothing,TwoWayFeedback}
     regs::Union{Nothing,NestFluxRegisters}
@@ -234,7 +239,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                     flux_correction, ns, Int(max_retries),
                     Float64(divergence_tol), Float64(max_velocity), validate,
                     reuse_boundary, record, solid, check_clocks, t, t, 0.0, NaN, nothing, nothing,
-                    Float64(child.t), 0.0, NestRunStats(), twoway,
+                    Float64(child.t), 0.0, NaN, NestRunStats(), twoway,
                     twoway !== nothing && twoway.reflux ?
                         NestFluxRegisters(nest, parent, child, s_bc, twoway,
                                           advance_parent, advance_child) : nothing)
@@ -280,8 +285,34 @@ function _set_window!(run::NestedRun)
     d = run.data
     d.a = run.s_old; d.b = run.s_new
     d.t0 = run.t0; d.Δt = run.Δt
+    run.sponge_τ = NaN
     _fill_nest_halos!(run.child, run.s_old)
     return run
+end
+
+# --- the sponge (#329, item 3) ---------------------------------------------
+
+# The sponge target, the parent blended to the end of the current child
+# substep, in run.s_bc (blended once per substep).
+function _sponge_target!(run::NestedRun)
+    τ = (run.sub_t0 + run.sub_h - run.t0) / run.Δt
+    τ == run.sponge_τ && return run.s_bc
+    _blend_state!(run.s_bc, run.s_old, run.s_new, τ)
+    run.sponge_τ = τ
+    return run.s_bc
+end
+
+# The velocity part of the sponge, chained after the child's own
+# post_predictor!: it relaxes the predicted velocity of every stage, before
+# the pressure solve, so the projection keeps ∇·u = 0.
+struct _SpongeHook{R} <: Function
+    run::R
+end
+
+function (h::_SpongeHook)(sim, Δt)
+    run = h.run
+    apply_nest_sponge!(sim, _sponge_target!(run), run.sponge; dt = Δt, scalars = false)
+    return nothing
 end
 
 # --- step validation and rollback ----------------------------------------
@@ -338,9 +369,9 @@ end
 # rolled back and retried; anything else — a `MethodError`, a `BoundsError`,
 # a wrong argument — is a bug or a set-up error and is rethrown at once
 # (#327, M6: it used to become a "rejected step" retried at half the size).
-function _try_advance!(adv::DomainAdvance, sim, h, bf = nothing)
+function _try_advance!(adv::DomainAdvance, sim, h, bf = nothing, pp = nothing)
     try
-        adv(sim, h; body_force! = bf)
+        adv(sim, h; body_force! = bf, post_predictor! = pp)
         return true
     catch err
         is_numerical_failure(err, sim) || rethrow()
@@ -524,6 +555,7 @@ end
 function _subcycle_child!(run::NestedRun, t_end::Float64)
     c = run.child; adv = run.advance_child; st = run.stats
     hook = _hook(run, :child)
+    pp = run.sponge === nothing ? nothing : _SpongeHook(run)
     adaptive = run.sync === :subcycle && run.cfl_child !== nothing
     R = t_end - c.t
     n_rem = run.sync === :shared_min_dt ? 1 :
@@ -546,9 +578,9 @@ function _subcycle_child!(run::NestedRun, t_end::Float64)
         run.sub_t0 = Float64(c.t); run.sub_h = h
         _begin!(run, :child)
         ok = if run.validate
-            _try_advance!(adv, c, h, hook) && _accept(run, c, :child)
+            _try_advance!(adv, c, h, hook, pp) && _accept(run, c, :child)
         else
-            adv(c, h; body_force! = hook); true
+            adv(c, h; body_force! = hook, post_predictor! = pp); true
         end
         ok && _commit!(run, :child)
         if !ok
@@ -565,9 +597,8 @@ function _subcycle_child!(run::NestedRun, t_end::Float64)
         end
         h_retry = 0.0
         tries = 0
-        if run.sponge !== nothing
-            _blend_state!(run.s_bc, run.s_old, run.s_new, (Float64(c.t) - run.t0) / run.Δt)
-            apply_nest_sponge!(c, run.s_bc, run.sponge; dt=h)
+        if run.sponge !== nothing               # the scalars; the velocity was relaxed
+            apply_nest_sponge!(c, _sponge_target!(run), run.sponge; dt = h, velocity = false)
         end
         n_taken += 1
         n_rem -= 1

@@ -18,6 +18,10 @@ boundary. `sides` is `(west, east, south, north, bottom, top)`.
 The smooth taper is the point: a hard relaxation edge is itself a
 reflector. Without a sponge, the halo/interior mismatch at a nest
 boundary reflects outgoing waves back into the child.
+
+In a [`NestedRun`](@ref) the velocity relaxation acts on the predicted
+velocity before the pressure solve, so the child stays divergence-free
+(#329); see [`apply_nest_sponge!`](@ref).
 """
 struct NestSponge{T}
     width::Int
@@ -296,22 +300,36 @@ function _sponge_field!(cf::Field, gf::Field, sp::NestSponge, cm, αdt)
 end
 
 """
-    apply_nest_sponge!(child_sim, parent_interp, sponge; dt=1.0)
+    apply_nest_sponge!(child_sim, parent_interp, sponge; dt=1.0, velocity=true, scalars=true)
 
 Relax the child solution toward `parent_interp` inside the sponge zone:
 `f ← (1-β) f + β f_parent` with `β = clamp(α_max·dt·ramp, 0, 1)`.
-Applied to every member of the field set (`u, v, w, θ`, `qv`, tracers).
-Call once per child substep, after `step!`.
+Applied to every member of the field set: the velocities `u, v, w`
+(`velocity = true`) and the scalars `θ`, `qv`, tracers (`scalars = true`).
+
+The relaxation of the velocity is a source the projection must see: a
+velocity relaxed *after* a step is no longer divergence-free (the
+prolongated parent velocity is flux-consistent on parent cells, not on
+child cells). A [`NestedRun`](@ref) therefore relaxes the velocities on
+the predicted velocity, inside every stage's `post_predictor!` hook and
+before the pressure solve, and only the scalars after the step (#329).
+Call it with `velocity = true` after a step only where `∇·u = 0` does
+not matter, or from a `post_predictor!` hook with `scalars = false`.
 """
 function apply_nest_sponge!(csim::_NestSim, s::NestInterpState,
-                            sp::NestSponge; dt::Real=1.0)
+                            sp::NestSponge; dt::Real=1.0, velocity::Bool=true,
+                            scalars::Bool=true)
     cm = csim.mesh
     αdt = sp.α_max * dt
-    for (cf, gf) in ((csim.u, s.u), (csim.v, s.v), (csim.w, s.w))
-        _sponge_field!(cf, gf, sp, cm, αdt)
+    if velocity
+        _sponge_field!(csim.u, s.u, sp, cm, αdt)
+        _sponge_field!(csim.v, s.v, sp, cm, αdt)
+        _sponge_field!(csim.w, s.w, sp, cm, αdt)
     end
-    for (_, buf, cf, _) in _scalar_entries(s, nothing, csim)
-        _sponge_field!(cf, buf, sp, cm, αdt)
+    if scalars
+        for (_, buf, cf, _) in _scalar_entries(s, nothing, csim)
+            _sponge_field!(cf, buf, sp, cm, αdt)
+        end
     end
     return csim
 end
