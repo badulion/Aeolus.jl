@@ -435,7 +435,11 @@ wheel. However, keep them to a minimum."
 Current direct dependencies: FFTW, and KernelAbstractions (admitted
 2026-10-06, #291: "single-node multithreading now, with one kernel path
 for the GPU in Phase 81"). All KernelAbstractions code lives in
-`src/Backends.jl` (`docs/src/design/ka_port.md`).
+`src/Backends.jl` (`docs/src/design/ka_port.md`). Its tree resolves
+`UnsafeAtomics` 0.4, which brings `LLVM.jl` and the binary
+`LLVMExtra_jll`; the earlier `UnsafeAtomics = "0.3"` pin that kept them
+out was lifted on 2026-10-06 (maintainer: "Allow LLVMExtra_jll"). It
+costs about 37 ms of `using Aeolus` (215 → 252 ms).
 
 ### Look at what you produce
 

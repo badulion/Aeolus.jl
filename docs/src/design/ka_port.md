@@ -247,9 +247,14 @@ least 16 384 points per task. Without that cap the 64×64×32 axpy took
 
 ## Dependency tree
 
-KernelAbstractions 0.9.43 → Adapt, Atomix, UnsafeAtomics, MacroTools,
+KernelAbstractions 0.9.43 → Adapt, Atomix 1.6.0, UnsafeAtomics 0.4.0
+(→ LLVM.jl 10.1.0 → CEnum, the binary `LLVMExtra_jll` 0.0.51), MacroTools,
 PrecompileTools (→ Preferences), Requires, StaticArrays
-(→ StaticArraysCore), and the stdlibs InteractiveUtils and UUIDs. There
-is no JLL. `UnsafeAtomics` is held at 0.3 by a weak-dependency compat
-bound in `Project.toml`, because 0.4 made `LLVM.jl`, and with it the
-binary `LLVMExtra_jll`, a hard dependency.
+(→ StaticArraysCore), and the stdlibs InteractiveUtils and UUIDs.
+
+Until 2026-10-06 `Project.toml` held `UnsafeAtomics` at 0.3 through a
+weak-dependency compat bound, the last series where LLVM.jl is optional,
+to keep the tree free of JLLs. The maintainer lifted it with the
+dependency-policy change ("Allow LLVMExtra_jll"). Measured cost, `using
+Aeolus` in a fresh process, minimum of three: 215 ms with the pin, 252 ms
+without (whole process 341 ms → 380 ms), about +37 ms.
