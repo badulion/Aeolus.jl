@@ -176,7 +176,10 @@ end
 #   * fetch: TKE and −u'w' at 0.2δ and 0.5δ within 10 % of the precursor
 #     by x ≤ 3δ — NOT met, the expectation was too short for this flow
 #     (not a code error): at 0.5δ one local eddy turnover is advected
-#     U k/ε ≈ 1.3 z U/u* ≈ 14δ, and the TKE at 0.2δ overshoots (the coarse
+#     U k/ε ≈ 10δ, with ε = τ ∂U/∂z measured on the child-grid reference
+#     (13δ with τ = u*²(1 - z/δ) and ∂U/∂z = u*/(κz); the log-layer
+#     ε = u*³/(κz) ignores the stress decrease and gives 7δ, too short),
+#     and the TKE at 0.2δ overshoots (the coarse
 #     parent's R11 is 57 % above the child-grid equilibrium). Asserted
 #     instead: the digital filter keeps TKE within [0.7, 1.5] of the
 #     precursor everywhere, and is closer to it than the FSD provider.
@@ -228,7 +231,13 @@ end
     # the digital filter supplies the precursor's turbulence from the inflow
     # plane on (measured range 0.77-1.34) and is closer to it than the FSD
     # provider (measured 0.56-0.83), whose isotropic single-scale field
-    # carries no u'w' structure
+    # carries no u'w' structure. The [0.7, 1.5] band is calibrated on these
+    # runs (a regression bound, not a physical tolerance), and it mixes two
+    # effects: the fetch, and the target being the coarse precursor — at
+    # 0.22δ the DF ratio moves AWAY from 1 with x (TKE 0.97 → 1.36, −u'w'
+    # 0.85 → 1.37 over 0.5-4.5δ) because the child settles to the
+    # equilibrium of the parent's 11 %-too-fast mean profile. Whether to
+    # relax the issued 10 %-by-3δ criterion to this is the maintainer's call.
     lndev(r, k) = sum(abs.(log.(ratio(r, :tke, k)[near3]))) / length(near3)
     for k in ks
         t = ratio(df, :tke, k)
@@ -248,6 +257,8 @@ end
         @test r.maxdiv < 1e-10
     end
     @test df.added < 1e-12 && fsd.added < 1e-12
+    # passes by cancellation, not equilibrium: −0.55 % with the parent's
+    # statistics, +23 % with the child grid's own (example, DF-same)
     @test abs(pressure_gradient_bias(df, G)) < 0.02
     @test abs(pressure_gradient_bias(df, G)) < abs(pressure_gradient_bias(fsd, G)) <
           abs(pressure_gradient_bias(off, G))

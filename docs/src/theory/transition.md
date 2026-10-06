@@ -1113,10 +1113,23 @@ development lengths (δ) to 10 % / 20 %:
 
 **What sets the fetch.** With statistics and mean from the child's own
 grid (DF-same, the set-up of the papers), the turbulence recovers to
-10 % in ``6.6δ`` at 0.22δ and ``12.3δ`` at 0.47δ. Both are 1.4–1.7 local
-eddy-turnover distances ``U(z)\,k/ε``, with ``k`` the reference TKE and
-``ε ≈ u_*^3/(κz)`` (log layer): ``4.8δ`` at 0.22δ (``k = 2.9``,
-``U = 18.8``) and ``7.1δ`` at 0.47δ (``k = 1.79``, ``U = 21.0``). A
+10 % in ``6.6δ`` at 0.22δ and ``12.3δ`` at 0.47δ. Both are about 1.2
+local eddy-turnover distances ``U(z)\,k/ε``, with ``k`` the reference
+TKE and ``ε`` set equal to the local shear production
+``P = τ(z)\,∂U/∂z`` (local equilibrium), ``τ`` the total stress. The
+half channel is not a constant-stress layer: ``τ ≈ u_*^2(1 - z/δ)``, so
+the log-layer value ``ε ≈ u_*^3/(κz)`` overestimates the dissipation by
+``1/(1 - z/δ)``, a factor 1.9 at 0.47δ. Measured on the reference
+(``τ`` and ``∂U/∂z`` from its mean profile, whose shear is 10–30 %
+above ``u_*/(κz)``, the usual LES log-layer mismatch):
+
+| z/δ | U | k | τ | ∂U/∂z | P | ``U k/P`` | with ``P ≈ u_*^3(1 - z/δ)/(κz)`` | measured L₁₀ (DF-same) |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| 0.22 | 18.8 | 2.90 | 0.78 | 12.6 | 9.8 | 5.6δ | 6.1δ | 6.6δ (1.2 turnovers) |
+| 0.47 | 21.0 | 1.79 | 0.53 | 7.0 | 3.7 | 10.2δ | 13.3δ | 12.3δ (1.2 turnovers) |
+
+(Units ``δ = u_* = 1``; ``P = ε`` neglects turbulent transport, so the
+turnover distances are estimates, good to a few tens of per cent.) A
 synthetic field with the right one-point statistics and exponential
 correlations is not yet turbulence: the projection removes its
 divergent part within one cell (the inflow-face ``\overline{u'^2}`` is
@@ -1145,12 +1158,19 @@ generator the inflow stays laminar.
 * "TKE and −u'w' at 0.2δ and 0.5δ within 10 % of the precursor by
   x ≤ 3δ" (the issue's placeholder). Not met in any configuration
   (table above). The full texts of Xie & Castro (2008) and Kim et al.
-  (2013) could not be retrieved (HTTP 403), so their development
+  (2013) could not be retrieved (the Southampton e-print refuses automated
+  access with HTTP 401/403, ScienceDirect shows the abstract only, and
+  OpenAlex lists both papers as closed access), so their development
   lengths were not checked and no literature number replaces the
   placeholder; the turnover estimate above says 3δ is too short at
   0.5δ for ``U/u_* ≈ 20`` whatever the generator. The CI case asserts
   instead that the DF keeps TKE within [0.7, 1.5] of the precursor for
-  ``x ≤ 5δ`` and is closer to it than the FSD.
+  ``x ≤ 5δ`` and is closer to it than the FSD. That band is a regression
+  bound calibrated on the measured runs (0.77–1.36), not a physical
+  tolerance, and it mixes the fetch with the coarse-parent target: at
+  0.22δ the DF ratio moves away from 1 with ``x`` (TKE 0.97 → 1.36,
+  ``-u'w'`` 0.85 → 1.37 over 0.5–4.5δ). Relaxing the issued criterion to
+  it is open for the maintainer.
 * "Total stress at 4δ within 10 % for 0.1δ < z < 0.8δ". Not met (RMS
   0.32 ``u_*^2``), for the same reason; asserted: DF < FSD < off.
 * The null comparison (off < 50 %), the bulk velocity (0.5 %) and the
