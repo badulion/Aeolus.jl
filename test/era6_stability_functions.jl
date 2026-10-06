@@ -325,25 +325,8 @@ function _n2_field_old!(N2, θ, qv, θ₀, g)
     return N2
 end
 
-# A saturated moist-adiabatic column (dT/dz = −Γ_m, hydrostatic dry p) at
-# the storage levels of a 1-column grid: T, p by RK4 in steps of ≤ 5 cm.
-function _moist_adiabat(zs; T0 = 285.0, p0 = 1.0e5)
-    MT = Aeolus.MoistThermodynamics; c = MT.DEFAULT_CONSTANTS
-    f(T, p) = (-MT.moist_adiabatic_lapse_rate(T, p, c), -c.grav * p / (MT.R_d(c) * T))
-    T, p, z = T0, p0, first(zs)
-    out = Tuple{Float64,Float64}[]
-    for zt in zs
-        while z < zt - 1e-12
-            h = min(0.05, zt - z)
-            k1 = f(T, p); k2 = f(T + h/2 * k1[1], p + h/2 * k1[2])
-            k3 = f(T + h/2 * k2[1], p + h/2 * k2[2]); k4 = f(T + h * k3[1], p + h * k3[2])
-            T += h / 6 * (k1[1] + 2k2[1] + 2k3[1] + k4[1])
-            p += h / 6 * (k1[2] + 2k2[2] + 2k3[2] + k4[2]); z += h
-        end
-        push!(out, (T, p))
-    end
-    return out
-end
+isdefined(@__MODULE__, :moist_adiabat_column!) ||
+    include(joinpath(@__DIR__, "support", "moist_adiabat.jl"))
 
 @testset "7. cloudy-air N² (#239)" begin
     MT = Aeolus.MoistThermodynamics; c = MT.DEFAULT_CONSTANTS
@@ -385,13 +368,7 @@ end
     for Nz in (20, 40, 80)
         mc = RegularGrid(; size = (2, 2, Nz), extent = (100.0, 100.0, 1000.0), halo = (1, 1, 1))
         θc = Field(CellCenter(), mc); qvc = Field(CellCenter(), mc); qcc = Field(CellCenter(), mc)
-        zs = [(k - mc.Hz - 0.5) * mc.dz for k in 1:size(θc.data, 3)]
-        pv = zeros(length(zs))
-        for (k, (T, p)) in enumerate(_moist_adiabat(zs .- zs[1]))
-            qs = MT.saturation_specific_humidity(T, p, c)
-            θc.data[:, :, k] .= T / MT.exner_function(p)
-            qvc.data[:, :, k] .= qs; qcc.data[:, :, k] .= 0.012 - qs; pv[k] = p
-        end
+        pv = moist_adiabat_column!(θc, qvc, qcc)
         @test all(>(0), qcc.data)
         Nf = Field(CellCenter(), mc)
         buoyancy_frequency_squared!(Nf, θc, qvc, qcc; θ₀ = θ₀, g = g, p = pv)

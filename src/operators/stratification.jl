@@ -116,6 +116,30 @@ end
     return θface * (1 + 0.61 * qvface - qcface)
 end
 
+"""
+    cloud_humidity(qc, p, mesh) -> nothing or (qc, qch, p)
+
+The condensate a closure's ``N^2`` uses (#239): `nothing` for `qc =
+nothing`, else the field `qc`, a scratch copy `qch` (its halos are filled
+there, the tracer is not touched) and the pressure `p` of the saturated
+``N^2`` (a number, or a vector indexed by the storage level). Shared by
+[`StabilityCorrected`](@ref) and the prognostic closures.
+"""
+cloud_humidity(::Nothing, p, g) = nothing
+function cloud_humidity(qc::Field, p, g)
+    p === nothing && throw(ArgumentError("a condensate field qc needs the pressure p of the saturated N²"))
+    p isa AbstractVector && length(p) != size(qc.data, 3) &&
+        throw(DimensionMismatch("p must be indexed by the storage level: length $(size(qc.data, 3)), got $(length(p))"))
+    return (qc = qc, qch = Field(CellCenter(), g), p = p isa Real ? Float64(p) : collect(Float64, p))
+end
+
+"Copy the condensate of [`cloud_humidity`](@ref) into its scratch and fill the halos with `bcs`."
+function filled_condensate!(cl, bcs)
+    copyto!(cl.qch.data, cl.qc.data)
+    fill_halos!(cl.qch, bcs)
+    return cl.qch
+end
+
 _humidity_data(::Nothing) = nothing
 _humidity_data(q) = q.data
 _humidity_data(q::_Cloudy) = q
