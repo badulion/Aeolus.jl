@@ -1,3 +1,11 @@
+"""
+    Aeolus.SimulationDriver
+
+The `simulation` run driver (CFG-b, #357): a bare run of the Boussinesq
+or the anelastic core on a box, configured from TOML (`[run] driver =
+"simulation"`). See [`SimulationDriverType`](@ref) and the Run
+configuration page; shipped configs are in `examples/configs/`.
+"""
 module SimulationDriver
 
 # The `simulation` driver (CFG-b, #357): a bare run of one dynamical core
