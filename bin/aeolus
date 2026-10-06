@@ -1,0 +1,5 @@
+#!/usr/bin/env julia
+# The aeolus command line on any Julia (≥ 1.12 also: julia --project -m Aeolus …).
+Base.active_project() == joinpath(dirname(@__DIR__), "Project.toml") || pushfirst!(LOAD_PATH, dirname(@__DIR__))
+using Aeolus
+exit(Aeolus.main(ARGS))

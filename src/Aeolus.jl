@@ -1152,4 +1152,18 @@ export SubfilterHeight, subfilter_height, DynamicRoughness,
        surface_gradient_drag, roughness_surface_drag, roughness_drag_residual, dynamic_alpha,
        update_dynamic_roughness!, with_roughness, dynamic_wall_laws, dynamic_wall_laws!
 
+# CFG-b (#357): the command line. `julia --project -m Aeolus <command> …`
+# (Julia ≥ 1.12) calls `Aeolus.main(ARGS)`; `bin/aeolus` does the same on
+# older Julia. The return value is the exit code.
+"""
+    Aeolus.main(args::Vector{String}; io = stdout, err = stderr) -> Cint
+
+The `aeolus` command line ([`Aeolus.Config.main`](@ref)): `julia --project
+-m Aeolus run config.toml`, or `bin/aeolus run config.toml`.
+"""
+main(args::AbstractVector{<:AbstractString} = ARGS; kwargs...) = Config.main(args; kwargs...)
+@static if VERSION >= v"1.11"
+    @main
+end
+
 end # module
