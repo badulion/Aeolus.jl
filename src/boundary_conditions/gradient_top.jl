@@ -19,14 +19,8 @@ function _fill_z!(d::AbstractArray{T,3}, bot, top::FluxBC, Hz, Nz, loc::CellCent
         throw(ArgumentError("FluxBC top: the gradient must be a number, got $(typeof(top.f))"))
     # the bottom face (and, provisionally, the top) with the bottom's own pair method
     _fill_z!(d, bot, bot, Hz, Nz, loc)
-    Γ = T(top.f)
-    kN = Hz + Nz
-    @inbounds for h in 1:Hz
-        src, dst = kN + 1 - h, kN + h
-        δ = Γ * T(_center_gap(g, src, dst))
-        @views d[:, :, dst] .= d[:, :, src] .+ δ
-    end
-    return d
+    # then the top: one launch of the halo kernels (KA-f, #297)
+    return _halo_gradient!(d, Hz, Nz, T(top.f), g)
 end
 
 _fill_z!(d, bot, top::FluxBC, Hz, Nz, loc::Location, g, key) =

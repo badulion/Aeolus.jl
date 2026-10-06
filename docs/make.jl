@@ -73,6 +73,7 @@ makedocs(
             "Blending height"             => "theory/blending_height.md",
             "Heterogeneous-surface validation" => "theory/heterogeneous_surface.md",
             # Era VI — high-fidelity turbulence closure
+            "Era VI overview: turbulence closure" => "theory/era6_overview.md",
             "Transition and wall-bounded flow" => "theory/transition.md",
             "Stability functions and Ri_g" => "theory/turbulence_stability.md",
             "Wall models"                 => "theory/wall_models.md",
@@ -108,6 +109,7 @@ makedocs(
             "PressureSolvers"      => "api/pressure_solvers.md",
             "Simulations"          => "api/simulations.md",
             "I/O and checkpoints"  => "api/io.md",
+            "Run configuration"    => "api/config.md",
             "Logging"              => "api/logging.md",
             "Physics modules"      => "api/physics.md",
             "Era II — numerics" => [

@@ -287,8 +287,120 @@ kw(r) = Dict{Symbol,Any}(r.kwargs)
         @test isopen(con)                        # the caller's console stays open
     end
 
+    @testset "flush policy: Warn+ at once, the rest every flush_interval s (2026-10-06)" begin
+        dir = mktempdir()
+        nlines(p) = count('\n', read(p, String))
+
+        # a Warn record is on disk at once, taking the buffered debug lines
+        # with it; read the file while the logger is still open
+        p = joinpath(dir, "warn.log")
+        lg = open_run_log(p; console = false, append = false, flush_interval = 3600)
+        file = lg.loggers[1]
+        @test file.flush_interval == 3600.0
+        t0 = file.last_flush
+        with_logger(lg) do
+            @debug "d1" subsystem = :t
+            @info "i1" subsystem = :t
+        end
+        # within the interval a debug or info record does not flush: the
+        # policy's clock has not moved (what the stream buffer holds is its
+        # own business, so the file is not required to be empty)
+        @test file.last_flush == t0
+        with_logger(lg) do
+            @warn "w1" subsystem = :t
+        end
+        @test file.last_flush > t0
+        txt = read(p, String)
+        @test count('\n', txt) == 3 && occursin("WARN  t[main] w1", txt) && occursin("d1", txt)
+        with_logger(lg) do
+            @error "e1" subsystem = :t
+        end
+        @test nlines(p) == 4                       # Error too
+        with_logger(lg) do
+            for i in 1:50
+                @debug "late" subsystem = :t i
+            end
+        end
+        close(lg)
+        @test nlines(p) == 54                      # everything is on disk after close
+
+        # the interval itself: once it has passed, the next debug record flushes
+        p = joinpath(dir, "interval.log")
+        lg = open_run_log(p; console = false, append = false, flush_interval = 0.05)
+        with_logger(lg) do
+            @debug "a" subsystem = :t
+        end
+        t0 = lg.loggers[1].last_flush
+        sleep(0.1)
+        with_logger(lg) do
+            @debug "b" subsystem = :t
+        end
+        @test lg.loggers[1].last_flush > t0
+        @test nlines(p) == 2
+        close(lg)
+
+        # flush_interval = 0 restores flush-every-record
+        p = joinpath(dir, "zero.log")
+        lg = open_run_log(p; console = false, append = false, flush_interval = 0)
+        with_logger(lg) do
+            for i in 1:3
+                @debug "z" subsystem = :t i
+                @test nlines(p) == i
+            end
+        end
+        close(lg)
+
+        # an exception inside with_run_log: every buffered record is on disk
+        p = joinpath(dir, "crash.log")
+        @test_throws ErrorException with_run_log(p; console = false, append = false,
+                                                 flush_interval = 3600) do
+            for i in 1:20
+                @debug "before crash" subsystem = :t i
+            end
+            error("blew up")
+        end
+        txt = read(p, String)
+        @test count("before crash", txt) == 20 && occursin("run stopped by an error", txt)
+        @test occursin("i=20", txt)
+
+        # and at the end of a normal with_run_log
+        p = joinpath(dir, "normal.log")
+        with_run_log(p; console = false, append = false, flush_interval = 3600) do
+            for i in 1:5
+                @info "ok" subsystem = :t i
+            end
+        end
+        @test nlines(p) == 5
+
+        # a process that dies of an uncaught error with the log still open
+        # (no with_run_log, no close): the atexit hook flushes it
+        p = joinpath(dir, "atexit.log")
+        script = """
+            using Aeolus, Logging
+            lg = open_run_log($(repr(p)); console = false, flush_interval = 3600)
+            global_logger(lg)
+            for i in 1:7
+                @debug "kept" subsystem = :t i
+            end
+            error("uncaught")
+            """
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(pkgdir(Aeolus)) -e $script`
+        proc = run(pipeline(ignorestatus(cmd); stderr = devnull, stdout = devnull))
+        @test !success(proc)
+        @test count("kept", read(p, String)) == 7
+
+        # the console and the test logger flush every record
+        @test test_logger().flush_interval == 0.0
+        lg = open_run_log(joinpath(dir, "c.log"); console = IOBuffer())
+        @test lg.loggers[1].flush_interval == 0.0 && lg.loggers[2].flush_interval == 5.0
+        close(lg)
+        @test AeolusLogger(devnull).flush_interval == 5.0             # the default
+        @test_throws ArgumentError AeolusLogger(devnull; flush_interval = -1)
+    end
+
     @testset "logging overhead is negligible next to a step" begin
-        # One structured debug record written to run.log (formatted, flushed)
+        # One structured debug record written to run.log (formatted, written,
+        # flushed by the default policy: at most every 5 s for Debug)
         # against one step of an 8³ case, the smallest the suite runs; the
         # 64×64×32 figure is measured in the PR (#333). The epic's budget is
         # 2 % of run time at the default cadence with a few records a step.

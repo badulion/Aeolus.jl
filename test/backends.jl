@@ -124,6 +124,37 @@ end
         @test v[17:4321] == 2 .* (17:4321) && count(!iszero, v) == 4321 - 16
     end
 
+    @testset "launch_weighted!: column bodies, each index once, same bits ($name)" for (name, b) in BACKENDS
+        # KA-h (#298): a body that loops over a column itself; the weight
+        # only changes how the work is split, never the result
+        Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+        rng = Xoshiro(298)
+        X = randn(rng, Nx, Ny, Nz)
+        col!(i, j, Y, X, Nz) = (@inbounds begin
+            s = 0.0
+            for k in 1:Nz
+                s = 0.5 * s + X[i, j, k]; Y[i, j, k] = s
+            end
+        end; nothing)
+        ref = similar(X)
+        for j in 1:Ny, i in 1:Nx
+            col!(i, j, ref, X, Nz)
+        end
+        for w in (1, Nz, 10^6)
+            Y = zeros(Nx, Ny, Nz)
+            launch_weighted!(b, w, col!, (1:Nx, 1:Ny), Y, X, Nz)
+            @test same_bits(Y, ref)
+            v = zeros(Int, Ny)
+            launch_weighted!(b, w, (j, v) -> (@inbounds v[j] += 1; nothing), (1:Ny,), v)
+            @test all(==(1), v)
+            C = zeros(Int, Nx, Ny, 2)
+            launch_weighted!(b, w, (i, j, k, C) -> (@inbounds C[i, j, k] += 1; nothing),
+                             (1:Nx, 1:Ny, 1:2), C)
+            @test all(==(1), C)
+        end
+        @test_throws ErrorException launch_weighted!(GPUBackend(), 4, (j,) -> nothing, (1:3,))
+    end
+
     rng = Xoshiro(91)
     # magnitudes spread over four decades, so the order of the additions shows
     # (`rand(rng, dims...)`: `rand(rng, dims)` would draw one element of the
@@ -281,13 +312,27 @@ end
 
         fftw0 = Aeolus.fftw_policy().threads
         blas0 = BLAS.get_num_threads()
+        st = Aeolus.Operators._FFTW_POLICY
+        explicit0 = st.threads_explicit
+        nfftw() = Aeolus.Operators.FFTW.get_num_threads()
+        # KA-h (#298): with no explicit count, FFTW runs on Julia's threads.
+        # (Until KA-h the expectation was "FFTW policy kept at 1"; changed by
+        # the maintainer decision on #291 once the FFT solves were shown to be
+        # thread-invariant.)
+        st.threads_explicit = false
         r = init_threads!(CPUBackend())
         @test r.backend == CPUBackend() && r.julia_threads == Threads.nthreads()
         Threads.nthreads() > 1 && @test BLAS.get_num_threads() == 1   # pinned when threaded
-        @test r.fftw_threads == fftw0 == Aeolus.fftw_policy().threads  # FFTW policy kept
+        @test r.fftw_threads == Threads.nthreads() == Aeolus.fftw_policy().threads == nfftw()
+        @test !st.threads_explicit                                    # still a default
+        # an explicit count (set_fftw_policy!, AEOLUS_FFTW_THREADS) is kept
+        Aeolus.set_fftw_policy!(threads = 3)
+        @test init_threads!(CPUBackend()).fftw_threads == 3 == nfftw()
         r2 = init_threads!(CPUBackend(); fftw_threads = 2)
-        @test r2.fftw_threads == 2 == Aeolus.fftw_policy().threads     # set through the policy
+        @test r2.fftw_threads == 2 == Aeolus.fftw_policy().threads == nfftw()  # through the policy
+        @test init_threads!(CPUBackend()).fftw_threads == 2
         init_threads!(CPUBackend(); fftw_threads = fftw0, blas_threads = blas0)
+        st.threads_explicit = explicit0
         @test Aeolus.fftw_policy().threads == fftw0 && BLAS.get_num_threads() == blas0
     end
 end

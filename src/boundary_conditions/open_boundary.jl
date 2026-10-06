@@ -54,26 +54,15 @@ _face_index(high::Bool, H::Int, N::Int) = high ? H + N + 1 : H + 1
 
 # Zero-gradient (mirror) halo — the Neumann condition. Used for φ and every
 # field without boundary data (Kim & Moin 1985), and for the tangential
-# fields of the free-stream top.
-function _open_mirror!(d, ax::Int, high::Bool, H::Int, N::Int)
-    @inbounds for h in 1:H
-        dst, src = high ? (H + N + h, H + N + 1 - h) : (H + 1 - h, H + h)
-        _slab(d, ax, dst) .= _slab(d, ax, src)
-    end
-    return d
-end
+# fields of the free-stream top. One launch of the halo kernels (KA-f, #297).
+_open_mirror!(d, ax::Int, high::Bool, H::Int, N::Int) = _halo_mirror!(d, ax, H, N, !high, high)
 
 # Halo beyond the normal face, antisymmetric about the face value
 # (linear extrapolation, d[f±h] = 2 d[f] − d[f∓h]). The face must be set.
 function _open_odd!(d, ax::Int, high::Bool, H::Int, N::Int)
     f = _face_index(high, H, N)
     f <= size(d, ax) || return d
-    @inbounds for h in 1:H
-        dst, src = high ? (f + h, f - h) : (f - h, f + h)
-        1 <= dst <= size(d, ax) || continue
-        _slab(d, ax, dst) .= 2 .* _slab(d, ax, f) .- _slab(d, ax, src)
-    end
-    return d
+    return _halo_odd!(d, ax, f, H, N, high)
 end
 
 # =========================================================================
@@ -260,11 +249,20 @@ counting from 1, the layout of an [`OpenPlane`](@ref)'s buffer).
 function blend_window!(dst::AbstractArray{T,3}, A::AbstractArray, B::AbstractArray, τ,
                        irange, jrange, krange) where {T}
     τ1 = one(T) - T(τ); τT = T(τ)
-    i0 = first(irange) - 1; j0 = first(jrange) - 1; k0 = first(krange) - 1
-    @inbounds for k in krange, j in jrange, i in irange
-        dst[i - i0, j - j0, k - k0] = τ1 * A[i, j, k] + τT * B[i, j, k]
-    end
+    o = (first(irange) - 1, first(jrange) - 1, first(krange) - 1)
+    r = (UnitRange{Int}(irange), UnitRange{Int}(jrange), UnitRange{Int}(krange))
+    _npts(r) == 0 && return dst
+    checkbounds(A, r...); checkbounds(B, r...)
+    checkbounds(dst, r[1] .- o[1], r[2] .- o[2], r[3] .- o[3])
+    # pointwise in time: one launch (KA-f, #297)
+    launch!(Backends.backend(dst), _blend_body!, r, dst, A, B, o, τ1, τT)
     return dst
+end
+_npts(r) = length(r[1]) * length(r[2]) * length(r[3])
+
+@inline function _blend_body!(i, j, k, dst, A, B, o, τ1, τT)
+    @inbounds dst[i - o[1], j - o[2], k - o[3]] = τ1 * A[i, j, k] + τT * B[i, j, k]
+    return nothing
 end
 
 blend_window!(dst::AbstractArray{T,3}, A::AbstractArray, B::AbstractArray, τ) where {T} =
@@ -687,44 +685,37 @@ end
 # Halo fills
 # =========================================================================
 
-# The plane of the field being filled, or nothing (→ mirror). Velocity
-# components by location; cell-centred fields by identity of their array.
-_plane_for(bc::OpenBoundary, ::FaceX, key) = get(bc.planes, :u, nothing)
-_plane_for(bc::OpenBoundary, ::FaceY, key) = get(bc.planes, :v, nothing)
-_plane_for(bc::OpenBoundary, ::FaceZ, key) = get(bc.planes, :w, nothing)
-function _plane_for(bc::OpenBoundary, ::CellCenter, key)
-    name = get(bc.state.bound, key, nothing)
-    name === nothing && return nothing
-    return get(bc.planes, name, nothing)
-end
+# The name of the plane of the field being filled, or nothing (→ mirror).
+# Velocity components by location; cell-centred fields by identity of
+# their array. (A name, not the plane: returning a `Union{Nothing,
+# OpenPlane}` boxed the plane, 160 B per face and fill.)
+_plane_name(bc::OpenBoundary, ::FaceX, key) = :u
+_plane_name(bc::OpenBoundary, ::FaceY, key) = :v
+_plane_name(bc::OpenBoundary, ::FaceZ, key) = :w
+_plane_name(bc::OpenBoundary, ::CellCenter, key) = get(bc.state.bound, key, nothing)
 
 function _fill_open_face!(d::AbstractArray{T,3}, bc::OpenBoundary, H::Int, N::Int,
                           loc::Location, key) where {T}
     ax, high = _side_axis(bc.side)
-    p = _plane_for(bc, loc, key)
-    if p === nothing || p.mode === :mirror
+    name = _plane_name(bc, loc, key)
+    if name === nothing || !haskey(bc.planes, name) || bc.planes[name].mode === :mirror
         # φ, p, νₜ and fields without data: Neumann. A normal component
         # without data cannot happen (open_boundary_conditions requires u, v, w).
         return _open_mirror!(d, ax, high, H, N)
     end
+    p = bc.planes[name]
     p.mode === :inflow && return _fill_inflow_face!(d, bc, p, ax, high, H, N)
-    s = _slab(d, ax, p.range)
     if p.normal && p.mode === :odd
         f = _face_index(high, H, N)
-        fl = _face_local(p)
         if bc.homogeneous
-            _slab(d, ax, f) .= zero(T)
+            _halo_set!(d, ax, f, zero(T))
         else
-            _slab(d, ax, f) .= _slab(p.data, ax, fl)
+            _halo_copy!(d, ax, f:f, p.data, f - _face_local(p))   # buffer layer fl → slot f
         end
         return _open_odd!(d, ax, high, H, N)
     end
-    if bc.homogeneous
-        fill!(s, zero(T))
-    else
-        s .= p.data
-    end
-    return d
+    bc.homogeneous && return _halo_set!(d, ax, p.range, zero(T))
+    return _halo_copy!(d, ax, p.range, p.data, first(p.range) - 1)
 end
 
 # A scalar plane in `:inflow` mode: per tangential point of the face, the
@@ -737,31 +728,7 @@ _normal_name(ax::Int) = ax == 1 ? :u : ax == 2 ? :v : :w
 function _fill_inflow_face!(d::AbstractArray{T,3}, bc::OpenBoundary, p::OpenPlane,
                             ax::Int, high::Bool, H::Int, N::Int) where {T}
     pn = bc.planes[_normal_name(ax)]
-    fl = _face_local(pn)
-    s = high ? one(T) : -one(T)                  # outward sign
-    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
-    @inbounds for b in axes(d, t2), a in axes(d, t1)
-        un = s * (ax == 1 ? pn.data[fl, a, b] : ax == 2 ? pn.data[a, fl, b] : pn.data[a, b, fl])
-        for h in 1:H
-            dst = high ? H + N + h : H + 1 - h
-            v = if un < 0                        # inflow: the data
-                bc.homogeneous ? zero(T) :
-                    (l = high ? h : H + 1 - h;   # local slab index of storage layer `dst`
-                     ax == 1 ? p.data[l, a, b] : ax == 2 ? p.data[a, l, b] : p.data[a, b, l])
-            else                                 # outflow or calm: zero gradient
-                src = high ? H + N + 1 - h : H + h
-                ax == 1 ? d[src, a, b] : ax == 2 ? d[a, src, b] : d[a, b, src]
-            end
-            if ax == 1
-                d[dst, a, b] = v
-            elseif ax == 2
-                d[a, dst, b] = v
-            else
-                d[a, b, dst] = v
-            end
-        end
-    end
-    return d
+    return _halo_inflow!(d, ax, H, N, high, p.data, pn.data, _face_local(pn), bc.homogeneous)
 end
 
 # Pairs on x and y: two open faces (an inflow/outflow axis).

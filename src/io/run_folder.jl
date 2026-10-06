@@ -113,6 +113,39 @@ function _summary(x)
 end
 
 # ---------------------------------------------------------------------------
+# configuration hooks (extended by Aeolus.Config for a RunConfig, CFG-a #356)
+# ---------------------------------------------------------------------------
+
+"""
+    config_record(config) -> Dict{String,Any}
+
+The top-level entries `run.toml` records for `config`: for any object,
+`config` as [`toml_value`](@ref) gives it. A `RunConfig`
+(`Aeolus.Config`) adds its canonical table, schema version, hash,
+sources, input-file hashes and replayability.
+"""
+config_record(config) = Dict{String,Any}("config" => toml_value(config))
+
+"""
+    run_options(config) -> NamedTuple
+
+The [`start_run`](@ref) settings a configuration carries (`root`,
+`allow_uncommitted`, `console_level`, `file_level`, `flush_interval`):
+none for a plain object; a `RunConfig` takes them from `[run]` and
+`[logging]`. Explicit keywords of `start_run` win.
+"""
+run_options(config) = NamedTuple()
+
+"""
+    check_restart_config(config, record; allow_changed_inputs = false)
+
+Called by [`start_run`](@ref) before a restart writes anything: nothing
+for a plain object; for a `RunConfig`, a `ConfigError` names every input
+file whose content changed since the run started.
+"""
+check_restart_config(config, record; allow_changed_inputs::Bool = false) = nothing
+
+# ---------------------------------------------------------------------------
 # provenance
 # ---------------------------------------------------------------------------
 
@@ -342,7 +375,14 @@ _current_session(rf::RunFolder) = rf.record["session"][end]
               allow_uncommitted = ENV["AEOLUS_ALLOW_UNCOMMITTED"] == "1",
               repo = aeolus_source_dir(), console = stderr,
               console_level = AEOLUS_LOG or Info, file_level = Debug,
+              flush_interval = 5.0, allow_changed_inputs = false,
               run_id = nothing) -> RunFolder
+
+With `config` a `RunConfig` (`Aeolus.Config`, CFG-a #356), `root`,
+`allow_uncommitted`, the log levels and `flush_interval` default to its
+`[run]` and `[logging]` sections (keywords given explicitly win), and a
+restart refuses to start when an input file recorded under `[inputs]`
+changed, unless `allow_changed_inputs = true`.
 
 Start a run that writes a run folder (epic #293, #334):
 
@@ -362,7 +402,10 @@ Start a run that writes a run folder (epic #293, #334):
    existing folder: same run ID, the log is appended and `run.toml` gets
    a new session.
 3. **Provenance.** `run.toml` holds `run_id`, `case`, `created`, the full
-   `config` and `seeds` (any object; see [`toml_value`](@ref)) and one
+   `config` and `seeds` (any object; see [`toml_value`](@ref); a
+   `RunConfig` is stored in its canonical resolved form with
+   `config_schema_version`, `config_hash`, `config_sources`, `[inputs]`
+   and `replayable`, see [`config_record`](@ref)) and one
    `[[session]]` table per start or restart: `kind` (`"start"` or
    `"restart"`), `started`, `ended`, `status`, `wall_seconds` and
    everything [`provenance`](@ref) returns (git commit, Julia and package
@@ -380,15 +423,24 @@ Start a run that writes a run folder (epic #293, #334):
 Call [`finish_run!`](@ref) at the end, or use [`with_run`](@ref), which
 does both and installs the logger.
 """
-function start_run(case; root::AbstractString = "runs", config = Dict{String,Any}(),
-                   seeds = Dict{String,Any}(), resume = nothing,
-                   allow_uncommitted::Bool = get(ENV, "AEOLUS_ALLOW_UNCOMMITTED", "0") == "1",
+function start_run(case; root::Union{Nothing,AbstractString} = nothing,
+                   config = Dict{String,Any}(), seeds = Dict{String,Any}(), resume = nothing,
+                   allow_uncommitted::Union{Nothing,Bool} = nothing,
                    repo::AbstractString = aeolus_source_dir(),
                    console::Union{Bool,Nothing,Base.IO} = stderr,
-                   console_level = nothing, file_level = Logging.Debug,
+                   console_level = nothing, file_level = nothing,
+                   flush_interval::Union{Nothing,Real} = nothing,
+                   allow_changed_inputs::Bool = false,
                    run_id::Union{Nothing,AbstractString} = nothing)
     t0 = time()
-    root = abspath(root)
+    opts = run_options(config)
+    root = abspath(something(root, get(opts, :root, "runs")))
+    allow_uncommitted = something(allow_uncommitted, get(opts, :allow_uncommitted,
+                                  get(ENV, "AEOLUS_ALLOW_UNCOMMITTED", "0") == "1"))
+    console_level = something(console_level, get(opts, :console_level, Some(nothing)))
+    file_level = something(file_level, get(opts, :file_level, Logging.Debug))
+    flush_interval = something(flush_interval, get(opts, :flush_interval, 5.0))
+    crec = config_record(config)
     # 1. code check, before anything is written
     prov = provenance(; repo = repo, exclude = [root])
     g = prov["git"]
@@ -408,6 +460,7 @@ function start_run(case; root::AbstractString = "runs", config = Dict{String,Any
         rid = record["run_id"]
         run_id === nothing || run_id == rid ||
             throw(ArgumentError("start_run: run_id = $run_id, but $folder is run $rid"))
+        check_restart_config(config, record; allow_changed_inputs = allow_changed_inputs)
     else
         rid = run_id === nothing ? new_run_id() : String(run_id)
         folder = joinpath(root, string(Libc.strftime("%Y-%m-%d", t0), '_', _safe_case(case),
@@ -415,9 +468,9 @@ function start_run(case; root::AbstractString = "runs", config = Dict{String,Any
         isdir(folder) && throw(ArgumentError("start_run: $folder exists; pass resume = it to restart"))
         record = Dict{String,Any}("run_id" => rid, "case" => string(case),
                                   "folder" => folder, "created" => _iso_time(t0),
-                                  "created_unix" => t0, "config" => toml_value(config),
-                                  "seeds" => toml_value(seeds),
+                                  "created_unix" => t0, "seeds" => toml_value(seeds),
                                   "session" => Any[])
+        merge!(record, crec)
     end
     mkpath(folder)
     sessions = get!(record, "session", Any[])
@@ -434,8 +487,14 @@ function start_run(case; root::AbstractString = "runs", config = Dict{String,Any
                                            "allow_uncommitted" => allow_uncommitted))
     changed = String[]
     if restart
-        cfg = toml_value(config); sd = toml_value(seeds)
-        cfg == record["config"] || (session["config"] = cfg; push!(changed, "config"))
+        sd = toml_value(seeds)
+        same = haskey(crec, "config_hash") ? get(record, "config_hash", nothing) == crec["config_hash"] :
+               isequal(crec["config"], get(record, "config", nothing))
+        if !same
+            session["config"] = crec["config"]
+            haskey(crec, "config_hash") && (session["config_hash"] = crec["config_hash"])
+            push!(changed, "config")
+        end
         sd == record["seeds"] || (session["seeds"] = sd; push!(changed, "seeds"))
         first_commit = sessions[1]["git"]["commit"]
         first_commit == g["commit"] || push!(changed, "git commit")
@@ -452,7 +511,8 @@ function start_run(case; root::AbstractString = "runs", config = Dict{String,Any
     # 3. log
     lvl = console_level === nothing ? RunLog._env_level(Logging.Info) : console_level
     logger = open_run_log(joinpath(folder, "run.log"); console = console,
-                          console_level = lvl, file_level = file_level, append = true)
+                          console_level = lvl, file_level = file_level, append = true,
+                          flush_interval = flush_interval)
     rf = RunFolder(folder, rid, string(record["case"]), n, logger, record, t0, false)
     _write_record(rf)
     Logging.with_logger(logger) do

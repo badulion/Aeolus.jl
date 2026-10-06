@@ -302,9 +302,34 @@ version (recorded; a mismatch warns on restart).
 function checkpoint!(sim::BoussinesqSimulation, path::AbstractString;
                      sgs = nothing, components = (;), stepper = nothing,
                      rng = nothing, extra::AbstractDict = Dict{Symbol,Any}())
+    return write_checkpoint(path, checkpoint_payload(sim; sgs, components, stepper, rng, extra))
+end
+
+"""
+    checkpoint_payload(sim; sgs = nothing, components = (;), stepper = nothing,
+                       rng = nothing, extra = Dict(), buffers = nothing) -> Dict{Symbol,Any}
+
+The in-memory checkpoint that [`checkpoint!`](@ref) writes: everything
+it lists, self-contained (the field data and every component state are
+copies, nothing is aliased to the run). [`write_checkpoint`](@ref) puts
+it on disk. The blowup guard (#335) holds the last good state of a run
+this way and writes it as the crash checkpoint. `buffers`, the `:fields`
+of an earlier payload of the same simulation, are reused for the field
+copies (no allocation); they then belong to the new payload.
+"""
+function checkpoint_payload(sim::BoussinesqSimulation;
+                            sgs = nothing, components = (;), stepper = nothing,
+                            rng = nothing, extra::AbstractDict = Dict{Symbol,Any}(),
+                            buffers::Union{Nothing,AbstractDict} = nothing)
     closure = sgs === nothing ? nothing : sgs_closure(sgs)
     comps = _component_dict(components)
-    payload = Dict{Symbol,Any}(
+    fields = Dict{Symbol,Any}()
+    for (k, f) in pairs(checkpoint_fields(sim))
+        b = buffers === nothing ? nothing : get(buffers, k, nothing)
+        fields[k] = b isa Array && size(b) == size(f.data) && eltype(b) == eltype(f.data) ?
+                    copyto!(b, f.data) : copy(f.data)
+    end
+    return Dict{Symbol,Any}(
         :format         => CHECKPOINT_FORMAT,
         :version        => CHECKPOINT_VERSION,
         :julia_version  => string(VERSION),
@@ -312,7 +337,7 @@ function checkpoint!(sim::BoussinesqSimulation, path::AbstractString;
         :sim_type       => string(nameof(typeof(sim))),
         :mesh           => _mesh_record(sim.mesh),
         :t              => sim.t,
-        :fields         => Dict{Symbol,Any}(k => copy(f.data) for (k, f) in pairs(checkpoint_fields(sim))),
+        :fields         => fields,
         :parameters     => _parameters(sim),
         :closure_type   => closure === nothing ? "" : string(nameof(typeof(closure))),
         :closure        => checkpoint_state(closure),
@@ -323,6 +348,16 @@ function checkpoint!(sim::BoussinesqSimulation, path::AbstractString;
         :fftw           => fftw_policy(),
         :extra          => Dict{Symbol,Any}(Symbol(k) => v for (k, v) in extra),
     )
+end
+
+"""
+    write_checkpoint(path, payload) -> path
+
+Write a [`checkpoint_payload`](@ref) to `path`, through `path * ".tmp"`
+and a rename, so an interrupted write never leaves a truncated
+checkpoint under `path`.
+"""
+function write_checkpoint(path::AbstractString, payload::AbstractDict)
     mkpath(dirname(abspath(path)))
     tmp = path * ".tmp"
     open(tmp, "w") do io
@@ -513,22 +548,8 @@ function CheckpointSchedule(dir::AbstractString; every_steps::Integer = 0,
     return ck
 end
 
-"""
-    checkpoint_schedule(cfg::AbstractDict, dir = cfg["checkpoint"]["dir"]) -> CheckpointSchedule
-
-A [`CheckpointSchedule`](@ref) from the `[checkpoint]` table of a TOML
-namelist ([`load_config`](@ref)): keys `dir`, `every_steps`,
-`every_seconds`, `keep`, `prefix`. Applies the `[fftw]` table first
-([`apply_fftw_config!`](@ref)), so the planner is set before any plan.
-"""
-function checkpoint_schedule(cfg::AbstractDict, dir = nothing)
-    apply_fftw_config!(cfg)
-    c = get(cfg, "checkpoint", Dict{String,Any}())
-    d = dir === nothing ? get(c, "dir", "checkpoints") : dir
-    return CheckpointSchedule(d; every_steps = get(c, "every_steps", 0),
-                              every_seconds = get(c, "every_seconds", Inf),
-                              keep = get(c, "keep", 2), prefix = get(c, "prefix", "checkpoint"))
-end
+# checkpoint_schedule(cfg) builds one from the [checkpoint] section of a
+# run configuration: src/config/common.jl (CFG-a, #356).
 
 "`dir/fftw_wisdom`: where a [`CheckpointSchedule`](@ref) keeps the run's FFTW wisdom."
 wisdom_path(ck::CheckpointSchedule) = joinpath(ck.dir, "fftw_wisdom")
@@ -688,31 +709,5 @@ function finish_checkpoints!(ck::Union{Nothing, CheckpointSchedule})
     return nothing
 end
 
-# -------------------------------------------------------------------------
-# FFTW policy from a namelist
-# -------------------------------------------------------------------------
-
-"""
-    apply_fftw_config!(cfg::AbstractDict) -> NamedTuple
-
-Apply the `[fftw]` table of a TOML namelist ([`load_config`](@ref)) to the
-FFTW planning policy ([`set_fftw_policy!`](@ref
-Aeolus.Operators.set_fftw_policy!)), before the simulation is built:
-
-```toml
-[fftw]
-planner = "measure"   # estimate | measure (default) | patient | exhaustive
-threads = 4
-wisdom  = "run/fftw_wisdom"   # optional: import before planning
-```
-
-Without the table nothing changes. Returns the resulting
-[`fftw_policy`](@ref Aeolus.Operators.fftw_policy).
-"""
-function apply_fftw_config!(cfg::AbstractDict)
-    f = get(cfg, "fftw", nothing)
-    f === nothing && return fftw_policy()
-    set_fftw_policy!(; planner = get(f, "planner", nothing), threads = get(f, "threads", nothing))
-    haskey(f, "wisdom") && load_fftw_wisdom!(f["wisdom"])
-    return fftw_policy()
-end
+# apply_fftw_config!(cfg), the [fftw] section of a run configuration, is in
+# src/config/common.jl (CFG-a, #356).

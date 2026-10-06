@@ -526,22 +526,29 @@ function _book_plane!(M::Matrix{Float64}, sim, ϕ, rec, K, ν, W, nest::NestedGr
         base = H[ax] + 1 + (hi ? N[ax] : 0)
         o1 = H[t1]; o2 = H[t2]
     end
+    r = (1:size(M, 1), 1:size(M, 2))
     if ϕ === nothing
-        @inbounds for B in axes(M, 2), A in axes(M, 1)
-            idx = _pos(ax, t1, base, o1 + A, o2 + B)
-            k = idx[3]
-            Wk = W === nothing ? 1.0 : (ax == 3 ? W[2][k] : W[1][k])
-            M[A, B] += w * Wk * veld[idx[1], idx[2], k]
-        end
+        launch!(Backends.backend(M), _book_volume_body!, r, M, veld, ax, t1, base, o1, o2, W, w)
         return M
     end
-    ϕd = ϕ.data
-    @inbounds for B in axes(M, 2), A in axes(M, 1)
-        idx = _pos(ax, t1, base, o1 + A, o2 + B)
-        M[A, B] += w * _face_total_flux(rec, ϕd, veld, ax, idx[1], idx[2], idx[3], g,
-                                        ν, K, W)
-    end
+    launch!(Backends.backend(M), _book_flux_body!, r, M, ϕ.data, veld, rec, ax, t1, base, o1, o2,
+            g, ν, K, W, w)
     return M
+end
+
+# The booked volume flux w·W·u_n, and the booked scalar flux, of one face.
+@inline function _book_volume_body!(A, B, M, veld, ax, t1, base, o1, o2, W, w)
+    idx = _pos(ax, t1, base, o1 + A, o2 + B)
+    k = idx[3]
+    Wk = W === nothing ? 1.0 : (ax == 3 ? W[2][k] : W[1][k])
+    @inbounds M[A, B] += w * Wk * veld[idx[1], idx[2], k]
+    return nothing
+end
+@inline function _book_flux_body!(A, B, M, ϕd, veld, rec, ax, t1, base, o1, o2, g, ν, K, W, w)
+    idx = _pos(ax, t1, base, o1 + A, o2 + B)
+    @inbounds M[A, B] += w * _face_total_flux(rec, ϕd, veld, ax, idx[1], idx[2], idx[3], g,
+                                              ν, K, W)
+    return nothing
 end
 
 # coarse − Σ fine on every interface plane, in the units of the registers ×
@@ -562,19 +569,21 @@ function _register_mismatch(r::NestFluxRegisters, n::Int, nest::NestedGrid,
         P = r.pacc[n][s]; C = r.cacc[n][s]
         Pv = r.pvacc[n][s]; Cv = r.cvacc[n][s]
         t1, t2 = _tang(ax)
-        r1, r2 = rr[t1], rr[t2]
-        inv = 1 / (r1 * r2)
-        @inbounds for B in axes(M, 2), A in axes(M, 1)
-            fine = 0.0
-            for b in 1:r2, a in 1:r1
-                ia = (A - 1) * r1 + a; ib = (B - 1) * r2 + b
-                fine += C[ia, ib] - ϕref * Cv[ia, ib]
-            end
-            M[A, B] = ((P[A, B] - ϕref * Pv[A, B]) - fine * inv) *
-                      _face_area(nest, nothing, ax, B)
-        end
+        launch!(Backends.backend(M), _register_body!, (1:size(M, 1), 1:size(M, 2)), M, P, C, Pv,
+                Cv, ϕref, rr[t1], rr[t2], nest, ax)
     end
     return out
+end
+
+@inline function _register_body!(A, B, M, P, C, Pv, Cv, ϕref, r1, r2, nest, ax)
+    inv = 1 / (r1 * r2)
+    fine = 0.0
+    @inbounds for b in 1:r2, a in 1:r1
+        ia = (A - 1) * r1 + a; ib = (B - 1) * r2 + b
+        fine += C[ia, ib] - ϕref * Cv[ia, ib]
+    end
+    @inbounds M[A, B] = ((P[A, B] - ϕref * Pv[A, B]) - fine * inv) * _face_area(nest, nothing, ax, B)
+    return nothing
 end
 
 # =========================================================================
@@ -789,17 +798,20 @@ function _anterpolate_field!(pf::Field, cf::Field, nest::NestedGrid, act::BitArr
     old = scratch[ax + 1]
     copyto!(old, view(pf.data, rng...))
     restrict_to_parent!(pf, cf, nest; measure = meas, solid = χ)
-    pd = pf.data
-    @inbounds for c in CartesianIndices(old)
-        I = Tuple(c)
-        i, j, k = rng[1][I[1]], rng[2][I[2]], rng[3][I[3]]
-        if !_active(act, ax, I, nn)
-            pd[i, j, k] = old[c]
-        elseif α != 1.0
-            pd[i, j, k] = old[c] + α * (pd[i, j, k] - old[c])
-        end
-    end
+    o = (first(rng[1]) - 1, first(rng[2]) - 1, first(rng[3]) - 1)
+    launch!(Backends.backend(pf.data), _anterp_body!, rng, pf.data, old, act, ax, nn, o, α)
     return pf
+end
+
+# Outside the mask: the value before the restriction; inside: relaxed by α.
+@inline function _anterp_body!(i, j, k, pd, old, act, ax, nn, o, α)
+    I = (i - o[1], j - o[2], k - o[3])
+    @inbounds if !_active(act, ax, I, nn)
+        pd[i, j, k] = old[I[1], I[2], I[3]]
+    elseif α != 1.0
+        pd[i, j, k] = old[I[1], I[2], I[3]] + α * (pd[i, j, k] - old[I[1], I[2], I[3]])
+    end
+    return nothing
 end
 
 """
@@ -858,32 +870,19 @@ function _correct_interface_flux!(pf::Field, cf::Field, nest::NestedGrid, ax::In
 end
 
 function _plane_correct!(pf::Field, cf::Field, nest::NestedGrid, ax::Int, q::Int, measure)
-    pm = nest.parent_mesh; cm = nest.child_mesh
-    r  = (nest.rx, nest.ry, nest.rz)
     nn = (nest.nx, nest.ny, nest.nz)
-    oo = (nest.ix, nest.iy, nest.iz)
-    Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (cm.Hx, cm.Hy, cm.Hz)
     t1, t2 = _tang(ax)
     ωz = ax == 3 ? nothing : _zweights(measure)
-    inv = 1 / (r[t1] * r[t2])
-    pd = pf.data; cd = cf.data
-    pq = Hp[ax] + oo[ax] + q; cq = Hc[ax] + q * r[ax] + 1
-    @inbounds for B in 1:nn[t2], A in 1:nn[t1]
-        pidx = _pos(ax, t1, pq, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
-        Ap = _face_area(nest, measure, ax, B)
-        s = 0.0; den = 0.0
-        for b in 1:r[t2], a in 1:r[t1]
-            cidx = _pos(ax, t1, cq, Hc[t1] + (A-1)*r[t1] + a, Hc[t2] + (B-1)*r[t2] + b)
-            if ωz === nothing
-                s += cd[cidx[1], cidx[2], cidx[3]]
-            else
-                w = ωz[cidx[3]]
-                s += w * cd[cidx[1], cidx[2], cidx[3]]; den += w
-            end
-        end
-        fine = ωz === nothing ? s * inv : s / den
-        M = (pd[pidx[1], pidx[2], pidx[3]] - fine) * Ap
-        pd[pidx[1], pidx[2], pidx[3]] -= M / _face_area(nest, measure, ax, B)
-    end
+    g = ωz === nothing ? _plane_geom(nest, ax, q, measure, nothing) :
+                         _plane_geom(nest, ax, q, measure, ωz)
+    launch!(Backends.backend(pf.data), _plane_correct_body!, (1:nn[t1], 1:nn[t2]), pf.data,
+            cf.data, g)
     return pf
+end
+
+# One parent interface face: the mismatch kernel, then u_p -= δΦ / A_p.
+@inline function _plane_correct_body!(A, B, pd, cd, g)
+    M, pidx = _mismatch_at(pd, cd, g, A, B)
+    @inbounds pd[pidx[1], pidx[2], pidx[3]] -= M / _face_area(g.nest, g.measure, g.ax, B)
+    return nothing
 end
