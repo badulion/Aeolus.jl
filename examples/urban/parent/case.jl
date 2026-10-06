@@ -771,10 +771,15 @@ radiation (every `radiation_period`), then the dynamics with
 `step_adaptive!` (in stable pieces if `dt` is longer than the parent's
 own limit, retried if it must), with every change of the heat and the
 water of the air attributed in the two ledgers.
-"""
-step_parent!(p::ParentCase) = step_parent!(p, parent_dt(p))
 
-function step_parent!(p::ParentCase, dt::Real)
+`body_force!(sim, Δt, w)` (optional) runs at every dynamics stage after
+the parent's own hooks, with `w` the stage's weight in the step (1 for
+the forward-Euler projection, 1/6, 1/6, 2/3 for SSP-RK3): the two-way
+Berlin nest books the parent's interface fluxes with it (#267).
+"""
+step_parent!(p::ParentCase; kw...) = step_parent!(p, parent_dt(p); kw...)
+
+function step_parent!(p::ParentCase, dt::Real; body_force! = nothing)
     sim, pc = p.sim, p.pc
     t = sim.t
     hour = hour_of_day(pc.child, t)
@@ -811,7 +816,9 @@ function step_parent!(p::ParentCase, dt::Real)
     t1 = time_ns()
     heat_open!(p.heat, :dynamics, :core, θ; split = true)
     pc.moisture && heat_open!(p.water, :dynamics, :core, q; split = true)
-    bf = (s, Δt) -> _parent_body_force!(p, s, Δt)
+    bf = body_force! === nothing ? (s, Δt) -> _parent_body_force!(p, s, Δt) :
+         (s, Δt) -> (_parent_body_force!(p, s, Δt);
+                     body_force!(s, Δt, _stage_weight(p, p.stage[])); s)
     pp = p.surface === nothing ? nothing : (s, Δt) -> apply_parent_drag!(p, s, Δt)
     # every attempt (a retry too) starts its stage count afresh
     stepper = pc.stepper === :rk3 ?
