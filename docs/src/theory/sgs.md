@@ -826,7 +826,7 @@ and the anelastic / pseudo-incompressible `step!`.
 | :-- | :-- |
 | `sgs_coefficients!(f, c, sim)` | fill the eddy viscosity and diffusivity `f = SGSFields(νh, νv, κh, κv)` (isotropic: `νv === νh`, `κv === κh`; by default `sim.νt`, `sim.κt`) from the current state — `u, v, w`, `θ`, `qv` with filled halos, the mesh, `θ₀`, `g` — and the closure's committed memory. **Pure.** |
 | `advance_sgs!(c, sim, dt)` | commit the memory over an accepted step of length `dt`, after the projection. Default no-op. |
-| `sgs_state(c)`, `restore_sgs_state!(c, s)` | snapshot / restore the memory around a step that may be rejected. Default no-op. |
+| `sgs_state(c)`, `restore_sgs_state!(c, s)` | snapshot / restore the memory around a step that may be rejected. Default no-op. The snapshot must be self-contained (restoring reads nothing but it): a checkpoint stores a deep copy of it and restores it into a fresh closure in another process (#245, [Checkpoint / restart](../design/checkpoint_restart.md)). |
 | `add_sgs_momentum!(tu, tv, tw, c, f, sim)` | the stress divergence; default the Laplacian eddy-viscosity form with `νh` |
 | `add_sgs_scalar!(tϕ, ϕ, c, f, sim)` | the scalar flux divergence; default `∂ⱼ(κh ∂ⱼϕ)` |
 | `sgs_explicit_stress(c)` | `true` for a closure whose momentum flux is its own stress (the Reynolds-stress closure, P56-d #188); `step_imex!`, whose implicit operator is an eddy viscosity, then refuses it. Default `false`. |

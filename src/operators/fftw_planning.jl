@@ -35,7 +35,8 @@ end
 
 const _FFTW_POLICY = _FFTWPolicyState(false, :patient, 1, false, "")
 
-"Default planner: `:patient` (the fastest practical plans), or `ENV[\"AEOLUS_FFTW_PLANNER\"]`."
+# Default planner: :patient (the fastest practical plans; #245), unless
+# ENV["AEOLUS_FFTW_PLANNER"] says otherwise.
 const FFTW_DEFAULT_PLANNER = :patient
 
 function _parse_planner(s)

@@ -237,6 +237,9 @@ modifier added later belongs in the same pattern. Before #128 the tree
 shade and the cloud shadow multiplied `bus.sw` in place, so they
 compounded between radiation updates.
 
+Checkpointing the case's own state is #269 / #134; the hook is described
+in [Checkpoint / restart](checkpoint_restart.md#The-Berlin-case).
+
 ## Reference state and moist buoyancy
 
 The Boussinesq core carries neither pressure nor density, and before
