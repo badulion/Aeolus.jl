@@ -163,6 +163,54 @@ of this rule.
 | `column_partials([b,] A, ranges)` + `ordered_sum` | one sum over ascending `k` per column `(i, j)`, then the columns in column-major order: a *different* canonical total |
 | `interior_max([b,] A, ranges)` | NaN-propagating maximum (any NaN gives NaN); `-Inf` for an empty region |
 | `interior_all_finite([b,] A, ranges)` | no NaN, no ±Inf |
+| `plane_reduce!(p, [b,] body, ranges, args...)` | `p[c]` = canonical plane sum of the *indexed* `body(i, j, k, args...)`; a tuple-valued body sums each component into `p::NTuple` of vectors (KA-b) |
+| `range_max([b,] body, ranges, args...)` | NaN-propagating maximum of an indexed body, which must only read (KA-b) |
+| `plane_map!(p, [b,] plane, ranges, args...)` | `p[c]` = `plane(k, ranges[1], ranges[2], args...)`: a whole-plane function in its own fixed loop order, one work item per plane (KA-b) |
+
+`plane_reduce!` is the general form. Its body follows the launch
+contract: it may read a stencil (a strain rate, a centred `w`), may
+write its own point (an update fused with the sum of what it changed: a
+chemistry step returning its production), and takes per-level
+coefficients as arguments indexed by `k`. A masked mean is a tuple body
+returning `(value, 1.0)` or `(0.0, 0.0)`: adding an exact `0.0` leaves
+a lane unchanged, so the masked sum is the canonical sum of the masked
+values. Ranges may be storage indices of halo-padded arrays or `axes`
+of interior-sized views. A `range_max` body only reads: its result type
+is inferred (`Base.promote_op`), never found by evaluating the body an
+extra time.
+
+`plane_map!` is the escape hatch for a reduction where the eight lanes
+cost more than they gain: the plane function runs its own loop (one
+running sum in cell order, `i` fastest) and each plane is still one work
+item, so the partials are thread-invariant. Its only user is
+`apply_wet_deposition!` (below): `exp` is called in the raining cells
+only, and keeping eight lanes live across that call made the fused
+update 1.3× slower than the old loop at one thread.
+
+**Implementation.** For `Float64` sums the eight lanes are the eight
+elements of one `<8 x double>` vector (an `llvmcall` `fadd`): point
+`i₁ + 8b + r` goes to element `r`, so a plane is one vector add per eight
+points. The vector add is eight independent IEEE additions, so the bits
+are those of the scalar lanes (`test/backends.jl` checks the transcript);
+the compiler does not vectorise eight scalar accumulators by itself, and
+the vector form measured 2.4× faster (`interior_sum` 23.3 → 9.6 µs at
+64×64×32, one thread). Other element types use the scalar lanes.
+Maxima need no canonical order (`max` is exact and commutative), so
+`interior_max` and `range_max` scan a plane in a plain loop: their bits
+equal those of any serial maximum.
+
+**Surface (2-D) sums** over the `(i, j)` columns stay serial: a loop
+over the columns folds their contributions in column-major order
+(`for j, for i`), or Base `sum` reduces a finished 2-D array. Both run
+on one task, so they are thread-invariant; a threaded kernel that
+produces the per-column values keeps the serial sum after it (a few µs
+at 64×64).
+
+**Per-level loops that already reduce one plane at a time** in a plain
+`for j, for i` loop (the dynamic-Smagorinsky plane averages, the
+#288 damping `levels`, the large-scale forcing's nudging and subsidence
+plane means) are thread-invariant as they stand, because a plane is one
+work item, and are left unchanged and documented as canonical.
 
 The canonical order is not Base's. `sum(view(A, I...))` over a
 non-contiguous view is a plain sequential sum, so it is not just
@@ -288,6 +336,139 @@ threads help until task start-up dominates. A launch therefore gets at
 least 16 384 points per task. Without that cap the 64×64×32 axpy took
 67.6 µs at 24 threads, 2.7× the serial loop. A pure store
 (`set!(f, value)`, 11 µs) is still slower threaded at 12 and 24 threads.
+
+## KA-b: the call sites (#296)
+
+KA-b moved every order-sensitive volume or plane reduction on the step
+path, and the budget diagnostics, onto the primitives (still serial at
+one thread; threaded through `launch!`'s rules at more). It fixes the
+canonical order once, so later threaded kernels match it bit for bit.
+
+| where | what | primitive |
+| :---- | :--- | :-------- |
+| `AdvectionSchemes` | `_dot_interior` (KE and scalar-variance budgets) | `interior_dot` |
+| `AdvectionSchemes` | `enstrophy` (edge vorticities) | `plane_reduce!` (stencil body) |
+| `FiniteVolume` | `_sgs_stress_dissipation` | `plane_reduce!` (strain body) |
+| `Simulations` | `kinetic_energy` (regular, stretched), `horizontal_mean` / `_variance`, `mean_θ_profile`, `resolved_flux_wθ` | `plane_partials!`, `plane_reduce!` |
+| `Simulations`, `Anelastic` | `max_divergence` | `range_max` (exact) |
+| `Anelastic` | `kinetic_energy` (density-weighted), `unweighted_kinetic_energy` | `plane_reduce!`, `plane_partials!` |
+| `TimeIntegration` | `_max_advective_rate`, `_max_interior`, `_max_speed` | `range_max`, `interior_max` (exact) |
+| `TimeIntegration` | `_all_finite` | `interior_all_finite` (exact) |
+| `TimeIntegration` | `_brunt_vaisala` plane means | `plane_partials!` |
+| `Nesting` | `NestedRun` speed cap, bound-field finiteness, `_covered_mean` | `range_max`, `interior_all_finite`, `plane_partials!` |
+| `abl_diagnostics` | `_plane_means`, `resolved_tke_profile` | `plane_partials!`, `plane_reduce!` |
+| `Chemistry` | `apply_photochemistry!` P / L / H | `plane_reduce!` (fused update) |
+| `Chemistry` | `apply_wet_deposition!` | `plane_map!` (fused update, cell order per plane) |
+| Berlin `core/ledger.jl` | `ledger_water`, `ledger_water_split` (`level_sums`), `add_surface!` | `plane_partials!`; per-class ordered fold |
+| Berlin `core/air_heat.jl` | `air_heat_levels!` (fluid and solid sums) | `plane_reduce!` (tuple) |
+| Berlin `parent/case.jl` | `_level_sums!` (the parent's budget levels) | `plane_partials!` |
+| `scalar_advection` | `sgs_diffuse!` Σ\|q\|, Σ tendency, its water split | `plane_reduce!` (tuple) |
+| `aq_chem` | species totals; level air temperature | `interior_sum`; `plane_reduce!` (masked) |
+| `moist_buoyancy` | the level means of ``(θ_ρ − θ)``, fused with the cell values | `plane_reduce!` (masked, fused) |
+| `column_radiation` | fluid-mean profiles | `plane_reduce!` (masked) |
+| `geostrophic` | interior means of `u`, `v`, `tu`, `tv` | `interior_sum` |
+
+Left as they are, with the reason:
+
+* **2-D surface sums** (`surface_exchange` `evap` / `nsolid`, `aq_chem`
+  emitted and dry deposition, `column_radiation`'s emissivity-weighted
+  `T_rad`, the `buildings_citymean` and `fog_dew` ledger terms): serial
+  2-D sums (above).
+* **Maxima and minima** of `output.jl` and the reports: exact and
+  order-independent.
+* **Plane-at-a-time loops** (dynamic Smagorinsky, #288 damping levels,
+  `LargeScaleForcing` nudging and subsidence): canonical as they stand.
+* **CG / MG dot products**: KA-g (#300).
+* **Reports, smoke checks and one-off diagnostics** (`bubble_top_height`,
+  `θ_variance`, the SGS reports, `laminar_reference_νt`): not on the step
+  path; serial and thread-invariant.
+* `examples/urban/couplings/nesting.jl`'s `_covered_profile!`: left for
+  the in-flight Berlin nesting work (#330 / #267), to avoid a conflict.
+
+**One-time bit changes against master (70d9f83).** Every ported sum
+changes its last bits once; maxima, minima and finiteness checks do not
+(`test/era2_timeint.jl` compares them with transcripts of the old loops,
+NaN and ±Inf included), and neither does any pointwise update (the
+chemistry cells, the moist-buoyancy cells: identical). Measured on a
+seeded 32³ LES after three steps (before → after):
+
+| quantity | master | KA-b |
+| :------- | -----: | ---: |
+| KE budget `residual` | −3.6e-15 | 0 |
+| KE budget `advection` (≈ 0 for an energy-conserving scheme) | 7.4e-18 | −1.4e-18 |
+| KE budget `pressure` (≈ 0) | 8.5e-18 | 2.2e-19 |
+| scalar-variance budget `residual` | 1.1e-11 | 1.4e-12 |
+| scalar-variance budget `advection` (≈ 0) | 7.5e-13 | 2.7e-13 |
+| `kinetic_energy` | 0.079382106926299545 | 0.079382106926300086 |
+| `sgs_stress_dissipation` | 0.74437976056020061 | 0.74437976056019994 |
+| `_brunt_vaisala` | 1.1608508246122187 | 1.1608508246121418 |
+| chemistry `P_Ox` (24×20×12) | 87.93448478692747 | 87.934484786927598 |
+| `apply_wet_deposition!` total (64³, 10 % rain; cells identical) | 6.518950163789894e-9 | 6.518950163789874e-9 |
+| `enstrophy` (seeded 64³ field) | 24548.03365630357 | 24548.033656303025 |
+| `_max_advective_rate`, `_max_speed`, `max_divergence` | identical | identical |
+
+The Berlin smoke matrix (49 runs, 12 steps) keeps every physical term to
+the printed digits; the ledger closures move at round-off (largest over
+the runs, master → KA-b): surface closure 1.0e-12 → 2.6e-13 W m⁻², water
+residual 7.5e-16 → 6.5e-16 kg m⁻², air-heat closure 1.0e-12 → 1.2e-12
+W m⁻². The tolerances (1e-6 W m⁻², 1e-12 kg m⁻², 1e-10 W m⁻²) are
+unchanged.
+
+**Measured at KA-b.** Same machine; minima of three runs at load 2-4, on
+the 64×64×64 flagship state after two steps. "1 t / old" is the gate
+(≤ 1.10); speed-up = old loop at 1 thread / new code at N threads.
+
+| reduction | old, 1 t (µs) | new, 1 t (µs) | 1 t / old | 4 t | 12 t | 24 t |
+| :-------- | ------------: | ------------: | --------: | --: | ---: | ---: |
+| `ledger_water` (qv) | 145.3 | 19.1 | 0.13 | 12.6× | 11.2× | 6.8× |
+| `ledger_water_split` (qv) | 145.4 | 19.2 | 0.13 | 12.9× | 12.4× | 5.9× |
+| `air_heat_levels!` | 35.4 | 34.4 | 0.97 | 2.0× | 2.1× | 1.4× |
+| `moist_buoyancy_perturbation!` | 1496 | 1355 | 0.91 | 3.0× | 3.5× | 3.5× |
+| `fluid_mean_profile` (θ) | 174.5 | 186.6 | 1.07 | 2.9× | 3.7× | 3.6× |
+| aq_chem `_aq_temperature!` | 143.4 | 130.4 | 0.91 | 3.4× | 4.3× | 3.8× |
+| `kinetic_energy` | 147.0 | 57.8 | 0.39 | 7.3× | 8.8× | 5.0× |
+| `horizontal_mean` (θ) | 25.9 | 19.3 | 0.75 | 2.7× | 2.2× | 1.1× |
+| `_max_advective_rate` | 148.6 | 155.7 | 1.05 | 3.3× | 4.4× | 4.1× |
+| `_brunt_vaisala` | 142.8 | 19.2 | 0.13 | 14.9× | 11.7× | 6.0× |
+| `_max_speed` | 2440 | 253.9 | 0.10 | 29.7× | 42.1× | 27.3× |
+| `_all_finite` | 990.2 | 574.5 | 0.58 | 5.7× | 7.9× | 5.4× |
+| `sgs_stress_dissipation` | 1030 | 905.0 | 0.88 | 4.2× | 6.3× | 7.2× |
+| `apply_photochemistry!` | 14456 | 11666 | 0.81 | 4.6× | 12.3× | 11.7× |
+| `apply_wet_deposition!` (no rain) | 109.4 | 54.5 | 0.50 | 1.2× | 1.3× | 1.2× |
+| `apply_wet_deposition!` (10 % rain) | 342.5 | 364.5 | 1.06 | 2.6× | 2.6× | 1.8× |
+| `apply_wet_deposition!` (all rain) | 840.6 | 860.0 | 1.02 | 1.7× | 3.2× | 2.5× |
+| `apply_wet_deposition!`, `Field` views (10 % rain) | 544.8 | 402.9 | 0.74 | | | |
+| `enstrophy` | 397.6 | 132.9 | 0.33 | 7.8× | 4.7× | 6.7× |
+
+`apply_wet_deposition!` first went through `plane_reduce!` and missed
+the gate (1.31–1.39× at 10 % random rain, 64³). The dry cells were not
+the cause: skipping blocks of eight dry cells, or adding only the
+nonzero terms to the lanes, both stayed at 1.2× or more, and the lane
+version was 1.3× even with rain everywhere. What cost the time was
+keeping eight lanes live across the `exp` call of each raining cell,
+together with 3-index stores that make the compiler reload the array's
+size at every cell (a plain `k, j, i` loop with `c[i, j, k]` is 1.5×
+the linear loop). It now runs through `plane_map!`: one running sum
+per plane in cell order over linear indices, planes in parallel, then
+`ordered_sum` over `k` — thread-invariant, the cells bit-identical to
+master, the total a named one-time change. Plain arrays: 1.00–1.07×
+the old loop at 2, 10, 50 and 100 % rain (table: minima of 200 runs,
+three repeats, the reviewer's protocol, load 13 from other jobs); the
+`Field` views the Berlin `aq_chem` coupling passes are 0.54–0.82×,
+because the old loop indexed the views Cartesian. The no-rain pre-scan
+is kept for plain arrays only (on a view it cost more than the sweep).
+The thread columns of these two rows were measured at load 13–15.
+
+The flagship (`CaseConfig()`, 64×64×64), minimum of 3 × 10 steps at
+load 2: **238.7 ms/step on master, 213.5 ms/step with KA-b at one
+thread (0.89×)**, mostly from the ledgers' water integrals (145 → 19 µs
+per call). At 4/12/24 threads it takes 208.8/213.6/216.0 ms/step: the
+reductions thread, but the step is still dominated by the loops later
+port PRs move.
+
+The thread-invariance harness (`AEOLUS_THREAD_TESTS=1`, sections
+`primitives,dns,reductions,smoke,flagship`) gave 2668 hashes at
+`-t 1`, `-t 4` and `-t 24`, all identical.
 
 ## KA-f: halo fills, open boundaries and nesting transfer (#297)
 

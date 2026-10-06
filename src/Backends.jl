@@ -22,7 +22,8 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
        runs_serially, launch!, launch_weighted!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
-       column_partials, interior_max, interior_all_finite, apply_transform!
+       column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
+       plane_map!, apply_transform!
 
 # =========================================================================
 # Backend types
@@ -148,8 +149,10 @@ end
 The backend that owns array `x` (for a `Field`, its storage): for a host
 `Array`, the default backend if that is a CPU backend, else `CPUBackend()`.
 """
-backend(::Array) = (b = default_backend(); b isa CPUBackend ? b : CPUBackend())
+backend(::Array) = _host_backend()
+_host_backend() = (b = default_backend(); b isa CPUBackend ? b : CPUBackend())
 backend(x::SubArray) = backend(parent(x))
+backend(::AbstractArray) = _host_backend()     # other host arrays (reshapes, BitArrays, …)
 
 # =========================================================================
 # Allocation
@@ -494,8 +497,28 @@ end
 # The values of every array at one point (inbounds: the caller checked the ranges).
 @inline _ld(arrs::Tuple, i, j, k) = map(a -> (@inbounds a[i, j, k]), arrs)
 
-@inline function _plane_reduce(op::O, init::T, f::F, ir::UnitRange{Int}, jr::UnitRange{Int},
-                               k::Int, arrs::Tuple) where {O, T, F}
+# Point evaluators: what a reduction adds up at the point (i, j, k).
+#   _Vals: f of the values of the arrays there (plane_partials!, interior_*)
+#   _Ix:   an indexed body f(i, j, k, args...) (plane_reduce!, range_max), which
+#          may read a stencil and write point (i, j, k) (the launch contract).
+struct _Vals{F, A}
+    f::F
+    arrs::A
+end
+@inline (v::_Vals)(i, j, k) = v.f(_ld(v.arrs, i, j, k)...)
+struct _Ix{F, A}
+    f::F
+    args::A
+end
+@inline (x::_Ix)(i, j, k) = x.f(i, j, k, x.args...)
+
+# The sum of the reductions: `+`, and component-wise for the tuple-valued
+# bodies of `plane_reduce!` (each component in the same canonical order).
+@inline _add(a, b) = a + b
+@inline _add(a::Tuple, b::Tuple) = map(+, a, b)
+
+@inline function _plane_reduce(op::O, init::T, g::G, ir::UnitRange{Int}, jr::UnitRange{Int},
+                               k::Int) where {O, T, G}
     l1 = l2 = l3 = l4 = l5 = l6 = l7 = l8 = init
     i1 = first(ir)
     n = length(ir)
@@ -503,32 +526,122 @@ end
     @inbounds for j in jr
         i = i1
         for _ in 1:nb
-            l1 = op(l1, T(f(_ld(arrs, i, j, k)...)))
-            l2 = op(l2, T(f(_ld(arrs, i + 1, j, k)...)))
-            l3 = op(l3, T(f(_ld(arrs, i + 2, j, k)...)))
-            l4 = op(l4, T(f(_ld(arrs, i + 3, j, k)...)))
-            l5 = op(l5, T(f(_ld(arrs, i + 4, j, k)...)))
-            l6 = op(l6, T(f(_ld(arrs, i + 5, j, k)...)))
-            l7 = op(l7, T(f(_ld(arrs, i + 6, j, k)...)))
-            l8 = op(l8, T(f(_ld(arrs, i + 7, j, k)...)))
+            l1 = op(l1, T(g(i, j, k)))
+            l2 = op(l2, T(g(i + 1, j, k)))
+            l3 = op(l3, T(g(i + 2, j, k)))
+            l4 = op(l4, T(g(i + 3, j, k)))
+            l5 = op(l5, T(g(i + 4, j, k)))
+            l6 = op(l6, T(g(i + 5, j, k)))
+            l7 = op(l7, T(g(i + 6, j, k)))
+            l8 = op(l8, T(g(i + 7, j, k)))
             i += 8
         end
         for ii in i:last(ir)
-            l1 = op(l1, T(f(_ld(arrs, ii, j, k)...)))
+            l1 = op(l1, T(g(ii, j, k)))
         end
     end
     return op(op(op(l1, l2), op(l3, l4)), op(op(l5, l6), op(l7, l8)))
 end
 
-# The per-plane function a work item (or the serial loop) evaluates.
-struct _PlaneReduce{O, T, F, R}
-    op::O
+# ---- the same order, explicitly vectorised (Float64 sums) -------------------
+#
+# The eight lanes of the canonical order are the eight elements of one
+# `<8 x double>` vector: point `i1 + 8b + r` of a row goes to element `r`
+# (`r = 0…7`), which is lane `(i − i1) mod 8 + 1`. The vector add is eight
+# independent IEEE additions, so the bits are those of the scalar lanes
+# above (`test/backends.jl` checks both against a transcript), but the
+# compiler issues one vector instruction where it does not vectorise eight
+# scalar accumulators on its own (measured 2.4x faster at 64³, below).
+# A tuple-valued body (`plane_reduce!`) gets one vector per component.
+
+const _V8 = NTuple{8,VecElement{Float64}}
+@inline _vadd(a::_V8, b::_V8) =
+    Base.llvmcall("%3 = fadd <8 x double> %0, %1\nret <8 x double> %3", _V8, Tuple{_V8,_V8}, a, b)
+@inline _v8(x1, x2, x3, x4, x5, x6, x7, x8) =
+    (VecElement(x1), VecElement(x2), VecElement(x3), VecElement(x4),
+     VecElement(x5), VecElement(x6), VecElement(x7), VecElement(x8))
+@inline _vfill(x::Float64) = _v8(x, x, x, x, x, x, x, x)
+@inline function _vfold(a::_V8)
+    l1, l2, l3, l4, l5, l6, l7, l8 = map(x -> x.value, a)
+    return ((l1 + l2) + (l3 + l4)) + ((l5 + l6) + (l7 + l8))
+end
+@inline _vlane1add(a::_V8, x::Float64) = Base.setindex(a, VecElement(a[1].value + x), 1)
+
+# component n of eight tuples, as one vector; and the step of N accumulators
+@inline _vcomp(n, t1, t2, t3, t4, t5, t6, t7, t8) =
+    _v8(t1[n], t2[n], t3[n], t4[n], t5[n], t6[n], t7[n], t8[n])
+@inline _vstep(acc::NTuple{N,_V8}, t1, t2, t3, t4, t5, t6, t7, t8) where {N} =
+    ntuple(n -> _vadd(acc[n], _vcomp(n, t1, t2, t3, t4, t5, t6, t7, t8)), Val(N))
+@inline _vtail(acc::NTuple{N,_V8}, t) where {N} = ntuple(n -> _vlane1add(acc[n], t[n]), Val(N))
+
+@inline function _plane_reduce(::typeof(_add), init::Float64, g::G, ir::UnitRange{Int},
+                               jr::UnitRange{Int}, k::Int) where {G}
+    acc = _vfill(init)                  # every lane starts at init, as the scalar lanes
+    i1 = first(ir)
+    nb = length(ir) >> 3
+    @inbounds for j in jr
+        i = i1
+        for _ in 1:nb
+            acc = _vadd(acc, _v8(Float64(g(i, j, k)), Float64(g(i + 1, j, k)),
+                                 Float64(g(i + 2, j, k)), Float64(g(i + 3, j, k)),
+                                 Float64(g(i + 4, j, k)), Float64(g(i + 5, j, k)),
+                                 Float64(g(i + 6, j, k)), Float64(g(i + 7, j, k))))
+            i += 8
+        end
+        if i <= last(ir)
+            l1 = acc[1].value
+            for ii in i:last(ir)
+                l1 += Float64(g(ii, j, k))
+            end
+            acc = Base.setindex(acc, VecElement(l1), 1)
+        end
+    end
+    return _vfold(acc)
+end
+
+@inline function _plane_reduce(::typeof(_add), init::T, g::G, ir::UnitRange{Int},
+                               jr::UnitRange{Int}, k::Int) where {N, T<:NTuple{N,Float64}, G}
+    acc = ntuple(n -> _vfill(init[n]), Val(N))
+    i1 = first(ir)
+    nb = length(ir) >> 3
+    @inbounds for j in jr
+        i = i1
+        for _ in 1:nb
+            acc = _vstep(acc, T(g(i, j, k)), T(g(i + 1, j, k)), T(g(i + 2, j, k)), T(g(i + 3, j, k)),
+                         T(g(i + 4, j, k)), T(g(i + 5, j, k)), T(g(i + 6, j, k)), T(g(i + 7, j, k)))
+            i += 8
+        end
+        for ii in i:last(ir)
+            acc = _vtail(acc, T(g(ii, j, k)))
+        end
+    end
+    return map(_vfold, acc)
+end
+
+# max is exact and commutative: any order gives the same bits, so a plane is
+# scanned in a plain loop (NaN-propagating `max`), as the loops it replaces
+struct _PlaneMax{T, R}
     init::T
-    f::F
     ir::R
     jr::R
 end
-@inline (p::_PlaneReduce)(k, arrs) = _plane_reduce(p.op, p.init, p.f, p.ir, p.jr, k, arrs)
+@inline function (p::_PlaneMax{T})(k, g) where {T}
+    m = p.init
+    @inbounds for j in p.jr, i in p.ir
+        m = max(m, T(g(i, j, k)))
+    end
+    return m
+end
+
+# The per-plane function a work item (or the serial loop) evaluates; the
+# point evaluator `g` is its argument.
+struct _PlaneReduce{O, T, R}
+    op::O
+    init::T
+    ir::R
+    jr::R
+end
+@inline (p::_PlaneReduce)(k, g) = _plane_reduce(p.op, p.init, g, p.ir, p.jr, k)
 
 # Bounds are checked once per launch; the kernels then index @inbounds.
 function _check(arrs::Tuple, ranges::Tuple)
@@ -537,22 +650,32 @@ function _check(arrs::Tuple, ranges::Tuple)
     end
     return nothing
 end
+_checkr(arrs::Tuple, (ir, jr, kr)::NTuple{3,UnitRange{Int}}) =
+    isempty(ir) || isempty(jr) || isempty(kr) || _check(arrs, (ir, jr, kr))
 
-function _plane_partials!(b::CPUBackend, out::AbstractVector, p::_PlaneReduce,
-                          kr::UnitRange{Int}, arrs::Tuple)
-    isempty(p.ir) || isempty(p.jr) || isempty(kr) || _check(arrs, (p.ir, p.jr, kr))
+# A whole-plane function `f(k, ir, jr, args...)` (plane_map!): the plane's
+# own loop, in its own fixed order.
+struct _PlaneFn{F, R}
+    f::F
+    ir::R
+    jr::R
+end
+@inline (p::_PlaneFn)(k, args) = p.f(k, p.ir, p.jr, args...)
+
+function _plane_partials!(b::CPUBackend, out::AbstractVector, p::Union{_PlaneReduce,_PlaneMax,_PlaneFn},
+                          kr::UnitRange{Int}, g)
     length(out) == length(kr) ||
         throw(DimensionMismatch("partials has length $(length(out)), the k range $(length(kr))"))
     isempty(kr) && return out
     if runs_serially(b, length(p.ir) * length(p.jr) * length(kr)) || length(kr) == 1
         for (c, k) in enumerate(kr)
-            out[c] = p(k, arrs)
+            out[c] = p(k, g)
         end
     else
         nk = length(kr)
         nt = _ntasks(length(p.ir) * length(p.jr) * nk)
         kern = _planes_kernel!(b.ka, nt >= Threads.nthreads() ? 1 : cld(nk, nt))
-        kern(out, p, first(kr) - 1, (arrs,); ndrange = length(kr))
+        kern(out, p, first(kr) - 1, (g,); ndrange = length(kr))
     end
     return out
 end
@@ -575,11 +698,20 @@ horizontal-mean profile ([`plane_mean!`](@ref)).
 function plane_partials!(partials::AbstractVector, b::AbstractBackend, f::F,
                          ranges::NTuple{3,UnitRange{Int}}, arrays::Vararg{AbstractArray,M}) where {F, M}
     T = eltype(partials)
-    _plane_partials!(b, partials, _PlaneReduce(+, zero(T), f, ranges[1], ranges[2]), ranges[3], arrays)
+    _checkr(arrays, ranges)
+    _plane_partials!(b, partials, _PlaneReduce(_add, zero(T), ranges[1], ranges[2]), ranges[3],
+                     _Vals(f, arrays))
 end
 plane_partials!(partials::AbstractVector, f::F, ranges::NTuple{3,UnitRange{Int}},
                 arrays::Vararg{AbstractArray,M}) where {F, M} =
     plane_partials!(partials, backend(first(arrays)), f, ranges, arrays...)
+
+plane_partials!(partials::AbstractVector, b::AbstractBackend, f::F,
+                ranges::NTuple{3,AbstractUnitRange{<:Integer}}, arrays::Vararg{AbstractArray,M}) where {F, M} =
+    plane_partials!(partials, b, f, map(UnitRange{Int}, ranges), arrays...)
+plane_partials!(partials::AbstractVector, f::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
+                arrays::Vararg{AbstractArray,M}) where {F, M} =
+    plane_partials!(partials, backend(first(arrays)), f, map(UnitRange{Int}, ranges), arrays...)
 
 """
     ordered_sum(v) -> sum
@@ -638,6 +770,126 @@ end
 plane_mean!(profile::AbstractVector, A::AbstractArray, ranges::NTuple{3,UnitRange{Int}}) =
     plane_mean!(profile, backend(A), A, ranges)
 
+# ---- indexed reductions: a body per point, as launch! ----------------------
+
+"""
+    plane_reduce!(partials, [backend,] body, ranges::NTuple{3,UnitRange{Int}}, args...)
+        -> partials
+
+The canonical plane sums of an *indexed* body: `partials[c]` = the sum,
+over the plane `k = ranges[3][c]` and the points `(i, j)` of
+`ranges[1] × ranges[2]`, of `body(i, j, k, args...)`, added in the order
+of [`plane_partials!`](@ref) (eight lanes per row, rows in order, one work
+item per plane). Thread-invariant, and the same bits as `plane_partials!`
+for a body that returns `f(A[i,j,k], …)`.
+
+The body follows the [`launch!`](@ref) contract: it may read its inputs
+anywhere (a stencil: a strain rate, a centred `w`), may **write point
+`(i, j, k)`** of its outputs (an update fused with the sum of what it
+changed: a chemistry step returning its production), carries its own
+`@inbounds`, and takes everything it reads as an argument. A per-level
+coefficient is an argument indexed by `k`.
+
+A body that returns an `NTuple` of `N` numbers sums every component in
+the same canonical order: pass `partials` as an `NTuple` of `N` vectors
+(`plane_reduce!((S, n), b, body, r, …)` for a masked sum and its count).
+
+`ranges` are whatever indices the body takes — storage indices of
+halo-padded arrays, or `axes(view)` of interior-sized arrays.
+"""
+function plane_reduce!(partials::AbstractVector, b::AbstractBackend, body::F,
+                       ranges::NTuple{3,UnitRange{Int}}, args::Vararg{Any,M}) where {F, M}
+    T = eltype(partials)
+    _plane_partials!(b, partials, _PlaneReduce(_add, zero(T), ranges[1], ranges[2]), ranges[3],
+                     _Ix(body, args))
+end
+function plane_reduce!(partials::NTuple{N,AbstractVector}, b::AbstractBackend, body::F,
+                       ranges::NTuple{3,UnitRange{Int}}, args::Vararg{Any,M}) where {N, F, M}
+    T = Tuple{map(eltype, partials)...}
+    tmp = Vector{T}(undef, length(ranges[3]))
+    _plane_partials!(b, tmp, _PlaneReduce(_add, map(zero, fieldtypes(T)), ranges[1], ranges[2]),
+                     ranges[3], _Ix(body, args))
+    for (c, t) in enumerate(tmp), n in 1:N
+        partials[n][c] = t[n]
+    end
+    return partials
+end
+plane_reduce!(partials::Union{AbstractVector,Tuple}, body::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
+              args::Vararg{Any,M}) where {F, M} =
+    plane_reduce!(partials, _host_backend(), body, ranges, args...)
+
+# `axes(view)` gives `Base.OneTo`s: any unit ranges are accepted
+plane_reduce!(partials::Union{AbstractVector,Tuple}, b::AbstractBackend, body::F,
+              ranges::NTuple{3,AbstractUnitRange{<:Integer}}, args::Vararg{Any,M}) where {F, M} =
+    plane_reduce!(partials, b, body, map(UnitRange{Int}, ranges), args...)
+
+"""
+    range_max([backend,] body, ranges::NTuple{3,UnitRange{Int}}, args...) -> maximum
+
+The maximum of the indexed `body(i, j, k, args...)` (indexed as in
+[`plane_reduce!`](@ref)) over `ranges`, **NaN-propagating** like
+[`interior_max`](@ref): any NaN gives NaN. `max` is exact and
+commutative, so the result equals any serial maximum of the same values
+(a CFL rate, `max |∇·u|`, a speed cap).
+
+Unlike a `plane_reduce!` body, a `range_max` body must **only read**: it
+is evaluated once per point, but a fused update belongs in
+`plane_reduce!`. The result type is the inferred (floating-point) return
+type of `body`, `Float64` when inference gives no concrete real type;
+an empty region gives `-Inf`.
+"""
+function range_max(b::AbstractBackend, body::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}},
+                   args::Vararg{Any,M}) where {F, M}
+    (isempty(ir) || isempty(jr) || isempty(kr)) && return -Inf
+    T = _max_type(Base.promote_op(body, Int, Int, Int, map(typeof, args)...))
+    parts = _plane_partials!(b, Vector{T}(undef, length(kr)),
+                             _PlaneMax(T(-Inf), ir, jr), kr, _Ix(body, args))
+    m = T(-Inf)
+    for x in parts
+        m = max(m, x)
+    end
+    return m
+end
+# the body's type without evaluating it (it is never called twice at a point)
+_max_type(::Type{R}) where {R<:Real} = isconcretetype(R) ? float(R) : Float64
+_max_type(::Type) = Float64
+
+range_max(b::AbstractBackend, body::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
+          args::Vararg{Any,M}) where {F, M} =
+    range_max(b, body, map(UnitRange{Int}, ranges), args...)
+range_max(body::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}}, args::Vararg{Any,M}) where {F, M} =
+    range_max(_host_backend(), body, ranges, args...)
+
+"""
+    plane_map!(partials, [backend,] plane, ranges::NTuple{3,UnitRange{Int}}, args...)
+        -> partials
+
+`partials[c] = plane(k, ranges[1], ranges[2], args...)` for
+`k = ranges[3][c]`: a function of a whole plane, one work item per plane
+(the plane parallelism of [`plane_reduce!`](@ref)), so every partial is
+computed by one task in the plane function's own fixed loop order and
+`partials` is identical at every thread count and with `serial = true`.
+Combine with [`ordered_sum`](@ref).
+
+For the reductions where the eight-lane order of `plane_reduce!` costs
+more than it gains: a fused update that touches few points and calls an
+expensive function there (`apply_wet_deposition!`: `exp` in the raining
+cells only), where keeping eight lanes live across the call is slower
+than one running sum in cell order (measured in ka_port.md). The plane
+function carries its own `@inbounds` and may write any point of its own
+plane `k`, and only of it.
+"""
+function plane_map!(partials::AbstractVector, b::AbstractBackend, plane::F,
+                    ranges::NTuple{3,UnitRange{Int}}, args::Vararg{Any,M}) where {F, M}
+    _plane_partials!(b, partials, _PlaneFn(plane, ranges[1], ranges[2]), ranges[3], args)
+end
+plane_map!(partials::AbstractVector, b::AbstractBackend, plane::F,
+           ranges::NTuple{3,AbstractUnitRange{<:Integer}}, args::Vararg{Any,M}) where {F, M} =
+    plane_map!(partials, b, plane, map(UnitRange{Int}, ranges), args...)
+plane_map!(partials::AbstractVector, plane::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
+           args::Vararg{Any,M}) where {F, M} =
+    plane_map!(partials, _host_backend(), plane, map(UnitRange{Int}, ranges), args...)
+
 # ---- column partials: one sum over k per (i, j) ----------------------------
 
 @inline function _column_body!(i, j, out, A, kr, oi, oj)
@@ -678,8 +930,9 @@ in ascending k: thread-invariant. `-Inf` for an empty region.
 """
 function interior_max(b::AbstractBackend, A::AbstractArray, (ir, jr, kr)::NTuple{3,UnitRange{Int}})
     T = _acc_type((A,))
+    _checkr((A,), (ir, jr, kr))
     parts = _plane_partials!(b, Vector{T}(undef, length(kr)),
-                             _PlaneReduce(max, T(-Inf), identity, ir, jr), kr, (A,))
+                             _PlaneMax(T(-Inf), ir, jr), kr, _Vals(identity, (A,)))
     m = T(-Inf)
     for x in parts
         m = max(m, x)
@@ -695,8 +948,9 @@ interior_max(A::AbstractArray, ranges::NTuple{3,UnitRange{Int}}) = interior_max(
 no ±Inf). Thread-invariant.
 """
 function interior_all_finite(b::AbstractBackend, A::AbstractArray, (ir, jr, kr)::NTuple{3,UnitRange{Int}})
+    _checkr((A,), (ir, jr, kr))
     parts = _plane_partials!(b, Vector{Bool}(undef, length(kr)),
-                             _PlaneReduce(&, true, isfinite, ir, jr), kr, (A,))
+                             _PlaneReduce(&, true, ir, jr), kr, _Vals(isfinite, (A,)))
     return all(parts)
 end
 interior_all_finite(A::AbstractArray, ranges::NTuple{3,UnitRange{Int}}) =

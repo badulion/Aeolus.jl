@@ -425,7 +425,7 @@ end
                           c_l = 0.76, κ = 0.4, surface_factor = 3.9, Ω = :auto,
                           wall_distance = nothing, first_level = nothing, mask = nothing,
                           surface = nothing, θ₀ = nothing, g_accel = nothing, qv = :auto,
-                          transport = true, advection = :auto)
+                          qc = nothing, p = nothing, transport = true, advection = :auto)
 
 A differential subgrid-scale Reynolds-stress closure (Deardorff 1973):
 six prognostic cell-centred stresses ``τ_{ij}`` (m² s⁻²) with
@@ -483,6 +483,9 @@ flux-limited (`advect_positive!`), the off-diagonals plain. Prefer a halo of
 realizability projection fires (measured in a 16³ decaying box, amplitude
 0.3 m/s, 60 s: 9140 corrections adding 2.8 % of the SGS energy, against
 none with WENO-Z5). The other keywords are those of [`TKEClosure`](@ref).
+A condensate field `qc` (with `p`, #239) enters the ``N^2`` of the length
+scale (cloudy-air ``N^2``); the buoyancy terms ``G_{ij}`` of the stress
+equations keep the θ_v gradients.
 
 References: Deardorff, J. W. (1973), *The use of subgrid transport
 equations in a three-dimensional model of atmospheric turbulence*, J.
@@ -491,7 +494,7 @@ Fluids Eng. 95, 429–438; Launder, B. E., Reece, G. J. & Rodi, W. (1975),
 Fluid Mech. 68, 537–566; Schumann, U. (1977), *Realizability of
 Reynolds-stress turbulence models*, Phys. Fluids 20, 721–725.
 """
-struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, SF, Q, CT, WS, AS} <: AbstractSGSClosure
+struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, CT, WS, AS} <: AbstractSGSClosure
     τ::NTuple{6,F}
     C1::T; C2::T; C3::T
     C_θ::CT                 # :tke or a number
@@ -502,6 +505,7 @@ struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, SF, Q, CT, WS, AS} <: Abst
     Ω::NTuple{3,T}
     Ω_auto::Bool
     qv::Q
+    cloud::CL               # nothing or Operators.cloud_humidity (qc, scratch, p), #239
     l_wall::LW
     first_level::FL
     mask::MK
@@ -531,7 +535,8 @@ function ReynoldsStressClosure(g::RegularGrid{T}; τ = nothing, e0::Real = 0,
                                c_l::Real = 0.76, κ::Real = 0.4, surface_factor::Real = 3.9,
                                Ω = :auto, wall_distance = nothing, first_level = nothing,
                                mask = nothing, surface = nothing, θ₀ = nothing, g_accel = nothing,
-                               qv = :auto, transport::Bool = true, advection::Symbol = :auto) where {T}
+                               qv = :auto, qc = nothing, p = nothing,
+                               transport::Bool = true, advection::Symbol = :auto) where {T}
     (C_θ === :tke || C_θ isa Real) ||
         throw(ArgumentError("C_θ must be :tke or a number, got $(repr(C_θ))"))
     mkf() = Field(CellCenter(), g)
@@ -563,7 +568,7 @@ function ReynoldsStressClosure(g::RegularGrid{T}; τ = nothing, e0::Real = 0,
                                  T(c_k), T(c_ε0), T(c_ε1), T(c_l), T(κ), T(surface_factor), Δ,
                                  θ₀ === nothing ? T(NaN) : T(θ₀),
                                  g_accel === nothing ? T(NaN) : T(g_accel),
-                                 Ωt, Ωa, qv, lw, fl, mk, surface, transport, advs,
+                                 Ωt, Ωa, qv, cloud_humidity(qc, p, g), lw, fl, mk, surface, transport, advs,
                                  mkf(), mkf(), mkf(), DiffusivityTensor(g), StressTensor(g),
                                  ntuple(_ -> mkf(), 6), ws, adv,
                                  zeros(T, 6, 6), zeros(T, 6, 6), zeros(T, 6),

@@ -156,7 +156,11 @@ end
     end
 
     rng = Xoshiro(91)
-    A = randn(rng, size(Field(mesh).data)) .* 10 .^ (4 .* rand(rng, size(Field(mesh).data)))
+    # magnitudes spread over four decades, so the order of the additions shows
+    # (`rand(rng, dims...)`: `rand(rng, dims)` would draw one element of the
+    # tuple, and 10^(4 n) overflows Int to 0, leaving A ≡ ±0)
+    A = randn(rng, size(Field(mesh).data)) .* 10 .^ (4 .* rand(rng, size(Field(mesh).data)...))
+    @assert count(!iszero, A) == length(A)
     B = randn(rng, size(A))
     ir, jr, kr = I3
 
@@ -183,6 +187,69 @@ end
         @test interior_dot(A, B, I3) ≈ sum(view(A, I3...) .* view(B, I3...)) rtol = 1e-12
         @test ordered_sum(Float64[]) === 0.0
         @test interior_max(A, (1:0, jr, kr)) == -Inf
+    end
+
+    # KA-b (#296): the indexed reductions every call site of the port uses
+    @testset "plane_reduce! / range_max: canonical order, fused writes ($name)" for (name, b) in BACKENDS
+        parts = [reference_plane_sum(A, ir, jr, k) for k in kr]
+        p = zeros(length(kr))
+        @test same_bits(plane_reduce!(p, b, (i, j, k, A) -> (@inbounds A[i, j, k]), I3, A), parts)
+        # a stencil body: the same order as plane_partials! on the stencil values
+        D = similar(A); fill!(D, 0)
+        for k in kr, j in jr, i in ir
+            D[i, j, k] = A[i+1, j, k] - A[i-1, j, k]
+        end
+        q = zeros(length(kr)); plane_partials!(q, b, identity, I3, D)
+        @test same_bits(plane_reduce!(p, b, (i, j, k, A) -> (@inbounds A[i+1, j, k] - A[i-1, j, k]), I3, A), q)
+        # a tuple body: each component in the canonical order (a masked sum and its count)
+        M = A .> 0
+        s, n = zeros(length(kr)), zeros(length(kr))
+        plane_reduce!((s, n), b, (i, j, k, A, M) -> (@inbounds M[i, j, k] ? (A[i, j, k], 1.0) : (0.0, 0.0)),
+                      I3, A, M)
+        q2 = zeros(length(kr)); plane_partials!(q2, b, (a, m) -> m ? a : 0.0, I3, A, M)
+        @test same_bits(s, q2)
+        @test n == [count(view(M, ir, jr, k)) for k in kr]
+        # a fused update: the body writes its point and returns what it added
+        C = copy(A); dC = zeros(length(kr))
+        plane_reduce!(dC, b, (i, j, k, C, f) -> (@inbounds (d = f * C[i, j, k]; C[i, j, k] += d; d)), I3, C, 0.25)
+        @test same_bits(view(C, I3...), view(A, I3...) .+ 0.25 .* view(A, I3...))
+        q3 = zeros(length(kr)); plane_partials!(q3, b, a -> 0.25 * a, I3, A)
+        @test same_bits(dC, q3)
+        # interior-sized views with axes ranges: the same bits as the halo arrays
+        V = view(A, I3...)
+        @test same_bits(plane_reduce!(p, b, (i, j, k, V) -> (@inbounds V[i, j, k]), axes(V), V), parts)
+        # range_max: exact, so equal to Base's maximum; NaN-propagating
+        @test same_bits(range_max(b, (i, j, k, A) -> abs(A[i, j, k]), I3, A), maximum(abs, view(A, I3...)))
+        C = copy(A); C[ir[3], jr[2], kr[4]] = NaN
+        @test isnan(range_max(b, (i, j, k, A) -> abs(A[i, j, k]), I3, C))
+        @test range_max(b, (i, j, k, A) -> A[i, j, k], (ir, 1:0, kr), A) == -Inf
+        # the result type is inferred, never found by evaluating the body an extra time
+        @test range_max(b, (i, j, k, A) -> Float32(A[i, j, k]), I3, A) isa Float32
+        @test range_max(b, (i, j, k, A) -> (@inbounds A[i, j, k] > 0 ? 1 : 0), I3, A) === 1.0
+        # plane_map!: a whole-plane function, one work item per plane, its own order;
+        # it may write its plane (here a fused update in cell order, i fastest)
+        function cell_order_plane(k, ir, jr, C, f)
+            s = 0.0
+            @inbounds for j in jr, i in ir
+                d = f * C[i, j, k]; C[i, j, k] += d; s += d
+            end
+            return s
+        end
+        C = copy(A); dC = zeros(length(kr))
+        @test plane_map!(dC, b, cell_order_plane, I3, C, 0.25) === dC
+        @test same_bits(view(C, I3...), view(A, I3...) .+ 0.25 .* view(A, I3...))
+        ref = similar(dC); Cr = copy(A)
+        for (c, k) in enumerate(kr)
+            ref[c] = cell_order_plane(k, ir, jr, Cr, 0.25)
+        end
+        @test same_bits(dC, ref)
+        @test same_bits(plane_map!(zeros(length(kr)), b, (k, ir, jr, A) -> sum(view(A, ir, jr, k)), I3, A),
+                        [sum(view(A, ir, jr, k)) for k in kr])
+    end
+    @testset "range_max evaluates the body once per point" begin
+        calls = Ref(0)
+        range_max(CPUBackend(serial = true), (i, j, k, A, n) -> (n[] += 1; A[i, j, k]), I3, A, calls)
+        @test calls[] == prod(length, I3)
     end
 
     @testset "max propagates NaN, all_finite catches NaN and ±Inf ($name)" for (name, b) in BACKENDS
