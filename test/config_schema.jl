@@ -70,8 +70,19 @@ end
         option!(s, "o", Optional{Int}); option!(s, "t", OpenTable())
     end
     @test s2.options[1].default === nothing && s2.options[2].default == Dict{String,Any}()
-    # a driver section may not collide with a common one
-    @test_throws ArgumentError ConfigSchema("x"; sections = [section("run") do s end])
+    # a driver section named like a common one extends it (CFG-b, #357),
+    # but may not redeclare a common option; a driver section twice is an error
+    sx = ConfigSchema("x"; sections = [section("output") do s
+        option!(s, "fields", Vector{String}; default = String[])
+    end])
+    @test [o.key for o in only(filter(s -> s.name == "output", sx.sections)).options] ==
+          ["path", "cadence", "fields"]
+    @test count(s -> s.name == "output", sx.sections) == 1
+    @test_throws ArgumentError ConfigSchema("x"; sections = [section("run") do s
+        option!(s, "seed", Int; default = 1)
+    end])
+    @test_throws ArgumentError ConfigSchema("x"; sections = [section("a") do s end,
+                                                             section("a") do s end])
     @test "cfgtest" in registered_drivers() && "common" in registered_drivers()
 end
 

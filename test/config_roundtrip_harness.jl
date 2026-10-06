@@ -1,0 +1,86 @@
+# The bit-identical round-trip harness (CFG-b, #357), used by every config
+# migration of #311: a run from a config, then a re-run from that run's own
+# run.toml, must give the same run.
+#
+#   include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
+#   r = roundtrip_check("examples/configs/taylor_green_vortex.toml"; nsteps = 20,
+#                       overrides = ["grid.size=[16,16,16]"])
+#   @test r.fields_equal && r.diagnostics_equal && r.config_equal
+#
+# Both runs use [fftw] planner = "estimate" (the #245 bitwise policy: the
+# same plans in every process) and the same thread count (the same process).
+
+using Aeolus
+using Aeolus.Config
+using Aeolus.IO: read_run_toml, diagnostics_path
+
+if !isdefined(@__MODULE__, :roundtrip_check)
+
+"""
+    bitwise_equal(a, b) -> Bool
+
+Whether two Float64 arrays have the same size and identical bit patterns
+(NaN payloads and the sign of zero included).
+"""
+bitwise_equal(a::AbstractArray{Float64}, b::AbstractArray{Float64}) =
+    size(a) == size(b) && reinterpret(UInt64, vec(collect(a))) == reinterpret(UInt64, vec(collect(b)))
+
+"""
+    diagnostics_without_wall(path) -> Vector{String}
+
+The lines of a `diagnostics.csv` with the wall-clock columns (header
+`wall …`) removed.
+"""
+function diagnostics_without_wall(path::AbstractString)
+    lines = readlines(path)
+    isempty(lines) && return lines
+    keep = findall(h -> !startswith(h, "wall"), split(lines[1], ','))
+    return [join(split(l, ',')[keep], ',') for l in lines]
+end
+
+"The `[stepper]` overrides of the simulation driver for a run of `n` steps."
+simulation_nsteps(n) = ["stepper.end_time=\"none\"", "stepper.nsteps=$n"]
+
+"""
+    roundtrip_check(config_path; nsteps = nothing, overrides = String[],
+                    nsteps_overrides = simulation_nsteps, root = mktempdir())
+        -> NamedTuple
+
+Run `config_path` through [`run_config`](@ref Aeolus.Config.run_config)
+into the run root `root`, then load that run's `run.toml` and run it
+again (a new run, a new folder). `overrides` (plus
+`nsteps_overrides(nsteps)` when `nsteps` is given, and `fftw.planner =
+"estimate"`) apply to the first run only: the second run takes
+everything from the record. Returns
+
+  * `fields_equal`: every array of `state_fields` is bitwise equal
+    (`fields_differing` names the ones that are not);
+  * `diagnostics_equal`: the two `diagnostics.csv` are byte-equal outside
+    the wall-clock column;
+  * `config_equal`: the two `[config]` tables of `run.toml` are identical
+    (and so are the `config_hash`es);
+  * `runs`: the two [`RunResult`](@ref Aeolus.Config.RunResult)s.
+"""
+function roundtrip_check(config_path::AbstractString; nsteps = nothing, overrides = String[],
+                         nsteps_overrides = simulation_nsteps, root = mktempdir())
+    ovr = String[overrides...]
+    nsteps === nothing || append!(ovr, nsteps_overrides(nsteps))
+    push!(ovr, "fftw.planner=\"estimate\"")
+    kw = (; root = root, console = false, repo = mktempdir())    # outside any git tree
+    cfg1 = load_run_config(config_path; overrides = ovr)
+    r1 = run_config(cfg1; kw...)
+    cfg2 = load_run_config(r1.folder.path)
+    r2 = run_config(cfg2; kw...)
+    # invokelatest: an example driver may have been loaded during this call
+    f1 = Base.invokelatest(state_fields, r1.obj); f2 = Base.invokelatest(state_fields, r2.obj)
+    differing = [k for k in keys(f1) if !(haskey(f2, k) && bitwise_equal(f1[k], f2[k]))]
+    keys(f1) == keys(f2) || append!(differing, setdiff(keys(f2), keys(f1)))
+    rec1 = read_run_toml(r1.folder.path); rec2 = read_run_toml(r2.folder.path)
+    return (fields_equal = isempty(differing), fields_differing = differing,
+            diagnostics_equal = diagnostics_without_wall(diagnostics_path(r1.folder)) ==
+                                diagnostics_without_wall(diagnostics_path(r2.folder)),
+            config_equal = rec1["config"] == rec2["config"] && rec1["config_hash"] == rec2["config_hash"],
+            runs = (r1, r2))
+end
+
+end # if !isdefined
