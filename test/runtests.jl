@@ -827,6 +827,7 @@ using Aeolus.Fields: set!, interior_view
     end
 
     include("io_checkpoint.jl")   # #245: full-state checkpoints, bitwise restart, FFTW policy
+    include("logging_core.jl")    # #333: structured events, run log, test logger
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

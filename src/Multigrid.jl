@@ -39,6 +39,7 @@ using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields
 using ..Fields: Field, interior_view
 using ..PressureSolvers: AbstractPressureSolver, solve!
+using ..RunLog: current_domain   # structured events (LOG-a, #333)
 import ..PressureSolvers: solve!, poisson_axis_bcs
 using ..StretchedGrids: StretchedGrid, cell_thickness, center_spacing
 
@@ -682,7 +683,10 @@ function mg_solve!(s::MultigridPoissonSolver{T},
     end
     s.last_cycles[] = ncyc
     s.last_residual[] = rel
-    converged || @warn "MultigridPoissonSolver: maxcycles=$(s.maxcycles) reached, rel. residual $rel"
+    converged ||
+        @warn("MultigridPoissonSolver: maxcycles=$(s.maxcycles) reached, rel. residual $rel",
+              subsystem = :pressure, domain = current_domain(), solver = :multigrid,
+              cycles = ncyc, relative_residual = rel, tol = s.tol)
     return (; cycles = ncyc, residual = rel, converged = converged)
 end
 
