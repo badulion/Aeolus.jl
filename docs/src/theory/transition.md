@@ -1043,6 +1043,123 @@ over 200 s, the child's kinetic energy grew ×5.5 and the parent's ×3.2.
 Without the inflow perturbations, the same two-way run kept the child's
 energy at ×0.99. N-inflow-c is therefore tested one-way only.
 
+### Development length behind the inflow (N-inflow-d)
+
+How far into the child is the inflow turbulence still out of
+equilibrium? N-inflow-d (#266) measures it on the canonical case of the
+inflow-generator literature (Xie & Castro 2008; Kim, Castro & Xie 2013):
+a periodic precursor supplies the statistics and the mean inflow profile,
+and an inflow–outflow copy of the same flow is compared with it.
+
+**The flow.** The neutral, wall-modelled half channel of P54-d
+(`half_channel_case`, ``δ = u_* = 1``, ``z_0 = 10^{-4}δ``,
+`StaticSmagorinsky(0.1)`, forcing ``G = u_*^2/δ``). The **precursor**
+(the parent) is periodic on ``5δ × 2.5δ × δ`` at ``Δx_p = 0.208δ``,
+``Δz = δ/16`` (24 × 12 × 16), spun up for ``20δ/u_*`` and averaged over
+``10δ/u_*``; its `ParentResolvedStatistics` (mode `:full`, uniform time
+average) is the generator's statistics source, and its plane- and
+time-mean ``u(z)`` is the inflow profile. The **child** is the same
+channel opened in x (`half_channel_case(; extent, inflow)`: the profile
+as Dirichlet data on the west face, the convective outflow of N-open-c
+on the east face, y periodic) at refine 2 horizontally (``Δx = 0.104δ``).
+The **reference** is the periodic channel on the child's grid, the
+equilibrium the child relaxes to. Generators: none (`off`), the digital
+filter (DF), and the random-mode `FreeStreamInflow` (FSD, one length:
+the face-mean streamwise ``L_s``, swept at the bulk velocity).
+
+**Diagnostics.** `FetchStatistics` averages the resolved moments over
+``y`` and time per column; the variances are taken at the native
+staggered points and ``\overline{u'w'}`` at the cell centres, exactly as
+for the precursor (whose x average is the target), so no definition
+difference enters. `development_length((x, f), T; frac)` is the distance
+from the inflow plane beyond which ``f`` stays within
+``[\text{frac}\,T, T/\text{frac}]``; the last ``0.5δ`` (the convective
+outflow layer, where the variances drop) is excluded. The total stress
+at ``x ≈ 4δ`` is `total_stress_profile(…; irange)` over three columns.
+The pressure-gradient bias is the least-squares slope of the time- and
+plane-mean pressure over ``1δ ≤ x ≤ 4δ``, divided by ``G``: the extra
+drive the developing flow needs.
+
+**Measured.** CI case (`test/era6_inflow_fetch.jl`, 5δ child, averaged
+``5δ/u_*``, 98 s), ratios to the precursor:
+
+| run | TKE at 0.22δ, x = 0.5, 1, 2, 3, 4.5δ | TKE at 0.47δ | −u'w' at 0.47δ | dp/dx bias |
+| :-- | :-- | :-- | :-- | --: |
+| off | 0 everywhere (the mean profile stays laminar) | 0 | 0 | +72 % |
+| DF  | 0.97, 1.04, 1.16, 1.27, 1.36 | 0.78, 0.79, 0.82, 0.85, 0.91 | 0.52, 0.56, 0.63, 0.71, 0.80 | −0.55 % |
+| FSD | 0.59, 0.59, 0.63, 0.68, 0.84 | 0.57, 0.56, 0.56, 0.56, 0.57 | 0.26, 0.33, 0.41, 0.47, 0.54 | +31 % |
+
+The bulk velocity is the precursor's at every x to ``4×10^{-5}`` (the
+uniform N-open-b correction δ of the radiated outflow, ``3.9×10^{-4}``
+m s⁻¹ on a 20 m s⁻¹ inflow); the generator's added flux is
+``5×10^{-18}`` of the mean-flow flux; ``\max|∇·u| < 10^{-13}``. RMS
+error of the total stress at ``x = 3.9δ`` over ``0.1δ < z < 0.8δ``:
+DF 0.32, FSD 0.47, off 1.32 ``u_*^2`` (the precursor's total stress is
+within 0.046 ``u_*^2`` of ``u_*^2(1 - z/δ)``, Porté-Agel et al. 2000).
+
+Example (`examples/nesting/inflow_fetch.jl`, 15δ child, averaged
+``10δ/u_*``, about 11 min), ratios to the child-grid reference and
+development lengths (δ) to 10 % / 20 %:
+
+| run | TKE 0.22δ at x = 1, 3, 5, 10, 14δ | TKE 0.47δ | L₁₀ TKE 0.22δ / 0.47δ | L₁₀ −u'w' 0.22δ / 0.47δ |
+| :-- | :-- | :-- | :-- | :-- |
+| off | 0 | 0 | ∞ / ∞ | ∞ / ∞ |
+| DF (parent statistics and mean) | 1.08, 1.26, 1.36, 1.32, 1.26 | 0.85, 0.92, 0.98, 1.12, 1.15 | ∞ / ∞ (∞ / 5.1 against the parent) | ∞ / ∞ |
+| FSD (parent) | 0.63, 0.72, 0.93, 1.25, 1.26 | 0.62, 0.62, 0.62, 0.73, 0.95 | ∞ / 13.0 | ∞ / 12.5 |
+| DF-same (reference statistics and mean) | 0.59, 0.69, 0.81, 1.02, 1.02 | 0.58, 0.63, 0.69, 0.83, 0.96 | 6.6 / 12.3 | 6.0 / 11.9 |
+
+![TKE behind the inflow at 0.22δ](../assets/nesting/inflow_fetch_tke_z02.svg)
+![−u'w' behind the inflow at 0.47δ](../assets/nesting/inflow_fetch_uw_z05.svg)
+
+**What sets the fetch.** With statistics and mean from the child's own
+grid (DF-same, the set-up of the papers), the turbulence recovers to
+10 % in ``6.6δ`` at 0.22δ and ``12.3δ`` at 0.47δ. Both are 1.4–1.7 local
+eddy-turnover distances ``U(z)\,k/ε``, with ``k`` the reference TKE and
+``ε ≈ u_*^3/(κz)`` (log layer): ``4.8δ`` at 0.22δ (``k = 2.9``,
+``U = 18.8``) and ``7.1δ`` at 0.47δ (``k = 1.79``, ``U = 21.0``). A
+synthetic field with the right one-point statistics and exponential
+correlations is not yet turbulence: the projection removes its
+divergent part within one cell (the inflow-face ``\overline{u'^2}`` is
+82 % of the target, one cell in 68 %), its ``u'w'`` starts at 40–75 % of
+the target, and the energy-containing eddies have to be rebuilt by the
+mean shear, which takes about one turnover. In a rough-wall ABL,
+``U/u_* ≈ 20``, so the distance is long.
+
+**The coarse parent.** With the refine-2 parent as the statistics source
+(the issue's set-up, and the Berlin child's), two things differ from the
+child grid's equilibrium. The parent's mean profile is 11 % faster at
+0.22δ (the log-layer mismatch depends on the horizontal resolution),
+and its ``R_{11}`` (resolved + SGS) is 57 % above the child grid's at
+0.16δ. The
+child keeps the parent's mean momentum for more than 15δ, and its
+near-wall TKE settles 26 % above the child-grid equilibrium; the FSD
+run converges to the same level by 10δ, so the level is set by the mean
+profile, not by the generator. The digital filter starts at the
+precursor's level (0.97 at 0.5δ, 0.22δ) and is within 10 % of its own
+source at 0.47δ from 5.1δ on; the FSD, isotropic with one length and no
+``u'w'`` structure, starts at 60 % and rises only after 5δ. Without a
+generator the inflow stays laminar.
+
+**Expectations that proved wrong** (the expectations, not the code):
+
+* "TKE and −u'w' at 0.2δ and 0.5δ within 10 % of the precursor by
+  x ≤ 3δ" (the issue's placeholder). Not met in any configuration
+  (table above). The full texts of Xie & Castro (2008) and Kim et al.
+  (2013) could not be retrieved (HTTP 403), so their development
+  lengths were not checked and no literature number replaces the
+  placeholder; the turnover estimate above says 3δ is too short at
+  0.5δ for ``U/u_* ≈ 20`` whatever the generator. The CI case asserts
+  instead that the DF keeps TKE within [0.7, 1.5] of the precursor for
+  ``x ≤ 5δ`` and is closer to it than the FSD.
+* "Total stress at 4δ within 10 % for 0.1δ < z < 0.8δ". Not met (RMS
+  0.32 ``u_*^2``), for the same reason; asserted: DF < FSD < off.
+* The null comparison (off < 50 %), the bulk velocity (0.5 %) and the
+  DF pressure-gradient bias (2 %) hold as issued. The bias depends on
+  the source: with the child-grid statistics it is +23 %, so the −0.55 %
+  of the coarse parent is a cancellation (its faster mean flow and its
+  larger stresses), not a sign that the flow is in equilibrium.
+
+
 ### The Berlin case
 
 Stated exception (as in #185): the Berlin run is laterally periodic and
@@ -1055,6 +1172,16 @@ digital-filter step on a 64 × 40 face costs 0.10 ms. One update of
 `ParentResolvedStatistics` on the 192 × 192 Berlin parent (20 levels)
 costs 65 ms, so it belongs on a cadence. The convective-parent numbers
 above stand in for the Berlin numbers until then.
+
+N-inflow-d (#266) adds no coupling either (stated exception): its
+fetch is measured on the periodic half channel above, and the Berlin
+child's fetch, day and night, is measured in N-inflow-e (#268), where
+the nested Berlin case exists. `development_length`, `FetchStatistics`
+and the open-x `half_channel_case` are diagnostics and a benchmark
+builder; no Berlin list changed. For the Berlin child the measurement
+here predicts two things to check: the fetch scales with
+``U(z)\,k/ε``, and a coarse parent's mean profile, not the generator,
+sets the near-wall turbulence level far downstream.
 
 ## References
 
@@ -1162,6 +1289,14 @@ above stand in for the Berlin numbers until then.
   R. Meteorol. Soc.*, 122, 367-389.
 * Schumann, U. (1977). Realizability of Reynolds-stress turbulence
   models. *Phys. Fluids*, 20, 721-725.
+* Kim, Y., Castro, I. P. & Xie, Z.-T. (2013). Divergence-free
+  turbulence inflow conditions for large-eddy simulations with
+  incompressible flow solvers. *Comput. Fluids*, 84, 56-68.
+* Porté-Agel, F., Meneveau, C. & Parlange, M. B. (2000). A
+  scale-dependent dynamic model for large-eddy simulation: application
+  to a neutral atmospheric boundary layer. *J. Fluid Mech.*, 415, 261-284.
+* Wu, X. (2017). Inflow turbulence generation methods. *Annu. Rev. Fluid
+  Mech.*, 49, 23-49.
 * Xie, Z.-T. & Castro, I. P. (2008). Efficient generation of inflow
   conditions for large eddy simulation of street-scale flows. *Flow
   Turbul. Combust.*, 81, 449-470.
