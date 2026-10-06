@@ -12,8 +12,8 @@
 Rayleigh damping of the prognostic field `field` of a simulation (`:θ`,
 `:qv`, or a velocity component `:u`, `:v`, `:w`) toward `target`, with the
 height-dependent rate `λ(z)` of `profile` (a
-[`DampingProfile`](@ref Aeolus.Operators.DampingProfile), usually
-[`sponge_profile`](@ref Aeolus.Operators.sponge_profile)`(α_max, z_start, z_top)`):
+[`DampingProfile`](@ref Aeolus.Operators.FiniteVolume.DampingProfile), usually
+[`sponge_profile`](@ref Aeolus.Operators.FiniteVolume.sponge_profile)`(α_max, z_start, z_top)`):
 
 ```math
 \\left.\\frac{\\partial φ}{\\partial t}\\right|_{d} = -λ(z)\\,\\bigl(φ - φ_{ref}\\bigr).
