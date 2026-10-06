@@ -1,5 +1,9 @@
 using Test
 using Random
+# #245: the suite plans every FFT with FFTW.ESTIMATE (deterministic, so bitwise
+# comparisons hold across processes, and planning is fast). Set before
+# `using Aeolus`; subprocesses the tests start inherit it.
+ENV["AEOLUS_FFTW_PLANNER"] = "estimate"
 using Statistics: mean
 using Aeolus
 using Aeolus.Grids: xnodes, ynodes, znodes, interior

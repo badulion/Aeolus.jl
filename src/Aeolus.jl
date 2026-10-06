@@ -202,6 +202,8 @@ export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
        sgs_stratification!
 # P58-e (#193): resolved TKE profile (turbulence-collapse runs)
 export resolved_tke_profile
+# #245: the FFTW planning policy
+export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!
