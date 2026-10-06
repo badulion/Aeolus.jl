@@ -173,7 +173,8 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
                      θ_walls = nothing, Pr::Real = 0.71, θ₀::Real = 1.0, g_accel::Real = 1.0,
                      init_law = law, θ_ref::Real = 0.0, θ_flux_bottom::Real = 0.0,
                      flux_g = nothing, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
-                     inflow = nothing, outflow::Symbol = :convective)
+                     inflow = nothing, outflow::Symbol = :convective,
+                     lateral::Symbol = :periodic, lateral_outflow::Symbol = outflow)
     walls in (:bottom, :both) ||
         throw(ArgumentError("walls must be :bottom or :both, got :$walls"))
     formulation in (:local, :schumann, :moeng) ||
@@ -221,9 +222,15 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
             throw(ArgumentError("inflow must be an AbstractBoundaryData, got $(typeof(inflow))"))
         bottom_bc === :wall_model && walls === :bottom ||
             throw(ArgumentError("inflow: only the wall-modelled half channel has an open-x variant"))
-        bcs = open_boundary_conditions(mesh, inflow; x = :open, y = :periodic,
-                                       bottom = :wall, top = :wall,
-                                       outflow = (east = outflow,))
+        lateral in (:periodic, :open) ||
+            throw(ArgumentError("lateral must be :periodic or :open, got :$lateral"))
+        # open y faces: the same data, the radiation condition where the
+        # flow leaves through them, the data where it enters (N-open-c)
+        out = lateral === :open ?
+              (east = outflow, south = lateral_outflow, north = lateral_outflow) :
+              (east = outflow,)
+        bcs = open_boundary_conditions(mesh, inflow; x = :open, y = lateral,
+                                       bottom = :wall, top = :wall, outflow = out)
     elseif bottom_bc === :noslip
         bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip,
                                       top = walls === :both ? :noslip : :wall)
@@ -299,7 +306,8 @@ end
                       stability = BusingerDyerBeljaarsHoltslag(),
                       bottom_bc = :wall_model,
                       θ_walls = nothing, extent = nothing,
-                      inflow = nothing, outflow = :convective) -> WallBoundedCase
+                      inflow = nothing, outflow = :convective,
+                      lateral = :periodic, lateral_outflow = outflow) -> WallBoundedCase
 
 The neutral, pressure-driven **half channel** of Porté-Agel, Meneveau &
 Parlange (2000) and Bou-Zeid, Meneveau & Parlange (2005): the canonical
@@ -333,12 +341,20 @@ the default ``2πH × 2πH`` horizontal extent. `inflow` — an
 (e.g. a `ProfileBoundaryData` with the mean profile of a periodic
 precursor) — opens the x direction: the west face takes the data
 (Dirichlet), the east face the `outflow` condition of N-open-c
-(`:convective` by default, `:orlanski` or `:dirichlet`), y stays
-periodic, and the walls, forcing, closure and wall model are those of
+(`:convective` by default, `:orlanski` or `:dirichlet`), and the walls, forcing, closure and wall model are those of
 the periodic case. This is the inflow–outflow half channel on which the
 development length of a synthetic inflow is measured against the
 periodic precursor (`Transition.development_length`; Xie & Castro 2008;
 Kim, Castro & Xie 2013). Neutral only.
+
+`lateral = :periodic` (default) keeps y periodic; `lateral = :open`
+opens the south and north faces as well, as in a nest child: they take
+the same data, with the `lateral_outflow` condition (default: that of
+the east face) at points where the flow leaves the domain and the data
+(Dirichlet) where it enters. With a mean-profile `inflow` (``v = 0``)
+the lateral faces carry no turbulence of their own, so the side layers
+of the domain are quieter than its centre; the fetch diagnostics
+(`FetchStatistics(sim; jrange)`) can exclude them.
 
 **Wall-model input** (P57-b, #183; see [`MatchingInput`](@ref)):
 
@@ -432,7 +448,10 @@ function half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
                            stability::AbstractStabilityFunctions = BusingerDyerBeljaarsHoltslag(),
                            bottom_bc::Symbol = :wall_model,
                            θ_walls = nothing, extent = nothing,
-                           inflow = nothing, outflow::Symbol = :convective)
+                           inflow = nothing, outflow::Symbol = :convective,
+                           lateral::Symbol = :periodic, lateral_outflow::Symbol = outflow)
+    inflow === nothing && lateral !== :periodic &&
+        throw(ArgumentError("lateral = :$lateral needs an inflow (the open-x half channel)"))
     _reserved("bottom_bc", bottom_bc, :wall_model, "channel_case (the half channel is inviscid)")
     _reserved("θ_walls", θ_walls, nothing, "channel_case (the half channel is inviscid)")
     neutral = RoughLogLaw(z0_over_H * H)
@@ -460,7 +479,8 @@ function half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
         return _build_case(:half_channel, _dims(N), ext, closure, law,
                            0.0, :bottom, formulation, u_star, H, noise, seed, stepper,
                            _case_inputs(:bottom, h_wm, h_wm_cells, filter, T_f, u_star, H),
-                           roughness; inflow = inflow, outflow = outflow)
+                           roughness; inflow = inflow, outflow = outflow,
+                           lateral = lateral, lateral_outflow = lateral_outflow)
     return _build_case(:half_channel, _dims(N), ext, closure, law,
                        0.0, :bottom, formulation, u_star, H, noise, seed, stepper,
                        _case_inputs(:bottom, h_wm, h_wm_cells, filter, T_f, u_star, H),

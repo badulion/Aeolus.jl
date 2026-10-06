@@ -103,6 +103,28 @@ end
     @test maximum(p2.tke) < 1e-12 && maximum(abs, p2.uw) < 1e-12
     @test_throws ArgumentError fetch_profiles(FetchStatistics(sim))
     @test_throws ArgumentError accumulate_fetch!(fs2, sim, 0.0)
+    # jrange: an amplitude that differs by row is seen only on the rows
+    # averaged; the y-faces of a band: interior faces whole, end faces half
+    jr = 2:4
+    fs3 = FetchStatistics(sim; jrange = jr)
+    amp(j) = j in jr ? a : 3a
+    vamp(jf) = jf in 3:4 ? cv : (jf in (2, 5) ? 2cv : 5cv)   # interior faces of 2:4 are 3, 4
+    for n in 0:nph-1
+        φ = 2π * n / nph
+        for k in 1:Nz, j in 1:Ny, i in 1:Nx
+            sim.u.data[Hx+i, Hy+j, Hz+k] = U0(k) + amp(j) * cos(φ)
+            sim.v.data[Hx+i, Hy+j, Hz+k] = vamp(j) * sin(φ)
+        end
+        fill!(sim.w.data, 0.0)
+        accumulate_fetch!(fs3, sim, 1.0)
+    end
+    p3 = fetch_profiles(fs3)
+    @test all(isapprox.(p3.uu, a^2 / 2; atol = 1e-12))
+    # faces 2 (half), 3, 4 (whole), 5 (half): (0.5·4 + 1 + 1 + 0.5·4) cv²/2 / 3
+    @test all(isapprox.(p3.vv, (0.5 * 4 + 2 + 0.5 * 4) / 3 * cv^2 / 2; atol = 1e-12))
+    @test maximum(p3.ww) < 1e-12 && maximum(abs, p3.uw) < 1e-12
+    @test_throws ArgumentError FetchStatistics(sim; jrange = 0:2)
+    @test_throws ArgumentError FetchStatistics(sim; jrange = 5:Ny+1)
 end
 
 # ---------------------------------------------------------------------------
@@ -124,6 +146,15 @@ end
     @test b1.total != b2.total                        # a turbulent field differs by band
     @test_throws ArgumentError total_stress_profile(s.u, s.v, s.w, νt; irange = 0:3)
     @test_throws ArgumentError total_stress_profile(s.u, s.v, s.w, νt; irange = 5:13)
+    # jrange: rows, as irange does columns
+    c1 = total_stress_profile(s.u, s.v, s.w, νt; jrange = 1:3)
+    c2 = total_stress_profile(s.u, s.v, s.w, νt; jrange = 4:8)
+    @test (3 .* c1.total .+ 5 .* c2.total) ./ 8 ≈ full.total atol = 1e-12
+    q = total_stress_profile(s.u, s.v, s.w, νt; irange = 1:5, jrange = 1:3)
+    q2 = total_stress_profile(s.u, s.v, s.w, νt; irange = 1:5, jrange = 4:8)
+    @test (3 .* q.resolved .+ 5 .* q2.resolved) ./ 8 ≈ b1.resolved atol = 1e-12
+    @test_throws ArgumentError total_stress_profile(s.u, s.v, s.w, νt; jrange = 0:3)
+    @test_throws ArgumentError total_stress_profile(s.u, s.v, s.w, νt; jrange = 1:9)
 end
 
 # ---------------------------------------------------------------------------
@@ -159,6 +190,33 @@ end
     @test maximum(δ) - minimum(δ) < 1e-12        # the profile, up to one uniform δ
     @test abs(Q[1] / Qin - 1) < 1e-3             # δ is small against the inflow
     @test all(isfinite, interior_view(s.u))
+    # open lateral faces (as a nest child): the same data on south and
+    # north, radiating where the flow leaves. The global volume balance
+    # (west in = east + south + north out) closes to round-off, and the
+    # projection keeps the field solenoidal.
+    cl = half_channel_case(; N = N, extent = (2.0, 1.0), noise = 0.5, lateral = :open,
+                           inflow = ProfileBoundaryData(u = prof, v = 0.0, w = 0.0, θ = 0.0))
+    sl = cl.sim
+    @test sl.bcs.south isa Aeolus.BoundaryConditions.OpenBoundary
+    @test sl.bcs.north isa Aeolus.BoundaryConditions.OpenBoundary
+    for _ in 1:40
+        advance_channel!(cl, channel_dt(cl))
+    end
+    Hx, Hy, Hz, Nx, Ny, Nz = g.Hx, g.Hy, g.Hz, g.Nx, g.Ny, g.Nz
+    kk = Hz+1:Hz+Nz
+    Qw = sum(sl.u.data[Hx+1, Hy+1:Hy+Ny, kk]) * g.dy * g.dz
+    Qe = sum(sl.u.data[Hx+Nx+1, Hy+1:Hy+Ny, kk]) * g.dy * g.dz
+    Qs = sum(sl.v.data[Hx+1:Hx+Nx, Hy+1, kk]) * g.dx * g.dz
+    Qn = sum(sl.v.data[Hx+1:Hx+Nx, Hy+Ny+1, kk]) * g.dx * g.dz
+    divl = Aeolus.Simulations.max_divergence(sl)
+    @printf("  open-x, open-y half channel, 40 steps: max|∇·u| = %.2e, (Q_w + Q_s - Q_e - Q_n)/Q_w = %.2e, Q_n/Q_w = %.2e\n",
+            divl, (Qw + Qs - Qe - Qn) / Qw, Qn / Qw)
+    @test divl < 1e-10
+    @test abs(Qw + Qs - Qe - Qn) / Qw < 1e-12
+    @test all(isfinite, interior_view(sl.u))
+    @test_throws ArgumentError half_channel_case(; N = N, lateral = :open)
+    @test_throws ArgumentError half_channel_case(; N = N, lateral = :closed,
+                                                 inflow = ProfileBoundaryData(u = prof, θ = 0.0))
     @test_throws ArgumentError half_channel_case(; N = N, inflow = :profile)
     @test_throws ArgumentError half_channel_case(; N = N, extent = (1.0,))
     @test_throws ArgumentError half_channel_case(; N = N, surface_heat_flux = -0.01,

@@ -15,13 +15,19 @@
 # `Operators.total_stress_profile` (with its `irange`).
 
 """
-    FetchStatistics(sim) -> fs
+    FetchStatistics(sim; jrange = nothing) -> fs
 
 Running span- and time-averaged moments of the resolved velocity of `sim`
 (a simulation with `u, v, w` on a `RegularGrid`) per streamwise column
 ``i`` and level ``k``, for a flow that is homogeneous in ``y`` and in time
 but develops in ``x`` (an inflow–outflow domain). Add samples with
 [`accumulate_fetch!`](@ref), read them with [`fetch_profiles`](@ref).
+
+`jrange` (default: all of `1:Ny`) restricts the span average to the
+cells `j ∈ jrange` (and their y-faces, the two end faces at half
+weight), e.g. the centre of a domain whose open lateral faces carry the
+mean profile only, so that the side layers they leave do not enter the
+fetch.
 
 The **variances are taken at each staggered component's own points**, as
 `Operators.resolved_tke_profile` and [`ParentResolvedStatistics`](@ref)
@@ -43,37 +49,48 @@ comparison.
 """
 mutable struct FetchStatistics{G}
     mesh::G
-    yper::Bool                       # y periodic: face Ny + 1 is face 1
+    jr::UnitRange{Int}               # the y cells averaged over
+    jf::UnitRange{Int}               # the y faces of those cells (storage-free indices)
+    vhalf::Bool                      # the end faces of jf count half (a bounded y range)
     W::Float64                       # Σ time weights
     nsamples::Int
-    Suf::Array{Float64,3}            # (Nx+1) × Ny × Nz: Σ u per x-face point
+    Suf::Array{Float64,3}            # (Nx+1) × ny × Nz: Σ u per x-face point
     Suu::Matrix{Float64}             # (Nx+1) × Nz:      Σ_j u²
     Svf::Array{Float64,3}            # Nx × nyf × Nz:    Σ v per y-face point
     Svv::Matrix{Float64}             # Nx × Nz:          Σ_faces wgt v²
-    Swf::Array{Float64,3}            # Nx × Ny × (Nz+1): Σ w per z-face point
+    Swf::Array{Float64,3}            # Nx × ny × (Nz+1): Σ w per z-face point
     Sww::Matrix{Float64}             # Nx × (Nz+1):      Σ_j w²
-    Sucp::Array{Float64,3}           # Nx × Ny × Nz:     Σ centre u, w per point
+    Sucp::Array{Float64,3}           # Nx × ny × Nz:     Σ centre u, w per point
     Swcp::Array{Float64,3}
     Suwc::Matrix{Float64}            # Nx × Nz:          Σ_j centre u w
 end
 
-function FetchStatistics(sim)
+function FetchStatistics(sim; jrange = nothing)
     g = mesh(sim.u)
     g isa RegularGrid || throw(ArgumentError("FetchStatistics: the simulation must be on a RegularGrid"))
     Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
     yper = sim.bcs.south isa Periodic
-    nyf = yper ? Ny : Ny + 1
-    return FetchStatistics(g, yper, 0.0, 0,
-                           zeros(Nx + 1, Ny, Nz), zeros(Nx + 1, Nz),
+    jr = jrange === nothing ? (1:Ny) : UnitRange{Int}(jrange)
+    (!isempty(jr) && first(jr) >= 1 && last(jr) <= Ny) ||
+        throw(ArgumentError("FetchStatistics: jrange must lie in 1:$Ny, got $jrange"))
+    # the whole span of a periodic y: face Ny + 1 is face 1, every face
+    # counts once; otherwise the cells' faces first(jr) … last(jr)+1, the
+    # two end faces shared with the cells outside the range (or the
+    # boundary) counting half
+    full = yper && jr == 1:Ny
+    jf = full ? (1:Ny) : (first(jr):last(jr)+1)
+    ny, nyf = length(jr), length(jf)
+    return FetchStatistics(g, jr, jf, !full, 0.0, 0,
+                           zeros(Nx + 1, ny, Nz), zeros(Nx + 1, Nz),
                            zeros(Nx, nyf, Nz), zeros(Nx, Nz),
-                           zeros(Nx, Ny, Nz + 1), zeros(Nx, Nz + 1),
-                           zeros(Nx, Ny, Nz), zeros(Nx, Ny, Nz), zeros(Nx, Nz))
+                           zeros(Nx, ny, Nz + 1), zeros(Nx, Nz + 1),
+                           zeros(Nx, ny, Nz), zeros(Nx, ny, Nz), zeros(Nx, Nz))
 end
 
-# y-face weights of a column: each cell averages its two faces, so an end
-# face of a non-periodic y range counts half
-_yface_weight(fs::FetchStatistics, jf) =
-    (!fs.yper && (jf == 1 || jf == fs.mesh.Ny + 1)) ? 0.5 : 1.0
+# y-face weights of a column (n: the position in fs.jf): each cell
+# averages its two faces, so an end face of a bounded y range counts half
+_yface_weight(fs::FetchStatistics, n) =
+    (fs.vhalf && (n == 1 || n == length(fs.jf))) ? 0.5 : 1.0
 
 Base.show(io::IO, fs::FetchStatistics) =
     print(io, "FetchStatistics(", fs.mesh.Nx, " × ", fs.mesh.Nz, " columns, ", fs.nsamples,
@@ -99,31 +116,31 @@ function accumulate_fetch!(fs::FetchStatistics, sim, Δt::Real = 1.0)
     a = Float64(Δt)
     @inbounds for k in 1:Nz
         K = Hz + k
-        for j in 1:Ny
+        for (jj, j) in enumerate(fs.jr)
             J = Hy + j
             for i in 1:Nx+1
                 x = u[Hx+i, J, K]
-                fs.Suf[i, j, k] += a * x
+                fs.Suf[i, jj, k] += a * x
                 fs.Suu[i, k] += a * x^2
             end
             for i in 1:Nx
                 I = Hx + i
                 uc = (u[I, J, K] + u[I+1, J, K]) / 2
                 wc = (w[I, J, K] + w[I, J, K+1]) / 2
-                fs.Sucp[i, j, k] += a * uc
-                fs.Swcp[i, j, k] += a * wc
+                fs.Sucp[i, jj, k] += a * uc
+                fs.Swcp[i, jj, k] += a * wc
                 fs.Suwc[i, k] += a * uc * wc
             end
         end
-        for jf in axes(fs.Svf, 2), i in 1:Nx
+        for (n, jf) in enumerate(fs.jf), i in 1:Nx
             x = v[Hx+i, Hy+jf, K]
-            fs.Svf[i, jf, k] += a * x
-            fs.Svv[i, k] += a * _yface_weight(fs, jf) * x^2
+            fs.Svf[i, n, k] += a * x
+            fs.Svv[i, k] += a * _yface_weight(fs, n) * x^2
         end
     end
-    @inbounds for kf in 1:Nz+1, j in 1:Ny, i in 1:Nx
+    @inbounds for kf in 1:Nz+1, (jj, j) in enumerate(fs.jr), i in 1:Nx
         x = w[Hx+i, Hy+j, Hz+kf]
-        fs.Swf[i, j, kf] += a * x
+        fs.Swf[i, jj, kf] += a * x
         fs.Sww[i, kf] += a * x^2
     end
     fs.W += a
@@ -152,7 +169,8 @@ then averaged over ``y``; see [`FetchStatistics`](@ref).
 function fetch_profiles(fs::FetchStatistics)
     fs.W > 0 || throw(ArgumentError("fetch_profiles: no samples"))
     g = fs.mesh
-    Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
+    Nx, Nz = g.Nx, g.Nz
+    Ny = length(fs.jr)
     W = fs.W
     # u: variance per x-face, about each point's time mean, averaged over y
     uf = zeros(Nx + 1, Nz)
