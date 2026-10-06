@@ -10,6 +10,11 @@
 *Resolved turbulence, high-fidelity radiation and exact moist thermodynamics —
 with one non-standard-library dependency.*
 
+[![CI](https://github.com/badulion/Aeolus.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/badulion/Aeolus.jl/actions/workflows/CI.yml?query=branch%3Amaster)
+[![Documentation](https://github.com/badulion/Aeolus.jl/actions/workflows/Documenter.yml/badge.svg?branch=master)](https://github.com/badulion/Aeolus.jl/actions/workflows/Documenter.yml?query=branch%3Amaster)
+[![docs: stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://badulion.github.io/Aeolus.jl/stable/)
+[![docs: dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://badulion.github.io/Aeolus.jl/dev/)
+
 <img src="assets/hero.png" alt="Aeolus.jl — Alexanderplatz, Berlin" width="760">
 
 <sub><b>Alexanderplatz, Berlin, 13:30 local, sun 50° above the horizon.</b>
@@ -311,8 +316,12 @@ see [the Berlin case](docs/src/design/berlin_case.md).
 
 ## Documentation
 
+Online: [stable](https://badulion.github.io/Aeolus.jl/stable/) (latest
+release) · [dev](https://badulion.github.io/Aeolus.jl/dev/) (`master`),
+deployed by the `Documentation` workflow.
+
 ```bash
-julia --project=docs docs/make.jl     # build locally
+julia --project=docs docs/make.jl     # build locally (never deploys)
 ```
 
 - **Theory** — Boussinesq equations, LES filtering and closure, staggered
