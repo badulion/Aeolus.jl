@@ -508,7 +508,7 @@ end
     @test nest_scalar_names(st[1]) == [:θ, :qv]
     @test st[1].measure.kind === :mass
     θ0 = composite_integral(pA, cA, nest, :theta; state=st[1])
-    step_nested!(pA, cA, nest, 1.0; state=st)
+    step_nested!(pA, cA, nest, 1.0; state=st, feedback=TwoWayFeedback(buffer=0))
     ii, jj, kk = interior(cm)
     hq = [qc.data[i, j, k] for i in axes(qc.data, 1), j in jj, k in kk if !(i in ii)]
     @test maximum(abs, hq .- 0.008) < 1e-15

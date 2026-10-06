@@ -471,6 +471,27 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     # halo fill below writes the corrected normal velocity into u*.
     update_open_boundaries!(sim, t_bc, Δt)
 
+    # 8.–10. Chorin projection of the predicted velocity.
+    _project_velocity!(sim)
+
+    # 11. Advance θ (no projection needed for scalar).
+    _axpy_interior!(sim.θ, Δt, sim.tθ, sim.mesh)
+    sim.has_moisture && _axpy_interior!(sim.qv, Δt, sim.tqv, sim.mesh)
+
+    # 12. Recover physical pressure and advance clock.
+    ii, jj, kk = interior(sim.mesh)
+    @inbounds @views sim.p.data[ii, jj, kk] .= sim.φ.data[ii, jj, kk] ./ Δt
+    sim.t += Δt
+
+    return sim
+end
+
+# Steps 8–10 of the fractional step: the divergence of the velocity, the
+# Poisson solve ∇²φ = ∇·u, the correction u ← u − ∇φ. `sim.φ` holds the
+# potential afterwards; `sim.p` is not touched. Shared by step!/step_rk3!,
+# the per-stage projection of the IMEX steppers and the re-projection of a
+# two-way nest parent after the feedback (N-nest-e, #263).
+function _project_velocity!(sim::BoussinesqSimulation{T}) where {T}
     # 8. Divergence of predicted velocity.
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
@@ -487,16 +508,6 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     _axpy_interior!(sim.u, -one(T), sim.dφdx, sim.mesh)
     _axpy_interior!(sim.v, -one(T), sim.dφdy, sim.mesh)
     _axpy_interior!(sim.w, -one(T), sim.dφdz, sim.mesh)
-
-    # 11. Advance θ (no projection needed for scalar).
-    _axpy_interior!(sim.θ, Δt, sim.tθ, sim.mesh)
-    sim.has_moisture && _axpy_interior!(sim.qv, Δt, sim.tqv, sim.mesh)
-
-    # 12. Recover physical pressure and advance clock.
-    ii, jj, kk = interior(sim.mesh)
-    @inbounds @views sim.p.data[ii, jj, kk] .= sim.φ.data[ii, jj, kk] ./ Δt
-    sim.t += Δt
-
     return sim
 end
 

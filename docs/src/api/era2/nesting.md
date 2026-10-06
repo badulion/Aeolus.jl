@@ -9,14 +9,19 @@ time coupling: [`NestedRun`](@ref), the per-domain
 [`domain_advance`](@ref) closures, [`boundary_time`](@ref) and
 [`step_nested!`](@ref), and the child's boundary conditions:
 [`nest_bcs`](@ref) (`OpenBoundary` nest faces) fed by
-[`NestBoundaryData`](@ref). The parent may be z-stretched
+[`NestBoundaryData`](@ref), and the two-way feedback:
+[`TwoWayFeedback`](@ref) (anterpolation with buffer zone, canopy
+restriction, inflow exclusion and relaxation, scalar refluxing from
+[`NestFluxRegisters`](@ref), re-projection), [`anterpolate!`](@ref),
+[`feedback_mask`](@ref) and [`two_way_feedback!`](@ref). The parent may be z-stretched
 (`StretchedGrid`), the operators may run in the reference-mass measure of
 a sound-proof pair ([`NestMeasure`](@ref), [`nest_measure`](@ref)), and
 restriction may be solid-aware ([`nest_fluid_mask`](@ref)). The block-structured AMR of
 [`Aeolus.AdaptiveMesh`](adaptive_mesh.md) builds on these operators.
 The theory is on the [nesting theory page](../../theory/nesting.md), the
-[nested time-coupling page](../../theory/nesting_time.md) and the
-[nested boundary-conditions page](../../theory/nesting_boundaries.md).
+[nested time-coupling page](../../theory/nesting_time.md), the
+[nested boundary-conditions page](../../theory/nesting_boundaries.md) and the
+[two-way nesting page](../../theory/nesting_twoway.md).
 
 ```@autodocs
 Modules = [Aeolus.Nesting]

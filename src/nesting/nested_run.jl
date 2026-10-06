@@ -1,7 +1,6 @@
 # Nesting: the time coupling of a parent and a child (N-nest-c, #257).
+# (DomainAdvance, the per-domain advance closure, is in domain_advance.jl.)
 #
-#   * DomainAdvance — a per-domain `advance!(sim, dt)` closure carrying the
-#     domain's hooks and keywords, calling any dynamical core by dispatch;
 #   * NestedRun     — parent + child + NestedGrid + boundary buffers +
 #     schedule (subcycling under adaptive steppers, or a shared minimum
 #     dt) + feedback (one-way / two-way) + statistics. The child's nest
@@ -10,91 +9,6 @@
 #   * step_nested!  — one parent step of a NestedRun; the positional
 #     method is the historical fixed-dt two-way entry point, now a thin
 #     wrapper over a NestedRun.
-
-# =========================================================================
-# Per-domain advance closures
-# =========================================================================
-
-"""
-    DomainAdvance
-
-A per-domain `advance!(sim, dt)` closure built by [`domain_advance`](@ref):
-a dynamical core plus the hooks and keywords that domain's steps must
-carry (`body_force!`, `post_predictor!`, `momentum_advection`, `sgs`,
-`sgs_stress`, …). Calling it, `adv(sim, dt)`, runs
-`core(sim, dt, args...; kwargs...)`. A caller may pass an extra
-`post_predictor!` hook, `adv(sim, dt; post_predictor! = f)`, which is
-chained *after* the domain's own.
-"""
-struct DomainAdvance{F, A<:Tuple, K<:NamedTuple}
-    core::F
-    args::A
-    kwargs::K
-end
-
-"""
-    domain_advance(core = step!, args...; kwargs...) -> DomainAdvance
-
-Bundle a dynamical core with the hooks and keywords of one domain. The
-core is called through dispatch, so no step logic is copied:
-
-| `core`, `args`                  | step taken                                             |
-| :------------------------------ | :----------------------------------------------------- |
-| `step!` (default)               | Boussinesq projection step, or the anelastic / pseudo-incompressible step of a `MassWeightedSimulation` |
-| `step_rk3!`                     | SSP-RK3 Boussinesq step                                |
-| `step_imex!, ARK2()`            | IMEX ARS(2,2,2) step (or `Rosenbrock2()`)              |
-| any `f(sim, dt, args...; kw...)`| a user core |
-
-```julia
-child_adv = domain_advance(step_rk3!; body_force! = ibm_force!,
-                           post_predictor! = wall_stress!, sgs = AMDClosure())
-```
-
-The keywords are forwarded verbatim. `sgs` (or `eddy_viscosity!`) and
-`sgs_stress` are also what the run's [`adaptive_dt`](@ref) pick for this
-domain uses, and a prognostic SGS closure's memory is rolled back with
-the state when a step is rejected.
-"""
-domain_advance(core = step!, args...; kwargs...) =
-    DomainAdvance(core, args, NamedTuple(kwargs))
-
-function (a::DomainAdvance)(sim, dt; post_predictor! = nothing)
-    if post_predictor! === nothing
-        a.core(sim, dt, a.args...; a.kwargs...)
-    else
-        user = get(a.kwargs, :post_predictor!, nothing)
-        pp = user === nothing ? post_predictor! :
-             (s, h) -> (user(s, h); post_predictor!(s, h))
-        a.core(sim, dt, a.args...;
-               merge(a.kwargs, NamedTuple{(:post_predictor!,)}((pp,)))...)
-    end
-    return sim
-end
-
-_imex_scheme(a::DomainAdvance{typeof(step_imex!)}) = a.args[1]
-_imex_scheme(::DomainAdvance) = nothing
-
-_domain_sgs(a::DomainAdvance) = get(a.kwargs, :sgs, get(a.kwargs, :eddy_viscosity!, nothing))
-
-"""
-    stage_times(adv::DomainAdvance) -> NTuple
-
-The times, as fractions `cᵢ` of the step `Δt`, at which `adv`'s core
-evaluates its tendencies, i.e. the times at which it reads the boundary
-data in the halos: `(0,)` for the projection step (`step!`, Boussinesq or
-sound-proof) and for a user core, `(0, 1, 1/2)` for SSP-RK3
-(Shu & Osher 1988), `(0, γ)` for ARK2 and `(0, a₂₁)` for Rosenbrock2.
-The cores' own open-boundary refresh (`update_open_boundaries!` at each
-projected stage's end time; for SSP-RK3 the boundary buffers are combined
-with the fields' weights) puts the time-blended parent data
-`B(t₀ + cᵢΔt)` in the child's halos at exactly these times.
-"""
-stage_times(a::DomainAdvance) = _stage_times(a.core, a.args)
-_stage_times(core, args) = (0.0,)
-_stage_times(::typeof(step_rk3!), args) = (0.0, 1.0, 0.5)
-_stage_times(::typeof(step_imex!), args) = _imex_stage_times(args[1])
-_imex_stage_times(s::ARK2) = (0.0, Float64(s.γ))
-_imex_stage_times(s::Rosenbrock2) = (0.0, Float64(s.a21))
 
 # =========================================================================
 # NestedRun
@@ -160,10 +74,13 @@ Keywords:
     step and the child subcycles to land exactly on its end;
     `:shared_min_dt`: both domains take one step of the smaller of the two
     limits (PALM's scheme, Hellsten et al. 2021, §3.1);
-  * `feedback` — `:one_way` (default; the parent never sees the child) or
-    `:two_way` (conservative restriction of the child field set onto the
-    parent, then the interface flux correction, as in
-    Berger & Colella 1989);
+  * `feedback` — `:one_way` (default; the parent never sees the child),
+    `:two_way` (the default [`TwoWayFeedback`](@ref)) or a
+    `TwoWayFeedback(…)`: anterpolation of the child field set onto the
+    covered parent cells outside a buffer zone, an optional relaxation,
+    canopy restriction and inflow exclusion, the interface flux
+    correction on the open faces, Berger–Colella scalar refluxing from
+    flux registers and the re-projection of the parent (N-nest-e, #263);
   * `order` (3), `flux_correction` (true), `scalars`, `state` — as for
     the operators of [`NestInterpState`](@ref);
   * `sponge` (`nothing`, the default, as in Kadasch et al. 2021 §2.2–2.3
@@ -246,6 +163,8 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     sub_t0::Float64                # start and length of the current child substep
     sub_h::Float64
     stats::NestRunStats
+    twoway::Union{Nothing,TwoWayFeedback}
+    regs::Union{Nothing,NestFluxRegisters}
 end
 
 function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
@@ -254,7 +173,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                    cfl_parent = CFLConstraints(),
                    cfl_child = cfl_parent,
                    sync::Symbol = :subcycle,
-                   feedback::Symbol = :one_way,
+                   feedback::Union{Symbol,TwoWayFeedback} = :one_way,
                    order::Int = 3,
                    sponge::Union{Nothing,NestSponge} = nothing,
                    solid = nothing,
@@ -269,8 +188,12 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                    reuse_boundary::Bool = true,
                    record::Bool = true,
                    check_clocks::Bool = true)
-    feedback in (:one_way, :two_way) ||
-        error("NestedRun: feedback must be :one_way or :two_way, got :$feedback")
+    twoway = feedback isa TwoWayFeedback ? feedback :
+             feedback === :two_way ? TwoWayFeedback() :
+             feedback === :one_way ? nothing :
+             error("NestedRun: feedback must be :one_way, :two_way or a TwoWayFeedback, " *
+                   "got :$feedback")
+    feedback = twoway === nothing ? :one_way : :two_way
     sync in (:subcycle, :shared_min_dt) ||
         error("NestedRun: sync must be :subcycle or :shared_min_dt, got :$sync")
     feedback === :two_way && !_same_core(parent, child) &&
@@ -306,7 +229,10 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                     flux_correction, ns, Int(max_retries),
                     Float64(divergence_tol), Float64(max_velocity), validate,
                     reuse_boundary, record, solid, check_clocks, t, t, 0.0, NaN, nothing, nothing,
-                    Float64(child.t), 0.0, NestRunStats())
+                    Float64(child.t), 0.0, NestRunStats(), twoway,
+                    twoway !== nothing && twoway.reflux ?
+                        NestFluxRegisters(nest, parent, child, s_bc, twoway,
+                                          advance_parent, advance_child) : nothing)
     return run
 end
 
@@ -397,9 +323,9 @@ function _accept(run::NestedRun, sim, which::Symbol)
     return true
 end
 
-function _try_advance!(adv::DomainAdvance, sim, h)
+function _try_advance!(adv::DomainAdvance, sim, h, bf = nothing)
     try
-        adv(sim, h)
+        adv(sim, h; body_force! = bf)
         return true
     catch err
         err isa InterruptException && rethrow()
@@ -450,7 +376,10 @@ Advance `run` by one parent step:
     child substep rolls back **only the child** (its `StateSnapshot`, its
     bound scalars and its SGS memory); the rejected piece is redone at
     half its size and the remaining time is re-divided;
- 6. two-way: conservative restriction and interface flux correction.
+ 6. two-way: the feedback of the run's [`TwoWayFeedback`](@ref)
+    ([`two_way_feedback!`](@ref)): anterpolation, interface flux
+    correction, scalar refluxing from the flux registers booked at every
+    stage of the parent step and the child substeps, re-projection.
 
 The child clock is set to the parent's at the end (the discrepancy it
 had is recorded in `run.stats.max_clock_error`).
@@ -503,6 +432,13 @@ function step_nested!(run::NestedRun; dt = nothing)
     run.t0 = Float64(c.t)
     run.Δt = t_end - t_p
     _set_window!(run)
+    # Two-way: the feedback changed the parent after the previous window's
+    # end data, so the child's boundary-normal faces just jumped to the new
+    # B(t₀). Project the child onto them, or its first stage starts
+    # divergent near the open faces (and SSP-RK3, which combines that start
+    # state into the step's result, keeps a third of it: ∇·u grew to 5e-9
+    # in 200 steps of the vortex harness).
+    two_way && _reproject!(c)
 
     # --- 5. child substeps --------------------------------------------------
     tw = time_ns()
@@ -512,7 +448,7 @@ function step_nested!(run::NestedRun; dt = nothing)
     # --- 6. feedback ---------------------------------------------------------
     if two_way
         tw = time_ns()
-        _two_way_feedback!(run)
+        two_way_feedback!(run)
         if run.record
             I1 = _composite_scalars(p, c, nest, run.s_bc)
             for (k, v0) in I0
@@ -533,14 +469,29 @@ function step_nested!(run::NestedRun; dt = nothing)
     return run
 end
 
+# The flux-register hook of a domain (nothing without refluxing), and the
+# begin / commit of one attempted step.
+_hook(run::NestedRun, which::Symbol) =
+    run.regs === nothing ? nothing : _RegisterHook(run.regs, run.nest, which)
+_begin!(run::NestedRun, which) = run.regs === nothing || _begin_attempt!(run.regs, which)
+_commit!(run::NestedRun, which) = run.regs === nothing || _commit_attempt!(run.regs, which)
+
 function _advance_parent!(run::NestedRun, Δt::Float64)
     p = run.parent; adv = run.advance_parent
-    run.validate || (adv(p, Δt); return Δt)
+    hook = _hook(run, :parent)
+    if !run.validate
+        _begin!(run, :parent); adv(p, Δt; body_force! = hook); _commit!(run, :parent)
+        return Δt
+    end
     rb = _save!(run, p, adv, :parent)
     dt_min = run.cfl_parent === nothing ? 0.0 : Float64(run.cfl_parent.dt_min)
     tries = 0
     while true
-        _try_advance!(adv, p, Δt) && _accept(run, p, :parent) && return Δt
+        _begin!(run, :parent)
+        if _try_advance!(adv, p, Δt, hook) && _accept(run, p, :parent)
+            _commit!(run, :parent)
+            return Δt
+        end
         _restore!(run, p, rb, :parent)
         tries += 1
         run.stats.parent_retries += 1
@@ -554,6 +505,7 @@ end
 
 function _subcycle_child!(run::NestedRun, t_end::Float64)
     c = run.child; adv = run.advance_child; st = run.stats
+    hook = _hook(run, :child)
     adaptive = run.sync === :subcycle && run.cfl_child !== nothing
     R = t_end - c.t
     n_rem = run.sync === :shared_min_dt ? 1 :
@@ -574,11 +526,13 @@ function _subcycle_child!(run::NestedRun, t_end::Float64)
 
         rb = run.validate ? _save!(run, c, adv, :child) : nothing
         run.sub_t0 = Float64(c.t); run.sub_h = h
+        _begin!(run, :child)
         ok = if run.validate
-            _try_advance!(adv, c, h) && _accept(run, c, :child)
+            _try_advance!(adv, c, h, hook) && _accept(run, c, :child)
         else
-            adv(c, h); true
+            adv(c, h; body_force! = hook); true
         end
+        ok && _commit!(run, :child)
         if !ok
             _restore!(run, c, rb, :child)
             tries += 1
@@ -614,23 +568,85 @@ function _subcycle_child!(run::NestedRun, t_end::Float64)
     return run
 end
 
-function _two_way_feedback!(run::NestedRun)
+"""
+    two_way_feedback!(run::NestedRun) -> run
+
+Apply the child → parent feedback of a two-way run now (what
+[`step_nested!`](@ref)`(run)` does once per parent step, after the child
+substeps), as configured by the run's [`TwoWayFeedback`](@ref):
+
+ 1. [`anterpolate!`](@ref) the field set onto the cells of
+    [`feedback_mask`](@ref)`(run)`, relaxed with `α = min(1, Δt_p/τ)`
+    (`Δt_p` the last parent step) and solid-aware with the run's `solid`;
+ 2. correct the parent's velocity on the interface planes of the child's
+    open faces to the child's flux (`flux_correction`);
+ 3. reflux `θ`, `qv` and the declared tracers from the flux registers
+    booked since the last feedback, and clear them. What is refluxed is
+    the flux of `ϕ − ϕ_ref`, `ϕ_ref` the parent's mean of `ϕ` over the
+    covered cells (one constant per scalar): the two grids are each
+    volume-conserving, but their time-integrated volume fluxes through a
+    face patch differ (the child's boundary velocity is interpolated in
+    time, the parent's is its stage velocity), and the flux of `ϕ` itself
+    would book `ϕ ×` that volume mismatch — for `θ ≈ 300 K` a spurious
+    heating of the cells outside the nest by up to kelvins per step. The
+    volume mismatches of the patches sum to zero over the closed interface
+    (both velocity fields are divergence-free), so the total correction,
+    and with it the exact conservation of the composite `∫ϕ dV`, is the
+    same for every `ϕ_ref`;
+ 4. re-project the parent.
+
+The interface mass-flux imbalance is written to the ledger before the
+flux correction (`:mass_before_correction`), after it (`:mass`, round-off)
+and after the re-projection (`:mass_after_projection`: the projection
+moves the parent's interface faces too, by the divergence that the
+anterpolation next to the buffer zone and the flux correction left in the
+parent; the next step's child boundary data take the projected parent).
+"""
+function two_way_feedback!(run::NestedRun)
+    fb = run.twoway
+    fb === nothing && error("two_way_feedback!: the run is one-way")
     p = run.parent; c = run.child; nest = run.nest
-    restrict_state_to_parent!(p, c, nest, run.s_bc; solid=run.solid)
     meas = run.s_bc.measure
+    α = fb.τ === nothing ? 1.0 : min(1.0, run.Δt / fb.τ)
+    # the reference value of each refluxed scalar (volume-consistent refluxing)
+    refs = run.regs === nothing ? Float64[] : [_covered_mean(f, nest) for f in run.regs.pfield]
+    anterpolate!(p, c, nest, run.s_bc; mask = feedback_mask(run), α, solid = run.solid)
+    sides = nest_open_sides(c)
     e_before = _interface_imbalance(p, c, nest, meas)
     if run.flux_correction
         for (pu, cu) in ((p.u, c.u), (p.v, c.v), (p.w, c.w))
-            apply_flux_correction!(pu, compute_nest_flux_mismatch(pu, cu, nest; measure=meas),
-                                   nest; measure=meas)
+            mm = _only_sides(compute_nest_flux_mismatch(pu, cu, nest; measure = meas), sides)
+            apply_flux_correction!(pu, mm, nest; measure = meas)
         end
     end
+    if run.regs !== nothing
+        r = run.regs
+        for n in eachindex(r.names)
+            apply_flux_correction!(r.pfield[n], _register_mismatch(r, n, nest, refs[n]),
+                                   nest; measure = meas)
+        end
+        _clear_registers!(r)
+    end
+    e_after = _interface_imbalance(p, c, nest, meas)
+    fb.reproject && _reproject!(p)
     if run.record
-        nest.ledger[:mass] = _interface_imbalance(p, c, nest, meas)
+        nest.ledger[:mass] = e_after
         nest.ledger[:mass_before_correction] = e_before
+        nest.ledger[:mass_after_projection] =
+            fb.reproject ? _interface_imbalance(p, c, nest, meas) : e_after
     end
     return run
 end
+
+# The parent's mean of a cell-centred field over the covered cells.
+function _covered_mean(f::Field, nest::NestedGrid)
+    cx, cy, cz = nest_covered_range(nest)
+    v = view(interior_view(f), cx, cy, cz)
+    return sum(v) / length(v)
+end
+
+feedback_mask(run::NestedRun) = run.twoway === nothing ?
+    error("feedback_mask: the run is one-way") : feedback_mask(run.nest, run.twoway, run.child)
 
 # =========================================================================
 # The historical fixed-dt entry point
@@ -639,7 +655,8 @@ end
 """
     step_nested!(parent_sim, child_sim, nest, dt; substeps=nothing, order=3,
                  flux_correction=true, sponge=nothing, solid=nothing,
-                 scalars=(), state=nothing, record=true)
+                 scalars=(), state=nothing, record=true,
+                 feedback=TwoWayFeedback())
 
 One **two-way** parent step of fixed size `dt` plus `substeps` equal
 child steps (default `max(rx,ry,rz)`, which keeps the child CFL equal to
@@ -654,9 +671,9 @@ are moist, and the extra cell-centred `scalars`
 (`:co2 => (child_field, parent_field)`, …); see [`NestInterpState`](@ref).
 The child's open faces ([`nest_bcs`](@ref)) hold the parent state
 linearly interpolated in time to the child's stage times; after the child substeps the child field set is
-conservatively restricted onto the parent
-([`restrict_state_to_parent!`](@ref)) and the interface flux mismatch is
-corrected. Conservation diagnostics for `:mass`, `:momentum_x` and every
+fed back onto the parent with `feedback` (a [`TwoWayFeedback`](@ref):
+anterpolation outside the buffer zone, interface flux correction,
+scalar refluxing, re-projection). Conservation diagnostics for `:mass`, `:momentum_x` and every
 scalar of the set are recorded in `nest.ledger`; read them with
 [`nest_conservation_error`](@ref). Returns `(parent_sim, child_sim)`.
 
@@ -680,9 +697,10 @@ function step_nested!(psim::_NestSim, csim::_NestSim, nest::NestedGrid, dt::Real
                       solid=nothing,
                       scalars=(),
                       state=nothing,
-                      record::Bool=true)
+                      record::Bool=true,
+                      feedback::TwoWayFeedback=TwoWayFeedback())
     run = NestedRun(psim, csim, nest; cfl_parent=nothing, cfl_child=nothing,
-                    substeps, feedback=:two_way, order, flux_correction, sponge,
+                    substeps, feedback, order, flux_correction, sponge,
                     solid, scalars, state, record, validate=false,
                     check_clocks=false)
     step_nested!(run; dt)

@@ -1541,6 +1541,34 @@ Generic entry point — dispatches to [`step_anelastic!`](@ref) or
 step!(sim::MassWeightedSimulation, dt::Real; kwargs...) =
     _step_mass_weighted!(sim, dt; kwargs...)
 
+# Steps 8–10 of the sound-proof fractional step: the weighted divergence of
+# the velocity, the variable-coefficient Poisson solve ∇·(W∇φ) = ∇·(Wu), and
+# the correction u ← u − ∇φ. `sim.φ` holds the potential afterwards; `sim.p`
+# is not touched. Also the re-projection of a two-way nest parent after the
+# feedback (N-nest-e, #263).
+function _project_mass_weighted!(sim::MassWeightedSimulation{S,T},
+                                 Wc = _weight_c(sim.weighting, sim.ref),
+                                 Wf = _weight_f(sim.weighting, sim.ref)) where {S,T}
+    m = sim.mesh
+    # 8. weighted divergence of the predicted velocity
+    fill_halos!(sim.u, sim.bcs)
+    fill_halos!(sim.v, sim.bcs)
+    fill_halos!(sim.w, sim.bcs)
+    weighted_divergence!(sim.div_buf, sim.u, sim.v, sim.w, Wc, Wf, m; normalize = false)
+
+    # 9. variable-coefficient Poisson solve: ∇·(W∇φ) = ∇·(W u*)
+    solve!(sim.φ, sim.div_buf, sim.solver)
+
+    # 10. correction u = u* − ∇φ
+    fill_halos!(sim.φ, sim.bcs)
+    ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
+    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
+    _axpy_interior!(sim.u, -one(T), sim.dφdx, m)
+    _axpy_interior!(sim.v, -one(T), sim.dφdy, m)
+    _axpy_interior!(sim.w, -one(T), sim.dφdz, m)
+    return sim
+end
+
 function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
                               body_force!::Union{Nothing,Function} = nothing,
                               post_predictor!::Union{Nothing,Function} = nothing,
@@ -1607,22 +1635,8 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     #     W-weighted mass-flux correction, written into u* by the fill below
     update_open_boundaries!(sim, sim.t + Δt, Δt)
 
-    # 8. weighted divergence of the predicted velocity
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
-    weighted_divergence!(sim.div_buf, sim.u, sim.v, sim.w, Wc, Wf, m; normalize = false)
-
-    # 9. variable-coefficient Poisson solve: ∇·(W∇φ) = ∇·(W u*)
-    solve!(sim.φ, sim.div_buf, sim.solver)
-
-    # 10. correction u = u* − ∇φ
-    fill_halos!(sim.φ, sim.bcs)
-    ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
-    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
-    _axpy_interior!(sim.u, -one(T), sim.dφdx, m)
-    _axpy_interior!(sim.v, -one(T), sim.dφdy, m)
-    _axpy_interior!(sim.w, -one(T), sim.dφdz, m)
+    # 8.–10. weighted projection
+    _project_mass_weighted!(sim, Wc, Wf)
 
     # 11. scalar update
     _axpy_interior!(sim.θ, Δt, sim.tθ, m)

@@ -19,6 +19,7 @@ using ..Operators: StressTensor, add_stress_divergence!, DiffusivityTensor,
                    add_tensor_diffusion_scalar!, bounded_directions, _θv_face_dir,
                    _scalar_bcs
 import ..Operators: add_sgs_momentum!, add_sgs_scalar!, sgs_scalar_tensor,
+                    sgs_scalar_face_diffusivity,
                     sgs_explicit_stress, _fill_sgs_halos!
 using ..AdvectionSchemes: advection_scheme
 
@@ -665,6 +666,7 @@ add_sgs_scalar!(tϕ, ϕ, c::ReynoldsStressClosure, f::SGSFields, sim) =
     add_tensor_diffusion_scalar!(tϕ, ϕ, c.K; bounded = bounded_directions(_scalar_bcs(sim)))
 
 sgs_scalar_tensor(c::ReynoldsStressClosure, f::SGSFields, sim) = c.K
+sgs_scalar_face_diffusivity(::ReynoldsStressClosure, f::SGSFields, sim) = nothing   # a tensor
 
 # ---- the commit ----------------------------------------------------------
 

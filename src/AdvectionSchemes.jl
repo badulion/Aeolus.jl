@@ -73,7 +73,9 @@ export # --- Phase 26: reconstructions -------------------------------------
        # --- Phase 28: conservation diagnostics ----------------------------
        kinetic_energy_budget, scalar_variance_budget, enstrophy,
        # --- N-open-c (#260): advective flux through the open faces --------
-       boundary_scalar_flux
+       boundary_scalar_flux,
+       # --- N-nest-e (#263): the flux through one face ---------------------
+       advective_face_flux
 
 # =========================================================================
 # 1. Smoothness indicators
@@ -1603,6 +1605,39 @@ end
 @inline _wflux(W::AbstractVector, k) = @inbounds W[k]
 
 """
+    advective_face_flux(r, ϕd, veld, ax, i, j, k) -> F
+
+The advective flux `u_n ϕ_f` of a cell-centred scalar through **one**
+face: the face of storage index `(i, j, k)` normal to axis `ax` (`1, 2,
+3` for x, y, z), i.e. the face between the cells `(i-1, j, k)` and
+`(i, j, k)` along `ax`. `veld` is the storage array of the face-normal
+velocity (`u.data`, `v.data` or `w.data`), `ϕd` that of the scalar
+(halos filled), `r` a reconstruction descriptor (`Centered2()` is the
+Boussinesq core's `advect_centered!`; see [`boundary_scalar_flux`](@ref)
+for the scheme names), upwinded on the sign of `u_n`.
+
+This is the face flux every flux-form operator of this module uses, and
+the one source of [`boundary_scalar_flux`](@ref) (its boundary faces)
+and of the two-way nest's flux registers (its interface faces, N-nest-e
+#263).
+"""
+@inline function advective_face_flux(r, ϕd::AbstractArray, veld::AbstractArray,
+                                     ax::Int, i::Int, j::Int, k::Int)
+    @inbounds vel = veld[i, j, k]
+    return vel * _advective_face_value(r, ϕd, vel, ax, i, j, k)
+end
+
+# The face value `ϕ_f` of `advective_face_flux` (upwinded on `vel`), for the
+# callers that also need it on its own (the mass-flux correction share of
+# `boundary_scalar_flux`).
+@inline function _advective_face_value(r, ϕd::AbstractArray, vel, ax::Int,
+                                       i::Int, j::Int, k::Int)
+    ax == 1 && return _face_x(r, ϕd, i - 1, j, k, vel)
+    ax == 2 && return _face_y(r, ϕd, i, j - 1, k, vel)
+    return _face_z(r, ϕd, i, j, k - 1, vel)
+end
+
+"""
     boundary_scalar_flux(sim, ϕ; scheme = :centered, bcs = sim.θ_bcs,
                          weights = nothing, fill = true,
                          diffusivity = nothing, levels = nothing,
@@ -1717,7 +1752,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         @inbounds for k in kk, (b, j) in enumerate(jj)
             w = _wflux(Wc, k) * Ax
             uw = ud[iw, j, k]; ue = ud[ie, j, k]
-            φw = _face_x(r, ϕd, iw - 1, j, k, uw); φe = _face_x(r, ϕd, ie - 1, j, k, ue)
+            φw = _advective_face_value(r, ϕd, uw, 1, iw, j, k)
+            φe = _advective_face_value(r, ϕd, ue, 1, ie, j, k)
             aw = -w * uw * φw; ae = w * ue * φe
             if dW_
                 aw += _wflux(Dc, k) * Ax * (dν + 0.5 * (_κ(Kh, iw, j, k) + _κ(Kh, iw - 1, j, k))) *
@@ -1741,7 +1777,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         @inbounds for k in kk, (a, i) in enumerate(ii)
             w = _wflux(Wc, k) * Ay
             vs = vd[i, js, k]; vn = vd[i, jn, k]
-            φs = _face_y(r, ϕd, i, js - 1, k, vs); φn = _face_y(r, ϕd, i, jn - 1, k, vn)
+            φs = _advective_face_value(r, ϕd, vs, 2, i, js, k)
+            φn = _advective_face_value(r, ϕd, vn, 2, i, jn, k)
             as = -w * vs * φs; an = w * vn * φn
             if dS_
                 as += _wflux(Dc, k) * Ay * (dν + 0.5 * (_κ(Kh, i, js, k) + _κ(Kh, i, js - 1, k))) *
@@ -1766,8 +1803,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         idz = 1 / g.dz
         @inbounds for (b, j) in enumerate(jj), (a, i) in enumerate(ii)
             wb = wd[i, j, kb]; wt = wd[i, j, kt]
-            φt = _face_z(r, ϕd, i, j, kt - 1, wt)
-            ab = -wb_ * wb * _face_z(r, ϕd, i, j, kb - 1, wb)
+            φt = _advective_face_value(r, ϕd, wt, 3, i, j, kt)
+            ab = -wb_ * advective_face_flux(r, ϕd, wd, 3, i, j, kb)
             at = wt_ * wt * φt
             if dT_
                 at -= dt_ * (dν + 0.5 * (_κ(Kv, i, j, kt - 1) + _κ(Kv, i, j, kt))) *
