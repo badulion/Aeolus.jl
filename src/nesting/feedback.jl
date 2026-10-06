@@ -13,8 +13,8 @@
 # All operators come from N-nest-a (#250) / N-nest-b (#256): the restriction
 # is `restrict_to_parent!` (volume- or mass-weighted, solid-aware), the
 # refluxing `apply_flux_correction!`, the face flux of a scalar
-# `AdvectionSchemes.advective_face_flux` and the closures'
-# `sgs_scalar_face_diffusivity`.
+# `AdvectionSchemes.scalar_face_flux` (the kernel of `boundary_scalar_flux`
+# too, #327 M2) and the closures' `sgs_scalar_face_diffusivity`.
 
 const _SIDE_NAMES = (:west, :east, :south, :north, :bottom, :top)
 _side_axis(s::Int) = (s + 1) ÷ 2
@@ -379,22 +379,16 @@ function _face_diffusivity(m::NestScalarFlux, closure, f, sim, ϕ, scratch)
 end
 
 # The total flux density (advective + molecular + SGS, times W) through the
-# face of storage index (i, j, k) normal to `ax`: the face fluxes of
-# advect_centered! / weighted_scalar_advect! (advective_face_flux), of the
-# Laplacian and of add_eddy_diffusion_scalar! (two-point, coefficient
-# averaged linearly to the face).
+# face of storage index (i, j, k) normal to `ax`: the one per-face kernel
+# `AdvectionSchemes.scalar_face_flux` (#327 M2: the same numbers as
+# `boundary_scalar_flux`), with the face diffusivity ν + s·½(K_L + K_R) of
+# the closure's `sgs_scalar_face_diffusivity`.
 @inline function _face_total_flux(rec, ϕd, veld, ax::Int, i::Int, j::Int, k::Int, g,
                                   ν::Float64, K, W)
-    F = advective_face_flux(rec, ϕd, veld, ax, i, j, k)
-    il, jl, kl = ax == 1 ? (i - 1, j, k) : ax == 2 ? (i, j - 1, k) : (i, j, k - 1)
-    @inbounds dϕ = ϕd[i, j, k] - ϕd[il, jl, kl]
-    invd = ax == 1 ? 1 / g.dx : ax == 2 ? 1 / g.dy : 1 / _dzf(g, k)
-    D = ν
-    if K !== nothing
-        Kd = ax == 3 ? K[2].data : K[1].data
-        @inbounds D += K[3] * (0.5 * (Kd[il, jl, kl] + Kd[i, j, k]))
-    end
-    F -= D * dϕ * invd
+    D = K === nothing ? face_diffusivity(ν, nothing, 1.0, ax, i, j, k) :
+                        face_diffusivity(ν, ax == 3 ? K[2] : K[1], K[3], ax, i, j, k)
+    Fa, Fd, _ = scalar_face_flux(rec, ϕd, veld, ax, i, j, k, D, face_inv_spacing(g, ax, k))
+    F = Fa + Fd
     W === nothing && return F
     @inbounds return (ax == 3 ? W[2][k] : W[1][k]) * F
 end

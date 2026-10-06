@@ -232,6 +232,51 @@ end
     @test NestedRun(pA, cA, nest; feedback = :two_way, cfl_parent = nothing).feedback === :two_way
 end
 
+# #327 M2: one per-face advective + diffusive kernel. The flux registers of
+# the nest and boundary_scalar_flux (the open-face budgets, the Berlin heat
+# ledger) used two copies of the same formula; both now call
+# AdvectionSchemes.scalar_face_flux and must agree face by face with each
+# other and with the formula they replaced.
+@testset "one flux kernel for the flux registers and boundary_scalar_flux (#327 M2)" begin
+    p, c, nest, run, _ = _tw_box(; ν = 2.0)
+    for _ in 1:3
+        step_nested!(run; dt = 10.0)
+    end
+    cm = c.mesh
+    cl = Aeolus.Operators._active_sgs(c, nothing, nothing)
+    f = Aeolus.Operators.sgs_fields(cl, c)
+    K = Aeolus.Operators.sgs_scalar_face_diffusivity(cl, f, c)        # (νt, νt, 1/Prₜ)
+    @test maximum(K[1].data) > 0
+    B = boundary_scalar_flux(c, c.θ; diffusivity = (ν = c.ν, κh = K[1], κv = K[2], scale = K[3]))
+    rec = Aeolus.AdvectionSchemes.Centered2()
+    A = (cm.dy * cm.dz, cm.dy * cm.dz, cm.dx * cm.dz, cm.dx * cm.dz, cm.dx * cm.dy, cm.dx * cm.dy)
+    worst_reg = 0.0
+    for (s, side) in enumerate((:west, :east, :south, :north, :bottom, :top))
+        _, csz = Aeolus.Nesting._plane_sizes(nest, s)
+        M = zeros(csz)
+        Aeolus.Nesting._book_plane!(M, c, c.θ, rec, K, Float64(c.ν), nothing, nest, s, false, 1.0)
+        reg = (iseven(s) ? 1 : -1) * sum(M) * A[s]                   # outward, m³/s · K
+        worst_reg = max(worst_reg, abs(reg - getproperty(B, side)) / abs(getproperty(B, side)))
+    end
+    # the replaced formula, written out: u_n ϕ_f − (ν + s·½(K_L + K_R)) ∂ϕ/∂n
+    worst_old = 0.0
+    θd = c.θ.data; ud = c.u.data
+    ie = cm.Hx + cm.Nx + 1
+    for k in cm.Hz .+ (1:cm.Nz), j in cm.Hy .+ (1:cm.Ny)
+        old = ud[ie, j, k] * 0.5 * (θd[ie, j, k] + θd[ie - 1, j, k]) -
+              (c.ν + K[3] * 0.5 * (K[1].data[ie - 1, j, k] + K[1].data[ie, j, k])) *
+              (θd[ie, j, k] - θd[ie - 1, j, k]) / cm.dx
+        Fa, Fd, _ = scalar_face_flux(rec, θd, ud, 1, ie, j, k,
+                                     face_diffusivity(c.ν, K[1], K[3], 1, ie, j, k),
+                                     face_inv_spacing(cm, 1, k))
+        worst_old = max(worst_old, abs(Fa + Fd - old) / max(abs(old), 1e-30))
+    end
+    @printf("  one kernel: registers vs boundary_scalar_flux, max relative difference over the six faces %.1e; kernel vs the replaced formula %.1e\n",
+            worst_reg, worst_old)
+    @test worst_reg < 1e-12
+    @test worst_old < 1e-12
+end
+
 # -------------------------------------------------------------------------
 # 2. Relaxation. Parent and child at rest, no diffusion: the child stays a
 #    uniform θ = 1 and the covered parent cells, initially 0, relax toward

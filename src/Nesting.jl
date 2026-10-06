@@ -80,7 +80,8 @@ using ..Anelastic: MassWeightedSimulation, ReferenceState, constraint_weights,
 using ..IBM: SolidMask
 using ..Operators: sgs_closure, sgs_state, restore_sgs_state!, sgs_fields,
                    sgs_scalar_face_diffusivity, sgs_tracer_diffusivity!, _active_sgs
-using ..AdvectionSchemes: advective_face_flux, _flux_reconstruction
+using ..AdvectionSchemes: advective_face_flux, _flux_reconstruction, scalar_face_flux,
+                           face_diffusivity, face_inv_spacing
 using ..TimeIntegration: CFLConstraints, adaptive_dt, StateSnapshot, save_state!, state_snapshot,
                          restore_state!, IMEXScheme, ARK2, Rosenbrock2, step_imex!,
                          _all_finite, _max_advective_rate, is_numerical_failure
