@@ -496,7 +496,7 @@ end
 
 """
     CheckpointSchedule(dir; every_steps = 0, every_seconds = Inf, keep = 2,
-                       prefix = "checkpoint", wisdom = true, verbose = true)
+                       prefix = "checkpoint", wisdom = true)
 
 Periodic checkpoints of a long run in the folder `dir`, with automatic
 resume — the one helper the long drivers (`dns256_generate.jl`, the
@@ -515,11 +515,12 @@ relaminarisation and SBL drivers) hook into:
    `every_seconds` of wall clock have passed since the last one, and
    deletes all but the newest `keep`.
 
-The policy and the FFTW provenance are logged when the run starts or
-resumes: at `Info` with `verbose = true`, else at `Debug` (only a run log
-shows it); each checkpoint written is a `Debug` event (`subsystem =
-:checkpoint`, see the Logging page). The `[checkpoint]` table of a TOML namelist builds one
-with [`checkpoint_schedule`](@ref).
+The fresh start or resume (with the FFTW provenance) and every checkpoint
+written are `Debug` events (`subsystem = :checkpoint`, see the Logging
+page): a run log records them, the default console does not, and inside
+[`with_run`](@ref) the restart itself is announced at `Info` by the run
+header. The `[checkpoint]` table of a TOML namelist builds one with
+[`checkpoint_schedule`](@ref).
 """
 mutable struct CheckpointSchedule
     dir::String
@@ -528,7 +529,6 @@ mutable struct CheckpointSchedule
     every_seconds::Float64
     keep::Int
     wisdom::Bool
-    verbose::Bool
     last_step::Int
     last_wall::Float64
     resumed_from::String
@@ -536,14 +536,13 @@ end
 
 function CheckpointSchedule(dir::AbstractString; every_steps::Integer = 0,
                             every_seconds::Real = Inf, keep::Integer = 2,
-                            prefix::AbstractString = "checkpoint", wisdom::Bool = true,
-                            verbose::Bool = true)
+                            prefix::AbstractString = "checkpoint", wisdom::Bool = true)
     every_steps >= 0 || throw(ArgumentError("every_steps must be ≥ 0 (0: off), got $every_steps"))
     every_seconds > 0 || throw(ArgumentError("every_seconds must be > 0 (Inf: off), got $every_seconds"))
     keep >= 1 || throw(ArgumentError("keep must be ≥ 1, got $keep"))
     mkpath(dir)
     ck = CheckpointSchedule(abspath(dir), String(prefix), Int(every_steps), Float64(every_seconds),
-                            Int(keep), wisdom, verbose, 0, time(), "")
+                            Int(keep), wisdom, 0, time(), "")
     wisdom && load_fftw_wisdom!(wisdom_path(ck))
     return ck
 end
@@ -600,7 +599,7 @@ function resume!(ck::CheckpointSchedule, sim; sgs = nothing, components = (;),
     ck.wisdom && !isfile(wisdom_path(ck)) && save_fftw_wisdom(wisdom_path(ck))
     path = latest_checkpoint(ck)
     if path === nothing
-        @logmsg((ck.verbose ? Info : Debug), "checkpoints: fresh start in $(ck.dir); $(_fftw_line())",
+        @debug("checkpoints: fresh start in $(ck.dir); $(_fftw_line())",
                 subsystem = :checkpoint, domain = current_domain(), event = :fresh_start,
                 dir = ck.dir)
         ck.last_wall = time()
@@ -612,8 +611,7 @@ function resume!(ck::CheckpointSchedule, sim; sgs = nothing, components = (;),
     ck.last_wall = time()
     ck.resumed_from = path
     d[:path] = path
-    @logmsg((ck.verbose ? Info : Debug),
-            "checkpoints: resumed from $(basename(path)) (t = $(d[:t]), step $(ck.last_step)); " *
+    @debug("checkpoints: resumed from $(basename(path)) (t = $(d[:t]), step $(ck.last_step)); " *
             "$(_fftw_line()); checkpoint written with planner = :$(d[:fftw].planner), " *
             "bitwise reproducible = $(d[:fftw].bitwise_reproducible)",
             subsystem = :checkpoint, domain = current_domain(), event = :resume, path,

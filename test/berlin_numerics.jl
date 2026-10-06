@@ -35,9 +35,9 @@ const BC = Main.BerlinCase
 # measured in: the nest (#265) is switched off (`:nesting => false`). The
 # nested default runs every numerics provider in the smoke matrix.
 function _run_smoke(nsteps; physics...)
-    cfg = BC.CaseConfig(:smoke; verbose = false, nsteps = nsteps,
+    cfg = BC.CaseConfig(:smoke; nsteps = nsteps,
                         physics = Dict{Symbol,Any}(:nesting => false, physics...))
-    case = BC.build_case(cfg; io = devnull)
+    case = BC.build_case(cfg)
     BC.run_case!(case)
     return case
 end
@@ -76,10 +76,10 @@ end
 
     # runs on the :smagorinsky provider (the slot default is :tke since #182)
     function run_opts(o; kw...)
-        cfg = BC.CaseConfig(:smoke; verbose = false,
+        cfg = BC.CaseConfig(:smoke;
                             physics = Dict{Symbol,Any}(:sgs => :smagorinsky, :nesting => false),
                             options = Dict{Symbol,Any}(:sgs_smagorinsky => o), (; nsteps = N, kw...)...)
-        case = BC.build_case(cfg; io = devnull)
+        case = BC.build_case(cfg)
         BC.run_case!(case)
         return case
     end
@@ -124,10 +124,9 @@ end
         νs, _ = BC.laminar_reference_νt(sg, sg.cfg.C_s)
         @test count(cells) > 0
         @test all(==(0), ν[cells]) && maximum(νs[cells]) > 0
-        sz = BC.build_case(BC.CaseConfig(:smoke; verbose = false, nsteps = N,
+        sz = BC.build_case(BC.CaseConfig(:smoke; nsteps = N,
                                          physics = Dict{Symbol,Any}(:sgs => :sigma, :nesting => false),
-                                         options = Dict{Symbol,Any}(:geostrophic => (sponge_to_geostrophic = false,)));
-                           io = devnull)
+                                         options = Dict{Symbol,Any}(:geostrophic => (sponge_to_geostrophic = false,))))
         BC.run_case!(sz)
         pz = BC.sigma_νt_profile(BC.find_coupling(sz, :sgs_sigma), sz)
         foreach(f -> fill_halos!(f, sz.sim.bcs), (sz.sim.u, sz.sim.v, sz.sim.w))
@@ -220,9 +219,9 @@ end
         @test all(isfinite, interior_view(ref.sim.θ))
         # (on a provider that is stability-corrected: the slot default :tke
         # since #182 is not wrapped and does not read sgs_stability)
-        @test_throws ErrorException BC.build_case(BC.CaseConfig(:smoke; verbose = false,
+        @test_throws ErrorException BC.build_case(BC.CaseConfig(:smoke;
                                                                 physics = Dict{Symbol,Any}(:sgs => :smagorinsky),
-                                                                sgs_stability = :bogus); io = devnull)
+                                                                sgs_stability = :bogus))
         # the tracers (#177) get θ's diagonal diffusivity: κh = sim.κt on the
         # x, y faces and the corrected κv on the z faces
         tq = only(t for t in ref.tracers if t.name === :qv)
@@ -281,9 +280,8 @@ end
                        maximum(abs, dq), sum(dq[fluid]) / sum(q0[fluid]), leak / sum(q0[fluid]))
         @test abs(leak) > 1e3 * abs(sum(dq[fluid]))
         # off switch: the pre-#177 transport (no tracer diffusion)
-        off = BC.build_case(BC.CaseConfig(:smoke; verbose = false, nsteps = 1,
-                                          options = Dict{Symbol,Any}(:scalar_advection => (sgs_diffusion = false,)));
-                            io = devnull)
+        off = BC.build_case(BC.CaseConfig(:smoke; nsteps = 1,
+                                          options = Dict{Symbol,Any}(:scalar_advection => (sgs_diffusion = false,))))
         @test BC.find_coupling(off, :scalar_advection).diffusion === nothing
         @test BC.tracer_sgs_diffusion(off) === nothing
     end
@@ -378,16 +376,16 @@ end
         # WENO-Z7 needs a halo of 4; the case default is 3. Nested (the
         # default, #265), the nest faces refuse the mesh first (an open face
         # needs the scheme's halo too); with the nest off, the transport does
-        cfg = BC.CaseConfig(:smoke; verbose = false,
+        cfg = BC.CaseConfig(:smoke;
                             options = Dict{Symbol,Any}(:scalar_advection => (scheme = :weno_z7,)))
-        @test_throws ArgumentError BC.build_case(cfg; io = devnull)
-        cfg = BC.CaseConfig(:smoke; verbose = false, physics = Dict{Symbol,Any}(:nesting => false),
+        @test_throws ArgumentError BC.build_case(cfg)
+        cfg = BC.CaseConfig(:smoke; physics = Dict{Symbol,Any}(:nesting => false),
                             options = Dict{Symbol,Any}(:scalar_advection => (scheme = :weno_z7,)))
-        @test_throws ErrorException BC.build_case(cfg; io = devnull)
+        @test_throws ErrorException BC.build_case(cfg)
         # the positivity limiter needs a reconstruction
-        cfg = BC.CaseConfig(:smoke; verbose = false,
+        cfg = BC.CaseConfig(:smoke;
                             options = Dict{Symbol,Any}(:scalar_advection => (scheme = :upwind,)))
-        @test_throws ErrorException BC.build_case(cfg; io = devnull)
+        @test_throws ErrorException BC.build_case(cfg)
         # a keyword claimed by two couplings
         @test_throws ErrorException BC.merge_keywords("step!", (:a => (x = 1,), :b => (x = 2,)))
         @test BC.merge_keywords("step!", (:a => (x = 1,), :b => (;), :c => (y = 2,))) == (x = 1, y = 2)

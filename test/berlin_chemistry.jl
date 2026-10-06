@@ -15,8 +15,8 @@ const BC = Main.BerlinCase
 _aq_sums(c) = Dict(s => sum(BC._aq_sp(c, s)) for s in BC.AQ_SPECIES)
 
 @testset "Berlin chemistry coupling (#135)" begin
-    cfg = BC.CaseConfig(:smoke; verbose = false, output_path = nothing)
-    case = BC.build_case(cfg; io = devnull)
+    cfg = BC.CaseConfig(:smoke; output_path = nothing)
+    case = BC.build_case(cfg)
     c = BC.find_coupling(case, :aq_chem)
     mesh = case.mesh
     Nx, Ny, Nz, dz = mesh.Nx, mesh.Ny, mesh.Nz, mesh.dz
@@ -120,8 +120,7 @@ _aq_sums(c) = Dict(s => sum(BC._aq_sp(c, s)) for s in BC.AQ_SPECIES)
     end
 
     @testset "night titration: Ox and NOx accounted for exactly in the chemistry stage" begin
-        nc = BC.build_case(BC.CaseConfig(:smoke; start_h = 0.5, verbose = false, output_path = nothing);
-                           io = devnull)
+        nc = BC.build_case(BC.CaseConfig(:smoke; start_h = 0.5, output_path = nothing))
         cn = BC.find_coupling(nc, :aq_chem)
         @test cn.J == 0 && cn.OH == 0
         # the night start is titrated: min(NOx, Ox) = NOx is all NO2
@@ -167,11 +166,11 @@ _aq_sums(c) = Dict(s => sum(BC._aq_sp(c, s)) for s in BC.AQ_SPECIES)
     end
 
     @testset "physics[:chemistry] = :off registers no species" begin
-        cfg_off = BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
+        cfg_off = BC.CaseConfig(:smoke; output_path = nothing,
                                 physics = Dict{Symbol,Any}(:chemistry => :off))
         sel = BC.selected_couplings(cfg_off)
         @test BC.NoChem in sel && !(BC.AQChem in sel)
-        off = BC.build_case(cfg_off; io = devnull)
+        off = BC.build_case(cfg_off)
         @test !any(s -> haskey(off.tracers, s), BC.AQ_SPECIES)
     end
 

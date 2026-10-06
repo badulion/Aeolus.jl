@@ -26,7 +26,7 @@ const MT = Aeolus.MoistThermodynamics
         c = MT.DEFAULT_CONSTANTS
         R_d = c.gas_constant / c.molmass_dry
         for sc in (:summer, :winter, :smoke)
-            cfg = BC.CaseConfig(sc; verbose = false, output_path = nothing)
+            cfg = BC.CaseConfig(sc; output_path = nothing)
             mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
             ref = BC.build_reference(cfg, mesh)
             err = BC.hydrostatic_check(cfg, ref, mesh)
@@ -52,14 +52,14 @@ const MT = Aeolus.MoistThermodynamics
             end
         end
         # the case carries it, and the ledger integrates water with its ρ̄
-        case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing))
+        case = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing))
         @test case.ledger.ρ == case.ref.ρ̄
         @test BC.surface_pressure(case) == 101325.0
         @test 1.19 < BC.ref_density(case, 1) < 1.21   # 294 K, 1013 hPa
     end
 
     @testset "initial state from the Lindenberg sounding of 29 June 2019 (#247)" begin
-        cfg = BC.CaseConfig(:summer; verbose = false, output_path = nothing)
+        cfg = BC.CaseConfig(:summer; output_path = nothing)
         S = BC.case_sounding(cfg)
         L = S.sounding.launches
         # 06:00 CEST = 04:00 UTC, between the 22:45 (28 June) and 04:45 UTC releases
@@ -80,7 +80,7 @@ const MT = Aeolus.MoistThermodynamics
         # through the lowest 100 m; at 14 CEST the mixed layer is ~1.2 km deep
         @test BC.initial_inversion_height(cfg) == 0
         @test θ0(0.0, 0.0, 100.0) > θ0(0.0, 0.0, 0.0)
-        zi14 = BC.initial_inversion_height(BC.CaseConfig(:summer; start_h = 14.0, verbose = false))
+        zi14 = BC.initial_inversion_height(BC.CaseConfig(:summer; start_h = 14.0))
         @test 1000 < zi14 < 1500
         # ground pressure: the launch-site value reduced from 112 m to 34 m,
         # ≈ ρ g Δz = 1.2 · 9.81 · 78 ≈ 9.2 hPa higher
@@ -103,7 +103,7 @@ const MT = Aeolus.MoistThermodynamics
     end
 
     @testset "ledger: an incompressible exchange between levels is density redistribution, not transport" begin
-        case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing))
+        case = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing))
         Nx, Ny, Nz = case.mesh.Nx, case.mesh.Ny, case.mesh.Nz
         dz, A = case.mesh.dz, Nx * Ny
         # a conservative (Σ dq = 0) exchange: 1 g/kg moved from level 1 to 2 in one column
@@ -194,7 +194,7 @@ const MT = Aeolus.MoistThermodynamics
     end
 
     @testset "fog in the Berlin case conserves moist enthalpy at p̄ (1e-10)" begin
-        case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing))
+        case = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing))
         θ = interior_view(case.sim.θ)
         qv = interior_view(BC.tracer(case, :qv)); ql = interior_view(BC.tracer(case, :ql))
         rng = Xoshiro(131)
@@ -239,7 +239,7 @@ const MT = Aeolus.MoistThermodynamics
     # formulation (2-D slices of every distinct k_air, a full-surface
     # dew_exchange! on each), reproduced here.
     @testset "dew in one pass equals the per-level dew_exchange! (bit for bit)" begin
-        case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing))
+        case = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing))
         bus = case.bus
         qv = interior_view(BC.tracer(case, :qv))
         rng = Xoshiro(295)
