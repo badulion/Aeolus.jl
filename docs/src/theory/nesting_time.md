@@ -168,6 +168,15 @@ loses 5.0 % of its heat through the faces in 80 s and the time integral of
 periodic box keeps it to 6.8e-12); the parent's geostrophic tendency is
 exactly ``(-fV_g, fU_g)`` and the child's IBM hook runs in every child step.
 
+A run with a [`NestSponge`](@ref) cannot be driven this way (#349): the
+sponge relaxes the child inside the run's own subcycling (the velocity on
+every stage's predicted velocity, the scalars after each substep), so an
+externally driven child would get none, and nothing would say so.
+`begin_parent_step!` and `begin_child_step!` refuse such a run with an
+`ArgumentError` before either domain is touched; an externally driven
+child is relaxed by its core's own sponge instead (the Berlin case's top
+sponge toward the parent's mean profile).
+
 A child tracer the parent does not carry (in Berlin: ql, qr, the chemistry
 species) still needs a face condition: its plane is added after the core
 is built ([`add_open_scalars!`](@ref Aeolus.BoundaryConditions.add_open_scalars!))

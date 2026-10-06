@@ -543,7 +543,7 @@ The child clock is set to the parent's at the end (the discrepancy it
 had is recorded in `run.stats.max_clock_error`).
 """
 function step_nested!(run::NestedRun; dt = nothing)
-    w = begin_parent_step!(run; dt)
+    w = _begin_parent_step!(run; dt)
     # --- 5. child substeps --------------------------------------------------
     tw = time_ns()
     _subcycle_child!(run, w.t_child_end)
@@ -573,10 +573,30 @@ order of the scalar ledger keys), which `end_parent_step!` compares.
 
 `step_nested!(run)` is exactly `begin_parent_step!`, the run's own child
 subcycling (`advance_child`), `end_parent_step!`.
+
+A run with a [`NestSponge`](@ref) is refused (`ArgumentError`): the
+sponge relaxes the child inside the run's own subcycling (the velocity
+on every stage's predicted velocity, the scalars after each substep), so
+an externally driven child would silently get none (#349). Drive a
+sponged run with [`step_nested!`](@ref), or relax the externally driven
+child with the core's own sponge (the Berlin case's top sponge).
 """
 const _NO_LEDGER = Float64[]          # the window's I0 of a run with no two-way scratch
 
 function begin_parent_step!(run::NestedRun; dt = nothing)
+    _refuse_external_sponge(run, "begin_parent_step!")
+    return _begin_parent_step!(run; dt)
+end
+
+# An externally driven child never runs the NestSponge (#349): refuse it.
+_refuse_external_sponge(run::NestedRun, who) =
+    run.sponge === nothing ||
+    throw(ArgumentError("$who: this NestedRun has a NestSponge, which only the run's own " *
+                        "child subcycling (step_nested!) applies; an externally driven child " *
+                        "would get no sponge. Build the run with sponge = nothing (and relax " *
+                        "the child with its core's own sponge) or step it with step_nested!"))
+
+function _begin_parent_step!(run::NestedRun; dt = nothing)
     p = run.parent; c = run.child; nest = run.nest; st = run.stats
     t_p = Float64(p.t)
 
@@ -794,9 +814,12 @@ to be chained into the core's `body_force!` at every stage; the separate
 transports of the step call [`book_nest_flux!`](@ref) in between.
 `end_child_step!` commits them. [`step_nested!`](@ref)'s own subcycling
 does the same around each child substep. Both are no-ops for the
-registers of a one-way run.
+registers of a one-way run. A run with a [`NestSponge`](@ref) is refused
+(`ArgumentError`, as by [`begin_parent_step!`](@ref)): its sponge acts
+only inside [`step_nested!`](@ref)'s subcycling.
 """
 function begin_child_step!(run::NestedRun)
+    _refuse_external_sponge(run, "begin_child_step!")
     run.sub_t0 = Float64(run.child.t)
     _begin!(run, :child)
     return run.regs === nothing || !any(_by_core, run.regs.models) ? nothing : _hook(run, :child)
