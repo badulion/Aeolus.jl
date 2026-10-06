@@ -91,7 +91,7 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
             c = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS
             R = c.gas_constant / c.molmass_dry; cp = c.cp_dry; p₀ = c.p_ref
             θ = cfg.θ_surface
-            Πs = (cfg.p_surface / p₀)^(R / cp)
+            Πs = (ref.p_surface / p₀)^(R / cp)          # the ground pressure the reference integrated from
             Πt = Πs - cfg.g * cfg.extent[3] / (cp * θ)
             a = cp / R + 1
             H_exact = cp^2 * θ * p₀ / (R * cfg.g) * (Πs^a - Πt^a) / a
