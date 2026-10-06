@@ -412,11 +412,24 @@ note in CLAUDE.md.
 
 ### No binary dependencies
 
-FFTW is the only non-stdlib dependency. NetCDF, PNG/APNG, Mie
-scattering, the error function and Bessel functions are all implemented
-in-package, because the usual binary stack does not build on every
-target platform and a package that fails to load is worse than one that
-is slightly less convenient.
+FFTW and KernelAbstractions (pure Julia) are the only non-stdlib
+dependencies; no binary dependencies. NetCDF, PNG/APNG, Mie scattering,
+the error function and Bessel functions are all implemented in-package,
+because the usual binary stack does not build on every target platform
+and a package that fails to load is worse than one that is slightly less
+convenient.
+
+*KernelAbstractions* was admitted by the maintainer on 2026-10-06 (#291):
+"single-node multithreading now, with one kernel path for the GPU in
+Phase 81". It is pure Julia, and so is its dependency tree (Adapt,
+Atomix, UnsafeAtomics, MacroTools, PrecompileTools, Preferences,
+Requires, StaticArrays, StaticArraysCore; stdlib InteractiveUtils,
+UUIDs). One trap: `UnsafeAtomics` 0.4 made `LLVM.jl` a hard dependency,
+which pulls the binary `LLVMExtra_jll`. `Project.toml` therefore lists
+`UnsafeAtomics` as a weak dependency with compat `0.3`, the last series
+where LLVM is optional. Check the manifest for `_jll` packages whenever
+you bump either. All KernelAbstractions code lives in `src/Backends.jl`
+(`docs/src/design/ka_port.md`).
 
 Do not add a dependency to avoid writing 150 lines. If you genuinely
 need one, raise it on the issue first.

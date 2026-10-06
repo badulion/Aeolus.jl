@@ -162,11 +162,14 @@ disagree about whether a particle activates. Shared quantities go in the
 era contract (`RadiationCore`, `MoistThermodynamics`) as a generic that
 implementers extend.
 
-**No binary dependencies.** FFTW is the only non-stdlib dependency and it
-should stay that way. NetCDF, PNG, Mie scattering, error and Bessel
-functions are all implemented in-package because the usual binary stack
-does not build on every target. Do not add a dependency to avoid writing
-150 lines.
+**No binary dependencies.** FFTW and KernelAbstractions (pure Julia) are
+the only non-stdlib dependencies; no binary dependencies. KernelAbstractions
+was admitted on 2026-10-06 (#291) for single-node multithreading now, with
+one kernel path for the GPU in Phase 81; its tree must stay free of JLLs
+(`UnsafeAtomics` is held at 0.3 for that, see `docs/CONTRIBUTING.md`).
+NetCDF, PNG, Mie scattering, error and Bessel functions are all
+implemented in-package because the usual binary stack does not build on
+every target. Do not add a dependency to avoid writing 150 lines.
 
 **Report honestly.** If a test fails, say whether the *code* or the
 *expectation* was wrong — both happen, and the distinction matters. Never
