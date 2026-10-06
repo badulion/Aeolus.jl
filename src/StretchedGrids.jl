@@ -16,12 +16,13 @@ module StretchedGrids
 #      maps a flat computational slab onto orography `h(x,y)`.
 #
 # Both are `AbstractMesh` subtypes, so `Field`, `fill_halos!` and the
-# `Operators` façade work on them unchanged. The numerics are retrofitted
-# by *adding methods* to the private kernels in `Operators.FiniteVolume`
-# (see the `import` block below) — `Operators.∂z(out, f)` forwards to
-# `_∂z!(out, f, mesh(f))`, so a field carrying a `StretchedGrid` picks up
-# the metric-correct stencil purely by multiple dispatch. No call site in
-# the rest of Aeolus changes.
+# `Operators` façade work on them unchanged. A `StretchedGrid` runs the
+# one set of kernels of `Operators.FiniteVolume`, which read its per-level
+# vertical metrics (`grid_metrics`, KA-d #299); a `TerrainFollowingGrid`
+# adds its own methods to those private kernels (see the `import` block
+# below) — `Operators.∂z(out, f)` forwards to `_∂z!(out, f, mesh(f))`, so a
+# field carrying either mesh picks up the metric-correct stencil purely by
+# multiple dispatch. No call site in the rest of Aeolus changes.
 #
 # Vertical index convention (identical to `RegularGrid`):
 #
@@ -58,8 +59,10 @@ import ..Grids: totalsize, interior, xnodes, ynodes, znodes
 import ..Operators.FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                                  _interp_to_face!, _interp_to_center!,
                                  _add_surface_flux!, _add_sponge!, _add_buoyancy!,
-                                 damping_coordinates
-using ..Operators.FiniteVolume: sponge_profile, in_damping, damping_rate, _add_damping!
+                                 damping_coordinates, grid_metrics
+using ..Operators.FiniteVolume: sponge_profile, in_damping, damping_rate, _add_damping!,
+                                LevelZ, GridMetrics
+using ..Backends: Backends, launch!
 
 export StretchedGrid, TerrainFollowingGrid,
        terrain_following_grid,
@@ -111,7 +114,7 @@ separates (use it for centre→face gradients). See
 
 See also [`TerrainFollowingGrid`](@ref), [`hydrostatic_balance_error`](@ref).
 """
-struct StretchedGrid{T<:AbstractFloat} <: AbstractMesh{T}
+struct StretchedGrid{T<:AbstractFloat, Z<:LevelZ{T}} <: AbstractMesh{T}
     Nx::Int; Ny::Int; Nz::Int
     Hx::Int; Hy::Int; Hz::Int
     Lx::T;   Ly::T;   Lz::T
@@ -122,6 +125,7 @@ struct StretchedGrid{T<:AbstractFloat} <: AbstractMesh{T}
     dzc::Vector{T}
     dzf::Vector{T}
     stretching::Symbol
+    zm::Z                # the kernels' per-level metrics (`level_metrics`, KA-d #299)
 end
 
 # --- vertical face generators (interior faces only, length Nz+1) ----------
@@ -383,9 +387,10 @@ function StretchedGrid(::Type{T} = Float64;
         dzf[Ntz+1] = dzc[Ntz]
     end
 
-    return StretchedGrid{T}(Nx, Ny, Nz, Hx, Hy, Hz, Lx, Ly, Lz,
-                            x0, y0, z0, Lx / Nx, Ly / Ny,
-                            zf, zc, dzc, dzf, kind)
+    dx, dy = Lx / Nx, Ly / Ny
+    return StretchedGrid(Nx, Ny, Nz, Hx, Hy, Hz, Lx, Ly, Lz,
+                         x0, y0, z0, dx, dy,
+                         zf, zc, dzc, dzf, kind, level_metrics(dx, dy, zf, zc, dzc, dzf))
 end
 
 """
@@ -518,130 +523,20 @@ terrain-following meshes:
 set_physical!(f::Field, fun) = _set_physical!(f, fun, mesh(f))
 
 # =========================================================================
-# Finite-volume stencils on a StretchedGrid
+# Finite-volume stencils on a StretchedGrid (KA-d, #299)
 # =========================================================================
 #
-# x and y are uniform, so those kernels are literal copies of the
-# `RegularGrid` ones (they cannot be inherited: dispatch is on the
-# concrete mesh type). The z kernels carry the metrics.
-
-# --- horizontal first derivatives (uniform, unchanged) -------------------
-
-function _∂x!(out::Field{CellCenter}, f::Field{CellCenter}, g::StretchedGrid)
-    inv2dx = 1 / (2g.dx)
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i, j, k] = (f.data[i+1, j, k] - f.data[i-1, j, k]) * inv2dx
-    end
-    return out
-end
-
-function _∂y!(out::Field{CellCenter}, f::Field{CellCenter}, g::StretchedGrid)
-    inv2dy = 1 / (2g.dy)
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i, j, k] = (f.data[i, j+1, k] - f.data[i, j-1, k]) * inv2dy
-    end
-    return out
-end
-
-function _∂x!(out::Field{FaceX}, f::Field{CellCenter}, g::StretchedGrid)
-    idx = 1 / g.dx
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i, j, k] = (f.data[i, j, k] - f.data[i-1, j, k]) * idx
-    end
-    return out
-end
-
-function _∂y!(out::Field{FaceY}, f::Field{CellCenter}, g::StretchedGrid)
-    idy = 1 / g.dy
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i, j, k] = (f.data[i, j, k] - f.data[i, j-1, k]) * idy
-    end
-    return out
-end
-
-function _∂x!(out::Field{CellCenter}, u::Field{FaceX}, g::StretchedGrid)
-    idx = 1 / g.dx
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i, j, k] = (u.data[i+1, j, k] - u.data[i, j, k]) * idx
-    end
-    return out
-end
-
-function _∂y!(out::Field{CellCenter}, v::Field{FaceY}, g::StretchedGrid)
-    idy = 1 / g.dy
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i, j, k] = (v.data[i, j+1, k] - v.data[i, j, k]) * idy
-    end
-    return out
-end
-
-# --- vertical first derivatives (metric-correct) -------------------------
-
-"""
-    _∂z!(out::Field{FaceZ}, f::Field{CellCenter}, g::StretchedGrid)
-
-Centre → face gradient. The face `k` separates the centres `k-1` and `k`,
-whose distance is `dzf[k]`:
-
-```math
-\\left.\\frac{\\partial f}{\\partial z}\\right|_{z_f[k]}
-    = \\frac{f_k - f_{k-1}}{\\Delta z_f[k]} .
-```
-
-Exact for any linear profile on *any* face distribution — a two-point
-divided difference is an exact derivative of the interpolating line — and
-second-order accurate in general because a face sits exactly midway
-between the two centres it separates *only* when the grid is uniform; on
-a stretched grid the formula is a first-order-accurate approximation to
-the derivative at the face but a second-order-accurate one at the
-midpoint of the two centres, which is where the flux is actually needed
-in the conservative Laplacian below. Using this pair
-(`dzf` here, `dzc` in the divergence) is what makes the composed
-Laplacian second order.
-"""
-function _∂z!(out::Field{FaceZ}, f::Field{CellCenter}, g::StretchedGrid)
-    dzf = g.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        idz = 1 / dzf[k]
-        for j in jj, i in ii
-            out.data[i, j, k] = (f.data[i, j, k] - f.data[i, j, k-1]) * idz
-        end
-    end
-    return out
-end
-
-"""
-    _∂z!(out::Field{CellCenter}, w::Field{FaceZ}, g::StretchedGrid)
-
-Face → centre divergence contribution. `w[k]` and `w[k+1]` are the bottom
-and top faces of control volume `k`, whose height is `dzc[k]`:
-
-```math
-\\left.\\frac{\\partial w}{\\partial z}\\right|_{z_c[k]}
-    = \\frac{w_{k+1} - w_k}{\\Delta z_c[k]} .
-```
-
-This is the *exact* mean divergence over the cell (Gauss' theorem), which
-is why the discrete projection stays conservative on a stretched grid.
-"""
-function _∂z!(out::Field{CellCenter}, w::Field{FaceZ}, g::StretchedGrid)
-    dzc = g.dzc
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        idz = 1 / dzc[k]
-        for j in jj, i in ii
-            out.data[i, j, k] = (w.data[i, j, k+1] - w.data[i, j, k]) * idz
-        end
-    end
-    return out
-end
+# The StretchedGrid has no kernels of its own: every finite-volume operator
+# (derivatives, Laplacian, divergence, interpolation, surface flux, sponge,
+# buoyancy, momentum and scalar advection, Smagorinsky, eddy viscosity and
+# diffusion) is the one kernel of `Operators.FiniteVolume`, which reads the
+# grid only through its metrics. A StretchedGrid's metrics are the
+# per-level vectors of `level_metrics` (a `FiniteVolume.LevelZ`), built
+# once with the grid and returned by `grid_metrics`. Before KA-d the
+# Phase-24 stencils here and the #151 / #276 Boussinesq kernels of
+# src/stretched/boussinesq.jl were copies of the RegularGrid kernels with
+# the vertical metric swapped in; the folded kernels give the same bits
+# (test/ka_fv.jl).
 
 # Three-point unequal-spacing centred derivative weights.
 #   h₋ = zc[k]   - zc[k-1] = dzf[k]
@@ -662,308 +557,50 @@ end
 end
 
 """
-    _∂z!(out::Field{CellCenter}, f::Field{CellCenter}, g::StretchedGrid)
+    level_metrics(dx, dy, zf, zc, dzc, dzf) -> FiniteVolume.LevelZ
 
-Collocated centre → centre vertical derivative using the **unequal-spacing
-three-point** stencil. With `h₋ = dzf[k]` and `h₊ = dzf[k+1]`,
-
-```math
-\\left.\\frac{\\partial f}{\\partial z}\\right|_{z_c[k]}
- = \\frac{-h_+}{h_-(h_-+h_+)} f_{k-1}
- + \\frac{h_+ - h_-}{h_- h_+} f_k
- + \\frac{h_-}{h_+(h_-+h_+)} f_{k+1}
- + O(h_- h_+) ,
-```
-
-the derivative at the middle node of the quadratic through the three cell
-centres. It is therefore **exact for every polynomial up to degree 2** on
-an arbitrary face distribution, and reduces to `(f_{k+1}-f_{k-1})/2Δz` on
-a uniform grid. The `f_k` term is essential: dropping it (the tempting
-`(f_{k+1}-f_{k-1})/(h_-+h_+)`) demotes the stencil to first order.
+The per-level vertical metrics of a stretched column (storage indices,
+halos included) in the form the finite-volume kernels read them: the
+reciprocal thicknesses, the interpolation weights, the three-point
+derivative weights and the Smagorinsky filter widths. Each entry is the
+expression the pre-port StretchedGrid kernels evaluated per level, so the
+kernels give the same bits; an entry whose stencil leaves the storage
+(the outermost halo levels) is zero.
 """
-function _∂z!(out::Field{CellCenter}, f::Field{CellCenter}, g::StretchedGrid)
-    dzf = g.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        wm, wc, wp = _dz_weights(dzf[k], dzf[k+1])
-        for j in jj, i in ii
-            out.data[i, j, k] = wm * f.data[i, j, k-1] +
-                                wc * f.data[i, j, k]   +
-                                wp * f.data[i, j, k+1]
-        end
+function level_metrics(dx::T, dy::T, zf::Vector{T}, zc::Vector{T}, dzc::Vector{T},
+                       dzf::Vector{T}) where {T}
+    n = length(dzc)
+    z = zeros(T, n)
+    idzc = T[1 / dzc[k] for k in 1:n]
+    idzf = T[1 / dzf[k] for k in 1:n+1]
+    idz_off = T[2 / (dzf[k] + dzf[k+1]) for k in 1:n]
+    wlo = copy(z); whi = copy(z); alo = copy(z); ahi = copy(z)
+    d3m = copy(z); d3c = copy(z); d3p = copy(z)
+    for k in 2:n
+        wlo[k] = dzc[k]   / (dzc[k-1] + dzc[k])
+        whi[k] = dzc[k-1] / (dzc[k-1] + dzc[k])
+        s = dzc[k-1] + dzc[k]
+        alo[k] = dzc[k-1] / s
+        ahi[k] = dzc[k]   / s
+        d3m[k], d3c[k], d3p[k] = _dz_weights(dzf[k], dzf[k+1])
     end
-    return out
+    clo = T[(zf[k+1] - zc[k]) / dzc[k] for k in 1:n]
+    chi = T[(zc[k] - zf[k])   / dzc[k] for k in 1:n]
+    Δ = [(dx * dy * dzc[k]) ^ (1/3) for k in 1:n]
+    return LevelZ{T, Vector{T}, typeof(Δ)}(idzc, idzf, idz_off, wlo, whi, alo, ahi, clo, chi,
+                                           d3m, d3c, d3p, Δ)
 end
 
-# --- Laplacian ----------------------------------------------------------
+grid_metrics(g::StretchedGrid) = GridMetrics(g.dx, g.dy, g.zm)
 
-"""
-    _laplacian!(out::Field{L}, f::Field{L}, g::StretchedGrid) where {L}
-
-Seven-point Laplacian in the conservative non-uniform form. Horizontally
-the usual uniform stencil; vertically the flux difference
-
-```math
-\\left.\\nabla^2_z f\\right|_k =
- \\frac{1}{\\Delta z_c[k]}
- \\left[\\frac{f_{k+1}-f_k}{\\Delta z_f[k+1]}
-      - \\frac{f_k-f_{k-1}}{\\Delta z_f[k]}\\right].
-```
-
-This is `div(grad)` built from the two stencils above: the gradient lives
-on faces (metric `dzf`), its divergence over the control volume uses the
-cell height (metric `dzc`). The operator is consequently
-**self-adjoint and negative-definite** on a non-uniform grid, which the
-naive `(f_{k+1}-2f_k+f_{k-1})/Δz_c^2` is not — and self-adjointness is
-what makes the CG pressure solve converge. Second order accurate for
-smooth stretching (the leading error term scales with the local
-thickness ratio minus one).
-"""
-function _laplacian!(out::Field{L}, f::Field{L}, g::StretchedGrid) where {L<:Location}
-    idx2 = 1 / g.dx^2
-    idy2 = 1 / g.dy^2
-    dzc, dzf = g.dzc, g.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        iv   = 1 / dzc[k]
-        idzm = 1 / dzf[k]
-        idzp = 1 / dzf[k+1]
-        for j in jj, i in ii
-            c = f.data[i, j, k]
-            zterm = ((f.data[i,j,k+1] - c) * idzp - (c - f.data[i,j,k-1]) * idzm) * iv
-            out.data[i, j, k] = (f.data[i+1,j,k] - 2c + f.data[i-1,j,k]) * idx2 +
-                                (f.data[i,j+1,k] - 2c + f.data[i,j-1,k]) * idy2 +
-                                zterm
-        end
-    end
-    return out
-end
-
-# --- divergence ---------------------------------------------------------
-
-"""
-    _divergence!(out, u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}, g::StretchedGrid)
-
-Arakawa-C divergence with the vertical metric:
-
-```math
-(\\nabla\\!\\cdot\\!\\mathbf{u})_{ijk} =
- \\frac{u_{i+1}-u_i}{\\Delta x} + \\frac{v_{j+1}-v_j}{\\Delta y}
- + \\frac{w_{k+1}-w_k}{\\Delta z_c[k]} .
-```
-
-Exactly the net volume flux through the faces of control volume `(i,j,k)`
-divided by its volume, so a discretely solenoidal field has *zero*
-divergence to round-off on any face distribution.
-"""
-function _divergence!(out::Field{CellCenter},
-                      u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                      g::StretchedGrid)
-    idx = 1 / g.dx; idy = 1 / g.dy
-    dzc = g.dzc
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        idz = 1 / dzc[k]
-        for j in jj, i in ii
-            out.data[i,j,k] = (u.data[i+1,j,k] - u.data[i,j,k]) * idx +
-                              (v.data[i,j+1,k] - v.data[i,j,k]) * idy +
-                              (w.data[i,j,k+1] - w.data[i,j,k]) * idz
-        end
-    end
-    return out
-end
-
-"""
-    _divergence!(out, u, v, w, g::StretchedGrid)   # all at CellCenter
-
-Collocated diagnostic divergence. The vertical term uses the unequal-
-spacing three-point weights (see the collocated `_∂z!`), not a naive
-`(w_{k+1}-w_{k-1})/(h_-+h_+)`.
-"""
-function _divergence!(out::Field{CellCenter},
-                      u::Field{CellCenter}, v::Field{CellCenter}, w::Field{CellCenter},
-                      g::StretchedGrid)
-    inv2dx = 1 / (2g.dx); inv2dy = 1 / (2g.dy)
-    dzf = g.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        wm, wc, wp = _dz_weights(dzf[k], dzf[k+1])
-        for j in jj, i in ii
-            out.data[i,j,k] = (u.data[i+1,j,k] - u.data[i-1,j,k]) * inv2dx +
-                              (v.data[i,j+1,k] - v.data[i,j-1,k]) * inv2dy +
-                              wm * w.data[i,j,k-1] + wc * w.data[i,j,k] + wp * w.data[i,j,k+1]
-        end
-    end
-    return out
-end
-
-# --- staggered interpolation --------------------------------------------
-
-# horizontal: uniform, plain averages
-function _interp_to_face!(out::Field{FaceX}, f::Field{CellCenter}, g::StretchedGrid)
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i,j,k] = 0.5 * (f.data[i-1,j,k] + f.data[i,j,k])
-    end
-    return out
-end
-function _interp_to_face!(out::Field{FaceY}, f::Field{CellCenter}, g::StretchedGrid)
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i,j,k] = 0.5 * (f.data[i,j-1,k] + f.data[i,j,k])
-    end
-    return out
-end
-
-"""
-    _interp_to_face!(out::Field{FaceZ}, f::Field{CellCenter}, g::StretchedGrid)
-
-Volume-weighted centre → z-face interpolation:
-
-```math
-f_{k}^{\\text{face}} =
- \\frac{\\Delta z_c[k-1]\\, f_k + \\Delta z_c[k]\\, f_{k-1}}
-       {\\Delta z_c[k-1] + \\Delta z_c[k]} .
-```
-
-Note the *cross* pairing — the weight on `f_k` is the thickness of the
-**other** cell. That is the geometric linear interpolation: face `k` sits
-at distance `Δz_c[k-1]/2` above centre `k-1` and `Δz_c[k]/2` below centre
-`k`, so the nearer centre gets the larger weight. The result is exact for
-linear profiles; the naive `½(f_{k-1}+f_k)` carries an
-`O((Δz_c[k]-Δz_c[k-1]))` first-order error that pollutes buoyancy and
-advective fluxes right where the grid is stretched hardest.
-"""
-function _interp_to_face!(out::Field{FaceZ}, f::Field{CellCenter}, g::StretchedGrid)
-    dzc = g.dzc
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        wlo = dzc[k]   / (dzc[k-1] + dzc[k])   # weight on f[k-1]
-        whi = dzc[k-1] / (dzc[k-1] + dzc[k])   # weight on f[k]
-        for j in jj, i in ii
-            out.data[i,j,k] = wlo * f.data[i,j,k-1] + whi * f.data[i,j,k]
-        end
-    end
-    return out
-end
-
-function _interp_to_center!(out::Field{CellCenter}, u::Field{FaceX}, g::StretchedGrid)
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i,j,k] = 0.5 * (u.data[i,j,k] + u.data[i+1,j,k])
-    end
-    return out
-end
-function _interp_to_center!(out::Field{CellCenter}, v::Field{FaceY}, g::StretchedGrid)
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i,j,k] = 0.5 * (v.data[i,j,k] + v.data[i,j+1,k])
-    end
-    return out
-end
-
-"""
-    _interp_to_center!(out::Field{CellCenter}, w::Field{FaceZ}, g::StretchedGrid)
-
-Volume-weighted z-face → centre interpolation:
-
-```math
-w_k^{\\text{centre}} = \\frac{(z_c[k]-z_f[k])\\,w_{k+1} + (z_f[k+1]-z_c[k])\\,w_k}
-                             {\\Delta z_c[k]} .
-```
-
-Because `z_c[k]` is *defined* as the midpoint of its two faces, both
-weights equal `½` on every grid — a stretched grid needs no correction in
-this direction. The distance form is kept explicit so the symmetry with
-the centre→face kernel is visible and so the code stays correct if a
-future mesh ever places centres off-midpoint (e.g. mass-weighted levels).
-"""
-function _interp_to_center!(out::Field{CellCenter}, w::Field{FaceZ}, g::StretchedGrid)
-    zf, zc, dzc = g.zf, g.zc, g.dzc
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        whi = (zc[k] - zf[k])   / dzc[k]   # weight on w[k+1]
-        wlo = (zf[k+1] - zc[k]) / dzc[k]   # weight on w[k]
-        for j in jj, i in ii
-            out.data[i,j,k] = wlo * w.data[i,j,k] + whi * w.data[i,j,k+1]
-        end
-    end
-    return out
-end
-
-# --- a few physics kernels that carry the vertical metric ---------------
-
-"""
-    _add_surface_flux!(tϕ, F_bot, F_top, g::StretchedGrid)
-
-Inject prescribed wall fluxes into the first and last interior cells. The
-tendency is the flux divided by the **local** cell thickness, so a
-stretched grid with a thin first cell feels a correspondingly larger
-heating rate — the whole point of refining near the surface.
-"""
-function _add_surface_flux!(tϕ::Field{CellCenter}, F_bot::Real, F_top::Real,
-                            g::StretchedGrid)
-    ii, jj, kk = interior(g)
-    k_bot, k_top = first(kk), last(kk)
-    inv_bot = 1 / g.dzc[k_bot]
-    inv_top = 1 / g.dzc[k_top]
-    @inbounds for j in jj, i in ii
-        tϕ.data[i, j, k_bot] += F_bot * inv_bot
-        tϕ.data[i, j, k_top] -= F_top * inv_top
-    end
-    return tϕ
-end
 
 _zloc_coords(g::StretchedGrid, ::FaceZ) = g.zf
 _zloc_coords(g::StretchedGrid, ::Location) = g.zc
-
-"""
-    _add_sponge!(tf, f, α_max, z_start, z_top, f_ref, g::StretchedGrid)
-
-Rayleigh damping toward `f_ref` for `z ≥ z_start`, with
-`α(z) = α_max sin²(½π (z-z_start)/(z_top-z_start))`. The one damping
-kernel `_add_damping!` of the `RegularGrid` sponge, with the profile
-sampled at the *actual* stretched heights, so the damping layer covers
-the physical region the user asked for rather than a fixed number of
-levels. `f_ref` is a number, a level vector (length `Nz`), a `Field` or a
-halo-padded array, as on the `RegularGrid` (#254).
-"""
-function _add_sponge!(tf::Field{L}, f::Field{L},
-                      α_max::Real, z_start::Real, z_top::Real,
-                      f_ref, g::StretchedGrid) where {L<:Location}
-    return _add_damping!(tf, f, sponge_profile(α_max, z_start, z_top),
-                         damping_coordinates(g, L()), 3, f_ref, g)
-end
 
 # The heights of the interior levels the damping kernel samples a vertical
 # DampingProfile at, on a StretchedGrid (the generic is in FiniteVolume).
 damping_coordinates(g::StretchedGrid, loc::Location) =
     _zloc_coords(g, loc)[g.Hz+1:g.Hz+g.Nz]
-
-"""
-    _add_buoyancy!(tw, θ, θ₀, g_accel, g::StretchedGrid)
-
-Boussinesq buoyancy `g(θ-θ₀)/θ₀` added to the `FaceZ` tendency, with `θ`
-brought to the face by the **volume-weighted** interpolation. Using the
-naive half-sum here would put a spurious first-order buoyancy source
-wherever the grid stretches, which shows up as a persistent artificial
-circulation in a supposedly quiescent stratified column.
-"""
-function _add_buoyancy!(tw::Field{FaceZ}, θ::Field{CellCenter},
-                        θ₀::Real, g_accel::Real, g::StretchedGrid)
-    coef = g_accel / θ₀
-    dzc = g.dzc
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        wlo = dzc[k]   / (dzc[k-1] + dzc[k])
-        whi = dzc[k-1] / (dzc[k-1] + dzc[k])
-        for j in jj, i in ii
-            θface = wlo * θ.data[i,j,k-1] + whi * θ.data[i,j,k]
-            tw.data[i,j,k] += coef * (θface - θ₀)
-        end
-    end
-    return tw
-end
 
 # =========================================================================
 # TerrainFollowingGrid — Gal-Chen / Somerville σ-coordinate
@@ -1045,8 +682,8 @@ true height.
 Accessors: [`metric_jacobian`](@ref), [`terrain_height`](@ref),
 [`physical_heights`](@ref).
 """
-struct TerrainFollowingGrid{T<:AbstractFloat} <: AbstractMesh{T}
-    base::StretchedGrid{T}
+struct TerrainFollowingGrid{T<:AbstractFloat, B<:StretchedGrid{T}} <: AbstractMesh{T}
+    base::B
     Nx::Int; Ny::Int; Nz::Int
     Hx::Int; Hy::Int; Hz::Int
     Lx::T;   Ly::T;   Lz::T
@@ -1203,7 +840,7 @@ function terrain_following_grid(mesh::AbstractMesh{T}, h) where {T}
         end
     end
 
-    return TerrainFollowingGrid{T}(base,
+    return TerrainFollowingGrid{T, typeof(base)}(base,
         base.Nx, base.Ny, base.Nz, base.Hx, base.Hy, base.Hz,
         base.Lx, base.Ly, base.Lz, base.x0, base.y0, base.z0,
         base.dx, base.dy,
@@ -1278,23 +915,30 @@ end
 
 # --- halo-aware initialisation ------------------------------------------
 
-function _set_physical!(f::Field, fun, g::Union{StretchedGrid,RegularGrid})
+# One launch over the whole storage (halos included); `fun` is called once
+# per sample, on any thread (KA-d, #299): it must not mutate shared state.
+@inline _b_set_physical!(i, j, k, o, fun::F, xs, ys, zs::AbstractVector) where {F} =
+    (@inbounds o[i, j, k] = fun(xs[i], ys[j], zs[k]); nothing)
+@inline _b_set_physical!(i, j, k, o, fun::F, xs, ys, zs::AbstractArray{<:Any,3}) where {F} =
+    (@inbounds o[i, j, k] = fun(xs[i], ys[j], zs[i, j, k]); nothing)
+
+function _set_physical!(f::Field, fun::F, g::Union{StretchedGrid,RegularGrid}) where {F}
     loc = Fields.location(f)
     sg  = g isa StretchedGrid ? g : StretchedGrid(g)
     xs  = _xcoords(sg, loc); ys = _ycoords(sg, loc); zs = _zcoords(sg, loc)
-    @inbounds for k in eachindex(zs), j in eachindex(ys), i in eachindex(xs)
-        f.data[i, j, k] = fun(xs[i], ys[j], zs[k])
-    end
+    r = (1:length(xs), 1:length(ys), 1:length(zs))
+    checkbounds(f.data, r...)
+    launch!(Backends.backend(f.data), _b_set_physical!, r, f.data, fun, xs, ys, zs)
     return f
 end
 
-function _set_physical!(f::Field, fun, g::TerrainFollowingGrid)
+function _set_physical!(f::Field, fun::F, g::TerrainFollowingGrid) where {F}
     loc = Fields.location(f)
     xs  = _xcoords(g, loc); ys = _ycoords(g, loc)
     zs  = physical_heights(g, loc)
-    @inbounds for k in axes(zs, 3), j in eachindex(ys), i in eachindex(xs)
-        f.data[i, j, k] = fun(xs[i], ys[j], zs[i, j, k])
-    end
+    r = (1:length(xs), 1:length(ys), 1:size(zs, 3))
+    checkbounds(f.data, r...)
+    launch!(Backends.backend(f.data), _b_set_physical!, r, f.data, fun, xs, ys, zs)
     return f
 end
 
@@ -1333,15 +977,12 @@ centres straddling a σ-face share the same `(x,y)`, so their difference is
 a genuine vertical difference, and `J·Δσ_f` is the physical distance
 between them.
 """
+@inline _b_tf_∂z_cf!(i, j, k, o, f, idzf, Jzf) =
+    (@inbounds o[i,j,k] = (f[i,j,k] - f[i,j,k-1]) * idzf[k] / Jzf[i,j,k]; nothing)
+
 function _∂z!(out::Field{FaceZ}, f::Field{CellCenter}, g::TerrainFollowingGrid)
-    dzf = g.base.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        idσ = 1 / dzf[k]
-        for j in jj, i in ii
-            out.data[i,j,k] = (f.data[i,j,k] - f.data[i,j,k-1]) * idσ / g.Jzf[i,j,k]
-        end
-    end
+    launch!(Backends.backend(out.data), _b_tf_∂z_cf!, interior(g), out.data, f.data,
+            g.base.zm.idzf, g.Jzf)
     return out
 end
 
@@ -1352,15 +993,12 @@ end
 derivative of `w`; the *divergence* additionally needs the contravariant
 flux `J w̃` (see `_divergence!`).
 """
+@inline _b_tf_∂z_fc!(i, j, k, o, w, idzc, J) =
+    (@inbounds o[i,j,k] = (w[i,j,k+1] - w[i,j,k]) * idzc[k] / J[i,j,k]; nothing)
+
 function _∂z!(out::Field{CellCenter}, w::Field{FaceZ}, g::TerrainFollowingGrid)
-    dzc = g.base.dzc
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk
-        idσ = 1 / dzc[k]
-        for j in jj, i in ii
-            out.data[i,j,k] = (w.data[i,j,k+1] - w.data[i,j,k]) * idσ / g.J[i,j,k]
-        end
-    end
+    launch!(Backends.backend(out.data), _b_tf_∂z_fc!, interior(g), out.data, w.data,
+            g.base.zm.idzc, g.J)
     return out
 end
 
@@ -1370,12 +1008,12 @@ end
 Collocated `∂f/∂z = (1/J) ∂f/∂σ` with the unequal-spacing three-point
 σ-derivative.
 """
+@inline _b_tf_∂z_cc!(i, j, k, o, f, dzf, J) =
+    (@inbounds o[i,j,k] = _dσ_c(f, i, j, k, dzf) / J[i,j,k]; nothing)
+
 function _∂z!(out::Field{CellCenter}, f::Field{CellCenter}, g::TerrainFollowingGrid)
-    dzf = g.base.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i,j,k] = _dσ_c(f.data, i, j, k, dzf) / g.J[i,j,k]
-    end
+    launch!(Backends.backend(out.data), _b_tf_∂z_cc!, interior(g), out.data, f.data,
+            g.base.dzf, g.J)
     return out
 end
 
@@ -1399,26 +1037,21 @@ surface; the second is the terrain correction. Omitting it is the standard
 terrain-following error and shows up immediately as a spurious
 pressure-gradient force over sloping ground.
 """
+@inline _b_tf_∂x_cc!(i, j, k, o, f, inv2dx, s, dzf) =
+    (@inbounds o[i,j,k] = (f[i+1,j,k] - f[i-1,j,k]) * inv2dx + s[i,j,k] * _dσ_c(f, i, j, k, dzf); nothing)
+@inline _b_tf_∂y_cc!(i, j, k, o, f, inv2dy, s, dzf) =
+    (@inbounds o[i,j,k] = (f[i,j+1,k] - f[i,j-1,k]) * inv2dy + s[i,j,k] * _dσ_c(f, i, j, k, dzf); nothing)
+
 function _∂x!(out::Field{CellCenter}, f::Field{CellCenter}, g::TerrainFollowingGrid)
-    inv2dx = 1 / (2g.dx)
-    dzf = g.base.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i,j,k] = (f.data[i+1,j,k] - f.data[i-1,j,k]) * inv2dx +
-                          g.dσdx[i,j,k] * _dσ_c(f.data, i, j, k, dzf)
-    end
+    launch!(Backends.backend(out.data), _b_tf_∂x_cc!, interior(g), out.data, f.data,
+            1 / (2g.dx), g.dσdx, g.base.dzf)
     return out
 end
 
 @doc (@doc _∂x!)
 function _∂y!(out::Field{CellCenter}, f::Field{CellCenter}, g::TerrainFollowingGrid)
-    inv2dy = 1 / (2g.dy)
-    dzf = g.base.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i,j,k] = (f.data[i,j+1,k] - f.data[i,j-1,k]) * inv2dy +
-                          g.dσdy[i,j,k] * _dσ_c(f.data, i, j, k, dzf)
-    end
+    launch!(Backends.backend(out.data), _b_tf_∂y_cc!, interior(g), out.data, f.data,
+            1 / (2g.dy), g.dσdy, g.base.dzf)
     return out
 end
 
@@ -1431,28 +1064,31 @@ columns. This is the kernel the pressure-gradient force goes through, so
 the metric must be co-located with the face or the hydrostatic
 cancellation over a slope is lost.
 """
-function _∂x!(out::Field{FaceX}, f::Field{CellCenter}, g::TerrainFollowingGrid)
-    idx = 1 / g.dx
-    dzf = g.base.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        dfdσ = (_dσ_c(f.data, i-1, j, k, dzf) + _dσ_c(f.data, i, j, k, dzf)) / 2
-        out.data[i,j,k] = (f.data[i,j,k] - f.data[i-1,j,k]) * idx +
-                          g.dσdx_xf[i,j,k] * dfdσ
+@inline function _b_tf_∂x_cf!(i, j, k, o, f, idx, s, dzf)
+    @inbounds begin
+        dfdσ = (_dσ_c(f, i-1, j, k, dzf) + _dσ_c(f, i, j, k, dzf)) / 2
+        o[i,j,k] = (f[i,j,k] - f[i-1,j,k]) * idx + s[i,j,k] * dfdσ
     end
+    return nothing
+end
+@inline function _b_tf_∂y_cf!(i, j, k, o, f, idy, s, dzf)
+    @inbounds begin
+        dfdσ = (_dσ_c(f, i, j-1, k, dzf) + _dσ_c(f, i, j, k, dzf)) / 2
+        o[i,j,k] = (f[i,j,k] - f[i,j-1,k]) * idy + s[i,j,k] * dfdσ
+    end
+    return nothing
+end
+
+function _∂x!(out::Field{FaceX}, f::Field{CellCenter}, g::TerrainFollowingGrid)
+    launch!(Backends.backend(out.data), _b_tf_∂x_cf!, interior(g), out.data, f.data,
+            1 / g.dx, g.dσdx_xf, g.base.dzf)
     return out
 end
 
 @doc (@doc _∂x!)
 function _∂y!(out::Field{FaceY}, f::Field{CellCenter}, g::TerrainFollowingGrid)
-    idy = 1 / g.dy
-    dzf = g.base.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        dfdσ = (_dσ_c(f.data, i, j-1, k, dzf) + _dσ_c(f.data, i, j, k, dzf)) / 2
-        out.data[i,j,k] = (f.data[i,j,k] - f.data[i,j-1,k]) * idy +
-                          g.dσdy_yf[i,j,k] * dfdσ
-    end
+    launch!(Backends.backend(out.data), _b_tf_∂y_cf!, interior(g), out.data, f.data,
+            1 / g.dy, g.dσdy_yf, g.base.dzf)
     return out
 end
 
@@ -1463,26 +1099,21 @@ Face → centre horizontal derivative of `u` at constant height. The
 σ-derivative of `u` is taken after averaging `u` to the cell centre in
 `x`, keeping the stencil symmetric about the cell.
 """
+@inline _b_tf_∂x_fc!(i, j, k, o, u, idx, s, dzf) =
+    (@inbounds o[i,j,k] = (u[i+1,j,k] - u[i,j,k]) * idx + s[i,j,k] * _dσ_cx(u, i, j, k, dzf); nothing)
+@inline _b_tf_∂y_fc!(i, j, k, o, v, idy, s, dzf) =
+    (@inbounds o[i,j,k] = (v[i,j+1,k] - v[i,j,k]) * idy + s[i,j,k] * _dσ_cy(v, i, j, k, dzf); nothing)
+
 function _∂x!(out::Field{CellCenter}, u::Field{FaceX}, g::TerrainFollowingGrid)
-    idx = 1 / g.dx
-    dzf = g.base.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i,j,k] = (u.data[i+1,j,k] - u.data[i,j,k]) * idx +
-                          g.dσdx[i,j,k] * _dσ_cx(u.data, i, j, k, dzf)
-    end
+    launch!(Backends.backend(out.data), _b_tf_∂x_fc!, interior(g), out.data, u.data,
+            1 / g.dx, g.dσdx, g.base.dzf)
     return out
 end
 
 @doc (@doc _∂x!)
 function _∂y!(out::Field{CellCenter}, v::Field{FaceY}, g::TerrainFollowingGrid)
-    idy = 1 / g.dy
-    dzf = g.base.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        out.data[i,j,k] = (v.data[i,j+1,k] - v.data[i,j,k]) * idy +
-                          g.dσdy[i,j,k] * _dσ_cy(v.data, i, j, k, dzf)
-    end
+    launch!(Backends.backend(out.data), _b_tf_∂y_fc!, interior(g), out.data, v.data,
+            1 / g.dy, g.dσdy, g.base.dzf)
     return out
 end
 
@@ -1540,34 +1171,42 @@ Because the discrete form telescopes, the pressure projection remains
 mass-conserving cell by cell. For `h ≡ 0`, `Ω ≡ w` and the kernel is
 bit-identical to the [`StretchedGrid`](@ref) one.
 """
+# The contravariant flux Ω through σ-face k of column (i, j). Each work
+# item evaluates the Ω of its two faces (a face is shared by two cells, so
+# it is computed twice, with the same arithmetic as the old column buffer).
+@inline function _tf_Ω(u, v, w, Jzf, sx, sy, dzc, i, j, k)
+    @inbounds begin
+        wlo = dzc[k]   / (dzc[k-1] + dzc[k])
+        whi = dzc[k-1] / (dzc[k-1] + dzc[k])
+        ucm = (u[i,j,k-1] + u[i+1,j,k-1]) / 2
+        uck = (u[i,j,k]   + u[i+1,j,k])   / 2
+        vcm = (v[i,j,k-1] + v[i,j+1,k-1]) / 2
+        vck = (v[i,j,k]   + v[i,j+1,k])   / 2
+        ū = wlo * ucm + whi * uck
+        v̄ = wlo * vcm + whi * vck
+        return w[i,j,k] + Jzf[i,j,k] * (sx[i,j,k] * ū + sy[i,j,k] * v̄)
+    end
+end
+
+@inline function _b_tf_divergence!(i, j, k, o, u, v, w, g, idx, idy)
+    @inbounds begin
+        T = eltype(o)
+        dzc = g.base.dzc
+        Ωb = convert(T, _tf_Ω(u, v, w, g.Jzf, g.dσdx_zf, g.dσdy_zf, dzc, i, j, k))
+        Ωt = convert(T, _tf_Ω(u, v, w, g.Jzf, g.dσdx_zf, g.dσdy_zf, dzc, i, j, k + 1))
+        hx_flux = (g.Jx[i+1,j,k] * u[i+1,j,k] - g.Jx[i,j,k] * u[i,j,k]) * idx
+        hy_flux = (g.Jy[i,j+1,k] * v[i,j+1,k] - g.Jy[i,j,k] * v[i,j,k]) * idy
+        vz_flux = (Ωt - Ωb) / dzc[k]
+        o[i,j,k] = (hx_flux + hy_flux + vz_flux) / g.J[i,j,k]
+    end
+    return nothing
+end
+
 function _divergence!(out::Field{CellCenter},
                       u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                       g::TerrainFollowingGrid{T}) where {T}
-    idx = 1 / g.dx; idy = 1 / g.dy
-    dzc = g.base.dzc
-    ii, jj, kk = interior(g)
-    k1, k2 = first(kk), last(kk)
-    Ω = Vector{T}(undef, k2 - k1 + 2)
-    @inbounds for j in jj, i in ii
-        for k in k1:k2+1
-            wlo = dzc[k]   / (dzc[k-1] + dzc[k])
-            whi = dzc[k-1] / (dzc[k-1] + dzc[k])
-            ucm = (u.data[i,j,k-1] + u.data[i+1,j,k-1]) / 2
-            uck = (u.data[i,j,k]   + u.data[i+1,j,k])   / 2
-            vcm = (v.data[i,j,k-1] + v.data[i,j+1,k-1]) / 2
-            vck = (v.data[i,j,k]   + v.data[i,j+1,k])   / 2
-            ū = wlo * ucm + whi * uck
-            v̄ = wlo * vcm + whi * vck
-            Ω[k - k1 + 1] = w.data[i,j,k] +
-                            g.Jzf[i,j,k] * (g.dσdx_zf[i,j,k] * ū + g.dσdy_zf[i,j,k] * v̄)
-        end
-        for k in k1:k2
-            hx_flux = (g.Jx[i+1,j,k] * u.data[i+1,j,k] - g.Jx[i,j,k] * u.data[i,j,k]) * idx
-            hy_flux = (g.Jy[i,j+1,k] * v.data[i,j+1,k] - g.Jy[i,j,k] * v.data[i,j,k]) * idy
-            vz_flux = (Ω[k - k1 + 2] - Ω[k - k1 + 1]) / dzc[k]
-            out.data[i,j,k] = (hx_flux + hy_flux + vz_flux) / g.J[i,j,k]
-        end
-    end
+    launch!(Backends.backend(out.data), _b_tf_divergence!, interior(g), out.data,
+            u.data, v.data, w.data, g, 1 / g.dx, 1 / g.dy)
     return out
 end
 
@@ -1577,20 +1216,22 @@ end
 Collocated diagnostic divergence: the sum of the three metric-corrected
 collocated derivatives (non-conservative; for diagnostics only).
 """
+@inline function _b_tf_divergence_cc!(i, j, k, o, u, v, w, g, inv2dx, inv2dy)
+    @inbounds begin
+        dzf = g.base.dzf
+        dudx = (u[i+1,j,k] - u[i-1,j,k]) * inv2dx + g.dσdx[i,j,k] * _dσ_c(u, i, j, k, dzf)
+        dvdy = (v[i,j+1,k] - v[i,j-1,k]) * inv2dy + g.dσdy[i,j,k] * _dσ_c(v, i, j, k, dzf)
+        dwdz = _dσ_c(w, i, j, k, dzf) / g.J[i,j,k]
+        o[i,j,k] = dudx + dvdy + dwdz
+    end
+    return nothing
+end
+
 function _divergence!(out::Field{CellCenter},
                       u::Field{CellCenter}, v::Field{CellCenter}, w::Field{CellCenter},
                       g::TerrainFollowingGrid)
-    inv2dx = 1 / (2g.dx); inv2dy = 1 / (2g.dy)
-    dzf = g.base.dzf
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
-        dudx = (u.data[i+1,j,k] - u.data[i-1,j,k]) * inv2dx +
-               g.dσdx[i,j,k] * _dσ_c(u.data, i, j, k, dzf)
-        dvdy = (v.data[i,j+1,k] - v.data[i,j-1,k]) * inv2dy +
-               g.dσdy[i,j,k] * _dσ_c(v.data, i, j, k, dzf)
-        dwdz = _dσ_c(w.data, i, j, k, dzf) / g.J[i,j,k]
-        out.data[i,j,k] = dudx + dvdy + dwdz
-    end
+    launch!(Backends.backend(out.data), _b_tf_divergence_cc!, interior(g), out.data,
+            u.data, v.data, w.data, g, 1 / (2g.dx), 1 / (2g.dy))
     return out
 end
 
@@ -1638,27 +1279,22 @@ the stretched-grid Laplacian.
     Acceptable for diagnostics and once-per-substep diffusion; a
     scratch-carrying in-place variant is deferred.
 """
-function _laplacian!(out::Field{L}, f::Field{L}, g::TerrainFollowingGrid{T}) where {L<:Location, T}
-    dx, dy = g.dx, g.dy
-    dzc, dzf = _σ_metrics(g.base, L())
-    ii, jj, kk = interior(g)
-    i1, i2 = first(ii), last(ii)
-    j1, j2 = first(jj), last(jj)
-    k1, k2 = first(kk), last(kk)
-    d = f.data
-    Fx = zeros(T, Base.size(d)); Fy = zeros(T, Base.size(d)); Fs = zeros(T, Base.size(d))
-
-    @inbounds for k in k1:k2, j in j1:j2, i in i1:i2+1
+@inline function _b_tf_lap_fx!(i, j, k, Fx, d, g, dzf, dx)
+    @inbounds begin
         dfdσ = (_dσ_c(d, i-1, j, k, dzf) + _dσ_c(d, i, j, k, dzf)) / 2
-        Fx[i,j,k] = g.Jx[i,j,k] * ((d[i,j,k] - d[i-1,j,k]) / dx +
-                                   g.dσdx_xf[i,j,k] * dfdσ)
+        Fx[i,j,k] = g.Jx[i,j,k] * ((d[i,j,k] - d[i-1,j,k]) / dx + g.dσdx_xf[i,j,k] * dfdσ)
     end
-    @inbounds for k in k1:k2, j in j1:j2+1, i in i1:i2
+    return nothing
+end
+@inline function _b_tf_lap_fy!(i, j, k, Fy, d, g, dzf, dy)
+    @inbounds begin
         dfdσ = (_dσ_c(d, i, j-1, k, dzf) + _dσ_c(d, i, j, k, dzf)) / 2
-        Fy[i,j,k] = g.Jy[i,j,k] * ((d[i,j,k] - d[i,j-1,k]) / dy +
-                                   g.dσdy_yf[i,j,k] * dfdσ)
+        Fy[i,j,k] = g.Jy[i,j,k] * ((d[i,j,k] - d[i,j-1,k]) / dy + g.dσdy_yf[i,j,k] * dfdσ)
     end
-    @inbounds for k in k1:k2+1, j in j1:j2, i in i1:i2
+    return nothing
+end
+@inline function _b_tf_lap_fs!(i, j, k, Fs, d, g, dzc, dzf, dx, dy)
+    @inbounds begin
         wlo = dzc[k]   / (dzc[k-1] + dzc[k])
         whi = dzc[k-1] / (dzc[k-1] + dzc[k])
         dfdx = wlo * (d[i+1,j,k-1] - d[i-1,j,k-1]) / (2dx) +
@@ -1671,11 +1307,30 @@ function _laplacian!(out::Field{L}, f::Field{L}, g::TerrainFollowingGrid{T}) whe
         Gσσ = sx * sx + sy * sy + 1 / (Jf * Jf)
         Fs[i,j,k] = Jf * (sx * dfdx + sy * dfdy + Gσσ * dfdσ)
     end
-    @inbounds for k in k1:k2, j in j1:j2, i in i1:i2
-        out.data[i,j,k] = ((Fx[i+1,j,k] - Fx[i,j,k]) / dx +
-                           (Fy[i,j+1,k] - Fy[i,j,k]) / dy +
-                           (Fs[i,j,k+1] - Fs[i,j,k]) / dzc[k]) / g.J[i,j,k]
-    end
+    return nothing
+end
+@inline function _b_tf_lap_div!(i, j, k, o, Fx, Fy, Fs, J, dzc, dx, dy)
+    @inbounds o[i,j,k] = ((Fx[i+1,j,k] - Fx[i,j,k]) / dx +
+                          (Fy[i,j+1,k] - Fy[i,j,k]) / dy +
+                          (Fs[i,j,k+1] - Fs[i,j,k]) / dzc[k]) / J[i,j,k]
+    return nothing
+end
+
+function _laplacian!(out::Field{L}, f::Field{L}, g::TerrainFollowingGrid{T}) where {L<:Location, T}
+    dx, dy = g.dx, g.dy
+    dzc, dzf = _σ_metrics(g.base, L())
+    ii, jj, kk = interior(g)
+    i1, i2 = first(ii), last(ii)
+    j1, j2 = first(jj), last(jj)
+    k1, k2 = first(kk), last(kk)
+    d = f.data
+    Fx = zeros(T, Base.size(d)); Fy = zeros(T, Base.size(d)); Fs = zeros(T, Base.size(d))
+    b = Backends.backend(out.data)
+    # the three face fluxes, then their divergence (KA-d: four launches)
+    launch!(b, _b_tf_lap_fx!, (i1:i2+1, j1:j2, k1:k2), Fx, d, g, dzf, dx)
+    launch!(b, _b_tf_lap_fy!, (i1:i2, j1:j2+1, k1:k2), Fy, d, g, dzf, dy)
+    launch!(b, _b_tf_lap_fs!, (i1:i2, j1:j2, k1:k2+1), Fs, d, g, dzc, dzf, dx, dy)
+    launch!(b, _b_tf_lap_div!, (i1:i2, j1:j2, k1:k2), out.data, Fx, Fy, Fs, g.J, dzc, dx, dy)
     return out
 end
 
@@ -1700,15 +1355,19 @@ Wall fluxes divided by the **physical** thickness `J·Δσ_c` of the first
 and last interior cell, so a cell sitting on high ground (small `J`, thin
 cell) receives the correspondingly larger tendency.
 """
+@inline function _b_tf_surface_flux!(i, j, t, J, F_bot, F_top, dzb, dzt, kb, kt)
+    @inbounds t[i,j,kb] += F_bot / (J[i,j,kb] * dzb)
+    @inbounds t[i,j,kt] -= F_top / (J[i,j,kt] * dzt)
+    return nothing
+end
+
 function _add_surface_flux!(tϕ::Field{CellCenter}, F_bot::Real, F_top::Real,
                             g::TerrainFollowingGrid)
     ii, jj, kk = interior(g)
     k_bot, k_top = first(kk), last(kk)
     dzc = g.base.dzc
-    @inbounds for j in jj, i in ii
-        tϕ.data[i,j,k_bot] += F_bot / (g.J[i,j,k_bot] * dzc[k_bot])
-        tϕ.data[i,j,k_top] -= F_top / (g.J[i,j,k_top] * dzc[k_top])
-    end
+    launch!(Backends.backend(tϕ.data), _b_tf_surface_flux!, (ii, jj), tϕ.data, g.J,
+            F_bot, F_top, dzc[k_bot], dzc[k_top], k_bot, k_top)
     return tϕ
 end
 
