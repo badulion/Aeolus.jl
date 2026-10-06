@@ -96,11 +96,13 @@ exclusive = true
 seconds = 150
 # asserts its own wall time (elapsed < 300 s), so it runs alone
 
-# --- fast, heavy (started first) ---------------------------------------------
-
 ["era6_apriori_sgs.jl"]
 weight = "heavy"
+exclusive = true
 seconds = 87
+# asserts the filtered-DNS fixture wall time (d.wall < 300 s), so it runs alone
+
+# --- fast, heavy (started first) ---------------------------------------------
 
 ["berlin_dynamics.jl"]
 weight = "heavy"

@@ -77,9 +77,9 @@ own Julia process, plus one job, `runtests.jl`, for the inline
   capped by available memory (`--mem-per-job`, default 1 GB; the
   heaviest file peaks at 2.2 GB, the median at 0.5 GB). So two agents
   running suites at once do not oversubscribe the machine.
-- **Exclusive files** (`berlin_smoke.jl`, `era6_cbc_decay.jl`) run one
-  at a time after the parallel batch, because they assert their own
-  wall time.
+- **Exclusive files** (`berlin_smoke.jl`, `era6_apriori_sgs.jl`,
+  `era6_cbc_decay.jl`) run one at a time after the parallel batch,
+  because they assert their own wall time.
 - **Logs.** One log and one result file per job in the run folder,
   `.testruns/<yyyymmdd-HHMMSS>-<tier>/` (gitignored), plus
   `summary.txt` and `summary.toml`. The path of a failing file's log is
