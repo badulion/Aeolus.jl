@@ -5,7 +5,10 @@
 #
 # `gabls2_case` (examples/sbl/cases.jl) from 16 LT 22 October for 48 h:
 # U_g = (3, -9) m/s, the prescribed surface temperature, z0m = 0.03 m,
-# z0h = 0.003 m; no subsidence, dry (see the CSV header). Virtual towers in
+# z0h = 0.003 m; dry (see the CSV header); the case's large-scale
+# subsidence on θ from 40 h (16 LT 23 Oct, LargeScaleForcing.Subsidence,
+# #248; SUBSIDENCE=0 for the run without it). The residual-layer inversion
+# height (sbl_inversion_height) is recorded with the series. Virtual towers in
 # every column record 5-min means and variances below 60 m during the two
 # nights (18-06 LT, as Sun et al. 2012); V_TKE (Transition's
 # turbulence_velocity_scale, resolved + SGS energy) is binned against the
@@ -14,7 +17,7 @@
 #
 #   julia --project=. examples/sbl/gabls2.jl                    # 64 x 64 x 128 (37.5 m / 12.5 m)
 #   NX=48 NZ=80 julia --project=. examples/sbl/gabls2.jl        # 50 m / 20 m
-#   CLOSURES=brown94 ... ; REUSE=1 ...
+#   CLOSURES=brown94 ... ; REUSE=1 ... ; SUBSIDENCE=0 ...
 #
 # writes examples/sbl/output/gabls2_<tag>.svg, cases99_hockey_<tag>.svg,
 # gabls2_<tag>_series.csv, cases99_hockey_<tag>.csv
@@ -32,13 +35,15 @@ const LZ = parse(Float64, get(ENV, "L", "1600"))
 const T0 = 16 * 3600.0
 const T_END = parse(Float64, get(ENV, "T_END", string(64 * 3600)))
 const CLOSURES = Symbol.(split(get(ENV, "CLOSURES", "brown94,none"), ","))
-const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))"
+const SUBSIDENCE = get(ENV, "SUBSIDENCE", "1") == "1"
+const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))" * (SUBSIDENCE ? "" : "_nosubs")
 const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 const P_SFC = 97200.0
 night(t) = (h = mod(t / 3600, 24); h >= 18 || h < 6)
 
 function run_closure(stab, ck = nothing)
-    c = gabls2_case(; N = (NX, NX, NZ), extent = (LX, LX, LZ), sgs_stability = stab, t_end = T_END)
+    c = gabls2_case(; N = (NX, NX, NZ), extent = (LX, LX, LZ), sgs_stability = stab, t_end = T_END,
+                    subsidence = SUBSIDENCE)
     dz = LZ / NZ
     towers = sbl_towers(c, [(k - 0.5) * dz for k in 1:NZ if (k - 0.5) * dz < 60]; window = 300.0)
     series = NamedTuple[]
@@ -54,6 +59,7 @@ function run_closure(stab, ck = nothing)
         scr = sbl_screen(c)
         push!(series, (t = c.sim.t, u_star = sqrt(hypot(c.τx, c.τy)), H = c.ρcp * mean(c.wθ),
                        h = sbl_bl_height(p.zf, p.τ), S_max = p.S[k], z_jet = p.z[k],
+                       z_inv = sbl_inversion_height(p.z, p.θ), ls_heat = c.ls_heat_applied,
                        T2 = scr.θ_screen * (P_SFC / 1e5)^0.286 - 273.15, U10 = scr.U_screen,
                        Ts = surface_temperature(c.Ts, c.sim.t) * (P_SFC / 1e5)^0.286 - 273.15))
     end
@@ -97,12 +103,21 @@ for row in ref.rows
     @printf("  %-8s at %2.0f h: reference [%.1f, %.1f] %s; model %s\n", q, h, row[3], row[4], row[5], vals)
 end
 
+println("\nResidual-layer inversion (largest ∂⟨θ⟩/∂z above 300 m) and the subsidence heating ∫∫(∂θ/∂t)_s dz dt",
+        SUBSIDENCE ? "" : " (SUBSIDENCE=0: none)", ":")
+for r in results, h in (40, 42, 48, 54)
+    r.series[end].t / 3600 >= h - 0.1 || continue
+    s = at(r, h)
+    @printf("  %-8s at %2.0f h: z_inv = %.1f m, h = %.1f m, subsidence heat %.2f K m, jet %.2f m/s at %.0f m\n",
+            r.stab, h, s.z_inv, s.h, s.ls_heat, s.S_max, s.z_jet)
+end
+
 open(joinpath(OUTDIR, "gabls2_$(TAG)_series.csv"), "w") do io
     println(io, "# GABLS2 time series (every 600 s), Aeolus.jl SBL driver, $TAG (P58-d, #194). Model output. t in s from 00 LT 22 Oct 1999.")
-    println(io, "closure,t_s,u_star,H_Wm2,h_m,S_max,z_jet,T_2m_C,U_10m,T_s_C")
+    println(io, "closure,t_s,u_star,H_Wm2,h_m,S_max,z_jet,T_2m_C,U_10m,T_s_C,z_inv_m,subsidence_heat_Km")
     for r in results, s in r.series
-        @printf(io, "%s,%.0f,%.4f,%.2f,%.1f,%.3f,%.1f,%.3f,%.3f,%.3f\n", r.stab, s.t, s.u_star, s.H, s.h,
-                s.S_max, s.z_jet, s.T2, s.U10, s.Ts)
+        @printf(io, "%s,%.0f,%.4f,%.2f,%.1f,%.3f,%.1f,%.3f,%.3f,%.3f,%.1f,%.4f\n", r.stab, s.t, s.u_star, s.H, s.h,
+                s.S_max, s.z_jet, s.T2, s.U10, s.Ts, s.z_inv, s.ls_heat)
     end
 end
 
