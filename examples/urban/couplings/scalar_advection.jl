@@ -62,6 +62,11 @@
 # face velocities (the flux through an open face is not a non-conservation
 # of the scheme), split from `transport` / `density_redistribution` level by
 # level. The SGS diffusion carries nothing through a mirror halo.
+#
+# Nested case (the default, #265): the tracer halos are the core's open set
+# (`tracer_bcs`): qv (and the TKE `e`) take the parent's values on the nest
+# faces, the tracers the parent does not carry zero on inflow and their own
+# value on outflow; the `:boundary` term books what that carries.
 
 "Reconstructions `advect_positive!` accepts (the flux limiter needs one)."
 const POSITIVE_SCHEMES = (:centered, :weno5, :weno_js5, :weno_z5, :weno_z7, :teno5, :teno8)
@@ -299,7 +304,7 @@ function build(::Type{<:ScalarAdvection}, case, o)
         error("scalar_advection: the positivity limiter takes one of $(POSITIVE_SCHEMES), not :$(o.scheme); set positivity = false")
     wt = o.weighted ? transport_weighting(case.sim, mesh) : nothing
     return ScalarAdvection(Field(CellCenter(), mesh), FluxLimiterWorkspace(mesh),
-                           case_scalar_bcs(case.cfg),
+                           tracer_bcs(case),
                            scheme, o.positivity, o.refresh_halos, Ref(0.0), Ref(0.0),
                            wt, o.weighted,
                            o.sgs_diffusion ? TracerSGSDiffusion(case) : nothing,
@@ -327,26 +332,32 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
         q = t.field
         fill_halos!(q, c.bcs)
         iswater = t.name in case.ledger.water_tracers
-        # the water the open faces carry this step, per level (#262)
+        limited = t.positive && c.positivity
+        fill!(c.tend.data, 0)
+        if limited
+            advect_positive!(c.tend, u, v, w, q, dt;
+                             scheme = c.scheme.name, workspace = c.ws, bcs = c.bcs)
+        else
+            c.scheme(c.tend, u, v, w, q)
+        end
+        # the water the open faces carry this step, per level (#262): the
+        # face fluxes the transport used — the limited ones of
+        # advect_positive! on the Boussinesq core (the positivity limiter
+        # scales a boundary flux where the cell next to an outflow face
+        # would go negative, #265), the reconstructed ones otherwise
         ob = c.open
         fb = rb = 0.0
         if ob !== nothing && iswater
             fill!(ob.lev, 0.0)
             boundary_scalar_flux(sim, q; scheme = ob.scheme, bcs = c.bcs, weights = ob.weights,
-                                 fill = false, levels = ob.lev)
+                                 fill = false, levels = ob.lev,
+                                 face_fluxes = limited && wt === nothing ? (c.ws.Fx, c.ws.Fy, c.ws.Fz) : nothing)
             Vc = mesh.dx * mesh.dy * mesh.dz
             @inbounds for k in 1:Nz
                 ob.S[k] = -dt * ob.lev[k] / Vc
             end
             fb, rb = ledger_water_split_levels(case, ob.S, wt === nothing ? nothing : wt.W)
             c.dWb[] += fb + rb
-        end
-        fill!(c.tend.data, 0)
-        if t.positive && c.positivity
-            advect_positive!(c.tend, u, v, w, q, dt;
-                             scheme = c.scheme.name, workspace = c.ws, bcs = c.bcs)
-        else
-            c.scheme(c.tend, u, v, w, q)
         end
         tend = view(c.tend.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
         # weighted: −∇·(W u q)/W_min → −∇·(W u q)/W_k

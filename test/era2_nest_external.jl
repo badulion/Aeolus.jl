@@ -36,6 +36,7 @@ using Aeolus.Operators: divergence
 using Aeolus.IBM: SolidMask, mark_solid!, apply_solid_mask!
 using Aeolus.LargeScaleForcing: GeostrophicPressureGradient, apply_forcing!
 using Aeolus.AdvectionSchemes: boundary_scalar_flux
+using Aeolus.BoundaryConditions: ProfileBoundaryData, open_boundary_conditions
 
 _nx_zc(m, k) = m.z0 + (k - m.Hz - 0.5) * m.dz
 
@@ -390,6 +391,51 @@ end
     fill_halos!(bc_, csim.θ_bcs)
     @test all(==(5.0), bc_.data[1:Hx, :, :])
     @test all(==(0.0), bc_.data[Hx+Nx+1:end, :, :])
+end
+
+# -------------------------------------------------------------------------
+# The water ledger of the Berlin case books what crosses the open faces with
+# boundary_scalar_flux. Its tracers go through the positivity-limited
+# transport (advect_positive!), which scales a boundary flux where the cell
+# next to an outflow face would go negative; the booking must take those
+# limited fluxes (face_fluxes), not re-reconstruct them. Found when the nest's
+# zero-ql inflow met seeded fog in the smoke window: the ledger's `transport`
+# term showed 2.4e-8 kg/m² of spurious water (#265).
+@testset "boundary_scalar_flux books the positivity-limited face fluxes" begin
+    m = RegularGrid(Float64; size = (16, 8, 8), extent = (160.0, 80.0, 80.0), halo = (3, 3, 3))
+    data = ProfileBoundaryData(u = 4.0, v = 0.0, w = 0.0, θ = 300.0)
+    bcs = open_boundary_conditions(m, data; halo = 3)
+    sim = BoussinesqSimulation(m; bcs = bcs, θ₀ = 300.0)
+    fill!(sim.u.data, 4.0); fill!(sim.θ.data, 300.0)
+    Aeolus.BoundaryConditions.prepare_open_boundaries!(sim)
+    q = Field(CellCenter(), m)
+    qi = interior_view(q)
+    # tracer only in the last cell before the outflow (east) face, its
+    # mirror halo next to it: the WENO face value there is 1.2–1.8 times the
+    # cell's content, so at CFL 0.9 the flux would empty the cell below zero
+    # and the limiter scales it down
+    for k in 1:m.Nz, j in 1:m.Ny
+        qi[m.Nx, j, k] = 1e-3
+    end
+    fill_halos!(q, FieldBoundaryConditions(:noflux))           # zero-gradient halos
+    ws = Aeolus.AdvectionSchemes.FluxLimiterWorkspace(m)
+    tend = Field(CellCenter(), m)
+    dt = 0.9 * m.dx / 4.0
+    Aeolus.AdvectionSchemes.advect_positive!(tend, sim.u, sim.v, sim.w, q, dt;
+                                             scheme = :weno_z5, workspace = ws,
+                                             bcs = FieldBoundaryConditions(:noflux))
+    V = m.dx * m.dy * m.dz
+    change = dt * sum(interior_view(tend)) * V
+    lim = boundary_scalar_flux(sim, q; scheme = :weno_z5, bcs = FieldBoundaryConditions(:noflux),
+                               fill = false, face_fluxes = (ws.Fx, ws.Fy, ws.Fz))
+    rec = boundary_scalar_flux(sim, q; scheme = :weno_z5, bcs = FieldBoundaryConditions(:noflux),
+                               fill = false)
+    out = dt * lim.total
+    @printf("  limited outflow: Δ∫q dV = %.6e, booked (limited fluxes) %.6e, re-reconstructed %.6e\n",
+            change, -out, -dt * rec.total)
+    @test abs(change + out) <= 1e-12 * abs(change)
+    @test abs(change + dt * rec.total) > 1e-6 * abs(change)    # the reconstruction is not what left
+    @test minimum(qi .+ dt .* interior_view(tend)) >= 0
 end
 
 end

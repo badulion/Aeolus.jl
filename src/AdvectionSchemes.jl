@@ -1658,6 +1658,14 @@ N-open-d (#262) adds three keywords for the budgets of an open domain:
   the correction adjusted, `−δ W ϕ_face A`. The data's own flux is the
   rest.
 
+`face_fluxes = (Fx, Fy, Fz)` (N-berlin-nest, #265) takes the advective
+face fluxes `u ϕ_face` the transport actually used instead of
+reconstructing them — the limited fluxes [`advect_positive!`](@ref)
+leaves in its [`FluxLimiterWorkspace`](@ref) (`ws.Fx, ws.Fy, ws.Fz`): where
+the positivity limiter scaled a boundary flux, the reconstructed one is
+not what left the domain. The face value of the correction split is then
+`F/u` (the reconstruction where `u = 0`).
+
 A mesh whose halo along an axis with an [`AbstractOpenBoundary`](@ref)
 face is shallower than `required_halo(scheme)` throws an `ArgumentError`.
 
@@ -1670,7 +1678,7 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
                               scheme = :centered, bcs::FieldBoundaryConditions = sim.θ_bcs,
                               weights = nothing, fill::Bool = true,
                               diffusivity = nothing, levels = nothing,
-                              correction_levels = nothing)
+                              correction_levels = nothing, face_fluxes = nothing)
     r = _flux_reconstruction(scheme)
     g = mesh(ϕ)
     vb = sim.bcs
@@ -1695,6 +1703,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     Wc, Wf = weights === nothing ? (nothing, nothing) : weights
     T = eltype(ϕ.data)
     ϕd = ϕ.data; ud = sim.u.data; vd = sim.v.data; wd = sim.w.data
+    Fxd, Fyd, Fzd = face_fluxes === nothing ? (nothing, nothing, nothing) :
+                    (face_fluxes[1].data, face_fluxes[2].data, face_fluxes[3].data)
     ii, jj, kk = interior(g)
     k0 = first(kk) - 1
     Ax = g.dy * g.dz; Ay = g.dx * g.dz; Az = g.dx * g.dy
@@ -1717,7 +1727,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         @inbounds for k in kk, (b, j) in enumerate(jj)
             w = _wflux(Wc, k) * Ax
             uw = ud[iw, j, k]; ue = ud[ie, j, k]
-            φw = _face_x(r, ϕd, iw - 1, j, k, uw); φe = _face_x(r, ϕd, ie - 1, j, k, ue)
+            φw = _face_or_flux(Fxd, iw, j, k, uw, _face_x(r, ϕd, iw - 1, j, k, uw))
+            φe = _face_or_flux(Fxd, ie, j, k, ue, _face_x(r, ϕd, ie - 1, j, k, ue))
             aw = -w * uw * φw; ae = w * ue * φe
             if dW_
                 aw += _wflux(Dc, k) * Ax * (dν + 0.5 * (_κ(Kh, iw, j, k) + _κ(Kh, iw - 1, j, k))) *
@@ -1741,7 +1752,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         @inbounds for k in kk, (a, i) in enumerate(ii)
             w = _wflux(Wc, k) * Ay
             vs = vd[i, js, k]; vn = vd[i, jn, k]
-            φs = _face_y(r, ϕd, i, js - 1, k, vs); φn = _face_y(r, ϕd, i, jn - 1, k, vn)
+            φs = _face_or_flux(Fyd, i, js, k, vs, _face_y(r, ϕd, i, js - 1, k, vs))
+            φn = _face_or_flux(Fyd, i, jn, k, vn, _face_y(r, ϕd, i, jn - 1, k, vn))
             as = -w * vs * φs; an = w * vn * φn
             if dS_
                 as += _wflux(Dc, k) * Ay * (dν + 0.5 * (_κ(Kh, i, js, k) + _κ(Kh, i, js - 1, k))) *
@@ -1766,8 +1778,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         idz = 1 / g.dz
         @inbounds for (b, j) in enumerate(jj), (a, i) in enumerate(ii)
             wb = wd[i, j, kb]; wt = wd[i, j, kt]
-            φt = _face_z(r, ϕd, i, j, kt - 1, wt)
-            ab = -wb_ * wb * _face_z(r, ϕd, i, j, kb - 1, wb)
+            φt = _face_or_flux(Fzd, i, j, kt, wt, _face_z(r, ϕd, i, j, kt - 1, wt))
+            ab = -wb_ * wb * _face_or_flux(Fzd, i, j, kb, wb, _face_z(r, ϕd, i, j, kb - 1, wb))
             at = wt_ * wt * φt
             if dT_
                 at -= dt_ * (dν + 0.5 * (_κ(Kv, i, j, kt - 1) + _κ(Kv, i, j, kt))) *
@@ -1783,6 +1795,12 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     return (west = fW, east = fE, south = fS, north = fN, bottom = fB, top = fT,
             total = fW + fE + fS + fN + fB + fT)
 end
+
+# The face value whose flux u·φ the transport used: the given face flux
+# F / u (the limited flux of advect_positive!), or the reconstruction `φr`
+# (no face fluxes given, or u = 0: no flux either way).
+@inline _face_or_flux(::Nothing, i, j, k, u, φr) = φr
+@inline _face_or_flux(F::AbstractArray, i, j, k, u, φr) = iszero(u) ? φr : (@inbounds F[i, j, k]) / u
 
 # The diffusive part of boundary_scalar_flux: (ν, κh, κv, Wc, Wf).
 _diffusive_parts(::Nothing, Wc, Wf) = (0.0, nothing, nothing, Wc, Wf)
