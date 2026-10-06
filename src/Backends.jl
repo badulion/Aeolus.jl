@@ -269,19 +269,19 @@ _npoints(ranges) = prod(length, ranges; init = 1)
 
 # ---- serial reference loops (the historical loop order) ---------------------
 
-@inline function _serial!(body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args) where {F}
+@noinline function _serial!(body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args) where {F}
     for k in kr, j in jr, i in ir
         body!(i, j, k, args...)
     end
     return nothing
 end
-@inline function _serial!(body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args) where {F}
+@noinline function _serial!(body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args) where {F}
     for j in jr, i in ir
         body!(i, j, args...)
     end
     return nothing
 end
-@inline function _serial!(body!::F, (nr,)::NTuple{1,UnitRange{Int}}, args) where {F}
+@noinline function _serial!(body!::F, (nr,)::NTuple{1,UnitRange{Int}}, args) where {F}
     for n in nr
         body!(n, args...)
     end
@@ -336,7 +336,18 @@ backend's threshold): the loops run on the calling task in the historical
 order `for k, for j, for i`. Threaded: a KernelAbstractions kernel whose
 work item is one i-row, in workgroups of four rows.
 """
-function launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, args...) where {F, N}
+# Specialisation: with a plain `args...`, or with a function among the
+# arguments, Julia compiles a pass-through method for widened argument types
+# (`Any`, `Function`), and the inlined serial loop then dispatches at every
+# point (measured 375x slower than the loop at 64x64x32). `Vararg{Any,M}`
+# and the type parameter `A` of `_launch!` prevent that.
+launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, args::Vararg{Any,M}) where {F, N, M} =
+    _launch!(b, body!, ranges, args)
+
+# The argument tuple as one parameter `A`, so it is never widened (a function
+# among `args` would otherwise be compiled as `::Function` and called by
+# dynamic dispatch at every point).
+function _launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, args::A) where {F, N, A<:Tuple}
     np = _npoints(ranges)
     np == 0 && return nothing
     if runs_serially(b, np)
@@ -350,17 +361,27 @@ launch!(b::GPUBackend, body!, ranges::Tuple, args...) = _gpu_error(b, "launch!")
 
 # ---- pointwise map ----------------------------------------------------------
 
-@inline _at(a::AbstractArray, i, j, k) = @inbounds a[i, j, k]
-@inline _at(x, i, j, k) = x
-@inline _at(a::AbstractArray, i, j) = @inbounds a[i, j]
-@inline _at(x, i, j) = x
+# An argument that is `out` itself (an in-place update, `y = f(y, x)`) is
+# replaced by `_OUT` and read through `out`: one pointer for the load and
+# the store, which the compiler then vectorises. With two pointers to the
+# same array it cannot prove the loop free of dependences and stays scalar
+# (measured 1.8x slower than the old in-place loop at 64x64x32).
+struct _Out end
+const _OUT = _Out()
+
+@inline _at(a::AbstractArray, out, i, j, k) = @inbounds a[i, j, k]
+@inline _at(::_Out, out, i, j, k) = @inbounds out[i, j, k]
+@inline _at(x, out, i, j, k) = x
+@inline _at(a::AbstractArray, out, i, j) = @inbounds a[i, j]
+@inline _at(::_Out, out, i, j) = @inbounds out[i, j]
+@inline _at(x, out, i, j) = x
 
 @inline function _map_body!(i, j, k, f::F, out, args) where {F}
-    @inbounds out[i, j, k] = f(map(a -> _at(a, i, j, k), args)...)
+    @inbounds out[i, j, k] = f(map(a -> _at(a, out, i, j, k), args)...)
     return nothing
 end
 @inline function _map_body!(i, j, f::F, out, args) where {F}
-    @inbounds out[i, j] = f(map(a -> _at(a, i, j), args)...)
+    @inbounds out[i, j] = f(map(a -> _at(a, out, i, j), args)...)
     return nothing
 end
 
@@ -372,9 +393,10 @@ end
 passed as is. A pointwise kernel: bit-identical serially and threaded.
 `Fields.interior_map!` is the field-level form.
 """
-function range_map!(b::AbstractBackend, f::F, out::AbstractArray, ranges::Tuple, args...) where {F}
+function range_map!(b::AbstractBackend, f::F, out::AbstractArray, ranges::Tuple,
+                    args::Vararg{Any,M}) where {F, M}
     _npoints(ranges) == 0 || _check((out, args...), ranges)
-    launch!(b, _map_body!, ranges, f, out, args)
+    launch!(b, _map_body!, ranges, f, out, map(a -> a === out ? _OUT : a, args))
     return out
 end
 
@@ -472,12 +494,12 @@ is identical at every thread count and with `serial = true`. Combine with
 horizontal-mean profile ([`plane_mean!`](@ref)).
 """
 function plane_partials!(partials::AbstractVector, b::AbstractBackend, f::F,
-                         ranges::NTuple{3,UnitRange{Int}}, arrays::AbstractArray...) where {F}
+                         ranges::NTuple{3,UnitRange{Int}}, arrays::Vararg{AbstractArray,M}) where {F, M}
     T = eltype(partials)
     _plane_partials!(b, partials, _PlaneReduce(+, zero(T), f, ranges[1], ranges[2]), ranges[3], arrays)
 end
 plane_partials!(partials::AbstractVector, f::F, ranges::NTuple{3,UnitRange{Int}},
-                arrays::AbstractArray...) where {F} =
+                arrays::Vararg{AbstractArray,M}) where {F, M} =
     plane_partials!(partials, backend(first(arrays)), f, ranges, arrays...)
 
 """

@@ -106,7 +106,7 @@ Halos are left untouched — call `fill_halos!` afterwards. A pointwise
 kernel ([`launch!`](@ref Aeolus.Backends.launch!)): threaded when Julia
 has threads, bit-identical to a serial loop.
 """
-function set!(f::Field, g::Function)
+function set!(f::Field, g::G) where {G<:Function}   # G: specialise on g
     loc = location(f)
     m   = f.mesh
     xs = Grids.xnodes(m, loc); ys = Grids.ynodes(m, loc); zs = Grids.znodes(m, loc)
@@ -146,7 +146,7 @@ _data(x) = x
 an axpy, `interior_map!((y, x) -> y + a * x, y, y, x)`. Pointwise: the
 same bits serially and threaded. Halos are untouched.
 """
-function interior_map!(f::F, out::Field, args...) where {F}
+function interior_map!(f::F, out::Field, args::Vararg{Any,M}) where {F, M}
     for a in args
         a isa Field && (size(a.data) == size(out.data) ||
                         throw(DimensionMismatch("interior_map!: fields of different sizes")))
