@@ -126,6 +126,10 @@ exclusive = true
 seconds = 87
 # asserts the filtered-DNS fixture wall time (d.wall < 300 s), so it runs alone
 
+["thread_invariance.jl"]
+exclusive = true
+reason = "with AEOLUS_THREAD_TESTS=1 it starts julia -t 1/4/24 subprocesses; the -t 24 ones would compete with the parallel jobs for every core, so it runs alone"
+
 # --- fast, heavy (started first) ---------------------------------------------
 
 ["berlin_dynamics.jl"]
