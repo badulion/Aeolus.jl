@@ -157,6 +157,10 @@ using .WallModels                  # Phase 57 (#169)
 using .LargeScaleForcing           # Era VI, Phase 58 (#171)
 using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 
+# LOG-c (#335): the diagnostics registry's methods for the library's
+# components (simulations, closures, wall models, nesting); needs them all.
+include("logging/component_diagnostics.jl")
+
 # Re-exports for the user-facing API.
 # Structured logging (LOG-a, #333)
 export AeolusLogger, TeeLogger, open_run_log, with_run_log, test_logger,
