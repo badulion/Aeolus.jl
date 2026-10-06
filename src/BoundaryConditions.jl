@@ -8,6 +8,7 @@ using ..Fields: location, Field
 export AbstractBC, Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
        FieldBoundaryConditions, fill_halos!
 export NoSlipWall, is_wall, homogeneous_bcs     # P59-a (#172)
+export passive_scalar_bcs                        # qv faces (#254 + #261)
 export FreeStreamBoundary                        # P59-d (#185)
 export axis_poisson_bc                           # N-open-a (#251)
 export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,   # N-open-b (#255)

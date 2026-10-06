@@ -41,6 +41,7 @@ Aeolus.BoundaryConditions.ImpermeableWall
 Aeolus.BoundaryConditions.NoSlipWall
 Aeolus.BoundaryConditions.is_wall
 Aeolus.BoundaryConditions.homogeneous_bcs
+Aeolus.BoundaryConditions.passive_scalar_bcs
 ```
 
 ## Free-stream top (P59-d, #185)
@@ -62,7 +63,10 @@ heights of a `StretchedGrid` or `dz` steps on a `RegularGrid`), so a
 diffusion with diffusivity `κ` carries `κΓ` through the top face. Its
 homogeneous part ([`homogeneous_bcs`](@ref
 Aeolus.BoundaryConditions.homogeneous_bcs)) is `FluxBC(0)`, which the
-implicit diffusion of `step_imex!` uses. Theory and measured convergence:
+implicit diffusion of `step_imex!` uses. `qv` shares θ's faces but not
+the gradient: it is filled with
+[`passive_scalar_bcs`](@ref Aeolus.BoundaryConditions.passive_scalar_bcs)
+(`FluxBC(0)` on top, open-boundary data kept). Theory and measured convergence:
 [Large-scale forcing → The fixed-gradient top](../theory/large_scale_forcing.md#The-fixed-gradient-top).
 
 ```julia

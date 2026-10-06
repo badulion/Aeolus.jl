@@ -303,7 +303,7 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
     mark_open_boundary_stage!(sim)   # radiating outflow: stage-start layers (N-open-c)
 
     # 2. Zero tendencies and add momentum + scalar advection.
