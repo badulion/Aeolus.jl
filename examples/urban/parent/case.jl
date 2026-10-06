@@ -503,40 +503,54 @@ function step_parent_surface!(p::ParentCase, period::Real)
     fill!(p.θsrc, 0.0); fill!(p.qsrc, 0.0); fill!(p.drag, 0.0)
     kmax = size(p.θsrc, 3)
     U_min = p.pc.U_min
-    sRn = sH = sLE = sG = sE = 0.0
     θd = sim.θ.data
     qd = p.pc.moisture ? sim.qv.data : nothing
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
-    for J in 1:m.Ny, I in 1:m.Nx
-        col = ps.columns[I, J]
-        kf = maximum(col.ktile)
-        air = [SurfaceForcing(; sw_down = p.sw_down, lw_down = p.lw_down,
-                              T_air = θd[Hx+I, Hy+J, Hz+k] * ref.π̄[k],
-                              q_air = qd === nothing ? 0.0 : max(qd[Hx+I, Hy+J, Hz+k], 0.0),
-                              U = max(_cell_speed(sim, I, J, k), U_min), p = ref.p̄[k], z_ref = 10.0)
-               for k in 1:kf]
-        agg = step_parent_column!(ps, col, air, period; U_min = U_min)
-        sRn += agg.Rn; sH += agg.H; sLE += agg.LE; sG += agg.G; sE += agg.E
-        tf = last_tile_fluxes(_mosaic(col))
-        fr = mosaic_fractions(col.surface)
-        τsum = 0.0
-        for (n, f) in enumerate(tf)
-            nl = max(1, col.ktile[n] - 1)
-            Z = zf[nl+1]
-            for k in 1:min(nl, kmax)
-                p.θsrc[I, J, k] += fr[n] * f.H / (Z * ref.ρ̄[k] * ref.cp * ref.π̄[k])
-                p.qsrc[I, J, k] += fr[n] * f.E / (Z * ref.ρ̄[k])
-                p.drag[I, J, k] += fr[n] * f.τ / (Z * ref.ρ̄[k])
-            end
-            τsum += fr[n] * f.τ
-        end
-        p.ustar[I, J] = sqrt(max(τsum, 0.0) / ref.ρ̄[1])
-    end
+    # one work item per parent column (KA-m, #301): a column steps its own
+    # tiles and writes only its own sources and u*; the area sums of its
+    # fluxes are its partials, folded in column-major order (the old
+    # loop's order, so the same bits at every thread count)
+    parts = foreach_column!(Aeolus.Backends.backend(p.θsrc), _parent_surface_column!,
+                            (1:m.Nx, 1:m.Ny), p, ps, sim, ref, θd, qd, zf, kmax, U_min, period;
+                            partials = zeros(m.Nx * m.Ny, 5), weight = PARENT_COLUMN_WEIGHT)
+    sRn, sH, sLE, sG, sE = column_sums(parts)
     n = m.Nx * m.Ny
     for (key, v) in ((:Rn, sRn), (:H, sH), (:LE, sLE), (:G, sG), (:E, sE))
         p.sfc_mean[key] += v / n * period
     end
     return p
+end
+
+# the work of one parent column (up to six tiles, each a surface step) in
+# grid-point equivalents, for the launch's serial threshold
+const PARENT_COLUMN_WEIGHT = 4096
+
+function _parent_surface_column!(I, J, p, ps, sim, ref, θd, qd, zf, kmax, U_min, period)
+    m = p.mesh
+    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
+    col = ps.columns[I, J]
+    kf = maximum(col.ktile)
+    air = [SurfaceForcing(; sw_down = p.sw_down, lw_down = p.lw_down,
+                          T_air = θd[Hx+I, Hy+J, Hz+k] * ref.π̄[k],
+                          q_air = qd === nothing ? 0.0 : max(qd[Hx+I, Hy+J, Hz+k], 0.0),
+                          U = max(_cell_speed(sim, I, J, k), U_min), p = ref.p̄[k], z_ref = 10.0)
+           for k in 1:kf]
+    agg = step_parent_column!(ps, col, air, period; U_min = U_min)
+    tf = last_tile_fluxes(_mosaic(col))
+    fr = mosaic_fractions(col.surface)
+    τsum = 0.0
+    for (n, f) in enumerate(tf)
+        nl = max(1, col.ktile[n] - 1)
+        Z = zf[nl+1]
+        for k in 1:min(nl, kmax)
+            p.θsrc[I, J, k] += fr[n] * f.H / (Z * ref.ρ̄[k] * ref.cp * ref.π̄[k])
+            p.qsrc[I, J, k] += fr[n] * f.E / (Z * ref.ρ̄[k])
+            p.drag[I, J, k] += fr[n] * f.τ / (Z * ref.ρ̄[k])
+        end
+        τsum += fr[n] * f.τ
+    end
+    p.ustar[I, J] = sqrt(max(τsum, 0.0) / ref.ρ̄[1])
+    return (agg.Rn, agg.H, agg.LE, agg.G, agg.E)
 end
 
 # add θ, qv sources (per s) over τ seconds into the canopy levels
