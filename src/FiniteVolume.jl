@@ -21,7 +21,7 @@ using ..Fields: Field
 using ..Operators: _strain_at
 
 export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
-       DampingProfile, sponge_profile, in_damping, damping_rate
+       DampingProfile, sponge_profile, in_damping, damping_rate, damping_coordinates
 
 # =========================================================================
 # First derivatives
@@ -381,29 +381,53 @@ function damping_rate(p::DampingProfile{NordstromRamp}, ξ)
                      smooth_step((ξ - p.stop) * p.inv_fall + 1))
 end
 
-# Relaxation target: a constant, or an array / Field indexed like the field.
+# Relaxation target: a constant, a level vector (one value per interior
+# level, indexed by `kl = k - k0`, the level of the field's own location),
+# or an array / Field indexed like the field. The 5-argument form is what
+# the kernel calls; `kl` is ignored by every target but the level vector.
 @inline _damping_target(t::Real, i, j, k) = t
 @inline _damping_target(t::Field, i, j, k) = @inbounds t.data[i, j, k]
 @inline _damping_target(t::AbstractArray{<:Real,3}, i, j, k) = @inbounds t[i, j, k]
+@inline _damping_target(t, i, j, k, kl) = _damping_target(t, i, j, k)
+@inline _damping_target(t::AbstractVector{<:Real}, i, j, k, kl) = @inbounds t[kl]
+
+# A level-vector target must have one value per interior level.
+_check_damping_target(t, g) = nothing
+function _check_damping_target(t::AbstractVector, g)
+    length(t) == g.Nz ||
+        throw(DimensionMismatch("damping target: a level vector needs Nz = $(g.Nz) values, got $(length(t))"))
+    return nothing
+end
 
 """
-    _add_damping!(tf, f, profile, coords, axis, target, g::RegularGrid)
+    _add_damping!(tf, f, profile, coords, axis, target, g; levels = nothing)
 
 Add `−λ(ξ)(f − target)` to `tf` on the interior cells where
 `in_damping(profile, ξ)`, with `ξ = coords[n]` the coordinate of the
 `n`-th interior index along `axis` (`1` = x, `3` = z). The one kernel
-behind the sponge (`axis = 3`) and the fringe (`axis = 1`).
+behind the sponge (`axis = 3`, every mesh with a level structure:
+`RegularGrid` and `StretchedGrid`), the fringe (`axis = 1`) and
+`LargeScaleForcing.ReferenceDamping`.
+
+`target` is a number, a level vector (length `Nz`, one value per interior
+level), a `Field` or a halo-padded 3-D array. With `levels` (a vector of
+length `Nz`) the tendency added to each interior level is also summed
+into `levels[kl]` (units of `tf` per cell, summed over the level's
+columns): the integral a budget books.
 """
 function _add_damping!(tf::Field{L}, f::Field{L}, p::DampingProfile,
                        coords::AbstractVector, axis::Int, target,
-                       g::RegularGrid) where {L}
+                       g::AbstractMesh; levels = nothing) where {L}
+    _check_damping_target(target, g)
     ii, jj, kk = interior(g)
     i0, j0, k0 = first(ii) - 1, first(jj) - 1, first(kk) - 1
     @inbounds for k in kk, j in jj, i in ii
         ξ = axis == 3 ? coords[k - k0] : axis == 1 ? coords[i - i0] : coords[j - j0]
         in_damping(p, ξ) || continue
         λ = damping_rate(p, ξ)
-        tf.data[i, j, k] -= λ * (f.data[i, j, k] - _damping_target(target, i, j, k))
+        δ = λ * (f.data[i, j, k] - _damping_target(target, i, j, k, k - k0))
+        tf.data[i, j, k] -= δ
+        levels === nothing || (levels[k - k0] -= δ)
     end
     return tf
 end
@@ -416,14 +440,26 @@ end
 #     α(z) = α_max · sin²( π/2 · (z - z_start) / (z_top - z_start) ).
 # Below `z_start` the damping is zero. Used to absorb gravity waves and
 # turbulent structures that would otherwise reflect off the rigid lid.
-# The rate comes from the shared `DampingProfile` above.
+# The rate comes from the shared `DampingProfile` above, the arithmetic
+# from the one kernel `_add_damping!`. `f_ref` is a number, a level vector
+# (length Nz), a Field or a halo-padded array (#254).
 
 function _add_sponge!(tf::Field{L}, f::Field{L},
                       α_max::Real, z_start::Real, z_top::Real,
-                      f_ref::Real, g::RegularGrid) where {L}
-    zs = _znodes_for(g, L())
+                      f_ref, g::RegularGrid) where {L}
+    zs = damping_coordinates(g, L())
     return _add_damping!(tf, f, sponge_profile(α_max, z_start, z_top), zs, 3, f_ref, g)
 end
+
+"""
+    damping_coordinates(g, loc) -> Vector
+
+The heights (m) of the `Nz` interior levels of a field at location `loc`
+on `g` (a `RegularGrid` here; `StretchedGrids` adds the `StretchedGrid`
+method, the actual stretched heights): the coordinate vector the damping
+kernel `_add_damping!` samples a vertical [`DampingProfile`](@ref) at.
+"""
+damping_coordinates(g::RegularGrid, loc::Location) = _znodes_for(g, loc)
 
 # helper — dispatch to `znodes` for a location, since `L` here is a type
 _znodes_for(g::RegularGrid, ::CellCenter) = collect(Grids.znodes(g, CellCenter()))

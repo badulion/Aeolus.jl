@@ -16,10 +16,14 @@ module LargeScaleForcing
 # table is integrated exactly in time by any explicit step.
 
 import ..SurfaceExchange: surface_temperature
+using ..Fields: location
+using ..Operators: DampingProfile
+using ..Operators.FiniteVolume: _add_damping!, damping_coordinates
 
 export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
-       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
+       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!,
+       ReferenceDamping, damping_tendency     # N-parent-b (#254)
 
 # =========================================================================
 # Tables and their interpolation
@@ -387,5 +391,7 @@ function _add_level_tendency!(d, m, x, t, Δt)
     end
     return d
 end
+
+include("large_scale_forcing/reference_damping.jl")   # N-parent-b (#254)
 
 end # module
