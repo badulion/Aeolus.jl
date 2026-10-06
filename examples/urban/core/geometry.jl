@@ -351,7 +351,7 @@ struct Geometry{SM, HM, SC, VF}
 end
 
 """
-    build_geometry(cfg, mesh; io = stdout) -> Geometry
+    build_geometry(cfg, mesh) -> Geometry
 
 Load the OSM city of `cfg` (projected about `cfg.lat0/lon0`, shifted so
 that the point `cfg.offset` metres from the anchor is the domain centre),
@@ -361,7 +361,7 @@ geometry is static, so this happens once). For `cfg.lateral = :open` the
 columns within `cfg.boundary_frame` cells of the open faces are kept free
 of buildings (#262).
 """
-function build_geometry(cfg, mesh; io::IO = stdout)
+function build_geometry(cfg, mesh)
     isfile(cfg.osm_path) ||
         error("Missing $(cfg.osm_path). Run examples/urban/data/fetch_alexanderplatz.jl first.")
     Lx, Ly = mesh.Lx, mesh.Ly
@@ -378,7 +378,6 @@ function build_geometry(cfg, mesh; io::IO = stdout)
     # Geometry is static, so facets and view factors are built once. The
     # ground facet of every open column takes the material of its surface
     # class (park, water, street), see `scene_class_map`.
-    cfg.verbose && @printf(io, "Computing sky-view factor... ")
     t_svf = time()
     heightmap = heightmap_from_solid_mask(sm)
     scene = build_scene(mesh, heightmap; wall_subdivisions = cfg.wall_subdivisions,
@@ -386,10 +385,11 @@ function build_geometry(cfg, mesh; io::IO = stdout)
     vfac  = view_factors(scene)
     facet_col = Tuple{Int,Int}[f.col for f in scene.facets]
     svf = aggregate_to_grid(scene, vfac).svf
-    cfg.verbose && @printf(io, "radiosity scene: %d facets in %.1fs, recip %.1e, closure %.1e\n",
-                           nfacets(scene), time() - t_svf, reciprocity_error(vfac), closure_error(vfac))
-    cfg.verbose && @printf(io, "SVF per column: min %.3f mean %.3f max %.3f\n",
-                           minimum(svf), mean(svf), maximum(svf))
+    @debug(@sprintf("radiosity scene: %d facets in %.1fs, recip %.1e, closure %.1e\nSVF per column: min %.3f mean %.3f max %.3f",
+                    nfacets(scene), time() - t_svf, reciprocity_error(vfac), closure_error(vfac),
+                    minimum(svf), mean(svf), maximum(svf)),
+           subsystem = :berlin, domain = current_domain(), event = :radiosity_scene,
+           facets = nfacets(scene), svf_mean = mean(svf))
     wall_ids = [i for (i, f) in enumerate(scene.facets) if f.kind === :wall]
     open_cols = findall(==(0), heightmap)
     return Geometry(city, sm, sfc, heightmap, scene, vfac, facet_col,

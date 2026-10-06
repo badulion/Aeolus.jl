@@ -253,7 +253,7 @@ end
     @test other.t == sim.t && other.u.data == sim.u.data         # restored with the override
     @test other.f_coriolis == 2e-4                               # the run keeps its own parameters
     # the schedule's resume! takes the same switch
-    ckdir = mktempdir(); ck = CheckpointSchedule(ckdir; wisdom = false, verbose = false)
+    ckdir = mktempdir(); ck = CheckpointSchedule(ckdir; wisdom = false)
     cp(path, joinpath(ckdir, "checkpoint_000000001.jls"))
     sR = ck_sim(); sR.f_coriolis = 2e-4
     @test_throws ArgumentError resume!(ck, sR; sgs = TKEClosure(sR.mesh))
@@ -292,7 +292,7 @@ end
 @testset "CheckpointSchedule: keep-K, resume, wisdom" begin
     dir = mktempdir()
     function run!(stop_at; nsteps = 10)
-        ck = CheckpointSchedule(dir; every_steps = 3, keep = 2, verbose = false)
+        ck = CheckpointSchedule(dir; every_steps = 3, keep = 2)
         sim = ck_sim(); c = TKEClosure(sim.mesh); initialize_tke!(c, sim)
         st = StepperState(:rk3); series = Float64[]
         d = resume!(ck, sim; sgs = c, stepper = st, components = (series = series,))
@@ -409,7 +409,7 @@ struct CkKilled <: Exception end
                           callback = c -> push!(seen, c.τ_wall_bottom))
     dir = mktempdir()
     run_part(kill_at) = begin
-        ck = CheckpointSchedule(dir; every_steps = 4, keep = 2, verbose = false)
+        ck = CheckpointSchedule(dir; every_steps = 4, keep = 2)
         c = mk(); series = Float64[]
         cb = c -> (push!(series, c.τ_wall_bottom); c.nsteps == kill_at && throw(CkKilled()))
         st = try
@@ -431,7 +431,7 @@ struct CkKilled <: Exception end
     # rerunning the finished call returns at once from its final checkpoint
     c2 = run_part(-1)
     @test c2.st.U == st_ref.U && c2.c.nsteps == ref.nsteps
-    finish_checkpoints!(CheckpointSchedule(dir; verbose = false))
+    finish_checkpoints!(CheckpointSchedule(dir))
     @test !isdir(dir)
 end
 
@@ -443,7 +443,7 @@ end
     ref = mk(); st_ref = Main.sbl_run!(ref, T; average_from = 100.0, sample_every = 2)
     dir = mktempdir()
     run_part(kill_at) = begin
-        ck = CheckpointSchedule(dir; every_steps = 3, keep = 1, verbose = false)
+        ck = CheckpointSchedule(dir; every_steps = 3, keep = 1)
         c = mk()
         st = try
             Main.sbl_run!(c, T; average_from = 100.0, sample_every = 2, checkpoint = ck,

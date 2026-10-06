@@ -32,7 +32,7 @@ using Printf
 using Dates
 
 const BC = BerlinCase
-const CFG = CaseConfig(; verbose = false)
+const CFG = CaseConfig()
 const LAT0, LON0 = CFG.lat0, CFG.lon0
 const L_PARENT = 6000.0                       # m, the parent box (centred on the anchor)
 const DX_CHILD = CFG.extent[1] / CFG.size[1]  # 15.625 m

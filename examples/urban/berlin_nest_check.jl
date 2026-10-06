@@ -47,7 +47,7 @@ function mean_θ_below(case, zmax)
 end
 
 function config(kind::AbstractString; start_h)
-    base = (verbose = false, output_path = nothing, start_h = start_h)
+    base = (output_path = nothing, start_h = start_h)
     kind == "nested"   && return BC.CaseConfig(:summer; base...)
     kind == "fallback" && return BC.CaseConfig(:summer; base...,
         options = Dict{Symbol,Any}(:nesting => (parent = (refinement = (4, 4, 8), vertical = :uniform),)))
@@ -68,7 +68,7 @@ function config(kind::AbstractString; start_h)
 end
 
 function run_cost(kind; minutes = 10.0)
-    case = BC.build_case(config(kind; start_h = 12.0); io = devnull)
+    case = BC.build_case(config(kind; start_h = 12.0))
     BC.step_case!(case, BC.step_dt(case))                 # compilation
     t0, w0 = case.sim.t, time()
     BC.run_case!(case; nsteps = round(Int, minutes * 60 / case.cfg.dt))
@@ -83,7 +83,7 @@ function run_cost(kind; minutes = 10.0)
 end
 
 function run_evening(kind; hours = 1.0)
-    case = BC.build_case(config(kind == "nested" ? "fallback" : kind; start_h = 18.0); io = devnull)
+    case = BC.build_case(config(kind == "nested" ? "fallback" : kind; start_h = 18.0))
     θ0 = mean_θ_below(case, 100.0)
     w0 = time()
     rows = String[]
