@@ -527,6 +527,34 @@ function run!(sim::BoussinesqSimulation, dt::Real, nsteps::Integer;
     return sim
 end
 
+"""
+    RK3Workspace(sim)
+
+The step-start state `uⁿ` (`u0, v0, w0, θ0, q0`: storage-sized copies of
+`sim.u, v, w, θ, qv`) that [`step_rk3!`](@ref) combines with its later
+substages. Allocated once per simulation by [`rk3_workspace`](@ref), so a
+step allocates nothing for it (before #295 every step copied 9 fields).
+"""
+struct RK3Workspace{A<:AbstractArray}
+    u0::A; v0::A; w0::A; θ0::A; q0::A
+end
+
+RK3Workspace(sim::BoussinesqSimulation) =
+    RK3Workspace(similar(sim.u.data), similar(sim.v.data), similar(sim.w.data),
+                 similar(sim.θ.data), similar(sim.θ.data))
+
+const _RK3_WORKSPACES = WeakKeyDict{Any,Any}()
+
+"""
+    rk3_workspace(sim) -> RK3Workspace
+
+The [`RK3Workspace`](@ref) of `sim`, allocated on first use and cached
+weakly (freed with `sim`), as `TimeIntegration.imex_workspace` does for
+the IMEX scratch.
+"""
+rk3_workspace(sim::BoussinesqSimulation) =
+    get!(() -> RK3Workspace(sim), _RK3_WORKSPACES, sim)::RK3Workspace
+
 # -------------------------------------------------------------------------
 # Projected RK3 — Phase 10.
 # -------------------------------------------------------------------------
@@ -574,7 +602,8 @@ function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
                    sgs = nothing, eddy_viscosity! = nothing,
                    body_force!::Union{Nothing, Function} = nothing,
                    post_predictor!::Union{Nothing, Function} = nothing,
-                   sgs_stress::Symbol = :laplacian) where {T}
+                   sgs_stress::Symbol = :laplacian,
+                   workspace::RK3Workspace = rk3_workspace(sim)) where {T}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     _check_sgs_stress(sgs_stress)
@@ -587,19 +616,16 @@ function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
         sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
     end
 
-    # Save current state
-    m  = sim.mesh
-    ii, jj, kk = interior(m)
-    u0 = copy(sim.u.data); v0 = copy(sim.v.data); w0 = copy(sim.w.data)
-    θ0 = copy(sim.θ.data)
+    # Save current state (into the workspace: no allocation per step, #295)
+    ws = workspace
+    u0 = copyto!(ws.u0, sim.u.data); v0 = copyto!(ws.v0, sim.v.data)
+    w0 = copyto!(ws.w0, sim.w.data); θ0 = copyto!(ws.θ0, sim.θ.data)
     moist = sim.has_moisture
-    q0 = moist ? copy(sim.qv.data) : θ0      # qv is combined like θ (#177)
+    q0 = moist ? copyto!(ws.q0, sim.qv.data) : θ0      # qv is combined like θ (#177)
 
     _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress,
                   t0 + Δt)                                                        # u1 = uⁿ + Δt L(uⁿ), then project
-    # combine into u1 (already there); save
-    u1 = copy(sim.u.data); v1 = copy(sim.v.data); w1 = copy(sim.w.data)
-    θ1 = copy(sim.θ.data)
+    # u1 stays in sim (the next substage advances it in place)
 
     _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress,
                   t0 + 2Δt)                                                       # u1 → u1 + Δt L(u1), then project
