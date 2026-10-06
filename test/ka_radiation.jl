@@ -369,4 +369,41 @@ end
         @test kr_same(r1.absorbed, r2.absorbed)
         @test_throws ArgumentError mc_solve(med, solver; sun_dir = sd)    # no global stream
     end
+
+    @testset "Superdroplets: counter streams per droplet / cell, thread-invariant" begin
+        SD = Aeolus.Superdroplet
+        TM = Aeolus.TurbulentMicrophysics
+        ref = nothing
+        for (name, b) in KR_BACKENDS
+            sd = init_exponential_superdroplets(MersenneTwister(1), 400, 1e8, 15e-6, 1e-4; backend = b)
+            # spread them over 8 cells
+            for i in eachindex(sd.cell)
+                sd.cell[i] = 1 + (i * 7) % 8
+            end
+            m0 = sum(sd.ξ .* sd.radius .^ 3)
+            r0 = copy(sd.radius)
+            nc, ne = 0, 0
+            rng = MersenneTwister(2)
+            for step in 1:5
+                c, e = collision_coalescence!(rng, sd, SD.GolovinKernel(), 1.0, fill(1.25e-5, 8);
+                                              backend = b)
+                nc += c; ne += e
+            end
+            state = (r0, copy(sd.ξ), copy(sd.radius), [nc, ne])
+            ref === nothing && (ref = state)
+            @test kr_same(state[1], ref[1]) && kr_same(state[3], ref[3])
+            @test state[2] == ref[2] && state[4] == ref[4]
+            @test ne > 0                                            # collisions happened
+            @test isapprox(sum(sd.ξ .* sd.radius .^ 3), m0; rtol = 1e-12)   # water conserved
+        end
+        # the fluctuations: thread-invariant, and a droplet's noise does not
+        # depend on which other droplets advance
+        f1 = supersaturation_fluctuations(50; σ_S = 1e-3, τ = 2.0, seed = 7)
+        f2 = supersaturation_fluctuations(50; σ_S = 1e-3, τ = 2.0, seed = 7)
+        advance_fluctuations!(f1, 0.5; backend = CPUBackend(threshold = 0))
+        advance_fluctuations!(f2, 0.5; indices = collect(26:50), backend = CPUBackend(serial = true))
+        advance_fluctuations!(f2, 0.5; indices = collect(1:25))
+        @test f1.ξ == f2.ξ
+        @test abs(sum(supersaturation_fluctuations(20_000; σ_S = 1e-3, seed = 3).ξ) / 20_000) < 0.03
+    end
 end
