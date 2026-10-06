@@ -26,9 +26,9 @@ velocity on the boundary face and `H` halo layers beyond it, Dirichlet
 tangential velocities and scalars, and a Neumann pressure correction, so
 the child's projection (the all-Neumann `CosineFFTPoissonSolver` picked
 by default) sees the parent's boundary flux. The single global mass-flux
-correction ([`correct_boundary_mass_flux!`](@ref
-Aeolus.BoundaryConditions.correct_boundary_mass_flux!)) makes that flux
-compatible with the solve.
+correction
+([`correct_boundary_mass_flux!`](@ref Aeolus.BoundaryConditions.correct_boundary_mass_flux!))
+makes that flux compatible with the solve.
 
 `x`, `y` — `:nest` or `:periodic` (a child spanning its parent's
 periodic extent). `bottom`, `top` — `:nest` on both (a child inside its
