@@ -483,6 +483,96 @@ end
     return op(op(op(l1, l2), op(l3, l4)), op(op(l5, l6), op(l7, l8)))
 end
 
+# ---- the same order, explicitly vectorised (Float64 sums) -------------------
+#
+# The eight lanes of the canonical order are the eight elements of one
+# `<8 x double>` vector: point `i1 + 8b + r` of a row goes to element `r`
+# (`r = 0…7`), which is lane `(i − i1) mod 8 + 1`. The vector add is eight
+# independent IEEE additions, so the bits are those of the scalar lanes
+# above (`test/backends.jl` checks both against a transcript), but the
+# compiler issues one vector instruction where it does not vectorise eight
+# scalar accumulators on its own (measured 2.4x faster at 64³, below).
+# A tuple-valued body (`plane_reduce!`) gets one vector per component.
+
+const _V8 = NTuple{8,VecElement{Float64}}
+@inline _vadd(a::_V8, b::_V8) =
+    Base.llvmcall("%3 = fadd <8 x double> %0, %1\nret <8 x double> %3", _V8, Tuple{_V8,_V8}, a, b)
+@inline _v8(x1, x2, x3, x4, x5, x6, x7, x8) =
+    (VecElement(x1), VecElement(x2), VecElement(x3), VecElement(x4),
+     VecElement(x5), VecElement(x6), VecElement(x7), VecElement(x8))
+@inline _vfill(x::Float64) = _v8(x, x, x, x, x, x, x, x)
+@inline function _vfold(a::_V8)
+    l1, l2, l3, l4, l5, l6, l7, l8 = map(x -> x.value, a)
+    return ((l1 + l2) + (l3 + l4)) + ((l5 + l6) + (l7 + l8))
+end
+@inline _vlane1add(a::_V8, x::Float64) = Base.setindex(a, VecElement(a[1].value + x), 1)
+
+# component n of eight tuples, as one vector; and the step of N accumulators
+@inline _vcomp(n, t1, t2, t3, t4, t5, t6, t7, t8) =
+    _v8(t1[n], t2[n], t3[n], t4[n], t5[n], t6[n], t7[n], t8[n])
+@inline _vstep(acc::NTuple{N,_V8}, t1, t2, t3, t4, t5, t6, t7, t8) where {N} =
+    ntuple(n -> _vadd(acc[n], _vcomp(n, t1, t2, t3, t4, t5, t6, t7, t8)), Val(N))
+@inline _vtail(acc::NTuple{N,_V8}, t) where {N} = ntuple(n -> _vlane1add(acc[n], t[n]), Val(N))
+
+@inline function _plane_reduce(::typeof(_add), init::Float64, g::G, ir::UnitRange{Int},
+                               jr::UnitRange{Int}, k::Int) where {G}
+    acc = _vfill(init)                  # every lane starts at init, as the scalar lanes
+    i1 = first(ir)
+    nb = length(ir) >> 3
+    @inbounds for j in jr
+        i = i1
+        for _ in 1:nb
+            acc = _vadd(acc, _v8(Float64(g(i, j, k)), Float64(g(i + 1, j, k)),
+                                 Float64(g(i + 2, j, k)), Float64(g(i + 3, j, k)),
+                                 Float64(g(i + 4, j, k)), Float64(g(i + 5, j, k)),
+                                 Float64(g(i + 6, j, k)), Float64(g(i + 7, j, k))))
+            i += 8
+        end
+        if i <= last(ir)
+            l1 = acc[1].value
+            for ii in i:last(ir)
+                l1 += Float64(g(ii, j, k))
+            end
+            acc = Base.setindex(acc, VecElement(l1), 1)
+        end
+    end
+    return _vfold(acc)
+end
+
+@inline function _plane_reduce(::typeof(_add), init::T, g::G, ir::UnitRange{Int},
+                               jr::UnitRange{Int}, k::Int) where {N, T<:NTuple{N,Float64}, G}
+    acc = ntuple(n -> _vfill(init[n]), Val(N))
+    i1 = first(ir)
+    nb = length(ir) >> 3
+    @inbounds for j in jr
+        i = i1
+        for _ in 1:nb
+            acc = _vstep(acc, T(g(i, j, k)), T(g(i + 1, j, k)), T(g(i + 2, j, k)), T(g(i + 3, j, k)),
+                         T(g(i + 4, j, k)), T(g(i + 5, j, k)), T(g(i + 6, j, k)), T(g(i + 7, j, k)))
+            i += 8
+        end
+        for ii in i:last(ir)
+            acc = _vtail(acc, T(g(ii, j, k)))
+        end
+    end
+    return map(_vfold, acc)
+end
+
+# max is exact and commutative: any order gives the same bits, so a plane is
+# scanned in a plain loop (NaN-propagating `max`), as the loops it replaces
+struct _PlaneMax{T, R}
+    init::T
+    ir::R
+    jr::R
+end
+@inline function (p::_PlaneMax{T})(k, g) where {T}
+    m = p.init
+    @inbounds for j in p.jr, i in p.ir
+        m = max(m, T(g(i, j, k)))
+    end
+    return m
+end
+
 # The per-plane function a work item (or the serial loop) evaluates; the
 # point evaluator `g` is its argument.
 struct _PlaneReduce{O, T, R}
@@ -503,7 +593,7 @@ end
 _checkr(arrs::Tuple, (ir, jr, kr)::NTuple{3,UnitRange{Int}}) =
     isempty(ir) || isempty(jr) || isempty(kr) || _check(arrs, (ir, jr, kr))
 
-function _plane_partials!(b::CPUBackend, out::AbstractVector, p::_PlaneReduce,
+function _plane_partials!(b::CPUBackend, out::AbstractVector, p::Union{_PlaneReduce,_PlaneMax},
                           kr::UnitRange{Int}, g)
     length(out) == length(kr) ||
         throw(DimensionMismatch("partials has length $(length(out)), the k range $(length(kr))"))
@@ -540,7 +630,7 @@ function plane_partials!(partials::AbstractVector, b::AbstractBackend, f::F,
                          ranges::NTuple{3,UnitRange{Int}}, arrays::Vararg{AbstractArray,M}) where {F, M}
     T = eltype(partials)
     _checkr(arrays, ranges)
-    _plane_partials!(b, partials, _PlaneReduce(+, zero(T), ranges[1], ranges[2]), ranges[3],
+    _plane_partials!(b, partials, _PlaneReduce(_add, zero(T), ranges[1], ranges[2]), ranges[3],
                      _Vals(f, arrays))
 end
 plane_partials!(partials::AbstractVector, f::F, ranges::NTuple{3,UnitRange{Int}},
@@ -680,7 +770,7 @@ function range_max(b::AbstractBackend, body::F, (ir, jr, kr)::NTuple{3,UnitRange
     (isempty(ir) || isempty(jr) || isempty(kr)) && return -Inf
     T = float(typeof(body(first(ir), first(jr), first(kr), args...)))
     parts = _plane_partials!(b, Vector{T}(undef, length(kr)),
-                             _PlaneReduce(max, T(-Inf), ir, jr), kr, _Ix(body, args))
+                             _PlaneMax(T(-Inf), ir, jr), kr, _Ix(body, args))
     m = T(-Inf)
     for x in parts
         m = max(m, x)
@@ -735,7 +825,7 @@ function interior_max(b::AbstractBackend, A::AbstractArray, (ir, jr, kr)::NTuple
     T = _acc_type((A,))
     _checkr((A,), (ir, jr, kr))
     parts = _plane_partials!(b, Vector{T}(undef, length(kr)),
-                             _PlaneReduce(max, T(-Inf), ir, jr), kr, _Vals(identity, (A,)))
+                             _PlaneMax(T(-Inf), ir, jr), kr, _Vals(identity, (A,)))
     m = T(-Inf)
     for x in parts
         m = max(m, x)
