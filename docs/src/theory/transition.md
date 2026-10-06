@@ -776,10 +776,28 @@ the step, so the memory e-folds in exactly ``τ_{\rm avg}`` (600 s by
 default) for any sequence of adaptive steps, and the first sample is not
 biased towards zero.
 
-* *Resolved part.* The velocities are interpolated to the cell centres,
-  and ``R^{\rm res}_{ij} = ⟨u_i'u_j'⟩`` is averaged over the whole plane
-  (`region = :plane`) or over the parent columns within `ring_width`
-  cells of the edge of the child footprint (`region = :ring`).
+* *Resolved part.* ``R^{\rm res}_{ij} = ⟨u_i'u_j'⟩`` is averaged over the
+  whole plane (`region = :plane`) or over the parent columns within
+  `ring_width` cells of the edge of the child footprint (`region = :ring`).
+  The variances are taken at each staggered component's own points, as
+  `Operators.resolved_tke_profile` does: ``u`` on the x-faces, ``v`` on
+  the y-faces, ``w`` the mean of the variances on the level's two
+  z-faces. Interpolating to the cell centre first would multiply a mode's
+  variance by ``\cos^2(k_iΔ_i/2)`` along the component's own direction.
+  That is ¼ at ``λ = 3Δ``, inside the scale gap, and over an isotropic
+  gap annulus it keeps 50 % (flat spectrum) to 58 % (``k^{-11/3}``) of
+  the ``u`` band variance. A cross term needs both components at one
+  point. It is the correlation coefficient of the cell-centred fields
+  times ``\sqrt{R_{ii}R_{jj}}``. That is exact for one Fourier mode and
+  realizable by construction (a correlation matrix scaled by a positive
+  diagonal). For a broadband field the centre correlation weights each
+  mode by the product of the two components' transfer functions.
+  On the plane the column sum of ``\tfrac12\operatorname{tr}R^{\rm res}``
+  equals that of `resolved_tke_profile` to 1e-12, and level by level for
+  ``u`` and ``v``. The statistic is computed in one pass over the planes
+  that also feed the spectra, the band-pass and the vertical lags (six
+  components, a ring region), so the `Operators` profiles are matched
+  in convention and checked, not called.
 * *SGS part.* ``R^{\rm SGS}_{ij} = \tfrac23 e\,δ_{ij} - 2ν_t\bar S_{ij}``,
   with ``\bar S`` the deviatoric cell-centred strain (`Operators._strain_at`),
   so ``\operatorname{tr}R^{\rm SGS} = 2e`` exactly. ``e`` comes from the
@@ -800,14 +818,15 @@ biased towards zero.
   The band runs from the parent's effective resolution (wavelength
   ``c_{\rm gap}Δ_p``, with ``c_{\rm gap} = 4``, the upper end of the 2–4
   ``Δ_p`` in the issue) to the child's, ``c_{\rm gap}Δ_p/r``. It is cut
-  out of each level by an FFT band-pass of the laterally periodic parent.
+  out of each native plane by an FFT band-pass of the laterally periodic
+  parent.
   At ``r = 1`` the band is empty, so ``R^{\rm gen} = R^{\rm SGS}``; at the
   Berlin ``r = 2`` it covers everything shorter than ``4Δ_p``. The lengths
   are those of the band-passed field, capped at ``c_{\rm len}Δ_p``
   (``c_{\rm len} = c_{\rm gap}/2``, half the cutoff wavelength).
   `mode = :full` gives ``R^{\rm SGS} + R^{\rm res}``.
-* *Lengths and time.* The horizontal autocovariances come from the same
-  spectra (Wiener–Khinchin). The vertical ones are the plane covariances
+* *Lengths and time.* The horizontal autocovariances come from the
+  spectra of the native planes (Wiener–Khinchin). The vertical ones are the plane covariances
   with the `lag_z = 16` levels above. Each length is the integral of the
   correlation coefficient up to its first zero crossing. The time is
   ``T = L_n/\max(|U_n|, 0.1\ {\rm m\,s^{-1}})``, with ``L_n`` the length
@@ -851,34 +870,46 @@ Measured (`test/era6_inflow_statistics.jl`):
 | band ``R_{11}`` of ``\sin`` at ``λ = 3Δ`` (in the gap) + ``λ = 8Δ`` (not) / ``A^2/2`` | 1 to 1e-12 | 1e-12 |
 | ``r = 1``: ``R^{\rm gen} - R^{\rm SGS}`` | 0 | 1e-12 |
 | laminar parent, ``e = e_0``: ``R - \tfrac23e_0δ_{ij}`` | 0 | 1e-15 |
-| generator-filled parent (240 × 64 × 40, 30 fills): ``R_{11,22,33}``, ``\overline{u'w'}`` / attenuated target | 0.984, 0.982, 0.980, 0.981 | 3 % |
-| same: ``L_s`` / 4 Δ (u, v, w) | 0.937, 1.006, 0.936 | 10 % |
+| band ``R_{11}`` of a ``u``-sine of ``λ = 3Δ`` varying in **x** / ``A^2/2`` (``v`` in y likewise; centre value 0.25) | 1 to 1e-12 | 1e-12 |
+| band ``R_{33}``, ``w`` with ``λ = 3Δz`` in z, level mean / ``B^2/4`` (centre value 0.25) | 1 to 1e-12 | 1e-12 |
+| one-mode band ``\overline{u'w'}`` / ``AB/2`` (centre value 0.5) | 1 to 1e-12 | 1e-12 |
+| column sum ``\tfrac12\operatorname{tr}R^{\rm res}`` / that of `Operators.resolved_tke_profile` (random field) | 1 to 1e-12 | 1e-12 |
+| generator-filled parent (240 × 64 × 40, 30 fills): ``R_{11,22,33}`` / imposed, ``\overline{u'w'}`` / ``R_{13}\sqrt{f_xf_z}`` | 0.987, 0.990, 0.980, 0.982 | 3 % |
+| same: ``L_s`` / 4 Δ (u, v, w) | 0.938, 0.949, 0.936 | 10 % |
 | same: ``L_z`` / 4 Δ | 1.008, 0.999, 1.056 | 10 % |
-| same: ``T`` / 6 Δt | 1.027, 0.939, 0.939 | 10 % |
+| same: ``T`` / 6 Δt | 0.945, 0.941, 0.938 | 10 % |
 | Lenschow ``σ_w/w_*`` at ``z/z_i = 0.3125`` (``u_* = 0``) | 0.6828325099 (analytic to 1e-10; the maximum) | 0.683 ± 5e-4 |
 | neutral ``σ_{u,v,w}/u_*`` at the surface | 2.39, 1.92, 1.25 | 1e-12 |
 | realizable for ``-z_i/L`` ∈ {0, 1, 10, 100}, 301 heights, two wind angles | no projection | — |
 
-**The generator-filled parent (an expectation that needed care).** The
+**The generator-filled parent (an expectation that was wrong).** The
 parent's x-slices are successive generator planes (``Δt`` = 1 s,
-``U`` = 1 m/s), with the Panofsky & Dutton tensor imposed. Measured at the
-cell centres, each staggered component is the two-point mean along its
-own direction. That attenuates the generator's field by ``(1 + ρ_1)/2``,
-where ``ρ_1`` is the lag-1 correlation (``e^{-1/6}`` in x, the filter's
-discrete ``R_1`` in y and z). Against the imposed tensor the measured
-values are 8–14 % low; against the exactly attenuated target they are
-within 2 %. The test asserts the attenuated target, which is computed
-from the generator's own kernels.
+``U`` = 1 m/s), with the Panofsky & Dutton tensor imposed. A first
+version took the statistics at the cell centres. Each staggered
+component was then the two-point mean along its own direction, which
+attenuated the variances by ``(1 + ρ_1)/2`` (``ρ_1`` the lag-1
+correlation: ``e^{-1/6}`` in x, the filter's discrete ``R_1`` in y and
+z), 8–14 % here. The test asserted that attenuated target as if it were
+a property of the measurement. It was the same smoothing that removed ¾
+of a ``λ = 3Δ`` mode from the scale gap, so the code was wrong. The
+variances now match the imposed tensor directly. The cross term
+``\overline{u'w'}`` keeps one stated factor. The generator puts ``u`` and
+``w`` at the same index, which on the C-grid is half a cell apart in x
+and z, so their centre correlation is ``ρ\sqrt{f_xf_z}``, with
+``f = (1 + ρ_1)/2`` (0.923 and 0.950). The lengths now come from the
+native spectra: ``v``'s ``L_s`` (0.949) agrees with ``u``'s and ``w``'s
+(0.938, 0.936); the centre smoothing had lengthened it to 1.006.
 
-The remaining 1.6–2.0 % deficit, the same sign for every component, is
+The remaining 1–2 % deficit, the same sign for every component, is
 consistent with two sources:
 
 * the plane-mean removal bias, about ``1/N_{\rm eff} ≈ 0.6`` % per plane;
 * the sampling error, about 0.8 %.
 
 **Cost.** One update on a 64 × 64 plane with 20 levels and `lag_z = 16`
-takes 5.5 ms (7.3 ms inside the CBL run below). On 192 × 192, the Berlin
-parent, it takes 56 ms on one core. With ``τ_{\rm avg}`` = 600 s, a
+takes 5.0 ms (7.2 ms inside the CBL run below). On 192 × 192, the Berlin
+parent, it takes 65 ms on one core (57 ms before the native-point
+variances, which add one second-moment pass per level). With ``τ_{\rm avg}`` = 600 s, a
 cadence of tens of seconds of parent time is enough.
 
 **A convective Aeolus parent** (`examples/nesting/cbl_inflow_statistics.jl`).
@@ -890,16 +921,18 @@ the west face:
 
 | z (m) | ``σ_u`` resolved | ``σ_u`` missing (band + SGS variance) | ``σ_w`` resolved | ``σ_w`` missing | ``\overline{u'w'}`` resolved / missing | ``e_{\rm SGS}`` | ``L_z`` full / band | ``L_s`` band |
 | --: | --: | --: | --: | --: | --: | --: | --: | --: |
-| 38 | 0.886 | 0.430 (0.046 + 0.139) | 0.524 | 0.505 | 0.0032 / −0.0003 | 0.209 | 188 / 91 | 19.7 |
-| 88 | 0.760 | 0.405 (0.039 + 0.125) | 0.743 | 0.504 | 0.0065 / 0.0013 | 0.187 | 179 / 89 | 19.8 |
-| 188 | 0.609 | 0.376 (0.032 + 0.109) | 0.937 | 0.459 | 0.0058 / 0.0010 | 0.163 | 176 / 86 | 19.8 |
-| 288 | 0.576 | 0.364 (0.029 + 0.104) | 1.015 | 0.449 | −0.0011 / −0.0002 | 0.157 | 167 / 79 | 19.9 |
-| 388 | 0.568 | 0.358 (0.027 + 0.101) | 1.040 | 0.440 | −0.0019 / −0.0011 | 0.152 | 157 / 75 | 20.1 |
+| 38 | 0.911 | 0.455 (0.067 + 0.139) | 0.540 | 0.511 | 0.0034 / −0.0004 | 0.209 | 188 / 91 | 22.7 |
+| 88 | 0.783 | 0.428 (0.058 + 0.125) | 0.751 | 0.510 | 0.0067 / 0.0013 | 0.187 | 179 / 89 | 22.9 |
+| 188 | 0.632 | 0.394 (0.047 + 0.109) | 0.942 | 0.463 | 0.0061 / 0.0012 | 0.163 | 176 / 86 | 22.7 |
+| 288 | 0.598 | 0.382 (0.042 + 0.104) | 1.019 | 0.453 | −0.0012 / −0.0002 | 0.157 | 167 / 79 | 22.7 |
+| 388 | 0.590 | 0.376 (0.040 + 0.101) | 1.043 | 0.444 | −0.0020 / −0.0013 | 0.152 | 157 / 75 | 23.2 |
 
 (σ in m s⁻¹, variances in m² s⁻², ``e_{\rm SGS}`` in m² s⁻², lengths of
 ``u`` in m.) The SGS part dominates what is missing: ``R^{\rm SGS}_{11}``
-is three to four times the band variance. Near the ground the missing
-``σ_w^2`` (0.26 m² s⁻²) is as large as the resolved one (0.27 m² s⁻²).
+is two to two and a half times the band variance. The band column is
+1.46 times what the cell-centred statistic gave (0.046 at 38 m), the
+``\cos^2`` loss described above. Near the ground the missing
+``σ_w^2`` (0.26 m² s⁻²) is nearly as large as the resolved one (0.29 m² s⁻²).
 Higher up the parent resolves most of ``σ_w`` (1.04 against 0.44 m/s
 missing at 388 m). There is no mean wind, so ``\overline{u'w'}`` is
 noise at the 1e-3 level. The band lengths are well inside the cap
@@ -914,7 +947,7 @@ will also quote the Berlin day and night statistics. Transition stays
 coupled through `turbulence_diag`; no Berlin list changed. One
 digital-filter step on a 64 × 40 face costs 0.10 ms. One update of
 `ParentResolvedStatistics` on the 192 × 192 Berlin parent (20 levels)
-costs 56 ms, so it belongs on a cadence. The convective-parent numbers
+costs 65 ms, so it belongs on a cadence. The convective-parent numbers
 above stand in for the Berlin numbers until then.
 
 ## References
