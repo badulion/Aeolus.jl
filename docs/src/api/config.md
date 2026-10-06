@@ -3,8 +3,14 @@
 `Aeolus.Config` (CFG-a, #356) is how a run is configured: a TOML file,
 checked against a declarative schema, resolved into an immutable typed
 [`RunConfig`](@ref Aeolus.Config.RunConfig), and stored in `run.toml` in a
-canonical form from which the run can be rebuilt. The loader, the CLI's
-`--set` (CFG-b) and the drivers' option tables (CFG-c) all build on it.
+canonical form from which the run can be rebuilt. The loader, the
+`aeolus` command line and its `--set` (CFG-b, #357) and the drivers'
+option tables all build on it.
+
+```bash
+julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml   # Julia ≥ 1.12
+bin/aeolus run examples/configs/taylor_green_vortex.toml                  # any Julia
+```
 
 ## Quick reference
 
@@ -148,7 +154,140 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 ```
 
 `[run] driver = "cbl"` then selects this schema; the driver `"common"`
-(the common sections only) is always registered.
+(the common sections only) is always registered. A driver section named
+like a common one adds its options to it (the `simulation` driver's
+`[output] fields`); redeclaring a common option is an error.
+
+## Run drivers
+
+A schema says what a config may contain; a **run driver**
+([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)) also says
+how to build and run it. A driver type implements `driver_name`,
+`driver_sections`, `driver_checks` (optional), `config_dir` (optional),
+`build(d, cfg)`, `run!(d, obj, rf, ck; callback)` and `state_fields(obj)`,
+and is registered with `register_driver!(D())`:
+
+```julia
+using Aeolus, Aeolus.Config
+
+struct CBLDriver <: AbstractRunDriver end
+Config.driver_name(::CBLDriver) = "cbl"
+Config.driver_sections(::CBLDriver) = [grid]                 # as above
+Config.build(::CBLDriver, cfg) = build_my_simulation(cfg)
+function Aeolus.run!(::CBLDriver, sim, rf, ck; callback = nothing)
+    d = resume!(ck, sim)                                     # a resumed run continues
+    # … step, maybe_checkpoint!(ck, sim; step = n), callback(sim, n) …
+end
+Config.state_fields(sim) = (u = sim.u.data, θ = sim.θ.data)
+register_driver!(CBLDriver())
+```
+
+[`run_config`](@ref Aeolus.Config.run_config)`(cfg; root, resume)` is
+the Julia API behind `aeolus run`: `apply_fftw_config!`, `start_run`,
+`run_checkpoints` from `[checkpoint]` (before the build, so a resumed run
+imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
+`finish_run!` (`failed` or `interrupted` with the error, which is
+rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
+(`folder`, `obj`).
+
+Drivers that live under `examples/` (the Berlin, SBL and validation
+drivers) are not moved into `src/`: [`DRIVER_FILES`](@ref
+Aeolus.Config.DRIVER_FILES) maps their names to files relative to the
+package directory, and the first config that names one includes the file
+into a fresh module. The migrations of #311 add their entries.
+
+## The command line
+
+| command | does |
+| :-- | :-- |
+| `run <config.toml> [--set k=v]… [--root DIR] [--allow-uncommitted]` | a new run (new run ID and folder) from a config file |
+| `run <run-folder>/run.toml …` | a new run with the configuration of an earlier run |
+| `run <run-folder> --resume` | continues that run: same run ID, a new session, from its newest checkpoint (`--set` is refused) |
+| `check <config> [--set k=v]…` | validates and prints every problem |
+| `resolve <config> [--set k=v]…` | prints the canonical resolved TOML |
+| `options [driver] [section]` | prints the option reference, generated from the schema |
+| `preprocess <kind> …` | a registered preprocessor ([`register_preprocessor!`](@ref Aeolus.Config.register_preprocessor!)) |
+
+Exit codes: **0** success; **1** the run failed (blowup or error; its
+session is recorded as `failed`); **2** a usage or configuration error,
+raised before anything is written. `--root` and `--allow-uncommitted`
+change where and whether the run starts, not its recorded config.
+`julia --project -m Aeolus …` needs Julia ≥ 1.12 (the `-m` flag; the
+`@main` entry point is marked on ≥ 1.11); `bin/aeolus` works on every
+Julia the package supports. In Julia, `Aeolus.main(["run", "case.toml"])`
+returns the exit code.
+
+```@docs
+Aeolus.main
+```
+
+## The `simulation` driver
+
+`[run] driver = "simulation"` is a bare run of one dynamical core on a
+box ([`Aeolus.SimulationDriver`](@ref)): what
+`examples/taylor_green_vortex.jl`, `dry_convective_bl.jl` and
+`buoyant_convection.jl` used to build in code. Their configs are in
+`examples/configs/`, and the scripts are now three-line runners.
+
+```toml
+[run]
+driver = "simulation"
+name = "taylor_green_vortex"
+
+[grid]
+size = [32, 32, 32]
+extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
+
+[dynamics]
+nu = 0.01
+
+[initial]
+u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
+v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
+
+[stepper]
+dt = 0.07853981633974483        # shortened to end_time / ceil(end_time / dt) = 2/26
+end_time = 2.0
+```
+
+This config is, bit for bit, the simulation the script built before
+(`test/config_simulation_driver.jl`). Notes on the sections:
+
+  * `[stepper]`: `dt` or `cfl` (adaptive, `step_adaptive!`, with a finite
+    `dt_max`), and `end_time` or `nsteps`. `euler` is `step!`, `rk3`
+    `step_rk3!`.
+  * `[sgs] closure = "smagorinsky"` without a stability correction is the
+    simulation's built-in closure (`C_s ≠ 0`); every other choice is
+    passed to the steps as a closure object.
+  * `[dynamics] nu` is also θ's (and qv's) molecular diffusivity: the
+    cores have one coefficient (Prandtl number 1), so there is no separate
+    `kappa`.
+  * Combinations a core cannot run are config errors: the anelastic core
+    needs z walls, `theta0 > 0`, a fixed `dt` with `euler`, a uniform grid
+    and no checkpoints; a stretched grid takes the `none` or `smagorinsky`
+    closure.
+  * The run writes `diagnostics.csv` (the run monitor, every
+    `[logging] diagnostics_cadence`), checkpoints on `[checkpoint]`, and
+    the `[output] fields` every `[output] cadence` as
+    `output/fields_<step>.nc`.
+
+The options:
+
+```@example
+using Aeolus # hide
+print(Aeolus.Config.option_reference("simulation")) # hide
+```
+
+## The bit-identical round trip
+
+`test/config_roundtrip_harness.jl` is the check every config migration
+uses: `roundtrip_check(path; nsteps, overrides)` runs a config through
+`run_config`, re-runs the run from its own `run.toml` (a new run), and
+compares every array of `state_fields` bitwise
+(`reinterpret(UInt64, a) == reinterpret(UInt64, b)`), `diagnostics.csv`
+outside its wall-clock column, and the two `[config]` tables. Both runs
+use `[fftw] planner = "estimate"` (the bitwise policy of #245) and the
+same thread count.
 
 ## The canonical form and `run.toml`
 
@@ -180,5 +319,5 @@ object passed as `config` is recorded as before (`toml_value`).
 ## Reference
 
 ```@autodocs
-Modules = [Aeolus.Config]
+Modules = [Aeolus.Config, Aeolus.SimulationDriver]
 ```

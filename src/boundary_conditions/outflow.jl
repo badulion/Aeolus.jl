@@ -152,27 +152,35 @@ function _outflow_phase_speeds!(st::OpenBoundaryState{T}, sim) where {T}
         # with the convective speed). It always uses the convective speed.
         orl = rp.mode === :orlanski && !p.normal && rp.has_hist[] && Δτ > 0
         cmax = orl ? Δn / Δτ : zero(T)
-        @inbounds for b in axes(rp.c, 2), a in axes(rp.c, 1)
-            un = _outward_un(p, pn, a, b)
-            φ1 = _at(f, ax, I1, a, b)
-            if !(un > 0)
-                rp.c[a, b] = T(NaN)            # inflow (or tangential): Dirichlet data
-            elseif !orl
-                rp.c[a, b] = un                # convective (and Orlanski's first step)
-            else
-                # Orlanski (1976): c = −(∂φ/∂t)/(∂φ/∂n) at the interior layer
-                # next to the face, clipped to [0, Δn/Δt] (Miller & Thorpe 1981)
-                num = -(φ1 - rp.hist[a, b]) / Δτ
-                den = (φ1 - _at(f, ax, I2, a, b)) / Δn
-                c = num / den
-                rp.c[a, b] = isnan(c) ? zero(T) : clamp(c, zero(T), cmax)
-            end
-            rp.hist[a, b] = φ1
-        end
+        # pointwise over the face (KA-f, #297)
+        launch!(Backends.backend(rp.c), _phase_speed_body!, (1:size(rp.c, 1), 1:size(rp.c, 2)),
+                rp.c, rp.hist, p, pn, f, ax, I1, I2, orl, Δτ, Δn, cmax)
         rp.t_hist[] = t
         rp.has_hist[] = true
     end
     return st
+end
+
+@inline function _phase_speed_body!(a, b, C::AbstractArray{T}, hist, p, pn, f, ax, I1, I2, orl,
+                                    Δτ, Δn, cmax) where {T}
+    un = _outward_un(p, pn, a, b)
+    @inbounds begin
+        φ1 = _at(f, ax, I1, a, b)
+        if !(un > 0)
+            C[a, b] = T(NaN)                   # inflow (or tangential): Dirichlet data
+        elseif !orl
+            C[a, b] = un                       # convective (and Orlanski's first step)
+        else
+            # Orlanski (1976): c = −(∂φ/∂t)/(∂φ/∂n) at the interior layer
+            # next to the face, clipped to [0, Δn/Δt] (Miller & Thorpe 1981)
+            num = -(φ1 - hist[a, b]) / Δτ
+            den = (φ1 - _at(f, ax, I2, a, b)) / Δn
+            c = num / den
+            C[a, b] = isnan(c) ? zero(T) : clamp(c, zero(T), cmax)
+        end
+        hist[a, b] = φ1
+    end
+    return nothing
 end
 
 function _save_previous!(st::OpenBoundaryState)
@@ -208,14 +216,18 @@ function mark_open_boundary_stage!(sim)
             f === nothing && continue
             ax = p.axis
             sb = _boundary_storage(p); o = _outward(p)
-            @inbounds for b in axes(rp.c, 2), a in axes(rp.c, 1)
-                rp.start1[a, b] = _at(f, ax, sb - o, a, b)
-                rp.start2[a, b] = _at(f, ax, sb - 2o, a, b)
-            end
+            launch!(Backends.backend(rp.c), _mark_stage_body!, (1:size(rp.c, 1), 1:size(rp.c, 2)),
+                    rp.start1, rp.start2, f, ax, sb - o, sb - 2o)
             rp.marked[] = true
         end
     end
     return sim
+end
+
+@inline function _mark_stage_body!(a, b, S1, S2, f, ax, l1, l2)
+    @inbounds S1[a, b] = _at(f, ax, l1, a, b)
+    @inbounds S2[a, b] = _at(f, ax, l2, a, b)
+    return nothing
 end
 
 # Advance the outflow points of every radiating plane over `dt`: the
@@ -232,26 +244,33 @@ function _radiate!(st::OpenBoundaryState{T}, sim, dt::Real) where {T}
         Δn = T(_spacing(m, ax))
         sb = _boundary_storage(p); o = _outward(p)
         lb = _boundary_local(p); L = length(p.range)
-        P = p.data; P0 = rp.prev
-        marked = rp.marked[]
-        @inbounds for b in axes(rp.c, 2), a in axes(rp.c, 1)
-            c = rp.c[a, b]
-            isnan(c) && continue
-            r = min(c * T(dt) / Δn, one(T))
-            i1 = marked ? rp.start1[a, b] : _at(f, ax, sb - o, a, b)
-            i2 = marked ? rp.start2[a, b] : _at(f, ax, sb - 2o, a, b)
-            l = lb
-            while 1 <= l <= L
-                φ0 = _at(P0, ax, l, a, b)
-                # second-order upstream: ∂φ/∂n ≈ (3φ_b − 4φ_{b−1} + φ_{b−2}) / 2Δn
-                _set!(P, ax, l, a, b, φ0 - r * (3φ0 - 4i1 + i2) / 2)
-                i2 = i1; i1 = φ0
-                l += o
-            end
-        end
+        # one work item per face point: its buffer pencil, outward (KA-f, #297)
+        launch!(Backends.backend(p.data), _radiate_body!, (1:size(rp.c, 1), 1:size(rp.c, 2)),
+                p.data, rp.prev, rp.c, rp.start1, rp.start2, rp.marked[], f, ax, sb, o, lb, L,
+                T(dt), Δn)
         rp.marked[] = false
     end
     return st
+end
+
+@inline function _radiate_body!(a, b, P, P0, C::AbstractArray{T}, S1, S2, marked::Bool, f, ax,
+                                sb, o, lb, L, dt, Δn) where {T}
+    @inbounds begin
+        c = C[a, b]
+        isnan(c) && return nothing
+        r = min(c * dt / Δn, one(T))
+        i1 = marked ? S1[a, b] : _at(f, ax, sb - o, a, b)
+        i2 = marked ? S2[a, b] : _at(f, ax, sb - 2o, a, b)
+        l = lb
+        while 1 <= l <= L
+            φ0 = _at(P0, ax, l, a, b)
+            # second-order upstream: ∂φ/∂n ≈ (3φ_b − 4φ_{b−1} + φ_{b−2}) / 2Δn
+            _set!(P, ax, l, a, b, φ0 - r * (3φ0 - 4i1 + i2) / 2)
+            i2 = i1; i1 = φ0
+            l += o
+        end
+    end
+    return nothing
 end
 
 """

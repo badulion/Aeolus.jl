@@ -42,6 +42,7 @@ using ..PressureSolvers: AbstractPressureSolver, solve!
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 import ..PressureSolvers: solve!, poisson_axis_bcs
 using ..StretchedGrids: StretchedGrid, cell_thickness, center_spacing
+using ..BoundaryConditions: _halo_periodic!, _halo_mirror!   # the halo kernels (KA-f, #297)
 
 export MultigridPoissonSolver, MGPreconditionedCG,
        mg_vcycle!, mg_solve!, mg_residual_norm,
@@ -67,32 +68,14 @@ end
 
 Fill the single-cell halo of a level array according to the per-axis
 boundary conditions. `φ` has size `(nx+2, ny+2, nz+2)`; the interior is
-`2:nx+1` in each direction.
+`2:nx+1` in each direction. The per-axis halo kernels of
+`BoundaryConditions` (KA-f, #297; one source with `fill_halos!`):
+`:periodic` wraps, `:neumann` mirrors, x then y then z.
 """
 function _fill_halo!(φ::Array{T,3}, bcx::Symbol, bcy::Symbol, bcz::Symbol) where {T}
-    nx, ny, nz = size(φ) .- 2
-    @inbounds @views begin      # plane copies on views: no copy of the source plane (#295)
-        if bcx === :periodic
-            φ[1,      :, :] .= φ[nx + 1, :, :]
-            φ[nx + 2, :, :] .= φ[2,      :, :]
-        else  # :neumann
-            φ[1,      :, :] .= φ[2,      :, :]
-            φ[nx + 2, :, :] .= φ[nx + 1, :, :]
-        end
-        if bcy === :periodic
-            φ[:, 1,      :] .= φ[:, ny + 1, :]
-            φ[:, ny + 2, :] .= φ[:, 2,      :]
-        else
-            φ[:, 1,      :] .= φ[:, 2,      :]
-            φ[:, ny + 2, :] .= φ[:, ny + 1, :]
-        end
-        if bcz === :periodic
-            φ[:, :, 1     ] .= φ[:, :, nz + 1]
-            φ[:, :, nz + 2] .= φ[:, :, 2     ]
-        else
-            φ[:, :, 1     ] .= φ[:, :, 2     ]
-            φ[:, :, nz + 2] .= φ[:, :, nz + 1]
-        end
+    for (ax, bc) in ((1, bcx), (2, bcy), (3, bcz))
+        n = size(φ, ax) - 2
+        bc === :periodic ? _halo_periodic!(φ, ax, 1, n) : _halo_mirror!(φ, ax, 1, n)
     end
     return φ
 end

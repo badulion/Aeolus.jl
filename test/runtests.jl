@@ -664,6 +664,7 @@ using Aeolus.Fields: set!, interior_view
     end
 
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
+    include("ka_halos.jl")   # KA-f (#297): halo fills / nesting transfer operators on launch!
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
     include("pressure_fft_threads.jl")  # KA-h (#298): spectral solvers as kernels, FFTW thread-invariant
 
@@ -842,6 +843,8 @@ using Aeolus.Fields: set!, interior_view
     include("logging_blowup.jl")      # #335: blowup diagnose-dump-stop, run monitor
     include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
     include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
+    include("config_simulation_driver.jl")  # CFG-b (#357): simulation driver, bitwise round trip, resume, TGV
+    include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"
