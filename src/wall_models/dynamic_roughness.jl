@@ -256,6 +256,12 @@ Fields after [`update_dynamic_roughness!`](@ref): `α`, `converged`, `z0`
 [`dynamic_wall_laws`](@ref) / [`with_roughness`](@ref) turn them into a
 per-column [`RoughLogLaw`](@ref) or [`MOSTWallLaw`](@ref).
 
+For an array of obstacles that the grid does not resolve at all, the
+morphometric roughness length and displacement height of Macdonald et
+al. (1998) are `Aeolus.SurfaceTiles.macdonald_roughness` (the one
+implementation in Aeolus, used by the Berlin parent's tiled surface);
+this model does not use them.
+
 # References
 
   * Anderson, W. & Meneveau, C. (2011). Dynamic roughness model for

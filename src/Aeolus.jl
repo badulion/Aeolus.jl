@@ -21,7 +21,6 @@ include("IO.jl")
 include("NetCDFIO.jl")        # dependency-free NetCDF-3 reader/writer
 include("IBM.jl")
 include("Parallel.jl")
-include("Nesting.jl")
 include("Backends.jl")
 include("SpectralElement.jl")
 include("Chemistry.jl")
@@ -36,7 +35,8 @@ include("AdvectionSchemes.jl")  # Phases 26, 28
 include("TimeIntegration.jl")   # Phases 23, 25
 include("Anelastic.jl")         # Phase 27
 include("Multigrid.jl")         # Phase 29
-include("AdaptiveMesh.jl")      # Phases 30-31
+include("Nesting.jl")          # Phase 30 parent-child operators (N-nest-a, #250)
+include("AdaptiveMesh.jl")      # Phase 31 AMR (delegates to Nesting)
 
 # --- Era III: high-fidelity radiation (Phases 32-38) ---------------------
 # MoistThermodynamics (Era IV, Phase 39) is dependency-free and defines the
@@ -99,7 +99,6 @@ using .NetCDFIO
 using .Microphysics
 using .IBM
 using .Parallel
-using .Nesting
 using .Backends
 using .SpectralElement
 using .Radiation
@@ -114,6 +113,7 @@ using .AdvectionSchemes
 using .TimeIntegration
 using .Anelastic
 using .Multigrid
+using .Nesting
 using .AdaptiveMesh
 
 using .RadiationCore
@@ -158,6 +158,7 @@ using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 export AbstractMesh, RegularGrid
 export Field, CellCenter, FaceX, FaceY, FaceZ
 export Periodic, NoFlux, ValueBC, FluxBC, FieldBoundaryConditions, fill_halos!
+export axis_poisson_bc                # N-open-a (#251)
 export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!,
        interpolate_to_face!, interpolate_to_center!, momentum_advect!,
        add_buoyancy!, add_coriolis!, compute_smagorinsky_νt!,
@@ -202,14 +203,23 @@ export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
        sgs_stratification!
 # P58-e (#193): resolved TKE profile (turbulence-collapse runs)
 export resolved_tke_profile
+# #245: the FFTW planning policy
+export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
-       CGPoissonSolver, solve!
+       CGPoissonSolver, solve!, poisson_axis_bcs
 export ImpermeableWall
 export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
 export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
+# #245: full-state checkpoints with bitwise restart, periodic checkpoints
+export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint_state!,
+       fieldwise_checkpoint_state, restore_fieldwise!, checkpoint_fields,
+       StepperState, record_step!, previous_dt,
+       CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
+       latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
+       driver_checkpoints, finish_checkpoints!
 export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_write!, nc_append_record!, nc_close!, nc_write_fields,
        nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
@@ -219,7 +229,6 @@ export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
        implicit_ibm_correction!, wall_distance, first_level_cells   # + P56-b (#182)
 export AbstractPartition, SerialPartition, PencilPartition,
        nranks, is_serial, exchange_halos_distributed!
-export NestSpec, apply_one_way_forcing!, apply_two_way_feedback!
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
@@ -303,7 +312,7 @@ export MultigridPoissonSolver, MGPreconditionedCG,
        mg_vcycle!, mg_solve!, mg_residual_norm,
        mg_level_count, mg_iteration_history
 
-# Phases 30-31 — production nesting + block-structured AMR
+# Phase 30 — parent-child nesting (Aeolus.Nesting); Phase 31 — block-structured AMR
 export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
        NestBC, nest_bcs,
@@ -313,6 +322,8 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        mismatch_l1, mismatch_area,
        NestSponge, apply_nest_sponge!,
        NestInterpState, nest_interp_state, interpolate_parent_state!,
+       nest_scalar_names, apply_nest_boundary!,
+       restrict_state_to_parent!, reflux!, reflux_scalars!,
        step_nested!, nest_conservation_error, composite_integral,
        RefinementBlock, AMRHierarchy, amr_hierarchy,
        refinement_criterion_gradient, refinement_criterion_vorticity,
@@ -951,6 +962,8 @@ export effective_roughness, effective_scalar_roughness,
 export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_prandtl,
        LillyCutoff, BrownEtAl1994, ShortTail, LongTail,
        gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR
+# N-parent-a (#247): the one boundary-layer-height diagnostic
+export boundary_layer_height
 # SurfaceExchange's implementer of the contract (MOST-consistent factors).
 export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # P58-e (#193): the maximum sustainable heat flux (Van de Wiel et al. 2012)
@@ -965,7 +978,8 @@ export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_value,
        tke_critical_richardson, tke_equilibrium, dual_strain!, shear_production!,
        buoyancy_production!, tke_budget, initialize_tke!, tke_statistics,
-       tke_eddy_coefficients
+       tke_eddy_coefficients,
+       attach_immersed_walls!   # #232: facade shear production from the wall-model stress
 # P56-d (#188): the differential SGS Reynolds-stress closure.
 export ReynoldsStressClosure, reynolds_stress_terms, reynolds_stress_rhs, reynolds_stress_step,
        daly_harlow_coefficient, coriolis_rotation, rotate_stress, is_realizable,
@@ -993,6 +1007,12 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
        onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw,
        FreeStreamDisturbance, von_karman_spectrum, disturbance_velocity!,
        disturbance_fringe_update
+# N-inflow-a (#252) — synthetic inflow turbulence: the generator contract,
+# the Xie & Castro (2008) digital filter, the Lund (1998) transform, and
+# FreeStreamDisturbance as a second provider.
+export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_generator_state!,
+       inflow_plane_size, DigitalFilterGenerator, digital_filter_kernel, lund_coefficients,
+       apply_lund!, FreeStreamInflow, disturbance_velocity, disturbance_covariance
 # Phase 57 — wall models (#169): equilibrium wall laws and the implicit
 # wall-stress operator. `friction_velocity` / `wall_stress` do not collide
 # with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
@@ -1007,7 +1027,7 @@ export MOSTFluxWallLaw
 # walls. The cut-cell stress is a method of CutCell.wall_shear_stress, not
 # a new name.
 export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
-       apply_immersed_wall_stress!, immersed_wall_count,
+       apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!,
        wall_slip_velocity, slip_wall_value
 # P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
 # `advance_channel!` / `run_channel!` do not collide with the Berlin case's
@@ -1039,6 +1059,10 @@ export FreeStreamBoundary
 export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
        AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
+# #248 (N-parent-c): plane-mean nudging of u, v, θ, qv and large-scale subsidence.
+export ProfileNudging, NudgingWeight, nudging_weight, Subsidence, tendency_integrals
+# N-parent-a (#247): radiosonde soundings → (z, t) profiles
+export Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time
 
 # P57-e (#190): the dynamic roughness of partially resolved relief
 # (Anderson & Meneveau 2011). `surface_gradient_drag` does not collide

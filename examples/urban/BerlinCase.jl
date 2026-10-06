@@ -46,11 +46,20 @@ for f in COUPLING_FILES
     include(joinpath(@__DIR__, "couplings", f))
 end
 
+# The parent domain of the nest (#246): its tiled surface (#249)
+include(joinpath(@__DIR__, "parent", "surface.jl"))
+
 export CaseConfig, SCENARIOS, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        Ledger, ledger_report, surface_budget, water_budget, heat_budget, add_heat!,
        AirHeatMeter, air_heat, register_surface_factory!,
-       CaseReference, ref_pressure, ref_density, ref_exner, surface_pressure
+       SurfaceSite, class_surface, class_roughness,
+       ParentLanduse, read_parent_landuse, child_footprint, parent_fractions,
+       parent_morphometry, parent_forcing_level, ParentColumn, ParentSurface,
+       build_parent_surface, parent_tile_forcings, step_parent_column!, parent_offline_forcing,
+       CaseReference, ref_pressure, ref_density, ref_exner, surface_pressure,
+       initial_θ, initial_qv, case_sounding, case_start_time, case_surface_pressure,
+       initial_inversion_height, case_weekday
 
 end # module BerlinCase

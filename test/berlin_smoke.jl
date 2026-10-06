@@ -107,7 +107,11 @@ function smoke_matrix(registry = BC.REGISTRY)
                                       physics = phys, options = opts, kw...)
     end
     runs = [mk("summer, everything on"),
-            mk("winter, everything on"; pairs(BC.SCENARIOS[:winter])..., scenario = :winter)]
+            mk("winter, everything on"; pairs(BC.SCENARIOS[:winter])..., scenario = :winter),
+            # the observed initial state of the flagship (#247): the smoke
+            # scenario's idealised profile replaced by the summer default
+            # sounding (Lindenberg, 29 June 2019, interpolated to noon)
+            mk("summer sounding, everything on"; sounding = BC.CaseConfig(:summer).sounding)]
     for C in registry
         (BC.slot(C) === :addon || BC.is_default(C)) && continue
         push!(runs, mk("$(BC.slot(C)) = $(BC.provider(C))";
@@ -259,7 +263,7 @@ struct _SmokeD <: BC.AbstractCoupling end
     BC.smoke_variants(::Type{_SmokeA}) = ((label = "coarse", options = Dict(:smoke_a => (n = 2,)), nsteps = 4),)
     runs = Dict(smoke_matrix(Type[_SmokeA, _SmokeB, _SmokeAddon, _SmokeC, _SmokeD]))
     @test Set(keys(runs)) == Set(["summer, everything on", "winter, everything on",
-                                  "smoke_slot = b", "smoke_slot2 = d", "smoke_a: coarse"])
+                                  "summer sounding, everything on", "smoke_slot = b", "smoke_slot2 = d", "smoke_a: coarse"])
     @test runs["summer, everything on"].physics[:smoke_addon] == true       # default-off addon on
     @test runs["winter, everything on"].scenario === :winter
     @test runs["winter, everything on"].θ_surface == BC.SCENARIOS[:winter].θ_surface
@@ -280,7 +284,7 @@ end
     runs = Dict(smoke_matrix())
     addons = Set(BC.coupling_name(C) for C in BC.REGISTRY if BC.slot(C) === :addon)
     defaults = Set(BC.coupling_name(C) for C in BC.REGISTRY if BC.slot(C) !== :addon && BC.is_default(C))
-    for label in ("summer, everything on", "winter, everything on")
+    for label in ("summer, everything on", "winter, everything on", "summer sounding, everything on")
         cfg = runs[label]
         @test all(a -> cfg.physics[a] === true, addons)
         got = Set(BC.coupling_name.(BC.selected_couplings(cfg)))
