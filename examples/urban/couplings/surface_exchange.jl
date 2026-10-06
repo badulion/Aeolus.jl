@@ -584,6 +584,8 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
     Hx, Hy, Hz, dz = mesh.Hx, mesh.Hy, mesh.Hz, mesh.dz
     evap = 0.0
     nsolid = 0
+    # a surface sum: the columns' contributions folded in column-major order,
+    # the canonical order of a 2-D reduction (serial; KA-b, #296)
     @inbounds for I in CartesianIndices(bus.k_air)
         bus.surface[I] === nothing && continue
         i, j = Tuple(I)

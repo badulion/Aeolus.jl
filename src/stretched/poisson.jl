@@ -36,8 +36,8 @@
 
 using FFTW: FFTW, plan_r2r
 using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
-using LinearAlgebra: mul!
-using ..PressureSolvers: AbstractPressureSolver
+using ..PressureSolvers: AbstractPressureSolver, copy_interior_in!, copy_interior_out!
+using ..Backends: backend, launch_weighted!, apply_transform!, runs_serially
 import ..PressureSolvers: solve!
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic
 import ..Simulations: _default_solver
@@ -150,39 +150,66 @@ end
 
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 s::StretchedPoissonSolver{T}) where {T}
-    m = source.mesh
-    ii, jj, kk = interior(m)
+    be = backend(s.buf)
     Nx, Ny, Nz = size(s.buf)
-    @views s.buf .= source.data[ii, jj, kk]
-    mul!(s.buf2, s.plan_fwd, s.buf)
+    copy_interior_in!(be, s.buf, source)
+    apply_transform!(be, s.buf2, s.plan_fwd, s.buf)
     b = s.buf2
-    cp, inv_den, lower = s.cp, s.inv_den, s.lower
     @views s.col .= b[1, 1, :]          # the mean mode, solved separately
+    # one tridiagonal solve per horizontal wavenumber, serial in z within
+    # the work item; a work item is a slab of ky rows, see _thomas_slab!
+    checkbounds(b, 1:Nx, 1:Ny, 1:Nz)
+    size(s.cp) == size(s.inv_den) == size(b) && length(s.lower) == Nz ||
+        throw(DimensionMismatch("StretchedPoissonSolver: inconsistent Thomas factors"))
+    np = Nx * Ny * Nz
+    nslab = runs_serially(be, np) ? 1 : min(Ny, Threads.nthreads())
+    launch_weighted!(be, cld(np, nslab), _thomas_slab!, (1:nslab,),
+                     b, s.cp, s.inv_den, s.lower, Nx, Ny, Nz, nslab)
+    _mean_mode!(s)
+    @views b[1, 1, :] .= s.col
+    apply_transform!(be, s.buf, s.plan_inv, s.buf2)
+    copy_interior_out!(be, p, s.buf, s.norm)
+    return p
+end
 
-    # forward elimination (level by level, wavenumbers inner; the mean
-    # mode has inv_den = cp = 0 and is overwritten below)
-    @inbounds for k in 1:Nz
-        a = lower[k]
-        if k == 1
-            for q in 1:Ny, pp in 1:Nx
-                b[pp, q, 1] *= inv_den[pp, q, 1]
-            end
-        else
-            for q in 1:Ny, pp in 1:Nx
+# The Thomas algorithm for the columns (pp, q) of the ky rows q of slab
+# `sl` (of `nslab` contiguous slabs) of the transformed source `b`, in
+# place, with the factorisation `cp` (c'_k) and `inv_den` (1/(b_k − a_k
+# c'_{k−1})) computed at construction: forward elimination
+# d'_k = (d_k − a_k d'_{k−1}) / den_k, then back substitution
+# φ_k = d'_k − c'_k φ_{k+1}. Every column is serial in z and owned by one
+# work item, and every operation is the one the former level-by-level loop
+# did, so the bits are those of that loop whatever the slabs are: the slab
+# count may follow the thread count (one slab, the old loop exactly, when
+# the launch runs serially). The mean mode (1, 1) has cp = inv_den = 0 and
+# is overwritten by `_mean_mode!`.
+#
+# Why slabs of rows and not one column per work item: with kx innermost
+# the loop vectorises and streams through memory. One column per item
+# walks z with a stride of Nx·Ny·8 bytes, a power of two on the usual
+# grids, so every level of a column falls in the same L1 set: measured
+# 4.6× slower than the old loop at 64×64×53 on one thread. One ky row per
+# item still cost 1.2× (64×64×53) to 1.6× (192×192×53) on one thread (Nx
+# contiguous values per level are too short a stream). A GPU backend will
+# launch one column per item (Phase 81).
+@inline function _thomas_slab!(sl, b, cp, inv_den, lower, Nx, Ny, Nz, nslab)
+    q1 = (sl - 1) * Ny ÷ nslab + 1
+    q2 = sl * Ny ÷ nslab
+    @inbounds begin
+        for q in q1:q2, pp in 1:Nx
+            b[pp, q, 1] *= inv_den[pp, q, 1]
+        end
+        for k in 2:Nz
+            a = lower[k]
+            for q in q1:q2, pp in 1:Nx
                 b[pp, q, k] = (b[pp, q, k] - a * b[pp, q, k-1]) * inv_den[pp, q, k]
             end
         end
+        for k in Nz-1:-1:1, q in q1:q2, pp in 1:Nx
+            b[pp, q, k] -= cp[pp, q, k] * b[pp, q, k+1]
+        end
     end
-    # back substitution
-    @inbounds for k in Nz-1:-1:1, q in 1:Ny, pp in 1:Nx
-        b[pp, q, k] -= cp[pp, q, k] * b[pp, q, k+1]
-    end
-    _mean_mode!(s)
-    @views b[1, 1, :] .= s.col
-
-    mul!(s.buf, s.plan_inv, s.buf2)
-    @views p.data[ii, jj, kk] .= s.buf .* s.norm
-    return p
+    return nothing
 end
 
 # Column of the λ_h = 0 mode, in transform units (the operator is linear,

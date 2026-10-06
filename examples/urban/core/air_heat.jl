@@ -113,23 +113,20 @@ dynamics may exchange heat with, see `core/air_heat_ledger.jl`) in
 """
 function air_heat_levels!(out::AbstractVector, m::AirHeatMeter, θ)
     d = _θdata(θ)
-    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
-    fl = m.fluid
+    # the fluid and solid sums of every level in one pass, each in the
+    # canonical, thread-invariant plane order (KA-b, #296)
+    plane_reduce!((m.S, m.Ssolid), Aeolus.Backends.backend(d), _air_heat_at,
+                  (1:m.Nx, 1:m.Ny, 1:m.Nz), d, m.fluid, m.Hx, m.Hy, m.Hz)
     @inbounds for k in 1:m.Nz
-        s = 0.0; a = 0.0
-        for j in 1:m.Ny
-            @simd for i in 1:m.Nx
-                x = d[Hx+i, Hy+j, Hz+k]
-                y = fl[i, j, k] * x          # x or 0, exactly
-                s += y
-                a += x - y                   # 0 or x, exactly
-            end
-        end
-        m.S[k] = s
-        m.Ssolid[k] = a
-        out[k] = m.w[k] * s
+        out[k] = m.w[k] * m.S[k]
     end
     return out
+end
+
+@inline function _air_heat_at(i, j, k, d, fl, Hx, Hy, Hz)
+    @inbounds x = d[Hx+i, Hy+j, Hz+k]
+    @inbounds y = fl[i, j, k] * x          # x or 0, exactly
+    return (y, x - y)                      # (fluid, solid): x - y is 0 or x, exactly
 end
 
 "The heat ``w_k Σ_{solid} θ`` per level of the solid cells at the last `air_heat_levels!`."

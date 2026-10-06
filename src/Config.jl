@@ -1,0 +1,46 @@
+module Config
+
+# Run configuration (CFG-a, #356): one in-package schema system, a loader
+# with `extends` and overrides, strict validation that reports every
+# problem at once, and the canonical resolved form `run.toml` stores.
+#
+#   config/schema.jl   option types, Option / Section / ConfigSchema,
+#                      value checks, the driver registry, "did you mean"
+#   config/load.jl     load_run_config: extends chain, merge, overrides,
+#                      validation, reading a run folder's [config]
+#   config/resolve.jl  RunConfig, with, to_toml / write_config /
+#                      config_hash, [inputs] hashes, the run.toml hooks
+#   config/common.jl   the common sections ([run], [fftw], [logging],
+#                      [checkpoint], [output]); checkpoint_schedule and
+#                      apply_fftw_config! on them
+#   config/run_record.jl  the run.toml record of a RunConfig: the hooks
+#                      IO.start_run calls, start_run(cfg)
+#
+# Included after IO: it extends IO.start_run and the run.toml hooks.
+# Dependencies: the stdlibs TOML and Dates only.
+
+using TOML
+using Dates: Dates, Date, Time, DateTime
+using ..RunLog: parse_log_level
+using ..Operators: set_fftw_policy!, fftw_policy, load_fftw_wisdom!, FFTW_DEFAULT_PLANNER,
+                   _FFTW_PLANNERS
+using ..IO: IO, CheckpointSchedule, fnv1a64
+
+export RunConfig, ConfigSection, ConfigError, ConfigProblem, load_run_config, with,
+       to_toml, write_config, config_text, config_hash, config_inputs, content_hash,
+       config_origin, config_sources, config_schema, nonreplayable_keys,
+       ConfigSchema, Section, Option, Path, Optional, OpenTable, section, option!, check!,
+       register_driver!, driver_schema, registered_drivers, shipped_configs,
+       damerau_levenshtein, CONFIG_SCHEMA_VERSION,
+       checkpoint_schedule, apply_fftw_config!
+
+include("config/schema.jl")
+include("config/load.jl")
+include("config/resolve.jl")
+include("config/common.jl")
+include("config/run_record.jl")
+
+# The common driver: the common sections only.
+register_driver!("common")
+
+end # module

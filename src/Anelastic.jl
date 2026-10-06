@@ -57,6 +57,7 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ,
                interior, znodes
 using ..Fields
 using ..Fields: Field, interior_view, set!
+using ..Backends: Backends, plane_reduce!, plane_partials!, ordered_sum, range_max
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall,
@@ -1734,7 +1735,9 @@ from the Boussinesq limit.
 function max_divergence(sim::MassWeightedSimulation)
     _fill_velocity_halos!(sim)
     divergence(sim.div_buf, sim.u, sim.v, sim.w)
-    return maximum(abs, interior_view(sim.div_buf))
+    # max is exact: the same bits as `maximum(abs, interior_view(div_buf))`
+    return range_max(Backends.backend(sim.div_buf.data), Simulations._abs_at, interior(sim.mesh),
+                     sim.div_buf.data)
 end
 
 """
@@ -1763,18 +1766,14 @@ systems, which is why [`system_comparison_diagnostics`](@ref) also reports
 function kinetic_energy(sim::MassWeightedSimulation{S,T}) where {S,T}
     m = sim.mesh
     dV = m.dx * m.dy * m.dz
-    ii, jj, kk = interior(m)
-    ρc = sim.ref.ρ̄c_pad; ρf = sim.ref.ρ̄f_pad
-    ke = zero(T)
-    ud = sim.u.data; vd = sim.v.data; wd = sim.w.data
-    @inbounds for k in kk
-        rc = ρc[k]; rf = ρf[k]
-        for j in jj, i in ii
-            ke += rc * (ud[i,j,k]^2 + vd[i,j,k]^2) + rf * wd[i,j,k]^2
-        end
-    end
-    return 0.5 * ke * dV
+    I3 = interior(m)
+    # canonical plane sums, then ascending k: thread-invariant (KA-b, #296)
+    p = plane_reduce!(zeros(T, length(I3[3])), Backends.backend(sim.u.data), _ρke_at, I3,
+                      sim.u.data, sim.v.data, sim.w.data, sim.ref.ρ̄c_pad, sim.ref.ρ̄f_pad)
+    return 0.5 * ordered_sum(p) * dV
 end
+@inline _ρke_at(i, j, k, ud, vd, wd, ρc, ρf) =
+    @inbounds ρc[k] * (ud[i,j,k]^2 + vd[i,j,k]^2) + ρf[k] * wd[i,j,k]^2
 
 """
     mean_θ_profile(sim::MassWeightedSimulation) -> Vector
@@ -1809,12 +1808,11 @@ velocity fields are identical.)
 function unweighted_kinetic_energy(sim)
     m = sim.mesh
     dV = m.dx * m.dy * m.dz
-    ui = interior_view(sim.u); vi = interior_view(sim.v); wi = interior_view(sim.w)
-    ke = zero(eltype(ui))
-    @inbounds for I in eachindex(ui)
-        ke += ui[I]^2 + vi[I]^2 + wi[I]^2
-    end
-    return 0.5 * ke * dV
+    I3 = interior(m)
+    # canonical plane sums, then ascending k: thread-invariant (KA-b, #296)
+    p = plane_partials!(zeros(eltype(sim.u.data), length(I3[3])), Backends.backend(sim.u.data),
+                        Simulations._ke_point, I3, sim.u.data, sim.v.data, sim.w.data)
+    return 0.5 * ordered_sum(p) * dV
 end
 
 """

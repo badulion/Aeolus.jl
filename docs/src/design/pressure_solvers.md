@@ -52,6 +52,18 @@ At each `solve!` call:
 No heap allocation. The forward+inverse FFT pair dominates the cost:
 `O(Nx Ny Nz log(Nx Ny Nz))`.
 
+**On threads (KA-h, #298).** The copies, the eigenvalue multiply and the
+normalisation are pointwise [`launch!`](@ref Aeolus.Backends.launch!)
+kernels, bit-identical to the broadcasts they replaced. The transforms
+are executed from the host between launches through
+[`apply_transform!`](@ref Aeolus.Backends.apply_transform!), never inside
+a kernel, so a GPU backend can substitute its own FFT library. FFTW's
+plans are threaded (`init_threads!` sets FFTW to `Threads.nthreads()`)
+and give the same bits at every thread count under `ESTIMATE` or
+imported wisdom. The stretched solver's tridiagonal solve in z is one
+launch over slabs of ky rows, serial in z within each work item. Measured
+speed-ups: [The kernel port](ka_port.md#Measured-at-KA-h).
+
 ## Planned solvers
 
 ### `CosineFFTPoissonSolver` *(Phase 1b — shipped)*

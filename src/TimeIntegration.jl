@@ -32,6 +32,7 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ,
                Location, interior, totalsize
 using ..Fields
 using ..Fields: Field, interior_view, location
+using ..Backends: Backends, plane_partials!, range_max, interior_max, interior_all_finite
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
@@ -158,37 +159,34 @@ end
 # cell with u = v = w = U is three times as restrictive as a cell with
 # only u = U. Each cell takes the larger of its two opposing face values
 # in every direction (conservative, and exact for uniform flow).
+#
+# `max` is exact and commutative, so the thread-invariant `range_max` gives
+# the bits of the old serial loop (NaN-propagating; KA-b, #296).
 function _max_advective_rate(ud, vd, wd, m::RegularGrid{T}) where {T}
-    ii, jj, kk = interior(m)
     idx = 1 / m.dx; idy = 1 / m.dy; idz = 1 / m.dz
-    r = zero(T)
-    @inbounds for k in kk, j in jj, i in ii
-        au = max(abs(ud[i, j, k]), abs(ud[i+1, j, k]))
-        av = max(abs(vd[i, j, k]), abs(vd[i, j+1, k]))
-        aw = max(abs(wd[i, j, k]), abs(wd[i, j, k+1]))
-        r  = max(r, au * idx + av * idy + aw * idz)   # NaN-propagating
-    end
-    return r
+    r = range_max(Backends.backend(ud), _adv_rate_at, interior(m), ud, vd, wd, idx, idy, idz)
+    return max(zero(T), T(r))
 end
 
 # The same rate with the local cell thickness: on a vertically stretched
 # grid (#151) the vertical CFL number of a cell is |w| / Δz_c[k], so the
 # thin near-surface cells bind, not the mean spacing.
 function _max_advective_rate(ud, vd, wd, m::AbstractMesh{T}) where {T}
-    ii, jj, kk = interior(m)
     idx = 1 / m.dx; idy = 1 / m.dy
-    r = zero(T)
-    @inbounds for k in kk
-        idz = 1 / _dzc(m, k)
-        for j in jj, i in ii
-            au = max(abs(ud[i, j, k]), abs(ud[i+1, j, k]))
-            av = max(abs(vd[i, j, k]), abs(vd[i, j+1, k]))
-            aw = max(abs(wd[i, j, k]), abs(wd[i, j, k+1]))
-            r  = max(r, au * idx + av * idy + aw * idz)   # NaN-propagating
-        end
-    end
-    return r
+    r = range_max(Backends.backend(ud), _adv_rate_dzc_at, interior(m), ud, vd, wd, idx, idy, m)
+    return max(zero(T), T(r))
 end
+
+@inline function _adv_rate_at(i, j, k, ud, vd, wd, idx, idy, idz)
+    @inbounds begin
+        au = max(abs(ud[i, j, k]), abs(ud[i+1, j, k]))
+        av = max(abs(vd[i, j, k]), abs(vd[i, j+1, k]))
+        aw = max(abs(wd[i, j, k]), abs(wd[i, j, k+1]))
+    end
+    return au * idx + av * idy + aw * idz
+end
+@inline _adv_rate_dzc_at(i, j, k, ud, vd, wd, idx, idy, m) =
+    _adv_rate_at(i, j, k, ud, vd, wd, idx, idy, 1 / _dzc(m, k))
 
 # Brunt-Väisälä frequency from the horizontal-mean (resolved) θ profile:
 # the largest N² across the faces between the plane means, from the
@@ -197,17 +195,15 @@ end
 function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
     sim.has_buoyancy || return zero(T)
     m = sim.mesh
-    ii, jj, kk = interior(m)
+    ii, jj, kk = I3 = interior(m)
     n_h = length(ii) * length(jj)
+    # the plane sums in the canonical, thread-invariant order (KA-b, #296)
+    S = plane_partials!(Vector{T}(undef, length(kk)), Backends.backend(sim.θ.data), identity,
+                        I3, sim.θ.data)
     N²max = zero(T)
     prev  = zero(T)
-    d = sim.θ.data
     @inbounds for (kc, k) in enumerate(kk)
-        s = zero(T)
-        for j in jj, i in ii
-            s += d[i, j, k]
-        end
-        mean_k = s / n_h
+        mean_k = S[kc] / n_h
         if kc > 1
             # the two plane means sit Δz_f[k] apart (= m.dz on a RegularGrid)
             N²max = max(N²max, buoyancy_frequency_squared(prev, mean_k, _dzf(m, k),
@@ -373,7 +369,7 @@ function stress_form_cfl_viscosity(νh_max::Real, νv_max::Real, m)
     return 2 * max(νh_max * (ix2 + iy2) + νv_max * iz2, νv_max * s) / s
 end
 
-_max_interior(f::Field) = maximum(interior_view(f))
+_max_interior(f::Field) = interior_max(f)      # exact: the bits of maximum(interior_view(f))
 
 """
     adaptive_dt(sim, constraints; dt_prev = nothing, diagnostics = nothing,
@@ -580,19 +576,19 @@ catch
 end
 
 function _all_finite(sim::BoussinesqSimulation)
-    all(isfinite, interior_view(sim.u)) || return false
-    all(isfinite, interior_view(sim.v)) || return false
-    all(isfinite, interior_view(sim.w)) || return false
-    all(isfinite, interior_view(sim.θ)) || return false
-    all(isfinite, interior_view(sim.p)) || return false
-    sim.has_moisture && !all(isfinite, interior_view(sim.qv)) && return false
+    interior_all_finite(sim.u) || return false
+    interior_all_finite(sim.v) || return false
+    interior_all_finite(sim.w) || return false
+    interior_all_finite(sim.θ) || return false
+    interior_all_finite(sim.p) || return false
+    sim.has_moisture && !interior_all_finite(sim.qv) && return false
     return true
 end
 
-_max_speed(sim::BoussinesqSimulation) =
-    max(maximum(abs, interior_view(sim.u)),
-        maximum(abs, interior_view(sim.v)),
-        maximum(abs, interior_view(sim.w)))
+# max |u|, |v|, |w| over the interior: exact and NaN-propagating, so the bits
+# of `maximum(abs, interior_view(·))` at any thread count (KA-b, #296)
+_max_speed(sim::BoussinesqSimulation) = max(_max_abs(sim.u), _max_abs(sim.v), _max_abs(sim.w))
+_max_abs(f::Field) = range_max(Backends.backend(f.data), Simulations._abs_at, interior(f.mesh), f.data)
 
 # =========================================================================
 # Phase 23 — the adaptive driver

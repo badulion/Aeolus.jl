@@ -19,6 +19,15 @@ step:
 | `ledger_water(case, q)` | ``Σ_k ρ_k Σ_{ij} q Δz / (N_x N_y)``, for measuring a change of a tracer |
 | `l.dt` | the length of the current step (s); use it, not `cfg.dt`, to turn the step's energy into a flux — they differ under the adaptive stepper |
 
+**Summation order (KA-b, #296).** Every ledger sum has one fixed order,
+independent of the thread count. The water integrals build on
+`level_sums(q)`, the per-level plane sums ``S_k = Σ_{ij} q`` in the
+canonical order of `plane_partials!` ([kernel port](ka_port.md#The-reduction-contract)),
+combined over ``k`` in ascending order; the heat of the air takes its
+fluid and solid level sums the same way (`air_heat_levels!`).
+`add_surface!` sums the step's column contributions per class in
+column-major order and adds that step total to the accumulated term.
+
 **Surface energy.** `:Rn` (net radiation into the surface), `:H`,
 `:LE`, `:G` (sensible, latent and ground heat flux out of it) and `:dS`
 (storage change of the surface layer) are the core terms. Every other

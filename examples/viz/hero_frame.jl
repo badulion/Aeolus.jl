@@ -23,30 +23,30 @@ isfile(NCPATH) || error("""
         julia --project=. examples/urban/alexanderplatz_diurnal.jl
     """)
 
-ncf   = nc_open(NCPATH)
-nrec  = nc_nrecords(ncf)
-hours = nc_read(ncf, "hour")
-elevs = nc_read(ncf, "solar_elevation")
-z     = nc_read(ncf, "z")
+ncf   = NCDataset(NCPATH)
+nrec  = ncf.dim["time"]
+hours = Array(ncf["hour"])
+elevs = Array(ncf["solar_elevation"])
+z     = Array(ncf["z"])
 
 # Pick the requested hour, or the warmest time level.
 rec = if length(ARGS) >= 2
     h = parse(Float64, ARGS[2])
     argmin(abs.(hours .- h))
 else
-    argmax([maximum(nc_read_record(ncf, "Ts", r)) for r in 1:nrec])
+    argmax([maximum(ncf["Ts"][:, :, r]) for r in 1:nrec])
 end
 @printf("Rendering record %d of %d  (t = %.1f h, sun %.1f°)\n",
         rec, nrec, hours[rec], elevs[rec])
 
 k = max(1, min(length(z), searchsortedfirst(z, 30.0)))
-Ts  = nc_read_record(ncf, "Ts", rec)
-sw  = nc_read_record(ncf, "sw_in", rec)
-u   = @view nc_read_record(ncf, "u", rec)[:, :, k]
-v   = @view nc_read_record(ncf, "v", rec)[:, :, k]
-w3  = @view nc_read_record(ncf, "w", rec)[:, :, k]
+Ts  = ncf["Ts"][:, :, rec]
+sw  = ncf["sw_in"][:, :, rec]
+u   = ncf["u"][:, :, k, rec]
+v   = ncf["v"][:, :, k, rec]
+w3  = ncf["w"][:, :, k, rec]
 uh  = sqrt.(u .^ 2 .+ v .^ 2)
-hgt = nc_read(ncf, "building_height")
+hgt = Array(ncf["building_height"])
 
 up = parse(Int, get(ENV, "AEOLUS_HERO_UPSCALE", "6"))
 

@@ -141,7 +141,7 @@ A production run writes one folder (#334), `runs/<yyyy-mm-dd>_<case>_<runID>/`:
 | file | contents |
 | :-- | :------ |
 | `run.log` | the run log: debug and up, full timestamps, source locations; appended to by every session |
-| `run.toml` | provenance: `run_id`, `case`, `created`, the full `config` and `seeds`, one `[[session]]` per start or restart |
+| `run.toml` | provenance: `run_id`, `case`, `created`, the full `config` and `seeds`, one `[[session]]` per start or restart; for a [`RunConfig`](config.md) the canonical `[config]`, `config_hash`, `config_sources`, `[inputs]` hashes and `replayable` |
 | `diagnostics.csv` | the diagnostics time series ([`diagnostics_path`](@ref Aeolus.IO.diagnostics_path); written by the [run monitor](#Run-monitor), `diagnostics.nc` after #310) |
 | `crash/` | crash checkpoints of a blown-up run ([`crash_dir`](@ref Aeolus.IO.crash_dir); see [Blowup](#Blowup:-diagnose,-dump,-stop)) |
 | `output/` | the run's output files ([`output_dir`](@ref Aeolus.IO.output_dir)) |
