@@ -40,7 +40,7 @@ export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
 # Era VI (P55-c, #181): the tensorial scalar eddy diffusivity (operators/scalar_tensor.jl)
 export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
-       sgs_scalar_tensor, IsentropicDiffusion
+       sgs_scalar_tensor, IsentropicDiffusion, sgs_scalar_face_diffusivity
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
 # The one damping-profile implementation behind add_sponge! and the fringe (P59-d, #185).
 export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,

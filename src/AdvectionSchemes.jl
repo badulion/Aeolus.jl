@@ -72,7 +72,9 @@ export # --- Phase 26: reconstructions -------------------------------------
        # --- Phase 28: conservation diagnostics ----------------------------
        kinetic_energy_budget, scalar_variance_budget, enstrophy,
        # --- N-open-c (#260): advective flux through the open faces --------
-       boundary_scalar_flux
+       boundary_scalar_flux,
+       # --- N-nest-e (#263): the flux through one face ---------------------
+       advective_face_flux
 
 # =========================================================================
 # 1. Smoothness indicators
@@ -1585,6 +1587,31 @@ end
 @inline _wflux(W::AbstractVector, k) = @inbounds W[k]
 
 """
+    advective_face_flux(r, ϕd, veld, ax, i, j, k) -> F
+
+The advective flux `u_n ϕ_f` of a cell-centred scalar through **one**
+face: the face of storage index `(i, j, k)` normal to axis `ax` (`1, 2,
+3` for x, y, z), i.e. the face between the cells `(i-1, j, k)` and
+`(i, j, k)` along `ax`. `veld` is the storage array of the face-normal
+velocity (`u.data`, `v.data` or `w.data`), `ϕd` that of the scalar
+(halos filled), `r` a reconstruction descriptor (`Centered2()` is the
+Boussinesq core's `advect_centered!`; see [`boundary_scalar_flux`](@ref)
+for the scheme names), upwinded on the sign of `u_n`.
+
+This is the face flux every flux-form operator of this module uses, and
+the one source of [`boundary_scalar_flux`](@ref) (its boundary faces)
+and of the two-way nest's flux registers (its interface faces, N-nest-e
+#263).
+"""
+@inline function advective_face_flux(r, ϕd::AbstractArray, veld::AbstractArray,
+                                     ax::Int, i::Int, j::Int, k::Int)
+    @inbounds vel = veld[i, j, k]
+    ax == 1 && return vel * _face_x(r, ϕd, i - 1, j, k, vel)
+    ax == 2 && return vel * _face_y(r, ϕd, i, j - 1, k, vel)
+    return vel * _face_z(r, ϕd, i, j, k - 1, vel)
+end
+
+"""
     boundary_scalar_flux(sim, ϕ; scheme = :centered, bcs = sim.θ_bcs,
                          weights = nothing, fill = true)
         -> (west, east, south, north, bottom, top, total)
@@ -1652,27 +1679,24 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         iw = first(ii); ie = last(ii) + 1
         @inbounds for k in kk, j in jj
             w = _wflux(Wc, k) * Ax
-            uw = ud[iw, j, k]; ue = ud[ie, j, k]
-            fW -= w * uw * _face_x(r, ϕd, iw - 1, j, k, uw)
-            fE += w * ue * _face_x(r, ϕd, ie - 1, j, k, ue)
+            fW -= w * advective_face_flux(r, ϕd, ud, 1, iw, j, k)
+            fE += w * advective_face_flux(r, ϕd, ud, 1, ie, j, k)
         end
     end
     if !(vb.south isa Periodic)
         js = first(jj); jn = last(jj) + 1
         @inbounds for k in kk, i in ii
             w = _wflux(Wc, k) * Ay
-            vs = vd[i, js, k]; vn = vd[i, jn, k]
-            fS -= w * vs * _face_y(r, ϕd, i, js - 1, k, vs)
-            fN += w * vn * _face_y(r, ϕd, i, jn - 1, k, vn)
+            fS -= w * advective_face_flux(r, ϕd, vd, 2, i, js, k)
+            fN += w * advective_face_flux(r, ϕd, vd, 2, i, jn, k)
         end
     end
     if !(vb.bottom isa Periodic)
         kb = first(kk); kt = last(kk) + 1
         wb_ = _wflux(Wf, kb) * Az; wt_ = _wflux(Wf, kt) * Az
         @inbounds for j in jj, i in ii
-            wb = wd[i, j, kb]; wt = wd[i, j, kt]
-            fB -= wb_ * wb * _face_z(r, ϕd, i, j, kb - 1, wb)
-            fT += wt_ * wt * _face_z(r, ϕd, i, j, kt - 1, wt)
+            fB -= wb_ * advective_face_flux(r, ϕd, wd, 3, i, j, kb)
+            fT += wt_ * advective_face_flux(r, ϕd, wd, 3, i, j, kt)
         end
     end
     return (west = fW, east = fE, south = fS, north = fN, bottom = fB, top = fT,

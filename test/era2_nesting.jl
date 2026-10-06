@@ -284,7 +284,10 @@ end
     fill!(psim.qv.data, 0.010); fill!(csim.qv.data, 0.0)      # dry child, moist parent
     trp = Field(CellCenter(), pm); trc = Field(CellCenter(), cm)
     fill!(trp.data, 400.0); fill!(trc.data, 0.0)
-    step_nested!(psim, csim, nest, 1e-3; scalars=(:co2 => (trc, trp),))
+    # buffer = 0: every covered cell is anterpolated (the default buffer of
+    # two parent cells, N-nest-e #263, covers this 3×3 nest entirely)
+    step_nested!(psim, csim, nest, 1e-3; scalars=(:co2 => (trc, trp),),
+                 feedback=TwoWayFeedback(buffer=0))
     # halos of the child now hold the parent value (qv and tracer at rest)
     ii, jj, kk = interior(cm)
     halo_qv = [csim.qv.data[i, j, k] for i in axes(csim.qv.data, 1), j in jj, k in kk

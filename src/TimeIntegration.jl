@@ -55,7 +55,8 @@ using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
 using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence,
-                     _dzc, _dzf, _dz_min      # vertical metrics, stretched-aware (#151)
+                     _dzc, _dzf, _dz_min,     # vertical metrics, stretched-aware (#151)
+                     _project_velocity!       # the projection (steps 8–10 of step!)
 using ..TimeSteppers: step!
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 
@@ -1553,17 +1554,7 @@ end
 # callable per IMEX stage so every stage value is discretely
 # divergence-free.
 function _project!(sim::BoussinesqSimulation{T}, Δt::T) where {T}
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
-    divergence(sim.div_buf, sim.u, sim.v, sim.w)
-    solve!(sim.φ, sim.div_buf, sim.solver)
-    fill_halos!(sim.φ, sim.bcs)
-    ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
-    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
-    _axpy_interior!(sim.u, -one(T), sim.dφdx, sim.mesh)
-    _axpy_interior!(sim.v, -one(T), sim.dφdy, sim.mesh)
-    _axpy_interior!(sim.w, -one(T), sim.dφdz, sim.mesh)
+    _project_velocity!(sim)
     ii, jj, kk = interior(sim.mesh)
     @inbounds @views sim.p.data[ii, jj, kk] .= sim.φ.data[ii, jj, kk] ./ Δt
     return sim
