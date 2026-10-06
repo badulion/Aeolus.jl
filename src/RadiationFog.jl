@@ -73,6 +73,7 @@ using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
                              isobaric_saturation_adjustment,
                              heat_capacity_moist, latent_heat_vapor,
                              saturation_specific_humidity, exner_function
+using ..Backends: AbstractBackend, plane_map!, ordered_sum, backend
 
 # Era III radiation and Era IV droplet physics the fog column delegates to
 # (issue #9): no optics or transfer is computed in this module.
@@ -199,7 +200,7 @@ end
 
 """
     fog_adjust!(θ, qv, ql, p, dt; τ = 0, levels = axes(θ, 3),
-                c = DEFAULT_CONSTANTS) -> total condensed (kg/kg, summed)
+                c = DEFAULT_CONSTANTS, backend = backend(θ)) -> total condensed (kg/kg, summed)
 
 Apply [`fog_condensation`](@ref) to every cell of 3-D arrays `θ`
 (potential temperature, K), `qv` and `ql` (kg/kg) in the vertical
@@ -208,29 +209,57 @@ by `k`. Temperature is `T = θ Π(p)` with the dry Exner function of the
 thermodynamic contract, and the enthalpy-conserving warming is written
 back as `Δθ = ΔT / Π`.
 
+A cell without fog water (`ql ≤ 0`) whose vapour is below saturation,
+``q_v < (1 − 10^{-8})\\,q_s(T, p)``, is left as it is without the
+adjustment (it cannot condense, and the adjustment returns `Δq = 0` for
+it exactly, so the skip changes no bits; maintainer decision on #291).
+
+The cells are independent: the levels run in parallel on `backend`
+(one plane per work item, KA-m #301), each plane in cell order, so the
+fields are identical at every thread count and to a serial sweep.
+
 Returns the domain sum of the condensed amount (negative when fog
-evaporated), which callers can use as a budget check.
+evaporated), which callers can use as a budget check: each plane's sum in
+cell order, the planes added in ascending `k` (thread-invariant; before
+KA-m one running sum over all cells, so the last bits of the total moved
+once).
 """
 function fog_adjust!(θ::AbstractArray{<:Real,3}, qv::AbstractArray{<:Real,3},
                      ql::AbstractArray{<:Real,3}, p, dt::Real;
                      τ::Real = 0.0, levels = axes(θ, 3),
-                     c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+                     c::ThermodynamicConstants = DEFAULT_CONSTANTS,
+                     backend::AbstractBackend = backend(θ))
     size(θ) == size(qv) == size(ql) ||
         throw(DimensionMismatch("fog_adjust!: θ, qv, ql must share shape"))
     Nx, Ny, _ = size(θ)
+    lv = UnitRange{Int}(levels)
+    isempty(lv) && return 0.0
+    checkbounds(θ, 1:Nx, 1:Ny, lv)
+    p isa AbstractVector && checkbounds(p, lv)
+    parts = Vector{Float64}(undef, length(lv))
+    plane_map!(parts, backend, _fog_plane!, (1:Nx, 1:Ny, lv), θ, qv, ql, p,
+               float(dt), float(τ), c)
+    return ordered_sum(parts)
+end
+
+# One level of fog_adjust!: the cells in (j, i) order, the plane's sum of
+# the condensed amount in that order.
+function _fog_plane!(k, ir, jr, θ, qv, ql, p, dt, τ, c)
+    pk = p isa AbstractVector ? float(@inbounds p[k]) : float(p)
+    Π  = exner_function(pk, PhasePartition(0.0), c)
     total = 0.0
-    @inbounds for k in levels
-        pk = p isa AbstractVector ? float(p[k]) : float(p)
-        Π  = exner_function(pk, PhasePartition(0.0), c)
-        for j in 1:Ny, i in 1:Nx
-            T = θ[i, j, k] * Π
-            r = fog_condensation(T, pk, qv[i, j, k], ql[i, j, k], dt; τ = τ, c = c)
-            r.Δq == 0 && continue
-            θ[i, j, k]  = r.T / Π
-            qv[i, j, k] = r.qv
-            ql[i, j, k] = r.ql
-            total += r.Δq
-        end
+    @inbounds for j in jr, i in ir
+        T = θ[i, j, k] * Π
+        qvi, qli = qv[i, j, k], ql[i, j, k]
+        # no fog water and subsaturated: Δq = 0 exactly (the adjustment
+        # would find T(Δ = 0) = T and q_v − q_s(T) < 0); skip the solve
+        qli <= 0 && qvi < (1 - 1e-8) * saturation_specific_humidity(T, pk, c) && continue
+        r = fog_condensation(T, pk, qvi, qli, dt; τ = τ, c = c)
+        r.Δq == 0 && continue
+        θ[i, j, k]  = r.T / Π
+        qv[i, j, k] = r.qv
+        ql[i, j, k] = r.ql
+        total += r.Δq
     end
     return total
 end

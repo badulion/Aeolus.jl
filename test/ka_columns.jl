@@ -14,6 +14,8 @@
 using Test
 using Random: Xoshiro, rand, randn
 using Aeolus
+include(joinpath(@__DIR__, "support", "legacy_columns.jl"))
+const LC = LegacyColumns
 
 const KC_BACKENDS = ("serial" => CPUBackend(serial = true),
                      "threaded, threshold 0" => CPUBackend(threshold = 0),
@@ -117,6 +119,50 @@ end
         Threads.@spawn (tabs[t] = snicar_aging_table())
     end
     @test all(t -> tabs[t] === tabs[1], 1:16) && tabs[1] === snicar_aging_table()
+end
+
+@testset "RadiationFog: fog_adjust! per plane with the early exit" begin
+    MT = Aeolus.MoistThermodynamics
+    n = (24, 20, 12)
+    rng = Xoshiro(2026)
+    p = collect(range(1.0e5, 8.5e4, length = n[3]))
+    Π = [MT.exner_function(pk, MT.PhasePartition(0.0)) for pk in p]
+    θ0 = 285 .+ 6 .* rand(rng, n...)
+    qs = [MT.saturation_specific_humidity(θ0[i, j, k] * Π[k], p[k]) for i in 1:n[1], j in 1:n[2], k in 1:n[3]]
+    # a mix: subsaturated dry cells, cells just below and just above
+    # saturation (the early exit's margin), supersaturated cells, fog cells
+    # that evaporate, and a few negative values
+    f = rand(rng, n...)
+    qv0 = qs .* ifelse.(f .< 0.4, 0.7 .+ 0.25 .* rand(rng, n...),
+                 ifelse.(f .< 0.5, 1 .- 1e-9 .* rand(rng, n...),
+                 ifelse.(f .< 0.6, 1 .- 2e-8 .* rand(rng, n...), 1 .+ 0.02 .* rand(rng, n...))))
+    ql0 = ifelse.(rand(rng, n...) .< 0.3, 2e-4 .* rand(rng, n...), 0.0)
+    ql0[1:3, 1, 1] .= -1e-12; qv0[4, 1, 1] = -1e-9
+    θr, qvr, qlr = copy(θ0), copy(qv0), copy(ql0)
+    totr = LC.fog_adjust!(θr, qvr, qlr, p, 2.0)
+    @test count(!=(0), qlr .- ql0) > 300          # the test exercises the adjustment
+    for (lab, b) in KC_BACKENDS, τ in (0.0, 30.0)
+        θa, qva, qla = copy(θ0), copy(qv0), copy(ql0)
+        θb, qvb, qlb = copy(θ0), copy(qv0), copy(ql0)
+        tb = LC.fog_adjust!(θb, qvb, qlb, p, 2.0; τ = τ)
+        ta = fog_adjust!(θa, qva, qla, p, 2.0; τ = τ, backend = b)
+        @test kc_bits(θa) == kc_bits(θb) && kc_bits(qva) == kc_bits(qvb) && kc_bits(qla) == kc_bits(qlb)
+        # the total: plane sums in cell order, then ascending k (a named
+        # one-time change of its last bits against the one running sum)
+        @test isapprox(ta, tb; rtol = 1e-12)
+        parts = [LC.fog_adjust!(copy(θ0), copy(qv0), copy(ql0), p, 2.0; τ = τ, levels = k:k) for k in 1:n[3]]
+        @test kc_bits(ta) == kc_bits(ordered_sum(parts))
+        # views (the Berlin coupling passes interior views), a scalar pressure
+        H = 2
+        big = [fill(NaN, n .+ 2H) for _ in 1:3]
+        for (B, A) in zip(big, (θ0, qv0, ql0)); B[H+1:H+n[1], H+1:H+n[2], H+1:H+n[3]] .= A; end
+        vs = [view(B, H+1:H+n[1], H+1:H+n[2], H+1:H+n[3]) for B in big]
+        θc, qvc, qlc = copy(θ0), copy(qv0), copy(ql0)
+        LC.fog_adjust!(θc, qvc, qlc, 9.5e4, 2.0; τ = τ)
+        fog_adjust!(vs..., 9.5e4, 2.0; τ = τ, backend = b)
+        @test kc_bits(vs[1]) == kc_bits(θc) && kc_bits(vs[2]) == kc_bits(qvc) && kc_bits(vs[3]) == kc_bits(qlc)
+        @test all(isnan, big[1][1:H, :, :])
+    end
 end
 
 end # testset KA-m
