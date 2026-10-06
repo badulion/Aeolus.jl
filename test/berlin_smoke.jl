@@ -117,7 +117,10 @@ allfinite(x) = all(isfinite, x)
     elapsed = time() - t_start
     @info @sprintf("Berlin smoke test: %d runs, %d coupling checks, %.1f s (first-call compilation included)",
                    length(runs), nchecks, elapsed)
-    @test elapsed < 300
+    # Wall-clock budget: 300 s on a development machine. Slower CI runners
+    # (4-core GitHub runners take about 340 s) set AEOLUS_SMOKE_BUDGET_S.
+    budget = parse(Float64, get(ENV, "AEOLUS_SMOKE_BUDGET_S", "300"))
+    @test elapsed < budget
 end
 
 struct _SmokeA <: BC.AbstractCoupling end
