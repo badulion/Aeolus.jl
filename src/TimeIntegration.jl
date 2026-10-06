@@ -1530,7 +1530,7 @@ function _project!(sim::BoussinesqSimulation{T}, Δt::T) where {T}
     solve!(sim.φ, sim.div_buf, sim.solver)
     fill_halos!(sim.φ, sim.bcs)
     ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
-    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy)   # ∂φ/∂n = 0 on open faces
+    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
     _axpy_interior!(sim.u, -one(T), sim.dφdx, sim.mesh)
     _axpy_interior!(sim.v, -one(T), sim.dφdy, sim.mesh)
     _axpy_interior!(sim.w, -one(T), sim.dφdz, sim.mesh)

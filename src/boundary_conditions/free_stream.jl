@@ -57,10 +57,12 @@ struct FreeStreamBoundary{V<:AbstractVector{<:Real}} <: AbstractOpenBoundary
 end
 
 # Allowed z pairs: an impermeable wall below an open top (free stream or
-# OpenBoundary); an open face is never a bottom.
+# OpenBoundary), or an OpenBoundary bottom below an OpenBoundary top (a nest
+# child inside its parent, N-nest-d #261).
 _z_pair_supported(b, t::AbstractOpenBoundary) = is_wall(b)
 _z_pair_supported(b::AbstractOpenBoundary, t) = false
 _z_pair_supported(b::AbstractOpenBoundary, t::AbstractOpenBoundary) = false
+_z_pair_supported(b::OpenBoundary, t::OpenBoundary) = true
 
 function _fill_z!(d, bot::_ZWall, top::FreeStreamBoundary, Hz, Nz, loc::Location)
     _fill_wall_bottom!(d, bot, Hz, loc)
