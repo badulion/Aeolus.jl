@@ -134,6 +134,13 @@ Aeolus.jl/
    [Multiple dispatch on Location](dispatch.md).
 3. **Pre-allocate; the hot path does not touch the heap.** The
    `Simulations.step!` function contains no allocations after warm-up.
+   Until #295 this was not true: every halo fill copied the source
+   plane of each `d[a, :, :] .= d[b, :, :]` into a fresh array (13 MB
+   in one flagship scalar-advection stage, as much again in one
+   dynamics step); the copies now run on views. `test/era2_advection.jl`
+   asserts that `fill_halos!` and `advect_positive!` (with a workspace
+   and a prebuilt reconstruction) allocate 0 bytes, and
+   `test/era2_multigrid.jl` the same of the CG and multigrid solves.
 4. **Public API is thin.** `Operators` re-exports one name per
    physically meaningful operation; the underscore-prefixed backend
    kernels are internal.

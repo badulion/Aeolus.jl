@@ -276,4 +276,31 @@ using Aeolus.Multigrid
         @test res.converged
         @test all(iszero, out)
     end
+    # ---------------------------------------------------------------------
+    # KA-c (#295): a solve allocates nothing, and the dot products are the
+    # same pairwise sums as before (so the same bits and iteration counts).
+    # ---------------------------------------------------------------------
+    @testset "KA-c: allocation-free solves, unchanged dot products" begin
+        g = RegularGrid(; size=(16,16,16), extent=(1.0,1.0,1.0), halo=(2,2,2))
+        Random.seed!(295)
+        src = Aeolus.Field(CellCenter(), g); interior_view(src) .= randn(16,16,16)
+        for S in (Aeolus.PressureSolvers.CGPoissonSolver(g; tol = 1e-10, maxit = 500),
+                  MultigridPoissonSolver(g), MGPreconditionedCG(g))
+            p = Aeolus.Field(CellCenter(), g)
+            Aeolus.PressureSolvers.solve!(p, src, S)
+            # the solution: ∇²p = src − mean(src) to the solver tolerance
+            b = interior_view(src) .- sum(interior_view(src)) / 16^3
+            Lp = similar(b)
+            Aeolus.PressureSolvers._apply_laplacian!(Lp, collect(interior_view(p)), g.dx, g.dy, g.dz,
+                                                     :neumann, :neumann, :periodic, :periodic)
+            r = Lp .- b
+            @test sqrt(sum(abs2, r)) <= 1e-6 * sqrt(sum(abs2, b))
+            a = @allocated Aeolus.PressureSolvers.solve!(p, src, S)
+            @info "KA-c: $(nameof(typeof(S))) solve! allocates $a bytes"
+            @test a == 0
+        end
+        x, y, w = randn(16,16,16), randn(16,16,16), zeros(16,16,16)
+        @test Aeolus.Multigrid._dot!(w, x, y) === sum(x .* y)
+    end
 end
+

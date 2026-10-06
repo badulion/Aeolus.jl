@@ -185,6 +185,25 @@ Since then `soil_urban` has been replaced by the surface exchange
 stepper, remeasured on master `915bd49`) and the chemistry (#135) adds five advected species; see the
 cost paragraphs of those sections.
 
+The serial baseline before threading (#295, KA-c) removed the runtime
+integer power from the WENO-Z / TENO weights, the plane copies from every
+halo fill and the per-level slice copies from the dew, with no change to
+any bit of the smoke matrix or of 12 flagship steps. Flagship, 1 thread,
+ms/step over 40 steps after 4 warm-up steps (minimum of 3 runs, 1-min
+load 10–20 on 24 cores; an earlier pair at load ≈ 1.5 in brackets):
+
+| entry | before | after |
+| :-- | --: | --: |
+| `scalar_advection` | 84.9 (68.6) | 34.6 (25.7) |
+| `step!` | 30.7 (23.5) | 28.6 (21.9) |
+| `fog_dew` | 10.1 (8.5) | 6.3 (5.9) |
+| whole step | 155.4 (128.3) | 99.7 (82.7) |
+
+A step of the flagship now allocates 1.0 MB (30.4 MB before), the
+scalar-advection stage 7 KB (13.3 MB). What remains of `fog_dew` is the
+fog saturation adjustment (5.7 ms on its own: one exact saturation
+humidity per cell), not the dew.
+
 ## Shared state
 
 Couplings never keep a private copy of a quantity another coupling
@@ -377,7 +396,7 @@ in summer, 1.30 in winter.
 
 | consumer | uses |
 | :-- | :-- |
-| `fog_dew` | fog adjusted at `p̄_k` (`T = θ Π̄_k`); dew at `p_surface` with `ρ̄_1` |
+| `fog_dew` | fog adjusted at `p̄_k` (`T = θ Π̄_k`); dew at the `p̄_k`, `ρ̄_k` of each column's first air cell `k_air` (#129; one pass over the columns since #295) |
 | `surface_exchange` | forcing `T_air = θ Π̄_k`, `p̄_k`, `ρ̄_k` at the first air cell `k_air`; `ρ̄_k c_pd`, `ρ̄_k` in the conversion of H and E to θ, qv |
 | `aq_chem` | `T = θ̄ Π̄_k` and `p̄_k` for the rate constants; its r_a solve uses `θ_s = Ts/Π̄_k` at the first air cell |
 | `column_radiation` | surface pressure `surface_pressure(case)` (`case.ref.p_surface`) |
