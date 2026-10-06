@@ -1650,7 +1650,9 @@ forced once at z_k − d̄.
 
 **Measured** (`test/berlin_parent_surface.jl`, synthetic clear-sky
 forcing `parent_offline_forcing`: Bird SW and Brutsaert LW for 20 June,
-T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s):
+T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s; as
+measured by #249, with the case sun still 2 h early — the values on the
+corrected UTC sun of #259 and the 2019-06-29 case date follow the table):
 
 | quantity | value |
 | :-- | :-- |
@@ -1662,6 +1664,12 @@ T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s):
 | footprint-mean LE − child area-mean LE, 06–18 h (13:00) | +4.7 % (−21 %) |
 | tile closure, 1825 tiles, 24 h: Rn − H − LE − G; ΔE/Δt − mean G | 1.1e-13; 6.9e-11 W m⁻² |
 | mixed street/park column, 13:00: mosaic vs parameter-aggregated | H 191 vs 117, LE 211 vs 644 W m⁻² |
+
+With the sun on UTC (#259; solar noon at 13:05 instead of 11:05 CEST,
+against the synthetic air temperature that peaks at 15:00) the footprint
+comparison measures H +5.97 % at 13:00 and +3.08 % over 06–18 h, LE
++11.55 % over 06–18 h (+4.4 % at 13:00). The date change to 2019-06-29
+moves these by less than 0.6 points.
 
 The issue's target for the footprint mean was 2 %. That holds only for
 the control. The parent proper and the child see the same air state at
