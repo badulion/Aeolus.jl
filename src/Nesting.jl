@@ -107,7 +107,7 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        DomainAdvance, domain_advance, stage_times,
        NestedRun, NestRunStats, boundary_time,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
-       anterpolate!, feedback_mask
+       anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights
 
 "Simulations a nest can couple: the Boussinesq core (uniform or z-stretched) and the sound-proof `MassWeightedSimulation`s (anelastic, pseudo-incompressible)."
 const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}

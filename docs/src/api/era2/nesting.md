@@ -13,7 +13,10 @@ time coupling: [`NestedRun`](@ref), the per-domain
 [`TwoWayFeedback`](@ref) (anterpolation with buffer zone, canopy
 restriction, inflow exclusion and relaxation, scalar refluxing from
 [`NestFluxRegisters`](@ref), re-projection), [`anterpolate!`](@ref),
-[`feedback_mask`](@ref) and [`two_way_feedback!`](@ref). The parent may be z-stretched
+[`feedback_mask`](@ref) and [`two_way_feedback!`](@ref); a tracer moved
+by a separate transport books its interface flux with
+[`book_nest_flux!`](@ref), and a user core declares its stage weights with
+[`nest_stage_weights`](@ref). The parent may be z-stretched
 (`StretchedGrid`), the operators may run in the reference-mass measure of
 a sound-proof pair ([`NestMeasure`](@ref), [`nest_measure`](@ref)), and
 restriction may be solid-aware ([`nest_fluid_mask`](@ref)). The block-structured AMR of

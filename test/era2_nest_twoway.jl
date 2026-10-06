@@ -96,6 +96,70 @@ function _tw_integrals(p, c, nest, scal)
     return out
 end
 
+# #327 M3: a tracer moved by a separate transport, after the dynamics, with
+# its own scheme (forward-Euler WENO-Z5, the Berlin :scalar_advection
+# pattern), booked by the transport itself through book_nest_flux!. The user
+# core takes a step! (one body_force! stage) and then transports, so it
+# declares the weights of step!.
+const _TW_WENO = advection_scheme(:weno_z5)
+struct _TWSlotCore{F}
+    f::F                               # the tracer the slot transports
+    book::Bool                         # call book_nest_flux! (the transport's own booking)
+    weighted::Bool                     # W-weighted centred transport (sound-proof core)
+end
+function (c::_TWSlotCore)(sim, dt; kw...)
+    step!(sim, dt; kw...)
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+    fill_halos!(c.f, sim.θ_bcs)
+    t = Field(CellCenter(), sim.mesh)
+    if c.weighted
+        c.book && book_nest_flux!(sim, :qv, c.f, dt; scheme = :centered)
+        Wc, Wf = Aeolus.Anelastic.constraint_weights(sim)
+        Aeolus.Anelastic.weighted_scalar_advect!(t, sim.u, sim.v, sim.w, c.f, Wc, Wf, sim.mesh)
+    else
+        c.book && book_nest_flux!(sim, :co2, c.f, dt; scheme = :weno_z5)
+        _TW_WENO(t, sim.u, sim.v, sim.w, c.f)
+    end
+    interior_view(c.f) .+= dt .* interior_view(t)
+    return sim
+end
+Aeolus.Nesting.nest_stage_weights(::_TWSlotCore, args...) = (1.0,)
+
+function _tw_slot_run(model; book = true, nsteps = 100)
+    pm = RegularGrid(Float64; size = (16, 16, 16), extent = (_TW_L, _TW_L, _TW_L),
+                     halo = (3, 3, 3))
+    p = BoussinesqSimulation(pm; C_s = 0.17, ν = 2.0, bcs = FieldBoundaryConditions(:periodic))
+    nest = nested_grid(pm, ((400.0, 1200.0), (400.0, 1200.0), (400.0, 1200.0)), 2)
+    cm = nest_child_mesh(nest)
+    c = BoussinesqSimulation(cm; C_s = 0.17, ν = 2.0,
+                             bcs = nest_bcs(cm, :nest, :nest, :nest; scalars = (:co2,)))
+    rng = Xoshiro(4)
+    fill!(p.θ.data, 1.0); fill!(p.u.data, 3.0); fill!(p.v.data, 1.0)
+    interior_view(p.u) .+= 0.5 .* randn(rng, size(interior_view(p.u)))
+    interior_view(p.v) .+= 0.5 .* randn(rng, size(interior_view(p.v)))
+    Aeolus.Simulations._project_velocity!(p)
+    trp = Field(CellCenter(), pm); trc = Field(CellCenter(), cm)
+    for k in axes(trp.data, 3), j in axes(trp.data, 2), i in axes(trp.data, 1)
+        trp.data[i, j, k] = 400.0 + 50 * exp(-((i - 8)^2 + (j - 8)^2 + (k - 8)^2) / 6)
+    end
+    for (cf, pf) in ((c.θ, p.θ), (c.u, p.u), (c.v, p.v), (c.w, p.w), (trc, trp))
+        interpolate_parent_to_child!(cf, pf, nest)
+    end
+    run = NestedRun(p, c, nest; scalars = (:co2 => (trc, trp),),
+                    feedback = TwoWayFeedback(tracer_fluxes = (:co2 => model,)),
+                    advance_parent = domain_advance(_TWSlotCore(trp, book, false)),
+                    advance_child = domain_advance(_TWSlotCore(trc, book, false)),
+                    cfl_parent = nothing, cfl_child = nothing)
+    I0 = composite_integral(trp, trc, nest)
+    worst = 0.0
+    for _ in 1:nsteps
+        Ia = composite_integral(trp, trc, nest)
+        step_nested!(run; dt = 4.0)            # forward-Euler WENO: CFL ≲ 0.2
+        worst = max(worst, abs(composite_integral(trp, trc, nest) - Ia) / I0)
+    end
+    return worst, abs(composite_integral(trp, trc, nest) - I0) / I0, run
+end
+
 @testset "Era II — two-way nest feedback (N-nest-e, #263)" begin
 
 # -------------------------------------------------------------------------
@@ -275,6 +339,94 @@ end
             worst_reg, worst_old)
     @test worst_reg < 1e-12
     @test worst_old < 1e-12
+end
+
+# #327 M3: the registers book the flux the transport actually applied.
+@testset "separately transported tracers: WENO-Z5 slot, qv as a tracer (#327 M3)" begin
+    # booked by the transport (applied_by = :transport) at its own state
+    per, tot, run = _tw_slot_run(NestScalarFlux(applied_by = :transport))
+    # the pre-#327 way: the hook books WENO-Z5 at the core's stage state
+    # (step-start velocity), which is not the state the slot used
+    per_c, tot_c, _ = _tw_slot_run(NestScalarFlux(scheme = :weno_z5))
+    # not booked at all (declared for transport, but the slot never books)
+    per_n, tot_n, _ = _tw_slot_run(NestScalarFlux(applied_by = :transport); book = false)
+    @printf("  WENO-Z5 tracer slot, 100 two-way steps, composite ∫co2 drift per step / total (Δt = 4 s): booked by the transport %.1e / %.1e; booked by the core hook (pre-#327) %.1e / %.1e; not booked %.1e / %.1e\n",
+            per, tot, per_c, tot_c, per_n, tot_n)
+    @test per <= 1e-12 && tot <= 1e-11
+    @test per_c > 1e3 * per                     # the stage-state booking is wrong
+    @test per_n > 1e3 * per
+    @test all(isfinite, run.child.u.data)
+    # book_nest_flux! is a no-op where nothing is to be booked
+    trc = run.s_bc.child[1]
+    @test !book_nest_flux!(run.child, :co2, trc, 1.0; scheme = :weno_z5)   # no step under way
+    @test !book_nest_flux!(run.child, :nothere, trc, 1.0; scheme = :weno_z5)
+    g = RegularGrid(Float64; size = (4, 4, 4), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+    @test !book_nest_flux!(BoussinesqSimulation(g), :co2, Field(CellCenter(), g), 1.0)
+
+    # qv as a tracer of a moist sound-proof nest: declared, transported by a
+    # W-weighted slot, composite ∫ρ̄ qv conserved
+    pm = RegularGrid(Float64; size = (12, 12, 12), extent = (1200.0, 1200.0, 1200.0),
+                     halo = (3, 3, 3))
+    nest = nested_grid(pm, ((300.0, 900.0), (300.0, 900.0), (0.0, 600.0)), 2)
+    cm = nest_child_mesh(nest)
+    rp = isothermal_reference(pm; T_surf = 300.0); rc = isothermal_reference(cm; T_surf = 300.0)
+    pA = AnelasticSimulation(pm; ref = rp, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    cA = AnelasticSimulation(cm; ref = rc,
+                             bcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest,
+                                            scalars = (:qv,)))
+    rng = Xoshiro(3)
+    for k in axes(pA.θ.data, 3)
+        pA.θ.data[:, :, k] .= rp.θ̄c_pad[k]
+    end
+    fill!(pA.u.data, 4.0)
+    interior_view(pA.v) .+= 0.3 .* randn(rng, size(interior_view(pA.v)))
+    Aeolus.Anelastic._project_mass_weighted!(pA)
+    qp = Field(CellCenter(), pm); qc = Field(CellCenter(), cm)
+    for k in axes(qp.data, 3), j in axes(qp.data, 2), i in axes(qp.data, 1)
+        qp.data[i, j, k] = 0.01 * (1 + 0.5 * exp(-((i - 6)^2 + (j - 7)^2 + (k - 5)^2) / 5))
+    end
+    meas = nest_measure(nest, pA, cA)
+    for (cf, pf) in ((cA.θ, pA.θ), (cA.u, pA.u), (cA.v, pA.v), (cA.w, pA.w), (qc, qp))
+        interpolate_parent_to_child!(cf, pf, nest; measure = meas)
+    end
+    qrun(book) = NestedRun(pA, cA, nest; scalars = (:qv => (qc, qp),),
+                           feedback = TwoWayFeedback(tracer_fluxes =
+                               (:qv => NestScalarFlux(applied_by = :transport),)),
+                           advance_parent = domain_advance(_TWSlotCore(qp, book, true)),
+                           advance_child = domain_advance(_TWSlotCore(qc, book, true)),
+                           cfl_parent = nothing, cfl_child = nothing)
+    run = qrun(true)
+    @test :qv in run.regs.names
+    Q0 = composite_integral(qp, qc, nest; measure = meas)
+    for _ in 1:20
+        step_nested!(run; dt = 5.0)
+    end
+    dq = abs(composite_integral(qp, qc, nest; measure = meas) - Q0) / Q0
+    @printf("  anelastic pair, qv as a W-weighted tracer slot, 20 steps: composite ∫ρ̄qv drift %.2e\n", dq)
+    @test dq <= 1e-12
+
+    # refusals: θ is not a tracer; qv of a moist Boussinesq pair is the core's
+    @test_throws ArgumentError TwoWayFeedback(tracer_fluxes = (:θ => NestScalarFlux(),))
+    pb, cb, nb, _, _ = _tw_box(; moist = true)
+    @test_throws ArgumentError NestedRun(pb, cb, nb; cfl_parent = nothing,
+        feedback = TwoWayFeedback(tracer_fluxes = (:qv => NestScalarFlux(),)))
+    # cores without known stage weights: refused clearly with refluxing on
+    pb, cb, nb, _, _ = _tw_box()
+    for (ap, ac) in ((domain_advance(step_imex!, ARK2()), domain_advance()),
+                     (domain_advance(), domain_advance((s, h; kw...) -> step!(s, h; kw...))))
+        err = try
+            NestedRun(pb, cb, nb; feedback = :two_way, cfl_parent = nothing,
+                      advance_parent = ap, advance_child = ac)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("nest_stage_weights", err.msg)
+    end
+    @test NestedRun(pb, cb, nb; feedback = TwoWayFeedback(reflux = false), cfl_parent = nothing,
+                    advance_parent = domain_advance(step_imex!, ARK2())).regs === nothing
+    @test nest_stage_weights(step_rk3!) == (1 / 6, 1 / 6, 2 / 3)
+    @test nest_stage_weights(step_imex!, ARK2()) === nothing
 end
 
 # -------------------------------------------------------------------------

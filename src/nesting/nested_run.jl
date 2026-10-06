@@ -238,6 +238,10 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                     twoway !== nothing && twoway.reflux ?
                         NestFluxRegisters(nest, parent, child, s_bc, twoway,
                                           advance_parent, advance_child) : nothing)
+    if run.regs !== nothing                  # separate transports book through the sims
+        _register_booker!(parent, run.regs, :parent, nest)
+        _register_booker!(child, run.regs, :child, nest)
+    end
     return run
 end
 

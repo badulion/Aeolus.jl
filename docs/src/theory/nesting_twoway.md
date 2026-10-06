@@ -10,7 +10,7 @@ conservation and stability. The pieces it is built from:
 | :-- | :-- | :-- |
 | restriction (volume / mass measure, solid-aware) | `restrict_to_parent!` (N-nest-a #250, N-nest-b #256) | [nesting](nesting.md) |
 | refluxing of a flux mismatch | `apply_flux_correction!` (N-nest-a) | [nesting](nesting.md) |
-| the face flux of a scalar | `AdvectionSchemes.advective_face_flux`, the closures' `sgs_scalar_face_diffusivity` | [fractional step](fractional_step.md) |
+| the face flux of a scalar | `AdvectionSchemes.scalar_face_flux` (the kernel of `boundary_scalar_flux` too), the closures' `sgs_scalar_face_diffusivity` | [fractional step](fractional_step.md) |
 | subcycling, stage times, retries | `NestedRun` (N-nest-c #257) | [nested time coupling](nesting_time.md) |
 | the child's open faces | `NestBoundaryData` (N-nest-d #261) | [nested boundary conditions](nesting_boundaries.md) |
 
@@ -101,14 +101,17 @@ difference unless it is put back (Berger & Colella 1989):
 ```
 
 **The registers** ([`NestFluxRegisters`](@ref)) hold ``Φ = ∫F\,dt`` on the
-interface planes only (both grids). They are booked by a hook that
+interface planes only (both grids). Scalars the cores transport (`θ`, a
+core `qv`, tracers updated inside `body_force!`) are booked by a hook that
 [`NestedRun`](@ref) chains in front of each domain's `body_force!`: the
 cores call it inside every stage, after the tendencies and before the
 predictor, when the halos, the velocities and the SGS coefficients are
-exactly those the stage used. The booked face flux is the sum of
+exactly those the stage used. The booked face flux is the one face kernel
+`AdvectionSchemes.scalar_face_flux` (shared with `boundary_scalar_flux`,
+#327), the sum of
 
-* the advective flux `advective_face_flux` (``u_n ϕ_f``, the face
-  reconstruction of the core's advection; `:centered` for `θ` and `qv`),
+* the advective flux ``u_n ϕ_f`` (the face reconstruction of the core's
+  advection; `:centered` for `θ` and `qv`),
 * the molecular flux ``-ν\,∂ϕ/∂n`` when the simulation is viscous,
 * the SGS flux ``-s\,\tfrac12(K_L+K_R)\,∂ϕ/∂n`` with the coefficients of
   the closure's `sgs_scalar_face_diffusivity`, the face form of its
@@ -121,7 +124,26 @@ times the stage weight of the core (1 for `step!`, ``\tfrac16, \tfrac16,
 Shu–Osher combination amounts to) and ``W`` for a sound-proof pair.
 Rejected (rolled-back) steps discard their bookings. A tracer that is not
 a simulation prognostic is refluxed when its owner declares its transport,
-`tracer_fluxes = (:co2 => NestScalarFlux(scheme = :upwind),)`.
+`tracer_fluxes = (:co2 => NestScalarFlux(scheme = :upwind),)`; `qv` is
+declared the same way where it is a tracer of the field set (a moist
+sound-proof nest) rather than a core prognostic.
+
+**Tracers moved by a separate transport.** A transport that advects its
+tracers outside the core's stages — after the dynamics, with its own
+scheme, velocity and time step, like the Berlin case's forward-Euler
+WENO-Z5 slot — is invisible to the hook: booking its scheme at the core's
+stage state books the wrong flux. Such a tracer is declared with
+`NestScalarFlux(applied_by = :transport)` and the transport books exactly
+what it applies with [`book_nest_flux!`](@ref)`(sim, name, ϕ, dt; scheme,
+diffusivity)`, called with the state it is about to update (a no-op for a
+simulation outside a two-way run). The domain's core then wraps the
+dynamics and the transport and declares the weights of its dynamics
+([`nest_stage_weights`](@ref)). Measured (`test/era2_nest_twoway.jl`, 100
+steps, forward-Euler WENO-Z5 slot after `step!`): composite ``∫``tracer
+drift 1.2e-14 per step booked by the transport, 2.9e-7 booked at the core
+stage (the pre-#327 way: right scheme, wrong velocity), 2.5e-6 not booked;
+a `qv` tracer of an anelastic pair, W-weighted slot, 20 steps: ``∫ρ̄q_v``
+drift 2.9e-15.
 
 **Volume-consistent refluxing.** Each grid conserves volume, but their
 time-integrated volume fluxes through one face patch differ: the child's
@@ -235,9 +257,16 @@ the benchmark applies "last hour within 20 % of the hour before" to hours
 
 ## Current limits
 
-* Refluxing needs a core with known stage weights (`step!`, `step_rk3!`)
-  in both domains; the IMEX cores and user cores run two-way with
+* Refluxing needs a core with known stage weights in both domains:
+  `step!`, `step_rk3!`, or a user core that declares them
+  ([`nest_stage_weights`](@ref)). The IMEX cores (implicit `θ` diffusion)
+  are refused with an `ArgumentError` and run two-way with
   `TwoWayFeedback(reflux = false)`.
+* Two-way feedback needs parent and child of one core family (two
+  Boussinesq sims, or two sound-proof sims of one system sharing one
+  reference profile). A mixed pair has no consistent measure and is
+  refused by every two-way entry point (`NestedRun`, `anterpolate!`,
+  `restrict_state_to_parent!`); it nests one-way.
 * With a buffer zone the re-projection is not idempotent: the anterpolated
   faces next to the buffer leave the parent divergent, and the projection
   moves them (and the interface faces: the ledger's
