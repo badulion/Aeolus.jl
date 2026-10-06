@@ -78,7 +78,8 @@ using ..Operators: sgs_tke!, sgs_fields                                    # N-i
 using LinearAlgebra: Symmetric, Diagonal, eigen, mul!, dot
 using FFTW: plan_rfft, plan_irfft
 using ..BoundaryConditions: AbstractBoundaryData, OpenPlane, OpenBoundary,           # N-inflow-c
-                            has_open_boundaries, open_boundary_states, _face_local
+                            has_open_boundaries, open_boundary_states, _face_local,
+                            WindowedBoundaryData
 import ..BoundaryConditions: boundary_values!
 using ..Nesting: NestedRun, NestBoundaryData, nest_covered_range
 

@@ -71,7 +71,7 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             has_open_boundaries, update_open_boundaries!,
                             open_boundary_snapshot, restore_open_boundaries!,
                             Periodic, NoFlux, ImpermeableWall, NoSlipWall,
-                            mark_open_boundary_solids!
+                            mark_open_boundary_solids!, WindowedBoundaryData
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, step_rk3!, _dzf, _project_velocity!
 using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness
@@ -89,18 +89,18 @@ using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
 
-import ..BoundaryConditions: boundary_values!
+import ..BoundaryConditions: boundary_values!, snapshot_values, blend_window!
 
 export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
        nest_bcs, NestBoundaryData, nest_boundary_data, nest_open_sides,
        interpolate_to_nest_boundary!, interpolate_parent_to_child!,
        restrict_to_parent!,
-       NestFluxMismatch, compute_nest_flux_mismatch, apply_flux_correction!,
+       NestFluxMismatch, compute_nest_flux_mismatch, apply_flux_correction!, nest_periodic_axes,
        mismatch_l1, mismatch_area,
        NestSponge, apply_nest_sponge!,
        NestInterpState, nest_interp_state, interpolate_parent_state!,
-       nest_scalar_names, apply_nest_boundary!,
+       nest_scalar_names, apply_nest_boundary!, nest_storage, fill_nest_halos!,
        restrict_state_to_parent!, reflux!, reflux_scalars!,
        step_nested!, nest_conservation_error, composite_integral,
        NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask,
@@ -118,6 +118,7 @@ _moist(::MassWeightedSimulation)  = false
 
 include("nesting/grid.jl")
 include("nesting/measure.jl")
+include("nesting/shell.jl")
 include("nesting/operators.jl")
 include("nesting/interp_state.jl")
 include("nesting/boundary_data.jl")

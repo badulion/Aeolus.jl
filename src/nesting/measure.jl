@@ -23,54 +23,6 @@
 # Horizontal directions are always uniform volume measure (W depends on z
 # only) and keep the N-nest-a integer plans.
 
-"""
-    NestMeasure
-
-Vertical measure of the nesting operators of one [`NestedGrid`](@ref):
-the coordinate in which the conservative prolongation reconstructs
-parent averages and the weights with which restriction averages child
-cells. Build with [`nest_measure`](@ref).
-
-  * `kind = :volume` — volume (height) measure. On a uniform parent the
-    operators are exactly the N-nest-a (#250) operators; on a z-stretched
-    parent the reconstruction uses the actual face heights.
-  * `kind = :mass` — the reference-mass measure `dμ = W(z) dz` of a
-    [`MassWeightedSimulation`](@ref) pair (`W = ρ̄` anelastic, `ρ̄θ̄`
-    pseudo-incompressible, from `constraint_weights`). Restriction is
-    `W`-weighted (scalars) and `W`-area-weighted (horizontal-normal
-    faces); prolongation conserves `∫ W φ dV` exactly.
-
-Fields (all storage-indexed, halos included): `pc`/`cc` the parent/child
-face coordinates in the measure, `ph`/`ch` the parent/child face heights
-(child faces that coincide with parent faces are bit-identical copies),
-`cw` the child cell measure per level (`Δz` or `W Δz`), `pw` the parent
-cell measure per level from the parent's *own* weight (`Δz` or
-`W_p Δz_p`), and the plan cache.
-
-Two parent cell masses exist in the mass measure. Inside the covered
-layers the coordinate `pc` takes a parent layer's mass to be the sum of
-its children's (`Σ W_c Δz_c`), which is what makes prolongation and
-restriction exactly conservative and the Lagrange basis exactly 0/1 on
-coincident faces. The parent simulation itself conserves `W_p Δz_p`,
-which differs from that sum by the midpoint-rule error of sampling one
-profile on two grids ([`nest_reference_mismatch`](@ref), `~4e-7` for a
-25 m layer). Cell integrals over *uncovered* parent cells
-([`composite_integral`](@ref), the refluxing correction) therefore use
-`pw`, so the composite integral is exactly what the two simulations
-conserve; covered parent cells only ever exchange with their own
-children and use `pc`.
-"""
-struct NestMeasure
-    kind::Symbol
-    pc::Vector{Float64}
-    cc::Vector{Float64}
-    ph::Vector{Float64}
-    ch::Vector{Float64}
-    cw::Vector{Float64}
-    pw::Vector{Float64}
-    plans::Dict{Tuple{Symbol,Int},Vector{Tuple{Int,Vector{Float64}}}}
-end
-
 Base.show(io::IO, m::NestMeasure) =
     print(io, "NestMeasure(:", m.kind, ", ", length(m.pc) - 1, " parent / ",
           length(m.cc) - 1, " child storage levels)")
@@ -129,10 +81,10 @@ The vertical measure of `nest`'s conservative operators (see
     1 K warmer surface is `3.5e-3`).
 """
 function nest_measure(nest::NestedGrid)
-    return get!(nest.measures, :volume) do
+    return get!(nest.measures, _VOLUME_KEY) do
         ph = _zfaces_storage(nest.parent_mesh)
         ch = _child_zfaces(nest, ph)
-        NestMeasure(:volume, ph, ch, ph, ch, diff(ch), diff(ph), Dict())
+        NestMeasure(:volume, ph, ch, ph, ch, diff(ch), diff(ph), Dict{Tuple{Symbol,Int},_Plan1D}())
     end
 end
 
@@ -174,7 +126,7 @@ function nest_measure(nest::NestedGrid, Wp::AbstractVector, Wc::AbstractVector)
         pc[P] = pc[P+1] - Wp[P] * (ph[P+1] - ph[P])
     end
     pw = [Wp[P] * (ph[P+1] - ph[P]) for P in 1:length(ph)-1]
-    return NestMeasure(:mass, pc, cc, ph, ch, diff(cc), pw, Dict())
+    return NestMeasure(:mass, pc, cc, ph, ch, diff(cc), pw, Dict{Tuple{Symbol,Int},_Plan1D}())
 end
 
 """
@@ -226,7 +178,7 @@ function nest_measure(nest::NestedGrid, psim::MassWeightedSimulation,
         error("nest_measure: parent_sim is not on the nest's parent mesh")
     csim.mesh === nest.child_mesh || size(csim.θ.data) == totalsize(nest.child_mesh) ||
         error("nest_measure: child_sim is not on the nest's child mesh")
-    key = (:mass, objectid(psim.ref), objectid(csim.ref), _weighting_key(psim))
+    key = (:mass, objectid(psim.ref), objectid(csim.ref), Symbol(_weighting_key(psim)))
     haskey(nest.measures, key) && return nest.measures[key]
     mis = nest_reference_mismatch(nest, psim.ref, csim.ref)
     mis <= rtol ||
@@ -283,3 +235,9 @@ _fluid(nest, f::_FluidMask) = f.χ
 _fluid(nest, ::Nothing) = nothing
 _fluid(nest, sm::SolidMask) = nest_fluid_mask(nest, sm)
 _fluid(nest, a::AbstractArray{Bool,3}) = nest_fluid_mask(nest, a)
+
+# The fluid mask once, wrapped, for a caller that restricts repeatedly (a
+# NestedRun computes it at construction, #329).
+_fluid_mask(nest, ::Nothing) = nothing
+_fluid_mask(nest, f::_FluidMask) = f
+_fluid_mask(nest, solid) = _FluidMask(_fluid(nest, solid))

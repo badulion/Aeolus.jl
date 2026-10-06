@@ -401,10 +401,11 @@ end
 
 _ramp(U_out, u_min) = clamp(-U_out / u_min, 0.0, 1.0)
 
-# The time window of the wrapped data, if it has one: a NestBoundaryData
-# blends the parent linearly over the current parent step [t0, t0 + Δt].
+# The time window of the wrapped data, if it has one: two-snapshot data (a
+# NestBoundaryData, or any WindowedBoundaryData, #329)
+# blends linearly over the current window [t0, t0 + Δt].
 _data_window(d) = nothing
-_data_window(d::NestBoundaryData) = d.Δt > 0 ? (d.t0, d.Δt) : nothing
+_data_window(d::WindowedBoundaryData) = d.Δt > 0 ? (d.t0, d.Δt) : nothing
 
 # The applied perturbation is linear in time between two knots,
 # (t_prev, Lp) and (t_gen, Lc); τ is not clamped inside a window (a stage

@@ -131,6 +131,17 @@ Aeolus.BoundaryConditions.ProfileBoundaryData
 Aeolus.BoundaryConditions.FunctionBoundaryData
 ```
 
+Data delivered at discrete times — the nest parent, a mesoscale model
+(#58), reanalysis (#57) — is two snapshots blended linearly in time by one
+type (#329): the snapshot implements `snapshot_values`.
+
+```@docs
+Aeolus.BoundaryConditions.WindowedBoundaryData
+Aeolus.BoundaryConditions.snapshot_values
+Aeolus.BoundaryConditions.window_fraction
+Aeolus.BoundaryConditions.blend_window!
+```
+
 ### Update, mass-flux correction and multi-stage support
 
 ```@docs

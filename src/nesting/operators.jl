@@ -59,22 +59,25 @@ function _build_plan(kind::Symbol, order::Int, r::Int, off::Int,
     ns  = max(order, 1)
     lo  = 1 - Hp                       # lowest representable parent cell/face number
     hi  = max(lo, Np + Hp - ns + 1)    # highest legal stencil start
-    plan = Vector{Tuple{Int,Vector{Float64}}}(undef, Nc + 2Hc)
-    @inbounds for ic in 1:(Nc + 2Hc)
-        n = ic - Hc                    # child cell / face number (may be <=0)
+    n   = Nc + 2Hc
+    start = Vector{Int}(undef, n); W = Matrix{Float64}(undef, ns, n); cell = zeros(Int, n)
+    @inbounds for ic in 1:n
+        nn = ic - Hc                   # child cell / face number (may be <=0)
         if kind === :avg
-            q = n - 1
+            q = nn - 1
             I = off + fld(q, r)
             m = mod(q, r) + 1
             s0 = clamp(I - ((ns - 1) ÷ 2), lo, hi)
-            plan[ic] = (Hp + s0, _cons_weights(ns, r, m, I - s0 + 1))
+            start[ic] = Hp + s0; cell[ic] = clamp(Hp + I, 1, Np + 2Hp)
+            W[:, ic] .= _cons_weights(ns, r, m, I - s0 + 1)
         else # :nodal — child face position in parent-face-number units
-            qf = off + (n - 1) / r
+            qf = off + (nn - 1) / r
             s0 = clamp(Int(floor(qf)) - ((ns - 1) ÷ 2), lo, hi)
-            plan[ic] = (Hp + s0, _nodal_weights(ns, qf - s0))
+            start[ic] = Hp + s0
+            W[:, ic] .= _nodal_weights(ns, qf - s0)
         end
     end
-    return plan
+    return _Plan1D(start, W, cell)
 end
 
 function _plan(nest::NestedGrid, kind::Symbol, d::Int, order::Int)
@@ -155,28 +158,30 @@ function _build_coord_plan(kind::Symbol, order::Int, pc::Vector{Float64},
     ns = max(order, 1)
     npc = length(pc) - 1                 # parent storage cells
     ncc = length(cc) - 1                 # child storage cells (= faces in a Face array)
-    plan = Vector{Tuple{Int,Vector{Float64}}}(undef, ncc)
+    start = Vector{Int}(undef, ncc); W = Matrix{Float64}(undef, ns, ncc); cell = zeros(Int, ncc)
     @inbounds for ic in 1:ncc
         if kind === :avg
             a = cc[ic]; b = cc[ic+1]
             I  = clamp(searchsortedlast(pc, (a + b) / 2), 1, npc)
             s0 = clamp(I - ((ns - 1) ÷ 2), 1, max(1, npc - ns + 1))
-            plan[ic] = (s0, _cons_weights_nodes(view(pc, s0:s0+ns), a, b))
+            start[ic] = s0; cell[ic] = I
+            W[:, ic] .= _cons_weights_nodes(view(pc, s0:s0+ns), a, b)
         else
             z  = cc[ic]
             F  = clamp(searchsortedlast(pc, z), 1, npc)
             s0 = clamp(F - ((ns - 1) ÷ 2), 1, max(1, npc - ns + 1))
-            plan[ic] = (s0, _nodal_weights_nodes(view(pc, s0:s0+ns-1), z))
+            start[ic] = s0
+            W[:, ic] .= _nodal_weights_nodes(view(pc, s0:s0+ns-1), z)
         end
     end
-    return plan
+    return _Plan1D(start, W, cell)
 end
 
 """
     _zplan(nest, kind, order, measure)
 
 The vertical 1-D plan. On a uniform parent in the volume measure it is
-the N-nest-a integer plan ([`_plan`](@ref)); otherwise the coordinate
+the N-nest-a integer plan (`_plan`); otherwise the coordinate
 plan of the measure: `:avg` in the measure coordinate (height, or the
 reference mass `μ`), `:nodal` (the point value `w`) in height.
 """
@@ -200,64 +205,246 @@ _dim_kinds(::FaceX)      = (:nodal, :avg,   :avg)
 _dim_kinds(::FaceY)      = (:avg,   :nodal, :avg)
 _dim_kinds(::FaceZ)      = (:avg,   :avg,   :nodal)
 
-_interface_plane(::CellCenter, cm, i, j, k) = false
-_interface_plane(::FaceX, cm, i, j, k) = (i == cm.Hx + 1)
-_interface_plane(::FaceY, cm, i, j, k) = (j == cm.Hy + 1)
-_interface_plane(::FaceZ, cm, i, j, k) = (k == cm.Hz + 1)
-
 # =========================================================================
 # Prolongation: parent -> child
 # =========================================================================
 
+# One box of child storage points `ir × jr × kr`, written to `dst` at the
+# local indices `(i, j, k) .- off` (`off = (0, 0, 0)` for a whole child
+# array; a slab of a halo-only `_ShellArray` otherwise). A function barrier
+# with concrete argument types: no allocation, no dynamic dispatch.
+function _interp_box!(dst::Array{T,3}, off::NTuple{3,Int}, pd::AbstractArray{<:Real,3},
+                      px::_Plan1D, py::_Plan1D, pz::_Plan1D,
+                      ir::UnitRange{Int}, jr::UnitRange{Int}, kr::UnitRange{Int}) where {T}
+    nx = _stencil(px); ny = _stencil(py); nz = _stencil(pz)
+    Wx = px.w; Wy = py.w; Wz = pz.w
+    @inbounds for k in kr
+        bk = pz.start[k]
+        for j in jr
+            bj = py.start[j]
+            for i in ir
+                bi = px.start[i]
+                s = 0.0
+                for c in 1:nz
+                    wc = Wz[c, k]; kp = bk + c - 1
+                    for b in 1:ny
+                        wbc = wc * Wy[b, j]; jp = bj + b - 1
+                        for a in 1:nx
+                            s += wbc * Wx[a, i] * pd[bi + a - 1, jp, kp]
+                        end
+                    end
+                end
+                dst[i - off[1], j - off[2], k - off[3]] = T(s)
+            end
+        end
+    end
+    return dst
+end
+
+# The storage boxes of a region of a child field at `loc`: the whole array
+# (`:all`), or the six non-overlapping halo slabs, `H` deep, one deeper on
+# the low side of the field's own staggered axis for `:halo_interface` (the
+# boundary-normal interior face plane of the west/south/bottom faces).
+function _region_boxes(cm::RegularGrid, loc::Location, region::Symbol)
+    n = (cm.Nx + 2cm.Hx, cm.Ny + 2cm.Hy, cm.Nz + 2cm.Hz)
+    region === :all && return ((1:n[1], 1:n[2], 1:n[3]),)
+    ax = _stagger_axis(loc)
+    lo = ntuple(d -> (cm.Hx, cm.Hy, cm.Hz)[d] + (region === :halo_interface && d == ax), 3)
+    return _shell_boxes(n, lo, (cm.Hx, cm.Hy, cm.Hz))
+end
+
+_stagger_axis(::CellCenter) = 0
+_stagger_axis(::FaceX) = 1
+_stagger_axis(::FaceY) = 2
+_stagger_axis(::FaceZ) = 3
+
 function _interp_child!(cf::Field, pf::Field, nest::NestedGrid;
-                        order::Int=3, region::Symbol=:halo, measure=nothing)
+                        order::Int=3, region::Symbol=:halo, measure=nothing,
+                        limiter::Symbol=:none)
     cm = nest.child_mesh
-    cf.mesh === cm || size(cf.data) == totalsize(cm) ||
+    size(cf.data) == totalsize(cm) ||
         error("_interp_child!: child field is not on the nest's child mesh")
     size(pf.data) == totalsize(nest.parent_mesh) ||
         error("_interp_child!: parent field is not on the nest's parent mesh")
+    region in (:all, :halo, :halo_interface) ||
+        throw(ArgumentError("_interp_child!: region must be :all, :halo or :halo_interface, got :$region"))
     loc = location(cf)
     kinds = _dim_kinds(loc)
     px = _plan(nest, kinds[1], 1, order)
     py = _plan(nest, kinds[2], 2, order)
     pz = _zplan(nest, kinds[3], order, measure)
-    # the loop behind a function barrier: the plans' types depend on the
-    # measure (volume / mass) and the parent mesh, so the caller is not
-    # type-stable in them (an 18× slower prolongation without it, #265)
-    return _interp_child_loop!(cf, cf.data, pf.data, px, py, pz, cm, loc, region)
-end
-
-function _interp_child_loop!(cf, cd::AbstractArray{T,3}, pd, px, py, pz, cm, loc,
-                             region::Symbol) where {T}
-    ii, jj, kk = interior(cm)
-    all_region = region === :all
-    iface = region === :halo_interface
-    @inbounds for k in axes(cd, 3)
-        bk, wk = pz[k]
-        kin = k in kk
-        for j in axes(cd, 2)
-            bj, wj = py[j]
-            jin = kin && (j in jj)
-            for i in axes(cd, 1)
-                if !all_region && jin && (i in ii)
-                    (iface && _interface_plane(loc, cm, i, j, k)) || continue
-                end
-                bi, wi = px[i]
-                s = 0.0
-                for c in eachindex(wk)
-                    wc = wk[c]; kp = bk + c - 1
-                    for b in eachindex(wj)
-                        wbc = wc * wj[b]; jp = bj + b - 1
-                        for a in eachindex(wi)
-                            s += wbc * wi[a] * pd[bi + a - 1, jp, kp]
-                        end
-                    end
-                end
-                cd[i, j, k] = T(s)
-            end
+    _interp_into!(cf.data, pf.data, px, py, pz, cm, loc, region)
+    limiter in _LIMITERS ||
+        throw(ArgumentError("prolongation limiter must be one of $(_LIMITERS), got :$limiter"))
+    if limiter !== :none && order > 1
+        boxes = _dst_boxes(cf.data, cm, loc, region)
+        if loc isa CellCenter
+            _limit_cells!(boxes, pf.data, px, py, pz, nest, limiter === :monotone)
+        else
+            limiter === :monotone ||
+                throw(ArgumentError("a velocity takes limiter = :none or :monotone, not :$limiter"))
+            _clip_faces!(boxes, pf.data, px, py, pz)
         end
     end
     return cf
+end
+
+function _interp_into!(cd::Array, pd, px, py, pz, cm, loc, region)
+    for (ir, jr, kr) in _region_boxes(cm, loc, region)
+        _interp_box!(cd, (0, 0, 0), pd, px, py, pz, ir, jr, kr)
+    end
+    return cd
+end
+
+# (array, offset, storage box) of every box a prolongation wrote.
+_dst_boxes(cd::Array, cm, loc, region) =
+    map(b -> (cd, (0, 0, 0), b), _region_boxes(cm, loc, region))
+_dst_boxes(cd::_ShellArray, cm, loc, region) = _shell_slabs(cd)
+
+# -------------------------------------------------------------------------
+# The prolongation limiter (#329, item 9)
+# -------------------------------------------------------------------------
+#
+# Scalars: a conservative scaling of the children of each parent cell P
+# about the parent value φ̄_P,
+#
+#     φ_c ← φ̄_P + θ_P (φ_c − φ̄_P),   0 ≤ θ_P ≤ 1,
+#
+# with the same θ_P for every child of P. The map is affine, so the
+# (volume- or reference-mass-weighted) mean of the children, which the
+# primitive-function reconstruction makes equal to φ̄_P, is unchanged:
+# conservation is kept wherever all children of P are prolongated (the
+# child interior of region = :all). Two bounds:
+#
+#   * :positive (Zhang & Shu 2010, JCP 229, 3091, §2.3): θ_P makes the
+#     smallest child ≥ 0 where φ̄_P ≥ 0. Inactive away from zero, so a smooth
+#     field keeps the full order; the default for scalars (qv, tracers).
+#   * :monotone (Barth & Jespersen 1989, AIAA 89-0366): θ_P keeps every
+#     child within the range [m_P, M_P] of the parent values over P and its
+#     26 neighbours. No new extrema at a front; it also clips smooth extrema
+#     to second order, hence an option.
+#
+# θ_P < 1 only where a child violates the bound; everywhere else the values
+# are left bit for bit.
+
+const _LIMITERS = (:none, :positive, :monotone)
+
+function _lim_scratch(nest::NestedGrid, dims::NTuple{3,Int})
+    return get!(nest.limscratch, dims) do
+        (Array{Float64,3}(undef, dims), Array{Float64,3}(undef, dims),
+         Array{Float64,3}(undef, dims))
+    end
+end
+
+function _limit_cells!(boxes, pd::AbstractArray{<:Real,3}, px::_Plan1D, py::_Plan1D,
+                       pz::_Plan1D, nest::NestedGrid, monotone::Bool)
+    c0 = (first(px.cell), first(py.cell), first(pz.cell)) .- 1
+    dims = (last(px.cell), last(py.cell), last(pz.cell)) .- c0
+    cmax, cmin, θ = _lim_scratch(nest, dims)
+    fill!(cmax, -Inf); fill!(cmin, Inf)
+    for (d, off, (ir, jr, kr)) in boxes
+        _child_extrema!(cmax, cmin, d, off, px, py, pz, c0, ir, jr, kr)
+    end
+    _limiter_factors!(θ, cmax, cmin, pd, c0, monotone)
+    for (d, off, (ir, jr, kr)) in boxes
+        _scale_children!(d, off, θ, pd, px, py, pz, c0, ir, jr, kr)
+    end
+    return nothing
+end
+
+function _child_extrema!(cmax, cmin, d::Array, off, px, py, pz, c0, ir, jr, kr)
+    @inbounds for k in kr
+        K = pz.cell[k] - c0[3]
+        for j in jr
+            J = py.cell[j] - c0[2]
+            for i in ir
+                I = px.cell[i] - c0[1]
+                v = d[i - off[1], j - off[2], k - off[3]]
+                cmax[I, J, K] = max(cmax[I, J, K], v)
+                cmin[I, J, K] = min(cmin[I, J, K], v)
+            end
+        end
+    end
+    return nothing
+end
+
+function _limiter_factors!(θ, cmax, cmin, pd, c0, monotone::Bool)
+    n1, n2, n3 = size(pd)
+    @inbounds for K in axes(θ, 3), J in axes(θ, 2), I in axes(θ, 1)
+        θ[I, J, K] = 1.0
+        cmax[I, J, K] == -Inf && continue            # no child of this cell written
+        P = (I + c0[1], J + c0[2], K + c0[3])
+        φ̄ = Float64(pd[P[1], P[2], P[3]])
+        t = 1.0
+        if monotone
+            m = φ̄; M = φ̄
+            for c in max(P[3] - 1, 1):min(P[3] + 1, n3), b in max(P[2] - 1, 1):min(P[2] + 1, n2),
+                a in max(P[1] - 1, 1):min(P[1] + 1, n1)
+                v = Float64(pd[a, b, c]); m = min(m, v); M = max(M, v)
+            end
+            cmax[I, J, K] > M && (t = min(t, (M - φ̄) / (cmax[I, J, K] - φ̄)))
+            cmin[I, J, K] < m && (t = min(t, (m - φ̄) / (cmin[I, J, K] - φ̄)))
+        elseif φ̄ >= 0 && cmin[I, J, K] < 0
+            t = φ̄ / (φ̄ - cmin[I, J, K])
+        end
+        θ[I, J, K] = max(t, 0.0)
+    end
+    return nothing
+end
+
+function _scale_children!(d::Array{T,3}, off, θ, pd, px, py, pz, c0, ir, jr, kr) where {T}
+    @inbounds for k in kr
+        Kp = pz.cell[k]
+        for j in jr
+            Jp = py.cell[j]
+            for i in ir
+                Ip = px.cell[i]
+                t = θ[Ip - c0[1], Jp - c0[2], Kp - c0[3]]
+                t < 1.0 || continue
+                φ̄ = Float64(pd[Ip, Jp, Kp])
+                q = (i - off[1], j - off[2], k - off[3])
+                d[q[1], q[2], q[3]] = T(φ̄ + t * (d[q[1], q[2], q[3]] - φ̄))
+            end
+        end
+    end
+    return nothing
+end
+
+# Velocities (optional): clip each prolongated value to the range of the
+# parent values its stencil reads. Monotone, but neither conservative nor
+# flux-preserving, hence off by default.
+function _clip_faces!(boxes, pd::AbstractArray{<:Real,3}, px::_Plan1D, py::_Plan1D,
+                      pz::_Plan1D)
+    for (d, off, (ir, jr, kr)) in boxes
+        _clip_box!(d, off, pd, px, py, pz, ir, jr, kr)
+    end
+    return nothing
+end
+
+function _clip_box!(d::Array{T,3}, off, pd, px, py, pz, ir, jr, kr) where {T}
+    nx = _stencil(px); ny = _stencil(py); nz = _stencil(pz)
+    @inbounds for k in kr, j in jr, i in ir
+        bi = px.start[i]; bj = py.start[j]; bk = pz.start[k]
+        lo = Inf; hi = -Inf
+        for c in 0:nz-1, b in 0:ny-1, a in 0:nx-1
+            v = Float64(pd[bi + a, bj + b, bk + c]); lo = min(lo, v); hi = max(hi, v)
+        end
+        q = (i - off[1], j - off[2], k - off[3])
+        d[q[1], q[2], q[3]] = T(clamp(Float64(d[q[1], q[2], q[3]]), lo, hi))
+    end
+    return nothing
+end
+
+# A halo-only array stores exactly the halo slabs (and the interface plane):
+# prolongate each slab in place. The interior is not stored.
+function _interp_into!(cd::_ShellArray, pd, px, py, pz, cm, loc, region)
+    region === :all &&
+        throw(ArgumentError("a halo-only (storage = :shell) nest state holds no child " *
+                            "interior; prolongate region = :all into a storage = :full state"))
+    for (slab, off, (ir, jr, kr)) in _shell_slabs(cd)
+        _interp_box!(slab, off, pd, px, py, pz, ir, jr, kr)
+    end
+    return cd
 end
 
 """
@@ -286,11 +473,33 @@ face heights. `measure` (a [`NestMeasure`](@ref)) selects the vertical
 measure; with the mass measure of a sound-proof pair
 ([`nest_measure`](@ref)) the conservative directions conserve `∫ W φ dV`
 (`W = ρ̄` or `ρ̄θ̄`) instead of `∫ φ dV`. The default is the volume measure.
+
+`limiter` (#329): the 3rd- and 5th-order reconstructions overshoot at a
+sharp front — a negative `qv` or tracer next to a dry or clean parent
+cell. For a cell-centred field the children of every parent cell are
+scaled about the parent value, which keeps the prolongation conservative
+(the children's mean is the parent value):
+
+  * `:positive` (Zhang & Shu 2010, *J. Comput. Phys.* 229, 3091) — no
+    child below zero where the parent cell is non-negative; inactive away
+    from zero, so a smooth positive field keeps the full order. For
+    quantities that cannot be negative (`qv`, tracer concentrations): a
+    signed field crossing zero inside a parent cell would be clipped;
+  * `:monotone` (Barth & Jespersen 1989, AIAA paper 89-0366) — no child
+    outside the range of its parent cell and the 26 neighbours: no new
+    extrema at a front, but smooth extrema are clipped to second order;
+  * `:none` (default of this low-level operator; the field set of a
+    [`NestedRun`](@ref) limits `qv` and the tracers with `:positive`, see
+    [`interpolate_parent_state!`](@ref)).
+
+A velocity takes `:none` or `:monotone`, a clip to the range of the parent
+values its stencil reads (monotone, but not flux-preserving).
+Where no child overshoots, the values are unchanged bit for bit.
 """
 interpolate_to_nest_boundary!(cf::Field, pf::Field, nest::NestedGrid;
                               order::Int=3, impose_interface::Bool=false,
-                              measure=nothing) =
-    _interp_child!(cf, pf, nest; order, measure,
+                              measure=nothing, limiter::Symbol=:none) =
+    _interp_child!(cf, pf, nest; order, measure, limiter,
                    region = impose_interface ? :halo_interface : :halo)
 
 """
@@ -299,11 +508,12 @@ interpolate_to_nest_boundary!(cf::Field, pf::Field, nest::NestedGrid;
 As [`interpolate_to_nest_boundary!`](@ref) but fills the child field
 *everywhere* (interior included). This is the AMR prolongation operator —
 used to initialize newly refined blocks and to build the reference state
-for [`apply_nest_sponge!`](@ref). Accepts the same `measure` keyword.
+for [`apply_nest_sponge!`](@ref). Accepts the same `measure` and
+`limiter` keywords.
 """
 interpolate_parent_to_child!(cf::Field, pf::Field, nest::NestedGrid; order::Int=3,
-                             measure=nothing) =
-    _interp_child!(cf, pf, nest; order, measure, region=:all)
+                             measure=nothing, limiter::Symbol=:none) =
+    _interp_child!(cf, pf, nest; order, measure, limiter, region=:all)
 
 # =========================================================================
 # Restriction: child -> parent
@@ -422,24 +632,19 @@ function _restrict_face_weighted!(pf::Field, cf::Field, nest::NestedGrid, ax::In
     nn = (nest.nx, nest.ny, nest.nz)
     oo = (nest.ix, nest.iy, nest.iz)
     Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (cm.Hx, cm.Hy, cm.Hz)
-    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+    t1, t2 = _tang(ax)
     q0 = include_boundary ? 0 : 1
     q1 = include_boundary ? nn[ax] : nn[ax] - 1
     pd = pf.data; cd = cf.data
-    pidx = [0, 0, 0]; cidx = [0, 0, 0]; bidx = [0, 0, 0]
     @inbounds for q in q0:q1
-        pidx[ax] = Hp[ax] + oo[ax] + q
-        cidx[ax] = Hc[ax] + q * r[ax] + 1
+        pq = Hp[ax] + oo[ax] + q; cq = Hc[ax] + q * r[ax] + 1
         for B in 1:nn[t2], A in 1:nn[t1]
-            pidx[t1] = Hp[t1] + oo[t1] + A - 1
-            pidx[t2] = Hp[t2] + oo[t2] + B - 1
+            pidx = _pos(ax, t1, pq, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
             num = 0.0; den = 0.0
             for b in 1:r[t2], a in 1:r[t1]
-                cidx[t1] = Hc[t1] + (A-1)*r[t1] + a
-                cidx[t2] = Hc[t2] + (B-1)*r[t2] + b
+                cidx = _pos(ax, t1, cq, Hc[t1] + (A-1)*r[t1] + a, Hc[t2] + (B-1)*r[t2] + b)
                 if χ !== nothing
-                    bidx[1] = cidx[1]; bidx[2] = cidx[2]; bidx[3] = cidx[3]
-                    bidx[ax] -= 1
+                    bidx = Base.setindex(cidx, cidx[ax] - 1, ax)
                     (χ[cidx[1], cidx[2], cidx[3]] && χ[bidx[1], bidx[2], bidx[3]]) ||
                         continue
                 end
@@ -453,6 +658,13 @@ function _restrict_face_weighted!(pf::Field, cf::Field, nest::NestedGrid, ax::In
     return pf
 end
 
+# The two tangential axes of a plane normal to `ax`, in increasing order, and
+# the storage index with `q` on `ax` and `a`, `b` on them — a tuple, not a
+# heap-allocated `[0, 0, 0]` (#329).
+@inline _tang(ax::Int) = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+@inline _pos(ax::Int, t1::Int, q::Int, a::Int, b::Int) =
+    ax == 1 ? (q, a, b) : ax == 2 ? (a, q, b) : (a, b, q)
+
 _axis_of(::Type{FaceX}) = 1
 _axis_of(::Type{FaceY}) = 2
 _axis_of(::Type{FaceZ}) = 3
@@ -464,23 +676,18 @@ function _restrict_face!(pf::Field, cf::Field, nest::NestedGrid, ax::Int,
     nn = (nest.nx, nest.ny, nest.nz)
     oo = (nest.ix, nest.iy, nest.iz)
     Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (cm.Hx, cm.Hy, cm.Hz)
-    ta = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
-    t1, t2 = ta
+    t1, t2 = _tang(ax)
     inv = 1 / (r[t1] * r[t2])
     q0 = include_boundary ? 0 : 1
     q1 = include_boundary ? nn[ax] : nn[ax] - 1
     pd = pf.data; cd = cf.data
-    pidx = [0, 0, 0]; cidx = [0, 0, 0]
     @inbounds for q in q0:q1
-        pidx[ax] = Hp[ax] + oo[ax] + q
-        cidx[ax] = Hc[ax] + q * r[ax] + 1
+        pq = Hp[ax] + oo[ax] + q; cq = Hc[ax] + q * r[ax] + 1
         for B in 1:nn[t2], A in 1:nn[t1]
-            pidx[t1] = Hp[t1] + oo[t1] + A - 1
-            pidx[t2] = Hp[t2] + oo[t2] + B - 1
+            pidx = _pos(ax, t1, pq, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
             s = 0.0
             for b in 1:r[t2], a in 1:r[t1]
-                cidx[t1] = Hc[t1] + (A-1)*r[t1] + a
-                cidx[t2] = Hc[t2] + (B-1)*r[t2] + b
+                cidx = _pos(ax, t1, cq, Hc[t1] + (A-1)*r[t1] + a, Hc[t2] + (B-1)*r[t2] + b)
                 s += cd[cidx[1], cidx[2], cidx[3]]
             end
             pd[pidx[1], pidx[2], pidx[3]] = s * inv
@@ -579,44 +786,53 @@ compute_nest_flux_mismatch(pf::Field{L}, cf::Field{L}, nest::NestedGrid;
 
 function _face_mismatch(pf::Field, cf::Field, nest::NestedGrid, ax::Int, measure=nothing)
     T  = eltype(pf.data)
+    nn = (nest.nx, nest.ny, nest.nz)
+    t1, t2 = _tang(ax)
+    lowm  = zeros(T, nn[t1], nn[t2])
+    highm = zeros(T, nn[t1], nn[t2])
+    _plane_mismatch!(lowm, pf, cf, nest, ax, 0, measure)
+    _plane_mismatch!(highm, pf, cf, nest, ax, nn[ax], measure)
+    e = zeros(T, 0, 0)
+    ax == 1 && return NestFluxMismatch{T}(lowm, highm, copy(e), copy(e), copy(e), copy(e))
+    ax == 2 && return NestFluxMismatch{T}(copy(e), copy(e), lowm, highm, copy(e), copy(e))
+    return NestFluxMismatch{T}(copy(e), copy(e), copy(e), copy(e), lowm, highm)
+end
+
+# coarse − Σ fine (flux units) on the interface plane `q` (0: low, n: high)
+# normal to `ax`, written into `M`; with `M === nothing` the plane's
+# Σ |coarse − fine| is returned instead and nothing is stored. One kernel
+# for the mismatch, the interface imbalance and the face flux correction.
+function _plane_mismatch!(M, pf::Field, cf::Field, nest::NestedGrid, ax::Int, q::Int,
+                          measure=nothing)
     pm = nest.parent_mesh; cm = nest.child_mesh
     r  = (nest.rx, nest.ry, nest.rz)
     nn = (nest.nx, nest.ny, nest.nz)
     oo = (nest.ix, nest.iy, nest.iz)
     Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (cm.Hx, cm.Hy, cm.Hz)
-    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+    t1, t2 = _tang(ax)
     ωz = ax == 3 ? nothing : _zweights(measure)
     inv = 1 / (r[t1] * r[t2])
     pd = pf.data; cd = cf.data
-    lowm  = zeros(T, nn[t1], nn[t2])
-    highm = zeros(T, nn[t1], nn[t2])
-    pidx = [0, 0, 0]; cidx = [0, 0, 0]
-    for (q, M) in ((0, lowm), (nn[ax], highm))
-        pidx[ax] = Hp[ax] + oo[ax] + q
-        cidx[ax] = Hc[ax] + q * r[ax] + 1
-        @inbounds for B in 1:nn[t2], A in 1:nn[t1]
-            pidx[t1] = Hp[t1] + oo[t1] + A - 1
-            pidx[t2] = Hp[t2] + oo[t2] + B - 1
-            Ap = _face_area(nest, measure, ax, B)
-            s = 0.0; den = 0.0
-            for b in 1:r[t2], a in 1:r[t1]
-                cidx[t1] = Hc[t1] + (A-1)*r[t1] + a
-                cidx[t2] = Hc[t2] + (B-1)*r[t2] + b
-                if ωz === nothing
-                    s += cd[cidx[1], cidx[2], cidx[3]]
-                else
-                    w = ωz[cidx[3]]
-                    s += w * cd[cidx[1], cidx[2], cidx[3]]; den += w
-                end
+    pq = Hp[ax] + oo[ax] + q; cq = Hc[ax] + q * r[ax] + 1
+    l1 = 0.0
+    @inbounds for B in 1:nn[t2], A in 1:nn[t1]
+        pidx = _pos(ax, t1, pq, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
+        Ap = _face_area(nest, measure, ax, B)
+        s = 0.0; den = 0.0
+        for b in 1:r[t2], a in 1:r[t1]
+            cidx = _pos(ax, t1, cq, Hc[t1] + (A-1)*r[t1] + a, Hc[t2] + (B-1)*r[t2] + b)
+            if ωz === nothing
+                s += cd[cidx[1], cidx[2], cidx[3]]
+            else
+                w = ωz[cidx[3]]
+                s += w * cd[cidx[1], cidx[2], cidx[3]]; den += w
             end
-            fine = ωz === nothing ? s * inv : s / den
-            M[A, B] = (pd[pidx[1], pidx[2], pidx[3]] - fine) * Ap
         end
+        fine = ωz === nothing ? s * inv : s / den
+        mm = (pd[pidx[1], pidx[2], pidx[3]] - fine) * Ap
+        M === nothing ? (l1 += abs(mm)) : (M[A, B] = mm)
     end
-    e = zeros(T, 0, 0)
-    ax == 1 && return NestFluxMismatch{T}(lowm, highm, copy(e), copy(e), copy(e), copy(e))
-    ax == 2 && return NestFluxMismatch{T}(copy(e), copy(e), lowm, highm, copy(e), copy(e))
-    return NestFluxMismatch{T}(copy(e), copy(e), copy(e), copy(e), lowm, highm)
+    return l1
 end
 
 """
@@ -631,8 +847,20 @@ Remove the coarse-fine flux inconsistency recorded in `mismatch`.
     with `mismatch` built from time-accumulated flux registers) — adjust
     the parent cells immediately *outside* the nest:
     `θ ± δΦ·A / V_p`. This is what makes the composite integral of a
-    conserved scalar exactly invariant across a nested step. Indices wrap
-    periodically, so a nest touching the parent boundary still works.
+    conserved scalar exactly invariant across a nested step. The parent's
+    boundary conditions decide where the cell outside a child face that
+    lies on the parent's own boundary is: along a periodic axis of the
+    parent the index wraps; along a non-periodic one there is no parent
+    cell beyond the face (the flux there is the parent's boundary
+    condition's) and the correction of that plane is dropped (#329: it
+    used to wrap on every axis, so a child touching the parent's top put
+    its top-plane correction into the parent's lowest layer).
+    `periodic = (px, py, pz)` gives the parent's periodic axes; the
+    default `(true, true, true)` is the default (triply periodic)
+    `BoussinesqSimulation` and the former behaviour. Pass
+    `periodic = nest_periodic_axes(parent_sim)` to read them from the
+    parent's boundary conditions, as the two-way feedback,
+    [`reflux_scalars!`](@ref) and the AMR refluxing do.
 
 `A_p` and `V_p` use the parent's actual layer thickness (stretched
 parents). With the mass `measure` of a sound-proof pair they are the
@@ -650,18 +878,17 @@ function apply_flux_correction!(pf::Field{L}, m::NestFluxMismatch,
                                 nest::NestedGrid; measure=nothing) where {L<:Union{FaceX,FaceY,FaceZ}}
     ax = _axis_of(L)
     pm = nest.parent_mesh
-    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+    t1, t2 = _tang(ax)
     lowm, highm = ax == 1 ? (m.west, m.east) : ax == 2 ? (m.south, m.north) :
                                                (m.bottom, m.top)
     (isempty(lowm) || isempty(highm)) && return pf
     nn = (nest.nx, nest.ny, nest.nz); oo = (nest.ix, nest.iy, nest.iz)
     Hp = (pm.Hx, pm.Hy, pm.Hz)
-    pd = pf.data; pidx = [0, 0, 0]
+    pd = pf.data
     for (q, M) in ((0, lowm), (nn[ax], highm))
-        pidx[ax] = Hp[ax] + oo[ax] + q
+        pq = Hp[ax] + oo[ax] + q
         @inbounds for B in 1:nn[t2], A in 1:nn[t1]
-            pidx[t1] = Hp[t1] + oo[t1] + A - 1
-            pidx[t2] = Hp[t2] + oo[t2] + B - 1
+            pidx = _pos(ax, t1, pq, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
             pd[pidx[1], pidx[2], pidx[3]] -= M[A, B] / _face_area(nest, measure, ax, B)
         end
     end
@@ -669,7 +896,8 @@ function apply_flux_correction!(pf::Field{L}, m::NestFluxMismatch,
 end
 
 function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
-                                nest::NestedGrid; measure=nothing)
+                                nest::NestedGrid; measure=nothing,
+                                periodic::NTuple{3,Bool} = (true, true, true))
     pm = nest.parent_mesh
     Np = (pm.Nx, pm.Ny, pm.Nz); Hp = (pm.Hx, pm.Hy, pm.Hz)
     nn = (nest.nx, nest.ny, nest.nz); oo = (nest.ix, nest.iy, nest.iz)
@@ -677,16 +905,20 @@ function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
     planes = ((1, m.west, m.east), (2, m.south, m.north), (3, m.bottom, m.top))
     for (ax, lowm, highm) in planes
         (isempty(lowm) || isempty(highm)) && continue
-        t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+        t1, t2 = _tang(ax)
         # cell just outside the low face:  Δθ = +δΦ·A / V
         # cell just outside the high face: Δθ = -δΦ·A / V
         for (cell, M, sgn) in ((oo[ax] - 1, lowm, +1.0),
                                (oo[ax] + nn[ax], highm, -1.0))
-            c = mod1(cell, Np[ax])
-            idx = [0, 0, 0]; idx[ax] = Hp[ax] + c
+            if 1 <= cell <= Np[ax]
+                c = cell
+            elseif periodic[ax]
+                c = mod1(cell, Np[ax])
+            else
+                continue                # the face is the parent's own boundary
+            end
             @inbounds for B in 1:nn[t2], A in 1:nn[t1]
-                idx[t1] = Hp[t1] + oo[t1] + A - 1
-                idx[t2] = Hp[t2] + oo[t2] + B - 1
+                idx = _pos(ax, t1, Hp[ax] + c, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
                 K = idx[3] - Hp[3]
                 Vp = pm.dx * pm.dy * _pcell(nest, measure, K)
                 pd[idx[1], idx[2], idx[3]] += sgn * M[A, B] / Vp
@@ -695,3 +927,15 @@ function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
     end
     return pf
 end
+
+"""
+    nest_periodic_axes(parent_sim_or_bcs) -> NTuple{3,Bool}
+
+The periodic axes `(x, y, z)` of a nest parent, from its boundary
+conditions (`bcs`): what [`apply_flux_correction!`](@ref) needs to place
+the refluxing correction of a child face lying on the parent's boundary.
+"""
+nest_periodic_axes(b::FieldBoundaryConditions) =
+    (b.west isa Periodic && b.east isa Periodic, b.south isa Periodic && b.north isa Periodic,
+     b.bottom isa Periodic && b.top isa Periodic)
+nest_periodic_axes(sim) = nest_periodic_axes(sim.bcs)
