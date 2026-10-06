@@ -74,4 +74,20 @@ function apply_kessler_step!(qv, ql, qr, dt; k_auto = 1e-3, ql_c = 1e-3, k_acc =
     return (qv, ql, qr)
 end
 
+"Chemistry.apply_dry_deposition! before KA-m (one running total over the columns)."
+function apply_dry_deposition!(c, v_d, dt; dz, k = 1)
+    Nx, Ny, Nz = size(c)
+    removed = 0.0
+    @inbounds for j in 1:Ny, i in 1:Nx
+        kk = k isa Integer ? k : k[i, j]
+        1 <= kk <= Nz || continue
+        vd = v_d isa Real ? v_d : v_d[i, j]
+        c0 = c[i, j, kk]
+        c1 = c0 * exp(-vd * dt / dz)
+        c[i, j, kk] = c1
+        removed += (c0 - c1) * dz
+    end
+    return removed
+end
+
 end # module
