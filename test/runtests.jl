@@ -13,6 +13,10 @@ ENV["AEOLUS_FFTW_PLANNER"] = "estimate"
 using Statistics: mean
 using Aeolus
 using Aeolus.Grids: xnodes, ynodes, znodes, interior
+# #333: the suite shows warnings and errors only (AEOLUS_LOG=debug or info
+# opts in); tests that assert on events capture them with their own logger.
+using Logging: global_logger
+global_logger(test_logger())
 using Aeolus.Fields: set!, interior_view
 
 @testset "Aeolus.jl" begin
@@ -827,6 +831,8 @@ using Aeolus.Fields: set!, interior_view
     end
 
     include("io_checkpoint.jl")   # #245: full-state checkpoints, bitwise restart, FFTW policy
+    include("logging_core.jl")    # #333: structured events, run log, test logger
+    include("logging_run_folder.jl")  # #334: run folder, run.toml provenance, dirty-tree policy
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

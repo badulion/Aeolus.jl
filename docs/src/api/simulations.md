@@ -73,4 +73,6 @@ Aeolus.Simulations.resolved_flux_wθ
 
 ```@docs
 Aeolus.Simulations.step_rk3!
+Aeolus.Simulations.RK3Workspace
+Aeolus.Simulations.rk3_workspace
 ```

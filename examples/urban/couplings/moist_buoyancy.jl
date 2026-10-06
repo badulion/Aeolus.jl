@@ -89,23 +89,29 @@ virtual-temperature and condensate-loading buoyancy
 [`add_moist_buoyancy!`](@ref). `Δ` keeps the last ``(θ_ρ − θ)′`` (K) for
 the output field `b_moist` and the report.
 """
-struct MoistBuoyancy <: AbstractCoupling
+struct MoistBuoyancy{V} <: AbstractCoupling
     Δ::Array{Float64,3}
     fluid::Array{Bool,3}
     θ₀::Float64
     g::Float64
+    qc::Vector{V}                 # condensate_views(case), collected once in init! (#295)
 end
 
-coupling_name(::Type{MoistBuoyancy}) = :moist_buoyancy
-modules_used(::Type{MoistBuoyancy}) = (:MoistThermodynamics,)
-stages(::Type{MoistBuoyancy}) = ((:body_force, 20, EVERY_STEP),)
+coupling_name(::Type{<:MoistBuoyancy}) = :moist_buoyancy
+modules_used(::Type{<:MoistBuoyancy}) = (:MoistThermodynamics,)
+stages(::Type{<:MoistBuoyancy}) = ((:body_force, 20, EVERY_STEP),)
 
-function build(::Type{MoistBuoyancy}, case, o)
+function build(::Type{<:MoistBuoyancy}, case, o)
     m = case.mesh
     sm = case.geom.sm.mask
     fluid = [!sm[m.Hx+i, m.Hy+j, m.Hz+k] for i in 1:m.Nx, j in 1:m.Ny, k in 1:m.Nz]
-    return MoistBuoyancy(zeros(m.Nx, m.Ny, m.Nz), fluid, case.cfg.θ₀, case.cfg.g)
+    V = typeof(interior_view(case.sim.θ))       # the tracers' interior views are of this type
+    return MoistBuoyancy(zeros(m.Nx, m.Ny, m.Nz), fluid, case.cfg.θ₀, case.cfg.g, V[])
 end
+
+# every coupling has registered its tracers by now: collect the condensate
+# views once instead of in a fresh vector every step
+init!(c::MoistBuoyancy, case) = (append!(empty!(c.qc), condensate_views(case)); nothing)
 
 "The interior views of the condensate tracers: the ledger's water tracers other than qv."
 condensate_views(case) =
@@ -114,7 +120,7 @@ condensate_views(case) =
 
 function run_stage!(c::MoistBuoyancy, case, ::Val{:body_force}, dt)
     moist_buoyancy_perturbation!(c.Δ, interior_view(case.sim.θ), interior_view(tracer(case, :qv)),
-                                 condensate_views(case), c.fluid)
+                                 c.qc, c.fluid)
     add_moist_buoyancy!(case.sim.tw, c.Δ, c.θ₀, c.g)
     return nothing
 end

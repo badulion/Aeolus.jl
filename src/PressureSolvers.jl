@@ -2,6 +2,7 @@ module PressureSolvers
 
 using FFTW
 using LinearAlgebra: mul!
+using ..RunLog: current_domain   # structured events (LOG-a, #333)
 using ..Grids
 using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields
@@ -371,6 +372,9 @@ mutable struct CGPoissonSolver{T, RA<:Array{T,3}} <: AbstractPressureSolver
     p_dir::RA
     Ap::RA
     z::RA
+    b::RA                          # zero-mean source
+    x::RA                          # iterate
+    w::RA                          # scratch of the dot products (no allocation per solve, #295)
     last_iter::Base.RefValue{Int}
     last_residual::Base.RefValue{T}
 end
@@ -392,7 +396,7 @@ function CGPoissonSolver(mesh::RegularGrid{T};
     z    = zeros(T, Nx, Ny, Nz)
     return CGPoissonSolver{T, typeof(r)}(mesh, T(tol), maxit,
                                           bc_top, bc_bottom, bc_x, bc_y,
-                                          r, p_dir, Ap, z,
+                                          r, p_dir, Ap, z, zero(r), zero(r), zero(r),
                                           Ref(0), Ref(zero(T)))
 end
 
@@ -436,23 +440,24 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
     ii, jj, kk = interior(m)
 
     # b (source), zero-mean so the singular system is compatible
-    b = Array(view(source.data, ii, jj, kk))
+    b = copyto!(solver.b, view(source.data, ii, jj, kk))
     b .-= sum(b) / length(b)
     b_norm = sqrt(sum(abs2, b))
     b_norm == 0 && (fill!(view(p.data, ii, jj, kk), 0); return p)
 
     # initial guess = 0
-    x = fill!(view(p.data, ii, jj, kk) |> collect, 0)
+    x = fill!(solver.x, 0)
 
     r    = solver.r    .= b
     pdir = solver.p_dir .= r
     z    = solver.z    .= r     # diagonal preconditioner is identity here
-    rz_old = sum(r .* z)
+    w = solver.w        # r·z as sum(r .* z), the product in scratch: same bits
+    rz_old = sum(w .= r .* z)
 
     for k in 1:solver.maxit
         _apply_laplacian!(solver.Ap, pdir, m.dx, m.dy, m.dz,
                           solver.bc_top, solver.bc_bottom, solver.bc_x, solver.bc_y)
-        pap = sum(pdir .* solver.Ap)
+        pap = sum(w .= pdir .* solver.Ap)
         α   = rz_old / pap
         @. x = x + α * pdir
         @. r = r - α * solver.Ap
@@ -463,11 +468,15 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
             break
         end
         z .= r     # identity preconditioner
-        rz_new = sum(r .* z)
+        rz_new = sum(w .= r .* z)
         β = rz_new / rz_old
         @. pdir = z + β * pdir
         rz_old = rz_new
-        k == solver.maxit && @warn "CGPoissonSolver hit maxit=$k with ‖r‖=$res_norm"
+        k == solver.maxit &&
+            @warn("CGPoissonSolver hit maxit=$k with ‖r‖=$res_norm",
+                  subsystem = :pressure, domain = current_domain(), solver = :cg,
+                  iterations = k, residual = res_norm,
+                  relative_residual = res_norm / b_norm, tol = solver.tol)
     end
     # zero-mean projection on the solution
     x .-= sum(x) / length(x)

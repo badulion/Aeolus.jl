@@ -82,6 +82,7 @@ const BERLIN_PENDING = Dict{Symbol,String}(
     :Superdroplet          => "#150 superdroplets in a fog sub-volume",
     :CutCell               => "#152 cut-cell buildings option",
     :AdaptiveMesh          => "#153 nesting with forward hooks (AMR blocks themselves cannot carry the IBM/surfaces: exempt that part with the reason then)",
+    :RunLog                => "awaiting #320 (#338: the Berlin console text through the logger)",
 )
 
 # --- frozen snapshots ---------------------------------------------------------
@@ -112,6 +113,7 @@ const BERLIN_PENDING_FROZEN = Set{Symbol}([
     :AerosolOptics, :P3Microphysics, :Snowpack, :IceThermodynamics, :AerosolCloud,
     :TurbulentMicrophysics, :IceNucleation, :Superdroplet,
     :CutCell, :AdaptiveMesh,
+    :RunLog,   # #333 logging core, added under the transition rule (CLAUDE.md) until #320
 ])
 
 """

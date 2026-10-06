@@ -58,6 +58,8 @@ using ..Simulations: BoussinesqSimulation, max_divergence,
                      _dzc, _dzf, _dz_min,     # vertical metrics, stretched-aware (#151)
                      _project_velocity!       # the projection (steps 8–10 of step!)
 using ..TimeSteppers: step!
+using ..RunLog: current_domain   # structured events (LOG-a, #333)
+using Logging: @logmsg, Warn, Info, Debug
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 
 export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
@@ -655,6 +657,12 @@ closure to the step it takes itself. `sgs_stress` (`:laplacian` |
 `:name => callback` pairs, or a bare callback (registered as
 `:default`). Each callback is invoked as `callback(sim, dt_sub)`.
 
+Every rejected step is a structured event (`subsystem = :timestepping`,
+keys `reason`, `from`, `to`, `retry`; a throw also carries `exception`):
+at `Info`/`Warn` with `verbose = true`, else at `Debug`, so a run log
+records it while the console stays quiet. A fast process that leaves
+non-finite values is always a warning. See the Logging page (#333).
+
 ```julia
 c = CFLConstraints(dt_max = 10.0)
 sched = SubsteppingSchedule(microphysics = 4)
@@ -713,7 +721,10 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
             err isa InterruptException && rethrow()
             failed = true
             reason = :exception
-            verbose && @warn "step_adaptive!: stepper threw" dt=Δt exception=err
+            # a throw the driver recovers from: a warning when verbose, else run.log only
+            @logmsg((verbose ? Warn : Debug), "step_adaptive!: stepper threw",
+                    subsystem = :timestepping, domain = current_domain(), dt = Δt,
+                    retry = n_retries, exception = err)
         end
         if !failed
             if !_all_finite(sim)
@@ -747,7 +758,10 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
                   "$(constraints.dt_min); cannot reduce dt further. State " *
                   "has been restored to the beginning of the step.")
         end
-        verbose && @info "step_adaptive!: retry" reason from=Δt to=Δt_new
+        # every retry is in run.log; on the console only when verbose
+        @logmsg((verbose ? Info : Debug), "step_adaptive!: retry",
+                subsystem = :timestepping, domain = current_domain(), reason,
+                from = Δt, to = Δt_new, retry = n_retries + 1, max_retries)
         Δt = Δt_new
         n_retries += 1
     end
@@ -763,7 +777,9 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
             end
         end
         _all_finite(sim) ||
-            @warn "step_adaptive!: state became non-finite inside a fast process" dt=Δt
+            @warn("step_adaptive!: state became non-finite inside a fast process",
+                  subsystem = :timestepping, domain = current_domain(), dt = Δt,
+                  processes = Tuple(first.(procs)))
     end
 
     return (sim, Δt, n_retries)
@@ -1191,8 +1207,10 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
         _apply_implicit!(Ap, pf, ν, Δt, m, bcs, kc, key)
         pAp = _idot(p, Ap, ii, jj, kk)
         if !(pAp > 0)
-            warn && @warn "solve_implicit_diffusion!: CG breakdown (pᵀAp = $pAp); " *
-                          "operator is not positive definite for these BCs"
+            warn && @warn("solve_implicit_diffusion!: CG breakdown (pᵀAp = $pAp); " *
+                          "operator is not positive definite for these BCs",
+                          subsystem = :diffusion, domain = current_domain(),
+                          reason = :breakdown, iterations = iters, curvature = pAp)
             break
         end
         α = rz / pAp
@@ -1225,8 +1243,11 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
         rz = rz_new
     end
 
-    converged || (warn && @warn "solve_implicit_diffusion! hit maxit=$maxit with " *
-                                "‖r‖/‖b‖ = $(rnorm / bnorm)")
+    converged || (warn && @warn("solve_implicit_diffusion! hit maxit=$maxit with " *
+                                "‖r‖/‖b‖ = $(rnorm / bnorm)",
+                                subsystem = :diffusion, domain = current_domain(),
+                                reason = :maxit, iterations = iters,
+                                relative_residual = rnorm / bnorm, tol = τ))
     # open faces: the pinned face rows and the halos carry the boundary data
     has_open_boundaries(bcs_full) && fill_halos!(field, bcs_full; key = key)
     return (iterations = iters, residual = rnorm,

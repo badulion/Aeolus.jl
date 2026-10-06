@@ -22,6 +22,8 @@
 #   --threads T        [AEOLUS_TEST_THREADS]  Julia threads per job, default 1
 #   --mem-per-job GB   [AEOLUS_TEST_MEM_GB]   memory reserved per job, default 1
 #   --only a.jl,b.jl                          run only these jobs (any tier)
+#   --log LEVEL        [AEOLUS_LOG]           log level of the jobs' test logger:
+#                                             warn (default), info, debug (#333)
 #   --outdir DIR                              run folder
 #   --list                                    print the plan and exit
 #
@@ -52,7 +54,7 @@ function parse_args(args)
         elseif startswith(a, "--")
             k, v = occursin('=', a) ? split(a[3:end], '='; limit = 2) :
                    (a[3:end], (i += 1; i <= length(args) ? args[i] : error("$a needs a value")))
-            k in ("tier", "jobs", "threads", "mem-per-job", "only", "outdir") ||
+            k in ("tier", "jobs", "threads", "mem-per-job", "only", "outdir", "log") ||
                 error("unknown option --$k (see the header of test/run.jl)")
             opts[k] = v
         else
@@ -293,6 +295,9 @@ function main(args)
         return 0
     end
     haskey(opts, "tier") && (ENV["AEOLUS_TEST_TIER"] = opts["tier"])
+    # every job installs Aeolus.test_logger() (runtests.jl header), which
+    # reads AEOLUS_LOG: warnings and up unless asked for more (#333)
+    haskey(opts, "log") && (ENV["AEOLUS_LOG"] = opts["log"])
     tier = AeolusTestSelection.tier()
     threads = parse(Int, get(opts, "threads", get(ENV, "AEOLUS_TEST_THREADS", "1")))
     memjob = parse(Float64, get(opts, "mem-per-job", get(ENV, "AEOLUS_TEST_MEM_GB", "1")))

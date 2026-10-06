@@ -686,4 +686,104 @@ end
     @test all(isfinite, interior_view(tw))
 end
 
+# -------------------------------------------------------------------------
+# KA-c (#295): the serial baseline before threading
+# -------------------------------------------------------------------------
+# The Z/TENO weights take their exponent as a compile-time constant
+# (`_ipow`), the limiter takes a prebuilt descriptor, and the halo fills
+# allocate nothing. These are the properties the threaded port (#291)
+# builds on.
+
+# The weights as they were before #295: Base's x^p with a runtime p.
+_teno5_left_basepow(v1, v2, v3, v4, v5, C_T, q) = begin
+    AS = Aeolus.AdvectionSchemes
+    q0 = (2*v1 - 7*v2 + 11*v3)/6; q1 = (-v2 + 5*v3 + 2*v4)/6; q2 = (2*v3 + 5*v4 - v5)/6
+    b0 = AS._b3_m2(v1, v2, v3); b1 = AS._b3_m1(v2, v3, v4); b2 = AS._b3_p0(v3, v4, v5)
+    ε = AS._zeps(Float64); τ = abs(b0 - b2)
+    g0 = (1 + τ/(b0 + ε))^q; g1 = (1 + τ/(b1 + ε))^q; g2 = (1 + τ/(b2 + ε))^q
+    gs = g0 + g1 + g2
+    d0 = g0/gs < C_T ? 0.0 : 1/10; d1 = g1/gs < C_T ? 0.0 : 6/10; d2 = g2/gs < C_T ? 0.0 : 3/10
+    (d0*q0 + d1*q1 + d2*q2)/(d0 + d1 + d2)
+end
+
+@testset "KA-c: compile-time integer power in the WENO-Z / TENO weights" begin
+    AS = Aeolus.AdvectionSchemes
+    rng = Xoshiro(295)
+    xs = [exp(20 * randn(rng)) for _ in 1:200_000]
+    pr = Ref(0)
+    # p = 1, 2, 3: identical to Base's x^p with a runtime exponent, bit for
+    # bit (one correctly rounded product for 2; Base's own x*x*x for 3)
+    for p in 1:3
+        pr[] = p
+        @test all(x -> AS._ipow(x, Val(p)) === x^pr[], xs)
+    end
+    # q = 6 (TENO): x³·x³ is not Base's compensated x^6 bit for bit. Three
+    # correctly rounded multiplies bound its relative error by
+    # (1+u)^4 − 1 ≈ 4u = 2 eps, i.e. ≤ 4 ulp of the result (measured:
+    # 3.02 ulp on 20 000 log-normal arguments; Base's is ≤ 1 ulp). A first
+    # guess of 3 ulp was the wrong expectation, not a code error.
+    pr[] = 6
+    nd = count(x -> AS._ipow(x, Val(6)) !== x^pr[], xs)
+    maxulp = maximum(xs[1:20_000]) do x
+        ex = big(x)^6
+        Float64(abs(big(AS._ipow(x, Val(6))) - ex) / eps(Float64(ex)))
+    end
+    @info "x^6: x³·x³ differs from Base's x^6 in $(nd) of $(length(xs)) arguments; max error $(round(maxulp; digits = 2)) ulp"
+    @test maxulp <= 4
+    # the TENO stencil selection (a cut-off on the normalised weights) is
+    # what q enters; on random stencils the reconstructed values agree with
+    # the Base-power ones to ≤ 1e-12 relative and differ in a few only
+    vals = [randn(rng, 5) .* (rand(rng) < 0.5 ? 1.0 : 1e-6) .+ (rand(rng) < 0.1 ? 10.0 : 0.0) for _ in 1:100_000]
+    new = [teno5_left(v...) for v in vals]
+    old = [_teno5_left_basepow(v..., 1e-5, pr[]) for v in vals]
+    ndiff = count(i -> new[i] !== old[i], eachindex(new))
+    rel = maximum(i -> abs(new[i] - old[i]) / max(abs(old[i]), 1e-300), eachindex(new))
+    @info "TENO5 (q = 6) against the Base-power weights: $(ndiff) of $(length(vals)) values differ, max rel $(rel)"
+    @test rel <= 1e-12
+    # WENO-Z (p = 2, the default; p = 1): the scalar entry points and the
+    # descriptor path are one function, and agree bit for bit
+    for p in (1, 2), v in vals[1:2000]
+        @test weno_z5_left(v...; p = p) === AS.reconstruct_left(AS.WENOZ(5, p), Tuple(v))
+        @test weno_z5_right(v...; p = p) === AS.reconstruct_right(AS.WENOZ(5, p), Tuple(v))
+    end
+    w7 = randn(rng, 7)
+    @test weno_z7_left(w7...) === AS.reconstruct_left(AS.WENOZ(7, 2), Tuple(w7))
+    w8 = randn(rng, 8)
+    @test teno8_left(w8...) === AS.reconstruct_left(AS.TENO(8), Tuple(w8))
+    @test teno5_left(w8[1:5]...; q = 4) === AS.reconstruct_left(AS.TENO(5; q = 4), Tuple(w8[1:5]))
+end
+
+@testset "KA-c: prebuilt reconstruction descriptor, allocation-free halos and limiter" begin
+    AS = Aeolus.AdvectionSchemes
+    g = RegularGrid(Float64; size = (16, 12, 10), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+    u = Aeolus.Field(FaceX(), g); v = Aeolus.Field(FaceY(), g); w = Aeolus.Field(FaceZ(), g)
+    set!(u, (x, y, z) -> 0.7 + 0.3sin(2π * y)); set!(v, (x, y, z) -> -0.4cos(2π * x))
+    set!(w, (x, y, z) -> 0.2sin(2π * x))
+    ϕ = Aeolus.Field(CellCenter(), g)
+    set!(ϕ, (x, y, z) -> exp(-((x - 0.5)^2 + (y - 0.5)^2) / 0.01))
+    walls = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    for f in (u, v, w, ϕ); fill_halos!(f, PERIODIC); end
+    ws = FluxLimiterWorkspace(g)
+    dt = 0.5 * g.dx
+    for name in (:weno_z5, :teno5, :centered)
+        r = AS._reconstruction(name)
+        t1 = Aeolus.Field(CellCenter(), g); t2 = Aeolus.Field(CellCenter(), g)
+        advect_positive!(t1, u, v, w, ϕ, dt; scheme = name, workspace = ws)
+        advect_positive!(t2, u, v, w, ϕ, dt; scheme = r, workspace = ws)
+        @test t1.data == t2.data                         # the same operator
+        advect_positive!(t2, u, v, w, ϕ, dt; scheme = r, workspace = ws)
+        @test (@allocated advect_positive!(t2, u, v, w, ϕ, dt; scheme = r, workspace = ws)) == 0
+    end
+    # halo fills: no plane copies (they ran ~6 per field per call before #295)
+    for f in (u, v, w, ϕ), bcs in (PERIODIC, walls, FieldBoundaryConditions(:noflux))
+        fill_halos!(f, bcs)
+        @test (@allocated fill_halos!(f, bcs)) == 0
+    end
+    # and the values are those of explicit copies
+    a = copy(ϕ.data); fill_halos!(ϕ, PERIODIC)
+    H = g.Hx; Nx = g.Nx; _, jj, kk = interior(g)
+    @test ϕ.data[1:H, jj, kk] == a[Nx+1:Nx+H, jj, kk]
+    @test ϕ.data[H+Nx+1:end, jj, kk] == a[H+1:2H, jj, kk]
+end
+
 end # testset

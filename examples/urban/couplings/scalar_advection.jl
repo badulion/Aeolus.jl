@@ -100,11 +100,12 @@ so `Σ W q` is conserved and a uniform tracer stays uniform. Option
 `weighted = false` uses the plain velocity there too (the pre-#133
 transport, for comparison).
 """
-struct ScalarAdvection{F, W, B, S} <: AbstractCoupling
+struct ScalarAdvection{F, W, B, S, R} <: AbstractCoupling
     tend::F
     ws::W
     bcs::B
     scheme::S                     # AdvectionScheme (the unlimited operator)
+    recon::R                      # its reconstruction descriptor for advect_positive! (built once, #295), or nothing
     positivity::Bool
     refresh_halos::Bool
     dW::Base.RefValue{Float64}    # this step's change of air water, ρ̄-mean part (kg/m²; 0 if conservative)
@@ -306,9 +307,12 @@ function build(::Type{<:ScalarAdvection}, case, o)
     o.positivity && !(o.scheme in POSITIVE_SCHEMES) &&
         error("scalar_advection: the positivity limiter takes one of $(POSITIVE_SCHEMES), not :$(o.scheme); set positivity = false")
     wt = o.weighted ? transport_weighting(case.sim, mesh) : nothing
+    # the limiter's reconstruction as a concrete descriptor, built once:
+    # from the name it would be rebuilt (a dynamic dispatch) every call (#295)
+    recon = o.positivity ? Aeolus.AdvectionSchemes._reconstruction(o.scheme) : nothing
     return ScalarAdvection(Field(CellCenter(), mesh), FluxLimiterWorkspace(mesh),
                            tracer_bcs(case),
-                           scheme, o.positivity, o.refresh_halos, Ref(0.0), Ref(0.0),
+                           scheme, recon, o.positivity, o.refresh_halos, Ref(0.0), Ref(0.0),
                            wt, o.weighted,
                            o.sgs_diffusion ? TracerSGSDiffusion(case) : nothing,
                            lateral_open(case.cfg) ? OpenFaceWater(case, Symbol(o.scheme), wt) : nothing,
@@ -339,7 +343,7 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
         fill!(c.tend.data, 0)
         if limited
             advect_positive!(c.tend, u, v, w, q, dt;
-                             scheme = c.scheme.name, workspace = c.ws, bcs = c.bcs)
+                             scheme = c.recon, workspace = c.ws, bcs = c.bcs)
         else
             c.scheme(c.tend, u, v, w, q)
         end

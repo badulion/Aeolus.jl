@@ -72,6 +72,7 @@ using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    compute_sgs!, add_sgs_momentum!, add_sgs_scalar!, advance_sgs!,
                    _active_sgs, _check_sgs_stress
 using ..PressureSolvers: AbstractPressureSolver
+using ..RunLog: current_domain   # structured events (LOG-a, #333)
 
 import ..PressureSolvers: solve!, poisson_axis_bcs
 import ..TimeSteppers: step!
@@ -883,7 +884,10 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
         _apply_neg_wlap!(Ap, pdir, s.w_c, s.w_f, dx, dy, dz, s.bc_z, s.bc_x, s.bc_y)
         pap = _dot(pdir, Ap)
         if pap <= 0
-            @warn "DensityWeightedPoissonSolver: non-positive curvature ($pap); stopping at iteration $it"
+            @warn("DensityWeightedPoissonSolver: non-positive curvature ($pap); stopping at iteration $it",
+                  subsystem = :pressure, domain = current_domain(),
+                  solver = :density_weighted_cg, reason = :breakdown, iterations = it,
+                  curvature = pap)
             break
         end
         α = rz / pap
@@ -906,9 +910,13 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
         end
         rz = rz_new
     end
-    converged || @warn "DensityWeightedPoissonSolver did not converge: " *
+    converged || @warn("DensityWeightedPoissonSolver did not converge: " *
                        "‖r‖=$(s.last_residual[]) after $(s.last_iter[]) iterations " *
-                       "(tol·‖b‖=$(s.tol * bnorm))"
+                       "(tol·‖b‖=$(s.tol * bnorm))",
+                       subsystem = :pressure, domain = current_domain(),
+                       solver = :density_weighted_cg, reason = :maxit,
+                       iterations = s.last_iter[], residual = s.last_residual[],
+                       relative_residual = s.last_residual[] / bnorm, tol = s.tol)
 
     _remove_mean!(x)
     @inbounds @views p.data[ii, jj, kk] .= x
