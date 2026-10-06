@@ -79,7 +79,7 @@ end
 # the extends chain
 # ---------------------------------------------------------------------------
 
-function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema)
+function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema; sweep::Symbol = :error)
     ovr, oprobs = _parse_overrides(overrides)
     files = String[leaf]; dicts = Dict{String,Any}[deepcopy(leafdict)]
     seen = Set{String}([_real(leaf)])
@@ -103,6 +103,13 @@ function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema)
     raw = Dict{String,Any}(); origins = Dict{String,String}()
     for i in length(files):-1:1                     # root first, the leaf last
         _merge!(raw, origins, dicts[i], files[i], "")
+    end
+    # a [sweep] (CFG-e) is expanded by the runner, never part of a resolved config
+    sw = pop!(raw, "sweep", nothing)
+    sweep === :table && return sw
+    if sw !== nothing && sweep === :error
+        n = sw isa AbstractDict ? length(sweep_members(sw, leaf)) : 0
+        throw(_sweep_error(leaf, n))
     end
     _apply_overrides!(raw, origins, ovr, oprobs)
     sources = Dict{String,Any}("files" => files, "overrides" => String[overrides...])

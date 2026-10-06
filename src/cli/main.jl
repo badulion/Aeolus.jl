@@ -10,13 +10,15 @@ const _USAGE = """
 usage: aeolus <command> [arguments]
 
   run <config.toml | run.toml | run-folder> [--set key=value]... [--resume]
-      [--root DIR] [--allow-uncommitted]
+      [--root DIR] [--allow-uncommitted] [--member k]
         Start a new run from a config file or a run's run.toml; with --resume and
         a run folder, continue that run (same run ID) from its newest checkpoint.
+        A file with a [sweep] runs every member (one run folder each), or only
+        member k (an index or a label).
   check <config> [--set key=value]...
-        Validate the config and print every problem.
-  resolve <config> [--set key=value]...
-        Print the canonical resolved TOML.
+        Validate the config (every member of a sweep) and print every problem.
+  resolve <config> [--set key=value]... [--member k]
+        Print the canonical resolved TOML (of every member of a sweep).
   options [driver] [section]
         Print the option reference of a driver (all sections, or one).
   preprocess <kind> [arguments]
@@ -159,16 +161,20 @@ end
 function _cmd_check(args, io, err)
     pos, sets, _, _ = _parse_args(args, ("set",), ())
     path = _one_positional(pos, "config file")
-    cfg = load_run_config(path; overrides = sets)
-    println(io, "ok: ", path, " (driver \"", config_schema(cfg).name, "\", config_hash ",
-            config_hash_string(cfg), ")")
+    for (m, cfg) in load_sweep(path; overrides = sets)
+        println(io, "ok: ", path, isempty(m.label) ? "" : " member $(m.index) ($(m.label))",
+                " (driver \"", config_schema(cfg).name, "\", config_hash ", config_hash_string(cfg), ")")
+    end
     return 0
 end
 
 function _cmd_resolve(args, io, err)
-    pos, sets, _, _ = _parse_args(args, ("set",), ())
-    cfg = load_run_config(_one_positional(pos, "config file"); overrides = sets)
-    print(io, config_text(cfg))
+    pos, sets, opts, _ = _parse_args(args, ("set", "member"), ())
+    runs = load_sweep(_one_positional(pos, "config file"); overrides = sets, member = _member_arg(opts))
+    for (i, (m, cfg)) in enumerate(runs)
+        length(runs) > 1 && println(io, i == 1 ? "" : "\n", "# member ", m.index, " (", m.label, ")")
+        print(io, config_text(cfg))
+    end
     return 0
 end
 
@@ -203,7 +209,7 @@ function _cmd_preprocess(args, io, err)
 end
 
 function _cmd_run(args, io, err)
-    pos, sets, opts, fl = _parse_args(args, ("set", "root"), ("resume", "allow-uncommitted"))
+    pos, sets, opts, fl = _parse_args(args, ("set", "root", "member"), ("resume", "allow-uncommitted"))
     path = _one_positional(pos, "config file, run.toml or run folder")
     resume = "resume" in fl
     root = get(opts, "root", nothing)
@@ -216,18 +222,26 @@ function _cmd_run(args, io, err)
                  basename(path) == "run.toml" ? dirname(abspath(path)) :
                  throw(UsageError("--resume needs a run folder (or its run.toml), got $path"))
     end
-    cfg = load_run_config(something(folder, path); overrides = sets)
-    run_driver(cfg.run.driver)                     # an unknown driver is a config error
-    local res
-    try
-        res = run_config(cfg; root = root, resume = folder, allow_uncommitted = allow, console = err)
-    catch e
-        e isa IO.UncommittedCodeError && rethrow()   # raised before anything is written: 2
-        println(err, "run failed: ", first(sprint(showerror, e), 2000))
-        return 1
+    (resume && haskey(opts, "member")) && throw(UsageError("--member selects a sweep member to start; " *
+                                                         "--resume continues a run folder"))
+    runs = resume ? [SweepMember(1, "", String[]) => load_run_config(folder; overrides = sets)] :
+                    load_sweep(path; overrides = sets, member = _member_arg(opts))
+    for (_, cfg) in runs
+        run_driver(cfg.run.driver)                 # an unknown driver is a config error
     end
-    rf = res.folder
-    println(io, "run ", rf.run_id, " (session ", rf.session, ") completed: ", rf.path)
+    for (m, cfg) in runs
+        local res
+        try
+            res = run_config(cfg; root = root, resume = folder, allow_uncommitted = allow, console = err)
+        catch e
+            e isa IO.UncommittedCodeError && rethrow()   # raised before anything is written: 2
+            println(err, "run failed", isempty(m.label) ? "" : " (member $(m.index), $(m.label))", ": ",
+                    first(sprint(showerror, e), 2000))
+            return 1
+        end
+        rf = res.folder
+        println(io, "run ", rf.run_id, " (session ", rf.session, ") completed: ", rf.path)
+    end
     return 0
 end
 
