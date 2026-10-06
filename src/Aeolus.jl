@@ -245,7 +245,7 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        runs_serially, launch!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, interior_map!,
-       plane_reduce!, range_max
+       plane_reduce!, range_max, plane_map!
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
 export apply_linear_chemistry!,

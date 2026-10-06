@@ -22,7 +22,8 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
        runs_serially, launch!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
-       column_partials, interior_max, interior_all_finite, plane_reduce!, range_max
+       column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
+       plane_map!
 
 # =========================================================================
 # Backend types
@@ -593,7 +594,16 @@ end
 _checkr(arrs::Tuple, (ir, jr, kr)::NTuple{3,UnitRange{Int}}) =
     isempty(ir) || isempty(jr) || isempty(kr) || _check(arrs, (ir, jr, kr))
 
-function _plane_partials!(b::CPUBackend, out::AbstractVector, p::Union{_PlaneReduce,_PlaneMax},
+# A whole-plane function `f(k, ir, jr, args...)` (plane_map!): the plane's
+# own loop, in its own fixed order.
+struct _PlaneFn{F, R}
+    f::F
+    ir::R
+    jr::R
+end
+@inline (p::_PlaneFn)(k, args) = p.f(k, p.ir, p.jr, args...)
+
+function _plane_partials!(b::CPUBackend, out::AbstractVector, p::Union{_PlaneReduce,_PlaneMax,_PlaneFn},
                           kr::UnitRange{Int}, g)
     length(out) == length(kr) ||
         throw(DimensionMismatch("partials has length $(length(out)), the k range $(length(kr))"))
@@ -757,18 +767,22 @@ plane_reduce!(partials::Union{AbstractVector,Tuple}, b::AbstractBackend, body::F
 """
     range_max([backend,] body, ranges::NTuple{3,UnitRange{Int}}, args...) -> maximum
 
-The maximum of the indexed `body(i, j, k, args...)` (as in
+The maximum of the indexed `body(i, j, k, args...)` (indexed as in
 [`plane_reduce!`](@ref)) over `ranges`, **NaN-propagating** like
 [`interior_max`](@ref): any NaN gives NaN. `max` is exact and
 commutative, so the result equals any serial maximum of the same values
-(a CFL rate, `max |∇·u|`, a speed cap). `-Inf` of the body's result type
-for an empty region; the type is that of `body` at the first point
-(`Float64` if the region is empty).
+(a CFL rate, `max |∇·u|`, a speed cap).
+
+Unlike a `plane_reduce!` body, a `range_max` body must **only read**: it
+is evaluated once per point, but a fused update belongs in
+`plane_reduce!`. The result type is the inferred (floating-point) return
+type of `body`, `Float64` when inference gives no concrete real type;
+an empty region gives `-Inf`.
 """
 function range_max(b::AbstractBackend, body::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}},
                    args::Vararg{Any,M}) where {F, M}
     (isempty(ir) || isempty(jr) || isempty(kr)) && return -Inf
-    T = float(typeof(body(first(ir), first(jr), first(kr), args...)))
+    T = _max_type(Base.promote_op(body, Int, Int, Int, map(typeof, args)...))
     parts = _plane_partials!(b, Vector{T}(undef, length(kr)),
                              _PlaneMax(T(-Inf), ir, jr), kr, _Ix(body, args))
     m = T(-Inf)
@@ -777,11 +791,45 @@ function range_max(b::AbstractBackend, body::F, (ir, jr, kr)::NTuple{3,UnitRange
     end
     return m
 end
+# the body's type without evaluating it (it is never called twice at a point)
+_max_type(::Type{R}) where {R<:Real} = isconcretetype(R) ? float(R) : Float64
+_max_type(::Type) = Float64
+
 range_max(b::AbstractBackend, body::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
           args::Vararg{Any,M}) where {F, M} =
     range_max(b, body, map(UnitRange{Int}, ranges), args...)
 range_max(body::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}}, args::Vararg{Any,M}) where {F, M} =
     range_max(_host_backend(), body, ranges, args...)
+
+"""
+    plane_map!(partials, [backend,] plane, ranges::NTuple{3,UnitRange{Int}}, args...)
+        -> partials
+
+`partials[c] = plane(k, ranges[1], ranges[2], args...)` for
+`k = ranges[3][c]`: a function of a whole plane, one work item per plane
+(the plane parallelism of [`plane_reduce!`](@ref)), so every partial is
+computed by one task in the plane function's own fixed loop order and
+`partials` is identical at every thread count and with `serial = true`.
+Combine with [`ordered_sum`](@ref).
+
+For the reductions where the eight-lane order of `plane_reduce!` costs
+more than it gains: a fused update that touches few points and calls an
+expensive function there (`apply_wet_deposition!`: `exp` in the raining
+cells only), where keeping eight lanes live across the call is slower
+than one running sum in cell order (measured in ka_port.md). The plane
+function carries its own `@inbounds` and may write any point of its own
+plane `k`, and only of it.
+"""
+function plane_map!(partials::AbstractVector, b::AbstractBackend, plane::F,
+                    ranges::NTuple{3,UnitRange{Int}}, args::Vararg{Any,M}) where {F, M}
+    _plane_partials!(b, partials, _PlaneFn(plane, ranges[1], ranges[2]), ranges[3], args)
+end
+plane_map!(partials::AbstractVector, b::AbstractBackend, plane::F,
+           ranges::NTuple{3,AbstractUnitRange{<:Integer}}, args::Vararg{Any,M}) where {F, M} =
+    plane_map!(partials, b, plane, map(UnitRange{Int}, ranges), args...)
+plane_map!(partials::AbstractVector, plane::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
+           args::Vararg{Any,M}) where {F, M} =
+    plane_map!(partials, _host_backend(), plane, map(UnitRange{Int}, ranges), args...)
 
 # ---- column partials: one sum over k per (i, j) ----------------------------
 

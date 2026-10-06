@@ -70,6 +70,10 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
                           ("plane_reduce! (tuple)", b -> (p = (zeros(32), zeros(32));
                               plane_reduce!(p, b, (i, j, k, B) -> (@inbounds (B[i, j, k], abs(B[i, j, k]))), I3, B);
                               vcat(p...))),
+                          ("plane_map! (fused)", b -> (C = copy(B); p = plane_map!(zeros(32), b,
+                              (k, ir, jr, C) -> (s = 0.0; @inbounds(for j in jr, i in ir
+                                  x = 0.5 * C[i, j, k]; C[i, j, k] -= x; s += x end); s), I3, C);
+                              vcat(p, vec(C)))),
                           ("range_max (NaN)", b -> range_max(b, (i, j, k, A) -> (@inbounds abs(A[i, j, k])), I3, A)))
             r1, r2 = f(ser), f(thr)
             @test isequal(r1, r2) && (r1 isa Bool || ti_bits(r1) == ti_bits(r2))

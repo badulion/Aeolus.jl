@@ -192,6 +192,33 @@ end
         C = copy(A); C[ir[3], jr[2], kr[4]] = NaN
         @test isnan(range_max(b, (i, j, k, A) -> abs(A[i, j, k]), I3, C))
         @test range_max(b, (i, j, k, A) -> A[i, j, k], (ir, 1:0, kr), A) == -Inf
+        # the result type is inferred, never found by evaluating the body an extra time
+        @test range_max(b, (i, j, k, A) -> Float32(A[i, j, k]), I3, A) isa Float32
+        @test range_max(b, (i, j, k, A) -> (@inbounds A[i, j, k] > 0 ? 1 : 0), I3, A) === 1.0
+        # plane_map!: a whole-plane function, one work item per plane, its own order;
+        # it may write its plane (here a fused update in cell order, i fastest)
+        function cell_order_plane(k, ir, jr, C, f)
+            s = 0.0
+            @inbounds for j in jr, i in ir
+                d = f * C[i, j, k]; C[i, j, k] += d; s += d
+            end
+            return s
+        end
+        C = copy(A); dC = zeros(length(kr))
+        @test plane_map!(dC, b, cell_order_plane, I3, C, 0.25) === dC
+        @test same_bits(view(C, I3...), view(A, I3...) .+ 0.25 .* view(A, I3...))
+        ref = similar(dC); Cr = copy(A)
+        for (c, k) in enumerate(kr)
+            ref[c] = cell_order_plane(k, ir, jr, Cr, 0.25)
+        end
+        @test same_bits(dC, ref)
+        @test same_bits(plane_map!(zeros(length(kr)), b, (k, ir, jr, A) -> sum(view(A, ir, jr, k)), I3, A),
+                        [sum(view(A, ir, jr, k)) for k in kr])
+    end
+    @testset "range_max evaluates the body once per point" begin
+        calls = Ref(0)
+        range_max(CPUBackend(serial = true), (i, j, k, A, n) -> (n[] += 1; A[i, j, k]), I3, A, calls)
+        @test calls[] == prod(length, I3)
     end
 
     @testset "max propagates NaN, all_finite catches NaN and ±Inf ($name)" for (name, b) in BACKENDS
