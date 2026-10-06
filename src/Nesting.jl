@@ -70,7 +70,8 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             set_boundary_data!, open_boundary_states,
                             has_open_boundaries, update_open_boundaries!,
                             open_boundary_snapshot, restore_open_boundaries!,
-                            Periodic, NoFlux, ImpermeableWall, NoSlipWall
+                            Periodic, NoFlux, ImpermeableWall, NoSlipWall,
+                            mark_open_boundary_solids!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, step_rk3!, _dzf, _project_velocity!
 using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness

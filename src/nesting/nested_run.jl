@@ -89,9 +89,11 @@ Keywords:
     parent after each child substep, on the child's open faces only
     ([`nest_open_sides`](@ref));
   * `solid` (`nothing`) — the child's IBM [`SolidMask`](@ref) (or a
-    `Bool` array). Open faces inside solids get `u·n = 0` and are left
-    out of the mass-flux correction ([`NestBoundaryData`](@ref)), and the
-    two-way restriction is solid-aware ([`restrict_state_to_parent!`](@ref));
+    `Bool` array). The open faces inside solids are marked with
+    [`mark_open_boundary_solids!`](@ref
+    Aeolus.BoundaryConditions.mark_open_boundary_solids!): zero normal and
+    tangential velocity there, left out of the mass-flux correction; and
+    the two-way restriction is solid-aware ([`restrict_state_to_parent!`](@ref));
   * `max_retries` (3), `divergence_tol` (`Inf`, parent only, through
     `max_divergence`), `max_velocity` (`Inf`), `validate` (true) — the
     step-rejection test, as in
@@ -223,7 +225,8 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                              sponge.sides .& nest_open_sides(child))
     # the child's boundary: the parent prolongated now, attached to its open faces
     interpolate_parent_state!(s_old, parent, nest; order, region)
-    data = nest_boundary_data(s_old, s_new; t0 = child.t, Δt = 0.0, solid)
+    _mark_nest_solids!(child, solid)
+    data = nest_boundary_data(s_old, s_new; t0 = child.t, Δt = 0.0)
     _attach_nest_data!(child, data)
     _fill_nest_halos!(child, s_old)
     run = NestedRun(parent, child, nest, s_old, s_new, s_bc, advance_parent, advance_child,
