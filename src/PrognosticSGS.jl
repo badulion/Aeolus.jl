@@ -55,7 +55,8 @@ module PrognosticSGS
 using ..Grids: RegularGrid, CellCenter, interior
 using ..StretchedGrids: StretchedGrid
 using ..Fields: Field, interior_view, mesh
-using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs
+using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs,
+                            passive_scalar_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
                    buoyancy_frequency_squared!, SymmetricTensorField
 import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_state!, sgs_tke!
@@ -355,7 +356,7 @@ function _stratification!(c, sim)
         if q === nothing
             buoyancy_frequency_squared!(c.N2, sim.θ; θ₀ = θ₀, g = g)
         else
-            fill_halos!(q, homogeneous_bcs(sim.θ_bcs))   # qv: not θ's top gradient (#254)
+            fill_halos!(q, passive_scalar_bcs(sim.θ_bcs))   # qv: not θ's top gradient (#254)
             buoyancy_frequency_squared!(c.N2, sim.θ, q; θ₀ = θ₀, g = g)
         end
     else

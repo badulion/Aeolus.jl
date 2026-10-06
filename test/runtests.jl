@@ -900,6 +900,7 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_nesting_conservative.jl") # #256 stretched parent, mass-weighted, solid-aware nesting
     include("era2_amr.jl")         # Phases 30-31  nesting, AMR
     include("era2_nested_run.jl")  # Phase  30     NestedRun time coupling (#257)
+    include("era2_nest_boundary.jl") # Phase 30   one-way nest boundary data (#261)
 end
 
 # =========================================================================

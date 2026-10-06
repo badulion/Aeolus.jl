@@ -1619,7 +1619,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     # 10. correction u = u* − ∇φ
     fill_halos!(sim.φ, sim.bcs)
     ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
-    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy)   # ∂φ/∂n = 0 on open faces
+    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
     _axpy_interior!(sim.u, -one(T), sim.dφdx, m)
     _axpy_interior!(sim.v, -one(T), sim.dφdy, m)
     _axpy_interior!(sim.w, -one(T), sim.dφdz, m)

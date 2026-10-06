@@ -27,7 +27,7 @@ using Aeolus.Grids: interior, xnodes, ynodes, znodes, FaceX, FaceY, FaceZ, CellC
 using Aeolus.Fields: Field, interior_view, set!
 using Aeolus.BoundaryConditions: OpenBoundary, FreeStreamBoundary, ImpermeableWall,
                                  NoSlipWall, homogeneous_bcs, _z_pair_supported,
-                                 axis_poisson_bc, OpenPlane
+                                 axis_poisson_bc, OpenPlane, Periodic
 using Aeolus.Simulations: BoussinesqSimulation, step_rk3!, _default_solver, max_divergence
 using Aeolus.TimeIntegration: step_imex!, ARK2, Rosenbrock2, step_adaptive!, CFLConstraints
 using Aeolus.Anelastic: AnelasticSimulation, PseudoIncompressibleSimulation,
@@ -98,11 +98,14 @@ const _OB_LIN = FunctionBoundaryData(
     @test poisson_axis_bcs(bcs) == (bc_x = :neumann, bc_y = :neumann, bc_z = :neumann)
     s = _default_solver(m, bcs)
     @test s isa CosineFFTPoissonSolver && (s.bc_x, s.bc_y, s.bc_z) == (:neumann, :neumann, :neumann)
-    # a wall below an open top is a supported z pair; an open bottom is not
+    # a wall below an open top is a supported z pair; an open bottom only
+    # below an open top (a nest child inside its parent, N-nest-d #261 —
+    # before it an open bottom was refused outright)
     @test _z_pair_supported(ImpermeableWall(), bcs.top)
     @test _z_pair_supported(NoSlipWall(), bcs.top)
     @test !_z_pair_supported(bcs.top, ImpermeableWall())
-    @test_throws ArgumentError OpenPlane(:u, FaceX(), :bottom, m)
+    @test _z_pair_supported(bcs.top, bcs.top)
+    @test OpenPlane(:u, FaceX(), :bottom, m).range == 1:m.Hz
     # channel: open x, periodic y
     cb = open_boundary_conditions(m, _OB_LIN; y = :periodic, top = :wall)
     @test poisson_axis_bcs(cb) == (bc_x = :neumann, bc_y = :periodic, bc_z = :neumann)
@@ -392,4 +395,43 @@ end
     @test assert_open_face_correction(bo, gx, gy) === nothing
     gx.data[m.Hx + 1, m.Hy + 2, m.Hz + 2] = 1e-3
     @test_throws ErrorException assert_open_face_correction(bo, gx, gy)
+end
+
+# ---------------------------------------------------------------------------
+# N-nest-d (#261): a nest child inside its parent has an open bottom as well
+# as an open top (and a child spanning a periodic z extent keeps periodic z).
+@testset "open bottom (nest child inside its parent): fill, correction, projection" begin
+    m = RegularGrid(size = (8, 8, 8), extent = (80.0, 80.0, 80.0), origin = (0.0, 0.0, 40.0))
+    # net vertical imbalance: w grows with z, so the bottom and top fluxes differ
+    data = FunctionBoundaryData(u = (x, y, z, t) -> 2.0, v = (x, y, z, t) -> -1.0,
+                                w = (x, y, z, t) -> 0.3 + 0.01z,
+                                θ = (x, y, z, t) -> 300.0 + 0.003z)
+    bcs = open_boundary_conditions(m, data; bottom = :open, top = :open)
+    @test bcs.bottom isa OpenBoundary && bcs.top isa OpenBoundary
+    @test poisson_axis_bcs(bcs) == (bc_x = :neumann, bc_y = :neumann, bc_z = :neumann)
+    @test_throws ArgumentError open_boundary_conditions(m, data; bottom = :open, top = :wall)
+    bp = open_boundary_conditions(m, data; bottom = :periodic, top = :periodic)
+    @test bp.bottom isa Periodic && bp.west isa OpenBoundary
+    # the w boundary face of an open bottom is a pinned row, as on a wall
+    @test pinned_face_indices(FaceZ(), m, bcs) == (0, 0, m.Hz + 1)
+    sim = BoussinesqSimulation(m; bcs = bcs)
+    fill!(sim.u.data, 2.0); fill!(sim.v.data, -1.0); fill!(sim.θ.data, 300.0)
+    step!(sim, 0.5)
+    led = open_boundary_ledger(sim)
+    # Q = (w_top − w_bottom)·A = 0.01·80 m/s · 80² m²
+    @printf("  open bottom + top: Q = %.6e m³/s (expected %.6e), residual %.1e, max|∇·u| = %.2e\n",
+            led.Q, 0.8 * 80.0^2, led.residual, max_divergence(sim))
+    @test led.Q ≈ 0.8 * 80.0^2 rtol = 1e-12
+    @test abs(led.residual) < 1e-10
+    @test max_divergence(sim) < 1e-12
+    # the corrected bottom face: w(z = 40) − δ·(−1) (outward normal −z)
+    ii, jj, kk = interior(m)
+    @test all(isapprox.(sim.w.data[ii, jj, m.Hz + 1], 0.3 + 0.4 + led.δ; atol = 1e-12))
+    @test all(isapprox.(sim.w.data[ii, jj, m.Hz + m.Nz + 1], 0.3 + 1.2 - led.δ; atol = 1e-12))
+    # the pressure correction leaves the bottom face alone, checked not assumed
+    gz = Field(FaceZ(), m)
+    @test assert_open_face_correction(bcs, Field(FaceX(), m), Field(FaceY(), m), gz) === nothing
+    gz.data[m.Hx + 2, m.Hy + 2, m.Hz + 1] = 1e-3
+    @test_throws ErrorException assert_open_face_correction(bcs, Field(FaceX(), m),
+                                                            Field(FaceY(), m), gz)
 end

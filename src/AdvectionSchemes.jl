@@ -1306,7 +1306,7 @@ function kinetic_energy_budget(sim::BoussinesqSimulation{T};
     m = sim.mesh
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
 
     tu = Field(FaceX(), m); tv = Field(FaceY(), m); tw = Field(FaceZ(), m)
     au = Field(FaceX(), m); av = Field(FaceY(), m); aw = Field(FaceZ(), m)

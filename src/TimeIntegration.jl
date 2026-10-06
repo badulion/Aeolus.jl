@@ -288,7 +288,7 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
     active  = sgs_active === nothing ? closure !== nothing : sgs_active
     if update_νt && closure !== nothing
         fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
-        sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+        sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
         compute_sgs!(closure, sim)
     end
     f = closure === nothing ? SGSFields(sim.νt, sim.κt) : sgs_fields(closure, sim)
@@ -1388,7 +1388,7 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
 
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
     fill!(sim.tθ.data, 0)
@@ -1460,7 +1460,7 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
-    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
     f = compute_sgs!(closure, sim)
     ws.ν_mom  === nothing && (ws.ν_mom  = similar(sim.νt.data))
     ws.ν_scal === nothing && (ws.ν_scal = similar(sim.νt.data))
@@ -1563,7 +1563,7 @@ function _project!(sim::BoussinesqSimulation{T}, Δt::T) where {T}
     solve!(sim.φ, sim.div_buf, sim.solver)
     fill_halos!(sim.φ, sim.bcs)
     ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
-    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy)   # ∂φ/∂n = 0 on open faces
+    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
     _axpy_interior!(sim.u, -one(T), sim.dφdx, sim.mesh)
     _axpy_interior!(sim.v, -one(T), sim.dφdy, sim.mesh)
     _axpy_interior!(sim.w, -one(T), sim.dφdz, sim.mesh)
@@ -1624,8 +1624,9 @@ function _solve_field!(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbo
     scalar = _is_scalar_name(name)
     ν   = _coef_for(νm, νs, name)
     bcs = scalar ? sim.θ_bcs : sim.bcs
-    # qv shares θ's walls but not θ's prescribed top gradient (#254)
-    (increment || name === :qv) && (bcs = homogeneous_bcs(bcs))
+    # qv shares θ's walls and open-boundary data but not θ's prescribed top
+    # gradient (#254); an increment has zero boundary values
+    bcs = increment ? homogeneous_bcs(bcs) : name === :qv ? passive_scalar_bcs(bcs) : bcs
     dw  = scalar ? ws.diff.c : getfield(ws.diff, name)
     stats = solve_implicit_diffusion!(f, f, ν, dtγ, sim.mesh, bcs;
                                       tol = tol, maxit = maxit, workspace = dw,
@@ -1754,7 +1755,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     # ---- I(U₁) = ∇·(ν∇U₁) on the projected stage value -------------------
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
     for name in names
         _diffusion!(_diffusion_buffer(sim, ws, name), getfield(sim, name),
                     _coef_for(νm, νs, name), m)

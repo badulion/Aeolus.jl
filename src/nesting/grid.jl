@@ -1,51 +1,76 @@
-# Nesting: the NestBC halo marker and the NestedGrid geometry (moved verbatim
-# from AdaptiveMesh.jl, N-nest-a #250).
+# Nesting: the child's boundary conditions (nest_bcs) and the NestedGrid
+# geometry. The NestBC no-op halo of N-nest-a was retired by N-nest-d
+# (#261): a child's nest faces are N-open-b OpenBoundary faces.
 
 # =========================================================================
-# Nest boundary condition: a no-op `fill_halos!` so nest halo data survives
+# The child's boundary conditions: OpenBoundary faces on the nest sides
 # =========================================================================
 
-"""
-    NestBC()
-
-Boundary condition marking a face as a *nest* boundary. `fill_halos!`
-deliberately does nothing on such a face — the halo is owned by
-[`interpolate_to_nest_boundary!`](@ref), which writes the parent's
-interpolated state there. Without this, `step!`'s internal
-`fill_halos!` would overwrite the nest halo with a periodic wrap.
-"""
-struct NestBC <: AbstractBC end
-
-_fill_x!(d, ::NestBC, ::NestBC, Hx, Nx, ::Location) = d
-_fill_y!(d, ::NestBC, ::NestBC, Hy, Ny, ::Location) = d
-_fill_z!(d, ::NestBC, ::NestBC, Hz, Nz, ::Location) = d
-
-# The parent prescribes the child's normal velocity on a nest face (boundary
-# data, and the interface plane under `impose_interface`), so the projection
-# must leave it unchanged: ∂φ/∂n = 0, as for the other velocity-prescribing
-# faces (N-open-a, #251). This is what the cosine solver did for nest faces
-# before the boundary kind was read through `axis_poisson_bc`.
-axis_poisson_bc(::NestBC) = :neumann
-
-_bck(s::Symbol) = s === :nest     ? NestBC()          :
-                  s === :periodic ? Periodic()        :
-                  s === :noflux   ? NoFlux()          :
-                  s === :wall     ? ImpermeableWall() :
-                  s === :noslip   ? NoSlipWall()      :
-                  error("nest_bcs: unknown BC kind $s")
+_nest_side(s::Symbol, what) = s === :nest ? :open :
+    s in (:periodic, :wall, :noslip, :noflux) ? s :
+    throw(ArgumentError("nest_bcs: unknown $what kind :$s (use :nest, :periodic, " *
+                        ":wall, :noslip)"))
 
 """
-    nest_bcs(x=:nest, y=:nest, z=:nest)
+    nest_bcs(child_mesh, x = :nest, y = x, z = y; bottom = z, top = z,
+             moisture = false, scalars = (), correction = :uniform,
+             normal_halo = :value, scalar_halo = :value, record = false)
+        -> FieldBoundaryConditions
 
-`FieldBoundaryConditions` for a nested child. `:nest` faces are left
-alone by `fill_halos!`; `:periodic`, `:noflux`, `:wall`, `:noslip` behave as usual.
-A child that spans the parent's full extent in a direction should use the
-parent's BC there rather than `:nest`.
+Boundary conditions of a nested child. Every `:nest` face is an
+[`OpenBoundary`](@ref Aeolus.BoundaryConditions.OpenBoundary) (N-open-b,
+#255) whose data come from the parent through a
+[`NestBoundaryData`](@ref), attached when the child joins a
+[`NestedRun`](@ref) (or by [`apply_nest_boundary!`](@ref)): the normal
+velocity on the boundary face and `H` halo layers beyond it, Dirichlet
+tangential velocities and scalars, and a Neumann pressure correction, so
+the child's projection (the all-Neumann `CosineFFTPoissonSolver` picked
+by default) sees the parent's boundary flux. The single global mass-flux
+correction
+([`correct_boundary_mass_flux!`](@ref Aeolus.BoundaryConditions.correct_boundary_mass_flux!))
+makes that flux compatible with the solve.
+
+`x`, `y` — `:nest` or `:periodic` (a child spanning its parent's
+periodic extent). `bottom`, `top` — `:nest` on both (a child inside its
+parent), `:periodic` on both, or a wall below (`:wall`, `:noslip`) and
+`:nest` above: the urban child on the ground. `fields` of the open faces:
+`u, v, w, θ`, `qv` when `moisture = true` (the simulation must then be
+moist too), and the extra cell-centred `scalars` (names, e.g. `(:co2,)`,
+matching the `scalars` of the run's [`NestInterpState`](@ref)). Pass the
+result as the child's `bcs` (it is also the default `θ_bcs`).
+
+This replaces the `NestBC` no-op halo of the Phase 16/30 nests, whose
+child kept a periodic projection that never saw the parent's flux.
 """
-function nest_bcs(x::Symbol=:nest, y::Symbol=x, z::Symbol=y)
-    bx = _bck(x); by = _bck(y); bz = _bck(z)
-    return FieldBoundaryConditions(bx, bx, by, by, bz, bz)
+function nest_bcs(m::RegularGrid, x::Symbol = :nest, y::Symbol = x, z::Symbol = y;
+                  bottom::Symbol = z, top::Symbol = z,
+                  moisture::Bool = false, scalars = (),
+                  correction::Symbol = :uniform, normal_halo::Symbol = :value,
+                  scalar_halo::Symbol = :value, record::Bool = false)
+    xs = _nest_side(x, "x"); ys = _nest_side(y, "y")
+    bs = _nest_side(bottom, "bottom"); ts = _nest_side(top, "top")
+    (xs in (:open, :periodic) && ys in (:open, :periodic)) ||
+        throw(ArgumentError("nest_bcs: the lateral faces must be :nest or :periodic"))
+    names = Symbol[:u, :v, :w, :θ]
+    moisture && push!(names, :qv)
+    for sname in scalars
+        sname isa Symbol || throw(ArgumentError("nest_bcs: scalars are given by name, e.g. (:co2,)"))
+        sname in names && throw(ArgumentError("nest_bcs: scalar :$sname given twice or reserved"))
+        push!(names, sname)
+    end
+    if xs === :periodic && ys === :periodic && bs !== :open && ts !== :open
+        # no nest face at all: an ordinary closed / periodic box
+        return FieldBoundaryConditions(:periodic, :periodic; bottom = bs, top = ts)
+    end
+    return open_boundary_conditions(m, nothing; x = xs, y = ys, bottom = bs, top = ts,
+                                    fields = Tuple(names), correction, normal_halo,
+                                    scalar_halo, record)
 end
+
+nest_bcs(x::Symbol, args...; kw...) =
+    throw(ArgumentError("nest_bcs needs the child mesh: nest_bcs(child_mesh, :$x, …). " *
+                        "A nest face is an OpenBoundary, which holds per-face buffers " *
+                        "on that mesh (N-nest-d, #261)."))
 
 # =========================================================================
 # NestedGrid

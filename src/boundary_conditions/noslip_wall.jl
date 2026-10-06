@@ -102,6 +102,24 @@ _homogeneous(bc::AbstractBC) = bc
 _homogeneous(bc::NoSlipWall{T}) where {T} = NoSlipWall{T}(zero(T), zero(T))
 _homogeneous(bc::FluxBC) = FluxBC(zero(bc.f))
 
+"""
+    passive_scalar_bcs(θ_bcs::FieldBoundaryConditions) -> FieldBoundaryConditions
+
+The boundary conditions of a scalar that shares θ's faces but not θ's
+prescribed top gradient (`qv`): a [`FluxBC`](@ref)`(Γ)` becomes
+`FluxBC(0)` (the mirror halo), every other face is kept as it is. Unlike
+[`homogeneous_bcs`](@ref) it keeps the boundary data of an
+[`OpenBoundary`](@ref) face, so a `qv` named in the open faces' `fields`
+(an open-boundary or nest child, N-open-b #255 / N-nest-d #261) gets its
+inflow values instead of zeros. Returns `θ_bcs` itself (`===`) when no
+face carries a non-zero gradient.
+"""
+function passive_scalar_bcs(bcs::FieldBoundaryConditions)
+    faces = (bcs.west, bcs.east, bcs.south, bcs.north, bcs.bottom, bcs.top)
+    any(f -> f isa FluxBC && !iszero(f.f), faces) || return bcs
+    return FieldBoundaryConditions(map(f -> f isa FluxBC ? FluxBC(zero(f.f)) : f, faces)...)
+end
+
 # --- halo fill: any pair of z-walls where at least one is NoSlipWall -----
 # (`ImpermeableWall, ImpermeableWall` keeps its own, more specific methods.)
 

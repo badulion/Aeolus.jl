@@ -54,6 +54,19 @@ end
 
 _nr_mean_u(sim) = sum(interior_view(sim.u)) / length(interior_view(sim.u))
 
+"""
+The time whose boundary data the child core's current tendency evaluation
+reads: the run's substep window `[run.sub_t0, run.sub_t0 + run.sub_h]` and
+the stage counter `ctr` (reset when a new substep starts).
+"""
+function _nr_stage_time!(ctr, run)
+    if ctr[1] != run.sub_t0
+        ctr[1] = run.sub_t0; ctr[2] = 0
+    end
+    ctr[2] += 1
+    return run.sub_t0 + stage_times(run.advance_child)[Int(ctr[2])] * run.sub_h
+end
+
 # =========================================================================
 @testset "Era II — NestedRun time coupling (N-nest-c, #257)" begin
 
@@ -118,21 +131,23 @@ function _nr_linear_case(child_adv; substeps=3, dt=1e-3, nsteps=4)
     pm = RegularGrid(Float64; size=(16, 16, 16), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
     nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
+    # u is divergence-free (no x dependence): the child's open faces make
+    # the boundary flux compatible with the projection (N-nest-d), so data
+    # with ∂u/∂x ≠ 0 would be (correctly) changed by the mass-flux correction
     f(n, x, y, z, t) = n === :θ ? 300.0 + 2x - 3y + z + 7.0 * t :
-                                  1.0 + 0.5x + 0.25y - 0.125z - 4.0 * t
+                                  1.0 + 0.25y - 0.125z - 4.0 * t
     psim = BoussinesqSimulation(pm)
     _nr_set_fields!(psim, (n, x, y, z) -> f(n, x, y, z, 0.0))
-    csim = BoussinesqSimulation(cm; bcs=nest_bcs(:nest), solver=FFTPoissonSolver(cm))
+    csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm))
     _nr_init_child_from_parent!(csim, psim, nest)
     # stage halos, recorded where the core reads them (body_force! runs after
     # the tendencies, before anything writes the halos again)
     RUN = Ref{Any}(nothing)
-    err = Ref(0.0); nrec = Ref(0)
+    err = Ref(0.0); nrec = Ref(0); ctr = [NaN, 0.0]
     ii, jj, kk = interior(cm)
     function record!(sim, Δt)
         run = RUN[]
-        cs = stage_times(run.advance_child)
-        ts = run.hook.t0 + cs[run.hook.k + 1] * run.hook.dt
+        ts = _nr_stage_time!(ctr, run)
         for k in axes(sim.θ.data, 3), j in axes(sim.θ.data, 2), i in axes(sim.θ.data, 1)
             (i in ii) && (j in jj) && (k in kk) && continue
             ex = f(:θ, _nr_xc(cm, i), _nr_yc(cm, j), _nr_zc(cm, k), ts)
@@ -190,12 +205,12 @@ end
         cm = nest_child_mesh(nest)
         f(n, x, y, z, t) = n === :θ ? 300.0 + A * sin(ω * t) : 0.0
         psim = BoussinesqSimulation(pm); _nr_set_fields!(psim, (n, x, y, z) -> f(n, x, y, z, 0.0))
-        csim = BoussinesqSimulation(cm; bcs=nest_bcs(:nest), solver=FFTPoissonSolver(cm))
+        csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm))
         _nr_init_child_from_parent!(csim, psim, nest)
-        RUN = Ref{Any}(nothing); err = Ref(0.0)
+        RUN = Ref{Any}(nothing); err = Ref(0.0); ctr = [NaN, 0.0]
         function rec!(sim, Δt)
             run = RUN[]
-            ts = run.hook.t0 + stage_times(run.advance_child)[run.hook.k + 1] * run.hook.dt
+            ts = _nr_stage_time!(ctr, run)
             err[] = max(err[], abs(sim.θ.data[1, 1, 1] - (300.0 + A * sin(ω * ts))))
             sim
         end
@@ -227,7 +242,7 @@ end
         nest = nested_grid(pm, ((0.25, 0.5), (0.125, 0.375), (0.125, 0.375)), r; halo=(3, 3, 3))
         cm = nest_child_mesh(nest)
         psim = BoussinesqSimulation(pm); fill!(psim.u.data, 1.3); fill!(psim.θ.data, 300.0)
-        csim = BoussinesqSimulation(cm; bcs=nest_bcs(:nest), solver=FFTPoissonSolver(cm))
+        csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm))
         fill!(csim.u.data, 1.3); fill!(csim.θ.data, 300.0)
         run = NestedRun(psim, csim, nest; cfl_parent = CFLConstraints(C_advective = 0.5))
         for _ in 1:3
@@ -254,9 +269,8 @@ function _nr_drag_case(; drag_on::Symbol, child_core::Symbol = :boussinesq, c = 
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm); fill!(psim.u.data, U0); fill!(psim.θ.data, 300.0)
     csim = child_core === :boussinesq ?
-        BoussinesqSimulation(cm; bcs=nest_bcs(:periodic, :periodic, :nest),
-                             solver=FFTPoissonSolver(cm)) :
-        AnelasticSimulation(cm; buoyancy=false, bcs=nest_bcs(:periodic, :periodic, :nest))
+        BoussinesqSimulation(cm; bcs=nest_bcs(cm, :periodic, :periodic, :nest)) :
+        AnelasticSimulation(cm; buoyancy=false, bcs=nest_bcs(cm, :periodic, :periodic, :nest))
     fill!(csim.u.data, U0)
     child_core === :boussinesq && fill!(csim.θ.data, 300.0)
     # RK3 with the drag as a tendency (Boussinesq), or the drag integrated
@@ -296,14 +310,15 @@ end
 # -------------------------------------------------------------------------
 """
 Parent and child with a Taylor-Green flow plus a mean wind and a θ blob.
-The child imposes the parent's normal velocity on its interface faces and
-relaxes toward the parent in a 3-cell sponge: with the periodic FFT
-projection the child has today (open-boundary projection: N-open-a/b), a
-child with neither blows up within ~10 steps.
+The child's x and y faces are open nest faces (N-nest-d): the parent's
+normal velocity on the boundary faces, Dirichlet tangential velocity and
+θ, and an all-Neumann projection that sees that flux. Before N-nest-d the
+child kept a periodic FFT projection and needed the normal velocity
+imposed on its interface planes *and* a 3-cell sponge to stay stable; it
+now runs without a sponge (the N-nest-c default).
 """
 function _nr_tg_case(; Np = 16, r = 2, U = 0.5, seed = 1, ν = 5e-3,
-                  impose_interface = true, sponge = NestSponge(width = 3, α_max = 20.0),
-                  kwargs...)
+                  sponge = nothing, kwargs...)
     L = 1.0
     pm = RegularGrid(Float64; size=(Np, Np, 8), extent=(L, L, L / 2), halo=(3, 3, 3))
     nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.0, L / 2)), (r, r, 1); halo=(3, 3, 3))
@@ -318,10 +333,9 @@ function _nr_tg_case(; Np = 16, r = 2, U = 0.5, seed = 1, ν = 5e-3,
         psim.θ.data[i, j, k] = 300.0 + exp(-((xc - 0.4)^2 + (y - 0.5)^2) / 0.02)
     end
     step!(psim, 1e-6); psim.t = 0.0           # project once
-    csim = BoussinesqSimulation(cm; ν = ν, bcs = nest_bcs(:nest, :nest, :periodic),
-                                solver = FFTPoissonSolver(cm))
+    csim = BoussinesqSimulation(cm; ν = ν, bcs = nest_bcs(cm, :nest, :nest, :periodic))
     _nr_init_child_from_parent!(csim, psim, nest)
-    return NestedRun(psim, csim, nest; impose_interface, sponge, kwargs...)
+    return NestedRun(psim, csim, nest; sponge, kwargs...)
 end
 
 "KE of the parent over the cells the child covers (u, v, w averaged to centres)."
@@ -435,8 +449,7 @@ end
                                    sin(2π * (pm.y0 + (j - pm.Hy - 1) * pm.dy))
         end
         psim.θ.data .= 300.0 .+ randn(size(psim.θ.data))
-        csim = BoussinesqSimulation(cm; bcs=nest_bcs(:periodic, :periodic, :nest),
-                                    solver=FFTPoissonSolver(cm))
+        csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :periodic, :periodic, :nest))
         fill!(csim.u.data, 1.0); fill!(csim.θ.data, 300.0)
         ncalls = Ref(0); ncore_child = Ref(0); armed = Ref(inject); parmed = Ref(parent_nan)
         counting(sim, dt; kw...) = (ncalls[] += 1; step!(sim, dt; kw...);
