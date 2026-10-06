@@ -507,6 +507,7 @@ function apply_wet_deposition!(c::AbstractArray{<:Real,3}, qr::AbstractArray{<:R
     size(qr) == size(c) ||
         throw(DimensionMismatch("apply_wet_deposition!: qr size $(size(qr)) vs $(size(c))"))
     scav == 0 && return 0.0
+    any(>(0), qr) || return 0.0          # no rain: nothing to scavenge (exact)
     # the update fused with the sum of what it removed, in the canonical
     # (thread-invariant) plane order (KA-b, #296)
     parts = plane_reduce!(zeros(size(c, 3)), Backends.backend(c), _wet_deposition_at, axes(c),
