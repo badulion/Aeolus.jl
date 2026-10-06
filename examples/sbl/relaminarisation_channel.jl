@@ -26,7 +26,7 @@
 #   RE=360 N=48,48,48 HL=1 julia … &  (one process per run; then REUSE=1)
 #
 # writes examples/sbl/output/relaminarisation_<Re>_<N>.svg and caches every
-# run (.jls); prints the table quoted on the theory page
+# run (.jls); an interrupted run resumes from its periodic checkpoints; prints the table quoted on the theory page
 # (docs/src/theory/transition.md, "Relaminarisation").
 # =========================================================================
 
@@ -44,19 +44,29 @@ grid(Re) = haskey(ENV, "N") ? Tuple(parse.(Int, split(ENV["N"], ","))) :
 const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 tag(Re) = "Re$(Re)_" * join(grid(Re), "x")
 
+# Every run checkpoints periodically into output/checkpoints/<name> and
+# resumes from there when restarted (#245; AEOLUS_CHECKPOINT=0 turns it off);
+# the folder is removed once the run's result is cached.
 function spinup(Re)
-    path = joinpath(OUTDIR, "relam_$(tag(Re))_spinup_T$(round(Int, T_SPIN)).jls")
+    name = "relam_$(tag(Re))_spinup_T$(round(Int, T_SPIN))"
+    path = joinpath(OUTDIR, name * ".jls")
     isfile(path) && return deserialize(path)
-    sp = relam_spinup(Re; N = grid(Re), T_spin = T_SPIN)
+    ck = sbl_checkpoints(name)
+    sp = relam_spinup(Re; N = grid(Re), T_spin = T_SPIN, checkpoint = ck)
     serialize(path, sp)
+    finish_checkpoints!(ck)
     return sp
 end
 
 function cached(Re, hL)
-    path = joinpath(OUTDIR, "relam_$(tag(Re))_hL$(hL)_T$(round(Int, T_END)).jls")
+    name = "relam_$(tag(Re))_hL$(hL)_T$(round(Int, T_END))"
+    path = joinpath(OUTDIR, name * ".jls")
     get(ENV, "REUSE", "0") == "1" && isfile(path) && return deserialize(path)
-    r = relam_run(Re, hL, spinup(Re); T_end = T_END)
+    sp = spinup(Re)
+    ck = sbl_checkpoints(name)
+    r = relam_run(Re, hL, sp; T_end = T_END, checkpoint = ck)
     serialize(path, r)
+    finish_checkpoints!(ck)
     return r
 end
 

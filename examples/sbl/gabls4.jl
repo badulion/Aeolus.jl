@@ -35,7 +35,7 @@ const CLOSURES = Symbol.(split(get(ENV, "CLOSURES", "brown94,none"), ","))
 const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))"
 const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 
-function run_closure(stab)
+function run_closure(stab, ck = nothing)
     c = gabls4_case(; N = (NX, NX, NZ), extent = (LX, LX, LZ), sgs_stability = stab)
     series = NamedTuple[]
     nextt = Ref(c.sim.t)
@@ -49,7 +49,8 @@ function run_closure(stab)
                        θ2 = scr.θ_screen, U10 = scr.U_screen,
                        θs = surface_temperature(c.Ts, c.sim.t)))
     end
-    st = sbl_run!(c, T_END; average_from = T_AVG, sample_every = 10, callback = cb)
+    st = sbl_run!(c, T_END; average_from = T_AVG, sample_every = 10, callback = cb,
+                  checkpoint = ck, checkpoint_components = (series = series, nextt = nextt))
     θst = mean(-s.H / c.ρcp / s.u_star for s in series if s.t >= T_AVG)
     @printf("%-8s %s: 16:30-17:30 UTC h = %5.1f m  L = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  θ* = %.3f K  LLJ %.2f m/s at %4.1f m  (%d steps, %.0f s)\n",
             stab, TAG, st.h, st.L, st.u_star, st.H0, θst, st.S_max, st.z_jet, c.nsteps, c.wall_time)
@@ -62,8 +63,11 @@ function cached(stab)
         println("$stab: cached $path")
         return deserialize(path)
     end
-    r = run_closure(stab)
+    # periodic checkpoints, automatic resume (#245); made before the case
+    ck = sbl_checkpoints("gabls4_$(TAG)_$(stab)")
+    r = run_closure(stab, ck)
     serialize(path, r)
+    finish_checkpoints!(ck)
     return r
 end
 results = [cached(s) for s in CLOSURES]

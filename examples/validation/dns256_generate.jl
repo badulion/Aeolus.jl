@@ -54,6 +54,9 @@
 # is single-threaded); max RSS 9.9 GB as printed by this script, not
 # stored in the TOML.
 #
+# Checkpoints: an interrupted run (killed job, reboot) resumes from
+# examples/validation/output/checkpoints/dns<N>/ when started again.
+#
 # The equivalent through the suite: AEOLUS_DNS256=1 julia --project=.
 # test/runtests.jl (the regeneration testset of era6_apriori_sgs.jl).
 # =========================================================================
@@ -69,7 +72,14 @@ out = length(ARGS) >= 2 ? ARGS[2] :
                  joinpath(@__DIR__, "output", "dns$(N)_apriori.toml")
 
 kw = length(ARGS) >= 3 ? (; ν = parse(Float64, ARGS[3])) : (;)
-total = @elapsed rec, d = generate_dns_apriori(; N, out, kw...)
+# Periodic checkpoints with automatic resume (#245): a killed run restarts
+# from its newest checkpoint, bit for bit (every 30 min of wall clock by
+# default; AEOLUS_CHECKPOINT=0 / _EVERY / _SECONDS / _KEEP override). Made
+# before the DNS so the folder's FFTW wisdom is loaded before any plan. At
+# 256³ one checkpoint is ≈ 1.15 GB (8 fields with halos), 2 are kept.
+ck = driver_checkpoints(joinpath(@__DIR__, "output", "checkpoints", "dns$(N)"))
+total = @elapsed rec, d = generate_dns_apriori(; N, out, checkpoint = ck, kw...)
+finish_checkpoints!(ck)
 @printf("total %.0f s (DNS %.0f s, statistics %.0f s); max RSS %.2f GB\n",
         total, d.wall, total - d.wall, Sys.maxrss() / 2^30)
 
