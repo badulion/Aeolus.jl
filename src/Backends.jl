@@ -16,13 +16,13 @@ module Backends
 
 using KernelAbstractions
 const KA = KernelAbstractions
-using LinearAlgebra: BLAS
+using LinearAlgebra: BLAS, mul!
 
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
        runs_serially, launch!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
-       column_partials, interior_max, interior_all_finite
+       column_partials, interior_max, interior_all_finite, apply_transform!
 
 # =========================================================================
 # Backend types
@@ -234,6 +234,30 @@ end
 function _fftw_threads end
 
 # =========================================================================
+# Transforms (KA-h, #298)
+# =========================================================================
+
+"""
+    apply_transform!(backend, out, plan, in) -> out
+
+Execute the precomputed transform `plan` (an FFTW plan on the CPU) from
+`in` into `out`. The spectral pressure solvers call every transform
+through this method, from host orchestration between kernel launches and
+never inside a kernel, so that Phase 81 can give the GPU backend its own
+transform library (cuFFT) behind the same call.
+
+On the [`CPUBackend`](@ref) it is `mul!(out, plan, in)`. The plan carries
+its own thread count (FFTW's, set at planning time through the FFTW policy;
+[`init_threads!`](@ref) makes it `Threads.nthreads()`). FFTW's threaded
+plans split the independent 1-D transforms of a multidimensional transform
+between the threads without changing any of them, so the result is
+identical at every thread count under a deterministic planner (measured
+in docs/src/design/ka_port.md).
+"""
+apply_transform!(::CPUBackend, out, plan, in) = (mul!(out, plan, in); out)
+apply_transform!(b::GPUBackend, out, plan, in) = _gpu_error(b, "apply_transform!")
+
+# =========================================================================
 # launch!: the one way a loop nest over storage indices is run
 # =========================================================================
 
@@ -312,7 +336,7 @@ end
     return nothing
 end
 
-# ---- threaded CPU launches ------------------------------------------------
+# ---- threaded CP# ---- threaded CPU launches ------------------------------------------------
 
 function _threaded!(b::CPUBackend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args) where {F}
     nj, nk = length(jr), length(kr)
@@ -389,7 +413,7 @@ function _launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, arg
     end
     return nothing
 end
-launch!(b::GPUBackend, body!, ranges::Tuple, args...) = _gpu_error(b, "launch!")
+end, body!, ranges::Tuple, args...) = _gpu_error(b, "launch!")
 
 # ---- pointwise map ----------------------------------------------------------
 
