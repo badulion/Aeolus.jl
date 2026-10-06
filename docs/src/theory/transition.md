@@ -118,7 +118,7 @@ unchanged.
 
 The Berlin ground is not a `NoSlipWall`. It is a rough, wall-modelled
 surface: the `MOSTWallLaw` stress of `Aeolus.WallModels` (#169) is
-applied as an implicit drag over a free-slip `:wall`, see [The Berlin case](../design/berlin_case.md). A
+applied as an implicit drag over a free-slip `:wall`, see [The Berlin case](../design/berlin_surface_radiation.md#Surface-exchange-(#129)). A
 resolved no-slip wall at ``Δx = 15.6`` m would put the first velocity
 point ``Δz/2 ≈ 3`` m from the wall, with a viscous sublayer of
 ``ν/u_* ∼ 10^{-4}`` m. `BoundaryConditions` is exempt infrastructure in
@@ -247,7 +247,7 @@ Moum 2000). The turbulence velocity scale of Sun et al. (2012) is
 ``UΔ/(ν + ν_t)`` and the fraction of cells with ``Ri_g > 1/4``
 (`supercritical_fraction`, which counts cells of a `gradient_richardson!`
 field) are the transition diagnostics of the Berlin
-[`turbulence_diag` addon](../design/berlin_case.md).
+[`turbulence_diag` addon](../design/berlin_turbulence.md#Turbulence-diagnostics-(#170)).
 
 #### Growth-rate fit
 
@@ -702,7 +702,7 @@ The command lines are in the header of the example; every run is cached,
 ### The Berlin case
 
 `turbulence_diag` reports the relaminarised fraction of the stable layer
-(see [The Berlin case](../design/berlin_case.md#Relaminarisation-of-the-stable-layer-(#195))):
+(see [The Berlin case](../design/berlin_turbulence.md#Relaminarisation-of-the-stable-layer-(#195))):
 in `:winter` at 06:00, 4.0 % of the 49 056 stable cells (Smagorinsky;
 4.1 % with σ), 0.1 % of 15 392 with ``ν`` reduced from 2 to 0.2 m² s⁻¹.
 

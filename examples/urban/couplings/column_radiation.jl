@@ -18,7 +18,7 @@
 # column, so taking the fog out of the column here is what keeps it from
 # being counted twice. The heating profile and the sky longwave come from
 # the column WITH it (the domain-mean fog absorbs, emits and cools at its
-# top). See docs/src/design/berlin_case.md.
+# top). See docs/src/design/berlin_surface_radiation.md.
 
 """
     ColumnRadiation

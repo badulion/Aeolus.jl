@@ -144,7 +144,7 @@ const BERLIN_OPTION_ONLY = Dict{Symbol,String}(
                   "cosine-FFT default, which MG-CG matches to 6.1e-10 m/s, at 23-36x the cost per " *
                   "solve (45.8-72.6 vs 2.0 ms); kept for the stretched-grid / cut-cell solvers (#151, #152)",
     :ML        => "sgs = :mlsgs: wraps ML.MLSGS, and there is no trained model; with the default " *
-                  "closure it is bit for bit the Smagorinsky default (berlin_case.md, numerics slots)",
+                  "closure it is bit for bit the Smagorinsky default (berlin_numerics.md, numerics slots)",
     :Anelastic => "core = :anelastic / :pseudo_incompressible (with pressure_solver = " *
                   ":density_weighted_cg and timestepper = :fixed): in the flagship's 200 m deep " *
                   "domain the density changes by 2 % and the sound-proof cores give the Boussinesq " *

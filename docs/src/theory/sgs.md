@@ -887,7 +887,7 @@ or the Berlin case transports, not only to θ:
   * The Berlin case diffuses every tracer its `:transport` stage advects
     (qv, ql, the chemistry species) and the pollutant with `sim.κt` of the
     last dynamics step: one shared κ, θ's κ_t, under every `:sgs` provider
-    including `:amd` (see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
+    including `:amd` (see [The Berlin case](../design/berlin_numerics.md#Numerics-slots)).
     The Berlin core runs with `moisture = false`, so qv and ql are case
     tracers, mixed in the `:transport` stage with the same shared κ, not by
     the core's `qv` path above. Under `:amd` this is a design choice, not a
@@ -984,7 +984,7 @@ shear production) read the same tensor.
 
 In the Berlin case the SGS slot's providers are closure objects passed as
 `sgs`, so `:dynamic` and `:mlsgs` now also run on the sound-proof cores
-(see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
+(see [The Berlin case](../design/berlin_numerics.md#Numerics-slots)).
 
 ## Anisotropic minimum-dissipation and Vreman closures
 
@@ -1107,7 +1107,7 @@ points. The closure and its constant did not change.
 
 In the Berlin case both are providers of the
 `:sgs` slot (`:amd`, `:vreman`; see
-[The Berlin case](../design/berlin_case.md#Numerics-slots)).
+[The Berlin case](../design/berlin_numerics.md#Numerics-slots)).
 
 ## Decaying grid turbulence (Comte-Bellot and Corrsin)
 

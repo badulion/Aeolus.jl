@@ -430,7 +430,7 @@ chemistry adds about 24–31 % to the cost of a flagship step (measured on
 the 64 × 64 × 32 case on master `915bd49` with the adaptive step on a
 loaded machine: 233.7 → 289.1 ms/step, of which 50 ms is the WENO
 transport of the five species and 12 ms the `aq_chem` stage; see
-`docs/src/design/berlin_case.md`), so runs that do not need air quality
+`docs/src/design/berlin_air_quality.md`), so runs that do not need air quality
 can switch it off with
 `physics = Dict(:chemistry => :off)`.
 """

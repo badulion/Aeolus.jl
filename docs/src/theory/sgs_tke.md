@@ -668,14 +668,14 @@ Reynolds-stress run was the slowest by 3–4×, more than its 2× in Berlin.
 ## Berlin coupling
 
 `examples/urban/couplings/sgs_tke.jl`, provider `:tke` of the `:sgs` slot
-(see [the Berlin case](../design/berlin_case.md#Numerics-slots)), with ``e``
+(see [the Berlin case](../design/berlin_numerics.md#Numerics-slots)), with ``e``
 the advected tracer `:e`, the wall cap from the building mask, the
 surface value from the MOST friction velocity, and the facade walls of
 `wall_model_facades` attached, so the facade production is the wall
 stress times the resolved shear (#232; on the summer flagship the
 stencil production it replaces was 27 % of the canopy ``Σ P_s V``, and
 near-facade ``ν_t`` rises by 5.3 %: see the facade section of
-[the Berlin case](../design/berlin_case.md)). The Reynolds-stress closure
+[the Berlin case](../design/berlin_surface_radiation.md#Facade-wall-model-(#179))). The Reynolds-stress closure
 is the option `:reynolds_stress` (`examples/urban/couplings/sgs_reynolds_stress.jl`):
 the six stresses are the advected tracers `:tau11 … :tau23`, with the same
 wall cap and an LRR-IP surface value. Both providers report a-priori

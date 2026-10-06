@@ -110,7 +110,7 @@ buoy SST time series, and field campaigns over patchy terrain.
 The Berlin case runs the contract in every column: since #129 a
 `SoilThermalColumn` with hydrology under streets, building-adjacent cells
 and the park, slabs elsewhere, Monin–Obukhov fluxes from the first air
-cell and an implicit surface drag ([the Berlin case](../design/berlin_case.md#Surface-exchange-(#129))).
+cell and an implicit surface drag ([the Berlin case](../design/berlin_surface_radiation.md#Surface-exchange-(#129))).
 The vegetated land column, per-facet walls, building zones, snow, water
 surfaces and tiles are wired in by open issues of the Berlin epic
 (#139–#149).
