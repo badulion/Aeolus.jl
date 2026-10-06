@@ -669,10 +669,8 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
     # it wrote into a solid cell; the totals folded in column-major order —
     # the canonical order of a 2-D sum, the old loop's (KA-m, #301)
     Nx, Ny = size(bus.k_air)
-    parts = foreach_column!(Aeolus.Backends.backend(bus.E), _deliver_column!, (1:Nx, 1:Ny),
-                            θ, qv, bus, c.cp, sm.mask, case, Hx, Hy, Hz, dz, τ;
-                            partials = zeros(Nx * Ny, 2))
-    evap, nsolid = column_sums(parts)
+    evap, nsolid = column_sum(Aeolus.Backends.backend(bus.E), _deliver_column!, (1:Nx, 1:Ny),
+                              θ, qv, bus, c.cp, sm.mask, case, Hx, Hy, Hz, dz, τ)
     c.evap = evap / length(bus.k_air)
     c.solid_writes += Int(nsolid)
     return nothing

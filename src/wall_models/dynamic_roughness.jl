@@ -341,24 +341,21 @@ function _drag_parts(dr::DynamicRoughness{T}, uc, vc, ut, vt) where {T}
     κ = T(von_karman(dr.c))
     b = Backends.backend(uc)
     cols = (axes(uc, 1), axes(uc, 2))
-    P = foreach_column!(b, _mean_wind_column, cols, dr.mask, uc, vc;
-                        partials = zeros(T, length(uc), 3))
-    ub, vb, nf = column_sums(P)
+    ub, vb, nf = column_sum(b, _mean_wind_column, cols, dr.mask, uc, vc, T)
     n = Int(nf)
     n > 0 || throw(ArgumentError("DynamicRoughness: no column in the mask"))
     M = hypot(ub, vb)
     ex, ey = M > 0 ? (ub / M, vb / M) : (one(T), zero(T))
     A1 = zeros(T, size(uc)); A2 = zeros(T, size(uc))
-    Q = foreach_column!(b, _drag_column, cols, dr.mask, A1, A2, uc, vc, ut, vt, s, κ, ex, ey,
-                        T(dr.C_d); partials = zeros(T, length(uc), 2))
-    R1, R2 = column_sums(Q)
+    R1, R2 = column_sum(b, _drag_column, cols, dr.mask, A1, A2, uc, vc, ut, vt, s, κ, ex, ey,
+                        T(dr.C_d))
     return A1, A2, R1 / n, R2 / n, n
 end
 
-@inline function _mean_wind_column(i, j, mask, uc, vc)
+@inline function _mean_wind_column(i, j, mask, uc, vc, ::Type{T}) where {T}
     I = CartesianIndex(i, j)
-    _in(mask, I) || return (zero(eltype(uc)), zero(eltype(uc)), 0.0)
-    return @inbounds (uc[I], vc[I], 1.0)
+    _in(mask, I) || return (zero(T), zero(T), zero(T))
+    return @inbounds (T(uc[I]), T(vc[I]), one(T))
 end
 
 @inline function _drag_column(i, j, mask, A1, A2, uc, vc, ut, vt, s, κ, ex, ey, C_d::T) where {T}
@@ -378,10 +375,8 @@ end
 # F(α) at one α: per column (one work item each), summed in column-major
 # order (the old loop's), so thread-invariant and the same bits.
 function _residual(dr::DynamicRoughness{T}, α, A1, A2, R1, R2, n, h) where {T}
-    P = foreach_column!(Backends.backend(A1), _residual_column, (axes(A1, 1), axes(A1, 2)),
-                        dr.mask, dr.z0_floor, dr.stats, A1, A2, h, α;
-                        partials = zeros(T, length(A1), 1), weight = 8)
-    W = column_sums(P)[1]
+    W = column_sum(Backends.backend(A1), _residual_column, (axes(A1, 1), axes(A1, 2)),
+                   dr.mask, dr.z0_floor, dr.stats, A1, A2, h, α; weight = 8)
     return W / n + (R2 - R1)
 end
 

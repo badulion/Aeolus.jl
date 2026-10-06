@@ -510,10 +510,9 @@ function step_parent_surface!(p::ParentCase, period::Real)
     # tiles and writes only its own sources and u*; the area sums of its
     # fluxes are its partials, folded in column-major order (the old
     # loop's order, so the same bits at every thread count)
-    parts = foreach_column!(Aeolus.Backends.backend(p.θsrc), _parent_surface_column!,
-                            (1:m.Nx, 1:m.Ny), p, ps, sim, ref, θd, qd, zf, kmax, U_min, period;
-                            partials = zeros(m.Nx * m.Ny, 5), weight = PARENT_COLUMN_WEIGHT)
-    sRn, sH, sLE, sG, sE = column_sums(parts)
+    sRn, sH, sLE, sG, sE = column_sum(Aeolus.Backends.backend(p.θsrc), _parent_surface_column!,
+                                      (1:m.Nx, 1:m.Ny), p, ps, sim, ref, θd, qd, zf, kmax, U_min,
+                                      period; weight = PARENT_COLUMN_WEIGHT)
     n = m.Nx * m.Ny
     for (key, v) in ((:Rn, sRn), (:H, sH), (:LE, sLE), (:G, sG), (:E, sE))
         p.sfc_mean[key] += v / n * period

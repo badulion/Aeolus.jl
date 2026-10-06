@@ -278,11 +278,10 @@ function _aq_emit!(c::AQChem, case, dt)
     # 2-D reduction and the old loop's (the same bits). The dry deposition
     # total (`apply_dry_deposition!`) is the same kind of sum.
     Nx, Ny = size(c.k_air)
-    parts = foreach_column!(Aeolus.Backends.backend(c.r_a), _aq_emit_column!, (1:Nx, 1:Ny),
-                            NO, NO2, VOC, c.k_air, sfc, Nz,
-                            c.F_NO * ftr * dt / dz, c.F_NO2 * ftr * dt / dz,
-                            c.F_VOC * fsun * dt / dz, dz; partials = zeros(Nx * Ny, 3))
-    eNO, eNO2, eVOC = column_sums(parts)
+    eNO, eNO2, eVOC = column_sum(Aeolus.Backends.backend(c.r_a), _aq_emit_column!, (1:Nx, 1:Ny),
+                                 NO, NO2, VOC, c.k_air, sfc, Nz,
+                                 c.F_NO * ftr * dt / dz, c.F_NO2 * ftr * dt / dz,
+                                 c.F_VOC * fsun * dt / dz, dz)
     A = length(c.k_air)
     c.emitted[:NO] += eNO / A; c.emitted[:NO2] += eNO2 / A; c.emitted[:VOC] += eVOC / A
     return nothing

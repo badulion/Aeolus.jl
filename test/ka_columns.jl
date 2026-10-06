@@ -53,6 +53,18 @@ kc_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
         S = column_sums(P)
         @test kc_bits(S[1]) == kc_bits(ref_fold((i, j) -> colsum(i, j, A)))
         @test kc_bits(S[2]) == kc_bits(ref_fold((i, j) -> isodd(i + j) ? 0.0 : abs(colsum(i, j, A))))
+        # column_sum: the running sums serially, partials + fold threaded —
+        # the same numbers in the same order
+        cs = column_sum(b, (i, j, A) -> (s = colsum(i, j, A); (s, isodd(i + j) ? 0.0 : abs(s))),
+                        (ir, jr), A; weight = 7)
+        @test cs isa NTuple{2,Float64} && kc_bits(collect(cs)) == kc_bits(S)
+        c1 = column_sum(b, colsum, (ir, jr), A; weight = 10^6)
+        @test kc_bits(c1) == kc_bits(S[1])
+        @test column_sum(b, (n, v) -> v[n], (3:9,), collect(1.0:10.0)) === sum(3.0:9.0)
+        # a body whose type is not inferred still sums from zero (−0.0 + 0.0 = 0.0)
+        anyv = Any[-0.0, -0.0, 1.5]
+        @test kc_bits(column_sum(b, (n, v) -> v[n], (1:3,), anyv)) == kc_bits(0.0 + -0.0 + -0.0 + 1.5)
+        @test kc_bits(column_sum(b, (n, v) -> v[n], (1:2,), anyv)) == kc_bits(0.0)
         # a maximum over the partials (exact: any order)
         @test foldl(max, view(P, :, 1); init = -Inf) == maximum(ref_col)
         # 1-D id lists, one term returned as a number

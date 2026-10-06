@@ -23,7 +23,7 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        runs_serially, launch!, launch_weighted!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
-       plane_map!, apply_transform!, foreach_column!, foreach_cell!, column_sums
+       plane_map!, apply_transform!, foreach_column!, foreach_cell!, column_sums, column_sum
 
 # =========================================================================
 # Backend types
@@ -1080,12 +1080,87 @@ foreach_cell!(b::AbstractBackend, body!::F, ranges::NTuple{3,AbstractUnitRange{<
     foreach_cell!(b, body!, map(UnitRange{Int}, ranges), args...; kw...)
 
 """
+    column_sum(backend, body, cols, args...; weight = 1) -> sum or NTuple of sums
+
+The totals over the columns of what a column body returns — a number, or
+an `NTuple` of numbers — in column-major order from zero: the
+[`foreach_column!`](@ref) launch with partials followed by
+[`column_sums`](@ref), without the partials when the launch runs on the
+calling task. Serially (one thread, `serial = true`, or fewer than the
+backend's threshold of `weight × ncolumns` points) the body's terms are
+added as they come, column after column — the old loops' running sums,
+with no partials array to fill and fold afterwards; threaded, every
+column stores its terms and the columns are folded in the same order. The
+two paths add the same numbers in the same order: the totals are
+identical, bit for bit, at every thread count.
+"""
+function column_sum(b::AbstractBackend, body::F, cols::NTuple{N,AbstractUnitRange{<:Integer}},
+                    args::Vararg{Any,M}; weight::Integer = 1) where {F, N, M}
+    cr = map(UnitRange{Int}, cols)
+    nc = _npoints(cr)
+    R = N == 2 ? Base.promote_op(body, Int, Int, map(typeof, args)...) :
+                 Base.promote_op(body, Int, map(typeof, args)...)
+    if runs_serially(b, nc * max(1, Int(weight))) || !_summable(R)
+        return _serial_column_sum(body, cr, args, _zero_terms(R))
+    end
+    P = Matrix{_term_eltype(R)}(undef, nc, _nterms(R))
+    foreach_column!(b, body, cr, args...; partials = P, weight = weight)
+    S = column_sums(P)
+    return R <: Tuple ? Tuple(S) : S[1]
+end
+
+_summable(::Type{R}) where {R<:Real} = isconcretetype(R)
+_summable(::Type{R}) where {R<:Tuple} = isconcretetype(R) && all(T -> T <: Real, fieldtypes(R))
+_summable(::Type) = false
+_nterms(::Type{R}) where {R<:Tuple} = fieldcount(R)
+_nterms(::Type) = 1
+_term_eltype(::Type{R}) where {R<:Tuple} = promote_type(fieldtypes(R)...)
+_term_eltype(::Type{R}) where {R} = R
+# the zero the running sums start from (`nothing`: not inferred, taken from
+# the first column's terms)
+_zero_terms(::Type{R}) where {R<:Real} = isconcretetype(R) ? zero(R) : nothing
+_zero_terms(::Type{R}) where {R<:Tuple} = _summable(R) ? map(zero, fieldtypes(R)) : nothing
+_zero_terms(::Type) = nothing
+
+@inline _add_terms(s::Tuple, x::Tuple) = map(+, s, x)
+@inline _add_terms(s, x) = s + x
+@inline _add_terms(::Nothing, x::Tuple) = map((z, y) -> z + y, map(zero, x), x)
+@inline _add_terms(::Nothing, x) = zero(x) + x
+
+@noinline function _serial_column_sum(body::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args, s) where {F}
+    for j in jr, i in ir
+        s = _add_terms(s, body(i, j, args...))
+    end
+    return s
+end
+@noinline function _serial_column_sum(body::F, (nr,)::NTuple{1,UnitRange{Int}}, args, s) where {F}
+    for n in nr
+        s = _add_terms(s, body(n, args...))
+    end
+    return s
+end
+
+"""
     column_sums(partials) -> Vector
 
 The sum of every term (column of `partials`) over the columns (rows), in
 row order from zero ([`ordered_sum`](@ref)): the canonical total of a
 [`foreach_column!`](@ref) launch, thread-invariant.
 """
-column_sums(P::AbstractMatrix) = [ordered_sum(view(P, :, t)) for t in axes(P, 2)]
+function column_sums(P::AbstractMatrix{T}) where {T}
+    nt = size(P, 2)
+    nt <= 8 && return collect(_column_sums(P, Val(nt)))
+    return [ordered_sum(view(P, :, t)) for t in axes(P, 2)]
+end
+# One pass over the rows, every term its own running sum held in a register
+# (independent chains, so one's add latency hides behind the others'),
+# each in row order from zero: the ordered_sum of each column of P.
+function _column_sums(P::AbstractMatrix{T}, ::Val{N}) where {T, N}
+    s = ntuple(_ -> zero(T), Val(N))
+    @inbounds for c in axes(P, 1)
+        s = ntuple(t -> s[t] + P[c, t], Val(N))
+    end
+    return s
+end
 
 end # module

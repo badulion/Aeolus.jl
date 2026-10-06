@@ -23,7 +23,7 @@ module Chemistry
 
 using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields: Field, interior_view
-using ..Backends: Backends, plane_reduce!, plane_map!, ordered_sum, foreach_column!, column_sums
+using ..Backends: Backends, plane_reduce!, plane_map!, ordered_sum, column_sum
 
 export apply_linear_chemistry!,
        air_number_density, ppb_rate_constant, emission_ppb_flux,
@@ -456,9 +456,7 @@ function apply_dry_deposition!(c::AbstractArray{<:Real,3}, v_d, dt::Real; dz::Re
     Nx, Ny, _ = size(c)
     # one work item per column (KA-m, #301), each returning what it removed;
     # the total folded in column-major order, the old loop's (the same bits)
-    parts = foreach_column!(backend, _dry_deposition_column!, (1:Nx, 1:Ny), c, v_d, dt, dz, k;
-                            partials = zeros(Nx * Ny, 1))
-    return column_sums(parts)[1]
+    return column_sum(backend, _dry_deposition_column!, (1:Nx, 1:Ny), c, v_d, dt, dz, k)
 end
 
 @inline function _dry_deposition_column!(i, j, c, v_d, dt, dz, k)
