@@ -203,7 +203,8 @@ function step_case!(case, dt::Real = step_dt(case))
     # :sanity (coupling guards first, then the core finiteness check)
     run_entries!(case, :sanity, dt, n, t_old, t_new)
     if clk.blowup || any(!isfinite, interior_view(sim.u)) || any(!isfinite, case.bus.Ts)
-        case.cfg.verbose && @printf(case.io, "!! blowup at step %d\n", n)
+        @error("blowup at step $n", subsystem = :berlin, domain = current_domain(),
+               event = :blowup, step = n)
         clk.blowup = true
         return false
     end
@@ -227,25 +228,25 @@ last_step_dt(dt, remaining) = remaining <= dt ? remaining : remaining < 2dt ? re
     run_case!(case; nsteps = case.cfg.nsteps) -> case
 
 Open the output (unless `cfg.output_path === nothing`), run `nsteps`
-steps (stopping early on a blow-up), close the output and print the
-summary.
+steps (stopping early on a blow-up), close the output and log the
+summary: the run's start and end, the stage timing and the ledgers are
+`Info` records (`subsystem = :berlin`).
 
 With a variable-step `:timestepper` provider (`variable_dt`, e.g.
 `:adaptive`) `nsteps · cfg.dt` is instead the simulated time to reach:
 each step takes `step_dt(case)`, the last one shortened to land on it.
 """
 function run_case!(case; nsteps::Integer = case.cfg.nsteps)
-    cfg, io = case.cfg, case.io
+    cfg = case.cfg
     cfg.output_path === nothing || open_output!(case)
     P = cadence_period(cfg, :output)
     ts = timestepper(case)
     variable = ts !== nothing && variable_dt(typeof(ts))
-    if cfg.verbose
-        variable ? @printf(io, "Run: %.0f s with a variable step (:%s), %d output records\n",
-                           nsteps * cfg.dt, provider(typeof(ts)), floor(Int, nsteps * cfg.dt / P)) :
-                   @printf(io, "Run: %d steps, %d output records, dt=%.0fs\n",
-                           nsteps, floor(Int, nsteps * cfg.dt / P), cfg.dt)
-    end
+    @info(variable ? @sprintf("Run: %.0f s with a variable step (:%s), %d output records",
+                              nsteps * cfg.dt, provider(typeof(ts)), floor(Int, nsteps * cfg.dt / P)) :
+                     @sprintf("Run: %d steps, %d output records, dt=%.0fs",
+                              nsteps, floor(Int, nsteps * cfg.dt / P), cfg.dt),
+          subsystem = :berlin, domain = current_domain(), event = :run_start)
     case.clock.t_wall0 = time()
     n0 = case.clock.n
     if variable
@@ -261,18 +262,16 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps)
     nsteps = case.clock.n - n0
     t_wall = time() - case.clock.t_wall0
     close_output!(case)
-    if cfg.verbose
-        if cfg.output_path === nothing
-            @printf(io, "Ran %d steps in %.1f s (no output file).\n", nsteps, t_wall)
-        else
-            @printf(io, "Ran %d steps in %.1f s. Wrote %d time levels to %s (%.1f MB)\n",
-                    nsteps, t_wall, case.clock.nrecord, cfg.output_path,
-                    filesize(cfg.output_path) / 1e6)
-        end
-        @printf(io, "Peak ΔT (heat island): %.1f K   max|∇·u| = %.2e\n",
-                maximum(case.bus.Ts) - minimum(case.bus.Ts), max_divergence(case.sim))
-        print(io, timing_report(case))
-        print(io, ledger_report(case))
-    end
+    @info(string(cfg.output_path === nothing ?
+                     @sprintf("Ran %d steps in %.1f s (no output file).", nsteps, t_wall) :
+                     @sprintf("Ran %d steps in %.1f s. Wrote %d time levels to %s (%.1f MB)",
+                              nsteps, t_wall, case.clock.nrecord, cfg.output_path,
+                              filesize(cfg.output_path) / 1e6),
+                 @sprintf("\nPeak ΔT (heat island): %.1f K   max|∇·u| = %.2e",
+                          maximum(case.bus.Ts) - minimum(case.bus.Ts), max_divergence(case.sim))),
+          subsystem = :berlin, domain = current_domain(), event = :run_end, steps = nsteps,
+          wall = t_wall)
+    @info(rstrip(timing_report(case)), subsystem = :berlin, domain = current_domain(), event = :timing)
+    @info(rstrip(ledger_report(case)), subsystem = :berlin, domain = current_domain(), event = :ledger)
     return case
 end

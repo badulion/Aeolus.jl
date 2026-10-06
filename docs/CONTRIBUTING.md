@@ -16,6 +16,7 @@ part an agent must follow every session — is in
 - [Commit granularity](#commit-granularity)
 - [Pull requests](#pull-requests)
 - [Testing standards](#testing-standards)
+- [Continuous integration](#continuous-integration)
 - [Documentation is part of done](#documentation-is-part-of-done)
 - [Conventions with a history](#conventions-with-a-history)
 - [Recovery procedures](#recovery-procedures)
@@ -220,9 +221,10 @@ in the whole PR.
 
 ## Testing standards
 
-There is no CI yet. The gate is that the agent runs the suite and
-reports the result honestly in the PR. **Fast tier for PRs, full tier
-at merge:**
+The gate is that the agent runs the suite and reports the result
+honestly in the PR; GitHub Actions re-runs it (see
+[Continuous integration](#continuous-integration)). **Fast tier for PRs,
+full tier at merge:**
 
 ```bash
 julia --project=. test/run.jl                          # fast tier, parallel: the PR gate
@@ -271,6 +273,55 @@ implementation or the expectation is wrong. Weakening an assertion to
 reach green, without stating that the original expectation was
 physically incorrect, is the one thing that will get a PR rejected
 outright.
+
+---
+
+## Continuous integration
+
+Four workflows live in `.github/workflows/`:
+
+| Workflow | Trigger | What it does |
+| :-- | :-- | :-- |
+| `CI.yml` | every PR, push to `master` | fast tier: `julia --project=. test/run.jl` |
+| `CI.yml` | push to `master`, Mondays 03:17 UTC, manual | full tier: `AEOLUS_TEST_TIER=full` |
+| `Documenter.yml` | push to `master`, tags, PRs | builds `docs/make.jl`; deploys from `master` and tags only |
+| `CompatHelper.yml` | daily | opens PRs that bump `[compat]` entries |
+| `TagBot.yml` | registry release | tags and releases a registered version |
+
+The test jobs run Julia 1.13 on `ubuntu-latest` (4 cores, 16 GB) with
+`JOBS=4`, one thread per job and `AEOLUS_FFTW_PLANNER=estimate`. Each job
+uploads its run folder (`.testruns/ci-*`: per-file logs, `summary.txt`)
+as an artifact, so a failure can be read without rerunning it. Timeouts:
+90 min for the fast tier, 240 min for the full tier, 60 min for the docs.
+
+CI is a second check, not a replacement for running the suite yourself:
+the wall-clock assertions (`berlin_smoke.jl`, `era6_apriori_sgs.jl`) were
+calibrated on the 24-core machine, and a slow runner failing one of them
+is reported, not papered over by loosening the limit.
+
+### Documentation deployment
+
+`docs/make.jl` ends in a `deploydocs` call guarded by
+`GITHUB_ACTIONS == "true"`, so a local build never tries to push. On
+GitHub it pushes the built site to the `gh-pages` branch with the
+workflow's `GITHUB_TOKEN`: `master` becomes `dev/`, a tag `vX.Y.Z` becomes
+`vX.Y.Z/` and `stable/`. A `DOCUMENTER_KEY` secret is optional (only
+needed if the token is not allowed to push, or for TagBot to trigger the
+docs build on tags).
+
+Serving the branch is a one-time repository setting that only the
+maintainer changes (agents must not):
+
+1. Let the `Documentation` workflow run once on `master`, so the
+   `gh-pages` branch exists.
+2. **Settings → Pages → Build and deployment → Source: Deploy from a
+   branch**, branch **`gh-pages`**, folder **`/ (root)`**, Save.
+3. If the deploy step fails with a permission error: **Settings →
+   Actions → General → Workflow permissions → Read and write
+   permissions**.
+
+The site is then at <https://badulion.github.io/Aeolus.jl/dev/>
+(`stable/` appears with the first tagged release).
 
 ---
 

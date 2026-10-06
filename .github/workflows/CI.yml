@@ -1,0 +1,97 @@
+# Tests (#354). Fast tier on every PR and push to master; full tier on push
+# to master and weekly. The tiers are defined in test/test_tags.toml and run
+# by the parallel runner test/run.jl (see docs/src/testing.md).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '17 3 * * 1'   # Mondays 03:17 UTC: full tier
+  workflow_dispatch:
+
+concurrency:
+  # one run per PR / ref; a new push cancels the superseded run (not on master)
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+permissions:
+  actions: write    # julia-actions/cache deletes stale caches
+  contents: read
+
+env:
+  # GitHub-hosted ubuntu runners have 4 cores and 16 GB
+  JOBS: '4'
+  AEOLUS_TEST_THREADS: '1'
+  # the suite already forces ESTIMATE in runtests.jl (#245); set it here too
+  # so every process, including the precompile step, plans deterministically
+  AEOLUS_FFTW_PLANNER: estimate
+  AEOLUS_FFTW_THREADS: '1'
+  # the 4-core runner is about 2.3x slower than a development machine on berlin_smoke.jl
+  AEOLUS_SMOKE_BUDGET_S: '900'
+  JULIA_NUM_THREADS: '1'
+
+jobs:
+  fast:
+    name: Fast tier - Julia ${{ matrix.version }}
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['1.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+          arch: x64
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Run fast tier
+        env:
+          AEOLUS_TEST_TIER: fast
+        run: julia --color=yes --project=. test/run.jl --outdir .testruns/ci-fast
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlogs-fast-${{ matrix.version }}
+          path: .testruns/ci-fast
+          retention-days: 14
+          if-no-files-found: ignore
+
+  full:
+    name: Full tier - Julia ${{ matrix.version }}
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['1.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+          arch: x64
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Run full tier
+        env:
+          AEOLUS_TEST_TIER: full
+        run: julia --color=yes --project=. test/run.jl --outdir .testruns/ci-full
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlogs-full-${{ matrix.version }}
+          path: .testruns/ci-full
+          retention-days: 30
+          if-no-files-found: ignore
