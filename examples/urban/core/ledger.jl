@@ -117,9 +117,14 @@ flux into the surface.
 function add_surface!(l::Ledger, term::Symbol, flux::AbstractMatrix, sfc::AbstractMatrix, dt::Real)
     size(flux) == size(sfc) || throw(DimensionMismatch("add_surface!: flux $(size(flux)) vs sfc $(size(sfc))"))
     acc = get!(() -> zeros(length(LEDGER_CLASS_NAMES)), l.surface, term)
+    # the canonical order (KA-b, #296): the step's per-column contributions
+    # flux·dt, summed per class in column-major order, then added to the
+    # accumulated term (a threaded flux kernel keeps this ordered fold)
+    step = zeros(length(acc))
     @inbounds for I in eachindex(flux, sfc)
-        acc[sfc[I]] += flux[I] * dt
+        step[sfc[I]] += flux[I] * dt
     end
+    acc .+= step
     return l
 end
 
@@ -162,11 +167,31 @@ domain area.
 function ledger_water(case, q::AbstractArray{<:Real,3})
     l, mesh = case.ledger, case.mesh
     isempty(l.ρ) && (l.ρ = ones(mesh.Nz))
+    S = level_sums(q)
     W = 0.0
-    @inbounds for k in axes(q, 3)
-        W += l.ρ[k] * sum(view(q, :, :, k))
+    @inbounds for k in eachindex(S)
+        W += l.ρ[k] * S[k]
     end
     return W * mesh.dz / (mesh.Nx * mesh.Ny)
+end
+
+"""
+    level_sums(q) -> Vector
+
+``S_k = Σ_{ij} q_{ijk}`` for every level of the 3-D array `q` (an
+interior-sized array or an `interior_view`), in the canonical,
+thread-invariant order of `plane_partials!` (KA-b, #296). The ledgers
+build every water and heat integral from these per-level sums, combined
+over `k` in ascending order.
+"""
+function level_sums(q::AbstractArray{<:Real,3})
+    S = zeros(size(q, 3))
+    # a view into a halo-padded field: reduce the parent over the view's
+    # storage range (the same order and bits, without the view's index offsets)
+    if q isa SubArray && all(r -> r isa AbstractUnitRange, parentindices(q))
+        return plane_partials!(S, identity, map(UnitRange{Int}, parentindices(q)), parent(q))
+    end
+    return plane_partials!(S, identity, axes(q), q)
 end
 
 """
@@ -189,7 +214,7 @@ part is exactly 0; on the pseudo-incompressible core `W = ρ̄θ̄`. With
 `ledger.ρ ≡ 1` and `W = nothing` it is exactly 0.
 """
 ledger_water_split(case, q::AbstractArray{<:Real,3}, W = nothing) =
-    ledger_water_split_levels(case, (sum(view(q, :, :, k)) for k in axes(q, 3)), W)
+    ledger_water_split_levels(case, level_sums(q), W)
 
 """
     ledger_water_split_levels(case, S, W = nothing) -> (transport, density_redistribution)

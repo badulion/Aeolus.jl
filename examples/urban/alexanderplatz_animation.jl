@@ -43,19 +43,19 @@ isfile(NCPATH) || error("""
         julia --project=. examples/urban/alexanderplatz_diurnal.jl
     """)
 
-ncf   = nc_open(NCPATH)
-nrec  = nc_nrecords(ncf)
+ncf   = NCDataset(NCPATH)
+nrec  = ncf.dim["time"]
 nrec > 0 || error("$NCPATH contains no time levels — did the run finish?")
-hours = nc_read(ncf, "hour")
-elevs = nc_read(ncf, "solar_elevation")
-zc    = nc_read(ncf, "z")
-hb    = nc_read(ncf, "building_height")
+hours = Array(ncf["hour"])
+elevs = Array(ncf["solar_elevation"])
+zc    = Array(ncf["z"])
+hb    = Array(ncf["building_height"])
 k_slice = argmin(abs.(zc .- parse(Float64, get(ENV, "AEOLUS_SLICE_Z", "10"))))
 z_slice = zc[k_slice]
 solid   = hb .> z_slice                       # building cells on the slice
 # columns solid to the lid have no surface (H_sfc is NaN there) and keep
 # their initial Ts: grey them out rather than let them pin the colour scale
-nosfc   = isnan.(nc_read_record(ncf, "H_sfc", 1))
+nosfc   = isnan.(ncf["H_sfc"][:, :, 1])
 @printf("Rendering %d time levels from %s (%.1f MB); slice at z = %.1f m (%d of %d cells solid)\n",
         nrec, NCPATH, filesize(NCPATH) / 1e6, z_slice, count(solid), length(solid))
 
@@ -66,9 +66,9 @@ north_up(Z) = reverse(permutedims(Z), dims = 1)
 # The panels: name, units, colormap, symmetric?, and how to get the field of
 # record r as a 2-D (x, y) matrix with NaN where nothing is defined.
 # ---------------------------------------------------------------------------
-slice(name, r) = nc_read_record(ncf, name, r)[:, :, k_slice]
+slice(name, r) = ncf[name][:, :, k_slice, r]          # reads one chunk
 masked(A) = (B = Float64.(A); B[solid] .= NaN; B)
-sfc(name, r) = (B = Float64.(nc_read_record(ncf, name, r)); B[nosfc] .= NaN; B)
+sfc(name, r) = (B = Float64.(ncf[name][:, :, r]); B[nosfc] .= NaN; B)
 
 const PANELS = [
     (title = "Ts",              units = "K",     cmap = :viridis, sym = false,
@@ -88,7 +88,7 @@ const PANELS = [
     (title = "O3 sfc",  units = "ppb", cmap = :viridis, sym = false,
      get = r -> sfc("O3_sfc", r)),
     (title = "plume max", units = "1", cmap = :viridis, sym = false,
-     get = r -> Float64.(dropdims(maximum(nc_read_record(ncf, "pollutant", r); dims = 3); dims = 3))),
+     get = r -> Float64.(dropdims(maximum(ncf["pollutant"][:, :, :, r]; dims = 3); dims = 3))),
 ]
 
 # Fixed colour limits over the whole run.

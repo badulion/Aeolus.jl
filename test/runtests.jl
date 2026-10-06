@@ -21,7 +21,7 @@ using Aeolus.Fields: set!, interior_view
 
 @testset "Aeolus.jl" begin
 
-    include("netcdf_io.jl")
+    include("ncio.jl")           # NetCDF-4 output policy, legacy NetCDF-3 reading (#310)
     include("viz_png.jl")        # examples/viz PNG/APNG encoder: DEFLATE + filters round-trip
 
     @testset "RegularGrid" begin
@@ -664,7 +664,9 @@ using Aeolus.Fields: set!, interior_view
     end
 
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
+    include("ka_halos.jl")   # KA-f (#297): halo fills / nesting transfer operators on launch!
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
+    include("pressure_fft_threads.jl")  # KA-h (#298): spectral solvers as kernels, FFTW thread-invariant
 
     @testset "GLL nodes: endpoints exact, weights sum to 2, symmetry" begin
         for N in (2, 3, 4, 6, 8)
@@ -839,6 +841,8 @@ using Aeolus.Fields: set!, interior_view
     include("logging_run_folder.jl")  # #334: run folder, run.toml provenance, dirty-tree policy
     include("logging_diagnostics.jl") # #335: diagnostics registry, CSV writer, progress line
     include("logging_blowup.jl")      # #335: blowup diagnose-dump-stop, run monitor
+    include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
+    include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

@@ -164,7 +164,7 @@ AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
 
 It starts `julia -t 1/4/24` (`AEOLUS_THREAD_COUNTS`) and runs the
 sections in `AEOLUS_THREAD_SECTIONS` (default
-`primitives,dns,smoke,flagship`). Every hash must match the 1-thread
+`primitives,dns,reductions,smoke,flagship`). Every hash must match the 1-thread
 run. At KA-a it produced 2261 hashes, all identical, in about 2 min per
 process.
 

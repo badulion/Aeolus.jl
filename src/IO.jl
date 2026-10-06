@@ -12,13 +12,10 @@ module IO
 #     periodic checkpoints with automatic resume (`CheckpointSchedule`).
 #   * Configuration via `TOML` — human-editable namelists.
 #
-# A NetCDF-backed writer (interoperable with Python / VAPOR / Paraview)
-# is planned as an optional binding once the HDF5 stack stabilizes on
-# the development machine.
+# NetCDF output (NetCDF-4 through NCDatasets) is in src/NCIO.jl (#310).
 
 using Serialization
 using TOML
-using Logging: @logmsg, Info, Debug
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 using ..Grids: interior, RegularGrid
 using ..Fields: Field, interior_view, location
@@ -29,8 +26,8 @@ export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
 export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint_state!,
        fieldwise_checkpoint_state, restore_fieldwise!, checkpoint_fields,
        StepperState, record_step!, previous_dt,
-       CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
-       latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
+       CheckpointSchedule, resume!, maybe_checkpoint!, checkpoint_due,
+       latest_checkpoint, checkpoint_path, wisdom_path,
        driver_checkpoints, finish_checkpoints!
 # #335: blowup guard and run monitor (io/blowup.jl, io/run_monitor.jl)
 export checkpoint_payload, write_checkpoint,

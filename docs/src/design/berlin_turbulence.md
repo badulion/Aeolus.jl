@@ -123,7 +123,9 @@ that wrapper's ``κ_h ≠ κ_v`` anisotropy (one ``Δ``, as in PALM): at
 ``dx/dz = 2.5`` it mixes 3.39× more vertically and 1.84× less
 horizontally than `StabilityCorrected` Smagorinsky of equal ``C_s``, and
 no `:isentropic` tensor is offered
-([details](../theory/sgs_tke.md#The-model)). Moist ``N^2``: #239.
+([details](../theory/sgs_tke.md#The-model)). Its ``N^2`` (and the
+`StabilityCorrected` providers' and `turbulence_diag`'s) is that of cloudy
+air: the `ql` tracer's loading, and the saturated ``N^2`` in fog (#239).
 
 * The closure is the `sgs` of every dynamics step, so the cores evaluate
   ``ν_t = c_k l\sqrt e``, ``κ_t = (1 + 2l/Δ)ν_t`` from the committed ``e``

@@ -50,7 +50,7 @@ allfinite(x) = all(isfinite, x)
     for (irun, (label, cfg)) in enumerate(runs)
         @testset "$label" begin
             t0 = time()
-            case = BC.build_case(cfg; io = devnull)
+            case = BC.build_case(cfg)
             seed_fog!(case, Xoshiro(127))
             BC.run_case!(case)
             union!(exercised, BC.coupling_name.(case.couplings))

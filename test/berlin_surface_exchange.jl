@@ -21,7 +21,7 @@ const BC = Main.BerlinCase
 @testset "Berlin case: surface exchange and soil ground (#129)" begin
     # the periodic box these surface checks (uniform wind, the wall model's
     # wrap across the seam) were written for: the nest (#265) is off
-    case = BC.build_case(BC.CaseConfig(:smoke; verbose = false,
+    case = BC.build_case(BC.CaseConfig(:smoke;
                                        physics = Dict{Symbol,Any}(:nesting => false)))
     mesh, sim, bus, g = case.mesh, case.sim, case.bus, case.geom
     Nx, Ny, Nz, dz = mesh.Nx, mesh.Ny, mesh.Nz, mesh.dz

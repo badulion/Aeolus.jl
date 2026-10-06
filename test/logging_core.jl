@@ -41,7 +41,7 @@ function lg_rhs(g)
 end
 
 "Every way the core can fail to converge or retry, once each."
-function lg_failures(; verbose = true)
+function lg_failures()
     g = RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (1, 1, 1))
     src = lg_rhs(g); out = Field(CellCenter(), g)
     mg = MultigridPoissonSolver(g; bc_x = :periodic, bc_y = :periodic, bc_z = :periodic,
@@ -56,7 +56,7 @@ function lg_failures(; verbose = true)
     calls = Ref(0)
     flaky = (s, h; kw...) -> (calls[] += 1; calls[] == 1 && error("injected failure");
                               step!(s, h; kw...))
-    step_adaptive!(sim, CFLConstraints(; dt_max = 2.0); stepper = flaky, verbose)
+    step_adaptive!(sim, CFLConstraints(; dt_max = 2.0); stepper = flaky)
     return (; mg, cg, sim)
 end
 
@@ -81,13 +81,15 @@ kw(r) = Dict{Symbol,Any}(r.kwargs)
     @testset "silent with no logger: nothing reaches stdout/stderr under a NullLogger" begin
         out = lg_capture_output() do
             with_logger(NullLogger()) do
-                lg_failures(; verbose = true)
+                lg_failures()
                 dir = mktempdir()
                 sim = lg_sim()
-                ck = CheckpointSchedule(dir; every_steps = 1, wisdom = false, verbose = true)
+                ck = CheckpointSchedule(dir; every_steps = 1, wisdom = false)
                 resume!(ck, sim)
                 step!(sim, 1.0)
                 maybe_checkpoint!(ck, sim; step = 1)
+                # the resume path too (the former verbose message of #347)
+                resume!(CheckpointSchedule(dir; every_steps = 1, wisdom = false), lg_sim())
             end
         end
         @test out == ""
@@ -98,7 +100,7 @@ kw(r) = Dict{Symbol,Any}(r.kwargs)
         with_logger(tl) do
             sim = lg_sim()
             dir = mktempdir()
-            ck = CheckpointSchedule(dir; every_steps = 2, wisdom = false, verbose = false)
+            ck = CheckpointSchedule(dir; every_steps = 2, wisdom = false)
             resume!(ck, sim)
             dt = nothing
             for n in 1:4
@@ -121,7 +123,7 @@ kw(r) = Dict{Symbol,Any}(r.kwargs)
         tl = Test.TestLogger(; min_level = Logging.Debug)
         res = with_logger(tl) do
             with_domain(:child) do
-                lg_failures(; verbose = false)
+                lg_failures()
             end
         end
         @test all(r -> haskey(kw(r), :subsystem) && kw(r)[:domain] === :child, tl.logs)
@@ -146,7 +148,7 @@ kw(r) = Dict{Symbol,Any}(r.kwargs)
         @test kw(dr)[:relative_residual] > kw(dr)[:tol] == 1e-14
 
         # the adaptive driver: one throw, one retry at half the step, both
-        # at Debug when not verbose (run.log only)
+        # at Debug (run.log only; #347 removed the verbose keyword)
         ts = [r for r in tl.logs if get(kw(r), :subsystem, nothing) === :timestepping]
         @test length(ts) == 2
         thr, rty = ts
@@ -156,17 +158,59 @@ kw(r) = Dict{Symbol,Any}(r.kwargs)
         @test kw(rty)[:reason] === :exception
         @test kw(rty)[:to] == kw(rty)[:from] / 2 && kw(rty)[:from] == kw(thr)[:dt]
         @test kw(rty)[:retry] == 1 && kw(rty)[:max_retries] == 3
+    end
 
-        # verbose = true raises the same two events to Warn and Info
-        tl2 = Test.TestLogger(; min_level = Logging.Debug)
-        with_logger(tl2) do
-            sim = lg_sim(); calls = Ref(0)
-            step_adaptive!(sim, CFLConstraints(; dt_max = 2.0); verbose = true,
+    @testset "no verbose keywords: the logger level decides what is shown (#347)" begin
+        # the keywords are gone, without a deprecation (maintainer, 2026-10-06)
+        sim = lg_sim()
+        @test_throws MethodError step_adaptive!(sim, CFLConstraints(; dt_max = 2.0); verbose = true)
+        @test_throws MethodError CheckpointSchedule(mktempdir(); verbose = false)
+        @test !hasfield(CheckpointSchedule, :verbose)
+
+        # each former verbose message, at its level: the adaptive retry chatter
+        # and the checkpoint fresh start / resume are Debug ...
+        dir = mktempdir()
+        tl = Test.TestLogger(; min_level = Logging.Debug)
+        with_logger(tl) do
+            s = lg_sim(); calls = Ref(0)
+            step_adaptive!(s, CFLConstraints(; dt_max = 2.0);
                            stepper = (s, h; kw...) -> (calls[] += 1; calls[] == 1 && error("x");
                                                        step!(s, h; kw...)))
+            ck = CheckpointSchedule(dir; every_steps = 1, wisdom = false)
+            resume!(ck, s)                                   # fresh start
+            maybe_checkpoint!(ck, s; step = 1)
+            ck2 = CheckpointSchedule(dir; every_steps = 1, wisdom = false)
+            resume!(ck2, lg_sim())                           # resumed from step 1
         end
-        @test [r.level for r in tl2.logs] == [Logging.Warn, Logging.Info]
-        @test all(r -> kw(r)[:domain] === :main, tl2.logs)    # outside with_domain
+        ts = [r for r in tl.logs if get(kw(r), :subsystem, nothing) === :timestepping]
+        @test [r.message for r in ts] == ["step_adaptive!: stepper threw", "step_adaptive!: retry"]
+        @test all(r -> r.level == Logging.Debug, ts)
+        ckr = [r for r in tl.logs if get(kw(r), :subsystem, nothing) === :checkpoint]
+        @test [kw(r)[:event] for r in ckr] == [:fresh_start, :write, :resume]
+        @test all(r -> r.level == Logging.Debug, ckr)
+        res = ckr[3]
+        @test kw(res)[:step] == 1 && basename(kw(res)[:path]) == "checkpoint_000000001.jls"
+        @test occursin("FFTW planner", res.message)
+
+        # ... so a console at Info (the default) shows none of them, and the
+        # same run under a Debug console shows them all, in order
+        run_all() = begin
+            s = lg_sim(); calls = Ref(0)
+            step_adaptive!(s, CFLConstraints(; dt_max = 2.0);
+                           stepper = (s, h; kw...) -> (calls[] += 1; calls[] == 1 && error("x");
+                                                       step!(s, h; kw...)))
+            resume!(CheckpointSchedule(mktempdir(); wisdom = false), s)
+        end
+        info = IOBuffer(); dbg = IOBuffer()
+        with_logger(run_all, AeolusLogger(info; min_level = Logging.Info))
+        with_logger(run_all, AeolusLogger(dbg; min_level = Logging.Debug))
+        @test String(take!(info)) == ""
+        # (the exception's continuation lines start with "    │")
+        lines = filter(l -> occursin(" DEBUG ", l), split(String(take!(dbg)), '\n'))
+        @test length(lines) == 3
+        @test occursin("DEBUG timestepping[main] step_adaptive!: stepper threw", lines[1])
+        @test occursin("DEBUG timestepping[main] step_adaptive!: retry", lines[2])
+        @test occursin("DEBUG checkpoint[main] checkpoints: fresh start", lines[3])
     end
 
     @testset "with_domain nests and restores; tasks start at :main" begin
