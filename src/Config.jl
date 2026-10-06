@@ -39,11 +39,11 @@ using ..IO: IO, CheckpointSchedule, RunFolder, fnv1a64
 export RunConfig, ConfigSection, ConfigError, ConfigProblem, load_run_config, with,
        to_toml, write_config, config_text, config_hash, config_inputs, content_hash,
        config_origin, config_sources, config_schema, nonreplayable_keys,
-       ConfigSchema, Section, Option, Path, Optional, OpenTable, section, option!, check!,
+       ConfigSchema, Section, Option, Path, Optional, Either, OpenTable, section, option!, check!,
        register_driver!, driver_schema, registered_drivers, shipped_configs,
        damerau_levenshtein, CONFIG_SCHEMA_VERSION,
        checkpoint_schedule, apply_fftw_config!,
-       AbstractRunDriver, driver_name, driver_sections, driver_checks, config_dir, build,
+       AbstractRunDriver, driver_name, driver_sections, driver_checks, driver_defaults, config_dir, build,
        state_fields, run_driver, run_config, RunResult, DRIVER_FILES,
        register_preprocessor!, option_reference
 

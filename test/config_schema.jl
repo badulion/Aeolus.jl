@@ -323,3 +323,31 @@ end
         @test_throws ConfigError load_run_config(cfg_file("[run]\nname = \"e\"\n"))
     end
 end
+
+@testset "Config: Either{A,B} and a driver's defaults of common options (CFG-c, #358)" begin
+    # Either: a name from `allowed` or a number in `range`, tried in order
+    register_driver!("eithertest"; sections = [section("top") do s
+        option!(s, "theta", Either{Symbol,Float64}; default = :initial_gradient,
+                allowed = [:initial_gradient, :noflux], range = (-1, 1))
+    end], defaults = ("output.cadence" => 1800.0, "run.name" => "alexanderplatz"))
+    ld(t) = load_run_config(cfg_file("[run]\ndriver = \"eithertest\"\n" * t))
+    @test ld("").top.theta === :initial_gradient
+    @test ld("[top]\ntheta = \"noflux\"\n").top.theta === :noflux
+    @test ld("[top]\ntheta = 0.003\n").top.theta === 0.003
+    @test ld("[top]\ntheta = 0\n").top.theta === 0.0               # an integer is a float
+    e = cfg_error(() -> ld("[top]\ntheta = \"lid\"\n"))
+    @test occursin("a string or a float", e.problems[1].message) && occursin("noflux", e.problems[1].message)
+    e = cfg_error(() -> ld("[top]\ntheta = 2.0\n"))                 # outside the range
+    @test only(e.problems).key == "top.theta"
+    c = ld("[top]\ntheta = -0.5\n")                                 # canonical text round-trips
+    @test load_run_config(IOBuffer(write_config(c))).top.theta === -0.5
+    # the driver's own defaults replace the common ones; type and range stay
+    cfg = ld("")
+    @test cfg.output.cadence == 1800.0 && cfg.run.name == "alexanderplatz"
+    @test load_run_config(cfg_file("[run]\nname = \"e\"\n")).output.cadence == 3600.0   # common: unchanged
+    @test_throws ArgumentError ConfigSchema("x"; defaults = ("output.cadence" => -1.0))
+    @test_throws ArgumentError ConfigSchema("x"; defaults = ("output.nope" => 1.0))
+    @test_throws ArgumentError ConfigSchema("x"; sections = [section("a") do s
+        option!(s, "e", Either{Symbol,Vector{Int}}; default = :x)   # scalars only
+    end])
+end
