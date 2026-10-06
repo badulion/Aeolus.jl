@@ -38,7 +38,9 @@ At the `:radiation` cadence (and step 1), before the radiosity solve:
    radiosity solve (class-mean albedo before the first one);
 3. correlated-k gas optics (`correlated_k_optics`) plus Mie cloud optics
    (`mie_cloud_optics`, `r_eff_liq`) → `solve_lw!` and, with the sun up,
-   `solve_sw!`, scaled by the Earth–Sun distance factor;
+   `solve_sw!`, scaled by the Earth–Sun distance factor; all through the
+   multi-column forms (KA-n, #305: optics `τ[k, g, column]`, one work item
+   per layer for the optics and per g-point for the solves) on one column;
 4. `bus.L_sky` = downwelling longwave at the surface; `bus.dni`,
    `bus.dhi` = direct-normal and diffuse shortwave at the surface of the
    same column with the LES condensate removed; `heat` = the LES-layer
@@ -74,6 +76,8 @@ mutable struct ColumnRadiation{GS, GL, CS, CL, SS, SL} <: AbstractCoupling
     ghi_bird::Float64             # Bird GHI with the radiosity coupling's sky, for the log
     dt_applied::Float64           # dt of the last :column_tendency
     ncalls::Int
+    ws_sw::TwoStreamWorkspace{Float64}   # scratch of the multi-column solves (KA-n, #305)
+    ws_lw::TwoStreamWorkspace{Float64}
 end
 
 coupling_name(::Type{<:ColumnRadiation}) = :column_radiation
@@ -117,7 +121,8 @@ function column_radiation_solver(Nz::Integer, p_surf::Real; nz_upper::Integer = 
                            Int(nz_upper), Float64(r_eff_liq), Float64(p_surf), surface_sw,
                            nothing, nothing, nothing, nothing,
                            zeros(Nz), zeros(Nz), zeros(Nz), zeros(Nz),
-                           0.0, nothing, NaN, 0.0, 0)
+                           0.0, nothing, NaN, 0.0, 0,
+                           TwoStreamWorkspace{Float64}(), TwoStreamWorkspace{Float64}())
 end
 
 """
@@ -204,26 +209,39 @@ function column_surface(case)
     return ε, α
 end
 
-function _optics(gas, cloud, col)
+# The optics of the columns `cols` in the multi-column layout τ[k, g, c]
+# (KA-n, #305): correlated-k gas optics, plus the Mie cloud optics when a
+# column has condensate. The case passes one column (the domain or plane
+# mean); a column's bits are those of the single-column optics.
+function _optics(gas, cloud, cols)
+    length(cols) == 1 || error("column_radiation: _optics combines the cloud optics of one column")
     spec = gas.spec
-    n = length(col.dz)
-    o = allocate_optics(Float64, (n,), spec)
-    compute_optics!(o, gas, col)
+    n = length(cols[1].dz)
+    o = allocate_column_optics(Float64, n, length(cols), spec)
+    compute_optics!(o, gas, cols)
+    col = cols[1]
     if any(>(0), col.ql) || any(>(0), col.qi)
-        oc = allocate_optics(Float64, (n,), spec)
-        compute_optics!(oc, cloud, col)
+        oc = allocate_column_optics(Float64, n, length(cols), spec)
+        compute_optics!(oc, cloud, cols)
         combine_optics!(o, oc)
     end
     return o
 end
 
+# The single-column fluxes of column 1 of multi-column fluxes (no copy).
+_column_fluxes(f) = RadiativeFluxes{Float64,1}(vec(f.flux_up), vec(f.flux_dn),
+                                               vec(f.flux_dn_dir), vec(f.flux_net))
+
 function _solve_sw(c, col, μ, α, fdist)
-    f = allocate_fluxes(Float64, (), length(col.dz) + 1)
-    solve_sw!(f, c.solver_sw, _optics(c.gas_sw, c.cloud_sw, col); μ₀ = μ, sfc_albedo_direct = α)
-    for a in (f.flux_up, f.flux_dn, f.flux_dn_dir, f.flux_net)
+    cols = [col]
+    f = allocate_fluxes(Float64, (1,), length(col.dz) + 1)
+    solve_sw!(f, c.solver_sw, _optics(c.gas_sw, c.cloud_sw, cols); μ₀ = μ,
+              sfc_albedo_direct = α, workspace = c.ws_sw)
+    f1 = _column_fluxes(f)
+    for a in (f1.flux_up, f1.flux_dn, f1.flux_dn_dir, f1.flux_net)
         a .*= fdist
     end
-    return f
+    return f1
 end
 
 """
@@ -247,8 +265,11 @@ longwave is `c.flw.flux_dn[1]` and the direct / diffuse shortwave are
 function column_radiation!(c::ColumnRadiation, col, sp, ε::Real, α::Real; clear = () -> col)
     Nz = length(c.heat)
     μ = sp.elevation > 0 ? sp.μ₀ : 0.0
-    flw = allocate_fluxes(Float64, (), length(col.dz) + 1)
-    solve_lw!(flw, c.solver_lw, _optics(c.gas_lw, c.cloud_lw, col), col; sfc_emissivity = ε)
+    cols = [col]
+    flw2 = allocate_fluxes(Float64, (1,), length(col.dz) + 1)
+    solve_lw!(flw2, c.solver_lw, _optics(c.gas_lw, c.cloud_lw, cols), cols; sfc_emissivity = ε,
+              workspace = c.ws_lw)
+    flw = _column_fluxes(flw2)
     heating_rate!(c.heat_lw, _les_levels(flw, Nz), col.dz[1:Nz], col.ρ[1:Nz])
     fdist = earth_sun_distance_factor(sp)
     if μ > 0

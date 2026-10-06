@@ -169,4 +169,114 @@ end
             @test facet_temperatures(s) == [Ts[c...] for c in cols]
         end
     end
+
+    @testset "Gas and cloud optics: multi-column = single column, every backend" begin
+        sw, lw = shortwave_bands(), longwave_bands()
+        cols = [us_standard_column(; nz = 24, T_sfc = 288.15),
+                us_standard_column(; nz = 24, T_sfc = 300.0, humid = :midlatitude_summer),
+                us_standard_column(; nz = 24, T_sfc = 265.0, humid = :subarctic_winter),
+                us_standard_column(; nz = 24, T_sfc = 293.0)]
+        cols[2].ql[2:4] .= 3e-4                    # a low cloud
+        cols[4].qi[10:11] .= 5e-5                  # an ice layer
+        for (spec, go, cl) in ((sw, correlated_k_optics(sw), mie_cloud_optics(sw)),
+                               (lw, correlated_k_optics(lw), mie_cloud_optics(lw)))
+            ref = map(cols) do col
+                o = allocate_optics(Float64, (24,), spec)
+                compute_optics!(o, go, col; backend = CPUBackend(serial = true))
+                oc = allocate_optics(Float64, (24,), spec)
+                compute_optics!(oc, cl, col; backend = CPUBackend(serial = true))
+                (o, oc)
+            end
+            for (name, b) in KR_BACKENDS
+                o3 = allocate_column_optics(Float64, 24, length(cols), spec)
+                compute_optics!(o3, go, cols; backend = b)
+                oc3 = allocate_column_optics(Float64, 24, length(cols), spec)
+                compute_optics!(oc3, cl, cols; backend = b)
+                for c in eachindex(cols)
+                    @test kr_same(o3.τ[:, :, c], ref[c][1].τ)
+                    @test kr_same(o3.ssa[:, :, c], ref[c][1].ssa)
+                    @test kr_same(o3.g[:, :, c], ref[c][1].g)
+                    @test kr_same(oc3.τ[:, :, c], ref[c][2].τ)
+                    @test kr_same(oc3.ssa[:, :, c], ref[c][2].ssa)
+                    @test kr_same(oc3.g[:, :, c], ref[c][2].g)
+                end
+                # the single-column form on this backend: the same bits too
+                o1 = allocate_optics(Float64, (24,), spec)
+                compute_optics!(o1, go, cols[3]; backend = b)
+                @test kr_same(o1.τ, ref[3][1].τ)
+            end
+            # optics are physical: τ ≥ 0, the cloud only where there is condensate
+            @test all(>=(0), ref[1][1].τ)
+            @test all(==(0), ref[1][2].τ) && any(>(0), ref[2][2].τ)
+        end
+    end
+
+    @testset "Two-stream: multi-column solves = single-column solves, every backend" begin
+        sw, lw = shortwave_bands(), longwave_bands()
+        nz = 24
+        cols = [us_standard_column(; nz = nz, T_sfc = 288.15 + 4c) for c in 1:3]
+        cols[2].ql[3:5] .= 4e-4
+        osw = allocate_column_optics(Float64, nz, 3, sw)
+        olw = allocate_column_optics(Float64, nz, 3, lw)
+        compute_optics!(osw, correlated_k_optics(sw), cols)
+        compute_optics!(olw, correlated_k_optics(lw), cols)
+        ocs = allocate_column_optics(Float64, nz, 3, sw); compute_optics!(ocs, mie_cloud_optics(sw), cols)
+        ocl = allocate_column_optics(Float64, nz, 3, lw); compute_optics!(ocl, mie_cloud_optics(lw), cols)
+        combine_optics!(osw, ocs); combine_optics!(olw, ocl)
+        column(o, c) = OpticalProperties{Float64,2}(o.τ[:, :, c], o.ssa[:, :, c], o.g[:, :, c], o.spec)
+        μ = [0.8, 0.45, 0.1]
+        αdir = [0.10 + 0.002b + 0.05c for b in 1:nbands(sw), c in 1:3]   # (band, column)
+        αdif = [0.12, 0.2, 0.3]                                          # per column
+        ε = [0.90 + 0.003b + 0.01c for b in 1:nbands(lw), c in 1:3]
+        ssw = two_stream_solver(sw)
+        slw = two_stream_solver(lw)
+        refsw = map(1:3) do c
+            f = allocate_fluxes(Float64, (), nz + 1)
+            solve_sw!(f, ssw, column(osw, c); μ₀ = μ[c], sfc_albedo_direct = αdir[:, c],
+                      sfc_albedo_diffuse = αdif[c], backend = CPUBackend(serial = true))
+        end
+        reflw = map(1:3) do c
+            f = allocate_fluxes(Float64, (), nz + 1)
+            solve_lw!(f, slw, column(olw, c), cols[c]; sfc_emissivity = ε[:, c],
+                      backend = CPUBackend(serial = true))
+        end
+        ws = TwoStreamWorkspace{Float64}()
+        for (name, b) in KR_BACKENDS, rep in 1:2           # rep 2 reuses the workspace
+            fsw = allocate_fluxes(Float64, (3,), nz + 1)
+            solve_sw!(fsw, ssw, osw; μ₀ = μ, sfc_albedo_direct = αdir, sfc_albedo_diffuse = αdif,
+                      workspace = ws, backend = b)
+            flw = allocate_fluxes(Float64, (3,), nz + 1)
+            solve_lw!(flw, slw, olw, cols; sfc_emissivity = ε, workspace = ws, backend = b)
+            for c in 1:3
+                for f in (:flux_up, :flux_dn, :flux_dn_dir, :flux_net)
+                    @test kr_same(getfield(fsw, f)[c, :], getfield(refsw[c], f))
+                    @test kr_same(getfield(flw, f)[c, :], getfield(reflw[c], f))
+                end
+            end
+        end
+        # physics of the solves: the top boundary is the incident beam F₀μ₀;
+        # the column absorbs (net down at TOA ≥ net at the surface ≥ 0); the
+        # cloudy column sends more longwave down to the surface
+        for c in 1:3
+            @test refsw[c].flux_dn[end] ≈ sum(sw.solar_src) * μ[c] rtol = 1e-12
+            @test refsw[c].flux_net[end] >= refsw[c].flux_net[1] >= 0
+        end
+        @test reflw[2].flux_dn[1] > reflw[1].flux_dn[1]
+        # more columns than one launch chunk: every column still matches
+        nc = Aeolus.TwoStream.TWOSTREAM_CHUNK + 5
+        big = allocate_column_optics(Float64, nz, nc, lw)
+        for c in 1:nc
+            big.τ[:, :, c] .= olw.τ[:, :, 1 + c % 3] .* (1 + 0.01c)
+        end
+        bigcols = [cols[1 + c % 3] for c in 1:nc]
+        fbig = allocate_fluxes(Float64, (nc,), nz + 1)
+        solve_lw!(fbig, slw, big, bigcols; sfc_emissivity = 0.97, workspace = ws,
+                  backend = CPUBackend(threshold = 0))
+        for c in (1, 64, 65, nc)
+            f = allocate_fluxes(Float64, (), nz + 1)
+            solve_lw!(f, slw, column(big, c), bigcols[c]; sfc_emissivity = 0.97)
+            @test kr_same(fbig.flux_up[c, :], f.flux_up)
+            @test kr_same(fbig.flux_dn[c, :], f.flux_dn)
+        end
+    end
 end
