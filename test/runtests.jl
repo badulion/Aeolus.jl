@@ -13,6 +13,10 @@ ENV["AEOLUS_FFTW_PLANNER"] = "estimate"
 using Statistics: mean
 using Aeolus
 using Aeolus.Grids: xnodes, ynodes, znodes, interior
+# #333: the suite shows warnings and errors only (AEOLUS_LOG=debug or info
+# opts in); tests that assert on events capture them with their own logger.
+using Logging: global_logger
+global_logger(test_logger())
 using Aeolus.Fields: set!, interior_view
 
 @testset "Aeolus.jl" begin
