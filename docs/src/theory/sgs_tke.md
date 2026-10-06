@@ -30,7 +30,10 @@ is given, and ``c_ε`` multiplied by 3.9 at the first level above a surface
 (Moeng 1984; [`IBM.first_level_cells`](@ref Aeolus.IBM.first_level_cells)).
 ``N^2`` is the one of the stability contract,
 `Operators.buoyancy_frequency_squared!` (P58-a, #170), with the virtual
-potential temperature when the case is moist.
+potential temperature when the case is moist. That ``N^2`` is the dry
+one of ``θ_v``: it ignores condensate loading and the moist-adiabatic
+stability of saturated air, a gap of the stability contract filed as
+#239 and not of this closure.
 
 Two limits fix the constants' meaning:
 
@@ -44,14 +47,29 @@ Two limits fix the constants' meaning:
   is linear in ``x``, so the equilibrium is explicit, and it has a root
   ``x > 0`` only for ``Ri = N^2/S^2 < Ri_c = 1/(1 + 0.19/(c_k\,0.76^2)) = 0.233``
   ([`tke_critical_richardson`](@ref Aeolus.PrognosticSGS.tke_critical_richardson)).
-  Above it the TKE decays to zero: the closure switches itself off
-  without a stability function.
+  Above it the equilibrium TKE is zero: in equilibrium the closure
+  switches itself off without a stability function. In a transient
+  ``ν_t`` stays positive while ``e`` decays.
 
 **No stability function on top.** The ``0.76\sqrt e/N`` length is the
 closure's own stability response, so no `TurbulenceStability` factor
 ``f_m(Ri)`` is applied to it, and the `StabilityCorrected` wrapper of
 P55-e (#187), which multiplies a Smagorinsky-type ``ν_t`` by such a
 factor, must not wrap a `TKEClosure`.
+
+**No horizontal–vertical anisotropy.** The closure has one filter width
+``Δ = (ΔxΔyΔz)^{1/3}`` and one ``ν_t``, ``κ_t`` in every direction, as in
+Deardorff (1980) and PALM; the ``κ_h ≠ κ_v`` length scales
+``Δ_h = \sqrt{ΔxΔy}``, ``Δ_v = Δz`` of `StabilityCorrected` are by design
+not part of it. On the Berlin grid (``Δx/Δz = 2.5``, ``ℓ_h = 1.842``,
+``ℓ_v = 0.2947``) the neutral equilibrium of `TKEClosure` therefore mixes
+``1/ℓ_v = 3.39×`` more vertically and ``ℓ_h = 1.84×`` less horizontally
+than a `StabilityCorrected` Smagorinsky closure of the same ``C_s = 0.194``
+(``(0.1944/C_s)^2`` more again for a smaller ``C_s``: 4.44× and 1.41× less
+for 0.17, 12.8× and 2.05× *more* for the Berlin `cfg.C_s = 0.1`;
+`tke_equilibrium`, ``S = 0.1`` s⁻¹, ``N = 0``). The rotated scalar tensor
+of `IsentropicDiffusion` is not offered for a `TKEClosure` either; both
+are possible follow-ups.
 
 ## Discretization
 
