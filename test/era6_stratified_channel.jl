@@ -7,7 +7,7 @@ using Test
 using Aeolus
 using Statistics: mean
 
-include(joinpath(@__DIR__, "..", "examples", "sbl", "driver.jl"))   # stratified_channel_run, sbl_read_csv
+include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))   # stratified_channel_run, sbl_read_csv
 const GV11 = sbl_read_csv(joinpath(@__DIR__, "..", "examples", "sbl", "data",
                                    "stratified_channel_gv11_re180.csv"))
 
@@ -81,9 +81,15 @@ end
 # statistics of that window are meaningful; Ri_τ = 60 is run at 32×32×48
 # for longer in examples/sbl/stratified_channel.jl.
 @testset "Reduced stratified channel vs the DNS (Re_τ = 180)" begin
-    N = (24, 16, 32)
-    sp = stratified_channel_spinup(; N = N, T_spin = 6.0)
-    ci(Ri, stab) = stratified_channel_run(Ri, stab; N = N, T_end = 16.0, T_avg = 10.0, spinup = sp)
+    # the runs of examples/sbl/configs/stratified_channel_re180.toml (the `sbl`
+    # run driver, CFG-d #359) at this grid and these times, from one spin-up
+    cfg0 = sbl_config("stratified_channel_re180"; overrides = ["grid.size=[24,16,32]", "case.spinup_time=6.0",
+                                                                "stepper.end_time=16.0", "averaging.from=10.0"])
+    sp = sbl_channel_spinup(cfg0)
+    function ci(Ri, stab)
+        cfg = with(cfg0, "case.richardson" => Ri, "sgs.stability" => stab)
+        return sbl_channel_run(cfg, sbl_channel_case(cfg), sp)
+    end
     n0 = ci(0.0, :none)          # θ passive (g = 0): the neutral heat transfer
     n18 = ci(18.0, :none)
     b18 = ci(18.0, :brown94)

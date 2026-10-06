@@ -1,12 +1,14 @@
 # P55-f (#191): GABLS1 (Beare et al. 2006, BLM 118, 247) on the shared SBL
 # driver, examples/sbl/driver.jl — reduced to 32³ at 12.5 m and the first
-# 1.25 h (the full 9 h, 64³ comparison is examples/sbl/gabls1.jl).
+# 1.25 h (the full 9 h, 64³ comparison is examples/sbl/gabls1.jl). The case
+# is built from examples/sbl/configs/gabls1.toml (the `sbl` run driver,
+# CFG-d #359).
 
 using Test
 using Aeolus
 using Statistics: mean
 
-include(joinpath(@__DIR__, "..", "examples", "sbl", "driver.jl"))
+include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))
 
 # Reduced CI run: 32³ (Δ = 12.5 m), 0-1.25 h, statistics over 1.0-1.25 h
 # (after the spin-up of the initial neutral layer: u* peaks at 0.43 m/s
@@ -14,8 +16,11 @@ include(joinpath(@__DIR__, "..", "examples", "sbl", "driver.jl"))
 const T_CI = 4500.0
 const T_AVG_CI = 3600.0
 
+gabls1_case(N, stab = :brown94) =
+    sbl_build("gabls1"; overrides = ["grid.size=[$N,$N,$N]", "sgs.stability=\"$stab\""]).case
+
 function gabls1_ci(stab)
-    c = sbl_case(; N = (32, 32, 32), sgs_stability = stab)
+    c = gabls1_case(32, stab)
     H0 = sbl_column_heat(c)
     hs = Float64[]; us = Float64[]; ws = Float64[]; sgs = Float64[]; rκ = Float64[]
     wmax = Ref(-Inf); maxres = Ref(0.0)
@@ -72,12 +77,13 @@ end
     sol = solve_surface_layer(s; U = 7.3, z_m = 6.25, θ_a = 264.8, θ_s = 263.9, z0m = 0.1, z0h = 0.1)
     @test sol.L > 0
     @test friction_velocity(MOSTWallLaw(s, 0.1, sol.L), 7.3, 6.25) == sol.u_star
-    # the case: GABLS1 protocol defaults, forcing from LargeScaleForcing
-    c = sbl_case(; N = (8, 8, 8))
+    # the case (gabls1.toml): the GABLS1 protocol, forcing from LargeScaleForcing
+    c = gabls1_case(8)
     @test c.sim.f_coriolis == 1.39e-4 && c.forcing[1] isa GeostrophicPressureGradient
     @test surface_temperature(c.Ts, 3600.0) ≈ 265 - 0.25           # 0.25 K/h
     @test c.closure isa StabilityCorrected && c.closure.scheme isa BrownEtAl1994
-    @test sbl_case(; N = (8, 8, 8), sgs_stability = :none).closure isa StaticSmagorinsky
+    @test gabls1_case(8, :none).closure isa StaticSmagorinsky
+    @test c.sf === SBL_GABLS1_STABILITY && c.z0m == c.z0h == 0.1
     # BL height: 5 % of the surface stress, linearly interpolated, / 0.95
     @test sbl_bl_height([0.0, 10.0, 20.0, 30.0], [1.0, 0.5, 0.02, 0.0]) ≈
           (10 + (0.05 - 0.5) / (0.02 - 0.5) * 10) / 0.95

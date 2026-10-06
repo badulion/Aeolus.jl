@@ -845,6 +845,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
     include("config_simulation_driver.jl")  # CFG-b (#357): simulation driver, bitwise round trip, resume, TGV
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
+    include("config_sbl.jl")          # CFG-d (#359): sbl driver, bit-identity to the old builders, round trip
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

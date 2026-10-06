@@ -1,0 +1,65 @@
+# GABLS4 stage 3, experiment 3 — the very stable boundary layer over the
+# Antarctic Plateau (Dome C, 11 Dec 2009; Couvreux et al. 2020, BLM 176,
+# 369-400).
+#
+# From 10 UTC, the experiment-2 ensemble-mean profiles (Table 5), dry,
+# f = 2Ω sin(-75.1°) (southern hemisphere), U_g = (1.25, 4.5) m/s, the
+# official case file's surface temperature converted to θ with
+# p_s = 651 hPa ((1000/p)^0.286, as the jax-alfa set-up), z0m = 1e-3 m,
+# z0h = 1e-4 m and the log-linear surface functions β_m = 4.8, β_h = 7.8
+# that experiment 3 prescribed; u, v, θ uniform ±0.1 below 50 m. Six of the
+# seven experiment-3 LES ran at 1 m isotropic (Table 2); 64 × 64 × 64 on a
+# 128 m cube is 2 m. Experiment 1 (from 00 UTC, z0m = 1e-2, z0h = 1e-3 m)
+# is table = "exp1", t_start = 0.
+
+[run]
+driver = "sbl"
+name = "gabls4_exp3"
+seed = 1
+
+[case]
+kind = "homogeneous"
+data = "../data/gabls4_case.csv"
+
+[grid]
+size = [64, 64, 64]
+extent = [128.0, 128.0, 128.0]
+
+[dynamics]
+theta0 = 275.0
+
+[forcing]
+latitude = -75.10
+u_g = 1.25
+v_g = 4.5
+
+[surface]
+z0m = 1e-3
+z0h = 1e-4
+temperature = {kind = "series", table = "surface", time_column = 1, column = 2, p_sfc = 65100.0, exponent = 0.286}
+stability = {family = "businger_dyer_log_linear", beta_m = 4.8, beta_h = 7.8}
+rho_cp = 957.6626330727378     # 65100/(287.05 × 238) × 1005
+
+[initial]
+theta = {kind = "table", table = "exp3", column = 2}
+u = {kind = "table", table = "exp3", column = 3}
+v = {kind = "table", table = "exp3", column = 4}
+perturbation = {kind = "uniform", amplitude = [0.1, 0.1, 0.1], depth = 50.0}
+t_start = 36000.0              # 10 UTC
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+stability = "brown94"
+
+[sponge]
+z = 96.0                       # 0.75 Lz
+alpha = 0.01
+
+[stepper]
+end_time = 63000.0             # 17:30 UTC
+
+[averaging]
+from = 59400.0                 # 16:30-17:30 UTC (Table 4)
+sample_every = 10
+series_interval = 300.0

@@ -105,7 +105,7 @@ for `name`. Physics stays in `examples/`; nothing is moved into `src/`
 for the CLI's sake. The migrations of the example drivers (#311) add
 their entries here.
 """
-const DRIVER_FILES = Dict{String,String}()
+const DRIVER_FILES = Dict{String,String}("sbl" => "examples/sbl/config_schema.jl")
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))
 
@@ -116,6 +116,9 @@ function _ensure_driver(name::AbstractString)
     isfile(path) || throw(ConfigError("run.driver", "the driver \"$name\" is listed in " *
                                       "DRIVER_FILES but $path does not exist"))
     m = Module(Symbol("AeolusDriver_", name))
+    # what `module … end` defines: the file may include its helpers
+    Core.eval(m, :(eval(x) = Core.eval($m, x)))
+    Core.eval(m, :(include(p) = Base.include($m, p)))
     Base.include(m, path)
     haskey(_DRIVERS, name) ||
         throw(ConfigError("run.driver", "$path did not register the driver \"$name\""))
