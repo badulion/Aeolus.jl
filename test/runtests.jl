@@ -1026,5 +1026,5 @@ end
     include("berlin_dynamics.jl")        # core / timestepper slots: anelastic, adaptive, IMEX (#133)
     include("berlin_parent_surface.jl")  # parent tiled surface: OSM 6 km mosaic, Macdonald roughness, footprint (#249)
     include("berlin_parent_smoke.jl")    # parent case: every forcing, 12 steps, heat and water ledgers close (#259)
-    include("berlin_parent.jl")          # parent case: encroachment, Wangara, Lindenberg, core sensitivity, 24 h (#259)
+    include("berlin_parent.jl")          # parent case: encroachment, Wangara, core sensitivity (24 h Lindenberg: examples/urban/berlin_parent_lindenberg_check.jl, #315) (#259)
 end
