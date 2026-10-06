@@ -1331,57 +1331,54 @@ end
 @inline _tg_B(d, i, j, k, idz, b, lo) = @inbounds((b && k == lo) ? zero(eltype(d)) : (d[i, j, k] - d[i, j, k-1]) * idz)
 @inline _tg_T(d, i, j, k, idz, b, hi) = @inbounds((b && k == hi) ? zero(eltype(d)) : (d[i, j, k+1] - d[i, j, k]) * idz)
 
-# The metric of the tensor kernels: 1/Δ per direction, the bounded flags,
-# the interior bounds (i1, i2, j1, j2, k1, k2) and the halo widths.
-struct _TensorGeom{T}
-    idx::T; idy::T; idz::T
-    bx::Bool; by::Bool; bz::Bool
-    i1::Int; i2::Int; j1::Int; j2::Int; k1::Int; k2::Int
-    Hx::Int; Hy::Int; Hz::Int
-end
-
-@inline function _b_tensor_fx!(i, j, k, Fx, d, K11, K12, K13, q::_TensorGeom, dodiag, dooff)
+# The bodies take the wall flags and the interior bounds as separate scalar
+# arguments: bundled into one struct they made the x-face flux 2.3x the old
+# loop (the compiler kept reloading the fields; measured at KA-d).
+@inline function _b_tensor_fx!(i, j, k, Fx, d, K11, K12, K13, idx, idy, idz, bx, by, bz,
+                               j1, j2, k1, k2, Hx, i2, dodiag, dooff)
     @inbounds begin
         T = eltype(d)
         f = zero(T)
-        dodiag && (f += 0.5 * (K11[i, j, k] + K11[i+1, j, k]) * (d[i+1, j, k] - d[i, j, k]) * q.idx)
-        if dooff && !(q.bx && (i == q.Hx || i == q.i2))
-            f += 0.25 * (K12[i,   j, k] * (_tg_S(d, i,   j, k, q.idy, q.by, q.j1) + _tg_N(d, i,   j, k, q.idy, q.by, q.j2)) +
-                         K12[i+1, j, k] * (_tg_S(d, i+1, j, k, q.idy, q.by, q.j1) + _tg_N(d, i+1, j, k, q.idy, q.by, q.j2)) +
-                         K13[i,   j, k] * (_tg_B(d, i,   j, k, q.idz, q.bz, q.k1) + _tg_T(d, i,   j, k, q.idz, q.bz, q.k2)) +
-                         K13[i+1, j, k] * (_tg_B(d, i+1, j, k, q.idz, q.bz, q.k1) + _tg_T(d, i+1, j, k, q.idz, q.bz, q.k2)))
+        dodiag && (f += 0.5 * (K11[i, j, k] + K11[i+1, j, k]) * (d[i+1, j, k] - d[i, j, k]) * idx)
+        if dooff && !(bx && (i == Hx || i == i2))
+            f += 0.25 * (K12[i,   j, k] * (_tg_S(d, i,   j, k, idy, by, j1) + _tg_N(d, i,   j, k, idy, by, j2)) +
+                         K12[i+1, j, k] * (_tg_S(d, i+1, j, k, idy, by, j1) + _tg_N(d, i+1, j, k, idy, by, j2)) +
+                         K13[i,   j, k] * (_tg_B(d, i,   j, k, idz, bz, k1) + _tg_T(d, i,   j, k, idz, bz, k2)) +
+                         K13[i+1, j, k] * (_tg_B(d, i+1, j, k, idz, bz, k1) + _tg_T(d, i+1, j, k, idz, bz, k2)))
         end
         Fx[i, j, k] = f
     end
     return nothing
 end
 
-@inline function _b_tensor_fy!(i, j, k, Fy, d, K22, K12, K23, q::_TensorGeom, dodiag, dooff)
+@inline function _b_tensor_fy!(i, j, k, Fy, d, K22, K12, K23, idx, idy, idz, bx, by, bz,
+                               i1, i2, k1, k2, Hy, j2, dodiag, dooff)
     @inbounds begin
         T = eltype(d)
         f = zero(T)
-        dodiag && (f += 0.5 * (K22[i, j, k] + K22[i, j+1, k]) * (d[i, j+1, k] - d[i, j, k]) * q.idy)
-        if dooff && !(q.by && (j == q.Hy || j == q.j2))
-            f += 0.25 * (K12[i, j,   k] * (_tg_W(d, i, j,   k, q.idx, q.bx, q.i1) + _tg_E(d, i, j,   k, q.idx, q.bx, q.i2)) +
-                         K12[i, j+1, k] * (_tg_W(d, i, j+1, k, q.idx, q.bx, q.i1) + _tg_E(d, i, j+1, k, q.idx, q.bx, q.i2)) +
-                         K23[i, j,   k] * (_tg_B(d, i, j,   k, q.idz, q.bz, q.k1) + _tg_T(d, i, j,   k, q.idz, q.bz, q.k2)) +
-                         K23[i, j+1, k] * (_tg_B(d, i, j+1, k, q.idz, q.bz, q.k1) + _tg_T(d, i, j+1, k, q.idz, q.bz, q.k2)))
+        dodiag && (f += 0.5 * (K22[i, j, k] + K22[i, j+1, k]) * (d[i, j+1, k] - d[i, j, k]) * idy)
+        if dooff && !(by && (j == Hy || j == j2))
+            f += 0.25 * (K12[i, j,   k] * (_tg_W(d, i, j,   k, idx, bx, i1) + _tg_E(d, i, j,   k, idx, bx, i2)) +
+                         K12[i, j+1, k] * (_tg_W(d, i, j+1, k, idx, bx, i1) + _tg_E(d, i, j+1, k, idx, bx, i2)) +
+                         K23[i, j,   k] * (_tg_B(d, i, j,   k, idz, bz, k1) + _tg_T(d, i, j,   k, idz, bz, k2)) +
+                         K23[i, j+1, k] * (_tg_B(d, i, j+1, k, idz, bz, k1) + _tg_T(d, i, j+1, k, idz, bz, k2)))
         end
         Fy[i, j, k] = f
     end
     return nothing
 end
 
-@inline function _b_tensor_fz!(i, j, k, Fz, d, K33, K13, K23, q::_TensorGeom, dodiag, dooff)
+@inline function _b_tensor_fz!(i, j, k, Fz, d, K33, K13, K23, idx, idy, idz, bx, by, bz,
+                               i1, i2, j1, j2, Hz, k2, dodiag, dooff)
     @inbounds begin
         T = eltype(d)
         f = zero(T)
-        dodiag && (f += 0.5 * (K33[i, j, k] + K33[i, j, k+1]) * (d[i, j, k+1] - d[i, j, k]) * q.idz)
-        if dooff && !(q.bz && (k == q.Hz || k == q.k2))
-            f += 0.25 * (K13[i, j, k  ] * (_tg_W(d, i, j, k,   q.idx, q.bx, q.i1) + _tg_E(d, i, j, k,   q.idx, q.bx, q.i2)) +
-                         K13[i, j, k+1] * (_tg_W(d, i, j, k+1, q.idx, q.bx, q.i1) + _tg_E(d, i, j, k+1, q.idx, q.bx, q.i2)) +
-                         K23[i, j, k  ] * (_tg_S(d, i, j, k,   q.idy, q.by, q.j1) + _tg_N(d, i, j, k,   q.idy, q.by, q.j2)) +
-                         K23[i, j, k+1] * (_tg_S(d, i, j, k+1, q.idy, q.by, q.j1) + _tg_N(d, i, j, k+1, q.idy, q.by, q.j2)))
+        dodiag && (f += 0.5 * (K33[i, j, k] + K33[i, j, k+1]) * (d[i, j, k+1] - d[i, j, k]) * idz)
+        if dooff && !(bz && (k == Hz || k == k2))
+            f += 0.25 * (K13[i, j, k  ] * (_tg_W(d, i, j, k,   idx, bx, i1) + _tg_E(d, i, j, k,   idx, bx, i2)) +
+                         K13[i, j, k+1] * (_tg_W(d, i, j, k+1, idx, bx, i1) + _tg_E(d, i, j, k+1, idx, bx, i2)) +
+                         K23[i, j, k  ] * (_tg_S(d, i, j, k,   idy, by, j1) + _tg_N(d, i, j, k,   idy, by, j2)) +
+                         K23[i, j, k+1] * (_tg_S(d, i, j, k+1, idy, by, j1) + _tg_N(d, i, j, k+1, idy, by, j2)))
         end
         Fz[i, j, k] = f
     end
@@ -1406,10 +1403,13 @@ function _add_tensor_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCen
     j1, j2 = Hy + 1, Hy + g.Ny
     k1, k2 = Hz + 1, Hz + g.Nz
     bx, by, bz = bounded
-    q = _TensorGeom(idx, idy, idz, bx, by, bz, i1, i2, j1, j2, k1, k2, Hx, Hy, Hz)
-    _fv!(_b_tensor_fx!, (Hx:i2, j1:j2, k1:k2), Fx, d, K11, K12, K13, q, dodiag, dooff)   # x faces i+½
-    _fv!(_b_tensor_fy!, (i1:i2, Hy:j2, k1:k2), Fy, d, K22, K12, K23, q, dodiag, dooff)   # y faces j+½
-    _fv!(_b_tensor_fz!, (i1:i2, j1:j2, Hz:k2), Fz, d, K33, K13, K23, q, dodiag, dooff)   # z faces k+½
+    # x faces i+½ (i ∈ Hx:i2), y faces j+½, z faces k+½
+    _fv!(_b_tensor_fx!, (Hx:i2, j1:j2, k1:k2), Fx, d, K11, K12, K13, idx, idy, idz, bx, by, bz,
+         j1, j2, k1, k2, Hx, i2, dodiag, dooff)
+    _fv!(_b_tensor_fy!, (i1:i2, Hy:j2, k1:k2), Fy, d, K22, K12, K23, idx, idy, idz, bx, by, bz,
+         i1, i2, k1, k2, Hy, j2, dodiag, dooff)
+    _fv!(_b_tensor_fz!, (i1:i2, j1:j2, Hz:k2), Fz, d, K33, K13, K23, idx, idy, idz, bx, by, bz,
+         i1, i2, j1, j2, Hz, k2, dodiag, dooff)
     _fv!(_b_flux_divergence!, (i1:i2, j1:j2, k1:k2), tϕ.data, Fx, Fy, Fz, idx, idy, idz)
     return tϕ
 end
