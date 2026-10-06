@@ -39,6 +39,21 @@ for n in 1:1200; step_rk3!(c.sim, 1.0; body_force! = c.forcing!); end
 cf = skin_friction(c.sim; U_e = 1.0); H = shape_factor(c.sim)
 ```
 
+Synthetic inflow turbulence (N-inflow-a, #252): the generator contract
+(`AbstractInflowGenerator`, `unit_fluctuations!`, `generator_state`,
+`restore_generator_state!`), the Lund transform (`lund_coefficients`,
+`apply_lund!`), the Xie & Castro digital filter (`DigitalFilterGenerator`,
+`digital_filter_kernel`) and free-stream turbulence as a second provider
+(`FreeStreamInflow`, `disturbance_velocity`, `disturbance_covariance`);
+theory in [Synthetic inflow turbulence](../../theory/transition.md#Synthetic-inflow-turbulence).
+
+```julia
+gen = DigitalFilterGenerator(64, 40, 15.625, 6.25; L_s = 62.5, L_z = 25.0, T = 30.0)
+a   = lund_coefficients([0.514 0 -0.09; 0 0.332 0; -0.09 0 0.141])   # R_ij, m² s⁻²
+u, v, w = zeros(64, 40), zeros(64, 40), zeros(64, 40)
+unit_fluctuations!(u, v, w, gen, Δt); apply_lund!(u, v, w, a)
+```
+
 ```@autodocs
 Modules = [Aeolus.Transition]
 ```

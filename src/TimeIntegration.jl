@@ -53,7 +53,8 @@ using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    sgs_explicit_stress
 using ..PressureSolvers: solve!
 using ..Simulations
-using ..Simulations: BoussinesqSimulation, max_divergence
+using ..Simulations: BoussinesqSimulation, max_divergence,
+                     _dzc, _dzf, _dz_min      # vertical metrics, stretched-aware (#151)
 using ..TimeSteppers: step!
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 
@@ -167,6 +168,25 @@ function _max_advective_rate(ud, vd, wd, m::RegularGrid{T}) where {T}
     return r
 end
 
+# The same rate with the local cell thickness: on a vertically stretched
+# grid (#151) the vertical CFL number of a cell is |w| / Δz_c[k], so the
+# thin near-surface cells bind, not the mean spacing.
+function _max_advective_rate(ud, vd, wd, m::AbstractMesh{T}) where {T}
+    ii, jj, kk = interior(m)
+    idx = 1 / m.dx; idy = 1 / m.dy
+    r = zero(T)
+    @inbounds for k in kk
+        idz = 1 / _dzc(m, k)
+        for j in jj, i in ii
+            au = max(abs(ud[i, j, k]), abs(ud[i+1, j, k]))
+            av = max(abs(vd[i, j, k]), abs(vd[i, j+1, k]))
+            aw = max(abs(wd[i, j, k]), abs(wd[i, j, k+1]))
+            r  = max(r, au * idx + av * idy + aw * idz)   # NaN-propagating
+        end
+    end
+    return r
+end
+
 # Brunt-Väisälä frequency from the horizontal-mean (resolved) θ profile:
 # the largest N² across the faces between the plane means, from the
 # TurbulenceStability contract (Boussinesq form, g/θ₀). Allocation-free:
@@ -186,7 +206,8 @@ function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
         end
         mean_k = s / n_h
         if kc > 1
-            N²max = max(N²max, buoyancy_frequency_squared(prev, mean_k, m.dz,
+            # the two plane means sit Δz_f[k] apart (= m.dz on a RegularGrid)
+            N²max = max(N²max, buoyancy_frequency_squared(prev, mean_k, _dzf(m, k),
                                                           sim.g_accel, sim.θ₀))
         end
         prev = mean_k
@@ -266,7 +287,7 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
     active  = sgs_active === nothing ? closure !== nothing : sgs_active
     if update_νt && closure !== nothing
         fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
-        sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
+        sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
         compute_sgs!(closure, sim)
     end
     f = closure === nothing ? SGSFields(sim.νt, sim.κt) : sgs_fields(closure, sim)
@@ -274,7 +295,8 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
     νv_max  = active ? _max_interior(f.νv) : zero(T)
     νt_max  = max(νh_max, νv_max)
     κt_max  = active ? max(_max_interior(f.κh), _max_interior(f.κv)) : zero(T)
-    Δ²harm  = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
+    # the thinnest cell binds the explicit diffusive limit (#151)
+    Δ²harm  = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / _dz_min(m)^2)
     # the SGS viscosity of the momentum limit: νt_max for the Laplacian form,
     # the stress form's own spectral bound (≤ 2 νt_max) for `:symmetric`
     νt_cfl  = _check_sgs_stress(sgs_stress) === :symmetric ?
@@ -343,7 +365,7 @@ for one an exact orthogonal projection has made divergence-free (see the
 theory page, "Explicit stability of the stress form").
 """
 function stress_form_cfl_viscosity(νh_max::Real, νv_max::Real, m)
-    ix2, iy2, iz2 = 1 / m.dx^2, 1 / m.dy^2, 1 / m.dz^2
+    ix2, iy2, iz2 = 1 / m.dx^2, 1 / m.dy^2, 1 / _dz_min(m)^2
     s = ix2 + iy2 + iz2
     return 2 * max(νh_max * (ix2 + iy2) + νv_max * iz2, νv_max * s) / s
 end
@@ -896,11 +918,14 @@ end
 
 function _assert_supported_bcs(bcs::FieldBoundaryConditions)
     for bc in (bcs.west, bcs.east, bcs.south, bcs.north, bcs.bottom, bcs.top)
+        # a FluxBC top (#254) is handled like a moving wall: its affine part
+        # goes to the right-hand side (see _cg_implicit!)
+        bc isa FluxBC && bc === bcs.top && continue
         if bc isa ValueBC || bc isa FluxBC
             throw(ArgumentError(
                 "solve_implicit_diffusion! supports the BC types handled by fill_halos! " *
                 "(Periodic, NoFlux, ImpermeableWall, NoSlipWall, OpenBoundary, " *
-                "FreeStreamBoundary). " *
+                "FreeStreamBoundary, and a FluxBC top). " *
                 "$(typeof(bc)) makes the operator affine; move the " *
                 "inhomogeneous part into `rhs` and pass a homogeneous BC."))
         end
@@ -1323,8 +1348,15 @@ and cached weakly so it is freed with `sim`. Pass it explicitly to
 `step_imex!` if you want to control the lifetime (or read the solver
 statistics it records).
 """
-imex_workspace(sim::BoussinesqSimulation) =
-    get!(() -> IMEXWorkspace(sim), _IMEX_WORKSPACES, sim)::IMEXWorkspace
+function imex_workspace(sim::BoussinesqSimulation)
+    # the implicit diffusion operator and its CG solve are uniform-grid
+    # stencils; a stretched mesh (#151) runs the explicit drivers
+    sim.mesh isa RegularGrid ||
+        throw(ArgumentError("step_imex! (implicit diffusion) is implemented on a RegularGrid " *
+                            "only, not on a $(nameof(typeof(sim.mesh))); use step!, " *
+                            "step_rk3! or step_adaptive!"))
+    return get!(() -> IMEXWorkspace(sim), _IMEX_WORKSPACES, sim)::IMEXWorkspace
+end
 
 function _k2_set!(ws::IMEXWorkspace{T,S}) where {T,S}
     ws.k2 === nothing && (ws.k2 = map(f -> Field(location(f), f.mesh), ws.state0))
@@ -1355,7 +1387,7 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
+    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
 
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
     fill!(sim.tθ.data, 0)
@@ -1427,7 +1459,7 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
-    sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
+    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
     f = compute_sgs!(closure, sim)
     ws.ν_mom  === nothing && (ws.ν_mom  = similar(sim.νt.data))
     ws.ν_scal === nothing && (ws.ν_scal = similar(sim.νt.data))
@@ -1591,7 +1623,8 @@ function _solve_field!(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbo
     scalar = _is_scalar_name(name)
     ν   = _coef_for(νm, νs, name)
     bcs = scalar ? sim.θ_bcs : sim.bcs
-    increment && (bcs = homogeneous_bcs(bcs))
+    # qv shares θ's walls but not θ's prescribed top gradient (#254)
+    (increment || name === :qv) && (bcs = homogeneous_bcs(bcs))
     dw  = scalar ? ws.diff.c : getfield(ws.diff, name)
     stats = solve_implicit_diffusion!(f, f, ν, dtγ, sim.mesh, bcs;
                                       tol = tol, maxit = maxit, workspace = dw,
@@ -1719,7 +1752,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     # ---- I(U₁) = ∇·(ν∇U₁) on the projected stage value -------------------
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
+    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
     for name in names
         _diffusion!(_diffusion_buffer(sim, ws, name), getfield(sim, name),
                     _coef_for(νm, νs, name), m)

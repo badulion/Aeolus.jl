@@ -75,11 +75,28 @@ struct ValueBC{T} <: AbstractBC
 end
 
 """
-    FluxBC(f)
+    FluxBC(Γ)
 
-Neumann boundary condition: prescribed flux `∂/∂n = f` across the
-boundary. Currently applied only in the z-direction on cell-centered
-scalars — used for prescribed surface heat flux `w'θ'|₀`.
+Neumann boundary condition: a prescribed outward normal gradient
+`∂φ/∂n = Γ` of a cell-centred scalar. Supported as the **top** (z) face
+of a scalar's boundary conditions (N-parent-b, #254), above a wall or a
+no-flux bottom: the fixed-gradient top of a free atmosphere (PALM; DALES,
+Heus et al. 2010, Eq. 39), with `Γ = ∂θ/∂z`, usually the initial lapse
+rate. `fill_halos!` sets the ghost cells to
+
+    φ(N + h) = φ(N + 1 − h) + Γ · (z_c(N + h) − z_c(N + 1 − h)),     h = 1 … Hz,
+
+so the first ghost is `φ_N + Γ·Δz_f` with `Δz_f` the centre spacing
+across the top face (`dz` on a `RegularGrid`, the face spacing on a
+`StretchedGrid`), a linear profile of slope `Γ` is continued exactly
+into every halo layer, and a diffusion operator with diffusivity `κ`
+carries the flux `κΓ` (per unit area, into the domain for `Γ > 0` and
+warmer air above) through the top face.
+
+`FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = FluxBC(Γ))`.
+Velocity fields (`FaceX/Y/Z`) cannot take it. The homogeneous part
+(the operator an implicit solver iterates with, see
+[`homogeneous_bcs`](@ref)) is `FluxBC(0)`, the mirror (no-flux) halo.
 """
 struct FluxBC{T} <: AbstractBC
     f::T
@@ -133,9 +150,12 @@ function FieldBoundaryConditions(hkind::Symbol=:periodic,
 end
 
 # The z pairs `fill_halos!` has methods for: two faces of the same kind,
-# or any two impermeable walls (free slip and/or no slip, mixed allowed).
+# or any two impermeable walls (free slip and/or no slip, mixed allowed),
+# or a fixed-gradient (FluxBC) top above a wall or a no-flux bottom (#254).
 _z_pair_supported(b, t) = nameof(typeof(b)) === nameof(typeof(t)) ||
                           (is_wall(b) && is_wall(t))
+_z_pair_supported(b, t::FluxBC) = is_wall(b) || b isa NoFlux
+_z_pair_supported(b::FluxBC, t::FluxBC) = false
 
 _bc(bc::AbstractBC) = bc
 _bc(s::Symbol) = s === :periodic ? Periodic()        :
@@ -162,7 +182,7 @@ function fill_halos!(f::Field, bcs::FieldBoundaryConditions; key = f.data)
     loc = location(f)
     _fill_x!(d, bcs.west,   bcs.east,   g.Hx, g.Nx, loc, key)
     _fill_y!(d, bcs.south,  bcs.north,  g.Hy, g.Ny, loc, key)
-    _fill_z!(d, bcs.bottom, bcs.top,    g.Hz, g.Nz, loc, key)
+    _fill_z!(d, bcs.bottom, bcs.top,    g.Hz, g.Nz, loc, g, key)
     return f
 end
 
@@ -173,6 +193,11 @@ end
 _fill_x!(d, a, b, H, N, loc::Location, key) = _fill_x!(d, a, b, H, N, loc)
 _fill_y!(d, a, b, H, N, loc::Location, key) = _fill_y!(d, a, b, H, N, loc)
 _fill_z!(d, a, b, H, N, loc::Location, key) = _fill_z!(d, a, b, H, N, loc)
+
+# The z fill with the mesh `g` and the key: only the fixed-gradient top
+# (FluxBC, #254) needs the level heights; every other pair is the
+# mesh-free method (with the key, for an open top).
+_fill_z!(d, bot, top, Hz, Nz, loc::Location, g, key) = _fill_z!(d, bot, top, Hz, Nz, loc, key)
 
 # --- X direction ---------------------------------------------------------
 
@@ -269,6 +294,7 @@ end
 include("boundary_conditions/noslip_wall.jl")   # P59-a (#172)
 include("boundary_conditions/open_boundary.jl") # N-open-b (#255)
 include("boundary_conditions/free_stream.jl")   # P59-d (#185)
+include("boundary_conditions/gradient_top.jl")  # N-parent-b (#254)
 
 # =========================================================================
 # Pressure-Poisson boundary kind of a velocity face (N-open-a, #251)

@@ -76,13 +76,16 @@ is_wall(::NoSlipWall) = true
     homogeneous_bcs(bcs::FieldBoundaryConditions) -> FieldBoundaryConditions
 
 `bcs` with every inhomogeneous face replaced by its homogeneous part:
-a moving [`NoSlipWall`](@ref) by a stationary one, an
+a moving [`NoSlipWall`](@ref) by a stationary one, a prescribed gradient
+[`FluxBC`](@ref)`(Γ)` by `FluxBC(0)` (the mirror halo), an
 [`OpenBoundary`](@ref) by one that writes zero boundary values (and the
 same zero-gradient / antisymmetric rules), a
 [`FreeStreamBoundary`](@ref) by one with zero transpiration. This is the
 homogeneous part of an affine boundary operator: implicit solvers apply
 the operator to search directions and increments with these, and move
-the boundary contribution to the right-hand side. Returns `bcs` itself
+the boundary contribution to the right-hand side. It is also the
+boundary condition of a scalar that shares θ's walls but not θ's
+prescribed top gradient (`qv`, the SGS TKE). Returns `bcs` itself
 (`===`) when every face is homogeneous, so the existing BC types take
 their usual code path.
 """
@@ -91,10 +94,13 @@ function homogeneous_bcs(bcs::FieldBoundaryConditions)
     any(_inhomogeneous, faces) || return bcs
     return FieldBoundaryConditions(map(_homogeneous, faces)...)
 end
+# a face whose halo fill is affine, not linear, in the field
 _inhomogeneous(::AbstractBC) = false
 _inhomogeneous(bc::NoSlipWall) = !(iszero(bc.u_wall) && iszero(bc.v_wall))
+_inhomogeneous(bc::FluxBC) = !iszero(bc.f)   # a non-zero prescribed gradient (#254)
 _homogeneous(bc::AbstractBC) = bc
 _homogeneous(bc::NoSlipWall{T}) where {T} = NoSlipWall{T}(zero(T), zero(T))
+_homogeneous(bc::FluxBC) = FluxBC(zero(bc.f))
 
 # --- halo fill: any pair of z-walls where at least one is NoSlipWall -----
 # (`ImpermeableWall, ImpermeableWall` keeps its own, more specific methods.)

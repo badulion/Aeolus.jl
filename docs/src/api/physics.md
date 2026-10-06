@@ -5,9 +5,8 @@ and parallel-decomposition machinery.
 
 ## I/O and checkpointing
 
-```@autodocs
-Modules = [Aeolus.IO]
-```
+Full-state checkpoints, bitwise restart and periodic checkpoints have
+their own page: [I/O, checkpoints and restart](io.md).
 
 ## NetCDF reader / writer
 
@@ -31,12 +30,6 @@ Modules = [Aeolus.IBM]
 
 ```@autodocs
 Modules = [Aeolus.Parallel]
-```
-
-## Grid nesting
-
-```@autodocs
-Modules = [Aeolus.Nesting]
 ```
 
 ## Compute backends

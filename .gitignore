@@ -24,3 +24,9 @@ output/
 
 # Agent worktrees (one per issue)
 .worktrees/
+
+# Raw OSM extracts (examples/urban/data/fetch_berlin_landuse.jl; not committed)
+examples/urban/data/raw/
+
+# Parallel test runner: per-run logs and measured timings (test/run.jl)
+.testruns/
