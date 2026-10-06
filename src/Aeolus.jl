@@ -275,6 +275,7 @@ export weno_z5_left, weno_z5_right, weno_z7_left, weno_z7_right,
        AdvectionScheme, advection_scheme, required_halo,
        momentum_advect_skew!, advect_variance_conserving!,
        kinetic_energy_budget, scalar_variance_budget, enstrophy
+export boundary_scalar_flux           # N-open-c (#260): the one boundary-flux function
 
 # Phase 27 — anelastic & pseudo-incompressible dynamics
 export ReferenceState,
@@ -1048,6 +1049,14 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
        open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
        assert_open_face_correction, open_intermediate_velocity!
+# N-open-c (#260) — convective / Orlanski radiation outflow on open faces.
+export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow, rewind_open_boundaries!,
+       mark_open_boundary_stage!
+# N-parent-b (#254) / N-open-d (#262) — θ's faces without its top gradient
+# (qv, the SGS TKE); the one BC-aware neighbour index (replaces the periodic
+# `mod1` wraps); solid obstacles at open faces; the sponge target of an open
+# top (`Simulations`).
+export gradient_free_bcs, neighbor_index, mark_open_boundary_solids!, sponge_target
 
 # Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
 # nudging, prescribed advective tendencies, surface-temperature series.

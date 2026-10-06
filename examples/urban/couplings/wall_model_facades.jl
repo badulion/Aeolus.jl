@@ -112,8 +112,9 @@ function mean_canopy_wind(case)
     su = sv = 0.0; n = 0
     for k in 1:kr, j in 1:m.Ny, i in 1:m.Nx
         sm.mask[m.Hx+i, m.Hy+j, m.Hz+k] && continue
-        su += (u[i, j, k] + u[mod1(i + 1, m.Nx), j, k]) / 2
-        sv += (v[i, j, k] + v[i, mod1(j + 1, m.Ny), k]) / 2
+        uc, vc = centre_wind(case.sim, i, j, k)                   # BC-aware (#262)
+        su += uc
+        sv += vc
         n += 1
     end
     return (u = su / n, v = sv / n)

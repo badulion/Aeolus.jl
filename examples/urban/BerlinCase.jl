@@ -39,6 +39,7 @@ const DATA_DIR = joinpath(URBAN_DIR, "data")
 
 for f in ("config", "scenarios", "registry", "geometry", "osm_ingest", "bus",
           "tracers", "air_heat", "air_heat_ledger", "ledger", "reference_state", "top_boundary",
+          "open_boundary",
           "output", "case", "stages")
     include(joinpath(@__DIR__, "core", f * ".jl"))
 end
@@ -68,6 +69,7 @@ export CaseConfig, SCENARIOS, build_case, run_case!, step_case!, describe,
        initial_θ, initial_qv, case_sounding, case_start_time, case_surface_pressure,
        initial_inversion_height, case_weekday,
        θ_top_gradient, θ_top_bc, TopHeatFlux, hydrostatic_pressure,
+       case_boundary_conditions, case_boundary_data, case_scalar_bcs, OpenBoundaryHeat,
        ParentConfig, ParentCase, build_parent, step_parent!, run_parent!, parent_record!,
        parent_zi, parent_heat_flux, mean_heat_flux, parent_mesh, parent_faces, parent_size, coarsen_landuse
 

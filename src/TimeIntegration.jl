@@ -39,7 +39,8 @@ using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             has_open_boundaries, update_open_boundaries!,
                             prepare_open_boundaries!, assert_open_face_correction,
                             open_boundary_snapshot, restore_open_boundaries!,
-                            open_intermediate_velocity!
+                            open_intermediate_velocity!, rewind_open_boundaries!,
+                            has_radiating_outflow
 using ..Operators
 using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    momentum_advect!, advect_centered!,
@@ -287,7 +288,7 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
     active  = sgs_active === nothing ? closure !== nothing : sgs_active
     if update_νt && closure !== nothing
         fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
-        sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+        sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
         compute_sgs!(closure, sim)
     end
     f = closure === nothing ? SGSFields(sim.νt, sim.κt) : sgs_fields(closure, sim)
@@ -1387,7 +1388,7 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
 
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
     fill!(sim.tθ.data, 0)
@@ -1415,12 +1416,7 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
     end
     sim.has_coriolis && add_coriolis!(sim.tu, sim.tv, sim.u, sim.v, sim.f_coriolis)
     sim.has_surface_flux && add_surface_flux!(sim.tθ, sim.θ_flux_bottom, sim.θ_flux_top)
-    if sim.has_sponge
-        z_top = sim.mesh.z0 + sim.mesh.Lz
-        add_sponge!(sim.tu, sim.u, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tv, sim.v, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tw, sim.w, sim.sponge_α_max, sim.sponge_z_start, z_top)
-    end
+    sim.has_sponge && Simulations.add_velocity_sponge!(sim)   # toward sim.sponge_target (#262)
 
     body_force! === nothing || body_force!(sim, Δt)
     return sim
@@ -1459,7 +1455,7 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
-    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
     f = compute_sgs!(closure, sim)
     ws.ν_mom  === nothing && (ws.ν_mom  = similar(sim.νt.data))
     ws.ν_scal === nothing && (ws.ν_scal = similar(sim.νt.data))
@@ -1623,8 +1619,9 @@ function _solve_field!(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbo
     scalar = _is_scalar_name(name)
     ν   = _coef_for(νm, νs, name)
     bcs = scalar ? sim.θ_bcs : sim.bcs
-    # qv shares θ's walls but not θ's prescribed top gradient (#254)
-    (increment || name === :qv) && (bcs = homogeneous_bcs(bcs))
+    # qv shares θ's walls and open faces but not θ's prescribed top gradient (#254)
+    name === :qv && (bcs = gradient_free_bcs(bcs))
+    increment && (bcs = homogeneous_bcs(bcs))
     dw  = scalar ? ws.diff.c : getfield(ws.diff, name)
     stats = solve_implicit_diffusion!(f, f, ν, dtγ, sim.mesh, bcs;
                                       tol = tol, maxit = maxit, workspace = dw,
@@ -1728,6 +1725,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     prepare_open_boundaries!(sim)
+    bc0 = has_radiating_outflow(sim) ? open_boundary_snapshot(sim) : nothing  # N-open-c
     νm, νs, sgsT, Ks = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
 
@@ -1752,7 +1750,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     # ---- I(U₁) = ∇·(ν∇U₁) on the projected stage value -------------------
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
     for name in names
         _diffusion!(_diffusion_buffer(sim, ws, name), getfield(sim, name),
                     _coef_for(νm, νs, name), m)
@@ -1762,6 +1760,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     _explicit_tendencies!(sim, Δt; body_force! = body_force!,
                           momentum_advection = momentum_advection,
                           sgs_transpose = sgsT, scalar_tensor = Ks)   # E(U₁) → sim.t*
+    rewind_open_boundaries!(sim, bc0)      # stage 2 restarts from uⁿ
     update_open_boundaries!(sim, t0 + Δt, Δt)
     bsnap = _open_intermediate!(sim, Δt)
     for name in names
@@ -1804,6 +1803,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     prepare_open_boundaries!(sim)
+    bc0 = has_radiating_outflow(sim) ? open_boundary_snapshot(sim) : nothing  # N-open-c
     νm, νs, sgsT, Ks = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
     k2set = _k2_set!(ws)
@@ -1846,6 +1846,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
                    b1, getfield(ws.aux, name), b2, getfield(k2set, name), m)
     end
     post_predictor! === nothing || post_predictor!(sim, Δt)
+    rewind_open_boundaries!(sim, bc0)      # stage 2 restarts from uⁿ
     update_open_boundaries!(sim, t0 + Δt, Δt)
     _project!(sim, Δt)
     sim.t = t0 + Δt

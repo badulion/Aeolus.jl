@@ -8,7 +8,7 @@ using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!, Periodic, ImpermeableWall,
                             update_open_boundaries!, prepare_open_boundaries!,
                             assert_open_face_correction, open_boundary_snapshot,
-                            combine_open_boundaries!
+                            combine_open_boundaries!, mark_open_boundary_stage!
 using ..Operators
 using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    advect_centered!,
@@ -25,7 +25,7 @@ using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPois
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
-       max_νt, mean_θ_profile,
+       max_νt, mean_θ_profile, sponge_target,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
 
 """
@@ -67,6 +67,8 @@ cell-centred: with `C_s ≠ 0` and no `sgs` keyword the built-in closure is
 [`StaticSmagorinsky`](@ref Aeolus.Operators.StaticSmagorinsky)`(C_s)`,
 `κt = νt/Prₜ`; any [`AbstractSGSClosure`](@ref
 Aeolus.Operators.AbstractSGSClosure) passed as `sgs` replaces it.
+| `sponge_α_max`, `sponge_z_start` | `0`, top | Rayleigh sponge on `u, v, w` above `z_start`. |
+| `sponge_target` | `nothing` (zero)           | What the sponge relaxes toward (N-open-d, #262; see [`sponge_target`](@ref)). Required with an open top. |
 | `bcs`         | `FieldBoundaryConditions(:periodic)` | Velocity BCs.               |
 | `θ_bcs`       | `bcs`                        | Scalar BCs (may differ from velocity). |
 | `solver`      | `FFTPoissonSolver(mesh)`     | Any `AbstractPressureSolver`.       |
@@ -101,6 +103,7 @@ mutable struct BoussinesqSimulation{T,
     θ_flux_top::T
     sponge_α_max::T
     sponge_z_start::T
+    sponge_target::NamedTuple{(:u, :v, :w)}   # relaxation targets of the sponge (N-open-d, #262)
     # enable flags (frozen at construction from parameter values)
     has_viscosity::Bool
     has_buoyancy::Bool
@@ -152,6 +155,7 @@ function BoussinesqSimulation(mesh::AbstractMesh{T};
                               θ_flux_top::Real        = 0,
                               sponge_α_max::Real      = 0,     # 0 → sponge off
                               sponge_z_start::Real    = mesh.z0 + mesh.Lz,   # never triggers
+                              sponge_target           = nothing,         # N-open-d (#262)
                               moisture::Bool          = false,           # Phase 11
                               bcs::FieldBoundaryConditions = FieldBoundaryConditions(:periodic),
                               θ_bcs::FieldBoundaryConditions = bcs,
@@ -182,12 +186,13 @@ function BoussinesqSimulation(mesh::AbstractMesh{T};
     has_sflux  = θ_flux_bottom != 0 || θ_flux_top != 0
     has_sponge = sponge_α_max != 0 && sponge_z_start < (mesh.z0 + mesh.Lz)
     has_moist  = moisture
+    target = _sponge_target(sponge_target, mesh, bcs, has_sponge)
 
     return BoussinesqSimulation(mesh, bcs, θ_bcs, solver,
                                 Tp(ν), Tp(θ₀), Tp(g_accel), Tp(f_coriolis),
                                 Tp(C_s), Tp(Pr_t),
                                 Tp(θ_flux_bottom), Tp(θ_flux_top),
-                                Tp(sponge_α_max), Tp(sponge_z_start),
+                                Tp(sponge_α_max), Tp(sponge_z_start), target,
                                 has_visc, has_buoy, has_cor, has_sgs,
                                 has_sflux, has_sponge, has_moist,
                                 zero(Tp),
@@ -195,6 +200,90 @@ function BoussinesqSimulation(mesh::AbstractMesh{T};
                                 tu, tv, tw, tθ, tqv,
                                 div_buf, φ, dφdx, dφdy, dφdz,
                                 lu, lv, lw, lθ, νt, κt)
+end
+
+# -------------------------------------------------------------------------
+# The sponge target (N-open-d, #262)
+# -------------------------------------------------------------------------
+
+"""
+    sponge_target(data, mesh) -> NamedTuple{(:u, :v, :w)}
+    sponge_target(; u = 0, v = 0, w = 0) -> NamedTuple{(:u, :v, :w)}
+
+The relaxation targets of the core's Rayleigh sponge, one per velocity
+component, in a form the one damping kernel (`_add_damping!`, through
+[`add_sponge!`](@ref Aeolus.Operators.add_sponge!)) takes: a number, a
+level vector (length `Nz`, the interior levels of that component's own
+location) or a `Field`.
+
+The first form evaluates boundary data on the levels of each component:
+a [`ProfileBoundaryData`](@ref Aeolus.BoundaryConditions.ProfileBoundaryData)
+profile that is a number stays a number, a function of height `z -> value`
+becomes the level vector at the heights of `u`, `v` (cell centres) and
+`w` (faces), and a storage-indexed vector (length `Nz + 2Hz`) gives its
+interior levels. `w` defaults to zero. This is the target of an **open
+top** (N-open-d, #262): the sponge layer then relaxes the flow toward the
+state the boundary data imposes on the top face (the parent's, in a
+nest), not toward rest. A sponge that relaxes toward zero below an open
+top is a momentum sink against the inflow: with a free-atmosphere wind
+`U` it removes `α(z)·U` everywhere in the layer, and nothing imposes the
+wind there.
+
+Pass the result as `sponge_target` to [`BoussinesqSimulation`](@ref) or a
+sound-proof core.
+"""
+sponge_target(; u = 0, v = 0, w = 0) = (u = u, v = v, w = w)
+function sponge_target(data::ProfileBoundaryData, mesh::AbstractMesh)
+    f = data.fields
+    lev(name, loc) = _sponge_levels(haskey(f, name) ? getfield(f, name) : 0, mesh, loc)
+    return (u = lev(:u, FaceX()), v = lev(:v, FaceY()), w = lev(:w, FaceZ()))
+end
+
+_sponge_levels(x::Real, mesh, loc) = x
+_sponge_levels(x::AbstractVector, mesh, loc) = [x[mesh.Hz + k] for k in 1:mesh.Nz]
+_sponge_levels(f, mesh, loc) = [f(z) for z in Operators.damping_coordinates(mesh, loc)]
+
+# The sponge target a core stores: `nothing` is the Phase-7 zero target,
+# which an open top refuses (the error of N-open-d); a NamedTuple may omit
+# `w` (zero); boundary data is evaluated on the mesh.
+function _sponge_target(target, mesh, bcs::FieldBoundaryConditions, has_sponge::Bool)
+    if target === nothing
+        has_sponge && bcs.top isa BoundaryConditions.OpenBoundary &&
+            throw(ArgumentError(
+                "the Rayleigh sponge below an open top would relax u, v, w toward zero, a " *
+                "momentum sink against the boundary data; pass sponge_target (e.g. " *
+                "sponge_target(data, mesh) for the open boundary's data, or " *
+                "sponge_target(u = U, v = V)) — see Simulations.sponge_target (N-open-d, #262)"))
+        return (u = 0, v = 0, w = 0)
+    end
+    target isa BoundaryConditions.AbstractBoundaryData && return sponge_target(target, mesh)
+    target isa NamedTuple ||
+        throw(ArgumentError("sponge_target must be a NamedTuple (u, v[, w]) or boundary data, " *
+                            "got $(typeof(target))"))
+    for k in keys(target)
+        k in (:u, :v, :w) || throw(ArgumentError("sponge_target: unknown component :$k (use u, v, w)"))
+    end
+    return (u = get(target, :u, 0), v = get(target, :v, 0), w = get(target, :w, 0))
+end
+
+"""
+    add_velocity_sponge!(sim) -> sim
+
+Add the core's Rayleigh sponge `−α(z)(u − u_target)` to the momentum
+tendencies `sim.tu, sim.tv, sim.tw`, with the profile `sim.sponge_α_max`,
+`sim.sponge_z_start` and the targets `sim.sponge_target`
+([`sponge_target`](@ref)). The one sponge call of every core (`step!`,
+`step_rk3!`, `step_imex!`, `step_adaptive!` and the sound-proof cores):
+the zero target of a closed top is `add_sponge!`'s own default, so a
+closed run is unchanged bit for bit.
+"""
+function add_velocity_sponge!(sim)
+    z_top = sim.mesh.z0 + sim.mesh.Lz
+    tg = sim.sponge_target
+    add_sponge!(sim.tu, sim.u, sim.sponge_α_max, sim.sponge_z_start, z_top; f_ref = tg.u)
+    add_sponge!(sim.tv, sim.v, sim.sponge_α_max, sim.sponge_z_start, z_top; f_ref = tg.v)
+    add_sponge!(sim.tw, sim.w, sim.sponge_α_max, sim.sponge_z_start, z_top; f_ref = tg.w)
+    return sim
 end
 
 # -------------------------------------------------------------------------
@@ -303,7 +392,8 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
+    mark_open_boundary_stage!(sim)   # radiating outflow: stage-start layers (N-open-c)
 
     # 2. Zero tendencies and add momentum + scalar advection.
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
@@ -358,13 +448,9 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
         add_surface_flux!(sim.tθ, sim.θ_flux_bottom, sim.θ_flux_top)
     end
 
-    # 6b. Rayleigh sponge on velocity (Phase 7).
-    if sim.has_sponge
-        z_top = sim.mesh.z0 + sim.mesh.Lz
-        add_sponge!(sim.tu, sim.u, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tv, sim.v, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tw, sim.w, sim.sponge_α_max, sim.sponge_z_start, z_top)
-    end
+    # 6b. Rayleigh sponge on velocity (Phase 7), toward `sim.sponge_target`
+    #     (zero for a closed top; the boundary data's state for an open one).
+    sim.has_sponge && add_velocity_sponge!(sim)
 
     # 6c. User body force / IBM penalty — last tendency contribution.
     body_force! === nothing || body_force!(sim, Δt)

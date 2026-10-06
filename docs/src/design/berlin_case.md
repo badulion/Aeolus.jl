@@ -60,6 +60,7 @@ examples/urban/
     tracers.jl         tracer registry (ensure_tracer!)
     ledger.jl          energy/water budget ledger (surface energy per class, water in the air)
     reference_state.jl hydrostatic reference p̄, ρ̄, T̄, Π̄ (CaseReference)
+    open_boundary.jl   cfg.lateral (:periodic / :open), the open faces' data and heat (#262)
     output.jl          NetCDF output driven by the registry
     case.jl            Case, build_case
     stages.jl          the stage loop: step_case!, run_case!, timing_report
@@ -419,19 +420,23 @@ options go under the coupling name in `options`.
 
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
-| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`, built with the per-axis Poisson kinds of the case's velocity `bcs` (`case_poisson_axes`, #251: periodic x, y and Neumann z today, all-Neumann for an open or nested child; smoke-checked); `tol`, `maxit` of the sound-proof core's own CG, whose axes the core derives from the same `bcs` |
+| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`, built with the per-axis Poisson kinds of the case's velocity `bcs` (`case_poisson_axes(cfg, mesh)`, #251: periodic x, y and Neumann z by default, all-Neumann for `lateral = :open` or a nested child; smoke-checked); `tol`, `maxit` of the sound-proof core's own CG, whose axes the core derives from the same `bcs` |
 | `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184), `:reynolds_stress` (`sgs_reynolds_stress`, `PrognosticSGS.ReynoldsStressClosure`, the differential Reynolds-stress closure, #188; not with `timestepper = :imex`); all but `:tke` and `:reynolds_stress` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` are each wrapped in `StabilityCorrected` (P55-e, #187; `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`); `:tke` and `:amd` carry their own stability treatment (TKE length scale, AMD buoyancy term) and are not wrapped, nor are `:vreman`, `:sigma` and `:reynolds_stress` (its stresses carry the buoyancy production directly) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177; with a stability-corrected `:sgs` closure κh on the x, y faces and its κv on the z faces, as for θ) |
 
-**Lateral boundaries.** The case is periodic in `x` and `y`. Open
+**Lateral boundaries.** The case is periodic in `x` and `y` by default
+(`cfg.lateral = :periodic`, bit for bit the case before #262). Open
 (Dirichlet-from-boundary-data) faces exist since N-open-b (#255:
 `OpenBoundary`, `open_boundary_conditions`, the `AbstractBoundaryData`
 contract and the global mass-flux correction, called from every core
-through `update_open_boundaries!`), but the case does not use them yet:
-`BoundaryConditions` is exempt infrastructure, the default run is bit for
-bit unchanged, the `:open` option arrives with N-open-d (#262) and the
-nested default with N-berlin-nest (#265).
+through `update_open_boundaries!`), with the radiation outflow of
+N-open-c (#260) and the one boundary-flux function
+`boundary_scalar_flux`. `cfg.lateral = :open` (N-open-d, #262) opens the
+four sides and the top of the case: see
+[Open boundaries](#Open-boundaries) below. It is a transitional option:
+N-berlin-nest (#265) feeds the same faces from the parent run and makes
+the nested configuration the default.
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every
@@ -1235,12 +1240,134 @@ afternoon the convective layer fills the 200 m domain, and a fixed
 gradient then imposes ``κΓ`` regardless of the real entrainment: the
 open top of the nested run (N-open-b, N-berlin-nest #265) replaces it.
 
-**Stated exception: no θ damping in the child.** θ is not
-Rayleigh-damped in the 200 m child. Its velocity sponge starts at 150 m,
-and a θ damping toward a constant target there would clamp the top 50 m
-(#238, approach B); in the nested run the child top comes from the
-parent. `LargeScaleForcing.ReferenceDamping` — the one θ-damping type —
-runs in the parent (N-parent-e).
+**Stated exception: no θ damping in the periodic child.** θ is not
+Rayleigh-damped in the periodic 200 m child. Its velocity sponge starts
+at 150 m, and a θ damping toward a constant target there would clamp the
+top 50 m (#238, approach B). With `lateral = :open` (#262) the top is
+open and θ is relaxed over the same layer toward the boundary data's
+profile, the state the open top imposes (`cfg.θ_relaxation`, see
+[Open boundaries](#Open-boundaries)); in the nested run that is the
+parent's. `LargeScaleForcing.ReferenceDamping` is the one θ-damping type
+in both places.
+
+### Open boundaries
+
+`cfg.lateral = :open` (N-open-d, #262; `core/open_boundary.jl`) gives the
+case open west, east, south, north and top faces:
+
+* **Data.** `ProfileBoundaryData(u = U_g, v = V_g, w = 0, θ = initial_θ)`
+  — the `:geostrophic` coupling's wind (also when it is off) and the
+  initial θ profile (`case_boundary_data`). The normal velocity of every
+  face is mass-corrected by the uniform global correction (N-open-b),
+  the outflow is `cfg.outflow` (`:dirichlet`, default; `:convective`,
+  `:orlanski`, N-open-c).
+* **Sponge.** The core's Rayleigh sponge relaxes `u, v, w` toward the
+  same data (`sponge_target(data, mesh)`, the one damping kernel; a
+  sponge below an open top without a target is an error), so the
+  `:geostrophic` coupling's own retargeting of the periodic case is off.
+  θ is relaxed toward the data's profile over the sponge layer
+  (`cfg.θ_relaxation = true`, `ReferenceDamping` in the body-force hook):
+  in the gravity-wave test of #254 damping θ as well as the velocity cut
+  the reflection of a layer one vertical wavelength deep from 0.17 to
+  0.034.
+* **Geometry.** `cfg.boundary_frame` cells (default 3, 47 m in the smoke
+  window, 47 m on the flagship grid) next to each open side are kept free
+  of buildings; a building that still touches a face (frame 0, or the
+  Fernsehturm through the top) is solid there:
+  `mark_open_boundary_solids!` gives its boundary points zero velocity and
+  takes them out of the mass-flux correction.
+* **Neighbours.** No coupling wraps across the box any more: every
+  former `mod1` reads through `neighbor_index` (`centre_wind` for the
+  cell-centred wind of the surface exchange, the deposition and the facade
+  wall model; the wall tagging; the a-priori stress centring); masks and
+  tracer halos take `case_scalar_bcs` (zero gradient at an open face; a
+  tracer has no boundary data, so it leaves with its own value and enters
+  with the value next to the face); the pressure solvers read the
+  all-Neumann axes from the case's `bcs`.
+
+**Ledger.** The open faces carry heat and water. Inside the dynamics
+context the composed body-force hook captures, per level, with the state
+and the SGS diffusivity the core's tendencies were built from:
+
+| term | what |
+| :-- | :-- |
+| `(:dynamics, :boundary_heat)` | ``-\sum ρ̄_k c_p Π̄_k (θ\,u·n - K ∂_nθ) A`` through the four sides and the top (`boundary_scalar_flux`: the core's centred θ face values, ``K = ν + ½(κ_{in} + κ_{out})``), without … |
+| `(:dynamics, :mass_correction)` | … the part the global correction ``δ`` carries, ``δ\,ρ̄c_pΠ̄\,θ_{face} A`` on every face it adjusted |
+| `(:dynamics, :relaxation)` | the θ relaxation toward the data |
+| water `:boundary` | the vapour and cloud water the faces carry, `boundary_scalar_flux` with the transport's own scheme (`scalar_advection`) |
+
+Each accepted (sub)step books them times its length (`book_dynamics_heat!`,
+also called for the fixed-gradient top). The mass-correction term is
+large next to its velocity because it multiplies the absolute θ (≈ 293 K):
+``|δ|/U`` = 7.8e-5 carries 19 W m⁻² in the convective run below, of the
+same sign as the net mass the correction removes; only the sum of the two
+terms is the boundary's heat. For the forward-Euler steps of the default
+`:adaptive` and the `:fixed` stepper the booked heat is the heat the step
+moved; under `:imex` it is the last stage's rate times dt (a residual in
+`(:dynamics, :transport)`, as for the top flux: −2.4e-2 W m⁻² on the
+open smoke window); on the anelastic core the column transport keeps
+the core's unweighted-diffusion residual of #254 (2.2e-2 W m⁻² open,
+1.8e-2 with the lid). The smoke check asserts < 1e-6 W m⁻² for the
+forward-Euler Boussinesq steps and < 0.1 W m⁻² otherwise. The diffusive part is the
+closures' ``κ_h``/``κ_v`` form: the cross terms of the tensor closure
+(`sgs = :reynolds_stress`) at the faces are not in it.
+
+**Measured (smoke window, 16 × 16 × 16, every coupling on, 24 s from
+12:00).**
+
+| | periodic | `:open`, Dirichlet | `:open`, convective |
+| :-- | --: | --: | --: |
+| steps (adaptive) | 8 | 9 | 9 |
+| surface sensible heat H (domain) | −2.12 W m⁻² | −2.87 W m⁻² | −2.85 W m⁻² |
+| `top_flux` (fixed-gradient top) | 7.18 W m⁻² | — | — |
+| open faces: top | — | 7.19 W m⁻² | 14.55 W m⁻² |
+| open faces: four sides | — | −0.17 W m⁻² | −3.34 W m⁻² |
+| `boundary_heat` | — | 7.02 W m⁻² | −7.98 W m⁻² |
+| `mass_correction` | — | 0 | 19.19 W m⁻² |
+| `relaxation` | — | 0.023 W m⁻² | 0.025 W m⁻² |
+| max ``|δ|/U`` | — | 0 | 7.8e-5 |
+| `(:dynamics, :transport)` (column) | −1.1e-10 W m⁻² | 4.3e-10 W m⁻² | −2.0e-10 W m⁻² |
+| air-heat closure | 0 | −4.7e-15 W m⁻² | 3.8e-14 W m⁻² |
+| water `:boundary` | — | 6.6e-5 kg m⁻² | 9.8e-5 kg m⁻² |
+| water residual | 1.1e-15 kg m⁻² | 1.5e-15 kg m⁻² | 1.3e-15 kg m⁻² |
+
+The open top's heat is the diffusion of the Dirichlet θ halo (the initial
+profile, 3 K km⁻¹ above the inversion) through the top face: 7.19 W m⁻²,
+the 7.18 W m⁻² of the periodic case's fixed-gradient top. With Dirichlet
+outflow the data balance (``δ = 0``); the convective outflow radiates the
+interior's building-perturbed wind at the faces and the correction
+removes the imbalance, which moves heat through the top as well. The
+column transport stays a numerics residual (1e-10 W m⁻²) in every
+configuration.
+
+**Cost.** The fixed stepper, the same buildings (`boundary_frame = 0`),
+the faster of two alternating rounds after a warm-up, on a shared
+machine:
+
+| grid | periodic | `:open` | ratio |
+| :-- | --: | --: | --: |
+| flagship 64 × 64 × 32, whole step | 116.2 ms | 113.3 ms | 0.98 |
+| flagship, dynamics (`step!`) | 20.5 ms | 18.1 ms | 0.88 |
+| smoke 16 × 16 × 16, whole step (3 rounds of 24 steps) | 18.5 ms | 18.7 ms | 1.01 |
+
+The open faces' work (the buffer update and mass correction, the
+boundary-heat capture, the θ relaxation) costs no more than the
+measurement noise; the all-Neumann cosine solve of the open box is if
+anything cheaper than the periodic-x, y solve. `test/berlin_open_boundaries.jl`
+prints a smoke-window measurement.
+
+**Tests.** `test/berlin_open_boundaries.jl`: the default stays periodic;
+the open faces, data, sponge target, solver axes, frame and solid points;
+one dynamics step through the case's own hook books 0.0 J m⁻² for an
+inflow equal to the interior and ``ρ̄c_pΠ̄(UΔT/2 + νΔT/Δx)AΔt`` = 604.525
+J m⁻² to 1e-12 for a +1 K inflow anomaly (the core's centred face value is
+the mean of the halo and the first cell; the diffusive flux across the
+jump is ``νΔT/Δx`` with the case's ``ν`` = 2 m² s⁻¹). The smoke matrix runs
+`geostrophic: lateral = :open, Dirichlet outflow` and `…, convective
+outflow` with every coupling on: air-heat closure ≤ 1.1e-13 W m⁻², water
+residual ≤ 4.3e-16 kg m⁻², column transport < 1e-6 W m⁻² (smoke check).
+The src tests are in `test/era6_open_near_boundary.jl` (theory:
+[Near the open faces](../theory/fractional_step.md#Near-the-open-faces-(N-open-d))).
 
 ### Baseline (measured, #127)
 

@@ -80,14 +80,17 @@ a moving [`NoSlipWall`](@ref) by a stationary one, a prescribed gradient
 [`FluxBC`](@ref)`(Γ)` by `FluxBC(0)` (the mirror halo), an
 [`OpenBoundary`](@ref) by one that writes zero boundary values (and the
 same zero-gradient / antisymmetric rules), a
-[`FreeStreamBoundary`](@ref) by one with zero transpiration. This is the
-homogeneous part of an affine boundary operator. It is also the boundary
-condition of a scalar that shares θ's walls but not θ's prescribed top
-gradient (`qv`, the SGS TKE). Implicit solvers apply the operator to
-search directions and increments with these, and move the boundary
-contribution to the right-hand side. Returns `bcs` itself (`===`) when
-every face is homogeneous, so the existing BC types take their usual
-code path.
+[`FreeStreamBoundary`](@ref) by one with zero transpiration, a
+prescribed gradient [`FluxBC`](@ref)`(Γ)` by `FluxBC(0)` (the mirror
+halo, #254). This is the homogeneous part of an affine boundary
+operator: implicit solvers apply the operator to search directions and
+increments with these, and move the boundary contribution to the
+right-hand side. Returns `bcs` itself (`===`) when every face is
+homogeneous, so the existing BC types take their usual code path.
+
+A scalar that shares θ's faces but not θ's prescribed top gradient
+(`qv`, the SGS TKE) takes [`gradient_free_bcs`](@ref) instead, which
+keeps open-boundary data.
 """
 function homogeneous_bcs(bcs::FieldBoundaryConditions)
     faces = (bcs.west, bcs.east, bcs.south, bcs.north, bcs.bottom, bcs.top)
@@ -96,8 +99,23 @@ function homogeneous_bcs(bcs::FieldBoundaryConditions)
 end
 _inhomogeneous(::AbstractBC) = false
 _inhomogeneous(bc::NoSlipWall) = !(iszero(bc.u_wall) && iszero(bc.v_wall))
-# a non-zero prescribed gradient makes the halo fill affine (FluxBC, #254)
 _inhomogeneous(bc::FluxBC) = !iszero(bc.f)
+
+"""
+    gradient_free_bcs(bcs::FieldBoundaryConditions) -> FieldBoundaryConditions
+
+`bcs` with a prescribed-gradient [`FluxBC`](@ref)`(Γ)` face replaced by
+`FluxBC(0)` (the mirror halo) and every other face kept, open-boundary
+data included. This is the boundary condition of a scalar that shares
+θ's walls and open faces but not θ's fixed-gradient top (N-parent-b,
+#254): `qv` and the SGS TKE. Returns `bcs` itself (`===`) when no face
+carries a non-zero gradient.
+"""
+function gradient_free_bcs(bcs::FieldBoundaryConditions)
+    faces = (bcs.west, bcs.east, bcs.south, bcs.north, bcs.bottom, bcs.top)
+    any(f -> f isa FluxBC && !iszero(f.f), faces) || return bcs
+    return FieldBoundaryConditions(map(f -> f isa FluxBC ? _homogeneous(f) : f, faces)...)
+end
 _homogeneous(bc::AbstractBC) = bc
 _homogeneous(bc::NoSlipWall{T}) where {T} = NoSlipWall{T}(zero(T), zero(T))
 _homogeneous(bc::FluxBC) = FluxBC(zero(bc.f))

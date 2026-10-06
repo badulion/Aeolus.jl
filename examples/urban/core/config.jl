@@ -38,6 +38,15 @@ Groups of fields:
   provider wraps its closure in, `Operators.StabilityCorrected`, P55-e
   #187: `:brown94` (default, Brown et al. 1994), `:lilly`, `:long_tail`,
   `:short_tail`, `:most`, or `:none` for the uncorrected closure);
+* **lateral boundaries** (N-open-d, #262; `core/open_boundary.jl`) —
+  `lateral` (`:periodic`, default, or `:open`: the four sides and the
+  top fed by `ProfileBoundaryData` of the geostrophic wind and the initial
+  θ profile; transitional until the nested default of #265), `outflow`
+  (`:dirichlet`, default, `:convective` or `:orlanski`: the outflow
+  condition of the open faces, N-open-c #260), `boundary_frame` (cells:
+  buildings closer than this to an open face are removed; default 3) and
+  `θ_relaxation` (default `true`: with `:open`, θ is relaxed toward the
+  data's profile over the velocity sponge layer);
 * **initial state** — `sounding`: the radiosonde CSV the initial θ(z),
   qv(z) and surface pressure come from (default: the Lindenberg WMO 10393
   launches of 29/30 June 2019, `data/lindenberg_10393_20190629.csv`,
@@ -99,6 +108,11 @@ Base.@kwdef mutable struct CaseConfig
     sponge_α_max::Float64             = 0.05
     sponge_frac::Float64              = 0.75
     θ_top::Union{Symbol,Float64}      = :initial_gradient
+    # lateral boundaries (N-open-d, #262)
+    lateral::Symbol                   = :periodic
+    outflow::Symbol                   = :dirichlet
+    boundary_frame::Int               = 3
+    θ_relaxation::Bool                = true
     # initial state: the observed sounding (#247) …
     sounding::Union{Nothing,String}   = joinpath(DATA_DIR, "lindenberg_10393_20190629.csv")
     # … or, with sounding = nothing, the idealised profile
