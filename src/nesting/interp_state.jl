@@ -327,15 +327,16 @@ function _blend_state!(dst::NestInterpState, a::NestInterpState,
 end
 
 function _sponge_field!(cf::Field, gf::Field, sp::NestSponge, cm, αdt)
-    ii, jj, kk = interior(cm)
-    cd = cf.data; gd = gf.data
-    @inbounds for k in kk, j in jj, i in ii
-        wgt = _sponge_weight(sp, cm, i, j, k)
-        wgt == 0.0 && continue
-        β = clamp(αdt * wgt, 0.0, 1.0)
-        cd[i, j, k] = (1 - β) * cd[i, j, k] + β * gd[i, j, k]
-    end
+    launch!(Backends.backend(cf.data), _sponge_body!, interior(cm), cf.data, gf.data, sp, cm, αdt)
     return cf
+end
+
+@inline function _sponge_body!(i, j, k, cd, gd, sp, cm, αdt)
+    wgt = _sponge_weight(sp, cm, i, j, k)
+    wgt == 0.0 && return nothing
+    β = clamp(αdt * wgt, 0.0, 1.0)
+    @inbounds cd[i, j, k] = (1 - β) * cd[i, j, k] + β * gd[i, j, k]
+    return nothing
 end
 
 """

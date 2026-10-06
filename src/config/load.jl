@@ -129,6 +129,7 @@ function _find_extends(ext::String, cur::String, hint)
     isfile(cand) && return cand
     looked = String[cand]
     dirs = String[]
+    hint === nothing || _ensure_driver(hint)
     if hint !== nothing && haskey(_DRIVERS, hint)
         d = _DRIVERS[hint].config_dir
         d === nothing || push!(dirs, d)
