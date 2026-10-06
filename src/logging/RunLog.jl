@@ -28,6 +28,10 @@ import Logging: min_enabled_level, shouldlog, handle_message, catch_exceptions
 
 export AeolusLogger, TeeLogger, open_run_log, with_run_log, test_logger,
        current_domain, with_domain, parse_log_level
+# LOG-c (#335): the diagnostics registry, the CSV writer, the progress line
+export Diagnostic, diagnostics, collect_diagnostics, prefixed, reduce_diagnostic, evaluate_diagnostic,
+       DiagnosticsWriter, record_diagnostics!, last_diagnostics, costly_due,
+       ProgressLine, progress!, WarningTap, with_progress, note_warning!
 
 # ---------------------------------------------------------------------------
 # domain tag
@@ -98,7 +102,7 @@ _level_name(l::LogLevel) =
 
 """
     AeolusLogger(stream = nothing; min_level = Info, timestamps = :datetime,
-                 source = false, flush = true)
+                 source = false, flush = true, flush_interval = 5.0, owns_stream = false)
 
 A logger that writes one line per record:
 
@@ -112,7 +116,19 @@ A logger that writes one line per record:
   (`HH:MM:SS.sss`) or `:none`.
 * `source`: append ` @ file:line` to every record; warnings and errors
   always carry it.
-* `flush`: flush the stream after each record, so a crash loses nothing.
+* `flush` and `flush_interval` (seconds): the flush policy (maintainer
+  decision of 2026-10-06, PR #346). With `flush = true` a record at
+  `Warn` or above is flushed at once; a `Debug` or `Info` record is
+  flushed only when more than `flush_interval` seconds have passed since
+  the last flush. Anything still buffered is flushed by `close(logger)`,
+  which [`with_run_log`](@ref) and `with_run` call on every exit,
+  including an error, and by an `atexit` hook if the process exits with
+  the logger still open. So only a hard kill (`SIGKILL`, power loss) can
+  lose the last few seconds of debug and info lines. There is no timer
+  task: the clock is read when a record arrives, so a debug line written
+  just before a long quiet spell stays buffered until the next record or
+  the close. `flush_interval = 0` flushes every record (the LOG-a
+  behaviour); `flush = false` never flushes before `close`.
 * `owns_stream`: `close(logger)` closes `stream` (the run log's file);
   otherwise the stream belongs to the caller and is left open.
 
@@ -130,6 +146,8 @@ mutable struct AeolusLogger <: AbstractLogger
     timestamps::Symbol
     source::Bool
     flush::Bool
+    flush_interval::Float64
+    last_flush::Float64          # time() of the last flush (or of construction)
     owns_stream::Bool
     lock::ReentrantLock
     message_limits::Dict{Any,Int}
@@ -137,11 +155,50 @@ end
 
 function AeolusLogger(stream::Union{Nothing,IO} = nothing; min_level = Info,
                       timestamps::Symbol = :datetime, source::Bool = false, flush::Bool = true,
-                      owns_stream::Bool = false)
+                      flush_interval::Real = 5.0, owns_stream::Bool = false)
     timestamps in (:datetime, :time, :none) ||
         throw(ArgumentError("timestamps must be :datetime, :time or :none, got :$timestamps"))
-    return AeolusLogger(stream, parse_log_level(min_level), timestamps, source, flush,
-                        owns_stream, ReentrantLock(), Dict{Any,Int}())
+    flush_interval >= 0 || throw(ArgumentError("flush_interval must be ≥ 0, got $flush_interval"))
+    l = AeolusLogger(stream, parse_log_level(min_level), timestamps, source, flush,
+                     Float64(flush_interval), time(), owns_stream, ReentrantLock(), Dict{Any,Int}())
+    stream === nothing || _register_open!(l)
+    return l
+end
+
+# Loggers with a stream of their own, flushed by an atexit hook if the
+# process ends while they are open (an uncaught error outside with_run_log).
+const _OPEN_LOGGERS = WeakKeyDict{AeolusLogger,Nothing}()
+const _OPEN_LOCK = ReentrantLock()
+_register_open!(l::AeolusLogger) = lock(() -> (_OPEN_LOGGERS[l] = nothing), _OPEN_LOCK)
+_unregister_open!(l::AeolusLogger) = lock(() -> delete!(_OPEN_LOGGERS, l), _OPEN_LOCK)
+
+"Flush every open logger's stream; registered with `atexit`."
+function _flush_open_loggers()
+    for l in lock(() -> collect(keys(_OPEN_LOGGERS)), _OPEN_LOCK)
+        try
+            flush(l)
+        catch
+        end
+    end
+    return nothing
+end
+
+function __init__()
+    atexit(_flush_open_loggers)
+end
+
+"""
+    flush(logger::AeolusLogger)
+
+Flush the logger's stream now, whatever its flush policy.
+"""
+function Base.flush(l::AeolusLogger)
+    s = l.stream === nothing ? stderr : l.stream
+    lock(l.lock) do
+        isopen(s) && flush(s)
+        l.last_flush = time()
+    end
+    return nothing
 end
 
 min_enabled_level(l::AeolusLogger) = l.min_level
@@ -229,12 +286,17 @@ function handle_message(l::AeolusLogger, level::LogLevel, message, _module, grou
         end
         remaining > 0 || return nothing
     end
+    t = time()
     text = format_record(level, message, _module, file, line, kwargs;
-                         timestamps = l.timestamps, source = l.source)
+                         timestamps = l.timestamps, source = l.source, time = t)
     io = l.stream === nothing ? stderr : l.stream
     lock(l.lock) do
         write(io, text)
-        l.flush && flush(io)
+        # the flush policy: Warn and up at once, the rest every flush_interval s
+        if l.flush && (level >= Warn || t - l.last_flush >= l.flush_interval)
+            flush(io)
+            l.last_flush = t
+        end
     end
     return nothing
 end
@@ -243,8 +305,9 @@ end
 function Base.close(l::AeolusLogger)
     s = l.stream
     s === nothing && return nothing
+    _unregister_open!(l)
     if !l.owns_stream
-        lock(() -> isopen(s) && flush(s), l.lock)
+        flush(l)
         return nothing
     end
     lock(l.lock) do
@@ -284,6 +347,9 @@ function handle_message(t::TeeLogger, level::LogLevel, message, _module, group, 
     return nothing
 end
 
+"Flush every child of the tee that can be flushed."
+Base.flush(t::TeeLogger) = (foreach(l -> applicable(flush, l) && flush(l), t.loggers); nothing)
+
 function Base.close(t::TeeLogger)
     for l in t.loggers
         applicable(close, l) && close(l)
@@ -297,7 +363,7 @@ end
 
 """
     open_run_log(path; console = stderr, console_level = Info,
-                 file_level = Debug, append = true) -> TeeLogger
+                 file_level = Debug, append = true, flush_interval = 5.0) -> TeeLogger
 
 The logger of a run (epic #293): records at `console_level` and up go to
 `console` with short `HH:MM:SS.sss` timestamps, records at `file_level`
@@ -307,17 +373,23 @@ and up go to the file `path` with full timestamps and source locations.
 overrides the default `console_level`. `append = true` continues an
 existing file (a restart reuses its run log). The caller closes it with
 `close`, or uses [`with_run_log`](@ref).
+
+The file follows the flush policy of [`AeolusLogger`](@ref): warnings
+and errors are on disk at once, debug and info lines at the latest
+`flush_interval` seconds later (at the next record), at `close`, or at
+process exit. `flush_interval = 0` flushes every record. The console
+flushes every record.
 """
 function open_run_log(path::AbstractString; console::Union{Bool,Nothing,IO} = stderr,
                       console_level = _env_level(Info), file_level = Debug,
-                      append::Bool = true)
+                      append::Bool = true, flush_interval::Real = 5.0)
     mkpath(dirname(abspath(path)))
     io = open(path, append ? "a" : "w")
     file = AeolusLogger(io; min_level = file_level, timestamps = :datetime, source = true,
-                        owns_stream = true)
+                        flush_interval = flush_interval, owns_stream = true)
     console === false && return TeeLogger(file)
     con = AeolusLogger(console === true ? stderr : console; min_level = console_level,
-                       timestamps = :time, source = false)
+                       timestamps = :time, source = false, flush_interval = 0.0)
     return TeeLogger(con, file)
 end
 
@@ -327,7 +399,8 @@ end
 Run `f()` with [`open_run_log`](@ref)`(path; kwargs...)` as the current
 logger and close the log afterwards, also when `f` throws (the error is
 logged at `Error` level first, so `run.log` records why the run stopped).
-Returns `f()`.
+Closing flushes every record still buffered by the flush policy, so on
+any exit short of a hard kill the whole run is on disk. Returns `f()`.
 """
 function with_run_log(f, path::AbstractString; kwargs...)
     logger = open_run_log(path; kwargs...)
@@ -356,6 +429,12 @@ Tests that assert on events capture them with their own logger
 (`Test.@test_logs`, `Test.TestLogger`), which this does not affect.
 """
 test_logger(; level = _env_level(Warn), stream::Union{Nothing,IO} = nothing) =
-    AeolusLogger(stream; min_level = level, timestamps = :time, source = false)
+    AeolusLogger(stream; min_level = level, timestamps = :time, source = false, flush_interval = 0.0)
+
+# ---------------------------------------------------------------------------
+# the diagnostics registry, CSV writer and progress line (LOG-c, #335)
+# ---------------------------------------------------------------------------
+
+include("diagnostics.jl")
 
 end # module

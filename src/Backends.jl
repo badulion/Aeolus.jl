@@ -16,14 +16,14 @@ module Backends
 
 using KernelAbstractions
 const KA = KernelAbstractions
-using LinearAlgebra: BLAS
+using LinearAlgebra: BLAS, mul!
 
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
-       runs_serially, launch!, range_map!,
+       runs_serially, launch!, launch_weighted!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
-       plane_map!
+       plane_map!, apply_transform!
 
 # =========================================================================
 # Backend types
@@ -183,6 +183,9 @@ to_host(x::AbstractArray) = Array(x)
 # Filled by Operators (the owner of the FFTW policy, #245), so that the
 # thread count is set through `set_fftw_policy!` and reported by
 # `fftw_policy()`; one source of truth for FFTW settings.
+# `_set_fftw_threads!(n; default = true)` sets `n` only if the count was
+# not chosen explicitly (AEOLUS_FFTW_THREADS, `set_fftw_policy!(threads =)`,
+# an `[fftw]` namelist table).
 function _set_fftw_threads! end
 
 """
@@ -191,17 +194,24 @@ function _set_fftw_threads! end
 
 Prepare the process to run on `backend`: makes it the
 [`default_backend`](@ref) and sets the thread counts of the two libraries
-that thread on their own.
+that thread on their own. Call it before the simulation (and so its FFT
+plans) is built: an FFTW plan keeps the thread count it was made with.
 
   * **BLAS** is pinned to one thread when Julia runs threaded
     (`Threads.nthreads() > 1`; maintainer decision on #294): BLAS threads
     would compete with the kernel tasks, and a threaded BLAS may split a
     reduction differently at different thread counts. `blas_threads`
     overrides.
-  * **FFTW**: `fftw_threads = nothing` keeps the FFTW policy
-    (`AEOLUS_FFTW_THREADS`, default 1; `Aeolus.Operators.set_fftw_policy!`);
-    an integer sets it there. Thread invariance of threaded FFTW plans
-    (under `ESTIMATE`) is established by the FFT port (KA-h), not here.
+  * **FFTW** runs on `Threads.nthreads()` threads (KA-h, #298; maintainer
+    decision on #291): FFTW's threaded plans split the independent 1-D
+    transforms between threads without changing any of them, so a solve
+    gives the same bits at every thread count under a deterministic
+    planner (`ESTIMATE`, or imported wisdom); measured in
+    docs/src/design/ka_port.md. A count chosen explicitly wins:
+    `fftw_threads = n` here, or before the call `AEOLUS_FFTW_THREADS`,
+    `Aeolus.Operators.set_fftw_policy!(threads = n)` or a namelist's
+    `[fftw] threads`. The count is set through that FFTW policy, so
+    `fftw_policy()` and the checkpoint record report it.
 
 Returns `(backend, julia_threads, blas_threads, fftw_threads)`.
 """
@@ -215,12 +225,40 @@ function init_threads!(b::AbstractBackend = default_backend();
     elseif nt > 1
         BLAS.set_num_threads(1)
     end
-    fftw_threads === nothing || _set_fftw_threads!(Int(fftw_threads))
+    if fftw_threads === nothing
+        _set_fftw_threads!(nt; default = true)
+    else
+        _set_fftw_threads!(Int(fftw_threads))
+    end
     return (backend = b, julia_threads = nt, blas_threads = BLAS.get_num_threads(),
             fftw_threads = _fftw_threads())
 end
 # The FFTW thread count as the policy reports it (Operators adds the method).
 function _fftw_threads end
+
+# =========================================================================
+# Transforms (KA-h, #298)
+# =========================================================================
+
+"""
+    apply_transform!(backend, out, plan, in) -> out
+
+Execute the precomputed transform `plan` (an FFTW plan on the CPU) from
+`in` into `out`. The spectral pressure solvers call every transform
+through this method, from host orchestration between kernel launches and
+never inside a kernel, so that Phase 81 can give the GPU backend its own
+transform library (cuFFT) behind the same call.
+
+On the [`CPUBackend`](@ref) it is `mul!(out, plan, in)`. The plan carries
+its own thread count (FFTW's, set at planning time through the FFTW policy;
+[`init_threads!`](@ref) makes it `Threads.nthreads()`). FFTW's threaded
+plans split the independent 1-D transforms of a multidimensional transform
+between the threads without changing any of them, so the result is
+identical at every thread count under a deterministic planner (measured
+in docs/src/design/ka_port.md).
+"""
+apply_transform!(::CPUBackend, out, plan, in) = (mul!(out, plan, in); out)
+apply_transform!(b::GPUBackend, out, plan, in) = _gpu_error(b, "apply_transform!")
 
 # =========================================================================
 # launch!: the one way a loop nest over storage indices is run
@@ -303,24 +341,27 @@ end
 
 # ---- threaded CPU launches ------------------------------------------------
 
-function _threaded!(b::CPUBackend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args) where {F}
+function _threaded!(b::CPUBackend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args,
+                    weight::Int = 1) where {F}
     nj, nk = length(jr), length(kr)
-    nt = _ntasks(length(ir) * nj * nk)
+    nt = _ntasks(length(ir) * nj * nk * weight)
     wg = nt >= Threads.nthreads() ? (min(nj, _ROWS_PER_GROUP), 1) : (nj, cld(nk, nt))
     kern = _rows3_kernel!(b.ka, wg)
     kern(body!, first(ir), last(ir), first(jr) - 1, first(kr) - 1, args; ndrange = (nj, nk))
     return nothing
 end
-function _threaded!(b::CPUBackend, body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args) where {F}
+function _threaded!(b::CPUBackend, body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args,
+                    weight::Int = 1) where {F}
     nj = length(jr)
-    nt = _ntasks(length(ir) * nj)
+    nt = _ntasks(length(ir) * nj * weight)
     kern = _rows2_kernel!(b.ka, nt >= Threads.nthreads() ? min(nj, _ROWS_PER_GROUP) : cld(nj, nt))
     kern(body!, first(ir), last(ir), first(jr) - 1, args; ndrange = nj)
     return nothing
 end
-function _threaded!(b::CPUBackend, body!::F, (nr,)::NTuple{1,UnitRange{Int}}, args) where {F}
-    nt = _ntasks(length(nr))
-    chunk = nt >= Threads.nthreads() ? _CHUNK_1D : cld(length(nr), nt)
+function _threaded!(b::CPUBackend, body!::F, (nr,)::NTuple{1,UnitRange{Int}}, args,
+                    weight::Int = 1) where {F}
+    nt = _ntasks(length(nr) * weight)
+    chunk = nt >= Threads.nthreads() ? max(1, _CHUNK_1D ÷ weight) : cld(length(nr), nt)
     kern = _chunks1_kernel!(b.ka, 1)
     kern(body!, first(nr), last(nr), chunk, args; ndrange = cld(length(nr), chunk))
     return nothing
@@ -368,16 +409,34 @@ launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, args::Vararg{
 # The argument tuple as one parameter `A`, so it is never widened (a function
 # among `args` would otherwise be compiled as `::Function` and called by
 # dynamic dispatch at every point).
-function _launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, args::A) where {F, N, A<:Tuple}
+function _launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, args::A,
+                  weight::Int = 1) where {F, N, A<:Tuple}
     np = _npoints(ranges)
     np == 0 && return nothing
-    if runs_serially(b, np)
+    if runs_serially(b, np * weight)
         _serial!(body!, ranges, args)
     else
-        _threaded!(b, body!, ranges, args)
+        _threaded!(b, body!, ranges, args, weight)
     end
     return nothing
 end
+
+"""
+    launch_weighted!(backend, weight, body!, ranges, args...)
+
+[`launch!`](@ref) for a body that covers `weight` points per index: a
+column kernel launched over `(i, j)` (or over rows `j`) that loops over
+`weight` levels itself, such as the tridiagonal solve of
+`StretchedPoissonSolver` (KA-h, #298). The backend's serial threshold and
+its points-per-task rule then count `weight × length(ranges)` points, the
+work actually done, instead of the number of indices. Same contract and
+same serial order as `launch!`; `weight = 1` is `launch!`.
+"""
+launch_weighted!(b::CPUBackend, weight::Integer, body!::F, ranges::NTuple{N,UnitRange{Int}},
+                 args::Vararg{Any,M}) where {F, N, M} =
+    _launch!(b, body!, ranges, args, max(1, Int(weight)))
+launch_weighted!(b::GPUBackend, weight, body!, ranges::Tuple, args...) =
+    _gpu_error(b, "launch_weighted!")
 launch!(b::GPUBackend, body!, ranges::Tuple, args...) = _gpu_error(b, "launch!")
 
 # ---- pointwise map ----------------------------------------------------------
