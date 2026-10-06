@@ -57,8 +57,9 @@ import ..Grids: totalsize, interior, xnodes, ynodes, znodes
 # the same generic functions the Operators façade already forwards to.
 import ..Operators.FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                                  _interp_to_face!, _interp_to_center!,
-                                 _add_surface_flux!, _add_sponge!, _add_buoyancy!
-using ..Operators.FiniteVolume: sponge_profile, in_damping, damping_rate
+                                 _add_surface_flux!, _add_sponge!, _add_buoyancy!,
+                                 damping_coordinates
+using ..Operators.FiniteVolume: sponge_profile, in_damping, damping_rate, _add_damping!
 
 export StretchedGrid, TerrainFollowingGrid,
        terrain_following_grid,
@@ -920,27 +921,24 @@ _zloc_coords(g::StretchedGrid, ::Location) = g.zc
     _add_sponge!(tf, f, α_max, z_start, z_top, f_ref, g::StretchedGrid)
 
 Rayleigh damping toward `f_ref` for `z ≥ z_start`, with
-`α(z) = α_max sin²(½π (z-z_start)/(z_top-z_start))`. Identical to the
-`RegularGrid` kernel except that the sponge profile is sampled at the
-*actual* stretched heights, so the damping layer covers the physical
-region the user asked for rather than a fixed number of levels.
+`α(z) = α_max sin²(½π (z-z_start)/(z_top-z_start))`. The one damping
+kernel `_add_damping!` of the `RegularGrid` sponge, with the profile
+sampled at the *actual* stretched heights, so the damping layer covers
+the physical region the user asked for rather than a fixed number of
+levels. `f_ref` is a number, a level vector (length `Nz`), a `Field` or a
+halo-padded array, as on the `RegularGrid` (#254).
 """
 function _add_sponge!(tf::Field{L}, f::Field{L},
                       α_max::Real, z_start::Real, z_top::Real,
-                      f_ref::Real, g::StretchedGrid) where {L<:Location}
-    zs = _zloc_coords(g, L())
-    ii, jj, kk = interior(g)
-    prof = sponge_profile(α_max, z_start, z_top)   # the shared damping profile
-    @inbounds for k in kk
-        z = zs[k]
-        in_damping(prof, z) || continue
-        α = damping_rate(prof, z)
-        for j in jj, i in ii
-            tf.data[i, j, k] -= α * (f.data[i, j, k] - f_ref)
-        end
-    end
-    return tf
+                      f_ref, g::StretchedGrid) where {L<:Location}
+    return _add_damping!(tf, f, sponge_profile(α_max, z_start, z_top),
+                         damping_coordinates(g, L()), 3, f_ref, g)
 end
+
+# The heights of the interior levels the damping kernel samples a vertical
+# DampingProfile at, on a StretchedGrid (the generic is in FiniteVolume).
+damping_coordinates(g::StretchedGrid, loc::Location) =
+    _zloc_coords(g, loc)[g.Hz+1:g.Hz+g.Nz]
 
 """
     _add_buoyancy!(tw, θ, θ₀, g_accel, g::StretchedGrid)
@@ -1719,21 +1717,16 @@ end
 
 Rayleigh damping keyed on the **physical** height of each sample, so the
 sponge is a horizontal slab in real space even though the coordinate
-surfaces below it are tilted by the orography.
+surfaces below it are tilted by the orography. The one damping kernel
+`_add_damping!`, sampled at the 3-D physical heights; `f_ref` is a
+number, a `Field` or a halo-padded array (a level vector is a target per
+σ-level).
 """
 function _add_sponge!(tf::Field{L}, f::Field{L},
                       α_max::Real, z_start::Real, z_top::Real,
-                      f_ref::Real, g::TerrainFollowingGrid) where {L<:Location}
-    zs = physical_heights(g, L())
-    ii, jj, kk = interior(g)
-    prof = sponge_profile(α_max, z_start, z_top)   # the shared damping profile
-    @inbounds for k in kk, j in jj, i in ii
-        z = zs[i,j,k]
-        in_damping(prof, z) || continue
-        α = damping_rate(prof, z)
-        tf.data[i,j,k] -= α * (f.data[i,j,k] - f_ref)
-    end
-    return tf
+                      f_ref, g::TerrainFollowingGrid) where {L<:Location}
+    return _add_damping!(tf, f, sponge_profile(α_max, z_start, z_top),
+                         physical_heights(g, L()), 3, f_ref, g)
 end
 
 """

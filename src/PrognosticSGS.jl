@@ -54,16 +54,18 @@ module PrognosticSGS
 
 using ..Grids: RegularGrid, CellCenter, interior
 using ..Fields: Field, interior_view, mesh
-using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!
+using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
                    buoyancy_frequency_squared!, SymmetricTensorField
 import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_state!
 using ..AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
+using ..WallModels: ImmersedWalls, immersed_wall_drag!
 
 export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_value,
        tke_eddy_coefficients,
        tke_critical_richardson, tke_equilibrium, dual_strain!, shear_production!,
-       buoyancy_production!, tke_budget, initialize_tke!, tke_statistics
+       buoyancy_production!, tke_budget, initialize_tke!, tke_statistics,
+       attach_immersed_walls!
 # P56-d (#188): the differential Reynolds-stress closure (prognostic_sgs/reynolds_stress.jl)
 export ReynoldsStressClosure, reynolds_stress_terms, reynolds_stress_rhs, reynolds_stress_step,
        daly_harlow_coefficient, coriolis_rotation, rotate_stress, is_realizable,
@@ -231,6 +233,12 @@ Keywords:
   first order, and its fixed point is the exact equilibrium. `:exact`: the
   exact solution of ``de/dt = −c_ε e^{3/2}/l`` over the step at frozen
   ``l``, ``e^{n+1} = (e^{*−1/2} + c_εΔt/(2l))^{−2}`` (then the buoyant sink).
+* `walls` — `nothing`, or the `Aeolus.WallModels.ImmersedWalls` whose
+  stencil flux the momentum step replaces by a wall-model stress
+  (`remove_stencil_wall_flux!` + `apply_immersed_wall_stress!`). The
+  shear production at those faces is then the wall stress times the
+  resolved shear across the wall instead of the stencil's: see
+  [`attach_immersed_walls!`](@ref), which also attaches them later.
 """
 struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, WS} <: AbstractSGSClosure
     e::F
@@ -248,20 +256,23 @@ struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, WS} <: AbstractSGSClosure
     advection::Symbol
     # scratch (not memory)
     ν::F; κt::F; N2::F; D::F; K2::F; tend::F
+    Pw::F                 # facade (wall-model) shear production, m² s⁻³ (#232)
+    walls::Base.RefValue{Any}   # nothing or the Aeolus.WallModels.ImmersedWalls
+    adrag::Vector{T}      # per-face-wall drag rate of the walls (s⁻¹)
     ws::WS
     snap::Array{T,3}
     stats::Vector{T}      # see tke_statistics
     snapstats::Vector{T}
 end
 
-const _NSTATS = 9
+const _NSTATS = 10
 
 function TKEClosure(g::RegularGrid{T}; e = nothing, e0::Real = 0, c_k::Real = 0.1,
                     c_ε0::Real = 0.19, c_ε1::Real = 0.51, c_l::Real = 0.76, κ::Real = 0.4,
                     surface_factor::Real = 3.9, wall_distance = nothing, first_level = nothing,
                     mask = nothing, surface = nothing, θ₀ = nothing, g_accel = nothing,
                     qv = :auto, transport::Bool = true, dissipation::Symbol = :semi_implicit,
-                    advection::Symbol = :auto) where {T}
+                    advection::Symbol = :auto, walls = nothing) where {T}
     dissipation in (:semi_implicit, :exact) ||
         throw(ArgumentError("dissipation must be :semi_implicit or :exact, got $(repr(dissipation))"))
     ef = e === nothing ? Field(CellCenter(), g) : e
@@ -277,11 +288,13 @@ function TKEClosure(g::RegularGrid{T}; e = nothing, e0::Real = 0, c_k::Real = 0.
     ws = transport ? FluxLimiterWorkspace(g) : nothing
     Δ = T((g.dx * g.dy * g.dz)^(1 / 3))
     mkf() = Field(CellCenter(), g)
-    return TKEClosure(ef, T(c_k), T(c_ε0), T(c_ε1), T(c_l), T(κ), T(surface_factor), Δ,
+    c = TKEClosure(ef, T(c_k), T(c_ε0), T(c_ε1), T(c_l), T(κ), T(surface_factor), Δ,
                       θ₀ === nothing ? T(NaN) : T(θ₀), g_accel === nothing ? T(NaN) : T(g_accel),
                       qv, lw, fl, mk, surface, transport, dissipation, adv,
-                      mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), ws,
+                      mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), Ref{Any}(nothing), T[], ws,
                       similar(ef.data), zeros(T, _NSTATS), zeros(T, _NSTATS))
+    walls === nothing || attach_immersed_walls!(c, walls)
+    return c
 end
 
 Base.show(io::IO, c::TKEClosure) =
@@ -304,7 +317,7 @@ function _stratification!(c, sim)
         if q === nothing
             buoyancy_frequency_squared!(c.N2, sim.θ; θ₀ = θ₀, g = g)
         else
-            fill_halos!(q, sim.θ_bcs)
+            fill_halos!(q, homogeneous_bcs(sim.θ_bcs))   # qv: not θ's top gradient (#254)
             buoyancy_frequency_squared!(c.N2, sim.θ, q; θ₀ = θ₀, g = g)
         end
     else
@@ -505,6 +518,111 @@ function shear_production!(P::Field, u::Field, v::Field, w::Field, νt::Field,
     return P
 end
 
+# -------------------------------------------------------------------------
+# Shear production at wall-modelled immersed walls (#232)
+# -------------------------------------------------------------------------
+
+"""
+    attach_immersed_walls!(c, walls) -> Bool
+
+Tell the closure `c` that the momentum step replaces the SGS stencil flux
+through the immersed walls `walls` (an `Aeolus.WallModels.ImmersedWalls`)
+by a wall-model stress: `remove_stencil_wall_flux!` takes
+``ν_{t,e}(q_N − q_F)/Δ_d^2`` out of the tendency of every wall face ``F``
+(``N`` its zeroed neighbour across the wall) and
+`apply_immersed_wall_stress!` applies ``τ = a\\,Δ_d\\,q_F`` (``a`` from
+`immersed_wall_drag!`). Returns `true` for a [`TKEClosure`](@ref);
+`false` (nothing attached) for any other closure. `walls = nothing`
+detaches.
+
+With walls attached, the shear production of every (face, wall) pair is
+
+```math
+P_s V \\;\\mathrel{+}=\\; \\underbrace{-\\,ν_{t,e}\\,q_F\\,\\frac{q_F − q_N}{Δ_d^2}\\,ΔV}_{\\text{stencil share out}}
+\\;+\\; \\underbrace{τ\\,\\frac{q_F}{Δ_d}\\,ΔV = a\\,q_F^2\\,ΔV}_{\\text{wall stress × resolved shear}},
+```
+
+the stencil share removed from the four cells around the edge exactly as
+[`dual_strain!`](@ref) put it there, and the wall-stress work split
+equally between the two cells the face separates. So
+``Σ P_s V = −Σ \\mathbf u·\\mathbf T_{sgs}V + Σ a\\,q_F^2 ΔV`` is again the
+resolved kinetic energy the SGS operator *as modified by the wall
+model* and the wall stress take out of the flow: the energy the
+wall-model stress removes is the shear production of the unresolved
+wall layer (``∫ τ_w ∂U/∂n\\,dn = τ_w U`` across a constant-stress log layer),
+booked in the first fluid cells, and no energy the resolved flow never
+lost is produced. Without walls the closure books the stencil's
+``ν_{t,e}(q_F/Δ_d)^2``, a production of a stress the step no longer
+applies.
+"""
+attach_immersed_walls!(c, walls) = false
+function attach_immersed_walls!(c::TKEClosure{T}, walls) where {T}
+    walls === nothing || walls isa ImmersedWalls ||
+        throw(ArgumentError("attach_immersed_walls!: walls must be an ImmersedWalls or nothing, got $(typeof(walls))"))
+    if walls !== nothing
+        g = mesh(c.e)
+        (size(walls.work[1]) == size(c.e.data) && walls.Δ == (T(g.dx), T(g.dy), T(g.dz))) ||
+            throw(DimensionMismatch("attach_immersed_walls!: the walls are of another grid"))
+    end
+    c.walls[] = walls
+    resize!(c.adrag, walls === nothing ? 0 : length(walls.faces))
+    return true
+end
+
+# Correct D (the stencil share out of the four edge cells) and fill c.Pw
+# (the wall-stress work) for the attached walls; the velocity halos and
+# c.ν must be filled and D folded already. No walls: Pw = 0. Returns the
+# interior sums (per unit cell volume) of the stencil production removed,
+# Σ ν ΔD, and of the wall-stress work, Σ Pw.
+function _wall_production!(c::TKEClosure{T}, sim, bcs) where {T}
+    fill!(c.Pw.data, zero(T))
+    iw = c.walls[]
+    iw === nothing && return (zero(T), zero(T))
+    return _wall_production!(c, iw, sim, bcs)      # (function barrier: c.walls is a Ref{Any})
+end
+
+function _wall_production!(c::TKEClosure{T}, iw::ImmersedWalls, sim, bcs) where {T}
+    pw, dd, nd = c.Pw.data, c.D.data, c.ν.data
+    g = mesh(c.e)
+    q = (sim.u.data, sim.v.data, sim.w.data)
+    Δ = (T(g.dx), T(g.dy), T(g.dz))
+    # 1. the stencil share of every wall face, as dual_strain! booked it
+    @inbounds for f in iw.faces
+        c_, d, s = Int(f.c), Int(f.d), Int(f.s)
+        I, J, K = Int(f.I), Int(f.J), Int(f.K)
+        Ni, Nj, Nk = I + s * (d == 1), J + s * (d == 2), K
+        ci, cj, ck = Int(c_ == 1), Int(c_ == 2), Int(c_ == 3)
+        qc = q[c_]
+        qF = qc[I, J, K]
+        a4 = T(0.25) * (-qF * (qc[Ni, Nj, Nk] - qF) / Δ[d]^2)
+        pw[I, J, K] += a4;  pw[I-ci, J-cj, K-ck] += a4
+        pw[Ni, Nj, Nk] += a4; pw[Ni-ci, Nj-cj, Nk-ck] += a4
+    end
+    _fold_halos!(pw, bcs, g)
+    ii, jj, kk = interior(g)
+    stencil = zero(T)
+    @inbounds for K in kk, J in jj, I in ii
+        dd[I, J, K] -= pw[I, J, K]
+        stencil += nd[I, J, K] * pw[I, J, K]
+    end
+    fill!(pw, zero(T))
+    # 2. the wall-stress work a q_F², half to each cell the face separates
+    a = immersed_wall_drag!(c.adrag, iw, q...)
+    @inbounds for (n, f) in enumerate(iw.faces)
+        c_ = Int(f.c)
+        I, J, K = Int(f.I), Int(f.J), Int(f.K)
+        ci, cj, ck = Int(c_ == 1), Int(c_ == 2), Int(c_ == 3)
+        h = a[n] * q[c_][I, J, K]^2 / 2
+        pw[I, J, K] += h; pw[I-ci, J-cj, K-ck] += h
+    end
+    _fold_halos!(pw, bcs, g)
+    work = zero(T)
+    @inbounds for K in kk, J in jj, I in ii
+        work += pw[I, J, K]
+    end
+    return (stencil, work)
+end
+
 """
     buoyancy_production!(P, κt, N2) -> P
 
@@ -534,7 +652,9 @@ step, or once per accepted piece of an adaptive step, after the projection;
 the sum over the pieces is the step):
 
 1. the coefficients ``ν_t, κ_t, l, s`` from ``e^n`` and the new state's
-   ``N^2``; ``P_s = ν_t D`` ([`dual_strain!`](@ref)), ``P_b = −κ_t N^2``;
+   ``N^2``; ``P_s = ν_t D`` ([`dual_strain!`](@ref)), with the facade
+   production of [`attach_immersed_walls!`](@ref) when walls are attached,
+   ``P_b = −κ_t N^2``;
 2. with `transport`: ``T = −∇·(\\mathbf u e)`` (flux-limited) ``+ ∇·(2ν_t∇e)``;
 3. ``e^* = e^n + Δt (T + P_s + \\max(P_b, 0))``, clipped at 0 if negative
    (booked: [`tke_statistics`](@ref));
@@ -552,9 +672,10 @@ function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     _coefficients!(c.ν, c.κt, c, c.N2)
     fill_halos!(c.ν, bcs)
     dual_strain!(c.D, sim.u, sim.v, sim.w, bcs)
+    _wall_production!(c, sim, bcs)
     fill!(c.tend.data, 0)
     if c.transport
-        ebcs = sim.θ_bcs
+        ebcs = homogeneous_bcs(sim.θ_bcs)     # e: not θ's top gradient (#254)
         fill_halos!(c.e, ebcs)
         advect_positive!(c.tend, sim.u, sim.v, sim.w, c.e, Δt;
                          scheme = c.advection, workspace = c.ws, bcs = ebcs)
@@ -569,9 +690,9 @@ function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
     g = mesh(c.e)
     Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     V = g.dx * g.dy * g.dz
-    ed, nd, n2, dd, td = c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data
+    ed, nd, n2, dd, td, pw = c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data, c.Pw.data
     Δ, ck, cl = c.Δ, c.c_k, c.c_l
-    sPs = zero(T); sPb = zero(T); sε = zero(T); sB = zero(T); sT = zero(T)
+    sPs = zero(T); sPb = zero(T); sε = zero(T); sB = zero(T); sT = zero(T); sPw = zero(T)
     nclip = zero(T); eclip = zero(T)
     exact = c.dissipation === :exact
     @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
@@ -585,7 +706,7 @@ function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
         l, s = tke_length_scale(e, N2, Δ; l_wall = _lwall(c.l_wall, i, j, k, T), c_l = cl)
         fac = _first(c.first_level, i, j, k) ? c.surface_factor : one(T)
         cε = tke_dissipation_coefficient(l, Δ; c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, factor = fac)
-        Ps = nd[I, J, K] * dd[I, J, K]
+        Ps = nd[I, J, K] * dd[I, J, K] + pw[I, J, K]
         κv = (1 + 2l / Δ) * nd[I, J, K]
         Psf = (k == 1 ? pbs[1] : zero(T)) + (k == g.Nz ? pbs[2] : zero(T))
         Pb = -κv * N2 + Psf
@@ -615,13 +736,14 @@ function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
             dB = R > 0 ? rem * (rb / R) : zero(T)
         end
         ed[I, J, K] = enew
-        sPs += Ps; sPb += Pb; sT += tr
+        sPs += Ps; sPb += Pb; sT += tr; sPw += pw[I, J, K]
         sε += dε; sB += dB
     end
     st = c.stats
     st[1] += nclip; st[2] += eclip
     st[4] = sPs * V; st[5] = sPb * V; st[6] = sε * V; st[7] = sB * V; st[8] = sT * V
     st[9] += 1
+    st[10] = sPw * V
     c.surface === nothing || _surface!(c, Δt)
     return c
 end
@@ -657,16 +779,18 @@ end
 
 Snapshot of the memory (``e`` and the booked statistics) into buffers the
 closure owns, and its restoration: a step `step_adaptive!` rejects leaves
-``e`` bit for bit as it was.
+``e`` bit for bit as it was. The snapshot `(e, stats)` is self-contained
+(restoring reads nothing but `s`), so a deep copy of it is what a
+checkpoint stores (#245) and restores into a freshly built closure.
 """
 function sgs_state(c::TKEClosure)
     copyto!(c.snap, c.e.data)
     copyto!(c.snapstats, c.stats)
-    return c.snap
+    return (c.snap, c.snapstats)
 end
 function restore_sgs_state!(c::TKEClosure, s)
-    copyto!(c.e.data, s)
-    copyto!(c.stats, c.snapstats)
+    copyto!(c.e.data, s[1])
+    copyto!(c.stats, s[2])
     return c
 end
 
@@ -679,12 +803,15 @@ those clips added, m⁵ s⁻², cumulative), `surface_energy` (TKE added by
 setting the surface value, m⁵ s⁻², cumulative), and the volume integrals of
 the last step (m⁵ s⁻³): `shear`, `buoyancy` (``Σ P_b V``, signed),
 `dissipation` (``Σ ε V``), `buoyant_destruction` (the implicit sink of the
-negative ``P_b``), `transport`; `steps` (commits).
+negative ``P_b``), `transport`, `wall` (the wall-stress work ``Σ a q_F^2 ΔV``
+booked in `shear` at wall-modelled faces, in place of the stencil share
+there: [`attach_immersed_walls!`](@ref); 0 without walls); `steps` (commits).
 """
 tke_statistics(c::TKEClosure) =
     (clips = Int(c.stats[1]), clipped_energy = c.stats[2], surface_energy = c.stats[3],
      shear = c.stats[4], buoyancy = c.stats[5], dissipation = c.stats[6],
-     buoyant_destruction = c.stats[7], transport = c.stats[8], steps = Int(c.stats[9]))
+     buoyant_destruction = c.stats[7], transport = c.stats[8], steps = Int(c.stats[9]),
+     wall = c.stats[10])
 
 """
     tke_budget(c::TKEClosure, sim) -> NamedTuple
@@ -694,7 +821,13 @@ state and ``e`` (m⁵ s⁻³; pure: no memory changes): `shear` ``Σ P_s V``,
 `buoyancy` ``Σ P_b V`` (with the half-face share of a prescribed surface
 heat flux, as in `advance_sgs!`), `dissipation` ``Σ ε V`` (``ε = c_ε e^{3/2}/l``),
 `transport` (``Σ V`` of the flux-limited advection and the ``2ν_t``
-diffusion: zero up to boundary fluxes), and `tke` ``Σ e V`` (m⁵ s⁻²).
+diffusion: zero up to boundary fluxes), `tke` ``Σ e V`` (m⁵ s⁻²),
+`wall_work` ``Σ a q_F^2 ΔV``, the wall-stress work booked in `shear` at the
+faces of attached walls, and `wall_stencil`, the stencil production
+``Σ ν_{t,e} q_F (q_F − q_N)/Δ_d^2 ΔV`` taken out of `shear` there
+([`attach_immersed_walls!`](@ref); both 0 without walls). With walls,
+`shear` ``= −Σ \\mathbf u·\\mathbf T_{sgs}V −`` `wall_stencil` ``+`` `wall_work`,
+``\\mathbf T_{sgs}`` the unmodified stencil.
 """
 function tke_budget(c::TKEClosure{T}, sim) where {T}
     g = mesh(c.e)
@@ -704,34 +837,37 @@ function tke_budget(c::TKEClosure{T}, sim) where {T}
     _coefficients!(c.ν, c.κt, c, c.N2)
     fill_halos!(c.ν, bcs)
     dual_strain!(c.D, sim.u, sim.v, sim.w, bcs)
+    sWs, _ = _wall_production!(c, sim, bcs)
     V = g.dx * g.dy * g.dz
     tr = zero(T)
     if c.transport
         fill!(c.tend.data, 0)
-        fill_halos!(c.e, sim.θ_bcs)
+        ebcs = homogeneous_bcs(sim.θ_bcs)
+        fill_halos!(c.e, ebcs)
         advect_positive!(c.tend, sim.u, sim.v, sim.w, c.e, one(T);
-                         scheme = c.advection, workspace = c.ws, bcs = sim.θ_bcs)
+                         scheme = c.advection, workspace = c.ws, bcs = ebcs)
         c.K2.data .= 2 .* c.ν.data
         add_eddy_diffusion_scalar!(c.tend, c.e, c.K2; mask = c.mask)
         tr = sum(interior_view(c.tend)) * V
     end
     Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     pbs = _surface_buoyancy(c, sim)
-    sP = zero(T); sB = zero(T); sε = zero(T); se = zero(T)
+    sP = zero(T); sB = zero(T); sε = zero(T); se = zero(T); sW = zero(T)
     @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
         I, J, K = Hx + i, Hy + j, Hz + k
         _solid(c.mask, I, J, K) && continue
+        sW += c.Pw.data[I, J, K]
         e = c.e.data[I, J, K]; N2 = c.N2.data[I, J, K]
         l, s = tke_length_scale(e, N2, c.Δ; l_wall = _lwall(c.l_wall, i, j, k, T), c_l = c.c_l)
         fac = _first(c.first_level, i, j, k) ? c.surface_factor : one(T)
         cε = tke_dissipation_coefficient(l, c.Δ; c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, factor = fac)
-        sP += c.ν.data[I, J, K] * c.D.data[I, J, K]
+        sP += c.ν.data[I, J, K] * c.D.data[I, J, K] + c.Pw.data[I, J, K]
         sB += -c.κt.data[I, J, K] * N2 + (k == 1 ? pbs[1] : zero(T)) + (k == g.Nz ? pbs[2] : zero(T))
         sε += cε * s * e
         se += e
     end
     return (shear = sP * V, buoyancy = sB * V, dissipation = sε * V, transport = tr,
-            tke = se * V)
+            tke = se * V, wall_work = sW * V, wall_stencil = sWs * V)
 end
 
 """

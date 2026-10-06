@@ -41,12 +41,10 @@ using Statistics
 
 const κ = Aeolus.SurfaceExchange.von_karman()
 
-# Macdonald et al. (1998), staggered array
-function macdonald(λp, λf; A = 4.43, β = 1.0, C_D = 1.2, κM = 0.4)
-    dh = 1 + A^(-λp) * (λp - 1)
-    z0h = (1 - dh) * exp(-(0.5 * β * C_D / κM^2 * (1 - dh) * λf)^(-0.5))
-    return dh, z0h
-end
+# Macdonald et al. (1998), staggered array: the one implementation is
+# `SurfaceTiles.macdonald_roughness` (defaults A = 4.43, β = 1.0, C_D = 1.2,
+# κ = 0.4 are the staggered-array constants quoted in the header).
+using Aeolus.SurfaceTiles: macdonald_roughness
 const CHENG_CASTRO_2002 = (d_h = 0.83, z0_h = 0.053)     # see the header: unverified
 
 # Height map of the staggered array: ncube cubes per row, npc fine points
@@ -69,7 +67,8 @@ ncube, npc = 20, 16
 hf = cube_array(ncube, npc; h = h)
 λp = mean(hf .> 0)
 Lf = 2ncube * h                      # side of the periodic tile
-dMac, z0Mac = macdonald(λp, λp)
+mac = macdonald_roughness(λp, λp, 1.0)   # h = 1: d and z0 are d/h and z0/h
+dMac, z0Mac = mac.d, mac.z0
 @printf("Staggered cubes: λp = λf = %.3f (measured from the map); Macdonald 1998: d/h = %.3f, z0/h = %.4f; Cheng & Castro 2002: d/h = %.2f, z0/h = %.3f\n",
         λp, dMac, z0Mac, CHENG_CASTRO_2002.d_h, CHENG_CASTRO_2002.z0_h)
 

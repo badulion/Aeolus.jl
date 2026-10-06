@@ -36,8 +36,10 @@ slot's anelastic / pseudo-incompressible provider), `geom`
 `ref` ([`CaseReference`](@ref)), the enabled `couplings` (registry
 order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
 NetCDF `output` (or `nothing`), the `io` for log lines, the composed
-`step!` hooks, and `timing` (wall seconds per `(stage, coupling)`, see
-[`timing_report`](@ref)).
+`step!` hooks, `timing` (wall seconds per `(stage, coupling)`, see
+[`timing_report`](@ref)) and `top` — the heat flux through a
+fixed-gradient θ top ([`TopHeatFlux`](@ref), `nothing` for a closed
+lid).
 """
 mutable struct Case{M, S, G<:Geometry}
     cfg::CaseConfig
@@ -57,6 +59,7 @@ mutable struct Case{M, S, G<:Geometry}
     post_predictor::Union{Nothing,Function}
     timing::Dict{Tuple{Symbol,Symbol},Float64}
     step_kwargs::NamedTuple      # extra step! keywords from the couplings' step_options
+    top::Union{Nothing,TopHeatFlux}   # the fixed-gradient θ top's heat flux (#254)
 end
 
 "The enabled coupling called `name`, or `nothing`."
@@ -69,6 +72,15 @@ end
 
 "Local hour of day at simulation time `t` (s)."
 hour_of_day(cfg::CaseConfig, t::Real) = (cfg.start_h + t / 3600) % 24.0
+
+"""
+    case_weekday(cfg) -> 1 … 7
+
+Day of the week of `cfg.date` (1 = Monday … 7 = Sunday, the convention
+of `BuildingEnergy.WeeklySchedule`): 29 June 2019 is a Saturday (6).
+"""
+case_weekday(cfg::CaseConfig) =
+    mod(Aeolus.LargeScaleForcing._days_from_civil(cfg.date...) + 3, 7) + 1   # 1970-01-01: Thursday
 
 """
     solar_position_at(cfg, hour) -> SolarPosition
@@ -89,8 +101,11 @@ end
     core_parameters(cfg) -> NamedTuple
 
 The keyword arguments every dynamical core of the case shares: viscosity,
-gravity, Coriolis, Smagorinsky, sponge and the boundary conditions
-(periodic laterally, wall / no-flux at top and bottom).
+gravity, Coriolis, Smagorinsky, sponge and the boundary conditions:
+periodic laterally, walls at the bottom and the top for the velocity;
+for θ no flux at the ground (the surface fluxes enter as tendencies) and
+[`θ_top_bc`](@ref)`(cfg)` at the top (`cfg.θ_top`; default the
+fixed-gradient top, #254).
 """
 core_parameters(cfg::CaseConfig) = (
     ν              = cfg.ν,
@@ -101,7 +116,7 @@ core_parameters(cfg::CaseConfig) = (
     sponge_α_max   = cfg.sponge_α_max,
     sponge_z_start = cfg.sponge_frac * cfg.extent[3],
     bcs   = FieldBoundaryConditions(:periodic, :periodic, :wall),
-    θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    θ_bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = θ_top_bc(cfg)))
 
 "The dry Boussinesq core of the case (buoyancy about the constant `cfg.θ₀`)."
 boussinesq_core(cfg::CaseConfig, mesh; kw...) =
@@ -149,15 +164,15 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time())
     case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), ledger, ref,
                 AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
-                nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;))
+                nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
+                top_heat_flux(cfg, sim, ref))
 
     # Core moisture tracers. qv and ql are advected by the :transport
     # stage; KNOWN: qr is sedimented by the microphysics but never
     # advected (kept for bit-for-bit; the microphysics-slot issue fixes it).
     qv = ensure_tracer!(case, :qv; advect = true, positive = true,
                         units = "kg kg-1", long_name = "water vapour specific humidity")
-    qv0, Hq = cfg.qv0, cfg.qv_scale
-    set!(qv, (x, y, z) -> qv0 * exp(-z / Hq))
+    set!(qv, initial_qv(cfg))                        # the sounding, or the idealised profile
     ensure_tracer!(case, :ql; advect = true, positive = true,
                    units = "kg kg-1", long_name = "cloud liquid water")
     ensure_tracer!(case, :qr; units = "kg kg-1", long_name = "rain water")
