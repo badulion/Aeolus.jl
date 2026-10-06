@@ -14,7 +14,7 @@ export axis_poisson_bc                           # N-open-a (#251)
 export neighbor_index, mark_open_boundary_solids!   # N-open-d (#262)
 export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,   # N-open-b (#255)
        AbstractBoundaryData, ProfileBoundaryData, FunctionBoundaryData,
-       boundary_values!, open_boundary_conditions, set_boundary_data!,
+       boundary_values!, open_boundary_conditions, set_boundary_data!, add_open_scalars!,
        has_open_boundaries, open_boundary_states, update_open_boundaries!,
        prepare_open_boundaries!, correct_boundary_mass_flux!, open_boundary_flux,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,

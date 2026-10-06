@@ -97,7 +97,7 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        step_nested!, nest_conservation_error, composite_integral,
        NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask,
        DomainAdvance, domain_advance, stage_times,
-       NestedRun, NestRunStats, boundary_time
+       NestedRun, NestRunStats, boundary_time, begin_parent_step!, end_parent_step!, subcycle_dt
 
 
 _moist(sim::BoussinesqSimulation) = sim.has_moisture

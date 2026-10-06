@@ -408,6 +408,19 @@ _dt_limit(sim, adv::DomainAdvance, c::CFLConstraints, dt_prev) =
 # exactly Δt_p/r takes r substeps, not r + 1.
 _nsub(R, lim) = max(1, ceil(Int, (R / lim) * (1 - 1e-9)))
 
+"""
+    subcycle_dt(remaining, limit) -> dt
+
+The next child substep of a parent-step window with `remaining` seconds
+left, for a child whose own step limit is `limit`: `remaining / n`,
+`n = ⌈remaining / limit⌉` (a ratio that is an integer up to 1e-9 relative
+is not rounded up), so the substeps land exactly on the window end. The
+rule [`step_nested!`](@ref)'s subcycling re-evaluates before every
+substep; a caller that drives the child itself
+([`begin_parent_step!`](@ref)) uses it to pick its steps.
+"""
+subcycle_dt(R::Real, lim::Real) = R / _nsub(R, lim)
+
 _advective_rate(sim) = (fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs);
                         fill_halos!(sim.w, sim.bcs);
                         _max_advective_rate(sim.u.data, sim.v.data, sim.w.data, sim.mesh))
@@ -445,6 +458,37 @@ The child clock is set to the parent's at the end (the discrepancy it
 had is recorded in `run.stats.max_clock_error`).
 """
 function step_nested!(run::NestedRun; dt = nothing)
+    w = begin_parent_step!(run; dt)
+    # --- 5. child substeps --------------------------------------------------
+    tw = time_ns()
+    _subcycle_child!(run, w.t_child_end)
+    run.stats.wall_child += (time_ns() - tw) / 1e9
+    end_parent_step!(run, w)
+    return run
+end
+
+"""
+    begin_parent_step!(run::NestedRun; dt = nothing) -> window
+
+Steps 1–4 of [`step_nested!`](@ref)`(run)`: pick the parent step `Δt_p`
+(or take `dt`), prolongate the parent field set at `t_p` (reused from the
+previous step in a one-way run), advance the parent (with its retries),
+prolongate at `t_p + Δt_p`, and point the child's open faces at the new
+window `[t_p, t_p + Δt_p]`. The child is **not** advanced: a caller that
+drives the child itself — the Berlin case, whose child step is a whole
+stage loop (`examples/urban`, N-berlin-nest #265) — then takes any child
+steps that land on `window.t_child_end` (the child's open faces read the
+time-blended parent at every stage time, [`boundary_time`](@ref)) and
+closes the window with [`end_parent_step!`](@ref).
+
+Returns `window = (t_child_end, Δt, I0, m0)`: the child time the window
+ends at, the parent step taken, and (two-way runs that record) the
+composite integrals at the start, which `end_parent_step!` compares.
+
+`step_nested!(run)` is exactly `begin_parent_step!`, the run's own child
+subcycling (`advance_child`), `end_parent_step!`.
+"""
+function begin_parent_step!(run::NestedRun; dt = nothing)
     p = run.parent; c = run.child; nest = run.nest; st = run.stats
     t_p = Float64(p.t)
 
@@ -461,10 +505,8 @@ function step_nested!(run::NestedRun; dt = nothing)
     Δt > 0 || error("step_nested!: parent step must be > 0, got $Δt")
 
     two_way = run.feedback === :two_way
-    if two_way && run.record
-        I0 = _composite_scalars(p, c, nest, run.s_bc)
-        m0 = composite_integral(p, c, nest, :momentum_x)
-    end
+    I0 = two_way && run.record ? _composite_scalars(p, c, nest, run.s_bc) : nothing
+    m0 = two_way && run.record ? composite_integral(p, c, nest, :momentum_x) : 0.0
 
     # --- 2. boundary data at t_p -------------------------------------------
     tb = time_ns()
@@ -492,33 +534,49 @@ function step_nested!(run::NestedRun; dt = nothing)
     run.t0 = Float64(c.t)
     run.Δt = t_end - t_p
     _set_window!(run)
+    return (t_child_end = run.synced ? t_end : run.t0 + run.Δt, Δt = Δt, I0 = I0, m0 = m0)
+end
 
-    # --- 5. child substeps --------------------------------------------------
-    tw = time_ns()
-    _subcycle_child!(run, run.synced ? t_end : run.t0 + run.Δt)
-    st.wall_child += (time_ns() - tw) / 1e9
+"""
+    end_parent_step!(run::NestedRun, window) -> run
+
+Close the parent-step window opened by [`begin_parent_step!`](@ref): the
+child must have reached `window.t_child_end` (to `1e-9 Δt_p`; its clock
+is then set to it exactly, the discrepancy recorded in
+`run.stats.max_clock_error`); a two-way run applies the feedback
+(step 6 of [`step_nested!`](@ref)) and records the conservation ledger;
+the parent-step statistics and the run clock are updated.
+"""
+function end_parent_step!(run::NestedRun, w::NamedTuple)
+    p = run.parent; c = run.child; nest = run.nest; st = run.stats
+    t_end = w.t_child_end
+    abs(Float64(c.t) - t_end) <= 1e-9 * max(run.Δt, floatmin(Float64)) ||
+        error("end_parent_step!: the child is at t = $(c.t), not at the window end $t_end")
+    st.max_clock_error = max(st.max_clock_error,
+                             abs(Float64(c.t) - t_end) / max(abs(t_end), floatmin(Float64)))
+    c.t = t_end
 
     # --- 6. feedback ---------------------------------------------------------
-    if two_way
+    if run.feedback === :two_way
         tw = time_ns()
         _two_way_feedback!(run)
         if run.record
             I1 = _composite_scalars(p, c, nest, run.s_bc)
-            for (k, v0) in I0
+            for (k, v0) in w.I0
                 nest.ledger[k] = abs(I1[k] - v0) / max(abs(v0), 1e-300)
             end
             m1 = composite_integral(p, c, nest, :momentum_x)
-            nest.ledger[:momentum_x] = abs(m1 - m0) / max(abs(m0), 1e-300)
+            nest.ledger[:momentum_x] = abs(m1 - w.m0) / max(abs(w.m0), 1e-300)
         end
         run.new_valid_at = NaN                 # the parent changed after s_new
         st.wall_feedback += (time_ns() - tw) / 1e9
     end
 
     st.parent_steps += 1
-    st.dt_parent_min = min(st.dt_parent_min, Δt)
-    st.dt_parent_max = max(st.dt_parent_max, Δt)
-    run.dt_prev_parent = Δt
-    run.t = t_end
+    st.dt_parent_min = min(st.dt_parent_min, w.Δt)
+    st.dt_parent_max = max(st.dt_parent_max, w.Δt)
+    run.dt_prev_parent = w.Δt
+    run.t = Float64(p.t)
     return run
 end
 
