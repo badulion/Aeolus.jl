@@ -20,9 +20,9 @@ include("Operators.jl")
 include("TimeSteppers.jl")
 include("PressureSolvers.jl")
 include("Simulations.jl")
+include("NCIO.jl")            # NetCDF-4 output policy over NCDatasets (#310); before IO (diagnostics.nc, #337)
 include("IO.jl")
 include("Config.jl")         # run configuration schema, loader, canonical run.toml (CFG-a, #356)
-include("NCIO.jl")            # NetCDF-4 output policy over NCDatasets (#310)
 include("IBM.jl")
 include("Parallel.jl")
 include("SpectralElement.jl")
@@ -98,9 +98,9 @@ using .Operators
 using .TimeSteppers
 using .PressureSolvers
 using .Simulations
+using .NCIO
 using .IO
 using .Config
-using .NCIO
 using .Microphysics
 using .IBM
 using .Parallel
@@ -250,6 +250,8 @@ export checkpoint_payload, write_checkpoint,
        BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
        check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
        RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir
+# #337: diagnostics.nc
+export DiagnosticsNCWriter, diagnostics_nc_path, nc_provenance_attributes
 export NCDataset, nc_create, nc_defvar!, nc_append_record!, nc_chunksizes,
        cf_time_units, NC_DEFLATE_LEVEL                              # #310
 export apply_kessler_step!, KESSLER_N0, kessler_rain_number, kessler_fall_speed

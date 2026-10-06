@@ -156,6 +156,123 @@ end
     @test ps[5].levels ≈ [(k - 0.5) * cm.dz for k in 1:cm.Nz]
     @test evaluate_profile(ps[1]) ≈ dn_mean(dn_raw(pA.u)) rtol = 1e-14
     @test evaluate_profile(ps[7]) ≈ dn_mean(dn_raw(cA.θ)) rtol = 1e-14
+    # in diagnostics.nc the two domains keep their own axes
+    path = joinpath(mktempdir(), "nest.nc")
+    w = DiagnosticsNCWriter(path, Diagnostic[], ps)
+    record_diagnostics!(w, run.parent.t; step = 1)
+    close(w)
+    NCDataset(path) do ds
+        @test ds.dim["parent.z"] == 12 && ds.dim["child.z"] == cm.Nz
+        @test NCDatasets.dimnames(ds["child.theta"]) == ("child.z", "time_costly")
+        @test ds["child.z"][:] == ps[5].levels
+    end
+end
+
+@testset "DiagnosticsNCWriter: two record dimensions, cadence, buffering, layout" begin
+    dir = mktempdir()
+    k = Ref(0)
+    diags = [Diagnostic("count", "1", () -> Float64(k[]); cadence = :step),
+             Diagnostic("sq", "m2", () -> Float64(k[])^2),
+             Diagnostic("peak", "m s-1", () -> [1.0, -k[]]; reduction = :maxabs)]
+    lev = [10.0, 30.0, 50.0]
+    profs = [ProfileDiagnostic("prof", "K", "z", lev, () -> lev .* k[]),
+             ProfileDiagnostic("other", "1", "zz", lev, () -> fill(-1.0 * k[], 3)),
+             ProfileDiagnostic("faces", "1", "z", [0.0, 20.0, 40.0], () -> [1.0, 2.0, 3.0])]
+    path = joinpath(dir, "d.nc")
+    w = DiagnosticsNCWriter(path, diags, profs; cadence = 2.5, flush_every = 4,
+                            attributes = Dict("run_id" => "abc", "session" => 1),
+                            time_origin = DateTime(2019, 6, 29, 4))
+    lims = ["advective", "", "diffusive"]
+    costly = Bool[]
+    for n in 1:10
+        k[] = n
+        push!(costly, record_diagnostics!(w, Float64(n); step = n, dt = 1.0, limiter = lims[mod1(n, 3)],
+                                          retries = n == 4 ? 2 : 0))
+        # rows are buffered: on disk after 4 rows, or with a costly row
+        n == 2 && @test w.ds.dim["time"] == 1         # row 1 was costly
+        n == 3 && @test w.ds.dim["time"] == 1
+    end
+    @test costly == [n in (1, 4, 7, 10) for n in 1:10]
+    close(w)
+    @test read(path, 4) == UInt8[0x89, 'H', 'D', 'F']
+    NCDataset(path) do ds
+        @test ds.attrib["Conventions"] == "CF-1.8" && ds.attrib["run_id"] == "abc"
+        @test ds.attrib["title"] == "Aeolus run diagnostics"
+        @test occursin("session 1: created", ds.attrib["history"])
+        @test ds.dim["time"] == 10 && ds.dim["time_costly"] == 4
+        # time: every row; CF time from the origin
+        @test ds["time"].var[:] == 1.0:10.0
+        @test ds["time"][1] == DateTime(2019, 6, 29, 4, 0, 1)
+        @test ds["step"][:] == 1:10 && eltype(ds["step"]) == Int64
+        @test ds["dt"][:] == fill(1.0, 10)
+        @test ds["dt_limiter"][:] == [lims[mod1(n, 3)] for n in 1:10]
+        @test ds["retries"][:] == [n == 4 ? 2 : 0 for n in 1:10]
+        @test ds["count"][:] == 1.0:10.0
+        @test issorted(ds["wall"][:])
+        # time_costly: the costly scalars and profiles at 1, 4, 7, 10
+        @test ds["time_costly"].var[:] == [1.0, 4.0, 7.0, 10.0]
+        @test ds["step_costly"][:] == [1, 4, 7, 10]
+        @test ds["sq"][:] == [1.0, 16.0, 49.0, 100.0]
+        @test ds["peak"][:] == [1.0, 4.0, 7.0, 10.0]
+        @test ds["peak"].attrib["cell_methods"] == "area: maximum_absolute_value"
+        @test ds["peak"].attrib["units"] == "m s-1"
+        @test ds["prof"][:, :] == lev * [1.0 4.0 7.0 10.0]
+        # equal levels share an axis whatever its name; other levels get a suffix
+        @test NCDatasets.dimnames(ds["other"]) == ("z", "time_costly")
+        @test NCDatasets.dimnames(ds["faces"]) == ("z_2", "time_costly")
+        @test ds["z"][:] == lev && ds["z_2"][:] == [0.0, 20.0, 40.0]
+        @test ds["z"].attrib["axis"] == "Z" && ds["z"].attrib["units"] == "m"
+        @test NCDatasets.deflate(ds["prof"])[1]                # compressed
+    end
+    # names are one namespace: scalars, profiles, axes, fixed variables
+    @test_throws ArgumentError DiagnosticsNCWriter(joinpath(dir, "x.nc"),
+        [Diagnostic("theta", "K", () -> 0.0)], [ProfileDiagnostic("theta", "K", "z", lev, () -> lev)])
+    @test_throws ArgumentError DiagnosticsNCWriter(joinpath(dir, "y.nc"),
+        [Diagnostic("time_costly", "s", () -> 0.0)])
+    @test_throws ArgumentError DiagnosticsNCWriter(joinpath(dir, "z.nc"),
+        [Diagnostic("z", "m", () -> 0.0)], profs)
+
+    # append: same layout continues the file; another layout goes to -2
+    w2 = DiagnosticsNCWriter(path, diags, profs; cadence = 2.5,
+                             attributes = Dict("run_id" => "abc", "session" => 2))
+    k[] = 11
+    record_diagnostics!(w2, 11.0; step = 11)
+    close(w2)
+    lg = Test.TestLogger(; min_level = Logging.Warn)
+    w3 = with_logger(lg) do
+        DiagnosticsNCWriter(path, diags[1:2], profs; attributes = Dict("session" => 3))
+    end
+    @test w3.path == joinpath(dir, "d-2.nc")
+    @test occursin("another layout", only(lg.logs).message)
+    record_diagnostics!(w3, 12.0; step = 12)
+    close(w3)
+    NCDataset(path) do ds
+        @test ds["step"][:] == 1:11 && ds["step_costly"][:] == [1, 4, 7, 10, 11]
+        @test ds["prof"][:, end] == lev * 11
+        @test ds.attrib["session"] == 2
+        @test occursin("session 2: appended", ds.attrib["history"])
+    end
+    NCDataset(joinpath(dir, "d-2.nc")) do ds
+        @test ds["step"][:] == [12] && !haskey(ds, "peak")
+    end
+end
+
+@testset "the writer never prints" begin
+    sim = dn_sim()
+    path = joinpath(mktempdir(), "q.nc")
+    out = mktemp() do p, io
+        redirect_stdout(io) do
+            redirect_stderr(io) do
+                with_logger(NullLogger()) do
+                    w = DiagnosticsNCWriter(path, collect_diagnostics(sim), collect_profiles(sim))
+                    record_diagnostics!(w, 0.0; step = 0)
+                    close(w)
+                end
+            end
+        end
+        close(io); read(p, String)
+    end
+    @test isempty(out)
 end
 
 end
