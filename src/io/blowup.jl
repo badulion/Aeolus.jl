@@ -80,7 +80,7 @@ function nonfinite_fields(sim)
     out = NonFiniteField[]
     for (name, f) in pairs(blowup_fields(sim))
         a = interior_view(f)
-        all(isfinite, a) && continue
+        allfinite(a) && continue
         n = 0; nn = 0; first_I = nothing
         @inbounds for I in CartesianIndices(a)
             x = a[I]
@@ -96,6 +96,26 @@ function nonfinite_fields(sim)
     end
     return out
 end
+
+"""
+    allfinite(a) -> Bool
+
+Whether every value of `a` is finite. Branch-free (`x * 0` is `0` for a
+finite `x` and `NaN` otherwise, summed with `@simd` along the contiguous
+first dimension), so the healthy case, the one the blowup check pays for
+every time, vectorises; about 10× faster than `all(isfinite, a)` on an
+interior view.
+"""
+function allfinite(a::AbstractArray{T,3}) where {T<:AbstractFloat}
+    s = zero(T)
+    @inbounds for k in axes(a, 3), j in axes(a, 2)
+        @simd for i in axes(a, 1)
+            s += a[i, j, k] * zero(T)
+        end
+    end
+    return s == 0
+end
+allfinite(a) = all(isfinite, a)
 
 # ---------------------------------------------------------------------------
 # the error
@@ -172,9 +192,11 @@ Blowup handling of a run (epic #293: diagnose, dump, stop).
   does not cover) nothing is written, and the diagnosis says so.
 * **Stop.** It throws a [`BlowupError`](@ref) with all of the above.
 
-Cost: the check reads every value of the inspected fields once, and a
-snapshot copies them; on the 64×64×32 benchmark both together, at the
-default `every_steps = 10`, are measured on the Logging API page.
+Cost: the check reads every value of the inspected fields once
+([`allfinite`](@ref)), a snapshot copies them into the previous
+snapshot's buffers; on a 64×64×32 case 0.12 ms and 0.26 ms, so 0.04 ms
+per step at the default `every_steps = 10` (0.4 % of an 8.6 ms step;
+`benchmarks/bench_run_monitor.jl`).
 """
 mutable struct BlowupGuard
     every_steps::Int
@@ -221,9 +243,13 @@ Keep the current state of `sim` as the last good state (without
 checking it; [`check_blowup!`](@ref) calls this after a passing check).
 """
 function snapshot_good!(g::BlowupGuard, sim; step::Integer)
-    p = _payload(g, sim, step)
-    p === nothing && return g
-    g.good = p; g.good_step = step
+    _can_checkpoint(sim) || return g
+    # the field copies reuse the buffers of the previous snapshot
+    g.good = checkpoint_payload(sim; sgs = g.sgs, components = g.components,
+                                stepper = g.stepper, rng = g.rng,
+                                extra = Dict{Symbol,Any}(:step => step),
+                                buffers = g.good === nothing ? nothing : g.good[:fields])
+    g.good_step = step
     return g
 end
 
