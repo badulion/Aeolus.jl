@@ -89,7 +89,8 @@ end
 
 """
     total_stress_profile(u, v, w, νt; ν = 0, τ_wall_bottom = 0,
-                         τ_wall_top = 0, component = :x)
+                         τ_wall_top = 0, component = :x, irange = nothing,
+                         jrange = nothing)
         -> (z, resolved, sgs, viscous, wall, total)
 
 The plane-mean vertical flux of horizontal momentum (kinematic,
@@ -125,6 +126,14 @@ For the pressure-driven half channel of height ``H`` and forcing
 ``u_*^2(1 - z/H)`` (Porté-Agel et al. 2000, Fig. 3); for the two-wall
 channel it is ``u_τ^2(1 - z/δ)``.
 
+`irange` (default: all of `1:Nx`) restricts the mean to the columns
+`i ∈ irange` (the x-faces / y-z edges of those columns), for the
+streamwise-developing flow of an inflow–outflow domain, which is
+homogeneous only in y (N-inflow-d, #266: the total stress a few
+boundary-layer depths behind a synthetic inflow). The budget statement
+above is then local to the x band. `jrange` likewise restricts it to the
+rows `j ∈ jrange` (the centre of a domain with open lateral faces).
+
 # References
 
   * Porté-Agel, F., Meneveau, C. & Parlange, M. B. (2000). *J. Fluid Mech.*,
@@ -136,11 +145,19 @@ channel it is ``u_τ^2(1 - z/δ)``.
 function total_stress_profile(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                               νt::Field{CellCenter}; ν::Real = 0,
                               τ_wall_bottom::Real = 0, τ_wall_top::Real = 0,
-                              component::Symbol = :x)
+                              component::Symbol = :x, irange = nothing,
+                              jrange = nothing)
     component in (:x, :y) ||
         throw(ArgumentError("total_stress_profile: component must be :x or :y, got :$component"))
     g = mesh(u)
     Nx, Ny, Nz, Hx, Hy, Hz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz
+    is = irange === nothing ? (1:Nx) : UnitRange{Int}(irange)
+    (first(is) >= 1 && last(is) <= Nx && !isempty(is)) ||
+        throw(ArgumentError("total_stress_profile: irange must lie in 1:$Nx"))
+    js = jrange === nothing ? (1:Ny) : UnitRange{Int}(jrange)
+    (first(js) >= 1 && last(js) <= Ny && !isempty(js)) ||
+        throw(ArgumentError("total_stress_profile: jrange must lie in 1:$Ny"))
+    nc = length(is) * length(js)
     T = eltype(u.data)
     idz = 1 / g.dz
     a = component === :x ? u.data : v.data
@@ -151,7 +168,7 @@ function total_stress_profile(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
     @inbounds for k in 1:Nz+1
         sr = zero(T); ss = zero(T); sv = zero(T)
         K = Hz + k
-        for j in 1:Ny, i in 1:Nx
+        for j in js, i in is
             I, J = Hx + i, Hy + j
             wa = (wd[I-di, J-dj, K] + wd[I, J, K]) / 2
             ua = (a[I, J, K-1] + a[I, J, K]) / 2
@@ -161,7 +178,7 @@ function total_stress_profile(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
             ss += ne * du
             sv += du
         end
-        res[k] = sr / (Nx * Ny); sgs[k] = ss / (Nx * Ny); vis[k] = ν * sv / (Nx * Ny)
+        res[k] = sr / nc; sgs[k] = ss / nc; vis[k] = ν * sv / nc
     end
     # the wall faces: the solver's interior stencils see zero flux through a
     # free-slip wall (w = 0, mirrored u/v halos); the wall model is the flux

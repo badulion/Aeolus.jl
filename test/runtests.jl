@@ -1022,6 +1022,7 @@ end
     include("era6_open_pressure.jl")     # N-open-a: per-axis Neumann Poisson solves, BC-aware default solver (#251)
     include("era6_open_boundaries.jl")   # N-open-b: open faces, boundary-data contract, mass-flux correction (#255)
     include("era6_outflow_conditions.jl") # N-open-c: convective / Orlanski outflow, boundary_scalar_flux, outgoing vortex (#260)
+    include("era6_inflow_fetch.jl")      # N-inflow-d: development length behind a synthetic inflow vs a periodic precursor (#266)
     include("era6_sounding.jl")          # N-parent-a: Lindenberg sounding → (z, t) profiles, boundary_layer_height (#247)
     include("era6_open_near_boundary.jl") # N-open-d: sponge toward the data, neighbor_index, solid open faces, boundary heat terms (#262)
 end

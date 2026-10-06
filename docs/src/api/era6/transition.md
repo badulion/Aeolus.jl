@@ -90,6 +90,23 @@ added_mass_flux(it).west.relative               # round-off
 injected_ke_flux(it).total                      # W m⁻²
 ```
 
+Development length (N-inflow-d, #266): `FetchStatistics`,
+`accumulate_fetch!` and `fetch_profiles` average the resolved moments of
+an inflow–outflow domain over y and time per streamwise column;
+`development_length` is the distance from the inflow plane beyond which
+a profile stays within a band around its target. The inflow–outflow half
+channel is `half_channel_case(; extent, inflow, outflow)` (WallModels),
+the x band of the total stress `total_stress_profile(…; irange)`
+(Operators). Theory and measured fetches in
+[Development length](../../theory/transition.md#Development-length-behind-the-inflow-(N-inflow-d)).
+
+```julia
+fs = FetchStatistics(child)
+accumulate_fetch!(fs, child, Δt)                # after every step
+p  = fetch_profiles(fs)                         # x, z, U, uu, vv, ww, tke, uw
+development_length((p.x, p.tke[:, k]), tke_precursor[k]; frac = 0.9, x0 = 0.0)
+```
+
 ```@autodocs
 Modules = [Aeolus.Transition]
 ```

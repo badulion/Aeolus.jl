@@ -1030,6 +1030,8 @@ export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statisti
 export InflowTurbulence, inflow_normal_length, set_integral_time!, remove_inflow_turbulence!,
        refresh_inflow_lengths!, added_mass_flux, injected_ke_flux, inflow_perturbation,
        feedback_exclude_width
+# N-inflow-d (#266) — the development length (fetch) behind a synthetic inflow.
+export FetchStatistics, accumulate_fetch!, fetch_profiles, development_length
 # Phase 57 — wall models (#169): equilibrium wall laws and the implicit
 # wall-stress operator. `friction_velocity` / `wall_stress` do not collide
 # with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
