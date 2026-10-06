@@ -19,27 +19,40 @@ it is the reference-mass integral `∫ W φ dV` (`W = ρ̄` or `ρ̄θ̄`).
 """
 function composite_integral(pf::Field{CellCenter}, cf::Field{CellCenter},
                             nest::NestedGrid; measure=nothing)
-    pm = nest.parent_mesh; cm = nest.child_mesh
-    size(pf.data) == totalsize(pm) ||
+    size(pf.data) == totalsize(nest.parent_mesh) ||
         error("composite_integral: parent field is not on the nest's parent mesh")
-    size(cf.data) == totalsize(cm) ||
+    size(cf.data) == totalsize(nest.child_mesh) ||
         error("composite_integral: child field is not on the nest's child mesh")
+    return _composite_sum(_CellValue(pf.data), _CellValue(cf.data), nest, measure)
+end
+
+# The cell value a composite integral sums: a cell-centred field, `u`
+# averaged to the cell centre, or one. Callable structs (no closures, no
+# temporary fields: #329, item 6 — `:momentum_x` used to allocate two
+# child- and parent-sized fields per call, twice per two-way step).
+struct _CellValue{A}; d::A; end
+@inline (c::_CellValue)(i, j, k) = @inbounds c.d[i, j, k]
+struct _UCellValue{A}; d::A; end
+@inline (c::_UCellValue)(i, j, k) = @inbounds 0.5 * (c.d[i, j, k] + c.d[i+1, j, k])
+struct _OneValue; end
+@inline (::_OneValue)(i, j, k) = 1.0
+
+function _composite_sum(fp, fc, nest::NestedGrid, measure)
+    pm = nest.parent_mesh; cm = nest.child_mesh
     cx, cy, cz = nest_covered_range(nest)
     total = 0.0
-    pd = pf.data
     @inbounds for k in 1:pm.Nz
         Vp = pm.dx * pm.dy * _pcell(nest, measure, k)
         for j in 1:pm.Ny, i in 1:pm.Nx
             (i in cx) && (j in cy) && (k in cz) && continue
-            total += pd[pm.Hx+i, pm.Hy+j, pm.Hz+k] * Vp
+            total += fp(pm.Hx+i, pm.Hy+j, pm.Hz+k) * Vp
         end
     end
-    cd = cf.data
     ωz = _zweights(measure)
     @inbounds for k in 1:cm.Nz
         Vc = ωz === nothing ? cm.dx * cm.dy * cm.dz : cm.dx * cm.dy * ωz[cm.Hz+k]
         for j in 1:cm.Ny, i in 1:cm.Nx
-            total += cd[cm.Hx+i, cm.Hy+j, cm.Hz+k] * Vc
+            total += fc(cm.Hx+i, cm.Hy+j, cm.Hz+k) * Vc
         end
     end
     return total
@@ -66,13 +79,8 @@ by the reference mass, `∫ W φ dV` (and `:mass` is `∫ W dV`).
 function composite_integral(psim::_NestSim, csim::_NestSim,
                             nest::NestedGrid, quantity::Symbol;
                             state::Union{Nothing,NestInterpState}=nothing)
-    pm = nest.parent_mesh; cm = nest.child_mesh
     meas = state === nothing ? _sim_measure(nest, psim, csim) : state.measure
-    if quantity === :mass
-        one_p = Field(CellCenter(), pm); fill!(one_p.data, 1.0)
-        one_c = Field(CellCenter(), cm); fill!(one_c.data, 1.0)
-        return composite_integral(one_p, one_c, nest; measure=meas)
-    end
+    quantity === :mass && return _composite_sum(_OneValue(), _OneValue(), nest, meas)
     (quantity === :theta || quantity === :θ) &&
         return composite_integral(psim.θ, csim.θ, nest; measure=meas)
     if state !== nothing
@@ -83,30 +91,26 @@ function composite_integral(psim::_NestSim, csim::_NestSim,
     quantity === :qv && return composite_integral(psim.qv, csim.qv, nest; measure=meas)
     quantity === :momentum_x || error("composite_integral: unknown quantity $quantity " *
         "(:mass, :theta, :qv, :momentum_x, or a scalar of `state`'s field set)")
-    up = Field(CellCenter(), pm); uc = Field(CellCenter(), cm)
-    pd = psim.u.data; cd = csim.u.data
-    @inbounds for k in 1:pm.Nz, j in 1:pm.Ny, i in 1:pm.Nx
-        up.data[pm.Hx+i, pm.Hy+j, pm.Hz+k] = 0.5 * (pd[pm.Hx+i, pm.Hy+j, pm.Hz+k] +
-                                                    pd[pm.Hx+i+1, pm.Hy+j, pm.Hz+k])
-    end
-    @inbounds for k in 1:cm.Nz, j in 1:cm.Ny, i in 1:cm.Nx
-        uc.data[cm.Hx+i, cm.Hy+j, cm.Hz+k] = 0.5 * (cd[cm.Hx+i, cm.Hy+j, cm.Hz+k] +
-                                                    cd[cm.Hx+i+1, cm.Hy+j, cm.Hz+k])
-    end
-    return composite_integral(up, uc, nest; measure=meas)
+    return _composite_sum(_UCellValue(psim.u.data), _UCellValue(csim.u.data), nest, meas)
 end
 
 "Ledger key of a field-set scalar: `:theta` for θ (historical), else its name."
 _ledger_key(name::Symbol) = name === :θ ? :theta : name
 
-"Composite integral of every scalar of the set, keyed like `nest.ledger`."
-function _composite_scalars(psim, csim, nest, s::NestInterpState)
-    d = Dict{Symbol,Float64}()
-    _foreach_scalar(s, psim, csim) do n, _, cf, pf
-        d[_ledger_key(n)] = composite_integral(pf, cf, nest; measure=s.measure)
+"Composite integral of every scalar of the set (θ first, then the bound scalars)."
+function _composite_scalars!(out::Vector{Float64}, psim, csim, nest, s::NestInterpState)
+    resize!(out, 1 + length(s.names))
+    out[1] = composite_integral(psim.θ, csim.θ, nest; measure=s.measure)
+    for i in eachindex(s.names)
+        out[1 + i] = composite_integral(s.parent[i], s.child[i], nest; measure=s.measure)
     end
-    return d
+    return out
 end
+_composite_scalars(psim, csim, nest, s::NestInterpState) =
+    _composite_scalars!(Float64[], psim, csim, nest, s)
+
+"Ledger keys of the scalars, in the order of `_composite_scalars!`."
+_scalar_ledger_keys(s::NestInterpState) = Symbol[:theta; [_ledger_key(n) for n in s.names]]
 
 # =========================================================================
 # Restriction and refluxing of the field set
@@ -135,8 +139,7 @@ function restrict_state_to_parent!(psim::_NestSim, csim::_NestSim, nest::NestedG
                                    solid=nothing)
     _check_two_way_pair(psim, csim, "restrict_state_to_parent!", s)
     meas = s === nothing ? _sim_measure(nest, psim, csim) : s.measure
-    χf = _fluid(nest, solid)                  # computed once for the whole set
-    χ = χf === nothing ? nothing : _FluidMask(χf)
+    χ = _fluid_mask(nest, solid)              # computed once for the whole set
     restrict_to_parent!(psim.θ, csim.θ, nest; measure=meas, solid=χ)
     if s !== nothing
         for i in eachindex(s.names)
@@ -211,15 +214,18 @@ end
 "Interface mass-flux imbalance, normalized by (velocity scale × interface area)."
 function _interface_imbalance(psim::_NestSim, csim::_NestSim,
                               nest::NestedGrid, meas=nothing)
-    m = compute_nest_flux_mismatch(psim.u, csim.u, nest; measure=meas) +
-        compute_nest_flux_mismatch(psim.v, csim.v, nest; measure=meas) +
-        compute_nest_flux_mismatch(psim.w, csim.w, nest; measure=meas)
+    nn = (nest.nx, nest.ny, nest.nz)
+    l1 = 0.0                         # Σ |coarse − fine| over the six planes, unstored
+    for (ax, pf, cf) in ((1, psim.u, csim.u), (2, psim.v, csim.v), (3, psim.w, csim.w))
+        l1 += _plane_mismatch!(nothing, pf, cf, nest, ax, 0, meas)
+        l1 += _plane_mismatch!(nothing, pf, cf, nest, ax, nn[ax], meas)
+    end
     U = max(maximum(abs, interior_view(psim.u)),
             maximum(abs, interior_view(psim.v)),
             maximum(abs, interior_view(psim.w)),
             maximum(abs, interior_view(csim.u)))
     U = U > 0 ? U : 1.0
-    return mismatch_l1(m) / (U * mismatch_area(nest))
+    return l1 / (U * mismatch_area(nest))
 end
 
 """

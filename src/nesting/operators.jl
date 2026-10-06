@@ -457,24 +457,19 @@ function _restrict_face_weighted!(pf::Field, cf::Field, nest::NestedGrid, ax::In
     nn = (nest.nx, nest.ny, nest.nz)
     oo = (nest.ix, nest.iy, nest.iz)
     Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (cm.Hx, cm.Hy, cm.Hz)
-    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+    t1, t2 = _tang(ax)
     q0 = include_boundary ? 0 : 1
     q1 = include_boundary ? nn[ax] : nn[ax] - 1
     pd = pf.data; cd = cf.data
-    pidx = [0, 0, 0]; cidx = [0, 0, 0]; bidx = [0, 0, 0]
     @inbounds for q in q0:q1
-        pidx[ax] = Hp[ax] + oo[ax] + q
-        cidx[ax] = Hc[ax] + q * r[ax] + 1
+        pq = Hp[ax] + oo[ax] + q; cq = Hc[ax] + q * r[ax] + 1
         for B in 1:nn[t2], A in 1:nn[t1]
-            pidx[t1] = Hp[t1] + oo[t1] + A - 1
-            pidx[t2] = Hp[t2] + oo[t2] + B - 1
+            pidx = _pos(ax, t1, pq, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
             num = 0.0; den = 0.0
             for b in 1:r[t2], a in 1:r[t1]
-                cidx[t1] = Hc[t1] + (A-1)*r[t1] + a
-                cidx[t2] = Hc[t2] + (B-1)*r[t2] + b
+                cidx = _pos(ax, t1, cq, Hc[t1] + (A-1)*r[t1] + a, Hc[t2] + (B-1)*r[t2] + b)
                 if χ !== nothing
-                    bidx[1] = cidx[1]; bidx[2] = cidx[2]; bidx[3] = cidx[3]
-                    bidx[ax] -= 1
+                    bidx = Base.setindex(cidx, cidx[ax] - 1, ax)
                     (χ[cidx[1], cidx[2], cidx[3]] && χ[bidx[1], bidx[2], bidx[3]]) ||
                         continue
                 end
@@ -488,6 +483,13 @@ function _restrict_face_weighted!(pf::Field, cf::Field, nest::NestedGrid, ax::In
     return pf
 end
 
+# The two tangential axes of a plane normal to `ax`, in increasing order, and
+# the storage index with `q` on `ax` and `a`, `b` on them — a tuple, not a
+# heap-allocated `[0, 0, 0]` (#329).
+@inline _tang(ax::Int) = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+@inline _pos(ax::Int, t1::Int, q::Int, a::Int, b::Int) =
+    ax == 1 ? (q, a, b) : ax == 2 ? (a, q, b) : (a, b, q)
+
 _axis_of(::Type{FaceX}) = 1
 _axis_of(::Type{FaceY}) = 2
 _axis_of(::Type{FaceZ}) = 3
@@ -499,23 +501,18 @@ function _restrict_face!(pf::Field, cf::Field, nest::NestedGrid, ax::Int,
     nn = (nest.nx, nest.ny, nest.nz)
     oo = (nest.ix, nest.iy, nest.iz)
     Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (cm.Hx, cm.Hy, cm.Hz)
-    ta = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
-    t1, t2 = ta
+    t1, t2 = _tang(ax)
     inv = 1 / (r[t1] * r[t2])
     q0 = include_boundary ? 0 : 1
     q1 = include_boundary ? nn[ax] : nn[ax] - 1
     pd = pf.data; cd = cf.data
-    pidx = [0, 0, 0]; cidx = [0, 0, 0]
     @inbounds for q in q0:q1
-        pidx[ax] = Hp[ax] + oo[ax] + q
-        cidx[ax] = Hc[ax] + q * r[ax] + 1
+        pq = Hp[ax] + oo[ax] + q; cq = Hc[ax] + q * r[ax] + 1
         for B in 1:nn[t2], A in 1:nn[t1]
-            pidx[t1] = Hp[t1] + oo[t1] + A - 1
-            pidx[t2] = Hp[t2] + oo[t2] + B - 1
+            pidx = _pos(ax, t1, pq, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
             s = 0.0
             for b in 1:r[t2], a in 1:r[t1]
-                cidx[t1] = Hc[t1] + (A-1)*r[t1] + a
-                cidx[t2] = Hc[t2] + (B-1)*r[t2] + b
+                cidx = _pos(ax, t1, cq, Hc[t1] + (A-1)*r[t1] + a, Hc[t2] + (B-1)*r[t2] + b)
                 s += cd[cidx[1], cidx[2], cidx[3]]
             end
             pd[pidx[1], pidx[2], pidx[3]] = s * inv
@@ -614,44 +611,53 @@ compute_nest_flux_mismatch(pf::Field{L}, cf::Field{L}, nest::NestedGrid;
 
 function _face_mismatch(pf::Field, cf::Field, nest::NestedGrid, ax::Int, measure=nothing)
     T  = eltype(pf.data)
+    nn = (nest.nx, nest.ny, nest.nz)
+    t1, t2 = _tang(ax)
+    lowm  = zeros(T, nn[t1], nn[t2])
+    highm = zeros(T, nn[t1], nn[t2])
+    _plane_mismatch!(lowm, pf, cf, nest, ax, 0, measure)
+    _plane_mismatch!(highm, pf, cf, nest, ax, nn[ax], measure)
+    e = zeros(T, 0, 0)
+    ax == 1 && return NestFluxMismatch{T}(lowm, highm, copy(e), copy(e), copy(e), copy(e))
+    ax == 2 && return NestFluxMismatch{T}(copy(e), copy(e), lowm, highm, copy(e), copy(e))
+    return NestFluxMismatch{T}(copy(e), copy(e), copy(e), copy(e), lowm, highm)
+end
+
+# coarse − Σ fine (flux units) on the interface plane `q` (0: low, n: high)
+# normal to `ax`, written into `M`; with `M === nothing` the plane's
+# Σ |coarse − fine| is returned instead and nothing is stored. One kernel
+# for the mismatch, the interface imbalance and the face flux correction.
+function _plane_mismatch!(M, pf::Field, cf::Field, nest::NestedGrid, ax::Int, q::Int,
+                          measure=nothing)
     pm = nest.parent_mesh; cm = nest.child_mesh
     r  = (nest.rx, nest.ry, nest.rz)
     nn = (nest.nx, nest.ny, nest.nz)
     oo = (nest.ix, nest.iy, nest.iz)
     Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (cm.Hx, cm.Hy, cm.Hz)
-    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+    t1, t2 = _tang(ax)
     ωz = ax == 3 ? nothing : _zweights(measure)
     inv = 1 / (r[t1] * r[t2])
     pd = pf.data; cd = cf.data
-    lowm  = zeros(T, nn[t1], nn[t2])
-    highm = zeros(T, nn[t1], nn[t2])
-    pidx = [0, 0, 0]; cidx = [0, 0, 0]
-    for (q, M) in ((0, lowm), (nn[ax], highm))
-        pidx[ax] = Hp[ax] + oo[ax] + q
-        cidx[ax] = Hc[ax] + q * r[ax] + 1
-        @inbounds for B in 1:nn[t2], A in 1:nn[t1]
-            pidx[t1] = Hp[t1] + oo[t1] + A - 1
-            pidx[t2] = Hp[t2] + oo[t2] + B - 1
-            Ap = _face_area(nest, measure, ax, B)
-            s = 0.0; den = 0.0
-            for b in 1:r[t2], a in 1:r[t1]
-                cidx[t1] = Hc[t1] + (A-1)*r[t1] + a
-                cidx[t2] = Hc[t2] + (B-1)*r[t2] + b
-                if ωz === nothing
-                    s += cd[cidx[1], cidx[2], cidx[3]]
-                else
-                    w = ωz[cidx[3]]
-                    s += w * cd[cidx[1], cidx[2], cidx[3]]; den += w
-                end
+    pq = Hp[ax] + oo[ax] + q; cq = Hc[ax] + q * r[ax] + 1
+    l1 = 0.0
+    @inbounds for B in 1:nn[t2], A in 1:nn[t1]
+        pidx = _pos(ax, t1, pq, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
+        Ap = _face_area(nest, measure, ax, B)
+        s = 0.0; den = 0.0
+        for b in 1:r[t2], a in 1:r[t1]
+            cidx = _pos(ax, t1, cq, Hc[t1] + (A-1)*r[t1] + a, Hc[t2] + (B-1)*r[t2] + b)
+            if ωz === nothing
+                s += cd[cidx[1], cidx[2], cidx[3]]
+            else
+                w = ωz[cidx[3]]
+                s += w * cd[cidx[1], cidx[2], cidx[3]]; den += w
             end
-            fine = ωz === nothing ? s * inv : s / den
-            M[A, B] = (pd[pidx[1], pidx[2], pidx[3]] - fine) * Ap
         end
+        fine = ωz === nothing ? s * inv : s / den
+        mm = (pd[pidx[1], pidx[2], pidx[3]] - fine) * Ap
+        M === nothing ? (l1 += abs(mm)) : (M[A, B] = mm)
     end
-    e = zeros(T, 0, 0)
-    ax == 1 && return NestFluxMismatch{T}(lowm, highm, copy(e), copy(e), copy(e), copy(e))
-    ax == 2 && return NestFluxMismatch{T}(copy(e), copy(e), lowm, highm, copy(e), copy(e))
-    return NestFluxMismatch{T}(copy(e), copy(e), copy(e), copy(e), lowm, highm)
+    return l1
 end
 
 """
@@ -697,18 +703,17 @@ function apply_flux_correction!(pf::Field{L}, m::NestFluxMismatch,
                                 nest::NestedGrid; measure=nothing) where {L<:Union{FaceX,FaceY,FaceZ}}
     ax = _axis_of(L)
     pm = nest.parent_mesh
-    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+    t1, t2 = _tang(ax)
     lowm, highm = ax == 1 ? (m.west, m.east) : ax == 2 ? (m.south, m.north) :
                                                (m.bottom, m.top)
     (isempty(lowm) || isempty(highm)) && return pf
     nn = (nest.nx, nest.ny, nest.nz); oo = (nest.ix, nest.iy, nest.iz)
     Hp = (pm.Hx, pm.Hy, pm.Hz)
-    pd = pf.data; pidx = [0, 0, 0]
+    pd = pf.data
     for (q, M) in ((0, lowm), (nn[ax], highm))
-        pidx[ax] = Hp[ax] + oo[ax] + q
+        pq = Hp[ax] + oo[ax] + q
         @inbounds for B in 1:nn[t2], A in 1:nn[t1]
-            pidx[t1] = Hp[t1] + oo[t1] + A - 1
-            pidx[t2] = Hp[t2] + oo[t2] + B - 1
+            pidx = _pos(ax, t1, pq, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
             pd[pidx[1], pidx[2], pidx[3]] -= M[A, B] / _face_area(nest, measure, ax, B)
         end
     end
@@ -725,7 +730,7 @@ function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
     planes = ((1, m.west, m.east), (2, m.south, m.north), (3, m.bottom, m.top))
     for (ax, lowm, highm) in planes
         (isempty(lowm) || isempty(highm)) && continue
-        t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+        t1, t2 = _tang(ax)
         # cell just outside the low face:  Δθ = +δΦ·A / V
         # cell just outside the high face: Δθ = -δΦ·A / V
         for (cell, M, sgn) in ((oo[ax] - 1, lowm, +1.0),
@@ -737,10 +742,8 @@ function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
             else
                 continue                # the face is the parent's own boundary
             end
-            idx = [0, 0, 0]; idx[ax] = Hp[ax] + c
             @inbounds for B in 1:nn[t2], A in 1:nn[t1]
-                idx[t1] = Hp[t1] + oo[t1] + A - 1
-                idx[t2] = Hp[t2] + oo[t2] + B - 1
+                idx = _pos(ax, t1, Hp[ax] + c, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
                 K = idx[3] - Hp[3]
                 Vp = pm.dx * pm.dy * _pcell(nest, measure, K)
                 pd[idx[1], idx[2], idx[3]] += sgn * M[A, B] / Vp

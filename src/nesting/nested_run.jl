@@ -139,7 +139,8 @@ advances by the parent's `Δt_p` per step).
 `run.t` is the common time, `run.stats` a [`NestRunStats`](@ref).
 """
 mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpState,
-                         AP<:DomainAdvance, AC<:DomainAdvance, CP, CC, SP, D<:NestBoundaryData}
+                         AP<:DomainAdvance, AC<:DomainAdvance, CP, CC, SP, D<:NestBoundaryData,
+                         SO, FM, RP, RC, R<:Union{Nothing,NestFluxRegisters}, W}
     parent::P
     child::C
     nest::N
@@ -164,7 +165,8 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     validate::Bool
     reuse_boundary::Bool
     record::Bool
-    solid::Any                     # child solid mask for the restriction (or nothing)
+    solid::SO                      # child solid mask as given (or nothing)
+    fluid::FM                      # its fluid mask for the restriction, computed once
     synced::Bool                   # the child runs on the parent's clock
     # clock and the current parent-step window [t0, t0 + Δt]
     t::Float64
@@ -178,8 +180,27 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     sponge_τ::Float64              # window fraction s_bc holds the sponge target at (NaN: stale)
     stats::NestRunStats
     twoway::Union{Nothing,TwoWayFeedback}
-    regs::Union{Nothing,NestFluxRegisters}
+    regs::R
+    rb_parent::RP                  # preallocated rollback state of each domain
+    rb_child::RC
+    work::W                        # two-way scratch (nothing in a one-way run)
 end
+
+# Scratch of the two-way feedback, allocated once (#329, item 6): the
+# feedback mask, the anterpolation boxes, the reference values of the
+# refluxed scalars and the composite integrals of the ledger.
+struct _TwoWayWork{AS}
+    mask::BitArray{3}
+    anterp::AS
+    refs::Vector{Float64}
+    I0::Vector{Float64}
+    I1::Vector{Float64}
+    keys::Vector{Symbol}
+end
+
+_two_way_work(nest, s) = _TwoWayWork(BitArray(undef, nest.nx, nest.ny, nest.nz),
+                                     _anterp_scratch(nest), Float64[], Float64[], Float64[],
+                                     _scalar_ledger_keys(s))
 
 function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                    advance_parent::DomainAdvance = domain_advance(),
@@ -243,15 +264,19 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     data = nest_boundary_data(s_old, s_new; t0 = child.t, Δt = 0.0)
     _attach_nest_data!(child, data)
     _fill_nest_halos!(child, s_old)
+    regs = twoway !== nothing && twoway.reflux ?
+           NestFluxRegisters(nest, parent, child, s_bc, twoway, advance_parent, advance_child) :
+           nothing
     run = NestedRun(parent, child, nest, s_old, s_new, s_bc, advance_parent, advance_child,
                     cfl_parent, cfl_child, feedback, sync, order, region, sp, data,
                     flux_correction, ns, Int(max_retries),
                     Float64(divergence_tol), Float64(max_velocity), validate,
-                    reuse_boundary, record, solid, check_clocks, t, t, 0.0, NaN, nothing, nothing,
-                    Float64(child.t), 0.0, NaN, NestRunStats(), twoway,
-                    twoway !== nothing && twoway.reflux ?
-                        NestFluxRegisters(nest, parent, child, s_bc, twoway,
-                                          advance_parent, advance_child) : nothing)
+                    reuse_boundary, record, solid, _fluid_mask(nest, solid), check_clocks,
+                    t, t, 0.0, NaN, nothing, nothing,
+                    Float64(child.t), 0.0, NaN, NestRunStats(), twoway, regs,
+                    _Rollback(parent, advance_parent, s_bc.parent),
+                    _Rollback(child, advance_child, s_bc.child),
+                    twoway === nothing ? nothing : _two_way_work(nest, s_bc))
     if run.regs !== nothing                  # separate transports book through the sims
         _register_booker!(parent, run.regs, :parent, nest)
         _register_booker!(child, run.regs, :child, nest)
@@ -329,28 +354,69 @@ end
 _bound_fields(run::NestedRun, which::Symbol) =
     which === :child ? run.s_old.child : run.s_old.parent
 
-mutable struct _Rollback{SN}
+# The state a rejected step is rolled back to, allocated once per domain
+# and refilled in place before every attempt (#329: the open-boundary
+# buffers were copied into fresh arrays each attempt, 853 KiB per child
+# substep of a 32³ child).
+mutable struct _Rollback{SN, SC<:AbstractArray, SG, OP}
     snap::SN
-    scalars::Vector{Any}
-    sgs::Any
-    open::Any                       # the open-boundary buffers (part of the state)
+    scalars::Vector{SC}             # the bound scalars' data
+    sgs::SG                         # (closure, its state), or nothing
+    open::OP                        # the open-boundary buffers (part of the state), or nothing
+end
+
+function _Rollback(sim, adv::DomainAdvance, fs::AbstractVector)
+    closure = sgs_closure(_domain_sgs(adv))
+    sg = closure === nothing ? nothing : (closure, sgs_state(closure))
+    sc = [copy(f.data) for f in fs]
+    return _Rollback(state_snapshot(sim), isempty(sc) ? Array{Float64,3}[] : sc, sg,
+                     open_boundary_snapshot(sim))
 end
 
 function _save!(run::NestedRun, sim, adv::DomainAdvance, which::Symbol)
-    snap = state_snapshot(sim)
-    save_state!(snap, sim)
-    fs = _bound_fields(run, which)
-    sc = Any[copy(f.data) for f in fs]
-    closure = sgs_closure(_domain_sgs(adv))
-    return _Rollback(snap, sc, closure === nothing ? nothing : (closure, sgs_state(closure)),
-                     open_boundary_snapshot(sim))
+    rb = which === :child ? run.rb_child : run.rb_parent
+    save_state!(rb.snap, sim)
+    _copy_data!(rb.scalars, _bound_fields(run, which))
+    if rb.sgs !== nothing
+        closure = rb.sgs[1]
+        rb.sgs = (closure, sgs_state(closure))
+    end
+    rb.open = _snapshot_open!(rb.open, sim)
+    return rb
+end
+
+function _copy_data!(dst::AbstractVector, fs::AbstractVector)
+    for i in eachindex(dst, fs)
+        copyto!(dst[i], fs[i].data)
+    end
+    return dst
+end
+
+function _restore_data!(fs::AbstractVector, src::AbstractVector)
+    for i in eachindex(fs, src)
+        copyto!(fs[i].data, src[i])
+    end
+    return fs
+end
+
+# The open-boundary buffers copied into the preallocated snapshot (a fresh
+# one if planes were added since).
+_snapshot_open!(::Nothing, sim) = open_boundary_snapshot(sim)
+function _snapshot_open!(snap::AbstractVector, sim)
+    n = 0
+    for st in open_boundary_states(sim), p in st.planes
+        n += 1
+        (n <= length(snap) && size(snap[n]) == size(p.data)) ||
+            return open_boundary_snapshot(sim)
+        copyto!(snap[n], p.data)
+    end
+    n == length(snap) || return open_boundary_snapshot(sim)
+    return snap
 end
 
 function _restore!(run::NestedRun, sim, rb::_Rollback, which::Symbol)
     restore_state!(sim, rb.snap)
-    for (f, d) in zip(_bound_fields(run, which), rb.scalars)
-        copyto!(f.data, d)
-    end
+    _restore_data!(_bound_fields(run, which), rb.scalars)
     rb.sgs === nothing || restore_sgs_state!(rb.sgs[1], rb.sgs[2])
     restore_open_boundaries!(sim, rb.open)
     return sim
@@ -459,8 +525,9 @@ function step_nested!(run::NestedRun; dt = nothing)
     Δt > 0 || error("step_nested!: parent step must be > 0, got $Δt")
 
     two_way = run.feedback === :two_way
+    m0 = 0.0
     if two_way && run.record
-        I0 = _composite_scalars(p, c, nest, run.s_bc)
+        _composite_scalars!(run.work.I0, p, c, nest, run.s_bc)
         m0 = composite_integral(p, c, nest, :momentum_x)
     end
 
@@ -508,9 +575,10 @@ function step_nested!(run::NestedRun; dt = nothing)
         tw = time_ns()
         two_way_feedback!(run)
         if run.record
-            I1 = _composite_scalars(p, c, nest, run.s_bc)
-            for (k, v0) in I0
-                nest.ledger[k] = abs(I1[k] - v0) / max(abs(v0), 1e-300)
+            wk = run.work
+            _composite_scalars!(wk.I1, p, c, nest, run.s_bc)
+            for n in eachindex(wk.keys)
+                nest.ledger[wk.keys[n]] = abs(wk.I1[n] - wk.I0[n]) / max(abs(wk.I0[n]), 1e-300)
             end
             m1 = composite_integral(p, c, nest, :momentum_x)
             nest.ledger[:momentum_x] = abs(m1 - m0) / max(abs(m0), 1e-300)
@@ -667,21 +735,30 @@ function two_way_feedback!(run::NestedRun)
     meas = run.s_bc.measure
     α = fb.τ === nothing ? 1.0 : min(1.0, run.Δt / fb.τ)
     # the reference value of each refluxed scalar (volume-consistent refluxing)
-    refs = run.regs === nothing ? Float64[] : [_covered_mean(f, nest) for f in run.regs.pfield]
-    anterpolate!(p, c, nest, run.s_bc; mask = feedback_mask(run), α, solid = run.solid)
+    wk = run.work
+    refs = wk.refs
+    if run.regs !== nothing
+        resize!(refs, length(run.regs.pfield))
+        for n in eachindex(run.regs.pfield)
+            refs[n] = _covered_mean(run.regs.pfield[n], nest)
+        end
+    end
+    _feedback_mask!(wk.mask, nest, fb, c)
+    anterpolate!(p, c, nest, run.s_bc; mask = wk.mask, α, solid = run.fluid,
+                 scratch = wk.anterp)
     sides = nest_open_sides(c)
     e_before = _interface_imbalance(p, c, nest, meas)
     if run.flux_correction
-        for (pu, cu) in ((p.u, c.u), (p.v, c.v), (p.w, c.w))
-            mm = _only_sides(compute_nest_flux_mismatch(pu, cu, nest; measure = meas), sides)
-            apply_flux_correction!(pu, mm, nest; measure = meas)
-        end
+        _correct_interface_flux!(p.u, c.u, nest, 1, meas, sides)
+        _correct_interface_flux!(p.v, c.v, nest, 2, meas, sides)
+        _correct_interface_flux!(p.w, c.w, nest, 3, meas, sides)
     end
     if run.regs !== nothing
         r = run.regs
+        per = nest_periodic_axes(p)
         for n in eachindex(r.names)
             apply_flux_correction!(r.pfield[n], _register_mismatch(r, n, nest, refs[n]),
-                                   nest; measure = meas, periodic = nest_periodic_axes(p))
+                                   nest; measure = meas, periodic = per)
         end
         _clear_registers!(r)
     end
@@ -698,9 +775,13 @@ end
 
 # The parent's mean of a cell-centred field over the covered cells.
 function _covered_mean(f::Field, nest::NestedGrid)
+    m = nest.parent_mesh
     cx, cy, cz = nest_covered_range(nest)
-    v = view(interior_view(f), cx, cy, cz)
-    return sum(v) / length(v)
+    s = 0.0
+    @inbounds for k in cz, j in cy, i in cx
+        s += f.data[m.Hx + i, m.Hy + j, m.Hz + k]
+    end
+    return s / (length(cx) * length(cy) * length(cz))
 end
 
 feedback_mask(run::NestedRun) = run.twoway === nothing ?

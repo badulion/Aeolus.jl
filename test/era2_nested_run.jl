@@ -627,4 +627,56 @@ end
                                          cfl_parent = nothing, cfl_child = nothing)
 end
 
+# -------------------------------------------------------------------------
+# #329 items 5 and 6: the nesting layer of a step allocates (almost)
+# nothing beyond what the two cores allocate on their own, and its state is
+# concretely typed (the KernelAbstractions port, #291, needs both). Before
+# #329 a nested step of this set-up allocated 2.9 MiB (one-way) and 6.6 MiB
+# (two-way) on top of the cores: fresh rollback copies of the open-boundary
+# buffers, two child- and parent-sized fields per composite momentum
+# integral, the anterpolation boxes, the mismatch matrices.
+@testset "a nested step allocates little beyond the cores; typed state (#329)" begin
+    pm = RegularGrid(Float64; size=(32, 32, 32), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
+    cm = nest_child_mesh(nest)
+    function mk(fb)
+        rng = Xoshiro(5)
+        p = BoussinesqSimulation(pm)
+        interior_view(p.θ) .= 300 .+ 0.1 .* rand(rng, size(interior_view(p.θ)))
+        fill!(p.u.data, 0.5)
+        c = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
+        fill!(c.θ.data, 300.0)
+        return NestedRun(p, c, nest; cfl_parent = nothing, cfl_child = nothing, feedback = fb)
+    end
+    loose(T) = T === Any ||
+        (T <: AbstractArray && eltype(T) in (Any, Field)) ||
+        (T <: AbstractDict && (keytype(T) === Any || valtype(T) === Any))
+    for fb in (:one_way, :two_way)
+        run = mk(fb); ref = mk(fb)
+        for _ in 1:3; step_nested!(run; dt = 1e-3); end
+        a = @allocated step_nested!(run; dt = 1e-3)
+        # the two cores alone, on an identical pair, with the same hooks
+        p, c = ref.parent, ref.child
+        step!(p, 1e-3); step!(c, 5e-4)
+        ap = @allocated step!(p, 1e-3)
+        ac = @allocated step!(c, 5e-4)
+        over = a - ap - run.stats.n_last * ac
+        @printf("  %-8s nested step allocates %.1f KiB; the cores alone %.1f KiB; nesting %.1f KiB\n",
+                fb, a / 1024, (ap + run.stats.n_last * ac) / 1024, over / 1024)
+        @test over < 96 * 1024
+        @test (@allocated composite_integral(run.parent, run.child, nest, :momentum_x)) == 0
+        @test (@allocated composite_integral(run.parent, run.child, nest, :mass)) == 0
+        @test @inferred(composite_integral(run.parent, run.child, nest, :momentum_x)) isa Float64
+        # no Any, Vector{Any}, Vector{Field} or Dict{Any,Any} left in the state
+        for T in (typeof(run), typeof(run.s_bc), typeof(run.nest), typeof(run.rb_child))
+            bad = [n for (n, F) in zip(fieldnames(T), fieldtypes(T)) if loose(F)]
+            @test isempty(bad)
+        end
+        run.regs === nothing || @test isempty([n for (n, F) in zip(fieldnames(typeof(run.regs)),
+                                                   fieldtypes(typeof(run.regs))) if loose(F)])
+    end
+    @test @inferred(Aeolus.Nesting._plan(nest, :avg, 1, 3)) isa Aeolus.Nesting._Plan1D
+    @test @inferred(nest_measure(nest)) isa NestMeasure
+end
+
 end # testset

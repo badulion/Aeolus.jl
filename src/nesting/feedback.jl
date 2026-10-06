@@ -225,11 +225,12 @@ it; the registers are consumed by the refluxing of
 [`two_way_feedback!`](@ref). Only the planes are stored, not whole face
 fields.
 """
-mutable struct NestFluxRegisters
+mutable struct NestFluxRegisters{WP<:Tuple, WC<:Tuple, KP, KC, FP<:Field, FC<:Field,
+                                 SP<:Field, SC<:Field}
     names::Vector{Symbol}
     models::Vector{NestScalarFlux}
-    pfield::Vector{Field}
-    cfield::Vector{Field}
+    pfield::Vector{FP}
+    cfield::Vector{FC}
     sides::NTuple{6,Bool}
     pacc::Vector{Vector{Matrix{Float64}}}     # committed, per scalar, per side
     cacc::Vector{Vector{Matrix{Float64}}}
@@ -241,16 +242,17 @@ mutable struct NestFluxRegisters
     cvpend::Vector{Vector{Matrix{Float64}}}
     pvstage::Vector{Matrix{Float64}}           # scratch: one stage's volume flux
     cvstage::Vector{Matrix{Float64}}
-    pweights::Tuple
-    cweights::Tuple
+    pweights::WP
+    cweights::WC
     pstage::Int
     cstage::Int
     popen::Bool                                # an attempt of the domain is under way
     copen::Bool
-    psgs::Any                                  # the domains' (sgs, eddy_viscosity!) keywords
-    csgs::Any
-    pscratch::Field
-    cscratch::Field
+    psgs::KP                                   # the domains' (sgs, eddy_viscosity!) keywords
+    csgs::KC
+    pscratch::SP
+    cscratch::SC
+    mismatch::NestFluxMismatch{Float64}        # scratch of the refluxing (parent planes)
 end
 
 """
@@ -326,7 +328,7 @@ function NestFluxRegisters(nest::NestedGrid, parent, child, s::NestInterpState,
     names = Symbol[:θ]
     models = NestScalarFlux[fb.theta_flux === nothing ?
                             NestScalarFlux(; molecular = true, sgs = :theta) : fb.theta_flux]
-    pf = Field[parent.θ]; cf = Field[child.θ]
+    pf = Field[parent.θ]; cf = Field[child.θ]       # narrowed to concrete types below
     declared = Dict(fb.tracer_fluxes)
     core_qv = _moist(parent)                  # qv is a core prognostic (moist Boussinesq)
     core_qv && haskey(declared, :qv) &&
@@ -348,12 +350,18 @@ function NestFluxRegisters(nest::NestedGrid, parent, child, s::NestInterpState,
     sides = nest_open_sides(child)
     _warn_internal_walls(nest, sides)
     mk(which) = [_new_planes(nest, sides, which) for _ in 1:length(names)]
-    return NestFluxRegisters(names, models, pf, cf, sides, mk(1), mk(2), mk(1), mk(2),
+    # the parent planes of every axis that has an open side (the refluxing
+    # mismatch: zero on a non-open side of such an axis)
+    mm = NestFluxMismatch{Float64}(ntuple(s -> (sides[2_side_axis(s)-1] || sides[2_side_axis(s)]) ?
+                                               zeros(_plane_sizes(nest, s)[1]) : zeros(0, 0), 6)...)
+    FP = mapreduce(typeof, typejoin, pf); FC = mapreduce(typeof, typejoin, cf)
+    return NestFluxRegisters(names, models, convert(Vector{FP}, pf), convert(Vector{FC}, cf),
+                             sides, mk(1), mk(2), mk(1), mk(2),
                              mk(1), mk(2), mk(1), mk(2),
                              _new_planes(nest, sides, 1), _new_planes(nest, sides, 2),
                              wp, wc, 0, 0, false, false, _sgs_keywords(ap), _sgs_keywords(ac),
                              Field(CellCenter(), nest.parent_mesh),
-                             Field(CellCenter(), nest.child_mesh))
+                             Field(CellCenter(), nest.child_mesh), mm)
 end
 
 # A child face that is not open but lies inside the parent (a lid below the
@@ -504,11 +512,9 @@ function _book_plane!(M::Matrix{Float64}, sim, ϕ, rec, K, ν, W, nest::NestedGr
         base = H[ax] + 1 + (hi ? N[ax] : 0)
         o1 = H[t1]; o2 = H[t2]
     end
-    idx = [0, 0, 0]
-    idx[ax] = base
     if ϕ === nothing
         @inbounds for B in axes(M, 2), A in axes(M, 1)
-            idx[t1] = o1 + A; idx[t2] = o2 + B
+            idx = _pos(ax, t1, base, o1 + A, o2 + B)
             k = idx[3]
             Wk = W === nothing ? 1.0 : (ax == 3 ? W[2][k] : W[1][k])
             M[A, B] += w * Wk * veld[idx[1], idx[2], k]
@@ -517,7 +523,7 @@ function _book_plane!(M::Matrix{Float64}, sim, ϕ, rec, K, ν, W, nest::NestedGr
     end
     ϕd = ϕ.data
     @inbounds for B in axes(M, 2), A in axes(M, 1)
-        idx[t1] = o1 + A; idx[t2] = o2 + B
+        idx = _pos(ax, t1, base, o1 + A, o2 + B)
         M[A, B] += w * _face_total_flux(rec, ϕd, veld, ax, idx[1], idx[2], idx[3], g,
                                         ν, K, W)
     end
@@ -531,34 +537,30 @@ end
 function _register_mismatch(r::NestFluxRegisters, n::Int, nest::NestedGrid,
                             ϕref::Float64 = 0.0)
     rr = (nest.rx, nest.ry, nest.rz)
-    out = Matrix{Float64}[]
+    out = r.mismatch                      # preallocated planes, refilled in place (#329)
+    planes = (out.west, out.east, out.south, out.north, out.bottom, out.top)
     for s in 1:6
         ax = _side_axis(s)
-        lo, hi_ = 2ax - 1, 2ax
-        if !(r.sides[lo] || r.sides[hi_])
-            push!(out, zeros(0, 0)); continue
-        end
-        psz, _ = _plane_sizes(nest, s)
-        M = zeros(psz)
-        if r.sides[s]
-            P = r.pacc[n][s]; C = r.cacc[n][s]
-            Pv = r.pvacc[n][s]; Cv = r.cvacc[n][s]
-            t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
-            r1, r2 = rr[t1], rr[t2]
-            inv = 1 / (r1 * r2)
-            @inbounds for B in 1:psz[2], A in 1:psz[1]
-                fine = 0.0
-                for b in 1:r2, a in 1:r1
-                    ia = (A - 1) * r1 + a; ib = (B - 1) * r2 + b
-                    fine += C[ia, ib] - ϕref * Cv[ia, ib]
-                end
-                M[A, B] = ((P[A, B] - ϕref * Pv[A, B]) - fine * inv) *
-                          _face_area(nest, nothing, ax, B)
+        M = planes[s]
+        isempty(M) && continue
+        fill!(M, 0.0)
+        r.sides[s] || continue
+        P = r.pacc[n][s]; C = r.cacc[n][s]
+        Pv = r.pvacc[n][s]; Cv = r.cvacc[n][s]
+        t1, t2 = _tang(ax)
+        r1, r2 = rr[t1], rr[t2]
+        inv = 1 / (r1 * r2)
+        @inbounds for B in axes(M, 2), A in axes(M, 1)
+            fine = 0.0
+            for b in 1:r2, a in 1:r1
+                ia = (A - 1) * r1 + a; ib = (B - 1) * r2 + b
+                fine += C[ia, ib] - ϕref * Cv[ia, ib]
             end
+            M[A, B] = ((P[A, B] - ϕref * Pv[A, B]) - fine * inv) *
+                      _face_area(nest, nothing, ax, B)
         end
-        push!(out, M)
     end
-    return NestFluxMismatch{Float64}(out...)
+    return out
 end
 
 # =========================================================================
@@ -678,30 +680,36 @@ outermost cells next to each open (nest) face of the child, the cells
 whose lower face lies below `fb.z_anterp`, and the `fb.exclude_width`
 cells next to the excluded (inflow) faces. See [`TwoWayFeedback`](@ref).
 """
-function feedback_mask(nest::NestedGrid, fb::TwoWayFeedback, csim)
+feedback_mask(nest::NestedGrid, fb::TwoWayFeedback, csim) =
+    _feedback_mask!(BitArray(undef, nest.nx, nest.ny, nest.nz), nest, fb, csim)
+
+function _feedback_mask!(act::BitArray{3}, nest::NestedGrid, fb::TwoWayFeedback, csim)
     open = nest_open_sides(csim)
     excl = fb.exclude_sides === :inflow ? _inflow_sides(csim, open) :
            ntuple(s -> open[s] && fb.exclude_sides[s], 6)
     nn = (nest.nx, nest.ny, nest.nz)
-    act = trues(nn...)
+    fill!(act, true)
     for s in 1:6
         open[s] || continue
         ax = _side_axis(s); hi = _side_high(s)
         wd = excl[s] ? max(fb.buffer, fb.exclude_width) : fb.buffer
         for q in 1:min(wd, nn[ax])
-            selectdim(act, ax, hi ? nn[ax] - q + 1 : q) .= false
+            fill!(selectdim(act, ax, hi ? nn[ax] - q + 1 : q), false)
         end
     end
     if isfinite(fb.z_anterp)
         pm = nest.parent_mesh
-        zf = _zfaces_storage(pm)
         tol = 1e-9 * max(1.0, abs(fb.z_anterp))
         for K in 1:nest.nz
-            zf[pm.Hz + nest.iz + K - 1] >= fb.z_anterp - tol || (act[:, :, K] .= false)
+            _zface_storage(pm, pm.Hz + nest.iz + K - 1) >= fb.z_anterp - tol ||
+                fill!(view(act, :, :, K), false)
         end
     end
     return act
 end
+
+_zface_storage(m::RegularGrid, P::Integer) = m.z0 + (P - m.Hz - 1) * m.dz
+_zface_storage(m::StretchedGrid, P::Integer) = Float64(zfaces(m)[P])
 
 # =========================================================================
 # Anterpolation
@@ -724,14 +732,26 @@ _loc_axis(::Field{FaceX}) = 1
 _loc_axis(::Field{FaceY}) = 2
 _loc_axis(::Field{FaceZ}) = 3
 
-function _anterpolate_field!(pf::Field, cf::Field, nest::NestedGrid, act::BitArray{3},
-                             α::Float64, meas, χ)
+# The covered parent box of a field at staggered axis `ax` (0: cells).
+function _covered_box(nest::NestedGrid, ax::Int)
     pm = nest.parent_mesh
-    ax = _loc_axis(pf)
     nn = (nest.nx, nest.ny, nest.nz)
     lo = (pm.Hx + nest.ix, pm.Hy + nest.iy, pm.Hz + nest.iz)
-    rng = ntuple(d -> lo[d]:lo[d] + nn[d] - (d == ax ? 0 : 1), 3)
-    old = pf.data[rng...]
+    return ntuple(d -> lo[d]:lo[d] + nn[d] - (d == ax ? 0 : 1), 3)
+end
+
+# Scratch of the anterpolation: the covered parent box of a cell-centred
+# field and of each face field, to keep the cells outside the mask.
+_anterp_scratch(nest::NestedGrid) =
+    ntuple(a -> zeros(length.(_covered_box(nest, a - 1))...), 4)
+
+function _anterpolate_field!(pf::Field, cf::Field, nest::NestedGrid, act::BitArray{3},
+                             α::Float64, meas, χ, scratch)
+    ax = _loc_axis(pf)
+    nn = (nest.nx, nest.ny, nest.nz)
+    rng = _covered_box(nest, ax)
+    old = scratch[ax + 1]
+    copyto!(old, view(pf.data, rng...))
     restrict_to_parent!(pf, cf, nest; measure = meas, solid = χ)
     pd = pf.data
     @inbounds for c in CartesianIndices(old)
@@ -760,7 +780,8 @@ inside the covered region and both their parent cells are in the mask;
 the interface planes are the flux correction's.
 """
 function anterpolate!(psim::_NestSim, csim::_NestSim, nest::NestedGrid, s::NestInterpState;
-                      mask::BitArray{3}, α::Real = 1.0, solid = nothing)
+                      mask::BitArray{3}, α::Real = 1.0, solid = nothing,
+                      scratch = _anterp_scratch(nest))
     size(mask) == (nest.nx, nest.ny, nest.nz) ||
         throw(DimensionMismatch("anterpolate!: mask has size $(size(mask)), expected " *
                                 "$((nest.nx, nest.ny, nest.nz))"))
@@ -768,15 +789,14 @@ function anterpolate!(psim::_NestSim, csim::_NestSim, nest::NestedGrid, s::NestI
     _check_two_way_pair(psim, csim, "anterpolate!", s)
     a = Float64(α)
     meas = s.measure
-    χf = _fluid(nest, solid)
-    χ = χf === nothing ? nothing : _FluidMask(χf)
-    _anterpolate_field!(psim.θ, csim.θ, nest, mask, a, meas, χ)
+    χ = _fluid_mask(nest, solid)
+    _anterpolate_field!(psim.θ, csim.θ, nest, mask, a, meas, χ, scratch)
     for i in eachindex(s.names)
-        _anterpolate_field!(s.parent[i], s.child[i], nest, mask, a, meas, χ)
+        _anterpolate_field!(s.parent[i], s.child[i], nest, mask, a, meas, χ, scratch)
     end
-    _anterpolate_field!(psim.u, csim.u, nest, mask, a, meas, χ)
-    _anterpolate_field!(psim.v, csim.v, nest, mask, a, meas, χ)
-    _anterpolate_field!(psim.w, csim.w, nest, mask, a, meas, χ)
+    _anterpolate_field!(psim.u, csim.u, nest, mask, a, meas, χ, scratch)
+    _anterpolate_field!(psim.v, csim.v, nest, mask, a, meas, χ, scratch)
+    _anterpolate_field!(psim.w, csim.w, nest, mask, a, meas, χ, scratch)
     return psim
 end
 
@@ -787,9 +807,47 @@ end
 _reproject!(sim::BoussinesqSimulation) = _project_velocity!(sim)
 _reproject!(sim::MassWeightedSimulation) = _project_mass_weighted!(sim)
 
-# Keep only the planes of the open sides of a velocity mismatch.
-function _only_sides(m::NestFluxMismatch{T}, sides::NTuple{6,Bool}) where {T}
-    keep(M, s) = (isempty(M) || sides[s]) ? M : zero(M)
-    return NestFluxMismatch{T}(keep(m.west, 1), keep(m.east, 2), keep(m.south, 3),
-                               keep(m.north, 4), keep(m.bottom, 5), keep(m.top, 6))
+# The interface flux correction of the open sides, in place: on every open
+# interface plane the parent's face velocity takes the child's summed flux
+# (the arithmetic of compute_nest_flux_mismatch + apply_flux_correction!,
+# without the mismatch matrices, #329).
+function _correct_interface_flux!(pf::Field, cf::Field, nest::NestedGrid, ax::Int, meas,
+                                  sides::NTuple{6,Bool})
+    nn = (nest.nx, nest.ny, nest.nz)
+    for (q, s) in ((0, 2ax - 1), (nn[ax], 2ax))
+        sides[s] || continue
+        _plane_correct!(pf, cf, nest, ax, q, meas)
+    end
+    return pf
+end
+
+function _plane_correct!(pf::Field, cf::Field, nest::NestedGrid, ax::Int, q::Int, measure)
+    pm = nest.parent_mesh; cm = nest.child_mesh
+    r  = (nest.rx, nest.ry, nest.rz)
+    nn = (nest.nx, nest.ny, nest.nz)
+    oo = (nest.ix, nest.iy, nest.iz)
+    Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (cm.Hx, cm.Hy, cm.Hz)
+    t1, t2 = _tang(ax)
+    ωz = ax == 3 ? nothing : _zweights(measure)
+    inv = 1 / (r[t1] * r[t2])
+    pd = pf.data; cd = cf.data
+    pq = Hp[ax] + oo[ax] + q; cq = Hc[ax] + q * r[ax] + 1
+    @inbounds for B in 1:nn[t2], A in 1:nn[t1]
+        pidx = _pos(ax, t1, pq, Hp[t1] + oo[t1] + A - 1, Hp[t2] + oo[t2] + B - 1)
+        Ap = _face_area(nest, measure, ax, B)
+        s = 0.0; den = 0.0
+        for b in 1:r[t2], a in 1:r[t1]
+            cidx = _pos(ax, t1, cq, Hc[t1] + (A-1)*r[t1] + a, Hc[t2] + (B-1)*r[t2] + b)
+            if ωz === nothing
+                s += cd[cidx[1], cidx[2], cidx[3]]
+            else
+                w = ωz[cidx[3]]
+                s += w * cd[cidx[1], cidx[2], cidx[3]]; den += w
+            end
+        end
+        fine = ωz === nothing ? s * inv : s / den
+        M = (pd[pidx[1], pidx[2], pidx[3]] - fine) * Ap
+        pd[pidx[1], pidx[2], pidx[3]] -= M / _face_area(nest, measure, ax, B)
+    end
+    return pf
 end

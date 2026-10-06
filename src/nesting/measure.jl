@@ -235,3 +235,9 @@ _fluid(nest, f::_FluidMask) = f.χ
 _fluid(nest, ::Nothing) = nothing
 _fluid(nest, sm::SolidMask) = nest_fluid_mask(nest, sm)
 _fluid(nest, a::AbstractArray{Bool,3}) = nest_fluid_mask(nest, a)
+
+# The fluid mask once, wrapped, for a caller that restricts repeatedly (a
+# NestedRun computes it at construction, #329).
+_fluid_mask(nest, ::Nothing) = nothing
+_fluid_mask(nest, f::_FluidMask) = f
+_fluid_mask(nest, solid) = _FluidMask(_fluid(nest, solid))
