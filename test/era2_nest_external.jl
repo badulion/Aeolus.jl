@@ -542,4 +542,51 @@ end
     end_child_step!(run)
 end
 
+# -------------------------------------------------------------------------
+# #349: a NestSponge acts only inside step_nested!'s own subcycling (the
+# velocity on every stage's predicted velocity, the scalars after each
+# substep). An externally driven child (begin_parent_step! / the child
+# stage loop / end_parent_step!) would get no sponge, silently; the run
+# refuses to be driven that way, before it touches either domain.
+@testset "a sponged run refuses to be driven externally (#349)" begin
+    pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo = (3, 3, 3))
+    cm = nest_child_mesh(nest)
+    function pair(sponge)
+        rng = Xoshiro(349)
+        psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic))
+        for f in (psim.u, psim.v, psim.w, psim.θ)
+            interior_view(f) .= randn(rng, size(interior_view(f)))
+        end
+        step!(psim, 1e-10); psim.t = 0.0          # project the random parent
+        csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
+        _nx_init_child!(csim, psim, nest)
+        return NestedRun(psim, csim, nest; cfl_parent = nothing, cfl_child = nothing, sponge)
+    end
+    run = pair(NestSponge(; width = 3, α_max = 20.0))
+    p, c = run.parent, run.child
+    pu, pθ, cu = copy(p.u.data), copy(p.θ.data), copy(c.u.data)
+    @test_throws ArgumentError begin_parent_step!(run; dt = 2e-3)
+    @test_throws ArgumentError begin_child_step!(run)
+    err = try begin_parent_step!(run; dt = 2e-3); nothing catch e; e end
+    @test occursin("NestSponge", err.msg) && occursin("step_nested!", err.msg)
+    # refused before anything moved: neither domain, nor the run's clock
+    @test p.u.data == pu && p.θ.data == pθ && c.u.data == cu
+    @test p.t == 0.0 && run.t == 0.0 && run.stats.parent_steps == 0
+    # the run's own subcycling still applies the sponge: the same step with
+    # and without it leaves different children (the relaxation an external
+    # driver would have missed)
+    plain = pair(nothing)
+    @test begin_parent_step!(plain; dt = 2e-3) isa NamedTuple     # no sponge: allowed
+    plain = pair(nothing)
+    step_nested!(run; dt = 2e-3); step_nested!(plain; dt = 2e-3)
+    du = maximum(abs, interior_view(run.child.u) .- interior_view(plain.child.u))
+    dθ = maximum(abs, interior_view(run.child.θ) .- interior_view(plain.child.θ))
+    @printf("  sponged vs unsponged child after one step_nested!: max|Δu| %.2e, max|Δθ| %.2e\n",
+            du, dθ)
+    @test run.stats.parent_steps == 1
+    @test du > 1e-6 && dθ > 1e-6
+    @test p.u.data != pu                          # the parent did step this time
+end
+
 end
