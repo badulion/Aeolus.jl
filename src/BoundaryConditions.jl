@@ -18,6 +18,8 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,   # N-o
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
        open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
        assert_open_face_correction, open_intermediate_velocity!
+export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow,      # N-open-c (#260)
+       rewind_open_boundaries!, mark_open_boundary_stage!
 
 """
     AbstractBC
@@ -35,7 +37,8 @@ Concrete types:
   * [`FreeStreamBoundary`](@ref) — top face with zero shear and a
     prescribed normal (transpiration) velocity.
   * [`OpenBoundary`](@ref) — lateral or top face whose velocities and
-    scalars come from boundary data (Dirichlet), with a Neumann `φ`.
+    scalars come from boundary data (Dirichlet), with a Neumann `φ`, and
+    optionally a convective or Orlanski radiation outflow.
   * [`ValueBC`](@ref) — Dirichlet with prescribed value.
   * [`FluxBC`](@ref) — Neumann with prescribed flux `∂/∂n = f`.
 """
@@ -293,6 +296,7 @@ end
 
 include("boundary_conditions/noslip_wall.jl")   # P59-a (#172)
 include("boundary_conditions/open_boundary.jl") # N-open-b (#255)
+include("boundary_conditions/outflow.jl")       # N-open-c (#260)
 include("boundary_conditions/free_stream.jl")   # P59-d (#185)
 include("boundary_conditions/gradient_top.jl")  # N-parent-b (#254)
 

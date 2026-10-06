@@ -9,7 +9,8 @@ moving `NoSlipWall` (P59-a, #172; theory in
 `FluxBC(Γ)` is the fixed-gradient top of a cell-centred scalar
 (N-parent-b, #254; below). `ValueBC` is declared but has no halo fill.
 Open lateral and top faces fed by boundary data are `OpenBoundary`
-(N-open-b, #255; see the last section).
+(N-open-b, #255), optionally with a convective or Orlanski radiation
+outflow (N-open-c, #260); see the last sections.
 
 ## BC types
 
@@ -139,4 +140,30 @@ Aeolus.BoundaryConditions.restore_open_boundaries!
 Aeolus.BoundaryConditions.combine_open_boundaries!
 Aeolus.BoundaryConditions.assert_open_face_correction
 Aeolus.BoundaryConditions.open_intermediate_velocity!
+```
+
+## Radiation outflow (N-open-c, #260)
+
+`open_boundary_conditions(mesh, data; outflow = :convective)` (or
+`:orlanski`, or a `NamedTuple` per side) advances the outflow points of
+the open faces by the radiation equation instead of taking the data; the
+inflow points keep the data. The advective flux of a scalar through the
+boundary, from the scheme's own face fluxes, is
+[`boundary_scalar_flux`](@ref Aeolus.AdvectionSchemes.boundary_scalar_flux)
+(`AdvectionSchemes`). Theory:
+[Radiation outflow](../theory/fractional_step.md#Radiation-outflow).
+
+```julia
+bcs = open_boundary_conditions(mesh, data; outflow = (east = :convective,), halo = 3)
+sim = BoussinesqSimulation(mesh; bcs = bcs)
+step_rk3!(sim, dt)
+F = boundary_scalar_flux(sim, sim.θ; scheme = :centered)   # (west, east, …, total)
+```
+
+```@docs
+Aeolus.BoundaryConditions.RadiationPlane
+Aeolus.BoundaryConditions.OUTFLOW_MODES
+Aeolus.BoundaryConditions.has_radiating_outflow
+Aeolus.BoundaryConditions.mark_open_boundary_stage!
+Aeolus.BoundaryConditions.rewind_open_boundaries!
 ```

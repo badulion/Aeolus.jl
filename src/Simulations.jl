@@ -8,7 +8,7 @@ using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!, Periodic, ImpermeableWall,
                             update_open_boundaries!, prepare_open_boundaries!,
                             assert_open_face_correction, open_boundary_snapshot,
-                            combine_open_boundaries!
+                            combine_open_boundaries!, mark_open_boundary_stage!
 using ..Operators
 using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    advect_centered!,
@@ -304,6 +304,7 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
     sim.has_moisture && fill_halos!(sim.qv, homogeneous_bcs(sim.θ_bcs))
+    mark_open_boundary_stage!(sim)   # radiating outflow: stage-start layers (N-open-c)
 
     # 2. Zero tendencies and add momentum + scalar advection.
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)

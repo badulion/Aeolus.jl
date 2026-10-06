@@ -437,7 +437,12 @@ contract and the global mass-flux correction, called from every core
 through `update_open_boundaries!`), but the case does not use them yet:
 `BoundaryConditions` is exempt infrastructure, the default run is bit for
 bit unchanged, the `:open` option arrives with N-open-d (#262) and the
-nested default with N-berlin-nest (#265).
+nested default with N-berlin-nest (#265). The radiation outflow modes of
+N-open-c (#260: `outflow = :convective | :orlanski`) and the one
+boundary-flux function `boundary_scalar_flux` likewise exist without a
+Berlin coupling: the outflow option gets its smoke variant with the
+`:open` option in N-open-d, the ledger term with N-berlin-nest, and
+Dirichlet everywhere stays the nested default.
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every
