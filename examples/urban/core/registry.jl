@@ -23,7 +23,7 @@
 #   init!(c, case)              -> called once, after every coupling is built
 #   init_priority(::Type{C})    -> Int, init! order (lower first, default 0; ties: registry order)
 #   run_stage!(c, case, ::Val{S}, dt)
-#   output_fields(c, case)      -> Vector of OutputField, registered before nc_endef!
+#   output_fields(c, case)      -> Vector of OutputField, registered when the file is created
 #   budget!(c, case, ledger)    -> energy / water terms for the ledger
 #   report(c, case)             -> Union{Nothing,String}, printed with each output record
 #   smoke_variants(::Type{C})   -> tuple of configs worth a smoke run

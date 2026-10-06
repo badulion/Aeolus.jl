@@ -80,11 +80,9 @@ function init!(c::WallModelFacades, case)
         so = step_options(o, case)
         haskey(so, :sgs) && (c.sgs_walls = attach_immersed_walls!(so.sgs, c.iw))
     end
-    if case.cfg.verbose
-        nu, nv, nw = immersed_wall_count(c.iw)
-        @printf(case.io, "Facade wall model: %d u, %d v, %d w face-walls; z0m wall %.3g m, glass %.3g m\n",
-                nu, nv, nw, c.z0m_wall, c.z0m_glass)
-    end
+    @debug(@sprintf("Facade wall model: %d u, %d v, %d w face-walls; z0m wall %.3g m, glass %.3g m",
+                    immersed_wall_count(c.iw)..., c.z0m_wall, c.z0m_glass),
+           subsystem = :berlin, domain = current_domain(), coupling = :wall_model)
     return nothing
 end
 
