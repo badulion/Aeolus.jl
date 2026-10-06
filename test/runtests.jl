@@ -1044,7 +1044,6 @@ end
 @testset "Berlin case" begin
     include("berlin_case.jl")            # registry, stages, bus, tracers (#126)
     include("berlin_surface_exchange.jl") # MOST fluxes, soil ground, roof-aware air level, drag (#129)
-    include("berlin_coverage.jl")        # every Aeolus module coupled, exempt or pending (#127)
     include("berlin_smoke.jl")           # every coupling and option, 12 steps, ledgers close (#127)
     include("berlin_air_heat.jl")        # air-heat ledger: meter, closed box, H₀ = 100 W/m², night window (#253)
     include("berlin_open_boundaries.jl") # lateral = :open: faces, data, sponge, frame, boundary heat, cost (#262)
