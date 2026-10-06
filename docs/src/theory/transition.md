@@ -938,12 +938,118 @@ missing at 388 m). There is no mean wind, so ``\overline{u'w'}`` is
 noise at the 1e-3 level. The band lengths are well inside the cap
 (``2Δ_p`` = 100 m) and above the child's ``Δ/2``.
 
+### Applying the perturbations on the inflow faces (N-inflow-c)
+
+[`InflowTurbulence`](@ref Aeolus.Transition.InflowTurbulence) puts the
+generator and the statistics on the lateral open faces of a nest child
+(N-inflow-c, #264). It wraps the boundary data of the open faces (the
+`NestBoundaryData` of N-nest-d, or any `AbstractBoundaryData`) and is
+installed as that data, so the superposition
+
+```math
+u_{b,i} = u_{{\rm data},i} + a_{ij}\,ũ_j
+```
+
+happens inside `update_open_boundaries!`, after the data fill and before
+the single mass-flux correction of N-open-b, at every stage time of every
+core. One digital-filter generator runs per face (normal, along-face and
+vertical components; ``(u, v, w)`` on an x-face, ``(v, u, w)`` on a
+y-face); the top face is excluded, as in PALM (Kadasch et al. 2021).
+
+**Inflow detection.** Per face and level, ``U_n(z)`` is the face mean of
+the data's outward normal velocity over the fluid faces. The perturbation
+is multiplied by ``r = \min(1, \max(0, -U_n/u_{\min}))`` (``u_{\min}`` =
+0.5 m s⁻¹ by default): nothing on outflow levels, full amplitude where
+the inflow exceeds ``u_{\min}``, linear in between, so a veering wind
+switches a face on and off continuously. The integral time follows
+Taylor, ``T = L_n/\max(|U_n|, u_{\min})``, with ``L_n`` the normal integral
+length of the statistics (`inflow_normal_length`).
+
+**Zero added mass flux.** The area-weighted mean of the normal
+perturbation is removed per face and level over the receiving faces.
+This is exact for any constraint weight that depends on height only
+(``ρ̄(z)``, ``ρ̄θ̄(z)``), so the N-open-b correction sees exactly the data's
+imbalance. The removal costs the normal component the variance of the
+face mean,
+
+```math
+f = \frac{1}{n^2}\sum_{i,j=1}^{n} R(|i-j|Δ_s)
+  \;\le\; \frac{1}{n}\sum_{r=-∞}^{∞} R(rΔ_s) = \frac{2L_s}{L_{\rm face}},
+```
+
+(``R ≥ 0`` for the exponential filter; ``L_s`` is the one-sided integral
+length, so the two-sided integral is ``2L_s``), and ``\overline{u_n'w'}``
+loses the same fraction (``u_n = a_{11}ũ_1`` is the only component
+whose mean is removed). The bound is reached for ``L_{\rm face} ≫ L_s``.
+The issue stated the bound as ``(L_s/L_{\rm face})σ_n^2``; that is
+half the measured reduction (the one-sided integral where the variance
+of a mean needs the two-sided one), so the expectation was wrong, not
+the code.
+
+**Corners.** The cell next to two open faces belongs to the x-face at
+levels where that face carries turbulence and to the y-face otherwise;
+the other face neither perturbs it nor counts it in its mean. The
+along-face (staggered) component of an x-face is not applied at the slot
+of the adjacent y-face's normal velocity, and the vertical component not
+at the ground face.
+
+**Time.** The applied perturbation is piecewise linear in time between
+*knots*; a knot is a complete perturbation (generator advanced, Lund
+transform, ramp, receiving faces, mean removal), so every blend of two
+knots carries zero added flux. For nest data the knots are the ends of
+the parent step, exactly like the data's own linear blend; otherwise
+every refresh at a new time is a knot. This matters for the divergence.
+SSP-RK3 combines the step-start state and its stages,
+``u^{n+1} = \tfrac13u^n + \tfrac23u^{(2)}``, and the boundary buffers
+with them. Boundary values that are linear in time make the combined
+buffers equal to a fresh refresh at the step's end. A `NestedRun`
+refreshes the buffers at the start of every parent step, so anything
+else leaves a divergence on the child's faces that the combination only
+damps by 1/3 per substep. Three variants were tried first, and each left
+``\max|∇·u| = O(10^{-3})`` s⁻¹ on a refine-3 nest: planes held constant
+over a step, a ramp re-evaluated at every stage, and perturbations
+switched on at the installation time. With the knots, the divergence is
+2.9e-16.
+
+**Ledgers.** `added_mass_flux(it)` reports, per face, the net added
+volume flux, the largest per-level flux, and their ratio to the face's
+mean-flow flux. `injected_ke_flux(it)` is the flux of perturbation
+kinetic energy carried in by the mean inflow,
+``ρ_{\rm ref}⟨\tfrac12|u'|^2\max(-U_n, 0)⟩`` (W m⁻²), per face and as an
+area-weighted total. `generator_state(it)` / `restore_generator_state!`
+snapshot the generators, the knots and the running sums of the
+statistics, so a restart continues bit for bit.
+
+**Measured** (`test/era6_inflow_turbulence.jl`):
+
+| test | result |
+| :-- | :-- |
+| U = (3, 1, 0), 500 RK3 steps, 24 × 16 × 12 | added flux / mean-flow flux ≤ 3.6e-17 (W, S), 0 on the outflow faces; per level ≤ 2.6e-16; max\|∇·u\| 2.0e-16 s⁻¹; KE flux 0.465 W m⁻² |
+| plane stresses, 128 × 16 west face, L_s = 2Δ, 1500 planes | R22, R33 within 0.45 %, 0.32 %; R11 / (R11(1−f)) = 1.0015, u'w' / (R13(1−f)) = 1.0064; f = 0.0309 against 2L_s/L_face = 0.0312 |
+| wind through 360° in 8 steps | variance only on faces with U_n < 0, exactly 0 elsewhere; ramp at U_n = −u_min/2 is exactly ½ (to 1e-14); corner owned by the west face |
+| refine-3 nest, ParentResolvedStatistics (folded every 10 s), wind veering 87° in 60 s | max\|∇·u\| child 2.4e-16 s⁻¹, added flux ≤ 2.6e-17, KE flux 0.265 W m⁻²; west-face R11, R22, R33 = 0.175, 0.205, 0.191 m² s⁻² (target at the end, level mean, 0.148, 0.155, 0.155: the statistics drift while the run is averaged) |
+| restart | velocity and perturbations bit-identical after 20 RK3 steps |
+
+**Cost.** On a 64 × 64 × 64 child (four faces, ``L_s = 4Δ``), a refresh
+that makes a new knot costs 0.92 ms and a refresh within the window
+costs 0.22 ms. The data fill alone costs 0.08 ms.
+
+**Two-way.** Feedback should skip a frame of
+`feedback_exclude_width(it)` = ``2\max L_s`` next to the open faces
+(N-nest-e, #263, which has not merged yet). Without that frame, the
+feedback restricts the synthetic eddies into the parent, and the parent
+returns them through the next prolongation. On the refine-3 test nest,
+over 200 s, the child's kinetic energy grew ×5.5 and the parent's ×3.2.
+Without the inflow perturbations, the same two-way run kept the child's
+energy at ×0.99. N-inflow-c is therefore tested one-way only.
+
 ### The Berlin case
 
 Stated exception (as in #185): the Berlin run is laterally periodic and
 has no inflow face, so no generator or statistics source is coupled yet.
 The coupling to the nested child's open faces is N-inflow-e (#268), which
-will also quote the Berlin day and night statistics. Transition stays
+will also quote the Berlin day and night statistics; `InflowTurbulence`
+(N-inflow-c) is the object it installs. Transition stays
 coupled through `turbulence_diag`; no Berlin list changed. One
 digital-filter step on a 64 × 40 face costs 0.10 ms. One update of
 `ParentResolvedStatistics` on the 192 × 192 Berlin parent (20 levels)

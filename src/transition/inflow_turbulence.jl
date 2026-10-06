@@ -97,7 +97,8 @@ end
     InflowTurbulence(run; generator = DigitalFilterGenerator,
                      statistics = ParentResolvedStatistics, faces = :lateral,
                      u_min = 0.5, ρ_ref = 1.2, seed = 1,
-                     length_interval = 3600, statistics_kwargs = (;))
+                     length_interval = 3600, statistics_interval = 60,
+                     statistics_kwargs = (;))
 
 Synthetic turbulence on the **inflow** parts of the lateral open faces of
 a nest child (N-inflow-c, #264): ``u_{b,i} = u_{{\\rm data},i} + a_{ij}ũ_j``,
@@ -176,9 +177,13 @@ set by [`NestBoundaryData`](@ref)'s solid mask) receive nothing.
 
 **Statistics.** `statistics` is an [`InflowStatistics`](@ref) (one source
 for every face), a function `side -> source`, a `NamedTuple` by side, or
-the type `ParentResolvedStatistics` (the default, for a `NestedRun`; it is
-folded with the parent's elapsed time every time the parent clock has
-advanced, and `statistics_kwargs` are passed to its constructor). The
+the type `ParentResolvedStatistics` (the default, for a `NestedRun`; one
+per face, `statistics_kwargs` passed to its constructor, with the
+parent levels the child spans). A source with memory is folded with the
+parent's elapsed time once the parent clock has advanced by
+`statistics_interval` seconds (default 60 s, against the default
+running-mean time of 600 s: one fold costs 65 ms per face on the
+192 × 192 Berlin parent, `docs/src/theory/transition.md`). The
 stresses (Lund factors) and normal lengths are re-evaluated at every
 generator advance; the generators' `L_s`, `L_z` every `length_interval`
 seconds ([`refresh_inflow_lengths!`](@ref)), lengths below one grid
@@ -210,6 +215,7 @@ mutable struct InflowTurbulence{D, S, P} <: AbstractBoundaryData
     t_stats::Float64                 # parent clock at the last statistics fold
     length_interval::Float64
     t_lengths::Float64
+    statistics_interval::Float64
 end
 
 _open_side(bcs, side) = getproperty(bcs, side) isa OpenBoundary
@@ -252,7 +258,8 @@ end
 function InflowTurbulence(run; generator = DigitalFilterGenerator,
                           statistics = ParentResolvedStatistics, faces = :lateral,
                           u_min::Real = 0.5, ρ_ref::Real = 1.2, seed::Integer = 1,
-                          length_interval::Real = 3600.0, statistics_kwargs = (;))
+                          length_interval::Real = 3600.0, statistics_interval::Real = 60.0,
+                          statistics_kwargs = (;))
     u_min > 0 || throw(ArgumentError("InflowTurbulence: u_min must be > 0"))
     if run isa NestedRun
         sim, parent, nest = run.child, run.parent, run.nest
@@ -299,7 +306,7 @@ function InflowTurbulence(run; generator = DigitalFilterGenerator,
     end
     it = InflowTurbulence(inner, sim, parent, fs, z, Float64(u_min), Float64(ρ_ref),
                           parent === nothing ? t : Float64(parent.t),
-                          Float64(length_interval), t)
+                          Float64(length_interval), t, Float64(statistics_interval))
     for st in sts
         st.data = it
         st.initialized = false
@@ -364,7 +371,7 @@ end
 function _fold_statistics!(it::InflowTurbulence)
     it.parent === nothing && return it
     tp = Float64(it.parent.t)
-    tp > it.t_stats || return it
+    tp - it.t_stats >= it.statistics_interval || return it
     Δ = tp - it.t_stats
     seen = IdDict{Any,Bool}()
     for f in it.faces

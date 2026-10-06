@@ -73,6 +73,23 @@ a   = inflow_lund_coefficients(src, z, t)       # realizable, projections booked
 unit_fluctuations!(u, v, w, gen, Δt); apply_lund!(u, v, w, a)
 ```
 
+Inflow faces (N-inflow-c, #264): `InflowTurbulence` wraps the open
+boundary's data, applies the perturbations on the inflow levels of every
+lateral face with zero added mass flux (`added_mass_flux`), and books the
+injected kinetic-energy flux (`injected_ke_flux`). Related functions are
+`inflow_normal_length`, `set_integral_time!`, `refresh_inflow_lengths!`,
+`inflow_perturbation`, `feedback_exclude_width` and
+`remove_inflow_turbulence!`. The theory is in
+[Applying the perturbations on the inflow faces](../../theory/transition.md#Applying-the-perturbations-on-the-inflow-faces-(N-inflow-c)).
+
+```julia
+run = NestedRun(parent, child, nest; feedback = :one_way)
+it  = InflowTurbulence(run)                     # ParentResolvedStatistics per face
+step_nested!(run)                               # perturbations enter at every stage time
+added_mass_flux(it).west.relative               # round-off
+injected_ke_flux(it).total                      # W m⁻²
+```
+
 ```@autodocs
 Modules = [Aeolus.Transition]
 ```

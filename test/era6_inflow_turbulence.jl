@@ -214,7 +214,7 @@ end
     # project it once (an Euler step of 1e-9 s with the nest data)
     step!(c, 1e-9); c.t = 0.0
     div0 = max_divergence(c)
-    it = InflowTurbulence(run; statistics_kwargs = (τ_avg = 60.0,))
+    it = InflowTurbulence(run; statistics_kwargs = (τ_avg = 60.0,), statistics_interval = 10.0)
     @test it.faces[1].stats isa ParentResolvedStatistics
     maxdiv = 0.0; worst = 0.0; nsteps = 30
     Rw = zeros(6); nR = 0
