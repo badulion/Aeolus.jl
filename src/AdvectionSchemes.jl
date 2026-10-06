@@ -161,12 +161,23 @@ end
 # differs, by up to 3 ulp, in 61 % of arguments; the weights only enter
 # TENO through a cut-off, and no TENO5 value changed on 10⁵ random
 # stencils; see the KA-c notes in test/era2_advection.jl).
-@inline _ipow(x, ::Val{1}) = x
-@inline _ipow(x, ::Val{2}) = x*x
-@inline _ipow(x, ::Val{3}) = x*x*x
-@inline _ipow(x, ::Val{4}) = (x2 = x*x; x2*x2)
-@inline _ipow(x, ::Val{6}) = (x3 = x*x*x; x3*x3)
-@inline _ipow(x, ::Val{P}) where {P} =
+#
+# One method, branching on the static `P` (the branches fold away for a
+# concrete `P`), not one method per exponent: a descriptor whose exponent
+# is not known to inference (an abstract `WENOZ` or `TENO`, as
+# `_flux_reconstruction(::Symbol)` returns) then still infers `typeof(x)`.
+# Six methods exceeded inference's `max_methods = 3`, `_ipow` inferred
+# `Any`, and `boundary_scalar_flux` lost type stability (merge train
+# after #327/#341).
+@inline function _ipow(x, ::Val{P}) where {P}
+    P === 1 && return x
+    P === 2 && return x*x
+    P === 3 && return x*x*x
+    P === 4 && (x2 = x*x; return x2*x2)
+    P === 6 && (x3 = x*x*x; return x3*x3)
+    return _ipow_general(x, P)
+end
+@inline _ipow_general(x, P::Integer) =
     P >= 0 ? Base.power_by_squaring(x, P) : inv(Base.power_by_squaring(x, -P))
 
 # The exponent of a public scalar entry point (`p`, `q` keywords) as a
