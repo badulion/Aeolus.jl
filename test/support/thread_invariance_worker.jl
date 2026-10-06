@@ -20,7 +20,11 @@
 #               surface / water / air-heat ledgers, the dt sequence and the
 #               pressure-solver iteration counts per step;
 #   flagship    one step of the default CaseConfig() (the 64×64×32
-#               Alexanderplatz run), hashed the same way.
+#               Alexanderplatz run), hashed the same way;
+#   fft         (KA-h, #298) one solve of every spectral pressure solver —
+#               FFT, CosineFFT for all 8 axis-BC combinations, Stretched for
+#               the 4 lateral pairs — at 64×64×32 and 128×128×64, with FFTW
+#               on the process's threads (`init_threads!`).
 
 ENV["AEOLUS_FFTW_PLANNER"] = "estimate"    # deterministic plans (#245)
 using Aeolus
@@ -167,6 +171,34 @@ function section_flagship()
 end
 
 # --------------------------------------------------------------------------
+function section_fft()
+    PS = Aeolus.PressureSolvers
+    @printf("thread-invariance worker: -t %d: FFTW plans on %d threads\n",
+            Threads.nthreads(), Aeolus.fftw_policy().threads)
+    for (Nx, Ny, Nz) in ((64, 64, 32), (128, 128, 64))
+        tag = "$(Nx)x$(Ny)x$(Nz)"
+        mesh = RegularGrid(; size = (Nx, Ny, Nz), extent = (1.0, 1.3, 0.7), halo = (3, 3, 3))
+        smesh = StretchedGrid(; size = (Nx, Ny, Nz), extent = (800.0, 800.0, 3000.0),
+                                halo = (3, 3, 3), stretching = (:geometric, 1.04))
+        solvers = Pair{String,Any}["fft" => (mesh, PS.FFTPoissonSolver(mesh))]
+        for bx in (:periodic, :neumann), by in (:periodic, :neumann), bz in (:periodic, :neumann)
+            push!(solvers, "cosine($bx,$by,$bz)" =>
+                  (mesh, PS.CosineFFTPoissonSolver(mesh; bc_x = bx, bc_y = by, bc_z = bz)))
+        end
+        for bx in (:periodic, :neumann), by in (:periodic, :neumann)
+            push!(solvers, "stretched($bx,$by)" =>
+                  (smesh, Aeolus.StretchedGrids.StretchedPoissonSolver(smesh; bc_x = bx, bc_y = by)))
+        end
+        for (name, (m, solver)) in solvers
+            src = Field(m); src.data .= randn(Xoshiro(298), size(src.data))
+            p = Field(m)
+            PS.solve!(p, src, solver)
+            record!("fft/$tag/$name", p.data)
+        end
+    end
+end
+
+# --------------------------------------------------------------------------
 init_threads!(BACKEND)
 t0 = time()
 for s in SECTIONS
@@ -175,6 +207,7 @@ for s in SECTIONS
     s == "dns"        ? section_dns() :
     s == "smoke"      ? section_smoke() :
     s == "flagship"   ? section_flagship() :
+    s == "fft"        ? section_fft() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)
 end

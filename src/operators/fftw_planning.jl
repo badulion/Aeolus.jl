@@ -30,11 +30,12 @@ mutable struct _FFTWPolicyState
     resolved::Bool
     planner::Symbol
     threads::Int
+    threads_explicit::Bool   # chosen by AEOLUS_FFTW_THREADS / set_fftw_policy!(threads =)
     wisdom_loaded::Bool
     wisdom_file::String
 end
 
-const _FFTW_POLICY = _FFTWPolicyState(false, :measure, 1, false, "")
+const _FFTW_POLICY = _FFTWPolicyState(false, :measure, 1, false, false, "")
 
 # Default planner: :measure (#245, maintainer decision on #318: near-PATIENT
 # plans at a fraction of the planning cost), unless ENV["AEOLUS_FFTW_PLANNER"]
@@ -55,6 +56,7 @@ function _fftw_policy!()
     st = _FFTW_POLICY
     if !st.resolved
         st.planner = _parse_planner(get(ENV, "AEOLUS_FFTW_PLANNER", String(FFTW_DEFAULT_PLANNER)))
+        st.threads_explicit = haskey(ENV, "AEOLUS_FFTW_THREADS")
         st.threads = parse(Int, get(ENV, "AEOLUS_FFTW_THREADS", "1"))
         st.threads >= 1 || throw(ArgumentError("AEOLUS_FFTW_THREADS must be ≥ 1"))
         FFTW.set_num_threads(st.threads)
@@ -81,6 +83,18 @@ sets `AEOLUS_FFTW_PLANNER=estimate`, so its bitwise comparisons hold across
 processes and planning stays fast. A TOML namelist sets it with an
 `[fftw]` table ([`apply_fftw_config!`](@ref Aeolus.IO.apply_fftw_config!)).
 
+**Threads.** Without an explicit count the policy starts at one thread
+and [`init_threads!`](@ref Aeolus.Backends.init_threads!) raises it to
+`Threads.nthreads()` (KA-h, #298). A count set here, through
+`AEOLUS_FFTW_THREADS` or by a namelist is explicit, and `init_threads!`
+keeps it. FFTW's threaded plans hand whole 1-D transforms to the
+threads, so under `:estimate` a solve gives identical bits at every FFTW
+thread count (measured for every pressure solver and axis-BC
+combination, 1-24 threads, docs/src/design/ka_port.md). Under the timing
+planners the planner may pick a different algorithm for a different
+thread count (as it may for another process), so there it holds only
+with imported wisdom made at the same thread count.
+
 **Reproducibility.** `:measure`, `:patient` and `:exhaustive` time
 candidate algorithms, so two processes may choose different plans and
 differ in the last bit (FFTW FAQ 3.8); `:estimate` is deterministic, and
@@ -104,6 +118,7 @@ function set_fftw_policy!(; planner = nothing, threads = nothing)
     if threads !== nothing
         threads >= 1 || throw(ArgumentError("FFTW threads must be ≥ 1, got $threads"))
         st.threads = Int(threads)
+        st.threads_explicit = true
         FFTW.set_num_threads(st.threads)
     end
     return fftw_policy()
@@ -174,5 +189,13 @@ end
 # `Backends.init_threads!` (KA-a, #294) sets and reports the FFTW thread
 # count through this policy, so there is one place FFTW is configured.
 using ..Backends: Backends
-Backends._set_fftw_threads!(n::Int) = (set_fftw_policy!(threads = n); nothing)
+function Backends._set_fftw_threads!(n::Int; default::Bool = false)
+    st = _fftw_policy!()
+    default && st.threads_explicit && return nothing   # an explicit count wins
+    n >= 1 || throw(ArgumentError("FFTW threads must be ≥ 1, got $n"))
+    st.threads = n
+    default || (st.threads_explicit = true)
+    FFTW.set_num_threads(n)
+    return nothing
+end
 Backends._fftw_threads() = _fftw_policy!().threads

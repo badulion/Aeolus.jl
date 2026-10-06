@@ -1,7 +1,6 @@
 module PressureSolvers
 
 using FFTW
-using LinearAlgebra: mul!
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 using ..Grids
 using ..Grids: RegularGrid, interior, CellCenter
@@ -9,6 +8,7 @@ using ..Fields
 using ..Fields: Field
 using ..BoundaryConditions: FieldBoundaryConditions, axis_poisson_bc
 using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
+using ..Backends: backend, launch!, apply_transform!
 
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!, poisson_axis_bcs
@@ -105,24 +105,90 @@ bug.
 """
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::FFTPoissonSolver{T}) where {T}
-    m  = source.mesh
-    ii, jj, kk = interior(m)
-
-    # copy interior of source into contiguous buffer
-    @views solver.src_buffer .= source.data[ii, jj, kk]
-
-    # forward transform
-    mul!(solver.hat_buffer, solver.forward_plan, solver.src_buffer)
-
+    b = backend(solver.src_buffer)
+    buf, hat = solver.src_buffer, solver.hat_buffer
+    copy_interior_in!(b, buf, source)                      # interior → contiguous buffer
+    apply_transform!(b, hat, solver.forward_plan, buf)     # forward transform
     # divide by eigenvalues (zero mode annihilated by inv_eigenvalues[1,1,1] = 0)
-    @inbounds solver.hat_buffer .*= solver.inv_eigenvalues
-
-    # inverse transform → real buffer
-    mul!(solver.src_buffer, solver.inverse_plan, solver.hat_buffer)
-
-    # write back
-    @views p.data[ii, jj, kk] .= solver.src_buffer
+    scale_by!(b, hat, solver.inv_eigenvalues)
+    apply_transform!(b, buf, solver.inverse_plan, hat)     # inverse transform
+    copy_interior_out!(b, p, buf)                          # write back
     return p
+end
+
+# ---- pointwise kernels of the spectral solvers (KA-h, #298) -----------------
+#
+# Bodies for `Backends.launch!`: each writes only its own point, so they give
+# the same bits serially, threaded, and as the broadcasts they replace
+# (`buf .= src[I...]`, `hat .*= invλ`, `buf .*= s`). The transforms between
+# them run from the host (`apply_transform!`), never inside a kernel.
+
+@inline function _copy_in_body!(i, j, k, buf, src, oi, oj, ok)
+    @inbounds buf[i, j, k] = src[i + oi, j + oj, k + ok]
+    return nothing
+end
+@inline function _copy_out_body!(i, j, k, dst, buf, oi, oj, ok)
+    @inbounds dst[i + oi, j + oj, k + ok] = buf[i, j, k]
+    return nothing
+end
+@inline function _copy_out_scaled_body!(i, j, k, dst, buf, oi, oj, ok, s)
+    @inbounds dst[i + oi, j + oj, k + ok] = buf[i, j, k] * s
+    return nothing
+end
+@inline function _scale_by_body!(i, j, k, a, w)
+    @inbounds a[i, j, k] = a[i, j, k] * w[i, j, k]
+    return nothing
+end
+
+_ranges(a::AbstractArray{<:Any,3}) = (1:size(a, 1), 1:size(a, 2), 1:size(a, 3))
+
+function _check_interior(f::Field, buf::AbstractArray{<:Any,3})
+    m = f.mesh
+    (m.Nx, m.Ny, m.Nz) == size(buf) ||
+        throw(DimensionMismatch("field interior $((m.Nx, m.Ny, m.Nz)) ≠ solver buffer $(size(buf))"))
+    checkbounds(f.data, interior(m)...)
+    return (m.Hx, m.Hy, m.Hz)
+end
+
+"""
+    copy_interior_in!(backend, buf, f::Field) -> buf
+
+`buf[i, j, k] = f`'s interior value at `(i, j, k)` (`buf` has the
+interior's size). A pointwise kernel (KA-h, #298).
+"""
+function copy_interior_in!(b, buf::AbstractArray{T,3}, f::Field) where {T}
+    oi, oj, ok = _check_interior(f, buf)
+    launch!(b, _copy_in_body!, _ranges(buf), buf, f.data, oi, oj, ok)
+    return buf
+end
+
+"""
+    copy_interior_out!(backend, f::Field, buf[, s]) -> f
+
+Write `buf` (interior-sized), times `s` if given, into `f`'s interior;
+`f`'s halos are left untouched. A pointwise kernel (KA-h, #298).
+"""
+function copy_interior_out!(b, f::Field, buf::AbstractArray{T,3}) where {T}
+    oi, oj, ok = _check_interior(f, buf)
+    launch!(b, _copy_out_body!, _ranges(buf), f.data, buf, oi, oj, ok)
+    return f
+end
+function copy_interior_out!(b, f::Field, buf::AbstractArray{T,3}, s) where {T}
+    oi, oj, ok = _check_interior(f, buf)
+    launch!(b, _copy_out_scaled_body!, _ranges(buf), f.data, buf, oi, oj, ok, s)
+    return f
+end
+
+"""
+    scale_by!(backend, a, w) -> a
+
+`a .*= w` (same size; `a` may be complex, `w` real) as a pointwise kernel:
+the division by the Laplacian eigenvalues in spectral space (KA-h, #298).
+"""
+function scale_by!(b, a::AbstractArray{<:Any,3}, w::AbstractArray{<:Any,3})
+    size(a) == size(w) || throw(DimensionMismatch("scale_by!: $(size(a)) vs $(size(w))"))
+    launch!(b, _scale_by_body!, _ranges(a), a, w)
+    return a
 end
 
 # -------------------------------------------------------------------------
@@ -300,34 +366,31 @@ end
 
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::CosineFFTPoissonSolver{T}) where {T}
-    m  = source.mesh
-    ii, jj, kk = interior(m)
+    b = backend(solver.real_buf)
+    cur, other = solver.real_buf, solver.real_buf2   # the data lives in `cur`
+    copy_interior_in!(b, cur, source)
 
-    @views solver.real_buf .= source.data[ii, jj, kk]
-
-    if solver.plan_dct_fwd === nothing                     # all periodic
-        solver.real_buf2 .= solver.real_buf
-    else
-        mul!(solver.real_buf2, solver.plan_dct_fwd, solver.real_buf)
+    if solver.plan_dct_fwd !== nothing                     # DCT-II along the Neumann axes
+        apply_transform!(b, other, solver.plan_dct_fwd, cur)
+        cur, other = other, cur
     end
 
     if solver.plan_fft_fwd === nothing                     # all Neumann: real spectrum
-        @inbounds solver.real_buf2 .*= solver.inv_eigenvalues
+        scale_by!(b, cur, solver.inv_eigenvalues)
     else
-        mul!(solver.hat_buf, solver.plan_fft_fwd, solver.real_buf2)
-        @inbounds solver.hat_buf .*= solver.inv_eigenvalues
-        mul!(solver.real_buf2, solver.plan_fft_inv, solver.hat_buf)
+        apply_transform!(b, solver.hat_buf, solver.plan_fft_fwd, cur)
+        scale_by!(b, solver.hat_buf, solver.inv_eigenvalues)
+        apply_transform!(b, cur, solver.plan_fft_inv, solver.hat_buf)
     end
 
-    if solver.plan_dct_inv === nothing
-        solver.real_buf .= solver.real_buf2
-    else
-        mul!(solver.real_buf, solver.plan_dct_inv, solver.real_buf2)
+    if solver.plan_dct_inv !== nothing                     # DCT-III back
+        apply_transform!(b, other, solver.plan_dct_inv, cur)
+        cur, other = other, cur
     end
 
-    solver.real_buf .*= solver.dct_scale
-
-    @views p.data[ii, jj, kk] .= solver.real_buf
+    # the DCT normalisation fused into the write-back (same bits as the
+    # former `real_buf .*= dct_scale` followed by the copy)
+    copy_interior_out!(b, p, cur, solver.dct_scale)
     return p
 end
 
