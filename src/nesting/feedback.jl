@@ -7,14 +7,15 @@
 #   * NestScalarFlux — the transport whose face flux a register books;
 #   * NestFluxRegisters — Berger–Colella flux registers on the interface
 #     planes, accumulated at every stage of every parent step and child
-#     substep through a body-force hook (exactly the fluxes the cores used);
+#     substep through a body-force hook (exactly the fluxes the cores used),
+#     and by separate transports through book_nest_flux! (#327 M3);
 #   * anterpolate!, two_way_feedback!, feedback_mask — the feedback itself.
 #
 # All operators come from N-nest-a (#250) / N-nest-b (#256): the restriction
 # is `restrict_to_parent!` (volume- or mass-weighted, solid-aware), the
 # refluxing `apply_flux_correction!`, the face flux of a scalar
-# `AdvectionSchemes.advective_face_flux` and the closures'
-# `sgs_scalar_face_diffusivity`.
+# `AdvectionSchemes.scalar_face_flux` (the kernel of `boundary_scalar_flux`
+# too, #327 M2) and the closures' `sgs_scalar_face_diffusivity`.
 
 const _SIDE_NAMES = (:west, :east, :south, :north, :bottom, :top)
 _side_axis(s::Int) = (s + 1) ÷ 2
