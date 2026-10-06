@@ -154,6 +154,42 @@ end
         @test interior_max(A, (1:0, jr, kr)) == -Inf
     end
 
+    # KA-b (#296): the indexed reductions every call site of the port uses
+    @testset "plane_reduce! / range_max: canonical order, fused writes ($name)" for (name, b) in BACKENDS
+        parts = [reference_plane_sum(A, ir, jr, k) for k in kr]
+        p = zeros(length(kr))
+        @test same_bits(plane_reduce!(p, b, (i, j, k, A) -> (@inbounds A[i, j, k]), I3, A), parts)
+        # a stencil body: the same order as plane_partials! on the stencil values
+        D = similar(A); fill!(D, 0)
+        for k in kr, j in jr, i in ir
+            D[i, j, k] = A[i+1, j, k] - A[i-1, j, k]
+        end
+        q = zeros(length(kr)); plane_partials!(q, b, identity, I3, D)
+        @test same_bits(plane_reduce!(p, b, (i, j, k, A) -> (@inbounds A[i+1, j, k] - A[i-1, j, k]), I3, A), q)
+        # a tuple body: each component in the canonical order (a masked sum and its count)
+        M = A .> 0
+        s, n = zeros(length(kr)), zeros(length(kr))
+        plane_reduce!((s, n), b, (i, j, k, A, M) -> (@inbounds M[i, j, k] ? (A[i, j, k], 1.0) : (0.0, 0.0)),
+                      I3, A, M)
+        q2 = zeros(length(kr)); plane_partials!(q2, b, (a, m) -> m ? a : 0.0, I3, A, M)
+        @test same_bits(s, q2)
+        @test n == [count(view(M, ir, jr, k)) for k in kr]
+        # a fused update: the body writes its point and returns what it added
+        C = copy(A); dC = zeros(length(kr))
+        plane_reduce!(dC, b, (i, j, k, C, f) -> (@inbounds (d = f * C[i, j, k]; C[i, j, k] += d; d)), I3, C, 0.25)
+        @test same_bits(view(C, I3...), view(A, I3...) .+ 0.25 .* view(A, I3...))
+        q3 = zeros(length(kr)); plane_partials!(q3, b, a -> 0.25 * a, I3, A)
+        @test same_bits(dC, q3)
+        # interior-sized views with axes ranges: the same bits as the halo arrays
+        V = view(A, I3...)
+        @test same_bits(plane_reduce!(p, b, (i, j, k, V) -> (@inbounds V[i, j, k]), axes(V), V), parts)
+        # range_max: exact, so equal to Base's maximum; NaN-propagating
+        @test same_bits(range_max(b, (i, j, k, A) -> abs(A[i, j, k]), I3, A), maximum(abs, view(A, I3...)))
+        C = copy(A); C[ir[3], jr[2], kr[4]] = NaN
+        @test isnan(range_max(b, (i, j, k, A) -> abs(A[i, j, k]), I3, C))
+        @test range_max(b, (i, j, k, A) -> A[i, j, k], (ir, 1:0, kr), A) == -Inf
+    end
+
     @testset "max propagates NaN, all_finite catches NaN and ±Inf ($name)" for (name, b) in BACKENDS
         for (bad, maxwant) in ((NaN, NaN), (Inf, Inf), (-Inf, maximum(view(A, I3...))))
             C = copy(A); C[ir[5], jr[7], kr[end]] = bad
