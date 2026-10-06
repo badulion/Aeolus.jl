@@ -32,6 +32,8 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
        CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
        latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
        driver_checkpoints, finish_checkpoints!
+# #335: blowup guard and run monitor (io/blowup.jl, io/run_monitor.jl)
+export checkpoint_payload, write_checkpoint
 # #334: run folder and provenance (io/run_folder.jl)
 export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
        provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,
@@ -96,6 +98,7 @@ include("io/checkpoint.jl")
 # Run folder and provenance (#334): runs/<date>_<case>_<runID>/ with run.log,
 # run.toml, diagnostics, output and checkpoints; the dirty-tree policy.
 include("io/run_folder.jl")
+
 
 # -------------------------------------------------------------------------
 # Configuration — TOML namelists.

@@ -239,6 +239,8 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
 export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
        provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,
        diagnostics_path, output_dir, checkpoint_dir, refresh_fftw_provenance!
+# #335: blowup guard (diagnose, dump, stop) and the run monitor
+export checkpoint_payload, write_checkpoint
 export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_write!, nc_append_record!, nc_close!, nc_write_fields,
        nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,

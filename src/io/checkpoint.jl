@@ -302,9 +302,25 @@ version (recorded; a mismatch warns on restart).
 function checkpoint!(sim::BoussinesqSimulation, path::AbstractString;
                      sgs = nothing, components = (;), stepper = nothing,
                      rng = nothing, extra::AbstractDict = Dict{Symbol,Any}())
+    return write_checkpoint(path, checkpoint_payload(sim; sgs, components, stepper, rng, extra))
+end
+
+"""
+    checkpoint_payload(sim; sgs = nothing, components = (;), stepper = nothing,
+                       rng = nothing, extra = Dict()) -> Dict{Symbol,Any}
+
+The in-memory checkpoint that [`checkpoint!`](@ref) writes: everything
+it lists, self-contained (the field data and every component state are
+copies, nothing is aliased to the run). [`write_checkpoint`](@ref) puts
+it on disk. The blowup guard (#335) holds the last good state of a run
+this way and writes it as the crash checkpoint.
+"""
+function checkpoint_payload(sim::BoussinesqSimulation;
+                            sgs = nothing, components = (;), stepper = nothing,
+                            rng = nothing, extra::AbstractDict = Dict{Symbol,Any}())
     closure = sgs === nothing ? nothing : sgs_closure(sgs)
     comps = _component_dict(components)
-    payload = Dict{Symbol,Any}(
+    return Dict{Symbol,Any}(
         :format         => CHECKPOINT_FORMAT,
         :version        => CHECKPOINT_VERSION,
         :julia_version  => string(VERSION),
@@ -323,6 +339,16 @@ function checkpoint!(sim::BoussinesqSimulation, path::AbstractString;
         :fftw           => fftw_policy(),
         :extra          => Dict{Symbol,Any}(Symbol(k) => v for (k, v) in extra),
     )
+end
+
+"""
+    write_checkpoint(path, payload) -> path
+
+Write a [`checkpoint_payload`](@ref) to `path`, through `path * ".tmp"`
+and a rename, so an interrupted write never leaves a truncated
+checkpoint under `path`.
+"""
+function write_checkpoint(path::AbstractString, payload::AbstractDict)
     mkpath(dirname(abspath(path)))
     tmp = path * ".tmp"
     open(tmp, "w") do io
