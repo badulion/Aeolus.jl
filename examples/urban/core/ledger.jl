@@ -68,7 +68,10 @@ the ledger was (re)started. See `core/ledger.jl` for the conventions.
 * `Ts_start`, `W_start` — snapshots at the start of the current step;
 * `dt` — the length (s) of the current step, set before the `budget!`
   calls. Use it, not `cfg.dt`, to turn a step's energy into a flux: with
-  the adaptive time stepper the two differ.
+  the adaptive time stepper the two differ;
+* `heat` — the air-heat ledger ([`AirHeatLedger`](@ref)): the change of
+  the heat of the air, attributed automatically to the stage entries
+  and the dynamics ([`heat_budget`](@ref), [`add_heat!`](@ref)).
 """
 mutable struct Ledger
     terms::Dict{Symbol,Float64}
@@ -83,9 +86,11 @@ mutable struct Ledger
     Ts_start::Matrix{Float64}
     W_start::Float64
     dt::Float64
+    heat::AirHeatLedger
 end
 Ledger() = Ledger(Dict{Symbol,Float64}(), Dict{Symbol,Vector{Float64}}(), Dict{Symbol,Float64}(),
-                  0.0, [:qv, :ql, :qr], Float64[], Int[], 0.0, 0, zeros(0, 0), 0.0, 0.0)
+                  0.0, [:qv, :ql, :qr], Float64[], Int[], 0.0, 0, zeros(0, 0), 0.0, 0.0,
+                  AirHeatLedger())
 
 "Add `value` to the free-form ledger term `name` (a diagnostic outside the budgets)."
 add_term!(l::Ledger, name::Symbol, value::Real) =
@@ -126,6 +131,11 @@ during this step by `term` (negative: removed, e.g. precipitation).
 """
 add_water!(l::Ledger, term::Symbol, amount::Real) =
     (l.water[term] = get(l.water, term, 0.0) + Float64(amount); l)
+
+add_heat!(l::Ledger, term::Symbol, J::Real; k = nothing) = (add_heat!(l.heat, term, J; k = k); l)
+add_heat!(l::Ledger, term::Symbol, J::AbstractVector) = (add_heat!(l.heat, term, J); l)
+heat_budget(l::Ledger; kw...) = heat_budget(l.heat; kw...)
+heat_report(l::Ledger; kw...) = heat_report(l.heat; kw...)
 
 """
     air_water(case) -> kg m⁻²
@@ -178,14 +188,23 @@ vapour makes it negative. On the anelastic core the transport is
 part is exactly 0; on the pseudo-incompressible core `W = ρ̄θ̄`. With
 `ledger.ρ ≡ 1` and `W = nothing` it is exactly 0.
 """
-function ledger_water_split(case, q::AbstractArray{<:Real,3}, W = nothing)
+ledger_water_split(case, q::AbstractArray{<:Real,3}, W = nothing) =
+    ledger_water_split_levels(case, (sum(view(q, :, :, k)) for k in axes(q, 3)), W)
+
+"""
+    ledger_water_split_levels(case, S, W = nothing) -> (transport, density_redistribution)
+
+[`ledger_water_split`](@ref) of an increment given by its per-level
+column sums `S[k] = Σ_ij dq` (e.g. the water an open face moved into each
+level, #262).
+"""
+function ledger_water_split_levels(case, S, W = nothing)
     l, mesh = case.ledger, case.mesh
     isempty(l.ρ) && (l.ρ = ones(mesh.Nz))
     ρm = sum(l.ρ) / length(l.ρ)
     c = W === nothing ? ρm : ρm / (sum(W) / length(W))
     flat, redis = 0.0, 0.0
-    @inbounds for k in axes(q, 3)
-        s = sum(view(q, :, :, k))
+    @inbounds for (k, s) in enumerate(S)
         w = W === nothing ? 1.0 : W[k]
         flat += c * w * s
         redis += (l.ρ[k] - c * w) * s
@@ -207,7 +226,27 @@ function reset_ledger!(case)
     l.elapsed = 0.0
     l.nsteps = 0
     l.ncol = [count(==(UInt8(k)), case.geom.sfc) for k in 1:length(LEDGER_CLASS_NAMES)]
+    heat_start!(l.heat, AirHeatMeter(case.sim, case.ref, case.geom.sm.mask);
+                canopy_top = canopy_top(case))
     return l
+end
+
+"""
+    canopy_top(case) -> m
+
+Top of the `:canopy` layer of the air-heat budget: `case.cfg.canopy_top`
+if it is set (finite), otherwise the tallest roof of the scene (the top
+of its highest solid cell), or one level for a scene without buildings.
+
+In the Alexanderplatz scene the tallest roof is the Fernsehturm, clipped
+at the domain top (200 m on the 64 × 64 × 32 grid), so the default
+`:canopy` layer is the whole column there; set `cfg.canopy_top` (e.g. to
+the 90th percentile of the roof heights, 37.5 m) for the street canyons.
+"""
+function canopy_top(case)
+    isfinite(case.cfg.canopy_top) && return Float64(case.cfg.canopy_top)
+    return max(maximum(building_height(case.geom, case.mesh); init = 0.0),
+               Float64(level_thickness(case.mesh)[1]))
 end
 
 _time_ledger!(case, t0) =
@@ -221,6 +260,7 @@ function ledger_begin_step!(case)
     size(l.Ts_start) == size(case.bus.Ts) ? copyto!(l.Ts_start, case.bus.Ts) :
                                            (l.Ts_start = copy(case.bus.Ts))
     l.W_start = air_water(case)
+    heat_begin_step!(l.heat, case.sim.θ, hour_of_day(case.cfg, case.sim.t))
     _time_ledger!(case, t0)
     return l
 end
@@ -234,6 +274,7 @@ function ledger_end_step!(case, dt::Real)
         budget!(c, case, l)
     end
     l.water_air += air_water(case) - l.W_start
+    heat_end_step!(l.heat, case.sim.θ, dt)
     l.elapsed += dt
     l.nsteps += 1
     _time_ledger!(case, t0)
@@ -315,5 +356,6 @@ function ledger_report(case)
     @printf(io, "Water ledger (kg/m² of domain): ΔW_air %.4e = ", w.storage)
     print(io, join((@sprintf("%s %.4e", t, v) for (t, v) in sort!(collect(w.sources))), " + "))
     @printf(io, "  (residual %.2e)\n", w.residual)
+    print(io, heat_report(l.heat))
     return String(take!(io))
 end

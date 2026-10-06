@@ -52,6 +52,16 @@
 # flux into or out of buildings, solid cells untouched) and, on a
 # sound-proof core, the constraint weights (conserving Σ W q). The
 # pollutant (its own :tracers stage) uses the same helper.
+#
+# Open lateral boundaries (`cfg.lateral = :open`, N-open-d #262). The tracer
+# and mask halos come from `case_scalar_bcs`: the mirror (zero-gradient)
+# halo on every face of an open case — a tracer has no boundary data, so it
+# leaves with its own value and enters with the value next to the face. The
+# water the open faces carry is booked as the water ledger's `:boundary`
+# term, from `boundary_scalar_flux` with the advection's own scheme and
+# face velocities (the flux through an open face is not a non-conservation
+# of the scheme), split from `transport` / `density_redistribution` level by
+# level. The SGS diffusion carries nothing through a mirror halo.
 
 "Reconstructions `advect_positive!` accepts (the flux limiter needs one)."
 const POSITIVE_SCHEMES = (:centered, :weno5, :weno_js5, :weno_z5, :weno_z7, :teno5, :teno8)
@@ -64,7 +74,8 @@ tracer registered with `advect = true` (registration order) is advanced
 over `dt` with the scheme `scheme` of `Aeolus.AdvectionSchemes`
 (`advection_scheme(scheme)`, any of `:centered, :upwind, :weno5,
 :weno_js5, :weno_z5, :weno_z7, :teno5, :teno8, :variance_conserving`),
-periodic lateral and no-flux vertical halos. Tracers flagged `positive`
+with the halos of `case_scalar_bcs` (periodic lateral and no-flux vertical
+by default; zero-gradient on every face of an open case, #262). Tracers flagged `positive`
 use the flux-limited `advect_positive!` with the same reconstruction
 (`positivity = false` switches that off). The mesh halo must be at least
 `required_halo` of the scheme (`:weno_z7` needs 4, `:teno8` 5; the case
@@ -96,6 +107,41 @@ struct ScalarAdvection{F, W, B, S} <: AbstractCoupling
     weighted::Any                 # nothing (Boussinesq core), or the W-weighted transport of a sound-proof core
     weighted_option::Bool
     diffusion::Any                # TracerSGSDiffusion, or nothing (sgs_diffusion = false)
+    open::Any                     # OpenFaceWater of an open case (#262), or nothing
+    dWb::Base.RefValue{Float64}   # this step's water carried in through the open faces (kg/m²)
+end
+
+"""
+    OpenFaceWater
+
+The water an open case's faces move ([`ScalarAdvection`](@ref), #262):
+the scheme name `boundary_scalar_flux` reconstructs with, its weights —
+1 on the lateral faces, and on the top face the factor the advected
+increment of the top level carries (`W_f/W_c` on a sound-proof core) —
+and per-level buffers.
+"""
+struct OpenFaceWater
+    scheme::Symbol
+    weights::Tuple{Vector{Float64},Vector{Float64}}
+    lev::Vector{Float64}
+    S::Vector{Float64}
+end
+
+function OpenFaceWater(case, scheme::Symbol, wt)
+    mesh = case.mesh
+    Hz, Nz = mesh.Hz, mesh.Nz
+    try
+        Aeolus.AdvectionSchemes._flux_reconstruction(scheme)
+    catch
+        error("scalar_advection: the open faces' water (#262) is booked with boundary_scalar_flux, " *
+              "which has no face reconstruction for scheme :$scheme")
+    end
+    wc = ones(Nz + 2Hz); wf = ones(Nz + 2Hz)
+    if wt !== nothing          # the W-weighted transport: the top face enters level Nz as W_f/W_c
+        Wc, Wf = Aeolus.Anelastic.constraint_weights(case.sim)
+        wf[Hz+Nz+1] = Wf[Hz+Nz+1] / Wc[Hz+Nz]
+    end
+    return OpenFaceWater(scheme, (wc, wf), zeros(Nz), zeros(Nz))
 end
 
 """
@@ -106,16 +152,21 @@ SGS diffusion of a registered tracer with the closure's eddy diffusivity
 dynamics step (zero before the first step, and with `C_s = 0`), formed by
 `Operators.add_eddy_diffusion_scalar!` with
 
-  * `mask` — the case's solid mask with periodic lateral halos: no flux
+  * `mask` — the case's solid mask with the halos of `case_scalar_bcs`
+    (periodic laterally; mirrored at open faces, #262): no flux
     through a face next to a building, solid cells untouched;
   * `weights` — on a sound-proof core the constraint weights `(Wc, Wf)`
     (`Anelastic.constraint_weights`), so the update is
     `(1/W) ∇·(W κt ∇q)` and conserves `Σ W q` (on the anelastic core that is
     the ledger's `Σ ρ̄ q`); `nothing` on the Boussinesq core (conserves `Σ q`).
 
-Halos of the tracer: periodic laterally, no-flux at the ground and the top.
+Halos of the tracer: `case_scalar_bcs` (periodic laterally, no-flux at the
+ground and the top; zero-gradient on every face of an open case).
 [`sgs_diffuse!`](@ref) applies it; the `:transport` stage calls it for every
-advected tracer and the pollutant coupling for its tracer.
+advected tracer and the pollutant coupling for its tracer. Every passive
+tracer gets the same shared `κt`, also under the `:amd` provider, whose
+per-scalar diffusivity is deliberately not used (one turbulent Schmidt
+number; #234, see the SGS theory page).
 """
 struct TracerSGSDiffusion{F, M, W}
     tend::F
@@ -129,10 +180,10 @@ end
 
 function TracerSGSDiffusion(case)
     mesh = case.mesh
-    bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux)
+    bcs = case_scalar_bcs(case.cfg)
     mf = Field(CellCenter(), mesh)
     mf.data .= case.geom.sm.mask
-    fill_halos!(mf, bcs)                       # periodic copies across the seam
+    fill_halos!(mf, bcs)                       # periodic copies across the seam (mirror at open faces)
     sim = case.sim
     w = sim isa Aeolus.Anelastic.MassWeightedSimulation ?
         Aeolus.Anelastic.constraint_weights(sim) : nothing
@@ -249,11 +300,14 @@ function build(::Type{<:ScalarAdvection}, case, o)
         error("scalar_advection: scheme :$(o.scheme) needs halo ≥ $H, the case has $((mesh.Hx, mesh.Hy, mesh.Hz)) (set CaseConfig halo)")
     o.positivity && !(o.scheme in POSITIVE_SCHEMES) &&
         error("scalar_advection: the positivity limiter takes one of $(POSITIVE_SCHEMES), not :$(o.scheme); set positivity = false")
+    wt = o.weighted ? transport_weighting(case.sim, mesh) : nothing
     return ScalarAdvection(Field(CellCenter(), mesh), FluxLimiterWorkspace(mesh),
-                           FieldBoundaryConditions(:periodic, :periodic, :noflux),
+                           case_scalar_bcs(case.cfg),
                            scheme, o.positivity, o.refresh_halos, Ref(0.0), Ref(0.0),
-                           o.weighted ? transport_weighting(case.sim, mesh) : nothing, o.weighted,
-                           o.sgs_diffusion ? TracerSGSDiffusion(case) : nothing)
+                           wt, o.weighted,
+                           o.sgs_diffusion ? TracerSGSDiffusion(case) : nothing,
+                           lateral_open(case.cfg) ? OpenFaceWater(case, Symbol(o.scheme), wt) : nothing,
+                           Ref(0.0))
 end
 
 function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
@@ -265,7 +319,7 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
         fill_halos!(sim.v, sim.bcs)
         fill_halos!(sim.w, sim.bcs)
     end
-    c.dW[] = 0.0; c.dWρ[] = 0.0
+    c.dW[] = 0.0; c.dWρ[] = 0.0; c.dWb[] = 0.0
     d = c.diffusion
     d === nothing || (d.dW[] = 0.0; d.dWρ[] = 0.0; d.resid[] = 0.0)
     wt = c.weighted
@@ -275,6 +329,21 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
         t.advect || continue
         q = t.field
         fill_halos!(q, c.bcs)
+        iswater = t.name in case.ledger.water_tracers
+        # the water the open faces carry this step, per level (#262)
+        ob = c.open
+        fb = rb = 0.0
+        if ob !== nothing && iswater
+            fill!(ob.lev, 0.0)
+            boundary_scalar_flux(sim, q; scheme = ob.scheme, bcs = c.bcs, weights = ob.weights,
+                                 fill = false, levels = ob.lev)
+            Vc = mesh.dx * mesh.dy * mesh.dz
+            @inbounds for k in 1:Nz
+                ob.S[k] = -dt * ob.lev[k] / Vc
+            end
+            fb, rb = ledger_water_split_levels(case, ob.S, wt === nothing ? nothing : wt.W)
+            c.dWb[] += fb + rb
+        end
         fill!(c.tend.data, 0)
         if t.positive && c.positivity
             advect_positive!(c.tend, u, v, w, q, dt;
@@ -286,10 +355,10 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
         # weighted: −∇·(W u q)/W_min → −∇·(W u q)/W_k
         wt === nothing || (tend .*= reshape(wt.s, 1, 1, :))
         interior_view(q) .+= dt .* tend
-        iswater = t.name in case.ledger.water_tracers
         if iswater
             flat, redis = ledger_water_split(case, tend, wt === nothing ? nothing : wt.W)
-            c.dW[] += dt * flat; c.dWρ[] += dt * redis
+            # the open faces' share is booked as :boundary (#262)
+            c.dW[] += dt * flat - fb; c.dWρ[] += dt * redis - rb
         end
         # SGS diffusion with κt (κh, κv of a stability-corrected closure),
         # after the advective update (#177)
@@ -302,7 +371,8 @@ end
 # Ledger: a flux-form scheme on a divergence-free velocity with periodic /
 # no-flux boundaries changes no domain total, so anything it does change
 # is booked as `transport` — a measure of non-conservation (zero to
-# round-off with refreshed halos). Under a sound-proof core the conserved
+# round-off with refreshed halos). Through the faces of an open case it
+# changes the total by the boundary flux, booked as `boundary` (#262). Under a sound-proof core the conserved
 # total is Σ W q (see the file header) and `transport` measures that. The ledger integrates with the
 # reference density ρ̄_k (#131), which an incompressible transport does
 # not conserve: moving vapour up into thinner air loses ρ̄-weighted water.
@@ -314,6 +384,7 @@ end
 # ρ̄-redistribution with the transport's.
 function budget!(c::ScalarAdvection, case, l)
     add_water!(l, :transport, c.dW[]); add_water!(l, :density_redistribution, c.dWρ[])
+    c.open === nothing || add_water!(l, :boundary, c.dWb[])
     d = c.diffusion
     if d !== nothing
         add_water!(l, :sgs_diffusion, d.dW[]); add_water!(l, :density_redistribution, d.dWρ[])

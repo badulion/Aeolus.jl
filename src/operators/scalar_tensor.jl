@@ -299,3 +299,4 @@ sgs_scalar_tensor(c::IsentropicDiffusion, f::SGSFields, sim) = c.K
 sgs_explicit_stress(c::IsentropicDiffusion) = sgs_explicit_stress(c.inner)
 add_sgs_scalar!(tϕ, ϕ, c::IsentropicDiffusion, f::SGSFields, sim) =
     add_tensor_diffusion_scalar!(tϕ, ϕ, c.K; bounded = bounded_directions(_scalar_bcs(sim)))
+sgs_scalar_face_diffusivity(::IsentropicDiffusion, f::SGSFields, sim) = nothing   # a tensor

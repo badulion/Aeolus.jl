@@ -274,3 +274,5 @@ restore_sgs_state!(c::StabilityCorrected, s) = (restore_sgs_state!(c.base, s); c
 add_sgs_scalar!(tϕ, ϕ, c::StabilityCorrected, f::SGSFields, sim) =
     (_add_eddy_diffusion_scalar!(tϕ, ϕ, f.νh, c.av, 1 / turbulent_prandtl(c.base, sim),
                                  mesh(ϕ)); nothing)
+sgs_scalar_face_diffusivity(c::StabilityCorrected, f::SGSFields, sim) =
+    (f.νh, c.av, 1 / turbulent_prandtl(c.base, sim))

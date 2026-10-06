@@ -141,10 +141,13 @@ ARK2 and ``4.4\times10^{-16}`` for Rosenbrock2. `boundary_time` reached
   run with the same ``Δt`` sequence; the test checks this over 20 adaptive
   steps. The boundary data at the start of a step is reused from the end of
   the previous one.
-* **`:two_way`**. After the child reaches ``t_p + Δt_p``, its field set is
-  restricted conservatively onto the covered parent cells, and the interface
-  mass-flux mismatch is corrected (Berger & Colella 1989). The conservation
-  ledger is read with [`nest_conservation_error`](@ref).
+* **`:two_way`** (or a [`TwoWayFeedback`](@ref)). After the child reaches
+  ``t_p + Δt_p``, its field set is anterpolated onto the covered parent
+  cells outside a buffer zone, the interface flux of the open faces is
+  corrected, the scalars are refluxed from flux registers booked at every
+  stage of both domains, and the parent is re-projected; see the
+  [two-way nesting page](nesting_twoway.md). The conservation ledger is
+  read with [`nest_conservation_error`](@ref).
 
 The historical `step_nested!(parent, child, nest, dt; …)` is a thin wrapper.
 It is a two-way `NestedRun` with a fixed ``Δt``, a fixed `substeps`
@@ -206,11 +209,10 @@ These are owned by other issues of the nesting epic (#246).
   Taylor-Green child blew up within about 10 steps unless the normal
   velocity was re-imposed and a sponge added; it now runs the 1000-step
   tests with neither, and the benchmark child has an open top.
-* **Two-way with walls.** The interface flux correction treats all six
-  faces as interfaces. With an open child top that is consistent (the
-  child's top flux is the parent's), but a child face on a wall that is not
-  the parent's wall would still be forced. Per-face two-way feedback is
-  N-nest-e (#263).
+* **Resolved by N-nest-e (#263): two-way with walls.** The interface flux
+  correction and the refluxing act on the child's open faces only; a child
+  wall that is not the parent's wall is reported (the composite integral
+  cannot be conserved across it).
 
 ## References
 

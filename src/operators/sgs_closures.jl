@@ -110,6 +110,13 @@ Aeolus.TimeIntegration.step_adaptive!) before it tries a step. Default
 `nothing` (stateless). A stateful closure returns a deep copy (or copies into
 a buffer it owns) so that [`restore_sgs_state!`](@ref) can roll a rejected
 step back bit for bit.
+
+**Serialisable** (#245): the snapshot must be *self-contained* — plain
+arrays, numbers and tuples of them, and `restore_sgs_state!(c, s)` must read
+nothing but `s` — because a checkpoint stores a deep copy of it and restores
+it into a freshly constructed closure in another process
+([`checkpoint!`](@ref Aeolus.IO.checkpoint!)). Every memory the closure's
+next step reads (not only what `advance_sgs!` writes) belongs in it.
 """
 sgs_state(::AbstractSGSClosure) = nothing
 
@@ -184,6 +191,28 @@ function add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim)
     end
     return nothing
 end
+
+"""
+    sgs_scalar_face_diffusivity(c::AbstractSGSClosure, f::SGSFields, sim) -> (Kh, Kv, s) or nothing
+
+The face form of [`add_sgs_scalar!`](@ref) for the closures whose scalar
+flux is diagonal: the SGS flux through a face normal to x or y is
+`−s · ½(Kh_L + Kh_R) (ϕ_R − ϕ_L)/Δ`, and through a z face the same with
+`Kv` (the cell-centred coefficient fields, halos filled, averaged
+linearly to the face — the kernel of
+[`add_eddy_diffusion_scalar!`](@ref)). Default `(f.κh, f.κv, 1)`; an
+eddy-viscosity closure gives `(νt, νt, 1/Prₜ)` (its tendency is formed
+with the factor after the flux divergence, so a flux built from this
+differs from the tendency's by round-off only). `nothing` for a closure
+whose scalar flux is a full tensor ([`IsentropicDiffusion`](@ref), the
+Reynolds-stress closure): it has no two-point face form.
+
+Every closure that adds an `add_sgs_scalar!` method must add the
+matching method here. Used by the flux registers of a two-way nest
+(`Nesting`, N-nest-e #263), which must book exactly the flux the
+tendency used.
+"""
+sgs_scalar_face_diffusivity(::AbstractSGSClosure, f::SGSFields, sim) = (f.κh, f.κv, 1.0)
 
 """
     sgs_tracer_diffusivity!(κ, c::AbstractSGSClosure, f::SGSFields, sim, ϕ) -> Field
@@ -314,6 +343,8 @@ end
 
 add_sgs_scalar!(tϕ, ϕ, c::AbstractEddyViscosityClosure, f::SGSFields, sim) =
     (add_eddy_diffusion_scalar!(tϕ, ϕ, f.νh, turbulent_prandtl(c, sim)); nothing)
+sgs_scalar_face_diffusivity(c::AbstractEddyViscosityClosure, f::SGSFields, sim) =
+    (f.νh, f.νh, 1 / turbulent_prandtl(c, sim))
 
 """
     StaticSmagorinsky(C_s = 0.17; Pr_t = nothing)

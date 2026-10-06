@@ -188,24 +188,46 @@ function _point_in_polygon(x::Real, y::Real, poly::Vector{NTuple{2, Float64}})
     return inside
 end
 
+# The index ranges of the sorted cell centres `xs`, `ys` inside the
+# bounding box of `poly`.
+function _bbox_cells(poly, xs, ys)
+    xmin, xmax, ymin, ymax = polygon_bbox(poly)
+    return searchsortedfirst(xs, xmin):searchsortedlast(xs, xmax),
+           searchsortedfirst(ys, ymin):searchsortedlast(ys, ymax)
+end
+
 """
-    rasterize_city!(sm, sfc, city, mesh)
+    rasterize_city!(sm, sfc, city, mesh; frame = (0, 0))
 
 Populate a `SolidMask sm` (marks cells inside building volumes) and a
 surface-class array `sfc::Matrix{UInt8}` (2-D horizontal, ground-level
 label per cell). Any cell not inside a building and not covered by a
 patch stays at whatever `sfc` was initialised to (typical default:
 `SURFACE_STREET`).
+
+`frame = (fx, fy)` (cells) leaves the columns within `fx` cells of the
+west and east faces and `fy` cells of the south and north faces free of
+buildings (N-open-d, #262: the `boundary_frame` of an open case, so the
+boundary data is not imposed on a building cut by the box edge).
 """
 function rasterize_city!(sm::SolidMask, sfc::AbstractMatrix{UInt8},
-                         city::UrbanCity, mesh)
+                         city::UrbanCity, mesh; frame::NTuple{2,Int} = (0, 0))
     xs = Aeolus.Grids.xnodes(mesh, Aeolus.Grids.CellCenter())
     ys = Aeolus.Grids.ynodes(mesh, Aeolus.Grids.CellCenter())
     zs = Aeolus.Grids.znodes(mesh, Aeolus.Grids.CellCenter())
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
+    fx, fy = frame
+    inframe(i, j) = i <= fx || i > length(xs) - fx || j <= fy || j > length(ys) - fy
+    # Only the cells whose centre lies in a polygon's bounding box are
+    # tested: a centre outside it is outside the polygon for the even–odd
+    # test of `_point_in_polygon` too (no edge spans its y, or every
+    # spanning edge lies on one side of it), so this is exact and only
+    # makes the 6 km parent raster (#249) affordable.
     # buildings → solid mask + roof label
     for b in city.buildings
-        for j in eachindex(ys), i in eachindex(xs)
+        ir, jr = _bbox_cells(b.polygon, xs, ys)
+        for j in jr, i in ir
+            inframe(i, j) && continue
             if _point_in_polygon(xs[i], ys[j], b.polygon)
                 sfc[i, j] = b.class
                 for k in eachindex(zs)
@@ -218,7 +240,8 @@ function rasterize_city!(sm::SolidMask, sfc::AbstractMatrix{UInt8},
     end
     # patches → surface label only
     for p in city.patches
-        for j in eachindex(ys), i in eachindex(xs)
+        ir, jr = _bbox_cells(p.polygon, xs, ys)
+        for j in jr, i in ir
             if _point_in_polygon(xs[i], ys[j], p.polygon)
                 sfc[i, j] = p.class
             end
@@ -228,33 +251,41 @@ function rasterize_city!(sm::SolidMask, sfc::AbstractMatrix{UInt8},
 end
 
 """
-    surface_class_map(city, mesh; default = SURFACE_STREET)
+    surface_class_map(city, mesh; default = SURFACE_STREET, tag_walls = true,
+                      frame = (0, 0), bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
 
 Convenience: create a fresh `Matrix{UInt8}` of horizontal surface class
 labels initialized to `default`, then populate it by rasterizing `city`
-(returning also a fresh solid mask).
+(returning also a fresh solid mask). `frame` is the building-free frame
+of [`rasterize_city!`](@ref); `bcs` the lateral conditions the wall
+tagging reads its neighbours with ([`tag_building_adjacent!`](@ref)).
 """
 function surface_class_map(city::UrbanCity, mesh;
                            default::UInt8 = SURFACE_STREET,
-                           tag_walls::Bool = true)
+                           tag_walls::Bool = true, frame::NTuple{2,Int} = (0, 0),
+                           bcs::FieldBoundaryConditions = FieldBoundaryConditions(:periodic, :periodic, :noflux))
     sfc = fill(default, mesh.Nx, mesh.Ny)
     sm  = SolidMask(mesh)
-    rasterize_city!(sm, sfc, city, mesh)
-    tag_walls && tag_building_adjacent!(sfc, sm, mesh)
+    rasterize_city!(sm, sfc, city, mesh; frame = frame)
+    tag_walls && tag_building_adjacent!(sfc, sm, mesh; bcs = bcs)
     return sm, sfc
 end
 
 """
-    tag_building_adjacent!(sfc, sm, mesh; class = SURFACE_WALL)
+    tag_building_adjacent!(sfc, sm, mesh; class = SURFACE_WALL,
+                           bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
 
 Overwrite any `SURFACE_STREET` cell that shares an edge with a building
 footprint (in the horizontal plane) with `class`. This lets an
 otherwise 2-D surface energy balance carry the effective heat load of
 the building's vertical walls, since real walls dominate solar
-absorption in dense urban geometry.
+absorption in dense urban geometry. The four neighbours are read with
+`neighbor_index` on `bcs` (#262): across a periodic side they wrap,
+across an open one the cell has no neighbour beyond the face.
 """
 function tag_building_adjacent!(sfc::AbstractMatrix{UInt8}, sm::SolidMask, mesh;
-                                class::UInt8 = SURFACE_WALL)
+                                class::UInt8 = SURFACE_WALL,
+                                bcs::FieldBoundaryConditions = FieldBoundaryConditions(:periodic, :periodic, :noflux))
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
     # A footprint cell is any (i, j) that has at least one solid cell in z.
@@ -270,11 +301,12 @@ function tag_building_adjacent!(sfc::AbstractMatrix{UInt8}, sm::SolidMask, mesh;
     @inbounds for j in 1:Ny, i in 1:Nx
         if footprint[i, j]; continue; end
         if sfc[i, j] != SURFACE_STREET; continue; end
-        # 4-neighbour periodic wrap
-        neighbours = ((mod1(i-1, Nx), j),
-                      (mod1(i+1, Nx), j),
-                      (i, mod1(j-1, Ny)),
-                      (i, mod1(j+1, Ny)))
+        # the 4 neighbours (wrapped across a periodic side, the mirror —
+        # the cell itself — across an open one)
+        neighbours = ((neighbor_index(mesh, bcs, i-1, 1), j),
+                      (neighbor_index(mesh, bcs, i+1, 1), j),
+                      (i, neighbor_index(mesh, bcs, j-1, 2)),
+                      (i, neighbor_index(mesh, bcs, j+1, 2)))
         for (ni, nj) in neighbours
             if footprint[ni, nj]
                 sfc[i, j] = class
@@ -325,7 +357,9 @@ Load the OSM city of `cfg` (projected about `cfg.lat0/lon0`, shifted so
 that the point `cfg.offset` metres from the anchor is the domain centre),
 rasterise it on `mesh` with building-adjacent cells tagged
 `SURFACE_WALL`, and build the radiosity scene and its view factors (the
-geometry is static, so this happens once).
+geometry is static, so this happens once). For `cfg.lateral = :open` the
+columns within `cfg.boundary_frame` cells of the open faces are kept free
+of buildings (#262).
 """
 function build_geometry(cfg, mesh; io::IO = stdout)
     isfile(cfg.osm_path) ||
@@ -336,7 +370,9 @@ function build_geometry(cfg, mesh; io::IO = stdout)
                          x_shift = Lx / 2 - cfg.offset[1],
                          y_shift = Ly / 2 - cfg.offset[2],
                          min_height = cfg.min_height)
-    sm, sfc = surface_class_map(city, mesh; tag_walls = true)
+    w_f = lateral_open(cfg) ? cfg.boundary_frame : 0
+    sm, sfc = surface_class_map(city, mesh; tag_walls = true, frame = (w_f, w_f),
+                                bcs = case_scalar_bcs(cfg))
 
     # Era III: a radiosity scene replaces the ray-cast sky-view factor.
     # Geometry is static, so facets and view factors are built once. The

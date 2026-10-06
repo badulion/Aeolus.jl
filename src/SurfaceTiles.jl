@@ -105,6 +105,8 @@ export SurfaceMosaic, ntiles, mosaic_fractions, set_mosaic_fractions!,
        effective_radiative_temperature, tile_mean_temperature,
        ParameterAggregatedSurface, parameter_aggregate,
        class_fractions, tiles_from_class_map,
+       # unresolved buildings (#249)
+       macdonald_roughness,
        # blending height (#42)
        effective_roughness, effective_scalar_roughness,
        AbstractBlendingHeight, FixedBlendingHeight, MasonBlendingHeight,
@@ -589,6 +591,70 @@ function effective_scalar_roughness(z0ms::AbstractVector{<:Real}, z0hs::Abstract
     S = sum(w / (log(l_b / zm) * log(l_b / zh)) for (zm, zh, w) in zip(z0ms, z0hs, f) if w > 0) /
         sum(w for w in f if w > 0)
     return l_b * exp(-1 / (S * log(l_b / z0m_eff)))
+end
+
+# =========================================================================
+# Unresolved buildings: morphometric roughness (Macdonald et al. 1998)
+# =========================================================================
+
+"""
+    macdonald_roughness(λ_p, λ_f, h; A = 4.43, β = 1.0, C_D = 1.2, κ = 0.4)
+        -> (z0 = z0m, d = d)
+
+Momentum roughness length `z0` and zero-plane displacement `d` (both m)
+of an array of buildings that a grid does not resolve, from its plan
+area density `λ_p` (built area / total area), frontal area density
+`λ_f` (windward facade area / total area) and mean building height `h`
+(m), after Macdonald, Griffiths & Hall (1998):
+
+```math
+\\frac{d}{h} = 1 + A^{-λ_p}\\,(λ_p - 1), \\qquad
+\\frac{z_0}{h} = \\left(1 - \\frac{d}{h}\\right)
+  \\exp\\!\\left\\{-\\left[\\frac{β}{2}\\,\\frac{C_D}{κ^2}\\left(1 - \\frac{d}{h}\\right) λ_f\\right]^{-1/2}\\right\\}.
+```
+
+The first is the empirical fit of the displacement to wind-tunnel
+arrays; the second balances the drag of the obstacles' frontal area
+(drag coefficient `C_D`, the factor `β` correcting for sheltering) with
+the log-law stress above ``d``. The defaults are Macdonald et al.'s
+values for **staggered** arrays (``A = 4.43``, ``β = 1.0``, ``C_D =
+1.2``, ``κ = 0.4``, the κ their fit was made with); for square
+(aligned) arrays they give ``A = 3.59``, ``β = 0.55``. With
+``λ_f = λ_p`` (cubes) ``z_0/h`` peaks at ``λ ≈ 0.16``, the
+"intermediate density" maximum reviewed by Grimmond & Oke (1999). Limits:
+``d, z_0 → 0`` as ``λ_p → 0`` (no buildings) and ``d → h``,
+``z_0 → 0`` as ``λ_p → 1`` (a closed roof at height ``h``).
+
+The wind profile above the array is ``u = (u_*/κ) \\ln((z - d)/z_0)``:
+a Monin–Obukhov reference height must be measured from ``d`` (see the
+Berlin parent surface, `examples/urban/parent/surface.jl`). This is the
+one implementation of the relation in Aeolus; `WallModels`' dynamic
+roughness cites it rather than carrying a copy.
+
+Arguments are validated: ``0 ≤ λ_p ≤ 1``, ``λ_f ≥ 0``, ``h ≥ 0``. With
+``h = 0`` or ``λ_p = 0`` or ``λ_f = 0`` the result is `(z0 = 0, d = 0·h)`;
+the caller supplies the roughness of the surface itself in that case.
+
+# References
+
+  * Macdonald, R. W., Griffiths, R. F. & Hall, D. J. (1998). An improved
+    method for the estimation of surface roughness of obstacle arrays.
+    *Atmos. Environ.*, 32, 1857-1864.
+  * Grimmond, C. S. B. & Oke, T. R. (1999). Aerodynamic properties of
+    urban areas derived from analysis of surface form. *J. Appl.
+    Meteorol.*, 38, 1262-1292.
+"""
+function macdonald_roughness(λ_p::Real, λ_f::Real, h::Real;
+                             A::Real = 4.43, β::Real = 1.0, C_D::Real = 1.2, κ::Real = 0.4)
+    (0 <= λ_p <= 1) || throw(ArgumentError("macdonald_roughness: λ_p must lie in [0, 1], got $λ_p"))
+    λ_f >= 0 || throw(ArgumentError("macdonald_roughness: λ_f must be ≥ 0, got $λ_f"))
+    h >= 0 || throw(ArgumentError("macdonald_roughness: h must be ≥ 0, got $h"))
+    (A > 1 && β > 0 && C_D > 0 && κ > 0) ||
+        throw(ArgumentError("macdonald_roughness: need A > 1 and positive β, C_D, κ"))
+    dh = 1 + A^(-λ_p) * (λ_p - 1)
+    s = 0.5 * β * C_D / κ^2 * (1 - dh) * λ_f
+    z0h = s > 0 ? (1 - dh) * exp(-1 / sqrt(s)) : zero(float(s))
+    return (z0 = z0h * h, d = dh * h)
 end
 
 _tile_roughness(m::SurfaceMosaic, k::Symbol) = Float64[getfield(roughness_lengths(t), k) for t in m.tiles]

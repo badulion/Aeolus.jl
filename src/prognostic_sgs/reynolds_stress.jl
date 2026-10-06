@@ -19,6 +19,7 @@ using ..Operators: StressTensor, add_stress_divergence!, DiffusivityTensor,
                    add_tensor_diffusion_scalar!, bounded_directions, _θv_face_dir,
                    _scalar_bcs
 import ..Operators: add_sgs_momentum!, add_sgs_scalar!, sgs_scalar_tensor,
+                    sgs_scalar_face_diffusivity,
                     sgs_explicit_stress, _fill_sgs_halos!
 using ..AdvectionSchemes: advection_scheme
 
@@ -665,6 +666,7 @@ add_sgs_scalar!(tϕ, ϕ, c::ReynoldsStressClosure, f::SGSFields, sim) =
     add_tensor_diffusion_scalar!(tϕ, ϕ, c.K; bounded = bounded_directions(_scalar_bcs(sim)))
 
 sgs_scalar_tensor(c::ReynoldsStressClosure, f::SGSFields, sim) = c.K
+sgs_scalar_face_diffusivity(::ReynoldsStressClosure, f::SGSFields, sim) = nothing   # a tensor
 
 # ---- the commit ----------------------------------------------------------
 
@@ -957,20 +959,22 @@ end
 
 Snapshot of the six stresses and the booked statistics into buffers the
 closure owns, and its restoration (a rejected adaptive step leaves them
-bit for bit as they were).
+bit for bit as they were). The snapshot `(τ, stats)` is self-contained
+(restoring reads nothing but `s`), so a deep copy of it is what a
+checkpoint stores (#245).
 """
 function sgs_state(c::ReynoldsStressClosure)
     for m in 1:6
         copyto!(c.snap[m], c.τ[m].data)
     end
     copyto!(c.snapstats, c.stats)
-    return c.snap
+    return (c.snap, c.snapstats)
 end
 function restore_sgs_state!(c::ReynoldsStressClosure, s)
     for m in 1:6
-        copyto!(c.τ[m].data, s[m])
+        copyto!(c.τ[m].data, s[1][m])
     end
-    copyto!(c.stats, c.snapstats)
+    copyto!(c.stats, s[2])
     return c
 end
 

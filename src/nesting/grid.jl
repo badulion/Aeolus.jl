@@ -81,6 +81,9 @@ nest_bcs(x::Symbol, args...; kw...) =
 
 Geometric description of a child domain embedded in a parent.
 
+  * `parent_mesh` — a [`RegularGrid`](@ref) or a z-stretched
+    [`StretchedGrid`](@ref) (N-nest-b, #256); `child_mesh` is a
+    `RegularGrid`.
   * `refinement` — integer ratio per dimension, `Int` or `NTuple{3,Int}`
     (`rx, ry, rz`; commonly 2 or 3).
   * `offset` — `(ix, iy, iz)`, the 1-based *interior* index of the first
@@ -91,9 +94,18 @@ boundaries, that `child.N` is divisible by the refinement, that
 `child.d * r == parent.d`, and that the covered box fits inside the
 parent's interior. Any violation raises a descriptive error.
 
+On a stretched parent the vertical checks use the parent's actual face
+heights ([`zfaces`](@ref)) and cell thicknesses
+([`cell_thickness`](@ref)): the child's bottom and top must sit on
+parent faces and **every covered parent layer must be exactly `rz` child
+layers thick** — an integer number of child layers per parent layer in
+the overlap, so the overlap is uniform in the parent. The parent may
+stretch freely above (or below) the overlap; the halo stencils that
+reach into those layers interpolate on the actual face heights.
+
 Use [`nested_grid`](@ref) to build the child mesh from a physical extent.
 """
-struct NestedGrid{T, MP<:RegularGrid{T}, MC<:RegularGrid{T}}
+struct NestedGrid{T, MP<:AbstractMesh{T}, MC<:RegularGrid{T}}
     parent_mesh::MP
     child_mesh::MC
     rx::Int; ry::Int; rz::Int
@@ -101,7 +113,11 @@ struct NestedGrid{T, MP<:RegularGrid{T}, MC<:RegularGrid{T}}
     nx::Int; ny::Int; nz::Int
     ledger::Dict{Symbol,Float64}
     plans::Dict{Tuple{Symbol,Int,Int},Vector{Tuple{Int,Vector{Float64}}}}
+    measures::Dict{Any,Any}          # cached NestMeasure objects (volume / mass)
 end
+
+"Parent meshes a [`NestedGrid`](@ref) accepts."
+const NestParentMesh{T} = Union{RegularGrid{T}, StretchedGrid{T}}
 
 _triple(r::Integer) = (Int(r), Int(r), Int(r))
 _triple(r::NTuple{3,Integer}) = (Int(r[1]), Int(r[2]), Int(r[3]))
@@ -110,7 +126,58 @@ function _near(a::Real, b::Real; rtol=1e-9)
     return abs(a - b) <= rtol * max(one(Float64), abs(Float64(a)), abs(Float64(b)))
 end
 
-function NestedGrid(parent::RegularGrid{T}, child::RegularGrid{T};
+# --- vertical metrics of a parent mesh: one source of truth ---------------
+# A RegularGrid has the affine faces z0 + (k-Hz-1)·dz; a StretchedGrid has
+# its own `zfaces` / `cell_thickness` (StretchedGrids, #151). Everything in
+# Nesting that needs a parent layer height goes through these two.
+
+"Storage-indexed bottom-face heights of `m` (length `Nz + 2Hz + 1`)."
+_zfaces_storage(m::RegularGrid) =
+    Float64[m.z0 + (k - m.Hz - 1) * m.dz for k in 1:m.Nz+2m.Hz+1]
+_zfaces_storage(m::StretchedGrid) = Float64.(zfaces(m))
+
+"Thickness of the parent cell at *storage* level `s`."
+_dz_storage(m::RegularGrid, s::Integer) = m.dz
+_dz_storage(m::StretchedGrid, s::Integer) = cell_thickness(m)[s]
+
+"Thickness of parent *interior* level `K`."
+_dzp(m, K::Integer) = _dz_storage(m, m.Hz + K)
+
+"Parent cell volume at interior level `K`."
+_vol_p(m, K::Integer) = m.dx * m.dy * _dzp(m, K)
+
+function _check_z(parent::RegularGrid, child::RegularGrid, rz, iz, nz)
+    _near(child.dz * rz, parent.dz) ||
+        error("NestedGrid: child dz * rz = $(child.dz*rz) does not match parent " *
+              "dz = $(parent.dz) (refinement mismatch).")
+    f = (child.z0 - parent.z0) / parent.dz
+    _near(f, iz - 1) || error("NestedGrid: child origin z = $(child.z0) sits $f parent " *
+                              "cells from the parent origin, which is not consistent " *
+                              "with offset index $iz (expected $(iz-1)). The child must " *
+                              "align to parent cell boundaries.")
+    return nothing
+end
+
+function _check_z(parent::StretchedGrid, child::RegularGrid, rz, iz, nz)
+    zf = zfaces(parent); Hz = parent.Hz
+    (1 <= iz && iz + nz - 1 <= parent.Nz) ||
+        error("NestedGrid: child covers parent z-cells $iz:$(iz+nz-1), outside the " *
+              "parent interior 1:$(parent.Nz).")
+    _near(child.z0, zf[Hz + iz]) ||
+        error("NestedGrid: child origin z = $(child.z0) is not the parent face " *
+              "z = $(zf[Hz+iz]) at the bottom of parent layer $iz. The child must " *
+              "align to parent faces.")
+    for K in iz:iz+nz-1
+        dzK = _dzp(parent, K)
+        _near(child.dz * rz, dzK) ||
+            error("NestedGrid: parent layer $K is $dzK thick but rz · child dz = " *
+                  "$(child.dz*rz): every parent layer in the overlap must hold exactly " *
+                  "rz = $rz child layers (keep the overlap in the parent's uniform region).")
+    end
+    return nothing
+end
+
+function NestedGrid(parent::NestParentMesh{T}, child::RegularGrid{T};
                     refinement, offset::NTuple{3,Integer}) where {T}
     rx, ry, rz = _triple(refinement)
     ix, iy, iz = Int.(offset)
@@ -125,15 +192,13 @@ function NestedGrid(parent::RegularGrid{T}, child::RegularGrid{T};
     nx = child.Nx ÷ rx; ny = child.Ny ÷ ry; nz = child.Nz ÷ rz
 
     for (nm, dc, dp, r) in (("x", child.dx, parent.dx, rx),
-                            ("y", child.dy, parent.dy, ry),
-                            ("z", child.dz, parent.dz, rz))
+                            ("y", child.dy, parent.dy, ry))
         _near(dc * r, dp) || error("NestedGrid: child d$nm * r$nm = $(dc*r) does not " *
                                    "match parent d$nm = $dp (refinement mismatch).")
     end
 
     for (nm, c0, p0, dp, i) in (("x", child.x0, parent.x0, parent.dx, ix),
-                                ("y", child.y0, parent.y0, parent.dy, iy),
-                                ("z", child.z0, parent.z0, parent.dz, iz))
+                                ("y", child.y0, parent.y0, parent.dy, iy))
         f = (c0 - p0) / dp
         _near(f, i - 1) || error("NestedGrid: child origin $nm = $c0 sits $f parent " *
                                  "cells from the parent origin, which is not consistent " *
@@ -147,37 +212,60 @@ function NestedGrid(parent::RegularGrid{T}, child::RegularGrid{T};
             error("NestedGrid: child covers parent $nm-cells $i:$(i+n-1), outside the " *
                   "parent interior 1:$Np.")
     end
+    _check_z(parent, child, rz, iz, nz)
 
     return NestedGrid{T, typeof(parent), typeof(child)}(
         parent, child, rx, ry, rz, ix, iy, iz, nx, ny, nz,
         Dict{Symbol,Float64}(),
-        Dict{Tuple{Symbol,Int,Int},Vector{Tuple{Int,Vector{Float64}}}}())
+        Dict{Tuple{Symbol,Int,Int},Vector{Tuple{Int,Vector{Float64}}}}(),
+        Dict{Any,Any}())
 end
 
 """
     nested_grid(parent_mesh, child_extent, refinement; halo=parent halo)
 
 Build the child mesh and the [`NestedGrid`](@ref) that links it to
-`parent_mesh`. `child_extent` is `((x₁,x₂), (y₁,y₂), (z₁,z₂))` in
-physical units; each endpoint must land on a parent cell boundary (an
-error names the offending direction otherwise). `refinement` is an `Int`
-or `NTuple{3,Int}`.
+`parent_mesh` (a `RegularGrid` or a z-stretched `StretchedGrid`).
+`child_extent` is `((x₁,x₂), (y₁,y₂), (z₁,z₂))` in physical units; each
+endpoint must land on a parent cell boundary (an error names the
+offending direction otherwise). On a stretched parent `z₁`, `z₂` must be
+parent face heights and the parent layers between them must all have
+the same thickness (the child is uniform, `dz = dz_parent / rz`).
+`refinement` is an `Int` or `NTuple{3,Int}`.
 """
-function nested_grid(parent::RegularGrid{T}, child_extent, refinement;
+function nested_grid(parent::NestParentMesh{T}, child_extent, refinement;
                      halo::NTuple{3,Int}=(parent.Hx, parent.Hy, parent.Hz)) where {T}
     rx, ry, rz = _triple(refinement)
     (ax, bx), (ay, by), (az, bz) = child_extent
     ix, nx = _align_extent(ax, bx, parent.x0, parent.dx, parent.Nx, "x")
     iy, ny = _align_extent(ay, by, parent.y0, parent.dy, parent.Ny, "y")
-    iz, nz = _align_extent(az, bz, parent.z0, parent.dz, parent.Nz, "z")
+    iz, nz = _align_extent_z(parent, az, bz)
+    dzp = _dzp(parent, iz)
+    zf  = _zfaces_storage(parent)
     child = RegularGrid(T;
         size   = (nx * rx, ny * ry, nz * rz),
-        extent = (nx * parent.dx, ny * parent.dy, nz * parent.dz),
+        extent = (nx * parent.dx, ny * parent.dy, nz * dzp),
         halo   = halo,
         origin = (parent.x0 + (ix - 1) * parent.dx,
                   parent.y0 + (iy - 1) * parent.dy,
-                  parent.z0 + (iz - 1) * parent.dz))
+                  zf[parent.Hz + iz]))
     return NestedGrid(parent, child; refinement=(rx, ry, rz), offset=(ix, iy, iz))
+end
+
+_align_extent_z(p::RegularGrid, a, b) = _align_extent(a, b, p.z0, p.dz, p.Nz, "z")
+
+function _align_extent_z(p::StretchedGrid, a, b)
+    zf = zfaces(p); Hz = p.Hz
+    fi = Hz+1:Hz+p.Nz+1
+    ia = findfirst(k -> _near(zf[k], a), fi)
+    ib = findfirst(k -> _near(zf[k], b), fi)
+    ia === nothing && error("nested_grid: child z-start $a is not a face of the " *
+                            "stretched parent (faces $(zf[first(fi)]) … $(zf[last(fi)])).")
+    ib === nothing && error("nested_grid: child z-end $b is not a face of the " *
+                            "stretched parent (faces $(zf[first(fi)]) … $(zf[last(fi)])).")
+    n = ib - ia
+    n >= 1 || error("nested_grid: child z extent must span at least one parent cell.")
+    return (ia, n)
 end
 
 function _align_extent(a, b, o, d, N, nm)

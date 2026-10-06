@@ -28,10 +28,10 @@
 # Every provider takes its per-axis Poisson closure from the case's
 # velocity boundary conditions (`case_poisson_axes`, N-open-a #251):
 # periodic sides give a periodic axis, walls and prescribed-velocity
-# (open / nest) sides a Neumann one. Today's case is periodic in x, y with
-# walls in z — (:periodic, :periodic, :neumann), the solver of before #251
-# bit for bit. When the child goes open (the nesting epic #246) the same
-# providers build the all-Neumann solve without a change here. The sound-
+# (open / nest) sides a Neumann one. The default case is periodic in x, y
+# with walls in z — (:periodic, :periodic, :neumann), the solver of before
+# #251 bit for bit; `cfg.lateral = :open` (#262) gives the all-Neumann
+# solve. The sound-
 # proof cores derive the same axes from the same `bcs` inside
 # `Anelastic._build_mass_weighted`. Each smoke check asserts the solver's
 # axes are the case's.
@@ -40,28 +40,29 @@
 case_divergence(case) = max_divergence(case.sim)
 
 """
-    case_poisson_axes(cfg) -> (bc_x, bc_y, bc_z)
+    case_poisson_axes(cfg, mesh) -> (bc_x, bc_y, bc_z)
 
 The per-axis pressure-Poisson kinds (`:periodic` / `:neumann`) implied by
 the velocity boundary conditions of the case's core
-(`core_parameters(cfg).bcs`), via `PressureSolvers.poisson_axis_bcs`.
+([`case_boundary_conditions`](@ref)`(cfg, mesh).bcs`: `cfg.lateral`), via
+`PressureSolvers.poisson_axis_bcs`.
 """
-case_poisson_axes(cfg) = poisson_axis_bcs(core_parameters(cfg).bcs)
+case_poisson_axes(cfg, mesh) = poisson_axis_bcs(case_boundary_conditions(cfg, mesh).bcs)
 
 "Smoke-check entry: the solver's per-axis closure is the one the case's `bcs` imply."
 solver_axes_check(case) =
     "the solver's axis BCs are the case's ($(join(values(poisson_axis_bcs(case.sim.bcs)), ", ")))" =>
         poisson_axis_bcs(case.sim.solver) == poisson_axis_bcs(case.sim.bcs) ==
-        case_poisson_axes(case.cfg)
+        case_poisson_axes(case.cfg, case.mesh)
 
 """
     PressureCosineFFT
 
 Slot `:pressure_solver`, provider `:cosine_fft` (default):
-`CosineFFTPoissonSolver(mesh; case_poisson_axes(cfg)...)`, the solver
+`CosineFFTPoissonSolver(mesh; case_poisson_axes(cfg, mesh)...)`, the solver
 `BoussinesqSimulation` picks for the case's boundary conditions
-(periodic x, y and walls in z today; all-Neumann for an open or nested
-child).
+(periodic x, y and walls in z by default; all-Neumann for `lateral = :open`
+or a nested child).
 """
 struct PressureCosineFFT <: AbstractCoupling end
 coupling_name(::Type{PressureCosineFFT}) = :pressure_fft
@@ -69,7 +70,7 @@ slot(::Type{PressureCosineFFT}) = :pressure_solver
 provider(::Type{PressureCosineFFT}) = :cosine_fft
 modules_used(::Type{PressureCosineFFT}) = (:PressureSolvers,)
 sim_options(::Type{PressureCosineFFT}, cfg, mesh, o) =
-    (solver = CosineFFTPoissonSolver(mesh; case_poisson_axes(cfg)...),)
+    (solver = CosineFFTPoissonSolver(mesh; case_poisson_axes(cfg, mesh)...),)
 smoke_check(c::PressureCosineFFT, case) =
     ["the solver is the cosine FFT" => case.sim.solver isa CosineFFTPoissonSolver,
      solver_axes_check(case),
@@ -90,7 +91,7 @@ is_default(::Type{PressureMultigrid}) = false
 modules_used(::Type{PressureMultigrid}) = (:Multigrid,)
 default_options(::Type{PressureMultigrid}) = (tol = 1e-10, maxcycles = 50, cycle = :V)
 sim_options(::Type{PressureMultigrid}, cfg, mesh, o) =
-    (solver = MultigridPoissonSolver(mesh; case_poisson_axes(cfg)...,
+    (solver = MultigridPoissonSolver(mesh; case_poisson_axes(cfg, mesh)...,
                                      tol = o.tol, maxcycles = o.maxcycles, cycle = o.cycle),)
 function report(c::PressureMultigrid, case)
     s = case.sim.solver
@@ -121,7 +122,7 @@ is_default(::Type{PressureMGCG}) = false
 modules_used(::Type{PressureMGCG}) = (:Multigrid,)
 default_options(::Type{PressureMGCG}) = (tol = 1e-10, maxit = 200)
 sim_options(::Type{PressureMGCG}, cfg, mesh, o) =
-    (solver = MGPreconditionedCG(mesh; case_poisson_axes(cfg)...,
+    (solver = MGPreconditionedCG(mesh; case_poisson_axes(cfg, mesh)...,
                                  tol = o.tol, maxit = o.maxit),)
 report(c::PressureMGCG, case) =
     @sprintf("MG-CG: last solve %d iterations, rel. residual %.1e",

@@ -20,6 +20,7 @@ struct PollutantCoupling{F} <: AbstractCoupling
     tend::F
     stacks::Vector{NTuple{3,Int}}
     tau::Float64
+    bcs::FieldBoundaryConditions   # the tracer's halos: periodic, or zero-gradient when open (#262)
 end
 
 coupling_name(::Type{<:PollutantCoupling}) = :pollutant
@@ -42,7 +43,10 @@ function build(::Type{<:PollutantCoupling}, case, o)
                     clamp(round(Int, cy / mesh.dy), 1, mesh.Ny),
                     clamp(round(Int, sz / mesh.dz), 1, mesh.Nz)))
     end
-    return PollutantCoupling(Field(CellCenter(), mesh), ijk, Float64(o.tau))
+    # a periodic case keeps the coupling's triply periodic halo (the walls'
+    # w = 0 makes its z halo inert); an open one the case's scalar halos
+    bcs = lateral_open(case.cfg) ? case_scalar_bcs(case.cfg) : FieldBoundaryConditions(:periodic)
+    return PollutantCoupling(Field(CellCenter(), mesh), ijk, Float64(o.tau), bcs)
 end
 
 function run_stage!(c::PollutantCoupling, case, ::Val{:tracers}, dt)
@@ -51,7 +55,7 @@ function run_stage!(c::PollutantCoupling, case, ::Val{:tracers}, dt)
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     pollutant, tp = tracer(case, :pollutant), c.tend
     hour = case.clock.hour
-    fill_halos!(pollutant, FieldBoundaryConditions(:periodic))
+    fill_halos!(pollutant, c.bcs)
     fill!(tp.data, 0)
     advect_centered!(tp, sim.u, sim.v, sim.w, pollutant)
     apply_linear_chemistry!(tp, pollutant, c.tau)
