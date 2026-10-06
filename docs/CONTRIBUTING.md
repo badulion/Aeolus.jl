@@ -401,8 +401,8 @@ test suite of its own.
 
 *History.* From the end of Era V until 2026-10-06 the rule was the
 opposite: every physics PR had to wire its module into the Berlin run,
-enforced by `test/berlin_coverage.jl` (frozen coverage lists) and
-`test/berlin_smoke.jl`. It found real cross-module defects, but the
+enforced by `test/berlin_coverage.jl` (frozen coverage lists, deleted
+on 2026-10-06) and `test/berlin_smoke.jl`. It found real cross-module defects, but the
 Berlin tests grew to about 15 minutes of suite time spent mostly
 rebuilding the Berlin geometry, and they tested `src/` physics
 indirectly. The maintainer dropped the rule; #320 moves every physics

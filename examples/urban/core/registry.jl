@@ -14,7 +14,7 @@
 #   slot(::Type{C})             -> :addon (additive, on/off) or an exclusive slot
 #   provider(::Type{C})         -> Symbol, the value of cfg.physics[slot] that selects C
 #   is_default(::Type{C})       -> Bool, default provider of its slot / default-on addon
-#   modules_used(::Type{C})     -> tuple of Aeolus submodule names (coverage test)
+#   modules_used(::Type{C})     -> tuple of Aeolus submodule names it runs
 #   default_options(::Type{C})  -> NamedTuple
 #   incompatible(::Type{C})     -> tuple of `slot => provider` or coupling names
 #   incompatible_reason(::Type{C}) -> String, why (appended to the selection error)
