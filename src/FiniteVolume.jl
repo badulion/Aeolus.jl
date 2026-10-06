@@ -556,9 +556,11 @@ end
 # for v-momentum we need u at the v-face. Both require a 4-point
 # horizontal average of the neighbouring face values.
 
+# Purely horizontal (level by level), so one kernel serves every mesh with
+# the RegularGrid horizontal layout (RegularGrid, StretchedGrid, #151).
 function _add_coriolis!(tu::Field{FaceX}, tv::Field{FaceY},
                         u::Field{FaceX},  v::Field{FaceY},
-                        f::Real, g::RegularGrid)
+                        f::Real, g::AbstractMesh)
     ii, jj, kk = interior(g)
     @inbounds for k in kk, j in jj, i in ii
         v_at_u = 0.25 * (v.data[i-1,j,k]   + v.data[i,j,k]   +
@@ -733,6 +735,13 @@ Base.@propagate_inbounds _τ23_v(v, w, nv, i, j, k, idy, idz, a, b) =
     -(_νe23(nv, i, j, k) * (a * ((v[i,j,k] - v[i,j,k-1]) * idz) + b * ((w[i,j,k] - w[i,j-1,k]) * idy)))
 Base.@propagate_inbounds _τ23_w(v, w, nv, i, j, k, idy, idz, a, b) =
     -(_νe23(nv, i, j, k) * (a * ((w[i,j,k] - w[i,j-1,k]) * idy) + b * ((v[i,j,k] - v[i,j,k-1]) * idz)))
+
+# The stress form has no vertically stretched stencil yet (#151 covers the
+# Laplacian form only): refuse it by name instead of a MethodError.
+_add_sgs_stress_divergence!(tu, tv, tw, u, v, w, nh, nv, a, b, g::AbstractMesh) =
+    throw(ArgumentError("sgs_stress = :symmetric (the SGS stress form) is implemented " *
+                        "on a RegularGrid only, not on a $(nameof(typeof(g))); use " *
+                        "sgs_stress = :laplacian"))
 
 # −∂τᵢⱼ/∂xⱼ into (tu, tv, tw), with the stresses formed on the fly from
 # (u, v, w) and the cell-centred (νh, νv) arrays (halos filled), part (a, b).

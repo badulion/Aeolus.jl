@@ -37,7 +37,7 @@ const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 const P_SFC = 97200.0
 night(t) = (h = mod(t / 3600, 24); h >= 18 || h < 6)
 
-function run_closure(stab)
+function run_closure(stab, ck = nothing)
     c = gabls2_case(; N = (NX, NX, NZ), extent = (LX, LX, LZ), sgs_stability = stab, t_end = T_END)
     dz = LZ / NZ
     towers = sbl_towers(c, [(k - 0.5) * dz for k in 1:NZ if (k - 0.5) * dz < 60]; window = 300.0)
@@ -57,7 +57,8 @@ function run_closure(stab)
                        T2 = scr.θ_screen * (P_SFC / 1e5)^0.286 - 273.15, U10 = scr.U_screen,
                        Ts = surface_temperature(c.Ts, c.sim.t) * (P_SFC / 1e5)^0.286 - 273.15))
     end
-    sbl_run!(c, T_END; callback = cb)
+    sbl_run!(c, T_END; callback = cb, checkpoint = ck,
+             checkpoint_components = (series = series, nextt = nextt, lastt = lastt, towers = towers))
     @printf("%-8s %s: %d steps, %.0f s, %d tower segments\n", stab, TAG, c.nsteps, c.wall_time, towers.nseg)
     return (stab = stab, series = series, towers = towers, nsteps = c.nsteps, wall = c.wall_time)
 end
@@ -68,8 +69,11 @@ function cached(stab)
         println("$stab: cached $path")
         return deserialize(path)
     end
-    r = run_closure(stab)
+    # periodic checkpoints, automatic resume (#245); made before the case
+    ck = sbl_checkpoints("gabls2_$(TAG)_$(stab)")
+    r = run_closure(stab, ck)
     serialize(path, r)
+    finish_checkpoints!(ck)
     return r
 end
 results = [cached(s) for s in CLOSURES]
