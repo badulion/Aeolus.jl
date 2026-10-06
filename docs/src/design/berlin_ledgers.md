@@ -3,7 +3,8 @@
 ## The budget ledger
 
 `case.ledger` integrates, step by step, the surface energy balance of
-every surface class and the water budget of the air. The core calls
+every surface class, the water budget of the air and the heat of the
+air ([below](#The-heat-of-the-air), #253). The core calls
 `ledger_begin_step!` before `:clock` (it snapshots `bus.Ts` into
 `ledger.Ts_start` and the water in the air) and `ledger_end_step!` after
 `:sanity` (it calls every coupling's `budget!` and books the change of
@@ -89,6 +90,309 @@ the surface exchange's smoke check counts writes into solid cells
 The cost is about 1 ms/step on the flagship grid (the two water
 integrals), plus about 0.4 ms/step for the Kessler coupling's own
 bookkeeping.
+
+### The heat of the air
+
+`ledger.heat`, an `AirHeatLedger`, closes the heat of the air
+
+``H_{air} = Σ_k ρ̄_k c_p Π̄_k Σ_{ij ∈ fluid} θ_{ijk} Δz_k / (N_x N_y)``  (J m⁻²),
+
+the dry enthalpy ``c_p T`` (``T = θ Π̄``) of the air above a unit of
+ground, with the case's one reference state (`case.ref`) and without the
+solid cells. The meter (`AirHeatMeter`, `core/air_heat.jl`) and the
+ledger (`core/air_heat_ledger.jl`) are functions of (mesh or sim,
+reference state, solid mask) and of the θ field, not of the Berlin
+`Case`, so the parent run of the nesting epic (#246) keeps its own with
+the same code.
+
+**Every heater converts with the same weight.** A heat flux `q` (W m⁻²
+into level `k`) raises θ by ``q Δt / (ρ̄_k c_p Π̄_k Δz_k)``:
+`ref_θ_per_heat(case, k)` is that conversion, the inverse of the
+meter's weight. `surface_exchange` and `traffic_heat` call it;
+`buildings_citymean` applies the same ``1/(ρ̄_k c_p Π̄_k)`` inline in
+`apply_building_heat!` (its `ρ`, `cp`, `π` keywords, passed from
+`case.ref`), and `column_radiation`, whose heating rate is already
+``dT/dt`` (K s⁻¹), divides it by ``Π̄_k`` only. Every heater therefore
+uses the same weight, but the conversion is written in three places,
+not delegated to one function. Before #253 they divided by ``ρ̄ c_p`` only and the
+air received Π̄₁ ≈ 1.004 times the flux at the ground.
+The meter weights θ with the dry ``c_{pd}``; the surface exchange
+converts with the moist ``c_p`` of the first air cell, so the ledger
+books its heating as ``H Δt\, c_{pd}/c_p``, about 0.8 % below the
+surface's ``H Δt`` at ``q_v ≈ 0.01`` (exactly ``H Δt`` in dry air). The
+ledger still closes, because it books what it measures.
+
+**Attribution is automatic.** Couplings book nothing. Every schedule
+entry `timed_run!` runs, and the dynamics step, is an attribution
+*context* `(stage, coupling)`: the ledger measures ``H_{air}`` per level
+when the context closes (the value it opened with is the previous
+close) and books the difference. Contexts nest: the `:body_force` and
+`:post_predictor` entries run inside `step!` and are taken out of the
+dynamics' share. The dynamics' rest is split into
+`(:dynamics, :transport)`, what the core's transport conserves
+(``Σ W θ ΔV``, ``W = 1`` on the Boussinesq core), whose column total is
+the numerics residual, `(:dynamics, :redistribution)`, the change of
+``H_{air}`` because the transport conserves ``Σ W θ`` and not
+``Σ ρ̄ Π̄ θ`` (moving warm air up into levels of lower ρ̄Π̄ lowers
+``H``; the heat analogue of `density_redistribution`), and
+`(:dynamics, :solid_exchange)`, the heat the transport and diffusion move
+into the building cells (θ is carried through the immersed boundary, so
+the solid cells' θ evolves and exchanges heat with the air through the
+numerics alone). A change of θ outside every context is still caught:
+as `(:core, :unattributed)` within a step, as `(:output, :between_steps)`
+between two steps. The smoke test asserts that neither is booked.
+
+**Booked terms.** `add_heat!(ledger, term, J; k)` books `J` J m⁻² under
+`(stage, term)` from inside a running context and takes it out of that
+context's own share, so a context's entry becomes the residual of the
+terms named inside it. The dynamics books `:top_flux`, the heat through
+the fixed-gradient θ top ([The θ top](#The-θ-top), N-parent-b, #254), this
+way; the nesting epic will add `:boundary_heat`, `:relaxation`,
+`:mass_correction` (N-open-d) and `:feedback_heat` (N-berlin-twoway). Called outside a step it is
+an error: that heat would have no place in the balance.
+
+**Layers and windows.** Every term is kept per level and per local hour
+of the step's start, so `heat_budget(ledger; window = (20, 5), layer =
+:canopy)` returns the 20:00–05:00 integrals of #238 for the canopy
+(`(0, cfg.canopy_top)`; `NaN`, the default, takes the tallest roof),
+or for `layer = (0, 100)`, `:column`. For a sub-layer
+`(:dynamics, :transport)` is the heat the dynamics carried across the
+layer's top. `ledger_report` prints the whole-run table (column,
+canopy, 0–100 m); `heat_report(ledger; window = (20, 5))` the night one.
+
+In the Alexanderplatz scene the tallest roof is the Fernsehturm, clipped
+at the 200 m domain top (the next tallest roof is 143.75 m, the
+90th percentile of the built columns 37.5 m, the mean 21.2 m), so the
+default `:canopy` is the whole column there; set `cfg.canopy_top` for the
+street canyons.
+
+**Tests** (`test/berlin_air_heat.jl`, `test/berlin_smoke.jl`). The meter
+against the analytic heat of a uniform-θ hydrostatic layer
+(``c_p^2 θ p_0/(R g)\,[Π^{c_p/R+1}/(c_p/R+1)]``: 3.1e-8 at Nz = 16,
+2.0e-9 at Nz = 64, second order). A closed box (every θ source off):
+the transport's column change is ≤ 2e-16 of ``H`` per step; ``H``
+itself changes by up to 3.7e-7 per step, all of it `redistribution`.
+(The issue expected ``|ΔH_{air}|/H_{air} ≤ 10^{-13}`` per step for a
+flux-form θ advection. That holds for what the flux-form Boussinesq
+transport conserves, ``Σ θ ΔV``; for ``H``, which weights θ with ρ̄Π̄,
+the expectation was wrong.) H₀ = 100 W m⁻² into the lowest level of a
+flat, motionless variant: the attributed term and ``ΔH_{air}`` equal
+H₀Δt to 3.9e-13 (relative). Every smoke run (everything on included) closes to
+≤ 1e-10 W m⁻² (measured ≤ 1.9e-14 in all 39 smoke runs).
+
+**Cost.** One measurement is one pass over the interior (20 µs on
+64 × 64 × 32); the flagship step opens ≈ 29 contexts, 31.1
+measurements per step: 1.06 ms/step warm (0.7 % of a 150 ms step;
+1.27 ms of 178 ms over the 24 h run on a shared machine). The issue's
+target was < 1 ms/step; the measurements are memory-bound, so the rest
+would need fewer contexts.
+
+**Night budget of the flagship (measured, #253).** The 24 h
+Alexanderplatz run (20 June 2024 from 06:00, every default coupling,
+adaptive step, 61 902 steps), 20:00–05:00 local (32 401 s), mean W m⁻²
+over the window (J m⁻² = W m⁻² × 32 401 s):
+
+| term | column 0–200 m | 0–100 m | 0–37.5 m |
+| :-- | --: | --: | --: |
+| storage ``ΔH_{air}`` | −52.79 | −26.35 | −9.26 |
+| `column_tendency / column_radiation` | −52.70 | −42.73 | −32.61 |
+| `anthropogenic / buildings_citymean` | −10.31 | −10.71 | −14.80 |
+| `anthropogenic / traffic_heat` | +8.00 | +8.00 | +8.00 |
+| `surface_flux / surface_exchange` | +0.12 | +0.12 | +0.11 |
+| `dynamics / transport` (across the layer top) | −5e-11 | +17.28 | +28.44 |
+| `dynamics / solid_exchange` | +1.70 | +1.39 | +1.26 |
+| `dynamics / redistribution` | +0.40 | +0.30 | +0.34 |
+| `fog_dew / fog_dew` | 0 | 0 | 0 |
+| closure | −7.2e-15 | −1.8e-14 | −1.1e-14 |
+
+The default `:canopy` is the whole column here (the Fernsehturm); 37.5 m
+is the 90th percentile of the roof heights. At night the air of the
+column loses 52.8 W m⁻², almost all of it to the column radiation; the
+surface exchange gives the air almost nothing (+0.12 W m⁻²), the
+city-mean buildings take heat out of it (−10.3) and the traffic heat
+puts 8 W m⁻² in. Inside the canyons the transport brings down from
+above most of what the radiation removes (+28.4 of −32.6 W m⁻² below
+37.5 m). This is the #238 budget and the baseline of N-berlin-validate
+(#270).
+
+### The θ top
+
+Since N-parent-b (#254) the θ condition of the top face is
+`cfg.θ_top = :initial_gradient`, on by default: `FluxBC(Γ)` with
+``Γ = ∂θ/∂z`` of the initial profile across the top face
+(`θ_top_gradient(cfg)`, 3 × 10⁻³ K m⁻¹ above the 100 m inversion), the
+fixed-gradient top of PALM and DALES. Before it the top was a closed
+no-flux lid, still available as `θ_top = :noflux` (a number sets Γ in
+K m⁻¹). The physics is `src/` (`BoundaryConditions.FluxBC`, the halo fill
+of `src/boundary_conditions/gradient_top.jl`; theory in
+[Large-scale forcing](../theory/large_scale_forcing.md#The-fixed-gradient-top));
+the case code is `core/top_boundary.jl`. `qv` and the tracers keep their
+no-flux top.
+
+**Ledger.** The heat the top face carries is booked as
+`(:dynamics, :top_flux)` at the top level. The composed body-force hook
+captures ``Γ\,ρ̄_N c_p Π̄_N ⟨ν + ½(κ_{v,N} + κ_{v,N+1})⟩`` in every dynamics
+stage (the SGS closure has just filled ``κ_v``), and each accepted
+(sub)step books it times its length (`dynamics_step!`, each piece of
+`step_adaptive!`, `step_imex!`). What is left to `(:dynamics, :transport)`
+over the column is round-off: 3.5e-11 W m⁻² (adaptive) and 8.4e-10 W m⁻²
+(fixed step) on the smoke case against a top flux of 7.18 W m⁻², 3.1e-6
+J m⁻² over the 24 h flagship against 6.2e5 J m⁻². With the IMEX stepper
+the residual is the CG tolerance (−1.0e-2 W m⁻² at `tol = 1e-8`,
+−8.6e-7 at `1e-12`; −1.4e-3 with the lid), on the anelastic core the
+core's unweighted diffusion (2.0e-2 W m⁻², 1.8e-2 with the lid).
+
+**Measured (flagship, 24 h from 06:00, every default coupling, adaptive
+step).** Two runs that differ only in `θ_top`:
+
+| | `:initial_gradient` (default) | `:noflux` (before #254) |
+| :-- | --: | --: |
+| steps | 62 724 | 61 903 |
+| top-face heat flux, 24 h mean | +7.21 W m⁻² | 0 |
+| top-face heat flux, 20–05 h | +7.14 W m⁻² | 0 |
+| column storage 20–05 h | −49.94 W m⁻² | −52.79 W m⁻² |
+| column radiation 20–05 h | −55.06 W m⁻² | −52.70 W m⁻² |
+| canopy air θ (fluid cells below 37.5 m), 20–05 h mean | 313.53 K | 312.54 K |
+| canopy air θ at 20:00 / 05:00 | 317.02 / 309.88 K | 316.21 / 308.74 K |
+
+The flux is downgradient, into the domain (the free atmosphere above is
+warmer), and nearly constant: ``ρ̄_N c_pΠ̄_N νΓ`` = 7.09 W m⁻² with the
+case's molecular ``ν`` = 2 m² s⁻¹ is almost all of it, the SGS
+``κ_v`` at the top adding 0.12 W m⁻² over the 24 h. The nightly canopy air is
+0.99 K warmer (20–05 h mean), 0.81 K at 20:00 rising to 1.14 K at 05:00,
+and cools 0.33 K less during the night (7.13 against 7.46 K). In the
+afternoon the convective layer fills the 200 m domain, and a fixed
+gradient then imposes ``κΓ`` regardless of the real entrainment: the
+open top of the nested run (N-open-b, N-berlin-nest #265) replaces it.
+
+**Stated exception: no θ damping in the periodic child.** θ is not
+Rayleigh-damped in the periodic 200 m child. Its velocity sponge starts
+at 150 m, and a θ damping toward a constant target there would clamp the
+top 50 m (#238, approach B). With `lateral = :open` (#262) the top is
+open and θ is relaxed over the same layer toward the boundary data's
+profile, the state the open top imposes (`cfg.θ_relaxation`, see
+[Open boundaries](#Open-boundaries)); in the nested run that is the
+parent's. `LargeScaleForcing.ReferenceDamping` is the one θ-damping type
+in both places.
+
+### Open boundaries
+
+`cfg.lateral = :open` (N-open-d, #262; `core/open_boundary.jl`) gives the
+case open west, east, south, north and top faces:
+
+* **Data.** `ProfileBoundaryData(u = U_g, v = V_g, w = 0, θ = initial_θ)`
+  — the `:geostrophic` coupling's wind (also when it is off) and the
+  initial θ profile (`case_boundary_data`). The normal velocity of every
+  face is mass-corrected by the uniform global correction (N-open-b),
+  the outflow is `cfg.outflow` (`:dirichlet`, default; `:convective`,
+  `:orlanski`, N-open-c).
+* **Sponge.** The core's Rayleigh sponge relaxes `u, v, w` toward the
+  same data (`sponge_target(data, mesh)`, the one damping kernel; a
+  sponge below an open top without a target is an error), so the
+  `:geostrophic` coupling's own retargeting of the periodic case is off.
+  θ is relaxed toward the data's profile over the sponge layer
+  (`cfg.θ_relaxation = true`, `ReferenceDamping` in the body-force hook):
+  in the gravity-wave test of #254 damping θ as well as the velocity cut
+  the reflection of a layer one vertical wavelength deep from 0.17 to
+  0.034.
+* **Geometry.** `cfg.boundary_frame` cells (default 3, 47 m in the smoke
+  window, 47 m on the flagship grid) next to each open side are kept free
+  of buildings; a building that still touches a face (frame 0, or the
+  Fernsehturm through the top) is solid there:
+  `mark_open_boundary_solids!` gives its boundary points zero velocity and
+  takes them out of the mass-flux correction.
+* **Neighbours.** No coupling wraps across the box any more: every
+  former `mod1` reads through `neighbor_index` (`centre_wind` for the
+  cell-centred wind of the surface exchange, the deposition and the facade
+  wall model; the wall tagging; the a-priori stress centring); masks and
+  tracer halos take `case_scalar_bcs` (zero gradient at an open face; a
+  tracer has no boundary data, so it leaves with its own value and enters
+  with the value next to the face); the pressure solvers read the
+  all-Neumann axes from the case's `bcs`.
+
+**Ledger.** The open faces carry heat and water. Inside the dynamics
+context the composed body-force hook captures, per level, with the state
+and the SGS diffusivity the core's tendencies were built from:
+
+| term | what |
+| :-- | :-- |
+| `(:dynamics, :boundary_heat)` | ``-\sum ρ̄_k c_p Π̄_k (θ\,u·n - K ∂_nθ) A`` through the four sides and the top (`boundary_scalar_flux`: the core's centred θ face values, ``K = ν + ½(κ_{in} + κ_{out})``), without … |
+| `(:dynamics, :mass_correction)` | … the part the global correction ``δ`` carries, ``δ\,ρ̄c_pΠ̄\,θ_{face} A`` on every face it adjusted |
+| `(:dynamics, :relaxation)` | the θ relaxation toward the data |
+| water `:boundary` | the vapour and cloud water the faces carry, `boundary_scalar_flux` with the transport's own scheme (`scalar_advection`) |
+
+Each accepted (sub)step books them times its length (`book_dynamics_heat!`,
+also called for the fixed-gradient top). The mass-correction term is
+large next to its velocity because it multiplies the absolute θ (≈ 293 K):
+``|δ|/U`` = 7.8e-5 carries 19 W m⁻² in the convective run below, of the
+same sign as the net mass the correction removes; only the sum of the two
+terms is the boundary's heat. For the forward-Euler steps of the default
+`:adaptive` and the `:fixed` stepper the booked heat is the heat the step
+moved; under `:imex` it is the last stage's rate times dt (a residual in
+`(:dynamics, :transport)`, as for the top flux: −2.4e-2 W m⁻² on the
+open smoke window); on the anelastic core the column transport keeps
+the core's unweighted-diffusion residual of #254 (2.2e-2 W m⁻² open,
+1.8e-2 with the lid). The smoke check asserts < 1e-6 W m⁻² for the
+forward-Euler Boussinesq steps and < 0.1 W m⁻² otherwise. The diffusive part is the
+closures' ``κ_h``/``κ_v`` form: the cross terms of the tensor closure
+(`sgs = :reynolds_stress`) at the faces are not in it.
+
+**Measured (smoke window, 16 × 16 × 16, every coupling on, 24 s from
+12:00).**
+
+| | periodic | `:open`, Dirichlet | `:open`, convective |
+| :-- | --: | --: | --: |
+| steps (adaptive) | 8 | 9 | 9 |
+| surface sensible heat H (domain) | −2.12 W m⁻² | −2.87 W m⁻² | −2.85 W m⁻² |
+| `top_flux` (fixed-gradient top) | 7.18 W m⁻² | — | — |
+| open faces: top | — | 7.19 W m⁻² | 14.55 W m⁻² |
+| open faces: four sides | — | −0.17 W m⁻² | −3.34 W m⁻² |
+| `boundary_heat` | — | 7.02 W m⁻² | −7.98 W m⁻² |
+| `mass_correction` | — | 0 | 19.19 W m⁻² |
+| `relaxation` | — | 0.023 W m⁻² | 0.025 W m⁻² |
+| max ``|δ|/U`` | — | 0 | 7.8e-5 |
+| `(:dynamics, :transport)` (column) | −1.1e-10 W m⁻² | 4.3e-10 W m⁻² | −2.0e-10 W m⁻² |
+| air-heat closure | 0 | −4.7e-15 W m⁻² | 3.8e-14 W m⁻² |
+| water `:boundary` | — | 6.6e-5 kg m⁻² | 9.8e-5 kg m⁻² |
+| water residual | 1.1e-15 kg m⁻² | 1.5e-15 kg m⁻² | 1.3e-15 kg m⁻² |
+
+The open top's heat is the diffusion of the Dirichlet θ halo (the initial
+profile, 3 K km⁻¹ above the inversion) through the top face: 7.19 W m⁻²,
+the 7.18 W m⁻² of the periodic case's fixed-gradient top. With Dirichlet
+outflow the data balance (``δ = 0``); the convective outflow radiates the
+interior's building-perturbed wind at the faces and the correction
+removes the imbalance, which moves heat through the top as well. The
+column transport stays a numerics residual (1e-10 W m⁻²) in every
+configuration.
+
+**Cost.** The fixed stepper, the same buildings (`boundary_frame = 0`),
+the faster of two alternating rounds after a warm-up, on a shared
+machine:
+
+| grid | periodic | `:open` | ratio |
+| :-- | --: | --: | --: |
+| flagship 64 × 64 × 32, whole step | 116.2 ms | 113.3 ms | 0.98 |
+| flagship, dynamics (`step!`) | 20.5 ms | 18.1 ms | 0.88 |
+| smoke 16 × 16 × 16, whole step (3 rounds of 24 steps) | 18.5 ms | 18.7 ms | 1.01 |
+
+The open faces' work (the buffer update and mass correction, the
+boundary-heat capture, the θ relaxation) costs no more than the
+measurement noise; the all-Neumann cosine solve of the open box is if
+anything cheaper than the periodic-x, y solve. `test/berlin_open_boundaries.jl`
+prints a smoke-window measurement.
+
+**Tests.** `test/berlin_open_boundaries.jl`: the default stays periodic;
+the open faces, data, sponge target, solver axes, frame and solid points;
+one dynamics step through the case's own hook books 0.0 J m⁻² for an
+inflow equal to the interior and ``ρ̄c_pΠ̄(UΔT/2 + νΔT/Δx)AΔt`` = 604.525
+J m⁻² to 1e-12 for a +1 K inflow anomaly (the core's centred face value is
+the mean of the halo and the first cell; the diffusive flux across the
+jump is ``νΔT/Δx`` with the case's ``ν`` = 2 m² s⁻¹). The smoke matrix runs
+`geostrophic: lateral = :open, Dirichlet outflow` and `…, convective
+outflow` with every coupling on: air-heat closure ≤ 1.1e-13 W m⁻², water
+residual ≤ 4.3e-16 kg m⁻², column transport < 1e-6 W m⁻² (smoke check).
+The src tests are in `test/era6_open_near_boundary.jl` (theory:
+[Near the open faces](../theory/fractional_step.md#Near-the-open-faces-(N-open-d))).
 
 ### Baseline (measured, #127)
 

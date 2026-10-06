@@ -4,7 +4,7 @@
 # wall is removed, so the two are never counted twice.
 
 export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
-       apply_immersed_wall_stress!, immersed_wall_count
+       apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!
 
 """
     ImmersedWallFace
@@ -102,12 +102,8 @@ function immersed_walls(sim, sm, law; ν::Real = 1.5e-5)
     per = (sim.bcs.west isa Periodic, sim.bcs.south isa Periodic, sim.bcs.bottom isa Periodic)
     N = (Nx, Ny, Nz); H = (Hx, Hy, Hz)
     # interior index of data index D along axis a, or 0 outside the domain
-    function inner(D, a)
-        i = D - H[a]
-        1 <= i <= N[a] && return i
-        per[a] && return mod1(i, N[a])
-        return 0
-    end
+    # (the one BC-aware neighbour helper, N-open-d #262)
+    inner(D, a) = neighbor_index(mesh, sim.bcs, D - H[a], a; outside = :none)
     function solid(I, J, K)
         i, j, k = inner(I, 1), inner(J, 2), inner(K, 3)
         (i == 0 || j == 0 || k == 0) && return (false, (0, 0, 0))
@@ -179,6 +175,34 @@ end
 end
 
 """
+    immersed_wall_drag!(a, iw::ImmersedWalls, u, v, w) -> a
+
+The drag rate ``a_n = τ_w(U)/(U\\,Δ_d)`` (s⁻¹) of every (face, wall) pair
+`n` of `iw`, for the velocity data arrays `u, v, w` (halos filled): the
+law of the pair evaluated at the speed parallel to that wall,
+``U = |(q, \\bar q_o)|``, at ``h = Δ_d/2`` ([`wall_drag`](@ref)), divided
+by the face's width ``Δ_d`` across the wall. The modelled stress on the
+face's component `q` is ``τ = a_n Δ_d\\, q`` and its kinematic force per
+unit volume ``a_n q``, so ``a_n q^2`` is the rate per unit volume at which
+the wall stress takes resolved kinetic energy out of that face.
+
+The one evaluation of the immersed wall law:
+[`apply_immersed_wall_stress!`](@ref) applies it, and the facade
+production of the prognostic TKE closure (`PrognosticSGS.TKEClosure`
+with `walls`, #232) books ``a_n q^2`` as shear production.
+"""
+function immersed_wall_drag!(a::AbstractVector, iw::ImmersedWalls{L,T}, u, v, w) where {L,T}
+    length(a) == length(iw.faces) ||
+        throw(DimensionMismatch("immersed_wall_drag!: need one entry per face-wall ($(length(iw.faces))), got $(length(a))"))
+    Δ, ν = iw.Δ, iw.ν
+    @inbounds for (n, f) in enumerate(iw.faces)
+        U = _tangential_speed(f, u, v, w)
+        a[n] = T(wall_drag(f.law, U, Δ[f.d] / 2; ν = ν)) / Δ[f.d]
+    end
+    return a
+end
+
+"""
     apply_immersed_wall_stress!(sim, iw::ImmersedWalls, Δt) -> (Fx, Fy, Fz)
 
 Apply the modelled stress of every wall of `iw` to the velocity of
@@ -242,10 +266,8 @@ function apply_immersed_wall_stress!(sim, iw::ImmersedWalls{L,T}, Δt::Real) whe
     ν = iw.ν
     dV = Δ[1] * Δ[2] * Δ[3]
     # 1. the drag coefficient of every (face, wall) pair, summed per face
-    a = Vector{T}(undef, length(iw.faces))
+    a = immersed_wall_drag!(Vector{T}(undef, length(iw.faces)), iw, u, v, w)
     @inbounds for (n, f) in enumerate(iw.faces)
-        U = _tangential_speed(f, u, v, w)
-        a[n] = T(wall_drag(f.law, U, Δ[f.d] / 2; ν = ν)) / Δ[f.d]
         A[f.c][f.I, f.J, f.K] += a[n]
     end
     # 2. the implicit update, once per face (the first of its entries)

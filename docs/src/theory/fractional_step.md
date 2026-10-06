@@ -118,6 +118,243 @@ et al. fix this by projecting `pⁿ⁺¹ - pⁿ` instead of `pⁿ⁺¹`. Aeolus 
 periodic-only for now, so this refinement is deferred to Phase 1b when
 walls arrive.
 
+## Prescribed-flux faces (open boundaries)
+
+A nested child, or any domain driven by outside data, prescribes the
+velocity on every face (N-open-b, #255; `OpenBoundary`). The normal
+component is written into the boundary-face slot of `u*` *before* the
+divergence is formed, and `φ` obeys the homogeneous Neumann condition
+`∂φ/∂n = 0` (Kim & Moin 1985). Then
+
+```math
+u^{n+1}\cdot n = u^*\cdot n - Δt\,\frac{∂φ}{∂n} = g^{n+1}\cdot n ,
+```
+
+so the projection leaves the prescribed face value exactly unchanged (the
+code asserts that `∂φ/∂n` is exactly zero at the west and south faces,
+whose face slots lie inside the interior index range). This is not an
+approximation: with ``u^* = u(t+Δt) + Δt∇p`` in the interior and the face
+value ``g`` on the boundary, the discrete Neumann problem is solved by
+``φ = Δt\,p`` — the face's missing ``Δt\,∂p/∂n`` is exactly the term the
+mirror halo drops from the boundary cell's Laplacian.
+
+### Compatibility and the mass-flux correction
+
+With every normal velocity prescribed, the Neumann problem is solvable
+only if ``\sum ∇·u^*\,ΔV = \oint u·n\,dA = 0``
+([compatibility](poisson.md#The-discrete-compatibility-condition)).
+Interpolated or analytic data never balance to round-off, and the
+solvers would leave the uniform residual ``∇·u = Q/V`` in every cell.
+`update_open_boundaries!` therefore applies, once per projected
+(sub)step and before the projection, the only boundary mass correction
+in the code base (`correct_boundary_mass_flux!`; Hellsten et al. 2021,
+§3.3, Eq. 2):
+
+```math
+Q = \sum_{\text{open faces}} W\,u·n\,A, \qquad
+δ = \frac{Q}{\sum W A}, \qquad u·n \leftarrow u·n - δ ,
+```
+
+with ``W = 1`` for the Boussinesq core and the constraint weight
+(``ρ̄`` anelastic, ``ρ̄θ̄`` pseudo-incompressible) for the sound-proof
+cores, taken exactly as the projection's divergence takes it (``W_c(k)``
+on lateral faces, ``W_f`` on the top). `correction = :outflow_only`
+adjusts only the outflow faces. Measured (`test/era6_open_boundaries.jl`,
+16 × 12 × 8 box, ``Q = 4.8 × 10^4`` m³ s⁻¹ of net outflow): without the
+correction ``\max|∇·u| = Q/V = 2.5 × 10^{-4}`` s⁻¹ in every core, to
+1e-12; with it ``\max|∇·u| < 10^{-12}`` s⁻¹ in `step!`, `step_rk3!`,
+`step_imex!` (ARK2, ROS2) and `step_adaptive!`, and
+``\max|(1/W)∇·(Wu)| < 10^{-9}`` s⁻¹ in the anelastic and
+pseudo-incompressible cores; the boundary faces equal the corrected data
+bit for bit.
+
+### Where the boundary data enter a step
+
+The buffers belong to the state: the halo fill at the start of a
+(sub)step reads them, so they must hold the boundary values of the
+(sub)step's start state. `update_open_boundaries!(sim, t, dt)` is
+called after the predictor with the time `t` the projected velocity
+belongs to — `t + Δt` for an Euler step; `t + Δt`, `t + 2Δt` and
+`t + 3Δt/2` for the three Shu–Osher substages of `step_rk3!`, whose
+buffers are then combined with the fields' own weights (3/4, 1/4 and
+1/3, 2/3); the stage times of ARK2 and ROS2. `step_adaptive!`
+restores the buffers with the fields when it rejects a step.
+
+### Implicit diffusion: the intermediate-velocity condition
+
+With an implicit viscous term (`step_imex!`) the diffusion solve needs
+boundary values for the *intermediate* velocity ``u^* = u^{n+1} + ∇φ``,
+``φ ≈ τ p`` (``τ`` the stage's projection step). Imposing the data
+``g`` itself on the tangential components leaves, after the projection, a
+viscous boundary layer of amplitude ``τ\,∂p/∂s`` — a first-order
+splitting error that shows up as order reduction. Kim & Moin's (1985)
+remedy is the condition ``u^*_s = g_s + τ\,∂p/∂s``, with the latest
+pressure; `open_intermediate_velocity!` applies it around each ARK2
+stage (the projection itself sees ``g``). Measured on the
+Dirichlet-everywhere Taylor–Green window (``ν Δt/h^2 = 0.2``,
+``N = 16, 32, 64``): with ``g`` alone the observed order was 1.60 and
+1.65, the time error growing with ``ν Δt/h^2`` (at 0.4 the ``N = 32``
+error was 2.2 times the spatial one); with the Kim & Moin condition it is
+2.005 and 2.006 and independent of ``ν Δt/h^2`` up to 0.4. The
+explicit drivers need no such condition (their tendencies use the
+step-start halos): `step_rk3!` measures 2.035 and 2.022.
+
+### Radiation outflow
+
+Structures generated inside a nested child — building wakes, plumes,
+eddies — reach the outflow face, where the parent's data do not contain
+them; a Dirichlet face then reflects them (N-open-c, #260). The
+alternative is a radiation condition on the outflow points,
+
+```math
+\frac{∂φ}{∂t} + c\,\frac{∂φ}{∂n} = 0 ,
+```
+
+selected per face by `open_boundary_conditions(…; outflow = …)`:
+`:dirichlet` (the data everywhere, the nested default), `:convective` or
+`:orlanski`. A point is an outflow point when the outward normal velocity
+of its boundary face is positive at the start of the step; inflow points
+keep the Dirichlet data. `prepare_open_boundaries!` fixes the phase speed
+once per step:
+
+* `:convective` — ``c = \max(u·n, 0)`` (Pauley, Moin & Reynolds 1990);
+* `:orlanski` — for the tangential velocities and the scalars, the speed
+  diagnosed from the interior layer next to the face at this and the
+  previous step start, ``c = -(∂φ/∂t)/(∂φ/∂n)`` (Orlanski 1976), clipped
+  to ``0 ≤ c ≤ Δn/Δt`` (Miller & Thorpe 1981); the normal velocity uses
+  the convective speed (below).
+
+Every halo layer ``b`` of every field (u, v, w and each scalar with
+boundary data) is then advanced, inside `update_open_boundaries!`, by the
+explicit second-order upstream update
+
+```math
+φ_b \leftarrow φ_b^0 - r\,\frac{3φ_b^0 - 4φ_{b-1}^0 + φ_{b-2}^0}{2},
+\qquad r = \min\!\left(\frac{c\,Δt}{Δn},\,1\right),
+```
+
+in values at the start of the (sub)stage (the buffers, and the two
+interior layers recorded by `mark_open_boundary_stage!` after the
+stage's halo fill). Two details matter:
+
+* **Stage-start values.** At the update the velocity is already the
+  predicted ``u^*``, which differs from the projected velocity by
+  ``Δt∇φ``. Radiating from ``u^*`` put that pressure-gradient error into
+  the outflow; radiating from the stage-start values makes the boundary
+  update an explicit stage that SSP-RK3 combines with its own weights. A
+  first version that read the halos before the stage's fill picked up
+  stale corner values (a uniform stream through the pseudo-incompressible
+  core with SGS on drifted, |w| = 6.5e-4 m/s after 100 steps); the
+  layers are now recorded after the fill.
+* **Second-order upstream.** With the centred interior schemes the
+  first-order upstream difference reflected a scalar pulse (σ = 4Δx)
+  with a residual ``∫θ'^2/∫θ'^2_0 = 1.9 × 10^{-4}``; the second-order
+  one, ``7.9 × 10^{-6}``.
+
+**The normal velocity is not a radiating wave.** In a projected core
+continuity ties ``u·n`` at the face to the interior, and the pressure
+responds at once to the boundary value. An Orlanski speed diagnosed from
+``u·n`` and fed back through the pressure drifts: in the outgoing-vortex
+test the diagnosed speeds of u and w settled at 0.79 U and 1.23 U (the
+diagnostic evaluated on a run with an accurate boundary gives 0.96 U for
+both) and R reached 0.15. With the convective speed for ``u·n`` and
+Orlanski for the rest, R = 4.9e-3. Both radiating modes therefore advance
+the normal velocity convectively. The mass-flux correction of the
+previous section balances the radiated normal velocities exactly as it
+balances data.
+
+Measured (`test/era6_outflow_conditions.jl`):
+
+| test | result |
+| :-- | :-- |
+| outgoing Lamb–Oseen vortex (r_c = 8Δx, U = 1, v_max = 0.5, 192 × 48 child, R when the centre is 3 r_c past the face) | Dirichlet, perfect parent 4.0e-5; Dirichlet, uniform-U parent 1.02; convective 6.5e-3; Orlanski 4.9e-3 |
+| scalar pulse (σ = 8Δx), ``∫θ'^2`` after two crossings | convective 1.2e-7, Orlanski 1.7e-6, Dirichlet 1.00 (trapped); interior L2 error of the centred scheme 2.8 % |
+| plane Poiseuille, Re = 50, open x | ``\max|u - u_{disc}|`` 1.3e-15; dp/dx relative error 2.6e-14 (middle 80 %); last 5 cells 2.0e-15 |
+| 2000 steps, parent stored every 5 steps and interpolated in time | ``\max|∫|u|^2_{child}/∫|u|^2_{parent} - 1|``: Dirichlet 3.0e-5, convective 2.7e-3, Orlanski 2.6e-3 |
+
+The vortex is carried by a uniform stream between free-slip walls (a
+2-D x–z flow), whose images make its far field decay as
+``\exp(-π|x|/L_z)``; the truth is the same flow in a periodic domain
+three times longer. A single vortex in a periodic row would instead carry
+the uniform jump ``±Γ/(2L)`` of a vortex sheet, which no uniform parent
+matches. The Poiseuille reference is the discrete steady state, the
+parabola shifted by ``U_{max}Δz^2/H^2``: the no-slip halo is linear
+(``u_0 = -u_1``), and the parabola itself differs from the scheme's
+steady solution by exactly that constant.
+
+### The advective flux through the boundary
+
+`boundary_scalar_flux(sim, ϕ; scheme)` (in `AdvectionSchemes`) returns
+the flux ``\oint ϕ\,u·n\,dA`` out of each face, formed from the face
+velocity and the face value of ``ϕ`` that the scheme reconstructs
+(`:centered`, `:upwind`, WENO-Z5/7, TENO5/8, WENO-JS5). The flux-form
+schemes telescope, so
+
+```math
+\int ϕ\,dV\Big|^{n+1} - \int ϕ\,dV\Big|^{n} = -Δt \oint ϕ\,u·n\,dA
+```
+
+per forward-Euler step to round-off: measured ``|·|/\int|ϕ|dV`` = 2.6e-18
+(centred), 1.5e-18 (WENO-Z5), 4.0e-18 (TENO5) and between 5.5e-18
+and 1.8e-16 through `step!` (the last depends on the summation order of
+the run). It is the only boundary-flux function of the code base: the
+nesting and Berlin budgets (N-nest-d, N-nest-e, N-open-d, N-berlin-nest)
+use it. The inflow faces of a scalar carry Dirichlet data in all ``H``
+halo layers, so the wide upwind stencils read data, not extrapolation;
+`open_boundary_conditions(…; halo = required_halo(scheme))` and
+`boundary_scalar_flux` refuse a mesh whose halo along an open axis is
+shallower than the scheme needs.
+
+### Near the open faces (N-open-d)
+
+Opening a face breaks four assumptions a closed, periodic box makes.
+
+**The sponge target.** The cores' Rayleigh sponge adds
+``-α(z)(u - u_{target})`` to the momentum. Below a lid the target is
+zero; below an open top it must be the state the boundary data impose
+(the parent's, in a nest; Hellsten et al. 2021 relax toward the parent),
+or the layer is a momentum sink of ``α(z)\,U`` against the inflow. Every
+core passes `sim.sponge_target` (the constructor keyword
+`sponge_target`, e.g. `sponge_target(data, mesh)`) to the one damping
+kernel; a sponge below an open top without a target is an error.
+Measured: a geostrophic stream ``U_g = 5`` m s⁻¹ through an open box with
+an open top stays ``U_g`` to 0.0 over 100 steps of `step!`, `step_rk3!`,
+`step_imex!` (ARK2) and the anelastic core; with the zero target it loses
+5.97 m s⁻¹.
+
+**Neighbours.** Code that reached across the domain edge with a periodic
+wrap (`mod1(i ± 1, N)`) reads the neighbour through
+`neighbor_index(mesh, bcs, i, axis; face, outside)`: the wrap across a
+periodic axis (bit for bit the old code), the mirror (zero-gradient) cell
+or no neighbour across any other face, and for a staggered field the
+boundary-face slot ``N+1``, which holds an open face's prescribed normal
+velocity. The immersed-wall model, the wall distance, the a-priori stress
+centring and the Berlin couplings use it.
+
+**Solid points.** A building the box edge cuts touches the open face. Its
+boundary points (`mark_open_boundary_solids!`, the faces the
+direct-forcing IBM zeroes) take the solid value, zero velocity, after the
+data are written, and the mass-flux correction neither counts nor adjusts
+them, so ``δ = Q/A_{fluid}``. Measured with a cube at the open east face
+under west inflow: ``\max|∇·u|`` = 1.5e-16, ``δ = Q/A_{fluid}`` to 1e-12.
+
+**Budget terms.** `boundary_scalar_flux` also returns, per level, the
+diffusive flux ``-K ∂ϕ/∂n\,A`` through every open scalar face, with the
+kernels' face diffusivity ``K = ν + \tfrac12(κ_{in} + κ_{out})`` (keyword
+`diffusivity`), and the part of the advective flux the mass correction
+carries, ``-δ\,W ϕ_{face} A`` on every face it adjusted (keyword
+`correction_levels`). Then a whole `step!` with centred advection, ``ν``
+and Smagorinsky diffusion through open faces satisfies
+
+```math
+\int θ\,dV\Big|^{n+1} - \int θ\,dV\Big|^{n} = -Δt \oint \bigl(θ\,u·n - K\,∂_n θ\bigr)\,dA
+```
+
+to 1.2e-13 (relative). For a +1 K inflow anomaly in a uniform stream the
+flux into the box is ``U ΔT A`` for the upwind and WENO-Z5 face values,
+``U ΔT A/2`` for the centred one (the mean of the halo and the first
+cell), plus ``ν ΔT A/Δx`` of diffusion across the jump, each to 1e-12.
+
 ## Alternative: pressure-Poisson-per-substage
 
 For RK3 (or higher-order Runge-Kutta), the divergence-free constraint
@@ -137,3 +374,21 @@ accumulation. This is what Oceananigans.jl and NCAR-LES do.
     projection methods for incompressible flows*, CMAME 195, 6011.
   * Ferziger, J. H. & Perić, M. (2020), *Computational Methods for
     Fluid Dynamics*, ch. 8.
+  * Kim, J. & Moin, P. (1985), *Application of a fractional-step method
+    to incompressible Navier–Stokes equations*, J. Comput. Phys. 59,
+    308–323.
+  * Hellsten, A., Ketelsen, K., Sühring, M. et al. (2021), *A nested
+    multi-scale system implemented in the large-eddy simulation model
+    PALM model system 6.0*, Geosci. Model Dev. 14, 3185–3214.
+  * Orlanski, I. (1976), *A simple boundary condition for unbounded
+    hyperbolic flows*, J. Comput. Phys. 21, 251–269.
+  * Miller, M. J. & Thorpe, A. J. (1981), *Radiation conditions for the
+    lateral boundaries of limited-area numerical models*, Q. J. R.
+    Meteorol. Soc. 107, 615–628.
+  * Pauley, L. L., Moin, P. & Reynolds, W. C. (1990), *The structure of
+    two-dimensional separation*, J. Fluid Mech. 220, 397–411.
+  * Colonius, T. (2004), *Modeling artificial boundary conditions for
+    compressible flow*, Annu. Rev. Fluid Mech. 36, 315–345.
+  * Kadasch, E., Sühring, M., Gronemeier, T. & Raasch, S. (2021),
+    *Mesoscale nesting interface of the PALM model system 6.0*, Geosci.
+    Model Dev. 14, 5435–5465.

@@ -39,7 +39,7 @@ const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))"
 const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 const T_AVG = (3 * 3600.0, 4 * 3600.0)
 
-function run_closure(stab)
+function run_closure(stab, ck = (nothing, nothing))
     c = gabls3_case(; N = (NX, NX, NZ), extent = (LX, LX, LZ), sponge_z = 0.75 * LZ,
                     sgs_stability = stab)
     series = NamedTuple[]
@@ -55,8 +55,10 @@ function run_closure(stab)
                        z_jet = p.z[k], θ2 = scr.θ_screen, U10 = scr.U_screen,
                        Ts = surface_temperature(c.Ts, c.sim.t)))
     end
-    st = sbl_run!(c, min(T_END, T_AVG[2]); average_from = T_AVG[1], sample_every = 5, callback = cb)
-    T_END > T_AVG[2] && sbl_run!(c, T_END; callback = cb)
+    cc = (series = series, nextt = nextt)
+    st = sbl_run!(c, min(T_END, T_AVG[2]); average_from = T_AVG[1], sample_every = 5, callback = cb,
+                  checkpoint = ck[1], checkpoint_components = cc)
+    T_END > T_AVG[2] && sbl_run!(c, T_END; callback = cb, checkpoint = ck[2], checkpoint_components = cc)
     @printf("%-8s %s: 03-04 UTC h = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  L = %5.1f m  h/L = %4.1f  LLJ %.2f m/s at %3.0f m  (%d steps, %.0f s)\n",
             stab, TAG, st.h, st.u_star, st.H0, st.L, st.h / st.L, st.S_max, st.z_jet, c.nsteps, c.wall_time)
     return (stab = stab, st = st, series = series, nsteps = c.nsteps, wall = c.wall_time)
@@ -68,8 +70,12 @@ function cached(stab)
         println("$stab: cached $path")
         return deserialize(path)
     end
-    r = run_closure(stab)
+    # periodic checkpoints, automatic resume (#245); one prefix per sbl_run! call
+    dir = joinpath(@__DIR__, "output", "checkpoints", "gabls3_$(TAG)_$(stab)")
+    ck = (driver_checkpoints(dir; prefix = "averaging"), driver_checkpoints(dir; prefix = "rest"))
+    r = run_closure(stab, ck)
     serialize(path, r)
+    finish_checkpoints!(ck[1])
     return r
 end
 results = [cached(s) for s in CLOSURES]

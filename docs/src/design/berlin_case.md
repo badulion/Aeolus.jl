@@ -60,6 +60,7 @@ examples/urban/
     tracers.jl         tracer registry (ensure_tracer!)
     ledger.jl          energy/water budget ledger (surface energy per class, water in the air)
     reference_state.jl hydrostatic reference p̄, ρ̄, T̄, Π̄ (CaseReference)
+    open_boundary.jl   cfg.lateral (:periodic / :open), the open faces' data and heat (#262)
     output.jl          NetCDF output driven by the registry
     case.jl            Case, build_case
     stages.jl          the stage loop: step_case!, run_case!, timing_report
@@ -201,11 +202,17 @@ needs.
   surface last saw (`T_air`, `q_air`, `U`, `z_ref`), the fluxes it
   returned (`Rn`, `H`, `LE`, `G`, `E`, `u_star`) and the `dew_mask`.
 * **Surface factories.** A coupling that provides the surface of a
-  class registers `register_surface_factory!(case, class, name, (case, I) -> surface)`
-  in its `build`; the surface exchange builds every column's surface
-  from these in its `init!` (a `SlabLand` for a class nobody claims).
-  This is how the park (#140), water (#141) and facet (#139) couplings
-  replace a class's surface without touching the surface exchange.
+  class registers `register_surface_factory!(case, class, name, (case, site) -> surface)`
+  in its `build`, where `site::SurfaceSite` carries the class, the
+  initial skin temperature, the child column (`nothing` for a tile of a
+  parent column) and an optional roughness override (take the roughness
+  from `class_roughness(case, site)`). `class_surface(case, site)` is the
+  one class-to-surface factory: the surface exchange builds every child
+  column's surface with it in its `init!` (a `SlabLand` for a class
+  nobody claims), and the parent's tiled surface (#249, below) every
+  tile. This is how the park (#140), water (#141) and facet (#139)
+  couplings replace a class's surface — in the child and the parent at
+  once — without touching the surface exchange.
 * **Tracers** (`case.tracers`): `ensure_tracer!(case, :qi; advect = true,
   positive = true, units = …, long_name = …)` creates or returns a
   cell-centred field; flags are OR-ed, so two couplings share one `ql`.
@@ -214,7 +221,10 @@ needs.
   the NetCDF file. The core registers `qv`, `ql` (advected) and `qr`.
   A tracer diffuses with the closure's `κt` unless it names its own
   diffusivity (`ensure_tracer!(…; diffusivity = case -> field)`): the SGS
-  TKE `e` of the `:tke` provider diffuses with `2ν_t` (#182).
+  TKE `e` of the `:tke` provider diffuses with `2ν_t` (#182). Passive
+  tracers (qv, ql, the chemistry species, the pollutant) never name one:
+  they share θ's κ_t under every `:sgs` provider, AMD included (#234, see
+  below).
 * **Geometry** (`case.geom`): mask, surface classes, scene, view factors.
   Couplings may add classes at `init!` (the glass coupling does). The
   scene is built with `class_map = scene_class_map(sfc)`, so the ground
@@ -237,6 +247,115 @@ modifier added later belongs in the same pattern. Before #128 the tree
 shade and the cloud shadow multiplied `bus.sw` in place, so they
 compounded between radiation updates.
 
+Checkpointing the case's own state is #269 / #134; the hook is described
+in [Checkpoint / restart](checkpoint_restart.md#The-Berlin-case).
+
+## Initial state: the Lindenberg sounding (#247)
+
+Until #247 the case started from an analytic profile, θ = 293 K up to
+100 m and +3 K/km above, with ``q_v = 10\,{\rm g\,kg^{-1}}\,e^{-z/800\,{\rm m}}``
+and 1013.25 hPa at the ground. #238 showed that this profile cannot cap
+a convective boundary layer, and the nesting parent (epic #246) must
+start from the same observed state as the child. The summer case now
+starts from the radiosondes of the Lindenberg observatory (WMO 10393,
+60 km south-east of Alexanderplatz).
+
+**Case day.** The epic first named 20 June 2024. That day was overcast
+(DWD hourly total cloud cover 7–8 oktas most hours at Lindenberg and
+Berlin-Tempelhof; the 12 UTC sounding is saturated at 907 hPa), so by the
+maintainer decision of 2026-10-05 the case moved to **29 June 2019**, a
+clear day of the late-June 2019 heat wave: 0–2 oktas at Lindenberg and
+Berlin-Brandenburg from 00 UTC on the 29th to 16 UTC on the 30th, and a
+12 UTC dew-point depression of at least 6 K below 700 hPa. The day is a
+Saturday; `case_weekday(cfg)` now feeds the weekday of `cfg.date` to the
+building schedules (they assumed the Thursday of 20 June 2024 before).
+
+**Data.** `examples/urban/data/fetch_lindenberg.jl` downloads the IGRA2
+record of GMM00010393 from NOAA NCEI (public domain; Durre et al. 2018)
+and writes `lindenberg_10393_20190629.csv`: the 00/06/12/18 UTC launches
+of 29 June and the 00/06 UTC launches of 30 June, with pressure, reported
+geopotential height, T, T_d, wind and the IGRA QC flags. Its header
+records the URL, the download date, the station elevation (launch site
+112 m, not the 97.7 m of the IGRA station list: with 97.7 m every launch
+misses the reported heights by 11–19 m) and the case-day check. The
+profiles are the GTS standard and significant levels, not the
+full-resolution BUFR ascent.
+
+**Profiles** (`src/large_scale_forcing/sounding.jl`). `read_sounding`
+reads the CSV; `sounding_profiles(s; z_top)` returns θ, ``q_v``, u, v
+and p as `ForcingTable`s on heights above the launch site and the
+release times. Heights are hypsometric (virtual temperature from
+`MoistThermodynamics`), θ uses its Exner function and ``q_v`` its
+``e_s(T_d)``; no thermodynamics is defined in the reader. The reported
+geopotential heights are used only as a check: below 3 km the computed
+heights match them to RMS 0.8–4.3 m per launch, within the ±4.7 m that
+the whole-hPa surface pressure of the GTS message allows.
+
+**The case** (`core/reference_state.jl`). `initial_θ(cfg)` remains the
+one definition of the initial θ: `forcing_value` of the θ table at the
+case start, 06:00 CEST = 04:00 UTC, which lies between the 22:45 and
+04:45 UTC releases (weight 0.875 on the later one). `initial_qv(cfg)`
+does the same for ``q_v`` and replaces the inline exponential of
+`build_case`. `case_surface_pressure(cfg)` reduces the launch-site
+surface pressure from 112 m to the case's 34 m with the surface virtual
+temperature. `build_reference` integrates from it, and so does every
+consumer of the reference state, the nesting parent included. The
+heights of the sounding are used as heights above the case's ground:
+the profile is taken as horizontally homogeneous over 60 km and as
+terrain-following over the 78 m elevation difference.
+
+| z (m) | θ sounding (K) | θ former (K) | q_v sounding (g/kg) | q_v former (g/kg) |
+| --: | --: | --: | --: | --: |
+| 0 | 288.60 | 293.00 | 7.70 | 10.00 |
+| 50 | 290.02 | 293.00 | 7.04 | 9.39 |
+| 100 | 291.21 | 293.00 | 6.08 | 8.82 |
+| 200 | 291.68 | 293.30 | 8.02 | 7.79 |
+| 400 | 292.42 | 293.90 | 8.02 | 6.07 |
+| 1000 | 294.07 | 295.70 | 7.12 | 2.87 |
+| 1500 | 300.16 | 297.20 | 1.13 | 1.53 |
+
+The ground pressure is 1018.4 hPa (former 1013.25 hPa). At 06 CEST the
+profile has a surface-based inversion, so the parcel z_i
+(`initial_inversion_height(cfg)`) is 0. The same profile interpolated to
+14 CEST has a mixed layer of 1.18 km, capped by the inversion at
+884–879 hPa. The smoke checks of the turbulence diagnostics and of the
+AMD/Vreman/σ switch-off take the capping inversion from
+`initial_inversion_height`, not from `cfg.θ_inversion_z`.
+
+**Effect on the standalone run** (flagship 64 × 64 × 32, 200 m deep,
+06:00 to 18:00 CEST on 29 June 2019, default couplings, adaptive step;
+the only difference between the two runs is `sounding` against
+`sounding = nothing`). Plane-mean θ of the fluid cells below 30 m:
+
+| | 06:00 | 12:00 | 18:00 |
+| :-- | --: | --: | --: |
+| sounding | 289.06 K | 303.81 K | 313.89 K |
+| former analytic profile | 293.00 K | 305.35 K | 315.22 K |
+| difference | −3.94 K | −1.54 K | −1.33 K |
+
+The colder and drier observed morning column stays 1.3 K cooler at
+18:00. In both runs the 200 m box warms by about 25 K, and by 10:00 it
+is mixed to the lid. The observed mixed layer is 1.2 km deep, so the
+box cannot hold it: entrainment of free-tropospheric air through a
+capping inversion is missing. Supplying that air is the job of the
+nesting parent (#246). Each run took 1.7–1.8 h of wall time with 2
+threads on a shared machine.
+
+**Idealised profile.** `sounding = nothing` selects the former analytic
+profile (`θ_surface`, `θ_inversion_z`, `θ_lapse`, `qv0`, `qv_scale`) and
+101 325 Pa. `:winter` uses it, explicitly labelled as idealised, until a
+winter sounding is added. `:smoke` uses it as well, because its checks
+need a stable layer above an inversion inside a 100 m box. The smoke
+matrix also runs "summer sounding, everything on", the smoke box started
+from the sounding at noon, so the observed path is exercised by every
+suite run.
+
+**The boundary-layer height.** z_i comes from
+`TurbulenceStability.boundary_layer_height` everywhere: soundings, the
+CBL harness `test/tke_cbl_driver.jl` and the nesting diagnostics. It is
+the only z_i diagnostic in the package; see [Stability functions and the
+gradient Richardson number](../theory/turbulence_stability.md).
+
 ## Reference state and moist buoyancy
 
 The Boussinesq core carries neither pressure nor density, and before
@@ -244,8 +363,10 @@ The Boussinesq core carries neither pressure nor density, and before
 scale height from 1013.25 hPa, the surface, building and traffic
 fluxes and the ledger `ρ = 1` (`ρcp = 1005`). Since #131
 `core/reference_state.jl` builds one hydrostatic profile per case,
-`Aeolus.Anelastic.reference_from_profile` of the initial θ(z) from
-`cfg.p_surface` (101 325 Pa at the ground), with the dry-air constants
+`Aeolus.Anelastic.reference_from_profile` of the initial θ(z) (see the
+initial-state section above) from
+`case_surface_pressure(cfg)` (1018.4 hPa at the ground on the summer
+case day since #247; 101 325 Pa for the idealised profile), with the dry-air constants
 of `MoistThermodynamics` (so `T = θ Π̄` is the temperature the fog
 adjustment and the saturation functions assume) and the `g` of the
 dynamics. It is exactly (1e-12 Pa m⁻¹) in the discrete balance of the
@@ -259,7 +380,7 @@ in summer, 1.30 in winter.
 | `fog_dew` | fog adjusted at `p̄_k` (`T = θ Π̄_k`); dew at `p_surface` with `ρ̄_1` |
 | `surface_exchange` | forcing `T_air = θ Π̄_k`, `p̄_k`, `ρ̄_k` at the first air cell `k_air`; `ρ̄_k c_pd`, `ρ̄_k` in the conversion of H and E to θ, qv |
 | `aq_chem` | `T = θ̄ Π̄_k` and `p̄_k` for the rate constants; its r_a solve uses `θ_s = Ts/Π̄_k` at the first air cell |
-| `column_radiation` | surface pressure `surface_pressure(case)` (101.325 kPa) |
+| `column_radiation` | surface pressure `surface_pressure(case)` (`case.ref.p_surface`) |
 | `cloud_shadow` | `ρ̄_k` for the cloud water path when no density is given |
 | `buildings_citymean`, `traffic_heat` | `ρ̄_k c_pd`, `ρ̄_k` for the release into level k |
 | the sound-proof cores (#133) | `case.ref.state` itself as the base state: the projection, buoyancy and advection weights are this ρ̄, θ̄ (`build_case` builds the reference before the core) |

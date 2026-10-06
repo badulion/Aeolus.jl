@@ -80,8 +80,11 @@ Aeolus.Operators.add_sponge!
 ## Damping profiles
 
 The one implementation of relaxation rates, shared by the Rayleigh sponge
-(every mesh type, and the `:cos2` nest sponge) and the fringe region of
-`Transition` (P59-d, #185).
+(every mesh type, and the `:cos2` nest sponge), the fringe region of
+`Transition` (P59-d, #185) and `LargeScaleForcing.ReferenceDamping`
+(N-parent-b, #254). The arithmetic is one kernel,
+`FiniteVolume._add_damping!`, on a `RegularGrid` and a `StretchedGrid`;
+its target is a number, a level vector, a `Field` or a 3-D array.
 
 ```@docs
 Aeolus.Operators.AbstractRamp
@@ -91,7 +94,9 @@ Aeolus.Operators.smooth_step
 Aeolus.Operators.DampingProfile
 Aeolus.Operators.sponge_profile
 Aeolus.Operators.damping_rate
+Aeolus.Operators.damping_coordinates
 Aeolus.Operators.FiniteVolume.in_damping
+Aeolus.Operators.FiniteVolume._add_damping!
 ```
 
 ## LES analysis toolbox (Phase 54)
@@ -131,4 +136,19 @@ Aeolus.Operators.stress_eigvals
 Aeolus.Operators.lumley_invariants
 Aeolus.Operators.apriori_metrics
 Aeolus.Operators.dissipation_matched_cs
+```
+
+## FFT planning policy
+
+The one place the FFTW planner flag and thread count of every FFT plan
+(the pressure solvers, the diagnostics) are chosen (#245). Default
+`:measure`, `:patient` opt-in; the test suite uses `:estimate`. Why it matters for restarts:
+[Checkpoint / restart and FFT planning](../design/checkpoint_restart.md).
+
+```@docs
+Aeolus.Operators.set_fftw_policy!
+Aeolus.Operators.fftw_policy
+Aeolus.Operators.fftw_planner_flags
+Aeolus.Operators.save_fftw_wisdom
+Aeolus.Operators.load_fftw_wisdom!
 ```

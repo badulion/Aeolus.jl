@@ -82,6 +82,17 @@ issue. Cost per evaluation of the whole addon: 0.28–0.55 ms on the smoke
 grid and 7.0 ms on the flagship grid (3.6 ms before #180), once per
 output record.
 
+### Inflow fetch (#266): stated exception
+
+N-inflow-d measures the development length behind a synthetic inflow on
+the periodic half channel (`examples/nesting/inflow_fetch.jl`, theory:
+[Development length behind the inflow](../theory/transition.md#Development-length-behind-the-inflow-(N-inflow-d))).
+It adds diagnostics (`FetchStatistics`, `development_length`) and a
+benchmark builder option (`half_channel_case(; inflow, lateral)`), no physics the
+Berlin run could execute: the Berlin domain is laterally periodic, and
+the Berlin child's fetch (day and night) is measured in N-inflow-e
+(#268), where the nested case exists. No Berlin list changed.
+
 ### Flat-plate transition (#185): stated exception
 
 The spatially developing boundary layer of P59-d (fringe region,
@@ -107,6 +118,13 @@ Moeng (1984) closure (see [the theory page](../theory/sgs_tke.md)). It is
 PALM's urban-LES default and the only closure here whose mixing responds
 prognostically to stratification (its ``0.76\sqrt e/N`` length scale; no
 stability function is applied on top of it).
+
+Not wrapping it in `StabilityCorrected` is by design. `:tke` has none of
+that wrapper's ``κ_h ≠ κ_v`` anisotropy (one ``Δ``, as in PALM): at
+``dx/dz = 2.5`` it mixes 3.39× more vertically and 1.84× less
+horizontally than `StabilityCorrected` Smagorinsky of equal ``C_s``, and
+no `:isentropic` tensor is offered
+([details](../theory/sgs_tke.md#The-model)). Moist ``N^2``: #239.
 
 * The closure is the `sgs` of every dynamics step, so the cores evaluate
   ``ν_t = c_k l\sqrt e``, ``κ_t = (1 + 2l/Δ)ν_t`` from the committed ``e``

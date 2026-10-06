@@ -59,7 +59,10 @@ using ..Fields
 using ..Fields: Field, interior_view, set!
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
-                            Periodic, NoFlux, ImpermeableWall
+                            Periodic, NoFlux, ImpermeableWall,
+                            update_open_boundaries!, prepare_open_boundaries!,
+                            assert_open_face_correction, mark_open_boundary_stage!
+import ..BoundaryConditions: boundary_flux_weights
 using ..Operators
 using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    add_coriolis!, compute_smagorinsky_νt!,
@@ -70,12 +73,17 @@ using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    _active_sgs, _check_sgs_stress
 using ..PressureSolvers: AbstractPressureSolver
 
-import ..PressureSolvers: solve!
+import ..PressureSolvers: solve!, poisson_axis_bcs
 import ..TimeSteppers: step!
 import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
 
-using ..Simulations: horizontal_mean, horizontal_variance
+using ..Simulations: horizontal_mean, horizontal_variance, add_velocity_sponge!
+import ..Simulations
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
+using ..Operators: sgs_fields
+using ..TimeIntegration: CFLConstraints, _max_advective_rate, _SNAPSHOTS
+import ..TimeIntegration: adaptive_dt, StateSnapshot, save_state!, restore_state!,
+                          state_snapshot, _all_finite
 
 export ReferenceState,
        isothermal_reference, isentropic_reference,
@@ -600,7 +608,8 @@ end
 # =========================================================================
 
 """
-    DensityWeightedPoissonSolver(mesh, w_c, w_f; tol=1e-10, maxit=500, bc_z=:neumann)
+    DensityWeightedPoissonSolver(mesh, w_c, w_f; tol=1e-10, maxit=500,
+                                 bc_x=:periodic, bc_y=:periodic, bc_z=:neumann)
     DensityWeightedPoissonSolver(mesh, ref::ReferenceState; weighting=:ρ, kwargs...)
     DensityWeightedPoissonSolver(mesh, c::Real; kwargs...)
 
@@ -641,11 +650,19 @@ solver and differs only at `O(Δz²)`.
 
 # Boundary conditions
 
-Periodic in `x, y` always. In `z`, `bc_z = :neumann` (default) sets the
+Each axis is `:periodic` or `:neumann`. In `x` and `y` the default is
+periodic; `bc_x = :neumann` / `bc_y = :neumann` sets the flux `w ∂φ/∂n`
+through the two lateral faces to zero (mirror ghost) — the closure of a
+nested or open-boundary child, whose normal velocity is prescribed on the
+side faces (#251; before that the solver was periodic in `x, y` by
+construction). In `z`, `bc_z = :neumann` (default) sets the
 vertical flux through the two wall faces to zero — the condition consistent
 with `ImpermeableWall`/`NoFlux` halos and with `w = 0` at the walls — or
 `bc_z = :periodic`, in which case `w_f[1]` and `w_f[Nz+1]` describe the same
-face and are symmetrised for you.
+face and are symmetrised for you. The Jacobi preconditioner uses the
+interior diagonal in every cell; on a Neumann side the boundary cells'
+true diagonal is smaller by `w_c/Δ²`, which leaves the preconditioner
+symmetric positive definite (CG still converges, to the same solution).
 
 `L` is singular with the constants as its null space, so the source is
 projected to zero mean and the returned solution is the unique zero-mean
@@ -666,6 +683,8 @@ mutable struct DensityWeightedPoissonSolver{T, RA<:Array{T,3}} <: AbstractPressu
     tol::T
     maxit::Int
     bc_z::Symbol
+    bc_x::Symbol
+    bc_y::Symbol
     # scratch, all interior-sized
     b::RA
     x::RA
@@ -682,8 +701,12 @@ function DensityWeightedPoissonSolver(mesh::RegularGrid{T},
                                       w_f::AbstractVector;
                                       tol::Real  = 1e-10,
                                       maxit::Int = 500,
-                                      bc_z::Symbol = :neumann) where {T}
+                                      bc_z::Symbol = :neumann,
+                                      bc_x::Symbol = :periodic,
+                                      bc_y::Symbol = :periodic) where {T}
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    bc_x in (:neumann, :periodic) || error("bc_x must be :neumann or :periodic, got $bc_x")
+    bc_y in (:neumann, :periodic) || error("bc_y must be :neumann or :periodic, got $bc_y")
     length(w_c) == Nz    || throw(DimensionMismatch("w_c must have length Nz=$Nz"))
     length(w_f) == Nz + 1 || throw(DimensionMismatch("w_f must have length Nz+1=$(Nz+1)"))
     bc_z in (:neumann, :periodic) || error("bc_z must be :neumann or :periodic, got $bc_z")
@@ -707,7 +730,7 @@ function DensityWeightedPoissonSolver(mesh::RegularGrid{T},
 
     mk() = zeros(T, Nx, Ny, Nz)
     return DensityWeightedPoissonSolver{T, Array{T,3}}(
-        mesh, wc, wf, diag, T(tol), maxit, bc_z,
+        mesh, wc, wf, diag, T(tol), maxit, bc_z, bc_x, bc_y,
         mk(), mk(), mk(), mk(), mk(), mk(), Ref(0), Ref(zero(T)))
 end
 
@@ -729,6 +752,8 @@ end
 DensityWeightedPoissonSolver(mesh::RegularGrid{T}, c::Real; kwargs...) where {T} =
     DensityWeightedPoissonSolver(mesh, fill(T(c), mesh.Nz), fill(T(c), mesh.Nz + 1); kwargs...)
 
+poisson_axis_bcs(s::DensityWeightedPoissonSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = s.bc_z)
+
 "Iterations used by the last [`solve!`](@ref)."
 solver_iterations(s::DensityWeightedPoissonSolver) = s.last_iter[]
 "Final residual 2-norm of the last [`solve!`](@ref)."
@@ -739,10 +764,14 @@ solver_residual(s::DensityWeightedPoissonSolver) = s.last_residual[]
 # out = −∇·(w ∇u) on an interior-sized array (positive semi-definite form).
 function _apply_neg_wlap!(out::Array{T,3}, u::Array{T,3},
                           w_c::Vector{T}, w_f::Vector{T},
-                          dx::T, dy::T, dz::T, bc_z::Symbol) where {T}
+                          dx::T, dy::T, dz::T, bc_z::Symbol,
+                          bc_x::Symbol = :periodic, bc_y::Symbol = :periodic) where {T}
     Nx, Ny, Nz = size(u)
     idx2 = 1 / dx^2; idy2 = 1 / dy^2; idz2 = 1 / dz^2
     periodic_z = bc_z === :periodic
+    # Neumann side: the ghost mirrors the boundary cell, so the face
+    # difference (and the flux through the face) is zero.
+    px = bc_x === :periodic; py = bc_y === :periodic
     @inbounds for k in 1:Nz
         wk = w_c[k]
         wt = w_f[k == Nz ? Nz + 1 : k + 1]
@@ -750,11 +779,11 @@ function _apply_neg_wlap!(out::Array{T,3}, u::Array{T,3},
         kp = k < Nz ? k + 1 : (periodic_z ? 1  : 0)
         km = k > 1  ? k - 1 : (periodic_z ? Nz : 0)
         for j in 1:Ny
-            jp = j == Ny ? 1 : j + 1
-            jm = j == 1  ? Ny : j - 1
+            jp = j < Ny ? j + 1 : (py ? 1  : Ny)
+            jm = j > 1  ? j - 1 : (py ? Ny : 1)
             for i in 1:Nx
-                ip = i == Nx ? 1 : i + 1
-                im = i == 1  ? Nx : i - 1
+                ip = i < Nx ? i + 1 : (px ? 1  : Nx)
+                im = i > 1  ? i - 1 : (px ? Nx : 1)
                 c = u[i, j, k]
                 lap = wk * ((u[ip, j, k] - 2c + u[im, j, k]) * idx2 +
                             (u[i, jp, k] - 2c + u[i, jm, k]) * idy2)
@@ -782,7 +811,8 @@ function apply_weighted_laplacian!(out::Field{CellCenter,T}, φ::Field{CellCente
     ii, jj, kk = interior(φ.mesh)
     xin  = Array{T,3}(view(φ.data, ii, jj, kk))
     xout = similar(xin)
-    _apply_neg_wlap!(xout, xin, s.w_c, s.w_f, s.mesh.dx, s.mesh.dy, s.mesh.dz, s.bc_z)
+    _apply_neg_wlap!(xout, xin, s.w_c, s.w_f, s.mesh.dx, s.mesh.dy, s.mesh.dz, s.bc_z,
+                     s.bc_x, s.bc_y)
     @inbounds @views out.data[ii, jj, kk] .= .-xout
     return out
 end
@@ -850,7 +880,7 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
     dx, dy, dz = m.dx, m.dy, m.dz
     converged = false
     for it in 1:s.maxit
-        _apply_neg_wlap!(Ap, pdir, s.w_c, s.w_f, dx, dy, dz, s.bc_z)
+        _apply_neg_wlap!(Ap, pdir, s.w_c, s.w_f, dx, dy, dz, s.bc_z, s.bc_x, s.bc_y)
         pap = _dot(pdir, Ap)
         if pap <= 0
             @warn "DensityWeightedPoissonSolver: non-positive curvature ($pap); stopping at iteration $it"
@@ -1203,6 +1233,7 @@ mutable struct MassWeightedSimulation{S<:MassWeighting,
     θ_flux_top::T
     sponge_α_max::T
     sponge_z_start::T
+    sponge_target::NamedTuple{(:u, :v, :w)}   # N-open-d (#262)
     # enable flags
     has_viscosity::Bool
     has_buoyancy::Bool
@@ -1258,6 +1289,7 @@ is `0`):
 | `Pr_t` | `1/3` | turbulent Prandtl number |
 | `θ_flux_bottom`, `θ_flux_top` | `0` | prescribed surface fluxes |
 | `sponge_α_max`, `sponge_z_start` | off | Rayleigh sponge |
+| `sponge_target` | `nothing` (zero) | sponge relaxation targets; required with an open top ([`sponge_target`](@ref Aeolus.Simulations.sponge_target), #262) |
 | `bcs`, `θ_bcs` | `FieldBoundaryConditions(:periodic, :periodic, :wall)` | BCs |
 | `solver` | `DensityWeightedPoissonSolver(mesh, ref; weighting=:ρ)` | projection solver |
 | `tol`, `maxit` | `1e-12`, `500` | passed to the default solver |
@@ -1327,6 +1359,11 @@ projection's tolerance.
 constraint_weights(sim::MassWeightedSimulation) =
     (_weight_c(sim.weighting, sim.ref), _weight_f(sim.weighting, sim.ref))
 
+# Open boundaries (N-open-b): the boundary mass-flux correction balances the
+# flux of the constraint weight W (ρ̄ or ρ̄θ̄), the quantity the projection
+# annihilates.
+boundary_flux_weights(sim::MassWeightedSimulation) = constraint_weights(sim)
+
 _default_reference(::AnelasticWeighting, mesh)            = isentropic_reference(mesh)
 _default_reference(::PseudoIncompressibleWeighting, mesh)  = constant_stability_reference(mesh)
 
@@ -1342,6 +1379,7 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
                               θ_flux_top::Real       = 0,
                               sponge_α_max::Real     = 0,
                               sponge_z_start::Real   = mesh.z0 + mesh.Lz,
+                              sponge_target          = nothing,
                               bcs::FieldBoundaryConditions =
                                   FieldBoundaryConditions(:periodic, :periodic, :wall),
                               θ_bcs::FieldBoundaryConditions = bcs,
@@ -1359,10 +1397,13 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
     refstate isa ReferenceState{T} ||
         error("ReferenceState element type $(eltype(refstate.ρ̄)) does not match mesh eltype $T")
 
+    # The projection's per-axis closure comes from the velocity faces
+    # (periodic, or Neumann for walls and prescribed-velocity sides).
+    ax = poisson_axis_bcs(bcs)
     ps = solver === nothing ?
         DensityWeightedPoissonSolver(mesh, refstate;
                                      weighting = _weighting_symbol(S),
-                                     tol = tol, maxit = maxit, bc_z = :neumann) :
+                                     tol = tol, maxit = maxit, ax...) :
         solver
 
     u = Field(FaceX(), mesh); v = Field(FaceY(), mesh); w = Field(FaceZ(), mesh)
@@ -1383,6 +1424,7 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
         S, mesh, bcs, θ_bcs, ps, refstate,
         T(ν), T(g_accel), T(f_coriolis), T(C_s), T(Pr_t),
         T(θ_flux_bottom), T(θ_flux_top), T(sponge_α_max), T(sponge_z_start),
+        Simulations._sponge_target(sponge_target, mesh, bcs, has_sponge),
         ν != 0, buoyancy, f_coriolis != 0, C_s != 0,
         θ_flux_bottom != 0 || θ_flux_top != 0, has_sponge,
         zero(T),
@@ -1499,6 +1541,34 @@ Generic entry point — dispatches to [`step_anelastic!`](@ref) or
 step!(sim::MassWeightedSimulation, dt::Real; kwargs...) =
     _step_mass_weighted!(sim, dt; kwargs...)
 
+# Steps 8–10 of the sound-proof fractional step: the weighted divergence of
+# the velocity, the variable-coefficient Poisson solve ∇·(W∇φ) = ∇·(Wu), and
+# the correction u ← u − ∇φ. `sim.φ` holds the potential afterwards; `sim.p`
+# is not touched. Also the re-projection of a two-way nest parent after the
+# feedback (N-nest-e, #263).
+function _project_mass_weighted!(sim::MassWeightedSimulation{S,T},
+                                 Wc = _weight_c(sim.weighting, sim.ref),
+                                 Wf = _weight_f(sim.weighting, sim.ref)) where {S,T}
+    m = sim.mesh
+    # 8. weighted divergence of the predicted velocity
+    fill_halos!(sim.u, sim.bcs)
+    fill_halos!(sim.v, sim.bcs)
+    fill_halos!(sim.w, sim.bcs)
+    weighted_divergence!(sim.div_buf, sim.u, sim.v, sim.w, Wc, Wf, m; normalize = false)
+
+    # 9. variable-coefficient Poisson solve: ∇·(W∇φ) = ∇·(W u*)
+    solve!(sim.φ, sim.div_buf, sim.solver)
+
+    # 10. correction u = u* − ∇φ
+    fill_halos!(sim.φ, sim.bcs)
+    ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
+    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
+    _axpy_interior!(sim.u, -one(T), sim.dφdx, m)
+    _axpy_interior!(sim.v, -one(T), sim.dφdy, m)
+    _axpy_interior!(sim.w, -one(T), sim.dφdz, m)
+    return sim
+end
+
 function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
                               body_force!::Union{Nothing,Function} = nothing,
                               post_predictor!::Union{Nothing,Function} = nothing,
@@ -1511,12 +1581,14 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     m  = sim.mesh
     Wc = _weight_c(sim.weighting, sim.ref)
     Wf = _weight_f(sim.weighting, sim.ref)
+    prepare_open_boundaries!(sim)          # no-op unless an open face is unfilled
 
     # 1. halos
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
+    mark_open_boundary_stage!(sim)         # radiating outflow: step-start layers (N-open-c)
 
     # 2. advection, weighted flux form
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
@@ -1550,12 +1622,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     # 6. Coriolis / surface flux / sponge / user forcing
     sim.has_coriolis && add_coriolis!(sim.tu, sim.tv, sim.u, sim.v, sim.f_coriolis)
     sim.has_surface_flux && add_surface_flux!(sim.tθ, sim.θ_flux_bottom, sim.θ_flux_top)
-    if sim.has_sponge
-        z_top = m.z0 + m.Lz
-        add_sponge!(sim.tu, sim.u, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tv, sim.v, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tw, sim.w, sim.sponge_α_max, sim.sponge_z_start, z_top)
-    end
+    sim.has_sponge && add_velocity_sponge!(sim)   # toward sim.sponge_target (#262)
     body_force! === nothing || body_force!(sim, Δt)
 
     # 7. predictor
@@ -1564,21 +1631,12 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     _axpy_interior!(sim.w, Δt, sim.tw, m)
     post_predictor! === nothing || post_predictor!(sim, Δt)
 
-    # 8. weighted divergence of the predicted velocity
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
-    weighted_divergence!(sim.div_buf, sim.u, sim.v, sim.w, Wc, Wf, m; normalize = false)
+    # 7b. open boundaries (N-open-b): data at the end of the step, with the
+    #     W-weighted mass-flux correction, written into u* by the fill below
+    update_open_boundaries!(sim, sim.t + Δt, Δt)
 
-    # 9. variable-coefficient Poisson solve: ∇·(W∇φ) = ∇·(W u*)
-    solve!(sim.φ, sim.div_buf, sim.solver)
-
-    # 10. correction u = u* − ∇φ
-    fill_halos!(sim.φ, sim.bcs)
-    ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
-    _axpy_interior!(sim.u, -one(T), sim.dφdx, m)
-    _axpy_interior!(sim.v, -one(T), sim.dφdy, m)
-    _axpy_interior!(sim.w, -one(T), sim.dφdz, m)
+    # 8.–10. weighted projection
+    _project_mass_weighted!(sim, Wc, Wf)
 
     # 11. scalar update
     _axpy_interior!(sim.θ, Δt, sim.tθ, m)
@@ -1855,5 +1913,101 @@ function _system_record(sim)
             constraint_residual = constraint_residual(sim),
             plain_divergence    = max_divergence(sim))
 end
+
+# =========================================================================
+# Adaptive dt and step snapshots for the sound-proof cores (N-nest-c, #257)
+# =========================================================================
+#
+# `adaptive_dt`, `StateSnapshot` and the finiteness check are the
+# TimeIntegration contract (Phase 23). These methods extend it to the
+# mass-weighted cores so a nested run (Nesting.NestedRun) can pick each
+# domain's step and roll a rejected step back whatever its dynamical core.
+
+"""
+    adaptive_dt(sim::MassWeightedSimulation, constraints; dt_prev = nothing,
+                sgs = nothing, kwargs...)
+
+The next time step of a sound-proof simulation: the smallest of the
+advective limit `C_advective / max_cell Σ|uᵢ|/Δxᵢ` (the per-cell rate of
+the Boussinesq [`cfl_diagnostics`](@ref Aeolus.TimeIntegration.cfl_diagnostics)),
+the diffusive limit `C_diffusive Δ²_harm / (ν + max(νt, κt))` with the SGS
+coefficients recomputed (pure `compute_sgs!`) from the current state, the
+buoyancy limit `C_buoyancy / N` from the horizontal-mean θ profile, and
+the Coriolis limit `C_coriolis / |f|`. Then, as for the Boussinesq core,
+limited to `growth_max · dt_prev` and clamped to `[dt_min, dt_max]`; a
+non-finite state collapses to `dt_min`. The other keywords of the
+Boussinesq method (`scheme`, `sgs_stress`, `diagnostics`) are accepted and
+ignored, so a driver can pass the same keywords to either core.
+"""
+function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
+                     dt_prev = nothing, sgs = nothing, kwargs...) where {S,T}
+    m = sim.mesh
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+    rate = _max_advective_rate(sim.u.data, sim.v.data, sim.w.data, m)
+    isnan(rate) && return c.dt_min
+    dt = rate > 0 ? c.C_advective / rate : T(Inf)
+
+    closure = _active_sgs(sim, sgs, nothing)
+    κmax = zero(T)
+    if closure !== nothing
+        fill_halos!(sim.θ, sim.θ_bcs)
+        compute_sgs!(closure, sim)
+        f = sgs_fields(closure, sim)
+        κmax = max(maximum(interior_view(f.νh)), maximum(interior_view(f.νv)),
+                   maximum(interior_view(f.κh)), maximum(interior_view(f.κv)))
+    end
+    νtot = (sim.has_viscosity ? sim.ν : zero(T)) + κmax
+    Δ²harm = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
+    νtot > 0 && (dt = min(dt, c.C_diffusive * Δ²harm / νtot))
+
+    if sim.has_buoyancy
+        θm = horizontal_mean(sim.θ)
+        N² = zero(T)
+        for k in 2:length(θm)
+            N² = max(N², buoyancy_frequency_squared(θm[k-1], θm[k], m.dz, sim.g_accel,
+                                                     (θm[k-1] + θm[k]) / 2))
+        end
+        N² > 0 && (dt = min(dt, c.C_buoyancy / sqrt(N²)))
+    end
+    sim.has_coriolis && sim.f_coriolis != 0 &&
+        (dt = min(dt, c.C_coriolis / abs(sim.f_coriolis)))
+    isnan(dt) && return c.dt_min
+    if dt_prev !== nothing
+        dtp = T(dt_prev)
+        dtp > 0 && (dt = min(dt, c.growth_max * dtp))
+    end
+    return clamp(dt, c.dt_min, c.dt_max)
+end
+
+# A sound-proof core carries no qv: its snapshot holds an empty qv buffer.
+StateSnapshot(sim::MassWeightedSimulation{S,T}) where {S,T} =
+    StateSnapshot{T}(similar(sim.u.data), similar(sim.v.data), similar(sim.w.data),
+                     similar(sim.p.data), similar(sim.θ.data), Array{T,3}(undef, 0, 0, 0),
+                     sim.t, false)
+
+function save_state!(snap::StateSnapshot, sim::MassWeightedSimulation)
+    copyto!(snap.u, sim.u.data); copyto!(snap.v, sim.v.data)
+    copyto!(snap.w, sim.w.data); copyto!(snap.p, sim.p.data)
+    copyto!(snap.θ, sim.θ.data)
+    snap.t = sim.t; snap.valid = true
+    return snap
+end
+
+function restore_state!(sim::MassWeightedSimulation, snap::StateSnapshot)
+    snap.valid || throw(ArgumentError("StateSnapshot has never been saved"))
+    copyto!(sim.u.data, snap.u); copyto!(sim.v.data, snap.v)
+    copyto!(sim.w.data, snap.w); copyto!(sim.p.data, snap.p)
+    copyto!(sim.θ.data, snap.θ)
+    sim.t = snap.t
+    return sim
+end
+
+state_snapshot(sim::MassWeightedSimulation) =
+    get!(() -> StateSnapshot(sim), _SNAPSHOTS, sim)::StateSnapshot
+
+_all_finite(sim::MassWeightedSimulation) =
+    all(isfinite, interior_view(sim.u)) && all(isfinite, interior_view(sim.v)) &&
+    all(isfinite, interior_view(sim.w)) && all(isfinite, interior_view(sim.θ)) &&
+    all(isfinite, interior_view(sim.p))
 
 end # module

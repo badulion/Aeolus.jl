@@ -21,36 +21,66 @@
 # last solves only the weighted one and is incompatible with Boussinesq.
 #
 # Both multigrid options solve the same 7-point Laplacian with the same
-# boundary conditions as the FFT (periodic, periodic, Neumann), so on this
-# uniform grid they only cost more; they are here because the stretched-
-# grid (#151) and cut-cell (#152) solver work needs them, and so that the
-# Berlin case keeps them exercised.
+# boundary conditions as the FFT, so on this uniform grid they only cost
+# more; they are here because the stretched-grid (#151) and cut-cell (#152)
+# solver work needs them, and so that the Berlin case keeps them exercised.
+#
+# Every provider takes its per-axis Poisson closure from the case's
+# velocity boundary conditions (`case_poisson_axes`, N-open-a #251):
+# periodic sides give a periodic axis, walls and prescribed-velocity
+# (open / nest) sides a Neumann one. The default case is periodic in x, y
+# with walls in z — (:periodic, :periodic, :neumann), the solver of before
+# #251 bit for bit; `cfg.lateral = :open` (#262) gives the all-Neumann
+# solve. The sound-
+# proof cores derive the same axes from the same `bcs` inside
+# `Anelastic._build_mass_weighted`. Each smoke check asserts the solver's
+# axes are the case's.
 
 "Maximum |∇·u| of the case velocity (fills the velocity halos)."
 case_divergence(case) = max_divergence(case.sim)
 
 """
+    case_poisson_axes(cfg, mesh) -> (bc_x, bc_y, bc_z)
+
+The per-axis pressure-Poisson kinds (`:periodic` / `:neumann`) implied by
+the velocity boundary conditions of the case's core
+([`case_boundary_conditions`](@ref)`(cfg, mesh).bcs`: `cfg.lateral`), via
+`PressureSolvers.poisson_axis_bcs`.
+"""
+case_poisson_axes(cfg, mesh) = poisson_axis_bcs(case_boundary_conditions(cfg, mesh).bcs)
+
+"Smoke-check entry: the solver's per-axis closure is the one the case's `bcs` imply."
+solver_axes_check(case) =
+    "the solver's axis BCs are the case's ($(join(values(poisson_axis_bcs(case.sim.bcs)), ", ")))" =>
+        poisson_axis_bcs(case.sim.solver) == poisson_axis_bcs(case.sim.bcs) ==
+        case_poisson_axes(case.cfg, case.mesh)
+
+"""
     PressureCosineFFT
 
 Slot `:pressure_solver`, provider `:cosine_fft` (default):
-`CosineFFTPoissonSolver(mesh)`, the solver `BoussinesqSimulation` picks
-for walls in z.
+`CosineFFTPoissonSolver(mesh; case_poisson_axes(cfg, mesh)...)`, the solver
+`BoussinesqSimulation` picks for the case's boundary conditions
+(periodic x, y and walls in z by default; all-Neumann for `lateral = :open`
+or a nested child).
 """
 struct PressureCosineFFT <: AbstractCoupling end
 coupling_name(::Type{PressureCosineFFT}) = :pressure_fft
 slot(::Type{PressureCosineFFT}) = :pressure_solver
 provider(::Type{PressureCosineFFT}) = :cosine_fft
 modules_used(::Type{PressureCosineFFT}) = (:PressureSolvers,)
-sim_options(::Type{PressureCosineFFT}, cfg, mesh, o) = (solver = CosineFFTPoissonSolver(mesh),)
+sim_options(::Type{PressureCosineFFT}, cfg, mesh, o) =
+    (solver = CosineFFTPoissonSolver(mesh; case_poisson_axes(cfg, mesh)...),)
 smoke_check(c::PressureCosineFFT, case) =
     ["the solver is the cosine FFT" => case.sim.solver isa CosineFFTPoissonSolver,
+     solver_axes_check(case),
      "projected velocity divergence-free (max|∇·u| < 1e-10 s⁻¹)" => case_divergence(case) < 1e-10]
 
 """
     PressureMultigrid
 
 Slot `:pressure_solver`, provider `:multigrid`: `MultigridPoissonSolver`
-with `bc = (:periodic, :periodic, :neumann)`, options `tol = 1e-10`
+with the case's axis BCs (`case_poisson_axes`), options `tol = 1e-10`
 (relative residual), `maxcycles = 50`, `cycle = :V`.
 """
 struct PressureMultigrid <: AbstractCoupling end
@@ -61,7 +91,7 @@ is_default(::Type{PressureMultigrid}) = false
 modules_used(::Type{PressureMultigrid}) = (:Multigrid,)
 default_options(::Type{PressureMultigrid}) = (tol = 1e-10, maxcycles = 50, cycle = :V)
 sim_options(::Type{PressureMultigrid}, cfg, mesh, o) =
-    (solver = MultigridPoissonSolver(mesh; bc_x = :periodic, bc_y = :periodic, bc_z = :neumann,
+    (solver = MultigridPoissonSolver(mesh; case_poisson_axes(cfg, mesh)...,
                                      tol = o.tol, maxcycles = o.maxcycles, cycle = o.cycle),)
 function report(c::PressureMultigrid, case)
     s = case.sim.solver
@@ -71,6 +101,7 @@ end
 function smoke_check(c::PressureMultigrid, case)
     s = case.sim.solver
     return ["the solver is multigrid" => s isa MultigridPoissonSolver,
+            solver_axes_check(case),
             "last solve converged (rel. residual < tol)" => mg_residual_norm(s) < s.tol,
             "projected velocity divergence-free (max|∇·u| < 1e-8 s⁻¹)" => case_divergence(case) < 1e-8]
 end
@@ -79,7 +110,8 @@ end
     PressureMGCG
 
 Slot `:pressure_solver`, provider `:mg_cg`: `MGPreconditionedCG` (CG with
-one multigrid V-cycle as the preconditioner), options `tol = 1e-10`,
+one multigrid V-cycle as the preconditioner) with the case's axis BCs
+(`case_poisson_axes`), options `tol = 1e-10`,
 `maxit = 200`.
 """
 struct PressureMGCG <: AbstractCoupling end
@@ -90,7 +122,7 @@ is_default(::Type{PressureMGCG}) = false
 modules_used(::Type{PressureMGCG}) = (:Multigrid,)
 default_options(::Type{PressureMGCG}) = (tol = 1e-10, maxit = 200)
 sim_options(::Type{PressureMGCG}, cfg, mesh, o) =
-    (solver = MGPreconditionedCG(mesh; bc_x = :periodic, bc_y = :periodic, bc_z = :neumann,
+    (solver = MGPreconditionedCG(mesh; case_poisson_axes(cfg, mesh)...,
                                  tol = o.tol, maxit = o.maxit),)
 report(c::PressureMGCG, case) =
     @sprintf("MG-CG: last solve %d iterations, rel. residual %.1e",
@@ -98,6 +130,7 @@ report(c::PressureMGCG, case) =
 function smoke_check(c::PressureMGCG, case)
     s = case.sim.solver
     return ["the solver is MG-preconditioned CG" => s isa MGPreconditionedCG,
+            solver_axes_check(case),
             "last solve converged (rel. residual < tol)" => mg_residual_norm(s) < s.tol,
             "projected velocity divergence-free (max|∇·u| < 1e-8 s⁻¹)" => case_divergence(case) < 1e-8]
 end
@@ -135,6 +168,7 @@ function smoke_check(c::PressureDensityWeighted, case)
     o = coupling_options(PressureDensityWeighted, case.cfg)
     return ["the solver is the density-weighted CG" => s isa DensityWeightedPoissonSolver,
             "with this provider's tol and maxit" => s.tol == o.tol && s.maxit == o.maxit,
+            solver_axes_check(case),
             "its weight is the core's (ρ̄ or ρ̄θ̄ of case.ref, rel. 1e-12)" =>
                 isapprox(s.w_c, W; rtol = 1e-12),
             "last solve converged within maxit" => 0 < solver_iterations(s) < s.maxit,

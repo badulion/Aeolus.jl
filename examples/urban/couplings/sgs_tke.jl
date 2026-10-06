@@ -25,7 +25,13 @@
 #     surface (`IBM.first_level_cells`); e = 0 in the buildings;
 #   * the first air cell of every column (`bus.k_air`) holds the surface
 #     value e_s = u*²/√(c_k c_ε) with the friction velocity of the surface
-#     exchange (`bus.u_star`, MOST): no second log law here.
+#     exchange (`bus.u_star`, MOST): no second log law here;
+#   * at the facades the shear production is the facade wall model's
+#     stress times the resolved shear across the wall, a q² (#232): the
+#     `wall_model_facades` coupling removes the stencil's facade flux from
+#     the momentum step and attaches its walls to this closure at init!
+#     (`attach_immersed_walls!`), so the closure books neither the removed
+#     stencil production nor misses the wall stress's work.
 #
 # A TKE closure has its own stability length scale, so no TurbulenceStability
 # stability function (nor the StabilityCorrected wrapper of P55-e, #187) is
@@ -65,7 +71,7 @@ function build(::Type{<:SGSTKE}, case, o)
                        long_name = "subgrid-scale turbulent kinetic energy",
                        diffusivity = diffusivity)
     closure = TKEClosure(m; e = e, mask = sm.mask,
-                         wall_distance = o.wall_cap ? wall_distance(sm; bottom = true) : nothing,
+                         wall_distance = o.wall_cap ? wall_distance(sm; bottom = true, bcs = case.sim.bcs) : nothing,
                          first_level = first_level_cells(sm; bottom = true),
                          surface = o.surface ? (u_star = case.bus.u_star, k = case.bus.k_air) : nothing,
                          θ₀ = cfg.θ₀, g_accel = cfg.g, qv = tracer(case, :qv),
@@ -154,12 +160,22 @@ function smoke_check(c::SGSTKE, case)
     push!(checks, "test-filter energy k_test > 0 and e/k_test finite (a priori)" =>
                       a.k_test > 0 && isfinite(a.ratio) && a.ratio > 0)
     push!(checks, "implied-stress II ≥ 0 where e > 0" => all(x -> isnan(x) || x >= -1e-12, II))
+    # #232: with the facade wall model on, the closure books the facade
+    # production from the wall stress (the walls are attached at init!)
+    facades = find_coupling(case, :wall_model_facades) !== nothing
+    push!(checks, "facade production from the wall stress iff the facade wall model is on (#232)" =>
+                      (cl.walls[] !== nothing) == facades)
     if sim isa BoussinesqSimulation
-        # Σ P_s V is the resolved-KE sink of the SGS momentum operator
+        # Σ P_s V is the resolved-KE sink of the SGS momentum operator the
+        # step applies: the stencil's (kinetic_energy_budget) less its facade
+        # share, which the wall model removes, plus the wall-stress work
         b = kinetic_energy_budget(sim; sgs = cl)
         tb = tke_budget(cl, sim)
-        push!(checks, "Σ P_s V = −(resolved-KE SGS sink) to 1e-8" =>
-                          b.sgs < 0 && abs(tb.shear + b.sgs) <= 1e-8 * abs(b.sgs))
+        sink = -b.sgs - tb.wall_stencil + tb.wall_work
+        push!(checks, "Σ P_s V = −(resolved-KE SGS sink) − facade stencil share + facade wall work, to 1e-8" =>
+                          b.sgs < 0 && abs(tb.shear - sink) <= 1e-8 * abs(sink))
+        facades && push!(checks, "facade wall work and stencil share booked (> 0)" =>
+                                     tb.wall_work > 0 && tb.wall_stencil > 0)
     end
     return checks
 end

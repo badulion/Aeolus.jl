@@ -338,6 +338,47 @@ skin's linearisation in ``T_{skin}`` and ``q_s``, not of MOST, whose own
 fluxes stay at or below ``H_{max}`` (worst 1.000) all day. The
 diagnostic exposes it; it does not fix it.
 
+## The boundary-layer height
+
+`boundary_layer_height(z, profile; method)` is the only ``z_i``
+diagnostic in the package (#247). It is applied in the same way to
+radiosonde profiles (`LargeScaleForcing.sounding_profiles`) and to LES
+output: the CBL harness `test/tke_cbl_driver.jl` delegates to it, and
+so do the diagnostics of the nesting epic (#246). It offers four
+methods, following the review of Seibert et al. (2000):
+
+* `:parcel`, the parcel method (Holzworth 1964). ``z_i`` is the first
+  height at which ``θ_v(z) = θ_v(z_1) + \text{excess}``, linearly
+  interpolated between levels. On a profile that is stable from the
+  ground it returns ``z_1``.
+* `:bulk_richardson`, the bulk Richardson number from the lowest level,
+  ``Ri_b(z) = (g/θ_{\rm ref})\,Δθ_v\,Δz / (Δu^2 + Δv^2 + b u_*^2)``,
+  with ``Ri_c = 0.25`` and ``b = 100`` (Vogelezang & Holtslag 1996).
+  It is evaluated as `gradient_richardson(N², S²)` of the layer
+  ``[z_1, z]``, so the shear floor of the previous section also covers
+  a calm profile.
+* `:max_gradient`, the midpoint of the layer with the largest
+  ``∂θ/∂z``.
+* `:min_flux`, the height of the minimum of the total heat flux
+  ``\overline{w'θ'}`` (Sullivan et al. 1998).
+
+**Measured.**
+
+* On a mixed layer with a 3 K jump at ``h`` = 800 m, sampled every
+  25 m, every profile method returns ``h`` to within one level.
+* On a linear stable profile `:parcel` returns the first level.
+* On the 24³ CBL of the TKE harness (1 h), `:min_flux` reproduces the
+  former local `zf[argmin(flux)]` bit for bit (900 m), and `:parcel` on
+  the mean θ gives 847 m (−5.9 %).
+* At Lindenberg at 12 UTC on 29 June 2019 (released 10:45 UTC),
+  `:parcel` and `:bulk_richardson` both give 1171 m and `:max_gradient`
+  gives 1149 m. Beyrich & Leps (2012) give a monthly-mean 12 UTC mixing
+  height of 1200–1400 m for early summer at Lindenberg.
+* The 00/06 UTC launches show surface-based inversions 79–329 m deep.
+  The GTS significant levels stored in IGRA do not resolve a nocturnal
+  boundary layer, so the test compares this inversion depth, not a
+  night ``z_i``.
+
 ## In the Berlin case
 
 The `turbulence_diag` addon writes the plane-mean ``N^2``, ``Ri_g`` and
@@ -348,6 +389,21 @@ the smoke case.
 
 ## References
 
+* Beyrich, F. & Leps, J.-P. (2012). An operational mixing height data
+  set from routine radiosoundings at Lindenberg: methodology.
+  *Meteorol. Z.*, 21, 337-348.
+* Holzworth, G. C. (1964). Estimates of mean maximum mixing depths in
+  the contiguous United States. *Mon. Wea. Rev.*, 92, 235-242.
+* Seibert, P., Beyrich, F., Gryning, S.-E., Joffre, S., Rasmussen, A. &
+  Tercier, P. (2000). Review and intercomparison of operational methods
+  for the determination of the mixing height. *Atmos. Environ.*, 34,
+  1001-1027.
+* Sullivan, P. P., Moeng, C.-H., Stevens, B., Lenschow, D. H. & Mayor,
+  S. D. (1998). Structure of the entrainment zone capping the convective
+  atmospheric boundary layer. *J. Atmos. Sci.*, 55, 3042-3064.
+* Vogelezang, D. H. P. & Holtslag, A. A. M. (1996). Evaluation and
+  model impacts of alternative boundary-layer height formulations.
+  *Boundary-Layer Meteorol.*, 81, 245-269.
 * Donda, J. M. M., van Hooijdonk, I. G. S., Moene, A. F., Jonker,
   H. J. J., van Heijst, G. J. F., Clercx, H. J. H. & van de Wiel,
   B. J. H. (2015). Collapse of turbulence in stably stratified channel

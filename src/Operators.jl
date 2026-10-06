@@ -25,13 +25,16 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_weno5!,
        box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+# #245: the FFTW planning policy (operators/fftw_planning.jl)
+export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 # Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
        sgs_tracer_diffusivity!,
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
-       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS,
+       sgs_tke!                 # N-inflow-b (#258)
 # Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
 export LagrangianDynamicSmagorinsky
 # Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
@@ -40,11 +43,11 @@ export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
 # Era VI (P55-c, #181): the tensorial scalar eddy diffusivity (operators/scalar_tensor.jl)
 export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
-       sgs_scalar_tensor, IsentropicDiffusion
+       sgs_scalar_tensor, IsentropicDiffusion, sgs_scalar_face_diffusivity
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
 # The one damping-profile implementation behind add_sponge! and the fringe (P59-d, #185).
 export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
-       DampingProfile, sponge_profile, damping_rate
+       DampingProfile, sponge_profile, damping_rate, damping_coordinates
 # Era VI (P55-d, #176): AMD and Vreman closures (operators/sgs_amd_vreman.jl)
 export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
        compute_vreman_νt!,
@@ -283,9 +286,27 @@ Rayleigh damping toward `f_ref` in the region `z ≥ z_start`. Damping rate
 grows smoothly `α(z) = α_max sin²(π/2 (z - z_start)/(z_top - z_start))`.
 Adds `-α(z)·(f - f_ref)` to `tf` for cells inside the sponge region.
 
+`f_ref` (#254) is
+
+* a number — the constant target of the Phase-7 velocity sponge;
+* a **level vector** of length `Nz` — one target per interior level of
+  `f`'s location, e.g. the initial θ̄(z) of a free-atmosphere top;
+* a `Field` or a halo-padded 3-D array of `f`'s shape — a full 3-D
+  target, e.g. the parent state a nest is damped toward.
+
+A `ForcingTable` or a time-dependent profile is evaluated into a level
+vector by `LargeScaleForcing.ReferenceDamping`, which also books the
+tendency integral. A constant level vector gives the same tendency as the
+equal number, bit for bit.
+
 The rate is [`damping_rate`](@ref) of [`sponge_profile`](@ref)`(α_max,
 z_start, z_top)`, the damping-profile implementation the fringe region of
-`Transition` (P59-d) shares.
+`Transition` (P59-d) shares; the arithmetic is the one kernel
+`FiniteVolume._add_damping!` on a `RegularGrid` and a `StretchedGrid`.
+
+References: Klemp, J. B. & Lilly, D. K. (1978), *J. Atmos. Sci.*, 35,
+78-107; Durran, D. R. (2010), *Numerical Methods for Fluid Dynamics*,
+2nd ed., §8.4.
 """
 add_sponge!(tf, f, α_max, z_start, z_top; f_ref = 0) =
     _add_sponge!(tf, f, α_max, z_start, z_top, f_ref, mesh(f))
@@ -372,17 +393,24 @@ The single gradient stencil of the SGS closures: [`_strain_at`](@ref) (and so
 the static and dynamic Smagorinsky ν_t) is built from it, and the AMD /
 Vreman, σ, gradient-Richardson and TKE-production closures of Era VI read the
 same tensor. Halos of `u, v, w` must be filled.
+
+`idz_off` (default `idz`) is the inverse of the vertical distance used by
+the off-diagonal `∂/∂z` terms: on a vertically stretched grid the
+diagonal `∂w/∂z` spans the cell (`idz = 1/Δz_c[k]`) while `∂u/∂z`, `∂v/∂z`
+span the two neighbouring centres, `idz_off = 2/(Δz_f[k] + Δz_f[k+1])`
+(the `StretchedGrid` Smagorinsky kernel, #151). With the default the
+uniform stencil is unchanged, bit for bit.
 """
-@inline function _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz)
+@inline function _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz, idz_off = idz)
     @inbounds begin
         du_dx = (u[i+1,j,k] - u[i,j,k]) * idx
         dv_dy = (v[i,j+1,k] - v[i,j,k]) * idy
         dw_dz = (w[i,j,k+1] - w[i,j,k]) * idz
         du_dy = ((u[i,j+1,k] + u[i+1,j+1,k]) - (u[i,j-1,k] + u[i+1,j-1,k])) * (0.25 * idy)
         dv_dx = ((v[i+1,j,k] + v[i+1,j+1,k]) - (v[i-1,j,k] + v[i-1,j+1,k])) * (0.25 * idx)
-        du_dz = ((u[i,j,k+1] + u[i+1,j,k+1]) - (u[i,j,k-1] + u[i+1,j,k-1])) * (0.25 * idz)
+        du_dz = ((u[i,j,k+1] + u[i+1,j,k+1]) - (u[i,j,k-1] + u[i+1,j,k-1])) * (0.25 * idz_off)
         dw_dx = ((w[i+1,j,k] + w[i+1,j,k+1]) - (w[i-1,j,k] + w[i-1,j,k+1])) * (0.25 * idx)
-        dv_dz = ((v[i,j,k+1] + v[i,j+1,k+1]) - (v[i,j,k-1] + v[i,j+1,k-1])) * (0.25 * idz)
+        dv_dz = ((v[i,j,k+1] + v[i,j+1,k+1]) - (v[i,j,k-1] + v[i,j+1,k-1])) * (0.25 * idz_off)
         dw_dy = ((w[i,j+1,k] + w[i,j+1,k+1]) - (w[i,j-1,k] + w[i,j-1,k+1])) * (0.25 * idy)
     end
     return ((du_dx, du_dy, du_dz),
@@ -403,14 +431,14 @@ Vorticity `ω = ∇×u` at the centre of cell `(i, j, k)`, from the same
 end
 
 """
-    _strain_at(u, v, w, i, j, k, idx, idy, idz) -> (S11, S22, S33, S12, S13, S23, |S|)
+    _strain_at(u, v, w, i, j, k, idx, idy, idz[, idz_off]) -> (S11, S22, S33, S12, S13, S23, |S|)
 
 Strain-rate components `Sᵢⱼ = ½(gᵢⱼ + gⱼᵢ)` and `|S| = √(2 SᵢⱼSᵢⱼ)` at the
 centre of cell `(i, j, k)`, from [`_velocity_gradient_at`](@ref). The stencil
 of [`compute_smagorinsky_νt!`](@ref) and [`compute_dynamic_smagorinsky_νt!`](@ref).
 """
-@inline function _strain_at(u, v, w, i, j, k, idx, idy, idz)
-    g = _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz)
+@inline function _strain_at(u, v, w, i, j, k, idx, idy, idz, idz_off = idz)
+    g = _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz, idz_off)
     S11 = g[1][1]; S22 = g[2][2]; S33 = g[3][3]
     S12 = 0.5 * (g[1][2] + g[2][1])
     S13 = 0.5 * (g[1][3] + g[3][1])
@@ -724,6 +752,8 @@ function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T
     return nothing
 end
 
+# The FFTW planning policy every plan_* call uses (#245).
+include("operators/fftw_planning.jl")
 # Explicit filters, energy spectrum and isotropic initialiser (Phase 54, P54-c).
 include("operators/filters.jl")
 include("operators/spectra.jl")
@@ -762,7 +792,7 @@ using .FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
 # The shared damping profile (sponge + fringe, P59-d #185).
 using .FiniteVolume: AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
                      DampingProfile, sponge_profile, in_damping, damping_rate,
-                     _add_damping!
+                     damping_coordinates, _add_damping!
 
 # -------------------------------------------------------------------------
 # Era VI: the stress-form SGS momentum divergence (wraps the kernels above).

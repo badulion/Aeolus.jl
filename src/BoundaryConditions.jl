@@ -8,7 +8,20 @@ using ..Fields: location, Field
 export AbstractBC, Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
        FieldBoundaryConditions, fill_halos!
 export NoSlipWall, is_wall, homogeneous_bcs     # P59-a (#172)
+export passive_scalar_bcs                        # qv faces (#254 + #261)
 export FreeStreamBoundary                        # P59-d (#185)
+export axis_poisson_bc                           # N-open-a (#251)
+export neighbor_index, mark_open_boundary_solids!   # N-open-d (#262)
+export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,   # N-open-b (#255)
+       AbstractBoundaryData, ProfileBoundaryData, FunctionBoundaryData,
+       boundary_values!, open_boundary_conditions, set_boundary_data!,
+       has_open_boundaries, open_boundary_states, update_open_boundaries!,
+       prepare_open_boundaries!, correct_boundary_mass_flux!, open_boundary_flux,
+       boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
+       open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
+       assert_open_face_correction, open_intermediate_velocity!
+export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow,      # N-open-c (#260)
+       rewind_open_boundaries!, mark_open_boundary_stage!
 
 """
     AbstractBC
@@ -25,6 +38,9 @@ Concrete types:
     velocity (no slip, or a moving wall).
   * [`FreeStreamBoundary`](@ref) — top face with zero shear and a
     prescribed normal (transpiration) velocity.
+  * [`OpenBoundary`](@ref) — lateral or top face whose velocities and
+    scalars come from boundary data (Dirichlet), with a Neumann `φ`, and
+    optionally a convective or Orlanski radiation outflow.
   * [`ValueBC`](@ref) — Dirichlet with prescribed value.
   * [`FluxBC`](@ref) — Neumann with prescribed flux `∂/∂n = f`.
 """
@@ -64,11 +80,28 @@ struct ValueBC{T} <: AbstractBC
 end
 
 """
-    FluxBC(f)
+    FluxBC(Γ)
 
-Neumann boundary condition: prescribed flux `∂/∂n = f` across the
-boundary. Currently applied only in the z-direction on cell-centered
-scalars — used for prescribed surface heat flux `w'θ'|₀`.
+Neumann boundary condition: a prescribed outward normal gradient
+`∂φ/∂n = Γ` of a cell-centred scalar. Supported as the **top** (z) face
+of a scalar's boundary conditions (N-parent-b, #254), above a wall or a
+no-flux bottom: the fixed-gradient top of a free atmosphere (PALM; DALES,
+Heus et al. 2010, Eq. 39), with `Γ = ∂θ/∂z`, usually the initial lapse
+rate. `fill_halos!` sets the ghost cells to
+
+    φ(N + h) = φ(N + 1 − h) + Γ · (z_c(N + h) − z_c(N + 1 − h)),     h = 1 … Hz,
+
+so the first ghost is `φ_N + Γ·Δz_f` with `Δz_f` the centre spacing
+across the top face (`dz` on a `RegularGrid`, the face spacing on a
+`StretchedGrid`), a linear profile of slope `Γ` is continued exactly
+into every halo layer, and a diffusion operator with diffusivity `κ`
+carries the flux `κΓ` (per unit area, into the domain for `Γ > 0` and
+warmer air above) through the top face.
+
+`FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = FluxBC(Γ))`.
+Velocity fields (`FaceX/Y/Z`) cannot take it. The homogeneous part
+(the operator an implicit solver iterates with, see
+[`homogeneous_bcs`](@ref)) is `FluxBC(0)`, the mirror (no-flux) halo.
 """
 struct FluxBC{T} <: AbstractBC
     f::T
@@ -92,7 +125,8 @@ or a Couette lid
 `FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = NoSlipWall(U, 0))`.
 A z-periodic face cannot be mixed with a non-periodic one, and a mixed
 bottom/top pair must be two walls (`:wall`, `:noslip`, `NoSlipWall`) or a
-wall below a [`FreeStreamBoundary`](@ref) top;
+wall below a [`FreeStreamBoundary`](@ref) or [`OpenBoundary`](@ref) top
+(open boxes are built with [`open_boundary_conditions`](@ref));
 anything else, e.g. `bottom = :noslip, top = :noflux`, throws an
 `ArgumentError` rather than failing at the first halo fill.
 """
@@ -121,9 +155,12 @@ function FieldBoundaryConditions(hkind::Symbol=:periodic,
 end
 
 # The z pairs `fill_halos!` has methods for: two faces of the same kind,
-# or any two impermeable walls (free slip and/or no slip, mixed allowed).
+# or any two impermeable walls (free slip and/or no slip, mixed allowed),
+# or a fixed-gradient (FluxBC) top above a wall or a no-flux bottom (#254).
 _z_pair_supported(b, t) = nameof(typeof(b)) === nameof(typeof(t)) ||
                           (is_wall(b) && is_wall(t))
+_z_pair_supported(b, t::FluxBC) = is_wall(b) || b isa NoFlux
+_z_pair_supported(b::FluxBC, t::FluxBC) = false
 
 _bc(bc::AbstractBC) = bc
 _bc(s::Symbol) = s === :periodic ? Periodic()        :
@@ -144,15 +181,28 @@ Populate halo cells of `field` according to `bcs`
 [`Location`](@ref Aeolus.Grids.Location) so that e.g. an impermeable wall
 zeros `w` at the wall face but mirrors `u, v`.
 """
-function fill_halos!(f::Field, bcs::FieldBoundaryConditions)
+function fill_halos!(f::Field, bcs::FieldBoundaryConditions; key = f.data)
     g   = f.mesh
     d   = f.data
     loc = location(f)
-    _fill_x!(d, bcs.west,   bcs.east,   g.Hx, g.Nx, loc)
-    _fill_y!(d, bcs.south,  bcs.north,  g.Hy, g.Ny, loc)
-    _fill_z!(d, bcs.bottom, bcs.top,    g.Hz, g.Nz, loc)
+    _fill_x!(d, bcs.west,   bcs.east,   g.Hx, g.Nx, loc, key)
+    _fill_y!(d, bcs.south,  bcs.north,  g.Hy, g.Ny, loc, key)
+    _fill_z!(d, bcs.bottom, bcs.top,    g.Hz, g.Nz, loc, g, key)
     return f
 end
+
+# `key` identifies the field to boundary conditions that hold per-field
+# data ([`OpenBoundary`](@ref)): a scratch field filled on behalf of
+# another (an implicit solver's search direction) passes that field's
+# array. Every other BC ignores it.
+_fill_x!(d, a, b, H, N, loc::Location, key) = _fill_x!(d, a, b, H, N, loc)
+_fill_y!(d, a, b, H, N, loc::Location, key) = _fill_y!(d, a, b, H, N, loc)
+_fill_z!(d, a, b, H, N, loc::Location, key) = _fill_z!(d, a, b, H, N, loc)
+
+# The z fill with the mesh `g` and the key: only the fixed-gradient top
+# (FluxBC, #254) needs the level heights; every other pair is the
+# mesh-free method (with the key, for an open top).
+_fill_z!(d, bot, top, Hz, Nz, loc::Location, g, key) = _fill_z!(d, bot, top, Hz, Nz, loc, key)
 
 # --- X direction ---------------------------------------------------------
 
@@ -247,6 +297,94 @@ function _fill_z!(d::AbstractArray{T,3}, ::ImpermeableWall, ::ImpermeableWall,
 end
 
 include("boundary_conditions/noslip_wall.jl")   # P59-a (#172)
+include("boundary_conditions/open_boundary.jl") # N-open-b (#255)
+include("boundary_conditions/outflow.jl")       # N-open-c (#260)
 include("boundary_conditions/free_stream.jl")   # P59-d (#185)
+include("boundary_conditions/gradient_top.jl")  # N-parent-b (#254)
+
+# =========================================================================
+# Pressure-Poisson boundary kind of a velocity face (N-open-a, #251)
+# =========================================================================
+
+"""
+    axis_poisson_bc(face::AbstractBC) -> Symbol
+
+The boundary condition the pressure correction `φ` of a projection method
+obeys on a face whose *velocity* boundary condition is `face`:
+
+* `:periodic` for [`Periodic`](@ref);
+* `:neumann` (`∂φ/∂n = 0`) for every face on which the normal velocity is
+  prescribed and the projection must leave it unchanged —
+  [`ImpermeableWall`](@ref), [`NoSlipWall`](@ref), [`NoFlux`](@ref),
+  and every [`AbstractOpenBoundary`](@ref) — [`FreeStreamBoundary`](@ref)
+  (prescribed transpiration) and [`OpenBoundary`](@ref), whose normal
+  velocity comes from boundary data. Because
+  `u^{n+1}·n = u^*·n − Δt ∂φ/∂n`, the face keeps its prescribed value
+  exactly when `∂φ/∂n = 0`.
+
+A new face type that prescribes the normal velocity extends this with
+`BoundaryConditions.axis_poisson_bc(::MyBC) = :neumann`. Types with no
+method (e.g. [`ValueBC`](@ref), [`FluxBC`](@ref), which are scalar
+conditions and say nothing about the normal velocity) throw an
+`ArgumentError`, so a pressure solver is never silently built for the
+wrong problem. `Simulations._default_solver` and the
+`poisson_axis_bcs(bcs)` of `PressureSolvers` read the six faces through
+this function.
+"""
+axis_poisson_bc(::Periodic)           = :periodic
+axis_poisson_bc(::ImpermeableWall)    = :neumann
+axis_poisson_bc(::NoSlipWall)         = :neumann
+axis_poisson_bc(::NoFlux)             = :neumann
+axis_poisson_bc(::AbstractOpenBoundary) = :neumann   # OpenBoundary, FreeStreamBoundary
+axis_poisson_bc(bc::AbstractBC) =
+    throw(ArgumentError("no pressure-Poisson boundary kind is defined for a " *
+                        "$(nameof(typeof(bc))) velocity face; define " *
+                        "BoundaryConditions.axis_poisson_bc(::$(nameof(typeof(bc))))"))
+
+# =========================================================================
+# The one BC-aware neighbour helper (N-open-d, #262)
+# =========================================================================
+
+"""
+    neighbor_index(mesh, bcs, i, axis; face = false, outside = :mirror) -> Int
+
+The interior index (`1…N` along `axis`, `1` = x, `2` = y, `3` = z) that
+stands for the neighbour index `i` of a stencil, according to the
+boundary conditions `bcs` of that axis:
+
+* inside the domain (`1 ≤ i ≤ N`; with `face = true`, a field staggered
+  along `axis`, `1 ≤ i ≤ N + 1`, whose `N + 1` is the far boundary face)
+  `i` itself;
+* across a [`Periodic`](@ref) axis, the wrapped index `mod1(i, N)`;
+* across any other face (a wall, [`NoFlux`](@ref), an
+  [`OpenBoundary`](@ref)): with `outside = :mirror` the mirror image
+  about the face — the cell-centred zero-gradient neighbour (`0 → 1`,
+  `N + 1 → N`), or for `face = true` the mirror about the boundary face
+  (`0 → 2`, `N + 2 → N`); with `outside = :none` the sentinel `0`
+  ("outside the domain: no neighbour").
+
+This replaces every hard-coded periodic wrap (`mod1(i ± 1, N)`) of code
+that must also run in an open (nested) domain: on a periodic axis it is
+`mod1` bit for bit, and on an open axis a stencil no longer reaches
+across the domain to the opposite face. With `face = true` the index
+`N + 1` of an open face is the boundary-face slot of the normal velocity
+(storage index `H + N + 1`, written by the open boundary), so
+`(u[i] + u[i+1])/2` at `i = N` reads the prescribed boundary value. A
+caller indexing the storage array adds the halo width `H`.
+"""
+function neighbor_index(m, bcs::FieldBoundaryConditions, i::Integer, axis::Integer;
+                        face::Bool = false, outside::Symbol = :mirror)
+    N, lo = axis == 1 ? (m.Nx, bcs.west) : axis == 2 ? (m.Ny, bcs.south) :
+            axis == 3 ? (m.Nz, bcs.bottom) :
+            throw(ArgumentError("neighbor_index: axis must be 1, 2 or 3, got $axis"))
+    lo isa Periodic && return mod1(i, N)
+    hi = face ? N + 1 : N
+    1 <= i <= hi && return Int(i)
+    outside === :none && return 0
+    outside === :mirror ||
+        throw(ArgumentError("neighbor_index: outside must be :mirror or :none, got :$outside"))
+    j = face ? (i < 1 ? 2 - i : 2hi - i) : (i < 1 ? 1 - i : 2N + 1 - i)
+    return clamp(j, 1, hi)
+end
 
 end # module

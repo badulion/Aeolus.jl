@@ -48,7 +48,7 @@ using ..Grids: AbstractMesh, RegularGrid, interior, CellCenter, FaceX, FaceY, Fa
 using ..Fields
 using ..Fields: Field, interior_view, mesh
 using ..BoundaryConditions
-using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!
+using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!, AbstractOpenBoundary, Periodic
 using ..Operators
 using ..Operators: advect_centered!, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    add_buoyancy!, add_coriolis!, compute_smagorinsky_νt!,
@@ -57,6 +57,7 @@ using ..Operators: advect_centered!, momentum_advect!, laplacian, ∂x, ∂y, �
 using ..Operators: compute_sgs!, add_sgs_momentum!, sgs_closure
 using ..Simulations
 using ..Simulations: BoussinesqSimulation
+using ..StretchedGrids: StretchedGrid
 
 export # --- Phase 26: reconstructions -------------------------------------
        weno_z5_left, weno_z5_right, weno_z7_left, weno_z7_right,
@@ -70,7 +71,11 @@ export # --- Phase 26: reconstructions -------------------------------------
        # --- Phase 28: conservative operators ------------------------------
        momentum_advect_skew!, advect_variance_conserving!,
        # --- Phase 28: conservation diagnostics ----------------------------
-       kinetic_energy_budget, scalar_variance_budget, enstrophy
+       kinetic_energy_budget, scalar_variance_budget, enstrophy,
+       # --- N-open-c (#260): advective flux through the open faces --------
+       boundary_scalar_flux,
+       # --- N-nest-e (#263): the flux through one face ---------------------
+       advective_face_flux
 
 # =========================================================================
 # 1. Smoothness indicators
@@ -588,7 +593,7 @@ end
     end
 end
 
-function _check_halo(r::AbstractReconstruction, g::RegularGrid)
+function _check_halo(r::AbstractReconstruction, g::Union{RegularGrid,StretchedGrid})
     H = required_halo(r)
     (g.Hx >= H && g.Hy >= H && g.Hz >= H) ||
         error("$(scheme_name(r)) advection requires halo ≥ $H in every direction " *
@@ -719,7 +724,7 @@ fluxes, first-order-upwind face fluxes, and the cell-centred limiter
 ratio. Pass it as `workspace = ws` to keep the positive-definite advection
 path allocation-free inside a time loop.
 """
-struct FluxLimiterWorkspace{T, M<:RegularGrid{T}}
+struct FluxLimiterWorkspace{T, M<:AbstractMesh{T}}
     Fx::Field{FaceX, T, Array{T,3}, M}
     Fy::Field{FaceY, T, Array{T,3}, M}
     Fz::Field{FaceZ, T, Array{T,3}, M}
@@ -729,11 +734,25 @@ struct FluxLimiterWorkspace{T, M<:RegularGrid{T}}
     ratio::Field{CellCenter, T, Array{T,3}, M}
 end
 
-function FluxLimiterWorkspace(m::RegularGrid)
+function FluxLimiterWorkspace(m::Union{RegularGrid,StretchedGrid})
     return FluxLimiterWorkspace(Field(FaceX(), m), Field(FaceY(), m), Field(FaceZ(), m),
                                 Field(FaceX(), m), Field(FaceY(), m), Field(FaceZ(), m),
                                 Field(CellCenter(), m))
 end
+
+# The positive-definite path on a vertically stretched grid (#259, the TKE
+# of the Berlin nesting parent): the face fluxes and the limiter are the
+# same, the vertical flux difference is divided by the local cell thickness
+# Δz_c[k]. Only the centred reconstruction is allowed there: the WENO / TENO
+# stencils assume uniform spacing.
+const _PosMesh = Union{RegularGrid,StretchedGrid}
+@inline _inv_dz(g::RegularGrid, k) = 1 / g.dz
+@inline _inv_dz(g::StretchedGrid, k) = @inbounds 1 / g.dzc[k]
+_check_stretched_recon(r, ::RegularGrid) = nothing
+_check_stretched_recon(::Centered2, ::StretchedGrid) = nothing
+_check_stretched_recon(r, ::StretchedGrid) =
+    throw(ArgumentError("advect_positive! on a StretchedGrid takes scheme = :centered only " *
+                        "(the $(scheme_name(r)) stencil assumes uniform spacing)"))
 
 # --- face-flux assembly ---------------------------------------------------
 # Fluxes are stored at their own face index over the interior *plus* the
@@ -742,7 +761,8 @@ end
 function _reconstructed_fluxes!(Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{FaceZ},
                                 u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                                 ϕ::Field{CellCenter}, r::AbstractReconstruction,
-                                g::RegularGrid)
+                                g::_PosMesh)
+    _check_stretched_recon(r, g)
     _check_halo(r, g)
     ii, jj, kk = interior(g)
     ϕd = ϕ.data
@@ -763,7 +783,7 @@ end
 
 function _upwind_fluxes!(Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{FaceZ},
                          u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                         ϕ::Field{CellCenter}, g::RegularGrid)
+                         ϕ::Field{CellCenter}, g::_PosMesh)
     ii, jj, kk = interior(g)
     ϕd = ϕ.data
     @inbounds for k in kk, j in jj, i in first(ii):last(ii)+1
@@ -783,11 +803,12 @@ end
 
 function _add_flux_divergence!(tend::Field{CellCenter},
                                Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{FaceZ},
-                               g::RegularGrid)
-    idx = 1/g.dx; idy = 1/g.dy; idz = 1/g.dz
+                               g::_PosMesh)
+    idx = 1/g.dx; idy = 1/g.dy
     ii, jj, kk = interior(g)
     fx = Fx.data; fy = Fy.data; fz = Fz.data; td = tend.data
     @inbounds for k in kk, j in jj, i in ii
+        idz = _inv_dz(g, k)
         td[i,j,k] -= (fx[i+1,j,k] - fx[i,j,k])*idx +
                      (fy[i,j+1,k] - fy[i,j,k])*idy +
                      (fz[i,j,k+1] - fz[i,j,k])*idz
@@ -796,7 +817,7 @@ function _add_flux_divergence!(tend::Field{CellCenter},
 end
 
 # one-layer face-normal periodic wrap of a cell-centred field
-function _wrap_one_layer!(f::Field{CellCenter}, g::RegularGrid)
+function _wrap_one_layer!(f::Field{CellCenter}, g::_PosMesh)
     ii, jj, kk = interior(g)
     d = f.data
     i1, i2 = first(ii), last(ii); j1, j2 = first(jj), last(jj); k1, k2 = first(kk), last(kk)
@@ -842,7 +863,7 @@ Returns `(flux_x, flux_y, flux_z)`.
 """
 function apply_positivity_limiter!(flux_x::Field{FaceX,T}, flux_y::Field{FaceY,T},
                                    flux_z::Field{FaceZ,T}, ϕ::Field{CellCenter,T},
-                                   dt::Real, m::RegularGrid{T};
+                                   dt::Real, m::_PosMesh;
                                    flux_lo = nothing,
                                    ratio::Union{Nothing,Field{CellCenter}} = nothing,
                                    bcs::Union{Nothing,FieldBoundaryConditions} = nothing) where {T}
@@ -854,9 +875,9 @@ function apply_positivity_limiter!(flux_x::Field{FaceX,T}, flux_y::Field{FaceY,T
     return _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt, m, R, Lx, Ly, Lz, bcs)
 end
 
-function _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt::T, m::RegularGrid{T},
+function _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt::T, m::_PosMesh,
                             R, Lx, Ly, Lz, bcs) where {T}
-    idx = 1/m.dx; idy = 1/m.dy; idz = 1/m.dz
+    idx = 1/m.dx; idy = 1/m.dy
     ii, jj, kk = interior(m)
     fx = flux_x.data; fy = flux_y.data; fz = flux_z.data
     ϕd = ϕ.data; Rd = R.data
@@ -864,6 +885,7 @@ function _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt::T, m::RegularGrid{T
 
     # --- pass 1: antidiffusive outflow budget per cell --------------------
     @inbounds for k in kk, j in jj, i in ii
+        idz = T(_inv_dz(m, k))
         lxe = _atlo(Lx, i+1, j, k); lxw = _atlo(Lx, i,   j, k)
         lyn = _atlo(Ly, i, j+1, k); lys = _atlo(Ly, i,   j, k)
         lzt = _atlo(Lz, i, j, k+1); lzb = _atlo(Lz, i, j, k  )
@@ -1286,7 +1308,7 @@ function kinetic_energy_budget(sim::BoussinesqSimulation{T};
     m = sim.mesh
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
 
     tu = Field(FaceX(), m); tv = Field(FaceY(), m); tw = Field(FaceZ(), m)
     au = Field(FaceX(), m); av = Field(FaceY(), m); aw = Field(FaceZ(), m)
@@ -1559,5 +1581,275 @@ struct _UpwindFirst <: AbstractReconstruction end
 @inline reconstruct_right(::_UpwindFirst, t::NTuple{1}) = t[1]
 required_halo(::_UpwindFirst) = 1
 scheme_name(::_UpwindFirst) = :upwind
+
+# =========================================================================
+# N-open-c (#260) — the advective flux of a scalar through the boundary
+# =========================================================================
+
+# Reconstruction descriptor of a flux-form scheme name.
+_flux_reconstruction(r::AbstractReconstruction; kwargs...) = r
+function _flux_reconstruction(name::Symbol; C_T::Real = 1e-5, p::Integer = 2)
+    name === :centered && return Centered2()
+    name === :upwind   && return _UpwindFirst()
+    name === :weno_js5 && return WENOJS(5)
+    name === :weno_z5  && return WENOZ(5, p)
+    name === :weno_z7  && return WENOZ(7, p)
+    name === :teno5    && return TENO(5; C_T = C_T)
+    name === :teno8    && return TENO(8; C_T = C_T)
+    throw(ArgumentError("boundary_scalar_flux: no flux-form face reconstruction for " *
+                        "scheme $(repr(name)); expected one of :centered, :upwind, " *
+                        ":weno_js5, :weno_z5, :weno_z7, :teno5, :teno8"))
+end
+
+@inline _wflux(::Nothing, k) = 1
+@inline _wflux(W::AbstractVector, k) = @inbounds W[k]
+
+"""
+    advective_face_flux(r, ϕd, veld, ax, i, j, k) -> F
+
+The advective flux `u_n ϕ_f` of a cell-centred scalar through **one**
+face: the face of storage index `(i, j, k)` normal to axis `ax` (`1, 2,
+3` for x, y, z), i.e. the face between the cells `(i-1, j, k)` and
+`(i, j, k)` along `ax`. `veld` is the storage array of the face-normal
+velocity (`u.data`, `v.data` or `w.data`), `ϕd` that of the scalar
+(halos filled), `r` a reconstruction descriptor (`Centered2()` is the
+Boussinesq core's `advect_centered!`; see [`boundary_scalar_flux`](@ref)
+for the scheme names), upwinded on the sign of `u_n`.
+
+This is the face flux every flux-form operator of this module uses, and
+the one source of [`boundary_scalar_flux`](@ref) (its boundary faces)
+and of the two-way nest's flux registers (its interface faces, N-nest-e
+#263).
+"""
+@inline function advective_face_flux(r, ϕd::AbstractArray, veld::AbstractArray,
+                                     ax::Int, i::Int, j::Int, k::Int)
+    @inbounds vel = veld[i, j, k]
+    return vel * _advective_face_value(r, ϕd, vel, ax, i, j, k)
+end
+
+# The face value `ϕ_f` of `advective_face_flux` (upwinded on `vel`), for the
+# callers that also need it on its own (the mass-flux correction share of
+# `boundary_scalar_flux`).
+@inline function _advective_face_value(r, ϕd::AbstractArray, vel, ax::Int,
+                                       i::Int, j::Int, k::Int)
+    ax == 1 && return _face_x(r, ϕd, i - 1, j, k, vel)
+    ax == 2 && return _face_y(r, ϕd, i, j - 1, k, vel)
+    return _face_z(r, ϕd, i, j, k - 1, vel)
+end
+
+"""
+    boundary_scalar_flux(sim, ϕ; scheme = :centered, bcs = sim.θ_bcs,
+                         weights = nothing, fill = true,
+                         diffusivity = nothing, levels = nothing,
+                         correction_levels = nothing)
+        -> (west, east, south, north, bottom, top, total)
+
+The flux of the cell-centred scalar `ϕ` **out of** the domain through
+each boundary face, `∮ ϕ u·n dA` (units `[ϕ] m³ s⁻¹`; with
+`weights = (Wc, Wf)` the weighted flux `∮ W ϕ u·n dA` of a sound-proof
+core, `Wc[k]` on the lateral faces, `Wf[k]` on the bottom and top, both
+indexed by the storage level `k`).
+
+The advective flux is formed from **the same face fluxes the advection
+scheme uses** — the face velocity of `sim.u, sim.v, sim.w` times the face
+value of `ϕ` reconstructed by `scheme` (`:centered` = `advect_centered!`,
+the Boussinesq core's θ and qv advection; `:upwind`, `:weno_js5`,
+`:weno_z5`, `:weno_z7`, `:teno5`, `:teno8` = the reconstructions of
+[`advect_weno_z!`](@ref), [`advect_teno!`](@ref) and
+[`advection_scheme`](@ref), or any reconstruction descriptor), upwinded on
+the sign of the face velocity. Because the scheme is in flux form, the
+interior fluxes telescope and
+
+    ∫ϕ dV (after a forward-Euler step) − ∫ϕ dV (before) = −Δt · total
+
+to round-off, for every scheme: this is the term that closes a scalar or
+energy budget of an open (nested) domain. With `fill = true` (default)
+the halos of `u, v, w` (with `sim.bcs`) and of `ϕ` (with `bcs`) are
+filled first, from the open-boundary buffers as the step itself fills
+them, so the result is the flux the next step uses. Faces of a periodic
+axis carry no flux (`0`); wall faces carry `0` because their normal
+velocity is zero.
+
+N-open-d (#262) adds three keywords for the budgets of an open domain:
+
+* `diffusivity = (ν = ν, κh = κh, κv = κv)` adds the **diffusive** flux
+  `−K ∂ϕ/∂n A` through every face of `bcs` that is an
+  [`AbstractOpenBoundary`](@ref) (a Dirichlet scalar halo carries a
+  gradient; mirror and wall halos carry none, and a fixed-gradient
+  `FluxBC` top is booked by its own meter), with the face diffusivity of
+  the core's kernels: `K = ν + ½(κ_in + κ_out)`, `κh` on the lateral
+  faces and `κv` on the top (`κh`, `κv` cell-centred `Field`s with
+  filled halos, or `nothing`; `κv` defaults to `κh`). An optional
+  `weights` entry weights the diffusive part instead of `weights`;
+* `levels` (a vector of length `Nz`) receives, per interior level `k`,
+  the (weighted) outward flux into that level — its lateral faces, plus
+  the top face for `k = Nz` and the bottom face for `k = 1` — so a budget
+  that weights levels differently (the air-heat ledger's ρ̄c_pΠ̄) can book
+  it level by level; the entries are added to;
+* `correction_levels` (length `Nz`) receives, per level, the part of the
+  advective outward flux carried by the last global mass-flux correction
+  `δ` of each open boundary set ([`correct_boundary_mass_flux!`](@ref
+  Aeolus.BoundaryConditions.correct_boundary_mass_flux!)): on every face
+  the correction adjusted, `−δ W ϕ_face A`. The data's own flux is the
+  rest.
+
+A mesh whose halo along an axis with an [`AbstractOpenBoundary`](@ref)
+face is shallower than `required_halo(scheme)` throws an `ArgumentError`.
+
+This is the only boundary-flux function of the code base: the
+nesting budgets (N-nest-d #261, N-nest-e #263), the open-boundary Berlin
+option (N-open-d #262) and the nested Berlin ledger (N-berlin-nest #265)
+use it.
+"""
+function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
+                              scheme = :centered, bcs::FieldBoundaryConditions = sim.θ_bcs,
+                              weights = nothing, fill::Bool = true,
+                              diffusivity = nothing, levels = nothing,
+                              correction_levels = nothing)
+    r = _flux_reconstruction(scheme)
+    g = mesh(ϕ)
+    vb = sim.bcs
+    H = required_halo(r)
+    for (side, face, Hs) in ((:west, vb.west, g.Hx), (:east, vb.east, g.Hx),
+                             (:south, vb.south, g.Hy), (:north, vb.north, g.Hy),
+                             (:top, vb.top, g.Hz))
+        face isa AbstractOpenBoundary && Hs < H &&
+            throw(ArgumentError("boundary_scalar_flux: the open face :$side has a halo of " *
+                                "$Hs layers, shallower than required_halo = $H of " *
+                                "$(scheme_name(r))"))
+    end
+    _check_halo(r, g)
+    levels === nothing || length(levels) == g.Nz ||
+        throw(DimensionMismatch("boundary_scalar_flux: levels needs Nz = $(g.Nz) entries"))
+    correction_levels === nothing || length(correction_levels) == g.Nz ||
+        throw(DimensionMismatch("boundary_scalar_flux: correction_levels needs Nz = $(g.Nz) entries"))
+    if fill
+        fill_halos!(sim.u, vb); fill_halos!(sim.v, vb); fill_halos!(sim.w, vb)
+        fill_halos!(ϕ, bcs)
+    end
+    Wc, Wf = weights === nothing ? (nothing, nothing) : weights
+    T = eltype(ϕ.data)
+    ϕd = ϕ.data; ud = sim.u.data; vd = sim.v.data; wd = sim.w.data
+    ii, jj, kk = interior(g)
+    k0 = first(kk) - 1
+    Ax = g.dy * g.dz; Ay = g.dx * g.dz; Az = g.dx * g.dy
+    # the diffusive part: ν + ½(κ_in + κ_out) on the open scalar faces
+    dν, Kh, Kv, Dc, Df = _diffusive_parts(diffusivity, Wc, Wf)
+    # the mass-flux correction of each open velocity face: (δ, corrected?(a, b, u_n))
+    cW, cE = _correction_of(vb.west, g), _correction_of(vb.east, g)
+    cS, cN = _correction_of(vb.south, g), _correction_of(vb.north, g)
+    cT = _correction_of(vb.top, g)
+    dW_ = diffusivity !== nothing && bcs.west isa AbstractOpenBoundary
+    dE_ = diffusivity !== nothing && bcs.east isa AbstractOpenBoundary
+    dS_ = diffusivity !== nothing && bcs.south isa AbstractOpenBoundary
+    dN_ = diffusivity !== nothing && bcs.north isa AbstractOpenBoundary
+    dT_ = diffusivity !== nothing && bcs.top isa AbstractOpenBoundary
+    fW = fE = fS = fN = fB = fT = zero(T)
+    @inline addl!(v, k, x) = (v === nothing || (@inbounds v[k - k0] += x); nothing)
+    if !(vb.west isa Periodic)
+        iw = first(ii); ie = last(ii) + 1
+        idx = 1 / g.dx
+        @inbounds for k in kk, (b, j) in enumerate(jj)
+            w = _wflux(Wc, k) * Ax
+            uw = ud[iw, j, k]; ue = ud[ie, j, k]
+            φw = _advective_face_value(r, ϕd, uw, 1, iw, j, k)
+            φe = _advective_face_value(r, ϕd, ue, 1, ie, j, k)
+            aw = -w * uw * φw; ae = w * ue * φe
+            if dW_
+                aw += _wflux(Dc, k) * Ax * (dν + 0.5 * (_κ(Kh, iw, j, k) + _κ(Kh, iw - 1, j, k))) *
+                      (ϕd[iw, j, k] - ϕd[iw - 1, j, k]) * idx
+            end
+            if dE_
+                ae -= _wflux(Dc, k) * Ax * (dν + 0.5 * (_κ(Kh, ie - 1, j, k) + _κ(Kh, ie, j, k))) *
+                      (ϕd[ie, j, k] - ϕd[ie - 1, j, k]) * idx
+            end
+            fW += aw; fE += ae
+            addl!(levels, k, aw + ae)
+            if correction_levels !== nothing
+                _corrected(cW, b, k - k0, -uw) && addl!(correction_levels, k, -cW[1] * w * φw)
+                _corrected(cE, b, k - k0, ue) && addl!(correction_levels, k, -cE[1] * w * φe)
+            end
+        end
+    end
+    if !(vb.south isa Periodic)
+        js = first(jj); jn = last(jj) + 1
+        idy = 1 / g.dy
+        @inbounds for k in kk, (a, i) in enumerate(ii)
+            w = _wflux(Wc, k) * Ay
+            vs = vd[i, js, k]; vn = vd[i, jn, k]
+            φs = _advective_face_value(r, ϕd, vs, 2, i, js, k)
+            φn = _advective_face_value(r, ϕd, vn, 2, i, jn, k)
+            as = -w * vs * φs; an = w * vn * φn
+            if dS_
+                as += _wflux(Dc, k) * Ay * (dν + 0.5 * (_κ(Kh, i, js, k) + _κ(Kh, i, js - 1, k))) *
+                      (ϕd[i, js, k] - ϕd[i, js - 1, k]) * idy
+            end
+            if dN_
+                an -= _wflux(Dc, k) * Ay * (dν + 0.5 * (_κ(Kh, i, jn - 1, k) + _κ(Kh, i, jn, k))) *
+                      (ϕd[i, jn, k] - ϕd[i, jn - 1, k]) * idy
+            end
+            fS += as; fN += an
+            addl!(levels, k, as + an)
+            if correction_levels !== nothing
+                _corrected(cS, a, k - k0, -vs) && addl!(correction_levels, k, -cS[1] * w * φs)
+                _corrected(cN, a, k - k0, vn) && addl!(correction_levels, k, -cN[1] * w * φn)
+            end
+        end
+    end
+    if !(vb.bottom isa Periodic)
+        kb = first(kk); kt = last(kk) + 1
+        wb_ = _wflux(Wf, kb) * Az; wt_ = _wflux(Wf, kt) * Az
+        dt_ = _wflux(Df, kt) * Az
+        idz = 1 / g.dz
+        @inbounds for (b, j) in enumerate(jj), (a, i) in enumerate(ii)
+            wb = wd[i, j, kb]; wt = wd[i, j, kt]
+            φt = _advective_face_value(r, ϕd, wt, 3, i, j, kt)
+            ab = -wb_ * advective_face_flux(r, ϕd, wd, 3, i, j, kb)
+            at = wt_ * wt * φt
+            if dT_
+                at -= dt_ * (dν + 0.5 * (_κ(Kv, i, j, kt - 1) + _κ(Kv, i, j, kt))) *
+                      (ϕd[i, j, kt] - ϕd[i, j, kt - 1]) * idz
+            end
+            fB += ab; fT += at
+            addl!(levels, kb, ab); addl!(levels, kt - 1, at)
+            if correction_levels !== nothing
+                _corrected(cT, a, b, wt) && addl!(correction_levels, kt - 1, -cT[1] * wt_ * φt)
+            end
+        end
+    end
+    return (west = fW, east = fE, south = fS, north = fN, bottom = fB, top = fT,
+            total = fW + fE + fS + fN + fB + fT)
+end
+
+# The diffusive part of boundary_scalar_flux: (ν, κh, κv, Wc, Wf).
+_diffusive_parts(::Nothing, Wc, Wf) = (0.0, nothing, nothing, Wc, Wf)
+function _diffusive_parts(d::NamedTuple, Wc, Wf)
+    ν = Float64(get(d, :ν, 0.0))
+    κh = get(d, :κh, nothing)
+    κv = get(d, :κv, κh)
+    Dc, Df = haskey(d, :weights) && d.weights !== nothing ? d.weights : (Wc, Wf)
+    return ν, κh, κv, Dc, Df
+end
+@inline _κ(::Nothing, i, j, k) = 0.0
+@inline _κ(κ::Field, i, j, k) = @inbounds κ.data[i, j, k]
+
+# The last mass-flux correction of an open velocity face: (δ, mode, fluid)
+# of its normal-velocity plane, or nothing (closed face, or no correction).
+function _correction_of(face, g)
+    face isa BoundaryConditions.OpenBoundary || return nothing
+    st = face.state
+    (st.correction === :none || iszero(st.δ)) && return nothing
+    name = face.side in (:west, :east) ? :u : face.side in (:south, :north) ? :v : :w
+    p = face.planes[name]
+    return (st.δ, st.correction === :outflow_only, p.fluid)
+end
+# Whether the face at tangential interior indices (a, b), with outward
+# normal velocity `un` (after the correction), was adjusted by it.
+@inline _corrected(::Nothing, a, b, un) = false
+@inline function _corrected(c::Tuple, a, b, un)
+    δ, outflow_only, fluid = c
+    @inbounds fluid[a, b] || return false
+    return !outflow_only || un + δ > 0
+end
 
 end # module

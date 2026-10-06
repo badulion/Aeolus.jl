@@ -8,10 +8,23 @@ options go under the coupling name in `options`.
 
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
-| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of the sound-proof core's own CG |
+| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`, built with the per-axis Poisson kinds of the case's velocity `bcs` (`case_poisson_axes(cfg, mesh)`, #251: periodic x, y and Neumann z by default, all-Neumann for `lateral = :open` or a nested child; smoke-checked); `tol`, `maxit` of the sound-proof core's own CG, whose axes the core derives from the same `bcs` |
 | `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184), `:reynolds_stress` (`sgs_reynolds_stress`, `PrognosticSGS.ReynoldsStressClosure`, the differential Reynolds-stress closure, #188; not with `timestepper = :imex`); all but `:tke` and `:reynolds_stress` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` are each wrapped in `StabilityCorrected` (P55-e, #187; `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`); `:tke` and `:amd` carry their own stability treatment (TKE length scale, AMD buoyancy term) and are not wrapped, nor are `:vreman`, `:sigma` and `:reynolds_stress` (its stresses carry the buoyancy production directly) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177; with a stability-corrected `:sgs` closure κh on the x, y faces and its κv on the z faces, as for θ) |
+
+**Lateral boundaries.** The case is periodic in `x` and `y` by default
+(`cfg.lateral = :periodic`, bit for bit the case before #262). Open
+(Dirichlet-from-boundary-data) faces exist since N-open-b (#255:
+`OpenBoundary`, `open_boundary_conditions`, the `AbstractBoundaryData`
+contract and the global mass-flux correction, called from every core
+through `update_open_boundaries!`), with the radiation outflow of
+N-open-c (#260) and the one boundary-flux function
+`boundary_scalar_flux`. `cfg.lateral = :open` (N-open-d, #262) opens the
+four sides and the top of the case: see
+[Open boundaries](berlin_ledgers.md#Open-boundaries) below. It is a transitional option:
+N-berlin-nest (#265) feeds the same faces from the parent run and makes
+the nested configuration the default.
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every
@@ -89,7 +102,9 @@ constraint weights, giving `(1/W)∇·(W κt ∇q)`, which conserves `Σ W q`;
 on the anelastic core that is the ledger's `Σ ρ̄ q`. The diffusion books
 its change of water as `sgs_diffusion` (zero to round-off) plus
 `density_redistribution`. Its `smoke_check` asserts that the diffusion
-alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`. Before
+alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`.
+The core runs with `moisture = false`, so qv and ql are case tracers and
+are mixed here, with the same κ as every other tracer. Before
 #177 no tracer was diffused at all: they saw only the implicit
 dissipation of WENO, a missing-physics bug. `sgs_diffusion = false`
 reproduces that transport for comparison. Measured over the first hour of the summer flagship (06:00–07:00,
@@ -105,6 +120,27 @@ kg/m², `sgs_diffusion` −6.1e-19 kg/m². Cost: +1.0 ms per advected tracer
 and step (7 tracers: `scalar_advection` 57.3 → 64.3 ms/step), +0.9 ms for
 the pollutant; the masked kernel takes 0.58 ms per call against 0.10 ms
 unmasked.
+
+*One shared κ, also under `:amd` (#234).* AMD offers a per-scalar
+diffusivity from each scalar's own gradient
+(`Operators.sgs_tracer_diffusivity!`, forwarded by `SolidMaskedSGS`); the
+stage does not use it, by design. Real high-Re turbulence mixes all
+passive scalars alike (one turbulent Schmidt number). Per-scalar κ would
+mix NO, NO₂ and O₃ differently and move them off the photostationary
+state, and mix qv and ql differently, so `q_t` and `θ_l` would no longer
+be mixed as conserved variables. Its zero-gradient fallback
+(`κ = ν_t/Pr_t = 3ν_t`) gives a uniform or flat field the largest κ of all
+and over-mixes plume edges, and the adaptive step (`sgs_cfl_diagnostics`)
+sees θ's κ_t, not the tracers'. An earlier probe of the `:amd` run measured
+cell-wise κ differences against θ's of 54–64 % for qv and 66–92 % for the
+chemistry, 28 % between NO and NO₂, 196 % between qv and ql, and a
+fallback maximum of 5.9 against 2.6 m²/s. The design test
+(`test/berlin_numerics.jl`, *one shared κ*) pins it: under `:amd` the
+stage is bit for bit the stage with every tracer forced onto `sim.κt`, and
+on its 12-step state AMD's own κ would differ from θ's by 77–80 %
+(`Σ|Δκ|/Σκ`) for qv and the chemistry, 24 % between NO and NO₂, with ql
+(zero there) at the fallback 3ν_t everywhere, maximum 5.08 against
+2.71 m²/s. Rationale in full: [the SGS theory page](../theory/sgs.md#Closure-contract).
 
 * **Pressure solvers.** All three solve the same 7-point Laplacian with
   the same boundary conditions (periodic, periodic, Neumann); the
@@ -161,7 +197,8 @@ unmasked.
   anisotropic minimum-dissipation and Vreman closures (see [the SGS
   theory page](../theory/sgs.md#Anisotropic-minimum-dissipation-and-Vreman-closures)).
   AMD runs with C = 0.3, its own κ_t and the buoyancy term with the
-  core's g/θ₀. It is set to zero in the building cells: there the
+  core's g/θ₀; the case's tracers are diffused with that κ_t (θ's), not
+  with AMD's per-scalar diffusivity (see *One shared κ* above). It is set to zero in the building cells: there the
   resolved velocity is ≈ 0, so the denominator ∂_l u_m ∂_l u_m vanishes
   while θ still varies, and the buoyancy term gave ν_t up to 19 m²/s
   inside buildings, against a fluid maximum of 1.6 m²/s. That only
@@ -277,9 +314,24 @@ cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # 1 h of simulated tim
                  options = Dict{Symbol,Any}(:timestep_adaptive => (C_advective = 0.5, dt_max = 10.0)))
 ```
 
+**Stretched vertical grid (#151): a stated exception.** The
+`BoussinesqSimulation` core runs on a `StretchedGrids.StretchedGrid`. See
+[Stretched vertical grid](@ref) for the operators, the direct
+stretched-z Poisson solve and the measured accuracy and cost. The Berlin
+child keeps its uniform `RegularGrid`, and there is no `:stretched` case
+option. Such an option would be non-default, which would put
+`StretchedGrids` in `BERLIN_OPTION_ONLY` and grow a frozen list.
+StretchedGrids is instead coupled by default through the nested parent
+in N-berlin-nest (#265), which removes `:StretchedGrids` from
+`BERLIN_PENDING`. The parent's vertical layout is
+`surface_refined_faces(dz_surface = 25, z_uniform = 500, z_top = 3000,
+ratio = 1.08, dz_max = 100)`: 53 levels, 20 of them uniform. One step of
+192 × 192 × 53 costs 0.225 s on one thread, against 0.526 s for
+192 × 192 × 120 at a uniform 25 m.
+
 **The sound-proof cores** take the case's reference state as their
 base state: `case.ref.state`, built by `build_reference` (θ̄(z) =
-`initial_θ(cfg)` integrated hydrostatically from `cfg.p_surface` with
+`initial_θ(cfg)` integrated hydrostatically from `case_surface_pressure(cfg)` with
 the MoistThermodynamics constants, see [Reference
 state](berlin_case.md#Reference-state-and-moist-buoyancy)), so there is one ρ̄(z) per
 case — the one the couplings convert fluxes with and the ledger

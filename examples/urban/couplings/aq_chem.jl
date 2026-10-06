@@ -223,8 +223,7 @@ function _aq_deposition_velocities!(c::AQChem, case)
             for s in AQ_DEPOSITING; c.v_d[s][i, j] = 0.0; end
             continue
         end
-        U = hypot(0.5 * (u[i, j, k] + u[mod1(i + 1, Nx), j, k]),
-                  0.5 * (v[i, j, k] + v[i, mod1(j + 1, Ny), k]))
+        U = hypot(centre_wind(case.sim, i, j, k)...)   # BC-aware faces (#262)
         q = qv === nothing ? 0.0 : qv[i, j, k]
         z0 = c.z0m[i, j]
         # θ is referred to 1000 hPa (#131): the skin's potential temperature

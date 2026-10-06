@@ -34,14 +34,15 @@ const T_AVG = T_END - 3600
 const CLOSURES = Symbol.(split(get(ENV, "CLOSURES", "brown94,none,lilly"), ","))
 const REF = sbl_read_csv(joinpath(@__DIR__, "data", "gabls1_reference.csv"))
 
-function run_closure(stab)
+function run_closure(stab, ck = nothing)
     c = sbl_case(; N = (N, N, N), sgs_stability = stab)
     series = NamedTuple[]
     cb = function (c)
         c.nsteps % 50 == 0 || return
         push!(series, (t = c.sim.t, u_star = sqrt(hypot(c.τx, c.τy)), wθ = mean(c.wθ)))
     end
-    st = sbl_run!(c, T_END; average_from = T_AVG, callback = cb)
+    st = sbl_run!(c, T_END; average_from = T_AVG, callback = cb,
+                  checkpoint = ck, checkpoint_components = (series = series,))
     @printf("%-8s N=%d: h = %5.1f m  u* = %.3f m/s  w'θ'0 = %.5f K m/s (H = %5.1f W/m²)  LLJ %.2f m/s at %3.0f m  L = %4.0f m  (%d steps, %.0f s)\n",
             stab, N, st.h, st.u_star, st.wθ0, st.H0, st.S_max, st.z_jet, st.L, st.nsteps, st.wall_time)
     return (stab = stab, st = st, series = series)
@@ -60,8 +61,11 @@ function cached(stab)
                 stab, N, r.st.h, r.st.u_star, r.st.wθ0, r.st.H0, r.st.S_max, r.st.z_jet)
         return r
     end
-    r = run_closure(stab)
+    # periodic checkpoints, automatic resume (#245); made before the case
+    ck = sbl_checkpoints("gabls1_N$(N)_$(stab)")
+    r = run_closure(stab, ck)
     serialize(path, r)
+    finish_checkpoints!(ck)
     return r
 end
 results = [cached(s) for s in CLOSURES]
