@@ -22,7 +22,7 @@ using Aeolus.Config
 using Aeolus.SimulationDriver
 using Aeolus.Fields: set!, interior_view
 using Aeolus.IO: read_run_toml, diagnostics_path
-using Aeolus.NetCDFIO: nc_open, nc_read, nc_attributes
+using Aeolus.NCIO: NCDataset
 
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
@@ -270,10 +270,11 @@ end
     res = sim_run(cfg)
     dir = joinpath(res.folder.path, "output")
     @test readdir(dir) == ["fields_00000000$(n).nc" for n in (0, 2, 4, 6)]    # dt = 5 s
-    nc = nc_open(joinpath(dir, "fields_000000006.nc"))
-    @test only(nc_attributes(nc)["t"]) == 30.0
-    @test nc_read(nc, "theta") == Float32.(interior_view(res.obj.sim.θ))
-    @test nc_read(nc, "u") == Float32.(interior_view(res.obj.sim.u))
+    NCDataset(joinpath(dir, "fields_000000006.nc")) do nc
+        @test only(nc.attrib["t"]) == 30.0
+        @test nc["theta"][:, :, :] == Float32.(interior_view(res.obj.sim.θ))
+        @test nc["u"][:, :, :] == Float32.(interior_view(res.obj.sim.u))
+    end
     # no fields: no output folder
     res = sim_run(sim_cfg("dry_convective_bl", 2, ["grid.size=[16,16,16]"]))
     @test !isdir(joinpath(res.folder.path, "output"))

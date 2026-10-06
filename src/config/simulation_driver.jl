@@ -31,7 +31,7 @@ using ..Operators: StaticSmagorinsky, DynamicSmagorinsky, VremanClosure, SigmaMo
 using ..TurbulenceStability: BrownEtAl1994, LillyCutoff, ShortTail, LongTail
 using ..IO: IO, RunFolder, CheckpointSchedule, StepperState, record_step!, previous_dt, resume!,
             maybe_checkpoint!, with_monitor, monitored_step!, check_blowup!, output_dir
-using ..NetCDFIO: nc_create, nc_defdim!, nc_defvar!, nc_endef!, nc_write!, nc_close!
+using ..NCIO: nc_create, nc_defvar!
 using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, Optional,
                 Path, section, option!, register_driver!
 
@@ -399,15 +399,15 @@ function _write_output(r::SimulationRun, dir, step)
     path = joinpath(dir, string("fields_", lpad(step, 9, '0'), ".nc"))
     nc = nc_create(path; attributes = Dict("t" => Float64(sim.t), "step" => Int32(step),
                                            "note" => "cell-index arrays: face fields at their own staggered positions"))
-    nc_defdim!(nc, "x", m.Nx); nc_defdim!(nc, "y", m.Ny); nc_defdim!(nc, "z", m.Nz)
-    for f in r.cfg.output.fields
-        nc_defvar!(nc, f, Float32, ("x", "y", "z"))
+    try
+        nc.dim["x"] = m.Nx; nc.dim["y"] = m.Ny; nc.dim["z"] = m.Nz
+        for f in r.cfg.output.fields
+            v = nc_defvar!(nc, f, Float32, ("x", "y", "z"))
+            v[:, :, :] = Float32.(Array(interior_view(getproperty(sim, _FIELD_OF[f]))))
+        end
+    finally
+        close(nc)
     end
-    nc_endef!(nc)
-    for f in r.cfg.output.fields
-        nc_write!(nc, f, Array(interior_view(getproperty(sim, _FIELD_OF[f]))))
-    end
-    nc_close!(nc)
     return path
 end
 
