@@ -188,3 +188,54 @@ end
     r = roundtrip_check(vcfg("dycoms_rf01"))
     @test r.fields_equal && r.config_equal && r.results_equal
 end
+
+# ---------------------------------------------------------------------------
+# cbc_decay, patchy_surface, dns_decay
+# ---------------------------------------------------------------------------
+
+# (guarded: the serial runtests.jl includes these files from other tests too)
+isdefined(@__MODULE__, :cbc_benchmark) || include(joinpath(@__DIR__, "cbc_benchmark_driver.jl"))
+isdefined(@__MODULE__, :patchy_les) ||
+    include(joinpath(@__DIR__, "..", "examples", "validation", "patchy_surface", "driver.jl"))
+isdefined(@__MODULE__, :dns_decay) || include(joinpath(@__DIR__, "fixtures", "dns_decay.jl"))
+
+@testset "cbc_decay, patchy_surface, dns_decay drivers equal the old in-code runs, bit for bit" begin
+    # cbc_decay.jl before CFG-e: cbc_benchmark(closure; N) for closure in (dynamic, smagorinsky, none)
+    runs = load_sweep(vcfg("cbc_decay"))
+    @test [c.sgs.closure for (_, c) in runs] == [:dynamic, :smagorinsky, :none]
+    @test all(c.grid.n == 64 && c.benchmark.seeds == [1, 2, 3] && c.benchmark.spinup == 2 for (_, c) in runs)
+    # (at 16³ the decay from tU0/M = 42 to 171 is 16 steps of CFL 0.5, after the spin-up)
+    old = cbc_benchmark(:smagorinsky; N = 16, seeds = [1], spinup = 1)
+    r = val_run("cbc_decay", "smagorinsky", ["grid.n=16", "benchmark.seeds=[1]", "benchmark.spinup=1"])
+    @test r.obj.result.nsteps == old.nsteps >= 15
+    @test fields_bitwise(Base.invokelatest(state_fields, r.obj),
+                         (E_42 = old.E_les[1], E_98 = old.E_les[2], E_171 = old.E_les[3]))
+    @test r.obj.result.K_ratio == old.K_ratio
+
+    # patchy_surface_les.jl before CFG-e: patchy_les(; A_grid..., case...) + patchy_run!(; A_run...),
+    # at 16 × 8 × 8 for 20 steps of dt = 3 s; the tiled and the windy strips
+    for (label, kw) in (("A_tiled", (λ = 800.0, T_hot = 310.0, T_cool = 300.0, mode = :tiled)),
+                        ("A_windy_strips_3200", (λ = 3200.0, T_hot = 310.0, T_cool = 300.0,
+                                                 Ug = 5.0, f_cor = 1e-4)))
+        pl = patchy_les(; Nx = 16, Ny = 8, Nz = 8, Lx = 3200.0, Ly = 1600.0, Lz = 1600.0, kw...)
+        res = patchy_run!(pl; t_end = 60.0, dt = 3.0, t_avg = 30.0, every = 5)
+        r = val_run("patchy_surface", label, ["grid.size=[16,8,8]", "stepper.end_time=60.0",
+                                              "stepper.average_from=30.0"])
+        s = pl.sim
+        @test fields_bitwise(Base.invokelatest(state_fields, r.obj),
+                             (u = s.u.data, v = s.v.data, w = s.w.data, p = s.p.data, θ = s.θ.data))
+        @test r.obj.result.les === res.les && r.obj.result.heat_error === res.heat_error
+    end
+    labels = [m.label for (m, _) in load_sweep(vcfg("patchy_surface"))]
+    @test length(labels) == 13 && count(startswith("A_"), labels) == 7
+
+    # apriori_sgs.jl before CFG-e: dns_decay(; N), here at 16³ to t = 0.3
+    d = dns_decay(; N = 16, t_end = 0.3)
+    r = val_run("apriori_sgs", nothing, ["grid.n=16", "dns.end_time=0.3"])
+    @test r.obj.result.nsteps == d.nsteps >= 5
+    s = d.sim
+    @test fields_bitwise(Base.invokelatest(state_fields, r.obj),
+                         (u = s.u.data, v = s.v.data, w = s.w.data, p = s.p.data))
+    # the fixture's energy budget closes in the driver's run too
+    @test maximum(abs, r.obj.result.budget_err) < 0.05
+end
