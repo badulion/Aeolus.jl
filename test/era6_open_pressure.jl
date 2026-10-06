@@ -265,12 +265,14 @@ end
 
     # Bit for bit: the channel default is the construction of 3a23110 —
     # DCT-II along z, rfft along (x, y), the same eigenvalues, 1/(2Nz).
+    # Plans use the one FFTW policy (#245), as the solver does: the same
+    # planner gives the same plans, so the comparison stays bitwise.
     T = Float64; Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
     rb = zeros(T, Nx, Ny, Nz); rb2 = similar(rb); hb = zeros(Complex{T}, Nx ÷ 2 + 1, Ny, Nz)
-    pdf = FFTW.plan_r2r(rb, FFTW.REDFT10, 3; flags = FFTW.MEASURE)
-    pdi = FFTW.plan_r2r(rb, FFTW.REDFT01, 3; flags = FFTW.MEASURE)
-    pff = FFTW.plan_rfft(rb, (1, 2); flags = FFTW.MEASURE)
-    pfi = FFTW.plan_irfft(hb, Nx, (1, 2); flags = FFTW.MEASURE)
+    pdf = FFTW.plan_r2r(rb, FFTW.REDFT10, 3; flags = fftw_planner_flags())
+    pdi = FFTW.plan_r2r(rb, FFTW.REDFT01, 3; flags = fftw_planner_flags())
+    pff = FFTW.plan_rfft(rb, (1, 2); flags = fftw_planner_flags())
+    pfi = FFTW.plan_irfft(hb, Nx, (1, 2); flags = fftw_planner_flags())
     kx² = [4 / g.dx^2 * sin(π * (m - 1) / Nx)^2 for m in 1:Nx ÷ 2 + 1]
     ky² = [4 / g.dy^2 * sin(π * (n - 1) / Ny)^2 for n in 1:Ny]
     kz² = [4 / g.dz^2 * sin(π * (l - 1) / (2Nz))^2 for l in 1:Nz]

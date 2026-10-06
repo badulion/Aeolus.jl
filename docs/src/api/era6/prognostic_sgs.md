@@ -13,7 +13,11 @@ on [Prognostic SGS TKE (Deardorff–Moeng)](../../theory/sgs_tke.md).
 The mixing length is capped at ``κ d`` with the distance of
 `IBM.wall_distance`, and Moeng's factor 3.9 on ``c_ε`` applies at
 `IBM.first_level_cells` (both documented with `Aeolus.IBM` on
-[Physics modules](../physics.md)).
+[Physics modules](../physics.md)). Where a wall model replaces the SGS
+stencil flux through immersed walls (`WallModels.immersed_walls`, the
+Berlin facades), `attach_immersed_walls!` (or the `walls` keyword) makes
+the shear production there the wall stress times the resolved shear
+instead of the stencil's (#232).
 
 ```julia
 using Aeolus

@@ -27,8 +27,10 @@ using Aeolus.Radiation: apply_radiative_cooling!
 using Aeolus.Operators: advect_centered!
 using Aeolus.AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using Aeolus.IBM: SolidMask, mark_solid!
+using Aeolus.StretchedGrids: surface_refined_faces
 using Printf
 using Statistics: mean
+import Random
 
 "Directory of the Berlin case (examples/urban)."
 const URBAN_DIR = @__DIR__
@@ -48,13 +50,27 @@ for f in COUPLING_FILES
     include(joinpath(@__DIR__, "couplings", f))
 end
 
+# The parent domain of the nest (#246): its tiled surface (#249), the
+# parent case (#259)
+include(joinpath(@__DIR__, "parent", "surface.jl"))
+include(joinpath(@__DIR__, "parent", "config.jl"))
+include(joinpath(@__DIR__, "parent", "case.jl"))
+
 export CaseConfig, SCENARIOS, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        Ledger, ledger_report, surface_budget, water_budget, heat_budget, add_heat!,
        AirHeatMeter, air_heat, register_surface_factory!,
+       SurfaceSite, class_surface, class_roughness,
+       ParentLanduse, read_parent_landuse, child_footprint, parent_fractions,
+       parent_morphometry, parent_forcing_level, ParentColumn, ParentSurface,
+       build_parent_surface, parent_tile_forcings, step_parent_column!, parent_offline_forcing,
        CaseReference, ref_pressure, ref_density, ref_exner, surface_pressure,
-       θ_top_gradient, θ_top_bc, TopHeatFlux,
-       case_boundary_conditions, case_boundary_data, case_scalar_bcs, OpenBoundaryHeat
+       initial_θ, initial_qv, case_sounding, case_start_time, case_surface_pressure,
+       initial_inversion_height, case_weekday,
+       θ_top_gradient, θ_top_bc, TopHeatFlux, hydrostatic_pressure,
+       case_boundary_conditions, case_boundary_data, case_scalar_bcs, OpenBoundaryHeat,
+       ParentConfig, ParentCase, build_parent, step_parent!, run_parent!, parent_record!,
+       parent_zi, parent_heat_flux, mean_heat_flux, parent_mesh, parent_faces, parent_size, coarsen_landuse
 
 end # module BerlinCase

@@ -49,10 +49,15 @@
 # with load) plus ≈ 5 min of statistics (58 s at 160³). Peak memory
 # ≈ 8–10 GB: max RSS 1.00, 1.68, 2.60 GB at 96, 128, 160³ with the
 # solver's work arrays dropped before the statistics (≈ 500 B per cell).
-# Measured (test/fixtures/dns256_apriori.toml): 1264 steps to t = 3.85
-# (ε peak at t = 3.60), wall_s = 7397 s = 2.05 h on one core (the solver
-# is single-threaded); max RSS 9.9 GB as printed by this script, not
-# stored in the TOML.
+# Measured (test/fixtures/dns256_apriori.toml, regenerated after #205 on
+# 2026-10-05, #235): 1264 steps to t = 3.85 (ε peak at t = 3.60),
+# wall_s = 5671 s = 1.58 h of DNS on one core (the solver is
+# single-threaded) plus 195 s of statistics; max RSS 9.81 GB as printed
+# by this script, not stored in the TOML. The pre-#205 record took
+# 7397 s (2.05 h) and 9.9 GB for the same 1264 steps on a busier machine.
+#
+# Checkpoints: an interrupted run (killed job, reboot) resumes from
+# examples/validation/output/checkpoints/dns<N>/ when started again.
 #
 # The equivalent through the suite: AEOLUS_DNS256=1 julia --project=.
 # test/runtests.jl (the regeneration testset of era6_apriori_sgs.jl).
@@ -69,7 +74,14 @@ out = length(ARGS) >= 2 ? ARGS[2] :
                  joinpath(@__DIR__, "output", "dns$(N)_apriori.toml")
 
 kw = length(ARGS) >= 3 ? (; ν = parse(Float64, ARGS[3])) : (;)
-total = @elapsed rec, d = generate_dns_apriori(; N, out, kw...)
+# Periodic checkpoints with automatic resume (#245): a killed run restarts
+# from its newest checkpoint, bit for bit (every 30 min of wall clock by
+# default; AEOLUS_CHECKPOINT=0 / _EVERY / _SECONDS / _KEEP override). Made
+# before the DNS so the folder's FFTW wisdom is loaded before any plan. At
+# 256³ one checkpoint is ≈ 1.15 GB (8 fields with halos), 2 are kept.
+ck = driver_checkpoints(joinpath(@__DIR__, "output", "checkpoints", "dns$(N)"))
+total = @elapsed rec, d = generate_dns_apriori(; N, out, checkpoint = ck, kw...)
+finish_checkpoints!(ck)
 @printf("total %.0f s (DNS %.0f s, statistics %.0f s); max RSS %.2f GB\n",
         total, d.wall, total - d.wall, Sys.maxrss() / 2^30)
 

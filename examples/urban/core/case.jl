@@ -76,11 +76,28 @@ end
 hour_of_day(cfg::CaseConfig, t::Real) = (cfg.start_h + t / 3600) % 24.0
 
 """
+    case_weekday(cfg) -> 1 … 7
+
+Day of the week of `cfg.date` (1 = Monday … 7 = Sunday, the convention
+of `BuildingEnergy.WeeklySchedule`): 29 June 2019 is a Saturday (6).
+"""
+case_weekday(cfg::CaseConfig) =
+    mod(Aeolus.LargeScaleForcing._days_from_civil(cfg.date...) + 3, 7) + 1   # 1970-01-01: Thursday
+
+"""
     solar_position_at(cfg, hour) -> SolarPosition
 
-The sun at local clock `hour` of `cfg.date` over the case anchor.
+The sun at local clock `hour` of `cfg.date` over the case anchor. The
+solar-position algorithm (`SolarGeometry.solar_time`) takes UTC, so the
+local clock is converted with `cfg.utc_offset` (local = UTC + offset; 2 h
+in summer, CEST). Before #259 the local hour was passed as UTC and the sun
+of the case ran `utc_offset` hours early (solar noon at 11:07 CEST instead
+of 13:07 on 29 June 2019). A local hour before `utc_offset` is a UTC hour
+of the previous day (a negative hour of `cfg.date`; the Julian day handles
+it).
 """
 function solar_position_at(cfg::CaseConfig, hour::Real)
+    hour = hour - cfg.utc_offset
     hh = floor(Int, hour)
     mi = floor(Int, (hour - hh) * 60)
     se = (hour - hh - mi / 60) * 3600
@@ -178,8 +195,7 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     # advected (kept for bit-for-bit; the microphysics-slot issue fixes it).
     qv = ensure_tracer!(case, :qv; advect = true, positive = true,
                         units = "kg kg-1", long_name = "water vapour specific humidity")
-    qv0, Hq = cfg.qv0, cfg.qv_scale
-    set!(qv, (x, y, z) -> qv0 * exp(-z / Hq))
+    set!(qv, initial_qv(cfg))                        # the sounding, or the idealised profile
     ensure_tracer!(case, :ql; advect = true, positive = true,
                    units = "kg kg-1", long_name = "cloud liquid water")
     ensure_tracer!(case, :qr; units = "kg kg-1", long_name = "rain water")

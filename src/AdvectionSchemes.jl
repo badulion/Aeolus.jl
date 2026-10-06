@@ -57,6 +57,7 @@ using ..Operators: advect_centered!, momentum_advect!, laplacian, ∂x, ∂y, �
 using ..Operators: compute_sgs!, add_sgs_momentum!, sgs_closure
 using ..Simulations
 using ..Simulations: BoussinesqSimulation
+using ..StretchedGrids: StretchedGrid
 
 export # --- Phase 26: reconstructions -------------------------------------
        weno_z5_left, weno_z5_right, weno_z7_left, weno_z7_right,
@@ -590,7 +591,7 @@ end
     end
 end
 
-function _check_halo(r::AbstractReconstruction, g::RegularGrid)
+function _check_halo(r::AbstractReconstruction, g::Union{RegularGrid,StretchedGrid})
     H = required_halo(r)
     (g.Hx >= H && g.Hy >= H && g.Hz >= H) ||
         error("$(scheme_name(r)) advection requires halo ≥ $H in every direction " *
@@ -721,7 +722,7 @@ fluxes, first-order-upwind face fluxes, and the cell-centred limiter
 ratio. Pass it as `workspace = ws` to keep the positive-definite advection
 path allocation-free inside a time loop.
 """
-struct FluxLimiterWorkspace{T, M<:RegularGrid{T}}
+struct FluxLimiterWorkspace{T, M<:AbstractMesh{T}}
     Fx::Field{FaceX, T, Array{T,3}, M}
     Fy::Field{FaceY, T, Array{T,3}, M}
     Fz::Field{FaceZ, T, Array{T,3}, M}
@@ -731,11 +732,25 @@ struct FluxLimiterWorkspace{T, M<:RegularGrid{T}}
     ratio::Field{CellCenter, T, Array{T,3}, M}
 end
 
-function FluxLimiterWorkspace(m::RegularGrid)
+function FluxLimiterWorkspace(m::Union{RegularGrid,StretchedGrid})
     return FluxLimiterWorkspace(Field(FaceX(), m), Field(FaceY(), m), Field(FaceZ(), m),
                                 Field(FaceX(), m), Field(FaceY(), m), Field(FaceZ(), m),
                                 Field(CellCenter(), m))
 end
+
+# The positive-definite path on a vertically stretched grid (#259, the TKE
+# of the Berlin nesting parent): the face fluxes and the limiter are the
+# same, the vertical flux difference is divided by the local cell thickness
+# Δz_c[k]. Only the centred reconstruction is allowed there: the WENO / TENO
+# stencils assume uniform spacing.
+const _PosMesh = Union{RegularGrid,StretchedGrid}
+@inline _inv_dz(g::RegularGrid, k) = 1 / g.dz
+@inline _inv_dz(g::StretchedGrid, k) = @inbounds 1 / g.dzc[k]
+_check_stretched_recon(r, ::RegularGrid) = nothing
+_check_stretched_recon(::Centered2, ::StretchedGrid) = nothing
+_check_stretched_recon(r, ::StretchedGrid) =
+    throw(ArgumentError("advect_positive! on a StretchedGrid takes scheme = :centered only " *
+                        "(the $(scheme_name(r)) stencil assumes uniform spacing)"))
 
 # --- face-flux assembly ---------------------------------------------------
 # Fluxes are stored at their own face index over the interior *plus* the
@@ -744,7 +759,8 @@ end
 function _reconstructed_fluxes!(Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{FaceZ},
                                 u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                                 ϕ::Field{CellCenter}, r::AbstractReconstruction,
-                                g::RegularGrid)
+                                g::_PosMesh)
+    _check_stretched_recon(r, g)
     _check_halo(r, g)
     ii, jj, kk = interior(g)
     ϕd = ϕ.data
@@ -765,7 +781,7 @@ end
 
 function _upwind_fluxes!(Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{FaceZ},
                          u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                         ϕ::Field{CellCenter}, g::RegularGrid)
+                         ϕ::Field{CellCenter}, g::_PosMesh)
     ii, jj, kk = interior(g)
     ϕd = ϕ.data
     @inbounds for k in kk, j in jj, i in first(ii):last(ii)+1
@@ -785,11 +801,12 @@ end
 
 function _add_flux_divergence!(tend::Field{CellCenter},
                                Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{FaceZ},
-                               g::RegularGrid)
-    idx = 1/g.dx; idy = 1/g.dy; idz = 1/g.dz
+                               g::_PosMesh)
+    idx = 1/g.dx; idy = 1/g.dy
     ii, jj, kk = interior(g)
     fx = Fx.data; fy = Fy.data; fz = Fz.data; td = tend.data
     @inbounds for k in kk, j in jj, i in ii
+        idz = _inv_dz(g, k)
         td[i,j,k] -= (fx[i+1,j,k] - fx[i,j,k])*idx +
                      (fy[i,j+1,k] - fy[i,j,k])*idy +
                      (fz[i,j,k+1] - fz[i,j,k])*idz
@@ -798,7 +815,7 @@ function _add_flux_divergence!(tend::Field{CellCenter},
 end
 
 # one-layer face-normal periodic wrap of a cell-centred field
-function _wrap_one_layer!(f::Field{CellCenter}, g::RegularGrid)
+function _wrap_one_layer!(f::Field{CellCenter}, g::_PosMesh)
     ii, jj, kk = interior(g)
     d = f.data
     i1, i2 = first(ii), last(ii); j1, j2 = first(jj), last(jj); k1, k2 = first(kk), last(kk)
@@ -844,7 +861,7 @@ Returns `(flux_x, flux_y, flux_z)`.
 """
 function apply_positivity_limiter!(flux_x::Field{FaceX,T}, flux_y::Field{FaceY,T},
                                    flux_z::Field{FaceZ,T}, ϕ::Field{CellCenter,T},
-                                   dt::Real, m::RegularGrid{T};
+                                   dt::Real, m::_PosMesh;
                                    flux_lo = nothing,
                                    ratio::Union{Nothing,Field{CellCenter}} = nothing,
                                    bcs::Union{Nothing,FieldBoundaryConditions} = nothing) where {T}
@@ -856,9 +873,9 @@ function apply_positivity_limiter!(flux_x::Field{FaceX,T}, flux_y::Field{FaceY,T
     return _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt, m, R, Lx, Ly, Lz, bcs)
 end
 
-function _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt::T, m::RegularGrid{T},
+function _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt::T, m::_PosMesh,
                             R, Lx, Ly, Lz, bcs) where {T}
-    idx = 1/m.dx; idy = 1/m.dy; idz = 1/m.dz
+    idx = 1/m.dx; idy = 1/m.dy
     ii, jj, kk = interior(m)
     fx = flux_x.data; fy = flux_y.data; fz = flux_z.data
     ϕd = ϕ.data; Rd = R.data
@@ -866,6 +883,7 @@ function _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt::T, m::RegularGrid{T
 
     # --- pass 1: antidiffusive outflow budget per cell --------------------
     @inbounds for k in kk, j in jj, i in ii
+        idz = T(_inv_dz(m, k))
         lxe = _atlo(Lx, i+1, j, k); lxw = _atlo(Lx, i,   j, k)
         lyn = _atlo(Ly, i, j+1, k); lys = _atlo(Ly, i,   j, k)
         lzt = _atlo(Lz, i, j, k+1); lzb = _atlo(Lz, i, j, k  )
@@ -1288,7 +1306,7 @@ function kinetic_energy_budget(sim::BoussinesqSimulation{T};
     m = sim.mesh
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
 
     tu = Field(FaceX(), m); tv = Field(FaceY(), m); tw = Field(FaceZ(), m)
     au = Field(FaceX(), m); av = Field(FaceY(), m); aw = Field(FaceZ(), m)

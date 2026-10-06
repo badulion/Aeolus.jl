@@ -126,8 +126,6 @@ _coord(x0, Δ, H, i, staggered::Bool) = x0 + (i - H - (staggered ? 1 : 0.5)) * �
 function OpenPlane(name::Symbol, loc::Location, side::Symbol, m::RegularGrid{T};
                    mode::Symbol = :value) where {T}
     ax, high = _side_axis(side)
-    side === :bottom && throw(ArgumentError("an open bottom face is not supported " *
-                                            "(the bottom is a wall)"))
     normal = _normal_loc(loc) == ax
     if normal
         mode in (:value, :odd) ||
@@ -402,7 +400,9 @@ _loc_of(name::Symbol) = name === :u ? FaceX() : name === :v ? FaceY() :
 A box with open faces fed by `data` (an [`AbstractBoundaryData`](@ref)).
 `x` and `y` are `:open` or `:periodic` (both faces of an axis alike);
 `top` is `:open` or a wall (`:wall`, `:noslip`, `NoSlipWall`); `bottom`
-is a wall. `fields` names the fields with boundary data: the three
+is a wall, or — for a nest child that does not reach the ground
+(N-nest-d, #261) — `:open` with `top = :open`, or `:periodic` with
+`top = :periodic` (a child spanning its parent's periodic z extent). `fields` names the fields with boundary data: the three
 velocity components and any cell-centred scalar the simulation holds
 under that name (`:θ`, `:qv`). `correction` is the mode of
 [`correct_boundary_mass_flux!`](@ref) (`:uniform`, `:outflow_only` or
@@ -474,8 +474,15 @@ function open_boundary_conditions(m::RegularGrid{T}, data;
     end
     w_ = x === :open ? face(:west)  : Periodic(); e_ = x === :open ? face(:east)  : Periodic()
     s_ = y === :open ? face(:south) : Periodic(); n_ = y === :open ? face(:north) : Periodic()
-    b_ = _bc(bottom)
-    is_wall(b_) || throw(ArgumentError("the bottom of an open box must be a wall"))
+    if bottom === :open || bottom === :periodic
+        top === bottom || throw(ArgumentError("bottom = :$bottom needs top = :$bottom"))
+    end
+    if bottom === :periodic
+        return FieldBoundaryConditions(w_, e_, s_, n_, Periodic(), Periodic())
+    end
+    b_ = bottom === :open ? face(:bottom) : _bc(bottom)
+    (b_ isa OpenBoundary || is_wall(b_)) ||
+        throw(ArgumentError("the bottom of an open box must be a wall, :open or :periodic"))
     t_ = top === :open ? face(:top) : _bc(top)
     (t_ isa OpenBoundary || is_wall(t_)) ||
         throw(ArgumentError("top must be :open or a wall"))
@@ -595,6 +602,13 @@ function _fill_z!(d, bot::_ZWall, top::OpenBoundary, Hz, Nz, loc::Location, key)
     _fill_open_face!(d, top, Hz, Nz, loc, key)
     return d
 end
+# z: open below and above — a nest child that sits inside its parent
+# (N-nest-d, #261), not on the ground.
+function _fill_z!(d, bot::OpenBoundary, top::OpenBoundary, Hz, Nz, loc::Location, key)
+    _fill_open_face!(d, bot, Hz, Nz, loc, key)
+    _fill_open_face!(d, top, Hz, Nz, loc, key)
+    return d
+end
 
 # =========================================================================
 # Solid obstacles at an open face (N-open-d, #262)
@@ -708,7 +722,7 @@ pinned_face_indices(::FaceX, m::RegularGrid, b::FieldBoundaryConditions) =
 pinned_face_indices(::FaceY, m::RegularGrid, b::FieldBoundaryConditions) =
     (0, b.south isa AbstractOpenBoundary ? m.Hy + 1 : 0, 0)
 pinned_face_indices(::FaceZ, m::RegularGrid, b::FieldBoundaryConditions) =
-    (0, 0, is_wall(b.bottom) ? m.Hz + 1 : 0)
+    (0, 0, (is_wall(b.bottom) || b.bottom isa AbstractOpenBoundary) ? m.Hz + 1 : 0)
 
 # =========================================================================
 # The global boundary mass-flux correction
@@ -750,7 +764,7 @@ function _foreach_face(g, p::OpenPlane{T}, m::RegularGrid{T}, W) where {T}
         end
     else
         A = m.dx * m.dy
-        kt = m.Hz + m.Nz + 1
+        kt = p.high ? m.Hz + m.Nz + 1 : m.Hz + 1      # top face, or an open bottom (nest)
         wt = T(_wtop(W, kt))
         for (b, j) in enumerate(m.Hy+1:m.Hy+m.Ny), (a, i) in enumerate(m.Hx+1:m.Hx+m.Nx)
             p.fluid[a, b] || continue
@@ -1017,11 +1031,13 @@ end
 Check, rather than assume, that the pressure correction leaves the
 prescribed normal velocity of the west/south open faces (interior slots
 `H+1`, which the correction loop visits) unchanged: `∂φ/∂n` must be
-exactly zero there (the mirror halo of `φ`). East, north and top faces
-lie in the halo and are never corrected. Throws an `ErrorException`
+exactly zero there (the mirror halo of `φ`); with `dφdz` also an open
+bottom (a nest child inside its parent, N-nest-d #261). East, north and
+top faces lie in the halo and are never corrected. Throws an `ErrorException`
 otherwise.
 """
-function assert_open_face_correction(b::FieldBoundaryConditions, dφdx, dφdy)
+function assert_open_face_correction(b::FieldBoundaryConditions, dφdx, dφdy,
+                                     dφdz = nothing)
     has_open_boundaries(b) || return nothing
     m = dφdx.mesh
     jj = m.Hy+1:m.Hy+m.Ny; kk = m.Hz+1:m.Hz+m.Nz; ii = m.Hx+1:m.Hx+m.Nx
@@ -1033,6 +1049,11 @@ function assert_open_face_correction(b::FieldBoundaryConditions, dφdx, dφdy)
     if b.south isa OpenBoundary
         all(iszero, view(dφdy.data, ii, m.Hy + 1, kk)) ||
             error("open boundary: the pressure correction at the south face is not zero " *
+                  "(φ halo is not Neumann); the prescribed inflow would be altered")
+    end
+    if dφdz !== nothing && b.bottom isa OpenBoundary
+        all(iszero, view(dφdz.data, ii, jj, m.Hz + 1)) ||
+            error("open boundary: the pressure correction at the bottom face is not zero " *
                   "(φ halo is not Neumann); the prescribed inflow would be altered")
     end
     return nothing

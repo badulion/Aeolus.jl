@@ -67,7 +67,8 @@ export StretchedGrid, TerrainFollowingGrid,
        zfaces, zcenters, cell_thickness, center_spacing,
        metric_jacobian, terrain_height, physical_heights,
        set_physical!,
-       hydrostatic_balance_error
+       hydrostatic_balance_error,
+       surface_refined_faces, StretchedPoissonSolver
 
 # =========================================================================
 # StretchedGrid
@@ -217,6 +218,58 @@ function _faces_tanh_both(::Type{T}, Nz::Int, z0::T, Lz::T, β::Real) where {T}
     end
     zf[1]    = z0
     zf[Nz+1] = z0 + Lz
+    return zf
+end
+
+"""
+    surface_refined_faces(; dz_surface, z_uniform, z_top, ratio = 1.08,
+                          dz_max = Inf, z0 = 0) -> Vector{Float64}
+
+Interior face heights (length `Nz + 1`, from `z0` to `z_top`) of the
+standard ABL vertical grid: uniform `dz_surface` from `z0` up to
+`z_uniform`, then geometric growth by `ratio` per level, capped at
+`dz_max`, up to `z_top`. Pass the result as `stretching = (:custom, zf)`
+with `size[3] = length(zf) - 1` and `extent[3] = z_top - z0`.
+
+`z_uniform - z0` must be a whole number of `dz_surface` cells. The stretched
+part takes the smallest number of cells that keeps every cell `≤ dz_max`
+and is then scaled by one common factor `f ≤ 1` so that the last face
+lands exactly on `z_top` (`f ≥ 1 - dz_max/(z_top - z_uniform)`; the ratio
+between stretched cells stays `ratio`, the first stretched cell is
+`f·ratio·dz_surface`).
+
+This is the layout of the Berlin nesting parent (#246): `dz_surface = 25`,
+uniform to `z_uniform ≥ 500` m so that the ~400 m child sits in the
+uniform region, stretched to `z_top = 3000` m. With `ratio = 1.08`,
+`dz_max = 100` it has 53 levels (20 uniform + 33 stretched). Keep
+`ratio ≲ 1.1` (see [`grid_stretching_ratio`](@ref)).
+"""
+function surface_refined_faces(; dz_surface::Real, z_uniform::Real, z_top::Real,
+                               ratio::Real = 1.08, dz_max::Real = Inf, z0::Real = 0)
+    dz0 = Float64(dz_surface); zu = Float64(z_uniform); zt = Float64(z_top)
+    zb = Float64(z0); r = Float64(ratio); dzm = Float64(dz_max)
+    dz0 > 0 || throw(ArgumentError("dz_surface must be > 0, got $dz0"))
+    r ≥ 1 || throw(ArgumentError("ratio must be ≥ 1, got $r"))
+    dzm ≥ dz0 || throw(ArgumentError("dz_max ($dzm) must be ≥ dz_surface ($dz0)"))
+    zb ≤ zu < zt || throw(ArgumentError("need z0 ≤ z_uniform < z_top, got $zb, $zu, $zt"))
+    nu = round(Int, (zu - zb) / dz0)
+    isapprox(zb + nu * dz0, zu; atol = 1e-9 * max(1.0, abs(zu))) ||
+        throw(ArgumentError("z_uniform - z0 = $(zu - zb) is not a whole number of " *
+                            "dz_surface = $dz0 cells"))
+    zf = [zb + (k - 1) * dz0 for k in 1:nu+1]
+    zf[end] = zu
+    # natural geometric growth until the column reaches z_top
+    dzs = Float64[]
+    dz = dz0; acc = 0.0
+    while acc < zt - zu - 1e-9 * zt
+        dz = min(dz * r, dzm)
+        push!(dzs, dz); acc += dz
+    end
+    f = (zt - zu) / acc                 # ≤ 1: the overshoot of the last cell is shared
+    for d in dzs
+        push!(zf, zf[end] + f * d)
+    end
+    zf[end] = zt
     return zf
 end
 
@@ -1570,11 +1623,15 @@ cross terms vanish, `J = 1`, `G^{σσ} = 1`, and the result is identical to
 the stretched-grid Laplacian.
 
 !!! note "Face-located inputs"
-    For `L ∈ {FaceX, FaceY, FaceZ}` the cell-centre metrics are reused
-    rather than re-interpolated to the staggered position; that is an
-    `O(Δ·∂²h)` approximation of the metric (exact for flat or
-    constant-slope terrain) and is intended for diffusion-type terms, not
-    for the pressure Poisson operator, which acts on cell-centred fields.
+    For `L ∈ {FaceX, FaceY, FaceZ}` the cell-centre terrain metrics (`J`,
+    `σ_x`, `σ_y`) are reused rather than re-interpolated to the staggered
+    position; that is an `O(Δ·∂²h)` approximation of the metric (exact for
+    flat or constant-slope terrain) and is intended for diffusion-type
+    terms, not for the pressure Poisson operator, which acts on
+    cell-centred fields. The *vertical* σ-metrics do follow the location:
+    a z-face field has control volumes of height `Δσ_f[k]` and neighbours
+    `Δσ_c` apart (before #151 the centre metrics were used for it too, a
+    first-order error on a stretched base grid even over flat terrain).
 
 !!! note "Allocation"
     Three flux scratch arrays of `totalsize(g)` are allocated per call.
@@ -1583,7 +1640,7 @@ the stretched-grid Laplacian.
 """
 function _laplacian!(out::Field{L}, f::Field{L}, g::TerrainFollowingGrid{T}) where {L<:Location, T}
     dx, dy = g.dx, g.dy
-    dzc, dzf = g.base.dzc, g.base.dzf
+    dzc, dzf = _σ_metrics(g.base, L())
     ii, jj, kk = interior(g)
     i1, i2 = first(ii), last(ii)
     j1, j2 = first(jj), last(jj)
@@ -1620,6 +1677,18 @@ function _laplacian!(out::Field{L}, f::Field{L}, g::TerrainFollowingGrid{T}) whe
                            (Fs[i,j,k+1] - Fs[i,j,k]) / dzc[k]) / g.J[i,j,k]
     end
     return out
+end
+
+# The vertical σ-metrics seen by a field at `L`: (control-volume height,
+# spacing to the neighbour below), indexed like `dzc`, `dzf`. Centre-located
+# in z (CellCenter, FaceX, FaceY): the grid's own. On z-faces: the volume of
+# face k is Δσ_f[k] and its neighbour below sits Δσ_c[k-1] away.
+_σ_metrics(b::StretchedGrid, ::Union{CellCenter,FaceX,FaceY}) = (b.dzc, b.dzf)
+function _σ_metrics(b::StretchedGrid{T}, ::FaceZ) where {T}
+    n = length(b.dzc)
+    vol = T[b.dzf[k] for k in 1:n]
+    sp  = T[k == 1 ? b.dzc[1] : b.dzc[k-1] for k in 1:n+1]
+    return vol, sp
 end
 
 # --- physics kernels carrying the terrain metric ------------------------
@@ -1759,5 +1828,9 @@ function hydrostatic_balance_error(θ::Field, p::Field, grid::AbstractMesh = mes
     end
     return worst
 end
+
+# #151 — the Boussinesq core and its pressure solve on a StretchedGrid
+include("stretched/boussinesq.jl")
+include("stretched/poisson.jl")
 
 end # module

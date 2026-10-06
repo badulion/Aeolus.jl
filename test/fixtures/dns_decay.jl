@@ -88,9 +88,15 @@ With `past_peak > 0` the run continues beyond `t_end` until it is
 `past_peak` time units past the maximum of ε (capped at `t_max`); the
 peak moves later as Re_λ grows (file header), so a fixed `t_end` is
 before it at large N. The default (`past_peak = 0`) stops at `t_end`.
+
+`checkpoint` (an `IO.CheckpointSchedule`, #245) resumes the run from the
+newest checkpoint of its folder (the fields and the history above) and
+writes periodic checkpoints; the resumed run is the uninterrupted one bit
+for bit (`wall` then counts this process only).
 """
 function dns_decay(; N::Integer = 48, seed::Integer = 1, t_end::Real = DNS_T_END, cfl::Real = 0.5,
-                   ν::Real = DNS_NU48 * (48 / N)^(4 / 3), past_peak::Real = 0, t_max::Real = 3t_end)
+                   ν::Real = DNS_NU48 * (48 / N)^(4 / 3), past_peak::Real = 0, t_max::Real = 3t_end,
+                   checkpoint = nothing)
     L = 2π
     mesh = RegularGrid(; size = (N, N, N), extent = (L, L, L), halo = (3, 3, 3))
     sim = BoussinesqSimulation(mesh; ν = ν)
@@ -105,6 +111,8 @@ function dns_decay(; N::Integer = 48, seed::Integer = 1, t_end::Real = DNS_T_END
         t = [0.0]; K = [kinetic_energy(sim) / L^3]; ε = [_dns_epsilon(sim, lap)]
         S = [velocity_derivative_skewness(sim)]
         budget_err = Float64[]
+        hist = (t = t, K = K, ε = ε, S = S, budget_err = budget_err)
+        checkpoint === nothing || resume!(checkpoint, sim; components = hist)
         running() = sim.t < t_end - 1e-12 ||
                     (past_peak > 0 && sim.t < min(t[argmax(ε)] + past_peak, t_max) - 1e-12)
         while running()
@@ -114,6 +122,8 @@ function dns_decay(; N::Integer = 48, seed::Integer = 1, t_end::Real = DNS_T_END
             push!(t, sim.t); push!(K, kinetic_energy(sim) / L^3); push!(ε, _dns_epsilon(sim, lap))
             push!(S, velocity_derivative_skewness(sim))
             push!(budget_err, -(K[end] - K[end-1]) / dt / (0.5 * (ε[end] + ε[end-1])) - 1)
+            checkpoint === nothing || maybe_checkpoint!(checkpoint, sim; step = length(t) - 1,
+                                                        components = hist)
         end
     end
     kmax = π / mesh.dx

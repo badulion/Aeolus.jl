@@ -2,11 +2,14 @@ module IO
 
 # Phase 9 — I/O infrastructure.
 #
-# We ship two lightweight facilities using only the Julia standard
-# library:
+# We ship lightweight facilities using only the Julia standard library:
 #
-#   * Snapshot / restart via `Serialization` — binary Julia format.
-#     Portable across machines running the same Julia version.
+#   * Field snapshots via `Serialization` (`write_snapshot`) — binary Julia
+#     format, portable across machines running the same Julia version.
+#   * Full-state, versioned checkpoints with bitwise restart (#245,
+#     io/checkpoint.jl): fields with halos, SGS closure memory, wall-model
+#     and other component state, stepper and RNG state, FFTW provenance;
+#     periodic checkpoints with automatic resume (`CheckpointSchedule`).
 #   * Configuration via `TOML` — human-editable namelists.
 #
 # A NetCDF-backed writer (interoperable with Python / VAPOR / Paraview)
@@ -20,6 +23,13 @@ using ..Fields: Field, interior_view, location
 using ..Simulations: BoussinesqSimulation
 
 export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
+# #245: full-state checkpoints (io/checkpoint.jl)
+export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint_state!,
+       fieldwise_checkpoint_state, restore_fieldwise!, checkpoint_fields,
+       StepperState, record_step!, previous_dt,
+       CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
+       latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
+       driver_checkpoints, finish_checkpoints!
 
 # -------------------------------------------------------------------------
 # Snapshots — a dictionary of interior arrays + metadata, serialized.
@@ -28,10 +38,14 @@ export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
 """
     write_snapshot(path, sim; extra = Dict())
 
-Serialize the interior of `sim.u, sim.v, sim.w, sim.p, sim.θ` plus the
-scalar time / clock to `path`. The `extra` dict is copied into the
+Serialize the interior of `sim.u, sim.v, sim.w, sim.p, sim.θ, sim.qv` plus
+the scalar time / clock to `path`. The `extra` dict is copied into the
 snapshot for user-defined metadata (dt, step number, tags, …).
 Round-trips through [`read_snapshot`](@ref).
+
+A snapshot is **output, not a restart file**: it has no closure memory,
+halos or stepper state, and [`restart!`](@ref) refuses it. Use
+[`checkpoint!`](@ref) to continue a run.
 """
 function write_snapshot(path::AbstractString, sim::BoussinesqSimulation;
                         extra::AbstractDict = Dict{Symbol,Any}())
@@ -69,36 +83,9 @@ function read_snapshot(path::AbstractString)
     end
 end
 
-"""
-    checkpoint!(sim, path)
-
-Alias for `write_snapshot(path, sim)` — recording the current state so
-`restart!` can resume from it.
-"""
-checkpoint!(sim::BoussinesqSimulation, path::AbstractString) = write_snapshot(path, sim)
-
-"""
-    restart!(sim, path)
-
-Load a snapshot from `path` and copy `u, v, w, p, θ, t` into `sim`.
-Mesh dimensions must match. Returns `sim`.
-"""
-function restart!(sim::BoussinesqSimulation, path::AbstractString)
-    d = read_snapshot(path)
-    m = sim.mesh
-    (d[:Nx], d[:Ny], d[:Nz]) == (m.Nx, m.Ny, m.Nz) ||
-        error("restart!: mesh size mismatch: file $(d[:Nx])×$(d[:Ny])×$(d[:Nz]) vs. sim $(m.Nx)×$(m.Ny)×$(m.Nz)")
-    interior_view(sim.u) .= d[:u]
-    interior_view(sim.v) .= d[:v]
-    interior_view(sim.w) .= d[:w]
-    interior_view(sim.p) .= d[:p]
-    interior_view(sim.θ) .= d[:θ]
-    if haskey(d, :qv)
-        interior_view(sim.qv) .= d[:qv]
-    end
-    sim.t = d[:t]
-    return sim
-end
+# Full-state, versioned checkpoint / restart (#245): checkpoint!, restart!,
+# the checkpoint_state component generic, StepperState, CheckpointSchedule.
+include("io/checkpoint.jl")
 
 # -------------------------------------------------------------------------
 # Configuration — TOML namelists.

@@ -38,12 +38,17 @@ const MT = Aeolus.MoistThermodynamics
             @test err < 1e-3                  # acceptance: within 0.1 % (measured ≲ 6e-8)
             @test err < 1e-6
             @test res < 1e-9                  # Pa/m: the grid balance is exact
-            @test all(<(0), diff(ref.p̄)) && ref.p̄[1] < cfg.p_surface
+            @test all(<(0), diff(ref.p̄)) && ref.p̄[1] < ref.p_surface
+            @test ref.p_surface == BC.case_surface_pressure(cfg)
+            θ0 = BC.initial_θ(cfg)
             for k in 1:mesh.Nz
                 @test ref.T̄[k] ≈ ref.θ̄[k] * ref.π̄[k] rtol = 1e-12
                 @test ref.π̄[k] ≈ MT.exner_function(ref.p̄[k]) rtol = 1e-12
                 @test ref.ρ̄[k] ≈ MT.air_density(ref.T̄[k], ref.p̄[k]) rtol = 1e-12
-                @test ref.θ̄[k] ≈ cfg.θ_surface + max(0, (k - 0.5) * mesh.dz - cfg.θ_inversion_z) * cfg.θ_lapse rtol = 1e-14
+                @test ref.θ̄[k] ≈ θ0(0.0, 0.0, (k - 0.5) * mesh.dz) rtol = 1e-14
+                # the idealised profile of :winter and :smoke is the analytic one
+                cfg.sounding === nothing &&
+                    @test ref.θ̄[k] ≈ cfg.θ_surface + max(0, (k - 0.5) * mesh.dz - cfg.θ_inversion_z) * cfg.θ_lapse rtol = 1e-14
             end
         end
         # the case carries it, and the ledger integrates water with its ρ̄
@@ -51,6 +56,50 @@ const MT = Aeolus.MoistThermodynamics
         @test case.ledger.ρ == case.ref.ρ̄
         @test BC.surface_pressure(case) == 101325.0
         @test 1.19 < BC.ref_density(case, 1) < 1.21   # 294 K, 1013 hPa
+    end
+
+    @testset "initial state from the Lindenberg sounding of 29 June 2019 (#247)" begin
+        cfg = BC.CaseConfig(:summer; verbose = false, output_path = nothing)
+        S = BC.case_sounding(cfg)
+        L = S.sounding.launches
+        # 06:00 CEST = 04:00 UTC, between the 22:45 (28 June) and 04:45 UTC releases
+        t0 = BC.case_start_time(cfg)
+        @test t0 == 4 * 3600.0
+        @test L[1].t < t0 < L[2].t
+        w = (t0 - L[1].t) / (L[2].t - L[1].t)                     # 0.875
+        θ0, q0 = BC.initial_θ(cfg), BC.initial_qv(cfg)
+        P = S.profiles
+        for z in (0.0, 3.125, 50.0, 100.0, 196.875, 400.0, 1500.0)
+            θa, θb = forcing_value(P.θ, z, L[1].t), forcing_value(P.θ, z, L[2].t)
+            @test θ0(0.0, 0.0, z) ≈ (1 - w) * θa + w * θb rtol = 1e-14
+            qa, qb = forcing_value(P.qv, z, L[1].t), forcing_value(P.qv, z, L[2].t)
+            @test q0(0.0, 0.0, z) ≈ (1 - w) * qa + w * qb rtol = 1e-12
+            @test 0 < q0(0.0, 0.0, z) < 0.02
+        end
+        # a surface-based inversion at 06 CEST: z_i (parcel) = 0, θ rising
+        # through the lowest 100 m; at 14 CEST the mixed layer is ~1.2 km deep
+        @test BC.initial_inversion_height(cfg) == 0
+        @test θ0(0.0, 0.0, 100.0) > θ0(0.0, 0.0, 0.0)
+        zi14 = BC.initial_inversion_height(BC.CaseConfig(:summer; start_h = 14.0, verbose = false))
+        @test 1000 < zi14 < 1500
+        # ground pressure: the launch-site value reduced from 112 m to 34 m,
+        # ≈ ρ g Δz = 1.2 · 9.81 · 78 ≈ 9.2 hPa higher
+        pL = forcing_value(P.p, 0.0, t0)
+        ps = BC.case_surface_pressure(cfg)
+        @test 880 < ps - pL < 960
+        # the case day is a Saturday (the building schedules follow it)
+        @test BC.case_weekday(cfg) == 6
+        @test BC.case_weekday(BC.CaseConfig(:winter)) == 1             # Monday 15 January 2024
+        # the idealised scenarios keep the analytic profile
+        @test BC.case_sounding(BC.CaseConfig(:winter)) === nothing
+        @test BC.case_surface_pressure(BC.CaseConfig(:smoke)) == 101325.0
+        # the Berlin diagnostic of #247: the observed against the former profile
+        old_θ(z) = 293.0 + max(0, z - 100.0) * 3e-3
+        old_q(z) = 0.010 * exp(-z / 800.0)
+        @info "  initial profile at 06 CEST, sounding vs former analytic (θ K, qv g/kg): " *
+              join([@sprintf("z=%.0f m: θ %.2f vs %.2f, qv %.2f vs %.2f", z, θ0(0, 0, z), old_θ(z),
+                             1e3q0(0, 0, z), 1e3old_q(z)) for z in (0.0, 25.0, 50.0, 100.0, 150.0, 200.0, 400.0)], "; ") *
+              @sprintf("; p_surface %.1f hPa (was 1013.25)", ps / 100)
     end
 
     @testset "ledger: an incompressible exchange between levels is density redistribution, not transport" begin
