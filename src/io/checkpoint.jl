@@ -548,22 +548,8 @@ function CheckpointSchedule(dir::AbstractString; every_steps::Integer = 0,
     return ck
 end
 
-"""
-    checkpoint_schedule(cfg::AbstractDict, dir = cfg["checkpoint"]["dir"]) -> CheckpointSchedule
-
-A [`CheckpointSchedule`](@ref) from the `[checkpoint]` table of a TOML
-namelist ([`load_config`](@ref)): keys `dir`, `every_steps`,
-`every_seconds`, `keep`, `prefix`. Applies the `[fftw]` table first
-([`apply_fftw_config!`](@ref)), so the planner is set before any plan.
-"""
-function checkpoint_schedule(cfg::AbstractDict, dir = nothing)
-    apply_fftw_config!(cfg)
-    c = get(cfg, "checkpoint", Dict{String,Any}())
-    d = dir === nothing ? get(c, "dir", "checkpoints") : dir
-    return CheckpointSchedule(d; every_steps = get(c, "every_steps", 0),
-                              every_seconds = get(c, "every_seconds", Inf),
-                              keep = get(c, "keep", 2), prefix = get(c, "prefix", "checkpoint"))
-end
+# checkpoint_schedule(cfg) builds one from the [checkpoint] section of a
+# run configuration: src/config/common.jl (CFG-a, #356).
 
 "`dir/fftw_wisdom`: where a [`CheckpointSchedule`](@ref) keeps the run's FFTW wisdom."
 wisdom_path(ck::CheckpointSchedule) = joinpath(ck.dir, "fftw_wisdom")
@@ -723,31 +709,5 @@ function finish_checkpoints!(ck::Union{Nothing, CheckpointSchedule})
     return nothing
 end
 
-# -------------------------------------------------------------------------
-# FFTW policy from a namelist
-# -------------------------------------------------------------------------
-
-"""
-    apply_fftw_config!(cfg::AbstractDict) -> NamedTuple
-
-Apply the `[fftw]` table of a TOML namelist ([`load_config`](@ref)) to the
-FFTW planning policy ([`set_fftw_policy!`](@ref
-Aeolus.Operators.set_fftw_policy!)), before the simulation is built:
-
-```toml
-[fftw]
-planner = "measure"   # estimate | measure (default) | patient | exhaustive
-threads = 4
-wisdom  = "run/fftw_wisdom"   # optional: import before planning
-```
-
-Without the table nothing changes. Returns the resulting
-[`fftw_policy`](@ref Aeolus.Operators.fftw_policy).
-"""
-function apply_fftw_config!(cfg::AbstractDict)
-    f = get(cfg, "fftw", nothing)
-    f === nothing && return fftw_policy()
-    set_fftw_policy!(; planner = get(f, "planner", nothing), threads = get(f, "threads", nothing))
-    haskey(f, "wisdom") && load_fftw_wisdom!(f["wisdom"])
-    return fftw_policy()
-end
+# apply_fftw_config!(cfg), the [fftw] section of a run configuration, is in
+# src/config/common.jl (CFG-a, #356).

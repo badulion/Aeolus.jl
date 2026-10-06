@@ -86,7 +86,8 @@ using ..AdvectionSchemes: advective_face_flux, _flux_reconstruction, scalar_face
                            face_diffusivity, face_inv_spacing
 using ..TimeIntegration: CFLConstraints, adaptive_dt, StateSnapshot, save_state!, state_snapshot,
                          restore_state!, IMEXScheme, ARK2, Rosenbrock2, step_imex!,
-                         _all_finite, _max_advective_rate, is_numerical_failure
+                         _all_finite, _max_advective_rate, is_numerical_failure, _max_abs
+using ..Backends: interior_all_finite, plane_partials!, ordered_sum
 using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!

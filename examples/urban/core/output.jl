@@ -163,6 +163,8 @@ function write_output!(case)
     θ1 = view(interior_view(sim.θ), :, :, 1)
     qv1 = view(interior_view(tracer(case, :qv)), :, :, 1)
     ql1 = view(interior_view(tracer(case, :ql)), :, :, 1)
+    # min / max are exact and order-independent (NaN-propagating), so these
+    # serial 2-D scans are thread-invariant as they stand (KA-b, #296)
     @printf(io, "  frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°  θ1=%5.1f/%5.1f  qv1min=%.4f  dew=%.3f mm  fog ql1max=%.2e\n",
             clk.nrecord, clk.hour, time() - clk.t_wall0,
             minimum(bus.Ts), maximum(bus.Ts),
