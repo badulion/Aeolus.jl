@@ -1207,11 +1207,21 @@ removes the imbalance, which moves heat through the top as well. The
 column transport stays a numerics residual (1e-10 W m⁻²) in every
 configuration.
 
-**Cost.** On the smoke window with the fixed stepper and the same
-buildings (`boundary_frame = 0`), a whole step costs 19.4 ms periodic and
-24.2 ms open (× 1.25, a shared machine; the dynamics alone 1.4 and
-0.9 ms, within the noise); `test/berlin_open_boundaries.jl` prints the
-measurement.
+**Cost.** The fixed stepper, the same buildings (`boundary_frame = 0`),
+the faster of two alternating rounds after a warm-up, on a shared
+machine:
+
+| grid | periodic | `:open` | ratio |
+| :-- | --: | --: | --: |
+| flagship 64 × 64 × 32, whole step | 116.2 ms | 113.3 ms | 0.98 |
+| flagship, dynamics (`step!`) | 20.5 ms | 18.1 ms | 0.88 |
+| smoke 16 × 16 × 16, whole step (3 rounds of 24 steps) | 18.5 ms | 18.7 ms | 1.01 |
+
+The open faces' work (the buffer update and mass correction, the
+boundary-heat capture, the θ relaxation) costs no more than the
+measurement noise; the all-Neumann cosine solve of the open box is if
+anything cheaper than the periodic-x, y solve. `test/berlin_open_boundaries.jl`
+prints a smoke-window measurement.
 
 **Tests.** `test/berlin_open_boundaries.jl`: the default stays periodic;
 the open faces, data, sponge target, solver axes, frame and solid points;
