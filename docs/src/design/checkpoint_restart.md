@@ -51,7 +51,7 @@ for a restore into a freshly built closure — and were fixed.
 
 A checkpoint is a `Serialization` dictionary with `:format =>
 "Aeolus.checkpoint"` and `:version => 1`, the Julia version, the mesh, the
-run's scalar parameters (a mismatch on restart warns), the fields,
+run's scalar parameters, the fields,
 closure, components, stepper, RNG, free-form `:extra`, and the FFTW
 provenance. It is written to `path.tmp` and renamed, so a job killed while
 writing never leaves a truncated checkpoint. Snapshots without a version —
@@ -59,6 +59,17 @@ writing never leaves a truncated checkpoint. Snapshots without a version —
 the interior of `u, v, w, p, θ, qv` and `t` — are **refused** by
 `restart!` with an explanation (maintainer decision on #245): restarting
 from them would silently start the closure memory cold.
+
+**Run parameters** (maintainer decision on #318): `restart!` compares the
+simulation's scalar parameters (`ν`, `θ₀`, `g_accel`, `f_coriolis`,
+`C_s`, `Pr_t`, surface fluxes, sponge, enable flags) with the
+checkpoint's and throws an `ArgumentError` listing every difference
+(`f_coriolis = 0.0002 (checkpoint: 0.0001), …`): a restart with other
+parameters is a different experiment, not a continuation. A deliberate
+change is made with `restart!(…; allow_mismatch = true)` (also a keyword
+of `resume!`), which restores the run and records the differences in the
+log with `@warn`. The mesh, the domain, the simulation type, the closure
+type and the component names are always checked.
 
 ## Periodic checkpoints and resume
 

@@ -238,6 +238,28 @@ end
                                         stepper = StepperState())
     small = BoussinesqSimulation(RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3)))
     @test_throws ArgumentError restart!(small, path; sgs = TKEClosure(small.mesh))
+    # run parameters (maintainer decision on #318): a mismatch is an error that
+    # lists every difference, unless allow_mismatch = true, which logs them
+    other = ck_sim(); other.f_coriolis = 2e-4; other.ν = 1.5e-5
+    err = try restart!(other, path; sgs = TKEClosure(other.mesh)); nothing catch e; e end
+    @test err isa ArgumentError
+    @test occursin("f_coriolis = 0.0002 (checkpoint: 0.0001)", err.msg)
+    @test occursin("ν = 1.5e-5 (checkpoint: 0.0)", err.msg)
+    @test occursin("allow_mismatch = true", err.msg)
+    @test other.t == 0.0 && other.u.data != sim.u.data          # nothing restored
+    cO = TKEClosure(other.mesh)
+    @test_logs (:warn, r"allow_mismatch = true.*f_coriolis = 0\.0002 \(checkpoint: 0\.0001\)") match_mode = :any restart!(
+        other, path; sgs = cO, allow_mismatch = true)
+    @test other.t == sim.t && other.u.data == sim.u.data         # restored with the override
+    @test other.f_coriolis == 2e-4                               # the run keeps its own parameters
+    # the schedule's resume! takes the same switch
+    ckdir = mktempdir(); ck = CheckpointSchedule(ckdir; wisdom = false, verbose = false)
+    cp(path, joinpath(ckdir, "checkpoint_000000001.jls"))
+    sR = ck_sim(); sR.f_coriolis = 2e-4
+    @test_throws ArgumentError resume!(ck, sR; sgs = TKEClosure(sR.mesh))
+    @test resume!(ck, sR; sgs = TKEClosure(sR.mesh), allow_mismatch = true) isa AbstractDict
+    @test sR.t == sim.t && sR.u.data == sim.u.data
+    rm(ckdir; recursive = true)
     # a component without a method is named
     err = try checkpoint!(sim, tempname(); components = (x = :sym,)); nothing catch e; e end
     @test err isa ArgumentError && occursin("checkpoint_state", err.msg)

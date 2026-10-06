@@ -361,31 +361,40 @@ end
 
 """
     restart!(sim, path; sgs = nothing, components = (;), stepper = nothing,
-             rng = nothing) -> sim
+             rng = nothing, allow_mismatch = false) -> sim
 
 Restore a run from a checkpoint written by [`checkpoint!`](@ref): `sim`
 must be built exactly as the checkpointed one (same mesh — checked —,
-boundary conditions, physics; scalar parameters that differ are reported
-with a warning), and `sgs`, `components`, `stepper`, `rng` must be the
+boundary conditions, physics), and `sgs`, `components`, `stepper`, `rng` must be the
 same kinds of objects the checkpoint was written with (the closure's type
 and the component names are checked). Copies the fields with their halos,
 the clock, the closure memory and every component's state back; the next
 step then equals the continuous run's bit for bit (given the same FFT
 plans: see [`fftw_policy`](@ref Aeolus.Operators.fftw_policy)).
 
+**Run parameters.** The scalar parameters of `sim` (`ν`, `θ₀`, `g_accel`,
+`f_coriolis`, `C_s`, `Pr_t`, the surface fluxes, the sponge, the enable
+flags) are compared with the checkpoint's. A difference throws an
+`ArgumentError` listing every differing parameter with both values: a
+restart with other parameters is a different experiment, not a
+continuation. Pass `allow_mismatch = true` to restart anyway (a deliberate
+change, e.g. a new sponge); the differences are then logged with `@warn`.
+
 Refuses unversioned snapshots (see [`read_checkpoint`](@ref)). To read the
 checkpoint's `extra` or provenance, use [`read_checkpoint`](@ref).
 """
 function restart!(sim::BoussinesqSimulation, path::AbstractString;
-                  sgs = nothing, components = (;), stepper = nothing, rng = nothing)
-    restore_checkpoint!(sim, read_checkpoint(path); sgs, components, stepper, rng, path)
+                  sgs = nothing, components = (;), stepper = nothing, rng = nothing,
+                  allow_mismatch::Bool = false)
+    restore_checkpoint!(sim, read_checkpoint(path); sgs, components, stepper, rng, path,
+                        allow_mismatch)
     return sim
 end
 
 # The restoring half of restart!, on an already read payload.
 function restore_checkpoint!(sim::BoussinesqSimulation, d::AbstractDict;
                              sgs = nothing, components = (;), stepper = nothing,
-                             rng = nothing, path = "checkpoint")
+                             rng = nothing, path = "checkpoint", allow_mismatch::Bool = false)
     d[:julia_version] == string(VERSION) ||
         @warn "restart!: $path was written by Julia $(d[:julia_version]), this is $(VERSION)"
     m = _mesh_record(sim.mesh); fm = d[:mesh]
@@ -398,9 +407,15 @@ function restore_checkpoint!(sim::BoussinesqSimulation, d::AbstractDict;
         throw(ArgumentError("restart!: checkpoint of a $(d[:sim_type]), restoring into a $(nameof(typeof(sim)))"))
     p = _parameters(sim)
     diff = sort!([k for (k, v) in d[:parameters] if haskey(p, k) && !isequal(p[k], v)])
-    isempty(diff) ||
-        @warn "restart!: parameters differ from the checkpointed run: " *
-              join(("$k = $(p[k]) (file $(d[:parameters][k]))" for k in diff), ", ")
+    if !isempty(diff)
+        list = join(("$k = $(p[k]) (checkpoint: $(d[:parameters][k]))" for k in diff), ", ")
+        allow_mismatch ||
+            throw(ArgumentError("restart!: run parameters differ from the checkpointed run in " *
+                                "$path: $list. Build the simulation with the checkpoint's " *
+                                "parameters, or pass `allow_mismatch = true` to restart anyway"))
+        @warn "restart!: restarting with allow_mismatch = true; run parameters differ from " *
+              "the checkpointed run in $path: $list"
+    end
 
     closure = sgs === nothing ? nothing : sgs_closure(sgs)
     ctype = closure === nothing ? "" : string(nameof(typeof(closure)))
@@ -543,7 +558,8 @@ _fftw_line() = (p = fftw_policy();
                 "bitwise reproducible = $(p.bitwise_reproducible)")
 
 """
-    resume!(ck::CheckpointSchedule, sim; sgs, components, stepper, rng) -> payload or nothing
+    resume!(ck::CheckpointSchedule, sim; sgs, components, stepper, rng,
+            allow_mismatch = false) -> payload or nothing
 
 Run start for a [`CheckpointSchedule`](@ref): write the FFTW wisdom to
 `dir/fftw_wisdom` if there is none yet (the plans of `sim` exist now), then
@@ -553,7 +569,7 @@ return `nothing` for a fresh start. The schedule's step counter continues
 from the checkpoint's `stepper.step` (or its `:step` extra).
 """
 function resume!(ck::CheckpointSchedule, sim; sgs = nothing, components = (;),
-                 stepper = nothing, rng = nothing)
+                 stepper = nothing, rng = nothing, allow_mismatch::Bool = false)
     ck.wisdom && !isfile(wisdom_path(ck)) && save_fftw_wisdom(wisdom_path(ck))
     path = latest_checkpoint(ck)
     if path === nothing
@@ -562,7 +578,7 @@ function resume!(ck::CheckpointSchedule, sim; sgs = nothing, components = (;),
         return nothing
     end
     d = read_checkpoint(path)
-    restore_checkpoint!(sim, d; sgs, components, stepper, rng, path)
+    restore_checkpoint!(sim, d; sgs, components, stepper, rng, path, allow_mismatch)
     ck.last_step = stepper === nothing ? get(d[:extra], :step, 0) : stepper.step
     ck.last_wall = time()
     ck.resumed_from = path
