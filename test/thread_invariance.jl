@@ -14,10 +14,14 @@
 #     and `-t 24` (AEOLUS_THREAD_COUNTS="1,4,24") and hashes every
 #     prognostic field, the ledgers, the solver iteration counts and the dt
 #     sequence of: the primitives, a 64³ DNS step, the Berlin smoke matrix
-#     (12 steps per run) and one flagship step. Every hash must agree with
+#     (12 steps per run), one flagship step and short nested runs (KA-f).
+#     Every hash must agree with
 #     the 1-thread one; the differing keys are listed otherwise.
 #     AEOLUS_THREAD_SECTIONS selects sections (default
-#     "primitives,dns,reductions,smoke,flagship"). Every port PR runs and quotes it:
+#     "primitives,dns,reductions,smoke,flagship,nested,fft"; reductions: KA-b #296;
+#     nested: short nested runs,
+#     KA-f #297; fft: every spectral pressure solver with FFTW on the
+#     process's threads, KA-h #298). Every port PR runs and quotes it:
 #
 #       AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
 #
@@ -83,7 +87,7 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
 
     if get(ENV, "AEOLUS_THREAD_TESTS", "0") == "1"
         counts = parse.(Int, split(get(ENV, "AEOLUS_THREAD_COUNTS", "1,4,24"), ','))
-        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship")
+        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft")
         project = dirname(Base.active_project())
         dir = mktempdir()
         hashes = Dict{Int,Dict{String,String}}()

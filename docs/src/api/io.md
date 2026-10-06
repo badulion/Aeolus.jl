@@ -66,6 +66,14 @@ on uncommitted code unless `allow_uncommitted = true`; a restart reuses
 the folder and keeps the run ID. See [Run folder and
 provenance](logging.md#Run-folder-and-provenance) on the Logging page.
 
+[`checkpoint!`](@ref) is [`write_checkpoint`](@ref) of
+[`checkpoint_payload`](@ref), the in-memory checkpoint. A
+[`BlowupGuard`](@ref) keeps the last good state of a run as such a payload
+and, when the run blows up, writes it as the crash checkpoint
+`crash/crash_<step>.jls`, which [`restart!`](@ref) continues from like any
+other (#335; see [Blowup](logging.md#Blowup:-diagnose,-dump,-stop) on the
+Logging page).
+
 ## FFT planning policy
 
 The planner of every FFT plan is set in one place,
@@ -73,7 +81,7 @@ The planner of every FFT plan is set in one place,
 :patient | :exhaustive`, `threads`), default `:measure` (`:patient`
 opt-in), or from the
 environment (`AEOLUS_FFTW_PLANNER`, `AEOLUS_FFTW_THREADS`) or a namelist
-`[fftw]` table ([`apply_fftw_config!`](@ref)). `fftw_policy()` reports
+`[fftw]` table ([`apply_fftw_config!`](@ref Aeolus.Config.apply_fftw_config!)). `fftw_policy()` reports
 the planner, the thread count, whether wisdom was loaded and whether the
 run is bitwise reproducible; every checkpoint records it, and
 `save_fftw_wisdom` / `load_fftw_wisdom!` keep a restart on the same plans.
@@ -81,6 +89,13 @@ The suite runs with `AEOLUS_FFTW_PLANNER=estimate`. These functions are
 documented with [Operators](operators.md#FFT-planning-policy).
 
 ## Namelist tables
+
+The `[fftw]` and `[checkpoint]` tables are sections of the run
+configuration ([Run configuration](config.md), CFG-a #356):
+`checkpoint_schedule(load_run_config("case.toml"), dir)` applies the
+`[fftw]` section and returns the schedule of the `[checkpoint]` section.
+An untyped namelist from `load_config` still works, with `dir` read from
+its `[checkpoint]` table and the missing keys taking the schema defaults:
 
 ```toml
 [fftw]
@@ -94,9 +109,6 @@ every_steps   = 500
 every_seconds = 1800.0
 keep          = 2
 ```
-
-`checkpoint_schedule(load_config("run.toml"))` applies the `[fftw]` table
-and returns the schedule of the `[checkpoint]` table.
 
 ## Reference
 

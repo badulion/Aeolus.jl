@@ -13,9 +13,8 @@
 # `sgs_step_options`; option `stress = :laplacian` for the Laplacian form).
 #
 # Off by default: `:tke` is the default provider (#182; flipping it is the
-# maintainer's call, #184). Operators is exempt infrastructure in
-# the coverage test, so no Berlin list changes; the smoke matrix runs this
-# provider automatically (one run per non-default provider).
+# maintainer's call, #184). The smoke matrix runs this provider
+# automatically (one run per non-default provider).
 
 """
     SGSSigma

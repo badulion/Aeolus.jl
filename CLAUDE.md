@@ -91,15 +91,12 @@ physics into it when that makes sense, but nothing requires it, and it has
 no test suite of its own (maintainer decision, 2026-10-06).
 
 **Transition until #320 lands.** The `test/berlin_*.jl` files, including
-`berlin_coverage.jl` and `berlin_smoke.jl`, still run until #320 moves
-their physics checks into module tests and deletes them (after the nesting
-epic #246 merges). Meanwhile:
+`berlin_smoke.jl`, still run until #320 moves their physics checks into
+module tests and deletes them (after the nesting epic #246 merges). The
+Berlin coverage lists (`test/berlin_coverage.jl`) are already gone
+(maintainer decision, 2026-10-06). Meanwhile:
 
 - Do not add new `berlin_*` tests; put new physics tests in module tests.
-- If `berlin_coverage.jl` fails only because a new module is neither
-  coupled nor listed, add it to `BERLIN_PENDING` and
-  `BERLIN_PENDING_FROZEN` with the reason "awaiting #320". Growing the
-  frozen lists is allowed for this purpose only.
 - Existing Berlin tests must stay green; if one breaks, fix the code or
   state why the expectation was wrong, as for any test.
 

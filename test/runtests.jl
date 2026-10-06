@@ -664,7 +664,9 @@ using Aeolus.Fields: set!, interior_view
     end
 
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
+    include("ka_halos.jl")   # KA-f (#297): halo fills / nesting transfer operators on launch!
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
+    include("pressure_fft_threads.jl")  # KA-h (#298): spectral solvers as kernels, FFTW thread-invariant
 
     @testset "GLL nodes: endpoints exact, weights sum to 2, symmetry" begin
         for N in (2, 3, 4, 6, 8)
@@ -837,6 +839,10 @@ using Aeolus.Fields: set!, interior_view
     include("io_checkpoint.jl")   # #245: full-state checkpoints, bitwise restart, FFTW policy
     include("logging_core.jl")    # #333: structured events, run log, test logger
     include("logging_run_folder.jl")  # #334: run folder, run.toml provenance, dirty-tree policy
+    include("logging_diagnostics.jl") # #335: diagnostics registry, CSV writer, progress line
+    include("logging_blowup.jl")      # #335: blowup diagnose-dump-stop, run monitor
+    include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
+    include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"
@@ -1044,7 +1050,6 @@ end
 @testset "Berlin case" begin
     include("berlin_case.jl")            # registry, stages, bus, tracers (#126)
     include("berlin_surface_exchange.jl") # MOST fluxes, soil ground, roof-aware air level, drag (#129)
-    include("berlin_coverage.jl")        # every Aeolus module coupled, exempt or pending (#127)
     include("berlin_smoke.jl")           # every coupling and option, 12 steps, ledgers close (#127)
     include("berlin_air_heat.jl")        # air-heat ledger: meter, closed box, H₀ = 100 W/m², night window (#253)
     include("berlin_open_boundaries.jl") # lateral = :open: faces, data, sponge, frame, boundary heat, cost (#262)
