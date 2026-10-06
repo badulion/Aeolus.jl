@@ -443,13 +443,15 @@ function _restore!(run::NestedRun, sim, rb::_Rollback, which::Symbol)
     return sim
 end
 
-_max_speed(sim) = max(maximum(abs, interior_view(sim.u)), maximum(abs, interior_view(sim.v)),
-                      maximum(abs, interior_view(sim.w)))
+# exact and NaN-propagating: the bits of `maximum(abs, interior_view(·))`,
+# thread-invariant (KA-b, #296)
+_max_speed(sim) = max(_max_abs(sim.u), _max_abs(sim.v),
+                      _max_abs(sim.w))
 
 function _accept(run::NestedRun, sim, which::Symbol)
     _all_finite(sim) || return false
     for f in _bound_fields(run, which)
-        all(isfinite, interior_view(f)) || return false
+        interior_all_finite(f) || return false
     end
     _max_speed(sim) <= run.max_velocity || return false
     if which === :parent && isfinite(run.divergence_tol)
@@ -898,11 +900,11 @@ end
 function _covered_mean(f::Field, nest::NestedGrid)
     m = nest.parent_mesh
     cx, cy, cz = nest_covered_range(nest)
-    s = 0.0
-    @inbounds for k in cz, j in cy, i in cx
-        s += f.data[m.Hx + i, m.Hy + j, m.Hz + k]
-    end
-    return s / (length(cx) * length(cy) * length(cz))
+    # canonical plane sums over the covered storage range, then ascending k
+    # (thread-invariant, KA-b #296)
+    r = (m.Hx .+ cx, m.Hy .+ cy, m.Hz .+ cz)
+    p = plane_partials!(zeros(length(cz)), identity, map(UnitRange{Int}, r), f.data)
+    return ordered_sum(p) / (length(cx) * length(cy) * length(cz))
 end
 
 feedback_mask(run::NestedRun) = run.twoway === nothing ?
