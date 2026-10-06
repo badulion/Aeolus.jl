@@ -13,6 +13,8 @@ module Config
 #   config/common.jl   the common sections ([run], [fftw], [logging],
 #                      [checkpoint], [output]); checkpoint_schedule and
 #                      apply_fftw_config! on them
+#   config/run_record.jl  the run.toml record of a RunConfig: the hooks
+#                      IO.start_run calls, start_run(cfg)
 #
 # Included after IO: it extends IO.start_run and the run.toml hooks.
 # Dependencies: the stdlibs TOML and Dates only.
@@ -36,6 +38,7 @@ include("config/schema.jl")
 include("config/load.jl")
 include("config/resolve.jl")
 include("config/common.jl")
+include("config/run_record.jl")
 
 # The common driver: the common sections only.
 register_driver!("common")
