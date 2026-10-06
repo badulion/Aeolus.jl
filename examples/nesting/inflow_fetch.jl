@@ -27,7 +27,13 @@
 # precursor and by the reference) to docs/src/assets/nesting/ and prints
 # the development lengths (10 % and 20 %).
 #
-#   julia --project=. examples/nesting/inflow_fetch.jl [Lx] [t_avg]
+#   julia --project=. examples/nesting/inflow_fetch.jl [Lx] [t_avg] [lateral]
+#
+# `lateral` is `periodic` (default: spanwise periodic, the set-up of Kim
+# et al. 2013 and the numbers quoted in docs/src/theory/transition.md) or
+# `open` (open south/north faces with the mean profile as Dirichlet data,
+# as in the CI case of test/era6_inflow_fetch.jl; statistics over the
+# span centre, 0.5δ from the sides).
 #
 # Cost (24 cores shared, one thread): about 3 min per 15δ child run with
 # t_avg = 10 δ/u*, 1 min for the precursors.
@@ -40,6 +46,7 @@ include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 
 Lx = length(ARGS) >= 1 ? parse(Float64, ARGS[1]) : 15.0
 t_avg = length(ARGS) >= 2 ? parse(Float64, ARGS[2]) : 10.0
+lateral = length(ARGS) >= 3 ? Symbol(ARGS[3]) : :periodic
 Ly = 2.5
 Np, Nr = (24, 12, 16), (48, 24, 16)
 Nc = (round(Int, 48 * Lx / 5), 24, 16)
@@ -60,7 +67,7 @@ runs = [(:off, "off", pre), (:df, "DF", pre), (:fsd, "FSD", pre), (:df, "DF-same
 res = Dict{String,Any}()
 for (g, name, src) in runs
     r = fetch_child(src; generator = g, N = Nc, extent = (Lx, Ly), t_spin = 2.0,
-                    t_avg = t_avg, sample_every = 4)
+                    t_avg = t_avg, sample_every = 4, lateral = lateral)
     res[name] = (r, src)
     @printf("%-8s %.0f s: bulk/U_b %.6f, dp/dx bias %+.4f G, KE flux %.1f, div %.1e\n", name,
             r.wall_time, r.bulk[1] / (sum(src.U) / 16), pressure_gradient_bias(r, src.case.forcing),
@@ -100,7 +107,8 @@ for (k, h) in zip(ks, (0.2, 0.5)), (f, lab) in ((:tke, "TKE"), (:uw, "-u'w'"))
     push!(ys, ones(length(x)))
     names = [n for (_, n, _) in runs]
     push!(names, "reference")
-    file = joinpath(outdir, @sprintf("inflow_fetch_%s_z%02d.svg", f === :tke ? "tke" : "uw", round(Int, 10h)))
+    file = joinpath(outdir, @sprintf("inflow_fetch_%s_z%02d%s.svg", f === :tke ? "tke" : "uw", round(Int, 10h),
+                                     lateral === :open ? "_open" : ""))
     save_multiline(file, x, ys, names; xlabel = "x / δ (from the inflow plane)",
                    ylabel = "$lab / child-grid periodic reference",
                    title = @sprintf("%s behind the inflow, z = %.2fδ", lab, pre.z[k]),

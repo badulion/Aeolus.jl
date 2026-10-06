@@ -9,8 +9,12 @@
 #               `FetchStatistics` averaged over x the target
 #   child       the same half channel opened in x (`inflow` keyword):
 #               the precursor's mean profile on the west face (Dirichlet),
-#               convective outflow on the east face, y periodic; the
-#               synthetic turbulence of N-inflow-c on the west face
+#               convective outflow on the east face; the lateral (south,
+#               north) faces open by default (the same data, convective
+#               where the flow leaves), as in a nest child; the synthetic
+#               turbulence of N-inflow-c on the west face. The statistics
+#               are taken over the centre of the span, `y_margin` (δ) away
+#               from open lateral faces
 #
 # Units: δ = H = 1, u* = 1, so times are in δ/u*.
 
@@ -62,8 +66,8 @@ function _storage_profile(U::AbstractVector, m)
 end
 
 """
-    fetch_child(pre; generator = :df, N, extent, t_spin, t_avg, i_stress = 4.0)
-        -> NamedTuple
+    fetch_child(pre; generator = :df, N, extent, t_spin, t_avg, x_stress = 4.0,
+                lateral = :open, y_margin = 0.5) -> NamedTuple
 
 The inflow–outflow half channel fed by the precursor `pre`
 (`generator` = `:off`, `:df` (DigitalFilterGenerator) or `:fsd`
@@ -74,14 +78,24 @@ per column (`pmean`), the total stress at `x = x_stress` (three columns,
 `stress`), the largest relative added mass flux of the generator
 (`added`), the injected KE flux and the wall time. The bulk velocity,
 pressure and stress are sampled every `sample_every` steps.
+`lateral = :open` (default) opens the south and north faces
+(`half_channel_case(lateral = :open)`); the fetch statistics, pressure
+and stress are then averaged over the cells farther than `y_margin`
+(δ) from them (`jrange`, returned). The bulk velocity is always the
+volume flux of the whole face.
 """
 function fetch_child(pre; generator::Symbol = :df, N, extent, t_spin, t_avg,
                      x_stress::Real = 4.0, nmodes::Integer = 200, seed::Integer = 1,
-                     sample_every::Integer = 1)
+                     sample_every::Integer = 1, lateral::Symbol = :open,
+                     lateral_outflow::Symbol = :dirichlet, y_margin::Real = 0.5)
     probe = Aeolus.Grids.RegularGrid(size = N, extent = (extent[1], extent[2], 1.0))
     data = ProfileBoundaryData(u = _storage_profile(pre.U, probe), v = 0.0, w = 0.0, θ = 0.0)
-    case = half_channel_case(; N = N, extent = extent, inflow = data, noise = 0.0)
+    case = half_channel_case(; N = N, extent = extent, inflow = data, noise = 0.0,
+                             lateral = lateral, lateral_outflow = lateral_outflow)
     sim = case.sim; g = sim.mesh
+    jr = lateral === :open ?
+         (findfirst(j -> (j - 0.5) * g.dy >= y_margin, 1:g.Ny):
+          findlast(j -> g.Ly - (j - 0.5) * g.dy >= y_margin, 1:g.Ny)) : (1:g.Ny)
     it = nothing
     if generator === :df
         it = InflowTurbulence(sim; statistics = pre.src, faces = (:west,), seed = seed)
@@ -99,7 +113,7 @@ function fetch_child(pre; generator::Symbol = :df, N, extent, t_spin, t_avg,
     end
     t0 = time()
     run_channel!(case, t_spin)
-    fs = FetchStatistics(sim)
+    fs = FetchStatistics(sim; jrange = jr)
     Nx, Ny, Nz, Hx, Hy, Hz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz
     bulk = zeros(Nx + 1); pm = zeros(Nx); stress = zeros(Nz + 1)
     is = round(Int, x_stress / g.dx)
@@ -126,15 +140,16 @@ function fetch_child(pre; generator::Symbol = :df, N, extent, t_spin, t_avg,
         end
         @inbounds for i in 1:Nx
             s = 0.0
-            for k in 1:Nz, j in 1:Ny
+            for k in 1:Nz, j in jr
                 s += sim.p.data[Hx+i, Hy+j, Hz+k]
             end
-            pm[i] += h * s / (Ny * Nz)
+            pm[i] += h * s / (length(jr) * Nz)
         end
         νt = Aeolus.Operators.compute_sgs!(case.closure, sim).νv
-        stress .+= h .* total_stress_profile(sim.u, sim.v, sim.w, νt; irange = is-1:is+1).total
+        stress .+= h .* total_stress_profile(sim.u, sim.v, sim.w, νt; irange = is-1:is+1,
+                                              jrange = jr).total
     end
-    return (case = case, inflow = it, p = fetch_profiles(fs), bulk = bulk ./ Ws, pmean = pm ./ Ws,
+    return (case = case, inflow = it, p = fetch_profiles(fs), jrange = jr, bulk = bulk ./ Ws, pmean = pm ./ Ws,
             stress = stress ./ Ws, x_stress = (is - 0.5) * g.dx, added = added,
             ke_flux = ke / W, wall_time = time() - t0,
             maxdiv = Aeolus.Simulations.max_divergence(sim))
