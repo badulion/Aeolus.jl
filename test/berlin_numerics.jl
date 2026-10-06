@@ -28,9 +28,12 @@ isdefined(Main, :BerlinCase) ||
     include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
 const BC = Main.BerlinCase
 
+# The runs of this file are the periodic box the quantitative checks were
+# measured in: the nest (#265) is switched off (`:nesting => false`). The
+# nested default runs every numerics provider in the smoke matrix.
 function _run_smoke(nsteps; physics...)
     cfg = BC.CaseConfig(:smoke; verbose = false, nsteps = nsteps,
-                        physics = Dict{Symbol,Any}(physics...))
+                        physics = Dict{Symbol,Any}(:nesting => false, physics...))
     case = BC.build_case(cfg; io = devnull)
     BC.run_case!(case)
     return case
@@ -71,7 +74,7 @@ end
     # runs on the :smagorinsky provider (the slot default is :tke since #182)
     function run_opts(o; kw...)
         cfg = BC.CaseConfig(:smoke; verbose = false,
-                            physics = Dict{Symbol,Any}(:sgs => :smagorinsky),
+                            physics = Dict{Symbol,Any}(:sgs => :smagorinsky, :nesting => false),
                             options = Dict{Symbol,Any}(:sgs_smagorinsky => o), (; nsteps = N, kw...)...)
         case = BC.build_case(cfg; io = devnull)
         BC.run_case!(case)
@@ -119,7 +122,7 @@ end
         @test count(cells) > 0
         @test all(==(0), ν[cells]) && maximum(νs[cells]) > 0
         sz = BC.build_case(BC.CaseConfig(:smoke; verbose = false, nsteps = N,
-                                         physics = Dict{Symbol,Any}(:sgs => :sigma),
+                                         physics = Dict{Symbol,Any}(:sgs => :sigma, :nesting => false),
                                          options = Dict{Symbol,Any}(:geostrophic => (sponge_to_geostrophic = false,)));
                            io = devnull)
         BC.run_case!(sz)
@@ -283,8 +286,13 @@ end
     end
 
     @testset "configuration errors" begin
-        # WENO-Z7 needs a halo of 4; the case default is 3
+        # WENO-Z7 needs a halo of 4; the case default is 3. Nested (the
+        # default, #265), the nest faces refuse the mesh first (an open face
+        # needs the scheme's halo too); with the nest off, the transport does
         cfg = BC.CaseConfig(:smoke; verbose = false,
+                            options = Dict{Symbol,Any}(:scalar_advection => (scheme = :weno_z7,)))
+        @test_throws ArgumentError BC.build_case(cfg; io = devnull)
+        cfg = BC.CaseConfig(:smoke; verbose = false, physics = Dict{Symbol,Any}(:nesting => false),
                             options = Dict{Symbol,Any}(:scalar_advection => (scheme = :weno_z7,)))
         @test_throws ErrorException BC.build_case(cfg; io = devnull)
         # the positivity limiter needs a reconstruction

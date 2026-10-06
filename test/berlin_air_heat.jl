@@ -61,8 +61,12 @@ A flat smoke case with only the couplings in `keep`, plus `extra`: the
 solid mask is cleared after the build (the building couplings need a
 scene to build, and are then removed).
 """
-function flat_case(; keep = NO_THETA, extra = BC.AbstractCoupling[], kw...)
-    cfg = BC.CaseConfig(:smoke; verbose = false, output_path = nothing, kw...)
+function flat_case(; keep = NO_THETA, extra = BC.AbstractCoupling[],
+                   physics = Dict{Symbol,Any}(), kw...)
+    # a closed box: the nest (#265) is switched off, so the box is the
+    # periodic one these budgets are derived for
+    cfg = BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
+                        physics = merge(Dict{Symbol,Any}(:nesting => false), physics), kw...)
     case = BC.build_case(cfg; io = devnull)
     case.geom.sm.mask .= false
     filter!(c -> BC.coupling_name(c) in keep, case.couplings)
@@ -272,7 +276,10 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         Γseg = (BC.forcing_value(P.θ, P.z[k+1], t0) - BC.forcing_value(P.θ, P.z[k], t0)) / (P.z[k+1] - P.z[k])
         @test BC.θ_top_gradient(cfgS) ≈ Γseg rtol = 1e-10
         @test 1e-3 < Γseg < 1e-2                                       # stable (measured 4.14 K/km)
-        for phys in (Dict{Symbol,Any}(), Dict{Symbol,Any}(:timestepper => :fixed))
+        # the fixed-gradient top closes the periodic box: the nest (#265),
+        # whose top is a nest face, is switched off
+        for phys in (Dict{Symbol,Any}(:nesting => false),
+                     Dict{Symbol,Any}(:timestepper => :fixed, :nesting => false))
             case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
                                                physics = phys); io = devnull)
             @test case.sim.θ_bcs.top isa FluxBC

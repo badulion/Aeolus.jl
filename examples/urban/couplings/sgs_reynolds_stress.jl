@@ -178,9 +178,12 @@ function smoke_check(c::SGSReynoldsStress, case)
     push!(checks, "II of τ in [0, 2/3] (Lumley triangle)" =>
                       all(x -> isnan(x) || -1e-10 <= x <= 2/3 + 1e-10, II))
     push!(checks, "output e = ½ tr τ = 0 in the buildings" => all(iszero, em[solid]))
-    if sim isa BoussinesqSimulation
+    if sim isa BoussinesqSimulation && !has_open_boundaries(sim)
         # the resolved-KE sink of the stress divergence is the SGS production
-        # (the dual gradient); they differ by Σ (2/3) e ∇·u V only
+        # (the dual gradient); they differ by Σ (2/3) e ∇·u V only — in a
+        # closed box: through open (nest) faces the summation by parts
+        # leaves the boundary work ∮ u·τ·n dA (the closed-box variant
+        # below runs it with the nest off, #265)
         b = kinetic_energy_budget(sim; sgs = cl)
         rb = reynolds_stress_budget(cl, sim)
         push!(checks, "Σ P V = −(resolved-KE SGS sink) to 1e-6" =>
@@ -192,6 +195,8 @@ end
 smoke_variants(::Type{<:SGSReynoldsStress}) =
     ((label = "Reynolds stress without the wall cap and the surface value",
       physics = Dict(:sgs => :reynolds_stress),
-      options = Dict(:sgs_reynolds_stress => (wall_cap = false, surface = false))),)
+      options = Dict(:sgs_reynolds_stress => (wall_cap = false, surface = false))),
+     (label = "Reynolds stress in the closed (periodic) box",
+      physics = Dict(:sgs => :reynolds_stress, :nesting => false)))
 
 register!(SGSReynoldsStress)

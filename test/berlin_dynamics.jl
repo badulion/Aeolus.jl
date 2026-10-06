@@ -23,9 +23,14 @@ isdefined(Main, :BerlinCase) ||
     include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
 const BC = Main.BerlinCase
 
+# The runs of this file are the periodic box the core and stepper checks
+# (closed-box constraints, uniform tracers, step counts) were derived for:
+# the nest (#265) is switched off. The nested default runs every core and
+# stepper in the smoke matrix.
 smoke(; physics = Dict{Symbol,Any}(), options = Dict{Symbol,Any}(), kw...) =
     BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
-                  physics = Dict{Symbol,Any}(physics), options = Dict{Symbol,Any}(options), kw...)
+                  physics = merge(Dict{Symbol,Any}(:nesting => false), Dict{Symbol,Any}(physics)),
+                  options = Dict{Symbol,Any}(options), kw...)
 
 run_smoke(; kw...) = (case = BC.build_case(smoke(; kw...); io = devnull); BC.run_case!(case); case)
 
