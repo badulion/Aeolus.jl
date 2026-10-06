@@ -1387,12 +1387,7 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
     end
     sim.has_coriolis && add_coriolis!(sim.tu, sim.tv, sim.u, sim.v, sim.f_coriolis)
     sim.has_surface_flux && add_surface_flux!(sim.tθ, sim.θ_flux_bottom, sim.θ_flux_top)
-    if sim.has_sponge
-        z_top = sim.mesh.z0 + sim.mesh.Lz
-        add_sponge!(sim.tu, sim.u, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tv, sim.v, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tw, sim.w, sim.sponge_α_max, sim.sponge_z_start, z_top)
-    end
+    sim.has_sponge && Simulations.add_velocity_sponge!(sim)   # toward sim.sponge_target (#262)
 
     body_force! === nothing || body_force!(sim, Δt)
     return sim
