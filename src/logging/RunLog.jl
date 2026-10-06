@@ -28,6 +28,10 @@ import Logging: min_enabled_level, shouldlog, handle_message, catch_exceptions
 
 export AeolusLogger, TeeLogger, open_run_log, with_run_log, test_logger,
        current_domain, with_domain, parse_log_level
+# LOG-c (#335): the diagnostics registry, the CSV writer, the progress line
+export Diagnostic, diagnostics, collect_diagnostics, prefixed, reduce_diagnostic, evaluate_diagnostic,
+       DiagnosticsWriter, record_diagnostics!, last_diagnostics, costly_due,
+       ProgressLine, progress!, WarningTap, with_progress, note_warning!
 
 # ---------------------------------------------------------------------------
 # domain tag
@@ -357,5 +361,11 @@ Tests that assert on events capture them with their own logger
 """
 test_logger(; level = _env_level(Warn), stream::Union{Nothing,IO} = nothing) =
     AeolusLogger(stream; min_level = level, timestamps = :time, source = false)
+
+# ---------------------------------------------------------------------------
+# the diagnostics registry, CSV writer and progress line (LOG-c, #335)
+# ---------------------------------------------------------------------------
+
+include("diagnostics.jl")
 
 end # module

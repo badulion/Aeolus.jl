@@ -161,6 +161,10 @@ using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 # Structured logging (LOG-a, #333)
 export AeolusLogger, TeeLogger, open_run_log, with_run_log, test_logger,
        current_domain, with_domain, parse_log_level
+# Diagnostics registry, CSV writer, progress line (LOG-c, #335)
+export Diagnostic, diagnostics, collect_diagnostics, prefixed, reduce_diagnostic, evaluate_diagnostic,
+       DiagnosticsWriter, record_diagnostics!, last_diagnostics, costly_due,
+       ProgressLine, progress!, WarningTap, with_progress, note_warning!
 export AbstractMesh, RegularGrid
 export Field, CellCenter, FaceX, FaceY, FaceZ
 export Periodic, NoFlux, ValueBC, FluxBC, FieldBoundaryConditions, fill_halos!
