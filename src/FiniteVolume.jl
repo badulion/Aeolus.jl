@@ -399,15 +399,23 @@ function _check_damping_target(t::AbstractVector, g)
     return nothing
 end
 
+# The coordinate the profile is sampled at: a 1-D vector along `axis`
+# (interior-indexed), or a halo-padded 3-D array of per-cell coordinates.
+@inline _damping_coord(c::AbstractVector, axis, i, j, k, i0, j0, k0) =
+    @inbounds axis == 3 ? c[k - k0] : axis == 1 ? c[i - i0] : c[j - j0]
+@inline _damping_coord(c::AbstractArray{<:Real,3}, axis, i, j, k, i0, j0, k0) = @inbounds c[i, j, k]
+
 """
     _add_damping!(tf, f, profile, coords, axis, target, g; levels = nothing)
 
 Add `−λ(ξ)(f − target)` to `tf` on the interior cells where
 `in_damping(profile, ξ)`, with `ξ = coords[n]` the coordinate of the
-`n`-th interior index along `axis` (`1` = x, `3` = z). The one kernel
-behind the sponge (`axis = 3`, every mesh with a level structure:
-`RegularGrid` and `StretchedGrid`), the fringe (`axis = 1`) and
-`LargeScaleForcing.ReferenceDamping`.
+`n`-th interior index along `axis` (`1` = x, `3` = z) — or, when `coords`
+is a halo-padded 3-D array, `ξ = coords[i, j, k]` of every cell (the
+physical heights of a `TerrainFollowingGrid`; `axis` is then unused).
+The one kernel behind the sponge (`axis = 3` on a `RegularGrid` and a
+`StretchedGrid`, the 3-D heights on a `TerrainFollowingGrid`), the
+fringe (`axis = 1`) and `LargeScaleForcing.ReferenceDamping`.
 
 `target` is a number, a level vector (length `Nz`, one value per interior
 level), a `Field` or a halo-padded 3-D array. With `levels` (a vector of
@@ -416,13 +424,13 @@ into `levels[kl]` (units of `tf` per cell, summed over the level's
 columns): the integral a budget books.
 """
 function _add_damping!(tf::Field{L}, f::Field{L}, p::DampingProfile,
-                       coords::AbstractVector, axis::Int, target,
+                       coords::AbstractArray, axis::Int, target,
                        g::AbstractMesh; levels = nothing) where {L}
     _check_damping_target(target, g)
     ii, jj, kk = interior(g)
     i0, j0, k0 = first(ii) - 1, first(jj) - 1, first(kk) - 1
     @inbounds for k in kk, j in jj, i in ii
-        ξ = axis == 3 ? coords[k - k0] : axis == 1 ? coords[i - i0] : coords[j - j0]
+        ξ = _damping_coord(coords, axis, i, j, k, i0, j0, k0)
         in_damping(p, ξ) || continue
         λ = damping_rate(p, ξ)
         δ = λ * (f.data[i, j, k] - _damping_target(target, i, j, k, k - k0))

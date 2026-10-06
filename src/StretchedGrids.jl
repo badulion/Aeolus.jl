@@ -1648,21 +1648,16 @@ end
 
 Rayleigh damping keyed on the **physical** height of each sample, so the
 sponge is a horizontal slab in real space even though the coordinate
-surfaces below it are tilted by the orography.
+surfaces below it are tilted by the orography. The one damping kernel
+`_add_damping!`, sampled at the 3-D physical heights; `f_ref` is a
+number, a `Field` or a halo-padded array (a level vector is a target per
+σ-level).
 """
 function _add_sponge!(tf::Field{L}, f::Field{L},
                       α_max::Real, z_start::Real, z_top::Real,
-                      f_ref::Real, g::TerrainFollowingGrid) where {L<:Location}
-    zs = physical_heights(g, L())
-    ii, jj, kk = interior(g)
-    prof = sponge_profile(α_max, z_start, z_top)   # the shared damping profile
-    @inbounds for k in kk, j in jj, i in ii
-        z = zs[i,j,k]
-        in_damping(prof, z) || continue
-        α = damping_rate(prof, z)
-        tf.data[i,j,k] -= α * (f.data[i,j,k] - f_ref)
-    end
-    return tf
+                      f_ref, g::TerrainFollowingGrid) where {L<:Location}
+    return _add_damping!(tf, f, sponge_profile(α_max, z_start, z_top),
+                         physical_heights(g, L()), 3, f_ref, g)
 end
 
 """

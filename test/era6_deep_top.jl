@@ -191,6 +191,26 @@ end
             @info "locality / exactness on $name: below z_start untouched, vector == number bit for bit"
         end
 
+        # TerrainFollowingGrid: the one kernel sampled at the 3-D physical
+        # heights equals the per-cell sin² formula (the pre-#254 loop) bit for bit
+        sg = StretchedGrid(; size = (8, 6, 12), extent = (800.0, 600.0, 1200.0), halo = (2, 2, 2))
+        tg = terrain_following_grid(sg, (x, y) -> 150 * exp(-((x - 400)^2) / 200^2))
+        f = Field(CellCenter(), tg)
+        f.data .= 300 .+ randn(size(f.data))
+        tt = Field(CellCenter(), tg)
+        add_sponge!(tt, f, 0.03, 700.0, 1200.0; f_ref = 300.0)
+        zs = physical_heights(tg, CellCenter())
+        oracle = zeros(size(f.data))
+        ii, jj, kk = Aeolus.Grids.interior(tg)
+        for k in kk, j in jj, i in ii
+            z = zs[i, j, k]
+            z >= 700.0 || continue
+            sn = sin(0.5π * (z - 700.0) * (1 / (1200.0 - 700.0)))
+            oracle[i, j, k] -= 0.03 * sn * sn * (f.data[i, j, k] - 300.0)
+        end
+        @test tt.data == oracle
+        @test count(!iszero, tt.data) > 0
+
         # ReferenceDamping on a simulation: profile, table and :mean targets
         g = RegularGrid(; size = (8, 6, 12), extent = (80.0, 60.0, 600.0), halo = (2, 2, 2))
         sim = BoussinesqSimulation(g; ν = 0.0)
