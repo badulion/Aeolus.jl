@@ -499,4 +499,85 @@ end
     @test all(iszero, θ.data)                                  # a wall: no cell beyond
 end
 
+# -------------------------------------------------------------------------
+# #329 item 9: the 3rd- and 5th-order prolongation overshoots at a sharp
+# scalar front (a negative tracer next to a clean parent cell). The
+# limiters scale the children of each parent cell about the parent value:
+# :positive (default for scalars) keeps them ≥ 0, :monotone inside the
+# range of the parent neighbourhood; both conserve the parent value.
+@testset "prolongation limiter on a sharp scalar front (#329)" begin
+    pm = RegularGrid(Float64; size=(16, 16, 16), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
+    cm = nest_child_mesh(nest)
+    pf = Field(CellCenter(), pm)
+    for k in axes(pf.data, 3), j in axes(pf.data, 2), i in axes(pf.data, 1)
+        x = pm.x0 + (i - pm.Hx - 0.5) * pm.dx; y = pm.y0 + (j - pm.Hy - 0.5) * pm.dy
+        pf.data[i, j, k] = (x + 0.3y >= 0.5) ? 1.0 : 0.0     # an oblique front, tracer 0 / 1
+    end
+    cx, cy, cz = nest_covered_range(nest)
+    # the parent value against the mean of its r³ children (child interior)
+    function cons(cf)
+        worst = 0.0
+        for K in 1:nest.nz, J in 1:nest.ny, I in 1:nest.nx
+            s = 0.0
+            for c in 1:2, b in 1:2, a in 1:2
+                s += cf.data[cm.Hx + 2(I-1) + a, cm.Hy + 2(J-1) + b, cm.Hz + 2(K-1) + c]
+            end
+            p = pf.data[pm.Hx + cx[I], pm.Hy + cy[J], pm.Hz + cz[K]]
+            worst = max(worst, abs(s / 8 - p))
+        end
+        return worst
+    end
+    for order in (3, 5)
+        res = Dict{Symbol,Any}()
+        for lim in (:none, :positive, :monotone)
+            cf = Field(CellCenter(), cm)
+            interpolate_parent_to_child!(cf, pf, nest; order, limiter = lim)
+            res[lim] = (extrema(cf.data), cons(cf), cf)
+        end
+        @printf("  order %d front: range unlimited [%.3f, %.3f], :positive [%.3f, %.3f], :monotone [%.3f, %.3f]; |mean of children − parent| %.1e / %.1e / %.1e\n",
+                order, res[:none][1]..., res[:positive][1]..., res[:monotone][1]...,
+                res[:none][2], res[:positive][2], res[:monotone][2])
+        @test res[:none][1][1] < -0.01                 # the unlimited overshoot is real
+        @test res[:none][1][2] > 1.01
+        @test res[:positive][1][1] >= 0.0              # positivity
+        @test res[:monotone][1][1] >= 0.0 && res[:monotone][1][2] <= 1.0   # no new extrema
+        @test res[:positive][2] < 1e-14 && res[:monotone][2] < 1e-14       # conservative
+        # the low-level operator does not limit by default (a field may be signed)
+        cd = Field(CellCenter(), cm); interpolate_parent_to_child!(cd, pf, nest; order)
+        @test cd.data == res[:none][3].data
+        # halo-only prolongation is limited the same way
+        ch = Field(CellCenter(), cm)
+        interpolate_to_nest_boundary!(ch, pf, nest; order, limiter = :positive)
+        @test minimum(ch.data) >= 0.0
+    end
+    # away from zero the positivity limiter is inactive: bit for bit
+    sm = Field(CellCenter(), pm)
+    for k in axes(sm.data, 3), j in axes(sm.data, 2), i in axes(sm.data, 1)
+        sm.data[i, j, k] = 300 + sin(2π * (i - pm.Hx - 0.5) / pm.Nx)
+    end
+    a = Field(CellCenter(), cm); b = Field(CellCenter(), cm)
+    interpolate_parent_to_child!(a, sm, nest; order = 5, limiter = :none)
+    interpolate_parent_to_child!(b, sm, nest; order = 5, limiter = :positive)
+    @test a.data == b.data
+    # the field set of a run: qv and the tracers limited, θ not
+    psim = BoussinesqSimulation(pm; moisture = true)
+    psim.qv.data .= pf.data .* 0.01; psim.θ.data .= 300 .+ pf.data
+    trp = Field(CellCenter(), pm); trp.data .= pf.data
+    csim = BoussinesqSimulation(cm; moisture = true)
+    st = nest_interp_state(nest, psim, csim; scalars = (:tr => (Field(CellCenter(), cm), trp),))
+    interpolate_parent_state!(st, psim, nest; order = 3, region = :all)
+    @test minimum(st[:qv].data) >= 0 && minimum(st[:tr].data) >= 0
+    @test minimum(st.θ.data) < 300 - 0.01                 # θ: no limiter by default
+    interpolate_parent_state!(st, psim, nest; order = 3, region = :all, limit_scalars = :none)
+    @test minimum(st[:tr].data) < -0.01
+    # velocities: no limiter by default; :monotone clips to the stencil range
+    pu = Field(FaceX(), pm); pu.data .= pf.data
+    u0 = Field(FaceX(), cm); interpolate_parent_to_child!(u0, pu, nest; order = 3)
+    u1 = Field(FaceX(), cm); interpolate_parent_to_child!(u1, pu, nest; order = 3, limiter = :monotone)
+    @test minimum(u0.data) < 0 && minimum(u1.data) >= 0 && maximum(u1.data) <= 1
+    @test_throws ArgumentError interpolate_parent_to_child!(u1, pu, nest; limiter = :positive)
+    @test_throws ArgumentError interpolate_parent_to_child!(a, sm, nest; limiter = :minmod)
+end
+
 end # Era II — Nesting operators

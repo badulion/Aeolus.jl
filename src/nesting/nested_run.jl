@@ -81,6 +81,9 @@ Keywords:
     canopy restriction and inflow exclusion, the interface flux
     correction on the open faces, Berger–Colella scalar refluxing from
     flux registers and the re-projection of the parent (N-nest-e, #263);
+  * `limit_scalars` (`:positive`, for `qv` and the tracers), `limit_theta`
+    (`:none`), `limit_momentum` (`:none`) — the limiters of the
+    prolongation (#329), see [`interpolate_parent_state!`](@ref);
   * `order` (3), `flux_correction` (true), `scalars`, `state` — as for
     the operators of [`NestInterpState`](@ref). The run allocates its three
     field sets (the parent prolongated at both ends of the parent step and
@@ -155,6 +158,9 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     sync::Symbol
     order::Int
     region::Symbol
+    limit_scalars::Symbol          # the prolongation limiters (#329)
+    limit_theta::Symbol
+    limit_momentum::Symbol
     sponge::SP
     data::D                        # the child's boundary data (NestBoundaryData)
     flux_correction::Bool
@@ -210,6 +216,9 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                    sync::Symbol = :subcycle,
                    feedback::Union{Symbol,TwoWayFeedback} = :one_way,
                    order::Int = 3,
+                   limit_scalars::Symbol = :positive,
+                   limit_theta::Symbol = :none,
+                   limit_momentum::Symbol = :none,
                    sponge::Union{Nothing,NestSponge} = nothing,
                    solid = nothing,
                    flux_correction::Bool = true,
@@ -259,7 +268,8 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
          NestSponge{Float64}(sponge.width, sponge.α_max, sponge.profile,
                              sponge.sides .& nest_open_sides(child))
     # the child's boundary: the parent prolongated now, attached to its open faces
-    interpolate_parent_state!(s_old, parent, nest; order, region)
+    interpolate_parent_state!(s_old, parent, nest; order, region, limit_scalars, limit_theta,
+                              limit_momentum)
     _mark_nest_solids!(child, solid)
     data = nest_boundary_data(s_old, s_new; t0 = child.t, Δt = 0.0)
     _attach_nest_data!(child, data)
@@ -268,7 +278,8 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
            NestFluxRegisters(nest, parent, child, s_bc, twoway, advance_parent, advance_child) :
            nothing
     run = NestedRun(parent, child, nest, s_old, s_new, s_bc, advance_parent, advance_child,
-                    cfl_parent, cfl_child, feedback, sync, order, region, sp, data,
+                    cfl_parent, cfl_child, feedback, sync, order, region,
+                    limit_scalars, limit_theta, limit_momentum, sp, data,
                     flux_correction, ns, Int(max_retries),
                     Float64(divergence_tol), Float64(max_velocity), validate,
                     reuse_boundary, record, solid, _fluid_mask(nest, solid), check_clocks,
@@ -311,6 +322,13 @@ function boundary_time(run::NestedRun, t::Real)
     _blend_state!(run.s_bc, run.s_old, run.s_new, (t - run.t0) / run.Δt)
     return run.s_bc
 end
+
+# The parent field set prolongated into one of the run's states.
+_prolongate!(run::NestedRun, s::NestInterpState) =
+    interpolate_parent_state!(s, run.parent, run.nest; order = run.order, region = run.region,
+                              limit_scalars = run.limit_scalars,
+                              limit_theta = run.limit_theta,
+                              limit_momentum = run.limit_momentum)
 
 # Point the child's boundary data at the current parent-step window and
 # refresh its open boundaries at the child's time (B(t₀) of the new window:
@@ -536,7 +554,7 @@ function step_nested!(run::NestedRun; dt = nothing)
     if !two_way && run.reuse_boundary && run.new_valid_at == t_p
         run.s_old, run.s_new = run.s_new, run.s_old
     else
-        interpolate_parent_state!(run.s_old, p, nest; order=run.order, region=run.region)
+        _prolongate!(run, run.s_old)
     end
     run.new_valid_at = NaN
     st.wall_boundary += (time_ns() - tb) / 1e9
@@ -549,7 +567,7 @@ function step_nested!(run::NestedRun; dt = nothing)
 
     # --- 4. boundary data at t_p + Δt_p ------------------------------------
     tb = time_ns()
-    interpolate_parent_state!(run.s_new, p, nest; order=run.order, region=run.region)
+    _prolongate!(run, run.s_new)
     run.new_valid_at = t_end
     st.wall_boundary += (time_ns() - tb) / 1e9
     # the window in the child's clock (the parent's, in a synchronised run,

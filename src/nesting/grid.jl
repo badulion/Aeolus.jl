@@ -195,6 +195,7 @@ struct NestedGrid{T, MP<:AbstractMesh{T}, MC<:RegularGrid{T}}
     ledger::Dict{Symbol,Float64}
     plans::Dict{Tuple{Symbol,Int,Int},_Plan1D}
     measures::Dict{_MeasureKey,NestMeasure}   # cached measures (volume / mass)
+    limscratch::Dict{NTuple{3,Int},NTuple{3,Array{Float64,3}}}   # prolongation limiter
 end
 
 
@@ -299,7 +300,7 @@ function NestedGrid(parent::NestParentMesh{T}, child::RegularGrid{T};
     return NestedGrid{T, typeof(parent), typeof(child)}(
         parent, child, rx, ry, rz, ix, iy, iz, nx, ny, nz,
         Dict{Symbol,Float64}(), Dict{Tuple{Symbol,Int,Int},_Plan1D}(),
-        Dict{_MeasureKey,NestMeasure}())
+        Dict{_MeasureKey,NestMeasure}(), Dict{NTuple{3,Int},NTuple{3,Array{Float64,3}}}())
 end
 
 """

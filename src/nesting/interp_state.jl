@@ -285,20 +285,27 @@ for the sponge); `region=:halo` fills only halos. Parent halos are filled
 first (scalars with `parent_sim.θ_bcs`, as `step!` does for `qv`). The
 operators use the state's vertical measure (`s.measure`): the parent's
 actual face heights on a stretched parent, the reference mass for a
-sound-proof pair.
+sound-proof pair. The prolongation limiters (#329; see
+[`interpolate_to_nest_boundary!`](@ref)): `limit_scalars` for `qv` and the
+bound tracers (default `:positive`: they cannot be negative), `limit_theta`
+for `θ` (default `:none`) — `:positive`, `:monotone` or `:none`, all
+conservative — and `limit_momentum` for the velocities (`:none`, default,
+or the `:monotone` clip). Pass `limit_scalars = :none` for a signed tracer.
 """
 function interpolate_parent_state!(s::NestInterpState, psim::_NestSim,
                                    nest::NestedGrid; order::Int=3,
-                                   region::Symbol=:all)
+                                   region::Symbol=:all, limit_scalars::Symbol=:positive,
+                                   limit_theta::Symbol=:none, limit_momentum::Symbol=:none)
     fill_halos!(psim.u, psim.bcs); fill_halos!(psim.v, psim.bcs)
     fill_halos!(psim.w, psim.bcs)
     meas = s.measure
-    _interp_child!(s.u, psim.u, nest; order, region, measure=meas)
-    _interp_child!(s.v, psim.v, nest; order, region, measure=meas)
-    _interp_child!(s.w, psim.w, nest; order, region, measure=meas)
-    _foreach_scalar(s, psim, nothing) do _, buf, _, pf
+    _interp_child!(s.u, psim.u, nest; order, region, measure=meas, limiter=limit_momentum)
+    _interp_child!(s.v, psim.v, nest; order, region, measure=meas, limiter=limit_momentum)
+    _interp_child!(s.w, psim.w, nest; order, region, measure=meas, limiter=limit_momentum)
+    _foreach_scalar(s, psim, nothing) do name, buf, _, pf
         fill_halos!(pf, psim.θ_bcs)
-        _interp_child!(buf, pf, nest; order, region, measure=meas)
+        _interp_child!(buf, pf, nest; order, region, measure=meas,
+                       limiter = name === :θ ? limit_theta : limit_scalars)
     end
     return s
 end

@@ -68,7 +68,7 @@ function _build_plan(kind::Symbol, order::Int, r::Int, off::Int,
             I = off + fld(q, r)
             m = mod(q, r) + 1
             s0 = clamp(I - ((ns - 1) ÷ 2), lo, hi)
-            start[ic] = Hp + s0; cell[ic] = Hp + I
+            start[ic] = Hp + s0; cell[ic] = clamp(Hp + I, 1, Np + 2Hp)
             W[:, ic] .= _cons_weights(ns, r, m, I - s0 + 1)
         else # :nodal — child face position in parent-face-number units
             qf = off + (nn - 1) / r
@@ -259,7 +259,8 @@ _stagger_axis(::FaceY) = 2
 _stagger_axis(::FaceZ) = 3
 
 function _interp_child!(cf::Field, pf::Field, nest::NestedGrid;
-                        order::Int=3, region::Symbol=:halo, measure=nothing)
+                        order::Int=3, region::Symbol=:halo, measure=nothing,
+                        limiter::Symbol=:none)
     cm = nest.child_mesh
     size(cf.data) == totalsize(cm) ||
         error("_interp_child!: child field is not on the nest's child mesh")
@@ -273,6 +274,18 @@ function _interp_child!(cf::Field, pf::Field, nest::NestedGrid;
     py = _plan(nest, kinds[2], 2, order)
     pz = _zplan(nest, kinds[3], order, measure)
     _interp_into!(cf.data, pf.data, px, py, pz, cm, loc, region)
+    limiter in _LIMITERS ||
+        throw(ArgumentError("prolongation limiter must be one of $(_LIMITERS), got :$limiter"))
+    if limiter !== :none && order > 1
+        boxes = _dst_boxes(cf.data, cm, loc, region)
+        if loc isa CellCenter
+            _limit_cells!(boxes, pf.data, px, py, pz, nest, limiter === :monotone)
+        else
+            limiter === :monotone ||
+                throw(ArgumentError("a velocity takes limiter = :none or :monotone, not :$limiter"))
+            _clip_faces!(boxes, pf.data, px, py, pz)
+        end
+    end
     return cf
 end
 
@@ -281,6 +294,145 @@ function _interp_into!(cd::Array, pd, px, py, pz, cm, loc, region)
         _interp_box!(cd, (0, 0, 0), pd, px, py, pz, ir, jr, kr)
     end
     return cd
+end
+
+# (array, offset, storage box) of every box a prolongation wrote.
+_dst_boxes(cd::Array, cm, loc, region) =
+    map(b -> (cd, (0, 0, 0), b), _region_boxes(cm, loc, region))
+_dst_boxes(cd::_ShellArray, cm, loc, region) = _shell_slabs(cd)
+
+# -------------------------------------------------------------------------
+# The prolongation limiter (#329, item 9)
+# -------------------------------------------------------------------------
+#
+# Scalars: a conservative scaling of the children of each parent cell P
+# about the parent value φ̄_P,
+#
+#     φ_c ← φ̄_P + θ_P (φ_c − φ̄_P),   0 ≤ θ_P ≤ 1,
+#
+# with the same θ_P for every child of P. The map is affine, so the
+# (volume- or reference-mass-weighted) mean of the children, which the
+# primitive-function reconstruction makes equal to φ̄_P, is unchanged:
+# conservation is kept wherever all children of P are prolongated (the
+# child interior of region = :all). Two bounds:
+#
+#   * :positive (Zhang & Shu 2010, JCP 229, 3091, §2.3): θ_P makes the
+#     smallest child ≥ 0 where φ̄_P ≥ 0. Inactive away from zero, so a smooth
+#     field keeps the full order; the default for scalars (qv, tracers).
+#   * :monotone (Barth & Jespersen 1989, AIAA 89-0366): θ_P keeps every
+#     child within the range [m_P, M_P] of the parent values over P and its
+#     26 neighbours. No new extrema at a front; it also clips smooth extrema
+#     to second order, hence an option.
+#
+# θ_P < 1 only where a child violates the bound; everywhere else the values
+# are left bit for bit.
+
+const _LIMITERS = (:none, :positive, :monotone)
+
+function _lim_scratch(nest::NestedGrid, dims::NTuple{3,Int})
+    return get!(nest.limscratch, dims) do
+        (Array{Float64,3}(undef, dims), Array{Float64,3}(undef, dims),
+         Array{Float64,3}(undef, dims))
+    end
+end
+
+function _limit_cells!(boxes, pd::AbstractArray{<:Real,3}, px::_Plan1D, py::_Plan1D,
+                       pz::_Plan1D, nest::NestedGrid, monotone::Bool)
+    c0 = (first(px.cell), first(py.cell), first(pz.cell)) .- 1
+    dims = (last(px.cell), last(py.cell), last(pz.cell)) .- c0
+    cmax, cmin, θ = _lim_scratch(nest, dims)
+    fill!(cmax, -Inf); fill!(cmin, Inf)
+    for (d, off, (ir, jr, kr)) in boxes
+        _child_extrema!(cmax, cmin, d, off, px, py, pz, c0, ir, jr, kr)
+    end
+    _limiter_factors!(θ, cmax, cmin, pd, c0, monotone)
+    for (d, off, (ir, jr, kr)) in boxes
+        _scale_children!(d, off, θ, pd, px, py, pz, c0, ir, jr, kr)
+    end
+    return nothing
+end
+
+function _child_extrema!(cmax, cmin, d::Array, off, px, py, pz, c0, ir, jr, kr)
+    @inbounds for k in kr
+        K = pz.cell[k] - c0[3]
+        for j in jr
+            J = py.cell[j] - c0[2]
+            for i in ir
+                I = px.cell[i] - c0[1]
+                v = d[i - off[1], j - off[2], k - off[3]]
+                cmax[I, J, K] = max(cmax[I, J, K], v)
+                cmin[I, J, K] = min(cmin[I, J, K], v)
+            end
+        end
+    end
+    return nothing
+end
+
+function _limiter_factors!(θ, cmax, cmin, pd, c0, monotone::Bool)
+    n1, n2, n3 = size(pd)
+    @inbounds for K in axes(θ, 3), J in axes(θ, 2), I in axes(θ, 1)
+        θ[I, J, K] = 1.0
+        cmax[I, J, K] == -Inf && continue            # no child of this cell written
+        P = (I + c0[1], J + c0[2], K + c0[3])
+        φ̄ = Float64(pd[P[1], P[2], P[3]])
+        t = 1.0
+        if monotone
+            m = φ̄; M = φ̄
+            for c in max(P[3] - 1, 1):min(P[3] + 1, n3), b in max(P[2] - 1, 1):min(P[2] + 1, n2),
+                a in max(P[1] - 1, 1):min(P[1] + 1, n1)
+                v = Float64(pd[a, b, c]); m = min(m, v); M = max(M, v)
+            end
+            cmax[I, J, K] > M && (t = min(t, (M - φ̄) / (cmax[I, J, K] - φ̄)))
+            cmin[I, J, K] < m && (t = min(t, (m - φ̄) / (cmin[I, J, K] - φ̄)))
+        elseif φ̄ >= 0 && cmin[I, J, K] < 0
+            t = φ̄ / (φ̄ - cmin[I, J, K])
+        end
+        θ[I, J, K] = max(t, 0.0)
+    end
+    return nothing
+end
+
+function _scale_children!(d::Array{T,3}, off, θ, pd, px, py, pz, c0, ir, jr, kr) where {T}
+    @inbounds for k in kr
+        Kp = pz.cell[k]
+        for j in jr
+            Jp = py.cell[j]
+            for i in ir
+                Ip = px.cell[i]
+                t = θ[Ip - c0[1], Jp - c0[2], Kp - c0[3]]
+                t < 1.0 || continue
+                φ̄ = Float64(pd[Ip, Jp, Kp])
+                q = (i - off[1], j - off[2], k - off[3])
+                d[q[1], q[2], q[3]] = T(φ̄ + t * (d[q[1], q[2], q[3]] - φ̄))
+            end
+        end
+    end
+    return nothing
+end
+
+# Velocities (optional): clip each prolongated value to the range of the
+# parent values its stencil reads. Monotone, but neither conservative nor
+# flux-preserving, hence off by default.
+function _clip_faces!(boxes, pd::AbstractArray{<:Real,3}, px::_Plan1D, py::_Plan1D,
+                      pz::_Plan1D)
+    for (d, off, (ir, jr, kr)) in boxes
+        _clip_box!(d, off, pd, px, py, pz, ir, jr, kr)
+    end
+    return nothing
+end
+
+function _clip_box!(d::Array{T,3}, off, pd, px, py, pz, ir, jr, kr) where {T}
+    nx = _stencil(px); ny = _stencil(py); nz = _stencil(pz)
+    @inbounds for k in kr, j in jr, i in ir
+        bi = px.start[i]; bj = py.start[j]; bk = pz.start[k]
+        lo = Inf; hi = -Inf
+        for c in 0:nz-1, b in 0:ny-1, a in 0:nx-1
+            v = Float64(pd[bi + a, bj + b, bk + c]); lo = min(lo, v); hi = max(hi, v)
+        end
+        q = (i - off[1], j - off[2], k - off[3])
+        d[q[1], q[2], q[3]] = T(clamp(Float64(d[q[1], q[2], q[3]]), lo, hi))
+    end
+    return nothing
 end
 
 # A halo-only array stores exactly the halo slabs (and the interface plane):
@@ -321,11 +473,33 @@ face heights. `measure` (a [`NestMeasure`](@ref)) selects the vertical
 measure; with the mass measure of a sound-proof pair
 ([`nest_measure`](@ref)) the conservative directions conserve `∫ W φ dV`
 (`W = ρ̄` or `ρ̄θ̄`) instead of `∫ φ dV`. The default is the volume measure.
+
+`limiter` (#329): the 3rd- and 5th-order reconstructions overshoot at a
+sharp front — a negative `qv` or tracer next to a dry or clean parent
+cell. For a cell-centred field the children of every parent cell are
+scaled about the parent value, which keeps the prolongation conservative
+(the children's mean is the parent value):
+
+  * `:positive` (Zhang & Shu 2010, *J. Comput. Phys.* 229, 3091) — no
+    child below zero where the parent cell is non-negative; inactive away
+    from zero, so a smooth positive field keeps the full order. For
+    quantities that cannot be negative (`qv`, tracer concentrations): a
+    signed field crossing zero inside a parent cell would be clipped;
+  * `:monotone` (Barth & Jespersen 1989, AIAA paper 89-0366) — no child
+    outside the range of its parent cell and the 26 neighbours: no new
+    extrema at a front, but smooth extrema are clipped to second order;
+  * `:none` (default of this low-level operator; the field set of a
+    [`NestedRun`](@ref) limits `qv` and the tracers with `:positive`, see
+    [`interpolate_parent_state!`](@ref)).
+
+A velocity takes `:none` or `:monotone`, a clip to the range of the parent
+values its stencil reads (monotone, but not flux-preserving).
+Where no child overshoots, the values are unchanged bit for bit.
 """
 interpolate_to_nest_boundary!(cf::Field, pf::Field, nest::NestedGrid;
                               order::Int=3, impose_interface::Bool=false,
-                              measure=nothing) =
-    _interp_child!(cf, pf, nest; order, measure,
+                              measure=nothing, limiter::Symbol=:none) =
+    _interp_child!(cf, pf, nest; order, measure, limiter,
                    region = impose_interface ? :halo_interface : :halo)
 
 """
@@ -334,11 +508,12 @@ interpolate_to_nest_boundary!(cf::Field, pf::Field, nest::NestedGrid;
 As [`interpolate_to_nest_boundary!`](@ref) but fills the child field
 *everywhere* (interior included). This is the AMR prolongation operator —
 used to initialize newly refined blocks and to build the reference state
-for [`apply_nest_sponge!`](@ref). Accepts the same `measure` keyword.
+for [`apply_nest_sponge!`](@ref). Accepts the same `measure` and
+`limiter` keywords.
 """
 interpolate_parent_to_child!(cf::Field, pf::Field, nest::NestedGrid; order::Int=3,
-                             measure=nothing) =
-    _interp_child!(cf, pf, nest; order, measure, region=:all)
+                             measure=nothing, limiter::Symbol=:none) =
+    _interp_child!(cf, pf, nest; order, measure, limiter, region=:all)
 
 # =========================================================================
 # Restriction: child -> parent
