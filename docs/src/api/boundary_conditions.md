@@ -63,8 +63,8 @@ heights of a `StretchedGrid` or `dz` steps on a `RegularGrid`), so a
 diffusion with diffusivity `κ` carries `κΓ` through the top face. Its
 homogeneous part ([`homogeneous_bcs`](@ref
 Aeolus.BoundaryConditions.homogeneous_bcs)) is `FluxBC(0)`, which the
-implicit diffusion of `step_imex!` uses. `qv` shares θ's faces but not
-the gradient: it is filled with
+implicit diffusion of `step_imex!` uses. `qv` and the SGS TKE share
+θ's faces but not the gradient: they are filled with
 [`passive_scalar_bcs`](@ref Aeolus.BoundaryConditions.passive_scalar_bcs)
 (`FluxBC(0)` on top, open-boundary data kept). Theory and measured convergence:
 [Large-scale forcing → The fixed-gradient top](../theory/large_scale_forcing.md#The-fixed-gradient-top).
@@ -170,4 +170,16 @@ Aeolus.BoundaryConditions.OUTFLOW_MODES
 Aeolus.BoundaryConditions.has_radiating_outflow
 Aeolus.BoundaryConditions.mark_open_boundary_stage!
 Aeolus.BoundaryConditions.rewind_open_boundaries!
+```
+
+## Near the open faces (N-open-d, #262)
+
+The one BC-aware neighbour index (it replaces the periodic `mod1` wraps
+of code that must also run in an open domain) and the solid points of an
+open face a building touches. Theory:
+[Near the open faces](../theory/fractional_step.md#Near-the-open-faces-(N-open-d)).
+
+```@docs
+Aeolus.BoundaryConditions.neighbor_index
+Aeolus.BoundaryConditions.mark_open_boundary_solids!
 ```

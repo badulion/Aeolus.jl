@@ -65,17 +65,42 @@ function _to_center_periodic(f::Field{L}) where {L}
     return c
 end
 
+# The same average with the far face read through the velocity boundary
+# conditions `bcs` (N-open-d, #262): across a periodic axis the wrapped face
+# (bit for bit `_to_center_periodic`), across any other the boundary-face
+# slot `N + 1` of the storage (the open face's prescribed normal velocity,
+# a wall's zero). `nothing` is the periodic form.
+_to_center(f::Field, ::Nothing) = _to_center_periodic(f)
+function _to_center(f::Field{L}, bcs::FieldBoundaryConditions) where {L}
+    g = f.mesh
+    d = f.data
+    Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
+    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
+    s = L === FaceX ? 1 : L === FaceY ? 2 : L === FaceZ ? 3 : 0
+    s == 0 && return Array(interior_view(f))
+    c = Array{eltype(d)}(undef, Nx, Ny, Nz)
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        I = (i, j, k)
+        n = BoundaryConditions.neighbor_index(g, bcs, I[s] + 1, s; face = true)
+        ip, jp, kp = s == 1 ? (n, j, k) : s == 2 ? (i, n, k) : (i, j, n)
+        c[i, j, k] = 0.5 * (d[Hx+i, Hy+j, Hz+k] + d[Hx+ip, Hy+jp, Hz+kp])
+    end
+    return c
+end
+
 # Cell-centred copy of a velocity component into `out` (a CellCenter field):
-# the two-point average with periodic wrap for a staggered component.
-function _center_into!(out::Field{CellCenter}, f::Field)
-    interior_view(out) .= _to_center_periodic(f)
+# the two-point average with periodic wrap for a staggered component, or
+# through the velocity boundary conditions `vbcs` (#262).
+function _center_into!(out::Field{CellCenter}, f::Field, vbcs = nothing)
+    interior_view(out) .= _to_center(f, vbcs)
     return out
 end
 
 const _PAIRS = ((1, 1), (2, 2), (3, 3), (1, 2), (1, 3), (2, 3))
 
 """
-    subfilter_stress!(τ, u, v, w, filter; ubar = nothing, bcs = periodic) -> τ
+    subfilter_stress!(τ, u, v, w, filter; ubar = nothing, bcs = periodic,
+                      velocity_bcs = nothing) -> τ
 
 The exact subfilter (SGS) stress of a resolved velocity field under an
 explicit filter ``\\overline{\\,·\\,}``,
@@ -86,8 +111,10 @@ explicit filter ``\\overline{\\,·\\,}``,
 
 at the interior cell centres, written into `τ::SymmetricTensorField`.
 `u, v, w` are staggered (`FaceX/FaceY/FaceZ`; interpolated to centres by
-the periodic two-point average of [`isotropic_energy_spectrum`](@ref)) or
-all `CellCenter`. `filter` is any callable `filter(out, f)` acting on
+the periodic two-point average of [`isotropic_energy_spectrum`](@ref), or,
+with `velocity_bcs` — the velocity boundary conditions of an open
+domain, N-open-d #262 — the average with the far face read through
+`BoundaryConditions.neighbor_index`) or all `CellCenter`. `filter` is any callable `filter(out, f)` acting on
 `CellCenter` fields, e.g.
 
 ```julia
@@ -112,14 +139,15 @@ Geurts, B. & Kuerten, H. (1994), *J. Fluid Mech.* 278, 351; Pope, S. B.
 """
 function subfilter_stress!(τ::SymmetricTensorField, u::Field, v::Field, w::Field, filter;
                            ubar = nothing,
-                           bcs::FieldBoundaryConditions = FieldBoundaryConditions(:periodic))
+                           bcs::FieldBoundaryConditions = FieldBoundaryConditions(:periodic),
+                           velocity_bcs = nothing)
     g = mesh(u)
     g isa RegularGrid || throw(ArgumentError("subfilter_stress!: RegularGrid only"))
     size(τ) == (g.Nx, g.Ny, g.Nz) ||
         throw(DimensionMismatch("subfilter_stress!: τ is $(size(τ)), interior $((g.Nx, g.Ny, g.Nz))"))
     uc = ntuple(_ -> Field(CellCenter(), g), 3)
     for (c, f) in zip(uc, (u, v, w))
-        _center_into!(c, f)
+        _center_into!(c, f, velocity_bcs)
     end
     ub = ubar === nothing ? ntuple(_ -> Field(CellCenter(), g), 3) : ubar
     _apply_filter!(ub[1], uc[1], filter, bcs)

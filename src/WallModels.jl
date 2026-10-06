@@ -114,7 +114,7 @@ module WallModels
 
 using ..Grids
 using ..Grids: RegularGrid
-using ..BoundaryConditions: fill_halos!, Periodic, FieldBoundaryConditions
+using ..BoundaryConditions: fill_halos!, Periodic, FieldBoundaryConditions, neighbor_index
 using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!, box_filter!,
                    spectral_cutoff_filter!
 using ..Fields: Field, interior_view

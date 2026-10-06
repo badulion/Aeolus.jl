@@ -305,6 +305,56 @@ halo layers, so the wide upwind stencils read data, not extrapolation;
 `boundary_scalar_flux` refuse a mesh whose halo along an open axis is
 shallower than the scheme needs.
 
+### Near the open faces (N-open-d)
+
+Opening a face breaks four assumptions a closed, periodic box makes.
+
+**The sponge target.** The cores' Rayleigh sponge adds
+``-α(z)(u - u_{target})`` to the momentum. Below a lid the target is
+zero; below an open top it must be the state the boundary data impose
+(the parent's, in a nest; Hellsten et al. 2021 relax toward the parent),
+or the layer is a momentum sink of ``α(z)\,U`` against the inflow. Every
+core passes `sim.sponge_target` (the constructor keyword
+`sponge_target`, e.g. `sponge_target(data, mesh)`) to the one damping
+kernel; a sponge below an open top without a target is an error.
+Measured: a geostrophic stream ``U_g = 5`` m s⁻¹ through an open box with
+an open top stays ``U_g`` to 0.0 over 100 steps of `step!`, `step_rk3!`,
+`step_imex!` (ARK2) and the anelastic core; with the zero target it loses
+5.97 m s⁻¹.
+
+**Neighbours.** Code that reached across the domain edge with a periodic
+wrap (`mod1(i ± 1, N)`) reads the neighbour through
+`neighbor_index(mesh, bcs, i, axis; face, outside)`: the wrap across a
+periodic axis (bit for bit the old code), the mirror (zero-gradient) cell
+or no neighbour across any other face, and for a staggered field the
+boundary-face slot ``N+1``, which holds an open face's prescribed normal
+velocity. The immersed-wall model, the wall distance, the a-priori stress
+centring and the Berlin couplings use it.
+
+**Solid points.** A building the box edge cuts touches the open face. Its
+boundary points (`mark_open_boundary_solids!`, the faces the
+direct-forcing IBM zeroes) take the solid value, zero velocity, after the
+data are written, and the mass-flux correction neither counts nor adjusts
+them, so ``δ = Q/A_{fluid}``. Measured with a cube at the open east face
+under west inflow: ``\max|∇·u|`` = 1.5e-16, ``δ = Q/A_{fluid}`` to 1e-12.
+
+**Budget terms.** `boundary_scalar_flux` also returns, per level, the
+diffusive flux ``-K ∂ϕ/∂n\,A`` through every open scalar face, with the
+kernels' face diffusivity ``K = ν + \tfrac12(κ_{in} + κ_{out})`` (keyword
+`diffusivity`), and the part of the advective flux the mass correction
+carries, ``-δ\,W ϕ_{face} A`` on every face it adjusted (keyword
+`correction_levels`). Then a whole `step!` with centred advection, ``ν``
+and Smagorinsky diffusion through open faces satisfies
+
+```math
+\int θ\,dV\Big|^{n+1} - \int θ\,dV\Big|^{n} = -Δt \oint \bigl(θ\,u·n - K\,∂_n θ\bigr)\,dA
+```
+
+to 1.2e-13 (relative). For a +1 K inflow anomaly in a uniform stream the
+flux into the box is ``U ΔT A`` for the upwind and WENO-Z5 face values,
+``U ΔT A/2`` for the centred one (the mean of the halo and the first
+cell), plus ``ν ΔT A/Δx`` of diffusion across the jump, each to 1e-12.
+
 ## Alternative: pressure-Poisson-per-substage
 
 For RK3 (or higher-order Runge-Kutta), the divergence-free constraint

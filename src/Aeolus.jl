@@ -1074,6 +1074,11 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
 # N-open-c (#260) — convective / Orlanski radiation outflow on open faces.
 export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow, rewind_open_boundaries!,
        mark_open_boundary_stage!
+# N-parent-b (#254) / N-open-d (#262) — θ's faces without its top gradient
+# (qv, the SGS TKE); the one BC-aware neighbour index (replaces the periodic
+# `mod1` wraps); solid obstacles at open faces; the sponge target of an open
+# top (`Simulations`).
+export passive_scalar_bcs, neighbor_index, mark_open_boundary_solids!, sponge_target
 
 # Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
 # nudging, prescribed advective tendencies, surface-temperature series.

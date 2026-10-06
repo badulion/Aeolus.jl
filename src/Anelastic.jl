@@ -77,7 +77,8 @@ import ..PressureSolvers: solve!, poisson_axis_bcs
 import ..TimeSteppers: step!
 import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
 
-using ..Simulations: horizontal_mean, horizontal_variance
+using ..Simulations: horizontal_mean, horizontal_variance, add_velocity_sponge!
+import ..Simulations
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 using ..Operators: sgs_fields
 using ..TimeIntegration: CFLConstraints, _max_advective_rate, _SNAPSHOTS
@@ -1232,6 +1233,7 @@ mutable struct MassWeightedSimulation{S<:MassWeighting,
     θ_flux_top::T
     sponge_α_max::T
     sponge_z_start::T
+    sponge_target::NamedTuple{(:u, :v, :w)}   # N-open-d (#262)
     # enable flags
     has_viscosity::Bool
     has_buoyancy::Bool
@@ -1287,6 +1289,7 @@ is `0`):
 | `Pr_t` | `1/3` | turbulent Prandtl number |
 | `θ_flux_bottom`, `θ_flux_top` | `0` | prescribed surface fluxes |
 | `sponge_α_max`, `sponge_z_start` | off | Rayleigh sponge |
+| `sponge_target` | `nothing` (zero) | sponge relaxation targets; required with an open top ([`sponge_target`](@ref Aeolus.Simulations.sponge_target), #262) |
 | `bcs`, `θ_bcs` | `FieldBoundaryConditions(:periodic, :periodic, :wall)` | BCs |
 | `solver` | `DensityWeightedPoissonSolver(mesh, ref; weighting=:ρ)` | projection solver |
 | `tol`, `maxit` | `1e-12`, `500` | passed to the default solver |
@@ -1376,6 +1379,7 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
                               θ_flux_top::Real       = 0,
                               sponge_α_max::Real     = 0,
                               sponge_z_start::Real   = mesh.z0 + mesh.Lz,
+                              sponge_target          = nothing,
                               bcs::FieldBoundaryConditions =
                                   FieldBoundaryConditions(:periodic, :periodic, :wall),
                               θ_bcs::FieldBoundaryConditions = bcs,
@@ -1420,6 +1424,7 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
         S, mesh, bcs, θ_bcs, ps, refstate,
         T(ν), T(g_accel), T(f_coriolis), T(C_s), T(Pr_t),
         T(θ_flux_bottom), T(θ_flux_top), T(sponge_α_max), T(sponge_z_start),
+        Simulations._sponge_target(sponge_target, mesh, bcs, has_sponge),
         ν != 0, buoyancy, f_coriolis != 0, C_s != 0,
         θ_flux_bottom != 0 || θ_flux_top != 0, has_sponge,
         zero(T),
@@ -1589,12 +1594,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     # 6. Coriolis / surface flux / sponge / user forcing
     sim.has_coriolis && add_coriolis!(sim.tu, sim.tv, sim.u, sim.v, sim.f_coriolis)
     sim.has_surface_flux && add_surface_flux!(sim.tθ, sim.θ_flux_bottom, sim.θ_flux_top)
-    if sim.has_sponge
-        z_top = m.z0 + m.Lz
-        add_sponge!(sim.tu, sim.u, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tv, sim.v, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tw, sim.w, sim.sponge_α_max, sim.sponge_z_start, z_top)
-    end
+    sim.has_sponge && add_velocity_sponge!(sim)   # toward sim.sponge_target (#262)
     body_force! === nothing || body_force!(sim, Δt)
 
     # 7. predictor

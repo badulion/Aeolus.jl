@@ -14,6 +14,7 @@ module IBM
 using ..Grids: RegularGrid, interior
 using ..Fields: Field, interior_view
 using ..Simulations: BoussinesqSimulation
+using ..BoundaryConditions: FieldBoundaryConditions, neighbor_index
 
 export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
        implicit_ibm_correction!, wall_distance, first_level_cells
@@ -158,7 +159,8 @@ end
 
 """
     wall_distance(sm::SolidMask; bottom = true, top = false,
-                  periodic = (true, true, false), maxsweeps = 50) -> Array{T,3}
+                  periodic = (true, true, false), bcs = nothing,
+                  maxsweeps = 50) -> Array{T,3}
 
 Distance (m) from the centre of every interior cell to the nearest solid
 surface, an interior-sized `Nx × Ny × Nz` array (0 in solid cells). The
@@ -178,7 +180,10 @@ than a scalar distance, with no dependencies:
 2. *Propagate.* Forward and backward raster sweeps over the
    26-neighbourhood offer each cell its neighbours' nearest points,
    `r(c) ← r(n) + (x_n − x_c)`, and keep the closest, until nothing changes
-   (`periodic` wraps the lateral neighbours across the seam).
+   (`periodic` wraps the lateral neighbours across the seam; a velocity
+   boundary-condition set `bcs`, when given, decides instead, through
+   `BoundaryConditions.neighbor_index`: an open or wall face has no
+   neighbour beyond it, N-open-d #262).
 
 The distance is exact for a plane surface aligned with the grid
 (`d = Δz/2 + (k−1)Δz` above a floor) and next to every surface; elsewhere
@@ -198,7 +203,9 @@ transformations in digital images*, Comput. Vision Graph. Image Process.
 34, 344.
 """
 function wall_distance(sm::SolidMask; bottom::Bool = true, top::Bool = false,
-                       periodic::NTuple{3,Bool} = (true, true, false), maxsweeps::Integer = 50)
+                       periodic::NTuple{3,Bool} = (true, true, false),
+                       bcs::Union{Nothing,FieldBoundaryConditions} = nothing,
+                       maxsweeps::Integer = 50)
     m = sm.mesh
     T = typeof(m.dx)
     Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
@@ -209,8 +216,11 @@ function wall_distance(sm::SolidMask; bottom::Bool = true, top::Bool = false,
         solid[i, j, k] = sm.mask[Hx+i, Hy+j, Hz+k]
     end
     offs = [(a, b, c) for c in -1:1 for b in -1:1 for a in -1:1 if (a, b, c) != (0, 0, 0)]
-    # neighbour index with wrap-around (or `0` outside a non-periodic edge)
-    @inline wrap(i, N, p) = 1 <= i <= N ? i : (p ? mod1(i, N) : 0)
+    # neighbour index with wrap-around (or `0` outside a non-periodic edge):
+    # the one BC-aware helper, on `bcs` or on the axes `periodic` names
+    nb = bcs === nothing ?
+        FieldBoundaryConditions(ntuple(a -> periodic[a] ? :periodic : :noflux, 3)...) : bcs
+    @inline wrap(i, a) = neighbor_index(m, nb, i, a; outside = :none)
     # displacement from the cell centre to its nearest surface point
     inf = T(Inf)
     rx = fill(inf, Nx, Ny, Nz); ry = fill(inf, Nx, Ny, Nz); rz = fill(inf, Nx, Ny, Nz)
@@ -229,8 +239,7 @@ function wall_distance(sm::SolidMask; bottom::Bool = true, top::Bool = false,
             bx, by, bz = zero(T), zero(T), dz / 2
         end
         for o in offs
-            ii = wrap(i + o[1], Nx, periodic[1]); jj = wrap(j + o[2], Ny, periodic[2])
-            kk = wrap(k + o[3], Nz, periodic[3])
+            ii = wrap(i + o[1], 1); jj = wrap(j + o[2], 2); kk = wrap(k + o[3], 3)
             (ii == 0 || jj == 0 || kk == 0) && continue
             solid[ii, jj, kk] || continue
             # the centre clamped into the neighbour's box: offset o·(Δ/2) per axis
@@ -250,8 +259,7 @@ function wall_distance(sm::SolidMask; bottom::Bool = true, top::Bool = false,
             bx, by, bz = rx[i, j, k], ry[i, j, k], rz[i, j, k]
             best = n2(bx, by, bz)
             for o in os
-                ii = wrap(i + o[1], Nx, periodic[1]); jj = wrap(j + o[2], Ny, periodic[2])
-                kk = wrap(k + o[3], Nz, periodic[3])
+                ii = wrap(i + o[1], 1); jj = wrap(j + o[2], 2); kk = wrap(k + o[3], 3)
                 (ii == 0 || jj == 0 || kk == 0) && continue
                 solid[ii, jj, kk] && continue            # seeds already hold solid boxes
                 isfinite(rx[ii, jj, kk]) || continue

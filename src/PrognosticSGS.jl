@@ -798,7 +798,7 @@ function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     _wall_production!(c, sim, bcs)
     fill!(c.tend.data, 0)
     if c.transport
-        ebcs = homogeneous_bcs(sim.θ_bcs)     # e: not θ's top gradient (#254)
+        ebcs = passive_scalar_bcs(sim.θ_bcs)     # e: not θ's top gradient (#254)
         fill_halos!(c.e, ebcs)
         _advect_tke!(c, sim, Δt, ebcs, g)
         c.K2.data .= 2 .* c.ν.data
@@ -987,7 +987,7 @@ function tke_budget(c::TKEClosure{T}, sim) where {T}
     tr = zero(T)
     if c.transport
         fill!(c.tend.data, 0)
-        ebcs = homogeneous_bcs(sim.θ_bcs)
+        ebcs = passive_scalar_bcs(sim.θ_bcs)
         fill_halos!(c.e, ebcs)
         _advect_tke!(c, sim, one(T), ebcs, g)
         c.K2.data .= 2 .* c.ν.data

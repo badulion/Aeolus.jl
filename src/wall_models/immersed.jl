@@ -102,12 +102,8 @@ function immersed_walls(sim, sm, law; ν::Real = 1.5e-5)
     per = (sim.bcs.west isa Periodic, sim.bcs.south isa Periodic, sim.bcs.bottom isa Periodic)
     N = (Nx, Ny, Nz); H = (Hx, Hy, Hz)
     # interior index of data index D along axis a, or 0 outside the domain
-    function inner(D, a)
-        i = D - H[a]
-        1 <= i <= N[a] && return i
-        per[a] && return mod1(i, N[a])
-        return 0
-    end
+    # (the one BC-aware neighbour helper, N-open-d #262)
+    inner(D, a) = neighbor_index(mesh, sim.bcs, D - H[a], a; outside = :none)
     function solid(I, J, K)
         i, j, k = inner(I, 1), inner(J, 2), inner(K, 3)
         (i == 0 || j == 0 || k == 0) && return (false, (0, 0, 0))

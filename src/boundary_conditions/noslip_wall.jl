@@ -83,11 +83,11 @@ same zero-gradient / antisymmetric rules), a
 [`FreeStreamBoundary`](@ref) by one with zero transpiration. This is the
 homogeneous part of an affine boundary operator: implicit solvers apply
 the operator to search directions and increments with these, and move
-the boundary contribution to the right-hand side. It is also the
-boundary condition of a scalar that shares θ's walls but not θ's
-prescribed top gradient (`qv`, the SGS TKE). Returns `bcs` itself
+the boundary contribution to the right-hand side. Returns `bcs` itself
 (`===`) when every face is homogeneous, so the existing BC types take
-their usual code path.
+their usual code path. A scalar that shares θ's faces but not θ's
+prescribed top gradient (`qv`, the SGS TKE) takes
+[`passive_scalar_bcs`](@ref) instead, which keeps open-boundary data.
 """
 function homogeneous_bcs(bcs::FieldBoundaryConditions)
     faces = (bcs.west, bcs.east, bcs.south, bcs.north, bcs.bottom, bcs.top)
@@ -106,7 +106,7 @@ _homogeneous(bc::FluxBC) = FluxBC(zero(bc.f))
     passive_scalar_bcs(θ_bcs::FieldBoundaryConditions) -> FieldBoundaryConditions
 
 The boundary conditions of a scalar that shares θ's faces but not θ's
-prescribed top gradient (`qv`): a [`FluxBC`](@ref)`(Γ)` becomes
+prescribed top gradient (`qv`, the SGS TKE): a [`FluxBC`](@ref)`(Γ)` becomes
 `FluxBC(0)` (the mirror halo), every other face is kept as it is. Unlike
 [`homogeneous_bcs`](@ref) it keeps the boundary data of an
 [`OpenBoundary`](@ref) face, so a `qv` named in the open faces' `fields`

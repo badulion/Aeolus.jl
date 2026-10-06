@@ -304,7 +304,7 @@ function _sgs_centre_strain(case)
     sim, m = case.sim, case.mesh
     U = map((sim.u, sim.v, sim.w)) do f
         F = Field(CellCenter(), m)
-        interior_view(F) .= Aeolus.Operators._to_center_periodic(f)
+        interior_view(F) .= Aeolus.Operators._to_center(f, sim.bcs)   # BC-aware (#262)
         F
     end
     return filtered_strain(U...)
@@ -336,9 +336,10 @@ function sgs_test_filter_metrics(case, τm, e)
     cells, _ = sgs_canopy_cells(case)
     isempty(cells) && return (k_test = NaN, e = NaN, ratio = NaN, ρ = NaN, II_L = NaN, II_model = NaN, outside = NaN)
     mask = case.geom.sm.mask
-    bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux)
+    bcs = case_scalar_bcs(case.cfg)
     L = SymmetricTensorField(m)
-    subfilter_stress!(L, sim.u, sim.v, sim.w, (o, f) -> box_filter!(o, f, 3; mask = mask); bcs = bcs)
+    subfilter_stress!(L, sim.u, sim.v, sim.w, (o, f) -> box_filter!(o, f, 3; mask = mask); bcs = bcs,
+                      velocity_bcs = sim.bcs)
     pick(a) = [a[i, j, k] for (i, j, k) in cells]
     trL = pick(L.xx) .+ pick(L.yy) .+ pick(L.zz)
     k_test = mean(trL) / 2
