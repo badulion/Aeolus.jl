@@ -362,7 +362,7 @@ end, and `heat_error`, the relative mismatch between the change of the
 column heat content and the heat flux applied.
 """
 function patchy_run!(pl::PatchyLES; t_end = 7200.0, dt = 2.0, t_avg = 3600.0,
-                     every = 10, z_mid = 400.0, verbose = false)
+                     every = 10, z_mid = 400.0)
     sim = pl.sim
     m = sim.mesh
     Nx, Ny = size(pl.classes)
@@ -386,8 +386,9 @@ function patchy_run!(pl::PatchyLES; t_end = 7200.0, dt = 2.0, t_avg = 3600.0,
                 wp[ϕ] += 0.5 * (sim.w.data[I, J, K] + sim.w.data[I, J, K + 1])
                 cnt[ϕ] += 1
             end
-            verbose && s % (20every) == 0 &&
-                println("  t = $(round(Int, sim.t)) s  zi = $(smp.zi) m  wθ = $(round(smp.les, digits = 4))")
+            s % (20every) == 0 &&
+                @info("patchy LES: t = $(round(Int, sim.t)) s  zi = $(smp.zi) m  wθ = $(round(smp.les, digits = 4))",
+                      subsystem = :patchy, domain = current_domain(), t = sim.t, zi = smp.zi, wθ = smp.les)
         end
     end
     mean_of(k) = sum(getfield(x, k) for x in samples) / length(samples)
