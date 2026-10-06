@@ -24,6 +24,7 @@ using ..Grids: RegularGrid, interior
 using ..Fields: Field, interior_view
 using ..Superdroplet: DEFAULT_MICRO
 using ..P3Microphysics: p3_sediment!, p3_rain_sedimentation_velocities
+using ..Backends: AbstractBackend, backend, launch!, foreach_column!
 
 export apply_kessler_step!, KESSLER_N0, kessler_rain_number, kessler_fall_speed
 
@@ -111,7 +112,8 @@ function apply_kessler_step!(qv::Field, ql::Field, qr::Field, dt::Real;
                              k_auto::Real=1e-3, ql_c::Real=1e-3,
                              k_acc::Real=2.2, Vt::Union{Real,Symbol}=:spectrum,
                              ρ_air = DEFAULT_MICRO.ρ_air, N0::Real = KESSLER_N0,
-                             mesh::RegularGrid = qv.mesh)
+                             mesh::RegularGrid = qv.mesh,
+                             backend::AbstractBackend = backend(ql.data))
     Vt isa Symbol && Vt !== :spectrum &&
         throw(ArgumentError("Vt must be a fall speed (m/s) or :spectrum"))
     dz  = mesh.dz
@@ -120,8 +122,35 @@ function apply_kessler_step!(qv::Field, ql::Field, qr::Field, dt::Real;
 
     qld = ql.data; qrd = qr.data
 
-    # 1. Autoconversion + accretion (source/sink between ql and qr).
-    @inbounds for k in kk, j in jj, i in ii
+    # 1. Autoconversion + accretion (source/sink between ql and qr): per
+    #    cell, one work item each (KA-m, #301; pointwise, so the same bits
+    #    at every thread count).
+    launch!(backend, _kessler_convert!, (ii, jj, kk), qld, qrd, float(k_auto), float(ql_c),
+            float(k_acc), float(Δt))
+
+    # 2a. Rain fallout with the size-dependent fall-speed spectrum.
+    if Vt === :spectrum
+        _kessler_sediment_spectrum!(qrd, ii, jj, kk, dz, Δt, ρ_air, N0; backend = backend)
+        return (qv, ql, qr)
+    end
+
+    # 2b. Legacy single fall speed — 1st-order upwind (rain falls downward).
+    # ∂qr/∂t += ∂(Vt qr)/∂z (positive Vt means fallout, so qr gained
+    # from above by 1 cell and lost downward). A column per work item,
+    # its levels in ascending k as in the old k-outer loop (each level
+    # reads the not-yet-updated level above it).
+    if Vt > 0
+        α = Vt * Δt / dz
+        α = min(α, 0.5)   # keep CFL stable
+        foreach_column!(backend, _kessler_upwind_column!, (ii, jj), qrd, kk, float(α);
+                        weight = length(kk))
+    end
+
+    return (qv, ql, qr)
+end
+
+@inline function _kessler_convert!(i, j, k, qld, qrd, k_auto, ql_c, k_acc, Δt)
+    @inbounds begin
         qle = qld[i,j,k]
         qre = qrd[i,j,k]
         auto = k_auto * max(qle - ql_c, 0.0)
@@ -132,50 +161,57 @@ function apply_kessler_step!(qv::Field, ql::Field, qr::Field, dt::Real;
         qld[i,j,k] -= dqr
         qrd[i,j,k] += dqr
     end
+    return nothing
+end
 
-    # 2a. Rain fallout with the size-dependent fall-speed spectrum.
-    if Vt === :spectrum
-        _kessler_sediment_spectrum!(qrd, ii, jj, kk, dz, Δt, ρ_air, N0)
-        return (qv, ql, qr)
+@inline function _kessler_upwind_column!(i, j, qrd, kk, α)
+    @inbounds for k in kk
+        in_from_above = k + 1 <= last(kk) ? qrd[i,j,k+1] : 0.0
+        out_to_below  = qrd[i,j,k]
+        qrd[i,j,k] += α * (in_from_above - out_to_below)
     end
-
-    # 2b. Legacy single fall speed — 1st-order upwind (rain falls downward).
-    # ∂qr/∂t += ∂(Vt qr)/∂z (positive Vt means fallout, so qr gained
-    # from above by 1 cell and lost downward).
-    if Vt > 0
-        α = Vt * Δt / dz
-        α = min(α, 0.5)   # keep CFL stable
-        @inbounds for k in kk, j in jj, i in ii
-            k_up   = k + 1
-            k_down = k - 1
-            in_from_above = k_up <= last(kk) ? qrd[i,j,k_up] : 0.0
-            out_to_below  = qrd[i,j,k]
-            qrd[i,j,k] += α * (in_from_above - out_to_below)
-        end
-    end
-
-    return (qv, ql, qr)
+    return nothing
 end
 
 # Column-by-column sedimentation of Kessler rain at the Marshall-Palmer
 # mass-weighted fall speed, delegated to the P3 flux-form, sub-stepped
-# column scheme (which is exactly conservative and positive).
-function _kessler_sediment_spectrum!(qrd, ii, jj, kk, dz, Δt, ρ_air, N0)
+# column scheme (which is exactly conservative and positive). One work
+# item per column (KA-m, #301): a raining column owns its scratch (`col`,
+# `Nr`, allocated by the column) and its fall-speed functor, so no two
+# columns share a buffer; the arithmetic is the old loop's.
+function _kessler_sediment_spectrum!(qrd, ii, jj, kk, dz, Δt, ρ_air, N0;
+                                     backend::AbstractBackend = backend(qrd))
     nz = length(kk)
     ρ = ρ_air isa AbstractVector ? collect(float.(ρ_air)) : fill(float(ρ_air), nz)
     length(ρ) == nz || throw(DimensionMismatch("ρ_air must be a scalar or have one value per level"))
-    col = zeros(eltype(qrd), nz)
-    Nr = similar(col)
-    function vel(f)
-        Nr .= kessler_rain_number.(f[1], ρ; N0 = N0)
-        return (p3_rain_sedimentation_velocities(f[1], Nr, ρ)[2],)
+    foreach_column!(backend, _kessler_sediment_column!, (ii, jj), qrd, kk, ρ, dz, Δt, float(N0);
+                    weight = nz)
+    return nothing
+end
+
+# The fall speeds of one column's rain, recomputed at every sub-step from
+# the column's own number scratch `Nr` (a functor, not a closure over a
+# shared buffer).
+struct _KesslerRainSpeed{V<:AbstractVector,R<:AbstractVector}
+    Nr::V
+    ρ::R
+    N0::Float64
+end
+function (v::_KesslerRainSpeed)(f)
+    v.Nr .= kessler_rain_number.(f[1], v.ρ; N0 = v.N0)
+    return (p3_rain_sedimentation_velocities(f[1], v.Nr, v.ρ)[2],)
+end
+
+function _kessler_sediment_column!(i, j, qrd, kk, ρ, dz, Δt, N0)
+    rains = false
+    @inbounds for k in kk
+        qrd[i, j, k] > 0 && (rains = true; break)
     end
-    @inbounds for j in jj, i in ii
-        for (n, k) in enumerate(kk); col[n] = qrd[i, j, k]; end
-        any(>(0), col) || continue
-        p3_sediment!((col,), vel, ρ, dz, Δt)
-        for (n, k) in enumerate(kk); qrd[i, j, k] = col[n]; end
-    end
+    rains || return nothing
+    col = zeros(eltype(qrd), length(kk))
+    @inbounds for (n, k) in enumerate(kk); col[n] = qrd[i, j, k]; end
+    p3_sediment!((col,), _KesslerRainSpeed(similar(col), ρ, N0), ρ, dz, Δt)
+    @inbounds for (n, k) in enumerate(kk); qrd[i, j, k] = col[n]; end
     return nothing
 end
 

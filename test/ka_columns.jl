@@ -165,4 +165,26 @@ end
     end
 end
 
+@testset "Microphysics: Kessler conversion per cell, sedimentation per column" begin
+    mesh = RegularGrid(; size = (16, 12, 20), extent = (800.0, 600.0, 1000.0), halo = (2, 2, 2))
+    rng = Xoshiro(44)
+    mk() = (f = Aeolus.Fields.Field(mesh); f)
+    qv0, ql0, qr0 = mk(), mk(), mk()
+    I = Aeolus.Grids.interior(mesh)
+    qv0.data .= 0.01
+    ql0.data[I...] .= ifelse.(rand(rng, 16, 12, 20) .< 0.3, 2e-3 .* rand(rng, 16, 12, 20), 0.0)
+    qr0.data[I...] .= ifelse.(rand(rng, 16, 12, 20) .< 0.2, 1e-3 .* rand(rng, 16, 12, 20), 0.0)
+    qr0.data[I[1], I[2][1:3], I[3]] .= 0.0                # dry columns
+    ρ = collect(range(1.2, 0.9, length = 20))
+    for (lab, b) in KC_BACKENDS, Vt in (:spectrum, 3.0), ρa in (1.1, ρ)
+        a = [copy(f.data) for f in (qv0, ql0, qr0)]
+        fa = [mk() for _ in 1:3]; for (f, d) in zip(fa, a); f.data .= d; end
+        fb = [mk() for _ in 1:3]; for (f, d) in zip(fb, a); f.data .= d; end
+        LC.apply_kessler_step!(fb..., 20.0; Vt = Vt, ρ_air = ρa)
+        apply_kessler_step!(fa..., 20.0; Vt = Vt, ρ_air = ρa, backend = b)
+        @test all(n -> kc_bits(fa[n].data) == kc_bits(fb[n].data), 1:3)
+        @test fa[3].data != qr0.data                       # rain was made and fell
+    end
+end
+
 end # testset KA-m

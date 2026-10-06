@@ -8,6 +8,7 @@ module LegacyColumns
 using Aeolus
 using Aeolus.MoistThermodynamics: DEFAULT_CONSTANTS, PhasePartition, exner_function
 using Aeolus.RadiationFog: fog_condensation
+using Aeolus.P3Microphysics: p3_sediment!, p3_rain_sedimentation_velocities
 
 "RadiationFog.fog_adjust! before KA-m: one sweep, one running total."
 function fog_adjust!(θ, qv, ql, p, dt; τ = 0.0, levels = axes(θ, 3), c = DEFAULT_CONSTANTS)
@@ -27,6 +28,50 @@ function fog_adjust!(θ, qv, ql, p, dt; τ = 0.0, levels = axes(θ, 3), c = DEFA
         end
     end
     return total
+end
+
+"Microphysics.apply_kessler_step! before KA-m (serial loops, one shared column scratch)."
+function apply_kessler_step!(qv, ql, qr, dt; k_auto = 1e-3, ql_c = 1e-3, k_acc = 2.2,
+                             Vt = :spectrum, ρ_air = Aeolus.Superdroplet.DEFAULT_MICRO.ρ_air,
+                             N0 = Aeolus.Microphysics.KESSLER_N0, mesh = qv.mesh)
+    dz = mesh.dz; Δt = dt
+    ii, jj, kk = Aeolus.Grids.interior(mesh)
+    qld = ql.data; qrd = qr.data
+    @inbounds for k in kk, j in jj, i in ii
+        qle = qld[i,j,k]
+        qre = qrd[i,j,k]
+        auto = k_auto * max(qle - ql_c, 0.0)
+        accr = k_acc * qle * (max(qre, 0.0) ^ (7/8))
+        dqr = (auto + accr) * Δt
+        dqr = min(dqr, max(qle, 0.0))
+        qld[i,j,k] -= dqr
+        qrd[i,j,k] += dqr
+    end
+    if Vt === :spectrum
+        nz = length(kk)
+        ρ = ρ_air isa AbstractVector ? collect(float.(ρ_air)) : fill(float(ρ_air), nz)
+        col = zeros(eltype(qrd), nz)
+        Nr = similar(col)
+        function vel(f)
+            Nr .= Aeolus.Microphysics.kessler_rain_number.(f[1], ρ; N0 = N0)
+            return (p3_rain_sedimentation_velocities(f[1], Nr, ρ)[2],)
+        end
+        @inbounds for j in jj, i in ii
+            for (n, k) in enumerate(kk); col[n] = qrd[i, j, k]; end
+            any(>(0), col) || continue
+            p3_sediment!((col,), vel, ρ, dz, Δt)
+            for (n, k) in enumerate(kk); qrd[i, j, k] = col[n]; end
+        end
+        return (qv, ql, qr)
+    end
+    if Vt > 0
+        α = min(Vt * Δt / dz, 0.5)
+        @inbounds for k in kk, j in jj, i in ii
+            in_from_above = k + 1 <= last(kk) ? qrd[i,j,k+1] : 0.0
+            qrd[i,j,k] += α * (in_from_above - qrd[i,j,k])
+        end
+    end
+    return (qv, ql, qr)
 end
 
 end # module
