@@ -81,7 +81,7 @@ end
 
 The slip velocity on the true surface that makes the ghost-cell
 reconstruction carry the modelled stress, per `CellCenter` stencil. The
-reconstruction ([`CutCell.reconstruct_wall_velocity!`](@ref)) makes the
+reconstruction ([`CutCell.reconstruct_wall_velocity!`](@ref Aeolus.CutCell.reconstruct_wall_velocity!)) makes the
 velocity linear along the normal between the wall value ``u_s`` and the
 image value ``u_t``, so the resolved stress there is
 ``ν_{eff}(u_t - u_s)/h``. Setting it equal to the modelled ``τ_w``

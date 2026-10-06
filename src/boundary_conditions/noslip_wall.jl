@@ -133,57 +133,27 @@ end
 
 # u, v (FaceX/FaceY): antisymmetric about the wall velocity (mirror when
 # it is a free-slip wall — ImpermeableWall keeps its free-slip meaning).
-function _fill_wall_bottom!(d::AbstractArray{T,3}, bc::NoSlipWall,
-                            Hz, loc::Union{FaceX,FaceY}) where {T}
-    U2 = 2 * _wall_velocity(bc, loc, T)
-    @inbounds for h in 1:Hz
-        @views d[:, :, Hz + 1 - h] .= U2 .- d[:, :, Hz + h]
-    end
-    return d
-end
-function _fill_wall_top!(d::AbstractArray{T,3}, bc::NoSlipWall,
-                         Hz, Nz, loc::Union{FaceX,FaceY}) where {T}
-    U2 = 2 * _wall_velocity(bc, loc, T)
-    @inbounds for h in 1:Hz
-        @views d[:, :, Hz + Nz + h] .= U2 .- d[:, :, Hz + Nz + 1 - h]
-    end
-    return d
-end
+# Each face is one launch of the per-axis halo kernels (KA-f, #297).
+_fill_wall_bottom!(d::AbstractArray{T,3}, bc::NoSlipWall, Hz, loc::Union{FaceX,FaceY}) where {T} =
+    _halo_reflect!(d, 3, Hz, size(d, 3) - 2Hz, true, false, 2 * _wall_velocity(bc, loc, T))
+_fill_wall_top!(d::AbstractArray{T,3}, bc::NoSlipWall, Hz, Nz, loc::Union{FaceX,FaceY}) where {T} =
+    _halo_reflect!(d, 3, Hz, Nz, false, true, 2 * _wall_velocity(bc, loc, T))
 
 # Free-slip side of a mixed pair, and cell-centred fields at any wall:
 # mirror (identical to the ImpermeableWall fill).
-function _fill_wall_bottom!(d, bc::_ZWall, Hz, loc::Union{CellCenter,FaceX,FaceY})
-    @inbounds for h in 1:Hz
-        @views d[:, :, Hz + 1 - h] .= d[:, :, Hz + h]
-    end
-    return d
-end
-function _fill_wall_top!(d, bc::_ZWall, Hz, Nz, loc::Union{CellCenter,FaceX,FaceY})
-    @inbounds for h in 1:Hz
-        @views d[:, :, Hz + Nz + h] .= d[:, :, Hz + Nz + 1 - h]
-    end
-    return d
-end
+_fill_wall_bottom!(d, bc::_ZWall, Hz, loc::Union{CellCenter,FaceX,FaceY}) =
+    _halo_mirror!(d, 3, Hz, size(d, 3) - 2Hz, true, false)
+_fill_wall_top!(d, bc::_ZWall, Hz, Nz, loc::Union{CellCenter,FaceX,FaceY}) =
+    _halo_mirror!(d, 3, Hz, Nz, false, true)
 
 # w (FaceZ): zero on the wall face, antisymmetric halo — same as
 # ImpermeableWall, so the pressure problem is unchanged.
 function _fill_wall_bottom!(d::AbstractArray{T,3}, ::_ZWall, Hz, ::FaceZ) where {T}
-    @inbounds begin
-        @views d[:, :, Hz + 1] .= zero(T)
-        for h in 1:Hz
-            @views d[:, :, Hz + 1 - h] .= .-d[:, :, Hz + 1 + h]
-        end
-    end
-    return d
+    _halo_set!(d, 3, Hz + 1, zero(T))
+    return _halo_negate!(d, 3, Hz, size(d, 3) - 2Hz, true, false)
 end
 function _fill_wall_top!(d::AbstractArray{T,3}, ::_ZWall, Hz, Nz, ::FaceZ) where {T}
     kw = Hz + Nz + 1
-    @inbounds begin
-        kw <= size(d, 3) && (@views d[:, :, kw] .= zero(T))
-        for h in 1:Hz
-            dst = kw + h
-            dst <= size(d, 3) && (@views d[:, :, dst] .= .-d[:, :, kw - h])
-        end
-    end
-    return d
+    kw <= size(d, 3) && _halo_set!(d, 3, kw, zero(T))
+    return _halo_negate!(d, 3, Hz, Nz, false, true)
 end

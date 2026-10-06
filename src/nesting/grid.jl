@@ -91,10 +91,32 @@ nest_bcs(x::Symbol, args...; kw...) =
 # child cell (the limiter groups children by it; 0 for a nodal plan). Flat
 # arrays rather than a vector of (start, weights) tuples (#329): one
 # allocation per plan and a concrete, GPU-friendly layout.
+#
+# `clo[q]:chi[q]` are the child indices whose parent cell is `c1 + q - 1`
+# (contiguous, since `cell` is non-decreasing): the inverse of `cell`, so the
+# limiter's parent cells gather their children (KA-f, #297). Empty for a
+# nodal plan.
 struct _Plan1D
     start::Vector{Int}
     w::Matrix{Float64}
     cell::Vector{Int}
+    clo::Vector{Int}
+    chi::Vector{Int}
+    c1::Int
+end
+
+function _Plan1D(start::Vector{Int}, w::Matrix{Float64}, cell::Vector{Int})
+    (isempty(cell) || first(cell) == 0) && return _Plan1D(start, w, cell, Int[], Int[], 1)
+    issorted(cell) || error("_Plan1D: the parent cells of a cell-average plan must be non-decreasing")
+    c1 = first(cell); n = last(cell) - c1 + 1
+    clo = fill(1, n); chi = fill(0, n)            # empty ranges by default
+    for ic in length(cell):-1:1
+        clo[cell[ic] - c1 + 1] = ic
+    end
+    for ic in eachindex(cell)
+        chi[cell[ic] - c1 + 1] = ic
+    end
+    return _Plan1D(start, w, cell, clo, chi, c1)
 end
 
 Base.length(p::_Plan1D) = length(p.start)

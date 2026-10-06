@@ -1,0 +1,37 @@
+# Rayleigh-Bénard-flavoured convection (formerly
+# examples/buoyant_convection.jl): a triply periodic unit box, 32³, an
+# unstable θ profile (1 K warmer at the bottom than at the top) with
+# 1 mK of noise, Smagorinsky-Lilly SGS. Kinetic energy grows from ~0 as
+# thermals develop; ν_t stays bounded; ∇·u stays at round-off.
+#
+#   julia --project -m Aeolus run examples/configs/buoyant_convection.toml
+
+[run]
+driver = "simulation"
+name = "buoyant_convection"
+seed = 1
+
+[grid]
+size = [32, 32, 32]
+extent = [1.0, 1.0, 1.0]
+
+[dynamics]
+theta0 = 300.0
+g = 9.81
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.17
+pr_t = 0.3333333333333333
+
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.5, z_i = 0.0, lapse = -1.0 }   # θ₀ + Δθ (1/2 − z/L)
+perturbation_amplitude = 0.001
+
+[stepper]
+scheme = "euler"
+dt = 0.05184386846337478        # 0.3 dx / w*, w* = sqrt(g Δθ / θ₀ L)
+end_time = 5.0
+
+[logging]
+diagnostics_cadence = 0.5

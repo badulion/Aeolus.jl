@@ -137,7 +137,10 @@ Aeolus.jl/
    Until #295 this was not true: every halo fill copied the source
    plane of each `d[a, :, :] .= d[b, :, :]` into a fresh array (13 MB
    in one flagship scalar-advection stage, as much again in one
-   dynamics step); the copies now run on views. `test/era2_advection.jl`
+   dynamics step); the copies then ran on views, and since KA-f (#297)
+   every fill is a launch of the per-axis halo kernels, which also made
+   the open-boundary fills allocation-free (`test/ka_halos.jl`).
+   `test/era2_advection.jl`
    asserts that `fill_halos!` and `advect_positive!` (with a workspace
    and a prebuilt reconstruction) allocate 0 bytes, and
    `test/era2_multigrid.jl` the same of the CG and multigrid solves.
