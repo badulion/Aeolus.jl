@@ -130,9 +130,13 @@ One known source of run-to-run variation is independent of the runner:
 the pressure solvers plan their FFTs with `FFTW.MEASURE`, which picks
 algorithms by timing, so round-off and with it chaotic LES statistics can
 differ between runs. `era6_gabls3.jl` has a `@test_broken` on the jet
-height that sits within one grid spacing of its envelope; in the
-full-tier run below it passed, which `@test_broken` reports as an error
-("Unexpected Pass"). That is the expectation's margin, not the runner.
+height that sits within one grid spacing of its envelope; sometimes it
+passes, which `@test_broken` reports as an error ("Unexpected Pass").
+That is the expectation's margin, not the runner: run alone
+(`--only era6_gabls3.jl --jobs 1`, load 1.6-5.2) it passed unexpectedly
+in 1 of 3 runs, and in parallel in 1 of 2 full-tier runs. Until the
+assertion is settled, a red full tier with only this error is this
+flakiness.
 
 ## Measured times
 
@@ -142,8 +146,9 @@ full-tier run below it passed, which `@test_broken` reports as an error
 | Run | Wall | Jobs × threads | 1-min load at start |
 | :-- | --: | :-- | --: |
 | fast tier, serial `runtests.jl` | 18.7 min | 1 × 1 | 4.6 (10.3 at the end) |
-| fast tier, `test/run.jl` | 5.4 min | 13 × 1 (free cores, capped by memory) | 3.2 |
-| full tier, `test/run.jl` | 11.1 min | 8 × 1 | 5.2 |
+| fast tier, `test/run.jl` | 5.5 min | 16 × 1 (free cores, capped by memory) | 2.7 |
+| full tier, `test/run.jl` | 7.9 min | 18 × 1 | 1.8 |
+| full tier, `test/run.jl`, earlier run | 11.1 min | 8 × 1 | 5.2 |
 | full tier, serial `runtests.jl` | about 48 min | 1 × 1 | not re-measured; figure from #316 (#259 branch) |
 
 Counts per top-level block, fast tier (serial and parallel identical):
@@ -160,7 +165,9 @@ Counts per top-level block, fast tier (serial and parallel identical):
 | Berlin case | 3378 | 0 |
 | **Total** | **84190** | **6** |
 
-The full tier adds 807 assertions (85021 in all: 84997 pass, 23 broken,
-1 error, the GABLS3 unexpected pass above). The fast tier is bounded by
-its longest files (`berlin_smoke.jl`, run alone, 139 s;
-`berlin_dynamics.jl`, 117 s), so more jobs do not shorten it much.
+The full tier adds 825 assertions (85021 in all: 84997 pass, 24 broken;
+in the earlier run one broken was the GABLS3 unexpected pass above).
+The fast tier is bounded by its longest files (`berlin_smoke.jl`, run
+alone, 125 s; `berlin_dynamics.jl`, 115 s) and the exclusive files run
+after the batch (`era6_apriori_sgs.jl`, 59 s alone), so more jobs do not
+shorten it much.
