@@ -61,7 +61,8 @@ module TurbulenceStability
 
 export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_prandtl,
        LillyCutoff, BrownEtAl1994, ShortTail, LongTail,
-       gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR
+       gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR,
+       boundary_layer_height
 
 # =========================================================================
 # The generics
@@ -294,5 +295,111 @@ function stability_factor_h(sf::LongTail, Ri::Real)
 end
 
 neutral_prandtl(sf::LongTail) = sf.Pr_n
+
+# =========================================================================
+# Boundary-layer height — the one z_i diagnostic (N-parent-a, #247)
+# =========================================================================
+
+"""
+    boundary_layer_height(z, profile; method = :parcel, kwargs...) -> z_i (m)
+
+Height of the top of the boundary layer from a profile sampled at the
+strictly increasing heights `z` (m). The one ``z_i`` diagnostic of the
+package: it is applied identically to radiosonde profiles
+(`LargeScaleForcing.sounding_profiles`) and to LES output (the CBL
+harness `test/tke_cbl_driver.jl`, the nesting epic #246).
+
+`method`:
+
+* `:parcel` — `profile` is the (virtual) potential temperature. The
+  height at which a parcel rising dry-adiabatically from the lowest
+  level with the temperature excess `excess` (K, default 0) becomes
+  neutrally buoyant: the first crossing of ``θ_v(z) = θ_v(z_1) +
+  \\text{excess}``, linearly interpolated (Holzworth 1964; Seibert et al.
+  2000, §3.1). On a stable profile it returns `z[1]`.
+* `:bulk_richardson` — `profile` is ``θ_v``; keywords `u`, `v` (wind
+  components at `z`, default calm), `g = 9.81`, `θ_ref = profile[1]`,
+  `Ri_c = 0.25`, `u_star = 0` and `b = 100`. The lowest height at which
+  the bulk Richardson number from the lowest level,
+
+  ```math
+  Ri_b(z) = \\frac{(g/θ_{ref})\\,(θ_v(z) - θ_v(z_1))\\,(z - z_1)}
+                 {(u(z) - u(z_1))^2 + (v(z) - v(z_1))^2 + b\\,u_*^2},
+  ```
+
+  reaches `Ri_c`, linearly interpolated between levels (Vogelezang &
+  Holtslag 1996, eq. 3, with their b = 100). It is evaluated as
+  [`gradient_richardson`](@ref)`(N², S²)` of the layer
+  ``[z_1, z]`` with [`buoyancy_frequency_squared`](@ref), so the shear
+  floor `RI_SHEAR2_FLOOR` handles a calm profile (``Ri_b → +∞`` above
+  a jump, the height then is the level below it).
+* `:max_gradient` — `profile` is θ; the midpoint of the layer with the
+  largest ``∂θ/∂z`` (the inversion).
+* `:min_flux` — `profile` is the total (resolved + SGS) kinematic heat
+  flux ``\\overline{w'θ'}`` (any normalisation); the height of its
+  minimum, `z[argmin(profile)]` (Sullivan et al. 1998, §3; the
+  definition of `tke_cbl`'s ``z_i``).
+
+References:
+
+* Holzworth, G. C. (1964). Estimates of mean maximum mixing depths in
+  the contiguous United States. *Mon. Wea. Rev.*, 92, 235-242.
+* Seibert, P., Beyrich, F., Gryning, S.-E., Joffre, S., Rasmussen, A. &
+  Tercier, P. (2000). Review and intercomparison of operational methods
+  for the determination of the mixing height. *Atmos. Environ.*, 34,
+  1001-1027.
+* Vogelezang, D. H. P. & Holtslag, A. A. M. (1996). Evaluation and
+  model impacts of alternative boundary-layer height formulations.
+  *Boundary-Layer Meteorol.*, 81, 245-269.
+* Sullivan, P. P., Moeng, C.-H., Stevens, B., Lenschow, D. H. & Mayor,
+  S. D. (1998). Structure of the entrainment zone capping the convective
+  atmospheric boundary layer. *J. Atmos. Sci.*, 55, 3042-3064.
+"""
+function boundary_layer_height(z::AbstractVector, profile::AbstractVector;
+                               method::Symbol = :parcel, excess::Real = 0.0,
+                               u = nothing, v = nothing, g::Real = 9.81,
+                               θ_ref::Real = profile[1], Ri_c::Real = 0.25,
+                               u_star::Real = 0.0, b::Real = 100.0)
+    n = length(z)
+    n == length(profile) ||
+        throw(ArgumentError("boundary_layer_height: z and profile differ in length ($n, $(length(profile)))"))
+    n >= 2 || throw(ArgumentError("boundary_layer_height: need at least two levels"))
+    all(>(0), diff(z)) || throw(ArgumentError("boundary_layer_height: z must be strictly increasing"))
+    if method === :min_flux
+        return z[argmin(profile)]
+    elseif method === :max_gradient
+        k = argmax([(profile[i+1] - profile[i]) / (z[i+1] - z[i]) for i in 1:n-1])
+        return (z[k] + z[k+1]) / 2
+    elseif method === :parcel
+        return _first_crossing(z, profile, profile[1] + excess)
+    elseif method === :bulk_richardson
+        uu = u === nothing ? zeros(n) : u
+        vv = v === nothing ? zeros(n) : v
+        (length(uu) == n && length(vv) == n) ||
+            throw(ArgumentError("boundary_layer_height: u and v must have the length of z"))
+        Rib = zeros(float(eltype(profile)), n)
+        for k in 2:n
+            Δz = z[k] - z[1]
+            N2 = buoyancy_frequency_squared(profile[1], profile[k], Δz, g, θ_ref)
+            S2 = ((uu[k] - uu[1])^2 + (vv[k] - vv[1])^2 + b * u_star^2) / Δz^2
+            Rib[k] = gradient_richardson(N2, S2)
+        end
+        return _first_crossing(z, Rib, Ri_c)
+    end
+    throw(ArgumentError("boundary_layer_height: unknown method :$method (:parcel, :bulk_richardson, :max_gradient, :min_flux)"))
+end
+
+# First height above z[1] where p exceeds `target`, interpolated linearly
+# between the bracketing levels (clamped to them); z[end] if never.
+function _first_crossing(z, p, target)
+    for k in 2:length(z)
+        if p[k] > target
+            p[k-1] >= target && return float(z[k-1])
+            w = (target - p[k-1]) / (p[k] - p[k-1])
+            return z[k-1] + clamp(w, 0, 1) * (z[k] - z[k-1])
+        end
+    end
+    return float(z[end])
+end
 
 end # module

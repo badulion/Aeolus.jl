@@ -65,3 +65,14 @@ implicit diffusion of `step_imex!` uses. Theory and measured convergence:
 ```julia
 θ_bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = FluxBC(3e-3))
 ```
+
+## Pressure-Poisson kind of a face (N-open-a, #251)
+
+The boundary condition of the projection's φ that a velocity face implies
+(`:periodic`, or `:neumann` wherever the normal velocity is prescribed),
+read by the default pressure solver and by
+[`poisson_axis_bcs`](@ref Aeolus.PressureSolvers.poisson_axis_bcs).
+
+```@docs
+Aeolus.BoundaryConditions.axis_poisson_bc
+```

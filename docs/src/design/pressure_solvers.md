@@ -72,10 +72,42 @@ sim    = BoussinesqSimulation(mesh; solver = solver, θ_bcs = θ_bcs, bcs = bcs)
 The rest of the driver is unchanged. This unlocks the Dry Convective
 Boundary Layer benchmark and everything downstream in Phase 1b.
 
+#### Per-axis boundary kinds (#251)
+
+`CosineFFTPoissonSolver(mesh; bc_x = :periodic, bc_y = :periodic, bc_z = :neumann)`:
+every axis is `:periodic` (rfft) or `:neumann` (DCT-II). Neumann sides are
+an option of this one type, not a new solver — one source of truth for
+the transform solve. The default keeps the channel plans, eigenvalues and
+normalisation bit for bit. `poisson_axis_bcs(solver)` reports the axes of
+any solver (FFT, cosine, CG, multigrid, MG-CG, density-weighted CG).
+
+#### Choosing the axes from the boundary conditions
+
+The pressure condition is not chosen separately: it follows from the
+velocity faces. `BoundaryConditions.axis_poisson_bc(face)` returns
+`:periodic` for `Periodic` and `:neumann` for every face on which the
+normal velocity is prescribed (`ImpermeableWall`, `NoSlipWall`, `NoFlux`,
+`FreeStreamBoundary`; the `OpenBoundary` of N-open-b adds a method). A
+face type with no method throws, so a solver is never silently built for
+the wrong problem. `PressureSolvers.poisson_axis_bcs(bcs)` pairs the two
+faces of each axis and rejects periodic-against-Neumann.
+
+`Simulations._default_solver(mesh::RegularGrid, bcs)` uses it: triply
+periodic gives `FFTPoissonSolver`, anything else
+`CosineFFTPoissonSolver(mesh; poisson_axis_bcs(bcs)...)` — the channel as
+before, the all-Neumann box for a nested child. The sound-proof cores
+pass the same axes to their `DensityWeightedPoissonSolver`, and the Berlin
+`:pressure_solver` providers (`examples/urban/couplings/pressure_solver.jl`)
+build every solver from the case's `bcs` the same way, with a smoke check
+that the axes match.
+
 ### `CGPoissonSolver` (Phase 3)
 
-Matrix-free preconditioned conjugate gradient. Works for arbitrary
-BCs, immersed boundaries, cut cells — anything where a direct
+Matrix-free conjugate gradient on the same 7-point operator, periodic or
+Neumann per axis (`bc_x`, `bc_y`, `bc_bottom`, `bc_top`). Until #251 it
+stored `bc_xy` but always wrapped `x` and `y` periodically — a code bug that
+silently returned the periodic solution for `bc_xy = :neumann`. Intended
+for immersed boundaries, cut cells — anything where a direct
 transform-based solver fails. Cost per solve is
 `O(N · √cond) ≈ O(N^{4/3})` for a Laplacian with mild
 preconditioning. The preconditioner will start as a simple diagonal
