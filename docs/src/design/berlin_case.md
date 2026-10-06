@@ -940,9 +940,13 @@ the same code.
 **Every heater converts with the same weight.** A heat flux `q` (W m⁻²
 into level `k`) raises θ by ``q Δt / (ρ̄_k c_p Π̄_k Δz_k)``:
 `ref_θ_per_heat(case, k)` is that conversion, the inverse of the
-meter's weight, and every coupling that heats the air uses it
-(`surface_exchange`, `buildings_citymean`, `traffic_heat`,
-`column_radiation`). Before #253 they divided by ``ρ̄ c_p`` only and the
+meter's weight. `surface_exchange` and `traffic_heat` call it;
+`buildings_citymean` applies the same ``1/(ρ̄_k c_p Π̄_k)`` inline in
+`apply_building_heat!` (its `ρ`, `cp`, `π` keywords, passed from
+`case.ref`), and `column_radiation`, whose heating rate is already
+``dT/dt`` (K s⁻¹), divides it by ``Π̄_k`` only. Every heater therefore
+uses the same weight, but the conversion is written in three places,
+not delegated to one function. Before #253 they divided by ``ρ̄ c_p`` only and the
 air received Π̄₁ ≈ 1.004 times the flux at the ground.
 The meter weights θ with the dry ``c_{pd}``; the surface exchange
 converts with the moist ``c_p`` of the first air cell, so the ledger

@@ -44,8 +44,9 @@ At the `:radiation` cadence (and step 1), before the radiosity solve:
    same column with the LES condensate removed; `heat` = the LES-layer
    heating rate (K/s) from the net-flux divergence with cloud.
 
-Every step (`:column_tendency`) θ += `heat`·dt on every LES level, in
-the fluid cells only (`Radiation.apply_radiative_cooling!` with the
+Every step (`:column_tendency`) θ += `heat`·dt/Π̄_k on every LES level
+(`heat` is dT/dt and T = θΠ̄; the same 1/(ρ̄c_pΠ̄) as `ref_θ_per_heat`
+with ρ̄c_p already divided out), in the fluid cells only (`Radiation.apply_radiative_cooling!` with the
 solid mask): the heating rate is a property of the air, and heating the
 immersed buildings' cells leaks into the air next to the walls.
 """
