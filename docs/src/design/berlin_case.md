@@ -201,11 +201,17 @@ needs.
   surface last saw (`T_air`, `q_air`, `U`, `z_ref`), the fluxes it
   returned (`Rn`, `H`, `LE`, `G`, `E`, `u_star`) and the `dew_mask`.
 * **Surface factories.** A coupling that provides the surface of a
-  class registers `register_surface_factory!(case, class, name, (case, I) -> surface)`
-  in its `build`; the surface exchange builds every column's surface
-  from these in its `init!` (a `SlabLand` for a class nobody claims).
-  This is how the park (#140), water (#141) and facet (#139) couplings
-  replace a class's surface without touching the surface exchange.
+  class registers `register_surface_factory!(case, class, name, (case, site) -> surface)`
+  in its `build`, where `site::SurfaceSite` carries the class, the
+  initial skin temperature, the child column (`nothing` for a tile of a
+  parent column) and an optional roughness override (take the roughness
+  from `class_roughness(case, site)`). `class_surface(case, site)` is the
+  one class-to-surface factory: the surface exchange builds every child
+  column's surface with it in its `init!` (a `SlabLand` for a class
+  nobody claims), and the parent's tiled surface (#249, below) every
+  tile. This is how the park (#140), water (#141) and facet (#139)
+  couplings replace a class's surface — in the child and the parent at
+  once — without touching the surface exchange.
 * **Tracers** (`case.tracers`): `ensure_tracer!(case, :qi; advect = true,
   positive = true, units = …, long_name = …)` creates or returns a
   cell-centred field; flags are OR-ed, so two couplings share one `ql`.
@@ -1580,6 +1586,105 @@ created 3.4e-3 kg m⁻² of water in the noon hour, and the Kessler clamp
 filled the negative qv it left aloft, +8.9e-5 kg m⁻²). On master both
 are zero to round-off in both runs: transport ≤ 3e-18 kg m⁻² in
 magnitude, qv clamp 0; the water ledger closes to −1.7e-14 kg m⁻².
+
+## Parent surface (#249)
+
+The nest (#246) puts the 1 km child inside a 6 × 6 km Aeolus parent
+with Δx = 31.25 m and Δz = 25 m. At that resolution the buildings are
+not resolved: the parent sees Berlin as a heterogeneous surface. Its
+surface is `examples/urban/parent/surface.jl`, a tiled mosaic
+(`Aeolus.SurfaceTiles`, Avissar & Pielke 1989) per parent column. It is
+not coupled to a 3-D run yet. The parent case (N-parent-e, #259) builds
+it, and the nest (N-berlin-nest, #265) makes it the default; that is
+where `:SurfaceTiles` leaves `BERLIN_PENDING`.
+
+![Berlin parent surface](../assets/berlin/parent_surface.svg)
+
+*Class fractions, the 250 m morphometry λp, and Macdonald z0 and d of
+the 6 km box (`examples/urban/parent/plot_parent_surface.jl`). Red: the
+child's footprint.*
+
+**Land use.** `data/fetch_berlin_landuse.jl` queries Overpass for the
+6 km box around the anchor (buildings, parks and green land use, water;
+ways and multipolygon relations). It classifies them with the case's own
+`load_city_osm` (one classifier: `osm_class`), and rasterises them with
+`surface_class_map` on the child's 15.625 m grid. It then writes, per
+parent cell, the class counts of its 2 × 2 child cells, λp, λf (mean
+over the four cardinal directions), and the mean and maximum building
+height to `data/berlin_landuse_6km.csv`, with provenance in the header.
+The raw OSM is not committed.
+
+**Fractions.** `parent_fractions` takes the table everywhere except
+under the child's footprint (`child_footprint`: parent cells 81:112 ×
+81:112). There it coarse-grains the child's own class map, so the
+parent sees exactly the child's surface, including the glass class the
+child adds. The child's OSM file is an older, smaller extract than the
+6 km table: under the footprint the table has a roof fraction of 0.292
+and the child's map 0.213, and 74 % of the footprint cells agree
+exactly. The parent follows the child, so the roughness map shows the
+footprint's edge.
+
+**Tiles.** Every tile is `class_surface(case, SurfaceSite(c; T_skin,
+z0m, z0h))`, the same class-to-surface factory the surface exchange
+builds the child's columns with (factored out of
+`couplings/surface_exchange.jl`). When the park (#140) and water (#141)
+couplings register their factories, the parent changes with the child.
+
+**Unresolved buildings.** `SurfaceTiles.macdonald_roughness` (Macdonald,
+Griffiths & Hall 1998; staggered arrays A = 4.43, β = 1, C_D = 1.2) gives
+z0 and d from λp, λf and the roof-weighted mean height h. These are
+averaged over an 8 × 8-cell (250 m) window, because one 31.25 m cell
+holds only a few buildings. The built tiles (street, roof, wall, glass)
+take `max(z0, z0m_class)` for momentum but keep their class's z0h. Form
+drag has no heat analogue, which is why urban kB⁻¹ is large (Kanda et
+al. 2007). With z0h = 0.1 z0m inherited instead, the parent's footprint H
+was +8.8 % above the child's at 13:00 and +9.8 % over 06–18 h; with
+the class z0h it is +2.8 % and +3.8 %. The built tiles exchange with the first parent
+level above h, at z_k − d. Park and water tiles keep their own
+roughness and d = 0, and exchange with the first level. Forced above
+the neighbouring roofs, a water column next to 58 m buildings
+decoupled (bulk Ri ≈ 1.8, LE = 0.7 W m⁻² at 13:00). With
+`blending = MasonBlendingHeight(L)` etc., a column is a `BlendedMosaic`
+forced once at z_k − d̄.
+
+**Measured** (`test/berlin_parent_surface.jl`, synthetic clear-sky
+forcing `parent_offline_forcing`: Bird SW and Brutsaert LW for 20 June,
+T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s):
+
+| quantity | value |
+| :-- | :-- |
+| Macdonald d/h at λp = 0.3 | 0.5521 |
+| λ of the z0/h maximum, cubes (Grimmond & Oke 1999: 0.15–0.2) | 0.164 (z0/h = 0.135) |
+| fractions: Σ − 1; footprint = child block counts | ≤ 1e-12; exact |
+| control (no unresolved treatment, child's height) − child, 24 h | 4.1e-12 W m⁻² (H) |
+| footprint-mean H − child area-mean H, 13:00 / 06–18 h | +2.8 % / +3.8 % |
+| footprint-mean LE − child area-mean LE, 06–18 h (13:00) | +4.7 % (−21 %) |
+| tile closure, 1825 tiles, 24 h: Rn − H − LE − G; ΔE/Δt − mean G | 1.1e-13; 6.9e-11 W m⁻² |
+| mixed street/park column, 13:00: mosaic vs parameter-aggregated | H 191 vs 117, LE 211 vs 644 W m⁻² |
+
+The issue's target for the footprint mean was 2 %. That holds only for
+the control. The parent proper and the child see the same air state at
+different heights (z_k − d against Δz/2), and with different momentum
+roughness. Under convective conditions the transfer then differs by a
+few per cent. LE also depends on when each soil reaches its dry limit:
+the child's street and park soils dry about an hour earlier, so LE at
+13:00 differs by 21 %.
+
+At 13:00 in the offline run (`parent/parent_surface_diurnal.jl`):
+
+| column | built-tile z0, d | Rn | H | LE | G |
+| :-- | :-- | --: | --: | --: | --: |
+| core, (109, 85), all roof, λp = 0.46 | 0.45 m, 11.6 m | 482 | 457 | 0 | 25 |
+| park, (93, 94), pure park | – | 558 | −1 | 420 | 139 |
+| water, Spree (79, 87), pure water | – | 741 | −5 | 7 | 738 |
+
+The water slab is 8 K below the air at 13:00, a stable surface layer.
+
+References: Macdonald, R. W., Griffiths, R. F. & Hall, D. J. (1998),
+*Atmos. Environ.* 32, 1857-1864. Grimmond, C. S. B. & Oke, T. R. (1999),
+*J. Appl. Meteorol.* 38, 1262-1292. Kanda, M. et al. (2007), *J. Appl.
+Meteorol. Climatol.* 46, 1067-1079. Avissar, R. & Pielke, R. A. (1989),
+*Mon. Weather Rev.* 117, 2113-2136.
 
 ## Facade wall model (#179)
 
