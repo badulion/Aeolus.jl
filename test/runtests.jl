@@ -21,7 +21,7 @@ using Aeolus.Fields: set!, interior_view
 
 @testset "Aeolus.jl" begin
 
-    include("netcdf_io.jl")
+    include("ncio.jl")           # NetCDF-4 output policy, legacy NetCDF-3 reading (#310)
     include("viz_png.jl")        # examples/viz PNG/APNG encoder: DEFLATE + filters round-trip
 
     @testset "RegularGrid" begin

@@ -21,7 +21,7 @@ include("TimeSteppers.jl")
 include("PressureSolvers.jl")
 include("Simulations.jl")
 include("IO.jl")
-include("NetCDFIO.jl")        # dependency-free NetCDF-3 reader/writer
+include("NCIO.jl")            # NetCDF-4 output policy over NCDatasets (#310)
 include("IBM.jl")
 include("Parallel.jl")
 include("SpectralElement.jl")
@@ -98,7 +98,7 @@ using .TimeSteppers
 using .PressureSolvers
 using .Simulations
 using .IO
-using .NetCDFIO
+using .NCIO
 using .Microphysics
 using .IBM
 using .Parallel
@@ -244,10 +244,8 @@ export checkpoint_payload, write_checkpoint,
        BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
        check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
        RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir
-export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
-       nc_write!, nc_append_record!, nc_close!, nc_write_fields,
-       nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
-       nc_attributes, nc_nrecords
+export NCDataset, nc_create, nc_defvar!, nc_append_record!, nc_chunksizes,
+       cf_time_units, NC_DEFLATE_LEVEL                              # #310
 export apply_kessler_step!, KESSLER_N0, kessler_rain_number, kessler_fall_speed
 export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
        implicit_ibm_correction!, wall_distance, first_level_cells   # + P56-b (#182)
