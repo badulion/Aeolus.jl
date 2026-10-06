@@ -747,10 +747,10 @@ end
 """
     horizontal_variance(field) -> Vector
 
-Horizontal variance of a cell-centered field over the interior,
-`⟨(f - ⟨f⟩)²⟩`, one entry per interior `z`-level.
+Horizontal variance of a field over the interior, `⟨(f - ⟨f⟩)²⟩`, one
+entry per interior `z`-level (the face levels for a `FaceZ` field).
 """
-function horizontal_variance(field::Field{CellCenter})
+function horizontal_variance(field::Field)
     v = interior_view(field)
     m = dropdims(sum(v; dims=(1,2)) ./ (size(v,1) * size(v,2)); dims=(1,2))
     var_profile = similar(m)
