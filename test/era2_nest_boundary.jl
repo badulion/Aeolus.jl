@@ -60,7 +60,9 @@ end
 
 # -------------------------------------------------------------------------
 @testset "mass: divergence-free parent, net boundary flux and δ" begin
-    Random.seed!(261)
+    # local RNGs throughout: the file leaves the global RNG stream of the
+    # suite untouched (later stochastic tests, e.g. era6_gabls3, depend on it)
+    rng = Xoshiro(261)
     cases = (
         # a child inside a triply periodic parent: all six faces open
         (name = "inside, r = 2", r = 2, pbcs = FieldBoundaryConditions(:periodic),
@@ -78,7 +80,7 @@ end
         cm = nest_child_mesh(nest)
         psim = BoussinesqSimulation(pm; bcs = c.pbcs)
         for f in (psim.u, psim.v, psim.w)
-            interior_view(f) .= randn(size(interior_view(f)))
+            interior_view(f) .= randn(rng, size(interior_view(f)))
         end
         step!(psim, 1e-10); psim.t = 0.0             # project: ∇·u = 0 to round-off
         csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest;
@@ -216,13 +218,13 @@ end
 function _nb_cbl_parent(pm, seed)
     p = BoussinesqSimulation(pm; θ₀ = 300.0, C_s = 0.17, θ_flux_bottom = 0.1,
                              bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-    Random.seed!(seed)
+    rng = Xoshiro(seed)
     for k in axes(p.θ.data, 3)
         z = _nb_zc(pm, k)
         p.θ.data[:, :, k] .= 300.0 + (z > 300 ? 0.005 * (z - 300) : 0.0)
     end
     θi = interior_view(p.θ)
-    θi[:, :, 1:3] .+= 0.2 .* (rand(size(θi, 1), size(θi, 2), 3) .- 0.5)
+    θi[:, :, 1:3] .+= 0.2 .* (rand(rng, size(θi, 1), size(θi, 2), 3) .- 0.5)
     fill!(p.u.data, 2.0)
     step!(p, 1e-3); p.t = 0.0
     return p
@@ -352,8 +354,8 @@ end
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
     fill!(psim.u.data, 3.0)                               # an eastward wind: outflow at the east face
-    Random.seed!(5)
-    interior_view(psim.v) .= 0.2 .* randn(size(interior_view(psim.v)))
+    rng = Xoshiro(5)
+    interior_view(psim.v) .= 0.2 .* randn(rng, size(interior_view(psim.v)))
     step!(psim, 1e-6); psim.t = 0.0
     # the building: x ∈ [550, 600] m (cut by the east face at 600 m),
     # y ∈ [350, 450] m, height 100 m
@@ -410,7 +412,7 @@ end
         nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.0, L / 3)), (1, 1, 1))
         cm = nest_child_mesh(nest)
         psim = BoussinesqSimulation(pm; ν = 2e-3, θ₀ = 300.0, g_accel = 0.1)
-        Random.seed!(11)
+        rng = Xoshiro(11)
         for k in axes(psim.u.data, 3), j in axes(psim.u.data, 2), i in axes(psim.u.data, 1)
             x = pm.x0 + (i - pm.Hx - 1) * pm.dx; xc = x + 0.5pm.dx
             y = pm.y0 + (j - pm.Hy - 0.5) * pm.dy; yf = y - 0.5pm.dy
@@ -418,7 +420,7 @@ end
             psim.v.data[i, j, k] = -cos(2π * xc) * sin(2π * yf)
             psim.θ.data[i, j, k] = 300.0 + exp(-((xc - 0.4)^2 + (y - 0.5)^2) / 0.02)
         end
-        interior_view(psim.w) .+= 0.05 .* randn(size(interior_view(psim.w)))
+        interior_view(psim.w) .+= 0.05 .* randn(rng, size(interior_view(psim.w)))
         step!(psim, 1e-8); psim.t = 0.0
         csim = BoussinesqSimulation(cm; ν = 2e-3, θ₀ = 300.0, g_accel = 0.1,
                                     bcs = nest_bcs(cm, :nest, :nest, :periodic))

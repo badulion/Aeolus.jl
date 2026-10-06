@@ -239,11 +239,11 @@ end
         # the correction still removes a genuine coarse/fine disagreement:
         # perturb the child's interface u, as a child with its own interface
         # flux (two-way feedback without boundary data) would have
-        Random.seed!(30 + r)
+        rng = Xoshiro(30 + r)         # local: the suite's global RNG stream is unchanged
         cm2 = c2.mesh
         for i in (cm2.Hx + 1, cm2.Hx + cm2.Nx + 1)
             c2.u.data[i, cm2.Hy+1:cm2.Hy+cm2.Ny, cm2.Hz+1:cm2.Hz+cm2.Nz] .+=
-                1e-2 .* randn(cm2.Ny, cm2.Nz)
+                1e-2 .* randn(rng, cm2.Ny, cm2.Nz)
         end
         mm = compute_nest_flux_mismatch(p2.u, c2.u, n2)
         leak = mismatch_l1(mm)
