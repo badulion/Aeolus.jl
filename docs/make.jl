@@ -20,6 +20,7 @@ makedocs(
         "Home"           => "index.md",
         "Installation"   => "installation.md",
         "Quick start"    => "quickstart.md",
+        "Running the tests" => "testing.md",
         "Theory" => [
             "Overview"                    => "theory/overview.md",
             "Boussinesq equations"        => "theory/boussinesq.md",

@@ -32,6 +32,12 @@ Additive coupling, on by default: the facade wall model of
   the `:sgs` slot). `:post_predictor` (12, after the `ibm` direct forcing
   at 10, before the ground's wall stress at 15):
   `apply_immersed_wall_stress!` applies the modelled stress implicitly.
+* **TKE production** (#232). At `init!` the walls are attached to the
+  closure of the `:sgs` slot (`attach_immersed_walls!`; the default
+  `:tke` takes them, a closure without a prognostic TKE ignores them):
+  its shear production at the facades is the modelled stress times the
+  resolved shear across the wall, ``a q^2``, instead of the production of
+  the stencil flux removed here.
 
 Momentum is not in the ledger (the surface-energy and water budgets), so
 there is no `budget!`; `report` prints the facade share of the surface
@@ -42,6 +48,7 @@ mutable struct WallModelFacades <: AbstractCoupling
     z0m_wall::Float64
     z0m_glass::Float64
     sgs::Bool                # the step has an eddy viscosity whose facade flux is removed
+    sgs_walls::Bool          # the :sgs closure books facade production from τ_w (#232)
 end
 
 coupling_name(::Type{WallModelFacades}) = :wall_model_facades
@@ -49,7 +56,7 @@ modules_used(::Type{WallModelFacades}) = (:WallModels, :IBM)
 stages(::Type{WallModelFacades}) = ((:body_force, 40, EVERY_STEP),
                                     (:post_predictor, 12, EVERY_STEP))
 
-build(::Type{WallModelFacades}, case, o) = WallModelFacades(nothing, NaN, NaN, false)
+build(::Type{WallModelFacades}, case, o) = WallModelFacades(nothing, NaN, NaN, false, false)
 
 function init!(c::WallModelFacades, case)
     sm::SolidMask = case.geom.sm
@@ -64,6 +71,15 @@ function init!(c::WallModelFacades, case)
     # the facade's material: the class of the building column behind it
     lawof(i, j, k) = sfc[i, j] == SURFACE_GLASS ? law_glass : law_wall
     c.iw = immersed_walls(case.sim, sm, lawof)
+    # The prognostic SGS closure of the :sgs slot books its shear production
+    # at the facades from the wall-model stress, not from the stencil flux
+    # this coupling removes (#232): attach the walls to it.
+    c.sgs_walls = false
+    for o in case.couplings
+        slot(typeof(o)) === :sgs || continue
+        so = step_options(o, case)
+        haskey(so, :sgs) && (c.sgs_walls = attach_immersed_walls!(so.sgs, c.iw))
+    end
     if case.cfg.verbose
         nu, nv, nw = immersed_wall_count(c.iw)
         @printf(case.io, "Facade wall model: %d u, %d v, %d w face-walls; z0m wall %.3g m, glass %.3g m\n",

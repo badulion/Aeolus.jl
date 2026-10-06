@@ -185,7 +185,9 @@ the official case file converted to θ with p_s = 651 hPa. `experiment = 3`
 (default) starts at 10 UTC from the experiment-2 ensemble mean (Table 5)
 with z0m = 1e-3 m, z0h = 1e-4 m and the log-linear surface functions
 β_m = 4.8, β_h = 7.8 that experiment 3 prescribed for its surface-flux
-tests; the published resolution is 1 m on ≤ 500 × 500 × 150 m.
+tests. Six of the seven experiment-3 LES ran at 1 m isotropic on
+256 × 256 × 80 m to 512 × 512 × 150 m; CSIRO-LES ran at Δx = 3.9 m,
+Δz = 1.17 m (Couvreux et al. 2020, Table 2).
 `experiment = 1` starts at 00 UTC with z0m = 1e-2 m, z0h = 1e-3 m.
 Perturbations: u, v, θ uniform ±0.1 (m s⁻¹, K) below 50 m.
 """
@@ -214,7 +216,7 @@ function gabls4_case(; N = (64, 64, 64), extent = (128.0, 128.0, 128.0), experim
                     t_start = experiment == 3 ? 36000.0 : 0.0, ρcp = ρ * 1005)
 end
 
-"The GABLS4 Table 4 values (`examples/sbl/data/gabls4_reference.csv`)."
+"The GABLS4 Table 4 values with each run's Table 2 grid and the envelopes (`examples/sbl/data/gabls4_reference.csv`)."
 gabls4_reference() = sbl_read_csv(joinpath(SBL_DATA, "gabls4_reference.csv"))
 
 # =========================================================================

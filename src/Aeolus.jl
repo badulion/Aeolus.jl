@@ -974,7 +974,8 @@ export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_value,
        tke_critical_richardson, tke_equilibrium, dual_strain!, shear_production!,
        buoyancy_production!, tke_budget, initialize_tke!, tke_statistics,
-       tke_eddy_coefficients
+       tke_eddy_coefficients,
+       attach_immersed_walls!   # #232: facade shear production from the wall-model stress
 # P56-d (#188): the differential SGS Reynolds-stress closure.
 export ReynoldsStressClosure, reynolds_stress_terms, reynolds_stress_rhs, reynolds_stress_step,
        daly_harlow_coefficient, coriolis_rotation, rotate_stress, is_realizable,
@@ -1016,7 +1017,7 @@ export MOSTFluxWallLaw
 # walls. The cut-cell stress is a method of CutCell.wall_shear_stress, not
 # a new name.
 export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
-       apply_immersed_wall_stress!, immersed_wall_count,
+       apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!,
        wall_slip_velocity, slip_wall_value
 # P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
 # `advance_channel!` / `run_channel!` do not collide with the Berlin case's
