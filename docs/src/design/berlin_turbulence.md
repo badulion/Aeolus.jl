@@ -107,8 +107,7 @@ profile: the Rayleigh sponge (`sponge_α_max` = 0.05 s⁻¹ from 75 m in
 implementation the fringe also uses. The smoke run's final state is
 bit-identical with the verbatim Phase-7 kernel reinstalled; the sponge's
 column kinetic-energy sink ``∫α|\mathbf u_h|^2dz`` after the 12 smoke
-steps is 0.139 m³ s⁻³. No Berlin list changed (`BERLIN_DEFAULT_OFF` stays
-empty).
+steps is 0.139 m³ s⁻³. No Berlin coupling was switched off.
 
 ## Prognostic SGS TKE (#182)
 
@@ -153,8 +152,8 @@ no `:isentropic` tensor is offered
   runs it without the wall cap and the surface value.
 
 The default changed from `:smagorinsky` to `:tke` because the coverage
-ratchet requires a new src module to run by default and no frozen list
-may grow; whether it stays the default is decided at review (#46).
+ratchet then required a new src module to run by default and no frozen
+list could grow (the coverage lists were removed on 2026-10-06, #320); whether it stays the default is decided at review (#46).
 Berlin tests that pinned the Smagorinsky default now select
 `:smagorinsky` explicitly where they test its bit-for-bit equivalences
 (MLSGS, the commit counter, the stale-halo demonstration).

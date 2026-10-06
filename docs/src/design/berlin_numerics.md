@@ -341,11 +341,8 @@ cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # 1 h of simulated tim
 [Stretched vertical grid](@ref) for the operators, the direct
 stretched-z Poisson solve and the measured accuracy and cost. The Berlin
 child keeps its uniform `RegularGrid`, and there is no `:stretched` case
-option. Such an option would be non-default, which would put
-`StretchedGrids` in `BERLIN_OPTION_ONLY` and grow a frozen list.
-StretchedGrids is instead coupled by default through the nested parent
-in N-berlin-nest (#265), which removes `:StretchedGrids` from
-`BERLIN_PENDING`. The parent's vertical layout is
+option. StretchedGrids is instead coupled by default through the nested
+parent in N-berlin-nest (#265). The parent's vertical layout is
 `surface_refined_faces(dz_surface = 25, z_uniform = 500, z_top = 3000,
 ratio = 1.08, dz_max = 100)`: 53 levels, 20 of them uniform. One step of
 192 × 192 × 53 costs 0.225 s on one thread, against 0.526 s for

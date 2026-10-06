@@ -145,8 +145,8 @@ identities run in closed-box smoke variants.
 
 **Stated exceptions.** The two-way option (#267, below) is not
 validated. The parent's 24 h validation is #315, the nested 24 h
-validation #270. `:AdaptiveMesh` stays in `BERLIN_PENDING` (AMR blocks,
-not the nest).
+validation #270. `AdaptiveMesh` is not coupled to the Berlin run (AMR
+blocks, not the nest).
 
 ## Two-way option (#267)
 
