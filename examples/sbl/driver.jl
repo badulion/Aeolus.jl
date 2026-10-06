@@ -439,9 +439,14 @@ end
 
 """
     sbl_run!(c, t_end; cfl = 1.2, average_from = Inf, sample_every = 10,
-             callback = nothing) -> stats
+             callback = nothing, checkpoint = nothing, checkpoint_components = (;)) -> stats
 
-Advance to `t_end` (s) with [`sbl_dt`](@ref). From `average_from` on,
+Advance to `t_end` (s) with [`sbl_dt`](@ref). With `checkpoint` (a
+`CheckpointSchedule`, e.g. [`sbl_checkpoints`](@ref)) the run resumes from
+the newest checkpoint of its folder, writes periodic ones, and a final one
+at `t_end`; `checkpoint_components` (a `NamedTuple`) adds the state of the
+caller's callback (its series, counters) to every checkpoint. Use one
+checkpoint `prefix` per call when a script calls `sbl_run!` more than once. From `average_from` on,
 every `sample_every`-th step is sampled: the returned `stats` hold the
 mean profiles (`U`, `V`, `S`, `θ`, `τ`, `wθ`), the BL height of the mean
 stress profile `h`, the mean `u_star` (√ of the mean surface stress
@@ -451,23 +456,32 @@ magnitude), the mean surface heat flux `wθ0` (K m s⁻¹) and `H0`
 `nsteps`, `wall_time`.
 """
 function sbl_run!(c::SBLCase, t_end; cfl = 1.2, average_from = Inf, sample_every = 10,
-                  callback = nothing)
+                  callback = nothing, checkpoint = nothing, checkpoint_components = (;))
     s = c.sim
-    acc = nothing; ns = 0; τs = 0.0; wθs = 0.0; Ls = 0.0
-    n0 = c.nsteps
+    # the run's accumulators, in one checkpointable Dict (#245)
+    R = Dict{Symbol,Any}(:acc => nothing, :ns => 0, :τs => 0.0, :wθs => 0.0, :Ls => 0.0,
+                         :n0 => c.nsteps)
+    comps = (sbl_case = c, sbl_run = R, checkpoint_components...)
+    checkpoint === nothing || resume!(checkpoint, s; components = comps)
     while s.t < t_end - 1e-9
         dt = min(sbl_dt(c; cfl = cfl), t_end - s.t)
         sbl_step!(c, dt)
         callback === nothing || callback(c)
-        if s.t >= average_from && (c.nsteps - n0) % sample_every == 0
+        if s.t >= average_from && (c.nsteps - R[:n0]) % sample_every == 0
             p = sbl_profiles(c)
-            acc === nothing ? (acc = Dict(k => copy(getfield(p, k)) for k in (:U, :V, :S, :θ, :τ, :wθ, :τx, :τy))) :
-                              (for k in keys(acc); acc[k] .+= getfield(p, k); end)
-            τs += sqrt(c.τx^2 + c.τy^2); wθs += mean(c.wθ)
-            Ls += mean(c.ustar)^3 / (0.4 * 9.81 / s.θ₀ * max(-mean(c.wθ), 1e-12))
-            ns += 1
+            R[:acc] === nothing ? (R[:acc] = Dict(k => copy(getfield(p, k)) for k in (:U, :V, :S, :θ, :τ, :wθ, :τx, :τy))) :
+                                  (for k in keys(R[:acc]); R[:acc][k] .+= getfield(p, k); end)
+            R[:τs] += sqrt(c.τx^2 + c.τy^2); R[:wθs] += mean(c.wθ)
+            R[:Ls] += mean(c.ustar)^3 / (0.4 * 9.81 / s.θ₀ * max(-mean(c.wθ), 1e-12))
+            R[:ns] += 1
         end
+        checkpoint === nothing || maybe_checkpoint!(checkpoint, s; step = c.nsteps, components = comps)
     end
+    # a final checkpoint: a rerun of a finished phase returns at once
+    checkpoint === nothing || maybe_checkpoint!(checkpoint, s; step = c.nsteps, force = true,
+                                                components = comps)
+    acc = R[:acc] === nothing ? nothing : Dict(k => copy(v) for (k, v) in R[:acc])
+    ns, τs, wθs, Ls, n0 = R[:ns], R[:τs], R[:wθs], R[:Ls], R[:n0]
     ns == 0 && return (nsamples = 0, nsteps = c.nsteps - n0, wall_time = c.wall_time)
     for k in keys(acc); acc[k] ./= ns; end
     m = s.mesh
@@ -482,6 +496,7 @@ function sbl_run!(c::SBLCase, t_end; cfl = 1.2, average_from = Inf, sample_every
             S_max = acc[:S][kj], z_jet = z[kj], L = Ls / ns,
             nsamples = ns, nsteps = c.nsteps - n0, wall_time = c.wall_time)
 end
+
 
 """
     sbl_read_csv(path) -> (; header, columns, rows)
@@ -976,17 +991,17 @@ function relam_perturb!(c; amp = 2.0, kp = 3.0, seed = 1)
 end
 
 """
-    relam_spinup(Re_τ; N = (32, 32, 32), T_spin = 10, seed = 1) -> snapshot
+    relam_spinup(Re_τ; N = (32, 32, 32), T_spin = 10, seed = 1, checkpoint = nothing) -> snapshot
 
 The neutral open channel (`relam_case(Re_τ, 0)`, θ uniform) from the
 law-of-the-wall profile plus `relam_perturb!`, run for `T_spin` h/u_τ.
 Returns `u, v, w`, the time `t` and the resolved TKE, wall stress and
 bulk velocity at the end.
 """
-function relam_spinup(Re_τ; N = (32, 32, 32), T_spin = 10.0, seed = 1)
+function relam_spinup(Re_τ; N = (32, 32, 32), T_spin = 10.0, seed = 1, checkpoint = nothing)
     c = relam_case(Re_τ, 0.0; N = N, seed = seed)
     relam_perturb!(c; seed = seed)
-    run_channel!(c, T_spin)
+    run_channel!(c, T_spin; checkpoint = checkpoint)
     s = c.sim
     return (u = copy(s.u.data), v = copy(s.v.data), w = copy(s.w.data), t = s.t,
             tke = mean(resolved_tke_profile(s.u, s.v, s.w)), τ_wall = c.τ_wall_bottom,
@@ -994,7 +1009,7 @@ function relam_spinup(Re_τ; N = (32, 32, 32), T_spin = 10.0, seed = 1)
 end
 
 """
-    relam_run(Re_τ, h_over_L, spinup; T_end = 20, sample = 0.5) -> NamedTuple
+    relam_run(Re_τ, h_over_L, spinup; T_end = 20, sample = 0.5, checkpoint = nothing) -> NamedTuple
 
 Switch the cooling `h/L` on in the developed neutral open channel
 `spinup` (θ reset to θ₀) and run `T_end` h/u_τ. Samples every `sample`:
@@ -1003,9 +1018,11 @@ value at the switch-on, the turbulent fraction γ of the lower half
 (`turbulent_fraction`, volume normalisation), the bottom wall stress and
 the bulk velocity. Returns the series, the final TKE ratio, the
 relaminarisation criteria at the switch-on (`relaminarisation_criteria`
-with the nominal u_τ = 1) and the wall time.
+with the nominal u_τ = 1) and the wall time. `checkpoint` (a
+`CheckpointSchedule`, [`sbl_checkpoints`](@ref)) resumes an interrupted run,
+series included (`run_channel!`'s hook, #245).
 """
-function relam_run(Re_τ, h_over_L, spinup; T_end = 20.0, sample = 0.5)
+function relam_run(Re_τ, h_over_L, spinup; T_end = 20.0, sample = 0.5, checkpoint = nothing)
     c = relam_case(Re_τ, h_over_L; N = spinup.N)
     s = c.sim
     s.u.data .= spinup.u; s.v.data .= spinup.v; s.w.data .= spinup.w
@@ -1022,8 +1039,39 @@ function relam_run(Re_τ, h_over_L, spinup; T_end = 20.0, sample = 0.5)
         push!(ts, s.t); push!(es, tke() / e0); push!(γs, γlow()); push!(τs, c.τ_wall_bottom)
         push!(Ubs, mean(Aeolus.WallModels._uv_means(s)[1]))
         nxt[] += sample
-    end)
+    end, checkpoint = checkpoint,
+       checkpoint_components = (ts = ts, es = es, γs = γs, τs = τs, Ubs = Ubs, nxt = nxt))
     return (Re_τ = Re_τ, h_over_L = h_over_L, crit = crit, t = ts, tke = es, γ = γs,
             τ_wall = τs, Ub = Ubs, tke_end = es[end], γ_end = γs[end],
             nsteps = c.nsteps, wall_time = time() - t00)
 end
+
+# ---- checkpoint / restart of the SBL runs (#245) -----------------------------
+# The case's memory between steps (the closure through the closure contract;
+# the surface-layer fields, counters, ledgers and the momentum budget), and
+# the virtual towers' open segment and bins: the components of the shared
+# `CheckpointSchedule` hook of `sbl_run!`.
+const _SBL_CASE_STATE = (:laws, :wθ, :ustar, :Lob, :τx, :τy, :heat_applied, :adv_heat_applied,
+                         :nsteps, :wall_time, :budget, :t_surf)
+Aeolus.IO.checkpoint_state(c::SBLCase) =
+    (closure = checkpoint_state(c.closure), case = fieldwise_checkpoint_state(c, _SBL_CASE_STATE))
+function Aeolus.IO.restore_checkpoint_state!(c::SBLCase, s)
+    restore_checkpoint_state!(c.closure, s.closure)
+    restore_fieldwise!(c, s.case)
+    return c
+end
+Aeolus.IO.checkpoint_state(T::SBLTowers) =
+    fieldwise_checkpoint_state(T, (:t_win, :τ, :acc, :count, :sumV, :sumE, :sumE2, :nseg, :active))
+Aeolus.IO.restore_checkpoint_state!(T::SBLTowers, s) = restore_fieldwise!(T, s)
+
+"""
+    sbl_checkpoints(tag) -> Union{Nothing, CheckpointSchedule}
+
+The checkpoint folder `examples/sbl/output/checkpoints/<tag>` of one SBL
+run (`driver_checkpoints`: every 30 min of wall clock by default, the
+`AEOLUS_CHECKPOINT*` environment variables override). Create it **before**
+the case (it loads the folder's FFTW wisdom), pass it to `sbl_run!` (or
+`run_channel!`) as `checkpoint`, and call `finish_checkpoints!` once the
+result is cached. An interrupted run resumes from its newest checkpoint.
+"""
+sbl_checkpoints(tag) = driver_checkpoints(joinpath(@__DIR__, "output", "checkpoints", tag))

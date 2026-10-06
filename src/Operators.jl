@@ -25,6 +25,8 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_weno5!,
        box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+# #245: the FFTW planning policy (operators/fftw_planning.jl)
+export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 # Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
@@ -731,6 +733,8 @@ function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T
     return nothing
 end
 
+# The FFTW planning policy every plan_* call uses (#245).
+include("operators/fftw_planning.jl")
 # Explicit filters, energy spectrum and isotropic initialiser (Phase 54, P54-c).
 include("operators/filters.jl")
 include("operators/spectra.jl")
