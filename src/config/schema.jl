@@ -304,9 +304,11 @@ end
 """
     driver_schema(name) -> ConfigSchema
 
-The schema registered for the driver `name` ([`register_driver!`](@ref)).
+The schema registered for the driver `name` ([`register_driver!`](@ref)),
+loading an example driver listed in [`DRIVER_FILES`](@ref) on first use.
 """
 function driver_schema(name::AbstractString)
+    _ensure_driver(name)              # an example driver is loaded on first use (CFG-b)
     haskey(_DRIVERS, name) || throw(ConfigError("run.driver",
         "unknown driver \"$name\"" * _suggest(name, collect(keys(_DRIVERS))) *
         "; registered drivers: " * join(sort!(repr.(collect(keys(_DRIVERS)))), ", ")))
