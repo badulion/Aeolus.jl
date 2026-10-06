@@ -33,6 +33,38 @@ using Aeolus.Operators: sponge_profile, damping_coordinates, damping_rate, Dampi
 _dt_level_sums(f) = (iv = interior_view(f); [sum(@view iv[:, :, k]) for k in axes(iv, 3)])
 _dt_level_sums(d::Array, g) = [sum(@view d[g.Hx+1:g.Hx+g.Nx, g.Hy+1:g.Hy+g.Ny, g.Hz+k]) for k in 1:g.Nz]
 
+# Analytic solution of θ_t = κθ_zz on [0, L], θ_z(0) = 0, θ_z(L) = Γ,
+# θ(z, 0) = Γz²/(2L) + a cos(πz/L).
+_neumann_exact(z, t; κ, Γ, L, a) = Γ * (z^2 / (2L) + κ * t / L) + a * cos(π * z / L) * exp(-κ * π^2 * t / L^2)
+
+# Forward-Euler diffusion θ ← θ + Δt κ ∇²θ on any mesh (fill_halos! + laplacian),
+# from the analytic initial condition to t_end; returns the max error at the cell
+# centres and the per-step check of the heat content Σθ Δz_k.
+function _neumann_run(g, κ, Γ, a, t_end, dt)
+    L = g.Lz
+    bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = FluxBC(Γ))
+    θ = Field(CellCenter(), g); lap = Field(CellCenter(), g)
+    zc = collect(damping_coordinates(g, CellCenter()))
+    Δz = hasproperty(g, :dzc) ? [g.dzc[g.Hz+k] for k in 1:g.Nz] : fill(g.dz, g.Nz)
+    iv = interior_view(θ)
+    for k in 1:g.Nz
+        iv[:, :, k] .= _neumann_exact(zc[k], 0.0; κ, Γ, L, a)
+    end
+    nsteps = round(Int, t_end / dt)
+    dt = t_end / nsteps
+    worst = 0.0
+    for n in 1:nsteps
+        H0 = sum(iv[1, 1, k] * Δz[k] for k in 1:g.Nz)
+        fill_halos!(θ, bcs)
+        laplacian(lap, θ)
+        iv .+= dt * κ .* interior_view(lap)
+        H1 = sum(iv[1, 1, k] * Δz[k] for k in 1:g.Nz)
+        worst = max(worst, abs((H1 - H0) - κ * Γ * dt) / (κ * Γ * dt))
+    end
+    err = maximum(abs(iv[1, 1, k] - _neumann_exact(zc[k], t_end; κ, Γ, L, a)) for k in 1:g.Nz)
+    return err, worst
+end
+
 @testset "N-parent-b: free-atmosphere top (#254)" begin
 
     # ---------------------------------------------------------------------
@@ -139,6 +171,107 @@ _dt_level_sums(d::Array, g) = [sum(@view d[g.Hx+1:g.Hx+g.Nx, g.Hy+1:g.Hy+g.Ny, g
         # qv needs a moist simulation; the symbolic target is :mean only
         @test_throws ArgumentError apply_forcing!(sim, ReferenceDamping(:qv, prof, 0.0), 0.0, 1.0)
         @test_throws ArgumentError ReferenceDamping(:θ, prof, :median)
+    end
+
+    # ---------------------------------------------------------------------
+    @testset "4. fixed-gradient top" begin
+        Γ = 0.003
+        # the ghost continues a linear profile of slope Γ exactly into every halo layer
+        for g in (RegularGrid(; size = (4, 4, 8), extent = (40.0, 40.0, 200.0), halo = (3, 3, 3)),
+                  StretchedGrid(; size = (4, 4, 8), extent = (40.0, 40.0, 200.0), halo = (3, 3, 3),
+                                stretching = (:geometric, 1.2)))
+            f = Field(CellCenter(), g)
+            zst = hasproperty(g, :zc) ? g.zc : [g.z0 + (k - g.Hz - 0.5) * g.dz for k in 1:g.Nz+2g.Hz]
+            for k in 1:g.Nz
+                f.data[:, :, g.Hz+k] .= 290 + Γ * zst[g.Hz+k]
+            end
+            fill_halos!(f, FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = FluxBC(Γ)))
+            @test maximum(abs(f.data[3, 3, g.Hz+g.Nz+h] - (290 + Γ * zst[g.Hz+g.Nz+h])) for h in 1:g.Hz) < 1e-12
+            @test f.data[3, 3, g.Hz] == f.data[3, 3, g.Hz+1]          # the no-flux bottom
+        end
+        # pairs: a FluxBC top above a wall or no-flux bottom only
+        @test FieldBoundaryConditions(:periodic, :periodic; bottom = :wall, top = FluxBC(Γ)).top isa FluxBC
+        @test FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = FluxBC(Γ)).top isa FluxBC
+        @test_throws ArgumentError FieldBoundaryConditions(:periodic, :periodic; bottom = FluxBC(Γ), top = :noflux)
+        @test_throws ArgumentError FieldBoundaryConditions(:periodic, :periodic; bottom = FluxBC(Γ), top = FluxBC(Γ))
+        gr = RegularGrid(; size = (4, 4, 8), extent = (40.0, 40.0, 200.0), halo = (2, 2, 2))
+        @test_throws ArgumentError fill_halos!(Field(FaceZ(), gr),
+            FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = FluxBC(Γ)))
+
+        # heat content grows by κΓΔt per step, to round-off (Boussinesq core, step!)
+        g = RegularGrid(; size = (6, 6, 20), extent = (60.0, 60.0, 400.0), halo = (2, 2, 2))
+        κ = 1.5
+        θbcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = FluxBC(Γ))
+        sim = BoussinesqSimulation(g; ν = κ, θ_bcs = θbcs, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+        set!(sim.θ, (x, y, z) -> 0.5 * sin(2π * x / 60) + 0.001 * z)
+        dt = 2.0
+        worst = 0.0
+        for _ in 1:50
+            S0 = sum(interior_view(sim.θ)) * g.dz / (g.Nx * g.Ny)
+            step!(sim, dt)
+            S1 = sum(interior_view(sim.θ)) * g.dz / (g.Nx * g.Ny)
+            worst = max(worst, abs((S1 - S0) - κ * Γ * dt) / (κ * Γ * dt))
+        end
+        @info @sprintf("top flux, step!: max |Δ∫θdz − κΓΔt|/(κΓΔt) = %.2e over 50 steps", worst)
+        @test worst < 1e-10
+        # the same on the IMEX path (implicit diffusion: the FluxBC is the affine part)
+        sim2 = BoussinesqSimulation(g; ν = κ, θ_bcs = θbcs, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+        set!(sim2.θ, (x, y, z) -> 0.5 * sin(2π * x / 60) + 0.001 * z)
+        worst2 = 0.0
+        dt_imex = 100.0
+        dt_expl = 1 / (2κ * (1 / g.dx^2 + 1 / g.dy^2 + 1 / g.dz^2))     # forward-Euler diffusion limit
+        for _ in 1:10
+            S0 = sum(interior_view(sim2.θ)) * g.dz / (g.Nx * g.Ny)
+            step_imex!(sim2, dt_imex, ARK2(); tol = 1e-13)
+            S1 = sum(interior_view(sim2.θ)) * g.dz / (g.Nx * g.Ny)
+            worst2 = max(worst2, abs((S1 - S0) - κ * Γ * dt_imex) / (κ * Γ * dt_imex))
+        end
+        @info @sprintf("top flux, step_imex! (Δt = %.0f s, %.1f× the explicit diffusion limit): max rel. error %.2e",
+                       dt_imex, dt_imex / dt_expl, worst2)
+        @test worst2 < 1e-8
+
+        # qv shares θ's walls but not θ's prescribed top gradient: a uniform qv
+        # stays uniform under diffusion while θ takes up the top flux
+        simq = BoussinesqSimulation(g; ν = κ, θ_bcs = θbcs, moisture = true,
+                                    bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+        set!(simq.θ, 1.0); set!(simq.qv, 0.008)
+        for _ in 1:10
+            step!(simq, dt)
+        end
+        @test maximum(abs.(interior_view(simq.qv) .- 0.008)) < 1e-15
+        @test sum(interior_view(simq.θ) .- 1.0) * g.dz / (g.Nx * g.Ny) ≈ 10 * κ * Γ * dt rtol = 1e-10
+
+        # a linear profile of slope Γ is steady (the surface takes the κΓ the top gives)
+        sim3 = BoussinesqSimulation(g; ν = κ, θ_bcs = θbcs, θ_flux_bottom = -κ * Γ,
+                                    bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+        set!(sim3.θ, (x, y, z) -> 1.0 + Γ * z)
+        θi = copy(interior_view(sim3.θ))
+        for _ in 1:100
+            step!(sim3, dt)
+        end
+        drift = maximum(abs.(interior_view(sim3.θ) .- θi))
+        @info @sprintf("linear profile of slope Γ after 100 steps: max drift %.2e K", drift)
+        @test drift < 1e-12
+
+        # second-order convergence against the analytic Neumann solution
+        κn, Γn, an, tn = 1.0, 1.0, 0.5, 0.05
+        for (label, mk) in (("RegularGrid", Nz -> RegularGrid(; size = (2, 2, Nz), extent = (1.0, 1.0, 1.0), halo = (2, 2, 2))),
+                            ("StretchedGrid (geometric)", Nz -> StretchedGrid(; size = (2, 2, Nz), extent = (1.0, 1.0, 1.0),
+                                                                             halo = (2, 2, 2), stretching = (:geometric, 1.1^(16 / Nz)))))
+            errs = Float64[]; flux = 0.0
+            for Nz in (16, 32, 64)
+                g = mk(Nz)
+                dzmin = hasproperty(g, :dzc) ? minimum(g.dzc[g.Hz+1:g.Hz+Nz]) : g.dz
+                e, w = _neumann_run(g, κn, Γn, an, tn, 0.2 * dzmin^2 / κn)
+                push!(errs, e); flux = max(flux, w)
+            end
+            r1, r2 = errs[1] / errs[2], errs[2] / errs[3]
+            @info @sprintf("Neumann convergence, %s: errors %.3e %.3e %.3e, ratios %.2f %.2f; flux error %.1e",
+                           label, errs..., r1, r2, flux)
+            @test 3.5 < r1 < 4.5
+            @test 3.5 < r2 < 4.5
+            @test flux < 1e-9
+        end
     end
 
 end
