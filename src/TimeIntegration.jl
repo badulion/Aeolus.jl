@@ -944,13 +944,18 @@ the IMEX split is consistent by construction.
 _diffusion!(out::Field{L,T}, f::Field{L,T}, ν_eff, m::RegularGrid{T}) where {L,T} =
     _diffusion_kernel!(out, f, _coef(ν_eff, m), m)
 
+@inline function _diffusion_body!(i, j, k, o, d, ν, idx2, idy2, idz2)
+    @inbounds o[i, j, k] = _diff_at(d, ν, i, j, k, idx2, idy2, idz2)
+    return nothing
+end
+
+# a pointwise launch over the interior (KA-g, #300)
 function _diffusion_kernel!(out::Field{L,T}, f::Field{L,T}, ν, m::RegularGrid{T}) where {L,T}
-    ii, jj, kk = interior(m)
+    I3 = interior(m)
+    checkbounds(out.data, I3...); checkbounds(f.data, I3...)
     idx2 = 1 / m.dx^2; idy2 = 1 / m.dy^2; idz2 = 1 / m.dz^2
-    d = f.data; o = out.data
-    @inbounds for k in kk, j in jj, i in ii
-        o[i, j, k] = _diff_at(d, ν, i, j, k, idx2, idy2, idz2)
-    end
+    Backends.launch!(Backends.backend(out.data), _diffusion_body!, I3, out.data, f.data, ν,
+                     idx2, idy2, idz2)
     return out
 end
 
@@ -966,7 +971,6 @@ _constraint_planes(loc::Location, m::RegularGrid, bcs::FieldBoundaryConditions) 
 _constraint_index(loc::Location, m::RegularGrid, bcs::FieldBoundaryConditions) =
     _constraint_planes(loc, m, bcs)[3]
 
-@inline _pinned(c::NTuple{3,Int}, i, j, k) = i == c[1] || j == c[2] || k == c[3]
 
 function _apply_constraint!(a::AbstractArray{T,3}, c::NTuple{3,Int}) where {T}
     @inbounds begin
@@ -1003,43 +1007,50 @@ end
 
 Preallocated scratch for [`solve_implicit_diffusion!`](@ref): four arrays
 the size of `field`'s storage (search direction, residual, operator
-image, preconditioned residual). Reuse one per `(location, mesh)` pair to
-keep the solve allocation-free. The diagonal is recomputed on the fly
-rather than stored (a handful of flops per cell, far cheaper than the
-matvec, and one array less).
+image, preconditioned residual) and the reduction partials of the CG
+driver ([`Aeolus.Backends.PCGWorkspace`](@ref)). Reuse one per
+`(location, mesh)` pair to keep the solve allocation-free. The diagonal
+is recomputed on the fly rather than stored (a handful of flops per cell,
+far cheaper than the matvec, and one array less).
 """
 struct DiffusionWorkspace{T,F<:Field}
     p_field::F
     r::Array{T,3}
     Ap::Array{T,3}
     z::Array{T,3}
+    pcg::Backends.PCGWorkspace{T,Array{T,3}}
 end
 
 function DiffusionWorkspace(f::Field{L,T}) where {L,T}
     pf = Field(L(), f.mesh)
     sz = size(f.data)
-    return DiffusionWorkspace{T,typeof(pf)}(pf, zeros(T, sz), zeros(T, sz), zeros(T, sz))
+    r, Ap, z = zeros(T, sz), zeros(T, sz), zeros(T, sz)
+    pcg = Backends.PCGWorkspace(r, z, pf.data, Ap; ranges = interior(f.mesh))
+    return DiffusionWorkspace{T,typeof(pf)}(pf, r, Ap, z, pcg)
 end
 
-function _apply_implicit!(out::AbstractArray{T,3}, xf::Field{L,T}, ν, Δt::T,
-                          m::RegularGrid{T}, bcs::FieldBoundaryConditions,
-                          kc::NTuple{3,Int}, key = xf.data) where {L,T}
-    fill_halos!(xf, bcs; key = key)
-    ii, jj, kk = interior(m)
-    idx2 = 1 / m.dx^2; idy2 = 1 / m.dy^2; idz2 = 1 / m.dz^2
-    d = xf.data
-    @inbounds for k in kk, j in jj, i in ii
-        out[i, j, k] = d[i, j, k] - Δt * _diff_at(d, ν, i, j, k, idx2, idy2, idz2)
-    end
-    return _apply_constraint!(out, kc)
-end
+# (I − Δt ∇·(ν∇)) d at one point: the operator of the implicit solve, a
+# `PointOperator` body (KA-g, #300). The driver zeroes the pinned rows.
+@inline _implicit_at(i, j, k, d, ν, Δt, idx2, idy2, idz2) =
+    @inbounds d[i, j, k] - Δt * _diff_at(d, ν, i, j, k, idx2, idy2, idz2)
 
-@inline function _idot(a::AbstractArray{T,3}, b::AbstractArray{T,3}, ii, jj, kk) where {T}
-    s = zero(T)
-    @inbounds for k in kk, j in jj, i in ii
-        s += a[i, j, k] * b[i, j, k]
-    end
-    return s
+# The Jacobi step z = r / diag(I − Δt ∇·(ν∇)).
+@inline _implicit_jacobi_at(rv, i, j, k, ν, idx2, idy2, idz2, Δt) =
+    rv / _diag_at(ν, i, j, k, idx2, idy2, idz2, Δt)
+
+# The halo fill before each operator application: of the field itself
+# (the initial residual of a nonzero guess) or of the search direction.
+struct _ImplicitHalos{F,P,B,K}
+    field::F
+    pf::P
+    bcs::B
+    key::K
+end
+(h::_ImplicitHalos)(a) = fill_halos!(a === h.field.data ? h.field : h.pf, h.bcs; key = h.key)
+
+@inline function _wall_rhs_body!(i, j, k, r, b, p, ν, Δt, idx2, idy2, idz2)
+    @inbounds r[i, j, k] = b[i, j, k] + Δt * _diff_at(p, ν, i, j, k, idx2, idy2, idz2)
+    return nothing
 end
 
 """
@@ -1125,129 +1136,67 @@ function solve_implicit_diffusion!(field::Field{L,T}, rhs::Field{L,T}, ν_eff,
                          precondition, warn, key)
 end
 
-# Function barrier: specializes on the concrete type of ν.
+# Function barrier: specializes on the concrete type of ν. The iteration
+# is the one CG driver `Backends.pcg!` (KA-g, #300).
 function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
                        m::RegularGrid{T}, bcs_full::FieldBoundaryConditions,
                        ws::DiffusionWorkspace, τ::T, maxit::Int,
                        precondition::Symbol, warn::Bool, key = field.data) where {L,T}
-    ii, jj, kk = interior(m)
+    I3 = interior(m)
     idx2 = 1 / m.dx^2; idy2 = 1 / m.dy^2; idz2 = 1 / m.dz^2
     # A moving no-slip wall makes the operator affine: iterate with the
     # stationary wall and carry the wall term in the right-hand side.
     bcs = homogeneous_bcs(bcs_full)
     affine = bcs !== bcs_full
     kc = _constraint_planes(L(), m, bcs)
-    jacobi = precondition === :jacobi
-
     x  = field.data
-    b  = rhs.data
-    r  = ws.r; Ap = ws.Ap; z = ws.z
-    pf = ws.p_field; p = pf.data
+    pf = ws.p_field
+    bk = Backends.backend(x)
 
     _apply_constraint!(x, kc)
 
-    # Wall term g = ∇·(ν∇0) with the moving-wall halo, into z (free until
-    # the preconditioner first writes it): b_eff = b + Δt g.
+    # Wall term g = ∇·(ν∇0) with the moving-wall halo: b_eff = b + Δt g,
+    # into r (the driver reads it as b before it writes r there).
+    b = rhs.data
     if affine
-        fill!(p, zero(T))
+        fill!(pf.data, zero(T))
         fill_halos!(pf, bcs_full; key = key)
-        @inbounds for k in kk, j in jj, i in ii
-            z[i, j, k] = Δt * _diff_at(p, ν, i, j, k, idx2, idy2, idz2)
-        end
+        Backends.launch!(bk, _wall_rhs_body!, I3, ws.r, b, pf.data, ν, Δt, idx2, idy2, idz2)
+        b = ws.r
     end
 
-    # r = b - A x   (safe when b === x: A x is formed into Ap first)
-    _apply_implicit!(Ap, field, ν, Δt, m, bcs, kc, key)
-    bnorm² = zero(T)
-    @inbounds for k in kk, j in jj, i in ii
-        if _pinned(kc, i, j, k)
-            r[i, j, k] = zero(T)
-            continue
-        end
-        bv = affine ? b[i, j, k] + z[i, j, k] : b[i, j, k]
-        r[i, j, k] = bv - Ap[i, j, k]
-        bnorm² += bv * bv
-    end
-    bnorm = sqrt(bnorm²)
+    A = Backends.PointOperator(_implicit_at, ν, Δt, idx2, idy2, idz2;
+                               prepare = _ImplicitHalos(field, pf, bcs, key))
+    M = precondition === :jacobi ?
+        Backends.PointPreconditioner(_implicit_jacobi_at, ν, idx2, idy2, idz2, Δt) :
+        Backends.IdentityPreconditioner()
+    st = Backends.pcg!(A, M, x, b, ws.pcg; ranges = I3, tol = τ, maxit = maxit,
+                       constraint = kc, zero_guess = false, backend = bk)
 
-    if bnorm == 0
-        @inbounds for k in kk, j in jj, i in ii
-            x[i, j, k] = zero(T)
-        end
+    if st.status === :zero_rhs
         has_open_boundaries(bcs_full) && fill_halos!(field, bcs_full; key = key)
         return (iterations = 0, residual = zero(T), relative_residual = zero(T),
                 converged = true, tol = τ)
     end
-
-    # z = M⁻¹ r ; p = z
-    rz = zero(T)
-    @inbounds for k in kk, j in jj, i in ii
-        zz = if _pinned(kc, i, j, k)
-            zero(T)
-        elseif jacobi
-            r[i, j, k] / _diag_at(ν, i, j, k, idx2, idy2, idz2, Δt)
-        else
-            r[i, j, k]
-        end
-        z[i, j, k] = zz
-        p[i, j, k] = zz
-        rz += r[i, j, k] * zz
+    iters = st.iterations
+    rnorm, bnorm = st.residual, st.bnorm
+    if st.status === :breakdown
+        iters += 1                     # the iteration that found it, as before
+        warn && @warn("solve_implicit_diffusion!: CG breakdown (pᵀAp ≤ 0); " *
+                      "operator is not positive definite for these BCs",
+                      subsystem = :diffusion, domain = current_domain(),
+                      reason = :breakdown, iterations = iters)
+    elseif st.status === :maxit
+        warn && @warn("solve_implicit_diffusion! hit maxit=$maxit with " *
+                      "‖r‖/‖b‖ = $(rnorm / bnorm)",
+                      subsystem = :diffusion, domain = current_domain(),
+                      reason = :maxit, iterations = iters,
+                      relative_residual = rnorm / bnorm, tol = τ)
     end
-
-    rnorm     = sqrt(_idot(r, r, ii, jj, kk))
-    converged = rnorm <= τ * bnorm
-    iters     = 0
-
-    while !converged && iters < maxit
-        iters += 1
-        _apply_implicit!(Ap, pf, ν, Δt, m, bcs, kc, key)
-        pAp = _idot(p, Ap, ii, jj, kk)
-        if !(pAp > 0)
-            warn && @warn("solve_implicit_diffusion!: CG breakdown (pᵀAp = $pAp); " *
-                          "operator is not positive definite for these BCs",
-                          subsystem = :diffusion, domain = current_domain(),
-                          reason = :breakdown, iterations = iters, curvature = pAp)
-            break
-        end
-        α = rz / pAp
-        @inbounds for k in kk, j in jj, i in ii
-            x[i, j, k] += α * p[i, j, k]
-            r[i, j, k] -= α * Ap[i, j, k]
-        end
-        rnorm = sqrt(_idot(r, r, ii, jj, kk))
-        if rnorm <= τ * bnorm
-            converged = true
-            break
-        end
-        rz_new = zero(T)
-        @inbounds for k in kk, j in jj, i in ii
-            zz = if _pinned(kc, i, j, k)
-                zero(T)
-            elseif jacobi
-                r[i, j, k] / _diag_at(ν, i, j, k, idx2, idy2, idz2, Δt)
-            else
-                r[i, j, k]
-            end
-            z[i, j, k] = zz
-            rz_new += r[i, j, k] * zz
-        end
-        β = rz_new / rz
-        @inbounds for k in kk, j in jj, i in ii
-            p[i, j, k] = z[i, j, k] + β * p[i, j, k]
-        end
-        _apply_constraint!(p, kc)
-        rz = rz_new
-    end
-
-    converged || (warn && @warn("solve_implicit_diffusion! hit maxit=$maxit with " *
-                                "‖r‖/‖b‖ = $(rnorm / bnorm)",
-                                subsystem = :diffusion, domain = current_domain(),
-                                reason = :maxit, iterations = iters,
-                                relative_residual = rnorm / bnorm, tol = τ))
     # open faces: the pinned face rows and the halos carry the boundary data
     has_open_boundaries(bcs_full) && fill_halos!(field, bcs_full; key = key)
     return (iterations = iters, residual = rnorm,
-            relative_residual = rnorm / bnorm, converged = converged, tol = τ)
+            relative_residual = rnorm / bnorm, converged = st.status === :converged, tol = τ)
 end
 
 # =========================================================================
