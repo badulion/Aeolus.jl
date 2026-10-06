@@ -2,8 +2,8 @@
 # and the parent / child / boundary / feedback cost split.
 #
 # Parent: 6 × 6 × 3 km, 192 × 192 × 120 (Δx = 31.25 m, uniform Δz = 25 m),
-# periodic sides, ground and lid walls. Child sides are nest faces, its
-# ground and top walls. Child: 1 × 1 km in the centre,
+# periodic sides, ground and lid walls. Child sides and top are nest faces
+# (OpenBoundary, N-nest-d #261), its ground a wall. Child: 1 × 1 km in the centre,
 # refinement (2, 2, 4) — Δx = 15.625 m, Δz = 6.25 m — 32 levels (200 m, the
 # issue's case) and 64 levels (400 m, the maintainer's deepened child).
 # The flow is synthetic: a 5 m/s westerly with random velocity and θ
@@ -13,7 +13,6 @@
 
 using Aeolus
 using Aeolus.BoundaryConditions: FieldBoundaryConditions
-using Aeolus.PressureSolvers: CosineFFTPoissonSolver
 using Aeolus.Fields: interior_view
 using Printf, Random
 
@@ -38,28 +37,24 @@ function build(child_levels; feedback = :one_way, kw...)
     depth = child_levels * 6.25
     nest = nested_grid(pm, ((2500.0, 3500.0), (2500.0, 3500.0), (0.0, depth)), (2, 2, 4))
     cm = nest_child_mesh(nest)
-    # nest faces laterally; walls at the ground and the lid (a wall-below /
-    # nest-above pair has no halo fill until the per-face OpenBoundary of
-    # N-open-b, #255), so the vertical coupling here is the restriction only
-    cbcs = nest_bcs(:nest, :nest, :wall)
-    csim = BoussinesqSimulation(cm; θ₀ = 300.0, C_s = 0.17, bcs = cbcs,
-                                solver = CosineFFTPoissonSolver(cm))
+    # nest faces laterally and on top (OpenBoundary), a wall at the ground;
+    # the default solver is the all-Neumann CosineFFTPoissonSolver
+    cbcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest)
+    csim = BoussinesqSimulation(cm; θ₀ = 300.0, C_s = 0.17, bcs = cbcs)
     st = nest_interp_state(nest)
     interpolate_parent_state!(st, psim, nest; region = :all)
     for (cf, sf) in ((csim.u, st.u), (csim.v, st.v), (csim.w, st.w), (csim.θ, st.θ))
         cf.data .= sf.data
     end
-    return NestedRun(psim, csim, nest; feedback, cfl_parent = CFLConstraints(),
-                     sponge = NestSponge(width = 4, α_max = 0.1), kw...)
+    return NestedRun(psim, csim, nest; feedback, cfl_parent = CFLConstraints(), kw...)
 end
 
-# Two-way is run without the interface flux correction: this child has a
-# wall lid, and correcting the parent's vertical flux through the lid to the
-# child's w = 0 drove the parent to |u| = 26 m/s within 12 steps (the
-# correction treats all six faces as interfaces; per-face two-way feedback
-# is N-nest-e, #263).
+# Two-way runs with the interface flux correction: since N-nest-d the
+# child's top is an open nest face carrying the parent's w, so the child's
+# interface fluxes equal the parent's (N-nest-c had to switch the correction
+# off: it forced the parent's flux through the child's wall lid to w = 0).
 for (levels, fb, kw) in ((32, :one_way, NamedTuple()), (64, :one_way, NamedTuple()),
-                         (64, :two_way, (flux_correction = false,)))
+                         (64, :two_way, NamedTuple()))
     run = build(levels; feedback = fb, kw...)
     step_nested!(run)                                # compile
     run.stats = NestRunStats()

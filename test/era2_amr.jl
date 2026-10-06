@@ -66,8 +66,7 @@ function _make_nest_pair(; Np=16, r=2, L=1.0)
                        halo=(3,3,3))
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm)
-    csim = BoussinesqSimulation(cm; bcs=nest_bcs(:nest, :nest, :periodic),
-                                solver=Aeolus.PressureSolvers.FFTPoissonSolver(cm))
+    csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :nest, :nest, :periodic))
     _init_taylor_green!(psim, L)
     step!(psim, 1e-3)                       # project to machine-precision div-free
     st = nest_interp_state(nest)
@@ -229,8 +228,31 @@ end
                 e_with > 0 ? @sprintf(" (%.3g× larger)", e_without / e_with) :
                              " (with-correction error is exactly zero)")
         @test e_with < 1e-10
-        @test e_without > 1e4 * max(e_with, 1e-16)
-        @test e_without > 1e-8
+        # Expectation changed by N-nest-d (#261): the child's nest faces are
+        # OpenBoundary faces that carry the parent's normal velocity (B(t+Δt),
+        # the parent after its step), so the child's interface flux equals the
+        # parent's by construction and the mismatch is round-off *without* the
+        # correction too. Before, the child had a periodic FFT projection that
+        # ignored the parent's flux, and the mismatch was ~1e-3 (r = 2). The
+        # leak the correction removes is now produced explicitly below.
+        @test e_without < 1e-13
+        # the correction still removes a genuine coarse/fine disagreement:
+        # perturb the child's interface u, as a child with its own interface
+        # flux (two-way feedback without boundary data) would have
+        Random.seed!(30 + r)
+        cm2 = c2.mesh
+        for i in (cm2.Hx + 1, cm2.Hx + cm2.Nx + 1)
+            c2.u.data[i, cm2.Hy+1:cm2.Hy+cm2.Ny, cm2.Hz+1:cm2.Hz+cm2.Nz] .+=
+                1e-2 .* randn(cm2.Ny, cm2.Nz)
+        end
+        mm = compute_nest_flux_mismatch(p2.u, c2.u, n2)
+        leak = mismatch_l1(mm)
+        apply_flux_correction!(p2.u, mm, n2)
+        after = mismatch_l1(compute_nest_flux_mismatch(p2.u, c2.u, n2))
+        @printf("        perturbed child interface: |mismatch| %.3e → %.3e after the correction\n",
+                leak, after)
+        @test leak > 1e-5
+        @test after < 1e-13 * leak / 1e-5
         # the θ and momentum ledgers are populated too
         @test isfinite(nest_conservation_error(p1, c1, n1, :theta))
         @test isfinite(nest_conservation_error(p1, c1, n1, :momentum_x))
@@ -265,8 +287,7 @@ end
         psim = BoussinesqSimulation(pm)
         fill!(psim.u.data, U); fill!(psim.v.data, 0.0); fill!(psim.w.data, 0.0)
         fill!(psim.θ.data, 0.0)
-        csim = BoussinesqSimulation(cm; bcs=nest_bcs(:nest, :periodic, :periodic),
-                                    solver=Aeolus.PressureSolvers.FFTPoissonSolver(cm))
+        csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :nest, :periodic, :periodic))
         fill!(csim.u.data, U); fill!(csim.v.data, 0.0); fill!(csim.w.data, 0.0)
         # a Gaussian θ packet travelling toward the east nest boundary
         σ = 0.05L; x0 = 0.30L

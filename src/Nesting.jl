@@ -37,9 +37,11 @@ module Nesting
 # the summed fine fluxes through a parent face equal the parent flux).
 # That combination is what makes the prolongation flux-preserving.
 #
-# Files: nesting/grid.jl (NestBC, NestedGrid), nesting/operators.jl
+# Files: nesting/grid.jl (nest_bcs, NestedGrid), nesting/operators.jl
 # (weights, prolongation, restriction, refluxing), nesting/interp_state.jl
-# (NestSponge, NestInterpState), nesting/step.jl (composite diagnostics,
+# (NestSponge, NestInterpState), nesting/boundary_data.jl (NestBoundaryData:
+# the parent as the boundary data of the child's OpenBoundary faces, N-nest-d
+# #261), nesting/step.jl (composite diagnostics,
 # restriction / refluxing of the field set), nesting/nested_run.jl (NestedRun:
 # per-domain advance closures, subcycling under adaptive steppers,
 # temporal interpolation of the boundary data, step_nested!; N-nest-c #257).
@@ -51,6 +53,11 @@ using ..Fields
 using ..Fields: Field, location, interior_view, set!
 using ..BoundaryConditions
 using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
+                            AbstractBoundaryData, OpenPlane, OpenBoundary,
+                            OpenBoundaryState, open_boundary_conditions,
+                            set_boundary_data!, open_boundary_states,
+                            has_open_boundaries, update_open_boundaries!,
+                            open_boundary_snapshot, restore_open_boundaries!,
                             Periodic, NoFlux, ImpermeableWall, NoSlipWall
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, step_rk3!
@@ -63,11 +70,11 @@ using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
 
-import ..BoundaryConditions: _fill_x!, _fill_y!, _fill_z!
+import ..BoundaryConditions: boundary_values!
 
 export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
-       NestBC, nest_bcs,
+       nest_bcs, NestBoundaryData, nest_boundary_data, nest_open_sides,
        interpolate_to_nest_boundary!, interpolate_parent_to_child!,
        restrict_to_parent!,
        NestFluxMismatch, compute_nest_flux_mismatch, apply_flux_correction!,
@@ -89,6 +96,7 @@ _moist(::MassWeightedSimulation)  = false
 include("nesting/grid.jl")
 include("nesting/operators.jl")
 include("nesting/interp_state.jl")
+include("nesting/boundary_data.jl")
 include("nesting/step.jl")
 include("nesting/nested_run.jl")
 

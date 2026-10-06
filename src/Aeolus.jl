@@ -306,7 +306,7 @@ export MultigridPoissonSolver, MGPreconditionedCG,
 # Phase 30 — parent-child nesting (Aeolus.Nesting); Phase 31 — block-structured AMR
 export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
-       NestBC, nest_bcs,
+       nest_bcs, NestBoundaryData, nest_boundary_data, nest_open_sides,
        interpolate_to_nest_boundary!, interpolate_parent_to_child!,
        restrict_to_parent!,
        NestFluxMismatch, compute_nest_flux_mismatch, apply_flux_correction!,
