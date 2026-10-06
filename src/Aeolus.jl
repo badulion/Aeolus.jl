@@ -348,11 +348,11 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_bcs, NestBoundaryData, nest_boundary_data, nest_open_sides,
        interpolate_to_nest_boundary!, interpolate_parent_to_child!,
        restrict_to_parent!,
-       NestFluxMismatch, compute_nest_flux_mismatch, apply_flux_correction!,
+       NestFluxMismatch, compute_nest_flux_mismatch, apply_flux_correction!, nest_periodic_axes,
        mismatch_l1, mismatch_area,
        NestSponge, apply_nest_sponge!,
        NestInterpState, nest_interp_state, interpolate_parent_state!,
-       nest_scalar_names, apply_nest_boundary!,
+       nest_scalar_names, apply_nest_boundary!, nest_storage, fill_nest_halos!,
        restrict_state_to_parent!, reflux!, reflux_scalars!,
        step_nested!, nest_conservation_error, composite_integral,
        NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask,
@@ -1109,6 +1109,8 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
        open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
        assert_open_face_correction, open_intermediate_velocity!
+# #329 — the two-snapshot (windowed) boundary data: nest parents, mesoscale (#58).
+export WindowedBoundaryData, snapshot_values, window_fraction, blend_window!
 # N-open-c (#260) — convective / Orlanski radiation outflow on open faces.
 export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow, rewind_open_boundaries!,
        mark_open_boundary_stage!

@@ -81,13 +81,23 @@ Keywords:
     canopy restriction and inflow exclusion, the interface flux
     correction on the open faces, Berger–Colella scalar refluxing from
     flux registers and the re-projection of the parent (N-nest-e, #263);
+  * `limit_scalars` (`:positive`, for `qv` and the tracers), `limit_theta`
+    (`:none`), `limit_momentum` (`:none`) — the limiters of the
+    prolongation (#329), see [`interpolate_parent_state!`](@ref);
   * `order` (3), `flux_correction` (true), `scalars`, `state` — as for
-    the operators of [`NestInterpState`](@ref);
+    the operators of [`NestInterpState`](@ref). The run allocates its three
+    field sets (the parent prolongated at both ends of the parent step and
+    their blend) with `storage = :shell`, halo slabs only, unless it has a
+    sponge, whose target is the child interior (#329);
   * `sponge` (`nothing`, the default, as in Kadasch et al. 2021 §2.2–2.3
     and Hellsten et al. 2021, which use none) or a [`NestSponge`](@ref):
     relaxation of every member of the field set toward the time-blended
-    parent after each child substep, on the child's open faces only
-    ([`nest_open_sides`](@ref));
+    parent (at the end of the child substep), on the child's open faces
+    only ([`nest_open_sides`](@ref)). The velocities are relaxed on the
+    predicted velocity of every stage, in the core's `post_predictor!`
+    hook, so the pressure solve that follows keeps the child
+    divergence-free; the scalars after each child substep (#329). A user
+    core must call `post_predictor!` for the velocity part to act;
   * `solid` (`nothing`) — the child's IBM [`SolidMask`](@ref) (or a
     `Bool` array). The open faces inside solids are marked with
     [`mark_open_boundary_solids!`](@ref
@@ -132,7 +142,8 @@ advances by the parent's `Δt_p` per step).
 `run.t` is the common time, `run.stats` a [`NestRunStats`](@ref).
 """
 mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpState,
-                         AP<:DomainAdvance, AC<:DomainAdvance, CP, CC, SP, D<:NestBoundaryData}
+                         AP<:DomainAdvance, AC<:DomainAdvance, CP, CC, SP, D<:NestBoundaryData,
+                         SO, FM, RP, RC, R<:Union{Nothing,NestFluxRegisters}, W}
     parent::P
     child::C
     nest::N
@@ -147,6 +158,9 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     sync::Symbol
     order::Int
     region::Symbol
+    limit_scalars::Symbol          # the prolongation limiters (#329)
+    limit_theta::Symbol
+    limit_momentum::Symbol
     sponge::SP
     data::D                        # the child's boundary data (NestBoundaryData)
     flux_correction::Bool
@@ -157,7 +171,8 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     validate::Bool
     reuse_boundary::Bool
     record::Bool
-    solid::Any                     # child solid mask for the restriction (or nothing)
+    solid::SO                      # child solid mask as given (or nothing)
+    fluid::FM                      # its fluid mask for the restriction, computed once
     synced::Bool                   # the child runs on the parent's clock
     # clock and the current parent-step window [t0, t0 + Δt]
     t::Float64
@@ -168,10 +183,30 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     dt_prev_child::Union{Nothing,Float64}
     sub_t0::Float64                # start and length of the current child substep
     sub_h::Float64
+    sponge_τ::Float64              # window fraction s_bc holds the sponge target at (NaN: stale)
     stats::NestRunStats
     twoway::Union{Nothing,TwoWayFeedback}
-    regs::Union{Nothing,NestFluxRegisters}
+    regs::R
+    rb_parent::RP                  # preallocated rollback state of each domain
+    rb_child::RC
+    work::W                        # two-way scratch (nothing in a one-way run)
 end
+
+# Scratch of the two-way feedback, allocated once (#329, item 6): the
+# feedback mask, the anterpolation boxes, the reference values of the
+# refluxed scalars and the composite integrals of the ledger.
+struct _TwoWayWork{AS}
+    mask::BitArray{3}
+    anterp::AS
+    refs::Vector{Float64}
+    I0::Vector{Float64}
+    I1::Vector{Float64}
+    keys::Vector{Symbol}
+end
+
+_two_way_work(nest, s) = _TwoWayWork(BitArray(undef, nest.nx, nest.ny, nest.nz),
+                                     _anterp_scratch(nest), Float64[], Float64[], Float64[],
+                                     _scalar_ledger_keys(s))
 
 function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                    advance_parent::DomainAdvance = domain_advance(),
@@ -181,6 +216,9 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                    sync::Symbol = :subcycle,
                    feedback::Union{Symbol,TwoWayFeedback} = :one_way,
                    order::Int = 3,
+                   limit_scalars::Symbol = :positive,
+                   limit_theta::Symbol = :none,
+                   limit_momentum::Symbol = :none,
                    sponge::Union{Nothing,NestSponge} = nothing,
                    solid = nothing,
                    flux_correction::Bool = true,
@@ -214,8 +252,14 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
         error("NestedRun: parent clock $(parent.t) and child clock $(child.t) differ")
     ns = substeps === nothing ? max(nest.rx, nest.ry, nest.rz) : Int(substeps)
     ns >= 1 || error("NestedRun: substeps must be >= 1")
+    # without a sponge only the child's open-boundary points are read: the
+    # three field sets keep their halo slabs only (#329, item 4)
+    storage = sponge === nothing ? :shell : :full
     s_old, s_new, s_bc = state === nothing ?
-        ntuple(_ -> nest_interp_state(nest, parent, child; scalars), 3) : state
+        ntuple(_ -> nest_interp_state(nest, parent, child; scalars, storage), 3) : state
+    sponge === nothing || all(st -> nest_storage(st) === :full, (s_old, s_new, s_bc)) ||
+        throw(ArgumentError("NestedRun: a sponge needs storage = :full states (it relaxes " *
+                            "the child interior toward them)"))
     feedback === :two_way && _check_two_way_pair(parent, child, "NestedRun", s_bc)
     # the boundary buffers hold the halos *and* the boundary-normal interior
     # face plane of the west/south/bottom faces; the sponge needs the whole field
@@ -224,20 +268,26 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
          NestSponge{Float64}(sponge.width, sponge.α_max, sponge.profile,
                              sponge.sides .& nest_open_sides(child))
     # the child's boundary: the parent prolongated now, attached to its open faces
-    interpolate_parent_state!(s_old, parent, nest; order, region)
+    interpolate_parent_state!(s_old, parent, nest; order, region, limit_scalars, limit_theta,
+                              limit_momentum)
     _mark_nest_solids!(child, solid)
     data = nest_boundary_data(s_old, s_new; t0 = child.t, Δt = 0.0)
     _attach_nest_data!(child, data)
-    _fill_nest_halos!(child, s_old)
+    fill_nest_halos!(child, s_old)
+    regs = twoway !== nothing && twoway.reflux ?
+           NestFluxRegisters(nest, parent, child, s_bc, twoway, advance_parent, advance_child) :
+           nothing
     run = NestedRun(parent, child, nest, s_old, s_new, s_bc, advance_parent, advance_child,
-                    cfl_parent, cfl_child, feedback, sync, order, region, sp, data,
+                    cfl_parent, cfl_child, feedback, sync, order, region,
+                    limit_scalars, limit_theta, limit_momentum, sp, data,
                     flux_correction, ns, Int(max_retries),
                     Float64(divergence_tol), Float64(max_velocity), validate,
-                    reuse_boundary, record, solid, check_clocks, t, t, 0.0, NaN, nothing, nothing,
-                    Float64(child.t), 0.0, NestRunStats(), twoway,
-                    twoway !== nothing && twoway.reflux ?
-                        NestFluxRegisters(nest, parent, child, s_bc, twoway,
-                                          advance_parent, advance_child) : nothing)
+                    reuse_boundary, record, solid, _fluid_mask(nest, solid), check_clocks,
+                    t, t, 0.0, NaN, nothing, nothing,
+                    Float64(child.t), 0.0, NaN, NestRunStats(), twoway, regs,
+                    _Rollback(parent, advance_parent, s_bc.parent),
+                    _Rollback(child, advance_child, s_bc.child),
+                    twoway === nothing ? nothing : _two_way_work(nest, s_bc))
     if run.regs !== nothing                  # separate transports book through the sims
         _register_booker!(parent, run.regs, :parent, nest)
         _register_booker!(child, run.regs, :child, nest)
@@ -261,7 +311,9 @@ synchronised run) of the current parent step
 states prolongated at the two ends of the step, over the whole field set
 (`u, v, w, θ`, `qv`, extra scalars). Linear interpolation in time is
 second-order accurate, `O(Δt_p²)`. The result is the run's scratch state;
-read it before the next call.
+read it before the next call. Calling it from a child hook (`body_force!`,
+`post_predictor!`) is safe in a sponged run: the sponge re-blends its own
+target (the same scratch state) after any such call.
 """
 function boundary_time(run::NestedRun, t::Real)
     run.Δt > 0 || error("boundary_time: the run has not taken a parent step yet")
@@ -270,8 +322,16 @@ function boundary_time(run::NestedRun, t::Real)
         error("boundary_time: t = $t is outside the current parent step " *
               "[$(run.t0), $(run.t0 + run.Δt)]")
     _blend_state!(run.s_bc, run.s_old, run.s_new, (t - run.t0) / run.Δt)
+    run.sponge_τ = NaN       # s_bc no longer holds the sponge target (#329)
     return run.s_bc
 end
+
+# The parent field set prolongated into one of the run's states.
+_prolongate!(run::NestedRun, s::NestInterpState) =
+    interpolate_parent_state!(s, run.parent, run.nest; order = run.order, region = run.region,
+                              limit_scalars = run.limit_scalars,
+                              limit_theta = run.limit_theta,
+                              limit_momentum = run.limit_momentum)
 
 # Point the child's boundary data at the current parent-step window and
 # refresh its open boundaries at the child's time (B(t₀) of the new window:
@@ -280,8 +340,34 @@ function _set_window!(run::NestedRun)
     d = run.data
     d.a = run.s_old; d.b = run.s_new
     d.t0 = run.t0; d.Δt = run.Δt
-    _fill_nest_halos!(run.child, run.s_old)
+    run.sponge_τ = NaN
+    fill_nest_halos!(run.child, run.s_old)
     return run
+end
+
+# --- the sponge (#329, item 3) ---------------------------------------------
+
+# The sponge target, the parent blended to the end of the current child
+# substep, in run.s_bc (blended once per substep).
+function _sponge_target!(run::NestedRun)
+    τ = (run.sub_t0 + run.sub_h - run.t0) / run.Δt
+    τ == run.sponge_τ && return run.s_bc
+    _blend_state!(run.s_bc, run.s_old, run.s_new, τ)
+    run.sponge_τ = τ
+    return run.s_bc
+end
+
+# The velocity part of the sponge, chained after the child's own
+# post_predictor!: it relaxes the predicted velocity of every stage, before
+# the pressure solve, so the projection keeps ∇·u = 0.
+struct _SpongeHook{R} <: Function
+    run::R
+end
+
+function (h::_SpongeHook)(sim, Δt)
+    run = h.run
+    apply_nest_sponge!(sim, _sponge_target!(run), run.sponge; dt = Δt, scalars = false)
+    return nothing
 end
 
 # --- step validation and rollback ----------------------------------------
@@ -289,28 +375,69 @@ end
 _bound_fields(run::NestedRun, which::Symbol) =
     which === :child ? run.s_old.child : run.s_old.parent
 
-mutable struct _Rollback{SN}
+# The state a rejected step is rolled back to, allocated once per domain
+# and refilled in place before every attempt (#329: the open-boundary
+# buffers were copied into fresh arrays each attempt, 853 KiB per child
+# substep of a 32³ child).
+mutable struct _Rollback{SN, SC<:AbstractArray, SG, OP}
     snap::SN
-    scalars::Vector{Any}
-    sgs::Any
-    open::Any                       # the open-boundary buffers (part of the state)
+    scalars::Vector{SC}             # the bound scalars' data
+    sgs::SG                         # (closure, its state), or nothing
+    open::OP                        # the open-boundary buffers (part of the state), or nothing
+end
+
+function _Rollback(sim, adv::DomainAdvance, fs::AbstractVector)
+    closure = sgs_closure(_domain_sgs(adv))
+    sg = closure === nothing ? nothing : (closure, sgs_state(closure))
+    sc = [copy(f.data) for f in fs]
+    return _Rollback(state_snapshot(sim), isempty(sc) ? Array{Float64,3}[] : sc, sg,
+                     open_boundary_snapshot(sim))
 end
 
 function _save!(run::NestedRun, sim, adv::DomainAdvance, which::Symbol)
-    snap = state_snapshot(sim)
-    save_state!(snap, sim)
-    fs = _bound_fields(run, which)
-    sc = Any[copy(f.data) for f in fs]
-    closure = sgs_closure(_domain_sgs(adv))
-    return _Rollback(snap, sc, closure === nothing ? nothing : (closure, sgs_state(closure)),
-                     open_boundary_snapshot(sim))
+    rb = which === :child ? run.rb_child : run.rb_parent
+    save_state!(rb.snap, sim)
+    _copy_data!(rb.scalars, _bound_fields(run, which))
+    if rb.sgs !== nothing
+        closure = rb.sgs[1]
+        rb.sgs = (closure, sgs_state(closure))
+    end
+    rb.open = _snapshot_open!(rb.open, sim)
+    return rb
+end
+
+function _copy_data!(dst::AbstractVector, fs::AbstractVector)
+    for i in eachindex(dst, fs)
+        copyto!(dst[i], fs[i].data)
+    end
+    return dst
+end
+
+function _restore_data!(fs::AbstractVector, src::AbstractVector)
+    for i in eachindex(fs, src)
+        copyto!(fs[i].data, src[i])
+    end
+    return fs
+end
+
+# The open-boundary buffers copied into the preallocated snapshot (a fresh
+# one if planes were added since).
+_snapshot_open!(::Nothing, sim) = open_boundary_snapshot(sim)
+function _snapshot_open!(snap::AbstractVector, sim)
+    n = 0
+    for st in open_boundary_states(sim), p in st.planes
+        n += 1
+        (n <= length(snap) && size(snap[n]) == size(p.data)) ||
+            return open_boundary_snapshot(sim)
+        copyto!(snap[n], p.data)
+    end
+    n == length(snap) || return open_boundary_snapshot(sim)
+    return snap
 end
 
 function _restore!(run::NestedRun, sim, rb::_Rollback, which::Symbol)
     restore_state!(sim, rb.snap)
-    for (f, d) in zip(_bound_fields(run, which), rb.scalars)
-        copyto!(f.data, d)
-    end
+    _restore_data!(_bound_fields(run, which), rb.scalars)
     rb.sgs === nothing || restore_sgs_state!(rb.sgs[1], rb.sgs[2])
     restore_open_boundaries!(sim, rb.open)
     return sim
@@ -338,9 +465,9 @@ end
 # rolled back and retried; anything else — a `MethodError`, a `BoundsError`,
 # a wrong argument — is a bug or a set-up error and is rethrown at once
 # (#327, M6: it used to become a "rejected step" retried at half the size).
-function _try_advance!(adv::DomainAdvance, sim, h, bf = nothing)
+function _try_advance!(adv::DomainAdvance, sim, h, bf = nothing, pp = nothing)
     try
-        adv(sim, h; body_force! = bf)
+        adv(sim, h; body_force! = bf, post_predictor! = pp)
         return true
     catch err
         is_numerical_failure(err, sim) || rethrow()
@@ -441,11 +568,14 @@ closes the window with [`end_parent_step!`](@ref).
 
 Returns `window = (t_child_end, Δt, I0, m0)`: the child time the window
 ends at, the parent step taken, and (two-way runs that record) the
-composite integrals at the start, which `end_parent_step!` compares.
+composite integrals at the start (the run's scratch vector, in the
+order of the scalar ledger keys), which `end_parent_step!` compares.
 
 `step_nested!(run)` is exactly `begin_parent_step!`, the run's own child
 subcycling (`advance_child`), `end_parent_step!`.
 """
+const _NO_LEDGER = Float64[]          # the window's I0 of a run with no two-way scratch
+
 function begin_parent_step!(run::NestedRun; dt = nothing)
     p = run.parent; c = run.child; nest = run.nest; st = run.stats
     t_p = Float64(p.t)
@@ -463,15 +593,18 @@ function begin_parent_step!(run::NestedRun; dt = nothing)
     Δt > 0 || error("step_nested!: parent step must be > 0, got $Δt")
 
     two_way = run.feedback === :two_way
-    I0 = two_way && run.record ? _composite_scalars(p, c, nest, run.s_bc) : nothing
-    m0 = two_way && run.record ? composite_integral(p, c, nest, :momentum_x) : 0.0
+    m0 = 0.0
+    if two_way && run.record
+        _composite_scalars!(run.work.I0, p, c, nest, run.s_bc)
+        m0 = composite_integral(p, c, nest, :momentum_x)
+    end
 
     # --- 2. boundary data at t_p -------------------------------------------
     tb = time_ns()
     if !two_way && run.reuse_boundary && run.new_valid_at == t_p
         run.s_old, run.s_new = run.s_new, run.s_old
     else
-        interpolate_parent_state!(run.s_old, p, nest; order=run.order, region=run.region)
+        _prolongate!(run, run.s_old)
     end
     run.new_valid_at = NaN
     st.wall_boundary += (time_ns() - tb) / 1e9
@@ -484,7 +617,7 @@ function begin_parent_step!(run::NestedRun; dt = nothing)
 
     # --- 4. boundary data at t_p + Δt_p ------------------------------------
     tb = time_ns()
-    interpolate_parent_state!(run.s_new, p, nest; order=run.order, region=run.region)
+    _prolongate!(run, run.s_new)
     run.new_valid_at = t_end
     st.wall_boundary += (time_ns() - tb) / 1e9
     # the window in the child's clock (the parent's, in a synchronised run,
@@ -499,7 +632,8 @@ function begin_parent_step!(run::NestedRun; dt = nothing)
     # state into the step's result, keeps a third of it: ∇·u grew to 5e-9
     # in 200 steps of the vortex harness).
     two_way && _reproject!(c)
-    return (t_child_end = run.synced ? t_end : run.t0 + run.Δt, Δt = Δt, I0 = I0, m0 = m0)
+    return (t_child_end = run.synced ? t_end : run.t0 + run.Δt, Δt = Δt,
+            I0 = run.work === nothing ? _NO_LEDGER : run.work.I0, m0 = m0)
 end
 
 """
@@ -526,9 +660,10 @@ function end_parent_step!(run::NestedRun, w::NamedTuple)
         tw = time_ns()
         two_way_feedback!(run)
         if run.record
-            I1 = _composite_scalars(p, c, nest, run.s_bc)
-            for (k, v0) in w.I0
-                nest.ledger[k] = abs(I1[k] - v0) / max(abs(v0), 1e-300)
+            wk = run.work
+            _composite_scalars!(wk.I1, p, c, nest, run.s_bc)
+            for n in eachindex(wk.keys)
+                nest.ledger[wk.keys[n]] = abs(wk.I1[n] - w.I0[n]) / max(abs(w.I0[n]), 1e-300)
             end
             m1 = composite_integral(p, c, nest, :momentum_x)
             nest.ledger[:momentum_x] = abs(m1 - w.m0) / max(abs(w.m0), 1e-300)
@@ -582,6 +717,7 @@ end
 function _subcycle_child!(run::NestedRun, t_end::Float64)
     c = run.child; adv = run.advance_child; st = run.stats
     hook = _hook(run, :child)
+    pp = run.sponge === nothing ? nothing : _SpongeHook(run)
     adaptive = run.sync === :subcycle && run.cfl_child !== nothing
     R = t_end - c.t
     n_rem = run.sync === :shared_min_dt ? 1 :
@@ -604,9 +740,9 @@ function _subcycle_child!(run::NestedRun, t_end::Float64)
         run.sub_t0 = Float64(c.t); run.sub_h = h
         _begin!(run, :child)
         ok = if run.validate
-            _try_advance!(adv, c, h, hook) && _accept(run, c, :child)
+            _try_advance!(adv, c, h, hook, pp) && _accept(run, c, :child)
         else
-            adv(c, h; body_force! = hook); true
+            adv(c, h; body_force! = hook, post_predictor! = pp); true
         end
         ok && _commit!(run, :child)
         if !ok
@@ -623,9 +759,8 @@ function _subcycle_child!(run::NestedRun, t_end::Float64)
         end
         h_retry = 0.0
         tries = 0
-        if run.sponge !== nothing
-            _blend_state!(run.s_bc, run.s_old, run.s_new, (Float64(c.t) - run.t0) / run.Δt)
-            apply_nest_sponge!(c, run.s_bc, run.sponge; dt=h)
+        if run.sponge !== nothing               # the scalars; the velocity was relaxed
+            apply_nest_sponge!(c, _sponge_target!(run), run.sponge; dt = h, velocity = false)
         end
         n_taken += 1
         n_rem -= 1
@@ -720,21 +855,31 @@ function two_way_feedback!(run::NestedRun)
     meas = run.s_bc.measure
     α = fb.τ === nothing ? 1.0 : min(1.0, run.Δt / fb.τ)
     # the reference value of each refluxed scalar (volume-consistent refluxing)
-    refs = run.regs === nothing ? Float64[] : [_covered_mean(f, nest) for f in run.regs.pfield]
-    anterpolate!(p, c, nest, run.s_bc; mask = feedback_mask(run), α, solid = run.solid)
+    wk = run.work
+    refs = wk.refs
+    if run.regs !== nothing
+        resize!(refs, length(run.regs.pfield))
+        for n in eachindex(run.regs.pfield)
+            refs[n] = _covered_mean(run.regs.pfield[n], nest)
+        end
+    end
+    _feedback_mask!(wk.mask, nest, fb, c)
+    run.sponge_τ = NaN                         # the sponge target is re-blended after this
+    anterpolate!(p, c, nest, run.s_bc; mask = wk.mask, α, solid = run.fluid,
+                 scratch = wk.anterp)
     sides = nest_open_sides(c)
     e_before = _interface_imbalance(p, c, nest, meas)
     if run.flux_correction
-        for (pu, cu) in ((p.u, c.u), (p.v, c.v), (p.w, c.w))
-            mm = _only_sides(compute_nest_flux_mismatch(pu, cu, nest; measure = meas), sides)
-            apply_flux_correction!(pu, mm, nest; measure = meas)
-        end
+        _correct_interface_flux!(p.u, c.u, nest, 1, meas, sides)
+        _correct_interface_flux!(p.v, c.v, nest, 2, meas, sides)
+        _correct_interface_flux!(p.w, c.w, nest, 3, meas, sides)
     end
     if run.regs !== nothing
         r = run.regs
+        per = nest_periodic_axes(p)
         for n in eachindex(r.names)
             apply_flux_correction!(r.pfield[n], _register_mismatch(r, n, nest, refs[n]),
-                                   nest; measure = meas)
+                                   nest; measure = meas, periodic = per)
         end
         _clear_registers!(r)
     end
@@ -751,9 +896,13 @@ end
 
 # The parent's mean of a cell-centred field over the covered cells.
 function _covered_mean(f::Field, nest::NestedGrid)
+    m = nest.parent_mesh
     cx, cy, cz = nest_covered_range(nest)
-    v = view(interior_view(f), cx, cy, cz)
-    return sum(v) / length(v)
+    s = 0.0
+    @inbounds for k in cz, j in cy, i in cx
+        s += f.data[m.Hx + i, m.Hy + j, m.Hz + k]
+    end
+    return s / (length(cx) * length(cy) * length(cz))
 end
 
 feedback_mask(run::NestedRun) = run.twoway === nothing ?

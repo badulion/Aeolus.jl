@@ -20,6 +20,7 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,   # N-o
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
        open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
        assert_open_face_correction, open_intermediate_velocity!
+export WindowedBoundaryData, snapshot_values, window_fraction, blend_window!   # #329
 export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow,      # N-open-c (#260)
        rewind_open_boundaries!, mark_open_boundary_stage!
 

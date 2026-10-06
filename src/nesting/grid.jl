@@ -81,8 +81,81 @@ nest_bcs(x::Symbol, args...; kw...) =
                         "on that mesh (N-nest-d, #261)."))
 
 # =========================================================================
+# 1-D prolongation plans and the vertical measure (types; the builders are
+# in operators.jl and measure.jl)
+# =========================================================================
+
+# For every child storage index along one dimension: the parent storage
+# index where the stencil starts, the `ns` stencil weights (column `ic` of
+# `w`) and, for a cell-average plan, the parent storage cell holding the
+# child cell (the limiter groups children by it; 0 for a nodal plan). Flat
+# arrays rather than a vector of (start, weights) tuples (#329): one
+# allocation per plan and a concrete, GPU-friendly layout.
+struct _Plan1D
+    start::Vector{Int}
+    w::Matrix{Float64}
+    cell::Vector{Int}
+end
+
+Base.length(p::_Plan1D) = length(p.start)
+Base.getindex(p::_Plan1D, ic::Integer) = (p.start[ic], view(p.w, :, ic))
+_stencil(p::_Plan1D) = size(p.w, 1)
+
+"""
+    NestMeasure
+
+Vertical measure of the nesting operators of one [`NestedGrid`](@ref):
+the coordinate in which the conservative prolongation reconstructs
+parent averages and the weights with which restriction averages child
+cells. Build with [`nest_measure`](@ref).
+
+  * `kind = :volume` — volume (height) measure. On a uniform parent the
+    operators are exactly the N-nest-a (#250) operators; on a z-stretched
+    parent the reconstruction uses the actual face heights.
+  * `kind = :mass` — the reference-mass measure `dμ = W(z) dz` of a
+    [`MassWeightedSimulation`](@ref) pair (`W = ρ̄` anelastic, `ρ̄θ̄`
+    pseudo-incompressible, from `constraint_weights`). Restriction is
+    `W`-weighted (scalars) and `W`-area-weighted (horizontal-normal
+    faces); prolongation conserves `∫ W φ dV` exactly.
+
+Fields (all storage-indexed, halos included): `pc`/`cc` the parent/child
+face coordinates in the measure, `ph`/`ch` the parent/child face heights
+(child faces that coincide with parent faces are bit-identical copies),
+`cw` the child cell measure per level (`Δz` or `W Δz`), `pw` the parent
+cell measure per level from the parent's *own* weight (`Δz` or
+`W_p Δz_p`), and the plan cache.
+
+Two parent cell masses exist in the mass measure. Inside the covered
+layers the coordinate `pc` takes a parent layer's mass to be the sum of
+its children's (`Σ W_c Δz_c`), which is what makes prolongation and
+restriction exactly conservative and the Lagrange basis exactly 0/1 on
+coincident faces. The parent simulation itself conserves `W_p Δz_p`,
+which differs from that sum by the midpoint-rule error of sampling one
+profile on two grids ([`nest_reference_mismatch`](@ref), `~4e-7` for a
+25 m layer). Cell integrals over *uncovered* parent cells
+([`composite_integral`](@ref), the refluxing correction) therefore use
+`pw`, so the composite integral is exactly what the two simulations
+conserve; covered parent cells only ever exchange with their own
+children and use `pc`.
+"""
+struct NestMeasure
+    kind::Symbol
+    pc::Vector{Float64}
+    cc::Vector{Float64}
+    ph::Vector{Float64}
+    ch::Vector{Float64}
+    cw::Vector{Float64}
+    pw::Vector{Float64}
+    plans::Dict{Tuple{Symbol,Int},_Plan1D}
+end
+
+# =========================================================================
 # NestedGrid
 # =========================================================================
+
+# (:volume, 0, 0, :none), or (:mass, objectid(parent ref), objectid(child ref), weighting)
+const _MeasureKey = Tuple{Symbol,UInt,UInt,Symbol}
+const _VOLUME_KEY = (:volume, UInt(0), UInt(0), :none)
 
 """
     NestedGrid(parent_mesh, child_mesh; refinement, offset)
@@ -120,9 +193,11 @@ struct NestedGrid{T, MP<:AbstractMesh{T}, MC<:RegularGrid{T}}
     ix::Int; iy::Int; iz::Int
     nx::Int; ny::Int; nz::Int
     ledger::Dict{Symbol,Float64}
-    plans::Dict{Tuple{Symbol,Int,Int},Vector{Tuple{Int,Vector{Float64}}}}
-    measures::Dict{Any,Any}          # cached NestMeasure objects (volume / mass)
+    plans::Dict{Tuple{Symbol,Int,Int},_Plan1D}
+    measures::Dict{_MeasureKey,NestMeasure}   # cached measures (volume / mass)
+    limscratch::Dict{NTuple{3,Int},NTuple{3,Array{Float64,3}}}   # prolongation limiter
 end
+
 
 "Parent meshes a [`NestedGrid`](@ref) accepts."
 const NestParentMesh{T} = Union{RegularGrid{T}, StretchedGrid{T}}
@@ -224,9 +299,8 @@ function NestedGrid(parent::NestParentMesh{T}, child::RegularGrid{T};
 
     return NestedGrid{T, typeof(parent), typeof(child)}(
         parent, child, rx, ry, rz, ix, iy, iz, nx, ny, nz,
-        Dict{Symbol,Float64}(),
-        Dict{Tuple{Symbol,Int,Int},Vector{Tuple{Int,Vector{Float64}}}}(),
-        Dict{Any,Any}())
+        Dict{Symbol,Float64}(), Dict{Tuple{Symbol,Int,Int},_Plan1D}(),
+        Dict{_MeasureKey,NestMeasure}(), Dict{NTuple{3,Int},NTuple{3,Array{Float64,3}}}())
 end
 
 """
