@@ -245,6 +245,134 @@ least 16 384 points per task. Without that cap the 64×64×32 axpy took
 67.6 µs at 24 threads, 2.7× the serial loop. A pure store
 (`set!(f, value)`, 11 µs) is still slower threaded at 12 and 24 threads.
 
+## KA-f: halo fills, open boundaries and nesting transfer (#297)
+
+**Halo fills.** Every phase of `fill_halos!` — periodic, mirror, the
+free-slip and no-slip walls, the free-stream top, the fixed-gradient top,
+and the open faces in `:value`, `:odd`, `:mirror` and `:inflow` mode — is
+one `launch!` of a point body over the face slab
+(`src/boundary_conditions/halo_kernels.jl`). A slab is `layers × the full
+extent of the two tangential axes`, so edges and corners are filled too.
+The phases run in the old order: x, then y, then z, and within an axis
+the faces in their old order. An edge or corner therefore keeps the value
+of the last axis that reaches it, and `test/ka_halos.jl` checks this
+("corner order").
+
+A phase on the pencil normal to a face reads only that pencil, and the
+old loops ran its layers in ascending `h`. Two cases follow:
+
+* A one-sided phase reads the interior side of its face, plus the face
+  slot written by an earlier launch, and writes only beyond the face. It
+  is always independent.
+* A two-sided phase (periodic, or mirror on both faces) can read its own
+  writes when the interior is shallower than the halo (`N < H`, e.g. a
+  2-D run with `Ny = 1`). Such a launch runs on the calling task in
+  `launch!`'s serial order, which keeps ascending `h` per pencil. The
+  result is then the old one at every thread count.
+
+Along x the layers are the contiguous direction, so a work item is one
+x-pencil whose layer count is a compile-time constant (1–4). The first
+version used a 3-D launch with the layer as the innermost loop, and it
+made the multigrid halo (`H = 1`) 2.7× the old plane copies.
+
+The multigrid level halo (`Multigrid._fill_halo!`) is the same periodic
+and mirror kernel with `H = 1`: one source with `fill_halos!`. The open
+faces no longer box their plane when they look it up, so an open fill
+allocates 0 B (it was 0.8–3.4 kB per call).
+
+**Radiation outflow.** The phase speeds, the stage mark and the upstream
+update of a convective or Orlanski face are launches over the face
+points. In the radiation update a work item owns its buffer pencil.
+
+**Nesting.** Owner computes for every write:
+
+* **Prolongation:** each child point interpolates from its parent
+  stencil, one launch per box (and per slab of a halo-only shell).
+* **Limiters:** per box, each parent cell gathers the extrema of its
+  children. This was a scatter into the parent arrays. `max` and `min`
+  return one of their operands, so the order of the children does not
+  change the bits. Then the factor is computed per parent cell, and the
+  scaling and the face clip per child. A plan now carries the inverse of
+  its `cell` map, the contiguous children of each parent cell.
+* **Restriction:** each covered parent cell or face gathers its
+  children. This covers the volume and mass measures, the solid-aware
+  case, cells and faces.
+* **Per parent face or cell:** the flux mismatch, the face flux
+  correction and the refluxing. Refluxing finds the parent cell beyond a
+  face with `neighbor_index` instead of `mod1`. The same holds for the
+  two-way anterpolation, interface correction, register mismatch and
+  bookings.
+* **Pointwise:** the sponge and the boundary-data time blend
+  (`blend_window!`).
+
+The interface-imbalance L1 sum stays a serial loop. It is a diagnostic,
+and moving it to a canonical reduction would change its bits. The
+synthetic-inflow RNG is not touched (seeded per face, serial).
+
+**Bit for bit.** Every BC type, combination and location matches the
+pre-port fill on random fields with random halos, at 12×10×8,
+at 9×7×6 with halo (2, 4, 3) and at 5×1×2 with `H = 3`. This holds on the
+serial, threshold-0 threaded and default backends. The reference is a
+transcript of the old plane copies (`test/support/legacy_halos.jl`).
+Likewise 124 transfer-operator calls match the pre-port operators
+(`test/support/legacy_nesting.jl`). The covered cases are orders 1, 3
+and 5, the three limiters, halo / interface / whole-child regions,
+solid-aware and mass-measure restriction, and the flux mismatch and
+correction. Outside the suite, 411 hashes (halos, multigrid, nesting
+operators, open-boundary runs with Dirichlet / convective / Orlanski
+faces, one-way / two-way / sponge / Orlanski / anelastic nested runs)
+agree with master at 70d9f83 at `-t 1` and `-t 24` (threshold 0). The
+worker's `nested` section hashes four nested runs across thread counts.
+
+**Measured** (same machine; minimum of two runs at load 3–4; µs; old =
+master at 70d9f83 at one thread; speed-up = old 1 t / new N t):
+
+| kernel | old, 1 t | new, 1 t | 1 t / old | 4 t | 12 t | 24 t |
+| :----- | -------: | -------: | --------: | --: | ---: | ---: |
+| `fill_halos!` periodic θ, 64×64×32 | 18.6 | 9.6 | 0.52 | 1.94× | 1.96× | 1.95× |
+| `fill_halos!` walls, w, 64×64×32 | 18.8 | 10.2 | 0.54 | 1.86× | 1.83× | 1.82× |
+| `fill_halos!` open box, u, 64×64×32 | 27.5 | 11.0 | 0.40 | 2.56× | 2.54× | 2.53× |
+| multigrid `_fill_halo!` periodic, 66×66×34 | 4.1 | 3.3 | 0.81 | 1.25× | 1.23× | 1.25× |
+| `fill_halos!` periodic θ, 256³ | 917 | 501 | 0.55 | 6.95× | 3.87× | 2.46× |
+| `fill_halos!` walls, w, 256³ | 901 | 536 | 0.59 | 6.15× | 3.22× | 2.96× |
+| `fill_halos!` open box, u, 256³ | 890 | 546 | 0.61 | 5.56× | 3.14× | 3.30× |
+| multigrid `_fill_halo!` periodic, 258³ | 200 | 135 | 0.67 | 3.51× | 1.98× | 1.81× |
+| prolongation, halos, θ, order 3 (64³ child) | 1279 | 1204 | 0.94 | 1.05× | 1.08× | 0.82× |
+| … with the `:positive` limiter | 1490 | 1591 | 1.07 | 0.92× | 0.91× | 0.74× |
+| prolongation, whole child, θ, order 3 | 5296 | 4989 | 0.94 | 3.86× | 5.71× | 7.12× |
+| … with the `:monotone` limiter | 10039 | 10458 | 1.04 | 2.37× | 2.64× | 2.72× |
+| restriction θ (32³ parent cells) | 225 | 198 | 0.88 | 2.03× | 1.97× | 1.99× |
+| restriction θ, solid-aware | 387 | 319 | 0.82 | 2.22× | 2.01× | 2.01× |
+| restriction u | 152 | 127 | 0.84 | 1.18× | 1.18× | 1.19× |
+| flux mismatch u | 12.9 | 12.0 | 0.93 | 1.01× | 1.00× | 0.99× |
+| face flux correction u | 1.9 | 2.0 | 1.03 | 0.96× | 0.96× | 0.96× |
+| refluxing θ | 2.0 | 2.0 | 1.00 | 0.99× | 0.99× | 0.97× |
+
+Radiation outflow at 64×64×32, one thread: the stage mark takes 92 µs
+(was 2752; the field array used to be dispatched on at every point), the
+phase speeds 413 µs (500) and the update 308 µs (374).
+
+Reading the table:
+
+* **The 1-thread gate holds everywhere** (largest 1.07, the `:positive`
+  limiter). At one thread every halo fill is faster than the plane copies
+  it replaces, 0.40–0.81×.
+* **Small launches stay serial.** At 64×64×32 every halo slab is below
+  the 32 768-point threshold, so the fill runs serially at any thread
+  count and does not slow down at 24 threads, as the issue requires. The
+  speed-ups there are the 1-thread gain. The halo prolongation of a 64³
+  child is serial for the same reason: each slab has about 15 000
+  points. Its 24-thread figures (0.74–0.82×) are machine noise, because
+  a direct per-box measurement gives the same 1.20 ms at 1, 4 and 24
+  threads.
+* **At 256³ the slabs thread.** A halo fill reaches 5.6–7.0× the old
+  loop at 4 threads, and only 2.5–3.9× at 12 and 24 threads. The fill is
+  memory-bound; the likely cause is that tasks beyond what the DRAM
+  channels can feed only add start-up cost (not profiled further). The issue expected 1.5–3× at 12 threads. Against the new
+  1-thread time it is 1.6–2.1× at 12 threads.
+* **The whole-child prolongation is compute-bound** (a 27-point stencil
+  per point) and scales to 7.1× at 24 threads.
+
 ## Dependency tree
 
 KernelAbstractions 0.9.43 → Adapt, Atomix 1.6.0, UnsafeAtomics 0.4.0

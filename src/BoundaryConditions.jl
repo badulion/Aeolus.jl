@@ -184,6 +184,12 @@ Populate halo cells of `field` according to `bcs`
 (a [`FieldBoundaryConditions`](@ref)). Multi-dispatches on the field's
 [`Location`](@ref Aeolus.Grids.Location) so that e.g. an impermeable wall
 zeros `w` at the wall face but mirrors `u, v`.
+
+The axes are filled x, then y, then z, over the whole face slab, so an
+edge or corner holds the value of the last axis that reaches it. Each
+fill phase is one [`launch!`](@ref Aeolus.Backends.launch!) of a per-axis
+halo kernel (KA-f, #297): threaded for large faces, serial below the
+backend's threshold, and identical bits at every thread count.
 """
 function fill_halos!(f::Field, bcs::FieldBoundaryConditions; key = f.data)
     g   = f.mesh

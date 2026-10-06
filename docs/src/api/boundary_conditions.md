@@ -12,6 +12,12 @@ Open lateral and top faces fed by boundary data are `OpenBoundary`
 (N-open-b, #255), optionally with a convective or Orlanski radiation
 outflow (N-open-c, #260); see the last sections.
 
+Every fill is a sequence of `launch!`es of the per-axis halo kernels
+(KA-f, #297): one launch per fill phase, x then y then z, bit for bit the
+pre-port plane copies at every thread count. The multigrid level halo
+shares the same kernels. The rules are in
+[The kernel port](../design/ka_port.md) (section KA-f).
+
 ## BC types
 
 ```@docs
