@@ -351,7 +351,8 @@ _csv_header(diags) =
     DiagnosticsWriter(path, diags; cadence = 60.0, append = true, flush_every = 20)
 
 The diagnostics time series of a run as CSV (`diagnostics.csv` of the
-run folder; `diagnostics.nc` follows with #310). One row per
+run folder; `diagnostics.nc`, with the profiles, is
+[`DiagnosticsNCWriter`](@ref Aeolus.IO.DiagnosticsNCWriter), #337). One row per
 [`record_diagnostics!`](@ref): the columns `step`, `t [s]`, `wall [s]`
 (wall time since the writer opened), `dt [s]`, `dt_limiter`, `retries`,
 then one column `name [units]` per [`Diagnostic`](@ref) of `diags`.
