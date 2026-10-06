@@ -229,7 +229,11 @@ using Aeolus.MonteCarloRT
     # ---------------------------------------------------------------------
     @testset "Conservative scattering closes exactly" begin
         dom = mc_domain(Float64; size = (1, 1, 20), spacing = (100.0, 100.0, 100.0))
-        solver = monte_carlo_solver(; nphoton = 24_000, nbatch = 16)
+        # 96k photons (24k before KA-n, #305): at 24k the worst |α + T − 1|
+        # of the eight cases exceeds 0.01 for 1 of 20 seeds with the old
+        # MersenneTwister draws and 2 of 20 with the counter streams; at 96k
+        # for none. The tolerance is unchanged.
+        solver = monte_carlo_solver(; nphoton = 96_000, nbatch = 16)
         worst = 0.0
         for (τ, g) in ((1.0, 0.0), (1.0, 0.85), (10.0, 0.0), (10.0, 0.85)),
             μ₀ in (1.0, 0.5)
@@ -316,7 +320,12 @@ using Aeolus.MonteCarloRT
         ts = two_stream_solver(sw)
         nz = 20
         dom = mc_domain(Float64; size = (1, 1, nz), spacing = (100.0, 100.0, 100.0))
-        solver = monte_carlo_solver(; nphoton = 24_000, nbatch = 16)
+        # 96k photons (24k before KA-n, #305). The worst case (τ = 1, ω = 0.9,
+        # g = 0.85, μ₀ = 0.5) differs from delta-Eddington by ΔT = −0.0271 ±
+        # 0.0010 (400k photons), so at 24k photons (σ_T ≈ 0.004) |ΔT| < 0.03
+        # failed for 2 of 20 seeds with the old draws, 4 of 20 with the
+        # counter streams; at 96k for none. The tolerances are unchanged.
+        solver = monte_carlo_solver(; nphoton = 96_000, nbatch = 16)
 
         function two_stream_ref(τ, ssa, g, μ₀)
             opt = allocate_optics(Float64, (nz,), sw)
@@ -550,8 +559,11 @@ using Aeolus.MonteCarloRT
         medc = mc_medium(dcol; kext = kc1, ssa = wc1, g = gc1, sfc_albedo = 0.0)
         medk = mc_medium(dcol; kext = 0.0, sfc_albedo = 0.0)
 
-        s3 = monte_carlo_solver(; nphoton = 32_000, nbatch = 16)
-        s1 = monte_carlo_solver(; nphoton = 16_000, nbatch = 16)
+        # 128k / 64k photons (32k / 16k before KA-n, #305): the overhead-sun
+        # 3-D effect is about 6 σ at 32k, so "> 5 σ" failed for 5 of 10 seeds
+        # with the old draws; at 4× the photons it is about 12 σ.
+        s3 = monte_carlo_solver(; nphoton = 128_000, nbatch = 16)
+        s1 = monte_carlo_solver(; nphoton = 64_000, nbatch = 16)
         for μ₀ in (1.0, 0.5)
             sd = mc_sun_direction(μ₀; azimuth = 90.0)     # sun in the east
             r3 = mc_solve(med3, s3; rng = MersenneTwister(11), sun_dir = sd,
@@ -595,8 +607,23 @@ using Aeolus.MonteCarloRT
         prof = vec(sum(mc_surface_irradiance(r4); dims = 2)) ./ ny
         zc = (9 + 12 - 1) / 2 * dxs                     # cloud centroid height
         i_expect = mod(round(Int, 8.5 - (sd[1] / sd[3]) * zc / dxs) - 1, nx) + 1
-        @info "shadow displacement" expected_i=i_expect measured_i=argmin(prof) under_cloud=mean(prof[8:9]) in_shadow=prof[i_expect]
-        @test argmin(prof) == i_expect
+        # The geometric shadow: ground points whose ray toward the sun crosses
+        # the cloud (x ∈ [250, 550] m, z ∈ [400, 600] m), x_g ∈
+        # [250 − 600 tanθ, 550 − 400 tanθ], wrapped periodically.
+        tθ = sd[1] / sd[3]
+        x_lo, x_hi = 5 * dxs - 12 * dxs * tθ, 11 * dxs - 8 * dxs * tθ
+        shadow = [mod(i - 1, nx) + 1 for i in ceil(Int, x_lo / dxs) + 1:floor(Int, x_hi / dxs)]
+        @info "shadow displacement" expected_i=i_expect measured_i=argmin(prof) shadow_cells=shadow under_cloud=mean(prof[8:9]) in_shadow=prof[i_expect]
+        # Before KA-n (#305) this asserted argmin(prof) == i_expect. That
+        # expectation was wrong: the optically thick cloud (τ = 20) casts a
+        # flat-bottomed shadow over the six cells 16, 1, …, 5 whose mean
+        # irradiances differ by less than the noise of one run (611.1–618.2
+        # W/m² over 20 seeds, σ ≈ 3–4 W/m² per run), so the darkest cell is
+        # decided by the noise; the old draws put it at i_expect for 4 of 12
+        # seeds. The geometry is asserted instead: the darkest cell and
+        # i_expect lie in the geometric shadow (cells 16, 1, …, 6 here).
+        @test argmin(prof) in shadow
+        @test i_expect in shadow
         @test prof[i_expect] < 0.8 * mean(prof[8:9])    # the shadow is dark
         @test mean(prof[8:9]) > 0.9 * maximum(prof)     # under the cloud is bright
         @test prof[i_expect] > 0                        # but never black: diffuse light

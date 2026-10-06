@@ -14,13 +14,14 @@
 #      superdroplet modules that use them: thread-invariant on every backend.
 
 using Test
-using Random: MersenneTwister, Xoshiro
+using Random: MersenneTwister, Xoshiro, shuffle!
 using LinearAlgebra
 using Aeolus
 using Aeolus.Radiosity
 using Aeolus.RadiationCore
 using Aeolus.GasOptics
 using Aeolus.TwoStream
+using Aeolus.MonteCarloRT
 
 include(joinpath(@__DIR__, "support", "legacy_radiosity.jl"))
 
@@ -313,5 +314,59 @@ end
         τu = fill(0.05, 12, 10, 8)
         tu = zeros(12, 10); cloud_shadow_transmittance!(tu, τu, mesh, sd; backend = CPUBackend(threshold = 0))
         @test all(isapprox.(tu, exp(-0.4 / sd[3]); rtol = 1e-12))
+    end
+
+    @testset "Counter-based random streams (Philox4x32-10)" begin
+        φ = Aeolus.Backends.philox4x32
+        z = UInt32(0); f = typemax(UInt32)
+        # Random123 known-answer vectors (kat_vectors, philox4x32_10)
+        @test φ((z, z, z, z), (z, z)) == (0x6627e8d5, 0xe169c58d, 0xbc57ac4c, 0x9b00dbd8)
+        @test φ((f, f, f, f), (f, f)) == (0x408f276d, 0x41c83b0e, 0xa20bc7c6, 0x6d5451fd)
+        @test φ((0x243f6a88, 0x85a308d3, 0x13198a2e, 0x03707344), (0xa4093822, 0x299f31d0)) ==
+              (0xd16cfe09, 0x94fdcceb, 0x5001e420, 0x24126ea1)
+        r = counter_rng(42, 3, 7)
+        a = [rand(r) for _ in 1:9]
+        @test a[1] == rand(counter_rng(42, 3, 7))         # a pure function of (seed, stream, id)
+        r2 = counter_rng(1, 0, 0)
+        set_stream!(r2, 42, 3, 7)
+        @test [rand(r2) for _ in 1:9] == a                 # re-pointed = fresh stream
+        @test rand(counter_rng(42, 3, 8)) != a[1]          # neighbouring ids differ
+        @test rand(counter_rng(42, 4, 7)) != a[1]
+        @test rand(counter_rng(43, 3, 7)) != a[1]
+        @test all(x -> 0 <= x < 1, a)
+        # first draws of 10^5 neighbouring streams: uniform mean and variance
+        x = [rand(counter_rng(2026, 0, i)) for i in 0:99_999]
+        @test abs(sum(x) / length(x) - 0.5) < 4 * sqrt(1 / 12 / length(x))
+        @test abs(sum(abs2, x .- 0.5) / length(x) - 1 / 12) < 0.002
+        # and the Random API on top: randn, ranges, shuffle!
+        g = [randn(counter_rng(5, 1, i)) for i in 0:19_999]
+        @test abs(sum(g) / length(g)) < 4 / sqrt(length(g))
+        @test abs(sum(abs2, g) / length(g) - 1) < 0.05
+        @test sort(shuffle!(counter_rng(1, 1, 1), collect(1:10))) == 1:10
+        @test_throws ArgumentError counter_rng(1, -1, 0)
+        @test_throws ArgumentError counter_rng(1, 0, -1)
+    end
+
+    @testset "Monte-Carlo solve: thread-invariant photon streams" begin
+        dom = mc_domain(Float64; size = (6, 5, 8), spacing = (40.0, 40.0, 40.0))
+        kext = zeros(6, 5, 8); ssa = zeros(6, 5, 8); gg = zeros(6, 5, 8)
+        kext[2:4, 2:4, 3:5] .= 0.05; ssa[2:4, 2:4, 3:5] .= 0.98; gg[2:4, 2:4, 3:5] .= 0.8
+        med = mc_medium(dom; kext = kext, ssa = ssa, g = gg, sfc_albedo = 0.2)
+        solver = monte_carlo_solver(; nphoton = 8_000, nbatch = 8)
+        sd = mc_sun_direction(0.7; azimuth = 120.0)
+        ref = nothing
+        for (name, b) in KR_BACKENDS
+            r = mc_solve(med, solver; seed = 305, sun_dir = sd, solar_flux = 900.0, backend = b)
+            vals = (r.absorbed, r.absorbed_err, r.sfc_direct, r.sfc_diffuse, r.flux_up, r.flux_dn,
+                    [r.albedo, r.albedo_err, r.transmittance, r.absorptance_atm])
+            ref === nothing && (ref = vals)
+            @test all(kr_same(v, w) for (v, w) in zip(vals, ref))
+            @test abs(mc_closure_residual(r)) < 1e-10
+        end
+        # `rng` keys the streams by one draw: the same seed, the same solve
+        r1 = mc_solve(med, solver; rng = MersenneTwister(9), sun_dir = sd)
+        r2 = mc_solve(med, solver; rng = MersenneTwister(9), sun_dir = sd)
+        @test kr_same(r1.absorbed, r2.absorbed)
+        @test_throws ArgumentError mc_solve(med, solver; sun_dir = sd)    # no global stream
     end
 end

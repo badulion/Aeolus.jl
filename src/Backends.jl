@@ -17,13 +17,16 @@ module Backends
 using KernelAbstractions
 const KA = KernelAbstractions
 using LinearAlgebra: BLAS, mul!
+import Random
+using Random: AbstractRNG
 
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
        runs_serially, launch!, launch_weighted!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
-       plane_map!, apply_transform!
+       plane_map!, apply_transform!,
+       CounterRNG, counter_rng, set_stream!
 
 # =========================================================================
 # Backend types
@@ -955,5 +958,137 @@ function interior_all_finite(b::AbstractBackend, A::AbstractArray, (ir, jr, kr):
 end
 interior_all_finite(A::AbstractArray, ranges::NTuple{3,UnitRange{Int}}) =
     interior_all_finite(backend(A), A, ranges)
+
+# =========================================================================
+# Counter-based random streams (KA-n, #305)
+# =========================================================================
+#
+# A threaded Monte-Carlo loop cannot share one generator: the draws would
+# depend on which task reached it first. Instead every independent unit of
+# work (a photon, a grid cell) gets its own stream, a pure function of
+# (seed, stream, id): Philox4x32-10 (Salmon, Moraes, Dror & Shaw 2011,
+# "Parallel random numbers: as easy as 1, 2, 3", SC'11), the generator of
+# Random123, cuRAND and JAX. Each output block is a bijection of a 128-bit
+# counter under a 64-bit key, so streams with different counters never
+# overlap and need no state beyond the counter. The draws of a unit are
+# then the same whichever thread runs it and however the units are split.
+
+const _PHILOX_M0 = 0xD2511F53
+const _PHILOX_M1 = 0xCD9E8D57
+const _PHILOX_W0 = 0x9E3779B9
+const _PHILOX_W1 = 0xBB67AE85
+
+@inline function _mulhilo(a::UInt32, b::UInt32)
+    p = UInt64(a) * UInt64(b)
+    return (p >> 32) % UInt32, p % UInt32
+end
+
+"""
+    philox4x32(ctr::NTuple{4,UInt32}, key::NTuple{2,UInt32}) -> NTuple{4,UInt32}
+
+The Philox4x32-10 block function: ten rounds of the Salmon et al. (2011)
+round function, with the Weyl key schedule. Checked against the Random123
+known-answer vectors in `test/ka_radiation.jl`.
+"""
+@inline function philox4x32(ctr::NTuple{4,UInt32}, key::NTuple{2,UInt32})
+    c0, c1, c2, c3 = ctr
+    k0, k1 = key
+    for r in 1:10
+        hi0, lo0 = _mulhilo(_PHILOX_M0, c0)
+        hi1, lo1 = _mulhilo(_PHILOX_M1, c2)
+        c0, c1, c2, c3 = hi1 ⊻ c1 ⊻ k0, lo1, hi0 ⊻ c3 ⊻ k1, lo0
+        if r < 10
+            k0 += _PHILOX_W0
+            k1 += _PHILOX_W1
+        end
+    end
+    return (c0, c1, c2, c3)
+end
+
+"""
+    CounterRNG <: AbstractRNG
+
+A counter-based random stream (Philox4x32-10), made by
+[`counter_rng`](@ref)`(seed, stream, id)`. The key is the 64-bit `seed`;
+the 128-bit counter holds the 64-bit `id` (a photon, a cell, a particle),
+the 32-bit `stream` (a step, a g-point, a purpose) and a 32-bit block
+index that advances as numbers are drawn (2³² blocks of two `UInt64`s per
+stream). Two `CounterRNG`s with the same `(seed, stream, id)` produce the
+same numbers; different triples give independent streams.
+
+Use one per work item, never one shared between threads; re-point it with
+[`set_stream!`](@ref) instead of allocating a new one for every unit. It
+implements the `Random` API (`rand`, `randn`, `shuffle!`, …) through
+`rand(rng, UInt64)`. The numbers differ from those of `MersenneTwister` or
+`Xoshiro` with the same seed.
+"""
+mutable struct CounterRNG <: AbstractRNG
+    key::NTuple{2,UInt32}
+    stream::UInt32
+    id::UInt64
+    block::UInt32
+    buf::UInt64          # second half of the last block
+    has_buf::Bool
+end
+
+"""
+    counter_rng(seed, stream, id) -> CounterRNG
+
+The random stream of unit `id` (≥ 0, < 2⁶⁴) in stream `stream`
+(0 ≤ stream < 2³²) under `seed` (any integer, taken modulo 2⁶⁴). See
+[`CounterRNG`](@ref).
+"""
+function counter_rng(seed::Integer, stream::Integer, id::Integer)
+    s = seed % UInt64
+    return set_stream!(CounterRNG(((s >> 32) % UInt32, s % UInt32), 0, 0, 0, 0, false),
+                       stream, id)
+end
+
+"""
+    set_stream!(rng::CounterRNG, stream, id) -> rng
+    set_stream!(rng::CounterRNG, seed, stream, id) -> rng
+
+Point `rng` at the start of stream `(seed, stream, id)` (the seed kept if
+not given), without allocating: equivalent to a new
+`counter_rng(seed, stream, id)`.
+"""
+function set_stream!(r::CounterRNG, stream::Integer, id::Integer)
+    0 <= stream <= typemax(UInt32) ||
+        throw(ArgumentError("set_stream!: stream must lie in 0:$(typemax(UInt32)), got $stream"))
+    id >= 0 || throw(ArgumentError("set_stream!: id must be ≥ 0, got $id"))
+    r.stream = stream % UInt32
+    r.id = id % UInt64
+    r.block = 0
+    r.has_buf = false
+    return r
+end
+function set_stream!(r::CounterRNG, seed::Integer, stream::Integer, id::Integer)
+    s = seed % UInt64
+    r.key = ((s >> 32) % UInt32, s % UInt32)
+    return set_stream!(r, stream, id)
+end
+
+@inline function _next_u64!(r::CounterRNG)
+    if r.has_buf
+        r.has_buf = false
+        return r.buf
+    end
+    r.block == typemax(UInt32) &&
+        error("CounterRNG: stream exhausted (2³² blocks); use more streams")
+    c = (r.block, r.stream, r.id % UInt32, (r.id >> 32) % UInt32)
+    x0, x1, x2, x3 = philox4x32(c, r.key)
+    r.block += one(UInt32)
+    r.buf = (UInt64(x3) << 32) | x2
+    r.has_buf = true
+    return (UInt64(x1) << 32) | x0
+end
+
+Random.rng_native_52(::CounterRNG) = UInt64
+Random.rand(r::CounterRNG, ::Random.SamplerType{UInt64}) = _next_u64!(r)
+Random.rand(r::CounterRNG, ::Random.SamplerType{UInt32}) = _next_u64!(r) % UInt32
+Base.copy(r::CounterRNG) = CounterRNG(r.key, r.stream, r.id, r.block, r.buf, r.has_buf)
+function Base.show(io::IO, r::CounterRNG)
+    print(io, "CounterRNG(stream ", r.stream, ", id ", r.id, ", block ", r.block, ")")
+end
 
 end # module
