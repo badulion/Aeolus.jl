@@ -318,9 +318,11 @@ xarray and NCDatasets decode dates.
 the session: `run_id`, `case`, `session`, `git_commit`, `git_branch`,
 `git_dirty`, `julia_version`, `aeolus_version`, `manifest_fnv1a64`,
 `hostname`, `julia_threads`, `blas_threads`, `fftw_planner`,
-`fftw_threads`, `fftw_wisdom_loaded`, `bitwise_reproducible`, `command`
-and `config` (the configuration as TOML, with `config_hash` for a
-`RunConfig`), plus `title`, `source` and a `history` line per session.
+`fftw_threads`, `fftw_wisdom_loaded`, `bitwise_reproducible`, `command`,
+`config` and `seeds` (the session's configuration and seeds as TOML, with
+`config_hash` for a `RunConfig`), `created` (the run), `session_started`
+and `session_finished` (set when the writer closes; empty while the
+session runs or if it died), plus `title`, `source` and a `history` line per session.
 Flags are `Int8` 0/1 (NetCDF has no boolean). `run.toml` stays the full
 record (every session, every package version).
 
@@ -439,7 +441,7 @@ With `diagnostics.nc` (#337; same benchmark, a later day, 7.18 ms per bare
 step, mean dt 0.10 s): the CSV-only monitor **+1.40 %**, the monitor
 with `diagnostics.nc` **+1.55 %** (paired medians; the bare-step
 repetitions spread over 6.99 to 7.38 ms). Its parts: a buffered row
-0.2 µs, a block write plus sync 2.1 ms (once per 5 s wall), a costly row
+0.2 µs, a block write plus sync 2.13 ms (once per 5 s wall), a costly row
 6.5 ms (0.26 ms of it the five profiles, the rest the write and the
 sync; once per 60 s simulated). At the default cadence all parts add up
 to 0.060 ms per step, 0.84 %. The worst case (everything every step) is

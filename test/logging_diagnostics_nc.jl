@@ -310,9 +310,12 @@ end
         cfl = CFLConstraints(dt_max = 1.0)
         sim = dn_sim()
         rfpath = Ref("")
-        with_run("nc case"; root, repo, console = false,
+        with_run("nc case"; root, repo, console = false, seeds = (; noise = 42),
                  config = Dict("mesh" => Dict("N" => [10, 8, 6]))) do rf
             rfpath[] = rf.path
+            # while the session runs, session_finished is empty
+            a = nc_provenance_attributes(rf)
+            @test a["session_finished"] == "" && a["session_started"] == rf.record["session"][1]["started"]
             with_monitor(sim; run = rf, cadence = 2.0) do mon
                 for n in 1:5
                     step_adaptive!(sim, cfl; dt = 1.0)
@@ -336,11 +339,18 @@ end
             @test a["fftw_planner"] == s1["fftw"]["planner"]
             @test a["bitwise_reproducible"] == Int8(s1["fftw"]["bitwise_reproducible"])
             @test occursin("N = [10, 8, 6]", a["config"])
+            @test occursin("noise = 42", a["seeds"]) && occursin("[seeds]", a["seeds"])
+            @test a["created"] == rec["created"]
+            @test a["session_started"] == s1["started"]
+            # set when the writer closes, before the session ends (same ISO format and zone
+            # as run.toml, so the strings order as the times)
+            @test !isempty(a["session_finished"])
+            @test s1["started"] <= a["session_finished"] <= s1["ended"]
             @test ds["step"][:] == 1:5 && ds["step_costly"][:] == [1, 3, 5]
         end
         # restart: same folder, same run ID, records appended, session 2
         with_run("nc case"; root, repo, console = false, resume = rfpath[],
-                 config = Dict("mesh" => Dict("N" => [10, 8, 6]))) do rf
+                 seeds = (; noise = 7), config = Dict("mesh" => Dict("N" => [10, 8, 6]))) do rf
             with_monitor(sim; run = rf, cadence = 2.0) do mon
                 for n in 6:8
                     step_adaptive!(sim, cfl; dt = 1.0)
@@ -353,6 +363,11 @@ end
             @test ds["step"][:] == 1:8 && ds["time"][:] == 1.0:8.0
             @test ds["step_costly"][:] == [1, 3, 5, 6, 8]     # the cadence restarts with the session
             @test length(split(ds.attrib["history"], '\n')) == 2
+            # refreshed to session 2: its start, its end, its seeds override
+            s2 = read_run_toml(rfpath[])["session"][2]
+            @test ds.attrib["session_started"] == s2["started"]
+            @test s2["started"] <= ds.attrib["session_finished"] <= s2["ended"]
+            @test occursin("noise = 7", ds.attrib["seeds"])
         end
         @test !isfile(joinpath(rfpath[], "diagnostics-2.nc"))
 

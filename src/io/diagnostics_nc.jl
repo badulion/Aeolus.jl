@@ -32,19 +32,23 @@ NetCDF stores (text, `Int64`, `Float64`; flags as `Int8` 0/1):
 `git_branch`, `git_dirty`, `julia_version`, `aeolus_version`,
 `manifest_fnv1a64`, `hostname`, `julia_threads`, `blas_threads`,
 `fftw_planner`, `fftw_threads`, `fftw_wisdom_loaded`,
-`bitwise_reproducible`, `command`, and `config`, the run's configuration
-as TOML text (with `config_hash` and `config_schema_version` when it is
-a `RunConfig`). `run.toml` stays the complete record (every session,
-every package version).
+`bitwise_reproducible`, `command`, `config` and `seeds`, the
+configuration and the seeds of the session as TOML text (a restart's
+override, else the run's; with `config_hash` and `config_schema_version`
+when it is a `RunConfig`), `session_started`, and `session_finished`,
+empty while the session runs (or if it died) and set by `close` of the
+[`DiagnosticsNCWriter`](@ref). `run.toml` stays the complete record
+(every session, every package version).
 """
 function nc_provenance_attributes(rf::RunFolder)
     r = rf.record
     s = _current_session(rf)
     g = s["git"]; h = s["host"]; f = s["fftw"]; c = s["command"]
     cmd = join(vcat(String[string(c["program"])], String[string(a) for a in c["args"]]), ' ')
-    buf = IOBuffer()
-    TOML.print(buf, Dict{String,Any}("config" => get(r, "config", Dict{String,Any}()));
-               sorted = true)
+    toml_text(k) = (buf = IOBuffer();     # the session's override, else the run's
+                    TOML.print(buf, Dict{String,Any}(k => get(s, k, get(r, k, Dict{String,Any}())));
+                               sorted = true);
+                    String(take!(buf)))
     a = Dict{String,Any}(
         "run_id" => rf.run_id, "case" => rf.case, "run_folder" => rf.path,
         "session" => Int64(rf.session), "created" => string(get(r, "created", "")),
@@ -58,7 +62,8 @@ function nc_provenance_attributes(rf::RunFolder)
         "fftw_planner" => string(f["planner"]), "fftw_threads" => Int64(f["threads"]),
         "fftw_wisdom_loaded" => _nc_flag(f["wisdom_loaded"]),
         "bitwise_reproducible" => _nc_flag(f["bitwise_reproducible"]),
-        "command" => cmd, "config" => String(take!(buf)))
+        "command" => cmd, "config" => toml_text("config"), "seeds" => toml_text("seeds"),
+        "session_started" => string(get(s, "started", "")), "session_finished" => "")
     haskey(r, "config_hash") && (a["config_hash"] = string(r["config_hash"]))
     haskey(r, "config_schema_version") && (a["config_schema_version"] = r["config_schema_version"])
     return a
@@ -105,9 +110,14 @@ writes `<name>-2.nc` (`-3`, …) instead, with a warning. The rows of
 rows, at every costly row, when a blowup is thrown out of the run monitor
 and on `close`; every write ends with a `sync`, so the file on disk holds
 every written row even if the run dies. The policy is the one of
-`run.log` (epic #293, "flush every few s"): a `sync` of the HDF5 file
-costs about 3 ms, so syncing every 20 rows would cost 2 % of a 64×64×32
-step on its own (measured, see the Logging page).
+`run.log` (epic #293, "flush every few s"): a block write plus `sync`
+of the HDF5 file measured 2.13 ms, and syncing every 20 rows measured
+146 µs per step amortised, 3.1 % of a 64×64×32 step from the parts, over
+the 2 % budget (see the Logging page).
+
+`close` writes the remaining rows and, if the file has a
+`session_finished` attribute (the provenance of
+[`nc_provenance_attributes`](@ref)), sets it to the current time.
 """
 mutable struct DiagnosticsNCWriter
     path::String
@@ -376,6 +386,7 @@ Base.flush(w::DiagnosticsNCWriter) = (isopen(w.ds) && _flush_rows!(w); nothing)
 function Base.close(w::DiagnosticsNCWriter)
     if isopen(w.ds)
         _flush_rows!(w)
+        haskey(w.ds.attrib, "session_finished") && (w.ds.attrib["session_finished"] = _iso_time())
         close(w.ds)
     end
     return nothing
