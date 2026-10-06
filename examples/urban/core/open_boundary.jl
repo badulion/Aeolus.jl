@@ -1,6 +1,11 @@
-# The lateral boundaries of the case (N-open-d, #262).
+# The lateral boundaries of the case (N-open-d, #262; nested, #265).
 #
-# `cfg.lateral` chooses them:
+# With the `:nesting` coupling on (the default, N-berlin-nest #265) the
+# four sides and the top are the nest faces of an Aeolus parent:
+# `OpenBoundary` faces fed by `Nesting.NestBoundaryData`, built by the
+# coupling's `sim_options` (couplings/nesting.jl). `cfg.lateral` is then
+# not consulted for the boundary conditions. With the nest switched off
+# (`physics = Dict(:nesting => false)`) `cfg.lateral` chooses them:
 #
 #   :periodic  (default) periodic in x and y, walls at the bottom and the
 #              top for the velocity; θ with the top of `cfg.θ_top`
@@ -20,9 +25,8 @@
 #              are removed (core/geometry.jl); a building that still
 #              touches a face is solid there (`mark_open_boundary_solids!`).
 #
-# The `:open` option is transitional: N-berlin-nest (#265) feeds the same
-# open faces from the parent run and makes the nested configuration the
-# default.
+# The nested default feeds the same open faces from the parent run; `:open`
+# remains the parent-free alternative (analytic profile data).
 #
 # The open faces carry heat. The air-heat ledger books, inside the
 # dynamics context and level by level:
@@ -43,11 +47,19 @@
 # the booked heat is the heat the step moved; for a multi-stage step
 # (`:imex`) it is the last stage's rate × dt.
 
-"Whether the lateral boundaries of `cfg` are open."
+"""
+    case_nested(cfg) -> Bool
+
+Whether `cfg` runs the `:nesting` coupling (the default, #265): its sides
+and top are then the nest faces of the parent run.
+"""
+case_nested(cfg::CaseConfig) = any(C -> coupling_name(C) === :nesting, selected_couplings(cfg))
+
+"Whether the lateral boundaries of `cfg` are open: nested (the default) or `cfg.lateral = :open`."
 function lateral_open(cfg::CaseConfig)
     cfg.lateral in (:periodic, :open) ||
         error("CaseConfig.lateral must be :periodic or :open, got $(repr(cfg.lateral))")
-    return cfg.lateral === :open
+    return cfg.lateral === :open || case_nested(cfg)
 end
 
 """
@@ -69,9 +81,12 @@ end
 
 The boundary keywords of the case's core: `bcs` and `θ_bcs`, plus, for
 `cfg.lateral = :open`, the `sponge_target` of the open top. One call
-builds one open-boundary set, shared by `bcs` and `θ_bcs`.
+builds one open-boundary set, shared by `bcs` and `θ_bcs`. A nested case
+(the default) gets none here: the `:nesting` coupling's `sim_options`
+are the one definition of its nest faces (couplings/nesting.jl).
 """
 function case_boundary_conditions(cfg::CaseConfig, mesh)
+    case_nested(cfg) && return (;)
     if !lateral_open(cfg)
         return (bcs   = FieldBoundaryConditions(:periodic, :periodic, :wall),
                 θ_bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux,
@@ -94,6 +109,18 @@ the value next to the face, and a mask does not wrap across the box.
 """
 case_scalar_bcs(cfg::CaseConfig) = lateral_open(cfg) ? FieldBoundaryConditions(:noflux) :
                                    FieldBoundaryConditions(:periodic, :periodic, :noflux)
+
+"""
+    tracer_bcs(case) -> FieldBoundaryConditions
+
+The halo conditions of the advected tracers: [`case_scalar_bcs`](@ref),
+except in a nested case, where they are the core's own open boundary set
+(`sim.θ_bcs`): a tracer of the nest's field set gets the parent's value
+(or, if the parent does not carry it, zero on inflow and its own value on
+outflow — the `:inflow` halo), every other array the mirror, as with
+`case_scalar_bcs` (couplings/nesting.jl, #265).
+"""
+tracer_bcs(case) = case_nested(case.cfg) ? case.sim.θ_bcs : case_scalar_bcs(case.cfg)
 
 """
     OpenBoundaryHeat

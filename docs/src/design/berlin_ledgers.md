@@ -278,7 +278,10 @@ in both places.
 ### Open boundaries
 
 `cfg.lateral = :open` (N-open-d, #262; `core/open_boundary.jl`) gives the
-case open west, east, south, north and top faces:
+case open west, east, south, north and top faces fed by analytic data (with
+the nest switched off, `physics = Dict(:nesting => false)`; the nested
+default of #265 feeds the same faces from the parent, see
+[Nesting](berlin_nesting.md#Nesting-(#265))):
 
 * **Data.** `ProfileBoundaryData(u = U_g, v = V_g, w = 0, θ = initial_θ)`
   — the `:geostrophic` coupling's wind (also when it is off) and the

@@ -84,6 +84,27 @@ end
     @test all(==(0), flat.σ2) && all(==(0), flat.σ2t) && all(==(0), flat.dhx)
 end
 
+# A non-periodic surface (an open or nested case, #265) takes the box test
+# filter with zero-gradient sides. Before #265 its halo fill named `:wall`
+# sides, which have no x/y fill: a MethodError on the first call.
+@testset "Sub-filter statistics on a non-periodic surface: box filter, zero-gradient sides" begin
+    Nx, Ny, r = 8, 6, 4
+    rng = Xoshiro(265)
+    hf = randn(rng, Nx * r, Ny * r)
+    s = subfilter_height(hf, r; dx = 1.0, dy = 1.0, periodic = false)
+    @test s.filter === :box && !s.periodic
+    @test all(isfinite, s.σ2t) && all(>=(0), s.σ2t)
+    # interior cells: the 3 × 3 box mean; edge cells: the mirror halo
+    # repeats the edge cell (zero gradient)
+    hm = s.h
+    ext(i, j) = hm[clamp(i, 1, Nx), clamp(j, 1, Ny)]
+    box = [sum(ext(i + a, j + b) for a in -1:1, b in -1:1) / 9 for i in 1:Nx, j in 1:Ny]
+    @test maximum(abs.(s.ht .- box)) < 1e-13
+    # a constant and a flat surface stay exact
+    flat = subfilter_height(fill(2.5, Nx * r, Ny * r), r; dx = 1.0, dy = 1.0, periodic = false)
+    @test all(==(2.5), flat.ht) && all(==(0), flat.σ2) && all(==(0), flat.σ2t)
+end
+
 @testset "Analytic invariance: flat surface returns the fallback z0 exactly" begin
     Nx, Ny, r = 16, 4, 4
     for filter in (:box, :spectral)

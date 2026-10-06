@@ -108,7 +108,7 @@ incompatible_reason(::Type{<:MassWeightedCore}) =
     "flux form (momentum_advection = :centered)"
 
 "The `sim_options` keywords a sound-proof core takes (those of its default projection solver)."
-const MASS_WEIGHTED_SIM_KEYWORDS = (:tol, :maxit)
+const MASS_WEIGHTED_SIM_KEYWORDS = (:tol, :maxit, :bcs, :θ_bcs, :sponge_target)   # the last three: the nest faces (#265)
 
 _mass_weighted_type(::Type{AnelasticCore}) = Aeolus.Anelastic.AnelasticSimulation
 _mass_weighted_type(::Type{PseudoIncompressibleCore}) = Aeolus.Anelastic.PseudoIncompressibleSimulation

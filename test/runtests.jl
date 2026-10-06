@@ -907,6 +907,7 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_amr.jl")         # Phases 30-31  nesting, AMR
     include("era2_nested_run.jl")  # Phase  30     NestedRun time coupling (#257)
     include("era2_nest_boundary.jl") # Phase 30   one-way nest boundary data (#261)
+    include("era2_nest_external.jl") # #265        externally driven child (the Berlin pattern), open scalars added later
     include("era2_nest_twoway.jl")  # Phase 30   two-way feedback: anterpolation, refluxing (#263)
     include("era2_nest_twoway_longrun.jl") # Phase 30 two-way long runs: CBL, neutral, vortex (#263)
 end

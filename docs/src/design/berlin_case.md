@@ -153,6 +153,7 @@ in the integer `order` their couplings declare.
 | stage | entries (order) in the default case |
 | :-- | :-- |
 | `:clock` | local hour (core) |
+| `:nest_parent` | `nesting` (10): opens a parent window when the child has reached the last one — the parent takes its step, the child's nest faces point at the new window (see [Nesting](berlin_nesting.md#Nesting-(#265))) |
 | `:radiation` (600 s, and step 1) | `column_radiation` (5), `radiosity_sun` (10), `cloud_shadow` (15), `buildings_citymean` (20) |
 | `:sw_modifiers` | `sw_modifiers` (10, tree shade) |
 | `:surface_flux` | `surface_exchange` (10): the held H, E into the first air cell (step 1: the first surface step) |
@@ -165,6 +166,7 @@ in the integer `order` their couplings declare.
 | dynamics: `advance_dynamics!` of the `:timestepper` provider (default one `step!`) with `:body_force` / `:post_predictor` | `geostrophic` (10), `moist_buoyancy` (20), `wall_model_facades` stencil-flux removal (40) / `ibm` (10), `wall_model_facades` facade stress (12), `surface_exchange` drag (15), `veg_drag` (20); the `step_options` of the numerics slots |
 | `:surface_update` | `surface_exchange` (10: collects `bus.sensible`; every surface period steps all surfaces, soil included), `snow_legacy` (30), `aq_chem` r_a / v_d refresh (90, every 30 s) |
 | `:column_tendency` | `column_radiation` (10) |
+| `:nest_feedback` | `nesting` (10): closes the window when the child reaches its end (one-way: clock and statistics; the two-way feedback is #267) |
 | `:sanity` | the core finiteness check |
 | (ledger) | every coupling's `budget!`, and the change of water in the air (core) |
 | `:output` (1800 s) | NetCDF record and log line (core), then coupling entries: `turbulence_diag` (10) |

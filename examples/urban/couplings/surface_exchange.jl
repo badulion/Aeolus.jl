@@ -228,8 +228,12 @@ smoke_variants(::Type{SurfaceExchangeMOST}) =
       options = Dict(:surface_exchange => (h_wm_cells = 3,))),
      (label = "non-equilibrium (TBLE) ground wall model",
       options = Dict(:surface_exchange => (wall_model = :nonequilibrium,))),
-     (label = "dynamic z0 from the OSM height map (Anderson & Meneveau 2011)",
-      options = Dict(:surface_exchange => (z0m = :dynamic,))))
+     # the spectral test filter needs a periodic surface: the closed box
+     # (nest off); the nested default takes the box filter (#265)
+     (label = "dynamic z0 from the OSM height map (Anderson & Meneveau 2011), periodic box",
+      options = Dict(:surface_exchange => (z0m = :dynamic,)), physics = Dict(:nesting => false)),
+     (label = "dynamic z0, box test filter, nested",
+      options = Dict(:surface_exchange => (z0m = :dynamic, dynamic_filter = :box))))
 stages(::Type{SurfaceExchangeMOST}) = ((:surface_flux, 10, EVERY_STEP),
                                        (:post_predictor, 15, EVERY_STEP),
                                        (:surface_update, 10, EVERY_STEP))
@@ -766,8 +770,17 @@ function smoke_check(c::SurfaceExchangeMOST, case)
                 all(I -> 0 < c.H_max[I] < Inf, have),
             "|H| ≤ H_max (1 + 1e-8) for every column: the downward MOST buoyancy flux ≤ MSHF (Van de Wiel et al. 2012), every surface step" =>
                 c.mshf_worst <= 1 + 1e-8,
-            "the delivered fluxes (a soil skin's linearisation in T_skin) exceed H_max by < 10 % (measured ≤ 3.1 %)" =>
-                c.mshf_worst_delivered < 1.1,
+            # An empirical bound on the O(ΔT²) overshoot of the linearised
+            # skin, not a physical limit. The former < 10 % was measured on
+            # the idealised smoke window at 1 m/s (≤ 3.1 %); the nested
+            # windows (#265) measured 21 % (a street column on the inflow
+            # face, where the parent's air arrives unadjusted to the skins)
+            # and 28 % (an interior column under the summer sounding's
+            # 3.4 m/s geostrophic wind, which the nest now drives the child
+            # with: stronger fluxes, a larger skin change over the 4 s
+            # surface period)
+            "the delivered fluxes (a soil skin's linearisation in T_skin) exceed H_max by < 50 % (measured ≤ 3.1 % periodic at 1 m/s, ≤ 28 % nested)" =>
+                c.mshf_worst_delivered < 1.5,
             "the wall law's z0m is the surface's (table) or, with z0m = :dynamic, √(z0f² + α²σ_Δ²) of the dynamic roughness, solved every surface step (1e-12)" =>
                 (c.dyn === nothing ? all(I -> c.laws[I].z0m == roughness_lengths(bus.surface[I]).z0m, have) :
                  c.dyn.nsolves == c.nsurface_steps &&

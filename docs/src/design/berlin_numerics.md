@@ -22,9 +22,10 @@ through `update_open_boundaries!`), with the radiation outflow of
 N-open-c (#260) and the one boundary-flux function
 `boundary_scalar_flux`. `cfg.lateral = :open` (N-open-d, #262) opens the
 four sides and the top of the case: see
-[Open boundaries](berlin_ledgers.md#Open-boundaries) below. It is a transitional option:
-N-berlin-nest (#265) feeds the same faces from the parent run and makes
-the nested configuration the default.
+[Open boundaries](berlin_ledgers.md#Open-boundaries). Since N-berlin-nest (#265)
+the default case is nested: the same open faces are fed by the parent run
+([Nesting](berlin_nesting.md#Nesting-(#265))), and `lateral` (`:periodic`, `:open`) chooses
+the faces only with the nest switched off.
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every

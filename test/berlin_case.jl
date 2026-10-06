@@ -63,9 +63,9 @@ const BC = Main.BerlinCase
         # replaced the slab and the soil adapter by the surface exchange
         # and the soil ground), with #130's radiation and #170's turbulence
         # diagnostics; #182 made the prognostic TKE (:sgs_tke) the default
-        # SGS provider in place of :sgs_smagorinsky
+        # SGS provider in place of :sgs_smagorinsky; #265 the nest (:nesting)
         @test Set(BC.coupling_name.(sel)) ==
-              Set([:ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_exchange,
+              Set([:nesting, :ibm, :geostrophic, :radiosity_sun, :buildings_citymean, :surface_exchange,
                    :ground_soil, :sw_modifiers, :glass, :aq_chem, :aq_aerosol, :scalar_advection,
                    :micro_kessler, :pollutant, :fog_dew, :veg_drag, :snow_legacy,
                    :column_radiation, :cloud_shadow, :traffic_heat, :moist_buoyancy,
@@ -100,8 +100,10 @@ const BC = Main.BerlinCase
         # before and the cloud shadow after the radiosity solve, moved the
         # cloud shadow out of :sw_modifiers and replaced the prescribed
         # cooling. #170 added the turbulence diagnostics at the output
-        # cadence.
+        # cadence. #265 added the nest: the parent window opens after the
+        # clock and closes after the column tendencies.
         @test order == [
+            (:nest_parent, :nesting),
             (:radiation, :column_radiation), (:radiation, :radiosity_sun),
             (:radiation, :cloud_shadow), (:radiation, :buildings_citymean),
             (:sw_modifiers, :sw_modifiers),
@@ -121,6 +123,7 @@ const BC = Main.BerlinCase
             (:surface_update, :surface_exchange), (:surface_update, :snow_legacy),
             (:surface_update, :aq_chem),              # r_a / v_d refresh (#135)
             (:column_tendency, :column_radiation),
+            (:nest_feedback, :nesting),
             (:output, :turbulence_diag)]
         # the chemistry species are advected tracers since #135, the SGS
         # TKE of the default :sgs => :tke provider since #182
@@ -160,9 +163,14 @@ const BC = Main.BerlinCase
         # adaptive default refreshes the halos in its CFL diagnostics. And
         # the Smagorinsky closure: the default TKE closure (#182) refreshes
         # them too, when it commits its sources after the projection.
+        # A closed (periodic) box: the flux form conserves a tracer only
+        # where no face is open. Through the nest faces of the default case
+        # (#265) the transport moves the boundary flux, which the water
+        # ledger books as :boundary (berlin_smoke closes it every run).
         local case = BC.build_case(BC.CaseConfig(:smoke; verbose = false,
                                                  physics = Dict{Symbol,Any}(:timestepper => :fixed,
-                                                                            :sgs => :smagorinsky));
+                                                                            :sgs => :smagorinsky,
+                                                                            :nesting => false));
                                    io = devnull)
         # give the flow some structure first
         for _ in 1:4

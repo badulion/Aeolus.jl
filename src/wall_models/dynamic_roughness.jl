@@ -57,8 +57,11 @@ function _test_filter(A::AbstractMatrix, dx::Real, dy::Real, filter::Symbol, per
     f = Field(CellCenter(), g); o = Field(CellCenter(), g)
     view(interior_view(f), :, :, 1) .= A
     if filter === :box
+        # a non-periodic surface (an open or nested case): zero-gradient
+        # halos (the former `:wall` sides had no x/y halo fill, a
+        # MethodError the first time a nested case ran it, #265)
         bcs = periodic ? FieldBoundaryConditions(:periodic, :periodic, :wall) :
-                         FieldBoundaryConditions(:wall, :wall, :wall)
+                         FieldBoundaryConditions(:noflux)
         fill_halos!(f, bcs)
         box_filter!(o, f, (3, 3, 1))
     elseif filter === :spectral
