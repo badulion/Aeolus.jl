@@ -276,7 +276,10 @@ These are owned by other issues of the nesting epic (#246).
   cell across a periodic seam and nowhere across a non-periodic boundary
   (it used to wrap on every axis, so a child at the parent top would have
   corrected the parent's lowest layer); `apply_flux_correction!` takes the
-  parent's periodic axes ([`nest_periodic_axes`](@ref)).
+  parent's periodic axes ([`nest_periodic_axes`](@ref)). Since #349 the
+  `periodic` keyword of the cell-centred `apply_flux_correction!` and of
+  `reflux!` is required: its triply periodic default was wrong for every
+  parent with a wall or an open face.
 * **Open (#328):** one parent–child pair per run; nest hierarchies,
   sibling nests, non-aligned parents and stretched children.
 

@@ -836,7 +836,8 @@ function _plane_mismatch!(M, pf::Field, cf::Field, nest::NestedGrid, ax::Int, q:
 end
 
 """
-    apply_flux_correction!(parent_field, mismatch, nest; measure=nothing)
+    apply_flux_correction!(parent_field, mismatch, nest; measure=nothing)          # face field
+    apply_flux_correction!(parent_field, mismatch, nest; periodic, measure=nothing) # cell-centred
 
 Remove the coarse-fine flux inconsistency recorded in `mismatch`.
 
@@ -855,9 +856,10 @@ Remove the coarse-fine flux inconsistency recorded in `mismatch`.
     condition's) and the correction of that plane is dropped (#329: it
     used to wrap on every axis, so a child touching the parent's top put
     its top-plane correction into the parent's lowest layer).
-    `periodic = (px, py, pz)` gives the parent's periodic axes; the
-    default `(true, true, true)` is the default (triply periodic)
-    `BoussinesqSimulation` and the former behaviour. Pass
+    `periodic = (px, py, pz)`, the parent's periodic axes, is
+    **required** (#349: it defaulted to `(true, true, true)`, which is
+    wrong for any parent with a wall or an open face and was silently
+    taken by a caller that forgot it). Pass
     `periodic = nest_periodic_axes(parent_sim)` to read them from the
     parent's boundary conditions, as the two-way feedback,
     [`reflux_scalars!`](@ref) and the AMR refluxing do.
@@ -897,7 +899,7 @@ end
 
 function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
                                 nest::NestedGrid; measure=nothing,
-                                periodic::NTuple{3,Bool} = (true, true, true))
+                                periodic::NTuple{3,Bool})
     pm = nest.parent_mesh
     Np = (pm.Nx, pm.Ny, pm.Nz); Hp = (pm.Hx, pm.Hy, pm.Hz)
     nn = (nest.nx, nest.ny, nest.nz); oo = (nest.ix, nest.iy, nest.iz)

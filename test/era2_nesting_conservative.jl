@@ -489,7 +489,7 @@ end
     fv!(pA.θ, preg, pA.ref.ρ̄c_pad); fv!(cA.θ, creg, cA.ref.ρ̄c_pad)
     Imid = composite_integral(pA.θ, cA.θ, nest; measure=m)
     restrict_to_parent!(pA.θ, cA.θ, nest; measure=m)
-    reflux!(pA.θ, preg, creg, nest; measure=m)
+    reflux!(pA.θ, preg, creg, nest; measure=m, periodic=nest_periodic_axes(pA))
     I1 = composite_integral(pA.θ, cA.θ, nest; measure=m)
     drift = abs(Imid - I0) / I0; rel = abs(I1 - I0) / I0
     @printf("  mass-measure refluxing: composite ∫ρ̄θ drift without %.2e, with %.2e\n", drift, rel)
