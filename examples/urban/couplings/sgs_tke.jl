@@ -65,7 +65,7 @@ function build(::Type{<:SGSTKE}, case, o)
                        long_name = "subgrid-scale turbulent kinetic energy",
                        diffusivity = diffusivity)
     closure = TKEClosure(m; e = e, mask = sm.mask,
-                         wall_distance = o.wall_cap ? wall_distance(sm; bottom = true) : nothing,
+                         wall_distance = o.wall_cap ? wall_distance(sm; bottom = true, bcs = case.sim.bcs) : nothing,
                          first_level = first_level_cells(sm; bottom = true),
                          surface = o.surface ? (u_star = case.bus.u_star, k = case.bus.k_air) : nothing,
                          θ₀ = cfg.θ₀, g_accel = cfg.g, qv = tracer(case, :qv),

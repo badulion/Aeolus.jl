@@ -348,8 +348,14 @@ function build_dynamic_roughness(c::SurfaceExchangeMOST, case)
     r = c.dyn_opts.refine
     hf = osm_height_map(case.geom.city, mesh, r)
     resolved = [min(k - 1, Nz) * dz for k in bus.k_air]
+    # the sub-filter statistics are periodic only on a periodic case (#262);
+    # the spectral test filter needs a periodic surface
+    periodic = !lateral_open(case.cfg)
+    periodic || c.dyn_opts.filter !== :spectral ||
+        error("surface_exchange: z0m = :dynamic with dynamic_filter = :spectral needs a periodic " *
+              "surface; with lateral = :open use dynamic_filter = :box")
     st = subfilter_height(hf, r; dx = mesh.dx, dy = mesh.dy, resolved = resolved,
-                          filter = c.dyn_opts.filter)
+                          filter = c.dyn_opts.filter, periodic = periodic)
     have = [bus.surface[I] !== nothing for I in CartesianIndices(bus.k_air)]
     floor_ = [have[I] ? roughness_lengths(bus.surface[I]).z0m : 0.05
               for I in CartesianIndices(bus.k_air)]
@@ -441,8 +447,7 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         ucs = zeros(Nx, Ny); vcs = zeros(Nx, Ny)
         @inbounds for j in 1:Ny, i in 1:Nx
             k = min(bus.k_air[i, j], mesh.Nz)
-            ucs[i, j] = (u[i, j, k] + u[mod1(i + 1, Nx), j, k]) / 2
-            vcs[i, j] = (v[i, j, k] + v[i, mod1(j + 1, Ny), k]) / 2
+            ucs[i, j], vcs[i, j] = centre_wind(case.sim, i, j, k)   # BC-aware (#262)
         end
         update_dynamic_roughness!(dyn, ucs, vcs, bus.z_ref)
         c.t_dyn += time() - t0
@@ -452,8 +457,7 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         s === nothing && continue
         k = bus.k_air[i, j]
         q = qv[i, j, k]
-        uc = (u[i, j, k] + u[mod1(i + 1, Nx), j, k]) / 2
-        vc = (v[i, j, k] + v[i, mod1(j + 1, Ny), k]) / 2
+        uc, vc = centre_wind(case.sim, i, j, k)                  # BC-aware (#262)
         U = sqrt(uc^2 + vc^2)
         qa = PhasePartition(q)
         T_air = θ[i, j, k] * ref_exner(case, k)
