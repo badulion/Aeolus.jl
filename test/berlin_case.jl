@@ -101,7 +101,8 @@ const BC = Main.BerlinCase
         # cloud shadow out of :sw_modifiers and replaced the prescribed
         # cooling. #170 added the turbulence diagnostics at the output
         # cadence. #265 added the nest: the parent window opens after the
-        # clock and closes after the column tendencies.
+        # clock and closes after the column tendencies. #267 added the nest's
+        # two-way θ booking to the dynamics stages (a no-op one-way).
         @test order == [
             (:nest_parent, :nesting),
             (:radiation, :column_radiation), (:radiation, :radiosity_sun),
@@ -115,6 +116,7 @@ const BC = Main.BerlinCase
             (:microphysics, :micro_kessler),
             (:tracers, :pollutant),
             (:fog_dew, :fog_dew),
+            (:body_force, :nesting),                  # two-way θ booking (#267)
             (:body_force, :geostrophic), (:body_force, :moist_buoyancy),
             (:body_force, :wall_model_facades),       # stencil facade flux out (#179)
             (:post_predictor, :ibm), (:post_predictor, :wall_model_facades),

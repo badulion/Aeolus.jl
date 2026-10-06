@@ -148,7 +148,7 @@ context's own share, so a context's entry becomes the residual of the
 terms named inside it. The dynamics books `:top_flux`, the heat through
 the fixed-gradient θ top ([The θ top](#The-θ-top), N-parent-b, #254), this
 way; the nesting epic will add `:boundary_heat`, `:relaxation`,
-`:mass_correction` (N-open-d) and `:feedback_heat` (N-berlin-twoway). Called outside a step it is
+`:mass_correction` (N-open-d) and `:feedback_heat` (N-berlin-twoway, #267: booked in the parent's ledgers as `(:nest_feedback, :feedback_heat)` and `(:nest_feedback, :feedback_water)`, see [Nesting](berlin_nesting.md#Two-way-option-(#267))). Called outside a step it is
 an error: that heat would have no place in the balance.
 
 **Layers and windows.** Every term is kept per level and per local hour

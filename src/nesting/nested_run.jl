@@ -645,6 +645,41 @@ function _subcycle_child!(run::NestedRun, t_end::Float64)
 end
 
 """
+    begin_child_step!(run::NestedRun) -> hook
+    end_child_step!(run::NestedRun) -> run
+
+The child-step bracket of a caller that advances the child itself between
+[`begin_parent_step!`](@ref) and [`end_parent_step!`](@ref) (the Berlin
+case, whose child step is a whole stage loop, #265 / #267): the flux
+registers of a refluxing two-way run book a child step only inside it.
+`begin_child_step!` opens the step's bookings and returns the register
+hook of the scalars the child's core transports (`nothing` in a one-way
+run, without refluxing, or when every scalar is booked by its transport),
+to be chained into the core's `body_force!` at every stage; the separate
+transports of the step call [`book_nest_flux!`](@ref) in between.
+`end_child_step!` commits them. [`step_nested!`](@ref)'s own subcycling
+does the same around each child substep. Both are no-ops for the
+registers of a one-way run.
+"""
+function begin_child_step!(run::NestedRun)
+    run.sub_t0 = Float64(run.child.t)
+    _begin!(run, :child)
+    return run.regs === nothing || !any(_by_core, run.regs.models) ? nothing : _hook(run, :child)
+end
+
+"""
+    end_child_step!(run::NestedRun) -> run
+
+Commit the bookings of the child step opened by
+[`begin_child_step!`](@ref) into the flux registers of a refluxing
+two-way run (a no-op otherwise).
+"""
+function end_child_step!(run::NestedRun)
+    _commit!(run, :child)
+    return run
+end
+
+"""
     two_way_feedback!(run::NestedRun) -> run
 
 Apply the child → parent feedback of a two-way run now (what
