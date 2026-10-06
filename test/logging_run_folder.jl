@@ -229,6 +229,31 @@ end
                                          resume = :latest)
 end
 
+@testset "latest_run compares created_unix as a number, not as a string" begin
+    # The decimal forms of these Float64s differ in length ("1.759748412123456e9"
+    # vs "1.7597490001e9"); a zero-padded string comparison picked the older one.
+    repo = rf_repo(); root = mktempdir()
+    old = start_run("x"; root = root, repo = repo, console = false, run_id = "aaaaaaaa")
+    finish_run!(old)
+    new = start_run("x"; root = root, repo = repo, console = false, run_id = "bbbbbbbb")
+    finish_run!(new)
+    function set_created!(rf, t)
+        r = read_run_toml(rf.path); r["created_unix"] = t
+        open(io -> Aeolus.IO.TOML.print(io, r; sorted = true), joinpath(rf.path, "run.toml"), "w")
+    end
+    set_created!(new, 1.7597490001e9)          # 10 minutes later, shorter decimal form
+    set_created!(old, 1.759748412123456e9)     # written last: the newer mtime, so no tie-break help
+    @test length(string(1.7597490001e9)) < length(string(1.759748412123456e9))
+    @test latest_run(root, "x") == new.path
+    rf = start_run("x"; root = root, repo = repo, console = false, resume = :latest)
+    @test rf.path == new.path && rf.run_id == "bbbbbbbb" && rf.session == 2
+    finish_run!(rf)
+    @test length(read_run_toml(old.path)["session"]) == 1    # the older run is untouched
+    # and the other way round: the longer decimal form is the newer one
+    set_created!(old, 1.7597500001234567e9)
+    @test latest_run(root, "x") == old.path
+end
+
 @testset "a session that never finished is marked aborted on restart" begin
     repo = rf_repo(); root = mktempdir()
     rf = start_run("crash"; root = root, repo = repo, console = false)

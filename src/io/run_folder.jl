@@ -162,7 +162,7 @@ function _porcelain_under(l::AbstractString, r::AbstractString)
     return path == r || startswith(path, r * "/")
 end
 
-"The versions of the active project's direct dependencies, from its Manifest."
+"The versions of every package in the active project's Manifest (direct and indirect)."
 function _package_versions(manifest::AbstractString)
     v = Dict{String,Any}()
     isfile(manifest) || return v
@@ -302,19 +302,24 @@ read_run_toml(folder::AbstractString) =
     latest_run(root, case) -> Union{String, Nothing}
 
 The most recently created run folder of `case` under `root` (by the
-`created` time of its `run.toml`), or `nothing`.
+`created_unix` time of its `run.toml`, compared as a number; ties are
+broken by the `run.toml` modification time, then the folder name), or
+`nothing`.
 """
 function latest_run(root::AbstractString, case)
     isdir(root) || return nothing
     prefix_ok(n) = occursin(Regex("^\\d{4}-\\d{2}-\\d{2}_" * _safe_case(case) * "_[0-9a-f]+\$"), n)
-    best = nothing; best_t = ""
+    best = nothing; best_key = (-Inf, -Inf, "")
     for n in readdir(root)
         p = joinpath(root, n)
         (isdir(p) && prefix_ok(n) && isfile(joinpath(p, "run.toml"))) || continue
-        t = string(get(read_run_toml(p), "created_unix", 0.0))
-        t = lpad(t, 24, '0')
-        if best === nothing || t > best_t
-            best, best_t = p, t
+        c = get(read_run_toml(p), "created_unix", 0.0)
+        t = c isa Real ? Float64(c) : something(tryparse(Float64, string(c)), 0.0)
+        # Numeric comparison (the decimal forms of Float64s differ in length,
+        # so a string comparison orders them by length); ties by mtime, name.
+        key = (t, mtime(joinpath(p, "run.toml")), n)
+        if best === nothing || key > best_key
+            best, best_key = p, key
         end
     end
     return best
