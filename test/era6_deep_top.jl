@@ -33,6 +33,67 @@ using Aeolus.Operators: sponge_profile, damping_coordinates, damping_rate, Dampi
 _dt_level_sums(f) = (iv = interior_view(f); [sum(@view iv[:, :, k]) for k in axes(iv, 3)])
 _dt_level_sums(d::Array, g) = [sum(@view d[g.Hx+1:g.Hx+g.Nx, g.Hy+1:g.Hy+g.Ny, g.Hz+k]) for k in 1:g.Nz]
 
+# The 2-D gravity-wave packet of test 3. Returns the reflected energy
+# fraction: the time-integrated energy of the downward-propagating part
+# (m > 0 for k > 0, ω > 0) over the time-integrated energy of the upward part
+# (m < 0), both from the vertical wavenumber spectrum of the complex x-mode
+# amplitude of w in a window below the damping layer. Both packets cross the
+# window at the same |c_gz| (a reflection keeps k, ω and |m|), so the ratio
+# of the time integrals is the energy ratio.
+function _gw_reflection(; depth, θdamp, α, dz = 50.0, dt = 20.0, t_end = 22_000.0,
+                        z_s = 6000.0, z_packet = 2000.0, σ = 600.0, window = (3000.0, 5500.0))
+    N = 0.01; λ = 1000.0; Nx = 16
+    k = 2π / λ; m = -2π / λ                          # m < 0: upward group velocity
+    ω = N * k / sqrt(k^2 + m^2)
+    H = z_s + depth
+    Nz = round(Int, H / dz)
+    g = RegularGrid(; size = (Nx, 2, Nz), extent = (λ, 2λ / Nx, H), halo = (2, 2, 2))
+    θ0 = 300.0; ga = 9.81
+    bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    sim = BoussinesqSimulation(g; ν = 0.0, θ₀ = θ0, g_accel = ga, bcs = bcs, θ_bcs = bcs,
+                               sponge_α_max = α, sponge_z_start = z_s)
+    θbar(z) = θ0 * (1 + N^2 * z / ga)
+    A = 1e-3
+    env(z) = exp(-(z - z_packet)^2 / (2σ^2))
+    # velocity from a stream function on the C-grid: discretely divergence-free
+    ψ(x, z) = (A / k) * env(z) * sin(k * x + m * z)
+    set!(sim.u, (x, y, z) -> -(ψ(x, z + dz / 2) - ψ(x, z - dz / 2)) / dz)
+    set!(sim.w, (x, y, z) -> (ψ(x + g.dx / 2, z) - ψ(x - g.dx / 2, z)) / g.dx)
+    # b = g θ'/θ0 = (N²/ω) A sin φ (linear polarization of the upward wave)
+    set!(sim.θ, (x, y, z) -> θbar(z) + θ0 / ga * (N^2 / ω) * A * env(z) * sin(k * x + m * z))
+    zc = collect(znodes(g, CellCenter()))
+    F = ReferenceDamping(:θ, sponge_profile(α, z_s, H), θbar.(zc))
+    bf! = θdamp ? ((s, Δt) -> apply_forcing!(s, F, s.t, Δt)) : nothing
+    kr = findall(z -> window[1] <= z <= window[2], zc)
+    nk = length(kr)
+    hann = [0.5 - 0.5cos(2π * (n - 0.5) / nk) for n in 1:nk]
+    ms = 2π .* fftfreq(nk, 1 / dz)
+    xs = collect(xnodes(g, CellCenter()))
+    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
+    Eup = 0.0; Edn = 0.0
+    W = zeros(ComplexF64, nk)
+    nsteps = round(Int, t_end / dt)
+    for n in 0:nsteps
+        if n % 5 == 0
+            for (q, kk) in enumerate(kr)
+                s = 0.0im
+                for i in 1:Nx
+                    wc = 0.5 * (sim.w.data[Hx+i, Hy+1, Hz+kk] + sim.w.data[Hx+i, Hy+1, Hz+kk+1])
+                    s += wc * cis(-k * xs[i])
+                end
+                W[q] = 2s / Nx * hann[q]
+            end
+            Wm = fft(W)
+            for i in 1:nk
+                ms[i] < 0 ? (Eup += abs2(Wm[i])) : ms[i] > 0 ? (Edn += abs2(Wm[i])) : nothing
+            end
+        end
+        n == nsteps && break
+        step_rk3!(sim, dt; body_force! = bf!)
+    end
+    return Edn / Eup
+end
+
 # Analytic solution of θ_t = κθ_zz on [0, L], θ_z(0) = 0, θ_z(L) = Γ,
 # θ(z, 0) = Γz²/(2L) + a cos(πz/L).
 _neumann_exact(z, t; κ, Γ, L, a) = Γ * (z^2 / (2L) + κ * t / L) + a * cos(π * z / L) * exp(-κ * π^2 * t / L^2)
@@ -174,6 +235,25 @@ end
     end
 
     # ---------------------------------------------------------------------
+    @testset "3. gravity-wave absorption (Klemp & Lilly 1978)" begin
+        # rigid lid, no damping: the measurement sees the full reflection
+        R_lid = _gw_reflection(; depth = 1000.0, θdamp = false, α = 0.0)
+        α = 1e-3                                   # λ_max = 0.1 N ≈ ω/7
+        R = Dict{Tuple{Float64,Bool},Float64}()
+        for depth in (1000.0, 2000.0), θd in (false, true)
+            R[(depth, θd)] = _gw_reflection(; depth = depth, θdamp = θd, α = α)
+        end
+        @info @sprintf("gravity-wave reflection, α_max = %.0e s⁻¹: lid %.3f; depth 1 λz: uvw %.4f, +θ %.4f; depth 2 λz: uvw %.4f, +θ %.4f",
+                       α, R_lid, R[(1000.0, false)], R[(1000.0, true)], R[(2000.0, false)], R[(2000.0, true)])
+        @test R_lid > 0.9
+        for depth in (1000.0, 2000.0)
+            @test R[(depth, true)] < 0.05                     # the issue's target
+            @test R[(depth, true)] < R[(depth, false)] / 4    # θ damping absorbs what velocity damping lets through
+        end
+        @test R[(2000.0, true)] < R[(1000.0, true)]
+    end
+
+    # ---------------------------------------------------------------------
     @testset "4. fixed-gradient top" begin
         Γ = 0.003
         # the ghost continues a linear profile of slope Γ exactly into every halo layer
@@ -274,4 +354,35 @@ end
         end
     end
 
+    # ---------------------------------------------------------------------
+    @testset "5. budget: Δ∫ρc_pθ dV = damping + top flux + surface flux" begin
+        Random.seed!(2541)
+        g = RegularGrid(; size = (8, 8, 16), extent = (160.0, 160.0, 320.0), halo = (2, 2, 2))
+        ρ, cp = 1.2, 1004.0
+        κ, Γ, Fs = 0.5, 0.004, 0.1                 # m²/s, K/m, K m/s (≈ 120 W/m²)
+        θbcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = FluxBC(Γ))
+        sim = BoussinesqSimulation(g; ν = κ, θ₀ = 300.0, θ_flux_bottom = Fs, θ_bcs = θbcs,
+                                   bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+        set!(sim.θ, (x, y, z) -> 300 + 0.003z + 0.2 * randn())
+        set!(sim.u, (x, y, z) -> 0.5 * randn()); set!(sim.v, (x, y, z) -> 0.5 * randn())
+        zc = collect(znodes(g, CellCenter()))
+        F = ReferenceDamping(:θ, sponge_profile(0.01, 200.0, 320.0), 300 .+ 0.003 .* zc)
+        ΔV = g.dx * g.dy * g.dz
+        A = g.Lx * g.Ly
+        heat(s) = ρ * cp * sum(interior_view(s.θ) .- 300) * ΔV
+        dt = 1.0
+        worst = 0.0; Dsum = 0.0
+        for n in 1:30
+            H0 = heat(sim)
+            step!(sim, dt; body_force! = (s, Δt) -> apply_forcing!(s, F, s.t, Δt))
+            D = damping_tendency(F).integral
+            Dsum += D * dt
+            expected = ρ * cp * dt * (D + κ * Γ * A + Fs * A)
+            worst = max(worst, abs((heat(sim) - H0) - expected) / abs(expected))
+        end
+        @info @sprintf("budget: max |ΔH − (D + top + surface)|/|ΔH| = %.2e over 30 steps (damping %.3e J, top %.3e J, surface %.3e J per step)",
+                       worst, ρ * cp * Dsum / 30, ρ * cp * κ * Γ * A * dt, ρ * cp * Fs * A * dt)
+        @test worst < 1e-10
+        @test Dsum < 0                             # the anomaly above z_start is damped
+    end
 end
