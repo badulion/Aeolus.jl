@@ -212,6 +212,12 @@ export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
 export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
+# #245: full-state checkpoints with bitwise restart, periodic checkpoints
+export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint_state!,
+       fieldwise_checkpoint_state, restore_fieldwise!, checkpoint_fields,
+       StepperState, record_step!, previous_dt,
+       CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
+       latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!
 export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_write!, nc_append_record!, nc_close!, nc_write_fields,
        nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
