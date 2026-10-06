@@ -74,7 +74,7 @@ using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
 
-import ..BoundaryConditions: _fill_x!, _fill_y!, _fill_z!
+import ..BoundaryConditions: _fill_x!, _fill_y!, _fill_z!, axis_poisson_bc
 
 export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
