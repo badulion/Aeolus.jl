@@ -478,14 +478,18 @@ function open_boundary_conditions(m::RegularGrid{T}, data;
         top === bottom || throw(ArgumentError("bottom = :$bottom needs top = :$bottom"))
     end
     if bottom === :periodic
-        return FieldBoundaryConditions(w_, e_, s_, n_, Periodic(), Periodic())
+        b_ = Periodic(); t_ = Periodic()
+    else
+        b_ = bottom === :open ? face(:bottom) : _bc(bottom)
+        (b_ isa OpenBoundary || is_wall(b_)) ||
+            throw(ArgumentError("the bottom of an open box must be a wall, :open or :periodic"))
+        t_ = top === :open ? face(:top) : _bc(top)
+        (t_ isa OpenBoundary || is_wall(t_)) ||
+            throw(ArgumentError("top must be :open or a wall"))
     end
-    b_ = bottom === :open ? face(:bottom) : _bc(bottom)
-    (b_ isa OpenBoundary || is_wall(b_)) ||
-        throw(ArgumentError("the bottom of an open box must be a wall, :open or :periodic"))
-    t_ = top === :open ? face(:top) : _bc(top)
-    (t_ isa OpenBoundary || is_wall(t_)) ||
-        throw(ArgumentError("top must be :open or a wall"))
+    # (#329: a vertically periodic box returned before these two, so its
+    # radiating outflow faces were never initialised and silently stayed
+    # Dirichlet)
     _check_outflow_sides(outflow, keys(st.outflow))
     _init_radiation!(st)
     return FieldBoundaryConditions(w_, e_, s_, n_, b_, t_)

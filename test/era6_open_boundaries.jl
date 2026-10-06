@@ -435,3 +435,18 @@ end
     @test_throws ErrorException assert_open_face_correction(bcs, Field(FaceX(), m),
                                                             Field(FaceY(), m), gz)
 end
+
+# A vertically periodic open box (the 1-D/2-D nest child, #329) used to return
+# before the radiating outflow was initialised: its :convective faces stayed
+# Dirichlet without a word.
+@testset "radiating outflow in a vertically periodic open box (#329)" begin
+    m = RegularGrid(size = (8, 4, 4), extent = (8.0, 4.0, 4.0), halo = (3, 3, 3))
+    data = ProfileBoundaryData(u = 1.0, v = 0.0, w = 0.0, θ = 0.0)
+    for (bot, top) in ((:periodic, :periodic), (:wall, :open))
+        bcs = open_boundary_conditions(m, data; y = :periodic, bottom = bot, top = top,
+                                       outflow = :convective)
+        st = only(Aeolus.BoundaryConditions.open_boundary_states(bcs))
+        @test Aeolus.BoundaryConditions.has_radiating_outflow(bcs)
+        @test count(!isnothing, st.radiation) == length(st.planes)
+    end
+end
