@@ -27,8 +27,7 @@
 #     level.
 #
 # Nothing here is coupled to a 3-D run yet: the parent case (N-parent-e,
-# #259) builds it and the nest (N-berlin-nest, #265) makes it default;
-# `:SurfaceTiles` leaves BERLIN_PENDING there.
+# #259) builds it and the nest (N-berlin-nest, #265) makes it default.
 
 using Aeolus.SurfaceTiles: SurfaceMosaic, BlendedMosaic, AbstractBlendingHeight,
                            class_fractions, macdonald_roughness, mosaic_fractions,

@@ -87,7 +87,7 @@ default.
 | `slot(::Type{C})` | `:addon` (additive, on/off) or an exclusive slot such as `:microphysics` |
 | `provider(::Type{C})` | the value of `cfg.physics[slot]` that selects `C` |
 | `is_default(::Type{C})` | default provider of its slot; for an addon, on by default |
-| `modules_used(::Type{C})` | Aeolus submodules it runs (checked by the coverage test) |
+| `modules_used(::Type{C})` | Aeolus submodules it runs |
 | `default_options(::Type{C})` | `NamedTuple`, merged with `cfg.options[name]` and passed to `build` |
 | `incompatible(::Type{C})` | `slot => provider` pairs or coupling names it cannot run with |
 | `stages(::Type{C})` | `((stage, order, Cadence), …)`, at most one entry per stage |
@@ -97,7 +97,7 @@ default.
 | `output_fields(c, case)` | `OutputField`s added to the NetCDF file |
 | `budget!(c, case, ledger)` | this step's surface-energy and water terms (see [the ledger](berlin_ledgers.md#The-budget-ledger)) |
 | `report(c, case)` | an extra log line with each output record |
-| `smoke_variants(::Type{C})` | extra smoke-test configurations, a tuple of `NamedTuple`s (see [the smoke test](berlin_ledgers.md#Smoke-test-and-coverage-test)) |
+| `smoke_variants(::Type{C})` | extra smoke-test configurations, a tuple of `NamedTuple`s (see [the smoke test](berlin_ledgers.md#Smoke-test)) |
 | `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run |
 | `sim_options(::Type{C}, cfg, mesh, opts)` | keywords of the dynamical core's constructor (the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of a sound-proof core), before the core is built (see [numerics slots](berlin_numerics.md#Numerics-slots)) |
 | `step_options(c, case)` | keywords added to every dynamics step, `step!` or `step_imex!` (e.g. `momentum_advection`, `sgs`) |
@@ -441,8 +441,7 @@ chaotic runs, not the term alone.
 
 ## Adding a coupling
 
-This is the whole procedure. It touches one new file, one line of the
-coverage test and the PR body; no shared file of the case is edited.
+This is the whole procedure. It touches one new file and the PR body; no shared file of the case is edited.
 
 **1. Put the physics in `src/`.** A coupling only wires a src
 implementation into the 3-D run. If the physics is missing, add it to
@@ -463,7 +462,7 @@ coupling_name(::Type{<:MicroP3}) = :micro_p3             # unique; key in cfg.op
 slot(::Type{<:MicroP3})          = :microphysics         # or :addon
 provider(::Type{<:MicroP3})      = :p3                   # cfg.physics[:microphysics] = :p3
 is_default(::Type{<:MicroP3})    = false                 # an alternative: off by default
-modules_used(::Type{<:MicroP3})  = (:P3Microphysics,)    # what the coverage test checks
+modules_used(::Type{<:MicroP3})  = (:P3Microphysics,)    # the Aeolus modules it runs
 default_options(::Type{<:MicroP3}) = (skip_dry = true,)
 stages(::Type{<:MicroP3}) = ((:microphysics, 10, EVERY_STEP),)
 
@@ -535,16 +534,8 @@ equations (a maximum principle, positivity, a range set by the
 thermostat), a sign that follows from the physics. "It ran" is already
 asserted for every coupling.
 
-**5. Remove the module from the pending list.** Delete its line from
-`BERLIN_PENDING` in `test/berlin_coverage.jl`. The coverage test fails
-until you do (the ratchet), and it also checks that the coupling's file
-really calls into every module in its `modules_used` (by an exported
-name or a `Module.` qualification). An indirect use (you call a src
-function that runs the module every time) goes in `BERLIN_INDIRECT`
-with the explanation.
-
-**6. Run and quote.** `julia --project=. test/berlin_smoke.jl` and
-`test/berlin_coverage.jl` locally (under a minute), then the full suite.
+**5. Run and quote.** `julia --project=. test/berlin_smoke.jl` locally
+(under a minute), then the full suite.
 In the PR body quote one Berlin diagnostic — a ledger term is often the
 natural one — the configuration it was measured in, and the cost from
 `timing_report`.

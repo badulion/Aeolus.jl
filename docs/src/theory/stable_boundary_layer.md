@@ -583,8 +583,8 @@ weak-wind, very stable regime 1 of the hockey stick, where no inertial
 oscillation can build a jet in a 200 m domain under a sponge. A
 GABLS3-like jet in the Berlin run would need GABLS3-like forcing (the
 `:geostrophic` coupling's `U_g` option) and a deeper domain. This issue
-changes no Berlin configuration. Smoke and coverage tests are unchanged
-(no coupling added, no frozen list touched).
+changes no Berlin configuration. The smoke test is unchanged (no
+coupling added).
 
 ## References
 

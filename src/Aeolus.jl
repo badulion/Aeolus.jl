@@ -157,10 +157,18 @@ using .WallModels                  # Phase 57 (#169)
 using .LargeScaleForcing           # Era VI, Phase 58 (#171)
 using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 
+# LOG-c (#335): the diagnostics registry's methods for the library's
+# components (simulations, closures, wall models, nesting); needs them all.
+include("logging/component_diagnostics.jl")
+
 # Re-exports for the user-facing API.
 # Structured logging (LOG-a, #333)
 export AeolusLogger, TeeLogger, open_run_log, with_run_log, test_logger,
        current_domain, with_domain, parse_log_level
+# Diagnostics registry, CSV writer, progress line (LOG-c, #335)
+export Diagnostic, diagnostics, collect_diagnostics, prefixed, reduce_diagnostic, evaluate_diagnostic,
+       DiagnosticsWriter, record_diagnostics!, last_diagnostics, costly_due,
+       ProgressLine, progress!, WarningTap, with_progress, note_warning!
 export AbstractMesh, RegularGrid
 export Field, CellCenter, FaceX, FaceY, FaceZ
 export Periodic, NoFlux, ValueBC, FluxBC, FieldBoundaryConditions, fill_halos!
@@ -231,6 +239,11 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
 export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
        provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,
        diagnostics_path, output_dir, checkpoint_dir, refresh_fftw_provenance!
+# #335: blowup guard (diagnose, dump, stop) and the run monitor
+export checkpoint_payload, write_checkpoint,
+       BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
+       check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
+       RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir
 export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_write!, nc_append_record!, nc_close!, nc_write_fields,
        nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
@@ -242,9 +255,9 @@ export AbstractPartition, SerialPartition, PencilPartition,
        nranks, is_serial, exchange_halos_distributed!
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
-       runs_serially, launch!, range_map!,
+       runs_serially, launch!, launch_weighted!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
-       column_partials, interior_max, interior_all_finite, interior_map!
+       column_partials, interior_max, interior_all_finite, interior_map!, apply_transform!
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
 export apply_linear_chemistry!,
