@@ -207,7 +207,7 @@ function streamwise_spectrum(u::Field, levels; remove_mean::Bool = true)
     nk = Nx ÷ 2 + 1
     E = zeros(T, nk, length(lv))
     line = zeros(T, Nx)
-    plan = plan_rfft(line)
+    plan = plan_rfft(line; flags = fftw_planner_flags())
     c = fill(T(2), nk); c[1] = 1
     iseven(Nx) && (c[nk] = 1)
     norm = g.Lx / (2π * Nx^2)

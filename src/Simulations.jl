@@ -30,6 +30,15 @@ export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
 Dry incompressible Boussinesq LES on a staggered Arakawa-C mesh with a
 fractional-step / pressure-projection driver.
 
+`mesh` is a uniform [`RegularGrid`](@ref) or a vertically stretched
+[`StretchedGrid`](@ref Aeolus.StretchedGrids.StretchedGrid) (#151): on the
+latter every operator of the core (momentum and scalar advection, molecular
+and SGS diffusion, the Smagorinsky length scale, buoyancy, the projection)
+uses the local cell thickness `cell_thickness(mesh)[k]` and centre spacing
+`center_spacing(mesh)[k]`, and the default pressure solver is the direct
+stretched-z solver (see the [Stretched vertical grid](@ref) theory page).
+A `:uniform` `StretchedGrid` reproduces the `RegularGrid` run.
+
 Prognostic state:
 
   * `u @ FaceX`, `v @ FaceY`, `w @ FaceZ` — velocity components.
@@ -68,7 +77,7 @@ See the [Fractional-step projection](@ref) theory page for the
 algorithm and the [Quick start](@ref) for a worked example.
 """
 mutable struct BoussinesqSimulation{T,
-                                    M<:RegularGrid{T},
+                                    M<:AbstractMesh{T},
                                     BCS<:FieldBoundaryConditions,
                                     TBCS<:FieldBoundaryConditions,
                                     PS<:AbstractPressureSolver}
@@ -128,7 +137,7 @@ mutable struct BoussinesqSimulation{T,
     κt::Field{CellCenter,      T, Array{T,3}, M}   # SGS scalar diffusivity (Era VI, #167)
 end
 
-function BoussinesqSimulation(mesh::RegularGrid{T};
+function BoussinesqSimulation(mesh::AbstractMesh{T};
                               ν::Real                 = 0,
                               θ₀::Real                = 0,     # 0 → buoyancy off
                               g_accel::Real           = 9.81,
@@ -143,6 +152,7 @@ function BoussinesqSimulation(mesh::RegularGrid{T};
                               bcs::FieldBoundaryConditions = FieldBoundaryConditions(:periodic),
                               θ_bcs::FieldBoundaryConditions = bcs,
                               solver::AbstractPressureSolver = _default_solver(mesh, bcs)) where {T}
+    _check_boussinesq_mesh(mesh)
     Tp = T
     u = Field(FaceX(), mesh); v = Field(FaceY(), mesh); w = Field(FaceZ(), mesh)
     p = Field(CellCenter(), mesh); θ = Field(CellCenter(), mesh)
@@ -512,6 +522,7 @@ but the standard diagnostic for staggered LES.
 """
 function kinetic_energy(sim::BoussinesqSimulation)
     m = sim.mesh
+    m isa RegularGrid || return _kinetic_energy_levels(sim, m)
     dV = m.dx * m.dy * m.dz
     ke = 0.0
     ui = interior_view(sim.u); vi = interior_view(sim.v); wi = interior_view(sim.w)
@@ -519,6 +530,22 @@ function kinetic_energy(sim::BoussinesqSimulation)
         ke += ui[I]^2 + vi[I]^2 + wi[I]^2
     end
     return 0.5 * ke * dV
+end
+
+# The same sum with per-level volumes: u, v (at cell-centre heights) weigh
+# with the cell thickness, w (on z-faces) with the centre spacing, i.e. the
+# heights of the u- and w-control volumes of the staggered grid.
+function _kinetic_energy_levels(sim::BoussinesqSimulation, m)
+    ii, jj, kk = interior(m)
+    ud, vd, wd = sim.u.data, sim.v.data, sim.w.data
+    ke = 0.0
+    @inbounds for k in kk
+        hc = _dzc(m, k); hf = _dzf(m, k)
+        for j in jj, i in ii
+            ke += (ud[i, j, k]^2 + vd[i, j, k]^2) * hc + wd[i, j, k]^2 * hf
+        end
+    end
+    return 0.5 * ke * m.dx * m.dy
 end
 
 """
@@ -634,6 +661,25 @@ function _default_solver(mesh::RegularGrid, bcs::FieldBoundaryConditions)
         return CosineFFTPoissonSolver(mesh)
     end
 end
+
+# --- vertical metrics the core needs, generic over the mesh --------------
+# `_dzc(m, k)`: thickness of cell k (storage index), the height of a
+# u/v/θ control volume; `_dzf(m, k)`: distance between the centres k-1 and
+# k, the height of the w control volume on face k; `_dz_min(m)`: the
+# thinnest interior cell (the CFL limits). Uniform here; the StretchedGrid
+# methods (in `StretchedGrids`) read `cell_thickness` / `center_spacing`.
+_dzc(m::RegularGrid, k) = m.dz
+_dzf(m::RegularGrid, k) = m.dz
+_dz_min(m::RegularGrid) = m.dz
+
+# A mesh the Boussinesq core has a complete operator set for. RegularGrid
+# here; StretchedGrids adds its grid. Anything else (a terrain-following
+# grid, a spectral-element mesh) is refused at construction instead of
+# failing with a MethodError inside the first step.
+_check_boussinesq_mesh(::RegularGrid) = nothing
+_check_boussinesq_mesh(m::AbstractMesh) =
+    throw(ArgumentError("BoussinesqSimulation: no operator set for a $(typeof(m)); " *
+                        "use a RegularGrid or a StretchedGrid"))
 
 "In-place y[interior] += a · x[interior]."
 function _axpy_interior!(y::Field, a::Number, x::Field, m::AbstractMesh)
