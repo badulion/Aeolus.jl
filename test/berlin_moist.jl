@@ -234,4 +234,56 @@ const MT = Aeolus.MoistThermodynamics
         @test sum(ql) != ql0                      # it did work
         @test rh < 1e-6                           # fog cells are left at saturation of the reference p̄
     end
+    # KA-c (#295): the dew is one pass over the dew_mask columns, each at its
+    # own first air cell. It must equal, bit for bit, the former per-level
+    # formulation (2-D slices of every distinct k_air, a full-surface
+    # dew_exchange! on each), reproduced here.
+    @testset "dew in one pass equals the per-level dew_exchange! (bit for bit)" begin
+        case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing))
+        bus = case.bus
+        qv = interior_view(BC.tracer(case, :qv))
+        rng = Xoshiro(295)
+        for I in CartesianIndices(bus.Ts)
+            bus.dew_mask[I] || continue
+            k = bus.k_air[I]
+            # half the columns below the dew point of their air cell (dew
+            # forms), half warmer with dew on them (it evaporates)
+            Td = MT.dewpoint_temperature(BC.ref_pressure(case, k), qv[I, k])
+            cold = rand(rng) < 0.5
+            bus.Ts[I] = cold ? Td - 3rand(rng) : Td + 5rand(rng)
+            bus.dew[I] = cold ? 0.0 : 0.02rand(rng)
+        end
+        levels = unique(bus.k_air[bus.dew_mask])
+        dt = case.cfg.dt
+        # the pre-#295 formulation, on copies
+        qref, dref = copy(qv), copy(bus.dew)
+        Href = zeros(size(bus.dew))
+        q1, d1 = zeros(size(bus.dew)), zeros(size(bus.dew))
+        for k in levels
+            at(I) = bus.dew_mask[I] && bus.k_air[I] == k
+            for I in CartesianIndices(q1)
+                q1[I], d1[I] = at(I) ? (qref[I, k], dref[I]) : (0.0, 0.0)
+            end
+            q0 = copy(q1)
+            Hk = Aeolus.RadiationFog.dew_exchange!(q1, d1, bus.Ts, BC.ref_pressure(case, k), dt;
+                                                   dz = case.mesh.dz, ρ = BC.ref_density(case, k))
+            for I in CartesianIndices(q1)
+                at(I) || continue
+                qref[I, k] += q1[I] - q0[I]
+                dref[I] = d1[I]
+                Href[I] = Hk[I]
+            end
+        end
+        H = zeros(size(bus.dew))
+        BC.dew_pass!(H, qv, bus, case.ref.p̄, case.ref.ρ̄, case.mesh.dz, dt)
+        ndep = count(>(0), H); nevap = count(<(0), H)
+        @info @sprintf("  dew single pass: %d air levels, %d columns depositing, %d evaporating",
+                       length(levels), ndep, nevap)
+        @test length(levels) > 1 && ndep > 0 && nevap > 0     # the case exercises both, at several levels
+        @test qv == qref
+        @test bus.dew == dref
+        @test H == Href
+        @test (@allocated BC.dew_pass!(H, qv, bus, case.ref.p̄, case.ref.ρ̄, case.mesh.dz, dt)) == 0
+    end
 end
+
