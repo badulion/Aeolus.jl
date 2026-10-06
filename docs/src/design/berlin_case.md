@@ -1690,7 +1690,7 @@ N-inflow-d measures the development length behind a synthetic inflow on
 the periodic half channel (`examples/nesting/inflow_fetch.jl`, theory:
 [Development length behind the inflow](../theory/transition.md#Development-length-behind-the-inflow-(N-inflow-d))).
 It adds diagnostics (`FetchStatistics`, `development_length`) and a
-benchmark builder option (`half_channel_case(; inflow)`), no physics the
+benchmark builder option (`half_channel_case(; inflow, lateral)`), no physics the
 Berlin run could execute: the Berlin domain is laterally periodic, and
 the Berlin child's fetch (day and night) is measured in N-inflow-e
 (#268), where the nested case exists. No Berlin list changed.

@@ -1061,16 +1061,25 @@ average) is the generator's statistics source, and its plane- and
 time-mean ``u(z)`` is the inflow profile. The **child** is the same
 channel opened in x (`half_channel_case(; extent, inflow)`: the profile
 as Dirichlet data on the west face, the convective outflow of N-open-c
-on the east face, y periodic) at refine 2 horizontally (``Δx = 0.104δ``).
-The issue asked for open lateral boundaries; y is periodic instead, a
-deviation. Open y faces would need boundary data there. With only the
-precursor's mean profile on them, they would be laminar walls of
-inflow that damp the turbulence near the sides. With synthetic
-turbulence on them as well, they would be a second inflow, whose fetch
-would mix with the one being measured. The canonical case is spanwise
-periodic (Kim et al. 2013, §3.1), and that is the case set up here. In
-the Berlin child (#268) the lateral faces receive the running parent's
-turbulent fields, which is a different problem.
+on the east face) at refine 2 horizontally (``Δx = 0.104δ``), with
+**open lateral faces** in the CI case (`lateral = :open`, maintainer
+decision on #314): south and north take the precursor's mean profile as
+Dirichlet data, the one-way nest default (PALM's child), so the side
+layers carry no turbulence of their own. The fetch statistics, the
+pressure and the total stress are therefore averaged over the span
+centre, ``0.5δ`` (5 cells) from each side (`FetchStatistics(sim;
+jrange)`, `total_stress_profile(…; jrange)`); the bulk velocity is the
+volume flux of the whole face. A radiation condition on the lateral
+faces (`lateral_outflow = :convective`) was tried first and rejected:
+the turbulent ``v'`` radiates out where it points outward and is held
+at zero where it points inward, a rectified net outflow through the
+sides, so the bulk velocity fell by 0.5–1 % along the child and the
+1–4δ drive bias became −58 % (DF) and −66 % (FSD), a measure of the
+leak, not of the fetch (one realisation). The example keeps the
+spanwise-periodic set-up of Kim et al. (2013, §3.1) by default
+(`lateral = periodic`), which is where the quoted 6.6δ and 12.3δ come
+from; in the Berlin child (#268) the lateral faces receive the running
+parent's turbulent fields, which is a different problem.
 The **reference** is the periodic channel on the child's grid, the
 equilibrium the child relaxes to. Generators: none (`off`), the digital
 filter (DF), and the random-mode `FreeStreamInflow` (FSD, one length:
@@ -1089,44 +1098,54 @@ The pressure-gradient bias is the least-squares slope of the time- and
 plane-mean pressure over ``1δ ≤ x ≤ 4δ``, divided by ``G``: the extra
 drive the developing flow needs.
 
-**Measured.** CI case (`test/era6_inflow_fetch.jl`, 5δ child, averaged
-``5δ/u_*``, 98 s), ratios to the precursor:
+**Measured.** CI case (`test/era6_inflow_fetch.jl`, 5δ child with open
+lateral faces, averaged ``5δ/u_*``, about 2 min for the precursor and
+the three children), ratios to the precursor over the span centre, one
+realisation (precursor seed 1):
 
 | run | TKE at 0.22δ, x = 0.5, 1, 2, 3, 4.5δ | TKE at 0.47δ | −u'w' at 0.47δ | dp/dx bias |
 | :-- | :-- | :-- | :-- | --: |
-| off | 0 everywhere (the mean profile stays laminar) | 0 | 0 | +72 % |
-| DF  | 0.97, 1.04, 1.16, 1.27, 1.36 | 0.78, 0.79, 0.82, 0.85, 0.91 | 0.52, 0.56, 0.63, 0.71, 0.80 | −0.55 % |
-| FSD | 0.59, 0.59, 0.63, 0.68, 0.84 | 0.57, 0.56, 0.56, 0.56, 0.57 | 0.26, 0.33, 0.41, 0.47, 0.54 | +31 % |
+| off | 0 everywhere (the mean profile stays laminar) | 0 | 0 | +71 % |
+| DF  | 0.99, 1.06, 1.17, 1.26, 1.35 | 0.77, 0.78, 0.81, 0.84, 0.88 | 0.53, 0.57, 0.67, 0.73, 0.78 | −2.6 % |
+| FSD | 0.59, 0.59, 0.63, 0.68, 0.84 | 0.57, 0.56, 0.56, 0.56, 0.56 | 0.26, 0.32, 0.40, 0.46, 0.53 | +29 % |
 
-The bulk velocity is the precursor's at every x to ``4×10^{-5}`` (the
-uniform N-open-b correction δ of the radiated outflow, ``3.9×10^{-4}``
-m s⁻¹ on a 20 m s⁻¹ inflow); the generator's added flux is
-``5×10^{-18}`` of the mean-flow flux; ``\max|∇·u| < 10^{-13}``. RMS
-error of the total stress at ``x = 3.9δ`` over ``0.1δ < z < 0.8δ``:
-DF 0.32, FSD 0.47, off 1.32 ``u_*^2`` (the precursor's total stress is
-within 0.046 ``u_*^2`` of ``u_*^2(1 - z/δ)``, Porté-Agel et al. 2000).
+The bulk velocity is the precursor's at every x to ``1.9×10^{-4}`` (the
+uniform N-open-b correction δ of the radiated east outflow); the
+generator's added flux is ``4×10^{-18}`` of the mean-flow flux;
+``\max|∇·u| < 10^{-13}``. RMS error of the total stress at
+``x = 3.9δ`` over ``0.1δ < z < 0.8δ``: DF 0.39, FSD 0.53, off 1.32
+``u_*^2`` (the precursor's total stress is within 0.05 ``u_*^2`` of
+``u_*^2(1 - z/δ)``, Porté-Agel et al. 2000). With the span centre as
+the average, these are within the realisation spread of the earlier
+spanwise-periodic CI case (DF TKE at 0.22δ 0.97 → 1.36, bias −0.55 %,
+stress RMS DF 0.32, FSD 0.47).
 
-**Realisations.** The run is not bitwise reproducible. The FFT pressure
-solvers plan with `FFTW.MEASURE`, the plan depends on timing, and the
-turbulence amplifies the round-off. Every run is therefore a new
-realisation of a precursor averaged only ``10δ/u_*`` on 24 × 12 columns.
-Over seven realisations (precursor seeds 1–6, plus a repeat of seed 1)
-the DF moments vary as follows:
+**Realisations.** The run is not bitwise reproducible until #245 puts
+the suite on `FFTW.ESTIMATE`: the FFT pressure solvers plan with
+`FFTW.MEASURE`, the plan depends on timing, and the turbulence amplifies
+the round-off. Every run is therefore a new realisation of a precursor
+averaged only ``10δ/u_*`` on 24 × 12 columns. Over five realisations
+with open lateral faces (precursor seeds 1–4, plus a repeat of seed 1):
 
-| quantity | range over 7 realisations |
+| quantity | range over 5 realisations |
 | :-- | :-- |
-| DF TKE/pre, 0.22δ and 0.47δ, all x | 0.72–1.39 |
-| DF −u'w'/pre, 0.22δ and 0.47δ, all x | 0.44–1.53 |
-| DF dp/dx bias | −0.6 % to −9.0 % (seed 1: −0.6 % and −2.9 %) |
-| FSD dp/dx bias | +19 % to +31 % |
-| total-stress RMS error at 3.9δ, DF / FSD | 0.30–0.35 / 0.40–0.53 ``u_*^2`` |
+| DF TKE/pre, 0.22δ, x = 0.5δ → 4.5δ | 0.90–0.99 → 1.33–1.36 |
+| DF −u'w'/pre, 0.47δ, x = 0.5δ → 4.5δ | 0.40–0.54 → 0.70–0.78 |
+| DF dp/dx bias | −0.8 % to −8.6 % |
+| FSD dp/dx bias | +27 % to +31 % |
+| off dp/dx bias | +66 % to +71 % |
+| total-stress RMS error at 3.9δ, DF / FSD / off | 0.33–0.46 / 0.51–0.55 / 1.23–1.32 ``u_*^2`` |
+| bulk velocity, max deviation | ``1.9×10^{-4}`` |
 
+(The spanwise-periodic CI case, over seven realisations: DF TKE/pre
+0.72–1.39 and −u'w'/pre 0.44–1.53 at both heights, DF bias −0.6 to
+−9.0 %, FSD +19 to +31 %, stress RMS DF 0.30–0.35, FSD 0.40–0.53.)
 The orderings DF < FSD in both moments and in the total stress, and
 |bias| DF < FSD < off, held in every realisation, and they are what the
 CI case asserts.
 
-Example (`examples/nesting/inflow_fetch.jl`, 15δ child, averaged
-``10δ/u_*``, about 11 min), ratios to the child-grid reference and
+Example (`examples/nesting/inflow_fetch.jl`, 15δ child, spanwise
+periodic, averaged ``10δ/u_*``, about 11 min), ratios to the child-grid reference and
 development lengths (δ) to 10 % / 20 %:
 
 | run | TKE 0.22δ at x = 1, 3, 5, 10, 14δ | TKE 0.47δ | L₁₀ TKE 0.22δ / 0.47δ | L₁₀ −u'w' 0.22δ / 0.47δ |
@@ -1204,23 +1223,31 @@ adopted here. It agrees with the turnover estimate: at
 "DF-same against the child-grid reference"). The reference periodic
 channel on the child grid (48 × 24 × 16, ``30δ/u_*``) is the statistics
 source, the inflow profile and the target. The child is 10δ long at
-``Δx = 0.104δ``, averaged ``5δ/u_*``. The testset takes 140–170 s
-(reference 81–97 s, child 58–72 s). Measured over six realisations
-(reference seeds 2–6, seed 2 twice):
+``Δx = 0.104δ``, averaged ``5δ/u_*``, with open lateral faces as in the
+CI case (statistics over the span centre). The testset takes about
+120–165 s (reference 68–93 s, child 50–70 s). Measured over five
+realisations (reference seeds 2–5, plus a repeat of seed 2):
 
-| z/δ | ``U k/P`` | L₁₀ TKE | L₁₀ −u'w' | TKE/ref at x ≈ 1δ → 9δ |
-| :-- | :-- | :-- | :-- | :-- |
-| 0.22 | 5.5–5.8δ | 5.6–6.5δ (1.00–1.16 turnovers) | 6.2–6.8δ (1.07–1.22) | 0.59–0.65 → 1.00–1.03 |
-| 0.47 | 9.6–10.4δ | ∞ within 9.5δ | ∞ within 9.5δ in five, 9.2δ in one | 0.58–0.62 → 0.82–0.87 |
+| z/δ | ``U k/P`` | L₁₀ TKE | L₁₀ −u'w' | L₂₀ TKE / −u'w' | TKE/ref at x ≈ 1δ → 9δ |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| 0.22 | 5.4–5.6δ | 5.6–6.6δ (1.03–1.20 turnovers) | 5.6–7.9δ (1.03–1.46) | 4.1–4.4δ / 4.2–5.1δ | 0.59–0.62 → 0.98–1.01 |
+| 0.47 | 9.7–10.4δ | ∞ within 9.5δ | ∞ within 9.5δ | 5.9–9.2δ / 5.1–7.2δ (∞ in one) | 0.60–0.63 → 0.79–0.87 |
 
-Asserted: at 0.22δ both moments are within 10 % by ``x ≤ 10δ`` (the
-paper's number), with L₁₀ between 0.6 and 1.6 local turnovers. At
-0.47δ the turnover distance is more than 1.5 times that at 0.22δ; both
-moments stay below 90 % over the first half turnover and are still
-rising across the child (by more than 0.1 from 1δ to 9δ; measured
-0.18–0.42). The 10δ figure of Kim et al. was measured at the wall and at
-0.1δ. In this rough-wall flow at 0.47δ, the 15δ example gives 12.3δ for
-TKE and 11.9δ for −u'w', i.e. 1.2 turnovers, slightly beyond it.
+With periodic y (six realisations, before #314 decision 3): L₁₀ at
+0.22δ 5.6–6.5δ (TKE) and 6.2–6.8δ (−u'w'), the same within the spread.
+
+Asserted (maintainer decision 1 on #314: the fetch target is about 10δ,
+Kim et al. 2013): at 0.22δ both moments are within 10 % by
+``x ≤ 10δ``, with L₁₀ between 0.6 and 1.6 local turnovers. At 0.47δ
+the turnover distance is more than 1.5 times that at 0.22δ; both
+moments stay below 90 % over the first half turnover, are still rising
+across the child (by more than 0.1 from 1δ to 9δ; measured 0.17–0.47),
+and are within 30 % of the reference over 8–9.5δ. The 10δ figure of
+Kim et al. was measured at the wall and at 0.1δ. In this rough-wall
+flow at 0.47δ, the spanwise-periodic 15δ example gives 12.3δ for TKE
+and 11.9δ for −u'w', i.e. 1.2 turnovers, slightly beyond it; this is
+the "about 10δ" of the decision, and the 10 % fetch at 0.47δ is not
+asserted inside the 10δ child.
 
 **Expectations that proved wrong** (the expectations, not the code):
 
@@ -1229,31 +1256,40 @@ TKE and 11.9δ for −u'w', i.e. 1.2 turnovers, slightly beyond it.
   (tables above). Kim et al. (2013) give ≈ 10δ (10–14δ) for the same
   generator in a channel, and the turnover estimate gives 5.6δ at 0.22δ
   and 10δ at 0.47δ. The placeholder is too short by a factor of 2–4,
-  whatever the generator. The literature number is adopted and asserted
-  in the DF-same testset (0.22δ within 10 % by 10δ). At 0.47δ it is
-  exceeded slightly (12.3δ, example). Against the coarse parent, no
+  whatever the generator. The literature number (≈ 10δ, maintainer
+  decision on #314) is adopted and asserted in the DF-same testset
+  (0.22δ within 10 % by 10δ). At 0.47δ it is exceeded slightly (12.3δ,
+  example). Against the coarse parent, no
   10 % fetch exists at 0.22δ for any generator: the DF ratio moves away
   from 1 with ``x`` (TKE 0.97 → 1.36, ``-u'w'`` 0.85 → 1.37 over
   0.5–4.5δ) as the child relaxes to the equilibrium of the parent's
-  faster mean profile. The CI case asserts only that the DF is closer to
+  faster mean profile (the coarse-parent bias, left to #268 by the same
+  decision). The CI case asserts only that the DF is closer to
   the precursor than the FSD, in TKE and in −u'w'. An earlier absolute
   band, [0.7, 1.5], was a regression bound calibrated on two runs. It
   came within 0.02 of its floor over the seven realisations and was
   removed.
 * "Total stress at 4δ within 10 % for 0.1δ < z < 0.8δ". Not met (RMS
-  0.30–0.35 ``u_*^2``), for the same reason; asserted: DF < FSD < off.
+  0.33–0.46 ``u_*^2`` with open lateral faces, 0.30–0.35 periodic), for
+  the same reason; asserted: DF < FSD < off.
 * "Driving pressure-gradient bias < 2 %". Not met reliably, and the
   expectation is wrong for a developing flow. Over 1–4δ, the extra drive
   balances the streamwise change of the momentum flux
   ``\overline{u^2}`` and of the wall stress. It is therefore a property
-  of the fetch, not zero: off +72 %, FSD +19 to +31 %, DF-same +23 %
-  (example), DF with the coarse parent −0.6 to −9.0 %. Locally it is
+  of the fetch, not zero: off +66 to +72 %, FSD +19 to +31 %, DF-same
+  +18 to +19 % (CI, open lateral faces) and +23 % (example), DF with the
+  coarse parent −0.8 to −8.6 % (open) and −0.6 to −9.0 % (periodic). Locally it is
   +6 % over 1–3δ and −5 % over 2–4δ in one realisation, so the 1–4δ
   value of the coarse-parent DF is a cancellation. The cancellation is
   between the parent's faster mean flow and its larger stresses; it is
   not equilibrium. The CI case asserts the ordering |DF| < |FSD| < |off|.
 * The null comparison (off < 50 %) and the bulk velocity (0.5 %) hold as
   issued.
+* "Open lateral boundaries" (the issue's set-up, required by the
+  maintainer on #314) hold in the CI case: the lateral faces carry the
+  mean profile (Dirichlet) and the fetch is measured over the span
+  centre. Not an expectation that proved wrong, but a set-up the first
+  attempt had replaced by periodic y.
 
 ### The Berlin case
 
