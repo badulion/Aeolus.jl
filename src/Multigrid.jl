@@ -39,7 +39,7 @@ using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields
 using ..Fields: Field, interior_view
 using ..PressureSolvers: AbstractPressureSolver, solve!
-import ..PressureSolvers: solve!
+import ..PressureSolvers: solve!, poisson_axis_bcs
 using ..StretchedGrids: StretchedGrid, cell_thickness, center_spacing
 
 export MultigridPoissonSolver, MGPreconditionedCG,
@@ -476,6 +476,8 @@ function MultigridPoissonSolver(mesh::RegularGrid{T};
                                      Ref(0), Ref(zero(T)), T[])
 end
 
+poisson_axis_bcs(s::MultigridPoissonSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = s.bc_z)
+
 """
     MultigridPoissonSolver(g::StretchedGrid; kwargs...)
     MGPreconditionedCG(g::StretchedGrid; kwargs...)
@@ -731,6 +733,8 @@ mutable struct MGPreconditionedCG{T} <: AbstractPressureSolver
     last_iters::Base.RefValue{Int}
     last_residual::Base.RefValue{T}
 end
+
+poisson_axis_bcs(s::MGPreconditionedCG) = poisson_axis_bcs(s.mg)
 
 function MGPreconditionedCG(mesh::RegularGrid{T};
                             tol::Real = 1e-10, maxit::Int = 200,

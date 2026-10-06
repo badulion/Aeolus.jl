@@ -158,6 +158,7 @@ using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 export AbstractMesh, RegularGrid
 export Field, CellCenter, FaceX, FaceY, FaceZ
 export Periodic, NoFlux, ValueBC, FluxBC, FieldBoundaryConditions, fill_halos!
+export axis_poisson_bc                # N-open-a (#251)
 export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!,
        interpolate_to_face!, interpolate_to_center!, momentum_advect!,
        add_buoyancy!, add_coriolis!, compute_smagorinsky_νt!,
@@ -206,7 +207,7 @@ export resolved_tke_profile
 export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
-       CGPoissonSolver, solve!
+       CGPoissonSolver, solve!, poisson_axis_bcs
 export ImpermeableWall
 export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile,

@@ -17,7 +17,8 @@ using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    AbstractSGSClosure, compute_sgs!, add_sgs_momentum!, add_sgs_scalar!,
                    advance_sgs!, _active_sgs, _check_sgs_stress, sgs_tracer_diffusivity!
 using ..PressureSolvers
-using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver, solve!
+using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver, solve!,
+                        poisson_axis_bcs
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
@@ -648,17 +649,28 @@ end
 # -------------------------------------------------------------------------
 
 """
-    _default_solver(mesh, bcs) -> AbstractPressureSolver
+    _default_solver(mesh::RegularGrid, bcs) -> AbstractPressureSolver
 
-Pick the appropriate solver from the vertical BCs on velocity:
-periodic-in-z → [`FFTPoissonSolver`](@ref); walls (or any non-periodic
-z BC) → [`CosineFFTPoissonSolver`](@ref).
+Pick the direct pressure solver from all six velocity faces of `bcs`,
+each mapped to `:periodic` or `:neumann` by
+[`axis_poisson_bc`](@ref Aeolus.BoundaryConditions.axis_poisson_bc)
+(see [`poisson_axis_bcs`](@ref Aeolus.PressureSolvers.poisson_axis_bcs)):
+
+* triply periodic → [`FFTPoissonSolver`](@ref);
+* anything else → [`CosineFFTPoissonSolver`](@ref) with those axis kinds
+  — the channel `(:periodic, :periodic, :neumann)` (bit-for-bit the solver
+  chosen before #251), and the all-Neumann box of a nested or open
+  child.
+
+A face type with no Poisson kind, or an axis whose two faces disagree
+(periodic against Neumann), throws an `ArgumentError`.
 """
 function _default_solver(mesh::RegularGrid, bcs::FieldBoundaryConditions)
-    if bcs.bottom isa Periodic && bcs.top isa Periodic
+    ax = poisson_axis_bcs(bcs)
+    if ax.bc_x === :periodic && ax.bc_y === :periodic && ax.bc_z === :periodic
         return FFTPoissonSolver(mesh)
     else
-        return CosineFFTPoissonSolver(mesh)
+        return CosineFFTPoissonSolver(mesh; ax...)
     end
 end
 

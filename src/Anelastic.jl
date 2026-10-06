@@ -70,7 +70,7 @@ using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    _active_sgs, _check_sgs_stress
 using ..PressureSolvers: AbstractPressureSolver
 
-import ..PressureSolvers: solve!
+import ..PressureSolvers: solve!, poisson_axis_bcs
 import ..TimeSteppers: step!
 import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
 
@@ -600,7 +600,8 @@ end
 # =========================================================================
 
 """
-    DensityWeightedPoissonSolver(mesh, w_c, w_f; tol=1e-10, maxit=500, bc_z=:neumann)
+    DensityWeightedPoissonSolver(mesh, w_c, w_f; tol=1e-10, maxit=500,
+                                 bc_x=:periodic, bc_y=:periodic, bc_z=:neumann)
     DensityWeightedPoissonSolver(mesh, ref::ReferenceState; weighting=:ρ, kwargs...)
     DensityWeightedPoissonSolver(mesh, c::Real; kwargs...)
 
@@ -641,11 +642,19 @@ solver and differs only at `O(Δz²)`.
 
 # Boundary conditions
 
-Periodic in `x, y` always. In `z`, `bc_z = :neumann` (default) sets the
+Each axis is `:periodic` or `:neumann`. In `x` and `y` the default is
+periodic; `bc_x = :neumann` / `bc_y = :neumann` sets the flux `w ∂φ/∂n`
+through the two lateral faces to zero (mirror ghost) — the closure of a
+nested or open-boundary child, whose normal velocity is prescribed on the
+side faces (#251; before that the solver was periodic in `x, y` by
+construction). In `z`, `bc_z = :neumann` (default) sets the
 vertical flux through the two wall faces to zero — the condition consistent
 with `ImpermeableWall`/`NoFlux` halos and with `w = 0` at the walls — or
 `bc_z = :periodic`, in which case `w_f[1]` and `w_f[Nz+1]` describe the same
-face and are symmetrised for you.
+face and are symmetrised for you. The Jacobi preconditioner uses the
+interior diagonal in every cell; on a Neumann side the boundary cells'
+true diagonal is smaller by `w_c/Δ²`, which leaves the preconditioner
+symmetric positive definite (CG still converges, to the same solution).
 
 `L` is singular with the constants as its null space, so the source is
 projected to zero mean and the returned solution is the unique zero-mean
@@ -666,6 +675,8 @@ mutable struct DensityWeightedPoissonSolver{T, RA<:Array{T,3}} <: AbstractPressu
     tol::T
     maxit::Int
     bc_z::Symbol
+    bc_x::Symbol
+    bc_y::Symbol
     # scratch, all interior-sized
     b::RA
     x::RA
@@ -682,8 +693,12 @@ function DensityWeightedPoissonSolver(mesh::RegularGrid{T},
                                       w_f::AbstractVector;
                                       tol::Real  = 1e-10,
                                       maxit::Int = 500,
-                                      bc_z::Symbol = :neumann) where {T}
+                                      bc_z::Symbol = :neumann,
+                                      bc_x::Symbol = :periodic,
+                                      bc_y::Symbol = :periodic) where {T}
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    bc_x in (:neumann, :periodic) || error("bc_x must be :neumann or :periodic, got $bc_x")
+    bc_y in (:neumann, :periodic) || error("bc_y must be :neumann or :periodic, got $bc_y")
     length(w_c) == Nz    || throw(DimensionMismatch("w_c must have length Nz=$Nz"))
     length(w_f) == Nz + 1 || throw(DimensionMismatch("w_f must have length Nz+1=$(Nz+1)"))
     bc_z in (:neumann, :periodic) || error("bc_z must be :neumann or :periodic, got $bc_z")
@@ -707,7 +722,7 @@ function DensityWeightedPoissonSolver(mesh::RegularGrid{T},
 
     mk() = zeros(T, Nx, Ny, Nz)
     return DensityWeightedPoissonSolver{T, Array{T,3}}(
-        mesh, wc, wf, diag, T(tol), maxit, bc_z,
+        mesh, wc, wf, diag, T(tol), maxit, bc_z, bc_x, bc_y,
         mk(), mk(), mk(), mk(), mk(), mk(), Ref(0), Ref(zero(T)))
 end
 
@@ -729,6 +744,8 @@ end
 DensityWeightedPoissonSolver(mesh::RegularGrid{T}, c::Real; kwargs...) where {T} =
     DensityWeightedPoissonSolver(mesh, fill(T(c), mesh.Nz), fill(T(c), mesh.Nz + 1); kwargs...)
 
+poisson_axis_bcs(s::DensityWeightedPoissonSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = s.bc_z)
+
 "Iterations used by the last [`solve!`](@ref)."
 solver_iterations(s::DensityWeightedPoissonSolver) = s.last_iter[]
 "Final residual 2-norm of the last [`solve!`](@ref)."
@@ -739,10 +756,14 @@ solver_residual(s::DensityWeightedPoissonSolver) = s.last_residual[]
 # out = −∇·(w ∇u) on an interior-sized array (positive semi-definite form).
 function _apply_neg_wlap!(out::Array{T,3}, u::Array{T,3},
                           w_c::Vector{T}, w_f::Vector{T},
-                          dx::T, dy::T, dz::T, bc_z::Symbol) where {T}
+                          dx::T, dy::T, dz::T, bc_z::Symbol,
+                          bc_x::Symbol = :periodic, bc_y::Symbol = :periodic) where {T}
     Nx, Ny, Nz = size(u)
     idx2 = 1 / dx^2; idy2 = 1 / dy^2; idz2 = 1 / dz^2
     periodic_z = bc_z === :periodic
+    # Neumann side: the ghost mirrors the boundary cell, so the face
+    # difference (and the flux through the face) is zero.
+    px = bc_x === :periodic; py = bc_y === :periodic
     @inbounds for k in 1:Nz
         wk = w_c[k]
         wt = w_f[k == Nz ? Nz + 1 : k + 1]
@@ -750,11 +771,11 @@ function _apply_neg_wlap!(out::Array{T,3}, u::Array{T,3},
         kp = k < Nz ? k + 1 : (periodic_z ? 1  : 0)
         km = k > 1  ? k - 1 : (periodic_z ? Nz : 0)
         for j in 1:Ny
-            jp = j == Ny ? 1 : j + 1
-            jm = j == 1  ? Ny : j - 1
+            jp = j < Ny ? j + 1 : (py ? 1  : Ny)
+            jm = j > 1  ? j - 1 : (py ? Ny : 1)
             for i in 1:Nx
-                ip = i == Nx ? 1 : i + 1
-                im = i == 1  ? Nx : i - 1
+                ip = i < Nx ? i + 1 : (px ? 1  : Nx)
+                im = i > 1  ? i - 1 : (px ? Nx : 1)
                 c = u[i, j, k]
                 lap = wk * ((u[ip, j, k] - 2c + u[im, j, k]) * idx2 +
                             (u[i, jp, k] - 2c + u[i, jm, k]) * idy2)
@@ -782,7 +803,8 @@ function apply_weighted_laplacian!(out::Field{CellCenter,T}, φ::Field{CellCente
     ii, jj, kk = interior(φ.mesh)
     xin  = Array{T,3}(view(φ.data, ii, jj, kk))
     xout = similar(xin)
-    _apply_neg_wlap!(xout, xin, s.w_c, s.w_f, s.mesh.dx, s.mesh.dy, s.mesh.dz, s.bc_z)
+    _apply_neg_wlap!(xout, xin, s.w_c, s.w_f, s.mesh.dx, s.mesh.dy, s.mesh.dz, s.bc_z,
+                     s.bc_x, s.bc_y)
     @inbounds @views out.data[ii, jj, kk] .= .-xout
     return out
 end
@@ -850,7 +872,7 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
     dx, dy, dz = m.dx, m.dy, m.dz
     converged = false
     for it in 1:s.maxit
-        _apply_neg_wlap!(Ap, pdir, s.w_c, s.w_f, dx, dy, dz, s.bc_z)
+        _apply_neg_wlap!(Ap, pdir, s.w_c, s.w_f, dx, dy, dz, s.bc_z, s.bc_x, s.bc_y)
         pap = _dot(pdir, Ap)
         if pap <= 0
             @warn "DensityWeightedPoissonSolver: non-positive curvature ($pap); stopping at iteration $it"
@@ -1359,10 +1381,13 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
     refstate isa ReferenceState{T} ||
         error("ReferenceState element type $(eltype(refstate.ρ̄)) does not match mesh eltype $T")
 
+    # The projection's per-axis closure comes from the velocity faces
+    # (periodic, or Neumann for walls and prescribed-velocity sides).
+    ax = poisson_axis_bcs(bcs)
     ps = solver === nothing ?
         DensityWeightedPoissonSolver(mesh, refstate;
                                      weighting = _weighting_symbol(S),
-                                     tol = tol, maxit = maxit, bc_z = :neumann) :
+                                     tol = tol, maxit = maxit, ax...) :
         solver
 
     u = Field(FaceX(), mesh); v = Field(FaceY(), mesh); w = Field(FaceZ(), mesh)
