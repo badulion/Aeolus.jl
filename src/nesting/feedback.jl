@@ -269,11 +269,31 @@ function NestFluxRegisters(nest::NestedGrid, parent, child, s::NestInterpState,
                                             "the run's field set $(s.names)"))
     end
     sides = nest_open_sides(child)
+    _warn_internal_walls(nest, sides)
     mk(which) = [_new_planes(nest, sides, which) for _ in names]
     return NestFluxRegisters(names, models, pf, cf, sides, mk(1), mk(2), mk(1), mk(2),
                              wp, wc, 0, 0, _sgs_keywords(ap), _sgs_keywords(ac),
                              Field(CellCenter(), nest.parent_mesh),
                              Field(CellCenter(), nest.child_mesh))
+end
+
+# A child face that is not open but lies inside the parent (a lid below the
+# parent top, a side wall inside a wider parent) blocks the child but not
+# the parent: the parent's flux through that plane has no fine counterpart
+# and no register, so the composite integral is not conserved across it.
+function _warn_internal_walls(nest::NestedGrid, sides::NTuple{6,Bool})
+    pm = nest.parent_mesh
+    inner = (nest.ix > 1, nest.ix + nest.nx - 1 < pm.Nx,
+             nest.iy > 1, nest.iy + nest.ny - 1 < pm.Ny,
+             nest.iz > 1, nest.iz + nest.nz - 1 < pm.Nz)
+    for s in 1:6
+        inner[s] && !sides[s] &&
+            @warn "TwoWayFeedback: the child's $(_SIDE_NAMES[s]) face is not open (nest) " *
+                  "but lies inside the parent; the parent's flux through that plane has " *
+                  "no fine counterpart, so refluxing cannot conserve the composite " *
+                  "integral across it. Make it a :nest face." maxlog = 1
+    end
+    return nothing
 end
 
 # --- attempts: begin / commit -----------------------------------------------
