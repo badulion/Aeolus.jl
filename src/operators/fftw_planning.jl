@@ -81,7 +81,7 @@ The default can also be set from the environment, before the first plan:
 `AEOLUS_FFTW_PLANNER=estimate`, `AEOLUS_FFTW_THREADS=4`. The test suite
 sets `AEOLUS_FFTW_PLANNER=estimate`, so its bitwise comparisons hold across
 processes and planning stays fast. A TOML namelist sets it with an
-`[fftw]` table ([`apply_fftw_config!`](@ref Aeolus.IO.apply_fftw_config!)).
+`[fftw]` table ([`apply_fftw_config!`](@ref Aeolus.Config.apply_fftw_config!)).
 
 **Threads.** Without an explicit count the policy starts at one thread
 and [`init_threads!`](@ref Aeolus.Backends.init_threads!) raises it to
