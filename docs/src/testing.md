@@ -166,7 +166,7 @@ Counts per top-level block, fast tier (serial and parallel identical):
 | **Total** | **84190** | **6** |
 
 The full tier adds 825 assertions (85021 in all: 84997 pass, 24 broken;
-in the earlier run one broken was the GABLS3 unexpected pass above).
+in the earlier run one of them was the GABLS3 unexpected pass above, counted as an error).
 The fast tier is bounded by its longest files (`berlin_smoke.jl`, run
 alone, 125 s; `berlin_dynamics.jl`, 115 s) and the exclusive files run
 after the batch (`era6_apriori_sgs.jl`, 59 s alone), so more jobs do not
