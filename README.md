@@ -1,6 +1,9 @@
 <div align="center">
 
-# Aeolus.jl
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/src/assets/aeolus-lockup-dark.svg">
+  <img src="docs/src/assets/aeolus-lockup.svg" alt="Aeolus.jl" width="360">
+</picture>
 
 **A Julia-native large-eddy simulation framework**
 

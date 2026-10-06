@@ -14,7 +14,8 @@ makedocs(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical  = "https://badulion.github.io/Aeolus.jl",
         edit_link  = "master",
-        assets     = String[],
+        assets     = [asset("assets/favicon.svg"; class = :ico, islocal = true)],
+        sidebar_sitename = true,
     ),
     pages = [
         "Home"           => "index.md",
