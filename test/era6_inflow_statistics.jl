@@ -211,17 +211,20 @@ end
         update_inflow_statistics!(src, 1.0)
     end
     p = inflow_stress_parts(src)
-    # The tensor is measured at the cell centres, i.e. after the two-point
-    # average of each staggered component along its own direction (u in x,
-    # v in y, w in z). The exact attenuation of the generator's field is
-    # (1 + ρ₁)/2 per averaged direction, ρ₁ the lag-1 correlation:
-    # e^{-Δt/T} in x (the AR(1) blend), the filter's discrete R_1 in y, z.
+    # The variances are taken at each staggered component's own points, so
+    # their target is the imposed tensor itself. A cross term needs u and w at
+    # one point: it is the correlation of the cell-centred fields (each the
+    # two-point mean along its own direction) times √(R_11 R_33). The
+    # generator places u and w at the same index, i.e. half a cell apart in x
+    # and z on the C-grid, so the centre correlation is ρ√(f_x f_z), with
+    # f = (1 + ρ₁)/2 per averaged direction, ρ₁ the lag-1 correlation:
+    # e^{-Δt/T} in x (the AR(1) blend), the filter's discrete R_1 in z.
     ρx = exp(-1 / T)
-    Rs1 = Aeolus.Transition._df_autocorrelation(gen.bs[1, 1])[2]
     Rz1 = Aeolus.Transition._df_autocorrelation(gen.bz[1, 1])[2]
-    fx, fs, fz = (1 + ρx) / 2, (1 + Rs1) / 2, (1 + Rz1) / 2
-    target = [R[1, 1] * fx, R[2, 2] * fs, R[3, 3] * fz, 0, R[1, 3] * fx * fz, 0]
+    fx, fz = (1 + ρx) / 2, (1 + Rz1) / 2
+    target = [R[1, 1], R[2, 2], R[3, 3], 0, R[1, 3] * sqrt(fx * fz), 0]
     mR = vec(sum(p.resolved; dims = 2)) ./ size(p.resolved, 2)
+    println("N-inflow-b synthetic parent: R / target (11 22 33 13) = ", [round(mR[q] / target[q]; digits = 4) for q in (1, 2, 3, 5)], ", f_x f_z = ", (fx, fz))
     for q in (1, 2, 3, 5)
         @test abs(mR[q] / target[q] - 1) < 0.03
     end
@@ -338,15 +341,95 @@ end
                           for i in 1:16, j in 1:12]
     update_inflow_statistics!(src, 1.0)
     p = inflow_stress_parts(src)
-    # the same covariance computed by hand over the ring columns (cell centres)
+    # the same statistics computed by hand over the ring columns: variances at
+    # the native points (u over both x-faces of each column; w the mean of
+    # its bottom- and top-face variances), the cross term the centre
+    # correlation times √(R_11 R_33)
     Aeolus.BoundaryConditions.fill_halos!(sim.u, sim.bcs)
     Aeolus.BoundaryConditions.fill_halos!(sim.w, sim.bcs)
     H = m.Hx; k = 2
     uc = [(sim.u.data[H+i, H+j, H+k] + sim.u.data[H+i+1, H+j, H+k]) / 2 for i in 1:16, j in 1:12]
     wc = [(sim.w.data[H+i, H+j, H+k] + sim.w.data[H+i, H+j, H+k+1]) / 2 for i in 1:16, j in 1:12]
     us, ws = uc[src.columns], wc[src.columns]
+    var_(x) = sum((x .- sum(x) / length(x)) .^ 2) / length(x)
+    uf = vcat([[sim.u.data[H+i, H+j, H+k], sim.u.data[H+i+1, H+j, H+k]]
+               for i in 1:16, j in 1:12 if src.columns[i, j]]...)
+    wb = [sim.w.data[H+i, H+j, H+k] for i in 1:16, j in 1:12][src.columns]
+    wt = [sim.w.data[H+i, H+j, H+k+1] for i in 1:16, j in 1:12][src.columns]
+    R11, R33 = var_(uf), (var_(wb) + var_(wt)) / 2
     mu, mw = sum(us) / length(us), sum(ws) / length(ws)
-    @test p.resolved[1, k] ≈ sum((us .- mu) .^ 2) / length(us) rtol = 1e-12
-    @test p.resolved[5, k] ≈ sum((us .- mu) .* (ws .- mw)) / length(us) rtol = 1e-12
+    C13 = sum((us .- mu) .* (ws .- mw)) / length(us)
+    @test p.resolved[1, k] ≈ R11 rtol = 1e-12
+    @test p.resolved[3, k] ≈ R33 rtol = 1e-12
+    @test p.resolved[5, k] ≈ C13 * sqrt(R11 * R33 / (var_(us) * var_(ws))) rtol = 1e-12
     @test p.U[1, k] ≈ mu rtol = 1e-12
+    # realizable: the centre correlation is ≤ 1 and the native variances
+    # exceed the centre ones (Jensen), which is what the projection log shows
+    @test var_(us) <= R11 && var_(ws) <= R33
+    inflow_stresses(src, p.z, 0.0)
+    @test isempty(inflow_projection_log(src))
+end
+
+@testset "N-inflow-b staggering: variances at the native points, no cos² loss" begin
+    # A mode of wavelength 3Δ along a component's own direction (inside the
+    # gap (2Δ, 4Δ] at r = 2): its cell-centred two-point mean keeps
+    # cos²(π/3) = 1/4 of the variance. The statistics take the variances at
+    # the native points, so the band and the full variance are A²/2.
+    m, sim = _ib_parent(24, 24, 6; Δ = 30.0)
+    k3 = 2π / (3m.dx); kz = 2π / (3m.dz)
+    xf = [(i - 1) * m.dx for i in 1:m.Nx]; yf = [(j - 1) * m.dy for j in 1:m.Ny]
+    yc = _ib_yc(m); zf = [(k - 1) * m.dz for k in 1:m.Nz]
+    A, B = 0.6, 0.4
+    H = m.Hx
+    for i in 1:m.Nx, j in 1:m.Ny, k in 1:m.Nz
+        sim.u.data[H+i, H+j, H+k] = 2.0 + A * sin(k3 * xf[i])
+        sim.v.data[H+i, H+j, H+k] = A * sin(k3 * yf[j])
+        sim.w.data[H+i, H+j, H+k] = B * sin(k3 * yc[j]) * sin(kz * zf[k])   # λ = 3Δz in z too
+    end
+    src = ParentResolvedStatistics(sim; τ_avg = Inf, refine = 2, c_gap = 4)
+    update_inflow_statistics!(src, 1.0)
+    p = inflow_stress_parts(src)
+    @test maximum(abs, p.band[1, :] ./ (A^2 / 2) .- 1) < 1e-12        # was cos²(π/3) = 0.25
+    @test maximum(abs, p.band[2, :] ./ (A^2 / 2) .- 1) < 1e-12
+    @test maximum(abs, p.resolved[1, :] ./ (A^2 / 2) .- 1) < 1e-12
+    # w: the face variances (B²/4) sin²(k_z z_f) averaged to each centre;
+    # over the two vertical periods their mean is B²/4 (centre value: B²/16)
+    @test abs(sum(p.band[3, :]) / m.Nz / (B^2 / 4) - 1) < 1e-12
+    @test abs(sum(p.resolved[3, :]) / m.Nz / (B^2 / 4) - 1) < 1e-12
+    # a cross term of one mode: u = A sin(kx), w = B sin(kx) at the centres
+    # (u'w' = AB/2); the centre correlation is 1, so R_13 = √(R_11 R_33)
+    for i in 1:m.Nx, j in 1:m.Ny, k in 1:m.Nz+1
+        xc = (i - 0.5) * m.dx
+        sim.u.data[H+i, H+j, H+k] = A * sin(k3 * xf[i])
+        sim.w.data[H+i, H+j, H+k] = B * sin(k3 * xc)
+    end
+    sim.v.data .= 0
+    src2 = ParentResolvedStatistics(sim; τ_avg = Inf, refine = 2, c_gap = 4)
+    update_inflow_statistics!(src2, 1.0)
+    p2 = inflow_stress_parts(src2)
+    @test maximum(abs, p2.band[5, :] ./ (A * B / 2) .- 1) < 1e-12     # centre value: AB/4
+    @test maximum(abs, p2.resolved[5, :] ./ (A * B / 2) .- 1) < 1e-12
+end
+
+@testset "N-inflow-b consistency with Operators.resolved_tke_profile" begin
+    # The same variances as Operators.resolved_tke_profile (fluctuations about
+    # the plane mean at each component's own points): level by level for u,
+    # v; for w the face variances are shared between the two levels a face
+    # bounds, so the column sums agree (z periodic).
+    m, sim = _ib_parent(12, 10, 5; Δ = 20.0)
+    rng = Random.Xoshiro(7)
+    for f in (sim.u, sim.v, sim.w)
+        interior_view(f) .= 1.5 .+ randn(rng, size(interior_view(f)))
+    end
+    src = ParentResolvedStatistics(sim; τ_avg = Inf, mode = :full)
+    update_inflow_statistics!(src, 1.0)
+    p = inflow_stress_parts(src)
+    e = resolved_tke_profile(sim.u, sim.v, sim.w)
+    @test sum(p.resolved[1, :] .+ p.resolved[2, :] .+ p.resolved[3, :]) / 2 ≈ sum(e) rtol = 1e-12
+    interior_view(sim.w) .= 0
+    src0 = ParentResolvedStatistics(sim; τ_avg = Inf, mode = :full)
+    update_inflow_statistics!(src0, 1.0)
+    p0 = inflow_stress_parts(src0)
+    @test maximum(abs, (p0.resolved[1, :] .+ p0.resolved[2, :]) ./ 2 .-
+                       resolved_tke_profile(sim.u, sim.v, sim.w)) < 1e-12
 end

@@ -202,14 +202,34 @@ exact kernel weight of its interval, ``S ← ρS + w\\,x``, ``W ← ρW + w``,
 (adaptive) steps and the first sample is not biased towards zero.
 `τ_avg = Inf` is the uniform time average (``w = Δt``).
 
-**Resolved part.** At each level the velocities are interpolated to the
-cell centres (as `test/tke_cbl_driver.jl` and the Transition diagnostics
-do); ``R^{\\rm res}_{ij} = ⟨u_i'u_j'⟩`` with ``⟨·⟩`` the mean over the
-`region` and ``'`` the deviation from it: `region = :plane`, the whole
-horizontal plane (the plane means of `Operators`); `region = :ring`, the
-parent columns within `ring_width` cells of the edge of the child
-`footprint = (i_range, j_range)` (parent cell indices), on both sides
-of it (periodic wrap).
+**Resolved part.** ``R^{\\rm res}_{ij} = ⟨u_i'u_j'⟩`` with ``⟨·⟩`` the
+mean over the `region` and ``'`` the deviation from it: `region = :plane`,
+the whole horizontal plane; `region = :ring`, the parent columns within
+`ring_width` cells of the edge of the child `footprint = (i_range,
+j_range)` (parent cell indices), on both sides of it (periodic wrap).
+
+The **variances are taken at each staggered component's own points**, as
+`Operators.resolved_tke_profile` does: ``u`` over the two x-faces of each
+region column, ``v`` over its two y-faces, and for ``w`` the mean of the
+variances on the bottom and top face of the level. The two-point mean to
+the cell centre would multiply the variance of a mode by
+``\\cos^2(k_iΔ_i/2)`` along the component's own direction, ¼ at
+``λ = 3Δ``, i.e. inside the scale gap. On the plane, the column sum of
+``\\tfrac12\\operatorname{tr}R^{\\rm res}`` equals that of
+`resolved_tke_profile` (and level by level for ``u, v``), which the test
+asserts. A **cross term** needs both components at one point: it is the
+correlation coefficient of the cell-centred (two-point-mean) fields times
+``\\sqrt{R_{ii}R_{jj}}`` of the native variances. That is exact for a
+single Fourier mode (each component attenuated by its own
+``\\cos(k_iΔ_i/2)``) and keeps the tensor realizable (a correlation matrix
+scaled by a positive diagonal); for a broadband field the centre
+correlation is a spectrally weighted mean of the modes' correlations,
+weighted by the products of the two transfer functions. The statistic
+is computed in one pass over the fluctuation planes that also feed the
+spectra, the band-pass and the vertical lags, so `Operators`'
+`_plane_means` / `resolved_tke_profile` (one scalar per level) and
+`total_stress_profile` (the solver's ``u``-``w`` edge flux, including the
+mean flow) are not called; their conventions are matched instead.
 
 **SGS part.** ``R^{\\rm SGS}_{ij} = \\tfrac23 e\\,δ_{ij} - 2ν_t\\bar S_{ij}``
 with ``e`` from [`sgs_tke!`](@ref)`(e, closure, parent)` (the TKE closure's
@@ -232,15 +252,18 @@ the resolved stress of the horizontal wavenumbers between the parent's
 effective resolution (wavelength ``c_{\\rm gap}Δ_p``; `c_gap = 4`, within
 the 2–4 ``Δ_p`` of the issue, ``Δ_p = \\max(Δx, Δy)``) and the child's
 (``c_{\\rm gap}Δ_p/r``, `refine = r`, the horizontal refinement), obtained
-by a spectral band-pass of each level (FFT, the parent laterally
-periodic). For ``r = 1`` the band is empty and ``R^{\\rm gen} = R^{\\rm SGS}``.
+by a spectral band-pass of each native plane (FFT, the parent laterally
+periodic); the band's variances and cross terms are formed as for the
+resolved part. For ``r = 1`` the band is empty and ``R^{\\rm gen} = R^{\\rm SGS}``.
 `mode = :full` gives ``R^{\\rm SGS} + R^{\\rm res}`` (a child whose
 boundary values carry no parent turbulence).
 
 **Lengths and time.** The horizontal autocovariances of every level come
-from the same spectra (Wiener–Khinchin, whole plane, running-averaged);
-the vertical ones from the plane covariance of a level with the
-`lag_z` levels above it. Each integral length is the integral of the
+from the spectra of the native planes (Wiener–Khinchin, whole plane,
+running-averaged; ``w``'s the mean of its two faces'); the vertical ones
+from the plane covariance of the cell-centred fields of a level with the
+`lag_z` levels above it (a correlation coefficient, normalised by the
+same centre variances). Each integral length is the integral of the
 correlation coefficient to its first zero crossing; ``L_s`` is along the
 face, ``L_z`` vertical and ``T = L_n/\\max(|U_n|, U_{\\min})`` with ``L_n``
 the length along the face normal and ``U_n`` the region-mean normal
@@ -283,8 +306,10 @@ mutable struct ParentResolvedStatistics{P, C, F, PL, IPL} <: InflowStatistics
     t::Float64
     nsamples::Int
     Um::Matrix{Float64}              # 3 × nl
-    Rres::Matrix{Float64}            # 6 × nl
+    Rres::Matrix{Float64}            # 6 × nl: diagonal at the native points, off-diagonal at the centres
     Rband::Matrix{Float64}
+    Cres::Matrix{Float64}            # 3 × nl: cell-centred variances (correlation coefficients)
+    Cband::Matrix{Float64}
     Rsgs::Matrix{Float64}
     esgs::Vector{Float64}
     Cx::Array{Float64,3}             # 3 × nl × (Nx÷2+1), autocovariance along x
@@ -297,8 +322,9 @@ mutable struct ParentResolvedStatistics{P, C, F, PL, IPL} <: InflowStatistics
     BVz::Matrix{Float64}
     # scratch
     e::F
-    buf::Array{Float64,4}            # Nx × Ny × 3 × (lag_z+1) plane fluctuations
+    buf::Array{Float64,4}            # Nx × Ny × 3 × (lag_z+1) cell-centred plane fluctuations
     bbuf::Array{Float64,4}           # band-passed
+    nband::Array{Float64,3}          # Nx × Ny × 4 band-passed native planes: u, v, w bottom, w top face
     plan::PL
     iplan::IPL
     spec::Matrix{ComplexF64}
@@ -364,12 +390,14 @@ function ParentResolvedStatistics(parent; closure = nothing, face::Symbol = :wes
     return ParentResolvedStatistics(parent, closure, face, Float64(τ_avg), region, cols, mode, r,
                                     Float64(c_gap), Float64(c_len), Float64(U_min), Float64(c_k),
                                     lev, L, z, Δh, band, 0.0, 0.0, 0,
-                                    zeros(3, nl), zeros(6, nl), zeros(6, nl), zeros(6, nl), zeros(nl),
+                                    zeros(3, nl), zeros(6, nl), zeros(6, nl), zeros(3, nl), zeros(3, nl),
+                                    zeros(6, nl), zeros(nl),
                                     zeros(3, nl, nkx), zeros(3, nl, Ny ÷ 2 + 1), zeros(3, nl, L + 1),
                                     zeros(3, nl + L),
                                     zeros(3, nl, nkx), zeros(3, nl, Ny ÷ 2 + 1), zeros(3, nl, L + 1),
                                     zeros(3, nl + L),
                                     Field(CellCenter(), g), zeros(Nx, Ny, 3, L + 1), zeros(Nx, Ny, 3, L + 1),
+                                    zeros(Nx, Ny, 4),
                                     plan, iplan, zeros(ComplexF64, nkx, Ny), tmp,
                                     [_wx(i, Nx) * cos(2π * (i - 1) * r / Nx) for i in 1:nkx, r in 0:nkx-1],
                                     [cos(2π * (j - 1) * r / Ny) for j in 1:Ny, r in 0:Ny÷2],
@@ -398,7 +426,7 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
     fill_halos!(p.u, p.bcs); fill_halos!(p.v, p.bcs); fill_halos!(p.w, p.bcs)
     ρ, w = isinf(s.τ_avg) ? (1.0, Float64(Δt)) : (exp(-Δt / s.τ_avg), s.τ_avg * -expm1(-Δt / s.τ_avg))
     s.W = ρ * s.W + w
-    for A in (s.Um, s.Rres, s.Rband, s.Rsgs, s.esgs, s.Cx, s.Cy, s.Cz, s.Vz, s.Bx, s.By, s.Bz, s.BVz)
+    for A in (s.Um, s.Rres, s.Rband, s.Cres, s.Cband, s.Rsgs, s.esgs, s.Cx, s.Cy, s.Cz, s.Vz, s.Bx, s.By, s.Bz, s.BVz)
         A .*= ρ
     end
     s.t = hasproperty(p, :t) ? Float64(p.t) : s.t + Δt
@@ -423,9 +451,21 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
     wx = [_wx(i, Nx) for i in 1:nkx]
     scale_gap = s.mode === :scale_gap
     pm = zeros(3)
+    band_on = scale_gap && any(s.band)
+    nb = s.nband
+    fac = w / N2
+    # Variances are taken at each component's own (native) points: the
+    # two-point mean to the cell centre would multiply a mode's variance by
+    # cos²(k_iΔ_i/2) along the component's own direction, 1/4 at λ = 3Δ, i.e.
+    # inside the scale gap. Cross terms need the components at one point and
+    # are formed at the centres; `_resolved6` restores their magnitude.
+    ib, it = 3, 4                        # w's bottom / top face in nband (swapped per level)
+    _native_spectrum!(s, wd, Hz + k1, 3, k1, wx, fac, band_on, ib)
     for kk in k1:kend
         slot = mod(kk - k1, M) + 1
         K = Hz + kk
+        l = kk - k1 + 1                     # index in the Vz/BVz columns
+        inlev = kk in lev
         # cell-centred velocities minus their plane means
         @inbounds for j in 1:Ny, i in 1:Nx
             I, J = Hx + i, Hy + j
@@ -436,34 +476,36 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
         for c in 1:3
             pm[c] = sum(@view s.buf[:, :, c, slot]) / (Nx * Ny)
             @views s.buf[:, :, c, slot] .-= pm[c]
+            s.Vz[c, l] += w * sum(abs2, @view s.buf[:, :, c, slot]) / (Nx * Ny)
         end
-        l = kk - k1 + 1                     # index in the Vz/BVz columns
-        inlev = kk in lev
-        for c in 1:3
-            f = @view s.buf[:, :, c, slot]
-            copyto!(s.tmp, f)
-            mul!(s.spec, s.plan, s.tmp)
-            s.Vz[c, l] += w * sum(abs2, f) / (Nx * Ny)
-            if inlev
-                _acc_autocov!(s.Cx, s.Cy, c, l, s.spec, nothing, wx, w / N2, s.cosx, s.cosy)
+        # spectra of the native planes (u, v of this level; w on its top face,
+        # the bottom face being the previous level's top): autocovariances
+        # along x and y, and the band-passed native planes
+        _native_spectrum!(s, ud, K, 1, kk, wx, fac, band_on, 1)
+        _native_spectrum!(s, vd, K, 2, kk, wx, fac, band_on, 2)
+        _native_spectrum!(s, wd, K + 1, 3, kk + 1, wx, fac, band_on, it)
+        # band-passed cell-centred fluctuations (the band-pass commutes with
+        # the two-point mean on the periodic plane)
+        if band_on
+            @inbounds for j in 1:Ny, i in 1:Nx
+                ip = i == Nx ? 1 : i + 1; jp = j == Ny ? 1 : j + 1
+                s.bbuf[i, j, 1, slot] = (nb[i, j, 1] + nb[ip, j, 1]) / 2
+                s.bbuf[i, j, 2, slot] = (nb[i, j, 2] + nb[i, jp, 2]) / 2
+                s.bbuf[i, j, 3, slot] = (nb[i, j, ib] + nb[i, j, it]) / 2
             end
-            # band-passed field
-            if scale_gap && any(s.band)
-                inlev && _acc_autocov!(s.Bx, s.By, c, l, s.spec, s.band, wx, w / N2, s.cosx, s.cosy)
-                @inbounds for j in 1:Ny, i in 1:nkx
-                    s.band[i, j] || (s.spec[i, j] = 0)
-                end
-                mul!(s.tmp, s.iplan, s.spec)
-                @views s.bbuf[:, :, c, slot] .= s.tmp
+            for c in 1:3
                 s.BVz[c, l] += w * sum(abs2, @view s.bbuf[:, :, c, slot]) / (Nx * Ny)
-            else
-                @views s.bbuf[:, :, c, slot] .= 0
             end
+        else
+            @views s.bbuf[:, :, :, slot] .= 0
         end
         if inlev
-            # region means, resolved and band covariances, SGS stress
+            # region means; centre covariances (Rr, Rb); native second moments
+            # (Nr, Nb: u over the two x-faces of a column, v over its two
+            # y-faces, w on its bottom and top face separately); SGS stress
             reg = zeros(3); breg = zeros(3)
             Rr = zeros(6); Rb = zeros(6); Rs = zeros(6); es = 0.0
+            Nr = zeros(4); Nb = zeros(4); rw = zeros(2); brw = zeros(2)
             @inbounds for j in 1:Ny, i in 1:Nx
                 cols[i, j] || continue
                 a1, a2, a3 = s.buf[i, j, 1, slot], s.buf[i, j, 2, slot], s.buf[i, j, 3, slot]
@@ -475,6 +517,18 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
                 Rb[1] += b1 * b1; Rb[2] += b2 * b2; Rb[3] += b3 * b3
                 Rb[4] += b1 * b2; Rb[5] += b1 * b3; Rb[6] += b2 * b3
                 I, J = Hx + i, Hy + j
+                u0, u1 = ud[I, J, K] - pm[1], ud[I+1, J, K] - pm[1]
+                v0, v1 = vd[I, J, K] - pm[2], vd[I, J+1, K] - pm[2]
+                w0, w1 = wd[I, J, K] - pm[3], wd[I, J, K+1] - pm[3]
+                Nr[1] += (u0^2 + u1^2) / 2; Nr[2] += (v0^2 + v1^2) / 2
+                Nr[3] += w0^2; Nr[4] += w1^2; rw[1] += w0; rw[2] += w1
+                if band_on
+                    ip = i == Nx ? 1 : i + 1; jp = j == Ny ? 1 : j + 1
+                    Nb[1] += (nb[i, j, 1]^2 + nb[ip, j, 1]^2) / 2
+                    Nb[2] += (nb[i, j, 2]^2 + nb[i, jp, 2]^2) / 2
+                    Nb[3] += nb[i, j, ib]^2; Nb[4] += nb[i, j, it]^2
+                    brw[1] += nb[i, j, ib]; brw[2] += nb[i, j, it]
+                end
                 S11, S22, S33, S12, S13, S23, _ = _strain_at(ud, vd, wd, I, J, K, idx, idy, idz)
                 e = s.e.data[I, J, K]
                 nh = νh.data[I, J, K]; nv = νv.data[I, J, K]
@@ -484,12 +538,27 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
                 Rs[4] += -2nh * S12; Rs[5] += -2nv * S13; Rs[6] += -2nv * S23
                 es += e
             end
-            reg ./= ncol; breg ./= ncol
+            reg ./= ncol; breg ./= ncol; rw ./= ncol; brw ./= ncol
             pairs = ((1, 1), (2, 2), (3, 3), (1, 2), (1, 3), (2, 3))
             for (q, (a, b)) in enumerate(pairs)
-                s.Rres[q, l] += w * (Rr[q] / ncol - reg[a] * reg[b])
-                s.Rband[q, l] += w * (Rb[q] / ncol - breg[a] * breg[b])
+                cr = Rr[q] / ncol - reg[a] * reg[b]
+                cb = Rb[q] / ncol - breg[a] * breg[b]
+                if q <= 3
+                    s.Cres[q, l] += w * cr; s.Cband[q, l] += w * cb
+                else
+                    s.Rres[q, l] += w * cr; s.Rband[q, l] += w * cb
+                end
                 s.Rsgs[q, l] += w * Rs[q] / ncol
+            end
+            # native variances: u and v about the mean over the region's faces
+            # (= the centre mean), w the mean of its two faces' variances
+            s.Rres[1, l] += w * (Nr[1] / ncol - reg[1]^2)
+            s.Rres[2, l] += w * (Nr[2] / ncol - reg[2]^2)
+            s.Rres[3, l] += w * ((Nr[3] / ncol - rw[1]^2) + (Nr[4] / ncol - rw[2]^2)) / 2
+            if band_on
+                s.Rband[1, l] += w * (Nb[1] / ncol - breg[1]^2)
+                s.Rband[2, l] += w * (Nb[2] / ncol - breg[2]^2)
+                s.Rband[3, l] += w * ((Nb[3] / ncol - brw[1]^2) + (Nb[4] / ncol - brw[2]^2)) / 2
             end
             s.esgs[l] += w * es / ncol
             for c in 1:3
@@ -511,8 +580,54 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
                 end
             end
         end
+        ib, it = it, ib                     # this level's top face is the next one's bottom
     end
     return s
+end
+
+# FFT of the native plane at data level K of `d` (component c: 1 u, 2 v,
+# 3 w on face kf); its x and y autocovariances go to level kf (u, v) or,
+# half each, to the two levels the face bounds (w); with the band on, the
+# band-passed plane goes to nband[:, :, slot].
+function _native_spectrum!(s::ParentResolvedStatistics, d, K, c, kf, wx, fac, band_on, slot)
+    g = mesh(s.parent.u)
+    Nx, Ny, Hx, Hy = g.Nx, g.Ny, g.Hx, g.Hy
+    @inbounds for j in 1:Ny, i in 1:Nx
+        s.tmp[i, j] = d[Hx+i, Hy+j, K]
+    end
+    mul!(s.spec, s.plan, s.tmp)
+    s.spec[1, 1] = 0                        # the plane mean
+    lev = s.levels; k1 = first(lev)
+    for (kl, a) in (c < 3 ? ((kf, 1.0),) : ((kf, 0.5), (kf - 1, 0.5)))
+        kl in lev || continue
+        l = kl - k1 + 1
+        _acc_autocov!(s.Cx, s.Cy, c, l, s.spec, nothing, wx, a * fac, s.cosx, s.cosy)
+        band_on && _acc_autocov!(s.Bx, s.By, c, l, s.spec, s.band, wx, a * fac, s.cosx, s.cosy)
+    end
+    if band_on
+        @inbounds for j in 1:Ny, i in 1:size(s.spec, 1)
+            s.band[i, j] || (s.spec[i, j] = 0)
+        end
+        mul!(s.tmp, s.iplan, s.spec)
+        @views s.nband[:, :, slot] .= s.tmp
+    end
+    return nothing
+end
+
+# The resolved (or band) tensor of level l in grid order: the variances at
+# the native points (R[1:3]); each cross term the correlation coefficient of
+# the cell-centred fields (R[4:6] over √(C_aa C_bb)) times √(R_aa R_bb). The
+# centre correlation is that of the colocated components; scaling it by the
+# native variances is exact for a single Fourier mode (each component then
+# attenuated by one factor cos(k_iΔ_i/2)) and keeps the tensor realizable
+# (a correlation matrix scaled by a positive diagonal).
+function _resolved6(R::AbstractMatrix, C::AbstractMatrix, l::Integer, W::Real)
+    off = ntuple(3) do m
+        a, b = ((1, 2), (1, 3), (2, 3))[m]
+        den = C[a, l] * C[b, l]
+        den > 0 ? R[3+m, l] * sqrt(max(R[a, l] * R[b, l], 0.0) / den) : 0.0
+    end
+    return (R[1, l] / W, R[2, l] / W, R[3, l] / W, off[1] / W, off[2] / W, off[3] / W)
 end
 
 # Accumulate the x and y autocovariances of one level from its half
@@ -553,7 +668,8 @@ function inflow_stress_parts(s::ParentResolvedStatistics)
     _check_samples(s)
     perm = _face_perm(s.face)
     tf(A) = reduce(hcat, [collect(_to_face(Tuple(A[:, l] ./ s.W), s.face)) for l in axes(A, 2)])
-    res = tf(s.Rres); bnd = tf(s.Rband); sgs = tf(s.Rsgs)
+    tres(R, C) = reduce(hcat, [collect(_to_face(_resolved6(R, C, l, s.W), s.face)) for l in axes(R, 2)])
+    res = tres(s.Rres, s.Cres); bnd = tres(s.Rband, s.Cband); sgs = tf(s.Rsgs)
     gen = s.mode === :scale_gap ? sgs .+ bnd : sgs .+ res
     U = s.Um[collect(perm), :] ./ s.W
     Ls = _lengths(s)
@@ -616,8 +732,9 @@ function inflow_stresses(s::ParentResolvedStatistics, z::AbstractVector, t::Real
 end
 function _stress_profile(s::ParentResolvedStatistics)
     _check_samples(s)
-    A = s.mode === :scale_gap ? s.Rsgs .+ s.Rband : s.Rsgs .+ s.Rres
-    return reduce(hcat, [collect(_to_face(Tuple(A[:, l] ./ s.W), s.face)) for l in axes(A, 2)])
+    R, C = s.mode === :scale_gap ? (s.Rband, s.Cband) : (s.Rres, s.Cres)
+    return reduce(hcat, [collect(_to_face(_resolved6(R, C, l, s.W) .+ Tuple(s.Rsgs[:, l] ./ s.W), s.face))
+                         for l in axes(R, 2)])
 end
 
 function inflow_lengths(s::ParentResolvedStatistics, z::Real, t::Real)
