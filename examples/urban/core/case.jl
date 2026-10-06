@@ -225,7 +225,7 @@ function build_case(cfg::CaseConfig)
                     count(==(SURFACE_WALL), sfc), count(==(UInt8(6)), sfc),
                     join(string.(coupling_name.(case.couplings)), ", ")),
            subsystem = :berlin, domain = current_domain(), event = :built,
-           buildings = length(geom.city.buildings), couplings = coupling_name.(case.couplings))
+           buildings = length(geom.city.buildings))
     return case
 end
 
