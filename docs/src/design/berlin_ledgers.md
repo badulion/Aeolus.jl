@@ -526,7 +526,7 @@ In the `:smoke` configuration the summer domain residual was −33.9
 W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
 #127 baseline).
 
-## Smoke test and coverage test
+## Smoke test
 
 **`test/berlin_smoke.jl`** runs the case in `CaseConfig(:smoke)`: a
 250 m × 250 m × 100 m window of the real OSM file (16 × 16 × 16,
@@ -576,68 +576,11 @@ multigrid runs a few seconds). The `:core` and `:timestepper` slots of #133
 add six (anelastic, pseudo-incompressible, `pressure_solver =
 density_weighted_cg`, adaptive, IMEX, adaptive + ARK2): 18 runs.
 
-**`test/berlin_coverage.jl`** checks that every submodule of `Aeolus`
-is either listed in some registered coupling's `modules_used`, or in
-`BERLIN_EXEMPT` with a reason, or in `BERLIN_PENDING` with the issue
-that wires it in. It ratchets: a new src module fails the suite until
-it is coupled or exempted, and a pending module that some coupling now
-uses fails it until it is removed from `BERLIN_PENDING`, so that list
-only shrinks. It also checks that each coupling's file calls into every
-module it lists (an exported name, or a `Module.` qualification, in the
-code with comments and docstrings removed); reviewed indirect uses go in
-`BERLIN_INDIRECT`. At #127: 55 modules, 15 coupled, 11 exempt
-(the core's infrastructure and the Parallel / Backends / SpectralElement
-scaffolds), 30 pending; #130 coupled RadiationCore, GasOptics and
-TwoStream (27 pending). KA-a (#294) took Backends off the exempt list: the
-core couplings run on `CaseConfig.backend` (`build_case` calls
-`init_threads!(cfg.backend)`; see [the kernel port](ka_port.md)).
+The coverage test `test/berlin_coverage.jl` and its lists (`BERLIN_EXEMPT`,
+`BERLIN_PENDING`, `BERLIN_DEFAULT_OFF`, `BERLIN_OPTION_ONLY`) were removed
+(maintainer decision 2026-10-06, #320).
 
-**The flagship guardrails.** The Berlin case is the flagship: it runs
-every component, on by default, and new physics lands in it in the PR
-that adds the physics. `test/berlin_coverage.jl` enforces that with four
-reviewed lists, each frozen against a literal snapshot in the same file
-(`*_FROZEN`; the test requires list = snapshot, so an entry can only be
-deleted, from both; adding one is a snapshot edit a reviewer sees and
-only the maintainer agrees to):
-
-| list | holds | at #160 |
-| :-- | :-- | :-- |
-| `BERLIN_EXEMPT` | non-physics modules; each reason starts `infrastructure:` or `scaffold:` | 11 |
-| `BERLIN_PENDING` | modules not wired in yet, with the owning issue | 24 |
-| `BERLIN_DEFAULT_OFF` | addon couplings off by default, with the measured cost or conflict | 0 |
-| `BERLIN_OPTION_ONLY` | modules only a non-default slot provider runs, with why it is an alternative | 2 (Multigrid: `pressure_solver = :multigrid / :mg_cg`; ML: `sgs = :mlsgs`) |
-
-and with these testsets:
-
-* **frozen lists … may only shrink** — each list equals its snapshot;
-  exemption reasons start with `infrastructure:` / `scaffold:`.
-* **every addon on by default, every slot's default provider in the
-  default run** — every `slot = :addon` coupling has `is_default = true`
-  unless it is in `BERLIN_DEFAULT_OFF`; every exclusive slot has exactly
-  one default provider and it is not an `:off` / `:none` / `:disabled`
-  switch (`chem_off` is a non-default provider of `:chemistry`); and
-  `selected_couplings` of `CaseConfig()` and of every `SCENARIOS` preset
-  contains every such addon and default provider.
-* **a module only a non-default provider runs is a reviewed exception** —
-  a module some coupling lists counts as coupled (the smoke test runs
-  every provider), but if the default `CaseConfig()` run does not use
-  it, it must be in `BERLIN_OPTION_ONLY`; an entry the default run now
-  uses is stale and fails too.
-
-`test/berlin_smoke.jl` adds one more: the "summer / winter, everything
-on" configurations of `smoke_matrix()` must select every addon and every
+`test/berlin_smoke.jl` also checks that the "summer / winter, everything
+on" configurations of `smoke_matrix()` select every addon and every
 default provider, so an `incompatible` declaration cannot silently drop
 a coupling from the runs that are meant to have everything.
-
-Each guardrail was checked against a deliberately broken tree (not
-committed): a new `src/DummyPhysics.jl` added to `BERLIN_PENDING` or
-`BERLIN_EXEMPT` fails "BERLIN_PENDING has grown: DummyPhysics" (resp.
-EXEMPT, plus the `infrastructure:` / `scaffold:` check);
-`is_default = false` on `veg_drag` fails "Addon couplings off by
-default: veg_drag" and "CaseConfig() does not run: veg_drag"; `veg_drag`
-moved into the `:sgs` slot as a non-default provider fails "Modules the
-default Berlin run does not use (only a non-default provider does):
-PlantCanopy (by veg_drag)"; making `chem_off` the `:chemistry` default
-fails "slot :chemistry defaults to an off switch (chem_off)"; and
-declaring `cloud_shadow` incompatible with `fog_dew` fails 'smoke run
-"summer, everything on" does not run: cloud_shadow, fog_dew'.
