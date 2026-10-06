@@ -657,16 +657,18 @@ end
 
 Snapshot of the memory (``e`` and the booked statistics) into buffers the
 closure owns, and its restoration: a step `step_adaptive!` rejects leaves
-``e`` bit for bit as it was.
+``e`` bit for bit as it was. The snapshot `(e, stats)` is self-contained
+(restoring reads nothing but `s`), so a deep copy of it is what a
+checkpoint stores (#245) and restores into a freshly built closure.
 """
 function sgs_state(c::TKEClosure)
     copyto!(c.snap, c.e.data)
     copyto!(c.snapstats, c.stats)
-    return c.snap
+    return (c.snap, c.snapstats)
 end
 function restore_sgs_state!(c::TKEClosure, s)
-    copyto!(c.e.data, s)
-    copyto!(c.stats, c.snapstats)
+    copyto!(c.e.data, s[1])
+    copyto!(c.stats, s[2])
     return c
 end
 
