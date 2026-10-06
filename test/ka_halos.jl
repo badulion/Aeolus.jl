@@ -13,7 +13,16 @@
 #      corner holds the value of the last axis that reaches it;
 #   3. the multigrid level halo is the same kernel (one source);
 #   4. halo fills allocate nothing (the open faces allocated 0.8-3.4 kB
-#      per fill before the port).
+#      per fill before the port);
+#   5. the nesting transfer operators — prolongation (orders 1/3/5, the
+#      :positive / :monotone limiters, halo / interface / whole child,
+#      halo-only shells), the restrictions (volume, mass measure,
+#      solid-aware), the flux mismatch, the face flux correction and the
+#      refluxing — bit for bit against the pre-port operators
+#      (test/support/legacy_nesting.jl) on every backend;
+#   6. a short one-way and two-way (with a sponge) nested run: serial =
+#      threaded, in process (across processes: the worker's `nested`
+#      section of test/thread_invariance.jl).
 
 using Test
 using Random: Xoshiro, randn
@@ -31,6 +40,8 @@ kh_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
 
 # The pre-port fill (master at 70d9f83), transcribed: test/support/legacy_halos.jl.
 isdefined(@__MODULE__, :LegacyHalos) || include(joinpath(@__DIR__, "support", "legacy_halos.jl"))
+isdefined(@__MODULE__, :LegacyNesting) || include(joinpath(@__DIR__, "support", "legacy_nesting.jl"))
+using Aeolus.Nesting
 
 # ---------------------------------------------------------------------------
 const KH_LOCS = (CellCenter(), FaceX(), FaceY(), FaceZ())
@@ -88,7 +99,7 @@ function kh_compare(f, bcs, init)
     return ok
 end
 
-@testset "KA-f halo kernels (#297)" begin
+@testset "KA-f halo kernels and nesting transfer operators (#297)" begin
     meshes = (("12×10×8, H = 3", RegularGrid(size = (12, 10, 8), extent = (1.2, 1.0, 0.8), halo = (3, 3, 3))),
               ("9×7×6, H = (2, 4, 3)", RegularGrid(size = (9, 7, 6), extent = (0.9, 0.7, 0.6), halo = (2, 4, 3))),
               ("5×1×2, H = 3 (N < H)", RegularGrid(size = (5, 1, 2), extent = (0.5, 0.1, 0.2), halo = (3, 3, 3))))
@@ -191,5 +202,120 @@ end
         @test all(iszero, allocs)
         φ = randn(10, 10, 10); Aeolus.Multigrid._fill_halo!(φ, :periodic, :neumann, :periodic)
         @test (@allocated Aeolus.Multigrid._fill_halo!(φ, :periodic, :neumann, :periodic)) == 0
+    end
+
+    @testset "nesting transfer operators: bit for bit with the pre-port loops" begin
+        pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+        nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.625), (0.0, 0.5)), 2; halo = (3, 3, 3))
+        cm = nest_child_mesh(nest)
+        rng = Xoshiro(42)
+        L = LegacyNesting
+        # run `new!(dst)` on every backend and `old!(ref)` once, from the same start
+        function same(new!, old!, dst::Field, init)
+            ref = Field(Aeolus.Fields.location(dst), dst.mesh); ref.data .= init
+            old!(ref)
+            ok = true
+            for (_, b) in KH_BACKENDS
+                dst.data .= init
+                with_backend(() -> new!(dst), b)
+                ok &= kh_bits(dst.data) == kh_bits(ref.data)
+            end
+            return ok
+        end
+        n = 0
+        for loc in KH_LOCS
+            pf = Field(loc, pm); pf.data .= randn(rng, size(pf.data))
+            cf = Field(loc, cm); c0 = randn(rng, size(cf.data))
+            for order in (1, 3, 5), lim in (:none, :positive, :monotone)
+                (loc isa CellCenter || lim !== :positive) || continue
+                for (f, g) in ((interpolate_to_nest_boundary!, L.interpolate_to_nest_boundary!),
+                               (interpolate_parent_to_child!, L.interpolate_parent_to_child!))
+                    @test same(c -> f(c, pf, nest; order, limiter = lim),
+                               c -> g(c, pf, nest; order, limiter = lim), cf, c0)
+                    n += 1
+                end
+                @test same(c -> interpolate_to_nest_boundary!(c, pf, nest; order, limiter = lim,
+                                                              impose_interface = true),
+                           c -> L.interpolate_to_nest_boundary!(c, pf, nest; order, limiter = lim,
+                                                                impose_interface = true), cf, c0)
+                n += 1
+            end
+            cf.data .= c0
+            solid = rand(rng, size(cf.data)...) .< 0.2
+            for ib in (false, true), sol in (nothing, solid)
+                (loc isa CellCenter && ib) && continue
+                kw = loc isa CellCenter ? (; solid = sol) : (; include_boundary = ib, solid = sol)
+                @test same(p -> restrict_to_parent!(p, cf, nest; kw...),
+                           p -> L.restrict_to_parent!(p, cf, nest; kw...), pf, copy(pf.data))
+                n += 1
+            end
+            loc isa CellCenter && continue
+            mm = compute_nest_flux_mismatch(pf, cf, nest)
+            mo = L.compute_nest_flux_mismatch(pf, cf, nest)
+            @test all(kh_bits(getfield(mm, s)) == kh_bits(getfield(mo, s)) for s in fieldnames(typeof(mm)))
+            @test same(p -> apply_flux_correction!(p, mm, nest), p -> L.apply_flux_correction!(p, mm, nest),
+                       pf, copy(pf.data))
+            θp = Field(CellCenter(), pm); θ0 = randn(rng, size(θp.data))
+            for per in ((true, true, true), (true, false, false), (false, true, false))
+                @test same(t -> apply_flux_correction!(t, mm, nest; periodic = per),
+                           t -> L.apply_flux_correction!(t, mm, nest; periodic = per), θp, θ0)
+            end
+            n += 5
+        end
+        # the mass measure of a sound-proof pair (weighted restriction and mismatch)
+        using_anel = Aeolus.Anelastic
+        rp = using_anel.isothermal_reference(pm; T_surf = 300.0)
+        rc = using_anel.isothermal_reference(cm; T_surf = 300.0)
+        pA = using_anel.AnelasticSimulation(pm; ref = rp, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+        cA = using_anel.AnelasticSimulation(cm; ref = rc, bcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest))
+        meas = nest_measure(nest, pA, cA)
+        for loc in KH_LOCS
+            pf = Field(loc, pm); pf.data .= randn(rng, size(pf.data))
+            cf = Field(loc, cm); cf.data .= randn(rng, size(cf.data))
+            @test same(c -> interpolate_parent_to_child!(c, pf, nest; measure = meas),
+                       c -> L.interpolate_parent_to_child!(c, pf, nest; measure = meas), cf, copy(cf.data))
+            @test same(p -> restrict_to_parent!(p, cf, nest; measure = meas),
+                       p -> L.restrict_to_parent!(p, cf, nest; measure = meas), pf, copy(pf.data))
+            n += 2
+            loc isa CellCenter && continue
+            mm = compute_nest_flux_mismatch(pf, cf, nest; measure = meas)
+            mo = L.compute_nest_flux_mismatch(pf, cf, nest; measure = meas)
+            @test all(kh_bits(getfield(mm, s)) == kh_bits(getfield(mo, s)) for s in fieldnames(typeof(mm)))
+            @test same(p -> apply_flux_correction!(p, mm, nest; measure = meas),
+                       p -> L.apply_flux_correction!(p, mm, nest; measure = meas), pf, copy(pf.data))
+            n += 2
+        end
+        @info "KA-f nesting: $n operator calls bit-identical to the pre-port loops on $(length(KH_BACKENDS)) backends"
+    end
+
+    @testset "nested runs: serial = threaded" begin
+        function nested_pair(fb; sponge = nothing)
+            pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+            nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo = (3, 3, 3))
+            cm = nest_child_mesh(nest)
+            rng = Xoshiro(329)
+            p = BoussinesqSimulation(pm; ν = 1e-3)
+            for f in (p.u, p.v, p.w)
+                Aeolus.Fields.interior_view(f) .= 0.3 .* randn(rng, size(Aeolus.Fields.interior_view(f)))
+            end
+            Aeolus.Fields.interior_view(p.θ) .= 300 .+ randn(rng, size(Aeolus.Fields.interior_view(p.θ)))
+            step!(p, 1e-10); p.t = 0.0
+            c = BoussinesqSimulation(cm; ν = 1e-3, bcs = nest_bcs(cm))
+            for (cf, pf) in ((c.u, p.u), (c.v, p.v), (c.w, p.w), (c.θ, p.θ))
+                interpolate_parent_to_child!(cf, pf, nest)
+            end
+            kw = sponge === nothing ? (;) : (; sponge)
+            return NestedRun(p, c, nest; cfl_parent = nothing, cfl_child = nothing, feedback = fb, kw...)
+        end
+        for (lab, fb, kw) in (("one-way", :one_way, (;)), ("two-way + sponge", :two_way, (; sponge = NestSponge())))
+            res = map((CPUBackend(serial = true), CPUBackend(threshold = 0))) do b
+                with_backend(b) do
+                    run = nested_pair(fb; kw...)
+                    for _ in 1:2; step_nested!(run; dt = 2e-3); end
+                    [kh_bits(getproperty(s, f).data) for s in (run.child, run.parent) for f in (:u, :v, :w, :θ, :p)]
+                end
+            end
+            @test res[1] == res[2]
+        end
     end
 end

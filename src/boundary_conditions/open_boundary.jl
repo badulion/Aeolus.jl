@@ -249,11 +249,20 @@ counting from 1, the layout of an [`OpenPlane`](@ref)'s buffer).
 function blend_window!(dst::AbstractArray{T,3}, A::AbstractArray, B::AbstractArray, τ,
                        irange, jrange, krange) where {T}
     τ1 = one(T) - T(τ); τT = T(τ)
-    i0 = first(irange) - 1; j0 = first(jrange) - 1; k0 = first(krange) - 1
-    @inbounds for k in krange, j in jrange, i in irange
-        dst[i - i0, j - j0, k - k0] = τ1 * A[i, j, k] + τT * B[i, j, k]
-    end
+    o = (first(irange) - 1, first(jrange) - 1, first(krange) - 1)
+    r = (UnitRange{Int}(irange), UnitRange{Int}(jrange), UnitRange{Int}(krange))
+    _npts(r) == 0 && return dst
+    checkbounds(A, r...); checkbounds(B, r...)
+    checkbounds(dst, r[1] .- o[1], r[2] .- o[2], r[3] .- o[3])
+    # pointwise in time: one launch (KA-f, #297)
+    launch!(Backends.backend(dst), _blend_body!, r, dst, A, B, o, τ1, τT)
     return dst
+end
+_npts(r) = length(r[1]) * length(r[2]) * length(r[3])
+
+@inline function _blend_body!(i, j, k, dst, A, B, o, τ1, τT)
+    @inbounds dst[i - o[1], j - o[2], k - o[3]] = τ1 * A[i, j, k] + τT * B[i, j, k]
+    return nothing
 end
 
 blend_window!(dst::AbstractArray{T,3}, A::AbstractArray, B::AbstractArray, τ) where {T} =
