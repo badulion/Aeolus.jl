@@ -11,9 +11,10 @@
 # candidate algorithms and keep the fastest, so two processes may pick
 # different plans, which round differently in the last bit (FFTW FAQ 3.8).
 # ESTIMATE is deterministic, and so is any planner when the plan comes from
-# imported wisdom. Hence: PATIENT by default (fastest at run time; the
-# planning cost is paid once per run), wisdom saved at run start and
-# reloaded on restart, ESTIMATE in the test suite.
+# imported wisdom. Hence: MEASURE by default (maintainer decision on #318:
+# PATIENT plans 256³ in 494 s against 2.4 s for MEASURE, for transforms of
+# 153 vs 182 ms), PATIENT opt-in, wisdom saved at run start and reloaded
+# on restart, ESTIMATE in the test suite.
 
 using FFTW: FFTW
 
@@ -33,11 +34,12 @@ mutable struct _FFTWPolicyState
     wisdom_file::String
 end
 
-const _FFTW_POLICY = _FFTWPolicyState(false, :patient, 1, false, "")
+const _FFTW_POLICY = _FFTWPolicyState(false, :measure, 1, false, "")
 
-# Default planner: :patient (the fastest practical plans; #245), unless
-# ENV["AEOLUS_FFTW_PLANNER"] says otherwise.
-const FFTW_DEFAULT_PLANNER = :patient
+# Default planner: :measure (#245, maintainer decision on #318: near-PATIENT
+# plans at a fraction of the planning cost), unless ENV["AEOLUS_FFTW_PLANNER"]
+# says otherwise. :patient is opt-in.
+const FFTW_DEFAULT_PLANNER = :measure
 
 function _parse_planner(s)
     p = Symbol(lowercase(strip(String(s))))
@@ -66,8 +68,11 @@ end
 
 Set the FFTW planning policy every FFT plan of Aeolus is made with (the
 pressure solvers' and the diagnostics'): `planner` is `:estimate`,
-`:measure`, `:patient` (the default) or `:exhaustive`, and `threads` the
-FFTW thread count (`FFTW.set_num_threads`). Plans made before the call keep
+`:measure` (the default), `:patient` or `:exhaustive`, and `threads` the
+FFTW thread count (`FFTW.set_num_threads`). `:patient` finds somewhat
+faster plans at a much higher planning cost — measured at 256³: 494 s of
+planning with `:patient` against 2.4 s with `:measure`, for transforms of
+153 vs 182 ms — so it is worth opting into only for long runs. Plans made before the call keep
 their flags; set the policy before constructing a simulation.
 
 The default can also be set from the environment, before the first plan:

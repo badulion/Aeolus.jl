@@ -137,7 +137,7 @@ Aeolus.Operators.dissipation_matched_cs
 
 The one place the FFTW planner flag and thread count of every FFT plan
 (the pressure solvers, the diagnostics) are chosen (#245). Default
-`:patient`; the test suite uses `:estimate`. Why it matters for restarts:
+`:measure`, `:patient` opt-in; the test suite uses `:estimate`. Why it matters for restarts:
 [Checkpoint / restart and FFT planning](../design/checkpoint_restart.md).
 
 ```@docs

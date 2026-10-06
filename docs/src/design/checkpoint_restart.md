@@ -98,14 +98,20 @@ The policy (maintainer decisions on #245), one helper,
   and the FFTW thread count, through `set_fftw_policy!`, the environment
   (`AEOLUS_FFTW_PLANNER`, `AEOLUS_FFTW_THREADS`) or a namelist `[fftw]`
   table.
-* **Default `PATIENT`**: the fastest plans at run time (as in
-  Oceananigans.jl); the planning cost is paid once per run (measured
-  0.22 s for the 32×32×16 rfft solver, 4.7 s at 96×96×48, against
-  < 0.01 s with `ESTIMATE`).
+* **Default `MEASURE`, `PATIENT` opt-in** (maintainer decision on #318):
+  `PATIENT` finds somewhat faster plans, but its planning cost grows
+  steeply — measured at 256³: 494 s of planning with `PATIENT` against
+  2.4 s with `MEASURE`, for transforms of 153 vs 182 ms (`PATIENT`
+  planning was also measured at 0.22 s for the 32×32×16 rfft solver and
+  4.7 s at 96×96×48, against < 0.01 s with `ESTIMATE`). `PATIENT` pays
+  off only for long runs; select
+  it with `set_fftw_policy!(; planner = :patient)`,
+  `AEOLUS_FFTW_PLANNER=patient` or the `[fftw]` table.
 * **Saved plans** (the MicroHH practice): the FFTW wisdom is written to
   the run folder at run start and loaded by a restarted process before
   any plan is made, so the restart makes the same plans. The cross-process
-  test checks it: a `PATIENT` run checkpointed at step 2 in one process
+  test checks it (with `PATIENT`, the strongest timing planner; `MEASURE`
+  wisdom works the same way): a `PATIENT` run checkpointed at step 2 in one process
   and resumed in a new one with the saved wisdom equals the continuous run
   bit for bit at step 4.
 * **Tests force `ESTIMATE`** (deterministic, and planning is free):

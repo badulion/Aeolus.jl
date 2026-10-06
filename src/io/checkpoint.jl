@@ -669,7 +669,7 @@ Aeolus.Operators.set_fftw_policy!)), before the simulation is built:
 
 ```toml
 [fftw]
-planner = "patient"   # estimate | measure | patient (default) | exhaustive
+planner = "measure"   # estimate | measure (default) | patient | exhaustive
 threads = 4
 wisdom  = "run/fftw_wisdom"   # optional: import before planning
 ```

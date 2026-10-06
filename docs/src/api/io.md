@@ -63,7 +63,8 @@ relaminarisation driver and `gabls1`–`gabls4.jl` use it by default
 
 The planner of every FFT plan is set in one place,
 `Aeolus.Operators.set_fftw_policy!` (`planner = :estimate | :measure |
-:patient | :exhaustive`, `threads`), default `:patient`, or from the
+:patient | :exhaustive`, `threads`), default `:measure` (`:patient`
+opt-in), or from the
 environment (`AEOLUS_FFTW_PLANNER`, `AEOLUS_FFTW_THREADS`) or a namelist
 `[fftw]` table ([`apply_fftw_config!`](@ref)). `fftw_policy()` reports
 the planner, the thread count, whether wisdom was loaded and whether the
@@ -76,7 +77,7 @@ documented with [Operators](operators.md#FFT-planning-policy).
 
 ```toml
 [fftw]
-planner = "patient"        # estimate | measure | patient | exhaustive
+planner = "measure"        # estimate | measure (default) | patient | exhaustive
 threads = 4
 wisdom  = "run/fftw_wisdom"
 

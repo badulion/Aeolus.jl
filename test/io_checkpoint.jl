@@ -310,6 +310,9 @@ end
     p0 = fftw_policy()
     @test p0.planner === :estimate                     # forced by runtests.jl
     @test fftw_planner_flags() == Aeolus.Operators.FFTW.ESTIMATE
+    # the default outside the suite is MEASURE, PATIENT is opt-in
+    # (maintainer decision on #318)
+    @test Aeolus.Operators.FFTW_DEFAULT_PLANNER === :measure
     try
         for (p, f) in ((:measure, Aeolus.Operators.FFTW.MEASURE), (:patient, Aeolus.Operators.FFTW.PATIENT),
                        (:exhaustive, Aeolus.Operators.FFTW.EXHAUSTIVE))
