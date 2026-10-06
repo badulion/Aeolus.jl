@@ -957,20 +957,22 @@ end
 
 Snapshot of the six stresses and the booked statistics into buffers the
 closure owns, and its restoration (a rejected adaptive step leaves them
-bit for bit as they were).
+bit for bit as they were). The snapshot `(τ, stats)` is self-contained
+(restoring reads nothing but `s`), so a deep copy of it is what a
+checkpoint stores (#245).
 """
 function sgs_state(c::ReynoldsStressClosure)
     for m in 1:6
         copyto!(c.snap[m], c.τ[m].data)
     end
     copyto!(c.snapstats, c.stats)
-    return c.snap
+    return (c.snap, c.snapstats)
 end
 function restore_sgs_state!(c::ReynoldsStressClosure, s)
     for m in 1:6
-        copyto!(c.τ[m].data, s[m])
+        copyto!(c.τ[m].data, s[1][m])
     end
-    copyto!(c.stats, c.snapstats)
+    copyto!(c.stats, s[2])
     return c
 end
 

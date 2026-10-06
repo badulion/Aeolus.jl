@@ -27,6 +27,11 @@ K  = (0.2 * 10.0)^2 * sqrt(1e-4) * stability_factor_m(sf, Ri)
 stability_factor_m(MOSTConsistent(), Ri)      # the Businger–Dyer–Beljaars–Holtslag value
 ```
 
+`boundary_layer_height(z, profile; method)` is the only ``z_i``
+diagnostic in the package: the parcel method, the bulk Richardson
+number, the maximum θ gradient and the minimum heat flux (#247; see
+[The boundary-layer height](../../theory/turbulence_stability.md#The-boundary-layer-height)).
+
 ```@autodocs
 Modules = [Aeolus.TurbulenceStability]
 ```

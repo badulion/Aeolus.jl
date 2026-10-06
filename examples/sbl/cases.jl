@@ -185,7 +185,9 @@ the official case file converted to θ with p_s = 651 hPa. `experiment = 3`
 (default) starts at 10 UTC from the experiment-2 ensemble mean (Table 5)
 with z0m = 1e-3 m, z0h = 1e-4 m and the log-linear surface functions
 β_m = 4.8, β_h = 7.8 that experiment 3 prescribed for its surface-flux
-tests; the published resolution is 1 m on ≤ 500 × 500 × 150 m.
+tests. Six of the seven experiment-3 LES ran at 1 m isotropic on
+256 × 256 × 80 m to 512 × 512 × 150 m; CSIRO-LES ran at Δx = 3.9 m,
+Δz = 1.17 m (Couvreux et al. 2020, Table 2).
 `experiment = 1` starts at 00 UTC with z0m = 1e-2 m, z0h = 1e-3 m.
 Perturbations: u, v, θ uniform ±0.1 (m s⁻¹, K) below 50 m.
 """
@@ -214,7 +216,7 @@ function gabls4_case(; N = (64, 64, 64), extent = (128.0, 128.0, 128.0), experim
                     t_start = experiment == 3 ? 36000.0 : 0.0, ρcp = ρ * 1005)
 end
 
-"The GABLS4 Table 4 values (`examples/sbl/data/gabls4_reference.csv`)."
+"The GABLS4 Table 4 values with each run's Table 2 grid and the envelopes (`examples/sbl/data/gabls4_reference.csv`)."
 gabls4_reference() = sbl_read_csv(joinpath(SBL_DATA, "gabls4_reference.csv"))
 
 # =========================================================================
@@ -248,11 +250,19 @@ prescribed surface temperature (sampled every minute into a
 `SurfaceTemperatureSeries`; converted to θ with p_s = 972 hPa), the
 log-linear surface functions with β = 5. Perturbations ±0.1 K below 200 m
 and ±0.5 m s⁻¹ in u, v below 200 m (the case was spun up from rest in the
-afternoon). No subsidence (see `examples/sbl/data/gabls2_case.csv`).
+afternoon).
+
+With `subsidence = true` (the default, #248) the case's large-scale
+subsidence is applied to θ from 40 h local time (16 LT 23 October):
+``w_s = -0.005\\,z/1000`` m s⁻¹ below 1 km and −0.005 m s⁻¹ above
+([`gabls2_subsidence`](@ref)), as LargeScaleForcing's `Subsidence` with
+the centred plane-mean gradient. `subsidence = false` is the sensitivity
+run without it.
 """
 function gabls2_case(; N = (48, 48, 80), extent = (2400.0, 2400.0, 1600.0),
                      sgs_stability::Symbol = :brown94, base = StaticSmagorinsky(0.1),
-                     sponge_frac = 0.75, sponge_α = 0.01, seed = 1, t_end = 64 * 3600.0)
+                     sponge_frac = 0.75, sponge_α = 0.01, seed = 1, t_end = 64 * 3600.0,
+                     subsidence::Bool = true)
     T = sbl_case_tables(joinpath(SBL_DATA, "gabls2_case.csv"))
     th = T["theta"]
     tab = sbl_read_csv(joinpath(SBL_DATA, "gabls2_case.csv"))
@@ -269,7 +279,49 @@ function gabls2_case(; N = (48, 48, 80), extent = (2400.0, 2400.0, 1600.0),
                     sgs_stability = sgs_stability, stability = BusingerDyerLogLinear(β = 5.0),
                     sponge_z = sponge_frac * extent[3], sponge_α = sponge_α, seed = seed,
                     θ_init = z -> _sbl_interp(th[:, 1], th[:, 2], z), perturb = pert,
-                    t_start = t0, ρcp = ρ * 1005)
+                    t_start = t0, ρcp = ρ * 1005,
+                    extra_forcing = subsidence ? (gabls2_subsidence(),) : ())
+end
+
+"""
+    gabls2_subsidence() -> Subsidence
+
+The GABLS2 large-scale subsidence (`examples/sbl/data/gabls2_case.csv`,
+from the CLUBB participant set-up): ``w_s = w_1\\,z/z_1`` below
+``z_1 = 1000`` m and ``w_1 = -0.005`` m s⁻¹ above, switched on at
+``t_s = 40`` h local time. The switch is a 1 s linear ramp of a
+height-time `ForcingTable` (`[t_s, t_s + 1]`), so the step means
+integrate it exactly. Applied to θ (the runs are dry) with the centred
+gradient of the plane mean (`form = :mean_gradient`).
+"""
+function gabls2_subsidence()
+    tab = sbl_read_csv(joinpath(SBL_DATA, "gabls2_case.csv"))
+    cst(k) = only(r[3] for r in tab.rows if r[1] == "constant" && r[2] == k)
+    w1, z1, ts = cst("w_s"), cst("z_s"), cst("t_subsidence")
+    w = ForcingTable([0.0, z1], [ts, ts + 1.0], [0.0 0.0; 0.0 w1])
+    return Subsidence(w; fields = (:θ,), form = :mean_gradient)
+end
+
+"""
+    sbl_inversion_height(z, θ; z_min = 300) -> m
+
+The height of the capping inversion of a plane-mean profile `θ` at cell
+centres `z` (uniform spacing): the face of the largest ``∂⟨θ⟩/∂z`` above
+`z_min`, refined by the parabola through that gradient and its two
+neighbours. With `z_min` above the nocturnal surface inversion it is the
+top of the residual layer left by the previous day's mixed layer, which
+large-scale subsidence lowers.
+"""
+function sbl_inversion_height(z, θ; z_min = 300.0)
+    dz = z[2] - z[1]
+    zf = [(z[k] + z[k+1]) / 2 for k in 1:length(z)-1]
+    G = diff(θ) ./ dz
+    ks = [k for k in eachindex(zf) if zf[k] >= z_min]
+    k = ks[argmax(G[ks])]
+    (k == 1 || k == length(G)) && return zf[k]
+    a, b, c = G[k-1], G[k], G[k+1]
+    den = a - 2b + c
+    return den == 0 ? zf[k] : zf[k] + 0.5 * (a - c) / den * dz
 end
 
 "The GABLS2 reference values (`examples/sbl/data/gabls2_reference.csv`)."

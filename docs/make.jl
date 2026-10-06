@@ -20,6 +20,7 @@ makedocs(
         "Home"           => "index.md",
         "Installation"   => "installation.md",
         "Quick start"    => "quickstart.md",
+        "Running the tests" => "testing.md",
         "Theory" => [
             "Overview"                    => "theory/overview.md",
             "Boussinesq equations"        => "theory/boussinesq.md",
@@ -28,7 +29,9 @@ makedocs(
             "Fractional-step projection"  => "theory/fractional_step.md",
             "Smagorinsky-Lilly SGS"       => "theory/sgs.md",
             "Discrete Poisson & FFT"      => "theory/poisson.md",
+            "Stretched vertical grid"     => "theory/stretched_grid.md",
             "Grid nesting: conservative staggered prolongation" => "theory/nesting.md",
+            "Nested time coupling: subcycling and temporal interpolation" => "theory/nesting_time.md",
             "Radiative transfer"          => "theory/radiation.md",
             "Era IV overview: clouds and microphysics" => "theory/era4_overview.md",
             "P3 microphysics"             => "theory/p3.md",
@@ -79,6 +82,7 @@ makedocs(
             "Multiple dispatch on Location" => "design/dispatch.md",
             "Pluggable pressure solvers"  => "design/pressure_solvers.md",
             "The Berlin case"             => "design/berlin_case.md",
+            "Checkpoint / restart and FFT planning" => "design/checkpoint_restart.md",
             "Roadmap"                     => "design/roadmap.md",
             "Long-range roadmap (Eras II–XI)" => "design/longterm_roadmap.md",
         ],
@@ -90,6 +94,7 @@ makedocs(
             "TimeSteppers"         => "api/time_steppers.md",
             "PressureSolvers"      => "api/pressure_solvers.md",
             "Simulations"          => "api/simulations.md",
+            "I/O and checkpoints"  => "api/io.md",
             "Physics modules"      => "api/physics.md",
             "Era II — numerics" => [
                 "Overview"                     => "api/era2.md",

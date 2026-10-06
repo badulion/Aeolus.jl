@@ -419,4 +419,26 @@ end
     @printf("  coincident faces: normal-only refinement max rel diff = %.1e (bitwise); isotropic r×r face mean max rel diff = %.2e\n", worst_bit, worst_mean)
 end
 
+# -------------------------------------------------------------------------
+# Bug caught by N-nest-c (#257): impose_interface overwrote the low-side
+# interior face plane of every velocity component, also along directions
+# that are not nest faces. For a child periodic in x the plane i = Hx+1 is
+# the child's own interior face, so the parent's u was written into the
+# child's interior every step.
+@testset "impose_interface acts only along nest directions" begin
+    pm = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
+    nest = nested_grid(pm, ((0.0, 1.0), (0.0, 1.0), (0.25, 0.75)), 2; halo=(3, 3, 3))
+    cm = nest_child_mesh(nest)
+    psim = BoussinesqSimulation(pm); fill!(psim.u.data, 2.0); fill!(psim.w.data, 0.5)
+    csim = BoussinesqSimulation(cm; bcs=nest_bcs(:periodic, :periodic, :nest),
+                                solver=Aeolus.PressureSolvers.FFTPoissonSolver(cm))
+    fill!(csim.u.data, 1.0); fill!(csim.w.data, 0.0)
+    st = nest_interp_state(nest, psim, csim)
+    interpolate_parent_state!(st, psim, nest; region=:all)
+    apply_nest_boundary!(csim, st; impose_interface=true)
+    ii, jj, kk = interior(cm)
+    @test all(==(1.0), csim.u.data[first(ii), jj, kk])      # x periodic: untouched
+    @test all(==(0.5), csim.w.data[ii, jj, first(kk)])      # z nest: imposed
+end
+
 end # Era II — Nesting operators

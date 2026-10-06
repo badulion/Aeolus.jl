@@ -110,6 +110,13 @@ Aeolus.TimeIntegration.step_adaptive!) before it tries a step. Default
 `nothing` (stateless). A stateful closure returns a deep copy (or copies into
 a buffer it owns) so that [`restore_sgs_state!`](@ref) can roll a rejected
 step back bit for bit.
+
+**Serialisable** (#245): the snapshot must be *self-contained* — plain
+arrays, numbers and tuples of them, and `restore_sgs_state!(c, s)` must read
+nothing but `s` — because a checkpoint stores a deep copy of it and restores
+it into a freshly constructed closure in another process
+([`checkpoint!`](@ref Aeolus.IO.checkpoint!)). Every memory the closure's
+next step reads (not only what `advance_sgs!` writes) belongs in it.
 """
 sgs_state(::AbstractSGSClosure) = nothing
 

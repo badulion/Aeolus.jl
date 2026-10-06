@@ -28,7 +28,7 @@ Run the CBL on an `N × N × N` grid with horizontal spacing `Δ` and vertical
 faces): `e` (SGS TKE), `kres` (resolved TKE), `w2` (resolved ``σ_w^2``),
 `flux` (total heat flux / Q at the w faces: resolved ``⟨w'θ'⟩`` plus the SGS
 ``−⟨κ_t ∂θ/∂z⟩``), `sgs_flux`, `θ`; and the scalars `zi` (height of the
-minimum heat flux), `min_flux_ratio`, `max_sgs_fraction` (of
+minimum heat flux, `boundary_layer_height(zf, flux; method = :min_flux)`), `min_flux_ratio`, `max_sgs_fraction` (of
 ``e/(e + k_{res})`` over ``0.2 < z/z_i < 0.8``), `z_epeak`, `w_star`
 (``(g Q z_i/θ_0)^{1/3}``), `w2max_norm` (``\\max σ_w^2/w_*^2``),
 `z_w2max_norm` (its ``z/z_i``), `clips`, `min_e`, `steps`, `wall` (s).
@@ -77,14 +77,14 @@ function tke_cbl(N::Integer; Δ = 50.0, Δz = Δ, Q = 0.1, T_end = 3600.0, avg =
     P = map(x -> x ./ nacc, acc)
     zc = [(k - 0.5) * m.dz for k in 1:m.Nz]
     zf = [k * m.dz for k in 1:m.Nz-1]
-    kmin = argmin(P.flux)
-    zi = zf[kmin]
+    # the one z_i diagnostic: the height of the minimum total heat flux
+    zi = boundary_layer_height(zf, P.flux; method = :min_flux)
     frac = P.e ./ (P.e .+ P.kres)
     sel = (zc .> 0.2zi) .& (zc .< 0.8zi)
     w_star = cbrt(sim.g_accel / θ₀ * Q * zi)
     kw = argmax(P.w2)
     st = tke_statistics(c)
-    return (; P..., zc, zf, zi, min_flux_ratio = P.flux[kmin],
+    return (; P..., zc, zf, zi, min_flux_ratio = minimum(P.flux),
               max_sgs_fraction = maximum(frac[sel]), sgs_fraction = frac,
               z_epeak = zc[argmax(P.e)], w_star, w2max_norm = P.w2[kw] / w_star^2,
               z_w2max_norm = zc[kw] / zi, clips = st.clips, min_e, steps, wall, N,

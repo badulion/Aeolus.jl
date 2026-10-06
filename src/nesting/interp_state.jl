@@ -88,6 +88,11 @@ names with [`nest_scalar_names`](@ref). Prolongation
 refluxing ([`reflux_scalars!`](@ref)) all iterate over the whole set,
 through the same operator per member — so a tracer initialised equal to
 `θ` stays bit-identical to `θ` through all of them.
+
+`s.measure` is the vertical [`NestMeasure`](@ref) of the set's
+operators: `nothing` (volume) for Boussinesq sims, the reference-mass
+measure for a [`MassWeightedSimulation`](@ref) pair, so prolongation,
+restriction, refluxing and the composite integrals conserve `∫ W φ dV`.
 """
 struct NestInterpState{T, M<:RegularGrid{T}}
     u::Field{FaceX,      T, Array{T,3}, M}
@@ -98,6 +103,7 @@ struct NestInterpState{T, M<:RegularGrid{T}}
     bufs::Vector{_CCField{T,M}}         # parent value interpolated to the child mesh
     child::Vector{Field}                # bound child field per extra scalar
     parent::Vector{Field}               # bound parent field per extra scalar
+    measure::Union{Nothing,NestMeasure} # vertical measure of the operators
 end
 
 const _RESERVED_NEST_NAMES = (:u, :v, :w, :θ, :theta)
@@ -119,16 +125,23 @@ function _check_scalar_pair(nest::NestedGrid, name::Symbol, cf, pf)
 end
 
 """
-    nest_interp_state(nest; scalars=())
+    nest_interp_state(nest; scalars=(), measure=nothing)
     nest_interp_state(nest, parent_sim, child_sim; scalars=())
 
 Allocate a [`NestInterpState`](@ref) on `nest`'s child mesh. The field
 set always holds `u, v, w, θ`. The second form adds `qv` (bound to
-`child_sim.qv` / `parent_sim.qv`) when both simulations carry moisture,
-and errors when only one does. `scalars` adds extra cell-centred
-scalars, `name => (child_field, parent_field)`, in the order given.
+`child_sim.qv` / `parent_sim.qv`) when both Boussinesq simulations carry
+moisture, and errors when only one does. `scalars` adds extra
+cell-centred scalars, `name => (child_field, parent_field)`, in the
+order given.
+
+For two [`MassWeightedSimulation`](@ref)s the state carries the mass
+measure of their shared `ReferenceState` ([`nest_measure`](@ref), which
+asserts that the profile is shared). The sound-proof core has no `qv`
+field, so a moist anelastic nest carries `qv` as a tracer:
+`scalars = (:qv => (child_qv, parent_qv),)`.
 """
-function nest_interp_state(nest::NestedGrid{T}; scalars=()) where {T}
+function nest_interp_state(nest::NestedGrid{T}; scalars=(), measure=nothing) where {T}
     cm = nest.child_mesh
     names = Symbol[]; bufs = _CCField{T,typeof(cm)}[]
     child = Field[]; parent = Field[]
@@ -145,16 +158,39 @@ function nest_interp_state(nest::NestedGrid{T}; scalars=()) where {T}
     end
     return NestInterpState(Field(FaceX(), cm), Field(FaceY(), cm),
                            Field(FaceZ(), cm), Field(CellCenter(), cm),
-                           names, bufs, child, parent)
+                           names, bufs, child, parent, measure)
 end
 
-function nest_interp_state(nest::NestedGrid, psim::BoussinesqSimulation,
-                           csim::BoussinesqSimulation; scalars=())
-    psim.has_moisture == csim.has_moisture ||
-        error("nest_interp_state: parent has_moisture = $(psim.has_moisture) but child " *
-              "has_moisture = $(csim.has_moisture); a nest must carry qv on both grids or " *
+function nest_interp_state(nest::NestedGrid, psim::MassWeightedSimulation,
+                           csim::MassWeightedSimulation; scalars=())
+    return nest_interp_state(nest; scalars, measure=nest_measure(nest, psim, csim))
+end
+
+# The measure of a pair of simulations: volume for Boussinesq, the
+# (cached, profile-checked) mass measure for sound-proof sims.
+_sim_measure(nest, ::BoussinesqSimulation, ::BoussinesqSimulation) = nothing
+_sim_measure(nest, p::MassWeightedSimulation, c::MassWeightedSimulation) =
+    nest_measure(nest, p, c)
+_sim_measure(nest, p, c) =
+    error("nesting: parent ($(nameof(typeof(p)))) and child ($(nameof(typeof(c)))) " *
+          "must be the same kind of simulation")
+
+# Same dynamical-core family (the pairs the restriction / feedback and the
+# mass measure are defined for).
+_same_core(::BoussinesqSimulation, ::BoussinesqSimulation) = true
+_same_core(::MassWeightedSimulation, ::MassWeightedSimulation) = true
+_same_core(p, c) = false
+
+# A Boussinesq pair, or a mixed pair (e.g. a Boussinesq parent providing
+# one-way boundary data to a sound-proof child, see NestedRun): volume
+# measure. A sound-proof pair is the more specific method above.
+function nest_interp_state(nest::NestedGrid, psim::_NestSim,
+                           csim::_NestSim; scalars=())
+    _moist(psim) == _moist(csim) ||
+        error("nest_interp_state: parent has_moisture = $(_moist(psim)) but child " *
+              "has_moisture = $(_moist(csim)); a nest must carry qv on both grids or " *
               "on neither")
-    moist = psim.has_moisture ? (:qv => (csim.qv, psim.qv),) : ()
+    moist = _moist(psim) ? (:qv => (csim.qv, psim.qv),) : ()
     return nest_interp_state(nest; scalars=(moist..., scalars...))
 end
 
@@ -195,19 +231,23 @@ Interpolate every member of `state`'s field set from the parent onto the
 child mesh: `parent_sim`'s `u, v, w, θ`, plus each bound scalar's parent
 field (`qv`, tracers). `region=:all` fills the whole child field (needed
 for the sponge); `region=:halo` fills only halos. Parent halos are filled
-first (scalars with `parent_sim.θ_bcs`, as `step!` does for `qv`).
+first (scalars with `parent_sim.θ_bcs`, as `step!` does for `qv`). The
+operators use the state's vertical measure (`s.measure`): the parent's
+actual face heights on a stretched parent, the reference mass for a
+sound-proof pair.
 """
-function interpolate_parent_state!(s::NestInterpState, psim::BoussinesqSimulation,
+function interpolate_parent_state!(s::NestInterpState, psim::_NestSim,
                                    nest::NestedGrid; order::Int=3,
                                    region::Symbol=:all)
     fill_halos!(psim.u, psim.bcs); fill_halos!(psim.v, psim.bcs)
     fill_halos!(psim.w, psim.bcs)
-    _interp_child!(s.u, psim.u, nest; order, region)
-    _interp_child!(s.v, psim.v, nest; order, region)
-    _interp_child!(s.w, psim.w, nest; order, region)
+    meas = s.measure
+    _interp_child!(s.u, psim.u, nest; order, region, measure=meas)
+    _interp_child!(s.v, psim.v, nest; order, region, measure=meas)
+    _interp_child!(s.w, psim.w, nest; order, region, measure=meas)
     for (_, buf, _, pf) in _scalar_entries(s, psim, nothing)
         fill_halos!(pf, psim.θ_bcs)
-        _interp_child!(buf, pf, nest; order, region)
+        _interp_child!(buf, pf, nest; order, region, measure=meas)
     end
     return s
 end
@@ -223,19 +263,51 @@ function _blend_state!(dst::NestInterpState, a::NestInterpState,
     return dst
 end
 
-function _copy_halo!(dst::Field, src::Field; interface::Bool=false)
+# Write `val(i, j, k)` into every halo cell of `dst` (and, with
+# `interface = true`, into its boundary-normal interior face plane). The
+# interior is skipped row by row, so the cost is that of the halo.
+function _halo_map!(val::F, dst::Field, interface::Bool) where {F}
     m = dst.mesh
     ii, jj, kk = interior(m)
     loc = location(dst)
-    dd = dst.data; sd = src.data
-    @inbounds for k in axes(dd, 3), j in axes(dd, 2), i in axes(dd, 1)
-        if (i in ii) && (j in jj) && (k in kk)
-            (interface && _interface_plane(loc, m, i, j, k)) || continue
+    dd = dst.data
+    i_lo = first(axes(dd, 1)):first(ii)-1
+    i_hi = last(ii)+1:last(axes(dd, 1))
+    @inbounds for k in axes(dd, 3), j in axes(dd, 2)
+        if (j in jj) && (k in kk)
+            for i in i_lo; dd[i, j, k] = val(i, j, k); end
+            for i in i_hi; dd[i, j, k] = val(i, j, k); end
+            if interface
+                for i in ii
+                    _interface_plane(loc, m, i, j, k) && (dd[i, j, k] = val(i, j, k))
+                end
+            end
+        else
+            for i in axes(dd, 1); dd[i, j, k] = val(i, j, k); end
         end
-        dd[i, j, k] = sd[i, j, k]
     end
     return dst
 end
+
+function _copy_halo!(dst::Field, src::Field; interface::Bool=false)
+    sd = src.data
+    return _halo_map!((i, j, k) -> sd[i, j, k], dst, interface)
+end
+
+# Halo of `dst` ← (1-τ)·a + τ·b: the boundary data at the blend fraction τ
+# of a parent step (τ outside [0, 1] extrapolates linearly).
+function _blend_halo!(dst::Field, a::Field, b::Field, τ::Real; interface::Bool=false)
+    ad = a.data; bd = b.data
+    T = eltype(dst.data)
+    τ1 = one(T) - T(τ); τT = T(τ)
+    return _halo_map!((i, j, k) -> τ1 * ad[i, j, k] + τT * bd[i, j, k], dst, interface)
+end
+
+# The velocity components whose boundary-normal interior plane a nest may
+# impose: only along a direction whose low face is a nest face. On a
+# periodic (or wall) direction the plane is the child's own interior face.
+_nest_dirs(sim) = (sim.bcs.west isa NestBC, sim.bcs.south isa NestBC,
+                   sim.bcs.bottom isa NestBC)
 
 """
     apply_nest_boundary!(child_sim, state; impose_interface=false)
@@ -244,13 +316,15 @@ Write the interpolated parent `state` into the halo cells of every member
 of the field set: `child_sim`'s `u, v, w, θ` and each bound scalar's
 child field. With `impose_interface=true` the velocities'
 boundary-normal interior face planes are overwritten too (Dirichlet
-inflow faces).
+inflow faces) — along the directions whose faces are nest faces
+(`NestBC`) only.
 """
-function apply_nest_boundary!(csim::BoussinesqSimulation, s::NestInterpState;
+function apply_nest_boundary!(csim::_NestSim, s::NestInterpState;
                               impose_interface::Bool=false)
-    _copy_halo!(csim.u, s.u; interface=impose_interface)
-    _copy_halo!(csim.v, s.v; interface=impose_interface)
-    _copy_halo!(csim.w, s.w; interface=impose_interface)
+    dx, dy, dz = _nest_dirs(csim)
+    _copy_halo!(csim.u, s.u; interface=impose_interface && dx)
+    _copy_halo!(csim.v, s.v; interface=impose_interface && dy)
+    _copy_halo!(csim.w, s.w; interface=impose_interface && dz)
     for (_, buf, cf, _) in _scalar_entries(s, nothing, csim)
         _copy_halo!(cf, buf)
     end
@@ -277,7 +351,7 @@ Relax the child solution toward `parent_interp` inside the sponge zone:
 Applied to every member of the field set (`u, v, w, θ`, `qv`, tracers).
 Call once per child substep, after `step!`.
 """
-function apply_nest_sponge!(csim::BoussinesqSimulation, s::NestInterpState,
+function apply_nest_sponge!(csim::_NestSim, s::NestInterpState,
                             sp::NestSponge; dt::Real=1.0)
     cm = csim.mesh
     αdt = sp.α_max * dt
