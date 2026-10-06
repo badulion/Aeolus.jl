@@ -173,17 +173,75 @@ planes.
 ## Secondary circulation
 
 Hellsten et al. (2021, §4.1, Fig. 8) found that two-way nests of a
-convective boundary layer develop a spurious secondary circulation: the
-better-resolved child transports heat differently from the parent, the
-anterpolated parent region becomes a heat island or sink for the parent,
-and a mean updraft of 0.4–0.9 m/s forms over the child. Anterpolation is
-exactly what makes the parent feel the child's different mixing, so this
-is a property of two-way nesting, not a defect of one scheme; the buffer
-zone and the canopy restriction weaken it. This is one reason the Berlin
-default is one-way.
+convective boundary layer develop a secondary circulation: a mean updraft
+of 0.4–0.9 m/s over the child, subsidence around it. They exclude
+differential surface heating (the surface flux is prescribed in both
+domains) and attribute it to "a slightly different divergence of the
+vertical heat flux between the region occupied by the child domain and the
+remaining parent domain due to different grid spacing". Anterpolation is
+exactly what makes the parent feel that difference, so this is a property
+of two-way nesting, not a defect of one scheme.
 
-The suite measures the child-mean ``w`` at 400 m in the scaled CBL for
-one-way and two-way (a measurement, not a target; see below).
+Our two-way CBL nests show a **mean descent** over the child instead
+(−0.36 m/s in the suite's single run, −0.42 m/s in the 4 h benchmark).
+#327 (M5) investigated whether that is a bug or a sampling artefact, with
+reduced runs (parent at 100 m, 2 h, the 2nd hour averaged, 4–6 seeds per
+configuration, paired one-way/two-way runs from the same initial noise;
+≈ 70 min of runs in total):
+
+| configuration (child; parent periodic, 100 m) | two-way − one-way child-mean ``w`` at mid-depth | two-way covered − outside parent ``θ``, lower half |
+| :-- | :-- | :-- |
+| suite case: 1.2 km × 800 m at r = 3, top in the entrainment zone (6 seeds) | −0.163 ± 0.057 m/s (all 6 < 0) | −0.030 ± 0.007 K |
+| larger child: 2.4 km × 800 m at r = 3 in a 6.4 km parent (4 seeds) | −0.091 ± 0.017 m/s | −0.038 ± 0.003 K |
+| Hellsten-like: 2.4 km × 500 m (top mid-CBL), r = 2, lapse-rate start (4) | −0.084 ± 0.019 m/s | −0.023 ± 0.003 K |
+| child top above the CBL: 1.2 km × 1200 m, r = 3 (4) | −0.189 ± 0.053 m/s | −0.026 ± 0.007 K |
+| child top above the CBL: 2.4 km × 1200 m, r = 2 (4) | −0.058 ± 0.011 m/s | −0.031 ± 0.003 K |
+| **r = 1**, suite geometry (4) | +0.034 ± 0.062 m/s | +0.009 ± 0.006 K |
+| **r = 1**, Hellsten-like geometry (4) | −0.011 ± 0.011 m/s | +0.003 ± 0.002 K |
+| **r = 1**, top above the CBL (4) | +0.007 ± 0.044 m/s | +0.003 ± 0.003 K |
+| suite case, buffer 0 / 4 instead of 2 (4) | −0.219 ± 0.026 / −0.174 ± 0.051 m/s | −0.029 / −0.021 K |
+| suite case, no refluxing (4) | −0.199 ± 0.073 m/s | −0.024 K |
+| suite case, no interface flux correction (4) | identical to the default run | |
+
+(Means ± standard errors over the seeds; the one-way child mean, which the
+parent never sees, averages to zero within its error in every
+configuration, e.g. −0.002 ± 0.061 m/s in the suite case.) Standalone
+periodic CBLs of the suite case, which hold the same heat at every
+resolution (column integrals equal to 2e-4), are **cooler below 800 m at
+the child's spacing than at the parent's**: −0.080 K at 33 m against 100 m
+(and −0.044 K below 500 m at 50 m against 100 m for the lapse-rate start);
+the finer CBL carries more of the surface heat into its entrainment zone.
+
+What this shows:
+
+* the descent is **not a sampling artefact**: it is systematic across
+  seeds, child sizes and child depths;
+* it is **not produced by the coupling machinery**: with r = 1 (the same
+  physics on both grids) there is no circulation in any geometry, and the
+  buffer width (0, 2, 4), refluxing (on or off) and the interface flux
+  correction (a no-op in this case: the prolongation is flux-conserving, so
+  the child's interface flux already is the parent's) do not change its
+  sign. The anterpolation weighting is the volume-weighted child mean of
+  Clark & Farley (1984) and Hellsten et al. (2021, Eq. 15);
+* it is **thermally direct** and has the sign of the resolution
+  dependence: the anterpolated column takes the child's cooler lower CBL,
+  is heavier than its surroundings, and sinks. A child top above the CBL
+  does not remove it. This is the mechanism Hellsten et al. propose, with
+  the sign set by how the model's CBL changes with grid spacing; in
+  Aeolus's numerics (centred advection, Smagorinsky) a finer CBL is cooler
+  below the inversion, and a mean descent over the child is the physical
+  response of a two-way nest to that. The opposite sign in PALM implies its
+  finer child was warmer; we have not run PALM's numerics to confirm this.
+
+So the two-way coupling is conservative, stable and free of a
+coupling-made circulation, but the secondary circulation of a convective
+two-way nest is real and set-up dependent (≈ 0.05–0.2 m/s of descent here,
+growing with the resolution contrast and shrinking with the child's
+size). Two-way nesting is **not validated against** Hellsten et al.'s
+circulation; it reproduces their mechanism, not their sign. This is one
+reason the Berlin default is one-way. `test/era2_nest_twoway_longrun.jl`
+asserts that the suite run's circulation is thermally direct and that the
+standalone CBL is cooler at the child's spacing.
 
 ## Measured behaviour
 
@@ -203,7 +261,7 @@ From `test/era2_nest_twoway.jl` and `test/era2_nest_twoway_longrun.jl`.
 | child-only 50 MW heat source: one-way parent vs standalone | bit-identical | |
 | the same, two-way: parent θ excess vs ``Qt/ρc_p`` − child content | 6.4e-11 | < 1e-10 |
 
-### Long runs (`test/era2_nest_twoway_longrun.jl`, ≈ 270 s)
+### Long runs (`test/era2_nest_twoway_longrun.jl`, ≈ 240 s on an idle core)
 
 | case | measured |
 | :-- | :-- |
@@ -212,7 +270,9 @@ From `test/era2_nest_twoway.jl` and `test/era2_nest_twoway_longrun.jl`.
 | largest child divergence, every step | 8.7e-17 s⁻¹ |
 | composite θ budget (after 30 min) | 9.8e-14 (one-way, which does not conserve it: 1.0e-2) |
 | 2Δ θ mode on the parent rows crossing the nest | 4.7e-3 K → 4.2e-3 K over the 2nd hour, growth −0.064 ± 0.031 h⁻¹ |
-| child-mean ``w`` at 400 m, 2nd hour | one-way −0.164 m/s, two-way −0.358 m/s |
+| child-mean ``w`` at 400 m, 2nd hour | one-way −0.164 m/s, two-way −0.358 m/s (one realisation; see the ensemble above) |
+| covered − outside parent ``θ`` below 400 m, 2nd hour | one-way −0.017 K, two-way −0.063 K (thermally direct: asserted) |
+| standalone CBL (1.6 km box), mean ``θ`` below 800 m, 33 m − 100 m | −0.087 K at equal column heat (asserted < −0.03 K) |
 | forced neutral flow (Kolmogorov, 16³ parent, r = 2), 61 eddy turnovers | KE of turnovers −40…−20 vs −20…0: ratio 1.011 |
 | outgoing Lamb–Oseen vortex harness (N-open-c), two-way, 2000 steps | child kinetic energy within 1.2e-6 of a standalone parent |
 
@@ -236,15 +296,12 @@ The two-way run meets "last hour within 20 % of the hour before"; the
 one-way run, whose CBL still deepens, does not (1.217).
 
 The child-mean ``w`` of a single run is dominated by where the few
-largest thermals happen to be: the child covers about one convective
-cell (1.2 km against ``1.5 z_i ≈ 1.2``–1.5 km), and the one-way run,
-which has no secondary circulation, shows −0.16 m/s (2nd hour, 100 m) and
-−0.25 m/s (4th hour, 50 m). The two-way runs give −0.36 and −0.42 m/s: a
-mean descent over the child about twice the one-way value, of the
-magnitude but the opposite sign of the 0.4–0.9 m/s mean updraft Hellsten
-et al. (2021) report. One realisation with a one-cell child cannot
-separate a circulation from the thermal statistics; an ensemble or a
-larger child would.
+largest thermals happen to be (the child covers about one convective
+cell): the one-way runs show −0.16 m/s (2nd hour, 100 m) and −0.25 m/s
+(4th hour, 50 m) although nothing feeds back. The ensemble of the previous
+section separates the two: the one-way mean is zero within its error, the
+two-way descent is systematic and comes from the resolution dependence of
+the CBL.
 
 Two expectations of the issue did not hold as stated, for physical
 reasons, and the tests say so: the kinetic energy of a CBL deepening under
