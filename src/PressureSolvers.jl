@@ -7,6 +7,7 @@ using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields
 using ..Fields: Field
 using ..BoundaryConditions: FieldBoundaryConditions, axis_poisson_bc
+using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
 
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!, poisson_axis_bcs
@@ -74,8 +75,8 @@ function FFTPoissonSolver(mesh::RegularGrid{T}) where {T}
 
     src = zeros(T, Nx, Ny, Nz)
     hat = zeros(Complex{T}, div(Nx, 2) + 1, Ny, Nz)
-    forward_plan = plan_rfft(src; flags = FFTW.MEASURE)
-    inverse_plan = plan_irfft(hat, Nx; flags = FFTW.MEASURE)
+    forward_plan = plan_rfft(src; flags = fftw_planner_flags())
+    inverse_plan = plan_irfft(hat, Nx; flags = fftw_planner_flags())
 
     kx² = [ 4/dx^2 * sin(π * (m - 1) / Nx)^2 for m in 1:div(Nx, 2) + 1 ]
     ky² = [ 4/dy^2 * sin(π * (m - 1) / Ny)^2 for m in 1:Ny ]
@@ -234,13 +235,13 @@ function CosineFFTPoissonSolver(mesh::RegularGrid{T};
     hat_buf = isempty(pdims) ? nothing : zeros(Complex{T}, nhat...)
 
     plan_dct_fwd = isempty(ndims_) ? nothing :
-        FFTW.plan_r2r(real_buf, FFTW.REDFT10, ndims_; flags = FFTW.MEASURE)
+        FFTW.plan_r2r(real_buf, FFTW.REDFT10, ndims_; flags = fftw_planner_flags())
     plan_dct_inv = isempty(ndims_) ? nothing :
-        FFTW.plan_r2r(real_buf, FFTW.REDFT01, ndims_; flags = FFTW.MEASURE)
+        FFTW.plan_r2r(real_buf, FFTW.REDFT01, ndims_; flags = fftw_planner_flags())
     plan_fft_fwd = isempty(pdims) ? nothing :
-        FFTW.plan_rfft(real_buf, pdims; flags = FFTW.MEASURE)
+        FFTW.plan_rfft(real_buf, pdims; flags = fftw_planner_flags())
     plan_fft_inv = isempty(pdims) ? nothing :
-        FFTW.plan_irfft(hat_buf, N[pdims[1]], pdims; flags = FFTW.MEASURE)
+        FFTW.plan_irfft(hat_buf, N[pdims[1]], pdims; flags = fftw_planner_flags())
 
     kx² = _k2(dx, Nx, nhat[1], bc_x)
     ky² = _k2(dy, Ny, nhat[2], bc_y)

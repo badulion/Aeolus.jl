@@ -171,9 +171,10 @@ Keywords:
     relaxation of every member of the field set toward the time-blended
     parent after each child substep, on the child's open faces only
     ([`nest_open_sides`](@ref));
-  * `solid` (`nothing`) — the child's solid mask (a `SolidMask` or a
-    `Bool` array); open faces inside solids get `u·n = 0` and are left
-    out of the mass-flux correction ([`NestBoundaryData`](@ref));
+  * `solid` (`nothing`) — the child's IBM [`SolidMask`](@ref) (or a
+    `Bool` array). Open faces inside solids get `u·n = 0` and are left
+    out of the mass-flux correction ([`NestBoundaryData`](@ref)), and the
+    two-way restriction is solid-aware ([`restrict_state_to_parent!`](@ref));
   * `max_retries` (3), `divergence_tol` (`Inf`, parent only, through
     `max_divergence`), `max_velocity` (`Inf`), `validate` (true) — the
     step-rejection test, as in
@@ -184,6 +185,11 @@ Keywords:
     changes the parent);
   * `record` (true) — write the two-way conservation ledger
     ([`nest_conservation_error`](@ref)).
+
+Two-way feedback needs parent and child of the same core family (two
+Boussinesq sims, or two `MassWeightedSimulation`s sharing one
+`ReferenceState`, whose transfers then use the reference-mass measure
+[`nest_measure`](@ref)); a mixed pair can only be nested one-way.
 
 **Boundary conditions.** The child must be built with
 [`nest_bcs`](@ref)`(child_mesh, …; moisture, scalars)` naming the same
@@ -228,6 +234,7 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     validate::Bool
     reuse_boundary::Bool
     record::Bool
+    solid::Any                     # child solid mask for the restriction (or nothing)
     synced::Bool                   # the child runs on the parent's clock
     # clock and the current parent-step window [t0, t0 + Δt]
     t::Float64
@@ -266,6 +273,10 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
         error("NestedRun: feedback must be :one_way or :two_way, got :$feedback")
     sync in (:subcycle, :shared_min_dt) ||
         error("NestedRun: sync must be :subcycle or :shared_min_dt, got :$sync")
+    feedback === :two_way && !_same_core(parent, child) &&
+        error("NestedRun: two-way feedback needs parent and child of the same kind " *
+              "(got $(nameof(typeof(parent))) and $(nameof(typeof(child)))); " *
+              "use feedback = :one_way")
     sync === :shared_min_dt && (cfl_parent === nothing || cfl_child === nothing) &&
         error("NestedRun: sync = :shared_min_dt needs cfl_parent and cfl_child")
     size(parent.θ.data) == totalsize(nest.parent_mesh) ||
@@ -294,7 +305,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                     cfl_parent, cfl_child, feedback, sync, order, region, sp, data,
                     flux_correction, ns, Int(max_retries),
                     Float64(divergence_tol), Float64(max_velocity), validate,
-                    reuse_boundary, record, check_clocks, t, t, 0.0, NaN, nothing, nothing,
+                    reuse_boundary, record, solid, check_clocks, t, t, 0.0, NaN, nothing, nothing,
                     Float64(child.t), 0.0, NestRunStats())
     return run
 end
@@ -605,15 +616,17 @@ end
 
 function _two_way_feedback!(run::NestedRun)
     p = run.parent; c = run.child; nest = run.nest
-    restrict_state_to_parent!(p, c, nest, run.s_bc)
-    e_before = _interface_imbalance(p, c, nest)
+    restrict_state_to_parent!(p, c, nest, run.s_bc; solid=run.solid)
+    meas = run.s_bc.measure
+    e_before = _interface_imbalance(p, c, nest, meas)
     if run.flux_correction
-        apply_flux_correction!(p.u, compute_nest_flux_mismatch(p.u, c.u, nest), nest)
-        apply_flux_correction!(p.v, compute_nest_flux_mismatch(p.v, c.v, nest), nest)
-        apply_flux_correction!(p.w, compute_nest_flux_mismatch(p.w, c.w, nest), nest)
+        for (pu, cu) in ((p.u, c.u), (p.v, c.v), (p.w, c.w))
+            apply_flux_correction!(pu, compute_nest_flux_mismatch(pu, cu, nest; measure=meas),
+                                   nest; measure=meas)
+        end
     end
     if run.record
-        nest.ledger[:mass] = _interface_imbalance(p, c, nest)
+        nest.ledger[:mass] = _interface_imbalance(p, c, nest, meas)
         nest.ledger[:mass_before_correction] = e_before
     end
     return run
@@ -651,6 +664,13 @@ scalar of the set are recorded in `nest.ledger`; read them with
 `nest_interp_state(nest, parent_sim, child_sim; scalars)`) to avoid
 re-allocating the boundary buffers every step; it then defines the field
 set and `scalars` is ignored.
+
+The parent may be z-stretched (a `BoussinesqSimulation` on a
+`StretchedGrid`). Both sims may instead be
+[`MassWeightedSimulation`](@ref)s sharing one `ReferenceState` profile:
+every transfer then uses the reference-mass measure
+([`nest_measure`](@ref)) and the ledger records `∫ W φ dV`. `solid`
+(the child's IBM mask) makes the restriction solid-aware.
 """
 function step_nested!(psim::_NestSim, csim::_NestSim, nest::NestedGrid, dt::Real;
                       substeps::Union{Nothing,Integer}=nothing,

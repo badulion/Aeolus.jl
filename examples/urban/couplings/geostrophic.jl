@@ -10,7 +10,15 @@
 #   mode = :nudging            Rayleigh relaxation of the horizontal-mean
 #                              wind toward (U_g, V_g) on τ (s): the case's
 #                              behaviour before #171, now
-#                              LargeScaleForcing.GeostrophicNudging.
+#                              LargeScaleForcing.GeostrophicNudging, which
+#                              since #248 is a constructor of the generic
+#                              plane-mean ProfileNudging (one nudging
+#                              implementation; bit for bit the former code).
+#
+# θ/qv nudging and large-scale subsidence (ProfileNudging, Subsidence,
+# #248) belong to the deep parent run (N-parent-e, #259), not to this
+# coupling: the nested child gets its top and lateral θ/q from the parent,
+# so nudging it as well would apply the large scale twice.
 #
 # The core's Rayleigh sponge (top 25 %, α_max = 0.05 s⁻¹) relaxes u, v
 # toward zero. Against a pressure gradient that is a momentum sink of
@@ -126,8 +134,16 @@ function smoke_check(c::GeostrophicCoupling, case)
         # every level is relaxed toward (U_g, V_g) at rate 1/τ, so the
         # domain-mean tendency is −(⟨u⟩ − U_g)/τ: toward the target, never away
         τ = c.forcing.τ
+        # the tendency integrals ProfileNudging returns, over the domain
+        # volume, are the domain-mean tendency measured above
+        I = tendency_integrals(c.forcing)
+        V = sim.mesh.Lx * sim.mesh.Ly * sim.mesh.Lz
         return ["nudging tendency = −(⟨u⟩ − U_g)/τ" =>
-                    abs(c.dtu + (c.ū - c.U_g) / τ) <= tol / τ && abs(c.dtv + (c.v̄ - c.V_g) / τ) <= tol / τ]
+                    abs(c.dtu + (c.ū - c.U_g) / τ) <= tol / τ && abs(c.dtv + (c.v̄ - c.V_g) / τ) <= tol / τ,
+                "one nudging implementation (ProfileNudging), integrals = mean tendency × volume" =>
+                    c.forcing isa ProfileNudging && keys(I) == (:u, :v) &&
+                    isapprox(I.u / V, c.dtu; rtol = 1e-10, atol = 1e-14) &&
+                    isapprox(I.v / V, c.dtv; rtol = 1e-10, atol = 1e-14)]
     end
 end
 

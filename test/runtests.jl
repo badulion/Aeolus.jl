@@ -1,5 +1,15 @@
+# Test selection (#316): AEOLUS_TEST_TIER=fast|full (default fast) picks
+# files by the tags in test_tags.toml; test/run.jl runs them in parallel.
+# The include list below stays the single list. See docs/src/testing.md.
+isdefined(Main, :AeolusTestSelection) || Base.include(Main, joinpath(@__DIR__, "runner", "selection.jl"))
+Main.AeolusTestSelection.serial_entry(@__FILE__) && exit()
+
 using Test
 using Random
+# #245: the suite plans every FFT with FFTW.ESTIMATE (deterministic, so bitwise
+# comparisons hold across processes, and planning is fast). Set before
+# `using Aeolus`; subprocesses the tests start inherit it.
+ENV["AEOLUS_FFTW_PLANNER"] = "estimate"
 using Statistics: mean
 using Aeolus
 using Aeolus.Grids: xnodes, ynodes, znodes, interior
@@ -791,7 +801,7 @@ using Aeolus.Fields: set!, interior_view
         @test θ1 ≈ 305.0 atol=1e-8
     end
 
-    @testset "I/O: snapshot round-trip" begin
+    @testset "I/O: snapshot round-trip; snapshots are not restart files (#245)" begin
         mesh = RegularGrid(; size=(8,8,8), extent=(1.0,1.0,1.0), halo=(2,2,2))
         sim1 = BoussinesqSimulation(mesh; ν=1e-3, θ₀=300.0)
         Random.seed!(11)
@@ -800,14 +810,23 @@ using Aeolus.Fields: set!, interior_view
         sim1.t = 42.0
         path = tempname() * ".jls"
         write_snapshot(path, sim1)
-
+        d = read_snapshot(path)
+        @test d[:t] == 42.0
+        @test d[:u] == interior_view(sim1.u) && d[:θ] == interior_view(sim1.θ)
+        # Maintainer decision on #245: an unversioned snapshot is refused by
+        # restart! (it has no closure memory, halos or stepper state). The
+        # pre-#245 expectation here (restart! from write_snapshot) is retired.
         sim2 = BoussinesqSimulation(mesh; ν=1e-3, θ₀=300.0)
+        @test_throws ArgumentError restart!(sim2, path)
+        # the versioned checkpoint round-trips, halos included
+        checkpoint!(sim1, path)
         restart!(sim2, path)
         @test sim2.t == 42.0
-        @test all(interior_view(sim2.u) .== interior_view(sim1.u))
-        @test all(interior_view(sim2.θ) .== interior_view(sim1.θ))
+        @test sim2.u.data == sim1.u.data && sim2.θ.data == sim1.θ.data
         rm(path)
     end
+
+    include("io_checkpoint.jl")   # #245: full-state checkpoints, bitwise restart, FFTW policy
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"
@@ -871,12 +890,14 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
 @testset "Era II" begin
     include("era2_cutcell.jl")     # Phases 21-22  cut-cell IBM, ghost cells
     include("era2_stretched.jl")   # Phase  24     stretched / terrain-following
+    include("era2_stretched_boussinesq.jl") # #151 Boussinesq core + Poisson on a StretchedGrid
     include("era2_timeint.jl")     # Phases 23, 25 adaptive dt, IMEX
     include("era2_advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
     include("era2_anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
     include("era2_multigrid.jl")   # Phase  29     geometric multigrid
     include("era2_sgs_numerics.jl") # #132         dynamic Smagorinsky, step! operator swap-ins
     include("era2_nesting.jl")     # Phase  30     parent-child nesting operators (#250)
+    include("era2_nesting_conservative.jl") # #256 stretched parent, mass-weighted, solid-aware nesting
     include("era2_amr.jl")         # Phases 30-31  nesting, AMR
     include("era2_nested_run.jl")  # Phase  30     NestedRun time coupling (#257)
     include("era2_nest_boundary.jl") # Phase 30   one-way nest boundary data (#261)
@@ -970,18 +991,23 @@ end
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
     include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
     include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)
+    include("era6_nudging_subsidence.jl") # N-parent-c: plane-mean nudging of u, v, θ, qv; large-scale subsidence (#248)
     include("era6_scalar_sgs_diffusion.jl") # P56-a: SGS diffusion of qv and tracers with κ_t, solid mask (#177)
     include("era6_neutral_abl.jl")       # P54-d: half-channel ABL / channel harness + Φ_m, stress, E11 (#174)
     include("era6_amd_vreman.jl")        # P55-d: AMD and Vreman closures (#176)
     include("era6_apriori_sgs.jl")       # Phase 56  a-priori SGS stress, filtered-DNS fixture (#178)
     include("era6_transition_kh.jl")       # Phase 59 Transition diagnostics, KH / Miles-Howard (#180)
     include("era6_tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
+    include("era6_tke_stretched.jl")     # N-parent-e: the TKE closure on a StretchedGrid, dual on stretched levels (#259)
+    include("era6_tke_facades.jl")       # #232: TKE shear production at wall-modelled facades
     include("era6_reynolds_stress.jl")   # P56-d: differential SGS Reynolds-stress closure (#188)
     include("era6_sgs_validation.jl")    # P56-e: TKE and RSM against filtered DNS (#192)
     include("era6_wall_models_channel.jl") # P57-b: matching height, time / wall-parallel input filters, LLM (#183)
     include("era6_wall_models_tble.jl")  # P57-c: non-equilibrium (TBLE) wall model, dynamic κ (#189)
     include("era6_sigma_sgs.jl")         # P59-b σ-model closure: invariants, z³ wall scaling, Couette, HIT (#184)
     include("era6_flat_plate.jl")        # P59-d flat-plate BL: fringe, Blasius, FST, transition (#185)
+    include("era6_synthetic_inflow.jl")  # N-inflow-a: digital-filter inflow, Lund transform (#252)
+    include("era6_inflow_statistics.jl")  # N-inflow-b: Reynolds stresses, lengths, times for the inflow (#258)
     include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected, Ri_g-dependent anisotropic ν/κ (#187)
     include("era6_wall_models_dynamic.jl") # P57-e: dynamic z0 of partially resolved roughness (#190)
     include("era6_gabls1.jl")            # P55-f: GABLS1 on the shared SBL driver, reduced (#191)
@@ -989,8 +1015,11 @@ end
     include("era6_collapse.jl")            # P58-e: maximum sustainable heat flux, LES collapse regime (#193)
     include("era6_gabls3.jl")            # P58-d: GABLS3 on the SBL driver: budgets, MOST, LLJ (#194)
     include("era6_relaminarisation.jl")  # P59-e: laminar stratified flow, decaying stratified turbulence, criteria (#195)
+    include("era6_deep_top.jl")          # N-parent-b: θ damping toward a profile, fixed-gradient θ top (#254)
     include("era6_open_pressure.jl")     # N-open-a: per-axis Neumann Poisson solves, BC-aware default solver (#251)
     include("era6_open_boundaries.jl")   # N-open-b: open faces, boundary-data contract, mass-flux correction (#255)
+    include("era6_outflow_conditions.jl") # N-open-c: convective / Orlanski outflow, boundary_scalar_flux, outgoing vortex (#260)
+    include("era6_sounding.jl")          # N-parent-a: Lindenberg sounding → (z, t) profiles, boundary_layer_height (#247)
 end
 
 # =========================================================================
@@ -1001,9 +1030,13 @@ end
     include("berlin_surface_exchange.jl") # MOST fluxes, soil ground, roof-aware air level, drag (#129)
     include("berlin_coverage.jl")        # every Aeolus module coupled, exempt or pending (#127)
     include("berlin_smoke.jl")           # every coupling and option, 12 steps, ledgers close (#127)
+    include("berlin_air_heat.jl")        # air-heat ledger: meter, closed box, H₀ = 100 W/m², night window (#253)
     include("berlin_sw_modifiers.jl")    # tree shade / cloud shadow once per radiation field; scene class map (#128)
     include("berlin_moist.jl")           # reference state, moist buoyancy, fog enthalpy (#131)
     include("berlin_chemistry.jl")       # NOx–O3–VOC on tracers, r_a-based dry / wet deposition (#135)
     include("berlin_numerics.jl")        # pressure solver, SGS, advection slots (#132)
     include("berlin_dynamics.jl")        # core / timestepper slots: anelastic, adaptive, IMEX (#133)
+    include("berlin_parent_surface.jl")  # parent tiled surface: OSM 6 km mosaic, Macdonald roughness, footprint (#249)
+    include("berlin_parent_smoke.jl")    # parent case: every forcing, 12 steps, heat and water ledgers close (#259)
+    include("berlin_parent.jl")          # parent case: encroachment, Wangara, core sensitivity (24 h Lindenberg: examples/urban/berlin_parent_lindenberg_check.jl, #315) (#259)
 end

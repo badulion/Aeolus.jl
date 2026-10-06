@@ -69,9 +69,14 @@ const BC = Main.BerlinCase
         @test all(==(0), Δθ[.!at_air]) && all(==(0), Δq[.!at_air])
         nsolid = count(I -> g.sm.mask[Hx+I[1], Hy+I[2], Hz+I[3]], CartesianIndices(Δθ))
         @test nsolid > 0
-        # energy and water: ρ̄_k c_p Δz Δθ = H Δt, ρ̄_k Δz Δq = E Δt (reference density, #131)
+        # energy and water: ρ̄_k c_p Π̄_k Δz Δθ = H Δt, ρ̄_k Δz Δq = E Δt
+        # (reference density, #131). The heat raises T = θ Π̄, so θ by
+        # H Δt / (ρ̄ c_p Π̄ Δz): before #253 this test (and the code) used
+        # ρ̄ c_p Δz Δθ, an expectation that was physically wrong (it equates
+        # a θ increment with a T increment; Π̄_1 = 1.004 here).
         ρ̄(I) = BC.ref_density(case, bus.k_air[I])
-        E_air = sum(ρ̄(I) * se.cp[I] * dz * Δθ[I, bus.k_air[I]] for I in CartesianIndices(bus.k_air))
+        Π̄(I) = BC.ref_exner(case, bus.k_air[I])
+        E_air = sum(ρ̄(I) * se.cp[I] * Π̄(I) * dz * Δθ[I, bus.k_air[I]] for I in CartesianIndices(bus.k_air))
         W_air = sum(ρ̄(I) * dz * Δq[I, bus.k_air[I]] for I in CartesianIndices(bus.k_air))
         E_sfc, W_sfc = sum(bus.H) * dt, sum(bus.E) * dt
         @info @sprintf("  surface_flux: air gain %.6e J/m², surface sensible %.6e J/m² (rel %.1e); water %.4e vs %.4e kg/m²",

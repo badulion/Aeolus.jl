@@ -306,6 +306,15 @@ end
     @test r.z_epeak <= 0.1 * r.zi
     # the boundary layer grew by encroachment: z_i² − z_i0² ≈ 2(1 + 2A) Q t / Γ
     @test 750 < r.zi < 1000
+    # N-parent-a (#247): the harness's z_i is the one diagnostic,
+    # boundary_layer_height(:min_flux); it equals the former local code
+    # (zf[argmin(flux)]) bit for bit, and the parcel method on the mean θ
+    # profile agrees within 10 %
+    @test r.zi === r.zf[argmin(r.flux)]
+    zi_parcel = boundary_layer_height(r.zc, r.θ; method = :parcel)
+    @info @sprintf("  z_i: min flux %.0f m, parcel (mean θ) %.0f m (%.1f %%)", r.zi, zi_parcel,
+                   100 * (zi_parcel / r.zi - 1))
+    @test abs(zi_parcel - r.zi) < 0.1 * r.zi
     # With the mixing length also capped at κ·d_wall (on top of Moeng's 3.9)
     # the first levels are over-damped: measured min flux ratio −0.08, SGS
     # fraction 0.31, e peak at 125 m — outside the three criteria above,

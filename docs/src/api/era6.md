@@ -17,9 +17,9 @@ tested at are in
 - Tensorial scalar eddy diffusivity (P55-c, #181; below) — `Aeolus.Operators`
 - Stability-corrected anisotropic eddy viscosity (P55-e, #187; below) — `Aeolus.Operators`
 - [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
-- [Transition diagnostics — Transition](era6/transition.md) — `Aeolus.Transition` (Phase 59, #180; flat-plate boundary layer, P59-d, #185; [theory](../theory/transition.md#Laminar–turbulent-transition), [flat plate](../theory/transition.md#Flat-plate-transition))
+- [Transition diagnostics — Transition](era6/transition.md) — `Aeolus.Transition` (Phase 59, #180; flat-plate boundary layer, P59-d, #185; [theory](../theory/transition.md#Laminar–turbulent-transition), [flat plate](../theory/transition.md#Flat-plate-transition); synthetic inflow, N-inflow-a, #252, [theory](../theory/transition.md#Synthetic-inflow-turbulence))
 - [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #179: wall model on immersed and cut-cell walls; #183: matching height and input filtering against log-layer mismatch; #189: the non-equilibrium (TBLE) wall model with dynamic κ; #190: dynamic roughness of partially resolved relief; [theory](../theory/wall_models.md))
-- [Large-scale forcing — LargeScaleForcing](era6/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; [theory](../theory/large_scale_forcing.md))
+- [Large-scale forcing — LargeScaleForcing](era6/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; N-parent-b, #254: `ReferenceDamping`, θ damping toward a profile; [theory](../theory/large_scale_forcing.md))
 - Walls — `NoSlipWall` and the resolved wall stress (P59-a, #172; below; [theory](../theory/transition.md))
 - AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`
 - [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182) and the differential `ReynoldsStressClosure` (P56-d, #188; [theory](../theory/sgs_tke.md))
@@ -60,6 +60,7 @@ Aeolus.Operators.compute_sgs!
 Aeolus.Operators.sgs_closure
 Aeolus.Operators.AbstractEddyViscosityClosure
 Aeolus.Operators.sgs_viscosity!
+Aeolus.Operators.sgs_tke!
 Aeolus.Operators.turbulent_prandtl
 Aeolus.Operators.StaticSmagorinsky
 Aeolus.Operators.DynamicSmagorinsky

@@ -16,8 +16,11 @@
 # it is examples/sbl/relaminarisation_channel.jl, which also sweeps h/L at
 # Re_τ = 180 and 360 against Nieuwstadt (2005) and Flores & Riley (2011).
 # Measured there: h/L = 2 collapses, but so does h/L = 0.3 (critical h/L
-# 0.12 at Re_τ = 180 on 32³, 0.39 at Re_τ = 360 on 48³; Nieuwstadt 1.23) —
-# see docs/src/theory/transition.md, "The cooled open channel".
+# 0.12 at Re_τ = 180 on 32³, 0.47 at Re_τ = 360 on 48³; Nieuwstadt's 1.23
+# is for an L without κ, i.e. 1.23 κ ≈ 0.49 with the κ-including L of
+# `relaminarisation_criteria`; h/L = 0.5 collapses on 96³ too) — see
+# docs/src/theory/transition.md,
+# "The cooled open channel".
 
 using Test
 using Aeolus
@@ -153,6 +156,17 @@ using Statistics: mean
         θb = θ₀ + 2.0 * 0.5 * g.dz; θt = θ₀ + 2.0 * (g.Nz - 0.5) * g.dz
         @test cr.Ri_b ≈ θ₀ * 1.0 * (θt - θb) / (θt * 15.0^2) rtol = 1e-12
     end
+    # The κ convention (#236). The L here includes κ; Nieuwstadt (2005)'s
+    # does not (h/L_N = g|Q|h/(θ₀ u_τ³)). The flux of his critical
+    # h/L_N = 1.23 at Re_τ = 360 is h/L = 1.23 κ = 0.492 here, L⁺ = 732.
+    QN = -1.23 * θ₀ / θ₀                                # g|Q|h/(θ₀u_τ³) = 1.23
+    cN = channel_case(; Re_τ = 360, N = (4, 4, 8), closure = nothing, bottom_bc = :noslip,
+                      walls = :bottom, extent = (2π, π, 1.0), noise = 0.0,
+                      surface_heat_flux = QN, θ₀ = θ₀, g_accel = θ₀)
+    crN = relaminarisation_criteria(cN.sim; u_τ = 1.0, h = 1.0)
+    @test crN.h_over_L ≈ 1.23 * von_karman() rtol = 1e-12
+    @test crN.h_over_L ≈ 0.492 rtol = 1e-12                # κ = 0.40
+    @test crN.L_plus ≈ 360 / 0.492 rtol = 1e-12
     # neutral: L = ∞
     cn = channel_case(; Re_τ = 180, N = (4, 4, 8), closure = nothing, bottom_bc = :noslip,
                       walls = :bottom, extent = (2π, π, 1.0), noise = 0.0,

@@ -266,6 +266,42 @@ end
 # =========================================================================
 
 """
+    RadiationPlane
+
+The outflow state of one [`OpenPlane`](@ref) on a face whose outflow mode
+is `:convective` or `:orlanski` (N-open-c, #260; see
+[`open_boundary_conditions`](@ref)):
+
+* `mode` — `:convective` or `:orlanski`;
+* `normal` — index, in the state's `planes`, of the face's normal-velocity
+  plane (whose boundary-face values decide inflow or outflow);
+* `prev` — the buffer before the refresh of the current (sub)step;
+* `c` — the phase speed (m/s, ≥ 0) at every tangential point of the
+  plane, fixed at the start of each step by
+  [`prepare_open_boundaries!`](@ref); `NaN` marks an inflow point, which
+  keeps the Dirichlet data;
+* `hist`, `t_hist`, `has_hist` — the interior layer next to the face at
+  the previous step start, from which the Orlanski phase speed is
+  estimated;
+* `start1`, `start2`, `marked` — the two interior layers next to the face
+  at the start of the current (sub)stage, recorded by
+  [`mark_open_boundary_stage!`](@ref) (the update uses them when
+  `marked`, the current interior otherwise).
+"""
+struct RadiationPlane{T}
+    mode::Symbol
+    normal::Int
+    prev::Array{T,3}
+    c::Matrix{T}
+    hist::Matrix{T}
+    t_hist::Base.RefValue{T}
+    has_hist::Base.RefValue{Bool}
+    start1::Matrix{T}
+    start2::Matrix{T}
+    marked::Base.RefValue{Bool}
+end
+
+"""
     OpenBoundaryState
 
 What the faces of one open boundary share: the boundary data, every
@@ -276,6 +312,11 @@ correction: `Q` (net outward volume, or mass, flux before the
 correction), `residual` (after), `δ` (the uniform normal-velocity
 adjustment) and, with `record = true`, `log`, one `(t, Q, residual)` per
 update.
+
+`outflow` maps each open side to its outflow mode (`:dirichlet`,
+`:convective`, `:orlanski`); `radiation[n]` is the
+[`RadiationPlane`](@ref) of `planes[n]` on a radiating face, `nothing`
+otherwise (N-open-c, #260).
 """
 mutable struct OpenBoundaryState{T,M<:RegularGrid{T}}
     mesh::M
@@ -290,7 +331,16 @@ mutable struct OpenBoundaryState{T,M<:RegularGrid{T}}
     δ::T
     record::Bool
     log::Vector{NTuple{3,T}}
+    outflow::Dict{Symbol,Symbol}
+    radiation::Vector{Union{Nothing,RadiationPlane{T}}}
 end
+
+# The N-open-b positional form (every face Dirichlet).
+OpenBoundaryState{T,M}(mesh, data, correction, planes, bound, initialized, t, Q, residual, δ,
+                       record, log) where {T,M} =
+    OpenBoundaryState{T,M}(mesh, data, correction, planes, bound, initialized, t, Q,
+                           residual, δ, record, log, Dict{Symbol,Symbol}(),
+                           Union{Nothing,RadiationPlane{T}}[])
 
 """
     OpenBoundary
@@ -343,7 +393,8 @@ _loc_of(name::Symbol) = name === :u ? FaceX() : name === :v ? FaceY() :
                              bottom = :wall, top = :open,
                              fields = (:u, :v, :w, :θ),
                              correction = :uniform, normal_halo = :value,
-                             scalar_halo = :value, record = false)
+                             scalar_halo = :value, record = false,
+                             outflow = :dirichlet, halo = 1)
         -> FieldBoundaryConditions
 
 A box with open faces fed by `data` (an [`AbstractBoundaryData`](@ref)).
@@ -360,6 +411,27 @@ instead of Dirichlet ones.
 
 All open faces share one [`OpenBoundaryState`](@ref); pass the result as
 `bcs` (and, by default, `θ_bcs`) of a simulation.
+
+`outflow` (N-open-c, #260) is the outflow condition of the open faces:
+one of `:dirichlet` (default: every point takes the boundary data, PALM's
+nested child), `:convective` or `:orlanski`, or a `NamedTuple` per side,
+e.g. `(east = :convective,)` (unnamed sides `:dirichlet`). On a radiating
+face, a point whose outward normal velocity is positive at the start of
+the step is an **outflow point**: every field with a plane there (u, v,
+w and each scalar) is advanced by the radiation equation
+`∂φ/∂t + c ∂φ/∂n = 0` in the halo, with `c = max(u·n, 0)` (convective) or
+the Orlanski (1976) phase speed clipped to `[0, Δn/Δt]` (Miller & Thorpe
+1981); **inflow points** keep the Dirichlet data. See
+[`prepare_open_boundaries!`](@ref) and [`update_open_boundaries!`](@ref).
+In `:orlanski` mode the normal velocity is advanced with the convective
+speed (see [`prepare_open_boundaries!`](@ref) and the theory page,
+"Radiation outflow").
+
+`halo` is the halo depth the advection scheme needs at an open face
+(`AdvectionSchemes.required_halo(scheme)`: 3 for WENO-Z5 and TENO5, 4 for
+WENO-Z7); a mesh whose halo along an open axis is shallower throws an
+`ArgumentError`, since the scheme would then read halo layers that hold
+no boundary data. Inflow scalars get Dirichlet data in all `H` layers.
 """
 function open_boundary_conditions(m::RegularGrid{T}, data;
                                   x = :open, y = :open, bottom = :wall, top = :open,
@@ -367,7 +439,9 @@ function open_boundary_conditions(m::RegularGrid{T}, data;
                                   correction::Symbol = :uniform,
                                   normal_halo::Symbol = :value,
                                   scalar_halo::Symbol = :value,
-                                  record::Bool = false) where {T}
+                                  record::Bool = false,
+                                  outflow = :dirichlet,
+                                  halo::Integer = 1) where {T}
     correction in (:uniform, :outflow_only, :none) ||
         throw(ArgumentError("correction must be :uniform, :outflow_only or :none, got :$correction"))
     (:u in fields && :v in fields && :w in fields) ||
@@ -380,6 +454,13 @@ function open_boundary_conditions(m::RegularGrid{T}, data;
                                         record, NTuple{3,T}[])
     function face(side)
         ax, _ = _side_axis(side)
+        Hs = (m.Hx, m.Hy, m.Hz)
+        Hs[ax] >= halo ||
+            throw(ArgumentError("open face :$side: the mesh halo along axis $ax is " *
+                                "$(Hs[ax]), shallower than the $halo layers the advection " *
+                                "scheme needs (required_halo); build the mesh with " *
+                                "halo ≥ $halo"))
+        st.outflow[side] = _outflow_mode(outflow, side)
         d = Dict{Symbol,OpenPlane{T}}()
         for name in fields
             loc = _loc_of(name)
@@ -405,6 +486,8 @@ function open_boundary_conditions(m::RegularGrid{T}, data;
     t_ = top === :open ? face(:top) : _bc(top)
     (t_ isa OpenBoundary || is_wall(t_)) ||
         throw(ArgumentError("top must be :open or a wall"))
+    _check_outflow_sides(outflow, keys(st.outflow))
+    _init_radiation!(st)
     return FieldBoundaryConditions(w_, e_, s_, n_, b_, t_)
 end
 
@@ -704,10 +787,30 @@ end
     update_open_boundaries!(sim, t, dt) -> sim
 
 Refresh the open boundaries of `sim` for a projected (sub)step that ends
-at time `t` (length `dt`, reserved for radiation outflow conditions): fill
-every buffer from the boundary data at `t` ([`boundary_values!`](@ref)),
-then apply [`correct_boundary_mass_flux!`](@ref) with the core's
-constraint weights ([`boundary_flux_weights`](@ref)). The next
+at time `t` (length `dt`): fill every buffer from the boundary data at
+`t` ([`boundary_values!`](@ref)); on a face with a `:convective` or
+`:orlanski` outflow, advance the outflow points of every plane instead by
+the radiation equation over `dt` (N-open-c, #260; see
+[`open_boundary_conditions`](@ref)); then apply
+[`correct_boundary_mass_flux!`](@ref) with the core's constraint weights
+([`boundary_flux_weights`](@ref)).
+
+The radiation update is the explicit second-order upstream form of
+`∂φ/∂t + c ∂φ/∂n = 0`, applied to every halo layer `b` outward from the
+face,
+
+    φ_b ← φ_b⁰ − r (3φ_b⁰ − 4φ_{b−1}⁰ + φ_{b−2}⁰) / 2,    r = min(c Δt / Δn, 1),
+
+where the superscript `⁰` marks values at the start of the (sub)stage
+(the buffer, and the interior layers recorded by
+[`mark_open_boundary_stage!`](@ref)) and `c` is the phase speed fixed by
+[`prepare_open_boundaries!`](@ref). Being explicit in stage-start values,
+it is integrated by a multi-stage driver with the driver's own weights
+(SSP-RK3 for `step_rk3!`); `r ≤ 1` (the Miller & Thorpe 1981 bound
+`c ≤ Δn/Δt`) keeps the update stable. The second-order upstream
+difference matters with the centred interior schemes: the first-order
+one reflects a scalar pulse with `∫θ'²` residual 1.9e-4 against 7.9e-6
+(N-open-c test, σ = 4Δx). The next
 `fill_halos!` writes the corrected face values into the predicted
 velocity, so the projection that follows sees a compatible problem.
 
@@ -723,8 +826,11 @@ function update_open_boundaries!(sim, t::Real, dt::Real)
     W = boundary_flux_weights(sim)
     for st in open_boundary_states(sim)
         _bind!(st, sim)
+        radiate = st.initialized && _has_radiation(st)
+        radiate && _save_previous!(st)          # the buffers of the step start
         st.data === nothing ||
             boundary_values!(st.planes, st.data, t)
+        radiate && _radiate!(st, sim, dt)       # outflow points (N-open-c)
         correct_boundary_mass_flux!(st, W; t = t)
         st.initialized = true
     end
@@ -738,11 +844,41 @@ Before a step: fill the buffers at the current time `sim.t` if they have
 never been filled (a fresh simulation, or new data from
 [`set_boundary_data!`](@ref)), so the first tendency evaluation sees the
 boundary data. A no-op otherwise, and for closed boundaries.
+
+On a face with a radiating outflow (N-open-c, #260) it also fixes, once
+per step, which points are outflow points (outward normal velocity of
+the boundary face `> 0`) and their phase speed `c`:
+
+* `:convective` — `c = max(u·n, 0)`, the local outward normal velocity
+  interpolated to the point;
+* `:orlanski` — for the tangential velocities and the scalars,
+  `c = −(∂φ/∂t)/(∂φ/∂n)` from the interior layer next to the face at this
+  and the previous step start (Orlanski 1976), clipped to `[0, Δn/Δt]`
+  (Miller & Thorpe 1981); the first step, without a history, uses the
+  convective speed. The **normal velocity** always uses the convective
+  speed: in a projected core continuity ties it to the interior, so it is
+  not a freely radiating wave, and an Orlanski speed diagnosed from it and
+  fed back through the pressure drifts away from the advection speed (in
+  the outgoing-vortex test the diagnosed speeds of u and w settled at
+  0.79 U and 1.23 U, R = 0.15; with the convective normal velocity
+  R = 4.9e-3).
+
+Every multi-stage driver calls it once at the start of the step, so the
+phase speeds stay fixed over the substages; a step that is retried at the
+same time keeps them.
+
+References: Orlanski, I. (1976), A simple boundary condition for
+unbounded hyperbolic flows, *J. Comput. Phys.* 21, 251–269. Miller, M. J.
+& Thorpe, A. J. (1981), Radiation conditions for the lateral boundaries
+of limited-area numerical models, *Q. J. R. Meteorol. Soc.* 107, 615–628.
 """
 function prepare_open_boundaries!(sim)
     has_open_boundaries(sim) || return sim
     if any(st -> !st.initialized, open_boundary_states(sim))
         update_open_boundaries!(sim, sim.t, zero(sim.t))
+    end
+    for st in open_boundary_states(sim)
+        _has_radiation(st) && _outflow_phase_speeds!(st, sim)
     end
     return sim
 end

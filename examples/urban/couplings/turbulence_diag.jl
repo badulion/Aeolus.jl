@@ -145,7 +145,8 @@ function turbulence_diagnostics!(c::TurbulenceDiag, case)
     copyto!(c.w.data, sim.w.data); copyto!(c.θ.data, sim.θ.data)
     copyto!(c.qv.data, tracer(case, :qv).data)
     fill_halos!(c.u, c.bcs); fill_halos!(c.v, c.bcs); fill_halos!(c.w, c.bcs)
-    fill_halos!(c.θ, c.θ_bcs); fill_halos!(c.qv, c.θ_bcs)
+    fill_halos!(c.θ, c.θ_bcs)
+    fill_halos!(c.qv, Aeolus.BoundaryConditions.homogeneous_bcs(c.θ_bcs))   # not θ's top gradient
     cfg = case.cfg
     buoyancy_frequency_squared!(c.N2f, c.θ, c.qv; θ₀ = cfg.θ₀, g = cfg.g)
     gradient_richardson!(c.Rif, c.N2f, c.u, c.v, c.w)
@@ -350,14 +351,23 @@ function smoke_check(c::TurbulenceDiag, case)
     # f_m < 1. The θ_v of the vapour lapse (q_v ∝ e^{−z/H_q}) removes about
     # 2/3 of the dry gΓ/θ₀ in the summer state (3.3e-5 against 1.0e-4 s⁻²),
     # and below z_i, where θ is uniform, it makes N² < 0.
+    # z_i is that of the initial profile (`initial_inversion_height`: the
+    # idealised θ_inversion_z, or the parcel z_i of the sounding, #247).
+    # When it lies above the box (the observed noon profile is mixed to
+    # ~1.2 km) there is no stable layer to test, and the check says so.
     cfg = case.cfg
+    zi = initial_inversion_height(cfg)
     zs = [(k - 0.5) * case.mesh.dz for k in 1:case.mesh.Nz]
     above = [k for k in eachindex(zs)
-             if cfg.θ_inversion_z + case.mesh.dz < zs[k] < cfg.sponge_frac * cfg.extent[3]]
-    inv_ok = all(k -> c.N2[k] > 0 && c.Ri[k] > 0 && c.fm[k] < 1, above)
+             if zi + case.mesh.dz < zs[k] < cfg.sponge_frac * cfg.extent[3]]
+    inv = isempty(above) ?
+        (@sprintf("no capping inversion inside the box (initial z_i = %.0f m above %.0f m)",
+                  zi, cfg.sponge_frac * cfg.extent[3]) => zi + case.mesh.dz >= cfg.sponge_frac * cfg.extent[3]) :
+        ("stable above the capping inversion: plane-mean N² > 0, Ri_g > 0, f_m < 1" =>
+             all(k -> c.N2[k] > 0 && c.Ri[k] > 0 && c.fm[k] < 1, above))
     return ["f_m ∈ [0, 1] where Ri_g ≥ 0 (fluid cells)" => fm_ok,
             "Ri_g finite in fluid cells" => fin,
-            "stable above the capping inversion: plane-mean N² > 0, Ri_g > 0, f_m < 1" => inv_ok,
+            inv,
             "f_m = 1 at Ri = 0" => stability_factor_m(c.stability, 0.0) == 1,
             "0 ≤ γ ≤ 1 on every level" => all(x -> 0 <= x <= 1, c.γ),
             "γ = 0 in solids (no solid cell is turbulent)" => !any(c.ind .& .!fl),

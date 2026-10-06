@@ -173,7 +173,8 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        sgs_tracer_diffusivity!,
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
-       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS,
+       sgs_tke!                 # N-inflow-b (#258)
 # Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
 export LagrangianDynamicSmagorinsky
 # Era VI (P55-b, #175): the stress-form SGS momentum divergence
@@ -203,6 +204,8 @@ export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
        sgs_stratification!
 # P58-e (#193): resolved TKE profile (turbulence-collapse runs)
 export resolved_tke_profile
+# #245: the FFTW planning policy
+export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!, poisson_axis_bcs
@@ -211,6 +214,13 @@ export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
 export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
+# #245: full-state checkpoints with bitwise restart, periodic checkpoints
+export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint_state!,
+       fieldwise_checkpoint_state, restore_fieldwise!, checkpoint_fields,
+       StepperState, record_step!, previous_dt,
+       CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
+       latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
+       driver_checkpoints, finish_checkpoints!
 export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_write!, nc_append_record!, nc_close!, nc_write_fields,
        nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
@@ -275,6 +285,7 @@ export weno_z5_left, weno_z5_right, weno_z7_left, weno_z7_right,
        AdvectionScheme, advection_scheme, required_halo,
        momentum_advect_skew!, advect_variance_conserving!,
        kinetic_energy_budget, scalar_variance_budget, enstrophy
+export boundary_scalar_flux           # N-open-c (#260): the one boundary-flux function
 
 # Phase 27 — anelastic & pseudo-incompressible dynamics
 export ReferenceState,
@@ -318,6 +329,7 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        step_nested!, nest_conservation_error, composite_integral,
        DomainAdvance, domain_advance, stage_times,
        NestedRun, NestRunStats, boundary_time,
+       NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask,
        RefinementBlock, AMRHierarchy, amr_hierarchy,
        refinement_criterion_gradient, refinement_criterion_vorticity,
        refinement_criterion_richardson, combine_criteria,
@@ -955,6 +967,8 @@ export effective_roughness, effective_scalar_roughness,
 export AbstractRiStability, stability_factor_m, stability_factor_h, neutral_prandtl,
        LillyCutoff, BrownEtAl1994, ShortTail, LongTail,
        gradient_richardson, buoyancy_frequency_squared, RI_SHEAR2_FLOOR
+# N-parent-a (#247): the one boundary-layer-height diagnostic
+export boundary_layer_height
 # SurfaceExchange's implementer of the contract (MOST-consistent factors).
 export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # P58-e (#193): the maximum sustainable heat flux (Van de Wiel et al. 2012)
@@ -969,7 +983,8 @@ export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_value,
        tke_critical_richardson, tke_equilibrium, dual_strain!, shear_production!,
        buoyancy_production!, tke_budget, initialize_tke!, tke_statistics,
-       tke_eddy_coefficients
+       tke_eddy_coefficients,
+       attach_immersed_walls!   # #232: facade shear production from the wall-model stress
 # P56-d (#188): the differential SGS Reynolds-stress closure.
 export ReynoldsStressClosure, reynolds_stress_terms, reynolds_stress_rhs, reynolds_stress_step,
        daly_harlow_coefficient, coriolis_rotation, rotate_stress, is_realizable,
@@ -997,6 +1012,17 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
        onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw,
        FreeStreamDisturbance, von_karman_spectrum, disturbance_velocity!,
        disturbance_fringe_update
+# N-inflow-a (#252) — synthetic inflow turbulence: the generator contract,
+# the Xie & Castro (2008) digital filter, the Lund (1998) transform, and
+# FreeStreamDisturbance as a second provider.
+export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_generator_state!,
+       inflow_plane_size, DigitalFilterGenerator, digital_filter_kernel, lund_coefficients,
+       apply_lund!, FreeStreamInflow, disturbance_velocity, disturbance_covariance
+# N-inflow-b (#258) — statistics for the synthetic inflow: parent-resolved
+# (resolved + SGS, scale gap) and parametrized (Rotach et al. 1996 blend).
+export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statistics!,
+       inflow_projection_log, realizable_stress, inflow_lund_coefficients,
+       ParentResolvedStatistics, inflow_stress_parts, ParametrizedStatistics, parametrized_scales
 # Phase 57 — wall models (#169): equilibrium wall laws and the implicit
 # wall-stress operator. `friction_velocity` / `wall_stress` do not collide
 # with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`
@@ -1011,7 +1037,7 @@ export MOSTFluxWallLaw
 # walls. The cut-cell stress is a method of CutCell.wall_shear_stress, not
 # a new name.
 export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
-       apply_immersed_wall_stress!, immersed_wall_count,
+       apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!,
        wall_slip_velocity, slip_wall_value
 # P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
 # `advance_channel!` / `run_channel!` do not collide with the Berlin case's
@@ -1045,6 +1071,9 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
        open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
        assert_open_face_correction, open_intermediate_velocity!
+# N-open-c (#260) — convective / Orlanski radiation outflow on open faces.
+export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow, rewind_open_boundaries!,
+       mark_open_boundary_stage!
 
 # Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
 # nudging, prescribed advective tendencies, surface-temperature series.
@@ -1052,7 +1081,12 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
 # generic, already exported.
 export ForcingTable, forcing_value, forcing_mean,
        AbstractLargeScaleForcing, GeostrophicPressureGradient, GeostrophicNudging,
-       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!
+       AdvectiveTendencies, SurfaceTemperatureSeries, apply_forcing!,
+       ReferenceDamping, damping_tendency
+# #248 (N-parent-c): plane-mean nudging of u, v, θ, qv and large-scale subsidence.
+export ProfileNudging, NudgingWeight, nudging_weight, Subsidence, tendency_integrals
+# N-parent-a (#247): radiosonde soundings → (z, t) profiles
+export Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time
 
 # P57-e (#190): the dynamic roughness of partially resolved relief
 # (Anderson & Meneveau 2011). `surface_gradient_drag` does not collide
