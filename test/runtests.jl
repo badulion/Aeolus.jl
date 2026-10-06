@@ -664,6 +664,7 @@ using Aeolus.Fields: set!, interior_view
     end
 
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
+    include("ka_halos.jl")   # KA-f (#297): halo fills / nesting transfer operators on launch!
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
     include("pressure_fft_threads.jl")  # KA-h (#298): spectral solvers as kernels, FFTW thread-invariant
 
