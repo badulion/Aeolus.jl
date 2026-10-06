@@ -276,6 +276,7 @@ export weno_z5_left, weno_z5_right, weno_z7_left, weno_z7_right,
        AdvectionScheme, advection_scheme, required_halo,
        momentum_advect_skew!, advect_variance_conserving!,
        kinetic_energy_budget, scalar_variance_budget, enstrophy
+export boundary_scalar_flux           # N-open-c (#260): the one boundary-flux function
 
 # Phase 27 — anelastic & pseudo-incompressible dynamics
 export ReferenceState,
