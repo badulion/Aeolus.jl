@@ -214,7 +214,10 @@ needs.
   the NetCDF file. The core registers `qv`, `ql` (advected) and `qr`.
   A tracer diffuses with the closure's `κt` unless it names its own
   diffusivity (`ensure_tracer!(…; diffusivity = case -> field)`): the SGS
-  TKE `e` of the `:tke` provider diffuses with `2ν_t` (#182).
+  TKE `e` of the `:tke` provider diffuses with `2ν_t` (#182). Passive
+  tracers (qv, ql, the chemistry species, the pollutant) never name one:
+  they share θ's κ_t under every `:sgs` provider, AMD included (#234, see
+  below).
 * **Geometry** (`case.geom`): mask, surface classes, scene, view factors.
   Couplings may add classes at `init!` (the glass coupling does). The
   scene is built with `class_map = scene_class_map(sfc)`, so the ground
@@ -386,7 +389,9 @@ constraint weights, giving `(1/W)∇·(W κt ∇q)`, which conserves `Σ W q`;
 on the anelastic core that is the ledger's `Σ ρ̄ q`. The diffusion books
 its change of water as `sgs_diffusion` (zero to round-off) plus
 `density_redistribution`. Its `smoke_check` asserts that the diffusion
-alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`. Before
+alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`.
+The core runs with `moisture = false`, so qv and ql are case tracers and
+are mixed here, with the same κ as every other tracer. Before
 #177 no tracer was diffused at all: they saw only the implicit
 dissipation of WENO, a missing-physics bug. `sgs_diffusion = false`
 reproduces that transport for comparison. Measured over the first hour of the summer flagship (06:00–07:00,
@@ -402,6 +407,27 @@ kg/m², `sgs_diffusion` −6.1e-19 kg/m². Cost: +1.0 ms per advected tracer
 and step (7 tracers: `scalar_advection` 57.3 → 64.3 ms/step), +0.9 ms for
 the pollutant; the masked kernel takes 0.58 ms per call against 0.10 ms
 unmasked.
+
+*One shared κ, also under `:amd` (#234).* AMD offers a per-scalar
+diffusivity from each scalar's own gradient
+(`Operators.sgs_tracer_diffusivity!`, forwarded by `SolidMaskedSGS`); the
+stage does not use it, by design. Real high-Re turbulence mixes all
+passive scalars alike (one turbulent Schmidt number). Per-scalar κ would
+mix NO, NO₂ and O₃ differently and move them off the photostationary
+state, and mix qv and ql differently, so `q_t` and `θ_l` would no longer
+be mixed as conserved variables. Its zero-gradient fallback
+(`κ = ν_t/Pr_t = 3ν_t`) gives a uniform or flat field the largest κ of all
+and over-mixes plume edges, and the adaptive step (`sgs_cfl_diagnostics`)
+sees θ's κ_t, not the tracers'. An earlier probe of the `:amd` run measured
+cell-wise κ differences against θ's of 54–64 % for qv and 66–92 % for the
+chemistry, 28 % between NO and NO₂, 196 % between qv and ql, and a
+fallback maximum of 5.9 against 2.6 m²/s. The design test
+(`test/berlin_numerics.jl`, *one shared κ*) pins it: under `:amd` the
+stage is bit for bit the stage with every tracer forced onto `sim.κt`, and
+on its 12-step state AMD's own κ would differ from θ's by 77–80 %
+(`Σ|Δκ|/Σκ`) for qv and the chemistry, 24 % between NO and NO₂, with ql
+(zero there) at the fallback 3ν_t everywhere, maximum 5.08 against
+2.71 m²/s. Rationale in full: [the SGS theory page](../theory/sgs.md#Closure-contract).
 
 * **Pressure solvers.** All three solve the same 7-point Laplacian with
   the same boundary conditions (periodic, periodic, Neumann); the
@@ -458,7 +484,8 @@ unmasked.
   anisotropic minimum-dissipation and Vreman closures (see [the SGS
   theory page](../theory/sgs.md#Anisotropic-minimum-dissipation-and-Vreman-closures)).
   AMD runs with C = 0.3, its own κ_t and the buoyancy term with the
-  core's g/θ₀. It is set to zero in the building cells: there the
+  core's g/θ₀; the case's tracers are diffused with that κ_t (θ's), not
+  with AMD's per-scalar diffusivity (see *One shared κ* above). It is set to zero in the building cells: there the
   resolved velocity is ≈ 0, so the denominator ∂_l u_m ∂_l u_m vanishes
   while θ still varies, and the buoyancy term gave ν_t up to 19 m²/s
   inside buildings, against a fluid maximum of 1.6 m²/s. That only
@@ -1715,6 +1742,13 @@ Moeng (1984) closure (see [the theory page](../theory/sgs_tke.md)). It is
 PALM's urban-LES default and the only closure here whose mixing responds
 prognostically to stratification (its ``0.76\sqrt e/N`` length scale; no
 stability function is applied on top of it).
+
+Not wrapping it in `StabilityCorrected` is by design. `:tke` has none of
+that wrapper's ``κ_h ≠ κ_v`` anisotropy (one ``Δ``, as in PALM): at
+``dx/dz = 2.5`` it mixes 3.39× more vertically and 1.84× less
+horizontally than `StabilityCorrected` Smagorinsky of equal ``C_s``, and
+no `:isentropic` tensor is offered
+([details](../theory/sgs_tke.md#The-model)). Moist ``N^2``: #239.
 
 * The closure is the `sgs` of every dynamics step, so the cores evaluate
   ``ν_t = c_k l\sqrt e``, ``κ_t = (1 + 2l/Δ)ν_t`` from the committed ``e``

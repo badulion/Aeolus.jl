@@ -1,3 +1,9 @@
+# Test selection (#316): AEOLUS_TEST_TIER=fast|full (default fast) picks
+# files by the tags in test_tags.toml; test/run.jl runs them in parallel.
+# The include list below stays the single list. See docs/src/testing.md.
+isdefined(Main, :AeolusTestSelection) || Base.include(Main, joinpath(@__DIR__, "runner", "selection.jl"))
+Main.AeolusTestSelection.serial_entry(@__FILE__) && exit()
+
 using Test
 using Random
 using Statistics: mean
