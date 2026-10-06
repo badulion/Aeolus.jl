@@ -15,8 +15,10 @@ git worktree add .worktrees/issue-42 -b issue/42-p3-microphysics master
 cd .worktrees/issue-42
 
 # 2. Work. Commit after every self-contained subproblem (see below).
-# 3. Run the FULL suite before proposing anything.
-julia --project=. test/runtests.jl
+# 3. Run the FAST tier before proposing anything (parallel, ~5 min),
+#    plus the full-tier files of any physics you touched.
+julia --project=. test/run.jl
+julia --project=. test/run.jl --only era6_gabls1.jl,era6_gabls3.jl
 
 # 4. Push the branch and open a PR. Then stop.
 git push -u origin issue/42-p3-microphysics
@@ -50,9 +52,29 @@ P3: wire into Aeolus.jl, add to runtests, fix export collision
 PRs are merged with a **merge commit**, so these survive on `master`.
 That is the point of asking for them — do not squash them yourself.
 
+## Tests: fast tier for PRs, full tier at merge
+
+The suite has two tiers (`AEOLUS_TEST_TIER=fast|full`, default `fast`).
+The full tier adds the validation mini-simulations that
+`test/test_tags.toml` marks `tier = "full"`, each with its reason.
+
+- **A PR needs the fast tier green**: `julia --project=. test/run.jl`
+  (parallel) or `julia --project=. test/runtests.jl` (serial).
+- **When you touch physics that a full-only file validates, run that
+  file too** (`test/run.jl --only <file>`) and quote its result.
+- **The merge train runs the full tier before merging**:
+  `AEOLUS_TEST_TIER=full julia --project=. test/run.jl`.
+- `test/runtests.jl`'s include list stays the single list of test
+  files; a new file needs only its include line. Tag it in
+  `test/test_tags.toml` only if it is a full-only validation run
+  (with a one-line reason) or timing-sensitive (`exclusive`).
+
+Details: [`docs/src/testing.md`](docs/src/testing.md).
+
 ## Before opening a PR
 
-- [ ] Full suite green: `julia --project=. test/runtests.jl`
+- [ ] Fast tier green: `julia --project=. test/run.jl`, plus the
+      full-tier files of the physics you touched (`--only`)
 - [ ] New code has tests that assert **physics**, not just that it runs
 - [ ] Validation numbers measured and quoted in the PR body
 - [ ] No new export collisions (see below)
@@ -187,7 +209,8 @@ weeks because nobody viewed the image at size.
 
 ```
 src/            55 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
-test/           runtests.jl + era*_*.jl + berlin_*.jl, 80,661 tests
+test/           runtests.jl + era*_*.jl + berlin_*.jl, 80,661 tests;
+                run.jl = parallel runner, test_tags.toml = tiers
 examples/       worked cases; examples/urban/ is the flagship
 docs/src/       theory, design, API reference
 .worktrees/     agent worktrees (gitignored)
