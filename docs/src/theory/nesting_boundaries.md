@@ -23,7 +23,10 @@ implement.
 ## What the child's faces carry
 
 The child is built with [`nest_bcs`](@ref)`(child_mesh, x, y; bottom, top,
-moisture, scalars)`. Every `:nest` face is an `OpenBoundary`; the Berlin
+moisture, scalars, outflow, halo)`. Every `:nest` face is an `OpenBoundary`
+(`outflow = :convective` or `:orlanski` makes its outflow points radiate
+instead of taking the parent's value, `halo` is checked against the
+advection scheme's stencil, #329); the Berlin
 child has open sides and top and a wall at the ground, a child inside its
 parent (not touching the ground) has an open bottom too. On an open face
 (PALM's Dirichlet child boundary, Hellsten et al. 2021 §3.2):
@@ -119,9 +122,29 @@ correction spreads over the fluid faces.
 A [`NestSponge`](@ref) (relaxation zone, Davies 1976) is optional and
 **off by default**: Kadasch et al. (2021, §2.2–2.3) and Hellsten et al.
 (2021) use none at the child boundary. When given, it relaxes every member
-of the field set toward the time-blended parent after each child substep,
-on the open faces only (`nest_open_sides`). Its measured effect is in the
-next section.
+of the field set toward the parent blended to the end of the child
+substep, on the open faces only (`nest_open_sides`). The velocities are
+relaxed on the predicted velocity of every stage, in the core's
+`post_predictor!` hook, *before* the pressure solve; the scalars after the
+substep (#329). The prolongated parent velocity is flux-consistent on
+parent cells, not divergence-free on child cells, so the former relaxation
+after the step left the child divergent: ``\max\lvert∇·u\rvert = 1.6``
+s⁻¹ for a random parent (width 3, ``α_{\max} = 20`` s⁻¹), against
+``2.8\times10^{-14}`` s⁻¹ now, with `step!` and `step_rk3!`. Its effect on
+an outgoing anomaly is in the next section.
+
+## Storage and cost of the boundary data
+
+Without a sponge the run reads the prolongated parent only at the child's
+open-boundary points, so its three field sets (the parent at both ends of
+the parent step and their blend) are halo-only (`storage = :shell`, #329):
+six dense halo slabs per member plus the boundary-normal face plane of the
+velocities, ``(N+2H)^3 - N^3`` instead of ``(N+2H)^3`` points. For a
+``32^3`` child with ``H = 3`` the three sets of `u, v, w, θ` hold 2144 KiB
+instead of 5144 KiB (42 %); for ``64^3`` a shell is 24 % of the full
+array. The results are bit-identical. The prolongation itself loops over
+the six halo slabs (one kernel, `_interp_box!`), not over the whole child
+array.
 
 ## Validation (`test/era2_nest_boundary.jl`)
 
@@ -153,8 +176,11 @@ Three findings:
   the amplitude stays trapped in the child after the anomaly has left,
   above the 1 % the issue asks for (kept as a `@test_broken`). The sponge
   removes it (0.08–0.2 %), and an upwind-biased scheme (WENO-Z5, the
-  scheme of the Berlin tracers) never creates it (0.007 %). The upwind
-  scalar outflow halo is N-open-c (#260).
+  scheme of the Berlin tracers) never creates it (0.007 %). A radiating
+  outflow face removes it too: `nest_bcs(…; outflow = :convective)` (#329)
+  lets a θ pulse that only the child carries leave with a residual
+  ``\int θ'^2 / \int θ'^2_0 = 1.2\times10^{-7}`` after two crossings,
+  where the Dirichlet parent face keeps all of it (1.00).
 * **Refinement 1 is exact for the projection step.** The predictor sees
   the same halo values as the parent, and the Neumann solve with the
   parent's (end-of-step) face velocities reproduces the parent's interior
@@ -164,15 +190,46 @@ Three findings:
 
 ## Limits
 
-* No Berlin coupling yet: `Nesting` stays in `BERLIN_PENDING` until
-  N-berlin-nest (#265) makes the nested run the default.
-* Scalar outflow is Dirichlet. The upwind / convective outflow option and
-  `boundary_scalar_flux` are N-open-c (#260).
-* Two-way feedback keeps N-nest-c's restriction and six-plane flux
-  correction; per-face two-way feedback (walls excluded), Clark–Farley
-  anterpolation and the parent re-projection are N-nest-e (#263).
+* No Berlin coupling on `master` yet: the Berlin multi-domain case is
+  N-berlin-nest (#265, PR #330).
+* `NestedRun` is one parent–child pair with an aligned, uniform child:
+  nest hierarchies, sibling nests, non-aligned parents and stretched
+  children are #328.
+
+Resolved since N-nest-d:
+
+* **Outflow and halo (#329).** `nest_bcs` passes `outflow`
+  (`:dirichlet`, the default, `:convective`, `:orlanski` or per side) and
+  the advection `halo` to `open_boundary_conditions` (N-open-c, #260). A
+  vertically periodic open box used to skip the initialisation of its
+  radiating faces, which silently stayed Dirichlet; fixed with it.
+* **Two-way feedback** is N-nest-e (#263): per-face flux correction and
+  refluxing on the open faces only, Clark–Farley anterpolation with a
+  buffer zone, re-projection of the parent; see the
+  [two-way nesting page](nesting_twoway.md).
+* **Prolongation limiter (#329).** The 3rd- and 5th-order prolongation
+  overshoots at a sharp front (``[-0.25, 1.25]`` at order 3,
+  ``[-0.30, 1.30]`` at order 5 for a 0/1 tracer). A conservative limiter
+  scales the children of each parent cell about the parent value:
+  `:positive` (Zhang & Shu 2010; the default for `qv` and the tracers of
+  the field set) keeps them non-negative, `:monotone` (Barth & Jespersen
+  1989) inside the parent neighbourhood's range; the children's mean stays
+  the parent value. θ and the velocities are not limited by default.
+* **One windowed boundary-data type (#329).**
+  [`NestBoundaryData`](@ref) is the generic two-snapshot
+  [`WindowedBoundaryData`](@ref Aeolus.BoundaryConditions.WindowedBoundaryData)
+  with the prolongated field set as the snapshot; a mesoscale parent
+  (#58) implements `snapshot_values` and reuses the time blend.
+* **Externally driven children** refresh their halos with the public
+  [`fill_nest_halos!`](@ref) (#329).
 
 ## References
+
+- Barth, T. J. & Jespersen, D. C. (1989). The design and application of
+  upwind schemes on unstructured meshes. AIAA paper 89-0366.
+- Zhang, X. & Shu, C.-W. (2010). On maximum-principle-satisfying high
+  order schemes for scalar conservation laws. *J. Comput. Phys.* 229,
+  3091–3120 (the scaling limiter about the cell mean).
 
 - Davies, H. C. (1976). A lateral boundary formulation for multi-level
   prediction models. *Q. J. R. Meteorol. Soc.* 102, 405–418.

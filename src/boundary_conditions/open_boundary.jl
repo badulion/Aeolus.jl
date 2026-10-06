@@ -194,6 +194,95 @@ Fill the open-boundary buffers `planes` from `data` at time `t`; see
 """
 function boundary_values! end
 
+# -------------------------------------------------------------------------
+# Two snapshots blended in time: the one windowed boundary-data helper
+# (#329, item 8). The nest parent (Nesting.NestBoundaryData) is one
+# implementer; a mesoscale parent (#58) or reanalysis (#57) that delivers
+# its fields at discrete times is another.
+# -------------------------------------------------------------------------
+
+"""
+    WindowedBoundaryData{S}(a, b, t0, Δt) <: AbstractBoundaryData
+
+Boundary data from two **snapshots** of a source, `a` at time `t0` and
+`b` at `t0 + Δt`, blended linearly in time:
+
+    boundary_values!(planes, d, t):   p.data ← (1 − τ) A + τ B,   τ = window_fraction(d, t)
+
+for every plane `p` (except `:mirror` planes), with `A`, `B` the
+snapshots' values of field `p.name`, read at the plane's storage points.
+`Δt = 0` is steady data (`a`). The window is moved by assigning the
+fields (`d.a = …; d.b = …; d.t0 = …; d.Δt = …`).
+
+A snapshot type `S` implements one method,
+
+    snapshot_values(s::S, name::Symbol) -> AbstractArray{T,3}
+
+the storage-indexed values of field `name` on the child mesh (only the
+plane points are read). Linear interpolation in time is exact for data
+linear in time and second-order accurate otherwise, `O(Δt²)`.
+
+Implementers: the nest parent ([`NestBoundaryData`](@ref
+Aeolus.Nesting.NestBoundaryData), N-nest-d #261); a mesoscale parent
+(#58) or reanalysis forcing (#57) delivering fields at discrete times.
+"""
+mutable struct WindowedBoundaryData{S} <: AbstractBoundaryData
+    a::S
+    b::S
+    t0::Float64
+    Δt::Float64
+end
+
+"""
+    snapshot_values(snapshot, name::Symbol) -> AbstractArray{T,3}
+
+The storage-indexed values of field `name` held by one snapshot of a
+[`WindowedBoundaryData`](@ref). Implemented by each snapshot type.
+"""
+function snapshot_values end
+
+"""
+    window_fraction(d::WindowedBoundaryData, t) -> τ
+
+The blend weight of `d.b` at time `t`: `(t − t0)/Δt`, or `0` for steady
+data (`Δt = 0`).
+"""
+window_fraction(d::WindowedBoundaryData, t) = d.Δt > 0 ? (Float64(t) - d.t0) / d.Δt : 0.0
+
+"""
+    blend_window!(dst, A, B, τ[, irange, jrange, krange]) -> dst
+
+`dst ← (1 − τ) A + τ B`, the one time-blend kernel of two snapshots: over
+the whole array, or, with ranges, `dst[a, b, c]` from `A[i, j, k]`,
+`B[i, j, k]` at the storage points `irange × jrange × krange` (`a, b, c`
+counting from 1, the layout of an [`OpenPlane`](@ref)'s buffer).
+"""
+function blend_window!(dst::AbstractArray{T,3}, A::AbstractArray, B::AbstractArray, τ,
+                       irange, jrange, krange) where {T}
+    τ1 = one(T) - T(τ); τT = T(τ)
+    i0 = first(irange) - 1; j0 = first(jrange) - 1; k0 = first(krange) - 1
+    @inbounds for k in krange, j in jrange, i in irange
+        dst[i - i0, j - j0, k - k0] = τ1 * A[i, j, k] + τT * B[i, j, k]
+    end
+    return dst
+end
+
+blend_window!(dst::AbstractArray{T,3}, A::AbstractArray, B::AbstractArray, τ) where {T} =
+    blend_window!(dst, A, B, τ, axes(dst, 1), axes(dst, 2), axes(dst, 3))
+
+"Blend into an [`OpenPlane`](@ref)'s buffer at its own storage points."
+blend_window!(p::OpenPlane, A::AbstractArray, B::AbstractArray, τ) =
+    (blend_window!(p.data, A, B, τ, p.irange, p.jrange, p.krange); p)
+
+function boundary_values!(planes::AbstractVector{<:OpenPlane}, d::WindowedBoundaryData, t)
+    τ = window_fraction(d, t)
+    for p in planes
+        p.mode === :mirror && continue
+        blend_window!(p, snapshot_values(d.a, p.name), snapshot_values(d.b, p.name), τ)
+    end
+    return planes
+end
+
 """
     FunctionBoundaryData(; u = f, v = f, w = f, θ = f, …)
 
@@ -486,14 +575,18 @@ function open_boundary_conditions(m::RegularGrid{T}, data;
         top === bottom || throw(ArgumentError("bottom = :$bottom needs top = :$bottom"))
     end
     if bottom === :periodic
-        return FieldBoundaryConditions(w_, e_, s_, n_, Periodic(), Periodic())
+        b_ = Periodic(); t_ = Periodic()
+    else
+        b_ = bottom === :open ? face(:bottom) : _bc(bottom)
+        (b_ isa OpenBoundary || is_wall(b_)) ||
+            throw(ArgumentError("the bottom of an open box must be a wall, :open or :periodic"))
+        t_ = top === :open ? face(:top) : _bc(top)
+        (t_ isa OpenBoundary || is_wall(t_)) ||
+            throw(ArgumentError("top must be :open or a wall"))
     end
-    b_ = bottom === :open ? face(:bottom) : _bc(bottom)
-    (b_ isa OpenBoundary || is_wall(b_)) ||
-        throw(ArgumentError("the bottom of an open box must be a wall, :open or :periodic"))
-    t_ = top === :open ? face(:top) : _bc(top)
-    (t_ isa OpenBoundary || is_wall(t_)) ||
-        throw(ArgumentError("top must be :open or a wall"))
+    # (#329: a vertically periodic box returned before these two, so its
+    # radiating outflow faces were never initialised and silently stayed
+    # Dirichlet)
     _check_outflow_sides(outflow, keys(st.outflow))
     _init_radiation!(st)
     return FieldBoundaryConditions(w_, e_, s_, n_, b_, t_)
@@ -831,22 +924,25 @@ boundary_flux_weights(sim) = nothing
 @inline _wtop(::Nothing, k) = 1
 @inline _wtop(W::Tuple, k) = W[2][k]
 
-# Visit every fluid interior face of a normal plane:
-# g(value_ref_indices..., outward sign, weight·area).
-function _foreach_face(g, p::OpenPlane{T}, m::RegularGrid{T}, W) where {T}
+# Fold over every fluid interior face of a normal plane:
+# acc = g(acc, value_ref_indices..., outward sign, weight·area). The
+# accumulator is threaded through the calls rather than captured and
+# reassigned by a closure, which boxed it (#329: 384 KiB per mass-flux
+# correction of a 32³ child).
+function _fold_faces(g, acc, p::OpenPlane{T}, m::RegularGrid{T}, W) where {T}
     fl = _face_local(p)
     s = p.high ? one(T) : -one(T)
     if p.axis == 1
         A = m.dy * m.dz
         for (b, k) in enumerate(m.Hz+1:m.Hz+m.Nz), (a, j) in enumerate(m.Hy+1:m.Hy+m.Ny)
             p.fluid[a, b] || continue
-            g(fl, j, k, s, T(_wlat(W, k)) * A)
+            acc = g(acc, fl, j, k, s, T(_wlat(W, k)) * A)
         end
     elseif p.axis == 2
         A = m.dx * m.dz
         for (b, k) in enumerate(m.Hz+1:m.Hz+m.Nz), (a, i) in enumerate(m.Hx+1:m.Hx+m.Nx)
             p.fluid[a, b] || continue
-            g(i, fl, k, s, T(_wlat(W, k)) * A)
+            acc = g(acc, i, fl, k, s, T(_wlat(W, k)) * A)
         end
     else
         A = m.dx * m.dy
@@ -854,10 +950,10 @@ function _foreach_face(g, p::OpenPlane{T}, m::RegularGrid{T}, W) where {T}
         wt = T(_wtop(W, kt))
         for (b, j) in enumerate(m.Hy+1:m.Hy+m.Ny), (a, i) in enumerate(m.Hx+1:m.Hx+m.Nx)
             p.fluid[a, b] || continue
-            g(i, j, fl, s, wt * A)
+            acc = g(acc, i, j, fl, s, wt * A)
         end
     end
-    return nothing
+    return acc
 end
 
 """
@@ -871,11 +967,27 @@ function open_boundary_flux(st::OpenBoundaryState{T}, W = nothing) where {T}
     Q = zero(T)
     for p in st.planes
         p.normal || continue
-        _foreach_face(p, st.mesh, W) do i, j, k, s, wA
-            Q += s * p.data[i, j, k] * wA
-        end
+        d = p.data
+        Q = _fold_faces((q, i, j, k, s, wA) -> q + s * d[i, j, k] * wA, Q, p, st.mesh, W)
     end
     return Q
+end
+
+# Subtract δ from the outward normal velocity of every open fluid face (only
+# the outflow faces with `only_out`). A function of its own so that no
+# closure captures a variable that is reassigned.
+function _subtract_flux_correction!(st::OpenBoundaryState{T}, W, δ, only_out::Bool) where {T}
+    for p in st.planes
+        p.normal || continue
+        d = p.data
+        _fold_faces(nothing, p, st.mesh, W) do acc, i, j, k, s, wA
+            if !only_out || s * d[i, j, k] > 0
+                d[i, j, k] -= s * δ
+            end
+            acc
+        end
+    end
+    return st
 end
 
 """
@@ -906,32 +1018,23 @@ function correct_boundary_mass_flux!(st::OpenBoundaryState{T}, W = nothing;
     Q = open_boundary_flux(st, W)
     δ = zero(T)
     if st.correction !== :none && Q != 0
-        outflow = st.correction === :outflow_only
+        only_out = st.correction === :outflow_only
         A = zero(T)
         for p in st.planes
             p.normal || continue
-            _foreach_face(p, st.mesh, W) do i, j, k, s, wA
-                (!outflow || s * p.data[i, j, k] > 0) && (A += wA)
-            end
+            d = p.data
+            A = _fold_faces((a, i, j, k, s, wA) -> (!only_out || s * d[i, j, k] > 0) ? a + wA : a,
+                            A, p, st.mesh, W)
         end
         if A == 0          # no outflow face: fall back to all faces
-            outflow = false
+            only_out = false
             for p in st.planes
                 p.normal || continue
-                _foreach_face(p, st.mesh, W) do i, j, k, s, wA
-                    A += wA
-                end
+                A = _fold_faces((a, i, j, k, s, wA) -> a + wA, A, p, st.mesh, W)
             end
         end
         δ = Q / A
-        for p in st.planes
-            p.normal || continue
-            _foreach_face(p, st.mesh, W) do i, j, k, s, wA
-                if !outflow || s * p.data[i, j, k] > 0
-                    p.data[i, j, k] -= s * δ
-                end
-            end
-        end
+        _subtract_flux_correction!(st, W, δ, only_out)
     end
     st.Q = Q
     st.δ = δ

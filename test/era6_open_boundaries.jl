@@ -435,3 +435,50 @@ end
     @test_throws ErrorException assert_open_face_correction(bcs, Field(FaceX(), m),
                                                             Field(FaceY(), m), gz)
 end
+
+# A vertically periodic open box (the 1-D/2-D nest child, #329) used to return
+# before the radiating outflow was initialised: its :convective faces stayed
+# Dirichlet without a word.
+@testset "radiating outflow in a vertically periodic open box (#329)" begin
+    m = RegularGrid(size = (8, 4, 4), extent = (8.0, 4.0, 4.0), halo = (3, 3, 3))
+    data = ProfileBoundaryData(u = 1.0, v = 0.0, w = 0.0, θ = 0.0)
+    for (bot, top) in ((:periodic, :periodic), (:wall, :open))
+        bcs = open_boundary_conditions(m, data; y = :periodic, bottom = bot, top = top,
+                                       outflow = :convective)
+        st = only(Aeolus.BoundaryConditions.open_boundary_states(bcs))
+        @test Aeolus.BoundaryConditions.has_radiating_outflow(bcs)
+        @test count(!isnothing, st.radiation) == length(st.planes)
+    end
+end
+
+# The one two-snapshot boundary-data helper (#329): a source delivering its
+# fields at discrete times implements snapshot_values and is blended in time
+# by WindowedBoundaryData (the nest parent is one such source).
+struct _ObSnapshot
+    val::Float64
+    m::Any
+end
+Aeolus.BoundaryConditions.snapshot_values(s::_ObSnapshot, name::Symbol) =
+    fill(name === :θ ? 10s.val : s.val, totalsize_ob(s.m))
+totalsize_ob(m) = (m.Nx + 2m.Hx, m.Ny + 2m.Hy, m.Nz + 2m.Hz)
+
+@testset "WindowedBoundaryData: two snapshots blended in time (#329)" begin
+    m = RegularGrid(size = (8, 4, 4), extent = (8.0, 4.0, 4.0), halo = (3, 3, 3))
+    d = WindowedBoundaryData(_ObSnapshot(1.0, m), _ObSnapshot(3.0, m), 10.0, 2.0)
+    @test window_fraction(d, 10.0) == 0 && window_fraction(d, 11.5) == 0.75
+    bcs = open_boundary_conditions(m, d; y = :periodic, top = :wall)
+    st = only(Aeolus.BoundaryConditions.open_boundary_states(bcs))
+    boundary_values!(st.planes, d, 10.5)                 # τ = 1/4
+    for p in st.planes
+        @test all(==(p.name === :θ ? 15.0 : 1.5), p.data)
+    end
+    d.Δt = 0.0                                           # steady: the first snapshot
+    boundary_values!(st.planes, d, 99.0)
+    @test all(p -> all(==(p.name === :θ ? 10.0 : 1.0), p.data), st.planes)
+    # the kernel on whole arrays and on a sub-box
+    A = rand(Xoshiro(1), 4, 4, 4); B = rand(Xoshiro(2), 4, 4, 4); D = similar(A)
+    @test blend_window!(D, A, B, 0.3) ≈ 0.7 .* A .+ 0.3 .* B
+    E = zeros(2, 4, 1)
+    blend_window!(E, A, B, 0.5, 2:3, 1:4, 4:4)
+    @test E == 0.5 .* A[2:3, :, 4:4] .+ 0.5 .* B[2:3, :, 4:4]
+end

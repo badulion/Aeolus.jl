@@ -13,7 +13,9 @@ time coupling: [`NestedRun`](@ref), the per-domain
 step bracketed by [`begin_child_step!`](@ref) and [`end_child_step!`](@ref)
 in a two-way run (#267) — and the child's boundary conditions:
 [`nest_bcs`](@ref) (`OpenBoundary` nest faces) fed by
-[`NestBoundaryData`](@ref), and the two-way feedback:
+[`NestBoundaryData`](@ref) (the nest parent as a two-snapshot
+[`WindowedBoundaryData`](@ref Aeolus.BoundaryConditions.WindowedBoundaryData)),
+refreshed by [`fill_nest_halos!`](@ref), and the two-way feedback:
 [`TwoWayFeedback`](@ref) (anterpolation with buffer zone, canopy
 restriction, inflow exclusion and relaxation, scalar refluxing from
 [`NestFluxRegisters`](@ref), re-projection), [`anterpolate!`](@ref),
