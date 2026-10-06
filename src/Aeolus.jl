@@ -21,6 +21,7 @@ include("TimeSteppers.jl")
 include("PressureSolvers.jl")
 include("Simulations.jl")
 include("IO.jl")
+include("Config.jl")         # run configuration schema, loader, canonical run.toml (CFG-a, #356)
 include("NetCDFIO.jl")        # dependency-free NetCDF-3 reader/writer
 include("IBM.jl")
 include("Parallel.jl")
@@ -98,6 +99,7 @@ using .TimeSteppers
 using .PressureSolvers
 using .Simulations
 using .IO
+using .Config
 using .NetCDFIO
 using .Microphysics
 using .IBM
@@ -235,6 +237,9 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
        CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
        latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
        driver_checkpoints, finish_checkpoints!
+# CFG-a (#356): run configuration (schema building: Aeolus.Config)
+export RunConfig, ConfigError, load_run_config, with, to_toml, write_config, config_text,
+       config_hash, register_driver!
 # #334: run folder and provenance
 export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
        provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,
