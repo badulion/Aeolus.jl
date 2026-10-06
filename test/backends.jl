@@ -125,7 +125,11 @@ end
     end
 
     rng = Xoshiro(91)
-    A = randn(rng, size(Field(mesh).data)) .* 10 .^ (4 .* rand(rng, size(Field(mesh).data)))
+    # magnitudes spread over four decades, so the order of the additions shows
+    # (`rand(rng, dims...)`: `rand(rng, dims)` would draw one element of the
+    # tuple, and 10^(4 n) overflows Int to 0, leaving A ≡ ±0)
+    A = randn(rng, size(Field(mesh).data)) .* 10 .^ (4 .* rand(rng, size(Field(mesh).data)...))
+    @assert count(!iszero, A) == length(A)
     B = randn(rng, size(A))
     ir, jr, kr = I3
 
