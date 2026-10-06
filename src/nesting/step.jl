@@ -1,6 +1,6 @@
 # Nesting: composite diagnostics, restriction and refluxing of the field
-# set, and step_nested! (moved from AdaptiveMesh.jl and generalised to
-# named field sets, N-nest-a #250).
+# set (moved from AdaptiveMesh.jl and generalised to named field sets,
+# N-nest-a #250). The time coupling, step_nested!, is in nesting/nested_run.jl.
 
 # =========================================================================
 # Composite diagnostics
@@ -238,8 +238,6 @@ function nest_conservation_error(psim::_NestSim, csim::_NestSim,
     error("nest_conservation_error: no recorded value for :$quantity — " *
           "run step_nested! first.")
 end
-
-# =========================================================================
 # Time-stepping coordination
 # =========================================================================
 
@@ -345,3 +343,4 @@ function step_nested!(psim::_NestSim, csim::_NestSim,
     end
     return (psim, csim)
 end
+=======
