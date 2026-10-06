@@ -135,6 +135,12 @@ delegation (test 6).
   applies at the cell's two w faces. θ and ``q_v`` are interpolated to
   the faces as there, with ``θ_v = θ(1 + 0.61 q_v)``. On a uniform grid
   this is the centred difference ``(g/θ_0)(θ_{k+1} - θ_{k-1})/(2Δz)``.
+* **Cloudy air** (#239). Given a condensate field ``q_c`` (cloud or fog
+  water) and the pressure, the buoyancy variable is
+  ``θ_ρ = θ(1 + 0.61 q_v - q_c)`` (condensate loading) and, in a saturated
+  cell (``q_c > 0``), ``N^2`` is that of a saturated parcel lifted on the
+  moist adiabat, `MoistThermodynamics.saturated_buoyancy_frequency_squared`
+  (see below).
 * `gradient_richardson!` divides by ``|S|^2 = 2S_{ij}S_{ij}`` from the
   strain stencil of the Smagorinsky closure. For a pure vertical shear,
   ``|S|^2 = (∂u/∂z)^2``.
@@ -148,6 +154,57 @@ delegation (test 6).
 * The shear layer ``u = U\tanh(z/δ)`` with constant ``N^2``: the
   discrete ``Ri`` converges to ``J\cosh^4(z/δ)`` with orders 1.92 and
   1.98 (``N_z`` = 32 → 64 → 128, over ``|z| ≤ 2δ``).
+
+## Saturated air
+
+Without the condensate, a moist-adiabatic cloud or fog layer — neutral for
+the saturated parcels that make up its turbulence — has the ``θ_v``
+gradient of a stable layer: about ``1.4 × 10^{-4}`` s⁻² for the 1 km
+column of test 7, enough for `StabilityCorrected` (Brown et al.) to shut
+the vertical mixing off at a shear of 0.02 s⁻¹ (``Ri = 0.36``) and for the
+Deardorff length scale ``0.76\sqrt e/N`` to fall to 6 m at
+``e = 0.01`` m² s⁻². Deardorff (1980) formulated the closure for
+stratocumulus with the saturated buoyancy.
+
+The saturated ``N^2`` linearises the ``θ_ρ`` of a parcel displaced on the
+(reversible) moist adiabat against the environment:
+
+```math
+N^2 = \frac{g}{θ_0}\Bigl[(1 + 0.61 q_v - q_c)
+      \Bigl(\frac{∂θ}{∂z} - \frac{Γ_d - Γ_m}{Π}\Bigr)
+      + θ\Bigl(1.61\Bigl(\frac{∂q_v}{∂z} - \frac{dq_s}{dz}\Big|_{\rm ad}\Bigr)
+      - \frac{∂q_w}{∂z}\Bigr)\Bigr].
+```
+
+``(Γ_d - Γ_m)/Π`` is the parcel's θ gradient (``T = θΠ``), so the pressure
+enters only pointwise; θ, ``q_v`` and ``q_w = q_v + q_c`` are differenced
+between the faces as for the dry ``N^2``. In a saturated environment the
+expression is the saturated Brunt–Väisälä frequency of Durran & Klemp
+(1982, eq. 36) to ``O(q)``. At a cloud edge it differs on purpose:
+Durran & Klemp assume a saturated environment and so drop the virtual
+effect of the humidity jump. A first version used their form. In the
+seeded Berlin smoke state it gave the fog-top level
+``⟨N^2⟩ = +3.1 × 10^{-3}`` s⁻², while ``θ_v`` gives
+``-2.2 × 10^{-3}``. A saturated parcel lifted into drier air of the same θ
+is buoyant: its vapour outweighs its water.
+
+**Measured (test 7).**
+
+* A saturated moist-adiabatic column with constant total water gives
+  ``|N^2| = 1.3 × 10^{-9}``, ``3.1 × 10^{-10}`` and ``7.8 × 10^{-11}`` s⁻² at
+  ``Δz`` = 50, 25 and 12.5 m (second order). The ``θ_v`` form gives
+  ``1.4 × 10^{-4}``.
+* In a saturated environment the result matches eq. 36 of Durran & Klemp,
+  written out by hand, to 0.9 %. It matches a parcel lifted 1 m by
+  ``8.5 × 10^{-9}`` s⁻², including at a cloud top.
+* It is within 1.4 %, 3.1 % and 1.3 % of the fog column's parcel ``N^2``
+  (`RadiationFog.moist_stability`, an enthalpy-conserving finite
+  displacement) on saturated layers of 8, 5 and 3 K km⁻¹.
+* Without condensate it reproduces the dry and the ``q_v`` forms bit for
+  bit.
+
+Rain is not loaded into the closures' ``N^2`` in the Berlin case: there
+``q_c`` is the cloud water ``q_l``, which also marks a cell as saturated.
 
 ## Maximum sustainable heat flux (P58-e)
 

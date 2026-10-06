@@ -16,6 +16,10 @@ include("Fields.jl")
 include("BoundaryConditions.jl")
 # Era VI stability contract (Phase 58): pure, and needed by Operators.
 include("TurbulenceStability.jl")
+# MoistThermodynamics (Era IV, Phase 39) is dependency-free. It is included
+# ahead of Operators, whose N² uses its saturated buoyancy frequency (#239),
+# and so also ahead of AerosolOptics (Kelvin coefficient, Köhler theory).
+include("MoistThermodynamics.jl")  # Phase 39
 include("Operators.jl")
 include("TimeSteppers.jl")
 include("PressureSolvers.jl")
@@ -42,10 +46,6 @@ include("Nesting.jl")          # Phase 30 parent-child operators (N-nest-a, #250
 include("AdaptiveMesh.jl")      # Phase 31 AMR (delegates to Nesting)
 
 # --- Era III: high-fidelity radiation (Phases 32-38) ---------------------
-# MoistThermodynamics (Era IV, Phase 39) is dependency-free and defines the
-# canonical Kelvin coefficient and Köhler theory, which AerosolOptics needs,
-# so it is included ahead of the radiation stack rather than with its own era.
-include("MoistThermodynamics.jl")  # Phase 39
 include("RadiationCore.jl")     # shared spectral / optics / flux contract
 # Era V contract (surface exchange) needs MoistThermodynamics and the
 # RadiationCore albedo/emissivity generics, and SlabLand (Radiation.jl)
@@ -263,7 +263,8 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
        runs_serially, launch!, launch_weighted!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
-       column_partials, interior_max, interior_all_finite, interior_map!, apply_transform!
+       column_partials, interior_max, interior_all_finite, interior_map!,
+       plane_reduce!, range_max, plane_map!, apply_transform!
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
 export apply_linear_chemistry!,
@@ -533,6 +534,7 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        moist_adiabatic_lapse_rate, dry_adiabatic_lapse_rate,
        lifting_condensation_level, level_of_free_convection,
        cape_cin, buoyancy, brunt_vaisala_frequency_moist,
+       saturated_buoyancy_frequency_squared,
        supersaturation, supersaturation_ice,
        kelvin_coefficient, kohler_supersaturation, kohler_critical_point,
        kohler_equilibrium_radius, surface_tension_water,

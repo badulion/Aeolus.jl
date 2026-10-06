@@ -16,6 +16,18 @@ print(describe(case))                               # couplings and schedule
 run_case!(case)                                     # NetCDF + log + timing table
 ```
 
+What the case prints is the installed logger's choice (#347; there is no
+`verbose` setting and no `io` keyword): every line is a log record with
+`subsystem = :berlin` and an `event` key. The setup summary (buildings,
+radiosity scene, surfaces, facade wall model, city-mean building) is
+`Debug`; the run's start, each output frame with the couplings' reports,
+the end-of-run summary, the timing table and the ledgers are `Info`; a
+blowup is an `Error`. `with_logger(NullLogger()) do … end` silences a run.
+`alexanderplatz_diurnal.jl` runs inside
+[`with_run_log`](@ref Aeolus.RunLog.with_run_log)`("output/alexanderplatz.log")`:
+`Info` and up on the console (`AEOLUS_LOG=debug` adds the setup summary),
+everything from `Debug` up in the log file.
+
 `examples/urban/alexanderplatz_diurnal.jl` is exactly this, reading
 `AEOLUS_NSTEPS` (default 43 200 = 24 h), `AEOLUS_OUTPUT_DT` (seconds
 between records, default 1800) and `AEOLUS_SCENARIO`.
@@ -176,7 +188,7 @@ included (#126). The surface exchange (#129) replaced the slab, whose
 latent flux sat at the end of `:anthropogenic` and whose Ts clamp ran in
 `:sanity` only to keep that order; see [Surface exchange](berlin_surface_radiation.md#Surface-exchange-(#129)).
 
-`run_case!` prints the wall time of every entry (`timing_report`). At
+`run_case!` logs the wall time of every entry (`timing_report`). At
 #126, in the 1 h flagship run (1800 steps, first-call compilation
 included), the largest entry was the WENO-Z5 scalar transport, about
 17 ms/step, ahead of `step!` itself (about 12.5 ms/step), then `fog_dew`

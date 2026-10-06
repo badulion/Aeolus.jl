@@ -15,6 +15,8 @@ using Statistics: mean
 using Printf
 
 include("tke_cbl_driver.jl")
+isdefined(@__MODULE__, :moist_adiabat_column!) ||
+    include(joinpath(@__DIR__, "support", "moist_adiabat.jl"))
 
 @testset "Era VI — prognostic SGS TKE (P56-b, #182)" begin
 
@@ -323,6 +325,30 @@ end
     @info "  wall cap: " * tke_cbl_summary(rc)
     @test rc.clips == 0
     @test rc.e[1] < r.e[1]                                  # the cap lowers e at the first level
+end
+
+
+@testset "7. saturated column: Deardorff's length scale sees the cloudy-air N² (#239)" begin
+    g = RegularGrid(; size = (4, 4, 20), extent = (100.0, 100.0, 500.0), halo = (3, 3, 3))
+    sim = BoussinesqSimulation(g; θ₀ = 285.0, g_accel = 9.81)
+    qv = Field(CellCenter(), g); qc = Field(CellCenter(), g)
+    pv = moist_adiabat_column!(sim.θ, qv, qc)
+    e0 = 0.01; Δ = 25.0; K = 2:g.Nz-1
+    v(x) = view(interior_view(x), :, :, K)
+    dry = TKEClosure(g; e0 = e0, qv = qv)
+    f = compute_sgs!(dry, sim)
+    # θ_v: N² ≈ 1.45e-4, l = 0.76 √e / N ≈ 6.3 m < Δ
+    @test minimum(v(dry.N2)) > 1.4e-4
+    @test maximum(v(f.νh)) < 0.1 * 0.3 * Δ * sqrt(e0)
+    wet = TKEClosure(g; e0 = e0, qv = qv, qc = qc, p = pv)
+    f = compute_sgs!(wet, sim)
+    @test maximum(abs, v(wet.N2)) < 1e-8                 # moist-neutral
+    @test all(νt -> νt ≈ 0.1 * Δ * sqrt(e0), v(f.νh))    # l = Δ: ν_t = c_k Δ √e
+    rsm = ReynoldsStressClosure(g; e0 = e0, qv = qv, qc = qc, p = pv)
+    Aeolus.PrognosticSGS._stratification!(rsm, sim)
+    @test interior_view(rsm.N2) == interior_view(wet.N2)   # the one N² of both closures
+    @test_throws ArgumentError TKEClosure(g; qv = qv, qc = qc)          # no pressure
+    @info "#239 TKE in a saturated column" N2_θv = minimum(v(dry.N2)) N2_cloudy = maximum(abs, v(wet.N2))
 end
 
 end

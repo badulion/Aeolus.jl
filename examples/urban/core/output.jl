@@ -139,14 +139,36 @@ function close_output!(case)
     return case
 end
 
+"The frame line of the current output record and every coupling's `report`."
+function frame_message(case)
+    clk, sim, bus = case.clock, case.sim, case.bus
+    io = IOBuffer()
+    θ1 = view(interior_view(sim.θ), :, :, 1)
+    qv1 = view(interior_view(tracer(case, :qv)), :, :, 1)
+    ql1 = view(interior_view(tracer(case, :ql)), :, :, 1)
+    # min / max are exact and order-independent (NaN-propagating), so these
+    # serial 2-D scans are thread-invariant as they stand (KA-b, #296)
+    @printf(io, "frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°  θ1=%5.1f/%5.1f  qv1min=%.4f  dew=%.3f mm  fog ql1max=%.2e",
+            clk.nrecord, clk.hour, time() - clk.t_wall0,
+            minimum(bus.Ts), maximum(bus.Ts),
+            minimum(bus.sw), maximum(bus.sw), clk.sun.elevation,
+            minimum(θ1), maximum(θ1), minimum(qv1), maximum(bus.dew), maximum(ql1))
+    for c in case.couplings
+        r = report(c, case)
+        r === nothing || print(io, '\n', r)
+    end
+    return String(take!(io))
+end
+
 """
     write_output!(case)
 
-Append one record (when a file is open) and print the log lines: the
-core frame line, then every coupling's `report`.
+Append one record (when a file is open) and log the frame: one `Info`
+record (`subsystem = :berlin`, `event = :frame`) whose message is the core
+frame line followed by every coupling's `report` ([`frame_message`](@ref)).
 """
 function write_output!(case)
-    clk, sim, bus = case.clock, case.sim, case.bus
+    clk, sim = case.clock, case.sim
     clk.nrecord += 1
     if case.output !== nothing
         rec = Dict{String,Any}(
@@ -158,19 +180,10 @@ function write_output!(case)
         end
         nc_append_record!(case.output.ncf, rec)
     end
-    case.cfg.verbose || return case
-    io = case.io
-    θ1 = view(interior_view(sim.θ), :, :, 1)
-    qv1 = view(interior_view(tracer(case, :qv)), :, :, 1)
-    ql1 = view(interior_view(tracer(case, :ql)), :, :, 1)
-    @printf(io, "  frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°  θ1=%5.1f/%5.1f  qv1min=%.4f  dew=%.3f mm  fog ql1max=%.2e\n",
-            clk.nrecord, clk.hour, time() - clk.t_wall0,
-            minimum(bus.Ts), maximum(bus.Ts),
-            minimum(bus.sw), maximum(bus.sw), clk.sun.elevation,
-            minimum(θ1), maximum(θ1), minimum(qv1), maximum(bus.dew), maximum(ql1))
-    for c in case.couplings
-        r = report(c, case)
-        r === nothing || println(io, r)
-    end
+    # the frame line and the couplings' reports: one Info record, built only
+    # when a logger wants it (#347; the reports move onto the diagnostics
+    # registry with #338)
+    @info(frame_message(case), subsystem = :berlin, domain = current_domain(),
+          event = :frame, frame = clk.nrecord, hour = clk.hour)
     return case
 end

@@ -14,6 +14,7 @@ makedocs(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical  = "https://badulion.github.io/Aeolus.jl",
         edit_link  = "master",
+        repolink   = "https://github.com/badulion/Aeolus.jl",
         assets     = [asset("assets/favicon.svg"; class = :ico, islocal = true)],
         sidebar_sitename = true,
     ),
@@ -184,3 +185,16 @@ makedocs(
     warnonly = [:missing_docs, :cross_references],
     remotes  = nothing,   # source links disabled; docs build standalone
 )
+
+# Deploy to the gh-pages branch (#354). Only from GitHub Actions, so a local
+# `julia --project=docs docs/make.jl` builds into docs/build and stops here.
+# Pushes to master update `dev`, version tags update `stable` and `vX.Y.Z`;
+# pull requests build without deploying (no previews). Authentication is the
+# workflow's GITHUB_TOKEN (DOCUMENTER_KEY, if set, is used instead).
+if get(ENV, "GITHUB_ACTIONS", "false") == "true"
+    deploydocs(
+        repo      = "github.com/badulion/Aeolus.jl.git",
+        devbranch = "master",
+        push_preview = false,
+    )
+end

@@ -11,7 +11,9 @@
 #   3. a linear internal wave is not damped by the vertical SGS;
 #   4. a breaking wave switches the vertical SGS on;
 #   5. conservation of Σθ dV and decay of the θ variance;
-#   6. a cooled column: where κv = 0 the θ-flux divergence vanishes.
+#   6. a cooled column: where κv = 0 the θ-flux divergence vanishes;
+#   7. saturated (fog) column: with the condensate (#239) a moist-adiabatic
+#      cloud is neutral (νv = ν_base ℓv); with θ_v only it is shut off.
 
 using Test
 using Aeolus
@@ -20,6 +22,9 @@ using Aeolus.Grids: interior
 using Aeolus.Operators: compute_sgs!
 using Random: Xoshiro, rand, randn
 using Printf
+
+isdefined(@__MODULE__, :moist_adiabat_column!) ||
+    include(joinpath(@__DIR__, "support", "moist_adiabat.jl"))
 
 const _SC_BCS  = FieldBoundaryConditions(:periodic, :periodic, :wall)
 const _SC_TBCS = FieldBoundaryConditions(:periodic, :periodic, :noflux)
@@ -554,6 +559,33 @@ end
     @test f.κv.data == fs.κv.data                                 # the inner closure's κv
     @test any(interior_view(iso.K.K13) .!= 0)                      # rotated where κv < κh
     @test all(isfinite, iso.K.K33.data)
+end
+
+
+@testset "7. saturated column: cloudy-air N² in the correction (#239)" begin
+    g = RegularGrid(; size = (4, 4, 20), extent = (100.0, 100.0, 500.0))   # dx = dz = 25 m
+    S = 0.02; C_s = 0.17
+    sim = BoussinesqSimulation(g; θ₀ = 285.0, g_accel = 9.81, Pr_t = 1 / 3,
+                               bcs = _SC_BCS, θ_bcs = _SC_TBCS)
+    qv = Field(CellCenter(), g); qc = Field(CellCenter(), g)
+    pv = moist_adiabat_column!(sim.θ, qv, qc)
+    set!(sim.u, (x, y, z) -> S * z)
+    _sc_halos!(sim)
+    Δ = (g.dx * g.dy * g.dz)^(1 / 3); νb = (C_s * Δ)^2 * S
+    K = 2:g.Nz-1
+    v(x) = view(interior_view(x), :, :, K)
+    dry = StabilityCorrected(StaticSmagorinsky(C_s), g; qv = qv)
+    f = compute_sgs!(dry, sim)
+    @test minimum(v(dry.Ri)) > 0.25          # θ_v sees a stable layer: Ri ≈ 0.36
+    @test all(iszero, v(f.νv))               # … and shuts the vertical mixing off
+    wet = StabilityCorrected(StaticSmagorinsky(C_s), g; qv = qv, qc = qc, p = pv)
+    f = compute_sgs!(wet, sim)
+    @test maximum(abs, v(wet.Ri)) < 1e-4      # moist-neutral
+    @test maximum(abs, v(f.νv) .- νb) < 1e-3 * νb
+    @test_throws ArgumentError StabilityCorrected(StaticSmagorinsky(C_s), g; qv = qv, qc = qc)
+    noq = StabilityCorrected(StaticSmagorinsky(C_s), g; qc = qc, p = pv)   # dry core, no qv
+    @test_throws ArgumentError compute_sgs!(noq, sim)
+    @info "#239 StabilityCorrected in a saturated column" Ri_θv = minimum(v(dry.Ri)) Ri_cloudy = maximum(abs, v(wet.Ri))
 end
 
 end # testset

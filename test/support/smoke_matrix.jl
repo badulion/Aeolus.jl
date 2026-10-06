@@ -73,7 +73,7 @@ function smoke_matrix(registry = BC.REGISTRY)
         opts = base_options()
         haskey(opts, :pollutant) && !any(C -> name(C) === :pollutant, registry) && delete!(opts, :pollutant)
         merge!(opts, options)
-        return label => BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
+        return label => BC.CaseConfig(:smoke; output_path = nothing,
                                       physics = phys, options = opts, kw...)
     end
     runs = [mk("summer, everything on"),

@@ -4,6 +4,7 @@ using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, interior
 using ..Fields
 using ..Fields: Field, interior_view
+using ..Backends: Backends, plane_partials!, plane_reduce!, plane_mean!, ordered_sum, range_max
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!, Periodic, ImpermeableWall,
                             update_open_boundaries!, prepare_open_boundaries!,
@@ -18,7 +19,8 @@ using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    add_eddy_diffusion_scalar!,
                    add_surface_flux!, add_sponge!,
                    AbstractSGSClosure, compute_sgs!, add_sgs_momentum!, add_sgs_scalar!,
-                   advance_sgs!, _active_sgs, _check_sgs_stress, sgs_tracer_diffusivity!
+                   advance_sgs!, _active_sgs, _check_sgs_stress, sgs_tracer_diffusivity!,
+                   _sq_dev_at                  # (f - m_k)², shared with abl_diagnostics
 using ..PressureSolvers
 using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver, solve!,
                         poisson_axis_bcs
@@ -685,29 +687,28 @@ function kinetic_energy(sim::BoussinesqSimulation)
     m = sim.mesh
     m isa RegularGrid || return _kinetic_energy_levels(sim, m)
     dV = m.dx * m.dy * m.dz
-    ke = 0.0
-    ui = interior_view(sim.u); vi = interior_view(sim.v); wi = interior_view(sim.w)
-    @inbounds for I in eachindex(ui)
-        ke += ui[I]^2 + vi[I]^2 + wi[I]^2
-    end
-    return 0.5 * ke * dV
+    I3 = interior(m)
+    # canonical plane sums, then ascending k: thread-invariant (KA-b, #296)
+    p = plane_partials!(zeros(length(I3[3])), Backends.backend(sim.u.data), _ke_point, I3,
+                        sim.u.data, sim.v.data, sim.w.data)
+    return 0.5 * ordered_sum(p) * dV
 end
+@inline _ke_point(u, v, w) = u^2 + v^2 + w^2
 
 # The same sum with per-level volumes: u, v (at cell-centre heights) weigh
 # with the cell thickness, w (on z-faces) with the centre spacing, i.e. the
 # heights of the u- and w-control volumes of the staggered grid.
 function _kinetic_energy_levels(sim::BoussinesqSimulation, m)
-    ii, jj, kk = interior(m)
-    ud, vd, wd = sim.u.data, sim.v.data, sim.w.data
-    ke = 0.0
-    @inbounds for k in kk
-        hc = _dzc(m, k); hf = _dzf(m, k)
-        for j in jj, i in ii
-            ke += (ud[i, j, k]^2 + vd[i, j, k]^2) * hc + wd[i, j, k]^2 * hf
-        end
-    end
-    return 0.5 * ke * m.dx * m.dy
+    I3 = interior(m)
+    p = plane_reduce!(zeros(length(I3[3])), Backends.backend(sim.u.data), _ke_levels_at, I3,
+                      sim.u.data, sim.v.data, sim.w.data, m)
+    return 0.5 * ordered_sum(p) * m.dx * m.dy
 end
+@inline _ke_levels_at(i, j, k, ud, vd, wd, m) =
+    @inbounds (ud[i, j, k]^2 + vd[i, j, k]^2) * _dzc(m, k) + wd[i, j, k]^2 * _dzf(m, k)
+
+# |a| at a point: the body of the max-norm reductions
+@inline _abs_at(i, j, k, a) = @inbounds abs(a[i, j, k])
 
 """
     max_divergence(sim) -> Float64
@@ -721,7 +722,8 @@ function max_divergence(sim::BoussinesqSimulation)
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     divergence(sim.div_buf, sim.u, sim.v, sim.w)
-    return maximum(abs, interior_view(sim.div_buf))
+    # max is exact: the same bits as `maximum(abs, interior_view(div_buf))`
+    return range_max(Backends.backend(sim.div_buf.data), _abs_at, interior(sim.mesh), sim.div_buf.data)
 end
 
 """
@@ -740,8 +742,8 @@ Horizontal mean of a cell-centered field over the interior, one entry
 per interior `z`-level.
 """
 function horizontal_mean(field::Field{CellCenter})
-    v = interior_view(field)
-    return dropdims(sum(v; dims=(1,2)) ./ (size(v,1) * size(v,2)); dims=(1,2))
+    # canonical plane sums / (Nx Ny): thread-invariant (KA-b, #296)
+    return plane_mean!(zeros(eltype(field.data), size(interior_view(field), 3)), field)
 end
 
 """
@@ -751,18 +753,14 @@ Horizontal variance of a field over the interior, `⟨(f - ⟨f⟩)²⟩`, one
 entry per interior `z`-level (the face levels for a `FaceZ` field).
 """
 function horizontal_variance(field::Field)
-    v = interior_view(field)
-    m = dropdims(sum(v; dims=(1,2)) ./ (size(v,1) * size(v,2)); dims=(1,2))
-    var_profile = similar(m)
-    @inbounds for k in eachindex(m)
-        s = 0.0
-        for j in 1:size(v,2), i in 1:size(v,1)
-            d = v[i,j,k] - m[k]
-            s += d*d
-        end
-        var_profile[k] = s / (size(v,1) * size(v,2))
-    end
-    return var_profile
+    # the plane mean of any location (horizontal_mean is cell-centred only),
+    # then the canonical plane sums of (f - m_k)²: thread-invariant (KA-b, #296)
+    m = plane_mean!(zeros(eltype(field.data), size(interior_view(field), 3)), field)
+    I3 = interior(field.mesh)
+    n = length(I3[1]) * length(I3[2])
+    s = plane_reduce!(similar(m), Backends.backend(field.data), _sq_dev_at, I3,
+                      field.data, m, first(I3[3]) - 1)
+    return s ./ n
 end
 
 """
@@ -773,24 +771,15 @@ cell centers (using `w` interpolated in z). One entry per interior
 `z`-level.
 """
 function resolved_flux_wθ(sim::BoussinesqSimulation)
-    θi = interior_view(sim.θ)
-    Nz = size(θi, 3)
-    profile = zeros(eltype(θi), Nz)
-    m_θ = dropdims(sum(θi; dims=(1,2)) ./ (size(θi,1) * size(θi,2)); dims=(1,2))
-    Hz = sim.mesh.Hz
-    wd = sim.w.data
-    ii, jj, _ = interior(sim.mesh)
-    @inbounds for k in 1:Nz
-        kw = Hz + k
-        s = 0.0
-        for j in jj, i in ii
-            w_cc = 0.5 * (wd[i, j, kw] + wd[i, j, kw + 1])
-            s += w_cc * (θi[i - first(ii) + 1, j - first(jj) + 1, k] - m_θ[k])
-        end
-        profile[k] = s / (length(ii) * length(jj))
-    end
-    return profile
+    m_θ = horizontal_mean(sim.θ)
+    I3 = interior(sim.mesh)
+    s = plane_reduce!(similar(m_θ), Backends.backend(sim.θ.data), _wθ_flux_at, I3,
+                      sim.w.data, sim.θ.data, m_θ, first(I3[3]) - 1)
+    return s ./ (length(I3[1]) * length(I3[2]))
 end
+# w (centred in z) × θ′ at a point of level k
+@inline _wθ_flux_at(i, j, k, wd, θd, m, ok) =
+    @inbounds 0.5 * (wd[i, j, k] + wd[i, j, k + 1]) * (θd[i, j, k] - m[k - ok])
 
 """
     mean_θ_profile(sim) -> Vector
@@ -799,10 +788,7 @@ Horizontal-mean potential-temperature profile `⟨θ⟩(k)` over the
 interior, one entry per interior `z`-level. Useful for diagnosing
 stratification.
 """
-function mean_θ_profile(sim::BoussinesqSimulation)
-    θi = interior_view(sim.θ)
-    return dropdims(sum(θi; dims=(1,2)) ./ (size(θi,1) * size(θi,2)); dims=(1,2))
-end
+mean_θ_profile(sim::BoussinesqSimulation) = horizontal_mean(sim.θ)   # canonical (KA-b, #296)
 
 # -------------------------------------------------------------------------
 # Helpers

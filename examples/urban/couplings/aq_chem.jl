@@ -168,19 +168,25 @@ function _aq_sun!(c::AQChem, case)
     return c
 end
 
-# level-mean temperature over the air cells: T = θ Π̄
+# level-mean temperature over the air cells: T = θ Π̄. The masked sums and
+# counts per level in the canonical, thread-invariant order (KA-b, #296).
 function _aq_temperature!(c::AQChem, case)
-    θ = interior_view(case.sim.θ)
-    for k in axes(θ, 3)
-        s = 0.0; n = 0
-        @inbounds for j in axes(θ, 2), i in axes(θ, 1)
-            c.k_air[i, j] <= k || continue
-            s += θ[i, j, k]; n += 1
-        end
-        θk = n > 0 ? s / n : case.cfg.θ₀
+    θ = case.sim.θ
+    m = case.mesh
+    Nz = m.Nz
+    S, n = zeros(Nz), zeros(Nz)
+    plane_reduce!((S, n), Aeolus.Backends.backend(θ.data), _aq_air_θ_at,
+                  (1:m.Nx, 1:m.Ny, 1:Nz), θ.data, c.k_air, m.Hx, m.Hy, m.Hz)
+    for k in 1:Nz
+        θk = n[k] > 0 ? S[k] / n[k] : case.cfg.θ₀
         c.T_col[k] = θk * ref_exner(case, k)
     end
     return c
+end
+
+@inline function _aq_air_θ_at(i, j, k, θ, k_air, Hx, Hy, Hz)
+    @inbounds k_air[i, j] <= k || return (0.0, 0.0)
+    return (@inbounds(θ[Hx+i, Hy+j, Hz+k]), 1.0)
 end
 
 function init!(c::AQChem, case)
@@ -256,6 +262,9 @@ function _aq_emit!(c::AQChem, case, dt)
     ftr = traffic_profile(case.clock.hour)
     fsun = c.J / j_NO2(1.0)
     eNO, eNO2, eVOC = 0.0, 0.0, 0.0
+    # surface sums: the columns' contributions folded in column-major order,
+    # the canonical order of a 2-D reduction (serial; KA-b, #296). The dry
+    # deposition total (`apply_dry_deposition!`) is the same kind of sum.
     @inbounds for j in axes(NO, 2), i in axes(NO, 1)
         k = c.k_air[i, j]
         k <= Nz || continue
@@ -280,11 +289,13 @@ function run_stage!(c::AQChem, case, ::Val{:chemistry}, dt)
     _aq_temperature!(c, case)
     _aq_emit!(c, case, dt)
     NO, NO2, O3, VOC, HNO3 = (_aq_sp(c, s) for s in AQ_SPECIES)
-    Ox0 = sum(O3) + sum(NO2); N0 = sum(NO) + sum(NO2)
+    # the species totals in the canonical, thread-invariant order (KA-b, #296)
+    tot(s) = interior_sum(getfield(c, s))
+    Ox0 = tot(:O3) + tot(:NO2); N0 = tot(:NO) + tot(:NO2)
     b = apply_photochemistry!(NO, NO2, O3, VOC, HNO3, dt; J = c.J, T = c.T_col, p = c.p_col,
                               OH = c.OH, ν = c.opts.ν)
-    dOx = sum(O3) + sum(NO2) - Ox0
-    dN = sum(NO) + sum(NO2) - N0
+    dOx = tot(:O3) + tot(:NO2) - Ox0
+    dN = tot(:NO) + tot(:NO2) - N0
     A, dz = length(c.k_air), case.mesh.dz
     for s in AQ_DEPOSITING
         c.dry[s] += apply_dry_deposition!(_aq_sp(c, s), c.v_d[s], dt; dz = dz, k = c.k_air) / A
@@ -365,7 +376,7 @@ function smoke_check(c::AQChem, case)
     # (measured −3e-21 ppb where a species is 0, e.g. NO at night)
     fin = all(s -> all(x -> isfinite(x) && x >= -1e-12, _aq_sp(c, s)), AQ_SPECIES)
     l = c.last
-    Ox = sum(_aq_sp(c, :O3)) + sum(_aq_sp(c, :NO2))
+    Ox = interior_sum(c.O3) + interior_sum(c.NO2)
     checks = ["NO, NO2, O3, VOC, HNO3 finite and ≥ 0 (to 1e-12 ppb)" => fin,
               # the mechanism's own budgets over the last photochemistry call:
               # ΔOx = P − L and ΔNOx = −ΔHNO3 (the triad conserves both exactly)
