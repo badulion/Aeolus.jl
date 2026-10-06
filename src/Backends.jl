@@ -85,6 +85,8 @@ struct GPUBackend <: AbstractBackend
 end
 GPUBackend() = GPUBackend(:cuda)
 
+"`backend_name(backend)`: `:cpu`, or the GPU kind (`:cuda`, `:rocm`, …)."
+function backend_name end
 backend_name(::CPUBackend) = :cpu
 backend_name(b::GPUBackend) = b.kind
 
@@ -346,8 +348,12 @@ The contract (docs/src/design/ka_port.md):
 Serial (`serial = true`, one Julia thread, or fewer points than the
 backend's threshold): the loops run on the calling task in the historical
 order `for k, for j, for i`. Threaded: a KernelAbstractions kernel whose
-work item is one i-row, in workgroups of four rows.
+work item is one i-row, in workgroups of four rows; a launch too small
+for every thread gets fewer, larger workgroups (at least 16 384 points
+per task).
 """
+function launch! end
+
 # Specialisation: with a plain `args...`, or with a function among the
 # arguments, Julia compiles a pass-through method for widened argument types
 # (`Any`, `Function`), and the inlined serial loop then dispatches at every
