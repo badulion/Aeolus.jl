@@ -35,6 +35,7 @@
 # diagonalise.
 
 using FFTW: FFTW, plan_r2r
+using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
 using LinearAlgebra: mul!
 using ..PressureSolvers: AbstractPressureSolver
 import ..PressureSolvers: solve!
@@ -111,8 +112,8 @@ function StretchedPoissonSolver(g::StretchedGrid{T};
     ky_f, ky_i, sy = _r2r_kinds(bc_y)
     buf  = zeros(T, Nx, Ny, Nz)
     buf2 = zeros(T, Nx, Ny, Nz)
-    plan_fwd = plan_r2r(buf, (kx_f, ky_f), (1, 2); flags = FFTW.MEASURE)
-    plan_inv = plan_r2r(buf, (kx_i, ky_i), (1, 2); flags = FFTW.MEASURE)
+    plan_fwd = plan_r2r(buf, (kx_f, ky_f), (1, 2); flags = fftw_planner_flags())
+    plan_inv = plan_r2r(buf, (kx_i, ky_i), (1, 2); flags = fftw_planner_flags())
     norm = one(T) / T(sx * Nx * sy * Ny)
 
     kk = g.Hz+1 : g.Hz+Nz

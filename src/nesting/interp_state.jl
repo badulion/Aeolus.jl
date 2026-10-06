@@ -64,9 +64,6 @@ end
 
 const _CCField{T,M} = Field{CellCenter, T, Array{T,3}, M}
 
-"Simulations a nest can couple: the Boussinesq core (uniform or z-stretched) and the sound-proof `MassWeightedSimulation`s (anelastic, pseudo-incompressible)."
-const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
-
 """
     NestInterpState
 
@@ -176,10 +173,17 @@ _sim_measure(nest, p::MassWeightedSimulation, c::MassWeightedSimulation) =
     nest_measure(nest, p, c)
 _sim_measure(nest, p, c) = nothing          # a mixed pair: the volume measure
 
-# A Boussinesq pair, or a mixed pair (a Boussinesq parent and a sound-proof
-# child, or the reverse; N-nest-c #257), which has no common reference mass:
-# the volume measure.
-function nest_interp_state(nest::NestedGrid, psim::_NestSim, csim::_NestSim; scalars=())
+# Same dynamical-core family (the pairs the restriction / feedback and the
+# mass measure are defined for).
+_same_core(::BoussinesqSimulation, ::BoussinesqSimulation) = true
+_same_core(::MassWeightedSimulation, ::MassWeightedSimulation) = true
+_same_core(p, c) = false
+
+# A Boussinesq pair, or a mixed pair (e.g. a Boussinesq parent providing
+# one-way boundary data to a sound-proof child, see NestedRun): volume
+# measure. A sound-proof pair is the more specific method above.
+function nest_interp_state(nest::NestedGrid, psim::_NestSim,
+                           csim::_NestSim; scalars=())
     _moist(psim) == _moist(csim) ||
         error("nest_interp_state: parent has_moisture = $(_moist(psim)) but child " *
               "has_moisture = $(_moist(csim)); a nest must carry qv on both grids or " *

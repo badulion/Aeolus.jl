@@ -149,7 +149,7 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
             @test sim isa Aeolus.Anelastic.MassWeightedSimulation
             @test case.clock.n == 12 && !case.clock.blowup
             # base state = the case's one reference state (#131): the
-            # initial sounding, hydrostatic from cfg.p_surface, the same ρ̄
+            # initial sounding, hydrostatic from case.ref.p_surface, the same ρ̄
             # the couplings and the ledger use
             @test ref === case.ref.state
             @test ref.ρ̄ == case.ref.ρ̄ == case.ledger.ρ
@@ -157,7 +157,7 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
             @test maximum(abs.(ref.θ̄ .- BC.initial_θ(case.cfg).(0.0, 0.0, zc))) < 1e-10
             @test Aeolus.Anelastic.max_hydrostatic_residual(ref) < 1e-8
             # ideal gas at the first level: T = θ (p/p₀)^(R/cₚ), p ≈ p_surface
-            ps = case.cfg.p_surface
+            ps = case.ref.p_surface
             T1 = ref.θ̄[1] * (ps / 1e5)^(287.0 / 1004.0)
             @test isapprox(ref.ρ̄[1], ps / (287.0 * T1); rtol = 1e-3)
             # The projection enforces ∇·(W u) = 0: at every level the mean

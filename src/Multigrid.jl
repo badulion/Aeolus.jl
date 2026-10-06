@@ -476,6 +476,8 @@ function MultigridPoissonSolver(mesh::RegularGrid{T};
                                      Ref(0), Ref(zero(T)), T[])
 end
 
+poisson_axis_bcs(s::MultigridPoissonSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = s.bc_z)
+
 """
     MultigridPoissonSolver(g::StretchedGrid; kwargs...)
     MGPreconditionedCG(g::StretchedGrid; kwargs...)
@@ -540,8 +542,6 @@ function _scale_rhs!(b::AbstractArray{T,3}, sc::Vector{T}) where {T}
     end
     return b
 end
-
-poisson_axis_bcs(s::MultigridPoissonSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = s.bc_z)
 
 "Number of levels in the hierarchy (1 means no coarsening was possible)."
 mg_level_count(s::MultigridPoissonSolver) = length(s.levels)

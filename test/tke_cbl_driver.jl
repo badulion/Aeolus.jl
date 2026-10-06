@@ -21,17 +21,20 @@ using Statistics: mean
 """
     tke_cbl(N; Δ = 50.0, Δz = Δ, Q = 0.1, T_end = 3600.0, avg = 900.0, z_i0 = 600.0,
             Γ = 0.003, θ₀ = 300.0, seed = 1, wall_cap = false, surface_factor = 3.9,
-            C_advective = 0.4, progress = false) -> NamedTuple
+            C_advective = 0.4, progress = false, on_step = nothing) -> NamedTuple
 
 Run the CBL on an `N × N × N` grid with horizontal spacing `Δ` and vertical
 `Δz` and return the averaged profiles (`zc` cell centres, `zf` interior w
 faces): `e` (SGS TKE), `kres` (resolved TKE), `w2` (resolved ``σ_w^2``),
 `flux` (total heat flux / Q at the w faces: resolved ``⟨w'θ'⟩`` plus the SGS
 ``−⟨κ_t ∂θ/∂z⟩``), `sgs_flux`, `θ`; and the scalars `zi` (height of the
-minimum heat flux), `min_flux_ratio`, `max_sgs_fraction` (of
+minimum heat flux, `boundary_layer_height(zf, flux; method = :min_flux)`), `min_flux_ratio`, `max_sgs_fraction` (of
 ``e/(e + k_{res})`` over ``0.2 < z/z_i < 0.8``), `z_epeak`, `w_star`
 (``(g Q z_i/θ_0)^{1/3}``), `w2max_norm` (``\\max σ_w^2/w_*^2``),
 `z_w2max_norm` (its ``z/z_i``), `clips`, `min_e`, `steps`, `wall` (s).
+
+`on_step(sim, closure, Δt)`, if given, is called after every step (e.g. to
+fold the state into `Transition.ParentResolvedStatistics`, N-inflow-b).
 
 `wall_cap = true` caps the mixing length at ``κ`` × `IBM.wall_distance`
 (the floor); the default is Moeng's (1984) closure, ``l ≤ Δ`` with
@@ -39,7 +42,8 @@ minimum heat flux), `min_flux_ratio`, `max_sgs_fraction` (of
 """
 function tke_cbl(N::Integer; Δ = 50.0, Δz = Δ, Q = 0.1, T_end = 3600.0, avg = 900.0,
                  z_i0 = 600.0, Γ = 0.003, θ₀ = 300.0, seed = 1, wall_cap::Bool = false,
-                 surface_factor = 3.9, C_advective = 0.4, progress::Bool = false)
+                 surface_factor = 3.9, C_advective = 0.4, progress::Bool = false,
+                 on_step = nothing)
     rng = Xoshiro(seed)
     L, H = N * Δ, N * Δz
     m = RegularGrid(; size = (N, N, N), extent = (L, L, H), halo = (3, 3, 3))
@@ -60,6 +64,7 @@ function tke_cbl(N::Integer; Δ = 50.0, Δz = Δ, Q = 0.1, T_end = 3600.0, avg =
         h = min(adaptive_dt(sim, cfl; dt_prev = dt, sgs = c), T_end - sim.t)
         step_rk3!(sim, h; sgs = c)
         dt = h; steps += 1
+        on_step === nothing || on_step(sim, c, h)
         min_e = min(min_e, minimum(interior_view(c.e)))
         if sim.t > T_end - avg
             p = _cbl_profiles(sim, c, Q)
@@ -72,14 +77,14 @@ function tke_cbl(N::Integer; Δ = 50.0, Δz = Δ, Q = 0.1, T_end = 3600.0, avg =
     P = map(x -> x ./ nacc, acc)
     zc = [(k - 0.5) * m.dz for k in 1:m.Nz]
     zf = [k * m.dz for k in 1:m.Nz-1]
-    kmin = argmin(P.flux)
-    zi = zf[kmin]
+    # the one z_i diagnostic: the height of the minimum total heat flux
+    zi = boundary_layer_height(zf, P.flux; method = :min_flux)
     frac = P.e ./ (P.e .+ P.kres)
     sel = (zc .> 0.2zi) .& (zc .< 0.8zi)
     w_star = cbrt(sim.g_accel / θ₀ * Q * zi)
     kw = argmax(P.w2)
     st = tke_statistics(c)
-    return (; P..., zc, zf, zi, min_flux_ratio = P.flux[kmin],
+    return (; P..., zc, zf, zi, min_flux_ratio = minimum(P.flux),
               max_sgs_fraction = maximum(frac[sel]), sgs_fraction = frac,
               z_epeak = zc[argmax(P.e)], w_star, w2max_norm = P.w2[kw] / w_star^2,
               z_w2max_norm = zc[kw] / zi, clips = st.clips, min_e, steps, wall, N,

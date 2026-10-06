@@ -60,6 +60,7 @@ examples/urban/
     tracers.jl         tracer registry (ensure_tracer!)
     ledger.jl          energy/water budget ledger (surface energy per class, water in the air)
     reference_state.jl hydrostatic reference p̄, ρ̄, T̄, Π̄ (CaseReference)
+    open_boundary.jl   cfg.lateral (:periodic / :open), the open faces' data and heat (#262)
     output.jl          NetCDF output driven by the registry
     case.jl            Case, build_case
     stages.jl          the stage loop: step_case!, run_case!, timing_report
@@ -201,11 +202,17 @@ needs.
   surface last saw (`T_air`, `q_air`, `U`, `z_ref`), the fluxes it
   returned (`Rn`, `H`, `LE`, `G`, `E`, `u_star`) and the `dew_mask`.
 * **Surface factories.** A coupling that provides the surface of a
-  class registers `register_surface_factory!(case, class, name, (case, I) -> surface)`
-  in its `build`; the surface exchange builds every column's surface
-  from these in its `init!` (a `SlabLand` for a class nobody claims).
-  This is how the park (#140), water (#141) and facet (#139) couplings
-  replace a class's surface without touching the surface exchange.
+  class registers `register_surface_factory!(case, class, name, (case, site) -> surface)`
+  in its `build`, where `site::SurfaceSite` carries the class, the
+  initial skin temperature, the child column (`nothing` for a tile of a
+  parent column) and an optional roughness override (take the roughness
+  from `class_roughness(case, site)`). `class_surface(case, site)` is the
+  one class-to-surface factory: the surface exchange builds every child
+  column's surface with it in its `init!` (a `SlabLand` for a class
+  nobody claims), and the parent's tiled surface (#249, below) every
+  tile. This is how the park (#140), water (#141) and facet (#139)
+  couplings replace a class's surface — in the child and the parent at
+  once — without touching the surface exchange.
 * **Tracers** (`case.tracers`): `ensure_tracer!(case, :qi; advect = true,
   positive = true, units = …, long_name = …)` creates or returns a
   cell-centred field; flags are OR-ed, so two couplings share one `ql`.
@@ -214,7 +221,10 @@ needs.
   the NetCDF file. The core registers `qv`, `ql` (advected) and `qr`.
   A tracer diffuses with the closure's `κt` unless it names its own
   diffusivity (`ensure_tracer!(…; diffusivity = case -> field)`): the SGS
-  TKE `e` of the `:tke` provider diffuses with `2ν_t` (#182).
+  TKE `e` of the `:tke` provider diffuses with `2ν_t` (#182). Passive
+  tracers (qv, ql, the chemistry species, the pollutant) never name one:
+  they share θ's κ_t under every `:sgs` provider, AMD included (#234, see
+  below).
 * **Geometry** (`case.geom`): mask, surface classes, scene, view factors.
   Couplings may add classes at `init!` (the glass coupling does). The
   scene is built with `class_map = scene_class_map(sfc)`, so the ground
@@ -237,6 +247,115 @@ modifier added later belongs in the same pattern. Before #128 the tree
 shade and the cloud shadow multiplied `bus.sw` in place, so they
 compounded between radiation updates.
 
+Checkpointing the case's own state is #269 / #134; the hook is described
+in [Checkpoint / restart](checkpoint_restart.md#The-Berlin-case).
+
+## Initial state: the Lindenberg sounding (#247)
+
+Until #247 the case started from an analytic profile, θ = 293 K up to
+100 m and +3 K/km above, with ``q_v = 10\,{\rm g\,kg^{-1}}\,e^{-z/800\,{\rm m}}``
+and 1013.25 hPa at the ground. #238 showed that this profile cannot cap
+a convective boundary layer, and the nesting parent (epic #246) must
+start from the same observed state as the child. The summer case now
+starts from the radiosondes of the Lindenberg observatory (WMO 10393,
+60 km south-east of Alexanderplatz).
+
+**Case day.** The epic first named 20 June 2024. That day was overcast
+(DWD hourly total cloud cover 7–8 oktas most hours at Lindenberg and
+Berlin-Tempelhof; the 12 UTC sounding is saturated at 907 hPa), so by the
+maintainer decision of 2026-10-05 the case moved to **29 June 2019**, a
+clear day of the late-June 2019 heat wave: 0–2 oktas at Lindenberg and
+Berlin-Brandenburg from 00 UTC on the 29th to 16 UTC on the 30th, and a
+12 UTC dew-point depression of at least 6 K below 700 hPa. The day is a
+Saturday; `case_weekday(cfg)` now feeds the weekday of `cfg.date` to the
+building schedules (they assumed the Thursday of 20 June 2024 before).
+
+**Data.** `examples/urban/data/fetch_lindenberg.jl` downloads the IGRA2
+record of GMM00010393 from NOAA NCEI (public domain; Durre et al. 2018)
+and writes `lindenberg_10393_20190629.csv`: the 00/06/12/18 UTC launches
+of 29 June and the 00/06 UTC launches of 30 June, with pressure, reported
+geopotential height, T, T_d, wind and the IGRA QC flags. Its header
+records the URL, the download date, the station elevation (launch site
+112 m, not the 97.7 m of the IGRA station list: with 97.7 m every launch
+misses the reported heights by 11–19 m) and the case-day check. The
+profiles are the GTS standard and significant levels, not the
+full-resolution BUFR ascent.
+
+**Profiles** (`src/large_scale_forcing/sounding.jl`). `read_sounding`
+reads the CSV; `sounding_profiles(s; z_top)` returns θ, ``q_v``, u, v
+and p as `ForcingTable`s on heights above the launch site and the
+release times. Heights are hypsometric (virtual temperature from
+`MoistThermodynamics`), θ uses its Exner function and ``q_v`` its
+``e_s(T_d)``; no thermodynamics is defined in the reader. The reported
+geopotential heights are used only as a check: below 3 km the computed
+heights match them to RMS 0.8–4.3 m per launch, within the ±4.7 m that
+the whole-hPa surface pressure of the GTS message allows.
+
+**The case** (`core/reference_state.jl`). `initial_θ(cfg)` remains the
+one definition of the initial θ: `forcing_value` of the θ table at the
+case start, 06:00 CEST = 04:00 UTC, which lies between the 22:45 and
+04:45 UTC releases (weight 0.875 on the later one). `initial_qv(cfg)`
+does the same for ``q_v`` and replaces the inline exponential of
+`build_case`. `case_surface_pressure(cfg)` reduces the launch-site
+surface pressure from 112 m to the case's 34 m with the surface virtual
+temperature. `build_reference` integrates from it, and so does every
+consumer of the reference state, the nesting parent included. The
+heights of the sounding are used as heights above the case's ground:
+the profile is taken as horizontally homogeneous over 60 km and as
+terrain-following over the 78 m elevation difference.
+
+| z (m) | θ sounding (K) | θ former (K) | q_v sounding (g/kg) | q_v former (g/kg) |
+| --: | --: | --: | --: | --: |
+| 0 | 288.60 | 293.00 | 7.70 | 10.00 |
+| 50 | 290.02 | 293.00 | 7.04 | 9.39 |
+| 100 | 291.21 | 293.00 | 6.08 | 8.82 |
+| 200 | 291.68 | 293.30 | 8.02 | 7.79 |
+| 400 | 292.42 | 293.90 | 8.02 | 6.07 |
+| 1000 | 294.07 | 295.70 | 7.12 | 2.87 |
+| 1500 | 300.16 | 297.20 | 1.13 | 1.53 |
+
+The ground pressure is 1018.4 hPa (former 1013.25 hPa). At 06 CEST the
+profile has a surface-based inversion, so the parcel z_i
+(`initial_inversion_height(cfg)`) is 0. The same profile interpolated to
+14 CEST has a mixed layer of 1.18 km, capped by the inversion at
+884–879 hPa. The smoke checks of the turbulence diagnostics and of the
+AMD/Vreman/σ switch-off take the capping inversion from
+`initial_inversion_height`, not from `cfg.θ_inversion_z`.
+
+**Effect on the standalone run** (flagship 64 × 64 × 32, 200 m deep,
+06:00 to 18:00 CEST on 29 June 2019, default couplings, adaptive step;
+the only difference between the two runs is `sounding` against
+`sounding = nothing`). Plane-mean θ of the fluid cells below 30 m:
+
+| | 06:00 | 12:00 | 18:00 |
+| :-- | --: | --: | --: |
+| sounding | 289.06 K | 303.81 K | 313.89 K |
+| former analytic profile | 293.00 K | 305.35 K | 315.22 K |
+| difference | −3.94 K | −1.54 K | −1.33 K |
+
+The colder and drier observed morning column stays 1.3 K cooler at
+18:00. In both runs the 200 m box warms by about 25 K, and by 10:00 it
+is mixed to the lid. The observed mixed layer is 1.2 km deep, so the
+box cannot hold it: entrainment of free-tropospheric air through a
+capping inversion is missing. Supplying that air is the job of the
+nesting parent (#246). Each run took 1.7–1.8 h of wall time with 2
+threads on a shared machine.
+
+**Idealised profile.** `sounding = nothing` selects the former analytic
+profile (`θ_surface`, `θ_inversion_z`, `θ_lapse`, `qv0`, `qv_scale`) and
+101 325 Pa. `:winter` uses it, explicitly labelled as idealised, until a
+winter sounding is added. `:smoke` uses it as well, because its checks
+need a stable layer above an inversion inside a 100 m box. The smoke
+matrix also runs "summer sounding, everything on", the smoke box started
+from the sounding at noon, so the observed path is exercised by every
+suite run.
+
+**The boundary-layer height.** z_i comes from
+`TurbulenceStability.boundary_layer_height` everywhere: soundings, the
+CBL harness `test/tke_cbl_driver.jl` and the nesting diagnostics. It is
+the only z_i diagnostic in the package; see [Stability functions and the
+gradient Richardson number](../theory/turbulence_stability.md).
+
 ## Reference state and moist buoyancy
 
 The Boussinesq core carries neither pressure nor density, and before
@@ -244,8 +363,10 @@ The Boussinesq core carries neither pressure nor density, and before
 scale height from 1013.25 hPa, the surface, building and traffic
 fluxes and the ledger `ρ = 1` (`ρcp = 1005`). Since #131
 `core/reference_state.jl` builds one hydrostatic profile per case,
-`Aeolus.Anelastic.reference_from_profile` of the initial θ(z) from
-`cfg.p_surface` (101 325 Pa at the ground), with the dry-air constants
+`Aeolus.Anelastic.reference_from_profile` of the initial θ(z) (see the
+initial-state section above) from
+`case_surface_pressure(cfg)` (1018.4 hPa at the ground on the summer
+case day since #247; 101 325 Pa for the idealised profile), with the dry-air constants
 of `MoistThermodynamics` (so `T = θ Π̄` is the temperature the fog
 adjustment and the saturation functions assume) and the `g` of the
 dynamics. It is exactly (1e-12 Pa m⁻¹) in the discrete balance of the
@@ -259,7 +380,7 @@ in summer, 1.30 in winter.
 | `fog_dew` | fog adjusted at `p̄_k` (`T = θ Π̄_k`); dew at `p_surface` with `ρ̄_1` |
 | `surface_exchange` | forcing `T_air = θ Π̄_k`, `p̄_k`, `ρ̄_k` at the first air cell `k_air`; `ρ̄_k c_pd`, `ρ̄_k` in the conversion of H and E to θ, qv |
 | `aq_chem` | `T = θ̄ Π̄_k` and `p̄_k` for the rate constants; its r_a solve uses `θ_s = Ts/Π̄_k` at the first air cell |
-| `column_radiation` | surface pressure `surface_pressure(case)` (101.325 kPa) |
+| `column_radiation` | surface pressure `surface_pressure(case)` (`case.ref.p_surface`) |
 | `cloud_shadow` | `ρ̄_k` for the cloud water path when no density is given |
 | `buildings_citymean`, `traffic_heat` | `ρ̄_k c_pd`, `ρ̄_k` for the release into level k |
 | the sound-proof cores (#133) | `case.ref.state` itself as the base state: the projection, buoyancy and advection weights are this ρ̄, θ̄ (`build_case` builds the reference before the core) |
@@ -305,24 +426,23 @@ options go under the coupling name in `options`.
 
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
-| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`, built with the per-axis Poisson kinds of the case's velocity `bcs` (`case_poisson_axes`, #251: periodic x, y and Neumann z today, all-Neumann for an open or nested child; smoke-checked); `tol`, `maxit` of the sound-proof core's own CG, whose axes the core derives from the same `bcs` |
+| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`, built with the per-axis Poisson kinds of the case's velocity `bcs` (`case_poisson_axes(cfg, mesh)`, #251: periodic x, y and Neumann z by default, all-Neumann for `lateral = :open` or a nested child; smoke-checked); `tol`, `maxit` of the sound-proof core's own CG, whose axes the core derives from the same `bcs` |
 | `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184), `:reynolds_stress` (`sgs_reynolds_stress`, `PrognosticSGS.ReynoldsStressClosure`, the differential Reynolds-stress closure, #188; not with `timestepper = :imex`); all but `:tke` and `:reynolds_stress` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` are each wrapped in `StabilityCorrected` (P55-e, #187; `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`); `:tke` and `:amd` carry their own stability treatment (TKE length scale, AMD buoyancy term) and are not wrapped, nor are `:vreman`, `:sigma` and `:reynolds_stress` (its stresses carry the buoyancy production directly) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177; with a stability-corrected `:sgs` closure κh on the x, y faces and its κv on the z faces, as for θ) |
 
-**Lateral boundaries.** The case is periodic in `x` and `y`. Open
+**Lateral boundaries.** The case is periodic in `x` and `y` by default
+(`cfg.lateral = :periodic`, bit for bit the case before #262). Open
 (Dirichlet-from-boundary-data) faces exist since N-open-b (#255:
 `OpenBoundary`, `open_boundary_conditions`, the `AbstractBoundaryData`
 contract and the global mass-flux correction, called from every core
-through `update_open_boundaries!`), but the case does not use them yet:
-`BoundaryConditions` is exempt infrastructure, the default run is bit for
-bit unchanged, the `:open` option arrives with N-open-d (#262) and the
-nested default with N-berlin-nest (#265). The radiation outflow modes of
-N-open-c (#260: `outflow = :convective | :orlanski`) and the one
-boundary-flux function `boundary_scalar_flux` likewise exist without a
-Berlin coupling: the outflow option gets its smoke variant with the
-`:open` option in N-open-d, the ledger term with N-berlin-nest, and
-Dirichlet everywhere stays the nested default.
+through `update_open_boundaries!`), with the radiation outflow of
+N-open-c (#260) and the one boundary-flux function
+`boundary_scalar_flux`. `cfg.lateral = :open` (N-open-d, #262) opens the
+four sides and the top of the case: see
+[Open boundaries](#Open-boundaries) below. It is a transitional option:
+N-berlin-nest (#265) feeds the same faces from the parent run and makes
+the nested configuration the default.
 
 `sim_options` and `step_options` are contract hooks: a coupling returns a
 `NamedTuple` of keywords for the core's constructor or for every
@@ -400,7 +520,9 @@ constraint weights, giving `(1/W)∇·(W κt ∇q)`, which conserves `Σ W q`;
 on the anelastic core that is the ledger's `Σ ρ̄ q`. The diffusion books
 its change of water as `sgs_diffusion` (zero to round-off) plus
 `density_redistribution`. Its `smoke_check` asserts that the diffusion
-alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`. Before
+alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`.
+The core runs with `moisture = false`, so qv and ql are case tracers and
+are mixed here, with the same κ as every other tracer. Before
 #177 no tracer was diffused at all: they saw only the implicit
 dissipation of WENO, a missing-physics bug. `sgs_diffusion = false`
 reproduces that transport for comparison. Measured over the first hour of the summer flagship (06:00–07:00,
@@ -416,6 +538,27 @@ kg/m², `sgs_diffusion` −6.1e-19 kg/m². Cost: +1.0 ms per advected tracer
 and step (7 tracers: `scalar_advection` 57.3 → 64.3 ms/step), +0.9 ms for
 the pollutant; the masked kernel takes 0.58 ms per call against 0.10 ms
 unmasked.
+
+*One shared κ, also under `:amd` (#234).* AMD offers a per-scalar
+diffusivity from each scalar's own gradient
+(`Operators.sgs_tracer_diffusivity!`, forwarded by `SolidMaskedSGS`); the
+stage does not use it, by design. Real high-Re turbulence mixes all
+passive scalars alike (one turbulent Schmidt number). Per-scalar κ would
+mix NO, NO₂ and O₃ differently and move them off the photostationary
+state, and mix qv and ql differently, so `q_t` and `θ_l` would no longer
+be mixed as conserved variables. Its zero-gradient fallback
+(`κ = ν_t/Pr_t = 3ν_t`) gives a uniform or flat field the largest κ of all
+and over-mixes plume edges, and the adaptive step (`sgs_cfl_diagnostics`)
+sees θ's κ_t, not the tracers'. An earlier probe of the `:amd` run measured
+cell-wise κ differences against θ's of 54–64 % for qv and 66–92 % for the
+chemistry, 28 % between NO and NO₂, 196 % between qv and ql, and a
+fallback maximum of 5.9 against 2.6 m²/s. The design test
+(`test/berlin_numerics.jl`, *one shared κ*) pins it: under `:amd` the
+stage is bit for bit the stage with every tracer forced onto `sim.κt`, and
+on its 12-step state AMD's own κ would differ from θ's by 77–80 %
+(`Σ|Δκ|/Σκ`) for qv and the chemistry, 24 % between NO and NO₂, with ql
+(zero there) at the fallback 3ν_t everywhere, maximum 5.08 against
+2.71 m²/s. Rationale in full: [the SGS theory page](../theory/sgs.md#Closure-contract).
 
 * **Pressure solvers.** All three solve the same 7-point Laplacian with
   the same boundary conditions (periodic, periodic, Neumann); the
@@ -472,7 +615,8 @@ unmasked.
   anisotropic minimum-dissipation and Vreman closures (see [the SGS
   theory page](../theory/sgs.md#Anisotropic-minimum-dissipation-and-Vreman-closures)).
   AMD runs with C = 0.3, its own κ_t and the buoyancy term with the
-  core's g/θ₀. It is set to zero in the building cells: there the
+  core's g/θ₀; the case's tracers are diffused with that κ_t (θ's), not
+  with AMD's per-scalar diffusivity (see *One shared κ* above). It is set to zero in the building cells: there the
   resolved velocity is ≈ 0, so the denominator ∂_l u_m ∂_l u_m vanishes
   while θ still varies, and the buoyancy term gave ν_t up to 19 m²/s
   inside buildings, against a fluid maximum of 1.6 m²/s. That only
@@ -605,7 +749,7 @@ ratio = 1.08, dz_max = 100)`: 53 levels, 20 of them uniform. One step of
 
 **The sound-proof cores** take the case's reference state as their
 base state: `case.ref.state`, built by `build_reference` (θ̄(z) =
-`initial_θ(cfg)` integrated hydrostatically from `cfg.p_surface` with
+`initial_θ(cfg)` integrated hydrostatically from `case_surface_pressure(cfg)` with
 the MoistThermodynamics constants, see [Reference
 state](#Reference-state-and-moist-buoyancy)), so there is one ρ̄(z) per
 case — the one the couplings convert fluxes with and the ledger
@@ -864,7 +1008,8 @@ natural one — the configuration it was measured in, and the cost from
 ## The budget ledger
 
 `case.ledger` integrates, step by step, the surface energy balance of
-every surface class and the water budget of the air. The core calls
+every surface class, the water budget of the air and the heat of the
+air ([below](#The-heat-of-the-air), #253). The core calls
 `ledger_begin_step!` before `:clock` (it snapshots `bus.Ts` into
 `ledger.Ts_start` and the water in the air) and `ledger_end_step!` after
 `:sanity` (it calls every coupling's `budget!` and books the change of
@@ -950,6 +1095,309 @@ the surface exchange's smoke check counts writes into solid cells
 The cost is about 1 ms/step on the flagship grid (the two water
 integrals), plus about 0.4 ms/step for the Kessler coupling's own
 bookkeeping.
+
+### The heat of the air
+
+`ledger.heat`, an `AirHeatLedger`, closes the heat of the air
+
+``H_{air} = Σ_k ρ̄_k c_p Π̄_k Σ_{ij ∈ fluid} θ_{ijk} Δz_k / (N_x N_y)``  (J m⁻²),
+
+the dry enthalpy ``c_p T`` (``T = θ Π̄``) of the air above a unit of
+ground, with the case's one reference state (`case.ref`) and without the
+solid cells. The meter (`AirHeatMeter`, `core/air_heat.jl`) and the
+ledger (`core/air_heat_ledger.jl`) are functions of (mesh or sim,
+reference state, solid mask) and of the θ field, not of the Berlin
+`Case`, so the parent run of the nesting epic (#246) keeps its own with
+the same code.
+
+**Every heater converts with the same weight.** A heat flux `q` (W m⁻²
+into level `k`) raises θ by ``q Δt / (ρ̄_k c_p Π̄_k Δz_k)``:
+`ref_θ_per_heat(case, k)` is that conversion, the inverse of the
+meter's weight. `surface_exchange` and `traffic_heat` call it;
+`buildings_citymean` applies the same ``1/(ρ̄_k c_p Π̄_k)`` inline in
+`apply_building_heat!` (its `ρ`, `cp`, `π` keywords, passed from
+`case.ref`), and `column_radiation`, whose heating rate is already
+``dT/dt`` (K s⁻¹), divides it by ``Π̄_k`` only. Every heater therefore
+uses the same weight, but the conversion is written in three places,
+not delegated to one function. Before #253 they divided by ``ρ̄ c_p`` only and the
+air received Π̄₁ ≈ 1.004 times the flux at the ground.
+The meter weights θ with the dry ``c_{pd}``; the surface exchange
+converts with the moist ``c_p`` of the first air cell, so the ledger
+books its heating as ``H Δt\, c_{pd}/c_p``, about 0.8 % below the
+surface's ``H Δt`` at ``q_v ≈ 0.01`` (exactly ``H Δt`` in dry air). The
+ledger still closes, because it books what it measures.
+
+**Attribution is automatic.** Couplings book nothing. Every schedule
+entry `timed_run!` runs, and the dynamics step, is an attribution
+*context* `(stage, coupling)`: the ledger measures ``H_{air}`` per level
+when the context closes (the value it opened with is the previous
+close) and books the difference. Contexts nest: the `:body_force` and
+`:post_predictor` entries run inside `step!` and are taken out of the
+dynamics' share. The dynamics' rest is split into
+`(:dynamics, :transport)`, what the core's transport conserves
+(``Σ W θ ΔV``, ``W = 1`` on the Boussinesq core), whose column total is
+the numerics residual, `(:dynamics, :redistribution)`, the change of
+``H_{air}`` because the transport conserves ``Σ W θ`` and not
+``Σ ρ̄ Π̄ θ`` (moving warm air up into levels of lower ρ̄Π̄ lowers
+``H``; the heat analogue of `density_redistribution`), and
+`(:dynamics, :solid_exchange)`, the heat the transport and diffusion move
+into the building cells (θ is carried through the immersed boundary, so
+the solid cells' θ evolves and exchanges heat with the air through the
+numerics alone). A change of θ outside every context is still caught:
+as `(:core, :unattributed)` within a step, as `(:output, :between_steps)`
+between two steps. The smoke test asserts that neither is booked.
+
+**Booked terms.** `add_heat!(ledger, term, J; k)` books `J` J m⁻² under
+`(stage, term)` from inside a running context and takes it out of that
+context's own share, so a context's entry becomes the residual of the
+terms named inside it. The dynamics books `:top_flux`, the heat through
+the fixed-gradient θ top ([The θ top](#The-θ-top), N-parent-b, #254), this
+way; the nesting epic will add `:boundary_heat`, `:relaxation`,
+`:mass_correction` (N-open-d) and `:feedback_heat` (N-berlin-twoway). Called outside a step it is
+an error: that heat would have no place in the balance.
+
+**Layers and windows.** Every term is kept per level and per local hour
+of the step's start, so `heat_budget(ledger; window = (20, 5), layer =
+:canopy)` returns the 20:00–05:00 integrals of #238 for the canopy
+(`(0, cfg.canopy_top)`; `NaN`, the default, takes the tallest roof),
+or for `layer = (0, 100)`, `:column`. For a sub-layer
+`(:dynamics, :transport)` is the heat the dynamics carried across the
+layer's top. `ledger_report` prints the whole-run table (column,
+canopy, 0–100 m); `heat_report(ledger; window = (20, 5))` the night one.
+
+In the Alexanderplatz scene the tallest roof is the Fernsehturm, clipped
+at the 200 m domain top (the next tallest roof is 143.75 m, the
+90th percentile of the built columns 37.5 m, the mean 21.2 m), so the
+default `:canopy` is the whole column there; set `cfg.canopy_top` for the
+street canyons.
+
+**Tests** (`test/berlin_air_heat.jl`, `test/berlin_smoke.jl`). The meter
+against the analytic heat of a uniform-θ hydrostatic layer
+(``c_p^2 θ p_0/(R g)\,[Π^{c_p/R+1}/(c_p/R+1)]``: 3.1e-8 at Nz = 16,
+2.0e-9 at Nz = 64, second order). A closed box (every θ source off):
+the transport's column change is ≤ 2e-16 of ``H`` per step; ``H``
+itself changes by up to 3.7e-7 per step, all of it `redistribution`.
+(The issue expected ``|ΔH_{air}|/H_{air} ≤ 10^{-13}`` per step for a
+flux-form θ advection. That holds for what the flux-form Boussinesq
+transport conserves, ``Σ θ ΔV``; for ``H``, which weights θ with ρ̄Π̄,
+the expectation was wrong.) H₀ = 100 W m⁻² into the lowest level of a
+flat, motionless variant: the attributed term and ``ΔH_{air}`` equal
+H₀Δt to 3.9e-13 (relative). Every smoke run (everything on included) closes to
+≤ 1e-10 W m⁻² (measured ≤ 1.9e-14 in all 39 smoke runs).
+
+**Cost.** One measurement is one pass over the interior (20 µs on
+64 × 64 × 32); the flagship step opens ≈ 29 contexts, 31.1
+measurements per step: 1.06 ms/step warm (0.7 % of a 150 ms step;
+1.27 ms of 178 ms over the 24 h run on a shared machine). The issue's
+target was < 1 ms/step; the measurements are memory-bound, so the rest
+would need fewer contexts.
+
+**Night budget of the flagship (measured, #253).** The 24 h
+Alexanderplatz run (20 June 2024 from 06:00, every default coupling,
+adaptive step, 61 902 steps), 20:00–05:00 local (32 401 s), mean W m⁻²
+over the window (J m⁻² = W m⁻² × 32 401 s):
+
+| term | column 0–200 m | 0–100 m | 0–37.5 m |
+| :-- | --: | --: | --: |
+| storage ``ΔH_{air}`` | −52.79 | −26.35 | −9.26 |
+| `column_tendency / column_radiation` | −52.70 | −42.73 | −32.61 |
+| `anthropogenic / buildings_citymean` | −10.31 | −10.71 | −14.80 |
+| `anthropogenic / traffic_heat` | +8.00 | +8.00 | +8.00 |
+| `surface_flux / surface_exchange` | +0.12 | +0.12 | +0.11 |
+| `dynamics / transport` (across the layer top) | −5e-11 | +17.28 | +28.44 |
+| `dynamics / solid_exchange` | +1.70 | +1.39 | +1.26 |
+| `dynamics / redistribution` | +0.40 | +0.30 | +0.34 |
+| `fog_dew / fog_dew` | 0 | 0 | 0 |
+| closure | −7.2e-15 | −1.8e-14 | −1.1e-14 |
+
+The default `:canopy` is the whole column here (the Fernsehturm); 37.5 m
+is the 90th percentile of the roof heights. At night the air of the
+column loses 52.8 W m⁻², almost all of it to the column radiation; the
+surface exchange gives the air almost nothing (+0.12 W m⁻²), the
+city-mean buildings take heat out of it (−10.3) and the traffic heat
+puts 8 W m⁻² in. Inside the canyons the transport brings down from
+above most of what the radiation removes (+28.4 of −32.6 W m⁻² below
+37.5 m). This is the #238 budget and the baseline of N-berlin-validate
+(#270).
+
+### The θ top
+
+Since N-parent-b (#254) the θ condition of the top face is
+`cfg.θ_top = :initial_gradient`, on by default: `FluxBC(Γ)` with
+``Γ = ∂θ/∂z`` of the initial profile across the top face
+(`θ_top_gradient(cfg)`, 3 × 10⁻³ K m⁻¹ above the 100 m inversion), the
+fixed-gradient top of PALM and DALES. Before it the top was a closed
+no-flux lid, still available as `θ_top = :noflux` (a number sets Γ in
+K m⁻¹). The physics is `src/` (`BoundaryConditions.FluxBC`, the halo fill
+of `src/boundary_conditions/gradient_top.jl`; theory in
+[Large-scale forcing](../theory/large_scale_forcing.md#The-fixed-gradient-top));
+the case code is `core/top_boundary.jl`. `qv` and the tracers keep their
+no-flux top.
+
+**Ledger.** The heat the top face carries is booked as
+`(:dynamics, :top_flux)` at the top level. The composed body-force hook
+captures ``Γ\,ρ̄_N c_p Π̄_N ⟨ν + ½(κ_{v,N} + κ_{v,N+1})⟩`` in every dynamics
+stage (the SGS closure has just filled ``κ_v``), and each accepted
+(sub)step books it times its length (`dynamics_step!`, each piece of
+`step_adaptive!`, `step_imex!`). What is left to `(:dynamics, :transport)`
+over the column is round-off: 3.5e-11 W m⁻² (adaptive) and 8.4e-10 W m⁻²
+(fixed step) on the smoke case against a top flux of 7.18 W m⁻², 3.1e-6
+J m⁻² over the 24 h flagship against 6.2e5 J m⁻². With the IMEX stepper
+the residual is the CG tolerance (−1.0e-2 W m⁻² at `tol = 1e-8`,
+−8.6e-7 at `1e-12`; −1.4e-3 with the lid), on the anelastic core the
+core's unweighted diffusion (2.0e-2 W m⁻², 1.8e-2 with the lid).
+
+**Measured (flagship, 24 h from 06:00, every default coupling, adaptive
+step).** Two runs that differ only in `θ_top`:
+
+| | `:initial_gradient` (default) | `:noflux` (before #254) |
+| :-- | --: | --: |
+| steps | 62 724 | 61 903 |
+| top-face heat flux, 24 h mean | +7.21 W m⁻² | 0 |
+| top-face heat flux, 20–05 h | +7.14 W m⁻² | 0 |
+| column storage 20–05 h | −49.94 W m⁻² | −52.79 W m⁻² |
+| column radiation 20–05 h | −55.06 W m⁻² | −52.70 W m⁻² |
+| canopy air θ (fluid cells below 37.5 m), 20–05 h mean | 313.53 K | 312.54 K |
+| canopy air θ at 20:00 / 05:00 | 317.02 / 309.88 K | 316.21 / 308.74 K |
+
+The flux is downgradient, into the domain (the free atmosphere above is
+warmer), and nearly constant: ``ρ̄_N c_pΠ̄_N νΓ`` = 7.09 W m⁻² with the
+case's molecular ``ν`` = 2 m² s⁻¹ is almost all of it, the SGS
+``κ_v`` at the top adding 0.12 W m⁻² over the 24 h. The nightly canopy air is
+0.99 K warmer (20–05 h mean), 0.81 K at 20:00 rising to 1.14 K at 05:00,
+and cools 0.33 K less during the night (7.13 against 7.46 K). In the
+afternoon the convective layer fills the 200 m domain, and a fixed
+gradient then imposes ``κΓ`` regardless of the real entrainment: the
+open top of the nested run (N-open-b, N-berlin-nest #265) replaces it.
+
+**Stated exception: no θ damping in the periodic child.** θ is not
+Rayleigh-damped in the periodic 200 m child. Its velocity sponge starts
+at 150 m, and a θ damping toward a constant target there would clamp the
+top 50 m (#238, approach B). With `lateral = :open` (#262) the top is
+open and θ is relaxed over the same layer toward the boundary data's
+profile, the state the open top imposes (`cfg.θ_relaxation`, see
+[Open boundaries](#Open-boundaries)); in the nested run that is the
+parent's. `LargeScaleForcing.ReferenceDamping` is the one θ-damping type
+in both places.
+
+### Open boundaries
+
+`cfg.lateral = :open` (N-open-d, #262; `core/open_boundary.jl`) gives the
+case open west, east, south, north and top faces:
+
+* **Data.** `ProfileBoundaryData(u = U_g, v = V_g, w = 0, θ = initial_θ)`
+  — the `:geostrophic` coupling's wind (also when it is off) and the
+  initial θ profile (`case_boundary_data`). The normal velocity of every
+  face is mass-corrected by the uniform global correction (N-open-b),
+  the outflow is `cfg.outflow` (`:dirichlet`, default; `:convective`,
+  `:orlanski`, N-open-c).
+* **Sponge.** The core's Rayleigh sponge relaxes `u, v, w` toward the
+  same data (`sponge_target(data, mesh)`, the one damping kernel; a
+  sponge below an open top without a target is an error), so the
+  `:geostrophic` coupling's own retargeting of the periodic case is off.
+  θ is relaxed toward the data's profile over the sponge layer
+  (`cfg.θ_relaxation = true`, `ReferenceDamping` in the body-force hook):
+  in the gravity-wave test of #254 damping θ as well as the velocity cut
+  the reflection of a layer one vertical wavelength deep from 0.17 to
+  0.034.
+* **Geometry.** `cfg.boundary_frame` cells (default 3, 47 m in the smoke
+  window, 47 m on the flagship grid) next to each open side are kept free
+  of buildings; a building that still touches a face (frame 0, or the
+  Fernsehturm through the top) is solid there:
+  `mark_open_boundary_solids!` gives its boundary points zero velocity and
+  takes them out of the mass-flux correction.
+* **Neighbours.** No coupling wraps across the box any more: every
+  former `mod1` reads through `neighbor_index` (`centre_wind` for the
+  cell-centred wind of the surface exchange, the deposition and the facade
+  wall model; the wall tagging; the a-priori stress centring); masks and
+  tracer halos take `case_scalar_bcs` (zero gradient at an open face; a
+  tracer has no boundary data, so it leaves with its own value and enters
+  with the value next to the face); the pressure solvers read the
+  all-Neumann axes from the case's `bcs`.
+
+**Ledger.** The open faces carry heat and water. Inside the dynamics
+context the composed body-force hook captures, per level, with the state
+and the SGS diffusivity the core's tendencies were built from:
+
+| term | what |
+| :-- | :-- |
+| `(:dynamics, :boundary_heat)` | ``-\sum ρ̄_k c_p Π̄_k (θ\,u·n - K ∂_nθ) A`` through the four sides and the top (`boundary_scalar_flux`: the core's centred θ face values, ``K = ν + ½(κ_{in} + κ_{out})``), without … |
+| `(:dynamics, :mass_correction)` | … the part the global correction ``δ`` carries, ``δ\,ρ̄c_pΠ̄\,θ_{face} A`` on every face it adjusted |
+| `(:dynamics, :relaxation)` | the θ relaxation toward the data |
+| water `:boundary` | the vapour and cloud water the faces carry, `boundary_scalar_flux` with the transport's own scheme (`scalar_advection`) |
+
+Each accepted (sub)step books them times its length (`book_dynamics_heat!`,
+also called for the fixed-gradient top). The mass-correction term is
+large next to its velocity because it multiplies the absolute θ (≈ 293 K):
+``|δ|/U`` = 7.8e-5 carries 19 W m⁻² in the convective run below, of the
+same sign as the net mass the correction removes; only the sum of the two
+terms is the boundary's heat. For the forward-Euler steps of the default
+`:adaptive` and the `:fixed` stepper the booked heat is the heat the step
+moved; under `:imex` it is the last stage's rate times dt (a residual in
+`(:dynamics, :transport)`, as for the top flux: −2.4e-2 W m⁻² on the
+open smoke window); on the anelastic core the column transport keeps
+the core's unweighted-diffusion residual of #254 (2.2e-2 W m⁻² open,
+1.8e-2 with the lid). The smoke check asserts < 1e-6 W m⁻² for the
+forward-Euler Boussinesq steps and < 0.1 W m⁻² otherwise. The diffusive part is the
+closures' ``κ_h``/``κ_v`` form: the cross terms of the tensor closure
+(`sgs = :reynolds_stress`) at the faces are not in it.
+
+**Measured (smoke window, 16 × 16 × 16, every coupling on, 24 s from
+12:00).**
+
+| | periodic | `:open`, Dirichlet | `:open`, convective |
+| :-- | --: | --: | --: |
+| steps (adaptive) | 8 | 9 | 9 |
+| surface sensible heat H (domain) | −2.12 W m⁻² | −2.87 W m⁻² | −2.85 W m⁻² |
+| `top_flux` (fixed-gradient top) | 7.18 W m⁻² | — | — |
+| open faces: top | — | 7.19 W m⁻² | 14.55 W m⁻² |
+| open faces: four sides | — | −0.17 W m⁻² | −3.34 W m⁻² |
+| `boundary_heat` | — | 7.02 W m⁻² | −7.98 W m⁻² |
+| `mass_correction` | — | 0 | 19.19 W m⁻² |
+| `relaxation` | — | 0.023 W m⁻² | 0.025 W m⁻² |
+| max ``|δ|/U`` | — | 0 | 7.8e-5 |
+| `(:dynamics, :transport)` (column) | −1.1e-10 W m⁻² | 4.3e-10 W m⁻² | −2.0e-10 W m⁻² |
+| air-heat closure | 0 | −4.7e-15 W m⁻² | 3.8e-14 W m⁻² |
+| water `:boundary` | — | 6.6e-5 kg m⁻² | 9.8e-5 kg m⁻² |
+| water residual | 1.1e-15 kg m⁻² | 1.5e-15 kg m⁻² | 1.3e-15 kg m⁻² |
+
+The open top's heat is the diffusion of the Dirichlet θ halo (the initial
+profile, 3 K km⁻¹ above the inversion) through the top face: 7.19 W m⁻²,
+the 7.18 W m⁻² of the periodic case's fixed-gradient top. With Dirichlet
+outflow the data balance (``δ = 0``); the convective outflow radiates the
+interior's building-perturbed wind at the faces and the correction
+removes the imbalance, which moves heat through the top as well. The
+column transport stays a numerics residual (1e-10 W m⁻²) in every
+configuration.
+
+**Cost.** The fixed stepper, the same buildings (`boundary_frame = 0`),
+the faster of two alternating rounds after a warm-up, on a shared
+machine:
+
+| grid | periodic | `:open` | ratio |
+| :-- | --: | --: | --: |
+| flagship 64 × 64 × 32, whole step | 116.2 ms | 113.3 ms | 0.98 |
+| flagship, dynamics (`step!`) | 20.5 ms | 18.1 ms | 0.88 |
+| smoke 16 × 16 × 16, whole step (3 rounds of 24 steps) | 18.5 ms | 18.7 ms | 1.01 |
+
+The open faces' work (the buffer update and mass correction, the
+boundary-heat capture, the θ relaxation) costs no more than the
+measurement noise; the all-Neumann cosine solve of the open box is if
+anything cheaper than the periodic-x, y solve. `test/berlin_open_boundaries.jl`
+prints a smoke-window measurement.
+
+**Tests.** `test/berlin_open_boundaries.jl`: the default stays periodic;
+the open faces, data, sponge target, solver axes, frame and solid points;
+one dynamics step through the case's own hook books 0.0 J m⁻² for an
+inflow equal to the interior and ``ρ̄c_pΠ̄(UΔT/2 + νΔT/Δx)AΔt`` = 604.525
+J m⁻² to 1e-12 for a +1 K inflow anomaly (the core's centred face value is
+the mean of the halo and the first cell; the diffusive flux across the
+jump is ``νΔT/Δx`` with the case's ``ν`` = 2 m² s⁻¹). The smoke matrix runs
+`geostrophic: lateral = :open, Dirichlet outflow` and `…, convective
+outflow` with every coupling on: air-heat closure ≤ 1.1e-13 W m⁻², water
+residual ≤ 4.3e-16 kg m⁻², column transport < 1e-6 W m⁻² (smoke check).
+The src tests are in `test/era6_open_near_boundary.jl` (theory:
+[Near the open faces](../theory/fractional_step.md#Near-the-open-faces-(N-open-d))).
 
 ### Baseline (measured, #127)
 
@@ -1305,6 +1753,114 @@ filled the negative qv it left aloft, +8.9e-5 kg m⁻²). On master both
 are zero to round-off in both runs: transport ≤ 3e-18 kg m⁻² in
 magnitude, qv clamp 0; the water ledger closes to −1.7e-14 kg m⁻².
 
+## Parent surface (#249)
+
+The nest (#246) puts the 1 km child inside a 6 × 6 km Aeolus parent
+with Δx = 31.25 m and Δz = 25 m. At that resolution the buildings are
+not resolved: the parent sees Berlin as a heterogeneous surface. Its
+surface is `examples/urban/parent/surface.jl`, a tiled mosaic
+(`Aeolus.SurfaceTiles`, Avissar & Pielke 1989) per parent column. The
+parent case (N-parent-e, #259; [The Berlin parent](berlin_parent.md))
+couples it to the 3-D parent run under the parent's own air and radiation;
+the nest (N-berlin-nest, #265) makes the parent the default of the Berlin
+run, and that is where `:SurfaceTiles` leaves `BERLIN_PENDING`.
+
+![Berlin parent surface](../assets/berlin/parent_surface.svg)
+
+*Class fractions, the 250 m morphometry λp, and Macdonald z0 and d of
+the 6 km box (`examples/urban/parent/plot_parent_surface.jl`). Red: the
+child's footprint.*
+
+**Land use.** `data/fetch_berlin_landuse.jl` queries Overpass for the
+6 km box around the anchor (buildings, parks and green land use, water;
+ways and multipolygon relations). It classifies them with the case's own
+`load_city_osm` (one classifier: `osm_class`), and rasterises them with
+`surface_class_map` on the child's 15.625 m grid. It then writes, per
+parent cell, the class counts of its 2 × 2 child cells, λp, λf (mean
+over the four cardinal directions), and the mean and maximum building
+height to `data/berlin_landuse_6km.csv`, with provenance in the header.
+The raw OSM is not committed.
+
+**Fractions.** `parent_fractions` takes the table everywhere except
+under the child's footprint (`child_footprint`: parent cells 81:112 ×
+81:112). There it coarse-grains the child's own class map, so the
+parent sees exactly the child's surface, including the glass class the
+child adds. The child's OSM file is an older, smaller extract than the
+6 km table: under the footprint the table has a roof fraction of 0.292
+and the child's map 0.213, and 74 % of the footprint cells agree
+exactly. The parent follows the child, so the roughness map shows the
+footprint's edge.
+
+**Tiles.** Every tile is `class_surface(case, SurfaceSite(c; T_skin,
+z0m, z0h))`, the same class-to-surface factory the surface exchange
+builds the child's columns with (factored out of
+`couplings/surface_exchange.jl`). When the park (#140) and water (#141)
+couplings register their factories, the parent changes with the child.
+
+**Unresolved buildings.** `SurfaceTiles.macdonald_roughness` (Macdonald,
+Griffiths & Hall 1998; staggered arrays A = 4.43, β = 1, C_D = 1.2) gives
+z0 and d from λp, λf and the roof-weighted mean height h. These are
+averaged over an 8 × 8-cell (250 m) window, because one 31.25 m cell
+holds only a few buildings. The built tiles (street, roof, wall, glass)
+take `max(z0, z0m_class)` for momentum but keep their class's z0h. Form
+drag has no heat analogue, which is why urban kB⁻¹ is large (Kanda et
+al. 2007). With z0h = 0.1 z0m inherited instead, the parent's footprint H
+was +8.8 % above the child's at 13:00 and +9.8 % over 06–18 h; with
+the class z0h it is +2.8 % and +3.8 %. The built tiles exchange with the first parent
+level above h, at z_k − d. Park and water tiles keep their own
+roughness and d = 0, and exchange with the first level. Forced above
+the neighbouring roofs, a water column next to 58 m buildings
+decoupled (bulk Ri ≈ 1.8, LE = 0.7 W m⁻² at 13:00). With
+`blending = MasonBlendingHeight(L)` etc., a column is a `BlendedMosaic`
+forced once at z_k − d̄.
+
+**Measured** (`test/berlin_parent_surface.jl`, synthetic clear-sky
+forcing `parent_offline_forcing`: Bird SW and Brutsaert LW for 20 June,
+T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s; as
+measured by #249, with the case sun still 2 h early — the values on the
+corrected UTC sun of #259 and the 2019-06-29 case date follow the table):
+
+| quantity | value |
+| :-- | :-- |
+| Macdonald d/h at λp = 0.3 | 0.5521 |
+| λ of the z0/h maximum, cubes (Grimmond & Oke 1999: 0.15–0.2) | 0.164 (z0/h = 0.135) |
+| fractions: Σ − 1; footprint = child block counts | ≤ 1e-12; exact |
+| control (no unresolved treatment, child's height) − child, 24 h | 4.1e-12 W m⁻² (H) |
+| footprint-mean H − child area-mean H, 13:00 / 06–18 h | +2.8 % / +3.8 % |
+| footprint-mean LE − child area-mean LE, 06–18 h (13:00) | +4.7 % (−21 %) |
+| tile closure, 1825 tiles, 24 h: Rn − H − LE − G; ΔE/Δt − mean G | 1.1e-13; 6.9e-11 W m⁻² |
+| mixed street/park column, 13:00: mosaic vs parameter-aggregated | H 191 vs 117, LE 211 vs 644 W m⁻² |
+
+With the sun on UTC (#259; solar noon at 13:05 instead of 11:05 CEST,
+against the synthetic air temperature that peaks at 15:00) the footprint
+comparison measures H +5.97 % at 13:00 and +3.08 % over 06–18 h, LE
++11.55 % over 06–18 h (+4.4 % at 13:00). The date change to 2019-06-29
+moves these by less than 0.6 points.
+
+The issue's target for the footprint mean was 2 %. That holds only for
+the control. The parent proper and the child see the same air state at
+different heights (z_k − d against Δz/2), and with different momentum
+roughness. Under convective conditions the transfer then differs by a
+few per cent. LE also depends on when each soil reaches its dry limit:
+the child's street and park soils dry about an hour earlier, so LE at
+13:00 differs by 21 %.
+
+At 13:00 in the offline run (`parent/parent_surface_diurnal.jl`):
+
+| column | built-tile z0, d | Rn | H | LE | G |
+| :-- | :-- | --: | --: | --: | --: |
+| core, (109, 85), all roof, λp = 0.46 | 0.45 m, 11.6 m | 482 | 457 | 0 | 25 |
+| park, (93, 94), pure park | – | 558 | −1 | 420 | 139 |
+| water, Spree (79, 87), pure water | – | 741 | −5 | 7 | 738 |
+
+The water slab is 8 K below the air at 13:00, a stable surface layer.
+
+References: Macdonald, R. W., Griffiths, R. F. & Hall, D. J. (1998),
+*Atmos. Environ.* 32, 1857-1864. Grimmond, C. S. B. & Oke, T. R. (1999),
+*J. Appl. Meteorol.* 38, 1262-1292. Kanda, M. et al. (2007), *J. Appl.
+Meteorol. Climatol.* 46, 1067-1079. Avissar, R. & Pielke, R. A. (1989),
+*Mon. Weather Rev.* 117, 2113-2136.
+
 ## Facade wall model (#179)
 
 The building facades are walls of `Aeolus.WallModels`
@@ -1320,6 +1876,7 @@ unresolved no-slip at `cfg.ν` = 2 m² s⁻¹ and Δ = 15.6 m.
 | law | `RoughLogLaw(z0m)` at ``h = Δ/2``; `z0m` from `bus.z0m_class` (the surface exchange's per-class table, put on the bus in its `build`): `SURFACE_GLASS` for a glass-tagged building column, `SURFACE_WALL` otherwise (0.01 m / 0.05 m by default) |
 | `:body_force` (40) | `remove_stencil_wall_flux!`: the stencil's facade flux out of the tendency (with ``ν_t`` when the step has an eddy viscosity) |
 | `:post_predictor` (12) | `apply_immersed_wall_stress!`, implicit, after the `ibm` direct forcing (10) and before the ground's wall stress (15) |
+| TKE production (#232) | at `init!` the walls are attached to the `:sgs` closure (`attach_immersed_walls!`): the `:tke` shear production at the facades is the wall stress times the resolved shear across the wall, ``a q^2``, not the production of the stencil flux removed at `:body_force` |
 | checks | facade ``τ_w ≥ 0``; no stress written into a solid cell's face; the total facade drag and the removed stencil drag oppose the mean canopy wind |
 
 Measured in `:smoke` after 1 h (3600 s, adaptive step), on vs off
@@ -1339,14 +1896,52 @@ The coupling took 2.2 s of a 5567 s run (0.04 %; machine heavily
 loaded). The cut-cell method of #179 is not wired: the case has no
 cut-cell provider (CutCell is pending on #152), which picks it up.
 
+**TKE production at the facades (#232).** Until #232 the `:tke` closure
+booked the shear production of the stencil flux this coupling removes,
+``ν_{t,e} q_F^2/Δ^2`` per face — energy the resolved flow never lost —
+and none of the work of the modelled stress. Measured on the summer
+flagship (default couplings, 1 h from 12:00, adaptive step; means of 31
+samples over the second half hour; canopy = the fluid cells of levels
+1–4, near-facade = the 5009 canopy cells next to a facade face):
+
+| | stencil production (before) | wall stress × resolved shear (#232) |
+| :-- | --: | --: |
+| removed-stencil production booked at the facades (m⁵ s⁻³) | 227 = 27.3 % of canopy ``Σ P_s V`` (2.5 % of the domain's) | 0 |
+| facade wall-stress work ``Σ a q^2 ΔV`` (m⁵ s⁻³) | 807 (not booked) | 804 (booked) |
+| canopy ``Σ P_s V`` booked (m⁵ s⁻³) | 832 | 1420 |
+| near-facade mean ``ν_t`` / ``e`` | 0.02464 m² s⁻¹ / 0.00996 m² s⁻² | 0.02595 (+5.3 %) / 0.01081 (+8.5 %) |
+| canopy mean ``ν_t`` / ``e`` | 0.03857 / 0.01257 | 0.03946 (+2.3 %) / 0.01303 (+3.7 %) |
+
+The production kernel takes 0.55 ms per step of the 161 ms Berlin step
+(0.3 %); both runs took 611 steps for 20 min.
+
 ## Radiation (#130)
 
 Two couplings put the Era III radiation stack into the case. Both run at
 the `:radiation` cadence, around the radiosity solve.
 
 **`column_radiation`** (slot `:column_radiation`, provider `:twostream`,
-the only one; it replaced `cooling_prescribed`). At order 5, before
-the radiosity:
+the only one; it replaced `cooling_prescribed`). Since #259 the coupling
+is factored into three functions that the nesting parent calls as well
+(one radiation for both domains): `column_radiation_solver(Nz, p_surf)`
+builds the optics and solvers, `stitched_column(c, θ, qv, ql, dz; T_rad)`
+the column of a model's mean profiles on layers of thickness `dz` (a
+vector, so the parent's stretched levels fit), and
+`column_radiation!(c, col, sun, ε, α)` the solve and the heating profile;
+the coupling's `:radiation` stage only gathers the child's inputs and
+sets the bus (bit for bit the former stage).
+
+**The sun** of every radiation coupling is `solar_position_at(cfg, hour)`
+at the local clock hour. `SolarGeometry.solar_time` takes UTC; before #259
+the local hour was passed to it unconverted, so the case's sun ran
+`utc_offset` hours early (2 h in summer: solar noon at 11:07 CEST instead
+of 13:07 on 29 June 2019, the 07:00 sun at the elevation of 09:00). The
+local clock is now converted with `cfg.utc_offset` (sun elevation 8.5° at
+06:00 CEST, maximum 60.7° at 13:06, sunrise 04:50, sunset 21:30). Flagship
+numbers measured before #259 (the diurnal tables of this page) carry the
+early sun.
+
+At order 5, before the radiosity:
 
 1. the mean over the fluid cells of θ, qv and ql on every LES level
    becomes a hydrostatic column (`column_from_profiles`, surface
@@ -1724,6 +2319,13 @@ Moeng (1984) closure (see [the theory page](../theory/sgs_tke.md)). It is
 PALM's urban-LES default and the only closure here whose mixing responds
 prognostically to stratification (its ``0.76\sqrt e/N`` length scale; no
 stability function is applied on top of it).
+
+Not wrapping it in `StabilityCorrected` is by design. `:tke` has none of
+that wrapper's ``κ_h ≠ κ_v`` anisotropy (one ``Δ``, as in PALM): at
+``dx/dz = 2.5`` it mixes 3.39× more vertically and 1.84× less
+horizontally than `StabilityCorrected` Smagorinsky of equal ``C_s``, and
+no `:isentropic` tensor is offered
+([details](../theory/sgs_tke.md#The-model)). Moist ``N^2``: #239.
 
 * The closure is the `sgs` of every dynamics step, so the cores evaluate
   ``ν_t = c_k l\sqrt e``, ``κ_t = (1 + 2l/Δ)ν_t`` from the committed ``e``

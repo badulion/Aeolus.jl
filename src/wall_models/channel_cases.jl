@@ -877,7 +877,8 @@ end
 
 """
     run_channel!(case, t_end; dt = nothing, cfl = 0.5, average_from = Inf,
-                 sample_every = 1, callback = nothing) -> stats
+                 sample_every = 1, callback = nothing, checkpoint = nothing,
+                 checkpoint_components = (;)) -> stats
 
 Advance `case` to the time `t_end` (in units of the simulation clock;
 ``H/u_*`` is the eddy-turnover time of the default cases, which have
@@ -897,17 +898,27 @@ returned `stats` hold the averages over those samples:
     `τ_wall_bottom`, `τ_wall_top` separately;
   * `t`, `τ_series` — the sampling times and the per-step wall stress;
   * `nsamples`, `nsteps`, `wall_time` (s).
+
+**Checkpoints** (#245). With `checkpoint` (an `IO.CheckpointSchedule`) the
+run resumes from the newest checkpoint of its folder (the simulation, the
+case — closure memory, wall model, inputs, roughness, counters — and the
+averages above), writes periodic checkpoints, and a final one at `t_end`.
+`checkpoint_components` (a `NamedTuple`) adds the state of the caller's
+`callback`. A restarted run returns the same `stats`, bit for bit, as an
+uninterrupted one. Use one checkpoint `prefix` per call when a driver calls
+`run_channel!` more than once.
 """
 function run_channel!(case::WallBoundedCase, t_end::Real; dt = nothing, cfl::Real = 0.5,
                       average_from::Real = Inf, sample_every::Integer = 1,
-                      callback = nothing)
+                      callback = nothing, checkpoint = nothing, checkpoint_components = (;))
     s = case.sim; g = s.mesh; Nz = g.Nz
-    Usum = zeros(Nz)
     keys_ = (:resolved, :sgs, :viscous, :wall, :total)
-    ssum = Dict(k => zeros(Nz + 1) for k in keys_)
-    τb_sum = 0.0; τt_sum = 0.0; tw = 0.0
-    ts = Float64[]; τs = Float64[]
-    nsamp = 0; n0 = case.nsteps
+    # the run's accumulators, in one checkpointable Dict (#245)
+    R = Dict{Symbol,Any}(:Usum => zeros(Nz), :ssum => Dict(k => zeros(Nz + 1) for k in keys_),
+                         :τb => 0.0, :τt => 0.0, :tw => 0.0, :ts => Float64[], :τs => Float64[],
+                         :nsamp => 0, :n0 => case.nsteps)
+    comps = (case = case, run_channel = R, checkpoint_components...)
+    checkpoint === nothing || resume!(checkpoint, s; components = comps)
     nw = case.walls === :both ? 2 : 1
     t0 = time()
     while s.t < t_end - 1e-12 * max(1.0, abs(t_end))
@@ -915,18 +926,24 @@ function run_channel!(case::WallBoundedCase, t_end::Real; dt = nothing, cfl::Rea
         h = min(h, t_end - s.t)
         advance_channel!(case, h)
         callback === nothing || callback(case)
-        if s.t >= average_from && (case.nsteps - n0) % sample_every == 0
-            nsamp += 1
+        if s.t >= average_from && (case.nsteps - R[:n0]) % sample_every == 0
+            R[:nsamp] += 1
             um, _ = _uv_means(s)
-            Usum .+= um
+            R[:Usum] .+= um
             p = total_stress_profile(case)
             for k in keys_
-                ssum[k] .+= getfield(p, k)
+                R[:ssum][k] .+= getfield(p, k)
             end
-            τb_sum += h * case.τ_wall_bottom; τt_sum += h * case.τ_wall_top; tw += h
-            push!(ts, s.t); push!(τs, (case.τ_wall_bottom + case.τ_wall_top) / nw)
+            R[:τb] += h * case.τ_wall_bottom; R[:τt] += h * case.τ_wall_top; R[:tw] += h
+            push!(R[:ts], s.t); push!(R[:τs], (case.τ_wall_bottom + case.τ_wall_top) / nw)
         end
+        checkpoint === nothing || maybe_checkpoint!(checkpoint, s; step = case.nsteps, components = comps)
     end
+    # a final checkpoint: a rerun of a finished phase returns at once
+    checkpoint === nothing || maybe_checkpoint!(checkpoint, s; step = case.nsteps, force = true,
+                                                components = comps)
+    Usum, ssum, τb_sum, τt_sum, tw = R[:Usum], R[:ssum], R[:τb], R[:τt], R[:tw]
+    ts, τs, nsamp, n0 = R[:ts], R[:τs], R[:nsamp], R[:n0]
     zc = [(k - 0.5) * g.dz for k in 1:Nz]
     if nsamp == 0
         return (nsamples = 0, nsteps = case.nsteps - n0, wall_time = time() - t0)

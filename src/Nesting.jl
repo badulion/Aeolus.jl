@@ -107,6 +107,8 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
        anterpolate!, feedback_mask
 
+"Simulations a nest can couple: the Boussinesq core (uniform or z-stretched) and the sound-proof `MassWeightedSimulation`s (anelastic, pseudo-incompressible)."
+const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
 
 _moist(sim::BoussinesqSimulation) = sim.has_moisture
 _moist(::MassWeightedSimulation)  = false
