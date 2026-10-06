@@ -1,0 +1,44 @@
+# Documentation (#354): build docs/make.jl and deploy to the gh-pages branch.
+# Pushes to master deploy the `dev` docs, version tags deploy `stable` and
+# `vX.Y.Z`. Pull requests build the docs without deploying.
+# GitHub Pages must be enabled once by the maintainer:
+# Settings -> Pages -> Deploy from a branch -> gh-pages / (root).
+name: Documentation
+
+on:
+  push:
+    branches: [master]
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write      # julia-actions/cache deletes stale caches
+  contents: write     # push to gh-pages
+  pull-requests: read
+  statuses: write
+
+jobs:
+  docs:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEOLUS_FFTW_PLANNER: estimate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.13'
+      - uses: julia-actions/cache@v2
+      - name: Install docs dependencies
+        run: julia --color=yes --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path = pwd())); Pkg.instantiate()'
+      - name: Build and deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}   # optional; GITHUB_TOKEN suffices
+        run: julia --color=yes --project=docs docs/make.jl
