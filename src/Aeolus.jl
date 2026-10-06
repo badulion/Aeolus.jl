@@ -1044,6 +1044,8 @@ export ForcingTable, forcing_value, forcing_mean,
        ReferenceDamping, damping_tendency
 # N-parent-a (#247): radiosonde soundings → (z, t) profiles
 export Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time
+# #248 (N-parent-c): plane-mean nudging of u, v, θ, qv and large-scale subsidence.
+export ProfileNudging, NudgingWeight, nudging_weight, Subsidence, tendency_integrals
 
 # P57-e (#190): the dynamic roughness of partially resolved relief
 # (Anderson & Meneveau 2011). `surface_gradient_drag` does not collide
