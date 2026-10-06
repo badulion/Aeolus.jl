@@ -4,6 +4,7 @@ using ..Grids
 using ..Grids: CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: location, Field
+using ..Backends: Backends, launch!
 
 export AbstractBC, Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
        FieldBoundaryConditions, fill_halos!
@@ -174,6 +175,8 @@ _bc(s::Symbol) = s === :periodic ? Periodic()        :
 # Halo filling
 # =========================================================================
 
+include("boundary_conditions/halo_kernels.jl")  # the per-axis kernels (KA-f, #297)
+
 """
     fill_halos!(field, bcs)
 
@@ -205,102 +208,40 @@ _fill_z!(d, a, b, H, N, loc::Location, key) = _fill_z!(d, a, b, H, N, loc)
 # mesh-free method (with the key, for an open top).
 _fill_z!(d, bot, top, Hz, Nz, loc::Location, g, key) = _fill_z!(d, bot, top, Hz, Nz, loc, key)
 
-# The plane copies below run on views (`@views`): the right-hand slice of
-# `d[a, :, :] .= d[b, :, :]` would otherwise be copied into a fresh array
-# on every call, and halo fills run several times per field per step
-# (KA-c, #295: 25 MB per flagship step). Source and destination planes are
-# disjoint, so the result is the same, bit for bit.
+# Every fill below is a sequence of `launch!`es of the per-axis halo
+# kernels (boundary_conditions/halo_kernels.jl, KA-f #297), one per fill
+# phase of the face slab, in the order the pre-port loops ran.
 
 # --- X direction ---------------------------------------------------------
 
-function _fill_x!(d, ::Periodic, ::Periodic, Hx, Nx, ::Location)
-    @inbounds @views for h in 1:Hx
-        d[h,               :, :] .= d[Nx + h,      :, :]
-        d[Hx + Nx + h,     :, :] .= d[Hx + h,      :, :]
-    end
-    return d
-end
-
-function _fill_x!(d, ::NoFlux, ::NoFlux, Hx, Nx, ::Location)
-    @inbounds @views for h in 1:Hx
-        d[Hx + 1 - h,      :, :] .= d[Hx + h,          :, :]
-        d[Hx + Nx + h,     :, :] .= d[Hx + Nx + 1 - h, :, :]
-    end
-    return d
-end
+_fill_x!(d, ::Periodic, ::Periodic, Hx, Nx, ::Location) = _halo_periodic!(d, 1, Hx, Nx)
+_fill_x!(d, ::NoFlux, ::NoFlux, Hx, Nx, ::Location) = _halo_mirror!(d, 1, Hx, Nx)
 
 # --- Y direction ---------------------------------------------------------
 
-function _fill_y!(d, ::Periodic, ::Periodic, Hy, Ny, ::Location)
-    @inbounds @views for h in 1:Hy
-        d[:, h,              :] .= d[:, Ny + h,      :]
-        d[:, Hy + Ny + h,    :] .= d[:, Hy + h,      :]
-    end
-    return d
-end
-
-function _fill_y!(d, ::NoFlux, ::NoFlux, Hy, Ny, ::Location)
-    @inbounds @views for h in 1:Hy
-        d[:, Hy + 1 - h,     :] .= d[:, Hy + h,          :]
-        d[:, Hy + Ny + h,    :] .= d[:, Hy + Ny + 1 - h, :]
-    end
-    return d
-end
+_fill_y!(d, ::Periodic, ::Periodic, Hy, Ny, ::Location) = _halo_periodic!(d, 2, Hy, Ny)
+_fill_y!(d, ::NoFlux, ::NoFlux, Hy, Ny, ::Location) = _halo_mirror!(d, 2, Hy, Ny)
 
 # --- Z direction ---------------------------------------------------------
 
-function _fill_z!(d, ::Periodic, ::Periodic, Hz, Nz, ::Location)
-    @inbounds @views for h in 1:Hz
-        d[:, :, h]           .= d[:, :, Nz + h]
-        d[:, :, Hz + Nz + h] .= d[:, :, Hz + h]
-    end
-    return d
-end
-
-function _fill_z!(d, ::NoFlux, ::NoFlux, Hz, Nz, ::Location)
-    @inbounds @views for h in 1:Hz
-        d[:, :, Hz + 1 - h]  .= d[:, :, Hz + h]
-        d[:, :, Hz + Nz + h] .= d[:, :, Hz + Nz + 1 - h]
-    end
-    return d
-end
+_fill_z!(d, ::Periodic, ::Periodic, Hz, Nz, ::Location) = _halo_periodic!(d, 3, Hz, Nz)
+_fill_z!(d, ::NoFlux, ::NoFlux, Hz, Nz, ::Location) = _halo_mirror!(d, 3, Hz, Nz)
 
 # Impermeable wall — for FaceX/FaceY (u, v) and CellCenter (p, θ), behave
 # as free-slip / Neumann → same as NoFlux (mirror).
-function _fill_z!(d, ::ImpermeableWall, ::ImpermeableWall, Hz, Nz,
-                  ::Union{CellCenter,FaceX,FaceY})
-    @inbounds @views for h in 1:Hz
-        d[:, :, Hz + 1 - h]  .= d[:, :, Hz + h]
-        d[:, :, Hz + Nz + h] .= d[:, :, Hz + Nz + 1 - h]
-    end
-    return d
-end
+_fill_z!(d, ::ImpermeableWall, ::ImpermeableWall, Hz, Nz, ::Union{CellCenter,FaceX,FaceY}) =
+    _halo_mirror!(d, 3, Hz, Nz)
 
 # Impermeable wall — for FaceZ (w): zero the two wall-face slots and
 # extend the halo anti-symmetrically about each wall so the wall face
 # stays exactly zero under stencil evaluation.
 function _fill_z!(d::AbstractArray{T,3}, ::ImpermeableWall, ::ImpermeableWall,
                   Hz, Nz, ::FaceZ) where {T}
-    zval = zero(T)
-    @inbounds @views begin
-        d[:, :, Hz + 1]      .= zval    # bottom wall face
-        # top wall face lives at Hz+Nz+1 (in halo region for FaceZ storage)
-        if Hz + Nz + 1 <= size(d, 3)
-            d[:, :, Hz + Nz + 1] .= zval
-        end
-
-        for h in 1:Hz
-            # below bottom wall: anti-symmetric about the wall at Hz+1
-            d[:, :, Hz + 1 - h] .= .-d[:, :, Hz + 1 + h]
-            # above top wall: anti-symmetric about the wall at Hz+Nz+1
-            src = Hz + Nz + 1 - h
-            dst = Hz + Nz + 1 + h
-            if dst <= size(d, 3)
-                d[:, :, dst] .= .-d[:, :, src]
-            end
-        end
-    end
-    return d
+    _halo_set!(d, 3, Hz + 1, zero(T))                    # bottom wall face
+    # top wall face lives at Hz+Nz+1 (in halo region for FaceZ storage)
+    Hz + Nz + 1 <= size(d, 3) && _halo_set!(d, 3, Hz + Nz + 1, zero(T))
+    # anti-symmetric about the walls at Hz+1 and Hz+Nz+1
+    return _halo_negate!(d, 3, Hz, Nz, true, true)
 end
 
 include("boundary_conditions/noslip_wall.jl")   # P59-a (#172)

@@ -82,11 +82,7 @@ function _fill_freestream_top!(d::AbstractArray{T,3}, bc::FreeStreamBoundary, Hz
         throw(DimensionMismatch("FreeStreamBoundary: w_top has $(length(wb)) entries, " *
                                 "the field has $(size(d, 1)) storage x points"))
     kw = _face_index(true, Hz, Nz)
-    if kw <= size(d, 3)
-        @inbounds for j in axes(d, 2), i in axes(d, 1)
-            d[i, j, kw] = T(wb[i])
-        end
-    end
+    kw <= size(d, 3) && _halo_launch!(_xprofile_body!, d, 3, kw:kw, true, wb)
     return _open_odd!(d, 3, true, Hz, Nz)
 end
 
