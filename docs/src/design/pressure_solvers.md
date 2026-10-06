@@ -114,6 +114,17 @@ transform-based solver fails. Cost per solve is
 preconditioning. The preconditioner will start as a simple diagonal
 scaling and can be upgraded to geometric multigrid.
 
+A solve allocates nothing (#295): the source, the iterate and the
+scratch of the dot products live in the solver, as they do in
+`MultigridPoissonSolver` (source buffer) and `MGPreconditionedCG`. The
+dot products are still `sum(a .* b)` — the product is written into the
+scratch array first — so the pairwise summation, the bits and the
+iteration counts are those of the allocating version. On the 64 × 64 ×
+32 flagship grid a plain CG solve went from 11.0 to 7.3 ms, multigrid
+from 60.9 to 55.3 ms and MG-CG from 41.9 to 39.0 ms (1 thread, minimum
+of 2 × 5 calls on a loaded 24-core machine; most of the CG gain is
+garbage collection that no longer runs).
+
 ### `SEMPoissonSolver` (Phase 5)
 
 For the spectral-element backend. Element-local mass is not diagonal
