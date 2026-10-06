@@ -1051,6 +1051,16 @@ export NoSlipWall
 include("wall_shear_stress.jl")
 # P59-d (#185) — free-stream (transpiration) top of a spatial boundary layer.
 export FreeStreamBoundary
+# N-open-b (#255) — open (Dirichlet-from-boundary-data) faces, the
+# boundary-data contract and the global boundary mass-flux correction.
+export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
+       AbstractBoundaryData, ProfileBoundaryData, FunctionBoundaryData,
+       boundary_values!, open_boundary_conditions, set_boundary_data!,
+       has_open_boundaries, open_boundary_states, update_open_boundaries!,
+       prepare_open_boundaries!, correct_boundary_mass_flux!, open_boundary_flux,
+       boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
+       open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
+       assert_open_face_correction, open_intermediate_velocity!
 
 # Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
 # nudging, prescribed advective tendencies, surface-temperature series.

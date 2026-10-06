@@ -204,8 +204,9 @@ solvers project the mean out: an incompatible source with mean
 uniform residual ``L_h φ − s = −\bar s`` (the test suite checks this to
 1e-14) — after the projection ``∇·u = −\bar s Δt`` in *every* cell, a
 uniform spurious source or sink. The open-boundary mass-flux correction
-(N-open-b) must therefore make the net boundary volume flux vanish
-*before* the projection, not after.
+(N-open-b, `correct_boundary_mass_flux!`) therefore makes the net boundary
+volume flux vanish *before* the projection, not after; see
+[Prescribed-flux faces](fractional_step.md#Prescribed-flux-faces-(open-boundaries)).
 
 ### When *this* solver stops applying
 

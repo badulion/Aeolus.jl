@@ -59,7 +59,10 @@ using ..Fields
 using ..Fields: Field, interior_view, set!
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
-                            Periodic, NoFlux, ImpermeableWall
+                            Periodic, NoFlux, ImpermeableWall,
+                            update_open_boundaries!, prepare_open_boundaries!,
+                            assert_open_face_correction
+import ..BoundaryConditions: boundary_flux_weights
 using ..Operators
 using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    add_coriolis!, compute_smagorinsky_νt!,
@@ -1349,6 +1352,11 @@ projection's tolerance.
 constraint_weights(sim::MassWeightedSimulation) =
     (_weight_c(sim.weighting, sim.ref), _weight_f(sim.weighting, sim.ref))
 
+# Open boundaries (N-open-b): the boundary mass-flux correction balances the
+# flux of the constraint weight W (ρ̄ or ρ̄θ̄), the quantity the projection
+# annihilates.
+boundary_flux_weights(sim::MassWeightedSimulation) = constraint_weights(sim)
+
 _default_reference(::AnelasticWeighting, mesh)            = isentropic_reference(mesh)
 _default_reference(::PseudoIncompressibleWeighting, mesh)  = constant_stability_reference(mesh)
 
@@ -1536,6 +1544,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     m  = sim.mesh
     Wc = _weight_c(sim.weighting, sim.ref)
     Wf = _weight_f(sim.weighting, sim.ref)
+    prepare_open_boundaries!(sim)          # no-op unless an open face is unfilled
 
     # 1. halos
     fill_halos!(sim.u, sim.bcs)
@@ -1589,6 +1598,10 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     _axpy_interior!(sim.w, Δt, sim.tw, m)
     post_predictor! === nothing || post_predictor!(sim, Δt)
 
+    # 7b. open boundaries (N-open-b): data at the end of the step, with the
+    #     W-weighted mass-flux correction, written into u* by the fill below
+    update_open_boundaries!(sim, sim.t + Δt, Δt)
+
     # 8. weighted divergence of the predicted velocity
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
@@ -1601,6 +1614,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     # 10. correction u = u* − ∇φ
     fill_halos!(sim.φ, sim.bcs)
     ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
+    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy)   # ∂φ/∂n = 0 on open faces
     _axpy_interior!(sim.u, -one(T), sim.dφdx, m)
     _axpy_interior!(sim.v, -one(T), sim.dφdy, m)
     _axpy_interior!(sim.w, -one(T), sim.dφdz, m)
