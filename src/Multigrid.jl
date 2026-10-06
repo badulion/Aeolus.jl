@@ -40,6 +40,7 @@ using ..Fields
 using ..Fields: Field, interior_view
 using ..PressureSolvers: AbstractPressureSolver, solve!
 import ..PressureSolvers: solve!
+using ..StretchedGrids: StretchedGrid, cell_thickness, center_spacing
 
 export MultigridPoissonSolver, MGPreconditionedCG,
        mg_vcycle!, mg_solve!, mg_residual_norm,
@@ -397,6 +398,10 @@ Keyword arguments:
 | `fmg` | `false` | start from a full-multigrid (nested-iteration) initial guess |
 | `min_size` | `4` | stop coarsening when any dimension reaches this |
 | `coeff_x/y/z` | `nothing` | face coefficients for `∇·(c∇φ)` |
+| `rhs_scale` | `nothing` | per-level factor `s_k` applied to the source (`(s_k b)`): solves `s_k (Lφ)_k = s_k b_k` |
+
+`MultigridPoissonSolver(g::StretchedGrid; kwargs...)` builds the
+stretched-z operator from these (see below).
 
 The mesh dimensions do not need to be powers of two — coarsening stops
 on any axis that becomes odd, so the hierarchy degrades gracefully
@@ -414,6 +419,7 @@ mutable struct MultigridPoissonSolver{T} <: AbstractPressureSolver
     cycle::Symbol
     fmg::Bool
     singular::Bool
+    rhs_scale::Union{Nothing, Vector{T}}   # per-level source factor (stretched z)
     # diagnostics
     last_cycles::Base.RefValue{Int}
     last_residual::Base.RefValue{T}
@@ -433,8 +439,11 @@ function MultigridPoissonSolver(mesh::RegularGrid{T};
                                 min_size::Int = 4,
                                 coeff_x = nothing,
                                 coeff_y = nothing,
-                                coeff_z = nothing) where {T}
+                                coeff_z = nothing,
+                                rhs_scale = nothing) where {T}
     _valid_bc(bc_x); _valid_bc(bc_y); _valid_bc(bc_z)
+    rhs_scale === nothing || length(rhs_scale) == mesh.Nz ||
+        throw(DimensionMismatch("rhs_scale needs one entry per level ($(mesh.Nz)), got $(length(rhs_scale))"))
     cycle === :V || cycle === :W ||
         error("Multigrid: cycle must be :V or :W")
 
@@ -463,7 +472,73 @@ function MultigridPoissonSolver(mesh::RegularGrid{T};
     return MultigridPoissonSolver{T}(levels, bc_x, bc_y, bc_z,
                                      T(tol), maxcycles, nu1, nu2, cycle, fmg,
                                      singular,
+                                     rhs_scale === nothing ? nothing : collect(T, rhs_scale),
                                      Ref(0), Ref(zero(T)), T[])
+end
+
+"""
+    MultigridPoissonSolver(g::StretchedGrid; kwargs...)
+    MGPreconditionedCG(g::StretchedGrid; kwargs...)
+
+The multigrid solvers for the conservative stretched-z Poisson operator of
+a [`StretchedGrid`](@ref Aeolus.StretchedGrids.StretchedGrid) (the
+divergence of the gradient of its `∂z` stencils, #151). Multiplying row
+`k` by `s_k = Δz_c[k]/Δ` (any reference `Δ`; here the thinnest cell) turns
+it into the symmetric variable-coefficient form this module solves,
+
+```math
+\\frac{s_k}{Δx^2}δ_x^2φ + \\frac{s_k}{Δy^2}δ_y^2φ
+ + \\frac{1}{Δ^2}\\Big[c_{k+1}(φ_{k+1}-φ_k) - c_k(φ_k-φ_{k-1})\\Big] = s_k b_k,
+\\qquad c_k = \\frac{Δ}{Δz_f[k]},
+```
+
+i.e. `coeff_x = coeff_y = s_k`, `coeff_z = c_k` and `rhs_scale = s_k` on a
+uniform grid of spacing `Δ`. Metrics from `cell_thickness`/`center_spacing`.
+Keyword arguments are those of the `RegularGrid` constructors (BCs,
+tolerance, cycles).
+
+Convergence needs a hierarchy: coarsening requires all three dimensions
+to halve, so a level count with few factors of two (a parent grid uniform
+to 500 m, then stretched: 53 levels) leaves one level and the "multigrid"
+is a Gauss-Seidel smoother. The default solver of the Boussinesq core is
+therefore the direct [`StretchedPoissonSolver`](@ref
+Aeolus.StretchedGrids.StretchedPoissonSolver); this route is for a
+variable coefficient field the transform cannot diagonalise.
+"""
+function MultigridPoissonSolver(g::StretchedGrid{T}; kwargs...) where {T}
+    rg, cx, cy, cz, sc = _stretched_operator(g)
+    return MultigridPoissonSolver(rg; coeff_x = cx, coeff_y = cy, coeff_z = cz,
+                                  rhs_scale = sc, kwargs...)
+end
+
+# The equivalent uniform grid (spacing Δ = thinnest cell in z) and the
+# face coefficients / row scaling of the stretched operator on it.
+function _stretched_operator(g::StretchedGrid{T}) where {T}
+    Nx, Ny, Nz, Hz = g.Nx, g.Ny, g.Nz, g.Hz
+    dzc = T[cell_thickness(g)[Hz + k] for k in 1:Nz]
+    dzf = T[center_spacing(g)[Hz + k] for k in 1:Nz+1]
+    Δ = minimum(dzc)
+    rg = RegularGrid(T; size = (Nx, Ny, Nz), extent = (g.Lx, g.Ly, Nz * Δ),
+                     halo = (g.Hx, g.Hy, g.Hz), origin = (g.x0, g.y0, g.z0))
+    sc = dzc ./ Δ
+    cx = zeros(T, Nx + 1, Ny, Nz); cy = zeros(T, Nx, Ny + 1, Nz)
+    cz = zeros(T, Nx, Ny, Nz + 1)
+    for k in 1:Nz
+        cx[:, :, k] .= sc[k]; cy[:, :, k] .= sc[k]
+    end
+    for k in 1:Nz+1
+        cz[:, :, k] .= Δ / dzf[k]
+    end
+    return rg, cx, cy, cz, sc
+end
+
+# s_k b_k in place on an interior-sized array (no-op without a scale)
+_scale_rhs!(b, ::Nothing) = b
+function _scale_rhs!(b::AbstractArray{T,3}, sc::Vector{T}) where {T}
+    @inbounds for k in axes(b, 3)
+        @views b[:, :, k] .*= sc[k]
+    end
+    return b
 end
 
 "Number of levels in the hierarchy (1 means no coarsening was possible)."
@@ -620,6 +695,7 @@ Drop-in replacement for the FFT and CG solvers.
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::MultigridPoissonSolver{T}) where {T}
     src = Array(interior_view(source))
+    _scale_rhs!(src, solver.rhs_scale)
     out = similar(src)
     mg_solve!(solver, out, src)
     interior_view(p) .= out
@@ -668,6 +744,12 @@ function MGPreconditionedCG(mesh::RegularGrid{T};
                                  Ref(0), Ref(zero(T)))
 end
 
+function MGPreconditionedCG(g::StretchedGrid{T}; kwargs...) where {T}
+    rg, cx, cy, cz, sc = _stretched_operator(g)
+    return MGPreconditionedCG(rg; coeff_x = cx, coeff_y = cy, coeff_z = cz,
+                              rhs_scale = sc, kwargs...)
+end
+
 # Apply the fine-level operator to an interior array.
 function _apply_fine!(out::Array{T,3}, x::Array{T,3},
                       s::MultigridPoissonSolver{T}) where {T}
@@ -714,6 +796,7 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::MGPreconditionedCG{T}) where {T}
     s  = solver.mg
     b  = Array(interior_view(source))
+    _scale_rhs!(b, s.rhs_scale)
     s.singular && _project_mean_flat!(b)
     bn = sqrt(sum(abs2, b))
     if bn == 0

@@ -1,27 +1,44 @@
 # GABLS4 LES intercomparison: the stable boundary layer at 17 UTC 11 Dec 2009 (Dome C), one-hour averages.
-# Source: Couvreux et al. (2020), Boundary-Layer Meteorol. 176, 369-400, Table 4 (experiments 2 and 3) (author version
-#   https://edepot.wur.nl/528755, read 2026-10-04). Copied from the table, not digitised: digitisation uncertainty 0.
+# Source: Couvreux et al. (2020), Boundary-Layer Meteorol. 176, 369-400 (author version https://edepot.wur.nl/528755,
+#   re-read 2026-10-05 for #237). h, L, u_star, H_Wm2, theta_star: Table 4 (experiments 2 and 3). run, dx_m, dz_m, z0m:
+#   Table 2 (the run's grid and momentum roughness length). table3, H_table3_Wm2: Table 3 (experiments 1 and 2).
+#   Copied from the tables, not digitised: digitisation uncertainty 0.
 # Columns: h = boundary-layer height (Beare et al. 2006 definition: 5 % of the surface stress, / 0.95), L = Obukhov
 #   length, u_star, H = surface sensible heat flux, theta_star. Table 4's header gives H in "K m s-1", but the values are
-#   W m-2: e.g. PALM exp. 3, -u* theta* = -0.09 x 0.08 = -7.2e-3 K m/s, times rho c_p = 0.93 x 1005 J m-3 K-1 at
-#   651 hPa and 245 K is -6.7 W m-2 against the tabulated -7.2.
-# Experiment 2: 5 m horizontal, 2 m vertical resolution, 1 km domain, from 00 UTC; experiment 3: 1 m isotropic
-#   (MesoNH 0.5 / 0.25 m tests exist), 500 x 500 x 150 m domain or smaller, from 10 UTC; both z0m = 1e-3 m, z0h = 1e-4 m.
-# envelope rows: min and max over the seven models of Table 4 (experiment 3).
-kind,model,h_m,L_m,u_star,H_Wm2,theta_star
-exp2,MesoNH,29,15.5,0.11,-6.8,0.06
-exp2,PALM,19,7.9,0.09,-8.1,0.09
-exp2,UConn,17.0,8.2,0.08,-4.9,0.06
-exp2,MicroHH,27,10.5,0.15,-22.3,0.16
-exp2,DALES,23,9.3,0.10,-8.2,0.09
-exp2,MONC,17,8.0,0.08,-4.7,0.06
-exp2,CSIRO-LES,39,8.1,0.11,-13.0,0.12
-exp3,MesoNH,19,8.4,0.09,-5.6,0.07
-exp3,PALM,17.5,7.3,0.09,-7.2,0.08
-exp3,UConn,17.5,9.0,0.09,-6.0,0.07
-exp3,MicroHH,16.5,9.9,0.12,-13.5,0.12
-exp3,DALES,19.5,7.2,0.09,-8.0,0.08
-exp3,MONC,14.5,6.5,0.08,-5.3,0.07
-exp3,CSIRO-LES,25,7.7,0.10,-10.5,0.10
-envelope_low,exp3,14.5,6.5,0.08,-13.5,0.07
-envelope_high,exp3,25,9.9,0.12,-5.3,0.12
+#   W m-2: H = -rho c_p u* theta*. With u* and theta* rounded to +-0.005, each row bounds rho c_p, and the 14 rows
+#   overlap in rho c_p = 991-992 J m-3 K-1 (air at 651 hPa and 230 K; e.g. PALM exp. 3, -0.09 x 0.08 x 1000 = -7.2).
+# Experiment 3 (from 10 UTC, z0m = 1e-3 m, z0h = 1e-4 m): NOT all seven runs are at 1 m. Six (MesoNH M1E3, PALM M2E3,
+#   UConn M3E3, MicroHH M4E3, DALES M8E3, MONC M9E3) used dx = dz = 1 m; CSIRO-LES (M10E3) used dx = 3.9 m, dz = 1.17 m.
+#   Domains 256 x 256 x 80 m (UConn) to 512 x 512 x 150 m (DALES) and 480 x 480 x 160 m (MicroHH).
+#   Finer tests (Table 2, Sect. 4.2): MesoNH dx/dz = 1/0.5, 0.5/0.5, 0.25/0.25 m on 250 x 250 x 75 m; UConn 0.5 and
+#   0.25 m isotropic. Only profiles (Figs. 11-12) are published for those, no h.
+# Experiment 2 (from 00 UTC): the Table 4 column is NOT uniformly "5 m / 2 m, z0m = 1e-3 m". Table 2 lists E2 runs at
+#   dx = 5 m, dz = 2 m for MesoNH, PALM, UConn and MONC, and CSIRO's E2 run at 7.8 m / 3.9 m. MicroHH and DALES have no
+#   E2 run in Table 2; their Table 4 "experiment 2" h, L and u* equal those of their EXPERIMENT 1 runs in Table 3 (M4E1,
+#   M8E1: 5 m / 2 m, z0m = 1e-2 m), so these rows are entered as M4E1 and M8E1. The table3 column says which of h, L,
+#   u* agree with Table 3 for that run: PALM's L is 7.9 in Table 4 and 7.4 for M2E2 in Table 3 (7.9 is M2E1's), CSIRO's
+#   L is 8.1 against 10.7, and MONC's row matches none of M9E2's Table 3 values (15, 1.4, 0.05, -5.1). H disagrees between
+#   the two tables for EVERY row (H_table3_Wm2), MicroHH most (-22.3 against -11.9). The Table 4 values are used here.
+# Envelope rows (min, max over the listed runs; H_Wm2 low = most negative):
+#   envelope_low/high:           experiment 3, the six 1 m runs (CSIRO-LES excluded: it alone sets h = 25 m).
+#   envelope_exp2_low/high:      experiment 2, the four Table 2 E2 runs at 5 m / 2 m with z0m = 1e-3 m (MesoNH, PALM,
+#                                UConn, MONC; MONC with the Table 3 inconsistency above).
+kind,model,h_m,L_m,u_star,H_Wm2,theta_star,run,dx_m,dz_m,z0m,table3,H_table3_Wm2
+exp2,MesoNH,29,15.5,0.11,-6.8,0.06,M1E2,5,2,1e-3,h_L_ustar,-5.6
+exp2,PALM,19,7.9,0.09,-8.1,0.09,M2E2,5,2,1e-3,h_ustar,-5.7
+exp2,UConn,17.0,8.2,0.08,-4.9,0.06,M3E2,5,2,1e-3,h_L_ustar,-3.0
+exp2,MicroHH,27,10.5,0.15,-22.3,0.16,M4E1,5,2,1e-2,h_L_ustar,-11.9
+exp2,DALES,23,9.3,0.10,-8.2,0.09,M8E1,5,2,1e-2,h_L_ustar,-6.7
+exp2,MONC,17,8.0,0.08,-4.7,0.06,M9E2,5,2,1e-3,none,-5.1
+exp2,CSIRO-LES,39,8.1,0.11,-13.0,0.12,M10E2,7.8,3.9,1e-3,h_ustar,-7.9
+exp3,MesoNH,19,8.4,0.09,-5.6,0.07,M1E3,1,1,1e-3,na,NaN
+exp3,PALM,17.5,7.3,0.09,-7.2,0.08,M2E3,1,1,1e-3,na,NaN
+exp3,UConn,17.5,9.0,0.09,-6.0,0.07,M3E3,1,1,1e-3,na,NaN
+exp3,MicroHH,16.5,9.9,0.12,-13.5,0.12,M4E3,1,1,1e-3,na,NaN
+exp3,DALES,19.5,7.2,0.09,-8.0,0.08,M8E3,1,1,1e-3,na,NaN
+exp3,MONC,14.5,6.5,0.08,-5.3,0.07,M9E3,1,1,1e-3,na,NaN
+exp3,CSIRO-LES,25,7.7,0.10,-10.5,0.10,M10E3,3.9,1.17,1e-3,na,NaN
+envelope_low,exp3_1m,14.5,6.5,0.08,-13.5,0.07,six,1,1,1e-3,na,NaN
+envelope_high,exp3_1m,19.5,9.9,0.12,-5.3,0.12,six,1,1,1e-3,na,NaN
+envelope_exp2_low,exp2_5m2m,17,7.9,0.08,-8.1,0.06,four,5,2,1e-3,na,NaN
+envelope_exp2_high,exp2_5m2m,29,15.5,0.11,-4.7,0.09,four,5,2,1e-3,na,NaN
