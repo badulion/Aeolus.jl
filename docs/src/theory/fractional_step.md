@@ -199,6 +199,111 @@ error was 2.2 times the spatial one); with the Kim & Moin condition it is
 explicit drivers need no such condition (their tendencies use the
 step-start halos): `step_rk3!` measures 2.035 and 2.022.
 
+### Radiation outflow
+
+Structures generated inside a nested child — building wakes, plumes,
+eddies — reach the outflow face, where the parent's data do not contain
+them; a Dirichlet face then reflects them (N-open-c, #260). The
+alternative is a radiation condition on the outflow points,
+
+```math
+\frac{∂φ}{∂t} + c\,\frac{∂φ}{∂n} = 0 ,
+```
+
+selected per face by `open_boundary_conditions(…; outflow = …)`:
+`:dirichlet` (the data everywhere, the nested default), `:convective` or
+`:orlanski`. A point is an outflow point when the outward normal velocity
+of its boundary face is positive at the start of the step; inflow points
+keep the Dirichlet data. `prepare_open_boundaries!` fixes the phase speed
+once per step:
+
+* `:convective` — ``c = \max(u·n, 0)`` (Pauley, Moin & Reynolds 1990);
+* `:orlanski` — for the tangential velocities and the scalars, the speed
+  diagnosed from the interior layer next to the face at this and the
+  previous step start, ``c = -(∂φ/∂t)/(∂φ/∂n)`` (Orlanski 1976), clipped
+  to ``0 ≤ c ≤ Δn/Δt`` (Miller & Thorpe 1981); the normal velocity uses
+  the convective speed (below).
+
+Every halo layer ``b`` of every field (u, v, w and each scalar with
+boundary data) is then advanced, inside `update_open_boundaries!`, by the
+explicit second-order upstream update
+
+```math
+φ_b \leftarrow φ_b^0 - r\,\frac{3φ_b^0 - 4φ_{b-1}^0 + φ_{b-2}^0}{2},
+\qquad r = \min\!\left(\frac{c\,Δt}{Δn},\,1\right),
+```
+
+in values at the start of the (sub)stage (the buffers, and the two
+interior layers recorded by `mark_open_boundary_stage!` after the
+stage's halo fill). Two details matter:
+
+* **Stage-start values.** At the update the velocity is already the
+  predicted ``u^*``, which differs from the projected velocity by
+  ``Δt∇φ``. Radiating from ``u^*`` put that pressure-gradient error into
+  the outflow; radiating from the stage-start values makes the boundary
+  update an explicit stage that SSP-RK3 combines with its own weights. A
+  first version that read the halos before the stage's fill picked up
+  stale corner values (a uniform stream through the pseudo-incompressible
+  core with SGS on drifted, |w| = 6.5e-4 m/s after 100 steps); the
+  layers are now recorded after the fill.
+* **Second-order upstream.** With the centred interior schemes the
+  first-order upstream difference reflected a scalar pulse (σ = 4Δx)
+  with a residual ``∫θ'^2/∫θ'^2_0 = 1.9 × 10^{-4}``; the second-order
+  one, ``7.9 × 10^{-6}``.
+
+**The normal velocity is not a radiating wave.** In a projected core
+continuity ties ``u·n`` at the face to the interior, and the pressure
+responds at once to the boundary value. An Orlanski speed diagnosed from
+``u·n`` and fed back through the pressure drifts: in the outgoing-vortex
+test the diagnosed speeds of u and w settled at 0.79 U and 1.23 U (the
+diagnostic evaluated on a run with an accurate boundary gives 0.96 U for
+both) and R reached 0.15. With the convective speed for ``u·n`` and
+Orlanski for the rest, R = 4.9e-3. Both radiating modes therefore advance
+the normal velocity convectively. The mass-flux correction of the
+previous section balances the radiated normal velocities exactly as it
+balances data.
+
+Measured (`test/era6_outflow_conditions.jl`):
+
+| test | result |
+| :-- | :-- |
+| outgoing Lamb–Oseen vortex (r_c = 8Δx, U = 1, v_max = 0.5, 192 × 48 child, R when the centre is 3 r_c past the face) | Dirichlet, perfect parent 4.0e-5; Dirichlet, uniform-U parent 1.02; convective 6.5e-3; Orlanski 4.9e-3 |
+| scalar pulse (σ = 8Δx), ``∫θ'^2`` after two crossings | convective 1.2e-7, Orlanski 1.7e-6, Dirichlet 1.00 (trapped); interior L2 error of the centred scheme 2.8 % |
+| plane Poiseuille, Re = 50, open x | ``\max|u - u_{disc}|`` 1.3e-15; dp/dx relative error 2.6e-14 (middle 80 %); last 5 cells 2.0e-15 |
+| 2000 steps, parent stored every 5 steps and interpolated in time | ``\max|∫|u|^2_{child}/∫|u|^2_{parent} - 1|``: Dirichlet 3.0e-5, convective 2.7e-3, Orlanski 2.6e-3 |
+
+The vortex is carried by a uniform stream between free-slip walls (a
+2-D x–z flow), whose images make its far field decay as
+``\exp(-π|x|/L_z)``; the truth is the same flow in a periodic domain
+three times longer. A single vortex in a periodic row would instead carry
+the uniform jump ``±Γ/(2L)`` of a vortex sheet, which no uniform parent
+matches. The Poiseuille reference is the discrete steady state, the
+parabola shifted by ``U_{max}Δz^2/H^2``: the no-slip halo is linear
+(``u_0 = -u_1``), and the parabola itself differs from the scheme's
+steady solution by exactly that constant.
+
+### The advective flux through the boundary
+
+`boundary_scalar_flux(sim, ϕ; scheme)` (in `AdvectionSchemes`) returns
+the flux ``\oint ϕ\,u·n\,dA`` out of each face, formed from the face
+velocity and the face value of ``ϕ`` that the scheme reconstructs
+(`:centered`, `:upwind`, WENO-Z5/7, TENO5/8, WENO-JS5). The flux-form
+schemes telescope, so
+
+```math
+\int ϕ\,dV\Big|^{n+1} - \int ϕ\,dV\Big|^{n} = -Δt \oint ϕ\,u·n\,dA
+```
+
+per forward-Euler step to round-off: measured ``|·|/\int|ϕ|dV`` = 2.6e-18
+(centred), 1.5e-18 (WENO-Z5), 4.0e-18 (TENO5) and 5.5e-18 through
+`step!`. It is the only boundary-flux function of the code base: the
+nesting and Berlin budgets (N-nest-d, N-nest-e, N-open-d, N-berlin-nest)
+use it. The inflow faces of a scalar carry Dirichlet data in all ``H``
+halo layers, so the wide upwind stencils read data, not extrapolation;
+`open_boundary_conditions(…; halo = required_halo(scheme))` and
+`boundary_scalar_flux` refuse a mesh whose halo along an open axis is
+shallower than the scheme needs.
+
 ## Alternative: pressure-Poisson-per-substage
 
 For RK3 (or higher-order Runge-Kutta), the divergence-free constraint
@@ -224,6 +329,15 @@ accumulation. This is what Oceananigans.jl and NCAR-LES do.
   * Hellsten, A., Ketelsen, K., Sühring, M. et al. (2021), *A nested
     multi-scale system implemented in the large-eddy simulation model
     PALM model system 6.0*, Geosci. Model Dev. 14, 3185–3214.
+  * Orlanski, I. (1976), *A simple boundary condition for unbounded
+    hyperbolic flows*, J. Comput. Phys. 21, 251–269.
+  * Miller, M. J. & Thorpe, A. J. (1981), *Radiation conditions for the
+    lateral boundaries of limited-area numerical models*, Q. J. R.
+    Meteorol. Soc. 107, 615–628.
+  * Pauley, L. L., Moin, P. & Reynolds, W. C. (1990), *The structure of
+    two-dimensional separation*, J. Fluid Mech. 220, 397–411.
+  * Colonius, T. (2004), *Modeling artificial boundary conditions for
+    compressible flow*, Annu. Rev. Fluid Mech. 36, 315–345.
   * Kadasch, E., Sühring, M., Gronemeier, T. & Raasch, S. (2021),
     *Mesoscale nesting interface of the PALM model system 6.0*, Geosci.
     Model Dev. 14, 5435–5465.
