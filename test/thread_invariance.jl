@@ -18,9 +18,10 @@
 #     Every hash must agree with
 #     the 1-thread one; the differing keys are listed otherwise.
 #     AEOLUS_THREAD_SECTIONS selects sections (default
-#     "primitives,dns,reductions,smoke,flagship,nested,fft"; nested: short nested runs,
+#     "primitives,dns,reductions,smoke,flagship,nested,fft,pcg"; nested: short nested runs,
 #     KA-f #297; fft: every spectral pressure solver with FFTW on the
-#     process's threads, KA-h #298). Every port PR runs and quotes it:
+#     process's threads, KA-h #298; pcg: the four CG solvers, KA-g #300).
+#     Every port PR runs and quotes it:
 #
 #       AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
 #
@@ -86,7 +87,7 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
 
     if get(ENV, "AEOLUS_THREAD_TESTS", "0") == "1"
         counts = parse.(Int, split(get(ENV, "AEOLUS_THREAD_COUNTS", "1,4,24"), ','))
-        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft")
+        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft,pcg")
         project = dirname(Base.active_project())
         dir = mktempdir()
         hashes = Dict{Int,Dict{String,String}}()
