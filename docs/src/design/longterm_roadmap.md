@@ -1554,14 +1554,53 @@ slopes. Cut cells (Phase 21) are the alternative for very steep relief.
 atmosphere over steep idealised terrain (spurious wind below a stated
 bound); a flow-over-hill case against linear theory.
 
-### Phase 103 — Regional geometry on the sphere
-A rotated-pole latitude–longitude grid and a conformal map projection,
-with curvature and metric terms, latitude-dependent Coriolis
-parameter, and a deep-atmosphere option.
+### Phase 103 — Grids on the sphere: one abstraction, several grid types
+Several grid types behind **one grid abstraction**, so that the
+dynamical core and every physics module run unchanged on any of them.
+The grids chosen for regional work must also be usable, later, for
+global models.
 
-**Validated by**: solid-body advection across the rotated pole;
-geostrophic balance preserved on the projected grid; a regional
-baroclinic wave against a global reference.
+- **The abstraction.** Operators are written against general
+  curvilinear metric terms: cell areas and volumes, edge lengths, the
+  local basis and its rotation, map factors, latitude for Coriolis,
+  and deep-atmosphere radius factors. The topology is a set of
+  logically rectangular **panels** with explicit connectivity, so that
+  halo exchange crosses panel edges (with the vector-component rotation
+  done there) as it later crosses MPI ranks (Phase 80). The existing
+  Cartesian box becomes one panel with trivial metrics, so the urban
+  LES is the special case, not a separate code path.
+- **Rotated-pole latitude–longitude** (one panel), the REMO and
+  COSMO-CLM choice for regional climate. It is the primary regional
+  grid, because it keeps the staggered C-grid stencils and the
+  KernelAbstractions kernels of #291.
+- **Conformal map projections** (Lambert conformal, polar
+  stereographic, Mercator; one panel each), as in WRF, through map
+  factors.
+- **Cubed sphere** (six panels, equiangular gnomonic). **Global.** Its
+  panels are structured, so the same stencils and kernels apply, with
+  rotated halos at the cube edges. A regional domain can be a subset of
+  panels or a single stretched panel (Schmidt transform), so regional
+  and global runs share one grid family. The spectral-element backend
+  (Phase 86) on curved elements gives a high-order path on the same
+  grid; ClimaAtmos and HOMME use that approach.
+- **Unstructured icosahedral or Voronoi grids** (ICON, MPAS): an
+  explicit later option, not part of this phase. It needs
+  unstructured operators (no i/j/k stencils) and would most naturally
+  come through the DG and SEM backends (Phases 86–87). The abstraction
+  keeps the door open by not baking i/j/k indexing into the physics
+  interfaces (column physics already works per column).
+
+**Validated by**:
+- the Williamson et al. (1992) shallow-water test suite on the cubed
+  sphere, which is global: solid-body advection over the poles and
+  across panel edges, and steady geostrophic flow, with errors and
+  convergence order quoted;
+- solid-body advection across the rotated pole, and geostrophic
+  balance preserved on the rotated and projected grids;
+- a baroclinic wave (DCMIP-style) on the cubed sphere, with the
+  regional subset against the global run;
+- the Cartesian box unchanged bit for bit when run through the
+  abstraction.
 
 ### Phase 104 — Lateral and top boundary driving
 - Davies (1976) relaxation zones at the lateral boundaries.
@@ -1645,7 +1684,12 @@ extremes.
 Online multi-level nesting inside one Aeolus run, from the 3 km
 regional domain through about 1 km to the urban LES of the Berlin case.
 Physics changes consistently with grid spacing through Phase 105, and
-there is two-way coupling with the urban scale.
+there is two-way coupling with the urban scale. The Cartesian urban
+child sits in the curved parent as a local tangent plane, with the
+interpolation between the two geometries (metric terms, vector
+rotation) done in the nesting operators. At about 1 km the
+tangent-plane error is negligible, but it is designed in and tested,
+not assumed.
 
 **Validated by**: the urban-scale result against the
 offline-driven Berlin case (#246); conservation across all levels.
@@ -1721,3 +1765,10 @@ years. It belongs on the roadmap because the payoff, one physics
 library from the regional domain down to the street canyon, is
 distinctive. It should be started only once Eras VIII and X are
 shipped, and broken into issues only when it comes into view.
+
+Era XII is deliberately **not** a global climate model. But its grid
+abstraction (Phase 103) is designed so a global one stays possible: the
+cubed sphere is global from the start, and the panel and metric
+abstraction leaves room for unstructured grids later. Global context in
+the meantime comes from coupling to existing global models (Phase 98)
+and from lateral driving (Phase 104).
