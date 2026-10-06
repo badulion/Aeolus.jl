@@ -17,7 +17,7 @@
 #     (12 steps per run) and one flagship step. Every hash must agree with
 #     the 1-thread one; the differing keys are listed otherwise.
 #     AEOLUS_THREAD_SECTIONS selects sections (default
-#     "primitives,dns,smoke,flagship"). Every port PR runs and quotes it:
+#     "primitives,dns,reductions,smoke,flagship"). Every port PR runs and quotes it:
 #
 #       AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
 #
@@ -66,7 +66,11 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
                           ("plane_mean!", b -> plane_mean!(zeros(32), b, B, I3)),
                           ("column_partials", b -> column_partials(b, B, I3)),
                           ("interior_max (NaN)", b -> interior_max(b, A, I3)),
-                          ("interior_all_finite (NaN)", b -> interior_all_finite(b, A, I3)))
+                          ("interior_all_finite (NaN)", b -> interior_all_finite(b, A, I3)),
+                          ("plane_reduce! (tuple)", b -> (p = (zeros(32), zeros(32));
+                              plane_reduce!(p, b, (i, j, k, B) -> (@inbounds (B[i, j, k], abs(B[i, j, k]))), I3, B);
+                              vcat(p...))),
+                          ("range_max (NaN)", b -> range_max(b, (i, j, k, A) -> (@inbounds abs(A[i, j, k])), I3, A)))
             r1, r2 = f(ser), f(thr)
             @test isequal(r1, r2) && (r1 isa Bool || ti_bits(r1) == ti_bits(r2))
         end
@@ -75,7 +79,7 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
 
     if get(ENV, "AEOLUS_THREAD_TESTS", "0") == "1"
         counts = parse.(Int, split(get(ENV, "AEOLUS_THREAD_COUNTS", "1,4,24"), ','))
-        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,smoke,flagship")
+        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship")
         project = dirname(Base.active_project())
         dir = mktempdir()
         hashes = Dict{Int,Dict{String,String}}()
