@@ -33,12 +33,6 @@ Modules = [Aeolus.IBM]
 Modules = [Aeolus.Parallel]
 ```
 
-## Grid nesting
-
-```@autodocs
-Modules = [Aeolus.Nesting]
-```
-
 ## Compute backends
 
 ```@autodocs

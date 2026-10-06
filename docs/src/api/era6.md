@@ -60,6 +60,7 @@ Aeolus.Operators.compute_sgs!
 Aeolus.Operators.sgs_closure
 Aeolus.Operators.AbstractEddyViscosityClosure
 Aeolus.Operators.sgs_viscosity!
+Aeolus.Operators.sgs_tke!
 Aeolus.Operators.turbulent_prandtl
 Aeolus.Operators.StaticSmagorinsky
 Aeolus.Operators.DynamicSmagorinsky

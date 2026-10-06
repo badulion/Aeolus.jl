@@ -830,6 +830,7 @@ and the anelastic / pseudo-incompressible `step!`.
 | `add_sgs_momentum!(tu, tv, tw, c, f, sim)` | the stress divergence; default the Laplacian eddy-viscosity form with `νh` |
 | `add_sgs_scalar!(tϕ, ϕ, c, f, sim)` | the scalar flux divergence; default `∂ⱼ(κh ∂ⱼϕ)` |
 | `sgs_explicit_stress(c)` | `true` for a closure whose momentum flux is its own stress (the Reynolds-stress closure, P56-d #188); `step_imex!`, whose implicit operator is an eddy viscosity, then refuses it. Default `false`. |
+| [`sgs_tke!`](@ref Aeolus.Operators.sgs_tke!)`(e, c, sim)` | the subgrid TKE (N-inflow-b, #258): `TKEClosure` its ``e``, `ReynoldsStressClosure` ``\tfrac12τ_{ii}``, every other closure (and `c = nothing`, the built-in Smagorinsky) the Deardorff (1980) inversion ``e = (ν_t/(c_kΔ))^2``, ``c_k = 0.1``, of the ``ν_t`` it last wrote. Read by the inflow statistics of `Transition`. |
 
 **Why `sgs_coefficients!` must be pure.** The cores evaluate the
 coefficients more often than once per step: once per RK3 substage, once

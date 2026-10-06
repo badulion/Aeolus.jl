@@ -636,23 +636,6 @@ using Aeolus.Fields: set!, interior_view
         @test_throws Exception exchange_halos_distributed!(f, p)
     end
 
-    @testset "Nesting: two-way feedback moves values parent ↔ child" begin
-        mesh_p = RegularGrid(; size=(8,8,8), extent=(1.0,1.0,1.0), halo=(2,2,2))
-        mesh_c = RegularGrid(; size=(4,4,4), extent=(0.5,0.5,0.5), halo=(2,2,2))
-        parent = BoussinesqSimulation(mesh_p)
-        child  = BoussinesqSimulation(mesh_c)
-        set!(parent.θ, (x,y,z) -> 300.0)
-        set!(child.θ, (x,y,z) -> 305.0)      # child hotter
-        nest = NestSpec(parent, child; refine=1, offset=(3,3,3))
-        apply_two_way_feedback!(nest)
-        # cells in the parent overlapping the child should now show 305
-        v = interior_view(parent.θ)
-        @test v[3, 3, 3] ≈ 305.0
-        @test v[6, 6, 6] ≈ 305.0
-        # cells outside remain 300
-        @test v[1, 1, 1] ≈ 300.0
-    end
-
     @testset "Backend scaffolding: CPU works, GPU stub errors" begin
         cpu = CPUBackend()
         gpu = GPUBackend(:cuda)
@@ -893,6 +876,7 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
     include("era2_multigrid.jl")   # Phase  29     geometric multigrid
     include("era2_sgs_numerics.jl") # #132         dynamic Smagorinsky, step! operator swap-ins
+    include("era2_nesting.jl")     # Phase  30     parent-child nesting operators (#250)
     include("era2_amr.jl")         # Phases 30-31  nesting, AMR
 end
 
@@ -997,6 +981,7 @@ end
     include("era6_sigma_sgs.jl")         # P59-b σ-model closure: invariants, z³ wall scaling, Couette, HIT (#184)
     include("era6_flat_plate.jl")        # P59-d flat-plate BL: fringe, Blasius, FST, transition (#185)
     include("era6_synthetic_inflow.jl")  # N-inflow-a: digital-filter inflow, Lund transform (#252)
+    include("era6_inflow_statistics.jl")  # N-inflow-b: Reynolds stresses, lengths, times for the inflow (#258)
     include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected, Ri_g-dependent anisotropic ν/κ (#187)
     include("era6_wall_models_dynamic.jl") # P57-e: dynamic z0 of partially resolved roughness (#190)
     include("era6_gabls1.jl")            # P55-f: GABLS1 on the shared SBL driver, reduced (#191)

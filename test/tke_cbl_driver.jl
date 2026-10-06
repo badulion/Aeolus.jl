@@ -21,7 +21,7 @@ using Statistics: mean
 """
     tke_cbl(N; Δ = 50.0, Δz = Δ, Q = 0.1, T_end = 3600.0, avg = 900.0, z_i0 = 600.0,
             Γ = 0.003, θ₀ = 300.0, seed = 1, wall_cap = false, surface_factor = 3.9,
-            C_advective = 0.4, progress = false) -> NamedTuple
+            C_advective = 0.4, progress = false, on_step = nothing) -> NamedTuple
 
 Run the CBL on an `N × N × N` grid with horizontal spacing `Δ` and vertical
 `Δz` and return the averaged profiles (`zc` cell centres, `zf` interior w
@@ -33,13 +33,17 @@ minimum heat flux), `min_flux_ratio`, `max_sgs_fraction` (of
 (``(g Q z_i/θ_0)^{1/3}``), `w2max_norm` (``\\max σ_w^2/w_*^2``),
 `z_w2max_norm` (its ``z/z_i``), `clips`, `min_e`, `steps`, `wall` (s).
 
+`on_step(sim, closure, Δt)`, if given, is called after every step (e.g. to
+fold the state into `Transition.ParentResolvedStatistics`, N-inflow-b).
+
 `wall_cap = true` caps the mixing length at ``κ`` × `IBM.wall_distance`
 (the floor); the default is Moeng's (1984) closure, ``l ≤ Δ`` with
 ``c_ε × 3.9`` (`surface_factor`) at the first level.
 """
 function tke_cbl(N::Integer; Δ = 50.0, Δz = Δ, Q = 0.1, T_end = 3600.0, avg = 900.0,
                  z_i0 = 600.0, Γ = 0.003, θ₀ = 300.0, seed = 1, wall_cap::Bool = false,
-                 surface_factor = 3.9, C_advective = 0.4, progress::Bool = false)
+                 surface_factor = 3.9, C_advective = 0.4, progress::Bool = false,
+                 on_step = nothing)
     rng = Xoshiro(seed)
     L, H = N * Δ, N * Δz
     m = RegularGrid(; size = (N, N, N), extent = (L, L, H), halo = (3, 3, 3))
@@ -60,6 +64,7 @@ function tke_cbl(N::Integer; Δ = 50.0, Δz = Δ, Q = 0.1, T_end = 3600.0, avg =
         h = min(adaptive_dt(sim, cfl; dt_prev = dt, sgs = c), T_end - sim.t)
         step_rk3!(sim, h; sgs = c)
         dt = h; steps += 1
+        on_step === nothing || on_step(sim, c, h)
         min_e = min(min_e, minimum(interior_view(c.e)))
         if sim.t > T_end - avg
             p = _cbl_profiles(sim, c, Q)
