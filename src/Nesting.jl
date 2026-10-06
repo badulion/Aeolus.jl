@@ -50,7 +50,10 @@ module Nesting
 # (NestSponge, NestInterpState), nesting/boundary_data.jl (NestBoundaryData:
 # the parent as the boundary data of the child's OpenBoundary faces, N-nest-d
 # #261), nesting/step.jl (composite diagnostics,
-# restriction / refluxing of the field set), nesting/nested_run.jl (NestedRun:
+# restriction / refluxing of the field set), nesting/feedback.jl (two-way
+# feedback: TwoWayFeedback, flux registers, anterpolation with buffer,
+# canopy restriction, relaxation and inflow exclusion, re-projection;
+# N-nest-e #263), nesting/nested_run.jl (NestedRun:
 # per-domain advance closures, subcycling under adaptive steppers,
 # temporal interpolation of the boundary data, step_nested!; N-nest-c #257).
 
@@ -67,16 +70,21 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             set_boundary_data!, open_boundary_states,
                             has_open_boundaries, update_open_boundaries!,
                             open_boundary_snapshot, restore_open_boundaries!,
-                            Periodic, NoFlux, ImpermeableWall, NoSlipWall
+                            Periodic, NoFlux, ImpermeableWall, NoSlipWall,
+                            mark_open_boundary_solids!
 using ..Simulations
-using ..Simulations: BoussinesqSimulation, step_rk3!
+using ..Simulations: BoussinesqSimulation, step_rk3!, _dzf, _project_velocity!
 using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness
-using ..Anelastic: MassWeightedSimulation, ReferenceState, constraint_weights
+using ..Anelastic: MassWeightedSimulation, ReferenceState, constraint_weights,
+                   _project_mass_weighted!
 using ..IBM: SolidMask
-using ..Operators: sgs_closure, sgs_state, restore_sgs_state!
+using ..Operators: sgs_closure, sgs_state, restore_sgs_state!, sgs_fields,
+                   sgs_scalar_face_diffusivity, sgs_tracer_diffusivity!, _active_sgs
+using ..AdvectionSchemes: advective_face_flux, _flux_reconstruction, scalar_face_flux,
+                           face_diffusivity, face_inv_spacing
 using ..TimeIntegration: CFLConstraints, adaptive_dt, StateSnapshot, save_state!, state_snapshot,
                          restore_state!, IMEXScheme, ARK2, Rosenbrock2, step_imex!,
-                         _all_finite, _max_advective_rate
+                         _all_finite, _max_advective_rate, is_numerical_failure
 using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
@@ -97,8 +105,12 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        step_nested!, nest_conservation_error, composite_integral,
        NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask,
        DomainAdvance, domain_advance, stage_times,
-       NestedRun, NestRunStats, boundary_time, begin_parent_step!, end_parent_step!, subcycle_dt
+       NestedRun, NestRunStats, boundary_time, begin_parent_step!, end_parent_step!, subcycle_dt,
+       TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
+       anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights
 
+"Simulations a nest can couple: the Boussinesq core (uniform or z-stretched) and the sound-proof `MassWeightedSimulation`s (anelastic, pseudo-incompressible)."
+const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
 
 _moist(sim::BoussinesqSimulation) = sim.has_moisture
 _moist(::MassWeightedSimulation)  = false
@@ -109,6 +121,8 @@ include("nesting/operators.jl")
 include("nesting/interp_state.jl")
 include("nesting/boundary_data.jl")
 include("nesting/step.jl")
+include("nesting/domain_advance.jl")
+include("nesting/feedback.jl")
 include("nesting/nested_run.jl")
 
 end # module

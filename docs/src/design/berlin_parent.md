@@ -46,7 +46,7 @@ pieces of at most the parent's own limit; `step_parent!(p)` is
 `step_parent!(p, parent_dt(p))`. The geostrophic wind has one definition,
 `parent_geostrophic(pc)`, which the nested child's `:geostrophic`
 coupling uses too; without a sounding it is the child's `(U_g, V_g)`
-options. The nest itself is the [Nesting](berlin_case.md#Nesting-(#265))
+options. The nest itself is the [Nesting](berlin_nesting.md#Nesting-(#265))
 section of the Berlin case page.
 
 ## Physics, all from src or the child

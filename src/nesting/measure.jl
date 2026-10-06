@@ -271,6 +271,15 @@ function nest_fluid_mask(nest::NestedGrid, solid::AbstractArray{Bool,3})
     return .!BitArray(solid)
 end
 
+# A fluid mask already computed by `_fluid` (a caller restricting a whole
+# field set computes it once): passed through unchanged. Before N-nest-e
+# (#263) restrict_state_to_parent! handed the BitArray fluid mask back as
+# `solid`, which `_fluid` inverted, so the field set was averaged over the
+# *solid* children.
+struct _FluidMask
+    χ::BitArray{3}
+end
+_fluid(nest, f::_FluidMask) = f.χ
 _fluid(nest, ::Nothing) = nothing
 _fluid(nest, sm::SolidMask) = nest_fluid_mask(nest, sm)
 _fluid(nest, a::AbstractArray{Bool,3}) = nest_fluid_mask(nest, a)

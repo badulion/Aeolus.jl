@@ -25,13 +25,16 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_weno5!,
        box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+# #245: the FFTW planning policy (operators/fftw_planning.jl)
+export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 # Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
        sgs_tracer_diffusivity!,
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
-       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS,
+       sgs_tke!                 # N-inflow-b (#258)
 # Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
 export LagrangianDynamicSmagorinsky
 # Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
@@ -40,7 +43,7 @@ export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
 # Era VI (P55-c, #181): the tensorial scalar eddy diffusivity (operators/scalar_tensor.jl)
 export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
-       sgs_scalar_tensor, IsentropicDiffusion
+       sgs_scalar_tensor, IsentropicDiffusion, sgs_scalar_face_diffusivity
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
 # The one damping-profile implementation behind add_sponge! and the fringe (P59-d, #185).
 export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
@@ -749,6 +752,8 @@ function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T
     return nothing
 end
 
+# The FFTW planning policy every plan_* call uses (#245).
+include("operators/fftw_planning.jl")
 # Explicit filters, energy spectrum and isotropic initialiser (Phase 54, P54-c).
 include("operators/filters.jl")
 include("operators/spectra.jl")

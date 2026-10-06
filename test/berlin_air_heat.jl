@@ -261,6 +261,8 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         @test BC.θ_top_bc(BC.CaseConfig(:smoke; θ_top = :noflux)) isa NoFlux
         @test BC.θ_top_bc(BC.CaseConfig(:smoke; θ_top = 0.01)).f == 0.01
         @test_throws ErrorException BC.θ_top_bc(BC.CaseConfig(:smoke; θ_top = :open))
+        # the idealised summer profile: the top (200 m) is above the inversion (100 m)
+        @test BC.θ_top_gradient(BC.CaseConfig(; sounding = nothing)) ≈ 3e-3 rtol = 1e-10
         # The summer flagship starts from the Lindenberg sounding (#247) at
         # 04 UTC, so Γ is the sounding's lapse rate at the 200 m top: the
         # slope of the time-interpolated sounding segment that holds the
@@ -276,6 +278,17 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         Γseg = (BC.forcing_value(P.θ, P.z[k+1], t0) - BC.forcing_value(P.θ, P.z[k], t0)) / (P.z[k+1] - P.z[k])
         @test BC.θ_top_gradient(cfgS) ≈ Γseg rtol = 1e-10
         @test 1e-3 < Γseg < 1e-2                                       # stable (measured 4.14 K/km)
+        # the default flagship starts from the Lindenberg sounding (#247): Γ is
+        # the slope of the sounding's θ profile across the top face (4.14 K/km
+        # measured), positive — a stable free atmosphere above the domain
+        let c = BC.CaseConfig(), S = BC.case_sounding(c), θi = BC.initial_θ(c)
+            H = c.extent[3]; zs = S.profiles.z
+            i = searchsortedlast(zs, H)
+            z1, z2 = zs[i], zs[i + 1]
+            Γs = (θi(0.0, 0.0, z2) - θi(0.0, 0.0, z1)) / (z2 - z1)
+            @test BC.θ_top_gradient(c) ≈ Γs rtol = 1e-8
+            @test BC.θ_top_gradient(c) > 0
+        end
         # the fixed-gradient top closes the periodic box: the nest (#265),
         # whose top is a nest face, is switched off
         for phys in (Dict{Symbol,Any}(:nesting => false),

@@ -118,7 +118,7 @@ unchanged.
 
 The Berlin ground is not a `NoSlipWall`. It is a rough, wall-modelled
 surface: the `MOSTWallLaw` stress of `Aeolus.WallModels` (#169) is
-applied as an implicit drag over a free-slip `:wall`, see [The Berlin case](../design/berlin_case.md). A
+applied as an implicit drag over a free-slip `:wall`, see [The Berlin case](../design/berlin_surface_radiation.md#Surface-exchange-(#129)). A
 resolved no-slip wall at ``Δx = 15.6`` m would put the first velocity
 point ``Δz/2 ≈ 3`` m from the wall, with a viscous sublayer of
 ``ν/u_* ∼ 10^{-4}`` m. `BoundaryConditions` is exempt infrastructure in
@@ -247,7 +247,7 @@ Moum 2000). The turbulence velocity scale of Sun et al. (2012) is
 ``UΔ/(ν + ν_t)`` and the fraction of cells with ``Ri_g > 1/4``
 (`supercritical_fraction`, which counts cells of a `gradient_richardson!`
 field) are the transition diagnostics of the Berlin
-[`turbulence_diag` addon](../design/berlin_case.md).
+[`turbulence_diag` addon](../design/berlin_turbulence.md#Turbulence-diagnostics-(#170)).
 
 #### Growth-rate fit
 
@@ -591,53 +591,110 @@ ends below 10 % of the switch-on value, *survived* above 50 %.
 | :-- | :-- | :-- | --: | --: |
 | 180, 32³ (``Δx^+ = 35``, ``Δz^+ = 5.6``) | 0.05 (0.94), 0.10 (0.87) | 0.15, 0.2, 0.3, 0.6, 1, 1.5, 2 (all ≤ 0.002) | 0.12 | 1470 |
 | 180, 48³ | — | 0.15 (0.001), 0.3 (0.000) | < 0.15 | > 1200 |
-| 360, 48³ (``Δx^+ = 47``, ``Δz^+ = 7.5``) | 0.10 (0.96), 0.30 (1.12) | 0.5, 0.7, 1.0 (all 0.001) | 0.39 | 930 |
-| Nieuwstadt (2005), DNS | | | 1.23 at ``Re_τ = 360`` | |
+| 360, 48³ (``Δx^+ = 47``, ``Δz^+ = 7.5``) | 0.10 (0.96), 0.30 (1.12), 0.40 (1.28), 0.45 (1.46) | 0.5, 0.7, 1.0 (all 0.001) | 0.47 | 760 |
+| 360, 96³ (``Δx^+ = 24``, ``Δz^+ = 3.8``) | — | 0.5 (0.001) | < 0.5 | > 720 |
+| Nieuwstadt (2005), DNS, ``L`` without ``κ`` | | | 1.23 at ``Re_τ = 360`` | 293 |
+| the same, this page's ``L`` (with ``κ``) | | | ``1.23 κ`` = 0.49 at ``Re_τ = 360`` | 730 |
 | Flores & Riley (2011), DNS | | | | ≈ 100 |
 
 The critical ``h/L`` is the geometric mean of the largest surviving and
-the smallest collapsed value. Collapse is complete in every collapsed
-run: γ of the lower half is 0.000 at ``T`` and the wall stress falls to
-0.51–0.53 ``u_τ^2`` (``Re_τ = 180``) and 0.37 ``u_τ^2`` (360) while the
-flow accelerates. In the surviving runs γ stays at 0.96–0.97. The
-neutral spin-ups reach TKE 2.24 / 1.46 / 1.68 ``u_τ^2`` and
-``⟨τ_w⟩`` = 0.94 / 0.86 / 0.94 ``u_τ^2`` (180 at 32³ and 48³, 360 at 48³).
+the smallest collapsed value. Every ``L`` on this page is the Obukhov
+length of `SurfaceExchange.obukhov_length`, ``L = u_τ^3 θ_0/(κ g |Q|)``,
+which **includes** ``κ`` (as does `relam_heat_flux` of the example
+driver). Nieuwstadt (2005) defines ``L`` without ``κ``, so his
+``h/L = 1.23`` is ``h/L = 1.23 κ = 0.49`` (``κ = 0.40``) here — the
+comparison value that Donda's thesis (TU/e) states for this
+convention. Before #236 this page compared the 48³ critical value
+(then 0.39, from the bracket 0.30–0.50) against 1.23 directly and
+reported a factor-3 miss that was a convention error.
+
+The runs at ``h/L = 0.40`` and 0.45 (#236) survive through a transient
+collapse: the TKE ratio falls to a minimum of 0.28 at ``t = 5.0 h/u_τ``
+(0.40) and 0.21 at 5.5 (0.45), the wall stress to 0.46 and 0.43
+``u_τ^2``, and both recover by ``t ≈ 10`` to end at 1.28 and 1.46 with
+``⟨τ_w⟩`` = 1.09 and 1.15 ``u_τ^2`` (the stratified flow has a higher
+TKE than the neutral switch-on state). At 0.50 the same descent does not
+turn: TKE 0.05 at ``t = 6``, 0.001 at 20, ``⟨τ_w⟩`` 0.37. A transient
+collapse followed by recovery just below the threshold is what Donda et
+al. (2015) describe for this channel. Each run took 1 380–1 430 s
+(18 070 steps).
+
+**96³ at the collapsed edge (#236).** One run at ``h/L = 0.50`` on 96³
+(``Δx^+ = 24``, ``Δy^+ = 12``, ``Δz^+ = 3.8``, twice the 48³
+resolution in each direction), from its own 10 ``h/u_τ`` neutral
+spin-up (TKE 1.80 ``u_τ^2``, ``⟨τ_w⟩ = 1.02 u_τ^2``, ``U_b = 16.7 u_τ``;
+10 750 s), also collapses: TKE ratio 0.001 and γ 0.000 at
+``T = 20 h/u_τ``, ``⟨τ_w⟩ = 0.37 u_τ^2`` (48³: 0.001, 0.000, 0.37);
+22 855 steps, 12 909 s. The finer grid delays the collapse slightly
+(γ of the lower half falls below 0.1 at ``t ≈ 9`` instead of ≈ 7; TKE
+0.13 against 0.08 at ``t = 5``) but does not stop it. Doubling the
+resolution does not move the collapsed edge of the bracket.
+
+Collapse is complete in every collapsed run: γ of the lower half is
+0.000 at ``T`` and the wall stress falls to 0.51–0.53 ``u_τ^2``
+(``Re_τ = 180``) and 0.37 ``u_τ^2`` (360, both grids) while the flow
+accelerates. In the surviving runs γ stays at 0.96–0.97. The neutral
+spin-ups reach TKE 2.24 / 1.46 / 1.68 / 1.80 ``u_τ^2`` and ``⟨τ_w⟩`` =
+0.94 / 0.86 / 0.94 / 1.02 ``u_τ^2`` (180 at 32³ and 48³, 360 at 48³ and
+96³).
 
 ![relaminarisation sweep, Re_τ = 180](../assets/transition/relaminarisation_Re180.svg)
 
 ![relaminarisation sweep, Re_τ = 360](../assets/transition/relaminarisation_Re360.svg)
 
-**Against the references: a miss.** The issue's targets were ±30 % on
-the critical ``h/L`` and a factor 1.5 on ``L^+``. At ``Re_τ = 360`` the
-measured 0.39 is 0.31 of Nieuwstadt's 1.23 (−69 %); ``L^+_c`` = 930
-(360) and 1470 (180) are 9 and 15 times the ≈ 100 of Flores & Riley.
+**Against the references.** The issue's targets were ±30 % on the
+critical ``h/L`` and a factor 1.5 on ``L^+``. At ``Re_τ = 360``, in one
+convention (``L`` with ``κ``), the measured 0.47 is 0.96 of Nieuwstadt's
+``1.23 κ = 0.49`` (−4 %, inside the ±30 %). The reference lies inside
+the measured bracket (survived 0.45, collapsed 0.50) but at its top
+edge, 2 % below the smallest collapsed value. There is residual
+tension: Donda's runs at ``h/L = 0.49`` (this convention) survive, ours
+collapse at 0.50 on 48³ and on 96³, so either the threshold here lies in
+0.45–0.49, slightly below the DNS one, or the two agree to within the
+2 % between 0.49 and 0.50 that the bracket does not resolve. The 96³ run
+rules out the 48³ grid spacing as the cause of the collapse at 0.50
+(96³ is still coarser than the DNS); whether 0.45 still survives on 96³
+was not run.
+``L^+_c`` = 760 (360) and 1470 (180) are 7.6 and 15 times the ≈ 100 of
+Flores & Riley. That ``L^+`` target is **not consistent** with
+Nieuwstadt's at ``Re_τ = 360`` either: his threshold is
+``L^+ = 360/0.49 ≈ 730`` with ``κ`` in ``L`` (293 without). ``L^+ = 100``
+in this convention would need ``h/L = 3.6``; read as a ``κ``-free
+``L^+`` (250 here) it would need ``h/L = 1.44`` — either way 3–7 times
+Nieuwstadt's 0.49, so the two DNS thresholds cannot both be met at this
+``Re_τ``. This page does not resolve the
+inconsistency; the ``h/L`` comparison with Nieuwstadt, at the same
+``Re_τ`` and in the same set-up, is the one used here.
 Test 3 of the issue — collapse at ``h/L = 2.0``, survival at
 ``h/L = 0.3`` at ``Re_τ = 180`` — holds for the collapse and fails for
 the survival: ``h/L = 0.3`` collapses on 32³ and on 48³. The trend is
-right — the threshold rises with ``Re_τ`` (0.12 → 0.39 for a doubling;
+right — the threshold rises with ``Re_τ`` (0.12 → 0.47 for a doubling;
 a constant ``L^+_c`` would give a factor 2) — and the collapse itself is
 the physical one (the near-wall shear production cannot keep up with
 the buoyancy sink, the wall stress drops and the flow accelerates
 laminar-like; Donda et al. 2015).
 
-Whether the code or the expectation is wrong could not be settled here.
-The flux boundary condition, the molecular ``Pr`` and the buoyancy are
-verified exactly by test 1 (θ budget 1.5e-10, the conduction profile
-1.6e-11, u blind to the hydrostatic buoyancy), and the definitions are
-the references' (``L`` of the surface flux and the nominal ``u_τ``,
-``L^+ = Re_τ/(h/L)``). What differs is resolution: the DNS thresholds are
-for a resolved near-wall cycle, and these grids are coarse wall-resolved
-LES (``Δx^+`` = 35–47). The collapse at ``h/L = 0.3``, ``Re_τ = 180``, is
+At ``Re_τ = 180`` test 3's survival at ``h/L = 0.3`` still fails, and
+there is no Nieuwstadt threshold at that ``Re_τ`` to set against the
+0.12. The flux boundary condition, the
+molecular ``Pr`` and the buoyancy are verified exactly by test 1 (θ
+budget 1.5e-10, the conduction profile 1.6e-11, u blind to the
+hydrostatic buoyancy); ``L`` is that of the surface flux and the nominal
+``u_τ``, with ``κ`` (Nieuwstadt's is without), and
+``L^+ = Re_τ/(h/L)``. The remaining candidate is resolution: the DNS
+thresholds are for a resolved near-wall cycle, and these grids are
+coarse wall-resolved LES (``Δx^+`` = 35–47). The collapse at ``h/L = 0.3``, ``Re_τ = 180``, is
 insensitive to the closure, ``Pr`` and ``Pr_t``: σ + correction, σ with
 ``Pr_t = 1`` (instead of the core's 1/3) and no SGS model at all end at
 TKE ratios 0.001, 0.001 and 0.001 after 20 ``h/u_τ`` (without a model
 the decay is slower: 0.46 at 5 ``h/u_τ``, against 0.06); plain σ,
 Smagorinsky 0.1 and ``Pr = 1`` are at 0.06, 0.10 and 0.05 after
 5 ``h/u_τ``, on the same path. Refining 32³ → 48³ did not move
-``h/L = 0.15`` or 0.3 to survival. A resolution study that reaches the
-DNS grids (≈ 128³ at ``Re_τ = 180``, beyond the budget of this phase)
-is the open step; until then the example documents the coarse-LES
-threshold and is not a validation against the DNS numbers.
+``h/L = 0.15`` or 0.3 to survival. At ``Re_τ = 360`` the coarse LES
+agrees with Nieuwstadt's threshold (−4 %, collapse at 0.50 unchanged
+from 48³ to 96³); at ``Re_τ = 180`` the example documents the
+coarse-LES threshold (0.12) only, with no DNS value at that ``Re_τ``
+to validate it against.
 
 The command lines are in the header of the example; every run is cached,
 `REUSE=1` reprints the table and redraws the figures.
@@ -645,9 +702,674 @@ The command lines are in the header of the example; every run is cached,
 ### The Berlin case
 
 `turbulence_diag` reports the relaminarised fraction of the stable layer
-(see [The Berlin case](../design/berlin_case.md#Relaminarisation-of-the-stable-layer-(#195))):
+(see [The Berlin case](../design/berlin_turbulence.md#Relaminarisation-of-the-stable-layer-(#195))):
 in `:winter` at 06:00, 4.0 % of the 49 056 stable cells (Smagorinsky;
 4.1 % with σ), 0.1 % of 15 392 with ``ν`` reduced from 2 to 0.2 m² s⁻¹.
+
+## Synthetic inflow turbulence
+
+An open inflow face fed by an interpolated coarse parent (the Berlin nest,
+epic #246) carries no energy below about two parent cells; without
+perturbations the child's inflow stays quasi-laminar over a long fetch.
+`Transition` owns the generator contract and two providers (N-inflow-a,
+#252); the inflow statistics (N-inflow-b, #258) and the coupling to an open face
+(N-inflow-e) build on them.
+
+### The contract and the Lund transform
+
+An [`AbstractInflowGenerator`](@ref Aeolus.Transition.AbstractInflowGenerator)
+works on an ``n_s × n_z`` plane and returns, each step,
+[`unit_fluctuations!`](@ref Aeolus.Transition.unit_fluctuations!)``(ũ, ṽ, w̃, gen, Δt)``:
+zero-mean, unit-variance, mutually uncorrelated planes. A Reynolds-stress
+tensor is imposed afterwards by the Lund, Wu & Squires (1998) transform
+``u_i = a_{ij}ũ_j`` with ``a`` the Cholesky factor of ``R``
+([`lund_coefficients`](@ref Aeolus.Transition.lund_coefficients),
+Lund Eq. 13; [`apply_lund!`](@ref Aeolus.Transition.apply_lund!), uniform
+or per height). The radicands are ratios of leading principal minors, so
+the factorisation exists exactly when ``R`` is positive semi-definite,
+Schumann's (1977) realizability; a non-realizable ``R`` throws. This is
+the one Cholesky in the code base; its accept/reject agrees with the
+minors test `PrognosticSGS.is_realizable` on 2000 random tensors. For
+the Panofsky & Dutton (1984) neutral tensor (``σ_{u,v,w} = 2.39, 1.92,
+1.25\,u_*``, ``\overline{u'w'} = -u_*^2``) ``aa^{\rm T} = R`` to 1e-12.
+[`generator_state`](@ref Aeolus.Transition.generator_state) /
+[`restore_generator_state!`](@ref Aeolus.Transition.restore_generator_state!)
+follow the `sgs_state` pattern: a restored generator continues bit for bit.
+
+### The digital filter
+
+[`DigitalFilterGenerator`](@ref Aeolus.Transition.DigitalFilterGenerator)
+is the Xie & Castro (2008) filter used by PALM (Kadasch et al. 2021). A
+fresh plane of Gaussian white noise is filtered with the separable kernel
+``b_k ∝ \exp(-π|k|/(2n))``, ``\sum b_k^2 = 1``, whose coefficients belong
+to the output level, so ``L_s``, ``L_z`` and ``T`` may vary with height and
+component. In time the planes are blended as
+``ψ(t) = ρψ(t-Δt) + \sqrt{1-ρ^2}\,ψ_{\rm new}``, ``ρ = e^{-Δt/T}``, which keeps
+unit variance and gives ``R(τ) = e^{-τ/T}`` for any sequence of adaptive
+steps.
+
+**The length convention (an expectation that was wrong).** Xie & Castro
+set ``n = L/Δ`` and state ``R(r) = \exp(-πr/(2nΔ))``. The autocorrelation
+of their exponential filter is instead ``(1 + ar)e^{-ar}``,
+``a = π/(2nΔ)``, with integral ``4nΔ/π``: the nominal width gives an
+integral length of 1.112, 1.159 and 1.170 L for ``L/Δ`` = 2, 4 and 8 with
+their truncation ``N = 2n`` (1.27 L untruncated). The same applies to
+time: their ``T_{XC}`` has integral ``2T_{XC}/π``. The code therefore
+calibrates ``n`` so the discrete ``∫_0^∞R\,dr`` is ``L`` to 1e-10
+([`digital_filter_kernel`](@ref Aeolus.Transition.digital_filter_kernel);
+``n`` = 1.791, 3.370, 6.594 for ``L/Δ`` = 2, 4, 8, i.e. 1.14, 1.07,
+1.05 × ``πL/(4Δ)``) and uses ``T`` itself as the integral time. The
+documented shape is ``R(r) ≈ (1 + 2r/L)e^{-2r/L}`` (kernel RMS difference
+0.012 to 0.017 for ``r ≤ 2L``).
+
+Measured (`test/era6_synthetic_inflow.jl`):
+
+| quantity | measured | asserted |
+| :-- | :-- | :-- |
+| P&D stresses, ``u_* = 0.3``, 64 × 48, 2000 steps, ``L = 2Δ``, ``T = 5Δt`` | ``σ/u_*`` = 2.390, 1.923, 1.248; ``\overline{u'w'}/u_*^2 = -1.0053`` | 5 % diag, 7 % ``u'w'`` |
+| expected sampling error (Bartlett ``N_{\rm eff}`` = 1.98e5 for variances) | 0.32 % diag, 0.71 % ``u'w'`` | tolerances ≥ 3× |
+| means of the unit planes | 0.0044, −0.0034, 0.0020 | ``< 3/\sqrt{N_{\rm eff}}`` = 0.0153 |
+| cross-correlations before the transform | ≤ 0.0010 | < 0.03 |
+| ``∫R\,ds / L_s`` for ``L/Δ`` = 2, 4, 8 | 0.999, 1.013, 1.018 | 10 % |
+| ``∫R\,dz / L_z`` for ``L/Δ`` = 2, 4, 8 | 1.010, 0.976, 0.989 | 10 % |
+| shape RMS vs ``(1 + 2r/L)e^{-2r/L}``, ``r ≤ 2L`` | 0.017, 0.015, 0.015 | 0.05 |
+| ``∫R\,dτ / T`` for ``T/Δt`` = 2, 4, 8 | 1.022, 1.007, 1.027 | 10 % |
+| ``L_z`` = 2 and 8 m in two regions of one plane | 2.007, 8.020 | 15 % |
+| cost of one step, 64 × 40 face, ``L = 4Δ`` | 0.10 ms | — |
+
+### Free-stream turbulence as a second provider
+
+[`FreeStreamInflow`](@ref Aeolus.Transition.FreeStreamInflow) wraps a
+[`FreeStreamDisturbance`](@ref Aeolus.Transition.FreeStreamDisturbance)
+(its constructor and the flat-plate path are unchanged): the frozen mode
+field is swept through the plane at ``U_∞`` and evaluated as the
+continuous mode sum
+([`disturbance_velocity`](@ref Aeolus.Transition.disturbance_velocity),
+which the staggered grid curl approximates to ``O((κΔ)^2)``), then
+whitened with the Cholesky factor of the exact mode-set covariance
+([`disturbance_covariance`](@ref Aeolus.Transition.disturbance_covariance)).
+The whitening removes the ``O(n_{\rm modes}^{-1/2})`` anisotropy of a finite
+mode set; ``a`` is lower triangular, so ``ũ`` keeps the ``L_{11}`` of
+``u'``. With 400 modes, 32 × 32 points and 2000 steps the P&D tensor is
+reproduced within 1.0, 0.6, 0.07 % (diagonal) and 0.9 % (``u'w'``), batch
+standard errors 1.1, 0.7, 0.6 and 1.4 %. ``L_{11}`` from the plane time
+series (``r = U_∞τ``) is 1.011 ± 0.015 L. That figure needs an ensemble:
+one realisation scatters (0.66 to 1.35 L over 80 seeds), and the
+correlation of the ``κ``-band-limited von Kármán set first crosses zero
+only near ``r ≈ 8.5L``, so short records or per-seed zero crossings are
+dominated by noise (a first 24-seed, 60 L-record version gave
+1.083 ± 0.043, which could not resolve 5 %; the test, not the code, was
+changed: 80 seeds × 2000 modes, 1600 L records). The digital filter
+remains the general provider: the mode field is isotropic with one
+intensity, one length and one advection speed.
+
+### Inflow statistics (N-inflow-b)
+
+The generator needs, at every child face, ``R_{ij}(z)``, ``L_s(z)``,
+``L_z(z)`` and ``T(z)``. An
+[`InflowStatistics`](@ref Aeolus.Transition.InflowStatistics) source
+supplies them through
+[`inflow_stresses`](@ref Aeolus.Transition.inflow_stresses)`(src, z, t)` and
+[`inflow_lengths`](@ref Aeolus.Transition.inflow_lengths)`(src, z, t)`, in
+the generator's face frame (normal, along the face, vertical), whatever
+the parent is. Every tensor returned has passed
+[`lund_coefficients`](@ref Aeolus.Transition.lund_coefficients); one that
+did not is replaced by its nearest positive-semidefinite tensor
+([`realizable_stress`](@ref Aeolus.Transition.realizable_stress),
+eigenvalues clipped) and the correction is booked in
+[`inflow_projection_log`](@ref Aeolus.Transition.inflow_projection_log).
+The resolved part is always realizable. The SGS part is not when
+``ν_t|S|`` exceeds ``e`` (a strongly sheared, weakly turbulent cell), and
+the test exercises that case.
+
+**An Aeolus parent:
+[`ParentResolvedStatistics`](@ref Aeolus.Transition.ParentResolvedStatistics).**
+After each parent step,
+[`update_inflow_statistics!`](@ref Aeolus.Transition.update_inflow_statistics!)`(src, Δt)`
+folds the state into a running exponential mean,
+``S ← ρS + τ(1-ρ)x``, ``W ← ρW + τ(1-ρ)``, ``ρ = e^{-Δt/τ_{\rm avg}}``,
+statistic ``S/W``. The weight is the exact integral of the kernel over
+the step, so the memory e-folds in exactly ``τ_{\rm avg}`` (600 s by
+default) for any sequence of adaptive steps, and the first sample is not
+biased towards zero.
+
+* *Resolved part.* ``R^{\rm res}_{ij} = ⟨u_i'u_j'⟩`` is averaged over the
+  whole plane (`region = :plane`) or over the parent columns within
+  `ring_width` cells of the edge of the child footprint (`region = :ring`).
+  The variances are taken at each staggered component's own points, as
+  `Operators.resolved_tke_profile` does: ``u`` on the x-faces, ``v`` on
+  the y-faces, ``w`` the mean of the variances on the level's two
+  z-faces. Interpolating to the cell centre first would multiply a mode's
+  variance by ``\cos^2(k_iΔ_i/2)`` along the component's own direction.
+  That is ¼ at ``λ = 3Δ``, inside the scale gap, and over an isotropic
+  gap annulus it keeps 50 % (flat spectrum) to 58 % (``k^{-11/3}``) of
+  the ``u`` band variance. A cross term needs both components at one
+  point. It is the correlation coefficient of the cell-centred fields
+  times ``\sqrt{R_{ii}R_{jj}}``. That is exact for one Fourier mode and
+  realizable by construction (a correlation matrix scaled by a positive
+  diagonal). For a broadband field the centre correlation weights each
+  mode by the product of the two components' transfer functions.
+  On the plane the column sum of ``\tfrac12\operatorname{tr}R^{\rm res}``
+  equals that of `resolved_tke_profile` to 1e-12, and level by level for
+  ``u`` and ``v``. The statistic is computed in one pass over the planes
+  that also feed the spectra, the band-pass and the vertical lags (six
+  components, a ring region), so the `Operators` profiles are matched
+  in convention and checked, not called.
+* *SGS part.* ``R^{\rm SGS}_{ij} = \tfrac23 e\,δ_{ij} - 2ν_t\bar S_{ij}``,
+  with ``\bar S`` the deviatoric cell-centred strain (`Operators._strain_at`),
+  so ``\operatorname{tr}R^{\rm SGS} = 2e`` exactly. ``e`` comes from the
+  new closure generic [`sgs_tke!`](@ref Aeolus.Operators.sgs_tke!): the
+  TKE closure's ``e``, the Reynolds-stress closure's ``\tfrac12τ_{ii}``,
+  or, for any eddy-viscosity closure, the closure's own estimate. That
+  estimate is the Deardorff (1980) relation ``ν_t = c_kΔ\sqrt e`` inverted
+  (``c_k = 0.1``, Moeng 1984).
+* *Scale gap* (the default). The interpolated boundary values already
+  carry the parent's well-resolved eddies, so the generator adds only
+  what is missing:
+
+  ```math
+  R^{\rm gen} = R^{\rm SGS} + R^{\rm res}(k_c < |k_h| ≤ r\,k_c),
+  \qquad k_c = \frac{2π}{c_{\rm gap}Δ_p}.
+  ```
+
+  The band runs from the parent's effective resolution (wavelength
+  ``c_{\rm gap}Δ_p``, with ``c_{\rm gap} = 4``, the upper end of the 2–4
+  ``Δ_p`` in the issue) to the child's, ``c_{\rm gap}Δ_p/r``. It is cut
+  out of each native plane by an FFT band-pass of the laterally periodic
+  parent.
+  At ``r = 1`` the band is empty, so ``R^{\rm gen} = R^{\rm SGS}``; at the
+  Berlin ``r = 2`` it covers everything shorter than ``4Δ_p``. The lengths
+  are those of the band-passed field, capped at ``c_{\rm len}Δ_p``
+  (``c_{\rm len} = c_{\rm gap}/2``, half the cutoff wavelength).
+  `mode = :full` gives ``R^{\rm SGS} + R^{\rm res}``.
+* *Lengths and time.* The horizontal autocovariances come from the
+  spectra of the native planes (Wiener–Khinchin). The vertical ones are the plane covariances
+  with the `lag_z = 16` levels above. Each length is the integral of the
+  correlation coefficient up to its first zero crossing. The time is
+  ``T = L_n/\max(|U_n|, 0.1\ {\rm m\,s^{-1}})``, with ``L_n`` the length
+  along the face normal (Taylor).
+
+**A parent without resolved turbulence:
+[`ParametrizedStatistics`](@ref Aeolus.Transition.ParametrizedStatistics).**
+This is for #58. The scales are ``u_*``, ``w_*``, ``z_i`` and ``L``.
+``w_*`` is derived from ``L`` (``w_*^3 = -z_iu_*^3/(κL)``, with
+`SurfaceExchange`'s κ) unless given, and ``L`` may come from the surface
+fluxes through `SurfaceExchange.obukhov_length`. The shear and convective
+variances are added, as in Rotach, Gryning & Tassone (1996) and PALM's
+generator. With ``x = \min(z/z_i, 1)``:
+``σ_u^2 = (2.39u_*)^2(1 - 0.8x) + 0.35w_*^2``,
+``σ_v^2 = (1.92u_*)^2(1 - 0.8x) + 0.35w_*^2``,
+``σ_w^2 = (1.25u_*)^2(1 - x/1.7) + 1.8x^{2/3}(1-0.8x)^2w_*^2``,
+``\overline{u'w'} = -u_*^2(1 - x)``. The coefficients have these sources:
+
+* the surface values of the shear part are the neutral ratios of
+  Panofsky & Dutton (1984);
+* the decay of the shear part is Rotach's (``5 - 4x`` and ``1.7 - x``,
+  normalised);
+* the convective ``σ_w^2`` is Lenschow et al. (1980).
+
+The tensor is rotated by the mean-wind angle and decays by a factor 10
+per `length_scale` above ``z_i``. The lengths follow PALM (Kadasch et al.
+2021): a single `length_scale`, ``L_z ≤ z_i``, and ``T = ℓ/|U_n|``. This
+is a numerical choice, not a similarity law. The blend has no
+stable-stratification correction.
+
+Measured (`test/era6_inflow_statistics.jl`):
+
+| test | measured | asserted |
+| :-- | :-- | :-- |
+| ``u = U + A\sin(ky)\cos(ωt)``, 3 periods × 16 samples: ``σ_u^2/(A^2/4) - 1`` | 2.4e-15 | 1e-10 |
+| same, ``\overline{u'w'}`` with ``w = B\sin(ky)\sin(ωt)`` | 7.9e-18 | 1e-12 ``AB`` |
+| same, ``L_s`` of the sine to its zero crossing / ``(λ/2π)``, ``λ = 32Δ`` | 0.9968 | 0.5 % |
+| e-folding of the running mean / ``τ_{\rm avg}`` (fixed and random steps) | 1.0000000000 | 2 % (and 1e-9) |
+| ``\operatorname{tr}R^{\rm SGS} - 2e`` (random field, TKE closure) | round-off | 1e-14 ``e`` |
+| ``S = 0``: ``R^{\rm SGS} - \tfrac23 e δ_{ij}`` | 0 | 1e-15 |
+| band ``R_{11}`` of ``\sin`` at ``λ = 3Δ`` (in the gap) + ``λ = 8Δ`` (not) / ``A^2/2`` | 1 to 1e-12 | 1e-12 |
+| ``r = 1``: ``R^{\rm gen} - R^{\rm SGS}`` | 0 | 1e-12 |
+| laminar parent, ``e = e_0``: ``R - \tfrac23e_0δ_{ij}`` | 0 | 1e-15 |
+| band ``R_{11}`` of a ``u``-sine of ``λ = 3Δ`` varying in **x** / ``A^2/2`` (``v`` in y likewise; centre value 0.25) | 1 to 1e-12 | 1e-12 |
+| band ``R_{33}``, ``w`` with ``λ = 3Δz`` in z, level mean / ``B^2/4`` (centre value 0.25) | 1 to 1e-12 | 1e-12 |
+| one-mode band ``\overline{u'w'}`` / ``AB/2`` (centre value 0.5) | 1 to 1e-12 | 1e-12 |
+| column sum ``\tfrac12\operatorname{tr}R^{\rm res}`` / that of `Operators.resolved_tke_profile` (random field) | 1 to 1e-12 | 1e-12 |
+| generator-filled parent (240 × 64 × 40, 30 fills): ``R_{11,22,33}`` / imposed, ``\overline{u'w'}`` / ``R_{13}\sqrt{f_xf_z}`` | 0.987, 0.990, 0.980, 0.982 | 3 % |
+| same: ``L_s`` / 4 Δ (u, v, w) | 0.938, 0.949, 0.936 | 10 % |
+| same: ``L_z`` / 4 Δ | 1.008, 0.999, 1.056 | 10 % |
+| same: ``T`` / 6 Δt | 0.945, 0.941, 0.938 | 10 % |
+| Lenschow ``σ_w/w_*`` at ``z/z_i = 0.3125`` (``u_* = 0``) | 0.6828325099 (analytic to 1e-10; the maximum) | 0.683 ± 5e-4 |
+| neutral ``σ_{u,v,w}/u_*`` at the surface | 2.39, 1.92, 1.25 | 1e-12 |
+| realizable for ``-z_i/L`` ∈ {0, 1, 10, 100}, 301 heights, two wind angles | no projection | — |
+
+**The generator-filled parent (an expectation that was wrong).** The
+parent's x-slices are successive generator planes (``Δt`` = 1 s,
+``U`` = 1 m/s), with the Panofsky & Dutton tensor imposed. A first
+version took the statistics at the cell centres. Each staggered
+component was then the two-point mean along its own direction, which
+attenuated the variances by ``(1 + ρ_1)/2`` (``ρ_1`` the lag-1
+correlation: ``e^{-1/6}`` in x, the filter's discrete ``R_1`` in y and
+z), 8–14 % here. The test asserted that attenuated target as if it were
+a property of the measurement. It was the same smoothing that removed ¾
+of a ``λ = 3Δ`` mode from the scale gap, so the code was wrong. The
+variances now match the imposed tensor directly. The cross term
+``\overline{u'w'}`` keeps one stated factor. The generator puts ``u`` and
+``w`` at the same index, which on the C-grid is half a cell apart in x
+and z, so their centre correlation is ``ρ\sqrt{f_xf_z}``, with
+``f = (1 + ρ_1)/2`` (0.923 and 0.950). The lengths now come from the
+native spectra: ``v``'s ``L_s`` (0.949) agrees with ``u``'s and ``w``'s
+(0.938, 0.936); the centre smoothing had lengthened it to 1.006.
+
+The remaining 1–2 % deficit, the same sign for every component, is
+consistent with two sources:
+
+* the plane-mean removal bias, about ``1/N_{\rm eff} ≈ 0.6`` % per plane;
+* the sampling error, about 0.8 %.
+
+**Cost.** One update on a 64 × 64 plane with 20 levels and `lag_z = 16`
+takes 5.0 ms (7.2 ms inside the CBL run below). On 192 × 192, the Berlin
+parent, it takes 65 ms on one core (57 ms before the native-point
+variances, which add one second-moment pass per level). With ``τ_{\rm avg}`` = 600 s, a
+cadence of tens of seconds of parent time is enough.
+
+**A convective Aeolus parent** (`examples/nesting/cbl_inflow_statistics.jl`).
+The parent is the 64³ CBL of `examples/sgs/cbl_tke.jl`: ``Δx = 50`` m,
+``Δz = 25`` m, ``Q = 0.1`` K m/s, Deardorff–Moeng TKE, 2 h, ``z_i = 1175`` m,
+``w_* = 1.57`` m/s. The last 30 min are folded into the running mean
+(τ_avg = 600 s, refine (2, 2, 4), so the band is 100–200 m). Values at
+the west face:
+
+| z (m) | ``σ_u`` resolved | ``σ_u`` missing (band + SGS variance) | ``σ_w`` resolved | ``σ_w`` missing | ``\overline{u'w'}`` resolved / missing | ``e_{\rm SGS}`` | ``L_z`` full / band | ``L_s`` band |
+| --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| 38 | 0.911 | 0.455 (0.067 + 0.139) | 0.540 | 0.511 | 0.0034 / −0.0004 | 0.209 | 188 / 91 | 22.7 |
+| 88 | 0.783 | 0.428 (0.058 + 0.125) | 0.751 | 0.510 | 0.0067 / 0.0013 | 0.187 | 179 / 89 | 22.9 |
+| 188 | 0.632 | 0.394 (0.047 + 0.109) | 0.942 | 0.463 | 0.0061 / 0.0012 | 0.163 | 176 / 86 | 22.7 |
+| 288 | 0.598 | 0.382 (0.042 + 0.104) | 1.019 | 0.453 | −0.0012 / −0.0002 | 0.157 | 167 / 79 | 22.7 |
+| 388 | 0.590 | 0.376 (0.040 + 0.101) | 1.043 | 0.444 | −0.0020 / −0.0013 | 0.152 | 157 / 75 | 23.2 |
+
+(σ in m s⁻¹, variances in m² s⁻², ``e_{\rm SGS}`` in m² s⁻², lengths of
+``u`` in m.) The SGS part dominates what is missing: ``R^{\rm SGS}_{11}``
+is two to two and a half times the band variance. The band column is
+1.46 times what the cell-centred statistic gave (0.046 at 38 m), the
+``\cos^2`` loss described above. Near the ground the missing
+``σ_w^2`` (0.26 m² s⁻²) is nearly as large as the resolved one (0.29 m² s⁻²).
+Higher up the parent resolves most of ``σ_w`` (1.04 against 0.44 m/s
+missing at 388 m). There is no mean wind, so ``\overline{u'w'}`` is
+noise at the 1e-3 level. The band lengths are well inside the cap
+(``2Δ_p`` = 100 m) and above the child's ``Δ/2``.
+
+### Applying the perturbations on the inflow faces (N-inflow-c)
+
+[`InflowTurbulence`](@ref Aeolus.Transition.InflowTurbulence) puts the
+generator and the statistics on the lateral open faces of a nest child
+(N-inflow-c, #264). It wraps the boundary data of the open faces (the
+`NestBoundaryData` of N-nest-d, or any `AbstractBoundaryData`) and is
+installed as that data, so the superposition
+
+```math
+u_{b,i} = u_{{\rm data},i} + a_{ij}\,ũ_j
+```
+
+happens inside `update_open_boundaries!`, after the data fill and before
+the single mass-flux correction of N-open-b, at every stage time of every
+core. One digital-filter generator runs per face (normal, along-face and
+vertical components; ``(u, v, w)`` on an x-face, ``(v, u, w)`` on a
+y-face); the top face is excluded, as in PALM (Kadasch et al. 2021).
+
+**Inflow detection.** Per face and level, ``U_n(z)`` is the face mean of
+the data's outward normal velocity over the fluid faces. The perturbation
+is multiplied by ``r = \min(1, \max(0, -U_n/u_{\min}))`` (``u_{\min}`` =
+0.5 m s⁻¹ by default): nothing on outflow levels, full amplitude where
+the inflow exceeds ``u_{\min}``, linear in between, so a veering wind
+switches a face on and off continuously. The integral time follows
+Taylor, ``T = L_n/\max(|U_n|, u_{\min})``, with ``L_n`` the normal integral
+length of the statistics (`inflow_normal_length`).
+
+**Zero added mass flux.** The area-weighted mean of the normal
+perturbation is removed per face and level over the receiving faces.
+This is exact for any constraint weight that depends on height only
+(``ρ̄(z)``, ``ρ̄θ̄(z)``), so the N-open-b correction sees exactly the data's
+imbalance. The removal costs the normal component the variance of the
+face mean,
+
+```math
+f = \frac{1}{n^2}\sum_{i,j=1}^{n} R(|i-j|Δ_s)
+  \;\le\; \frac{1}{n}\sum_{r=-∞}^{∞} R(rΔ_s) = \frac{2L_s}{L_{\rm face}},
+```
+
+(``R ≥ 0`` for the exponential filter; ``L_s`` is the one-sided integral
+length, so the two-sided integral is ``2L_s``), and ``\overline{u_n'w'}``
+loses the same fraction (``u_n = a_{11}ũ_1`` is the only component
+whose mean is removed). The bound is reached for ``L_{\rm face} ≫ L_s``.
+The issue stated the bound as ``(L_s/L_{\rm face})σ_n^2``; that is
+half the measured reduction (the one-sided integral where the variance
+of a mean needs the two-sided one), so the expectation was wrong, not
+the code.
+
+**Corners.** The cell next to two open faces belongs to the x-face at
+levels where that face carries turbulence and to the y-face otherwise;
+the other face neither perturbs it nor counts it in its mean. The
+along-face (staggered) component of an x-face is not applied at the slot
+of the adjacent y-face's normal velocity, and the vertical component not
+at the ground face.
+
+**Time.** The applied perturbation is piecewise linear in time between
+*knots*; a knot is a complete perturbation (generator advanced, Lund
+transform, ramp, receiving faces, mean removal), so every blend of two
+knots carries zero added flux. For nest data the knots are the ends of
+the parent step, exactly like the data's own linear blend; otherwise
+every refresh at a new time is a knot. This matters for the divergence.
+SSP-RK3 combines the step-start state and its stages,
+``u^{n+1} = \tfrac13u^n + \tfrac23u^{(2)}``, and the boundary buffers
+with them. Boundary values that are linear in time make the combined
+buffers equal to a fresh refresh at the step's end. A `NestedRun`
+refreshes the buffers at the start of every parent step, so anything
+else leaves a divergence on the child's faces that the combination only
+damps by 1/3 per substep. Three variants were tried first, and each left
+``\max|∇·u| = O(10^{-3})`` s⁻¹ on a refine-3 nest: planes held constant
+over a step, a ramp re-evaluated at every stage, and perturbations
+switched on at the installation time. With the knots, the divergence is
+2.9e-16.
+
+**Ledgers.** `added_mass_flux(it)` reports, per face, the net added
+volume flux, the largest per-level flux, and their ratio to the face's
+mean-flow flux. `injected_ke_flux(it)` is the flux of perturbation
+kinetic energy carried in by the mean inflow,
+``ρ_{\rm ref}⟨\tfrac12|u'|^2\max(-U_n, 0)⟩`` (W m⁻²), per face and as an
+area-weighted total. `generator_state(it)` / `restore_generator_state!`
+snapshot the generators, the knots and the running sums of the
+statistics, so a restart continues bit for bit.
+
+**Measured** (`test/era6_inflow_turbulence.jl`):
+
+| test | result |
+| :-- | :-- |
+| U = (3, 1, 0), 500 RK3 steps, 24 × 16 × 12 | added flux / mean-flow flux ≤ 3.6e-17 (W, S), 0 on the outflow faces; per level ≤ 2.6e-16; max\|∇·u\| 2.0e-16 s⁻¹; KE flux 0.465 W m⁻² |
+| plane stresses, 128 × 16 west face, L_s = 2Δ, 1500 planes | R22, R33 within 0.45 %, 0.32 %; R11 / (R11(1−f)) = 1.0015, u'w' / (R13(1−f)) = 1.0064; f = 0.0309 against 2L_s/L_face = 0.0312 |
+| wind through 360° in 8 steps | variance only on faces with U_n < 0, exactly 0 elsewhere; ramp at U_n = −u_min/2 is exactly ½ (to 1e-14); corner owned by the west face |
+| refine-3 nest, ParentResolvedStatistics (folded every 10 s), wind veering 87° in 60 s | max\|∇·u\| child 2.4e-16 s⁻¹, added flux ≤ 2.6e-17, KE flux 0.265 W m⁻²; west-face R11, R22, R33 = 0.175, 0.205, 0.191 m² s⁻² (target at the end, level mean, 0.148, 0.155, 0.155: the statistics drift while the run is averaged) |
+| restart | velocity and perturbations bit-identical after 20 RK3 steps |
+
+**Cost.** On a 64 × 64 × 64 child (four faces, ``L_s = 4Δ``), a refresh
+that makes a new knot costs 0.92 ms and a refresh within the window
+costs 0.22 ms. The data fill alone costs 0.08 ms.
+
+**Two-way.** Feedback should skip a frame of
+`feedback_exclude_width(it)` = ``2\max L_s`` next to the open faces
+(N-nest-e, #263, which has not merged yet). Without that frame, the
+feedback restricts the synthetic eddies into the parent, and the parent
+returns them through the next prolongation. On the refine-3 test nest,
+over 200 s, the child's kinetic energy grew ×5.5 and the parent's ×3.2.
+Without the inflow perturbations, the same two-way run kept the child's
+energy at ×0.99. N-inflow-c is therefore tested one-way only.
+
+### Development length behind the inflow (N-inflow-d)
+
+How far into the child is the inflow turbulence still out of
+equilibrium? N-inflow-d (#266) measures it on the canonical case of the
+inflow-generator literature (Xie & Castro 2008; Kim, Castro & Xie 2013):
+a periodic precursor supplies the statistics and the mean inflow profile,
+and an inflow–outflow copy of the same flow is compared with it.
+
+**The flow.** The neutral, wall-modelled half channel of P54-d
+(`half_channel_case`, ``δ = u_* = 1``, ``z_0 = 10^{-4}δ``,
+`StaticSmagorinsky(0.1)`, forcing ``G = u_*^2/δ``). The **precursor**
+(the parent) is periodic on ``5δ × 2.5δ × δ`` at ``Δx_p = 0.208δ``,
+``Δz = δ/16`` (24 × 12 × 16), spun up for ``20δ/u_*`` and averaged over
+``10δ/u_*``; its `ParentResolvedStatistics` (mode `:full`, uniform time
+average) is the generator's statistics source, and its plane- and
+time-mean ``u(z)`` is the inflow profile. The **child** is the same
+channel opened in x (`half_channel_case(; extent, inflow)`: the profile
+as Dirichlet data on the west face, the convective outflow of N-open-c
+on the east face) at refine 2 horizontally (``Δx = 0.104δ``), with
+**open lateral faces** in the CI case (`lateral = :open`, maintainer
+decision on #314): south and north take the precursor's mean profile as
+Dirichlet data, the one-way nest default (PALM's child), so the side
+layers carry no turbulence of their own. The fetch statistics, the
+pressure and the total stress are therefore averaged over the span
+centre, ``0.5δ`` (5 cells) from each side (`FetchStatistics(sim;
+jrange)`, `total_stress_profile(…; jrange)`); the bulk velocity is the
+volume flux of the whole face. A radiation condition on the lateral
+faces (`lateral_outflow = :convective`) was tried first and rejected:
+the turbulent ``v'`` radiates out where it points outward and is held
+at zero where it points inward, a rectified net outflow through the
+sides, so the bulk velocity fell by 0.5–1 % along the child and the
+1–4δ drive bias became −58 % (DF) and −66 % (FSD), a measure of the
+leak, not of the fetch (one realisation). The example keeps the
+spanwise-periodic set-up of Kim et al. (2013, §3.1) by default
+(`lateral = periodic`), which is where the quoted 6.6δ and 12.3δ come
+from; in the Berlin child (#268) the lateral faces receive the running
+parent's turbulent fields, which is a different problem.
+The **reference** is the periodic channel on the child's grid, the
+equilibrium the child relaxes to. Generators: none (`off`), the digital
+filter (DF), and the random-mode `FreeStreamInflow` (FSD, one length:
+the face-mean streamwise ``L_s``, swept at the bulk velocity).
+
+**Diagnostics.** `FetchStatistics` averages the resolved moments over
+``y`` and time per column; the variances are taken at the native
+staggered points and ``\overline{u'w'}`` at the cell centres, exactly as
+for the precursor (whose x average is the target), so no definition
+difference enters. `development_length((x, f), T; frac)` is the distance
+from the inflow plane beyond which ``f`` stays within
+``[\text{frac}\,T, T/\text{frac}]``; the last ``0.5δ`` (the convective
+outflow layer, where the variances drop) is excluded. The total stress
+at ``x ≈ 4δ`` is `total_stress_profile(…; irange)` over three columns.
+The pressure-gradient bias is the least-squares slope of the time- and
+plane-mean pressure over ``1δ ≤ x ≤ 4δ``, divided by ``G``: the extra
+drive the developing flow needs.
+
+**Measured.** CI case (`test/era6_inflow_fetch.jl`, 5δ child with open
+lateral faces, averaged ``5δ/u_*``, about 2 min for the precursor and
+the three children), ratios to the precursor over the span centre, one
+realisation (precursor seed 1):
+
+| run | TKE at 0.22δ, x = 0.5, 1, 2, 3, 4.5δ | TKE at 0.47δ | −u'w' at 0.47δ | dp/dx bias |
+| :-- | :-- | :-- | :-- | --: |
+| off | 0 everywhere (the mean profile stays laminar) | 0 | 0 | +71 % |
+| DF  | 0.99, 1.06, 1.17, 1.26, 1.35 | 0.77, 0.78, 0.81, 0.84, 0.88 | 0.53, 0.57, 0.67, 0.73, 0.78 | −2.6 % |
+| FSD | 0.59, 0.59, 0.63, 0.68, 0.84 | 0.57, 0.56, 0.56, 0.56, 0.56 | 0.26, 0.32, 0.40, 0.46, 0.53 | +29 % |
+
+The bulk velocity is the precursor's at every x to ``1.9×10^{-4}`` (the
+uniform N-open-b correction δ of the radiated east outflow); the
+generator's added flux is ``4×10^{-18}`` of the mean-flow flux;
+``\max|∇·u| < 10^{-13}``. RMS error of the total stress at
+``x = 3.9δ`` over ``0.1δ < z < 0.8δ``: DF 0.39, FSD 0.53, off 1.32
+``u_*^2`` (the precursor's total stress is within 0.05 ``u_*^2`` of
+``u_*^2(1 - z/δ)``, Porté-Agel et al. 2000). With the span centre as
+the average, these are within the realisation spread of the earlier
+spanwise-periodic CI case (DF TKE at 0.22δ 0.97 → 1.36, bias −0.55 %,
+stress RMS DF 0.32, FSD 0.47).
+
+**Realisations.** The run is not bitwise reproducible until #245 puts
+the suite on `FFTW.ESTIMATE`: the FFT pressure solvers plan with
+`FFTW.MEASURE`, the plan depends on timing, and the turbulence amplifies
+the round-off. Every run is therefore a new realisation of a precursor
+averaged only ``10δ/u_*`` on 24 × 12 columns. Over five realisations
+with open lateral faces (precursor seeds 1–4, plus a repeat of seed 1):
+
+| quantity | range over 5 realisations |
+| :-- | :-- |
+| DF TKE/pre, 0.22δ, x = 0.5δ → 4.5δ | 0.90–0.99 → 1.33–1.36 |
+| DF −u'w'/pre, 0.47δ, x = 0.5δ → 4.5δ | 0.40–0.54 → 0.70–0.78 |
+| DF dp/dx bias | −0.8 % to −8.6 % |
+| FSD dp/dx bias | +27 % to +31 % |
+| off dp/dx bias | +66 % to +71 % |
+| total-stress RMS error at 3.9δ, DF / FSD / off | 0.33–0.46 / 0.51–0.55 / 1.23–1.32 ``u_*^2`` |
+| bulk velocity, max deviation | ``1.9×10^{-4}`` |
+
+(The spanwise-periodic CI case, over seven realisations: DF TKE/pre
+0.72–1.39 and −u'w'/pre 0.44–1.53 at both heights, DF bias −0.6 to
+−9.0 %, FSD +19 to +31 %, stress RMS DF 0.30–0.35, FSD 0.40–0.53.)
+The orderings DF < FSD in both moments and in the total stress, and
+|bias| DF < FSD < off, held in every realisation, and they are what the
+CI case asserts.
+
+Example (`examples/nesting/inflow_fetch.jl`, 15δ child, spanwise
+periodic, averaged ``10δ/u_*``, about 11 min), ratios to the child-grid reference and
+development lengths (δ) to 10 % / 20 %:
+
+| run | TKE 0.22δ at x = 1, 3, 5, 10, 14δ | TKE 0.47δ | L₁₀ TKE 0.22δ / 0.47δ | L₁₀ −u'w' 0.22δ / 0.47δ |
+| :-- | :-- | :-- | :-- | :-- |
+| off | 0 | 0 | ∞ / ∞ | ∞ / ∞ |
+| DF (parent statistics and mean) | 1.08, 1.26, 1.36, 1.32, 1.26 | 0.85, 0.92, 0.98, 1.12, 1.15 | ∞ / ∞ (∞ / 5.1 against the parent) | ∞ / ∞ |
+| FSD (parent) | 0.63, 0.72, 0.93, 1.25, 1.26 | 0.62, 0.62, 0.62, 0.73, 0.95 | ∞ / 13.0 | ∞ / 12.5 |
+| DF-same (reference statistics and mean) | 0.59, 0.69, 0.81, 1.02, 1.02 | 0.58, 0.63, 0.69, 0.83, 0.96 | 6.6 / 12.3 | 6.0 / 11.9 |
+
+![TKE behind the inflow at 0.22δ](../assets/nesting/inflow_fetch_tke_z02.svg)
+![−u'w' behind the inflow at 0.47δ](../assets/nesting/inflow_fetch_uw_z05.svg)
+
+**What sets the fetch.** With statistics and mean from the child's own
+grid (DF-same, the set-up of the papers), the turbulence recovers to
+10 % in ``6.6δ`` at 0.22δ and ``12.3δ`` at 0.47δ. Both are about 1.2
+local eddy-turnover distances ``U(z)\,k/ε``, with ``k`` the reference
+TKE and ``ε`` set equal to the local shear production
+``P = τ(z)\,∂U/∂z`` (local equilibrium), ``τ`` the total stress. The
+half channel is not a constant-stress layer: ``τ ≈ u_*^2(1 - z/δ)``, so
+the log-layer value ``ε ≈ u_*^3/(κz)`` overestimates the dissipation by
+``1/(1 - z/δ)``, a factor 1.9 at 0.47δ. Measured on the reference
+(``τ`` and ``∂U/∂z`` from its mean profile, whose shear is 10–30 %
+above ``u_*/(κz)``, the usual LES log-layer mismatch):
+
+| z/δ | U | k | τ | ∂U/∂z | P | ``U k/P`` | with ``P ≈ u_*^3(1 - z/δ)/(κz)`` | measured L₁₀ (DF-same) |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| 0.22 | 18.8 | 2.90 | 0.78 | 12.6 | 9.8 | 5.6δ | 6.1δ | 6.6δ (1.2 turnovers) |
+| 0.47 | 21.0 | 1.79 | 0.53 | 7.0 | 3.7 | 10.2δ | 13.3δ | 12.3δ (1.2 turnovers) |
+
+(Units ``δ = u_* = 1``; ``P = ε`` neglects turbulent transport, so the
+turnover distances are estimates, good to a few tens of per cent.) A
+synthetic field with the right one-point statistics and exponential
+correlations is not yet turbulence: the projection removes its
+divergent part within one cell (the inflow-face ``\overline{u'^2}`` is
+82 % of the target, one cell in 68 %), its ``u'w'`` starts at 40–75 % of
+the target, and the energy-containing eddies have to be rebuilt by the
+mean shear, which takes about one turnover. In a rough-wall ABL,
+``U/u_* ≈ 20``, so the distance is long.
+
+**The coarse parent.** With the refine-2 parent as the statistics source
+(the issue's set-up, and the Berlin child's), two things differ from the
+child grid's equilibrium. The parent's mean profile is 11 % faster at
+0.22δ (the log-layer mismatch depends on the horizontal resolution),
+and its ``R_{11}`` (resolved + SGS) is 57 % above the child grid's at
+0.16δ. The
+child keeps the parent's mean momentum for more than 15δ, and its
+near-wall TKE settles 26 % above the child-grid equilibrium; the FSD
+run converges to the same level by 10δ, so the level is set by the mean
+profile, not by the generator. The digital filter starts at the
+precursor's level (0.97 at 0.5δ, 0.22δ) and is within 10 % of its own
+source at 0.47δ from 5.1δ on; the FSD, isotropic with one length and no
+``u'w'`` structure, starts at 60 % and rises only after 5δ. Without a
+generator the inflow stays laminar.
+
+**The literature number.** Kim, Castro & Xie (2013) ran the XC digital
+filter (with and without a mass-flux correction) and their
+divergence-free variant XCDF at the inlet of a plane channel:
+``Re_τ = 395``, ``60δ × 2δ × 3.5δ``, spanwise periodic, ``U_b/u_τ =
+18.3``. The input statistics came from DNS and from the periodic LES on
+the same grid. The wall shear stress and ``-\overline{u'v'}`` recovered
+by ``x/δ ≈ 10`` for XC and XCMC, "similar to those in Deck et al." for
+another synthetic method (§3.3). The XCDF wall stress was within 5 % at
+``x = 15δ``, a 14δ development distance counted from its plane at
+``x_0 = δ``. Its ``-\overline{u'v'}`` at ``(10δ, 0.1δ)`` was within
+about 5 %, and its pressure variance matched the periodic case from
+``10δ`` on. Xie & Castro (2008) could not be retrieved (closed access,
+with no repository copy in OpenAlex or Semantic Scholar). The
+Kim et al. accepted manuscript was read from the Southampton e-print
+(eprints.soton.ac.uk/341146). **The literature development distance is
+therefore ≈ 10δ (10–14δ), not the 3δ placeholder**, and that number is
+adopted here. It agrees with the turnover estimate: at
+``U_b/u_τ ≈ 18–20``, one turnover near ``0.1–0.5δ`` is 5–10δ.
+
+**CI: the physical fetch** (`test/era6_inflow_fetch.jl`, testset
+"DF-same against the child-grid reference"). The reference periodic
+channel on the child grid (48 × 24 × 16, ``30δ/u_*``) is the statistics
+source, the inflow profile and the target. The child is 10δ long at
+``Δx = 0.104δ``, averaged ``5δ/u_*``, with open lateral faces as in the
+CI case (statistics over the span centre). The testset takes about
+120–165 s (reference 68–93 s, child 50–70 s). Measured over five
+realisations (reference seeds 2–5, plus a repeat of seed 2):
+
+| z/δ | ``U k/P`` | L₁₀ TKE | L₁₀ −u'w' | L₂₀ TKE / −u'w' | TKE/ref at x ≈ 1δ → 9δ |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| 0.22 | 5.4–5.6δ | 5.6–6.6δ (1.03–1.20 turnovers) | 5.6–7.9δ (1.03–1.46) | 4.1–4.4δ / 4.2–5.1δ | 0.59–0.62 → 0.98–1.01 |
+| 0.47 | 9.7–10.4δ | ∞ within 9.5δ | ∞ within 9.5δ | 5.9–9.2δ / 5.1–7.2δ (∞ in one) | 0.60–0.63 → 0.79–0.87 |
+
+With periodic y (six realisations, before #314 decision 3): L₁₀ at
+0.22δ 5.6–6.5δ (TKE) and 6.2–6.8δ (−u'w'), the same within the spread.
+
+Asserted (maintainer decision 1 on #314: the fetch target is about 10δ,
+Kim et al. 2013): at 0.22δ both moments are within 10 % by
+``x ≤ 10δ``, with L₁₀ between 0.6 and 1.6 local turnovers. At 0.47δ
+the turnover distance is more than 1.5 times that at 0.22δ; both
+moments stay below 90 % over the first half turnover, are still rising
+across the child (by more than 0.1 from 1δ to 9δ; measured 0.17–0.47),
+and are within 30 % of the reference over 8–9.5δ. The 10δ figure of
+Kim et al. was measured at the wall and at 0.1δ. In this rough-wall
+flow at 0.47δ, the spanwise-periodic 15δ example gives 12.3δ for TKE
+and 11.9δ for −u'w', i.e. 1.2 turnovers, slightly beyond it; this is
+the "about 10δ" of the decision, and the 10 % fetch at 0.47δ is not
+asserted inside the 10δ child.
+
+**Expectations that proved wrong** (the expectations, not the code):
+
+* "TKE and −u'w' at 0.2δ and 0.5δ within 10 % of the precursor by
+  x ≤ 3δ" (the issue's placeholder). Not met in any configuration
+  (tables above). Kim et al. (2013) give ≈ 10δ (10–14δ) for the same
+  generator in a channel, and the turnover estimate gives 5.6δ at 0.22δ
+  and 10δ at 0.47δ. The placeholder is too short by a factor of 2–4,
+  whatever the generator. The literature number (≈ 10δ, maintainer
+  decision on #314) is adopted and asserted in the DF-same testset
+  (0.22δ within 10 % by 10δ). At 0.47δ it is exceeded slightly (12.3δ,
+  example). Against the coarse parent, no
+  10 % fetch exists at 0.22δ for any generator: the DF ratio moves away
+  from 1 with ``x`` (TKE 0.97 → 1.36, ``-u'w'`` 0.85 → 1.37 over
+  0.5–4.5δ) as the child relaxes to the equilibrium of the parent's
+  faster mean profile (the coarse-parent bias, left to #268 by the same
+  decision). The CI case asserts only that the DF is closer to
+  the precursor than the FSD, in TKE and in −u'w'. An earlier absolute
+  band, [0.7, 1.5], was a regression bound calibrated on two runs. It
+  came within 0.02 of its floor over the seven realisations and was
+  removed.
+* "Total stress at 4δ within 10 % for 0.1δ < z < 0.8δ". Not met (RMS
+  0.33–0.46 ``u_*^2`` with open lateral faces, 0.30–0.35 periodic), for
+  the same reason; asserted: DF < FSD < off.
+* "Driving pressure-gradient bias < 2 %". Not met reliably, and the
+  expectation is wrong for a developing flow. Over 1–4δ, the extra drive
+  balances the streamwise change of the momentum flux
+  ``\overline{u^2}`` and of the wall stress. It is therefore a property
+  of the fetch, not zero: off +66 to +72 %, FSD +19 to +31 %, DF-same
+  +18 to +19 % (CI, open lateral faces) and +23 % (example), DF with the
+  coarse parent −0.8 to −8.6 % (open) and −0.6 to −9.0 % (periodic). Locally it is
+  +6 % over 1–3δ and −5 % over 2–4δ in one realisation, so the 1–4δ
+  value of the coarse-parent DF is a cancellation. The cancellation is
+  between the parent's faster mean flow and its larger stresses; it is
+  not equilibrium. The CI case asserts the ordering |DF| < |FSD| < |off|.
+* The null comparison (off < 50 %) and the bulk velocity (0.5 %) hold as
+  issued.
+* "Open lateral boundaries" (the issue's set-up, required by the
+  maintainer on #314) hold in the CI case: the lateral faces carry the
+  mean profile (Dirichlet) and the fetch is measured over the span
+  centre. Not an expectation that proved wrong, but a set-up the first
+  attempt had replaced by periodic y.
+
+### The Berlin case
+
+Stated exception (as in #185): the Berlin run is laterally periodic and
+has no inflow face, so no generator or statistics source is coupled yet.
+The coupling to the nested child's open faces is N-inflow-e (#268), which
+will also quote the Berlin day and night statistics; `InflowTurbulence`
+(N-inflow-c) is the object it installs. Transition stays
+coupled through `turbulence_diag`; no Berlin list changed. One
+digital-filter step on a 64 × 40 face costs 0.10 ms. One update of
+`ParentResolvedStatistics` on the 192 × 192 Berlin parent (20 levels)
+costs 65 ms, so it belongs on a cadence. The convective-parent numbers
+above stand in for the Berlin numbers until then.
+
+N-inflow-d (#266) adds no coupling either (stated exception): its
+fetch is measured on the periodic half channel above, and the Berlin
+child's fetch, day and night, is measured in N-inflow-e (#268), where
+the nested Berlin case exists. `development_length`, `FetchStatistics`
+and the open-x `half_channel_case` are diagnostics and a benchmark
+builder; no Berlin list changed. For the Berlin child the measurement
+here predicts two things to check: the fetch scales with
+``U(z)\,k/ε``, and a coarse parent's mean profile, not the generator,
+sets the near-wall turbulence level far downstream.
 
 ## References
 
@@ -728,3 +1450,42 @@ in `:winter` at 06:00, 4.0 % of the 49 056 stable cells (Smagorinsky;
 * Nieuwstadt, F. T. M. (2005). Direct numerical simulation of stable
   channel flow at large stability. *Boundary-Layer Meteorol.*, 116,
   277-299.
+
+### Synthetic inflow
+
+* Deardorff, J. W. (1980). Stratocumulus-capped mixed layers derived
+  from a three-dimensional model. *Boundary-Layer Meteorol.*, 18,
+  495-527.
+* Kadasch, E., Sühring, M., Gronemeier, T. & Raasch, S. (2021). Mesoscale
+  nesting interface of the PALM model system 6.0. *Geosci. Model Dev.*, 14,
+  5435-5465.
+* Klein, M., Sadiki, A. & Janicka, J. (2003). A digital filter based
+  generation of inflow data for spatially developing direct numerical or
+  large eddy simulations. *J. Comput. Phys.*, 186, 652-665.
+* Lenschow, D. H., Wyngaard, J. C. & Pennell, W. T. (1980). Mean-field
+  and second-moment budgets in a baroclinic, convective boundary layer.
+  *J. Atmos. Sci.*, 37, 1313-1326.
+* Lund, T. S., Wu, X. & Squires, K. D. (1998). Generation of turbulent
+  inflow data for spatially-developing boundary layer simulations.
+  *J. Comput. Phys.*, 140, 233-258.
+* Moeng, C.-H. (1984). A large-eddy-simulation model for the study of
+  planetary boundary-layer turbulence. *J. Atmos. Sci.*, 41, 2052-2062.
+* Panofsky, H. A. & Dutton, J. A. (1984). *Atmospheric Turbulence*.
+  Wiley.
+* Rotach, M. W., Gryning, S.-E. & Tassone, C. (1996). A two-dimensional
+  Lagrangian stochastic dispersion model for daytime conditions. *Q. J.
+  R. Meteorol. Soc.*, 122, 367-389.
+* Schumann, U. (1977). Realizability of Reynolds-stress turbulence
+  models. *Phys. Fluids*, 20, 721-725.
+* Kim, Y., Castro, I. P. & Xie, Z.-T. (2013). Divergence-free
+  turbulence inflow conditions for large-eddy simulations with
+  incompressible flow solvers. *Comput. Fluids*, 84, 56-68. Accepted
+  manuscript: eprints.soton.ac.uk/341146.
+* Porté-Agel, F., Meneveau, C. & Parlange, M. B. (2000). A
+  scale-dependent dynamic model for large-eddy simulation: application
+  to a neutral atmospheric boundary layer. *J. Fluid Mech.*, 415, 261-284.
+* Wu, X. (2017). Inflow turbulence generation methods. *Annu. Rev. Fluid
+  Mech.*, 49, 23-49.
+* Xie, Z.-T. & Castro, I. P. (2008). Efficient generation of inflow
+  conditions for large eddy simulation of street-scale flows. *Flow
+  Turbul. Combust.*, 81, 449-470.

@@ -55,14 +55,15 @@ using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
 using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence,
-                     _dzc, _dzf, _dz_min      # vertical metrics, stretched-aware (#151)
+                     _dzc, _dzf, _dz_min,     # vertical metrics, stretched-aware (#151)
+                     _project_velocity!       # the projection (steps 8–10 of step!)
 using ..TimeSteppers: step!
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 
 export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
        SubsteppingSchedule, substeps_for,
        StateSnapshot, state_snapshot, save_state!, restore_state!,
-       step_adaptive!,
+       step_adaptive!, NumericalFailure, is_numerical_failure,
        DiffusionWorkspace, solve_implicit_diffusion!,
        IMEXScheme, ARK2, Rosenbrock2,
        IMEXWorkspace, imex_workspace, step_imex!, imex_stability_limit
@@ -288,7 +289,7 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
     active  = sgs_active === nothing ? closure !== nothing : sgs_active
     if update_νt && closure !== nothing
         fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
-        sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
+        sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
         compute_sgs!(closure, sim)
     end
     f = closure === nothing ? SGSFields(sim.νt, sim.κt) : sgs_fields(closure, sim)
@@ -529,6 +530,53 @@ cached afterwards (weakly, so it is freed with `sim`). This is what makes
 """
 state_snapshot(sim::BoussinesqSimulation) =
     get!(() -> StateSnapshot(sim), _SNAPSHOTS, sim)::StateSnapshot
+
+"""
+    NumericalFailure(msg) <: Exception
+
+The exception a dynamical core, a solver or a physics step throws when it
+fails **numerically** — an iterative solver that diverges or does not
+converge, a state that has left its physical range — as opposed to a
+programming error. Step-rejecting drivers
+([`NestedRun`](@ref Aeolus.Nesting.NestedRun)) roll back and retry at a
+smaller step on it ([`is_numerical_failure`](@ref)); any other exception is
+rethrown.
+"""
+struct NumericalFailure <: Exception
+    msg::String
+end
+Base.showerror(io::IO, e::NumericalFailure) = print(io, "NumericalFailure: ", e.msg)
+
+"""
+    is_numerical_failure(err, sim) -> Bool
+
+Whether the exception `err`, thrown by a step of `sim`, is a numerical
+failure that a smaller step may cure, rather than a bug to be reported:
+
+* a [`NumericalFailure`](@ref) (a solver that diverged);
+* a `DomainError` (`sqrt`/`log` of a negative value), an `InexactError`
+  (a non-finite value converted to an integer, e.g. a step count
+  `ceil(Int, R/Δt)` from an infinite rate) or an `OverflowError`;
+* **any** exception thrown while the prognostic state of `sim` has become
+  non-finite (the throw is a consequence of the blow-up).
+
+A `MethodError`, `BoundsError`, `ArgumentError`, `DimensionMismatch`, …
+thrown from a finite state is a programming or set-up error: retrying it at
+half the step only hides it (#327, M6). An `InterruptException` is never a
+numerical failure.
+"""
+function is_numerical_failure(err, sim)
+    err isa InterruptException && return false
+    err isa Union{NumericalFailure, DomainError, InexactError, OverflowError} && return true
+    return !_finite_state(sim)
+end
+
+# `_all_finite`, but false (not a throw) for a state it cannot inspect.
+_finite_state(sim) = try
+    _all_finite(sim)
+catch
+    false
+end
 
 function _all_finite(sim::BoussinesqSimulation)
     all(isfinite, interior_view(sim.u)) || return false
@@ -1388,7 +1436,7 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
 
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
     fill!(sim.tθ.data, 0)
@@ -1455,7 +1503,7 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
-    sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
     f = compute_sgs!(closure, sim)
     ws.ν_mom  === nothing && (ws.ν_mom  = similar(sim.νt.data))
     ws.ν_scal === nothing && (ws.ν_scal = similar(sim.νt.data))
@@ -1551,17 +1599,7 @@ end
 # callable per IMEX stage so every stage value is discretely
 # divergence-free.
 function _project!(sim::BoussinesqSimulation{T}, Δt::T) where {T}
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
-    divergence(sim.div_buf, sim.u, sim.v, sim.w)
-    solve!(sim.φ, sim.div_buf, sim.solver)
-    fill_halos!(sim.φ, sim.bcs)
-    ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
-    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
-    _axpy_interior!(sim.u, -one(T), sim.dφdx, sim.mesh)
-    _axpy_interior!(sim.v, -one(T), sim.dφdy, sim.mesh)
-    _axpy_interior!(sim.w, -one(T), sim.dφdz, sim.mesh)
+    _project_velocity!(sim)
     ii, jj, kk = interior(sim.mesh)
     @inbounds @views sim.p.data[ii, jj, kk] .= sim.φ.data[ii, jj, kk] ./ Δt
     return sim
@@ -1619,9 +1657,9 @@ function _solve_field!(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbo
     scalar = _is_scalar_name(name)
     ν   = _coef_for(νm, νs, name)
     bcs = scalar ? sim.θ_bcs : sim.bcs
-    # qv shares θ's walls and open faces but not θ's prescribed top gradient (#254)
-    name === :qv && (bcs = gradient_free_bcs(bcs))
-    increment && (bcs = homogeneous_bcs(bcs))
+    # qv shares θ's walls and open-boundary data but not θ's prescribed top
+    # gradient (#254); an increment has zero boundary values
+    bcs = increment ? homogeneous_bcs(bcs) : name === :qv ? passive_scalar_bcs(bcs) : bcs
     dw  = scalar ? ws.diff.c : getfield(ws.diff, name)
     stats = solve_implicit_diffusion!(f, f, ν, dtγ, sim.mesh, bcs;
                                       tol = tol, maxit = maxit, workspace = dw,
@@ -1750,7 +1788,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     # ---- I(U₁) = ∇·(ν∇U₁) on the projected stage value -------------------
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
     for name in names
         _diffusion!(_diffusion_buffer(sim, ws, name), getfield(sim, name),
                     _coef_for(νm, νs, name), m)

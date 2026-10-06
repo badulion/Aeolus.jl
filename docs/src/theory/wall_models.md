@@ -610,7 +610,7 @@ and updates α once per step.
 The ground of the flagship is this operator with a `MOSTWallLaw` per
 column: `z0m` from the surface's roughness (the per-class table), `L`
 from the last surface step, ``u_τ`` re-evaluated at the instantaneous
-first-air wind every step (see [The Berlin case](../design/berlin_case.md)).
+first-air wind every step (see [The Berlin case](../design/berlin_surface_radiation.md#Surface-exchange-(#129))).
 With ``L`` and the wind frozen it reproduced the drag the example used
 to carry (``u_*^2/U`` held between surface steps) exactly.
 

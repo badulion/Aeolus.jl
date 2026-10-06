@@ -209,7 +209,7 @@ end
     psim = BoussinesqSimulation(pm; moisture=true,
                                 bcs=FieldBoundaryConditions(:periodic, :periodic, :wall))
     csim = BoussinesqSimulation(cm; moisture=true,
-                                bcs=nest_bcs(cm, :nest, :nest, :wall; moisture=true))
+                                bcs=nest_bcs(cm, :nest, :nest; bottom=:wall, top=:nest, moisture=true))
     fill!(psim.θ.data, 300.0); fill!(csim.θ.data, 300.0)
     fill!(psim.qv.data, 0.010); fill!(csim.qv.data, 0.0)
     step_nested!(psim, csim, nest, 0.5)
@@ -231,9 +231,10 @@ end
 # two-way steps. The free stream must be preserved to round-off on both
 # grids, no vertical motion may appear, and θ must stay within the
 # initial bounds up to the advection scheme's own dispersive undershoot.
-# The child's nest faces are N-nest-d's OpenBoundary faces fed by the
-# parent (#261), which replaced both the free NestBC faces (unstable at
-# the nest corners, reported on #256) and the impose_interface option.
+# The child's nest faces are OpenBoundary faces fed by NestBoundaryData
+# (N-nest-d, #261), whose boundary-normal interface plane is Dirichlet. The
+# N-nest-a NestBC path (free interface faces), which amplified round-off at
+# the nest corners on a *uniform* parent too (reported on #256), is retired.
 @testset "free stream and a warm blob through the nest on a stretched parent (30 steps)" begin
     zf = surface_refined_faces(dz_surface=50, z_uniform=500, z_top=1500, ratio=1.08)
     pm = StretchedGrid(Float64; size=(12, 12, length(zf) - 1), extent=(600.0, 600.0, 1500.0),
@@ -242,7 +243,7 @@ end
                        halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm; bcs=FieldBoundaryConditions(:periodic, :periodic, :wall))
-    csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :nest, :nest, :wall))
+    csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :nest, :nest; bottom=:wall, top=:nest))
     fill!(psim.u.data, 2.0)
     for k in axes(psim.θ.data, 3), j in axes(psim.θ.data, 2), i in axes(psim.θ.data, 1)
         psim.θ.data[i, j, k] = 300 + 0.5 * exp(-((i - 6)^2 + (j - 6)^2 + (k - 6)^2) / 4)
@@ -303,15 +304,14 @@ end
 # 2. Reference-mass (anelastic) measure
 # =========================================================================
 
-function _anelastic_pair(; T_surf=_T30, child_T=T_surf, r=(2, 2, 4), ref_fn=nothing,
-                         scalars=())
+function _anelastic_pair(; T_surf=_T30, child_T=T_surf, r=(2, 2, 4), ref_fn=nothing, scalars=())
     pm = RegularGrid(Float64; size=(8, 8, 24), extent=(1000.0, 1000.0, 3000.0), halo=(3, 3, 3))
     nest = nested_grid(pm, ((250.0, 500.0), (250.0, 750.0), (0.0, 1000.0)), r; halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     rp = ref_fn === nothing ? isothermal_reference(pm; T_surf) : ref_fn(pm)
     rc = ref_fn === nothing ? isothermal_reference(cm; T_surf=child_T) : ref_fn(cm)
     pA = AnelasticSimulation(pm; ref=rp)
-    cA = AnelasticSimulation(cm; ref=rc, bcs=nest_bcs(cm, :nest, :nest, :wall; scalars))
+    cA = AnelasticSimulation(cm; ref=rc, bcs=nest_bcs(cm, :nest, :nest; bottom=:wall, top=:nest, scalars))
     return pm, nest, cm, pA, cA
 end
 
@@ -332,7 +332,7 @@ end
     @test mis2 > 1e-3
     @test_throws ErrorException nest_measure(nest2, pB, cB)
     # a pseudo-incompressible child under an anelastic parent is refused
-    cP = PseudoIncompressibleSimulation(cm; ref=cA.ref, bcs=nest_bcs(cm, :nest, :nest, :wall))
+    cP = PseudoIncompressibleSimulation(cm; ref=cA.ref, bcs=nest_bcs(cm, :nest, :nest; bottom=:wall, top=:nest))
     @test_throws ErrorException nest_measure(nest, pA, cP)
 end
 
@@ -508,7 +508,7 @@ end
     @test nest_scalar_names(st[1]) == [:θ, :qv]
     @test st[1].measure.kind === :mass
     θ0 = composite_integral(pA, cA, nest, :theta; state=st[1])
-    step_nested!(pA, cA, nest, 1.0; state=st)
+    step_nested!(pA, cA, nest, 1.0; state=st, feedback=TwoWayFeedback(buffer=0))
     ii, jj, kk = interior(cm)
     hq = [qc.data[i, j, k] for i in axes(qc.data, 1), j in jj, k in kk if !(i in ii)]
     @test maximum(abs, hq .- 0.008) < 1e-15

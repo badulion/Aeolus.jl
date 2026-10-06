@@ -168,7 +168,10 @@ dynamics step (zero before the first step, and with `C_s = 0`), formed by
 Halos of the tracer: `case_scalar_bcs` (periodic laterally, no-flux at the
 ground and the top; zero-gradient on every face of an open case).
 [`sgs_diffuse!`](@ref) applies it; the `:transport` stage calls it for every
-advected tracer and the pollutant coupling for its tracer.
+advected tracer and the pollutant coupling for its tracer. Every passive
+tracer gets the same shared `κt`, also under the `:amd` provider, whose
+per-scalar diffusivity is deliberately not used (one turbulent Schmidt
+number; #234, see the SGS theory page).
 """
 struct TracerSGSDiffusion{F, M, W}
     tend::F

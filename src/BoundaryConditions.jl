@@ -8,7 +8,7 @@ using ..Fields: location, Field
 export AbstractBC, Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
        FieldBoundaryConditions, fill_halos!
 export NoSlipWall, is_wall, homogeneous_bcs     # P59-a (#172)
-export gradient_free_bcs                         # N-parent-b (#254) + N-open-d (#262)
+export passive_scalar_bcs                        # qv faces (#254 + #261)
 export FreeStreamBoundary                        # P59-d (#185)
 export axis_poisson_bc                           # N-open-a (#251)
 export neighbor_index, mark_open_boundary_solids!   # N-open-d (#262)
@@ -187,7 +187,7 @@ function fill_halos!(f::Field, bcs::FieldBoundaryConditions; key = f.data)
     loc = location(f)
     _fill_x!(d, bcs.west,   bcs.east,   g.Hx, g.Nx, loc, key)
     _fill_y!(d, bcs.south,  bcs.north,  g.Hy, g.Ny, loc, key)
-    _fill_z!(d, bcs.bottom, bcs.top,    g.Hz, g.Nz, loc, key, g)
+    _fill_z!(d, bcs.bottom, bcs.top,    g.Hz, g.Nz, loc, g, key)
     return f
 end
 
@@ -199,9 +199,10 @@ _fill_x!(d, a, b, H, N, loc::Location, key) = _fill_x!(d, a, b, H, N, loc)
 _fill_y!(d, a, b, H, N, loc::Location, key) = _fill_y!(d, a, b, H, N, loc)
 _fill_z!(d, a, b, H, N, loc::Location, key) = _fill_z!(d, a, b, H, N, loc)
 
-# The z fill with the mesh `g`: only the fixed-gradient top (#254) needs
-# the level heights; every other pair is the mesh-free (keyed) method.
-_fill_z!(d, bot, top, Hz, Nz, loc::Location, key, g) = _fill_z!(d, bot, top, Hz, Nz, loc, key)
+# The z fill with the mesh `g` and the key: only the fixed-gradient top
+# (FluxBC, #254) needs the level heights; every other pair is the
+# mesh-free method (with the key, for an open top).
+_fill_z!(d, bot, top, Hz, Nz, loc::Location, g, key) = _fill_z!(d, bot, top, Hz, Nz, loc, key)
 
 # --- X direction ---------------------------------------------------------
 

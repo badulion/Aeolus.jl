@@ -1,0 +1,185 @@
+# Test tags (#316): tier, weight and exclusivity for the files that
+# test/runtests.jl includes. runtests.jl's include list stays the single
+# list of test files; this table only annotates it.
+#
+#   tier      = "fast" (default; runs in both tiers) | "full" (full tier only)
+#   weight    = "light" (default) | "heavy" (started first by test/run.jl)
+#   exclusive = false (default) | true: run alone after the parallel batch
+#               (timing-sensitive files: wall-clock or CI-budget assertions)
+#   seconds   = measured wall time, orders the parallel batch (longest first)
+#   reason    = one line, required for tier = "full": why the file is full-only
+#               and which fast file keeps its module covered
+#
+# An untagged file is fast, light and not exclusive, so a PR that adds a
+# test file needs no edit here. "runtests.jl" names the inline @testsets
+# of runtests.jl itself.
+#
+# Times: AEOLUS_TEST_TIER=full test/run.jl, 8 jobs x 1 thread, 1-min load
+# 5-13 on the 24-core machine (2026-10-06). Every src module keeps fast
+# coverage (checked by grepping each module's name and exports in the fast
+# files). PRs need the fast tier green; the merge train runs the full tier.
+
+# --- full only: validation mini-simulations ---------------------------------
+
+["era2_nest_twoway_longrun.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 349
+reason = "two-way long runs (2 h CBL, neutral, 2000-step vortex); two-way nesting stays fast in era2_nest_twoway.jl"
+
+["era6_inflow_fetch.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 299
+reason = "development-length runs behind synthetic inflow vs a periodic precursor; Transition stays fast in era6_synthetic_inflow.jl, era6_inflow_statistics.jl, era6_inflow_turbulence.jl (development_length/FetchStatistics have no other fast test)"
+
+["era6_outflow_conditions.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 225
+reason = "convective/Orlanski outflow and outgoing-vortex runs; open-boundary outflow stays fast in era6_open_near_boundary.jl, era6_open_boundaries.jl"
+
+["era6_nudging_subsidence.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 151
+reason = "plane-mean nudging and large-scale subsidence runs; LargeScaleForcing stays fast in era6_large_scale_forcing.jl (nudging/subsidence otherwise only in berlin_parent_smoke.jl: #320 must keep a fast check)"
+
+["era6_stratified_channel.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 155
+reason = "Re_tau = 180 stratified channel run vs DNS; NoSlipWall and channel harness stay fast in era6_walls.jl, era6_neutral_abl.jl"
+
+["era6_gabls1.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 152
+reason = "GABLS1 32^3 LES on the examples/sbl driver (driver full-only); stability functions and forcing stay fast in era6_stability_functions.jl, era6_large_scale_forcing.jl"
+
+["era6_flat_plate.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 146
+reason = "laminar and bypass-transition flat-plate runs (its Blasius / fringe unit checks go with them); Transition stays fast in era6_relaminarisation.jl, berlin_numerics.jl"
+
+["era6_collapse.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 140
+reason = "flux-cooled half-channel LES collapse runs (its MSHF closed-form checks go with them); SurfaceExchange stays fast in era5_surface_exchange.jl"
+
+["era6_lasd.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 131
+reason = "scale-dependent Lagrangian model log-law channel runs; the Lagrangian dynamic model stays fast in era6_lagrangian_sgs.jl"
+
+["era6_transition_kh.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 126
+reason = "Kelvin-Helmholtz / Miles-Howard growth-rate runs (128x1x256); Transition stays fast in era6_relaminarisation.jl"
+
+["era6_gabls3.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 113
+reason = "GABLS3 4 h LES on the SBL driver; LargeScaleForcing and wall models stay fast in era6_large_scale_forcing.jl, era6_wall_models.jl"
+
+["era5_heterogeneous_surface.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 106
+reason = "resolved patchy-surface CBL LES vs tiles; SurfaceTiles stays fast in era5_surface_tiles.jl, era5_blending_height.jl"
+
+["era6_sgs_validation.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 72
+reason = "48^3 DNS and 12 LES against filtered DNS; TKE and RSM closures stay fast in era6_tke.jl, era6_reynolds_stress.jl"
+
+["era5_urban_validation.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 71
+reason = "BUBBLE / CAPITOUL multi-season canyon runs; UrbanSurface and BuildingEnergy stay fast in era5_urban_surface.jl, era5_building_energy.jl"
+
+["era6_cbc_decay.jl"]
+tier = "full"
+weight = "heavy"
+exclusive = true
+seconds = 55
+reason = "Comte-Bellot-Corrsin 32^3 benchmark, 8 closures x 3 seeds, CI-budget wall-clock asserts; closures stay fast in era6_amd_vreman.jl, era6_sigma_sgs.jl"
+
+# --- fast, timing-sensitive --------------------------------------------------
+
+["berlin_smoke.jl"]
+weight = "heavy"
+exclusive = true
+seconds = 150
+# asserts its own wall time (elapsed < 300 s), so it runs alone
+
+["era6_apriori_sgs.jl"]
+weight = "heavy"
+exclusive = true
+seconds = 87
+# asserts the filtered-DNS fixture wall time (d.wall < 300 s), so it runs alone
+
+# --- fast, heavy (started first) ---------------------------------------------
+
+["berlin_dynamics.jl"]
+weight = "heavy"
+seconds = 83
+
+["era6_relaminarisation.jl"]
+weight = "heavy"
+seconds = 83
+
+["berlin_numerics.jl"]
+weight = "heavy"
+seconds = 77
+
+["era4_icenucleation.jl"]
+weight = "heavy"
+seconds = 72
+
+["era6_wall_models_channel.jl"]
+weight = "heavy"
+seconds = 65
+
+["berlin_case.jl"]
+weight = "heavy"
+seconds = 64
+
+["era6_large_scale_forcing.jl"]
+weight = "heavy"
+seconds = 60
+
+["era6_neutral_abl.jl"]
+weight = "heavy"
+seconds = 56
+
+["era6_tke.jl"]
+weight = "heavy"
+seconds = 53
+
+["era6_sigma_sgs.jl"]
+weight = "heavy"
+seconds = 53
+
+["berlin_sw_modifiers.jl"]
+weight = "heavy"
+seconds = 49
+
+["berlin_chemistry.jl"]
+weight = "heavy"
+seconds = 48
+
+["era5_anthropogenic_heat.jl"]
+weight = "heavy"
+seconds = 47
+
+["era6_stratified_sgs.jl"]
+weight = "heavy"
+seconds = 45

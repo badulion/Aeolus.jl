@@ -490,4 +490,20 @@ end
     @test c5.bottom.storage > 0
 end
 
+# #327 M6: a Picard iteration that cannot converge down to dt_min is a
+# numerical failure (a step-rejecting driver retries it), not a bug
+@testset "Picard non-convergence throws NumericalFailure (#327 M6)" begin
+    v = carsel_parrish_texture(:loam)
+    col = SoilWaterColumn(uniform_soil_grid(0.5, 50), v; ψ = -100.0, top = HeadTop(0.0),
+                          temperature_dependent = false, maxiter = 1, dt_min = 30.0)
+    err = try
+        step_soil_water!(col, 60.0); nothing
+    catch e
+        e
+    end
+    @test err isa Aeolus.NumericalFailure
+    @test occursin("Picard", sprint(showerror, err))
+    @test Aeolus.is_numerical_failure(err, nothing)
+end
+
 end # SoilColumn testset

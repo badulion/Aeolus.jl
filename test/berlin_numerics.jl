@@ -15,6 +15,9 @@
 #     one to round-off; with diapycnal = 0.1 it rotates and changes θ;
 #   * the SGS stability correction (P55-e, #187) is on by default; it cuts
 #     νv in the capping inversion; `sgs_stability = :none` is the bare closure;
+#   * one shared κ (#234): under `sgs = :amd` the :transport stage diffuses
+#     every passive tracer with the shared sim.κt, not AMD's per-scalar κ
+#     (a design choice, see the SGS theory page), bit for bit;
 #   * configuration errors (halo too small for a scheme, a step! keyword
 #     claimed by two couplings) are caught.
 
@@ -283,6 +286,92 @@ end
                             io = devnull)
         @test BC.find_coupling(off, :scalar_advection).diffusion === nothing
         @test BC.tracer_sgs_diffusion(off) === nothing
+    end
+
+    @testset "one shared κ for every transported tracer, also under :amd (#234)" begin
+        # Design pin. AMD has a per-scalar diffusivity (sgs_tracer_diffusivity!,
+        # Rozema et al. 2015), but the :transport stage deliberately diffuses
+        # every passive tracer with the one shared sim.κt: high-Re turbulence
+        # mixes all passive scalars alike (one turbulent Schmidt number), and
+        # per-scalar κ would mix NO/NO₂/O₃ differently (photostationary state)
+        # and qv/ql differently (q_t, θ_l no longer mixed as conserved
+        # variables). See docs/src/theory/sgs.md, "Every transported scalar
+        # uses κ_t".
+        am = _run_smoke(12; sgs = :amd)
+        c = BC.find_coupling(am, :sgs_amd)
+        @test c !== nothing
+        sim, m = am.sim, am.mesh
+        @test !sim.has_moisture             # qv, ql are case tracers, mixed in :transport
+        sa = BC.find_coupling(am, :scalar_advection)
+        @test sa.diffusion isa BC.TracerSGSDiffusion
+        adv = BC.advected_tracers(am)
+        names = Set(t.name for t in adv)
+        @test issubset((:qv, :ql, BC.AQ_SPECIES...), names)
+        # the diffusivity the stage passes (tracer_diffusivity /
+        # tracer_vertical_diffusivity) is the shared field itself, for every
+        # tracer that does not name its own
+        shared = [t for t in adv if t.diffusivity === nothing]
+        @test issubset((:qv, :ql, BC.AQ_SPECIES...), Set(t.name for t in shared))
+        @test all(t -> BC.tracer_diffusivity(t, am) === sim.κt, shared)
+        @test all(t -> BC.tracer_vertical_diffusivity(t, am) === sim.κt, shared)
+
+        # AMD's own per-scalar κ on this state: what the stage does NOT use
+        foreach(f -> fill_halos!(f, sim.bcs), (sim.u, sim.v, sim.w))
+        fill_halos!(sim.θ, sim.θ_bcs)
+        f = Aeolus.Operators.SGSFields(Field(CellCenter(), m), Field(CellCenter(), m))
+        Aeolus.Operators.sgs_coefficients!(f, c.sgs, sim)
+        I = (m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz)
+        fluid = .!view(am.geom.sm.mask, I...)
+        # θ's AMD κ_t on the same (current) state; sim.κt itself is from the
+        # start of the last step, so the like-for-like comparison is this one
+        κθ = view(f.κh.data, I...)[fluid]
+        @test minimum(κθ) >= 0 && maximum(κθ) > 0
+        κown = Dict{Symbol,Any}()
+        for s in (:qv, :ql, :NO, :NO2, :O3)
+            q = BC.tracer(am, s); fill_halos!(q, sa.diffusion.bcs)
+            κs = Field(CellCenter(), m)
+            Aeolus.Operators.sgs_tracer_diffusivity!(κs, c.sgs, f, sim, q)
+            κown[s] = κs
+            v = view(κs.data, I...)[fluid]
+            sel = κθ .> 0
+            rel = sum(abs.(v[sel] .- κθ[sel])) / sum(κθ[sel])
+            @info @sprintf("  AMD per-scalar κ of %-3s vs θ's κ_t (same state, fluid): Σ|Δκ|/Σκ_t %.0f %%, max %.2f vs %.2f m²/s",
+                           s, 100rel, maximum(v), maximum(κθ))
+        end
+        # ql is zero in this dry smoke state: AMD's zero-gradient fallback
+        # gives it κ = ν_t/Pr_t (= 3ν_t) in every fluid cell, above θ's κ_t
+        ql = view(BC.tracer(am, :ql).data, I...)[fluid]
+        νf = view(f.νh.data, I...)[fluid]
+        κql = view(κown[:ql].data, I...)[fluid]
+        @info @sprintf("  ql: max %.1e kg/kg; its AMD κ / (ν_t/Pr_t) in [%.3f, %.3f] where ν_t > 0, Pr_t = %.3f",
+                       maximum(abs, ql), extrema(κql[νf .> 0] ./ νf[νf .> 0])..., sim.Pr_t)
+        maximum(abs, ql) == 0 && @test κql ≈ νf ./ sim.Pr_t
+        # the alternative is not vacuous: it would split θ from qv and NO from NO₂
+        @test view(κown[:qv].data, I...)[fluid] != κθ
+        @test view(κown[:NO].data, I...)[fluid] != view(κown[:NO2].data, I...)[fluid]
+        n = view(κown[:NO].data, I...)[fluid]; n2 = view(κown[:NO2].data, I...)[fluid]
+        @info @sprintf("  AMD per-scalar κ, NO vs NO₂: Σ|Δκ|/Σκ_NO %.0f %%; qv vs ql: %.0f %%",
+                       100sum(abs.(n .- n2)) / sum(n),
+                       100sum(abs.(view(κown[:qv].data, I...)[fluid] .- view(κown[:ql].data, I...)[fluid])) /
+                           sum(view(κown[:qv].data, I...)[fluid]))
+
+        # the stage itself: from one tracer state, the default stage equals the
+        # stage with every tracer forced onto sim.κt bit for bit, and differs
+        # from one that gives qv AMD's own κ
+        saved = Dict(t.name => copy(t.field.data) for t in adv)
+        restore!() = foreach(t -> (t.field.data .= saved[t.name]), adv)
+        snap() = Dict(t.name => copy(interior_view(t.field)) for t in adv)
+        dt = 2.0
+        BC.run_stage!(sa, am, Val(:transport), dt); qA = snap(); restore!()
+        for t in shared; t.diffusivity = cs -> cs.sim.κt; end
+        BC.run_stage!(sa, am, Val(:transport), dt); qB = snap(); restore!()
+        tqv = only(t for t in adv if t.name === :qv)
+        tqv.diffusivity = _ -> κown[:qv]
+        BC.run_stage!(sa, am, Val(:transport), dt); qC = snap(); restore!()
+        for t in shared; t.diffusivity = nothing; end
+        @test all(s -> qA[s] == qB[s], keys(qA))
+        @test qC[:qv] != qA[:qv]
+        @test all(s -> qC[s] == qA[s], setdiff(keys(qA), (:qv,)))
     end
 
     @testset "configuration errors" begin

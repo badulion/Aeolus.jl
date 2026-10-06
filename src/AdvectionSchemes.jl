@@ -56,7 +56,7 @@ using ..Operators: advect_centered!, momentum_advect!, laplacian, ∂x, ∂y, �
                    add_eddy_diffusion_scalar!, add_surface_flux!, advect_weno5!
 using ..Operators: compute_sgs!, add_sgs_momentum!, sgs_closure
 using ..Simulations
-using ..Simulations: BoussinesqSimulation
+using ..Simulations: BoussinesqSimulation, _dzf
 using ..StretchedGrids: StretchedGrid
 
 export # --- Phase 26: reconstructions -------------------------------------
@@ -73,7 +73,9 @@ export # --- Phase 26: reconstructions -------------------------------------
        # --- Phase 28: conservation diagnostics ----------------------------
        kinetic_energy_budget, scalar_variance_budget, enstrophy,
        # --- N-open-c (#260): advective flux through the open faces --------
-       boundary_scalar_flux
+       boundary_scalar_flux, scalar_face_flux, face_diffusivity, face_inv_spacing,
+       # --- N-nest-e (#263): the flux through one face ---------------------
+       advective_face_flux
 
 # =========================================================================
 # 1. Smoothness indicators
@@ -1306,7 +1308,7 @@ function kinetic_energy_budget(sim::BoussinesqSimulation{T};
     m = sim.mesh
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, gradient_free_bcs(sim.θ_bcs))
+    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
 
     tu = Field(FaceX(), m); tv = Field(FaceY(), m); tw = Field(FaceZ(), m)
     au = Field(FaceX(), m); av = Field(FaceY(), m); aw = Field(FaceZ(), m)
@@ -1603,6 +1605,103 @@ end
 @inline _wflux(W::AbstractVector, k) = @inbounds W[k]
 
 """
+    advective_face_flux(r, ϕd, veld, ax, i, j, k) -> F
+
+The advective flux `u_n ϕ_f` of a cell-centred scalar through **one**
+face: the face of storage index `(i, j, k)` normal to axis `ax` (`1, 2,
+3` for x, y, z), i.e. the face between the cells `(i-1, j, k)` and
+`(i, j, k)` along `ax`. `veld` is the storage array of the face-normal
+velocity (`u.data`, `v.data` or `w.data`), `ϕd` that of the scalar
+(halos filled), `r` a reconstruction descriptor (`Centered2()` is the
+Boussinesq core's `advect_centered!`; see [`boundary_scalar_flux`](@ref)
+for the scheme names), upwinded on the sign of `u_n`.
+
+This is the face flux every flux-form operator of this module uses, and
+the one source of [`boundary_scalar_flux`](@ref) (its boundary faces)
+and of the two-way nest's flux registers (its interface faces, N-nest-e
+#263).
+"""
+@inline function advective_face_flux(r, ϕd::AbstractArray, veld::AbstractArray,
+                                     ax::Int, i::Int, j::Int, k::Int)
+    @inbounds vel = veld[i, j, k]
+    return vel * _advective_face_value(r, ϕd, vel, ax, i, j, k)
+end
+
+# The face value `ϕ_f` of `advective_face_flux` (upwinded on `vel`), for the
+# callers that also need it on its own (the mass-flux correction share of
+# `boundary_scalar_flux`).
+@inline function _advective_face_value(r, ϕd::AbstractArray, vel, ax::Int,
+                                       i::Int, j::Int, k::Int)
+    ax == 1 && return _face_x(r, ϕd, i - 1, j, k, vel)
+    ax == 2 && return _face_y(r, ϕd, i, j - 1, k, vel)
+    return _face_z(r, ϕd, i, j, k - 1, vel)
+end
+
+"""
+    scalar_face_flux(r, ϕd, veld, ax, i, j, k, D = 0, invΔ = 0) -> (Fa, Fd, ϕ_f)
+
+The **one** per-face flux kernel of a cell-centred scalar (#327, M2): the
+advective flux density `Fa = u_n ϕ_f` ([`advective_face_flux`](@ref):
+`ϕ_f` reconstructed by `r`, upwinded on `u_n = veld[i, j, k]`; `r =
+nothing` for no advection, `Fa = ϕ_f = 0`) and the diffusive flux density
+
+    Fd = −D (ϕ[i, j, k] − ϕ[i − e_ax]) · invΔ
+
+through the face of storage index `(i, j, k)` normal to axis `ax`, with
+the face diffusivity `D` ([`face_diffusivity`](@ref)) and the inverse
+centre-to-centre distance `invΔ` ([`face_inv_spacing`](@ref)) — the
+two-point face form of the Laplacian and of
+`add_eddy_diffusion_scalar!`. Positive along `+ax`.
+
+Its two users book exactly the same numbers: [`boundary_scalar_flux`](@ref)
+(the open-face budgets, among them the Berlin heat ledger) and the flux
+registers of a two-way nest (`Nesting.NestFluxRegisters`).
+"""
+@inline function scalar_face_flux(r, ϕd::AbstractArray, veld::AbstractArray,
+                                  ax::Int, i::Int, j::Int, k::Int, D = 0.0, invΔ = 0.0)
+    @inbounds vel = veld[i, j, k]
+    ϕf = _advective_face_value(r, ϕd, vel, ax, i, j, k)
+    Fd = iszero(D) ? zero(ϕf * vel) : -D * _face_jump(ϕd, ax, i, j, k) * invΔ
+    return vel * ϕf, Fd, ϕf
+end
+@inline _advective_face_value(::Nothing, ϕd::AbstractArray, vel, ax::Int, i::Int, j::Int,
+                              k::Int) = zero(eltype(ϕd))
+
+# ϕ[i, j, k] − ϕ[the cell below along ax]
+@inline function _face_jump(ϕd, ax::Int, i::Int, j::Int, k::Int)
+    @inbounds return ax == 1 ? ϕd[i, j, k] - ϕd[i - 1, j, k] :
+                     ax == 2 ? ϕd[i, j, k] - ϕd[i, j - 1, k] : ϕd[i, j, k] - ϕd[i, j, k - 1]
+end
+
+"""
+    face_diffusivity(ν, κ, s, ax, i, j, k) -> D
+
+The diffusivity of [`scalar_face_flux`](@ref) on the face `(i, j, k)`
+normal to `ax`: `D = ν + s · ½(κ_L + κ_R)`, the cell-centred coefficient
+`κ` (a `Field` or its storage array, halos filled; `nothing` for none)
+averaged linearly to the face, as in `add_eddy_diffusion_scalar!`; `s` the
+closure's scale (`1/Prₜ` for an eddy-viscosity closure, see
+`Operators.sgs_scalar_face_diffusivity`).
+"""
+@inline face_diffusivity(ν, ::Nothing, s, ax::Int, i::Int, j::Int, k::Int) = ν
+@inline face_diffusivity(ν, κ::Field, s, ax::Int, i::Int, j::Int, k::Int) =
+    face_diffusivity(ν, κ.data, s, ax, i, j, k)
+@inline function face_diffusivity(ν, κ::AbstractArray, s, ax::Int, i::Int, j::Int, k::Int)
+    @inbounds κl = ax == 1 ? κ[i - 1, j, k] : ax == 2 ? κ[i, j - 1, k] : κ[i, j, k - 1]
+    @inbounds return ν + s * (0.5 * (κl + κ[i, j, k]))
+end
+
+"""
+    face_inv_spacing(mesh, ax, k) -> 1/Δ
+
+The inverse distance between the two cell centres a face normal to `ax`
+separates: `1/Δx`, `1/Δy`, or `1/Δz_f(k)` (stretched-aware; `k` the
+storage index of the face).
+"""
+@inline face_inv_spacing(g, ax::Int, k::Int) =
+    ax == 1 ? 1 / g.dx : ax == 2 ? 1 / g.dy : 1 / _dzf(g, k)
+
+"""
     boundary_scalar_flux(sim, ϕ; scheme = :centered, bcs = sim.θ_bcs,
                          weights = nothing, fill = true,
                          diffusivity = nothing, levels = nothing,
@@ -1643,9 +1742,12 @@ N-open-d (#262) adds three keywords for the budgets of an open domain:
   gradient; mirror and wall halos carry none, and a fixed-gradient
   `FluxBC` top is booked by its own meter), with the face diffusivity of
   the core's kernels: `K = ν + ½(κ_in + κ_out)`, `κh` on the lateral
-  faces and `κv` on the top (`κh`, `κv` cell-centred `Field`s with
-  filled halos, or `nothing`; `κv` defaults to `κh`). An optional
-  `weights` entry weights the diffusive part instead of `weights`;
+  faces and `κv` on the top and an open bottom (`κh`, `κv` cell-centred
+  `Field`s with filled halos, or `nothing`; `κv` defaults to `κh`; an
+  optional `scale` entry multiplies the averaged coefficient, `1/Prₜ` for
+  the `(νt, νt, 1/Prₜ)` form of `Operators.sgs_scalar_face_diffusivity`).
+  An optional `weights` entry weights the diffusive part instead of
+  `weights`. Vertical gradients use the stretched-aware centre distance;
 * `levels` (a vector of length `Nz`) receives, per interior level `k`,
   the (weighted) outward flux into that level — its lateral faces, plus
   the top face for `k = Nz` and the bottom face for `k = 1` — so a budget
@@ -1669,7 +1771,9 @@ not what left the domain. The face value of the correction split is then
 A mesh whose halo along an axis with an [`AbstractOpenBoundary`](@ref)
 face is shallower than `required_halo(scheme)` throws an `ArgumentError`.
 
-This is the only boundary-flux function of the code base: the
+Every face flux is [`scalar_face_flux`](@ref), the kernel the two-way
+nest's flux registers use too (#327, M2). This is the only
+boundary-flux function of the code base: the
 nesting budgets (N-nest-d #261, N-nest-e #263), the open-boundary Berlin
 option (N-open-d #262) and the nested Berlin ledger (N-berlin-nest #265)
 use it.
@@ -1683,14 +1787,11 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     g = mesh(ϕ)
     vb = sim.bcs
     H = required_halo(r)
-    for (side, face, Hs) in ((:west, vb.west, g.Hx), (:east, vb.east, g.Hx),
-                             (:south, vb.south, g.Hy), (:north, vb.north, g.Hy),
-                             (:top, vb.top, g.Hz))
-        face isa AbstractOpenBoundary && Hs < H &&
-            throw(ArgumentError("boundary_scalar_flux: the open face :$side has a halo of " *
-                                "$Hs layers, shallower than required_halo = $H of " *
-                                "$(scheme_name(r))"))
-    end
+    # one call per face, not a loop over a heterogeneous tuple (which boxes
+    # its elements: an allocation on every call, #327)
+    _check_open_halo(:west, vb.west, g.Hx, H, r); _check_open_halo(:east, vb.east, g.Hx, H, r)
+    _check_open_halo(:south, vb.south, g.Hy, H, r); _check_open_halo(:north, vb.north, g.Hy, H, r)
+    _check_open_halo(:bottom, vb.bottom, g.Hz, H, r); _check_open_halo(:top, vb.top, g.Hz, H, r)
     _check_halo(r, g)
     levels === nothing || length(levels) == g.Nz ||
         throw(DimensionMismatch("boundary_scalar_flux: levels needs Nz = $(g.Nz) entries"))
@@ -1708,8 +1809,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     ii, jj, kk = interior(g)
     k0 = first(kk) - 1
     Ax = g.dy * g.dz; Ay = g.dx * g.dz; Az = g.dx * g.dy
-    # the diffusive part: ν + ½(κ_in + κ_out) on the open scalar faces
-    dν, Kh, Kv, Dc, Df = _diffusive_parts(diffusivity, Wc, Wf)
+    # the diffusive part: ν + s·½(κ_in + κ_out) on the open scalar faces
+    dν, Kh, Kv, ks, Dc, Df = _diffusive_parts(diffusivity, Wc, Wf)
     # the mass-flux correction of each open velocity face: (δ, corrected?(a, b, u_n))
     cW, cE = _correction_of(vb.west, g), _correction_of(vb.east, g)
     cS, cN = _correction_of(vb.south, g), _correction_of(vb.north, g)
@@ -1718,77 +1819,57 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     dE_ = diffusivity !== nothing && bcs.east isa AbstractOpenBoundary
     dS_ = diffusivity !== nothing && bcs.south isa AbstractOpenBoundary
     dN_ = diffusivity !== nothing && bcs.north isa AbstractOpenBoundary
+    dB_ = diffusivity !== nothing && bcs.bottom isa AbstractOpenBoundary
     dT_ = diffusivity !== nothing && bcs.top isa AbstractOpenBoundary
     fW = fE = fS = fN = fB = fT = zero(T)
     @inline addl!(v, k, x) = (v === nothing || (@inbounds v[k - k0] += x); nothing)
+    # every face flux is _bsf_face_flux (scalar_face_flux, diffusive part only
+    # where the scalar face is open): a top-level function with its arrays as
+    # arguments, not a captured closure, which did not infer and allocated
+    # on every face (#327)
     if !(vb.west isa Periodic)
         iw = first(ii); ie = last(ii) + 1
-        idx = 1 / g.dx
         @inbounds for k in kk, (b, j) in enumerate(jj)
-            w = _wflux(Wc, k) * Ax
-            uw = ud[iw, j, k]; ue = ud[ie, j, k]
-            φw = _face_or_flux(Fxd, iw, j, k, uw, _face_x(r, ϕd, iw - 1, j, k, uw))
-            φe = _face_or_flux(Fxd, ie, j, k, ue, _face_x(r, ϕd, ie - 1, j, k, ue))
-            aw = -w * uw * φw; ae = w * ue * φe
-            if dW_
-                aw += _wflux(Dc, k) * Ax * (dν + 0.5 * (_κ(Kh, iw, j, k) + _κ(Kh, iw - 1, j, k))) *
-                      (ϕd[iw, j, k] - ϕd[iw - 1, j, k]) * idx
-            end
-            if dE_
-                ae -= _wflux(Dc, k) * Ax * (dν + 0.5 * (_κ(Kh, ie - 1, j, k) + _κ(Kh, ie, j, k))) *
-                      (ϕd[ie, j, k] - ϕd[ie - 1, j, k]) * idx
-            end
+            w = _wflux(Wc, k) * Ax; wd_ = _wflux(Dc, k) * Ax
+            Fa_w, Fd_w, φw = _bsf_face_flux(r, ϕd, ud, 1, iw, j, k, dν, Kh, ks, g, dW_, Fxd)
+            Fa_e, Fd_e, φe = _bsf_face_flux(r, ϕd, ud, 1, ie, j, k, dν, Kh, ks, g, dE_, Fxd)
+            aw = -(w * Fa_w + wd_ * Fd_w); ae = w * Fa_e + wd_ * Fd_e
             fW += aw; fE += ae
             addl!(levels, k, aw + ae)
             if correction_levels !== nothing
-                _corrected(cW, b, k - k0, -uw) && addl!(correction_levels, k, -cW[1] * w * φw)
-                _corrected(cE, b, k - k0, ue) && addl!(correction_levels, k, -cE[1] * w * φe)
+                _corrected(cW, b, k - k0, -ud[iw, j, k]) && addl!(correction_levels, k, -cW[1] * w * φw)
+                _corrected(cE, b, k - k0, ud[ie, j, k]) && addl!(correction_levels, k, -cE[1] * w * φe)
             end
         end
     end
     if !(vb.south isa Periodic)
         js = first(jj); jn = last(jj) + 1
-        idy = 1 / g.dy
         @inbounds for k in kk, (a, i) in enumerate(ii)
-            w = _wflux(Wc, k) * Ay
-            vs = vd[i, js, k]; vn = vd[i, jn, k]
-            φs = _face_or_flux(Fyd, i, js, k, vs, _face_y(r, ϕd, i, js - 1, k, vs))
-            φn = _face_or_flux(Fyd, i, jn, k, vn, _face_y(r, ϕd, i, jn - 1, k, vn))
-            as = -w * vs * φs; an = w * vn * φn
-            if dS_
-                as += _wflux(Dc, k) * Ay * (dν + 0.5 * (_κ(Kh, i, js, k) + _κ(Kh, i, js - 1, k))) *
-                      (ϕd[i, js, k] - ϕd[i, js - 1, k]) * idy
-            end
-            if dN_
-                an -= _wflux(Dc, k) * Ay * (dν + 0.5 * (_κ(Kh, i, jn - 1, k) + _κ(Kh, i, jn, k))) *
-                      (ϕd[i, jn, k] - ϕd[i, jn - 1, k]) * idy
-            end
+            w = _wflux(Wc, k) * Ay; wd_ = _wflux(Dc, k) * Ay
+            Fa_s, Fd_s, φs = _bsf_face_flux(r, ϕd, vd, 2, i, js, k, dν, Kh, ks, g, dS_, Fyd)
+            Fa_n, Fd_n, φn = _bsf_face_flux(r, ϕd, vd, 2, i, jn, k, dν, Kh, ks, g, dN_, Fyd)
+            as = -(w * Fa_s + wd_ * Fd_s); an = w * Fa_n + wd_ * Fd_n
             fS += as; fN += an
             addl!(levels, k, as + an)
             if correction_levels !== nothing
-                _corrected(cS, a, k - k0, -vs) && addl!(correction_levels, k, -cS[1] * w * φs)
-                _corrected(cN, a, k - k0, vn) && addl!(correction_levels, k, -cN[1] * w * φn)
+                _corrected(cS, a, k - k0, -vd[i, js, k]) && addl!(correction_levels, k, -cS[1] * w * φs)
+                _corrected(cN, a, k - k0, vd[i, jn, k]) && addl!(correction_levels, k, -cN[1] * w * φn)
             end
         end
     end
     if !(vb.bottom isa Periodic)
         kb = first(kk); kt = last(kk) + 1
         wb_ = _wflux(Wf, kb) * Az; wt_ = _wflux(Wf, kt) * Az
-        dt_ = _wflux(Df, kt) * Az
-        idz = 1 / g.dz
+        db_ = _wflux(Df, kb) * Az; dt_ = _wflux(Df, kt) * Az
         @inbounds for (b, j) in enumerate(jj), (a, i) in enumerate(ii)
-            wb = wd[i, j, kb]; wt = wd[i, j, kt]
-            φt = _face_or_flux(Fzd, i, j, kt, wt, _face_z(r, ϕd, i, j, kt - 1, wt))
-            ab = -wb_ * wb * _face_or_flux(Fzd, i, j, kb, wb, _face_z(r, ϕd, i, j, kb - 1, wb))
-            at = wt_ * wt * φt
-            if dT_
-                at -= dt_ * (dν + 0.5 * (_κ(Kv, i, j, kt - 1) + _κ(Kv, i, j, kt))) *
-                      (ϕd[i, j, kt] - ϕd[i, j, kt - 1]) * idz
-            end
+            Fa_b, Fd_b, _ = _bsf_face_flux(r, ϕd, wd, 3, i, j, kb, dν, Kv, ks, g, dB_, Fzd)
+            Fa_t, Fd_t, φt = _bsf_face_flux(r, ϕd, wd, 3, i, j, kt, dν, Kv, ks, g, dT_, Fzd)
+            ab = -(wb_ * Fa_b + db_ * Fd_b)
+            at = wt_ * Fa_t + dt_ * Fd_t
             fB += ab; fT += at
             addl!(levels, kb, ab); addl!(levels, kt - 1, at)
             if correction_levels !== nothing
-                _corrected(cT, a, b, wt) && addl!(correction_levels, kt - 1, -cT[1] * wt_ * φt)
+                _corrected(cT, a, b, wd[i, j, kt]) && addl!(correction_levels, kt - 1, -cT[1] * wt_ * φt)
             end
         end
     end
@@ -1796,23 +1877,43 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
             total = fW + fE + fS + fN + fB + fT)
 end
 
-# The face value whose flux u·φ the transport used: the given face flux
-# F / u (the limited flux of advect_positive!), or the reconstruction `φr`
-# (no face fluxes given, or u = 0: no flux either way).
-@inline _face_or_flux(::Nothing, i, j, k, u, φr) = φr
-@inline _face_or_flux(F::AbstractArray, i, j, k, u, φr) = iszero(u) ? φr : (@inbounds F[i, j, k]) / u
+# The halo of an open face of boundary_scalar_flux must hold the stencil.
+@inline _check_open_halo(side, face, Hs, H, r) =
+    face isa AbstractOpenBoundary && Hs < H &&
+        throw(ArgumentError("boundary_scalar_flux: the open face :$side has a halo of " *
+                            "$Hs layers, shallower than required_halo = $H of " *
+                            "$(scheme_name(r))"))
 
-# The diffusive part of boundary_scalar_flux: (ν, κh, κv, Wc, Wf).
-_diffusive_parts(::Nothing, Wc, Wf) = (0.0, nothing, nothing, Wc, Wf)
+# One face flux of boundary_scalar_flux: scalar_face_flux with the diffusive
+# part only where the scalar face is open (`on`). Top level, with every array
+# an argument, so it specialises and inlines (#327).
+@inline function _bsf_face_flux(r, ϕd, vel, ax, i, j, k, dν, K, ks, g, on, F)
+    Fa, Fd, φ = scalar_face_flux(r, ϕd, vel, ax, i, j, k,
+                                 on ? face_diffusivity(dν, K, ks, ax, i, j, k) : 0.0,
+                                 face_inv_spacing(g, ax, k))
+    return _face_or_flux(F, i, j, k, (@inbounds vel[i, j, k]), Fa, Fd, φ)
+end
+
+# The advective flux the transport used (`face_fluxes`, #265): the given
+# face flux F and its face value F / u (the limited flux of
+# advect_positive!), or the reconstruction (no face fluxes, or u = 0).
+@inline _face_or_flux(::Nothing, i, j, k, u, Fa, Fd, φ) = (Fa, Fd, φ)
+@inline function _face_or_flux(F::AbstractArray, i, j, k, u, Fa, Fd, φ)
+    iszero(u) && return (Fa, Fd, φ)
+    @inbounds f = F[i, j, k]
+    return (oftype(Fa, f), Fd, oftype(φ, f / u))
+end
+
+# The diffusive part of boundary_scalar_flux: (ν, κh, κv, scale, Wc, Wf).
+_diffusive_parts(::Nothing, Wc, Wf) = (0.0, nothing, nothing, 1.0, Wc, Wf)
 function _diffusive_parts(d::NamedTuple, Wc, Wf)
     ν = Float64(get(d, :ν, 0.0))
     κh = get(d, :κh, nothing)
     κv = get(d, :κv, κh)
+    sc = Float64(get(d, :scale, 1.0))
     Dc, Df = haskey(d, :weights) && d.weights !== nothing ? d.weights : (Wc, Wf)
-    return ν, κh, κv, Dc, Df
+    return ν, κh, κv, sc, Dc, Df
 end
-@inline _κ(::Nothing, i, j, k) = 0.0
-@inline _κ(κ::Field, i, j, k) = @inbounds κ.data[i, j, k]
 
 # The last mass-flux correction of an open velocity face: (δ, mode, fluid)
 # of its normal-velocity plane, or nothing (closed face, or no correction).

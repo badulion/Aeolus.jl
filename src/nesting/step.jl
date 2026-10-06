@@ -123,12 +123,16 @@ averages are weighted by the shared reference mass (`ρ̄` or `ρ̄θ̄`, see
 [`restrict_to_parent!`](@ref)). `solid` (the child's IBM
 [`SolidMask`](@ref) or a Boolean `solid` array) makes every member
 solid-aware: building cells and faces are left out of the averages.
+A mixed Boussinesq / sound-proof pair throws an `ArgumentError` (no
+consistent measure, #327).
 """
 function restrict_state_to_parent!(psim::_NestSim, csim::_NestSim, nest::NestedGrid,
                                    s::Union{Nothing,NestInterpState}=nothing;
                                    solid=nothing)
+    _check_two_way_pair(psim, csim, "restrict_state_to_parent!", s)
     meas = s === nothing ? _sim_measure(nest, psim, csim) : s.measure
-    χ = _fluid(nest, solid)                   # computed once for the whole set
+    χf = _fluid(nest, solid)                  # computed once for the whole set
+    χ = χf === nothing ? nothing : _FluidMask(χf)
     restrict_to_parent!(psim.θ, csim.θ, nest; measure=meas, solid=χ)
     if s !== nothing
         for i in eachindex(s.names)
@@ -221,7 +225,9 @@ step, as recorded by the most recent [`step_nested!`](@ref).
     This is the discrete statement that the parent and the child agree on
     the volume flux through the interface; `apply_flux_correction!` drives
     it to machine zero, and skipping the correction leaves it at the size
-    of the genuine coarse/fine disagreement.
+    of the genuine coarse/fine disagreement. `:mass_before_correction` is
+    the value before the correction and `:mass_after_projection` the value
+    after the two-way re-projection of the parent ([`TwoWayFeedback`](@ref)).
   * `:theta`, `:momentum_x`, and every other scalar of the step's field
     set (`:qv`, tracers) — relative change of
     [`composite_integral`](@ref) over the step.

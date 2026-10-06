@@ -110,6 +110,13 @@ Aeolus.TimeIntegration.step_adaptive!) before it tries a step. Default
 `nothing` (stateless). A stateful closure returns a deep copy (or copies into
 a buffer it owns) so that [`restore_sgs_state!`](@ref) can roll a rejected
 step back bit for bit.
+
+**Serialisable** (#245): the snapshot must be *self-contained* — plain
+arrays, numbers and tuples of them, and `restore_sgs_state!(c, s)` must read
+nothing but `s` — because a checkpoint stores a deep copy of it and restores
+it into a freshly constructed closure in another process
+([`checkpoint!`](@ref Aeolus.IO.checkpoint!)). Every memory the closure's
+next step reads (not only what `advance_sgs!` writes) belongs in it.
 """
 sgs_state(::AbstractSGSClosure) = nothing
 
@@ -184,6 +191,28 @@ function add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim)
     end
     return nothing
 end
+
+"""
+    sgs_scalar_face_diffusivity(c::AbstractSGSClosure, f::SGSFields, sim) -> (Kh, Kv, s) or nothing
+
+The face form of [`add_sgs_scalar!`](@ref) for the closures whose scalar
+flux is diagonal: the SGS flux through a face normal to x or y is
+`−s · ½(Kh_L + Kh_R) (ϕ_R − ϕ_L)/Δ`, and through a z face the same with
+`Kv` (the cell-centred coefficient fields, halos filled, averaged
+linearly to the face — the kernel of
+[`add_eddy_diffusion_scalar!`](@ref)). Default `(f.κh, f.κv, 1)`; an
+eddy-viscosity closure gives `(νt, νt, 1/Prₜ)` (its tendency is formed
+with the factor after the flux divergence, so a flux built from this
+differs from the tendency's by round-off only). `nothing` for a closure
+whose scalar flux is a full tensor ([`IsentropicDiffusion`](@ref), the
+Reynolds-stress closure): it has no two-point face form.
+
+Every closure that adds an `add_sgs_scalar!` method must add the
+matching method here. Used by the flux registers of a two-way nest
+(`Nesting`, N-nest-e #263), which must book exactly the flux the
+tendency used.
+"""
+sgs_scalar_face_diffusivity(::AbstractSGSClosure, f::SGSFields, sim) = (f.κh, f.κv, 1.0)
 
 """
     sgs_tracer_diffusivity!(κ, c::AbstractSGSClosure, f::SGSFields, sim, ϕ) -> Field
@@ -314,6 +343,8 @@ end
 
 add_sgs_scalar!(tϕ, ϕ, c::AbstractEddyViscosityClosure, f::SGSFields, sim) =
     (add_eddy_diffusion_scalar!(tϕ, ϕ, f.νh, turbulent_prandtl(c, sim)); nothing)
+sgs_scalar_face_diffusivity(c::AbstractEddyViscosityClosure, f::SGSFields, sim) =
+    (f.νh, f.νh, 1 / turbulent_prandtl(c, sim))
 
 """
     StaticSmagorinsky(C_s = 0.17; Pr_t = nothing)
@@ -433,3 +464,49 @@ closure added later (AMD, P55-d) extends it.
 """
 laminar_consistent(::AbstractSGSClosure) = false
 laminar_consistent(::Nothing) = false
+
+# -------------------------------------------------------------------------
+# N-inflow-b (#258): the subgrid TKE of any closure
+# -------------------------------------------------------------------------
+
+"""
+    sgs_tke!(e::Field{CellCenter}, c, sim; c_k = 0.1) -> e
+
+Fill the interior of `e` with the closure's **subgrid turbulent kinetic
+energy** ``e = \\tfrac12\\overline{u_i'u_i'}^{\\,\\rm SGS}`` (m² s⁻²) for the
+current state of `sim`. Every closure answers through this one generic, so
+a consumer (the inflow statistics of `Transition`, N-inflow-b #258) never
+needs to know which closure the parent runs:
+
+* a prognostic closure returns its memory: `PrognosticSGS.TKEClosure` its
+  ``e``, `PrognosticSGS.ReynoldsStressClosure` ``\\tfrac12τ_{ii}``;
+* every other closure (the default method, and `c = nothing` for a
+  simulation's built-in Smagorinsky) returns **its own estimate**: the
+  Deardorff (1980) eddy viscosity ``ν_t = c_k\\,l\\,\\sqrt e`` with the
+  neutral mixing length ``l = Δ = (ΔxΔyΔz)^{1/3}`` inverted,
+  ``e = (ν_t/(c_kΔ))^2``, ``c_k = 0.1`` (Moeng 1984). ``ν_t`` is the
+  horizontal viscosity the closure last wrote (`sgs_fields(c, sim).νh`,
+  or `sim.νt`), so call it after a step (or after `sgs_coefficients!`).
+  For Smagorinsky, ``ν_t = (C_sΔ)^2|S|`` and the estimate is the local
+  equilibrium value ``e = (C_s^2Δ|S|/c_k)^2``.
+
+References: Deardorff, J. W. (1980). Stratocumulus-capped mixed layers
+derived from a three-dimensional model. *Boundary-Layer Meteorol.*, 18,
+495-527. Moeng, C.-H. (1984). A large-eddy-simulation model for the study
+of planetary boundary-layer turbulence. *J. Atmos. Sci.*, 41, 2052-2062.
+"""
+function sgs_tke!(e::Field{CellCenter}, c, sim; c_k::Real = 0.1)
+    ν = c === nothing ? sim.νt : sgs_fields(c, sim).νh
+    return _tke_from_viscosity!(e, ν, c_k)
+end
+
+function _tke_from_viscosity!(e::Field, ν::Field, c_k::Real)
+    g = mesh(e)
+    Δ = (g.dx * g.dy * g.dz)^(1 / 3)
+    s = 1 / (c_k * Δ)
+    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
+        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
+        e.data[I, J, K] = (max(ν.data[I, J, K], 0) * s)^2
+    end
+    return e
+end

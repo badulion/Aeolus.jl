@@ -89,6 +89,7 @@ using ..Radiosity: Radiosity, RadiosityScene, ViewFactors, Facet, LongwaveRespon
                    solve_shortwave, set_temperature!
 import ..Radiosity: facet_temperatures, nfacets
 using LinearAlgebra: I, lu!, mul!, dot, norm
+using ..TimeIntegration: NumericalFailure   # a diverged solver (#327 M6)
 
 export ThermalMaterial, thermal_material, thermal_material_names,
        volumetric_heat_capacity, thermal_diffusivity, thermal_admittance,
@@ -1410,8 +1411,9 @@ function _solve_scene_iterative(s::_SceneStep{T}, lhs, R, pinned, y, Φ) where {
         its, res = _gmres!(x, op!, rhs; tol = s.tol * max(norm(rhs), one(T)),
                            restart = min(n, 30), maxiter = s.maxiter)
         res <= s.tol * max(norm(rhs), one(T)) ||
-            error("step_urban_facets!: GMRES did not converge in $(s.maxiter) iterations " *
-                  "(residual $res K); raise `maxiter` or use `solver = :direct`")
+            throw(NumericalFailure("step_urban_facets!: GMRES did not converge in " *
+                                   "$(s.maxiter) iterations (residual $res K); raise " *
+                                   "`maxiter` or use `solver = :direct`"))
         s.iterations[] = its
         s.residual[] = res
     end

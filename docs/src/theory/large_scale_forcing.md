@@ -443,7 +443,7 @@ carries as `(:dynamics, :top_flux)` in the air-heat ledger. θ is **not**
 damped in the child: its sponge starts at 150 m, so a constant-target
 damping would clamp the top 50 m (#238, approach B), and in the nested
 run the child top comes from the parent. The θ damping layer runs in the
-parent (N-parent-e). See [The Berlin case](../design/berlin_case.md#The-θ-top).
+parent (N-parent-e). See [The Berlin case](../design/berlin_ledgers.md#The-θ-top).
 
 ## Users
 

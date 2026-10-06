@@ -64,9 +64,6 @@ end
 
 const _CCField{T,M} = Field{CellCenter, T, Array{T,3}, M}
 
-"Simulations a nest can couple: the Boussinesq core (uniform or z-stretched) and the sound-proof `MassWeightedSimulation`s (anelastic, pseudo-incompressible)."
-const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
-
 """
     NestInterpState
 
@@ -176,10 +173,38 @@ _sim_measure(nest, p::MassWeightedSimulation, c::MassWeightedSimulation) =
     nest_measure(nest, p, c)
 _sim_measure(nest, p, c) = nothing          # a mixed pair: the volume measure
 
-# A Boussinesq pair, or a mixed pair (a Boussinesq parent and a sound-proof
-# child, or the reverse; N-nest-c #257), which has no common reference mass:
-# the volume measure.
-function nest_interp_state(nest::NestedGrid, psim::_NestSim, csim::_NestSim; scalars=())
+# Same dynamical-core family (the pairs the restriction / feedback and the
+# mass measure are defined for).
+_same_core(::BoussinesqSimulation, ::BoussinesqSimulation) = true
+_same_core(::MassWeightedSimulation, ::MassWeightedSimulation) = true
+_same_core(p, c) = false
+
+# The guard of every child → parent transfer (#327, M1). A mixed pair (a
+# Boussinesq parent with a sound-proof child, or the reverse) has no
+# consistent measure: the restriction would average with the volume where
+# the sound-proof grid needs its reference mass, and the flux registers
+# would mix a volume flux with a mass flux. A sound-proof pair must carry
+# the reference-mass measure (a state built with `nest_interp_state(nest)`
+# has the volume measure). One-way nesting of a mixed pair is fine: the
+# parent only provides boundary data.
+function _check_two_way_pair(p, c, what::AbstractString, s = nothing)
+    _same_core(p, c) ||
+        throw(ArgumentError("$what: two-way feedback needs parent and child of the same " *
+                            "core family (two BoussinesqSimulations, or two " *
+                            "MassWeightedSimulations sharing one reference profile); got " *
+                            "$(nameof(typeof(p))) and $(nameof(typeof(c))). A mixed pair " *
+                            "can only be nested one-way (feedback = :one_way)"))
+    s !== nothing && p isa MassWeightedSimulation && s.measure === nothing &&
+        throw(ArgumentError("$what: a sound-proof pair needs the reference-mass measure; " *
+                            "build the state with nest_interp_state(nest, parent, child)"))
+    return nothing
+end
+
+# A Boussinesq pair, or a mixed pair (e.g. a Boussinesq parent providing
+# one-way boundary data to a sound-proof child, see NestedRun): volume
+# measure. A sound-proof pair is the more specific method above.
+function nest_interp_state(nest::NestedGrid, psim::_NestSim,
+                           csim::_NestSim; scalars=())
     _moist(psim) == _moist(csim) ||
         error("nest_interp_state: parent has_moisture = $(_moist(psim)) but child " *
               "has_moisture = $(_moist(csim)); a nest must carry qv on both grids or " *

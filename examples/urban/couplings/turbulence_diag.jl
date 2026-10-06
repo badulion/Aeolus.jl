@@ -146,7 +146,7 @@ function turbulence_diagnostics!(c::TurbulenceDiag, case)
     copyto!(c.qv.data, tracer(case, :qv).data)
     fill_halos!(c.u, c.bcs); fill_halos!(c.v, c.bcs); fill_halos!(c.w, c.bcs)
     fill_halos!(c.θ, c.θ_bcs)
-    fill_halos!(c.qv, Aeolus.BoundaryConditions.gradient_free_bcs(c.θ_bcs))   # not θ's top gradient
+    fill_halos!(c.qv, Aeolus.BoundaryConditions.passive_scalar_bcs(c.θ_bcs))   # not θ's top gradient
     cfg = case.cfg
     buoyancy_frequency_squared!(c.N2f, c.θ, c.qv; θ₀ = cfg.θ₀, g = cfg.g)
     gradient_richardson!(c.Rif, c.N2f, c.u, c.v, c.w)

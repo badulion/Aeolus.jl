@@ -66,13 +66,21 @@ module Transition
 using ..Grids: RegularGrid, CellCenter, FaceX, FaceY, FaceZ, interior, xnodes, ynodes, znodes
 using ..Fields: Field, interior_view, mesh
 using ..BoundaryConditions: fill_halos!, NoSlipWall, FreeStreamBoundary, FieldBoundaryConditions
+using ..BoundaryConditions: Periodic                                       # N-inflow-d
 using ..Operators: _vorticity_at, _strain_at
 using ..Operators: DampingProfile, NordstromRamp, damping_rate, smooth_step, _add_damping!   # P59-d
 using ..Simulations: BoussinesqSimulation
 import Random
 using ..CutCell: wall_shear_stress
 using ..MoistThermodynamics: ThermodynamicConstants
-using ..SurfaceExchange: obukhov_length, bulk_richardson, SurfaceConstants
+using ..SurfaceExchange: obukhov_length, bulk_richardson, SurfaceConstants, von_karman
+using ..Operators: sgs_tke!, sgs_fields                                    # N-inflow-b
+using LinearAlgebra: Symmetric, Diagonal, eigen, mul!, dot
+using FFTW: plan_rfft, plan_irfft
+using ..BoundaryConditions: AbstractBoundaryData, OpenPlane, OpenBoundary,           # N-inflow-c
+                            has_open_boundaries, open_boundary_states, _face_local
+import ..BoundaryConditions: boundary_values!
+using ..Nesting: NestedRun, NestBoundaryData, nest_covered_range
 
 export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
@@ -88,6 +96,20 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
        onset_reynolds_theta_mayle, onset_reynolds_theta_abu_ghannam_shaw,
        FreeStreamDisturbance, von_karman_spectrum, disturbance_velocity!,
        disturbance_fringe_update
+# N-inflow-a (#252): synthetic inflow turbulence (digital filter, Lund transform)
+export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_generator_state!,
+       inflow_plane_size, DigitalFilterGenerator, digital_filter_kernel, lund_coefficients, apply_lund!,
+       FreeStreamInflow, disturbance_velocity, disturbance_covariance
+# N-inflow-b (#258): statistics for the synthetic inflow (parent-resolved, parametrized)
+export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statistics!,
+       inflow_projection_log, realizable_stress, inflow_lund_coefficients,
+       ParentResolvedStatistics, inflow_stress_parts, ParametrizedStatistics, parametrized_scales
+# N-inflow-c (#264): turbulence on the inflow faces of an open-boundary child
+export InflowTurbulence, inflow_normal_length, set_integral_time!, remove_inflow_turbulence!,
+       refresh_inflow_lengths!, added_mass_flux, injected_ke_flux, inflow_perturbation,
+       feedback_exclude_width
+# N-inflow-d (#266): the development length (fetch) behind a synthetic inflow
+export FetchStatistics, accumulate_fetch!, fetch_profiles, development_length
 # P59-e (#195): relaminarisation in strongly stable stratification
 export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
 
@@ -480,11 +502,16 @@ negative for cooling; default the simulation's prescribed bottom flux):
   * ``h/L`` with the Obukhov length of the surface flux,
     ``L = u_τ^2 θ_0/(κ g θ_*)``, ``θ_* = -\\overline{w'θ'}_0/u_τ``
     (`SurfaceExchange.obukhov_length` with the simulation's ``g`` and
-    ``θ_0``; positive for cooling). Nieuwstadt (2005) finds the
+    ``θ_0``; positive for cooling). This ``L`` includes ``κ``.
+    Nieuwstadt (2005) defines ``L`` without ``κ`` and finds that the
     turbulence of an open channel collapses for ``h/L ≳ 1.23`` at
-    ``Re_τ = 360``;
-  * ``L^+ = L u_τ/ν``, the Obukhov length in wall units; Flores & Riley
-    (2011) find collapse for ``L^+ ≲ 100`` (``L^+ = Re_τ/(h/L)``);
+    ``Re_τ = 360`` in his convention, i.e. ``h/L ≳ 1.23 κ ≈ 0.49`` in
+    this one;
+  * ``L^+ = L u_τ/ν``, the Obukhov length in wall units (``L^+ = Re_τ/(h/L)``,
+    with the same ``κ``-including ``L``); Flores & Riley (2011) find
+    collapse for ``L^+ ≲ 100``, which at ``Re_τ = 360`` is not
+    consistent with Nieuwstadt's threshold (``L^+ ≈ 730`` there; see
+    the theory page, "The cooled open channel");
   * the bulk Richardson number ``Ri_b = g h (Θ_{top} - Θ_{bot})/(Θ_{top} U_b^2)``
     (`SurfaceExchange.bulk_richardson`) of the plane-mean θ of the top
     and the bottom cell layers and the bulk (volume-mean) streamwise
@@ -670,5 +697,9 @@ end
 include("transition/blasius.jl")
 include("transition/flat_plate.jl")
 include("transition/free_stream_disturbance.jl")
+include("transition/synthetic_inflow.jl")             # N-inflow-a (#252)
+include("transition/inflow_statistics.jl")            # N-inflow-b (#258)
+include("transition/inflow_turbulence.jl")            # N-inflow-c (#264)
+include("transition/inflow_fetch.jl")                 # N-inflow-d (#266)
 
 end # module

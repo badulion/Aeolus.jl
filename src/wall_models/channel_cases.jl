@@ -172,7 +172,9 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
                      bottom_bc::Symbol = :wall_model, sgs_stress::Symbol = :laplacian,
                      θ_walls = nothing, Pr::Real = 0.71, θ₀::Real = 1.0, g_accel::Real = 1.0,
                      init_law = law, θ_ref::Real = 0.0, θ_flux_bottom::Real = 0.0,
-                     flux_g = nothing, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
+                     flux_g = nothing, c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS,
+                     inflow = nothing, outflow::Symbol = :convective,
+                     lateral::Symbol = :periodic, lateral_outflow::Symbol = outflow)
     walls in (:bottom, :both) ||
         throw(ArgumentError("walls must be :bottom or :both, got :$walls"))
     formulation in (:local, :schumann, :moeng) ||
@@ -213,7 +215,23 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
     mesh = RegularGrid(; size = dims, extent = extent)
 
     T = typeof(float(mesh.dz))
-    if bottom_bc === :noslip
+    if inflow !== nothing
+        # N-inflow-d (#266): open in x — the inflow data on the west face,
+        # a radiation (or Dirichlet) outflow on the east face (N-open-c)
+        inflow isa AbstractBoundaryData ||
+            throw(ArgumentError("inflow must be an AbstractBoundaryData, got $(typeof(inflow))"))
+        bottom_bc === :wall_model && walls === :bottom ||
+            throw(ArgumentError("inflow: only the wall-modelled half channel has an open-x variant"))
+        lateral in (:periodic, :open) ||
+            throw(ArgumentError("lateral must be :periodic or :open, got :$lateral"))
+        # open y faces: the same data, the radiation condition where the
+        # flow leaves through them, the data where it enters (N-open-c)
+        out = lateral === :open ?
+              (east = outflow, south = lateral_outflow, north = lateral_outflow) :
+              (east = outflow,)
+        bcs = open_boundary_conditions(mesh, inflow; x = :open, y = lateral,
+                                       bottom = :wall, top = :wall, outflow = out)
+    elseif bottom_bc === :noslip
         bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip,
                                       top = walls === :both ? :noslip : :wall)
     else
@@ -227,7 +245,8 @@ function _build_case(kind, dims, extent, closure, law, ν, walls, formulation,
                                 (θb === nothing ? 0.0 : θ₀, g_accel)
     sim = BoussinesqSimulation(mesh; ν = ν, bcs = bcs,
                                θ₀ = θ0_sim, g_accel = g_sim, θ_flux_bottom = θ_flux_bottom,
-                               θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+                               θ_bcs = inflow === nothing ?
+                                       FieldBoundaryConditions(:periodic, :periodic, :wall) : bcs)
     θ_ref > 0 && fill!(sim.θ.data, θ_ref)
     _initialise!(sim, init_law, u_star, ν, walls, noise, seed)
     θb === nothing || _initialise_θ!(sim, θb, walls)
@@ -286,7 +305,9 @@ end
                       surface_heat_flux = nothing, θ_ref = 300.0,
                       stability = BusingerDyerBeljaarsHoltslag(),
                       bottom_bc = :wall_model,
-                      θ_walls = nothing) -> WallBoundedCase
+                      θ_walls = nothing, extent = nothing,
+                      inflow = nothing, outflow = :convective,
+                      lateral = :periodic, lateral_outflow = outflow) -> WallBoundedCase
 
 The neutral, pressure-driven **half channel** of Porté-Agel, Meneveau &
 Parlange (2000) and Bou-Zeid, Meneveau & Parlange (2005): the canonical
@@ -313,6 +334,27 @@ high-Reynolds-number surface layer for testing an SGS closure's log law.
     `StaticSmagorinsky(0.1)`; with `noise = 0.3` the same run stays
     laminar (the eddy viscosity damps the noise) and its wall stress sits
     at 0.5-0.7 u*² for 30 H/u*.
+
+**Domain and inflow** (N-inflow-d, #266). `extent = (Lx, Ly)` replaces
+the default ``2πH × 2πH`` horizontal extent. `inflow` — an
+[`AbstractBoundaryData`](@ref Aeolus.BoundaryConditions.AbstractBoundaryData)
+(e.g. a `ProfileBoundaryData` with the mean profile of a periodic
+precursor) — opens the x direction: the west face takes the data
+(Dirichlet), the east face the `outflow` condition of N-open-c
+(`:convective` by default, `:orlanski` or `:dirichlet`), and the walls, forcing, closure and wall model are those of
+the periodic case. This is the inflow–outflow half channel on which the
+development length of a synthetic inflow is measured against the
+periodic precursor (`Transition.development_length`; Xie & Castro 2008;
+Kim, Castro & Xie 2013). Neutral only.
+
+`lateral = :periodic` (default) keeps y periodic; `lateral = :open`
+opens the south and north faces as well, as in a nest child: they take
+the same data, with the `lateral_outflow` condition (default: that of
+the east face) at points where the flow leaves the domain and the data
+(Dirichlet) where it enters. With a mean-profile `inflow` (``v = 0``)
+the lateral faces carry no turbulence of their own, so the side layers
+of the domain are quieter than its centre; the fetch diagnostics
+(`FetchStatistics(sim; jrange)`) can exclude them.
 
 **Wall-model input** (P57-b, #183; see [`MatchingInput`](@ref)):
 
@@ -405,7 +447,11 @@ function half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
                            surface_heat_flux = nothing, θ_ref::Real = 300.0,
                            stability::AbstractStabilityFunctions = BusingerDyerBeljaarsHoltslag(),
                            bottom_bc::Symbol = :wall_model,
-                           θ_walls = nothing)
+                           θ_walls = nothing, extent = nothing,
+                           inflow = nothing, outflow::Symbol = :convective,
+                           lateral::Symbol = :periodic, lateral_outflow::Symbol = outflow)
+    inflow === nothing && lateral !== :periodic &&
+        throw(ArgumentError("lateral = :$lateral needs an inflow (the open-x half channel)"))
     _reserved("bottom_bc", bottom_bc, :wall_model, "channel_case (the half channel is inviscid)")
     _reserved("θ_walls", θ_walls, nothing, "channel_case (the half channel is inviscid)")
     neutral = RoughLogLaw(z0_over_H * H)
@@ -420,12 +466,22 @@ function half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1),
     end
     law isa AbstractWallLaw ||
         throw(ArgumentError("wall_law must be an AbstractWallLaw, got $(typeof(law))"))
+    ext = if extent === nothing
+        (2π * H, 2π * H, H)
+    else
+        length(extent) == 2 && all(>(0), extent) ||
+            throw(ArgumentError("extent must be (Lx, Ly) > 0, got $extent"))
+        (float(extent[1]), float(extent[2]), H)
+    end
+    inflow === nothing || surface_heat_flux === nothing ||
+        throw(ArgumentError("inflow: the open-x half channel is neutral (no surface_heat_flux)"))
     surface_heat_flux === nothing &&
-        return _build_case(:half_channel, _dims(N), (2π * H, 2π * H, H), closure, law,
+        return _build_case(:half_channel, _dims(N), ext, closure, law,
                            0.0, :bottom, formulation, u_star, H, noise, seed, stepper,
                            _case_inputs(:bottom, h_wm, h_wm_cells, filter, T_f, u_star, H),
-                           roughness)
-    return _build_case(:half_channel, _dims(N), (2π * H, 2π * H, H), closure, law,
+                           roughness; inflow = inflow, outflow = outflow,
+                           lateral = lateral, lateral_outflow = lateral_outflow)
+    return _build_case(:half_channel, _dims(N), ext, closure, law,
                        0.0, :bottom, formulation, u_star, H, noise, seed, stepper,
                        _case_inputs(:bottom, h_wm, h_wm_cells, filter, T_f, u_star, H),
                        roughness; init_law = neutral, θ_ref = θ_ref,
@@ -877,7 +933,8 @@ end
 
 """
     run_channel!(case, t_end; dt = nothing, cfl = 0.5, average_from = Inf,
-                 sample_every = 1, callback = nothing) -> stats
+                 sample_every = 1, callback = nothing, checkpoint = nothing,
+                 checkpoint_components = (;)) -> stats
 
 Advance `case` to the time `t_end` (in units of the simulation clock;
 ``H/u_*`` is the eddy-turnover time of the default cases, which have
@@ -897,17 +954,27 @@ returned `stats` hold the averages over those samples:
     `τ_wall_bottom`, `τ_wall_top` separately;
   * `t`, `τ_series` — the sampling times and the per-step wall stress;
   * `nsamples`, `nsteps`, `wall_time` (s).
+
+**Checkpoints** (#245). With `checkpoint` (an `IO.CheckpointSchedule`) the
+run resumes from the newest checkpoint of its folder (the simulation, the
+case — closure memory, wall model, inputs, roughness, counters — and the
+averages above), writes periodic checkpoints, and a final one at `t_end`.
+`checkpoint_components` (a `NamedTuple`) adds the state of the caller's
+`callback`. A restarted run returns the same `stats`, bit for bit, as an
+uninterrupted one. Use one checkpoint `prefix` per call when a driver calls
+`run_channel!` more than once.
 """
 function run_channel!(case::WallBoundedCase, t_end::Real; dt = nothing, cfl::Real = 0.5,
                       average_from::Real = Inf, sample_every::Integer = 1,
-                      callback = nothing)
+                      callback = nothing, checkpoint = nothing, checkpoint_components = (;))
     s = case.sim; g = s.mesh; Nz = g.Nz
-    Usum = zeros(Nz)
     keys_ = (:resolved, :sgs, :viscous, :wall, :total)
-    ssum = Dict(k => zeros(Nz + 1) for k in keys_)
-    τb_sum = 0.0; τt_sum = 0.0; tw = 0.0
-    ts = Float64[]; τs = Float64[]
-    nsamp = 0; n0 = case.nsteps
+    # the run's accumulators, in one checkpointable Dict (#245)
+    R = Dict{Symbol,Any}(:Usum => zeros(Nz), :ssum => Dict(k => zeros(Nz + 1) for k in keys_),
+                         :τb => 0.0, :τt => 0.0, :tw => 0.0, :ts => Float64[], :τs => Float64[],
+                         :nsamp => 0, :n0 => case.nsteps)
+    comps = (case = case, run_channel = R, checkpoint_components...)
+    checkpoint === nothing || resume!(checkpoint, s; components = comps)
     nw = case.walls === :both ? 2 : 1
     t0 = time()
     while s.t < t_end - 1e-12 * max(1.0, abs(t_end))
@@ -915,18 +982,24 @@ function run_channel!(case::WallBoundedCase, t_end::Real; dt = nothing, cfl::Rea
         h = min(h, t_end - s.t)
         advance_channel!(case, h)
         callback === nothing || callback(case)
-        if s.t >= average_from && (case.nsteps - n0) % sample_every == 0
-            nsamp += 1
+        if s.t >= average_from && (case.nsteps - R[:n0]) % sample_every == 0
+            R[:nsamp] += 1
             um, _ = _uv_means(s)
-            Usum .+= um
+            R[:Usum] .+= um
             p = total_stress_profile(case)
             for k in keys_
-                ssum[k] .+= getfield(p, k)
+                R[:ssum][k] .+= getfield(p, k)
             end
-            τb_sum += h * case.τ_wall_bottom; τt_sum += h * case.τ_wall_top; tw += h
-            push!(ts, s.t); push!(τs, (case.τ_wall_bottom + case.τ_wall_top) / nw)
+            R[:τb] += h * case.τ_wall_bottom; R[:τt] += h * case.τ_wall_top; R[:tw] += h
+            push!(R[:ts], s.t); push!(R[:τs], (case.τ_wall_bottom + case.τ_wall_top) / nw)
         end
+        checkpoint === nothing || maybe_checkpoint!(checkpoint, s; step = case.nsteps, components = comps)
     end
+    # a final checkpoint: a rerun of a finished phase returns at once
+    checkpoint === nothing || maybe_checkpoint!(checkpoint, s; step = case.nsteps, force = true,
+                                                components = comps)
+    Usum, ssum, τb_sum, τt_sum, tw = R[:Usum], R[:ssum], R[:τb], R[:τt], R[:tw]
+    ts, τs, nsamp, n0 = R[:ts], R[:τs], R[:nsamp], R[:n0]
     zc = [(k - 0.5) * g.dz for k in 1:Nz]
     if nsamp == 0
         return (nsamples = 0, nsteps = case.nsteps - n0, wall_time = time() - t0)
