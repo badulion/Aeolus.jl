@@ -841,6 +841,8 @@ using Aeolus.Fields: set!, interior_view
     include("logging_run_folder.jl")  # #334: run folder, run.toml provenance, dirty-tree policy
     include("logging_diagnostics.jl") # #335: diagnostics registry, CSV writer, progress line
     include("logging_blowup.jl")      # #335: blowup diagnose-dump-stop, run monitor
+    include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
+    include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"
