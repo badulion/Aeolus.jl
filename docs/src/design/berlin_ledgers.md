@@ -148,7 +148,7 @@ context's own share, so a context's entry becomes the residual of the
 terms named inside it. The dynamics books `:top_flux`, the heat through
 the fixed-gradient θ top ([The θ top](#The-θ-top), N-parent-b, #254), this
 way; the nesting epic will add `:boundary_heat`, `:relaxation`,
-`:mass_correction` (N-open-d) and `:feedback_heat` (N-berlin-twoway). Called outside a step it is
+`:mass_correction` (N-open-d) and `:feedback_heat` (N-berlin-twoway, #267: booked in the parent's ledgers as `(:nest_feedback, :feedback_heat)` and `(:nest_feedback, :feedback_water)`, see [Nesting](berlin_nesting.md#Two-way-option-(#267))). Called outside a step it is
 an error: that heat would have no place in the balance.
 
 **Layers and windows.** Every term is kept per level and per local hour
@@ -278,7 +278,10 @@ in both places.
 ### Open boundaries
 
 `cfg.lateral = :open` (N-open-d, #262; `core/open_boundary.jl`) gives the
-case open west, east, south, north and top faces:
+case open west, east, south, north and top faces fed by analytic data (with
+the nest switched off, `physics = Dict(:nesting => false)`; the nested
+default of #265 feeds the same faces from the parent, see
+[Nesting](berlin_nesting.md#Nesting-(#265))):
 
 * **Data.** `ProfileBoundaryData(u = U_g, v = V_g, w = 0, θ = initial_θ)`
   — the `:geostrophic` coupling's wind (also when it is off) and the
@@ -585,7 +588,9 @@ code with comments and docstrings removed); reviewed indirect uses go in
 `BERLIN_INDIRECT`. At #127: 55 modules, 15 coupled, 11 exempt
 (the core's infrastructure and the Parallel / Backends / SpectralElement
 scaffolds), 30 pending; #130 coupled RadiationCore, GasOptics and
-TwoStream (27 pending).
+TwoStream (27 pending). KA-a (#294) took Backends off the exempt list: the
+core couplings run on `CaseConfig.backend` (`build_case` calls
+`init_threads!(cfg.backend)`; see [the kernel port](ka_port.md)).
 
 **The flagship guardrails.** The Berlin case is the flagship: it runs
 every component, on by default, and new physics lands in it in the PR

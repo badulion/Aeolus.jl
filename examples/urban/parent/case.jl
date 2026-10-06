@@ -158,14 +158,40 @@ simulation time): the sounding wind (`sounding_profiles` u, v,
 linear in time between the launches) at ``\\max(z, z_g)`` — the wind
 above the boundary layer is taken as geostrophic, and held constant with
 height below `z_g` (no thermal wind inside the boundary layer). `z_g` is
-`pc.z_g`, or 1.2 × [`sounding_zi_max`](@ref).
+`pc.z_g`, or 1.2 × [`sounding_zi_max`](@ref). Without a sounding
+(an idealised child profile), the constant `(U_g, V_g)` of the child's
+`:geostrophic` coupling options. The nested child's `:geostrophic`
+coupling takes the same functions ([`nest_geostrophic_wind`](@ref)).
 """
 function parent_geostrophic_wind(pc::ParentConfig, t0::Real, z_g::Real)
     S = case_sounding(pc.child)
-    S === nothing && return ((z, t) -> 0.0, (z, t) -> 0.0)
+    if S === nothing
+        # no sounding: the child's own geostrophic wind (its :geostrophic
+        # coupling options), so that a nest is driven by one wind
+        g = coupling_options(GeostrophicCoupling, pc.child)
+        U, V = Float64(g.U_g), Float64(g.V_g)
+        return ((z, t) -> U, (z, t) -> V)
+    end
     P = S.profiles
     return ((z, t) -> forcing_value(P.u, max(z, z_g), t0 + t),
             (z, t) -> forcing_value(P.v, max(z, z_g), t0 + t))
+end
+
+"The height (m) above which the sounding wind is geostrophic: `pc.z_g`, or 1.2 × [`sounding_zi_max`](@ref)."
+parent_z_g(pc::ParentConfig) = isnan(pc.z_g) ? 1.2 * sounding_zi_max(pc.child) : pc.z_g
+
+"""
+    parent_geostrophic(pc) -> (U_g, V_g)
+
+The geostrophic wind of the parent of `pc`, functions `(z, t)` of the
+simulation time: [`parent_geostrophic_wind`](@ref) at the sounding time
+of the case start and [`parent_z_g`](@ref). The one definition the
+parent's `GeostrophicPressureGradient` and the nested child's
+`:geostrophic` coupling ([`nest_geostrophic_wind`](@ref)) are built from.
+"""
+function parent_geostrophic(pc::ParentConfig)
+    S = case_sounding(pc.child)
+    return parent_geostrophic_wind(pc, S === nothing ? 0.0 : case_start_time(pc.child), parent_z_g(pc))
 end
 
 "Sounding table `name` as a function `(z, t)` of the simulation time."
@@ -206,6 +232,39 @@ function coarsen_landuse(pl::ParentLanduse, b::Integer)
 end
 
 """
+    crop_landuse(pl, pc::ParentConfig) -> ParentLanduse
+    crop_landuse(pl, Is, Js) -> ParentLanduse
+
+The land-use table under the parent box of `pc` (its centre
+[`parent_center`](@ref) and extent): the cells `Is × Js` of `pl` with
+`x0`, `y0` moved to the box's corner. The full 6 km table when the box is
+the table's own; an error when the box is not on the table's cell faces
+or leaves it. The small parent of the `:smoke` nest (1 km, #265) is a
+crop of the 6 km table, coarsened by `build_parent`.
+"""
+function crop_landuse(pl::ParentLanduse, pc::ParentConfig)
+    c = parent_center(pc)
+    fi = (c[1] - pc.extent[1] / 2 - pl.x0) / pl.dx
+    fj = (c[2] - pc.extent[2] / 2 - pl.y0) / pl.dx
+    ni, nj = pc.extent[1] / pl.dx, pc.extent[2] / pl.dx
+    all(x -> abs(x - round(x)) < 1e-9, (fi, fj, ni, nj)) ||
+        error("crop_landuse: the parent box is not on the land-use cell faces ($fi, $fj, $ni, $nj cells)")
+    I0, J0 = round(Int, fi) + 1, round(Int, fj) + 1
+    Is, Js = I0:I0+round(Int, ni)-1, J0:J0+round(Int, nj)-1
+    (first(Is) >= 1 && first(Js) >= 1 && last(Is) <= pl.nx && last(Js) <= pl.ny) ||
+        error("crop_landuse: the parent box ($Is, $Js) leaves the land-use table (1:$(pl.nx), 1:$(pl.ny))")
+    return crop_landuse(pl, Is, Js)
+end
+
+function crop_landuse(pl::ParentLanduse, Is::AbstractUnitRange, Js::AbstractUnitRange)
+    (Is == 1:pl.nx && Js == 1:pl.ny) && return pl
+    return ParentLanduse(length(Is), length(Js), pl.dx, pl.x0 + (first(Is) - 1) * pl.dx,
+                         pl.y0 + (first(Js) - 1) * pl.dx, pl.r,
+                         pl.counts[Is, Js, :], pl.λf[Is, Js], pl.hmean[Is, Js], pl.hmax[Is, Js],
+                         vcat(pl.header, "# cropped to cells $Is × $Js (crop_landuse)"))
+end
+
+"""
     build_parent(pc::ParentConfig; child = nothing, io = stdout) -> ParentCase
 
 Build the parent: the mesh ([`parent_mesh`](@ref)), the reference state,
@@ -242,8 +301,8 @@ function build_parent(pc::ParentConfig; child = nothing, io::IO = stdout)
     S = case_sounding(cfg)
     t0 = S === nothing ? NaN : case_start_time(cfg)
     zi_obs = sounding_zi_max(cfg)
-    z_g = isnan(pc.z_g) ? 1.2 * zi_obs : pc.z_g
-    Ug, Vg = parent_geostrophic_wind(pc, isnan(t0) ? 0.0 : t0, z_g)
+    z_g = parent_z_g(pc)
+    Ug, Vg = parent_geostrophic(pc)
 
     # initial state
     θf, qf = parent_θ_init(pc), parent_qv_init(pc)
@@ -265,7 +324,7 @@ function build_parent(pc::ParentConfig; child = nothing, io::IO = stdout)
 
     # forcings (θ, qv: the tendencies they add are booked from inside the step)
     sounding = S !== nothing
-    geo = pc.geostrophic && sounding ? GeostrophicPressureGradient(Ug, Vg) : nothing
+    geo = pc.geostrophic ? GeostrophicPressureGradient(Ug, Vg) : nothing
     zi_run = Ref(0.0)
     nudge = isfinite(pc.nudging_τ) && sounding ?
         ProfileNudging(pc.moisture ? (θ = sounding_target(pc, t0, :θ), qv = sounding_target(pc, t0, :qv)) :
@@ -285,7 +344,7 @@ function build_parent(pc::ParentConfig; child = nothing, io::IO = stdout)
     surface = nothing
     if pc.surface === :tiles
         child === nothing && (child = build_case(cfg; io = devnull))
-        pl = read_parent_landuse()
+        pl = crop_landuse(read_parent_landuse(), pc)
         b = pl.nx ÷ Nx
         (b * Nx == pl.nx && pl.dx * b ≈ mesh.dx) ||
             error("build_parent: the land use ($(pl.nx) cells of $(pl.dx) m) does not coarsen to $Nx cells of $(mesh.dx) m")
@@ -687,24 +746,45 @@ function _book_forcings!(p::ParentCase, h::Real)
 end
 
 """
-    step_parent!(p) -> dt
+    parent_dt(p) -> dt
 
-One step of the parent: the step length from `adaptive_dt` (the child's
-constraints, with the SGS closure's diffusive limit), the surface fluxes
-over it, the radiation (every `radiation_period`), then the dynamics with
-`step_adaptive!` (retried in pieces if it must), with every change of the
-heat and the water of the air attributed in the two ledgers.
+The length of the parent's next step: `adaptive_dt` with the child's
+constraints and the SGS closure's diffusive limit, shortened to land on
+the next output time.
 """
-function step_parent!(p::ParentCase)
+function parent_dt(p::ParentCase)
+    sim, pc = p.sim, p.pc
+    t = sim.t
+    d = cfl_diagnostics(sim, p.constraints; sgs = p.closure)
+    dt = adaptive_dt(sim, p.constraints; dt_prev = p.dt_prev, diagnostics = d)
+    tn = (floor(t / pc.output_period + 1e-9) + 1) * pc.output_period
+    return min(dt, tn - t)
+end
+
+"""
+    step_parent!(p) -> dt
+    step_parent!(p, dt) -> dt
+
+One step of the parent: the step length from [`parent_dt`](@ref) (or the
+given `dt`: the nest's window, #265), the surface fluxes over it, the
+radiation (every `radiation_period`), then the dynamics with
+`step_adaptive!` (in stable pieces if `dt` is longer than the parent's
+own limit, retried if it must), with every change of the heat and the
+water of the air attributed in the two ledgers.
+
+`body_force!(sim, Δt, w)` (optional) runs at every dynamics stage after
+the parent's own hooks, with `w` the stage's weight in the step (1 for
+the forward-Euler projection, 1/6, 1/6, 2/3 for SSP-RK3): the two-way
+Berlin nest books the parent's interface fluxes with it (#267).
+"""
+step_parent!(p::ParentCase; kw...) = step_parent!(p, parent_dt(p); kw...)
+
+function step_parent!(p::ParentCase, dt::Real; body_force! = nothing)
     sim, pc = p.sim, p.pc
     t = sim.t
     hour = hour_of_day(pc.child, t)
     tw = time_ns()
-    d = cfl_diagnostics(sim, p.constraints; sgs = p.closure)
-    dt = adaptive_dt(sim, p.constraints; dt_prev = p.dt_prev, diagnostics = d)
-    # land on the output times
-    tn = (floor(t / pc.output_period + 1e-9) + 1) * pc.output_period
-    dt = min(dt, tn - t)
+    dt = Float64(dt)
     θ, q = sim.θ, (pc.moisture ? sim.qv : sim.θ)
     heat_begin_step!(p.heat, θ, hour)
     pc.moisture && heat_begin_step!(p.water, q, hour)
@@ -736,19 +816,26 @@ function step_parent!(p::ParentCase)
     t1 = time_ns()
     heat_open!(p.heat, :dynamics, :core, θ; split = true)
     pc.moisture && heat_open!(p.water, :dynamics, :core, q; split = true)
-    bf = (s, Δt) -> _parent_body_force!(p, s, Δt)
+    bf = body_force! === nothing ? (s, Δt) -> _parent_body_force!(p, s, Δt) :
+         (s, Δt) -> (_parent_body_force!(p, s, Δt);
+                     body_force!(s, Δt, _stage_weight(p, p.stage[])); s)
     pp = p.surface === nothing ? nothing : (s, Δt) -> apply_parent_drag!(p, s, Δt)
     # every attempt (a retry too) starts its stage count afresh
     stepper = pc.stepper === :rk3 ?
         ((s, h; kw...) -> (p.stage[] = 0; step_rk3!(s, h; kw..., sgs = p.closure))) :
         ((s, h; kw...) -> (p.stage[] = 0; step!(s, h; kw..., sgs = p.closure)))
-    remaining, nret, piece_min = Float64(dt), 0, Inf
+    # pieces of at most the parent's own limit: a step of parent_dt is one
+    # piece; a longer one (a nest window over fixed child steps, #265) is
+    # taken in stable pieces
+    remaining, nret, piece_min, npieces, prev = Float64(dt), 0, Inf, 0, p.dt_prev
     while remaining > 1e-12 * dt
-        _, used, r = step_adaptive!(sim, p.constraints; dt = remaining, body_force! = bf,
+        lim = adaptive_dt(sim, p.constraints; dt_prev = prev, sgs = p.closure)
+        h = remaining <= lim * (1 + 1e-12) ? remaining : lim
+        _, used, r = step_adaptive!(sim, p.constraints; dt = h, body_force! = bf,
                                     post_predictor! = pp, sgs = p.closure, stepper = stepper)
         _book_forcings!(p, used)
-        remaining -= used; nret += r
-        piece_min = min(piece_min, used)
+        remaining -= used; nret += r; npieces += 1
+        piece_min = min(piece_min, used); prev = used
     end
     heat_close!(p.heat, θ)
     pc.moisture && heat_close!(p.water, q)
@@ -756,7 +843,7 @@ function step_parent!(p::ParentCase)
 
     heat_end_step!(p.heat, θ, dt)
     pc.moisture && heat_end_step!(p.water, q, dt)
-    p.dt_prev = nret == 0 ? dt : piece_min
+    p.dt_prev = nret == 0 && npieces == 1 ? dt : piece_min
     p.retries += nret
     p.nsteps += 1
     push!(p.dt_hist, dt)

@@ -7,6 +7,8 @@
 # bit-for-bit.
 #
 #   :clock           local hour of day (core)
+#   :nest_parent     the parent run advanced to cover the child step, the
+#                    child's nest faces pointed at the new parent window (#265)
 #   :radiation       sun, radiosity, buildings over the radiation interval
 #   :sw_modifiers    tree shade, cloud shadow
 #   :surface_flux    surface → air fluxes; builds bus.sensible
@@ -20,16 +22,19 @@
 #      entries composed into its body_force! / post_predictor! hooks --
 #   :surface_update  surface and soil prognostics
 #   :column_tendency column (radiative) tendencies of θ
+#   :nest_feedback   the parent window closed when the child reached its end
+#                    (one-way: clock and statistics; two-way, #267: the feedback)
 #   :sanity          guards (e.g. clamps), then the core blow-up check
 #   :output          NetCDF record and log line (core)
 
 "Stages before the dynamics, in order."
-const PRE_DYNAMICS_STAGES = (:clock, :radiation, :sw_modifiers, :surface_flux, :anthropogenic,
-                             :chemistry, :transport, :microphysics, :tracers, :fog_dew)
+const PRE_DYNAMICS_STAGES = (:clock, :nest_parent, :radiation, :sw_modifiers, :surface_flux,
+                             :anthropogenic, :chemistry, :transport, :microphysics, :tracers,
+                             :fog_dew)
 "Stages composed into the hooks of `step!`."
 const DYNAMICS_STAGES = (:body_force, :post_predictor)
 "Stages after the dynamics, in order."
-const POST_DYNAMICS_STAGES = (:surface_update, :column_tendency, :sanity, :output)
+const POST_DYNAMICS_STAGES = (:surface_update, :column_tendency, :nest_feedback, :sanity, :output)
 "Every stage name, in execution order."
 const ALL_STAGES = (PRE_DYNAMICS_STAGES..., DYNAMICS_STAGES..., POST_DYNAMICS_STAGES...)
 
@@ -144,9 +149,20 @@ dynamics_step!(case, dt) =
 
 The length (s) of the next step: `next_dt` of the `:timestepper`
 provider (`cfg.dt` for a fixed step; the CFL-limited step of the adaptive
-provider).
+provider). A variable step is then shortened by every coupling's
+[`limit_dt`](@ref) (the nest: the child lands on the end of the parent's
+step, #265).
 """
-step_dt(case) = (ts = timestepper(case); ts === nothing ? case.cfg.dt : next_dt(ts, case))
+function step_dt(case)
+    ts = timestepper(case)
+    ts === nothing && return case.cfg.dt
+    dt = next_dt(ts, case)
+    variable_dt(typeof(ts)) || return dt
+    for c in case.couplings
+        dt = limit_dt(c, case, dt)
+    end
+    return dt
+end
 
 """
     step_case!(case, dt = step_dt(case)) -> Bool
@@ -183,6 +199,7 @@ function step_case!(case, dt::Real = step_dt(case))
     _time_air_heat!(case, (t0 - th) + (time_ns() - t1))
     run_entries!(case, :surface_update, dt, n, t_old, t_new)
     run_entries!(case, :column_tendency, dt, n, t_old, t_new)
+    run_entries!(case, :nest_feedback, dt, n, t_old, t_new)
     # :sanity (coupling guards first, then the core finiteness check)
     run_entries!(case, :sanity, dt, n, t_old, t_new)
     if clk.blowup || any(!isfinite, interior_view(sim.u)) || any(!isfinite, case.bus.Ts)

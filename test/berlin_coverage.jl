@@ -50,7 +50,6 @@ const BERLIN_EXEMPT = Dict{Symbol,String}(
     :NetCDFIO           => "infrastructure: the NetCDF output writer (core/output.jl)",
     # scaffolds with no operators to couple
     :Parallel           => "scaffold: partition types with no distributed operators (no MPI); nothing to run",
-    :Backends           => "scaffold: CPU/GPU backend abstraction with no GPU kernels; nothing to run",
     :SpectralElement    => "scaffold: a spectral-element mesh type with no solver; the case is finite-volume",
 )
 
@@ -79,12 +78,9 @@ const BERLIN_PENDING = Dict{Symbol,String}(
     :AerosolCloud          => "#147 activation",
     :TurbulentMicrophysics => "#147 SGS cloud",
     :IceNucleation         => "#148 INP tracers and P3 ice",
-    :SurfaceTiles          => "#149 tiles / blended mosaic (coarse configuration)",
     :Superdroplet          => "#150 superdroplets in a fog sub-volume",
-    :StretchedGrids        => "#151 stretched-grid option",
     :CutCell               => "#152 cut-cell buildings option",
     :AdaptiveMesh          => "#153 nesting with forward hooks (AMR blocks themselves cannot carry the IBM/surfaces: exempt that part with the reason then)",
-    :Nesting               => "#153 multi-domain case (legacy one-way forcing, deferred with AdaptiveMesh)",
     :RunLog                => "awaiting #320 (#338: the Berlin console text through the logger)",
 )
 
@@ -106,7 +102,7 @@ const BERLIN_PENDING = Dict{Symbol,String}(
 "Frozen: the modules of `BERLIN_EXEMPT`. Entries may only be deleted."
 const BERLIN_EXEMPT_FROZEN = Set{Symbol}([
     :Grids, :Fields, :BoundaryConditions, :Operators, :Simulations, :PressureSolvers,
-    :TimeSteppers, :NetCDFIO, :Parallel, :Backends, :SpectralElement,
+    :TimeSteppers, :NetCDFIO, :Parallel, :SpectralElement,
 ])
 
 "Frozen: the modules of `BERLIN_PENDING`. Entries may only be deleted."
@@ -114,8 +110,8 @@ const BERLIN_PENDING_FROZEN = Set{Symbol}([
     :Particles, :DataAssimilation, :IO, :MonteCarloRT,
     :Visibility, :LandSurface, :Photosynthesis, :OceanMixedLayer, :AirSeaFlux,
     :AerosolOptics, :P3Microphysics, :Snowpack, :IceThermodynamics, :AerosolCloud,
-    :TurbulentMicrophysics, :IceNucleation, :SurfaceTiles, :Superdroplet,
-    :StretchedGrids, :CutCell, :AdaptiveMesh, :Nesting,
+    :TurbulentMicrophysics, :IceNucleation, :Superdroplet,
+    :CutCell, :AdaptiveMesh,
     :RunLog,   # #333 logging core, added under the transition rule (CLAUDE.md) until #320
 ])
 

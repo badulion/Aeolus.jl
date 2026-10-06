@@ -221,9 +221,15 @@ function _interp_child!(cf::Field, pf::Field, nest::NestedGrid;
     px = _plan(nest, kinds[1], 1, order)
     py = _plan(nest, kinds[2], 2, order)
     pz = _zplan(nest, kinds[3], order, measure)
-    cd = cf.data; pd = pf.data
+    # the loop behind a function barrier: the plans' types depend on the
+    # measure (volume / mass) and the parent mesh, so the caller is not
+    # type-stable in them (an 18× slower prolongation without it, #265)
+    return _interp_child_loop!(cf, cf.data, pf.data, px, py, pz, cm, loc, region)
+end
+
+function _interp_child_loop!(cf, cd::AbstractArray{T,3}, pd, px, py, pz, cm, loc,
+                             region::Symbol) where {T}
     ii, jj, kk = interior(cm)
-    T = eltype(cd)
     all_region = region === :all
     iface = region === :halo_interface
     @inbounds for k in axes(cd, 3)

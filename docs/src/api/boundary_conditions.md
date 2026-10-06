@@ -116,6 +116,7 @@ Aeolus.BoundaryConditions.OpenPlane
 Aeolus.BoundaryConditions.OpenBoundaryState
 Aeolus.BoundaryConditions.open_boundary_conditions
 Aeolus.BoundaryConditions.set_boundary_data!
+Aeolus.BoundaryConditions.add_open_scalars!
 Aeolus.BoundaryConditions.has_open_boundaries
 Aeolus.BoundaryConditions.open_boundary_states
 Aeolus.BoundaryConditions.pinned_face_indices

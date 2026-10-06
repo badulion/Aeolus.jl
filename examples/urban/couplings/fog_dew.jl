@@ -107,33 +107,37 @@ function run_stage!(c::FogDew, case, ::Val{:fog_dew}, dt)
     copyto!(c.dew_start, bus.dew)
     qv = interior_view(tracer(case, :qv))
     # dew: on the first air cell of the columns in dew_mask, at the pressure
-    # of that cell (roof columns exchange tens of metres up). One
-    # dew_exchange! per air level; the columns not at that level see q = 0
-    # and an empty reservoir, which gives no exchange (and those entries
-    # are not copied back).
-    H_dew = zeros(size(bus.dew))
-    q1, d1 = zeros(size(bus.dew)), zeros(size(bus.dew))
-    for k in unique(bus.k_air[bus.dew_mask])
-        at(I) = bus.dew_mask[I] && bus.k_air[I] == k
-        for I in CartesianIndices(q1)
-            q1[I], d1[I] = at(I) ? (qv[I, k], bus.dew[I]) : (0.0, 0.0)
-        end
-        q0 = copy(q1)
-        Hk = Aeolus.RadiationFog.dew_exchange!(q1, d1, bus.Ts, ref_pressure(case, k), dt;
-                                               dz = case.mesh.dz, ρ = ref_density(case, k))
-        for I in CartesianIndices(q1)
-            at(I) || continue
-            qv[I, k] += q1[I] - q0[I]
-            bus.dew[I] = d1[I]
-            H_dew[I] = Hk[I]
-        end
-    end
+    # and density of that cell (roof columns exchange tens of metres up).
+    # One pass over the columns, each with RadiationFog.dew_deposition at
+    # its own k_air (#295). Before, every distinct air level copied two 2-D
+    # slices and ran a full-surface dew_exchange! on them (about 2.4 of the
+    # stage's 8.5 ms/step on the flagship; the rest is the fog adjustment);
+    # the arithmetic per column is the same, bit for bit:
+    # the vapour increment is still applied as qv += (q + Δqv) − q.
+    dew_pass!(c.H_dew, qv, bus, case.ref.p̄, case.ref.ρ̄, case.mesh.dz, dt)
     # fog: saturation adjustment in the air
     Aeolus.RadiationFog.fog_adjust!(interior_view(case.sim.θ), qv,
                                     interior_view(tracer(case, :ql)), ref_pressure(case), dt)
-    @. bus.sensible -= H_dew
-    c.H_dew = H_dew
+    @. bus.sensible -= c.H_dew
     return nothing
+end
+
+# The dew pass (a function barrier: `qv` comes untyped from the tracer
+# registry). H_dew is overwritten: 0 where no dew forms or evaporates.
+function dew_pass!(H_dew, qv, bus, p̄, ρ̄, dz, dt)
+    fill!(H_dew, 0.0)
+    @inbounds for I in CartesianIndices(H_dew)
+        bus.dew_mask[I] || continue
+        k = bus.k_air[I]
+        q = qv[I, k]
+        r = Aeolus.RadiationFog.dew_deposition(q, bus.Ts[I], p̄[k], dt;
+                                               dz = dz, ρ = ρ̄[k], dew = bus.dew[I])
+        r.mass == 0 && continue
+        qv[I, k] += (q + r.Δqv) - q
+        bus.dew[I] = max(bus.dew[I] + r.mass, 0.0)
+        H_dew[I] = r.surface_heat / dt
+    end
+    return H_dew
 end
 
 # Ledger: the dew's latent heat is an extra flux into the surface; the

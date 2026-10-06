@@ -93,6 +93,11 @@ physical coordinates `x, y, z` of those storage points, so an
 
 * tangential velocity and scalars: `:value` (Dirichlet: copied from
   `data`) or `:mirror` (zero gradient; `data` unused);
+* scalars only: `:inflow` — Dirichlet (copied from `data`) where the
+  face's normal velocity points into the domain, zero gradient (the
+  mirror) where it points out or is zero: a scalar whose outside value is
+  known only for the air that enters (a tracer a nest parent does not
+  carry: zero inflow, its own value out; N-berlin-nest #265);
 * the normal velocity: the boundary face is always copied from `data`;
   the layers beyond it are `:value` (copied) or `:odd` (antisymmetric
   about the face value).
@@ -130,6 +135,9 @@ function OpenPlane(name::Symbol, loc::Location, side::Symbol, m::RegularGrid{T};
     if normal
         mode in (:value, :odd) ||
             throw(ArgumentError("normal-velocity halo mode must be :value or :odd, got :$mode"))
+    elseif loc isa CellCenter
+        mode in (:value, :mirror, :inflow) ||
+            throw(ArgumentError("scalar halo mode must be :value, :mirror or :inflow, got :$mode"))
     else
         mode in (:value, :mirror) ||
             throw(ArgumentError("halo mode must be :value or :mirror, got :$mode"))
@@ -492,6 +500,46 @@ function open_boundary_conditions(m::RegularGrid{T}, data;
 end
 
 """
+    add_open_scalars!(bcs, names; mode = :value) -> bcs
+
+Give every open face of the open boundary set in `bcs` a cell-centred
+plane for each scalar in `names` (a `Symbol` or a collection of them),
+with halo mode `mode` (`:value`, `:mirror` or `:inflow`; see
+[`OpenPlane`](@ref)). For scalars that become known only after the
+simulation is built — the tracers a case registers later, which a nest
+then feeds from its parent (N-berlin-nest, #265). Bind each tracer's
+array to its name in the set's `bound` table (the nest does this when it
+attaches its data) so that `fill_halos!(tracer, θ_bcs)` finds its plane.
+Call it before the first step: the radiation state of a radiating face
+is re-initialised. A name the set already has is an error.
+"""
+function add_open_scalars!(bcs::FieldBoundaryConditions, names; mode::Symbol = :value)
+    ns = names isa Symbol ? (names,) : Tuple(names)
+    sts = open_boundary_states(bcs)
+    isempty(sts) && throw(ArgumentError("add_open_scalars!: `bcs` has no open face"))
+    for st in sts
+        m = st.mesh
+        for name in ns
+            name isa Symbol || throw(ArgumentError("add_open_scalars!: scalar names are Symbols"))
+            name in (:u, :v, :w) && throw(ArgumentError("add_open_scalars!: :$name is a velocity component"))
+            any(p -> p.name === name, st.planes) &&
+                throw(ArgumentError("add_open_scalars!: the open faces already carry :$name"))
+        end
+        for f in _faces(bcs)
+            f isa OpenBoundary && f.state === st || continue
+            for name in ns
+                p = OpenPlane(name, CellCenter(), f.side, m; mode = mode)
+                f.planes[name] = p
+                push!(st.planes, p)
+            end
+        end
+        _init_radiation!(st)
+        _apply_solid_values!(st)
+    end
+    return bcs
+end
+
+"""
     set_boundary_data!(bcs, data) -> bcs
 
 Replace the boundary data of the open boundary set in `bcs` (e.g. once
@@ -566,6 +614,7 @@ function _fill_open_face!(d::AbstractArray{T,3}, bc::OpenBoundary, H::Int, N::In
         # without data cannot happen (open_boundary_conditions requires u, v, w).
         return _open_mirror!(d, ax, high, H, N)
     end
+    p.mode === :inflow && return _fill_inflow_face!(d, bc, p, ax, high, H, N)
     s = _slab(d, ax, p.range)
     if p.normal && p.mode === :odd
         f = _face_index(high, H, N)
@@ -581,6 +630,43 @@ function _fill_open_face!(d::AbstractArray{T,3}, bc::OpenBoundary, H::Int, N::In
         fill!(s, zero(T))
     else
         s .= p.data
+    end
+    return d
+end
+
+# A scalar plane in `:inflow` mode: per tangential point of the face, the
+# halo takes the data (zero when homogeneous) where the face's normal
+# velocity — the boundary-face value of the face's normal plane, as the
+# last refresh left it — points into the domain, and the mirror of the
+# interior where it points out (or is zero).
+_normal_name(ax::Int) = ax == 1 ? :u : ax == 2 ? :v : :w
+
+function _fill_inflow_face!(d::AbstractArray{T,3}, bc::OpenBoundary, p::OpenPlane,
+                            ax::Int, high::Bool, H::Int, N::Int) where {T}
+    pn = bc.planes[_normal_name(ax)]
+    fl = _face_local(pn)
+    s = high ? one(T) : -one(T)                  # outward sign
+    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+    @inbounds for b in axes(d, t2), a in axes(d, t1)
+        un = s * (ax == 1 ? pn.data[fl, a, b] : ax == 2 ? pn.data[a, fl, b] : pn.data[a, b, fl])
+        for h in 1:H
+            dst = high ? H + N + h : H + 1 - h
+            v = if un < 0                        # inflow: the data
+                bc.homogeneous ? zero(T) :
+                    (l = high ? h : H + 1 - h;   # local slab index of storage layer `dst`
+                     ax == 1 ? p.data[l, a, b] : ax == 2 ? p.data[a, l, b] : p.data[a, b, l])
+            else                                 # outflow or calm: zero gradient
+                src = high ? H + N + 1 - h : H + h
+                ax == 1 ? d[src, a, b] : ax == 2 ? d[a, src, b] : d[a, b, src]
+            end
+            if ax == 1
+                d[dst, a, b] = v
+            elseif ax == 2
+                d[a, dst, b] = v
+            else
+                d[a, b, dst] = v
+            end
+        end
     end
     return d
 end

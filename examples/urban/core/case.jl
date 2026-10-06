@@ -112,7 +112,9 @@ end
 
 The keyword arguments every dynamical core of the case shares: viscosity,
 gravity, Coriolis, Smagorinsky, sponge and the boundary conditions of
-[`case_boundary_conditions`](@ref) (`cfg.lateral`, #262): for the
+[`case_boundary_conditions`](@ref) (none for a nested case, whose nest
+faces the `:nesting` coupling's `sim_options` set, #265; otherwise
+`cfg.lateral`, #262): for the
 default periodic case periodic laterally, walls at the bottom and the
 top for the velocity; for θ no flux at the ground (the surface fluxes
 enter as tendencies) and [`θ_top_bc`](@ref)`(cfg)` at the top
@@ -140,10 +142,14 @@ Build the mesh, the geometry, the dynamical core (`build_core` of the
 provider of the `:core` slot) and its initial state,
 the surface bus and the core tracers (`qv`, `ql`, `qr`), then the
 couplings `cfg` enables (see [`selected_couplings`](@ref)): each is
-constructed with `build(C, case, opts)`, then every `init!` runs in
-registry order, and finally the stage schedule is assembled.
+constructed with `build(C, case, opts)`, then every `init!` runs
+(in `init_priority` order, then registry order: the nest first), and
+finally the stage schedule is assembled.
 """
 function build_case(cfg::CaseConfig; io::IO = stdout)
+    # The run's compute backend (KA-a, #294): the default for every field
+    # allocated below, BLAS pinned to one thread when Julia is threaded.
+    init_threads!(cfg.backend)
     Nx, Ny, Nz = cfg.size
     mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
     geom = build_geometry(cfg, mesh; io = io)
@@ -183,11 +189,16 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     # before the first dynamics step, whose prepare_open_boundaries! would
     # come too late: with empty buffers the first transport saw u = 0 on the
     # open faces and moved 14 % of the edge cells' vapour across them)
+    # A nested case's faces get their data from the parent when the
+    # `:nesting` coupling builds the nest, before the first stage reads them
+    # (couplings/nesting.jl, #265).
     if has_open_boundaries(sim)
         mark_open_boundary_solids!(sim.bcs, geom.sm.mask)
-        prepare_open_boundaries!(sim)
-        fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
-        fill_halos!(sim.θ, sim.θ_bcs)
+        if all(st -> st.data !== nothing, open_boundary_states(sim))
+            prepare_open_boundaries!(sim)
+            fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+            fill_halos!(sim.θ, sim.θ_bcs)
+        end
     end
 
     # Core moisture tracers. qv and ql are advected by the :transport
@@ -203,7 +214,7 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     for C in selected
         push!(case.couplings, build(C, case, coupling_options(C, cfg)))
     end
-    for c in case.couplings
+    for c in sort(case.couplings; by = c -> init_priority(typeof(c)))   # stable: registry order
         init!(c, case)
     end
     build_schedule!(case)

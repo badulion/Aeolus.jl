@@ -272,7 +272,7 @@ it is an error: that heat would have no place in the step's balance.
 
 Terms other issues book (#246): `:top_flux` (N-parent-b),
 `:boundary_heat`, `:relaxation`, `:mass_correction` (N-open-d),
-`:feedback_heat` (N-berlin-twoway).
+`:feedback_heat` (N-berlin-twoway, #267, in the parent's ledgers).
 """
 function add_heat!(hl::AirHeatLedger, term::Symbol, J::Real; k::Union{Nothing,Integer} = nothing)
     hl.active && !isempty(hl.stack) ||

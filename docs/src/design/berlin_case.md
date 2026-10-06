@@ -153,6 +153,7 @@ in the integer `order` their couplings declare.
 | stage | entries (order) in the default case |
 | :-- | :-- |
 | `:clock` | local hour (core) |
+| `:nest_parent` | `nesting` (10): opens a parent window when the child has reached the last one — the parent takes its step, the child's nest faces point at the new window (see [Nesting](berlin_nesting.md#Nesting-(#265))) |
 | `:radiation` (600 s, and step 1) | `column_radiation` (5), `radiosity_sun` (10), `cloud_shadow` (15), `buildings_citymean` (20) |
 | `:sw_modifiers` | `sw_modifiers` (10, tree shade) |
 | `:surface_flux` | `surface_exchange` (10): the held H, E into the first air cell (step 1: the first surface step) |
@@ -162,9 +163,10 @@ in the integer `order` their couplings declare.
 | `:microphysics` | `micro_kessler` (10) |
 | `:tracers` | `pollutant` (10) |
 | `:fog_dew` | `fog_dew` (10) |
-| dynamics: `advance_dynamics!` of the `:timestepper` provider (default one `step!`) with `:body_force` / `:post_predictor` | `geostrophic` (10), `moist_buoyancy` (20), `wall_model_facades` stencil-flux removal (40) / `ibm` (10), `wall_model_facades` facade stress (12), `surface_exchange` drag (15), `veg_drag` (20); the `step_options` of the numerics slots |
+| dynamics: `advance_dynamics!` of the `:timestepper` provider (default one `step!`) with `:body_force` / `:post_predictor` | `nesting` (5: the two-way θ booking, a no-op one-way, #267), `geostrophic` (10), `moist_buoyancy` (20), `wall_model_facades` stencil-flux removal (40) / `ibm` (10), `wall_model_facades` facade stress (12), `surface_exchange` drag (15), `veg_drag` (20); the `step_options` of the numerics slots |
 | `:surface_update` | `surface_exchange` (10: collects `bus.sensible`; every surface period steps all surfaces, soil included), `snow_legacy` (30), `aq_chem` r_a / v_d refresh (90, every 30 s) |
 | `:column_tendency` | `column_radiation` (10) |
+| `:nest_feedback` | `nesting` (10): closes the window when the child reaches its end (one-way: clock and statistics; `mode = :two_way`, #267: also the feedback onto the parent, see [Nesting](berlin_nesting.md#Two-way-option-(#267))) |
 | `:sanity` | the core finiteness check |
 | (ledger) | every coupling's `budget!`, and the change of water in the air (core) |
 | `:output` (1800 s) | NetCDF record and log line (core), then coupling entries: `turbulence_diag` (10) |
@@ -184,6 +186,25 @@ Since then `soil_urban` has been replaced by the surface exchange
 (#129; its surface step costs 13.6–16.3 ms per step of the adaptive
 stepper, remeasured on master `915bd49`) and the chemistry (#135) adds five advected species; see the
 cost paragraphs of those sections.
+
+The serial baseline before threading (#295, KA-c) removed the runtime
+integer power from the WENO-Z / TENO weights, the plane copies from every
+halo fill and the per-level slice copies from the dew, with no change to
+any bit of the smoke matrix or of 12 flagship steps. Flagship, 1 thread,
+ms/step over 40 steps after 4 warm-up steps (minimum of 3 runs, 1-min
+load 10–20 on 24 cores; an earlier pair at load ≈ 1.5 in brackets):
+
+| entry | before | after |
+| :-- | --: | --: |
+| `scalar_advection` | 84.9 (68.6) | 34.6 (25.7) |
+| `step!` | 30.7 (23.5) | 28.6 (21.9) |
+| `fog_dew` | 10.1 (8.5) | 6.3 (5.9) |
+| whole step | 155.4 (128.3) | 99.7 (82.7) |
+
+A step of the flagship now allocates 1.0 MB (30.4 MB before), the
+scalar-advection stage 7 KB (13.3 MB). What remains of `fog_dew` is the
+fog saturation adjustment (5.7 ms on its own: one exact saturation
+humidity per cell), not the dew.
 
 ## Shared state
 
@@ -377,7 +398,7 @@ in summer, 1.30 in winter.
 
 | consumer | uses |
 | :-- | :-- |
-| `fog_dew` | fog adjusted at `p̄_k` (`T = θ Π̄_k`); dew at `p_surface` with `ρ̄_1` |
+| `fog_dew` | fog adjusted at `p̄_k` (`T = θ Π̄_k`); dew at the `p̄_k`, `ρ̄_k` of each column's first air cell `k_air` (#129; one pass over the columns since #295) |
 | `surface_exchange` | forcing `T_air = θ Π̄_k`, `p̄_k`, `ρ̄_k` at the first air cell `k_air`; `ρ̄_k c_pd`, `ρ̄_k` in the conversion of H and E to θ, qv |
 | `aq_chem` | `T = θ̄ Π̄_k` and `p̄_k` for the rate constants; its r_a solve uses `θ_s = Ts/Π̄_k` at the first air cell |
 | `column_radiation` | surface pressure `surface_pressure(case)` (`case.ref.p_surface`) |
