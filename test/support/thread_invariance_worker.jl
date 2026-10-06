@@ -122,7 +122,7 @@ const BC = Main.BerlinCase
 include(joinpath(@__DIR__, "smoke_matrix.jl"))
 
 function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
-    case = BC.build_case(cfg; io = devnull)
+    case = BC.build_case(cfg)
     seed && seed_fog!(case, Xoshiro(127))
     ts = BC.timestepper(case)
     variable = ts !== nothing && BC.variable_dt(typeof(ts))
@@ -162,7 +162,7 @@ function section_smoke()
 end
 
 function section_flagship()
-    cfg = BC.CaseConfig(; verbose = false, output_path = nothing, backend = BACKEND)
+    cfg = BC.CaseConfig(; output_path = nothing, backend = BACKEND)
     run_hashed!("flagship", cfg; seed = false, nsteps = 1)
 end
 

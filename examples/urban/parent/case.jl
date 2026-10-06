@@ -90,7 +90,6 @@ mutable struct ParentCase{M, S, C}
     dt_hist::Vector{Float64}
     timing::Dict{Symbol,Float64}
     diag::Vector{Any}
-    io::IO
 end
 
 # ---------------------------------------------------------------------------
@@ -265,7 +264,7 @@ function crop_landuse(pl::ParentLanduse, Is::AbstractUnitRange, Js::AbstractUnit
 end
 
 """
-    build_parent(pc::ParentConfig; child = nothing, io = stdout) -> ParentCase
+    build_parent(pc::ParentConfig; child = nothing) -> ParentCase
 
 Build the parent: the mesh ([`parent_mesh`](@ref)), the reference state,
 the Boussinesq core with the sponge and the θ top, the initial state, the
@@ -274,7 +273,7 @@ case `child` — built from `pc.child` if not given — provides the
 class-to-surface factory and the class map under its footprint), the
 column radiation and the ledgers.
 """
-function build_parent(pc::ParentConfig; child = nothing, io::IO = stdout)
+function build_parent(pc::ParentConfig; child = nothing)
     cfg = pc.child
     mesh = parent_mesh(pc)
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
@@ -343,7 +342,7 @@ function build_parent(pc::ParentConfig; child = nothing, io::IO = stdout)
     # surface
     surface = nothing
     if pc.surface === :tiles
-        child === nothing && (child = build_case(cfg; io = devnull))
+        child === nothing && (child = build_case(cfg))
         pl = crop_landuse(read_parent_landuse(), pc)
         b = pl.nx ÷ Nx
         (b * Nx == pl.nx && pl.dx * b ≈ mesh.dx) ||
@@ -395,9 +394,10 @@ function build_parent(pc::ParentConfig; child = nothing, io::IO = stdout)
                        -Inf, Dict{Symbol,Float64}(:Rn => 0.0, :H => 0.0, :LE => 0.0, :G => 0.0, :E => 0.0,
                                             :delivered_H => 0.0, :delivered_E => 0.0),
                        0.0, 350.0, 0.0, Ref(0), Ref(0.0), lev, copy(hm.w), copy(wm.w),
-                       0, 0, Float64[], Dict{Symbol,Float64}(), Any[], io)
-    pc.verbose && @printf(io, "Berlin parent: %d × %d × %d (Δx %.2f m, Δz %.1f–%.1f m), surface %s, sgs %s, z_g %.0f m, z_i(obs) %.0f m\n",
-                          Nx, Ny, Nz, mesh.dx, minimum(dzc), maximum(dzc), pc.surface, pc.sgs, z_g, zi_obs)
+                       0, 0, Float64[], Dict{Symbol,Float64}(), Any[])
+    @debug(@sprintf("Berlin parent: %d × %d × %d (Δx %.2f m, Δz %.1f–%.1f m), surface %s, sgs %s, z_g %.0f m, z_i(obs) %.0f m",
+                    Nx, Ny, Nz, mesh.dx, minimum(dzc), maximum(dzc), pc.surface, pc.sgs, z_g, zi_obs),
+           subsystem = :berlin, domain = current_domain(), event = :parent_built)
     return pcase
 end
 
@@ -894,11 +894,12 @@ function run_parent!(p::ParentCase; hours::Real = p.pc.hours, record::Bool = tru
         all(isfinite, interior_view(p.sim.θ)) || error("run_parent!: non-finite θ at t = $(p.sim.t) s")
         if record && abs(p.sim.t / pc.output_period - round(p.sim.t / pc.output_period)) < 1e-6
             r = parent_record!(p)
-            pc.verbose && @printf(p.io, "  %5.2f h (%05.2f LT): z_i %6.0f m (parcel %6.0f), θ(12.5 m) %.2f K, H %.1f W/m², %d steps, %.0f s wall\n",
-                                  r.t / 3600, r.hour, r.zi, r.zi_parcel, r.θ[1],
-                                  length(p.diag) > 1 ? (r.sfc[:H] - p.diag[end-1].sfc[:H]) / pc.output_period : 0.0,
-                                  r.nsteps, r.wall)
-            pc.verbose && flush(p.io)
+            @info(@sprintf("parent %5.2f h (%05.2f LT): z_i %6.0f m (parcel %6.0f), θ(12.5 m) %.2f K, H %.1f W/m², %d steps, %.0f s wall",
+                           r.t / 3600, r.hour, r.zi, r.zi_parcel, r.θ[1],
+                           length(p.diag) > 1 ? (r.sfc[:H] - p.diag[end-1].sfc[:H]) / pc.output_period : 0.0,
+                           r.nsteps, r.wall),
+                  subsystem = :berlin, domain = current_domain(), event = :parent_record,
+                  t = r.t, zi = r.zi)
         end
     end
     return p

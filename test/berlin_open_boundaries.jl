@@ -34,14 +34,14 @@ const BC = Main.BerlinCase
 # with the nest switched off; the nested default (#265) is tested in
 # test/era2_nest_external.jl and by the `:nesting` coupling's smoke checks.
 _smoke(; physics = Dict{Symbol,Any}(), kw...) =
-    BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
+    BC.CaseConfig(:smoke; output_path = nothing,
                   physics = merge(Dict{Symbol,Any}(:nesting => false), physics), kw...)
 
 @testset "Berlin open lateral boundaries (N-open-d, #262)" begin
     @testset "with the nest off, the default stays periodic" begin
         cfg = _smoke()
         @test cfg.lateral === :periodic
-        case = BC.build_case(cfg; io = devnull)
+        case = BC.build_case(cfg)
         b = case.sim.bcs
         @test all(f -> f isa Periodic, (b.west, b.east, b.south, b.north))
         @test case.open === nothing
@@ -53,7 +53,7 @@ _smoke(; physics = Dict{Symbol,Any}(), kw...) =
 
     @testset "lateral = :open: faces, data, sponge, solver, frame" begin
         cfg = _smoke(lateral = :open)
-        case = BC.build_case(cfg; io = devnull)
+        case = BC.build_case(cfg)
         sim, m = case.sim, case.mesh
         b = sim.bcs
         @test all(f -> f isa OpenBoundary, (b.west, b.east, b.south, b.north, b.top))
@@ -75,7 +75,7 @@ _smoke(; physics = Dict{Symbol,Any}(), kw...) =
         @test all(sim.u.data[m.Hx+1, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz] .== g.U_g)
         # without the frame the scene's buildings reach the faces: their
         # open-face points are solid (zero velocity, no correction)
-        c0 = BC.build_case(_smoke(lateral = :open, boundary_frame = 0); io = devnull)
+        c0 = BC.build_case(_smoke(lateral = :open, boundary_frame = 0))
         nsolid = sum(count(!, p.fluid) for st in open_boundary_states(c0.sim)
                      for p in st.planes if p.normal)
         mask0 = c0.geom.sm.mask
@@ -110,7 +110,7 @@ _smoke(; physics = Dict{Symbol,Any}(), kw...) =
         base = (lateral = :open, θ_lapse = 0.0, C_s = 0.0,
                 physics = Dict{Symbol,Any}(:sgs => :smagorinsky, :timestepper => :fixed))
         function one_step(ΔT)
-            case = BC.build_case(_smoke(; base...); io = devnull)
+            case = BC.build_case(_smoke(; base...))
             sim, m, ref = case.sim, case.mesh, case.ref
             θ0 = case.cfg.θ_surface
             U = BC.coupling_options(BC.GeostrophicCoupling, case.cfg).U_g
@@ -149,7 +149,7 @@ _smoke(; physics = Dict{Symbol,Any}(), kw...) =
         t = Dict{Symbol,NTuple{2,Float64}}()
         for _ in 1:2, lat in (:periodic, :open)
             case = BC.build_case(_smoke(lateral = lat, boundary_frame = 0,
-                                        physics = Dict{Symbol,Any}(:timestepper => :fixed)); io = devnull)
+                                        physics = Dict{Symbol,Any}(:timestepper => :fixed)))
             BC.run_case!(case; nsteps = 2)
             n0 = case.clock.n
             d0 = case.timing[(:dynamics, :step!)]

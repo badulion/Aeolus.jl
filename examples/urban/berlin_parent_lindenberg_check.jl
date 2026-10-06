@@ -25,8 +25,8 @@ isdefined(Main, :BerlinCase) || include(joinpath(@__DIR__, "BerlinCase.jl"))
 const BP = Main.BerlinCase
 
 @testset "4 + 6. Lindenberg 29/30 June 2019, 24 h (coarse parent)" begin
-    child = BP.CaseConfig(; verbose = false, output_path = nothing)
-    pc = BP.ParentConfig(child; refinement = (16, 16, 8), verbose = false, output_period = 1800.0)
+    child = BP.CaseConfig(; output_path = nothing)
+    pc = BP.ParentConfig(child; refinement = (16, 16, 8), output_period = 1800.0)
     p = BP.build_parent(pc)
     @test (p.mesh.Nx, p.mesh.Ny, p.mesh.Nz) == (24, 24, 38)
     BP.run_parent!(p)

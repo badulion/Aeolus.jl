@@ -86,7 +86,8 @@ water went. Since #129 both act on the first air cell (`bus.k_air`), and
 the surface exchange's smoke check counts writes into solid cells
 (zero).
 
-`run_case!` prints `ledger_report(case)` at the end of a verbose run.
+`run_case!` logs `ledger_report(case)` at the end of the run (an `Info`
+record, `event = :ledger`).
 The cost is about 1 ms/step on the flagship grid (the two water
 integrals), plus about 0.4 ms/step for the Kessler coupling's own
 bookkeeping.

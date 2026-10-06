@@ -221,9 +221,9 @@ function init!(c::CityMeanBuildings, case)
                            sum(scene.facets[i].area for i in g.wall_ids);
                            start_weekday = case_weekday(case.cfg))
     bem = c.bem
-    case.cfg.verbose &&
-        @printf(case.io, "City-mean building: %.0f m² floor area, %.0f m² walls, %.0f m² roofs\n",
-                bem.zone.floor_area, bem.zone.envelope[1].area / (1 - 0.33), bem.zone.envelope[2].area)
+    @debug(@sprintf("City-mean building: %.0f m² floor area, %.0f m² walls, %.0f m² roofs",
+                    bem.zone.floor_area, bem.zone.envelope[1].area / (1 - 0.33), bem.zone.envelope[2].area),
+           subsystem = :berlin, domain = current_domain(), coupling = :buildings)
     return nothing
 end
 
