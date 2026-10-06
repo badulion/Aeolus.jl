@@ -144,7 +144,7 @@ different problem).
 
 The Berlin case's own state — soil columns, building zones, tracers,
 the surface bus, radiation caches, the stage clock — is not checkpointed
-yet; that is #269 / #134, and `IO` stays in `BERLIN_PENDING` until then.
+yet; that is #269 / #134.
 The hook is the generic above: one `checkpoint_state` /
 `restore_checkpoint_state!` method per coupling state, collected as the
 `components` of `checkpoint!` (the dynamical core, closure and wall
