@@ -14,7 +14,7 @@
 #   Wangara Micrometeorology, NOAA Tech. Memo. ERL ARL-104; transcribed from validation/wangara/ref/
 #   day33_sfc_fluxes_Hicks81.csv of the same JAX-SCM commit. The idealised forcing every SCM/LES study uses,
 #   <w theta>_s = 0.216 cos(pi (t_h - 13)/11) K m/s and <w q>_s = 2.29e-5 cos(...) m/s (Nakanishi & Niino 2009,
-#   Boundary-Layer Meteorol. 132, 1-31; Yamada & Mellor 1975), peaks at 0.216 K m/s = 256 W/m2 at 13 LT;
+#   J. Meteorol. Soc. Japan 87, 895-912; Yamada & Mellor 1975), peaks at 0.216 K m/s = 256 W/m2 at 13 LT;
 #   Hicks' maximum is 247 W/m2 at 13 LT.
 # zi,hour_LT,zi_m,neg_R,w_star_m_s
 #   boundary-layer height (height of the minimum heat flux), -R = -<w theta>(zi)/<w theta>_s and w* of the
