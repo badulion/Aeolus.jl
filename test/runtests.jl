@@ -662,6 +662,9 @@ using Aeolus.Fields: set!, interior_view
         @test to_host(a) === a || to_host(a) == a
     end
 
+    include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
+    include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
+
     @testset "GLL nodes: endpoints exact, weights sum to 2, symmetry" begin
         for N in (2, 3, 4, 6, 8)
             x = gll_nodes(N)

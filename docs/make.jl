@@ -95,6 +95,7 @@ makedocs(
             ],
             "The Berlin parent"           => "design/berlin_parent.md",
             "Checkpoint / restart and FFT planning" => "design/checkpoint_restart.md",
+            "Kernel port (KernelAbstractions)" => "design/ka_port.md",
             "Roadmap"                     => "design/roadmap.md",
             "Long-range roadmap (Eras II–XI)" => "design/longterm_roadmap.md",
         ],

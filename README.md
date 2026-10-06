@@ -34,8 +34,8 @@ building height · resolved vertical velocity at 30 m.</sub>
   solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
   CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
 - **80,661 tests.** 62,000 lines of source, 32,000 lines of tests.
-- **FFTW is the only non-stdlib dependency.** Everything else — NetCDF, PNG,
-  Mie scattering, error and Bessel functions — is written in the package.
+- **Few dependencies** (FFTW, KernelAbstractions). NetCDF, PNG, Mie
+  scattering, error and Bessel functions are written in the package.
 - Single-node CPU. MPI and GPU are planned, not present.
 
 ---

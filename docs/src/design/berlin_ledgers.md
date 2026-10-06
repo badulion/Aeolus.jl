@@ -588,7 +588,9 @@ code with comments and docstrings removed); reviewed indirect uses go in
 `BERLIN_INDIRECT`. At #127: 55 modules, 15 coupled, 11 exempt
 (the core's infrastructure and the Parallel / Backends / SpectralElement
 scaffolds), 30 pending; #130 coupled RadiationCore, GasOptics and
-TwoStream (27 pending).
+TwoStream (27 pending). KA-a (#294) took Backends off the exempt list: the
+core couplings run on `CaseConfig.backend` (`build_case` calls
+`init_threads!(cfg.backend)`; see [the kernel port](ka_port.md)).
 
 **The flagship guardrails.** The Berlin case is the flagship: it runs
 every component, on by default, and new physics lands in it in the PR

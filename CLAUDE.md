@@ -162,11 +162,15 @@ disagree about whether a particle activates. Shared quantities go in the
 era contract (`RadiationCore`, `MoistThermodynamics`) as a generic that
 implementers extend.
 
-**No binary dependencies.** FFTW is the only non-stdlib dependency and it
-should stay that way. NetCDF, PNG, Mie scattering, error and Bessel
-functions are all implemented in-package because the usual binary stack
-does not build on every target. Do not add a dependency to avoid writing
-150 lines.
+**Minimal dependencies.** Use a well-maintained Julia package rather
+than reimplementing it; binary (JLL) packages are allowed. Keep the
+dependency list short: every new dependency is justified in its PR —
+what it replaces, why it is worth it, and its load-time cost (`using
+Aeolus`, min of 3 fresh processes, before and after). Do not pin versions
+only to avoid a JLL. The existing in-package implementations (NetCDF
+writer, PNG, Mie, error and Bessel functions) stay as they are, but may
+be replaced by a package in a dedicated PR. Details:
+`docs/CONTRIBUTING.md`.
 
 **Report honestly.** If a test fails, say whether the *code* or the
 *expectation* was wrong — both happen, and the distinction matters. Never

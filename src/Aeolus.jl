@@ -11,6 +11,7 @@ module Aeolus
 # Structured logging (LOG-a, #333): first, so every module can tag its events.
 include("logging/RunLog.jl")
 include("Grids.jl")
+include("Backends.jl")     # KA kernels + launch/reduction primitives (KA-a, #294); before Fields
 include("Fields.jl")
 include("BoundaryConditions.jl")
 # Era VI stability contract (Phase 58): pure, and needed by Operators.
@@ -23,7 +24,6 @@ include("IO.jl")
 include("NetCDFIO.jl")        # dependency-free NetCDF-3 reader/writer
 include("IBM.jl")
 include("Parallel.jl")
-include("Backends.jl")
 include("SpectralElement.jl")
 include("Chemistry.jl")
 include("Particles.jl")
@@ -240,7 +240,11 @@ export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
        implicit_ibm_correction!, wall_distance, first_level_cells   # + P56-b (#182)
 export AbstractPartition, SerialPartition, PencilPartition,
        nranks, is_serial, exchange_halos_distributed!
-export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name
+export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
+       backend, default_backend, set_default_backend!, with_backend, init_threads!,
+       runs_serially, launch!, range_map!,
+       plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
+       column_partials, interior_max, interior_all_finite, interior_map!
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
 export apply_linear_chemistry!,
