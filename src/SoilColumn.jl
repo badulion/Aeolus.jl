@@ -122,6 +122,7 @@ using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
 import ..SurfaceExchange: moisture_availability, surface_temperature, roughness_lengths,
                           surface_albedo, surface_emissivity, step_surface!
 using ..SurfaceOptics: material_emissivity
+using ..TimeIntegration: NumericalFailure   # a diverged solver (#327 M6)
 
 export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
        AbstractHydraulicModel, ClappHornberger, VanGenuchtenMualem, GardnerExponential,
@@ -1289,7 +1290,7 @@ function step_soil_water!(col::SoilWaterColumn{T}, dt::Real;
         else
             htry = h / 2
             htry >= col.dt_min ||
-                error("step_soil_water!: Picard iteration failed to converge for sub-steps down to $(col.dt_min) s")
+                throw(NumericalFailure("step_soil_water!: Picard iteration failed to converge for sub-steps down to $(col.dt_min) s"))
         end
     end
     col.dt_sub = htry
@@ -2100,7 +2101,7 @@ function step_soil_heat!(col::SoilThermalColumn{T}, dt::Real, top::AbstractSoilH
         else
             htry = h / 2
             htry >= col.dt_min ||
-                error("step_soil_heat!: Newton iteration failed to converge for sub-steps down to $(col.dt_min) s")
+                throw(NumericalFailure("step_soil_heat!: Newton iteration failed to converge for sub-steps down to $(col.dt_min) s"))
         end
     end
     col.dt_sub = htry

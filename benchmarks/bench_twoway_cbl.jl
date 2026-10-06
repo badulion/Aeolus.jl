@@ -14,7 +14,8 @@
 #   * the largest child |∇·u| of any step and the composite θ budget error;
 #   * the child-mean secondary-circulation w at 400 m over the last hour
 #     (Hellsten et al. 2021 report a mean child updraft of 0.4–0.9 m/s in
-#     their two-way CBL nests) — a measurement, not a target;
+#     their two-way CBL nests; ours descends, see the #327 ensemble on the
+#     two-way theory page) — a measurement, not a target;
 #   * the growth rate of the 2Δ θ mode along the parent rows crossing the
 #     nest over the last two hours;
 #   * wall time.

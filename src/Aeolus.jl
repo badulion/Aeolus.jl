@@ -277,7 +277,7 @@ export StretchedGrid, TerrainFollowingGrid, terrain_following_grid,
 export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
        SubsteppingSchedule, substeps_for,
        StateSnapshot, state_snapshot, save_state!, restore_state!,
-       step_adaptive!,
+       step_adaptive!, NumericalFailure, is_numerical_failure,
        DiffusionWorkspace, solve_implicit_diffusion!,
        IMEXScheme, ARK2, Rosenbrock2,
        IMEXWorkspace, imex_workspace, step_imex!, imex_stability_limit
@@ -292,6 +292,7 @@ export weno_z5_left, weno_z5_right, weno_z7_left, weno_z7_right,
        momentum_advect_skew!, advect_variance_conserving!,
        kinetic_energy_budget, scalar_variance_budget, enstrophy
 export boundary_scalar_flux           # N-open-c (#260): the one boundary-flux function
+export scalar_face_flux, face_diffusivity, face_inv_spacing   # #327 M2: the one per-face scalar flux kernel
 
 # Phase 27 — anelastic & pseudo-incompressible dynamics
 export ReferenceState,
@@ -337,7 +338,7 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        DomainAdvance, domain_advance, stage_times,
        NestedRun, NestRunStats, boundary_time,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
-       anterpolate!, feedback_mask,
+       anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights,
        RefinementBlock, AMRHierarchy, amr_hierarchy,
        refinement_criterion_gradient, refinement_criterion_vorticity,
        refinement_criterion_richardson, combine_criteria,

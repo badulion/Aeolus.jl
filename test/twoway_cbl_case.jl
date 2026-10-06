@@ -23,8 +23,9 @@ const _TWL_θS = 300.0
 Run the CBL case with `feedback` (`:one_way`, `:two_way` or a
 `TwoWayFeedback`) for `T` seconds at parent spacing `Δ`. Returns the time
 series (every `every` parent steps) of the total kinetic energy, the
-child-mean `w` at 400 m and the 2Δ amplitude of θ along the parent rows
-crossing the nest at a quarter of the child depth; the largest child
+child-mean `w` at 400 m, the 2Δ amplitude of θ along the parent rows
+crossing the nest at a quarter of the child depth and the parent's θ over
+the covered columns minus the rest in the child's lower half; the largest child
 `|∇·u|` of every step and the largest relative error of the composite θ
 budget after 30 min.
 """
@@ -67,8 +68,9 @@ function _twl_cbl(feedback; Δ = 100.0, T = 7200.0, seed = 1, r = 3, every = 1)
     kc = cm.Hz + cm.Nz ÷ 2                            # child mid-height w faces (400 m)
     jrows = pm.Hy .+ cy                               # parent rows crossing the nest
     krow = pm.Hz + cz[1] + length(cz) ÷ 4             # at a quarter of the child depth
-    out = (t = Float64[], ke = Float64[], wc = Float64[], noise = Float64[],
+    out = (t = Float64[], ke = Float64[], wc = Float64[], noise = Float64[], dθ = Float64[],
            divmax = Ref(0.0), budget = Ref(0.0), finite = Ref(true))
+    klow = pm.Hz .+ (1:length(cz) ÷ 2)                 # parent levels of the child's lower half
     t0 = time()
     while p.t < T - 1e-9
         step_nested!(run)
@@ -90,6 +92,18 @@ function _twl_cbl(feedback; Δ = 100.0, T = 7200.0, seed = 1, r = 3, every = 1)
             a += (s / pm.Nx)^2
         end
         push!(out.noise, sqrt(a / length(jrows)))
+        # the parent's θ over the covered columns minus over the rest, in the
+        # child's lower half (the buoyancy behind a secondary circulation)
+        sc = 0.0; so = 0.0; nc = 0; no = 0
+        @inbounds for k in klow, j in 1:pm.Ny, i in 1:pm.Nx
+            v = p.θ.data[pm.Hx+i, pm.Hy+j, k]
+            if (i in cx) && (j in cy)
+                sc += v; nc += 1
+            else
+                so += v; no += 1
+            end
+        end
+        push!(out.dθ, sc / nc - so / no)
     end
     out.finite[] = all(isfinite, p.u.data) && all(isfinite, c.u.data) &&
                    all(isfinite, p.θ.data) && all(isfinite, c.θ.data)

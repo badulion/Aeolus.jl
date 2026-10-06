@@ -123,10 +123,13 @@ averages are weighted by the shared reference mass (`ρ̄` or `ρ̄θ̄`, see
 [`restrict_to_parent!`](@ref)). `solid` (the child's IBM
 [`SolidMask`](@ref) or a Boolean `solid` array) makes every member
 solid-aware: building cells and faces are left out of the averages.
+A mixed Boussinesq / sound-proof pair throws an `ArgumentError` (no
+consistent measure, #327).
 """
 function restrict_state_to_parent!(psim::_NestSim, csim::_NestSim, nest::NestedGrid,
                                    s::Union{Nothing,NestInterpState}=nothing;
                                    solid=nothing)
+    _check_two_way_pair(psim, csim, "restrict_state_to_parent!", s)
     meas = s === nothing ? _sim_measure(nest, psim, csim) : s.measure
     χf = _fluid(nest, solid)                  # computed once for the whole set
     χ = χf === nothing ? nothing : _FluidMask(χf)

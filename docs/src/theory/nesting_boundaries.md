@@ -93,12 +93,22 @@ does real work only where the child's geometry differs from the parent's.
 
 ## Faces inside solids
 
-`NestedRun(...; solid = mask)` (or [`nest_boundary_data`](@ref)`(...;
-solid)`) passes the child's solid mask. An open face whose adjacent child
-cell is solid gets ``u·n = 0`` on the face and the layers beyond it, and is
-flagged non-fluid in its `OpenPlane`; the mass-flux correction neither
-counts nor adjusts it. A building cut by the east face of a test child
-(16 solid faces of 128) keeps ``u·n = 0.0`` exactly, and
+`NestedRun(...; solid = mask)` (or [`apply_nest_boundary!`](@ref)`(...;
+solid)`) passes the child's solid mask, and the run marks the open faces
+with the one open-boundary path,
+[`mark_open_boundary_solids!`](@ref Aeolus.BoundaryConditions.mark_open_boundary_solids!)
+(N-open-d #262). A boundary point is solid when an interior cell it
+borders is solid (the cell next to the face for the normal velocity and the
+scalars, either of the two cells for a staggered tangential component).
+Every velocity buffer — the normal velocity on the face and the layers
+beyond it, **and** the tangential velocities — is zero there, and the
+point is flagged non-fluid in its `OpenPlane`, so the mass-flux correction
+neither counts nor adjusts it. (Until #327 the nest had a second
+implementation, `NestBoundaryData.solid`, that zeroed only the normal
+velocity; it is retired, and `nest_boundary_data` no longer takes a
+`solid` keyword.) A building cut by the east face of a test child
+(16 solid faces of 128, 40 tangential solid points) keeps ``u·n = 0.0``
+and zero tangential velocity exactly, and
 ``δ = Q / A_{\rm fluid}`` holds bit for bit. The parent does not see the
 building, so the solid faces create a genuine imbalance
 (``Q = -2.97\times10^4`` m³/s, ``δ = -0.063`` m/s, 2 % of ``U``) that the

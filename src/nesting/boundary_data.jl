@@ -27,12 +27,14 @@ tangential-velocity and scalar halos, for every member of the field set
 The time blend is the one of [`boundary_time`](@ref): exact for data
 linear in time, second order otherwise (N-nest-c, #257).
 
-`solid` (optional) is the child's solid mask — a `SolidMask` or a
-`Bool` array on the child's storage — and marks the **faces inside
-solids**: an open face whose adjacent child cell is solid gets `u·n = 0`
-(face and beyond-face layers) and is flagged non-fluid in its
-[`OpenPlane`](@ref Aeolus.BoundaryConditions.OpenPlane), so the mass-flux
-correction neither counts nor adjusts it.
+Faces inside solids are not this type's business (#327, M4): a
+[`NestedRun`](@ref) built with `solid = mask` (and
+[`apply_nest_boundary!`](@ref)`(…; solid)`) marks them with the one
+open-boundary path,
+[`mark_open_boundary_solids!`](@ref Aeolus.BoundaryConditions.mark_open_boundary_solids!)
+(N-open-d #262): every velocity buffer — normal **and** tangential — is
+zero at the solid points, and the mass-flux correction neither counts nor
+adjusts them.
 
 The prolongated parent states are filled by a [`NestedRun`](@ref) (or,
 steady, by [`apply_nest_boundary!`](@ref)); see
@@ -45,34 +47,44 @@ the interpolated parent, mass-flux correction); Kadasch, E. et al. (2021),
 *Geosci. Model Dev.* 14, 5435–5465, §2.2–2.3 (the same interface for a
 mesoscale parent).
 """
-mutable struct NestBoundaryData{S<:NestInterpState, M} <: AbstractBoundaryData
+mutable struct NestBoundaryData{S<:NestInterpState} <: AbstractBoundaryData
     a::S
     b::S
     t0::Float64
     Δt::Float64
-    solid::M
 end
 
 _solid_array(::Nothing) = nothing
 _solid_array(x::AbstractArray{Bool,3}) = x
 _solid_array(x) = hasproperty(x, :mask) ? _solid_array(getproperty(x, :mask)) :
-    throw(ArgumentError("NestBoundaryData: `solid` must be a SolidMask or a Bool array " *
+    throw(ArgumentError("nest: `solid` must be a SolidMask or a Bool array " *
                         "on the child's storage, got $(typeof(x))"))
 
 """
-    nest_boundary_data(a, b = a; t0 = 0, Δt = 0, solid = nothing) -> NestBoundaryData
+    nest_boundary_data(a, b = a; t0 = 0, Δt = 0) -> NestBoundaryData
 
 A [`NestBoundaryData`](@ref) blending the prolongated parent states `a`
 (at `t0`) and `b` (at `t0 + Δt`); with `b = a` (or `Δt = 0`) it is
-steady.
+steady. Solid faces are marked on the child's boundary conditions, not
+here (`NestedRun(…; solid)`, [`apply_nest_boundary!`](@ref)).
 """
 function nest_boundary_data(a::NestInterpState, b::NestInterpState = a;
-                            t0::Real = 0.0, Δt::Real = 0.0, solid = nothing)
+                            t0::Real = 0.0, Δt::Real = 0.0)
+    return NestBoundaryData(a, b, Float64(t0), Float64(Δt))
+end
+
+# The child's solid mask on its open faces: the single N-open-d path
+# (`mark_open_boundary_solids!`: zero normal and tangential velocity at the
+# solid points, excluded from the mass-flux correction). #327 M4 retired the
+# nest's own `_solid_faces!`, which zeroed only the normal velocity.
+function _mark_nest_solids!(csim, solid)
     sa = _solid_array(solid)
-    sa === nothing || size(sa) == size(a.θ.data) ||
-        throw(DimensionMismatch("NestBoundaryData: solid mask of size $(size(sa)) is not " *
-                                "on the child's storage $(size(a.θ.data))"))
-    return NestBoundaryData(a, b, Float64(t0), Float64(Δt), sa)
+    sa === nothing && return csim
+    size(sa) == size(csim.θ.data) ||
+        throw(DimensionMismatch("nest: solid mask of size $(size(sa)) is not on the " *
+                                "child's storage $(size(csim.θ.data))"))
+    has_open_boundaries(csim) && mark_open_boundary_solids!(csim.bcs, sa)
+    return csim
 end
 
 function _nest_member(s::NestInterpState, name::Symbol)
@@ -91,7 +103,6 @@ function boundary_values!(planes::AbstractVector{<:OpenPlane}, d::NestBoundaryDa
     for p in planes
         p.mode === :mirror && continue
         _blend_plane!(p, _nest_member(d.a, p.name).data, _nest_member(d.b, p.name).data, τ)
-        p.normal && d.solid !== nothing && _solid_faces!(p, d.solid, d.a.θ.mesh)
     end
     return planes
 end
@@ -104,34 +115,6 @@ function _blend_plane!(p::OpenPlane{T}, A::AbstractArray, B::AbstractArray, τ) 
     @inbounds for (c, k) in enumerate(p.krange), (b, j) in enumerate(p.jrange),
                   (a, i) in enumerate(p.irange)
         pd[a, b, c] = τ1 * A[i, j, k] + τT * B[i, j, k]
-    end
-    return p
-end
-
-# Faces inside solids: the child cell next to the open face is solid →
-# u·n = 0 on the face and on the layers beyond it, and the face is not a
-# fluid face (the mass-flux correction skips it).
-function _solid_faces!(p::OpenPlane{T}, mask::AbstractArray{Bool,3}, m) where {T}
-    Hs = (m.Hx, m.Hy, m.Hz); Ns = (m.Nx, m.Ny, m.Nz)
-    ax = p.axis
-    cell = p.high ? Hs[ax] + Ns[ax] : Hs[ax] + 1
-    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
-    pd = p.data
-    @inbounds for b in 1:Ns[t2], a in 1:Ns[t1]
-        I = ax == 1 ? (cell, Hs[2] + a, Hs[3] + b) :
-            ax == 2 ? (Hs[1] + a, cell, Hs[3] + b) : (Hs[1] + a, Hs[2] + b, cell)
-        solid = mask[I[1], I[2], I[3]]
-        p.fluid[a, b] = !solid
-        solid || continue
-        # the plane's storage ranges are full along the tangential axes, so
-        # the local tangential index is the storage index
-        if ax == 1
-            pd[:, I[2], I[3]] .= zero(T)
-        elseif ax == 2
-            pd[I[1], :, I[3]] .= zero(T)
-        else
-            pd[I[1], I[2], :] .= zero(T)
-        end
     end
     return p
 end
@@ -196,12 +179,16 @@ the mass-flux correction, and write them into the child: the boundary
 faces of the normal velocity, the tangential-velocity halos and the
 halos of every scalar of the set (`θ`, `qv`, tracers). Faces that are
 not nest faces (periodic, walls) are filled by their own condition.
+`solid` (a `SolidMask` or a `Bool` array) marks the open faces inside
+solids ([`mark_open_boundary_solids!`](@ref
+Aeolus.BoundaryConditions.mark_open_boundary_solids!)).
 
 A [`NestedRun`](@ref) does this itself, with the time-blended parent;
 calling this on a run's child replaces the run's boundary data.
 """
 function apply_nest_boundary!(csim::_NestSim, s::NestInterpState; solid = nothing)
     has_open_boundaries(csim) || return csim
-    _attach_nest_data!(csim, nest_boundary_data(s; t0 = csim.t, solid))
+    _mark_nest_solids!(csim, solid)
+    _attach_nest_data!(csim, nest_boundary_data(s; t0 = csim.t))
     return _fill_nest_halos!(csim, s)
 end

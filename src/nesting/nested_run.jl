@@ -89,9 +89,11 @@ Keywords:
     parent after each child substep, on the child's open faces only
     ([`nest_open_sides`](@ref));
   * `solid` (`nothing`) — the child's IBM [`SolidMask`](@ref) (or a
-    `Bool` array). Open faces inside solids get `u·n = 0` and are left
-    out of the mass-flux correction ([`NestBoundaryData`](@ref)), and the
-    two-way restriction is solid-aware ([`restrict_state_to_parent!`](@ref));
+    `Bool` array). The open faces inside solids are marked with
+    [`mark_open_boundary_solids!`](@ref
+    Aeolus.BoundaryConditions.mark_open_boundary_solids!): zero normal and
+    tangential velocity there, left out of the mass-flux correction; and
+    the two-way restriction is solid-aware ([`restrict_state_to_parent!`](@ref));
   * `max_retries` (3), `divergence_tol` (`Inf`, parent only, through
     `max_divergence`), `max_velocity` (`Inf`), `validate` (true) — the
     step-rejection test, as in
@@ -104,9 +106,13 @@ Keywords:
     ([`nest_conservation_error`](@ref)).
 
 Two-way feedback needs parent and child of the same core family (two
-Boussinesq sims, or two `MassWeightedSimulation`s sharing one
-`ReferenceState`, whose transfers then use the reference-mass measure
-[`nest_measure`](@ref)); a mixed pair can only be nested one-way.
+Boussinesq sims, or two `MassWeightedSimulation`s of one sound-proof
+system sharing one `ReferenceState`, whose transfers then use the
+reference-mass measure [`nest_measure`](@ref)); a mixed pair can only be
+nested one-way, and asking for two-way throws an `ArgumentError` (a
+Boussinesq/sound-proof pair has no consistent measure: the restriction
+would weight by volume where the sound-proof grid needs its reference
+mass, and the flux registers would mix volume and mass fluxes).
 
 **Boundary conditions.** The child must be built with
 [`nest_bcs`](@ref)`(child_mesh, …; moisture, scalars)` naming the same
@@ -196,10 +202,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     feedback = twoway === nothing ? :one_way : :two_way
     sync in (:subcycle, :shared_min_dt) ||
         error("NestedRun: sync must be :subcycle or :shared_min_dt, got :$sync")
-    feedback === :two_way && !_same_core(parent, child) &&
-        error("NestedRun: two-way feedback needs parent and child of the same kind " *
-              "(got $(nameof(typeof(parent))) and $(nameof(typeof(child)))); " *
-              "use feedback = :one_way")
+    feedback === :two_way && _check_two_way_pair(parent, child, "NestedRun")
     sync === :shared_min_dt && (cfl_parent === nothing || cfl_child === nothing) &&
         error("NestedRun: sync = :shared_min_dt needs cfl_parent and cfl_child")
     size(parent.θ.data) == totalsize(nest.parent_mesh) ||
@@ -213,6 +216,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     ns >= 1 || error("NestedRun: substeps must be >= 1")
     s_old, s_new, s_bc = state === nothing ?
         ntuple(_ -> nest_interp_state(nest, parent, child; scalars), 3) : state
+    feedback === :two_way && _check_two_way_pair(parent, child, "NestedRun", s_bc)
     # the boundary buffers hold the halos *and* the boundary-normal interior
     # face plane of the west/south/bottom faces; the sponge needs the whole field
     region = sponge !== nothing ? :all : :halo_interface
@@ -221,7 +225,8 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                              sponge.sides .& nest_open_sides(child))
     # the child's boundary: the parent prolongated now, attached to its open faces
     interpolate_parent_state!(s_old, parent, nest; order, region)
-    data = nest_boundary_data(s_old, s_new; t0 = child.t, Δt = 0.0, solid)
+    _mark_nest_solids!(child, solid)
+    data = nest_boundary_data(s_old, s_new; t0 = child.t, Δt = 0.0)
     _attach_nest_data!(child, data)
     _fill_nest_halos!(child, s_old)
     run = NestedRun(parent, child, nest, s_old, s_new, s_bc, advance_parent, advance_child,
@@ -233,6 +238,10 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                     twoway !== nothing && twoway.reflux ?
                         NestFluxRegisters(nest, parent, child, s_bc, twoway,
                                           advance_parent, advance_child) : nothing)
+    if run.regs !== nothing                  # separate transports book through the sims
+        _register_booker!(parent, run.regs, :parent, nest)
+        _register_booker!(child, run.regs, :child, nest)
+    end
     return run
 end
 
@@ -323,12 +332,18 @@ function _accept(run::NestedRun, sim, which::Symbol)
     return true
 end
 
+# One attempted step. A numerical failure (`is_numerical_failure`: a
+# `NumericalFailure`, a `DomainError`/`InexactError`/`OverflowError`, or any
+# exception thrown from a non-finite state) rejects the step, which is then
+# rolled back and retried; anything else — a `MethodError`, a `BoundsError`,
+# a wrong argument — is a bug or a set-up error and is rethrown at once
+# (#327, M6: it used to become a "rejected step" retried at half the size).
 function _try_advance!(adv::DomainAdvance, sim, h, bf = nothing)
     try
         adv(sim, h; body_force! = bf)
         return true
     catch err
-        err isa InterruptException && rethrow()
+        is_numerical_failure(err, sim) || rethrow()
         return false
     end
 end
@@ -364,7 +379,10 @@ Advance `run` by one parent step:
     one-way run, reused from the end of the previous step);
  3. the parent takes its step. A rejected parent step (non-finite state,
     exception, `divergence_tol`, `max_velocity`) is rolled back and
-    retried with `Δt_p/2` — **before** any child substep;
+    retried with `Δt_p/2` — **before** any child substep. Only a
+    numerical failure ([`is_numerical_failure`](@ref
+    Aeolus.TimeIntegration.is_numerical_failure)) is rejected; any other
+    exception (a `MethodError`, a `BoundsError`, …) propagates at once;
  4. the parent field set is prolongated at `t_p + Δt_p`;
  5. the child subcycles to land exactly on `t_p + Δt_p`:
     `n = ⌈Δt_p / Δt_c^max⌉` substeps, re-evaluated before every substep as
