@@ -153,6 +153,10 @@ end
 # NestedGrid
 # =========================================================================
 
+# (:volume, 0, 0, :none), or (:mass, objectid(parent ref), objectid(child ref), weighting)
+const _MeasureKey = Tuple{Symbol,UInt,UInt,Symbol}
+const _VOLUME_KEY = (:volume, UInt(0), UInt(0), :none)
+
 """
     NestedGrid(parent_mesh, child_mesh; refinement, offset)
 
@@ -182,10 +186,6 @@ reach into those layers interpolate on the actual face heights.
 
 Use [`nested_grid`](@ref) to build the child mesh from a physical extent.
 """
-# (:volume, 0, 0, :none), or (:mass, objectid(parent ref), objectid(child ref), weighting)
-const _MeasureKey = Tuple{Symbol,UInt,UInt,Symbol}
-const _VOLUME_KEY = (:volume, UInt(0), UInt(0), :none)
-
 struct NestedGrid{T, MP<:AbstractMesh{T}, MC<:RegularGrid{T}}
     parent_mesh::MP
     child_mesh::MC

@@ -181,7 +181,7 @@ end
     _zplan(nest, kind, order, measure)
 
 The vertical 1-D plan. On a uniform parent in the volume measure it is
-the N-nest-a integer plan ([`_plan`](@ref)); otherwise the coordinate
+the N-nest-a integer plan (`_plan`); otherwise the coordinate
 plan of the measure: `:avg` in the measure coordinate (height, or the
 reference mass `μ`), `:nodal` (the point value `w`) in height.
 """

@@ -74,7 +74,8 @@ B(t) = (1-τ)\,\mathcal P\,φ_p(t_p) + τ\,\mathcal P\,φ_p(t_p+Δt_p),
 ```
 
 [`boundary_time`](@ref)`(run, t)` evaluates it over the whole field set
-(`u, v, w, θ`, `qv`, extra scalars). Linear interpolation of a smooth
+(`u, v, w, θ`, `qv`, extra scalars), at the points the run stores (the
+halos and boundary face planes only, without a sponge: #329). Linear interpolation of a smooth
 ``φ(t)`` has the error
 
 ```math
@@ -213,6 +214,32 @@ These are owned by other issues of the nesting epic (#246).
   correction and the refluxing act on the child's open faces only; a child
   wall that is not the parent's wall is reported (the composite integral
   cannot be conserved across it).
+* **Resolved by #329: the sponge and ∇·u.** A `NestSponge` relaxes the
+  child velocity on the predicted velocity of every stage, before the
+  pressure solve (`post_predictor!`), so the child stays divergence-free
+  (``2.8\times10^{-14}`` s⁻¹, against 1.6 s⁻¹ when relaxed after the
+  step); the scalars are relaxed after the substep. A user core must call
+  `post_predictor!` for the velocity part to act.
+* **Resolved by #329: memory and allocations.** Without a sponge the
+  run's three field sets are halo-only (`storage = :shell`, 42 % of the
+  child-sized sets for a ``32^3`` child, 24 % for ``64^3``); the rollback
+  state of each domain and the two-way scratch are allocated once. Per
+  nested step (``32^3`` parent, ``32^3`` child at ``r = 2``, `step!`), the
+  nesting layer allocates 24 KiB one-way and 44 KiB two-way on top of the
+  cores, against 2.9 MiB and 6.6 MiB before (the composite momentum
+  integral alone allocated 858 KiB per call, twice per two-way step); the
+  periodic halo fill no longer allocates, so a 32³ `step!` went from
+  1.6 MiB to 0. The state is concretely typed (no `Any`, `Vector{Any}`,
+  `Vector{Field}` or `Dict{Any,Any}`), as the KernelAbstractions port
+  (#291) needs.
+* **Resolved by #329: refluxing at the parent boundary.** The correction
+  of a child face lying on the parent's own boundary goes to the wrapped
+  cell across a periodic seam and nowhere across a non-periodic boundary
+  (it used to wrap on every axis, so a child at the parent top would have
+  corrected the parent's lowest layer); `apply_flux_correction!` takes the
+  parent's periodic axes ([`nest_periodic_axes`](@ref)).
+* **Open (#328):** one parent–child pair per run; nest hierarchies,
+  sibling nests, non-aligned parents and stretched children.
 
 ## References
 
