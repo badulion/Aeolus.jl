@@ -581,7 +581,7 @@ Reynolds-stress run was the slowest by 3–4×, more than its 2× in Berlin.
 ## Berlin coupling
 
 `examples/urban/couplings/sgs_tke.jl`, provider `:tke` of the `:sgs` slot
-(see [the Berlin case](../design/berlin_case.md#Numerics-slots)), with ``e``
+(see [the Berlin case](../design/berlin_numerics.md#Numerics-slots)), with ``e``
 the advected tracer `:e`, the wall cap from the building mask, and the
 surface value from the MOST friction velocity. The Reynolds-stress closure
 is the option `:reynolds_stress` (`examples/urban/couplings/sgs_reynolds_stress.jl`):

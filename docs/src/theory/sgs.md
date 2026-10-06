@@ -878,7 +878,7 @@ or the Berlin case transports, not only to θ:
   * The Berlin case diffuses every tracer its `:transport` stage advects
     (qv, ql, the chemistry species) and the pollutant with `sim.κt` of the
     last dynamics step (θ's κ_t, also under the `:amd` provider, whose own
-    per-scalar diffusivity the Berlin tracers do not use yet) (see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
+    per-scalar diffusivity the Berlin tracers do not use yet) (see [The Berlin case](../design/berlin_numerics.md#Numerics-slots)).
 
 The three-argument kernel takes two keywords for this. `mask` (a Bool
 solid mask, e.g. `IBM.SolidMask(…).mask`) closes every face with a solid
@@ -923,7 +923,7 @@ shear production) read the same tensor.
 
 In the Berlin case the SGS slot's providers are closure objects passed as
 `sgs`, so `:dynamic` and `:mlsgs` now also run on the sound-proof cores
-(see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
+(see [The Berlin case](../design/berlin_numerics.md#Numerics-slots)).
 
 ## Anisotropic minimum-dissipation and Vreman closures
 
@@ -1044,7 +1044,7 @@ points. The closure and its constant did not change.
 
 In the Berlin case both are providers of the
 `:sgs` slot (`:amd`, `:vreman`; see
-[The Berlin case](../design/berlin_case.md#Numerics-slots)).
+[The Berlin case](../design/berlin_numerics.md#Numerics-slots)).
 
 ## Decaying grid turbulence (Comte-Bellot and Corrsin)
 

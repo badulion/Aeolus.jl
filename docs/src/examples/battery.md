@@ -342,7 +342,7 @@ from the first air cell, with its soil water (`hydrology = true`), so β
 follows the top layer. Roofs, water and glass are `Radiation.SlabLand`
 surfaces. `UrbanSoil` / `step_soil!` and `couplings/soil_urban.jl` are
 gone; `couplings/ground_soil.jl` registers the soil columns. See
-`docs/src/design/berlin_case.md` for the design and the measured
+`docs/src/design/berlin_surface_radiation.md` for the design and the measured
 effect. The rest of this section describes the #18 arrangement and its
 measurements.
 

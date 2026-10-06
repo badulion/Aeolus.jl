@@ -342,7 +342,7 @@ diagnostic exposes it; it does not fix it.
 
 The `turbulence_diag` addon writes the plane-mean ``N^2``, ``Ri_g`` and
 ``f_m`` profiles at every output record. See
-[The Berlin case](../design/berlin_case.md#Turbulence-diagnostics-(#170)),
+[The Berlin case](../design/berlin_turbulence.md#Turbulence-diagnostics-(#170)),
 which also gives the measured values in the 60 m capping inversion of
 the smoke case.
 

@@ -24,7 +24,7 @@ Monin–Obukhov fluxes with the first air cell through `step_surface!`,
 with the soil water stepped (`hydrology = true`) so the moisture
 availability follows the top layer (see
 [the Alexanderplatz run](../examples/battery.md#Ground:-the-production-soil-column)
-and `docs/src/design/berlin_case.md`). Before that (#18) it sat under a
+and `docs/src/design/berlin_surface_radiation.md`). Before that (#18) it sat under a
 surface slab, coupled through a contact conductance.
 
 ## 1. Thermal properties
