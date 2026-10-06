@@ -79,6 +79,10 @@ import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
 
 using ..Simulations: horizontal_mean, horizontal_variance
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
+using ..Operators: sgs_fields
+using ..TimeIntegration: CFLConstraints, _max_advective_rate, _SNAPSHOTS
+import ..TimeIntegration: adaptive_dt, StateSnapshot, save_state!, restore_state!,
+                          state_snapshot, _all_finite
 
 export ReferenceState,
        isothermal_reference, isentropic_reference,
@@ -1894,5 +1898,101 @@ function _system_record(sim)
             constraint_residual = constraint_residual(sim),
             plain_divergence    = max_divergence(sim))
 end
+
+# =========================================================================
+# Adaptive dt and step snapshots for the sound-proof cores (N-nest-c, #257)
+# =========================================================================
+#
+# `adaptive_dt`, `StateSnapshot` and the finiteness check are the
+# TimeIntegration contract (Phase 23). These methods extend it to the
+# mass-weighted cores so a nested run (Nesting.NestedRun) can pick each
+# domain's step and roll a rejected step back whatever its dynamical core.
+
+"""
+    adaptive_dt(sim::MassWeightedSimulation, constraints; dt_prev = nothing,
+                sgs = nothing, kwargs...)
+
+The next time step of a sound-proof simulation: the smallest of the
+advective limit `C_advective / max_cell Σ|uᵢ|/Δxᵢ` (the per-cell rate of
+the Boussinesq [`cfl_diagnostics`](@ref Aeolus.TimeIntegration.cfl_diagnostics)),
+the diffusive limit `C_diffusive Δ²_harm / (ν + max(νt, κt))` with the SGS
+coefficients recomputed (pure `compute_sgs!`) from the current state, the
+buoyancy limit `C_buoyancy / N` from the horizontal-mean θ profile, and
+the Coriolis limit `C_coriolis / |f|`. Then, as for the Boussinesq core,
+limited to `growth_max · dt_prev` and clamped to `[dt_min, dt_max]`; a
+non-finite state collapses to `dt_min`. The other keywords of the
+Boussinesq method (`scheme`, `sgs_stress`, `diagnostics`) are accepted and
+ignored, so a driver can pass the same keywords to either core.
+"""
+function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
+                     dt_prev = nothing, sgs = nothing, kwargs...) where {S,T}
+    m = sim.mesh
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+    rate = _max_advective_rate(sim.u.data, sim.v.data, sim.w.data, m)
+    isnan(rate) && return c.dt_min
+    dt = rate > 0 ? c.C_advective / rate : T(Inf)
+
+    closure = _active_sgs(sim, sgs, nothing)
+    κmax = zero(T)
+    if closure !== nothing
+        fill_halos!(sim.θ, sim.θ_bcs)
+        compute_sgs!(closure, sim)
+        f = sgs_fields(closure, sim)
+        κmax = max(maximum(interior_view(f.νh)), maximum(interior_view(f.νv)),
+                   maximum(interior_view(f.κh)), maximum(interior_view(f.κv)))
+    end
+    νtot = (sim.has_viscosity ? sim.ν : zero(T)) + κmax
+    Δ²harm = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
+    νtot > 0 && (dt = min(dt, c.C_diffusive * Δ²harm / νtot))
+
+    if sim.has_buoyancy
+        θm = horizontal_mean(sim.θ)
+        N² = zero(T)
+        for k in 2:length(θm)
+            N² = max(N², buoyancy_frequency_squared(θm[k-1], θm[k], m.dz, sim.g_accel,
+                                                     (θm[k-1] + θm[k]) / 2))
+        end
+        N² > 0 && (dt = min(dt, c.C_buoyancy / sqrt(N²)))
+    end
+    sim.has_coriolis && sim.f_coriolis != 0 &&
+        (dt = min(dt, c.C_coriolis / abs(sim.f_coriolis)))
+    isnan(dt) && return c.dt_min
+    if dt_prev !== nothing
+        dtp = T(dt_prev)
+        dtp > 0 && (dt = min(dt, c.growth_max * dtp))
+    end
+    return clamp(dt, c.dt_min, c.dt_max)
+end
+
+# A sound-proof core carries no qv: its snapshot holds an empty qv buffer.
+StateSnapshot(sim::MassWeightedSimulation{S,T}) where {S,T} =
+    StateSnapshot{T}(similar(sim.u.data), similar(sim.v.data), similar(sim.w.data),
+                     similar(sim.p.data), similar(sim.θ.data), Array{T,3}(undef, 0, 0, 0),
+                     sim.t, false)
+
+function save_state!(snap::StateSnapshot, sim::MassWeightedSimulation)
+    copyto!(snap.u, sim.u.data); copyto!(snap.v, sim.v.data)
+    copyto!(snap.w, sim.w.data); copyto!(snap.p, sim.p.data)
+    copyto!(snap.θ, sim.θ.data)
+    snap.t = sim.t; snap.valid = true
+    return snap
+end
+
+function restore_state!(sim::MassWeightedSimulation, snap::StateSnapshot)
+    snap.valid || throw(ArgumentError("StateSnapshot has never been saved"))
+    copyto!(sim.u.data, snap.u); copyto!(sim.v.data, snap.v)
+    copyto!(sim.w.data, snap.w); copyto!(sim.p.data, snap.p)
+    copyto!(sim.θ.data, snap.θ)
+    sim.t = snap.t
+    return sim
+end
+
+state_snapshot(sim::MassWeightedSimulation) =
+    get!(() -> StateSnapshot(sim), _SNAPSHOTS, sim)::StateSnapshot
+
+_all_finite(sim::MassWeightedSimulation) =
+    all(isfinite, interior_view(sim.u)) && all(isfinite, interior_view(sim.v)) &&
+    all(isfinite, interior_view(sim.w)) && all(isfinite, interior_view(sim.θ)) &&
+    all(isfinite, interior_view(sim.p))
 
 end # module

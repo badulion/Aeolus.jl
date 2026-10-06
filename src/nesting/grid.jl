@@ -20,6 +20,13 @@ _fill_x!(d, ::NestBC, ::NestBC, Hx, Nx, ::Location) = d
 _fill_y!(d, ::NestBC, ::NestBC, Hy, Ny, ::Location) = d
 _fill_z!(d, ::NestBC, ::NestBC, Hz, Nz, ::Location) = d
 
+# The parent prescribes the child's normal velocity on a nest face (boundary
+# data, and the interface plane under `impose_interface`), so the projection
+# must leave it unchanged: ∂φ/∂n = 0, as for the other velocity-prescribing
+# faces (N-open-a, #251). This is what the cosine solver did for nest faces
+# before the boundary kind was read through `axis_poisson_bc`.
+axis_poisson_bc(::NestBC) = :neumann
+
 _bck(s::Symbol) = s === :nest     ? NestBC()          :
                   s === :periodic ? Periodic()        :
                   s === :noflux   ? NoFlux()          :

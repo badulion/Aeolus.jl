@@ -48,7 +48,9 @@ module Nesting
 # (NestMeasure, fluid mask), nesting/operators.jl
 # (weights, prolongation, restriction, refluxing), nesting/interp_state.jl
 # (NestSponge, NestInterpState), nesting/step.jl (composite diagnostics,
-# step_nested!).
+# restriction / refluxing of the field set), nesting/nested_run.jl (NestedRun:
+# per-domain advance closures, subcycling under adaptive steppers,
+# temporal interpolation of the boundary data, step_nested!; N-nest-c #257).
 
 using Printf: @sprintf
 using ..Grids
@@ -60,7 +62,11 @@ using ..BoundaryConditions
 using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall, NoSlipWall
 using ..Simulations
-using ..Simulations: BoussinesqSimulation
+using ..Simulations: BoussinesqSimulation, step_rk3!
+using ..Operators: sgs_closure, sgs_state, restore_sgs_state!
+using ..TimeIntegration: CFLConstraints, adaptive_dt, StateSnapshot, save_state!, state_snapshot,
+                         restore_state!, IMEXScheme, ARK2, Rosenbrock2, step_imex!,
+                         _all_finite, _max_advective_rate
 using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness
 using ..Anelastic: MassWeightedSimulation, ReferenceState, constraint_weights
 using ..IBM: SolidMask
@@ -68,7 +74,7 @@ using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
 
-import ..BoundaryConditions: _fill_x!, _fill_y!, _fill_z!
+import ..BoundaryConditions: _fill_x!, _fill_y!, _fill_z!, axis_poisson_bc
 
 export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
@@ -82,12 +88,21 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_scalar_names, apply_nest_boundary!,
        restrict_state_to_parent!, reflux!, reflux_scalars!,
        step_nested!, nest_conservation_error, composite_integral,
+       DomainAdvance, domain_advance, stage_times,
+       NestedRun, NestRunStats, boundary_time,
        NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask
+
+"Simulations a nest can couple: the Boussinesq core (uniform or z-stretched) and the sound-proof `MassWeightedSimulation`s (anelastic, pseudo-incompressible)."
+const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
+
+_moist(sim::BoussinesqSimulation) = sim.has_moisture
+_moist(::MassWeightedSimulation)  = false
 
 include("nesting/grid.jl")
 include("nesting/measure.jl")
 include("nesting/operators.jl")
 include("nesting/interp_state.jl")
 include("nesting/step.jl")
+include("nesting/nested_run.jl")
 
 end # module
