@@ -41,8 +41,8 @@ radius, for each temperature, temperature gradient and density, to
 
 The fits are CLM's look-up table `snicar_drdt_bst_fit_60_c070416.nc`
 (11 temperatures 223–273 K × 31 gradients 0–300 K m⁻¹ × 8 densities
-50–400 kg m⁻³), shipped unchanged in `src/data/` and read with the
-in-package `NetCDFIO` reader (`snicar_aging_table`).
+50–400 kg m⁻³), shipped unchanged in `src/data/` and read with
+NCDatasets (`snicar_aging_table`).
 
 **Exact integration.** At fixed parameters the law integrates in closed
 form. With ``x = r - r_0 + τ`` and ``e = 1 + 1/κ``,

@@ -426,13 +426,14 @@ wheel. However, keep them to a minimum."
   usually not worth it.
 - **Do not pin versions only to avoid a JLL.** Take the version the
   resolver picks unless there is a real incompatibility.
-- **Existing in-package implementations stay.** NetCDF writer, PNG/APNG,
+- **Existing in-package implementations stay.** PNG/APNG,
   Mie scattering, the error function and Bessel functions were written
   under the old rule. They are tested and validated and are not to be
   churned in passing; replacing one with a package is fine, in a
   dedicated PR that shows the validation still holds.
 
-Current direct dependencies: FFTW, and KernelAbstractions (admitted
+Current direct dependencies: FFTW, NCDatasets and KernelAbstractions
+(admitted
 2026-10-06, #291: "single-node multithreading now, with one kernel path
 for the GPU in Phase 81"). All KernelAbstractions code lives in
 `src/Backends.jl` (`docs/src/design/ka_port.md`). Its tree resolves
@@ -440,6 +441,20 @@ for the GPU in Phase 81"). All KernelAbstractions code lives in
 `LLVMExtra_jll`; the earlier `UnsafeAtomics = "0.3"` pin that kept them
 out was lifted on 2026-10-06 (maintainer: "Allow LLVMExtra_jll"). It
 costs about 37 ms of `using Aeolus` (215 → 252 ms).
+
+NCDatasets (admitted 2026-10-06, #310) replaced the in-package NetCDF-3
+reader and writer (`NetCDFIO`, 566 lines). NetCDF-4/HDF5 is the format of
+ERA5, ICON, COSMO and PALM and of the tools that read them; it gives the
+output lossless compression, chunking and no 4 GiB limit per record, none
+of which a hand-written writer could reasonably provide. Its tree brings
+the binary `NetCDF_jll` and `HDF5_jll`. It costs about 270 ms of
+`using Aeolus` (449 → 717 ms, minimum of three fresh processes,
+2026-10-06). On the 24 h Berlin output of 2026-10-04 (48 records,
+64×64×32) it reduces the file from 316 MB (NetCDF-3) to 185 MB, bit for
+bit identical on read-back. All of Aeolus' output policy (NetCDF-4, deflate level 4
+with shuffle, chunks of one level and one record) is in `src/NCIO.jl`;
+reading is plain NCDatasets. GRIBDatasets, which #310 also admitted, is
+added with the first code that reads GRIB (the ERA5 preprocessors, #311).
 
 ### Look at what you produce
 
@@ -450,8 +465,8 @@ never viewed at size. `add_label!` substituted a space for unknown
 characters, so it failed silently — it now renders `?`.
 
 The same applies to data: a writer whose output cannot be read back is
-not a working format, which is why `NetCDFIO` ships a reader that
-re-derives offsets independently of the writer.
+not a working format, which is why `test/ncio.jl` reads every output
+variable back and checks it bit for bit.
 
 ---
 

@@ -36,7 +36,7 @@ building height · resolved vertical velocity at 30 m.</sub>
 - **96,755 passing tests in the fast tier** (master `511deda`, 2026-10-06);
   the full tier adds the validation mini-simulations. 62,000 lines of source,
   32,000 lines of tests.
-- **Few dependencies** (FFTW, KernelAbstractions). NetCDF, PNG, Mie
+- **Few dependencies** (FFTW, KernelAbstractions, NCDatasets). PNG, Mie
   scattering, error and Bessel functions are written in the package.
 - Single-node CPU. MPI and GPU are planned, not present.
 
@@ -140,7 +140,7 @@ dry deposition · rain scavenging of HNO₃
 </td></tr>
 <tr><td><b>Output</b></td><td>
 
-CF-1.8 NetCDF, readable by ncview, xarray, Paraview, CDO and Panoply ·
+CF-1.8 NetCDF-4 (compressed), readable by ncview, xarray, Paraview, CDO and Panoply ·
 pure-Julia PNG, APNG, PPM and SVG rendering
 
 </td></tr>
@@ -205,14 +205,14 @@ Pkg.activate(".")
 Pkg.instantiate()
 ```
 
-Julia ≥ 1.10. The only non-standard-library dependency is **FFTW**.
+Julia ≥ 1.10. Non-standard-library dependencies: **FFTW**,
+**KernelAbstractions** and **NCDatasets** (NetCDF-4 output, #310).
 
-> **Why so few dependencies?** The usual scientific-Julia stack — NetCDF,
-> HDF5, Makie, SpecialFunctions — needs binary libraries that do not build on
-> every target platform. Rather than ship a package that fails to load,
-> Aeolus writes what it needs: a CF-compliant NetCDF-3 writer, a PNG/APNG
-> encoder, a Mie solver, and series expansions for the error and Bessel
-> functions. See [`src/NetCDFIO.jl`](src/NetCDFIO.jl) for the clearest case.
+> **Why so few dependencies?** Each one is justified in the PR that adds it
+> (`docs/CONTRIBUTING.md`). Some of the in-package code (a PNG/APNG
+> encoder, a Mie solver, series expansions for the error and Bessel
+> functions) dates from a rule against binary dependencies; the NetCDF-3
+> writer of that time was replaced by NCDatasets in #310.
 
 ---
 
