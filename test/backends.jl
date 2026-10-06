@@ -124,6 +124,37 @@ end
         @test v[17:4321] == 2 .* (17:4321) && count(!iszero, v) == 4321 - 16
     end
 
+    @testset "launch_weighted!: column bodies, each index once, same bits ($name)" for (name, b) in BACKENDS
+        # KA-h (#298): a body that loops over a column itself; the weight
+        # only changes how the work is split, never the result
+        Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+        rng = Xoshiro(298)
+        X = randn(rng, Nx, Ny, Nz)
+        col!(i, j, Y, X, Nz) = (@inbounds begin
+            s = 0.0
+            for k in 1:Nz
+                s = 0.5 * s + X[i, j, k]; Y[i, j, k] = s
+            end
+        end; nothing)
+        ref = similar(X)
+        for j in 1:Ny, i in 1:Nx
+            col!(i, j, ref, X, Nz)
+        end
+        for w in (1, Nz, 10^6)
+            Y = zeros(Nx, Ny, Nz)
+            launch_weighted!(b, w, col!, (1:Nx, 1:Ny), Y, X, Nz)
+            @test same_bits(Y, ref)
+            v = zeros(Int, Ny)
+            launch_weighted!(b, w, (j, v) -> (@inbounds v[j] += 1; nothing), (1:Ny,), v)
+            @test all(==(1), v)
+            C = zeros(Int, Nx, Ny, 2)
+            launch_weighted!(b, w, (i, j, k, C) -> (@inbounds C[i, j, k] += 1; nothing),
+                             (1:Nx, 1:Ny, 1:2), C)
+            @test all(==(1), C)
+        end
+        @test_throws ErrorException launch_weighted!(GPUBackend(), 4, (j,) -> nothing, (1:3,))
+    end
+
     rng = Xoshiro(91)
     A = randn(rng, size(Field(mesh).data)) .* 10 .^ (4 .* rand(rng, size(Field(mesh).data)))
     B = randn(rng, size(A))

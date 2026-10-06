@@ -20,7 +20,7 @@ using LinearAlgebra: BLAS, mul!
 
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
-       runs_serially, launch!, range_map!,
+       runs_serially, launch!, launch_weighted!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, apply_transform!
 
@@ -336,26 +336,29 @@ end
     return nothing
 end
 
-# ---- threaded CP# ---- threaded CPU launches ------------------------------------------------
+# ---- threaded CPU launches ------------------------------------------------
 
-function _threaded!(b::CPUBackend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args) where {F}
+function _threaded!(b::CPUBackend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args,
+                    weight::Int = 1) where {F}
     nj, nk = length(jr), length(kr)
-    nt = _ntasks(length(ir) * nj * nk)
+    nt = _ntasks(length(ir) * nj * nk * weight)
     wg = nt >= Threads.nthreads() ? (min(nj, _ROWS_PER_GROUP), 1) : (nj, cld(nk, nt))
     kern = _rows3_kernel!(b.ka, wg)
     kern(body!, first(ir), last(ir), first(jr) - 1, first(kr) - 1, args; ndrange = (nj, nk))
     return nothing
 end
-function _threaded!(b::CPUBackend, body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args) where {F}
+function _threaded!(b::CPUBackend, body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args,
+                    weight::Int = 1) where {F}
     nj = length(jr)
-    nt = _ntasks(length(ir) * nj)
+    nt = _ntasks(length(ir) * nj * weight)
     kern = _rows2_kernel!(b.ka, nt >= Threads.nthreads() ? min(nj, _ROWS_PER_GROUP) : cld(nj, nt))
     kern(body!, first(ir), last(ir), first(jr) - 1, args; ndrange = nj)
     return nothing
 end
-function _threaded!(b::CPUBackend, body!::F, (nr,)::NTuple{1,UnitRange{Int}}, args) where {F}
-    nt = _ntasks(length(nr))
-    chunk = nt >= Threads.nthreads() ? _CHUNK_1D : cld(length(nr), nt)
+function _threaded!(b::CPUBackend, body!::F, (nr,)::NTuple{1,UnitRange{Int}}, args,
+                    weight::Int = 1) where {F}
+    nt = _ntasks(length(nr) * weight)
+    chunk = nt >= Threads.nthreads() ? max(1, _CHUNK_1D ÷ weight) : cld(length(nr), nt)
     kern = _chunks1_kernel!(b.ka, 1)
     kern(body!, first(nr), last(nr), chunk, args; ndrange = cld(length(nr), chunk))
     return nothing
@@ -403,17 +406,35 @@ launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, args::Vararg{
 # The argument tuple as one parameter `A`, so it is never widened (a function
 # among `args` would otherwise be compiled as `::Function` and called by
 # dynamic dispatch at every point).
-function _launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, args::A) where {F, N, A<:Tuple}
+function _launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, args::A,
+                  weight::Int = 1) where {F, N, A<:Tuple}
     np = _npoints(ranges)
     np == 0 && return nothing
-    if runs_serially(b, np)
+    if runs_serially(b, np * weight)
         _serial!(body!, ranges, args)
     else
-        _threaded!(b, body!, ranges, args)
+        _threaded!(b, body!, ranges, args, weight)
     end
     return nothing
 end
-end, body!, ranges::Tuple, args...) = _gpu_error(b, "launch!")
+
+"""
+    launch_weighted!(backend, weight, body!, ranges, args...)
+
+[`launch!`](@ref) for a body that covers `weight` points per index: a
+column kernel launched over `(i, j)` (or over rows `j`) that loops over
+`weight` levels itself, such as the tridiagonal solve of
+`StretchedPoissonSolver` (KA-h, #298). The backend's serial threshold and
+its points-per-task rule then count `weight × length(ranges)` points, the
+work actually done, instead of the number of indices. Same contract and
+same serial order as `launch!`; `weight = 1` is `launch!`.
+"""
+launch_weighted!(b::CPUBackend, weight::Integer, body!::F, ranges::NTuple{N,UnitRange{Int}},
+                 args::Vararg{Any,M}) where {F, N, M} =
+    _launch!(b, body!, ranges, args, max(1, Int(weight)))
+launch_weighted!(b::GPUBackend, weight, body!, ranges::Tuple, args...) =
+    _gpu_error(b, "launch_weighted!")
+launch!(b::GPUBackend, body!, ranges::Tuple, args...) = _gpu_error(b, "launch!")
 
 # ---- pointwise map ----------------------------------------------------------
 
