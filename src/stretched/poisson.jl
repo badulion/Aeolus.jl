@@ -36,7 +36,6 @@
 
 using FFTW: FFTW, plan_r2r
 using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
-using LinearAlgebra: mul!
 using ..PressureSolvers: AbstractPressureSolver, copy_interior_in!, copy_interior_out!
 using ..Backends: backend, launch_weighted!, apply_transform!
 import ..PressureSolvers: solve!

@@ -1,7 +1,6 @@
 module PressureSolvers
 
 using FFTW
-using LinearAlgebra: mul!
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 using ..Grids
 using ..Grids: RegularGrid, interior, CellCenter

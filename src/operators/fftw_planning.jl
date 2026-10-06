@@ -80,16 +80,20 @@ their flags; set the policy before constructing a simulation.
 The default can also be set from the environment, before the first plan:
 `AEOLUS_FFTW_PLANNER=estimate`, `AEOLUS_FFTW_THREADS=4`. The test suite
 sets `AEOLUS_FFTW_PLANNER=estimate`, so its bitwise comparisons hold across
-processes and planning stays fast.
+processes and planning stays fast. A TOML namelist sets it with an
+`[fftw]` table ([`apply_fftw_config!`](@ref Aeolus.IO.apply_fftw_config!)).
 
-**Threads.** FFTW's threaded plans hand whole 1-D transforms to the
+**Threads.** Without an explicit count the policy starts at one thread
+and [`init_threads!`](@ref Aeolus.Backends.init_threads!) raises it to
+`Threads.nthreads()` (KA-h, #298). A count set here, through
+`AEOLUS_FFTW_THREADS` or by a namelist is explicit, and `init_threads!`
+keeps it. FFTW's threaded plans hand whole 1-D transforms to the
 threads, so under `:estimate` a solve gives identical bits at every FFTW
 thread count (measured for every pressure solver and axis-BC
-combination, 1-24 threads, docs/src/design/ka_port.md). Under the
-timing planners the planner may pick a different algorithm for a
-different thread count (as it may for another process), so that holds
-only with imported wisdom made at the same thread count. A TOML namelist sets it with an
-`[fftw]` table ([`apply_fftw_config!`](@ref Aeolus.IO.apply_fftw_config!)).
+combination, 1-24 threads, docs/src/design/ka_port.md). Under the timing
+planners the planner may pick a different algorithm for a different
+thread count (as it may for another process), so there it holds only
+with imported wisdom made at the same thread count.
 
 **Reproducibility.** `:measure`, `:patient` and `:exhaustive` time
 candidate algorithms, so two processes may choose different plans and

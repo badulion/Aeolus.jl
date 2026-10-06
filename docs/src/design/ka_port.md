@@ -108,6 +108,25 @@ inner `i` loop a plain loop the compiler vectorises. A GPU backend will
 launch the same body one point per work item; the body is the portable
 unit, not the iteration strategy.
 
+**Column kernels: `launch_weighted!`** (KA-h, #298). A body that loops
+over a whole column itself — a tridiagonal solve in z, serial within the
+work item — does `Nz` points of work per index, so a launch over
+`(i, j)` or over rows `j` would look small to the threshold and to the
+points-per-task rule (a 64-row launch is 64 "points").
+[`launch_weighted!`](@ref Aeolus.Backends.launch_weighted!)`(b, weight,
+body!, ranges, args...)` is `launch!` with those two rules counting
+`weight × length(ranges)` points. Same contract, same serial order. It is
+not a per-kernel cost hint: the weight is the number of points an index
+covers.
+
+A column per work item can be slow on the CPU: the column walks z with
+a stride of `Nx·Ny·8` bytes, a power of two on the usual grids, so all
+its levels fall in the same L1 set. `StretchedPoissonSolver`'s Thomas
+solve with one column per item took 4.3 ms at 64×64×53 against 0.94 ms
+for the old level-by-level loop. Its work item is therefore one ky row
+(all kx, kx innermost, vectorised), 0.80 ms. A GPU backend will launch
+one column per item.
+
 ## The reduction contract
 
 Sums over a region use one **canonical order** that does not depend on
@@ -162,12 +181,30 @@ quotes its size.
 * **FFTW** plans come from the #245 policy (`set_fftw_policy!`): MEASURE
   by default, PATIENT opt-in, ESTIMATE in the tests (set by
   `test/runtests.jl` and inherited by every subprocess, including the
-  harness). ESTIMATE plans are deterministic. `init_threads!(b;
-  fftw_threads = n)` sets the FFTW thread count *through that policy*, so
-  `fftw_policy()` and the checkpoint record report it. The default
-  (`nothing`) keeps `AEOLUS_FFTW_THREADS`, which defaults to 1. Thread
-  invariance of threaded FFTW plans is the FFT port's (KA-h) to
-  establish.
+  harness). ESTIMATE plans are deterministic. Since KA-h (#298)
+  `init_threads!` sets the FFTW thread count to `Threads.nthreads()`,
+  through that policy, so `fftw_policy()` and the checkpoint record
+  report it. A count chosen explicitly wins: `init_threads!(b;
+  fftw_threads = n)`, `AEOLUS_FFTW_THREADS`, `set_fftw_policy!(threads =
+  n)` or a namelist's `[fftw] threads`. Call `init_threads!` before the
+  simulation is built: a plan keeps the thread count it was made with.
+* **Threaded FFTW is thread-invariant under ESTIMATE.** FFTW's threaded
+  plans hand whole 1-D transforms (and contiguous slabs of them) to the
+  threads and leave each transform's arithmetic unchanged. Measured at
+  KA-h: every pressure solver (FFT, CosineFFT with each of the 8 axis-BC
+  combinations, Stretched with each of the 4 lateral pairs) gives
+  bit-identical solves with plans made at 1, 2, 4, 12 and 24 threads, at
+  64×64×32, 128²×64, 192²×53, 256²×128, 96×80×40 and 37×29×23. Under
+  MEASURE the planner times candidates per thread count, and the same
+  check found differing bits in 3 of the 13 solvers at 64×64×32 (for 2,
+  12 and 24 threads). MEASURE runs are not bitwise reproducible anyway
+  (#245), and imported wisdom made at the same thread count restores
+  reproducibility. The pencil-parallel fallback the plan held in reserve
+  (serial 1-D plans launched over pencils) was not needed.
+* **Transforms run from the host.** Plans are executed through
+  [`apply_transform!`](@ref Aeolus.Backends.apply_transform!)`(backend,
+  out, plan, in)` between kernel launches, never inside a kernel, so a GPU
+  backend can put cuFFT behind the same call (Phase 81).
 * **BLAS** is pinned to one thread whenever Julia runs threaded (the
   accepted default on #294). BLAS threads would oversubscribe the cores
   next to the kernel tasks, and a threaded BLAS may split a reduction

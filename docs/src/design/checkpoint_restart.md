@@ -108,7 +108,10 @@ The policy (maintainer decisions on #245), one helper,
 * **Configurable**: planner `ESTIMATE / MEASURE / PATIENT / EXHAUSTIVE`
   and the FFTW thread count, through `set_fftw_policy!`, the environment
   (`AEOLUS_FFTW_PLANNER`, `AEOLUS_FFTW_THREADS`) or a namelist `[fftw]`
-  table.
+  table. Without an explicit count, `init_threads!` sets FFTW to
+  `Threads.nthreads()` (KA-h, #298); under `ESTIMATE` the solves are
+  bit-identical at every thread count, and wisdom covers the thread
+  count it was made at.
 * **Default `MEASURE`, `PATIENT` opt-in** (maintainer decision on #318):
   `PATIENT` finds somewhat faster plans, but its planning cost grows
   steeply — measured at 256³: 494 s of planning with `PATIENT` against
