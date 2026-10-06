@@ -31,12 +31,15 @@ Test extras: `Random`, `Statistics`.
 
 ## Running tests
 
-```julia
-julia> using Pkg
-julia> Pkg.test("Aeolus")
+```bash
+$ julia --project=. test/run.jl                          # fast tier, in parallel
+$ AEOLUS_TEST_TIER=full julia --project=. test/run.jl    # full tier, in parallel
+$ julia --project=. test/runtests.jl                     # serial (also Pkg.test())
 ```
 
-Full suite runs in ~10 s on a modern laptop.
+The fast tier (the default) skips the validation mini-simulations; the
+full tier runs everything. See [Running the tests](testing.md) for the
+tiers, the runner's options and measured times.
 
 ## Running examples
 

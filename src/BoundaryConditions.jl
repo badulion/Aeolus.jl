@@ -9,6 +9,7 @@ export AbstractBC, Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
        FieldBoundaryConditions, fill_halos!
 export NoSlipWall, is_wall, homogeneous_bcs     # P59-a (#172)
 export FreeStreamBoundary                        # P59-d (#185)
+export axis_poisson_bc                           # N-open-a (#251)
 
 """
     AbstractBC
@@ -248,5 +249,43 @@ end
 
 include("boundary_conditions/noslip_wall.jl")   # P59-a (#172)
 include("boundary_conditions/free_stream.jl")   # P59-d (#185)
+
+# =========================================================================
+# Pressure-Poisson boundary kind of a velocity face (N-open-a, #251)
+# =========================================================================
+
+"""
+    axis_poisson_bc(face::AbstractBC) -> Symbol
+
+The boundary condition the pressure correction `φ` of a projection method
+obeys on a face whose *velocity* boundary condition is `face`:
+
+* `:periodic` for [`Periodic`](@ref);
+* `:neumann` (`∂φ/∂n = 0`) for every face on which the normal velocity is
+  prescribed and the projection must leave it unchanged —
+  [`ImpermeableWall`](@ref), [`NoSlipWall`](@ref), [`NoFlux`](@ref),
+  [`FreeStreamBoundary`](@ref) (prescribed transpiration), and the open /
+  nest faces whose normal velocity comes from boundary data. Because
+  `u^{n+1}·n = u^*·n − Δt ∂φ/∂n`, the face keeps its prescribed value
+  exactly when `∂φ/∂n = 0`.
+
+A new face type that prescribes the normal velocity extends this with
+`BoundaryConditions.axis_poisson_bc(::MyBC) = :neumann`. Types with no
+method (e.g. [`ValueBC`](@ref), [`FluxBC`](@ref), which are scalar
+conditions and say nothing about the normal velocity) throw an
+`ArgumentError`, so a pressure solver is never silently built for the
+wrong problem. `Simulations._default_solver` and the
+`poisson_axis_bcs(bcs)` of `PressureSolvers` read the six faces through
+this function.
+"""
+axis_poisson_bc(::Periodic)           = :periodic
+axis_poisson_bc(::ImpermeableWall)    = :neumann
+axis_poisson_bc(::NoSlipWall)         = :neumann
+axis_poisson_bc(::NoFlux)             = :neumann
+axis_poisson_bc(::FreeStreamBoundary) = :neumann
+axis_poisson_bc(bc::AbstractBC) =
+    throw(ArgumentError("no pressure-Poisson boundary kind is defined for a " *
+                        "$(nameof(typeof(bc))) velocity face; define " *
+                        "BoundaryConditions.axis_poisson_bc(::$(nameof(typeof(bc))))"))
 
 end # module

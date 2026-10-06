@@ -68,31 +68,35 @@ function build(::Type{<:GroundSoil}, case, o)
                    carsel_parrish_texture(o.texture), clm_soil_thermal_properties(o.sand, o.clay),
                    o.nlayers, CartesianIndex{2}[])
     for cls in c.classes
-        register_surface_factory!(case, cls, :ground_soil, (cs, I) -> soil_surface(c, cs, I))
+        register_surface_factory!(case, cls, :ground_soil, (cs, site) -> soil_surface(c, cs, site))
     end
     return c
 end
 
 """
-    soil_surface(c::GroundSoil, case, I) -> SoilThermalColumn
+    soil_surface(c::GroundSoil, case, site::SurfaceSite) -> SoilThermalColumn
+    soil_surface(c::GroundSoil, case, I::CartesianIndex{2}) -> SoilThermalColumn
 
-The soil column of column `I` (see [`GroundSoil`](@ref)).
+The soil column of a [`SurfaceSite`](@ref) (see [`GroundSoil`](@ref));
+the second form builds the site of child column `I`. A child column is
+recorded in `c.cols` (its outputs and checks); a parent tile
+(`site.column === nothing`) is not.
 """
-function soil_surface(c::GroundSoil, case, I)
-    cls = case.geom.sfc[I]
+function soil_surface(c::GroundSoil, case, site::SurfaceSite)
+    cls = site.class
     p, T0 = case.bus.params, case.cfg.T_soil0
-    se = find_coupling(case, :surface_exchange)
-    z0m = se === nothing ? 0.05 : get(se.z0m, cls, 0.05)
-    ratio = se === nothing ? 0.1 : se.z0h_ratio
+    z0m, z0h = class_roughness(case, site)
     water = SoilWaterColumn(clm_exponential_soil_grid(c.nlayers), c.hydraulics;
                             θ = get(c.θ0, cls, 0.2))
-    col = SoilThermalColumn(water, c.thermal; T_soil = T0, T_skin = case.bus.Ts[I],
+    col = SoilThermalColumn(water, c.thermal; T_soil = T0, T_skin = site.T_skin,
                             bottom = Aeolus.SoilColumn.BottomTemperature(T0),
                             albedo = p.albedo[cls], emissivity = p.emissivity[cls],
-                            z0m = z0m, z0h = ratio * z0m, hydrology = true)
-    push!(c.cols, I)
+                            z0m = z0m, z0h = z0h, hydrology = true)
+    site.column === nothing || push!(c.cols, site.column)
     return col
 end
+soil_surface(c::GroundSoil, case, I::CartesianIndex{2}) =
+    soil_surface(c, case, SurfaceSite(case.geom.sfc[I]; T_skin = case.bus.Ts[I], column = I))
 
 # The surface exchange's per-column closure check: the soil's enthalpy
 # less what left through the base and what the moved water carried, so

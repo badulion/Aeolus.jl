@@ -424,7 +424,15 @@ eddy-viscosity closure (`StaticSmagorinsky`, `DynamicSmagorinsky`,
 * **Not every closure is wrapped.** A closure with its own buoyancy term
   (the anisotropic minimum-dissipation model, P55-d) or its own length
   scale (prognostic TKE, P56-b) already accounts for the stratification;
-  the constructor accepts eddy-viscosity closures only.
+  the constructor accepts eddy-viscosity closures only. This is by
+  design, not a gap: the TKE closure also has no ``\ell_h, \ell_v``
+  anisotropy (one ``\Delta = (\Delta x\Delta y\Delta z)^{1/3}``, as in
+  Deardorff 1980 and PALM), so on the Berlin grid its neutral equilibrium
+  mixes ``1/\ell_v = 3.39\times`` more vertically and
+  ``\ell_h = 1.84\times`` less horizontally than this wrapper around a
+  Smagorinsky closure of the same ``C_s``
+  ([details](sgs_tke.md#The-model)); the rotated tensor of
+  `IsentropicDiffusion` is not offered for it either.
 
 The four fields reach every core through the contract defaults: the
 stress form ``\partial_j(2\nu_{ij}S_{ij})`` with ``\nu_h, \nu_v`` (P55-b,
@@ -826,7 +834,7 @@ and the anelastic / pseudo-incompressible `step!`.
 | :-- | :-- |
 | `sgs_coefficients!(f, c, sim)` | fill the eddy viscosity and diffusivity `f = SGSFields(νh, νv, κh, κv)` (isotropic: `νv === νh`, `κv === κh`; by default `sim.νt`, `sim.κt`) from the current state — `u, v, w`, `θ`, `qv` with filled halos, the mesh, `θ₀`, `g` — and the closure's committed memory. **Pure.** |
 | `advance_sgs!(c, sim, dt)` | commit the memory over an accepted step of length `dt`, after the projection. Default no-op. |
-| `sgs_state(c)`, `restore_sgs_state!(c, s)` | snapshot / restore the memory around a step that may be rejected. Default no-op. |
+| `sgs_state(c)`, `restore_sgs_state!(c, s)` | snapshot / restore the memory around a step that may be rejected. Default no-op. The snapshot must be self-contained (restoring reads nothing but it): a checkpoint stores a deep copy of it and restores it into a fresh closure in another process (#245, [Checkpoint / restart](../design/checkpoint_restart.md)). |
 | `add_sgs_momentum!(tu, tv, tw, c, f, sim)` | the stress divergence; default the Laplacian eddy-viscosity form with `νh` |
 | `add_sgs_scalar!(tϕ, ϕ, c, f, sim)` | the scalar flux divergence; default `∂ⱼ(κh ∂ⱼϕ)` |
 | `sgs_explicit_stress(c)` | `true` for a closure whose momentum flux is its own stress (the Reynolds-stress closure, P56-d #188); `step_imex!`, whose implicit operator is an eddy viscosity, then refuses it. Default `false`. |
@@ -877,8 +885,60 @@ or the Berlin case transports, not only to θ:
     pseudo-incompressible cores carry no `qv`.)
   * The Berlin case diffuses every tracer its `:transport` stage advects
     (qv, ql, the chemistry species) and the pollutant with `sim.κt` of the
-    last dynamics step (θ's κ_t, also under the `:amd` provider, whose own
-    per-scalar diffusivity the Berlin tracers do not use yet) (see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
+    last dynamics step: one shared κ, θ's κ_t, under every `:sgs` provider
+    including `:amd` (see [The Berlin case](../design/berlin_case.md#Numerics-slots)).
+    The Berlin core runs with `moisture = false`, so qv and ql are case
+    tracers, mixed in the `:transport` stage with the same shared κ, not by
+    the core's `qv` path above. Under `:amd` this is a design choice, not a
+    missing feature; the reasons follow (#234).
+
+**Why the Berlin tracers share one κ** (#234). AMD can give every scalar
+its own diffusivity from its own gradient (see
+[below](#Anisotropic-minimum-dissipation-and-Vreman-closures)); the
+`:transport` stage deliberately does not use it.
+
+  * *Physics.* At high Reynolds number the subfilter eddies that mix one
+    passive scalar mix every other one the same way: the turbulent
+    Schmidt number is a property of the flow, not of the species, and one
+    `Sc_t` (here `Pr_t`) for every passive scalar is the standard LES
+    assumption. Per-scalar AMD κ makes the mixing depend on the shape of
+    each field, which is a property of the closure's gradient model, not
+    of the turbulence.
+  * *Chemistry.* NO, NO₂ and O₃ are chemically linked: away from sources
+    they sit near the photostationary state
+    ``[\mathrm{NO}][\mathrm{O_3}]/[\mathrm{NO_2}] = j_{NO_2}/k``.
+    Mixing them with different κ separates them artificially and moves the
+    mixture off that state, i.e. the transport itself does chemistry.
+  * *Water.* With different κ for qv and ql, total water ``q_t = q_v + q_l``
+    and ``θ_l`` are no longer mixed as conserved variables: a cloud edge
+    that mixes vapour faster than liquid creates or destroys
+    supersaturation in the mixing step instead of in the microphysics.
+  * *Fallback.* Where a scalar's gradient vanishes AMD falls back to
+    ``κ = ν_t/Pr_t = 3ν_t``. A tracer that is uniform (a clean background,
+    ql = 0 outside clouds) or flat at a plume edge then gets the largest κ
+    of all, three times ν_t, and over-mixes plume edges.
+  * *Time step.* The adaptive step limits by ``\max(ν_{t,\max},
+    κ_{t,\max})`` of θ (`sgs_cfl_diagnostics`); per-tracer κ, which can be
+    larger (the fallback), is not seen by it, so an explicit tracer
+    diffusion could run past its own stability limit.
+
+Measured. An earlier probe of the Berlin `:amd` run (2026-10-05) gave
+cell-wise differences between a tracer's own AMD κ and θ's κ_t of
+54–64 % for qv and 66–92 % for the chemistry species, 28 % between NO
+and NO₂, 196 % between qv and ql, and a fallback maximum of 5.9 m²/s
+against 2.6 m²/s for θ. The design test (`test/berlin_numerics.jl`, *one
+shared κ*) recomputes them on the 12-step `:amd` smoke state (fluid cells,
+``Σ|Δκ|/Σκ_θ`` against θ's AMD κ_t on the same state): qv 78 % (maximum
+0.26 against θ's 2.71 m²/s), NO / NO₂ / O₃ 80 / 80 / 77 %, NO vs NO₂ 24 %,
+and ql, which is zero everywhere there, exactly the fallback ``3ν_t`` in
+every cell, maximum 5.08 against 2.71 m²/s. (The probe's and the test's
+numbers come from different states and normalisations; both show
+differences of order one.) The
+test pins the choice: the default `:transport` stage is bit for bit the
+stage with every tracer forced onto `sim.κt`, while giving qv its own AMD
+κ changes qv (and nothing else). The core's moist path (`moisture = true`
+in `step!`, `step_rk3!`, `step_imex!`) still gives `qv` AMD's own κ; the
+Berlin case does not run it.
 
 The three-argument kernel takes two keywords for this. `mask` (a Bool
 solid mask, e.g. `IBM.SolidMask(…).mask`) closes every face with a solid
@@ -960,7 +1020,9 @@ with its own gradient
 ([`compute_amd_scalar_diffusivity!`](@ref Aeolus.Operators.compute_amd_scalar_diffusivity!),
 reached through the contract generic
 [`sgs_tracer_diffusivity!`](@ref Aeolus.Operators.sgs_tracer_diffusivity!)).
-This is how `step_imex!` diffuses ``q_v``. The formula is unchanged under
+This is how `step_imex!` diffuses ``q_v``. The Berlin `:transport` stage does not use it
+for its tracers: they share θ's κ_t by design (see [*Why the Berlin tracers
+share one κ*](#Closure-contract) above, #234). The formula is unchanged under
 ``ϕ → aϕ + b``. ``C = 0.3`` is the modified Poincaré constant for a
 second-order central discretisation from Rozema et al. (2015) (their
 decaying-turbulence tests; 1/12 for a spectral method, 0.212 for fourth
@@ -1173,7 +1235,13 @@ Its shear production is the exact discrete dual of the momentum operator
 above, so the resolved kinetic energy the closure removes is the energy
 ``e`` gains; its neutral equilibrium is this page's model with
 ``C_s = 0.194``; its stability length ``0.76\sqrt e/N`` gives a critical
-Richardson number of 0.233, so no stability function is applied to it.
+Richardson number of 0.233 (in equilibrium; ``ν_t`` stays positive while
+``e`` decays in a transient), so no stability function is applied to it
+and `StabilityCorrected` does not wrap it — by design, not a gap. It has
+no ``κ_h ≠ κ_v`` anisotropy either (one filter width ``Δ``, as in PALM):
+on the Berlin grid it mixes about 3.4× more vertically and 1.84× less
+horizontally than `StabilityCorrected` Smagorinsky of equal ``C_s``. Its
+``N^2`` misses the moist-adiabatic stability of saturated air (#239).
 In the CBC benchmark above it decays too fast (−9.4 % / −26.9 % at 32³).
 Everything else is on [Prognostic SGS TKE](sgs_tke.md).
 
