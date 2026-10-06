@@ -257,8 +257,19 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         @test BC.θ_top_bc(BC.CaseConfig(:smoke; θ_top = :noflux)) isa NoFlux
         @test BC.θ_top_bc(BC.CaseConfig(:smoke; θ_top = 0.01)).f == 0.01
         @test_throws ErrorException BC.θ_top_bc(BC.CaseConfig(:smoke; θ_top = :open))
-        # the summer flagship: the top (200 m) is above the inversion (100 m)
-        @test BC.θ_top_gradient(BC.CaseConfig()) ≈ 3e-3 rtol = 1e-10
+        # the idealised summer profile: the top (200 m) is above the inversion (100 m)
+        @test BC.θ_top_gradient(BC.CaseConfig(; sounding = nothing)) ≈ 3e-3 rtol = 1e-10
+        # the default flagship starts from the Lindenberg sounding (#247): Γ is
+        # the slope of the sounding's θ profile across the top face (4.14 K/km
+        # measured), positive — a stable free atmosphere above the domain
+        let c = BC.CaseConfig(), S = BC.case_sounding(c), θi = BC.initial_θ(c)
+            H = c.extent[3]; zs = S.profiles.z
+            i = searchsortedlast(zs, H)
+            z1, z2 = zs[i], zs[i + 1]
+            Γs = (θi(0.0, 0.0, z2) - θi(0.0, 0.0, z1)) / (z2 - z1)
+            @test BC.θ_top_gradient(c) ≈ Γs rtol = 1e-8
+            @test BC.θ_top_gradient(c) > 0
+        end
         for phys in (Dict{Symbol,Any}(), Dict{Symbol,Any}(:timestepper => :fixed))
             case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
                                                physics = phys); io = devnull)
