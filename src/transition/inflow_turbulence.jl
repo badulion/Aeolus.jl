@@ -83,6 +83,9 @@ mutable struct _InflowFace{G}
     U_out::Vector{Float64}          # face-mean outward normal velocity per level
     ramp::Vector{Float64}           # amplitude factor per level, 0 … 1
     t_gen::Float64                  # the generator's clock
+    t_prev::Float64                 # the first knot
+    Lp::NTuple{3,Matrix{Float64}}   # applied (Lund-transformed) planes at t_prev …
+    Lc::NTuple{3,Matrix{Float64}}   # … and at t_gen (zero before the first advance)
     Q::Float64                      # added outward normal flux, last evaluation (m³ s⁻¹)
     Q_level::Float64                # max over levels of |added flux of a level|
     Q_scale::Float64                # Σ |U_n| dA over the fluid faces (m³ s⁻¹)
@@ -124,10 +127,29 @@ on outflow levels, full where the inflow exceeds `u_min` (default
 0.5 m s⁻¹), linear in between, so a wind that veers through a face
 switches its turbulence on and off continuously. The integral time is
 Taylor's ``T = L_n/\\max(|U_n|, u_{\\min})`` with the normal length of
-[`inflow_normal_length`](@ref). The generators always advance (by the
-time since their last advance, once per time level; stages that revisit
-an earlier time reuse the current planes), so their state does not
-depend on the wind direction.
+[`inflow_normal_length`](@ref).
+
+**Time.** The perturbation is piecewise **linear in time** between
+*knots*. A knot is a complete perturbation: the generator advanced to the
+knot time (always, whatever the wind, so its state does not depend on
+the direction), Lund-transformed, ramped with the current ``U_n``,
+restricted to the receiving faces and stripped of its per-level mean.
+For data with a time window (a [`NestBoundaryData`](@ref): the parent
+blended linearly over the parent step ``[t_0, t_0+Δt]``) the knots are
+the window ends, so the perturbation is blended exactly like the data
+(a stage time past the end extrapolates, as the data does); otherwise
+every refresh at a new time makes a knot. The first knot (installation)
+is zero. This is what keeps the child's divergence at round-off: a
+multistage core combines the step-start state with its stages, and the
+open-boundary buffers with them (SSP-RK3:
+``u^{n+1} = \tfrac13u^n + \tfrac23u^{(2)}``); boundary values linear in
+time make the combined buffers equal to a fresh refresh at the step's
+end, so the refresh at the start of the next parent step (the window
+update of a [`NestedRun`](@ref)) finds exactly the faces the projection
+saw. Planes held constant over a step, a ramp re-evaluated at every
+stage, or perturbations switched on at the installation time each left
+a divergence of ``O(10^{-3})`` s⁻¹ that the combination only damps by
+1/3 per substep (measured, `test/era6_inflow_turbulence.jl`).
 
 **Zero added mass flux.** On every face and level the area-weighted mean
 of the normal perturbation over the receiving fluid faces is removed, so
@@ -140,7 +162,7 @@ by the same factor); see `docs/src/theory/transition.md`.
 
 **Corners.** The cell next to two open faces is owned by exactly one:
 the x-face (west/east) at levels where that face carries turbulence
-(ramp > 0), the y-face otherwise. The y-face's corner column then
+(ramp > 0, decided at each knot), the y-face otherwise. The y-face's corner column then
 receives no perturbation and is excluded from its mean removal. The
 along-face (staggered) component of an x-face is not applied at the
 slot that is the adjacent open y-face's normal-velocity face, and the
@@ -271,7 +293,9 @@ function InflowTurbulence(run; generator = DigitalFilterGenerator,
                               inflow_lund_coefficients(src, z, t), Ls, Lz,
                               inflow_normal_length(src, z, t), copy(Tm),
                               ntuple(_ -> zeros(ns, m.Nz), 3), falses(ns, m.Nz),
-                              zeros(m.Nz), zeros(m.Nz), t, 0.0, 0.0, 0.0, 0.0, 0.0))
+                              zeros(m.Nz), zeros(m.Nz), t, t,
+                              ntuple(_ -> zeros(ns, m.Nz), 3), ntuple(_ -> zeros(ns, m.Nz), 3),
+                              0.0, 0.0, 0.0, 0.0, 0.0))
     end
     it = InflowTurbulence(inner, sim, parent, fs, z, Float64(u_min), Float64(ρ_ref),
                           parent === nothing ? t : Float64(parent.t),
@@ -370,29 +394,49 @@ end
 
 _ramp(U_out, u_min) = clamp(-U_out / u_min, 0.0, 1.0)
 
-# Advance (when t is a new time level) and form the face's perturbations:
-# unit planes → Lund → ramp → receiving faces → per-level mean removal.
-function _perturbation!(it::InflowTurbulence, f::_InflowFace, np::OpenPlane, t::Float64,
-                        owner_lo::Union{Nothing,_InflowFace}, owner_hi::Union{Nothing,_InflowFace})
-    P1, P2, P3 = f.P
-    if t > f.t_gen
-        f.a = inflow_lund_coefficients(f.stats, it.z, t)
-        f.L_n = inflow_normal_length(f.stats, it.z, t)
-        @inbounds for k in 1:f.nz, c in 1:3
-            f.T[c, k] = f.L_n[c, k] / max(abs(f.U_out[k]), it.u_min)
+# The time window of the wrapped data, if it has one: a NestBoundaryData
+# blends the parent linearly over the current parent step [t0, t0 + Δt].
+_data_window(d) = nothing
+_data_window(d::NestBoundaryData) = d.Δt > 0 ? (d.t0, d.Δt) : nothing
+
+# The applied perturbation is linear in time between two knots,
+# (t_prev, Lp) and (t_gen, Lc); τ is not clamped inside a window (a stage
+# time beyond its end extrapolates, as the data does).
+function _knot_value!(out, f::_InflowFace, s::Float64; clamp_τ::Bool)
+    if f.t_gen > f.t_prev
+        τ = (s - f.t_prev) / (f.t_gen - f.t_prev)
+        clamp_τ && (τ = clamp(τ, 0.0, 1.0))
+        for c in 1:3
+            out[c] .= (1 - τ) .* f.Lp[c] .+ τ .* f.Lc[c]
         end
-        set_integral_time!(f.gen, f.T)
-        unit_fluctuations!(P1, P2, P3, f.gen, t - f.t_gen)
-        f.t_gen = t
     else
-        unit_fluctuations!(P1, P2, P3, f.gen, 0.0)
+        for c in 1:3
+            copyto!(out[c], f.Lc[c])
+        end
     end
+    return out
+end
+
+# A new knot at t_new: the curve's value at t_from becomes the first knot;
+# the second is the generator advanced from its clock to t_new, Lund
+# transformed, ramped with the current face-mean U_n, restricted to the
+# receiving faces and stripped of its per-level face mean. Every knot is
+# a complete perturbation (zero flux per level), so is every blend of two.
+function _new_knot!(it::InflowTurbulence, f::_InflowFace, np::OpenPlane, t_from::Float64,
+                    t_new::Float64, owner_lo, owner_hi)
+    _knot_value!(f.Lp, f, t_from; clamp_τ = false)
+    f.a = inflow_lund_coefficients(f.stats, it.z, t_new)
+    f.L_n = inflow_normal_length(f.stats, it.z, t_new)
+    @inbounds for k in 1:f.nz, c in 1:3
+        f.T[c, k] = f.L_n[c, k] / max(abs(f.U_out[k]), it.u_min)
+    end
+    set_integral_time!(f.gen, f.T)
+    P1, P2, P3 = f.Lc
+    unit_fluctuations!(P1, P2, P3, f.gen, t_new - f.t_gen)
     apply_lund!(P1, P2, P3, f.a)
-    Q = 0.0; Qlev = 0.0; Qs = 0.0; ke = 0.0; area = 0.0
     @inbounds for b in 1:f.nz
         r = _ramp(f.U_out[b], it.u_min)
         f.ramp[b] = r
-        Uin = max(-f.U_out[b], 0.0)
         # receiving faces of this level: fluid, and not a corner owned by an x-face
         nact = 0; s = 0.0
         for a in 1:f.ns
@@ -407,22 +451,47 @@ function _perturbation!(it::InflowTurbulence, f::_InflowFace, np::OpenPlane, t::
             if act
                 nact += 1; s += P1[a, b]
             end
-            if np.fluid[a, b]
-                Qs += abs(f.U_out[b]) * f.dA
-                area += f.dA
-            end
         end
         mean1 = nact == 0 ? 0.0 : s / nact
-        ql = 0.0
         for a in 1:f.ns
             if f.active[a, b]
                 P1[a, b] = r * (P1[a, b] - mean1)
                 P2[a, b] *= r; P3[a, b] *= r
-                ql += P1[a, b] * f.dA
-                ke += 0.5 * (P1[a, b]^2 + P2[a, b]^2 + P3[a, b]^2) * Uin * f.dA
             else
                 P1[a, b] = 0.0; P2[a, b] = 0.0; P3[a, b] = 0.0
             end
+        end
+    end
+    f.t_prev = t_from
+    f.t_gen = t_new
+    return f
+end
+
+# Form the face's perturbations at time t (a new knot first, when t — or
+# the data's window — has moved past the last one) and their ledgers.
+function _perturbation!(it::InflowTurbulence, f::_InflowFace, np::OpenPlane, t::Float64,
+                        owner_lo::Union{Nothing,_InflowFace}, owner_hi::Union{Nothing,_InflowFace})
+    tol = 1e-9 * max(1.0, abs(t))                   # a clock round-off is not a new time
+    win = _data_window(it.data)
+    if win === nothing
+        t > f.t_gen + tol && _new_knot!(it, f, np, f.t_gen, t, owner_lo, owner_hi)
+        _knot_value!(f.P, f, t; clamp_τ = true)
+    else
+        t0, Δt = Float64(win[1]), Float64(win[2])
+        t0 + Δt > f.t_gen + tol && _new_knot!(it, f, np, t0, t0 + Δt, owner_lo, owner_hi)
+        _knot_value!(f.P, f, t; clamp_τ = false)
+    end
+    P1, P2, P3 = f.P
+    Q = 0.0; Qlev = 0.0; Qs = 0.0; ke = 0.0; area = 0.0
+    @inbounds for b in 1:f.nz
+        Uin = max(-f.U_out[b], 0.0)
+        ql = 0.0
+        for a in 1:f.ns
+            np.fluid[a, b] || continue
+            Qs += abs(f.U_out[b]) * f.dA
+            area += f.dA
+            ql += P1[a, b] * f.dA
+            ke += 0.5 * (P1[a, b]^2 + P2[a, b]^2 + P3[a, b]^2) * Uin * f.dA
         end
         Q += f.s_out * ql
         Qlev = max(Qlev, abs(ql))
@@ -451,8 +520,7 @@ function _add_perturbation!(planes, f::_InflowFace, m, lo_open::Bool)
         d = p.data
         nl = size(d, f.axis)
         @inbounds for b in kmin:f.nz, a in (skip_a1 ? 2 : 1):f.ns
-            f.active[a, b] || continue
-            v = P[a, b]
+            v = P[a, b]                     # zero off the receiving faces of both knots
             for l in 1:nl
                 if f.axis == 1
                     d[l, Ht + a, m.Hz + b] += v
@@ -489,9 +557,6 @@ function boundary_values!(planes::AbstractVector{<:OpenPlane}, it::InflowTurbule
         (f.axis == ax && np !== nothing) || continue
         if ax == 1
             # x-faces own their corners; their ramp must be current
-            for b in 1:f.nz
-                f.ramp[b] = _ramp(f.U_out[b], it.u_min)
-            end
             _perturbation!(it, f, np, tt, nothing, nothing)
         else
             _perturbation!(it, f, np, tt, get(byside, :west, nothing), get(byside, :east, nothing))
@@ -581,7 +646,8 @@ function generator_state(it::InflowTurbulence)
         haskey(seen, f.stats) || (seen[f.stats] = _stats_state(f.stats))
     end
     return (gens = [deepcopy(generator_state(f.gen)) for f in it.faces],
-            t_gen = [f.t_gen for f in it.faces], gen_objs = [f.gen for f in it.faces],
+            t_gen = [f.t_gen for f in it.faces], t_prev = [f.t_prev for f in it.faces],
+            Lpc = [(deepcopy(f.Lp), deepcopy(f.Lc)) for f in it.faces], gen_objs = [f.gen for f in it.faces],
             L = [(copy(f.L_s), copy(f.L_z), copy(f.T)) for f in it.faces],
             a = [deepcopy(f.a) for f in it.faces],
             stats = seen, t_stats = it.t_stats, t_lengths = it.t_lengths)
@@ -590,7 +656,10 @@ function restore_generator_state!(it::InflowTurbulence, s)
     for (q, f) in enumerate(it.faces)
         f.gen = s.gen_objs[q]
         restore_generator_state!(f.gen, s.gens[q])
-        f.t_gen = s.t_gen[q]
+        f.t_gen = s.t_gen[q]; f.t_prev = s.t_prev[q]
+        for c in 1:3
+            copyto!(f.Lp[c], s.Lpc[q][1][c]); copyto!(f.Lc[c], s.Lpc[q][2][c])
+        end
         f.L_s, f.L_z, Tm = copy.(s.L[q])
         copyto!(f.T, Tm)
         f.a = deepcopy(s.a[q])

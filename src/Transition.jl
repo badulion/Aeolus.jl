@@ -79,7 +79,7 @@ using FFTW: plan_rfft, plan_irfft
 using ..BoundaryConditions: AbstractBoundaryData, OpenPlane, OpenBoundary,           # N-inflow-c
                             has_open_boundaries, open_boundary_states, _face_local
 import ..BoundaryConditions: boundary_values!
-using ..Nesting: NestedRun, nest_covered_range
+using ..Nesting: NestedRun, NestBoundaryData, nest_covered_range
 
 export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
