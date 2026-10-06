@@ -1593,10 +1593,11 @@ The nest (#246) puts the 1 km child inside a 6 × 6 km Aeolus parent
 with Δx = 31.25 m and Δz = 25 m. At that resolution the buildings are
 not resolved: the parent sees Berlin as a heterogeneous surface. Its
 surface is `examples/urban/parent/surface.jl`, a tiled mosaic
-(`Aeolus.SurfaceTiles`, Avissar & Pielke 1989) per parent column. It is
-not coupled to a 3-D run yet. The parent case (N-parent-e, #259) builds
-it, and the nest (N-berlin-nest, #265) makes it the default; that is
-where `:SurfaceTiles` leaves `BERLIN_PENDING`.
+(`Aeolus.SurfaceTiles`, Avissar & Pielke 1989) per parent column. The
+parent case (N-parent-e, #259; [The Berlin parent](berlin_parent.md))
+couples it to the 3-D parent run under the parent's own air and radiation;
+the nest (N-berlin-nest, #265) makes the parent the default of the Berlin
+run, and that is where `:SurfaceTiles` leaves `BERLIN_PENDING`.
 
 ![Berlin parent surface](../assets/berlin/parent_surface.svg)
 
@@ -1726,8 +1727,27 @@ Two couplings put the Era III radiation stack into the case. Both run at
 the `:radiation` cadence, around the radiosity solve.
 
 **`column_radiation`** (slot `:column_radiation`, provider `:twostream`,
-the only one; it replaced `cooling_prescribed`). At order 5, before
-the radiosity:
+the only one; it replaced `cooling_prescribed`). Since #259 the coupling
+is factored into three functions that the nesting parent calls as well
+(one radiation for both domains): `column_radiation_solver(Nz, p_surf)`
+builds the optics and solvers, `stitched_column(c, θ, qv, ql, dz; T_rad)`
+the column of a model's mean profiles on layers of thickness `dz` (a
+vector, so the parent's stretched levels fit), and
+`column_radiation!(c, col, sun, ε, α)` the solve and the heating profile;
+the coupling's `:radiation` stage only gathers the child's inputs and
+sets the bus (bit for bit the former stage).
+
+**The sun** of every radiation coupling is `solar_position_at(cfg, hour)`
+at the local clock hour. `SolarGeometry.solar_time` takes UTC; before #259
+the local hour was passed to it unconverted, so the case's sun ran
+`utc_offset` hours early (2 h in summer: solar noon at 11:07 CEST instead
+of 13:07 on 29 June 2019, the 07:00 sun at the elevation of 09:00). The
+local clock is now converted with `cfg.utc_offset` (sun elevation 8.5° at
+06:00 CEST, maximum 60.7° at 13:06, sunrise 04:50, sunset 21:30). Flagship
+numbers measured before #259 (the diurnal tables of this page) carry the
+early sun.
+
+At order 5, before the radiosity:
 
 1. the mean over the fluid cells of θ, qv and ql on every LES level
    becomes a hydrostatic column (`column_from_profiles`, surface

@@ -780,6 +780,7 @@ function run_parent!(p::ParentCase; hours::Real = p.pc.hours, record::Bool = tru
                                   r.t / 3600, r.hour, r.zi, r.zi_parcel, r.θ[1],
                                   length(p.diag) > 1 ? (r.sfc[:H] - p.diag[end-1].sfc[:H]) / pc.output_period : 0.0,
                                   r.nsteps, r.wall)
+            pc.verbose && flush(p.io)
         end
     end
     return p
