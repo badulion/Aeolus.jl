@@ -22,6 +22,12 @@
 # term +α(z)·U_g is added with the core's own sponge profile
 # (`add_sponge!` on a zero field with `f_ref = U_g`), so that the sum is
 # −α(z)(u − U_g). The nudging mode is left exactly as it was.
+#
+# With `cfg.lateral = :open` (N-open-d, #262) the top is open and the core's
+# own sponge already relaxes toward the boundary data, whose wind is
+# (U_g, V_g) (`sponge_target`, core/open_boundary.jl): the retargeting here
+# is then not applied (it would double the target). The periodic case keeps
+# it, bit for bit; the open/nested default of #265 retires it.
 
 """
     GeostrophicCoupling
@@ -65,7 +71,10 @@ function build(::Type{<:GeostrophicCoupling}, case, o)
     F = o.mode === :pressure_gradient ? GeostrophicPressureGradient(o.U_g, o.V_g) :
         o.mode === :nudging           ? GeostrophicNudging(o.U_g, o.V_g, o.τ) :
         error("geostrophic: mode must be :pressure_gradient or :nudging, got :$(o.mode)")
-    sponge_ref = o.mode === :pressure_gradient && o.sponge_to_geostrophic && case.sim.has_sponge
+    # an open top: the core's sponge already targets the boundary data (#262)
+    core_targets = has_open_boundaries(case.sim)
+    sponge_ref = o.mode === :pressure_gradient && o.sponge_to_geostrophic && case.sim.has_sponge &&
+                 !core_targets
     zu = sponge_ref ? Field(FaceX(), case.sim.mesh) : nothing
     zv = sponge_ref ? Field(FaceY(), case.sim.mesh) : nothing
     return GeostrophicCoupling(F, o.mode, Float64(o.U_g), Float64(o.V_g), sponge_ref, zu, zv,
@@ -95,13 +104,27 @@ report(c::GeostrophicCoupling, case) =
     @sprintf("geostrophic (%s%s): mean wind (%.2f, %.2f) m/s, forcing (%.2e, %.2e) m/s²",
              c.mode, c.sponge_ref ? ", sponge → U_g" : "", c.ū, c.v̄, c.dtu, c.dtv)
 
+# The open-box variants of the case (#262) live here: the open faces are fed
+# with this coupling's (U_g, V_g). Every coupling is on in both.
 smoke_variants(::Type{<:GeostrophicCoupling}) =
-    ((label = "nudging", options = Dict(:geostrophic => (mode = :nudging,))),)
+    ((label = "nudging", options = Dict(:geostrophic => (mode = :nudging,))),
+     (label = "lateral = :open, Dirichlet outflow", lateral = :open),
+     (label = "lateral = :open, convective outflow", lateral = :open, outflow = :convective))
 
 function smoke_check(c::GeostrophicCoupling, case)
     sim = case.sim
     f = sim.f_coriolis
     tol = 1e-10 * (abs(c.U_g) + abs(c.V_g) + 1)
+    open_checks = !has_open_boundaries(sim) ? Pair{String,Bool}[] :
+        ["open top: the core's sponge relaxes toward (U_g, V_g), not 0 (#262)" =>
+             sim.sponge_target.u == c.U_g && sim.sponge_target.v == c.V_g && sim.sponge_target.w == 0,
+         "open top: the coupling does not retarget the sponge a second time" => !c.sponge_ref,
+         # the open faces' heat is booked (boundary_heat, mass_correction,
+         # relaxation): what stays in the column transport is the numerics
+         # residual (measured ≤ 1e-9 W/m² in the smoke window)
+         "open box: the column (:dynamics, :transport) is a residual (< 1e-6 W/m²)" =>
+             (hb = heat_budget(case.ledger);
+              hb.elapsed == 0 || abs(get(hb.terms, (:dynamics, :transport), 0.0)) / hb.elapsed < 1e-6)]
     if c.mode === :pressure_gradient
         # the pressure gradient in balance with (U_g, V_g): exactly
         # (−f V_g, +f U_g) on every u and v point
@@ -121,13 +144,14 @@ function smoke_check(c::GeostrophicCoupling, case)
             push!(checks, "sponge retargeted at (U_g, V_g): mean +ᾱ (U_g, V_g)" =>
                       ᾱ > 0 && abs(c.dtu_sp - ᾱ * c.U_g) <= tol * ᾱ && abs(c.dtv_sp - ᾱ * c.V_g) <= tol * ᾱ)
         end
-        return checks
+        return vcat(checks, open_checks)
     else
         # every level is relaxed toward (U_g, V_g) at rate 1/τ, so the
         # domain-mean tendency is −(⟨u⟩ − U_g)/τ: toward the target, never away
         τ = c.forcing.τ
-        return ["nudging tendency = −(⟨u⟩ − U_g)/τ" =>
-                    abs(c.dtu + (c.ū - c.U_g) / τ) <= tol / τ && abs(c.dtv + (c.v̄ - c.V_g) / τ) <= tol / τ]
+        return vcat(["nudging tendency = −(⟨u⟩ − U_g)/τ" =>
+                         abs(c.dtu + (c.ū - c.U_g) / τ) <= tol / τ && abs(c.dtv + (c.v̄ - c.V_g) / τ) <= tol / τ],
+                    open_checks)
     end
 end
 
