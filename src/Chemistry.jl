@@ -23,7 +23,7 @@ module Chemistry
 
 using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields: Field, interior_view
-using ..Backends: Backends, plane_reduce!, ordered_sum
+using ..Backends: Backends, plane_reduce!, plane_map!, ordered_sum
 
 export apply_linear_chemistry!,
        air_number_density, ppb_rate_constant, emission_ppb_flux,
@@ -507,23 +507,82 @@ function apply_wet_deposition!(c::AbstractArray{<:Real,3}, qr::AbstractArray{<:R
     size(qr) == size(c) ||
         throw(DimensionMismatch("apply_wet_deposition!: qr size $(size(qr)) vs $(size(c))"))
     scav == 0 && return 0.0
-    any(>(0), qr) || return 0.0          # no rain: nothing to scavenge (exact)
-    # the update fused with the sum of what it removed, in the canonical
-    # (thread-invariant) plane order (KA-b, #296)
-    parts = plane_reduce!(zeros(size(c, 3)), Backends.backend(c), _wet_deposition_at, axes(c),
-                          c, qr, scav, dt)
+    qr isa Array && (any(>(0), qr) || return 0.0)   # no rain: nothing to scavenge (exact)
+    # the update fused with the sum of what it removed: one running sum per
+    # plane in cell order, planes in parallel, then ascending k
+    # (thread-invariant; KA-b, #296). Not the eight lanes of plane_reduce!:
+    # with `exp` called only in the raining cells, the lanes cost 1.3x the
+    # old loop at 1 thread, the cell-order plane sum does not (ka_port.md).
+    parts = plane_map!(zeros(size(c, 3)), Backends.backend(c), _wet_deposition_plane, axes(c),
+                       c, qr, scav, dt)
     return ordered_sum(parts)
 end
 
-@inline function _wet_deposition_at(i, j, k, c, qr, scav, dt)
-    @inbounds begin
+# One plane k of `apply_wet_deposition!`, i fastest. Plain arrays and
+# unit-range views of them (the `Field` interiors) are swept along
+# contiguous rows of their parents with linear indices: a 3-index store
+# into `c` makes the compiler reload the array's size at every cell
+# (measured 1.5x slower). A full plane of a plain array is one contiguous
+# run. The sweep is its own function so that the plane bookkeeping around
+# it does not cost it registers.
+const _LinearRows = Union{Array{<:Real,3},
+                          SubArray{<:Real,3,<:Array{<:Real,3},<:NTuple{3,UnitRange{Int}}}}
+
+# the parent of `A` and the parent's linear index of point (i, j, k) of `A`
+@inline _lin(A::Array, i, j, k) = (A, i + size(A, 1) * ((j - 1) + size(A, 2) * (k - 1)))
+@inline function _lin(A::SubArray, i, j, k)
+    P = parent(A); pi, pj, pk = parentindices(A)
+    return _lin(P, pi[i], pj[j], pk[k])
+end
+
+function _wet_deposition_plane(k, ir, jr, c::_LinearRows, qr::_LinearRows, scav, dt)
+    s = 0.0
+    if c isa Array && qr isa Array && ir == axes(c, 1) && jr == axes(c, 2)
+        cp, ic = _lin(c, 1, 1, k); qp, iq = _lin(qr, 1, 1, k)
+        return _wet_deposition_run!(s, cp, qp, ic, iq, length(ir) * length(jr), scav, dt)
+    end
+    i1 = first(ir)
+    for j in jr
+        cp, ic = _lin(c, i1, j, k); qp, iq = _lin(qr, i1, j, k)
+        s = _wet_deposition_run!(s, cp, qp, ic, iq, length(ir), scav, dt)
+    end
+    return s
+end
+# n consecutive cells from parent index ic of `cp` (iq of `qp`), adding to s
+@noinline function _wet_deposition_run!(s, cp, qp, ic, iq, n, scav, dt)
+    ic == iq || return _wet_deposition_run2!(s, cp, qp, ic, iq, n, scav, dt)
+    @inbounds for I in ic:ic+n-1           # the same layout: one index
+        q = qp[I]
+        q > 0 || continue
+        c0 = cp[I]
+        c1 = c0 * exp(-scav * q * dt)
+        cp[I] = c1
+        s += Float64(c0 - c1)
+    end
+    return s
+end
+@noinline function _wet_deposition_run2!(s, cp, qp, ic, iq, n, scav, dt)
+    @inbounds for r in 0:n-1
+        q = qp[iq + r]
+        q > 0 || continue
+        c0 = cp[ic + r]
+        c1 = c0 * exp(-scav * q * dt)
+        cp[ic + r] = c1
+        s += Float64(c0 - c1)
+    end
+    return s
+end
+function _wet_deposition_plane(k, ir, jr, c, qr, scav, dt)
+    s = 0.0
+    @inbounds for j in jr, i in ir
         q = qr[i, j, k]
-        q > 0 || return 0.0
+        q > 0 || continue
         c0 = c[i, j, k]
         c1 = c0 * exp(-scav * q * dt)
         c[i, j, k] = c1
-        return Float64(c0 - c1)
+        s += Float64(c0 - c1)
     end
+    return s
 end
 apply_wet_deposition!(c::Field, qr, dt::Real; kw...) =
     apply_wet_deposition!(interior_view(c), qr isa Field ? interior_view(qr) : qr, dt; kw...)
