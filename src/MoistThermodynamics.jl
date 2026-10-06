@@ -301,7 +301,12 @@ function saturation_specific_humidity(T::Real, ρ_or_p::Real,
     if use_density
         return es / (float(ρ_or_p) * R_v(c) * float(T))
     end
-    p = float(ρ_or_p)
+    return _saturation_specific_humidity(T, es, ρ_or_p, c)
+end
+
+# q_sat from e_s at pressure p (the pressure form of saturation_specific_humidity)
+function _saturation_specific_humidity(T::Real, es::Real, p::Real, c::ThermodynamicConstants)
+    p = float(p)
     ε = molmass_ratio(c)
     # Once e_s reaches ambient pressure the water boils: there is no
     # saturated *mixture* any more, the air is all vapour, and q_sat = 1.
@@ -335,6 +340,11 @@ function saturation_mixing_ratio(T::Real, p::Real,
                                  over::Symbol = :liquid)
     es = over === :liquid ? saturation_vapor_pressure(T, c) :
                             saturation_vapor_pressure_ice(T, c)
+    return _saturation_mixing_ratio(es, p, c)
+end
+
+# r_sat from e_s at pressure p
+function _saturation_mixing_ratio(es::Real, p::Real, c::ThermodynamicConstants)
     den = float(p) - es
     den <= 0 && return float(Inf)
     return molmass_ratio(c) * es / den
@@ -1066,8 +1076,12 @@ polar one.
 function moist_adiabatic_lapse_rate(T::Real, p::Real,
                                     c::ThermodynamicConstants = DEFAULT_CONSTANTS)
     Tk = float(T)
-    rs = saturation_mixing_ratio(Tk, p, c)
-    Lv = latent_heat_vapor(Tk, c)
+    return _moist_adiabatic_lapse_rate(Tk, saturation_mixing_ratio(Tk, p, c),
+                                       latent_heat_vapor(Tk, c), c)
+end
+
+# Γ_m from r_s and L_v at T (shared with saturated_buoyancy_frequency_squared)
+function _moist_adiabatic_lapse_rate(Tk::Real, rs::Real, Lv::Real, c::ThermodynamicConstants)
     Rd = R_d(c); ε = molmass_ratio(c)
     num = 1 + Lv * rs / (Rd * Tk)
     den = c.cp_dry + Lv^2 * rs * ε / (Rd * Tk^2)
@@ -1171,8 +1185,8 @@ drier air of the same θ is buoyant, as a parcel computation says.
 `θ` (K), `p` (Pa), `q_v`, `q_c` (kg kg⁻¹) are the cell's; ``T = θΠ(p)``
 with the dry Exner function. ``Γ_m`` is [`moist_adiabatic_lapse_rate`](@ref),
 ``Γ_d`` [`dry_adiabatic_lapse_rate`](@ref), ``q_s``
-[`saturation_specific_humidity`](@ref) (``dq_s/dz|_{\\rm ad}`` by a centred
-difference over ±1 m of the adiabat, hydrostatic with ``R_d T``): one
+[`saturation_specific_humidity`](@ref) (``dq_s/dz|_{\\rm ad}`` from its
+derivatives in T and p, hydrostatic with ``R_d T``): one
 source of truth with the rest of the contract. `θ_ref` is the reference
 temperature of a Boussinesq core (``θ_0``; default θ). The factor 1.61
 is ``1 + 0.61``, the 0.61 of the cores' θ_v. The result vanishes on a
@@ -1191,13 +1205,20 @@ function saturated_buoyancy_frequency_squared(θ::Real, p::Real, q_v::Real, q_c:
                                               θ_ref::Real = θ, g::Real = c.grav)
     Π  = exner_function(p, PhasePartition(0.0), c)
     T  = float(θ) * Π
+    pf = float(p)
+    es = saturation_vapor_pressure(T, c)
+    Lv = latent_heat_vapor(T, c)
+    ε  = molmass_ratio(c)
     Γd = dry_adiabatic_lapse_rate(PhasePartition(0.0), c)
-    Γm = moist_adiabatic_lapse_rate(T, p, c)
-    # the parcel's saturation humidity along the moist adiabat, ±1 m
-    h  = 1.0
-    dp = exp(c.grav * h / (R_d(c) * T))
-    dqs_ad = (saturation_specific_humidity(T - Γm * h, p / dp, c) -
-              saturation_specific_humidity(T + Γm * h, p * dp, c)) / (2h)
+    Γm = _moist_adiabatic_lapse_rate(T, _saturation_mixing_ratio(es, pf, c), Lv, c)
+    # the parcel's saturation humidity along the moist adiabat:
+    # dq_s/dz = ∂q_s/∂T (−Γ_m) + ∂q_s/∂p (−g p/(R_d T)), with
+    # q_s = ε e_s/(p − (1−ε) e_s) and de_s/dT = e_s L_v/(R_v T²) (exact for
+    # the Kirchhoff e_s of this module)
+    den = pf - (1 - ε) * es
+    qs  = _saturation_specific_humidity(T, es, pf, c)
+    dqs_ad = -(ε * pf / den^2) * es * Lv / (R_v(c) * T^2) * Γm +
+              (qs / den) * c.grav * pf / (R_d(c) * T)
     return (g / θ_ref) * ((1 + 0.61 * q_v - q_c) * (dθ_dz - (Γd - Γm) / Π) +
                           θ * (1.61 * (dq_v_dz - dqs_ad) - dq_w_dz))
 end
