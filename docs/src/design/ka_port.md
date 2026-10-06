@@ -289,6 +289,70 @@ least 16 384 points per task. Without that cap the 64×64×32 axpy took
 67.6 µs at 24 threads, 2.7× the serial loop. A pure store
 (`set!(f, value)`, 11 µs) is still slower threaded at 12 and 24 threads.
 
+## Measured at KA-h
+
+Same machine, Julia 1.13.1, FFTW 1.10.0 (FFTW 3.3.10), ESTIMATE plans,
+FFTW threads = Julia threads, BLAS pinned to 1. Minimum over repeats at
+load average 4-9 (other agents on the machine). Times in ms for one
+`solve!`. "old" is master before KA-h at one thread; speed-up = old at
+1 thread / new at N threads. CosineFFT is the default channel
+`(:periodic, :periodic, :neumann)`; "closed box" is all-Neumann;
+Stretched uses the parent's 53 levels (25 m to 500 m, ×1.08 to 100 m,
+3 km).
+
+| solver | grid | old 1 t | new 1 t | new / old | 4 t | 12 t | 24 t |
+| :----- | :--- | ------: | ------: | --------: | --: | ---: | ---: |
+| FFT | 64×64×32 | 0.699 | 0.509 | 0.73 | 3.8× | 2.4× | 2.2× |
+| FFT | 128²×64 | 10.50 | 9.74 | 0.93 | 3.9× | 4.3× | 4.0× |
+| FFT | 256²×128 | 119.2 | 114.6 | 0.96 | 2.7× | 3.5× | 3.5× |
+| CosineFFT | 64×64×32 | 1.950 | 1.671 | 0.86 | 4.1× | 4.8× | 4.7× |
+| CosineFFT | 128²×64 | 19.82 | 18.35 | 0.93 | 4.1× | 5.3× | 5.3× |
+| CosineFFT | 256²×128 | 246.4 | 238.9 | 0.97 | 3.2× | 5.3× | 5.8× |
+| CosineFFT closed box | 64×64×32 | 2.890 | 2.734 | 0.95 | 3.9× | 5.7× | 5.7× |
+| CosineFFT closed box | 128²×64 | 32.76 | 31.51 | 0.96 | 3.9× | 7.9× | 7.4× |
+| CosineFFT closed box | 256²×128 | 321.7 | 319.9 | 0.99 | 3.6× | 6.8× | 8.6× |
+| Stretched, periodic | 64×64×53 | 0.958 | 0.819 | 0.85 | 3.9× | 3.1× | 3.0× |
+| Stretched, periodic | 192²×53 (parent) | 34.51 | 33.74 | 0.98 | 3.2× | 5.7× | 6.3× |
+| Stretched, Neumann | 64×64×53 | 2.030 | 1.877 | 0.92 | 3.8× | 4.8× | 4.3× |
+| Stretched, Neumann | 192²×53 (parent) | 29.61 | 29.14 | 0.98 | 3.2× | 5.5× | 5.9× |
+
+The Thomas solve alone (the old level-by-level loop against the slab
+kernel): 0.074 / 0.074 ms at 64×64×53 and 1.099 / 1.127 ms at 192²×53
+on one thread (1.00 and 1.03), then 0.029 / 0.028 / 0.033 ms and
+0.327 / 0.160 / 0.171 ms at 4/12/24 threads (6.9× at 12 threads at the
+parent size).
+
+The pointwise kernels at one thread against the broadcasts they
+replaced (64×64×32 / 256²×128, µs): copy-in 18 vs 127 / 4 254 vs 8 333,
+the eigenvalue multiply 64 vs 100 / 4 404 vs 6 324, normalise and copy
+out 18 vs 84 / 4 346 vs 5 500. These are memory-bound. At 256²×128 they
+take 2.7 / 1.8 / 2.8 ms at 4 threads and no less at 12 or 24.
+
+Threaded FFTW alone (the old code with FFTW on N threads) gives
+CosineFFT 256²×128 in 90.7 / 60.2 / 56.2 ms at 4/12/24 threads; the
+kernels take that to 76.9 / 46.3 / 42.7 ms. At 64×64×32, where the issue
+measured 1.2× at 12 threads, the old code with threaded FFTW reaches
+2.7× (0.711 ms), the new 4.8× (0.408 ms). Beyond 12 threads the solves
+are bandwidth-bound and gain little, and the 64×64×32 FFT and stretched
+solves get slower again: task start-up then costs more than the work.
+
+**ESTIMATE against MEASURE** (new code, ms, 1 / 12 / 24 threads):
+CosineFFT 256²×128 238.9 / 46.3 / 42.7 vs 236.1 / 44.2 / 39.4; closed
+box 128²×64 31.5 / 4.14 / 4.46 vs 13.3 / 2.57 / 2.70; FFT 256²×128
+114.6 / 33.7 / 33.6 vs 82.3 / 30.6 / 29.3; Stretched periodic 192²×53
+33.7 / 6.09 / 5.49 vs 16.8 / 3.83 / 4.02. So ESTIMATE costs up to 2.4×
+on one thread (mostly the r2r DCTs and the stretched solver's
+half-complex transforms) and 1.0-1.6× at 12 threads. Production keeps
+MEASURE (with wisdom for reproducible restarts); the tests use ESTIMATE.
+
+**Thread invariance.** The harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,12,24`), with FFTW now threaded in every
+section: all 2656 hashes (primitives, 64³ DNS, the Berlin smoke matrix,
+the flagship step and the new fft section) identical at 4, 12 and 24
+threads to 1 thread. Two separate processes at `-t 1` and two at `-t 24`
+gave the same fft and dns hashes. At `-t 1` every solve is bit-identical
+to master: no one-time change.
+
 ## Dependency tree
 
 KernelAbstractions 0.9.43 → Adapt, Atomix 1.6.0, UnsafeAtomics 0.4.0
