@@ -17,6 +17,9 @@
 #   5. faces inside solids (a building cut by the east face): u·n = 0,
 #      excluded from δ
 #   6. perfect parent: refinement 1, the child driven by the truth
+#   7. outflow condition through nest_bcs (#329): a child-only θ pulse
+#      leaves through a convective outflow face, but is trapped by the
+#      Dirichlet (parent) one; the advection halo is checked
 #
 # References: Hellsten et al. (2021), GMD 14, 3185 (PALM nesting: Dirichlet
 # child boundary from the interpolated parent, §3.2; mass-flux correction,
@@ -471,6 +474,54 @@ end
         @test worst < 1e-3
         name == "step!" && @test worst < 1e-10
     end
+end
+
+# A θ pulse that exists only in the child (the parent is uniform, θ = 0)
+# leaves through the east (outflow) face of a 1-D nest. With the nest's
+# default Dirichlet outflow the parent's θ = 0 is imposed in the outflow
+# halo and the centred scheme traps and reflects the pulse; with the
+# convective outflow passed through nest_bcs (#329; Orlanski 1976, JCP 21,
+# 251) it radiates out. Same set-up as era6_outflow_conditions.jl's pulse,
+# here through the nest's faces.
+function _nb_outflow_pulse(mode; σ = 4.0, U = 1.0)
+    pm = RegularGrid(Float64; size = (64, 1, 1), extent = (64.0, 1.0, 1.0), halo = (3, 3, 3))
+    nest = nested_grid(pm, ((16.0, 48.0), (0.0, 1.0), (0.0, 1.0)), (2, 1, 1))
+    cm = nest_child_mesh(nest)
+    psim = BoussinesqSimulation(pm)
+    fill!(psim.u.data, U)
+    bcs = nest_bcs(cm, :nest, :periodic, :periodic; outflow = mode, halo = 3)
+    csim = BoussinesqSimulation(cm; bcs)
+    fill!(csim.u.data, U)
+    ii, jj, kk = interior(cm)
+    for i in ii
+        csim.θ.data[i, jj, kk] .= exp(-(_nb_xc(cm, i) - 32.0)^2 / (2σ^2))
+    end
+    E0 = sum(abs2, interior_view(csim.θ))
+    run = NestedRun(psim, csim, nest; advance_parent = domain_advance(step_rk3!),
+                    advance_child = domain_advance(step_rk3!),
+                    cfl_parent = nothing, cfl_child = nothing, substeps = 2)
+    st = only(open_boundary_states(csim))
+    for _ in 1:round(Int, 2 * 32.0 / (U * 0.25))          # two crossings of the child
+        step_nested!(run; dt = 0.25)
+    end
+    return sum(abs2, interior_view(csim.θ)) / E0, st
+end
+
+@testset "outflow condition and advection halo through nest_bcs (#329)" begin
+    res_c, st_c = _nb_outflow_pulse(:convective)
+    res_d, st_d = _nb_outflow_pulse(:dirichlet)
+    @printf("  child-only θ pulse, two crossings: residual ∫θ'²/∫θ'²₀ convective outflow %.2e, Dirichlet (parent) outflow %.2e\n",
+            res_c, res_d)
+    @test all(==(:convective), values(st_c.outflow))
+    @test all(==(:dirichlet), values(st_d.outflow))
+    @test res_c < 1e-3                # radiated out
+    @test res_d > 0.1                 # trapped by the imposed parent θ = 0
+    # the advection halo is checked against the child mesh, as for
+    # open_boundary_conditions
+    cm = RegularGrid(Float64; size = (8, 8, 8), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+    @test nest_bcs(cm; halo = 3) isa FieldBoundaryConditions
+    @test_throws ArgumentError nest_bcs(cm; halo = 4)
+    @test_throws ArgumentError nest_bcs(cm; outflow = :sponge)
 end
 
 end # testset

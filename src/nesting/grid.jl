@@ -14,7 +14,8 @@ _nest_side(s::Symbol, what) = s === :nest ? :open :
 """
     nest_bcs(child_mesh, x = :nest, y = x, z = y; bottom = z, top = z,
              moisture = false, scalars = (), correction = :uniform,
-             normal_halo = :value, scalar_halo = :value, record = false)
+             normal_halo = :value, scalar_halo = :value, record = false,
+             outflow = :dirichlet, halo = 1)
         -> FieldBoundaryConditions
 
 Boundary conditions of a nested child. Every `:nest` face is an
@@ -39,6 +40,12 @@ moist too), and the extra cell-centred `scalars` (names, e.g. `(:co2,)`,
 matching the `scalars` of the run's [`NestInterpState`](@ref)). Pass the
 result as the child's `bcs` (it is also the default `θ_bcs`).
 
+`outflow` and `halo` are those of
+[`open_boundary_conditions`](@ref Aeolus.BoundaryConditions.open_boundary_conditions):
+the outflow condition of the nest faces (`:dirichlet`, PALM's nested
+child and the default, or a `:convective` / `:orlanski` radiation
+outflow) and the halo depth the child's advection scheme needs there.
+
 This replaces the `NestBC` no-op halo of the Phase 16/30 nests, whose
 child kept a periodic projection that never saw the parent's flux.
 """
@@ -46,7 +53,8 @@ function nest_bcs(m::RegularGrid, x::Symbol = :nest, y::Symbol = x, z::Symbol = 
                   bottom::Symbol = z, top::Symbol = z,
                   moisture::Bool = false, scalars = (),
                   correction::Symbol = :uniform, normal_halo::Symbol = :value,
-                  scalar_halo::Symbol = :value, record::Bool = false)
+                  scalar_halo::Symbol = :value, record::Bool = false,
+                  outflow = :dirichlet, halo::Integer = 1)
     xs = _nest_side(x, "x"); ys = _nest_side(y, "y")
     bs = _nest_side(bottom, "bottom"); ts = _nest_side(top, "top")
     (xs in (:open, :periodic) && ys in (:open, :periodic)) ||
@@ -64,7 +72,7 @@ function nest_bcs(m::RegularGrid, x::Symbol = :nest, y::Symbol = x, z::Symbol = 
     end
     return open_boundary_conditions(m, nothing; x = xs, y = ys, bottom = bs, top = ts,
                                     fields = Tuple(names), correction, normal_halo,
-                                    scalar_halo, record)
+                                    scalar_halo, record, outflow, halo)
 end
 
 nest_bcs(x::Symbol, args...; kw...) =
