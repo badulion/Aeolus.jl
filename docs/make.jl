@@ -7,7 +7,8 @@ makedocs(
     modules  = [Aeolus,
                 Aeolus.Grids, Aeolus.Fields, Aeolus.BoundaryConditions,
                 Aeolus.Operators, Aeolus.TimeSteppers,
-                Aeolus.PressureSolvers, Aeolus.Simulations],
+                Aeolus.PressureSolvers, Aeolus.Simulations,
+                Aeolus.SimulationDriver],
     sitename = "Aeolus.jl",
     authors  = "Andrzej Dulny",
     format   = Documenter.HTML(

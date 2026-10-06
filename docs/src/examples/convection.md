@@ -4,11 +4,18 @@ End-to-end exercise of the full Phase 1a system: staggered momentum
 advection + fractional-step projection + Smagorinsky-Lilly SGS +
 buoyancy + scalar transport, all coupled.
 
-Location: `examples/buoyant_convection.jl`.
+Location: `examples/configs/buoyant_convection.toml` (the `simulation`
+driver; `examples/buoyant_convection.jl` is a three-line runner for it).
 
 ```bash
-$ julia --project=. examples/buoyant_convection.jl
+$ julia --project -m Aeolus run examples/configs/buoyant_convection.toml
 ```
+
+The θ profile is the `mixed_layer_lapse` family with `z_i = 0`
+(`300.5 − 1.0 z`), and the 1 mK noise comes from `Xoshiro([run] seed)`,
+so the trajectory is not bit for bit the former script's (which used
+`θ₀ + Δθ (½ − z/L)` and the global RNG); the dt (5/97 s) and every
+parameter are the same. The run writes `diagnostics.csv`, every 0.5 s:
 
 ## Setup
 
@@ -23,6 +30,10 @@ Unstably stratified θ profile plus tiny random noise, triply periodic
   * CFL 0.3, `T_end = 5 s`
 
 ## Expected output
+
+The former script's printout (the config's run gives
+`ke_mean` 5.64e-12 m² s⁻² at t = 0.567 s, 4.25e-10 at t = 4.69 s, with
+`max_div` ≈ 5e-16 throughout):
 
 ```text
 Convection: N = 32³   w* = 0.181 m/s   dt = 5.15e-02   nsteps = 97
