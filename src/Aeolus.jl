@@ -8,6 +8,8 @@ module Aeolus
 # added without changing user code — it plugs in via multiple dispatch on
 # the mesh type inside the Operators layer.
 
+# Structured logging (LOG-a, #333): first, so every module can tag its events.
+include("logging/RunLog.jl")
 include("Grids.jl")
 include("Fields.jl")
 include("BoundaryConditions.jl")
@@ -87,6 +89,7 @@ include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, adve
 include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 include("PrognosticSGS.jl")        # Phase 56 Deardorff prognostic SGS TKE (#182)
 
+using .RunLog
 using .Grids
 using .Fields
 using .BoundaryConditions
@@ -155,6 +158,9 @@ using .LargeScaleForcing           # Era VI, Phase 58 (#171)
 using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 
 # Re-exports for the user-facing API.
+# Structured logging (LOG-a, #333)
+export AeolusLogger, TeeLogger, open_run_log, with_run_log, test_logger,
+       current_domain, with_domain, parse_log_level
 export AbstractMesh, RegularGrid
 export Field, CellCenter, FaceX, FaceY, FaceZ
 export Periodic, NoFlux, ValueBC, FluxBC, FieldBoundaryConditions, fill_halos!
@@ -221,6 +227,10 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
        CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
        latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
        driver_checkpoints, finish_checkpoints!
+# #334: run folder and provenance
+export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
+       provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,
+       diagnostics_path, output_dir, checkpoint_dir, refresh_fftw_provenance!
 export NCWriter, NCFile, nc_create, nc_defdim!, nc_defvar!, nc_endef!,
        nc_write!, nc_append_record!, nc_close!, nc_write_fields,
        nc_open, nc_varnames, nc_dimnames, nc_read, nc_read_record,
@@ -330,7 +340,7 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        step_nested!, nest_conservation_error, composite_integral,
        NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask,
        DomainAdvance, domain_advance, stage_times,
-       NestedRun, NestRunStats, boundary_time,
+       NestedRun, NestRunStats, boundary_time, begin_parent_step!, end_parent_step!, subcycle_dt,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
        anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights,
        RefinementBlock, AMRHierarchy, amr_hierarchy,
@@ -1075,7 +1085,7 @@ export FreeStreamBoundary
 # boundary-data contract and the global boundary mass-flux correction.
 export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
        AbstractBoundaryData, ProfileBoundaryData, FunctionBoundaryData,
-       boundary_values!, open_boundary_conditions, set_boundary_data!,
+       boundary_values!, open_boundary_conditions, set_boundary_data!, add_open_scalars!,
        has_open_boundaries, open_boundary_states, update_open_boundaries!,
        prepare_open_boundaries!, correct_boundary_mass_flux!, open_boundary_flux,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,

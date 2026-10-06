@@ -30,10 +30,15 @@ isdefined(Main, :BerlinCase) ||
     include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
 const BC = Main.BerlinCase
 
-_smoke(; kw...) = BC.CaseConfig(:smoke; verbose = false, output_path = nothing, kw...)
+# This file tests the parent-free `lateral` options, which the case uses
+# with the nest switched off; the nested default (#265) is tested in
+# test/era2_nest_external.jl and by the `:nesting` coupling's smoke checks.
+_smoke(; physics = Dict{Symbol,Any}(), kw...) =
+    BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
+                  physics = merge(Dict{Symbol,Any}(:nesting => false), physics), kw...)
 
 @testset "Berlin open lateral boundaries (N-open-d, #262)" begin
-    @testset "the default stays periodic" begin
+    @testset "with the nest off, the default stays periodic" begin
         cfg = _smoke()
         @test cfg.lateral === :periodic
         case = BC.build_case(cfg; io = devnull)

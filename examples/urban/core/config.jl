@@ -17,7 +17,11 @@ from a named scenario preset (see [`SCENARIOS`](@ref)) and then applies
 
 Groups of fields:
 
-* **grid** — `size`, `extent` (m), `halo`;
+* **grid** — `size`, `extent` (m), `halo`. The default child is
+  1 km × 1 km × 400 m on 64 × 64 × 64 cells (15.6 m × 6.25 m): deepened
+  from 200 m for the nest (maintainer decision of 2026-10-05, epic #246)
+  so that the Fernsehturm (368 m) fits and the child top sits in the
+  parent's uniform 25 m layers;
 * **geometry** — `osm_path`, the anchor `lat0`/`lon0` of the OSM
   projection, `offset` (m, the window centre relative to the anchor),
   `min_height` (buildings lower than this are dropped), `elevation` (m
@@ -30,7 +34,9 @@ Groups of fields:
   a coupling may add its own key;
 * **dynamics** — `ν`, `θ₀`, `g`, `f_coriolis`, `C_s`, `Pr_t`,
   `sponge_α_max`, `sponge_frac` (sponge starts at `sponge_frac·Lz`; it
-  damps the velocity only), `θ_top` (the θ condition of the top face:
+  damps the velocity only; in a nested case toward the parent's mean wind
+  over the child, #265), `θ_top` (the θ condition of a closed top face, not
+  used by a nested or open case:
   `:initial_gradient` (default), the fixed-gradient top `FluxBC(Γ)` with
   the initial ∂θ/∂z at the top face; `:noflux`, a closed lid; or a
   gradient in K/m — see `core/top_boundary.jl`, #254),
@@ -38,15 +44,20 @@ Groups of fields:
   provider wraps its closure in, `Operators.StabilityCorrected`, P55-e
   #187: `:brown94` (default, Brown et al. 1994), `:lilly`, `:long_tail`,
   `:short_tail`, `:most`, or `:none` for the uncorrected closure);
-* **lateral boundaries** (N-open-d, #262; `core/open_boundary.jl`) —
-  `lateral` (`:periodic`, default, or `:open`: the four sides and the
-  top fed by `ProfileBoundaryData` of the geostrophic wind and the initial
-  θ profile; transitional until the nested default of #265), `outflow`
-  (`:dirichlet`, default, `:convective` or `:orlanski`: the outflow
-  condition of the open faces, N-open-c #260), `boundary_frame` (cells:
-  buildings closer than this to an open face are removed; default 3) and
-  `θ_relaxation` (default `true`: with `:open`, θ is relaxed toward the
-  data's profile over the velocity sponge layer);
+* **lateral boundaries** (`core/open_boundary.jl`) — by default the
+  case is **nested** (N-berlin-nest, #265): the `:nesting` coupling runs
+  an Aeolus parent (its settings in `options[:nesting]`) whose state
+  feeds the four sides and the top; `lateral` is then not used. With the
+  nest switched off (`physics = Dict(:nesting => false)`), `lateral`
+  chooses them (N-open-d, #262): `:periodic` (default) or `:open` (the
+  four sides and the top fed by `ProfileBoundaryData` of the geostrophic
+  wind and the initial θ profile). `outflow` (`:dirichlet`, default,
+  `:convective` or `:orlanski`: the outflow condition of the open or nest
+  faces, N-open-c #260), `boundary_frame` (cells: buildings closer than
+  this to an open face are removed; default 3) and `θ_relaxation` (default
+  `true`: θ is relaxed over the velocity sponge layer toward the data's
+  profile, in a nested case toward the parent's mean profile over the
+  child);
 * **initial state** — `sounding`: the radiosonde CSV the initial θ(z),
   qv(z) and surface pressure come from (default: the Lindenberg WMO 10393
   launches of 29/30 June 2019, `data/lindenberg_10393_20190629.csv`,
@@ -77,8 +88,8 @@ Base.@kwdef mutable struct CaseConfig
     name::Symbol                      = :alexanderplatz
     scenario::Symbol                  = :summer
     # grid
-    size::NTuple{3,Int}               = (64, 64, 32)
-    extent::NTuple{3,Float64}         = (1000.0, 1000.0, 200.0)
+    size::NTuple{3,Int}               = (64, 64, 64)
+    extent::NTuple{3,Float64}         = (1000.0, 1000.0, 400.0)   # 400 m: the nested child (#246)
     halo::NTuple{3,Int}               = (3, 3, 3)      # 3: WENO-Z5 moisture transport
     # geometry
     osm_path::String                  = joinpath(DATA_DIR, "alexanderplatz_real.osm")

@@ -21,6 +21,12 @@ state.
 
 Groups of keywords:
 
+* **placement** — `center` (m, the horizontal centre of the parent box
+  relative to the OSM anchor; `nothing`, the default, centres it on the
+  child, `child.offset`). The parent mesh is placed in the child mesh's
+  coordinates ([`parent_origin`](@ref)), so the child nests in it at its
+  own origin, and the land use is cropped to the box
+  ([`crop_landuse`](@ref)).
 * **grid** — `extent` (m, default 6000 × 6000 × 3000), `refinement`
   `(rx, ry, rz)`: the parent cell is `rx × ry × rz` child cells (default
   `(2, 2, 4)`: Δx = 31.25 m, Δz = 25 m); `vertical`: `:stretched`
@@ -40,7 +46,9 @@ Groups of keywords:
   `column_radiation!`, on the parent's mean column every `radiation_period`
   s).
 * **large-scale forcing** — `geostrophic` (the `GeostrophicPressureGradient`
-  of the sounding wind above `z_g`, see [`parent_geostrophic_wind`](@ref)),
+  of the sounding wind above `z_g`, see [`parent_geostrophic_wind`](@ref);
+  without a sounding, the child's `:geostrophic` coupling options
+  `(U_g, V_g)`, so the two domains are driven by one wind),
   `nudging_τ` (s; `Inf` = off) with `nudging_factor`, `nudging_depth`
   (the `NudgingWeight` above `nudging_factor` × the running maximum of the
   diagnosed z_i), `divergence` (s⁻¹, the large-scale divergence of the
@@ -88,6 +96,8 @@ Groups of keywords:
 """
 Base.@kwdef mutable struct ParentConfig
     child::CaseConfig                    = CaseConfig(; verbose = false, output_path = nothing)
+    # placement
+    center::Union{Nothing,NTuple{2,Float64}} = nothing   # nothing: on the child
     # grid
     extent::NTuple{3,Float64}            = (6000.0, 6000.0, 3000.0)
     refinement::NTuple{3,Int}            = (2, 2, 4)
@@ -180,19 +190,40 @@ function parent_size(pc::ParentConfig)
     return Nx, Ny, length(parent_faces(pc)) - 1
 end
 
+"The horizontal centre of the parent box relative to the OSM anchor (m): `pc.center`, or the child's centre."
+parent_center(pc::ParentConfig) = pc.center === nothing ? pc.child.offset : pc.center
+
+"""
+    parent_origin(pc) -> (x0, y0, 0)
+
+The origin of the parent mesh in the coordinates of the child mesh
+(whose origin is the child's south-west corner, `child.offset −
+child.extent/2` from the anchor): `center − extent/2 − (offset −
+extent_child/2)`. For the defaults (the 6 km parent centred on the 1 km
+child) `(−2500, −2500, 0)`, so the child covers parent cells 81–112 in x
+and y (`Nesting.nested_grid` finds them).
+"""
+function parent_origin(pc::ParentConfig)
+    c, cfg = parent_center(pc), pc.child
+    return (c[1] - pc.extent[1] / 2 - (cfg.offset[1] - cfg.extent[1] / 2),
+            c[2] - pc.extent[2] / 2 - (cfg.offset[2] - cfg.extent[2] / 2), 0.0)
+end
+
 """
     parent_mesh(pc) -> StretchedGrid
 
 The parent's mesh: a `StretchedGrid` with the faces of
 [`parent_faces`](@ref) (`:custom`), or `:uniform` stretching for the
-uniform alternative (bit for bit the `RegularGrid` operators).
+uniform alternative (bit for bit the `RegularGrid` operators), placed at
+[`parent_origin`](@ref).
 """
 function parent_mesh(pc::ParentConfig)
     N = parent_size(pc)
+    o = parent_origin(pc)
     if pc.vertical === :uniform
-        return StretchedGrid(; size = N, extent = pc.extent, halo = pc.halo)
+        return StretchedGrid(; size = N, extent = pc.extent, halo = pc.halo, origin = o)
     end
-    return StretchedGrid(; size = N, extent = pc.extent, halo = pc.halo,
+    return StretchedGrid(; size = N, extent = pc.extent, halo = pc.halo, origin = o,
                          stretching = (:custom, parent_faces(pc)))
 end
 

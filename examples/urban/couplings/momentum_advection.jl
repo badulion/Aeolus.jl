@@ -59,6 +59,9 @@ end
 # at the walls, the domain sums of the u and v tendencies vanish (measured
 # ~1e-18 relative in the :smoke window, the centred operator the same).
 # w is not conserved by the operator alone (the walls take momentum).
+# Through open (nest) faces the sums are the boundary momentum flux, so the
+# check applies to a closed box: the variant below runs it with the nest off
+# (#265).
 function smoke_check(c::MomentumWENOZ, case)
     sim, m = case.sim, case.mesh
     for f in (sim.u, sim.v, sim.w)
@@ -68,9 +71,13 @@ function smoke_check(c::MomentumWENOZ, case)
     Aeolus.AdvectionSchemes.momentum_advect_weno_z!(tu, tv, tw, sim.u, sim.v, sim.w; order = c.order)
     rel(t) = (x = interior_view(t); abs(sum(x)) / max(sum(abs, x), eps()))
     return ["projected velocity divergence-free (max|∇·u| < 1e-10 s⁻¹)" => max_divergence(sim) < 1e-10,
-            "WENO-Z flux form conserves horizontal momentum (|Σtu|, |Σtv| < 1e-12 Σ|·|)" =>
-                rel(tu) < 1e-12 && rel(tv) < 1e-12]
+            "WENO-Z flux form conserves horizontal momentum in a closed box (|Σtu|, |Σtv| < 1e-12 Σ|·|)" =>
+                has_open_boundaries(sim) || (rel(tu) < 1e-12 && rel(tv) < 1e-12)]
 end
+
+smoke_variants(::Type{MomentumWENOZ}) =
+    ((label = "WENO-Z momentum in the closed (periodic) box",
+      physics = Dict(:momentum_advection => :weno_z, :nesting => false)),)
 
 register!(MomentumCentered)
 register!(MomentumWENOZ)

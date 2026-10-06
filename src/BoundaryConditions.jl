@@ -14,7 +14,7 @@ export axis_poisson_bc                           # N-open-a (#251)
 export neighbor_index, mark_open_boundary_solids!   # N-open-d (#262)
 export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,   # N-open-b (#255)
        AbstractBoundaryData, ProfileBoundaryData, FunctionBoundaryData,
-       boundary_values!, open_boundary_conditions, set_boundary_data!,
+       boundary_values!, open_boundary_conditions, set_boundary_data!, add_open_scalars!,
        has_open_boundaries, open_boundary_states, update_open_boundaries!,
        prepare_open_boundaries!, correct_boundary_mass_flux!, open_boundary_flux,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
@@ -205,43 +205,26 @@ _fill_z!(d, a, b, H, N, loc::Location, key) = _fill_z!(d, a, b, H, N, loc)
 # mesh-free method (with the key, for an open top).
 _fill_z!(d, bot, top, Hz, Nz, loc::Location, g, key) = _fill_z!(d, bot, top, Hz, Nz, loc, key)
 
-# Copy storage plane `src` of axis `ax` onto plane `dst` (times `sgn`):
-# explicit loops, because `d[h, :, :] .= d[N + h, :, :]` allocates a copy
-# of the right-hand slice on every call (#329: 205 KiB per periodic fill of
-# a 38³ array, four per nest prolongation).
-@inline function _copy_plane!(d::AbstractArray{T,3}, ax::Int, dst::Int, src::Int,
-                              sgn = one(T)) where {T}
-    n1, n2, n3 = size(d)
-    @inbounds if ax == 1
-        for k in 1:n3, j in 1:n2
-            d[dst, j, k] = sgn * d[src, j, k]
-        end
-    elseif ax == 2
-        for k in 1:n3, i in 1:n1
-            d[i, dst, k] = sgn * d[i, src, k]
-        end
-    else
-        for j in 1:n2, i in 1:n1
-            d[i, j, dst] = sgn * d[i, j, src]
-        end
-    end
-    return d
-end
+# The plane copies below run on views (`@views`): the right-hand slice of
+# `d[a, :, :] .= d[b, :, :]` would otherwise be copied into a fresh array
+# on every call, and halo fills run several times per field per step
+# (KA-c, #295: 25 MB per flagship step). Source and destination planes are
+# disjoint, so the result is the same, bit for bit.
 
 # --- X direction ---------------------------------------------------------
 
 function _fill_x!(d, ::Periodic, ::Periodic, Hx, Nx, ::Location)
-    @inbounds for h in 1:Hx
-        _copy_plane!(d, 1, h, Nx + h)
-        _copy_plane!(d, 1, Hx + Nx + h, Hx + h)
+    @inbounds @views for h in 1:Hx
+        d[h,               :, :] .= d[Nx + h,      :, :]
+        d[Hx + Nx + h,     :, :] .= d[Hx + h,      :, :]
     end
     return d
 end
 
 function _fill_x!(d, ::NoFlux, ::NoFlux, Hx, Nx, ::Location)
-    @inbounds for h in 1:Hx
-        _copy_plane!(d, 1, Hx + 1 - h, Hx + h)
-        _copy_plane!(d, 1, Hx + Nx + h, Hx + Nx + 1 - h)
+    @inbounds @views for h in 1:Hx
+        d[Hx + 1 - h,      :, :] .= d[Hx + h,          :, :]
+        d[Hx + Nx + h,     :, :] .= d[Hx + Nx + 1 - h, :, :]
     end
     return d
 end
@@ -249,17 +232,17 @@ end
 # --- Y direction ---------------------------------------------------------
 
 function _fill_y!(d, ::Periodic, ::Periodic, Hy, Ny, ::Location)
-    @inbounds for h in 1:Hy
-        _copy_plane!(d, 2, h, Ny + h)
-        _copy_plane!(d, 2, Hy + Ny + h, Hy + h)
+    @inbounds @views for h in 1:Hy
+        d[:, h,              :] .= d[:, Ny + h,      :]
+        d[:, Hy + Ny + h,    :] .= d[:, Hy + h,      :]
     end
     return d
 end
 
 function _fill_y!(d, ::NoFlux, ::NoFlux, Hy, Ny, ::Location)
-    @inbounds for h in 1:Hy
-        _copy_plane!(d, 2, Hy + 1 - h, Hy + h)
-        _copy_plane!(d, 2, Hy + Ny + h, Hy + Ny + 1 - h)
+    @inbounds @views for h in 1:Hy
+        d[:, Hy + 1 - h,     :] .= d[:, Hy + h,          :]
+        d[:, Hy + Ny + h,    :] .= d[:, Hy + Ny + 1 - h, :]
     end
     return d
 end
@@ -267,17 +250,17 @@ end
 # --- Z direction ---------------------------------------------------------
 
 function _fill_z!(d, ::Periodic, ::Periodic, Hz, Nz, ::Location)
-    @inbounds for h in 1:Hz
-        _copy_plane!(d, 3, h, Nz + h)
-        _copy_plane!(d, 3, Hz + Nz + h, Hz + h)
+    @inbounds @views for h in 1:Hz
+        d[:, :, h]           .= d[:, :, Nz + h]
+        d[:, :, Hz + Nz + h] .= d[:, :, Hz + h]
     end
     return d
 end
 
 function _fill_z!(d, ::NoFlux, ::NoFlux, Hz, Nz, ::Location)
-    @inbounds for h in 1:Hz
-        _copy_plane!(d, 3, Hz + 1 - h, Hz + h)
-        _copy_plane!(d, 3, Hz + Nz + h, Hz + Nz + 1 - h)
+    @inbounds @views for h in 1:Hz
+        d[:, :, Hz + 1 - h]  .= d[:, :, Hz + h]
+        d[:, :, Hz + Nz + h] .= d[:, :, Hz + Nz + 1 - h]
     end
     return d
 end
@@ -286,9 +269,9 @@ end
 # as free-slip / Neumann → same as NoFlux (mirror).
 function _fill_z!(d, ::ImpermeableWall, ::ImpermeableWall, Hz, Nz,
                   ::Union{CellCenter,FaceX,FaceY})
-    @inbounds for h in 1:Hz
-        _copy_plane!(d, 3, Hz + 1 - h, Hz + h)
-        _copy_plane!(d, 3, Hz + Nz + h, Hz + Nz + 1 - h)
+    @inbounds @views for h in 1:Hz
+        d[:, :, Hz + 1 - h]  .= d[:, :, Hz + h]
+        d[:, :, Hz + Nz + h] .= d[:, :, Hz + Nz + 1 - h]
     end
     return d
 end
@@ -299,7 +282,7 @@ end
 function _fill_z!(d::AbstractArray{T,3}, ::ImpermeableWall, ::ImpermeableWall,
                   Hz, Nz, ::FaceZ) where {T}
     zval = zero(T)
-    @inbounds begin
+    @inbounds @views begin
         d[:, :, Hz + 1]      .= zval    # bottom wall face
         # top wall face lives at Hz+Nz+1 (in halo region for FaceZ storage)
         if Hz + Nz + 1 <= size(d, 3)
@@ -308,12 +291,12 @@ function _fill_z!(d::AbstractArray{T,3}, ::ImpermeableWall, ::ImpermeableWall,
 
         for h in 1:Hz
             # below bottom wall: anti-symmetric about the wall at Hz+1
-            _copy_plane!(d, 3, Hz + 1 - h, Hz + 1 + h, -one(T))
+            d[:, :, Hz + 1 - h] .= .-d[:, :, Hz + 1 + h]
             # above top wall: anti-symmetric about the wall at Hz+Nz+1
             src = Hz + Nz + 1 - h
             dst = Hz + Nz + 1 + h
             if dst <= size(d, 3)
-                _copy_plane!(d, 3, dst, src, -one(T))
+                d[:, :, dst] .= .-d[:, :, src]
             end
         end
     end

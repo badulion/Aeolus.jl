@@ -151,6 +151,33 @@ end
 @inline _zeps(::Type{T}) where {T} = eps(T)^2
 @inline _zeps(x) = _zeps(typeof(x))
 
+# Integer power with a compile-time exponent (KA-c, #295). `x^p` with a
+# runtime `p::Integer` goes through Base's non-inlined compensated
+# `pow_body` — 11–16 % of all flagship samples, one call per weight. With
+# the exponent a type parameter the weights are a fixed multiply chain:
+# `x*x` for p = 2, which equals Base's `x^2` bit for bit (one correctly
+# rounded product); `x*x*x` for 3, as Base's `literal_pow`; `x³·x³` for
+# TENO's q = 6, which is *not* bitwise Base's compensated `x^6` (it
+# differs, by up to 3 ulp, in 61 % of arguments; the weights only enter
+# TENO through a cut-off, and no TENO5 value changed on 10⁵ random
+# stencils; see the KA-c notes in test/era2_advection.jl).
+@inline _ipow(x, ::Val{1}) = x
+@inline _ipow(x, ::Val{2}) = x*x
+@inline _ipow(x, ::Val{3}) = x*x*x
+@inline _ipow(x, ::Val{4}) = (x2 = x*x; x2*x2)
+@inline _ipow(x, ::Val{6}) = (x3 = x*x*x; x3*x3)
+@inline _ipow(x, ::Val{P}) where {P} =
+    P >= 0 ? Base.power_by_squaring(x, P) : inv(Base.power_by_squaring(x, -P))
+
+# The exponent of a public scalar entry point (`p`, `q` keywords) as a
+# `Val`, with the common values as constants so the call stays static.
+@inline function _with_pow(f::F, p::Integer) where {F}
+    p == 2 && return f(Val(2))
+    p == 6 && return f(Val(6))
+    p == 1 && return f(Val(1))
+    return f(Val(Int(p)))
+end
+
 # =========================================================================
 # 2. WENO-Z  (Borges, Carmona, Costa & Don, JCP 227 (2008) 3191)
 # =========================================================================
@@ -186,7 +213,7 @@ Reference: Borges, Carmona, Costa & Don, *An improved weighted essentially
 non-oscillatory scheme for hyperbolic conservation laws*, JCP 227 (2008).
 """
 @inline weno_z5_left(fm2, fm1, f0, fp1, fp2; p::Integer = 2) =
-    _weno_z5_left(promote(fm2, fm1, f0, fp1, fp2)..., p)
+    _with_pow(P -> _weno_z5_left(promote(fm2, fm1, f0, fp1, fp2)..., P), p)
 
 """
     weno_z5_right(fm1, f0, fp1, fp2, fp3; p = 2)
@@ -198,7 +225,7 @@ mirrored stencil `(f_{i-1}, …, f_{i+3})`.
 @inline weno_z5_right(fm1, f0, fp1, fp2, fp3; p::Integer = 2) =
     weno_z5_left(fp3, fp2, fp1, f0, fm1; p = p)
 
-@inline function _weno_z5_left(v1::T, v2::T, v3::T, v4::T, v5::T, p::Integer) where {T}
+@inline function _weno_z5_left(v1::T, v2::T, v3::T, v4::T, v5::T, p::Val) where {T}
     q0 = (2*v1 - 7*v2 + 11*v3)/6
     q1 = (-v2 + 5*v3 + 2*v4)/6
     q2 = (2*v3 + 5*v4 - v5)/6
@@ -209,9 +236,9 @@ mirrored stencil `(f_{i-1}, …, f_{i+3})`.
 
     ε = _zeps(T)
     τ = abs(b0 - b2)
-    a0 = T(1/10)*(one(T) + (τ/(b0 + ε))^p)
-    a1 = T(6/10)*(one(T) + (τ/(b1 + ε))^p)
-    a2 = T(3/10)*(one(T) + (τ/(b2 + ε))^p)
+    a0 = T(1/10)*(one(T) + _ipow(τ/(b0 + ε), p))
+    a1 = T(6/10)*(one(T) + _ipow(τ/(b1 + ε), p))
+    a2 = T(3/10)*(one(T) + _ipow(τ/(b2 + ε), p))
     return (a0*q0 + a1*q1 + a2*q2)/(a0 + a1 + a2)
 end
 
@@ -231,7 +258,7 @@ JCP 230 (2011) 1766 (extending Borges et al. 2008 to arbitrary order;
 candidate polynomials/indicators after Balsara & Shu, JCP 160 (2000) 405).
 """
 @inline weno_z7_left(fm3, fm2, fm1, f0, fp1, fp2, fp3; p::Integer = 2) =
-    _weno_z7_left(promote(fm3, fm2, fm1, f0, fp1, fp2, fp3)..., p)
+    _with_pow(P -> _weno_z7_left(promote(fm3, fm2, fm1, f0, fp1, fp2, fp3)..., P), p)
 
 """
     weno_z7_right(fm2, fm1, f0, fp1, fp2, fp3, fp4; p = 2)
@@ -243,7 +270,7 @@ on the mirrored stencil `(f_{i-2}, …, f_{i+4})`.
     weno_z7_left(fp4, fp3, fp2, fp1, f0, fm1, fm2; p = p)
 
 @inline function _weno_z7_left(v1::T, v2::T, v3::T, v4::T, v5::T, v6::T, v7::T,
-                               p::Integer) where {T}
+                               p::Val) where {T}
     q0 = (-3*v1 + 13*v2 - 23*v3 + 25*v4)/12
     q1 = (v2 - 5*v3 + 13*v4 + 3*v5)/12
     q2 = (-v3 + 7*v4 + 7*v5 - v6)/12
@@ -256,10 +283,10 @@ on the mirrored stencil `(f_{i-2}, …, f_{i+4})`.
 
     ε = _zeps(T)
     τ = abs(b0 - b1 - b2 + b3)
-    a0 = T(1/35) *(one(T) + (τ/(b0 + ε))^p)
-    a1 = T(12/35)*(one(T) + (τ/(b1 + ε))^p)
-    a2 = T(18/35)*(one(T) + (τ/(b2 + ε))^p)
-    a3 = T(4/35) *(one(T) + (τ/(b3 + ε))^p)
+    a0 = T(1/35) *(one(T) + _ipow(τ/(b0 + ε), p))
+    a1 = T(12/35)*(one(T) + _ipow(τ/(b1 + ε), p))
+    a2 = T(18/35)*(one(T) + _ipow(τ/(b2 + ε), p))
+    a3 = T(4/35) *(one(T) + _ipow(τ/(b3 + ε), p))
     return (a0*q0 + a1*q1 + a2*q2 + a3*q3)/(a0 + a1 + a2 + a3)
 end
 
@@ -350,7 +377,7 @@ Reference: Fu, Hu & Adams, *A family of high-order targeted ENO schemes
 for compressible-flow simulations*, JCP 305 (2016) 333.
 """
 @inline teno5_left(fm2, fm1, f0, fp1, fp2; C_T::Real = 1e-5, q::Integer = 6) =
-    _teno5_left(promote(fm2, fm1, f0, fp1, fp2)..., C_T, q)
+    _with_pow(Q -> _teno5_left(promote(fm2, fm1, f0, fp1, fp2)..., C_T, Q), q)
 
 """
     teno5_right(fm1, f0, fp1, fp2, fp3; C_T = 1e-5, q = 6)
@@ -362,7 +389,7 @@ mirrored stencil.
     teno5_left(fp3, fp2, fp1, f0, fm1; C_T = C_T, q = q)
 
 @inline function _teno5_left(v1::T, v2::T, v3::T, v4::T, v5::T,
-                             C_T::Real, q::Integer) where {T}
+                             C_T::Real, q::Val) where {T}
     q0 = (2*v1 - 7*v2 + 11*v3)/6
     q1 = (-v2 + 5*v3 + 2*v4)/6
     q2 = (2*v3 + 5*v4 - v5)/6
@@ -373,9 +400,9 @@ mirrored stencil.
 
     ε = _zeps(T)
     τ = abs(b0 - b2)
-    g0 = (one(T) + τ/(b0 + ε))^q
-    g1 = (one(T) + τ/(b1 + ε))^q
-    g2 = (one(T) + τ/(b2 + ε))^q
+    g0 = _ipow(one(T) + τ/(b0 + ε), q)
+    g1 = _ipow(one(T) + τ/(b1 + ε), q)
+    g2 = _ipow(one(T) + τ/(b2 + ε), q)
     gs = g0 + g1 + g2
     c  = T(C_T)
 
@@ -402,7 +429,7 @@ Reference: Fu, Hu & Adams, JCP 305 (2016) 333.
 """
 @inline teno8_left(fm4, fm3, fm2, fm1, f0, fp1, fp2, fp3;
                    C_T::Real = 1e-5, q::Integer = 6) =
-    _teno8_left(promote(fm4, fm3, fm2, fm1, f0, fp1, fp2, fp3)..., C_T, q)
+    _with_pow(Q -> _teno8_left(promote(fm4, fm3, fm2, fm1, f0, fp1, fp2, fp3)..., C_T, Q), q)
 
 """
     teno8_right(fm2, fm1, f0, fp1, fp2, fp3, fp4, fp5; C_T = 1e-5, q = 6)
@@ -415,7 +442,7 @@ on the mirrored stencil `(f_{i-2}, …, f_{i+5})`.
     teno8_left(fp5, fp4, fp3, fp2, fp1, f0, fm1, fm2; C_T = C_T, q = q)
 
 @inline function _teno8_left(v1::T, v2::T, v3::T, v4::T, v5::T, v6::T, v7::T, v8::T,
-                             C_T::Real, q::Integer) where {T}
+                             C_T::Real, q::Val) where {T}
     #    v1    v2    v3    v4    v5   v6    v7    v8
     #  i-4   i-3   i-2   i-1    i   i+1   i+2   i+3
     q0 = (2*v3 - 7*v4 + 11*v5)/6                       # {i-2,i-1,i}
@@ -434,12 +461,12 @@ on the mirrored stencil `(f_{i-2}, …, f_{i+5})`.
 
     ε = _zeps(T)
     τ = abs(b5 - (b0 + 4*b1 + b2)/6)
-    g0 = (one(T) + τ/(b0 + ε))^q
-    g1 = (one(T) + τ/(b1 + ε))^q
-    g2 = (one(T) + τ/(b2 + ε))^q
-    g3 = (one(T) + τ/(b3 + ε))^q
-    g4 = (one(T) + τ/(b4 + ε))^q
-    g5 = (one(T) + τ/(b5 + ε))^q
+    g0 = _ipow(one(T) + τ/(b0 + ε), q)
+    g1 = _ipow(one(T) + τ/(b1 + ε), q)
+    g2 = _ipow(one(T) + τ/(b2 + ε), q)
+    g3 = _ipow(one(T) + τ/(b3 + ε), q)
+    g4 = _ipow(one(T) + τ/(b4 + ε), q)
+    g5 = _ipow(one(T) + τ/(b5 + ε), q)
     gs = g0 + g1 + g2 + g3 + g4 + g5
     c  = T(C_T)
 
@@ -536,19 +563,19 @@ scheme_name(::WENOJS{5})= :weno_js5
 scheme_name(::Centered2)= :centered
 
 # reconstruction entry points ---------------------------------------------
-@inline reconstruct_left(::WENOZ{5,P}, t::NTuple{5}) where {P} = _weno_z5_left(t..., P)
+@inline reconstruct_left(::WENOZ{5,P}, t::NTuple{5}) where {P} = _weno_z5_left(t..., Val(P))
 @inline reconstruct_right(::WENOZ{5,P}, t::NTuple{5}) where {P} =
-    _weno_z5_left(reverse(t)..., P)
-@inline reconstruct_left(::WENOZ{7,P}, t::NTuple{7}) where {P} = _weno_z7_left(t..., P)
+    _weno_z5_left(reverse(t)..., Val(P))
+@inline reconstruct_left(::WENOZ{7,P}, t::NTuple{7}) where {P} = _weno_z7_left(t..., Val(P))
 @inline reconstruct_right(::WENOZ{7,P}, t::NTuple{7}) where {P} =
-    _weno_z7_left(reverse(t)..., P)
+    _weno_z7_left(reverse(t)..., Val(P))
 
-@inline reconstruct_left(r::TENO{5,Q}, t::NTuple{5}) where {Q} = _teno5_left(t..., r.C_T, Q)
+@inline reconstruct_left(r::TENO{5,Q}, t::NTuple{5}) where {Q} = _teno5_left(t..., r.C_T, Val(Q))
 @inline reconstruct_right(r::TENO{5,Q}, t::NTuple{5}) where {Q} =
-    _teno5_left(reverse(t)..., r.C_T, Q)
-@inline reconstruct_left(r::TENO{8,Q}, t::NTuple{8}) where {Q} = _teno8_left(t..., r.C_T, Q)
+    _teno5_left(reverse(t)..., r.C_T, Val(Q))
+@inline reconstruct_left(r::TENO{8,Q}, t::NTuple{8}) where {Q} = _teno8_left(t..., r.C_T, Val(Q))
 @inline reconstruct_right(r::TENO{8,Q}, t::NTuple{8}) where {Q} =
-    _teno8_left(reverse(t)..., r.C_T, Q)
+    _teno8_left(reverse(t)..., r.C_T, Val(Q))
 
 @inline reconstruct_left(r::WENOJS{5}, t::NTuple{5}) = weno_js5_left(t...; ε = r.ε)
 @inline reconstruct_right(r::WENOJS{5}, t::NTuple{5}) = weno_js5_left(reverse(t)...; ε = r.ε)
@@ -945,7 +972,13 @@ of `ϕ` with the *same* `dt` keeps `ϕ ≥ 0` exactly, provided
   * the first-order CFL condition `Σ_d |u_d| dt/Δx_d ≤ 1` holds.
 
 `scheme` selects the high-order reconstruction (`:weno_z5`, `:weno_z7`,
-`:teno5`, `:teno8`, `:weno5`, `:centered`). The flux correction blends
+`:teno5`, `:teno8`, `:weno5`, `:centered`), or is a reconstruction
+descriptor (`AdvectionSchemes.WENOZ(5, 2)`, `TENO(5)`, …; `C_T` and `p`
+are then ignored). A name is turned into a descriptor on every call (a
+dynamic dispatch per call, not per cell); a time loop may build it once
+with `AdvectionSchemes._reconstruction(name)` and pass that.
+
+The flux correction blends
 towards first-order upwind only in the cells that would otherwise go
 negative, so smooth regions keep the full high-order accuracy.
 
@@ -957,7 +990,8 @@ must be sign-safe themselves. Pass a [`FluxLimiterWorkspace`](@ref) as
 function advect_positive!(tend::Field{CellCenter,T}, u::Field{FaceX,T},
                           v::Field{FaceY,T}, w::Field{FaceZ,T},
                           ϕ::Field{CellCenter,T}, dt::Real;
-                          scheme::Symbol = :weno_z5, C_T::Real = 1e-5, p::Integer = 2,
+                          scheme::Union{Symbol,AbstractReconstruction} = :weno_z5,
+                          C_T::Real = 1e-5, p::Integer = 2,
                           workspace::Union{Nothing,FluxLimiterWorkspace} = nothing,
                           bcs::Union{Nothing,FieldBoundaryConditions} = nothing) where {T}
     m  = mesh(ϕ)
@@ -1487,6 +1521,7 @@ end
 # 10. Uniform scheme selection
 # =========================================================================
 
+_reconstruction(r::AbstractReconstruction; kwargs...) = r
 function _reconstruction(name::Symbol; C_T::Real = 1e-5, p::Integer = 2)
     name === :centered  && return Centered2()
     name === :weno5     && return WENOJS(5)
@@ -1760,6 +1795,14 @@ N-open-d (#262) adds three keywords for the budgets of an open domain:
   the correction adjusted, `−δ W ϕ_face A`. The data's own flux is the
   rest.
 
+`face_fluxes = (Fx, Fy, Fz)` (N-berlin-nest, #265) takes the advective
+face fluxes `u ϕ_face` the transport actually used instead of
+reconstructing them — the limited fluxes [`advect_positive!`](@ref)
+leaves in its [`FluxLimiterWorkspace`](@ref) (`ws.Fx, ws.Fy, ws.Fz`): where
+the positivity limiter scaled a boundary flux, the reconstructed one is
+not what left the domain. The face value of the correction split is then
+`F/u` (the reconstruction where `u = 0`).
+
 A mesh whose halo along an axis with an [`AbstractOpenBoundary`](@ref)
 face is shallower than `required_halo(scheme)` throws an `ArgumentError`.
 
@@ -1774,7 +1817,7 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
                               scheme = :centered, bcs::FieldBoundaryConditions = sim.θ_bcs,
                               weights = nothing, fill::Bool = true,
                               diffusivity = nothing, levels = nothing,
-                              correction_levels = nothing)
+                              correction_levels = nothing, face_fluxes = nothing)
     r = _flux_reconstruction(scheme)
     g = mesh(ϕ)
     vb = sim.bcs
@@ -1796,6 +1839,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     Wc, Wf = weights === nothing ? (nothing, nothing) : weights
     T = eltype(ϕ.data)
     ϕd = ϕ.data; ud = sim.u.data; vd = sim.v.data; wd = sim.w.data
+    Fxd, Fyd, Fzd = face_fluxes === nothing ? (nothing, nothing, nothing) :
+                    (face_fluxes[1].data, face_fluxes[2].data, face_fluxes[3].data)
     ii, jj, kk = interior(g)
     k0 = first(kk) - 1
     Ax = g.dy * g.dz; Ay = g.dx * g.dz; Az = g.dx * g.dy
@@ -1821,8 +1866,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         iw = first(ii); ie = last(ii) + 1
         @inbounds for k in kk, (b, j) in enumerate(jj)
             w = _wflux(Wc, k) * Ax; wd_ = _wflux(Dc, k) * Ax
-            Fa_w, Fd_w, φw = _bsf_face_flux(r, ϕd, ud, 1, iw, j, k, dν, Kh, ks, g, dW_)
-            Fa_e, Fd_e, φe = _bsf_face_flux(r, ϕd, ud, 1, ie, j, k, dν, Kh, ks, g, dE_)
+            Fa_w, Fd_w, φw = _bsf_face_flux(r, ϕd, ud, 1, iw, j, k, dν, Kh, ks, g, dW_, Fxd)
+            Fa_e, Fd_e, φe = _bsf_face_flux(r, ϕd, ud, 1, ie, j, k, dν, Kh, ks, g, dE_, Fxd)
             aw = -(w * Fa_w + wd_ * Fd_w); ae = w * Fa_e + wd_ * Fd_e
             fW += aw; fE += ae
             addl!(levels, k, aw + ae)
@@ -1836,8 +1881,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         js = first(jj); jn = last(jj) + 1
         @inbounds for k in kk, (a, i) in enumerate(ii)
             w = _wflux(Wc, k) * Ay; wd_ = _wflux(Dc, k) * Ay
-            Fa_s, Fd_s, φs = _bsf_face_flux(r, ϕd, vd, 2, i, js, k, dν, Kh, ks, g, dS_)
-            Fa_n, Fd_n, φn = _bsf_face_flux(r, ϕd, vd, 2, i, jn, k, dν, Kh, ks, g, dN_)
+            Fa_s, Fd_s, φs = _bsf_face_flux(r, ϕd, vd, 2, i, js, k, dν, Kh, ks, g, dS_, Fyd)
+            Fa_n, Fd_n, φn = _bsf_face_flux(r, ϕd, vd, 2, i, jn, k, dν, Kh, ks, g, dN_, Fyd)
             as = -(w * Fa_s + wd_ * Fd_s); an = w * Fa_n + wd_ * Fd_n
             fS += as; fN += an
             addl!(levels, k, as + an)
@@ -1852,8 +1897,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         wb_ = _wflux(Wf, kb) * Az; wt_ = _wflux(Wf, kt) * Az
         db_ = _wflux(Df, kb) * Az; dt_ = _wflux(Df, kt) * Az
         @inbounds for (b, j) in enumerate(jj), (a, i) in enumerate(ii)
-            Fa_b, Fd_b, _ = _bsf_face_flux(r, ϕd, wd, 3, i, j, kb, dν, Kv, ks, g, dB_)
-            Fa_t, Fd_t, φt = _bsf_face_flux(r, ϕd, wd, 3, i, j, kt, dν, Kv, ks, g, dT_)
+            Fa_b, Fd_b, _ = _bsf_face_flux(r, ϕd, wd, 3, i, j, kb, dν, Kv, ks, g, dB_, Fzd)
+            Fa_t, Fd_t, φt = _bsf_face_flux(r, ϕd, wd, 3, i, j, kt, dν, Kv, ks, g, dT_, Fzd)
             ab = -(wb_ * Fa_b + db_ * Fd_b)
             at = wt_ * Fa_t + dt_ * Fd_t
             fB += ab; fT += at
@@ -1877,10 +1922,22 @@ end
 # One face flux of boundary_scalar_flux: scalar_face_flux with the diffusive
 # part only where the scalar face is open (`on`). Top level, with every array
 # an argument, so it specialises and inlines (#327).
-@inline _bsf_face_flux(r, ϕd, vel, ax, i, j, k, dν, K, ks, g, on) =
-    scalar_face_flux(r, ϕd, vel, ax, i, j, k,
-                     on ? face_diffusivity(dν, K, ks, ax, i, j, k) : 0.0,
-                     face_inv_spacing(g, ax, k))
+@inline function _bsf_face_flux(r, ϕd, vel, ax, i, j, k, dν, K, ks, g, on, F)
+    Fa, Fd, φ = scalar_face_flux(r, ϕd, vel, ax, i, j, k,
+                                 on ? face_diffusivity(dν, K, ks, ax, i, j, k) : 0.0,
+                                 face_inv_spacing(g, ax, k))
+    return _face_or_flux(F, i, j, k, (@inbounds vel[i, j, k]), Fa, Fd, φ)
+end
+
+# The advective flux the transport used (`face_fluxes`, #265): the given
+# face flux F and its face value F / u (the limited flux of
+# advect_positive!), or the reconstruction (no face fluxes, or u = 0).
+@inline _face_or_flux(::Nothing, i, j, k, u, Fa, Fd, φ) = (Fa, Fd, φ)
+@inline function _face_or_flux(F::AbstractArray, i, j, k, u, Fa, Fd, φ)
+    iszero(u) && return (Fa, Fd, φ)
+    @inbounds f = F[i, j, k]
+    return (oftype(Fa, f), Fd, oftype(φ, f / u))
+end
 
 # The diffusive part of boundary_scalar_flux: (ν, κh, κv, scale, Wc, Wf).
 _diffusive_parts(::Nothing, Wc, Wf) = (0.0, nothing, nothing, 1.0, Wc, Wf)

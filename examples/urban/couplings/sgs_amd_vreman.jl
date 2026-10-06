@@ -65,7 +65,12 @@ function laminar_reference_νt(case, closure)
         end
     end
     w.data .= 0
-    foreach(f -> fill_halos!(f, sim.bcs), (u, v, w))
+    # the horizontally uniform flow continues uniformly across the sides:
+    # periodic lateral halos (an open or nest face would write the boundary
+    # data into them, which is not this flow, #265); the closed case is
+    # unchanged, bit for bit
+    lam = has_open_boundaries(sim) ? FieldBoundaryConditions(:periodic, :periodic, :wall) : sim.bcs
+    foreach(f -> fill_halos!(f, lam), (u, v, w))
     fill_halos!(sim.θ, sim.θ_bcs)
     ν = Field(CellCenter(), m); κ = Field(CellCenter(), m)
     if closure isa AMDClosure

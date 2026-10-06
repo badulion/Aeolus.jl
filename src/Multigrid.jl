@@ -39,6 +39,7 @@ using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields
 using ..Fields: Field, interior_view
 using ..PressureSolvers: AbstractPressureSolver, solve!
+using ..RunLog: current_domain   # structured events (LOG-a, #333)
 import ..PressureSolvers: solve!, poisson_axis_bcs
 using ..StretchedGrids: StretchedGrid, cell_thickness, center_spacing
 
@@ -70,7 +71,7 @@ boundary conditions. `φ` has size `(nx+2, ny+2, nz+2)`; the interior is
 """
 function _fill_halo!(φ::Array{T,3}, bcx::Symbol, bcy::Symbol, bcz::Symbol) where {T}
     nx, ny, nz = size(φ) .- 2
-    @inbounds begin
+    @inbounds @views begin      # plane copies on views: no copy of the source plane (#295)
         if bcx === :periodic
             φ[1,      :, :] .= φ[nx + 1, :, :]
             φ[nx + 2, :, :] .= φ[2,      :, :]
@@ -424,6 +425,7 @@ mutable struct MultigridPoissonSolver{T} <: AbstractPressureSolver
     last_cycles::Base.RefValue{Int}
     last_residual::Base.RefValue{T}
     history::Vector{T}
+    rhs_buf::Array{T,3}           # interior-sized scaled source of solve! (no allocation per solve, #295)
 end
 
 function MultigridPoissonSolver(mesh::RegularGrid{T};
@@ -473,7 +475,8 @@ function MultigridPoissonSolver(mesh::RegularGrid{T};
                                      T(tol), maxcycles, nu1, nu2, cycle, fmg,
                                      singular,
                                      rhs_scale === nothing ? nothing : collect(T, rhs_scale),
-                                     Ref(0), Ref(zero(T)), T[])
+                                     Ref(0), Ref(zero(T)), T[],
+                                     zeros(T, mesh.Nx, mesh.Ny, mesh.Nz))
 end
 
 poisson_axis_bcs(s::MultigridPoissonSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = s.bc_z)
@@ -682,7 +685,10 @@ function mg_solve!(s::MultigridPoissonSolver{T},
     end
     s.last_cycles[] = ncyc
     s.last_residual[] = rel
-    converged || @warn "MultigridPoissonSolver: maxcycles=$(s.maxcycles) reached, rel. residual $rel"
+    converged ||
+        @warn("MultigridPoissonSolver: maxcycles=$(s.maxcycles) reached, rel. residual $rel",
+              subsystem = :pressure, domain = current_domain(), solver = :multigrid,
+              cycles = ncyc, relative_residual = rel, tol = s.tol)
     return (; cycles = ncyc, residual = rel, converged = converged)
 end
 
@@ -696,11 +702,9 @@ Drop-in replacement for the FFT and CG solvers.
 """
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::MultigridPoissonSolver{T}) where {T}
-    src = Array(interior_view(source))
+    src = copyto!(solver.rhs_buf, interior_view(source))
     _scale_rhs!(src, solver.rhs_scale)
-    out = similar(src)
-    mg_solve!(solver, out, src)
-    interior_view(p) .= out
+    mg_solve!(solver, interior_view(p), src)     # writes every interior cell of p
     return p
 end
 
@@ -730,6 +734,8 @@ mutable struct MGPreconditionedCG{T} <: AbstractPressureSolver
     pdir::Array{T,3}
     Ap::Array{T,3}
     x::Array{T,3}
+    b::Array{T,3}                 # the (scaled, zero-mean) source
+    w::Array{T,3}                 # scratch of the dot products
     last_iters::Base.RefValue{Int}
     last_residual::Base.RefValue{T}
 end
@@ -744,7 +750,7 @@ function MGPreconditionedCG(mesh::RegularGrid{T};
     nx, ny, nz = mesh.Nx, mesh.Ny, mesh.Nz
     z3() = zeros(T, nx, ny, nz)
     return MGPreconditionedCG{T}(mg, T(tol), maxit,
-                                 z3(), z3(), z3(), z3(), z3(),
+                                 z3(), z3(), z3(), z3(), z3(), z3(), z3(),
                                  Ref(0), Ref(zero(T)))
 end
 
@@ -789,7 +795,9 @@ function _mg_precond!(z::Array{T,3}, r::Array{T,3},
     return z
 end
 
-_dot(a::Array{T,3}, b::Array{T,3}) where {T} = sum(a .* b)
+# a·b as `sum(a .* b)` — the same pairwise sum, bit for bit — with the
+# product in the scratch `w` instead of a fresh array (#295)
+_dot!(w::Array{T,3}, a::Array{T,3}, b::Array{T,3}) where {T} = sum(w .= a .* b)
 
 function _project_mean_flat!(a::Array{T,3}) where {T}
     a .-= sum(a) / length(a)
@@ -799,7 +807,7 @@ end
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::MGPreconditionedCG{T}) where {T}
     s  = solver.mg
-    b  = Array(interior_view(source))
+    b  = copyto!(solver.b, interior_view(source))
     _scale_rhs!(b, s.rhs_scale)
     s.singular && _project_mean_flat!(b)
     bn = sqrt(sum(abs2, b))
@@ -816,13 +824,13 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
     _mg_precond!(z, r, s)
     s.singular && _project_mean_flat!(z)
     pd .= z
-    rz_old = _dot(r, z)
+    rz_old = _dot!(solver.w, r, z)
     iters = 0
     rel = one(T)
 
     for it in 1:solver.maxit
         _apply_fine!(Ap, pd, s)
-        pAp = _dot(pd, Ap)
+        pAp = _dot!(solver.w, pd, Ap)
         # breakdown test relative to r·z (pAp ~ r·z in magnitude), so the
         # iteration is invariant to the scale of the right-hand side
         abs(pAp) <= eps(T) * abs(rz_old) && break
@@ -834,7 +842,7 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
         rel < solver.tol && break
         _mg_precond!(z, r, s)
         s.singular && _project_mean_flat!(z)
-        rz_new = _dot(r, z)
+        rz_new = _dot!(solver.w, r, z)
         β = rz_new / rz_old
         @. pd = z + β * pd
         rz_old = rz_new

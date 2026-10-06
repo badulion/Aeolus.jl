@@ -135,6 +135,45 @@ stage against the analytic value. The maximum relative error was
 ARK2 and ``4.4\times10^{-16}`` for Rosenbrock2. `boundary_time` reached
 ``3.8\times10^{-16}``.
 
+## A child driven by its caller (N-berlin-nest, #265)
+
+The Berlin case advances its child through a whole stage loop (surfaces,
+radiation, chemistry, transport, then the dynamics), so it cannot hand
+the child to the run's own subcycling. `step_nested!(run)` is therefore
+three calls, and a caller can take the middle one itself:
+
+1. [`begin_parent_step!`](@ref)`(run; dt)` — the parent step ``Δt_p`` (its
+   own pick, or `dt`), the prolongation at ``t_p`` (reused in a one-way
+   run) and at ``t_p + Δt_p``, and the child's boundary window
+   ``[t_p, t_p + Δt_p]``; it returns `window`, with `window.t_child_end`;
+2. the caller's child steps, which must land on `window.t_child_end`:
+   [`subcycle_dt`](@ref)`(R, limit)` is the rule above (``R/n``,
+   ``n = \lceil R/\mathrm{limit}\rceil`` with the ``10^{-9}`` tolerance), and
+   every core reads the blended parent at its own stage times;
+3. [`end_parent_step!`](@ref)`(run, window)` — the clock check and snap,
+   the two-way feedback, the statistics.
+
+`step_nested!(run)` is exactly these with the run's own subcycling in
+between; `test/era2_nest_external.jl` checks the two are bit-identical
+(one- and two-way, four windows of three substeps). The same file runs
+the physics of an externally driven child on synthetic boxes, with
+adaptive child steps that do not divide the window (limit
+``0.37\,Δt_p``): a parent at rest with a hydrostatic θ(z) leaves the child
+at rest (max ``|u|`` = 1.0e-14 m/s after 12 steps, θ unchanged); a parent
+at (2, 1) m/s leaves the child at (2, 1) m/s exactly; the net boundary
+volume flux after the correction stays at 8.1e-18 ``UA`` and
+max ``|∇·u|`` at 5.7e-14 s⁻¹; a +1 K bubble near the lid of a calm child
+loses 5.0 % of its heat through the faces in 80 s and the time integral of
+`boundary_scalar_flux` books it to 8.9e-12 of the anomaly's heat (the
+periodic box keeps it to 6.8e-12); the parent's geostrophic tendency is
+exactly ``(-fV_g, fU_g)`` and the child's IBM hook runs in every child step.
+
+A child tracer the parent does not carry (in Berlin: ql, qr, the chemistry
+species) still needs a face condition: its plane is added after the core
+is built ([`add_open_scalars!`](@ref Aeolus.BoundaryConditions.add_open_scalars!))
+with the `:inflow` halo — the parent's value (here zero) where the face's
+normal velocity enters, the zero-gradient mirror where it leaves.
+
 ## Feedback
 
 * **`:one_way`** (default, the Berlin default). The parent never sees the

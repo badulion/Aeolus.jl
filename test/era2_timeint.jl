@@ -653,4 +653,47 @@ using Aeolus.Grids: interior, xnodes, znodes
         println("  [combined] 15 adaptive IMEX steps: dt $(dts[1]) → $(dts[end]), " *
                 "t = $(sim.t), KE $(ke0) → $(kinetic_energy(sim))")
     end
+    # KA-c (#295): step_rk3! keeps uⁿ in a cached RK3Workspace. The step is
+    # bit-identical to the former copy-based one (reproduced here with the
+    # same substep and combinations) and allocates only the cache lookup.
+    @testset "KA-c: step_rk3! with a cached workspace" begin
+        S = Aeolus.Simulations
+        mk() = begin
+            g = RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (2, 2, 2))
+            s = BoussinesqSimulation(g; ν = 1e-3, θ₀ = 300.0, g_accel = 9.81, C_s = 0.17,
+                                     moisture = true)
+            set!(s.u, (x, y, z) -> sin(2π * x) * cos(2π * y))
+            set!(s.v, (x, y, z) -> -cos(2π * x) * sin(2π * y))
+            set!(s.θ, (x, y, z) -> 300.0 + 0.1 * sin(2π * z))
+            set!(s.qv, (x, y, z) -> 0.008 + 1e-4 * cos(2π * x))
+            s
+        end
+        # the pre-#295 step_rk3! for a closed box: copies of uⁿ, three substeps
+        function rk3_reference!(sim, dt)
+            closure = S._active_sgs(sim, nothing, nothing)
+            t0 = sim.t
+            d = (sim.u.data, sim.v.data, sim.w.data, sim.θ.data, sim.qv.data)
+            d0 = map(copy, d)
+            S._rk3_substep!(sim, dt, closure, nothing, nothing, :laplacian, t0 + dt)
+            S._rk3_substep!(sim, dt, closure, nothing, nothing, :laplacian, t0 + 2dt)
+            for (a, a0) in zip(d, d0); a .= 0.75 .* a0 .+ 0.25 .* a; end
+            S._rk3_substep!(sim, dt, closure, nothing, nothing, :laplacian, t0 + 3dt / 2)
+            inv3 = 1 / 3; two3 = 2 * inv3
+            for (a, a0) in zip(d, d0); a .= inv3 .* a0 .+ two3 .* a; end
+            sim.t -= 2dt
+            closure === nothing || S.advance_sgs!(closure, sim, dt)
+            return sim
+        end
+        a, b = mk(), mk()
+        for _ in 1:3
+            step_rk3!(a, 2e-3); rk3_reference!(b, 2e-3)
+        end
+        @test all(f -> getproperty(a, f).data == getproperty(b, f).data, (:u, :v, :w, :θ, :qv))
+        @test a.t == b.t
+        @test S.rk3_workspace(a) === S.rk3_workspace(a)          # cached, one per simulation
+        nb = @allocated step_rk3!(a, 2e-3)
+        println("  [KA-c] one step_rk3! (16³, SGS, moist) allocates $nb bytes")
+        @test nb <= 64
+    end
 end
+

@@ -265,8 +265,8 @@ laminar-consistent closure gives exactly 0.
 function laminar_flow_νt(closure, case)
     m = case.mesh; sim = case.sim; cfg = case.cfg
     # a horizontally uniform flow: a laterally periodic scratch core, also
-    # for an open case (#262)
-    pcfg = deepcopy(cfg); pcfg.lateral = :periodic
+    # for an open (#262) or nested (#265) case
+    pcfg = deepcopy(cfg); pcfg.lateral = :periodic; pcfg.physics[:nesting] = false
     s = boussinesq_core(pcfg, m)
     fill!(s.θ.data, cfg.θ₀)
     ui = interior_view(sim.u); vi = interior_view(sim.v)

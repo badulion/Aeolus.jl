@@ -21,6 +21,7 @@
 #   stages(::Type{C})           -> tuple of (stage::Symbol, order::Int, Cadence), one per stage
 #   build(::Type{C}, case, opts)-> instance (default `C()`)
 #   init!(c, case)              -> called once, after every coupling is built
+#   init_priority(::Type{C})    -> Int, init! order (lower first, default 0; ties: registry order)
 #   run_stage!(c, case, ::Val{S}, dt)
 #   output_fields(c, case)      -> Vector of OutputField, registered before nc_endef!
 #   budget!(c, case, ledger)    -> energy / water terms for the ledger
@@ -30,6 +31,8 @@
 #   sim_options(::Type{C}, cfg, mesh, opts) -> NamedTuple of keywords of the core's constructor
 #   step_options(c, case)       -> NamedTuple of keywords of the core's step! (and of the
 #                                  :timestepper provider's stepper)
+#   limit_dt(c, case, dt)       -> the next step of a variable-step stepper, shortened
+#                                  if `c` needs it (the nest: land on the parent window, #265)
 #
 # Dynamics contract (#133), used only by the providers of the two
 # dynamics slots:
@@ -104,6 +107,16 @@ incompatible_reason(::Type{<:AbstractCoupling}) = ""
 stages(::Type{<:AbstractCoupling}) = ()
 build(C::Type{<:AbstractCoupling}, case, opts) = C()
 init!(c::AbstractCoupling, case) = nothing
+"""
+    init_priority(::Type{C}) -> Int
+
+The order of the `init!` calls: lower first (default 0), ties in registry
+order. The `:nesting` coupling initialises first (−1, #265): the nest
+faces' data and the child's initial wind come from the parent, and the
+other couplings initialise from them (e.g. the deposition's r_a from the
+first air cell's wind, which reads the face velocity at an edge column).
+"""
+init_priority(::Type{<:AbstractCoupling}) = 0
 output_fields(c::AbstractCoupling, case) = OutputField[]
 budget!(c::AbstractCoupling, case, ledger) = nothing
 report(c::AbstractCoupling, case) = nothing
@@ -129,6 +142,16 @@ is built and passed by the `:timestepper` provider to `step!` (or to
 the same keyword.
 """
 step_options(c::AbstractCoupling, case) = (;)
+"""
+    limit_dt(c, case, dt) -> dt
+
+The length of the next step under a variable-step `:timestepper`
+provider (`variable_dt`), given the stepper's own `dt`: a coupling that
+needs the steps to land on its own times shortens it (the `:nesting`
+coupling makes the child's steps land on the end of the parent's step,
+#265). Default: `dt`. [`step_dt`](@ref) applies every enabled coupling's.
+"""
+limit_dt(c::AbstractCoupling, case, dt) = dt
 function build_core end
 variable_dt(::Type{<:AbstractCoupling}) = false
 next_dt(c::AbstractCoupling, case) = case.cfg.dt

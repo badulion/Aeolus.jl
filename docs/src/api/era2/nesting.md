@@ -7,7 +7,9 @@ Berger–Colella refluxing, the [`NestSponge`](@ref), the field-set
 [`NestInterpState`](@ref) (velocities, θ, `qv`, extra scalars), and the
 time coupling: [`NestedRun`](@ref), the per-domain
 [`domain_advance`](@ref) closures, [`boundary_time`](@ref) and
-[`step_nested!`](@ref), and the child's boundary conditions:
+[`step_nested!`](@ref) — or, for a caller that advances the child itself
+(the Berlin case, #265), [`begin_parent_step!`](@ref),
+[`subcycle_dt`](@ref) and [`end_parent_step!`](@ref) — and the child's boundary conditions:
 [`nest_bcs`](@ref) (`OpenBoundary` nest faces) fed by
 [`NestBoundaryData`](@ref) (the nest parent as a two-snapshot
 [`WindowedBoundaryData`](@ref Aeolus.BoundaryConditions.WindowedBoundaryData)),

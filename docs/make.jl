@@ -89,6 +89,7 @@ makedocs(
                 "Surface exchange and radiation" => "design/berlin_surface_radiation.md",
                 "Turbulence and SGS"             => "design/berlin_turbulence.md",
                 "Ledgers and tests"              => "design/berlin_ledgers.md",
+                "Nesting"                        => "design/berlin_nesting.md",
                 "Air quality"                    => "design/berlin_air_quality.md",
             ],
             "The Berlin parent"           => "design/berlin_parent.md",
@@ -105,6 +106,7 @@ makedocs(
             "PressureSolvers"      => "api/pressure_solvers.md",
             "Simulations"          => "api/simulations.md",
             "I/O and checkpoints"  => "api/io.md",
+            "Logging"              => "api/logging.md",
             "Physics modules"      => "api/physics.md",
             "Era II — numerics" => [
                 "Overview"                     => "api/era2.md",

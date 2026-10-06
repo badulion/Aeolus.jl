@@ -59,6 +59,13 @@ relaminarisation driver and `gabls1`–`gabls4.jl` use it by default
 ([`driver_checkpoints`](@ref): every 30 min of wall clock,
 `AEOLUS_CHECKPOINT=0` / `_EVERY` / `_SECONDS` / `_KEEP` override).
 
+A production run keeps its log, provenance, output and checkpoints in a
+**run folder**, `runs/<date>_<case>_<runID>/` ([`start_run`](@ref),
+[`with_run`](@ref), [`run_checkpoints`](@ref); #334). It refuses to start
+on uncommitted code unless `allow_uncommitted = true`; a restart reuses
+the folder and keeps the run ID. See [Run folder and
+provenance](logging.md#Run-folder-and-provenance) on the Logging page.
+
 ## FFT planning policy
 
 The planner of every FFT plan is set in one place,
