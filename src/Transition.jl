@@ -66,6 +66,7 @@ module Transition
 using ..Grids: RegularGrid, CellCenter, FaceX, FaceY, FaceZ, interior, xnodes, ynodes, znodes
 using ..Fields: Field, interior_view, mesh
 using ..BoundaryConditions: fill_halos!, NoSlipWall, FreeStreamBoundary, FieldBoundaryConditions
+using ..BoundaryConditions: Periodic                                       # N-inflow-d
 using ..Operators: _vorticity_at, _strain_at
 using ..Operators: DampingProfile, NordstromRamp, damping_rate, smooth_step, _add_damping!   # P59-d
 using ..Simulations: BoussinesqSimulation
@@ -107,6 +108,8 @@ export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statisti
 export InflowTurbulence, inflow_normal_length, set_integral_time!, remove_inflow_turbulence!,
        refresh_inflow_lengths!, added_mass_flux, injected_ke_flux, inflow_perturbation,
        feedback_exclude_width
+# N-inflow-d (#266): the development length (fetch) behind a synthetic inflow
+export FetchStatistics, accumulate_fetch!, fetch_profiles, development_length
 # P59-e (#195): relaminarisation in strongly stable stratification
 export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
 
@@ -692,5 +695,6 @@ include("transition/free_stream_disturbance.jl")
 include("transition/synthetic_inflow.jl")             # N-inflow-a (#252)
 include("transition/inflow_statistics.jl")            # N-inflow-b (#258)
 include("transition/inflow_turbulence.jl")            # N-inflow-c (#264)
+include("transition/inflow_fetch.jl")                 # N-inflow-d (#266)
 
 end # module
