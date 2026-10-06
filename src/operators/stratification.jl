@@ -33,9 +33,10 @@ one with ``q_c > 0``, which after a saturation adjustment means
 Klemp 1982 in a saturated environment, with the virtual effect of the
 humidity jump kept at a cloud edge), from the same face differences of
 θ, ``q_v`` and ``q_w = q_v + q_c`` over Δz and the cell's own θ,
-``q_v``, ``q_c`` and pressure `p`. Moist-adiabatic (moist-neutral) saturated air then has ``N^2 ≈ 0``
-instead of the dry ``(g/θ_0)∂θ/∂z ≈ 3 × 10^{-4}`` s⁻² of a 5 K km⁻¹
-θ gradient. Where `qc` is zero in a cell and both neighbours the result
+``q_v``, ``q_c`` and pressure `p`. Moist-adiabatic (moist-neutral)
+saturated air then has ``N^2 ≈ 0`` (``|N^2| < 10^{-10}`` s⁻² at
+Δz = 12.5 m) instead of the ``1.4 × 10^{-4}`` s⁻² of the θ_v form
+(a 1 km column from 285 K). Where `qc` is zero in a cell and both neighbours the result
 is the `qv` form bit for bit.
 
 `p` (Pa) is the pressure of the saturated adjustment: a number or a
