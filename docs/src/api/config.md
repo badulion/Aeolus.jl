@@ -251,7 +251,7 @@ This config is, bit for bit, the simulation the script built before
 
   * `[stepper]`: `dt` or `cfl` (adaptive, `step_adaptive!`, with a finite
     `dt_max`), and `end_time` or `nsteps`. `euler` is `step!`, `rk3`
-    `step_rk3!`, `ark2` `step_imex!(…, ARK2())`.
+    `step_rk3!`.
   * `[sgs] closure = "smagorinsky"` without a stability correction is the
     simulation's built-in closure (`C_s ≠ 0`); every other choice is
     passed to the steps as a closure object.

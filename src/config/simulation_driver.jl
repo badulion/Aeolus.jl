@@ -23,7 +23,7 @@ using ..Grids: RegularGrid, CellCenter
 using ..Fields: Field, set!, interior_view
 using ..BoundaryConditions: FieldBoundaryConditions
 using ..Simulations: Simulations, BoussinesqSimulation, step!, step_rk3!
-using ..TimeIntegration: CFLConstraints, adaptive_dt, step_adaptive!, ARK2, step_imex!
+using ..TimeIntegration: CFLConstraints, adaptive_dt, step_adaptive!
 using ..StretchedGrids: StretchedGrid
 using ..Anelastic: AnelasticSimulation, MassWeightedSimulation, isentropic_reference
 using ..Operators: StaticSmagorinsky, DynamicSmagorinsky, VremanClosure, SigmaModel, AMDClosure,
@@ -200,8 +200,8 @@ function Config.driver_sections(::SimulationDriverType)
                 doc = "the noise is added below this height")
     end
     stp = section("stepper"; doc = "Time stepping. Give dt or cfl, and end_time or nsteps.") do s
-        option!(s, "scheme", Symbol; default = :euler, allowed = [:euler, :rk3, :ark2],
-                doc = "euler (step!, the forward-Euler projection), rk3 (step_rk3!, SSP-RK3), ark2 (step_imex!, implicit vertical diffusion); anelastic: euler")
+        option!(s, "scheme", Symbol; default = :euler, allowed = [:euler, :rk3],
+                doc = "euler (step!, the forward-Euler projection) or rk3 (step_rk3!, SSP-RK3); anelastic: euler")
         option!(s, "dt", Optional{Float64}; range = (0, Inf), open_lower = true, units = "s",
                 doc = "fixed step; with end_time it is shortened to end_time / ceil(end_time / dt)")
         option!(s, "cfl", Optional{Float64}; range = (0, Inf), open_lower = true,
@@ -379,20 +379,16 @@ end
 
 function _take_step!(r::SimulationRun, dt)
     sim = r.sim; sgs = r.closure; scheme = r.cfg.stepper.scheme
-    scheme === :rk3 ? step_rk3!(sim, dt; sgs = sgs) :
-    scheme === :ark2 ? step_imex!(sim, dt, ARK2(); sgs = sgs) :
-    step!(sim, dt; sgs = sgs)
+    scheme === :rk3 ? step_rk3!(sim, dt; sgs = sgs) : step!(sim, dt; sgs = sgs)
     return (sim, Float64(dt), 0)
 end
 
 function _adaptive_step!(r::SimulationRun, c::CFLConstraints, t_end)
     sim = r.sim; sgs = r.closure; scheme = r.cfg.stepper.scheme
-    dt = adaptive_dt(sim, c; dt_prev = previous_dt(r.stepper), sgs = sgs,
-                     scheme = scheme === :ark2 ? ARK2() : nothing)
+    dt = adaptive_dt(sim, c; dt_prev = previous_dt(r.stepper), sgs = sgs)
     t_end === nothing || (dt = min(dt, t_end - sim.t))
     stepper = scheme === :rk3 ? ((s, h; kw...) -> step_rk3!(s, h; kw..., sgs = sgs)) : nothing
-    return step_adaptive!(sim, c; dt = dt, sgs = sgs, stepper = stepper,
-                          scheme = scheme === :ark2 ? ARK2() : nothing)
+    return step_adaptive!(sim, c; dt = dt, sgs = sgs, stepper = stepper)
 end
 
 # output: the selected fields every `cadence` simulated seconds

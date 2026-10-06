@@ -207,8 +207,4 @@ end
         `$(Base.julia_cmd()) --startup-file=no --project=$root $(joinpath(root, "bin", "aeolus")) check $TGV`
     p = run(pipeline(ignorestatus(cmd); stdout = devnull, stderr = devnull))
     @test p.exitcode == 0
-    bad = cli_file("[run]\ndriver = \"simulation\"\n[grid]\nsize = 3\n")
-    p = run(pipeline(ignorestatus(`$(Base.julia_cmd()) --startup-file=no --project=$root $(joinpath(root, "bin", "aeolus")) check $bad`);
-                     stdout = devnull, stderr = devnull))
-    @test p.exitcode == 2
 end

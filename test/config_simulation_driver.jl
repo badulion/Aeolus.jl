@@ -253,14 +253,14 @@ end
     @test count(>(0.25), Ri) > length(Ri) ÷ 2
     @test all(iszero, νv[Ri .> 0.25])
     @test max_νt(rs.sim) > 0
-    # schemes: rk3 and ark2 are other trajectories than euler, all divergence-free
+    # schemes: rk3 is another trajectory than euler, both divergence-free
     out = Dict{String,Any}()
-    for sch in ("euler", "rk3", "ark2")
+    for sch in ("euler", "rk3")
         res = sim_run(sim_cfg("dry_convective_bl", 4, ["grid.size=[16,16,16]", "stepper.scheme=\"$sch\""]))
         @test max_divergence(res.obj.sim) < 1e-10
         out[sch] = copy(interior_view(res.obj.sim.w))
     end
-    @test out["euler"] != out["rk3"] && out["euler"] != out["ark2"]
+    @test out["euler"] != out["rk3"]
     @test isapprox(out["rk3"], out["euler"]; rtol = 0.2)               # the same flow, to O(dt)
 end
 
