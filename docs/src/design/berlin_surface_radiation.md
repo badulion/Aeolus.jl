@@ -235,7 +235,7 @@ surface is `examples/urban/parent/surface.jl`, a tiled mosaic
 parent case (N-parent-e, #259; [The Berlin parent](berlin_parent.md))
 couples it to the 3-D parent run under the parent's own air and radiation;
 the nest (N-berlin-nest, #265) makes the parent the default of the Berlin
-run, and that is where `:SurfaceTiles` leaves `BERLIN_PENDING`.
+run.
 
 ![Berlin parent surface](../assets/berlin/parent_surface.svg)
 

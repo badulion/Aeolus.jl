@@ -164,8 +164,8 @@ Three findings:
 
 ## Limits
 
-* No Berlin coupling yet: `Nesting` stays in `BERLIN_PENDING` until
-  N-berlin-nest (#265) makes the nested run the default.
+* No Berlin coupling yet: N-berlin-nest (#265) makes the nested run the
+  default.
 * Scalar outflow is Dirichlet. The upwind / convective outflow option and
   `boundary_scalar_flux` are N-open-c (#260).
 * Two-way feedback keeps N-nest-c's restriction and six-plane flux

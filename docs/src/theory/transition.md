@@ -121,8 +121,7 @@ surface: the `MOSTWallLaw` stress of `Aeolus.WallModels` (#169) is
 applied as an implicit drag over a free-slip `:wall`, see [The Berlin case](../design/berlin_surface_radiation.md#Surface-exchange-(#129)). A
 resolved no-slip wall at ``Δx = 15.6`` m would put the first velocity
 point ``Δz/2 ≈ 3`` m from the wall, with a viscous sublayer of
-``ν/u_* ∼ 10^{-4}`` m. `BoundaryConditions` is exempt infrastructure in
-the coverage test, so no Berlin list changes.
+``ν/u_* ∼ 10^{-4}`` m.
 
 ## Laminar–turbulent transition
 
