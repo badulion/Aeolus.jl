@@ -12,9 +12,7 @@ module IO
 #     periodic checkpoints with automatic resume (`CheckpointSchedule`).
 #   * Configuration via `TOML` — human-editable namelists.
 #
-# A NetCDF-backed writer (interoperable with Python / VAPOR / Paraview)
-# is planned as an optional binding once the HDF5 stack stabilizes on
-# the development machine.
+# NetCDF output (NetCDF-4 through NCDatasets) is in src/NCIO.jl (#310).
 
 using Serialization
 using TOML
