@@ -40,7 +40,8 @@
 #               fields with filled halos, on a 64×64×32 RegularGrid, a
 #               geometric StretchedGrid and a TerrainFollowingGrid over a
 #               hill; the damping kernel with `levels` (one plane per work
-#               item; its per-level sums); and 3 steps of a 64×64×32
+#               item; its per-level sums, also at 128×128×32, where a 3-D
+#               launch would race); and 3 steps of a 64×64×32
 #               Smagorinsky LES on the stretched grid (every field).
 
 ENV["AEOLUS_FFTW_PLANNER"] = "estimate"    # deterministic plans (#245)
@@ -389,6 +390,15 @@ function section_fv()
             o = rf(CC); FVK._advect_weno5!(o, u, v, w, θ, g); rec("weno5", o)
         end
     end
+    # the damping kernel with levels at 128×128×32: large enough that a 3-D
+    # launch would split a plane between tasks at -t 24 (rows in workgroups
+    # of four), which races on levels[k]; the plane-per-work-item launch does not
+    bg = RegularGrid(; size = (128, 128, 32), extent = (1280.0, 1280.0, 320.0), halo = (3, 3, 3))
+    θb = Field(CC, bg); θb.data .= 300 .+ randn(rng, size(θb.data))
+    tb = Field(CC, bg); tb.data .= randn(rng, size(tb.data)); lvb = zeros(bg.Nz)
+    FVK._add_damping!(tb, θb, FVK.sponge_profile(0.01, 100.0, 320.0),
+                      FVK.damping_coordinates(bg, CC), 3, 300.0, bg; levels = lvb)
+    record!("fv/damping levels 128².tendency", tb.data); record!("fv/damping levels 128².sums", lvb)
     # a TerrainFollowingGrid over a hill: its own kernels on launch!
     tg = SG.terrain_following_grid(SG.StretchedGrid(; size = (64, 32, 32), extent = (2000.0, 400.0, 1500.0),
                                                     halo = (2, 2, 2), stretching = (:tanh, 1.4)),
