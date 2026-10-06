@@ -44,8 +44,9 @@ At the `:radiation` cadence (and step 1), before the radiosity solve:
    same column with the LES condensate removed; `heat` = the LES-layer
    heating rate (K/s) from the net-flux divergence with cloud.
 
-Every step (`:column_tendency`) θ += `heat`·dt on every LES level, in
-the fluid cells only (`Radiation.apply_radiative_cooling!` with the
+Every step (`:column_tendency`) θ += `heat`·dt/Π̄_k on every LES level
+(`heat` is dT/dt and T = θΠ̄; the same 1/(ρ̄c_pΠ̄) as `ref_θ_per_heat`
+with ρ̄c_p already divided out), in the fluid cells only (`Radiation.apply_radiative_cooling!` with the
 solid mask): the heating rate is a property of the air, and heating the
 immersed buildings' cells leaks into the air next to the walls.
 """
@@ -88,16 +89,32 @@ smoke_variants(::Type{<:ColumnRadiation}) =
     ((label = "surface shortwave from Bird", options = Dict(:column_radiation => (surface_sw = :bird,))),)
 
 function build(::Type{<:ColumnRadiation}, case, o)
-    o.surface_sw in (:twostream, :bird) ||
-        error("column_radiation: surface_sw must be :twostream or :bird, got $(o.surface_sw)")
-    sw, lw = shortwave_bands(), longwave_bands()
-    Nz = case.mesh.Nz
     # the case's surface pressure (the reference state, #131), unless overridden
     ps = o.p_surf === nothing ? surface_pressure(case) : Float64(o.p_surf)
+    return column_radiation_solver(case.mesh.Nz, ps; nz_upper = o.nz_upper,
+                                   r_eff_liq = o.r_eff_liq, surface_sw = o.surface_sw)
+end
+
+"""
+    column_radiation_solver(Nz, p_surf; nz_upper = 60, r_eff_liq = 10, surface_sw = :twostream)
+        -> ColumnRadiation
+
+The column-radiation state for a model with `Nz` levels and ground
+pressure `p_surf` (Pa): correlated-k gas optics, Mie cloud optics and the
+two-stream solvers of the shortwave and longwave bands. The one
+constructor: the `:column_radiation` coupling of the Berlin child builds
+it from the case, the nesting parent (`parent/case.jl`, #259) from its
+own grid, and both then call [`column_radiation!`](@ref).
+"""
+function column_radiation_solver(Nz::Integer, p_surf::Real; nz_upper::Integer = 60,
+                                 r_eff_liq::Real = 10.0, surface_sw::Symbol = :twostream)
+    surface_sw in (:twostream, :bird) ||
+        error("column_radiation: surface_sw must be :twostream or :bird, got $surface_sw")
+    sw, lw = shortwave_bands(), longwave_bands()
     return ColumnRadiation(correlated_k_optics(sw), correlated_k_optics(lw),
                            mie_cloud_optics(sw), mie_cloud_optics(lw),
                            two_stream_solver(sw), two_stream_solver(lw),
-                           Int(o.nz_upper), Float64(o.r_eff_liq), ps, o.surface_sw,
+                           Int(nz_upper), Float64(r_eff_liq), Float64(p_surf), surface_sw,
                            nothing, nothing, nothing, nothing,
                            zeros(Nz), zeros(Nz), zeros(Nz), zeros(Nz),
                            0.0, nothing, NaN, 0.0, 0)
@@ -148,13 +165,32 @@ function les_column(c::ColumnRadiation, case; condensate::Bool = true)
         num += e * bus.Ts[I]^4; den += e
     end
     T_rad = (num / den)^(1 / 4)
-    low = column_from_profiles(θ, m.dz; p_surf = c.p_surf, qv = max.(qv, 0.0), ql = ql,
+    return stitched_column(c, θ, qv, ql, fill(Float64(m.dz), m.Nz); T_rad = T_rad,
+                           humid = season_humidity(case.cfg))
+end
+
+"The humidity profile of the standard atmosphere above the column for the scenario's season."
+season_humidity(cfg) = cfg.scenario === :winter ? :subarctic_winter : :midlatitude_summer
+
+"""
+    stitched_column(c, θ, qv, ql, dz; T_rad, humid = :midlatitude_summer) -> AtmosphericColumn
+
+The radiation column of a model's mean profiles: `θ`, `qv`, `ql` (K,
+kg kg⁻¹) on layers of thickness `dz` (m, a vector: uniform for the child,
+stretched for the parent), hydrostatic from `c.p_surf`
+(`column_from_profiles`), with the surface radiative temperature `T_rad`,
+under `us_standard_column` (`c.nz_upper` layers to 30 km, its surface
+temperature chosen so that its lapse rate continues from the model top
+temperature; humidity profile `humid`).
+"""
+function stitched_column(c::ColumnRadiation, θ, qv, ql, dz::AbstractVector; T_rad::Real,
+                         humid::Symbol = :midlatitude_summer)
+    low = column_from_profiles(θ, dz; p_surf = c.p_surf, qv = max.(qv, 0.0), ql = ql,
                                T_sfc = T_rad, r_eff_liq = c.r_eff_liq)
-    # the standard atmosphere above, with its lapse rate continued from the LES top
+    # the standard atmosphere above, with its lapse rate continued from the model top
     T_top = low.T_lev[end]
-    humid = case.cfg.scenario === :winter ? :subarctic_winter : :midlatitude_summer
     up = us_standard_column(; nz = c.nz_upper, z_top = 30_000.0,
-                            T_sfc = T_top + 6.5e-3 * m.Lz, humid = humid)
+                            T_sfc = T_top + 6.5e-3 * sum(dz), humid = humid)
     return stitch_columns(low, up)
 end
 
@@ -189,12 +225,27 @@ function _solve_sw(c, col, μ, α, fdist)
     return f
 end
 
-function run_stage!(c::ColumnRadiation, case, ::Val{:radiation}, dt)
-    bus, Nz = case.bus, case.mesh.Nz
-    sp = solar_position_at(case.cfg, case.clock.hour)
+"""
+    column_radiation!(c, col, sp, ε, α; clear = () -> col) -> c
+
+One radiation call on the stitched column `col` ([`stitched_column`](@ref))
+at the solar position `sp`, for a surface of emissivity `ε` and
+shortwave albedo `α`: correlated-k optics (plus Mie cloud optics where
+`col` has condensate), `solve_lw!` and, with the sun up, `solve_sw!`
+scaled by the Earth–Sun distance factor. Fills `c.heat_lw`, `c.heat_sw`,
+`c.heat` (K/s, dT/dt of the model layers, from the net-flux divergence),
+`c.col`, `c.flw`, `c.fsw` (`nothing` at night), `c.fsw_clear` — the
+shortwave of the column `clear()` returns (the column without the model's
+condensate; only built when `col` has any) — `c.μ₀` and `c.sun`.
+
+The one radiation call of the Berlin case: the child's `:radiation` stage
+and the nesting parent (#259) both call it; the surface downwelling
+longwave is `c.flw.flux_dn[1]` and the direct / diffuse shortwave are
+`c.fsw_clear.flux_dn_dir[1]` and `c.fsw_clear.flux_dn[1] − dir`.
+"""
+function column_radiation!(c::ColumnRadiation, col, sp, ε::Real, α::Real; clear = () -> col)
+    Nz = length(c.heat)
     μ = sp.elevation > 0 ? sp.μ₀ : 0.0
-    ε, α = column_surface(case)
-    col = les_column(c, case)
     flw = allocate_fluxes(Float64, (), length(col.dz) + 1)
     solve_lw!(flw, c.solver_lw, _optics(c.gas_lw, c.cloud_lw, col), col; sfc_emissivity = ε)
     heating_rate!(c.heat_lw, _les_levels(flw, Nz), col.dz[1:Nz], col.ρ[1:Nz])
@@ -202,12 +253,29 @@ function run_stage!(c::ColumnRadiation, case, ::Val{:radiation}, dt)
     if μ > 0
         fsw = _solve_sw(c, col, μ, α, fdist)
         heating_rate!(c.heat_sw, _les_levels(fsw, Nz), col.dz[1:Nz], col.ρ[1:Nz])
-        # the surface beam without the LES condensate (the 3-D shadow applies it)
-        fcl = any(>(0), @view col.ql[1:Nz]) ? _solve_sw(c, les_column(c, case; condensate = false),
-                                                        μ, α, fdist) : fsw
+        # the surface beam without the model condensate (the 3-D shadow applies it)
+        fcl = any(>(0), @view col.ql[1:Nz]) ? _solve_sw(c, clear(), μ, α, fdist) : fsw
+    else
+        fsw = nothing; fcl = nothing
+        fill!(c.heat_sw, 0.0)
+    end
+    @. c.heat = c.heat_lw + c.heat_sw
+    c.col, c.flw, c.fsw, c.fsw_clear, c.μ₀, c.sun = col, flw, fsw, fcl, μ, sp
+    c.ncalls += 1
+    return c
+end
+
+function run_stage!(c::ColumnRadiation, case, ::Val{:radiation}, dt)
+    bus = case.bus
+    sp = solar_position_at(case.cfg, case.clock.hour)
+    ε, α = column_surface(case)
+    column_radiation!(c, les_column(c, case), sp, ε, α;
+                      clear = () -> les_column(c, case; condensate = false))
+    fcl = c.fsw_clear
+    if fcl !== nothing
         dir = fcl.flux_dn_dir[1]
         if c.surface_sw === :twostream
-            bus.dni = dir / μ
+            bus.dni = dir / c.μ₀
             bus.dhi = fcl.flux_dn[1] - dir
         else
             bus.dni = NaN; bus.dhi = NaN
@@ -215,16 +283,11 @@ function run_stage!(c::ColumnRadiation, case, ::Val{:radiation}, dt)
         rs = find_coupling(case, :radiosity_sun)
         c.ghi_bird = rs === nothing ? NaN : clear_sky_irradiance(sp, rs.sky).ghi
     else
-        fsw = nothing; fcl = nothing
-        fill!(c.heat_sw, 0.0)
         bus.dni = c.surface_sw === :twostream ? 0.0 : NaN
         bus.dhi = c.surface_sw === :twostream ? 0.0 : NaN
         c.ghi_bird = 0.0
     end
-    bus.L_sky = flw.flux_dn[1]
-    @. c.heat = c.heat_lw + c.heat_sw
-    c.col, c.flw, c.fsw, c.fsw_clear, c.μ₀, c.sun = col, flw, fsw, fcl, μ, sp
-    c.ncalls += 1
+    bus.L_sky = c.flw.flux_dn[1]
     return nothing
 end
 
@@ -235,21 +298,22 @@ function _les_levels(f, Nz)
     return RadiativeFluxes{Float64,1}(f.flux_up[r], f.flux_dn[r], f.flux_dn_dir[r], f.flux_net[r])
 end
 
+# the heating is dT/dt; θ = T/Π̄ gets it divided by Π̄_k (#253)
 function run_stage!(c::ColumnRadiation, case, ::Val{:column_tendency}, dt)
-    c.buf .= c.heat .* dt
+    c.buf .= c.heat .* dt ./ case.ref.π̄
     apply_radiative_cooling!(case.sim.θ, c.buf; solid = case.geom.sm.mask)
     c.dt_applied = dt
     return nothing
 end
 
 # Apply the stage's increment to a copy of θ and compare what changed
-# with heating·dt: exactly that in every fluid cell, nothing in a solid
+# with heating·dt/Π̄: exactly that in every fluid cell, nothing in a solid
 # one. (Measured on the field, so it tests the masked application, not
 # the bookkeeping.)
 function _applied_increment_ok(c::ColumnRadiation, case)
     θ = deepcopy(case.sim.θ)
     dt = c.dt_applied > 0 ? c.dt_applied : 1.0
-    c.buf .= c.heat .* dt
+    c.buf .= c.heat .* dt ./ case.ref.π̄
     apply_radiative_cooling!(θ, c.buf; solid = case.geom.sm.mask)
     m, mask = case.mesh, case.geom.sm.mask
     a, a0 = interior_view(θ), interior_view(case.sim.θ)
@@ -259,7 +323,7 @@ function _applied_increment_ok(c::ColumnRadiation, case)
         if mask[m.Hx + i, m.Hy + j, m.Hz + k]
             ok &= d == 0                                  # untouched
         else
-            ok &= abs(d - c.heat[k] * dt) <= 1e-12        # ≈ 20 ulp of θ ≈ 300 K
+            ok &= abs(d - c.heat[k] * dt / case.ref.π̄[k]) <= 1e-12   # ≈ 20 ulp of θ ≈ 300 K
         end
     end
     return ok
@@ -293,7 +357,7 @@ function smoke_check(c::ColumnRadiation, case)
     checks = [
         "LES-layer heating ∫ρc_p Ḣ dz = net flux convergence (rel. 1e-10)" =>
             isapprox(Q, ΔF; rtol = 1e-10, atol = 1e-10),
-        "θ increment applied = heating·dt in every fluid cell, 0 in the solid ones" =>
+        "θ increment applied = heating·dt/Π̄ in every fluid cell, 0 in the solid ones" =>
             _applied_increment_ok(c, case),
         "0 < L_sky < σ T_max⁴ of the column" => 0 < case.bus.L_sky < σ * Tmax^4,
         "sky longwave on the bus is the column's" => case.bus.L_sky == c.flw.flux_dn[1],

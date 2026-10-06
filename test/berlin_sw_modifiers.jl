@@ -55,7 +55,7 @@ const BC = Main.BerlinCase
     @testset "the modifiers apply once per radiation field, not per step" begin
         # no cloud water, so the cloud shadow (#130) leaves the base unchanged
         fill!(interior_view(BC.tracer(case, :ql)), 0.0)
-        ratios = Float64[]; parksw = Float64[]
+        ratios = Float64[]; georatios = Float64[]; parksw = Float64[]
         for n in 2:12                                 # radiation fires at steps 4, 8, 12
             BC.step_case!(case)
             sw = case.bus.sw
@@ -63,15 +63,23 @@ const BC = Main.BerlinCase
             @test all(sw[park] .≈ shade .* sw_mod.sw_base[park])
             @test all(I -> sw[I] == sw_mod.sw_base[I], setdiff(CartesianIndices(sw), park))
             push!(ratios, mean(sw[park]) / mean(sw[street]))
+            push!(georatios, mean(sw_mod.sw_base[park]) / mean(sw_mod.sw_base[street]))
             push!(parksw, mean(sw[park]))
         end
-        # Park / open-street shortwave: the same on every step and equal to
-        # the Beer's-law factor to 1 % (unshaded park and street effective
-        # irradiance differ by the geometry; measured ratio 0.2875 against
-        # exp(−1.25) = 0.2865). Before #128 it fell to 0.0068 by the
-        # fourth step after a radiation update.
+        # Park / open-street shortwave: the same on every step, and the
+        # Beer's-law factor times the geometric ratio of the unshaded
+        # fields. Before #128 it fell to 0.0068 by the fourth step after a
+        # radiation update.
         @test maximum(ratios) - minimum(ratios) < 1e-3
-        @test all(r -> isapprox(r, shade; rtol = 0.01), ratios)
+        @test all(i -> isapprox(ratios[i], shade * georatios[i]; rtol = 1e-12), eachindex(ratios))
+        # The unshaded park and open street differ only by the building
+        # geometry (shadows, sky view, reflections), which depends on the
+        # sun. Until #259 the case sun ran utc_offset = 2 h early (12 CEST
+        # used as 12 UTC) and this ratio was 0.9994, so `ratio ≈ shade` held
+        # to 1 %. At the corrected 10 UTC sun it is 1.0176 (park/street
+        # 0.29155 against exp(−1.25) = 0.28650); the old 1 % expectation
+        # was tuned to the wrong sun. Bound the geometry on its own:
+        @test all(r -> abs(r - 1) < 0.03, georatios)
         # the park keeps a quarter of the noon sun, not a vanishing fraction
         @test minimum(parksw) > 200
     end
