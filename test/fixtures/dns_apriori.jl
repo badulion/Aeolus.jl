@@ -220,15 +220,16 @@ an interrupted DNS resumes from its newest checkpoint (#245).
 function generate_dns_apriori(; N::Integer = 256, out::AbstractString, seed::Integer = 1,
                               ν::Real = DNS_GEN_NU_MARGIN * DNS_NU48 * (48 / N)^(4 / 3), t_end::Real = DNS_T_END,
                               past_peak::Real = 0.25, t_max::Real = 6.0, ratios = (4, 8, 16, 32),
-                              require_checks::Bool = true, verbose::Bool = true,
+                              require_checks::Bool = true,
                               checkpoint = nothing)
     d = dns_decay(; N, seed, ν, t_end, past_peak, t_max, checkpoint)
     # keep the velocity only: the solver's work arrays are ~40 fields (6 GB at 256³)
     d = merge(d, (; sim = (; mesh = d.sim.mesh, u = d.sim.u, v = d.sim.v, w = d.sim.w)))
     GC.gc()
-    verbose && @printf("DNS %d³: ν = %.4g, %d steps to t = %.2f, %.0f s; Re_λ %.1f; k_max η ≥ %.2f; ε peak at t = %.2f; S = %.3f; max |budget err| %.1e\n",
-                       N, d.ν, d.nsteps, d.t[end], d.wall, d.Re_λ, d.kmax_eta, d.t[argmax(d.ε)], d.S[end],
-                       maximum(abs, d.budget_err))
+    @info(@sprintf("DNS %d³: ν = %.4g, %d steps to t = %.2f, %.0f s; Re_λ %.1f; k_max η ≥ %.2f; ε peak at t = %.2f; S = %.3f; max |budget err| %.1e",
+                   N, d.ν, d.nsteps, d.t[end], d.wall, d.Re_λ, d.kmax_eta, d.t[argmax(d.ε)], d.S[end],
+                   maximum(abs, d.budget_err)),
+          subsystem = :dns_apriori, domain = current_domain(), N, Re_λ = d.Re_λ, nsteps = d.nsteps)
     ratios = Tuple(r for r in ratios if N ÷ r >= 1)
     rec = dns_apriori_record(d; ratios, seed)
     bad = sort([k for (k, v) in rec["checks"] if !v && k ∉ ADVISORY_CHECKS])
@@ -239,6 +240,6 @@ function generate_dns_apriori(; N::Integer = 256, out::AbstractString, seed::Int
                              "record written to $(out).failed, not to $(out)"))
     end
     write_dns_apriori(out, rec)
-    verbose && println("wrote ", out)
+    @info("wrote $out", subsystem = :dns_apriori, domain = current_domain(), path = out)
     return rec, d
 end

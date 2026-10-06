@@ -11,6 +11,7 @@ using Test
 using Aeolus
 using Aeolus.Fields: interior_view
 using Printf
+using Logging
 import Dates
 
 isdefined(Main, :BerlinCase) ||
@@ -86,7 +87,7 @@ const BC = Main.BerlinCase
     end
 
     # One small case shared by the remaining tests: the :smoke window.
-    case = BC.build_case(BC.CaseConfig(:smoke; verbose = false))
+    case = BC.build_case(BC.CaseConfig(:smoke))
     mesh, sim, bus = case.mesh, case.sim, case.bus
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
 
@@ -170,11 +171,10 @@ const BC = Main.BerlinCase
         # where no face is open. Through the nest faces of the default case
         # (#265) the transport moves the boundary flux, which the water
         # ledger books as :boundary (berlin_smoke closes it every run).
-        local case = BC.build_case(BC.CaseConfig(:smoke; verbose = false,
+        local case = BC.build_case(BC.CaseConfig(:smoke;
                                                  physics = Dict{Symbol,Any}(:timestepper => :fixed,
                                                                             :sgs => :smagorinsky,
-                                                                            :nesting => false));
-                                   io = devnull)
+                                                                            :nesting => false)))
         # give the flow some structure first
         for _ in 1:4
             BC.step_case!(case, 2.0)
@@ -228,8 +228,36 @@ const BC = Main.BerlinCase
 
     @testset "a short run stays finite and writes the registered output" begin
         path = joinpath(mktempdir(), "smoke.nc")
-        c2 = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = path))
-        BC.run_case!(c2)
+        # built and run under a capturing logger, with stdout and stderr
+        # captured too: the case prints nothing itself, every line is a log
+        # record at its level (#347: no verbose keyword)
+        tl = Test.TestLogger(; min_level = Logging.Debug)
+        c2 = nothing
+        printed = mktemp() do tmp, io
+            redirect_stdout(io) do
+                redirect_stderr(io) do
+                    with_logger(tl) do
+                        c2 = BC.build_case(BC.CaseConfig(:smoke; output_path = path))
+                        BC.run_case!(c2)
+                    end
+                end
+            end
+            close(io); read(tmp, String)
+        end
+        @test printed == ""
+        berlin = [r for r in tl.logs if get(Dict(r.kwargs), :subsystem, nothing) === :berlin]
+        lvl(ev) = [r.level for r in berlin if get(Dict(r.kwargs), :event, nothing) === ev]
+        @test lvl(:built) == lvl(:radiosity_scene) == [Logging.Debug]     # the setup summary
+        @test any(r -> get(Dict(r.kwargs), :coupling, nothing) === :surface_exchange &&
+                       r.level == Logging.Debug && startswith(r.message, "Surfaces: "), berlin)
+        @test lvl(:run_start) == lvl(:run_end) == lvl(:timing) == lvl(:ledger) == [Logging.Info]
+        frames = [r for r in berlin if get(Dict(r.kwargs), :event, nothing) === :frame]
+        @test length(frames) == c2.clock.nrecord == 2 && all(r -> r.level == Logging.Info, frames)
+        @test [Dict(r.kwargs)[:frame] for r in frames] == [1, 2]
+        @test startswith(frames[2].message, "frame  2 @ t=")
+        @test occursin("Ran $(c2.clock.n) steps", only(r for r in berlin if
+                       get(Dict(r.kwargs), :event, nothing) === :run_end).message)
+        @test isempty(lvl(:blowup))
         # the adaptive default runs to the simulated time nsteps·dt = 24 s
         @test c2.sim.t ≈ 24.0 && c2.clock.n >= 1 && !c2.clock.blowup
         NCDataset(path) do f

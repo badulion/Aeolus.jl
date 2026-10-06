@@ -37,7 +37,7 @@ refinement, vertical = grid == "default" ? ((2, 2, 4), :stretched) :
                        error("grid must be default, fallback or coarse")
 tag = grid * (D == 0 ? "" : "_D$D")
 
-child = BC.CaseConfig(; verbose = false, output_path = nothing)
+child = BC.CaseConfig(; output_path = nothing)
 pc = BC.ParentConfig(child; refinement = refinement, vertical = vertical, hours = hours,
                      divergence = D, output_period = 1800.0)
 tb = @elapsed p = BC.build_parent(pc)

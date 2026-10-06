@@ -13,8 +13,8 @@ using Aeolus, Printf
 isdefined(Main, :BerlinCase) || include(joinpath(@__DIR__, "..", "BerlinCase.jl"))
 const BC = Main.BerlinCase
 
-cfg = BC.CaseConfig(; verbose = false, output_path = nothing)
-case = BC.build_case(cfg; io = devnull)
+cfg = BC.CaseConfig(; output_path = nothing)
+case = BC.build_case(cfg)
 pl = BC.read_parent_landuse()
 ps0 = BC.build_parent_surface(case, pl; columns = CartesianIndex{2}[])
 Is, Js = ps0.footprint
