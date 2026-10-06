@@ -7,31 +7,40 @@
 # =========================================================================
 
 """
-    composite_integral(parent_field, child_field, nest) -> Float64
+    composite_integral(parent_field, child_field, nest; measure=nothing) -> Float64
 
 Volume integral of a cell-centred scalar over the *composite* grid:
 parent cells not covered by the nest plus all child cells. This is the
 quantity a conservative two-way nest must leave invariant (up to the
 genuine sources and the fluxes through the parent's own boundary).
+Parent cell volumes use the actual layer thickness (stretched parents).
+With the mass `measure` of a sound-proof pair ([`nest_measure`](@ref))
+it is the reference-mass integral `∫ W φ dV` (`W = ρ̄` or `ρ̄θ̄`).
 """
 function composite_integral(pf::Field{CellCenter}, cf::Field{CellCenter},
-                            nest::NestedGrid)
+                            nest::NestedGrid; measure=nothing)
     pm = nest.parent_mesh; cm = nest.child_mesh
     size(pf.data) == totalsize(pm) ||
         error("composite_integral: parent field is not on the nest's parent mesh")
     size(cf.data) == totalsize(cm) ||
         error("composite_integral: child field is not on the nest's child mesh")
-    Vp = pm.dx * pm.dy * pm.dz; Vc = cm.dx * cm.dy * cm.dz
     cx, cy, cz = nest_covered_range(nest)
     total = 0.0
     pd = pf.data
-    @inbounds for k in 1:pm.Nz, j in 1:pm.Ny, i in 1:pm.Nx
-        (i in cx) && (j in cy) && (k in cz) && continue
-        total += pd[pm.Hx+i, pm.Hy+j, pm.Hz+k] * Vp
+    @inbounds for k in 1:pm.Nz
+        Vp = pm.dx * pm.dy * _pcell(nest, measure, k)
+        for j in 1:pm.Ny, i in 1:pm.Nx
+            (i in cx) && (j in cy) && (k in cz) && continue
+            total += pd[pm.Hx+i, pm.Hy+j, pm.Hz+k] * Vp
+        end
     end
     cd = cf.data
-    @inbounds for k in 1:cm.Nz, j in 1:cm.Ny, i in 1:cm.Nx
-        total += cd[cm.Hx+i, cm.Hy+j, cm.Hz+k] * Vc
+    ωz = _zweights(measure)
+    @inbounds for k in 1:cm.Nz
+        Vc = ωz === nothing ? cm.dx * cm.dy * cm.dz : cm.dx * cm.dy * ωz[cm.Hz+k]
+        for j in 1:cm.Ny, i in 1:cm.Nx
+            total += cd[cm.Hx+i, cm.Hy+j, cm.Hz+k] * Vc
+        end
     end
     return total
 end
@@ -50,37 +59,41 @@ covered by the nest plus all child cells.
     conservation across a nest interface is therefore diagnosed by
     [`nest_conservation_error`](@ref) from the interface flux imbalance
     instead.
+
+For a [`MassWeightedSimulation`](@ref) pair every integral is weighted
+by the reference mass, `∫ W φ dV` (and `:mass` is `∫ W dV`).
 """
-function composite_integral(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
+function composite_integral(psim::_NestSim, csim::_NestSim,
                             nest::NestedGrid, quantity::Symbol;
                             state::Union{Nothing,NestInterpState}=nothing)
     pm = nest.parent_mesh; cm = nest.child_mesh
-    Vp = pm.dx * pm.dy * pm.dz; Vc = cm.dx * cm.dy * cm.dz
-    quantity === :mass && return (pm.Nx*pm.Ny*pm.Nz - nest.nx*nest.ny*nest.nz) * Vp +
-                                 cm.Nx*cm.Ny*cm.Nz * Vc
+    meas = state === nothing ? _sim_measure(nest, psim, csim) : state.measure
+    if quantity === :mass
+        one_p = Field(CellCenter(), pm); fill!(one_p.data, 1.0)
+        one_c = Field(CellCenter(), cm); fill!(one_c.data, 1.0)
+        return composite_integral(one_p, one_c, nest; measure=meas)
+    end
     (quantity === :theta || quantity === :θ) &&
-        return composite_integral(psim.θ, csim.θ, nest)
+        return composite_integral(psim.θ, csim.θ, nest; measure=meas)
     if state !== nothing
         i = findfirst(==(quantity), state.names)
-        i === nothing || return composite_integral(state.parent[i], state.child[i], nest)
+        i === nothing ||
+            return composite_integral(state.parent[i], state.child[i], nest; measure=meas)
     end
-    quantity === :qv && return composite_integral(psim.qv, csim.qv, nest)
+    quantity === :qv && return composite_integral(psim.qv, csim.qv, nest; measure=meas)
     quantity === :momentum_x || error("composite_integral: unknown quantity $quantity " *
         "(:mass, :theta, :qv, :momentum_x, or a scalar of `state`'s field set)")
-    cx, cy, cz = nest_covered_range(nest)
-    total = 0.0
-    pd = psim.u.data
+    up = Field(CellCenter(), pm); uc = Field(CellCenter(), cm)
+    pd = psim.u.data; cd = csim.u.data
     @inbounds for k in 1:pm.Nz, j in 1:pm.Ny, i in 1:pm.Nx
-        (i in cx) && (j in cy) && (k in cz) && continue
-        total += 0.5 * (pd[pm.Hx+i, pm.Hy+j, pm.Hz+k] +
-                        pd[pm.Hx+i+1, pm.Hy+j, pm.Hz+k]) * Vp
+        up.data[pm.Hx+i, pm.Hy+j, pm.Hz+k] = 0.5 * (pd[pm.Hx+i, pm.Hy+j, pm.Hz+k] +
+                                                    pd[pm.Hx+i+1, pm.Hy+j, pm.Hz+k])
     end
-    cd = csim.u.data
     @inbounds for k in 1:cm.Nz, j in 1:cm.Ny, i in 1:cm.Nx
-        total += 0.5 * (cd[cm.Hx+i, cm.Hy+j, cm.Hz+k] +
-                        cd[cm.Hx+i+1, cm.Hy+j, cm.Hz+k]) * Vc
+        uc.data[cm.Hx+i, cm.Hy+j, cm.Hz+k] = 0.5 * (cd[cm.Hx+i, cm.Hy+j, cm.Hz+k] +
+                                                    cd[cm.Hx+i+1, cm.Hy+j, cm.Hz+k])
     end
-    return total
+    return composite_integral(up, uc, nest; measure=meas)
 end
 
 "Ledger key of a field-set scalar: `:theta` for θ (historical), else its name."
@@ -88,7 +101,7 @@ _ledger_key(name::Symbol) = name === :θ ? :theta : name
 
 "Composite integral of every scalar of the set, keyed like `nest.ledger`."
 _composite_scalars(psim, csim, nest, s::NestInterpState) =
-    Dict(_ledger_key(n) => composite_integral(pf, cf, nest)
+    Dict(_ledger_key(n) => composite_integral(pf, cf, nest; measure=s.measure)
          for (n, _, cf, pf) in _scalar_entries(s, psim, csim))
 
 # =========================================================================
@@ -96,7 +109,7 @@ _composite_scalars(psim, csim, nest, s::NestInterpState) =
 # =========================================================================
 
 """
-    restrict_state_to_parent!(parent_sim, child_sim, nest, state=nothing)
+    restrict_state_to_parent!(parent_sim, child_sim, nest, state=nothing; solid=nothing)
 
 Conservative restriction of the whole field set, child → parent:
 `θ` and every bound scalar of `state` (`qv`, tracers) by volume-weighted
@@ -104,19 +117,27 @@ averaging, and `u, v, w` by area-weighted averaging on the faces strictly
 inside the nest (the interface planes belong to
 [`apply_flux_correction!`](@ref)). Without a `state` only `u, v, w, θ`
 are restricted.
+
+Selected by dispatch: for a [`MassWeightedSimulation`](@ref) pair the
+averages are weighted by the shared reference mass (`ρ̄` or `ρ̄θ̄`, see
+[`restrict_to_parent!`](@ref)). `solid` (the child's IBM
+[`SolidMask`](@ref) or a Boolean `solid` array) makes every member
+solid-aware: building cells and faces are left out of the averages.
 """
-function restrict_state_to_parent!(psim::BoussinesqSimulation,
-                                   csim::BoussinesqSimulation, nest::NestedGrid,
-                                   s::Union{Nothing,NestInterpState}=nothing)
-    restrict_to_parent!(psim.θ, csim.θ, nest)
+function restrict_state_to_parent!(psim::_NestSim, csim::_NestSim, nest::NestedGrid,
+                                   s::Union{Nothing,NestInterpState}=nothing;
+                                   solid=nothing)
+    meas = s === nothing ? _sim_measure(nest, psim, csim) : s.measure
+    χ = _fluid(nest, solid)                   # computed once for the whole set
+    restrict_to_parent!(psim.θ, csim.θ, nest; measure=meas, solid=χ)
     if s !== nothing
         for i in eachindex(s.names)
-            restrict_to_parent!(s.parent[i], s.child[i], nest)
+            restrict_to_parent!(s.parent[i], s.child[i], nest; measure=meas, solid=χ)
         end
     end
-    restrict_to_parent!(psim.u, csim.u, nest)
-    restrict_to_parent!(psim.v, csim.v, nest)
-    restrict_to_parent!(psim.w, csim.w, nest)
+    restrict_to_parent!(psim.u, csim.u, nest; measure=meas, solid=χ)
+    restrict_to_parent!(psim.v, csim.v, nest; measure=meas, solid=χ)
+    restrict_to_parent!(psim.w, csim.w, nest; measure=meas, solid=χ)
     return psim
 end
 
@@ -132,18 +153,22 @@ parent cells just outside the nest, so the composite integral
 ([`composite_integral`](@ref)) of the scalar is unchanged by the nest to
 round-off.
 
+With the mass `measure` of a sound-proof pair the registers are mass
+fluxes (`Φ = ∫ W F dt`) and the correction is divided by the parent
+cell's reference mass, so the composite `∫ W φ dV` is unchanged.
+
 Reference: Berger, M. J. & Colella, P. (1989), *J. Comput. Phys.* 82,
 64–84, §3 (the flux-register correction).
 """
 function reflux!(pf::Field{CellCenter}, preg::NTuple{3,Field}, creg::NTuple{3,Field},
-                 nest::NestedGrid)
+                 nest::NestedGrid; measure=nothing)
     location(preg[1]) isa FaceX && location(preg[2]) isa FaceY &&
         location(preg[3]) isa FaceZ ||
         error("reflux!: registers must be (FaceX, FaceY, FaceZ) fields")
     mm = compute_nest_flux_mismatch(preg[1], creg[1], nest) +
          compute_nest_flux_mismatch(preg[2], creg[2], nest) +
          compute_nest_flux_mismatch(preg[3], creg[3], nest)
-    return apply_flux_correction!(pf, mm, nest)
+    return apply_flux_correction!(pf, mm, nest; measure)
 end
 
 """
@@ -154,9 +179,10 @@ has an entry in `registers`, a mapping
 `name => (parent_registers, child_registers)` with each register a
 `(Φx, Φy, Φz)` tuple of face fields (`:θ` refers to `parent_sim.θ`, the
 other names to their bound parent fields). Scalars without registers are
-left untouched. Returns the names that were refluxed.
+left untouched. Uses the state's measure (mass-flux registers for a
+sound-proof pair). Returns the names that were refluxed.
 """
-function reflux_scalars!(psim::BoussinesqSimulation, nest::NestedGrid,
+function reflux_scalars!(psim::_NestSim, nest::NestedGrid,
                          s::NestInterpState, registers)
     done = Symbol[]
     for (name, _, _, pf) in _scalar_entries(s, psim, nothing)
@@ -164,18 +190,18 @@ function reflux_scalars!(psim::BoussinesqSimulation, nest::NestedGrid,
               (name === :θ && haskey(registers, :theta)) ? :theta : nothing
         key === nothing && continue
         preg, creg = registers[key]
-        reflux!(pf, Tuple(preg), Tuple(creg), nest)
+        reflux!(pf, Tuple(preg), Tuple(creg), nest; measure=s.measure)
         push!(done, name)
     end
     return done
 end
 
 "Interface mass-flux imbalance, normalized by (velocity scale × interface area)."
-function _interface_imbalance(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
-                              nest::NestedGrid)
-    m = compute_nest_flux_mismatch(psim.u, csim.u, nest) +
-        compute_nest_flux_mismatch(psim.v, csim.v, nest) +
-        compute_nest_flux_mismatch(psim.w, csim.w, nest)
+function _interface_imbalance(psim::_NestSim, csim::_NestSim,
+                              nest::NestedGrid, meas=nothing)
+    m = compute_nest_flux_mismatch(psim.u, csim.u, nest; measure=meas) +
+        compute_nest_flux_mismatch(psim.v, csim.v, nest; measure=meas) +
+        compute_nest_flux_mismatch(psim.w, csim.w, nest; measure=meas)
     U = max(maximum(abs, interior_view(psim.u)),
             maximum(abs, interior_view(psim.v)),
             maximum(abs, interior_view(psim.w)),
@@ -203,11 +229,12 @@ step, as recorded by the most recent [`step_nested!`](@ref).
 If no step has been recorded, `:mass` is evaluated instantaneously and the
 other quantities raise an error.
 """
-function nest_conservation_error(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
+function nest_conservation_error(psim::_NestSim, csim::_NestSim,
                                  nest::NestedGrid, quantity::Symbol)
     quantity === :θ && (quantity = :theta)
     haskey(nest.ledger, quantity) && return nest.ledger[quantity]
-    quantity === :mass && return _interface_imbalance(psim, csim, nest)
+    quantity === :mass &&
+        return _interface_imbalance(psim, csim, nest, _sim_measure(nest, psim, csim))
     error("nest_conservation_error: no recorded value for :$quantity — " *
           "run step_nested! first.")
 end
@@ -252,8 +279,15 @@ them with [`nest_conservation_error`](@ref). Returns
 `nest_interp_state(nest, parent_sim, child_sim; scalars)`) to avoid
 re-allocating the boundary buffers every step; it then defines the field
 set and `scalars` is ignored.
+
+The parent may be z-stretched (a `BoussinesqSimulation` on a
+`StretchedGrid`). Both sims may instead be
+[`MassWeightedSimulation`](@ref)s sharing one `ReferenceState` profile:
+every transfer then uses the reference-mass measure
+([`nest_measure`](@ref)) and the ledger records `∫ W φ dV`. `solid`
+(the child's IBM mask) makes the restriction solid-aware.
 """
-function step_nested!(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
+function step_nested!(psim::_NestSim, csim::_NestSim,
                       nest::NestedGrid, dt::Real;
                       substeps::Union{Nothing,Integer}=nothing,
                       order::Int=3,
@@ -262,6 +296,7 @@ function step_nested!(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
                       impose_interface::Bool=false,
                       scalars=(),
                       state=nothing,
+                      solid=nothing,
                       record::Bool=true)
     ns = substeps === nothing ? max(nest.rx, nest.ry, nest.rz) : Int(substeps)
     ns >= 1 || error("step_nested!: substeps must be >= 1")
@@ -286,15 +321,17 @@ function step_nested!(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
     end
 
     # --- conservative restriction (interior faces / covered cells) --------
-    restrict_state_to_parent!(psim, csim, nest, s_bc)
+    restrict_state_to_parent!(psim, csim, nest, s_bc; solid)
 
-    e_before = _interface_imbalance(psim, csim, nest)
+    meas = s_bc.measure
+    e_before = _interface_imbalance(psim, csim, nest, meas)
     if flux_correction
-        apply_flux_correction!(psim.u, compute_nest_flux_mismatch(psim.u, csim.u, nest), nest)
-        apply_flux_correction!(psim.v, compute_nest_flux_mismatch(psim.v, csim.v, nest), nest)
-        apply_flux_correction!(psim.w, compute_nest_flux_mismatch(psim.w, csim.w, nest), nest)
+        for (pu, cu) in ((psim.u, csim.u), (psim.v, csim.v), (psim.w, csim.w))
+            apply_flux_correction!(pu, compute_nest_flux_mismatch(pu, cu, nest; measure=meas),
+                                   nest; measure=meas)
+        end
     end
-    e_after = _interface_imbalance(psim, csim, nest)
+    e_after = _interface_imbalance(psim, csim, nest, meas)
 
     if record
         nest.ledger[:mass] = e_after

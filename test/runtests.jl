@@ -897,6 +897,7 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_multigrid.jl")   # Phase  29     geometric multigrid
     include("era2_sgs_numerics.jl") # #132         dynamic Smagorinsky, step! operator swap-ins
     include("era2_nesting.jl")     # Phase  30     parent-child nesting operators (#250)
+    include("era2_nesting_conservative.jl") # #256 stretched parent, mass-weighted, solid-aware nesting
     include("era2_amr.jl")         # Phases 30-31  nesting, AMR
 end
 
