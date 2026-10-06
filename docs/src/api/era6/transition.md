@@ -54,6 +54,25 @@ u, v, w = zeros(64, 40), zeros(64, 40), zeros(64, 40)
 unit_fluctuations!(u, v, w, gen, Δt); apply_lund!(u, v, w, a)
 ```
 
+Inflow statistics (N-inflow-b, #258): the contract (`InflowStatistics`,
+`inflow_stresses`, `inflow_lengths`, `update_inflow_statistics!`,
+`inflow_projection_log`, `realizable_stress`, `inflow_lund_coefficients`),
+the statistics of an Aeolus LES parent (`ParentResolvedStatistics`,
+`inflow_stress_parts`: resolved, scale-gap band, SGS from
+`Operators.sgs_tke!`) and the similarity profiles for a parent without
+resolved turbulence (`ParametrizedStatistics`, `parametrized_scales`);
+theory in [Inflow statistics](../../theory/transition.md#Inflow-statistics-(N-inflow-b)).
+
+```julia
+src = ParentResolvedStatistics(parent; closure = tke, τ_avg = 600.0, refine = (2, 2, 4),
+                               levels = 1:20)
+update_inflow_statistics!(src, Δt)              # after every parent step (or at a cadence)
+z   = [(k - 0.5) * 6.25 for k in 1:64]          # the child's levels
+gen = DigitalFilterGenerator(64, 64, 15.625, 6.25; inflow_lengths(src, z, t)...)
+a   = inflow_lund_coefficients(src, z, t)       # realizable, projections booked
+unit_fluctuations!(u, v, w, gen, Δt); apply_lund!(u, v, w, a)
+```
+
 ```@autodocs
 Modules = [Aeolus.Transition]
 ```

@@ -173,7 +173,8 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        sgs_tracer_diffusivity!,
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
-       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS
+       StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS,
+       sgs_tke!                 # N-inflow-b (#258)
 # Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
 export LagrangianDynamicSmagorinsky
 # Era VI (P55-b, #175): the stress-form SGS momentum divergence
@@ -1016,6 +1017,11 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
 export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_generator_state!,
        inflow_plane_size, DigitalFilterGenerator, digital_filter_kernel, lund_coefficients,
        apply_lund!, FreeStreamInflow, disturbance_velocity, disturbance_covariance
+# N-inflow-b (#258) — statistics for the synthetic inflow: parent-resolved
+# (resolved + SGS, scale gap) and parametrized (Rotach et al. 1996 blend).
+export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statistics!,
+       inflow_projection_log, realizable_stress, inflow_lund_coefficients,
+       ParentResolvedStatistics, inflow_stress_parts, ParametrizedStatistics, parametrized_scales
 # Phase 57 — wall models (#169): equilibrium wall laws and the implicit
 # wall-stress operator. `friction_velocity` / `wall_stress` do not collide
 # with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`

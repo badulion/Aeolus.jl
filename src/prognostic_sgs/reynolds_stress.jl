@@ -941,6 +941,18 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
 end
 
 """
+    sgs_tke!(e, c::ReynoldsStressClosure, sim) -> e
+
+Half the trace of the transported subgrid stress, ``e = \\tfrac12τ_{ii}``
+(N-inflow-b, #258). See `Operators.sgs_tke!` for the contract.
+"""
+function sgs_tke!(e::Field{CellCenter}, c::ReynoldsStressClosure, sim; kwargs...)
+    interior_view(e) .= (interior_view(c.τ[1]) .+ interior_view(c.τ[2]) .+
+                         interior_view(c.τ[3])) ./ 2
+    return e
+end
+
+"""
     sgs_state(c::ReynoldsStressClosure) / restore_sgs_state!(c, s)
 
 Snapshot of the six stresses and the booked statistics into buffers the

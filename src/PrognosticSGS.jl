@@ -57,7 +57,7 @@ using ..Fields: Field, interior_view, mesh
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
                    buoyancy_frequency_squared!, SymmetricTensorField
-import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_state!
+import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_state!, sgs_tke!
 using ..AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using ..WallModels: ImmersedWalls, immersed_wall_drag!
 
@@ -792,6 +792,17 @@ function restore_sgs_state!(c::TKEClosure, s)
     copyto!(c.e.data, s[1])
     copyto!(c.stats, s[2])
     return c
+end
+
+"""
+    sgs_tke!(e, c::TKEClosure, sim) -> e
+
+The closure's own memory: the prognostic SGS TKE `c.e` (interior copied;
+N-inflow-b, #258). See `Operators.sgs_tke!` for the contract.
+"""
+function sgs_tke!(e::Field{CellCenter}, c::TKEClosure, sim; kwargs...)
+    interior_view(e) .= interior_view(c.e)
+    return e
 end
 
 """

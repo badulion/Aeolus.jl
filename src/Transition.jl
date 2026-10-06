@@ -72,7 +72,10 @@ using ..Simulations: BoussinesqSimulation
 import Random
 using ..CutCell: wall_shear_stress
 using ..MoistThermodynamics: ThermodynamicConstants
-using ..SurfaceExchange: obukhov_length, bulk_richardson, SurfaceConstants
+using ..SurfaceExchange: obukhov_length, bulk_richardson, SurfaceConstants, von_karman
+using ..Operators: sgs_tke!, sgs_fields                                    # N-inflow-b
+using LinearAlgebra: Symmetric, Diagonal, eigen, mul!, dot
+using FFTW: plan_rfft, plan_irfft
 
 export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
@@ -92,6 +95,10 @@ export BlasiusSolution, blasius_solution, blasius_profile, blasius_velocity,
 export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_generator_state!,
        inflow_plane_size, DigitalFilterGenerator, digital_filter_kernel, lund_coefficients, apply_lund!,
        FreeStreamInflow, disturbance_velocity, disturbance_covariance
+# N-inflow-b (#258): statistics for the synthetic inflow (parent-resolved, parametrized)
+export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statistics!,
+       inflow_projection_log, realizable_stress, inflow_lund_coefficients,
+       ParentResolvedStatistics, inflow_stress_parts, ParametrizedStatistics, parametrized_scales
 # P59-e (#195): relaminarisation in strongly stable stratification
 export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
 
@@ -680,5 +687,6 @@ include("transition/blasius.jl")
 include("transition/flat_plate.jl")
 include("transition/free_stream_disturbance.jl")
 include("transition/synthetic_inflow.jl")             # N-inflow-a (#252)
+include("transition/inflow_statistics.jl")            # N-inflow-b (#258)
 
 end # module
