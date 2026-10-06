@@ -144,7 +144,10 @@ const BC = Main.BerlinCase
     @testset "anthropogenic stage: traffic heat is Q_urban over the domain" begin
         θ0 = copy(interior_view(sim.θ))
         BC.run_stage!(BC.find_coupling(case, :traffic_heat), case, Val(:anthropogenic), 2.0)
-        ρcp = BC.ref_density(case, 1) * Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS.cp_dry
+        # ρ̄ c_p Π̄: the heat raises T = θΠ̄ (before #253 the expectation, and
+        # the code, used ρ̄ c_p and the air got Π̄_1 × 8 W/m² — physically wrong)
+        ρcp = BC.ref_density(case, 1) * Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS.cp_dry *
+              BC.ref_exner(case, 1)
         Q = sum(interior_view(sim.θ) .- θ0) * ρcp * mesh.dz / 2.0 / (Nx * Ny)
         @info @sprintf("  traffic heat: %.6f W/m² domain mean (expected 8)", Q)
         @test Q ≈ 8.0 rtol = 1e-9

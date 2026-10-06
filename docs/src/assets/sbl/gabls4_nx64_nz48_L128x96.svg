@@ -2,7 +2,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1180" height="760" font-family="DejaVu Sans, sans-serif">
 <rect width="100%" height="100%" fill="white"/>
 <text x="590.0" y="24" font-size="16" text-anchor="middle" font-weight="bold">GABLS4 exp. 3, 64×64×48 (Δx = 2.0 m, Δz = 2.0 m): Smagorinsky C_s = 0.1 ± stability correction</text>
-<rect x="80" y="242.5" width="300" height="36.75" fill="#e5e7eb"/>
+<rect x="80" y="261.75" width="300" height="17.5" fill="#e5e7eb"/>
 <rect x="80" y="50" width="300" height="280" fill="none" stroke="#333"/>
 <line x1="80.0" y1="330" x2="80.0" y2="335" stroke="#333"/>
 <text x="80.0" y="348" font-size="12" text-anchor="middle">0</text>
@@ -33,7 +33,7 @@
 <text x="276" y="80" font-size="11">brown94</text>
 <line x1="250" y1="92" x2="272" y2="92" stroke="#dc2626" stroke-width="2"/>
 <text x="276" y="96" font-size="11">none</text>
-<rect x="460" y="242.5" width="300" height="36.75" fill="#e5e7eb"/>
+<rect x="460" y="261.75" width="300" height="17.5" fill="#e5e7eb"/>
 <rect x="460" y="50" width="300" height="280" fill="none" stroke="#333"/>
 <line x1="460.0" y1="330" x2="460.0" y2="335" stroke="#333"/>
 <text x="460.0" y="348" font-size="12" text-anchor="middle">264</text>
@@ -60,7 +60,7 @@
 <text x="610.0" y="368" font-size="13" text-anchor="middle">θ (K), 16:30-17:30 UTC</text>
 <text x="416" y="190.0" font-size="13" text-anchor="middle" transform="rotate(-90 416,190.0)"></text>
 <text x="466" y="67" font-size="13" font-weight="bold">(b)</text>
-<rect x="840" y="260.0" width="300" height="29.399999999999977" fill="#e5e7eb"/>
+<rect x="840" y="275.4" width="300" height="14.0" fill="#e5e7eb"/>
 <rect x="840" y="50" width="300" height="280" fill="none" stroke="#333"/>
 <line x1="840.0" y1="330" x2="840.0" y2="335" stroke="#333"/>
 <text x="840.0" y="348" font-size="12" text-anchor="middle">10</text>
@@ -198,5 +198,5 @@
 <text x="846" y="437" font-size="13" font-weight="bold">(f)</text>
 <line x1="1010" y1="446" x2="1032" y2="446" stroke="#4b5563" stroke-width="2" stroke-dasharray="5,3"/>
 <text x="1036" y="450" font-size="11">θ_s (prescribed)</text>
-<text x="80" y="735" font-size="11" text-anchor="start" fill="#333">grey: range of the seven LES of Couvreux et al. (2020) Table 4, experiment 3 (1 m), 17 UTC; in (a)-(c) the range of h.</text>
+<text x="80" y="735" font-size="11" text-anchor="start" fill="#333">grey: range of the six 1 m LES of Couvreux et al. (2020) Table 4, experiment 3, 17 UTC (CSIRO-LES, 3.9 m / 1.17 m, excluded); in (a)-(c) the range of h.</text>
 </svg>

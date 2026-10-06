@@ -88,6 +88,11 @@ names with [`nest_scalar_names`](@ref). Prolongation
 refluxing ([`reflux_scalars!`](@ref)) all iterate over the whole set,
 through the same operator per member — so a tracer initialised equal to
 `θ` stays bit-identical to `θ` through all of them.
+
+`s.measure` is the vertical [`NestMeasure`](@ref) of the set's
+operators: `nothing` (volume) for Boussinesq sims, the reference-mass
+measure for a [`MassWeightedSimulation`](@ref) pair, so prolongation,
+restriction, refluxing and the composite integrals conserve `∫ W φ dV`.
 """
 struct NestInterpState{T, M<:RegularGrid{T}}
     u::Field{FaceX,      T, Array{T,3}, M}
@@ -98,6 +103,7 @@ struct NestInterpState{T, M<:RegularGrid{T}}
     bufs::Vector{_CCField{T,M}}         # parent value interpolated to the child mesh
     child::Vector{Field}                # bound child field per extra scalar
     parent::Vector{Field}               # bound parent field per extra scalar
+    measure::Union{Nothing,NestMeasure} # vertical measure of the operators
 end
 
 const _RESERVED_NEST_NAMES = (:u, :v, :w, :θ, :theta)
@@ -119,16 +125,23 @@ function _check_scalar_pair(nest::NestedGrid, name::Symbol, cf, pf)
 end
 
 """
-    nest_interp_state(nest; scalars=())
+    nest_interp_state(nest; scalars=(), measure=nothing)
     nest_interp_state(nest, parent_sim, child_sim; scalars=())
 
 Allocate a [`NestInterpState`](@ref) on `nest`'s child mesh. The field
 set always holds `u, v, w, θ`. The second form adds `qv` (bound to
-`child_sim.qv` / `parent_sim.qv`) when both simulations carry moisture,
-and errors when only one does. `scalars` adds extra cell-centred
-scalars, `name => (child_field, parent_field)`, in the order given.
+`child_sim.qv` / `parent_sim.qv`) when both Boussinesq simulations carry
+moisture, and errors when only one does. `scalars` adds extra
+cell-centred scalars, `name => (child_field, parent_field)`, in the
+order given.
+
+For two [`MassWeightedSimulation`](@ref)s the state carries the mass
+measure of their shared `ReferenceState` ([`nest_measure`](@ref), which
+asserts that the profile is shared). The sound-proof core has no `qv`
+field, so a moist anelastic nest carries `qv` as a tracer:
+`scalars = (:qv => (child_qv, parent_qv),)`.
 """
-function nest_interp_state(nest::NestedGrid{T}; scalars=()) where {T}
+function nest_interp_state(nest::NestedGrid{T}; scalars=(), measure=nothing) where {T}
     cm = nest.child_mesh
     names = Symbol[]; bufs = _CCField{T,typeof(cm)}[]
     child = Field[]; parent = Field[]
@@ -145,9 +158,32 @@ function nest_interp_state(nest::NestedGrid{T}; scalars=()) where {T}
     end
     return NestInterpState(Field(FaceX(), cm), Field(FaceY(), cm),
                            Field(FaceZ(), cm), Field(CellCenter(), cm),
-                           names, bufs, child, parent)
+                           names, bufs, child, parent, measure)
 end
 
+function nest_interp_state(nest::NestedGrid, psim::MassWeightedSimulation,
+                           csim::MassWeightedSimulation; scalars=())
+    return nest_interp_state(nest; scalars, measure=nest_measure(nest, psim, csim))
+end
+
+# The measure of a pair of simulations: volume for Boussinesq, the
+# (cached, profile-checked) mass measure for sound-proof sims.
+_sim_measure(nest, ::BoussinesqSimulation, ::BoussinesqSimulation) = nothing
+_sim_measure(nest, p::MassWeightedSimulation, c::MassWeightedSimulation) =
+    nest_measure(nest, p, c)
+_sim_measure(nest, p, c) =
+    error("nesting: parent ($(nameof(typeof(p)))) and child ($(nameof(typeof(c)))) " *
+          "must be the same kind of simulation")
+
+# Same dynamical-core family (the pairs the restriction / feedback and the
+# mass measure are defined for).
+_same_core(::BoussinesqSimulation, ::BoussinesqSimulation) = true
+_same_core(::MassWeightedSimulation, ::MassWeightedSimulation) = true
+_same_core(p, c) = false
+
+# A Boussinesq pair, or a mixed pair (e.g. a Boussinesq parent providing
+# one-way boundary data to a sound-proof child, see NestedRun): volume
+# measure. A sound-proof pair is the more specific method above.
 function nest_interp_state(nest::NestedGrid, psim::_NestSim,
                            csim::_NestSim; scalars=())
     _moist(psim) == _moist(csim) ||
@@ -195,19 +231,23 @@ Interpolate every member of `state`'s field set from the parent onto the
 child mesh: `parent_sim`'s `u, v, w, θ`, plus each bound scalar's parent
 field (`qv`, tracers). `region=:all` fills the whole child field (needed
 for the sponge); `region=:halo` fills only halos. Parent halos are filled
-first (scalars with `parent_sim.θ_bcs`, as `step!` does for `qv`).
+first (scalars with `parent_sim.θ_bcs`, as `step!` does for `qv`). The
+operators use the state's vertical measure (`s.measure`): the parent's
+actual face heights on a stretched parent, the reference mass for a
+sound-proof pair.
 """
 function interpolate_parent_state!(s::NestInterpState, psim::_NestSim,
                                    nest::NestedGrid; order::Int=3,
                                    region::Symbol=:all)
     fill_halos!(psim.u, psim.bcs); fill_halos!(psim.v, psim.bcs)
     fill_halos!(psim.w, psim.bcs)
-    _interp_child!(s.u, psim.u, nest; order, region)
-    _interp_child!(s.v, psim.v, nest; order, region)
-    _interp_child!(s.w, psim.w, nest; order, region)
+    meas = s.measure
+    _interp_child!(s.u, psim.u, nest; order, region, measure=meas)
+    _interp_child!(s.v, psim.v, nest; order, region, measure=meas)
+    _interp_child!(s.w, psim.w, nest; order, region, measure=meas)
     for (_, buf, _, pf) in _scalar_entries(s, psim, nothing)
         fill_halos!(pf, psim.θ_bcs)
-        _interp_child!(buf, pf, nest; order, region)
+        _interp_child!(buf, pf, nest; order, region, measure=meas)
     end
     return s
 end

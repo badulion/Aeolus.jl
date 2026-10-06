@@ -56,11 +56,15 @@ Slot `:surface_exchange`, provider `:most` (default).
   fluxes only up to that end, and the time beyond it is delivered with
   the next surface step's fluxes, which cover it (`dt ≤ period` is
   assumed; the adaptive stepper caps `dt` at the shortest cadence).
-* **Air side**, every step in `:surface_flux`: ``Δθ = H\\,τ/(ρ_k c_p Δz)``,
-  ``Δq_v = E\\,τ/(ρ_k Δz)`` in the first air cell, `τ` the air time this
-  step delivers (``τ = Δt`` with a fixed step), with ``ρ_k`` the
-  reference density ``\\bar ρ_k`` of that level (`case.ref`, the density
-  the ledger integrates with) and ``c_p`` the moist heat capacity of that air.
+* **Air side**, every step in `:surface_flux`:
+  ``Δθ = H\\,τ/(\\bar ρ_k c_p \\bar Π_k Δz)`` (`ref_θ_per_heat`),
+  ``Δq_v = E\\,τ/(\\bar ρ_k Δz)`` in the first air cell, `τ` the air time
+  this step delivers (``τ = Δt`` with a fixed step), with ``\\bar ρ_k`` and
+  ``\\bar Π_k`` the reference density and Exner function of that level
+  (`case.ref`, the state the ledgers integrate with) and ``c_p`` the moist
+  heat capacity of that air. The air-heat ledger weights θ with the dry
+  ``c_{pd}``, so it books this heating as ``H τ\\, c_{pd}/c_p``, about
+  0.8 % below ``H τ`` at ``q_v ≈ 0.01``.
 * **Momentum**, every step in `:post_predictor` (after the IBM): the
   ground is a wall of `Aeolus.WallModels`. Every surface step sets, per
   column, a `MOSTWallLaw` with the column's `z0m` and the Obukhov
@@ -320,7 +324,7 @@ function osm_height_map(city, mesh, r::Integer)
     hf = zeros(Nf, Mf)
     for b in city.buildings
         isempty(b.polygon) && continue
-        xmin, xmax = extrema(first.(b.polygon)); ymin, ymax = extrema(last.(b.polygon))
+        xmin, xmax, ymin, ymax = polygon_bbox(b.polygon)
         i0 = max(1, floor(Int, (xmin - mesh.x0) / dxf)); i1 = min(Nf, ceil(Int, (xmax - mesh.x0) / dxf) + 1)
         j0 = max(1, floor(Int, (ymin - mesh.y0) / dyf)); j1 = min(Mf, ceil(Int, (ymax - mesh.y0) / dyf) + 1)
         for j in j0:j1, i in i0:i1
@@ -374,13 +378,48 @@ function matching_cells(geom, k_air, mesh, n, classes)
     return cells, nfb
 end
 
-"The `SlabLand` for a column of class `cls` nobody registered a factory for."
-function fallback_slab(c::SurfaceExchangeMOST, case, I)
-    p, cls = case.bus.params, case.geom.sfc[I]
-    z0m = get(c.z0m, cls, 0.05)
-    return SlabLand(; T = case.bus.Ts[I], C_s = p.C_s[cls], albedo = p.albedo[cls],
-                    emissivity = p.emissivity[cls], z0m = z0m, z0h = c.z0h_ratio * z0m,
+"""
+    class_roughness(case, site::SurfaceSite) -> (z0m, z0h)
+
+The roughness lengths (m) of a surface of class `site.class`: `site.z0m`
+if set (a parent tile over unresolved buildings), otherwise the
+`:surface_exchange` provider's per-class `z0m` table (0.05 m for a class
+not in it, or when no provider is selected); `site.z0h` if set,
+otherwise ``z_{0h} = z_{0m}`` times its `z0h_ratio` (0.1 without a
+provider). Every surface factory takes its roughness from here.
+"""
+function class_roughness(case, site::SurfaceSite)
+    se = find_coupling(case, :surface_exchange)
+    z0m = site.z0m !== nothing ? site.z0m :
+          se === nothing ? 0.05 : get(se.z0m, site.class, 0.05)
+    ratio = se === nothing ? 0.1 : se.z0h_ratio
+    return z0m, site.z0h !== nothing ? site.z0h : ratio * z0m
+end
+
+"The `SlabLand` for a site of a class nobody registered a factory for."
+function fallback_slab(case, site::SurfaceSite)
+    p, cls = case.bus.params, site.class
+    z0m, z0h = class_roughness(case, site)
+    return SlabLand(; T = site.T_skin, C_s = p.C_s[cls], albedo = p.albedo[cls],
+                    emissivity = p.emissivity[cls], z0m = z0m, z0h = z0h,
                     β = cls == SURFACE_WATER ? 1.0 : 0.0)
+end
+
+"""
+    class_surface(case, site::SurfaceSite) -> AbstractSurface
+
+**The** class-to-surface factory of the Berlin case: the surface the
+coupling registered for `site.class` builds
+([`register_surface_factory!`](@ref)), or the surface exchange's
+`SlabLand` fallback for a class nobody claims. The surface exchange
+builds every child column with it, and the parent's tiled surface
+(`parent/surface.jl`, #249) every tile of every parent column, so a
+coupling that takes over a class (the park, #140; water, #141) changes
+both at once.
+"""
+function class_surface(case, site::SurfaceSite)
+    fac = get(case.bus.factories, site.class, nothing)
+    return fac === nothing ? fallback_slab(case, site) : fac[2](case, site)
 end
 
 function init!(c::SurfaceExchangeMOST, case)
@@ -392,8 +431,7 @@ function init!(c::SurfaceExchangeMOST, case)
             bus.dew_mask[I] = false
             continue
         end
-        fac = get(bus.factories, sfc[I], nothing)
-        s = fac === nothing ? fallback_slab(c, case, I) : fac[2](case, I)
+        s = class_surface(case, SurfaceSite(sfc[I]; T_skin = bus.Ts[I], column = I))
         bus.surface[I] = s
         bus.Ts[I] = surface_temperature(s)
         bus.dew_mask[I] = moisture_availability(s) == 0
@@ -542,7 +580,7 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
         k = bus.k_air[I]
         sm.mask[Hx+i, Hy+j, Hz+k] && (nsolid += 1)
         ρk = ref_density(case, k)
-        θ[i, j, k] += bus.H[I] * τ / (ρk * c.cp[I] * dz)
+        θ[i, j, k] += bus.H[I] * τ / dz * ref_θ_per_heat(case, k; cp = c.cp[I])
         qv[i, j, k] += bus.E[I] * τ / (ρk * dz)
         evap += bus.E[I] * τ
     end

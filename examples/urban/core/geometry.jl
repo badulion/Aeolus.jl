@@ -188,6 +188,14 @@ function _point_in_polygon(x::Real, y::Real, poly::Vector{NTuple{2, Float64}})
     return inside
 end
 
+# The index ranges of the sorted cell centres `xs`, `ys` inside the
+# bounding box of `poly`.
+function _bbox_cells(poly, xs, ys)
+    xmin, xmax, ymin, ymax = polygon_bbox(poly)
+    return searchsortedfirst(xs, xmin):searchsortedlast(xs, xmax),
+           searchsortedfirst(ys, ymin):searchsortedlast(ys, ymax)
+end
+
 """
     rasterize_city!(sm, sfc, city, mesh)
 
@@ -203,9 +211,15 @@ function rasterize_city!(sm::SolidMask, sfc::AbstractMatrix{UInt8},
     ys = Aeolus.Grids.ynodes(mesh, Aeolus.Grids.CellCenter())
     zs = Aeolus.Grids.znodes(mesh, Aeolus.Grids.CellCenter())
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
+    # Only the cells whose centre lies in a polygon's bounding box are
+    # tested: a centre outside it is outside the polygon for the even–odd
+    # test of `_point_in_polygon` too (no edge spans its y, or every
+    # spanning edge lies on one side of it), so this is exact and only
+    # makes the 6 km parent raster (#249) affordable.
     # buildings → solid mask + roof label
     for b in city.buildings
-        for j in eachindex(ys), i in eachindex(xs)
+        ir, jr = _bbox_cells(b.polygon, xs, ys)
+        for j in jr, i in ir
             if _point_in_polygon(xs[i], ys[j], b.polygon)
                 sfc[i, j] = b.class
                 for k in eachindex(zs)
@@ -218,7 +232,8 @@ function rasterize_city!(sm::SolidMask, sfc::AbstractMatrix{UInt8},
     end
     # patches → surface label only
     for p in city.patches
-        for j in eachindex(ys), i in eachindex(xs)
+        ir, jr = _bbox_cells(p.polygon, xs, ys)
+        for j in jr, i in ir
             if _point_in_polygon(xs[i], ys[j], p.polygon)
                 sfc[i, j] = p.class
             end

@@ -151,11 +151,14 @@ boundary layer is meant to evolve under the prescribed advection.
   ``0.61 Δq\,θ ≈ 0.23`` K. That is 3 % of the 6.5 K θ range of the
   initial sounding. GABLS2's q (2.5 g/kg) is not carried either. GABLS4
   is dry by design.
-* **No subsidence in GABLS2.** `LargeScaleForcing` has no
-  state-dependent subsidence by design (its `AdvectiveTendencies`
-  docstring says so). The GABLS2 subsidence (−5 mm s⁻¹ at 1 km) only
-  starts at 40 h local time, after the first night that the SCM ranges
-  refer to. Adding it is a `src` change and is outside this issue.
+* **GABLS2 subsidence (since #248).** The case's subsidence
+  (−5 mm s⁻¹ at 1 km, ``w_s ∝ z`` below) starts at 40 h local time, after
+  the first night that the SCM ranges refer to. Until #248 it was not
+  applied, because `LargeScaleForcing` had no state-dependent
+  subsidence; `gabls2_case` now applies it to θ with
+  `LargeScaleForcing.Subsidence` (see
+  [Large-scale forcing](large_scale_forcing.md#GABLS2)). The first-night
+  numbers below are unaffected by it.
 * **Sources that were not accessible.** Bosveld et al. (2014b) and
   Svensson et al. (2011) were behind a publisher JavaScript challenge.
   The GABLS3 envelope therefore comes from the same LES ensemble as
@@ -185,7 +188,7 @@ only accessible LES envelope is for 03-04 UTC. Checks 1-3 use the
 | 4. surface heat flux 00-04 UTC | ≤ −0.011 K m s⁻¹ at every step | < 0 |
 | 4. jet at 03-04 UTC | 9.07 m s⁻¹ at 94.9 m; geostrophic speed 6.54 m s⁻¹ | supergeostrophic, below 400 m |
 | 4. jet speed vs envelope 7.8-9.3 m s⁻¹ | inside | inside |
-| 4. jet height vs envelope 100-130 m | **−5.1 m outside** | `@test_broken`; within one Δz |
+| 4. jet height vs envelope 100-130 m | **−5.1 m outside** (+0.9997 m inside in 2 of 4 runs) | reported; within one Δz |
 
 How the momentum budget is formed: every term is evaluated in every
 SSP-RK3 substage, from the same state the dynamics see, and weighted
@@ -202,9 +205,15 @@ does not: two realisations give 93.4 and 94.9 m, 5-7 m below the 100 m
 lower bound, which is less than one Δz. The expectation is what fails
 here, not the code. With the same code the jet rises with resolution:
 102.7 m at 12.5 m / 4.2 m, 126.8 m at 6.25 m and 118.9 m at 3.125 m
-(table below). The strict assertion is kept as `@test_broken`. Next to it, the
-test asserts the resolution-aware statement that the jet lies within one
-Δz of the envelope.
+(table below). The strict assertion was kept as `@test_broken` until
+#248, which found that marker to be the wrong expectation: the same code
+gave 94.93 m when the test file ran alone and in one full suite, and
+100.9997 m in two other full suites (one on master, one on the #248
+branch). The run is chaotic and not reproducible bit for bit from
+process to process, so the strict check was sometimes an unexpected
+pass. It is now reported, not asserted. The test asserts the
+resolution-aware statement that the jet lies within one Δz of the
+envelope, which holds in every run.
 
 ### GABLS3: full runs
 
@@ -266,31 +275,74 @@ on a machine shared with other jobs (load 12-18).
 
 `examples/sbl/gabls4.jl` uses experiment 3: it starts at 10 UTC from
 the Table 5 profiles, with z0m = 1e-3 m, z0h = 1e-4 m and β_m = 4.8,
-β_h = 7.8. Statistics are 16:30-17:30 UTC means. The published resolution
-is 1 m isotropic on up to 500 × 500 × 150 m, i.e. 37.5 M cells. The
-finest affordable grid here is 2 m, the vertical resolution of
-experiment 2, on 128 × 128 × 96 m (64 × 64 × 48). It took 9436 s
-(brown94) and 7895 s (none) for 7.5 simulated hours on one core. 1 m on
-the same domain would need 8 × the cells and about 2 × the steps,
-≈ 16 × the cost (≈ 40 h).
+β_h = 7.8. Statistics are 16:30-17:30 UTC means. The finest affordable
+grid here is 2 m, the vertical resolution of experiment 2, on
+128 × 128 × 96 m (64 × 64 × 48). It took 9436 s (brown94) and 7895 s
+(none) for 7.5 simulated hours on one core. 1 m on the same domain would
+need 8 × the cells and about 2 × the steps, ≈ 16 × the cost (≈ 40 h).
 
-| 17 UTC | brown94 | none | Table 4, exp. 3 (1 m, 7 LES) | exp. 2 (2 m vertical, 7 LES) |
-| :-- | --: | --: | :-- | :-- |
-| h (m) | 30.7 | 35.7 | 14.5 … 25 | 17 … 39 |
-| L (m) | 4.6 | 3.4 | 6.5 … 9.9 | 7.9 … 15.5 |
-| u* (m s⁻¹) | 0.092 | 0.086 | 0.08 … 0.12 | 0.08 … 0.15 |
-| H (W m⁻²) | −11.0 | −12.3 | −13.5 … −5.3 | −22.3 … −4.7 |
-| θ* (K) | 0.125 | 0.149 | 0.07 … 0.12 | 0.06 … 0.16 |
-| jet | 5.68 m s⁻¹ at 31 m | 5.46 m s⁻¹ at 31 m | — | — |
+**The reference grids** (Couvreux et al. 2020, Table 2; #237). Not all
+seven experiment-3 LES ran at 1 m:
 
-* Inside both the experiment-3 and experiment-2 ranges: u* and H, with
-  both closures.
-* h: at this resolution h lies inside the experiment-2 spread (17-39 m)
-  but 5.7 m (brown94) above the 1 m ensemble. Couvreux et al. (2020) also
-  find h falling, and the spread shrinking, between 2 m and 1 m.
-* θ*: 0.125 K, just above the experiment-3 range.
-* L: 4.6 m, below both ranges. Our larger |H| at the same u* gives the
-  smaller L.
+| experiment 3 | run | Δx (m) | Δz (m) | domain (m) | h at 17 UTC (m) |
+| :-- | :-- | --: | --: | :-- | --: |
+| MesoNH | M1E3 | 1 | 1 | 500 × 500 × 150 | 19 |
+| PALM | M2E3 | 1 | 1 | 500 × 500 × 150 | 17.5 |
+| UConn | M3E3 | 1 | 1 | 256 × 256 × 80 | 17.5 |
+| MicroHH | M4E3 | 1 | 1 | 480 × 480 × 160 | 16.5 |
+| DALES | M8E3 | 1 | 1 | 512 × 512 × 150 | 19.5 |
+| MONC | M9E3 | 1 | 1 | 500 × 500 × 150 | 14.5 |
+| CSIRO-LES | M10E3 | 3.9 | 1.17 | 500 × 500 × 150 | 25 |
+| Aeolus (this run) | — | 2 | 2 | 128 × 128 × 96 | 30.7 (brown94) |
+
+The six 1 m runs give h = 14.5-19.5 m (mean 17.4 m). CSIRO-LES alone sets
+the 25 m top of the seven-model range. An earlier version of this page
+and of `gabls4_reference.csv` called all seven "1 m" and used 14.5-25 m.
+Our vertical spacing (2 m) is coarser than that of every experiment-3
+run, CSIRO's 1.17 m included; horizontally we are finer than CSIRO only.
+
+The experiment-2 column of Table 4 mixes runs. Table 2 lists E2 runs at
+5 m / 2 m for MesoNH, PALM, UConn and MONC, and CSIRO's E2 run at
+7.8 m / 3.9 m. MicroHH and DALES have no E2 run; their "experiment 2"
+h, L and u* equal those of their experiment-1 runs in Table 3 (M4E1,
+M8E1, z0m = 1e-2 m). H differs between Tables 3 and 4 for every run that
+appears in both (MicroHH: −22.3 in Table 4, −11.9 for M4E1), and MONC's
+Table 4 row matches none of M9E2's Table 3 values. Below, the
+experiment-2 column is therefore restricted to the four E2 runs at
+5 m / 2 m with z0m = 1e-3 m. The per-run provenance is in
+`examples/sbl/data/gabls4_reference.csv`.
+
+| 17 UTC | brown94 | none | exp. 3, six LES at 1 m | CSIRO-LES exp. 3 (3.9 / 1.17 m) | exp. 2, four LES at 5 / 2 m |
+| :-- | --: | --: | :-- | --: | :-- |
+| h (m) | 30.7 | 35.7 | 14.5 … 19.5 | 25 | 17 … 29 |
+| L (m) | 4.6 | 3.4 | 6.5 … 9.9 | 7.7 | 7.9 … 15.5 |
+| u* (m s⁻¹) | 0.092 | 0.086 | 0.08 … 0.12 | 0.10 | 0.08 … 0.11 |
+| H (W m⁻²) | −11.0 | −12.3 | −13.5 … −5.3 | −10.5 | −8.1 … −4.7 |
+| θ* (K) | 0.125 | 0.149 | 0.07 … 0.12 | 0.10 | 0.06 … 0.09 |
+| jet | 5.68 m s⁻¹ at 31 m | 5.46 m s⁻¹ at 31 m | — | — | — |
+
+* Inside the six-run 1 m range: u* and H, with both closures.
+* h: 30.7 m (brown94) is 11.2 m above the top of the 1 m runs and
+  1.8 × their mean; 35.7 m (none) is 16.2 m above. The 2 m run's h is
+  also just above the four experiment-2 runs at the same Δz (17-29 m;
+  those start from 00 UTC, not from the experiment-3 profiles).
+  The earlier statement "5.7 m above the 1 m ensemble" measured against
+  CSIRO's 25 m, which is not a 1 m run.
+* Couvreux et al. (2020, Sect. 3.2) find the SBL thinner, with a stronger
+  inversion, in the higher-resolution runs (less clearly for UConn and
+  PALM), and the spread smaller in experiment 3 than in experiment 2.
+  Within single models (Sect. 4.2) the MesoNH and UConn mean profiles
+  converge at 0.5 m, and MesoNH's change from Δz = 1 to 0.5 m mattered
+  more than from Δx = 1 to 0.5 m ("possibly" because of the strong
+  vertical gradients); PALM changes little between 5 m and 1 m. No h is
+  tabulated for those resolution tests, so the share of our excess that
+  a finer grid would remove cannot be read off the paper.
+* θ*: 0.125 K, just above the 1 m range (0.12).
+* L: 4.6 m, below every range. Our larger |H| at the same u* gives the
+  smaller L. Against the four experiment-2 runs at our Δz, H (−11.0) is
+  also outside (−8.1 … −4.7). An earlier version of this page reported H
+  inside an experiment-2 range of −22.3 … −4.7; that range came from
+  MicroHH's experiment-1 run and CSIRO's 7.8 m / 3.9 m run.
 
 The P55-e correction lowers h by 5 m and θ* by 16 %. Without it, the
 layer is deeper and smoother in time (panel c).
