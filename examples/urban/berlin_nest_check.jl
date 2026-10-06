@@ -4,14 +4,19 @@
 #   julia --project=. examples/urban/berlin_nest_check.jl cost-nested   [minutes]
 #   julia --project=. examples/urban/berlin_nest_check.jl cost-periodic [minutes]
 #   julia --project=. examples/urban/berlin_nest_check.jl cost-200m     [minutes]
-#   julia --project=. examples/urban/berlin_nest_check.jl evening-nested   [hours]
-#   julia --project=. examples/urban/berlin_nest_check.jl evening-periodic [hours]
+#   julia --project=. examples/urban/berlin_nest_check.jl cost-periodic-wind [minutes]
+#   julia --project=. examples/urban/berlin_nest_check.jl evening-nested   [hours, default 1]
+#   julia --project=. examples/urban/berlin_nest_check.jl evening-periodic [hours, default 1]
 #
 # cost-*: wall seconds per simulated hour from 12:00 LT, 29 June 2019, the
 #   first step (compilation) excluded: the nested default (6 km parent at
 #   refinement (2, 2, 4), 400 m child), the 400 m child in the periodic box
-#   (nest off), and the 200 m child of before the nest (64 × 64 × 32, nest off).
-# evening-*: 18:00 LT onwards (default 3 h): the heat the child's lid and
+#   (nest off), the same driven by the nest's geostrophic wind instead of the
+#   default 1 m/s (periodic-wind), and the 200 m child of before the nest
+#   (64 × 64 × 32, nest off).
+# evening-*: 18:00 LT onwards (default 1 h; the 18–21 h window of the issue
+#   needs about an hour of wall time per simulated hour nested, the full
+#   evening is the 24 h validation of #270): the heat the child's lid and
 #   sides carry (the air-heat ledger's boundary terms, W/m² of child ground
 #   area) and the change of the mean θ of the air in 0–100 m, nested (the
 #   uniform 62.5 m × 50 m fallback parent of #259, refinement (4, 4, 8), to
@@ -49,6 +54,16 @@ function config(kind::AbstractString; start_h)
     kind == "periodic" && return BC.CaseConfig(:summer; base..., physics = Dict{Symbol,Any}(:nesting => false))
     kind == "200m"     && return BC.CaseConfig(:summer; base..., size = (64, 64, 32), extent = (1000.0, 1000.0, 200.0),
                                                physics = Dict{Symbol,Any}(:nesting => false))
+    if kind == "periodic-wind"
+        # the periodic box driven by the nest's geostrophic wind (the
+        # sounding wind above z_g at the start), not the 1 m/s default: the
+        # nest's cost without the wind's
+        cfg = BC.CaseConfig(:summer; base...)
+        Ug, Vg = BC.nest_geostrophic_wind(cfg)
+        U, V = Ug(3000.0, 0.0), Vg(3000.0, 0.0)
+        return BC.CaseConfig(:summer; base..., u0 = U, physics = Dict{Symbol,Any}(:nesting => false),
+                             options = Dict{Symbol,Any}(:geostrophic => (U_g = U, V_g = V)))
+    end
     error("unknown configuration $kind")
 end
 
@@ -67,7 +82,7 @@ function run_cost(kind; minutes = 10.0)
                                           c.wall_parent, 100 * c.wall_parent / wall))
 end
 
-function run_evening(kind; hours = 3.0)
+function run_evening(kind; hours = 1.0)
     case = BC.build_case(config(kind == "nested" ? "fallback" : kind; start_h = 18.0); io = devnull)
     θ0 = mean_θ_below(case, 100.0)
     w0 = time()
@@ -98,7 +113,7 @@ arg = length(ARGS) >= 2 ? parse(Float64, ARGS[2]) : nothing
 if startswith(what, "cost-")
     run_cost(what[6:end]; minutes = something(arg, 10.0))
 elseif startswith(what, "evening-")
-    run_evening(what[9:end]; hours = something(arg, 3.0))
+    run_evening(what[9:end]; hours = something(arg, 1.0))
 else
     error("usage: berlin_nest_check.jl cost-nested|cost-periodic|cost-200m|evening-nested|evening-periodic [length]")
 end
