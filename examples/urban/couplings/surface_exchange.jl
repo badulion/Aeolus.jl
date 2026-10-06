@@ -193,6 +193,8 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     dyn::Any                   # WallModels.DynamicRoughness, built in init!
     dyn_opts::NamedTuple
     t_dyn::Float64             # wall time spent in the dynamic solve (s)
+    ucs::Matrix{Float64}       # first-air-cell wind of the dynamic solve (scratch, #295)
+    vcs::Matrix{Float64}
     # P58-e (#193): maximum sustainable heat flux per column, last surface step
     H_max::Matrix{Float64}     # ρ c_p Q_max (W m⁻²; SurfaceExchange.max_sustainable_heat_flux)
     mshf_ratio::Matrix{Float64} # downward buoyancy flux / Q_max (< 0: upward, unstable)
@@ -303,7 +305,7 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
                                0.0, 0, 0.0, 0, 0.0, 0,
                                dynamic, nothing,
                                (refine = Int(o.dynamic_refine), filter = Symbol(o.dynamic_filter),
-                                C_d = Float64(o.dynamic_C_d)), 0.0,
+                                C_d = Float64(o.dynamic_C_d)), 0.0, z(), z(),
                                fill(NaN, Nx, Ny), fill(NaN, Nx, Ny), fill(false, Nx, Ny),
                                -Inf, -Inf, 0.0)
 end
@@ -478,7 +480,7 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
     dyn = c.dyn
     if dyn !== nothing
         t0 = time()
-        ucs = zeros(Nx, Ny); vcs = zeros(Nx, Ny)
+        ucs, vcs = c.ucs, c.vcs
         @inbounds for j in 1:Ny, i in 1:Nx
             k = min(bus.k_air[i, j], mesh.Nz)
             ucs[i, j], vcs[i, j] = centre_wind(case.sim, i, j, k)   # BC-aware (#262)
