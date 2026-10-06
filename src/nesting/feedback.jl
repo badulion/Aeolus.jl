@@ -187,7 +187,9 @@ a hook the run chains in front of each domain's `body_force!`, at every
 stage of every accepted step, with the stage weight of the core (a
 rejected step's bookings are discarded with it), and consumed by the
 refluxing of [`two_way_feedback!`](@ref). Only the planes are stored,
-not whole face fields.
+not whole face fields. One more set of planes books the volume (mass)
+flux `∫ W u_n dt` of every face, for the volume-consistent refluxing
+(see [`two_way_feedback!`](@ref)).
 """
 mutable struct NestFluxRegisters
     names::Vector{Symbol}
@@ -195,7 +197,7 @@ mutable struct NestFluxRegisters
     pfield::Vector{Field}
     cfield::Vector{Field}
     sides::NTuple{6,Bool}
-    pacc::Vector{Vector{Matrix{Float64}}}     # committed, per scalar, per side
+    pacc::Vector{Vector{Matrix{Float64}}}     # committed, per scalar (+ volume), per side
     cacc::Vector{Vector{Matrix{Float64}}}
     ppend::Vector{Vector{Matrix{Float64}}}    # the step being attempted
     cpend::Vector{Vector{Matrix{Float64}}}
@@ -270,7 +272,7 @@ function NestFluxRegisters(nest::NestedGrid, parent, child, s::NestInterpState,
     end
     sides = nest_open_sides(child)
     _warn_internal_walls(nest, sides)
-    mk(which) = [_new_planes(nest, sides, which) for _ in names]
+    mk(which) = [_new_planes(nest, sides, which) for _ in 1:length(names)+1]   # + volume
     return NestFluxRegisters(names, models, pf, cf, sides, mk(1), mk(2), mk(1), mk(2),
                              wp, wc, 0, 0, _sgs_keywords(ap), _sgs_keywords(ac),
                              Field(CellCenter(), nest.parent_mesh),
@@ -358,6 +360,11 @@ function (h::_RegisterHook)(sim, Δt)
                          h.which === :parent, w)
         end
     end
+    for s in 1:6                                          # the volume (mass) flux
+        r.sides[s] || continue
+        _book_plane!(planes[end][s], sim, nothing, nothing, nothing, 0.0, W, h.nest, s,
+                     h.which === :parent, w)
+    end
     return nothing
 end
 
@@ -392,14 +399,14 @@ end
     @inbounds return (ax == 3 ? W[2][k] : W[1][k]) * F
 end
 
-function _book_plane!(M::Matrix{Float64}, sim, ϕ::Field, rec, K, ν, W, nest::NestedGrid,
+# ϕ === nothing books the volume (mass) flux W u_n instead of a scalar flux.
+function _book_plane!(M::Matrix{Float64}, sim, ϕ, rec, K, ν, W, nest::NestedGrid,
                       s::Int, parent::Bool, w::Float64)
     ax = _side_axis(s); hi = _side_high(s)
     g = sim.mesh
     t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
     H = (g.Hx, g.Hy, g.Hz)
     veld = ax == 1 ? sim.u.data : ax == 2 ? sim.v.data : sim.w.data
-    ϕd = ϕ.data
     if parent
         oo = (nest.ix, nest.iy, nest.iz); nn = (nest.nx, nest.ny, nest.nz)
         base = H[ax] + oo[ax] + (hi ? nn[ax] : 0)
@@ -411,6 +418,16 @@ function _book_plane!(M::Matrix{Float64}, sim, ϕ::Field, rec, K, ν, W, nest::N
     end
     idx = [0, 0, 0]
     idx[ax] = base
+    if ϕ === nothing
+        @inbounds for B in axes(M, 2), A in axes(M, 1)
+            idx[t1] = o1 + A; idx[t2] = o2 + B
+            k = idx[3]
+            Wk = W === nothing ? 1.0 : (ax == 3 ? W[2][k] : W[1][k])
+            M[A, B] += w * Wk * veld[idx[1], idx[2], k]
+        end
+        return M
+    end
+    ϕd = ϕ.data
     @inbounds for B in axes(M, 2), A in axes(M, 1)
         idx[t1] = o1 + A; idx[t2] = o2 + B
         M[A, B] += w * _face_total_flux(rec, ϕd, veld, ax, idx[1], idx[2], idx[3], g,
@@ -420,8 +437,11 @@ function _book_plane!(M::Matrix{Float64}, sim, ϕ::Field, rec, K, ν, W, nest::N
 end
 
 # coarse − Σ fine on every interface plane, in the units of the registers ×
-# the parent face area (a NestFluxMismatch for apply_flux_correction!)
-function _register_mismatch(r::NestFluxRegisters, n::Int, nest::NestedGrid)
+# the parent face area (a NestFluxMismatch for apply_flux_correction!), for
+# the flux of ϕ − ϕ_ref: the booked scalar flux minus ϕ_ref times the booked
+# volume flux.
+function _register_mismatch(r::NestFluxRegisters, n::Int, nest::NestedGrid,
+                            ϕref::Float64 = 0.0)
     rr = (nest.rx, nest.ry, nest.rz)
     out = Matrix{Float64}[]
     for s in 1:6
@@ -434,15 +454,18 @@ function _register_mismatch(r::NestFluxRegisters, n::Int, nest::NestedGrid)
         M = zeros(psz)
         if r.sides[s]
             P = r.pacc[n][s]; C = r.cacc[n][s]
+            Pv = r.pacc[end][s]; Cv = r.cacc[end][s]
             t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
             r1, r2 = rr[t1], rr[t2]
             inv = 1 / (r1 * r2)
             @inbounds for B in 1:psz[2], A in 1:psz[1]
                 fine = 0.0
                 for b in 1:r2, a in 1:r1
-                    fine += C[(A - 1) * r1 + a, (B - 1) * r2 + b]
+                    ia = (A - 1) * r1 + a; ib = (B - 1) * r2 + b
+                    fine += C[ia, ib] - ϕref * Cv[ia, ib]
                 end
-                M[A, B] = (P[A, B] - fine * inv) * _face_area(nest, nothing, ax, B)
+                M[A, B] = ((P[A, B] - ϕref * Pv[A, B]) - fine * inv) *
+                          _face_area(nest, nothing, ax, B)
             end
         end
         push!(out, M)

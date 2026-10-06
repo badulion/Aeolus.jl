@@ -421,6 +421,13 @@ function step_nested!(run::NestedRun; dt = nothing)
     run.t0 = Float64(c.t)
     run.Δt = t_end - t_p
     _set_window!(run)
+    # Two-way: the feedback changed the parent after the previous window's
+    # end data, so the child's boundary-normal faces just jumped to the new
+    # B(t₀). Project the child onto them, or its first stage starts
+    # divergent near the open faces (and SSP-RK3, which combines that start
+    # state into the step's result, keeps a third of it: ∇·u grew to 5e-9
+    # in 200 steps of the vortex harness).
+    two_way && _reproject!(c)
 
     # --- 5. child substeps --------------------------------------------------
     tw = time_ns()
@@ -563,7 +570,18 @@ substeps), as configured by the run's [`TwoWayFeedback`](@ref):
  2. correct the parent's velocity on the interface planes of the child's
     open faces to the child's flux (`flux_correction`);
  3. reflux `θ`, `qv` and the declared tracers from the flux registers
-    booked since the last feedback, and clear them;
+    booked since the last feedback, and clear them. What is refluxed is
+    the flux of `ϕ − ϕ_ref`, `ϕ_ref` the parent's mean of `ϕ` over the
+    covered cells (one constant per scalar): the two grids are each
+    volume-conserving, but their time-integrated volume fluxes through a
+    face patch differ (the child's boundary velocity is interpolated in
+    time, the parent's is its stage velocity), and the flux of `ϕ` itself
+    would book `ϕ ×` that volume mismatch — for `θ ≈ 300 K` a spurious
+    heating of the cells outside the nest by up to kelvins per step. The
+    volume mismatches of the patches sum to zero over the closed interface
+    (both velocity fields are divergence-free), so the total correction,
+    and with it the exact conservation of the composite `∫ϕ dV`, is the
+    same for every `ϕ_ref`;
  4. re-project the parent.
 
 The interface mass-flux imbalance is written to the ledger before the
@@ -579,6 +597,8 @@ function two_way_feedback!(run::NestedRun)
     p = run.parent; c = run.child; nest = run.nest
     meas = run.s_bc.measure
     α = fb.τ === nothing ? 1.0 : min(1.0, run.Δt / fb.τ)
+    # the reference value of each refluxed scalar (volume-consistent refluxing)
+    refs = run.regs === nothing ? Float64[] : [_covered_mean(f, nest) for f in run.regs.pfield]
     anterpolate!(p, c, nest, run.s_bc; mask = feedback_mask(run), α, solid = run.data.solid)
     sides = nest_open_sides(c)
     e_before = _interface_imbalance(p, c, nest, meas)
@@ -591,8 +611,8 @@ function two_way_feedback!(run::NestedRun)
     if run.regs !== nothing
         r = run.regs
         for n in eachindex(r.names)
-            apply_flux_correction!(r.pfield[n], _register_mismatch(r, n, nest), nest;
-                                   measure = meas)
+            apply_flux_correction!(r.pfield[n], _register_mismatch(r, n, nest, refs[n]),
+                                   nest; measure = meas)
         end
         _clear_registers!(r)
     end
@@ -605,6 +625,13 @@ function two_way_feedback!(run::NestedRun)
             fb.reproject ? _interface_imbalance(p, c, nest, meas) : e_after
     end
     return run
+end
+
+# The parent's mean of a cell-centred field over the covered cells.
+function _covered_mean(f::Field, nest::NestedGrid)
+    cx, cy, cz = nest_covered_range(nest)
+    v = view(interior_view(f), cx, cy, cz)
+    return sum(v) / length(v)
 end
 
 feedback_mask(run::NestedRun) = run.twoway === nothing ?
