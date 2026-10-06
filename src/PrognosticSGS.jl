@@ -58,7 +58,8 @@ using ..Fields: Field, interior_view, mesh
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs,
                             passive_scalar_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
-                   buoyancy_frequency_squared!, SymmetricTensorField
+                   buoyancy_frequency_squared!, SymmetricTensorField, cloud_humidity,
+                   filled_condensate!
 import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_state!, sgs_tke!
 using ..AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using ..WallModels: ImmersedWalls, immersed_wall_drag!
@@ -192,6 +193,7 @@ end
                c_ε1 = 0.51, c_l = 0.76, κ = 0.4, surface_factor = 3.9,
                wall_distance = nothing, first_level = nothing, mask = nothing,
                surface = nothing, θ₀ = nothing, g_accel = nothing, qv = :auto,
+               qc = nothing, p = nothing,
                transport = true, dissipation = :semi_implicit, advection = :auto)
 
 The Deardorff (1980) / Moeng (1984) prognostic-TKE closure, an
@@ -221,7 +223,13 @@ Keywords:
 * `θ₀`, `g_accel` — buoyancy reference; `nothing` takes `sim.θ₀`, `sim.g_accel`
   (no buoyancy terms if the simulation has none). `qv` — `:auto` (the
   simulation's `qv` when it is moist), `nothing` (dry), or a field: ``N^2``
-  then uses ``θ_v``.
+  then uses ``θ_v``. `qc` — `nothing`, or a condensate field (cloud or fog
+  water) with `p` its pressure (Pa; a number or a storage-indexed vector):
+  ``N^2`` is then that of cloudy air (#239, `Operators.buoyancy_frequency_squared!`),
+  with condensate loading and, where ``q_c > 0``, the saturated ``N^2`` of
+  Durran & Klemp (1982) — the stratocumulus buoyancy of Deardorff (1980),
+  so the length scale ``c_l\\sqrt{e}/N`` and the buoyant production do not
+  treat moist-neutral cloud as stable. Needs a humidity (`qv`).
 * `transport` — advect (flux-limited, `AdvectionSchemes.advect_positive!`
   with `advection`: `:auto` = WENO-Z5 if the halo is ≥ 3, else centred) and
   diffuse (``∇·(2ν_t∇e)``, the three-argument
@@ -254,7 +262,7 @@ Keywords:
   resolved shear across the wall instead of the stencil's: see
   [`attach_immersed_walls!`](@ref), which also attaches them later.
 """
-struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, WS} <: AbstractSGSClosure
+struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS} <: AbstractSGSClosure
     e::F
     c_k::T; c_ε0::T; c_ε1::T; c_l::T; κ::T; surface_factor::T
     Δ::T                  # the filter width (of the lowest level on a StretchedGrid)
@@ -263,6 +271,7 @@ struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, WS} <: AbstractSGSClosure
     θ₀::T                 # NaN: from the simulation
     g::T                  # NaN: from the simulation
     qv::Q                 # :auto, nothing or a Field
+    cloud::CL             # nothing or Operators.cloud_humidity (qc, scratch, p), #239
     l_wall::LW            # interior-sized κ·d_wall, or nothing
     first_level::FL       # interior-sized Bool, or nothing
     mask::MK              # storage-sized Bool, or nothing
@@ -303,7 +312,8 @@ function TKEClosure(g::Union{RegularGrid{T},StretchedGrid{T}}; e = nothing, e0::
                     c_ε0::Real = 0.19, c_ε1::Real = 0.51, c_l::Real = 0.76, κ::Real = 0.4,
                     surface_factor::Real = 3.9, wall_distance = nothing, first_level = nothing,
                     mask = nothing, surface = nothing, θ₀ = nothing, g_accel = nothing,
-                    qv = :auto, transport::Bool = true, dissipation::Symbol = :semi_implicit,
+                    qv = :auto, qc = nothing, p = nothing,
+                    transport::Bool = true, dissipation::Symbol = :semi_implicit,
                     advection::Symbol = :auto, walls = nothing) where {T}
     dissipation in (:semi_implicit, :exact) ||
         throw(ArgumentError("dissipation must be :semi_implicit or :exact, got $(repr(dissipation))"))
@@ -329,7 +339,7 @@ function TKEClosure(g::Union{RegularGrid{T},StretchedGrid{T}}; e = nothing, e0::
     mkf() = Field(CellCenter(), g)
     c = TKEClosure(ef, T(c_k), T(c_ε0), T(c_ε1), T(c_l), T(κ), T(surface_factor), Δ, Δk, vrel,
                       θ₀ === nothing ? T(NaN) : T(θ₀), g_accel === nothing ? T(NaN) : T(g_accel),
-                      qv, lw, fl, mk, surface, transport, dissipation, adv,
+                      qv, cloud_humidity(qc, p, g), lw, fl, mk, surface, transport, dissipation, adv,
                       mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), Ref{Any}(nothing), T[], ws,
                       similar(ef.data), zeros(T, _NSTATS), zeros(T, _NSTATS))
     walls === nothing || attach_immersed_walls!(c, walls)
@@ -354,10 +364,17 @@ function _stratification!(c, sim)
         fill_halos!(sim.θ, sim.θ_bcs)
         q = _qv(c, sim)
         if q === nothing
+            c.cloud === nothing ||
+                throw(ArgumentError("a condensate field qc needs a humidity (qv, or a moist core)"))
             buoyancy_frequency_squared!(c.N2, sim.θ; θ₀ = θ₀, g = g)
         else
             fill_halos!(q, passive_scalar_bcs(sim.θ_bcs))   # qv: not θ's top gradient (#254)
-            buoyancy_frequency_squared!(c.N2, sim.θ, q; θ₀ = θ₀, g = g)
+            if c.cloud === nothing
+                buoyancy_frequency_squared!(c.N2, sim.θ, q; θ₀ = θ₀, g = g)
+            else                                            # cloudy air (#239)
+                qc = filled_condensate!(c.cloud, passive_scalar_bcs(sim.θ_bcs))
+                buoyancy_frequency_squared!(c.N2, sim.θ, q, qc; θ₀ = θ₀, g = g, p = c.cloud.p)
+            end
         end
     else
         fill!(c.N2.data, 0)
