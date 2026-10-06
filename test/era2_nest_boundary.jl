@@ -573,6 +573,62 @@ end
     end
 end
 
+# The sponge target lives in the run's scratch state run.s_bc and is
+# blended once per child substep (#329, item 3). `boundary_time(run, t)`
+# writes the same scratch state, and calling it from a child hook is a
+# documented use: the sponge must then re-blend its target rather than
+# relax toward the hook's stage-time blend. A run whose hook calls
+# boundary_time must stay bit-identical to one whose hook does not.
+@testset "boundary_time from a child hook leaves the sponge target intact (#329)" begin
+    rng = Xoshiro(3291)
+    pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo = (3, 3, 3))
+    cm = nest_child_mesh(nest)
+    ui = [randn(rng, size(interior_view(Field(FaceX(), pm)))) for _ in 1:3]
+    θi = 300 .+ 0.5 .* rand(rng, size(interior_view(Field(CellCenter(), pm))))
+    function mk(call_bt::Bool)
+        psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic))
+        for (f, a) in zip((psim.u, psim.v, psim.w), ui)
+            interior_view(f) .= a
+        end
+        interior_view(psim.θ) .= θi
+        step!(psim, 1e-10); psim.t = 0.0
+        csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
+        _nb_init_child!(csim, psim, nest)
+        rr = Ref{Any}(nothing)
+        ncalls = Ref(0)
+        hook = (s, h) -> begin
+            r = rr[]
+            if call_bt && r !== nothing && r.Δt > 0
+                boundary_time(r, clamp(Float64(s.t), r.t0, r.t0 + r.Δt))
+                ncalls[] += 1
+            end
+            nothing
+        end
+        run = NestedRun(psim, csim, nest; advance_parent = domain_advance(step_rk3!),
+                        advance_child = domain_advance(step_rk3!; body_force! = hook),
+                        cfl_parent = nothing, cfl_child = nothing,
+                        sponge = NestSponge(; width = 3, α_max = 20.0))
+        rr[] = run
+        return run, ncalls
+    end
+    a, na = mk(true)
+    b, nb = mk(false)
+    for _ in 1:4
+        step_nested!(a; dt = 2e-3)
+        step_nested!(b; dt = 2e-3)
+    end
+    d = maximum(maximum(abs, getproperty(a.child, f).data .- getproperty(b.child, f).data)
+                for f in (:u, :v, :w, :θ))
+    # the parent moves within a window, so a stale target would show
+    sw = maximum(abs, a.s_new.u.data .- a.s_old.u.data)
+    @printf("  boundary_time called %d times from the child hook; max child difference %.2e (window change of the target %.2e)\n",
+            na[], d, sw)
+    @test na[] > 0 && nb[] == 0
+    @test sw > 1e-6
+    @test d == 0.0
+end
+
 # fill_nest_halos! is the public entry a driver uses after changing a
 # child's boundary data outside a NestedRun step (#329, item 7; the Berlin
 # nest coupling of #265 called the private _fill_nest_halos!).

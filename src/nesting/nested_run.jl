@@ -574,6 +574,8 @@ order of the scalar ledger keys), which `end_parent_step!` compares.
 `step_nested!(run)` is exactly `begin_parent_step!`, the run's own child
 subcycling (`advance_child`), `end_parent_step!`.
 """
+const _NO_LEDGER = Float64[]          # the window's I0 of a run with no two-way scratch
+
 function begin_parent_step!(run::NestedRun; dt = nothing)
     p = run.parent; c = run.child; nest = run.nest; st = run.stats
     t_p = Float64(p.t)
@@ -630,7 +632,8 @@ function begin_parent_step!(run::NestedRun; dt = nothing)
     # state into the step's result, keeps a third of it: ∇·u grew to 5e-9
     # in 200 steps of the vortex harness).
     two_way && _reproject!(c)
-    return (t_child_end = run.synced ? t_end : run.t0 + run.Δt, Δt = Δt, I0 = run.work.I0, m0 = m0)
+    return (t_child_end = run.synced ? t_end : run.t0 + run.Δt, Δt = Δt,
+            I0 = run.work === nothing ? _NO_LEDGER : run.work.I0, m0 = m0)
 end
 
 """
