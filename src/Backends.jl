@@ -331,6 +331,29 @@ end
     return nothing
 end
 
+@kernel inbounds = true function _rows2_kernel!(body!, i1, i2, oj, args)
+    b = @index(Global, Linear)
+    j = b + oj
+    for i in i1:i2
+        body!(i, j, args...)
+    end
+end
+
+@kernel inbounds = true function _chunks1_kernel!(body!, n1, n2, chunk, args)
+    c = @index(Global, Linear)
+    lo = n1 + (c - 1) * chunk
+    hi = min(lo + chunk - 1, n2)
+    for n in lo:hi
+        body!(n, args...)
+    end
+end
+
+# A plane (3-D: one k) or a row (2-D: one j) per work item: reductions.
+@kernel inbounds = true function _planes_kernel!(out, plane!, ok, args)
+    c = @index(Global, Linear)
+    out[c] = plane!(c + ok, args...)
+end
+
 const _ROWS_PER_GROUP = 4
 const _CHUNK_1D = 1024
 
