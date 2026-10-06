@@ -145,7 +145,7 @@ function _fill_nest_halos!(csim, s::NestInterpState)
     has_open_boundaries(csim) || return csim
     update_open_boundaries!(csim, csim.t, zero(csim.t))
     fill_halos!(csim.u, csim.bcs); fill_halos!(csim.v, csim.bcs); fill_halos!(csim.w, csim.bcs)
-    for (_, _, cf, _) in _scalar_entries(s, nothing, csim)
+    _foreach_scalar(s, nothing, csim) do _, _, cf, _
         fill_halos!(cf, csim.θ_bcs)
     end
     return csim

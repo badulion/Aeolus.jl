@@ -97,17 +97,37 @@ through the same operator per member — so a tracer initialised equal to
 operators: `nothing` (volume) for Boussinesq sims, the reference-mass
 measure for a [`MassWeightedSimulation`](@ref) pair, so prolongation,
 restriction, refluxing and the composite integrals conserve `∫ W φ dV`.
+
+**Storage.** A `storage = :full` state (the default of
+[`nest_interp_state`](@ref)) holds child-sized fields. A
+`storage = :shell` state holds only the halo slabs and the
+boundary-normal face plane of each member (#329): what the child's open
+faces read. It is what a [`NestedRun`](@ref) without a sponge keeps (the
+two window ends and the blend), `(N+2H)³ − N³` instead of `(N+2H)³`
+points per member; reading its interior is an error, so it cannot be a
+sponge target or take a `region = :all` prolongation.
 """
-struct NestInterpState{T, M<:RegularGrid{T}}
-    u::Field{FaceX,      T, Array{T,3}, M}
-    v::Field{FaceY,      T, Array{T,3}, M}
-    w::Field{FaceZ,      T, Array{T,3}, M}
-    θ::Field{CellCenter, T, Array{T,3}, M}
+struct NestInterpState{T, M<:RegularGrid{T}, A<:AbstractArray{T,3}, FC<:Field, FP<:Field}
+    u::Field{FaceX,      T, A, M}
+    v::Field{FaceY,      T, A, M}
+    w::Field{FaceZ,      T, A, M}
+    θ::Field{CellCenter, T, A, M}
     names::Vector{Symbol}               # extra scalars (qv first, when moist)
-    bufs::Vector{_CCField{T,M}}         # parent value interpolated to the child mesh
-    child::Vector{Field}                # bound child field per extra scalar
-    parent::Vector{Field}               # bound parent field per extra scalar
+    bufs::Vector{Field{CellCenter, T, A, M}}   # parent value interpolated to the child mesh
+    child::Vector{FC}                   # bound child field per extra scalar
+    parent::Vector{FP}                  # bound parent field per extra scalar
     measure::Union{Nothing,NestMeasure} # vertical measure of the operators
+end
+
+"Whether a state stores child-sized fields (`:full`) or halo slabs only (`:shell`)."
+nest_storage(s::NestInterpState) = s.θ.data isa _ShellArray ? :shell : :full
+
+function _state_field(loc::Location, cm::RegularGrid{T}, storage::Symbol) where {T}
+    storage === :full && return Field(loc, cm)
+    storage === :shell ||
+        throw(ArgumentError("nest_interp_state: storage must be :full or :shell, got :$storage"))
+    d = _shell_array(T, cm, loc)
+    return Field{typeof(loc), T, typeof(d), typeof(cm)}(d, cm)
 end
 
 const _RESERVED_NEST_NAMES = (:u, :v, :w, :θ, :theta)
@@ -129,15 +149,16 @@ function _check_scalar_pair(nest::NestedGrid, name::Symbol, cf, pf)
 end
 
 """
-    nest_interp_state(nest; scalars=(), measure=nothing)
-    nest_interp_state(nest, parent_sim, child_sim; scalars=())
+    nest_interp_state(nest; scalars=(), measure=nothing, storage=:full)
+    nest_interp_state(nest, parent_sim, child_sim; scalars=(), storage=:full)
 
 Allocate a [`NestInterpState`](@ref) on `nest`'s child mesh. The field
 set always holds `u, v, w, θ`. The second form adds `qv` (bound to
 `child_sim.qv` / `parent_sim.qv`) when both Boussinesq simulations carry
 moisture, and errors when only one does. `scalars` adds extra
 cell-centred scalars, `name => (child_field, parent_field)`, in the
-order given.
+order given. `storage = :shell` keeps only the halo slabs (see
+[`NestInterpState`](@ref)).
 
 For two [`MassWeightedSimulation`](@ref)s the state carries the mass
 measure of their shared `ReferenceState` ([`nest_measure`](@ref), which
@@ -145,10 +166,12 @@ asserts that the profile is shared). The sound-proof core has no `qv`
 field, so a moist anelastic nest carries `qv` as a tracer:
 `scalars = (:qv => (child_qv, parent_qv),)`.
 """
-function nest_interp_state(nest::NestedGrid{T}; scalars=(), measure=nothing) where {T}
+function nest_interp_state(nest::NestedGrid{T}; scalars=(), measure=nothing,
+                           storage::Symbol=:full) where {T}
     cm = nest.child_mesh
-    names = Symbol[]; bufs = _CCField{T,typeof(cm)}[]
-    child = Field[]; parent = Field[]
+    θ = _state_field(CellCenter(), cm, storage)
+    names = Symbol[]; bufs = typeof(θ)[]
+    cfs = Field[]; pfs = Field[]
     for pr in scalars
         name, fs = first(pr), last(pr)
         name isa Symbol || error("nest_interp_state: scalar names must be Symbols")
@@ -157,17 +180,21 @@ function nest_interp_state(nest::NestedGrid{T}; scalars=(), measure=nothing) whe
         cf, pf = fs
         _check_scalar_pair(nest, name, cf, pf)
         name in names && error("nest_interp_state: scalar :$name given twice")
-        push!(names, name); push!(bufs, Field(CellCenter(), cm))
-        push!(child, cf); push!(parent, pf)
+        push!(names, name); push!(bufs, _state_field(CellCenter(), cm, storage))
+        push!(cfs, cf); push!(pfs, pf)
     end
-    return NestInterpState(Field(FaceX(), cm), Field(FaceY(), cm),
-                           Field(FaceZ(), cm), Field(CellCenter(), cm),
-                           names, bufs, child, parent, measure)
+    # concrete element types for the bound fields (#329: no Vector{Field})
+    FC = isempty(cfs) ? _CCField{T,typeof(cm)} : mapreduce(typeof, typejoin, cfs)
+    FP = isempty(pfs) ? _CCField{T,typeof(nest.parent_mesh)} : mapreduce(typeof, typejoin, pfs)
+    return NestInterpState(_state_field(FaceX(), cm, storage), _state_field(FaceY(), cm, storage),
+                           _state_field(FaceZ(), cm, storage), θ,
+                           names, bufs, convert(Vector{FC}, cfs), convert(Vector{FP}, pfs),
+                           measure)
 end
 
 function nest_interp_state(nest::NestedGrid, psim::MassWeightedSimulation,
-                           csim::MassWeightedSimulation; scalars=())
-    return nest_interp_state(nest; scalars, measure=nest_measure(nest, psim, csim))
+                           csim::MassWeightedSimulation; scalars=(), storage::Symbol=:full)
+    return nest_interp_state(nest; scalars, measure=nest_measure(nest, psim, csim), storage)
 end
 
 # The measure of a pair of simulations: volume for Boussinesq, the
@@ -208,13 +235,13 @@ end
 # one-way boundary data to a sound-proof child, see NestedRun): volume
 # measure. A sound-proof pair is the more specific method above.
 function nest_interp_state(nest::NestedGrid, psim::_NestSim,
-                           csim::_NestSim; scalars=())
+                           csim::_NestSim; scalars=(), storage::Symbol=:full)
     _moist(psim) == _moist(csim) ||
         error("nest_interp_state: parent has_moisture = $(_moist(psim)) but child " *
               "has_moisture = $(_moist(csim)); a nest must carry qv on both grids or " *
               "on neither")
     moist = _moist(psim) ? (:qv => (csim.qv, psim.qv),) : ()
-    return nest_interp_state(nest; scalars=(moist..., scalars...))
+    return nest_interp_state(nest; scalars=(moist..., scalars...), storage)
 end
 
 
@@ -236,16 +263,16 @@ function Base.getindex(s::NestInterpState, name::Symbol)
     return s.bufs[i]
 end
 
-# (name, interpolated buffer, child field, parent field) for every
-# cell-centred scalar of the set; θ is bound to the simulations.
-function _scalar_entries(s::NestInterpState, psim, csim)
-    θc = csim === nothing ? nothing : csim.θ
-    θp = psim === nothing ? nothing : psim.θ
-    out = Any[(:θ, s.θ, θc, θp)]
+# Call `f(name, buffer, child_field, parent_field)` for every cell-centred
+# scalar of the set: θ first (bound to the simulations; `nothing` where a
+# simulation is not given), then the bound scalars. A function barrier per
+# member instead of the former Vector{Any} of tuples (#329).
+@inline function _foreach_scalar(f, s::NestInterpState, psim, csim)
+    f(:θ, s.θ, csim === nothing ? nothing : csim.θ, psim === nothing ? nothing : psim.θ)
     for i in eachindex(s.names)
-        push!(out, (s.names[i], s.bufs[i], s.child[i], s.parent[i]))
+        f(s.names[i], s.bufs[i], s.child[i], s.parent[i])
     end
-    return out
+    return nothing
 end
 
 """
@@ -269,7 +296,7 @@ function interpolate_parent_state!(s::NestInterpState, psim::_NestSim,
     _interp_child!(s.u, psim.u, nest; order, region, measure=meas)
     _interp_child!(s.v, psim.v, nest; order, region, measure=meas)
     _interp_child!(s.w, psim.w, nest; order, region, measure=meas)
-    for (_, buf, _, pf) in _scalar_entries(s, psim, nothing)
+    _foreach_scalar(s, psim, nothing) do _, buf, _, pf
         fill_halos!(pf, psim.θ_bcs)
         _interp_child!(buf, pf, nest; order, region, measure=meas)
     end
@@ -322,6 +349,9 @@ not matter, or from a `post_predictor!` hook with `scalars = false`.
 function apply_nest_sponge!(csim::_NestSim, s::NestInterpState,
                             sp::NestSponge; dt::Real=1.0, velocity::Bool=true,
                             scalars::Bool=true)
+    s.θ.data isa _ShellArray &&
+        throw(ArgumentError("apply_nest_sponge!: a halo-only (storage = :shell) state has no " *
+                            "interior to relax toward; use a storage = :full state"))
     cm = csim.mesh
     αdt = sp.α_max * dt
     if velocity
@@ -330,7 +360,7 @@ function apply_nest_sponge!(csim::_NestSim, s::NestInterpState,
         _sponge_field!(csim.w, s.w, sp, cm, αdt)
     end
     if scalars
-        for (_, buf, cf, _) in _scalar_entries(s, nothing, csim)
+        _foreach_scalar(s, nothing, csim) do _, buf, cf, _
             _sponge_field!(cf, buf, sp, cm, αdt)
         end
     end

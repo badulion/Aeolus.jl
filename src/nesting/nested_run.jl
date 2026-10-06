@@ -82,7 +82,10 @@ Keywords:
     correction on the open faces, Berger–Colella scalar refluxing from
     flux registers and the re-projection of the parent (N-nest-e, #263);
   * `order` (3), `flux_correction` (true), `scalars`, `state` — as for
-    the operators of [`NestInterpState`](@ref);
+    the operators of [`NestInterpState`](@ref). The run allocates its three
+    field sets (the parent prolongated at both ends of the parent step and
+    their blend) with `storage = :shell`, halo slabs only, unless it has a
+    sponge, whose target is the child interior (#329);
   * `sponge` (`nothing`, the default, as in Kadasch et al. 2021 §2.2–2.3
     and Hellsten et al. 2021, which use none) or a [`NestSponge`](@ref):
     relaxation of every member of the field set toward the time-blended
@@ -219,8 +222,14 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
         error("NestedRun: parent clock $(parent.t) and child clock $(child.t) differ")
     ns = substeps === nothing ? max(nest.rx, nest.ry, nest.rz) : Int(substeps)
     ns >= 1 || error("NestedRun: substeps must be >= 1")
+    # without a sponge only the child's open-boundary points are read: the
+    # three field sets keep their halo slabs only (#329, item 4)
+    storage = sponge === nothing ? :shell : :full
     s_old, s_new, s_bc = state === nothing ?
-        ntuple(_ -> nest_interp_state(nest, parent, child; scalars), 3) : state
+        ntuple(_ -> nest_interp_state(nest, parent, child; scalars, storage), 3) : state
+    sponge === nothing || all(st -> nest_storage(st) === :full, (s_old, s_new, s_bc)) ||
+        throw(ArgumentError("NestedRun: a sponge needs storage = :full states (it relaxes " *
+                            "the child interior toward them)"))
     feedback === :two_way && _check_two_way_pair(parent, child, "NestedRun", s_bc)
     # the boundary buffers hold the halos *and* the boundary-normal interior
     # face plane of the west/south/bottom faces; the sponge needs the whole field

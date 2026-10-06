@@ -59,22 +59,25 @@ function _build_plan(kind::Symbol, order::Int, r::Int, off::Int,
     ns  = max(order, 1)
     lo  = 1 - Hp                       # lowest representable parent cell/face number
     hi  = max(lo, Np + Hp - ns + 1)    # highest legal stencil start
-    plan = Vector{Tuple{Int,Vector{Float64}}}(undef, Nc + 2Hc)
-    @inbounds for ic in 1:(Nc + 2Hc)
-        n = ic - Hc                    # child cell / face number (may be <=0)
+    n   = Nc + 2Hc
+    start = Vector{Int}(undef, n); W = Matrix{Float64}(undef, ns, n); cell = zeros(Int, n)
+    @inbounds for ic in 1:n
+        nn = ic - Hc                   # child cell / face number (may be <=0)
         if kind === :avg
-            q = n - 1
+            q = nn - 1
             I = off + fld(q, r)
             m = mod(q, r) + 1
             s0 = clamp(I - ((ns - 1) ÷ 2), lo, hi)
-            plan[ic] = (Hp + s0, _cons_weights(ns, r, m, I - s0 + 1))
+            start[ic] = Hp + s0; cell[ic] = Hp + I
+            W[:, ic] .= _cons_weights(ns, r, m, I - s0 + 1)
         else # :nodal — child face position in parent-face-number units
-            qf = off + (n - 1) / r
+            qf = off + (nn - 1) / r
             s0 = clamp(Int(floor(qf)) - ((ns - 1) ÷ 2), lo, hi)
-            plan[ic] = (Hp + s0, _nodal_weights(ns, qf - s0))
+            start[ic] = Hp + s0
+            W[:, ic] .= _nodal_weights(ns, qf - s0)
         end
     end
-    return plan
+    return _Plan1D(start, W, cell)
 end
 
 function _plan(nest::NestedGrid, kind::Symbol, d::Int, order::Int)
@@ -155,21 +158,23 @@ function _build_coord_plan(kind::Symbol, order::Int, pc::Vector{Float64},
     ns = max(order, 1)
     npc = length(pc) - 1                 # parent storage cells
     ncc = length(cc) - 1                 # child storage cells (= faces in a Face array)
-    plan = Vector{Tuple{Int,Vector{Float64}}}(undef, ncc)
+    start = Vector{Int}(undef, ncc); W = Matrix{Float64}(undef, ns, ncc); cell = zeros(Int, ncc)
     @inbounds for ic in 1:ncc
         if kind === :avg
             a = cc[ic]; b = cc[ic+1]
             I  = clamp(searchsortedlast(pc, (a + b) / 2), 1, npc)
             s0 = clamp(I - ((ns - 1) ÷ 2), 1, max(1, npc - ns + 1))
-            plan[ic] = (s0, _cons_weights_nodes(view(pc, s0:s0+ns), a, b))
+            start[ic] = s0; cell[ic] = I
+            W[:, ic] .= _cons_weights_nodes(view(pc, s0:s0+ns), a, b)
         else
             z  = cc[ic]
             F  = clamp(searchsortedlast(pc, z), 1, npc)
             s0 = clamp(F - ((ns - 1) ÷ 2), 1, max(1, npc - ns + 1))
-            plan[ic] = (s0, _nodal_weights_nodes(view(pc, s0:s0+ns-1), z))
+            start[ic] = s0
+            W[:, ic] .= _nodal_weights_nodes(view(pc, s0:s0+ns-1), z)
         end
     end
-    return plan
+    return _Plan1D(start, W, cell)
 end
 
 """
@@ -200,58 +205,94 @@ _dim_kinds(::FaceX)      = (:nodal, :avg,   :avg)
 _dim_kinds(::FaceY)      = (:avg,   :nodal, :avg)
 _dim_kinds(::FaceZ)      = (:avg,   :avg,   :nodal)
 
-_interface_plane(::CellCenter, cm, i, j, k) = false
-_interface_plane(::FaceX, cm, i, j, k) = (i == cm.Hx + 1)
-_interface_plane(::FaceY, cm, i, j, k) = (j == cm.Hy + 1)
-_interface_plane(::FaceZ, cm, i, j, k) = (k == cm.Hz + 1)
-
 # =========================================================================
 # Prolongation: parent -> child
 # =========================================================================
 
+# One box of child storage points `ir × jr × kr`, written to `dst` at the
+# local indices `(i, j, k) .- off` (`off = (0, 0, 0)` for a whole child
+# array; a slab of a halo-only `_ShellArray` otherwise). A function barrier
+# with concrete argument types: no allocation, no dynamic dispatch.
+function _interp_box!(dst::Array{T,3}, off::NTuple{3,Int}, pd::AbstractArray{<:Real,3},
+                      px::_Plan1D, py::_Plan1D, pz::_Plan1D,
+                      ir::UnitRange{Int}, jr::UnitRange{Int}, kr::UnitRange{Int}) where {T}
+    nx = _stencil(px); ny = _stencil(py); nz = _stencil(pz)
+    Wx = px.w; Wy = py.w; Wz = pz.w
+    @inbounds for k in kr
+        bk = pz.start[k]
+        for j in jr
+            bj = py.start[j]
+            for i in ir
+                bi = px.start[i]
+                s = 0.0
+                for c in 1:nz
+                    wc = Wz[c, k]; kp = bk + c - 1
+                    for b in 1:ny
+                        wbc = wc * Wy[b, j]; jp = bj + b - 1
+                        for a in 1:nx
+                            s += wbc * Wx[a, i] * pd[bi + a - 1, jp, kp]
+                        end
+                    end
+                end
+                dst[i - off[1], j - off[2], k - off[3]] = T(s)
+            end
+        end
+    end
+    return dst
+end
+
+# The storage boxes of a region of a child field at `loc`: the whole array
+# (`:all`), or the six non-overlapping halo slabs, `H` deep, one deeper on
+# the low side of the field's own staggered axis for `:halo_interface` (the
+# boundary-normal interior face plane of the west/south/bottom faces).
+function _region_boxes(cm::RegularGrid, loc::Location, region::Symbol)
+    n = (cm.Nx + 2cm.Hx, cm.Ny + 2cm.Hy, cm.Nz + 2cm.Hz)
+    region === :all && return ((1:n[1], 1:n[2], 1:n[3]),)
+    ax = _stagger_axis(loc)
+    lo = ntuple(d -> (cm.Hx, cm.Hy, cm.Hz)[d] + (region === :halo_interface && d == ax), 3)
+    return _shell_boxes(n, lo, (cm.Hx, cm.Hy, cm.Hz))
+end
+
+_stagger_axis(::CellCenter) = 0
+_stagger_axis(::FaceX) = 1
+_stagger_axis(::FaceY) = 2
+_stagger_axis(::FaceZ) = 3
+
 function _interp_child!(cf::Field, pf::Field, nest::NestedGrid;
                         order::Int=3, region::Symbol=:halo, measure=nothing)
     cm = nest.child_mesh
-    cf.mesh === cm || size(cf.data) == totalsize(cm) ||
+    size(cf.data) == totalsize(cm) ||
         error("_interp_child!: child field is not on the nest's child mesh")
     size(pf.data) == totalsize(nest.parent_mesh) ||
         error("_interp_child!: parent field is not on the nest's parent mesh")
+    region in (:all, :halo, :halo_interface) ||
+        throw(ArgumentError("_interp_child!: region must be :all, :halo or :halo_interface, got :$region"))
     loc = location(cf)
     kinds = _dim_kinds(loc)
     px = _plan(nest, kinds[1], 1, order)
     py = _plan(nest, kinds[2], 2, order)
     pz = _zplan(nest, kinds[3], order, measure)
-    cd = cf.data; pd = pf.data
-    ii, jj, kk = interior(cm)
-    T = eltype(cd)
-    all_region = region === :all
-    iface = region === :halo_interface
-    @inbounds for k in axes(cd, 3)
-        bk, wk = pz[k]
-        kin = k in kk
-        for j in axes(cd, 2)
-            bj, wj = py[j]
-            jin = kin && (j in jj)
-            for i in axes(cd, 1)
-                if !all_region && jin && (i in ii)
-                    (iface && _interface_plane(loc, cm, i, j, k)) || continue
-                end
-                bi, wi = px[i]
-                s = 0.0
-                for c in eachindex(wk)
-                    wc = wk[c]; kp = bk + c - 1
-                    for b in eachindex(wj)
-                        wbc = wc * wj[b]; jp = bj + b - 1
-                        for a in eachindex(wi)
-                            s += wbc * wi[a] * pd[bi + a - 1, jp, kp]
-                        end
-                    end
-                end
-                cd[i, j, k] = T(s)
-            end
-        end
-    end
+    _interp_into!(cf.data, pf.data, px, py, pz, cm, loc, region)
     return cf
+end
+
+function _interp_into!(cd::Array, pd, px, py, pz, cm, loc, region)
+    for (ir, jr, kr) in _region_boxes(cm, loc, region)
+        _interp_box!(cd, (0, 0, 0), pd, px, py, pz, ir, jr, kr)
+    end
+    return cd
+end
+
+# A halo-only array stores exactly the halo slabs (and the interface plane):
+# prolongate each slab in place. The interior is not stored.
+function _interp_into!(cd::_ShellArray, pd, px, py, pz, cm, loc, region)
+    region === :all &&
+        throw(ArgumentError("a halo-only (storage = :shell) nest state holds no child " *
+                            "interior; prolongate region = :all into a storage = :full state"))
+    for (slab, off, (ir, jr, kr)) in _shell_slabs(cd)
+        _interp_box!(slab, off, pd, px, py, pz, ir, jr, kr)
+    end
+    return cd
 end
 
 """

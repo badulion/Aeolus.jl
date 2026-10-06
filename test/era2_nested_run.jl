@@ -560,4 +560,71 @@ end
     @test is_numerical_failure(BoundsError(zeros(1), 2), s)
 end
 
+# -------------------------------------------------------------------------
+# #329 item 4: without a sponge a NestedRun reads the prolongated parent only
+# at the child's open-boundary points, so its three field sets keep only
+# their halo slabs (and the boundary-normal face plane). Bit-identical
+# results to child-sized sets, a fraction of the memory.
+@testset "halo-only field sets of a NestedRun (#329)" begin
+    pm = RegularGrid(Float64; size=(32, 32, 32), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
+    cm = nest_child_mesh(nest)
+    function mk(fb; state = nothing)
+        rng = Xoshiro(329)
+        p = BoussinesqSimulation(pm; ν = 1e-3)
+        for f in (p.u, p.v, p.w)
+            interior_view(f) .= 0.3 .* randn(rng, size(interior_view(f)))
+        end
+        interior_view(p.θ) .= 300 .+ randn(rng, size(interior_view(p.θ)))
+        step!(p, 1e-10); p.t = 0.0
+        c = BoussinesqSimulation(cm; ν = 1e-3, bcs = nest_bcs(cm))
+        _nr_init_child_from_parent!(c, p, nest)
+        st = state === nothing ? nothing :
+             ntuple(_ -> nest_interp_state(nest, p, c; storage = state), 3)
+        return NestedRun(p, c, nest; cfl_parent = nothing, cfl_child = nothing,
+                         feedback = fb, state = st)
+    end
+    for fb in (:one_way, :two_way)
+        a = mk(fb); b = mk(fb; state = :full)
+        @test nest_storage(a.s_old) === nest_storage(a.s_new) === nest_storage(a.s_bc) === :shell
+        @test nest_storage(b.s_bc) === :full
+        for _ in 1:4
+            step_nested!(a; dt = 2e-3); step_nested!(b; dt = 2e-3)
+        end
+        for f in (:u, :v, :w, :θ)
+            @test getproperty(a.child, f).data == getproperty(b.child, f).data
+            @test getproperty(a.parent, f).data == getproperty(b.parent, f).data
+        end
+        # boundary_time over every stored (halo) point is the same blend
+        sa = boundary_time(a, a.t0 + 0.4a.Δt); sb = boundary_time(b, b.t0 + 0.4b.Δt)
+        ii, jj, kk = interior(cm)
+        same = true
+        for k in axes(sb.θ.data, 3), j in axes(sb.θ.data, 2), i in axes(sb.θ.data, 1)
+            (i in ii) && (j in jj) && (k in kk) && continue
+            same &= sa.θ[i, j, k] == sb.θ[i, j, k] && sa.u[i, j, k] == sb.u[i, j, k]
+        end
+        @test same
+        if fb === :one_way
+            bytes(r) = sum(st -> sum(Aeolus.Nesting._data_bytes(getproperty(st, f).data)
+                                     for f in (:u, :v, :w, :θ)), (r.s_old, r.s_new, r.s_bc))
+            n = (cm.Nx + 2cm.Hx) * (cm.Ny + 2cm.Hy) * (cm.Nz + 2cm.Hz)
+            nin = cm.Nx * cm.Ny * cm.Nz
+            plane = cm.Ny * cm.Nz                           # one face plane per velocity
+            @test bytes(b) == 3 * 4 * 8n
+            @test bytes(a) == 3 * 8 * (4 * (n - nin) + 3plane)
+            @printf("  child %d³, halo %d: the run's three field sets hold %.0f KiB (child-sized: %.0f KiB, %.0f %%)\n",
+                    cm.Nx, cm.Hx, bytes(a) / 1024, bytes(b) / 1024, 100 * bytes(a) / bytes(b))
+        end
+    end
+    # a shell has no interior: reading it, prolongating region = :all into
+    # it or relaxing toward it is an error
+    a = mk(:one_way)
+    @test_throws ArgumentError a.s_bc.θ.data[cm.Hx + 2, cm.Hy + 2, cm.Hz + 2]
+    @test_throws ArgumentError interpolate_parent_state!(a.s_bc, a.parent, nest; region = :all)
+    @test_throws ArgumentError apply_nest_sponge!(a.child, a.s_bc, NestSponge())
+    @test_throws ArgumentError NestedRun(a.parent, a.child, nest; sponge = NestSponge(),
+                                         state = (a.s_old, a.s_new, a.s_bc),
+                                         cfl_parent = nothing, cfl_child = nothing)
+end
+
 end # testset

@@ -100,9 +100,13 @@ end
 _ledger_key(name::Symbol) = name === :θ ? :theta : name
 
 "Composite integral of every scalar of the set, keyed like `nest.ledger`."
-_composite_scalars(psim, csim, nest, s::NestInterpState) =
-    Dict(_ledger_key(n) => composite_integral(pf, cf, nest; measure=s.measure)
-         for (n, _, cf, pf) in _scalar_entries(s, psim, csim))
+function _composite_scalars(psim, csim, nest, s::NestInterpState)
+    d = Dict{Symbol,Float64}()
+    _foreach_scalar(s, psim, csim) do n, _, cf, pf
+        d[_ledger_key(n)] = composite_integral(pf, cf, nest; measure=s.measure)
+    end
+    return d
+end
 
 # =========================================================================
 # Restriction and refluxing of the field set
@@ -192,13 +196,13 @@ conditions ([`nest_periodic_axes`](@ref)). Returns the names that were refluxed.
 function reflux_scalars!(psim::_NestSim, nest::NestedGrid,
                          s::NestInterpState, registers)
     done = Symbol[]
-    for (name, _, _, pf) in _scalar_entries(s, psim, nothing)
+    per = nest_periodic_axes(psim)
+    _foreach_scalar(s, psim, nothing) do name, _, _, pf
         key = haskey(registers, name) ? name :
               (name === :θ && haskey(registers, :theta)) ? :theta : nothing
-        key === nothing && continue
+        key === nothing && return
         preg, creg = registers[key]
-        reflux!(pf, Tuple(preg), Tuple(creg), nest; measure=s.measure,
-                periodic=nest_periodic_axes(psim))
+        reflux!(pf, Tuple(preg), Tuple(creg), nest; measure=s.measure, periodic=per)
         push!(done, name)
     end
     return done
