@@ -151,6 +151,32 @@ end
 @inline _zeps(::Type{T}) where {T} = eps(T)^2
 @inline _zeps(x) = _zeps(typeof(x))
 
+# Integer power with a compile-time exponent (KA-c, #295). `x^p` with a
+# runtime `p::Integer` goes through Base's non-inlined compensated
+# `pow_body` — 11–16 % of all flagship samples, one call per weight. With
+# the exponent a type parameter the weights are a fixed multiply chain:
+# `x*x` for p = 2, which equals Base's `x^2` bit for bit (one correctly
+# rounded product); `x*x*x` for 3, as Base's `literal_pow`; `x³·x³` for
+# TENO's q = 6, which is *not* bitwise Base's compensated `x^6` (it
+# differs by a few ulp in about 60 % of arguments; see the KA-c notes in
+# test/era2_advection.jl).
+@inline _ipow(x, ::Val{1}) = x
+@inline _ipow(x, ::Val{2}) = x*x
+@inline _ipow(x, ::Val{3}) = x*x*x
+@inline _ipow(x, ::Val{4}) = (x2 = x*x; x2*x2)
+@inline _ipow(x, ::Val{6}) = (x3 = x*x*x; x3*x3)
+@inline _ipow(x, ::Val{P}) where {P} =
+    P >= 0 ? Base.power_by_squaring(x, P) : inv(Base.power_by_squaring(x, -P))
+
+# The exponent of a public scalar entry point (`p`, `q` keywords) as a
+# `Val`, with the common values as constants so the call stays static.
+@inline function _with_pow(f::F, p::Integer) where {F}
+    p == 2 && return f(Val(2))
+    p == 6 && return f(Val(6))
+    p == 1 && return f(Val(1))
+    return f(Val(Int(p)))
+end
+
 # =========================================================================
 # 2. WENO-Z  (Borges, Carmona, Costa & Don, JCP 227 (2008) 3191)
 # =========================================================================
@@ -186,7 +212,7 @@ Reference: Borges, Carmona, Costa & Don, *An improved weighted essentially
 non-oscillatory scheme for hyperbolic conservation laws*, JCP 227 (2008).
 """
 @inline weno_z5_left(fm2, fm1, f0, fp1, fp2; p::Integer = 2) =
-    _weno_z5_left(promote(fm2, fm1, f0, fp1, fp2)..., p)
+    _with_pow(P -> _weno_z5_left(promote(fm2, fm1, f0, fp1, fp2)..., P), p)
 
 """
     weno_z5_right(fm1, f0, fp1, fp2, fp3; p = 2)
@@ -198,7 +224,7 @@ mirrored stencil `(f_{i-1}, …, f_{i+3})`.
 @inline weno_z5_right(fm1, f0, fp1, fp2, fp3; p::Integer = 2) =
     weno_z5_left(fp3, fp2, fp1, f0, fm1; p = p)
 
-@inline function _weno_z5_left(v1::T, v2::T, v3::T, v4::T, v5::T, p::Integer) where {T}
+@inline function _weno_z5_left(v1::T, v2::T, v3::T, v4::T, v5::T, p::Val) where {T}
     q0 = (2*v1 - 7*v2 + 11*v3)/6
     q1 = (-v2 + 5*v3 + 2*v4)/6
     q2 = (2*v3 + 5*v4 - v5)/6
@@ -209,9 +235,9 @@ mirrored stencil `(f_{i-1}, …, f_{i+3})`.
 
     ε = _zeps(T)
     τ = abs(b0 - b2)
-    a0 = T(1/10)*(one(T) + (τ/(b0 + ε))^p)
-    a1 = T(6/10)*(one(T) + (τ/(b1 + ε))^p)
-    a2 = T(3/10)*(one(T) + (τ/(b2 + ε))^p)
+    a0 = T(1/10)*(one(T) + _ipow(τ/(b0 + ε), p))
+    a1 = T(6/10)*(one(T) + _ipow(τ/(b1 + ε), p))
+    a2 = T(3/10)*(one(T) + _ipow(τ/(b2 + ε), p))
     return (a0*q0 + a1*q1 + a2*q2)/(a0 + a1 + a2)
 end
 
@@ -231,7 +257,7 @@ JCP 230 (2011) 1766 (extending Borges et al. 2008 to arbitrary order;
 candidate polynomials/indicators after Balsara & Shu, JCP 160 (2000) 405).
 """
 @inline weno_z7_left(fm3, fm2, fm1, f0, fp1, fp2, fp3; p::Integer = 2) =
-    _weno_z7_left(promote(fm3, fm2, fm1, f0, fp1, fp2, fp3)..., p)
+    _with_pow(P -> _weno_z7_left(promote(fm3, fm2, fm1, f0, fp1, fp2, fp3)..., P), p)
 
 """
     weno_z7_right(fm2, fm1, f0, fp1, fp2, fp3, fp4; p = 2)
@@ -243,7 +269,7 @@ on the mirrored stencil `(f_{i-2}, …, f_{i+4})`.
     weno_z7_left(fp4, fp3, fp2, fp1, f0, fm1, fm2; p = p)
 
 @inline function _weno_z7_left(v1::T, v2::T, v3::T, v4::T, v5::T, v6::T, v7::T,
-                               p::Integer) where {T}
+                               p::Val) where {T}
     q0 = (-3*v1 + 13*v2 - 23*v3 + 25*v4)/12
     q1 = (v2 - 5*v3 + 13*v4 + 3*v5)/12
     q2 = (-v3 + 7*v4 + 7*v5 - v6)/12
@@ -256,10 +282,10 @@ on the mirrored stencil `(f_{i-2}, …, f_{i+4})`.
 
     ε = _zeps(T)
     τ = abs(b0 - b1 - b2 + b3)
-    a0 = T(1/35) *(one(T) + (τ/(b0 + ε))^p)
-    a1 = T(12/35)*(one(T) + (τ/(b1 + ε))^p)
-    a2 = T(18/35)*(one(T) + (τ/(b2 + ε))^p)
-    a3 = T(4/35) *(one(T) + (τ/(b3 + ε))^p)
+    a0 = T(1/35) *(one(T) + _ipow(τ/(b0 + ε), p))
+    a1 = T(12/35)*(one(T) + _ipow(τ/(b1 + ε), p))
+    a2 = T(18/35)*(one(T) + _ipow(τ/(b2 + ε), p))
+    a3 = T(4/35) *(one(T) + _ipow(τ/(b3 + ε), p))
     return (a0*q0 + a1*q1 + a2*q2 + a3*q3)/(a0 + a1 + a2 + a3)
 end
 
@@ -350,7 +376,7 @@ Reference: Fu, Hu & Adams, *A family of high-order targeted ENO schemes
 for compressible-flow simulations*, JCP 305 (2016) 333.
 """
 @inline teno5_left(fm2, fm1, f0, fp1, fp2; C_T::Real = 1e-5, q::Integer = 6) =
-    _teno5_left(promote(fm2, fm1, f0, fp1, fp2)..., C_T, q)
+    _with_pow(Q -> _teno5_left(promote(fm2, fm1, f0, fp1, fp2)..., C_T, Q), q)
 
 """
     teno5_right(fm1, f0, fp1, fp2, fp3; C_T = 1e-5, q = 6)
@@ -362,7 +388,7 @@ mirrored stencil.
     teno5_left(fp3, fp2, fp1, f0, fm1; C_T = C_T, q = q)
 
 @inline function _teno5_left(v1::T, v2::T, v3::T, v4::T, v5::T,
-                             C_T::Real, q::Integer) where {T}
+                             C_T::Real, q::Val) where {T}
     q0 = (2*v1 - 7*v2 + 11*v3)/6
     q1 = (-v2 + 5*v3 + 2*v4)/6
     q2 = (2*v3 + 5*v4 - v5)/6
@@ -373,9 +399,9 @@ mirrored stencil.
 
     ε = _zeps(T)
     τ = abs(b0 - b2)
-    g0 = (one(T) + τ/(b0 + ε))^q
-    g1 = (one(T) + τ/(b1 + ε))^q
-    g2 = (one(T) + τ/(b2 + ε))^q
+    g0 = _ipow(one(T) + τ/(b0 + ε), q)
+    g1 = _ipow(one(T) + τ/(b1 + ε), q)
+    g2 = _ipow(one(T) + τ/(b2 + ε), q)
     gs = g0 + g1 + g2
     c  = T(C_T)
 
@@ -402,7 +428,7 @@ Reference: Fu, Hu & Adams, JCP 305 (2016) 333.
 """
 @inline teno8_left(fm4, fm3, fm2, fm1, f0, fp1, fp2, fp3;
                    C_T::Real = 1e-5, q::Integer = 6) =
-    _teno8_left(promote(fm4, fm3, fm2, fm1, f0, fp1, fp2, fp3)..., C_T, q)
+    _with_pow(Q -> _teno8_left(promote(fm4, fm3, fm2, fm1, f0, fp1, fp2, fp3)..., C_T, Q), q)
 
 """
     teno8_right(fm2, fm1, f0, fp1, fp2, fp3, fp4, fp5; C_T = 1e-5, q = 6)
@@ -415,7 +441,7 @@ on the mirrored stencil `(f_{i-2}, …, f_{i+5})`.
     teno8_left(fp5, fp4, fp3, fp2, fp1, f0, fm1, fm2; C_T = C_T, q = q)
 
 @inline function _teno8_left(v1::T, v2::T, v3::T, v4::T, v5::T, v6::T, v7::T, v8::T,
-                             C_T::Real, q::Integer) where {T}
+                             C_T::Real, q::Val) where {T}
     #    v1    v2    v3    v4    v5   v6    v7    v8
     #  i-4   i-3   i-2   i-1    i   i+1   i+2   i+3
     q0 = (2*v3 - 7*v4 + 11*v5)/6                       # {i-2,i-1,i}
@@ -434,12 +460,12 @@ on the mirrored stencil `(f_{i-2}, …, f_{i+5})`.
 
     ε = _zeps(T)
     τ = abs(b5 - (b0 + 4*b1 + b2)/6)
-    g0 = (one(T) + τ/(b0 + ε))^q
-    g1 = (one(T) + τ/(b1 + ε))^q
-    g2 = (one(T) + τ/(b2 + ε))^q
-    g3 = (one(T) + τ/(b3 + ε))^q
-    g4 = (one(T) + τ/(b4 + ε))^q
-    g5 = (one(T) + τ/(b5 + ε))^q
+    g0 = _ipow(one(T) + τ/(b0 + ε), q)
+    g1 = _ipow(one(T) + τ/(b1 + ε), q)
+    g2 = _ipow(one(T) + τ/(b2 + ε), q)
+    g3 = _ipow(one(T) + τ/(b3 + ε), q)
+    g4 = _ipow(one(T) + τ/(b4 + ε), q)
+    g5 = _ipow(one(T) + τ/(b5 + ε), q)
     gs = g0 + g1 + g2 + g3 + g4 + g5
     c  = T(C_T)
 
@@ -536,19 +562,19 @@ scheme_name(::WENOJS{5})= :weno_js5
 scheme_name(::Centered2)= :centered
 
 # reconstruction entry points ---------------------------------------------
-@inline reconstruct_left(::WENOZ{5,P}, t::NTuple{5}) where {P} = _weno_z5_left(t..., P)
+@inline reconstruct_left(::WENOZ{5,P}, t::NTuple{5}) where {P} = _weno_z5_left(t..., Val(P))
 @inline reconstruct_right(::WENOZ{5,P}, t::NTuple{5}) where {P} =
-    _weno_z5_left(reverse(t)..., P)
-@inline reconstruct_left(::WENOZ{7,P}, t::NTuple{7}) where {P} = _weno_z7_left(t..., P)
+    _weno_z5_left(reverse(t)..., Val(P))
+@inline reconstruct_left(::WENOZ{7,P}, t::NTuple{7}) where {P} = _weno_z7_left(t..., Val(P))
 @inline reconstruct_right(::WENOZ{7,P}, t::NTuple{7}) where {P} =
-    _weno_z7_left(reverse(t)..., P)
+    _weno_z7_left(reverse(t)..., Val(P))
 
-@inline reconstruct_left(r::TENO{5,Q}, t::NTuple{5}) where {Q} = _teno5_left(t..., r.C_T, Q)
+@inline reconstruct_left(r::TENO{5,Q}, t::NTuple{5}) where {Q} = _teno5_left(t..., r.C_T, Val(Q))
 @inline reconstruct_right(r::TENO{5,Q}, t::NTuple{5}) where {Q} =
-    _teno5_left(reverse(t)..., r.C_T, Q)
-@inline reconstruct_left(r::TENO{8,Q}, t::NTuple{8}) where {Q} = _teno8_left(t..., r.C_T, Q)
+    _teno5_left(reverse(t)..., r.C_T, Val(Q))
+@inline reconstruct_left(r::TENO{8,Q}, t::NTuple{8}) where {Q} = _teno8_left(t..., r.C_T, Val(Q))
 @inline reconstruct_right(r::TENO{8,Q}, t::NTuple{8}) where {Q} =
-    _teno8_left(reverse(t)..., r.C_T, Q)
+    _teno8_left(reverse(t)..., r.C_T, Val(Q))
 
 @inline reconstruct_left(r::WENOJS{5}, t::NTuple{5}) = weno_js5_left(t...; ε = r.ε)
 @inline reconstruct_right(r::WENOJS{5}, t::NTuple{5}) = weno_js5_left(reverse(t)...; ε = r.ε)
