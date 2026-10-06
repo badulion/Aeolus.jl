@@ -23,6 +23,7 @@ module Chemistry
 
 using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields: Field, interior_view
+using ..Backends: Backends, plane_reduce!, ordered_sum
 
 export apply_linear_chemistry!,
        air_number_density, ppb_rate_constant, emission_ppb_flux,
@@ -322,25 +323,35 @@ function apply_photochemistry!(NO::AbstractArray{<:Real,3}, NO2::AbstractArray{<
     size(NO) == size(NO2) == size(O3) == size(VOC) == size(HNO3) ||
         throw(DimensionMismatch("apply_photochemistry!: species arrays differ in size"))
     Nx, Ny, Nz = size(NO)
-    P = 0.0; L = 0.0; H = 0.0
-    @inbounds for k in 1:Nz
+    # the rate constants once per level
+    k1 = zeros(Nz); k3 = zeros(Nz); L4 = zeros(Nz); L5 = zeros(Nz)
+    for k in 1:Nz
         Tk, pk, OHk = _atk(T, k), _atk(p, k), _atk(OH, k)
         M = air_number_density(pk, Tk)
-        k1 = k_NO_O3(Tk) * M * 1e-9
-        k3 = k_VOC_O3(Tk) * M * 1e-9
-        L4 = k_VOC_OH(Tk) * OHk
-        L5 = k_NO2_OH(Tk, M) * OHk
-        for j in 1:Ny, i in 1:Nx
-            h0 = HNO3[i, j, k]
-            a, b, c, d, e, pr, ls = photochemistry_cell(NO[i, j, k], NO2[i, j, k], O3[i, j, k],
-                                                        VOC[i, j, k], h0, dt;
-                                                        J = J, k1 = k1, k3 = k3, L4 = L4, L5 = L5, ν = ν)
-            NO[i, j, k] = a; NO2[i, j, k] = b; O3[i, j, k] = c
-            VOC[i, j, k] = d; HNO3[i, j, k] = e
-            P += pr; L += ls; H += e - h0
-        end
+        k1[k] = k_NO_O3(Tk) * M * 1e-9
+        k3[k] = k_VOC_O3(Tk) * M * 1e-9
+        L4[k] = k_VOC_OH(Tk) * OHk
+        L5[k] = k_NO2_OH(Tk, M) * OHk
     end
-    return (P_Ox = P, L_Ox = L, HNO3_formed = H)
+    # the cell update fused with the sums of what it produced, in the
+    # canonical (thread-invariant) plane order (KA-b, #296)
+    P = zeros(Nz); L = zeros(Nz); H = zeros(Nz)
+    plane_reduce!((P, L, H), Backends.backend(NO), _photochemistry_at,
+                  (1:Nx, 1:Ny, 1:Nz), NO, NO2, O3, VOC, HNO3, dt, J, k1, k3, L4, L5, ν)
+    return (P_Ox = ordered_sum(P), L_Ox = ordered_sum(L), HNO3_formed = ordered_sum(H))
+end
+
+@inline function _photochemistry_at(i, j, k, NO, NO2, O3, VOC, HNO3, dt, J, k1, k3, L4, L5, ν)
+    @inbounds begin
+        h0 = HNO3[i, j, k]
+        a, b, c, d, e, pr, ls = photochemistry_cell(NO[i, j, k], NO2[i, j, k], O3[i, j, k],
+                                                    VOC[i, j, k], h0, dt;
+                                                    J = J, k1 = k1[k], k3 = k3[k], L4 = L4[k],
+                                                    L5 = L5[k], ν = ν)
+        NO[i, j, k] = a; NO2[i, j, k] = b; O3[i, j, k] = c
+        VOC[i, j, k] = d; HNO3[i, j, k] = e
+        return (Float64(pr), Float64(ls), Float64(e - h0))
+    end
 end
 
 # =========================================================================
@@ -496,16 +507,22 @@ function apply_wet_deposition!(c::AbstractArray{<:Real,3}, qr::AbstractArray{<:R
     size(qr) == size(c) ||
         throw(DimensionMismatch("apply_wet_deposition!: qr size $(size(qr)) vs $(size(c))"))
     scav == 0 && return 0.0
-    removed = 0.0
-    @inbounds for I in eachindex(c, qr)
-        q = qr[I]
-        q > 0 || continue
-        c0 = c[I]
+    # the update fused with the sum of what it removed, in the canonical
+    # (thread-invariant) plane order (KA-b, #296)
+    parts = plane_reduce!(zeros(size(c, 3)), Backends.backend(c), _wet_deposition_at, axes(c),
+                          c, qr, scav, dt)
+    return ordered_sum(parts)
+end
+
+@inline function _wet_deposition_at(i, j, k, c, qr, scav, dt)
+    @inbounds begin
+        q = qr[i, j, k]
+        q > 0 || return 0.0
+        c0 = c[i, j, k]
         c1 = c0 * exp(-scav * q * dt)
-        c[I] = c1
-        removed += c0 - c1
+        c[i, j, k] = c1
+        return Float64(c0 - c1)
     end
-    return removed
 end
 apply_wet_deposition!(c::Field, qr, dt::Real; kw...) =
     apply_wet_deposition!(interior_view(c), qr isa Field ? interior_view(qr) : qr, dt; kw...)
