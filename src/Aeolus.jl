@@ -158,6 +158,7 @@ using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 export AbstractMesh, RegularGrid
 export Field, CellCenter, FaceX, FaceY, FaceZ
 export Periodic, NoFlux, ValueBC, FluxBC, FieldBoundaryConditions, fill_halos!
+export axis_poisson_bc                # N-open-a (#251)
 export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!,
        interpolate_to_face!, interpolate_to_center!, momentum_advect!,
        add_buoyancy!, add_coriolis!, compute_smagorinsky_νt!,
@@ -204,7 +205,7 @@ export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
 export resolved_tke_profile
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
-       CGPoissonSolver, solve!
+       CGPoissonSolver, solve!, poisson_axis_bcs
 export ImpermeableWall
 export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile,
@@ -305,7 +306,7 @@ export MultigridPoissonSolver, MGPreconditionedCG,
 # Phase 30 — parent-child nesting (Aeolus.Nesting); Phase 31 — block-structured AMR
 export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
-       NestBC, nest_bcs,
+       nest_bcs, NestBoundaryData, nest_boundary_data, nest_open_sides,
        interpolate_to_nest_boundary!, interpolate_parent_to_child!,
        restrict_to_parent!,
        NestFluxMismatch, compute_nest_flux_mismatch, apply_flux_correction!,
@@ -316,6 +317,8 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        restrict_state_to_parent!, reflux!, reflux_scalars!,
        step_nested!, nest_conservation_error, composite_integral,
        NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask,
+       DomainAdvance, domain_advance, stage_times,
+       NestedRun, NestRunStats, boundary_time,
        RefinementBlock, AMRHierarchy, amr_hierarchy,
        refinement_criterion_gradient, refinement_criterion_vorticity,
        refinement_criterion_richardson, combine_criteria,
@@ -1035,6 +1038,16 @@ export NoSlipWall
 include("wall_shear_stress.jl")
 # P59-d (#185) — free-stream (transpiration) top of a spatial boundary layer.
 export FreeStreamBoundary
+# N-open-b (#255) — open (Dirichlet-from-boundary-data) faces, the
+# boundary-data contract and the global boundary mass-flux correction.
+export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
+       AbstractBoundaryData, ProfileBoundaryData, FunctionBoundaryData,
+       boundary_values!, open_boundary_conditions, set_boundary_data!,
+       has_open_boundaries, open_boundary_states, update_open_boundaries!,
+       prepare_open_boundaries!, correct_boundary_mass_flux!, open_boundary_flux,
+       boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
+       open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
+       assert_open_face_correction, open_intermediate_velocity!
 
 # Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
 # nudging, prescribed advective tendencies, surface-temperature series.

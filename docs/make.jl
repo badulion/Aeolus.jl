@@ -30,6 +30,8 @@ makedocs(
             "Discrete Poisson & FFT"      => "theory/poisson.md",
             "Grid nesting: conservative staggered prolongation" => "theory/nesting.md",
             "Stretched vertical grid"     => "theory/stretched_grid.md",
+            "Nested time coupling: subcycling and temporal interpolation" => "theory/nesting_time.md",
+            "Nested boundary conditions: one-way parent → child data" => "theory/nesting_boundaries.md",
             "Radiative transfer"          => "theory/radiation.md",
             "Era IV overview: clouds and microphysics" => "theory/era4_overview.md",
             "P3 microphysics"             => "theory/p3.md",

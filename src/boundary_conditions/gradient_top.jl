@@ -14,7 +14,7 @@ _z_pair_supported(b::FreeStreamBoundary, t::FluxBC) = false
 # RegularGrid.
 _center_gap(g, a::Int, b::Int) = hasproperty(g, :zc) ? g.zc[b] - g.zc[a] : (b - a) * g.dz
 
-function _fill_z!(d::AbstractArray{T,3}, bot, top::FluxBC, Hz, Nz, loc::CellCenter, g) where {T}
+function _fill_z_mesh!(d::AbstractArray{T,3}, bot, top::FluxBC, Hz, Nz, loc::CellCenter, key, g) where {T}
     top.f isa Real ||
         throw(ArgumentError("FluxBC top: the gradient must be a number, got $(typeof(top.f))"))
     # the bottom face (and, provisionally, the top) with the bottom's own pair method
@@ -29,5 +29,5 @@ function _fill_z!(d::AbstractArray{T,3}, bot, top::FluxBC, Hz, Nz, loc::CellCent
     return d
 end
 
-_fill_z!(d, bot, top::FluxBC, Hz, Nz, loc::Location, g) =
+_fill_z_mesh!(d, bot, top::FluxBC, Hz, Nz, loc::Location, key, g) =
     throw(ArgumentError("FluxBC top is a scalar (CellCenter) condition; a $(nameof(typeof(loc))) field cannot take it"))

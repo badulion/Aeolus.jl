@@ -174,19 +174,20 @@ end
 _sim_measure(nest, ::BoussinesqSimulation, ::BoussinesqSimulation) = nothing
 _sim_measure(nest, p::MassWeightedSimulation, c::MassWeightedSimulation) =
     nest_measure(nest, p, c)
-_sim_measure(nest, p, c) =
-    error("nesting: parent ($(nameof(typeof(p)))) and child ($(nameof(typeof(c)))) " *
-          "must be the same kind of simulation")
+_sim_measure(nest, p, c) = nothing          # a mixed pair: the volume measure
 
-function nest_interp_state(nest::NestedGrid, psim::BoussinesqSimulation,
-                           csim::BoussinesqSimulation; scalars=())
-    psim.has_moisture == csim.has_moisture ||
-        error("nest_interp_state: parent has_moisture = $(psim.has_moisture) but child " *
-              "has_moisture = $(csim.has_moisture); a nest must carry qv on both grids or " *
+# A Boussinesq pair, or a mixed pair (a Boussinesq parent and a sound-proof
+# child, or the reverse; N-nest-c #257), which has no common reference mass:
+# the volume measure.
+function nest_interp_state(nest::NestedGrid, psim::_NestSim, csim::_NestSim; scalars=())
+    _moist(psim) == _moist(csim) ||
+        error("nest_interp_state: parent has_moisture = $(_moist(psim)) but child " *
+              "has_moisture = $(_moist(csim)); a nest must carry qv on both grids or " *
               "on neither")
-    moist = psim.has_moisture ? (:qv => (csim.qv, psim.qv),) : ()
+    moist = _moist(psim) ? (:qv => (csim.qv, psim.qv),) : ()
     return nest_interp_state(nest; scalars=(moist..., scalars...))
 end
+
 
 """
     nest_scalar_names(state) -> Vector{Symbol}
@@ -255,40 +256,6 @@ function _blend_state!(dst::NestInterpState, a::NestInterpState,
         dst.bufs[i].data .= (1 - τ) .* a.bufs[i].data .+ τ .* b.bufs[i].data
     end
     return dst
-end
-
-function _copy_halo!(dst::Field, src::Field; interface::Bool=false)
-    m = dst.mesh
-    ii, jj, kk = interior(m)
-    loc = location(dst)
-    dd = dst.data; sd = src.data
-    @inbounds for k in axes(dd, 3), j in axes(dd, 2), i in axes(dd, 1)
-        if (i in ii) && (j in jj) && (k in kk)
-            (interface && _interface_plane(loc, m, i, j, k)) || continue
-        end
-        dd[i, j, k] = sd[i, j, k]
-    end
-    return dst
-end
-
-"""
-    apply_nest_boundary!(child_sim, state; impose_interface=false)
-
-Write the interpolated parent `state` into the halo cells of every member
-of the field set: `child_sim`'s `u, v, w, θ` and each bound scalar's
-child field. With `impose_interface=true` the velocities'
-boundary-normal interior face planes are overwritten too (Dirichlet
-inflow faces).
-"""
-function apply_nest_boundary!(csim::_NestSim, s::NestInterpState;
-                              impose_interface::Bool=false)
-    _copy_halo!(csim.u, s.u; interface=impose_interface)
-    _copy_halo!(csim.v, s.v; interface=impose_interface)
-    _copy_halo!(csim.w, s.w; interface=impose_interface)
-    for (_, buf, cf, _) in _scalar_entries(s, nothing, csim)
-        _copy_halo!(cf, buf)
-    end
-    return csim
 end
 
 function _sponge_field!(cf::Field, gf::Field, sp::NestSponge, cm, αdt)

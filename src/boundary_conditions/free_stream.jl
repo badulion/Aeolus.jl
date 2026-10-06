@@ -1,7 +1,12 @@
 # P59-d (#185) — the free-stream (transpiration) top boundary of a
 # spatially developing boundary layer.
 #
-# Included inside `module BoundaryConditions`, after noslip_wall.jl.
+# Included inside `module BoundaryConditions`, after open_boundary.jl: the
+# free-stream top is a special case of the open-face kernels there (N-open-b,
+# #255) — a fixed normal-velocity profile (no boundary data, no mass-flux
+# correction: its net transpiration is zero by construction), the halo
+# beyond the face antisymmetric (`:odd`), and zero-gradient (`:mirror`)
+# tangential and scalar halos.
 
 """
     FreeStreamBoundary(w_top::AbstractVector)
@@ -31,6 +36,12 @@ The pressure problem is unchanged (Neumann at the top face, the
 `CosineFFTPoissonSolver` is exact): the prescribed face value enters the
 divergence of the top cell, and the projection leaves it untouched.
 
+It is the special case of an [`AbstractOpenBoundary`](@ref) top face with
+a fixed normal velocity, an antisymmetric halo beyond the face and mirror
+halos for everything else: it is filled by the same face kernels as
+[`OpenBoundary`](@ref) (bit for bit the P59-d fill). Unlike an
+`OpenBoundary` it carries no boundary data and is not mass corrected.
+
 Valid only as the `top` face, paired with a wall (`:wall`, `:noslip`,
 `NoSlipWall`) at the bottom:
 `FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = FreeStreamBoundary(w))`.
@@ -41,14 +52,17 @@ Brandt, L., Schlatter, P. & Henningson, D. S. (2004). Transition in
 boundary layers subject to free-stream turbulence. *J. Fluid Mech.*,
 517, 167-198.
 """
-struct FreeStreamBoundary{V<:AbstractVector{<:Real}} <: AbstractBC
+struct FreeStreamBoundary{V<:AbstractVector{<:Real}} <: AbstractOpenBoundary
     w_top::V
 end
 
-# Allowed pair: an impermeable wall below, the free stream above.
-_z_pair_supported(b, t::FreeStreamBoundary) = is_wall(b)
-_z_pair_supported(b::FreeStreamBoundary, t) = false
-_z_pair_supported(b::FreeStreamBoundary, t::FreeStreamBoundary) = false
+# Allowed z pairs: an impermeable wall below an open top (free stream or
+# OpenBoundary), or an OpenBoundary bottom below an OpenBoundary top (a nest
+# child inside its parent, N-nest-d #261).
+_z_pair_supported(b, t::AbstractOpenBoundary) = is_wall(b)
+_z_pair_supported(b::AbstractOpenBoundary, t) = false
+_z_pair_supported(b::AbstractOpenBoundary, t::AbstractOpenBoundary) = false
+_z_pair_supported(b::OpenBoundary, t::OpenBoundary) = true
 
 function _fill_z!(d, bot::_ZWall, top::FreeStreamBoundary, Hz, Nz, loc::Location)
     _fill_wall_bottom!(d, bot, Hz, loc)
@@ -57,13 +71,8 @@ function _fill_z!(d, bot::_ZWall, top::FreeStreamBoundary, Hz, Nz, loc::Location
 end
 
 # u, v and cell-centred fields: mirror (zero shear / Neumann).
-function _fill_freestream_top!(d, ::FreeStreamBoundary, Hz, Nz,
-                               ::Union{CellCenter,FaceX,FaceY})
-    @inbounds for h in 1:Hz
-        @views d[:, :, Hz + Nz + h] .= d[:, :, Hz + Nz + 1 - h]
-    end
-    return d
-end
+_fill_freestream_top!(d, ::FreeStreamBoundary, Hz, Nz, ::Union{CellCenter,FaceX,FaceY}) =
+    _open_mirror!(d, 3, true, Hz, Nz)
 
 # w: the prescribed face value, halo antisymmetric about it.
 function _fill_freestream_top!(d::AbstractArray{T,3}, bc::FreeStreamBoundary, Hz, Nz,
@@ -72,13 +81,15 @@ function _fill_freestream_top!(d::AbstractArray{T,3}, bc::FreeStreamBoundary, Hz
     length(wb) == size(d, 1) ||
         throw(DimensionMismatch("FreeStreamBoundary: w_top has $(length(wb)) entries, " *
                                 "the field has $(size(d, 1)) storage x points"))
-    kw = Hz + Nz + 1
-    @inbounds for k_ in 0:Hz
-        dst = kw + k_
-        dst <= size(d, 3) || continue
-        for j in axes(d, 2), i in axes(d, 1)
-            d[i, j, dst] = k_ == 0 ? T(wb[i]) : 2 * T(wb[i]) - d[i, j, kw - k_]
+    kw = _face_index(true, Hz, Nz)
+    if kw <= size(d, 3)
+        @inbounds for j in axes(d, 2), i in axes(d, 1)
+            d[i, j, kw] = T(wb[i])
         end
     end
-    return d
+    return _open_odd!(d, 3, true, Hz, Nz)
 end
+
+# Homogeneous part (implicit solvers): zero transpiration.
+_inhomogeneous(bc::FreeStreamBoundary) = any(!iszero, bc.w_top)
+_homogeneous(bc::FreeStreamBoundary) = FreeStreamBoundary(zero(bc.w_top))

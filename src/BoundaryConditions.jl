@@ -9,6 +9,15 @@ export AbstractBC, Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
        FieldBoundaryConditions, fill_halos!
 export NoSlipWall, is_wall, homogeneous_bcs     # P59-a (#172)
 export FreeStreamBoundary                        # P59-d (#185)
+export axis_poisson_bc                           # N-open-a (#251)
+export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,   # N-open-b (#255)
+       AbstractBoundaryData, ProfileBoundaryData, FunctionBoundaryData,
+       boundary_values!, open_boundary_conditions, set_boundary_data!,
+       has_open_boundaries, open_boundary_states, update_open_boundaries!,
+       prepare_open_boundaries!, correct_boundary_mass_flux!, open_boundary_flux,
+       boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
+       open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
+       assert_open_face_correction, open_intermediate_velocity!
 
 """
     AbstractBC
@@ -25,6 +34,8 @@ Concrete types:
     velocity (no slip, or a moving wall).
   * [`FreeStreamBoundary`](@ref) — top face with zero shear and a
     prescribed normal (transpiration) velocity.
+  * [`OpenBoundary`](@ref) — lateral or top face whose velocities and
+    scalars come from boundary data (Dirichlet), with a Neumann `φ`.
   * [`ValueBC`](@ref) — Dirichlet with prescribed value.
   * [`FluxBC`](@ref) — Neumann with prescribed flux `∂/∂n = f`.
 """
@@ -109,7 +120,8 @@ or a Couette lid
 `FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = NoSlipWall(U, 0))`.
 A z-periodic face cannot be mixed with a non-periodic one, and a mixed
 bottom/top pair must be two walls (`:wall`, `:noslip`, `NoSlipWall`) or a
-wall below a [`FreeStreamBoundary`](@ref) top;
+wall below a [`FreeStreamBoundary`](@ref) or [`OpenBoundary`](@ref) top
+(open boxes are built with [`open_boundary_conditions`](@ref));
 anything else, e.g. `bottom = :noslip, top = :noflux`, throws an
 `ArgumentError` rather than failing at the first halo fill.
 """
@@ -164,19 +176,27 @@ Populate halo cells of `field` according to `bcs`
 [`Location`](@ref Aeolus.Grids.Location) so that e.g. an impermeable wall
 zeros `w` at the wall face but mirrors `u, v`.
 """
-function fill_halos!(f::Field, bcs::FieldBoundaryConditions)
+function fill_halos!(f::Field, bcs::FieldBoundaryConditions; key = f.data)
     g   = f.mesh
     d   = f.data
     loc = location(f)
-    _fill_x!(d, bcs.west,   bcs.east,   g.Hx, g.Nx, loc)
-    _fill_y!(d, bcs.south,  bcs.north,  g.Hy, g.Ny, loc)
-    _fill_z!(d, bcs.bottom, bcs.top,    g.Hz, g.Nz, loc, g)
+    _fill_x!(d, bcs.west,   bcs.east,   g.Hx, g.Nx, loc, key)
+    _fill_y!(d, bcs.south,  bcs.north,  g.Hy, g.Ny, loc, key)
+    _fill_z_mesh!(d, bcs.bottom, bcs.top, g.Hz, g.Nz, loc, key, g)
     return f
 end
 
-# The z fill with the mesh: only the fixed-gradient top needs the level
-# heights; every other pair is the mesh-free method.
-_fill_z!(d, bot, top, Hz, Nz, loc, g) = _fill_z!(d, bot, top, Hz, Nz, loc)
+# `key` identifies the field to boundary conditions that hold per-field
+# data ([`OpenBoundary`](@ref)): a scratch field filled on behalf of
+# another (an implicit solver's search direction) passes that field's
+# array. Every other BC ignores it.
+_fill_x!(d, a, b, H, N, loc::Location, key) = _fill_x!(d, a, b, H, N, loc)
+_fill_y!(d, a, b, H, N, loc::Location, key) = _fill_y!(d, a, b, H, N, loc)
+_fill_z!(d, a, b, H, N, loc::Location, key) = _fill_z!(d, a, b, H, N, loc)
+
+# The z fill with the mesh: only the fixed-gradient top (#254) needs the
+# level heights; every other pair is the mesh-free, key-aware method.
+_fill_z_mesh!(d, bot, top, Hz, Nz, loc, key, g) = _fill_z!(d, bot, top, Hz, Nz, loc, key)
 
 # --- X direction ---------------------------------------------------------
 
@@ -271,7 +291,47 @@ function _fill_z!(d::AbstractArray{T,3}, ::ImpermeableWall, ::ImpermeableWall,
 end
 
 include("boundary_conditions/noslip_wall.jl")   # P59-a (#172)
+include("boundary_conditions/open_boundary.jl") # N-open-b (#255)
 include("boundary_conditions/free_stream.jl")   # P59-d (#185)
 include("boundary_conditions/gradient_top.jl")  # N-parent-b (#254)
+
+# =========================================================================
+# Pressure-Poisson boundary kind of a velocity face (N-open-a, #251)
+# =========================================================================
+
+"""
+    axis_poisson_bc(face::AbstractBC) -> Symbol
+
+The boundary condition the pressure correction `φ` of a projection method
+obeys on a face whose *velocity* boundary condition is `face`:
+
+* `:periodic` for [`Periodic`](@ref);
+* `:neumann` (`∂φ/∂n = 0`) for every face on which the normal velocity is
+  prescribed and the projection must leave it unchanged —
+  [`ImpermeableWall`](@ref), [`NoSlipWall`](@ref), [`NoFlux`](@ref),
+  and every [`AbstractOpenBoundary`](@ref) — [`FreeStreamBoundary`](@ref)
+  (prescribed transpiration) and [`OpenBoundary`](@ref), whose normal
+  velocity comes from boundary data. Because
+  `u^{n+1}·n = u^*·n − Δt ∂φ/∂n`, the face keeps its prescribed value
+  exactly when `∂φ/∂n = 0`.
+
+A new face type that prescribes the normal velocity extends this with
+`BoundaryConditions.axis_poisson_bc(::MyBC) = :neumann`. Types with no
+method (e.g. [`ValueBC`](@ref), [`FluxBC`](@ref), which are scalar
+conditions and say nothing about the normal velocity) throw an
+`ArgumentError`, so a pressure solver is never silently built for the
+wrong problem. `Simulations._default_solver` and the
+`poisson_axis_bcs(bcs)` of `PressureSolvers` read the six faces through
+this function.
+"""
+axis_poisson_bc(::Periodic)           = :periodic
+axis_poisson_bc(::ImpermeableWall)    = :neumann
+axis_poisson_bc(::NoSlipWall)         = :neumann
+axis_poisson_bc(::NoFlux)             = :neumann
+axis_poisson_bc(::AbstractOpenBoundary) = :neumann   # OpenBoundary, FreeStreamBoundary
+axis_poisson_bc(bc::AbstractBC) =
+    throw(ArgumentError("no pressure-Poisson boundary kind is defined for a " *
+                        "$(nameof(typeof(bc))) velocity face; define " *
+                        "BoundaryConditions.axis_poisson_bc(::$(nameof(typeof(bc))))"))
 
 end # module
