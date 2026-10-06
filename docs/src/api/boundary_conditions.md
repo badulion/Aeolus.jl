@@ -175,3 +175,15 @@ open-boundary data and replaces only the gradient top by `FluxBC(0)`.
 ```@docs
 Aeolus.BoundaryConditions.gradient_free_bcs
 ```
+
+## Near the open faces (N-open-d, #262)
+
+The one BC-aware neighbour index (it replaces the periodic `mod1` wraps
+of code that must also run in an open domain) and the solid points of an
+open face a building touches. Theory:
+[Near the open faces](../theory/fractional_step.md#Near-the-open-faces-(N-open-d)).
+
+```@docs
+Aeolus.BoundaryConditions.neighbor_index
+Aeolus.BoundaryConditions.mark_open_boundary_solids!
+```
