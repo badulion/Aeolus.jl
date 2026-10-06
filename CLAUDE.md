@@ -57,55 +57,29 @@ That is the point of asking for them — do not squash them yourself.
 - [ ] Validation numbers measured and quoted in the PR body
 - [ ] No new export collisions (see below)
 - [ ] Documentation updated — see below
-- [ ] New physics is wired into the Berlin example — see below
+- [ ] New physics is tested on its own (module tests, synthetic setups) — see below
 
-## New physics lands in the Berlin example
+## Physics is tested on its own
 
-The Berlin (Alexanderplatz) run, `examples/urban/alexanderplatz_diurnal.jl`,
-is the flagship. It should exercise **all** of the physics in `src/`. A
-module that is validated as a point or column model but never coupled
-to the 3-D run is not done.
+Every piece of physics is tested **in its own module's tests**, with small
+synthetic setups (analytic limits, conservation, published benchmarks) —
+not through the Berlin case. The Berlin (Alexanderplatz) run,
+`examples/urban/alexanderplatz_diurnal.jl`, is an **example**: couple new
+physics into it when that makes sense, but nothing requires it, and it has
+no test suite of its own (maintainer decision, 2026-10-06).
 
-In every PR that adds or changes physics:
+**Transition until #320 lands.** The `test/berlin_*.jl` files, including
+`berlin_coverage.jl` and `berlin_smoke.jl`, still run until #320 moves
+their physics checks into module tests and deletes them (after the nesting
+epic #246 merges). Meanwhile:
 
-- Wire it into the Berlin run, **on by default**. If it is a genuine
-  alternative (P3 vs Kessler) or too expensive to run every step, put it
-  behind an option or a cadence and quote the measured cost.
-- Replace the example's own copy of that physics rather than running
-  both. The one-source-of-truth rule applies to examples too.
-- Quote one Berlin diagnostic in the PR body showing the coupling does
-  something physical (e.g. an energy-budget term, a facade temperature,
-  a park's latent heat flux).
-- Keep the Berlin smoke test (`test/berlin_smoke.jl`: every coupling
-  and option, 12 steps, energy and water ledgers must close) green, and
-  remove your module from `BERLIN_PENDING` (and `BERLIN_PENDING_FROZEN`)
-  in `test/berlin_coverage.jl`.
-
-The suite enforces this (`test/berlin_coverage.jl`, `test/berlin_smoke.jl`):
-
-- Every src module is coupled, exempt or pending. `BERLIN_EXEMPT` and
-  `BERLIN_PENDING` are frozen against literal snapshots: they may only
-  shrink, so a new module must be coupled. Exemptions are for
-  non-physics infrastructure and scaffolds only.
-- Every addon coupling is `is_default = true`; every slot has one
-  default provider, not an `:off` switch; `CaseConfig()` and every
-  scenario run them all. Off-by-default addons need a frozen,
-  reasoned entry in `BERLIN_DEFAULT_OFF` (empty today).
-- A module only a non-default provider runs (an alternative: P3 vs
-  Kessler) needs a frozen, reasoned entry in `BERLIN_OPTION_ONLY`.
-- The smoke test's "everything on" runs must enable every addon and
-  every default provider.
-
-Growing any frozen list is the maintainer's call, agreed in the issue —
-never a way to get green.
-
-**How to add a coupling** (one file under `examples/urban/couplings/`,
-`register!`, `modules_used`, `budget!`, `smoke_check`/`smoke_variants`):
-[`docs/src/design/berlin_case.md`](docs/src/design/berlin_case.md).
-
-Exceptions (numerics the solver cannot use yet, physics with no urban
-meaning) are stated in the PR body with the reason, never skipped
-silently.
+- Do not add new `berlin_*` tests; put new physics tests in module tests.
+- If `berlin_coverage.jl` fails only because a new module is neither
+  coupled nor listed, add it to `BERLIN_PENDING` and
+  `BERLIN_PENDING_FROZEN` with the reason "awaiting #320". Growing the
+  frozen lists is allowed for this purpose only.
+- Existing Berlin tests must stay green; if one breaks, fix the code or
+  state why the expectation was wrong, as for any test.
 
 ## Documentation is part of done
 
@@ -187,7 +161,7 @@ weeks because nobody viewed the image at size.
 
 ```
 src/            55 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
-test/           runtests.jl + era*_*.jl + berlin_*.jl, 80,661 tests
+test/           runtests.jl + era*_*.jl (+ berlin_*.jl until #320)
 examples/       worked cases; examples/urban/ is the flagship
 docs/src/       theory, design, API reference
 .worktrees/     agent worktrees (gitignored)
