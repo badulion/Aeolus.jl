@@ -1723,6 +1723,13 @@ PALM's urban-LES default and the only closure here whose mixing responds
 prognostically to stratification (its ``0.76\sqrt e/N`` length scale; no
 stability function is applied on top of it).
 
+Not wrapping it in `StabilityCorrected` is by design. `:tke` has none of
+that wrapper's ``κ_h ≠ κ_v`` anisotropy (one ``Δ``, as in PALM): at
+``dx/dz = 2.5`` it mixes 3.39× more vertically and 1.84× less
+horizontally than `StabilityCorrected` Smagorinsky of equal ``C_s``, and
+no `:isentropic` tensor is offered
+([details](../theory/sgs_tke.md#The-model)). Moist ``N^2``: #239.
+
 * The closure is the `sgs` of every dynamics step, so the cores evaluate
   ``ν_t = c_k l\sqrt e``, ``κ_t = (1 + 2l/Δ)ν_t`` from the committed ``e``
   and commit the sources (shear production, the exact dual of the SGS

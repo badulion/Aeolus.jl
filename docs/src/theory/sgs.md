@@ -424,7 +424,15 @@ eddy-viscosity closure (`StaticSmagorinsky`, `DynamicSmagorinsky`,
 * **Not every closure is wrapped.** A closure with its own buoyancy term
   (the anisotropic minimum-dissipation model, P55-d) or its own length
   scale (prognostic TKE, P56-b) already accounts for the stratification;
-  the constructor accepts eddy-viscosity closures only.
+  the constructor accepts eddy-viscosity closures only. This is by
+  design, not a gap: the TKE closure also has no ``\ell_h, \ell_v``
+  anisotropy (one ``\Delta = (\Delta x\Delta y\Delta z)^{1/3}``, as in
+  Deardorff 1980 and PALM), so on the Berlin grid its neutral equilibrium
+  mixes ``1/\ell_v = 3.39\times`` more vertically and
+  ``\ell_h = 1.84\times`` less horizontally than this wrapper around a
+  Smagorinsky closure of the same ``C_s``
+  ([details](sgs_tke.md#The-model)); the rotated tensor of
+  `IsentropicDiffusion` is not offered for it either.
 
 The four fields reach every core through the contract defaults: the
 stress form ``\partial_j(2\nu_{ij}S_{ij})`` with ``\nu_h, \nu_v`` (P55-b,
@@ -1227,7 +1235,13 @@ Its shear production is the exact discrete dual of the momentum operator
 above, so the resolved kinetic energy the closure removes is the energy
 ``e`` gains; its neutral equilibrium is this page's model with
 ``C_s = 0.194``; its stability length ``0.76\sqrt e/N`` gives a critical
-Richardson number of 0.233, so no stability function is applied to it.
+Richardson number of 0.233 (in equilibrium; ``ν_t`` stays positive while
+``e`` decays in a transient), so no stability function is applied to it
+and `StabilityCorrected` does not wrap it — by design, not a gap. It has
+no ``κ_h ≠ κ_v`` anisotropy either (one filter width ``Δ``, as in PALM):
+on the Berlin grid it mixes about 3.4× more vertically and 1.84× less
+horizontally than `StabilityCorrected` Smagorinsky of equal ``C_s``. Its
+``N^2`` misses the moist-adiabatic stability of saturated air (#239).
 In the CBC benchmark above it decays too fast (−9.4 % / −26.9 % at 32³).
 Everything else is on [Prognostic SGS TKE](sgs_tke.md).
 

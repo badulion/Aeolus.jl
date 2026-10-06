@@ -100,7 +100,9 @@ gitignored; **do not remove that entry**.
 
 Everything else is safe: `test/runtests.jl` and `docs/make.jl` use
 explicit file and module lists rather than recursive globs, so neither
-will wander into a worktree. This was checked rather than assumed.
+will wander into a worktree. This was checked rather than assumed. The
+parallel runner reads the same include list, and writes its logs to
+`.testruns/`, which is gitignored too.
 
 ### Cleaning up
 
@@ -143,7 +145,8 @@ git commit -m "P3: wire into Aeolus.jl, add to runtests, resolve export collisio
 Then the gate, and only then the PR:
 
 ```bash
-julia --project=. test/runtests.jl      # must be green
+julia --project=. test/run.jl                           # fast tier: must be green
+julia --project=. test/run.jl --only era4_icenucleation.jl  # full-tier files of the physics you touched
 git push -u origin issue/42-p3-microphysics
 gh pr create --base master --title "Phase 40 — P3 microphysics (#42)" --body "..."
 ```
@@ -217,12 +220,34 @@ in the whole PR.
 
 ## Testing standards
 
-There is no CI yet. The gate is that the agent runs the full suite and
-reports the result honestly in the PR.
+There is no CI yet. The gate is that the agent runs the suite and
+reports the result honestly in the PR. **Fast tier for PRs, full tier
+at merge:**
 
 ```bash
-julia --project=. test/runtests.jl
+julia --project=. test/run.jl                          # fast tier, parallel: the PR gate
+julia --project=. test/run.jl --only <file>.jl         # a full-tier file you affected
+AEOLUS_TEST_TIER=full julia --project=. test/run.jl    # full tier: the merge train
+julia --project=. test/runtests.jl                     # serial, same tier selection
 ```
+
+- The **fast tier** (default) is every test file except the validation
+  mini-simulations tagged `tier = "full"` in `test/test_tags.toml`. It
+  keeps every module covered by conservation, analytic and unit checks
+  and the Berlin smoke test, and runs in about 5 minutes on the 24-core
+  machine. A PR needs it green.
+- The **full tier** adds the validation runs (GABLS, channels, flat
+  plate, CBC decay, urban and heterogeneous-surface campaigns). The merge
+  train runs it before merging. If your change touches physics that a
+  full-only file validates, run that file yourself and quote it: the
+  merge train is not the place to find out.
+- `test/runtests.jl`'s include list stays the single list of test files.
+  A new file needs its include line and nothing else; tag it only if it
+  is a full-only validation run (with a one-line reason saying which fast
+  file keeps the module covered) or timing-sensitive (`exclusive`).
+
+The runner, its options and the tag table are described in
+[`docs/src/testing.md`](src/testing.md).
 
 **Test physics, not execution.** A test asserting a function returns
 without error is nearly worthless. Assert conservation laws, analytic
@@ -366,41 +391,24 @@ Before adding a function, check whether it already exists under another
 name. A collision scan across all modules takes a minute and has caught
 a real conflict every time it has been run.
 
-### New physics lands in the Berlin example
+### Physics is tested on its own
 
-After Era V, the Berlin run called fewer than half of the physics
-modules in `src/`, several of them for only one or two functions.
-Soil, canopy drag, glazing and the building energy model were wired in.
-Per-facet wall conduction, the surface-exchange contract, photosynthesis,
-snow, water surfaces, tiles, the Era III radiation solvers and most of
-Era IV's microphysics were not.
-Every one of those modules was tested, but on its own. A module that is
-never coupled to the 3-D run hides a whole class of bugs: the Era V
-integration branch found two cross-module defects that no module's own
-tests could see. It also hides the physics from users, who run the
-example, not the unit tests.
+Physics is tested in its own module's tests, with small synthetic setups
+(analytic limits, conservation, published benchmarks). The Berlin run is
+an **example**, not a test harness: coupling new physics into it is
+welcome where it makes sense, but not required, and the example has no
+test suite of its own.
 
-The rule: **a PR that adds or changes physics wires it into the Berlin
-run in the same PR.**
-
-What counts as wired in:
-
-- The run calls the `src/` implementation. A copy in the example does
-  not count, and the example's old version of the same physics is
-  removed (one source of truth applies to examples).
-- It is **on by default**. Alternatives (Kessler, P3, superdroplets)
-  and expensive schemes may sit behind an option or a cadence. The PR
-  then quotes the measured cost per simulated hour. The option must be
-  exercised by the Berlin smoke test (`test/berlin_smoke.jl`), which
-  derives its runs from the coupling registry, and the module must come
-  off the pending list of the coverage test (`test/berlin_coverage.jl`).
-  How to add a coupling, step by step: `docs/src/design/berlin_case.md`.
-- The PR body quotes one diagnostic from the Berlin run showing the
-  coupling does something physical, with its value.
-
-Legitimate exceptions are numerics the solver cannot yet use and
-physics with no meaning in an urban scene. State them in the PR body
-with the reason. Do not skip them silently.
+*History.* From the end of Era V until 2026-10-06 the rule was the
+opposite: every physics PR had to wire its module into the Berlin run,
+enforced by `test/berlin_coverage.jl` (frozen coverage lists) and
+`test/berlin_smoke.jl`. It found real cross-module defects, but the
+Berlin tests grew to about 15 minutes of suite time spent mostly
+rebuilding the Berlin geometry, and they tested `src/` physics
+indirectly. The maintainer dropped the rule; #320 moves every physics
+check from `test/berlin_*.jl` into module tests and deletes those files
+after the nesting epic (#246) merges. Until then, see the transition
+note in CLAUDE.md.
 
 ### No binary dependencies
 
@@ -453,6 +461,11 @@ git worktree prune
 **An issue is bigger than expected.** Say so on the issue, split it, and
 open a PR for the part that is finished. A large PR that touches six
 subsystems cannot be reviewed meaningfully.
+
+**A full-tier file fails at merge but the fast tier was green.** The
+log path is printed in the runner's summary. Rerun that file alone
+(`test/run.jl --only <file>`) to rule out load: files tagged
+`exclusive` assert wall-clock budgets and must not share the machine.
 
 **The suite fails on `master`.** Stop and report it. Do not build on a
 red baseline — you will not be able to tell your failures from the
