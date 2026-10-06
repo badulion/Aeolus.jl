@@ -201,7 +201,13 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     mshf_beyond::Matrix{Bool}  # z_ref/L beyond the MSHF point: the very stable (collapsed) branch
     mshf_worst::Float64        # max ratio of the MOST fluxes of the step's start, all columns and steps
     mshf_worst_delivered::Float64 # the same for the fluxes step_surface! returned (linearised soil skin)
-    mshf_time::Float64         # wall time spent in the MSHF maximisations (s)
+    mshf_time::Float64         # time spent in the MSHF maximisations, summed over columns (s)
+    # KA-m (#301): the columns grouped by concrete surface type (one launch
+    # per group), and per-column terms of the surface step (rows: columns
+    # in column-major order; store_err, mshf_worst, mshf_worst_delivered,
+    # mshf time) folded after the launches
+    groups::Vector{Any}
+    colterms::Matrix{Float64}
 end
 
 coupling_name(::Type{SurfaceExchangeMOST}) = :surface_exchange
@@ -311,7 +317,7 @@ function build(::Type{SurfaceExchangeMOST}, case, o)
                                (refine = Int(o.dynamic_refine), filter = Symbol(o.dynamic_filter),
                                 C_d = Float64(o.dynamic_C_d)), 0.0, z(), z(),
                                fill(NaN, Nx, Ny), fill(NaN, Nx, Ny), fill(false, Nx, Ny),
-                               -Inf, -Inf, 0.0)
+                               -Inf, -Inf, 0.0, Any[], zeros(Nx * Ny, 4))
 end
 
 """
@@ -449,6 +455,7 @@ function init!(c::SurfaceExchangeMOST, case)
         bus.dew_mask[I] = moisture_availability(s) == 0
         c.tble === nothing || (c.tble.z0[I] = roughness_lengths(s).z0m)
     end
+    c.groups = surface_groups(bus.surface)
     c.dynamic && (c.dyn = build_dynamic_roughness(c, case))
     if case.cfg.verbose
         kinds = Dict{String,Int}()
@@ -464,17 +471,56 @@ function init!(c::SurfaceExchangeMOST, case)
 end
 
 """
+    SurfaceGroup{S}
+
+The columns of one concrete surface type `S`: the surfaces themselves
+(`surfs[n]`, the objects of `bus.surface`) and their columns (`ids[n]`).
+[`step_all_surfaces!`](@ref) launches one `foreach_column!` per group, so
+every launch calls `step_surface!` on one concrete type (no dynamic
+dispatch per column; the layout a GPU backend will need, KA-m #301).
+"""
+struct SurfaceGroup{S}
+    surfs::Vector{S}
+    ids::Vector{CartesianIndex{2}}
+end
+
+"The columns of `surface` grouped by concrete type, each group in column-major order."
+function surface_groups(surface::AbstractMatrix)
+    by = Dict{DataType,Vector{CartesianIndex{2}}}()
+    order = DataType[]
+    for I in CartesianIndices(surface)
+        s = surface[I]
+        s === nothing && continue
+        T = typeof(s)
+        haskey(by, T) || (by[T] = CartesianIndex{2}[]; push!(order, T))
+        push!(by[T], I)
+    end
+    return Any[SurfaceGroup{T}(T[surface[I] for I in by[T]], by[T]) for T in order]
+end
+
+# The work of one surface column in grid-point equivalents (a soil column's
+# implicit heat and water solve plus two MOST root solves and two MSHF
+# maximisations, tens of µs): the serial threshold of the launch counts it.
+const SURFACE_WEIGHT = 1024
+
+"""
     step_all_surfaces!(c, case)
 
 Advance every column's surface by `c.P` under the forcing of its first
 air cell and store the fluxes it returns (held until the next call).
+
+The columns are independent (each owns its surface, its workspace and its
+entries of the bus and of `c`), so they run as one `foreach_column!` work
+item each, one launch per concrete surface type ([`SurfaceGroup`](@ref)).
+What the old loop accumulated across columns — the worst storage error,
+the worst MSHF ratios, the MSHF time — each column writes to its row of
+`c.colterms`, folded in column-major order afterwards: the same bits as
+the serial loop, at every thread count (KA-m, #301).
 """
 function step_all_surfaces!(c::SurfaceExchangeMOST, case)
     bus, mesh = case.bus, case.mesh
     θ = interior_view(case.sim.θ)
-    u, v = interior_view(case.sim.u), interior_view(case.sim.v)
     qv = interior_view(tracer(case, :qv))
-    Nx, Ny, dz = mesh.Nx, mesh.Ny, mesh.dz
     P = c.P
     # the air has received the fluxes of the interval that ends now for
     # τ_interval seconds; it must be P (not checked before the first step)
@@ -484,17 +530,56 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
     dyn = c.dyn
     if dyn !== nothing
         t0 = time()
-        ucs, vcs = c.ucs, c.vcs
-        @inbounds for j in 1:Ny, i in 1:Nx
-            k = min(bus.k_air[i, j], mesh.Nz)
-            ucs[i, j], vcs[i, j] = centre_wind(case.sim, i, j, k)   # BC-aware (#262)
-        end
-        update_dynamic_roughness!(dyn, ucs, vcs, bus.z_ref)
+        _dynamic_roughness_step!(dyn, c, case)
         c.t_dyn += time() - t0
     end
-    @inbounds for j in 1:Ny, i in 1:Nx
-        s = bus.surface[i, j]
-        s === nothing && continue
+    T = c.colterms
+    view(T, :, 1:3) .= -Inf          # max folds: a column without a surface adds nothing
+    view(T, :, 4) .= 0.0
+    dz0 = dyn === nothing ? nothing : dyn.z0
+    b = Aeolus.Backends.backend(bus.Ts)
+    for g in c.groups
+        _step_surface_group!(b, g, c, case, bus, θ, qv, P, dz0)
+    end
+    c.store_err = foldl(max, view(T, :, 1); init = c.store_err)
+    c.mshf_worst = foldl(max, view(T, :, 2); init = c.mshf_worst)
+    c.mshf_worst_delivered = foldl(max, view(T, :, 3); init = c.mshf_worst_delivered)
+    c.mshf_time += ordered_sum(view(T, :, 4))
+    c.stepped = true
+    c.t_next += P
+    c.nsurface_steps += 1
+    return nothing
+end
+
+# the first-air-cell wind of every column (pointwise), then the dynamic α
+function _dynamic_roughness_step!(dyn, c, case)
+    bus, mesh = case.bus, case.mesh
+    foreach_column!(Aeolus.Backends.backend(c.ucs), _centre_wind_column!, (1:mesh.Nx, 1:mesh.Ny),
+                    c.ucs, c.vcs, case.sim, bus.k_air, mesh.Nz)
+    update_dynamic_roughness!(dyn, c.ucs, c.vcs, bus.z_ref)
+    return nothing
+end
+
+@inline function _centre_wind_column!(i, j, ucs, vcs, sim, k_air, Nz)
+    @inbounds k = min(k_air[i, j], Nz)
+    @inbounds ucs[i, j], vcs[i, j] = centre_wind(sim, i, j, k)   # BC-aware (#262)
+    return nothing
+end
+
+_step_surface_group!(b, g::SurfaceGroup, c, case, bus, θ, qv, P, dz0) =
+    foreach_column!(b, _surface_column!, (1:length(g.ids),), g.surfs, g.ids, c, case, bus,
+                    θ, qv, P, dz0; weight = SURFACE_WEIGHT)
+
+# One surface column (the body of the old serial loop). Writes only column
+# I of the bus and of `c`, its own surface, and row `lin` of c.colterms.
+function _surface_column!(n, surfs, ids, c, case, bus, θ, qv, P, dz0)
+    @inbounds begin
+        I = ids[n]
+        s = surfs[n]
+        s === bus.surface[I] ||
+            error("surface_exchange: bus.surface[$I] was replaced after init! (the surface groups are stale)")
+        i, j = Tuple(I)
+        lin = LinearIndices(bus.k_air)[I]
         k = bus.k_air[i, j]
         q = qv[i, j, k]
         uc, vc = centre_wind(case.sim, i, j, k)                  # BC-aware (#262)
@@ -510,10 +595,10 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         E0 = surface_store_energy(s)
         # P58-e: the Monin–Obukhov fluxes of the skin at the start of the
         # step, before step_surface! (which may linearise them in T_skin)
-        c.mshf_time += @elapsed (f_most = _most_fluxes(s, f, c.U_min))
+        tm = @elapsed (f_most = _most_fluxes(s, f, c.U_min))
         fl = _step_one(s, f, P, Q, c.U_min)
         E1 = surface_store_energy(s)
-        E0 === nothing || (c.store_err = max(c.store_err, abs((E1 - E0) / P - fl.G)))
+        E0 === nothing || (c.colterms[lin, 1] = abs((E1 - E0) / P - fl.G))
         bus.T_air[i, j], bus.q_air[i, j], bus.U[i, j] = T_air, q, U
         bus.Rn[i, j], bus.H[i, j], bus.LE[i, j] = fl.Rn, fl.H, fl.LE
         bus.G[i, j], bus.E[i, j] = fl.G, fl.E
@@ -528,17 +613,17 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         c.L[i, j] = L
         # (z0m = :dynamic: the law's roughness is the dynamic one; L is the
         # stability of this surface step, recovered with the surface's z0m)
-        c.laws[i, j] = MOSTWallLaw(dyn === nothing ? z0m : dyn.z0[i, j], L; U_min = c.U_min)
+        c.laws[i, j] = MOSTWallLaw(dz0 === nothing ? z0m : dz0[i, j], L; U_min = c.U_min)
         # the law reproduces the surface step's u* with the table z0m; with the
         # dynamic z0 bus.u_star is the wall law's at this wind and height
-        dyn === nothing || (bus.u_star[i, j] = friction_velocity(c.laws[i, j], U, bus.z_ref[i, j]))
+        dz0 === nothing || (bus.u_star[i, j] = friction_velocity(c.laws[i, j], U, bus.z_ref[i, j]))
         # P58-e: how far the column is from its maximum sustainable heat
         # flux (Van de Wiel et al. 2012) — one 1-D maximisation per column.
         # MOST bounds the fluxes it defines (f_most) by Q_max exactly; the
         # fluxes a soil column returns are its first-order extrapolation in
         # T_skin to the step's mean skin temperature, which can overshoot
         # the maximum of the concave H(T_skin) by O(ΔT²) (tracked apart).
-        c.mshf_time += @elapsed begin
+        tm += @elapsed begin
             r = surface_mshf_ratio(BusingerDyerBeljaarsHoltslag(), f_most, f, z0m; U_min = c.U_min)
             rd = surface_mshf_ratio(BusingerDyerBeljaarsHoltslag(), fl, f, z0m; U_min = c.U_min,
                                     Q_max = r.Q_max)
@@ -546,8 +631,9 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         c.H_max[i, j] = r.H_max
         c.mshf_ratio[i, j] = r.ratio
         c.mshf_beyond[i, j] = r.ratio > 0 && bus.z_ref[i, j] / L > r.ζ_mshf
-        c.mshf_worst = max(c.mshf_worst, r.ratio)
-        c.mshf_worst_delivered = max(c.mshf_worst_delivered, rd.ratio)
+        c.colterms[lin, 2] = r.ratio
+        c.colterms[lin, 3] = rd.ratio
+        c.colterms[lin, 4] = tm
         c.U_wall[i, j] = U          # u* is the law at this wind and height until the next step
         c.h_wall[i, j] = bus.z_ref[i, j]
         c.cp[i, j] = heat_capacity_moist(qa)
@@ -564,9 +650,6 @@ function step_all_surfaces!(c::SurfaceExchangeMOST, case)
         # the extra energy delivered leaves the pending store
         c.edS[i, j] -= Q * P
     end
-    c.stepped = true
-    c.t_next += P
-    c.nsurface_steps += 1
     return nothing
 end
 
@@ -582,23 +665,29 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
     qv = interior_view(tracer(case, :qv))
     sm = case.geom.sm
     Hx, Hy, Hz, dz = mesh.Hx, mesh.Hy, mesh.Hz, mesh.dz
-    evap = 0.0
-    nsolid = 0
-    # a surface sum: the columns' contributions folded in column-major order,
-    # the canonical order of a 2-D reduction (serial; KA-b, #296)
-    @inbounds for I in CartesianIndices(bus.k_air)
-        bus.surface[I] === nothing && continue
-        i, j = Tuple(I)
-        k = bus.k_air[I]
-        sm.mask[Hx+i, Hy+j, Hz+k] && (nsolid += 1)
-        ρk = ref_density(case, k)
-        θ[i, j, k] += bus.H[I] * τ / dz * ref_θ_per_heat(case, k; cp = c.cp[I])
-        qv[i, j, k] += bus.E[I] * τ / (ρk * dz)
-        evap += bus.E[I] * τ
-    end
+    # one work item per (i, j) column, returning its evaporation and whether
+    # it wrote into a solid cell; the totals folded in column-major order —
+    # the canonical order of a 2-D sum, the old loop's (KA-m, #301)
+    Nx, Ny = size(bus.k_air)
+    parts = foreach_column!(Aeolus.Backends.backend(bus.E), _deliver_column!, (1:Nx, 1:Ny),
+                            θ, qv, bus, c.cp, sm.mask, case, Hx, Hy, Hz, dz, τ;
+                            partials = zeros(Nx * Ny, 2))
+    evap, nsolid = column_sums(parts)
     c.evap = evap / length(bus.k_air)
-    c.solid_writes += nsolid
+    c.solid_writes += Int(nsolid)
     return nothing
+end
+
+@inline function _deliver_column!(i, j, θ, qv, bus, cp, mask, case, Hx, Hy, Hz, dz, τ)
+    @inbounds begin
+        bus.surface[i, j] === nothing && return (0.0, 0.0)
+        k = bus.k_air[i, j]
+        solid = mask[Hx+i, Hy+j, Hz+k]
+        ρk = ref_density(case, k)
+        θ[i, j, k] += bus.H[i, j] * τ / dz * ref_θ_per_heat(case, k; cp = cp[i, j])
+        qv[i, j, k] += bus.E[i, j] * τ / (ρk * dz)
+        return (bus.E[i, j] * τ, solid ? 1.0 : 0.0)
+    end
 end
 
 """
