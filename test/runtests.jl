@@ -1007,6 +1007,7 @@ end
     include("era6_open_boundaries.jl")   # N-open-b: open faces, boundary-data contract, mass-flux correction (#255)
     include("era6_outflow_conditions.jl") # N-open-c: convective / Orlanski outflow, boundary_scalar_flux, outgoing vortex (#260)
     include("era6_deep_top.jl")          # N-parent-b: θ damping toward a profile, fixed-gradient θ top (#254)
+    include("era6_open_near_boundary.jl") # N-open-d: sponge toward the data, neighbor_index, solid open faces, boundary heat terms (#262)
 end
 
 # =========================================================================

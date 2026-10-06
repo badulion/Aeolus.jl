@@ -597,6 +597,95 @@ function _fill_z!(d, bot::_ZWall, top::OpenBoundary, Hz, Nz, loc::Location, key)
 end
 
 # =========================================================================
+# Solid obstacles at an open face (N-open-d, #262)
+# =========================================================================
+
+"""
+    mark_open_boundary_solids!(bcs, mask) -> bcs
+
+Tell the open faces of `bcs` where a solid obstacle (an immersed-boundary
+building, `mask` a storage-sized `Bool` array, `true` = solid, e.g.
+`IBM.SolidMask(...).mask`) touches them. For every plane of every open
+face, a boundary point is **solid** when an interior cell it borders is
+solid — the cell next to the face for the normal velocity and the
+scalars, and either of the two cells a staggered tangential component
+sits between — exactly the faces the direct-forcing IBM zeroes
+(`IBM.apply_solid_mask!`). Solid points:
+
+* take the **solid value** of the velocity, zero, in every halo layer,
+  written by [`update_open_boundaries!`](@ref) after the boundary data —
+  the data of a building cut by the box edge is never imposed on its
+  inside, and the projection sees an impermeable face there;
+* are excluded from the global mass-flux correction
+  ([`correct_boundary_mass_flux!`](@ref), N-open-b): neither counted in
+  `Q`'s area nor adjusted by `δ`, so the correction cannot push flow
+  through a wall.
+
+Scalars keep their data at solid points: with zero normal velocity no
+advective flux crosses there, and the diffusive exchange with the solid
+cell is the same as anywhere between air and a building. Call once after
+the geometry is built; the buffers are refreshed at the next
+[`update_open_boundaries!`](@ref).
+"""
+function mark_open_boundary_solids!(bcs::FieldBoundaryConditions, mask::AbstractArray{Bool,3})
+    for st in open_boundary_states(bcs)
+        m = st.mesh
+        size(mask) == (m.Nx + 2m.Hx, m.Ny + 2m.Hy, m.Nz + 2m.Hz) ||
+            throw(DimensionMismatch("mark_open_boundary_solids!: the mask must have the storage " *
+                                    "size of the mesh, $((m.Nx + 2m.Hx, m.Ny + 2m.Hy, m.Nz + 2m.Hz))"))
+        for p in st.planes
+            _mark_solid!(p, m, mask)
+        end
+        st.initialized = false
+    end
+    return bcs
+end
+
+function _mark_solid!(p::OpenPlane, m, mask)
+    Hs = (m.Hx, m.Hy, m.Hz); Ns = (m.Nx, m.Ny, m.Nz)
+    ax = p.axis
+    t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
+    loc = _loc_of(p.name)
+    nl = _normal_loc(loc)
+    cell = p.high ? Hs[ax] + Ns[ax] : Hs[ax] + 1      # the interior cell next to the face
+    @inbounds for b in 1:Ns[t2], a in 1:Ns[t1]
+        solid = false
+        for da in (nl == t1 ? (0, -1) : (0,)), db in (nl == t2 ? (0, -1) : (0,))
+            I = [0, 0, 0]
+            I[ax] = cell; I[t1] = Hs[t1] + a + da; I[t2] = Hs[t2] + b + db
+            solid |= mask[I[1], I[2], I[3]]
+        end
+        p.fluid[a, b] = !solid
+    end
+    return p
+end
+
+# Zero every velocity buffer at the solid points of its plane.
+function _apply_solid_values!(st::OpenBoundaryState{T}) where {T}
+    m = st.mesh
+    Hs = (m.Hx, m.Hy, m.Hz)
+    for p in st.planes
+        _loc_of(p.name) isa CellCenter && continue
+        all(p.fluid) && continue
+        t1, t2 = p.axis == 1 ? (2, 3) : p.axis == 2 ? (1, 3) : (1, 2)
+        @inbounds for b in axes(p.fluid, 2), a in axes(p.fluid, 1)
+            p.fluid[a, b] && continue
+            A, B = Hs[t1] + a, Hs[t2] + b
+            for c in 1:length(p.range)
+                if p.axis == 1
+                    p.data[c, A, B] = zero(T)
+                elseif p.axis == 2
+                    p.data[A, c, B] = zero(T)
+                else
+                    p.data[A, B, c] = zero(T)
+                end
+            end
+        end
+    end
+    return st
+end
+
+# =========================================================================
 # Homogeneous part (implicit solvers) and constraint rows
 # =========================================================================
 
@@ -779,7 +868,9 @@ at time `t` (length `dt`): fill every buffer from the boundary data at
 the radiation equation over `dt` (N-open-c, #260; see
 [`open_boundary_conditions`](@ref)); then apply
 [`correct_boundary_mass_flux!`](@ref) with the core's constraint weights
-([`boundary_flux_weights`](@ref)).
+([`boundary_flux_weights`](@ref)). Points a solid obstacle touches
+([`mark_open_boundary_solids!`](@ref), N-open-d #262) get zero velocity
+after the data is written, and the correction leaves them alone.
 
 The radiation update is the explicit second-order upstream form of
 `∂φ/∂t + c ∂φ/∂n = 0`, applied to every halo layer `b` outward from the
@@ -816,6 +907,7 @@ function update_open_boundaries!(sim, t::Real, dt::Real)
         radiate && _save_previous!(st)          # the buffers of the step start
         st.data === nothing ||
             boundary_values!(st.planes, st.data, t)
+        _apply_solid_values!(st)                # solid points: zero velocity (N-open-d)
         radiate && _radiate!(st, sim, dt)       # outflow points (N-open-c)
         correct_boundary_mass_flux!(st, W; t = t)
         st.initialized = true
