@@ -287,22 +287,24 @@ end
 
 """
     dew_exchange!(qv, q_dew, Ts, p, dt; dz, ρ = 1.2, C_e = 1e-3, U = 3.0,
-                  c = DEFAULT_CONSTANTS) -> H (W m⁻²)
+                  c = DEFAULT_CONSTANTS, out = nothing) -> H (W m⁻²)
 
 Apply [`dew_deposition`](@ref) column by column: `qv` is the 3-D vapour
 array (only level 1 is touched) or a 2-D array of lowest-layer values,
 `q_dew` the 2-D surface dew reservoir (kg m⁻², updated in place), `Ts`
 the 2-D surface temperature. Returns the 2-D latent heating of the
 surface, W m⁻², positive when dew forms — add it to the surface energy
-balance, not to the air.
+balance, not to the air. `H` is a new array, or `out` (overwritten) when
+given, so a time loop can avoid the allocation.
 """
 function dew_exchange!(qv::AbstractArray{<:Real}, q_dew::AbstractMatrix,
                        Ts::AbstractMatrix, p::Real, dt::Real;
                        dz::Real, ρ::Real = 1.2, C_e::Real = 1e-3,
                        U::Real = 3.0,
-                       c::ThermodynamicConstants = DEFAULT_CONSTANTS)
+                       c::ThermodynamicConstants = DEFAULT_CONSTANTS,
+                       out::Union{Nothing,AbstractMatrix} = nothing)
     Nx, Ny = size(Ts)
-    H = zeros(Float64, Nx, Ny)
+    H = out === nothing ? zeros(Float64, Nx, Ny) : fill!(out, 0)
     @inbounds for j in 1:Ny, i in 1:Nx
         q = ndims(qv) == 3 ? qv[i, j, 1] : qv[i, j]
         r = dew_deposition(q, Ts[i, j], p, dt; dz = dz, ρ = ρ, C_e = C_e,
