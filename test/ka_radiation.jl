@@ -279,4 +279,39 @@ end
             @test kr_same(fbig.flux_dn[c, :], f.flux_dn)
         end
     end
+
+    @testset "Cloud shadow: optical depth and rays per column, every backend" begin
+        mesh = RegularGrid(; size = (12, 10, 8), extent = (240.0, 200.0, 160.0), halo = (2, 2, 2))
+        rng = Xoshiro(305)
+        ql = zeros(12, 10, 8); ql[3:7, 2:6, 4:6] .= 1e-4 .* rand(rng, 5, 5, 3)
+        qi = zeros(12, 10, 8); qi[8:10, 5:9, 6:7] .= 2e-5
+        ρ = [1.2 - 0.01k for k in 1:8]
+        # transcript of the cell loop before KA-n
+        τref = similar(ql)
+        for k in 1:8, j in 1:10, i in 1:12
+            lwc = ql[i, j, k] * ρ[k] * 1000
+            iwc = qi[i, j, k] * ρ[k] * 1000
+            τref[i, j, k] = (0.15 * lwc + 0.033 * iwc) * 20.0
+        end
+        mask = falses(16, 14, 12); mask[2 + 5, 2 + 4, 3:2 + 3] .= true     # a 3-cell tower
+        kst = [Int(count(k -> mask[2 + i, 2 + j, 2 + k], 1:8)) for i in 1:12, j in 1:10]
+        sd = (0.35, -0.2, 0.6) ./ sqrt(0.35^2 + 0.2^2 + 0.6^2)
+        ref = nothing
+        for (name, b) in KR_BACKENDS
+            τ = cloud_optical_depth_column(ql, qi, ρ, 20.0; k_liq = 0.15, k_ice = 0.033, backend = b)
+            @test kr_same(τ, τref)
+            t1 = zeros(12, 10); cloud_shadow_transmittance!(t1, τ, mesh, sd; k_start = kst, backend = b)
+            t2 = zeros(12, 10); combined_shadow_transmittance!(t2, τ, mask, mesh, sd; backend = b)
+            t3 = zeros(12, 10); cloud_shadow_transmittance!(t3, τ, mesh, sd; backend = b)
+            ref === nothing && (ref = (t1, t2, t3))
+            @test kr_same(t1, ref[1]) && kr_same(t2, ref[2]) && kr_same(t3, ref[3])
+        end
+        t1, t2, t3 = ref
+        @test all(t -> 0 < t <= 1, t1) && minimum(t1) < 1
+        @test count(==(0), t2) > 0                 # the tower's building shadow
+        # a uniform layer of vertical optical depth τ transmits exactly exp(−τ/μ₀)
+        τu = fill(0.05, 12, 10, 8)
+        tu = zeros(12, 10); cloud_shadow_transmittance!(tu, τu, mesh, sd; backend = CPUBackend(threshold = 0))
+        @test all(isapprox.(tu, exp(-0.4 / sd[3]); rtol = 1e-12))
+    end
 end
