@@ -47,7 +47,8 @@ end
 
 Additive coupling (on by default), stage `:output`: the pointwise
 ``N^2``, ``|S|^2``, ``Ri_g = N^2/\\max(|S|^2, S^2_{\\min})`` and
-``f_m(Ri_g)`` of the resolved flow, and their fluid-cell plane means
+``f_m(Ri_g)`` of the resolved flow (``N^2`` of cloudy air: θ_v with the
+`ql` loading, the saturated ``N^2`` in fog, #239), and their fluid-cell plane means
 `N2`, `S2`, `fm` per level. The level's Richardson number `Ri` is the
 ratio of the plane means, ``⟨N^2⟩/⟨|S|^2⟩`` (the pointwise ratio is
 dominated by the shear-free cells, where the floor makes it huge).
@@ -71,16 +72,17 @@ of the `Rif` field above; no second Ri) and the grid Reynolds number
 `Re_grid` ``= |U_h| Δ/(ν + ⟨ν_t⟩)`` with ``|U_h|`` the plane-mean
 horizontal wind speed, ``Δ = (Δx Δy Δz)^{1/3}`` and `cfg.ν`.
 
-The velocities, θ and q_v are copied into scratch fields whose halos are
+The velocities, θ, q_v and q_l are copied into scratch fields whose halos are
 filled with the core's boundary conditions, so the diagnostic does not
 touch the model state. `ncalls` / `seconds` time the evaluation.
 """
 mutable struct TurbulenceDiag{S<:AbstractRiStability, FU, FV, FW, FC, B, BT} <: AbstractCoupling
     stability::S
-    u::FU; v::FV; w::FW; θ::FC; qv::FC
+    u::FU; v::FV; w::FW; θ::FC; qv::FC; ql::FC
     N2f::FC; S2f::FC; Rif::FC
     bcs::B; θ_bcs::BT
     fluid::Array{Bool,3}
+    p::Vector{Float64}          # storage-indexed reference pressure (cloudy-air N², #239)
     N2::Vector{Float64}
     S2::Vector{Float64}
     Ri::Vector{Float64}
@@ -121,8 +123,8 @@ function build(::Type{<:TurbulenceDiag}, case, o)
     p = case.sim                       # the core's own conditions (periodic or open, #262)
     z() = zeros(m.Nz)
     return TurbulenceDiag(turbulence_stability_family(o.stability),
-                          Field(FaceX(), m), Field(FaceY(), m), Field(FaceZ(), m), cc(), cc(),
-                          cc(), cc(), cc(), p.bcs, p.θ_bcs, fluid,
+                          Field(FaceX(), m), Field(FaceY(), m), Field(FaceZ(), m), cc(), cc(), cc(),
+                          cc(), cc(), cc(), p.bcs, p.θ_bcs, fluid, ref_pressure_storage(case),
                           z(), z(), z(), z(), Float64(o.gamma_threshold),
                           Symbol(o.gamma_normalization), zeros(Bool, m.Nx, m.Ny, m.Nz),
                           z(), z(), z(), Float64(o.relam_νt_ratio),
@@ -144,11 +146,14 @@ function turbulence_diagnostics!(c::TurbulenceDiag, case)
     copyto!(c.u.data, sim.u.data); copyto!(c.v.data, sim.v.data)
     copyto!(c.w.data, sim.w.data); copyto!(c.θ.data, sim.θ.data)
     copyto!(c.qv.data, tracer(case, :qv).data)
+    copyto!(c.ql.data, tracer(case, :ql).data)
     fill_halos!(c.u, c.bcs); fill_halos!(c.v, c.bcs); fill_halos!(c.w, c.bcs)
     fill_halos!(c.θ, c.θ_bcs)
     fill_halos!(c.qv, Aeolus.BoundaryConditions.passive_scalar_bcs(c.θ_bcs))   # not θ's top gradient
+    fill_halos!(c.ql, Aeolus.BoundaryConditions.passive_scalar_bcs(c.θ_bcs))
     cfg = case.cfg
-    buoyancy_frequency_squared!(c.N2f, c.θ, c.qv; θ₀ = cfg.θ₀, g = cfg.g)
+    # cloudy-air N² (#239): condensate loading, saturated N² in fog / cloud
+    buoyancy_frequency_squared!(c.N2f, c.θ, c.qv, c.ql; θ₀ = cfg.θ₀, g = cfg.g, p = c.p)
     gradient_richardson!(c.Rif, c.N2f, c.u, c.v, c.w)
     strain_rate_squared!(c.S2f, c.u, c.v, c.w)
     N2 = interior_view(c.N2f); Ri = interior_view(c.Rif); S2 = interior_view(c.S2f)

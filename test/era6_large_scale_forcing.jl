@@ -264,11 +264,11 @@ Main.BerlinCase.run_stage!(::_LegacyGeostrophic, case, ::Val{:body_force}, dt) =
         BC = Main.BerlinCase
         # the fixed stepper, so that the run is 100 steps (the default
         # adaptive one covers the same 200 s in 59)
-        cfg() = BC.CaseConfig(:smoke; verbose = false, output_path = nothing, nsteps = 100,
+        cfg() = BC.CaseConfig(:smoke; output_path = nothing, nsteps = 100,
                               physics = Dict{Symbol,Any}(:timestepper => :fixed),
                               options = Dict{Symbol,Any}(:geostrophic => (mode = :nudging,)))
-        new = BC.build_case(cfg(); io = devnull)
-        old = BC.build_case(cfg(); io = devnull)
+        new = BC.build_case(cfg())
+        old = BC.build_case(cfg())
         # swap the coupling of the :body_force entry for the legacy function
         bf = old.schedule[:body_force]
         i = findfirst(e -> BC.coupling_name(e.coupling) === :geostrophic, bf)

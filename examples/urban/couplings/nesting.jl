@@ -136,7 +136,7 @@ the #259 default), centred on the child.
 """
 function nest_parent_config(cfg::CaseConfig)
     o = coupling_options(NestingCoupling, cfg)
-    return ParentConfig(cfg; verbose = false, o.parent...)
+    return ParentConfig(cfg; o.parent...)
 end
 
 """
@@ -286,7 +286,7 @@ function ensure_nest!(c::NestingCoupling, case)
         c.wall_build += (time_ns() - t0) * 1e-9
         return c
     end
-    p = build_parent(c.pc; child = case, io = devnull)
+    p = build_parent(c.pc; child = case)
     pm, cm = p.mesh, case.mesh
     off = (round(Int, (cm.x0 - pm.x0) / pm.dx) + 1, round(Int, (cm.y0 - pm.y0) / pm.dy) + 1, 1)
     nest = NestedGrid(pm, cm; refinement = c.pc.refinement, offset = off)

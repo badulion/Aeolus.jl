@@ -16,6 +16,7 @@ part an agent must follow every session — is in
 - [Commit granularity](#commit-granularity)
 - [Pull requests](#pull-requests)
 - [Testing standards](#testing-standards)
+- [Continuous integration](#continuous-integration)
 - [Documentation is part of done](#documentation-is-part-of-done)
 - [Conventions with a history](#conventions-with-a-history)
 - [Recovery procedures](#recovery-procedures)
@@ -220,9 +221,10 @@ in the whole PR.
 
 ## Testing standards
 
-There is no CI yet. The gate is that the agent runs the suite and
-reports the result honestly in the PR. **Fast tier for PRs, full tier
-at merge:**
+The gate is that the agent runs the suite and reports the result
+honestly in the PR; GitHub Actions re-runs it (see
+[Continuous integration](#continuous-integration)). **Fast tier for PRs,
+full tier at merge:**
 
 ```bash
 julia --project=. test/run.jl                          # fast tier, parallel: the PR gate
@@ -271,6 +273,55 @@ implementation or the expectation is wrong. Weakening an assertion to
 reach green, without stating that the original expectation was
 physically incorrect, is the one thing that will get a PR rejected
 outright.
+
+---
+
+## Continuous integration
+
+Four workflows live in `.github/workflows/`:
+
+| Workflow | Trigger | What it does |
+| :-- | :-- | :-- |
+| `CI.yml` | every PR, push to `master` | fast tier: `julia --project=. test/run.jl` |
+| `CI.yml` | push to `master`, Mondays 03:17 UTC, manual | full tier: `AEOLUS_TEST_TIER=full` |
+| `Documenter.yml` | push to `master`, tags, PRs | builds `docs/make.jl`; deploys from `master` and tags only |
+| `CompatHelper.yml` | daily | opens PRs that bump `[compat]` entries |
+| `TagBot.yml` | registry release | tags and releases a registered version |
+
+The test jobs run Julia 1.13 on `ubuntu-latest` (4 cores, 16 GB) with
+`JOBS=4`, one thread per job and `AEOLUS_FFTW_PLANNER=estimate`. Each job
+uploads its run folder (`.testruns/ci-*`: per-file logs, `summary.txt`)
+as an artifact, so a failure can be read without rerunning it. Timeouts:
+90 min for the fast tier, 240 min for the full tier, 60 min for the docs.
+
+CI is a second check, not a replacement for running the suite yourself:
+the wall-clock assertions (`berlin_smoke.jl`, `era6_apriori_sgs.jl`) were
+calibrated on the 24-core machine, and a slow runner failing one of them
+is reported, not papered over by loosening the limit.
+
+### Documentation deployment
+
+`docs/make.jl` ends in a `deploydocs` call guarded by
+`GITHUB_ACTIONS == "true"`, so a local build never tries to push. On
+GitHub it pushes the built site to the `gh-pages` branch with the
+workflow's `GITHUB_TOKEN`: `master` becomes `dev/`, a tag `vX.Y.Z` becomes
+`vX.Y.Z/` and `stable/`. A `DOCUMENTER_KEY` secret is optional (only
+needed if the token is not allowed to push, or for TagBot to trigger the
+docs build on tags).
+
+Serving the branch is a one-time repository setting that only the
+maintainer changes (agents must not):
+
+1. Let the `Documentation` workflow run once on `master`, so the
+   `gh-pages` branch exists.
+2. **Settings → Pages → Build and deployment → Source: Deploy from a
+   branch**, branch **`gh-pages`**, folder **`/ (root)`**, Save.
+3. If the deploy step fails with a permission error: **Settings →
+   Actions → General → Workflow permissions → Read and write
+   permissions**.
+
+The site is then at <https://badulion.github.io/Aeolus.jl/dev/>
+(`stable/` appears with the first tagged release).
 
 ---
 
@@ -426,13 +477,14 @@ wheel. However, keep them to a minimum."
   usually not worth it.
 - **Do not pin versions only to avoid a JLL.** Take the version the
   resolver picks unless there is a real incompatibility.
-- **Existing in-package implementations stay.** NetCDF writer, PNG/APNG,
+- **Existing in-package implementations stay.** PNG/APNG,
   Mie scattering, the error function and Bessel functions were written
   under the old rule. They are tested and validated and are not to be
   churned in passing; replacing one with a package is fine, in a
   dedicated PR that shows the validation still holds.
 
-Current direct dependencies: FFTW, and KernelAbstractions (admitted
+Current direct dependencies: FFTW, NCDatasets and KernelAbstractions
+(admitted
 2026-10-06, #291: "single-node multithreading now, with one kernel path
 for the GPU in Phase 81"). All KernelAbstractions code lives in
 `src/Backends.jl` (`docs/src/design/ka_port.md`). Its tree resolves
@@ -440,6 +492,20 @@ for the GPU in Phase 81"). All KernelAbstractions code lives in
 `LLVMExtra_jll`; the earlier `UnsafeAtomics = "0.3"` pin that kept them
 out was lifted on 2026-10-06 (maintainer: "Allow LLVMExtra_jll"). It
 costs about 37 ms of `using Aeolus` (215 → 252 ms).
+
+NCDatasets (admitted 2026-10-06, #310) replaced the in-package NetCDF-3
+reader and writer (`NetCDFIO`, 566 lines). NetCDF-4/HDF5 is the format of
+ERA5, ICON, COSMO and PALM and of the tools that read them; it gives the
+output lossless compression, chunking and no 4 GiB limit per record, none
+of which a hand-written writer could reasonably provide. Its tree brings
+the binary `NetCDF_jll` and `HDF5_jll`. It costs about 270 ms of
+`using Aeolus` (449 → 717 ms, minimum of three fresh processes,
+2026-10-06). On the 24 h Berlin output of 2026-10-04 (48 records,
+64×64×32) it reduces the file from 316 MB (NetCDF-3) to 185 MB, bit for
+bit identical on read-back. All of Aeolus' output policy (NetCDF-4, deflate level 4
+with shuffle, chunks of one level and one record) is in `src/NCIO.jl`;
+reading is plain NCDatasets. GRIBDatasets, which #310 also admitted, is
+added with the first code that reads GRIB (the ERA5 preprocessors, #311).
 
 ### Look at what you produce
 
@@ -450,8 +516,8 @@ never viewed at size. `add_label!` substituted a space for unknown
 characters, so it failed silently — it now renders `?`.
 
 The same applies to data: a writer whose output cannot be read back is
-not a working format, which is why `NetCDFIO` ships a reader that
-re-derives offsets independently of the writer.
+not a working format, which is why `test/ncio.jl` reads every output
+variable back and checks it bit for bit.
 
 ---
 

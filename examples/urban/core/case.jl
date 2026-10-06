@@ -55,7 +55,6 @@ mutable struct Case{M, S, G<:Geometry}
     schedule::Dict{Symbol,Vector{ScheduleEntry}}
     clock::Clock
     output::Any
-    io::IO
     body_force::Union{Nothing,Function}
     post_predictor::Union{Nothing,Function}
     timing::Dict{Tuple{Symbol,Symbol},Float64}
@@ -136,7 +135,7 @@ boussinesq_core(cfg::CaseConfig, mesh; kw...) =
     BoussinesqSimulation(mesh; core_parameters(cfg, mesh)..., θ₀ = cfg.θ₀, moisture = false, kw...)
 
 """
-    build_case(cfg; io = stdout) -> Case
+    build_case(cfg) -> Case
 
 Build the mesh, the geometry, the dynamical core (`build_core` of the
 provider of the `:core` slot) and its initial state,
@@ -144,15 +143,16 @@ the surface bus and the core tracers (`qv`, `ql`, `qr`), then the
 couplings `cfg` enables (see [`selected_couplings`](@ref)): each is
 constructed with `build(C, case, opts)`, then every `init!` runs
 (in `init_priority` order, then registry order: the nest first), and
-finally the stage schedule is assembled.
+finally the stage schedule is assembled. The setup summary (buildings,
+surface classes, couplings) is a `Debug` record (`subsystem = :berlin`).
 """
-function build_case(cfg::CaseConfig; io::IO = stdout)
+function build_case(cfg::CaseConfig)
     # The run's compute backend (KA-a, #294): the default for every field
     # allocated below, BLAS pinned to one thread when Julia is threaded.
     init_threads!(cfg.backend)
     Nx, Ny, Nz = cfg.size
     mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
-    geom = build_geometry(cfg, mesh; io = io)
+    geom = build_geometry(cfg, mesh)
 
     # Hydrostatic reference p̄, ρ̄ (core/reference_state.jl), built before
     # the core: the sound-proof cores use it as their base state, the
@@ -181,7 +181,7 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time())
     case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), ledger, ref,
                 AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
-                nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
+                nothing, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
                 top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref))
     # a building the box edge cuts is solid on the open faces (#262): zero
     # velocity there, and no mass-flux correction through it; then the open
@@ -219,13 +219,13 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     end
     build_schedule!(case)
 
-    if cfg.verbose
-        sfc = geom.sfc
-        @printf(io, "%s OSM: %d buildings; solid=%d wall=%d glass=%d\n",
-                cfg.name, length(geom.city.buildings), count(geom.sm.mask),
-                count(==(SURFACE_WALL), sfc), count(==(UInt8(6)), sfc))
-        @printf(io, "Couplings: %s\n", join(string.(coupling_name.(case.couplings)), ", "))
-    end
+    sfc = geom.sfc
+    @debug(@sprintf("%s OSM: %d buildings; solid=%d wall=%d glass=%d\nCouplings: %s",
+                    cfg.name, length(geom.city.buildings), count(geom.sm.mask),
+                    count(==(SURFACE_WALL), sfc), count(==(UInt8(6)), sfc),
+                    join(string.(coupling_name.(case.couplings)), ", ")),
+           subsystem = :berlin, domain = current_domain(), event = :built,
+           buildings = length(geom.city.buildings))
     return case
 end
 

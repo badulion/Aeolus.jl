@@ -92,10 +92,12 @@ Groups of keywords:
   CFL ≤ 1 per stage) keeps its guarantee; the other constraints are the
   child's `default_options(AdaptiveStep)`.
 * `moisture` — carry qv (default true).
-* `verbose`.
+
+What is printed is the installed logger's choice (#347): the build summary
+is a `Debug` record, each output of [`run_parent!`](@ref) an `Info` one.
 """
 Base.@kwdef mutable struct ParentConfig
-    child::CaseConfig                    = CaseConfig(; verbose = false, output_path = nothing)
+    child::CaseConfig                    = CaseConfig(; output_path = nothing)
     # placement
     center::Union{Nothing,NTuple{2,Float64}} = nothing   # nothing: on the child
     # grid
@@ -140,7 +142,6 @@ Base.@kwdef mutable struct ParentConfig
     stepper::Symbol                      = :rk3
     C_advective::Float64                 = 0.9
     moisture::Bool                       = true
-    verbose::Bool                        = true
 end
 
 ParentConfig(child::CaseConfig; kw...) = ParentConfig(; child = child, kw...)

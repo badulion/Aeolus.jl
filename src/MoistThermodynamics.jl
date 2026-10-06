@@ -86,6 +86,7 @@ export ThermodynamicConstants, DEFAULT_CONSTANTS,
        moist_adiabatic_lapse_rate, dry_adiabatic_lapse_rate,
        lifting_condensation_level, level_of_free_convection,
        cape_cin, buoyancy, brunt_vaisala_frequency_moist,
+       saturated_buoyancy_frequency_squared,
        supersaturation, supersaturation_ice,
        kelvin_coefficient, kohler_supersaturation, kohler_critical_point,
        kohler_equilibrium_radius, surface_tension_water,
@@ -305,7 +306,12 @@ function saturation_specific_humidity(T::Real, ρ_or_p::Real,
     if use_density
         return es / (float(ρ_or_p) * R_v(c) * float(T))
     end
-    p = float(ρ_or_p)
+    return _saturation_specific_humidity(T, es, ρ_or_p, c)
+end
+
+# q_sat from e_s at pressure p (the pressure form of saturation_specific_humidity)
+function _saturation_specific_humidity(T::Real, es::Real, p::Real, c::ThermodynamicConstants)
+    p = float(p)
     ε = molmass_ratio(c)
     # Once e_s reaches ambient pressure the water boils: there is no
     # saturated *mixture* any more, the air is all vapour, and q_sat = 1.
@@ -339,6 +345,11 @@ function saturation_mixing_ratio(T::Real, p::Real,
                                  over::Symbol = :liquid)
     es = over === :liquid ? saturation_vapor_pressure(T, c) :
                             saturation_vapor_pressure_ice(T, c)
+    return _saturation_mixing_ratio(es, p, c)
+end
+
+# r_sat from e_s at pressure p
+function _saturation_mixing_ratio(es::Real, p::Real, c::ThermodynamicConstants)
     den = float(p) - es
     den <= 0 && return float(Inf)
     return molmass_ratio(c) * es / den
@@ -1070,8 +1081,12 @@ polar one.
 function moist_adiabatic_lapse_rate(T::Real, p::Real,
                                     c::ThermodynamicConstants = DEFAULT_CONSTANTS)
     Tk = float(T)
-    rs = saturation_mixing_ratio(Tk, p, c)
-    Lv = latent_heat_vapor(Tk, c)
+    return _moist_adiabatic_lapse_rate(Tk, saturation_mixing_ratio(Tk, p, c),
+                                       latent_heat_vapor(Tk, c), c)
+end
+
+# Γ_m from r_s and L_v at T (shared with saturated_buoyancy_frequency_squared)
+function _moist_adiabatic_lapse_rate(Tk::Real, rs::Real, Lv::Real, c::ThermodynamicConstants)
     Rd = R_d(c); ε = molmass_ratio(c)
     num = 1 + Lv * rs / (Rd * Tk)
     den = c.cp_dry + Lv^2 * rs * ε / (Rd * Tk^2)
@@ -1132,6 +1147,86 @@ gradient. Negative means statically unstable.
 brunt_vaisala_frequency_moist(θρ::Real, dθρ_dz::Real,
                               c::ThermodynamicConstants = DEFAULT_CONSTANTS) =
     c.grav * float(dθρ_dz) / float(θρ)
+
+"""
+    saturated_buoyancy_frequency_squared(θ, p, q_v, q_c, dθ_dz, dq_v_dz, dq_w_dz,
+                                         c = DEFAULT_CONSTANTS; θ_ref = θ, g = c.grav) -> N² in s⁻²
+
+Squared buoyancy frequency of a **saturated** cell: the restoring force
+on a saturated parcel displaced along the moist adiabat (reversible,
+total water ``q_w = q_v + q_c`` conserved, condensate carried along),
+measured against the environment's gradients. With the buoyancy variable
+of the dynamics, the density potential temperature
+``θ_ρ = θ(1 + 0.61 q_v - q_c)``, linearised about the cell,
+
+```math
+N^2 = \\frac{g}{θ_{\\rm ref}}\\Bigl[(1 + 0.61 q_v - q_c)
+      \\Bigl(\\frac{∂θ}{∂z} - \\frac{Γ_d - Γ_m}{Π}\\Bigr)
+      + θ\\Bigl(1.61\\Bigl(\\frac{∂q_v}{∂z} - \\frac{dq_s}{dz}\\Big|_{\\rm ad}\\Bigr)
+      - \\frac{∂q_w}{∂z}\\Bigr)\\Bigr],
+```
+
+where ``(Γ_d - Γ_m)/Π`` is the parcel's θ gradient on the moist adiabat
+(``T = θΠ``, ``θ ∂Π/∂z = -Γ_d`` in a hydrostatic column) and
+``dq_s/dz|_{\\rm ad}`` the change of its saturation humidity along it.
+In a **saturated environment** ``∂q_v/∂z - dq_s/dz|_{\\rm ad} =
+(∂q_s/∂T)(∂T/∂z + Γ_m)``, and the expression is the saturated
+Brunt–Väisälä frequency of Durran & Klemp (1982, eq. 36),
+
+```math
+N_m^2 = \\frac{g}{T}\\Bigl(\\frac{∂T}{∂z} + Γ_m\\Bigr)
+        \\Bigl(1 + \\frac{L_v r_s}{R_d T}\\Bigr) - \\frac{g}{1 + q_w}\\frac{∂q_w}{∂z},
+```
+
+to ``O(q)`` (with ``g/T → g/θ_{\\rm ref}`` per unit θ, the Boussinesq form):
+the factor ``1 + L_v r_s/(R_d T)`` is the virtual effect of the vapour
+that the displaced parcel and its saturated environment exchange. At a
+cloud **edge**, where the environment above or below is unsaturated,
+Durran & Klemp's form would still assume a saturated environment and
+drop the virtual effect of the humidity jump; there this form keeps it
+(``∂q_v/∂z`` is the environment's), so a saturated parcel lifted into
+drier air of the same θ is buoyant, as a parcel computation says.
+
+`θ` (K), `p` (Pa), `q_v`, `q_c` (kg kg⁻¹) are the cell's; ``T = θΠ(p)``
+with the dry Exner function. ``Γ_m`` is [`moist_adiabatic_lapse_rate`](@ref),
+``Γ_d`` [`dry_adiabatic_lapse_rate`](@ref), ``q_s``
+[`saturation_specific_humidity`](@ref) (``dq_s/dz|_{\\rm ad}`` from its
+derivatives in T and p, hydrostatic with ``R_d T``): one
+source of truth with the rest of the contract. `θ_ref` is the reference
+temperature of a Boussinesq core (``θ_0``; default θ). The factor 1.61
+is ``1 + 0.61``, the 0.61 of the cores' θ_v. The result vanishes on a
+moist adiabat of constant total water, is ``(g/θ_{\\rm ref})∂θ/∂z`` for
+``q → 0``, and is below the dry ``N^2`` of the same θ gradient in a stable
+saturated layer, because condensation in a rising parcel offsets part of
+its adiabatic cooling.
+
+Reference: Durran, D. R. & Klemp, J. B. (1982). On the effects of
+moisture on the Brunt–Väisälä frequency. *J. Atmos. Sci.*, 39,
+2152-2158.
+"""
+function saturated_buoyancy_frequency_squared(θ::Real, p::Real, q_v::Real, q_c::Real,
+                                              dθ_dz::Real, dq_v_dz::Real, dq_w_dz::Real,
+                                              c::ThermodynamicConstants = DEFAULT_CONSTANTS;
+                                              θ_ref::Real = θ, g::Real = c.grav)
+    Π  = exner_function(p, PhasePartition(0.0), c)
+    T  = float(θ) * Π
+    pf = float(p)
+    es = saturation_vapor_pressure(T, c)
+    Lv = latent_heat_vapor(T, c)
+    ε  = molmass_ratio(c)
+    Γd = dry_adiabatic_lapse_rate(PhasePartition(0.0), c)
+    Γm = _moist_adiabatic_lapse_rate(T, _saturation_mixing_ratio(es, pf, c), Lv, c)
+    # the parcel's saturation humidity along the moist adiabat:
+    # dq_s/dz = ∂q_s/∂T (−Γ_m) + ∂q_s/∂p (−g p/(R_d T)), with
+    # q_s = ε e_s/(p − (1−ε) e_s) and de_s/dT = e_s L_v/(R_v T²) (exact for
+    # the Kirchhoff e_s of this module)
+    den = pf - (1 - ε) * es
+    qs  = _saturation_specific_humidity(T, es, pf, c)
+    dqs_ad = -(ε * pf / den^2) * es * Lv / (R_v(c) * T^2) * Γm +
+              (qs / den) * c.grav * pf / (R_d(c) * T)
+    return (g / θ_ref) * ((1 + 0.61 * q_v - q_c) * (dθ_dz - (Γd - Γm) / Π) +
+                          θ * (1.61 * (dq_v_dz - dqs_ad) - dq_w_dz))
+end
 
 """
     level_of_free_convection(T_p, p_p, q_p, sounding, c) -> p_lfc or NaN

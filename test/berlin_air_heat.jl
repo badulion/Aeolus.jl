@@ -65,9 +65,9 @@ function flat_case(; keep = NO_THETA, extra = BC.AbstractCoupling[],
                    physics = Dict{Symbol,Any}(), kw...)
     # a closed box: the nest (#265) is switched off, so the box is the
     # periodic one these budgets are derived for
-    cfg = BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
+    cfg = BC.CaseConfig(:smoke; output_path = nothing,
                         physics = merge(Dict{Symbol,Any}(:nesting => false), physics), kw...)
-    case = BC.build_case(cfg; io = devnull)
+    case = BC.build_case(cfg)
     case.geom.sm.mask .= false
     filter!(c -> BC.coupling_name(c) in keep, case.couplings)
     append!(case.couplings, extra)
@@ -88,7 +88,7 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         # agreement to O(Δz²).
         errs = Float64[]
         for Nz in (16, 64)
-            cfg = BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
+            cfg = BC.CaseConfig(:smoke; output_path = nothing,
                                 θ_lapse = 0.0, size = (16, 16, Nz))
             mesh = Aeolus.Grids.RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
             ref = BC.build_reference(cfg, mesh)
@@ -115,7 +115,7 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         end
         @test errs[1] / errs[2] > 12          # second order: 16 for a 4× finer grid
         # solid cells are not air
-        case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing); io = devnull)
+        case = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing))
         mask = case.geom.sm.mask
         m_fl = BC.AirHeatMeter(case.sim, case.ref, mask)
         m_all = BC.AirHeatMeter(case.sim, case.ref, nothing)
@@ -254,7 +254,7 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
     end
 
     @testset "fixed-gradient θ top: the dynamics books the top flux (#254)" begin
-        cfg0 = BC.CaseConfig(:smoke; verbose = false, output_path = nothing)
+        cfg0 = BC.CaseConfig(:smoke; output_path = nothing)
         # Γ is the initial lapse rate above the inversion (60 m < 100 m top)
         @test BC.θ_top_gradient(cfg0) ≈ cfg0.θ_lapse rtol = 1e-10       # a difference of θ ≈ 300 K over 6 m
         @test BC.θ_top_bc(cfg0) isa FluxBC
@@ -270,7 +270,7 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         # difference of a piecewise-linear profile is exact inside one
         # segment). Positive: the 06 CEST air is stably stratified from
         # the ground (surface-based inversion, initial z_i = 0).
-        cfgS = BC.CaseConfig(; verbose = false, output_path = nothing)
+        cfgS = BC.CaseConfig(; output_path = nothing)
         S = BC.case_sounding(cfgS); P = S.profiles; t0 = BC.case_start_time(cfgS)
         H, dzS = cfgS.extent[3], cfgS.extent[3] / cfgS.size[3]
         k = searchsortedlast(P.z, H - dzS / 2)
@@ -293,8 +293,8 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
         # whose top is a nest face, is switched off
         for phys in (Dict{Symbol,Any}(:nesting => false),
                      Dict{Symbol,Any}(:timestepper => :fixed, :nesting => false))
-            case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
-                                               physics = phys); io = devnull)
+            case = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing,
+                                               physics = phys))
             @test case.sim.θ_bcs.top isa FluxBC
             @test case.top !== nothing
             BC.run_case!(case; nsteps = 12)
@@ -321,8 +321,8 @@ step_terms(prev, now) = Dict(k => v - get(prev, k, 0.0) for (k, v) in now)
 
     @testset "canopy layer: the tallest roof, or cfg.canopy_top" begin
         for ct in (NaN, 30.0)
-            case = BC.build_case(BC.CaseConfig(:smoke; verbose = false, output_path = nothing,
-                                               canopy_top = ct); io = devnull)
+            case = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing,
+                                               canopy_top = ct))
             BC.run_case!(case; nsteps = 2)
             hl = case.ledger.heat
             roof = maximum(BC.building_height(case.geom, case.mesh))

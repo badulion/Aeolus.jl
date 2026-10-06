@@ -122,11 +122,11 @@ a band dominated by one species and degrades where bands overlap.
 ### How Aeolus builds ``k(g)``
 
 Operational models (RRTMG, RRTMGP) tabulate ``k(g, p, T)`` from
-line-by-line calculations and ship it as a data file. Aeolus cannot:
-the NetCDF/HDF5 stack those files need does not load on every target
-platform, and a radiation module that fails to load is worse than a
-slightly less accurate one. `src/GasOptics.jl` therefore *constructs*
-the distribution analytically:
+line-by-line calculations and ship it as a data file. Aeolus does not
+(yet): when `src/GasOptics.jl` was written the NetCDF/HDF5 stack those
+files need did not load on the development machine, so it *constructs*
+the distribution analytically. Since #310 NCDatasets is a dependency and
+reading an RRTMGP table would be possible:
 
 1. A **Malkmus statistical narrow-band model** treats the band as a
    random array of Lorentz lines with an exponential-tailed inverse

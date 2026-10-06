@@ -1,10 +1,10 @@
 # NetCDF output driven by the registry.
 #
-# Full 3-D model state in NetCDF-3, written with the dependency-free
-# writer in `src/NetCDFIO.jl` — the format every tool in the field reads
-# (ncview, xarray, Paraview, CDO, Panoply) without Aeolus installed.
-# Float32, the usual precision for model output: 64x64x32 is 512 kB per
-# 3-D field and record.
+# Full 3-D model state in NetCDF-4 through `src/NCIO.jl` (NCDatasets, #310)
+# — the format every tool in the field reads (ncview, xarray, Paraview,
+# CDO, Panoply) without Aeolus installed. Float32, the usual precision for
+# model output (64x64x32 is 512 kB per 3-D field and record before
+# compression), deflated and chunked by level and record (`nc_defvar!`).
 #
 # The variables are: the core ones (coordinates, time, hour, solar
 # elevation, static geometry, u v w θ p), every tracer registered with
@@ -55,6 +55,15 @@ function core_output_fields(case)
 end
 
 """
+    case_start_utc(cfg) -> DateTime
+
+UTC time of the case start: `cfg.date` at local hour `cfg.start_h`, less
+`cfg.utc_offset`. The reference time of the output's CF time axis.
+"""
+case_start_utc(cfg) = DateTime(cfg.date...) +
+                      Millisecond(round(Int, (cfg.start_h - cfg.utc_offset) * 3.6e6))
+
+"""
     open_output!(case)
 
 Create `cfg.output_path`, define the core, tracer, bus and coupling
@@ -73,15 +82,15 @@ function open_output!(case)
         "couplings"   => join(string.(coupling_name.(case.couplings)), " "),
         "references"  => "examples/urban/BerlinCase.jl"))
 
-    nc_defdim!(ncf, "x", Nx); nc_defdim!(ncf, "y", Ny); nc_defdim!(ncf, "z", Nz)
-    nc_defdim!(ncf, "time", nothing)          # unlimited record dimension
+    ncf.dim["x"] = Nx; ncf.dim["y"] = Ny; ncf.dim["z"] = Nz
+    ncf.dim["time"] = Inf                     # unlimited record dimension
     for (d, L) in (("x", mesh.Lx), ("y", mesh.Ly), ("z", mesh.Lz))
         nc_defvar!(ncf, d, Float32, (d,);
                    attributes = Dict("units" => "m", "axis" => uppercase(d),
                                      "long_name" => "$d cell centre"))
     end
     nc_defvar!(ncf, "time", Float64, ("time",);
-               attributes = Dict("units" => "seconds since simulation start",
+               attributes = Dict("units" => cf_time_units(case_start_utc(cfg)),
                                  "axis" => "T", "long_name" => "simulation time"))
     nc_defvar!(ncf, "hour", Float64, ("time",);
                attributes = Dict("units" => "h", "long_name" => "local hour of day"))
@@ -112,13 +121,12 @@ function open_output!(case)
                                      "coordinates" => f.dims === :xyz ? "x y z" :
                                                       f.dims === :z ? "z" : "x y"))
     end
-    nc_endef!(ncf)
-    nc_write!(ncf, "x", Float32[(i - 0.5) * mesh.dx for i in 1:Nx])
-    nc_write!(ncf, "y", Float32[(j - 0.5) * mesh.dy for j in 1:Ny])
-    nc_write!(ncf, "z", Float32[(k - 0.5) * mesh.dz for k in 1:Nz])
-    nc_write!(ncf, "sky_view_factor", Float32.(geom.svf))
-    nc_write!(ncf, "building_height", Float32.(building_height(geom, mesh)))
-    nc_write!(ncf, "surface_class", Float32.(geom.sfc))
+    ncf["x"][:] = Float32[(i - 0.5) * mesh.dx for i in 1:Nx]
+    ncf["y"][:] = Float32[(j - 0.5) * mesh.dy for j in 1:Ny]
+    ncf["z"][:] = Float32[(k - 0.5) * mesh.dz for k in 1:Nz]
+    ncf["sky_view_factor"][:, :] = Float32.(geom.svf)
+    ncf["building_height"][:, :] = Float32.(building_height(geom, mesh))
+    ncf["surface_class"][:, :] = Float32.(geom.sfc)
     case.output = CaseOutput(ncf, fields)
     return case
 end
@@ -126,19 +134,41 @@ end
 "Close the NetCDF file if one is open."
 function close_output!(case)
     case.output === nothing && return case
-    nc_close!(case.output.ncf)
+    close(case.output.ncf)
     case.output = nothing
     return case
+end
+
+"The frame line of the current output record and every coupling's `report`."
+function frame_message(case)
+    clk, sim, bus = case.clock, case.sim, case.bus
+    io = IOBuffer()
+    θ1 = view(interior_view(sim.θ), :, :, 1)
+    qv1 = view(interior_view(tracer(case, :qv)), :, :, 1)
+    ql1 = view(interior_view(tracer(case, :ql)), :, :, 1)
+    # min / max are exact and order-independent (NaN-propagating), so these
+    # serial 2-D scans are thread-invariant as they stand (KA-b, #296)
+    @printf(io, "frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°  θ1=%5.1f/%5.1f  qv1min=%.4f  dew=%.3f mm  fog ql1max=%.2e",
+            clk.nrecord, clk.hour, time() - clk.t_wall0,
+            minimum(bus.Ts), maximum(bus.Ts),
+            minimum(bus.sw), maximum(bus.sw), clk.sun.elevation,
+            minimum(θ1), maximum(θ1), minimum(qv1), maximum(bus.dew), maximum(ql1))
+    for c in case.couplings
+        r = report(c, case)
+        r === nothing || print(io, '\n', r)
+    end
+    return String(take!(io))
 end
 
 """
     write_output!(case)
 
-Append one record (when a file is open) and print the log lines: the
-core frame line, then every coupling's `report`.
+Append one record (when a file is open) and log the frame: one `Info`
+record (`subsystem = :berlin`, `event = :frame`) whose message is the core
+frame line followed by every coupling's `report` ([`frame_message`](@ref)).
 """
 function write_output!(case)
-    clk, sim, bus = case.clock, case.sim, case.bus
+    clk, sim = case.clock, case.sim
     clk.nrecord += 1
     if case.output !== nothing
         rec = Dict{String,Any}(
@@ -150,21 +180,10 @@ function write_output!(case)
         end
         nc_append_record!(case.output.ncf, rec)
     end
-    case.cfg.verbose || return case
-    io = case.io
-    θ1 = view(interior_view(sim.θ), :, :, 1)
-    qv1 = view(interior_view(tracer(case, :qv)), :, :, 1)
-    ql1 = view(interior_view(tracer(case, :ql)), :, :, 1)
-    # min / max are exact and order-independent (NaN-propagating), so these
-    # serial 2-D scans are thread-invariant as they stand (KA-b, #296)
-    @printf(io, "  frame %2d @ t=%5.1fh  wall=%5.0fs  Ts=%5.1f/%5.1f  SW=%4.0f/%4.0f W/m²  elev=%5.1f°  θ1=%5.1f/%5.1f  qv1min=%.4f  dew=%.3f mm  fog ql1max=%.2e\n",
-            clk.nrecord, clk.hour, time() - clk.t_wall0,
-            minimum(bus.Ts), maximum(bus.Ts),
-            minimum(bus.sw), maximum(bus.sw), clk.sun.elevation,
-            minimum(θ1), maximum(θ1), minimum(qv1), maximum(bus.dew), maximum(ql1))
-    for c in case.couplings
-        r = report(c, case)
-        r === nothing || println(io, r)
-    end
+    # the frame line and the couplings' reports: one Info record, built only
+    # when a logger wants it (#347; the reports move onto the diagnostics
+    # registry with #338)
+    @info(frame_message(case), subsystem = :berlin, domain = current_domain(),
+          event = :frame, frame = clk.nrecord, hour = clk.hour)
     return case
 end

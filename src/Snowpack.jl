@@ -103,7 +103,7 @@ import ..SurfaceExchange: surface_temperature, roughness_lengths,
 using ..SurfaceOptics: material_emissivity, SNOW_REFERENCE_RADIUS, SNOW_GROWTH_RATE, SnowSurface,
                        snow_grain_radius, broadband_albedo
 using ..RadiationCore: SpectralGrid, shortwave_bands
-using ..NetCDFIO: nc_open, nc_read
+using NCDatasets: NCDataset
 
 export AbstractSnowConductivity, Yen1981Conductivity, Sturm1997Conductivity,
        Jordan1991Conductivity, Calonne2011Conductivity, snow_thermal_conductivity,
@@ -1652,7 +1652,7 @@ gradient `dTdz` (K m⁻¹, 0-300, 31 points) and density `ρ` (kg m⁻³,
 The data are the file `snicar_drdt_bst_fit_60_c070416.nc` (M. Flanner,
 16 Apr 2007; "r_e0 = 54.5 um") distributed with CESM/CLM as
 `lnd/clm2/snicardata/` input data, shipped unchanged in `src/data/` and
-read with the in-package `NetCDFIO` reader.
+read with NCDatasets (the file is NetCDF-3 classic).
 """
 struct SnicarAgingTable
     T::Vector{Float64}
@@ -1688,11 +1688,11 @@ function snicar_aging_table(path::AbstractString = SNICAR_AGING_FILE)
 end
 
 function _read_snicar_table(path::AbstractString)
-    f = nc_open(path)
-    desc = string(get(f.gattrs, "description", ""))
-    tab = SnicarAgingTable(nc_read(f, "T"), nc_read(f, "dTdz"), nc_read(f, "sno_dns"),
-                           nc_read(f, "drdsdt0"), nc_read(f, "tau"), nc_read(f, "kappa"),
-                           54.5, desc)
+    tab = NCDataset(path) do f
+        rd(name) = Float64.(Array(f[name]))
+        SnicarAgingTable(rd("T"), rd("dTdz"), rd("sno_dns"), rd("drdsdt0"),
+                         rd("tau"), rd("kappa"), 54.5, string(get(f.attrib, "description", "")))
+    end
     return tab
 end
 
