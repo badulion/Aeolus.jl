@@ -1,29 +1,26 @@
-module RunLog
+"""
+    Aeolus.RunLog
 
-# Structured logging for Aeolus (LOG-a, #333; design in epic #293).
-#
-# The library emits events through stdlib `Logging` (`@debug`, `@info`,
-# `@warn`, `@error`) with key-value pairs and never prints. Every event of
-# the library carries two tags:
-#
-#   * `subsystem` — a Symbol naming the emitting part of the code
-#     (`:pressure`, `:timestepping`, `:diffusion`, `:checkpoint`, …);
-#   * `domain` — the domain of a multi-domain run the event belongs to,
-#     `current_domain()` (`:main` outside `with_domain`).
-#
-# What is shown, and where, is the caller's choice: they install a logger.
-# This module provides the loggers a run needs, without any dependency
-# beyond the standard library:
-#
-#   * `AeolusLogger`  — one formatted line per record, with timestamp,
-#                       level, subsystem/domain and the key-values, to a
-#                       stream (or to whatever `stderr` is at the time);
-#   * `TeeLogger`     — sends each record to several loggers, each with
-#                       its own level;
-#   * `open_run_log` / `with_run_log` — the run logger: info and up to the
-#                       console, debug and up to `run.log`;
-#   * `test_logger`   — the test suite's logger: warnings and up, or the
-#                       level of `AEOLUS_LOG`.
+Structured logging for Aeolus (LOG-a, #333; design in epic #293).
+
+The library emits events through stdlib `Logging` (`@debug`, `@info`,
+`@warn`, `@error`) with key-value pairs and never prints. Every event of
+the library carries two tags:
+
+* `subsystem`: a `Symbol` naming the emitting part of the code
+  (`:pressure`, `:timestepping`, `:diffusion`, `:checkpoint`, …);
+* `domain`: the domain of a multi-domain run the event belongs to,
+  [`current_domain`](@ref)`()` (`:main` outside [`with_domain`](@ref)).
+
+What is shown, and where, is the caller's choice: they install a logger.
+This module provides the loggers a run needs, with no dependency beyond
+the standard library: [`AeolusLogger`](@ref) (one formatted, timestamped
+line per record), [`TeeLogger`](@ref) (several sinks, each with its own
+level), [`open_run_log`](@ref) / [`with_run_log`](@ref) (info and up to
+the console, debug and up to `run.log`) and [`test_logger`](@ref) (the
+test suite's: warnings and up, or the level of `AEOLUS_LOG`).
+"""
+module RunLog
 
 using Logging
 using Logging: AbstractLogger, LogLevel, Debug, Info, Warn, Error, BelowMinLevel, AboveMaxLevel
