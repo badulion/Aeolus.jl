@@ -1062,6 +1062,15 @@ time-mean ``u(z)`` is the inflow profile. The **child** is the same
 channel opened in x (`half_channel_case(; extent, inflow)`: the profile
 as Dirichlet data on the west face, the convective outflow of N-open-c
 on the east face, y periodic) at refine 2 horizontally (``Δx = 0.104δ``).
+The issue asked for open lateral boundaries; y is periodic instead, a
+deviation. Open y faces would need boundary data there. With only the
+precursor's mean profile on them, they would be laminar walls of
+inflow that damp the turbulence near the sides. With synthetic
+turbulence on them as well, they would be a second inflow, whose fetch
+would mix with the one being measured. The canonical case is spanwise
+periodic (Kim et al. 2013, §3.1), and that is the case set up here. In
+the Berlin child (#268) the lateral faces receive the running parent's
+turbulent fields, which is a different problem.
 The **reference** is the periodic channel on the child's grid, the
 equilibrium the child relaxes to. Generators: none (`off`), the digital
 filter (DF), and the random-mode `FreeStreamInflow` (FSD, one length:
@@ -1096,6 +1105,25 @@ m s⁻¹ on a 20 m s⁻¹ inflow); the generator's added flux is
 error of the total stress at ``x = 3.9δ`` over ``0.1δ < z < 0.8δ``:
 DF 0.32, FSD 0.47, off 1.32 ``u_*^2`` (the precursor's total stress is
 within 0.046 ``u_*^2`` of ``u_*^2(1 - z/δ)``, Porté-Agel et al. 2000).
+
+**Realisations.** The run is not bitwise reproducible. The FFT pressure
+solvers plan with `FFTW.MEASURE`, the plan depends on timing, and the
+turbulence amplifies the round-off. Every run is therefore a new
+realisation of a precursor averaged only ``10δ/u_*`` on 24 × 12 columns.
+Over seven realisations (precursor seeds 1–6, plus a repeat of seed 1)
+the DF moments vary as follows:
+
+| quantity | range over 7 realisations |
+| :-- | :-- |
+| DF TKE/pre, 0.22δ and 0.47δ, all x | 0.72–1.39 |
+| DF −u'w'/pre, 0.22δ and 0.47δ, all x | 0.44–1.53 |
+| DF dp/dx bias | −0.6 % to −9.0 % (seed 1: −0.6 % and −2.9 %) |
+| FSD dp/dx bias | +19 % to +31 % |
+| total-stress RMS error at 3.9δ, DF / FSD | 0.30–0.35 / 0.40–0.53 ``u_*^2`` |
+
+The orderings DF < FSD in both moments and in the total stress, and
+|bias| DF < FSD < off, held in every realisation, and they are what the
+CI case asserts.
 
 Example (`examples/nesting/inflow_fetch.jl`, 15δ child, averaged
 ``10δ/u_*``, about 11 min), ratios to the child-grid reference and
@@ -1153,32 +1181,79 @@ source at 0.47δ from 5.1δ on; the FSD, isotropic with one length and no
 ``u'w'`` structure, starts at 60 % and rises only after 5δ. Without a
 generator the inflow stays laminar.
 
+**The literature number.** Kim, Castro & Xie (2013) ran the XC digital
+filter (with and without a mass-flux correction) and their
+divergence-free variant XCDF at the inlet of a plane channel:
+``Re_τ = 395``, ``60δ × 2δ × 3.5δ``, spanwise periodic, ``U_b/u_τ =
+18.3``. The input statistics came from DNS and from the periodic LES on
+the same grid. The wall shear stress and ``-\overline{u'v'}`` recovered
+by ``x/δ ≈ 10`` for XC and XCMC, "similar to those in Deck et al." for
+another synthetic method (§3.3). The XCDF wall stress was within 5 % at
+``x = 15δ``, a 14δ development distance counted from its plane at
+``x_0 = δ``. Its ``-\overline{u'v'}`` at ``(10δ, 0.1δ)`` was within
+about 5 %, and its pressure variance matched the periodic case from
+``10δ`` on. Xie & Castro (2008) could not be retrieved (closed access,
+with no repository copy in OpenAlex or Semantic Scholar). The
+Kim et al. accepted manuscript was read from the Southampton e-print
+(eprints.soton.ac.uk/341146). **The literature development distance is
+therefore ≈ 10δ (10–14δ), not the 3δ placeholder**, and that number is
+adopted here. It agrees with the turnover estimate: at
+``U_b/u_τ ≈ 18–20``, one turnover near ``0.1–0.5δ`` is 5–10δ.
+
+**CI: the physical fetch** (`test/era6_inflow_fetch.jl`, testset
+"DF-same against the child-grid reference"). The reference periodic
+channel on the child grid (48 × 24 × 16, ``30δ/u_*``) is the statistics
+source, the inflow profile and the target. The child is 10δ long at
+``Δx = 0.104δ``, averaged ``5δ/u_*``. The testset takes 140–170 s
+(reference 81–97 s, child 58–72 s). Measured over six realisations
+(reference seeds 2–6, seed 2 twice):
+
+| z/δ | ``U k/P`` | L₁₀ TKE | L₁₀ −u'w' | TKE/ref at x ≈ 1δ → 9δ |
+| :-- | :-- | :-- | :-- | :-- |
+| 0.22 | 5.5–5.8δ | 5.6–6.5δ (1.00–1.16 turnovers) | 6.2–6.8δ (1.07–1.22) | 0.59–0.65 → 1.00–1.03 |
+| 0.47 | 9.6–10.4δ | ∞ within 9.5δ | ∞ within 9.5δ in five, 9.2δ in one | 0.58–0.62 → 0.82–0.87 |
+
+Asserted: at 0.22δ both moments are within 10 % by ``x ≤ 10δ`` (the
+paper's number), with L₁₀ between 0.6 and 1.6 local turnovers. At
+0.47δ the turnover distance is more than 1.5 times that at 0.22δ; both
+moments stay below 90 % over the first half turnover and are still
+rising across the child (by more than 0.1 from 1δ to 9δ; measured
+0.18–0.42). The 10δ figure of Kim et al. was measured at the wall and at
+0.1δ. In this rough-wall flow at 0.47δ, the 15δ example gives 12.3δ for
+TKE and 11.9δ for −u'w', i.e. 1.2 turnovers, slightly beyond it.
+
 **Expectations that proved wrong** (the expectations, not the code):
 
 * "TKE and −u'w' at 0.2δ and 0.5δ within 10 % of the precursor by
   x ≤ 3δ" (the issue's placeholder). Not met in any configuration
-  (table above). The full texts of Xie & Castro (2008) and Kim et al.
-  (2013) could not be retrieved (the Southampton e-print refuses automated
-  access with HTTP 401/403, ScienceDirect shows the abstract only, and
-  OpenAlex lists both papers as closed access), so their development
-  lengths were not checked and no literature number replaces the
-  placeholder; the turnover estimate above says 3δ is too short at
-  0.5δ for ``U/u_* ≈ 20`` whatever the generator. The CI case asserts
-  instead that the DF keeps TKE within [0.7, 1.5] of the precursor for
-  ``x ≤ 5δ`` and is closer to it than the FSD. That band is a regression
-  bound calibrated on the measured runs (0.77–1.36), not a physical
-  tolerance, and it mixes the fetch with the coarse-parent target: at
-  0.22δ the DF ratio moves away from 1 with ``x`` (TKE 0.97 → 1.36,
-  ``-u'w'`` 0.85 → 1.37 over 0.5–4.5δ). Relaxing the issued criterion to
-  it is open for the maintainer.
+  (tables above). Kim et al. (2013) give ≈ 10δ (10–14δ) for the same
+  generator in a channel, and the turnover estimate gives 5.6δ at 0.22δ
+  and 10δ at 0.47δ. The placeholder is too short by a factor of 2–4,
+  whatever the generator. The literature number is adopted and asserted
+  in the DF-same testset (0.22δ within 10 % by 10δ). At 0.47δ it is
+  exceeded slightly (12.3δ, example). Against the coarse parent, no
+  10 % fetch exists at 0.22δ for any generator: the DF ratio moves away
+  from 1 with ``x`` (TKE 0.97 → 1.36, ``-u'w'`` 0.85 → 1.37 over
+  0.5–4.5δ) as the child relaxes to the equilibrium of the parent's
+  faster mean profile. The CI case asserts only that the DF is closer to
+  the precursor than the FSD, in TKE and in −u'w'. An earlier absolute
+  band, [0.7, 1.5], was a regression bound calibrated on two runs. It
+  came within 0.02 of its floor over the seven realisations and was
+  removed.
 * "Total stress at 4δ within 10 % for 0.1δ < z < 0.8δ". Not met (RMS
-  0.32 ``u_*^2``), for the same reason; asserted: DF < FSD < off.
-* The null comparison (off < 50 %), the bulk velocity (0.5 %) and the
-  DF pressure-gradient bias (2 %) hold as issued. The bias depends on
-  the source: with the child-grid statistics it is +23 %, so the −0.55 %
-  of the coarse parent is a cancellation (its faster mean flow and its
-  larger stresses), not a sign that the flow is in equilibrium.
-
+  0.30–0.35 ``u_*^2``), for the same reason; asserted: DF < FSD < off.
+* "Driving pressure-gradient bias < 2 %". Not met reliably, and the
+  expectation is wrong for a developing flow. Over 1–4δ, the extra drive
+  balances the streamwise change of the momentum flux
+  ``\overline{u^2}`` and of the wall stress. It is therefore a property
+  of the fetch, not zero: off +72 %, FSD +19 to +31 %, DF-same +23 %
+  (example), DF with the coarse parent −0.6 to −9.0 %. Locally it is
+  +6 % over 1–3δ and −5 % over 2–4δ in one realisation, so the 1–4δ
+  value of the coarse-parent DF is a cancellation. The cancellation is
+  between the parent's faster mean flow and its larger stresses; it is
+  not equilibrium. The CI case asserts the ordering |DF| < |FSD| < |off|.
+* The null comparison (off < 50 %) and the bulk velocity (0.5 %) hold as
+  issued.
 
 ### The Berlin case
 
@@ -1311,7 +1386,8 @@ sets the near-wall turbulence level far downstream.
   models. *Phys. Fluids*, 20, 721-725.
 * Kim, Y., Castro, I. P. & Xie, Z.-T. (2013). Divergence-free
   turbulence inflow conditions for large-eddy simulations with
-  incompressible flow solvers. *Comput. Fluids*, 84, 56-68.
+  incompressible flow solvers. *Comput. Fluids*, 84, 56-68. Accepted
+  manuscript: eprints.soton.ac.uk/341146.
 * Porté-Agel, F., Meneveau, C. & Parlange, M. B. (2000). A
   scale-dependent dynamic model for large-eddy simulation: application
   to a neutral atmospheric boundary layer. *J. Fluid Mech.*, 415, 261-284.
