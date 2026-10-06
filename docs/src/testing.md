@@ -138,6 +138,25 @@ in 1 of 3 runs, and in parallel in 1 of 2 full-tier runs. Until the
 assertion is settled, a red full tier with only this error is this
 flakiness.
 
+## Thread invariance (KernelAbstractions port)
+
+`test/thread_invariance.jl` checks that the code gives identical bits at
+N threads and at 1 thread (KA-a, #294; [the kernel port](design/ka_port.md)).
+In the normal run it compares `CPUBackend(serial = true)` with the
+threaded backend in process, which is meaningful under `--threads 4`.
+Its subprocess level is opt-in. Every port PR runs it and quotes the
+result:
+
+```bash
+AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
+```
+
+It starts `julia -t 1/4/24` (`AEOLUS_THREAD_COUNTS`) and runs the
+sections in `AEOLUS_THREAD_SECTIONS` (default
+`primitives,dns,smoke,flagship`). Every hash must match the 1-thread
+run. At KA-a it produced 2261 hashes, all identical, in about 2 min per
+process.
+
 ## Measured times
 
 24-core machine, 2026-10-06, other agents' suites running alongside
