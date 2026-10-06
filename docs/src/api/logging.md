@@ -35,6 +35,37 @@ with_logger(lg) do … end
 close(lg)
 ```
 
+### Flush policy
+
+`run.log` is not flushed after every record (maintainer decision of
+2026-10-06, PR #346):
+
+| record | on disk |
+| :-- | :-- |
+| `Warn`, `Error` | at once (and everything buffered before it with it) |
+| `Debug`, `Info` | at the next record more than `flush_interval` seconds (default 5) after the last flush |
+| anything still buffered | at `close`: the end of [`with_run_log`](@ref Aeolus.RunLog.with_run_log) or [`with_run`](@ref Aeolus.IO.with_run), also when the run throws; and by an `atexit` hook if the process dies of an uncaught error with the log still open |
+
+So only a hard kill (`SIGKILL`, the OOM killer, power loss) can lose the
+last few seconds of debug and info lines; a warning or error never waits
+in a buffer. There is no timer task: the clock is read when a record
+arrives, which keeps logging deterministic and thread-free, so a debug
+line written just before a long quiet spell stays buffered until the
+next record or the close. To follow a run with `tail -f run.log` at
+record granularity, or when debugging a hang, use `flush_interval = 0`
+(flush every record, the LOG-a behaviour):
+
+```julia
+with_run_log("run.log"; flush_interval = 0) do … end
+lg = open_run_log("run.log"; flush_interval = 1.0)   # or any interval
+flush(lg)                                            # force one now
+```
+
+The keyword is [`AeolusLogger`](@ref Aeolus.RunLog.AeolusLogger)'s
+(`flush_interval = 5.0`); [`open_run_log`](@ref Aeolus.RunLog.open_run_log)
+passes it to the file. The console logger and the test logger flush
+every record.
+
 A run log line:
 
 ```
@@ -338,8 +369,17 @@ Measured on a 64×64×32 Boussinesq case, `step_adaptive!`, one thread
 installed and no records (the difference is within the ±1.7 % run-to-run
 spread), 9.16 ms with one six-key `@debug` record per step written to
 `run.log`. One record costs 10.6 µs (0.12 % of the step), about half of
-which is the standard library's macro; the file is flushed after every
-record so a crash loses nothing.
+which is the standard library's macro.
+
+The [flush policy](#Flush-policy) (PR #346) measured on one machine, one
+thread, the same six-key `@debug` record to `run.log`, best of 7 × 20 000
+records, three runs each: flushing every record (the old code, and
+`flush_interval = 0`) costs 8.82–8.98 µs a record, the default
+`flush_interval = 5` 7.89–7.98 µs, so the policy saves about 1 µs a
+record (11 %). Timed alone, `format_record` is 2.5 µs, `write` + `flush`
+of one line 0.68 µs against 0.05 µs for `write` alone, and the `time()`
+call the policy adds 23 ns. (The #333 figure of 10.6 µs was measured on
+a different day; the comparison here is like for like.)
 
 ## Tests
 
