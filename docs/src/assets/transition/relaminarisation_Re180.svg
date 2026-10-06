@@ -53,7 +53,7 @@
 <text x="967.2727272727273" y="378" font-size="12" text-anchor="middle">2.0</text>
 <line x1="640" y1="335.0" x2="1000" y2="335.0" stroke="#999" stroke-dasharray="4,4"/>
 <line x1="640" y1="235.0" x2="1000" y2="235.0" stroke="#999" stroke-dasharray="4,4"/>
-<line x1="841.2727272727273" y1="60" x2="841.2727272727273" y2="360" stroke="#dc2626" stroke-dasharray="5,4"/><text x="837.2727272727273" y="210.0" font-size="11" fill="#dc2626" text-anchor="end">Nieuwstadt 2005</text><text x="837.2727272727273" y="224.0" font-size="11" fill="#dc2626" text-anchor="end">(Re_τ = 360)</text>
+<line x1="720.5090909090909" y1="60" x2="720.5090909090909" y2="360" stroke="#dc2626" stroke-dasharray="5,4"/><text x="726.5090909090909" y="180.0" font-size="11" fill="#dc2626">Nieuwstadt 2005</text><text x="726.5090909090909" y="194.0" font-size="11" fill="#dc2626">(Re_τ = 360: 1.23 κ)</text>
 <line x1="934.5454545454545" y1="60" x2="934.5454545454545" y2="360" stroke="#7c3aed" stroke-dasharray="2,3"/><text x="930.5454545454545" y="250.0" font-size="11" fill="#7c3aed" text-anchor="end">L⁺ = 100</text><text x="930.5454545454545" y="264.0" font-size="11" fill="#7c3aed" text-anchor="end">(Flores &amp; Riley)</text>
 <circle cx="648.1818181818181" cy="125.71764377522223" r="5" fill="#1d4ed8"/><rect x="644.1818181818181" y="116.23864746093747" width="8" height="8" fill="none" stroke="#059669" stroke-width="1.5"/>
 <circle cx="656.3636363636364" cy="142.69607794580673" r="5" fill="#1d4ed8"/><rect x="652.3636363636364" y="113.62939453124997" width="8" height="8" fill="none" stroke="#059669" stroke-width="1.5"/>
@@ -64,7 +64,7 @@
 <circle cx="803.6363636363636" cy="359.9603948715005" r="5" fill="#1d4ed8"/><rect x="799.6363636363636" y="356.0" width="8" height="8" fill="none" stroke="#059669" stroke-width="1.5"/>
 <circle cx="885.4545454545455" cy="359.98036419017825" r="5" fill="#1d4ed8"/><rect x="881.4545454545455" y="356.0" width="8" height="8" fill="none" stroke="#059669" stroke-width="1.5"/>
 <circle cx="967.2727272727273" cy="359.98517789205397" r="5" fill="#1d4ed8"/><rect x="963.2727272727273" y="356.0" width="8" height="8" fill="none" stroke="#059669" stroke-width="1.5"/>
-<text x="701.2" y="159.99999999999997" font-size="12" fill="#1d4ed8">● TKE(T)/TKE(0)</text><text x="701.2" y="175.99999999999997" font-size="12" fill="#059669">□ γ of the lower half at T</text>
+<text x="726.5090909090909" y="90" font-size="12" fill="#1d4ed8">● TKE(T)/TKE(0)</text><text x="726.5090909090909" y="106" font-size="12" fill="#059669">□ γ of the lower half at T</text>
 <text x="820.0" y="398" font-size="14" text-anchor="middle">h/L</text>
 <text x="648" y="80" font-size="14" font-weight="bold">(b)</text>
 </svg>

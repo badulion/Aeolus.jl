@@ -23,7 +23,7 @@ Groups of fields:
   `min_height` (buildings lower than this are dropped), `elevation` (m
   above sea level, for the solar position), `wall_subdivisions` of the
   radiosity scene, `park_lai` (leaf-area index of park cells);
-* **clock** — `date = (y, m, d)`, `start_h` (local hour at t = 0), `dt`
+* **clock** — `date = (y, m, d)`, `start_h` (local hour at t = 0), `utc_offset` (h, local − UTC), `dt`
   (s), `nsteps`;
 * **cadences** — `cadence::Dict{Symbol,Float64}`, periods in seconds.
   `:radiation`, `:soil` and `:output` are used by the initial couplings;
@@ -34,12 +34,20 @@ Groups of fields:
   provider wraps its closure in, `Operators.StabilityCorrected`, P55-e
   #187: `:brown94` (default, Brown et al. 1994), `:lilly`, `:long_tail`,
   `:short_tail`, `:most`, or `:none` for the uncorrected closure);
-* **initial state** — `θ_surface`, `θ_inversion_z`, `θ_lapse` (θ(z) =
-  θ_surface + max(0, z − θ_inversion_z)·θ_lapse), `u0`, `qv0`, `qv_scale`
-  (qv(z) = qv0·exp(−z/qv_scale)), `Ts0` and `Ts_water_offset` (surface
-  temperature, water `Ts0 + offset`), `T_soil0`, `p_surface` (Pa at the
-  ground: the hydrostatic reference state is integrated from it, see
-  `core/reference_state.jl`);
+* **initial state** — `sounding`: the radiosonde CSV the initial θ(z),
+  qv(z) and surface pressure come from (default: the Lindenberg WMO 10393
+  launches of 29/30 June 2019, `data/lindenberg_10393_20190629.csv`,
+  interpolated in time to the case start; see
+  [`initial_θ`](@ref) and `core/reference_state.jl`); `utc_offset` (h,
+  local clock = UTC + `utc_offset`; 2 = CEST) places the case start on
+  the sounding's UTC time axis. `sounding = nothing` selects the
+  **idealised** profile instead: `θ_surface`, `θ_inversion_z`,
+  `θ_lapse` (θ(z) = θ_surface + max(0, z − θ_inversion_z)·θ_lapse),
+  `qv0`, `qv_scale` (qv(z) = qv0·exp(−z/qv_scale)); those five fields are
+  used only then. `p_surface` (Pa at the ground; `nothing` = from the
+  sounding, 101325 Pa for the idealised profile; see
+  [`case_surface_pressure`](@ref)). `u0`, `Ts0` and `Ts_water_offset`
+  (surface temperature, water `Ts0 + offset`), `T_soil0`;
 * **physics** — `physics::Dict{Symbol,Any}`: for an exclusive slot,
   `slot => provider` (e.g. `:microphysics => :kessler`); for an additive
   coupling, `name => true/false`. Anything absent takes the registry
@@ -66,7 +74,8 @@ Base.@kwdef mutable struct CaseConfig
     wall_subdivisions::Int            = 1
     park_lai::Float64                 = 2.5
     # clock
-    date::NTuple{3,Int}               = (2024, 6, 20)
+    date::NTuple{3,Int}               = (2019, 6, 29)   # clear-sky heat-wave day (#247)
+    utc_offset::Float64               = 2.0             # local = UTC + 2 h (CEST)
     start_h::Float64                  = 6.0
     dt::Float64                       = 2.0
     nsteps::Int                       = 43_200
@@ -82,7 +91,9 @@ Base.@kwdef mutable struct CaseConfig
     sgs_stability::Symbol             = :brown94
     sponge_α_max::Float64             = 0.05
     sponge_frac::Float64              = 0.75
-    # initial state
+    # initial state: the observed sounding (#247) …
+    sounding::Union{Nothing,String}   = joinpath(DATA_DIR, "lindenberg_10393_20190629.csv")
+    # … or, with sounding = nothing, the idealised profile
     θ_surface::Float64                = 293.0
     θ_inversion_z::Float64            = 100.0
     θ_lapse::Float64                  = 3e-3
@@ -92,7 +103,7 @@ Base.@kwdef mutable struct CaseConfig
     Ts0::Float64                      = 285.0
     Ts_water_offset::Float64          = 5.0
     T_soil0::Float64                  = 288.0
-    p_surface::Float64                = 101325.0
+    p_surface::Union{Nothing,Float64} = nothing         # nothing: from the sounding
     # coupling selection
     physics::Dict{Symbol,Any}         = Dict{Symbol,Any}()
     options::Dict{Symbol,Any}         = Dict{Symbol,Any}()
