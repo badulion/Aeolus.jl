@@ -6,9 +6,10 @@ using ..Grids
 using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields
 using ..Fields: Field
-using ..BoundaryConditions: FieldBoundaryConditions, axis_poisson_bc
+using ..BoundaryConditions: FieldBoundaryConditions, axis_poisson_bc, _halo_periodic!, _halo_mirror!
 using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
-using ..Backends: backend, launch!, apply_transform!
+using ..Backends: backend, launch!, apply_transform!, pcg!, PCGWorkspace, PointOperator,
+                  IdentityPreconditioner
 
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
        CGPoissonSolver, solve!, poisson_axis_bcs
@@ -419,7 +420,13 @@ the periodic solution.
 Preconditioner: none (the diagonal of the uniform-grid Laplacian is
 constant in the interior, so Jacobi would only rescale).
 
-Convergence: `‖r‖ < tol · ‖b‖`. Not guaranteed within `maxit`; a warning
+The iteration is [`Aeolus.Backends.pcg!`](@ref), the one CG driver
+(KA-g, #300): the 7-point operator is a point kernel fused with `p·Ap`,
+the reductions are canonical plane sums, so a solve (and its iteration
+count) is identical at every thread count. The mean is removed from the
+source, from every residual direction and from the solution.
+
+Convergence: `‖r‖ ≤ tol · ‖b‖`. Not guaranteed within `maxit`; a warning
 is emitted if the iteration hits the cap.
 """
 mutable struct CGPoissonSolver{T, RA<:Array{T,3}} <: AbstractPressureSolver
@@ -430,17 +437,15 @@ mutable struct CGPoissonSolver{T, RA<:Array{T,3}} <: AbstractPressureSolver
     bc_bottom::Symbol
     bc_x::Symbol
     bc_y::Symbol
-    # scratch buffers on interior sizes
-    r::RA
-    p_dir::RA
-    Ap::RA
-    z::RA
-    b::RA                          # zero-mean source
+    # CG arrays with one halo layer, (Nx+2, Ny+2, Nz+2); interior 2:N+1
+    b::RA                          # the source
     x::RA                          # iterate
-    w::RA                          # scratch of the dot products (no allocation per solve, #295)
+    ws::PCGWorkspace{T,RA}         # r, z, p, Ap and the reduction partials (no allocation per solve)
     last_iter::Base.RefValue{Int}
     last_residual::Base.RefValue{T}
 end
+
+_unit_halo_ranges(Nx, Ny, Nz) = (2:Nx+1, 2:Ny+1, 2:Nz+1)
 
 function CGPoissonSolver(mesh::RegularGrid{T};
                          tol::Real = 1e-8, maxit::Int = 200,
@@ -452,98 +457,128 @@ function CGPoissonSolver(mesh::RegularGrid{T};
     _check_axis_bc("bc_x", bc_x); _check_axis_bc("bc_y", bc_y)
     (bc_top === :periodic) == (bc_bottom === :periodic) ||
         throw(ArgumentError("CGPoissonSolver: bc_top and bc_bottom must both be periodic or both not"))
-    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
-    r    = zeros(T, Nx, Ny, Nz)
-    p_dir= zeros(T, Nx, Ny, Nz)
-    Ap   = zeros(T, Nx, Ny, Nz)
-    z    = zeros(T, Nx, Ny, Nz)
-    return CGPoissonSolver{T, typeof(r)}(mesh, T(tol), maxit,
+    b = zeros(T, mesh.Nx + 2, mesh.Ny + 2, mesh.Nz + 2)
+    return CGPoissonSolver{T, typeof(b)}(mesh, T(tol), maxit,
                                           bc_top, bc_bottom, bc_x, bc_y,
-                                          r, p_dir, Ap, z, zero(r), zero(r), zero(r),
+                                          b, zero(b),
+                                          PCGWorkspace(b; ranges = _unit_halo_ranges(mesh.Nx, mesh.Ny, mesh.Nz)),
                                           Ref(0), Ref(zero(T)))
 end
 
 poisson_axis_bcs(s::CGPoissonSolver) =
     (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = s.bc_top === :periodic ? :periodic : :neumann)
 
-# Neighbour index across a face of an axis of length N: periodic wrap, or
-# the cell itself (Neumann mirror ghost ⇒ zero flux through the face).
-@inline _nbr_hi(i, N, periodic::Bool) = i < N ? i + 1 : (periodic ? 1 : N)
-@inline _nbr_lo(i, N, periodic::Bool) = i > 1 ? i - 1 : (periodic ? N : 1)
+"""
+    fill_unit_halo!(a, bc_x, bc_y, bc_z) -> a
 
-# 7-point Laplacian evaluated on an interior-sized array, applying BCs
-# implicitly (periodic wrap or Neumann mirror) on every axis.
+Fill the one-cell halo of `a` (size `(nx+2, ny+2, nz+2)`, interior
+`2:n+1`): per axis `:periodic` wraps, anything else mirrors (the
+homogeneous-Neumann ghost `φ₀ = φ₁`), x then y then z. The halo kernels of
+`BoundaryConditions` (KA-f, #297): the halo of the CG iterates of
+[`CGPoissonSolver`](@ref) and `DensityWeightedPoissonSolver`, and of the
+multigrid levels.
+"""
+function fill_unit_halo!(a::AbstractArray{<:Any,3}, bcx::Symbol, bcy::Symbol, bcz::Symbol)
+    for (ax, bc) in ((1, bcx), (2, bcy), (3, bcz))
+        n = size(a, ax) - 2
+        bc === :periodic ? _halo_periodic!(a, ax, 1, n) : _halo_mirror!(a, ax, 1, n)
+    end
+    return a
+end
+
+# the halo fill before each operator application of the CG driver
+struct _UnitHalo
+    bc_x::Symbol
+    bc_y::Symbol
+    bc_z::Symbol
+end
+(h::_UnitHalo)(a) = fill_unit_halo!(a, h.bc_x, h.bc_y, h.bc_z)
+
+# The 7-point Laplacian at one point of a unit-halo array whose halo holds
+# the periodic wrap or the Neumann mirror (the face difference is then
+# zero: no flux through a Neumann face). A `PointOperator` body (KA-g,
+# #300); the same values as the wrap-around indexing it replaces.
+@inline function _laplacian_at(i, j, k, u, idx2, idy2, idz2)
+    @inbounds begin
+        c = u[i, j, k]
+        return (u[i+1, j, k] - 2c + u[i-1, j, k]) * idx2 +
+               (u[i, j+1, k] - 2c + u[i, j-1, k]) * idy2 +
+               (u[i, j, k+1] - 2c + u[i, j, k-1]) * idz2
+    end
+end
+
+@inline function _laplacian_body!(i, j, k, out, u, idx2, idy2, idz2)
+    @inbounds out[i, j, k] = _laplacian_at(i, j, k, u, idx2, idy2, idz2)
+    return nothing
+end
+
+"""
+    _apply_laplacian!(out, u, dx, dy, dz, bc_top, bc_bottom, bc_x, bc_y) -> out
+
+The 7-point Laplacian of [`CGPoissonSolver`](@ref) on interior-sized
+arrays (a test helper: pads `u` with the BC halo, then launches the
+operator its CG iterates).
+"""
 function _apply_laplacian!(out::Array{T,3}, u::Array{T,3},
                            dx::T, dy::T, dz::T,
                            bc_top::Symbol, bc_bottom::Symbol,
                            bc_x::Symbol, bc_y::Symbol) where {T}
+    size(out) == size(u) || throw(DimensionMismatch("_apply_laplacian!: $(size(out)) vs $(size(u))"))
     Nx, Ny, Nz = size(u)
-    idx2 = 1 / dx^2
-    idy2 = 1 / dy^2
-    idz2 = 1 / dz^2
-    px = bc_x === :periodic
-    py = bc_y === :periodic
-    pt = bc_top === :periodic
-    pb = bc_bottom === :periodic
-    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
-        ip = _nbr_hi(i, Nx, px); im = _nbr_lo(i, Nx, px)
-        jp = _nbr_hi(j, Ny, py); jm = _nbr_lo(j, Ny, py)
-        kp = _nbr_hi(k, Nz, pt); km = _nbr_lo(k, Nz, pb)
-        c = u[i, j, k]
-        out[i, j, k] = (u[ip, j, k] - 2c + u[im, j, k]) * idx2 +
-                       (u[i, jp, k] - 2c + u[i, jm, k]) * idy2 +
-                       (u[i, j,  kp] - 2c + u[i, j, km]) * idz2
-    end
+    up = zeros(T, Nx + 2, Ny + 2, Nz + 2); op = similar(up)
+    up[2:Nx+1, 2:Ny+1, 2:Nz+1] .= u
+    fill_unit_halo!(up, bc_x, bc_y, bc_top === :periodic ? :periodic : :neumann)
+    launch!(backend(u), _laplacian_body!, _unit_halo_ranges(Nx, Ny, Nz), op, up,
+            1 / dx^2, 1 / dy^2, 1 / dz^2)
+    out .= view(op, 2:Nx+1, 2:Ny+1, 2:Nz+1)
     return out
+end
+
+"""
+    copy_unit_halo_in!(backend, buf, f::Field) -> buf
+    copy_unit_halo_out!(backend, f::Field, buf) -> f
+
+Copy `f`'s interior into the interior `2:n+1` of the unit-halo array
+`buf`, or back. Pointwise kernels (KA-g, #300).
+"""
+function copy_unit_halo_in!(b, buf::AbstractArray{T,3}, f::Field) where {T}
+    m = f.mesh
+    size(buf) == (m.Nx + 2, m.Ny + 2, m.Nz + 2) || throw(DimensionMismatch("unit-halo buffer $(size(buf))"))
+    checkbounds(f.data, interior(m)...)
+    launch!(b, _copy_in_body!, _unit_halo_ranges(m.Nx, m.Ny, m.Nz), buf, f.data, m.Hx - 1, m.Hy - 1, m.Hz - 1)
+    return buf
+end
+function copy_unit_halo_out!(b, f::Field, buf::AbstractArray{T,3}) where {T}
+    m = f.mesh
+    size(buf) == (m.Nx + 2, m.Ny + 2, m.Nz + 2) || throw(DimensionMismatch("unit-halo buffer $(size(buf))"))
+    checkbounds(f.data, interior(m)...)
+    launch!(b, _copy_out_body!, _unit_halo_ranges(m.Nx, m.Ny, m.Nz), f.data, buf, m.Hx - 1, m.Hy - 1, m.Hz - 1)
+    return f
 end
 
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::CGPoissonSolver{T}) where {T}
-    m  = source.mesh
-    ii, jj, kk = interior(m)
-
-    # b (source), zero-mean so the singular system is compatible
-    b = copyto!(solver.b, view(source.data, ii, jj, kk))
-    b .-= sum(b) / length(b)
-    b_norm = sqrt(sum(abs2, b))
-    b_norm == 0 && (fill!(view(p.data, ii, jj, kk), 0); return p)
-
-    # initial guess = 0
-    x = fill!(solver.x, 0)
-
-    r    = solver.r    .= b
-    pdir = solver.p_dir .= r
-    z    = solver.z    .= r     # diagonal preconditioner is identity here
-    w = solver.w        # r·z as sum(r .* z), the product in scratch: same bits
-    rz_old = sum(w .= r .* z)
-
-    for k in 1:solver.maxit
-        _apply_laplacian!(solver.Ap, pdir, m.dx, m.dy, m.dz,
-                          solver.bc_top, solver.bc_bottom, solver.bc_x, solver.bc_y)
-        pap = sum(w .= pdir .* solver.Ap)
-        α   = rz_old / pap
-        @. x = x + α * pdir
-        @. r = r - α * solver.Ap
-        res_norm = sqrt(sum(abs2, r))
-        solver.last_iter[] = k
-        solver.last_residual[] = res_norm
-        if res_norm < solver.tol * b_norm
-            break
-        end
-        z .= r     # identity preconditioner
-        rz_new = sum(w .= r .* z)
-        β = rz_new / rz_old
-        @. pdir = z + β * pdir
-        rz_old = rz_new
-        k == solver.maxit &&
-            @warn("CGPoissonSolver hit maxit=$k with ‖r‖=$res_norm",
-                  subsystem = :pressure, domain = current_domain(), solver = :cg,
-                  iterations = k, residual = res_norm,
-                  relative_residual = res_norm / b_norm, tol = solver.tol)
-    end
-    # zero-mean projection on the solution
-    x .-= sum(x) / length(x)
-    view(p.data, ii, jj, kk) .= x
+    m  = solver.mesh
+    bk = backend(solver.b)
+    copy_unit_halo_in!(bk, solver.b, source)
+    A = PointOperator(_laplacian_at, 1 / m.dx^2, 1 / m.dy^2, 1 / m.dz^2;
+                      prepare = _UnitHalo(solver.bc_x, solver.bc_y,
+                                          solver.bc_top === :periodic ? :periodic : :neumann))
+    st = pcg!(A, IdentityPreconditioner(), solver.x, solver.b, solver.ws;
+              ranges = _unit_halo_ranges(m.Nx, m.Ny, m.Nz), tol = solver.tol,
+              maxit = solver.maxit, project_mean = true, definite = :negative, backend = bk)
+    solver.last_iter[] = st.iterations
+    solver.last_residual[] = st.residual
+    st.status === :maxit &&
+        @warn("CGPoissonSolver hit maxit=$(solver.maxit) with ‖r‖=$(st.residual)",
+              subsystem = :pressure, domain = current_domain(), solver = :cg,
+              iterations = st.iterations, residual = st.residual,
+              relative_residual = st.residual / st.bnorm, tol = solver.tol)
+    st.status === :breakdown &&
+        @warn("CGPoissonSolver: CG breakdown (vanishing curvature) after $(st.iterations) iterations",
+              subsystem = :pressure, domain = current_domain(), solver = :cg,
+              reason = :breakdown, iterations = st.iterations, residual = st.residual)
+    copy_unit_halo_out!(bk, p, solver.x)
     return p
 end
 
