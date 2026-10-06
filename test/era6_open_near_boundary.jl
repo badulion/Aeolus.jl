@@ -299,3 +299,32 @@ end
     set!(s2.u, U); set!(s2.θ, θ0)
     @test abs(boundary_scalar_flux(s2, s2.θ; diffusivity = d).total) < 1e-12 * U * θ0 * A
 end
+
+# ---------------------------------------------------------------------------
+# #327 gate: boundary_scalar_flux with a diffusivity is type-stable and
+# allocation-free. A captured face-flux closure (M2) inferred as
+# Tuple{Any,Any,Any}: 313 kB per call on 16³, 43× slower on 96×96×48. The
+# Berlin heat and water ledgers call it every step.
+function _bsf_bytes(s, sch, d)          # a function barrier: no dispatch in the measurement
+    boundary_scalar_flux(s, s.θ; scheme = sch, diffusivity = d, fill = false)
+    return @allocated boundary_scalar_flux(s, s.θ; scheme = sch, diffusivity = d, fill = false)
+end
+@testset "#327: boundary_scalar_flux with diffusivity — inferred, no allocation" begin
+    m = RegularGrid(size = (16, 16, 16), extent = (160.0, 160.0, 160.0), halo = (3, 3, 3))
+    data = FunctionBoundaryData(u = 2.0, v = -1.0, w = 0.0,
+                                θ = (x, y, z, t) -> 300.0 + 0.003z + 0.01x)
+    s = BoussinesqSimulation(m; bcs = open_boundary_conditions(m, data; top = :open),
+                             θ₀ = 300.0, ν = 0.1)
+    set!(s.u, 2.0); set!(s.v, -1.0); set!(s.θ, (x, y, z) -> 300.0 + 0.003z + 0.01x)
+    prepare_open_boundaries!(s)
+    κ = deepcopy(s.θ); fill!(κ.data, 0.5)               # a cell-centred Field, as the SGS κ
+    for K in (κ, κ.data), sch in (:centered, :upwind, :weno_z5)
+        d = (ν = 0.1, κh = K, κv = K, scale = 1.0)
+        F = @inferred boundary_scalar_flux(s, s.θ; scheme = sch, diffusivity = d, fill = false)
+        @test isfinite(F.total) && F.total isa Float64
+        # zero bytes for the two-point schemes; the WENO face value boxes one
+        # Float64 per face, as on the base commit e2c73f2 (not this regression)
+        sch === :weno_z5 && continue
+        @test _bsf_bytes(s, sch, d) == 0
+    end
+end

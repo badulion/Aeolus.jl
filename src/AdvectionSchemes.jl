@@ -1779,14 +1779,11 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     g = mesh(ϕ)
     vb = sim.bcs
     H = required_halo(r)
-    for (side, face, Hs) in ((:west, vb.west, g.Hx), (:east, vb.east, g.Hx),
-                             (:south, vb.south, g.Hy), (:north, vb.north, g.Hy),
-                             (:bottom, vb.bottom, g.Hz), (:top, vb.top, g.Hz))
-        face isa AbstractOpenBoundary && Hs < H &&
-            throw(ArgumentError("boundary_scalar_flux: the open face :$side has a halo of " *
-                                "$Hs layers, shallower than required_halo = $H of " *
-                                "$(scheme_name(r))"))
-    end
+    # one call per face, not a loop over a heterogeneous tuple (which boxes
+    # its elements: an allocation on every call, #327)
+    _check_open_halo(:west, vb.west, g.Hx, H, r); _check_open_halo(:east, vb.east, g.Hx, H, r)
+    _check_open_halo(:south, vb.south, g.Hy, H, r); _check_open_halo(:north, vb.north, g.Hy, H, r)
+    _check_open_halo(:bottom, vb.bottom, g.Hz, H, r); _check_open_halo(:top, vb.top, g.Hz, H, r)
     _check_halo(r, g)
     levels === nothing || length(levels) == g.Nz ||
         throw(DimensionMismatch("boundary_scalar_flux: levels needs Nz = $(g.Nz) entries"))
@@ -1816,18 +1813,16 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     dT_ = diffusivity !== nothing && bcs.top isa AbstractOpenBoundary
     fW = fE = fS = fN = fB = fT = zero(T)
     @inline addl!(v, k, x) = (v === nothing || (@inbounds v[k - k0] += x); nothing)
-    # the face flux of the one kernel (scalar_face_flux), diffusive part only
-    # where the scalar face is open
-    @inline flux(ax, i, j, k, K, on) =
-        scalar_face_flux(r, ϕd, ax == 1 ? ud : ax == 2 ? vd : wd, ax, i, j, k,
-                         on ? face_diffusivity(dν, K, ks, ax, i, j, k) : 0.0,
-                         face_inv_spacing(g, ax, k))
+    # every face flux is _bsf_face_flux (scalar_face_flux, diffusive part only
+    # where the scalar face is open): a top-level function with its arrays as
+    # arguments, not a captured closure, which did not infer and allocated
+    # on every face (#327)
     if !(vb.west isa Periodic)
         iw = first(ii); ie = last(ii) + 1
         @inbounds for k in kk, (b, j) in enumerate(jj)
             w = _wflux(Wc, k) * Ax; wd_ = _wflux(Dc, k) * Ax
-            Fa_w, Fd_w, φw = flux(1, iw, j, k, Kh, dW_)
-            Fa_e, Fd_e, φe = flux(1, ie, j, k, Kh, dE_)
+            Fa_w, Fd_w, φw = _bsf_face_flux(r, ϕd, ud, 1, iw, j, k, dν, Kh, ks, g, dW_)
+            Fa_e, Fd_e, φe = _bsf_face_flux(r, ϕd, ud, 1, ie, j, k, dν, Kh, ks, g, dE_)
             aw = -(w * Fa_w + wd_ * Fd_w); ae = w * Fa_e + wd_ * Fd_e
             fW += aw; fE += ae
             addl!(levels, k, aw + ae)
@@ -1841,8 +1836,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         js = first(jj); jn = last(jj) + 1
         @inbounds for k in kk, (a, i) in enumerate(ii)
             w = _wflux(Wc, k) * Ay; wd_ = _wflux(Dc, k) * Ay
-            Fa_s, Fd_s, φs = flux(2, i, js, k, Kh, dS_)
-            Fa_n, Fd_n, φn = flux(2, i, jn, k, Kh, dN_)
+            Fa_s, Fd_s, φs = _bsf_face_flux(r, ϕd, vd, 2, i, js, k, dν, Kh, ks, g, dS_)
+            Fa_n, Fd_n, φn = _bsf_face_flux(r, ϕd, vd, 2, i, jn, k, dν, Kh, ks, g, dN_)
             as = -(w * Fa_s + wd_ * Fd_s); an = w * Fa_n + wd_ * Fd_n
             fS += as; fN += an
             addl!(levels, k, as + an)
@@ -1857,8 +1852,8 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
         wb_ = _wflux(Wf, kb) * Az; wt_ = _wflux(Wf, kt) * Az
         db_ = _wflux(Df, kb) * Az; dt_ = _wflux(Df, kt) * Az
         @inbounds for (b, j) in enumerate(jj), (a, i) in enumerate(ii)
-            Fa_b, Fd_b, _ = flux(3, i, j, kb, Kv, dB_)
-            Fa_t, Fd_t, φt = flux(3, i, j, kt, Kv, dT_)
+            Fa_b, Fd_b, _ = _bsf_face_flux(r, ϕd, wd, 3, i, j, kb, dν, Kv, ks, g, dB_)
+            Fa_t, Fd_t, φt = _bsf_face_flux(r, ϕd, wd, 3, i, j, kt, dν, Kv, ks, g, dT_)
             ab = -(wb_ * Fa_b + db_ * Fd_b)
             at = wt_ * Fa_t + dt_ * Fd_t
             fB += ab; fT += at
@@ -1871,6 +1866,21 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     return (west = fW, east = fE, south = fS, north = fN, bottom = fB, top = fT,
             total = fW + fE + fS + fN + fB + fT)
 end
+
+# The halo of an open face of boundary_scalar_flux must hold the stencil.
+@inline _check_open_halo(side, face, Hs, H, r) =
+    face isa AbstractOpenBoundary && Hs < H &&
+        throw(ArgumentError("boundary_scalar_flux: the open face :$side has a halo of " *
+                            "$Hs layers, shallower than required_halo = $H of " *
+                            "$(scheme_name(r))"))
+
+# One face flux of boundary_scalar_flux: scalar_face_flux with the diffusive
+# part only where the scalar face is open (`on`). Top level, with every array
+# an argument, so it specialises and inlines (#327).
+@inline _bsf_face_flux(r, ϕd, vel, ax, i, j, k, dν, K, ks, g, on) =
+    scalar_face_flux(r, ϕd, vel, ax, i, j, k,
+                     on ? face_diffusivity(dν, K, ks, ax, i, j, k) : 0.0,
+                     face_inv_spacing(g, ax, k))
 
 # The diffusive part of boundary_scalar_flux: (ν, κh, κv, scale, Wc, Wf).
 _diffusive_parts(::Nothing, Wc, Wf) = (0.0, nothing, nothing, 1.0, Wc, Wf)
