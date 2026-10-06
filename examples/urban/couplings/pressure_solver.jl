@@ -43,11 +43,13 @@ case_divergence(case) = max_divergence(case.sim)
     case_poisson_axes(cfg, mesh) -> (bc_x, bc_y, bc_z)
 
 The per-axis pressure-Poisson kinds (`:periodic` / `:neumann`) implied by
-the velocity boundary conditions of the case's core
-([`case_boundary_conditions`](@ref)`(cfg, mesh).bcs`: `cfg.lateral`), via
+the velocity boundary conditions of the case's core — the nest faces of
+[`nest_case_bcs`](@ref) for a nested case (#265, all Neumann), otherwise
+[`case_boundary_conditions`](@ref)`(cfg, mesh).bcs` (`cfg.lateral`) — via
 `PressureSolvers.poisson_axis_bcs`.
 """
-case_poisson_axes(cfg, mesh) = poisson_axis_bcs(case_boundary_conditions(cfg, mesh).bcs)
+case_poisson_axes(cfg, mesh) =
+    poisson_axis_bcs(case_nested(cfg) ? nest_case_bcs(cfg, mesh) : case_boundary_conditions(cfg, mesh).bcs)
 
 "Smoke-check entry: the solver's per-axis closure is the one the case's `bcs` imply."
 solver_axes_check(case) =

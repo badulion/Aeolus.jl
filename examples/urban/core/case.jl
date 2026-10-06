@@ -112,7 +112,9 @@ end
 
 The keyword arguments every dynamical core of the case shares: viscosity,
 gravity, Coriolis, Smagorinsky, sponge and the boundary conditions of
-[`case_boundary_conditions`](@ref) (`cfg.lateral`, #262): for the
+[`case_boundary_conditions`](@ref) (none for a nested case, whose nest
+faces the `:nesting` coupling's `sim_options` set, #265; otherwise
+`cfg.lateral`, #262): for the
 default periodic case periodic laterally, walls at the bottom and the
 top for the velocity; for θ no flux at the ground (the surface fluxes
 enter as tendencies) and [`θ_top_bc`](@ref)`(cfg)` at the top
@@ -183,11 +185,16 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     # before the first dynamics step, whose prepare_open_boundaries! would
     # come too late: with empty buffers the first transport saw u = 0 on the
     # open faces and moved 14 % of the edge cells' vapour across them)
+    # A nested case's faces get their data from the parent when the
+    # `:nesting` coupling builds the nest, before the first stage reads them
+    # (couplings/nesting.jl, #265).
     if has_open_boundaries(sim)
         mark_open_boundary_solids!(sim.bcs, geom.sm.mask)
-        prepare_open_boundaries!(sim)
-        fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
-        fill_halos!(sim.θ, sim.θ_bcs)
+        if all(st -> st.data !== nothing, open_boundary_states(sim))
+            prepare_open_boundaries!(sim)
+            fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+            fill_halos!(sim.θ, sim.θ_bcs)
+        end
     end
 
     # Core moisture tracers. qv and ql are advected by the :transport

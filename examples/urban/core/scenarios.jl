@@ -9,8 +9,10 @@
 
 Named presets for [`CaseConfig`](@ref):
 
-* `:summer` (alias `:alexanderplatz`) — the flagship: 1 km × 1 km × 200 m
-  around Alexanderplatz on the 64 × 64 × 32 grid (dx = 15.6 m), 29 June
+* `:summer` (alias `:alexanderplatz`) — the flagship: 1 km × 1 km × 400 m
+  around Alexanderplatz on the 64 × 64 × 64 grid (dx = 15.6 m, dz =
+  6.25 m), nested in the 6 km × 6 km × 3 km Aeolus parent of #259
+  (refinement (2, 2, 4); `options[:nesting]`, #265), 29 June
   2019 (a clear day of the late-June 2019 heat wave; #247) from 06:00
   CEST, 24 h at dt = 2 s, initialised from the Lindenberg sounding
   (`cfg.sounding`).
@@ -25,7 +27,10 @@ Named presets for [`CaseConfig`](@ref):
   312.5 m south of the anchor: 69 building and 50 park columns, tallest
   roof 31 m, well clear of the towers that reach 200 m in the OSM
   heights) on a
-  16 × 16 × 16 grid (dx = 15.6 m) at local noon, 12 steps of 2 s with
+  16 × 16 × 16 grid (dx = 15.6 m) at local noon, nested in a small
+  parent (1 km × 1 km × 500 m on 16 × 16 × 10 cells of 62.5 m × 50 m,
+  refinement (4, 4, 8), the land use a crop of the 6 km table; #265),
+  `options[:nesting]`), 12 steps of 2 s with
   radiation every 8 s, the surfaces (soil included) every 4 s and output
   every 12 s. Used for
   quick checks of every code path, not for physics. **Idealised** initial
@@ -47,7 +52,12 @@ const SCENARIOS = Dict{Symbol,NamedTuple}(
                 offset = (0.0, -312.5), start_h = 12.0, nsteps = 12,
                 sounding = nothing, θ_inversion_z = 60.0,
                 cadence = Dict(:radiation => 8.0, :soil => 4.0, :output => 12.0),
-                output_path = nothing),
+                output_path = nothing,
+                # the small parent of the smoke nest (#265): 1 km × 1 km × 500 m,
+                # 16 × 16 × 10 cells of 62.5 m × 50 m
+                options = Dict{Symbol,Any}(:nesting => (parent = (extent = (1000.0, 1000.0, 500.0),
+                                                                  refinement = (4, 4, 8),
+                                                                  vertical = :uniform),))),
     :mitte_sample => (osm_path = joinpath(DATA_DIR, "sample_berlin_mitte.osm"),
                       min_height = 15.0),
 )
@@ -60,7 +70,17 @@ function CaseConfig(scenario::Symbol; kwargs...)
     # copy mutable preset values so two configs never share a Dict
     fields = Dict{Symbol,Any}(k => (v isa AbstractDict ? copy(v) : v) for (k, v) in pairs(preset))
     for (k, v) in kwargs
-        fields[k] = v
+        if k === :options && haskey(fields, :options)
+            # options merge over the preset's, per coupling and keyword
+            # (the smoke preset's nest parent survives a user's options)
+            o = copy(fields[:options])
+            for (name, nt) in v
+                o[name] = haskey(o, name) ? merge(o[name], nt) : nt
+            end
+            fields[k] = o
+        else
+            fields[k] = v
+        end
     end
     haskey(fields, :scenario) || (fields[:scenario] = scenario === :alexanderplatz ? :summer : scenario)
     haskey(fields, :name) || (fields[:name] = scenario)

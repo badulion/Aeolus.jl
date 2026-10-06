@@ -30,6 +30,8 @@
 #   sim_options(::Type{C}, cfg, mesh, opts) -> NamedTuple of keywords of the core's constructor
 #   step_options(c, case)       -> NamedTuple of keywords of the core's step! (and of the
 #                                  :timestepper provider's stepper)
+#   limit_dt(c, case, dt)       -> the next step of a variable-step stepper, shortened
+#                                  if `c` needs it (the nest: land on the parent window, #265)
 #
 # Dynamics contract (#133), used only by the providers of the two
 # dynamics slots:
@@ -129,6 +131,16 @@ is built and passed by the `:timestepper` provider to `step!` (or to
 the same keyword.
 """
 step_options(c::AbstractCoupling, case) = (;)
+"""
+    limit_dt(c, case, dt) -> dt
+
+The length of the next step under a variable-step `:timestepper`
+provider (`variable_dt`), given the stepper's own `dt`: a coupling that
+needs the steps to land on its own times shortens it (the `:nesting`
+coupling makes the child's steps land on the end of the parent's step,
+#265). Default: `dt`. [`step_dt`](@ref) applies every enabled coupling's.
+"""
+limit_dt(c::AbstractCoupling, case, dt) = dt
 function build_core end
 variable_dt(::Type{<:AbstractCoupling}) = false
 next_dt(c::AbstractCoupling, case) = case.cfg.dt
