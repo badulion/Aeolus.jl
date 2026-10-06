@@ -24,7 +24,7 @@ the relaxation term ``-λ(x)(\\mathbf u - \\mathbf u_{\\rm target})`` with
     λ(x) = λ_max [ S((x − x_start)/rise) − S((x − x_end)/fall + 1) ]
 
 (Nordström, Nordin & Henningson 1999, eq. 2.3; `S` is
-[`smooth_step`](@ref Aeolus.Operators.smooth_step)). λ is zero outside
+[`smooth_step`](@ref Aeolus.Operators.FiniteVolume.smooth_step)). λ is zero outside
 `[x_start, x_end]` and `λ_max` on the plateau
 `[x_start + rise, x_end − fall]`. Apply it with [`add_fringe!`](@ref) or
 through `body_force!` with [`fringe_forcing`](@ref).

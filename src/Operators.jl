@@ -5,6 +5,7 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Locat
 using ..Fields
 using ..Fields: Field, mesh, interior_view
 using ..Grids: interior
+using ..Backends: Backends, plane_reduce!, plane_partials!, ordered_sum, range_max
 using ..BoundaryConditions: BoundaryConditions, fill_halos!, Periodic, FieldBoundaryConditions,
                             passive_scalar_bcs
 using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR,

@@ -2,8 +2,8 @@
 #
 # We avoid Makie / Plots / GR here because the NixOS build machine has a
 # glibc / artifact mismatch that breaks several Julia C-dependent
-# packages (SpecialFunctions → StatsFuns → Makie fails to precompile;
-# HDF5 → NCDatasets fails to precompile). Rather than fight the system,
+# packages (SpecialFunctions → StatsFuns → Makie failed to precompile;
+# NCDatasets did too then, but loads since #310). Rather than fight the system,
 # we write our own tiny plotting utilities:
 #
 #   * `save_heatmap(path, Z; …)` — writes an ASCII PPM image (`.ppm`).

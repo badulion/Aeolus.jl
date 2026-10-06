@@ -4,6 +4,7 @@
 using Test
 using Aeolus
 using Aeolus.Chemistry
+using Random: Xoshiro
 
 # Classical RK4 reference for the triad R1–R2 (tiny steps).
 function triad_rk4(NO, NO2, O3, t, J, k; n = 200_000)
@@ -197,5 +198,28 @@ end
         @test removed ≈ 27 * 2.0 - sum(c) rtol = 1e-12                 # mass accounting
         @test apply_wet_deposition!(c, qr, 600.0; scav = 0.0) == 0     # insoluble: nothing
         @test_throws DimensionMismatch apply_wet_deposition!(c, zeros(2, 2, 2), 1.0; scav = 1.0)
+        # KA-b (#296): the total is a running sum per plane in cell order (i
+        # fastest), planes added in ascending k: thread-invariant, and the same
+        # bits for plain arrays (linear indexing) and views (Cartesian)
+        c0 = 1 .+ rand(Xoshiro(11), 13, 9, 7)
+        qr = (rand(Xoshiro(12), size(c0)...) .< 0.3) .* 1e-4
+        ref = 0.0
+        cr = copy(c0)
+        for k in axes(cr, 3)
+            sk = 0.0
+            for j in axes(cr, 2), i in axes(cr, 1)
+                qr[i, j, k] > 0 || continue
+                c1 = cr[i, j, k] * exp(-s * qr[i, j, k] * 600.0)
+                sk += cr[i, j, k] - c1; cr[i, j, k] = c1
+            end
+            ref += sk
+        end
+        ca = copy(c0)
+        ra = apply_wet_deposition!(ca, qr, 600.0; scav = s)
+        @test ra === ref && ca == cr
+        big = zeros(15, 11, 9); big[2:14, 2:10, 2:8] .= c0
+        qbig = zeros(size(big)); qbig[2:14, 2:10, 2:8] .= qr
+        rv = apply_wet_deposition!(view(big, 2:14, 2:10, 2:8), view(qbig, 2:14, 2:10, 2:8), 600.0; scav = s)
+        @test rv === ref && big[2:14, 2:10, 2:8] == cr
     end
 end

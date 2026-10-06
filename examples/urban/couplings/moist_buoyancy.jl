@@ -35,29 +35,37 @@ function moist_buoyancy_perturbation!(Δ::AbstractArray{<:Real,3}, θ::AbstractA
                                       qv::AbstractArray{<:Real,3}, qc::AbstractVector,
                                       fluid::AbstractArray{Bool,3})
     Nx, Ny, Nz = size(Δ)
+    # the cell values fused with the per-level fluid sums and counts, in the
+    # canonical, thread-invariant plane order (KA-b, #296)
+    S, n = zeros(Nz), zeros(Nz)
+    plane_reduce!((S, n), Aeolus.Backends.backend(Δ), _moist_Δ_at, (1:Nx, 1:Ny, 1:Nz),
+                  Δ, θ, qv, qc, fluid)
     @inbounds for k in 1:Nz
-        s = 0.0; n = 0
-        for j in 1:Ny, i in 1:Nx
-            if fluid[i, j, k]
-                c = 0.0
-                for q in qc
-                    c += q[i, j, k]
-                end
-                θk = θ[i, j, k]
-                d = Aeolus.MoistThermodynamics.density_temperature(
-                        θk, Aeolus.MoistThermodynamics.PhasePartition(qv[i, j, k] + c, c)) - θk
-                Δ[i, j, k] = d
-                s += d; n += 1
-            else
-                Δ[i, j, k] = 0.0
-            end
-        end
-        m = n > 0 ? s / n : 0.0
+        m = n[k] > 0 ? S[k] / n[k] : 0.0
         for j in 1:Ny, i in 1:Nx
             fluid[i, j, k] && (Δ[i, j, k] -= m)
         end
     end
     return Δ
+end
+
+@inline function _moist_Δ_at(i, j, k, Δ, θ, qv, qc, fluid)
+    @inbounds begin
+        if fluid[i, j, k]
+            c = 0.0
+            for q in qc
+                c += q[i, j, k]
+            end
+            θk = θ[i, j, k]
+            d = Aeolus.MoistThermodynamics.density_temperature(
+                    θk, Aeolus.MoistThermodynamics.PhasePartition(qv[i, j, k] + c, c)) - θk
+            Δ[i, j, k] = d
+            return (Float64(d), 1.0)
+        else
+            Δ[i, j, k] = 0.0
+            return (0.0, 0.0)
+        end
+    end
 end
 
 """

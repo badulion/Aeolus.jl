@@ -33,8 +33,10 @@ building height · resolved vertical velocity at 30 m.</sub>
   kernel constants, Wiscombe's Mie benchmark, Golovin's analytic coalescence
   solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
   CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
-- **80,661 tests.** 62,000 lines of source, 32,000 lines of tests.
-- **Few dependencies** (FFTW, KernelAbstractions). NetCDF, PNG, Mie
+- **96,755 passing tests in the fast tier** (master `511deda`, 2026-10-06);
+  the full tier adds the validation mini-simulations. 62,000 lines of source,
+  32,000 lines of tests.
+- **Few dependencies** (FFTW, KernelAbstractions, NCDatasets). PNG, Mie
   scattering, error and Bessel functions are written in the package.
 - Single-node CPU. MPI and GPU are planned, not present.
 
@@ -115,8 +117,18 @@ material albedo and emissivity derived from the spectral library
 </td></tr>
 <tr><td><b>Turbulence</b></td><td>
 
-Smagorinsky-Lilly · plane-averaged dynamic (Germano-Lilly) Smagorinsky ·
-a wrapper for learned closures (`ML.MLSGS`)
+One SGS closure contract on every core (commit per accepted step,
+rollback on rejected steps) · Deardorff prognostic TKE (default) ·
+differential SGS Reynolds stresses · Smagorinsky-Lilly · plane, Lagrangian
+and scale-dependent Lagrangian (LASD) dynamic Smagorinsky · AMD · Vreman ·
+σ-model · Ri<sub>g</sub>-dependent anisotropic eddy viscosity · stress-form
+SGS divergence and tensorial (isentropic) scalar diffusion · wall models:
+Spalding / rough log law / MOST, matching height and input filtering,
+immersed and cut-cell walls, non-equilibrium TBLE, dynamic roughness ·
+large-scale forcing (geostrophic pressure gradient, nudging, advective
+tendencies) · maximum sustainable heat flux · turbulent-fraction,
+intermittency and relaminarisation diagnostics · a-priori SGS analysis
+against filtered DNS · a wrapper for learned closures (`ML.MLSGS`)
 
 </td></tr>
 <tr><td><b>Chemistry</b></td><td>
@@ -128,7 +140,7 @@ dry deposition · rain scavenging of HNO₃
 </td></tr>
 <tr><td><b>Output</b></td><td>
 
-CF-1.8 NetCDF, readable by ncview, xarray, Paraview, CDO and Panoply ·
+CF-1.8 NetCDF-4 (compressed), readable by ncview, xarray, Paraview, CDO and Panoply ·
 pure-Julia PNG, APNG, PPM and SVG rendering
 
 </td></tr>
@@ -160,7 +172,17 @@ code does not contain.
 | P3 rain reflectivity at 5 mm/h | `33.93 dBZ` | `34.19` (Marshall-Palmer) |
 | Settling speed, 10 μm particle | `0.304 cm/s` | `0.31` (Seinfeld & Pandis) |
 | Fog visibility, LWC 0.2 g/m³ | `108 m` | `111` (Kunkel 1984) |
-| Dynamic Smagorinsky *C*<sub>s</sub>, decaying turbulence | `0.153` | ~0.17 (Lilly) |
+| Dynamic Smagorinsky *C*<sub>s</sub>, decaying turbulence | `0.155` | ~0.17 (Lilly) |
+| Log-law Φ<sub>m</sub>, half channel, LASD, no wall damping | `0.93–1.15` | 1 (Smagorinsky `0.97–1.59`) |
+| Channel bulk velocity *U*<sub>b</sub><sup>+</sup>, wall-modelled, *Re*<sub>τ</sub> 182–5186 | within `1.5%` | Lee & Moser (2015) DNS |
+| GABLS1 boundary-layer height / *u*<sub>*</sub> at 64³ | `196 m` / `0.284 m/s` | ≈200 / 0.245–0.283 (intercomparison) |
+| Stratified channel, Nusselt ratio at *Ri*<sub>τ</sub> 18 | `0.63–0.67` | `0.667` (DNS) |
+| Convective BL, peak vertical-velocity variance | `0.459 w*²` | `0.466` (Lenschow et al. 1980) |
+| A-priori SGS dissipation correlation, Smagorinsky, 256³ DNS | `0.832` | 0.4–0.85 (literature) |
+| GABLS3 low-level jet at 6.25 m | `7.70 m/s` at `127 m` | 7.8–9.3 m/s at 100–130 m (LES) |
+| Kelvin-Helmholtz linear growth rate | `0.1864` | `0.1897` (Michalke) |
+| Flat-plate bypass transition onset, *Tu* 3.3 % | *Re*<sub>θ</sub> `198` | 190–200 (Mayle; Abu-Ghannam & Shaw) |
+| Collapse of a cooled channel, critical *h/L* at *Re*<sub>τ</sub> 360 | `0.45–0.50` | `0.49` (Nieuwstadt 2005) |
 | Hourly latent heat flux, 5 FLUXNET towers | *r* `0.83–0.94` | tower observations |
 | CAPITOUL road / wall mean temperature | `+0.06 / −0.03 K` | campaign observations |
 | ASHRAE 140 annual heating and cooling loads | `19 of 20` inside | six reference programs |
@@ -183,14 +205,14 @@ Pkg.activate(".")
 Pkg.instantiate()
 ```
 
-Julia ≥ 1.10. The only non-standard-library dependency is **FFTW**.
+Julia ≥ 1.10. Non-standard-library dependencies: **FFTW**,
+**KernelAbstractions** and **NCDatasets** (NetCDF-4 output, #310).
 
-> **Why so few dependencies?** The usual scientific-Julia stack — NetCDF,
-> HDF5, Makie, SpecialFunctions — needs binary libraries that do not build on
-> every target platform. Rather than ship a package that fails to load,
-> Aeolus writes what it needs: a CF-compliant NetCDF-3 writer, a PNG/APNG
-> encoder, a Mie solver, and series expansions for the error and Bessel
-> functions. See [`src/NetCDFIO.jl`](src/NetCDFIO.jl) for the clearest case.
+> **Why so few dependencies?** Each one is justified in the PR that adds it
+> (`docs/CONTRIBUTING.md`). Some of the in-package code (a PNG/APNG
+> encoder, a Mie solver, series expansions for the error and Bessel
+> functions) dates from a rule against binary dependencies; the NetCDF-3
+> writer of that time was replaced by NCDatasets in #310.
 
 ---
 
@@ -352,7 +374,13 @@ ends with a validation target. Full plan:
   - [x] Phase 51 — snow, ice and frozen surfaces
   - [x] Phase 52 — water surfaces and wave coupling
   - [x] Phase 53 — surface heterogeneity and blending
-- [ ] **Era VI** — turbulence closure *(54–59)*
+- [x] **Era VI** — turbulence closure *(54–59)* · 5,729 tests (17 `@test_broken`)
+  - [x] Phase 54 — Lagrangian and scale-dependent dynamic SGS models
+  - [x] Phase 55 — AMD, Vreman, anisotropic and tensorial eddy viscosity, GABLS1
+  - [x] Phase 56 — prognostic SGS TKE and Reynolds stresses, filtered-DNS validation
+  - [x] Phase 57 — wall models: equilibrium, log-layer mismatch, immersed walls, TBLE
+  - [x] Phase 58 — stable boundary layer: GABLS2–4, CASES-99, turbulence collapse
+  - [x] Phase 59 — transition, σ-model, flat-plate transition, relaminarisation
 - [ ] **Era VII** — chemistry and aerosol *(60–66)*
 - [ ] **Era VIII** — real-world data, forcing and validation *(67–73)*
 - [ ] **Era IX** — data assimilation and inverse problems *(74–79)*

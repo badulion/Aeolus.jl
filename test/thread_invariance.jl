@@ -14,10 +14,14 @@
 #     and `-t 24` (AEOLUS_THREAD_COUNTS="1,4,24") and hashes every
 #     prognostic field, the ledgers, the solver iteration counts and the dt
 #     sequence of: the primitives, a 64³ DNS step, the Berlin smoke matrix
-#     (12 steps per run) and one flagship step. Every hash must agree with
+#     (12 steps per run), one flagship step and short nested runs (KA-f).
+#     Every hash must agree with
 #     the 1-thread one; the differing keys are listed otherwise.
 #     AEOLUS_THREAD_SECTIONS selects sections (default
-#     "primitives,dns,smoke,flagship"). Every port PR runs and quotes it:
+#     "primitives,dns,reductions,smoke,flagship,nested,fft"; reductions: the
+#     KA-b #296 reduction call sites; nested: short nested runs, KA-f #297;
+#     fft: every spectral pressure solver with FFTW on the process's threads,
+#     KA-h #298). Every port PR runs and quotes it:
 #
 #       AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
 #
@@ -66,7 +70,15 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
                           ("plane_mean!", b -> plane_mean!(zeros(32), b, B, I3)),
                           ("column_partials", b -> column_partials(b, B, I3)),
                           ("interior_max (NaN)", b -> interior_max(b, A, I3)),
-                          ("interior_all_finite (NaN)", b -> interior_all_finite(b, A, I3)))
+                          ("interior_all_finite (NaN)", b -> interior_all_finite(b, A, I3)),
+                          ("plane_reduce! (tuple)", b -> (p = (zeros(32), zeros(32));
+                              plane_reduce!(p, b, (i, j, k, B) -> (@inbounds (B[i, j, k], abs(B[i, j, k]))), I3, B);
+                              vcat(p...))),
+                          ("plane_map! (fused)", b -> (C = copy(B); p = plane_map!(zeros(32), b,
+                              (k, ir, jr, C) -> (s = 0.0; @inbounds(for j in jr, i in ir
+                                  x = 0.5 * C[i, j, k]; C[i, j, k] -= x; s += x end); s), I3, C);
+                              vcat(p, vec(C)))),
+                          ("range_max (NaN)", b -> range_max(b, (i, j, k, A) -> (@inbounds abs(A[i, j, k])), I3, A)))
             r1, r2 = f(ser), f(thr)
             @test isequal(r1, r2) && (r1 isa Bool || ti_bits(r1) == ti_bits(r2))
         end
@@ -75,7 +87,7 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
 
     if get(ENV, "AEOLUS_THREAD_TESTS", "0") == "1"
         counts = parse.(Int, split(get(ENV, "AEOLUS_THREAD_COUNTS", "1,4,24"), ','))
-        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,smoke,flagship")
+        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft")
         project = dirname(Base.active_project())
         dir = mktempdir()
         hashes = Dict{Int,Dict{String,String}}()

@@ -64,6 +64,7 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ,
 using ..Fields
 using ..Fields: Field, location, interior_view, set!
 using ..BoundaryConditions
+using ..Backends: Backends, launch!      # the transfer operators are launches (KA-f, #297)
 using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             AbstractBoundaryData, OpenPlane, OpenBoundary,
                             OpenBoundaryState, open_boundary_conditions,
@@ -71,7 +72,8 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             has_open_boundaries, update_open_boundaries!,
                             open_boundary_snapshot, restore_open_boundaries!,
                             Periodic, NoFlux, ImpermeableWall, NoSlipWall,
-                            mark_open_boundary_solids!, WindowedBoundaryData
+                            mark_open_boundary_solids!, WindowedBoundaryData,
+                            neighbor_index
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, step_rk3!, _dzf, _project_velocity!
 using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness
@@ -84,7 +86,8 @@ using ..AdvectionSchemes: advective_face_flux, _flux_reconstruction, scalar_face
                            face_diffusivity, face_inv_spacing
 using ..TimeIntegration: CFLConstraints, adaptive_dt, StateSnapshot, save_state!, state_snapshot,
                          restore_state!, IMEXScheme, ARK2, Rosenbrock2, step_imex!,
-                         _all_finite, _max_advective_rate, is_numerical_failure
+                         _all_finite, _max_advective_rate, is_numerical_failure, _max_abs
+using ..Backends: interior_all_finite, plane_partials!, ordered_sum
 using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!

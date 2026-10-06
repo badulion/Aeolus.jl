@@ -190,6 +190,8 @@ struct TracerSGSDiffusion{F, M, W}
     dW::Base.RefValue{Float64}        # this step's air-water change, conserved part (kg/m²; ~0)
     dWρ::Base.RefValue{Float64}       # this step's ρ̄-redistribution part (kg/m²)
     resid::Base.RefValue{Float64}     # max relative change of the conserved total, this step
+    Sq::Vector{Float64}               # scratch: per-level Σ|q| (canonical plane sums)
+    St::Vector{Float64}               # scratch: per-level Σ tendency
 end
 
 function TracerSGSDiffusion(case)
@@ -202,7 +204,7 @@ function TracerSGSDiffusion(case)
     w = sim isa Aeolus.Anelastic.MassWeightedSimulation ?
         Aeolus.Anelastic.constraint_weights(sim) : nothing
     return TracerSGSDiffusion(Field(CellCenter(), mesh), Array{Bool}(mf.data .> 0.5), w, bcs,
-                              Ref(0.0), Ref(0.0), Ref(0.0))
+                              Ref(0.0), Ref(0.0), Ref(0.0), zeros(mesh.Nz), zeros(mesh.Nz))
 end
 
 """
@@ -234,22 +236,27 @@ function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false, �
     qi = interior_view(q)
     Wk = d.weights === nothing ? nothing : view(d.weights[1], Hz+1:Hz+Nz)
     # the conserved total (solid tendencies are zero, so the sum over all
-    # cells is the sum over fluid cells): one pass
+    # cells is the sum over fluid cells): the per-level sums of |q| and of
+    # the tendency in one canonical, thread-invariant pass (KA-b, #296),
+    # weighted and combined over k in ascending order
+    Sq, St = d.Sq, d.St
+    plane_reduce!((Sq, St), Aeolus.Backends.backend(q.data), _abs_and_tend_at,
+                  Aeolus.Grids.interior(mesh), q.data, d.tend.data)
     tot = 0.0; dtot = 0.0
     @inbounds for k in 1:Nz
         wk = Wk === nothing ? 1.0 : Wk[k]
-        for j in 1:Ny, i in 1:Nx
-            tot += wk * abs(qi[i, j, k]); dtot += wk * tend[i, j, k]
-        end
+        tot += wk * Sq[k]; dtot += wk * St[k]
     end
     tot > 0 && (d.resid[] = max(d.resid[], abs(dt * dtot) / tot))
     qi .+= dt .* tend
     if water
-        flat, redis = ledger_water_split(case, tend, Wk === nothing ? nothing : collect(Wk))
+        flat, redis = ledger_water_split_levels(case, St, Wk === nothing ? nothing : collect(Wk))
         d.dW[] += dt * flat; d.dWρ[] += dt * redis
     end
     return q
 end
+
+@inline _abs_and_tend_at(i, j, k, q, t) = @inbounds (abs(q[i, j, k]), t[i, j, k])
 
 "The tracer diffusion of the enabled `:scalar_advection` coupling, or `nothing`."
 function tracer_sgs_diffusion(case)
