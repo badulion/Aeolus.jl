@@ -1175,7 +1175,11 @@ same sign as the net mass the correction removes; only the sum of the two
 terms is the boundary's heat. For the forward-Euler steps of the default
 `:adaptive` and the `:fixed` stepper the booked heat is the heat the step
 moved; under `:imex` it is the last stage's rate times dt (a residual in
-`(:dynamics, :transport)`, as for the top flux). The diffusive part is the
+`(:dynamics, :transport)`, as for the top flux: −2.4e-2 W m⁻² on the
+open smoke window); on the anelastic core the column transport keeps
+the core's unweighted-diffusion residual of #254 (2.2e-2 W m⁻² open,
+1.8e-2 with the lid). The smoke check asserts < 1e-6 W m⁻² for the
+forward-Euler Boussinesq steps and < 0.1 W m⁻² otherwise. The diffusive part is the
 closures' ``κ_h``/``κ_v`` form: the cross terms of the tensor closure
 (`sgs = :reynolds_stress`) at the faces are not in it.
 

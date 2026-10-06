@@ -111,6 +111,13 @@ smoke_variants(::Type{<:GeostrophicCoupling}) =
      (label = "lateral = :open, Dirichlet outflow", lateral = :open),
      (label = "lateral = :open, convective outflow", lateral = :open, outflow = :convective))
 
+# The column transport residual an open box leaves (see smoke_check).
+function _open_transport_tol(case)
+    ts = timestepper(case)
+    imex = ts isa IMEXStep || (ts isa AdaptiveStep && ts.scheme !== nothing)
+    return case.sim isa BoussinesqSimulation && !imex ? 1e-6 : 0.1
+end
+
 function smoke_check(c::GeostrophicCoupling, case)
     sim = case.sim
     f = sim.f_coriolis
@@ -121,10 +128,14 @@ function smoke_check(c::GeostrophicCoupling, case)
          "open top: the coupling does not retarget the sponge a second time" => !c.sponge_ref,
          # the open faces' heat is booked (boundary_heat, mass_correction,
          # relaxation): what stays in the column transport is the numerics
-         # residual (measured ≤ 1e-9 W/m² in the smoke window)
-         "open box: the column (:dynamics, :transport) is a residual (< 1e-6 W/m²)" =>
-             (hb = heat_budget(case.ledger);
-              hb.elapsed == 0 || abs(get(hb.terms, (:dynamics, :transport), 0.0)) / hb.elapsed < 1e-6)]
+         # residual — measured ≤ 1e-9 W/m² in the smoke window for the
+         # forward-Euler Boussinesq steps; the IMEX steppers (last-stage
+         # rate, CG tolerance) and the sound-proof cores (unweighted
+         # diffusion) leave ≈ 2e-2 W/m², as with the closed top (#254)
+         (tol = _open_transport_tol(case);
+          "open box: the column (:dynamics, :transport) is a residual (< $tol W/m²)" =>
+              (hb = heat_budget(case.ledger);
+               hb.elapsed == 0 || abs(get(hb.terms, (:dynamics, :transport), 0.0)) / hb.elapsed < tol))]
     if c.mode === :pressure_gradient
         # the pressure gradient in balance with (U_g, V_g): exactly
         # (−f V_g, +f U_g) on every u and v point
