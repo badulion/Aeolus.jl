@@ -61,7 +61,7 @@ using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall,
                             update_open_boundaries!, prepare_open_boundaries!,
-                            assert_open_face_correction
+                            assert_open_face_correction, mark_open_boundary_stage!
 import ..BoundaryConditions: boundary_flux_weights
 using ..Operators
 using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
@@ -1551,6 +1551,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
+    mark_open_boundary_stage!(sim)         # radiating outflow: step-start layers (N-open-c)
 
     # 2. advection, weighted flux form
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)

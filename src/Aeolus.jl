@@ -1042,6 +1042,9 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
        open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
        assert_open_face_correction, open_intermediate_velocity!
+# N-open-c (#260) — convective / Orlanski radiation outflow on open faces.
+export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow, rewind_open_boundaries!,
+       mark_open_boundary_stage!
 
 # Phase 58 — LargeScaleForcing (#171): geostrophic pressure gradient,
 # nudging, prescribed advective tendencies, surface-temperature series.
