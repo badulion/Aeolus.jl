@@ -675,6 +675,38 @@ end
         run.regs === nothing || @test isempty([n for (n, F) in zip(fieldnames(typeof(run.regs)),
                                                    fieldtypes(typeof(run.regs))) if loose(F)])
     end
+    # the prolongation limiters (`:positive` for qv and the tracers, on by
+    # default; `:monotone` for θ and the velocity here) on a sharp tracer
+    # front: the limiter path adds no allocation either
+    function mk_lim()
+        rng = Xoshiro(6)
+        p = BoussinesqSimulation(pm)
+        interior_view(p.θ) .= 300 .+ 0.1 .* rand(rng, size(interior_view(p.θ)))
+        fill!(p.u.data, 0.5)
+        qp = Field(CellCenter(), pm)
+        interior_view(qp) .= ifelse.(rand(rng, size(interior_view(qp))) .< 0.5, 0.0, 1e-2)
+        c = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest, :nest; scalars = (:q,)))
+        fill!(c.θ.data, 300.0)
+        qc = Field(CellCenter(), cm)
+        return NestedRun(p, c, nest; cfl_parent = nothing, cfl_child = nothing,
+                         scalars = (:q => (qc, qp),), limit_scalars = :positive,
+                         limit_theta = :monotone, limit_momentum = :monotone)
+    end
+    # (fresh names: reusing `run`, `p`, `c` would make the loop's locals
+    # above type-unstable, and @allocated would see the dynamic dispatch)
+    let rl = mk_lim(), rf = mk_lim()
+        @test rl.limit_scalars === :positive && rl.limit_theta === :monotone
+        for _ in 1:3; step_nested!(rl; dt = 1e-3); end
+        al = @allocated step_nested!(rl; dt = 1e-3)
+        pl, cl = rf.parent, rf.child
+        step!(pl, 1e-3); step!(cl, 5e-4)
+        apl = @allocated step!(pl, 1e-3)
+        acl = @allocated step!(cl, 5e-4)
+        overl = al - apl - rl.stats.n_last * acl
+        @printf("  limited  nested step (tracer :positive, θ and u :monotone) allocates %.1f KiB; the cores alone %.1f KiB; nesting %.1f KiB\n",
+                al / 1024, (apl + rl.stats.n_last * acl) / 1024, overl / 1024)
+        @test overl < 96 * 1024
+    end
     @test @inferred(Aeolus.Nesting._plan(nest, :avg, 1, 3)) isa Aeolus.Nesting._Plan1D
     @test @inferred(nest_measure(nest)) isa NestMeasure
 end
