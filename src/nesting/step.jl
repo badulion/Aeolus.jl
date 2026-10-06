@@ -1,6 +1,6 @@
 # Nesting: composite diagnostics, restriction and refluxing of the field
-# set, and step_nested! (moved from AdaptiveMesh.jl and generalised to
-# named field sets, N-nest-a #250).
+# set (moved from AdaptiveMesh.jl and generalised to named field sets,
+# N-nest-a #250). The time coupling, step_nested!, is in nesting/nested_run.jl.
 
 # =========================================================================
 # Composite diagnostics
@@ -51,7 +51,7 @@ covered by the nest plus all child cells.
     [`nest_conservation_error`](@ref) from the interface flux imbalance
     instead.
 """
-function composite_integral(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
+function composite_integral(psim::_NestSim, csim::_NestSim,
                             nest::NestedGrid, quantity::Symbol;
                             state::Union{Nothing,NestInterpState}=nothing)
     pm = nest.parent_mesh; cm = nest.child_mesh
@@ -105,8 +105,8 @@ inside the nest (the interface planes belong to
 [`apply_flux_correction!`](@ref)). Without a `state` only `u, v, w, θ`
 are restricted.
 """
-function restrict_state_to_parent!(psim::BoussinesqSimulation,
-                                   csim::BoussinesqSimulation, nest::NestedGrid,
+function restrict_state_to_parent!(psim::_NestSim,
+                                   csim::_NestSim, nest::NestedGrid,
                                    s::Union{Nothing,NestInterpState}=nothing)
     restrict_to_parent!(psim.θ, csim.θ, nest)
     if s !== nothing
@@ -156,7 +156,7 @@ has an entry in `registers`, a mapping
 other names to their bound parent fields). Scalars without registers are
 left untouched. Returns the names that were refluxed.
 """
-function reflux_scalars!(psim::BoussinesqSimulation, nest::NestedGrid,
+function reflux_scalars!(psim::_NestSim, nest::NestedGrid,
                          s::NestInterpState, registers)
     done = Symbol[]
     for (name, _, _, pf) in _scalar_entries(s, psim, nothing)
@@ -171,7 +171,7 @@ function reflux_scalars!(psim::BoussinesqSimulation, nest::NestedGrid,
 end
 
 "Interface mass-flux imbalance, normalized by (velocity scale × interface area)."
-function _interface_imbalance(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
+function _interface_imbalance(psim::_NestSim, csim::_NestSim,
                               nest::NestedGrid)
     m = compute_nest_flux_mismatch(psim.u, csim.u, nest) +
         compute_nest_flux_mismatch(psim.v, csim.v, nest) +
@@ -203,108 +203,11 @@ step, as recorded by the most recent [`step_nested!`](@ref).
 If no step has been recorded, `:mass` is evaluated instantaneously and the
 other quantities raise an error.
 """
-function nest_conservation_error(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
+function nest_conservation_error(psim::_NestSim, csim::_NestSim,
                                  nest::NestedGrid, quantity::Symbol)
     quantity === :θ && (quantity = :theta)
     haskey(nest.ledger, quantity) && return nest.ledger[quantity]
     quantity === :mass && return _interface_imbalance(psim, csim, nest)
     error("nest_conservation_error: no recorded value for :$quantity — " *
           "run step_nested! first.")
-end
-
-# =========================================================================
-# Time-stepping coordination
-# =========================================================================
-
-"""
-    step_nested!(parent_sim, child_sim, nest, dt; substeps=nothing, order=3,
-                 flux_correction=true, sponge=nothing, impose_interface=false,
-                 scalars=(), state=nothing)
-
-One parent step of size `dt` plus `substeps` child steps of size
-`dt/substeps` (default `max(rx,ry,rz)`, which keeps the child CFL equal to
-the parent's).
-
-The transferred field set is `u, v, w, θ`, `qv` when both simulations
-are moist, and the extra cell-centred `scalars`
-(`:co2 => (child_field, parent_field)`, …); see [`NestInterpState`](@ref).
-`step!` advances only the simulations' own prognostics, so an extra
-scalar is carried across the interface (boundary data, sponge,
-restriction) but advanced by whoever owns it.
-
-Sequence:
-
- 1. interpolate the parent field set at time `t` onto the child mesh;
- 2. `step!(parent_sim, dt)`; interpolate the new parent field set;
- 3. for each child substep, **linearly interpolate the parent state in
-    time** to the substep midpoint, write it into the child halos,
-    `step!` the child, then apply the sponge (if any);
- 4. conservatively restrict the child field set back onto the parent
-    ([`restrict_state_to_parent!`](@ref));
- 5. compute the interface flux mismatch and apply the flux correction.
-
-Conservation diagnostics for `:mass`, `:momentum_x` and every scalar of
-the set (`:theta`, `:qv`, tracers) are recorded in `nest.ledger`; read
-them with [`nest_conservation_error`](@ref). Returns
-`(parent_sim, child_sim)`.
-
-`state` may be a pre-allocated `NTuple{3,NestInterpState}` (built with
-`nest_interp_state(nest, parent_sim, child_sim; scalars)`) to avoid
-re-allocating the boundary buffers every step; it then defines the field
-set and `scalars` is ignored.
-"""
-function step_nested!(psim::BoussinesqSimulation, csim::BoussinesqSimulation,
-                      nest::NestedGrid, dt::Real;
-                      substeps::Union{Nothing,Integer}=nothing,
-                      order::Int=3,
-                      flux_correction::Bool=true,
-                      sponge::Union{Nothing,NestSponge}=nothing,
-                      impose_interface::Bool=false,
-                      scalars=(),
-                      state=nothing,
-                      record::Bool=true)
-    ns = substeps === nothing ? max(nest.rx, nest.ry, nest.rz) : Int(substeps)
-    ns >= 1 || error("step_nested!: substeps must be >= 1")
-
-    s_old, s_new, s_bc = state === nothing ?
-        ntuple(_ -> nest_interp_state(nest, psim, csim; scalars), 3) :
-        state
-
-    I0 = _composite_scalars(psim, csim, nest, s_old)
-    m0 = composite_integral(psim, csim, nest, :momentum_x)
-
-    interpolate_parent_state!(s_old, psim, nest; order, region=:all)
-    step!(psim, dt)
-    interpolate_parent_state!(s_new, psim, nest; order, region=:all)
-
-    dtc = dt / ns
-    for m in 1:ns
-        _blend_state!(s_bc, s_old, s_new, (m - 0.5) / ns)
-        apply_nest_boundary!(csim, s_bc; impose_interface)
-        step!(csim, dtc)
-        sponge === nothing || apply_nest_sponge!(csim, s_bc, sponge; dt=dtc)
-    end
-
-    # --- conservative restriction (interior faces / covered cells) --------
-    restrict_state_to_parent!(psim, csim, nest, s_bc)
-
-    e_before = _interface_imbalance(psim, csim, nest)
-    if flux_correction
-        apply_flux_correction!(psim.u, compute_nest_flux_mismatch(psim.u, csim.u, nest), nest)
-        apply_flux_correction!(psim.v, compute_nest_flux_mismatch(psim.v, csim.v, nest), nest)
-        apply_flux_correction!(psim.w, compute_nest_flux_mismatch(psim.w, csim.w, nest), nest)
-    end
-    e_after = _interface_imbalance(psim, csim, nest)
-
-    if record
-        nest.ledger[:mass] = e_after
-        nest.ledger[:mass_before_correction] = e_before
-        I1 = _composite_scalars(psim, csim, nest, s_bc)
-        for (k, v0) in I0
-            nest.ledger[k] = abs(I1[k] - v0) / max(abs(v0), 1e-300)
-        end
-        m1 = composite_integral(psim, csim, nest, :momentum_x)
-        nest.ledger[:momentum_x] = abs(m1 - m0) / max(abs(m0), 1e-300)
-    end
-    return (psim, csim)
 end

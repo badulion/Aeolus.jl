@@ -35,7 +35,11 @@ using ..Fields: Field, interior_view, location
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
-                            is_wall, homogeneous_bcs
+                            is_wall, homogeneous_bcs, pinned_face_indices,
+                            has_open_boundaries, update_open_boundaries!,
+                            prepare_open_boundaries!, assert_open_face_correction,
+                            open_boundary_snapshot, restore_open_boundaries!,
+                            open_intermediate_velocity!
 using ..Operators
 using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    momentum_advect!, advect_centered!,
@@ -619,6 +623,8 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
     end
 
     save_state!(snapshot, sim)
+    # open-boundary buffers are state too: a retry must start from them
+    bc_snap = open_boundary_snapshot(sim)
     # the closure's memory: the step commits it once (advance_sgs!); a
     # rejected step's commit is rolled back with the prognostic state
     sgs_snap = closure === nothing ? nothing : sgs_state(closure)
@@ -655,12 +661,14 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
 
         if n_retries >= max_retries
             restore_state!(sim, snapshot)
+            restore_open_boundaries!(sim, bc_snap)
             closure === nothing || restore_sgs_state!(closure, sgs_snap)
             error("step_adaptive!: step failed ($reason) after $max_retries " *
                   "retries; last dt = $Δt. State has been restored to the " *
                   "beginning of the step.")
         end
         restore_state!(sim, snapshot)
+        restore_open_boundaries!(sim, bc_snap)
         closure === nothing || restore_sgs_state!(closure, sgs_snap)
         Δt_new = max(Δt / 2, constraints.dt_min)
         if Δt_new == Δt
@@ -864,16 +872,25 @@ function _diffusion_kernel!(out::Field{L,T}, f::Field{L,T}, ν, m::RegularGrid{T
 end
 
 # Rows that are *not* unknowns: `w` on an impermeable wall face is pinned
-# to zero by the BC, so it is removed from the CG system (keeping the
-# reduced operator SPD) instead of being solved for. Free-slip and no-slip
-# walls (`is_wall`) pin it alike; the top wall face lies in the halo.
-_constraint_index(::Location, ::RegularGrid, ::FieldBoundaryConditions) = 0
-_constraint_index(::FaceZ, m::RegularGrid, bcs::FieldBoundaryConditions) =
-    is_wall(bcs.bottom) ? m.Hz + 1 : 0
+# to zero by the BC, and the normal velocity on a west/south open face
+# (N-open-b) to its boundary value, so they are removed from the CG system
+# (keeping the reduced operator SPD) instead of being solved for. Free-slip
+# and no-slip walls (`is_wall`) pin `w` alike; the top, east and north
+# faces lie in the halo. `_constraint_planes` gives `(ic, jc, kc)`, 0 =
+# none; `_constraint_index` is its z entry (the wall row), as before.
+_constraint_planes(loc::Location, m::RegularGrid, bcs::FieldBoundaryConditions) =
+    pinned_face_indices(loc, m, bcs)
+_constraint_index(loc::Location, m::RegularGrid, bcs::FieldBoundaryConditions) =
+    _constraint_planes(loc, m, bcs)[3]
 
-function _apply_constraint!(a::AbstractArray{T,3}, kc::Int) where {T}
-    kc == 0 && return a
-    @inbounds a[:, :, kc] .= zero(T)
+@inline _pinned(c::NTuple{3,Int}, i, j, k) = i == c[1] || j == c[2] || k == c[3]
+
+function _apply_constraint!(a::AbstractArray{T,3}, c::NTuple{3,Int}) where {T}
+    @inbounds begin
+        c[1] == 0 || (a[c[1], :, :] .= zero(T))
+        c[2] == 0 || (a[:, c[2], :] .= zero(T))
+        c[3] == 0 || (a[:, :, c[3]] .= zero(T))
+    end
     return a
 end
 
@@ -881,8 +898,9 @@ function _assert_supported_bcs(bcs::FieldBoundaryConditions)
     for bc in (bcs.west, bcs.east, bcs.south, bcs.north, bcs.bottom, bcs.top)
         if bc isa ValueBC || bc isa FluxBC
             throw(ArgumentError(
-                "solve_implicit_diffusion! supports the homogeneous BC types " *
-                "handled by fill_halos! (Periodic, NoFlux, ImpermeableWall, NoSlipWall). " *
+                "solve_implicit_diffusion! supports the BC types handled by fill_halos! " *
+                "(Periodic, NoFlux, ImpermeableWall, NoSlipWall, OpenBoundary, " *
+                "FreeStreamBoundary). " *
                 "$(typeof(bc)) makes the operator affine; move the " *
                 "inhomogeneous part into `rhs` and pass a homogeneous BC."))
         end
@@ -919,8 +937,8 @@ end
 
 function _apply_implicit!(out::AbstractArray{T,3}, xf::Field{L,T}, ν, Δt::T,
                           m::RegularGrid{T}, bcs::FieldBoundaryConditions,
-                          kc::Int) where {L,T}
-    fill_halos!(xf, bcs)
+                          kc::NTuple{3,Int}, key = xf.data) where {L,T}
+    fill_halos!(xf, bcs; key = key)
     ii, jj, kk = interior(m)
     idx2 = 1 / m.dx^2; idy2 = 1 / m.dy^2; idz2 = 1 / m.dz^2
     d = xf.data
@@ -969,6 +987,14 @@ matrix-free, with Jacobi-preconditioned conjugate gradients.
     `dt·g` is added to the right-hand side, so `φ` is the solution with
     the wall moving. Pass `homogeneous_bcs(bcs)` yourself when `φ` is an
     *increment* (a Rosenbrock stage), whose wall value is zero.
+  * An [`OpenBoundary`](@ref Aeolus.BoundaryConditions.OpenBoundary)
+    (N-open-b) is affine in the same way and handled the same way: the CG
+    iterates with zero boundary values and the Dirichlet lift (the
+    boundary data in the halos and in the pinned west/south face rows) is
+    carried in the right-hand side; after the solve the field's halos and
+    boundary faces are refilled with the data. `key` names the field whose
+    boundary data apply (default `field.data`; a Rosenbrock increment
+    passes the prognostic field's array).
   * `field` doubles as the initial guess, and `rhs === field` is
     explicitly allowed (build the right-hand side in place, then solve
     over it — that is what [`step_imex!`](@ref) does).
@@ -991,7 +1017,7 @@ function solve_implicit_diffusion!(field::Field{L,T}, rhs::Field{L,T}, ν_eff,
                                    tol::Real = 1e-10, maxit::Integer = 200,
                                    workspace::DiffusionWorkspace = DiffusionWorkspace(field),
                                    precondition::Symbol = :jacobi,
-                                   warn::Bool = true) where {L,T}
+                                   warn::Bool = true, key = field.data) where {L,T}
     _assert_supported_bcs(bcs)
     precondition in (:jacobi, :none) ||
         throw(ArgumentError("precondition must be :jacobi or :none, got :$precondition"))
@@ -1010,21 +1036,21 @@ function solve_implicit_diffusion!(field::Field{L,T}, rhs::Field{L,T}, ν_eff,
     end
 
     return _cg_implicit!(field, rhs, ν, Δt, m, bcs, workspace, τ, Int(maxit),
-                         precondition, warn)
+                         precondition, warn, key)
 end
 
 # Function barrier: specializes on the concrete type of ν.
 function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
                        m::RegularGrid{T}, bcs_full::FieldBoundaryConditions,
                        ws::DiffusionWorkspace, τ::T, maxit::Int,
-                       precondition::Symbol, warn::Bool) where {L,T}
+                       precondition::Symbol, warn::Bool, key = field.data) where {L,T}
     ii, jj, kk = interior(m)
     idx2 = 1 / m.dx^2; idy2 = 1 / m.dy^2; idz2 = 1 / m.dz^2
     # A moving no-slip wall makes the operator affine: iterate with the
     # stationary wall and carry the wall term in the right-hand side.
     bcs = homogeneous_bcs(bcs_full)
     affine = bcs !== bcs_full
-    kc = _constraint_index(L(), m, bcs)
+    kc = _constraint_planes(L(), m, bcs)
     jacobi = precondition === :jacobi
 
     x  = field.data
@@ -1038,17 +1064,17 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
     # the preconditioner first writes it): b_eff = b + Δt g.
     if affine
         fill!(p, zero(T))
-        fill_halos!(pf, bcs_full)
+        fill_halos!(pf, bcs_full; key = key)
         @inbounds for k in kk, j in jj, i in ii
             z[i, j, k] = Δt * _diff_at(p, ν, i, j, k, idx2, idy2, idz2)
         end
     end
 
     # r = b - A x   (safe when b === x: A x is formed into Ap first)
-    _apply_implicit!(Ap, field, ν, Δt, m, bcs, kc)
+    _apply_implicit!(Ap, field, ν, Δt, m, bcs, kc, key)
     bnorm² = zero(T)
     @inbounds for k in kk, j in jj, i in ii
-        if k == kc
+        if _pinned(kc, i, j, k)
             r[i, j, k] = zero(T)
             continue
         end
@@ -1062,6 +1088,7 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
         @inbounds for k in kk, j in jj, i in ii
             x[i, j, k] = zero(T)
         end
+        has_open_boundaries(bcs_full) && fill_halos!(field, bcs_full; key = key)
         return (iterations = 0, residual = zero(T), relative_residual = zero(T),
                 converged = true, tol = τ)
     end
@@ -1069,7 +1096,7 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
     # z = M⁻¹ r ; p = z
     rz = zero(T)
     @inbounds for k in kk, j in jj, i in ii
-        zz = if k == kc
+        zz = if _pinned(kc, i, j, k)
             zero(T)
         elseif jacobi
             r[i, j, k] / _diag_at(ν, i, j, k, idx2, idy2, idz2, Δt)
@@ -1087,7 +1114,7 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
 
     while !converged && iters < maxit
         iters += 1
-        _apply_implicit!(Ap, pf, ν, Δt, m, bcs, kc)
+        _apply_implicit!(Ap, pf, ν, Δt, m, bcs, kc, key)
         pAp = _idot(p, Ap, ii, jj, kk)
         if !(pAp > 0)
             warn && @warn "solve_implicit_diffusion!: CG breakdown (pᵀAp = $pAp); " *
@@ -1106,7 +1133,7 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
         end
         rz_new = zero(T)
         @inbounds for k in kk, j in jj, i in ii
-            zz = if k == kc
+            zz = if _pinned(kc, i, j, k)
                 zero(T)
             elseif jacobi
                 r[i, j, k] / _diag_at(ν, i, j, k, idx2, idy2, idz2, Δt)
@@ -1126,6 +1153,8 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
 
     converged || (warn && @warn "solve_implicit_diffusion! hit maxit=$maxit with " *
                                 "‖r‖/‖b‖ = $(rnorm / bnorm)")
+    # open faces: the pinned face rows and the halos carry the boundary data
+    has_open_boundaries(bcs_full) && fill_halos!(field, bcs_full; key = key)
     return (iterations = iters, residual = rnorm,
             relative_residual = rnorm / bnorm, converged = converged, tol = τ)
 end
@@ -1479,6 +1508,17 @@ function _add_diffusion_tendencies!(sim::BoussinesqSimulation{T}, ws::IMEXWorksp
     return sim
 end
 
+# Open faces (N-open-b): the implicit stage solves for the intermediate
+# velocity u* = u + τ∇p, so its tangential boundary data get Kim & Moin's
+# τ ∂p/∂s; the data themselves are restored (from the returned snapshot)
+# before the projection. `nothing` and a no-op for closed boundaries.
+function _open_intermediate!(sim::BoussinesqSimulation, τ)
+    has_open_boundaries(sim) || return nothing
+    snap = open_boundary_snapshot(sim)
+    open_intermediate_velocity!(sim, τ)
+    return snap
+end
+
 # Chorin projection — identical to the one inside Simulations.step!, but
 # callable per IMEX stage so every stage value is discretely
 # divergence-free.
@@ -1490,6 +1530,7 @@ function _project!(sim::BoussinesqSimulation{T}, Δt::T) where {T}
     solve!(sim.φ, sim.div_buf, sim.solver)
     fill_halos!(sim.φ, sim.bcs)
     ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
+    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
     _axpy_interior!(sim.u, -one(T), sim.dφdx, sim.mesh)
     _axpy_interior!(sim.v, -one(T), sim.dφdy, sim.mesh)
     _axpy_interior!(sim.w, -one(T), sim.dφdz, sim.mesh)
@@ -1553,7 +1594,8 @@ function _solve_field!(sim::BoussinesqSimulation, ws::IMEXWorkspace, name::Symbo
     increment && (bcs = homogeneous_bcs(bcs))
     dw  = scalar ? ws.diff.c : getfield(ws.diff, name)
     stats = solve_implicit_diffusion!(f, f, ν, dtγ, sim.mesh, bcs;
-                                      tol = tol, maxit = maxit, workspace = dw)
+                                      tol = tol, maxit = maxit, workspace = dw,
+                                      key = getfield(sim, name).data)
     ws.total_iterations += stats.iterations
     ws.max_residual = max(ws.max_residual, stats.relative_residual)
     return stats
@@ -1652,6 +1694,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     ws.max_residual = zero(T)
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
+    prepare_open_boundaries!(sim)
     νm, νs, sgsT, Ks = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
 
@@ -1660,12 +1703,15 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
                           momentum_advection = momentum_advection,
                           sgs_transpose = sgsT, scalar_tensor = Ks)
     _copy_tendencies!(ws.aux, sim, names)                 # E(uⁿ)
+    update_open_boundaries!(sim, t0 + γ * Δt, γ * Δt)     # stage-1 boundary data (lift)
+    bsnap = _open_intermediate!(sim, γ * Δt)
     for name in names
         f = getfield(sim, name)
         _combine2!(f, one(T), getfield(ws.state0, name),
                       γ * Δt, getfield(ws.aux, name), m)
         _solve_field!(sim, ws, name, f, νm, νs, γ * Δt, tol, maxit)
     end
+    restore_open_boundaries!(sim, bsnap)
     post_predictor! === nothing || post_predictor!(sim, γ * Δt)
     _project!(sim, γ * Δt)
     sim.t = t0 + γ * Δt
@@ -1683,6 +1729,8 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     _explicit_tendencies!(sim, Δt; body_force! = body_force!,
                           momentum_advection = momentum_advection,
                           sgs_transpose = sgsT, scalar_tensor = Ks)   # E(U₁) → sim.t*
+    update_open_boundaries!(sim, t0 + Δt, Δt)
+    bsnap = _open_intermediate!(sim, Δt)
     for name in names
         f = getfield(sim, name)
         _combine4!(f, one(T), getfield(ws.state0, name),
@@ -1691,6 +1739,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
                       (one(T) - γ) * Δt, _diffusion_buffer(sim, ws, name), m)
         _solve_field!(sim, ws, name, f, νm, νs, γ * Δt, tol, maxit)
     end
+    restore_open_boundaries!(sim, bsnap)
     post_predictor! === nothing || post_predictor!(sim, Δt)
     _project!(sim, Δt)
     sim.t = t0 + Δt
@@ -1721,6 +1770,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     ws.max_residual = zero(T)
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
+    prepare_open_boundaries!(sim)
     νm, νs, sgsT, Ks = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
     k2set = _k2_set!(ws)
@@ -1742,6 +1792,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
                    a21, getfield(ws.aux, name), m)
     end
     post_predictor! === nothing || post_predictor!(sim, a21 * Δt)
+    update_open_boundaries!(sim, t0 + a21 * Δt, a21 * Δt)
     _project!(sim, a21 * Δt)
     sim.t = t0 + a21 * Δt
 
@@ -1762,6 +1813,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
                    b1, getfield(ws.aux, name), b2, getfield(k2set, name), m)
     end
     post_predictor! === nothing || post_predictor!(sim, Δt)
+    update_open_boundaries!(sim, t0 + Δt, Δt)
     _project!(sim, Δt)
     sim.t = t0 + Δt
     closure === nothing || advance_sgs!(closure, sim, Δt)   # once per step

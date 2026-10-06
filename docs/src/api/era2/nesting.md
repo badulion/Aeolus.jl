@@ -4,10 +4,16 @@
 the [`NestedGrid`](@ref) geometry (any integer refinement per direction),
 the conservative staggered prolongation, conservative restriction,
 Berger–Colella refluxing, the [`NestSponge`](@ref), the field-set
-[`NestInterpState`](@ref) (velocities, θ, `qv`, extra scalars) and
-[`step_nested!`](@ref). The block-structured AMR of
+[`NestInterpState`](@ref) (velocities, θ, `qv`, extra scalars), and the
+time coupling: [`NestedRun`](@ref), the per-domain
+[`domain_advance`](@ref) closures, [`boundary_time`](@ref) and
+[`step_nested!`](@ref), and the child's boundary conditions:
+[`nest_bcs`](@ref) (`OpenBoundary` nest faces) fed by
+[`NestBoundaryData`](@ref). The block-structured AMR of
 [`Aeolus.AdaptiveMesh`](adaptive_mesh.md) builds on these operators.
-The theory is on the [nesting theory page](../../theory/nesting.md).
+The theory is on the [nesting theory page](../../theory/nesting.md), the
+[nested time-coupling page](../../theory/nesting_time.md) and the
+[nested boundary-conditions page](../../theory/nesting_boundaries.md).
 
 ```@autodocs
 Modules = [Aeolus.Nesting]

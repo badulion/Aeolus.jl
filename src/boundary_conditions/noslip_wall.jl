@@ -75,20 +75,24 @@ is_wall(::NoSlipWall) = true
 """
     homogeneous_bcs(bcs::FieldBoundaryConditions) -> FieldBoundaryConditions
 
-`bcs` with every moving [`NoSlipWall`](@ref) replaced by a stationary
-one: the homogeneous part of an affine boundary operator. Implicit
-solvers apply the operator to search directions and increments with
-these, and move the wall-velocity contribution to the right-hand side.
-Returns `bcs` itself (`===`) when nothing moves, so the existing BC types
-take their usual code path.
+`bcs` with every inhomogeneous face replaced by its homogeneous part:
+a moving [`NoSlipWall`](@ref) by a stationary one, an
+[`OpenBoundary`](@ref) by one that writes zero boundary values (and the
+same zero-gradient / antisymmetric rules), a
+[`FreeStreamBoundary`](@ref) by one with zero transpiration. This is the
+homogeneous part of an affine boundary operator: implicit solvers apply
+the operator to search directions and increments with these, and move
+the boundary contribution to the right-hand side. Returns `bcs` itself
+(`===`) when every face is homogeneous, so the existing BC types take
+their usual code path.
 """
 function homogeneous_bcs(bcs::FieldBoundaryConditions)
-    _moving(bcs.bottom) || _moving(bcs.top) || return bcs
-    return FieldBoundaryConditions(bcs.west, bcs.east, bcs.south, bcs.north,
-                                   _homogeneous(bcs.bottom), _homogeneous(bcs.top))
+    faces = (bcs.west, bcs.east, bcs.south, bcs.north, bcs.bottom, bcs.top)
+    any(_inhomogeneous, faces) || return bcs
+    return FieldBoundaryConditions(map(_homogeneous, faces)...)
 end
-_moving(::AbstractBC) = false
-_moving(bc::NoSlipWall) = !(iszero(bc.u_wall) && iszero(bc.v_wall))
+_inhomogeneous(::AbstractBC) = false
+_inhomogeneous(bc::NoSlipWall) = !(iszero(bc.u_wall) && iszero(bc.v_wall))
 _homogeneous(bc::AbstractBC) = bc
 _homogeneous(bc::NoSlipWall{T}) where {T} = NoSlipWall{T}(zero(T), zero(T))
 

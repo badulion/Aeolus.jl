@@ -148,13 +148,13 @@ function nest_interp_state(nest::NestedGrid{T}; scalars=()) where {T}
                            names, bufs, child, parent)
 end
 
-function nest_interp_state(nest::NestedGrid, psim::BoussinesqSimulation,
-                           csim::BoussinesqSimulation; scalars=())
-    psim.has_moisture == csim.has_moisture ||
-        error("nest_interp_state: parent has_moisture = $(psim.has_moisture) but child " *
-              "has_moisture = $(csim.has_moisture); a nest must carry qv on both grids or " *
+function nest_interp_state(nest::NestedGrid, psim::_NestSim,
+                           csim::_NestSim; scalars=())
+    _moist(psim) == _moist(csim) ||
+        error("nest_interp_state: parent has_moisture = $(_moist(psim)) but child " *
+              "has_moisture = $(_moist(csim)); a nest must carry qv on both grids or " *
               "on neither")
-    moist = psim.has_moisture ? (:qv => (csim.qv, psim.qv),) : ()
+    moist = _moist(psim) ? (:qv => (csim.qv, psim.qv),) : ()
     return nest_interp_state(nest; scalars=(moist..., scalars...))
 end
 
@@ -197,7 +197,7 @@ field (`qv`, tracers). `region=:all` fills the whole child field (needed
 for the sponge); `region=:halo` fills only halos. Parent halos are filled
 first (scalars with `parent_sim.θ_bcs`, as `step!` does for `qv`).
 """
-function interpolate_parent_state!(s::NestInterpState, psim::BoussinesqSimulation,
+function interpolate_parent_state!(s::NestInterpState, psim::_NestSim,
                                    nest::NestedGrid; order::Int=3,
                                    region::Symbol=:all)
     fill_halos!(psim.u, psim.bcs); fill_halos!(psim.v, psim.bcs)
@@ -223,40 +223,6 @@ function _blend_state!(dst::NestInterpState, a::NestInterpState,
     return dst
 end
 
-function _copy_halo!(dst::Field, src::Field; interface::Bool=false)
-    m = dst.mesh
-    ii, jj, kk = interior(m)
-    loc = location(dst)
-    dd = dst.data; sd = src.data
-    @inbounds for k in axes(dd, 3), j in axes(dd, 2), i in axes(dd, 1)
-        if (i in ii) && (j in jj) && (k in kk)
-            (interface && _interface_plane(loc, m, i, j, k)) || continue
-        end
-        dd[i, j, k] = sd[i, j, k]
-    end
-    return dst
-end
-
-"""
-    apply_nest_boundary!(child_sim, state; impose_interface=false)
-
-Write the interpolated parent `state` into the halo cells of every member
-of the field set: `child_sim`'s `u, v, w, θ` and each bound scalar's
-child field. With `impose_interface=true` the velocities'
-boundary-normal interior face planes are overwritten too (Dirichlet
-inflow faces).
-"""
-function apply_nest_boundary!(csim::BoussinesqSimulation, s::NestInterpState;
-                              impose_interface::Bool=false)
-    _copy_halo!(csim.u, s.u; interface=impose_interface)
-    _copy_halo!(csim.v, s.v; interface=impose_interface)
-    _copy_halo!(csim.w, s.w; interface=impose_interface)
-    for (_, buf, cf, _) in _scalar_entries(s, nothing, csim)
-        _copy_halo!(cf, buf)
-    end
-    return csim
-end
-
 function _sponge_field!(cf::Field, gf::Field, sp::NestSponge, cm, αdt)
     ii, jj, kk = interior(cm)
     cd = cf.data; gd = gf.data
@@ -277,7 +243,7 @@ Relax the child solution toward `parent_interp` inside the sponge zone:
 Applied to every member of the field set (`u, v, w, θ`, `qv`, tracers).
 Call once per child substep, after `step!`.
 """
-function apply_nest_sponge!(csim::BoussinesqSimulation, s::NestInterpState,
+function apply_nest_sponge!(csim::_NestSim, s::NestInterpState,
                             sp::NestSponge; dt::Real=1.0)
     cm = csim.mesh
     αdt = sp.α_max * dt
