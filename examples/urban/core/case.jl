@@ -142,8 +142,9 @@ Build the mesh, the geometry, the dynamical core (`build_core` of the
 provider of the `:core` slot) and its initial state,
 the surface bus and the core tracers (`qv`, `ql`, `qr`), then the
 couplings `cfg` enables (see [`selected_couplings`](@ref)): each is
-constructed with `build(C, case, opts)`, then every `init!` runs in
-registry order, and finally the stage schedule is assembled.
+constructed with `build(C, case, opts)`, then every `init!` runs
+(in `init_priority` order, then registry order: the nest first), and
+finally the stage schedule is assembled.
 """
 function build_case(cfg::CaseConfig; io::IO = stdout)
     Nx, Ny, Nz = cfg.size
@@ -210,7 +211,7 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     for C in selected
         push!(case.couplings, build(C, case, coupling_options(C, cfg)))
     end
-    for c in case.couplings
+    for c in sort(case.couplings; by = c -> init_priority(typeof(c)))   # stable: registry order
         init!(c, case)
     end
     build_schedule!(case)

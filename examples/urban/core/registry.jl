@@ -21,6 +21,7 @@
 #   stages(::Type{C})           -> tuple of (stage::Symbol, order::Int, Cadence), one per stage
 #   build(::Type{C}, case, opts)-> instance (default `C()`)
 #   init!(c, case)              -> called once, after every coupling is built
+#   init_priority(::Type{C})    -> Int, init! order (lower first, default 0; ties: registry order)
 #   run_stage!(c, case, ::Val{S}, dt)
 #   output_fields(c, case)      -> Vector of OutputField, registered before nc_endef!
 #   budget!(c, case, ledger)    -> energy / water terms for the ledger
@@ -106,6 +107,16 @@ incompatible_reason(::Type{<:AbstractCoupling}) = ""
 stages(::Type{<:AbstractCoupling}) = ()
 build(C::Type{<:AbstractCoupling}, case, opts) = C()
 init!(c::AbstractCoupling, case) = nothing
+"""
+    init_priority(::Type{C}) -> Int
+
+The order of the `init!` calls: lower first (default 0), ties in registry
+order. The `:nesting` coupling initialises first (−1, #265): the nest
+faces' data and the child's initial wind come from the parent, and the
+other couplings initialise from them (e.g. the deposition's r_a from the
+first air cell's wind, which reads the face velocity at an edge column).
+"""
+init_priority(::Type{<:AbstractCoupling}) = 0
 output_fields(c::AbstractCoupling, case) = OutputField[]
 budget!(c::AbstractCoupling, case, ledger) = nothing
 report(c::AbstractCoupling, case) = nothing

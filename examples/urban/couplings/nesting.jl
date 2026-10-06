@@ -139,6 +139,9 @@ build(::Type{<:NestingCoupling}, case, o) =
                     Symbol[], Symbol[], 0, 0.0, 0.0, nothing)
 
 init!(c::NestingCoupling, case) = (ensure_nest!(c, case); nothing)
+# before every other coupling's init!: they initialise from the faces' data
+# and the child's wind, which come from the parent
+init_priority(::Type{<:NestingCoupling}) = -1
 
 # The parent field a child tracer takes its boundary values from, or nothing.
 function _parent_scalar(p, name::Symbol)
