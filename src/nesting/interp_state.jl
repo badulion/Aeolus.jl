@@ -174,19 +174,20 @@ end
 _sim_measure(nest, ::BoussinesqSimulation, ::BoussinesqSimulation) = nothing
 _sim_measure(nest, p::MassWeightedSimulation, c::MassWeightedSimulation) =
     nest_measure(nest, p, c)
-_sim_measure(nest, p, c) =
-    error("nesting: parent ($(nameof(typeof(p)))) and child ($(nameof(typeof(c)))) " *
-          "must be the same kind of simulation")
+_sim_measure(nest, p, c) = nothing          # a mixed pair: the volume measure
 
-function nest_interp_state(nest::NestedGrid, psim::BoussinesqSimulation,
-                           csim::BoussinesqSimulation; scalars=())
-    psim.has_moisture == csim.has_moisture ||
-        error("nest_interp_state: parent has_moisture = $(psim.has_moisture) but child " *
-              "has_moisture = $(csim.has_moisture); a nest must carry qv on both grids or " *
+# A Boussinesq pair, or a mixed pair (a Boussinesq parent and a sound-proof
+# child, or the reverse; N-nest-c #257), which has no common reference mass:
+# the volume measure.
+function nest_interp_state(nest::NestedGrid, psim::_NestSim, csim::_NestSim; scalars=())
+    _moist(psim) == _moist(csim) ||
+        error("nest_interp_state: parent has_moisture = $(_moist(psim)) but child " *
+              "has_moisture = $(_moist(csim)); a nest must carry qv on both grids or " *
               "on neither")
     moist = _moist(psim) ? (:qv => (csim.qv, psim.qv),) : ()
     return nest_interp_state(nest; scalars=(moist..., scalars...))
 end
+
 
 """
     nest_scalar_names(state) -> Vector{Symbol}

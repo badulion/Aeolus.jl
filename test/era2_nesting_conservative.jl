@@ -208,7 +208,8 @@ end
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm; moisture=true,
                                 bcs=FieldBoundaryConditions(:periodic, :periodic, :wall))
-    csim = BoussinesqSimulation(cm; moisture=true, bcs=nest_bcs(cm, :nest, :nest, :wall))
+    csim = BoussinesqSimulation(cm; moisture=true,
+                                bcs=nest_bcs(cm, :nest, :nest, :wall; moisture=true))
     fill!(psim.θ.data, 300.0); fill!(csim.θ.data, 300.0)
     fill!(psim.qv.data, 0.010); fill!(csim.qv.data, 0.0)
     step_nested!(psim, csim, nest, 0.5)
@@ -302,14 +303,15 @@ end
 # 2. Reference-mass (anelastic) measure
 # =========================================================================
 
-function _anelastic_pair(; T_surf=_T30, child_T=T_surf, r=(2, 2, 4), ref_fn=nothing)
+function _anelastic_pair(; T_surf=_T30, child_T=T_surf, r=(2, 2, 4), ref_fn=nothing,
+                         scalars=())
     pm = RegularGrid(Float64; size=(8, 8, 24), extent=(1000.0, 1000.0, 3000.0), halo=(3, 3, 3))
     nest = nested_grid(pm, ((250.0, 500.0), (250.0, 750.0), (0.0, 1000.0)), r; halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     rp = ref_fn === nothing ? isothermal_reference(pm; T_surf) : ref_fn(pm)
     rc = ref_fn === nothing ? isothermal_reference(cm; T_surf=child_T) : ref_fn(cm)
     pA = AnelasticSimulation(pm; ref=rp)
-    cA = AnelasticSimulation(cm; ref=rc, bcs=nest_bcs(cm, :nest, :nest, :wall))
+    cA = AnelasticSimulation(cm; ref=rc, bcs=nest_bcs(cm, :nest, :nest, :wall; scalars))
     return pm, nest, cm, pA, cA
 end
 
@@ -499,7 +501,7 @@ end
 # The sound-proof core has no qv field: a moist anelastic nest carries qv
 # as a tracer of the field set, transferred in the mass measure.
 @testset "moist anelastic nest: qv as a tracer, step_nested! with MassWeightedSimulation" begin
-    pm, nest, cm, pA, cA = _anelastic_pair()
+    pm, nest, cm, pA, cA = _anelastic_pair(scalars=(:qv,))
     qp = Field(CellCenter(), pm); qc = Field(CellCenter(), cm)
     fill!(qp.data, 0.008); fill!(qc.data, 0.0)
     st = ntuple(_ -> nest_interp_state(nest, pA, cA; scalars=(:qv => (qc, qp),)), 3)
