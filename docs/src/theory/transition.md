@@ -706,6 +706,111 @@ The command lines are in the header of the example; every run is cached,
 in `:winter` at 06:00, 4.0 % of the 49 056 stable cells (Smagorinsky;
 4.1 % with σ), 0.1 % of 15 392 with ``ν`` reduced from 2 to 0.2 m² s⁻¹.
 
+## Synthetic inflow turbulence
+
+An open inflow face fed by an interpolated coarse parent (the Berlin nest,
+epic #246) carries no energy below about two parent cells; without
+perturbations the child's inflow stays quasi-laminar over a long fetch.
+`Transition` owns the generator contract and two providers (N-inflow-a,
+#252); the inflow statistics (N-inflow-b) and the coupling to an open face
+(N-inflow-e) build on them.
+
+### The contract and the Lund transform
+
+An [`AbstractInflowGenerator`](@ref Aeolus.Transition.AbstractInflowGenerator)
+works on an ``n_s × n_z`` plane and returns, each step,
+[`unit_fluctuations!`](@ref Aeolus.Transition.unit_fluctuations!)``(ũ, ṽ, w̃, gen, Δt)``:
+zero-mean, unit-variance, mutually uncorrelated planes. A Reynolds-stress
+tensor is imposed afterwards by the Lund, Wu & Squires (1998) transform
+``u_i = a_{ij}ũ_j`` with ``a`` the Cholesky factor of ``R``
+([`lund_coefficients`](@ref Aeolus.Transition.lund_coefficients),
+Lund Eq. 13; [`apply_lund!`](@ref Aeolus.Transition.apply_lund!), uniform
+or per height). The radicands are ratios of leading principal minors, so
+the factorisation exists exactly when ``R`` is positive semi-definite,
+Schumann's (1977) realizability; a non-realizable ``R`` throws. This is
+the one Cholesky in the code base; its accept/reject agrees with the
+minors test `PrognosticSGS.is_realizable` on 2000 random tensors. For
+the Panofsky & Dutton (1984) neutral tensor (``σ_{u,v,w} = 2.39, 1.92,
+1.25\,u_*``, ``\overline{u'w'} = -u_*^2``) ``aa^{\rm T} = R`` to 1e-12.
+[`generator_state`](@ref Aeolus.Transition.generator_state) /
+[`restore_generator_state!`](@ref Aeolus.Transition.restore_generator_state!)
+follow the `sgs_state` pattern: a restored generator continues bit for bit.
+
+### The digital filter
+
+[`DigitalFilterGenerator`](@ref Aeolus.Transition.DigitalFilterGenerator)
+is the Xie & Castro (2008) filter used by PALM (Kadasch et al. 2021). A
+fresh plane of Gaussian white noise is filtered with the separable kernel
+``b_k ∝ \exp(-π|k|/(2n))``, ``\sum b_k^2 = 1``, whose coefficients belong
+to the output level, so ``L_s``, ``L_z`` and ``T`` may vary with height and
+component. In time the planes are blended as
+``ψ(t) = ρψ(t-Δt) + \sqrt{1-ρ^2}\,ψ_{\rm new}``, ``ρ = e^{-Δt/T}``, which keeps
+unit variance and gives ``R(τ) = e^{-τ/T}`` for any sequence of adaptive
+steps.
+
+**The length convention (an expectation that was wrong).** Xie & Castro
+set ``n = L/Δ`` and state ``R(r) = \exp(-πr/(2nΔ))``. The autocorrelation
+of their exponential filter is instead ``(1 + ar)e^{-ar}``,
+``a = π/(2nΔ)``, with integral ``4nΔ/π``: the nominal width gives an
+integral length of 1.112, 1.159 and 1.170 L for ``L/Δ`` = 2, 4 and 8 with
+their truncation ``N = 2n`` (1.27 L untruncated). The same applies to
+time: their ``T_{XC}`` has integral ``2T_{XC}/π``. The code therefore
+calibrates ``n`` so the discrete ``∫_0^∞R\,dr`` is ``L`` to 1e-10
+([`digital_filter_kernel`](@ref Aeolus.Transition.digital_filter_kernel);
+``n`` = 1.791, 3.370, 6.594 for ``L/Δ`` = 2, 4, 8, i.e. 1.14, 1.07,
+1.05 × ``πL/(4Δ)``) and uses ``T`` itself as the integral time. The
+documented shape is ``R(r) ≈ (1 + 2r/L)e^{-2r/L}`` (kernel RMS difference
+0.012 to 0.017 for ``r ≤ 2L``).
+
+Measured (`test/era6_synthetic_inflow.jl`):
+
+| quantity | measured | asserted |
+| :-- | :-- | :-- |
+| P&D stresses, ``u_* = 0.3``, 64 × 48, 2000 steps, ``L = 2Δ``, ``T = 5Δt`` | ``σ/u_*`` = 2.390, 1.923, 1.248; ``\overline{u'w'}/u_*^2 = -1.0053`` | 5 % diag, 7 % ``u'w'`` |
+| expected sampling error (Bartlett ``N_{\rm eff}`` = 1.98e5 for variances) | 0.32 % diag, 0.71 % ``u'w'`` | tolerances ≥ 3× |
+| means of the unit planes | 0.0044, −0.0034, 0.0020 | ``< 3/\sqrt{N_{\rm eff}}`` = 0.0153 |
+| cross-correlations before the transform | ≤ 0.0010 | < 0.03 |
+| ``∫R\,ds / L_s`` for ``L/Δ`` = 2, 4, 8 | 0.999, 1.013, 1.018 | 10 % |
+| ``∫R\,dz / L_z`` for ``L/Δ`` = 2, 4, 8 | 1.010, 0.976, 0.989 | 10 % |
+| shape RMS vs ``(1 + 2r/L)e^{-2r/L}``, ``r ≤ 2L`` | 0.017, 0.015, 0.015 | 0.05 |
+| ``∫R\,dτ / T`` for ``T/Δt`` = 2, 4, 8 | 1.022, 1.007, 1.027 | 10 % |
+| ``L_z`` = 2 and 8 m in two regions of one plane | 2.007, 8.020 | 15 % |
+| cost of one step, 64 × 40 face, ``L = 4Δ`` | 0.10 ms | — |
+
+### Free-stream turbulence as a second provider
+
+[`FreeStreamInflow`](@ref Aeolus.Transition.FreeStreamInflow) wraps a
+[`FreeStreamDisturbance`](@ref Aeolus.Transition.FreeStreamDisturbance)
+(its constructor and the flat-plate path are unchanged): the frozen mode
+field is swept through the plane at ``U_∞`` and evaluated as the
+continuous mode sum
+([`disturbance_velocity`](@ref Aeolus.Transition.disturbance_velocity),
+which the staggered grid curl approximates to ``O((κΔ)^2)``), then
+whitened with the Cholesky factor of the exact mode-set covariance
+([`disturbance_covariance`](@ref Aeolus.Transition.disturbance_covariance)).
+The whitening removes the ``O(n_{\rm modes}^{-1/2})`` anisotropy of a finite
+mode set; ``a`` is lower triangular, so ``ũ`` keeps the ``L_{11}`` of
+``u'``. With 400 modes, 32 × 32 points and 2000 steps the P&D tensor is
+reproduced within 1.0, 0.6, 0.07 % (diagonal) and 0.9 % (``u'w'``), batch
+standard errors 1.1, 0.7, 0.6 and 1.4 %. ``L_{11}`` from the plane time
+series (``r = U_∞τ``) is 1.011 ± 0.015 L. That figure needs an ensemble:
+one realisation scatters (0.66 to 1.35 L over 80 seeds), and the
+correlation of the ``κ``-band-limited von Kármán set first crosses zero
+only near ``r ≈ 8.5L``, so short records or per-seed zero crossings are
+dominated by noise (a first 24-seed, 60 L-record version gave
+1.083 ± 0.043, which could not resolve 5 %; the test, not the code, was
+changed: 80 seeds × 2000 modes, 1600 L records). The digital filter
+remains the general provider: the mode field is isotropic with one
+intensity, one length and one advection speed.
+
+### The Berlin case
+
+Stated exception (as in #185): the Berlin run is laterally periodic and
+has no inflow face, so no generator is coupled yet. The coupling to the
+nested child's open faces is N-inflow-e (#268). Transition stays coupled
+through `turbulence_diag`; no Berlin list changed. One digital-filter step
+on a 64 × 40 face costs 0.10 ms.
+
 ## References
 
 ### Wall treatment
@@ -785,3 +890,22 @@ in `:winter` at 06:00, 4.0 % of the 49 056 stable cells (Smagorinsky;
 * Nieuwstadt, F. T. M. (2005). Direct numerical simulation of stable
   channel flow at large stability. *Boundary-Layer Meteorol.*, 116,
   277-299.
+
+### Synthetic inflow
+
+* Kadasch, E., Sühring, M., Gronemeier, T. & Raasch, S. (2021). Mesoscale
+  nesting interface of the PALM model system 6.0. *Geosci. Model Dev.*, 14,
+  5435-5465.
+* Klein, M., Sadiki, A. & Janicka, J. (2003). A digital filter based
+  generation of inflow data for spatially developing direct numerical or
+  large eddy simulations. *J. Comput. Phys.*, 186, 652-665.
+* Lund, T. S., Wu, X. & Squires, K. D. (1998). Generation of turbulent
+  inflow data for spatially-developing boundary layer simulations.
+  *J. Comput. Phys.*, 140, 233-258.
+* Panofsky, H. A. & Dutton, J. A. (1984). *Atmospheric Turbulence*.
+  Wiley.
+* Schumann, U. (1977). Realizability of Reynolds-stress turbulence
+  models. *Phys. Fluids*, 20, 721-725.
+* Xie, Z.-T. & Castro, I. P. (2008). Efficient generation of inflow
+  conditions for large eddy simulation of street-scale flows. *Flow
+  Turbul. Combust.*, 81, 449-470.
