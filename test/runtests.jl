@@ -6,6 +6,10 @@ Main.AeolusTestSelection.serial_entry(@__FILE__) && exit()
 
 using Test
 using Random
+# #245: the suite plans every FFT with FFTW.ESTIMATE (deterministic, so bitwise
+# comparisons hold across processes, and planning is fast). Set before
+# `using Aeolus`; subprocesses the tests start inherit it.
+ENV["AEOLUS_FFTW_PLANNER"] = "estimate"
 using Statistics: mean
 using Aeolus
 using Aeolus.Grids: xnodes, ynodes, znodes, interior
@@ -814,7 +818,7 @@ using Aeolus.Fields: set!, interior_view
         @test θ1 ≈ 305.0 atol=1e-8
     end
 
-    @testset "I/O: snapshot round-trip" begin
+    @testset "I/O: snapshot round-trip; snapshots are not restart files (#245)" begin
         mesh = RegularGrid(; size=(8,8,8), extent=(1.0,1.0,1.0), halo=(2,2,2))
         sim1 = BoussinesqSimulation(mesh; ν=1e-3, θ₀=300.0)
         Random.seed!(11)
@@ -823,14 +827,23 @@ using Aeolus.Fields: set!, interior_view
         sim1.t = 42.0
         path = tempname() * ".jls"
         write_snapshot(path, sim1)
-
+        d = read_snapshot(path)
+        @test d[:t] == 42.0
+        @test d[:u] == interior_view(sim1.u) && d[:θ] == interior_view(sim1.θ)
+        # Maintainer decision on #245: an unversioned snapshot is refused by
+        # restart! (it has no closure memory, halos or stepper state). The
+        # pre-#245 expectation here (restart! from write_snapshot) is retired.
         sim2 = BoussinesqSimulation(mesh; ν=1e-3, θ₀=300.0)
+        @test_throws ArgumentError restart!(sim2, path)
+        # the versioned checkpoint round-trips, halos included
+        checkpoint!(sim1, path)
         restart!(sim2, path)
         @test sim2.t == 42.0
-        @test all(interior_view(sim2.u) .== interior_view(sim1.u))
-        @test all(interior_view(sim2.θ) .== interior_view(sim1.θ))
+        @test sim2.u.data == sim1.u.data && sim2.θ.data == sim1.θ.data
         rm(path)
     end
+
+    include("io_checkpoint.jl")   # #245: full-state checkpoints, bitwise restart, FFTW policy
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

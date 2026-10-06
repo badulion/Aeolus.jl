@@ -203,7 +203,8 @@ const DNS_GEN_NU_MARGIN = 1.035
 """
     generate_dns_apriori(; N = 256, out, seed = 1, ν = 1.035 · 0.018 (48/N)^{4/3},
                          t_end = 2.0, past_peak = 0.25, t_max = 6.0,
-                         ratios = (4, 8, 16, 32), require_checks = true) -> (rec, d)
+                         ratios = (4, 8, 16, 32), require_checks = true,
+                         checkpoint = nothing) -> (rec, d)
 
 Run `dns_decay` at `N`³ (ν with a 3.5 % margin over the fixture's
 scaling, `DNS_GEN_NU_MARGIN`), continued to `past_peak` past the
@@ -213,13 +214,15 @@ required DNS check holds (k_max η ≥ 1.5 over the run, skewness band,
 budget, monotone decay, past the peak; `ADVISORY_CHECKS` are recorded
 only); otherwise it is
 written to `out * ".failed"` and the call throws, naming the failed
-checks.
+checks. `checkpoint` (an `IO.CheckpointSchedule`) is passed to `dns_decay`:
+an interrupted DNS resumes from its newest checkpoint (#245).
 """
 function generate_dns_apriori(; N::Integer = 256, out::AbstractString, seed::Integer = 1,
                               ν::Real = DNS_GEN_NU_MARGIN * DNS_NU48 * (48 / N)^(4 / 3), t_end::Real = DNS_T_END,
                               past_peak::Real = 0.25, t_max::Real = 6.0, ratios = (4, 8, 16, 32),
-                              require_checks::Bool = true, verbose::Bool = true)
-    d = dns_decay(; N, seed, ν, t_end, past_peak, t_max)
+                              require_checks::Bool = true, verbose::Bool = true,
+                              checkpoint = nothing)
+    d = dns_decay(; N, seed, ν, t_end, past_peak, t_max, checkpoint)
     # keep the velocity only: the solver's work arrays are ~40 fields (6 GB at 256³)
     d = merge(d, (; sim = (; mesh = d.sim.mesh, u = d.sim.u, v = d.sim.v, w = d.sim.w)))
     GC.gc()
