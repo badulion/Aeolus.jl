@@ -565,7 +565,7 @@ rk3_workspace(sim::BoussinesqSimulation) =
 """
     step_rk3!(sim::BoussinesqSimulation, dt; sgs = nothing, eddy_viscosity! = nothing,
               body_force! = nothing, post_predictor! = nothing,
-              sgs_stress = :laplacian)
+              sgs_stress = :laplacian, workspace = rk3_workspace(sim))
 
 Advance one Shu-Osher SSP-RK3 step with a pressure projection at each of
 the three substages. Third-order-accurate in time for divergence-free
@@ -597,6 +597,9 @@ step projected with the boundary data of its own end time — `t+Δt`,
 `t+2Δt` and `t+3Δt/2` for the three Shu–Osher substages — and the
 boundary buffers are combined with the fields' weights, so every stage's
 halos and boundary faces are exactly those of the combined state.
+
+The step-start state lives in `workspace` ([`RK3Workspace`](@ref), cached
+per simulation), so a step allocates nothing but the cache lookup (#295).
 """
 function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
                    sgs = nothing, eddy_viscosity! = nothing,

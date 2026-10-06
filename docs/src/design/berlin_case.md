@@ -377,7 +377,7 @@ in summer, 1.30 in winter.
 
 | consumer | uses |
 | :-- | :-- |
-| `fog_dew` | fog adjusted at `p̄_k` (`T = θ Π̄_k`); dew at `p_surface` with `ρ̄_1` |
+| `fog_dew` | fog adjusted at `p̄_k` (`T = θ Π̄_k`); dew at the `p̄_k`, `ρ̄_k` of each column's first air cell `k_air` (#129; one pass over the columns since #295) |
 | `surface_exchange` | forcing `T_air = θ Π̄_k`, `p̄_k`, `ρ̄_k` at the first air cell `k_air`; `ρ̄_k c_pd`, `ρ̄_k` in the conversion of H and E to θ, qv |
 | `aq_chem` | `T = θ̄ Π̄_k` and `p̄_k` for the rate constants; its r_a solve uses `θ_s = Ts/Π̄_k` at the first air cell |
 | `column_radiation` | surface pressure `surface_pressure(case)` (`case.ref.p_surface`) |
