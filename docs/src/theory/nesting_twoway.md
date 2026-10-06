@@ -208,8 +208,9 @@ parent never sees, averages to zero within its error in every
 configuration, e.g. −0.002 ± 0.061 m/s in the suite case.) Standalone
 periodic CBLs of the suite case, which hold the same heat at every
 resolution (column integrals equal to 2e-4), are **cooler below 800 m at
-the child's spacing than at the parent's**: −0.080 K at 33 m against 100 m
-(and −0.044 K below 500 m at 50 m against 100 m for the lapse-rate start);
+the child's spacing than at the parent's**: −0.080 K at 33 m against 100 m,
+the mean of seeds 1 and 2 (−0.087 K and −0.072 K; the suite runs seed 1),
+and −0.044 K below 500 m at 50 m against 100 m for the lapse-rate start;
 the finer CBL carries more of the surface heat into its entrainment zone.
 
 What this shows:
@@ -272,7 +273,7 @@ From `test/era2_nest_twoway.jl` and `test/era2_nest_twoway_longrun.jl`.
 | 2Δ θ mode on the parent rows crossing the nest | 4.7e-3 K → 4.2e-3 K over the 2nd hour, growth −0.064 ± 0.031 h⁻¹ |
 | child-mean ``w`` at 400 m, 2nd hour | one-way −0.164 m/s, two-way −0.358 m/s (one realisation; see the ensemble above) |
 | covered − outside parent ``θ`` below 400 m, 2nd hour | one-way −0.017 K, two-way −0.063 K (thermally direct: asserted) |
-| standalone CBL (1.6 km box), mean ``θ`` below 800 m, 33 m − 100 m | −0.087 K at equal column heat (asserted < −0.03 K) |
+| standalone CBL (1.6 km box), mean ``θ`` below 800 m, 33 m − 100 m | −0.087 K at equal column heat, seed 1 (asserted < −0.03 K) |
 | forced neutral flow (Kolmogorov, 16³ parent, r = 2), 61 eddy turnovers | KE of turnovers −40…−20 vs −20…0: ratio 1.011 |
 | outgoing Lamb–Oseen vortex harness (N-open-c), two-way, 2000 steps | child kinetic energy within 1.2e-6 of a standalone parent |
 
