@@ -977,9 +977,10 @@ between two steps. The smoke test asserts that neither is booked.
 **Booked terms.** `add_heat!(ledger, term, J; k)` books `J` J m⁻² under
 `(stage, term)` from inside a running context and takes it out of that
 context's own share, so a context's entry becomes the residual of the
-terms named inside it. The nesting epic books `:top_flux` (N-parent-b),
-`:boundary_heat`, `:relaxation`, `:mass_correction` (N-open-d) and
-`:feedback_heat` (N-berlin-twoway) this way. Called outside a step it is
+terms named inside it. The dynamics books `:top_flux`, the heat through
+the fixed-gradient θ top ([The θ top](#The-θ-top), N-parent-b, #254), this
+way; the nesting epic will add `:boundary_heat`, `:relaxation`,
+`:mass_correction` (N-open-d) and `:feedback_heat` (N-berlin-twoway). Called outside a step it is
 an error: that heat would have no place in the balance.
 
 **Layers and windows.** Every term is kept per level and per local hour
@@ -1045,6 +1046,63 @@ puts 8 W m⁻² in. Inside the canyons the transport brings down from
 above most of what the radiation removes (+28.4 of −32.6 W m⁻² below
 37.5 m). This is the #238 budget and the baseline of N-berlin-validate
 (#270).
+
+### The θ top
+
+Since N-parent-b (#254) the θ condition of the top face is
+`cfg.θ_top = :initial_gradient`, on by default: `FluxBC(Γ)` with
+``Γ = ∂θ/∂z`` of the initial profile across the top face
+(`θ_top_gradient(cfg)`, 3 × 10⁻³ K m⁻¹ above the 100 m inversion), the
+fixed-gradient top of PALM and DALES. Before it the top was a closed
+no-flux lid, still available as `θ_top = :noflux` (a number sets Γ in
+K m⁻¹). The physics is `src/` (`BoundaryConditions.FluxBC`, the halo fill
+of `src/boundary_conditions/gradient_top.jl`; theory in
+[Large-scale forcing](../theory/large_scale_forcing.md#The-fixed-gradient-top));
+the case code is `core/top_boundary.jl`. `qv` and the tracers keep their
+no-flux top.
+
+**Ledger.** The heat the top face carries is booked as
+`(:dynamics, :top_flux)` at the top level. The composed body-force hook
+captures ``Γ\,ρ̄_N c_p Π̄_N ⟨ν + ½(κ_{v,N} + κ_{v,N+1})⟩`` in every dynamics
+stage (the SGS closure has just filled ``κ_v``), and each accepted
+(sub)step books it times its length (`dynamics_step!`, each piece of
+`step_adaptive!`, `step_imex!`). What is left to `(:dynamics, :transport)`
+over the column is round-off: 3.5e-11 W m⁻² (adaptive) and 8.4e-10 W m⁻²
+(fixed step) on the smoke case against a top flux of 7.18 W m⁻², 3.1e-6
+J m⁻² over the 24 h flagship against 6.2e5 J m⁻². With the IMEX stepper
+the residual is the CG tolerance (−1.0e-2 W m⁻² at `tol = 1e-8`,
+−8.6e-7 at `1e-12`; −1.4e-3 with the lid), on the anelastic core the
+core's unweighted diffusion (2.0e-2 W m⁻², 1.8e-2 with the lid).
+
+**Measured (flagship, 24 h from 06:00, every default coupling, adaptive
+step).** Two runs that differ only in `θ_top`:
+
+| | `:initial_gradient` (default) | `:noflux` (before #254) |
+| :-- | --: | --: |
+| steps | 62 724 | 61 903 |
+| top-face heat flux, 24 h mean | +7.21 W m⁻² | 0 |
+| top-face heat flux, 20–05 h | +7.14 W m⁻² | 0 |
+| column storage 20–05 h | −49.94 W m⁻² | −52.79 W m⁻² |
+| column radiation 20–05 h | −55.06 W m⁻² | −52.70 W m⁻² |
+| canopy air θ (fluid cells below 37.5 m), 20–05 h mean | 313.53 K | 312.54 K |
+| canopy air θ at 20:00 / 05:00 | 317.02 / 309.88 K | 316.21 / 308.74 K |
+
+The flux is downgradient, into the domain (the free atmosphere above is
+warmer), and nearly constant: ``ρ̄_N c_pΠ̄_N νΓ`` = 7.09 W m⁻² with the
+case's molecular ``ν`` = 2 m² s⁻¹ is almost all of it, the SGS
+``κ_v`` at the top adding 0.12 W m⁻² over the 24 h. The nightly canopy air is
+0.99 K warmer (20–05 h mean), 0.81 K at 20:00 rising to 1.14 K at 05:00,
+and cools 0.33 K less during the night (7.13 against 7.46 K). In the
+afternoon the convective layer fills the 200 m domain, and a fixed
+gradient then imposes ``κΓ`` regardless of the real entrainment: the
+open top of the nested run (N-open-b, N-berlin-nest #265) replaces it.
+
+**Stated exception: no θ damping in the child.** θ is not
+Rayleigh-damped in the 200 m child. Its velocity sponge starts at 150 m,
+and a θ damping toward a constant target there would clamp the top 50 m
+(#238, approach B); in the nested run the child top comes from the
+parent. `LargeScaleForcing.ReferenceDamping` — the one θ-damping type —
+runs in the parent (N-parent-e).
 
 ### Baseline (measured, #127)
 
