@@ -674,13 +674,8 @@ end
 # The dynamics: hooks, step, booking
 # ---------------------------------------------------------------------------
 
-function _level_sums!(out, f)
-    a = interior_view(f)
-    @inbounds for k in axes(a, 3)
-        out[k] = sum(view(a, :, :, k))
-    end
-    return out
-end
+# the per-level sums in the canonical, thread-invariant order (KA-b, #296)
+_level_sums!(out, f) = plane_partials!(out, identity, Aeolus.Grids.interior(f.mesh), f.data)
 
 # The stage weights of the parent's time step: the net effect of a
 # tendency evaluated at each stage is Σ w_s Δt T_s — one stage of weight 1

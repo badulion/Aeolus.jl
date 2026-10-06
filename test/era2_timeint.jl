@@ -12,6 +12,7 @@ using Aeolus
 using Aeolus.TimeIntegration
 using Aeolus.Fields: set!, interior_view
 using Aeolus.Grids: interior, xnodes, znodes
+import Random
 
 @testset "Era II — Adaptive dt & IMEX" begin
 
@@ -695,5 +696,58 @@ using Aeolus.Grids: interior, xnodes, znodes
         println("  [KA-c] one step_rk3! (16³, SGS, moist) allocates $nb bytes")
         @test nb <= 64
     end
+
+    # =====================================================================
+    # KA-b (#296): the step-path maxima and finiteness checks run through
+    # the thread-invariant primitives. max and isfinite are exact, so the
+    # results must be bit-identical to the loops they replaced (master at
+    # 70d9f83, transcribed here), NaN propagation included.
+    # =====================================================================
+    @testset "KA-b: CFL maxima and finiteness bit-identical to the old loops" begin
+        function old_rate(ud, vd, wd, m)
+            ii, jj, kk = interior(m)
+            idx = 1 / m.dx; idy = 1 / m.dy; idz = 1 / m.dz
+            r = 0.0
+            for k in kk, j in jj, i in ii
+                au = max(abs(ud[i, j, k]), abs(ud[i+1, j, k]))
+                av = max(abs(vd[i, j, k]), abs(vd[i, j+1, k]))
+                aw = max(abs(wd[i, j, k]), abs(wd[i, j, k+1]))
+                r  = max(r, au * idx + av * idy + aw * idz)
+            end
+            return r
+        end
+        old_speed(sim) = max(maximum(abs, interior_view(sim.u)), maximum(abs, interior_view(sim.v)),
+                             maximum(abs, interior_view(sim.w)))
+        g = RegularGrid(; size = (37, 21, 13), extent = (1.0, 2.0, 0.5), halo = (3, 3, 3))
+        sim = BoussinesqSimulation(g; θ₀ = 300.0)
+        rng = Random.Xoshiro(296)
+        for f in (sim.u, sim.v, sim.w, sim.θ, sim.p)
+            interior_view(f) .= randn(rng, size(interior_view(f)))
+        end
+        u, v, w = sim.u.data, sim.v.data, sim.w.data
+        bits(x) = reinterpret(UInt64, Float64(x))
+        TI = Aeolus.TimeIntegration
+        @test bits(TI._max_advective_rate(u, v, w, g)) == bits(old_rate(u, v, w, g))
+        @test bits(TI._max_speed(sim)) == bits(old_speed(sim))
+        @test bits(TI._max_interior(sim.u)) == bits(maximum(interior_view(sim.u)))
+        @test bits(max_divergence(sim)) == bits(maximum(abs, interior_view(sim.div_buf)))
+        @test TI._all_finite(sim)
+        # NaN propagates through every maximum; ±Inf fails the finiteness check
+        interior_view(sim.v)[5, 6, 7] = NaN
+        @test isnan(TI._max_advective_rate(u, v, w, g)) && isnan(old_rate(u, v, w, g))
+        @test isnan(TI._max_speed(sim))
+        @test !TI._all_finite(sim)
+        interior_view(sim.v)[5, 6, 7] = 0.0
+        interior_view(sim.p)[1, 1, 1] = -Inf
+        @test !TI._all_finite(sim)
+        interior_view(sim.p)[1, 1, 1] = 0.0
+        sim.p.data[1, 1, 1] = NaN                     # a halo NaN is not in the interior
+        @test TI._all_finite(sim)
+        # the brunt_vaisala plane means: canonical sums, round-off from the old loop
+        set!(sim.θ, (x, y, z) -> 300 + 3z)
+        N = TI._brunt_vaisala(sim)
+        @test N ≈ sqrt(9.81 / 300 * 3) rtol = 1e-10
+    end
+
 end
 

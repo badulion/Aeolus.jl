@@ -1242,7 +1242,7 @@ and `StabilityCorrected` does not wrap it — by design, not a gap. It has
 no ``κ_h ≠ κ_v`` anisotropy either (one filter width ``Δ``, as in PALM):
 on the Berlin grid it mixes about 3.4× more vertically and 1.84× less
 horizontally than `StabilityCorrected` Smagorinsky of equal ``C_s``. Its
-``N^2`` misses the moist-adiabatic stability of saturated air (#239).
+``N^2`` is that of cloudy air when it is given the condensate (#239).
 In the CBC benchmark above it decays too fast (−9.4 % / −26.9 % at 32³).
 Everything else is on [Prognostic SGS TKE](sgs_tke.md).
 

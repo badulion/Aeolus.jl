@@ -58,6 +58,7 @@ using ..Operators: compute_sgs!, add_sgs_momentum!, sgs_closure
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, _dzf
 using ..StretchedGrids: StretchedGrid
+using ..Backends: Backends, interior_dot, plane_reduce!, ordered_sum
 
 export # --- Phase 26: reconstructions -------------------------------------
        weno_z5_left, weno_z5_right, weno_z7_left, weno_z7_right,
@@ -1291,16 +1292,9 @@ end
 
 _zero!(fs::Field...) = (for f in fs; fill!(f.data, 0); end; nothing)
 
-# Σ_interior a·b dV at a common location
-function _dot_interior(a::Field, b::Field, g::RegularGrid)
-    ii, jj, kk = interior(g)
-    s = zero(eltype(a))
-    ad = a.data; bd = b.data
-    @inbounds for k in kk, j in jj, i in ii
-        s += ad[i,j,k]*bd[i,j,k]
-    end
-    return s * (g.dx*g.dy*g.dz)
-end
+# Σ_interior a·b dV at a common location, in the canonical (thread-invariant)
+# order of `Backends.interior_dot` (KA-b, #296)
+_dot_interior(a::Field, b::Field, g::RegularGrid) = interior_dot(a, b) * (g.dx*g.dy*g.dz)
 
 function _uvw_dot(u, v, w, tu, tv, tw, g::RegularGrid)
     return _dot_interior(u, tu, g) + _dot_interior(v, tv, g) + _dot_interior(w, tw, g)
@@ -1517,15 +1511,20 @@ function enstrophy(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ})
     g = mesh(u)
     idx = 1/g.dx; idy = 1/g.dy; idz = 1/g.dz
     ii, jj, kk = interior(g)
-    ud = u.data; vd = v.data; wd = w.data
-    s = zero(eltype(u))
-    @inbounds for k in kk, j in jj, i in ii
+    # canonical plane sums, then ascending k (thread-invariant; KA-b, #296)
+    parts = plane_reduce!(zeros(eltype(u), length(kk)), Backends.backend(u.data), _enstrophy_at,
+                          (ii, jj, kk), u.data, v.data, w.data, idx, idy, idz)
+    return 0.5 * ordered_sum(parts) * (g.dx*g.dy*g.dz)
+end
+
+# |ω|² from the three edge vorticities of cell (i, j, k)
+@inline function _enstrophy_at(i, j, k, ud, vd, wd, idx, idy, idz)
+    @inbounds begin
         ωx = (wd[i,j,k] - wd[i,j-1,k])*idy - (vd[i,j,k] - vd[i,j,k-1])*idz
         ωy = (ud[i,j,k] - ud[i,j,k-1])*idz - (wd[i,j,k] - wd[i-1,j,k])*idx
         ωz = (vd[i,j,k] - vd[i-1,j,k])*idx - (ud[i,j,k] - ud[i,j-1,k])*idy
-        s += ωx*ωx + ωy*ωy + ωz*ωz
+        return ωx*ωx + ωy*ωy + ωz*ωz
     end
-    return 0.5 * s * (g.dx*g.dy*g.dz)
 end
 
 # =========================================================================

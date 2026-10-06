@@ -134,16 +134,17 @@ end
 
 function _fluid_mean(a, mask, Hx, Hy, Hz)
     Nx, Ny, Nz = size(a)
-    out = zeros(Nz)
-    @inbounds for k in 1:Nz
-        s = 0.0; n = 0
-        for j in 1:Ny, i in 1:Nx
-            mask[Hx + i, Hy + j, Hz + k] && continue
-            s += a[i, j, k]; n += 1
-        end
-        out[k] = n > 0 ? s / n : NaN
-    end
-    return out
+    # the masked sums and counts per level in the canonical, thread-invariant
+    # plane order (KA-b, #296)
+    S, n = zeros(Nz), zeros(Nz)
+    plane_reduce!((S, n), Aeolus.Backends.backend(a), _fluid_value_at, (1:Nx, 1:Ny, 1:Nz),
+                  a, mask, Hx, Hy, Hz)
+    return [n[k] > 0 ? S[k] / n[k] : NaN for k in 1:Nz]
+end
+
+@inline function _fluid_value_at(i, j, k, a, mask, Hx, Hy, Hz)
+    @inbounds mask[Hx + i, Hy + j, Hz + k] && return (0.0, 0.0)
+    return (Float64(@inbounds a[i, j, k]), 1.0)
 end
 
 """

@@ -19,6 +19,7 @@ using ..Grids
 using ..Grids: RegularGrid, interior, CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields: Field
 using ..Operators: _strain_at
+using ..Backends: Backends, plane_reduce!, ordered_sum
 
 export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
        DampingProfile, sponge_profile, in_damping, damping_rate, damping_coordinates
@@ -874,21 +875,25 @@ function _sgs_stress_dissipation(u::Field{FaceX}, v::Field{FaceY}, w::Field{Face
                                  g::RegularGrid)
     T = eltype(u.data)
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
-    ii, jj, kk = interior(g)
-    ud, vd, wd = u.data, v.data, w.data
-    s = zero(T)
-    @inbounds for k in kk, j in jj, i in ii
+    I3 = interior(g)
+    # canonical plane sums, then ascending k (KA-b, #296)
+    parts = plane_reduce!(zeros(T, length(I3[3])), Backends.backend(u.data), _sgs_dissipation_at,
+                          I3, u.data, v.data, w.data, nh, nv, idx, idy, idz)
+    return ordered_sum(parts) * (g.dx * g.dy * g.dz)
+end
+
+@inline function _sgs_dissipation_at(i, j, k, ud, vd, wd, nh, nv, idx, idy, idz)
+    @inbounds begin
         S11 = (ud[i+1,j,k] - ud[i,j,k]) * idx
         S22 = (vd[i,j+1,k] - vd[i,j,k]) * idy
         S33 = (wd[i,j,k+1] - wd[i,j,k]) * idz
         S12 = 0.5 * ((ud[i,j,k] - ud[i,j-1,k]) * idy + (vd[i,j,k] - vd[i-1,j,k]) * idx)
         S13 = 0.5 * ((ud[i,j,k] - ud[i,j,k-1]) * idz + (wd[i,j,k] - wd[i-1,j,k]) * idx)
         S23 = 0.5 * ((vd[i,j,k] - vd[i,j,k-1]) * idz + (wd[i,j,k] - wd[i,j-1,k]) * idy)
-        s += 2 * (nh[i,j,k] * (S11^2 + S22^2) + nv[i,j,k] * S33^2) +
-             4 * (_νe12(nh, i, j, k) * S12^2 + _νe13(nv, i, j, k) * S13^2 +
-                  _νe23(nv, i, j, k) * S23^2)
+        return 2 * (nh[i,j,k] * (S11^2 + S22^2) + nv[i,j,k] * S33^2) +
+               4 * (_νe12(nh, i, j, k) * S12^2 + _νe13(nv, i, j, k) * S13^2 +
+                    _νe23(nv, i, j, k) * S23^2)
     end
-    return s * (g.dx * g.dy * g.dz)
 end
 
 # --- eddy diffusion for a cell-centered scalar --------------------------

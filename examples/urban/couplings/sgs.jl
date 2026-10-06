@@ -118,14 +118,16 @@ sgs_stability_scheme(name::Symbol) =
 
 `closure` wrapped in `Operators.StabilityCorrected` (P55-e, #187) with the
 scheme of `case.cfg.sgs_stability`, the anisotropic length scales of the
-case grid and the θ_v of the `qv` tracer — or `closure` itself for
+case grid, the θ_v of the `qv` tracer and the cloud water `ql` (cloudy-air
+``N^2``, #239) — or `closure` itself for
 `sgs_stability = :none`.
 """
 function sgs_stability_closure(closure, case)
     s = case.cfg.sgs_stability
     s === :none && return closure
     return StabilityCorrected(closure, case.mesh; scheme = sgs_stability_scheme(s),
-                              length_scales = :anisotropic, qv = tracer(case, :qv))
+                              length_scales = :anisotropic, qv = tracer(case, :qv),
+                              qc = tracer(case, :ql), p = ref_pressure_storage(case))
 end
 
 """

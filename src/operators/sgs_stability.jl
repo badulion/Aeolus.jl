@@ -61,7 +61,7 @@ end
 """
     StabilityCorrected(base::AbstractEddyViscosityClosure, mesh;
                        scheme = BrownEtAl1994(), length_scales = :anisotropic,
-                       qv = nothing, S2_min = RI_SHEAR2_FLOOR)
+                       qv = nothing, qc = nothing, p = nothing, S2_min = RI_SHEAR2_FLOOR)
 
 A closure that corrects the eddy viscosity `ν_base` of `base`
 ([`StaticSmagorinsky`](@ref), [`DynamicSmagorinsky`](@ref),
@@ -80,7 +80,12 @@ splits it into horizontal and vertical coefficients:
   ``N^2`` from [`buoyancy_frequency_squared!`](@ref): of θ, or of the
   virtual potential temperature when a humidity is known (`qv`, a
   `Field{CellCenter}` such as a tracer, or the core's own `sim.qv` when it
-  carries moisture). The reference is `sim.θ₀` on the Boussinesq core and
+  carries moisture). With a condensate field `qc` (cloud or fog water,
+  `Field{CellCenter}`) and the pressure `p` (Pa; a number or a
+  storage-indexed vector) ``N^2`` is that of cloudy air (#239): condensate
+  loading in unsaturated cells, the saturated ``N^2`` of Durran & Klemp
+  (1982) where ``q_c > 0``, so that moist-neutral fog or cloud is not
+  damped as if it were stable. The reference is `sim.θ₀` on the Boussinesq core and
   the profile `θ̄(z)` (`sim.ref`) on the anelastic / pseudo-incompressible
   cores, the reference their buoyancy uses.
 * **f_m, f_h** are the stability factors of the TurbulenceStability
@@ -135,7 +140,7 @@ References: Lilly, D. K. (1962), *Tellus* 14, 148; Mason, P. J. (1989),
 (2002), *Mon. Wea. Rev.* 130, 2917.
 """
 struct StabilityCorrected{B<:AbstractEddyViscosityClosure, S<:AbstractRiStability,
-                          F<:Field{CellCenter}, Q} <: AbstractSGSClosure
+                          F<:Field{CellCenter}, Q, C} <: AbstractSGSClosure
     base::B
     scheme::S
     length_scales::Symbol
@@ -148,6 +153,7 @@ struct StabilityCorrected{B<:AbstractEddyViscosityClosure, S<:AbstractRiStabilit
     Ri::F
     qv::Q            # nothing, or the humidity field of θ_v
     qvh::F           # scratch: a copy of the humidity with filled halos
+    cloud::C         # nothing, or (qc = condensate field, qch = scratch copy, p = pressure)
     S2_min::Float64
 end
 
@@ -155,6 +161,8 @@ function StabilityCorrected(base::AbstractEddyViscosityClosure, g::RegularGrid;
                             scheme::AbstractRiStability = BrownEtAl1994(),
                             length_scales::Symbol = :anisotropic,
                             qv::Union{Nothing,Field} = nothing,
+                            qc::Union{Nothing,Field} = nothing,
+                            p::Union{Nothing,Real,AbstractVector} = nothing,
                             S2_min::Real = RI_SHEAR2_FLOOR)
     length_scales in (:anisotropic, :isotropic) ||
         throw(ArgumentError("length_scales must be :anisotropic or :isotropic, got $(repr(length_scales))"))
@@ -162,7 +170,8 @@ function StabilityCorrected(base::AbstractEddyViscosityClosure, g::RegularGrid;
     ℓh, ℓv = length_scales === :anisotropic ? anisotropic_length_factors(g) : (1.0, 1.0)
     c() = Field(CellCenter(), g)
     return StabilityCorrected(base, scheme, length_scales, Float64(ℓh), Float64(ℓv),
-                              c(), c(), c(), c(), c(), qv, c(), Float64(S2_min))
+                              c(), c(), c(), c(), c(), qv, c(), cloud_humidity(qc, p, g),
+                              Float64(S2_min))
 end
 StabilityCorrected(base::AbstractSGSClosure, g; kwargs...) =
     throw(ArgumentError("StabilityCorrected wraps an AbstractEddyViscosityClosure " *
@@ -181,6 +190,13 @@ function _buoyancy_reference(sim)
         return (sim.ref.θ̄c_pad, sim.ref.g)
     end
     throw(ArgumentError("StabilityCorrected: the simulation has neither θ₀ nor a reference state θ̄(z)"))
+end
+
+# The halo conditions of the condensate: those of a passive scalar (not θ's
+# top gradient, #254) when the core's scalar conditions are field ones.
+function _condensate_bcs(sim)
+    b = _scalar_bcs(sim)
+    return b isa FieldBoundaryConditions ? passive_scalar_bcs(b) : b
 end
 
 # The humidity of θ_v with filled halos (scratch), or nothing (dry N²).
@@ -213,9 +229,14 @@ function sgs_stratification!(c::StabilityCorrected, sim)
     θ₀, g = _buoyancy_reference(sim)
     q = _stability_humidity!(c, sim)
     if q === nothing
+        c.cloud === nothing ||
+            throw(ArgumentError("StabilityCorrected: a condensate field needs a humidity (qv, or a moist core)"))
         buoyancy_frequency_squared!(c.N2, sim.θ; θ₀ = θ₀, g = g)
-    else
+    elseif c.cloud === nothing
         buoyancy_frequency_squared!(c.N2, sim.θ, q; θ₀ = θ₀, g = g)
+    else
+        buoyancy_frequency_squared!(c.N2, sim.θ, q, filled_condensate!(c.cloud, _condensate_bcs(sim));
+                                    θ₀ = θ₀, g = g, p = c.cloud.p)
     end
     gradient_richardson!(c.Ri, c.N2, sim.u, sim.v, sim.w; S2_min = c.S2_min)
     return (c.N2, c.Ri)
