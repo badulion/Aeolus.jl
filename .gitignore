@@ -30,3 +30,6 @@ examples/urban/data/raw/
 
 # Parallel test runner: per-run logs and measured timings (test/run.jl)
 .testruns/
+
+# Run folders (#334): runs/<date>_<case>_<runID>/ (run.log, run.toml, output, checkpoints)
+runs/
