@@ -265,6 +265,14 @@ end
 const _ROWS_PER_GROUP = 4
 const _CHUNK_1D = 1024
 
+# KA's CPU backend starts min(nthreads, nblocks) tasks. A launch too small
+# to keep every thread busy gets bigger workgroups, so fewer blocks and so
+# fewer tasks: at least `_MIN_POINTS_PER_TASK` points per task (a task
+# start costs a few µs; measured in ka_port.md). Pointwise results do not
+# depend on the split.
+const _MIN_POINTS_PER_TASK = 16_384
+_ntasks(np) = clamp(np ÷ _MIN_POINTS_PER_TASK, 1, Threads.nthreads())
+
 _npoints(ranges) = prod(length, ranges; init = 1)
 
 # ---- serial reference loops (the historical loop order) ---------------------
@@ -292,20 +300,24 @@ end
 
 function _threaded!(b::CPUBackend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args) where {F}
     nj, nk = length(jr), length(kr)
-    kern = _rows3_kernel!(b.ka, (min(nj, _ROWS_PER_GROUP), 1))
+    nt = _ntasks(length(ir) * nj * nk)
+    wg = nt >= Threads.nthreads() ? (min(nj, _ROWS_PER_GROUP), 1) : (nj, cld(nk, nt))
+    kern = _rows3_kernel!(b.ka, wg)
     kern(body!, first(ir), last(ir), first(jr) - 1, first(kr) - 1, args; ndrange = (nj, nk))
     return nothing
 end
 function _threaded!(b::CPUBackend, body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args) where {F}
     nj = length(jr)
-    kern = _rows2_kernel!(b.ka, min(nj, _ROWS_PER_GROUP))
+    nt = _ntasks(length(ir) * nj)
+    kern = _rows2_kernel!(b.ka, nt >= Threads.nthreads() ? min(nj, _ROWS_PER_GROUP) : cld(nj, nt))
     kern(body!, first(ir), last(ir), first(jr) - 1, args; ndrange = nj)
     return nothing
 end
 function _threaded!(b::CPUBackend, body!::F, (nr,)::NTuple{1,UnitRange{Int}}, args) where {F}
-    nc = cld(length(nr), _CHUNK_1D)
+    nt = _ntasks(length(nr))
+    chunk = nt >= Threads.nthreads() ? _CHUNK_1D : cld(length(nr), nt)
     kern = _chunks1_kernel!(b.ka, 1)
-    kern(body!, first(nr), last(nr), _CHUNK_1D, args; ndrange = nc)
+    kern(body!, first(nr), last(nr), chunk, args; ndrange = cld(length(nr), chunk))
     return nothing
 end
 
@@ -472,7 +484,9 @@ function _plane_partials!(b::CPUBackend, out::AbstractVector, p::_PlaneReduce,
             out[c] = p(k, arrs)
         end
     else
-        kern = _planes_kernel!(b.ka, 1)
+        nk = length(kr)
+        nt = _ntasks(length(p.ir) * length(p.jr) * nk)
+        kern = _planes_kernel!(b.ka, nt >= Threads.nthreads() ? 1 : cld(nk, nt))
         kern(out, p, first(kr) - 1, (arrs,); ndrange = length(kr))
     end
     return out
