@@ -295,8 +295,9 @@ schemes telescope, so
 ```
 
 per forward-Euler step to round-off: measured ``|·|/\int|ϕ|dV`` = 2.6e-18
-(centred), 1.5e-18 (WENO-Z5), 4.0e-18 (TENO5) and 5.5e-18 through
-`step!`. It is the only boundary-flux function of the code base: the
+(centred), 1.5e-18 (WENO-Z5), 4.0e-18 (TENO5) and between 5.5e-18
+and 1.8e-16 through `step!` (the last depends on the summation order of
+the run). It is the only boundary-flux function of the code base: the
 nesting and Berlin budgets (N-nest-d, N-nest-e, N-open-d, N-berlin-nest)
 use it. The inflow faces of a scalar carry Dirichlet data in all ``H``
 halo layers, so the wide upwind stencils read data, not extrapolation;
