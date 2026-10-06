@@ -604,6 +604,21 @@ cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # 1 h of simulated tim
                  options = Dict{Symbol,Any}(:timestep_adaptive => (C_advective = 0.5, dt_max = 10.0)))
 ```
 
+**Stretched vertical grid (#151): a stated exception.** The
+`BoussinesqSimulation` core runs on a `StretchedGrids.StretchedGrid`. See
+[Stretched vertical grid](@ref) for the operators, the direct
+stretched-z Poisson solve and the measured accuracy and cost. The Berlin
+child keeps its uniform `RegularGrid`, and there is no `:stretched` case
+option. Such an option would be non-default, which would put
+`StretchedGrids` in `BERLIN_OPTION_ONLY` and grow a frozen list.
+StretchedGrids is instead coupled by default through the nested parent
+in N-berlin-nest (#265), which removes `:StretchedGrids` from
+`BERLIN_PENDING`. The parent's vertical layout is
+`surface_refined_faces(dz_surface = 25, z_uniform = 500, z_top = 3000,
+ratio = 1.08, dz_max = 100)`: 53 levels, 20 of them uniform. One step of
+192 × 192 × 53 costs 0.225 s on one thread, against 0.526 s for
+192 × 192 × 120 at a uniform 25 m.
+
 **The sound-proof cores** take the case's reference state as their
 base state: `case.ref.state`, built by `build_reference` (θ̄(z) =
 `initial_θ(cfg)` integrated hydrostatically from `cfg.p_surface` with
