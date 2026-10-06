@@ -81,6 +81,23 @@ _smoke(; kw...) = BC.CaseConfig(:smoke; verbose = false, output_path = nothing, 
         @test nsolid == touching > 0
     end
 
+    @testset "a building at the east edge: no wall class across an open west face" begin
+        # the wall tagging (the 2-D surface's facade heat) read its 4
+        # neighbours with a periodic wrap: a street column at the west edge
+        # next to a building at the east edge (across the seam) became a
+        # wall. Through neighbor_index it still does when periodic, and not
+        # when open
+        m = RegularGrid(size = (8, 6, 4), extent = (80.0, 60.0, 40.0), halo = (3, 3, 3))
+        sm = Aeolus.IBM.SolidMask(m)
+        for k in 1:2, j in 2:4; sm.mask[m.Hx+8, m.Hy+j, m.Hz+k] = true; end
+        per = fill(BC.SURFACE_STREET, 8, 6); opn = copy(per)
+        BC.tag_building_adjacent!(per, sm, m)
+        BC.tag_building_adjacent!(opn, sm, m; bcs = BC.case_scalar_bcs(_smoke(lateral = :open)))
+        @test all(per[1, j] == BC.SURFACE_WALL for j in 2:4)
+        @test all(opn[1, j] == BC.SURFACE_STREET for j in 2:4)
+        @test per[7, 2:4] == opn[7, 2:4] == fill(BC.SURFACE_WALL, 3)   # the inner side is a wall in both
+    end
+
     @testset "the open faces' heat in the ledger: equal inflow 0, +1 K anomaly analytic" begin
         # a uniform-θ window (the frame keeps the buildings off the faces,
         # the tallest roof is below the top), no SGS (C_s = 0), the fixed
@@ -121,8 +138,11 @@ _smoke(; kw...) = BC.CaseConfig(:smoke; verbose = false, output_path = nothing, 
         # which makes the radiation cheaper and would flatter the open run);
         # the dynamics' share (step!, which includes the open faces' update,
         # the boundary-heat capture and the θ relaxation) and the whole step
+        # Two rounds, the second measured: a cadence that first fires inside
+        # the measured steps compiles there (the first round measured the
+        # periodic case 2× slower than the open one for that reason alone).
         t = Dict{Symbol,NTuple{2,Float64}}()
-        for lat in (:periodic, :open)
+        for _ in 1:2, lat in (:periodic, :open)
             case = BC.build_case(_smoke(lateral = lat, boundary_frame = 0,
                                         physics = Dict{Symbol,Any}(:timestepper => :fixed)); io = devnull)
             BC.run_case!(case; nsteps = 2)
