@@ -108,6 +108,10 @@ their entries here.
 const DRIVER_FILES = Dict{String,String}(
     # CFG-e (#360): the validation drivers and the remaining example scripts
     "channel" => "examples/validation/channel_driver.jl",
+    "cbc_decay" => "examples/validation/cbc_driver.jl",
+    "patchy_surface" => "examples/validation/patchy_surface_driver.jl",
+    "column" => "examples/validation/column_driver.jl",
+    "dns_decay" => "examples/validation/dns_driver.jl",
 )
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))
@@ -119,6 +123,9 @@ function _ensure_driver(name::AbstractString)
     isfile(path) || throw(ConfigError("run.driver", "the driver \"$name\" is listed in " *
                                       "DRIVER_FILES but $path does not exist"))
     m = Module(Symbol("AeolusDriver_", name))
+    # what `module` defines for its body: include (relative to the file) and eval
+    Core.eval(m, :(include(p::AbstractString) = Base.include($m, p)))
+    Core.eval(m, :(eval(x) = Core.eval($m, x)))
     Base.include(m, path)
     haskey(_DRIVERS, name) ||
         throw(ConfigError("run.driver", "$path did not register the driver \"$name\""))
@@ -243,4 +250,77 @@ function no_checkpoints(cfg)
     return [ConfigError("checkpoint.every_steps",
                         "the \"$(cfg.run.driver)\" driver runs to the end in one call and writes no checkpoints; " *
                         "leave [checkpoint] off")]
+end
+
+const _GREEK = Dict('α' => "alpha", 'β' => "beta", 'γ' => "gamma", 'δ' => "delta", 'ε' => "epsilon",
+                    'κ' => "kappa", 'λ' => "lambda", 'μ' => "mu", 'ν' => "nu", 'ρ' => "rho",
+                    'σ' => "sigma", 'τ' => "tau", 'θ' => "theta", 'ω' => "omega", 'Γ' => "gamma")
+
+"The ASCII snake_case option key of a Julia field name (`σ_S` → `sigma_s`, `T_deep` → `t_deep`)."
+function field_key(f::Symbol)
+    s = join(get(_GREEK, ch, string(ch)) for ch in String(f))
+    return lowercase(s)
+end
+
+"""
+    kwdef_section(name, T; doc = "", exclude = (), docs = Dict(), units = Dict()) -> Section
+
+A section whose options are the fields of the keyword struct `T`
+(`Base.@kwdef`), with the defaults of `T()`: one option per field of type
+`Float64`, `Int`, `Bool`, `Symbol` or an `NTuple` of those, keyed by
+[`field_key`](@ref) (`σ_S` is `sigma_s`). `exclude` names fields left out;
+`docs` and `units` map field names to the option's doc and units. Rebuild
+the struct with [`kwdef_value`](@ref). One source of truth: the struct's
+defaults are the schema's defaults.
+"""
+function kwdef_section(name::AbstractString, ::Type{T}; doc::AbstractString = "", exclude = (),
+                       docs = Dict{Symbol,String}(), units = Dict{Symbol,String}()) where {T}
+    d = T()
+    return section(name; doc = doc) do s
+        for f in fieldnames(T)
+            f in exclude && continue
+            v = getfield(d, f); FT = fieldtype(T, f)
+            FT in (Float64, Int, Bool, Symbol) || (FT <: Tuple && fieldcount(FT) > 0) ||
+                throw(ArgumentError("kwdef_section: field $f of $T has type $FT"))
+            option!(s, field_key(f), FT; default = v,
+                    doc = get(docs, f, "$(nameof(T)).$f"), units = get(units, f, ""))
+        end
+    end
+end
+
+"""
+    kwdef_value(T, sec::ConfigSection; exclude = (), kw...) -> T
+
+The keyword struct `T` from the section made by [`kwdef_section`](@ref):
+`T(; field = sec[field_key(field)], …, kw...)`.
+"""
+function kwdef_value(::Type{T}, sec::ConfigSection; exclude = (), kw...) where {T}
+    vals = Dict{Symbol,Any}(f => sec[field_key(f)] for f in fieldnames(T) if !(f in exclude))
+    return T(; vals..., kw...)
+end
+
+"""
+    selected_case_sections(cfg, case_key, sections) -> Vector{ConfigError}
+
+A cross-field check for drivers with a `kind`/`case` switch and one
+section per case (`sections`: case => section name pairs; a case may
+appear more than once): any key of the section of a case that is not
+selected whose value differs from its default is an error, so a key that
+would be ignored does not pass silently. (Values, not origins, are
+compared: a `run.toml` records every key, defaults included.)
+"""
+function selected_case_sections(cfg::RunConfig, case_key::AbstractString, sections)
+    e = ConfigError[]
+    chosen = cfg[case_key]
+    schema = getfield(cfg, :schema)
+    for (case, sec) in sections
+        string(case) == string(chosen) && continue
+        spec = only(s for s in schema.sections if s.name == sec)
+        for o in spec.options
+            isequal(getproperty(cfg, Symbol(sec))[o.key], o.default) && continue
+            push!(e, ConfigError("$sec.$(o.key)",
+                                 "[$sec] belongs to $case_key = \"$case\", not \"$chosen\": it would be ignored"))
+        end
+    end
+    return e
 end

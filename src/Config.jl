@@ -48,6 +48,7 @@ export RunConfig, ConfigSection, ConfigError, ConfigProblem, load_run_config, wi
        AbstractRunDriver, driver_name, driver_sections, driver_checks, config_dir, build,
        state_fields, run_driver, run_config, RunResult, DRIVER_FILES,
        register_preprocessor!, option_reference, write_results, no_checkpoints,
+       kwdef_section, kwdef_value, field_key, selected_case_sections,
        SweepMember, sweep_members, load_sweep, run_configs
 
 include("config/schema.jl")
