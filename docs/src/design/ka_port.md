@@ -423,7 +423,7 @@ reductions thread, but the step is still dominated by the loops later
 port PRs move.
 
 The thread-invariance harness (`AEOLUS_THREAD_TESTS=1`, sections
-`primitives,dns,reductions,smoke,flagship`) gave 2665 hashes at
+`primitives,dns,reductions,smoke,flagship`) gave 2668 hashes at
 `-t 1`, `-t 4` and `-t 24`, all identical.
 
 ## Dependency tree
