@@ -60,6 +60,20 @@ Groups of keywords:
 * `sgs` — `:tke` (the child's default `:sgs` provider, the Deardorff /
   Moeng closure, here on the stretched grid) or `:smagorinsky` (the
   core's built-in closure, `C_s` of the child).
+* `stepper` — `:rk3` (default: `step_rk3!`, SSP-RK3 with a projection per
+  stage, under `step_adaptive!`) or `:euler` (the child's forward-Euler
+  projection `step!`). The forward-Euler step with the core's centred
+  advection is unconditionally unstable for advection; the child's SGS
+  diffusion damps it, but at the parent's 31.25 m and 62.5 m grids it did
+  not: a grid-scale cold anomaly at the second level grew to −17 K within
+  140 s at 31.25 m, and both 62.5 m runs failed after 5 h (the
+  projection's divergence check, at the step floor). SSP-RK3 is stable for
+  centred advection up to a Courant number of √3.
+* `C_advective` — the advective Courant number of the step pick (default
+  0.9 with RK3; the child's forward-Euler `AdaptiveStep` uses 0.5). Below
+  1 so that the positive TKE transport (`advect_positive!`, first-order
+  CFL ≤ 1 per stage) keeps its guarantee; the other constraints are the
+  child's `default_options(AdaptiveStep)`.
 * `moisture` — carry qv (default true).
 * `verbose`.
 """
@@ -104,6 +118,8 @@ Base.@kwdef mutable struct ParentConfig
     output_period::Float64               = 600.0
     # numerics
     sgs::Symbol                          = :tke
+    stepper::Symbol                      = :rk3
+    C_advective::Float64                 = 0.9
     moisture::Bool                       = true
     verbose::Bool                        = true
 end

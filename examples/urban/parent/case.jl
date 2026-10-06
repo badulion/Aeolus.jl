@@ -11,7 +11,8 @@
 #               at κz, Moeng's c_ε factor in the first level, the surface
 #               value from the tiles' u*;
 #   time        TimeIntegration.step_adaptive! with the child's AdaptiveStep
-#               constraints (`default_options(AdaptiveStep)`);
+#               constraints (`default_options(AdaptiveStep)`, the advective
+#               Courant number 0.9), each step SSP-RK3 (`step_rk3!`);
 #   initial     θ, qv from the child's `initial_θ` / `initial_qv` (the
 #               Lindenberg sounding of #247 interpolated to the case start),
 #               u, v = the geostrophic wind;
@@ -77,6 +78,8 @@ mutable struct ParentCase{M, S, C}
     sw_down::Float64
     lw_down::Float64
     t_rad::Float64              # time (s) of the next radiation call
+    stage::Base.RefValue{Int}   # stage of the current dynamics step (1 for Euler, 1-3 for RK3)
+    top_acc::Base.RefValue{Float64}   # stage-weighted top heat flux of the step (W m⁻²)
     # per-step scratch of the dynamics hooks
     lev::Dict{Symbol,Vector{Float64}}
     wθ::Vector{Float64}         # meter weights (J m⁻² per K of level sum)
@@ -320,18 +323,19 @@ function build_parent(pc::ParentConfig; child = nothing, io::IO = stdout)
     o = default_options(AdaptiveStep)
     periods = filter(isfinite, [pc.surface === :tiles ? pc.surface_period : Inf,
                                 pc.radiation ? pc.radiation_period : Inf, pc.output_period])
-    k = CFLConstraints(; C_advective = o.C_advective, C_diffusive = o.C_diffusive,
+    k = CFLConstraints(; C_advective = pc.C_advective, C_diffusive = o.C_diffusive,
                        C_buoyancy = o.C_buoyancy, C_coriolis = o.C_coriolis, dt_min = o.dt_min,
                        dt_max = min(o.dt_max, minimum(periods; init = Inf)), growth_max = o.growth_max)
 
     lev = Dict{Symbol,Vector{Float64}}(s => zeros(Nz) for s in
-              (:a, :b, :θnudging, :θsubsidence, :θdamping, :qnudging, :qsubsidence))
+              (:a, :b, :θnudging, :θsubsidence, :θdamping, :qnudging, :qsubsidence,
+               :acc_θnudging, :acc_θsubsidence, :acc_θdamping, :acc_qnudging, :acc_qsubsidence))
     pcase = ParentCase(pc, mesh, sim, ref, closure, forcing, surface, child, rad, heat, water, top,
                        k, cfg.dt, isnan(t0) ? 0.0 : t0, zi_obs, zi_run,
                        zeros(Nx, Ny, kmax), zeros(Nx, Ny, kmax), zeros(Nx, Ny, kmax), ustar,
                        -Inf, Dict{Symbol,Float64}(:Rn => 0.0, :H => 0.0, :LE => 0.0, :G => 0.0, :E => 0.0,
                                             :delivered_H => 0.0, :delivered_E => 0.0),
-                       0.0, 350.0, 0.0, lev, copy(hm.w), copy(wm.w),
+                       0.0, 350.0, 0.0, Ref(0), Ref(0.0), lev, copy(hm.w), copy(wm.w),
                        0, 0, Float64[], Dict{Symbol,Float64}(), Any[], io)
     pc.verbose && @printf(io, "Berlin parent: %d × %d × %d (Δx %.2f m, Δz %.1f–%.1f m), surface %s, sgs %s, z_g %.0f m, z_i(obs) %.0f m\n",
                           Nx, Ny, Nz, mesh.dx, minimum(dzc), maximum(dzc), pc.surface, pc.sgs, z_g, zi_obs)
@@ -535,7 +539,7 @@ function parent_surface_stage!(p::ParentCase, dt::Real)
 end
 
 """
-    apply_canopy_drag!(p, Δt) -> p
+    apply_parent_drag!(p, sim, Δt) -> p
 
 The post-predictor hook: the momentum flux of the tiles as an implicit
 deceleration of the canopy levels, ``u ← u / (1 + Δt\\,a/U)`` with
@@ -544,7 +548,7 @@ deceleration of the canopy levels, ``u ← u / (1 + Δt\\,a/U)`` with
 local speed: the stress magnitude held from the surface step, along the
 instantaneous wind, stable for any Δt.
 """
-function apply_canopy_drag!(p::ParentCase, sim, Δt)
+function apply_parent_drag!(p::ParentCase, sim, Δt)
     m = p.mesh
     Hx, Hy, Hz, Nx, Ny = m.Hx, m.Hy, m.Hz, m.Nx, m.Ny
     ud, vd = sim.u.data, sim.v.data
@@ -619,9 +623,27 @@ function _level_sums!(out, f)
     return out
 end
 
-# the θ (and qv) forcings, each one's per-level tendency sum recorded
+# The stage weights of the parent's time step: the net effect of a
+# tendency evaluated at each stage is Σ w_s Δt T_s — one stage of weight 1
+# for the forward-Euler projection, (1/6, 1/6, 2/3) for SSP-RK3
+# (u³ = u⁰ + Δt(L⁰/6 + L¹/6 + 2L²/3) for the Shu–Osher form of step_rk3!).
+const _RK3_WEIGHTS = (1 / 6, 1 / 6, 2 / 3)
+_stage_weight(p::ParentCase, s::Int) = p.pc.stepper === :rk3 ? _RK3_WEIGHTS[s] : 1.0
+
+const _BOOKED = (:θnudging, :θsubsidence, :θdamping, :qnudging, :qsubsidence)
+
+# the θ (and qv) forcings, each one's per-level tendency sum recorded and
+# accumulated with the stage weight
 function _parent_body_force!(p::ParentCase, sim, Δt)
     F, L = p.forcing, p.lev
+    stage = (p.stage[] += 1)
+    w = _stage_weight(p, stage)
+    if stage == 1
+        for n in _BOOKED
+            fill!(L[Symbol(:acc_, n)], 0.0)
+        end
+        p.top_acc[] = 0.0
+    end
     t = sim.t
     F.geostrophic === nothing || apply_forcing!(sim, F.geostrophic, t, Δt)
     moist = p.pc.moisture
@@ -632,12 +654,17 @@ function _parent_body_force!(p::ParentCase, sim, Δt)
         apply_forcing!(sim, f, t, Δt)
         Lθ = L[Symbol(:θ, name)]
         _level_sums!(Lθ, sim.tθ); Lθ .-= L[:a]
+        L[Symbol(:acc_θ, name)] .+= w .* Lθ
         if moist && name !== :damping
             Lq = L[Symbol(:q, name)]
             _level_sums!(Lq, sim.tqv); Lq .-= L[:b]
+            L[Symbol(:acc_q, name)] .+= w .* Lq
         end
     end
-    p.top === nothing || capture_top_flux!(p.top, sim, p.closure)
+    if p.top !== nothing
+        capture_top_flux!(p.top, sim, p.closure)
+        p.top_acc[] += w * p.top.rate
+    end
     return sim
 end
 
@@ -646,13 +673,13 @@ function _book_forcings!(p::ParentCase, h::Real)
     F, L = p.forcing, p.lev
     for name in (:nudging, :subsidence, :damping)
         getproperty(F, name) === nothing && continue
-        add_heat!(p.heat, name, p.wθ .* L[Symbol(:θ, name)] .* h)
+        add_heat!(p.heat, name, p.wθ .* L[Symbol(:acc_θ, name)] .* h)
         if p.pc.moisture && name !== :damping
-            add_heat!(p.water, name, p.wq .* L[Symbol(:q, name)] .* h)
+            add_heat!(p.water, name, p.wq .* L[Symbol(:acc_q, name)] .* h)
         end
     end
     if p.top !== nothing
-        J = p.top.rate * h
+        J = p.top_acc[] * h
         p.top.total += J
         add_heat!(p.heat, :top_flux, J; k = p.mesh.Nz)
     end
@@ -710,11 +737,15 @@ function step_parent!(p::ParentCase)
     heat_open!(p.heat, :dynamics, :core, θ; split = true)
     pc.moisture && heat_open!(p.water, :dynamics, :core, q; split = true)
     bf = (s, Δt) -> _parent_body_force!(p, s, Δt)
-    pp = p.surface === nothing ? nothing : (s, Δt) -> apply_canopy_drag!(p, s, Δt)
+    pp = p.surface === nothing ? nothing : (s, Δt) -> apply_parent_drag!(p, s, Δt)
+    # every attempt (a retry too) starts its stage count afresh
+    stepper = pc.stepper === :rk3 ?
+        ((s, h; kw...) -> (p.stage[] = 0; step_rk3!(s, h; kw..., sgs = p.closure))) :
+        ((s, h; kw...) -> (p.stage[] = 0; step!(s, h; kw..., sgs = p.closure)))
     remaining, nret, piece_min = Float64(dt), 0, Inf
     while remaining > 1e-12 * dt
         _, used, r = step_adaptive!(sim, p.constraints; dt = remaining, body_force! = bf,
-                                    post_predictor! = pp, sgs = p.closure)
+                                    post_predictor! = pp, sgs = p.closure, stepper = stepper)
         _book_forcings!(p, used)
         remaining -= used; nret += r
         piece_min = min(piece_min, used)

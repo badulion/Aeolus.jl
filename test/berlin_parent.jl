@@ -73,7 +73,7 @@ idealised(; kw...) = BP.ParentConfig(BP.CaseConfig(; verbose = false, output_pat
     R = sum(ratios) / length(ratios)
     @info @sprintf("entrainment flux ratio (2-6 h mean of %d profiles): %.3f (range %.3f…%.3f)",
                    length(ratios), R, minimum(ratios), maximum(ratios))
-    @test -0.25 <= R <= -0.10       # measured -0.129
+    @test -0.25 <= R <= -0.10       # measured -0.130
     # heat budget: ∫ρ̄c_pΠ̄(θ − θ_init) dz = Σ booked terms at every output
     @test worst < 1e-10             # measured 6.8e-16 (the closure relative to the largest term)
     hb = BP.heat_budget(p.heat)
@@ -117,7 +117,7 @@ end
     for h in (12, 14, 16)
         err = zi[h] / ref[h] - 1
         @info @sprintf("Wangara 33: z_i(%d LT) = %.0f m, NN09 (MYNN) %.0f m, %+.1f %%", h, zi[h], ref[h], 100err)
-        @test abs(err) < 0.15       # measured +7.8 %, +13.5 %, +7.6 % (z_i jumps by whole levels, 90-100 m here)
+        @test abs(err) < 0.15       # measured +7.8 %, +6.1 %, +7.6 % (z_i jumps by whole levels, 90-100 m here)
     end
 end
 
@@ -146,31 +146,22 @@ end
     err = r14.zi_parcel / zi_obs - 1
     @info @sprintf("z_i(14 LT) parcel %.0f m (min flux %.0f m), 12 UTC sounding %.0f m: %+.1f %%",
                    r14.zi_parcel, r14.zi, zi_obs, 100err)
-    @test abs(err) < 0.25           # measured +10.1 % (1303 m against 1183 m)
+    @test abs(err) < 0.25           # measured +12.6 % (1332 m against 1183 m)
     zc = BP.level_centres(p.mesh)
     θat(r, h) = (k = searchsortedlast(zc, h); r.θ[k] + (r.θ[k+1] - r.θ[k]) * (h - zc[k]) / (zc[k+1] - zc[k]))
     for h in (500.0, 1000.0)
         d = θat(r14, h) - BP.forcing_value(P.θ, h, t12)
         @info @sprintf("⟨θ⟩(%.0f m, 14 LT) = %.2f K, sounding %.2f K: %+.2f K", h, θat(r14, h),
                        BP.forcing_value(P.θ, h, t12), d)
-        @test abs(d) < 1.5          # measured +0.91 K (500 m), +0.62 K (1000 m)
+        @test abs(d) < 1.5          # measured +0.12 K (500 m), -0.17 K (1000 m)
     end
-    # residual layer at 03 LT: |dθ/dz| < 1.5 K/km below 0.8 z_i,max. The
-    # issue's lower bound is 300 m; on this coarse CI grid (Δz = 50 m, first
-    # level 25 m) the nocturnal stable layer reaches ~500 m (5 K between 25
-    # and 475 m at 03 LT, measured), so 300 m lies inside it and the bulk
-    # gradient over 300 m … 0.8 z_i,max is 2.4 K/km. That is the coarse grid's
-    # deep stable layer, not a missing residual layer; the 300 m bound is
-    # checked at full resolution (examples/urban/berlin_parent_diurnal.jl,
-    # quoted in docs/src/design/berlin_parent.md). Here the bound applies from
-    # 600 m, above the coarse stable layer.
+    # residual layer at 03 LT: |dθ/dz| < 1.5 K/km between 300 m and 0.8 z_i,max
     zimax = maximum(r.zi_parcel for r in p.diag)
     r03 = rec(3.0)
-    bulk300 = (θat(r03, 0.8zimax) - θat(r03, 300.0)) / (0.8zimax - 300)
-    bulk = (θat(r03, 0.8zimax) - θat(r03, 600.0)) / (0.8zimax - 600)
-    @info @sprintf("residual layer 03 LT: bulk dθ/dz %.2f K/km over 600-%.0f m (%.2f K/km from 300 m); z_i,max %.0f m",
-                   1e3bulk, 0.8zimax, 1e3bulk300, zimax)
-    @test abs(bulk) < 1.5e-3
+    bulk = (θat(r03, 0.8zimax) - θat(r03, 300.0)) / (0.8zimax - 300)
+    @info @sprintf("residual layer 03 LT: bulk dθ/dz %.2f K/km over 300-%.0f m; z_i,max %.0f m",
+                   1e3bulk, 0.8zimax, zimax)
+    @test abs(bulk) < 1.5e-3        # measured 0.26 K/km (z_i,max 1529 m)
     # the night nudging against the daytime surface flux (Heinze et al. 2017)
     night = BP.heat_budget(p.heat; window = (20, 5))
     day = BP.heat_budget(p.heat; window = (10, 16))
@@ -180,13 +171,12 @@ end
                    nn, hs, nn / hs,
                    (BP.heat_budget(p.heat).terms[k] / 86400 for k in ((:surface_flux, :tiles), (:column_tendency, :column_radiation),
                     (:dynamics, :subsidence), (:dynamics, :nudging), (:dynamics, :damping), (:dynamics, :top_flux)))...)
-    # measured: 51.5 W/m² at night against 292 W/m² by day (ratio 0.18): not
-    # small. The observed free troposphere warmed by 3.7-6.5 K between the
-    # 04:45 UTC launches of the 29th and the 30th (+6.0 K at 2 km, warm-air
-    # advection of the heat wave); the nudging (and the damping) carry that
-    # observed large-scale warming into the box, which subsidence alone does
-    # not. Quoted, and bounded:
-    @test abs(nn) < 0.25 * hs
+    # measured: 8.5 W/m² at night against 299 W/m² by day (ratio 0.028). The
+    # observed free troposphere warmed by 3.7-6.5 K between the 04:45 UTC
+    # launches of the 29th and the 30th (+6.0 K at 2 km, the warm-air
+    # advection of the heat wave): over 24 h the nudging (12 W/m²) and the
+    # damping (23 W/m²) carry part of that into the box, above 1.2 z_i.
+    @test abs(nn) < 0.05 * hs
     hb = BP.heat_budget(p.heat)
     @test abs(hb.closure) < 1e-10 * maximum(abs, values(hb.terms))
 end
