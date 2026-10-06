@@ -996,6 +996,7 @@ end
     include("era6_apriori_sgs.jl")       # Phase 56  a-priori SGS stress, filtered-DNS fixture (#178)
     include("era6_transition_kh.jl")       # Phase 59 Transition diagnostics, KH / Miles-Howard (#180)
     include("era6_tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
+    include("era6_tke_facades.jl")       # #232: TKE shear production at wall-modelled facades
     include("era6_reynolds_stress.jl")   # P56-d: differential SGS Reynolds-stress closure (#188)
     include("era6_sgs_validation.jl")    # P56-e: TKE and RSM against filtered DNS (#192)
     include("era6_wall_models_channel.jl") # P57-b: matching height, time / wall-parallel input filters, LLM (#183)

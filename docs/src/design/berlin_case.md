@@ -1318,6 +1318,7 @@ unresolved no-slip at `cfg.ν` = 2 m² s⁻¹ and Δ = 15.6 m.
 | law | `RoughLogLaw(z0m)` at ``h = Δ/2``; `z0m` from `bus.z0m_class` (the surface exchange's per-class table, put on the bus in its `build`): `SURFACE_GLASS` for a glass-tagged building column, `SURFACE_WALL` otherwise (0.01 m / 0.05 m by default) |
 | `:body_force` (40) | `remove_stencil_wall_flux!`: the stencil's facade flux out of the tendency (with ``ν_t`` when the step has an eddy viscosity) |
 | `:post_predictor` (12) | `apply_immersed_wall_stress!`, implicit, after the `ibm` direct forcing (10) and before the ground's wall stress (15) |
+| TKE production (#232) | at `init!` the walls are attached to the `:sgs` closure (`attach_immersed_walls!`): the `:tke` shear production at the facades is the wall stress times the resolved shear across the wall, ``a q^2``, not the production of the stencil flux removed at `:body_force` |
 | checks | facade ``τ_w ≥ 0``; no stress written into a solid cell's face; the total facade drag and the removed stencil drag oppose the mean canopy wind |
 
 Measured in `:smoke` after 1 h (3600 s, adaptive step), on vs off
@@ -1336,6 +1337,25 @@ Measured in `:smoke` after 1 h (3600 s, adaptive step), on vs off
 The coupling took 2.2 s of a 5567 s run (0.04 %; machine heavily
 loaded). The cut-cell method of #179 is not wired: the case has no
 cut-cell provider (CutCell is pending on #152), which picks it up.
+
+**TKE production at the facades (#232).** Until #232 the `:tke` closure
+booked the shear production of the stencil flux this coupling removes,
+``ν_{t,e} q_F^2/Δ^2`` per face — energy the resolved flow never lost —
+and none of the work of the modelled stress. Measured on the summer
+flagship (default couplings, 1 h from 12:00, adaptive step; means of 31
+samples over the second half hour; canopy = the fluid cells of levels
+1–4, near-facade = the 5009 canopy cells next to a facade face):
+
+| | stencil production (before) | wall stress × resolved shear (#232) |
+| :-- | --: | --: |
+| removed-stencil production booked at the facades (m⁵ s⁻³) | 227 = 27.3 % of canopy ``Σ P_s V`` (2.5 % of the domain's) | 0 |
+| facade wall-stress work ``Σ a q^2 ΔV`` (m⁵ s⁻³) | 807 (not booked) | 804 (booked) |
+| canopy ``Σ P_s V`` booked (m⁵ s⁻³) | 832 | 1420 |
+| near-facade mean ``ν_t`` / ``e`` | 0.02464 m² s⁻¹ / 0.00996 m² s⁻² | 0.02595 (+5.3 %) / 0.01081 (+8.5 %) |
+| canopy mean ``ν_t`` / ``e`` | 0.03857 / 0.01257 | 0.03946 (+2.3 %) / 0.01303 (+3.7 %) |
+
+The production kernel takes 0.55 ms per step of the 161 ms Berlin step
+(0.3 %); both runs took 611 steps for 20 min.
 
 ## Radiation (#130)
 
