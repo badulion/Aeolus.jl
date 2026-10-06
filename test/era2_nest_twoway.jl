@@ -193,6 +193,45 @@ end
     @test run.regs.pweights == (1.0,)
 end
 
+# #327 M1: a mixed Boussinesq / sound-proof pair has no consistent measure
+# for two-way transfers (volume vs reference mass in the restriction, volume
+# vs mass flux in the registers). Every two-way entry point refuses it; the
+# same pair nests one-way.
+@testset "mixed-core pairs: two-way refused, one-way allowed (#327 M1)" begin
+    pm = RegularGrid(Float64; size = (12, 12, 12), extent = (1200.0, 1200.0, 1200.0),
+                     halo = (3, 3, 3))
+    nest = nested_grid(pm, ((300.0, 900.0), (300.0, 900.0), (0.0, 600.0)), 2)
+    cm = nest_child_mesh(nest)
+    rp = isothermal_reference(pm; T_surf = 300.0); rc = isothermal_reference(cm; T_surf = 300.0)
+    pbc = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    cbc() = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest)
+    pB = BoussinesqSimulation(pm; bcs = pbc)
+    pA = AnelasticSimulation(pm; ref = rp, bcs = pbc)
+    cA = AnelasticSimulation(cm; ref = rc, bcs = cbc())
+    cB = BoussinesqSimulation(cm; bcs = cbc())
+    cP = PseudoIncompressibleSimulation(cm; ref = rc, bcs = cbc())
+    for (p, c) in ((pB, cA), (pA, cB))
+        for fb in (:two_way, TwoWayFeedback(), TwoWayFeedback(reflux = false))
+            @test_throws ArgumentError NestedRun(p, c, nest; feedback = fb, cfl_parent = nothing)
+        end
+        @test_throws ArgumentError step_nested!(p, c, nest, 1.0)
+        st = nest_interp_state(nest, p, c)
+        @test_throws ArgumentError anterpolate!(p, c, nest, st;
+                                               mask = trues(nest.nx, nest.ny, nest.nz))
+        @test_throws ArgumentError restrict_state_to_parent!(p, c, nest, st)
+        run = NestedRun(p, c, nest; feedback = :one_way, cfl_parent = nothing)  # one-way: fine
+        @test run.feedback === :one_way
+    end
+    # two sound-proof systems (W = ρ̄ against W = ρ̄θ̄): refused by the measure
+    @test_throws ErrorException NestedRun(pA, cP, nest; feedback = :two_way, cfl_parent = nothing)
+    # a sound-proof pair with a volume-measure state
+    vol = ntuple(_ -> nest_interp_state(nest), 3)
+    @test_throws ArgumentError NestedRun(pA, cA, nest; feedback = :two_way, cfl_parent = nothing,
+                                         state = vol)
+    # the guarded pair itself is accepted
+    @test NestedRun(pA, cA, nest; feedback = :two_way, cfl_parent = nothing).feedback === :two_way
+end
+
 # -------------------------------------------------------------------------
 # 2. Relaxation. Parent and child at rest, no diffusion: the child stays a
 #    uniform θ = 1 and the covered parent cells, initially 0, relax toward

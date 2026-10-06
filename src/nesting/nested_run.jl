@@ -104,9 +104,13 @@ Keywords:
     ([`nest_conservation_error`](@ref)).
 
 Two-way feedback needs parent and child of the same core family (two
-Boussinesq sims, or two `MassWeightedSimulation`s sharing one
-`ReferenceState`, whose transfers then use the reference-mass measure
-[`nest_measure`](@ref)); a mixed pair can only be nested one-way.
+Boussinesq sims, or two `MassWeightedSimulation`s of one sound-proof
+system sharing one `ReferenceState`, whose transfers then use the
+reference-mass measure [`nest_measure`](@ref)); a mixed pair can only be
+nested one-way, and asking for two-way throws an `ArgumentError` (a
+Boussinesq/sound-proof pair has no consistent measure: the restriction
+would weight by volume where the sound-proof grid needs its reference
+mass, and the flux registers would mix volume and mass fluxes).
 
 **Boundary conditions.** The child must be built with
 [`nest_bcs`](@ref)`(child_mesh, …; moisture, scalars)` naming the same
@@ -196,10 +200,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     feedback = twoway === nothing ? :one_way : :two_way
     sync in (:subcycle, :shared_min_dt) ||
         error("NestedRun: sync must be :subcycle or :shared_min_dt, got :$sync")
-    feedback === :two_way && !_same_core(parent, child) &&
-        error("NestedRun: two-way feedback needs parent and child of the same kind " *
-              "(got $(nameof(typeof(parent))) and $(nameof(typeof(child)))); " *
-              "use feedback = :one_way")
+    feedback === :two_way && _check_two_way_pair(parent, child, "NestedRun")
     sync === :shared_min_dt && (cfl_parent === nothing || cfl_child === nothing) &&
         error("NestedRun: sync = :shared_min_dt needs cfl_parent and cfl_child")
     size(parent.θ.data) == totalsize(nest.parent_mesh) ||
@@ -213,6 +214,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     ns >= 1 || error("NestedRun: substeps must be >= 1")
     s_old, s_new, s_bc = state === nothing ?
         ntuple(_ -> nest_interp_state(nest, parent, child; scalars), 3) : state
+    feedback === :two_way && _check_two_way_pair(parent, child, "NestedRun", s_bc)
     # the boundary buffers hold the halos *and* the boundary-normal interior
     # face plane of the west/south/bottom faces; the sponge needs the whole field
     region = sponge !== nothing ? :all : :halo_interface

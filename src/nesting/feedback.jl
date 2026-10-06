@@ -592,6 +592,7 @@ function anterpolate!(psim::_NestSim, csim::_NestSim, nest::NestedGrid, s::NestI
         throw(DimensionMismatch("anterpolate!: mask has size $(size(mask)), expected " *
                                 "$((nest.nx, nest.ny, nest.nz))"))
     0 < α <= 1 || throw(ArgumentError("anterpolate!: α = $α must be in (0, 1]"))
+    _check_two_way_pair(psim, csim, "anterpolate!", s)
     a = Float64(α)
     meas = s.measure
     χf = _fluid(nest, solid)
