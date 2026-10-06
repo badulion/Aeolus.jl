@@ -27,7 +27,8 @@ function _plane_means(f::Field)
     return m ./ (g.Nx * g.Ny)
 end
 
-# (f - m_k)² at a point of level k (m: the plane means, indexed from the first interior level)
+# (f - m_k)² at a point of level k (m: the plane means, indexed from the first
+# interior level). The one definition: Simulations.horizontal_variance uses it too.
 @inline _sq_dev_at(i, j, k, f, m, Hz) = @inbounds (f[i, j, k] - m[k - Hz])^2
 
 """

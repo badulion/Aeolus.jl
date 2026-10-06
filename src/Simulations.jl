@@ -19,7 +19,8 @@ using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    add_eddy_diffusion_scalar!,
                    add_surface_flux!, add_sponge!,
                    AbstractSGSClosure, compute_sgs!, add_sgs_momentum!, add_sgs_scalar!,
-                   advance_sgs!, _active_sgs, _check_sgs_stress, sgs_tracer_diffusivity!
+                   advance_sgs!, _active_sgs, _check_sgs_stress, sgs_tracer_diffusivity!,
+                   _sq_dev_at                  # (f - m_k)², shared with abl_diagnostics
 using ..PressureSolvers
 using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver, solve!,
                         poisson_axis_bcs
@@ -759,8 +760,6 @@ function horizontal_variance(field::Field{CellCenter})
                       field.data, m, first(I3[3]) - 1)
     return s ./ n
 end
-# (f - m_k)² at a point of level k (m indexed from the first interior level)
-@inline _sq_dev_at(i, j, k, f, m, ok) = @inbounds (f[i, j, k] - m[k - ok])^2
 
 """
     resolved_flux_wθ(sim) -> Vector
