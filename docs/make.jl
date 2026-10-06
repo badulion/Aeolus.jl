@@ -32,6 +32,7 @@ makedocs(
             "Stretched vertical grid"     => "theory/stretched_grid.md",
             "Nested time coupling: subcycling and temporal interpolation" => "theory/nesting_time.md",
             "Nested boundary conditions: one-way parent → child data" => "theory/nesting_boundaries.md",
+            "Two-way nesting: anterpolation and refluxing" => "theory/nesting_twoway.md",
             "Radiative transfer"          => "theory/radiation.md",
             "Era IV overview: clouds and microphysics" => "theory/era4_overview.md",
             "P3 microphysics"             => "theory/p3.md",
