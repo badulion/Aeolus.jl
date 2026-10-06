@@ -13,8 +13,8 @@
 #      dynamic C_s against the dissipation-matched one;
 #   6. the offline filtered-DNS record (hybrid-DNS decision on #208): the
 #      pipeline DNS → statistics → TOML → read-back at 32³ on every run;
-#      the 256³ regeneration only with AEOLUS_DNS256=1 (measured 2.05 h
-#      on one core, the solver is single-threaded; 9.9 GB max RSS as
+#      the 256³ regeneration only with AEOLUS_DNS256=1 (measured 1.6–2.1 h
+#      on one core, the solver is single-threaded; 9.8–9.9 GB max RSS as
 #      reported by the run, not stored in the TOML;
 #      examples/validation/dns256_generate.jl is the same call); and, when
 #      test/fixtures/dns256_apriori.toml exists, the literature band at
@@ -68,10 +68,13 @@
 # (the ≈ 8η row is the 256³ value at 4h, 8.1η; the record starts at
 # 8.05η, so the 48³ and 96³ points just below it are not interpolated):
 #
-#   Δ/η      48³ (Re_λ 32)   96³ (Re_λ 64)   256³ (Re_λ 78.7)
+#   Δ/η      48³ (Re_λ 32)   96³ (Re_λ 64)   256³ (Re_λ 78.6)
 #   ≈ 8η     0.867           0.810           0.832
 #   ≈ 16η    0.814           0.734           0.787
-#   ≈ 32η    0.669           0.669           0.756
+#   ≈ 32η    0.669           0.669           0.755
+#
+# (256³ column from the record regenerated after #205, #235; the pre-#205
+# record gave 0.832, 0.787, 0.756 at Re_λ 78.7.)
 #
 # The EXPECTATION was wrong, not the code (maintainer decision on #208).
 # It was an extrapolation from two single-seed points (48³ → 96³), and
@@ -347,6 +350,17 @@ end
             @test dn["kmax_eta_min"] >= 1.5 && -0.6 <= dn["skewness_end"] <= -0.35
             @test dn["budget_err_max"] <= 0.02
             @test dn["Re_lambda"] > d.Re_λ                                   # above the 96³ fixture
+            # Parseval (#235): the spectrum is on the stored face values
+            # (isotropic_energy_spectrum since #205), so Σ E dk is the
+            # solver's K exactly. The pre-#205 record (centred values)
+            # had Σ E dk / K_end = 0.99668 and fails this. Nothing is
+            # asserted about the spectrum's shape: at Re_λ ≈ 79 there is
+            # no k^{-5/3} plateau (the compensated spectrum
+            # C = E k^{5/3} ε^{-2/3} has a bump peaking at 2.37, 3-shell
+            # mean, near kη ≈ 0.16, then falls), and `eps_plateau` is a
+            # test on ε(t), not on E(k).
+            sp = rec["spectrum"]
+            @test sum(sp["E"]) * (sp["k"][2] - sp["k"][1]) ≈ dn["K_end"] rtol = 1e-10
             f = rec["filter"]["4h"]; m = f["smagorinsky"]
             # Clark et al. (1979); Liu, Meneveau & Katz (1994)
             @test 0.4 < m["rho_Pi"] < 0.85
