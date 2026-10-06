@@ -1010,6 +1010,7 @@ end
     include("era6_flat_plate.jl")        # P59-d flat-plate BL: fringe, Blasius, FST, transition (#185)
     include("era6_synthetic_inflow.jl")  # N-inflow-a: digital-filter inflow, Lund transform (#252)
     include("era6_inflow_statistics.jl")  # N-inflow-b: Reynolds stresses, lengths, times for the inflow (#258)
+    include("era6_inflow_turbulence.jl")  # N-inflow-c: inflow faces, zero added mass flux (#264)
     include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected, Ri_g-dependent anisotropic ν/κ (#187)
     include("era6_wall_models_dynamic.jl") # P57-e: dynamic z0 of partially resolved roughness (#190)
     include("era6_gabls1.jl")            # P55-f: GABLS1 on the shared SBL driver, reduced (#191)

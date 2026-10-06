@@ -1025,6 +1025,11 @@ export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_gen
 export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statistics!,
        inflow_projection_log, realizable_stress, inflow_lund_coefficients,
        ParentResolvedStatistics, inflow_stress_parts, ParametrizedStatistics, parametrized_scales
+# N-inflow-c (#264) — the synthetic turbulence applied on the inflow faces of
+# an open-boundary child, with zero added mass flux.
+export InflowTurbulence, inflow_normal_length, set_integral_time!, remove_inflow_turbulence!,
+       refresh_inflow_lengths!, added_mass_flux, injected_ke_flux, inflow_perturbation,
+       feedback_exclude_width
 # Phase 57 — wall models (#169): equilibrium wall laws and the implicit
 # wall-stress operator. `friction_velocity` / `wall_stress` do not collide
 # with `andreas_friction_velocity` (AirSeaFlux) or `wall_shear_stress`

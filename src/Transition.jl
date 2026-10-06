@@ -76,6 +76,10 @@ using ..SurfaceExchange: obukhov_length, bulk_richardson, SurfaceConstants, von_
 using ..Operators: sgs_tke!, sgs_fields                                    # N-inflow-b
 using LinearAlgebra: Symmetric, Diagonal, eigen, mul!, dot
 using FFTW: plan_rfft, plan_irfft
+using ..BoundaryConditions: AbstractBoundaryData, OpenPlane, OpenBoundary,           # N-inflow-c
+                            has_open_boundaries, open_boundary_states, _face_local
+import ..BoundaryConditions: boundary_values!
+using ..Nesting: NestedRun, NestBoundaryData, nest_covered_range
 
 export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
@@ -99,6 +103,10 @@ export AbstractInflowGenerator, unit_fluctuations!, generator_state, restore_gen
 export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statistics!,
        inflow_projection_log, realizable_stress, inflow_lund_coefficients,
        ParentResolvedStatistics, inflow_stress_parts, ParametrizedStatistics, parametrized_scales
+# N-inflow-c (#264): turbulence on the inflow faces of an open-boundary child
+export InflowTurbulence, inflow_normal_length, set_integral_time!, remove_inflow_turbulence!,
+       refresh_inflow_lengths!, added_mass_flux, injected_ke_flux, inflow_perturbation,
+       feedback_exclude_width
 # P59-e (#195): relaminarisation in strongly stable stratification
 export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
 
@@ -688,5 +696,6 @@ include("transition/flat_plate.jl")
 include("transition/free_stream_disturbance.jl")
 include("transition/synthetic_inflow.jl")             # N-inflow-a (#252)
 include("transition/inflow_statistics.jl")            # N-inflow-b (#258)
+include("transition/inflow_turbulence.jl")            # N-inflow-c (#264)
 
 end # module
