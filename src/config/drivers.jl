@@ -105,7 +105,8 @@ for `name`. Physics stays in `examples/`; nothing is moved into `src/`
 for the CLI's sake. The migrations of the example drivers (#311) add
 their entries here.
 """
-const DRIVER_FILES = Dict{String,String}("sbl" => "examples/sbl/config_schema.jl")
+const DRIVER_FILES = Dict{String,String}("sbl" => "examples/sbl/config_schema.jl",
+                                         "dns" => "examples/validation/dns_driver.jl")
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))
 

@@ -9,19 +9,24 @@
 # energy spectrum) to test/fixtures/dns256_apriori.toml, which
 # test/era6_apriori_sgs.jl then asserts against.
 #
-#   julia --project=. examples/validation/dns256_generate.jl [N] [out] [ν]
+#   julia --project=. examples/validation/dns256_generate.jl [--set key=value …] [--resume <run folder>]
 #
-# N defaults to 256 and out to test/fixtures/dns256_apriori.toml for
-# N = 256, examples/validation/output/dns<N>_apriori.toml otherwise
-# (a small N proves the pipeline without touching the fixture).
+# The run is examples/validation/configs/dns256.toml, through the `dns`
+# run driver (examples/validation/dns_driver.jl, CFG-d #359): this script
+# is `aeolus run examples/validation/configs/dns256.toml` that, at the
+# shipped grid.n = 256 and with no apriori.out of its own, writes the
+# record to test/fixtures/dns256_apriori.toml, then prints its table.
+# Other resolutions go to the run folder's output/ (`--set grid.n=32`
+# proves the pipeline without touching the fixture). The old positional
+# arguments map to `--set grid.n=N --set apriori.out="out" --set fluid.nu=ν`.
 #
 # Viscosity: ν = 1.035 · 0.018 (48/N)^{4/3} = 2.00e-3 at 256³: the
 # fixture's scaling, which holds k_max η roughly fixed (measured minima
 # 1.494, 1.544, 1.626, 1.598 at 32³, 48³, 64³, 96³), with a 3.5 % margin
 # (k_max η × 1.026). At 256³ that gives k_max η ≥ 1.53 even if the peak
 # ε reached 0.39, the largest measured on any grid (32³; 0.30 at 96³).
-# The 2nd-order FV solver needs k_max η ≥ 1.5, and the script refuses to
-# write the fixture otherwise (the record goes to <out>.failed).
+# The 2nd-order FV solver needs k_max η ≥ 1.5, and the driver refuses to
+# write the record otherwise (it goes to <out>.failed; the run fails).
 #
 # Run length: the dissipation peak moves later as Re_λ grows (t ≈ 0.99,
 # 1.45, 1.85, 2.41 at 32³, 48³, 64³, 96³, about +1.29 per e-fold in N;
@@ -56,34 +61,41 @@
 # by this script, not stored in the TOML. The pre-#205 record took
 # 7397 s (2.05 h) and 9.9 GB for the same 1264 steps on a busier machine.
 #
-# Checkpoints: an interrupted run (killed job, reboot) resumes from
-# examples/validation/output/checkpoints/dns<N>/ when started again.
+# Checkpoints: every 30 min of wall clock ([checkpoint] of dns256.toml);
+# an interrupted run (killed job, reboot) resumes bit for bit with
+# `--resume <its run folder>`.
 #
 # The equivalent through the suite: AEOLUS_DNS256=1 julia --project=.
 # test/runtests.jl (the regeneration testset of era6_apriori_sgs.jl).
 # =========================================================================
 
 using Aeolus
-using Aeolus.Fields: interior_view
+using Aeolus.Config: run_config, with
 using Printf
-include(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns_apriori.jl"))
+include(joinpath(@__DIR__, "dns_driver.jl"))
 
-N = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 256
-out = length(ARGS) >= 2 ? ARGS[2] :
-      N == 256 ? joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns256_apriori.toml") :
-                 joinpath(@__DIR__, "output", "dns$(N)_apriori.toml")
+const FIXTURE = normpath(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns256_apriori.toml"))
 
-kw = length(ARGS) >= 3 ? (; ν = parse(Float64, ARGS[3])) : (;)
-# Periodic checkpoints with automatic resume (#245): a killed run restarts
-# from its newest checkpoint, bit for bit (every 30 min of wall clock by
-# default; AEOLUS_CHECKPOINT=0 / _EVERY / _SECONDS / _KEEP override). Made
-# before the DNS so the folder's FFTW wisdom is loaded before any plan. At
-# 256³ one checkpoint is ≈ 1.15 GB (8 fields with halos), 2 are kept.
-ck = driver_checkpoints(joinpath(@__DIR__, "output", "checkpoints", "dns$(N)"))
-total = @elapsed rec, d = generate_dns_apriori(; N, out, checkpoint = ck, kw...)
-finish_checkpoints!(ck)
+function dns256_args(args)
+    sets = String[]; resume = nothing; i = 1
+    while i <= length(args)
+        a = args[i]
+        a in ("--set", "--resume") && i < length(args) ||
+            error("dns256_generate.jl takes --set key=value and --resume <run folder>, got $(repr(a))")
+        a == "--set" ? push!(sets, args[i+1]) : (resume = args[i+1])
+        i += 2
+    end
+    return sets, resume
+end
+
+sets, resume = dns256_args(ARGS)
+cfg = dns_config(joinpath(@__DIR__, "configs", "dns256.toml"); overrides = sets)
+cfg.apriori.out === nothing && cfg.grid.n == 256 && (cfg = with(cfg, "apriori.out" => FIXTURE))
+total = @elapsed res = run_config(cfg; resume = resume)
+rec, d = res.obj.record, res.obj.summary
 @printf("total %.0f s (DNS %.0f s, statistics %.0f s); max RSS %.2f GB\n",
         total, d.wall, total - d.wall, Sys.maxrss() / 2^30)
+rec === nothing && exit(0)
 
 println("\n| Δ | Δ/η | Smag. ρ12 ρ13 ρ23 | ρ_Π | C_s matched | dynamic (DNS grid) | dynamic (LES grid) | backscatter |")
 println("| --: | --: | :-- | --: | --: | --: | --: | --: |")

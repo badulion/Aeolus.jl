@@ -1,9 +1,11 @@
 # A-priori statistics of the filtered DNS, and their TOML record
 # (Era VI, P56-c, #178; the hybrid-DNS decision on #208).
 #
-# Included by test/era6_apriori_sgs.jl and by
-# examples/validation/dns256_generate.jl, which runs `generate_dns_apriori`
-# offline at 256³ and writes test/fixtures/dns256_apriori.toml. The
+# Included by test/era6_apriori_sgs.jl and by the `dns` run driver
+# (examples/validation/dns_driver.jl, CFG-d #359), whose config
+# examples/validation/configs/dns256.toml is run offline at 256³
+# (examples/validation/dns256_generate.jl copies its record to
+# test/fixtures/dns256_apriori.toml). The
 # always-on testset of era6_apriori_sgs.jl reads that file when it
 # exists; the in-suite 96³ fixture stays the CI reference.
 #
@@ -151,7 +153,7 @@ function dns_apriori_record(d; ratios = (4, 8, 16, 32), seed::Integer = 1)
     ip = argmax(d.ε)
     k, E = isotropic_energy_spectrum(d.sim.u, d.sim.v, d.sim.w)
     return Dict{String,Any}(
-        "generator" => "examples/validation/dns256_generate.jl (test/fixtures/dns_apriori.jl)",
+        "generator" => "the dns run driver, examples/validation/configs/dns256.toml (test/fixtures/dns_apriori.jl)",
         "created" => Libc.strftime("%Y-%m-%dT%H:%M:%S", time()),
         "dns" => Dict{String,Any}(
             "N" => d.mesh.Nx, "nu" => d.ν, "seed" => seed, "t_end" => d.t[end], "nsteps" => d.nsteps,
@@ -175,8 +177,8 @@ function write_dns_apriori(path::AbstractString, rec::AbstractDict)
     mkpath(dirname(path))
     open(path, "w") do io
         println(io, "# Filtered-DNS a-priori statistics (Aeolus, Era VI P56-c, #178).")
-        println(io, "# Written by examples/validation/dns256_generate.jl; read by test/era6_apriori_sgs.jl.")
-        println(io, "# Do not edit by hand: regenerate (AEOLUS_DNS256=1 or the example script).")
+        println(io, "# Written by the dns run driver (examples/validation/configs/dns256.toml); read by test/era6_apriori_sgs.jl.")
+        println(io, "# Do not edit by hand: regenerate (AEOLUS_DNS256=1 or examples/validation/dns256_generate.jl).")
         TOML.print(io, rec; sorted = true)
     end
     return path
@@ -193,53 +195,33 @@ read_dns_apriori(path::AbstractString) = TOML.parsefile(path)
 # is required.
 const ADVISORY_CHECKS = ("eps_plateau", "skewness_settled")
 
-# ν margin of the offline generator over the fixture's ν = 0.018 (48/N)^{4/3}:
-# k_max η ∝ ν^{3/4} rises by 2.6 %. The scaling alone gave minima of
-# 1.494, 1.544, 1.626, 1.598 at 32³, 48³, 64³, 96³ (the peak ε does not
-# scale exactly); with the margin the 256³ run has k_max η ≥ 1.53 even if
-# its peak ε reached 0.39, the largest measured on any grid (32³).
-const DNS_GEN_NU_MARGIN = 1.035
-
 """
-    generate_dns_apriori(; N = 256, out, seed = 1, ν = 1.035 · 0.018 (48/N)^{4/3},
-                         t_end = 2.0, past_peak = 0.25, t_max = 6.0,
-                         ratios = (4, 8, 16, 32), require_checks = true,
-                         checkpoint = nothing) -> (rec, d)
+    dns_apriori_finish(d; out, ratios = (4, 8, 16, 32), seed = 1, require_checks = true) -> rec
 
-Run `dns_decay` at `N`³ (ν with a 3.5 % margin over the fixture's
-scaling, `DNS_GEN_NU_MARGIN`), continued to `past_peak` past the
-dissipation peak, compute the a-priori statistics and write the TOML record to
-`out`. With `require_checks` the record goes to `out` only if every
-required DNS check holds (k_max η ≥ 1.5 over the run, skewness band,
-budget, monotone decay, past the peak; `ADVISORY_CHECKS` are recorded
-only); otherwise it is
-written to `out * ".failed"` and the call throws, naming the failed
-checks. `checkpoint` (an `IO.CheckpointSchedule`) is passed to `dns_decay`:
-an interrupted DNS resumes from its newest checkpoint (#245).
+The a-priori record of the DNS result `d` ([`dns_summary`](@ref),
+[`dns_decay`](@ref)), written to `out`. With `require_checks` the record
+goes to `out` only if every required DNS check holds (k_max η ≥ 1.5 over
+the run, skewness band, budget, monotone decay, past the peak;
+`ADVISORY_CHECKS` are recorded only); otherwise it is written to
+`out * ".failed"` and the call throws, naming the failed checks and the
+measured k_max η. The `dns` run driver (examples/validation/dns_driver.jl,
+`[apriori]`, CFG-d #359) calls it after the run.
 """
-function generate_dns_apriori(; N::Integer = 256, out::AbstractString, seed::Integer = 1,
-                              ν::Real = DNS_GEN_NU_MARGIN * DNS_NU48 * (48 / N)^(4 / 3), t_end::Real = DNS_T_END,
-                              past_peak::Real = 0.25, t_max::Real = 6.0, ratios = (4, 8, 16, 32),
-                              require_checks::Bool = true,
-                              checkpoint = nothing)
-    d = dns_decay(; N, seed, ν, t_end, past_peak, t_max, checkpoint)
-    # keep the velocity only: the solver's work arrays are ~40 fields (6 GB at 256³)
-    d = merge(d, (; sim = (; mesh = d.sim.mesh, u = d.sim.u, v = d.sim.v, w = d.sim.w)))
-    GC.gc()
-    @info(@sprintf("DNS %d³: ν = %.4g, %d steps to t = %.2f, %.0f s; Re_λ %.1f; k_max η ≥ %.2f; ε peak at t = %.2f; S = %.3f; max |budget err| %.1e",
-                   N, d.ν, d.nsteps, d.t[end], d.wall, d.Re_λ, d.kmax_eta, d.t[argmax(d.ε)], d.S[end],
-                   maximum(abs, d.budget_err)),
-          subsystem = :dns_apriori, domain = current_domain(), N, Re_λ = d.Re_λ, nsteps = d.nsteps)
+function dns_apriori_finish(d; out::AbstractString, ratios = (4, 8, 16, 32), seed::Integer = 1,
+                            require_checks::Bool = true)
+    N = d.mesh.Nx
     ratios = Tuple(r for r in ratios if N ÷ r >= 1)
     rec = dns_apriori_record(d; ratios, seed)
     bad = sort([k for (k, v) in rec["checks"] if !v && k ∉ ADVISORY_CHECKS])
     if require_checks && !isempty(bad)
         # keep the expensive result for inspection, but not under the name the suite reads
         write_dns_apriori(out * ".failed", rec)
-        throw(ErrorException("generate_dns_apriori: DNS checks failed at $(N)³: $(join(bad, ", ")); " *
-                             "record written to $(out).failed, not to $(out)"))
+        throw(ErrorException("DNS checks failed at $(N)³: $(join(bad, ", ")); measured k_max η = " *
+                             string(round(d.kmax_eta; sigdigits = 4)) * " (minimum over the run; the " *
+                             "2nd-order solver needs ≥ 1.5) with ν = $(d.ν); record written to " *
+                             "$(out).failed, not to $(out)"))
     end
     write_dns_apriori(out, rec)
     @info("wrote $out", subsystem = :dns_apriori, domain = current_domain(), path = out)
-    return rec, d
+    return rec
 end

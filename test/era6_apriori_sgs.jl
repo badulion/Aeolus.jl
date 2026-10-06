@@ -16,7 +16,8 @@
 #      the 256³ regeneration only with AEOLUS_DNS256=1 (measured 1.6–2.1 h
 #      on one core, the solver is single-threaded; 9.8–9.9 GB max RSS as
 #      reported by the run, not stored in the TOML;
-#      examples/validation/dns256_generate.jl is the same call); and, when
+#      examples/validation/configs/dns256.toml, through the `dns` run
+#      driver, is the same run); and, when
 #      test/fixtures/dns256_apriori.toml exists, the literature band at
 #      4h. The ρ_Π comparison 48³ / 96³ / 256³ is logged, not asserted
 #      ("Expectation that proved wrong with the 256³ record", below).
@@ -119,7 +120,13 @@ using Aeolus.Fields: interior_view
 using Printf
 using LinearAlgebra: eigvals, Symmetric
 
-include(joinpath(@__DIR__, "fixtures", "dns_apriori.jl"))   # includes dns_decay.jl
+# the `dns` run driver (CFG-d, #359); it includes fixtures/dns_apriori.jl,
+# which includes dns_decay.jl
+include(joinpath(@__DIR__, "..", "examples", "validation", "dns_driver.jl"))
+using Aeolus.Config: run_config
+"A run of the `dns` driver's dns256.toml with `overrides`, quietly, into a fresh root."
+dns_apriori_run(overrides) = run_config(dns_config(; overrides = vcat(overrides, "fftw.planner=\"estimate\""));
+                                        root = mktempdir(), console = false, repo = mktempdir())
 
 const DNS256_TOML = joinpath(@__DIR__, "fixtures", "dns256_apriori.toml")
 # ρ_Π of the old 48³ fixture (Re_λ = 32), (r, Δ/η, ρ_Π): the history in the header
@@ -296,11 +303,14 @@ end
     # ---------------------------------------------------------------- 6
     # The offline 256³ record (hybrid-DNS decision on #208). The pipeline
     # (DNS → statistics → TOML → read back) is proven here at 32³ on every
-    # run; the 256³ run itself is offline (examples/validation/
+    # run; the 256³ run itself is offline (`aeolus run
+    # examples/validation/configs/dns256.toml`, examples/validation/
     # dns256_generate.jl, or AEOLUS_DNS256=1 for the regeneration testset).
+    # Both go through the `dns` run driver (CFG-d, #359).
     @testset "offline a-priori record: pipeline at 32³" begin
         path = joinpath(mktempdir(), "dns32_apriori.toml")
-        rec, d32 = generate_dns_apriori(; N = 32, out = path, ratios = (4, 8))
+        res = dns_apriori_run(["grid.n=32", "apriori.widths=[4,8]", "apriori.out=\"$path\""])
+        rec, d32 = res.obj.record, res.obj.summary
         back = read_dns_apriori(path)
         @test back["dns"] == rec["dns"] && back["checks"] == rec["checks"]
         @test back["filter"]["4h"]["smagorinsky"]["rho"] == rec["filter"]["4h"]["smagorinsky"]["rho"]
@@ -322,14 +332,15 @@ end
         @test f["delta_over_eta"] ≈ 4 * (2π / 32) / d32.η
         # a failed DNS check keeps the record out of the suite's path
         bad = joinpath(dirname(path), "bad.toml")
-        @test_throws ErrorException generate_dns_apriori(; N = 32, out = bad, ν = 0.02, ratios = (4,))
+        @test_throws ErrorException dns_apriori_run(["grid.n=32", "fluid.nu=0.02", "apriori.widths=[4]",
+                                                     "apriori.out=\"$bad\""])
         @test !isfile(bad) && isfile(bad * ".failed")
         @test read_dns_apriori(bad * ".failed")["checks"]["kmax_eta_ge_1.5"] == false
     end
 
     @testset "offline a-priori record: 256³ regeneration (AEOLUS_DNS256=1)" begin
         if get(ENV, "AEOLUS_DNS256", "0") == "1"
-            rec, _ = generate_dns_apriori(; N = 256, out = DNS256_TOML)
+            rec = dns_apriori_run(["apriori.out=\"$DNS256_TOML\""]).obj.record
             @test isfile(DNS256_TOML)
             @test all(v for (k, v) in rec["checks"] if k ∉ ADVISORY_CHECKS)
         else
