@@ -6,9 +6,11 @@ container. `fill_halos!` applies `Periodic` and `NoFlux` on every face
 and the two impermeable z-walls, free-slip `ImpermeableWall` and no-slip /
 moving `NoSlipWall` (P59-a, #172; theory in
 [Transition and wall-bounded flow](../theory/transition.md#Walls)).
-`ValueBC` and `FluxBC` are declared for scalar surface conditions.
+`FluxBC(Γ)` is the fixed-gradient top of a cell-centred scalar
+(N-parent-b, #254; below). `ValueBC` is declared but has no halo fill.
 Open lateral and top faces fed by boundary data are `OpenBoundary`
-(N-open-b, #255; see the last section).
+(N-open-b, #255), optionally with a convective or Orlanski radiation
+outflow (N-open-c, #260); see the last sections.
 
 ## BC types
 
@@ -39,6 +41,7 @@ Aeolus.BoundaryConditions.ImpermeableWall
 Aeolus.BoundaryConditions.NoSlipWall
 Aeolus.BoundaryConditions.is_wall
 Aeolus.BoundaryConditions.homogeneous_bcs
+Aeolus.BoundaryConditions.passive_scalar_bcs
 ```
 
 ## Free-stream top (P59-d, #185)
@@ -49,6 +52,25 @@ prescribed transpiration velocity (theory in
 
 ```@docs
 Aeolus.BoundaryConditions.FreeStreamBoundary
+```
+
+## Fixed-gradient scalar top (N-parent-b, #254)
+
+`FluxBC(Γ)` as the `top` face, above a wall or a no-flux bottom: the
+ghost cells continue the profile with slope `Γ`
+(`φ(N+h) = φ(N+1−h) + Γ·(z_c(N+h) − z_c(N+1−h))`, the cell-centre
+heights of a `StretchedGrid` or `dz` steps on a `RegularGrid`), so a
+diffusion with diffusivity `κ` carries `κΓ` through the top face. Its
+homogeneous part ([`homogeneous_bcs`](@ref
+Aeolus.BoundaryConditions.homogeneous_bcs)) is `FluxBC(0)`, which the
+implicit diffusion of `step_imex!` uses. `qv` and the SGS TKE share
+θ's faces but not the gradient: they are filled with
+[`passive_scalar_bcs`](@ref Aeolus.BoundaryConditions.passive_scalar_bcs)
+(`FluxBC(0)` on top, open-boundary data kept). Theory and measured convergence:
+[Large-scale forcing → The fixed-gradient top](../theory/large_scale_forcing.md#The-fixed-gradient-top).
+
+```julia
+θ_bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = FluxBC(3e-3))
 ```
 
 ## Pressure-Poisson kind of a face (N-open-a, #251)
@@ -122,4 +144,42 @@ Aeolus.BoundaryConditions.restore_open_boundaries!
 Aeolus.BoundaryConditions.combine_open_boundaries!
 Aeolus.BoundaryConditions.assert_open_face_correction
 Aeolus.BoundaryConditions.open_intermediate_velocity!
+```
+
+## Radiation outflow (N-open-c, #260)
+
+`open_boundary_conditions(mesh, data; outflow = :convective)` (or
+`:orlanski`, or a `NamedTuple` per side) advances the outflow points of
+the open faces by the radiation equation instead of taking the data; the
+inflow points keep the data. The advective flux of a scalar through the
+boundary, from the scheme's own face fluxes, is
+[`boundary_scalar_flux`](@ref Aeolus.AdvectionSchemes.boundary_scalar_flux)
+(`AdvectionSchemes`). Theory:
+[Radiation outflow](../theory/fractional_step.md#Radiation-outflow).
+
+```julia
+bcs = open_boundary_conditions(mesh, data; outflow = (east = :convective,), halo = 3)
+sim = BoussinesqSimulation(mesh; bcs = bcs)
+step_rk3!(sim, dt)
+F = boundary_scalar_flux(sim, sim.θ; scheme = :centered)   # (west, east, …, total)
+```
+
+```@docs
+Aeolus.BoundaryConditions.RadiationPlane
+Aeolus.BoundaryConditions.OUTFLOW_MODES
+Aeolus.BoundaryConditions.has_radiating_outflow
+Aeolus.BoundaryConditions.mark_open_boundary_stage!
+Aeolus.BoundaryConditions.rewind_open_boundaries!
+```
+
+## Near the open faces (N-open-d, #262)
+
+The one BC-aware neighbour index (it replaces the periodic `mod1` wraps
+of code that must also run in an open domain) and the solid points of an
+open face a building touches. Theory:
+[Near the open faces](../theory/fractional_step.md#Near-the-open-faces-(N-open-d)).
+
+```@docs
+Aeolus.BoundaryConditions.neighbor_index
+Aeolus.BoundaryConditions.mark_open_boundary_solids!
 ```

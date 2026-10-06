@@ -77,7 +77,8 @@ ratio 0.33, chosen to be close to the DOE medium-office reference
 building (Deru et al. 2011) but not checked against it here; the illustrative
 `UrbanSurface` example wall and roof; window U = 2.8 W m⁻² K⁻¹;
 infiltration 0.3 h⁻¹; a packaged DX unit (COP 3.0) and a gas boiler.
-`start_weekday = 4`: the run starts on a Thursday (20 June 2024).
+`start_weekday` (1 = Monday): the weekday of day 1; the coupling passes
+`case_weekday(cfg)` (29 June 2019, the case day, is a Saturday).
 """
 function city_buildings(heightmap::AbstractMatrix, sfc::AbstractMatrix{UInt8},
                         dx::Real, dy::Real, dz::Real, wall_area::Real;
@@ -163,16 +164,17 @@ function step_city_buildings!(cb::CityBuildings, t::Real, dt::Real, T_out::Real,
 end
 
 """
-    apply_building_heat!(sim, qv_field, sensible, cb, dt; ρ = 1.0, cp = 1005.0)
+    apply_building_heat!(sim, qv_field, sensible, cb, dt; ρ = 1.0, cp = 1005.0, π = 1.0)
 
 Put the city-mean building's direct release into the first air layer of
-each column (above the roof for building columns): θ gets `H/(ρ_k cp)`,
+each column (above the roof for building columns): θ gets `H/(ρ_k cp Π_k)`
+(`π` the Exner function, scalar or per level; T = θΠ),
 the vapour field `LE/(ρ_k L_v)`, per `dz`, over `dt`. `ρ` is a scalar or
 a per-level vector (the case passes the reference density `ρ̄`). `S` goes to the slab
 surfaces: `sensible` is their loss term, so it is reduced by `S`.
 """
 function apply_building_heat!(sim, qv_field, sensible::AbstractMatrix, cb::CityBuildings, dt::Real;
-                              ρ = 1.0, cp::Real = 1005.0)
+                              ρ = 1.0, cp::Real = 1005.0, π = 1.0)
     sensible .-= cb.S
     Hx, Hy, Hz = sim.mesh.Hx, sim.mesh.Hy, sim.mesh.Hz
     dz = sim.mesh.dz; Nz = sim.mesh.Nz
@@ -181,7 +183,8 @@ function apply_building_heat!(sim, qv_field, sensible::AbstractMatrix, cb::CityB
         i, j = Tuple(I)
         k = min(cb.kair[I], Nz)
         ρk = ρ isa AbstractVector ? ρ[k] : ρ
-        sim.θ.data[Hx+i, Hy+j, Hz+k] += cb.H[I] / (ρk * cp) * dt / dz
+        πk = π isa AbstractVector ? π[k] : π
+        sim.θ.data[Hx+i, Hy+j, Hz+k] += cb.H[I] / (ρk * cp * πk) * dt / dz
         qv[i, j, k] += cb.LE[I] / (ρk * _L_v) * dt / dz
     end
     return sim
@@ -215,7 +218,8 @@ function init!(c::CityMeanBuildings, case)
     g, mesh = case.geom, case.mesh
     scene = g.scene
     c.bem = city_buildings(g.heightmap, g.sfc, mesh.dx, mesh.dy, mesh.dz,
-                           sum(scene.facets[i].area for i in g.wall_ids))
+                           sum(scene.facets[i].area for i in g.wall_ids);
+                           start_weekday = case_weekday(case.cfg))
     bem = c.bem
     case.cfg.verbose &&
         @printf(case.io, "City-mean building: %.0f m² floor area, %.0f m² walls, %.0f m² roofs\n",
@@ -240,7 +244,7 @@ end
 
 run_stage!(c::CityMeanBuildings, case, ::Val{:anthropogenic}, dt) =
     apply_building_heat!(case.sim, tracer(case, :qv), case.bus.sensible, c.bem, dt;
-                         ρ = ref_density(case), cp = case.ref.cp)
+                         ρ = ref_density(case), cp = case.ref.cp, π = case.ref.π̄)
 
 function report(c::CityMeanBuildings, case)
     bem = c.bem

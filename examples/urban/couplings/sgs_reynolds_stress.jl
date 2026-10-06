@@ -77,12 +77,13 @@ function build(::Type{<:SGSReynoldsStress}, case, o)
                                    units = "m2 s-2",
                                    long_name = "subgrid-scale Reynolds stress tau_$(names[k])",
                                    diffusivity = diffusivity), 6)
-    # the solid mask with periodic lateral halos (edges across the seam)
+    # the solid mask with the case's scalar halos (edges across the periodic
+    # seam; mirrored at an open face, #262)
     mf = Field(CellCenter(), m)
     mf.data .= sm.mask
-    fill_halos!(mf, FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    fill_halos!(mf, case_scalar_bcs(cfg))
     closure = ReynoldsStressClosure(m; τ = τ, mask = mf.data .> 0.5,
-                                    wall_distance = o.wall_cap ? wall_distance(sm; bottom = true) : nothing,
+                                    wall_distance = o.wall_cap ? wall_distance(sm; bottom = true, bcs = case.sim.bcs) : nothing,
                                     first_level = first_level_cells(sm; bottom = true),
                                     surface = o.surface ? (u_star = case.bus.u_star, k = case.bus.k_air) : nothing,
                                     θ₀ = cfg.θ₀, g_accel = cfg.g, qv = tracer(case, :qv),

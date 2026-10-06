@@ -61,7 +61,7 @@ using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall,
                             update_open_boundaries!, prepare_open_boundaries!,
-                            assert_open_face_correction
+                            assert_open_face_correction, mark_open_boundary_stage!
 import ..BoundaryConditions: boundary_flux_weights
 using ..Operators
 using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
@@ -77,7 +77,8 @@ import ..PressureSolvers: solve!, poisson_axis_bcs
 import ..TimeSteppers: step!
 import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
 
-using ..Simulations: horizontal_mean, horizontal_variance
+using ..Simulations: horizontal_mean, horizontal_variance, add_velocity_sponge!
+import ..Simulations
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 using ..Operators: sgs_fields
 using ..TimeIntegration: CFLConstraints, _max_advective_rate, _SNAPSHOTS
@@ -1232,6 +1233,7 @@ mutable struct MassWeightedSimulation{S<:MassWeighting,
     θ_flux_top::T
     sponge_α_max::T
     sponge_z_start::T
+    sponge_target::NamedTuple{(:u, :v, :w)}   # N-open-d (#262)
     # enable flags
     has_viscosity::Bool
     has_buoyancy::Bool
@@ -1287,6 +1289,7 @@ is `0`):
 | `Pr_t` | `1/3` | turbulent Prandtl number |
 | `θ_flux_bottom`, `θ_flux_top` | `0` | prescribed surface fluxes |
 | `sponge_α_max`, `sponge_z_start` | off | Rayleigh sponge |
+| `sponge_target` | `nothing` (zero) | sponge relaxation targets; required with an open top ([`sponge_target`](@ref Aeolus.Simulations.sponge_target), #262) |
 | `bcs`, `θ_bcs` | `FieldBoundaryConditions(:periodic, :periodic, :wall)` | BCs |
 | `solver` | `DensityWeightedPoissonSolver(mesh, ref; weighting=:ρ)` | projection solver |
 | `tol`, `maxit` | `1e-12`, `500` | passed to the default solver |
@@ -1376,6 +1379,7 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
                               θ_flux_top::Real       = 0,
                               sponge_α_max::Real     = 0,
                               sponge_z_start::Real   = mesh.z0 + mesh.Lz,
+                              sponge_target          = nothing,
                               bcs::FieldBoundaryConditions =
                                   FieldBoundaryConditions(:periodic, :periodic, :wall),
                               θ_bcs::FieldBoundaryConditions = bcs,
@@ -1420,6 +1424,7 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
         S, mesh, bcs, θ_bcs, ps, refstate,
         T(ν), T(g_accel), T(f_coriolis), T(C_s), T(Pr_t),
         T(θ_flux_bottom), T(θ_flux_top), T(sponge_α_max), T(sponge_z_start),
+        Simulations._sponge_target(sponge_target, mesh, bcs, has_sponge),
         ν != 0, buoyancy, f_coriolis != 0, C_s != 0,
         θ_flux_bottom != 0 || θ_flux_top != 0, has_sponge,
         zero(T),
@@ -1536,6 +1541,34 @@ Generic entry point — dispatches to [`step_anelastic!`](@ref) or
 step!(sim::MassWeightedSimulation, dt::Real; kwargs...) =
     _step_mass_weighted!(sim, dt; kwargs...)
 
+# Steps 8–10 of the sound-proof fractional step: the weighted divergence of
+# the velocity, the variable-coefficient Poisson solve ∇·(W∇φ) = ∇·(Wu), and
+# the correction u ← u − ∇φ. `sim.φ` holds the potential afterwards; `sim.p`
+# is not touched. Also the re-projection of a two-way nest parent after the
+# feedback (N-nest-e, #263).
+function _project_mass_weighted!(sim::MassWeightedSimulation{S,T},
+                                 Wc = _weight_c(sim.weighting, sim.ref),
+                                 Wf = _weight_f(sim.weighting, sim.ref)) where {S,T}
+    m = sim.mesh
+    # 8. weighted divergence of the predicted velocity
+    fill_halos!(sim.u, sim.bcs)
+    fill_halos!(sim.v, sim.bcs)
+    fill_halos!(sim.w, sim.bcs)
+    weighted_divergence!(sim.div_buf, sim.u, sim.v, sim.w, Wc, Wf, m; normalize = false)
+
+    # 9. variable-coefficient Poisson solve: ∇·(W∇φ) = ∇·(W u*)
+    solve!(sim.φ, sim.div_buf, sim.solver)
+
+    # 10. correction u = u* − ∇φ
+    fill_halos!(sim.φ, sim.bcs)
+    ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
+    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
+    _axpy_interior!(sim.u, -one(T), sim.dφdx, m)
+    _axpy_interior!(sim.v, -one(T), sim.dφdy, m)
+    _axpy_interior!(sim.w, -one(T), sim.dφdz, m)
+    return sim
+end
+
 function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
                               body_force!::Union{Nothing,Function} = nothing,
                               post_predictor!::Union{Nothing,Function} = nothing,
@@ -1555,6 +1588,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)
+    mark_open_boundary_stage!(sim)         # radiating outflow: step-start layers (N-open-c)
 
     # 2. advection, weighted flux form
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
@@ -1588,12 +1622,7 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     # 6. Coriolis / surface flux / sponge / user forcing
     sim.has_coriolis && add_coriolis!(sim.tu, sim.tv, sim.u, sim.v, sim.f_coriolis)
     sim.has_surface_flux && add_surface_flux!(sim.tθ, sim.θ_flux_bottom, sim.θ_flux_top)
-    if sim.has_sponge
-        z_top = m.z0 + m.Lz
-        add_sponge!(sim.tu, sim.u, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tv, sim.v, sim.sponge_α_max, sim.sponge_z_start, z_top)
-        add_sponge!(sim.tw, sim.w, sim.sponge_α_max, sim.sponge_z_start, z_top)
-    end
+    sim.has_sponge && add_velocity_sponge!(sim)   # toward sim.sponge_target (#262)
     body_force! === nothing || body_force!(sim, Δt)
 
     # 7. predictor
@@ -1606,22 +1635,8 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     #     W-weighted mass-flux correction, written into u* by the fill below
     update_open_boundaries!(sim, sim.t + Δt, Δt)
 
-    # 8. weighted divergence of the predicted velocity
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
-    weighted_divergence!(sim.div_buf, sim.u, sim.v, sim.w, Wc, Wf, m; normalize = false)
-
-    # 9. variable-coefficient Poisson solve: ∇·(W∇φ) = ∇·(W u*)
-    solve!(sim.φ, sim.div_buf, sim.solver)
-
-    # 10. correction u = u* − ∇φ
-    fill_halos!(sim.φ, sim.bcs)
-    ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
-    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
-    _axpy_interior!(sim.u, -one(T), sim.dφdx, m)
-    _axpy_interior!(sim.v, -one(T), sim.dφdy, m)
-    _axpy_interior!(sim.w, -one(T), sim.dφdz, m)
+    # 8.–10. weighted projection
+    _project_mass_weighted!(sim, Wc, Wf)
 
     # 11. scalar update
     _axpy_interior!(sim.θ, Δt, sim.tθ, m)

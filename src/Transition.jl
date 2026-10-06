@@ -499,11 +499,16 @@ negative for cooling; default the simulation's prescribed bottom flux):
   * ``h/L`` with the Obukhov length of the surface flux,
     ``L = u_τ^2 θ_0/(κ g θ_*)``, ``θ_* = -\\overline{w'θ'}_0/u_τ``
     (`SurfaceExchange.obukhov_length` with the simulation's ``g`` and
-    ``θ_0``; positive for cooling). Nieuwstadt (2005) finds the
+    ``θ_0``; positive for cooling). This ``L`` includes ``κ``.
+    Nieuwstadt (2005) defines ``L`` without ``κ`` and finds that the
     turbulence of an open channel collapses for ``h/L ≳ 1.23`` at
-    ``Re_τ = 360``;
-  * ``L^+ = L u_τ/ν``, the Obukhov length in wall units; Flores & Riley
-    (2011) find collapse for ``L^+ ≲ 100`` (``L^+ = Re_τ/(h/L)``);
+    ``Re_τ = 360`` in his convention, i.e. ``h/L ≳ 1.23 κ ≈ 0.49`` in
+    this one;
+  * ``L^+ = L u_τ/ν``, the Obukhov length in wall units (``L^+ = Re_τ/(h/L)``,
+    with the same ``κ``-including ``L``); Flores & Riley (2011) find
+    collapse for ``L^+ ≲ 100``, which at ``Re_τ = 360`` is not
+    consistent with Nieuwstadt's threshold (``L^+ ≈ 730`` there; see
+    the theory page, "The cooled open channel");
   * the bulk Richardson number ``Ri_b = g h (Θ_{top} - Θ_{bot})/(Θ_{top} U_b^2)``
     (`SurfaceExchange.bulk_richardson`) of the plane-mean θ of the top
     and the bottom cell layers and the bulk (volume-mean) streamwise

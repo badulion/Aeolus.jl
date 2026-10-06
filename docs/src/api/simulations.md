@@ -16,6 +16,25 @@ Aeolus.Simulations.max_νt
 Aeolus.Simulations.mean_θ_profile
 ```
 
+## The sponge target (N-open-d, #262)
+
+The Rayleigh sponge of every core relaxes `u, v, w` toward
+`sim.sponge_target`: zero below a lid (the Phase-7 default), the
+boundary data's state below an open top (required there). Theory:
+[Near the open faces](../theory/fractional_step.md#Near-the-open-faces-(N-open-d)).
+
+```julia
+data = ProfileBoundaryData(u = 5.0, v = -1.5, θ = 300.0)
+sim  = BoussinesqSimulation(mesh; bcs = open_boundary_conditions(mesh, data),
+                            sponge_α_max = 0.05, sponge_z_start = 300.0,
+                            sponge_target = sponge_target(data, mesh))
+```
+
+```@docs
+Aeolus.Simulations.sponge_target
+Aeolus.Simulations.add_velocity_sponge!
+```
+
 ## Swapping operators in `step!`
 
 Two keywords of `step!(sim, dt; …)` replace a numerical operator without

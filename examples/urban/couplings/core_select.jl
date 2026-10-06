@@ -10,7 +10,7 @@
 #
 # The sound-proof cores take the case's reference state as their base
 # state: `case.ref.state` (core/reference_state.jl, #131), the initial θ
-# profile (`initial_θ`) integrated hydrostatically from `cfg.p_surface`
+# profile (`initial_θ`) integrated hydrostatically from `case_surface_pressure(cfg)`
 # with the MoistThermodynamics constants. It is the same ρ̄(z) the
 # couplings convert their fluxes with and the ledger integrates water
 # with, so there is one reference state per case. The initial state has
@@ -80,7 +80,7 @@ Slot `:core`, provider `P ∈ (:anelastic, :pseudo_incompressible)`: the
 sound-proof cores of `Aeolus.Anelastic`, `AnelasticSimulation`
 (`∇·(ρ̄u) = 0`) and `PseudoIncompressibleSimulation` (`∇·(ρ̄θ̄u) = 0`). The
 base state is the case's reference state `case.ref.state`
-([`build_reference`](@ref): the initial θ(z) from `cfg.p_surface`).
+([`build_reference`](@ref): the initial θ(z) from `case_surface_pressure(cfg)`).
 The projection solver is the core's own density-weighted CG; its `tol`
 and `maxit` are options of the `:pressure_solver` provider
 `:density_weighted_cg` (the only one these cores accept).
@@ -118,7 +118,7 @@ function build_core(C::Type{<:MassWeightedCore}, cfg, mesh, ref, simkw)
     isempty(bad) || error("coupling :$(coupling_name(C)): the sim_options keyword(s) " *
                           "$(join(bad, ", ")) are not keywords of the sound-proof core " *
                           "(it takes $(join(MASS_WEIGHTED_SIM_KEYWORDS, ", ")))")
-    return _mass_weighted_type(C)(mesh; core_parameters(cfg)..., ref = ref.state,
+    return _mass_weighted_type(C)(mesh; core_parameters(cfg, mesh)..., ref = ref.state,
                                   buoyancy = true, simkw...)
 end
 

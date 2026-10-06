@@ -670,7 +670,6 @@ end
 function _pressure_gradients!(w, sim, side, mask, hh, resolved, dpdx, dpdy)
     g = sim.mesh
     Nx, Ny, Nz, Hx, Hy, Hz, dz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz, g.dz
-    xper = sim.bcs.west isa Periodic; yper = sim.bcs.south isa Periodic
     p = sim.p.data
     s = side === :bottom ? 1 : -1
     fill!(w.dpdx, dpdx); fill!(w.dpdy, dpdy)
@@ -678,8 +677,10 @@ function _pressure_gradients!(w, sim, side, mask, hh, resolved, dpdx, dpdy)
     air(i, j, k) = (1 <= i <= Nx && 1 <= j <= Ny) &&
                    (mask isa AbstractMatrix{<:Integer} && !(mask isa AbstractMatrix{Bool}) ?
                     (1 <= mask[i, j] <= k) : true)
-    wrapx(i) = xper ? mod1(i, Nx) : i
-    wrapy(j) = yper ? mod1(j, Ny) : j
+    # the one BC-aware neighbour index (#262): wrapped across a periodic
+    # side, 0 (no neighbour: not air) across any other
+    wrapx(i) = neighbor_index(g, sim.bcs, i, 1; outside = :none)
+    wrapy(j) = neighbor_index(g, sim.bcs, j, 2; outside = :none)
     @inbounds for j in 1:Ny, i in 1:Nx
         w.active[i, j] || continue
         kw = _wall_level(side, mask, i, j, Nz)
@@ -713,10 +714,10 @@ end
 # divergence), upwind in the wall-normal direction.
 function _convection!(w, g, bcs)
     Nx, Ny = size(w.cols)
-    xper = bcs.west isa Periodic; yper = bcs.south isa Periodic
     nb(i, j) = (1 <= i <= Nx && 1 <= j <= Ny) ? (w.active[i, j] ? w.cols[i, j] : nothing) : nothing
-    wrapx(i) = xper ? mod1(i, Nx) : i
-    wrapy(j) = yper ? mod1(j, Ny) : j
+    # the one BC-aware neighbour index (#262); 0 = none (nb gives nothing)
+    wrapx(i) = neighbor_index(g, bcs, i, 1; outside = :none)
+    wrapy(j) = neighbor_index(g, bcs, j, 2; outside = :none)
     same(c, d) = d !== nothing && length(d.y) == length(c.y) && d.y[end] == c.y[end]
     # upwind derivative of the profile `f` (:u or :v) at node m along a
     # direction with neighbours P (+) and M (−) and spacing d, advected at `a`

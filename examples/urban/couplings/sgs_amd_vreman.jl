@@ -49,7 +49,7 @@ end
 The closure's `ν_t` on a laminar version of the current flow: `u` and `v`
 replaced by their horizontal means at each level (a horizontally uniform
 shear flow `u(z), v(z)`), `w = 0`, the case's θ. `cells` are the interior
-cells above the inversion (`z > cfg.θ_inversion_z`), above the highest roof
+cells above the inversion (`z > initial_inversion_height(cfg)`), above the highest roof
 + 1 and below the sponge: the laminar free stream. AMD, Vreman and the
 σ-model must give `ν_t = 0` there exactly (pure shear has no AMD
 production, a rank-one Vreman `β` and σ₃ = 0), where Smagorinsky gives
@@ -81,8 +81,9 @@ function laminar_reference_νt(case, closure)
     kr = highest_solid_level(case)
     ksp = floor(Int, case.cfg.sponge_frac * m.Nz)
     cells = falses(m.Nx, m.Ny, m.Nz)
+    zi = initial_inversion_height(case.cfg)
     for k in kr+2:ksp
-        (k - 0.5) * m.dz > case.cfg.θ_inversion_z && (cells[:, :, k] .= true)
+        (k - 0.5) * m.dz > zi && (cells[:, :, k] .= true)
     end
     return interior_view(ν), cells
 end

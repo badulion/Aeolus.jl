@@ -36,8 +36,11 @@ slot's anelastic / pseudo-incompressible provider), `geom`
 `ref` ([`CaseReference`](@ref)), the enabled `couplings` (registry
 order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
 NetCDF `output` (or `nothing`), the `io` for log lines, the composed
-`step!` hooks, and `timing` (wall seconds per `(stage, coupling)`, see
-[`timing_report`](@ref)).
+`step!` hooks, `timing` (wall seconds per `(stage, coupling)`, see
+[`timing_report`](@ref)), `top` — the heat flux through a
+fixed-gradient θ top ([`TopHeatFlux`](@ref), `nothing` for a closed
+lid) — and `open`, the heat of the open faces of a `lateral = :open`
+case ([`OpenBoundaryHeat`](@ref), `nothing` for a periodic one).
 """
 mutable struct Case{M, S, G<:Geometry}
     cfg::CaseConfig
@@ -57,6 +60,8 @@ mutable struct Case{M, S, G<:Geometry}
     post_predictor::Union{Nothing,Function}
     timing::Dict{Tuple{Symbol,Symbol},Float64}
     step_kwargs::NamedTuple      # extra step! keywords from the couplings' step_options
+    top::Union{Nothing,TopHeatFlux}   # the fixed-gradient θ top's heat flux (#254)
+    open::Union{Nothing,OpenBoundaryHeat}   # the open faces' heat (#262)
 end
 
 "The enabled coupling called `name`, or `nothing`."
@@ -71,11 +76,28 @@ end
 hour_of_day(cfg::CaseConfig, t::Real) = (cfg.start_h + t / 3600) % 24.0
 
 """
+    case_weekday(cfg) -> 1 … 7
+
+Day of the week of `cfg.date` (1 = Monday … 7 = Sunday, the convention
+of `BuildingEnergy.WeeklySchedule`): 29 June 2019 is a Saturday (6).
+"""
+case_weekday(cfg::CaseConfig) =
+    mod(Aeolus.LargeScaleForcing._days_from_civil(cfg.date...) + 3, 7) + 1   # 1970-01-01: Thursday
+
+"""
     solar_position_at(cfg, hour) -> SolarPosition
 
-The sun at local clock `hour` of `cfg.date` over the case anchor.
+The sun at local clock `hour` of `cfg.date` over the case anchor. The
+solar-position algorithm (`SolarGeometry.solar_time`) takes UTC, so the
+local clock is converted with `cfg.utc_offset` (local = UTC + offset; 2 h
+in summer, CEST). Before #259 the local hour was passed as UTC and the sun
+of the case ran `utc_offset` hours early (solar noon at 11:07 CEST instead
+of 13:07 on 29 June 2019). A local hour before `utc_offset` is a UTC hour
+of the previous day (a negative hour of `cfg.date`; the Julian day handles
+it).
 """
 function solar_position_at(cfg::CaseConfig, hour::Real)
+    hour = hour - cfg.utc_offset
     hh = floor(Int, hour)
     mi = floor(Int, (hour - hh) * 60)
     se = (hour - hh - mi / 60) * 3600
@@ -86,13 +108,18 @@ function solar_position_at(cfg::CaseConfig, hour::Real)
 end
 
 """
-    core_parameters(cfg) -> NamedTuple
+    core_parameters(cfg, mesh) -> NamedTuple
 
 The keyword arguments every dynamical core of the case shares: viscosity,
-gravity, Coriolis, Smagorinsky, sponge and the boundary conditions
-(periodic laterally, wall / no-flux at top and bottom).
+gravity, Coriolis, Smagorinsky, sponge and the boundary conditions of
+[`case_boundary_conditions`](@ref) (`cfg.lateral`, #262): for the
+default periodic case periodic laterally, walls at the bottom and the
+top for the velocity; for θ no flux at the ground (the surface fluxes
+enter as tendencies) and [`θ_top_bc`](@ref)`(cfg)` at the top
+(`cfg.θ_top`; default the fixed-gradient top, #254). For `:open`, the
+open boundary set and the sponge target of its open top.
 """
-core_parameters(cfg::CaseConfig) = (
+core_parameters(cfg::CaseConfig, mesh) = (
     ν              = cfg.ν,
     g_accel        = cfg.g,
     f_coriolis     = cfg.f_coriolis,
@@ -100,12 +127,11 @@ core_parameters(cfg::CaseConfig) = (
     Pr_t           = cfg.Pr_t,
     sponge_α_max   = cfg.sponge_α_max,
     sponge_z_start = cfg.sponge_frac * cfg.extent[3],
-    bcs   = FieldBoundaryConditions(:periodic, :periodic, :wall),
-    θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    case_boundary_conditions(cfg, mesh)...)
 
 "The dry Boussinesq core of the case (buoyancy about the constant `cfg.θ₀`)."
 boussinesq_core(cfg::CaseConfig, mesh; kw...) =
-    BoussinesqSimulation(mesh; core_parameters(cfg)..., θ₀ = cfg.θ₀, moisture = false, kw...)
+    BoussinesqSimulation(mesh; core_parameters(cfg, mesh)..., θ₀ = cfg.θ₀, moisture = false, kw...)
 
 """
     build_case(cfg; io = stdout) -> Case
@@ -149,15 +175,27 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time())
     case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), ledger, ref,
                 AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
-                nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;))
+                nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
+                top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref))
+    # a building the box edge cuts is solid on the open faces (#262): zero
+    # velocity there, and no mass-flux correction through it; then the open
+    # faces get their data before any stage reads them (the transport runs
+    # before the first dynamics step, whose prepare_open_boundaries! would
+    # come too late: with empty buffers the first transport saw u = 0 on the
+    # open faces and moved 14 % of the edge cells' vapour across them)
+    if has_open_boundaries(sim)
+        mark_open_boundary_solids!(sim.bcs, geom.sm.mask)
+        prepare_open_boundaries!(sim)
+        fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+        fill_halos!(sim.θ, sim.θ_bcs)
+    end
 
     # Core moisture tracers. qv and ql are advected by the :transport
     # stage; KNOWN: qr is sedimented by the microphysics but never
     # advected (kept for bit-for-bit; the microphysics-slot issue fixes it).
     qv = ensure_tracer!(case, :qv; advect = true, positive = true,
                         units = "kg kg-1", long_name = "water vapour specific humidity")
-    qv0, Hq = cfg.qv0, cfg.qv_scale
-    set!(qv, (x, y, z) -> qv0 * exp(-z / Hq))
+    set!(qv, initial_qv(cfg))                        # the sounding, or the idealised profile
     ensure_tracer!(case, :ql; advect = true, positive = true,
                    units = "kg kg-1", long_name = "cloud liquid water")
     ensure_tracer!(case, :qr; units = "kg kg-1", long_name = "rain water")

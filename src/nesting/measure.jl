@@ -1,0 +1,285 @@
+# Nesting: the vertical measure of the conservative operators (N-nest-b, #256).
+#
+# The conservative prolongation is a primitive-function reconstruction: the
+# parent cell averages define the primitive F exactly at the parent faces,
+# a polynomial interpolates F there, and a child value is the difference
+# quotient of that polynomial across the child cell. N-nest-a did this in
+# "parent cell numbers", which is exact only when the parent is uniform and
+# the average is a volume average. Here the construction is done in an
+# explicit vertical *coordinate* (the measure):
+#
+#   * :volume — the coordinate is the height z. On a uniform RegularGrid
+#     parent this is exactly the N-nest-a integer construction (and the
+#     operators use that code path, bit for bit). On a z-stretched parent
+#     the Lagrange nodes are the parent's actual face heights.
+#   * :mass   — the coordinate is the cumulative reference mass
+#     μ(z) = ∫ W dz, with W the constraint weight of a sound-proof
+#     simulation (ρ̄ anelastic, ρ̄θ̄ pseudo-incompressible). A cell average
+#     in μ is the W-weighted average, so Σ W φ ΔV over the child cells of a
+#     parent cell is the parent's W φ ΔV exactly (the primitive is matched
+#     at the parent faces), and a constant stays constant (F is linear in
+#     μ, reproduced by any interpolating polynomial of degree ≥ 1).
+#
+# Horizontal directions are always uniform volume measure (W depends on z
+# only) and keep the N-nest-a integer plans.
+
+"""
+    NestMeasure
+
+Vertical measure of the nesting operators of one [`NestedGrid`](@ref):
+the coordinate in which the conservative prolongation reconstructs
+parent averages and the weights with which restriction averages child
+cells. Build with [`nest_measure`](@ref).
+
+  * `kind = :volume` — volume (height) measure. On a uniform parent the
+    operators are exactly the N-nest-a (#250) operators; on a z-stretched
+    parent the reconstruction uses the actual face heights.
+  * `kind = :mass` — the reference-mass measure `dμ = W(z) dz` of a
+    [`MassWeightedSimulation`](@ref) pair (`W = ρ̄` anelastic, `ρ̄θ̄`
+    pseudo-incompressible, from `constraint_weights`). Restriction is
+    `W`-weighted (scalars) and `W`-area-weighted (horizontal-normal
+    faces); prolongation conserves `∫ W φ dV` exactly.
+
+Fields (all storage-indexed, halos included): `pc`/`cc` the parent/child
+face coordinates in the measure, `ph`/`ch` the parent/child face heights
+(child faces that coincide with parent faces are bit-identical copies),
+`cw` the child cell measure per level (`Δz` or `W Δz`), `pw` the parent
+cell measure per level from the parent's *own* weight (`Δz` or
+`W_p Δz_p`), and the plan cache.
+
+Two parent cell masses exist in the mass measure. Inside the covered
+layers the coordinate `pc` takes a parent layer's mass to be the sum of
+its children's (`Σ W_c Δz_c`), which is what makes prolongation and
+restriction exactly conservative and the Lagrange basis exactly 0/1 on
+coincident faces. The parent simulation itself conserves `W_p Δz_p`,
+which differs from that sum by the midpoint-rule error of sampling one
+profile on two grids ([`nest_reference_mismatch`](@ref), `~4e-7` for a
+25 m layer). Cell integrals over *uncovered* parent cells
+([`composite_integral`](@ref), the refluxing correction) therefore use
+`pw`, so the composite integral is exactly what the two simulations
+conserve; covered parent cells only ever exchange with their own
+children and use `pc`.
+"""
+struct NestMeasure
+    kind::Symbol
+    pc::Vector{Float64}
+    cc::Vector{Float64}
+    ph::Vector{Float64}
+    ch::Vector{Float64}
+    cw::Vector{Float64}
+    pw::Vector{Float64}
+    plans::Dict{Tuple{Symbol,Int},Vector{Tuple{Int,Vector{Float64}}}}
+end
+
+Base.show(io::IO, m::NestMeasure) =
+    print(io, "NestMeasure(:", m.kind, ", ", length(m.pc) - 1, " parent / ",
+          length(m.cc) - 1, " child storage levels)")
+
+# Child face heights, storage-indexed (length Nc + 2Hc + 1). Faces inside the
+# overlap are generated from the parent faces, so a child face lying on a
+# parent face *is* that parent face (bitwise), which is what makes the
+# Lagrange basis exactly 0/1 there and the reconstruction exactly
+# conservative. Faces in the child halos continue at the child spacing.
+function _child_zfaces(nest::NestedGrid, ph::Vector{Float64})
+    pm = nest.parent_mesh; cm = nest.child_mesh
+    Hp = pm.Hz; Hc = cm.Hz; Nc = cm.Nz; rz = nest.rz
+    ch = Vector{Float64}(undef, Nc + 2Hc + 1)
+    Pb = Hp + nest.iz                       # parent storage face at the child bottom
+    for f in eachindex(ch)
+        n = f - Hc - 1                      # child face number, 0 = child bottom
+        if 0 <= n <= Nc
+            P = Pb + fld(n, rz); m = mod(n, rz)
+            ch[f] = m == 0 ? ph[P] : ph[P] + (m / rz) * (ph[P+1] - ph[P])
+        end
+    end
+    zb = ph[Pb]; zt = ph[Pb + nest.nz]
+    for f in eachindex(ch)
+        n = f - Hc - 1
+        n < 0  && (ch[f] = zb + n * cm.dz)
+        n > Nc && (ch[f] = zt + (n - Nc) * cm.dz)
+    end
+    return ch
+end
+
+"""
+    nest_measure(nest)                          -> NestMeasure (:volume)
+    nest_measure(nest, Wp, Wc)                  -> NestMeasure (:mass)
+    nest_measure(nest, parent_sim, child_sim; rtol=1e-4)
+
+The vertical measure of `nest`'s conservative operators (see
+[`NestMeasure`](@ref)).
+
+  * `nest_measure(nest)` — the volume measure (the default of every
+    operator; on a stretched parent its coordinates are the parent's
+    `zfaces`).
+  * `nest_measure(nest, Wp, Wc)` — the mass measure for weights `Wp`
+    (parent) and `Wc` (child), storage-indexed cell vectors
+    (`length = Nz + 2Hz`). When `W` is the same constant on both grids
+    the mass measure *is* the volume measure and that is returned (the
+    analytic limit: the operators are then the N-nest-a operators bit for
+    bit).
+  * `nest_measure(nest, parent_sim, child_sim)` for two
+    [`MassWeightedSimulation`](@ref)s — the mass measure from their
+    `constraint_weights` (`ρ̄` or `ρ̄θ̄` of the sims' `ReferenceState`s),
+    after asserting that parent and child share one reference profile
+    ([`nest_reference_mismatch`](@ref) `≤ rtol`). The default
+    `rtol = 1e-4` admits the midpoint-rule difference of one smooth
+    profile sampled on both grids (`≲ 1e-4` for parent layers up to
+    ~400 m in an 8 km scale height) and rejects a different profile (a
+    1 K warmer surface is `3.5e-3`).
+"""
+function nest_measure(nest::NestedGrid)
+    return get!(nest.measures, :volume) do
+        ph = _zfaces_storage(nest.parent_mesh)
+        ch = _child_zfaces(nest, ph)
+        NestMeasure(:volume, ph, ch, ph, ch, diff(ch), diff(ph), Dict())
+    end
+end
+
+function nest_measure(nest::NestedGrid, Wp::AbstractVector, Wc::AbstractVector)
+    pm = nest.parent_mesh; cm = nest.child_mesh
+    length(Wp) == pm.Nz + 2pm.Hz ||
+        error("nest_measure: parent weight has length $(length(Wp)), expected " *
+              "Nz + 2Hz = $(pm.Nz + 2pm.Hz) (storage-indexed cell values)")
+    length(Wc) == cm.Nz + 2cm.Hz ||
+        error("nest_measure: child weight has length $(length(Wc)), expected " *
+              "Nz + 2Hz = $(cm.Nz + 2cm.Hz) (storage-indexed cell values)")
+    all(>(0), Wp) && all(>(0), Wc) || error("nest_measure: weights must be positive")
+    # the analytic limit: a constant W is a rescaled volume, and the
+    # operators are then the volume operators, bit for bit
+    w0 = Wp[1]
+    (all(==(w0), Wp) && all(==(w0), Wc)) && return nest_measure(nest)
+    ph = _zfaces_storage(pm)
+    ch = _child_zfaces(nest, ph)
+    Hp = pm.Hz; Hc = cm.Hz
+    # child: μ = 0 at the child bottom face, cumulative child masses W Δz
+    cc = zeros(Float64, length(ch))
+    for f in Hc+1:length(ch)-1
+        cc[f+1] = cc[f] + Wc[f] * (ch[f+1] - ch[f])
+    end
+    for f in Hc:-1:1
+        cc[f] = cc[f+1] - Wc[f] * (ch[f+1] - ch[f])
+    end
+    # parent: covered faces are copied from the coincident child faces, so
+    # a covered parent cell's mass is exactly the sum of its children's
+    pc = zeros(Float64, length(ph))
+    Pb = Hp + nest.iz; Pt = Pb + nest.nz
+    for K in 0:nest.nz
+        pc[Pb + K] = cc[Hc + 1 + K * nest.rz]
+    end
+    for P in Pt:length(ph)-1
+        pc[P+1] = pc[P] + Wp[P] * (ph[P+1] - ph[P])
+    end
+    for P in Pb-1:-1:1
+        pc[P] = pc[P+1] - Wp[P] * (ph[P+1] - ph[P])
+    end
+    pw = [Wp[P] * (ph[P+1] - ph[P]) for P in 1:length(ph)-1]
+    return NestMeasure(:mass, pc, cc, ph, ch, diff(cc), pw, Dict())
+end
+
+"""
+    nest_reference_mismatch(nest, parent_ref, child_ref) -> Float64
+
+How far the parent and child [`ReferenceState`](@ref)s are from being one
+reference profile, as the largest relative difference, over the parent
+layers the child covers, between the parent's `ρ̄ Δz` and the sum of the
+child's `ρ̄ Δz` over the `rz` child layers inside it (and the same for
+`θ̄`, as a `Δz`-weighted mean). A shared, smooth profile sampled at cell
+centres on the two grids differs only by the midpoint-rule error of the
+parent layer, `≈ (Δz_p² − Δz_c²)/24 · |ρ̄''/ρ̄|`, i.e. `~4e-7` for a
+25 m parent layer in a scale height of 8 km. A genuinely different
+profile (another surface temperature, a surface pressure set at the
+child's own bottom) shows up at `1e-3` and above. The thermodynamic
+constants must agree exactly (an error is raised otherwise).
+"""
+function nest_reference_mismatch(nest::NestedGrid, pr::ReferenceState, cr::ReferenceState)
+    (pr.R_d == cr.R_d && pr.cp == cr.cp && pr.p₀ == cr.p₀ && pr.g == cr.g) ||
+        error("nest_reference_mismatch: parent and child ReferenceStates use different " *
+              "thermodynamic constants (R_d, cp, p₀, g)")
+    pm = nest.parent_mesh; cm = nest.child_mesh
+    pr.mesh.Nz == pm.Nz || error("nest_reference_mismatch: parent_ref is not on the nest's parent mesh")
+    cr.mesh.Nz == cm.Nz || error("nest_reference_mismatch: child_ref is not on the nest's child mesh")
+    worst = 0.0
+    for K in 1:nest.nz
+        Kp = nest.iz + K - 1
+        dzp = _dzp(pm, Kp)
+        mρ = 0.0; mθ = 0.0
+        for kc in 1:nest.rz
+            k = (K - 1) * nest.rz + kc
+            mρ += cr.ρ̄[k] * cm.dz
+            mθ += cr.θ̄[k] * cm.dz
+        end
+        worst = max(worst, abs(mρ - pr.ρ̄[Kp] * dzp) / (pr.ρ̄[Kp] * dzp),
+                           abs(mθ - pr.θ̄[Kp] * dzp) / (pr.θ̄[Kp] * dzp))
+    end
+    return worst
+end
+
+_weighting_key(s::MassWeightedSimulation) = nameof(typeof(s.weighting))
+
+function nest_measure(nest::NestedGrid, psim::MassWeightedSimulation,
+                      csim::MassWeightedSimulation; rtol::Real=1e-4)
+    typeof(psim.weighting) === typeof(csim.weighting) ||
+        error("nest_measure: parent is $(_weighting_key(psim)) but child is " *
+              "$(_weighting_key(csim)); a nest must use one sound-proof system")
+    psim.mesh === nest.parent_mesh || size(psim.θ.data) == totalsize(nest.parent_mesh) ||
+        error("nest_measure: parent_sim is not on the nest's parent mesh")
+    csim.mesh === nest.child_mesh || size(csim.θ.data) == totalsize(nest.child_mesh) ||
+        error("nest_measure: child_sim is not on the nest's child mesh")
+    key = (:mass, objectid(psim.ref), objectid(csim.ref), _weighting_key(psim))
+    haskey(nest.measures, key) && return nest.measures[key]
+    mis = nest_reference_mismatch(nest, psim.ref, csim.ref)
+    mis <= rtol ||
+        error("nest_measure: the parent and child ReferenceStates are not one " *
+              "reference profile (relative mismatch " * @sprintf("%.3e", mis) *
+              " > rtol = " * @sprintf("%.1e", rtol) * " over the overlap). Build both " *
+              "from the same profile and surface pressure, with the child's surface " *
+              "at the parent's.")
+    meas = nest_measure(nest, constraint_weights(psim)[1], constraint_weights(csim)[1])
+    nest.measures[key] = meas
+    return meas
+end
+
+# The measure an operator uses: the explicit one, or the nest's volume
+# measure. `nothing` on a uniform parent short-circuits to the N-nest-a
+# integer plans (identical numbers, no measure allocation).
+_uses_integer_z(nest::NestedGrid, ::Nothing) = nest.parent_mesh isa RegularGrid
+_uses_integer_z(nest::NestedGrid, m::NestMeasure) =
+    m.kind === :volume && nest.parent_mesh isa RegularGrid
+_resolve(nest::NestedGrid, m::NestMeasure) = m
+_resolve(nest::NestedGrid, ::Nothing) = nest_measure(nest)
+
+# =========================================================================
+# Fluid mask (solid-aware restriction)
+# =========================================================================
+
+"""
+    nest_fluid_mask(nest, solid) -> BitArray{3}
+
+The child fluid mask (`true` = fluid) used by solid-aware restriction,
+from the IBM [`SolidMask`](@ref) of the child or a storage-sized Boolean
+`solid` array (`true` = solid, e.g. the Berlin case's `geom.sm.mask`).
+A child face is fluid when both cells it separates are fluid, the
+convention of `apply_solid_mask!`.
+"""
+nest_fluid_mask(nest::NestedGrid, sm::SolidMask) = nest_fluid_mask(nest, sm.mask)
+
+function nest_fluid_mask(nest::NestedGrid, solid::AbstractArray{Bool,3})
+    size(solid) == totalsize(nest.child_mesh) ||
+        error("nest_fluid_mask: solid mask has size $(size(solid)), expected the child " *
+              "storage size $(totalsize(nest.child_mesh))")
+    return .!BitArray(solid)
+end
+
+# A fluid mask already computed by `_fluid` (a caller restricting a whole
+# field set computes it once): passed through unchanged. Before N-nest-e
+# (#263) restrict_state_to_parent! handed the BitArray fluid mask back as
+# `solid`, which `_fluid` inverted, so the field set was averaged over the
+# *solid* children.
+struct _FluidMask
+    χ::BitArray{3}
+end
+_fluid(nest, f::_FluidMask) = f.χ
+_fluid(nest, ::Nothing) = nothing
+_fluid(nest, sm::SolidMask) = nest_fluid_mask(nest, sm)
+_fluid(nest, a::AbstractArray{Bool,3}) = nest_fluid_mask(nest, a)
