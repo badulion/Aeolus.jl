@@ -18,20 +18,17 @@ export phi_m_profile, total_stress_profile, streamwise_spectrum
 # P58-e (#193): the resolved TKE profile of the collapse runs
 export resolved_tke_profile
 
-# plane means of the interior of a field, one per level k = 1..Nz
+# plane means of the interior of a field, one per level k = 1..Nz, in the
+# canonical (thread-invariant) order of `Backends.plane_partials!` (KA-b, #296)
 function _plane_means(f::Field)
     g = mesh(f)
-    Nx, Ny, Nz, Hx, Hy, Hz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz
-    m = zeros(eltype(f.data), Nz)
-    @inbounds for k in 1:Nz
-        s = zero(eltype(f.data))
-        for j in 1:Ny, i in 1:Nx
-            s += f.data[Hx+i, Hy+j, Hz+k]
-        end
-        m[k] = s / (Nx * Ny)
-    end
-    return m
+    T = eltype(f.data)
+    m = plane_partials!(zeros(T, g.Nz), Backends.backend(f.data), identity, interior(g), f.data)
+    return m ./ (g.Nx * g.Ny)
 end
+
+# (f - m_k)² at a point of level k (m: the plane means, indexed from the first interior level)
+@inline _sq_dev_at(i, j, k, f, m, Hz) = @inbounds (f[i, j, k] - m[k - Hz])^2
 
 """
     phi_m_profile(u::Field{FaceX}, v::Field{FaceY}, u_star; κ) -> (z, Φ)
@@ -267,23 +264,19 @@ a flux-cooled half channel relative to the neutral run (Donda et al.
 """
 function resolved_tke_profile(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ})
     g = mesh(u)
-    Nx, Ny, Nz, Hx, Hy, Hz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz
+    Nx, Ny, Nz, Hz = g.Nx, g.Ny, g.Nz, g.Hz
     T = float(eltype(u.data))
     e = zeros(T, Nz)
     n = Nx * Ny
-    @inbounds for k in 1:Nz
-        for f in (u.data, v.data, w.data)
-            s = zero(T); s2 = zero(T)
-            for j in 1:Ny, i in 1:Nx
-                x = f[Hx+i, Hy+j, Hz+k]
-                s += x
-            end
-            m = s / n
-            for j in 1:Ny, i in 1:Nx
-                s2 += (f[Hx+i, Hy+j, Hz+k] - m)^2
-            end
-            e[k] += s2 / (2n)
-        end
+    I3 = interior(g)
+    s2 = zeros(T, Nz)
+    # plane means, then the plane sums of the squared deviations, both in the
+    # canonical order (KA-b, #296)
+    for f in (u.data, v.data, w.data)
+        b = Backends.backend(f)
+        m = plane_partials!(zeros(T, Nz), b, identity, I3, f) ./ n
+        plane_reduce!(s2, b, _sq_dev_at, I3, f, m, Hz)
+        e .+= s2 ./ (2n)
     end
     return e
 end

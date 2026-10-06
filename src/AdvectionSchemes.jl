@@ -58,6 +58,7 @@ using ..Operators: compute_sgs!, add_sgs_momentum!, sgs_closure
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, _dzf
 using ..StretchedGrids: StretchedGrid
+using ..Backends: interior_dot
 
 export # --- Phase 26: reconstructions -------------------------------------
        weno_z5_left, weno_z5_right, weno_z7_left, weno_z7_right,
@@ -1291,16 +1292,9 @@ end
 
 _zero!(fs::Field...) = (for f in fs; fill!(f.data, 0); end; nothing)
 
-# Σ_interior a·b dV at a common location
-function _dot_interior(a::Field, b::Field, g::RegularGrid)
-    ii, jj, kk = interior(g)
-    s = zero(eltype(a))
-    ad = a.data; bd = b.data
-    @inbounds for k in kk, j in jj, i in ii
-        s += ad[i,j,k]*bd[i,j,k]
-    end
-    return s * (g.dx*g.dy*g.dz)
-end
+# Σ_interior a·b dV at a common location, in the canonical (thread-invariant)
+# order of `Backends.interior_dot` (KA-b, #296)
+_dot_interior(a::Field, b::Field, g::RegularGrid) = interior_dot(a, b) * (g.dx*g.dy*g.dz)
 
 function _uvw_dot(u, v, w, tu, tv, tw, g::RegularGrid)
     return _dot_interior(u, tu, g) + _dot_interior(v, tv, g) + _dot_interior(w, tw, g)

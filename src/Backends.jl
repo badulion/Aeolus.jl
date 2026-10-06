@@ -151,6 +151,7 @@ The backend that owns array `x` (for a `Field`, its storage): for a host
 backend(::Array) = _host_backend()
 _host_backend() = (b = default_backend(); b isa CPUBackend ? b : CPUBackend())
 backend(x::SubArray) = backend(parent(x))
+backend(::AbstractArray) = _host_backend()     # other host arrays (reshapes, BitArrays, …)
 
 # =========================================================================
 # Allocation
@@ -545,6 +546,13 @@ end
 plane_partials!(partials::AbstractVector, f::F, ranges::NTuple{3,UnitRange{Int}},
                 arrays::Vararg{AbstractArray,M}) where {F, M} =
     plane_partials!(partials, backend(first(arrays)), f, ranges, arrays...)
+
+plane_partials!(partials::AbstractVector, b::AbstractBackend, f::F,
+                ranges::NTuple{3,AbstractUnitRange{<:Integer}}, arrays::Vararg{AbstractArray,M}) where {F, M} =
+    plane_partials!(partials, b, f, map(UnitRange{Int}, ranges), arrays...)
+plane_partials!(partials::AbstractVector, f::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
+                arrays::Vararg{AbstractArray,M}) where {F, M} =
+    plane_partials!(partials, backend(first(arrays)), f, map(UnitRange{Int}, ranges), arrays...)
 
 """
     ordered_sum(v) -> sum
