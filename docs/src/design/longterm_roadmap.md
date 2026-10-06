@@ -1110,18 +1110,44 @@ qualitatively.
 
 ---
 
-# Era VI — High-fidelity turbulence closure
+# Era VI — High-fidelity turbulence closure ✅ SHIPPED
 
 *The SGS model is the heart of LES. Make it defensible.*
 
-**Status: not started** (milestone 6: six issues, all open). Groundwork
-from the Berlin epic (#125), which does not satisfy Phase 54: the local
-Germano–Lilly scaffold moved into `Operators` as
-`compute_dynamic_smagorinsky_νt!` with Lilly plane averaging, after
-its M_ij sign was found wrong (C_s = 0 everywhere); in decaying
-turbulence it gives C_s 0.129 at t = 1 and 0.153 at t = 3 (Lilly 0.17),
-in the Berlin `:smoke` free stream only 0.077 (#132 / PR #160). There is
-no scale-dependent or Lagrangian-averaged model yet.
+**Status: all six phases (54–59) are merged.** That is the 29 issues
+#167–#195, merged as PRs #203–#231 on 2026-10-04/05, plus six follow-ups
+from the Technical-debt milestone (#232–#237 / PRs #240–#244, #271).
+Milestone 6 is still open: its six phase tracking issues #44–#49 have
+no open work left, but agents do not close issues, so closing them and
+the milestone is left to the maintainer. Era VI adds five src modules:
+`TurbulenceStability`, `WallModels`, `LargeScaleForcing`, `PrognosticSGS`
+and `Transition`. The closures themselves live in `Operators`. The era
+test set is 5,729 tests (17 `@test_broken`) on master at `511deda`:
+4,704 in the fast tier and 1,025 in the full-only validation runs. The
+count includes the files of the nesting epic (#246) that are filed under Era VI. The groundwork from before the era (#132 /
+PR #160) moved the local Germano–Lilly scaffold into `Operators` after
+its M_ij sign was found wrong (C_s = 0 everywhere).
+
+**Berlin defaults after the era.** The `:sgs` slot runs the Deardorff
+TKE closure (`:tke`), with the stress-form divergence, the diagonal
+scalar diffusivity, and qv and every tracer diffused with κ_t. Every
+eddy-viscosity provider is wrapped in `StabilityCorrected` (`:brown94`).
+TKE handles stratification itself, so it is not wrapped, by design
+(#233). The ground wall model takes a time-filtered input. The facade
+wall model is on, and TKE shear production at the facades matches the
+facade stress (#232). The `:geostrophic` coupling uses the geostrophic
+pressure gradient, with the sponge retargeted at U_g. `turbulence_diag`
+writes N², Ri_g, f_m, γ, the supercritical fraction and the
+relaminarised fraction. The surface exchange evaluates the maximum
+sustainable heat flux in every column. The following are options, not
+defaults: LASD (the default of the `:dynamic` provider), AMD, Vreman,
+σ, the Reynolds-stress closure, the isentropic tensor, the TBLE wall
+model and the dynamic z0.
+
+**Open after the era** (Technical debt, not Era VI milestone):
+#238, Berlin nights are implausible (37 °C at 03:00, heat island
+27.7 K, u* ≈ 0.001 m/s); #239, N² ignores condensate loading and
+saturated stability.
 
 ### Phase 54 — Production dynamic and scale-dependent SGS models
 Lagrangian-averaged scale-dependent dynamic Smagorinsky (Bou-Zeid,
@@ -1131,6 +1157,68 @@ without ad-hoc damping.
 **Validated by**: log-law recovery with no wall-damping function;
 resolved-scale spectra against DNS.
 
+**✅ SHIPPED** (`src/operators/sgs_closures.jl` and the Lagrangian
+model in `Operators`, #167, #168, #173, #174, #186 / PRs #207, #205,
+#212, #216, #224). What was built:
+- **SGS closure contract.** `AbstractSGSClosure`, a κ_t field and
+  θ-aware closures. A closure commits once per accepted step on every
+  core (Euler, RK3, IMEX, the anelastic core, and adaptive stepping
+  with rollback on a rejected try).
+- **LES toolbox.** Box, Gaussian and spectral filters, the isotropic
+  energy spectrum, a solenoidal initialiser and the Comte-Bellot &
+  Corrsin (CBC) benchmark.
+- **Lagrangian dynamic Smagorinsky** (Meneveau, Lund & Cabot 1996),
+  aware of the solid mask.
+- **Scale-dependent LASD** (Bou-Zeid et al. 2005), with a 5-cell second
+  filter and a coefficient cadence.
+- **Channel and half-channel case builders**, with Φ_m, total-stress
+  and E11 diagnostics.
+
+**Measured**:
+- The contract reproduces the old Smagorinsky paths bit for bit over
+  50 steps of three steppers, at 0.9 % overhead.
+- CBC at 32³, dynamic: K98/K42 +13.2 % and K171/K42 −3.6 %. At 64³:
+  −4.9 % and −17.6 %.
+- In isotropic turbulence the Lagrangian C_s is 0.1500, against the
+  plane-averaged 0.1539, at t = 3.
+- Half channel with Smagorinsky 0.17: the near-wall Φ_m overshoot
+  peaks at 1.629 (1.45–1.65 over 12 seeds).
+- LASD at 24³ with the 2Δ input filter, without wall damping: Φ_m stays
+  in 0.934–1.151 over 0.05–0.3 H (0.961–1.094 at 48³), and ⟨τ_w⟩ is
+  1.028 u*². Smagorinsky 0.1 at 32³ gives 0.965–1.589.
+- Berlin `:dynamic` with LASD at cadence 4: C_s 0.095 in the canopy
+  and 0.089 in the free stream (LASI: 0.037 / 0.033), at 25–33 ms per
+  step on the 64×64×32 mesh.
+
+**Bugs the tests caught**:
+- The spectrum measured the centre average of the staggered velocities.
+  As a result, fresh CBC fields carried 22.0 % too much kinetic energy
+  (13.7 % at 64³).
+- The masked Germano filter allocated 125 MB per call.
+- The 5-cell LASD filter reached into the mirrored halo at a free-slip
+  wall. That gave a spurious β ≈ 1 at the second level.
+
+**Expectations that were wrong**:
+- The 32³ CBC pass of K98 within ±10 % depended on the spectrum defect.
+  The measured value is now +13.2 %, kept as `@test_broken`.
+- β was tested as an arithmetic mean. The right statistics are the
+  geometric mean (1.03–1.06) and the median.
+- "LASD C_s within 10 % of LASI" fails on the domain mean (+10.5 to
+  +14.2 %), because C²_Δ is convex in a noisy φ.
+- "β → 1 above z/H ≈ 0.2": β crosses 1 about 10 cells from the wall,
+  wherever that falls in z/H.
+- Exactly zero ν_t in laminar shear for the Lagrangian model: it decays
+  geometrically, to 1.4e-8 of the start.
+
+**Not met**:
+- Resolved spectra were compared only with CBC, which is an experiment,
+  not DNS.
+- The k⁻⁵ᐟ³ range of E11 is not reproduced at 32³–48³ (fitted slopes
+  −4.27 and −3.48).
+- K171 within ±10 % fails for every closure but AMD at 32³.
+- The −17.6 % K171 deficit at 64³ is unexplained.
+- LASD is the default of a non-default provider.
+
 ### Phase 55 — Anisotropic and tensorial eddy viscosity
 Anisotropic minimum-dissipation (AMD) and Vreman models, plus a full
 tensorial eddy-diffusivity formulation for strongly stratified flow
@@ -1138,11 +1226,158 @@ where vertical and horizontal mixing differ by orders of magnitude.
 **Validated by**: stably stratified channel against DNS; GABLS1
 intercomparison.
 
+**✅ SHIPPED** (`Operators`, `WallModels` channel cases,
+`examples/sbl/driver.jl`; #175, #181, #176, #187, #191 / PRs #214, #218,
+#215, #225, #228). What was built:
+- **Stress-form SGS divergence** ∂_j(2ν_ij S_ij) with separate (ν_h, ν_v),
+  a generic `add_stress_divergence!`, an `sgs_stress` keyword on every
+  core, the IMEX split, and the stress-form diffusive CFL limit.
+- **Tensorial scalar diffusion**: a diagonal (κ_h, κ_v) operator, a
+  general symmetric K_ij in triad form, and a rotated isentropic tensor
+  with a slope taper.
+- **AMD** (with its scalar and buoyancy terms) and **Vreman** closures.
+- **`StabilityCorrected`**, which wraps any eddy-viscosity closure with
+  Ri_g stability functions from `TurbulenceStability`, anisotropic
+  length scales and Pr_t(Ri).
+- **A shared stable-boundary-layer (SBL) driver**, used by GABLS1 and the
+  stratified channel. `BusingerDyerLogLinear` moved into SurfaceExchange
+  so that there is one copy.
+
+**Measured**:
+- Stress form: solid-body rotation gives zero tendency (the Laplacian
+  form gives 2.33), and the discrete dissipation matches to 2.8e-16.
+- The stress form's spectral radius is 8νΣΔ⁻², twice the Laplacian's.
+  The corrected CFL limit costs one extra step in 1,647 over a Berlin
+  hour.
+- The isentropic tensor spreads a blob at 0.9977 / 1.0067 of 2κt along /
+  across the isentropes.
+- AMD is exactly zero in laminar shear and reaches zero at the critical
+  N²*. In CBC, AMD gives +9.9 % / −4.7 %, the first closure to meet
+  ±10 % on K171. Vreman gives +4.9 % / −12.7 %.
+- `StabilityCorrected`:
+  - Neutral case bit for bit with the base closure; analytic
+    stability functions to 6.1e-14.
+  - Internal wave: ω within 0.46 % of N k_x/|k|, with ν_v ≡ 0.
+  - Breaking wave: 23.4 % of the energy lost in 3 periods, against
+    5.5 % resolved only.
+  - Berlin: ν_v in the capping inversion is 2.3e-5 m²/s, against
+    8.1e-3 uncorrected. The flagship night mean κ_v/κ_h is 0.016.
+    Cost: +8 % per step, +5 % over the 21 h run.
+- GABLS1 at 64³, hours 8–9, Brown 1994:
+  - h 196.4 m (reference about 200).
+  - u* 0.284 m/s, 0.4 % above the range's upper end 0.283.
+  - w'θ'₀ −0.0134 K m/s, inside −0.0148 to −0.0094.
+  - Low-level jet 9.49 m/s at 191 m.
+  - At 32³, u* is 4–7 % above the range.
+- Stably stratified channel at Re_τ = 180, 32×32×48:
+  - U_b⁺ within 4.4 % of García-Villalba & del Álamo neutral, and
+    within 1.4 % / 2.7 % at Ri_τ = 18.
+  - Nu is over-predicted by 15 % and 9 % / 14 %.
+  - Nu(18)/Nu(0) is 0.63 / 0.67, against the DNS 0.667.
+
+**Bugs the tests caught**:
+- Vreman's B_β written as a sum of minors left 1e-10 m²/s on a
+  two-component shear. It is now in Cauchy–Binet form.
+- IMEX froze θ's κ_t for qv under AMD.
+- `step!` diffused θ with κ_h only while `step_imex!` used (κ_h, κ_v),
+  a relative error of 1.0.
+- The Laplacian-form CFL limit was 2× too permissive for the unprojected
+  stress form.
+
+**Expectations that were wrong**:
+- "AMD ν_t falls monotonically with N²" holds only where ∂w/∂z < 0.
+- "Breaking wave loses more than 30 %": measured 23.4 %.
+- "ν_v = ν_h where Ri ≤ 0" ignored the anisotropic length scales.
+- "The corrected closure gives a lower GABLS1 BL": it is deeper, 196.4 m
+  against 191.1 m.
+- "The corrected channel is closer to the DNS": it is not, at CI
+  resolution.
+- A Berlin dt_diff check used the Laplacian-form limit for the stress
+  form.
+
+**Not met**:
+- At Ri_τ = 60 the channel relaminarises (Nu 1.23, against the DNS
+  2.80). We attribute this to resolution.
+- The DNS at Re_τ = 550 is unaffordable wall-resolved.
+- AMD's CBC K98 is asserted to ±13 % (the reference spectrum is
+  uncertain by about 3 %).
+
 ### Phase 56 — Prognostic SGS energy and stress
 Deardorff prognostic TKE and, beyond it, a full differential
 Reynolds-stress SGS model for the cases where eddy viscosity fails
 (rapid rotation, strong stratification, flow around sharp obstacles).
 **Validated by**: SGS-stress comparison against filtered DNS fields.
+
+**✅ SHIPPED** (`src/PrognosticSGS.jl`, the a-priori harness in
+`Operators`; #177, #182, #178, #188, #192 / PRs #213, #219, #208, #223,
+#227; follow-ups #232 / PR #242, #235 / PR #244). What was built:
+- **SGS diffusion of qv and of every Berlin tracer** with κ_t, aware of
+  the solid mask. Before this, that physics was missing.
+- **Deardorff / Moeng TKE closure**, plus `wall_distance`. It is the
+  Berlin `:sgs` default.
+- **A-priori harness**: exact subfilter stress; Smagorinsky, Bardina and
+  gradient model stresses; metrics. It has a 96³ DNS fixture in the
+  suite and an offline 256³ record.
+- **Differential SGS Reynolds-stress closure** (Deardorff 1973; LRR-IP;
+  Schumann realizability), as an option.
+- **Validation against filtered DNS** (isotropic, rotating and
+  stratified decay) and a surface-mounted cube.
+
+**Measured**:
+- qv diffusion matches the discrete factor to 1.8e-15. The old code
+  gave a relative error of 2.3.
+- Berlin with tracer diffusion: ground-level pollutant maximum −27 %,
+  cost +4.5 %.
+- TKE closure:
+  - Neutral equilibrium C_s is 0.194413 = c_k^{3/4} c_ε^{-1/4}.
+  - Ri_c is 0.23313.
+  - Energy exchange closes to 2e-16.
+  - 64³ CBL: σ_w² peaks at 0.459 w*² at 0.351 z_i, against
+    Lenschow et al.'s 0.466 at 0.313 (RMS difference 0.035).
+- A priori at 256³ (Re_λ 78.6): Smagorinsky ρ_Π(4h) 0.832, matched C_s
+  0.099, Bardina ρ_Π 0.956, backscatter 21.1 %.
+- RSM: the shear equilibrium is exact to 1e-10, and the rotation
+  invariants hold to 1e-13.
+- Against filtered DNS (48³ DNS, 12³ LES):
+  - Rotating decay, KE error: RSM +6.4 %, Smagorinsky −11.9 %.
+    At 96³ the RSM error is 1.4 %.
+  - Stratified decay, τ₃₃/τ₁₁: DNS 0.700, RSM 0.762, TKE 1.002.
+- Surface-mounted cube, x_R/H: Smagorinsky 1.82, TKE 1.80, RSM 1.97,
+  against 1.612 (Martinuzzi & Tropea 1993).
+- In Berlin, RSM costs about 2× TKE, so TKE stays the default.
+- With the facade fix (#232): canopy shear production +71 %,
+  near-facade ν_t +5.3 %.
+
+**Bugs the tests caught**:
+- `step!` and `step_rk3!` never diffused qv, and moist `step_rk3!`
+  advanced qv with three Euler steps.
+- A backward-Euler RSM source flipped the sign of growing modes. The
+  realizability projection then added 3.96e4 m⁵/s² of energy.
+- The literal `2e0` in the constructor made every RSM closure built
+  with `e0` start at e = 1 m²/s².
+- `germano_lilly_cs` raised a DomainError.
+- A Berlin `sgs_dissipation` shadowed an export.
+- TKE production at wall-modelled facades booked a stencil flux the step
+  does not apply: 27.3 % of canopy production (#232).
+- The 256³ record failed Parseval (0.9967) because of the pre-#205
+  spectrum (#235).
+
+**Expectations that were wrong**:
+- "ρ_Π < 0.85 at 48³": Re_λ 32 is too low.
+- "ρ_Π falls monotonically with Re_λ": dropped on the maintainer's
+  decision.
+- "TKE and RSM isotropic KE within 10 %": measured −11.6 % / −11.7 %.
+- "TKE e within 25 % of ½τ_kk": measured 2.8×.
+- "RSM heat flux closer to the DNS than TKE's": the reverse holds.
+- "ρ(τ₃₃/τ₁₁) > 0.5": holds only up to T/4.
+- "Σ P_s V = −stencil sink with the facade model on" is physically
+  wrong.
+
+**Not met**:
+- TKE over-dissipates the CBC decay (−18.5 % / −34.4 %).
+- The cube's x_F is far too short (0.21–0.51, against 1.04).
+- RSM cannot run under IMEX.
+- RSM facade production has the inconsistency #232 fixed for TKE.
 
 ### Phase 57 — Wall models for high Reynolds number
 Equilibrium and non-equilibrium wall models, dynamic wall models, and a
@@ -1151,6 +1386,68 @@ wall-modelled LES of realistic urban flow.
 **Validated by**: Kim-Moin-Moser channel at several Reynolds numbers;
 comparison against wall-resolved reference.
 
+**✅ SHIPPED** (`src/WallModels.jl`, #169, #183, #179, #189, #190 / PRs
+#204, #220, #211, #221, #222). What was built:
+- **Equilibrium wall laws** (Spalding, rough log law, MOST), delegating
+  to SurfaceExchange, and an implicit `apply_wall_stress!` (local,
+  Schumann, Moeng). The Berlin ground stress is evaluated every step.
+- **Matching height, time filter and 2Δ input filter**
+  (`MatchingInput`). The Berlin ground takes the time-filtered input.
+- **Wall model on IBM and cut-cell walls.** Berlin
+  `wall_model_facades` is on by default.
+- **TBLE non-equilibrium wall model** with dynamic κ, as an option.
+- **Anderson–Meneveau dynamic z0**, as an option.
+
+**Measured**:
+- Spalding round trip 8.7e-15. Momentum is conserved to 1.3e-15, and
+  the operator is stable at 100× the explicit limit.
+- Log-layer mismatch against Lee & Moser, U_b⁺ error (first-cell
+  matching → matching height plus filters):
+
+  | Re_τ | 182 | 544 | 1000 | 5186 |
+  | :-- | :-- | :-- | :-- | :-- |
+  | U_b⁺ error | +5.58 → −1.24 % | −0.50 → −1.19 % | −0.59 → −1.40 % | −1.41 → −1.45 % |
+
+  Φ_m(Δz) goes from 1.70 to 1.47 at Re_τ 182 and from 1.24 to 0.93 at
+  5186.
+- IBM walls match z-walls to 3e-15, at U_b⁺ 19.18 (−4.0 % against
+  Lee & Moser). Without the model it is 13.86.
+- The 30° cut-cell channel gives ⟨τ_w⟩ 0.990.
+- Berlin facades carry 9.3 % of the surface drag. The stencil drag
+  they replace was 33× the modelled drag.
+- TBLE:
+  - Stokes I converges at second order.
+  - After a sudden tripling of dp/dx, τ_w gets half-way in
+    5.965 δ/u_τ, against the resolved reference 5.960 (equilibrium:
+    6.255).
+  - In Berlin, the street stresses differ from the equilibrium ones
+    by more than 30 % in 77 % of columns, at +9.4 % stage cost.
+- Dynamic z0: u* is grid-invariant to within 4.5 % from 32² to 16²,
+  against +9 % to +10.6 % with a fixed α.
+
+**Bugs the tests caught**:
+- With `wind` given, the wall-stress operator scaled the stress by
+  U1/U_in. The #169 test had encoded the wrong formula.
+- Matching the dynamic κ on the stress is degenerate.
+- TBLE `:full` with centred convection was unstable.
+
+**Expectations that were wrong**:
+- "|u⁺ − log law| < 1e-3 at y⁺ = 1e4": Spalding itself differs by
+  2.506e-3 there.
+- "2× lower U_b⁺ error at Re_τ 1000": first-cell matching is already
+  within 1 %.
+- "The matching height lowers the rough-wall Φ_m peak": the peak is the
+  Smagorinsky overshoot, which the wall model does not control.
+- "TBLE within 1 % of Spalding at h⁺ = 30": −3.0 %, because the buffer
+  layer differs.
+- "Stencil drag more than 10× the modelled drag": measured 3.8×.
+
+**Not met**:
+- The 2× reduction at Re_τ 1000.
+- Dynamic z0 of a cube array is 5.8× Macdonald (1998).
+- Berlin keeps first-cell matching, because 3 cells is in the canyon.
+- The cut-cell wall model is not in Berlin.
+
 ### Phase 58 — Stable-boundary-layer and intermittent turbulence
 The hardest regime in boundary-layer meteorology: very stable
 stratification, intermittent turbulence, gravity-wave-turbulence
@@ -1158,12 +1455,153 @@ interaction, and the correct behaviour as the flow relaminarises.
 **Validated by**: GABLS2, GABLS3, GABLS4 intercomparison cases;
 CASES-99 observations.
 
+**✅ SHIPPED** (`src/TurbulenceStability.jl`, `src/LargeScaleForcing.jl`,
+the MSHF in `SurfaceExchange`, `examples/sbl/`; #170, #171, #193, #194 /
+PRs #203, #210, #229, #231; follow-up #237 / PR #243). What was built:
+- **Stability functions of Ri_g** (Lilly, Brown et al. 1994, short and
+  long tail, MOST-consistent) and N² / Ri_g fields. The fog column and
+  both cores delegate to them.
+- **`LargeScaleForcing`**: geostrophic pressure gradient, nudging,
+  advective tendencies and a T_s series. It replaces both example
+  copies.
+- **Maximum sustainable heat flux** (Van de Wiel et al. 2012) and a LES
+  collapse test.
+- **GABLS2, GABLS3, GABLS4 and CASES-99** on the SBL driver.
+
+**Measured**:
+- MOST round trip of K_m 5.4e-11. The log-linear critical Ri is
+  0.199996.
+- Ekman veer 44.74°. Inertial oscillation 6.5e-8 of the
+  ageostrophic speed.
+- MSHF: the closed form matches to 1e-8.
+- Collapse LES:
+  - At H = 2 H_max, the lowest third keeps 2.8 % of the neutral TKE,
+    with γ = 0.
+  - At H = 0.5 H_max it keeps 83.2 %.
+  - The first-level wind is 1.253–1.257 U₀, against the predicted
+    2^{1/3} = 1.260.
+- GABLS3:
+  - CI grid (25 m): jet 9.07 m/s at 94.9 m. Envelope 7.8–9.3 m/s at
+    100–130 m.
+  - 6.25 m: jet 7.70 m/s at 126.8 m; U(10 m) 2.62 m/s, inside
+    2.41–2.83.
+  - 3.125 m: profiles on the LES median.
+- GABLS4 exp. 3 at 2 m, against the six 1 m LES:
+  - u* 0.092 m/s and H −11.0 W/m² are inside.
+  - h 30.7 m is outside (14.5–19.5).
+  - L 4.6 m is outside (6.5–9.9).
+  - θ* 0.125 K is outside (0.07–0.12).
+- GABLS2 at 30 h, corrected: H −23.0 W/m², u* 0.192 m/s and h 100 m
+  are inside the SCM ranges. Uncorrected, H and h are outside.
+- CASES-99 hockey stick, at 30 m only: V_s 7.56 m/s and slope 0.17,
+  against 6.5 m/s and about 0.25 (Sun et al. 2012).
+- Berlin at 03:00: every stable column is beyond the MSHF point. The
+  night has no jet and u* 0.001–0.002 m/s (the very stable regime 1).
+
+**Bugs the tests caught**:
+- Random initial perturbations were not divergence-free, which gave θ
+  swings of ±20 K.
+- Under the pressure gradient, the Berlin sponge drained the mean wind
+  to 0.12 m/s. Nudging had hidden this.
+- The GABLS4 reference counted CSIRO's 3.9 / 1.17 m run as 1 m (#237).
+- Couvreux et al. (2020) Table 5 is shifted by one hour.
+
+**Expectations that were wrong**:
+- "N² within 2× of the dry value": the vapour term takes about 2/3 off.
+- "A nocturnal low-level jet in Berlin": the 200 m domain is too
+  shallow.
+- "One H_max separates both regimes": the bulk value is 0.032 × the
+  wall value.
+- "Whole-domain TKE below 5 % at 20 H/u*": it gets there at 40 H/u*.
+- "GABLS3 jet height at CI resolution": 5–7 m low, kept as
+  `@test_broken`.
+- The GABLS4 h range of 14.5–25 m.
+
+**Not met**:
+- GABLS4 h, L and θ*.
+- The CASES-99 shape at 10 m and 50 m.
+- GABLS4 was not run at 1 m, and GABLS3 not on the 800 m cube.
+- All the runs are dry.
+- Calm soil columns deliver more than H_max (linearised skin).
+
 ### Phase 59 — Transition and laminar-turbulent coexistence
 Handle flows that are partly laminar: nocturnal boundary layers,
 low-Reynolds regions in a cut-cell wake, and the transition process
 itself.
 **Validated by**: transition location in a flat-plate boundary layer;
 relaminarisation in a strongly stable case.
+
+**✅ SHIPPED** (`src/Transition.jl`, `NoSlipWall` in BoundaryConditions,
+the σ-model in `Operators`; #172, #184, #180, #185, #195 / PRs #209,
+#217, #206, #226, #230; follow-up #236 / PR #271). What was built:
+- **No-slip and moving walls**, with IMEX support.
+- **σ-model** (Nicoud et al. 2011), with closed-form singular values,
+  as the Berlin `:sigma` option.
+- **`Transition` diagnostics**: γ, intermittency, Ri_f, Re_b, V_TKE and
+  growth-rate fits, in the Berlin `turbulence_diag`.
+- **Flat-plate boundary layer**: a fringe that shares `add_sponge!`'s
+  profile, Blasius inflow and free-stream disturbances.
+- **Relaminarisation**: criteria, the `laminar_consistent` trait, and
+  the Berlin relaminarised fraction.
+
+**Measured**:
+- Couette 2.7e-15. Poiseuille converges at order 2.0000.
+- σ-model:
+  - Exactly zero for shear, rotation and 2-D flow. Near-wall slope
+    2.955 (z³).
+  - The Kelvin–Helmholtz growth rate with σ equals the no-model 0.1820.
+  - CBC: +6.6 % / −11.1 %.
+- Kelvin–Helmholtz growth rate 0.1864, against Michalke's 0.1897
+  (−1.76 %). At Miles–Howard J = 0.15 it grows (σ 0.0391); at
+  J = 0.30 it decays.
+- T3A-like plate at 576×64×96:
+  - Downstream c_f 1.057–1.135 × the turbulent correlation (target:
+    within 20 %).
+  - Onset at Re_θ 198 (Mayle 190, Abu-Ghannam & Shaw 200).
+  - A 3-D control at Tu 0.1 % stays laminar.
+- Relaminarisation:
+  - Laminar flow: the σ closure stays exactly zero.
+  - Cooled open channel at Re_τ 360: survives at h/L 0.45 and collapses
+    at 0.50, on 48³ and on 96³. The critical value is about 0.474,
+    against Nieuwstadt's 0.492 in the κ-including convention (−4 %).
+- Berlin winter, before dawn: 4.0 % of stable cells relaminarised
+  (4.1 % with σ). The background ν = 2 m²/s dominates this.
+
+**Bugs the tests caught**:
+- `growth_rate` windows took in the seed transient and the start of
+  saturation (0.1859).
+- Mixed z boundary pairs were built, then failed in `fill_halos!`.
+- The example's critical-h/L bracket always returned NaN.
+
+**Expectations that were wrong**:
+- "Smagorinsky is nonzero for solid-body rotation".
+- "σ gives exactly zero in Berlin's free stream", which is weakly 3-D.
+- The original factor-3 miss against Nieuwstadt: Aeolus puts κ in L,
+  so his 1.23 is 0.492 in our convention.
+- The coarse T3A grid (1.26–1.39) was the grid, not the code.
+- A single-seed L11 assertion.
+
+**Not met**:
+- At Re_τ 180, survival at h/L 0.3 fails (critical 0.12).
+- Flores & Riley's L⁺ ≈ 100 cannot be reconciled with Nieuwstadt.
+- h/L 0.45 was not re-run on 96³.
+- σ is off by default.
+
+### Era VI — known limitations carried forward
+
+- **The Berlin flagship night is not physical** (#238): 37 °C at 03:00,
+  a 27.7 K heat island, u* ≈ 0.001 m/s. Its constant ν = 2 m²/s is
+  about 100× the night-time SGS κ, so it hides most of the closure
+  differences measured above.
+- **N²** uses dry or vapour-only θ_v. It has no condensate loading and
+  no moist-adiabatic stability (#239). AMD's buoyancy term uses dry θ.
+- **The SBL validation runs are dry.** The Boussinesq `step_rk3!` does
+  not advance qv.
+- **Resolution-limited misses**: the K171 CBC deficit, the stratified
+  channel at Ri_τ = 60, collapse at Re_τ 180, and GABLS4 at 2 m.
+- **Option-only closures** wait on a maintainer decision to become
+  defaults, measured at their cost: LASD, AMD, Vreman, σ, RSM, TBLE and
+  the dynamic z0.
 
 ---
 
