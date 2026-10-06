@@ -2,8 +2,11 @@ module Fields
 
 using ..Grids
 using ..Grids: AbstractMesh, totalsize, CellCenter, FaceX, FaceY, FaceZ, Location
+using ..Backends: Backends, AbstractBackend, allocate, default_backend, launch!, range_map!,
+                  plane_partials!, interior_sum, interior_dot, plane_mean!, interior_max,
+                  interior_all_finite
 
-export Field, location, mesh, interior_view, set!
+export Field, location, mesh, interior_view, set!, interior_map!
 
 """
     Field{L, T, A, M}
@@ -20,12 +23,23 @@ mutable struct Field{L<:Location, T<:AbstractFloat, A<:AbstractArray{T}, M<:Abst
     mesh::M
 end
 
-function Field(loc::Location, mesh::AbstractMesh{T}) where {T}
-    data = zeros(T, totalsize(mesh))
+"""
+    Field(loc, mesh; backend = default_backend())
+    Field(mesh; backend = default_backend())        # CellCenter
+
+A zero field at `loc` on `mesh`, its storage (interior plus halos)
+allocated on `backend` ([`Backends.allocate`](@ref Aeolus.Backends.allocate)).
+"""
+function Field(loc::Location, mesh::AbstractMesh{T};
+               backend::AbstractBackend = default_backend()) where {T}
+    data = allocate(backend, T, totalsize(mesh))
     return Field{typeof(loc), T, typeof(data), typeof(mesh)}(data, mesh)
 end
 
-Field(mesh::AbstractMesh) = Field(CellCenter(), mesh)
+Field(mesh::AbstractMesh; kw...) = Field(CellCenter(), mesh; kw...)
+
+"The backend that owns `f`'s storage."
+Backends.backend(f::Field) = Backends.backend(f.data)
 
 """
     location(field) -> Location
@@ -65,31 +79,91 @@ function interior_view(f::Field)
     return view(f.data, ii, jj, kk)
 end
 
+# ---- set!: the first KA kernels and the pattern example (KA-a, #294) ----------
+#
+# A kernel is a plain body `body!(i, j, k, args...)` that updates the one
+# point (i, j, k) given in storage indices; `launch!` walks the ranges
+# (serially in the old `for k, for j, for i` order, or threaded). The body
+# gets everything it reads as arguments — no closures over globals — and
+# carries its own @inbounds. Pointwise, so every path gives the same bits
+# as the loops it replaced.
+
+@inline function _set_function_body!(i, j, k, data, g::G, xs, ys, zs, oi, oj, ok) where {G}
+    @inbounds data[i, j, k] = g(xs[i - oi], ys[j - oj], zs[k - ok])
+    return nothing
+end
+
+@inline function _set_value_body!(i, j, k, data, v)
+    @inbounds data[i, j, k] = v
+    return nothing
+end
+
 """
     set!(f::Field, g::Function)
 
 Populate `f`'s interior with `g(x, y, z)` at that location's physical coords.
-Halos are left untouched — call `fill_halos!` afterwards.
+Halos are left untouched — call `fill_halos!` afterwards. A pointwise
+kernel ([`launch!`](@ref Aeolus.Backends.launch!)): threaded when Julia
+has threads, bit-identical to a serial loop.
 """
 function set!(f::Field, g::Function)
     loc = location(f)
     m   = f.mesh
     xs = Grids.xnodes(m, loc); ys = Grids.ynodes(m, loc); zs = Grids.znodes(m, loc)
     ii, jj, kk = Grids.interior(m)
-    @inbounds for (kk_, kv) in enumerate(kk), (jj_, jv) in enumerate(jj), (ii_, iv) in enumerate(ii)
-        f.data[iv, jv, kv] = g(xs[ii_], ys[jj_], zs[kk_])
-    end
+    checkbounds(f.data, ii, jj, kk)
+    (length(xs), length(ys), length(zs)) == (length(ii), length(jj), length(kk)) ||
+        throw(DimensionMismatch("set!: node vectors do not match the interior"))
+    launch!(Backends.backend(f), _set_function_body!, (ii, jj, kk), f.data, g, xs, ys, zs,
+            first(ii) - 1, first(jj) - 1, first(kk) - 1)
     return f
 end
 
+"""
+    set!(f::Field, value::Real)
+
+Set every interior value of `f` to `value` (halos untouched). A pointwise
+kernel, bit-identical serially and threaded.
+"""
 function set!(f::Field, value::Real)
     v = eltype(f)(value)
     ii, jj, kk = Grids.interior(f.mesh)
-    @inbounds for k in kk, j in jj, i in ii
-        f.data[i, j, k] = v
-    end
+    checkbounds(f.data, ii, jj, kk)
+    launch!(Backends.backend(f), _set_value_body!, (ii, jj, kk), f.data, v)
     return f
 end
+
+# ---- field-level map and reductions over the interior ------------------------
+
+_data(f::Field) = f.data
+_data(x) = x
+
+"""
+    interior_map!(f, out::Field, args...) -> out
+
+`out[i,j,k] = f(args[1][i,j,k], args[2][i,j,k], …)` over the interior of
+`out`'s mesh; an argument may be a `Field` (same mesh) or a number. E.g.
+an axpy, `interior_map!((y, x) -> y + a * x, y, y, x)`. Pointwise: the
+same bits serially and threaded. Halos are untouched.
+"""
+function interior_map!(f::F, out::Field, args...) where {F}
+    for a in args
+        a isa Field && (size(a.data) == size(out.data) ||
+                        throw(DimensionMismatch("interior_map!: fields of different sizes")))
+    end
+    range_map!(Backends.backend(out), f, out.data, Grids.interior(out.mesh), map(_data, args)...)
+    return out
+end
+
+# The canonical, thread-invariant reductions (Backends) over a field's interior.
+Backends.interior_sum(f::Field) = interior_sum(Backends.backend(f), f.data, Grids.interior(f.mesh))
+Backends.interior_dot(a::Field, b::Field) =
+    interior_dot(Backends.backend(a), a.data, b.data, Grids.interior(a.mesh))
+Backends.interior_max(f::Field) = interior_max(Backends.backend(f), f.data, Grids.interior(f.mesh))
+Backends.interior_all_finite(f::Field) =
+    interior_all_finite(Backends.backend(f), f.data, Grids.interior(f.mesh))
+Backends.plane_mean!(profile::AbstractVector, f::Field) =
+    plane_mean!(profile, Backends.backend(f), f.data, Grids.interior(f.mesh))
 
 function Base.show(io::IO, f::Field{L,T}) where {L,T}
     print(io, "Field{$L,$T}(mesh=$(f.mesh))")
