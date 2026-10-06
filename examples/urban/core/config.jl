@@ -38,6 +38,15 @@ Groups of fields:
   provider wraps its closure in, `Operators.StabilityCorrected`, P55-e
   #187: `:brown94` (default, Brown et al. 1994), `:lilly`, `:long_tail`,
   `:short_tail`, `:most`, or `:none` for the uncorrected closure);
+* **lateral boundaries** (N-open-d, #262; `core/open_boundary.jl`) —
+  `lateral` (`:periodic`, default, or `:open`: the four sides and the
+  top fed by `ProfileBoundaryData` of the geostrophic wind and the initial
+  θ profile; transitional until the nested default of #265), `outflow`
+  (`:dirichlet`, default, `:convective` or `:orlanski`: the outflow
+  condition of the open faces, N-open-c #260), `boundary_frame` (cells:
+  buildings closer than this to an open face are removed; default 3) and
+  `θ_relaxation` (default `true`: with `:open`, θ is relaxed toward the
+  data's profile over the velocity sponge layer);
 * **initial state** — `θ_surface`, `θ_inversion_z`, `θ_lapse` (θ(z) =
   θ_surface + max(0, z − θ_inversion_z)·θ_lapse), `u0`, `qv0`, `qv_scale`
   (qv(z) = qv0·exp(−z/qv_scale)), `Ts0` and `Ts_water_offset` (surface
@@ -90,6 +99,11 @@ Base.@kwdef mutable struct CaseConfig
     sponge_α_max::Float64             = 0.05
     sponge_frac::Float64              = 0.75
     θ_top::Union{Symbol,Float64}      = :initial_gradient
+    # lateral boundaries (N-open-d, #262)
+    lateral::Symbol                   = :periodic
+    outflow::Symbol                   = :dirichlet
+    boundary_frame::Int               = 3
+    θ_relaxation::Bool                = true
     # initial state
     θ_surface::Float64                = 293.0
     θ_inversion_z::Float64            = 100.0

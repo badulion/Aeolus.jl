@@ -118,7 +118,7 @@ function build(::Type{<:TurbulenceDiag}, case, o)
     sm = case.geom.sm.mask
     fluid = [!sm[m.Hx+i, m.Hy+j, m.Hz+k] for i in 1:m.Nx, j in 1:m.Ny, k in 1:m.Nz]
     cc() = Field(CellCenter(), m)
-    p = core_parameters(case.cfg)
+    p = case.sim                       # the core's own conditions (periodic or open, #262)
     z() = zeros(m.Nz)
     return TurbulenceDiag(turbulence_stability_family(o.stability),
                           Field(FaceX(), m), Field(FaceY(), m), Field(FaceZ(), m), cc(), cc(),
@@ -264,7 +264,10 @@ laminar-consistent closure gives exactly 0.
 """
 function laminar_flow_νt(closure, case)
     m = case.mesh; sim = case.sim; cfg = case.cfg
-    s = boussinesq_core(cfg, m)
+    # a horizontally uniform flow: a laterally periodic scratch core, also
+    # for an open case (#262)
+    pcfg = deepcopy(cfg); pcfg.lateral = :periodic
+    s = boussinesq_core(pcfg, m)
     fill!(s.θ.data, cfg.θ₀)
     ui = interior_view(sim.u); vi = interior_view(sim.v)
     for k in 1:m.Nz

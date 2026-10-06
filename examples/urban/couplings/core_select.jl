@@ -118,7 +118,7 @@ function build_core(C::Type{<:MassWeightedCore}, cfg, mesh, ref, simkw)
     isempty(bad) || error("coupling :$(coupling_name(C)): the sim_options keyword(s) " *
                           "$(join(bad, ", ")) are not keywords of the sound-proof core " *
                           "(it takes $(join(MASS_WEIGHTED_SIM_KEYWORDS, ", ")))")
-    return _mass_weighted_type(C)(mesh; core_parameters(cfg)..., ref = ref.state,
+    return _mass_weighted_type(C)(mesh; core_parameters(cfg, mesh)..., ref = ref.state,
                                   buoyancy = true, simkw...)
 end
 

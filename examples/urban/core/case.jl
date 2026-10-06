@@ -37,9 +37,10 @@ slot's anelastic / pseudo-incompressible provider), `geom`
 order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
 NetCDF `output` (or `nothing`), the `io` for log lines, the composed
 `step!` hooks, `timing` (wall seconds per `(stage, coupling)`, see
-[`timing_report`](@ref)) and `top` — the heat flux through a
+[`timing_report`](@ref)), `top` — the heat flux through a
 fixed-gradient θ top ([`TopHeatFlux`](@ref), `nothing` for a closed
-lid).
+lid) — and `open`, the heat of the open faces of a `lateral = :open`
+case ([`OpenBoundaryHeat`](@ref), `nothing` for a periodic one).
 """
 mutable struct Case{M, S, G<:Geometry}
     cfg::CaseConfig
@@ -60,6 +61,7 @@ mutable struct Case{M, S, G<:Geometry}
     timing::Dict{Tuple{Symbol,Symbol},Float64}
     step_kwargs::NamedTuple      # extra step! keywords from the couplings' step_options
     top::Union{Nothing,TopHeatFlux}   # the fixed-gradient θ top's heat flux (#254)
+    open::Union{Nothing,OpenBoundaryHeat}   # the open faces' heat (#262)
 end
 
 "The enabled coupling called `name`, or `nothing`."
@@ -89,16 +91,18 @@ function solar_position_at(cfg::CaseConfig, hour::Real)
 end
 
 """
-    core_parameters(cfg) -> NamedTuple
+    core_parameters(cfg, mesh) -> NamedTuple
 
 The keyword arguments every dynamical core of the case shares: viscosity,
-gravity, Coriolis, Smagorinsky, sponge and the boundary conditions:
-periodic laterally, walls at the bottom and the top for the velocity;
-for θ no flux at the ground (the surface fluxes enter as tendencies) and
-[`θ_top_bc`](@ref)`(cfg)` at the top (`cfg.θ_top`; default the
-fixed-gradient top, #254).
+gravity, Coriolis, Smagorinsky, sponge and the boundary conditions of
+[`case_boundary_conditions`](@ref) (`cfg.lateral`, #262): for the
+default periodic case periodic laterally, walls at the bottom and the
+top for the velocity; for θ no flux at the ground (the surface fluxes
+enter as tendencies) and [`θ_top_bc`](@ref)`(cfg)` at the top
+(`cfg.θ_top`; default the fixed-gradient top, #254). For `:open`, the
+open boundary set and the sponge target of its open top.
 """
-core_parameters(cfg::CaseConfig) = (
+core_parameters(cfg::CaseConfig, mesh) = (
     ν              = cfg.ν,
     g_accel        = cfg.g,
     f_coriolis     = cfg.f_coriolis,
@@ -106,12 +110,11 @@ core_parameters(cfg::CaseConfig) = (
     Pr_t           = cfg.Pr_t,
     sponge_α_max   = cfg.sponge_α_max,
     sponge_z_start = cfg.sponge_frac * cfg.extent[3],
-    bcs   = FieldBoundaryConditions(:periodic, :periodic, :wall),
-    θ_bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = θ_top_bc(cfg)))
+    case_boundary_conditions(cfg, mesh)...)
 
 "The dry Boussinesq core of the case (buoyancy about the constant `cfg.θ₀`)."
 boussinesq_core(cfg::CaseConfig, mesh; kw...) =
-    BoussinesqSimulation(mesh; core_parameters(cfg)..., θ₀ = cfg.θ₀, moisture = false, kw...)
+    BoussinesqSimulation(mesh; core_parameters(cfg, mesh)..., θ₀ = cfg.θ₀, moisture = false, kw...)
 
 """
     build_case(cfg; io = stdout) -> Case
@@ -156,7 +159,19 @@ function build_case(cfg::CaseConfig; io::IO = stdout)
     case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), ledger, ref,
                 AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
                 nothing, io, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
-                top_heat_flux(cfg, sim, ref))
+                top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref))
+    # a building the box edge cuts is solid on the open faces (#262): zero
+    # velocity there, and no mass-flux correction through it; then the open
+    # faces get their data before any stage reads them (the transport runs
+    # before the first dynamics step, whose prepare_open_boundaries! would
+    # come too late: with empty buffers the first transport saw u = 0 on the
+    # open faces and moved 14 % of the edge cells' vapour across them)
+    if has_open_boundaries(sim)
+        mark_open_boundary_solids!(sim.bcs, geom.sm.mask)
+        prepare_open_boundaries!(sim)
+        fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+        fill_halos!(sim.θ, sim.θ_bcs)
+    end
 
     # Core moisture tracers. qv and ql are advected by the :transport
     # stage; KNOWN: qr is sedimented by the microphysics but never

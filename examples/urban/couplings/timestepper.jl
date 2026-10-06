@@ -203,7 +203,7 @@ function advance_dynamics!(c::AdaptiveStep, case, dt)
                                     max_retries = c.max_retries, scheme = c.scheme,
                                     divergence_tol = c.divergence_tol,
                                     max_velocity = c.max_velocity, sgs = sgs)
-        book_top_flux!(case, used)       # the accepted piece's top-face heat (#254)
+        book_dynamics_heat!(case, used)  # the accepted piece's top / open-face heat (#254, #262)
         remaining -= used
         nretry += r
         piece_min = min(piece_min, used)
@@ -287,7 +287,7 @@ function advance_dynamics!(c::IMEXStep, case, dt)
     step_imex!(sim, dt, c.scheme; body_force! = case.body_force,
                post_predictor! = case.post_predictor, workspace = ws,
                tol = c.tol, maxit = c.maxit, case.step_kwargs...)
-    book_top_flux!(case, dt)             # the step's top-face heat (#254)
+    book_dynamics_heat!(case, dt)        # the step's top / open-face heat (#254, #262)
     c.stats.pieces += 1
     _record_dt!(c.stats, dt, cfl)
     c.stats.imex_iterations, c.stats.imex_residual = ws.total_iterations, ws.max_residual
