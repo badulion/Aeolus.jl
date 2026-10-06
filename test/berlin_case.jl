@@ -11,6 +11,7 @@ using Test
 using Aeolus
 using Aeolus.Fields: interior_view
 using Printf
+import Dates
 
 isdefined(Main, :BerlinCase) ||
     include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
@@ -244,8 +245,13 @@ const BC = Main.BerlinCase
             # (dt ≤ 4 s, capped at the soil cadence) after the firing
             t = f["time"].var[:]
             @test 12.0 <= t[1] < 16.0 && t[2] ≈ 24.0
-            # CF time axis: the case start in UTC (06 local CEST = 04 UTC)
-            @test f["time"].attrib["units"] == "seconds since 2019-06-29 04:00:00"
+            # CF time axis in UTC: the decoded time plus the UTC offset is
+            # the local hour of the record (the smoke case starts 12 CEST)
+            utc = f["time"][:]
+            local_h = [Dates.hour(u) + Dates.minute(u) / 60 + Dates.second(u) / 3600 +
+                       c2.cfg.utc_offset for u in utc]
+            @test f["time"].attrib["units"] == "seconds since 2019-06-29 10:00:00"
+            @test local_h ≈ f["hour"][:] atol = 1e-3
             @test all(isfinite, Array(f["theta"]))
         end
     end
