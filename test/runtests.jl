@@ -843,6 +843,7 @@ using Aeolus.Fields: set!, interior_view
     include("logging_blowup.jl")      # #335: blowup diagnose-dump-stop, run monitor
     include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
     include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
+    include("config_simulation_driver.jl")  # CFG-b (#357): simulation driver, bitwise round trip, resume, TGV
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

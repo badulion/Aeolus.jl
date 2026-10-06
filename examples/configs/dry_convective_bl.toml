@@ -1,0 +1,46 @@
+# Dry convective boundary layer (formerly examples/dry_convective_bl.jl),
+# roughly after Sullivan & Patton (2011, JAS), simplified and coarse (a
+# smoke run, not a reference): 3200 × 3200 × 1600 m on 32³, periodic in
+# x and y, free-slip walls in z, surface heat flux w'θ' = 0.24 K m/s, a
+# mixed layer of θ₀ = 300 K capped at z_i = 800 m by Γ = 3 K/km, noise of
+# 0.1 K in the lowest 100 m, a Rayleigh sponge in the upper quarter and
+# Smagorinsky-Lilly with C_s = 0.17, Pr_t = 1/3. Five minutes.
+#
+#   julia --project -m Aeolus run examples/configs/dry_convective_bl.toml
+
+[run]
+driver = "simulation"
+name = "dry_convective_bl"
+seed = 1
+
+[grid]
+size = [32, 32, 32]
+extent = [3200.0, 3200.0, 1600.0]
+
+[dynamics]
+theta0 = 300.0
+g = 9.81
+sponge_alpha_max = 0.01
+sponge_z_start = 1200.0
+
+[boundaries]
+z = "free_slip"
+theta_flux_bottom = 0.24
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.17
+pr_t = 0.3333333333333333
+
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 800.0, lapse = 0.003 }
+perturbation_amplitude = 0.1
+perturbation_depth = 100.0
+
+[stepper]
+scheme = "euler"
+dt = 5.0                        # min(0.3 dx / w*, the SGS diffusive limit, 5 s); w* ≈ 1.85 m/s
+end_time = 300.0
+
+[logging]
+diagnostics_cadence = 60.0

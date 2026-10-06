@@ -90,6 +90,10 @@ include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, adve
 include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 include("PrognosticSGS.jl")        # Phase 56 Deardorff prognostic SGS TKE (#182)
 
+# CFG-b (#357): the bare-simulation run driver (needs the dynamical cores,
+# so after them; the driver contract and the CLI are in Config).
+include("config/simulation_driver.jl")
+
 using .RunLog
 using .Grids
 using .Fields
@@ -240,6 +244,9 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
 # CFG-a (#356): run configuration (schema building: Aeolus.Config)
 export RunConfig, ConfigError, load_run_config, with, to_toml, write_config, config_text,
        config_hash, register_driver!
+# CFG-b (#357): the driver contract, run_config, the bare-simulation driver.
+# `Aeolus.main` (the `julia -m Aeolus` entry point) is not exported.
+export AbstractRunDriver, run_config, state_fields
 # #334: run folder and provenance
 export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
        provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,
