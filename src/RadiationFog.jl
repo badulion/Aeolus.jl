@@ -73,7 +73,7 @@ using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
                              isobaric_saturation_adjustment,
                              heat_capacity_moist, latent_heat_vapor,
                              saturation_specific_humidity, exner_function
-using ..Backends: AbstractBackend, plane_map!, ordered_sum, backend
+using ..Backends: AbstractBackend, plane_map!, ordered_sum, backend, foreach_column!
 
 # Era III radiation and Era IV droplet physics the fog column delegates to
 # (issue #9): no optics or transfer is computed in this module.
@@ -334,11 +334,19 @@ function dew_exchange!(qv::AbstractArray{<:Real}, q_dew::AbstractMatrix,
                        out::Union{Nothing,AbstractMatrix} = nothing)
     Nx, Ny = size(Ts)
     H = out === nothing ? zeros(Float64, Nx, Ny) : fill!(out, 0)
-    @inbounds for j in 1:Ny, i in 1:Nx
+    # one work item per column (KA-m, #301): a column touches only its own
+    # air cell, reservoir and H
+    foreach_column!(backend(Ts), _dew_exchange_column!, (1:Nx, 1:Ny), qv, q_dew, Ts, H,
+                    p, dt, dz, ρ, C_e, U, c; weight = 16)
+    return H
+end
+
+@inline function _dew_exchange_column!(i, j, qv, q_dew, Ts, H, p, dt, dz, ρ, C_e, U, c)
+    @inbounds begin
         q = ndims(qv) == 3 ? qv[i, j, 1] : qv[i, j]
         r = dew_deposition(q, Ts[i, j], p, dt; dz = dz, ρ = ρ, C_e = C_e,
                            U = U, dew = q_dew[i, j], c = c)
-        r.mass == 0 && continue
+        r.mass == 0 && return nothing
         if ndims(qv) == 3
             qv[i, j, 1] = q + r.Δqv
         else
@@ -347,7 +355,7 @@ function dew_exchange!(qv::AbstractArray{<:Real}, q_dew::AbstractMatrix,
         q_dew[i, j] = max(q_dew[i, j] + r.mass, 0.0)
         H[i, j] = r.surface_heat / dt
     end
-    return H
+    return nothing
 end
 
 include("radiation_fog/coupling.jl")

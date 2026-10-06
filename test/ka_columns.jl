@@ -248,4 +248,21 @@ end
     end
 end
 
+@testset "RadiationFog: dew_exchange! per column" begin
+    MT = Aeolus.MoistThermodynamics
+    rng = Xoshiro(17)
+    Ts = 280 .+ 8 .* rand(rng, 20, 14)
+    q0 = [MT.saturation_specific_humidity(T, 1.0e5) * (0.9 + 0.2rand(rng)) for T in 282 .+ 4 .* rand(rng, 20, 14)]
+    d0 = ifelse.(rand(rng, 20, 14) .< 0.5, 1e-3 .* rand(rng, 20, 14), 0.0)
+    ref = nothing
+    for (lab, b) in KC_BACKENDS, three in (false, true)
+        q = three ? reshape(copy(q0), 20, 14, 1) : copy(q0); d = copy(d0)
+        H = with_backend(() -> dew_exchange!(q, d, Ts, 1.0e5, 60.0; dz = 4.0, ρ = 1.2), b)
+        r = (vec(q), d, H)
+        ref === nothing && (ref = r)
+        @test all(n -> kc_bits(r[n]) == kc_bits(ref[n]), 1:3)
+    end
+    @test count(!=(0), ref[3]) > 50                     # dew forms and evaporates
+end
+
 end # testset KA-m
