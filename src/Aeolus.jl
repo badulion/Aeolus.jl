@@ -21,7 +21,6 @@ include("IO.jl")
 include("NetCDFIO.jl")        # dependency-free NetCDF-3 reader/writer
 include("IBM.jl")
 include("Parallel.jl")
-include("Nesting.jl")
 include("Backends.jl")
 include("SpectralElement.jl")
 include("Chemistry.jl")
@@ -36,7 +35,8 @@ include("AdvectionSchemes.jl")  # Phases 26, 28
 include("TimeIntegration.jl")   # Phases 23, 25
 include("Anelastic.jl")         # Phase 27
 include("Multigrid.jl")         # Phase 29
-include("AdaptiveMesh.jl")      # Phases 30-31
+include("Nesting.jl")          # Phase 30 parent-child operators (N-nest-a, #250)
+include("AdaptiveMesh.jl")      # Phase 31 AMR (delegates to Nesting)
 
 # --- Era III: high-fidelity radiation (Phases 32-38) ---------------------
 # MoistThermodynamics (Era IV, Phase 39) is dependency-free and defines the
@@ -99,7 +99,6 @@ using .NetCDFIO
 using .Microphysics
 using .IBM
 using .Parallel
-using .Nesting
 using .Backends
 using .SpectralElement
 using .Radiation
@@ -114,6 +113,7 @@ using .AdvectionSchemes
 using .TimeIntegration
 using .Anelastic
 using .Multigrid
+using .Nesting
 using .AdaptiveMesh
 
 using .RadiationCore
@@ -219,7 +219,6 @@ export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
        implicit_ibm_correction!, wall_distance, first_level_cells   # + P56-b (#182)
 export AbstractPartition, SerialPartition, PencilPartition,
        nranks, is_serial, exchange_halos_distributed!
-export NestSpec, apply_one_way_forcing!, apply_two_way_feedback!
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
@@ -303,7 +302,7 @@ export MultigridPoissonSolver, MGPreconditionedCG,
        mg_vcycle!, mg_solve!, mg_residual_norm,
        mg_level_count, mg_iteration_history
 
-# Phases 30-31 — production nesting + block-structured AMR
+# Phase 30 — parent-child nesting (Aeolus.Nesting); Phase 31 — block-structured AMR
 export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
        NestBC, nest_bcs,
@@ -313,7 +312,10 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        mismatch_l1, mismatch_area,
        NestSponge, apply_nest_sponge!,
        NestInterpState, nest_interp_state, interpolate_parent_state!,
+       nest_scalar_names, apply_nest_boundary!,
+       restrict_state_to_parent!, reflux!, reflux_scalars!,
        step_nested!, nest_conservation_error, composite_integral,
+       NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask,
        RefinementBlock, AMRHierarchy, amr_hierarchy,
        refinement_criterion_gradient, refinement_criterion_vorticity,
        refinement_criterion_richardson, combine_criteria,

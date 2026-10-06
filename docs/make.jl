@@ -28,6 +28,7 @@ makedocs(
             "Fractional-step projection"  => "theory/fractional_step.md",
             "Smagorinsky-Lilly SGS"       => "theory/sgs.md",
             "Discrete Poisson & FFT"      => "theory/poisson.md",
+            "Grid nesting: conservative staggered prolongation" => "theory/nesting.md",
             "Stretched vertical grid"     => "theory/stretched_grid.md",
             "Radiative transfer"          => "theory/radiation.md",
             "Era IV overview: clouds and microphysics" => "theory/era4_overview.md",
@@ -100,7 +101,8 @@ makedocs(
                 "Advection schemes"            => "api/era2/advection.md",
                 "Anelastic dynamics"           => "api/era2/anelastic.md",
                 "Multigrid"                    => "api/era2/multigrid.md",
-                "Nesting and AMR"              => "api/era2/adaptive_mesh.md",
+                "Nesting"                      => "api/era2/nesting.md",
+                "Block-structured AMR"         => "api/era2/adaptive_mesh.md",
             ],
             "Era III — radiation" => [
                 "Overview"                     => "api/era3.md",
