@@ -337,4 +337,36 @@ end
     @test fftw_policy().planner === :estimate
 end
 
+# ---------------------------------------------------------------------------
+# Across processes: plans are made anew in every process, so this is where
+# the FFTW policy matters (test/fixtures/checkpoint_subprocess.jl).
+# ---------------------------------------------------------------------------
+@testset "cross-process: ESTIMATE reruns and a PATIENT restart with saved wisdom" begin
+    dir = mktempdir()
+    script = joinpath(@__DIR__, "fixtures", "checkpoint_subprocess.jl")
+    proj = dirname(Base.active_project())
+    for role in ("first", "second")
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$proj $script $role $dir`
+        @test success(pipeline(cmd; stdout = devnull, stderr = devnull))
+    end
+    ld(f) = deserialize(joinpath(dir, f))
+    e1, e2 = ld("estimate_first.jls"), ld("estimate_second.jls")
+    @test e1.fftw.planner === :estimate && e1.fftw.bitwise_reproducible
+    @test all(k -> e1.fields[k] == e2.fields[k], keys(e1.fields))     # two processes, bitwise
+    @test ck_same(e1.closure, e2.closure)
+    pc, pr = ld("patient_continuous.jls"), ld("patient_restart.jls")
+    @test pc.fftw.planner === :patient && pr.fftw.planner === :patient
+    @test pr.fftw.wisdom_loaded && pr.fftw.bitwise_reproducible       # the restart reloaded the plans
+    @test pc.t === pr.t
+    @test all(k -> pc.fields[k] == pr.fields[k], keys(pc.fields))     # restart in a new process, bitwise
+    @test ck_same(pc.closure, pr.closure)
+    # the two planners solve the same problem: round-off apart (bitwise they
+    # may differ: on this grid the PATIENT plan's pressure differed from the
+    # ESTIMATE one in the last bit when measured, which is why the restart
+    # needs the saved wisdom)
+    @test maximum(abs, pc.fields.u .- e1.fields.u) < 1e-10
+    @info "cross-process: PATIENT vs ESTIMATE, max |Δu| = $(maximum(abs, pc.fields.u .- e1.fields.u))"
+    rm(dir; recursive = true)
+end
+
 end # testset
