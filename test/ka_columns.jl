@@ -187,4 +187,65 @@ end
     end
 end
 
+@testset "Chemistry: dry deposition per column, total in column order" begin
+    rng = Xoshiro(9)
+    c0 = 10 .+ rand(rng, 30, 20, 8); vd = 0.01 .* rand(rng, 30, 20); kk = rand(rng, 0:9, 30, 20)
+    for (lab, b) in KC_BACKENDS, (v, k) in ((vd, kk), (0.004, 2), (vd, 1))
+        ca, cb = copy(c0), copy(c0)
+        rb = LC.apply_dry_deposition!(cb, v, 30.0; dz = 2.0, k = k)
+        ra = Aeolus.Chemistry.apply_dry_deposition!(ca, v, 30.0; dz = 2.0, k = k, backend = b)
+        @test kc_bits(ca) == kc_bits(cb) && kc_bits(ra) == kc_bits(rb)
+    end
+end
+
+@testset "UrbanSurface: facet column steps, one work item per facet" begin
+    hm = zeros(8, 6); hm[3:4, :] .= 12; hm[6, 2:5] .= 20
+    sc = Aeolus.Radiosity.build_scene(hm, 4.0, 4.0; wall_subdivisions = 2)
+    vf = Aeolus.Radiosity.view_factors(sc)
+    air = SurfaceForcing(sw_down = 500.0, lw_down = 330.0, T_air = 295.0, U = 3.0, q_air = 0.008)
+    function run(b, kw)
+        u = UrbanFacetScene(sc, vf; T = 290.0, options = f -> (T_interior = 293.0,))
+        fl = with_backend(b) do
+            local fl
+            for _ in 1:3
+                fl = step_urban_facets!(u, air, 600.0; kw...)
+            end
+            fl
+        end
+        return vcat(facet_temperatures(u), [f.H for f in fl], [f.G for f in fl],
+                    reduce(vcat, [f.column.T for f in u.facets]))
+    end
+    for kw in ((;), (solver = :direct,), (coupling = :lagged,))
+        ref = run(CPUBackend(serial = true), kw)
+        @test kc_bits(run(CPUBackend(threshold = 0), kw)) == kc_bits(ref)
+        @test kc_bits(run(CPUBackend(), kw)) == kc_bits(ref)
+    end
+    # a facet listed twice would be stepped twice (and by two work items)
+    u = UrbanFacetScene(sc, vf; T = 290.0)
+    @test_throws ArgumentError UrbanFacetScene(sc, vf, vcat(u.facets[1:end-1], u.facets[1:1]))
+end
+
+@testset "WallModels: dynamic roughness per column" begin
+    WM = Aeolus.WallModels
+    Nx, Ny, r = 32, 8, 4
+    dx = 2π / Nx
+    xf = [(i - 0.5) * dx / r for i in 1:Nx*r]
+    hf = [0.02 * sin(3x) + 0.006 * sin(10x) + 0.004 * cos(2y) for x in xf, y in xf[1:Ny*r]]
+    st = WM.subfilter_height(hf, r; dx = dx, dy = dx, filter = :box)
+    uc = 3 .+ 0.3 .* randn(Xoshiro(12), Nx, Ny); vc = 0.3 .* randn(Xoshiro(13), Nx, Ny)
+    mask = rand(Xoshiro(14), Nx, Ny) .< 0.85
+    res = map(KC_BACKENDS) do (lab, b)
+        with_backend(b) do
+            dr = WM.DynamicRoughness(st; z0_floor = 1e-5, C_d = 0.3, mask = mask)
+            WM.update_dynamic_roughness!(dr, uc, vc, 0.05)
+            (dr.α, dr.converged, copy(dr.z0), collect(WM.roughness_surface_drag(dr, uc, vc, 0.05)))
+        end
+    end
+    @test res[1][2]                                     # a root was found
+    for r in res[2:end]
+        @test kc_bits(r[1]) == kc_bits(res[1][1]) && kc_bits(r[3]) == kc_bits(res[1][3]) &&
+              kc_bits(r[4]) == kc_bits(res[1][4])
+    end
+end
+
 end # testset KA-m

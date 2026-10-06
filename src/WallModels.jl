@@ -124,6 +124,7 @@ using ..Simulations: BoussinesqSimulation, step_rk3!
 using ..Operators: laplacian
 using ..BoundaryConditions: NoSlipWall
 using ..TimeSteppers: step!
+using ..Backends: Backends, foreach_column!, column_sums
 using Random
 using ..SurfaceExchange
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,

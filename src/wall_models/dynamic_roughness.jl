@@ -332,43 +332,65 @@ end
 
 # The parts of the plane-mean drag at both scales that do not depend on α:
 # per column A = κ² |u| u·ê (the modelled stress is A/ln²(z/z0)), and the
-# plane-mean resolved drag along ê, R_Δ and R_Δ̂.
+# plane-mean resolved drag along ê, R_Δ and R_Δ̂. Every column is one work
+# item (KA-m, #301) and the plane sums are its partials, folded in
+# column-major order — the old loops' order, so the same bits at every
+# thread count.
 function _drag_parts(dr::DynamicRoughness{T}, uc, vc, ut, vt) where {T}
     s = dr.stats
     κ = T(von_karman(dr.c))
-    n = 0; ub = zero(T); vb = zero(T)
-    @inbounds for I in eachindex(uc)
-        _in(dr.mask, I) || continue
-        ub += uc[I]; vb += vc[I]; n += 1
-    end
+    b = Backends.backend(uc)
+    cols = (axes(uc, 1), axes(uc, 2))
+    P = foreach_column!(b, _mean_wind_column, cols, dr.mask, uc, vc;
+                        partials = zeros(T, length(uc), 3))
+    ub, vb, nf = column_sums(P)
+    n = Int(nf)
     n > 0 || throw(ArgumentError("DynamicRoughness: no column in the mask"))
     M = hypot(ub, vb)
     ex, ey = M > 0 ? (ub / M, vb / M) : (one(T), zero(T))
     A1 = zeros(T, size(uc)); A2 = zeros(T, size(uc))
-    R1 = zero(T); R2 = zero(T)
-    @inbounds for I in eachindex(uc)
-        _in(dr.mask, I) || continue
-        u1, v1, u2, v2 = T(uc[I]), T(vc[I]), T(ut[I]), T(vt[I])
-        A1[I] = κ^2 * hypot(u1, v1) * (u1 * ex + v1 * ey)
-        A2[I] = κ^2 * hypot(u2, v2) * (u2 * ex + v2 * ey)
-        f1 = surface_gradient_drag(u1, v1, s.dhx[I], s.dhy[I]; C_d = dr.C_d)
-        f2 = surface_gradient_drag(u2, v2, s.dhxt[I], s.dhyt[I]; C_d = dr.C_d)
-        R1 -= f1[1] * ex + f1[2] * ey
-        R2 -= f2[1] * ex + f2[2] * ey
-    end
+    Q = foreach_column!(b, _drag_column, cols, dr.mask, A1, A2, uc, vc, ut, vt, s, κ, ex, ey,
+                        T(dr.C_d); partials = zeros(T, length(uc), 2))
+    R1, R2 = column_sums(Q)
     return A1, A2, R1 / n, R2 / n, n
 end
 
-# The residual F(α) = D_Δ̂(α) − D_Δ(α), from the parts.
-function _residual(dr::DynamicRoughness{T}, α, A1, A2, R1, R2, n, h) where {T}
-    s = dr.stats; z0f = dr.z0_floor
-    W = zero(T)
-    @inbounds for I in eachindex(A1)
-        _in(dr.mask, I) || continue
-        z = T(_hval(h, I))
-        W += A2[I] / log(z / _dyn_z0(z0f[I], α, s.σ2t[I]))^2 - A1[I] / log(z / _dyn_z0(z0f[I], α, s.σ2[I]))^2
+@inline function _mean_wind_column(i, j, mask, uc, vc)
+    I = CartesianIndex(i, j)
+    _in(mask, I) || return (zero(eltype(uc)), zero(eltype(uc)), 0.0)
+    return @inbounds (uc[I], vc[I], 1.0)
+end
+
+@inline function _drag_column(i, j, mask, A1, A2, uc, vc, ut, vt, s, κ, ex, ey, C_d::T) where {T}
+    I = CartesianIndex(i, j)
+    _in(mask, I) || return (zero(T), zero(T))
+    @inbounds begin
+        u1, v1, u2, v2 = T(uc[I]), T(vc[I]), T(ut[I]), T(vt[I])
+        A1[I] = κ^2 * hypot(u1, v1) * (u1 * ex + v1 * ey)
+        A2[I] = κ^2 * hypot(u2, v2) * (u2 * ex + v2 * ey)
+        f1 = surface_gradient_drag(u1, v1, s.dhx[I], s.dhy[I]; C_d = C_d)
+        f2 = surface_gradient_drag(u2, v2, s.dhxt[I], s.dhyt[I]; C_d = C_d)
+        # R -= f·ê, as a partial: 0 - x₁ - x₂ … ≡ 0 + (-x₁) + (-x₂) … exactly
+        return (-(f1[1] * ex + f1[2] * ey), -(f2[1] * ex + f2[2] * ey))
     end
+end
+
+# F(α) at one α: per column (one work item each), summed in column-major
+# order (the old loop's), so thread-invariant and the same bits.
+function _residual(dr::DynamicRoughness{T}, α, A1, A2, R1, R2, n, h) where {T}
+    P = foreach_column!(Backends.backend(A1), _residual_column, (axes(A1, 1), axes(A1, 2)),
+                        dr.mask, dr.z0_floor, dr.stats, A1, A2, h, α;
+                        partials = zeros(T, length(A1), 1), weight = 8)
+    W = column_sums(P)[1]
     return W / n + (R2 - R1)
+end
+
+@inline function _residual_column(i, j, mask, z0f, s, A1::AbstractArray{T}, A2, h, α) where {T}
+    I = CartesianIndex(i, j)
+    _in(mask, I) || return zero(T)
+    z = T(_hval(h, I))
+    return @inbounds A2[I] / log(z / _dyn_z0(z0f[I], α, s.σ2t[I]))^2 -
+                     A1[I] / log(z / _dyn_z0(z0f[I], α, s.σ2[I]))^2
 end
 
 # Test-filtered column velocities (the filter of the statistics).
