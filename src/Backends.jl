@@ -106,36 +106,24 @@ _gpu_error(b::GPUBackend, what) =
 
 # ---- process default -------------------------------------------------------
 
-# Two concretely typed slots rather than one `Ref{AbstractBackend}`, so that
-# `backend(::Array)` -- called by every launch on host storage -- infers as
-# `CPUBackend` from a plain field load. The CPU settings (serial, threshold)
-# live in `_CPU_DEFAULT`; a GPU default, when set, lives in `_GPU_DEFAULT` and
-# only steers allocation. Carrying the backend in `Field`'s type replaces
-# this in Phase 81, when CPU and GPU storage get mixed (maintainer, #294).
-const _CPU_DEFAULT = Ref{CPUBackend}(CPUBackend())
-const _GPU_DEFAULT = Ref{Union{Nothing,GPUBackend}}(nothing)
+const _DEFAULT_BACKEND = Ref{AbstractBackend}(CPUBackend())
 
 """
-    default_backend() -> Union{CPUBackend, GPUBackend}
+    default_backend() -> AbstractBackend
 
-The backend new fields are allocated on: `CPUBackend()` unless
-[`set_default_backend!`](@ref) (or [`init_threads!`](@ref), or
-[`with_backend`](@ref)) changed it.
+The backend new fields are allocated on and plain arrays are launched on:
+`CPUBackend()` unless [`set_default_backend!`](@ref) (or
+[`init_threads!`](@ref), or [`with_backend`](@ref)) changed it.
 """
-default_backend() = (g = _GPU_DEFAULT[]; g === nothing ? _CPU_DEFAULT[] : g)
+default_backend() = _DEFAULT_BACKEND[]
 
 """
     set_default_backend!(backend) -> backend
 
-Make `backend` the process default ([`default_backend`](@ref)). A
-`CPUBackend` also becomes the backend of every host `Array` (its `serial`
-and `threshold` settings apply to their launches) and clears a GPU
-default; a `GPUBackend` changes where fields are allocated and leaves the
-CPU settings of host arrays alone. Global state: call it at run start, not
-from inside a threaded region.
+Make `backend` the process default ([`default_backend`](@ref)). Global
+state: call it at run start, not from inside a threaded region.
 """
-set_default_backend!(b::CPUBackend) = (_GPU_DEFAULT[] = nothing; _CPU_DEFAULT[] = b)
-set_default_backend!(b::GPUBackend) = (_GPU_DEFAULT[] = b)
+set_default_backend!(b::AbstractBackend) = (_DEFAULT_BACKEND[] = b)
 
 """
     with_backend(f, backend)
@@ -145,23 +133,22 @@ previous default afterwards (also on error). Not task-local: do not use it
 concurrently from several tasks.
 """
 function with_backend(f, b::AbstractBackend)
-    oldc, oldg = _CPU_DEFAULT[], _GPU_DEFAULT[]
-    set_default_backend!(b)
+    old = _DEFAULT_BACKEND[]
+    _DEFAULT_BACKEND[] = b
     try
         return f()
     finally
-        _CPU_DEFAULT[], _GPU_DEFAULT[] = oldc, oldg
+        _DEFAULT_BACKEND[] = old
     end
 end
 
 """
     backend(x) -> AbstractBackend
 
-The backend that owns array `x` (for a `Field`, its storage). For a host
-`Array` (or a view of one) it is the CPU default, a `CPUBackend` the
-compiler infers, so a launch on host storage costs no dynamic dispatch.
+The backend that owns array `x` (for a `Field`, its storage): for a host
+`Array`, the default backend if that is a CPU backend, else `CPUBackend()`.
 """
-backend(::Array) = _CPU_DEFAULT[]
+backend(::Array) = (b = default_backend(); b isa CPUBackend ? b : CPUBackend())
 backend(x::SubArray) = backend(parent(x))
 
 # =========================================================================

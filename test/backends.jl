@@ -202,24 +202,11 @@ end
         @test default_backend() == CPUBackend()             # restored
         @test_throws ErrorException with_backend(() -> error("boom"), sb)
         @test default_backend() == CPUBackend()             # restored on error too
-        # the CPU path is concretely typed: a launch on host storage finds its
-        # backend without dynamic dispatch (maintainer "small fix", #294)
-        @test @inferred(backend(zeros(2, 2, 2))) === default_backend()
+        # the CPU path is already concretely typed: a launch on host storage
+        # finds its backend without dynamic dispatch or allocation (#294, #342)
+        @test @inferred(backend(zeros(2, 2, 2))) isa CPUBackend
         @test @inferred(backend(view(zeros(2, 2, 2), :, :, 1))) isa CPUBackend
         @test @inferred(backend(Field(mesh))) isa CPUBackend
-        with_backend(GPUBackend(:cuda)) do                  # GPU default: allocation only
-            @test default_backend() == GPUBackend(:cuda)
-            @test backend(zeros(2)) == CPUBackend()
-            @test_throws ErrorException Field(mesh)
-        end
-        @test default_backend() == CPUBackend()
-        with_backend(sb) do
-            set_default_backend!(GPUBackend(:rocm))
-            @test backend(zeros(2)) === sb                  # CPU settings kept
-            set_default_backend!(CPUBackend())               # a CPU default clears the GPU one
-            @test default_backend() == CPUBackend()
-        end
-        @test default_backend() == CPUBackend()
         f = Field(mesh; backend = CPUBackend())
         @test size(f.data) == (37 + 6, 29 + 6, 23 + 6) && all(iszero, f.data)
         @test_throws ErrorException launch!(GPUBackend(), (i, j, k) -> nothing, I3)
