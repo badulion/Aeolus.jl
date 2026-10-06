@@ -208,7 +208,7 @@ end
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm; moisture=true,
                                 bcs=FieldBoundaryConditions(:periodic, :periodic, :wall))
-    csim = BoussinesqSimulation(cm; moisture=true, bcs=nest_bcs(:nest, :nest, :wall))
+    csim = BoussinesqSimulation(cm; moisture=true, bcs=nest_bcs(cm, :nest, :nest, :wall))
     fill!(psim.θ.data, 300.0); fill!(csim.θ.data, 300.0)
     fill!(psim.qv.data, 0.010); fill!(csim.qv.data, 0.0)
     step_nested!(psim, csim, nest, 0.5)
@@ -230,10 +230,9 @@ end
 # two-way steps. The free stream must be preserved to round-off on both
 # grids, no vertical motion may appear, and θ must stay within the
 # initial bounds up to the advection scheme's own dispersive undershoot.
-# Dirichlet interface faces (impose_interface=true) are used: with the
-# NestBC default (free interface faces) the N-nest-a step_nested! amplifies
-# round-off at the nest corners on a *uniform* parent too (reported on
-# #256; the NestBC path is retired by N-nest-d, #261).
+# The child's nest faces are N-nest-d's OpenBoundary faces fed by the
+# parent (#261), which replaced both the free NestBC faces (unstable at
+# the nest corners, reported on #256) and the impose_interface option.
 @testset "free stream and a warm blob through the nest on a stretched parent (30 steps)" begin
     zf = surface_refined_faces(dz_surface=50, z_uniform=500, z_top=1500, ratio=1.08)
     pm = StretchedGrid(Float64; size=(12, 12, length(zf) - 1), extent=(600.0, 600.0, 1500.0),
@@ -242,7 +241,7 @@ end
                        halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm; bcs=FieldBoundaryConditions(:periodic, :periodic, :wall))
-    csim = BoussinesqSimulation(cm; bcs=nest_bcs(:nest, :nest, :wall))
+    csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :nest, :nest, :wall))
     fill!(psim.u.data, 2.0)
     for k in axes(psim.θ.data, 3), j in axes(psim.θ.data, 2), i in axes(psim.θ.data, 1)
         psim.θ.data[i, j, k] = 300 + 0.5 * exp(-((i - 6)^2 + (j - 6)^2 + (k - 6)^2) / 4)
@@ -253,7 +252,7 @@ end
     st = ntuple(_ -> nest_interp_state(nest, psim, csim), 3)
     lo = Inf; hi = -Inf
     for n in 1:30
-        step_nested!(psim, csim, nest, 2.0; state=st, impose_interface=true)
+        step_nested!(psim, csim, nest, 2.0; state=st)
         lo = min(lo, minimum(interior_view(csim.θ))); hi = max(hi, maximum(interior_view(csim.θ)))
     end
     du = max(maximum(abs, interior_view(csim.u) .- 2), maximum(abs, interior_view(psim.u) .- 2))
@@ -310,7 +309,7 @@ function _anelastic_pair(; T_surf=_T30, child_T=T_surf, r=(2, 2, 4), ref_fn=noth
     rp = ref_fn === nothing ? isothermal_reference(pm; T_surf) : ref_fn(pm)
     rc = ref_fn === nothing ? isothermal_reference(cm; T_surf=child_T) : ref_fn(cm)
     pA = AnelasticSimulation(pm; ref=rp)
-    cA = AnelasticSimulation(cm; ref=rc, bcs=nest_bcs(:nest, :nest, :wall))
+    cA = AnelasticSimulation(cm; ref=rc, bcs=nest_bcs(cm, :nest, :nest, :wall))
     return pm, nest, cm, pA, cA
 end
 
@@ -331,7 +330,7 @@ end
     @test mis2 > 1e-3
     @test_throws ErrorException nest_measure(nest2, pB, cB)
     # a pseudo-incompressible child under an anelastic parent is refused
-    cP = PseudoIncompressibleSimulation(cm; ref=cA.ref, bcs=nest_bcs(:nest, :nest, :wall))
+    cP = PseudoIncompressibleSimulation(cm; ref=cA.ref, bcs=nest_bcs(cm, :nest, :nest, :wall))
     @test_throws ErrorException nest_measure(nest, pA, cP)
 end
 

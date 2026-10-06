@@ -180,7 +180,8 @@ end
                        halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm; moisture=true)
-    csim = BoussinesqSimulation(cm; moisture=true, bcs=nest_bcs(:nest))
+    csim = BoussinesqSimulation(cm; moisture=true,
+                                bcs=nest_bcs(cm; moisture=true, scalars=(:tr,)))
     _randfill!(psim.θ, 300.0, 2.0); _randfill!(csim.θ, 301.0, 2.0)
     _randfill!(psim.qv, 0.008, 1e-3); _randfill!(csim.qv, 0.009, 1e-3)
     trp = _ccopy(psim.θ, pm); trc = _ccopy(csim.θ, cm)
@@ -225,7 +226,8 @@ end
     nest = nested_grid(pm, ((0.3, 0.6), (0.2, 0.7), (0.2, 0.5)), (2, 3, 4); halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm; moisture=true)
-    csim = BoussinesqSimulation(cm; moisture=true, bcs=nest_bcs(:nest))
+    csim = BoussinesqSimulation(cm; moisture=true,
+                                bcs=nest_bcs(cm; moisture=true, scalars=(:co2,)))
     trp = Field(CellCenter(), pm); trc = Field(CellCenter(), cm)
     sc = (:co2 => (trc, trp),)
     st = nest_interp_state(nest, psim, csim; scalars=sc)
@@ -275,8 +277,9 @@ end
     nest = nested_grid(pm, ((0.25, 0.5), (0.25, 0.5), (0.0, 1.0)), (3, 3, 1); halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm; moisture=true)
-    csim = BoussinesqSimulation(cm; moisture=true, bcs=nest_bcs(:nest, :nest, :periodic),
-                                solver=Aeolus.PressureSolvers.FFTPoissonSolver(cm))
+    csim = BoussinesqSimulation(cm; moisture=true,
+                                bcs=nest_bcs(cm, :nest, :nest, :periodic; moisture=true,
+                                             scalars=(:co2,)))
     fill!(psim.θ.data, 300.0); fill!(csim.θ.data, 300.0)
     fill!(psim.qv.data, 0.010); fill!(csim.qv.data, 0.0)      # dry child, moist parent
     trp = Field(CellCenter(), pm); trc = Field(CellCenter(), cm)
@@ -424,21 +427,32 @@ end
 # interior face plane of every velocity component, also along directions
 # that are not nest faces. For a child periodic in x the plane i = Hx+1 is
 # the child's own interior face, so the parent's u was written into the
-# child's interior every step.
-@testset "impose_interface acts only along nest directions" begin
+# child's interior every step. Since N-nest-d (#261) the boundary face of
+# the normal velocity belongs to the OpenBoundary of a nest face, and a
+# periodic direction has none: the same assertions hold by construction.
+@testset "the boundary face is imposed only on nest faces" begin
     pm = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
     nest = nested_grid(pm, ((0.0, 1.0), (0.0, 1.0), (0.25, 0.75)), 2; halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm); fill!(psim.u.data, 2.0); fill!(psim.w.data, 0.5)
-    csim = BoussinesqSimulation(cm; bcs=nest_bcs(:periodic, :periodic, :nest),
-                                solver=Aeolus.PressureSolvers.FFTPoissonSolver(cm))
+    csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :periodic, :periodic, :nest))
+    @test nest_open_sides(csim) == (false, false, false, false, true, true)
     fill!(csim.u.data, 1.0); fill!(csim.w.data, 0.0)
     st = nest_interp_state(nest, psim, csim)
     interpolate_parent_state!(st, psim, nest; region=:all)
-    apply_nest_boundary!(csim, st; impose_interface=true)
+    apply_nest_boundary!(csim, st)
     ii, jj, kk = interior(cm)
     @test all(==(1.0), csim.u.data[first(ii), jj, kk])      # x periodic: untouched
     @test all(==(0.5), csim.w.data[ii, jj, first(kk)])      # z nest: imposed
+    @test all(==(0.5), csim.w.data[ii, jj, last(kk) + 1])   # the top face too
+    # the tangential velocity and θ halos hold the parent (Dirichlet)
+    @test maximum(abs, csim.u.data[ii, jj, first(kk) - 1] .- 2.0) < 1e-14
+    # a nest face needs the child mesh (it holds per-face buffers)
+    @test_throws ArgumentError nest_bcs(:nest)
+    # the run's field set and the child's open faces must agree
+    cw = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :periodic, :periodic, :nest;
+                                               scalars=(:co2,)))
+    @test_throws ArgumentError apply_nest_boundary!(cw, st)
 end
 
 end # Era II — Nesting operators

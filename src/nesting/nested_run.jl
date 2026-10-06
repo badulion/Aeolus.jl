@@ -4,7 +4,9 @@
 #     domain's hooks and keywords, calling any dynamical core by dispatch;
 #   * NestedRun     — parent + child + NestedGrid + boundary buffers +
 #     schedule (subcycling under adaptive steppers, or a shared minimum
-#     dt) + feedback (one-way / two-way) + statistics;
+#     dt) + feedback (one-way / two-way) + statistics. The child's nest
+#     faces are OpenBoundary faces fed by a NestBoundaryData (N-nest-d,
+#     #261): every core refreshes them itself at its stage times;
 #   * step_nested!  — one parent step of a NestedRun; the positional
 #     method is the historical fixed-dt two-way entry point, now a thin
 #     wrapper over a NestedRun.
@@ -20,9 +22,9 @@ A per-domain `advance!(sim, dt)` closure built by [`domain_advance`](@ref):
 a dynamical core plus the hooks and keywords that domain's steps must
 carry (`body_force!`, `post_predictor!`, `momentum_advection`, `sgs`,
 `sgs_stress`, …). Calling it, `adv(sim, dt)`, runs
-`core(sim, dt, args...; kwargs...)`; a [`NestedRun`](@ref) additionally
-passes its own boundary-data hook, which is chained *after* the domain's
-own `post_predictor!`.
+`core(sim, dt, args...; kwargs...)`. A caller may pass an extra
+`post_predictor!` hook, `adv(sim, dt; post_predictor! = f)`, which is
+chained *after* the domain's own.
 """
 struct DomainAdvance{F, A<:Tuple, K<:NamedTuple}
     core::F
@@ -41,7 +43,7 @@ core is called through dispatch, so no step logic is copied:
 | `step!` (default)               | Boussinesq projection step, or the anelastic / pseudo-incompressible step of a `MassWeightedSimulation` |
 | `step_rk3!`                     | SSP-RK3 Boussinesq step                                |
 | `step_imex!, ARK2()`            | IMEX ARS(2,2,2) step (or `Rosenbrock2()`)              |
-| any `f(sim, dt, args...; kw...)`| a user core; it must accept `post_predictor!` if it is the child of a run |
+| any `f(sim, dt, args...; kw...)`| a user core |
 
 ```julia
 child_adv = domain_advance(step_rk3!; body_force! = ibm_force!,
@@ -82,6 +84,10 @@ evaluates its tendencies, i.e. the times at which it reads the boundary
 data in the halos: `(0,)` for the projection step (`step!`, Boussinesq or
 sound-proof) and for a user core, `(0, 1, 1/2)` for SSP-RK3
 (Shu & Osher 1988), `(0, γ)` for ARK2 and `(0, a₂₁)` for Rosenbrock2.
+The cores' own open-boundary refresh (`update_open_boundaries!` at each
+projected stage's end time; for SSP-RK3 the boundary buffers are combined
+with the fields' weights) puts the time-blended parent data
+`B(t₀ + cᵢΔt)` in the child's halos at exactly these times.
 """
 stage_times(a::DomainAdvance) = _stage_times(a.core, a.args)
 _stage_times(core, args) = (0.0,)
@@ -89,24 +95,6 @@ _stage_times(::typeof(step_rk3!), args) = (0.0, 1.0, 0.5)
 _stage_times(::typeof(step_imex!), args) = _imex_stage_times(args[1])
 _imex_stage_times(s::ARK2) = (0.0, Float64(s.γ))
 _imex_stage_times(s::Rosenbrock2) = (0.0, Float64(s.a21))
-
-# The time whose boundary data the k-th `post_predictor!` call of one step
-# writes into the halos (`t0` = step start, `dt` = step, `h` = the stage
-# increment the core passes to the hook). The halos must hold B(t0 + cᵢ dt)
-# when stage i computes its tendencies.
-#
-# Projection step, IMEX stages, sound-proof step: the halo is not combined
-# by the core, and the stage being formed ends at t0 + h → write B(t0 + h).
-#
-# SSP-RK3: the core combines the *whole* arrays, halos included:
-# u⁽²⁾ = ¾uⁿ + ¼ũ, uⁿ⁺¹ = ⅓uⁿ + ⅔ũ. Writing B(t0+dt), B(t0+2dt),
-# B(t0+3dt/2) after the three predictors makes the halos
-# B(t0+dt), ¾B(t0)+¼B(t0+2dt) = B(t0+dt/2), ⅓B(t0)+⅔B(t0+3dt/2) = B(t0+dt):
-# exactly the stage times (0, 1, ½) and the step end, because B is linear
-# in time inside a parent step (the temporal interpolation).
-_halo_write_time(a::DomainAdvance, k::Int, t0, dt, h) = t0 + h
-_halo_write_time(::DomainAdvance{typeof(step_rk3!)}, k::Int, t0, dt, h) =
-    t0 + (k == 1 ? dt : k == 2 ? 2dt : 1.5dt)
 
 # =========================================================================
 # NestedRun
@@ -150,21 +138,6 @@ end
 NestRunStats() = NestRunStats(0, 0, 0, 0, 0, typemax(Int), 0, Inf, 0.0, Inf, 0.0,
                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
-# The post_predictor! hook through which a run refreshes the child halos at
-# the times the child's core asks for (see `_halo_write_time`).
-mutable struct _BoundaryHook{R} <: Function
-    run::R
-    k::Int
-    t0::Float64
-    dt::Float64
-end
-
-function (h::_BoundaryHook)(sim, Δt_stage)
-    h.k += 1
-    _write_boundary!(h.run, _halo_write_time(h.run.advance_child, h.k, h.t0, h.dt, Δt_stage))
-    return sim
-end
-
 """
     NestedRun(parent, child, nest; kwargs...)
 
@@ -191,15 +164,16 @@ Keywords:
     `:two_way` (conservative restriction of the child field set onto the
     parent, then the interface flux correction, as in
     Berger & Colella 1989);
-  * `order` (3), `sponge` (`nothing` or a [`NestSponge`](@ref)),
-    `flux_correction` (true), `scalars`, `state` — as for the operators of
-    [`NestInterpState`](@ref);
-  * `impose_interface` (**true**) — also write the boundary data into the
-    child's boundary-normal interior face planes (Dirichlet normal
-    velocity) along its nest directions, at every stage. With the child's periodic FFT projection
-    (the open-boundary projection is N-open-a/b), a Taylor-Green child
-    without it, and without a sponge, blew up within about ten steps;
-    with it, it ran 1000 adaptive parent steps (test/era2_nested_run.jl);
+  * `order` (3), `flux_correction` (true), `scalars`, `state` — as for
+    the operators of [`NestInterpState`](@ref);
+  * `sponge` (`nothing`, the default, as in Kadasch et al. 2021 §2.2–2.3
+    and Hellsten et al. 2021, which use none) or a [`NestSponge`](@ref):
+    relaxation of every member of the field set toward the time-blended
+    parent after each child substep, on the child's open faces only
+    ([`nest_open_sides`](@ref));
+  * `solid` (`nothing`) — the child's solid mask (a `SolidMask` or a
+    `Bool` array); open faces inside solids get `u·n = 0` and are left
+    out of the mass-flux correction ([`NestBoundaryData`](@ref));
   * `max_retries` (3), `divergence_tol` (`Inf`, parent only, through
     `max_divergence`), `max_velocity` (`Inf`), `validate` (true) — the
     step-rejection test, as in
@@ -211,13 +185,25 @@ Keywords:
   * `record` (true) — write the two-way conservation ledger
     ([`nest_conservation_error`](@ref)).
 
+**Boundary conditions.** The child must be built with
+[`nest_bcs`](@ref)`(child_mesh, …; moisture, scalars)` naming the same
+field set as the run: its nest faces are
+[`OpenBoundary`](@ref Aeolus.BoundaryConditions.OpenBoundary) faces, and
+the run attaches a [`NestBoundaryData`](@ref) to them. Every core then
+refreshes the child's boundary at its own stage times
+(`update_open_boundaries!`), with the parent field set linearly blended in
+time over the parent step and the single global mass-flux correction of
+N-open-b, so the child's pressure solve (all-Neumann `CosineFFTPoissonSolver`)
+sees the parent's boundary flux. A child without open faces (periodic or
+walled everywhere) runs, but nothing reaches it from the parent.
+
 The clocks of the two simulations must agree when the run is built
 (`check_clocks = false` lets the child keep its own clock origin; it then
 advances by the parent's `Δt_p` per step).
 `run.t` is the common time, `run.stats` a [`NestRunStats`](@ref).
 """
 mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpState,
-                         AP<:DomainAdvance, AC<:DomainAdvance, CP, CC, SP}
+                         AP<:DomainAdvance, AC<:DomainAdvance, CP, CC, SP, D<:NestBoundaryData}
     parent::P
     child::C
     nest::N
@@ -233,7 +219,7 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     order::Int
     region::Symbol
     sponge::SP
-    impose_interface::Bool
+    data::D                        # the child's boundary data (NestBoundaryData)
     flux_correction::Bool
     substeps::Int
     max_retries::Int
@@ -250,7 +236,8 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     new_valid_at::Float64          # parent time s_new was prolongated at (NaN: stale)
     dt_prev_parent::Union{Nothing,Float64}
     dt_prev_child::Union{Nothing,Float64}
-    hook::Any
+    sub_t0::Float64                # start and length of the current child substep
+    sub_h::Float64
     stats::NestRunStats
 end
 
@@ -263,7 +250,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                    feedback::Symbol = :one_way,
                    order::Int = 3,
                    sponge::Union{Nothing,NestSponge} = nothing,
-                   impose_interface::Bool = true,
+                   solid = nothing,
                    flux_correction::Bool = true,
                    scalars = (),
                    state = nothing,
@@ -292,15 +279,23 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     ns >= 1 || error("NestedRun: substeps must be >= 1")
     s_old, s_new, s_bc = state === nothing ?
         ntuple(_ -> nest_interp_state(nest, parent, child; scalars), 3) : state
-    region = sponge !== nothing ? :all : impose_interface ? :halo_interface : :halo
+    # the boundary buffers hold the halos *and* the boundary-normal interior
+    # face plane of the west/south/bottom faces; the sponge needs the whole field
+    region = sponge !== nothing ? :all : :halo_interface
+    sp = sponge === nothing ? nothing :
+         NestSponge{Float64}(sponge.width, sponge.α_max, sponge.profile,
+                             sponge.sides .& nest_open_sides(child))
+    # the child's boundary: the parent prolongated now, attached to its open faces
+    interpolate_parent_state!(s_old, parent, nest; order, region)
+    data = nest_boundary_data(s_old, s_new; t0 = child.t, Δt = 0.0, solid)
+    _attach_nest_data!(child, data)
+    _fill_nest_halos!(child, s_old)
     run = NestedRun(parent, child, nest, s_old, s_new, s_bc, advance_parent, advance_child,
-                    cfl_parent, cfl_child, feedback, sync, order, region, sponge,
-                    impose_interface, flux_correction, ns, Int(max_retries),
+                    cfl_parent, cfl_child, feedback, sync, order, region, sp, data,
+                    flux_correction, ns, Int(max_retries),
                     Float64(divergence_tol), Float64(max_velocity), validate,
                     reuse_boundary, record, check_clocks, t, t, 0.0, NaN, nothing, nothing,
-                    nothing,
-                    NestRunStats())
-    run.hook = _BoundaryHook(run, 0, 0.0, 0.0)
+                    Float64(child.t), 0.0, NestRunStats())
     return run
 end
 
@@ -332,19 +327,14 @@ function boundary_time(run::NestedRun, t::Real)
     return run.s_bc
 end
 
-# Halos of the child (and its interface planes when imposed) ← B(t).
-function _write_boundary!(run::NestedRun, t::Real)
-    τ = (t - run.t0) / run.Δt
-    c = run.child; a = run.s_old; b = run.s_new
-    ii = run.impose_interface
-    dx, dy, dz = _nest_dirs(c)
-    _blend_halo!(c.u, a.u, b.u, τ; interface=ii && dx)
-    _blend_halo!(c.v, a.v, b.v, τ; interface=ii && dy)
-    _blend_halo!(c.w, a.w, b.w, τ; interface=ii && dz)
-    _blend_halo!(c.θ, a.θ, b.θ, τ)
-    for i in eachindex(a.names)
-        _blend_halo!(a.child[i], a.bufs[i], b.bufs[i], τ)
-    end
+# Point the child's boundary data at the current parent-step window and
+# refresh its open boundaries at the child's time (B(t₀) of the new window:
+# in a two-way run the parent changed after the previous window's B(t₀+Δt)).
+function _set_window!(run::NestedRun)
+    d = run.data
+    d.a = run.s_old; d.b = run.s_new
+    d.t0 = run.t0; d.Δt = run.Δt
+    _fill_nest_halos!(run.child, run.s_old)
     return run
 end
 
@@ -357,6 +347,7 @@ mutable struct _Rollback{SN}
     snap::SN
     scalars::Vector{Any}
     sgs::Any
+    open::Any                       # the open-boundary buffers (part of the state)
 end
 
 function _save!(run::NestedRun, sim, adv::DomainAdvance, which::Symbol)
@@ -365,7 +356,8 @@ function _save!(run::NestedRun, sim, adv::DomainAdvance, which::Symbol)
     fs = _bound_fields(run, which)
     sc = Any[copy(f.data) for f in fs]
     closure = sgs_closure(_domain_sgs(adv))
-    return _Rollback(snap, sc, closure === nothing ? nothing : (closure, sgs_state(closure)))
+    return _Rollback(snap, sc, closure === nothing ? nothing : (closure, sgs_state(closure)),
+                     open_boundary_snapshot(sim))
 end
 
 function _restore!(run::NestedRun, sim, rb::_Rollback, which::Symbol)
@@ -374,6 +366,7 @@ function _restore!(run::NestedRun, sim, rb::_Rollback, which::Symbol)
         copyto!(f.data, d)
     end
     rb.sgs === nothing || restore_sgs_state!(rb.sgs[1], rb.sgs[2])
+    restore_open_boundaries!(sim, rb.open)
     return sim
 end
 
@@ -393,9 +386,9 @@ function _accept(run::NestedRun, sim, which::Symbol)
     return true
 end
 
-function _try_advance!(adv::DomainAdvance, sim, h, hook)
+function _try_advance!(adv::DomainAdvance, sim, h)
     try
-        adv(sim, h; post_predictor! = hook)
+        adv(sim, h)
         return true
     catch err
         err isa InterruptException && rethrow()
@@ -439,9 +432,10 @@ Advance `run` by one parent step:
  5. the child subcycles to land exactly on `t_p + Δt_p`:
     `n = ⌈Δt_p / Δt_c^max⌉` substeps, re-evaluated before every substep as
     `n_rem = max(n_rem, ⌈R/Δt_c^max⌉)` with `Δt_c = R / n_rem` (`R` the
-    remaining time; the last substep takes exactly `R`). The child halos
-    hold the linearly interpolated boundary data at every stage time of
-    its core ([`stage_times`](@ref), [`boundary_time`](@ref)). A rejected
+    remaining time; the last substep takes exactly `R`). The child's open
+    faces hold the linearly interpolated, mass-corrected boundary data at
+    every stage time of its core ([`stage_times`](@ref),
+    [`boundary_time`](@ref), [`NestBoundaryData`](@ref)). A rejected
     child substep rolls back **only the child** (its `StateSnapshot`, its
     bound scalars and its SGS memory); the rejected piece is redone at
     half its size and the remaining time is re-divided;
@@ -497,6 +491,7 @@ function step_nested!(run::NestedRun; dt = nothing)
     # where the child lands on the parent's clock bit for bit)
     run.t0 = Float64(c.t)
     run.Δt = t_end - t_p
+    _set_window!(run)
 
     # --- 5. child substeps --------------------------------------------------
     tw = time_ns()
@@ -534,7 +529,7 @@ function _advance_parent!(run::NestedRun, Δt::Float64)
     dt_min = run.cfl_parent === nothing ? 0.0 : Float64(run.cfl_parent.dt_min)
     tries = 0
     while true
-        _try_advance!(adv, p, Δt, nothing) && _accept(run, p, :parent) && return Δt
+        _try_advance!(adv, p, Δt) && _accept(run, p, :parent) && return Δt
         _restore!(run, p, rb, :parent)
         tries += 1
         run.stats.parent_retries += 1
@@ -557,7 +552,6 @@ function _subcycle_child!(run::NestedRun, t_end::Float64)
     n_taken = 0
     tries = 0
     h_retry = 0.0                       # > 0: redo a rejected piece at this size
-    hook = run.hook
     while n_rem > 0
         R = t_end - c.t
         if adaptive && !first_piece
@@ -568,13 +562,11 @@ function _subcycle_child!(run::NestedRun, t_end::Float64)
         cfl = h * _advective_rate(c)
 
         rb = run.validate ? _save!(run, c, adv, :child) : nothing
-        t0 = Float64(c.t)
-        _write_boundary!(run, t0)
-        hook.k = 0; hook.t0 = t0; hook.dt = h
+        run.sub_t0 = Float64(c.t); run.sub_h = h
         ok = if run.validate
-            _try_advance!(adv, c, h, hook) && _accept(run, c, :child)
+            _try_advance!(adv, c, h) && _accept(run, c, :child)
         else
-            adv(c, h; post_predictor! = hook); true
+            adv(c, h); true
         end
         if !ok
             _restore!(run, c, rb, :child)
@@ -614,7 +606,7 @@ end
 function _two_way_feedback!(run::NestedRun)
     p = run.parent; c = run.child; nest = run.nest
     meas = run.s_bc.measure
-    restrict_state_to_parent!(p, c, nest, run.s_bc)
+    restrict_state_to_parent!(p, c, nest, run.s_bc; solid = run.data.solid)
     e_before = _interface_imbalance(p, c, nest, meas)
     if run.flux_correction
         for (pu, cu) in ((p.u, c.u), (p.v, c.v), (p.w, c.w))
@@ -635,7 +627,7 @@ end
 
 """
     step_nested!(parent_sim, child_sim, nest, dt; substeps=nothing, order=3,
-                 flux_correction=true, sponge=nothing, impose_interface=false,
+                 flux_correction=true, sponge=nothing, solid=nothing,
                  scalars=(), state=nothing, record=true)
 
 One **two-way** parent step of fixed size `dt` plus `substeps` equal
@@ -649,8 +641,8 @@ steps, hooks, other dynamical cores or one-way nesting.
 The transferred field set is `u, v, w, θ`, `qv` when both simulations
 are moist, and the extra cell-centred `scalars`
 (`:co2 => (child_field, parent_field)`, …); see [`NestInterpState`](@ref).
-The child halos hold the parent state linearly interpolated in time to
-the child's stage times; after the child substeps the child field set is
+The child's open faces ([`nest_bcs`](@ref)) hold the parent state
+linearly interpolated in time to the child's stage times; after the child substeps the child field set is
 conservatively restricted onto the parent
 ([`restrict_state_to_parent!`](@ref)) and the interface flux mismatch is
 corrected. Conservation diagnostics for `:mass`, `:momentum_x` and every
@@ -667,13 +659,13 @@ function step_nested!(psim::_NestSim, csim::_NestSim, nest::NestedGrid, dt::Real
                       order::Int=3,
                       flux_correction::Bool=true,
                       sponge::Union{Nothing,NestSponge}=nothing,
-                      impose_interface::Bool=false,
+                      solid=nothing,
                       scalars=(),
                       state=nothing,
                       record::Bool=true)
     run = NestedRun(psim, csim, nest; cfl_parent=nothing, cfl_child=nothing,
                     substeps, feedback=:two_way, order, flux_correction, sponge,
-                    impose_interface, scalars, state, record, validate=false,
+                    solid, scalars, state, record, validate=false,
                     check_clocks=false)
     step_nested!(run; dt)
     return (psim, csim)

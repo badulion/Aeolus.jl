@@ -90,13 +90,17 @@ halving it again divided it by 3.989.
 ### Boundary data at the stage times of every core
 
 A multi-stage core reads its halos once per stage. Imposing the data at the
-step start for all stages loses accuracy (Carpenter et al. 1995). The run
-therefore refreshes the halos from inside the step, through the
-`post_predictor!` hook every core calls once per stage after its predictor.
-The halos must hold ``B(t_0 + c_i Δt)`` when stage ``i`` computes its
-tendencies. The ``c_i`` are given by [`stage_times`](@ref):
+step start for all stages loses accuracy (Carpenter et al. 1995). The
+halos must hold ``B(t_0 + c_i Δt)`` when stage ``i`` computes its
+tendencies. The ``c_i`` are given by [`stage_times`](@ref). Since N-nest-d
+(#261) the child's nest faces are `OpenBoundary` faces fed by a
+[`NestBoundaryData`](@ref), and every core refreshes them itself, once per
+projected stage, before the projection (`update_open_boundaries!`, N-open-b
+#255), with the time in the last column ([nested boundary
+conditions](nesting_boundaries.md)). Before, the run wrote the halos
+through a `post_predictor!` hook with the same times.
 
-| core | ``c_i`` | written by the ``k``-th hook call |
+| core | ``c_i`` | boundary data refreshed at the end of stage ``k`` |
 | :-- | :-- | :-- |
 | `step!` (Boussinesq or sound-proof) | ``0`` | ``B(t_0 + Δt)`` |
 | `step_imex!`, ARK2 (Ascher et al. 1997) | ``0, γ`` | ``B(t_0 + h_k)``, with ``h_k = γΔt, Δt`` the stage increments |
@@ -104,10 +108,10 @@ tendencies. The ``c_i`` are given by [`stage_times`](@ref):
 | `step_rk3!`, SSP-RK3 (Shu & Osher 1988) | ``0, 1, \tfrac12`` | ``B(t_0+Δt),\ B(t_0+2Δt),\ B(t_0+\tfrac32Δt)`` |
 
 The SSP-RK3 row needs explaining. `step_rk3!` combines whole arrays, halos
-included: ``u^{(2)} = \tfrac34 u^n + \tfrac14 \tilde u`` and
+included, and the open-boundary buffers with the same weights:
+``u^{(2)} = \tfrac34 u^n + \tfrac14 \tilde u`` and
 ``u^{n+1} = \tfrac13 u^n + \tfrac23 \tilde u``. Because ``B`` is linear in
-time, writing the values in the last column after the three predictors
-makes the combined halos
+time, the values in the last column make the combined halos
 
 ```math
 B(t_0+Δt),\quad \tfrac34 B(t_0) + \tfrac14 B(t_0+2Δt) = B(t_0+\tfrac12Δt),
@@ -117,10 +121,11 @@ B(t_0+Δt),\quad \tfrac34 B(t_0) + \tfrac14 B(t_0+2Δt) = B(t_0+\tfrac12Δt),
 These are exactly the stage times and the step end. A write past
 ``t_p + Δt_p`` is a linear extrapolation of the same line.
 
-With `impose_interface = true` (the default of `NestedRun`), the
-boundary-normal interior face planes of the velocities are written as well.
-This is only done along the child's nest directions (`NestBC` faces), so a
-periodic child direction keeps its own interior face.
+The boundary face of the normal velocity on a west, south or bottom nest
+face is the child's interior face index ``H+1``; it belongs to the
+`OpenBoundary` and is written with the halos (N-nest-c had to re-impose it
+with an `impose_interface` option, now removed). A periodic child direction
+has no open face and keeps its own interior face.
 
 **Measured.** The parent was advanced analytically, linear in ``x, y, z``
 and ``t``, and the child's halos were checked at every substep and every
@@ -156,9 +161,14 @@ It is a two-way `NestedRun` with a fixed ``Δt``, a fixed `substeps`
 | the same, anelastic child, drag integrated exactly | ``2.4\times10^{-14}`` | ``10^{-6}`` |
 | the other domain under one-way | unchanged (0) | ``10^{-14}`` |
 | 1000 adaptive parent steps, one-way / two-way: clock error | 0 / 0 | ``10^{-12}\,t`` |
-| the same: maximum child CFL | 0.4898 / 0.4992 | ``C_{\rm adv} = 0.5`` |
-| the same: ``KE_{\rm child}/KE_{\rm parent}`` over the covered box | [0.959, 1.096] / [0.960, 1.102] | [0.85, 1.15] |
-| two-way interface mass imbalance after the correction | ``\le 3\times10^{-19}`` | ``10^{-10}`` |
+| the same: maximum child CFL | 0.4911 / 0.4877 | ``C_{\rm adv} = 0.5`` |
+| the same: ``KE_{\rm child}/KE_{\rm parent}`` over the covered box | [0.954, 1.102] / [0.954, 1.108] | [0.85, 1.15] |
+| two-way interface mass imbalance after the correction | 0 | ``10^{-10}`` |
+
+The last three rows are for the open-faced child of N-nest-d (#261), with
+no sponge; N-nest-c measured 0.4898 / 0.4992, [0.959, 1.096] /
+[0.960, 1.102] and ``3\times10^{-19}`` with a periodic child projection, a
+re-imposed normal velocity and a 3-cell sponge.
 | injected child NaN: child state vs. the uninjected run | ``1.1\times10^{-16}``; 10 parent calls, not 11 | ``10^{-12}`` |
 
 ## Cost for the Berlin child
@@ -166,39 +176,40 @@ It is a two-way `NestedRun` with a fixed ``Δt``, a fixed `substeps`
 `benchmarks/bench_nested_run.jl` runs a 192 × 192 × 120 parent (6 × 6 × 3
 km, Δx = 31.25 m, uniform Δz = 25 m) and a 1 × 1 km child at
 ``(2, 2, 4)``. Both use Smagorinsky SGS and a 5 m/s westerly with noise.
-The run takes 12 adaptive parent steps of ``Δt_p = 1.72 - 1.80`` s on one
-core:
+The run takes 12 adaptive parent steps of ``Δt_p = 1.44 - 1.80`` s on one
+core. Since N-nest-d (#261) the child's sides and top are open nest faces
+(`OpenBoundary`) over a ground wall, with no sponge; the boundary column
+includes the per-stage refresh of the open-boundary buffers:
 
 | child | ``n`` | ``Δt_c`` (s) | max child CFL | parent / child / boundary / feedback per parent step (s) |
 | :-- | :-- | :-- | :-- | :-- |
-| 64 × 64 × 32, one-way | 4–6 | 0.29–0.45 | 0.489 | 0.401 / 0.096 / 0.020 / — |
-| 64 × 64 × 64, one-way | 4–6 | 0.29–0.45 | 0.499 | 0.393 / 0.195 / 0.031 / — |
-| 64 × 64 × 64, two-way (no flux correction) | 4–6 | 0.23–0.45 | 0.498 | 0.400 / 0.188 / 0.061 / 0.101 |
+| 64 × 64 × 32, one-way | 4–5 | 0.34–0.45 | 0.494 | 0.386 / 0.061 / 0.012 / — |
+| 64 × 64 × 64, one-way | 4–8 | 0.22–0.45 | 0.497 | 0.365 / 0.147 / 0.014 / — |
+| 64 × 64 × 64, two-way (with flux correction) | 4–6 | 0.24–0.45 | 0.488 | 0.349 / 0.116 / 0.025 / 0.098 |
 
-The child costs 0.24× the parent at 32 levels and 0.50× at 64 levels. In
-this case ``n`` exceeds the horizontal ratio 2 because the child's vertical
-spacing is 4× finer, so the vertical term of the per-cell CFL sum weighs
-more.
+The child costs 0.16× the parent at 32 levels and 0.40× at 64 levels
+(N-nest-c, with a wall lid, a sponge and the periodic-projection child:
+0.24× and 0.50×). In this case ``n`` exceeds the horizontal ratio 2
+because the child's vertical spacing is 4× finer, so the vertical term of
+the per-cell CFL sum weighs more. The two-way case now runs with the
+interface flux correction: N-nest-c had to switch it off, because it
+forced the parent's flux through the child's wall lid to ``w = 0``.
 
 ## Current limits
 
 These are owned by other issues of the nesting epic (#246).
 
-* **Child projection with open sides.** The child's pressure solve is still
-  the periodic or cosine FFT, and `NestBC` leaves the ``φ`` halos alone, so
-  the projection does not respect the prescribed boundary flux (N-open-a
-  #251, N-open-b #255). Two cases blew up within a few steps: a
-  Taylor-Green child with neither `impose_interface` nor a sponge (about 10
-  steps), and the Berlin-sized child without `impose_interface` (failed at
-  ``t = 2.2`` s). With `impose_interface = true`, both ran stably, which is
-  why it is the `NestedRun` default.
-* **Mixed faces.** A child with a wall below and a nest face above has no
-  halo fill yet (per-face `OpenBoundary`, N-open-b). The benchmark child
-  therefore has a wall lid.
-* **Two-way with a wall lid.** The interface flux correction treats all six
-  faces as interfaces. Under a wall lid it forced the parent's flux through
-  the lid to the child's ``w = 0``, which drove the parent to
-  ``\lvert u\rvert = 26`` m/s in 12 steps. Per-face two-way feedback is
+* **Resolved by N-nest-d (#261).** The child's projection now sees the
+  parent's boundary flux (open faces, all-Neumann solve, the single
+  mass-flux correction), and a wall below a nest face above is a supported
+  child (the Berlin shape). With N-nest-c's periodic child projection a
+  Taylor-Green child blew up within about 10 steps unless the normal
+  velocity was re-imposed and a sponge added; it now runs the 1000-step
+  tests with neither, and the benchmark child has an open top.
+* **Two-way with walls.** The interface flux correction treats all six
+  faces as interfaces. With an open child top that is consistent (the
+  child's top flux is the parent's), but a child face on a wall that is not
+  the parent's wall would still be forced. Per-face two-way feedback is
   N-nest-e (#263).
 
 ## References

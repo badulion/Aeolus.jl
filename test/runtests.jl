@@ -881,6 +881,7 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_nesting_conservative.jl") # #256 stretched parent, mass-weighted, solid-aware nesting
     include("era2_amr.jl")         # Phases 30-31  nesting, AMR
     include("era2_nested_run.jl")  # Phase  30     NestedRun time coupling (#257)
+    include("era2_nest_boundary.jl") # Phase 30   one-way nest boundary data (#261)
 end
 
 # =========================================================================
@@ -990,6 +991,8 @@ end
     include("era6_collapse.jl")            # P58-e: maximum sustainable heat flux, LES collapse regime (#193)
     include("era6_gabls3.jl")            # P58-d: GABLS3 on the SBL driver: budgets, MOST, LLJ (#194)
     include("era6_relaminarisation.jl")  # P59-e: laminar stratified flow, decaying stratified turbulence, criteria (#195)
+    include("era6_open_pressure.jl")     # N-open-a: per-axis Neumann Poisson solves, BC-aware default solver (#251)
+    include("era6_open_boundaries.jl")   # N-open-b: open faces, boundary-data contract, mass-flux correction (#255)
 end
 
 # =========================================================================

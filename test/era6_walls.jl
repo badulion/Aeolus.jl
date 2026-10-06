@@ -62,7 +62,7 @@ end
         @test FieldBoundaryConditions(:periodic, :periodic, :noflux).bottom isa NoFlux
         @test is_wall(NoSlipWall()) && is_wall(ImpermeableWall()) && !is_wall(Periodic())
         # the nest helper understands the symbol too
-        @test Aeolus.AdaptiveMesh.nest_bcs(:periodic, :periodic, :noslip).bottom isa NoSlipWall
+        @test Aeolus.AdaptiveMesh.nest_bcs(wall_mesh(6), :periodic, :periodic, :noslip).bottom isa NoSlipWall
     end
 
     @testset "halo: antisymmetric about the wall velocity" begin
