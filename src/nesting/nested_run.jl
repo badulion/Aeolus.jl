@@ -641,7 +641,7 @@ function two_way_feedback!(run::NestedRun)
         r = run.regs
         for n in eachindex(r.names)
             apply_flux_correction!(r.pfield[n], _register_mismatch(r, n, nest, refs[n]),
-                                   nest; measure = meas)
+                                   nest; measure = meas, periodic = nest_periodic_axes(p))
         end
         _clear_registers!(r)
     end

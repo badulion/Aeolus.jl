@@ -153,7 +153,8 @@ Berger & Colella (1989) refluxing of one cell-centred scalar.
 time-integrated advective+diffusive fluxes `Φ = ∫ F dt` (field value ×
 length) on the parent and child faces over one parent step. The
 coarse-minus-fine mismatch on the six interface planes is booked into the
-parent cells just outside the nest, so the composite integral
+parent cells just outside the nest (`periodic`: the parent's periodic
+axes, see [`apply_flux_correction!`](@ref)), so the composite integral
 ([`composite_integral`](@ref)) of the scalar is unchanged by the nest to
 round-off.
 
@@ -165,14 +166,15 @@ Reference: Berger, M. J. & Colella, P. (1989), *J. Comput. Phys.* 82,
 64–84, §3 (the flux-register correction).
 """
 function reflux!(pf::Field{CellCenter}, preg::NTuple{3,Field}, creg::NTuple{3,Field},
-                 nest::NestedGrid; measure=nothing)
+                 nest::NestedGrid; measure=nothing,
+                 periodic::NTuple{3,Bool} = (true, true, true))
     location(preg[1]) isa FaceX && location(preg[2]) isa FaceY &&
         location(preg[3]) isa FaceZ ||
         error("reflux!: registers must be (FaceX, FaceY, FaceZ) fields")
     mm = compute_nest_flux_mismatch(preg[1], creg[1], nest) +
          compute_nest_flux_mismatch(preg[2], creg[2], nest) +
          compute_nest_flux_mismatch(preg[3], creg[3], nest)
-    return apply_flux_correction!(pf, mm, nest; measure)
+    return apply_flux_correction!(pf, mm, nest; measure, periodic)
 end
 
 """
@@ -184,7 +186,8 @@ has an entry in `registers`, a mapping
 `(Φx, Φy, Φz)` tuple of face fields (`:θ` refers to `parent_sim.θ`, the
 other names to their bound parent fields). Scalars without registers are
 left untouched. Uses the state's measure (mass-flux registers for a
-sound-proof pair). Returns the names that were refluxed.
+sound-proof pair) and the periodic axes of `parent_sim`'s boundary
+conditions ([`nest_periodic_axes`](@ref)). Returns the names that were refluxed.
 """
 function reflux_scalars!(psim::_NestSim, nest::NestedGrid,
                          s::NestInterpState, registers)
@@ -194,7 +197,8 @@ function reflux_scalars!(psim::_NestSim, nest::NestedGrid,
               (name === :θ && haskey(registers, :theta)) ? :theta : nothing
         key === nothing && continue
         preg, creg = registers[key]
-        reflux!(pf, Tuple(preg), Tuple(creg), nest; measure=s.measure)
+        reflux!(pf, Tuple(preg), Tuple(creg), nest; measure=s.measure,
+                periodic=nest_periodic_axes(psim))
         push!(done, name)
     end
     return done

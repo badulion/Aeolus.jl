@@ -625,8 +625,20 @@ Remove the coarse-fine flux inconsistency recorded in `mismatch`.
     with `mismatch` built from time-accumulated flux registers) — adjust
     the parent cells immediately *outside* the nest:
     `θ ± δΦ·A / V_p`. This is what makes the composite integral of a
-    conserved scalar exactly invariant across a nested step. Indices wrap
-    periodically, so a nest touching the parent boundary still works.
+    conserved scalar exactly invariant across a nested step. The parent's
+    boundary conditions decide where the cell outside a child face that
+    lies on the parent's own boundary is: along a periodic axis of the
+    parent the index wraps; along a non-periodic one there is no parent
+    cell beyond the face (the flux there is the parent's boundary
+    condition's) and the correction of that plane is dropped (#329: it
+    used to wrap on every axis, so a child touching the parent's top put
+    its top-plane correction into the parent's lowest layer).
+    `periodic = (px, py, pz)` gives the parent's periodic axes; the
+    default `(true, true, true)` is the default (triply periodic)
+    `BoussinesqSimulation` and the former behaviour. Pass
+    `periodic = nest_periodic_axes(parent_sim)` to read them from the
+    parent's boundary conditions, as the two-way feedback,
+    [`reflux_scalars!`](@ref) and the AMR refluxing do.
 
 `A_p` and `V_p` use the parent's actual layer thickness (stretched
 parents). With the mass `measure` of a sound-proof pair they are the
@@ -663,7 +675,8 @@ function apply_flux_correction!(pf::Field{L}, m::NestFluxMismatch,
 end
 
 function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
-                                nest::NestedGrid; measure=nothing)
+                                nest::NestedGrid; measure=nothing,
+                                periodic::NTuple{3,Bool} = (true, true, true))
     pm = nest.parent_mesh
     Np = (pm.Nx, pm.Ny, pm.Nz); Hp = (pm.Hx, pm.Hy, pm.Hz)
     nn = (nest.nx, nest.ny, nest.nz); oo = (nest.ix, nest.iy, nest.iz)
@@ -676,7 +689,13 @@ function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
         # cell just outside the high face: Δθ = -δΦ·A / V
         for (cell, M, sgn) in ((oo[ax] - 1, lowm, +1.0),
                                (oo[ax] + nn[ax], highm, -1.0))
-            c = mod1(cell, Np[ax])
+            if 1 <= cell <= Np[ax]
+                c = cell
+            elseif periodic[ax]
+                c = mod1(cell, Np[ax])
+            else
+                continue                # the face is the parent's own boundary
+            end
             idx = [0, 0, 0]; idx[ax] = Hp[ax] + c
             @inbounds for B in 1:nn[t2], A in 1:nn[t1]
                 idx[t1] = Hp[t1] + oo[t1] + A - 1
@@ -689,3 +708,15 @@ function apply_flux_correction!(pf::Field{CellCenter}, m::NestFluxMismatch,
     end
     return pf
 end
+
+"""
+    nest_periodic_axes(parent_sim_or_bcs) -> NTuple{3,Bool}
+
+The periodic axes `(x, y, z)` of a nest parent, from its boundary
+conditions (`bcs`): what [`apply_flux_correction!`](@ref) needs to place
+the refluxing correction of a child face lying on the parent's boundary.
+"""
+nest_periodic_axes(b::FieldBoundaryConditions) =
+    (b.west isa Periodic && b.east isa Periodic, b.south isa Periodic && b.north isa Periodic,
+     b.bottom isa Periodic && b.top isa Periodic)
+nest_periodic_axes(sim) = nest_periodic_axes(sim.bcs)

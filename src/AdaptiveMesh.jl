@@ -848,7 +848,8 @@ function _reflux_block!(h::AMRHierarchy, b::RefinementBlock)
             mm = mm + compute_nest_flux_mismatch(b.parent.state[_reg(v, sym)],
                                                  b.state[_reg(v, sym)], b.nest)
         end
-        apply_flux_correction!(b.parent.state[v], mm, b.nest)
+        apply_flux_correction!(b.parent.state[v], mm, b.nest;
+                               periodic = nest_periodic_axes(h.bcs))
     end
     return b
 end

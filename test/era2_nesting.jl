@@ -5,6 +5,7 @@ using Aeolus
 using Aeolus.Nesting
 using Aeolus.Grids: interior
 using Aeolus.Fields: set!, interior_view
+using Aeolus.BoundaryConditions: FieldBoundaryConditions
 
 # =========================================================================
 # Phase 30 — parent ↔ child nesting operators (src/Nesting.jl, #250)
@@ -456,6 +457,46 @@ end
     cw = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :periodic, :periodic, :nest;
                                                scalars=(:co2,)))
     @test_throws ArgumentError apply_nest_boundary!(cw, st)
+end
+
+# -------------------------------------------------------------------------
+# #329 item 2: the refluxing correction of a child face that lies on the
+# parent's own boundary goes where the parent's boundary conditions say —
+# the wrapped cell across a periodic seam, nowhere across a wall (it used
+# to wrap on every axis, so a child touching the parent top booked its top
+# correction into the parent's lowest layer).
+@testset "flux correction at a child face on the parent boundary (#329)" begin
+    pm = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
+    @test nest_periodic_axes(BoussinesqSimulation(pm)) == (true, true, true)
+    walled = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    @test nest_periodic_axes(walled) == (true, true, false)
+    zwall = nest_periodic_axes(walled)
+    Vp = pm.dx * pm.dy * pm.dz
+    # a child touching the parent top
+    nt = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.5, 1.0)), 2)
+    @test last(nest_covered_range(nt)[3]) == pm.Nz
+    z0 = zeros(nt.nx, nt.ny)
+    mt = NestFluxMismatch{Float64}(zeros(0, 0), zeros(0, 0), zeros(0, 0), zeros(0, 0),
+                                   copy(z0), ones(nt.nx, nt.ny))
+    θ = Field(CellCenter(), pm)
+    apply_flux_correction!(θ, mt, nt; periodic = zwall)       # z is not periodic
+    @test all(iszero, θ.data)                                  # bottom layer untouched
+    apply_flux_correction!(θ, mt, nt)                          # default: triply periodic
+    cx, cy, _ = nest_covered_range(nt)
+    @test all(interior_view(θ)[cx, cy, 1] .≈ -1 / Vp)          # z-periodic parent: wraps
+    @test count(!iszero, θ.data) == nt.nx * nt.ny
+    # a child touching the parent's east edge
+    ne = nested_grid(pm, ((0.5, 1.0), (0.25, 0.75), (0.25, 0.75)), 2)
+    me = NestFluxMismatch{Float64}(zeros(ne.ny, ne.nz), ones(ne.ny, ne.nz), zeros(0, 0),
+                                   zeros(0, 0), zeros(0, 0), zeros(0, 0))
+    θ = Field(CellCenter(), pm)
+    apply_flux_correction!(θ, me, ne; periodic = zwall)       # x-periodic: wraps to i = 1
+    _, cy, cz = nest_covered_range(ne)
+    @test all(interior_view(θ)[1, cy, cz] .≈ -1 / Vp)
+    @test count(!iszero, θ.data) == ne.ny * ne.nz
+    θ = Field(CellCenter(), pm)
+    apply_flux_correction!(θ, me, ne; periodic = (false, true, false))
+    @test all(iszero, θ.data)                                  # a wall: no cell beyond
 end
 
 end # Era II — Nesting operators
