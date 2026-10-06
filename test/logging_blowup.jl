@@ -44,6 +44,20 @@ blowup_kwargs(r) = Dict{Symbol,Any}(r.kwargs)
 
 @testset "Blowup: diagnose, dump, stop; run monitor (LOG-c, #335)" begin
 
+@testset "allfinite: the branch-free test agrees with all(isfinite, ·)" begin
+    a = randn(Xoshiro(1), 10, 9, 8); v = view(a, 2:9, 2:8, 2:7)
+    @test Aeolus.IO.allfinite(v)
+    for (I, x) in (((5, 5, 5), NaN), ((2, 2, 2), Inf), ((9, 8, 7), -Inf))
+        b = copy(a); b[I...] = x
+        @test !Aeolus.IO.allfinite(view(b, 2:9, 2:8, 2:7))
+        @test Aeolus.IO.allfinite(view(b, 2:9, 2:8, 2:7)) == all(isfinite, view(b, 2:9, 2:8, 2:7))
+    end
+    b = copy(a); b[1, 1, 1] = NaN                       # outside the view
+    @test Aeolus.IO.allfinite(view(b, 2:9, 2:8, 2:7))
+    @test Aeolus.IO.allfinite(fill(floatmax(Float64), 3, 3, 3))   # huge but finite
+    @test Aeolus.IO.allfinite(Float32[1 2; 3 4]) && !Aeolus.IO.allfinite([1.0, NaN])
+end
+
 @testset "nonfinite_fields: which field, how many, where" begin
     sim = bu_sim()
     @test isempty(nonfinite_fields(sim))
