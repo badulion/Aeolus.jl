@@ -44,6 +44,20 @@ a temporary default; it is process-global, not task-local. The Berlin
 case takes its backend from `CaseConfig.backend` and calls
 `init_threads!` first thing in `build_case`.
 
+The default is held in two concretely typed slots: a `Ref{CPUBackend}`
+with the CPU settings (`serial`, `threshold`) and a separate GPU slot that
+only steers allocation. `backend(::Array)` (and so `backend(field)` on host
+storage) is a plain load from the CPU slot and infers as `CPUBackend`, so
+a launch finds its backend without dynamic dispatch (`@inferred` in
+`test/backends.jl`). Setting a `CPUBackend` default clears a GPU default.
+This is the maintainer's "small fix now"; carrying the backend in
+`Field`'s type is deferred to Phase 81, when CPU and GPU storage get
+mixed. The previous single `Ref{AbstractBackend}` was already inferable
+through an `isa` narrowing in `backend(::Array)`, so launch time and
+allocation did not change (axpy launch, 64×64×32: 16.3 µs, 0 B at 1
+thread; 21 µs, 4528 B at 24 threads, the task spawn; 2×2×2: 18 ns, 0 B,
+before and after).
+
 ## The launch contract
 
 ```julia
