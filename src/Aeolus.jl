@@ -271,7 +271,7 @@ export StretchedGrid, TerrainFollowingGrid, terrain_following_grid,
 export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
        SubsteppingSchedule, substeps_for,
        StateSnapshot, state_snapshot, save_state!, restore_state!,
-       step_adaptive!,
+       step_adaptive!, NumericalFailure, is_numerical_failure,
        DiffusionWorkspace, solve_implicit_diffusion!,
        IMEXScheme, ARK2, Rosenbrock2,
        IMEXWorkspace, imex_workspace, step_imex!, imex_stability_limit

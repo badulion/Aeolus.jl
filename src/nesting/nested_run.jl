@@ -323,12 +323,18 @@ function _accept(run::NestedRun, sim, which::Symbol)
     return true
 end
 
+# One attempted step. A numerical failure (`is_numerical_failure`: a
+# `NumericalFailure`, a `DomainError`/`InexactError`/`OverflowError`, or any
+# exception thrown from a non-finite state) rejects the step, which is then
+# rolled back and retried; anything else — a `MethodError`, a `BoundsError`,
+# a wrong argument — is a bug or a set-up error and is rethrown at once
+# (#327, M6: it used to become a "rejected step" retried at half the size).
 function _try_advance!(adv::DomainAdvance, sim, h, bf = nothing)
     try
         adv(sim, h; body_force! = bf)
         return true
     catch err
-        err isa InterruptException && rethrow()
+        is_numerical_failure(err, sim) || rethrow()
         return false
     end
 end
@@ -364,7 +370,10 @@ Advance `run` by one parent step:
     one-way run, reused from the end of the previous step);
  3. the parent takes its step. A rejected parent step (non-finite state,
     exception, `divergence_tol`, `max_velocity`) is rolled back and
-    retried with `Δt_p/2` — **before** any child substep;
+    retried with `Δt_p/2` — **before** any child substep. Only a
+    numerical failure ([`is_numerical_failure`](@ref
+    Aeolus.TimeIntegration.is_numerical_failure)) is rejected; any other
+    exception (a `MethodError`, a `BoundsError`, …) propagates at once;
  4. the parent field set is prolongated at `t_p + Δt_p`;
  5. the child subcycles to land exactly on `t_p + Δt_p`:
     `n = ⌈Δt_p / Δt_c^max⌉` substeps, re-evaluated before every substep as

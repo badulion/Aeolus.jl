@@ -82,7 +82,7 @@ using ..Operators: sgs_closure, sgs_state, restore_sgs_state!, sgs_fields,
 using ..AdvectionSchemes: advective_face_flux, _flux_reconstruction
 using ..TimeIntegration: CFLConstraints, adaptive_dt, StateSnapshot, save_state!, state_snapshot,
                          restore_state!, IMEXScheme, ARK2, Rosenbrock2, step_imex!,
-                         _all_finite, _max_advective_rate
+                         _all_finite, _max_advective_rate, is_numerical_failure
 using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
 using ..TimeSteppers: step!
