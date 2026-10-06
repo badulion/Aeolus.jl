@@ -100,7 +100,9 @@ gitignored; **do not remove that entry**.
 
 Everything else is safe: `test/runtests.jl` and `docs/make.jl` use
 explicit file and module lists rather than recursive globs, so neither
-will wander into a worktree. This was checked rather than assumed.
+will wander into a worktree. This was checked rather than assumed. The
+parallel runner reads the same include list, and writes its logs to
+`.testruns/`, which is gitignored too.
 
 ### Cleaning up
 
@@ -143,7 +145,8 @@ git commit -m "P3: wire into Aeolus.jl, add to runtests, resolve export collisio
 Then the gate, and only then the PR:
 
 ```bash
-julia --project=. test/runtests.jl      # must be green
+julia --project=. test/run.jl                           # fast tier: must be green
+julia --project=. test/run.jl --only era4_icenucleation.jl  # full-tier files of the physics you touched
 git push -u origin issue/42-p3-microphysics
 gh pr create --base master --title "Phase 40 — P3 microphysics (#42)" --body "..."
 ```
@@ -217,12 +220,34 @@ in the whole PR.
 
 ## Testing standards
 
-There is no CI yet. The gate is that the agent runs the full suite and
-reports the result honestly in the PR.
+There is no CI yet. The gate is that the agent runs the suite and
+reports the result honestly in the PR. **Fast tier for PRs, full tier
+at merge:**
 
 ```bash
-julia --project=. test/runtests.jl
+julia --project=. test/run.jl                          # fast tier, parallel: the PR gate
+julia --project=. test/run.jl --only <file>.jl         # a full-tier file you affected
+AEOLUS_TEST_TIER=full julia --project=. test/run.jl    # full tier: the merge train
+julia --project=. test/runtests.jl                     # serial, same tier selection
 ```
+
+- The **fast tier** (default) is every test file except the validation
+  mini-simulations tagged `tier = "full"` in `test/test_tags.toml`. It
+  keeps every module covered by conservation, analytic and unit checks
+  and the Berlin smoke test, and runs in about 5 minutes on the 24-core
+  machine. A PR needs it green.
+- The **full tier** adds the validation runs (GABLS, channels, flat
+  plate, CBC decay, urban and heterogeneous-surface campaigns). The merge
+  train runs it before merging. If your change touches physics that a
+  full-only file validates, run that file yourself and quote it: the
+  merge train is not the place to find out.
+- `test/runtests.jl`'s include list stays the single list of test files.
+  A new file needs its include line and nothing else; tag it only if it
+  is a full-only validation run (with a one-line reason saying which fast
+  file keeps the module covered) or timing-sensitive (`exclusive`).
+
+The runner, its options and the tag table are described in
+[`docs/src/testing.md`](src/testing.md).
 
 **Test physics, not execution.** A test asserting a function returns
 without error is nearly worthless. Assert conservation laws, analytic
@@ -453,6 +478,11 @@ git worktree prune
 **An issue is bigger than expected.** Say so on the issue, split it, and
 open a PR for the part that is finished. A large PR that touches six
 subsystems cannot be reviewed meaningfully.
+
+**A full-tier file fails at merge but the fast tier was green.** The
+log path is printed in the runner's summary. Rerun that file alone
+(`test/run.jl --only <file>`) to rule out load: files tagged
+`exclusive` assert wall-clock budgets and must not share the machine.
 
 **The suite fails on `master`.** Stop and report it. Do not build on a
 red baseline — you will not be able to tell your failures from the
