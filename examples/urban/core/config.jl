@@ -71,7 +71,13 @@ Groups of fields:
   air-heat budget (`heat_budget(…; layer = :canopy)`); `NaN` (default)
   takes the tallest roof of the scene;
 * **output** — `output_path` (`nothing` disables NetCDF output),
-  `verbose`.
+  `verbose`;
+* **backend** — `backend::AbstractBackend` (default `CPUBackend()`): the
+  compute backend of the run (`Aeolus.Backends`, KA-a #294). The core
+  coupling calls `init_threads!(cfg.backend)` before building the
+  simulation, so every field is allocated on it and its kernels run on
+  it; `CPUBackend(serial = true)` is the single-task reference of the
+  thread-invariance tests.
 """
 Base.@kwdef mutable struct CaseConfig
     name::Symbol                      = :alexanderplatz
@@ -133,6 +139,8 @@ Base.@kwdef mutable struct CaseConfig
     canopy_top::Float64               = NaN
     output_path::Union{Nothing,String} = joinpath(URBAN_DIR, "output", "alexanderplatz.nc")
     verbose::Bool                     = true
+    # compute backend (KA-a, #294)
+    backend::AbstractBackend          = CPUBackend()
 end
 
 "Cadence period (s) named `key` in `cfg`; errors if the config has none."

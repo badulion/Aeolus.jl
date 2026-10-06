@@ -144,6 +144,9 @@ constructed with `build(C, case, opts)`, then every `init!` runs in
 registry order, and finally the stage schedule is assembled.
 """
 function build_case(cfg::CaseConfig; io::IO = stdout)
+    # The run's compute backend (KA-a, #294): the default for every field
+    # allocated below, BLAS pinned to one thread when Julia is threaded.
+    init_threads!(cfg.backend)
     Nx, Ny, Nz = cfg.size
     mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
     geom = build_geometry(cfg, mesh; io = io)
