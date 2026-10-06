@@ -838,22 +838,25 @@ boundary_flux_weights(sim) = nothing
 @inline _wtop(::Nothing, k) = 1
 @inline _wtop(W::Tuple, k) = W[2][k]
 
-# Visit every fluid interior face of a normal plane:
-# g(value_ref_indices..., outward sign, weight·area).
-function _foreach_face(g, p::OpenPlane{T}, m::RegularGrid{T}, W) where {T}
+# Fold over every fluid interior face of a normal plane:
+# acc = g(acc, value_ref_indices..., outward sign, weight·area). The
+# accumulator is threaded through the calls rather than captured and
+# reassigned by a closure, which boxed it (#329: 384 KiB per mass-flux
+# correction of a 32³ child).
+function _fold_faces(g, acc, p::OpenPlane{T}, m::RegularGrid{T}, W) where {T}
     fl = _face_local(p)
     s = p.high ? one(T) : -one(T)
     if p.axis == 1
         A = m.dy * m.dz
         for (b, k) in enumerate(m.Hz+1:m.Hz+m.Nz), (a, j) in enumerate(m.Hy+1:m.Hy+m.Ny)
             p.fluid[a, b] || continue
-            g(fl, j, k, s, T(_wlat(W, k)) * A)
+            acc = g(acc, fl, j, k, s, T(_wlat(W, k)) * A)
         end
     elseif p.axis == 2
         A = m.dx * m.dz
         for (b, k) in enumerate(m.Hz+1:m.Hz+m.Nz), (a, i) in enumerate(m.Hx+1:m.Hx+m.Nx)
             p.fluid[a, b] || continue
-            g(i, fl, k, s, T(_wlat(W, k)) * A)
+            acc = g(acc, i, fl, k, s, T(_wlat(W, k)) * A)
         end
     else
         A = m.dx * m.dy
@@ -861,10 +864,10 @@ function _foreach_face(g, p::OpenPlane{T}, m::RegularGrid{T}, W) where {T}
         wt = T(_wtop(W, kt))
         for (b, j) in enumerate(m.Hy+1:m.Hy+m.Ny), (a, i) in enumerate(m.Hx+1:m.Hx+m.Nx)
             p.fluid[a, b] || continue
-            g(i, j, fl, s, wt * A)
+            acc = g(acc, i, j, fl, s, wt * A)
         end
     end
-    return nothing
+    return acc
 end
 
 """
@@ -878,11 +881,27 @@ function open_boundary_flux(st::OpenBoundaryState{T}, W = nothing) where {T}
     Q = zero(T)
     for p in st.planes
         p.normal || continue
-        _foreach_face(p, st.mesh, W) do i, j, k, s, wA
-            Q += s * p.data[i, j, k] * wA
-        end
+        d = p.data
+        Q = _fold_faces((q, i, j, k, s, wA) -> q + s * d[i, j, k] * wA, Q, p, st.mesh, W)
     end
     return Q
+end
+
+# Subtract δ from the outward normal velocity of every open fluid face (only
+# the outflow faces with `only_out`). A function of its own so that no
+# closure captures a variable that is reassigned.
+function _subtract_flux_correction!(st::OpenBoundaryState{T}, W, δ, only_out::Bool) where {T}
+    for p in st.planes
+        p.normal || continue
+        d = p.data
+        _fold_faces(nothing, p, st.mesh, W) do acc, i, j, k, s, wA
+            if !only_out || s * d[i, j, k] > 0
+                d[i, j, k] -= s * δ
+            end
+            acc
+        end
+    end
+    return st
 end
 
 """
@@ -913,32 +932,23 @@ function correct_boundary_mass_flux!(st::OpenBoundaryState{T}, W = nothing;
     Q = open_boundary_flux(st, W)
     δ = zero(T)
     if st.correction !== :none && Q != 0
-        outflow = st.correction === :outflow_only
+        only_out = st.correction === :outflow_only
         A = zero(T)
         for p in st.planes
             p.normal || continue
-            _foreach_face(p, st.mesh, W) do i, j, k, s, wA
-                (!outflow || s * p.data[i, j, k] > 0) && (A += wA)
-            end
+            d = p.data
+            A = _fold_faces((a, i, j, k, s, wA) -> (!only_out || s * d[i, j, k] > 0) ? a + wA : a,
+                            A, p, st.mesh, W)
         end
         if A == 0          # no outflow face: fall back to all faces
-            outflow = false
+            only_out = false
             for p in st.planes
                 p.normal || continue
-                _foreach_face(p, st.mesh, W) do i, j, k, s, wA
-                    A += wA
-                end
+                A = _fold_faces((a, i, j, k, s, wA) -> a + wA, A, p, st.mesh, W)
             end
         end
         δ = Q / A
-        for p in st.planes
-            p.normal || continue
-            _foreach_face(p, st.mesh, W) do i, j, k, s, wA
-                if !outflow || s * p.data[i, j, k] > 0
-                    p.data[i, j, k] -= s * δ
-                end
-            end
-        end
+        _subtract_flux_correction!(st, W, δ, only_out)
     end
     st.Q = Q
     st.δ = δ
