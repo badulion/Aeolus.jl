@@ -26,7 +26,7 @@ for s in (:summer, :winter, :smoke, :mitte_sample)
     out[string(s)] = Dict{String,Any}("case" => normalise(cfg), "parent" => normalise(BC.nest_parent_config(cfg)))
 end
 Aeolus.Operators.set_fftw_policy!(; planner = :estimate)
-case = BC.build_case(BC.CaseConfig(:smoke); io = devnull)
+case = BC.build_case(BC.CaseConfig(:smoke))
 BC.run_case!(case)
 out["smoke_digests"] = Dict{String,Any}(string(k) => digest(v) for (k, v) in pairs(berlin_state(case)))
 out["smoke_digests_threads"] = Threads.nthreads()
