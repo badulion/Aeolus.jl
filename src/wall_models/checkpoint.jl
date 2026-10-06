@@ -6,7 +6,7 @@
 # =========================================================================
 
 import ..IO: checkpoint_state, restore_checkpoint_state!
-using ..IO: fieldwise_checkpoint_state, restore_fieldwise!
+using ..IO: fieldwise_checkpoint_state, restore_fieldwise!, resume!, maybe_checkpoint!   # run_channel!'s hook
 
 # MatchingInput: the temporal filter's state (`work` is scratch).
 checkpoint_state(mi::MatchingInput) = (uf = copy(mi.uf), vf = copy(mi.vf), primed = mi.primed)

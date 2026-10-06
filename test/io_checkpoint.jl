@@ -369,4 +369,72 @@ end
     rm(dir; recursive = true)
 end
 
+# ---------------------------------------------------------------------------
+# The long drivers' hooks: run_channel! (relaminarisation, channel drivers)
+# and sbl_run! (GABLS1-4) interrupted after a checkpoint and resumed in fresh
+# objects return the uninterrupted run's state and statistics bit for bit.
+# ---------------------------------------------------------------------------
+struct CkKilled <: Exception end
+
+@testset "driver hook: run_channel! interrupted and resumed" begin
+    mk() = ck_case(:filtered_lasd)
+    T = 0.06; dt = 0.004                                    # 15 steps
+    ref = mk(); seen = Float64[]
+    st_ref = run_channel!(ref, T; dt = dt, average_from = 0.02, sample_every = 2,
+                          callback = c -> push!(seen, c.τ_wall_bottom))
+    dir = mktempdir()
+    run_part(kill_at) = begin
+        ck = CheckpointSchedule(dir; every_steps = 4, keep = 2, verbose = false)
+        c = mk(); series = Float64[]
+        cb = c -> (push!(series, c.τ_wall_bottom); c.nsteps == kill_at && throw(CkKilled()))
+        st = try
+            run_channel!(c, T; dt = dt, average_from = 0.02, sample_every = 2, callback = cb,
+                         checkpoint = ck, checkpoint_components = (series = series,))
+        catch e
+            e isa CkKilled || rethrow(); nothing
+        end
+        (c = c, st = st, series = series)
+    end
+    a = run_part(10)                                        # killed after step 10 (checkpoint at 8)
+    @test a.st === nothing
+    b = run_part(-1)                                        # resumes at step 8
+    @test ck_state(b.c.sim).u == ck_state(ref.sim).u
+    @test ck_same(checkpoint_state(b.c), checkpoint_state(ref))
+    @test b.series == seen                                  # the callback's state resumed too
+    @test b.st.U == st_ref.U && b.st.τ_series == st_ref.τ_series && b.st.nsteps == st_ref.nsteps
+    @test b.st.stress.total == st_ref.stress.total && b.st.τ_wall === st_ref.τ_wall
+    # rerunning the finished call returns at once from its final checkpoint
+    c2 = run_part(-1)
+    @test c2.st.U == st_ref.U && c2.c.nsteps == ref.nsteps
+    finish_checkpoints!(CheckpointSchedule(dir; verbose = false))
+    @test !isdir(dir)
+end
+
+@testset "driver hook: sbl_run! interrupted and resumed" begin
+    isdefined(Main, :sbl_run!) || Base.include(Main, joinpath(@__DIR__, "..", "examples", "sbl", "driver.jl"))
+    mk() = Main.sbl_case(; N = (8, 8, 8), base = LagrangianDynamicSmagorinsky(
+                RegularGrid(; size = (8, 8, 8), extent = (400.0, 400.0, 400.0))))
+    T = 300.0
+    ref = mk(); st_ref = Main.sbl_run!(ref, T; average_from = 100.0, sample_every = 2)
+    dir = mktempdir()
+    run_part(kill_at) = begin
+        ck = CheckpointSchedule(dir; every_steps = 3, keep = 1, verbose = false)
+        c = mk()
+        st = try
+            Main.sbl_run!(c, T; average_from = 100.0, sample_every = 2, checkpoint = ck,
+                          callback = c -> c.nsteps == kill_at && throw(CkKilled()))
+        catch e
+            e isa CkKilled || rethrow(); nothing
+        end
+        (c = c, st = st)
+    end
+    @test run_part(7).st === nothing
+    b = run_part(-1)
+    @test ck_state(b.c.sim).u == ck_state(ref.sim).u && b.c.nsteps == ref.nsteps
+    @test b.st.U == st_ref.U && b.st.u_star === st_ref.u_star && b.st.wθ0 === st_ref.wθ0
+    @test b.c.heat_applied === ref.heat_applied               # the ledger continues exactly
+    @test ref.nsteps > 7
+    rm(dir; recursive = true)
+end
+
 end # testset

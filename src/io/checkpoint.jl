@@ -609,6 +609,53 @@ function maybe_checkpoint!(ck::CheckpointSchedule, sim; step::Integer, force::Bo
     return path
 end
 
+"""
+    driver_checkpoints(dir; every_steps = 0, every_seconds = 1800, keep = 2,
+                       prefix = "checkpoint") -> Union{Nothing, CheckpointSchedule}
+
+The [`CheckpointSchedule`](@ref) of a long example driver: on by default
+(every 30 min of wall clock, the newest 2 kept), overridden by the
+environment so every driver is controlled the same way:
+
+| variable | effect |
+| :------- | :----- |
+| `AEOLUS_CHECKPOINT=0` | no checkpoints (returns `nothing`) |
+| `AEOLUS_CHECKPOINT_EVERY=n` | every `n` steps |
+| `AEOLUS_CHECKPOINT_SECONDS=s` | every `s` s of wall clock (`Inf`: off) |
+| `AEOLUS_CHECKPOINT_KEEP=k` | keep the newest `k` |
+
+Call it before building the run (it imports the run folder's FFTW wisdom),
+then hand it to the driver's run loop; [`finish_checkpoints!`](@ref)
+removes the folder once the driver has stored its result.
+"""
+function driver_checkpoints(dir::AbstractString; every_steps::Integer = 0,
+                            every_seconds::Real = 1800, keep::Integer = 2,
+                            prefix::AbstractString = "checkpoint")
+    get(ENV, "AEOLUS_CHECKPOINT", "1") == "0" && return nothing
+    n = parse(Int, get(ENV, "AEOLUS_CHECKPOINT_EVERY", string(every_steps)))
+    sec = parse(Float64, get(ENV, "AEOLUS_CHECKPOINT_SECONDS", string(every_seconds)))
+    k = parse(Int, get(ENV, "AEOLUS_CHECKPOINT_KEEP", string(keep)))
+    return CheckpointSchedule(dir; every_steps = n, every_seconds = sec, keep = k, prefix = prefix)
+end
+
+"""
+    finish_checkpoints!(ck) -> nothing
+
+Delete the checkpoints (every prefix) and the FFTW wisdom of the folder of
+`ck`, and the folder if it is then empty: call it once the driver has
+stored the run's result, so a later run starts fresh. `nothing` is
+accepted (checkpointing off).
+"""
+function finish_checkpoints!(ck::Union{Nothing, CheckpointSchedule})
+    ck === nothing && return nothing
+    isdir(ck.dir) || return nothing
+    for f in readdir(ck.dir)
+        (endswith(f, ".jls") || f == "fftw_wisdom") && rm(joinpath(ck.dir, f); force = true)
+    end
+    isempty(readdir(ck.dir)) && rm(ck.dir)
+    return nothing
+end
+
 # -------------------------------------------------------------------------
 # FFTW policy from a namelist
 # -------------------------------------------------------------------------

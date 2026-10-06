@@ -28,7 +28,8 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
        fieldwise_checkpoint_state, restore_fieldwise!, checkpoint_fields,
        StepperState, record_step!, previous_dt,
        CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
-       latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!
+       latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
+       driver_checkpoints, finish_checkpoints!
 
 # -------------------------------------------------------------------------
 # Snapshots — a dictionary of interior arrays + metadata, serialized.
