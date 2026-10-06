@@ -513,7 +513,9 @@ function smoke_check(c::NestingCoupling, case)
             all(col -> col === nothing || isapprox(sum(mosaic_fractions(col.surface)), 1; atol = 1e-12),
                 p.surface.columns)
     w = c.window
-    return ["the parent ran: ≥ 1 window, the child inside the last one" =>
+    checks = two_way(c) ? _two_way_checks(c, case) : Pair{String,Bool}[]
+    return [checks...,
+            "the parent ran: ≥ 1 window, the child inside the last one" =>
                 c.windows >= 1 && (w === nothing ? abs(sim.t - run.t) <= 1e-9 * max(run.Δt, 1.0) :
                                    w.t_child_end - w.Δt - 1e-9 <= sim.t <= w.t_child_end + 1e-9),
             "the parent is the StretchedGrid run of #259, nested at refinement $(c.pc.refinement)" =>
@@ -537,9 +539,35 @@ function smoke_check(c::NestingCoupling, case)
                 (sim.sponge_target.u === c.targets.u && any(!iszero, c.targets.u))]
 end
 
-# The outflow options of the nest faces (N-open-c, #260); every coupling on.
+# The two-way checks (#267): the feedback ran and changed the parent, its
+# heat and water are named terms of the parent ledgers (whose closure the
+# checks above assert), the interface mass flux matches after the flux
+# correction, and the re-projected parent is divergence-free.
+function _two_way_checks(c::NestingCoupling, case)
+    p, run = c.parent, c.run
+    hb = heat_budget(p.heat)
+    wb = p.pc.moisture ? heat_budget(p.water) : nothing
+    return ["two-way: the run is two-way, with the transport-booked registers of θ and qv" =>
+                run.feedback === :two_way && (!c.opts.reflux || (run.regs !== nothing &&
+                    run.regs.names == (p.pc.moisture ? [:θ, :qv] : [:θ]))),
+            "two-way: ≥ 1 feedback, which changed the parent's θ" =>
+                get(c.feedback, :n, 0.0) >= 1 && haskey(hb.terms, (:nest_feedback, :feedback_heat)) &&
+                hb.terms[(:nest_feedback, :feedback_heat)] != 0,
+            "two-way: the parent water ledger names the feedback" =>
+                wb === nothing || haskey(wb.terms, (:nest_feedback, :feedback_water)),
+            "two-way: interface mass-flux mismatch after the flux correction ≤ 1e-12 (of U A)" =>
+                get(c.feedback, :mass, Inf) <= 1e-12,
+            "two-way: the re-projected parent's max|∇·u| ≤ 1e-8 s⁻¹" =>
+                max_divergence(p.sim) <= 1e-8]
+end
+
+# The outflow options of the nest faces (N-open-c, #260), and the two-way
+# option (#267; buffer 1 and no canopy restriction, so the smoke child,
+# which covers only 4 × 4 × 2 parent cells, is anterpolated at all); every
+# coupling on.
 smoke_variants(::Type{<:NestingCoupling}) =
-    ((label = "convective outflow", outflow = :convective),
+    ((label = "two-way", options = Dict(:nesting => (mode = :two_way, buffer = 1, z_anterp = 0.0))),
+     (label = "convective outflow", outflow = :convective),
      (label = "parent_driver: analytic boundary data in place of the parent (the #58 interface)",
       options = Dict(:nesting => (parent_driver = :profile,))),
      (label = "nest off: the periodic box", physics = Dict(:nesting => false)))
