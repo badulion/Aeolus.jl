@@ -169,8 +169,7 @@ boundary layer is meant to evolve under the prescribed advection.
   CSV header.
 * **One published table is wrong.** Table 5 of Couvreux et al. (2020)
   omits the 15 UTC surface temperature (233.04 K) and shifts the later
-  hours by one. The official case file (read with `Aeolus.NetCDFIO`) is
-  used.
+  hours by one. The official case file (read with NCDatasets) is used.
 
 ### GABLS3: reduced CI test
 

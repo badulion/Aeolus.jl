@@ -87,6 +87,7 @@ function build(::Type{<:SGSReynoldsStress}, case, o)
                                     first_level = first_level_cells(sm; bottom = true),
                                     surface = o.surface ? (u_star = case.bus.u_star, k = case.bus.k_air) : nothing,
                                     θ₀ = cfg.θ₀, g_accel = cfg.g, qv = tracer(case, :qv),
+                                    qc = tracer(case, :ql), p = ref_pressure_storage(case),
                                     transport = false)
     return SGSReynoldsStress(closure, K2, Float64(o.e_min))
 end
