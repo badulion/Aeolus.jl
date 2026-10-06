@@ -158,8 +158,9 @@ end
 # `x*x` for p = 2, which equals Base's `x^2` bit for bit (one correctly
 # rounded product); `x*x*x` for 3, as Base's `literal_pow`; `x³·x³` for
 # TENO's q = 6, which is *not* bitwise Base's compensated `x^6` (it
-# differs by a few ulp in about 60 % of arguments; see the KA-c notes in
-# test/era2_advection.jl).
+# differs, by up to 3 ulp, in 61 % of arguments; the weights only enter
+# TENO through a cut-off, and no TENO5 value changed on 10⁵ random
+# stencils; see the KA-c notes in test/era2_advection.jl).
 @inline _ipow(x, ::Val{1}) = x
 @inline _ipow(x, ::Val{2}) = x*x
 @inline _ipow(x, ::Val{3}) = x*x*x
