@@ -231,6 +231,9 @@ function sbl_surface!(c::SBLCase, t)
     z1 = m.dz / 2
     θs = surface_temperature(c.Ts, t)
     c.t_surf = t
+    # the first-level wind of column Nx (Ny) reads the periodic halo: refill
+    # it from the current interior (the last RK3 combination left it stale)
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
     @inbounds for j in 1:m.Ny, i in 1:m.Nx
         uc, vc, θ = _sbl_first_level(sim, i, j)
         sol = solve_surface_layer(c.sf; U = sqrt(uc^2 + vc^2), z_m = z1, θ_a = θ, θ_s = θs,
