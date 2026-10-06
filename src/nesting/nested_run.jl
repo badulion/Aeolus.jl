@@ -263,7 +263,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     _mark_nest_solids!(child, solid)
     data = nest_boundary_data(s_old, s_new; t0 = child.t, Δt = 0.0)
     _attach_nest_data!(child, data)
-    _fill_nest_halos!(child, s_old)
+    fill_nest_halos!(child, s_old)
     regs = twoway !== nothing && twoway.reflux ?
            NestFluxRegisters(nest, parent, child, s_bc, twoway, advance_parent, advance_child) :
            nothing
@@ -320,7 +320,7 @@ function _set_window!(run::NestedRun)
     d.a = run.s_old; d.b = run.s_new
     d.t0 = run.t0; d.Δt = run.Δt
     run.sponge_τ = NaN
-    _fill_nest_halos!(run.child, run.s_old)
+    fill_nest_halos!(run.child, run.s_old)
     return run
 end
 

@@ -139,9 +139,25 @@ function _attach_nest_data!(csim, data::NestBoundaryData)
     return csim
 end
 
-# Refresh the child's open-boundary buffers at the child's time and write
-# them into the halos of every member of the field set.
-function _fill_nest_halos!(csim, s::NestInterpState)
+"""
+    fill_nest_halos!(child_sim, state) -> child_sim
+
+Refresh the open-boundary buffers of a nested child at the child's own
+time (`child_sim.t`) from the boundary data attached to its nest faces
+(the [`NestBoundaryData`](@ref) of a [`NestedRun`](@ref) or of
+[`apply_nest_boundary!`](@ref)), with the single mass-flux correction,
+and write them into the halos of every member of `state`'s field set:
+`u, v, w` with the child's `bcs`, `θ`, `qv` and the bound tracers with
+its `θ_bcs`. Faces that are not nest faces are filled by their own
+condition. A no-op for a child without open faces.
+
+What a driver calls after it changed the child's boundary data or clock
+outside a [`NestedRun`](@ref) step — for instance an externally driven
+child whose parent advances on its own (the Berlin nest, #265) — so that
+the next tendency evaluation sees the current parent. `NestedRun` calls
+it itself at the start of every parent-step window.
+"""
+function fill_nest_halos!(csim, s::NestInterpState)
     has_open_boundaries(csim) || return csim
     update_open_boundaries!(csim, csim.t, zero(csim.t))
     fill_halos!(csim.u, csim.bcs); fill_halos!(csim.v, csim.bcs); fill_halos!(csim.w, csim.bcs)
@@ -172,5 +188,9 @@ function apply_nest_boundary!(csim::_NestSim, s::NestInterpState; solid = nothin
     has_open_boundaries(csim) || return csim
     _mark_nest_solids!(csim, solid)
     _attach_nest_data!(csim, nest_boundary_data(s; t0 = csim.t))
-    return _fill_nest_halos!(csim, s)
+    return fill_nest_halos!(csim, s)
 end
+
+# The pre-#329 private name, kept for callers written against it (the
+# Berlin nest coupling of #265 calls Aeolus.Nesting._fill_nest_halos!).
+const _fill_nest_halos! = fill_nest_halos!

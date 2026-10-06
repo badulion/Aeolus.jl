@@ -22,6 +22,8 @@
 #      Dirichlet (parent) one; the advection halo is checked
 #   8. a NestSponge keeps the child divergence-free (#329): the velocity is
 #      relaxed before the projection
+#   9. fill_nest_halos! (public since #329): new boundary data reach the
+#      child's halos
 #
 # References: Hellsten et al. (2021), GMD 14, 3185 (PALM nesting: Dirichlet
 # child boundary from the interpolated parent, §3.2; mass-flux correction,
@@ -569,6 +571,30 @@ end
         @test worst < 1e-10
         @test broken > 1e3 * worst        # the test can see the old placement
     end
+end
+
+# fill_nest_halos! is the public entry a driver uses after changing a
+# child's boundary data outside a NestedRun step (#329, item 7; the Berlin
+# nest coupling of #265 called the private _fill_nest_halos!).
+@testset "fill_nest_halos!: new boundary data reach the halos (#329)" begin
+    pm = RegularGrid(Float64; size = (8, 8, 8), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2)
+    cm = nest_child_mesh(nest)
+    psim = BoussinesqSimulation(pm)
+    csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest, :periodic))
+    st = nest_interp_state(nest)
+    fill!(st.θ.data, 301.0)
+    apply_nest_boundary!(csim, st)
+    ii, jj, kk = interior(cm)
+    @test csim.θ.data[first(ii) - 1, first(jj), first(kk)] == 301.0
+    fill!(st.θ.data, 305.0)                       # the driver's new parent data
+    @test csim.θ.data[first(ii) - 1, first(jj), first(kk)] == 301.0
+    @test fill_nest_halos!(csim, st) === csim
+    @test csim.θ.data[first(ii) - 1, first(jj), first(kk)] == 305.0   # west halo
+    @test csim.θ.data[last(ii) + 1, last(jj), first(kk)] == 305.0     # east halo
+    @test Aeolus.Nesting._fill_nest_halos! === fill_nest_halos!       # #265's name
+    closed = BoussinesqSimulation(cm)
+    @test fill_nest_halos!(closed, st) === closed                      # no open faces
 end
 
 end # testset

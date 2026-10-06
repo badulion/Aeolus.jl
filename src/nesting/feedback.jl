@@ -422,9 +422,9 @@ end
 # stage, after the tendencies and before the predictor, when the halos of
 # the state, the velocities and the SGS coefficients are those the stage
 # used. It books the scalars the core transports (applied_by = :core).
-struct _RegisterHook <: Function
-    regs::NestFluxRegisters
-    nest::NestedGrid
+struct _RegisterHook{R<:NestFluxRegisters, N<:NestedGrid} <: Function
+    regs::R
+    nest::N
     which::Symbol
 end
 
