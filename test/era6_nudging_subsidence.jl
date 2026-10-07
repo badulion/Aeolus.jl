@@ -31,7 +31,7 @@ using Aeolus.Grids: znodes
 using Aeolus.StretchedGrids: cell_thickness
 using Statistics: mean
 
-isdefined(Main, :gabls2_case) || include(joinpath(@__DIR__, "..", "examples", "sbl", "cases.jl"))
+isdefined(Main, :sbl_build) || include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))
 
 _ns_level(f, k) = (iv = interior_view(f); sum(@view iv[:, :, k]) / (size(iv, 1) * size(iv, 2)))
 _ns_quiet(Nz; Lz = 800.0, θ₀ = 300.0, N = 4) =
@@ -313,7 +313,10 @@ end
         # 22 Oct to 06 LT 24 Oct (16-54 h). One run to 40 h, then the case
         # with subsidence and a copy without it (the D = 0 sensitivity run).
         # The full-resolution numbers are from examples/sbl/gabls2.jl (PR body).
-        c = gabls2_case(; N = (16, 16, 40), extent = (2400.0, 2400.0, 1600.0), t_end = 56 * 3600.0)
+        # The case of examples/sbl/configs/gabls2.toml (the `sbl` run driver,
+        # CFG-d #359), its surface temperature sampled to 56 h.
+        c = sbl_build("gabls2"; overrides = ["grid.size=[16,16,40]",
+            "surface.temperature={kind=\"gabls2\", p_sfc=97200.0, exponent=0.286, sample_every=60.0, until=201600.0}"]).case
         @test count(f -> f isa Subsidence, c.forcing) == 1
         H0 = sbl_column_heat(c)
         ledger(c) = sbl_column_heat(c) - H0 - c.heat_applied - c.adv_heat_applied - c.ls_heat_applied

@@ -256,8 +256,11 @@ checkpoint_fields(sim::BoussinesqSimulation) =
     (u = sim.u, v = sim.v, w = sim.w, p = sim.p, θ = sim.θ, qv = sim.qv,
      νt = sim.νt, κt = sim.κt)
 
+# dz: the uniform spacing, or a StretchedGrid's cell thicknesses (it has no
+# `dz` field; a stretched run's checkpoint failed on it before CFG-b, #357)
 _mesh_record(m) = (Nx = m.Nx, Ny = m.Ny, Nz = m.Nz, Hx = m.Hx, Hy = m.Hy, Hz = m.Hz,
-                   Lx = m.Lx, Ly = m.Ly, Lz = m.Lz, dx = m.dx, dy = m.dy, dz = m.dz)
+                   Lx = m.Lx, Ly = m.Ly, Lz = m.Lz, dx = m.dx, dy = m.dy,
+                   dz = hasfield(typeof(m), :dz) ? m.dz : copy(m.dzc))
 
 # the run's scalar parameters (numbers and flags of the simulation struct)
 _parameters(sim) = Dict{Symbol,Any}(n => getfield(sim, n) for n in fieldnames(typeof(sim))

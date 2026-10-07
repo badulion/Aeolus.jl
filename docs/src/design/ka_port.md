@@ -108,6 +108,24 @@ inner `i` loop a plain loop the compiler vectorises. A GPU backend will
 launch the same body one point per work item; the body is the portable
 unit, not the iteration strategy.
 
+**The arguments reach the loop as arguments** (KA-d, #299). A large body
+with branches (WENO-5, the tensor-diffusion face fluxes) inlined into a
+loop that reads its arguments out of the `args` tuple ran 3-5× slower
+than the same body in a plain loop (WENO-5 at 64×64×32, one thread:
+6.3 ms against 2.1 ms): LLVM did not hoist the array loads behind the
+branches. Arrays that arrive as function arguments are known
+dereferenceable, and then it does. So the serial path calls
+`_nest!(body!, ir, jr, kr, a1, …, aN)`, the whole `k/j/i` nest in one
+function with the arguments separate, and the threaded row kernel calls
+`_row!(body!, ir, j, k, a1, …, aN)` per work item. Each argument has its
+own type parameter (a function among them is still specialised; methods
+are generated for up to 24 arguments, plain loops beyond). Same
+operations in the same order, so no bit changes. Small kernels are
+unchanged at one thread (axpy 22-24 µs, `set!` 11 µs, the Laplacian
+46-47 µs at 64×64×32); WENO-5 went from 6.3 to 2.0 ms at one thread and
+from 0.83 to 0.39 ms at 12. A call per *row* on the serial path instead
+of one per nest made the Laplacian 1.3× the old loop, hence `_nest!`.
+
 **Column kernels: `launch_weighted!`** (KA-h, #298). A body that loops
 over a whole column itself — a tridiagonal solve in z, serial within the
 work item — does `Nz` points of work per index, so a launch over
@@ -385,7 +403,7 @@ Left as they are, with the reason:
   order-independent.
 * **Plane-at-a-time loops** (dynamic Smagorinsky, #288 damping levels,
   `LargeScaleForcing` nudging and subsidence): canonical as they stand.
-* **CG / MG dot products**: KA-g (#300).
+* **CG / MG dot products**: ported by KA-g (#300), below.
 * **Reports, smoke checks and one-off diagnostics** (`bubble_top_height`,
   `θ_variance`, the SGS reports, `laminar_reference_νt`): not on the step
   path; serial and thread-invariant.
@@ -605,6 +623,152 @@ Reading the table:
 * **The whole-child prolongation is compute-bound** (a 27-point stencil
   per point) and scales to 7.1× at 24 threads.
 
+## KA-g: one CG driver (#300)
+
+**One loop.** `Backends.pcg!` is the only preconditioned conjugate
+gradient in Aeolus. `CGPoissonSolver`, `MGPreconditionedCG`,
+`DensityWeightedPoissonSolver` and `solve_implicit_diffusion!` (the IMEX
+steppers' implicit diffusion) call it. Their own loops are deleted:
+`_dot!`, `_project_mean_flat!`, Anelastic's `_dot`, `_remove_mean!` and
+`_jacobi!`, TimeIntegration's `_apply_implicit!` and `_idot`. A solver
+supplies four things:
+
+* the operator: a `PointOperator(f, args...; prepare)` (the stencil at
+  one point; `prepare` is the halo fill of the array it reads) or a
+  function `A!(Ap, p)` (the multigrid fine-grid operator);
+* the preconditioner: `IdentityPreconditioner()`, a pointwise
+  `PointPreconditioner` (Jacobi), or a function `M!(z, r)` (V-cycles);
+* `project_mean` for a singular operator (all axes periodic or Neumann);
+* `constraint`: the pinned planes of a staggered field with walls.
+
+Per iteration the driver makes three sweeps and two canonical
+reductions:
+
+1. `Ap = A p`, with `p·Ap` reduced over each plane while it is in cache;
+2. `x += αp`, `r -= αAp`, `z = M⁻¹r` (a pointwise `M`), with
+   `(r·r, r·z, Σz, Σr)` as one 4-tuple reduction;
+3. `p = (z − m) + βp`, where `m = Σz / n` with the mean projected out.
+
+The mean projection costs no extra sweep: `r·z` of the deflated `z` is
+`Σ rz − m Σ r`. The density-weighted solver went from nine passes over
+the arrays per iteration (five sweeps and four separate reductions) to
+three sweeps carrying two reductions. A function preconditioner adds one
+reduction after `M!`. Every reduction is a `plane_reduce!`-style plane
+sum, so a solve, its iteration count and its residual are the same at
+every thread count.
+
+**Unit halos.** `CGPoissonSolver` and `DensityWeightedPoissonSolver`
+now keep `b`, `x`, `r`, `z`, `p` and `Ap` as `(N+2)`-arrays with one halo
+layer. `fill_unit_halo!` (the KA-f halo kernels, also the multigrid
+level halo) fills the periodic wrap or the Neumann mirror before each
+operator application. The stencil then has no wrap-around index
+arithmetic and vectorises: one point of `_laplacian_at` and
+`_neg_wlap_at` gives the values of the old wrap-around loops (a mirrored
+neighbour makes the face difference exactly zero). The implicit
+diffusion iterates on the field's own storage as before, with
+`fill_halos!` as `prepare`. `_diffusion_kernel!` is a `launch!` of
+`_diff_at`.
+
+**Pinned rows.** A per-point pinned test in the sweeps stopped the row
+loops from vectorising: 4× slower in a first version. The sweeps
+therefore compute every point and then zero the pinned plane (`Ap`, `z`
+and `p` there are 0, `x` keeps its value, `b` there does not count in
+`‖b‖`), as `_apply_constraint!` did.
+
+**Status.** `pcg!` returns `(iterations, residual, bnorm, status,
+curvature)`. `status` is `:converged`, `:maxit`, `:breakdown` or
+`:zero_rhs`, and each solver logs it as before. One change:
+`CGPoissonSolver` now stops at a breakdown and warns. Before, it divided
+by a vanishing `p·Ap` and went on. `definite = :negative` is for the
+two Poisson solvers that iterate on `∇²` itself (negative
+semi-definite). For those only a vanishing curvature is a breakdown.
+
+**Workspace.** `PCGWorkspace` holds `r`, `z`, `p`, `Ap` and the
+per-plane partial sums. Every solver preallocates one, so a solve
+allocates nothing on one thread. Measured with `@allocated`, the
+Poisson solvers allocate 0 B. `solve_implicit_diffusion!` allocates
+48 B (352 B with a moving wall), the same as before; the 48 B are its
+returned NamedTuple at a dynamic call site. A first version allocated
+80 B more with a ν array: the `Union` of the two preconditioners was
+boxed. It now has one `pcg!` call per preconditioner. Above the serial threshold a threaded launch allocates
+KernelAbstractions' tasks, about 9 kB per iteration at 4 threads.
+
+**One-time change (expectation).** The dot products were
+`sum(w .= a .* b)` (pairwise) in CG and MG-CG and serial `@simd` loops
+in the other two. They are now canonical plane sums. The iteration
+counts did not change: identical in all 28 cases measured (the 14
+below at 32×32×16 and 64×64×32; the issue allowed ±1). The solutions
+change in the last bits: `sum(|x|)` and `max(|x|)` changed by at most
+2.2e-15 and 1.8e-15 relative (deep density-weighted case). In 2 of the
+28 cases both are bit-identical. No regression reference of the suite
+moved. One assertion was replaced: `era2_multigrid.jl` asserted that
+MG-CG's dot equals `sum(x .* y)`. It now asserts that the driver's dot
+is `interior_dot` (canonical).
+
+**Measured** (64×64×32; ms per solve, minimum of 5; load 2-4 for 1 and
+24 threads and 2-6 for 4 and 12; Julia 1.13.1; old = master b4f6f82 at
+one thread; speed-up = old 1 t / new N t, in brackets new 1 t / new N
+t):
+
+| solver | iterations old → new | old 1 t | new 1 t | new / old | 4 t | 12 t | 24 t |
+| :----- | :------------------- | ------: | ------: | --------: | --: | ---: | ---: |
+| CG, periodic xy, Neumann z | 288 → 288 | 123.4 | 51.0 | 0.41 | 5.3× (2.18×) | 3.8× (1.56×) | 3.8× (1.55×) |
+| CG, closed box | 508 → 508 | 221.2 | 89.6 | 0.41 | 5.9× (2.40×) | 2.9× (1.17×) | 3.7× (1.50×) |
+| CG, triply periodic | 259 → 259 | 108.9 | 46.7 | 0.43 | 6.0× (2.56×) | 3.0× (1.30×) | 3.7× (1.57×) |
+| MG-CG, periodic xy, Neumann z | 12 → 12 | 40.3 | 39.1 | 0.97 | 1.0× | 1.0× | 1.0× |
+| MG-CG, triply periodic | 12 → 12 | 40.4 | 39.0 | 0.97 | 1.0× | 0.9× | 1.0× |
+| MG-CG, stretched (×1.04) | 47 → 47 | 226.7 | 222.4 | 0.98 | 1.0× | 0.9× | 1.0× |
+| density-weighted, periodic xy, Neumann z | 330 → 330 | 124.7 | 62.0 | 0.50 | 4.8× (2.41×) | 2.4× (1.18×) | 3.3× (1.62×) |
+| density-weighted, triply periodic | 292 → 292 | 93.7 | 54.0 | 0.58 | 4.1× (2.37×) | 2.4× (1.40×) | 2.8× (1.62×) |
+| density-weighted, closed box | 569 → 569 | 224.1 | 105.3 | 0.47 | 5.5× (2.61×) | 2.8× (1.32×) | 3.3× (1.56×) |
+| density-weighted, 3 km deep | 519 → 519 | 223.9 | 96.1 | 0.43 | 6.0× (2.57×) | 3.2× (1.38×) | 3.6× (1.56×) |
+| implicit diffusion θ, scalar ν | 27 → 27 | 11.0 | 5.6 | 0.51 | 4.0× (2.07×) | 2.4× (1.23×) | 2.8× (1.44×) |
+| implicit diffusion θ, ν(x, z), walls | 34 → 34 | 46.6 | 28.6 | 0.61 | 5.1× (3.12×) | 4.3× (2.67×) | 3.2× (1.99×) |
+| implicit diffusion w, pinned walls | 27 → 27 | 11.0 | 5.6 | 0.51 | 3.9× (2.01×) | 2.1× (1.07×) | 2.9× (1.47×) |
+| implicit diffusion u, moving no-slip wall | 28 → 28 | 11.5 | 5.9 | 0.51 | 4.5× (2.28×) | 2.5× (1.28×) | 2.8× (1.41×) |
+
+The Berlin flagship step at 64³ (ms per step, minimum of 8 after 2
+warm-up steps, the smoke matrix's `core = anelastic` and `timestepper =
+imex` rows without nesting; the `:dynamics` timers in brackets; 419
+density-weighted iterations per solve; old = master b4f6f82):
+
+| run | old 1 t | new 1 t | new 4 t | new 12 t | new 24 t | old 24 t |
+| :-- | ------: | ------: | ------: | -------: | -------: | -------: |
+| anelastic core | 362.0 (276.0) | 291.0 (205.2) | 169.2 (91.0) | 196.8 (120.0) | 243.6 (164.0) | 353.2 (276.8) |
+| IMEX ARK2 | 234.2 (151.3) | 216.1 (132.2) | 141.2 (69.7) | 144.2 (70.8) | 164.6 (85.5) | 220.9 (148.2) |
+
+Reading the tables:
+
+* **The 1-thread gate holds everywhere** (largest new / old 0.98,
+  MG-CG stretched). CG, density-weighted CG and implicit diffusion are
+  0.41-0.61× the old loops on one thread. The gain comes from fewer
+  sweeps (the fused reductions, the mean projection folded into `r·z`)
+  and from stencils without wrap-around indices.
+* **MG-CG does not change.** Its time is the V-cycle (smoothing,
+  restriction, prolongation). That cycle is still serial and outside
+  this issue.
+* **Threads.** The issue expected 2-3× at 4 threads and 3-5× at 12.
+  Against the new 1-thread time we get 2.0-3.1× at 4 threads and
+  1.1-2.7× at 12. At 12 threads it is worse than at 4, and 24 threads
+  is between the two. The likely cause (not profiled) is that 32 planes
+  of 64×64 points are too little work per task for the start-up of
+  three launches per iteration. Against the old loops at one
+  thread this is 3.9-6.0× at 4 threads.
+* **Berlin.** At 4 threads the anelastic dynamics take 91 ms instead of
+  276 ms (3.0×) and the IMEX dynamics 70 ms instead of 151 ms (2.2×).
+  The issue quoted 139.6 ms and 124.7-163.9 ms, measured on another
+  setup; on this one master takes 276 ms and 151 ms. The replacement of the
+  density-weighted CG by a direct solve is #309.
+
+**Thread invariance.** The worker's `pcg` section hashes the solution
+and the iteration count of every solver above at 64×64×32 (the
+singular Neumann and periodic cases, the stretched multigrid and the
+ν(x, z) / pinned / moving-wall implicit cases): 28 hashes. With
+`AEOLUS_THREAD_TESTS=1` at 1, 4 and 24 threads, all 2894 hashes of the
+harness (every section, `pcg` included) are identical to 1 thread.
+`test/ka_pcg.jl` checks the serial backend against the default one,
+solution and iteration count, for every solver.
+
 ## Measured at KA-h
 
 Same machine, Julia 1.13.1, FFTW 1.10.0 (FFTW 3.3.10), ESTIMATE plans,
@@ -668,6 +832,239 @@ the flagship step and the new fft section) identical at 4, 12 and 24
 threads to 1 thread. Two separate processes at `-t 1` and two at `-t 24`
 gave the same fft and dns hashes. At `-t 1` every solve is bit-identical
 to master: no one-time change.
+
+## KA-d: grid metrics and the finite-volume kernels (#299)
+
+**One kernel per operator for both grids.** Every kernel of
+`Operators.FiniteVolume` is a point body run by `launch!`, and the body
+reads the grid only through its *metrics*. `grid_metrics(g)` returns a
+`GridMetrics`: uniform `1/Δx`, `1/Δy` (and `1/Δx²`, `1/(2Δx)`, …) and, in
+z, a `UniformZ` on a `RegularGrid` (scalars, built per call, no
+allocation) or a `LevelZ` on a `StretchedGrid` (vectors over the storage
+levels, built once with the grid by `StretchedGrids.level_metrics` and
+cached in its `zm` field). A body asks for a metric through an `@inline`
+accessor:
+
+| accessor | `RegularGrid` (`UniformZ`) | `StretchedGrid` (`LevelZ`) |
+| :------- | :------------------------- | :------------------------- |
+| `_idx(m, i)`, `_idy(m, j)` | `1/Δx`, `1/Δy` | same |
+| `_idz(m, k)` | `1/Δz` | `1/Δz_c[k]`: across cell `k` (face → centre; the volume of a centre-located field) |
+| `_idzf(m, k)` | `1/Δz` | `1/Δz_f[k]`: centres `k−1`, `k` (centre → face; the volume of `w`) |
+| `_idz_off(m, k)` | `1/Δz` | `2/(Δz_f[k] + Δz_f[k+1])`: ∂u/∂z at a centre |
+| `_zface(m, k, lo, hi)` | `0.5*(lo + hi)` | `wlo[k]*lo + whi[k]*hi`, the geometric weights |
+| `_zflux(m, k, lo, hi)` | `0.5*(lo + hi)` | `alo[k]*lo + ahi[k]*hi`, the side-face volume flux of a `w` cell |
+| `_zcentre(m, k, lo, hi)` | `0.5*(lo + hi)` | `clo[k]*lo + chi[k]*hi` |
+| `_lapz(m, loc, k, fm, c, fp)` | `(fp − 2c + fm)/Δz²` | the conservative flux difference, `w`'s metrics for `loc = FaceZ` |
+| `_addz3(m, k, acc, fm, fc, fp)` | `acc + (fp − fm)/(2Δz)` | `acc + d3m[k]*fm + d3c[k]*fc + d3p[k]*fp` |
+| `_filter_width(m, k)` | `(Δx Δy Δz)^{1/3}` | `(Δx Δy Δz_c[k])^{1/3}` |
+
+**The contract:** every accessor evaluates the *same floating-point
+expression* that the pre-port kernel of that grid evaluated (on a
+uniform grid `0.5*(a + b)`, never `0.5a + 0.5b`; on a stretched grid the
+per-level quantity the old loop computed at the top of its `k` loop,
+precomputed with the same expression). A body written against the
+accessors is therefore the old RegularGrid kernel on a `RegularGrid`
+and the old StretchedGrid kernel on a `StretchedGrid`, bit for bit. A
+new kernel that needs a metric not in the table adds an accessor with a
+method for both types; a mesh without `grid_metrics` (the
+`TerrainFollowingGrid`, whose metrics are 3-D) keeps its own methods.
+
+**What was folded.** The `StretchedGrid` had about twenty kernels that
+were copies of the RegularGrid ones with the vertical metric swapped in:
+the Phase-24 derivatives, Laplacian, divergence, interpolation, surface
+flux, sponge and buoyancy of `StretchedGrids.jl`, and the #151 / #276
+momentum and scalar advection, `w` Laplacian, moist buoyancy,
+Smagorinsky, eddy viscosity `u/v/w` and eddy diffusion of
+`stretched/boussinesq.jl`. They are gone; the FiniteVolume kernels take
+`g::AbstractMesh`. `stretched/boussinesq.jl` keeps only what has no
+RegularGrid twin there (the core's `_dzc/_dzf/_dz_min` and the TKE
+closure's N²).
+
+**Ported to `launch!`** (all in FiniteVolume unless noted):
+
+* derivatives (collocated and staggered), Laplacian, divergence (both),
+  interpolation, the surface flux (a 2-D launch);
+* momentum advection (three launches), dry and moist buoyancy, Coriolis
+  (one launch writing `tu` and `tv`), Smagorinsky νt, eddy viscosity
+  `u/v/w`, the SGS stress divergence (one launch), the stored-stress
+  divergence, `_sgs_stress_tensor!` (one launch per component range);
+* scalar eddy diffusion (every variant, including the masked and weighted
+  `_add_eddy_diffusion_scalar_masked!`), the tensor diffusion (one launch
+  per face direction over its extended range, e.g. `i ∈ Hx:i2`, then the
+  divergence; the face gradients `gW … gT` are the named functions
+  `_tg_W … _tg_T`), `_isentropic_tensor!`;
+* WENO-5, centred (staggered and collocated) and upwind scalar advection
+  (all three are public API, `advect_weno5!`, `advect_centered!`,
+  `advect_upwind!`: ported, not deleted);
+* `StretchedGrids`: `_set_physical!` (one launch over the storage; `fun`
+  must not mutate shared state), and the `TerrainFollowingGrid` kernels
+  (derivatives, divergence, Laplacian, surface flux). The staggered
+  divergence used a column buffer for the contravariant flux Ω; each work
+  item now evaluates the Ω of its two faces with the same arithmetic
+  (a face is computed twice). The Laplacian is three flux launches and a
+  divergence launch.
+
+**`_add_damping!` with `levels`** (the #288 budget path) is launched over
+the levels only (`launch_weighted!` over `k` with weight `Nx·Ny`): one
+work item owns plane `k` and runs its `(j, i)` loop serially, so the sum
+into `levels[kl]` is the old one at every thread count. A 3-D launch
+would have several tasks adding into the same `levels[kl]`. Without
+`levels` the damping is a 3-D pointwise launch.
+
+**A launch change for large bodies.** WENO-5 and the tensor-diffusion
+fluxes first ran 3.1× and 5.2× the old loops at one thread. The bodies
+were not the problem (the same body in a plain loop matched the old
+kernel); the `args` tuple was: see "The arguments reach the loop as
+arguments" above (`_nest!` / `_row!`, a `Backends.jl` change that leaves
+every bit unchanged). The tensor fluxes also took their flags and bounds
+in a struct, which cost 2.3× on its own; they take scalars now.
+
+**Tests.** `test/ka_fv.jl` compares every ported kernel bit for bit with
+a transcript of the pre-port loops (`test/support/legacy_fv.jl`: the old
+FiniteVolume, StretchedGrids and `stretched/boussinesq.jl` methods) on a
+RegularGrid, a geometric and a `:uniform` StretchedGrid and a
+TerrainFollowingGrid over a hill, on random fields with random halos,
+on the serial, threshold-0 and default backends (600 checks; the folded
+stretched kernels against the copies they replace); the damping with
+`levels` on every backend; the metric accessors against the old per-level
+expressions; zero allocation on the serial path. The harness has an `fv`
+section (below). `test/era2_stretched.jl` asked *which module* defined
+the StretchedGrid stencils; with one kernel per operator that
+expectation was obsolete, and it now checks that a StretchedGrid hands
+the kernels its per-level metrics (its behavioural check is unchanged).
+
+No bit changes: KA-d names no one-time change, and none occurred (every
+kernel bit-identical to the old loop, serially and threaded).
+
+**Measured** (same machine, a Ryzen 9 7900: 12 cores / 24 threads, 2 ×
+32 MB L3, dual-channel DDR5; minimum of 200 runs at 64×64×32, 8 runs at
+256³; load 6–9 from other agents; µs; old = the pre-port loop at one
+thread; speed-up = old at 1 thread / new at N threads; R = RegularGrid,
+S = geometric StretchedGrid):
+
+| kernel | old, 1 t (µs) | new, 1 t (µs) | 1 t / old | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: | --: | --: |
+| R ∂x c→f | 21.2 | 21.1 | 0.99 | 1.3× | 1.5× | 1.1× |
+| R ∂z c→f | 28.3 | 28.1 | 1.00 | 1.6× | 1.6× | 1.5× |
+| R ∂z cc | 27.9 | 27.9 | 1.00 | 1.8× | 2.1× | 1.4× |
+| R interp c→fz | 28.2 | 28.1 | 1.00 | 1.2× | 1.8× | 1.5× |
+| R laplacian cc | 46.5 | 46.9 | 1.01 | 2.2× | 2.1× | 1.9× |
+| R laplacian w | 45.8 | 45.8 | 1.00 | 1.8× | 2.1× | 1.9× |
+| R divergence | 48.9 | 48.4 | 0.99 | 1.3× | 2.0× | 1.7× |
+| R surface flux | 0.7 | 0.7 | 1.03 | 0.9× | 0.9× | 1.0× |
+| R momentum advection | 302.9 | 303.1 | 1.00 | 2.4× | 2.3× | 2.0× |
+| R scalar advection | 92.7 | 93.6 | 1.01 | 2.0× | 2.3× | 2.1× |
+| R buoyancy | 30.4 | 30.4 | 1.00 | 1.8× | 1.7× | 1.5× |
+| R moist buoyancy | 48.6 | 48.2 | 0.99 | 1.8× | 2.1× | 1.8× |
+| R coriolis | 66.0 | 66.1 | 1.00 | 2.0× | 2.4× | 2.2× |
+| R smagorinsky | 791.8 | 747.4 | 0.94 | 3.9× | 4.8× | 5.5× |
+| R eddy viscosity u | 115.7 | 116.0 | 1.00 | 1.6× | 2.6× | 2.8× |
+| R eddy viscosity w | 112.8 | 112.1 | 0.99 | 1.8× | 2.7× | 2.5× |
+| R eddy diffusion scalar | 103.1 | 104.6 | 1.01 | 2.2× | 3.0× | 2.4× |
+| R sponge | 317.4 | 292.7 | 0.92 | 2.0× | 2.6× | 3.6× |
+| R damping with levels | 345.6 | 299.8 | 0.87 | 2.1× | 1.9× | 2.0× |
+| R masked eddy diffusion | 1124.0 | 959.8 | 0.85 | 4.5× | 5.0× | 6.0× |
+| R SGS stress divergence | 522.7 | 520.7 | 1.00 | 3.4× | 3.1× | 3.4× |
+| R SGS stress tensor | 287.0 | 288.1 | 1.00 | 1.6× | 1.2× | 1.3× |
+| R stored-stress divergence | 142.1 | 142.6 | 1.00 | 2.1× | 2.7× | 2.4× |
+| R tensor diffusion | 631.0 | 621.5 | 0.98 | 2.7× | 2.6× | 2.5× |
+| R isentropic tensor | 196.7 | 197.3 | 1.00 | 2.4× | 1.1× | 2.8× |
+| R WENO-5 | 1957.4 | 1975.6 | 1.01 | 3.9× | 4.1× | 6.7× |
+| S ∂x c→f | 20.9 | 21.2 | 1.01 | 1.4× | 1.3× | 1.1× |
+| S ∂z c→f | 28.4 | 28.5 | 1.00 | 1.4× | 1.8× | 1.4× |
+| S ∂z cc | 37.6 | 38.5 | 1.02 | 1.6× | 1.9× | 1.7× |
+| S interp c→fz | 28.8 | 28.6 | 0.99 | 1.3× | 1.6× | 1.4× |
+| S laplacian cc | 45.9 | 47.4 | 1.03 | 1.5× | 1.9× | 1.9× |
+| S laplacian w | 47.0 | 49.0 | 1.04 | 1.9× | 2.0× | 1.8× |
+| S divergence | 49.7 | 48.9 | 0.98 | 1.8× | 2.0× | 1.9× |
+| S surface flux | 0.7 | 0.7 | 1.00 | 0.9× | 1.0× | 1.0× |
+| S momentum advection | 315.0 | 318.9 | 1.01 | 2.5× | 2.9× | 2.2× |
+| S scalar advection | 95.2 | 95.1 | 1.00 | 2.1× | 2.5× | 2.2× |
+| S buoyancy | 30.3 | 30.8 | 1.02 | 1.2× | 1.7× | 1.4× |
+| S moist buoyancy | 48.4 | 47.9 | 0.99 | 1.2× | 2.2× | 1.9× |
+| S coriolis | 66.5 | 65.9 | 0.99 | 2.5× | 2.4× | 2.2× |
+| S smagorinsky | 746.1 | 789.4 | 1.06 | 3.6× | 4.0× | 4.6× |
+| S eddy viscosity u | 109.8 | 112.3 | 1.02 | 2.4× | 3.3× | 2.5× |
+| S eddy viscosity w | 115.4 | 115.8 | 1.00 | 2.6× | 2.7× | 2.6× |
+| S eddy diffusion scalar | 104.7 | 106.2 | 1.01 | 2.6× | 2.5× | 2.5× |
+| S sponge | 283.3 | 257.0 | 0.91 | 1.9× | 2.8× | 3.1× |
+| S damping with levels | 303.4 | 265.7 | 0.88 | 1.9× | 1.6× | 1.9× |
+
+At 256³ (DRAM-bound):
+
+| kernel | old, 1 t (µs) | new, 1 t (µs) | 1 t / old | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: | --: | --: |
+| R laplacian cc | 15456.5 | 15633.4 | 1.01 | 1.7× | 1.7× | 1.6× |
+| R divergence | 17178.2 | 17197.4 | 1.00 | 1.2× | 1.2× | 1.1× |
+| R momentum advection | 87552.2 | 87564.9 | 1.00 | 1.9× | 1.6× | 1.4× |
+| R scalar advection | 30407.0 | 31573.6 | 1.04 | 1.5× | 1.5× | 1.4× |
+| R smagorinsky | 114957.5 | 108128.6 | 0.94 | 3.8× | 4.3× | 4.3× |
+| R eddy diffusion scalar | 25217.2 | 25761.6 | 1.02 | 1.9× | 1.5× | 1.4× |
+| R masked eddy diffusion | 144628.6 | 124607.9 | 0.86 | 4.0× | 6.3× | 6.9× |
+| R tensor diffusion | 117952.6 | 117062.8 | 0.99 | 1.6× | 1.5× | 1.4× |
+| S laplacian cc | 15610.6 | 15377.3 | 0.99 | 1.7× | 1.6× | 1.6× |
+| S divergence | 17998.0 | 17714.2 | 0.98 | 1.2× | 1.2× | 1.2× |
+| S momentum advection | 82376.1 | 82006.6 | 1.00 | 1.7× | 1.4× | 1.3× |
+| S scalar advection | 29441.5 | 29893.1 | 1.02 | 1.6× | 1.4× | 1.3× |
+| S smagorinsky | 114068.0 | 115879.0 | 1.02 | 3.5× | 4.6× | 4.5× |
+| S eddy diffusion scalar | 25350.4 | 26754.3 | 1.06 | 1.9× | 1.8× | 1.4× |
+
+Reading the tables:
+
+* **The 1-thread gate holds for every kernel**: largest 1.06 (the
+  stretched Smagorinsky; its RegularGrid twin is 0.94). Re-measured
+  after merging master `b4f6f82` (load 6-10, so absolute times 15-50 %
+  higher, the ratios noisier): every 64×64×32 kernel 0.92-1.08 (largest
+  R `∂z c→f` 1.08, R SGS stress divergence 1.07). Several kernels
+  are faster (not profiled): the damping kernel 0.87–0.92, the masked
+  eddy diffusion 0.85, the RegularGrid Smagorinsky 0.94.
+* **At 64×64×32 the light stencils reach 1.5–3×**, not the 4–6× the
+  issue expected. Each takes 20–120 µs at one thread; a launch costs
+  about 10–16 µs of task start and join (measured at KA-a), and the
+  points-per-task rule (16 384) gives a 131 072-point launch at most 8
+  tasks. The heavy kernels reach 4.6–6.7× at 24 threads (Smagorinsky,
+  masked diffusion, WENO-5). Fusing launches (fewer, longer kernels per step) is the lever
+  for the light ones; that is not in KA-d's scope.
+* **At 256³ the stencils are DRAM-bound**: 1.2–1.9× at 4–24 threads.
+  A plain threaded triad (`a = b + 2c` over 256³, `Threads.@threads`)
+  moves 25.6 GB/s on one thread and 35.7 / 34.4 / 36.7 GB/s at 4 / 12 /
+  24 threads: at most 1.4×, so the stencils sit at the memory ceiling of
+  this dual-channel machine (they beat the triad's ratio a little through
+  cache reuse of the stencil neighbours). The compute-heavy kernels scale
+  further (Smagorinsky 4.3–4.6×, masked diffusion 6.9× at 24 threads).
+* The 64×64×32 24-thread column was re-measured at load 5 (the first
+  run overlapped other agents' jobs at load 9 and gave e.g. S `∂x` 0.5×);
+  the columns still carry a few tenths of noise (the R isentropic tensor's
+  1.1× at 12 threads against 2.4× and 2.8× at 4 and 24).
+
+**Flagship** (`CaseConfig()`, the 64×64×64 Alexanderplatz run, minimum
+of 3 × 10 steps after 2 warm-up steps, load 5–11): **237.1 ms/step before
+KA-d, 238.0 ms/step with KA-d at one thread (1.004×)**; 212.9 / 180.0 /
+198.2 ms/step at 4 / 12 / 24 threads. The tracer-transport line of
+`timing_report` (`transport/scalar_advection`: the tracers' advection and
+their SGS diffusion through `_add_eddy_diffusion_scalar_masked!`) is
+62.3 ms/step before and 64.4 with KA-d at one thread (1.03×, inside the
+rep-to-rep spread of 3 %), 59.6 / 47.6 / 55.9 at 4 / 12 / 24 threads; the
+`dynamics/step!` line 50.1 → 49.6 (44.7 / 38.4 / 41.7). The step is still
+dominated by loops later port PRs move (nesting 84 ms, the tracers'
+WENO-Z advection, chemistry, fog).
+
+**The race the `levels` path avoids, measured.** A 3-D launch of the same
+damping body with `levels` (128×128×32, `threshold = 0`, `-t 24`, where
+the row workgroups split each plane between tasks) gave level sums
+different from the serial loop in 320 of 20 × 32 level values; the
+plane-per-work-item launch differed in none.
+
+**Thread invariance.** The harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,24`) with the new `fv` section: every FV kernel
+on seeded random fields with filled halos on a 64×64×32 RegularGrid, a
+geometric StretchedGrid and a TerrainFollowingGrid, the damping kernel
+with `levels` (tendency and per-level sums, also at 128×128×32 where row
+workgroups split a plane), and 3 steps of a Smagorinsky LES on the
+stretched grid (87 hashes). All 2953 hashes (primitives, 64³ DNS,
+reductions, the Berlin smoke matrix, the flagship step, nested, fft, fv)
+are identical at 4 and 24 threads to 1 thread. At `-t 1` every kernel is
+the old loop bit for bit (`test/ka_fv.jl`): no one-time change.
 
 ## KA-n: radiation and stochastic modules (#305)
 

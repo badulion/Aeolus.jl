@@ -481,7 +481,11 @@ end
     θ = Field(CellCenter(), pm)
     apply_flux_correction!(θ, mt, nt; periodic = zwall)       # z is not periodic
     @test all(iszero, θ.data)                                  # bottom layer untouched
-    apply_flux_correction!(θ, mt, nt)                          # default: triply periodic
+    # the parent's periodic axes are required (#349: the default was triply
+    # periodic, wrong for this walled parent, and taken silently)
+    @test_throws UndefKeywordError apply_flux_correction!(θ, mt, nt)
+    @test all(iszero, θ.data)
+    apply_flux_correction!(θ, mt, nt; periodic = (true, true, true))  # z-periodic parent
     cx, cy, _ = nest_covered_range(nt)
     @test all(interior_view(θ)[cx, cy, 1] .≈ -1 / Vp)          # z-periodic parent: wraps
     @test count(!iszero, θ.data) == nt.nx * nt.ny

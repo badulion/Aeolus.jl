@@ -18,7 +18,12 @@
 # digitised. Ri_τ ∈ {0 (passive θ), 18, 60}. As in the DNS, the
 # stratification is switched on in a developed neutral channel: one neutral
 # spin-up (T_SPIN, default T_END/4), then every run to T_END, statistics
-# from T_AVG (default T_END/2).
+# from T_AVG (default T_END/2). The cases are
+# examples/sbl/configs/stratified_channel_re180.toml (the `sbl` run driver,
+# CFG-d #359) with N, the times and each run's Ri_τ and closure set on it;
+# the runs share one spin-up (`julia -m Aeolus run
+# examples/sbl/configs/stratified_channel_re180.toml` is one run with its
+# own).
 #
 #   julia --project=. examples/sbl/stratified_channel.jl            # 32×32×48, T = 40
 #   N=24,16,32 T_END=16 T_SPIN=6 T_AVG=10 julia --project=. examples/sbl/stratified_channel.jl
@@ -33,7 +38,7 @@
 using Aeolus
 using Printf, Serialization
 using Statistics: mean
-include(joinpath(@__DIR__, "driver.jl"))          # stratified_channel_run, sbl_read_csv
+include(joinpath(@__DIR__, "config_schema.jl"))   # the `sbl` driver: sbl_config, sbl_channel_run, sbl_read_csv
 
 const NN = Tuple(parse.(Int, split(get(ENV, "N", "32,32,48"), ",")))
 const T_END = parse(Float64, get(ENV, "T_END", "40"))
@@ -45,12 +50,17 @@ const DNS = sbl_read_csv(joinpath(@__DIR__, "data", "stratified_channel_gv11_re1
 const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 const TAG = join(NN, "x")
 
+"stratified_channel_re180.toml at this script's grid and times."
+const CFG = sbl_config("stratified_channel_re180";
+                       overrides = ["grid.size=[$(join(NN, ","))]", "case.spinup_time=$T_SPIN",
+                                    "stepper.end_time=$T_END", "averaging.from=$T_AVG"])
+
 # The neutral spin-up every run starts from, computed once and cached
 # (run one process first when running the closures in parallel).
 function spinup()
     path = joinpath(OUTDIR, "stratified_channel_$(TAG)_spinup_T$(round(Int, T_SPIN)).jls")
     isfile(path) && return deserialize(path)
-    sp = stratified_channel_spinup(; N = NN, T_spin = T_SPIN)
+    sp = sbl_channel_spinup(CFG)
     serialize(path, sp)
     return sp
 end
@@ -58,7 +68,8 @@ end
 function cached(Ri, stab)
     path = joinpath(OUTDIR, "stratified_channel_$(TAG)_Ri$(round(Int, Ri))_$(stab).jls")
     get(ENV, "REUSE", "0") == "1" && isfile(path) && return deserialize(path)
-    r = stratified_channel_run(Ri, stab; N = NN, T_end = T_END, T_avg = T_AVG, spinup = spinup())
+    cfg = with(CFG, "case.richardson" => Ri, "sgs.stability" => stab)
+    r = merge(sbl_channel_run(cfg, sbl_channel_case(cfg), spinup()), (; case = nothing))
     serialize(path, r)
     return r
 end

@@ -26,6 +26,7 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
        plane_map!, apply_transform!,
+       pcg!, PCGWorkspace, PointOperator, PointPreconditioner, IdentityPreconditioner,
        CounterRNG, counter_rng, counter_xoshiro, set_stream!
 
 # =========================================================================
@@ -280,9 +281,58 @@ apply_transform!(b::GPUBackend, out, plan, in) = _gpu_error(b, "apply_transform!
     b, c = @index(Global, NTuple)
     j = b + oj
     k = c + ok
-    for i in i1:i2
+    _row!(body!, i1:i2, j, k, args...)
+end
+
+# One i-row of a 3-D launch, as its own function that receives the body's
+# arguments as separate arguments (KA-d, #299). Inlined into a loop that
+# reads them from the `args` tuple, a large body with branches (WENO-5, the
+# tensor diffusion fluxes) ran 3-5x slower than the same body in a plain
+# loop: LLVM did not hoist the array loads behind the branches, which it
+# does for arrays that arrive as function arguments (known dereferenceable).
+# One call per row costs nothing measurable (ka_port.md, KA-d).
+#
+# Every argument has its own type parameter: a `Vararg{Any,N}` would not be
+# specialised on a function among the arguments (Julia's heuristic for
+# arguments that are only passed on), and the body would then be called by
+# dynamic dispatch at every point (the specialisation trap of ka_port.md).
+#
+# The serial path is the same idea for the whole loop nest (`_nest!`): one
+# call per launch, the arguments separate, the loops `for k, for j, for i`
+# in one function, so a small stencil vectorises exactly as the old loop
+# did (a call per row made the Laplacian 1.3x the old loop at 64x64x32).
+for N in 0:24
+    as = [Symbol(:a, n) for n in 1:N]
+    Ts = [Symbol(:A, n) for n in 1:N]
+    sig = [:($(as[n])::$(Ts[n])) for n in 1:N]
+    @eval @noinline function _row!(body!::F, ir::UnitRange{Int}, j::Int, k::Int,
+                                   $(sig...)) where {F, $(Ts...)}
+        for i in ir
+            body!(i, j, k, $(as...))
+        end
+        return nothing
+    end
+    @eval @noinline function _nest!(body!::F, ir::UnitRange{Int}, jr::UnitRange{Int},
+                                    kr::UnitRange{Int}, $(sig...)) where {F, $(Ts...)}
+        for k in kr, j in jr, i in ir
+            body!(i, j, k, $(as...))
+        end
+        return nothing
+    end
+end
+# more than 24 arguments: the plain loops
+@noinline function _row!(body!::F, ir::UnitRange{Int}, j::Int, k::Int, args::Vararg{Any,N}) where {F, N}
+    for i in ir
         body!(i, j, k, args...)
     end
+    return nothing
+end
+@noinline function _nest!(body!::F, ir::UnitRange{Int}, jr::UnitRange{Int}, kr::UnitRange{Int},
+                          args::Vararg{Any,N}) where {F, N}
+    for k in kr, j in jr, i in ir
+        body!(i, j, k, args...)
+    end
+    return nothing
 end
 
 @kernel inbounds = true function _rows2_kernel!(body!, i1, i2, oj, args)
@@ -324,9 +374,7 @@ _npoints(ranges) = prod(length, ranges; init = 1)
 # ---- serial reference loops (the historical loop order) ---------------------
 
 @noinline function _serial!(body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args) where {F}
-    for k in kr, j in jr, i in ir
-        body!(i, j, k, args...)
-    end
+    _nest!(body!, ir, jr, kr, args...)    # for k in kr, j in jr, i in ir: body!(i, j, k, args...)
     return nothing
 end
 @noinline function _serial!(body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args) where {F}
@@ -958,6 +1006,367 @@ function interior_all_finite(b::AbstractBackend, A::AbstractArray, (ir, jr, kr):
 end
 interior_all_finite(A::AbstractArray, ranges::NTuple{3,UnitRange{Int}}) =
     interior_all_finite(backend(A), A, ranges)
+
+# =========================================================================
+# pcg!: the one preconditioned conjugate-gradient driver (KA-g, #300)
+# =========================================================================
+#
+# Every CG solver of Aeolus (PressureSolvers.CGPoissonSolver,
+# Multigrid.MGPreconditionedCG, Anelastic.DensityWeightedPoissonSolver and
+# the implicit diffusion of TimeIntegration) runs this loop; they differ
+# only in the operator, the preconditioner, the null-space projection and
+# the pinned rows. Per iteration it makes three sweeps over the region and
+# two canonical reductions:
+#
+#   1. Ap = A p, fused with p·Ap                    (operator sweep + reduction)
+#   2. x += αp, r -= αAp, z = M⁻¹r, fused with
+#      (r·r, r·z, Σz, Σr)                           (update sweep + reduction)
+#   3. p = (z − m) + βp                             (pointwise)
+#
+# where m is the mean of z when the null space is projected out (else 0).
+# Every reduction goes through the plane partials of `plane_reduce!`, so a
+# solve gives the same bits at every thread count, iteration count included.
+
+"""
+    PointOperator(f, args...; prepare = nothing)
+
+A matrix-free operator for [`pcg!`](@ref) given point by point:
+`(A p)[i, j, k] = f(i, j, k, p, args...)`. `f` reads `p` anywhere (a
+stencil) and carries its own `@inbounds`. `prepare(p)`, if given, runs
+before each application (a halo fill of the array the operator reads).
+`pcg!` evaluates it inside the reduction of `p·Ap`, so the operator and
+the dot product are one sweep.
+"""
+struct PointOperator{F, A, P}
+    f::F
+    args::A
+    prepare::P
+    PointOperator(f::F, args...; prepare::P = nothing) where {F, P} =
+        new{F, typeof(args), P}(f, args, prepare)
+end
+
+"""
+    PointPreconditioner(f, args...)
+
+A pointwise preconditioner for [`pcg!`](@ref): `z[i, j, k] =
+f(r[i, j, k], i, j, k, args...)` (Jacobi: `r / diag`). Fused into the
+residual update of every iteration.
+"""
+struct PointPreconditioner{F, A}
+    f::F
+    args::A
+    PointPreconditioner(f::F, args...) where {F} = new{F, typeof(args)}(f, args)
+end
+
+"`IdentityPreconditioner()`: `z = r` (unpreconditioned CG) for [`pcg!`](@ref)."
+struct IdentityPreconditioner end
+
+@inline _pc(::IdentityPreconditioner, rv, i, j, k) = rv
+@inline _pc(M::PointPreconditioner, rv, i, j, k) = M.f(rv, i, j, k, M.args...)
+
+# Pinned rows (rows removed from the system): `nothing`, or the storage
+# planes `(ic, jc, kc)` (0 = none on that axis), as TimeIntegration's
+# constraint planes. The sweeps compute every point and then zero the
+# pinned points of their plane: a test per point would stop the row loops
+# from vectorising (measured 4x slower, ka_port.md).
+@inline _pinned(::Nothing, i, j, k) = false
+@inline _pinned(c::NTuple{3,Int}, i, j, k) = i == c[1] || j == c[2] || k == c[3]
+
+@inline _zero_pinned!(a, ::Nothing, ir, jr, k) = nothing
+@inline function _zero_pinned!(a, c::NTuple{3,Int}, ir, jr, k)
+    T = eltype(a)
+    @inbounds if k == c[3]
+        for j in jr, i in ir
+            a[i, j, k] = zero(T)
+        end
+    else
+        if c[2] in jr
+            for i in ir
+                a[i, c[2], k] = zero(T)
+            end
+        end
+        if c[1] in ir
+            for j in jr
+                a[c[1], j, k] = zero(T)
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    PCGWorkspace(x; ranges = axes(x))
+    PCGWorkspace(r, z, p, Ap; ranges)
+
+Preallocated scratch of [`pcg!`](@ref): the residual `r`, the
+preconditioned residual `z`, the search direction `p`, the operator image
+`Ap` (arrays of the shape of the unknown) and the per-plane partial sums
+of the fused reductions. One per solver, so a solve allocates nothing
+(on one thread; a threaded launch allocates KernelAbstractions' tasks).
+"""
+struct PCGWorkspace{T, A<:AbstractArray{T,3}}
+    r::A
+    z::A
+    p::A
+    Ap::A
+    s1::Vector{T}
+    s4::Vector{NTuple{4,T}}
+    s5::Vector{NTuple{5,T}}
+end
+function PCGWorkspace(r::A, z::A, p::A, Ap::A; ranges) where {T, A<:AbstractArray{T,3}}
+    nk = length(ranges[3])
+    return PCGWorkspace{T,A}(r, z, p, Ap, zeros(T, nk), fill(ntuple(_ -> zero(T), 4), nk),
+                             fill(ntuple(_ -> zero(T), 5), nk))
+end
+PCGWorkspace(x::AbstractArray{T,3}; ranges = axes(x)) where {T} =
+    PCGWorkspace(zero(x), zero(x), zero(x), zero(x); ranges)
+
+# canonical sums of the plane partials of a body, into the workspace buffer
+@inline _zero_of(::Type{T}) where {T<:Number} = zero(T)
+@inline _zero_of(::Type{T}) where {T<:Tuple} = map(zero, fieldtypes(T))
+function _pcg_reduce!(buf::Vector{T}, b::CPUBackend, ranges, body::F, args::Vararg{Any,M}) where {T, F, M}
+    _plane_partials!(b, buf, _PlaneReduce(_add, _zero_of(T), ranges[1], ranges[2]), ranges[3],
+                     _Ix(body, args))
+    s = _zero_of(T)
+    @inbounds for x in buf
+        s = _add(s, x)
+    end
+    return s
+end
+
+# ---- bodies (each writes only its own point) -------------------------------
+
+# Ap = A p over the plane k in a plain row loop (the operator's index
+# arithmetic is then hoisted out of the i loop), followed by the canonical
+# lanes of p·Ap over the plane while it is in cache: the same bits as a
+# fused `plane_reduce!` body, 1.1x faster at 64x64x32 (ka_port.md).
+@inline function _pcg_op_plane(k, ir, jr, Ap, p, f::F, args, c) where {F}
+    @inbounds for j in jr, i in ir
+        Ap[i, j, k] = f(i, j, k, p, args...)
+    end
+    _zero_pinned!(Ap, c, ir, jr, k)
+    return _plane_reduce(_add, zero(eltype(Ap)), _Vals(*, (p, Ap)), ir, jr, k)
+end
+@inline _pcg_dot_body(i, j, k, a, b) = @inbounds a[i, j, k] * b[i, j, k]
+@inline _pcg_val_body(i, j, k, a) = @inbounds a[i, j, k]
+
+# the initial residual r = (b − mb) − Ap (or r = b − mb for a zero guess),
+# z = M⁻¹r; returns ((b − mb)², r², r·z, z, r)
+@inline function _pcg_init_body(i, j, k, r, z, b, Ap, mb, M, c, zero_guess::Bool)
+    @inbounds begin
+        T = eltype(r)
+        if _pinned(c, i, j, k)
+            r[i, j, k] = zero(T); z[i, j, k] = zero(T)
+            return (zero(T), zero(T), zero(T), zero(T), zero(T))
+        end
+        bv = b[i, j, k] - mb
+        rv = zero_guess ? bv : bv - Ap[i, j, k]
+        zv = M isa Union{IdentityPreconditioner,PointPreconditioner} ? _pc(M, rv, i, j, k) : zero(T)
+        r[i, j, k] = rv
+        z[i, j, k] = zv
+        return (bv * bv, rv * rv, rv * zv, zv, rv)
+    end
+end
+
+# x += αp; r -= αAp; z = M⁻¹r (pointwise M) over the plane k, then the
+# canonical lanes of (r², r·z, z, r) over the plane (for a general M,
+# whose z is formed after this, only r² is used)
+@inline _rz4(rv, zv) = (rv * rv, rv * zv, zv, rv)
+@inline function _pcg_update_plane(k, ir, jr, x, r, z, p, Ap, α, M, c)
+    T = eltype(r)
+    @inbounds for j in jr, i in ir
+        x[i, j, k] = x[i, j, k] + α * p[i, j, k]
+        rv = r[i, j, k] - α * Ap[i, j, k]
+        r[i, j, k] = rv
+        if M isa Union{IdentityPreconditioner,PointPreconditioner}
+            z[i, j, k] = _pc(M, rv, i, j, k)
+        end
+    end
+    _pointwise(M) && _zero_pinned!(z, c, ir, jr, k)
+    return _plane_reduce(_add, ntuple(_ -> zero(T), 4), _Vals(_rz4, (r, z)), ir, jr, k)
+end
+
+# (r², r·z, z, r) for a general preconditioner, after M!(z, r)
+@inline _pcg_rz_body(i, j, k, r, z) = @inbounds _rz4(r[i, j, k], z[i, j, k])
+
+@inline function _pcg_dir_body!(i, j, k, p, z, m, β, first::Bool)
+    @inbounds p[i, j, k] = first ? z[i, j, k] - m : (z[i, j, k] - m) + β * p[i, j, k]
+    return nothing
+end
+# p = (z − m) + βp, then p = 0 on the pinned planes
+function _pcg_dir!(bk, rg, p, z, m, β, c, first::Bool)
+    launch!(bk, _pcg_dir_body!, rg, p, z, m, β, first)
+    c === nothing && return nothing
+    ir, jr, kr = rg
+    c[1] in ir && launch!(bk, _pcg_fill_body!, (c[1]:c[1], jr, kr), p, zero(eltype(p)))
+    c[2] in jr && launch!(bk, _pcg_fill_body!, (ir, c[2]:c[2], kr), p, zero(eltype(p)))
+    c[3] in kr && launch!(bk, _pcg_fill_body!, (ir, jr, c[3]:c[3]), p, zero(eltype(p)))
+    return nothing
+end
+
+@inline function _pcg_fill_body!(i, j, k, x, v)
+    @inbounds x[i, j, k] = v
+    return nothing
+end
+@inline function _pcg_shift_body!(i, j, k, x, m)
+    @inbounds x[i, j, k] = x[i, j, k] - m
+    return nothing
+end
+
+# ---- operator application: Ap = A p, returns p·Ap --------------------------
+
+# the canonical sum of per-plane partials from a plane function
+function _pcg_planes!(buf::Vector{T}, b::CPUBackend, (ir, jr, kr), f::F, args::Vararg{Any,M}) where {T, F, M}
+    _plane_partials!(b, buf, _PlaneFn(f, ir, jr), kr, args)
+    s = _zero_of(T)
+    @inbounds for x in buf
+        s = _add(s, x)
+    end
+    return s
+end
+
+function _pcg_apply!(b::CPUBackend, A::PointOperator, Ap, p, ranges, ws, c = nothing)
+    A.prepare === nothing || A.prepare(p)
+    return _pcg_planes!(ws.s1, b, ranges, _pcg_op_plane, Ap, p, A.f, A.args, c)
+end
+function _pcg_apply!(b::CPUBackend, A!::F, Ap, p, ranges, ws, c = nothing) where {F}
+    A!(Ap, p)
+    return _pcg_reduce!(ws.s1, b, ranges, _pcg_dot_body, p, Ap)
+end
+
+_pointwise(M) = M isa Union{IdentityPreconditioner,PointPreconditioner}
+
+"""
+    pcg!(A, M, x, b, ws::PCGWorkspace; ranges = axes(x), tol, maxit,
+         project_mean = false, constraint = nothing, zero_guess = true,
+         backend = backend(x))
+        -> (; iterations, residual, bnorm, status, curvature)
+
+Solve `A x = b` by preconditioned conjugate gradients over the storage
+`ranges` of `x` and `b`, for a symmetric positive (semi-)definite `A`.
+The one CG loop of Aeolus (KA-g, #300): `CGPoissonSolver`,
+`MGPreconditionedCG`, `DensityWeightedPoissonSolver` and
+`solve_implicit_diffusion!` all call it.
+
+  * `A` is a [`PointOperator`](@ref) (fused with the reduction `p·Ap`:
+    one sweep) or a function `A!(Ap, p)` that writes `A p` over `ranges`.
+  * `M` is an [`IdentityPreconditioner`](@ref), a
+    [`PointPreconditioner`](@ref) (fused with the residual update and its
+    reductions) or a function `M!(z, r)` (a multigrid V-cycle).
+  * `project_mean = true`: `A` is singular with the constants as its null
+    space. The mean is removed from `b` (without modifying `b`), from
+    every preconditioned residual `z` (a deflated preconditioner, which
+    keeps every iterate in the zero-mean subspace) and from the solution.
+  * `constraint`: pinned rows, `(ic, jc, kc)` storage planes (0 = none):
+    there `Ap` (from a `PointOperator`; a function `A!` writes 0 there
+    itself), `r`, `z` and `p` are zero and
+    `x` keeps its value; they do not count in `‖b‖`.
+  * `zero_guess = true` starts from `x = 0` (written over `ranges`);
+    `false` uses `x` as the initial guess (`b === x` is allowed: `A x` is
+    formed before `r`).
+
+  * `definite = :positive` (default): `A` and `M` are symmetric positive
+    (semi-)definite, and `p·Ap ≤ 0` is a breakdown. `:negative`: both are
+    negative definite (the Laplacian `∇²` itself with a multigrid cycle
+    of it); then only vanishing curvature is one.
+
+Convergence is `‖r‖₂ ≤ tol·‖b‖₂`, checked before the first iteration
+and after every update. `status` is `:converged`, `:maxit`, `:breakdown`
+(`|p·Ap| ≤ eps·|r·z|`, vanishing curvature, or `p·Ap ≤ 0` for
+`definite = :positive`; the iteration stops before the update) or
+`:zero_rhs` (`‖b‖ = 0`: `x = 0`). `curvature` is the last `p·Ap`
+formed (the offending one after a breakdown; `NaN` if none was). The
+caller reports a breakdown or `:maxit` as it sees fit.
+
+**Determinism.** The reductions are canonical plane sums
+([`plane_reduce!`](@ref)), the other sweeps pointwise launches, so a
+solve, its iteration count and its residual are identical at every
+thread count and with `serial = true` (provided a function `A!` or `M!`
+is itself thread-invariant). With the mean projected, `r·z` of the
+deflated `z` is formed as `Σ r z − m Σ r`, so the projection costs no
+extra sweep.
+"""
+function pcg!(A, M, x::AbstractArray{T,3}, b::AbstractArray{T,3}, ws::PCGWorkspace{T};
+              ranges::NTuple{3,AbstractUnitRange{<:Integer}} = axes(x), tol::Real,
+              maxit::Integer, project_mean::Bool = false, constraint = nothing,
+              zero_guess::Bool = true, definite::Symbol = :positive,
+              backend::AbstractBackend = _backend_of(x)) where {T}
+    rg = map(UnitRange{Int}, ranges)
+    _check((x, b, ws.r, ws.z, ws.p, ws.Ap), rg)
+    project_mean && constraint !== nothing &&
+        throw(ArgumentError("pcg!: project_mean with pinned rows is not supported"))
+    definite in (:positive, :negative) ||
+        throw(ArgumentError("pcg!: definite must be :positive or :negative, got :$definite"))
+    return _pcg!(backend, A, M, x, b, ws, rg, T(tol), Int(maxit), project_mean,
+                 constraint, zero_guess, definite === :positive)
+end
+
+function _pcg!(bk::CPUBackend, A, M, x::AbstractArray{T,3}, b, ws::PCGWorkspace{T}, rg,
+               tol::T, maxit::Int, project_mean::Bool, c, zero_guess::Bool,
+               positive::Bool) where {T}
+    r, z, p, Ap = ws.r, ws.z, ws.p, ws.Ap
+    n = T(_npoints(rg))
+    mb = project_mean ? _pcg_reduce!(ws.s1, bk, rg, _pcg_val_body, b) / n : zero(T)
+    if zero_guess
+        launch!(bk, _pcg_fill_body!, rg, x, zero(T))
+    else
+        _pcg_apply!(bk, A, Ap, x, rg, ws, c)
+    end
+    b2, r2, rz, Σz, Σr = _pcg_reduce!(ws.s5, bk, rg, _pcg_init_body, r, z, b, Ap, mb, M, c,
+                                      zero_guess)
+    bnorm = sqrt(b2)
+    if bnorm == 0
+        launch!(bk, _pcg_fill_body!, rg, x, zero(T))
+        return (iterations = 0, residual = zero(T), bnorm = bnorm, status = :zero_rhs,
+                curvature = T(NaN))
+    end
+    if !_pointwise(M)
+        M(z, r)
+        r2, rz, Σz, Σr = _pcg_reduce!(ws.s4, bk, rg, _pcg_rz_body, r, z)
+    end
+    m = project_mean ? Σz / n : zero(T)
+    project_mean && (rz -= m * Σr)
+    _pcg_dir!(bk, rg, p, z, m, zero(T), c, true)
+
+    rnorm = sqrt(r2)
+    iters = 0
+    pAp = T(NaN)
+    status = rnorm <= tol * bnorm ? :converged : :maxit
+    while status !== :converged && iters < maxit
+        pAp = _pcg_apply!(bk, A, Ap, p, rg, ws, c)
+        # vanishing curvature, or curvature of the wrong sign for an SPD
+        # system (any NaN fails both tests)
+        if !(abs(pAp) > eps(T) * abs(rz)) || (positive && !(pAp > 0))
+            status = :breakdown
+            break
+        end
+        α = rz / pAp
+        iters += 1
+        r2, rzn, Σz, Σr = _pcg_planes!(ws.s4, bk, rg, _pcg_update_plane, x, r, z, p, Ap, α, M, c)
+        rnorm = sqrt(r2)
+        if rnorm <= tol * bnorm
+            status = :converged
+            break
+        end
+        if !_pointwise(M)
+            M(z, r)
+            _, rzn, Σz, Σr = _pcg_reduce!(ws.s4, bk, rg, _pcg_rz_body, r, z)
+        end
+        m = project_mean ? Σz / n : zero(T)
+        project_mean && (rzn -= m * Σr)
+        β = rzn / rz
+        _pcg_dir!(bk, rg, p, z, m, β, c, false)
+        rz = rzn
+    end
+    if project_mean
+        mx = _pcg_reduce!(ws.s1, bk, rg, _pcg_val_body, x) / n
+        launch!(bk, _pcg_shift_body!, rg, x, mx)
+    end
+    return (iterations = iters, residual = rnorm, bnorm = bnorm, status = status,
+            curvature = pAp)
+end
+_pcg!(b::GPUBackend, args...) = _gpu_error(b, "pcg!")
+_backend_of(x) = backend(x)
 
 # =========================================================================
 # Counter-based random streams (KA-n, #305)

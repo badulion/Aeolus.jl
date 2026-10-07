@@ -4,7 +4,7 @@
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
 # Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
-# nested, fft, radiation) and writes
+# nested, fft, fv, pcg, radiation) and writes
 # one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
 # the raw bits (Float64 → UInt64), so two processes agree iff the results
 # are bit-identical. MODE is `default` (CPUBackend(): threaded when N > 1)
@@ -36,6 +36,13 @@
 #               FFT, CosineFFT for all 8 axis-BC combinations, Stretched for
 #               the 4 lateral pairs — at 64×64×32 and 128×128×64, with FFTW
 #               on the process's threads (`init_threads!`).
+#   fv          (KA-d, #299) every finite-volume kernel on seeded random
+#               fields with filled halos, on a 64×64×32 RegularGrid, a
+#               geometric StretchedGrid and a TerrainFollowingGrid over a
+#               hill; the damping kernel with `levels` (one plane per work
+#               item; its per-level sums, also at 128×128×32, where a 3-D
+#               launch would race); and 3 steps of a 64×64×32
+#               Smagorinsky LES on the stretched grid (every field).
 #   radiation   (KA-n, #305) the radiosity view factors of a 16×14 city
 #               (n ≈ 600 facets), its shortwave / longwave solves through
 #               the LU cache (BLAS pinned to one thread here: LAPACK's bits
@@ -333,6 +340,152 @@ function section_fft()
 end
 
 # --------------------------------------------------------------------------
+# KA-g (#300): every solver on the one CG driver, singular (Neumann and
+# periodic) and stretched-coefficient cases: the solution and the
+# iteration count.
+function section_pcg()
+    PS, MGm, A, TI = Aeolus.PressureSolvers, Aeolus.Multigrid, Aeolus.Anelastic, Aeolus.TimeIntegration
+    N = (64, 64, 32)
+    g = RegularGrid(; size = N, extent = (1000.0, 1000.0, 200.0), halo = (3, 3, 3))
+    smesh = StretchedGrid(; size = N, extent = (1000.0, 1000.0, 2000.0), halo = (3, 3, 3),
+                          stretching = (:geometric, 1.04))
+    gd = RegularGrid(; size = N, extent = (1000.0, 1000.0, 3000.0), halo = (3, 3, 3))
+    ref = A.isothermal_reference(g; T_surf = 300.0); refd = A.isothermal_reference(gd; T_surf = 300.0)
+    solvers = Pair{String,Any}[]
+    for (bz, bxy) in ((:neumann, :periodic), (:neumann, :neumann), (:periodic, :periodic))
+        push!(solvers, "cg($bxy,$bz)" => (g, PS.CGPoissonSolver(g; tol = 1e-8, maxit = 2000, bc_top = bz,
+                                                                  bc_bottom = bz, bc_xy = bxy), s -> s.last_iter[]))
+    end
+    for (bz, bxy) in ((:neumann, :periodic), (:periodic, :periodic))
+        push!(solvers, "mgcg($bxy,$bz)" => (g, MGm.MGPreconditionedCG(g; bc_x = bxy, bc_y = bxy, bc_z = bz,
+                                                                      tol = 1e-10, maxit = 200), s -> s.last_iters[]))
+    end
+    push!(solvers, "mgcg(stretched)" => (smesh, MGm.MGPreconditionedCG(smesh; tol = 1e-10, maxit = 200),
+                                         s -> s.last_iters[]))
+    for (bz, bx) in ((:neumann, :periodic), (:periodic, :periodic), (:neumann, :neumann))
+        push!(solvers, "dw($bx,$bz)" => (g, A.DensityWeightedPoissonSolver(g, ref; bc_z = bz, bc_x = bx, bc_y = bx,
+                                                                           tol = 1e-10, maxit = 2000),
+                                         A.solver_iterations))
+    end
+    push!(solvers, "dw(deep)" => (gd, A.DensityWeightedPoissonSolver(gd, refd; tol = 1e-10, maxit = 2000),
+                                  A.solver_iterations))
+    for (name, (m, solver, its)) in solvers
+        src = Field(m); src.data .= randn(Xoshiro(300), size(src.data))
+        p = Field(m)
+        PS.solve!(p, src, solver)
+        record!("pcg/$name", p.data)
+        record!("pcg/$name/iterations", its(solver))
+    end
+    νvar = zeros(size(Field(g).data))
+    for k in axes(νvar, 3), i in axes(νvar, 1)
+        νvar[i, :, k] .= 2.0 * (1 + 0.5sin(i / 7) + 0.3k / N[3])
+    end
+    for (name, loc, bcs, ν) in (("imex(θ,periodic)", CellCenter(), FieldBoundaryConditions(:periodic), 2.0),
+                                ("imex(θ,ν(x,z),walls)", CellCenter(), FieldBoundaryConditions(:periodic, :periodic, :wall), νvar),
+                                ("imex(w,pinned)", FaceZ(), FieldBoundaryConditions(:periodic, :periodic, :wall), 2.0),
+                                ("imex(u,moving wall)", FaceX(),
+                                 FieldBoundaryConditions(Periodic(), Periodic(), Periodic(), Periodic(),
+                                                         NoSlipWall(), NoSlipWall(u_wall = 1.0)), 2.0))
+        f = Field(loc, g); f.data .= randn(Xoshiro(302), size(f.data))
+        st = TI.solve_implicit_diffusion!(f, f, ν, 20.0, g, bcs; tol = 1e-10, maxit = 500)
+        record!("pcg/$name", f.data)
+        record!("pcg/$name/iterations", st.iterations)
+    end
+end
+
+# --------------------------------------------------------------------------
+function section_fv()
+    FVK = Aeolus.Operators.FiniteVolume
+    SG = Aeolus.StretchedGrids
+    CC, FX, FY, FZ = Aeolus.Grids.CellCenter(), Aeolus.Grids.FaceX(), Aeolus.Grids.FaceY(), Aeolus.Grids.FaceZ()
+    rg = RegularGrid(; size = (64, 64, 32), extent = (640.0, 640.0, 320.0), halo = (3, 3, 3))
+    sg = SG.StretchedGrid(; size = (64, 64, 32), extent = (640.0, 640.0, 320.0), halo = (3, 3, 3),
+                          stretching = (:geometric, 1.05))
+    rng = Xoshiro(299)
+    for (gn, g) in (("regular", rg), ("stretched", sg))
+        rf(loc; s = 1.0, o = 0.0) = (f = Field(loc, g); f.data .= o .+ s .* randn(rng, size(f.data)); f)
+        u, v, w = rf(FX), rf(FY), rf(FZ)
+        θ = rf(CC; s = 2.0, o = 300.0); qv = rf(CC; s = 1e-3, o = 8e-3); K = rf(CC; s = 0.1, o = 1.0)
+        c = rf(CC)
+        rec(name, f) = record!("fv/$gn/$name", f isa Field ? f.data : f)
+        for (nm, loc, inp, k!) in (("∂x cc", CC, c, FVK._∂x!), ("∂z cc", CC, c, FVK._∂z!),
+                                   ("∂x c→f", FX, c, FVK._∂x!), ("∂z c→f", FZ, c, FVK._∂z!),
+                                   ("∂z f→c", CC, w, FVK._∂z!), ("interp c→fz", FZ, c, FVK._interp_to_face!),
+                                   ("interp fz→c", CC, w, FVK._interp_to_center!))
+            o = rf(loc); k!(o, inp, g); rec(nm, o)
+        end
+        for (ln, loc) in (("cc", CC), ("w", FZ))
+            f = rf(loc); o = rf(loc); FVK._laplacian!(o, f, g); rec("laplacian $ln", o)
+        end
+        o = rf(CC); FVK._divergence!(o, u, v, w, g); rec("divergence", o)
+        o = rf(CC); FVK._add_surface_flux!(o, 0.1, -0.05, g); rec("surface flux", o)
+        a, b, d = rf(FX), rf(FY), rf(FZ); FVK._momentum_advect!(a, b, d, u, v, w, g)
+        rec("momentum.u", a); rec("momentum.v", b); rec("momentum.w", d)
+        o = rf(CC); FVK._advect_centered!(o, u, v, w, θ, g); rec("scalar advection", o)
+        o = rf(FZ); FVK._add_buoyancy_moist!(o, θ, qv, 300.0, 9.81, g); rec("moist buoyancy", o)
+        a, b = rf(FX), rf(FY); FVK._add_coriolis!(a, b, u, v, 1e-4, g); rec("coriolis.u", a); rec("coriolis.v", b)
+        o = rf(CC); FVK._compute_smagorinsky_νt!(o, u, v, w, 0.17, g); rec("smagorinsky", o)
+        o = rf(FX); FVK._add_eddy_viscosity_u!(o, u, K, g); rec("eddy viscosity u", o)
+        o = rf(FZ); FVK._add_eddy_viscosity_w!(o, w, K, g); rec("eddy viscosity w", o)
+        o = rf(CC); FVK._add_eddy_diffusion_scalar!(o, θ, K, K, 1.0, g); rec("eddy diffusion", o)
+        # the damping kernel: pointwise, and with levels (one plane per work item)
+        zs = FVK.damping_coordinates(g, CC); p = FVK.sponge_profile(0.01, 100.0, 320.0)
+        o = rf(CC); FVK._add_damping!(o, θ, p, zs, 3, 300.0, g); rec("sponge", o)
+        o = rf(CC); lv = zeros(g.Nz)
+        FVK._add_damping!(o, θ, p, zs, 3, collect(range(299.0, 301.0; length = g.Nz)), g; levels = lv)
+        rec("damping levels.tendency", o); rec("damping levels.sums", lv)
+        o = rf(CC); SG._set_physical!(o, (x, y, z) -> sin(x / 50) * cos(y / 70) + z / 100, g)
+        rec("set_physical!", o)
+        if g === rg
+            nh = abs.(randn(rng, size(θ.data))); nv = abs.(randn(rng, size(θ.data)))
+            a, b, d = rf(FX), rf(FY), rf(FZ)
+            FVK._add_sgs_stress_divergence!(a, b, d, u, v, w, nh, nv, 1, 1, g)
+            rec("sgs stress div.u", a); rec("sgs stress div.v", b); rec("sgs stress div.w", d)
+            τ = ntuple(_ -> zeros(size(θ.data)), 6); FVK._sgs_stress_tensor!(τ..., u, v, w, nh, nv, g)
+            rec("sgs stress tensor", vcat(map(vec, τ)...))
+            Ks = ntuple(_ -> 0.1 .* randn(rng, size(θ.data)), 6); F = ntuple(_ -> zeros(size(θ.data)), 3)
+            o = rf(CC); FVK._add_tensor_diffusion_scalar!(o, θ, Ks..., F..., (false, false, true), true, true, g)
+            rec("tensor diffusion", o)
+            mask = rand(rng, size(θ.data)...) .< 0.1
+            o = rf(CC); FVK._add_eddy_diffusion_scalar_masked!(o, θ, K, K, g, mask, nothing, nothing)
+            rec("masked eddy diffusion", o)
+            FVK._isentropic_tensor!(Ks..., θ, 2.0, 0.3, 0.3, 1e-3, g); rec("isentropic tensor", vcat(map(vec, Ks)...))
+            o = rf(CC); FVK._advect_weno5!(o, u, v, w, θ, g); rec("weno5", o)
+        end
+    end
+    # the damping kernel with levels at 128×128×32: large enough that a 3-D
+    # launch would split a plane between tasks at -t 24 (rows in workgroups
+    # of four), which races on levels[k]; the plane-per-work-item launch does not
+    bg = RegularGrid(; size = (128, 128, 32), extent = (1280.0, 1280.0, 320.0), halo = (3, 3, 3))
+    θb = Field(CC, bg); θb.data .= 300 .+ randn(rng, size(θb.data))
+    tb = Field(CC, bg); tb.data .= randn(rng, size(tb.data)); lvb = zeros(bg.Nz)
+    FVK._add_damping!(tb, θb, FVK.sponge_profile(0.01, 100.0, 320.0),
+                      FVK.damping_coordinates(bg, CC), 3, 300.0, bg; levels = lvb)
+    record!("fv/damping levels 128².tendency", tb.data); record!("fv/damping levels 128².sums", lvb)
+    # a TerrainFollowingGrid over a hill: its own kernels on launch!
+    tg = SG.terrain_following_grid(SG.StretchedGrid(; size = (64, 32, 32), extent = (2000.0, 400.0, 1500.0),
+                                                    halo = (2, 2, 2), stretching = (:tanh, 1.4)),
+                                   (x, y) -> 150.0 / (1 + ((x - 1000.0) / 300.0)^2))
+    rt(loc) = (f = Field(loc, tg); f.data .= randn(rng, size(f.data)); f)
+    u, v, w, c = rt(FX), rt(FY), rt(FZ), rt(CC)
+    o = rt(CC); FVK._divergence!(o, u, v, w, tg); record!("fv/terrain/divergence", o.data)
+    o = rt(CC); FVK._laplacian!(o, c, tg); record!("fv/terrain/laplacian", o.data)
+    o = rt(FX); FVK._∂x!(o, c, tg); record!("fv/terrain/∂x c→f", o.data)
+    # 3 steps of a Smagorinsky LES on the stretched grid
+    sim = BoussinesqSimulation(sg; ν = 1e-2, θ₀ = 300.0, C_s = 0.17,
+                               bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    for f in (sim.u, sim.v, sim.w)
+        interior_view(f) .= 0.3 .* randn(rng, size(interior_view(f)))
+    end
+    set!(sim.θ, (x, y, z) -> 300 + 0.01z)
+    interior_view(sim.θ) .+= 0.05 .* randn(rng, size(interior_view(sim.θ)))
+    for _ in 1:3
+        step!(sim, 0.05)
+    end
+    record_sim!("fv/stretched LES", sim)
+end
+
+# --------------------------------------------------------------------------
 function section_radiation()
     R = Aeolus.Radiosity
     hm = zeros(16, 14)
@@ -439,6 +592,8 @@ for s in SECTIONS
     s == "flagship"   ? section_flagship() :
     s == "nested"     ? section_nested() :
     s == "fft"        ? section_fft() :
+    s == "fv"         ? section_fv() :
+    s == "pcg"        ? section_pcg() :
     s == "radiation"  ? section_radiation() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)

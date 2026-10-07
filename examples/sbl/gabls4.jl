@@ -3,7 +3,8 @@
 # Antarctic Plateau (Dome C, 11 Dec 2009; Couvreux et al. 2020, BLM 176,
 # 369-400), P58-d (#194)
 #
-# `gabls4_case` (examples/sbl/cases.jl): from 10 UTC, the experiment-2
+# The run is examples/sbl/configs/gabls4_exp3.toml (the `sbl` run driver,
+# CFG-d #359; one run folder per closure): from 10 UTC, the experiment-2
 # ensemble-mean profiles, U_g = (1.25, 4.5) m/s, f = 2Ω sin(-75.1°), the
 # official case file's surface temperature (θ at 651 hPa), z0m = 1e-3 m,
 # z0h = 1e-4 m, β_m = 4.8, β_h = 7.8. Statistics of 16:30-17:30 UTC are
@@ -19,12 +20,12 @@
 #
 #   julia --project=. examples/sbl/gabls4.jl                       # 2 m
 #   NX=64 NZ=64 LX=64 L=64 julia --project=. examples/sbl/gabls4.jl  # 1 m on a 64 m cube
-#   CLOSURES=brown94 ... ; REUSE=1 ...
+#   CLOSURES=brown94 ... ; REUSE=1 ... ; CLOSURES=brown94 RESUME=runs/<run folder> ...
 #
 # writes examples/sbl/output/gabls4_<tag>.svg, _series.csv, _profiles.csv
 # =========================================================================
 
-include(joinpath(@__DIR__, "cases.jl"))
+include(joinpath(@__DIR__, "config_schema.jl"))
 include(joinpath(@__DIR__, "svgplot.jl"))
 using Printf
 using Serialization
@@ -39,22 +40,13 @@ const CLOSURES = Symbol.(split(get(ENV, "CLOSURES", "brown94,none"), ","))
 const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))"
 const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 
-function run_closure(stab, ck = nothing)
-    c = gabls4_case(; N = (NX, NX, NZ), extent = (LX, LX, LZ), sgs_stability = stab)
-    series = NamedTuple[]
-    nextt = Ref(c.sim.t)
-    cb = function (c)
-        c.sim.t >= nextt[] || return
-        nextt[] += 300.0
-        p = sbl_profiles(c); k = argmax(p.S)
-        scr = sbl_screen(c; z_θ = 2.0, z_U = 10.0)
-        push!(series, (t = c.sim.t, u_star = sqrt(hypot(c.τx, c.τy)), H = c.ρcp * mean(c.wθ),
-                       h = sbl_bl_height(p.zf, p.τ), S_max = p.S[k], z_jet = p.z[k],
-                       θ2 = scr.θ_screen, U10 = scr.U_screen,
-                       θs = surface_temperature(c.Ts, c.sim.t)))
-    end
-    st = sbl_run!(c, T_END; average_from = T_AVG, sample_every = 10, callback = cb,
-                  checkpoint = ck, checkpoint_components = (series = series, nextt = nextt))
+function run_closure(stab)
+    r = sbl_script_run("gabls4_exp3"; overrides = ["grid.size=[$NX,$NX,$NZ]", "grid.extent=[$LX,$LX,$LZ]",
+                                                   "sponge.z=$(0.75LZ)", "sgs.stability=\"$stab\"",
+                                                   "stepper.end_time=$T_END", "averaging.from=$T_AVG"])
+    st = r.stats; c = r.case
+    series = [(t = s.t, u_star = s.u_star, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet,
+               θ2 = s.θ_screen, U10 = s.U_screen, θs = s.T_s) for s in r.series]          # every 300 s
     θst = mean(-s.H / c.ρcp / s.u_star for s in series if s.t >= T_AVG)
     @printf("%-8s %s: 16:30-17:30 UTC h = %5.1f m  L = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  θ* = %.3f K  LLJ %.2f m/s at %4.1f m  (%d steps, %.0f s)\n",
             stab, TAG, st.h, st.L, st.u_star, st.H0, θst, st.S_max, st.z_jet, c.nsteps, c.wall_time)
@@ -67,11 +59,8 @@ function cached(stab)
         println("$stab: cached $path")
         return deserialize(path)
     end
-    # periodic checkpoints, automatic resume (#245); made before the case
-    ck = sbl_checkpoints("gabls4_$(TAG)_$(stab)")
-    r = run_closure(stab, ck)
+    r = run_closure(stab)
     serialize(path, r)
-    finish_checkpoints!(ck)
     return r
 end
 results = [cached(s) for s in CLOSURES]
