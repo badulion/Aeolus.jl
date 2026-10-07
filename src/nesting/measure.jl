@@ -33,6 +33,9 @@ Base.show(io::IO, m::NestMeasure) =
 # Lagrange basis exactly 0/1 there and the reconstruction exactly
 # conservative. Faces in the child halos continue at the child spacing.
 function _child_zfaces(nest::NestedGrid, ph::Vector{Float64})
+    # a stretched, non-uniform or non-aligned child: its own faces, snapped
+    # onto the coincident parent faces (#328)
+    (nest.rz > 0 && nest.child_mesh isa RegularGrid) || return copy(nest.axes[3].cf)
     pm = nest.parent_mesh; cm = nest.child_mesh
     Hp = pm.Hz; Hc = cm.Hz; Nc = cm.Nz; rz = nest.rz
     ch = Vector{Float64}(undef, Nc + 2Hc + 1)
@@ -84,7 +87,8 @@ function nest_measure(nest::NestedGrid)
     return get!(nest.measures, _VOLUME_KEY) do
         ph = _zfaces_storage(nest.parent_mesh)
         ch = _child_zfaces(nest, ph)
-        NestMeasure(:volume, ph, ch, ph, ch, diff(ch), diff(ph), Dict{Tuple{Symbol,Int},_Plan1D}())
+        NestMeasure(:volume, ph, ch, ph, ch, diff(ch), diff(ph),
+                    _overlap_lengths(nest.axes[3], ph, ch), Dict{Tuple{Symbol,Int},_Plan1D}())
     end
 end
 
@@ -116,8 +120,24 @@ function nest_measure(nest::NestedGrid, Wp::AbstractVector, Wc::AbstractVector)
     # a covered parent cell's mass is exactly the sum of its children's
     pc = zeros(Float64, length(ph))
     Pb = Hp + nest.iz; Pt = Pb + nest.nz
-    for K in 0:nest.nz
-        pc[Pb + K] = cc[Hc + 1 + K * nest.rz]
+    if nest.rz > 0 && cm isa RegularGrid
+        for K in 0:nest.nz
+            pc[Pb + K] = cc[Hc + 1 + K * nest.rz]
+        end
+    else
+        # general (#328): a box face is the child's μ at that height — the
+        # coincident child face's on a common face, else inside the child
+        # cell below it (W is constant in a cell, μ linear)
+        az = nest.axes[3]
+        for K in 0:nest.nz
+            f = az.cface[K+1]
+            if f != 0
+                pc[Pb + K] = cc[f]
+            else
+                g = az.fbr[K+1]
+                pc[Pb + K] = cc[g] + Wc[g] * (ph[Pb + K] - ch[g])
+            end
+        end
     end
     for P in Pt:length(ph)-1
         pc[P+1] = pc[P] + Wp[P] * (ph[P+1] - ph[P])
@@ -126,7 +146,8 @@ function nest_measure(nest::NestedGrid, Wp::AbstractVector, Wc::AbstractVector)
         pc[P] = pc[P+1] - Wp[P] * (ph[P+1] - ph[P])
     end
     pw = [Wp[P] * (ph[P+1] - ph[P]) for P in 1:length(ph)-1]
-    return NestMeasure(:mass, pc, cc, ph, ch, diff(cc), pw, Dict{Tuple{Symbol,Int},_Plan1D}())
+    return NestMeasure(:mass, pc, cc, ph, ch, diff(cc), pw, _overlap_lengths(nest.axes[3], pc, cc),
+                       Dict{Tuple{Symbol,Int},_Plan1D}())
 end
 
 """
@@ -152,14 +173,23 @@ function nest_reference_mismatch(nest::NestedGrid, pr::ReferenceState, cr::Refer
     pr.mesh.Nz == pm.Nz || error("nest_reference_mismatch: parent_ref is not on the nest's parent mesh")
     cr.mesh.Nz == cm.Nz || error("nest_reference_mismatch: child_ref is not on the nest's child mesh")
     worst = 0.0
+    az = nest.axes[3]
     for K in 1:nest.nz
         Kp = nest.iz + K - 1
         dzp = _dzp(pm, Kp)
         mρ = 0.0; mθ = 0.0
-        for kc in 1:nest.rz
-            k = (K - 1) * nest.rz + kc
-            mρ += cr.ρ̄[k] * cm.dz
-            mθ += cr.θ̄[k] * cm.dz
+        if nest.rz > 0 && cm isa RegularGrid
+            for kc in 1:nest.rz
+                k = (K - 1) * nest.rz + kc
+                mρ += cr.ρ̄[k] * cm.dz
+                mθ += cr.θ̄[k] * cm.dz
+            end
+        else                                   # the overlaps of the box layer (#328)
+            for q in az.ptr[K]:az.ptr[K+1]-1
+                k = az.cidx[q] - az.Hc
+                mρ += cr.ρ̄[k] * az.len[q]
+                mθ += cr.θ̄[k] * az.len[q]
+            end
         end
         worst = max(worst, abs(mρ - pr.ρ̄[Kp] * dzp) / (pr.ρ̄[Kp] * dzp),
                            abs(mθ - pr.θ̄[Kp] * dzp) / (pr.θ̄[Kp] * dzp))
@@ -195,9 +225,10 @@ end
 # The measure an operator uses: the explicit one, or the nest's volume
 # measure. `nothing` on a uniform parent short-circuits to the N-nest-a
 # integer plans (identical numbers, no measure allocation).
-_uses_integer_z(nest::NestedGrid, ::Nothing) = nest.parent_mesh isa RegularGrid
+_uses_integer_z(nest::NestedGrid, ::Nothing) =
+    nest.parent_mesh isa RegularGrid && nest.axes[3].integer !== nothing
 _uses_integer_z(nest::NestedGrid, m::NestMeasure) =
-    m.kind === :volume && nest.parent_mesh isa RegularGrid
+    m.kind === :volume && _uses_integer_z(nest, nothing)
 _resolve(nest::NestedGrid, m::NestMeasure) = m
 _resolve(nest::NestedGrid, ::Nothing) = nest_measure(nest)
 
