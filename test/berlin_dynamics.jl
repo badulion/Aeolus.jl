@@ -37,7 +37,7 @@ run_smoke(; kw...) = (case = BC.build_case(smoke(; kw...)); BC.run_case!(case); 
 "The physics selecting sound-proof core `core` (it brings its own pressure solver)."
 # a sound-proof core brings its solver and the fixed stepper (the adaptive default is typed on
 # BoussinesqSimulation)
-soundproof(core) = Dict{Symbol,Any}(:core => core, :pressure_solver => :density_weighted_cg,
+soundproof(core) = Dict{Symbol,Any}(:core => core, :pressure_solver => :density_weighted_direct,
                                     :timestepper => :fixed)
 
 "The selection error for `physics`, or `nothing`."
@@ -106,6 +106,7 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
 
     @testset "numerics slots × core: the keywords a core cannot take are declared incompatible" begin
         @test :density_weighted_cg in BC.slot_providers()[:pressure_solver]
+        @test :density_weighted_direct in BC.slot_providers()[:pressure_solver]   # #309
         for core in (:anelastic, :pseudo_incompressible)
             # the default (cosine FFT) and multigrid solvers solve ∇²φ = ∇·u*,
             # not the weighted projection: selecting the core alone says so
@@ -125,9 +126,11 @@ Aeolus.Operators.restore_sgs_state!(c::CommitCounter, s) = (c.n = s[1]; c.dts = 
                 @test selection_error(merge(soundproof(core), Dict(:sgs => p))) === nothing
             end
         end
-        # the weighted solver on the Boussinesq core
-        err = selection_error(Dict(:pressure_solver => :density_weighted_cg))
-        @test err !== nothing && occursin("sound-proof", err)
+        # the weighted solvers on the Boussinesq core
+        for ps in (:density_weighted_cg, :density_weighted_direct)
+            err = selection_error(Dict(:pressure_solver => ps, :core => :boussinesq))
+            @test err !== nothing && occursin("sound-proof", err)
+        end
         # a sim_options keyword a sound-proof core does not take is an
         # error, never dropped (the guard behind the declarations)
         cfg = smoke(physics = soundproof(:anelastic))
