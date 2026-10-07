@@ -269,3 +269,29 @@ end
     @test occursin("above the ERA5 top", e5_err(() -> write_era5_driver(joinpath(mktempdir(), "x.nc"), e;
                                                                         lat = E5_LAT, lon = E5_LON, mesh = m)))
 end
+
+@testset "ERA5: the Lindenberg sample against the Lindenberg sounding (00 UTC, 200-3000 m)" begin
+    @test all(isfile, E5_SAMPLE) && sum(filesize, E5_SAMPLE) <= 1024^2
+    for f in E5_SAMPLE                                       # provenance and licence in the file
+        NCDatasets.NCDataset(f) do ds
+            @test occursin("Copernicus", ds.attrib["licence"]) && occursin("doi:10.24381", ds.attrib["attribution"])
+            @test occursin("\"area\":[53.21,13.12,51.21,15.12]", ds.attrib["cds_request"])
+        end
+    end
+    e = read_era5(E5_SAMPLE)
+    @test e.time == [DateTime(2019, 6, 29, h) for h in 0:12] && size(e.T, 3) == 16 && e.p[1, 1, end, 1] == 50_000.0
+    lat, lon = 52.2085, 14.1180                              # the launch site (IGRA2)
+    C = era5_columns(e; lat, lon)
+    snd = read_sounding(joinpath(pkgdir(Aeolus), "examples", "urban", "data", "lindenberg_10393_20190629.csv"))
+    P = sounding_profiles(snd; z_top = 3000.0)
+    l0 = snd.launches[1]                                     # "2019-06-29T00Z", released 22:45 UTC on the 28th
+    zg = collect(200.0:50.0:3000.0)                          # m above the ground (ERA5's, the launch site's)
+    θe = era5_vertical(C.z[:, 1], C.θ[:, 1], zg); qe = era5_vertical(C.z[:, 1], C.qv[:, 1], zg)
+    θs = [forcing_value(P.θ, z, l0.t) for z in zg]; qs = [forcing_value(P.qv, z, l0.t) for z in zg]
+    rms(a) = sqrt(sum(abs2, a) / length(a))
+    rθ, rq = rms(θe .- θs), 1e3 * rms(qe .- qs)
+    @info @sprintf("ERA5 vs the Lindenberg sounding, 00 UTC 29 June 2019, 200-3000 m above the ground: θ RMSE %.3f K (bias %+.3f K), qv RMSE %.3f g/kg (bias %+.3f g/kg); ERA5 ground %.1f m, launch site %.1f m",
+                   rθ, sum(θe .- θs) / length(zg), rq, 1e3 * sum(qe .- qs) / length(zg), C.ground, snd.elevation)
+    @test rθ <= 1.5
+    @test rq <= 1.5
+end
