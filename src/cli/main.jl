@@ -117,6 +117,33 @@ function _preprocess_static(args)
     end
     return 0
 end
+"""
+`aeolus preprocess dynamic (--from-sounding | --from-parent) <config.toml> [--child <child config>]
+[--out file.nc] [--set key=value]...`: load the run config and write its dynamic driver with the
+driver's [`preprocess_dynamic`](@ref) (CFG-g, #362): from the sounding or case tables the config
+names (`--from-sounding`), or by running the config's nest parent with the child's boundary slabs
+recorded at every parent step (`--from-parent`; `--child` names the child config when it is not
+the same file); prints the files written.
+"""
+function _preprocess_dynamic(args)
+    pos, sets, opts, fl = _parse_args(args, ("set", "out", "child"), ("from-sounding", "from-parent"))
+    length(fl) == 1 || throw(UsageError("give one of --from-sounding, --from-parent"))
+    from = "from-sounding" in fl ? :sounding : :parent
+    path = _one_positional(pos, "config file")
+    cfg = load_run_config(path; overrides = sets)
+    d = run_driver(cfg.run.driver)
+    child = haskey(opts, "child") ? load_run_config(opts["child"]; overrides = sets) : nothing
+    files = Base.invokelatest(preprocess_dynamic, d, cfg; from = from, out = get(opts, "out", nothing),
+                              child = child)
+    for f in files
+        println("wrote ", f)
+    end
+    return 0
+end
+register_preprocessor!("dynamic", _preprocess_dynamic,
+                       "dynamic (--from-sounding | --from-parent) <config.toml> [--child <config.toml>] " *
+                       "[--out file.nc] [--set key=value]...  write the run's dynamic input driver")
+
 register_preprocessor!("static", _preprocess_static,
                        "static <config.toml> [--out file.nc] [--parent-out file.nc] [--set key=value]...  " *
                        "write the run's static input driver(s)")
