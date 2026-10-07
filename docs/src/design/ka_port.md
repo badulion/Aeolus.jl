@@ -1363,7 +1363,11 @@ duality). The second test filter allocates nothing per call. The harness
 has an `sgs` section (109 hashes): every closure's coefficients on a seeded
 64×64×32 state, 3 commits of every stateful closure with its statistics,
 the dual strain, the masked box filter, the initialisations, and 3 LES
-steps with the dynamic and with the TKE closure.
+steps with the dynamic and with the TKE closure. `AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,12,24`, every section (primitives, dns,
+reductions, smoke, flagship, nested, fft, fv, pcg, radiation, sgs): all
+3124 hashes are identical at 4, 12 and 24 threads to 1 thread (21 of 21
+checks pass).
 
 **Measurements** (`compute_sgs!` / `advance_sgs!` per closure on a seeded
 64×64×32 LES state, minimum of up to 40 calls, the best of four processes
