@@ -8,7 +8,12 @@
 #     julia --project=. examples/urban/berlin_checks.jl            # all
 #     julia --project=. examples/urban/berlin_checks.jl smoke      # child smoke matrix only
 #     julia --project=. examples/urban/berlin_checks.jl parent     # parent smoke + validation only
+#     julia --project=. examples/urban/berlin_checks.jl flagship   # the default case, 20 steps
 #
+#   flagship  the default case (CaseConfig(), 64³) for 20 adaptive steps,
+#           past step 16 where step_case!(case, cfg.dt) failed (#392): no
+#           retry, CFL ≤ C_advective, |u_i| < 20 m/s, θ within 2 K of its
+#           initial range; the forced 2 s step is rejected;
 #   smoke   every coupling of the Berlin case in a short window of the real
 #           OSM scene (examples/urban/configs/berlin_smoke.toml: 16³,
 #           250 m × 250 m × 100 m, 12 steps of 2 s), in every configuration
@@ -47,7 +52,7 @@ const BC = Main.BerlinCase
 # thread-invariance harness (KA-a, #294)
 include(joinpath(@__DIR__, "..", "..", "test", "support", "smoke_matrix.jl"))
 
-const WHAT = isempty(ARGS) ? ("smoke", "parent") : Tuple(ARGS)
+const WHAT = isempty(ARGS) ? ("flagship", "smoke", "parent") : Tuple(ARGS)
 
 allfinite(x) = all(isfinite, x)
 
@@ -417,7 +422,51 @@ function berlin_parent_checks()
     end
 end
 
+"""
+flagship: the default case, `CaseConfig()` (64³, 1 km × 1 km × 400 m,
+every default coupling, the nest on), for `FLAGSHIP_STEPS` steps of the
+adaptive stepper (#392). `step_case!(case, cfg.dt)` used to force 2 s steps
+against a stable step that fell to 0.09 s: the guard passed them, |v|
+grew to 49 m/s and the run failed at step 16; that dt is now rejected,
+and the stepper's own steps run past step 16 without a retry.
+"""
+const FLAGSHIP_STEPS = 20
+
+function berlin_flagship_checks()
+    @testset "Berlin flagship: default case past step 16 (#392)" begin
+        cfg = BC.CaseConfig(; output_path = nothing)
+        case = BC.build_case(cfg)
+        sim = case.sim
+        θ0 = extrema(interior_view(sim.θ))
+        ts = BC.timestepper(case)
+        # the forced fixed step of the failing run is refused, nothing changed
+        @test_throws ArgumentError BC.step_case!(case, cfg.dt)
+        @test case.clock.n == 0 && sim.t == 0
+        t_start = time()
+        vmax = 0.0
+        for n in 1:FLAGSHIP_STEPS
+            @test BC.step_case!(case)
+            vmax = max(vmax, maximum(abs, interior_view(sim.u)), maximum(abs, interior_view(sim.v)),
+                       maximum(abs, interior_view(sim.w)))
+        end
+        s, k = ts.stats, ts.constraints
+        θ1 = extrema(interior_view(sim.θ))
+        @info @sprintf("flagship: %d steps in %.0f s, t = %.2f s, dt %.3f–%.3f s, %d retries, max CFL %.2f, max |u_i| %.1f m/s, θ %.2f–%.2f K (initial %.2f–%.2f)",
+                       s.n, time() - t_start, sim.t, s.dt_min, s.dt_max, s.retries, s.cfl_max, vmax,
+                       θ1..., θ0...)
+        @test s.n == FLAGSHIP_STEPS && s.retries == 0
+        @test s.cfl_max <= k.C_advective + 1e-9
+        @test max_divergence(sim) < 1e-10
+        # measured 2026-10-07 (32 steps): max |v| 11.2 m/s, θ 288.33–292.42 K
+        # from 288.69–292.41; the forced-2-s run had |v| 49 m/s, θ 229–360 K
+        @test vmax < 20
+        @test θ0[1] - 2 < θ1[1] && θ1[2] < θ0[2] + 2
+        @test !case.clock.blowup
+    end
+end
+
 @testset "Berlin example checks" begin
+    "flagship" in WHAT && berlin_flagship_checks()
     "smoke" in WHAT && berlin_smoke_checks()
     "parent" in WHAT && berlin_parent_checks()
     "parent" in WHAT && berlin_parent_surface_checks()
