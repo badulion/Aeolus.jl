@@ -1385,6 +1385,12 @@ Re-checked at one thread after merging KA-d (#299) and the CFG changes
 the lagged facet step (9 581 → 10 468 µs, 1.09; 1.03 above, so it is
 within run-to-run noise but close to the gate), the emissions (1.06) and
 the dynamic roughness (1.04).
+Re-checked again after merging KA-g (#300) and KA-n (#305), single run
+against the same old numbers: 0.12-1.06 for every kernel but the lagged
+facet step, which read 1.11 (5 calls). Measured on its own, old and new
+alternating, three processes each, the minimum of 60 calls: old
+9 662-9 855 µs, new 9 550-9 882 µs (0.97-1.02). The 1.11 was the 5-call
+minimum under a machine load of 5-7 from other jobs.
 
 Reading the table:
 
