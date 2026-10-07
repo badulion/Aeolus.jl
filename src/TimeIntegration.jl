@@ -1166,11 +1166,15 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
 
     A = Backends.PointOperator(_implicit_at, ν, Δt, idx2, idy2, idz2;
                                prepare = _ImplicitHalos(field, pf, bcs, key))
-    M = precondition === :jacobi ?
-        Backends.PointPreconditioner(_implicit_jacobi_at, ν, idx2, idy2, idz2, Δt) :
-        Backends.IdentityPreconditioner()
-    st = Backends.pcg!(A, M, x, b, ws.pcg; ranges = I3, tol = τ, maxit = maxit,
-                       constraint = kc, zero_guess = false, backend = bk)
+    # one call per preconditioner: a `Union` of the two would box M (80 B per solve)
+    st = if precondition === :jacobi
+        Backends.pcg!(A, Backends.PointPreconditioner(_implicit_jacobi_at, ν, idx2, idy2, idz2, Δt),
+                      x, b, ws.pcg; ranges = I3, tol = τ, maxit = maxit, constraint = kc,
+                      zero_guess = false, backend = bk)
+    else
+        Backends.pcg!(A, Backends.IdentityPreconditioner(), x, b, ws.pcg; ranges = I3, tol = τ,
+                      maxit = maxit, constraint = kc, zero_guess = false, backend = bk)
+    end
 
     if st.status === :zero_rhs
         has_open_boundaries(bcs_full) && fill_halos!(field, bcs_full; key = key)
