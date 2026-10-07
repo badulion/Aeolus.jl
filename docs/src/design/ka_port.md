@@ -248,6 +248,13 @@ quotes its size.
   the work-item → task map changes with the thread count.
 * Partials arrays for reductions are sized by the outer range (`n_k`
   planes, `n_i × n_j` columns), not by the thread count.
+* Random numbers: never one generator shared by the work items of a
+  launch (the draws would depend on which task got there first). Each
+  item makes its own stream from what identifies it,
+  [`counter_rng`](@ref Aeolus.Backends.counter_rng)`(key, stream, id)`
+  for a few draws or [`counter_xoshiro`](@ref Aeolus.Backends.counter_xoshiro)
+  for hundreds, keyed by a seed or one draw from the caller's `rng`
+  (KA-n). Tallies go into per-item buffers merged in item order.
 
 ## FFTW and BLAS
 
@@ -396,7 +403,7 @@ Left as they are, with the reason:
   order-independent.
 * **Plane-at-a-time loops** (dynamic Smagorinsky, #288 damping levels,
   `LargeScaleForcing` nudging and subsidence): canonical as they stand.
-* **CG / MG dot products**: KA-g (#300).
+* **CG / MG dot products**: ported by KA-g (#300), below.
 * **Reports, smoke checks and one-off diagnostics** (`bubble_top_height`,
   `θ_variance`, the SGS reports, `laminar_reference_νt`): not on the step
   path; serial and thread-invariant.
@@ -615,6 +622,152 @@ Reading the table:
   1-thread time it is 1.6–2.1× at 12 threads.
 * **The whole-child prolongation is compute-bound** (a 27-point stencil
   per point) and scales to 7.1× at 24 threads.
+
+## KA-g: one CG driver (#300)
+
+**One loop.** `Backends.pcg!` is the only preconditioned conjugate
+gradient in Aeolus. `CGPoissonSolver`, `MGPreconditionedCG`,
+`DensityWeightedPoissonSolver` and `solve_implicit_diffusion!` (the IMEX
+steppers' implicit diffusion) call it. Their own loops are deleted:
+`_dot!`, `_project_mean_flat!`, Anelastic's `_dot`, `_remove_mean!` and
+`_jacobi!`, TimeIntegration's `_apply_implicit!` and `_idot`. A solver
+supplies four things:
+
+* the operator: a `PointOperator(f, args...; prepare)` (the stencil at
+  one point; `prepare` is the halo fill of the array it reads) or a
+  function `A!(Ap, p)` (the multigrid fine-grid operator);
+* the preconditioner: `IdentityPreconditioner()`, a pointwise
+  `PointPreconditioner` (Jacobi), or a function `M!(z, r)` (V-cycles);
+* `project_mean` for a singular operator (all axes periodic or Neumann);
+* `constraint`: the pinned planes of a staggered field with walls.
+
+Per iteration the driver makes three sweeps and two canonical
+reductions:
+
+1. `Ap = A p`, with `p·Ap` reduced over each plane while it is in cache;
+2. `x += αp`, `r -= αAp`, `z = M⁻¹r` (a pointwise `M`), with
+   `(r·r, r·z, Σz, Σr)` as one 4-tuple reduction;
+3. `p = (z − m) + βp`, where `m = Σz / n` with the mean projected out.
+
+The mean projection costs no extra sweep: `r·z` of the deflated `z` is
+`Σ rz − m Σ r`. The density-weighted solver went from nine passes over
+the arrays per iteration (five sweeps and four separate reductions) to
+three sweeps carrying two reductions. A function preconditioner adds one
+reduction after `M!`. Every reduction is a `plane_reduce!`-style plane
+sum, so a solve, its iteration count and its residual are the same at
+every thread count.
+
+**Unit halos.** `CGPoissonSolver` and `DensityWeightedPoissonSolver`
+now keep `b`, `x`, `r`, `z`, `p` and `Ap` as `(N+2)`-arrays with one halo
+layer. `fill_unit_halo!` (the KA-f halo kernels, also the multigrid
+level halo) fills the periodic wrap or the Neumann mirror before each
+operator application. The stencil then has no wrap-around index
+arithmetic and vectorises: one point of `_laplacian_at` and
+`_neg_wlap_at` gives the values of the old wrap-around loops (a mirrored
+neighbour makes the face difference exactly zero). The implicit
+diffusion iterates on the field's own storage as before, with
+`fill_halos!` as `prepare`. `_diffusion_kernel!` is a `launch!` of
+`_diff_at`.
+
+**Pinned rows.** A per-point pinned test in the sweeps stopped the row
+loops from vectorising: 4× slower in a first version. The sweeps
+therefore compute every point and then zero the pinned plane (`Ap`, `z`
+and `p` there are 0, `x` keeps its value, `b` there does not count in
+`‖b‖`), as `_apply_constraint!` did.
+
+**Status.** `pcg!` returns `(iterations, residual, bnorm, status,
+curvature)`. `status` is `:converged`, `:maxit`, `:breakdown` or
+`:zero_rhs`, and each solver logs it as before. One change:
+`CGPoissonSolver` now stops at a breakdown and warns. Before, it divided
+by a vanishing `p·Ap` and went on. `definite = :negative` is for the
+two Poisson solvers that iterate on `∇²` itself (negative
+semi-definite). For those only a vanishing curvature is a breakdown.
+
+**Workspace.** `PCGWorkspace` holds `r`, `z`, `p`, `Ap` and the
+per-plane partial sums. Every solver preallocates one, so a solve
+allocates nothing on one thread. Measured with `@allocated`, the
+Poisson solvers allocate 0 B. `solve_implicit_diffusion!` allocates
+48 B (352 B with a moving wall), the same as before; the 48 B are its
+returned NamedTuple at a dynamic call site. A first version allocated
+80 B more with a ν array: the `Union` of the two preconditioners was
+boxed. It now has one `pcg!` call per preconditioner. Above the serial threshold a threaded launch allocates
+KernelAbstractions' tasks, about 9 kB per iteration at 4 threads.
+
+**One-time change (expectation).** The dot products were
+`sum(w .= a .* b)` (pairwise) in CG and MG-CG and serial `@simd` loops
+in the other two. They are now canonical plane sums. The iteration
+counts did not change: identical in all 28 cases measured (the 14
+below at 32×32×16 and 64×64×32; the issue allowed ±1). The solutions
+change in the last bits: `sum(|x|)` and `max(|x|)` changed by at most
+2.2e-15 and 1.8e-15 relative (deep density-weighted case). In 2 of the
+28 cases both are bit-identical. No regression reference of the suite
+moved. One assertion was replaced: `era2_multigrid.jl` asserted that
+MG-CG's dot equals `sum(x .* y)`. It now asserts that the driver's dot
+is `interior_dot` (canonical).
+
+**Measured** (64×64×32; ms per solve, minimum of 5; load 2-4 for 1 and
+24 threads and 2-6 for 4 and 12; Julia 1.13.1; old = master b4f6f82 at
+one thread; speed-up = old 1 t / new N t, in brackets new 1 t / new N
+t):
+
+| solver | iterations old → new | old 1 t | new 1 t | new / old | 4 t | 12 t | 24 t |
+| :----- | :------------------- | ------: | ------: | --------: | --: | ---: | ---: |
+| CG, periodic xy, Neumann z | 288 → 288 | 123.4 | 51.0 | 0.41 | 5.3× (2.18×) | 3.8× (1.56×) | 3.8× (1.55×) |
+| CG, closed box | 508 → 508 | 221.2 | 89.6 | 0.41 | 5.9× (2.40×) | 2.9× (1.17×) | 3.7× (1.50×) |
+| CG, triply periodic | 259 → 259 | 108.9 | 46.7 | 0.43 | 6.0× (2.56×) | 3.0× (1.30×) | 3.7× (1.57×) |
+| MG-CG, periodic xy, Neumann z | 12 → 12 | 40.3 | 39.1 | 0.97 | 1.0× | 1.0× | 1.0× |
+| MG-CG, triply periodic | 12 → 12 | 40.4 | 39.0 | 0.97 | 1.0× | 0.9× | 1.0× |
+| MG-CG, stretched (×1.04) | 47 → 47 | 226.7 | 222.4 | 0.98 | 1.0× | 0.9× | 1.0× |
+| density-weighted, periodic xy, Neumann z | 330 → 330 | 124.7 | 62.0 | 0.50 | 4.8× (2.41×) | 2.4× (1.18×) | 3.3× (1.62×) |
+| density-weighted, triply periodic | 292 → 292 | 93.7 | 54.0 | 0.58 | 4.1× (2.37×) | 2.4× (1.40×) | 2.8× (1.62×) |
+| density-weighted, closed box | 569 → 569 | 224.1 | 105.3 | 0.47 | 5.5× (2.61×) | 2.8× (1.32×) | 3.3× (1.56×) |
+| density-weighted, 3 km deep | 519 → 519 | 223.9 | 96.1 | 0.43 | 6.0× (2.57×) | 3.2× (1.38×) | 3.6× (1.56×) |
+| implicit diffusion θ, scalar ν | 27 → 27 | 11.0 | 5.6 | 0.51 | 4.0× (2.07×) | 2.4× (1.23×) | 2.8× (1.44×) |
+| implicit diffusion θ, ν(x, z), walls | 34 → 34 | 46.6 | 28.6 | 0.61 | 5.1× (3.12×) | 4.3× (2.67×) | 3.2× (1.99×) |
+| implicit diffusion w, pinned walls | 27 → 27 | 11.0 | 5.6 | 0.51 | 3.9× (2.01×) | 2.1× (1.07×) | 2.9× (1.47×) |
+| implicit diffusion u, moving no-slip wall | 28 → 28 | 11.5 | 5.9 | 0.51 | 4.5× (2.28×) | 2.5× (1.28×) | 2.8× (1.41×) |
+
+The Berlin flagship step at 64³ (ms per step, minimum of 8 after 2
+warm-up steps, the smoke matrix's `core = anelastic` and `timestepper =
+imex` rows without nesting; the `:dynamics` timers in brackets; 419
+density-weighted iterations per solve; old = master b4f6f82):
+
+| run | old 1 t | new 1 t | new 4 t | new 12 t | new 24 t | old 24 t |
+| :-- | ------: | ------: | ------: | -------: | -------: | -------: |
+| anelastic core | 362.0 (276.0) | 291.0 (205.2) | 169.2 (91.0) | 196.8 (120.0) | 243.6 (164.0) | 353.2 (276.8) |
+| IMEX ARK2 | 234.2 (151.3) | 216.1 (132.2) | 141.2 (69.7) | 144.2 (70.8) | 164.6 (85.5) | 220.9 (148.2) |
+
+Reading the tables:
+
+* **The 1-thread gate holds everywhere** (largest new / old 0.98,
+  MG-CG stretched). CG, density-weighted CG and implicit diffusion are
+  0.41-0.61× the old loops on one thread. The gain comes from fewer
+  sweeps (the fused reductions, the mean projection folded into `r·z`)
+  and from stencils without wrap-around indices.
+* **MG-CG does not change.** Its time is the V-cycle (smoothing,
+  restriction, prolongation). That cycle is still serial and outside
+  this issue.
+* **Threads.** The issue expected 2-3× at 4 threads and 3-5× at 12.
+  Against the new 1-thread time we get 2.0-3.1× at 4 threads and
+  1.1-2.7× at 12. At 12 threads it is worse than at 4, and 24 threads
+  is between the two. The likely cause (not profiled) is that 32 planes
+  of 64×64 points are too little work per task for the start-up of
+  three launches per iteration. Against the old loops at one
+  thread this is 3.9-6.0× at 4 threads.
+* **Berlin.** At 4 threads the anelastic dynamics take 91 ms instead of
+  276 ms (3.0×) and the IMEX dynamics 70 ms instead of 151 ms (2.2×).
+  The issue quoted 139.6 ms and 124.7-163.9 ms, measured on another
+  setup; on this one master takes 276 ms and 151 ms. The replacement of the
+  density-weighted CG by a direct solve is #309.
+
+**Thread invariance.** The worker's `pcg` section hashes the solution
+and the iteration count of every solver above at 64×64×32 (the
+singular Neumann and periodic cases, the stretched multigrid and the
+ν(x, z) / pinned / moving-wall implicit cases): 28 hashes. With
+`AEOLUS_THREAD_TESTS=1` at 1, 4 and 24 threads, all 2894 hashes of the
+harness (every section, `pcg` included) are identical to 1 thread.
+`test/ka_pcg.jl` checks the serial backend against the default one,
+solution and iteration count, for every solver.
 
 ## Measured at KA-h
 
@@ -912,6 +1065,175 @@ stretched grid (87 hashes). All 2953 hashes (primitives, 64³ DNS,
 reductions, the Berlin smoke matrix, the flagship step, nested, fft, fv)
 are identical at 4 and 24 threads to 1 thread. At `-t 1` every kernel is
 the old loop bit for bit (`test/ka_fv.jl`): no one-time change.
+
+## KA-n: radiation and stochastic modules (#305)
+
+**Radiosity.** Three changes.
+
+* *LU cache.* [`RadiosityFactorCache`](@ref Aeolus.Radiosity.RadiosityFactorCache)
+  keeps the dense LU of ``M = I - \mathrm{diag}(\rho) F`` between calls
+  and refactorises only when ``F`` (by identity) or ``\rho`` (by value)
+  changes. A hit runs the same LAPACK `getrs` on the same factors, so the
+  bits equal a refactorisation at the same BLAS thread count. The
+  `radiosity_sun` coupling keeps one cache per band. The longwave
+  ``\rho = 1 - \varepsilon`` is fixed, so its LU is computed once per run.
+  The shortwave albedos follow μ₀ (`default_urban_materials(; μ₀)`; all
+  five classes change, from 0.140 / 0.268 / 0.293 / 0.359 / 0.272 at
+  μ₀ = 0.1 to 0.121 / 0.204 / 0.186 / 0.031 / 0.217 at 0.9), so the
+  shortwave operator is still refactorised on every daytime call.
+* *BLAS.* Pinned to one thread when Julia runs threaded (KA-a). LAPACK's
+  bits depend on the BLAS thread count, so the harness section pins it
+  too. Under `-t 1` the BLAS setting is left alone, and a cached solve
+  equals an uncached one at whatever count is set.
+* *View factors and aggregation.* `view_factors` is one
+  `launch_weighted!` over pairs of upper-triangle rows `(p, n − p)`, each
+  writing `F[i, j]` and `F[j, i]` of its own rows. The Gauss nodes are
+  cached before the threads read them, and the occlusion quadrature no
+  longer allocates. `F` and `F_sky` are bit-identical to the serial loop.
+  `aggregate_to_grid` gathers through a CSR column → facets index
+  (`facet_column_index`) in ascending facet order, which gives the same
+  sums as the old facet scatter (bit-identical, no expectation change).
+  An exact tie between dominant classes goes to the lowest material
+  index. `set_temperatures!(scene, Ts, facet_col)` is one launch over the
+  facets.
+
+The iterative (Gauss-Seidel) radiosity solver stays serial.
+
+**Gas optics and two-stream.** `compute_optics!` is one
+`launch_weighted!` over (column, layer): a work item fills one layer's
+g-points in the serial loop order, so the optics are bit-identical at
+every thread count. The k-distribution bisections are 33 of the 37 ms of a
+Berlin radiation call. The multi-column forms take optics `τ[k, g, c]`
+(`allocate_column_optics`). `solve_sw!` / `solve_lw!` launch over
+(g-point, column) work items, with the adding recurrence sequential in
+``k`` inside each item. Per-(g, column) scratch lives in a reusable
+[`TwoStreamWorkspace`](@ref Aeolus.TwoStream.TwoStreamWorkspace), so a
+call does not allocate. A second launch sums the g-points in ascending
+order. A single-column solve is the multi-column solve on one column (one
+code path), so column ``c`` gets the single-column bits.
+`column_radiation!`, the entry the Berlin child and the nesting parent
+share (#259), runs through these forms.
+
+**Cloud shadow.** The optical-depth field is a pointwise launch, and the
+slant rays are one `launch_weighted!` over the columns, one ray per work
+item. Both are identical to the old loops.
+
+**Random streams.** No generator is shared between work items.
+[`counter_rng`](@ref Aeolus.Backends.counter_rng)`(seed, stream, id)` is
+a Philox4x32-10 stream (Salmon et al. 2011, checked against the
+Random123 known-answer vectors) and a pure function of the triple.
+[`counter_xoshiro`](@ref Aeolus.Backends.counter_xoshiro) is a Xoshiro256++
+seeded from the first four numbers of that stream, for long streams.
+
+| module | work item | stream |
+| :-- | :-- | :-- |
+| `MonteCarloRT.mc_solve` | a batch of photons, tallied into its own buffer and merged in batch order | photon ``p``: `(key, g-point, p)` |
+| `init_exponential_superdroplets`, `broadening_initial_population` | a droplet | `(key, 0, i)` |
+| `collision_coalescence!` | a cell | `counter_xoshiro(key, 0, ci)` |
+| `SupersaturationFluctuations` | a droplet | the ``n``-th Ornstein-Uhlenbeck draw of droplet ``i``: `(key, n, i)` |
+
+The key is the caller's `seed`, or one `UInt64` drawn from the caller's
+`rng`, so a seeded `MersenneTwister` caller stays reproducible.
+`mc_solve` without either is an error, and the unseeded global `rand()`
+default is gone. A Philox block costs about 4 ns per two `UInt64`s: ten
+dependent rounds of multiplication. That is fine for a few draws per
+item, and `randn(counter_rng(…))` is not heap-allocated. A cell's
+collisions draw a few hundred numbers, which took 1.26× the old loop on
+Philox, so they use `counter_xoshiro` (under 1 ns per draw). A Philox that
+computes four blocks per refill (2.2 ns per draw) was tried and dropped.
+Its larger refill stops the generator from being inlined, so a one-draw
+stream is heap-allocated, and the superdroplet initialisation took 1.6×
+as long.
+
+**Named expectation changes** (one time, against master):
+
+* *Monte-Carlo photons.* Every realisation changes, but the statistics
+  do not: the standard-error calibration over 60 seeds gives sd/err 0.97
+  on the new streams against 0.99 on the old. Four `era3_montecarlo`
+  assertions held only for the old realisation. Their tolerances are
+  unchanged. The conservative closure and the delta-Eddington comparison
+  now use 96k photons instead of 24k: at 24k they failed for 1 or 2 of
+  20 seeds with the old draws and for 2 or 4 with the new. The 3-D cloud
+  "> 5σ" test now uses 128k / 64k photons instead of 32k / 16k: the old
+  draws failed it for 5 of 10 seeds. The shadow test's
+  `argmin(profile) == i_expect` was a wrong expectation: the τ = 20
+  shadow is a plateau of six cells equal within the noise. It now
+  asserts that both lie in the geometric shadow.
+* *Superdroplets and sub-grid fluctuations.* The realisations change. The
+  era4 superdroplet, broadening, sgs-growth and turbulent-microphysics
+  tests pass with their tolerances unchanged. The spectral-broadening
+  page's seed-1 table and seed lists were re-measured. At
+  ``\sigma_S = 0.2\,\%`` the bulk ``\varepsilon`` deficit is −2.9 / −5.1 /
+  −4.3 % over seeds 1-3, against −4.1 / −4.1 / −3.5 % before (asserted
+  2-6 %). The stationary exponent is 0.540 / 0.529 / 0.526, against
+  0.529 / 0.514 / 0.518 before.
+* Everything else in this PR is bit-identical to master at `-t 1`: the
+  radiosity (cached or not), the view factors, the aggregation, the gas
+  and cloud optics, the two-stream solves and the cloud shadow.
+
+**Thread invariance.** The harness's `radiation` section hashes the
+following:
+
+* the view factors of a 16×14 city;
+* its shortwave and longwave solves, the second longwave solve through
+  the LU cache;
+* `aggregate_to_grid`;
+* the gas and cloud optics and the multi-column solves of 6 columns;
+* the cloud optical depth and the shadow rays;
+* a Monte-Carlo solve;
+* 4 collision steps of 2000 superdroplets in 16 cells, and the sub-grid
+  fluctuations.
+
+## Measured at KA-n
+
+Same machine, Julia 1.13.1, BLAS on one thread in every run. Each figure
+is the minimum over repeats, with other agents on the machine. The
+Berlin radiosity scene is the flagship's (5639 facets). "Day call" is one
+`radiosity_sun` `:radiation` stage: materials for a new μ₀, temperatures,
+shortwave and longwave solves and aggregation. "Night" is the same
+without the sun. The parent columns are 96 columns of the 53 parent
+levels under the standard atmosphere (113 layers), LW + SW. The old code
+is master `b4f6f82`. Speed-up is old at 1 thread divided by new at N
+threads.
+
+| kernel | old 1 t (ms) | new 1 t (ms) | new / old | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: | --: | --: |
+| radiosity day call | 3783 | 1800 | 0.48 | 2.1× | 2.1× | 2.1× |
+| radiosity night call | 1892 | 17.4 | 0.009 | 110× | 111× | 109× |
+| `view_factors` (5639 facets) | 937 | 833 | 0.89 | 2.9× | 4.8× | 5.0× |
+| `aggregate_to_grid` | 0.556 | 0.120 | 0.22 | 4.7× | 4.7× | 4.8× |
+| `column_radiation!` (child, 91 layers) | 45.7 | 45.4 | 0.99 | 3.6× | 7.4× | 12.1× |
+| gas optics LW (1 column) | 20.2 | 20.2 | 1.00 | 3.8× | 7.4× | 12.5× |
+| 96 parent columns, optics + LW + SW | 3828 | 3879 | 1.01 | 3.8× | 8.4× | 10.1× |
+| `cloud_optical_depth_column` 64×64×32 | 0.0229 | 0.0235 | 1.03 | 1.8× | 1.6× | 1.3× |
+| `cloud_shadow_transmittance!` 64×64×32 | 0.798 | 0.805 | 1.01 | 3.8× | 4.2× | 3.6× |
+| `mc_solve` 16³ cloud, 64k photons, 24 batches | 95.5 | 98.6 | 1.03 | 3.7× | 9.8× | 9.6× |
+| `init_exponential_superdroplets` 64k | 3.37 | 2.64 | 0.78 | 1.8× | 1.9× | 1.9× |
+| `collision_coalescence!` 64k in 512 cells, 5 steps | 3.99 | 3.67 | 0.92 | 1.8× | 1.7× | 1.8× |
+
+A single-column `solve_lw!` / `solve_sw!` (0.13 / 0.10 ms) runs serially:
+its 1 × 16 or 1 × 14 work items are below the launch threshold. It takes
+1.00 / 1.02× the old time.
+
+* **The issue's radiosity target (≥ 10× per call) is met at night, not
+  by day.** At night only the longwave solve runs, on the cached LU:
+  17 ms against 1.9 s. By day the shortwave operator changes with μ₀, so
+  it is refactorised (1.8 s, 2.1× faster than before, when both bands
+  were). Reusing the LU across μ₀ needs a non-bitwise scheme, for
+  example iterative refinement on a stale LU or albedos held across a
+  μ₀ tolerance. That is a maintainer question (PR body).
+* **Superdroplet collisions scale poorly:** 1.7-1.8× at 4-24 threads. The bucketing,
+  `compact!` and the launch over 512 small cells are serial or too fine.
+  This path is not on the Berlin default.
+* The multi-column radiation reaches 8.4× at 12 threads at the parent
+  size (the issue expected 6-10×). The Berlin child's one domain-mean
+  column gains through the threaded gas optics (layers × g-points): 7.4×
+  at 12 threads.
+
+**Harness.** `AEOLUS_THREAD_TESTS=1`, `AEOLUS_THREAD_COUNTS=1,4,12,24`,
+every section (primitives, dns, reductions, smoke, flagship, nested, fft,
+radiation): all 2900 hashes, the 34 of the radiation section included,
+are identical at 4, 12 and 24 threads to 1 thread.
 
 ## Dependency tree
 

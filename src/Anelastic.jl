@@ -57,7 +57,7 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ,
                interior, znodes
 using ..Fields
 using ..Fields: Field, interior_view, set!
-using ..Backends: Backends, plane_reduce!, plane_partials!, ordered_sum, range_max
+using ..Backends: Backends, plane_reduce!, plane_partials!, ordered_sum, range_max, PCGWorkspace
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall,
@@ -72,7 +72,7 @@ using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    add_surface_flux!, add_sponge!,
                    compute_sgs!, add_sgs_momentum!, add_sgs_scalar!, advance_sgs!,
                    _active_sgs, _check_sgs_stress
-using ..PressureSolvers: AbstractPressureSolver
+using ..PressureSolvers: PressureSolvers, AbstractPressureSolver
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 
 import ..PressureSolvers: solve!, poisson_axis_bcs
@@ -682,18 +682,16 @@ mutable struct DensityWeightedPoissonSolver{T, RA<:Array{T,3}} <: AbstractPressu
     w_c::Vector{T}          # cell weight, length Nz
     w_f::Vector{T}          # face weight, length Nz+1
     diag::Vector{T}         # positive diagonal of (−L), length Nz
+    inv_diag::Vector{T}     # 1 / diag: the Jacobi preconditioner
     tol::T
     maxit::Int
     bc_z::Symbol
     bc_x::Symbol
     bc_y::Symbol
-    # scratch, all interior-sized
+    # CG arrays with one halo layer, (Nx+2, Ny+2, Nz+2); interior 2:N+1
     b::RA
     x::RA
-    r::RA
-    p_dir::RA
-    Ap::RA
-    z::RA
+    ws::PCGWorkspace{T,RA}  # r, z, p, Ap and the reduction partials (KA-g, #300)
     last_iter::Base.RefValue{Int}
     last_residual::Base.RefValue{T}
 end
@@ -730,10 +728,11 @@ function DensityWeightedPoissonSolver(mesh::RegularGrid{T},
         diag[k] > 0 || error("degenerate Jacobi diagonal at k=$k (single-cell domain?)")
     end
 
-    mk() = zeros(T, Nx, Ny, Nz)
+    b = zeros(T, Nx + 2, Ny + 2, Nz + 2)
     return DensityWeightedPoissonSolver{T, Array{T,3}}(
-        mesh, wc, wf, diag, T(tol), maxit, bc_z, bc_x, bc_y,
-        mk(), mk(), mk(), mk(), mk(), mk(), Ref(0), Ref(zero(T)))
+        mesh, wc, wf, diag, 1 ./ diag, T(tol), maxit, bc_z, bc_x, bc_y,
+        b, zero(b), PCGWorkspace(b; ranges = PressureSolvers._unit_halo_ranges(Nx, Ny, Nz)),
+        Ref(0), Ref(zero(T)))
 end
 
 "Anelastic (`:ρ`) or pseudo-incompressible (`:ρθ`) weighting taken from `ref`."
@@ -763,38 +762,44 @@ solver_residual(s::DensityWeightedPoissonSolver) = s.last_residual[]
 
 # --- kernels -------------------------------------------------------------
 
-# out = −∇·(w ∇u) on an interior-sized array (positive semi-definite form).
+# −∇·(w ∇u) at one point (positive semi-definite form) of a unit-halo
+# array (interior 2:N+1, so the level is k − 1) whose halo holds the
+# periodic wrap or the Neumann mirror: a Neumann face difference, hence its
+# flux, is then exactly zero. A `PointOperator` body of the one CG driver
+# (KA-g, #300); the same values as the wrap-around indexing it replaces.
+@inline function _neg_wlap_at(i, j, k, u, w_c, w_f, idx2, idy2, idz2)
+    @inbounds begin
+        kk = k - 1
+        c = u[i, j, k]
+        lap = w_c[kk] * ((u[i+1, j, k] - 2c + u[i-1, j, k]) * idx2 +
+                         (u[i, j+1, k] - 2c + u[i, j-1, k]) * idy2)
+        ft = w_f[kk+1] * (u[i, j, k+1] - c)
+        fb = w_f[kk] * (c - u[i, j, k-1])
+        return -(lap + (ft - fb) * idz2)
+    end
+end
+
+_neg_wlap_args(w_c, w_f, dx, dy, dz) = (w_c, w_f, 1 / dx^2, 1 / dy^2, 1 / dz^2)
+
+@inline function _neg_wlap_body!(i, j, k, out, u, args)
+    @inbounds out[i, j, k] = _neg_wlap_at(i, j, k, u, args...)
+    return nothing
+end
+
+# out = −∇·(w ∇u) on interior-sized arrays (pads u with the BC halo, then
+# launches the operator the CG iterates).
 function _apply_neg_wlap!(out::Array{T,3}, u::Array{T,3},
                           w_c::Vector{T}, w_f::Vector{T},
                           dx::T, dy::T, dz::T, bc_z::Symbol,
                           bc_x::Symbol = :periodic, bc_y::Symbol = :periodic) where {T}
+    size(out) == size(u) || throw(DimensionMismatch("_apply_neg_wlap!: $(size(out)) vs $(size(u))"))
     Nx, Ny, Nz = size(u)
-    idx2 = 1 / dx^2; idy2 = 1 / dy^2; idz2 = 1 / dz^2
-    periodic_z = bc_z === :periodic
-    # Neumann side: the ghost mirrors the boundary cell, so the face
-    # difference (and the flux through the face) is zero.
-    px = bc_x === :periodic; py = bc_y === :periodic
-    @inbounds for k in 1:Nz
-        wk = w_c[k]
-        wt = w_f[k == Nz ? Nz + 1 : k + 1]
-        wb = w_f[k]
-        kp = k < Nz ? k + 1 : (periodic_z ? 1  : 0)
-        km = k > 1  ? k - 1 : (periodic_z ? Nz : 0)
-        for j in 1:Ny
-            jp = j < Ny ? j + 1 : (py ? 1  : Ny)
-            jm = j > 1  ? j - 1 : (py ? Ny : 1)
-            for i in 1:Nx
-                ip = i < Nx ? i + 1 : (px ? 1  : Nx)
-                im = i > 1  ? i - 1 : (px ? Nx : 1)
-                c = u[i, j, k]
-                lap = wk * ((u[ip, j, k] - 2c + u[im, j, k]) * idx2 +
-                            (u[i, jp, k] - 2c + u[i, jm, k]) * idy2)
-                ft = kp == 0 ? zero(T) : wt * (u[i, j, kp] - c)
-                fb = km == 0 ? zero(T) : wb * (c - u[i, j, km])
-                out[i, j, k] = -(lap + (ft - fb) * idz2)
-            end
-        end
-    end
+    up = zeros(T, Nx + 2, Ny + 2, Nz + 2); op = similar(up)
+    up[2:Nx+1, 2:Ny+1, 2:Nz+1] .= u
+    PressureSolvers.fill_unit_halo!(up, bc_x, bc_y, bc_z)
+    Backends.launch!(Backends.backend(u), _neg_wlap_body!, PressureSolvers._unit_halo_ranges(Nx, Ny, Nz),
+                     op, up, _neg_wlap_args(w_c, w_f, dx, dy, dz))
+    out .= view(op, 2:Nx+1, 2:Ny+1, 2:Nz+1)
     return out
 end
 
@@ -819,40 +824,19 @@ function apply_weighted_laplacian!(out::Field{CellCenter,T}, φ::Field{CellCente
     return out
 end
 
-@inline function _dot(a::Array{T,3}, b::Array{T,3}) where {T}
-    s = zero(T)
-    @inbounds @simd for i in eachindex(a)
-        s += a[i] * b[i]
-    end
-    return s
-end
-
-@inline function _remove_mean!(a::Array{T,3}) where {T}
-    m = sum(a) / length(a)
-    @inbounds @simd for i in eachindex(a)
-        a[i] -= m
-    end
-    return a
-end
-
-# z .= r / diag(k), then project onto the zero-mean subspace.
-function _jacobi!(z::Array{T,3}, r::Array{T,3}, diag::Vector{T}) where {T}
-    Nx, Ny, Nz = size(r)
-    @inbounds for k in 1:Nz
-        d = 1 / diag[k]
-        for j in 1:Ny, i in 1:Nx
-            z[i, j, k] = r[i, j, k] * d
-        end
-    end
-    return _remove_mean!(z)
-end
+# Jacobi: z = r / diag(k), as r · (1 / diag[k]) (level k − 1 of a unit-halo array)
+@inline _jacobi_at(rv, i, j, k, inv_diag) = @inbounds rv * inv_diag[k-1]
 
 """
     solve!(p, source, solver::DensityWeightedPoissonSolver)
 
 Solve `∇·(w ∇p) = source` on the interior. `source` is projected to zero
 mean (the compatibility condition of the singular operator) and `p` is
-returned with zero mean; halos of `p` are untouched.
+returned with zero mean; halos of `p` are untouched. The iteration is the
+one CG driver [`Aeolus.Backends.pcg!`](@ref) (KA-g, #300): the operator
+fused with `p·Ap`, the Jacobi step and its mean projection fused with the
+residual update, so three sweeps and two canonical reductions per
+iteration, identical at every thread count.
 """
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 s::DensityWeightedPoissonSolver{T}) where {T}
@@ -861,67 +845,37 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
 
     # Work with the positive semi-definite form (−L)x = −source.
     b = s.b
-    @inbounds @views b .= .-source.data[ii, jj, kk]
-    _remove_mean!(b)
-    bnorm = sqrt(_dot(b, b))
-
-    x = fill!(s.x, zero(T))
-    s.last_iter[] = 0
-    s.last_residual[] = zero(T)
-    if bnorm == 0
-        @inbounds @views p.data[ii, jj, kk] .= 0
-        return p
+    bk = Backends.backend(b)
+    I1 = PressureSolvers._unit_halo_ranges(m.Nx, m.Ny, m.Nz)
+    Backends.launch!(bk, _neg_copy_in_body!, I1, b, source.data, m.Hx - 1, m.Hy - 1, m.Hz - 1)
+    A = Backends.PointOperator(_neg_wlap_at, _neg_wlap_args(s.w_c, s.w_f, m.dx, m.dy, m.dz)...;
+                               prepare = PressureSolvers._UnitHalo(s.bc_x, s.bc_y, s.bc_z))
+    M = Backends.PointPreconditioner(_jacobi_at, s.inv_diag)
+    st = Backends.pcg!(A, M, s.x, b, s.ws; ranges = I1, tol = s.tol, maxit = s.maxit,
+                       project_mean = true, backend = bk)
+    s.last_iter[] = st.iterations
+    s.last_residual[] = st.residual
+    if st.status === :breakdown
+        @warn("DensityWeightedPoissonSolver: non-positive curvature ($(st.curvature)); stopping at iteration $(st.iterations + 1)",
+              subsystem = :pressure, domain = current_domain(),
+              solver = :density_weighted_cg, reason = :breakdown, iterations = st.iterations + 1,
+              curvature = st.curvature)
+    elseif st.status === :maxit
+        @warn("DensityWeightedPoissonSolver did not converge: " *
+              "‖r‖=$(st.residual) after $(st.iterations) iterations " *
+              "(tol·‖b‖=$(s.tol * st.bnorm))",
+              subsystem = :pressure, domain = current_domain(),
+              solver = :density_weighted_cg, reason = :maxit,
+              iterations = st.iterations, residual = st.residual,
+              relative_residual = st.residual / st.bnorm, tol = s.tol)
     end
-
-    r = s.r; pdir = s.p_dir; Ap = s.Ap; z = s.z
-    copyto!(r, b)
-    _jacobi!(z, r, s.diag)
-    copyto!(pdir, z)
-    rz = _dot(r, z)
-
-    dx, dy, dz = m.dx, m.dy, m.dz
-    converged = false
-    for it in 1:s.maxit
-        _apply_neg_wlap!(Ap, pdir, s.w_c, s.w_f, dx, dy, dz, s.bc_z, s.bc_x, s.bc_y)
-        pap = _dot(pdir, Ap)
-        if pap <= 0
-            @warn("DensityWeightedPoissonSolver: non-positive curvature ($pap); stopping at iteration $it",
-                  subsystem = :pressure, domain = current_domain(),
-                  solver = :density_weighted_cg, reason = :breakdown, iterations = it,
-                  curvature = pap)
-            break
-        end
-        α = rz / pap
-        @inbounds @simd for i in eachindex(x)
-            x[i] += α * pdir[i]
-            r[i] -= α * Ap[i]
-        end
-        res = sqrt(_dot(r, r))
-        s.last_iter[] = it
-        s.last_residual[] = res
-        if res < s.tol * bnorm
-            converged = true
-            break
-        end
-        _jacobi!(z, r, s.diag)
-        rz_new = _dot(r, z)
-        β = rz_new / rz
-        @inbounds @simd for i in eachindex(pdir)
-            pdir[i] = z[i] + β * pdir[i]
-        end
-        rz = rz_new
-    end
-    converged || @warn("DensityWeightedPoissonSolver did not converge: " *
-                       "‖r‖=$(s.last_residual[]) after $(s.last_iter[]) iterations " *
-                       "(tol·‖b‖=$(s.tol * bnorm))",
-                       subsystem = :pressure, domain = current_domain(),
-                       solver = :density_weighted_cg, reason = :maxit,
-                       iterations = s.last_iter[], residual = s.last_residual[],
-                       relative_residual = s.last_residual[] / bnorm, tol = s.tol)
-
-    _remove_mean!(x)
-    @inbounds @views p.data[ii, jj, kk] .= x
+    PressureSolvers.copy_unit_halo_out!(bk, p, s.x)
     return p
+end
+
+@inline function _neg_copy_in_body!(i, j, k, b, src, oi, oj, ok)
+    @inbounds b[i, j, k] = -src[i + oi, j + oj, k + ok]
+    return nothing
 end
 
 # =========================================================================

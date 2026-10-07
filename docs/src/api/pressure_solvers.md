@@ -17,7 +17,13 @@ Aeolus.PressureSolvers.poisson_axis_bcs
 
 ```@docs
 Aeolus.PressureSolvers.CGPoissonSolver
+Aeolus.PressureSolvers.fill_unit_halo!
+Aeolus.PressureSolvers.copy_unit_halo_in!
 ```
+
+`CGPoissonSolver`, `MGPreconditionedCG`, `DensityWeightedPoissonSolver`
+and `solve_implicit_diffusion!` all iterate with the one CG driver
+[`pcg!`](@ref Aeolus.Backends.pcg!) (KA-g, #300).
 
 ## Kernels of the spectral solvers
 
