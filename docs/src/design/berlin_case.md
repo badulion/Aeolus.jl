@@ -23,14 +23,24 @@ radiosity scene, surfaces, facade wall model, city-mean building) is
 `Debug`; the run's start, each output frame with the couplings' reports,
 the end-of-run summary, the timing table and the ledgers are `Info`; a
 blowup is an `Error`. `with_logger(NullLogger()) do … end` silences a run.
-`alexanderplatz_diurnal.jl` runs inside
-[`with_run_log`](@ref Aeolus.RunLog.with_run_log)`("output/alexanderplatz.log")`:
-`Info` and up on the console (`AEOLUS_LOG=debug` adds the setup summary),
-everything from `Debug` up in the log file.
+Under `aeolus run` (below) the run folder's log takes everything from
+`[logging] file_level` (`debug`) up and the console `[logging]
+console_level` (`info`; `debug` adds the setup summary).
 
-`examples/urban/alexanderplatz_diurnal.jl` is exactly this, reading
-`AEOLUS_NSTEPS` (default 43 200 = 24 h), `AEOLUS_OUTPUT_DT` (seconds
-between records, default 1800) and `AEOLUS_SCENARIO`.
+The flagship is configured in TOML (CFG-c, #358): the scenarios are the
+shipped files `examples/urban/configs/berlin_<scenario>.toml`, run by the
+`berlin` driver,
+
+```bash
+julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800 --set output.cadence=600
+```
+
+and `examples/urban/alexanderplatz_diurnal.jl` is a three-line wrapper of
+that command. The run folder (`runs/<date>_<name>_<id>/`) holds `run.toml`,
+the log and `diagnostics.csv`; the NetCDF output still goes to
+`examples/urban/output/alexanderplatz.nc` (`[output] path`). See
+[the `berlin` driver](../api/config.md#The-berlin-driver) for the schema;
+`CaseConfig(:summer)` in Julia loads the same file.
 
 ## Status of the epic (#125)
 
@@ -64,7 +74,8 @@ examples/urban/
   BerlinCase.jl        module: includes core/*, then every couplings/*.jl in sorted order
   core/
     config.jl          CaseConfig — grid, window, clock, cadences (s), physics/options
-    scenarios.jl       :summer (= :alexanderplatz), :winter, :smoke, :mitte_sample
+    scenarios.jl       CaseConfig(:summer) etc.: loads configs/berlin_<scenario>.toml
+    config_schema.jl   the `berlin` run driver: TOML schema (defaults), RunConfig → CaseConfig
     registry.jl        AbstractCoupling, the contract, Cadence, register!, selection
     geometry.jl        surface classes, rasterisation, build_geometry (scene, view factors)
     osm_ingest.jl      OSM XML reader
@@ -77,7 +88,8 @@ examples/urban/
     case.jl            Case, build_case
     stages.jl          the stage loop: step_case!, run_case!, timing_report
   couplings/           one file per coupling, each ending in register!(Type)
-  alexanderplatz_diurnal.jl              the run
+  configs/             berlin_summer.toml (every option), _winter, _smoke, _mitte_sample
+  alexanderplatz_diurnal.jl              the run (a wrapper of `aeolus run configs/berlin_summer.toml`)
   alexanderplatz_animation.jl            renderer (reads the NetCDF only)
   alexanderplatz_surface_diagnostics.jl  per-class diurnal summary (NetCDF only)
 ```
@@ -100,9 +112,10 @@ default.
 | `provider(::Type{C})` | the value of `cfg.physics[slot]` that selects `C` |
 | `is_default(::Type{C})` | default provider of its slot; for an addon, on by default |
 | `modules_used(::Type{C})` | Aeolus submodules it runs |
-| `default_options(::Type{C})` | `NamedTuple`, merged with `cfg.options[name]` and passed to `build` |
+| `default_options(::Type{C})` | `NamedTuple`, merged with `cfg.options[name]` and passed to `build`; also the TOML schema of `[physics.options.<name>]` (closed keys, each value of its default's type) |
 | `incompatible(::Type{C})` | `slot => provider` pairs or coupling names it cannot run with |
-| `stages(::Type{C})` | `((stage, order, Cadence), …)`, at most one entry per stage |
+| `stages(::Type{C})` | `((stage, order, Cadence), …)`, at most one entry per stage; a `Symbol` period is a `[cadence]` key |
+| `cadence_keys(::Type{C})` | named cadences it reads beyond its stages' (`[cadence]` keys; default `()`) |
 | `build(::Type{C}, case, opts)` | construct the instance (default `C()`) |
 | `init!(c, case)` | after every coupling is built, in registry order |
 | `run_stage!(c, case, ::Val{S}, dt)` | the work of stage `S` |
@@ -554,7 +567,7 @@ natural one — the configuration it was measured in, and the cost from
 
 ## Validation of the refactor (#126)
 
-The refactor had to be bit-for-bit. On a 1 h run (`AEOLUS_NSTEPS=1800`,
+The refactor had to be bit-for-bit. On a 1 h run (1800 steps,
 two records) every NetCDF variable of the refactored case is identical
 (`==`) to the pre-refactor script, and the printed frame lines match
 apart from the wall-clock column.
