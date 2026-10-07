@@ -212,7 +212,8 @@ using Aeolus
                 # Gaussian (symmetric) while the closure assumes a gamma
                 # (skewness 2/√k); for the same Var(r²) the gamma puts less
                 # weight in the small-r tail, so the bulk ε is LOW.
-                # Measured over seeds 1-3: −4.1 %, −4.1 %, −3.5 %.
+                # Measured over seeds 1-3: −2.9 %, −5.1 %, −4.3 % (counter-based
+                # streams, #305; −4.1 %, −4.1 %, −3.5 % with the old draws).
                 @test 0.02 < -relerr(Hb.ε[end], Hs.ε[end]) < 0.06
                 @test abs(relerr(Hb.mean_radius[end], Hs.mean_radius[end])) < 2e-3
             end
@@ -265,7 +266,8 @@ using Aeolus
         @test pfit(Hb0) ≈ p_OU atol = 2e-3
         @test pref0 ≈ 1 atol = 5e-3
         # the reference reproduces the DNS law; SD exponent scatter between
-        # seeds is ±0.008 (seeds 1-3: 0.529, 0.514, 0.518), so 0.03 ≈ 4σ
+        # seeds is ±0.008 (full physics, seeds 1-3: 0.540, 0.529, 0.526 with the
+        # counter-based streams of #305; 0.529, 0.514, 0.518 before), so 0.03 ≈ 4σ
         @test abs(pfit(Hs0) - p_OU) < 0.03
         @test abs(pfit(Hs) - pfit(Hb)) < 0.03
         @test abs(pfit(Hs) - 0.5) < 0.05

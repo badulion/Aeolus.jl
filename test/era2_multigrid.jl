@@ -277,10 +277,13 @@ using Aeolus.Multigrid
         @test all(iszero, out)
     end
     # ---------------------------------------------------------------------
-    # KA-c (#295): a solve allocates nothing, and the dot products are the
-    # same pairwise sums as before (so the same bits and iteration counts).
+    # KA-c (#295): a solve allocates nothing. Since KA-g (#300) the dot
+    # products are the canonical plane sums of the one CG driver `pcg!`
+    # instead of `sum(w .= a .* b)` (pairwise): a named one-time change of
+    # the last bits, with the same iteration counts (test/ka_pcg.jl). The
+    # assertion that the dot equals the pairwise sum is gone with it.
     # ---------------------------------------------------------------------
-    @testset "KA-c: allocation-free solves, unchanged dot products" begin
+    @testset "KA-c: allocation-free solves (dot products: KA-g canonical sums)" begin
         g = RegularGrid(; size=(16,16,16), extent=(1.0,1.0,1.0), halo=(2,2,2))
         Random.seed!(295)
         src = Aeolus.Field(CellCenter(), g); interior_view(src) .= randn(16,16,16)
@@ -299,8 +302,11 @@ using Aeolus.Multigrid
             @info "KA-c: $(nameof(typeof(S))) solve! allocates $a bytes"
             @test a == 0
         end
-        x, y, w = randn(16,16,16), randn(16,16,16), zeros(16,16,16)
-        @test Aeolus.Multigrid._dot!(w, x, y) === sum(x .* y)
+        x, y = randn(16,16,16), randn(16,16,16)
+        I3 = (1:16, 1:16, 1:16)
+        ws = Aeolus.Backends.PCGWorkspace(x)
+        @test Aeolus.Backends._pcg_reduce!(ws.s1, Aeolus.Backends.backend(x), I3,
+                                           Aeolus.Backends._pcg_dot_body, x, y) === interior_dot(x, y, I3)
     end
 end
 

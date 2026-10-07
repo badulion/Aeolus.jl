@@ -100,21 +100,26 @@ dry-air molar mass in ``\alpha``'s pressure term.
 The parcel starts at cloud base with 100 cm⁻³ of 5 μm droplets
 (log-normal, ``\varepsilon_0 = 0.1``). It rises at ``w = 0.5`` m s⁻¹
 for 300 s with ``\tau = 5`` s, and the reference uses 8000 superdroplets.
+The superdroplet columns are seed 1. Since #305 the superdroplet radii
+and fluctuations come from counter-based streams (one per droplet), so the
+realisations, and these numbers, changed once. The table and the seed
+lists below were re-measured then. The ranges quoted for the monodisperse
+and stationary variants are from the earlier streams.
 
 | ``\sigma_S`` | ``\varepsilon`` SD | ``\varepsilon`` bulk | diff | ``\sigma_{r^2}`` SD / bulk (μm²) | ``\bar r`` diff |
 | :-: | :-: | :-: | :-: | :-: | :-: |
-| 0     | 0.0301 | 0.0304 | +0.9 % | 5.56 / 5.57   | −1.0e-5 |
-| 0.1 % | 0.0647 | 0.0646 | −0.2 % | 11.73 / 11.81 | +1.6e-5 |
-| 0.2 % | 0.1245 | 0.1194 | **−4.1 %** | 21.65 / 21.57 | +8.7e-4 |
+| 0     | 0.0301 | 0.0305 | +1.0 % | 5.57 / 5.59   | −1.1e-5 |
+| 0.1 % | 0.0642 | 0.0646 | +0.6 % | 11.66 / 11.82 | −9.8e-5 |
+| 0.2 % | 0.1229 | 0.1194 | **−2.9 %** | 21.35 / 21.57 | +3.8e-4 |
 
-Across seeds 1–3, the ``\varepsilon`` difference is within 1.1 % for
+Across seeds 1–3, the ``\varepsilon`` difference is within 1.6 % for
 ``\sigma_S \le 0.1\,\%``. That is inside the stated tolerance: three
 standard errors of a sample standard deviation, ``3/\sqrt{2n_{sd}} = 2.4\,\%``,
 plus the closure error of the initial spectrum. The width
-``\sigma_{r^2}``, which depends on no closure, agrees within 0.9 % in
+``\sigma_{r^2}``, which depends on no closure, agrees within 1.6 % in
 every case.
 
-At ``\sigma_S = 0.2\,\%`` the bulk ``\varepsilon`` is **3.5–4.1 % low**
+At ``\sigma_S = 0.2\,\%`` the bulk ``\varepsilon`` is **2.9–5.1 % low**
 for every seed. This is a systematic error, not sampling. Here the
 fluctuations have produced most of the variance, so the ``r^2``
 distribution is nearly symmetric, and the gamma closure puts too little
@@ -159,9 +164,9 @@ The test case uses monodisperse 10 μm droplets, ``w = 0``,
 | :-- | :-: | :-: |
 | OU analytic, same window | 0.5142 | 1 |
 | bulk, Kelvin off | 0.5142 | 1.0000 |
-| superdroplet, Kelvin off | 0.5155 | — |
+| superdroplet, Kelvin off | 0.5265 | — |
 | bulk, full physics | 0.5276 | 1.0334 |
-| superdroplet, full physics | 0.5292 (seeds 1–3: 0.529, 0.514, 0.518) | 1.034 |
+| superdroplet, full physics | 0.5401 (seeds 1–3: 0.540, 0.529, 0.526) | 1.039 |
 
 The analytic OU curve has exponent 0.514 in this window rather than 0.5
 because of its ``-\tau`` offset. The local exponent is
