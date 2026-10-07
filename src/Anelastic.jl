@@ -57,7 +57,8 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ,
                interior, znodes
 using ..Fields
 using ..Fields: Field, interior_view, set!
-using ..Backends: Backends, plane_reduce!, plane_partials!, ordered_sum, range_max, PCGWorkspace
+using ..Backends: Backends, plane_reduce!, plane_partials!, ordered_sum, range_max, PCGWorkspace,
+                  launch!, interior_max
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall,
@@ -79,13 +80,17 @@ import ..PressureSolvers: solve!, poisson_axis_bcs
 import ..TimeSteppers: step!
 import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
 
-using ..Simulations: horizontal_mean, horizontal_variance, add_velocity_sponge!
+using ..Simulations: horizontal_mean, horizontal_variance, add_velocity_sponge!,
+                     StepWorkspaces, axpy!, pressure_from_potential!, zero_storage!,
+                     storage_like, copy_storage!
 import ..Simulations
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 using ..Operators: sgs_fields
-using ..TimeIntegration: CFLConstraints, _max_advective_rate, _SNAPSHOTS
+using ..TimeIntegration: CFLConstraints, _max_advective_rate, _workspace_snapshot,
+                         _snapshot_pairs
 import ..TimeIntegration: adaptive_dt, StateSnapshot, save_state!, restore_state!,
                           state_snapshot, _all_finite
+using ..IO: allfinite                    # the one finiteness check (#346)
 
 export ReferenceState,
        isothermal_reference, isentropic_reference,
@@ -912,20 +917,40 @@ function weighted_divergence!(out::Field{CellCenter,T},
                               u::Field{FaceX,T}, v::Field{FaceY,T}, w::Field{FaceZ,T},
                               Wc::Vector{T}, Wf::Vector{T}, g::RegularGrid{T};
                               normalize::Bool = false) where {T}
-    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
-    ii, jj, kk = interior(g)
-    ud = u.data; vd = v.data; wd = w.data; od = out.data
-    @inbounds for k in kk
-        wc = Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
-        scale = normalize ? 1 / wc : one(T)
-        for j in jj, i in ii
-            d = wc * ((ud[i+1,j,k] - ud[i,j,k]) * idx +
-                      (vd[i,j+1,k] - vd[i,j,k]) * idy) +
-                (wft * wd[i,j,k+1] - wfb * wd[i,j,k]) * idz
-            od[i,j,k] = scale * d
-        end
-    end
+    I3 = interior(g)
+    _check_weights(out.data, (u.data, v.data, w.data), Wc, Wf, I3, 1)
+    launch!(Backends.backend(out.data), _wdiv_body!, I3, out.data, u.data, v.data, w.data,
+            Wc, Wf, 1 / g.dx, 1 / g.dy, 1 / g.dz, normalize)
     return out
+end
+
+# The kernels below are point bodies run by `launch!` (KA-j, #306). Each
+# evaluates, per point, the expression its pre-port loop evaluated with
+# the per-level factors (`1/Wc[k]`, `g/θ̄f[k]`, …) hoisted out of the (j, i)
+# loops: the same IEEE operations on the same values, hence the same bits
+# (test/ka_step.jl compares them with a transcript of the old loops).
+
+# Bounds of one launch, checked once: the fields over the interior plus a
+# one-cell stencil, the weight vectors over k-1:k+1.
+function _check_weights(out, ins, Wc, Wf, (ii, jj, kk), h)
+    checkbounds(out, ii, jj, kk)
+    for a in ins
+        checkbounds(a, first(ii)-h:last(ii)+h, first(jj)-h:last(jj)+h, first(kk)-h:last(kk)+h)
+    end
+    checkbounds(Wc, first(kk)-1:last(kk)+1); checkbounds(Wf, first(kk)-1:last(kk)+1)
+    return nothing
+end
+
+@inline function _wdiv_body!(i, j, k, od, ud, vd, wd, Wc, Wf, idx, idy, idz, normalize::Bool)
+    @inbounds begin
+        wc = Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
+        scale = normalize ? 1 / wc : one(wc)
+        d = wc * ((ud[i+1,j,k] - ud[i,j,k]) * idx +
+                  (vd[i,j+1,k] - vd[i,j,k]) * idy) +
+            (wft * wd[i,j,k+1] - wfb * wd[i,j,k]) * idz
+        od[i,j,k] = scale * d
+    end
+    return nothing
 end
 
 """
@@ -983,82 +1008,90 @@ function weighted_momentum_advect!(tu::Field{FaceX,T}, tv::Field{FaceY,T},
                                    Wc::Vector{T}, Wf::Vector{T},
                                    g::RegularGrid{T}) where {T}
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
-    ii, jj, kk = interior(g)
+    I3 = interior(g)
     ud = u.data; vd = v.data; wd = w.data
-
-    # --- u-momentum, west face of cell (i,j,k) --------------------------
-    @inbounds for k in kk
-        iwc = 1 / Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
-        for j in jj, i in ii
-            uce = 0.5*(ud[i,   j, k] + ud[i+1, j, k])
-            ucw = 0.5*(ud[i-1, j, k] + ud[i,   j, k])
-            d_uu_dx = (uce*uce - ucw*ucw) * idx
-
-            vun = 0.5*(vd[i-1, j+1, k] + vd[i, j+1, k])
-            uvn = 0.5*(ud[i,   j,   k] + ud[i, j+1, k])
-            vus = 0.5*(vd[i-1, j,   k] + vd[i, j,   k])
-            uvs = 0.5*(ud[i,   j-1, k] + ud[i, j,   k])
-            d_vu_dy = (vun*uvn - vus*uvs) * idy
-
-            wut = 0.5*(wd[i-1, j, k+1] + wd[i, j, k+1])
-            uwt = 0.5*(ud[i,   j, k  ] + ud[i, j, k+1])
-            wub = 0.5*(wd[i-1, j, k  ] + wd[i, j, k  ])
-            uwb = 0.5*(ud[i,   j, k-1] + ud[i, j, k  ])
-            d_wu_dz = (wft*wut*uwt - wfb*wub*uwb) * idz * iwc
-
-            tu.data[i, j, k] -= d_uu_dx + d_vu_dy + d_wu_dz
-        end
-    end
-
-    # --- v-momentum, south face of cell (i,j,k) -------------------------
-    @inbounds for k in kk
-        iwc = 1 / Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
-        for j in jj, i in ii
-            uve = 0.5*(ud[i+1, j-1, k] + ud[i+1, j, k])
-            vue = 0.5*(vd[i,   j,   k] + vd[i+1, j, k])
-            uvw = 0.5*(ud[i,   j-1, k] + ud[i,   j, k])
-            vuw = 0.5*(vd[i-1, j,   k] + vd[i,   j, k])
-            d_uv_dx = (uve*vue - uvw*vuw) * idx
-
-            vcn = 0.5*(vd[i, j,   k] + vd[i, j+1, k])
-            vcs = 0.5*(vd[i, j-1, k] + vd[i, j,   k])
-            d_vv_dy = (vcn*vcn - vcs*vcs) * idy
-
-            wvt = 0.5*(wd[i, j-1, k+1] + wd[i, j, k+1])
-            vwt = 0.5*(vd[i, j,   k  ] + vd[i, j, k+1])
-            wvb = 0.5*(wd[i, j-1, k  ] + wd[i, j, k  ])
-            vwb = 0.5*(vd[i, j,   k-1] + vd[i, j, k  ])
-            d_wv_dz = (wft*wvt*vwt - wfb*wvb*vwb) * idz * iwc
-
-            tv.data[i, j, k] -= d_uv_dx + d_vv_dy + d_wv_dz
-        end
-    end
-
-    # --- w-momentum, bottom face of cell (i,j,k) ------------------------
-    @inbounds for k in kk
-        iwf = 1 / Wf[k]; wcb = Wc[k-1]; wct_ = Wc[k]
-        for j in jj, i in ii
-            uwe = 0.5*(ud[i+1, j, k-1] + ud[i+1, j, k])
-            wue = 0.5*(wd[i,   j, k  ] + wd[i+1, j, k])
-            uww = 0.5*(ud[i,   j, k-1] + ud[i,   j, k])
-            wuw = 0.5*(wd[i-1, j, k  ] + wd[i,   j, k])
-            d_uw_dx = (uwe*wue - uww*wuw) * idx
-
-            vwn = 0.5*(vd[i, j+1, k-1] + vd[i, j+1, k])
-            wvn = 0.5*(wd[i, j,   k  ] + wd[i, j+1, k])
-            vws = 0.5*(vd[i, j,   k-1] + vd[i, j,   k])
-            wvs = 0.5*(wd[i, j-1, k  ] + wd[i, j,   k])
-            d_vw_dy = (vwn*wvn - vws*wvs) * idy
-
-            wtop = 0.5*(wd[i, j, k  ] + wd[i, j, k+1])
-            wbot = 0.5*(wd[i, j, k-1] + wd[i, j, k  ])
-            d_ww_dz = (wct_*wtop*wtop - wcb*wbot*wbot) * idz * iwf
-
-            tw.data[i, j, k] -= d_uw_dx + d_vw_dy + d_ww_dz
-        end
-    end
-
+    _check_weights(tu.data, (ud, vd, wd), Wc, Wf, I3, 1)
+    checkbounds(tv.data, I3...); checkbounds(tw.data, I3...)
+    bk = Backends.backend(tu.data)
+    launch!(bk, _wmom_u_body!, I3, tu.data, ud, vd, wd, Wc, Wf, idx, idy, idz)
+    launch!(bk, _wmom_v_body!, I3, tv.data, ud, vd, wd, Wc, Wf, idx, idy, idz)
+    launch!(bk, _wmom_w_body!, I3, tw.data, ud, vd, wd, Wc, Wf, idx, idy, idz)
     return (tu, tv, tw)
+end
+
+# --- u-momentum, west face of cell (i,j,k) --------------------------------
+@inline function _wmom_u_body!(i, j, k, tud, ud, vd, wd, Wc, Wf, idx, idy, idz)
+    @inbounds begin
+        iwc = 1 / Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
+        uce = 0.5*(ud[i,   j, k] + ud[i+1, j, k])
+        ucw = 0.5*(ud[i-1, j, k] + ud[i,   j, k])
+        d_uu_dx = (uce*uce - ucw*ucw) * idx
+
+        vun = 0.5*(vd[i-1, j+1, k] + vd[i, j+1, k])
+        uvn = 0.5*(ud[i,   j,   k] + ud[i, j+1, k])
+        vus = 0.5*(vd[i-1, j,   k] + vd[i, j,   k])
+        uvs = 0.5*(ud[i,   j-1, k] + ud[i, j,   k])
+        d_vu_dy = (vun*uvn - vus*uvs) * idy
+
+        wut = 0.5*(wd[i-1, j, k+1] + wd[i, j, k+1])
+        uwt = 0.5*(ud[i,   j, k  ] + ud[i, j, k+1])
+        wub = 0.5*(wd[i-1, j, k  ] + wd[i, j, k  ])
+        uwb = 0.5*(ud[i,   j, k-1] + ud[i, j, k  ])
+        d_wu_dz = (wft*wut*uwt - wfb*wub*uwb) * idz * iwc
+
+        tud[i, j, k] -= d_uu_dx + d_vu_dy + d_wu_dz
+    end
+    return nothing
+end
+
+# --- v-momentum, south face of cell (i,j,k) -------------------------------
+@inline function _wmom_v_body!(i, j, k, tvd, ud, vd, wd, Wc, Wf, idx, idy, idz)
+    @inbounds begin
+        iwc = 1 / Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
+        uve = 0.5*(ud[i+1, j-1, k] + ud[i+1, j, k])
+        vue = 0.5*(vd[i,   j,   k] + vd[i+1, j, k])
+        uvw = 0.5*(ud[i,   j-1, k] + ud[i,   j, k])
+        vuw = 0.5*(vd[i-1, j,   k] + vd[i,   j, k])
+        d_uv_dx = (uve*vue - uvw*vuw) * idx
+
+        vcn = 0.5*(vd[i, j,   k] + vd[i, j+1, k])
+        vcs = 0.5*(vd[i, j-1, k] + vd[i, j,   k])
+        d_vv_dy = (vcn*vcn - vcs*vcs) * idy
+
+        wvt = 0.5*(wd[i, j-1, k+1] + wd[i, j, k+1])
+        vwt = 0.5*(vd[i, j,   k  ] + vd[i, j, k+1])
+        wvb = 0.5*(wd[i, j-1, k  ] + wd[i, j, k  ])
+        vwb = 0.5*(vd[i, j,   k-1] + vd[i, j, k  ])
+        d_wv_dz = (wft*wvt*vwt - wfb*wvb*vwb) * idz * iwc
+
+        tvd[i, j, k] -= d_uv_dx + d_vv_dy + d_wv_dz
+    end
+    return nothing
+end
+
+# --- w-momentum, bottom face of cell (i,j,k) ------------------------------
+@inline function _wmom_w_body!(i, j, k, twd, ud, vd, wd, Wc, Wf, idx, idy, idz)
+    @inbounds begin
+        iwf = 1 / Wf[k]; wcb = Wc[k-1]; wct_ = Wc[k]
+        uwe = 0.5*(ud[i+1, j, k-1] + ud[i+1, j, k])
+        wue = 0.5*(wd[i,   j, k  ] + wd[i+1, j, k])
+        uww = 0.5*(ud[i,   j, k-1] + ud[i,   j, k])
+        wuw = 0.5*(wd[i-1, j, k  ] + wd[i,   j, k])
+        d_uw_dx = (uwe*wue - uww*wuw) * idx
+
+        vwn = 0.5*(vd[i, j+1, k-1] + vd[i, j+1, k])
+        wvn = 0.5*(wd[i, j,   k  ] + wd[i, j+1, k])
+        vws = 0.5*(vd[i, j,   k-1] + vd[i, j,   k])
+        wvs = 0.5*(wd[i, j-1, k  ] + wd[i, j,   k])
+        d_vw_dy = (vwn*wvn - vws*wvs) * idy
+
+        wtop = 0.5*(wd[i, j, k  ] + wd[i, j, k+1])
+        wbot = 0.5*(wd[i, j, k-1] + wd[i, j, k  ])
+        d_ww_dz = (wct_*wtop*wtop - wcb*wbot*wbot) * idz * iwf
+
+        twd[i, j, k] -= d_uw_dx + d_vw_dy + d_ww_dz
+    end
+    return nothing
 end
 
 """
@@ -1075,23 +1108,26 @@ function weighted_scalar_advect!(tϕ::Field{CellCenter,T},
                                  ϕ::Field{CellCenter,T},
                                  Wc::Vector{T}, Wf::Vector{T},
                                  g::RegularGrid{T}) where {T}
-    idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
-    ii, jj, kk = interior(g)
-    ud = u.data; vd = v.data; wd = w.data; f = ϕ.data
-    @inbounds for k in kk
-        iwc = 1 / Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
-        for j in jj, i in ii
-            uϕe = ud[i+1,j,k] * 0.5 * (f[i,  j,k] + f[i+1,j,k])
-            uϕw = ud[i,  j,k] * 0.5 * (f[i-1,j,k] + f[i,  j,k])
-            vϕn = vd[i,j+1,k] * 0.5 * (f[i,j,  k] + f[i,j+1,k])
-            vϕs = vd[i,j,  k] * 0.5 * (f[i,j-1,k] + f[i,j,  k])
-            wϕt = wft * wd[i,j,k+1] * 0.5 * (f[i,j,k  ] + f[i,j,k+1])
-            wϕb = wfb * wd[i,j,k  ] * 0.5 * (f[i,j,k-1] + f[i,j,k  ])
-            tϕ.data[i,j,k] -= (uϕe - uϕw) * idx + (vϕn - vϕs) * idy +
-                              (wϕt - wϕb) * idz * iwc
-        end
-    end
+    I3 = interior(g)
+    _check_weights(tϕ.data, (u.data, v.data, w.data, ϕ.data), Wc, Wf, I3, 1)
+    launch!(Backends.backend(tϕ.data), _wscal_body!, I3, tϕ.data, u.data, v.data, w.data,
+            ϕ.data, Wc, Wf, 1 / g.dx, 1 / g.dy, 1 / g.dz)
     return tϕ
+end
+
+@inline function _wscal_body!(i, j, k, tf, ud, vd, wd, f, Wc, Wf, idx, idy, idz)
+    @inbounds begin
+        iwc = 1 / Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
+        uϕe = ud[i+1,j,k] * 0.5 * (f[i,  j,k] + f[i+1,j,k])
+        uϕw = ud[i,  j,k] * 0.5 * (f[i-1,j,k] + f[i,  j,k])
+        vϕn = vd[i,j+1,k] * 0.5 * (f[i,j,  k] + f[i,j+1,k])
+        vϕs = vd[i,j,  k] * 0.5 * (f[i,j-1,k] + f[i,j,  k])
+        wϕt = wft * wd[i,j,k+1] * 0.5 * (f[i,j,k  ] + f[i,j,k+1])
+        wϕb = wfb * wd[i,j,k  ] * 0.5 * (f[i,j,k-1] + f[i,j,k  ])
+        tf[i,j,k] -= (uϕe - uϕw) * idx + (vϕn - vϕs) * idy +
+                     (wϕt - wϕb) * idz * iwc
+    end
+    return nothing
 end
 
 """
@@ -1117,18 +1153,23 @@ leading-order error.
 function add_anelastic_buoyancy!(tw::Field{FaceZ,T}, θ::Field{CellCenter,T},
                                  ref::ReferenceState{T},
                                  g::RegularGrid{T} = ref.mesh) where {T}
-    ii, jj, kk = interior(g)
-    gacc = ref.g
-    θ̄f = ref.θ̄f_pad
-    @inbounds for k in kk
+    I3 = interior(g)
+    ii, jj, kk = I3
+    checkbounds(tw.data, I3...); checkbounds(θ.data, ii, jj, first(kk)-1:last(kk))
+    checkbounds(ref.θ̄f_pad, kk)
+    launch!(Backends.backend(tw.data), _anelastic_buoyancy_body!, I3, tw.data, θ.data,
+            ref.θ̄f_pad, ref.g)
+    return tw
+end
+
+@inline function _anelastic_buoyancy_body!(i, j, k, twd, θd, θ̄f, gacc)
+    @inbounds begin
         θ̄k = θ̄f[k]
         coef = gacc / θ̄k
-        for j in jj, i in ii
-            θface = 0.5 * (θ.data[i,j,k-1] + θ.data[i,j,k])
-            tw.data[i,j,k] += coef * (θface - θ̄k)
-        end
+        θface = 0.5 * (θd[i,j,k-1] + θd[i,j,k])
+        twd[i,j,k] += coef * (θface - θ̄k)
     end
-    return tw
+    return nothing
 end
 
 # =========================================================================
@@ -1229,6 +1270,8 @@ mutable struct MassWeightedSimulation{S<:MassWeighting,
     lap_θ::Field{CellCenter,   T, Array{T,3}, M}
     νt::Field{CellCenter,      T, Array{T,3}, M}
     κt::Field{CellCenter,      T, Array{T,3}, M}   # SGS scalar diffusivity (Era VI, #167)
+    # the drivers' scratch (the retry snapshot), per simulation (KA-j, #306)
+    workspaces::StepWorkspaces
 end
 
 """
@@ -1392,7 +1435,7 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
         θ_flux_bottom != 0 || θ_flux_top != 0, has_sponge,
         zero(T),
         u, v, w, p, θ, tu, tv, tw, tθ,
-        div_buf, φ, dφdx, dφdy, dφdz, lu, lv, lw, lθ, νt, κt)
+        div_buf, φ, dφdx, dφdy, dφdz, lu, lv, lw, lθ, νt, κt, StepWorkspaces())
 
     initialize_θ && set_reference_state!(sim)
     return sim
@@ -1428,28 +1471,24 @@ or simply add the perturbation on top of what the constructor left in
 `sim.θ`.
 """
 function set_reference_state!(sim::MassWeightedSimulation{S,T}) where {S,T}
-    fill!(sim.u.data, 0); fill!(sim.v.data, 0); fill!(sim.w.data, 0)
-    fill!(sim.p.data, 0)
-    ii, jj, kk = interior(sim.mesh)
-    θ̄ = sim.ref.θ̄c_pad
-    @inbounds for k in kk, j in jj, i in ii
-        sim.θ.data[i,j,k] = θ̄[k]
-    end
+    zero_storage!(sim.u); zero_storage!(sim.v); zero_storage!(sim.w)
+    zero_storage!(sim.p)
+    I3 = interior(sim.mesh)
+    checkbounds(sim.θ.data, I3...); checkbounds(sim.ref.θ̄c_pad, I3[3])
+    launch!(Backends.backend(sim.θ.data), _level_body!, I3, sim.θ.data, sim.ref.θ̄c_pad)
     fill_halos!(sim.θ, sim.θ_bcs)
     sim.t = zero(T)
     return sim
 end
 
+@inline function _level_body!(i, j, k, θd, θ̄)
+    @inbounds θd[i, j, k] = θ̄[k]
+    return nothing
+end
+
 # =========================================================================
 # The fractional step
 # =========================================================================
-
-"In-place y[interior] += a · x[interior]."
-function _axpy_interior!(y::Field, a::Number, x::Field, m::AbstractMesh)
-    ii, jj, kk = interior(m)
-    @inbounds @views y.data[ii, jj, kk] .+= a .* x.data[ii, jj, kk]
-    return y
-end
 
 """
     step_anelastic!(sim::AnelasticSimulation, dt; body_force! = nothing, post_predictor! = nothing)
@@ -1526,9 +1565,9 @@ function _project_mass_weighted!(sim::MassWeightedSimulation{S,T},
     fill_halos!(sim.φ, sim.bcs)
     ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
     assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
-    _axpy_interior!(sim.u, -one(T), sim.dφdx, m)
-    _axpy_interior!(sim.v, -one(T), sim.dφdy, m)
-    _axpy_interior!(sim.w, -one(T), sim.dφdz, m)
+    axpy!(sim.u, -one(T), sim.dφdx)
+    axpy!(sim.v, -one(T), sim.dφdy)
+    axpy!(sim.w, -one(T), sim.dφdz)
     return sim
 end
 
@@ -1554,8 +1593,8 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     mark_open_boundary_stage!(sim)         # radiating outflow: step-start layers (N-open-c)
 
     # 2. advection, weighted flux form
-    fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
-    fill!(sim.tθ.data, 0)
+    zero_storage!(sim.tu); zero_storage!(sim.tv); zero_storage!(sim.tw)
+    zero_storage!(sim.tθ)
     weighted_momentum_advect!(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w, Wc, Wf, m)
     weighted_scalar_advect!(sim.tθ, sim.u, sim.v, sim.w, sim.θ, Wc, Wf, m)
 
@@ -1565,10 +1604,10 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     if sim.has_viscosity
         laplacian(sim.lap_u, sim.u); laplacian(sim.lap_v, sim.v); laplacian(sim.lap_w, sim.w)
         laplacian(sim.lap_θ, sim.θ)
-        _axpy_interior!(sim.tu, sim.ν, sim.lap_u, m)
-        _axpy_interior!(sim.tv, sim.ν, sim.lap_v, m)
-        _axpy_interior!(sim.tw, sim.ν, sim.lap_w, m)
-        _axpy_interior!(sim.tθ, sim.ν, sim.lap_θ, m)
+        axpy!(sim.tu, sim.ν, sim.lap_u)
+        axpy!(sim.tv, sim.ν, sim.lap_v)
+        axpy!(sim.tw, sim.ν, sim.lap_w)
+        axpy!(sim.tθ, sim.ν, sim.lap_θ)
     end
 
     # 4. SGS closure (the contract shared with the Boussinesq core: the
@@ -1589,9 +1628,9 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     body_force! === nothing || body_force!(sim, Δt)
 
     # 7. predictor
-    _axpy_interior!(sim.u, Δt, sim.tu, m)
-    _axpy_interior!(sim.v, Δt, sim.tv, m)
-    _axpy_interior!(sim.w, Δt, sim.tw, m)
+    axpy!(sim.u, Δt, sim.tu)
+    axpy!(sim.v, Δt, sim.tv)
+    axpy!(sim.w, Δt, sim.tw)
     post_predictor! === nothing || post_predictor!(sim, Δt)
 
     # 7b. open boundaries (N-open-b): data at the end of the step, with the
@@ -1602,11 +1641,10 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     _project_mass_weighted!(sim, Wc, Wf)
 
     # 11. scalar update
-    _axpy_interior!(sim.θ, Δt, sim.tθ, m)
+    axpy!(sim.θ, Δt, sim.tθ)
 
     # 12. pressure-like diagnostic and clock
-    ii, jj, kk = interior(m)
-    @inbounds @views sim.p.data[ii, jj, kk] .= sim.φ.data[ii, jj, kk] ./ Δt
+    pressure_from_potential!(sim.p, sim.φ, Δt)
     sim.t += Δt
     closure === nothing || advance_sgs!(closure, sim, Δt)   # once per step
     return sim
@@ -1645,7 +1683,7 @@ constraint and vice versa.
 function max_anelastic_divergence(sim::MassWeightedSimulation)
     _fill_velocity_halos!(sim)
     anelastic_divergence!(sim.div_buf, sim.u, sim.v, sim.w, sim.ref, sim.mesh)
-    return maximum(abs, interior_view(sim.div_buf))
+    return _max_abs_interior(sim)
 end
 
 """
@@ -1657,7 +1695,7 @@ residual, i.e. the quantity the projection literally annihilates.
 function max_mass_flux_divergence(sim::MassWeightedSimulation)
     _fill_velocity_halos!(sim)
     mass_flux_divergence!(sim.div_buf, sim.u, sim.v, sim.w, sim.ref, sim.mesh)
-    return maximum(abs, interior_view(sim.div_buf))
+    return _max_abs_interior(sim)
 end
 
 """
@@ -1668,8 +1706,12 @@ end
 function max_pseudo_incompressible_divergence(sim::MassWeightedSimulation)
     _fill_velocity_halos!(sim)
     pseudo_incompressible_divergence!(sim.div_buf, sim.u, sim.v, sim.w, sim.ref, sim.mesh)
-    return maximum(abs, interior_view(sim.div_buf))
+    return _max_abs_interior(sim)
 end
+
+# max |div_buf| over the interior: exact, the bits of `maximum(abs, interior_view(·))`
+_max_abs_interior(sim) = range_max(Backends.backend(sim.div_buf.data), Simulations._abs_at,
+                                   interior(sim.mesh), sim.div_buf.data)
 
 function _fill_velocity_halos!(sim::MassWeightedSimulation)
     fill_halos!(sim.u, sim.bcs)
@@ -1913,8 +1955,8 @@ function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
         fill_halos!(sim.θ, sim.θ_bcs)
         compute_sgs!(closure, sim)
         f = sgs_fields(closure, sim)
-        κmax = max(maximum(interior_view(f.νh)), maximum(interior_view(f.νv)),
-                   maximum(interior_view(f.κh)), maximum(interior_view(f.κv)))
+        # exact maxima: the bits of `maximum(interior_view(·))`
+        κmax = max(interior_max(f.νh), interior_max(f.νv), interior_max(f.κh), interior_max(f.κv))
     end
     νtot = (sim.has_viscosity ? sim.ν : zero(T)) + κmax
     Δ²harm = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
@@ -1940,34 +1982,37 @@ function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
 end
 
 # A sound-proof core carries no qv: its snapshot holds an empty qv buffer.
-StateSnapshot(sim::MassWeightedSimulation{S,T}) where {S,T} =
-    StateSnapshot{T}(similar(sim.u.data), similar(sim.v.data), similar(sim.w.data),
-                     similar(sim.p.data), similar(sim.θ.data), Array{T,3}(undef, 0, 0, 0),
-                     sim.t, false)
+function StateSnapshot(sim::MassWeightedSimulation{S,T}) where {S,T}
+    al(f) = storage_like(f.data)
+    return StateSnapshot(al(sim.u), al(sim.v), al(sim.w), al(sim.p), al(sim.θ),
+                         Backends.allocate(Backends.backend(sim.u.data), T, (0, 0, 0)),
+                         al(sim.νt), al(sim.κt), sim.t, false)
+end
 
+# the copies are kernels, as for the Boussinesq core (KA-j, #306)
 function save_state!(snap::StateSnapshot, sim::MassWeightedSimulation)
-    copyto!(snap.u, sim.u.data); copyto!(snap.v, sim.v.data)
-    copyto!(snap.w, sim.w.data); copyto!(snap.p, sim.p.data)
-    copyto!(snap.θ, sim.θ.data)
+    for (a, f) in _snapshot_pairs(snap, sim)
+        copy_storage!(a, f)
+    end
     snap.t = sim.t; snap.valid = true
     return snap
 end
 
 function restore_state!(sim::MassWeightedSimulation, snap::StateSnapshot)
     snap.valid || throw(ArgumentError("StateSnapshot has never been saved"))
-    copyto!(sim.u.data, snap.u); copyto!(sim.v.data, snap.v)
-    copyto!(sim.w.data, snap.w); copyto!(sim.p.data, snap.p)
-    copyto!(sim.θ.data, snap.θ)
+    for (a, f) in _snapshot_pairs(snap, sim)
+        copy_storage!(f, a)
+    end
+    Backends.synchronize(Backends.backend(sim.u.data))
     sim.t = snap.t
     return sim
 end
 
-state_snapshot(sim::MassWeightedSimulation) =
-    get!(() -> StateSnapshot(sim), _SNAPSHOTS, sim)::StateSnapshot
+state_snapshot(sim::MassWeightedSimulation) = _workspace_snapshot(sim)
 
 _all_finite(sim::MassWeightedSimulation) =
-    all(isfinite, interior_view(sim.u)) && all(isfinite, interior_view(sim.v)) &&
-    all(isfinite, interior_view(sim.w)) && all(isfinite, interior_view(sim.θ)) &&
-    all(isfinite, interior_view(sim.p))
+    allfinite(interior_view(sim.u)) && allfinite(interior_view(sim.v)) &&
+    allfinite(interior_view(sim.w)) && allfinite(interior_view(sim.θ)) &&
+    allfinite(interior_view(sim.p))
 
 end # module
