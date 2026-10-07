@@ -219,9 +219,10 @@ participant set-up (`examples/sbl/data/gabls2_case.csv`; since CFG-d
 That config applies it to θ (`--set forcing.subsidence={}` for the
 sensitivity run without it), and the SBL driver books it in its θ ledger. In the reduced test
 (16 × 16 × 40, Δx = 150 m, Δz = 40 m), the residual-layer inversion
-(the largest ``∂⟨θ⟩/∂z`` above 300 m) at 06 LT 24 October is 856.0 m
-with subsidence and 1039.7 m without (−183.6 m), 0.80 Δz above a passive
-surface descending from the 18 LT inversion. The θ ledger closes to
+(the largest ``∂⟨θ⟩/∂z`` above 300 m) at 06 LT 24 October is 851.7 m
+with subsidence and 1038.7 m without (−187.0 m), 0.74 Δz above a passive
+surface descending from the 18 LT inversion (856.0 m, 1039.7 m and
+0.80 Δz before the halo fix of `sbl_surface!` in CFG-d, #359). The θ ledger closes to
 8.1 × 10⁻¹³ of the column content.
 
 At 48 × 48 × 80 (Δx = 50 m, Δz = 20 m, `examples/sbl/gabls2.jl`,
