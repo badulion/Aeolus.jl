@@ -91,10 +91,11 @@ StepStats() = StepStats(0, 0, 0, 0, Inf, 0.0, 0.0, 0.0, Dict{Symbol,Int}(), 0, 0
     step_limiter(case) -> String
 
 What limited the step about to be taken, for the diagnostics row and the
-progress line: the binding CFL limit of the `:adaptive` provider
+progress line: for the `:adaptive` provider the binding CFL limit
 (`advective`, `diffusive`, …, as `cfl_diagnostics` names it), or the
-coupling whose `limit_dt` shortened the step (`nesting`); `""` for a
-fixed step.
+clamp of `adaptive_dt` that bound instead (`dt_min`, `dt_max`, `growth`),
+or the coupling whose `limit_dt` shortened the step (`nesting`); `""`
+for a fixed step.
 """
 function step_limiter(case)
     ts = timestepper(case)
