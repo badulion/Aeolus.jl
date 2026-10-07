@@ -833,7 +833,10 @@ its 1 × 16 or 1 × 14 work items are below the launch threshold. It takes
   column gains through the threaded gas optics (layers × g-points): 7.4×
   at 12 threads.
 
-**Harness.** HARNESS_RESULT
+**Harness.** `AEOLUS_THREAD_TESTS=1`, `AEOLUS_THREAD_COUNTS=1,4,12,24`,
+every section (primitives, dns, reductions, smoke, flagship, nested, fft,
+radiation): all 2900 hashes, the 34 of the radiation section included,
+are identical at 4, 12 and 24 threads to 1 thread.
 
 ## Dependency tree
 
