@@ -430,7 +430,7 @@ function parent_section()
                 doc = "stretched: Δz uniform up to z_uniform, then × ratio per level up to dz_max; uniform: Δz everywhere")
         option!(s, "z_uniform", Float64; default = 500.0, range = (0, Inf), open_lower = true, units = "m",
                 doc = "top of the uniform layers (stretched)")
-        option!(s, "ratio", Float64; default = 1.08, range = (1, Inf), doc = "growth of Δz per level (stretched)")
+        option!(s, "ratio", Float64; units = "1", default = 1.08, range = (1, Inf), doc = "growth of Δz per level (stretched)")
         option!(s, "dz_max", Float64; default = 100.0, range = (0, Inf), open_lower = true, units = "m",
                 doc = "largest Δz (stretched)")
         option!(s, "halo", NTuple{3,Int}; default = (2, 2, 2), range = (1, 8), doc = "halo cells per side")
@@ -455,7 +455,7 @@ function parent_section()
                 doc = "height of the geostrophic wind; nan: 1.2 × the sounding's largest z_i")
         option!(s, "nudging_tau", Float64; default = 6 * 3600.0, range = (0, Inf), open_lower = true,
                 units = "s", doc = "θ/qv nudging time scale; inf: off")
-        option!(s, "nudging_factor", Float64; default = 1.2, range = (0, Inf),
+        option!(s, "nudging_factor", Float64; units = "1", default = 1.2, range = (0, Inf),
                 doc = "the nudging acts above nudging_factor × the running maximum of z_i")
         option!(s, "nudging_depth", Float64; default = 200.0, range = (0, Inf), units = "m",
                 doc = "depth of the nudging weight's ramp")
@@ -463,7 +463,7 @@ function parent_section()
                 doc = "large-scale divergence of the subsidence w_s = -D z (3e-6 diverges by day, #312)")
         option!(s, "damping_rate", Float64; default = 0.01, range = (0, Inf), units = "s^-1",
                 doc = "θ reference damping and velocity sponge rate")
-        option!(s, "damping_frac", Float64; default = 0.25, range = (0, 1),
+        option!(s, "damping_frac", Float64; units = "1", default = 0.25, range = (0, 1),
                 doc = "the damping acts over the top damping_frac of the domain")
         option!(s, "theta_top", Symbol; default = :initial_gradient, allowed = [:initial_gradient, :noflux],
                 doc = "the θ top: the fixed initial gradient (#254) or no flux")
@@ -486,7 +486,7 @@ function parent_section()
                 doc = "the parent's closure: tke (Deardorff) or smagorinsky (the core's)")
         option!(s, "stepper", Symbol; default = :rk3, allowed = [:rk3, :euler],
                 doc = "rk3 (SSP-RK3 under step_adaptive!) or euler")
-        option!(s, "c_advective", Float64; default = 0.9, range = (0, Inf), open_lower = true,
+        option!(s, "c_advective", Float64; units = "1", default = 0.9, range = (0, Inf), open_lower = true,
                 doc = "advective Courant number of the parent's step pick")
         option!(s, "moisture", Bool; default = true, doc = "carry qv")
     end
@@ -564,6 +564,54 @@ end
 
 _options_problems(tbl) = options_value(tbl)[1]
 
+# the TOML form of a coupling option for the option reference (the OPTION_FORMS keys by hand)
+function _option_form_text(name::Symbol, k::Symbol, v)
+    (name, k) == (:nesting, :parent) && return "a table ([physics.options.nesting.parent])"
+    (name, k) == (:nesting, :z_anterp) && return "\"canopy\" or a number (m)"
+    (name, k) == (:nesting, :parent_driver) && return "\"aeolus\", \"profile\" or \"offline\""
+    (name, k) == (:surface_exchange, :z0m) && return "\"dynamic\" or " * _shape(v)
+    (name, k) == (:sgs_mlsgs, :fn) && return "\"none\" (a model function only from Julia)"
+    return _shape(v)
+end
+
+"The default of a coupling option as TOML text, or what it is when TOML cannot hold it."
+function _option_default_text(v)
+    v isa ParentConfig && return "(the parent's defaults)"
+    try
+        return toml_literal(v)
+    catch err
+        err isa ArgumentError || rethrow()
+        return "(a $(nameof(typeof(v))), set from Julia)"
+    end
+end
+
+"""
+    berlin_options_reference() -> Vector{Section}
+
+The documented sub-tables of `[physics.options]` for the option
+reference: one per coupling with options, `[physics.options.<name>]`,
+listing its `default_options` (key, TOML form, default; generated, so it
+cannot drift), and `[physics.options.nesting.parent]`, the parent's
+schema ([`parent_section`](@ref)).
+"""
+function berlin_options_reference()
+    out = Section[]
+    for C in sort(REGISTRY; by = C -> String(coupling_name(C)))
+        d = default_options(C)
+        isempty(d) && continue
+        name = coupling_name(C)
+        opts = [Config.reference_option(String(k),
+                    _option_form_text(name, k, v), _option_default_text(v))
+                for (k, v) in pairs(d)]
+        push!(out, Section(String(name), "The options of the coupling `$name` (`default_options(::Type{" *
+                           "$(nameof(C))})`): only these keys, each a value of its default's form; " *
+                           "their meaning is documented on the coupling (`?$(nameof(C))`).", opts))
+    end
+    p = parent_schema_section()
+    push!(out, Section("nesting.parent", p.doc, p.options))
+    return out
+end
+
 function Config.driver_sections(::BerlinDriver)
     run = section("run") do s
         option!(s, "scenario", Symbol; default = :summer,
@@ -601,7 +649,7 @@ function Config.driver_sections(::BerlinDriver)
                 doc = "the OpenStreetMap file of the buildings, parks and water")
         option!(s, "min_height", Float64; default = 8.0, range = (0, Inf), units = "m",
                 doc = "buildings lower than this are dropped")
-        option!(s, "park_lai", Float64; default = 2.5, range = (0, Inf), doc = "leaf-area index of park cells")
+        option!(s, "park_lai", Float64; units = "m2 m-2", default = 2.5, range = (0, Inf), doc = "leaf-area index of park cells")
         option!(s, "landuse", Path; default = joinpath(DATA_DIR, "berlin_landuse_6km.csv"),
                 doc = "the nest parent's land-use table (data/fetch_berlin_landuse.jl)")
     end
@@ -635,15 +683,15 @@ function Config.driver_sections(::BerlinDriver)
         option!(s, "g", Float64; default = 9.81, range = (0, Inf), open_lower = true, units = "m s^-2",
                 doc = "gravitational acceleration")
         option!(s, "f_coriolis", Float64; default = 1e-4, units = "s^-1", doc = "Coriolis parameter")
-        option!(s, "c_s", Float64; default = 0.1, range = (0, Inf), doc = "Smagorinsky coefficient C_s of the core")
-        option!(s, "pr_t", Float64; default = 1 / 3, range = (0, Inf), open_lower = true,
+        option!(s, "c_s", Float64; units = "1", default = 0.1, range = (0, Inf), doc = "Smagorinsky coefficient C_s of the core")
+        option!(s, "pr_t", Float64; units = "1", default = 1 / 3, range = (0, Inf), open_lower = true,
                 doc = "turbulent Prandtl number")
         option!(s, "sgs_stability", Symbol; default = :brown94,
                 allowed = [:brown94, :lilly, :long_tail, :short_tail, :most, :none],
                 doc = "the stability correction every eddy-viscosity sgs provider wraps its closure in (P55-e, #187); none: uncorrected")
         option!(s, "sponge_alpha_max", Float64; default = 0.05, range = (0, Inf), units = "s^-1",
                 doc = "velocity sponge rate at the top")
-        option!(s, "sponge_frac", Float64; default = 0.75, range = (0, 1),
+        option!(s, "sponge_frac", Float64; units = "1", default = 0.75, range = (0, 1),
                 doc = "the sponge starts at sponge_frac × Lz")
         option!(s, "theta_top", OneOf(Symbol, Float64); default = :initial_gradient,
                 allowed = [:initial_gradient, :noflux], units = "K m^-1",
@@ -709,7 +757,7 @@ function Config.driver_sections(::BerlinDriver)
             option!(s, String(coupling_name(C)), Bool; default = is_default(C),
                     doc = "the additive coupling $(coupling_name(C)) on or off")
         end
-        option!(s, "options", OpenTable(_options_problems);
+        option!(s, "options", OpenTable(_options_problems; reference = berlin_options_reference);
                 doc = "[physics.options.<coupling>]: that coupling's options over its default_options " *
                       "(the keys are closed, a value has its default's type); " *
                       "[physics.options.nesting.parent] is the parent's schema")
@@ -773,7 +821,13 @@ function _berlin_checks(cfg::RunConfig)
     return e
 end
 
-Config.driver_checks(::BerlinDriver) = Any[_berlin_checks]
+const _BERLIN_CHECKS_DOC = """
+the selected couplings are compatible (the declared incompatibilities of `[physics]`, with their reasons)
+every cadence an enabled coupling needs is set, and a cadence a file sets is used by an enabled coupling
+`dynamics.theta_top` is `"initial_gradient"`, `"noflux"` or a gradient in K/m
+`[checkpoint]` stays off: the Berlin case has no checkpoint/restart yet (#269)"""
+
+Config.driver_checks(::BerlinDriver) = Any[_BERLIN_CHECKS_DOC => _berlin_checks]
 
 const _BERLIN_SCHEMA = Ref{Any}(nothing)
 

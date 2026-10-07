@@ -42,7 +42,7 @@ function Config.driver_sections(::CBCDriver)
                 doc = "evolve-and-rescale cycles before tU0/M = 42 (Rogallo 1981)")
         option!(s, "t_spin", Optional{Float64}; range = (0, Inf), open_lower = true, units = "s",
                 doc = "length of one spin-up cycle; \"none\": the 42 → 98 interval, (98 − 42) M/U0")
-        option!(s, "cfl", Float64; default = 0.5, range = (0, Inf), open_lower = true,
+        option!(s, "cfl", Float64; units = "1", default = 0.5, range = (0, Inf), open_lower = true,
                 doc = "advective Courant number of the step")
     end
     return Section[g, sgs, b]
@@ -53,7 +53,9 @@ function _checks(cfg)
     isempty(cfg.benchmark.seeds) && push!(e, ConfigError("benchmark.seeds", "give at least one seed"))
     return e
 end
-Config.driver_checks(::CBCDriver) = Any[_checks]
+Config.driver_checks(::CBCDriver) = Any[
+    """`[checkpoint]` stays off: the benchmark runs to the end in one call
+    `benchmark.seeds` has at least one seed""" => _checks]
 
 "What the `cbc_decay` driver builds and runs: `result` (the NamedTuple of `cbc_benchmark`) and `cfg`."
 mutable struct CBCRun

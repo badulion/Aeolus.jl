@@ -31,11 +31,11 @@ function Config.driver_sections(::DNSDecayDriver)
     d = section("dns"; doc = "The decaying DNS (dns_decay of test/fixtures/dns_decay.jl).") do s
         option!(s, "nu", Optional{Float64}; range = (0, Inf), open_lower = true, units = "m^2 s^-1",
                 doc = "kinematic viscosity; \"none\": 0.018 (48/N)^(4/3), which holds k_max η ≈ 1.5")
-        option!(s, "end_time", Float64; default = DNS_T_END, range = (0, Inf), open_lower = true,
+        option!(s, "end_time", Float64; units = "L/u'", default = DNS_T_END, range = (0, Inf), open_lower = true,
                 doc = "simulated time (in units of L/u', u' = 1)")
-        option!(s, "past_peak", Float64; default = 0.0, range = (0, Inf),
+        option!(s, "past_peak", Float64; units = "L/u'", default = 0.0, range = (0, Inf),
                 doc = "run on this long past the dissipation peak (0: stop at end_time)")
-        option!(s, "cfl", Float64; default = 0.5, range = (0, Inf), open_lower = true,
+        option!(s, "cfl", Float64; units = "1", default = 0.5, range = (0, Inf), open_lower = true,
                 doc = "advective Courant number of the step")
     end
     return Section[g, d]

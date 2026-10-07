@@ -33,6 +33,23 @@ const DRIVER_ATTRIBUTES = ("aeolus_driver", "aeolus_form", "aeolus_schema_versio
                            "projection", "origin_x", "origin_y", "dx", "dy", "source",
                            "source_fnv1a64", "preprocessor", "aeolus_commit")
 
+# what each global attribute holds, for format_reference (the docstring above in table form)
+const _ATTRIBUTE_DOCS = Dict(
+    "aeolus_driver" => "`\"static\"` or `\"dynamic\"`",
+    "aeolus_form" => "the layout within the kind (`\"resolved\"`, `\"tiles\"`, `\"standard\"`)",
+    "aeolus_schema_version" => "the version of these conventions (a file of another version is refused)",
+    "origin_lat" => "latitude of the projection's anchor (degrees north)",
+    "origin_lon" => "longitude of the projection's anchor (degrees east)",
+    "projection" => "`\"equirectangular\"` (`latlon_to_meters`)",
+    "origin_x" => "x of the anchor in the run's mesh coordinates (m)",
+    "origin_y" => "y of the anchor in the run's mesh coordinates (m)",
+    "dx" => "horizontal spacing of the run's grid in x (m)",
+    "dy" => "horizontal spacing of the run's grid in y (m)",
+    "source" => "the file the driver was made from (relative to the driver's directory when under it)",
+    "source_fnv1a64" => "FNV-1a hash of that file, 16 hex digits (a changed source makes the driver stale)",
+    "preprocessor" => "what wrote the file (e.g. `\"aeolus preprocess static\"`)",
+    "aeolus_commit" => "git commit of the writing Aeolus (`\"\"` outside a checkout)")
+
 const _EARTH_R = 6_371_000.0
 
 """
@@ -100,20 +117,26 @@ DriverVariable(name, dims, type; units = "", long_name = name, standard_name = "
                    String(standard_name), required, range, String(doc))
 
 """
-    DriverSchema(kind, form, doc, variables)
+    DriverSchema(kind, form, doc, variables; attributes = [])
 
 A declarative table of the variables of one kind of input driver: `kind`
 is the `aeolus_driver` attribute (`"static"`), `form` the `aeolus_form`
 attribute that tells two layouts of one kind apart (`"resolved"`,
-`"tiles"`). [`check_driver`](@ref) checks a file against it and
-[`schema_markdown`](@ref) renders it for the docs.
+`"tiles"`). `attributes` are the global attributes of this form on top of
+[`DRIVER_ATTRIBUTES`](@ref), `name => meaning` pairs. [`check_driver`](@ref)
+checks a file against it; [`schema_markdown`](@ref) and
+[`format_reference`](@ref) render it for the docs.
 """
 struct DriverSchema
     kind::String
     form::String
     doc::String
     variables::Vector{DriverVariable}
+    attributes::Vector{Pair{String,String}}
 end
+DriverSchema(kind, form, doc, variables; attributes = Pair{String,String}[]) =
+    DriverSchema(String(kind), String(form), String(doc), variables,
+                 Pair{String,String}[String(first(a)) => String(last(a)) for a in attributes])
 
 function Base.getindex(s::DriverSchema, name::AbstractString)
     i = findfirst(v -> v.name == name, s.variables)
@@ -223,6 +246,106 @@ function schema_markdown(s::DriverSchema)
         println(io, "| `$(v.name)` | ", isempty(v.dims) ? "scalar" : join(v.dims, ", "), " | `", v.type, "` | ",
                 isempty(v.units) ? "" : "`$(v.units)`", " | ", v.required ? "yes" : "no", " | ", r, " | ",
                 v.long_name, sn, isempty(v.doc) ? "" : ": " * v.doc, " |")
+    end
+    return String(take!(io))
+end
+
+"""
+    format_reference(schema; example = nothing, title = nothing) -> String
+
+The input-format specification of one [`DriverSchema`](@ref), as Markdown,
+generated from the schema (the docs build writes
+`docs/src/reference/input_static.md` and `input_dynamic.md` from it):
+the identifying attributes (`aeolus_driver`, `aeolus_form`,
+`aeolus_schema_version` = [`DRIVER_SCHEMA_VERSION`](@ref)), one table row
+per variable (dimensions, element type, units, required or optional,
+valid range, meaning; [`schema_markdown`](@ref)), the global attributes
+(the common [`DRIVER_ATTRIBUTES`](@ref) and the schema's own), and, with
+`example` a driver file of this schema, its header as `ncdump -h` prints
+it ([`ncdump_header`](@ref)).
+"""
+function format_reference(s::DriverSchema; example = nothing, title = nothing)
+    io = IOBuffer()
+    println(io, "## ", title === nothing ? "The $(s.kind) driver, form \"$(s.form)\"" : title, "\n")
+    println(io, s.doc, "\n")
+    println(io, "A file of this form has the global attributes `aeolus_driver = \"", s.kind,
+            "\"`, `aeolus_form = \"", s.form, "\"` and `aeolus_schema_version = ", DRIVER_SCHEMA_VERSION,
+            "`; a file of another kind, form or version is refused (`check_driver`). ",
+            "NetCDF-4, CF-1.8 attributes; dimensions are in Julia index order (the first varies fastest; ",
+            "`ncdump` lists them in the reverse, C order); `*` is the variable's own coordinate.\n")
+    println(io, "### Variables\n")
+    println(io, schema_markdown(s))
+    println(io, "### Global attributes\n")
+    println(io, "| attribute | meaning |")
+    println(io, "| :-- | :-- |")
+    for a in DRIVER_ATTRIBUTES
+        println(io, "| `", a, "` | ", _ATTRIBUTE_DOCS[a], " |")
+    end
+    for (a, d) in s.attributes
+        println(io, "| ", join(("`" * strip(x) * "`" for x in split(a, ',')), ", "), " | ", d, " |")
+    end
+    println(io, "| `Conventions`, `date_created` | CF conventions; creation time, ISO-8601 UTC |")
+    if example !== nothing
+        println(io, "\n### Example (`ncdump -h`)\n")
+        println(io, "The header of `", basename(example), "`, a driver Aeolus ships:\n")
+        println(io, "```\n", ncdump_header(example; max_attr = 100), "```")
+    end
+    return String(take!(io))
+end
+
+const _CDL_TYPES = Dict{DataType,Tuple{String,String}}(
+    Float64 => ("double", ""), Float32 => ("float", "f"), Int8 => ("byte", "b"), UInt8 => ("ubyte", "UB"),
+    Int16 => ("short", "s"), UInt16 => ("ushort", "US"), Int32 => ("int", ""), UInt32 => ("uint", "U"),
+    Int64 => ("int64", "LL"), UInt64 => ("uint64", "ULL"), String => ("string", ""), Char => ("char", ""))
+
+_cdl_type(T) = get(_CDL_TYPES, T, (lowercase(string(T)), ""))[1]
+
+function _cdl_value(x)
+    x isa AbstractString && return "\"" * escape_string(x) * "\""
+    T = typeof(x)
+    s = x isa AbstractFloat ? (isnan(x) ? "NaN" : isinf(x) ? (x > 0 ? "Infinity" : "-Infinity") : repr(x)) :
+        string(x)
+    x isa Float32 && (s = replace(s, r"f0$" => ""))
+    return s * get(_CDL_TYPES, T, ("", ""))[2]
+end
+_cdl_attr(v) = v isa AbstractString ? _cdl_value(v) :
+               v isa AbstractVector ? join(map(_cdl_value, v), ", ") : _cdl_value(v)
+
+"""
+    ncdump_header(path; max_attr = nothing) -> String
+
+The header of the NetCDF file `path` in CDL, as `ncdump -h` prints it
+(dimensions, variables with their attributes, global attributes; no
+data), written in Julia so that the docs need no NetCDF binaries.
+Dimensions are listed in C order, as `ncdump` does. `max_attr` shortens
+an attribute value longer than that many characters (with `…`; `ncdump`
+does not).
+"""
+function ncdump_header(path::AbstractString; max_attr = nothing)
+    cut(s) = (max_attr === nothing || length(s) <= max_attr) ? s : first(s, max_attr) * " …"
+    io = IOBuffer()
+    NCDataset(path) do ds
+        println(io, "netcdf ", splitext(basename(path))[1], " {")
+        unl = Set(String.(NCDatasets.unlimited(ds.dim)))
+        println(io, "dimensions:")
+        for d in keys(ds.dim)
+            n = ds.dim[d]
+            println(io, "\t", d, " = ", d in unl ? "UNLIMITED ; // ($n currently)" : "$n ;")
+        end
+        println(io, "variables:")
+        for v in keys(ds)
+            var = ds[v]
+            dn = reverse(String.(NCDatasets.dimnames(var)))
+            println(io, "\t", _cdl_type(eltype(var.var)), " ", v, isempty(dn) ? "" : "(" * join(dn, ", ") * ")", " ;")
+            for (a, x) in var.attrib
+                println(io, "\t\t", v, ":", a, " = ", cut(_cdl_attr(x)), " ;")
+            end
+        end
+        println(io, "\n// global attributes:")
+        for (a, x) in ds.attrib
+            println(io, "\t\t:", a, " = ", cut(_cdl_attr(x)), " ;")
+        end
+        println(io, "}")
     end
     return String(take!(io))
 end

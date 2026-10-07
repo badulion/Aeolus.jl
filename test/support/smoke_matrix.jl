@@ -20,7 +20,8 @@ const SMOKE_TOML = joinpath(BC.CONFIG_DIR, "berlin_smoke.toml")
     file_overrides(path) -> Vector{String}
 
 The values a scenario file sets (its tables flattened to `--set`
-overrides; `extends`, `schema_version` and `[run] name` left out): the
+overrides; `extends`, `schema_version`, `[run] name` and the file's
+`[test]` table, which is not configuration, left out): the
 differences of `berlin_winter.toml` applied to the smoke run.
 """
 function file_overrides(path)
@@ -29,7 +30,7 @@ function file_overrides(path)
     function walk(t, prefix)
         for k in sort!(collect(keys(t)))
             key = isempty(prefix) ? k : prefix * "." * k
-            key in ("extends", "schema_version", "run.name") && continue
+            key in ("extends", "schema_version", "run.name", "test") && continue
             v = t[k]
             v isa AbstractDict ? walk(v, key) :
                 push!(out, key * "=" * Aeolus.Config._emit_value(Aeolus.Config._toml_out(v)))

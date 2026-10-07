@@ -71,7 +71,11 @@ Global attribute `dynamic_source`: `"sounding"`, `"case_table"` or
 `"parent"` (an Aeolus nest parent, [`NestBoundaryRecorder`](@ref)).
 """
 const DYNAMIC_SCHEMA = DriverSchema("dynamic", "standard",
-    "Initial state, boundary planes and large-scale and surface forcing over time.",
+    "Initial state, boundary planes and large-scale and surface forcing over time. Every group is " *
+    "optional. Besides the variables below, the boundary planes are one variable `bc_<face>_<var>` per " *
+    "open face (`west`, `east`, `south`, `north`, `top`) and field with data, over (`bc_<face>_<var>_i`, " *
+    "`_j`, `_k`, `time_bc`): the child's buffer slab (the face plane plus the halo layers), with " *
+    "attributes `field`, `side`, `i0`, `j0`, `k0` (the slab's first storage index) and `halo_mode`.",
     vcat([DriverVariable("x", ("x",), Float64; units = "m", required = false, long_name = "x of the cell centres",
                          doc = "the run mesh's (with 3-D fields or boundary planes)"),
           DriverVariable("y", ("y",), Float64; units = "m", required = false, long_name = "y of the cell centres"),
@@ -101,7 +105,15 @@ const DYNAMIC_SCHEMA = DriverSchema("dynamic", "standard",
           DriverVariable("sfc_temperature", ("time_sfc",), Float64; units = "K", required = false,
                          long_name = "surface (skin or screen-level) potential temperature", range = (100, 1000)),
           DriverVariable("sfc_pressure", ("time_sfc",), Float64; units = "Pa", required = false,
-                         long_name = "surface pressure", range = (1e3, 2e5))]))
+                         long_name = "surface pressure", range = (1e3, 2e5))]);
+    attributes = [
+        "init_time" => "the model start, ISO-8601 UTC (`\"\"`: a case without a calendar date); every time coordinate is in s since it",
+        "dynamic_source" => "`\"sounding\"`, `\"case_table\"` or `\"parent\"` (an Aeolus nest parent)",
+        "sounding_station, sounding_elevation, sounding_launches" =>
+            "a sounding driver's station name, station elevation (m) and number of launches",
+        "subsidence_fields, subsidence_form" =>
+            "with `ls_w_subs`: the fields subsidence acts on (space-separated) and its form (`Subsidence`)",
+        "nudging_tau" => "with `ls_nudge_*`: the nudging time scale (s, `ProfileNudging`)"])
 
 # ---------------------------------------------------------------------------
 # boundary snapshots read from the file

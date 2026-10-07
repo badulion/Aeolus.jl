@@ -51,3 +51,10 @@ levels = "pressure"
 
 [logging]
 diagnostics_cadence = 60.0
+
+[test]
+# the dynamic driver is made from the ERA5 sample by test/config_roundtrip.jl
+overrides = [
+    "stepper.end_time=\"none\"",
+    "stepper.nsteps=10",
+]

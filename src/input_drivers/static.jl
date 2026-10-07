@@ -82,7 +82,9 @@ const STATIC_TILES_SCHEMA = DriverSchema("static", "tiles",
     DriverVariable("lambda_f", _XY, Float64; units = "1", long_name = "frontal area density", range = (0, 100)),
     DriverVariable("h_mean", _XY, Float64; units = "m", long_name = "roof-area-weighted mean building height",
                    range = (0, 1e4)),
-    DriverVariable("h_max", _XY, Float64; units = "m", long_name = "maximum building height", range = (0, 1e4))]))
+    DriverVariable("h_max", _XY, Float64; units = "m", long_name = "maximum building height", range = (0, 1e4))]);
+    attributes = ["tile_x0" => "x of the south-west corner of the grid, from the anchor (m)",
+                  "tile_y0" => "y of the south-west corner of the grid, from the anchor (m)"])
 
 # ---------------------------------------------------------------------------
 # the resolved form

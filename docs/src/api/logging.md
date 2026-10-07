@@ -149,6 +149,16 @@ A production run writes one folder (#334), `runs/<yyyy-mm-dd>_<case>_<runID>/`:
 | `checkpoints/` | the [`CheckpointSchedule`](@ref Aeolus.IO.CheckpointSchedule) and FFTW wisdom ([`run_checkpoints`](@ref Aeolus.IO.run_checkpoints)) |
 | `uncommitted-<n>.diff`, `untracked-<n>.txt` | the uncommitted code of session `n`, only with `allow_uncommitted = true` |
 
+**`run.toml` `[config]` is the configuration of record.** For a run
+started from a [`RunConfig`](config.md) (every `aeolus run`, every shipped
+config), `[config]` is the canonical resolved TOML: every option written
+out, no `extends`, paths absolute, floats bit-exact. It is what
+`load_run_config(folder)` reads, what `aeolus run <folder>/run.toml`
+replays bit for bit and what `aeolus run <folder> --resume` continues; the
+free-form `config` of a run started from a `Dict` or a struct is kept for
+provenance only and cannot be replayed. See
+[Run configuration](../design/run_configuration.md).
+
 ```julia
 using Aeolus
 

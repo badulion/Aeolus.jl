@@ -96,6 +96,50 @@ the log and `diagnostics.csv`; the NetCDF output still goes to
 [the `berlin` driver](../api/config.md#The-berlin-driver) for the schema;
 `CaseConfig(:summer)` in Julia loads the same file.
 
+### Configuring with TOML
+
+A variant of a scenario is a file that `extends` it and sets only what
+differs, or a `--set` on the command line:
+
+```toml
+# my_berlin.toml
+extends = "berlin_summer.toml"     # found next to this file, else in examples/urban/configs/
+
+[run]
+name = "summer_no_traffic_nox"
+
+[physics]
+sgs = "smagorinsky"                # a slot: one of its registered providers
+
+[physics.options.aq_chem]
+nox_street = 0.0                   # a coupling option, checked against its default_options
+```
+
+`julia --project -m Aeolus check my_berlin.toml` validates it,
+`resolve` prints every option it resolves to, and `run` starts it. In
+Julia, `CaseConfig(load_run_config("my_berlin.toml"))` gives the
+`CaseConfig` that `build_case` takes. Every key, with its type, default,
+units and range, is in the generated
+[option reference of the `berlin` driver](../reference/options/berlin.md);
+the guide to files, overrides, replays and `--resume` is
+[Run configuration](run_configuration.md). The run's `run.toml` holds the
+resolved config, so `aeolus run <folder>/run.toml` replays the run bit for
+bit.
+
+**A coupling's `default_options` is its option table.** The schema of
+`[physics.options.<name>]` is generated from the coupling's
+`default_options` `NamedTuple`: the keys are closed (an unknown key is an
+error that lists the coupling's options), each value must have its
+default's type (a `Symbol` is a string, a tuple an array of its length,
+a `NamedTuple` a sub-table). The option reference documents the table
+(`berlin_options_reference`), one row per key with its TOML form and its
+default, generated from the same `NamedTuple`; the meaning of each key is
+documented on the coupling's docstring. Adding a key to `default_options`
+is all it takes to make it configurable from TOML and listed in the
+reference; there is no separate schema to edit. `[physics]` gets one key per
+slot (allowed values: the registered providers) and one per additive
+coupling, and `[cadence]` one per named period a coupling declares.
+
 ## Status of the epic (#125)
 
 The work is tracked in the milestone "Berlin — full-physics flagship"

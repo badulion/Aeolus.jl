@@ -40,3 +40,13 @@ parcel = { epsilon0 = 0.0, r0 = 10e-6, w = 0.0, sigma_s = 1e-3, tau = 5.0, t_end
 
 [sweep]
 axis = [ { key = "parcel.model", values = ["superdroplet", "bulk"] } ]
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "parcel.t_end=20.0",
+    "parcel.n_sd=400",
+]
+member = "parcel_0.1_superdroplet"

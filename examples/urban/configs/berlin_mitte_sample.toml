@@ -17,3 +17,24 @@ static = "input/berlin_mitte_sample_static.nc"
 [preprocess]
 osm_path = "../data/sample_berlin_mitte.osm"
 min_height = 15.0
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[16,16,16]",
+    "grid.extent=[250.0,250.0,100.0]",
+    "geometry.offset=[0.0,-312.5]",
+    "physics.options.nesting.parent.extent=[1000.0,1000.0,500.0]",
+    "physics.options.nesting.parent.refinement=[4,4,8]",
+    "physics.options.nesting.parent.vertical=\"uniform\"",
+    "clock.nsteps=4",
+    "cadence.radiation=8.0",
+    "cadence.soil=4.0",
+    "output.path=\"none\"",
+    "output.netcdf=\"none\"",
+    "output.cadence=8.0",
+    "geometry.static=\"none\"",
+    "geometry.parent_static=\"none\"",
+]

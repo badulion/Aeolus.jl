@@ -115,3 +115,14 @@ label = "B_uniform"
 surface = { wavelength = 800.0, t_hot = 305.0, t_cool = 305.0 }
 grid = { size = [128, 16, 16], extent = [12800.0, 1600.0, 1600.0] }
 stepper = { end_time = 10800.0, dt = 5.0, average_from = 5400.0, sample_every = 3 }
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[16,8,8]",
+    "stepper.end_time=60.0",
+    "stepper.average_from=30.0",
+]
+member = "A_tiled"

@@ -68,3 +68,14 @@ series_interval = 600.0
 [checkpoint]
 every_seconds = 1800.0         # an interrupted run resumes with --resume <run folder> (RESUME= for the scripts)
 keep = 2
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[16,16,32]",
+    "stepper.end_time=\"none\"",
+    "stepper.nsteps=10",
+    "averaging.series_interval=0.0",
+]

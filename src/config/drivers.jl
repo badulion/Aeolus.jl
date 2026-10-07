@@ -12,7 +12,8 @@ run into a run folder. A driver type `D` implements
   * `driver_name(::D) -> String`: the `[run] driver` value that selects it;
   * `driver_sections(::D) -> Vector{Section}`: its sections, on top of the
     common ones (a section named like a common one adds options to it);
-  * `driver_checks(::D)`: cross-field checks ([`check!`](@ref); default none);
+  * `driver_checks(::D)`: cross-field checks, `"what it checks" => f` pairs
+    ([`check!`](@ref); default none);
   * `config_dir(::D)`: where `extends = "base.toml"` looks for bare names
     (default `nothing`);
   * `driver_defaults(::D)`: the driver's own defaults of common options,
@@ -48,8 +49,9 @@ driver_sections(::AbstractRunDriver) = Section[]
 """
     driver_checks(d::AbstractRunDriver) -> Vector
 
-The cross-field checks of the driver `d` (functions `cfg -> Vector{ConfigError}`,
-see [`check!`](@ref)).
+The cross-field checks of the driver `d`: `"what it checks, in words" => f`
+pairs with `f(cfg) -> Vector{ConfigError}` (see [`check!`](@ref)). The
+text goes into the option reference, one bullet per line.
 """
 driver_checks(::AbstractRunDriver) = Any[]
 

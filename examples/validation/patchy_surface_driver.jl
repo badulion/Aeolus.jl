@@ -32,7 +32,7 @@ function Config.driver_sections(::PatchySurfaceDriver)
     sf = section("surface"; doc = "The strips (normal to x) and how the LES sees them.") do s
         option!(s, "wavelength", Float64; default = 800.0, range = (0, Inf), open_lower = true, units = "m",
                 doc = "strip wavelength λ (one hot and one cool strip)")
-        option!(s, "hot_fraction", Float64; default = 0.5, range = (0, 1), doc = "hot share of a wavelength")
+        option!(s, "hot_fraction", Float64; units = "1", default = 0.5, range = (0, 1), doc = "hot share of a wavelength")
         option!(s, "t_hot", Float64; default = 310.0, range = (0, Inf), open_lower = true, units = "K",
                 doc = "skin temperature of the hot strips")
         option!(s, "t_cool", Float64; default = 300.0, range = (0, Inf), open_lower = true, units = "K",
@@ -55,7 +55,7 @@ function Config.driver_sections(::PatchySurfaceDriver)
     end
     dyn = section("dynamics"; doc = "Rotation and the closure.") do s
         option!(s, "f_coriolis", Float64; default = 0.0, units = "s^-1", doc = "Coriolis parameter")
-        option!(s, "c_s", Float64; default = 0.17, range = (0, Inf), open_lower = true,
+        option!(s, "c_s", Float64; units = "1", default = 0.17, range = (0, Inf), open_lower = true,
                 doc = "Smagorinsky coefficient")
     end
     st = section("stepper"; doc = "SSP-RK3 with a fixed step; statistics sampled on the fly.") do s
@@ -78,7 +78,9 @@ function _checks(cfg)
         push!(e, ConfigError("stepper.average_from", "no samples: average_from is after end_time"))
     return e
 end
-Config.driver_checks(::PatchySurfaceDriver) = Any[_checks]
+Config.driver_checks(::PatchySurfaceDriver) = Any[
+    """`[checkpoint]` stays off: the run goes to the end in one call
+    `stepper.average_from` ≤ `stepper.end_time` (else there are no samples)""" => _checks]
 
 "What the `patchy_surface` driver builds: `les` (a `PatchyLES`), `result` (of `patchy_run!`) and `cfg`."
 mutable struct PatchyRun

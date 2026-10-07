@@ -155,7 +155,7 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 ```
 
 `[run] driver = "cbl"` then selects this schema; the driver `"common"`
-(the common sections only) is always registered. A driver section named
+(the common sections only) is always registered. The options of every driver are in the generated reference: [`common`](../reference/options/common.md), [`simulation`](../reference/options/simulation.md), [`berlin`](../reference/options/berlin.md), [`sbl`](../reference/options/sbl.md), [`dns`](../reference/options/dns.md), [`column`](../reference/options/column.md) and the other example drivers; the guide is [Run configuration](../design/run_configuration.md). A driver section named
 like a common one adds its options to it (the `simulation` driver's
 `[output] fields`); redeclaring a common option is an error.
 
@@ -348,12 +348,7 @@ This config is, bit for bit, the simulation the script built before
     of `[preprocess.era5]` ([Input drivers](input_drivers.md), CFG-h
     #363); `examples/configs/lindenberg_era5.toml` is the example.
 
-The options:
-
-```@example
-using Aeolus # hide
-print(Aeolus.Config.option_reference("simulation")) # hide
-```
+Its options, every key with type, default, units, range and doc: [Options: driver `simulation`](../reference/options/simulation.md) (generated from the schema; `aeolus options simulation` prints the same).
 
 ## The `berlin` driver
 
@@ -430,6 +425,8 @@ run 12 steps gives state bitwise equal to the Julia-built smoke case and
 passes the round trip with the nest on. The Berlin case has no
 checkpoint/restart yet, so `[checkpoint]` must stay off.
 
+Its options, the `[physics.options.<coupling>]` tables included: [Options: driver `berlin`](../reference/options/berlin.md).
+
 ## The `sbl` driver
 
 `[run] driver = "sbl"` (`examples/sbl/config_schema.jl`, CFG-d #359) runs
@@ -479,10 +476,7 @@ CASES-99 hockey stick bins). The scripts `gabls1.jl` … `gabls4.jl` run
 their config (`sbl_script_run`) and make the figures; the channel sweeps
 build their cases from the configs and share one spin-up.
 
-```@example
-using Aeolus # hide
-print(Aeolus.Config.option_reference("sbl")) # hide
-```
+Its options, every key with type, default, units, range and doc: [Options: driver `sbl`](../reference/options/sbl.md) (generated from the schema; `aeolus options sbl` prints the same).
 
 ## The `dns` driver
 
@@ -501,10 +495,7 @@ over the run, the skewness band, the energy budget, monotone decay, past
 the dissipation peak) fails, names the measured k_max η, and leaves its
 record at `<out>.failed` only.
 
-```@example
-using Aeolus # hide
-print(Aeolus.Config.option_reference("dns")) # hide
-```
+Its options, every key with type, default, units, range and doc: [Options: driver `dns`](../reference/options/dns.md) (generated from the schema; `aeolus options dns` prints the same).
 
 ## The bit-identical round trip
 
