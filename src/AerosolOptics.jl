@@ -158,9 +158,11 @@ Base.show(io::IO, r::MieResult) =
 # Scratch buffer for the logarithmic-derivative recursion. The recursion
 # needs O(x + |m|x + 15) complex numbers; reallocating that for every one
 # of the ~10⁵ Mie calls a mixture costs is pure garbage-collector churn,
-# so one buffer is grown and reused. Single-threaded by construction —
-# `mie_sphere` is called from the (serial) optics-table build.
-const _D_BUFFER = ComplexF64[]
+# so a buffer is grown and reused — one per task (task-local storage).
+# It was one global buffer, "single-threaded by construction"; two tasks
+# calling `mie_sphere` at once then overwrote each other's recursion and
+# returned wrong efficiencies (found by the KA-m cache test, #301).
+_d_buffer() = get!(() -> ComplexF64[], task_local_storage(), :aeolus_mie_D)::Vector{ComplexF64}
 
 """
     rayleigh_efficiencies(x, m) -> MieResult
@@ -262,7 +264,7 @@ function mie_sphere(x::Real, m::Complex; nmax::Int = 0)
     nstop = max(nstop, 1)
     nmx = max(nstop, ceil(Int, abs(y))) + 15
 
-    D = _D_BUFFER
+    D = _d_buffer()
     length(D) < nmx && resize!(D, nmx)
     @inbounds D[nmx] = zero(ComplexF64)
     @inbounds for n in (nmx - 1):-1:1
@@ -884,9 +886,14 @@ const POINTS_PER_RIPPLE = 5
 # a library one would alias, which is why `mode_optics` bypasses the
 # cache for species that are not the registry singletons.
 const _BULK_CACHE = Dict{NTuple{6, Any}, NTuple{4, Float64}}()
+# Every access holds this lock, so `mode_optics` is safe to call from any
+# thread (KA-m, #301). Two tasks missing the same key both compute it,
+# with the same arithmetic, so the memoised value does not depend on
+# which one stores it.
+const _BULK_LOCK = ReentrantLock()
 
 "Empty the memoised single-mode optics cache."
-clear_optics_cache!() = (empty!(_BULK_CACHE); nothing)
+clear_optics_cache!() = (lock(() -> empty!(_BULK_CACHE), _BULK_LOCK); nothing)
 
 """
     _quadrature_points(r_lo, r_hi, λ, nquad) -> Int
@@ -954,7 +961,7 @@ function mode_optics(m::LogNormalMode, λ::Real; rh::Real = 0.0,
            Float64(rh), nquad)
     cacheable = _is_library_species(sp) && T_K == 298.15
     if cacheable
-        hit = get(_BULK_CACHE, key, nothing)
+        hit = lock(() -> get(_BULK_CACHE, key, nothing), _BULK_LOCK)
         hit === nothing || return (hit[1] * m.N, hit[2] * m.N,
                                    hit[3] * m.N, hit[4])
     end
@@ -999,7 +1006,7 @@ function mode_optics(m::LogNormalMode, λ::Real; rh::Real = 0.0,
     β_abs = max(β_ext - β_sca, 0.0)
     gbar  = Ss > 0 ? Sg / Ss : 0.0
 
-    cacheable && (_BULK_CACHE[key] = (β_ext, β_sca, β_abs, gbar))
+    cacheable && lock(() -> (_BULK_CACHE[key] = (β_ext, β_sca, β_abs, gbar)), _BULK_LOCK)
     return (β_ext * m.N, β_sca * m.N, β_abs * m.N, gbar)
 end
 

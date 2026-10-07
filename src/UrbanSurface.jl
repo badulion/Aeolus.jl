@@ -90,6 +90,7 @@ using ..Radiosity: Radiosity, RadiosityScene, ViewFactors, Facet, LongwaveRespon
 import ..Radiosity: facet_temperatures, nfacets
 using LinearAlgebra: I, lu!, mul!, dot, norm
 using ..TimeIntegration: NumericalFailure   # a diverged solver (#327 M6)
+using ..Backends: AbstractBackend, backend, foreach_column!
 
 export ThermalMaterial, thermal_material, thermal_material_names,
        volumetric_heat_capacity, thermal_diffusivity, thermal_admittance,
@@ -955,6 +956,10 @@ function UrbanFacetScene(scene::RadiosityScene{T}, vf::ViewFactors{T},
         throw(ArgumentError("UrbanFacetScene: $(length(facets)) UrbanFacets for $n " *
                             "radiosity facets"))
     fs = UrbanFacet{T}[f for f in facets]
+    # every facet owns its column: the facet steps run one work item per
+    # facet (KA-m, #301), and a facet listed twice would be stepped twice
+    allunique(map(objectid, fs)) ||
+        throw(ArgumentError("UrbanFacetScene: the same UrbanFacet object is listed more than once"))
     for i in 1:n
         fs[i].kind === scene.facets[i].kind ||
             throw(ArgumentError("UrbanFacetScene: facet $i is a :$(fs[i].kind) " *
@@ -1245,45 +1250,62 @@ function _prepare_scene_step(u::UrbanFacetScene{T}, forcing, dt::Real;
     dLE = zeros(T, n)
     a = zeros(T, n); b = zeros(T, n); d = zeros(T, n)
     F0 = zeros(T, n); e = zeros(T, n); g = zeros(T, n)
-    Δq = T(100)
-    for (i, f) in enumerate(fs)
-        fi = _facet_forcing(_air(forcing, i), Qsw[i], lw.incident[i])
-        Ts = f.T_skin
-        fl0 = _facet_fluxes(f, fi; kwargs...)
-        f.T_skin = Ts + T(δT)
-        fl1 = _facet_fluxes(f, fi; kwargs...)
-        f.T_skin = Ts
-        dH = (fl1.H - fl0.H) / T(δT)
-        dLE[i] = (fl1.LE - fl0.LE) / T(δT)
-        fl0s[i] = fl0
-        F0i = u.sw_absorbed[i] + N0[i] - fl0.H - fl0.LE
-        Fp = Gii[i] - dH - dLE[i]
-        Fp < 0 || (Fp = min(Gii[i], -eps(T)))
-        outers[i] = ColumnBoundary{T}(Ts, -Fp, F0i)
-        # trial steps, state restored after each
-        save = copy(f.column.T)
-        _, Fi_a, _, a[i] = _advance_column!(f, outers[i], dt)
-        F0[i] = Fi_a
-        copyto!(f.column.T, save)
-        o2 = ColumnBoundary{T}(Ts, -Fp, F0i + Δq)
-        _, Fi_b, _, xb = _advance_column!(f, o2, dt)
-        b[i] = (xb - a[i]) / Δq
-        e[i] = (Fi_b - Fi_a) / Δq
-        copyto!(f.column.T, save)
-        if node[i] != 0
-            ib = f.interior
-            f.interior = ColumnBoundary{T}(ib.T_env + one(T), ib.h, ib.q)
-            _, Fi_d, _, xd = _advance_column!(f, outers[i], dt)
-            d[i] = xd - a[i]
-            g[i] = Fi_d - Fi_a
-            f.interior = ib
-            copyto!(f.column.T, save)
-        end
-    end
+    # the facets' trial steps: one work item per facet (each restores its
+    # own column; KA-m, #301), so the same bits at every thread count
+    foreach_column!(backend(a), _prepare_facet!, (1:n,), fs, forcing, Qsw, lw, u.sw_absorbed,
+                    N0, Gii, outers, fl0s, dLE, a, b, d, F0, e, g, node, T(δT), dt,
+                    NamedTuple(kwargs); weight = FACET_WEIGHT)
     return _SceneStep{T, typeof(forcing)}(forcing, T(dt), lw, J, dEdT, Gii, N0, outers, fl0s, dLE,
                                           a, b, d, F0, e, g, collect(Int, node), copy(u.vf.area),
                                           T[f.interior.q for f in fs], solver, T(tol), maxiter,
                                           Ref(0), Ref(zero(T)))
+end
+
+# The work of one facet's conduction-column step in grid-point equivalents
+# (a tridiagonal θ-step of tens of layers plus the surface fluxes): the
+# serial threshold of the facet launches counts it.
+const FACET_WEIGHT = 256
+
+# One facet of `_prepare_scene_step`: its linearised outer balance and its
+# trial steps (the column state restored after each). Writes entry `i` of
+# the step's vectors and nothing of any other facet.
+function _prepare_facet!(i, fs, forcing, Qsw, lw, sw_absorbed, N0, Gii, outers, fl0s, dLE,
+                         a, b, d, F0, e, g, node, δT::T, dt, kw) where {T}
+    f = fs[i]
+    Δq = T(100)
+    fi = _facet_forcing(_air(forcing, i), Qsw[i], lw.incident[i])
+    Ts = f.T_skin
+    fl0 = _facet_fluxes(f, fi; kw...)
+    f.T_skin = Ts + δT
+    fl1 = _facet_fluxes(f, fi; kw...)
+    f.T_skin = Ts
+    dH = (fl1.H - fl0.H) / δT
+    dLE[i] = (fl1.LE - fl0.LE) / δT
+    fl0s[i] = fl0
+    F0i = sw_absorbed[i] + N0[i] - fl0.H - fl0.LE
+    Fp = Gii[i] - dH - dLE[i]
+    Fp < 0 || (Fp = min(Gii[i], -eps(T)))
+    outers[i] = ColumnBoundary{T}(Ts, -Fp, F0i)
+    # trial steps, state restored after each
+    save = copy(f.column.T)
+    _, Fi_a, _, a[i] = _advance_column!(f, outers[i], dt)
+    F0[i] = Fi_a
+    copyto!(f.column.T, save)
+    o2 = ColumnBoundary{T}(Ts, -Fp, F0i + Δq)
+    _, Fi_b, _, xb = _advance_column!(f, o2, dt)
+    b[i] = (xb - a[i]) / Δq
+    e[i] = (Fi_b - Fi_a) / Δq
+    copyto!(f.column.T, save)
+    if node[i] != 0
+        ib = f.interior
+        f.interior = ColumnBoundary{T}(ib.T_env + one(T), ib.h, ib.q)
+        _, Fi_d, _, xd = _advance_column!(f, outers[i], dt)
+        d[i] = xd - a[i]
+        g[i] = Fi_d - Fi_a
+        f.interior = ib
+        copyto!(f.column.T, save)
+    end
+    return nothing
 end
 
 # Solve the facets (and interior nodes) of a prepared step. With nodes, pass
@@ -1495,19 +1517,10 @@ function _apply_scene_step!(u::UrbanFacetScene{T}, s::_SceneStep{T}, x::Abstract
     c = _offdiag_exchange!(zeros(T, n), s, x, tmp)
     out = Vector{SurfaceFluxes{T}}(undef, n)
     Fo = zeros(T, n)
-    for (i, f) in enumerate(fs)
-        k = s.node[i]
-        if k != 0
-            ib = f.interior
-            f.interior = ColumnBoundary{T}(ib.T_env + T(y[k]), ib.h, ib.q)
-        end
-        o = s.outers[i]
-        outer = ColumnBoundary{T}(o.T_env, o.h, o.q + c[i])
-        Fo[i], Fi, Tf_new, u.skin_increment[i] = _advance_column!(f, outer, s.dt)
-        f.T_skin = Tf_new
-        f.G = Fo[i]
-        f.Q_interior = -Fi
-    end
+    # the facet column steps: one work item per facet (KA-m, #301); the
+    # coupled solve above (one global system) stays serial
+    foreach_column!(backend(Fo), _apply_facet!, (1:n,), fs, s.node, y, s.outers, c, s.dt, Fo,
+                    u.skin_increment; weight = FACET_WEIGHT)
     xa = u.skin_increment
     # lw_net = N0 + G xa (the full G, diagonal included)
     tmp .= s.dEdT .* xa
@@ -1526,21 +1539,45 @@ function _apply_scene_step!(u::UrbanFacetScene{T}, s::_SceneStep{T}, x::Abstract
     return out
 end
 
+# one facet's column step of `_apply_scene_step!`
+function _apply_facet!(i, fs, node, y, outers, c, dt, Fo, skin_increment)
+    f = fs[i]
+    T = eltype(Fo)
+    k = node[i]
+    if k != 0
+        ib = f.interior
+        f.interior = ColumnBoundary{T}(ib.T_env + T(y[k]), ib.h, ib.q)
+    end
+    o = outers[i]
+    outer = ColumnBoundary{T}(o.T_env, o.h, o.q + c[i])
+    Fo[i], Fi, Tf_new, skin_increment[i] = _advance_column!(f, outer, dt)
+    f.T_skin = Tf_new
+    f.G = Fo[i]
+    f.Q_interior = -Fi
+    return nothing
+end
+
 function _step_lagged!(u::UrbanFacetScene{T}, forcing, lw, Qsw, dt; kwargs...) where {T}
     fs = u.facets
     out = Vector{SurfaceFluxes{T}}(undef, length(fs))
-    for (i, f) in enumerate(fs)
-        Ts = f.T_skin
-        fi = _facet_forcing(_air(forcing, i), Qsw[i], lw.incident[i])
-        out[i] = step_surface!(f, fi, dt; kwargs...)
-        u.lw_net[i] = out[i].Rn - u.sw_absorbed[i]
-        # frozen incident longwave: the applied net gain is ε Qⁿ - E
-        u.lw_emission[i] = f.emissivity * lw.incident[i] - u.lw_net[i]
-        u.skin_increment[i] = (u.lw_emission[i] - lw.emitted[i]) /
-                              (4 * f.emissivity * T(STEFAN_BOLTZMANN) * Ts^3)
-    end
+    # one work item per facet (KA-m, #301): each steps its own column
+    foreach_column!(backend(u.lw_net), _lagged_facet!, (1:length(fs),), u, fs, forcing, lw, Qsw,
+                    dt, out, NamedTuple(kwargs); weight = FACET_WEIGHT)
     _sync_scene_temperatures!(u)
     return out
+end
+
+function _lagged_facet!(i, u::UrbanFacetScene{T}, fs, forcing, lw, Qsw, dt, out, kw) where {T}
+    f = fs[i]
+    Ts = f.T_skin
+    fi = _facet_forcing(_air(forcing, i), Qsw[i], lw.incident[i])
+    out[i] = step_surface!(f, fi, dt; kw...)
+    u.lw_net[i] = out[i].Rn - u.sw_absorbed[i]
+    # frozen incident longwave: the applied net gain is ε Qⁿ - E
+    u.lw_emission[i] = f.emissivity * lw.incident[i] - u.lw_net[i]
+    u.skin_increment[i] = (u.lw_emission[i] - lw.emitted[i]) /
+                          (4 * f.emissivity * T(STEFAN_BOLTZMANN) * Ts^3)
+    return nothing
 end
 
 """

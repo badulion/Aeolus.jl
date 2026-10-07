@@ -4,7 +4,7 @@
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
 # Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
-# nested, fft, fv, pcg, steps, radiation, hooks) and writes
+# nested, fft, fv, pcg, steps, radiation, hooks, columns) and writes
 # one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
 # the raw bits (Float64 → UInt64), so two processes agree iff the results
 # are bit-identical. MODE is `default` (CPUBackend(): threaded when N > 1)
@@ -32,6 +32,12 @@
 #               two-way with Orlanski outflow faces (16³ parent, 16³
 #               child at r = 2, 3 steps) and an anelastic two-way pair
 #               (4 steps): every field of parent and child.
+#   columns     (KA-m, #301) the column-physics kernels on seeded inputs, every
+#               launch threaded (threshold 0): fog adjustment, Kessler (both
+#               sedimentation schemes), dew exchange, dry deposition, the
+#               Berlin aq_chem emissions, facet
+#               scenes (implicit, direct, lagged), the dynamic roughness, and
+#               the partials of a foreach_column! launch;
 #   fft         (KA-h, #298) one solve of every spectral pressure solver —
 #               FFT, CosineFFT for all 8 axis-BC combinations, Stretched for
 #               the 4 lateral pairs — at 64×64×32 and 128×128×64, with FFTW
@@ -69,6 +75,7 @@ using Aeolus.Fields: set!, interior_view, Field
 using Aeolus.Grids: interior
 using Random: Xoshiro, randn, rand
 using Printf
+import LinearAlgebra
 
 const OUT = ARGS[1]
 const SECTIONS = split(ARGS[2], ',')
@@ -404,6 +411,96 @@ function section_pcg()
 end
 
 # --------------------------------------------------------------------------
+# KA-m (#301): the column-physics kernels on seeded inputs, every launch on
+# the threaded path in the default mode (threshold 0), serial in `serial`
+function section_columns()
+    b = MODE == "serial" ? BACKEND : CPUBackend(threshold = 0)
+    MT = Aeolus.MoistThermodynamics
+    # fog adjustment (64×64×32): dry, near-saturated, supersaturated and foggy cells
+    n = (64, 64, 32); rng = Xoshiro(301)
+    p = collect(range(1.0e5, 9.0e4, length = n[3]))
+    Π = [MT.exner_function(pk, MT.PhasePartition(0.0)) for pk in p]
+    θ = 285 .+ 6 .* rand(rng, n...)
+    qs = [MT.saturation_specific_humidity(θ[i, j, k] * Π[k], p[k]) for i in 1:n[1], j in 1:n[2], k in 1:n[3]]
+    qv = qs .* (0.85 .+ 0.2 .* rand(rng, n...))
+    ql = ifelse.(rand(rng, n...) .< 0.2, 2e-4 .* rand(rng, n...), 0.0)
+    tot = fog_adjust!(θ, qv, ql, p, 2.0; backend = b)
+    record!("columns/fog.fields", vcat(vec(θ), vec(qv), vec(ql))); record!("columns/fog.total", tot)
+    # Kessler: conversion per cell, both sedimentation schemes per column
+    mesh = RegularGrid(; size = (48, 40, 32), extent = (2400.0, 2000.0, 1600.0), halo = (2, 2, 2))
+    I3 = interior(mesh)
+    for Vt in (:spectrum, 3.0)
+        f = [Field(mesh) for _ in 1:3]
+        f[1].data .= 0.01
+        f[2].data[I3...] .= ifelse.(rand(Xoshiro(2), 48, 40, 32) .< 0.3, 2e-3 .* rand(Xoshiro(3), 48, 40, 32), 0.0)
+        f[3].data[I3...] .= ifelse.(rand(Xoshiro(4), 48, 40, 32) .< 0.2, 1e-3 .* rand(Xoshiro(5), 48, 40, 32), 0.0)
+        apply_kessler_step!(f..., 20.0; Vt = Vt, ρ_air = collect(range(1.2, 0.95, length = 32)), backend = b)
+        record!("columns/kessler[$Vt]", vcat(vec(f[2].data), vec(f[3].data)))
+    end
+    # dew exchange and dry deposition (128×96 columns)
+    Ts = 280 .+ 8 .* rand(Xoshiro(6), 128, 96)
+    q = [MT.saturation_specific_humidity(T, 1.0e5) * (0.9 + 0.2r) for (T, r) in
+         zip(282 .+ 4 .* rand(Xoshiro(7), 128, 96), rand(Xoshiro(8), 128, 96))]
+    d = ifelse.(rand(Xoshiro(9), 128, 96) .< 0.5, 1e-3 .* rand(Xoshiro(10), 128, 96), 0.0)
+    H = with_backend(() -> dew_exchange!(q, d, Ts, 1.0e5, 60.0; dz = 4.0, ρ = 1.2), b)
+    record!("columns/dew", vcat(vec(q), vec(d), vec(H)))
+    c = 10 .+ rand(Xoshiro(11), 128, 96, 8)
+    r = Aeolus.Chemistry.apply_dry_deposition!(c, 0.01 .* rand(Xoshiro(12), 128, 96), 30.0; dz = 2.0,
+                                               k = rand(Xoshiro(13), 1:8, 128, 96), backend = b)
+    record!("columns/dry_deposition", vcat(vec(c), r))
+    # aq_chem emissions: at one thread the site's own serial loop (only the
+    # emitted terms added), threaded the column_sum launch (a 3-tuple per
+    # column, zeros included); equal hashes across the counts mean the two
+    # paths give the same fields and totals
+    ac = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing))
+    aq = BC.find_coupling(ac, :aq_chem)
+    BC._aq_sun!(aq, ac)
+    with_backend(() -> BC._aq_emit!(aq, ac, 2.0), b)
+    record!("columns/aq_emit", vcat(vec(BC._aq_sp(aq, :NO)), vec(BC._aq_sp(aq, :NO2)), vec(BC._aq_sp(aq, :VOC)),
+                                    [aq.emitted[s] for s in (:NO, :NO2, :VOC)]))
+    # facet scenes: implicit (iterative, direct) and lagged. BLAS on one
+    # thread in every process: the scene's longwave response is an LU solve
+    # whose bits depend on the BLAS thread count, and init_threads! leaves
+    # BLAS threaded at -t 1 (it pins BLAS only when Julia runs threaded), so
+    # the -t 1 reference would differ from -t 4 for a reason that is not a
+    # Julia-thread one (measured: response hash 3b3d… with 12 BLAS threads,
+    # 517a… with 1, at -t 1 and -t 4 alike)
+    nblas = LinearAlgebra.BLAS.get_num_threads()
+    LinearAlgebra.BLAS.set_num_threads(1)
+    hm = zeros(10, 8); hm[3:4, :] .= 12; hm[7, 2:6] .= 20
+    sc = Aeolus.Radiosity.build_scene(hm, 4.0, 4.0; wall_subdivisions = 2)
+    vf = Aeolus.Radiosity.view_factors(sc)
+    air = SurfaceForcing(sw_down = 500.0, lw_down = 330.0, T_air = 295.0, U = 3.0, q_air = 0.008)
+    for (lab, kw) in (("implicit", (;)), ("direct", (solver = :direct,)), ("lagged", (coupling = :lagged,)))
+        u = UrbanFacetScene(sc, vf; T = 290.0, options = f -> (T_interior = 293.0,))
+        fl = with_backend(b) do
+            local fl
+            for _ in 1:3; fl = step_urban_facets!(u, air, 600.0; kw...); end
+            fl
+        end
+        record!("columns/facets[$lab]", vcat(facet_temperatures(u), [x.H for x in fl],
+                                              reduce(vcat, [x.column.T for x in u.facets])))
+    end
+    LinearAlgebra.BLAS.set_num_threads(nblas)
+    # dynamic roughness (masked)
+    WM = Aeolus.WallModels
+    Nx, Ny, rr = 64, 16, 4
+    dx = 2π / Nx
+    xf = [(i - 0.5) * dx / rr for i in 1:Nx*rr]
+    hf = [0.02 * sin(3x) + 0.006 * sin(10x) + 0.004 * cos(2y) for x in xf, y in xf[1:Ny*rr]]
+    st = WM.subfilter_height(hf, rr; dx = dx, dy = dx, filter = :box)
+    uc = 3 .+ 0.3 .* randn(Xoshiro(14), Nx, Ny); vc = 0.3 .* randn(Xoshiro(15), Nx, Ny)
+    dr = WM.DynamicRoughness(st; z0_floor = 1e-5, C_d = 0.3, mask = rand(Xoshiro(16), Nx, Ny) .< 0.85)
+    with_backend(() -> WM.update_dynamic_roughness!(dr, uc, vc, 0.05), b)
+    record!("columns/dynamic_roughness", vcat(dr.α, vec(dr.z0)))
+    # the primitive: partials of a column launch and their fold
+    A = randn(Xoshiro(17), 96, 80, 24)
+    P = foreach_column!(b, (i, j, A) -> (s = 0.0; @inbounds(for k in axes(A, 3); s += A[i, j, k]; end);
+                                         (s, abs(s))), (1:96, 1:80), A; partials = zeros(96 * 80, 2))
+    record!("columns/foreach_column!", vcat(vec(P), column_sums(P)))
+end
+
+# --------------------------------------------------------------------------
 function section_fv()
     FVK = Aeolus.Operators.FiniteVolume
     SG = Aeolus.StretchedGrids
@@ -697,6 +794,7 @@ for s in SECTIONS
     s == "pcg"        ? section_pcg() :
     s == "steps"      ? section_steps() :
     s == "radiation"  ? section_radiation() :
+    s == "columns"    ? section_columns() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)
 end
