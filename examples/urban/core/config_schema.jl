@@ -69,14 +69,14 @@ const CASE_FIELDS = (
     sponge_frac = ("dynamics.sponge_frac",), θ_top = ("dynamics.theta_top",),
     lateral = ("boundaries.lateral",), outflow = ("boundaries.outflow",),
     boundary_frame = ("boundaries.boundary_frame",), θ_relaxation = ("boundaries.theta_relaxation",),
-    sounding = ("initial.sounding",), θ_surface = ("initial.theta_surface",),
+    sounding = ("initial.sounding",), dynamic = ("initial.dynamic",), θ_surface = ("initial.theta_surface",),
     θ_inversion_z = ("initial.theta_inversion_z",), θ_lapse = ("initial.theta_lapse",),
     u0 = ("initial.u0",), qv0 = ("initial.qv0",), qv_scale = ("initial.qv_scale",),
     Ts0 = ("initial.ts0",), Ts_water_offset = ("initial.ts_water_offset",),
     T_soil0 = ("initial.t_soil0",), p_surface = ("initial.p_surface",),
     physics = ("physics.*",), options = ("physics.options",),
     canopy_top = ("ledger.canopy_top",),
-    output_path = ("output.path", "output.netcdf"),
+    output_path = ("output.path", "output.netcdf"), child_boundaries = ("output.child_boundaries",),
     backend = ("run.backend", "run.serial"))
 
 """
@@ -256,7 +256,7 @@ default: `coupling => option => f(x, path) -> (ok, value, message)`.
 
   * `nesting.parent`: the parent's own schema ([`parent_section`](@ref));
   * `nesting.z_anterp`: `"canopy"` or a height in m;
-  * `nesting.parent_driver`: `"aeolus"` or `"profile"` (an
+  * `nesting.parent_driver`: `"aeolus"`, `"profile"` or `"offline"` (an
     `AbstractBoundaryData` only from Julia);
   * `surface_exchange.z0m`: a table by surface class or `"dynamic"`;
   * `sgs_mlsgs.fn`: `"none"` (a model function only from Julia).
@@ -266,8 +266,8 @@ const OPTION_FORMS = Dict{Symbol,Dict{Symbol,Function}}(
         :parent => (x, path) -> parent_value(x, path),
         :z_anterp => (x, path) -> x == "canopy" ? (true, :canopy, "") : _isnum(x) ? (true, Float64(x), "") :
                                  (false, nothing, "$path: expected \"canopy\" or a height in m, got $(_raw(x))"),
-        :parent_driver => (x, path) -> x in ("aeolus", "profile") ? (true, Symbol(x), "") :
-                                 (false, nothing, "$path: expected \"aeolus\" or \"profile\", got $(_raw(x))")),
+        :parent_driver => (x, path) -> x in ("aeolus", "profile", "offline") ? (true, Symbol(x), "") :
+                                 (false, nothing, "$path: expected \"aeolus\", \"profile\" or \"offline\", got $(_raw(x))")),
     :surface_exchange => Dict{Symbol,Function}(
         :z0m => (x, path) -> x == "dynamic" ? (true, :dynamic, "") :
                              option_value(default_options(SurfaceExchangeMOST).z0m, x, path)),
@@ -662,6 +662,10 @@ function Config.driver_sections(::BerlinDriver)
     ini = section("initial"; doc = "The initial state: the sounding, or the idealised profile.") do s
         option!(s, "sounding", Optional{Path}; default = joinpath(DATA_DIR, "lindenberg_10393_20190629.csv"),
                 doc = "radiosonde CSV of the initial θ(z), qv(z) and surface pressure; \"none\": the idealised profile below")
+        option!(s, "dynamic", Optional{Path};
+                doc = "the dynamic driver (CFG-g #362, `aeolus preprocess dynamic`): a sounding driver (--from-sounding), " *
+                      "used instead of sounding; or, with physics.options.nesting.parent_driver = \"offline\", the " *
+                      "parent-made driver of the nest faces (--from-parent); \"none\": no driver")
         option!(s, "theta_surface", Float64; default = 293.0, range = (0, Inf), open_lower = true, units = "K",
                 doc = "idealised: θ at the ground")
         option!(s, "theta_inversion_z", Float64; default = 100.0, range = (0, Inf), units = "m",
@@ -688,6 +692,10 @@ function Config.driver_sections(::BerlinDriver)
     out = section("output") do s
         option!(s, "netcdf", Optional{String}; default = "alexanderplatz.nc",
                 doc = "file name of the NetCDF-4 output in [output] path (the run folder's output/ under aeolus run, else examples/urban/output/); \"none\": no NetCDF")
+        option!(s, "child_boundaries", Optional{Path}; input = false,
+                doc = "with the online nest: write the child's boundary slabs at every parent step, the 3-D initial wind " *
+                      "and the parent's mean profiles to this dynamic driver (CFG-g #362, `aeolus preprocess dynamic " *
+                      "--from-parent`; the file of an offline child); \"none\": not written")
     end
     sp = slot_providers()
     phys = section("physics"; doc = "Which couplings run: a provider per exclusive slot, on/off per addon.") do s
@@ -804,11 +812,11 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
                       dyn.nu, dyn.theta0, dyn.g, dyn.f_coriolis, dyn.c_s, dyn.pr_t, dyn.sgs_stability,
                       dyn.sponge_alpha_max, dyn.sponge_frac, dyn.theta_top,
                       b.lateral, b.outflow, b.boundary_frame, b.theta_relaxation,
-                      ini.sounding, ini.theta_surface, ini.theta_inversion_z, ini.theta_lapse, ini.u0,
+                      ini.sounding, ini.dynamic, ini.theta_surface, ini.theta_inversion_z, ini.theta_lapse, ini.u0,
                       ini.qv0, ini.qv_scale, ini.ts0, ini.ts_water_offset, ini.t_soil0, ini.p_surface,
                       berlin_physics(cfg), options,
                       cfg.ledger.canopy_top,
-                      out.netcdf === nothing ? nothing : joinpath(dir, out.netcdf),
+                      out.netcdf === nothing ? nothing : joinpath(dir, out.netcdf), out.child_boundaries,
                       CPUBackend(; serial = r.serial))
 end
 
@@ -839,6 +847,13 @@ function Config.build(::BerlinDriver, cfg::RunConfig)
         throw(ConfigError(key, "the static driver $f does not exist; generate it with\n" *
                                "  julia --project -m Aeolus preprocess static $src\n" *
                                "or set it to \"none\" to preprocess the source in memory"))
+    end
+    if cc.dynamic !== nothing && !isfile(cc.dynamic)
+        how = nest_offline(cc) ? "--from-parent <the online config, with [output] child_boundaries = this file>" :
+                                 "--from-sounding $src"
+        throw(ConfigError("initial.dynamic", "the dynamic driver $(cc.dynamic) does not exist; generate it with\n" *
+                                             "  julia --project -m Aeolus preprocess dynamic $how\n" *
+                                             "or set it to \"none\" to read [initial] sounding in memory"))
     end
     return BerlinRun(cfg, nothing)
 end
@@ -874,6 +889,61 @@ function Config.preprocess_static(::BerlinDriver, cfg::RunConfig; out = nothing,
     return files
 end
 
+"""
+    preprocess_dynamic(::BerlinDriver, cfg; from, out = nothing, child = nothing) -> Vector{String}
+
+`aeolus preprocess dynamic --from-sounding berlin_<s>.toml`: write the
+sounding driver (`[initial] dynamic`, or `out`) of the case from
+`[initial] sounding` ([`case_dynamic_inputs`](@ref): the height-time
+tables, times since the case start, and the ground pressure), the CSV
+hashed; for an open, non-nested case (`boundaries.lateral = "open"`,
+`physics.nesting = false`) also the steady boundary planes of its
+[`case_boundary_data`](@ref) (one `time_bc` record). `--from-parent`: run the online nested case of `cfg` for its
+`[clock] nsteps` with the child's boundary slabs recorded at every parent
+step (`[output] child_boundaries`, or `out`): the parent-made driver an
+offline child (`parent_driver = "offline"`, `[initial] dynamic` = this
+file) replays. The Berlin parent is a section of the child's config
+(`[physics.options.nesting.parent]`), so there is no separate `child`.
+"""
+function Config.preprocess_dynamic(::BerlinDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing)
+    cc = CaseConfig(cfg)
+    mesh = RegularGrid(; size = cc.size, extent = cc.extent, halo = cc.halo)
+    if from === :sounding
+        path = out !== nothing ? abspath(out) : cc.dynamic
+        path === nothing && throw(ArgumentError("[initial] dynamic is \"none\": pass --out file.nc"))
+        cc.sounding === nothing && throw(ArgumentError("[initial] sounding is \"none\": there is no sounding to preprocess"))
+        ox, oy = anchor_xy(cc, mesh)
+        d = case_dynamic_inputs(cc)
+        kw = (; source = cc.sounding, preprocessor = "aeolus preprocess dynamic --from-sounding",
+              origin_lat = cc.lat0, origin_lon = cc.lon0, origin_x = ox, origin_y = oy)
+        if !case_nested(cc) && cc.lateral === :open
+            # the open case: also its steady planes, the ProfileBoundaryData of
+            # case_boundary_data on the faces (from the CSV in memory: the file
+            # being written is not read)
+            cc0 = deepcopy(cc); cc0.dynamic = nothing
+            st = only(open_boundary_states(case_boundary_conditions(cc0, mesh).bcs))
+            Aeolus.BoundaryConditions.boundary_values!(st.planes, st.data, 0.0)
+            record_boundary!(NestBoundaryRecorder(path, st.planes, mesh; inputs = d, kw...), 0.0, NaN,
+                             plane_snapshot(st.planes, mesh))
+        else
+            write_dynamic_driver(path, d; dx = mesh.dx, dy = mesh.dy, kw...)
+        end
+        return [path]
+    end
+    from === :parent || throw(ArgumentError("preprocess_dynamic: from = :$from; use :sounding or :parent"))
+    child === nothing || throw(ArgumentError("the Berlin nest's parent is the [physics.options.nesting.parent] " *
+                                             "section of the child's config: give the child config alone, without --child"))
+    case_nested(cc) || throw(ArgumentError("--from-parent: the case is not nested (physics.nesting = false)"))
+    nest_offline(cc) && throw(ArgumentError("--from-parent: the case replays its parent (parent_driver = \"offline\"); " *
+                                            "give the online config"))
+    path = out !== nothing ? abspath(out) : cc.child_boundaries
+    path === nothing && throw(ArgumentError("[output] child_boundaries is \"none\": pass --out file.nc"))
+    cc.child_boundaries = path
+    cc.output_path = nothing
+    run_case!(build_case(cc))
+    return [path]
+end
+
 function Aeolus.Simulations.run!(::BerlinDriver, r::BerlinRun, rf::RunFolder, ck::CheckpointSchedule;
                                  callback = nothing)
     rf.session == 1 || error("the Berlin case cannot resume a run (no checkpoint/restart yet)")
@@ -882,9 +952,12 @@ function Aeolus.Simulations.run!(::BerlinDriver, r::BerlinRun, rf::RunFolder, ck
     r.case = case
     t_end = case.sim.t + cc.nsteps * cc.dt
     # the case's diagnostics: the core's, the frame's, the ledgers, the stage
-    # timing and every coupling's (core/diagnostics.jl, #338)
+    # timing and every coupling's (core/diagnostics.jl, #338); explicit rows,
+    # one per case step (a case step may be several core steps; the step
+    # record sums them, #336)
     with_monitor(case.sim; run = rf, t_end = t_end, cadence = r.cfg.logging.diagnostics_cadence,
-                 diagnostics = case_diagnostics(case), profiles = case_profiles(case)) do m
+                 diagnostics = case_diagnostics(case), profiles = case_profiles(case),
+                 attach = false) do m
         run_case!(case; monitor = m, callback = callback === nothing ? nothing : (c, n) -> callback(r, n))
         check_blowup!(m.guard, case.sim; step = case.clock.n, force = true)
     end
