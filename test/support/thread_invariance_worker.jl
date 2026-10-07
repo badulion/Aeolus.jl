@@ -3,7 +3,7 @@
 #
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
-# Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship, nested, fft, fv)
+# Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship, nested, fft, fv, sgs)
 # and writes
 # one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
 # the raw bits (Float64 → UInt64), so two processes agree iff the results
@@ -43,6 +43,16 @@
 #               item; its per-level sums, also at 128×128×32, where a 3-D
 #               launch would race); and 3 steps of a 64×64×32
 #               Smagorinsky LES on the stretched grid (every field).
+#   sgs         (KA-l, #304) every SGS closure on a seeded 64×64×32 LES
+#               state: compute_sgs! of the static, dynamic (plane, local,
+#               masked), Lagrangian (scale-invariant, scale-dependent,
+#               masked), AMD (+ its scalar diffusivity), Vreman, σ and
+#               stability-corrected closures (every coefficient field);
+#               3 commits of the Lagrangian memories and of the TKE and
+#               Reynolds-stress closures (memories, coefficients, budget
+#               statistics); the dual strain, the box filter (masked), the
+#               TKE / RSM initialisations; and 3 steps of an LES with the
+#               dynamic closure and with the TKE closure (every field).
 
 ENV["AEOLUS_FFTW_PLANNER"] = "estimate"    # deterministic plans (#245)
 using Aeolus
@@ -423,6 +433,78 @@ function section_fv()
 end
 
 # --------------------------------------------------------------------------
+function section_sgs()
+    g = RegularGrid(; size = (64, 64, 32), extent = (640.0, 640.0, 320.0), halo = (3, 3, 3))
+    bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    rng = Xoshiro(304)
+    function mksim()
+        sim = BoussinesqSimulation(g; ν = 1e-3, θ₀ = 300.0, f_coriolis = 1e-4, bcs = bcs)
+        r = Xoshiro(3040)
+        for f in (sim.u, sim.v, sim.w)
+            interior_view(f) .= 0.5 .* randn(r, size(interior_view(f)))
+        end
+        set!(sim.θ, (x, y, z) -> 300 + 0.003z)
+        interior_view(sim.θ) .+= 0.05 .* randn(r, size(interior_view(sim.θ)))
+        for f in (sim.u, sim.v, sim.w)
+            fill_halos!(f, sim.bcs)
+        end
+        fill_halos!(sim.θ, sim.θ_bcs)
+        return sim
+    end
+    mask = falses(size(Field(Aeolus.Grids.CellCenter(), g).data))
+    mask[g.Hx+20:g.Hx+30, g.Hy+20:g.Hy+40, g.Hz+1:g.Hz+12] .= true
+    mask[g.Hx+45:g.Hx+55, g.Hy+5:g.Hy+15, g.Hz+1:g.Hz+20] .= true
+    recf(name, f) = record!("sgs/$name", f isa Field ? f.data : f)
+    sim = mksim()
+    for (n, c) in ("static" => StaticSmagorinsky(0.17), "dynamic plane" => DynamicSmagorinsky(g),
+                   "dynamic local" => DynamicSmagorinsky(g; averaging = :local),
+                   "dynamic masked" => DynamicSmagorinsky(g; mask = mask),
+                   "AMD" => AMDClosure(), "Vreman" => VremanClosure(), "sigma" => SigmaModel(),
+                   "stability smag" => StabilityCorrected(StaticSmagorinsky(0.17), g),
+                   "stability dynamic" => StabilityCorrected(DynamicSmagorinsky(g), g))
+        f = compute_sgs!(c, sim)
+        recf("$n.νh", f.νh); recf("$n.νv", f.νv); recf("$n.κh", f.κh); recf("$n.κv", f.κv)
+        c isa AMDClosure && recf("$n.κ(θ as tracer)", sgs_tracer_diffusivity!(Field(Aeolus.Grids.CellCenter(), g),
+                                                                             c, f, sim, sim.θ))
+    end
+    for (n, c) in ("lagrangian" => LagrangianDynamicSmagorinsky(g),
+                   "LASD" => LagrangianDynamicSmagorinsky(g; scale_dependent = true),
+                   "lagrangian masked" => LagrangianDynamicSmagorinsky(g; mask = mask))
+        for _ in 1:3
+            advance_sgs!(c, sim, 0.05)
+        end
+        f = compute_sgs!(c, sim)
+        recf("$n.νt", f.νh); recf("$n.I_LM", c.I_LM); recf("$n.I_MM", c.I_MM)
+        c.scale_dependent && (recf("$n.I_QN", c.I_QN); recf("$n.I_NN", c.I_NN); recf("$n.beta", c.beta))
+    end
+    for (n, c) in ("TKE" => TKEClosure(g), "TKE masked exact" => TKEClosure(g; mask = mask, dissipation = :exact))
+        initialize_tke!(c, sim; e_min = 1e-4); recf("$n.init", c.e)
+        for _ in 1:3
+            advance_sgs!(c, sim, 0.05)
+        end
+        f = compute_sgs!(c, sim)
+        recf("$n.e", c.e); recf("$n.νt", f.νh); recf("$n.κt", f.κh); recf("$n.stats", c.stats)
+    end
+    rsm = ReynoldsStressClosure(g); initialize_reynolds_stress!(rsm, sim; e_min = 1e-4)
+    recf("RSM.init", vcat(map(f -> vec(f.data), rsm.τ)...))
+    for _ in 1:3
+        advance_sgs!(rsm, sim, 0.05)
+    end
+    f = compute_sgs!(rsm, sim)
+    recf("RSM.τ", vcat(map(f -> vec(f.data), rsm.τ)...)); recf("RSM.νt", f.νh); recf("RSM.stats", rsm.stats)
+    D = Field(Aeolus.Grids.CellCenter(), g); dual_strain!(D, sim.u, sim.v, sim.w, sim.bcs); recf("dual strain", D)
+    o = Field(Aeolus.Grids.CellCenter(), g); box_filter!(o, sim.θ, 3; mask = mask); recf("box filter masked", o)
+    # 3 steps of an LES with the dynamic closure, and with the TKE closure
+    for (n, mk) in ("dynamic" => () -> DynamicSmagorinsky(g), "TKE" => () -> TKEClosure(g; e0 = 1e-3))
+        s2 = mksim(); c = mk()
+        for _ in 1:3
+            step!(s2, 0.05; sgs = c)
+        end
+        record_sim!("sgs/LES $n", s2)
+    end
+end
+
+# --------------------------------------------------------------------------
 init_threads!(BACKEND)
 t0 = time()
 for s in SECTIONS
@@ -435,6 +517,7 @@ for s in SECTIONS
     s == "nested"     ? section_nested() :
     s == "fft"        ? section_fft() :
     s == "fv"         ? section_fv() :
+    s == "sgs"        ? section_sgs() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)
 end
