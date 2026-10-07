@@ -44,3 +44,13 @@ end_time = 300.0
 
 [logging]
 diagnostics_cadence = 60.0
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[16,16,16]",
+    "stepper.end_time=\"none\"",
+    "stepper.nsteps=10",
+]

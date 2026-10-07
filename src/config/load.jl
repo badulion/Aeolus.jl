@@ -81,7 +81,7 @@ end
 
 function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema; sweep::Symbol = :error)
     ovr, oprobs = _parse_overrides(overrides)
-    files = String[leaf]; dicts = Dict{String,Any}[deepcopy(leafdict)]
+    files = String[leaf]; dicts = Dict{String,Any}[_drop_test!(deepcopy(leafdict), leaf)]
     seen = Set{String}([_real(leaf)])
     while true
         cur = files[end]; d = dicts[end]
@@ -98,7 +98,7 @@ function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema; sw
         r in seen && throw(ConfigError("extends", "extends cycle: " * join(vcat(files, next), " -> ");
                                        file = cur))
         push!(seen, r)
-        push!(files, next); push!(dicts, _parse_toml_file(next))
+        push!(files, next); push!(dicts, _drop_test!(_parse_toml_file(next), next))
     end
     raw = Dict{String,Any}(); origins = Dict{String,String}()
     for i in length(files):-1:1                     # root first, the leaf last
@@ -117,6 +117,62 @@ function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema; sw
 end
 
 _real(p) = ispath(p) ? realpath(p) : abspath(p)
+
+# ---------------------------------------------------------------------------
+# the [test] table (CFG-i, #364)
+# ---------------------------------------------------------------------------
+
+"""
+    config_test_table(path) -> Union{Nothing, NamedTuple}
+
+The `[test]` table of the config file `path` (the file's own, not one it
+`extends`), or `nothing` if it has none:
+
+```toml
+[test]
+overrides = ["grid.size=[16,16,16]", "stepper.nsteps=4"]   # the smoke size
+member = "lasd_32x32x32"                                   # a sweep: the member replayed (default: the first)
+```
+
+`overrides` are `dotted.key=<TOML value>` strings that make the file a
+smoke run; the round-trip coverage suite (`test/config_roundtrip.jl`)
+runs every shipped config with them and replays it from its `run.toml`.
+The loader ignores `[test]` (it checks only its shape): it is not part
+of the resolved config, of `run.toml` or of the config hash, and a file's
+`[test]` is not inherited through `extends`.
+"""
+function config_test_table(path::AbstractString)
+    d = _parse_toml_file(abspath(path))
+    t = get(d, "test", nothing)
+    t === nothing && return nothing
+    _check_test_table(t, abspath(path))
+    m = get(t, "member", nothing)
+    return (overrides = String[get(t, "overrides", String[])...], member = m isa Integer ? Int(m) : m)
+end
+
+function _check_test_table(t, file)
+    t isa AbstractDict || throw(ConfigError("test", "expected a table [test], got $(_show_raw(t))"; file = file))
+    probs = ConfigProblem[]
+    for k in sort!(collect(keys(t)))
+        k in ("overrides", "member") || push!(probs, ConfigProblem("test.$k", file,
+            "unknown key in [test] (keys: overrides, member)" * _suggest(k, ["overrides", "member"])))
+    end
+    o = get(t, "overrides", String[])
+    (o isa AbstractVector && all(x -> x isa AbstractString, o)) ||
+        push!(probs, ConfigProblem("test.overrides", file, "expected an array of \"dotted.key=<TOML value>\" strings, got $(_show_raw(o))"))
+    m = get(t, "member", nothing)
+    (m === nothing || m isa AbstractString || (m isa Integer && !(m isa Bool) && m >= 1)) ||
+        push!(probs, ConfigProblem("test.member", file, "expected a member label (a string) or index (≥ 1), got $(_show_raw(m))"))
+    isempty(probs) || throw(ConfigError(_sorted(probs)))
+    return nothing
+end
+
+"Remove the `[test]` table of one file of an extends chain (after checking its shape)."
+function _drop_test!(d::AbstractDict, file)
+    t = pop!(d, "test", nothing)
+    t === nothing || _check_test_table(t, file)
+    return d
+end
 
 "The driver whose config directory `extends` searches: the overrides', else the child-most file's."
 function _driver_hint(ovr, dicts, schema)

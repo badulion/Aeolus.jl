@@ -47,3 +47,14 @@ require_checks = true
 [checkpoint]
 every_seconds = 1800.0          # an interrupted run resumes with --resume <run folder>
 keep = 2
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.n=32",
+    "apriori.widths=[4,8]",
+    "apriori.require_checks=false",
+    "stepper.nsteps=10",
+]

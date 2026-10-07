@@ -25,3 +25,14 @@ cfl = 0.5
 
 [sweep]
 axis = [ { key = "sgs.closure", values = ["dynamic", "smagorinsky", "none"] } ]
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.n=16",
+    "benchmark.seeds=[1]",
+    "benchmark.spinup=1",
+]
+member = "smagorinsky"

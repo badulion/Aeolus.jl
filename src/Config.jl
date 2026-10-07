@@ -50,7 +50,7 @@ export RunConfig, ConfigSection, ConfigError, ConfigProblem, load_run_config, wi
        register_preprocessor!, option_reference, reference_sections, undocumented_keys, reference_option,
        write_results, no_checkpoints,
        kwdef_section, kwdef_value, field_key, selected_case_sections,
-       SweepMember, sweep_members, load_sweep, run_configs
+       SweepMember, sweep_members, load_sweep, run_configs, config_test_table
 
 include("config/schema.jl")
 include("config/load.jl")
