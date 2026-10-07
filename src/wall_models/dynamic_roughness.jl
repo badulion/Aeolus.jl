@@ -377,17 +377,21 @@ end
 # F(α) at one α: per column (one work item each), summed in column-major
 # order (the old loop's), so thread-invariant and the same bits.
 function _residual(dr::DynamicRoughness{T}, α, A1, A2, R1, R2, n, h) where {T}
+    s = dr.stats
     W = column_sum(Backends.backend(A1), _residual_column, (axes(A1, 1), axes(A1, 2)),
-                   dr.mask, dr.z0_floor, dr.stats, A1, A2, h, α; weight = 8)
+                   dr.mask, dr.z0_floor, s.σ2, s.σ2t, A1, A2, h, α; weight = 8)
     return W / n + (R2 - R1)
 end
 
-@inline function _residual_column(i, j, mask, z0f, s, A1::AbstractArray{T}, A2, h, α) where {T}
-    I = CartesianIndex(i, j)
+# The arrays are passed themselves (not the statistics struct) and indexed
+# linearly, as the old `eachindex` loop did: the column body is then as
+# cheap as one iteration of that loop.
+@inline function _residual_column(i, j, mask, z0f, σ2, σ2t, A1::AbstractArray{T}, A2, h, α) where {T}
+    I = (j - 1) * size(A1, 1) + i
     _in(mask, I) || return zero(T)
     z = T(_hval(h, I))
-    return @inbounds A2[I] / log(z / _dyn_z0(z0f[I], α, s.σ2t[I]))^2 -
-                     A1[I] / log(z / _dyn_z0(z0f[I], α, s.σ2[I]))^2
+    return @inbounds A2[I] / log(z / _dyn_z0(z0f[I], α, σ2t[I]))^2 -
+                     A1[I] / log(z / _dyn_z0(z0f[I], α, σ2[I]))^2
 end
 
 # Test-filtered column velocities (the filter of the statistics).
