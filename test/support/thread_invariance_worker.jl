@@ -373,6 +373,13 @@ function section_fft()
             push!(solvers, "stretched($bx,$by)" =>
                   (smesh, Aeolus.StretchedGrids.StretchedPoissonSolver(smesh; bc_x = bx, bc_y = by)))
         end
+        # the direct density-weighted projection of the sound-proof cores (#309)
+        dmesh = RegularGrid(; size = (Nx, Ny, Nz), extent = (1000.0, 1000.0, 3000.0), halo = (3, 3, 3))
+        dref = Aeolus.Anelastic.isothermal_reference(dmesh; T_surf = 300.0)
+        for bx in (:periodic, :neumann)
+            push!(solvers, "direct_weighted($bx)" =>
+                  (dmesh, Aeolus.Anelastic.DirectWeightedPoissonSolver(dmesh, dref; bc_x = bx, bc_y = bx)))
+        end
         for (name, (m, solver)) in solvers
             src = Field(m); src.data .= randn(Xoshiro(298), size(src.data))
             p = Field(m)
