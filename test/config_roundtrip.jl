@@ -139,7 +139,21 @@ end
 
 const RT_PLAN = smoke_plan(RT_FILES)
 
-@testset "round-trip coverage: $(relpath(f, RT_EXAMPLES))" for (f, t) in RT_PLAN
+# Inputs a shipped config reads that are made by a preprocessor, not
+# committed: the ERA5 box's dynamic driver (CFG-h, #363), made once from the
+# committed ERA5 sample the way its header says, and passed as an override.
+const RT_MADE_INPUTS = let dir = mktempdir(), out = joinpath(dir, "lindenberg_era5_dynamic.nc"),
+                           cfg = joinpath(RT_EXAMPLES, "configs", "lindenberg_era5.toml")
+    era5 = [joinpath(RT_EXAMPLES, "data", "era5_lindenberg_20190629_$x.nc") for x in ("pl", "sfc")]
+    rc = redirect_stdout(devnull) do
+        Aeolus.main(["preprocess", "dynamic", "--from-era5", era5..., "--config", cfg, "--out", out])
+    end
+    rc == 0 || error("could not preprocess the ERA5 dynamic driver of $cfg")
+    Dict(cfg => ["initial.dynamic=\"$out\""])
+end
+
+@testset "round-trip coverage: $(relpath(f, RT_EXAMPLES))" for (f, t0) in RT_PLAN
+    t = (overrides = vcat(t0.overrides, get(RT_MADE_INPUTS, f, String[])), member = t0.member)
     # 1. it validates: every member as written, and with its smoke overrides
     runs = load_sweep(f)
     @test !isempty(runs)
