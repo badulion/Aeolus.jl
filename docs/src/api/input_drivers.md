@@ -228,7 +228,10 @@ The dynamic driver (CFG-g, #362): `[initial] dynamic` names it.
   (101841.78 Pa), reference state, the parent's geostrophic wind and z_i
   are bitwise those of master's CSV path (digests captured before the
   switch). With `dynamic = "none"` the CSV is preprocessed in memory by
-  the same functions. The driver's `init_time` must be the case start.
+  the same functions. The driver holds the whole sounding series: a case
+  starting at another time (`[clock] start_h`) reads the same tables with
+  the time axis moved and its ground pressure recomputed at its start,
+  bitwise the CSV read in memory.
   The smoke and winter scenarios keep the idealised profile
   (`sounding = dynamic = "none"`).
 * **Offline nest.** An online run with `[output] child_boundaries =

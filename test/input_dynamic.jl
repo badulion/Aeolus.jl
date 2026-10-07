@@ -10,8 +10,8 @@
 #   * memory stays bounded: over 1000 records at most two are resident
 #     (Base.summarysize of the feed);
 #   * errors: a face missing for an open side, a time_bc that does not
-#     cover the run (both intervals printed), a grid mismatch, a sounding
-#     driver of another start;
+#     cover the run (both intervals printed), a grid mismatch; a case
+#     starting at another time reads the sounding driver bitwise as the CSV;
 #   * the forcing tables of GABLS3 read from its driver are the ForcingTables
 #     built from gabls3_case.csv, bit for bit, and GABLS3 run 50 steps from
 #     the file is bitwise the CSV path (and the pre-#359 digests);
@@ -182,9 +182,16 @@ end
     # a static driver is not a dynamic one
     st = joinpath(BCD.CONFIG_DIR, "input", "berlin_smoke_static.nc")
     @test occursin("aeolus_driver = \"static\", expected \"dynamic\"", errmsg(() -> read_dynamic_driver(st)))
-    # a sounding driver of another start
-    msg = errmsg(() -> BCD.case_sounding(BCD.CaseConfig(:summer; start_h = 8.0)))
-    @test occursin("starts at init_time 2019-06-29T04:00:00Z", msg) && occursin("2019-06-29T06:00:00Z", msg)
+    # a case starting at another time than the sounding driver (08 instead
+    # of 06 CEST): the same series with the axis moved and the ground
+    # pressure at its own start, bitwise the CSV read in memory
+    a = BCD.case_sounding(BCD.CaseConfig(:summer; start_h = 8.0))
+    b = BCD.case_sounding(BCD.CaseConfig(:summer; start_h = 8.0, dynamic = nothing))
+    @test a.inputs.init_time == "2019-06-29T04:00:00Z" && b.inputs.init_time == "2019-06-29T06:00:00Z"
+    @test a.t0 == b.t0 == 6 * 3600.0 && isequal(a.p_surface, b.p_surface) && a.times == b.times
+    @test all(k -> (x = getproperty(a.profiles, k); y = getproperty(b.profiles, k);
+                    x.z == y.z && x.t == y.t && isequal(x.values, y.values)), (:θ, :qv, :u, :v, :p))
+    @test a.p_surface != BCD.case_sounding(BCD.CaseConfig(:summer)).p_surface
     # the parent-made driver offered as the initial state of a case without the offline nest
     msg = errmsg(() -> BCD.case_sounding(BCD.CaseConfig(:summer; dynamic = p)))
     @test occursin("not a sounding driver", msg)

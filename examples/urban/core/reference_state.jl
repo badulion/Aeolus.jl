@@ -106,40 +106,52 @@ height grid `z`, heights above the launch site) on a time axis in seconds
 from 00 UTC of the case date, the case start `t0` on that axis, the
 launch times `times`, the ground pressure `p_surface` and the
 `DynamicInputs` they came from. From the sounding driver `cfg.dynamic`
-(CFG-g, #362; [`initial_driver`](@ref)), whose `init_time` must be the
-case start, or else from the CSV `cfg.sounding` preprocessed in memory
-([`case_dynamic_inputs`](@ref), the same tables value for value);
-`nothing` for the idealised profile. Read once per source and cached.
+(CFG-g, #362; [`initial_driver`](@ref)), or else from the CSV
+`cfg.sounding` preprocessed in memory ([`case_dynamic_inputs`](@ref), the
+same tables value for value); `nothing` for the idealised profile. The
+driver holds the whole sounding series, so a case starting at another
+time than the driver's `init_time` reads the same tables with the time
+axis moved (exact for whole seconds) and its ground pressure
+recomputed at its own start ([`surface_pressure_at`](@ref), as the
+preprocessor does); at the driver's `init_time` it is the stored
+`init_p_surface`. Read once per source and cached.
 """
 function case_sounding(cfg::CaseConfig)
     path = initial_driver(cfg)
     path === nothing && cfg.sounding === nothing && return nothing
     it = case_init_time(cfg)
     src = path === nothing ? string(cfg.sounding, "|", max(SOUNDING_TABLE_TOP, cfg.extent[3]), "|", cfg.elevation) :
-          string(path, "|", isfile(path) ? file_fnv1a64(path) : "")
+          string(path, "|", isfile(path) ? file_fnv1a64(path) : "", "|", cfg.elevation)
     return get!(_SOUNDING_CACHE, string(src, "|", it)) do
         d = path === nothing ? case_dynamic_inputs(cfg) : read_dynamic_driver(path; planes = false)
-        _case_sounding(d, path === nothing ? cfg.sounding : path, it)
+        _case_sounding(d, path === nothing ? cfg.sounding : path, it, cfg.elevation)
     end
 end
 
-function _case_sounding(d::DynamicInputs, src, it)
+_utc(s::AbstractString) = DateTime(rstrip(s, 'Z'))
+
+function _case_sounding(d::DynamicInputs, src, it, elevation)
     get(d.attributes, "dynamic_source", "") == "sounding" ||
         error("$src is not a sounding driver (dynamic_source = $(repr(get(d.attributes, "dynamic_source", "")))): " *
               "[initial] dynamic of a case without the offline nest is the sounding's " *
               "(aeolus preprocess dynamic --from-sounding)")
-    d.init_time == it ||
-        error("the sounding driver $src starts at init_time $(d.init_time), the case at $it " *
-              "([clock] date, start_h, utc_offset); re-run aeolus preprocess dynamic --from-sounding")
+    isempty(d.init_time) && error("the sounding driver $src has no init_time")
     for k in (:profile_theta, :profile_qv, :profile_u, :profile_v, :profile_p)
         haskey(d.tables, k) || error("the sounding driver $src has no ls_$k")
     end
     d.p_surface === nothing && error("the sounding driver $src has no init_p_surface")
+    # the tables' axis: seconds from 00 UTC of the case date
     t0 = init_day_seconds(it)
-    tab(k) = shift_table(d.tables[k], t0)
+    off = Dates.value(_utc(d.init_time) - DateTime(Dates.Date(_utc(it)))) / 1000
+    tab(k) = shift_table(d.tables[k], off)
     θ = tab(:profile_theta)
     P = (θ = θ, qv = tab(:profile_qv), u = tab(:profile_u), v = tab(:profile_v), p = tab(:profile_p), z = θ.z)
-    return (; profiles = P, t0 = t0, times = copy(θ.t), p_surface = d.p_surface, inputs = d)
+    ps = d.p_surface
+    if d.init_time != it                     # another start than the driver's: the pressure at this one
+        haskey(d.attributes, "sounding_elevation") || error("the sounding driver $src has no sounding_elevation")
+        ps = surface_pressure_at(P, t0, Float64(d.attributes["sounding_elevation"]), elevation)
+    end
+    return (; profiles = P, t0 = t0, times = copy(θ.t), p_surface = ps, inputs = d)
 end
 
 """
