@@ -333,9 +333,16 @@ function sgs_coefficients!(f::SGSFields, c::AbstractEddyViscosityClosure, sim)
 end
 
 # out = a ./ d over the whole storage (halos included), as a pointwise launch
-# (KA-l, #304): `x / d` per point, the bits of the broadcast it replaces.
+# (KA-l, #304): `x / d` per point, the bits of the broadcast it replaces. A
+# named body, not range_map! with `Base.Fix2(/, d)`: that form allocated
+# 272 bytes per call (the step_rk3! allocation test of KA-c).
 _divide_storage!(out::AbstractArray{<:Any,3}, a::AbstractArray{<:Any,3}, d) =
-    range_map!(Backends.backend(out), Base.Fix2(/, d), out, _storage_ranges(out), a)
+    launch!(Backends.backend(out), _divide_body!, _storage_ranges(out), out, a, d)
+
+@inline function _divide_body!(i, j, k, out, a, d)
+    @inbounds out[i, j, k] = a[i, j, k] / d
+    return nothing
+end
 
 # κt = νt/Prₜ on the whole array once the halos of νt are filled: one halo
 # fill instead of two (κt's halos are then νt's divided by Prₜ, which is what

@@ -291,8 +291,6 @@ end
     return nothing
 end
 
-# The index ranges of an interior-sized array, as launch ranges.
-axes_ranges(A::AbstractArray{<:Any,3}) = (1:size(A, 1), 1:size(A, 2), 1:size(A, 3))
 
 """
     advance_sgs!(c::LagrangianDynamicSmagorinsky, sim, dt)
@@ -324,7 +322,7 @@ function advance_sgs!(c::LagrangianDynamicSmagorinsky{T}, sim, dt) where {T}
     end
     if !c.initialised[]
         b = Backends.backend(c.I_MM)
-        r = axes_ranges(c.I_MM)
+        r = _storage_ranges(c.I_MM)
         C02 = c.C0^2
         copyto!(c.I_MM, ws.MM)
         range_map!(b, Base.Fix1(*, C02), c.I_LM, r, ws.MM)
