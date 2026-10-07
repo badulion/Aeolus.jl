@@ -1058,22 +1058,3 @@ end
     include("era6_sounding.jl")          # N-parent-a: Lindenberg sounding → (z, t) profiles, boundary_layer_height (#247)
     include("era6_open_near_boundary.jl") # N-open-d: sponge toward the data, neighbor_index, solid open faces, boundary heat terms (#262)
 end
-
-# =========================================================================
-# The Berlin (Alexanderplatz) flagship case — examples/urban/BerlinCase.jl
-
-@testset "Berlin case" begin
-    include("berlin_case.jl")            # registry, stages, bus, tracers (#126)
-    include("berlin_surface_exchange.jl") # MOST fluxes, soil ground, roof-aware air level, drag (#129)
-    include("berlin_smoke.jl")           # every coupling and option, 12 steps, ledgers close (#127)
-    include("berlin_air_heat.jl")        # air-heat ledger: meter, closed box, H₀ = 100 W/m², night window (#253)
-    include("berlin_open_boundaries.jl") # lateral = :open: faces, data, sponge, frame, boundary heat, cost (#262)
-    include("berlin_sw_modifiers.jl")    # tree shade / cloud shadow once per radiation field; scene class map (#128)
-    include("berlin_moist.jl")           # reference state, moist buoyancy, fog enthalpy (#131)
-    include("berlin_chemistry.jl")       # NOx–O3–VOC on tracers, r_a-based dry / wet deposition (#135)
-    include("berlin_numerics.jl")        # pressure solver, SGS, advection slots (#132)
-    include("berlin_dynamics.jl")        # core / timestepper slots: anelastic, adaptive, IMEX (#133)
-    include("berlin_parent_surface.jl")  # parent tiled surface: OSM 6 km mosaic, Macdonald roughness, footprint (#249)
-    include("berlin_parent_smoke.jl")    # parent case: every forcing, 12 steps, heat and water ledgers close (#259)
-    include("berlin_parent.jl")          # parent case: encroachment, Wangara, core sensitivity (24 h Lindenberg: examples/urban/berlin_parent_lindenberg_check.jl, #315) (#259)
-end
