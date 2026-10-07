@@ -1456,10 +1456,11 @@ stages that other port issues own: the parent's nesting step (92 ms),
 scalar advection (49 ms) and the dynamics (48 ms).
 
 **Thread invariance.** The harness (`AEOLUS_THREAD_TESTS=1`,
-`AEOLUS_THREAD_COUNTS=1,4,12,24`) gives 2877 hashes per process
+`AEOLUS_THREAD_COUNTS=1,4,12,24`) gives 3027 hashes per process
 (primitives, 64³ DNS, reductions, the Berlin smoke matrix, the flagship
-step, nested runs, fft and the new `columns` section), and all of them at
-4, 12 and 24 threads equal the 1-thread hashes. `test/ka_columns.jl` at
+step, nested runs, fft, fv, pcg, radiation and the new `columns` section;
+measured after merging KA-g and KA-n), and all of them at 4, 12 and 24
+threads equal the 1-thread hashes. `test/ka_columns.jl` at
 `--threads 24` includes the first use of every cache from hundreds of
 tasks at once, and passes.
 
