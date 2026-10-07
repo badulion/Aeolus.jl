@@ -136,7 +136,8 @@ sees θ's κ_t, not the tracers'. An earlier probe of the `:amd` run measured
 cell-wise κ differences against θ's of 54–64 % for qv and 66–92 % for the
 chemistry, 28 % between NO and NO₂, 196 % between qv and ql, and a
 fallback maximum of 5.9 against 2.6 m²/s. The design test
-(`test/berlin_numerics.jl`, *one shared κ*) pins it: under `:amd` the
+(*one shared κ*, in `test/berlin_numerics.jl` until #320 removed the
+Berlin suite) pinned it: under `:amd` the
 stage is bit for bit the stage with every tracer forced onto `sim.κt`, and
 on its 12-step state AMD's own κ would differ from θ's by 77–80 %
 (`Σ|Δκ|/Σκ`) for qv and the chemistry, 24 % between NO and NO₂, with ql
@@ -148,7 +149,8 @@ on its 12-step state AMD's own κ would differ from θ's by 77–80 %
   multigrid ones iterate to a relative residual of 1e-10. In the
   `:smoke` window after 100 steps, MG-CG differs from the FFT by at most
   6.1e-10 m s⁻¹ in u, v, w and 2.1e-9 K in θ, with max|∇·u| = 1.9e-13
-  s⁻¹ (`test/berlin_numerics.jl`). They are here for the stretched-grid
+  s⁻¹ (measured by the former `test/berlin_numerics.jl`; the same
+  agreement on a synthetic 16³ box is `test/era2_multigrid.jl`). They are here for the stretched-grid
   and cut-cell solver work (#151, #152), not for speed.
 * **SGS.** `:tke` (default since #182) is described in
   [Prognostic SGS TKE (#182)](berlin_turbulence.md#Prognostic-SGS-TKE-(#182)) below.

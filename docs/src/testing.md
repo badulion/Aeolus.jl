@@ -31,8 +31,9 @@ SGS closures against filtered DNS, the BUBBLE / CAPITOUL campaigns and
 the patchy-surface LES. Each has a one-line reason in
 `test/test_tags.toml` naming the fast file that keeps its module
 covered. Every `src` module keeps fast coverage (checked by searching
-each module's name and exports in the fast files), and the fast tier
-includes the Berlin smoke test.
+each module's name and exports in the fast files). The Berlin example
+has no tests of its own (#320): its end-to-end runs are
+`examples/urban/berlin_checks.jl`, run by hand.
 
 The granularity is the file. A few full-only files also hold closed-form
 checks next to their simulations (the Blasius solution in
@@ -77,8 +78,8 @@ own Julia process, plus one job, `runtests.jl`, for the inline
   capped by available memory (`--mem-per-job`, default 1 GB; the
   heaviest file peaks at 2.2 GB, the median at 0.5 GB). So two agents
   running suites at once do not oversubscribe the machine.
-- **Exclusive files** (`berlin_smoke.jl`, `era6_apriori_sgs.jl`,
-  `era6_cbc_decay.jl`) run one at a time after the parallel batch,
+- **Exclusive files** (`era6_apriori_sgs.jl`, `era6_cbc_decay.jl`,
+  `thread_invariance.jl`) run one at a time after the parallel batch,
   because they assert their own wall time.
 - **Logs.** One log and one result file per job in the run folder,
   `.testruns/<yyyymmdd-HHMMSS>-<tier>/` (gitignored), plus

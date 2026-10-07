@@ -1,8 +1,11 @@
 # The Berlin case
 
-The Berlin (Alexanderplatz) run is the flagship of Aeolus: every
-physics module in `src/` is meant to be exercised by it (the rule of
-#123, in `CLAUDE.md`). Since #126 it is not a script but a small
+The Berlin (Alexanderplatz) run is the flagship example of Aeolus. Until
+2026-10-06 every physics module in `src/` had to be exercised by it (the
+rule of #123); the maintainer dropped that rule, and the example has no
+test suite of its own (#320): the physics it couples is tested in the
+module tests, and its end-to-end runs are `examples/urban/berlin_checks.jl`,
+run by hand. Since #126 it is not a script but a small
 framework, the `BerlinCase` module in `examples/urban/`, built so that
 many couplings can be added independently and at the same time.
 
@@ -123,8 +126,8 @@ default.
 | `output_fields(c, case)` | `OutputField`s added to the NetCDF file |
 | `budget!(c, case, ledger)` | this step's surface-energy and water terms (see [the ledger](berlin_ledgers.md#The-budget-ledger)) |
 | `report(c, case)` | an extra log line with each output record |
-| `smoke_variants(::Type{C})` | extra smoke-test configurations, a tuple of `NamedTuple`s (see [the smoke test](berlin_ledgers.md#Smoke-test)) |
-| `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run |
+| `smoke_variants(::Type{C})` | extra smoke-run configurations, a tuple of `NamedTuple`s (see [the smoke runs](berlin_ledgers.md#Smoke-test)) |
+| `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run (`examples/urban/berlin_checks.jl`) |
 | `sim_options(::Type{C}, cfg, mesh, opts)` | keywords of the dynamical core's constructor (the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of a sound-proof core), before the core is built (see [numerics slots](berlin_numerics.md#Numerics-slots)) |
 | `step_options(c, case)` | keywords added to every dynamics step, `step!` or `step_imex!` (e.g. `momentum_advection`, `sgs`) |
 | `incompatible_reason(::Type{C})` | why the `incompatible` pairs fail, appended to the selection error |
@@ -154,8 +157,7 @@ errors rather than silently ignored.
 crosses a multiple of 600 s, `floor(t_new/P) > floor(t_old/P)`;
 `Cadence(:radiation; first = true)` names a period in `cfg.cadence` and
 also fires on step 1. With `dt = 2 s` this is exactly the old
-`n % 300 == 0 || n == 1` (checked over a whole day in
-`test/berlin_case.jl`). With an adaptive `dt` the entry still fires
+`n % 300 == 0 || n == 1` over a whole day. With an adaptive `dt` the entry still fires
 once per period crossed, and the adaptive stepper caps `dt` at the
 shortest `cfg.cadence` period so that no firing is skipped. The surface
 exchange steps its surfaces (the soil columns of `ground_soil`
@@ -518,9 +520,10 @@ between entries of the same stage and order).
 
 * **On by default.** An additive coupling is on unless `is_default`
   says otherwise; a slot provider is the slot's default only if it is
-  the one with `is_default = true`. The rule of #123: new physics is on
-  by default unless it is a genuine alternative or too expensive, and
-  then its cost per step is quoted from `timing_report` in the PR.
+  the one with `is_default = true`. Coupling new physics into the
+  example is welcome where it makes sense, not required (the rule of
+  #123 was dropped on 2026-10-06); quote the cost per step from
+  `timing_report` in the PR.
 * **Cadence.** An expensive stage can run every `P` seconds:
   `Cadence(600.0)`, or `Cadence(:mykey)` with a default in
   `cfg.cadence` (add the key through the scenario or your option; a
@@ -531,16 +534,17 @@ between entries of the same stage and order).
   that does not exist, add it to `core/bus.jl` additively and say so
   in the PR.
 * **Replacing a coupling.** Delete the old file (the issue says which)
-  and move its `budget!` terms and checks over. The ledger closure in
-  the smoke test fails if a term that changes a surface temperature or
+  and move its `budget!` terms and checks over. The ledger closure of
+  the smoke runs fails if a term that changes a surface temperature or
   the water in the air is lost.
 
 **3. Report to the ledger.** If the coupling changes a surface
 temperature, adds or removes water from the air, or clips anything,
-book it in `budget!` (next section). The smoke test asserts the
-closure, so a missing term fails the suite.
+book it in `budget!` (next section). The smoke runs of
+`examples/urban/berlin_checks.jl` assert the closure, so a missing term
+fails them.
 
-**4. Give it smoke coverage.** The smoke test already runs every
+**4. Give it smoke coverage.** The smoke runs already run every
 additive coupling and one configuration per non-default provider, so
 most couplings need no `smoke_variants`. Add one for a configuration
 that is not reached that way, for example an option that changes the
@@ -560,8 +564,9 @@ equations (a maximum principle, positivity, a range set by the
 thermostat), a sign that follows from the physics. "It ran" is already
 asserted for every coupling.
 
-**5. Run and quote.** `julia --project=. test/berlin_smoke.jl` locally
-(under a minute), then the full suite.
+**5. Run and quote.** `julia --project=. examples/urban/berlin_checks.jl smoke`
+locally (about 2.5 min); the physics itself is tested in its module's
+tests, which the fast tier runs.
 In the PR body quote one Berlin diagnostic — a ledger term is often the
 natural one — the configuration it was measured in, and the cost from
 `timing_report`.
@@ -612,9 +617,9 @@ conserving: in the `:smoke` window after four steps the transport stage
 changes the domain total of qv by −4.4e-5 and of ql by −3.5e-5 *per
 step*. With the halos refreshed (`fill_halos!` on u, v, w) the same
 stage conserves both to 1.5e-15 and 3.8e-15. The fix changes the
-answer, so it is not in #126; `test/berlin_case.jl` records the leak as
-`@test_broken` and asserts the conservation with fresh halos. The
-scalar-advection issue (#132) owns it.
+answer, so it was not in #126; the Berlin tests recorded the leak as
+`@test_broken` and asserted the conservation with fresh halos. The
+scalar-advection issue (#132) owned it.
 
 The ledger (#127) measures the same leak in water. On **step 1** it is
 much larger: the velocity halos have never been filled when the
@@ -628,6 +633,8 @@ transport term is −2.70e-4 kg m⁻². **Fixed in #132**: the
 advects (`refresh_halos = true`), which also gives the pollutant, which
 advects later in the step, fresh halos. The water change of the
 transport stage is now ~1e-19 kg m⁻² per run (smoke) and +6.9e-19 kg m⁻²
-over the flagship hour; both `@test_broken` are now `@test`, and
-`test/berlin_case.jl` keeps the mechanism tested with
-`refresh_halos = false`.
+over the flagship hour; both `@test_broken` became `@test`, and the
+Berlin tests kept the mechanism tested with `refresh_halos = false`
+until they were removed (#320; the smoke runs of
+`examples/urban/berlin_checks.jl` still assert the water closure of the
+transport).
