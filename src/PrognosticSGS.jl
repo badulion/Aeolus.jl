@@ -54,14 +54,15 @@ module PrognosticSGS
 
 using ..Grids: RegularGrid, CellCenter, interior
 using ..StretchedGrids: StretchedGrid
-using ..Fields: Field, interior_view, mesh
+using ..Fields: Field, interior_view, mesh, interior_map!
+using ..Backends: Backends, launch!, plane_reduce!, range_map!, ordered_sum
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs,
                             passive_scalar_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
                    buoyancy_frequency_squared!, SymmetricTensorField, cloud_humidity,
                    filled_condensate!
 import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_state!, sgs_tke!
-using ..AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
+using ..AdvectionSchemes: advect_positive!, FluxLimiterWorkspace, _reconstruction
 using ..WallModels: ImmersedWalls, immersed_wall_drag!
 
 export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_value,
@@ -262,7 +263,7 @@ Keywords:
   resolved shear across the wall instead of the stencil's: see
   [`attach_immersed_walls!`](@ref), which also attaches them later.
 """
-struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS} <: AbstractSGSClosure
+struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS, RC} <: AbstractSGSClosure
     e::F
     c_k::T; c_ε0::T; c_ε1::T; c_l::T; κ::T; surface_factor::T
     Δ::T                  # the filter width (of the lowest level on a StretchedGrid)
@@ -279,6 +280,7 @@ struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS} <: AbstractSGSClosure
     transport::Bool
     dissipation::Symbol
     advection::Symbol
+    recon::RC             # the reconstruction of `advection`, built once (nothing without transport)
     # scratch (not memory)
     ν::F; κt::F; N2::F; D::F; K2::F; tend::F
     Pw::F                 # facade (wall-model) shear production, m² s⁻³ (#232)
@@ -340,7 +342,7 @@ function TKEClosure(g::Union{RegularGrid{T},StretchedGrid{T}}; e = nothing, e0::
     c = TKEClosure(ef, T(c_k), T(c_ε0), T(c_ε1), T(c_l), T(κ), T(surface_factor), Δ, Δk, vrel,
                       θ₀ === nothing ? T(NaN) : T(θ₀), g_accel === nothing ? T(NaN) : T(g_accel),
                       qv, cloud_humidity(qc, p, g), lw, fl, mk, surface, transport, dissipation, adv,
-                      mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), Ref{Any}(nothing), T[], ws,
+                      transport ? _reconstruction(adv) : nothing, mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), Ref{Any}(nothing), T[], ws,
                       similar(ef.data), zeros(T, _NSTATS), zeros(T, _NSTATS))
     walls === nothing || attach_immersed_walls!(c, walls)
     return c
@@ -402,25 +404,33 @@ end
 @inline _first(a, i, j, k) = @inbounds a[i, j, k]
 
 # ν_t, κ_t of the closure's current e into ν, κ (interior); N² must be current.
+#
+# KA-l (#304): the pointwise parts of the closure (coefficients, production
+# factors, the update of e, the initialisation) are point bodies run by
+# `launch!` (the update by `plane_reduce!`, which also sums its budget).
 function _coefficients!(ν::Field, κt::Field, c::TKEClosure{T}, N2::Field) where {T}
     g = mesh(c.e)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
-    ed, nd, kd, n2 = c.e.data, ν.data, κt.data, N2.data
-    ck, cl = c.c_k, c.c_l
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = Hx + i, Hy + j, Hz + k
-        Δ = c.Δk[k]
-        if _solid(c.mask, I, J, K)
+    launch!(Backends.backend(ν.data), _coefficients_body!, interior(g), ν.data, κt.data, c.e.data,
+            N2.data, c.Δk, c.mask, c.l_wall, g.Hx, g.Hy, g.Hz, c.c_k, c.c_l)
+    return ν, κt
+end
+
+@inline function _coefficients_body!(I, J, K, nd, kd, ed, n2, Δk, mask, l_wall, Hx, Hy, Hz, ck, cl)
+    T = eltype(nd)
+    i, j, k = I - Hx, J - Hy, K - Hz
+    @inbounds begin
+        Δ = Δk[k]
+        if _solid(mask, I, J, K)
             nd[I, J, K] = zero(T); kd[I, J, K] = zero(T)
-            continue
+            return nothing
         end
         e = ed[I, J, K]
-        l, _ = tke_length_scale(e, n2[I, J, K], Δ; l_wall = _lwall(c.l_wall, i, j, k, T), c_l = cl)
+        l, _ = tke_length_scale(e, n2[I, J, K], Δ; l_wall = _lwall(l_wall, i, j, k, T), c_l = cl)
         νv, κv = tke_eddy_coefficients(e, l, Δ; c_k = ck)
         nd[I, J, K] = νv
         kd[I, J, K] = κv
     end
-    return ν, κt
+    return nothing
 end
 
 """
@@ -650,9 +660,7 @@ halos (with `bcs`), as the momentum operator needs.
 function shear_production!(P::Field, u::Field, v::Field, w::Field, νt::Field,
                            bcs::FieldBoundaryConditions)
     dual_strain!(P, u, v, w, bcs)
-    g = mesh(u)
-    ii, jj, kk = interior(g)
-    @inbounds @views P.data[ii, jj, kk] .*= νt.data[ii, jj, kk]
+    interior_map!(*, P, P, νt)
     return P
 end
 
@@ -774,11 +782,10 @@ of the SGS heat flux. (A prescribed surface heat flux adds ``(g/θ_0)F/2``
 to the boundary cells inside `advance_sgs!`; not here.)
 """
 function buoyancy_production!(P::Field, κt::Field, N2::Field)
-    g = mesh(P)
-    ii, jj, kk = interior(g)
-    @inbounds @views P.data[ii, jj, kk] .= .-κt.data[ii, jj, kk] .* N2.data[ii, jj, kk]
+    interior_map!(_neg_product, P, κt, N2)
     return P
 end
+@inline _neg_product(κ, n2) = -κ * n2
 
 # -------------------------------------------------------------------------
 # The time integration of e (the one commit per accepted step)
@@ -818,7 +825,7 @@ function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
         ebcs = passive_scalar_bcs(sim.θ_bcs)     # e: not θ's top gradient (#254)
         fill_halos!(c.e, ebcs)
         _advect_tke!(c, sim, Δt, ebcs, g)
-        c.K2.data .= 2 .* c.ν.data
+        _double!(c.K2, c.ν)
         add_eddy_diffusion_scalar!(c.tend, c.e, c.K2; mask = c.mask)
     end
     _update!(c, Δt, _surface_buoyancy(c, sim))
@@ -827,53 +834,84 @@ end
 
 # The advection of e into c.tend: flux-limited and positive (on a
 # StretchedGrid with the centred reconstruction, the only one allowed there).
+# (`c.recon`: the reconstruction built once from the scheme's name, so the
+# call does not dispatch on a Symbol; KA-l.)
 _advect_tke!(c, sim, Δt, ebcs, g) =
     advect_positive!(c.tend, sim.u, sim.v, sim.w, c.e, Δt;
-                     scheme = c.advection, workspace = c.ws, bcs = ebcs)
+                     scheme = c.recon, workspace = c.ws, bcs = ebcs)
+
+# K = 2ν over the whole storage (halos included): `2 * ν` per point, the
+# bits of the broadcast it replaces.
+_double!(K::Field, ν::Field) =
+    (range_map!(Backends.backend(K.data), Base.Fix1(*, 2), K.data, _storage(K.data), ν.data); K)
+_storage(A) = (1:size(A, 1), 1:size(A, 2), 1:size(A, 3))
 
 # Σ a V over the interior (a interior-sized)
 _tke_volume_sum(a, c, V0, ::RegularGrid) = sum(a) * V0
 _tke_volume_sum(a, c, V0, g::StretchedGrid) = sum(sum(view(a, :, :, k)) * c.vrel[k] for k in 1:g.Nz) * V0
 
+# The update of e, fused with the volume sums of its budget: a
+# `plane_reduce!` body that writes e at its point and returns the point's
+# contributions (P_s, P_b, transport, wall work, dissipation, buoyant
+# destruction, clip count, clipped energy), summed per plane in the
+# canonical order (KA-l, #304; the per-point values, and so e, are the
+# loop's bit for bit; the sums are a named one-time change of order).
 function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
     g = mesh(c.e)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     V0 = T(_tke_volume0(g))
-    ed, nd, n2, dd, td, pw = c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data, c.Pw.data
-    ck, cl = c.c_k, c.c_l
-    sPs = zero(T); sPb = zero(T); sε = zero(T); sB = zero(T); sT = zero(T); sPw = zero(T)
-    nclip = zero(T); eclip = zero(T)
-    exact = c.dissipation === :exact
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = Hx + i, Hy + j, Hz + k
-        if _solid(c.mask, I, J, K)
-            ed[I, J, K] = zero(T)
-            continue
+    par = (Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, Nz = g.Nz, V0 = V0, Δt = Δt, pb1 = T(pbs[1]),
+           pb2 = T(pbs[2]), ck = c.c_k, cl = c.c_l, cε0 = c.c_ε0, cε1 = c.c_ε1,
+           sfac = c.surface_factor, exact = c.dissipation === :exact)
+    parts = ntuple(_ -> zeros(T, g.Nz), Val(8))
+    plane_reduce!(parts, Backends.backend(c.e.data), _tke_update_body, interior(g),
+                  c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data, c.Pw.data, c.Δk, c.vrel,
+                  c.l_wall, c.first_level, c.mask, par)
+    sPs, sPb, sT, sPw, sε, sB, nclip, eclip = map(ordered_sum, parts)
+    st = c.stats
+    st[1] += nclip; st[2] += eclip
+    st[4] = sPs * V0; st[5] = sPb * V0; st[6] = sε * V0; st[7] = sB * V0; st[8] = sT * V0
+    st[9] += 1
+    st[10] = sPw * V0
+    c.surface === nothing || _surface!(c, Δt)
+    return c
+end
+
+@inline function _tke_update_body(I, J, K, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall, first_level,
+                                  mask, p)
+    T = eltype(ed)
+    z = zero(T)
+    i, j, k = I - p.Hx, J - p.Hy, K - p.Hz
+    @inbounds begin
+        if _solid(mask, I, J, K)
+            ed[I, J, K] = z
+            return (z, z, z, z, z, z, z, z)
         end
-        Δ = c.Δk[k]; vr = c.vrel[k]; V = V0 * vr
+        Δt = p.Δt
+        Δ = Δk[k]; vr = vrel[k]; V = p.V0 * vr
         e = ed[I, J, K]
         N2 = n2[I, J, K]
-        l, s = tke_length_scale(e, N2, Δ; l_wall = _lwall(c.l_wall, i, j, k, T), c_l = cl)
-        fac = _first(c.first_level, i, j, k) ? c.surface_factor : one(T)
-        cε = tke_dissipation_coefficient(l, Δ; c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, factor = fac)
+        l, s = tke_length_scale(e, N2, Δ; l_wall = _lwall(l_wall, i, j, k, T), c_l = p.cl)
+        fac = _first(first_level, i, j, k) ? p.sfac : one(T)
+        cε = tke_dissipation_coefficient(l, Δ; c_ε0 = p.cε0, c_ε1 = p.cε1, factor = fac)
         Ps = nd[I, J, K] * dd[I, J, K] + pw[I, J, K]
         κv = (1 + 2l / Δ) * nd[I, J, K]
-        Psf = (k == 1 ? pbs[1] : zero(T)) + (k == g.Nz ? pbs[2] : zero(T))
+        Psf = (k == 1 ? p.pb1 : z) + (k == p.Nz ? p.pb2 : z)
         Pb = -κv * N2 + Psf
         # sources: P_s and the positive buoyancy production; sinks, linear in
         # e: dissipation c_ε s e, the buoyant destruction κ_t N² = r_N e
         # (r_N = (1+2l/Δ) c_k N²/s, finite as e → 0) and a stable surface flux
-        src = Ps + (N2 < 0 ? -κv * N2 : zero(T)) + max(Psf, zero(T))
-        rb = (N2 > 0 && s > 0 ? (1 + 2l / Δ) * ck * N2 / s : zero(T)) +
-             (Psf < 0 ? -Psf / max(e, floatmin(T)) : zero(T))
+        src = Ps + (N2 < 0 ? -κv * N2 : z) + max(Psf, z)
+        rb = (N2 > 0 && s > 0 ? (1 + 2l / Δ) * p.ck * N2 / s : z) +
+             (Psf < 0 ? -Psf / max(e, floatmin(T)) : z)
         tr = td[I, J, K]
         estar = e + Δt * (tr + src)
+        nclip = z; eclip = z
         if estar < 0
-            nclip += 1; eclip -= estar * V
-            estar = zero(T)
+            nclip = one(T); eclip = -(estar * V)
+            estar = z
         end
         rε = cε * s
-        if exact && l > 0 && estar > 0
+        if p.exact && l > 0 && estar > 0
             e1 = inv(inv(sqrt(estar)) + cε * Δt / (2l))^2
             enew = e1 / (1 + Δt * rb)
             dε = (estar - e1) / Δt
@@ -882,20 +920,12 @@ function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
             R = rε + rb
             enew = estar / (1 + Δt * R)
             rem = (estar - enew) / Δt
-            dε = R > 0 ? rem * (rε / R) : zero(T)
-            dB = R > 0 ? rem * (rb / R) : zero(T)
+            dε = R > 0 ? rem * (rε / R) : z
+            dB = R > 0 ? rem * (rb / R) : z
         end
         ed[I, J, K] = enew
-        sPs += Ps * vr; sPb += Pb * vr; sT += tr * vr; sPw += pw[I, J, K] * vr
-        sε += dε * vr; sB += dB * vr
+        return (Ps * vr, Pb * vr, tr * vr, pw[I, J, K] * vr, dε * vr, dB * vr, nclip, eclip)
     end
-    st = c.stats
-    st[1] += nclip; st[2] += eclip
-    st[4] = sPs * V0; st[5] = sPb * V0; st[6] = sε * V0; st[7] = sB * V0; st[8] = sT * V0
-    st[9] += 1
-    st[10] = sPw * V0
-    c.surface === nothing || _surface!(c, Δt)
-    return c
 end
 
 function _surface!(c::TKEClosure{T}, Δt) where {T}
@@ -952,7 +982,7 @@ The closure's own memory: the prognostic SGS TKE `c.e` (interior copied;
 N-inflow-b, #258). See `Operators.sgs_tke!` for the contract.
 """
 function sgs_tke!(e::Field{CellCenter}, c::TKEClosure, sim; kwargs...)
-    interior_view(e) .= interior_view(c.e)
+    interior_map!(identity, e, c.e)
     return e
 end
 
@@ -1007,7 +1037,7 @@ function tke_budget(c::TKEClosure{T}, sim) where {T}
         ebcs = passive_scalar_bcs(sim.θ_bcs)
         fill_halos!(c.e, ebcs)
         _advect_tke!(c, sim, one(T), ebcs, g)
-        c.K2.data .= 2 .* c.ν.data
+        _double!(c.K2, c.ν)
         add_eddy_diffusion_scalar!(c.tend, c.e, c.K2; mask = c.mask)
         tr = _tke_volume_sum(interior_view(c.tend), c, V0, g)
     end
@@ -1049,20 +1079,29 @@ function initialize_tke!(c::TKEClosure{T}, sim; e_min::Real = 0) where {T}
     fill_halos!(sim.u, bcs); fill_halos!(sim.v, bcs); fill_halos!(sim.w, bcs)
     _stratification!(c, sim)
     dual_strain!(c.D, sim.u, sim.v, sim.w, bcs)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = Hx + i, Hy + j, Hz + k
-        if _solid(c.mask, I, J, K)
-            c.e.data[I, J, K] = zero(T)
-            continue
-        end
-        fac = _first(c.first_level, i, j, k) ? c.surface_factor : one(T)
-        eq = tke_equilibrium(max(c.D.data[I, J, K], zero(T)), c.N2.data[I, J, K], c.Δk[k];
-                             c_k = c.c_k, c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, c_l = c.c_l,
-                             l_wall = _lwall(c.l_wall, i, j, k, T), factor = fac)
-        c.e.data[I, J, K] = max(T(eq), T(e_min))
-    end
+    launch!(Backends.backend(c.e.data), _init_tke_body!, interior(g), c.e.data, c.D.data,
+            c.N2.data, c.Δk, c.mask, c.first_level, c.l_wall, g.Hx, g.Hy, g.Hz,
+            (c_k = c.c_k, c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, c_l = c.c_l, sfac = c.surface_factor,
+             e_min = T(e_min)))
     return c
+end
+
+# the equilibrium e of one cell (a bisection per point: compute-bound)
+@inline function _init_tke_body!(I, J, K, ed, dd, n2, Δk, mask, first_level, l_wall, Hx, Hy, Hz, p)
+    T = eltype(ed)
+    i, j, k = I - Hx, J - Hy, K - Hz
+    @inbounds begin
+        if _solid(mask, I, J, K)
+            ed[I, J, K] = zero(T)
+            return nothing
+        end
+        fac = _first(first_level, i, j, k) ? p.sfac : one(T)
+        eq = tke_equilibrium(max(dd[I, J, K], zero(T)), n2[I, J, K], Δk[k];
+                             c_k = p.c_k, c_ε0 = p.c_ε0, c_ε1 = p.c_ε1, c_l = p.c_l,
+                             l_wall = _lwall(l_wall, i, j, k, T), factor = fac)
+        ed[I, J, K] = max(T(eq), p.e_min)
+    end
+    return nothing
 end
 
 """
@@ -1079,12 +1118,19 @@ function initialize_tke!(c::TKEClosure{T}, τ::SymmetricTensorField) where {T}
     g = mesh(c.e)
     size(τ) == (g.Nx, g.Ny, g.Nz) ||
         throw(DimensionMismatch("initialize_tke!: τ is $(size(τ)), interior $((g.Nx, g.Ny, g.Nz))"))
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
-        e = (τ.xx[i, j, k] + τ.yy[i, j, k] + τ.zz[i, j, k]) / 2
-        c.e.data[I, J, K] = _solid(c.mask, I, J, K) ? zero(T) : max(T(e), zero(T))
-    end
+    launch!(Backends.backend(c.e.data), _init_tke_trace_body!, interior(g), c.e.data,
+            τ.xx, τ.yy, τ.zz, c.mask, g.Hx, g.Hy, g.Hz)
     return c
+end
+
+@inline function _init_tke_trace_body!(I, J, K, ed, xx, yy, zz, mask, Hx, Hy, Hz)
+    T = eltype(ed)
+    i, j, k = I - Hx, J - Hy, K - Hz
+    @inbounds begin
+        e = (xx[i, j, k] + yy[i, j, k] + zz[i, j, k]) / 2
+        ed[I, J, K] = _solid(mask, I, J, K) ? zero(T) : max(T(e), zero(T))
+    end
+    return nothing
 end
 
 include("prognostic_sgs/reynolds_stress.jl")
