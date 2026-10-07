@@ -95,11 +95,12 @@ default_options(::Type{PressureMultigrid}) = (tol = 1e-10, maxcycles = 50, cycle
 sim_options(::Type{PressureMultigrid}, cfg, mesh, o) =
     (solver = MultigridPoissonSolver(mesh; case_poisson_axes(cfg, mesh)...,
                                      tol = o.tol, maxcycles = o.maxcycles, cycle = o.cycle),)
-function report(c::PressureMultigrid, case)
-    s = case.sim.solver
-    return @sprintf("multigrid: %d levels, last solve %d cycles, rel. residual %.1e",
-                    mg_level_count(s), s.last_cycles[], mg_residual_norm(s))
-end
+"`cycles` and `residual` (relative) of the last multigrid solve, every step."
+diagnostics(c::PressureMultigrid, case) = Diagnostic[
+    Diagnostic("cycles", "1", () -> case.sim.solver.last_cycles[]; cadence = :step,
+               description = "V-cycles of the last solve ($(mg_level_count(case.sim.solver)) levels)"),
+    Diagnostic("residual", "1", () -> mg_residual_norm(case.sim.solver); cadence = :step,
+               description = "relative residual of the last solve")]
 function smoke_check(c::PressureMultigrid, case)
     s = case.sim.solver
     return ["the solver is multigrid" => s isa MultigridPoissonSolver,
@@ -126,9 +127,11 @@ default_options(::Type{PressureMGCG}) = (tol = 1e-10, maxit = 200)
 sim_options(::Type{PressureMGCG}, cfg, mesh, o) =
     (solver = MGPreconditionedCG(mesh; case_poisson_axes(cfg, mesh)...,
                                  tol = o.tol, maxit = o.maxit),)
-report(c::PressureMGCG, case) =
-    @sprintf("MG-CG: last solve %d iterations, rel. residual %.1e",
-             case.sim.solver.last_iters[], mg_residual_norm(case.sim.solver))
+"`iterations` and `residual` (relative) of the last MG-CG solve, every step."
+diagnostics(c::PressureMGCG, case) = Diagnostic[
+    Diagnostic("iterations", "1", () -> case.sim.solver.last_iters[]; cadence = :step),
+    Diagnostic("residual", "1", () -> mg_residual_norm(case.sim.solver); cadence = :step,
+               description = "relative residual of the last solve")]
 function smoke_check(c::PressureMGCG, case)
     s = case.sim.solver
     return ["the solver is MG-preconditioned CG" => s isa MGPreconditionedCG,
@@ -160,9 +163,11 @@ incompatible_reason(::Type{PressureDensityWeighted}) =
     "cores (core = :anelastic or :pseudo_incompressible); the Boussinesq core takes one of " *
     "cosine_fft, multigrid, mg_cg"
 sim_options(::Type{PressureDensityWeighted}, cfg, mesh, o) = (tol = o.tol, maxit = o.maxit)
-report(c::PressureDensityWeighted, case) =
-    @sprintf("density-weighted CG: last solve %d iterations, ‖r‖ %.1e",
-             solver_iterations(case.sim.solver), solver_residual(case.sim.solver))
+"`iterations` and `residual` (‖r‖₂) of the last density-weighted CG solve, every step."
+diagnostics(c::PressureDensityWeighted, case) = Diagnostic[
+    Diagnostic("iterations", "1", () -> solver_iterations(case.sim.solver); cadence = :step),
+    Diagnostic("residual", "1", () -> solver_residual(case.sim.solver); cadence = :step,
+               description = "‖r‖₂ of the last solve")]
 function smoke_check(c::PressureDensityWeighted, case)
     s, sim = case.sim.solver, case.sim
     ref = Aeolus.Anelastic.reference_state(sim)

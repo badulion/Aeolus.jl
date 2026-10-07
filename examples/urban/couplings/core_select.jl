@@ -90,8 +90,8 @@ The projection solver is the core's own density-weighted CG; its `tol`
 and `maxit` are options of the `:pressure_solver` provider
 `:density_weighted_cg` (the only one these cores accept).
 
-The constraint the projection enforces is reported with every output
-record (`report`) and checked by the smoke test.
+The constraint the projection enforces is the core's `max_div`
+diagnostic (and checked by the smoke test).
 """
 struct MassWeightedCore{P} <: AbstractCoupling end
 
@@ -127,12 +127,18 @@ function build_core(C::Type{<:MassWeightedCore}, cfg, mesh, ref, simkw)
                                   buoyancy = true, simkw...)
 end
 
-function report(c::MassWeightedCore{P}, case) where {P}
-    sim = case.sim
-    return @sprintf("  %s core: max|∇·(W u)| = %.2e s⁻¹ (plain max|∇·u| = %.2e), CG iterations %d",
-                    P, Aeolus.Anelastic.constraint_residual(sim), max_divergence(sim),
-                    Aeolus.Anelastic.solver_iterations(sim.solver))
-end
+"""
+    diagnostics(c::MassWeightedCore, case)
+
+The pressure solve of the sound-proof core, every step: `cg_iterations`.
+(The core's own diagnostics, `max_div` = max|∇·(W u)| among them, are
+the simulation's; the plain max|∇·u| is `max_div_plain`, costly.)
+"""
+diagnostics(c::MassWeightedCore, case) = Diagnostic[
+    Diagnostic("cg_iterations", "1", () -> Aeolus.Anelastic.solver_iterations(case.sim.solver);
+               cadence = :step),
+    Diagnostic("max_div_plain", "s-1", () -> max_divergence(case.sim);
+               description = "max|∇·u|, which the mass-weighted constraint does not make 0")]
 
 function smoke_check(c::MassWeightedCore{P}, case) where {P}
     sim = case.sim

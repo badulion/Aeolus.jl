@@ -359,12 +359,25 @@ function les_heating_kday(c::ColumnRadiation, case)
     return (avg(c.heat), avg(c.heat_lw), avg(c.heat_sw))
 end
 
-function report(c::ColumnRadiation, case)
-    c.col === nothing && return nothing
-    h, hl, hs = les_heating_kday(c, case)
-    ghi = c.fsw_clear === nothing ? 0.0 : c.fsw_clear.flux_dn[1]
-    return @sprintf("column radiation: L_sky %.1f W/m², GHI %.1f (Bird %.1f), heating %+.2f K/day (lw %+.2f, sw %+.2f)",
-                    case.bus.L_sky, ghi, c.ghi_bird, h, hl, hs)
+"""
+    diagnostics(c::ColumnRadiation, case)
+
+The sky longwave on the surface `L_sky`, the clear-sky global horizontal
+irradiance of the column `ghi` and of the Bird model `ghi_bird` (W m⁻²),
+and the LES-layer mean heating `heating`, `heating_lw`, `heating_sw`
+(K day⁻¹, [`les_heating_kday`](@ref)). `NaN` before the first radiation
+call.
+"""
+function diagnostics(c::ColumnRadiation, case)
+    h = per_state(() -> c.col === nothing ? (NaN, NaN, NaN) : les_heating_kday(c, case), case)
+    return Diagnostic[
+        Diagnostic("L_sky", "W m-2", () -> c.col === nothing ? NaN : case.bus.L_sky),
+        Diagnostic("ghi", "W m-2", () -> c.col === nothing ? NaN :
+                                         c.fsw_clear === nothing ? 0.0 : c.fsw_clear.flux_dn[1]),
+        Diagnostic("ghi_bird", "W m-2", () -> c.col === nothing ? NaN : c.ghi_bird),
+        Diagnostic("heating", "K day-1", () -> h()[1]),
+        Diagnostic("heating_lw", "K day-1", () -> h()[2]),
+        Diagnostic("heating_sw", "K day-1", () -> h()[3])]
 end
 
 function smoke_check(c::ColumnRadiation, case)

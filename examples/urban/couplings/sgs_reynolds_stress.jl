@@ -138,13 +138,23 @@ function rsm_model_stress(c::SGSReynoldsStress, case)
     return τ, (τ.xx .+ τ.yy .+ τ.zz) ./ 2
 end
 
-function report(c::SGSReynoldsStress, case)
-    p = rsm_canopy_profile(c, case)
-    st = reynolds_stress_statistics(c.closure)
-    τ, e = rsm_model_stress(c, case)
-    return @sprintf("SGS Reynolds stress: canopy e %.4f m²/s², II %.4f, τ33/τ11 %.3f; %d realizability corrections",
-                    p.e, p.II, p.τ33_τ11, st.clips) *
-           "\n    SGS Reynolds stress " * sgs_apriori_line(sgs_test_filter_metrics(case, τ, e))
+"""
+    diagnostics(c::SGSReynoldsStress, case)
+
+The canopy means of [`rsm_canopy_profile`](@ref): `e_canopy` (m² s⁻²),
+`II_canopy` and `tau33_tau11`; the realizability corrections `clips`
+(cumulative); and the a-priori metrics of the stress
+([`sgs_apriori_diagnostics`](@ref)).
+"""
+function diagnostics(c::SGSReynoldsStress, case)
+    p = per_state(() -> rsm_canopy_profile(c, case), case)
+    return vcat(Diagnostic[
+                    Diagnostic("e_canopy", "m2 s-2", () -> p().e),
+                    Diagnostic("II_canopy", "1", () -> p().II),
+                    Diagnostic("tau33_tau11", "1", () -> p().τ33_τ11),
+                    Diagnostic("clips", "1", () -> reynolds_stress_statistics(c.closure).clips;
+                               cadence = :step)],
+                sgs_apriori_diagnostics(() -> rsm_model_stress(c, case), case))
 end
 
 # the six stresses are tracers (written already); e and II of τ

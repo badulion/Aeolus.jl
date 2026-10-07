@@ -464,17 +464,45 @@ function _feedback!(c::NestingCoupling, case, w)
     return c
 end
 
-function report(c::NestingCoupling, case)
-    c.run === nothing && return "  nesting: parent not built"
-    external_driver(c) && return "  nesting: faces fed by $(nameof(typeof(c.driver))) (parent_driver)"
-    st, ob, t = c.run.stats, case.open, max(case.sim.t, eps())
-    fbk = two_way(c) ? @sprintf("; feedback: %d, parent heat %+.3e J/m², water %+.3e kg/m², %.2f s wall",
-                                Int(get(c.feedback, :n, 0.0)), get(c.feedback, :heat, 0.0),
-                                get(c.feedback, :water, 0.0), get(c.feedback, :wall, 0.0)) : ""
-    return @sprintf("  nesting (%s): %d parent windows, dt_p %.2f–%.2f s, parent %.1f s wall; boundary heat sides %.2f, top %.2f W/m² (mean), max|δ| %.1e m/s%s",
-                    two_way(c) ? "two-way" : "one-way", st.parent_steps + (c.window === nothing ? 0 : 1), st.dt_parent_min, st.dt_parent_max,
-                    c.wall_parent, ob === nothing ? NaN : ob.lateral / t, ob === nothing ? NaN : ob.top / t,
-                    ob === nothing ? NaN : ob.δmax, fbk)
+"""
+    diagnostics(c::NestingCoupling, case)
+
+With the Aeolus parent: `parent_windows` (parent steps begun),
+`dt_parent_min` / `dt_parent_max` (s); the heat the open faces carried,
+`boundary_heat_sides` / `boundary_heat_top` (W m⁻², mean over the run)
+and the largest normal-velocity correction `delta_max` (m s⁻¹); a
+two-way nest adds `feedback_count`, `feedback_heat` (J m⁻², into the
+parent) and `feedback_water` (kg m⁻²). The wall time of the parent run
+`wall.parent` and of the feedback `wall.feedback` (s, cumulative). None
+for an external `parent_driver`.
+"""
+function diagnostics(c::NestingCoupling, case)
+    (c.run === nothing || external_driver(c)) && return Diagnostic[]
+    st() = c.run.stats
+    ob = case.open
+    perrun(x) = () -> ob === nothing ? NaN : x(ob) / max(case.sim.t, eps())
+    ds = Diagnostic[
+        Diagnostic("parent_windows", "1", () -> st().parent_steps + (c.window === nothing ? 0 : 1);
+                   cadence = :step),
+        Diagnostic("dt_parent_min", "s", () -> st().dt_parent_min),
+        Diagnostic("dt_parent_max", "s", () -> st().dt_parent_max),
+        Diagnostic("boundary_heat_sides", "W m-2", perrun(o -> o.lateral);
+                   description = "heat through the lateral faces, mean over the run"),
+        Diagnostic("boundary_heat_top", "W m-2", perrun(o -> o.top);
+                   description = "heat through the top face, mean over the run"),
+        Diagnostic("delta_max", "m s-1", () -> ob === nothing ? NaN : ob.δmax;
+                   description = "largest normal-velocity correction of the open faces"),
+        Diagnostic("wall.parent", "s", () -> c.wall_parent; description = "wall time of the parent run")]
+    if two_way(c)
+        append!(ds, [Diagnostic("feedback_count", "1", () -> get(c.feedback, :n, 0.0)),
+                     Diagnostic("feedback_heat", "J m-2", () -> get(c.feedback, :heat, 0.0);
+                                description = "heat the feedback put into the parent"),
+                     Diagnostic("feedback_water", "kg m-2", () -> get(c.feedback, :water, 0.0);
+                                description = "water the feedback put into the parent"),
+                     Diagnostic("wall.feedback", "s", () -> get(c.feedback, :wall, 0.0);
+                                description = "wall time of the feedback")])
+    end
+    return ds
 end
 
 # --- smoke checks ------------------------------------------------------------
