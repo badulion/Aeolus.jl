@@ -308,6 +308,19 @@ end
 "A Markdown table cell: `|` escaped, line breaks as spaces."
 _md_cell(s) = replace(String(s), '|' => "\\|", '\n' => ' ')
 
+"""
+Prose for a Markdown cell or paragraph: `_md_cell`, and `_` and `*` escaped
+outside code spans, so `AEOLUS_LOG` or `set_fftw_policy!` in a doc string is
+not read as emphasis.
+"""
+function _md_prose(s)
+    parts = split(_md_cell(s), '`')
+    for i in 1:2:length(parts)                    # the odd pieces are outside code spans
+        parts[i] = replace(parts[i], '_' => "\\_", '*' => "\\*")
+    end
+    return join(parts, '`')
+end
+
 "The allowed values or the range of `o`, for the Markdown table."
 function _md_constraint(o::Option)
     parts = String[]
@@ -327,7 +340,7 @@ function _reference_markdown(sch, blocks, checks)
             "`aeolus options ", sch.name, " --markdown`). TOML has no null: `\"none\"` stands for nothing.")
     for (name, s) in blocks
         println(io, "\n", count('.', name) == 0 ? "## " : "### ", "`[", name, "]`\n")
-        isempty(s.doc) || println(io, s.doc, "\n")
+        isempty(s.doc) || println(io, _md_prose(s.doc), "\n")
         println(io, "| key | type | default | units | allowed / range | doc |")
         println(io, "| :-- | :-- | :-- | :-- | :-- | :-- |")
         for o in s.options
@@ -337,14 +350,14 @@ function _reference_markdown(sch, blocks, checks)
             println(io, "| `", o.key, "` | ", _md_cell(_type_text(o.type)), " | `", _md_cell(d), "`",
                     env ? " (from the environment if set)" : "", " | ",
                     isempty(o.units) ? "" : "`" * _md_cell(o.units) * "`", " | ",
-                    _md_cell(_md_constraint(o)), " | ", _md_cell(o.doc), " |")
+                    _md_cell(_md_constraint(o)), " | ", _md_prose(o.doc), " |")
         end
     end
     if !isempty(checks)
         println(io, "\n## Cross-field checks\n")
         println(io, "Checked after every option has passed its own checks; every failure is reported ",
                 "with the others in one `ConfigError`.\n")
-        foreach(l -> println(io, "- ", l), checks)
+        foreach(l -> println(io, "- ", _md_prose(l)), checks)
     end
     return String(take!(io))
 end

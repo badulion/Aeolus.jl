@@ -92,6 +92,23 @@ end
     @test occursin("### `[physics.options.aq_chem]`", one) && !occursin("Cross-field checks", one)
 end
 
+"Every `Markdown.Italic` / `Bold` node under `x` (the option docs are plain prose)."
+emphasis(x) = x isa Union{Markdown.Italic,Markdown.Bold} ? [x] :
+              x isa AbstractVector ? reduce(vcat, map(emphasis, x); init = Any[]) :
+              hasproperty(x, :content) ? emphasis(x.content) :
+              hasproperty(x, :rows) ? emphasis(reduce(vcat, x.rows; init = Any[])) : Any[]
+
+@testset "option reference: identifiers in prose are not read as emphasis" begin
+    @test C._md_prose("see set_fftw_policy! and AEOLUS_LOG, `a_b*c`, 2*3*4") ==
+          "see set\\_fftw\\_policy! and AEOLUS\\_LOG, `a_b*c`, 2\\*3\\*4"
+    for d in REF_DRIVERS
+        md = Markdown.parse(option_reference(d; format = :markdown))
+        @test isempty(emphasis(md.content))
+    end
+    # not vacuous: the same prose unescaped is read as emphasis
+    @test !isempty(emphasis(Markdown.parse("| doc |\n| :-- |\n| default: AEOLUS_ALLOW_UNCOMMITTED=1 |\n").content))
+end
+
 @testset "every option documented: a doc, units on every float option, checks in words" begin
     for d in REF_DRIVERS
         p = doc_problems(driver_schema(d))
