@@ -1,3 +1,6 @@
+# summer_qv_zc and summer_qv_fine re-captured after master's KA-m (#301) fused
+# saturation vapour pressure (a named last-bits change of e_s, so of the sounding's
+# qv: max relative change 5.8e-16 in ls_profile_qv); every other entry as captured.
 summer_ref_rho = "7b4caa357e552e05"
 summer_ug = "88b332506aee67a9"
 summer_qv_fine = "cfe924028a14d551"

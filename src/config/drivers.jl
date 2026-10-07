@@ -113,6 +113,11 @@ itself). `out` replaces the path the config gives the driver. `aeolus
 preprocess dynamic (--from-sounding | --from-parent) <config.toml>` calls
 it. The default: the driver has no dynamic preprocessor (an
 `ArgumentError`).
+
+`from = :era5` (CFG-h, #363; `aeolus preprocess dynamic --from-era5
+<files…> --config <config.toml> [--box deg]`) passes two more keywords,
+`files` (the ERA5 files) and `box` (degrees, or `nothing`: the config's);
+a driver with an ERA5 preprocessor accepts them (the `simulation` driver).
 """
 preprocess_dynamic(d::AbstractRunDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing) =
     throw(ArgumentError("the driver \"$(driver_name(d))\" has no dynamic preprocessor"))

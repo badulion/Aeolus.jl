@@ -328,8 +328,20 @@ function sgs_coefficients!(f::SGSFields, c::AbstractEddyViscosityClosure, sim)
     sgs_viscosity!(f.νh, c, sim)
     # κt = νt/Prₜ by division (not by multiplication with 1/Prₜ): the frozen
     # scalar viscosity of step_imex! has always been formed this way.
-    f.κh.data .= f.νh.data ./ turbulent_prandtl(c, sim)
+    _divide_storage!(f.κh.data, f.νh.data, turbulent_prandtl(c, sim))
     return f
+end
+
+# out = a ./ d over the whole storage (halos included), as a pointwise launch
+# (KA-l, #304): `x / d` per point, the bits of the broadcast it replaces. A
+# named body, not range_map! with `Base.Fix2(/, d)`: that form allocated
+# 272 bytes per call (the step_rk3! allocation test of KA-c).
+_divide_storage!(out::AbstractArray{<:Any,3}, a::AbstractArray{<:Any,3}, d) =
+    launch!(Backends.backend(out), _divide_body!, _storage_ranges(out), out, a, d)
+
+@inline function _divide_body!(i, j, k, out, a, d)
+    @inbounds out[i, j, k] = a[i, j, k] / d
+    return nothing
 end
 
 # κt = νt/Prₜ on the whole array once the halos of νt are filled: one halo
@@ -337,7 +349,7 @@ end
 # fill_halos! would give for the periodic / no-flux / wall copies anyway).
 function _fill_sgs_halos!(f::SGSFields, c::AbstractEddyViscosityClosure, sim)
     fill_halos!(f.νh, sim.bcs)
-    f.κh.data .= f.νh.data ./ turbulent_prandtl(c, sim)
+    _divide_storage!(f.κh.data, f.νh.data, turbulent_prandtl(c, sim))
     return f
 end
 
@@ -422,10 +434,10 @@ turbulent_prandtl(c::DynamicSmagorinsky, sim) = _prandtl(c.Pr_t, sim)
 # closure memory: it never changes once built).
 struct _LazyMask{A, T}
     src::A
-    cache::Base.RefValue{Union{Nothing, _SGSMask{BitArray{3}, T}}}
+    cache::Base.RefValue{Union{Nothing, _SGSMask{Array{Bool,3}, T}}}
 end
 _LazyMask(src, ::Type{T}) where {T} =
-    _LazyMask(src, Base.RefValue{Union{Nothing, _SGSMask{BitArray{3}, T}}}(nothing))
+    _LazyMask(src, Base.RefValue{Union{Nothing, _SGSMask{Array{Bool,3}, T}}}(nothing))
 _sgs_mask(::_LazyMask{Nothing}, sim) = nothing
 function _sgs_mask(m::_LazyMask, sim)
     c = m.cache[]
@@ -504,9 +516,11 @@ function _tke_from_viscosity!(e::Field, ν::Field, c_k::Real)
     g = mesh(e)
     Δ = (g.dx * g.dy * g.dz)^(1 / 3)
     s = 1 / (c_k * Δ)
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
-        e.data[I, J, K] = (max(ν.data[I, J, K], 0) * s)^2
-    end
+    launch!(Backends.backend(e.data), _tke_from_ν_body!, interior(g), e.data, ν.data, s)
     return e
+end
+
+@inline function _tke_from_ν_body!(i, j, k, ed, νd, s)
+    @inbounds ed[i, j, k] = (max(νd[i, j, k], 0) * s)^2
+    return nothing
 end

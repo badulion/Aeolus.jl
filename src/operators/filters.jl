@@ -76,25 +76,45 @@ function box_filter!(out::Field{L}, f::Field{L}, n = 3; mask = nothing) where {L
     return out
 end
 
+# The summands of the box filter as named functions of the storage index
+# (KA-l, #304; the closures they replace captured `fd` and `mask`).
+struct _ValAt{A}                # (f,)
+    fd::A
+end
+@inline (t::_ValAt)(a, b, q) = (@inbounds(t.fd[a,b,q]),)
+struct _MaskedValAt{A, M}       # (f, 1) on a fluid cell, (0, 0) on a solid one
+    fd::A
+    mask::M
+end
+@inline (t::_MaskedValAt)(a, b, q) =
+    @inbounds(t.mask[a,b,q] ? (zero(eltype(t.fd)), 0) : (t.fd[a,b,q], 1))
+
 function _box_filter!(od, fd::AbstractArray{T}, g, rx, ry, rz, ::Nothing) where {T}
     inv_n = one(T) / ((2rx + 1) * (2ry + 1) * (2rz + 1))
-    @inbounds for k in g.Hz+1:g.Hz+g.Nz, j in g.Hy+1:g.Hy+g.Ny, i in g.Hx+1:g.Hx+g.Nx
-        (s,) = _box_stencil_sum((a, b, q) -> (@inbounds(fd[a,b,q]),), i, j, k, rx, ry, rz)
-        od[i,j,k] = s * inv_n
-    end
+    launch!(Backends.backend(od), _box_filter_body!, interior(g), od, _ValAt(fd), rx, ry, rz, inv_n)
+    return nothing
+end
+
+@inline function _box_filter_body!(i, j, k, od, at, rx, ry, rz, inv_n)
+    (s,) = _box_stencil_sum(at, i, j, k, rx, ry, rz)
+    @inbounds od[i,j,k] = s * inv_n
     return nothing
 end
 
 function _box_filter!(od, fd::AbstractArray{T}, g, rx, ry, rz, mask) where {T}
-    @inbounds for k in g.Hz+1:g.Hz+g.Nz, j in g.Hy+1:g.Hy+g.Ny, i in g.Hx+1:g.Hx+g.Nx
-        if mask[i,j,k]
-            od[i,j,k] = zero(T)
-            continue
-        end
-        s, c = _box_stencil_sum((a, b, q) -> @inbounds(mask[a,b,q] ? (zero(T), 0) : (fd[a,b,q], 1)),
-                                i, j, k, rx, ry, rz)
-        od[i,j,k] = c > 0 ? s / c : zero(T)
+    launch!(Backends.backend(od), _box_filter_masked_body!, interior(g), od, mask,
+            _MaskedValAt(fd, mask), rx, ry, rz)
+    return nothing
+end
+
+@inline function _box_filter_masked_body!(i, j, k, od, mask, at, rx, ry, rz)
+    T = eltype(od)
+    @inbounds if mask[i,j,k]
+        od[i,j,k] = zero(T)
+        return nothing
     end
+    s, c = _box_stencil_sum(at, i, j, k, rx, ry, rz)
+    @inbounds od[i,j,k] = c > 0 ? s / c : zero(T)
     return nothing
 end
 
