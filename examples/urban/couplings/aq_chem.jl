@@ -278,29 +278,60 @@ function _aq_emit!(c::AQChem, case, dt)
     # 2-D reduction and the old loop's (the same bits). The dry deposition
     # total (`apply_dry_deposition!`) is the same kind of sum.
     Nx, Ny = size(c.k_air)
-    eNO, eNO2, eVOC = column_sum(Aeolus.Backends.backend(c.r_a), _aq_emit_column!, (1:Nx, 1:Ny),
-                                 NO, NO2, VOC, c.k_air, sfc, Nz,
-                                 c.F_NO * ftr * dt / dz, c.F_NO2 * ftr * dt / dz,
-                                 c.F_VOC * fsun * dt / dz, dz)
+    b = Aeolus.Backends.backend(c.r_a)
+    a_NO, a_NO2 = c.F_NO * ftr * dt / dz, c.F_NO2 * ftr * dt / dz
+    a_VOC = c.F_VOC * fsun * dt / dz
+    eNO, eNO2, eVOC = if runs_serially(b, Nx * Ny)
+        # On the calling task, add only the terms a column emits, as the old
+        # loop did. `column_sum` would add a 3-tuple for every column, zeros
+        # included: 1.43x the old loop at one thread (#301 gate). Adding a
+        # +0.0 term leaves a sum that starts at +0.0 unchanged, so both paths
+        # give the same bits.
+        e1, e2, e3 = 0.0, 0.0, 0.0
+        k_air = c.k_air
+        @inbounds for j in 1:Ny, i in 1:Nx
+            src, k = _aq_emit_source(i, j, k_air, sfc, Nz)
+            if src == 1
+                NO[i, j, k] += a_NO; NO2[i, j, k] += a_NO2
+                e1 += a_NO * dz; e2 += a_NO2 * dz
+            elseif src == 2
+                VOC[i, j, k] += a_VOC
+                e3 += a_VOC * dz
+            end
+        end
+        (e1, e2, e3)
+    else
+        column_sum(b, _aq_emit_column!, (1:Nx, 1:Ny), NO, NO2, VOC, c.k_air, sfc, Nz,
+                   a_NO, a_NO2, a_VOC, dz)
+    end
     A = length(c.k_air)
     c.emitted[:NO] += eNO / A; c.emitted[:NO2] += eNO2 / A; c.emitted[:VOC] += eVOC / A
     return nothing
 end
 
-@inline function _aq_emit_column!(i, j, NO, NO2, VOC, k_air, sfc, Nz, a_NO, a_NO2, a_VOC, dz)
+# what column (i, j) emits: 0 nothing, 1 traffic (NO, NO2), 2 park (VOC), and
+# its lowest air level. Both emission paths classify through it.
+@inline function _aq_emit_source(i, j, k_air, sfc, Nz)
     @inbounds begin
         k = k_air[i, j]
-        k <= Nz || return (0.0, 0.0, 0.0)
+        k <= Nz || return 0, k
         cl = sfc[i, j]
-        if cl == SURFACE_STREET || cl == SURFACE_WALL
-            NO[i, j, k] += a_NO; NO2[i, j, k] += a_NO2
-            return (a_NO * dz, a_NO2 * dz, 0.0)
-        elseif cl == SURFACE_PARK
-            VOC[i, j, k] += a_VOC
-            return (0.0, 0.0, a_VOC * dz)
-        end
-        return (0.0, 0.0, 0.0)
+        (cl == SURFACE_STREET || cl == SURFACE_WALL) && return 1, k
+        cl == SURFACE_PARK && return 2, k
+        return 0, k
     end
+end
+
+@inline function _aq_emit_column!(i, j, NO, NO2, VOC, k_air, sfc, Nz, a_NO, a_NO2, a_VOC, dz)
+    src, k = _aq_emit_source(i, j, k_air, sfc, Nz)
+    @inbounds if src == 1
+        NO[i, j, k] += a_NO; NO2[i, j, k] += a_NO2
+        return (a_NO * dz, a_NO2 * dz, 0.0)
+    elseif src == 2
+        VOC[i, j, k] += a_VOC
+        return (0.0, 0.0, a_VOC * dz)
+    end
+    return (0.0, 0.0, 0.0)
 end
 
 function run_stage!(c::AQChem, case, ::Val{:chemistry}, dt)

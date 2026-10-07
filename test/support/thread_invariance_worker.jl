@@ -34,7 +34,8 @@
 #               (4 steps): every field of parent and child.
 #   columns     (KA-m, #301) the column-physics kernels on seeded inputs, every
 #               launch threaded (threshold 0): fog adjustment, Kessler (both
-#               sedimentation schemes), dew exchange, dry deposition, facet
+#               sedimentation schemes), dew exchange, dry deposition, the
+#               Berlin aq_chem emissions, facet
 #               scenes (implicit, direct, lagged), the dynamic roughness, and
 #               the partials of a foreach_column! launch;
 #   fft         (KA-h, #298) one solve of every spectral pressure solver —
@@ -367,6 +368,16 @@ function section_columns()
     r = Aeolus.Chemistry.apply_dry_deposition!(c, 0.01 .* rand(Xoshiro(12), 128, 96), 30.0; dz = 2.0,
                                                k = rand(Xoshiro(13), 1:8, 128, 96), backend = b)
     record!("columns/dry_deposition", vcat(vec(c), r))
+    # aq_chem emissions: at one thread the site's own serial loop (only the
+    # emitted terms added), threaded the column_sum launch (a 3-tuple per
+    # column, zeros included); equal hashes across the counts mean the two
+    # paths give the same fields and totals
+    ac = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing))
+    aq = BC.find_coupling(ac, :aq_chem)
+    BC._aq_sun!(aq, ac)
+    with_backend(() -> BC._aq_emit!(aq, ac, 2.0), b)
+    record!("columns/aq_emit", vcat(vec(BC._aq_sp(aq, :NO)), vec(BC._aq_sp(aq, :NO2)), vec(BC._aq_sp(aq, :VOC)),
+                                    [aq.emitted[s] for s in (:NO, :NO2, :VOC)]))
     # facet scenes: implicit (iterative, direct) and lagged. BLAS on one
     # thread in every process: the scene's longwave response is an LU solve
     # whose bits depend on the BLAS thread count, and init_threads! leaves

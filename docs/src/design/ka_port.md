@@ -793,7 +793,7 @@ at one thread; speed-up = old 1 t / new N t; µs).
 | `step_all_surfaces!`, child 64×64 | 146 241 | 140 142 | 0.96 | 4.04× | 5.42× | 11.51× |
 | `step_parent_surface!`, parent 192×192 (tiled) | 1 987 205 | 1 993 987 | 1.00 | 3.38× | 5.28× | 6.24× |
 | `aq_chem` deposition velocities, 64×64 | 24 336 | 21 086 | 0.87 | 4.37× | 7.45× | 7.98× |
-| `aq_chem` emissions, 64×64 | 5.0 | 7.5 | 1.50 | 0.68× | 0.68× | 0.64× |
+| `aq_chem` emissions, 64×64 | 5.11 | 5.32 | 1.04 | 0.96× | 0.86× | 0.85× |
 | `apply_dry_deposition!` (O₃), 64×64 | 30.9 | 23.7 | 0.77 | 1.29× | 1.29× | 1.28× |
 | surface delivery (`:surface_flux`), 64×64 | 184 | 22.9 | 0.12 | 7.92× | 7.95× | 7.88× |
 | `step_urban_facets!` implicit, 564 facets | 9 587 | 9 646 | 1.01 | 3.47× | 3.73× | 4.21× |
@@ -802,12 +802,21 @@ at one thread; speed-up = old 1 t / new N t; µs).
 
 Reading the table:
 
-* **The 1-thread gate (≤ 1.10) holds except for the `aq_chem`
-  emissions**, which take 5.0 → 7.5 µs. The cause is that every emitting
-  column (3265 of 4096) adds a 3-tuple, which is three add-latency
-  chains, where the old loop added one or two terms. Skipping zero terms
-  did not help (7.6 µs). The 2.5 µs is once per chemistry step, against a
-  stage whose deposition velocities got 3 ms faster.
+* **The 1-thread gate (≤ 1.10) holds for every kernel.** The `aq_chem`
+  emissions first missed it at 1.38-1.50× (5.0 → 7.5 µs): through
+  `column_sum` every column adds a 3-tuple, zeros included, where the
+  old loop added only the one or two terms a street or park column
+  emits (3265 of 4096 columns emit). The site now runs its own serial
+  loop whenever the launch would run on the calling task, adding only
+  the emitted terms, and launches `column_sum` otherwise; both classify
+  a column through one helper, `_aq_emit_source`. Adding a +0.0 term to
+  a sum that starts at +0.0 changes nothing, so the two paths give the
+  same bits (the harness record `columns/aq_emit` runs the serial loop
+  at one thread and the threaded launch at more). Measured on the
+  flagship state, 3 repeats of the minimum of 20 000 calls: 5.11-5.24 →
+  5.32-5.39 µs, 1.02-1.05×. The emission row's 4-24 thread columns are
+  serial too (4096 points are below the threshold), and the spread
+  there is machine load.
 * **`fog_adjust!` gains at one thread** (0.44×) from the early exit,
   because most flagship cells are far from saturation. A foggy state
   (30 % of cells supersaturated) gains 0.88×. Both reach 15-18× at 24
