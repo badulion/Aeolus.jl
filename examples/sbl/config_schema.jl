@@ -33,6 +33,7 @@ using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section,
                      Optional, Path, section, option!, register_driver!, config_schema
 using Aeolus.IO: IO, RunFolder, CheckpointSchedule, with_monitor, monitor!, output_dir
 using Aeolus.Simulations: Simulations
+using Aeolus.InputDrivers: read_dynamic_driver, dynamic_forcing, forcing_dynamic_inputs, write_dynamic_driver
 import TOML
 
 """
@@ -286,6 +287,10 @@ function Config.driver_sections(::SBLDriver)
                 doc = "homogeneous (sbl_case: GABLS1-4, CASES-99), stratified_channel (stratified_channel_run), relaminarisation_channel (relam_spinup + relam_run), collapse_channel (collapse_run)")
         option!(s, "data", Optional{Path};
                 doc = "the case table (a CSV of examples/sbl/data/ with a table name in its first column) that table references read; \"none\": no table")
+        option!(s, "dynamic", Optional{Path};
+                doc = "homogeneous: a dynamic driver (CFG-g #362, `aeolus preprocess dynamic --from-sounding`) whose " *
+                      "tables replace the config's: geostrophic wind, advective tendencies, subsidence, nudging and " *
+                      "the surface θ series, each when the driver holds it; \"none\": the config's own")
         option!(s, "richardson", Float64; default = 0.0, range = (0, Inf),
                 doc = "stratified_channel: the friction Richardson number Ri_τ (0: θ passive, g = 0)")
         option!(s, "re_tau", Float64; default = 180.0, range = (0, Inf), open_lower = true,
@@ -415,7 +420,7 @@ end
 # kind that does not use it is an error (a silently ignored key is a bug)
 const _SBL_HOMOG = (:homogeneous,)
 const _SBL_KIND_USE = Dict(
-    "case.data" => _SBL_HOMOG, "case.richardson" => (:stratified_channel,),
+    "case.data" => _SBL_HOMOG, "case.dynamic" => _SBL_HOMOG, "case.richardson" => (:stratified_channel,),
     "case.re_tau" => (:relaminarisation_channel,), "case.h_over_l" => (:relaminarisation_channel,),
     "case.heat_flux_fraction" => (:collapse_channel,), "case.z0" => (:collapse_channel,),
     "case.theta_ref" => (:collapse_channel,),
@@ -509,6 +514,10 @@ function _sbl_checks(cfg)
                    ("initial.theta", cfg.initial.theta), ("initial.u", cfg.initial.u), ("initial.v", cfg.initial.v))
         _sbl_table_refs(v, k, refs)
     end
+    dd = cfg.case.dynamic
+    dd === nothing || isfile(dd) ||
+        push!(e, ConfigError("case.dynamic", "the dynamic driver $dd does not exist; generate it with\n" *
+                             "  julia --project -m Aeolus preprocess dynamic --from-sounding <this config> --out $dd"))
     if d !== nothing && !isfile(d)
         push!(e, ConfigError("case.data", "the case table $d does not exist"))
     elseif !isempty(refs) && d === nothing
@@ -651,6 +660,69 @@ function sbl_extra_forcing(f, T)
 end
 
 """
+    sbl_forcing(cfg::RunConfig) -> (; U_g, V_g, extra, surface)
+
+The large-scale forcing of a homogeneous `sbl` config as `LargeScaleForcing`
+objects: the geostrophic wind `U_g`, `V_g`, the `extra` forcings
+([`sbl_extra_forcing`](@ref)) and the `sbl_case` keywords of the surface
+temperature ([`sbl_surface_temperature`](@ref)), from the config's own
+quantities and case table, or, for those a dynamic driver `case.dynamic`
+holds (CFG-g #362), from the driver (its times shifted from "seconds
+since init_time" to the model time, `initial.t_start` at the start): the
+geostrophic wind, the extra forcings (all of them, when it holds any) and
+the surface θ series.
+"""
+function sbl_forcing(cfg::RunConfig)
+    T = _sbl_tables(cfg)
+    f = cfg.forcing; t0 = cfg.initial.t_start
+    Ug = sbl_quantity(f.u_g, T); Vg = sbl_quantity(f.v_g, T)
+    extra = sbl_extra_forcing(f, T)
+    sfc = sbl_surface_temperature(cfg.surface.temperature, T, t0)
+    cfg.case.dynamic === nothing && return (; U_g = Ug, V_g = Vg, extra, surface = sfc)
+    d = read_dynamic_driver(cfg.case.dynamic; planes = false)
+    F = dynamic_forcing(d; t0 = t0)
+    F.U_g === nothing || (Ug = F.U_g)
+    F.V_g === nothing || (Vg = F.V_g)
+    isempty(F.extra) || (extra = F.extra)
+    s = d.surface
+    s === nothing || s.temperature === nothing ||
+        (sfc = (; T_s = SurfaceTemperatureSeries(s.t .+ t0, s.temperature)))
+    return (; U_g = Ug, V_g = Vg, extra, surface = sfc)
+end
+
+"""
+    preprocess_dynamic(::SBLDriver, cfg; from = :sounding, out = nothing) -> Vector{String}
+
+`aeolus preprocess dynamic --from-sounding <sbl config>`: the case-table
+preprocessor of the homogeneous SBL cases (GABLS2-4, CASES-99): the
+config's table quantities ([`sbl_forcing`](@ref) without a driver: the
+geostrophic wind, advective tendencies, subsidence, nudging, the surface
+θ series) as a dynamic driver at `case.dynamic` (or `out`), times since
+the run start `initial.t_start`, the case table hashed. Numbers and
+formulas stay in the config. `init_time` is empty: the configs carry no
+calendar date.
+"""
+function Config.preprocess_dynamic(::SBLDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing)
+    from === :sounding || throw(ArgumentError("the sbl driver has the case-table preprocessor only (--from-sounding)"))
+    cfg.case.kind === :homogeneous || throw(ArgumentError("--from-sounding: case.kind = $(cfg.case.kind) has no forcing tables"))
+    path = out !== nothing ? abspath(out) : cfg.case.dynamic
+    path === nothing && throw(ArgumentError("[case] dynamic is \"none\": pass --out file.nc"))
+    F = sbl_forcing(with_case_dynamic(cfg, nothing))
+    sfc = haskey(F.surface, :T_s) ? (t = F.surface.T_s.t, temperature = F.surface.T_s.T_s, pressure = nothing) : nothing
+    d = forcing_dynamic_inputs(; U_g = F.U_g, V_g = F.V_g, extra = F.extra, surface = sfc,
+                               t_start = cfg.initial.t_start)
+    isempty(d.tables) && d.surface === nothing &&
+        throw(ArgumentError("--from-sounding: the config has no forcing tables (only numbers and formulas)"))
+    lat = cfg.forcing.latitude === nothing ? NaN : cfg.forcing.latitude
+    write_dynamic_driver(path, d; source = something(cfg.case.data, ""), origin_lat = lat,
+                         preprocessor = "aeolus preprocess dynamic --from-sounding")
+    return [path]
+end
+
+# `cfg` with case.dynamic replaced (the preprocessor reads the config's own tables)
+with_case_dynamic(cfg::RunConfig, path) = path === cfg.case.dynamic ? cfg : with(cfg, "case.dynamic" => path)
+
+"""
     sbl_case(cfg::RunConfig) -> SBLCase
 
 The homogeneous SBL case of a resolved `sbl` config (`[case] kind =
@@ -661,17 +733,17 @@ function sbl_case(cfg::RunConfig)
     T = _sbl_tables(cfg)
     f = cfg.forcing; sf = cfg.surface; ini = cfg.initial; sp = cfg.sponge
     fc = f.f === nothing ? sbl_coriolis(f.latitude) : f.f
-    Ug = sbl_quantity(f.u_g, T); Vg = sbl_quantity(f.v_g, T)
+    F = sbl_forcing(cfg)
+    Ug = F.U_g; Vg = F.V_g
     θi = sbl_profile(ini.theta, T)
     kw = (; N = cfg.grid.size, extent = something(cfg.grid.extent, (400.0, 400.0, 400.0)),
           U_g = Ug, V_g = Vg, f = fc, z0m = sf.z0m, z0h = something(sf.z0h, sf.z0m), θ₀ = cfg.dynamics.theta0,
           base = sbl_base_closure(cfg.sgs), sgs_stability = cfg.sgs.stability,
           sgs_stress = cfg.sgs.stress, stability = sbl_stability(sf.stability),
           sponge_z = sp.z, sponge_α = sp.alpha, sponge_target = sp.target, seed = cfg.run.seed,
-          extra_forcing = sbl_extra_forcing(f, T), θ_init = θi, u_init = sbl_profile(ini.u, T),
+          extra_forcing = F.extra, θ_init = θi, u_init = sbl_profile(ini.u, T),
           v_init = sbl_profile(ini.v, T), t_start = ini.t_start, ρcp = sf.rho_cp)
-    return sbl_case(; kw..., sbl_perturbation(ini.perturbation)...,
-                    sbl_surface_temperature(sf.temperature, T, ini.t_start)...)
+    return sbl_case(; kw..., sbl_perturbation(ini.perturbation)..., F.surface...)
 end
 
 """
