@@ -64,3 +64,7 @@ end_time = 230400.0            # 64 h local: 00 LT 25 Oct
 
 [averaging]
 series_interval = 600.0
+
+[checkpoint]
+every_seconds = 1800.0         # an interrupted run resumes with --resume <run folder> (RESUME= for the scripts)
+keep = 2

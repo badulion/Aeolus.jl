@@ -695,19 +695,21 @@ function sbl_channel_case(cfg::RunConfig)
 end
 
 """
-    sbl_channel_spinup(cfg::RunConfig) -> snapshot
+    sbl_channel_spinup(cfg::RunConfig; checkpoint = nothing) -> snapshot
 
 The neutral spin-up a channel kind starts from (`case.spinup_time`):
 `stratified_channel_spinup`, `relam_spinup` or the neutral collapse half
 channel (`collapse_case`, run with `run_channel!`). `nothing` for a
 stratified channel with `spinup_time = 0` (it then starts from noise).
+`checkpoint` (a `CheckpointSchedule`) resumes an interrupted
+relaminarisation spin-up (`relam_spinup`'s).
 """
-function sbl_channel_spinup(cfg::RunConfig)
+function sbl_channel_spinup(cfg::RunConfig; checkpoint = nothing)
     k = cfg.case.kind; N = cfg.grid.size; T = cfg.case.spinup_time; seed = cfg.run.seed
     if k === :stratified_channel
         return T == 0 ? nothing : stratified_channel_spinup(; N = N, T_spin = T, seed = seed)
     elseif k === :relaminarisation_channel
-        return relam_spinup(cfg.case.re_tau; N = N, T_spin = T, seed = seed)
+        return relam_spinup(cfg.case.re_tau; N = N, T_spin = T, seed = seed, checkpoint = checkpoint)
     end
     spin = collapse_case(N; z0 = cfg.case.z0, c_s = something(cfg.sgs.c_s, 0.1))
     run_channel!(spin, T)
@@ -776,6 +778,20 @@ Load an `sbl` config: a path, or the name of a shipped config of
 function sbl_config(path::AbstractString; overrides = String[])
     p = isfile(path) ? path : joinpath(SBL_CONFIG_DIR, endswith(path, ".toml") ? path : path * ".toml")
     return load_run_config(p; overrides = overrides)
+end
+
+"""
+    sbl_script_run(name; overrides = String[], resume = get(ENV, "RESUME", nothing)) -> SBLRun
+
+Run the `sbl` config `name` (a path or a shipped config, [`sbl_config`](@ref))
+with `overrides` as `aeolus run` does (`run_config`: a run folder under
+`[run] root`) and return what the driver built and ran: `case`, `stats`,
+`series`, `towers`. The runner scripts of examples/sbl/ call it, then make
+their figures. `resume` (or `RESUME=<run folder>`) continues an
+interrupted run from its newest checkpoint.
+"""
+function sbl_script_run(name::AbstractString; overrides = String[], resume = get(ENV, "RESUME", nothing))
+    return Config.run_config(sbl_config(name; overrides = overrides); resume = resume).obj
 end
 
 # ---------------------------------------------------------------------------

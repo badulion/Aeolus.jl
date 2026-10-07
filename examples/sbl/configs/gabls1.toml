@@ -62,3 +62,7 @@ end_time = 32400.0             # 9 h
 from = 28800.0                 # hours 8-9
 sample_every = 10
 series_interval = 300.0
+
+[checkpoint]
+every_seconds = 1800.0         # an interrupted run resumes with --resume <run folder> (RESUME= for the scripts)
+keep = 2
