@@ -9,9 +9,13 @@
 # of the surface flux and the nominal u_τ (`relaminarisation_criteria`;
 # L from `SurfaceExchange.obukhov_length`), L⁺ = L u_τ/ν = Re_τ/(h/L).
 #
-# Each Re_τ is spun up neutral for T_SPIN h/u_τ (the driver's
-# `relam_spinup`); from that state the cooling is switched on and each h/L
-# run for T_END h/u_τ (`relam_run`). A run has *collapsed* when the
+# The case is examples/sbl/configs/relaminarisation.toml (the `sbl` run
+# driver, CFG-d #359) with RE, N, T_SPIN, T_END and each h/L set on it.
+# Each Re_τ is spun up neutral once for T_SPIN h/u_τ (`relam_spinup`, the
+# driver's sbl_channel_spinup); from that state the cooling is switched on
+# and each h/L run for T_END h/u_τ (`relam_run`, sbl_channel_run). One
+# config run is `julia -m Aeolus run examples/sbl/configs/relaminarisation.toml
+# --set case.h_over_l=2.0` (with its own spin-up); this sweep shares one. A run has *collapsed* when the
 # volume-mean resolved TKE at T_END is below 10 % of its switch-on value,
 # and *survived* when it is above 50 %. The critical h/L is the geometric
 # mean of the largest surviving and the smallest collapsed h/L; its L⁺ is
@@ -38,7 +42,7 @@
 using Aeolus
 using Printf, Serialization
 using Statistics: mean
-include(joinpath(@__DIR__, "driver.jl"))
+include(joinpath(@__DIR__, "config_schema.jl"))
 
 const RES = parse.(Int, split(get(ENV, "RE", "180,360"), ","))
 const HLS = parse.(Float64, split(get(ENV, "HL", "0.3,0.6,1,1.5,2"), ","))
@@ -53,6 +57,10 @@ const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 const H_NIEUWSTADT = 1.23 * Aeolus.SurfaceExchange.von_karman()
 tag(Re) = "Re$(Re)_" * join(grid(Re), "x")
 
+"The relaminarisation.toml config of `Re` at this script's grid and times."
+relam_config(Re) = sbl_config("relaminarisation"; overrides = ["case.re_tau=$Re", "grid.size=[$(join(grid(Re), ","))]",
+                                                                 "case.spinup_time=$T_SPIN", "stepper.end_time=$T_END"])
+
 # Every run checkpoints periodically into output/checkpoints/<name> and
 # resumes from there when restarted (#245; AEOLUS_CHECKPOINT=0 turns it off);
 # the folder is removed once the run's result is cached.
@@ -61,7 +69,7 @@ function spinup(Re)
     path = joinpath(OUTDIR, name * ".jls")
     isfile(path) && return deserialize(path)
     ck = sbl_checkpoints(name)
-    sp = relam_spinup(Re; N = grid(Re), T_spin = T_SPIN, checkpoint = ck)
+    sp = sbl_channel_spinup(relam_config(Re); checkpoint = ck)
     serialize(path, sp)
     finish_checkpoints!(ck)
     return sp
@@ -73,7 +81,9 @@ function cached(Re, hL)
     get(ENV, "REUSE", "0") == "1" && isfile(path) && return deserialize(path)
     sp = spinup(Re)
     ck = sbl_checkpoints(name)
-    r = relam_run(Re, hL, sp; T_end = T_END, checkpoint = ck)
+    cfg = with(relam_config(Re), "case.h_over_l" => hL)
+    r = sbl_channel_run(cfg, sbl_channel_case(cfg), sp; checkpoint = ck)
+    r = merge(r, (; case = nothing))          # the result, not the solver state, is cached
     serialize(path, r)
     finish_checkpoints!(ck)
     return r

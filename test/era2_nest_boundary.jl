@@ -631,7 +631,7 @@ end
 
 # fill_nest_halos! is the public entry a driver uses after changing a
 # child's boundary data outside a NestedRun step (#329, item 7; the Berlin
-# nest coupling of #265 called the private _fill_nest_halos!).
+# nest coupling uses it since #349, the private alias is gone).
 @testset "fill_nest_halos!: new boundary data reach the halos (#329)" begin
     pm = RegularGrid(Float64; size = (8, 8, 8), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
     nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2)
@@ -648,7 +648,7 @@ end
     @test fill_nest_halos!(csim, st) === csim
     @test csim.θ.data[first(ii) - 1, first(jj), first(kk)] == 305.0   # west halo
     @test csim.θ.data[last(ii) + 1, last(jj), first(kk)] == 305.0     # east halo
-    @test Aeolus.Nesting._fill_nest_halos! === fill_nest_halos!       # #265's name
+    @test !isdefined(Aeolus.Nesting, :_fill_nest_halos!)              # alias removed (#349)
     closed = BoussinesqSimulation(cm)
     @test fill_nest_halos!(closed, st) === closed                      # no open faces
 end

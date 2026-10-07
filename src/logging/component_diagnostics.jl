@@ -7,9 +7,10 @@
 # `apply_wall_stress!`'s friction velocity, the TBLE columns' u_τ,
 # `NestRunStats`.
 
-import .RunLog: diagnostics
-using .RunLog: Diagnostic, prefixed
+import .RunLog: diagnostics, profile_diagnostics
+using .RunLog: Diagnostic, ProfileDiagnostic, prefixed
 using .Fields: interior_view
+using .Backends: plane_mean!
 
 # ---------------------------------------------------------------------------
 # simulations
@@ -233,3 +234,88 @@ function diagnostics(run::Nesting.NestedRun, _)
     append!(ds, prefixed("child", diagnostics(run.child, run.child)))
     return ds
 end
+
+# ---------------------------------------------------------------------------
+# profiles (LOG-e, #337): diagnostics.nc
+# ---------------------------------------------------------------------------
+# Each source delegates to the library's own reduction: `plane_mean!` (the
+# deterministic plane sum of the KernelAbstractions port),
+# `horizontal_variance`, `resolved_flux_wθ`.
+
+_zc(m) = collect(Float64, Grids.znodes(m, Grids.CellCenter()))
+_zf(m) = collect(Float64, Grids.znodes(m, Grids.FaceZ()))
+_pmean(f) = () -> plane_mean!(zeros(Float64, f.mesh.Nz), f)
+
+function _core_profiles(sim)
+    m = sim.mesh
+    zc, zf = _zc(m), _zf(m)
+    return ProfileDiagnostic[
+        ProfileDiagnostic("u", "m s-1", "z", zc, _pmean(sim.u); description = "horizontal mean of u"),
+        ProfileDiagnostic("v", "m s-1", "z", zc, _pmean(sim.v); description = "horizontal mean of v"),
+        ProfileDiagnostic("theta", "K", "z", zc, _pmean(sim.θ);
+                          description = "horizontal mean potential temperature"),
+        ProfileDiagnostic("w_var", "m2 s-2", "zf", zf, () -> Simulations.horizontal_variance(sim.w);
+                          description = "horizontal variance of w at the w faces"),
+    ]
+end
+
+"""
+    profile_diagnostics(sim::BoussinesqSimulation, sim) -> Vector{ProfileDiagnostic}
+
+The dynamical core's profiles for `diagnostics.nc`: horizontal means `u`,
+`v`, `theta` (and `qv` with moisture) on the cell-centre heights `z`
+(the staggered `u`, `v` sit at the centre heights), `w_var`, the
+horizontal variance of `w` on the face heights `zf`
+([`horizontal_variance`](@ref Aeolus.Simulations.horizontal_variance)),
+and `w_theta`, the resolved kinematic heat flux `⟨w'θ'⟩` on `z`
+([`resolved_flux_wθ`](@ref Aeolus.Simulations.resolved_flux_wθ)).
+"""
+function profile_diagnostics(sim::Simulations.BoussinesqSimulation, ::Simulations.BoussinesqSimulation)
+    ps = _core_profiles(sim)
+    zc = _zc(sim.mesh)
+    sim.has_moisture &&
+        push!(ps, ProfileDiagnostic("qv", "kg kg-1", "z", zc, _pmean(sim.qv);
+                                    description = "horizontal mean water-vapour mixing ratio"))
+    push!(ps, ProfileDiagnostic("w_theta", "K m s-1", "z", zc, () -> Simulations.resolved_flux_wθ(sim);
+                                description = "resolved kinematic heat flux <w'theta'>"))
+    return ps
+end
+
+"""
+    profile_diagnostics(sim::MassWeightedSimulation, sim) -> Vector{ProfileDiagnostic}
+
+The sound-proof cores' profiles: `u`, `v`, `theta` on `z` and `w_var` on
+`zf`, as for the Boussinesq core.
+"""
+profile_diagnostics(sim::Anelastic.MassWeightedSimulation, ::Anelastic.MassWeightedSimulation) =
+    _core_profiles(sim)
+
+"""
+    profile_diagnostics(closure::AbstractSGSClosure, sim) -> Vector{ProfileDiagnostic}
+
+Any SGS closure: `nu_v`, the horizontal mean of its vertical eddy
+viscosity of the last evaluation, through
+[`sgs_fields`](@ref Aeolus.Operators.sgs_fields). A `TKEClosure` adds
+`e`, the horizontal mean of its SGS energy.
+"""
+profile_diagnostics(c::Operators.AbstractSGSClosure, sim) = ProfileDiagnostic[
+    ProfileDiagnostic("nu_v", "m2 s-1", "z", _zc(sim.mesh),
+                      () -> plane_mean!(zeros(Float64, sim.mesh.Nz), Operators.sgs_fields(c, sim).νv);
+                      description = "horizontal mean vertical eddy viscosity")]
+
+function profile_diagnostics(c::PrognosticSGS.TKEClosure, sim)
+    ps = invoke(profile_diagnostics, Tuple{Operators.AbstractSGSClosure,Any}, c, sim)
+    push!(ps, ProfileDiagnostic("e", "m2 s-2", "z", _zc(sim.mesh), _pmean(c.e);
+                                description = "horizontal mean SGS TKE"))
+    return ps
+end
+
+"""
+    profile_diagnostics(run::NestedRun, run) -> Vector{ProfileDiagnostic}
+
+The profiles of both domains, under `parent.` and `child.` (names and
+axes).
+"""
+profile_diagnostics(run::Nesting.NestedRun, _) =
+    vcat(prefixed("parent", profile_diagnostics(run.parent, run.parent)),
+         prefixed("child", profile_diagnostics(run.child, run.child)))

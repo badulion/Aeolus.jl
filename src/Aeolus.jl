@@ -24,9 +24,9 @@ include("Operators.jl")
 include("TimeSteppers.jl")
 include("PressureSolvers.jl")
 include("Simulations.jl")
+include("NCIO.jl")            # NetCDF-4 output policy over NCDatasets (#310); before IO (diagnostics.nc, #337)
 include("IO.jl")
 include("Config.jl")         # run configuration schema, loader, canonical run.toml (CFG-a, #356)
-include("NCIO.jl")            # NetCDF-4 output policy over NCDatasets (#310)
 include("IBM.jl")
 include("Parallel.jl")
 include("SpectralElement.jl")
@@ -90,6 +90,10 @@ include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, adve
 include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 include("PrognosticSGS.jl")        # Phase 56 Deardorff prognostic SGS TKE (#182)
 
+# CFG-b (#357): the bare-simulation run driver (needs the dynamical cores,
+# so after them; the driver contract and the CLI are in Config).
+include("config/simulation_driver.jl")
+
 using .RunLog
 using .Grids
 using .Fields
@@ -98,9 +102,9 @@ using .Operators
 using .TimeSteppers
 using .PressureSolvers
 using .Simulations
+using .NCIO
 using .IO
 using .Config
-using .NCIO
 using .Microphysics
 using .IBM
 using .Parallel
@@ -169,6 +173,7 @@ export AeolusLogger, TeeLogger, open_run_log, with_run_log, test_logger,
        current_domain, with_domain, parse_log_level
 # Diagnostics registry, CSV writer, progress line (LOG-c, #335)
 export Diagnostic, diagnostics, collect_diagnostics, prefixed, reduce_diagnostic, evaluate_diagnostic,
+       ProfileDiagnostic, profile_diagnostics, collect_profiles, evaluate_profile,
        DiagnosticsWriter, record_diagnostics!, last_diagnostics, costly_due,
        ProgressLine, progress!, WarningTap, with_progress, note_warning!
 export AbstractMesh, RegularGrid
@@ -240,6 +245,11 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
 # CFG-a (#356): run configuration (schema building: Aeolus.Config)
 export RunConfig, ConfigError, load_run_config, with, to_toml, write_config, config_text,
        config_hash, register_driver!
+# CFG-b (#357): the driver contract, run_config, the bare-simulation driver.
+# `Aeolus.main` (the `julia -m Aeolus` entry point) is not exported.
+export AbstractRunDriver, run_config, state_fields
+# CFG-e (#360): sweeps; the example scripts run their configs with run_configs
+export run_configs, load_sweep
 # #334: run folder and provenance
 export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
        provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,
@@ -249,6 +259,8 @@ export checkpoint_payload, write_checkpoint,
        BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
        check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
        RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir
+# #337: diagnostics.nc
+export DiagnosticsNCWriter, diagnostics_nc_path, nc_provenance_attributes
 export NCDataset, nc_create, nc_defvar!, nc_append_record!, nc_chunksizes,
        cf_time_units, NC_DEFLATE_LEVEL                              # #310
 export apply_kessler_step!, KESSLER_N0, kessler_rain_number, kessler_fall_speed
@@ -1145,5 +1157,19 @@ export Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time
 export SubfilterHeight, subfilter_height, DynamicRoughness,
        surface_gradient_drag, roughness_surface_drag, roughness_drag_residual, dynamic_alpha,
        update_dynamic_roughness!, with_roughness, dynamic_wall_laws, dynamic_wall_laws!
+
+# CFG-b (#357): the command line. `julia --project -m Aeolus <command> …`
+# (Julia ≥ 1.12) calls `Aeolus.main(ARGS)`; `bin/aeolus` does the same on
+# older Julia. The return value is the exit code.
+"""
+    Aeolus.main(args::Vector{String}; io = stdout, err = stderr) -> Cint
+
+The `aeolus` command line ([`Aeolus.Config.main`](@ref)): `julia --project
+-m Aeolus run config.toml`, or `bin/aeolus run config.toml`.
+"""
+main(args::AbstractVector{<:AbstractString} = ARGS; kwargs...) = Config.main(args; kwargs...)
+@static if VERSION >= v"1.11"
+    @main
+end
 
 end # module

@@ -3,28 +3,29 @@
 # description; Bosveld et al. 2014a,b; LES results: Basu, Holtslag &
 # Bosveld 2012), P58-d (#194)
 #
-# Built on the shared SBL driver through examples/sbl/cases.jl
-# (`gabls3_case`): time-height geostrophic wind and advective tendencies
-# from LargeScaleForcing, the prescribed 0.25 m θ as a
+# The run is examples/sbl/configs/gabls3.toml (the `sbl` run driver,
+# CFG-d #359; one run folder per closure): time-height geostrophic wind and
+# advective tendencies from LargeScaleForcing, the prescribed 0.25 m θ as a
 # SurfaceTemperatureSeries, MOST surface fluxes (SurfaceExchange) and
 # stress (WallModels.MOSTWallLaw), Smagorinsky C_s = 0.1 with the P55-e
 # stability correction (`brown94`) or without it (`none`). Dry (see
 # cases.jl).
 #
 # Runs 00 UTC -> T_END (default 04 UTC: the published LES envelope is for
-# 03-04 UTC), averages the profiles over 03-04 UTC and compares the jet
-# with the digitised ensemble (examples/sbl/data/gabls3_reference.csv,
-# gabls3_envelope.csv).
+# 03-04 UTC), averages the profiles from 03 UTC to T_END and compares the
+# jet with the digitised ensemble (examples/sbl/data/gabls3_reference.csv,
+# gabls3_envelope.csv), then makes the figure.
 #
 #   NX=64 NZ=64 L=400 julia --project=. examples/sbl/gabls3.jl            # 6.25 m on 400 m
 #   NX=64 NZ=128 LX=200 L=400 julia --project=. examples/sbl/gabls3.jl    # 3.125 m on 200 x 200 x 400 m
 #   NX=128 NZ=128 L=800 julia --project=. examples/sbl/gabls3.jl          # the reference 800 m cube at 6.25 m
 #   CLOSURES=brown94 ... ; REUSE=1 ... (combine separately run closures)
+#   CLOSURES=brown94 RESUME=runs/<run folder> ...  (continue an interrupted run)
 #
 # writes examples/sbl/output/gabls3_<tag>.svg, _profiles.csv, _series.csv
 # =========================================================================
 
-include(joinpath(@__DIR__, "cases.jl"))
+include(joinpath(@__DIR__, "config_schema.jl"))
 include(joinpath(@__DIR__, "svgplot.jl"))
 using Printf
 using Serialization
@@ -39,28 +40,16 @@ const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))"
 const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 const T_AVG = (3 * 3600.0, 4 * 3600.0)
 
-function run_closure(stab, ck = (nothing, nothing))
-    c = gabls3_case(; N = (NX, NX, NZ), extent = (LX, LX, LZ), sponge_z = 0.75 * LZ,
-                    sgs_stability = stab)
-    series = NamedTuple[]
-    nextt = Ref(0.0)
-    cb = function (c)
-        c.sim.t >= nextt[] || return
-        nextt[] += 300.0
-        p = sbl_profiles(c)
-        k = argmax(p.S)
-        scr = sbl_screen(c)
-        push!(series, (t = c.sim.t, u_star = sqrt(hypot(c.τx, c.τy)), wθ = mean(c.wθ),
-                       H = c.ρcp * mean(c.wθ), h = sbl_bl_height(p.zf, p.τ), S_max = p.S[k],
-                       z_jet = p.z[k], θ2 = scr.θ_screen, U10 = scr.U_screen,
-                       Ts = surface_temperature(c.Ts, c.sim.t)))
-    end
-    cc = (series = series, nextt = nextt)
-    st = sbl_run!(c, min(T_END, T_AVG[2]); average_from = T_AVG[1], sample_every = 5, callback = cb,
-                  checkpoint = ck[1], checkpoint_components = cc)
-    T_END > T_AVG[2] && sbl_run!(c, T_END; callback = cb, checkpoint = ck[2], checkpoint_components = cc)
-    @printf("%-8s %s: 03-04 UTC h = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  L = %5.1f m  h/L = %4.1f  LLJ %.2f m/s at %3.0f m  (%d steps, %.0f s)\n",
-            stab, TAG, st.h, st.u_star, st.H0, st.L, st.h / st.L, st.S_max, st.z_jet, c.nsteps, c.wall_time)
+function run_closure(stab)
+    r = sbl_script_run("gabls3"; overrides = ["grid.size=[$NX,$NX,$NZ]", "grid.extent=[$LX,$LX,$LZ]",
+                                              "sponge.z=$(0.75LZ)", "sgs.stability=\"$stab\"",
+                                              "stepper.end_time=$T_END", "averaging.from=$(T_AVG[1])"])
+    st = r.stats; c = r.case
+    series = [(t = s.t, u_star = s.u_star, wθ = s.wθ, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet,
+               θ2 = s.θ_screen, U10 = s.U_screen, Ts = s.T_s) for s in r.series]      # every 300 s
+    @printf("%-8s %s: 03-%02d UTC h = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  L = %5.1f m  h/L = %4.1f  LLJ %.2f m/s at %3.0f m  (%d steps, %.0f s)\n",
+            stab, TAG, round(Int, T_END / 3600), st.h, st.u_star, st.H0, st.L, st.h / st.L, st.S_max, st.z_jet,
+            c.nsteps, c.wall_time)
     return (stab = stab, st = st, series = series, nsteps = c.nsteps, wall = c.wall_time)
 end
 
@@ -70,12 +59,8 @@ function cached(stab)
         println("$stab: cached $path")
         return deserialize(path)
     end
-    # periodic checkpoints, automatic resume (#245); one prefix per sbl_run! call
-    dir = joinpath(@__DIR__, "output", "checkpoints", "gabls3_$(TAG)_$(stab)")
-    ck = (driver_checkpoints(dir; prefix = "averaging"), driver_checkpoints(dir; prefix = "rest"))
-    r = run_closure(stab, ck)
+    r = run_closure(stab)
     serialize(path, r)
-    finish_checkpoints!(ck[1])
     return r
 end
 results = [cached(s) for s in CLOSURES]

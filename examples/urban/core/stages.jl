@@ -225,18 +225,21 @@ shorter than `2dt` (so the run does not end on a sliver of a step).
 last_step_dt(dt, remaining) = remaining <= dt ? remaining : remaining < 2dt ? remaining / 2 : dt
 
 """
-    run_case!(case; nsteps = case.cfg.nsteps) -> case
+    run_case!(case; nsteps = case.cfg.nsteps, monitor = nothing, callback = nothing) -> case
 
 Open the output (unless `cfg.output_path === nothing`), run `nsteps`
 steps (stopping early on a blow-up), close the output and log the
 summary: the run's start and end, the stage timing and the ledgers are
-`Info` records (`subsystem = :berlin`).
+`Info` records (`subsystem = :berlin`). With a `monitor` (an `Aeolus.IO.RunMonitor`, the `berlin` run
+driver's) every step runs under it (`monitored_step!`: the diagnostics
+row, the progress line, the blowup guard); `callback(case, n)` is called
+after step `n`.
 
 With a variable-step `:timestepper` provider (`variable_dt`, e.g.
 `:adaptive`) `nsteps · cfg.dt` is instead the simulated time to reach:
 each step takes `step_dt(case)`, the last one shortened to land on it.
 """
-function run_case!(case; nsteps::Integer = case.cfg.nsteps)
+function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, callback = nothing)
     cfg = case.cfg
     cfg.output_path === nothing || open_output!(case)
     P = cadence_period(cfg, :output)
@@ -249,14 +252,22 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps)
           subsystem = :berlin, domain = current_domain(), event = :run_start)
     case.clock.t_wall0 = time()
     n0 = case.clock.n
+    function one_step(dt)
+        ok = monitor === nothing ? step_case!(case, dt) :
+             Aeolus.IO.monitored_step!(monitor, case.sim; step = case.clock.n + 1) do
+                 step_case!(case, dt)
+             end
+        ok && callback !== nothing && callback(case, case.clock.n)
+        return ok
+    end
     if variable
         t_end = case.sim.t + nsteps * cfg.dt
         while t_end - case.sim.t > 1e-9 * cfg.dt
-            step_case!(case, last_step_dt(step_dt(case), t_end - case.sim.t)) || break
+            one_step(last_step_dt(step_dt(case), t_end - case.sim.t)) || break
         end
     else
         for _ in 1:nsteps
-            step_case!(case, cfg.dt) || break
+            one_step(cfg.dt) || break
         end
     end
     nsteps = case.clock.n - n0
