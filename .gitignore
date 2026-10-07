@@ -12,6 +12,8 @@ deps/build.log
 # Simulation output (large binaries)
 output/
 *.nc
+# …but the committed static drivers of the shipped Berlin configs (CFG-f, #361)
+!examples/urban/configs/input/*_static.nc
 *.ppm
 *.jls
 

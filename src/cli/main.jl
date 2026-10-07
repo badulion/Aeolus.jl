@@ -100,6 +100,27 @@ function register_preprocessor!(kind::AbstractString, f, usage::AbstractString)
     return String(kind)
 end
 
+"""
+`aeolus preprocess static <config.toml> [--out file.nc] [--parent-out file.nc] [--set key=value]...`:
+load the run config and write its static driver(s) with the driver's
+[`preprocess_static`](@ref) (CFG-f, #361); prints the files written.
+"""
+function _preprocess_static(args)
+    pos, sets, opts, _ = _parse_args(args, ("set", "out", "parent-out"), ())
+    path = _one_positional(pos, "config file")
+    cfg = load_run_config(path; overrides = sets)
+    d = run_driver(cfg.run.driver)
+    files = Base.invokelatest(preprocess_static, d, cfg; out = get(opts, "out", nothing),
+                              parent_out = get(opts, "parent-out", nothing))
+    for f in files
+        println("wrote ", f)
+    end
+    return 0
+end
+register_preprocessor!("static", _preprocess_static,
+                       "static <config.toml> [--out file.nc] [--parent-out file.nc] [--set key=value]...  " *
+                       "write the run's static input driver(s)")
+
 # ---------------------------------------------------------------------------
 # the option reference
 # ---------------------------------------------------------------------------

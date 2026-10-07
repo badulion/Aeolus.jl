@@ -112,6 +112,7 @@ makedocs(
             "Simulations"          => "api/simulations.md",
             "I/O and checkpoints"  => "api/io.md",
             "Run configuration"    => "api/config.md",
+            "Input drivers"        => "api/input_drivers.md",
             "Logging"              => "api/logging.md",
             "Physics modules"      => "api/physics.md",
             "Era II — numerics" => [
