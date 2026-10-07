@@ -32,17 +32,6 @@ the default", never `nothing`.
 struct Optional{T} end
 
 """
-    Either{A,B}
-
-Option type marker for a value of the scalar type `A` or of the scalar
-type `B` (tried in that order), e.g. `Either{Symbol,Float64}` for "a name
-or a number" (the Berlin case's `theta_top = "noflux"` or `0.003`).
-`allowed` constrains the `Symbol`/`String` values only, `range` the
-numbers only.
-"""
-struct Either{A,B} end
-
-"""
     OpenTable(validator = tbl -> String[])
 
 Option type for a table whose keys a driver decides (the per-coupling
@@ -55,16 +44,32 @@ struct OpenTable
 end
 OpenTable() = OpenTable(_ -> String[])
 
+"""
+    OneOf(T1, T2, …)
+
+Option type for a value of any of the option types `T1, T2, …` (scalars,
+`Optional`, tuples, vectors, [`OpenTable`](@ref)): the first that accepts
+the value wins. A forcing quantity that is a number or a table is
+`OneOf(Float64, OpenTable(validator))`; a viscosity that is a number or
+the keyword `"scaled"` is `OneOf(Float64, Symbol)` with `allowed =
+[:scaled]` (`allowed` applies to the non-numeric alternatives only;
+`range` to the numeric ones). An option of this type needs a `default`.
+"""
+struct OneOf
+    alts::Tuple
+    OneOf(alts...) = length(alts) >= 2 ? new(Tuple(alts)) :
+                     throw(ArgumentError("OneOf needs at least two alternatives"))
+end
+
 const _SCALARS = (Float64, Int, Bool, String, Symbol, Path, Date, Time)
 
 "Whether `T` is a supported option type (see [`option!`](@ref))."
 function _valid_spec(T)
     T isa OpenTable && return true
+    T isa OneOf && return all(a -> !(a isa OneOf) && _valid_spec(a), T.alts)
     T isa Type || return false
     T in _SCALARS && return true
     T <: Optional && return T !== Optional && _valid_spec(T.parameters[1])
-    T <: Either && return T !== Either && length(T.parameters) == 2 &&
-                          all(p -> p isa Type && p in _SCALARS, T.parameters)
     if T <: Tuple && isconcretetype(T)
         ps = fieldtypes(T)
         return !isempty(ps) && all(==(ps[1]), ps) && ps[1] in _SCALARS
@@ -192,7 +197,6 @@ Declare the option `key` of type `T` in section `s`. Types:
   * `Vector{T}`;
   * `Date` and `Time` (TOML local date and local time);
   * [`Optional{T}`](@ref Optional), where `"none"` stands for `nothing`;
-  * [`Either{A,B}`](@ref Either), a value of either of two scalar types;
   * [`OpenTable(validator)`](@ref OpenTable), a table whose keys a driver decides.
 
 `default` is the value a missing key takes (a zero-argument function is
@@ -389,8 +393,8 @@ _describe(::Type{Path}) = "a path (a string)"
 _describe(::Type{Date}) = "a local date (yyyy-mm-dd)"
 _describe(::Type{Time}) = "a local time (hh:mm:ss)"
 _describe(::OpenTable) = "a table"
+_describe(T::OneOf) = join(map(_describe, T.alts), " or ")
 _describe(T::Type{<:Optional}) = _describe(_elem(T)) * " or \"none\""
-_describe(T::Type{<:Either}) = _describe(T.parameters[1]) * " or " * _describe(T.parameters[2])
 function _describe(T::Type)
     if T <: Tuple
         return "an array of $(fieldcount(T)) $(_plural(fieldtype(T, 1)))"
@@ -446,20 +450,23 @@ end
 _fail() = (false, nothing, "")
 
 function _coerce_type(T, o, x, julia, base, key)
-    if T isa OpenTable
+    if T isa OneOf
+        why = ""
+        for a in T.alts
+            ok, v, w = _coerce_type(a, o, x, julia, base, key)
+            ok && return (true, v, "")
+            # a table that one alternative takes but finds invalid: its reasons
+            (a isa OpenTable && x isa AbstractDict && !isempty(w)) && (why = w)
+        end
+        return (false, nothing, why)
+    elseif T isa OpenTable
         tbl = x isa AbstractDict ? _plain_table(x) : (julia && x isa NamedTuple) ? _plain_table(x) : nothing
         tbl === nothing && return _fail()
-        probs = Base.invokelatest(T.validator, tbl)   # (a driver loaded during this load)
+        probs = Base.invokelatest(T.validator, tbl)     # a driver loaded at run time
         isempty(probs) && return (true, tbl, "")
         msgs = String[p isa ConfigError ? join(("$(q.key): $(q.message)" for q in p.problems), "; ") :
                       string(p) for p in probs]
         return (false, nothing, join(msgs, "; "))
-    elseif T <: Either
-        for P in T.parameters
-            ok, v = _scalar(P, x, julia, base)
-            ok && _within(o, v) && return (true, v, "")
-        end
-        return _fail()
     elseif T <: Optional
         (x === nothing && julia) && return (true, nothing, "")
         x == "none" && return (true, nothing, "")
@@ -527,7 +534,7 @@ function _scalar(T, x, julia, base)
 end
 
 function _within(o::Option, v)
-    if o.allowed !== nothing && !(o.type isa Type && o.type <: Either && !(v isa Union{Symbol,AbstractString}))
+    if o.allowed !== nothing && !(o.type isa OneOf && v isa Real)
         any(a -> isequal(a, v) || (v isa Symbol && a isa AbstractString && String(v) == a) ||
                  (a isa Symbol && v isa AbstractString && String(a) == v), o.allowed) || return false
     end

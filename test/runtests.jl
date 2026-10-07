@@ -846,6 +846,8 @@ using Aeolus.Fields: set!, interior_view
     include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
     include("config_simulation_driver.jl")  # CFG-b (#357): simulation driver, bitwise round trip, resume, TGV
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
+    include("config_sbl.jl")          # CFG-d (#359): sbl driver, bit-identity to the old builders, round trip
+    include("config_dns.jl")          # CFG-d (#359): dns driver, round trip, the k_max η refusal
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
     include("config_examples_validation.jl")  # CFG-e (#360): examples/validation/ from TOML, bit-identical to the old scripts
     include("config_berlin.jl")       # CFG-c (#358): berlin driver, scenarios from TOML, bitwise vs Julia-built, round trip

@@ -1,0 +1,21 @@
+# The CASES-99 "hockey stick" (Sun et al. 2012, J. Atmos. Sci. 69, 338):
+# the GABLS2 case (gabls2.toml) with virtual towers in every column that
+# record 5-min means and variances below 60 m during the two nights
+# (18-06 LT); V_TKE (Transition's turbulence_velocity_scale, resolved + SGS
+# energy) is binned against the wind speed per level and the threshold
+# wind speed V_s is fitted (output/towers.csv), for comparison with Sun et
+# al. (2012) Fig. 3a (examples/sbl/data/cases99_sun2012_threshold.csv).
+# The script examples/sbl/gabls2.jl runs this config.
+
+extends = "gabls2.toml"
+
+[run]
+name = "cases99"
+
+[grid]
+size = [64, 64, 128]           # 37.5 m / 12.5 m
+
+[towers]
+below = 60.0
+window = 300.0
+hours = [18.0, 6.0]

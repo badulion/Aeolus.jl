@@ -106,9 +106,9 @@ end
 
 function _type_text(T)
     T isa OpenTable && return "table"
+    T isa OneOf && return join(map(_type_text, T.alts), " | ")
     T === Path && return "path"
     T <: Optional && return _type_text(_elem(T)) * " | \"none\""
-    T <: Either && return _type_text(T.parameters[1]) * " | " * _type_text(T.parameters[2])
     T <: Tuple && return "[$(fieldcount(T)) × $(_type_text(fieldtype(T, 1)))]"
     T <: Vector && return "[$(_type_text(eltype(T))), …]"
     T === Symbol && return "string"
