@@ -1144,16 +1144,10 @@ function momentum_advect_weno_z!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{F
     return _momentum_advect_recon!(tu, tv, tw, u, v, w, WENOZ(order, p), mesh(u))
 end
 
-function _momentum_advect_recon!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
-                                 u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                                 r::AbstractReconstruction, g::RegularGrid)
-    _check_halo(r, g)
-    idx = 1/g.dx; idy = 1/g.dy; idz = 1/g.dz
-    ii, jj, kk = interior(g)
-    ud = u.data; vd = v.data; wd = w.data
-
-    # --- u-momentum (west face of cell i,j,k) ---------------------------
-    @inbounds for k in kk, j in jj, i in ii
+# One launch per momentum component (KA-e, #302); each body is the old
+# loop body of that component.
+@inline function _b_mrecon_u!(i, j, k, tud, ud, vd, wd, r, idx, idy, idz)
+    @inbounds begin
         Ue = (ud[i,   j, k] + ud[i+1, j, k])/2      # at cell centre i
         Uw = (ud[i-1, j, k] + ud[i,   j, k])/2      # at cell centre i-1
         d_uu_dx = (Ue*_face_x(r, ud, i, j, k, Ue) - Uw*_face_x(r, ud, i-1, j, k, Uw))*idx
@@ -1166,11 +1160,12 @@ function _momentum_advect_recon!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{F
         Wb = (wd[i-1, j, k  ] + wd[i, j, k  ])/2    # at x-z edge (i,k)
         d_wu_dz = (Wt*_face_z(r, ud, i, j, k, Wt) - Wb*_face_z(r, ud, i, j, k-1, Wb))*idz
 
-        tu.data[i, j, k] -= d_uu_dx + d_vu_dy + d_wu_dz
+        tud[i, j, k] -= d_uu_dx + d_vu_dy + d_wu_dz
     end
-
-    # --- v-momentum (south face of cell i,j,k) --------------------------
-    @inbounds for k in kk, j in jj, i in ii
+    return nothing
+end
+@inline function _b_mrecon_v!(i, j, k, tvd, ud, vd, wd, r, idx, idy, idz)
+    @inbounds begin
         Ue = (ud[i+1, j-1, k] + ud[i+1, j, k])/2
         Uw = (ud[i,   j-1, k] + ud[i,   j, k])/2
         d_uv_dx = (Ue*_face_x(r, vd, i, j, k, Ue) - Uw*_face_x(r, vd, i-1, j, k, Uw))*idx
@@ -1183,11 +1178,12 @@ function _momentum_advect_recon!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{F
         Wb = (wd[i, j-1, k  ] + wd[i, j, k  ])/2
         d_wv_dz = (Wt*_face_z(r, vd, i, j, k, Wt) - Wb*_face_z(r, vd, i, j, k-1, Wb))*idz
 
-        tv.data[i, j, k] -= d_uv_dx + d_vv_dy + d_wv_dz
+        tvd[i, j, k] -= d_uv_dx + d_vv_dy + d_wv_dz
     end
-
-    # --- w-momentum (bottom face of cell i,j,k) -------------------------
-    @inbounds for k in kk, j in jj, i in ii
+    return nothing
+end
+@inline function _b_mrecon_w!(i, j, k, twd, ud, vd, wd, r, idx, idy, idz)
+    @inbounds begin
         Ue = (ud[i+1, j, k-1] + ud[i+1, j, k])/2
         Uw = (ud[i,   j, k-1] + ud[i,   j, k])/2
         d_uw_dx = (Ue*_face_x(r, wd, i, j, k, Ue) - Uw*_face_x(r, wd, i-1, j, k, Uw))*idx
@@ -1200,9 +1196,22 @@ function _momentum_advect_recon!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{F
         Wb = (wd[i, j, k-1] + wd[i, j, k  ])/2
         d_ww_dz = (Wt*_face_z(r, wd, i, j, k, Wt) - Wb*_face_z(r, wd, i, j, k-1, Wb))*idz
 
-        tw.data[i, j, k] -= d_uw_dx + d_vw_dy + d_ww_dz
+        twd[i, j, k] -= d_uw_dx + d_vw_dy + d_ww_dz
     end
+    return nothing
+end
 
+function _momentum_advect_recon!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
+                                 u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                                 r::AbstractReconstruction, g::RegularGrid)
+    _check_halo(r, g)
+    idx = 1/g.dx; idy = 1/g.dy; idz = 1/g.dz
+    I = interior(g)
+    ud = u.data; vd = v.data; wd = w.data
+    b = Backends.backend(tu.data)
+    launch!(b, _b_mrecon_u!, I, tu.data, ud, vd, wd, r, idx, idy, idz)   # west face of cell i,j,k
+    launch!(b, _b_mrecon_v!, I, tv.data, ud, vd, wd, r, idx, idy, idz)   # south face
+    launch!(b, _b_mrecon_w!, I, tw.data, ud, vd, wd, r, idx, idy, idz)   # bottom face
     return (tu, tv, tw)
 end
 
@@ -1281,15 +1290,8 @@ momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
                       u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}) =
     _momentum_advect_skew!(tu, tv, tw, u, v, w, mesh(u))
 
-function _momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
-                                u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                                g::RegularGrid)
-    h2x = 1/(2g.dx); h2y = 1/(2g.dy); h2z = 1/(2g.dz)
-    ii, jj, kk = interior(g)
-    ud = u.data; vd = v.data; wd = w.data
-
-    # --- u-momentum ------------------------------------------------------
-    @inbounds for k in kk, j in jj, i in ii
+@inline function _b_skew_u!(i, j, k, tud, ud, vd, wd, h2x, h2y, h2z)
+    @inbounds begin
         Ue = (ud[i,   j, k] + ud[i+1, j, k])/2
         Uw = (ud[i-1, j, k] + ud[i,   j, k])/2
         Vn = (vd[i-1, j+1, k] + vd[i, j+1, k])/2
@@ -1297,13 +1299,14 @@ function _momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{Fa
         Wt = (wd[i-1, j, k+1] + wd[i, j, k+1])/2
         Wb = (wd[i-1, j, k  ] + wd[i, j, k  ])/2
 
-        tu.data[i,j,k] -= (Ue*ud[i+1,j,k] - Uw*ud[i-1,j,k])*h2x +
-                          (Vn*ud[i,j+1,k] - Vs*ud[i,j-1,k])*h2y +
-                          (Wt*ud[i,j,k+1] - Wb*ud[i,j,k-1])*h2z
+        tud[i,j,k] -= (Ue*ud[i+1,j,k] - Uw*ud[i-1,j,k])*h2x +
+                      (Vn*ud[i,j+1,k] - Vs*ud[i,j-1,k])*h2y +
+                      (Wt*ud[i,j,k+1] - Wb*ud[i,j,k-1])*h2z
     end
-
-    # --- v-momentum ------------------------------------------------------
-    @inbounds for k in kk, j in jj, i in ii
+    return nothing
+end
+@inline function _b_skew_v!(i, j, k, tvd, ud, vd, wd, h2x, h2y, h2z)
+    @inbounds begin
         Ue = (ud[i+1, j-1, k] + ud[i+1, j, k])/2
         Uw = (ud[i,   j-1, k] + ud[i,   j, k])/2
         Vn = (vd[i, j,   k] + vd[i, j+1, k])/2
@@ -1311,13 +1314,14 @@ function _momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{Fa
         Wt = (wd[i, j-1, k+1] + wd[i, j, k+1])/2
         Wb = (wd[i, j-1, k  ] + wd[i, j, k  ])/2
 
-        tv.data[i,j,k] -= (Ue*vd[i+1,j,k] - Uw*vd[i-1,j,k])*h2x +
-                          (Vn*vd[i,j+1,k] - Vs*vd[i,j-1,k])*h2y +
-                          (Wt*vd[i,j,k+1] - Wb*vd[i,j,k-1])*h2z
+        tvd[i,j,k] -= (Ue*vd[i+1,j,k] - Uw*vd[i-1,j,k])*h2x +
+                      (Vn*vd[i,j+1,k] - Vs*vd[i,j-1,k])*h2y +
+                      (Wt*vd[i,j,k+1] - Wb*vd[i,j,k-1])*h2z
     end
-
-    # --- w-momentum ------------------------------------------------------
-    @inbounds for k in kk, j in jj, i in ii
+    return nothing
+end
+@inline function _b_skew_w!(i, j, k, twd, ud, vd, wd, h2x, h2y, h2z)
+    @inbounds begin
         Ue = (ud[i+1, j, k-1] + ud[i+1, j, k])/2
         Uw = (ud[i,   j, k-1] + ud[i,   j, k])/2
         Vn = (vd[i, j+1, k-1] + vd[i, j+1, k])/2
@@ -1325,11 +1329,23 @@ function _momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{Fa
         Wt = (wd[i, j, k  ] + wd[i, j, k+1])/2
         Wb = (wd[i, j, k-1] + wd[i, j, k  ])/2
 
-        tw.data[i,j,k] -= (Ue*wd[i+1,j,k] - Uw*wd[i-1,j,k])*h2x +
-                          (Vn*wd[i,j+1,k] - Vs*wd[i,j-1,k])*h2y +
-                          (Wt*wd[i,j,k+1] - Wb*wd[i,j,k-1])*h2z
+        twd[i,j,k] -= (Ue*wd[i+1,j,k] - Uw*wd[i-1,j,k])*h2x +
+                      (Vn*wd[i,j+1,k] - Vs*wd[i,j-1,k])*h2y +
+                      (Wt*wd[i,j,k+1] - Wb*wd[i,j,k-1])*h2z
     end
+    return nothing
+end
 
+function _momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
+                                u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                                g::RegularGrid)
+    h2x = 1/(2g.dx); h2y = 1/(2g.dy); h2z = 1/(2g.dz)
+    I = interior(g)
+    ud = u.data; vd = v.data; wd = w.data
+    b = Backends.backend(tu.data)
+    launch!(b, _b_skew_u!, I, tu.data, ud, vd, wd, h2x, h2y, h2z)
+    launch!(b, _b_skew_v!, I, tv.data, ud, vd, wd, h2x, h2y, h2z)
+    launch!(b, _b_skew_w!, I, tw.data, ud, vd, wd, h2x, h2y, h2z)
     return (tu, tv, tw)
 end
 
@@ -1360,17 +1376,19 @@ advect_variance_conserving!(tend::Field{CellCenter},
                             ϕ::Field{CellCenter}) =
     _advect_variance_conserving!(tend, u, v, w, ϕ, mesh(ϕ))
 
+@inline function _b_varcons!(i, j, k, td, ud, vd, wd, ϕd, h2x, h2y, h2z)
+    @inbounds td[i,j,k] -= (ud[i+1,j,k]*ϕd[i+1,j,k] - ud[i,j,k]*ϕd[i-1,j,k])*h2x +
+                           (vd[i,j+1,k]*ϕd[i,j+1,k] - vd[i,j,k]*ϕd[i,j-1,k])*h2y +
+                           (wd[i,j,k+1]*ϕd[i,j,k+1] - wd[i,j,k]*ϕd[i,j,k-1])*h2z
+    return nothing
+end
+
 function _advect_variance_conserving!(tend::Field{CellCenter},
                                      u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                                      ϕ::Field{CellCenter}, g::RegularGrid)
     h2x = 1/(2g.dx); h2y = 1/(2g.dy); h2z = 1/(2g.dz)
-    ii, jj, kk = interior(g)
-    ϕd = ϕ.data; ud = u.data; vd = v.data; wd = w.data
-    @inbounds for k in kk, j in jj, i in ii
-        tend.data[i,j,k] -= (ud[i+1,j,k]*ϕd[i+1,j,k] - ud[i,j,k]*ϕd[i-1,j,k])*h2x +
-                            (vd[i,j+1,k]*ϕd[i,j+1,k] - vd[i,j,k]*ϕd[i,j-1,k])*h2y +
-                            (wd[i,j,k+1]*ϕd[i,j,k+1] - wd[i,j,k]*ϕd[i,j,k-1])*h2z
-    end
+    launch!(Backends.backend(tend.data), _b_varcons!, interior(g),
+            tend.data, u.data, v.data, w.data, ϕ.data, h2x, h2y, h2z)
     return tend
 end
 
