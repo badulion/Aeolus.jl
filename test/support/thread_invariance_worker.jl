@@ -3,8 +3,8 @@
 #
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
-# Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship, nested, fft, fv)
-# and writes
+# Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
+# nested, fft, fv, pcg) and writes
 # one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
 # the raw bits (Float64 → UInt64), so two processes agree iff the results
 # are bit-identical. MODE is `default` (CPUBackend(): threaded when N > 1)
@@ -423,6 +423,60 @@ function section_fv()
 end
 
 # --------------------------------------------------------------------------
+# KA-g (#300): every solver on the one CG driver, singular (Neumann and
+# periodic) and stretched-coefficient cases: the solution and the
+# iteration count.
+function section_pcg()
+    PS, MGm, A, TI = Aeolus.PressureSolvers, Aeolus.Multigrid, Aeolus.Anelastic, Aeolus.TimeIntegration
+    N = (64, 64, 32)
+    g = RegularGrid(; size = N, extent = (1000.0, 1000.0, 200.0), halo = (3, 3, 3))
+    smesh = StretchedGrid(; size = N, extent = (1000.0, 1000.0, 2000.0), halo = (3, 3, 3),
+                          stretching = (:geometric, 1.04))
+    gd = RegularGrid(; size = N, extent = (1000.0, 1000.0, 3000.0), halo = (3, 3, 3))
+    ref = A.isothermal_reference(g; T_surf = 300.0); refd = A.isothermal_reference(gd; T_surf = 300.0)
+    solvers = Pair{String,Any}[]
+    for (bz, bxy) in ((:neumann, :periodic), (:neumann, :neumann), (:periodic, :periodic))
+        push!(solvers, "cg($bxy,$bz)" => (g, PS.CGPoissonSolver(g; tol = 1e-8, maxit = 2000, bc_top = bz,
+                                                                  bc_bottom = bz, bc_xy = bxy), s -> s.last_iter[]))
+    end
+    for (bz, bxy) in ((:neumann, :periodic), (:periodic, :periodic))
+        push!(solvers, "mgcg($bxy,$bz)" => (g, MGm.MGPreconditionedCG(g; bc_x = bxy, bc_y = bxy, bc_z = bz,
+                                                                      tol = 1e-10, maxit = 200), s -> s.last_iters[]))
+    end
+    push!(solvers, "mgcg(stretched)" => (smesh, MGm.MGPreconditionedCG(smesh; tol = 1e-10, maxit = 200),
+                                         s -> s.last_iters[]))
+    for (bz, bx) in ((:neumann, :periodic), (:periodic, :periodic), (:neumann, :neumann))
+        push!(solvers, "dw($bx,$bz)" => (g, A.DensityWeightedPoissonSolver(g, ref; bc_z = bz, bc_x = bx, bc_y = bx,
+                                                                           tol = 1e-10, maxit = 2000),
+                                         A.solver_iterations))
+    end
+    push!(solvers, "dw(deep)" => (gd, A.DensityWeightedPoissonSolver(gd, refd; tol = 1e-10, maxit = 2000),
+                                  A.solver_iterations))
+    for (name, (m, solver, its)) in solvers
+        src = Field(m); src.data .= randn(Xoshiro(300), size(src.data))
+        p = Field(m)
+        PS.solve!(p, src, solver)
+        record!("pcg/$name", p.data)
+        record!("pcg/$name/iterations", its(solver))
+    end
+    νvar = zeros(size(Field(g).data))
+    for k in axes(νvar, 3), i in axes(νvar, 1)
+        νvar[i, :, k] .= 2.0 * (1 + 0.5sin(i / 7) + 0.3k / N[3])
+    end
+    for (name, loc, bcs, ν) in (("imex(θ,periodic)", CellCenter(), FieldBoundaryConditions(:periodic), 2.0),
+                                ("imex(θ,ν(x,z),walls)", CellCenter(), FieldBoundaryConditions(:periodic, :periodic, :wall), νvar),
+                                ("imex(w,pinned)", FaceZ(), FieldBoundaryConditions(:periodic, :periodic, :wall), 2.0),
+                                ("imex(u,moving wall)", FaceX(),
+                                 FieldBoundaryConditions(Periodic(), Periodic(), Periodic(), Periodic(),
+                                                         NoSlipWall(), NoSlipWall(u_wall = 1.0)), 2.0))
+        f = Field(loc, g); f.data .= randn(Xoshiro(302), size(f.data))
+        st = TI.solve_implicit_diffusion!(f, f, ν, 20.0, g, bcs; tol = 1e-10, maxit = 500)
+        record!("pcg/$name", f.data)
+        record!("pcg/$name/iterations", st.iterations)
+    end
+end
+
+# --------------------------------------------------------------------------
 init_threads!(BACKEND)
 t0 = time()
 for s in SECTIONS
@@ -435,6 +489,7 @@ for s in SECTIONS
     s == "nested"     ? section_nested() :
     s == "fft"        ? section_fft() :
     s == "fv"         ? section_fv() :
+    s == "pcg"        ? section_pcg() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)
 end
