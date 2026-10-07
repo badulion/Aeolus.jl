@@ -39,7 +39,11 @@ using Aeolus.InputDrivers: SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE_W
                            load_city_osm, osm_class, load_city_geojson, rasterize_city, static_inputs,
                            solid_and_classes, surface_class_map, tag_building_adjacent!,
                            StaticInputs, StaticTiles, read_static_driver, write_static_driver,
-                           read_static_tiles, write_static_tiles
+                           read_static_tiles, write_static_tiles,
+                           DynamicInputs, read_dynamic_driver, write_dynamic_driver, sounding_dynamic_inputs,
+                           init_time_string, init_day_seconds, surface_pressure_at, shift_table, file_fnv1a64,
+                           FileBoundaryFeed, feed_window!, feed_steady!, check_planes, check_coverage,
+                           NestBoundaryRecorder, record_boundary!, plane_snapshot
 using Aeolus.StretchedGrids: surface_refined_faces
 using Printf
 using Dates: DateTime, Millisecond

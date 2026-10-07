@@ -11,7 +11,9 @@
 # (dx = 15.6 m, dz = 6.25 m), nested in the 6 km × 6 km × 3 km Aeolus parent
 # of #259 (refinement (2, 2, 4), [physics.options.nesting.parent], #265),
 # 29 June 2019 (a clear day of the late-June 2019 heat wave, #247) from 06:00
-# CEST, 24 h at dt = 2 s, initialised from the Lindenberg sounding.
+# CEST, 24 h at dt = 2 s, initialised from the Lindenberg sounding (its
+# dynamic driver, input/berlin_20190629_dynamic.nc: `julia --project -m Aeolus
+# preprocess dynamic --from-sounding berlin_summer.toml` writes it from the CSV).
 #
 # Left at their defaults (environment variables fill some of them, see the
 # Run configuration page): [fftw], [logging], [checkpoint] (the Berlin case
@@ -47,6 +49,11 @@ cadence = 1800.0
 # file name of the NetCDF-4 output in [output] path (the run folder's output/
 # under aeolus run, else examples/urban/output/); "none": no NetCDF
 netcdf = "alexanderplatz.nc"
+# with the online nest: write the child's boundary slabs at every parent step,
+# the 3-D initial wind and the parent's mean profiles to this dynamic driver
+# (CFG-g #362, `aeolus preprocess dynamic --from-parent`; the file of an
+# offline child); "none": not written
+child_boundaries = "none"
 
 [grid]
 # The child mesh (RegularGrid).
@@ -155,6 +162,11 @@ theta_relaxation = true
 # radiosonde CSV of the initial θ(z), qv(z) and surface pressure; "none": the
 # idealised profile below
 sounding = "../data/lindenberg_10393_20190629.csv"
+# the dynamic driver (CFG-g #362, `aeolus preprocess dynamic`): a sounding
+# driver (--from-sounding), used instead of sounding; or, with
+# physics.options.nesting.parent_driver = "offline", the parent-made driver of
+# the nest faces (--from-parent); "none": no driver
+dynamic = "input/berlin_20190629_dynamic.nc"
 # idealised: θ at the ground [K]
 theta_surface = 293.0
 # idealised: base of the capping inversion [m]

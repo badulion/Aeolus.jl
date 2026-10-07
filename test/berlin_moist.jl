@@ -61,18 +61,18 @@ const MT = Aeolus.MoistThermodynamics
     @testset "initial state from the Lindenberg sounding of 29 June 2019 (#247)" begin
         cfg = BC.CaseConfig(:summer; output_path = nothing)
         S = BC.case_sounding(cfg)
-        L = S.sounding.launches
+        L = S.times                                                # the launch times
         # 06:00 CEST = 04:00 UTC, between the 22:45 (28 June) and 04:45 UTC releases
         t0 = BC.case_start_time(cfg)
         @test t0 == 4 * 3600.0
-        @test L[1].t < t0 < L[2].t
-        w = (t0 - L[1].t) / (L[2].t - L[1].t)                     # 0.875
+        @test L[1] < t0 < L[2]
+        w = (t0 - L[1]) / (L[2] - L[1])                           # 0.875
         θ0, q0 = BC.initial_θ(cfg), BC.initial_qv(cfg)
         P = S.profiles
         for z in (0.0, 3.125, 50.0, 100.0, 196.875, 400.0, 1500.0)
-            θa, θb = forcing_value(P.θ, z, L[1].t), forcing_value(P.θ, z, L[2].t)
+            θa, θb = forcing_value(P.θ, z, L[1]), forcing_value(P.θ, z, L[2])
             @test θ0(0.0, 0.0, z) ≈ (1 - w) * θa + w * θb rtol = 1e-14
-            qa, qb = forcing_value(P.qv, z, L[1].t), forcing_value(P.qv, z, L[2].t)
+            qa, qb = forcing_value(P.qv, z, L[1]), forcing_value(P.qv, z, L[2])
             @test q0(0.0, 0.0, z) ≈ (1 - w) * qa + w * qb rtol = 1e-12
             @test 0 < q0(0.0, 0.0, z) < 0.02
         end

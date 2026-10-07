@@ -57,37 +57,104 @@ layer and its nudging see the observed profile above the domain.
 """
 const SOUNDING_TABLE_TOP = 4000.0
 
-"""
-    case_sounding(cfg) -> (; sounding, profiles) or nothing
+"The model start of `cfg` as the ISO-8601 UTC `init_time` of a dynamic driver."
+case_init_time(cfg::CaseConfig) = init_time_string(cfg.date..., cfg.start_h - cfg.utc_offset)
 
-The radiosonde sounding of the case (`cfg.sounding`, read with
-`Aeolus.LargeScaleForcing.read_sounding`) and its height-time tables
-(`sounding_profiles`, heights above the launch site up to
-max([`SOUNDING_TABLE_TOP`](@ref), the domain top)); `nothing` for the idealised profile
-(`cfg.sounding === nothing`). Read once per file and cached.
+"""
+    initial_driver(cfg) -> path or nothing
+
+The dynamic driver the initial state of `cfg` comes from: `cfg.dynamic`,
+unless the nest is fed offline from it (`parent_driver = :offline`: then
+`cfg.dynamic` is the parent-made driver of the nest faces, and the
+initial profile is `cfg.sounding`'s).
+"""
+function initial_driver(cfg::CaseConfig)
+    cfg.dynamic === nothing && return nothing
+    nest_offline(cfg) && return nothing
+    return cfg.dynamic
+end
+
+"""
+    case_dynamic_inputs(cfg) -> DynamicInputs
+
+The sounding preprocessor of the case (CFG-g, #362): the radiosonde CSV
+`cfg.sounding` as the tables of a dynamic driver
+([`sounding_dynamic_inputs`](@ref)) up to max([`SOUNDING_TABLE_TOP`](@ref),
+the domain top), times since the case start
+([`case_init_time`](@ref)), with the ground pressure the launch-site
+pressure at the start reduced hypsometrically from the launch site
+(`sounding.elevation`, 112 m) to `cfg.elevation` (34 m)
+([`surface_pressure_at`](@ref)). What `aeolus preprocess dynamic
+--from-sounding` writes, and what a case reading the CSV uses in memory.
+"""
+function case_dynamic_inputs(cfg::CaseConfig)
+    cfg.sounding === nothing && error("case_dynamic_inputs: the case has no sounding (cfg.sounding = nothing)")
+    snd = read_sounding(cfg.sounding)
+    ztop = max(SOUNDING_TABLE_TOP, cfg.extent[3])
+    t0 = sounding_time(snd, cfg.date..., cfg.start_h - cfg.utc_offset)
+    P = sounding_profiles(snd; z_top = ztop)
+    ps = surface_pressure_at(P, t0, snd.elevation, cfg.elevation)
+    return sounding_dynamic_inputs(snd; t0 = t0, init_time = case_init_time(cfg), z_top = ztop, p_surface = ps)
+end
+
+"""
+    case_sounding(cfg) -> (; profiles, t0, times, p_surface, inputs) or nothing
+
+The observed initial state of the case: its sounding's height-time tables
+`profiles` (`θ`, `qv`, `u`, `v`, `p` `ForcingTable`s and the common
+height grid `z`, heights above the launch site) on a time axis in seconds
+from 00 UTC of the case date, the case start `t0` on that axis, the
+launch times `times`, the ground pressure `p_surface` and the
+`DynamicInputs` they came from. From the sounding driver `cfg.dynamic`
+(CFG-g, #362; [`initial_driver`](@ref)), whose `init_time` must be the
+case start, or else from the CSV `cfg.sounding` preprocessed in memory
+([`case_dynamic_inputs`](@ref), the same tables value for value);
+`nothing` for the idealised profile. Read once per source and cached.
 """
 function case_sounding(cfg::CaseConfig)
-    cfg.sounding === nothing && return nothing
-    ztop = max(SOUNDING_TABLE_TOP, cfg.extent[3])
-    key = string(cfg.sounding, "|", ztop)
-    return get!(_SOUNDING_CACHE, key) do
-        snd = read_sounding(cfg.sounding)
-        (; sounding = snd, profiles = sounding_profiles(snd; z_top = ztop))
+    path = initial_driver(cfg)
+    path === nothing && cfg.sounding === nothing && return nothing
+    it = case_init_time(cfg)
+    src = path === nothing ? string(cfg.sounding, "|", max(SOUNDING_TABLE_TOP, cfg.extent[3]), "|", cfg.elevation) :
+          string(path, "|", isfile(path) ? file_fnv1a64(path) : "")
+    return get!(_SOUNDING_CACHE, string(src, "|", it)) do
+        d = path === nothing ? case_dynamic_inputs(cfg) : read_dynamic_driver(path; planes = false)
+        _case_sounding(d, path === nothing ? cfg.sounding : path, it)
     end
+end
+
+function _case_sounding(d::DynamicInputs, src, it)
+    get(d.attributes, "dynamic_source", "") == "sounding" ||
+        error("$src is not a sounding driver (dynamic_source = $(repr(get(d.attributes, "dynamic_source", "")))): " *
+              "[initial] dynamic of a case without the offline nest is the sounding's " *
+              "(aeolus preprocess dynamic --from-sounding)")
+    d.init_time == it ||
+        error("the sounding driver $src starts at init_time $(d.init_time), the case at $it " *
+              "([clock] date, start_h, utc_offset); re-run aeolus preprocess dynamic --from-sounding")
+    for k in (:profile_theta, :profile_qv, :profile_u, :profile_v, :profile_p)
+        haskey(d.tables, k) || error("the sounding driver $src has no ls_$k")
+    end
+    d.p_surface === nothing && error("the sounding driver $src has no init_p_surface")
+    t0 = init_day_seconds(it)
+    tab(k) = shift_table(d.tables[k], t0)
+    θ = tab(:profile_theta)
+    P = (θ = θ, qv = tab(:profile_qv), u = tab(:profile_u), v = tab(:profile_v), p = tab(:profile_p), z = θ.z)
+    return (; profiles = P, t0 = t0, times = copy(θ.t), p_surface = d.p_surface, inputs = d)
 end
 
 """
     case_start_time(cfg) -> t (s)
 
 The case start (`cfg.date`, local hour `cfg.start_h`, local = UTC +
-`cfg.utc_offset`) on the time axis of the case's sounding (seconds from
-its epoch, `sounding_time`). 06:00 CEST on 29 June 2019 is 04:00 UTC,
-between the 22:45 and 04:45 UTC releases.
+`cfg.utc_offset`) on the time axis of the case's sounding tables
+([`case_sounding`](@ref): seconds from 00 UTC of the case date).
+06:00 CEST on 29 June 2019 is 04:00 UTC, 14400 s, between the 22:45 and
+04:45 UTC releases.
 """
 function case_start_time(cfg::CaseConfig)
     S = case_sounding(cfg)
     S === nothing && error("case_start_time: the case has no sounding (cfg.sounding = nothing)")
-    return sounding_time(S.sounding, cfg.date..., cfg.start_h - cfg.utc_offset)
+    return S.t0
 end
 
 """
@@ -98,8 +165,9 @@ The initial potential temperature of the case, the one definition:
 integrates the reference state from it (so the nesting parent, which
 uses the same reference, follows).
 
-* Default — the observed sounding `cfg.sounding` (Lindenberg, WMO 10393,
-  29/30 June 2019) at the case start [`case_start_time`](@ref):
+* Default — the observed sounding (Lindenberg, WMO 10393, 29/30 June
+  2019; the sounding driver `cfg.dynamic` or the CSV `cfg.sounding`,
+  [`case_sounding`](@ref)) at the case start [`case_start_time`](@ref):
   `forcing_value(θ_table, z, t₀)` of `sounding_profiles`, linear in
   height between the reported levels and linear in time between the two
   launches that bracket t₀. θ uses the dry Exner function of
@@ -107,7 +175,7 @@ uses the same reference, follows).
   launch site, applied as heights above the case's ground (the profile
   is assumed horizontally homogeneous over the 60 km to Berlin and
   terrain-following over the 78 m elevation difference).
-* `cfg.sounding === nothing` — the **idealised** profile
+* no sounding (`cfg.sounding === nothing` and no sounding driver) — the **idealised** profile
   ``θ(z) = θ_s + \\max(0, z - z_i)Γ`` (`cfg.θ_surface`,
   `cfg.θ_inversion_z`, `cfg.θ_lapse`), kept for `:winter` (no winter
   sounding yet) and `:smoke` (its checks need a capping inversion inside
@@ -166,25 +234,17 @@ end
     case_surface_pressure(cfg) -> p (Pa)
 
 Pressure at the case's ground: `cfg.p_surface` if set; otherwise, with a
-sounding, the sounding's surface pressure at the case start reduced
-hypsometrically from the launch site (`sounding.elevation`, 112 m) to
-`cfg.elevation` (34 m) with the surface virtual temperature,
-``p = p_L \\exp\\bigl(g_0 (z_L - z)/(R_d T_v)\\bigr)``; for the idealised
-profile 101325 Pa.
+sounding, its `init_p_surface` ([`case_sounding`](@ref)): the launch-site
+surface pressure at the case start reduced hypsometrically from the
+launch site (112 m) to `cfg.elevation` (34 m) with the surface virtual
+temperature ([`surface_pressure_at`](@ref)); for the idealised profile
+101325 Pa.
 """
 function case_surface_pressure(cfg::CaseConfig)
     cfg.p_surface === nothing || return cfg.p_surface
     S = case_sounding(cfg)
     S === nothing && return 101325.0
-    MT = Aeolus.MoistThermodynamics
-    c = MT.DEFAULT_CONSTANTS
-    t0 = case_start_time(cfg)
-    P = S.profiles
-    pL = forcing_value(P.p, 0.0, t0)
-    T = forcing_value(P.θ, 0.0, t0) * MT.exner_function(pL)
-    Tv = MT.virtual_temperature(T, MT.PhasePartition(forcing_value(P.qv, 0.0, t0)))
-    R_d = c.gas_constant / c.molmass_dry
-    return pL * exp(c.grav * (S.sounding.elevation - cfg.elevation) / (R_d * Tv))
+    return S.p_surface
 end
 
 """
