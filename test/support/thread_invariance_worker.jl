@@ -665,7 +665,11 @@ function section_radiation()
 end
 
 # --------------------------------------------------------------------------
-init_threads!(BACKEND)
+# BLAS on one thread at every count. `init_threads!` pins it only when Julia
+# runs threaded, so at -t 1 OpenBLAS keeps its own default; LAPACK's bits
+# depend on the BLAS thread count, and the Berlin radiosity solves through
+# it (bus sw/lw, the surface ledger of the smoke and flagship sections).
+init_threads!(BACKEND; blas_threads = 1)
 t0 = time()
 for s in SECTIONS
     ts = time()
