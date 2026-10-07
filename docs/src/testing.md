@@ -262,7 +262,8 @@ studies over those windows; the laminar Poiseuille channels of
 ``Ri_τ = 50``); the 96³ (`era6_apriori_sgs.jl`) and 48³
 (`era6_sgs_validation.jl`) DNS fixtures; the config tests' runs of the
 legacy in-code builds, which are the bit-identity oracles of the config
-migration. The slowest fast file, `config_berlin.jl` (105 s), spends its
+migration. The slowest fast file, `config_berlin.jl` (118.0 s in the
+fast-tier run below, 105.0 s alone with `--only`), spends its
 time building the case and starting a fresh process, not stepping (12
 Berlin steps take 0.5 s).
 
@@ -270,5 +271,10 @@ Fast tier after #317 (`test/run.jl --jobs 4`, 1-min load 5.2 at start,
 other agents' suites alongside): 13.4 min, 128 jobs, 100 981 assertions
 (100 973 pass, 8 broken). It is not comparable with the 12.6 min of
 #320 above: master gained four KA jobs in between. The job time saved
-is the 69 s of `era6_large_scale_forcing.jl` (83 → 13.3 s); the full
-tier, whose full-only files #317 does not touch, saves the same.
+is the 69 s of `era6_large_scale_forcing.jl` (83 → 13.3 s). The full
+tier was not re-measured for #317. The only full-only file #317 touches
+is `era6_lasd.jl`, and only to swap in the shared `kolmogorov_field!`
+fixture (bit-identical field, unchanged assertion counts; 90.1 s with
+`--only` after the swap, no before time was recorded). The
+expected full-tier saving is therefore the same 69 s of
+`era6_large_scale_forcing.jl`; that is an estimate, not a measurement.
