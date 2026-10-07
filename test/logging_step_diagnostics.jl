@@ -266,3 +266,100 @@ end
     v = evaluate_diagnostic.(pd)
     @test all(isfinite, v) && v[1] > 0 && v[2] ≥ v[1] && v[3] ≥ 0
 end
+
+function sd_csv(path)
+    lines = readlines(path)
+    hdr = split(lines[1], ',')
+    rows = [split(l, ',') for l in lines[2:end]]
+    col(name) = [r[findfirst(h -> h == name || startswith(h, name * " ["), hdr)] for r in rows]
+    return (; hdr, rows, col)
+end
+
+@testset "attached monitor: one row per step, with the step's values" begin
+    sim = sd_sim()
+    c = CFLConstraints(; dt_max = 100.0)
+    dir = mktempdir()
+    path = joinpath(dir, "d.csv")
+    expected_dt = Float64[]; expected_cfl = Float64[]; expected_lim = String[]
+    with_logger(NullLogger()) do
+        with_monitor(sim; csv = path, cadence = 3.0, t_end = 1e6, progress_every = 1e9) do m
+            @test m.attached && step_hook(sim) isa MonitorHook
+            @test_throws ArgumentError attach_monitor!(RunMonitor(sim))   # one hook per sim
+            for n in 1:5
+                d = cfl_diagnostics(sim, c)
+                _, dt, _ = step_adaptive!(sim, c)
+                push!(expected_dt, dt); push!(expected_cfl, dt * d.advective_rate)
+                push!(expected_lim, string(d.limiter))
+            end
+            step!(sim, 0.25)                                  # a fixed step: no pick
+            push!(expected_dt, 0.25); push!(expected_cfl, NaN); push!(expected_lim, "fixed")
+        end
+    end
+    @test step_hook(sim) === nothing                          # closing removes the hook
+    t = sd_csv(path)
+    @test length(t.rows) == 6
+    @test parse.(Int, t.col("step")) == 1:6
+    @test parse.(Float64, t.col("dt")) == expected_dt
+    @test t.col("dt_limiter") == expected_lim
+    cfl = parse.(Float64, t.col("cfl_adv"))
+    @test cfl[1:5] == expected_cfl[1:5] && isnan(cfl[6])
+    @test all(==(0.0), parse.(Float64, t.col("solver_iters")))
+    # costly cadence: the first row and every 3 s simulated
+    costly = .!isempty.(t.col("wall_step"))
+    @test costly[1] && 1 < count(costly) < 6
+    @test any(h -> startswith(h, "proc.mem_maxrss_mb"), t.hdr)
+    # step0: a resumed run continues the numbering; monitored_step! adds no row
+    path2 = joinpath(dir, "d2.csv")
+    with_logger(NullLogger()) do
+        with_monitor(sim; csv = path2, step0 = 40) do m
+            for n in 41:43
+                monitored_step!(m, sim; step = n) do
+                    step_adaptive!(sim, c)
+                end
+            end
+        end
+    end
+    @test parse.(Int, sd_csv(path2).col("step")) == 41:43
+end
+
+@testset "driver-reported rows: the steps since the previous row" begin
+    sim = sd_sim()
+    path = joinpath(mktempdir(), "e.csv")
+    with_logger(NullLogger()) do
+        with_monitor(sim; csv = path, attach = false, progress_every = 1e9) do m
+            @test !m.attached && step_hook(sim) === nothing
+            for n in 1:3                                     # a driver step = two core steps
+                step!(sim, 0.2); step_rk3!(sim, 0.3)
+                monitor!(m, sim; step = n)
+            end
+        end
+    end
+    t = sd_csv(path)
+    @test length(t.rows) == 3
+    @test parse.(Float64, t.col("dt")) ≈ fill(0.5, 3)        # the time the row covers
+    @test t.col("dt_limiter") == fill("fixed", 3)
+end
+
+@testset "attached monitor on a nested run: one row per parent step" begin
+    pm = RegularGrid(Float64; size = (12, 12, 12), extent = (1200.0, 1200.0, 1200.0), halo = (3, 3, 3))
+    nest = nested_grid(pm, ((300.0, 900.0), (300.0, 900.0), (0.0, 600.0)), 2)
+    cm = nest_child_mesh(nest)
+    p = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    c = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest))
+    fill!(p.u.data, 4.0)
+    run = NestedRun(p, c, nest; feedback = :one_way, cfl_parent = nothing, cfl_child = nothing)
+    path = joinpath(mktempdir(), "n.csv")
+    with_logger(NullLogger()) do
+        with_monitor(run; csv = path, cadence = 0.0) do m
+            for _ in 1:4
+                step_nested!(run; dt = 5.0)
+            end
+        end
+    end
+    t = sd_csv(path)
+    @test length(t.rows) == 4 && parse.(Float64, t.col("dt")) == fill(5.0, 4)
+    @test parse.(Float64, t.col("child.solver_iters")) == fill(0, 4)
+    @test parse.(Float64, t.col("cfl_adv")) ≈ fill(run.stats.max_child_cfl, 4) rtol = 1e-12
+    # each row is one parent step of two child substeps (refinement 2)
+    @test parse.(Float64, t.col("child_substeps")) == [2, 4, 6, 8]
+end

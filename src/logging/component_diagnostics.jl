@@ -140,7 +140,7 @@ over the domain volume), `max_abs_u`, `max_abs_v`, `max_abs_w`,
 Aeolus.Simulations.max_divergence)), `nu_t_max` (the eddy viscosity of
 the last evaluation) and, with moisture, `qv_max`; the extrema with the
 port's thread-invariant reductions of a Field
-([`reduce_diagnostic`](@ref Aeolus.reduce_diagnostic(::Symbol, ::Aeolus.Fields.Field))).
+([`reduce_diagnostic`](@ref Aeolus.RunLog.reduce_diagnostic)).
 
 From the step cores' [`StepRecord`](@ref Aeolus.Simulations.StepRecord)
 (#336), **every row**, over the steps since the previous row: `cfl_adv`
@@ -478,3 +478,9 @@ profile_diagnostics(run::Nesting.NestedRun, _) =
     vcat(prefixed("parent", profile_diagnostics(run.parent, run.parent)),
          prefixed("child", profile_diagnostics(run.child, run.child)))
 
+# A nested run's monitor row covers the steps of the run and of its two
+# domains since the previous row (#336).
+IO._reset_records!(run::Nesting.NestedRun) =
+    (Simulations.reset_interval!(run.step_record);
+     Simulations.reset_interval!(Simulations.step_record(run.parent));
+     Simulations.reset_interval!(Simulations.step_record(run.child)); nothing)

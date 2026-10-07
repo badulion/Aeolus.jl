@@ -263,7 +263,8 @@ export RunFolder, start_run, finish_run!, with_run, run_checkpoints, Uncommitted
 export checkpoint_payload, write_checkpoint,
        BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
        check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
-       RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir
+       RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir,
+       attach_monitor!, detach_monitor!, MonitorHook
 # #337: diagnostics.nc
 export DiagnosticsNCWriter, diagnostics_nc_path, nc_provenance_attributes
 export NCDataset, nc_create, nc_defvar!, nc_append_record!, nc_chunksizes,

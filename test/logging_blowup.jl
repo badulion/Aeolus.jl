@@ -288,7 +288,8 @@ end
     path = joinpath(mktempdir(), "d.csv")
     lg = Test.TestLogger(; min_level = Logging.Info)
     with_logger(lg) do
-        with_monitor(sim; t_end = 10.0, csv = path, progress_every = 1e9, cadence = 2.0) do mon
+        with_monitor(sim; t_end = 10.0, csv = path, progress_every = 1e9, cadence = 2.0,
+                     attach = false) do mon
             for n in 1:10
                 _, dt, nr = step_adaptive!(sim, cfl; dt = 1.0)
                 n == 5 && @warn "a solver warning" subsystem = :pressure
