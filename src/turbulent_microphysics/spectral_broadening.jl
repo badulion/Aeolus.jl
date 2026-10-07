@@ -441,18 +441,20 @@ end
     broadening_initial_population(case) -> (sd, cell)
 
 The initial superdroplets and parcel of `case`: `n_sd` equal-multiplicity
-superdroplets with radii `r0 exp(ε0 z)`, `z ~ N(0,1)` (seeded), in a 1 m³
+superdroplets with radii `r0 exp(ε0 z)`, `z ~ N(0,1)` (droplet `i` from the
+counter-based stream `(seed, 0, i)`), in a 1 m³
 cell at `(T0, p0)` with vapour at `1 + S0` times saturation. The bulk
 run takes its initial moments from this very population.
 """
 function broadening_initial_population(case::BroadeningCase;
                                        c::ThermodynamicConstants = DEFAULT_CONSTANTS)
-    rng = MersenneTwister(case.seed)
     sd = init_monodisperse_superdroplets(case.n_sd, case.N, case.r0, 1.0;
                                          solute_mass = case.solute_mass)
     if case.ε0 > 0
+        # droplet i's deviate from the counter-based stream (seed, 0, i)
+        # (KA-n, #305): independent of the order the droplets are visited
         for i in eachindex(sd.radius)
-            sd.radius[i] = case.r0 * exp(case.ε0 * randn(rng))
+            sd.radius[i] = case.r0 * exp(case.ε0 * randn(counter_rng(case.seed, 0, i)))
         end
     end
     # vapour at 1 + S0 times saturation; iterate once so that the density
@@ -492,7 +494,7 @@ function run_broadening_case(case::BroadeningCase; model::Symbol = :superdroplet
                           Float64[], Float64[], Float64[])
     if model === :superdroplet
         fl = supersaturation_fluctuations(sd; σ_S = case.σ_S, τ = case.τ,
-                                          rng = MersenneTwister(case.seed + 1))
+                                          seed = case.seed + 1)
         qliq() = total_water_mass(sd, mc) / cell_air_mass(cell)
         record_sd!(t) = _record!(H, t, cell, mean_radius(sd),
                                  relative_dispersion(sd)[2],

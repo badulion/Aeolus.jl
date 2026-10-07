@@ -34,9 +34,18 @@ the Bird clear sky `sky`, the sky longwave `bus.L_sky`, the μ₀-dependent mate
 over the static scene, and the per-column aggregation into `bus.sw`,
 `bus.lw` (per unit surface). Leaves the solutions in `bus.swsol`,
 `bus.lwsol` for the buildings.
+
+The LU factorisations of the two radiosity operators are kept between
+calls (`sw_cache`, `lw_cache`: `Radiosity.RadiosityFactorCache`, KA-n
+#305). The longwave reflectance `1 − ε` never changes, so the longwave
+operator is factorised once per run; the shortwave albedos follow μ₀,
+so the shortwave operator is refactorised whenever they change (every
+daytime call) and not solved at night.
 """
 struct RadiositySun{SK} <: AbstractCoupling
     sky::SK
+    sw_cache::RadiosityFactorCache{Float64}
+    lw_cache::RadiosityFactorCache{Float64}
 end
 
 coupling_name(::Type{<:RadiositySun}) = :radiosity_sun
@@ -50,7 +59,8 @@ stages(::Type{<:RadiositySun}) = ((:radiation, 10, Cadence(:radiation; first = t
 build(::Type{<:RadiositySun}, case, o) =
     RadiositySun(BirdClearSky(; aod380 = o.aod380, aod500 = o.aod500,
                               precipitable_water = o.precipitable_water,
-                              ozone = o.ozone, albedo = o.albedo))
+                              ozone = o.ozone, albedo = o.albedo),
+                 RadiosityFactorCache(), RadiosityFactorCache())
 
 function run_stage!(c::RadiositySun, case, ::Val{:radiation}, dt)
     scene, vfac, bus = case.geom.scene, case.geom.vfac, case.bus
@@ -64,13 +74,11 @@ function run_stage!(c::RadiositySun, case, ::Val{:radiation}, dt)
     mats = default_urban_materials(; μ₀ = max(μ, 0.05))
     scene.materials.albedo     .= mats.albedo
     scene.materials.emissivity .= mats.emissivity
-    for (fi, (ci, cj)) in enumerate(case.geom.facet_col)
-        set_temperature!(scene, fi, Ts[ci, cj])
-    end
+    set_temperatures!(scene, Ts, case.geom.facet_col)
     sunv  = solar_unit_vector(sp)
-    swsol = μ > 0 ? solve_shortwave(scene, vfac, sunv;
-                                    dni = irr.dni, dhi = irr.dhi) : nothing
-    lwsol = solve_longwave(scene, vfac; L_sky = bus.L_sky)
+    swsol = μ > 0 ? solve_shortwave(scene, vfac, sunv; dni = irr.dni, dhi = irr.dhi,
+                                    cache = c.sw_cache) : nothing
+    lwsol = solve_longwave(scene, vfac; L_sky = bus.L_sky, cache = c.lw_cache)
     bus.swsol = swsol
     bus.lwsol = lwsol
     forcing = aggregate_to_grid(scene, vfac; sw = swsol, lw = lwsol, T_surface = Ts)

@@ -4,7 +4,7 @@
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
 # Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
-# nested, fft, fv, pcg, steps) and writes
+# nested, fft, fv, pcg, steps, radiation) and writes
 # one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
 # the raw bits (Float64 → UInt64), so two processes agree iff the results
 # are bit-identical. MODE is `default` (CPUBackend(): threaded when N > 1)
@@ -48,6 +48,15 @@
 #               diagnostics, a forced retry), IMEX ARK2 / Rosenbrock2,
 #               anelastic and pseudo-incompressible, a stretched grid and
 #               every core with open boundaries: every field after 1-4 steps.
+#   radiation   (KA-n, #305) the radiosity view factors of a 16×14 city
+#               (n ≈ 600 facets), its shortwave / longwave solves through
+#               the LU cache (BLAS pinned to one thread here: LAPACK's bits
+#               depend on the BLAS thread count, docs/src/design/ka_port.md)
+#               and aggregate_to_grid; gas + cloud optics and the
+#               multi-column two-stream solves of 6 columns; the cloud
+#               optical-depth field and shadow rays; a Monte-Carlo solve
+#               (12×10×10, 16 batches); 4 collision steps of 2000
+#               superdroplets in 16 cells and the sub-grid fluctuations.
 
 ENV["AEOLUS_FFTW_PLANNER"] = "estimate"    # deterministic plans (#245)
 using Aeolus
@@ -336,6 +345,60 @@ function section_fft()
 end
 
 # --------------------------------------------------------------------------
+# KA-g (#300): every solver on the one CG driver, singular (Neumann and
+# periodic) and stretched-coefficient cases: the solution and the
+# iteration count.
+function section_pcg()
+    PS, MGm, A, TI = Aeolus.PressureSolvers, Aeolus.Multigrid, Aeolus.Anelastic, Aeolus.TimeIntegration
+    N = (64, 64, 32)
+    g = RegularGrid(; size = N, extent = (1000.0, 1000.0, 200.0), halo = (3, 3, 3))
+    smesh = StretchedGrid(; size = N, extent = (1000.0, 1000.0, 2000.0), halo = (3, 3, 3),
+                          stretching = (:geometric, 1.04))
+    gd = RegularGrid(; size = N, extent = (1000.0, 1000.0, 3000.0), halo = (3, 3, 3))
+    ref = A.isothermal_reference(g; T_surf = 300.0); refd = A.isothermal_reference(gd; T_surf = 300.0)
+    solvers = Pair{String,Any}[]
+    for (bz, bxy) in ((:neumann, :periodic), (:neumann, :neumann), (:periodic, :periodic))
+        push!(solvers, "cg($bxy,$bz)" => (g, PS.CGPoissonSolver(g; tol = 1e-8, maxit = 2000, bc_top = bz,
+                                                                  bc_bottom = bz, bc_xy = bxy), s -> s.last_iter[]))
+    end
+    for (bz, bxy) in ((:neumann, :periodic), (:periodic, :periodic))
+        push!(solvers, "mgcg($bxy,$bz)" => (g, MGm.MGPreconditionedCG(g; bc_x = bxy, bc_y = bxy, bc_z = bz,
+                                                                      tol = 1e-10, maxit = 200), s -> s.last_iters[]))
+    end
+    push!(solvers, "mgcg(stretched)" => (smesh, MGm.MGPreconditionedCG(smesh; tol = 1e-10, maxit = 200),
+                                         s -> s.last_iters[]))
+    for (bz, bx) in ((:neumann, :periodic), (:periodic, :periodic), (:neumann, :neumann))
+        push!(solvers, "dw($bx,$bz)" => (g, A.DensityWeightedPoissonSolver(g, ref; bc_z = bz, bc_x = bx, bc_y = bx,
+                                                                           tol = 1e-10, maxit = 2000),
+                                         A.solver_iterations))
+    end
+    push!(solvers, "dw(deep)" => (gd, A.DensityWeightedPoissonSolver(gd, refd; tol = 1e-10, maxit = 2000),
+                                  A.solver_iterations))
+    for (name, (m, solver, its)) in solvers
+        src = Field(m); src.data .= randn(Xoshiro(300), size(src.data))
+        p = Field(m)
+        PS.solve!(p, src, solver)
+        record!("pcg/$name", p.data)
+        record!("pcg/$name/iterations", its(solver))
+    end
+    νvar = zeros(size(Field(g).data))
+    for k in axes(νvar, 3), i in axes(νvar, 1)
+        νvar[i, :, k] .= 2.0 * (1 + 0.5sin(i / 7) + 0.3k / N[3])
+    end
+    for (name, loc, bcs, ν) in (("imex(θ,periodic)", CellCenter(), FieldBoundaryConditions(:periodic), 2.0),
+                                ("imex(θ,ν(x,z),walls)", CellCenter(), FieldBoundaryConditions(:periodic, :periodic, :wall), νvar),
+                                ("imex(w,pinned)", FaceZ(), FieldBoundaryConditions(:periodic, :periodic, :wall), 2.0),
+                                ("imex(u,moving wall)", FaceX(),
+                                 FieldBoundaryConditions(Periodic(), Periodic(), Periodic(), Periodic(),
+                                                         NoSlipWall(), NoSlipWall(u_wall = 1.0)), 2.0))
+        f = Field(loc, g); f.data .= randn(Xoshiro(302), size(f.data))
+        st = TI.solve_implicit_diffusion!(f, f, ν, 20.0, g, bcs; tol = 1e-10, maxit = 500)
+        record!("pcg/$name", f.data)
+        record!("pcg/$name/iterations", st.iterations)
+    end
+end
+
+# --------------------------------------------------------------------------
 function section_fv()
     FVK = Aeolus.Operators.FiniteVolume
     SG = Aeolus.StretchedGrids
@@ -428,57 +491,98 @@ function section_fv()
 end
 
 # --------------------------------------------------------------------------
-# KA-g (#300): every solver on the one CG driver, singular (Neumann and
-# periodic) and stretched-coefficient cases: the solution and the
-# iteration count.
-function section_pcg()
-    PS, MGm, A, TI = Aeolus.PressureSolvers, Aeolus.Multigrid, Aeolus.Anelastic, Aeolus.TimeIntegration
-    N = (64, 64, 32)
-    g = RegularGrid(; size = N, extent = (1000.0, 1000.0, 200.0), halo = (3, 3, 3))
-    smesh = StretchedGrid(; size = N, extent = (1000.0, 1000.0, 2000.0), halo = (3, 3, 3),
-                          stretching = (:geometric, 1.04))
-    gd = RegularGrid(; size = N, extent = (1000.0, 1000.0, 3000.0), halo = (3, 3, 3))
-    ref = A.isothermal_reference(g; T_surf = 300.0); refd = A.isothermal_reference(gd; T_surf = 300.0)
-    solvers = Pair{String,Any}[]
-    for (bz, bxy) in ((:neumann, :periodic), (:neumann, :neumann), (:periodic, :periodic))
-        push!(solvers, "cg($bxy,$bz)" => (g, PS.CGPoissonSolver(g; tol = 1e-8, maxit = 2000, bc_top = bz,
-                                                                  bc_bottom = bz, bc_xy = bxy), s -> s.last_iter[]))
+function section_radiation()
+    R = Aeolus.Radiosity
+    hm = zeros(16, 14)
+    for (i, j, h) in ((3, 3, 15.0), (4, 3, 15.0), (7, 5, 30.0), (8, 5, 24.0), (8, 6, 24.0),
+                      (12, 9, 9.0), (12, 10, 9.0), (13, 10, 12.0), (5, 11, 40.0), (14, 3, 6.0))
+        hm[i, j] = h
     end
-    for (bz, bxy) in ((:neumann, :periodic), (:periodic, :periodic))
-        push!(solvers, "mgcg($bxy,$bz)" => (g, MGm.MGPreconditionedCG(g; bc_x = bxy, bc_y = bxy, bc_z = bz,
-                                                                      tol = 1e-10, maxit = 200), s -> s.last_iters[]))
+    scene = build_scene(hm, 3.0, 3.0; wall_subdivisions = 2)
+    for i in 1:nfacets(scene)
+        set_temperature!(scene, i, 285.0 + 15 * sin(0.37 * i))
     end
-    push!(solvers, "mgcg(stretched)" => (smesh, MGm.MGPreconditionedCG(smesh; tol = 1e-10, maxit = 200),
-                                         s -> s.last_iters[]))
-    for (bz, bx) in ((:neumann, :periodic), (:periodic, :periodic), (:neumann, :neumann))
-        push!(solvers, "dw($bx,$bz)" => (g, A.DensityWeightedPoissonSolver(g, ref; bc_z = bz, bc_x = bx, bc_y = bx,
-                                                                           tol = 1e-10, maxit = 2000),
-                                         A.solver_iterations))
+    vf = view_factors(scene; backend = BACKEND)
+    record!("radiation/radiosity/nfacets", nfacets(scene))
+    record!("radiation/radiosity/F", vf.F)
+    record!("radiation/radiosity/F_sky", vf.F_sky)
+    nb = Aeolus.Backends.BLAS.get_num_threads()
+    Aeolus.Backends.BLAS.set_num_threads(1)
+    csw, clw = RadiosityFactorCache(), RadiosityFactorCache()
+    sun = solar_unit_vector((0.3, -0.4, 0.8))
+    sw = solve_shortwave(scene, vf, sun; dni = 800.0, dhi = 90.0, cache = csw)
+    lw = solve_longwave(scene, vf; L_sky = 320.0, cache = clw)
+    lw2 = solve_longwave(scene, vf; L_sky = 330.0, cache = clw)
+    Aeolus.Backends.BLAS.set_num_threads(nb)
+    record!("radiation/radiosity/sw.B", sw.radiosity)
+    record!("radiation/radiosity/lw.B", lw.radiosity)
+    record!("radiation/radiosity/lw2.B (cached LU)", lw2.radiosity)
+    agg = aggregate_to_grid(scene, vf; sw = sw, lw = lw, backend = BACKEND)
+    for f in fieldnames(typeof(agg))
+        record!("radiation/aggregate/$f", getfield(agg, f))
     end
-    push!(solvers, "dw(deep)" => (gd, A.DensityWeightedPoissonSolver(gd, refd; tol = 1e-10, maxit = 2000),
-                                  A.solver_iterations))
-    for (name, (m, solver, its)) in solvers
-        src = Field(m); src.data .= randn(Xoshiro(300), size(src.data))
-        p = Field(m)
-        PS.solve!(p, src, solver)
-        record!("pcg/$name", p.data)
-        record!("pcg/$name/iterations", its(solver))
+    # gas + cloud optics and the multi-column two-stream solves
+    nz = 30
+    cols = [us_standard_column(; nz = nz, T_sfc = 280.0 + 3c) for c in 1:6]
+    cols[2].ql[3:6] .= 3e-4; cols[5].qi[12:14] .= 4e-5
+    for (tag, spec) in (("sw", shortwave_bands()), ("lw", longwave_bands()))
+        o = allocate_column_optics(Float64, nz, 6, spec)
+        compute_optics!(o, correlated_k_optics(spec), cols; backend = BACKEND)
+        oc = allocate_column_optics(Float64, nz, 6, spec)
+        compute_optics!(oc, mie_cloud_optics(spec), cols; backend = BACKEND)
+        combine_optics!(o, oc)
+        record!("radiation/optics/$tag.τ", o.τ); record!("radiation/optics/$tag.ssa", o.ssa)
+        f = allocate_fluxes(Float64, (6,), nz + 1)
+        if tag == "sw"
+            solve_sw!(f, two_stream_solver(spec), o; μ₀ = [0.2 + 0.1c for c in 1:6],
+                      sfc_albedo_direct = 0.15, backend = BACKEND)
+        else
+            solve_lw!(f, two_stream_solver(spec), o, cols; sfc_emissivity = 0.96, backend = BACKEND)
+        end
+        record!("radiation/twostream/$tag.up", f.flux_up)
+        record!("radiation/twostream/$tag.dn", f.flux_dn)
+        record!("radiation/twostream/$tag.dir", f.flux_dn_dir)
     end
-    νvar = zeros(size(Field(g).data))
-    for k in axes(νvar, 3), i in axes(νvar, 1)
-        νvar[i, :, k] .= 2.0 * (1 + 0.5sin(i / 7) + 0.3k / N[3])
+    # cloud shadow
+    mesh = RegularGrid(; size = (32, 24, 16), extent = (640.0, 480.0, 320.0), halo = (2, 2, 2))
+    rng = Xoshiro(305)
+    ql = max.(1e-4 .* randn(rng, 32, 24, 16), 0.0); qi = zeros(32, 24, 16)
+    τ = cloud_optical_depth_column(ql, qi, 1.1, 20.0; backend = BACKEND)
+    tr = zeros(32, 24)
+    cloud_shadow_transmittance!(tr, τ, mesh, (0.4, 0.2, 0.89); backend = BACKEND)
+    record!("radiation/cloud_shadow/τ", τ)
+    record!("radiation/cloud_shadow/trans", tr)
+    # Monte Carlo
+    dom = mc_domain(Float64; size = (12, 10, 10), spacing = (40.0, 40.0, 40.0))
+    kext = zeros(12, 10, 10); ssa = zeros(12, 10, 10); gg = zeros(12, 10, 10)
+    kext[3:8, 2:7, 3:6] .= 0.04; ssa[3:8, 2:7, 3:6] .= 0.99; gg[3:8, 2:7, 3:6] .= 0.85
+    med = mc_medium(dom; kext = kext, ssa = ssa, g = gg, sfc_albedo = 0.15)
+    r = mc_solve(med, monte_carlo_solver(; nphoton = 16_000, nbatch = 16); seed = 305,
+                 sun_dir = mc_sun_direction(0.6; azimuth = 100.0), solar_flux = 900.0,
+                 backend = BACKEND)
+    record!("radiation/montecarlo/absorbed", r.absorbed)
+    record!("radiation/montecarlo/absorbed_err", r.absorbed_err)
+    record!("radiation/montecarlo/sfc", r.sfc_direct .+ r.sfc_diffuse)
+    record!("radiation/montecarlo/fluxes", vcat(vec(r.flux_up), vec(r.flux_dn)))
+    record!("radiation/montecarlo/scalars", [r.albedo, r.albedo_err, r.transmittance])
+    # superdroplets
+    sd = init_exponential_superdroplets(Xoshiro(1), 2000, 1e8, 15e-6, 1.6e-4; backend = BACKEND)
+    for i in eachindex(sd.cell)
+        sd.cell[i] = 1 + (i * 7) % 16
     end
-    for (name, loc, bcs, ν) in (("imex(θ,periodic)", CellCenter(), FieldBoundaryConditions(:periodic), 2.0),
-                                ("imex(θ,ν(x,z),walls)", CellCenter(), FieldBoundaryConditions(:periodic, :periodic, :wall), νvar),
-                                ("imex(w,pinned)", FaceZ(), FieldBoundaryConditions(:periodic, :periodic, :wall), 2.0),
-                                ("imex(u,moving wall)", FaceX(),
-                                 FieldBoundaryConditions(Periodic(), Periodic(), Periodic(), Periodic(),
-                                                         NoSlipWall(), NoSlipWall(u_wall = 1.0)), 2.0))
-        f = Field(loc, g); f.data .= randn(Xoshiro(302), size(f.data))
-        st = TI.solve_implicit_diffusion!(f, f, ν, 20.0, g, bcs; tol = 1e-10, maxit = 500)
-        record!("pcg/$name", f.data)
-        record!("pcg/$name/iterations", st.iterations)
+    rsd = Xoshiro(2)
+    counts = Int[]
+    for _ in 1:4
+        c, e = collision_coalescence!(rsd, sd, Aeolus.Superdroplet.GolovinKernel(), 1.0,
+                                      fill(1e-5, 16); backend = BACKEND)
+        push!(counts, c, e)
     end
+    record!("radiation/superdroplet/ξ", sd.ξ)
+    record!("radiation/superdroplet/radius", sd.radius)
+    record!("radiation/superdroplet/counts", counts)
+    fl = supersaturation_fluctuations(2000; σ_S = 1e-3, τ = 2.0, seed = 9, backend = BACKEND)
+    advance_fluctuations!(fl, 0.5; backend = BACKEND)
+    record!("radiation/superdroplet/fluctuations", fl.ξ)
 end
 
 # --------------------------------------------------------------------------
@@ -503,6 +607,7 @@ for s in SECTIONS
     s == "fv"         ? section_fv() :
     s == "pcg"        ? section_pcg() :
     s == "steps"      ? section_steps() :
+    s == "radiation"  ? section_radiation() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)
 end

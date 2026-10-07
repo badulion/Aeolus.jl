@@ -29,7 +29,9 @@ the radiosity solve:
    radiosity solution.
 
 It runs at the radiation cadence, like the radiosity solve whose beam it
-attenuates, so it cannot compound between updates.
+attenuates, so it cannot compound between updates. The optical-depth
+field and the per-column rays are launches on the case's backend (KA-n,
+#305): pointwise, so identical at every thread count.
 
 Known limitations: interreflections of the shaded beam and the window
 sun the buildings take from the radiosity solution are not attenuated;
@@ -97,9 +99,9 @@ function run_stage!(c::CloudShadow, case, ::Val{:radiation}, dt)
                                    k_liq = liquid_mass_extinction(c.r_eff_liq),
                                    k_ice = ice_mass_extinction(c.r_eff_ice))
     mask = case.geom.sm.mask
-    @inbounds for k in 1:m.Nz, j in 1:m.Ny, i in 1:m.Nx
-        τ[i, j, k] = mask[m.Hx + i, m.Hy + j, m.Hz + k] ? 0.0 : max(τ[i, j, k], 0.0) * c.fδ
-    end
+    # zero in the solid cells, delta-scaled in the air: pointwise (KA-n, #305)
+    launch!(Aeolus.Backends.backend(τ), _shadow_tau_cell!, (1:m.Nx, 1:m.Ny, 1:m.Nz),
+            τ, mask, m.Hx, m.Hy, m.Hz, c.fδ)
     c.cloud = any(>(0), τ)
     sp = solar_position_at(case.cfg, case.clock.hour)
     cloud_shadow_transmittance!(c.trans, τ, m, sun_direction_enu(sp); k_start = c.k_start)
@@ -109,6 +111,11 @@ function run_stage!(c::CloudShadow, case, ::Val{:radiation}, dt)
         c.removed[I] = r
         bus.sw[I] -= r
     end
+    return nothing
+end
+
+@inline function _shadow_tau_cell!(i, j, k, τ, mask, Hx, Hy, Hz, fδ)
+    @inbounds τ[i, j, k] = mask[Hx + i, Hy + j, Hz + k] ? 0.0 : max(τ[i, j, k], 0.0) * fδ
     return nothing
 end
 

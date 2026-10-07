@@ -36,6 +36,7 @@ using ..Fields
 using ..Fields: Field, interior_view
 using ..RadiationCore
 using ..RadiationCore: SOLAR_CONSTANT, liquid_mass_extinction, ice_mass_extinction
+using ..Backends: AbstractBackend, default_backend, launch!, launch_weighted!
 
 export AbstractSolarPosition, MeeusPosition,
        SolarTime, solar_time, julian_day, julian_century,
@@ -594,23 +595,30 @@ instantiating the whole optics pipeline.
 
 `ql`, `qi` are mass mixing ratios (kg/kg), `ρ` is air density (kg/m³),
 a scalar, a per-level vector or a 3-D array, `dz` the layer thickness
-(m). Returns a 3-D array of optical depths.
+(m). Returns a 3-D array of optical depths: one pointwise
+[`launch!`](@ref Aeolus.Backends.launch!) on `backend` (KA-n, #305).
 """
 function cloud_optical_depth_column(ql::AbstractArray{T,3},
                                     qi::AbstractArray{T,3},
                                     ρ, dz;
                                     k_liq::Real = liquid_mass_extinction(10.0),
-                                    k_ice::Real = ice_mass_extinction(30.0)) where {T}
+                                    k_ice::Real = ice_mass_extinction(30.0),
+                                    backend::AbstractBackend = default_backend()) where {T}
     τ = similar(ql)
     nx, ny, nz = size(ql)
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
+    launch!(backend, _cloud_tau_cell!, (1:nx, 1:ny, 1:nz), τ, ql, qi, ρ, dz, k_liq, k_ice)
+    return τ
+end
+
+@inline function _cloud_tau_cell!(i, j, k, τ, ql, qi, ρ, dz, k_liq, k_ice)
+    @inbounds begin
         ρk = ρ isa Real ? ρ : (ρ isa AbstractVector ? ρ[k] : ρ[i, j, k])
         hk = dz isa Real ? dz : dz[k]
         lwc = ql[i, j, k] * ρk * 1000      # kg/kg → g/m³
         iwc = qi[i, j, k] * ρk * 1000
         τ[i, j, k] = (k_liq * lwc + k_ice * iwc) * hk
     end
-    return τ
+    return nothing
 end
 
 """
@@ -645,19 +653,26 @@ the ray (for opaque buildings see
 This is genuinely 3-D: a cloud displaced horizontally from a surface cell
 shadows it when the sun is low, which no column-by-column (independent
 column) calculation can represent.
+
+The rays are the work items of one
+[`launch_weighted!`](@ref Aeolus.Backends.launch_weighted!) over the columns
+on `backend` (KA-n, #305); each ray reads τ and writes its own `trans[i, j]`,
+so the map is identical at every thread count.
 """
 function cloud_shadow_transmittance!(trans::AbstractMatrix{T},
                                      τ_cloud::AbstractArray{T,3},
                                      mesh::RegularGrid,
                                      sun_dir::NTuple{3,<:Real};
-                                     k_start::Union{Nothing,AbstractMatrix{<:Integer}} = nothing) where {T}
+                                     k_start::Union{Nothing,AbstractMatrix{<:Integer}} = nothing,
+                                     backend::AbstractBackend = default_backend()) where {T}
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     size(trans) == (Nx, Ny) ||
         error("cloud_shadow_transmittance!: trans is $(size(trans)), expected ($Nx, $Ny)")
     size(τ_cloud) == (Nx, Ny, Nz) ||
         error("cloud_shadow_transmittance!: τ_cloud is $(size(τ_cloud)), expected ($Nx, $Ny, $Nz)")
     k_start === nothing &&
-        return combined_shadow_transmittance!(trans, τ_cloud, nothing, mesh, sun_dir)
+        return combined_shadow_transmittance!(trans, τ_cloud, nothing, mesh, sun_dir;
+                                              backend = backend)
     size(k_start) == (Nx, Ny) ||
         error("cloud_shadow_transmittance!: k_start is $(size(k_start)), expected ($Nx, $Ny)")
     sx, sy, sz = Float64.(sun_dir)
@@ -666,12 +681,18 @@ function cloud_shadow_transmittance!(trans::AbstractMatrix{T},
         return trans
     end
     dx, dy, dz = Float64(mesh.dx), Float64(mesh.dy), Float64(mesh.dz)
-    @inbounds for j in 1:Ny, i in 1:Nx
-        τ_slant, _ = _shadow_ray(τ_cloud, nothing, i, j, Int(k_start[i, j]), sx, sy, sz,
-                                 dx, dy, dz, Nx, Ny, Nz, mesh.Hx, mesh.Hy, mesh.Hz)
-        trans[i, j] = T(exp(-τ_slant))
-    end
+    # one ray per column; a ray crosses about Nz/μ₀ cells
+    launch_weighted!(backend, Nz, _cloud_ray_column!, (1:Nx, 1:Ny), trans, τ_cloud, k_start,
+                     sx, sy, sz, dx, dy, dz, Nx, Ny, Nz, mesh.Hx, mesh.Hy, mesh.Hz)
     return trans
+end
+
+@inline function _cloud_ray_column!(i, j, trans::AbstractMatrix{T}, τ_cloud, k_start, sx, sy, sz,
+                                    dx, dy, dz, Nx, Ny, Nz, Hx, Hy, Hz) where {T}
+    τ_slant, _ = _shadow_ray(τ_cloud, nothing, i, j, Int(@inbounds k_start[i, j]), sx, sy, sz,
+                             dx, dy, dz, Nx, Ny, Nz, Hx, Hy, Hz)
+    @inbounds trans[i, j] = T(exp(-τ_slant))
+    return nothing
 end
 
 """
@@ -707,7 +728,8 @@ function combined_shadow_transmittance!(trans::AbstractMatrix{T},
                                         τ_cloud::Union{Nothing,AbstractArray{T,3}},
                                         solid_mask::Union{Nothing,AbstractArray{Bool,3}},
                                         mesh::RegularGrid,
-                                        sun_dir::NTuple{3,<:Real}) where {T}
+                                        sun_dir::NTuple{3,<:Real};
+                                        backend::AbstractBackend = default_backend()) where {T}
     sx, sy, sz = Float64.(sun_dir)
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
@@ -716,20 +738,25 @@ function combined_shadow_transmittance!(trans::AbstractMatrix{T},
         return trans
     end
     dx, dy, dz = Float64(mesh.dx), Float64(mesh.dy), Float64(mesh.dz)
-    @inbounds for j in 1:Ny, i in 1:Nx
-        # start on top of the local solid stack so a rooftop is not
-        # shadowed by its own building
-        k_top = 0
-        if solid_mask !== nothing
-            for k in Nz:-1:1
-                if solid_mask[Hx + i, Hy + j, Hz + k]; k_top = k; break; end
-            end
-        end
-        τ_slant, blocked = _shadow_ray(τ_cloud, solid_mask, i, j, k_top,
-                                       sx, sy, sz, dx, dy, dz, Nx, Ny, Nz, Hx, Hy, Hz)
-        trans[i, j] = blocked ? zero(T) : T(exp(-τ_slant))
-    end
+    launch_weighted!(backend, Nz, _combined_ray_column!, (1:Nx, 1:Ny), trans, τ_cloud,
+                     solid_mask, sx, sy, sz, dx, dy, dz, Nx, Ny, Nz, Hx, Hy, Hz)
     return trans
+end
+
+@inline function _combined_ray_column!(i, j, trans::AbstractMatrix{T}, τ_cloud, solid_mask,
+                                       sx, sy, sz, dx, dy, dz, Nx, Ny, Nz, Hx, Hy, Hz) where {T}
+    # start on top of the local solid stack so a rooftop is not
+    # shadowed by its own building
+    k_top = 0
+    if solid_mask !== nothing
+        @inbounds for k in Nz:-1:1
+            if solid_mask[Hx + i, Hy + j, Hz + k]; k_top = k; break; end
+        end
+    end
+    τ_slant, blocked = _shadow_ray(τ_cloud, solid_mask, i, j, k_top,
+                                   sx, sy, sz, dx, dy, dz, Nx, Ny, Nz, Hx, Hy, Hz)
+    @inbounds trans[i, j] = blocked ? zero(T) : T(exp(-τ_slant))
+    return nothing
 end
 
 # Exact traversal of the ray from the centre of cell (i, j)'s face at
