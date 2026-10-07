@@ -230,6 +230,17 @@ quotes its size.
   the work-item → task map changes with the thread count.
 * Partials arrays for reductions are sized by the outer range (`n_k`
   planes, `n_i × n_j` columns), not by the thread count.
+* A column work item ([`foreach_column!`](@ref Aeolus.Backends.foreach_column!),
+  KA-m) owns its scratch: a workspace that belongs to the column's own
+  object (a soil column's, a facet's conduction column), or vectors the
+  column allocates itself (a raining Kessler column's `col` / `Nr`).
+  Never one buffer captured by a closure and shared by every column, and
+  never a global scratch vector (the Mie log-derivative buffer was one,
+  and raced, until KA-m made it task-local).
+* Lazily filled global caches are filled before any launch can reach
+  them, or guarded by a lock (KA-m): the Gauss-Legendre nodes are a table
+  computed when `RadiationCore` loads, the aerosol optics memo and the
+  SNICAR table are locked.
 
 ## FFTW and BLAS
 
@@ -290,7 +301,9 @@ AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
 ```
 
 Later port PRs extend the worker with their own sections, not the
-driver.
+driver. KA-m added `columns`: the column kernels on seeded inputs, every
+launch threaded (`threshold = 0`), BLAS on one thread in that section
+(see "Measured at KA-m").
 
 ## Measured at KA-a
 
@@ -661,6 +674,193 @@ the flagship step and the new fft section) identical at 4, 12 and 24
 threads to 1 thread. Two separate processes at `-t 1` and two at `-t 24`
 gave the same fft and dns hashes. At `-t 1` every solve is bit-identical
 to master: no one-time change.
+
+## KA-m: column physics, one work item per column (#301)
+
+**Primitives** (`src/Backends.jl`). [`foreach_column!`](@ref Aeolus.Backends.foreach_column!)
+runs a column body `body!(i, j, args...)` (or `body!(n, args...)` over a
+list of ids: the columns of one surface type, the facets of a scene) as
+one work item. The body loops over its own levels in its own order and
+writes only its own column. What the old loops accumulated across
+columns, the body *returns*; the launch stores it in row `c` of a
+`partials` matrix (column-major `c`), and
+[`column_sums`](@ref Aeolus.Backends.column_sums) folds each term in
+row order from zero. [`column_sum`](@ref Aeolus.Backends.column_sum) does
+both, and on the calling task it adds the terms as they come (no partials
+array). Both paths add the same numbers in the same order, so a total is
+identical at every thread count and equal to the old `s += x` loop. A
+maximum is `foldl(max, …)` over the partials (exact in any order).
+[`foreach_cell!`](@ref Aeolus.Backends.foreach_cell!) is `launch!` with a
+weight, or `plane_reduce!` with per-plane partials. `weight` is the work
+of one column in grid points (its levels, or its root solves), so that
+the serial threshold counts the real work.
+
+**What runs per column.**
+
+* Surface exchange (`step_all_surfaces!`): the columns are grouped by
+  concrete surface type at `init!` and each group is one launch, so every
+  launch calls `step_surface!` on one type. The worst storage error, the
+  worst MSHF ratios and the MSHF time are per-column partials; the
+  delivery loop (`:surface_flux`) returns evaporation and the solid-write
+  flag.
+* The parent's tiled surface (`step_parent_surface!`): one work item per
+  parent column, with the area sums of the tile fluxes as partials.
+* `aq_chem`: the deposition velocities (one surface-layer solve per
+  column) and the emissions; `Chemistry.apply_dry_deposition!` returns
+  what each column removed. `apply_photochemistry!` was already a
+  per-cell `plane_reduce!` (KA-b).
+* `RadiationFog.fog_adjust!`: one plane per work item, with an early exit
+  for a cell with `ql ≤ 0` and `qv < (1 − 10⁻⁸) q_s`, where the
+  adjustment returns exactly zero. `dew_exchange!` and the Berlin dew
+  pass: one column each.
+* Kessler: conversion per cell; the spectrum sedimentation one column
+  per work item, a raining column allocating its own `col` / `Nr` scratch
+  (the old loop shared one pair through a captured closure); the legacy
+  upwind one column per work item in ascending `k`. This is also the only
+  3-D use of `p3_sediment!`; the Berlin case has no 3-D P3 coupling.
+* `WallModels` dynamic roughness: the masked mean wind, the drag parts
+  and the residual at every α of the scan and the root solve.
+* `UrbanSurface` facet scenes: the trial steps of the implicit step, the
+  final column advance and the lagged step, one work item per facet. A
+  scene that lists one facet object twice is refused (it would race).
+
+**What stays serial, and why.** The facet scene's coupled longwave /
+node solve between the facet launches and the building energy balance
+are global linear systems: every unknown depends on every other, so
+there is no column to give a work item. The LU solve also depends on the
+BLAS thread count, which is why the harness section pins BLAS to one
+thread. Per-tracer parallelism is a follow-up.
+
+**Global caches.** `RadiationCore._gauss_legendre` is the one source of
+Gauss-Legendre nodes; `SurfaceOptics` and `Radiosity` delegate to it
+(their copies were the same arithmetic and gave the same bits). Orders
+1-64 are a table computed when the module loads; higher orders are
+memoised under a lock. The aerosol bulk-optics memo and the SNICAR table
+are locked (the SNICAR file is read once). The Mie log-derivative buffer
+was one global vector, and two tasks calling `mie_sphere` at once
+corrupted each other's recursion. The new first-use-under-threads test
+found this; the buffer is task-local now (2000 calls: 4.39 → 4.02 ms).
+
+**Two performance traps** found while measuring, both now fixed and
+tested:
+
+* A closure that captures a variable the loop reassigns is boxed. The
+  first `column_sums` row update did this, and every row then went
+  through dynamic dispatch (72 bytes per row). `update_dynamic_roughness!`
+  at 128² took 101 / 98 / 97 ms at 4 / 12 / 24 threads against 8.3 ms
+  for the old loop at one thread.
+* A type passed among the launch arguments (`::Type{T}`) is stored as a
+  `DataType` in the argument tuple, so the body is dispatched per
+  column. Pass `zero(T)` instead.
+
+**One-time changes against master** (named in the maintainer's
+decisions on #291):
+
+* The saturation vapour pressure is one fused exponential,
+  `e_s = p_tr exp(a ln(T/T0) + b)`, instead of `p_tr (T/T0)^a exp(b)`.
+  This changes the last bits of `e_s` and `q_s` everywhere: at most
+  8.3 × 10⁻¹⁶ relative over 230-320 K (6 ulps) and 2.4 × 10⁻¹⁵ over
+  150-400 K. The P3 precipitation-fraction golden values move by
+  9.5 × 10⁻¹⁶ in `q_c` of the cold parcel; they were re-recorded because
+  that expectation was a bit pattern.
+  After 12 flagship steps at one thread against master: θ differs by at
+  most 3.4 × 10⁻¹³ K (1.2 × 10⁻¹⁵ relative), qv by 1.4 × 10⁻¹⁷
+  (1.7 × 10⁻¹⁵), u by 6.2 × 10⁻¹⁵ m s⁻¹, the surface temperature by
+  2.3 × 10⁻¹³ K; ql is identical. In the ledgers the park class moves in
+  the 14th digit, and the domain evaporation goes from
+  1.4646778140248087 × 10⁻⁴ to 1.4646778140248762 × 10⁻⁴.
+* The total that `fog_adjust!` returns is the plane sums in ascending
+  `k`, so its last bits change. The Berlin coupling ignores it, and the
+  fields are bit-identical.
+
+Apart from these, every ported kernel is bit-identical to master at one
+thread. This was checked by hashing in two worktrees: facet scenes
+(implicit, direct, lagged), dry deposition, dynamic roughness, the
+smoke matrix and the flagship, 2591 hashes. The `dew_exchange!` hash
+equals the hash of master with the `e_s` change alone.
+
+**Measured** (AMD Ryzen 9 7900, Julia 1.13.1; minimum of 20 calls,
+5-10 for the slow ones; old = master at b4f6f82, the minimum of two runs
+at one thread; speed-up = old 1 t / new N t; µs).
+
+| kernel | old, 1 t | new, 1 t | 1 t / old | 4 t | 12 t | 24 t |
+| :----- | -------: | -------: | --------: | --: | ---: | ---: |
+| `fog_adjust!`, flagship state, 64×64×32 | 11 350 | 4 968 | 0.44 | 9.04× | 15.93× | 17.97× |
+| `fog_adjust!`, foggy state, 64×64×32 | 49 276 | 43 523 | 0.88 | 4.61× | 11.48× | 14.52× |
+| `fog_dew` dew pass, 64×64 | 33.5 | 32.2 | 0.96 | 2.01× | 1.32× | 1.25× |
+| `apply_kessler_step!` (spectrum), flagship state | 677 | 644 | 0.95 | 3.34× | 4.00× | 3.55× |
+| `apply_kessler_step!` (spectrum), 20 % raining cells | 3 242 882 | 3 342 466 | 1.03 | 3.77× | 6.97× | 10.56× |
+| `step_all_surfaces!`, child 64×64 | 146 241 | 140 142 | 0.96 | 4.04× | 5.42× | 11.51× |
+| `step_parent_surface!`, parent 192×192 (tiled) | 1 987 205 | 1 993 987 | 1.00 | 3.38× | 5.28× | 6.24× |
+| `aq_chem` deposition velocities, 64×64 | 24 336 | 21 086 | 0.87 | 4.37× | 7.45× | 7.98× |
+| `aq_chem` emissions, 64×64 | 5.0 | 7.5 | 1.50 | 0.68× | 0.68× | 0.64× |
+| `apply_dry_deposition!` (O₃), 64×64 | 30.9 | 23.7 | 0.77 | 1.29× | 1.29× | 1.28× |
+| surface delivery (`:surface_flux`), 64×64 | 184 | 22.9 | 0.12 | 7.92× | 7.95× | 7.88× |
+| `step_urban_facets!` implicit, 564 facets | 9 587 | 9 646 | 1.01 | 3.47× | 3.73× | 4.21× |
+| `step_urban_facets!` lagged, 564 facets | 9 586 | 9 854 | 1.03 | 3.67× | 4.21× | 4.66× |
+| `update_dynamic_roughness!`, 128×128 | 8 336 | 8 708 | 1.04 | 2.20× | 2.53× | 2.46× |
+
+Reading the table:
+
+* **The 1-thread gate (≤ 1.10) holds except for the `aq_chem`
+  emissions**, which take 5.0 → 7.5 µs. The cause is that every emitting
+  column (3265 of 4096) adds a 3-tuple, which is three add-latency
+  chains, where the old loop added one or two terms. Skipping zero terms
+  did not help (7.6 µs). The 2.5 µs is once per chemistry step, against a
+  stage whose deposition velocities got 3 ms faster.
+* **`fog_adjust!` gains at one thread** (0.44×) from the early exit,
+  because most flagship cells are far from saturation. A foggy state
+  (30 % of cells supersaturated) gains 0.88×. Both reach 15-18× at 24
+  threads.
+* **The surface delivery** is 0.12× at one thread. The old loop ran
+  inside the stage method, which reads the case's fields, and some of
+  them are not concretely typed. The column body sits behind
+  `column_sum`, which acts as a function barrier, so it is compiled for
+  concrete types. That is the likely reason; it was not profiled.
+* **Compute-heavy columns scale.** The child surface step reaches
+  11.5× at 24 threads, the parent's 192² tiled surface 6.2× (5.3× at
+  12), the deposition velocities 8.0×, and Kessler with 20 % rain 10.6×.
+  The issue expected 6-10× at 12 threads for the surface exchange; the
+  child gets 5.4× at 12 and the parent 5.3×, limited by load imbalance
+  between surface types (one launch per type).
+* **Small 2-D sums stay serial.** The emissions and the dry deposition
+  are 4096 columns × 1 point, below the threshold, so they run on the
+  calling task at any thread count. The dew pass has weight 16 (a
+  saturation humidity per column) and does thread. It reaches 2.0× at 4 threads, but only 1.3× at
+  12 and 24, where task start-up costs about as much as the 33 µs of
+  work.
+* **The facet scene** (564 facets) reaches 4.2-4.7× at 24 threads. The
+  serial longwave solve between the facet launches bounds it.
+* **The dynamic roughness** gains 2.2-2.5×: the filtered velocities and
+  the scan's bookkeeping between the residual launches are serial.
+
+**The flagship** (64×64×32 child with its parent, default cadence;
+`case.timing` per step in ms, mean over 8 steps, minimum of 3 repeats;
+old = master at one thread):
+
+| stage | old, 1 t | new, 1 t | 4 t | 12 t | 24 t |
+| :---- | -------: | -------: | --: | ---: | ---: |
+| whole step | 227.9 | 220.1 | 196.2 | 197.4 | 211.6 |
+| `chemistry/aq_chem` | 12.78 | 12.88 | 4.24 | 2.68 | 2.45 |
+| `fog_dew/fog_dew` | 11.43 | 4.83 | 1.64 | 0.99 | 0.86 |
+| `microphysics/micro_kessler` | 1.12 | 1.05 | 0.62 | 0.59 | 0.78 |
+| `surface_flux/surface_exchange` | 0.207 | 0.043 | 0.059 | 0.076 | 0.070 |
+| `surface_update/surface_exchange` | 0.106 | 0.107 | 0.115 | 0.173 | 0.139 |
+
+The issue's baseline was aq_chem 15-16.5 ms and fog_dew 9.4 ms. These
+stages now take 2.5 and 0.9 ms at 24 threads. The surface step runs at
+its cadence, so its mean per step is small; per call it is the
+`step_all_surfaces!` row above. The step as a whole is still bound by
+stages that other port issues own: the parent's nesting step (92 ms),
+scalar advection (49 ms) and the dynamics (48 ms).
+
+**Thread invariance.** The harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,12,24`) gives 2877 hashes per process
+(primitives, 64³ DNS, reductions, the Berlin smoke matrix, the flagship
+step, nested runs, fft and the new `columns` section), and all of them at
+4, 12 and 24 threads equal the 1-thread hashes. `test/ka_columns.jl` at
+`--threads 24` includes the first use of every cache from hundreds of
+tasks at once, and passes.
 
 ## Dependency tree
 

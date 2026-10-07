@@ -27,6 +27,11 @@ combined over ``k`` in ascending order; the heat of the air takes its
 fluid and solid level sums the same way (`air_heat_levels!`).
 `add_surface!` sums the step's column contributions per class in
 column-major order and adds that step total to the accumulated term.
+The couplings' own column totals — the surface exchange's evaporation,
+the `aq_chem` emissions and dry deposition, the parent's area sums of
+its tile fluxes — are `column_sum` totals (KA-m, #301): one work item
+per column, the columns' terms added in column-major order from zero,
+the same bits serially and threaded.
 
 **Surface energy.** `:Rn` (net radiation into the surface), `:H`,
 `:LE`, `:G` (sensible, latent and ground heat flux out of it) and `:dS`
