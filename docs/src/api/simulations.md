@@ -78,6 +78,21 @@ Aeolus.Simulations.rk3_workspace
 Aeolus.Simulations.StepWorkspaces
 ```
 
+### The step record and the diagnostics hook (#336)
+
+Every step core fills the simulation's
+[`StepRecord`](@ref Aeolus.Simulations.StepRecord) and calls its hook at
+the end of each step; the run monitor attaches to it. See
+[Per-step diagnostics](logging.md#Per-step-diagnostics-in-the-step-cores).
+
+```@docs
+Aeolus.Simulations.StepRecord
+Aeolus.Simulations.step_record
+Aeolus.Simulations.set_step_hook!
+Aeolus.Simulations.step_hook
+Aeolus.Simulations.reset_interval!
+```
+
 ### Field algebra of the step cores (KA-j, #306)
 
 The drivers update their fields only through pointwise kernels, which

@@ -850,6 +850,7 @@ using Aeolus.Fields: set!, interior_view
     include("logging_diagnostics.jl") # #335: diagnostics registry, CSV writer, progress line
     include("logging_blowup.jl")      # #335: blowup diagnose-dump-stop, run monitor
     include("logging_diagnostics_nc.jl")  # #337: diagnostics.nc (profiles, NetCDF-4, provenance attributes)
+    include("logging_step_diagnostics.jl")  # #336: per-step diagnostics in the step cores, attached monitor
     include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
     include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
     include("config_simulation_driver.jl")  # CFG-b (#357): simulation driver, bitwise round trip, resume, TGV
