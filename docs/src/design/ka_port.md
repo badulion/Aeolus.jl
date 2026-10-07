@@ -859,7 +859,10 @@ At 256³ (DRAM-bound):
 Reading the tables:
 
 * **The 1-thread gate holds for every kernel**: largest 1.06 (the
-  stretched Smagorinsky; its RegularGrid twin is 0.94). Several kernels
+  stretched Smagorinsky; its RegularGrid twin is 0.94). Re-measured
+  after merging master `b4f6f82` (load 6-10, so absolute times 15-50 %
+  higher, the ratios noisier): every 64×64×32 kernel 0.92-1.08 (largest
+  R `∂z c→f` 1.08, R SGS stress divergence 1.07). Several kernels
   are faster (not profiled): the damping kernel 0.87–0.92, the masked
   eddy diffusion 0.85, the RegularGrid Smagorinsky 0.94.
 * **At 64×64×32 the light stencils reach 1.5–3×**, not the 4–6× the
