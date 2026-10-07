@@ -577,7 +577,8 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
     st.status === :breakdown &&
         @warn("CGPoissonSolver: CG breakdown (vanishing curvature) after $(st.iterations) iterations",
               subsystem = :pressure, domain = current_domain(), solver = :cg,
-              reason = :breakdown, iterations = st.iterations, residual = st.residual)
+              reason = :breakdown, iterations = st.iterations, residual = st.residual,
+              curvature = st.curvature)
     copy_unit_halo_out!(bk, p, solver.x)
     return p
 end

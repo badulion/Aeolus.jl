@@ -1190,7 +1190,7 @@ _pointwise(M) = M isa Union{IdentityPreconditioner,PointPreconditioner}
     pcg!(A, M, x, b, ws::PCGWorkspace; ranges = axes(x), tol, maxit,
          project_mean = false, constraint = nothing, zero_guess = true,
          backend = backend(x))
-        -> (; iterations, residual, bnorm, status)
+        -> (; iterations, residual, bnorm, status, curvature)
 
 Solve `A x = b` by preconditioned conjugate gradients over the storage
 `ranges` of `x` and `b`, for a symmetric positive (semi-)definite `A`.
@@ -1224,8 +1224,9 @@ Convergence is `‖r‖₂ ≤ tol·‖b‖₂`, checked before the first iterat
 and after every update. `status` is `:converged`, `:maxit`, `:breakdown`
 (`|p·Ap| ≤ eps·|r·z|`, vanishing curvature, or `p·Ap ≤ 0` for
 `definite = :positive`; the iteration stops before the update) or
-`:zero_rhs` (`‖b‖ = 0`: `x = 0`). The caller reports a breakdown or
-`:maxit` as it sees fit.
+`:zero_rhs` (`‖b‖ = 0`: `x = 0`). `curvature` is the last `p·Ap`
+formed (the offending one after a breakdown; `NaN` if none was). The
+caller reports a breakdown or `:maxit` as it sees fit.
 
 **Determinism.** The reductions are canonical plane sums
 ([`plane_reduce!`](@ref)), the other sweeps pointwise launches, so a
@@ -1266,7 +1267,8 @@ function _pcg!(bk::CPUBackend, A, M, x::AbstractArray{T,3}, b, ws::PCGWorkspace{
     bnorm = sqrt(b2)
     if bnorm == 0
         launch!(bk, _pcg_fill_body!, rg, x, zero(T))
-        return (iterations = 0, residual = zero(T), bnorm = bnorm, status = :zero_rhs)
+        return (iterations = 0, residual = zero(T), bnorm = bnorm, status = :zero_rhs,
+                curvature = T(NaN))
     end
     if !_pointwise(M)
         M(z, r)
@@ -1278,6 +1280,7 @@ function _pcg!(bk::CPUBackend, A, M, x::AbstractArray{T,3}, b, ws::PCGWorkspace{
 
     rnorm = sqrt(r2)
     iters = 0
+    pAp = T(NaN)
     status = rnorm <= tol * bnorm ? :converged : :maxit
     while status !== :converged && iters < maxit
         pAp = _pcg_apply!(bk, A, Ap, p, rg, ws, c)
@@ -1309,7 +1312,8 @@ function _pcg!(bk::CPUBackend, A, M, x::AbstractArray{T,3}, b, ws::PCGWorkspace{
         mx = _pcg_reduce!(ws.s1, bk, rg, _pcg_val_body, x) / n
         launch!(bk, _pcg_shift_body!, rg, x, mx)
     end
-    return (iterations = iters, residual = rnorm, bnorm = bnorm, status = status)
+    return (iterations = iters, residual = rnorm, bnorm = bnorm, status = status,
+            curvature = pAp)
 end
 _pcg!(b::GPUBackend, args...) = _gpu_error(b, "pcg!")
 _backend_of(x) = backend(x)

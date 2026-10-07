@@ -136,6 +136,8 @@ const OLD_ITERS = Dict("cg(periodic,neumann)" => 147, "cg(neumann,neumann)" => 2
         stb = pcg!(neg, IdentityPreconditioner(), x, b, ws; ranges = (2:n+1, 2:n+1, 2:n+1),
                    tol = 1e-10, maxit = 10)
         @test stb.status === :breakdown && stb.iterations == 0
+        @test stb.curvature ≈ -sum(abs2, bi)     # p = b: p·Ap = −‖b‖², reported for the warning
+        @test isnan(st0.curvature)
         stn = pcg!(neg, IdentityPreconditioner(), x, b, ws; ranges = (2:n+1, 2:n+1, 2:n+1),
                    tol = 1e-10, maxit = 10, definite = :negative)
         @test stn.status === :converged && stn.iterations == 1

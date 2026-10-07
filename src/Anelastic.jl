@@ -856,9 +856,10 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
     s.last_iter[] = st.iterations
     s.last_residual[] = st.residual
     if st.status === :breakdown
-        @warn("DensityWeightedPoissonSolver: non-positive curvature; stopping at iteration $(st.iterations + 1)",
+        @warn("DensityWeightedPoissonSolver: non-positive curvature ($(st.curvature)); stopping at iteration $(st.iterations + 1)",
               subsystem = :pressure, domain = current_domain(),
-              solver = :density_weighted_cg, reason = :breakdown, iterations = st.iterations + 1)
+              solver = :density_weighted_cg, reason = :breakdown, iterations = st.iterations + 1,
+              curvature = st.curvature)
     elseif st.status === :maxit
         @warn("DensityWeightedPoissonSolver did not converge: " *
               "‖r‖=$(st.residual) after $(st.iterations) iterations " *

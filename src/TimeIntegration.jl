@@ -1181,10 +1181,10 @@ function _cg_implicit!(field::Field{L,T}, rhs::Field{L,T}, ν, Δt::T,
     rnorm, bnorm = st.residual, st.bnorm
     if st.status === :breakdown
         iters += 1                     # the iteration that found it, as before
-        warn && @warn("solve_implicit_diffusion!: CG breakdown (pᵀAp ≤ 0); " *
+        warn && @warn("solve_implicit_diffusion!: CG breakdown (pᵀAp = $(st.curvature)); " *
                       "operator is not positive definite for these BCs",
                       subsystem = :diffusion, domain = current_domain(),
-                      reason = :breakdown, iterations = iters)
+                      reason = :breakdown, iterations = iters, curvature = st.curvature)
     elseif st.status === :maxit
         warn && @warn("solve_implicit_diffusion! hit maxit=$maxit with " *
                       "‖r‖/‖b‖ = $(rnorm / bnorm)",
