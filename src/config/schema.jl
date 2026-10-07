@@ -449,7 +449,7 @@ function _coerce_type(T, o, x, julia, base, key)
     if T isa OpenTable
         tbl = x isa AbstractDict ? _plain_table(x) : (julia && x isa NamedTuple) ? _plain_table(x) : nothing
         tbl === nothing && return _fail()
-        probs = T.validator(tbl)
+        probs = Base.invokelatest(T.validator, tbl)   # (a driver loaded during this load)
         isempty(probs) && return (true, tbl, "")
         msgs = String[p isa ConfigError ? join(("$(q.key): $(q.message)" for q in p.problems), "; ") :
                       string(p) for p in probs]

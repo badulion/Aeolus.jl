@@ -79,7 +79,8 @@ function roundtrip_check(config_path::AbstractString; nsteps = nothing, override
     return (fields_equal = isempty(differing), fields_differing = differing,
             diagnostics_equal = diagnostics_without_wall(diagnostics_path(r1.folder)) ==
                                 diagnostics_without_wall(diagnostics_path(r2.folder)),
-            config_equal = rec1["config"] == rec2["config"] && rec1["config_hash"] == rec2["config_hash"],
+            # isequal: a nan option (the Berlin canopy_top) equals itself
+            config_equal = isequal(rec1["config"], rec2["config"]) && rec1["config_hash"] == rec2["config_hash"],
             runs = (r1, r2))
 end
 
