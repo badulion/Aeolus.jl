@@ -71,6 +71,8 @@ end
     @info @sprintf("core sensitivity, 5 h CBL (Q = 0.25 K m/s, Γ = 3 K/km): z_i Boussinesq %.0f m, anelastic %.0f m (Δz_i/z_i = %+.3f); θ_ML %.2f vs %.2f K (Δθ_ML = %+.2f K)",
                    b.zi, a.zi, dzi, b.θml, a.θml, dθ)
     @test 1700 < b.zi < 2500        # "to about 2 km"
-    @test 0 <= dzi < 0.2            # measured +0.107
-    @test 0 <= dθ < 0.5             # measured +0.23 K
+    # measured +0.034 (2175 vs 2250 m: z_i moves in whole 75 m levels) on
+    # 2026-10-07; +0.107 (2100 vs 2325 m) when #259 was merged
+    @test 0 <= dzi < 0.2
+    @test 0 <= dθ < 0.5             # measured +0.22 K (+0.23 K at #259)
 end
