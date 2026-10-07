@@ -213,13 +213,17 @@ function _compute_sigma_νt!(νt::Field{CellCenter}, u::Field{FaceX}, v::Field{F
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
     Δ = (g.dx * g.dy * g.dz)^(1 / 3)
     coef = (C_σ * Δ)^2
-    ii, jj, kk = interior(g)
-    ud, vd, wd, nd = u.data, v.data, w.data, νt.data
-    @inbounds for k in kk, j in jj, i in ii
-        G = _velocity_gradient_at(ud, vd, wd, i, j, k, idx, idy, idz)
-        nd[i, j, k] = coef * sigma_operator(G)
-    end
+    launch!(Backends.backend(νt.data), _sigma_body!, interior(g), νt.data, u.data, v.data, w.data,
+            idx, idy, idz, coef)
     return νt
+end
+
+# KA-l (#304): one point per work item (a closed-form 3 × 3 eigenproblem per
+# point, so the kernel is compute-bound); the loop's expressions, bit for bit.
+@inline function _sigma_body!(i, j, k, nd, ud, vd, wd, idx, idy, idz, coef)
+    G = _velocity_gradient_at(ud, vd, wd, i, j, k, idx, idy, idz)
+    @inbounds nd[i, j, k] = coef * sigma_operator(G)
+    return nothing
 end
 
 """

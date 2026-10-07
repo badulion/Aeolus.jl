@@ -279,7 +279,8 @@ function sgs_coefficients!(f::SGSFields, c::IsentropicDiffusion, sim)
     κv = if c.diapycnal === nothing
         f.κv
     else
-        c.κv.data .= c.diapycnal .* f.κh.data
+        range_map!(Backends.backend(c.κv.data), Base.Fix1(*, c.diapycnal), c.κv.data,
+                   _storage_ranges(c.κv.data), f.κh.data)
         c.κv
     end
     isentropic_tensor!(c.K, sim.θ, f.κh, κv; slope_max = c.slope_max, grad_min = c.grad_min)
