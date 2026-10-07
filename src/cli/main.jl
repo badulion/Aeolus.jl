@@ -154,6 +154,7 @@ register_preprocessor!("static", _preprocess_static,
 # ---------------------------------------------------------------------------
 
 function _type_text(T)
+    T isa AbstractString && return String(T)              # a reference_option
     T isa OpenTable && return "table"
     T isa OneOf && return join(map(_type_text, T.alts), " | ")
     T === Path && return "path"
@@ -170,6 +171,7 @@ end
 const _FROM_ENV = " (from the environment if set)"
 
 function _default_text(o::Option)
+    o.type isa AbstractString && return string(o.default)  # a reference_option
     o.required && return "(required)"
     d = o.default isa Function ? o.default() : o.default
     ok, v, _ = _coerce(o, d, true, pwd(), o.key)
@@ -184,8 +186,9 @@ end
 The option reference of a driver's schema, generated from the schema (the
 one source of truth: nothing is written by hand). For each section its
 doc, then for each option its key, type, default, units, allowed values
-or range, and doc; after the sections, the schema's cross-field checks in
-words ([`check!`](@ref)). `section` restricts it to one section (and
+or range, and doc; after a section, the documented sub-tables of its
+[`OpenTable`](@ref) options ([`reference_sections`](@ref)); after the
+sections, the schema's cross-field checks in words ([`check!`](@ref)). `section` restricts it to one section (and
 leaves the checks out).
 
 `format = :text` is what `aeolus options [driver] [section]` prints;
@@ -205,7 +208,70 @@ function option_reference(sch::ConfigSchema; section = nothing, format::Symbol =
     isempty(secs) && throw(ConfigError(String(section), "driver \"$(sch.name)\" has no section [$section]" *
                                        _suggest(String(section), [s.name for s in sch.sections])))
     checks = section === nothing ? _check_lines(sch) : String[]
-    return format === :text ? _reference_text(sch, secs, checks) : _reference_markdown(sch, secs, checks)
+    blocks = filter(b -> section === nothing || split(b.first, '.')[1] == section, reference_sections(sch))
+    return format === :text ? _reference_text(sch, blocks, checks) : _reference_markdown(sch, blocks, checks)
+end
+
+"The documented sub-tables of an [`OpenTable`](@ref) option (none for any other)."
+_subtables(o::Option) = (o.type isa OpenTable && o.type.reference !== nothing) ?
+                        Section[Base.invokelatest(o.type.reference)...] : Section[]
+
+"""
+    reference_sections(schema) -> Vector{Pair{String,Section}}
+
+Every table the option reference of `schema` documents, `"dotted.name" =>
+section`: the schema's sections and, after each, the documented
+sub-tables of its [`OpenTable`](@ref) options (`"physics.options.aq_chem"`).
+"""
+function reference_sections(sch::ConfigSchema)
+    out = Pair{String,Section}[]
+    for s in sch.sections
+        push!(out, s.name => s)
+        for o in s.options, sub in _subtables(o)
+            push!(out, "$(s.name).$(o.key).$(sub.name)" => sub)
+        end
+    end
+    return out
+end
+
+"""
+    undocumented_keys(cfg::RunConfig) -> Vector{String}
+
+The dotted keys a resolved config holds that the option reference of its
+schema does not document: empty for a config that passed validation,
+except inside an [`OpenTable`](@ref) with documented sub-tables (the
+Berlin `[physics.options]`), whose keys are checked against those
+sub-tables. A key whose value is a table and that is itself documented
+(a forcing given as `{kind = …}`) counts as documented. The round-trip
+coverage suite requires it to be empty for every shipped config.
+"""
+function undocumented_keys(cfg::RunConfig)
+    sch = config_schema(cfg)
+    out = String[]
+    for s in sch.sections, o in s.options
+        subs = _subtables(o)
+        isempty(subs) && continue
+        names = Dict(x.name => x for x in subs)
+        v = getproperty(cfg, Symbol(s.name))[o.key]
+        v isa AbstractDict && _undocumented!(out, "$(s.name).$(o.key)", "", v, names)
+    end
+    return sort!(out)
+end
+
+function _undocumented!(out, base, rel, tbl, names)
+    sec = get(names, rel, nothing)
+    for k in sort!(collect(String, string.(keys(tbl))))
+        v = tbl[k]
+        r = isempty(rel) ? k : rel * "." * k
+        if v isa AbstractDict && haskey(names, r)
+            _undocumented!(out, base, r, v, names)         # a documented sub-table
+        elseif sec !== nothing && _option(sec, k) !== nothing
+            continue                                       # a documented option (any value)
+        else
+            push!(out, base * "." * r)
+        end
+    end
+    return out
 end
 
 "The cross-field checks of `sch` in words, one line each (a check without a description: \"(undocumented)\")."
@@ -218,11 +284,11 @@ function _check_lines(sch::ConfigSchema)
     return out
 end
 
-function _reference_text(sch, secs, checks)
+function _reference_text(sch, blocks, checks)
     io = IOBuffer()
     println(io, "# options of driver \"", sch.name, "\"")
-    for s in secs
-        println(io, "\n[", s.name, "]", isempty(s.doc) ? "" : "  " * s.doc)
+    for (name, s) in blocks
+        println(io, "\n[", name, "]", isempty(s.doc) ? "" : "  " * s.doc)
         for o in s.options
             print(io, "  ", o.key, " : ", _type_text(o.type), " = ", _default_text(o))
             isempty(o.units) || print(io, "  [", o.units, "]")
@@ -254,13 +320,13 @@ function _md_constraint(o::Option)
     return join(parts, "; ")
 end
 
-function _reference_markdown(sch, secs, checks)
+function _reference_markdown(sch, blocks, checks)
     io = IOBuffer()
     println(io, "Options of the driver `", sch.name, "`, generated from its schema ",
             "(`Aeolus.Config.option_reference(\"", sch.name, "\"; format = :markdown)`, ",
             "`aeolus options ", sch.name, " --markdown`). TOML has no null: `\"none\"` stands for nothing.")
-    for s in secs
-        println(io, "\n## `[", s.name, "]`\n")
+    for (name, s) in blocks
+        println(io, "\n", count('.', name) == 0 ? "## " : "### ", "`[", name, "]`\n")
         isempty(s.doc) || println(io, s.doc, "\n")
         println(io, "| key | type | default | units | allowed / range | doc |")
         println(io, "| :-- | :-- | :-- | :-- | :-- | :-- |")

@@ -32,17 +32,27 @@ the default", never `nothing`.
 struct Optional{T} end
 
 """
-    OpenTable(validator = tbl -> String[])
+    OpenTable(validator = tbl -> String[]; reference = nothing)
 
 Option type for a table whose keys a driver decides (the per-coupling
 options of the Berlin case). `validator(tbl::Dict{String,Any})` returns
 the problems it finds: strings (attached to the option's key) or
 [`ConfigError`](@ref)s whose keys are relative to the table.
+
+`reference`, when given, is a zero-argument function returning the
+documented sub-tables, a `Vector{Section}` whose names are dotted paths
+below the option (`"aq_chem"`, `"nesting.parent"`); the option reference
+([`option_reference`](@ref)) lists them after the option's section, and
+[`undocumented_keys`](@ref) checks a config's keys against them. Their
+options may be [`reference_option`](@ref)s (a type and a default given
+as text).
 """
 struct OpenTable
     validator::Any
+    reference::Any
 end
-OpenTable() = OpenTable(_ -> String[])
+OpenTable(validator; reference = nothing) = OpenTable(validator, reference)
+OpenTable() = OpenTable(_ -> String[], nothing)
 
 """
     OneOf(T1, T2, …)
@@ -146,6 +156,19 @@ struct Option
     input::Bool
     allow_julia::Bool
 end
+
+"""
+    reference_option(key, type_text, default_text; doc = "", units = "") -> Option
+
+An option of a documented sub-table of an [`OpenTable`](@ref) whose type
+and default are given as text (the per-coupling options of the Berlin
+case, validated by the driver itself): it appears in the option
+reference and nowhere else.
+"""
+reference_option(key::AbstractString, type_text::AbstractString, default_text::AbstractString;
+                 doc::AbstractString = "", units::AbstractString = "") =
+    Option(String(key), String(type_text), String(default_text), String(doc), String(units),
+           nothing, nothing, false, false, false, false)
 
 """
     Section

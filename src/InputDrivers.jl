@@ -10,8 +10,8 @@ one file instead of re-parsing OpenStreetMap at every start.
   ([`DRIVER_ATTRIBUTES`](@ref)), the one map projection
   ([`latlon_to_meters`](@ref), equirectangular), and the declarative
   [`DriverSchema`](@ref) a file is checked against
-  ([`check_driver`](@ref)) and the docs page is generated from
-  ([`schema_markdown`](@ref)).
+  ([`check_driver`](@ref)) and the docs pages are generated from
+  ([`schema_markdown`](@ref), [`format_reference`](@ref)).
 * **The static driver** (`input_drivers/static.jl`): terrain, buildings
   and surface classes on the run's own horizontal grid plus the building
   and patch polygons ([`STATIC_SCHEMA`](@ref), [`StaticInputs`](@ref),
@@ -57,7 +57,8 @@ using ..LargeScaleForcing: ForcingTable, forcing_value, Sounding, sounding_profi
                            Subsidence, ProfileNudging
 using ..IO: fnv1a64, git_state
 
-export latlon_to_meters, DriverVariable, DriverSchema, check_driver, schema_markdown,
+export latlon_to_meters, DriverVariable, DriverSchema, check_driver, schema_markdown, format_reference,
+       ncdump_header,
        DRIVER_ATTRIBUTES, DRIVER_SCHEMA_VERSION, file_fnv1a64,
        SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE_WATER, SURFACE_WALL, SURFACE_CLASSES,
        Building, UrbanCity, polygon_bbox, point_in_polygon, load_city_osm, osm_class,
