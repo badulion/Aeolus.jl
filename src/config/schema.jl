@@ -55,11 +55,29 @@ struct OpenTable
 end
 OpenTable() = OpenTable(_ -> String[])
 
+"""
+    OneOf(T1, T2, …)
+
+Option type for a value of any of the option types `T1, T2, …` (scalars,
+`Optional`, tuples, vectors, [`OpenTable`](@ref)): the first that accepts
+the value wins. A forcing quantity that is a number or a table is
+`OneOf(Float64, OpenTable(validator))`; a viscosity that is a number or
+the keyword `"scaled"` is `OneOf(Float64, Symbol)` with `allowed =
+[:scaled]` (`allowed` applies to the non-numeric alternatives only;
+`range` to the numeric ones). An option of this type needs a `default`.
+"""
+struct OneOf
+    alts::Tuple
+    OneOf(alts...) = length(alts) >= 2 ? new(Tuple(alts)) :
+                     throw(ArgumentError("OneOf needs at least two alternatives"))
+end
+
 const _SCALARS = (Float64, Int, Bool, String, Symbol, Path, Date, Time)
 
 "Whether `T` is a supported option type (see [`option!`](@ref))."
 function _valid_spec(T)
     T isa OpenTable && return true
+    T isa OneOf && return all(a -> !(a isa OneOf) && _valid_spec(a), T.alts)
     T isa Type || return false
     T in _SCALARS && return true
     T <: Optional && return T !== Optional && _valid_spec(T.parameters[1])
@@ -389,6 +407,7 @@ _describe(::Type{Path}) = "a path (a string)"
 _describe(::Type{Date}) = "a local date (yyyy-mm-dd)"
 _describe(::Type{Time}) = "a local time (hh:mm:ss)"
 _describe(::OpenTable) = "a table"
+_describe(T::OneOf) = join(map(_describe, T.alts), " or ")
 _describe(T::Type{<:Optional}) = _describe(_elem(T)) * " or \"none\""
 _describe(T::Type{<:Either}) = _describe(T.parameters[1]) * " or " * _describe(T.parameters[2])
 function _describe(T::Type)
@@ -446,10 +465,19 @@ end
 _fail() = (false, nothing, "")
 
 function _coerce_type(T, o, x, julia, base, key)
-    if T isa OpenTable
+    if T isa OneOf
+        why = ""
+        for a in T.alts
+            ok, v, w = _coerce_type(a, o, x, julia, base, key)
+            ok && return (true, v, "")
+            # a table that one alternative takes but finds invalid: its reasons
+            (a isa OpenTable && x isa AbstractDict && !isempty(w)) && (why = w)
+        end
+        return (false, nothing, why)
+    elseif T isa OpenTable
         tbl = x isa AbstractDict ? _plain_table(x) : (julia && x isa NamedTuple) ? _plain_table(x) : nothing
         tbl === nothing && return _fail()
-        probs = Base.invokelatest(T.validator, tbl)   # (a driver loaded during this load)
+        probs = Base.invokelatest(T.validator, tbl)     # a driver loaded at run time
         isempty(probs) && return (true, tbl, "")
         msgs = String[p isa ConfigError ? join(("$(q.key): $(q.message)" for q in p.problems), "; ") :
                       string(p) for p in probs]
@@ -527,7 +555,8 @@ function _scalar(T, x, julia, base)
 end
 
 function _within(o::Option, v)
-    if o.allowed !== nothing && !(o.type isa Type && o.type <: Either && !(v isa Union{Symbol,AbstractString}))
+    if o.allowed !== nothing && !(o.type isa Type && o.type <: Either && !(v isa Union{Symbol,AbstractString})) &&
+       !(o.type isa OneOf && v isa Real)
         any(a -> isequal(a, v) || (v isa Symbol && a isa AbstractString && String(v) == a) ||
                  (a isa Symbol && v isa AbstractString && String(a) == v), o.allowed) || return false
     end

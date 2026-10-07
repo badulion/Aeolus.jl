@@ -41,7 +41,7 @@ using ..IO: IO, CheckpointSchedule, RunFolder, fnv1a64
 export RunConfig, ConfigSection, ConfigError, ConfigProblem, load_run_config, with,
        to_toml, write_config, config_text, config_hash, config_inputs, content_hash,
        config_origin, config_sources, config_schema, nonreplayable_keys,
-       ConfigSchema, Section, Option, Path, Optional, Either, OpenTable, section, option!, check!,
+       ConfigSchema, Section, Option, Path, Optional, Either, OpenTable, OneOf, section, option!, check!,
        register_driver!, driver_schema, registered_drivers, shipped_configs,
        damerau_levenshtein, CONFIG_SCHEMA_VERSION,
        checkpoint_schedule, apply_fftw_config!,

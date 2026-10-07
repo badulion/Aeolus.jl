@@ -2,12 +2,14 @@
 # Bosveld et al. 2014a,b) on the shared SBL driver, reduced to 16 × 16 × 48
 # (Δx = 25 m, Δz = 8.3 m on 400 × 400 × 400 m) for CI. The full runs (6.25 m
 # and finer, GABLS2, GABLS4, the CASES-99 hockey stick) are examples/sbl/.
+# The case is built from examples/sbl/configs/gabls3.toml (the `sbl` run
+# driver, CFG-d #359).
 
 using Test
 using Aeolus
 using Statistics: mean
 
-include(joinpath(@__DIR__, "..", "examples", "sbl", "cases.jl"))
+include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))
 
 # One run, 00-04 UTC. The issue asks for 00-02 UTC; the only accessible LES
 # envelope (Basu, Holtslag & Bosveld 2012, Fig. 1) is for 03-04 UTC, so the
@@ -18,9 +20,12 @@ const G3_T_END = 4 * 3600.0
 const G3_BUDGET = (3600.0, 7200.0)
 const G3_JET_FROM = 3 * 3600.0
 
+gabls3_reduced(stab = :brown94; N = (16, 16, 48)) =
+    sbl_build("gabls3"; overrides = ["grid.size=[$(join(N, ","))]", "grid.extent=[400.0,400.0,400.0]",
+                                     "sponge.z=300.0", "sgs.stability=\"$stab\""]).case
+
 function gabls3_ci(stab = :brown94)
-    c = gabls3_case(; N = (16, 16, 48), extent = (400.0, 400.0, 400.0), sponge_z = 300.0,
-                    sgs_stability = stab)
+    c = gabls3_reduced(stab)
     H0 = sbl_column_heat(c)
     heat_res = Ref(0.0); wθ_max = Ref(-Inf); budget = Ref{Any}(nothing)
     surf = Ref{Any}(nothing)
@@ -59,8 +64,9 @@ function gabls3_surface_check(c)
         L = c.Lob[i, j]
         L > 0 || continue                                # the case prescribes the stable branch only
         nst += 1
-        us = κ * hypot(U, V) / (log(z1 / GABLS3_Z0M) - ψ(z1 / L) + ψ(GABLS3_Z0M / L))
-        θst = κ * (θ - θs) / (log(z1 / GABLS3_Z_T) - ψ(z1 / L) + ψ(GABLS3_Z_T / L))
+        # the case description's z0m = 0.15 m and θ height z_T = 0.25 m (gabls3.toml)
+        us = κ * hypot(U, V) / (log(z1 / 0.15) - ψ(z1 / L) + ψ(0.15 / L))
+        θst = κ * (θ - θs) / (log(z1 / 0.25) - ψ(z1 / L) + ψ(0.25 / L))
         du = max(du, abs(c.ustar[i, j] - us) / us)
         dθ = max(dθ, abs(-c.wθ[i, j] / c.ustar[i, j] - θst) / abs(θst))
         dlaw = max(dlaw, abs(friction_velocity(c.laws[i, j], hypot(U, V), z1) - c.ustar[i, j]))
@@ -85,7 +91,9 @@ end
     tab = sbl_read_csv(joinpath(SBL_DATA, "gabls3_case.csv"))
     @test any(occursin("Revised: October 6, 2008", l) for l in tab.header)   # provenance
     @test size(d.wind) == (25, 3) && size(d.thermo) == (19, 4) && size(d.surface) == (10, 4)
-    F = gabls3_forcing(d)
+    c0 = gabls3_reduced(; N = (8, 8, 8))           # the case as gabls3.toml builds it
+    @test c0.z0m == 0.15 && c0.z0h == 0.25
+    F = (U_g = c0.U_g, V_g = c0.V_g, adv = c0.forcing[2], T_s = c0.Ts)
     # geostrophic wind: (-6.5, 4.5) at 23 UTC, (-5, 4.5) at 03 UTC, linear in t,
     # linear in z to (-2, 2) at 2000 m (case description)
     @test forcing_value(F.U_g, 0.0, -3600.0) ≈ -6.5 && forcing_value(F.U_g, 0.0, 10800.0) ≈ -5.0
@@ -98,7 +106,7 @@ end
     @test forcing_value(F.adv.u, 300.0, 4 * 3600.0) == 0.0
     @test surface_temperature(F.T_s, 1800.0) ≈ (291.28 + 290.34) / 2
     # the case's MOST functions: ψ_M = ψ_H = -5 z/L in stable conditions
-    @test psi_m(GABLS3_STABILITY, 0.3) ≈ -1.5 && psi_h(GABLS3_STABILITY, 0.3) ≈ -1.5
+    @test psi_m(c0.sf, 0.3) ≈ -1.5 && psi_h(c0.sf, 0.3) ≈ -1.5
     # the envelope file carries its provenance and the digitisation uncertainty
     env = gabls3_envelope()
     @test any(occursin("Basu, Holtslag", l) for l in env.header)
@@ -112,8 +120,8 @@ end
 
 r = gabls3_ci(:brown94)
 b = r.budget; s = r.surf; st = r.st
-G = hypot(forcing_mean(gabls3_forcing().U_g, st.z_jet, G3_JET_FROM, G3_T_END),
-          forcing_mean(gabls3_forcing().V_g, st.z_jet, G3_JET_FROM, G3_T_END))
+G = hypot(forcing_mean(r.c.U_g, st.z_jet, G3_JET_FROM, G3_T_END),
+          forcing_mean(r.c.V_g, st.z_jet, G3_JET_FROM, G3_T_END))
 J = g3_jet(st.z, st.S)
 @info "GABLS3 16x16x48, 00-04 UTC" r.heat_res / r.heat_scale b.rel b.model_turb_mismatch b.largest s.du s.dθ s.dlaw s.stable_fraction s.τ_applied s.τ_most r.wθ_max st.h st.u_star st.wθ0 st.H0 st.L st.h / st.L J.z J.S G st.nsteps st.wall_time
 
