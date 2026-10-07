@@ -46,6 +46,7 @@ soil = 4.0
 
 [initial]
 sounding = "none"
+dynamic = "none"
 theta_inversion_z = 60.0
 
 [physics.options.nesting.parent]

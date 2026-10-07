@@ -63,7 +63,8 @@ file_fnv1a64(path::AbstractString) = string(fnv1a64(read(path)); base = 16, pad 
                    required = true, range = nothing, doc = "")
 
 One variable of a [`DriverSchema`](@ref): its `name`, its dimensions
-`dims` (Julia index order: `("x", "y")` is an `(Nx, Ny)` array), its
+`dims` (Julia index order: `("x", "y")` is an `(Nx, Ny)` array; `"*"`
+matches any dimension name, `()` is a scalar), its
 element `type`, its CF `units`, `long_name` and `standard_name` (`""`
 where CF has none), whether a file must have it, and the closed `range`
 `(lo, hi)` its values must lie in (`nothing`: unchecked; `NaN` values,
@@ -162,13 +163,14 @@ function check_driver(path::AbstractString, schema::DriverSchema; source::Bool =
             end
             var = ds[v.name]
             dn = Tuple(String.(NCDatasets.dimnames(var)))
-            dn == v.dims || push!(probs, "$path: $(v.name) is over $(dn), expected $(v.dims)")
+            dims_ok = _dims_match(dn, v.dims)
+            dims_ok || push!(probs, "$path: $(v.name) is over $(dn), expected $(v.dims)")
             T = eltype(var.var)
             T == v.type || push!(probs, "$path: $(v.name) has element type $T, expected $(v.type)")
             u = _attr(var, "units", "")
             isempty(v.units) || u == v.units || push!(probs, "$path: $(v.name) has units $(repr(u)), expected $(repr(v.units))")
-            if v.range !== nothing && v.type <: Real && dn == v.dims
-                a = var.var[:]
+            if v.range !== nothing && v.type <: Real && dims_ok
+                a = isempty(dn) ? [var.var[]] : var.var[:]
                 lo, hi = v.range
                 bad = count(x -> !(x isa AbstractFloat && isnan(x)) && !(lo <= x <= hi), a)
                 bad == 0 || push!(probs, "$path: $(v.name) has $bad value(s) outside [$lo, $hi]")
@@ -188,6 +190,9 @@ function check_driver(path::AbstractString, schema::DriverSchema; source::Bool =
     end
     return probs
 end
+
+# a schema dimension "*" matches any name (a table over its own coordinates)
+_dims_match(dn, want) = length(dn) == length(want) && all(((a, b),) -> b == "*" || a == b, zip(dn, want))
 
 """
     schema_markdown(schema) -> String
