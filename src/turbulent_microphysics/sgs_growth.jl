@@ -43,19 +43,26 @@ each droplet in its sub-volume).
             `sd.radius`)
   * `σ_S` — standard deviation of the supersaturation (fractional)
   * `τ`   — Lagrangian correlation time of `S'` (s)
-  * `rng` — random-number generator driving the process
+  * `key`  — the 64-bit key of the per-droplet random streams
+  * `nadv` — how many times each droplet's fluctuation has advanced
+
+Droplet `i`'s `n`-th draw comes from the counter-based stream
+`(key, n, i)` ([`Aeolus.Backends.counter_rng`](@ref); KA-n, #305), so a
+droplet's noise does not depend on which other droplets advance, in what
+order, or on how many threads.
 
 Build with [`supersaturation_fluctuations`](@ref).
 """
-mutable struct SupersaturationFluctuations{R<:AbstractRNG}
+mutable struct SupersaturationFluctuations
     ξ::Vector{Float64}
     σ_S::Float64
     τ::Float64
-    rng::R
+    key::UInt64
+    nadv::Vector{Int}
 end
 
 """
-    supersaturation_fluctuations(n; σ_S, τ = Inf, rng = MersenneTwister(0))
+    supersaturation_fluctuations(n; σ_S, τ = Inf, seed = nothing, rng = MersenneTwister(0))
     supersaturation_fluctuations(sd::SuperdropletSet; kwargs...)
         -> SupersaturationFluctuations
 
@@ -63,38 +70,56 @@ Draw the initial fluctuations of `n` droplets (or one per superdroplet of
 `sd`) from the stationary distribution, `ξ ~ N(0, 1)`. `σ_S` is typically
 [`SubgridCloud`](@ref)`.σ_S` from issue #12, and `τ` the sub-grid eddy
 turnover time (`Δ^{2/3} ε^{-1/3}` for filter width `Δ` and dissipation
-rate `ε`). Using the same `rng` seed for several `σ_S` gives the same
-unit-noise realisation scaled by `σ_S` (common random numbers).
+rate `ε`). The streams are keyed by `seed`, or by one `UInt64` drawn from
+`rng`. Using the same seed for several `σ_S` gives the same unit-noise
+realisation scaled by `σ_S` (common random numbers).
 """
 function supersaturation_fluctuations(n::Integer; σ_S::Real, τ::Real = Inf,
-                                      rng::AbstractRNG = MersenneTwister(0))
+                                      seed::Union{Nothing,Integer} = nothing,
+                                      rng::AbstractRNG = MersenneTwister(0),
+                                      backend::AbstractBackend = default_backend())
     σ_S >= 0 || throw(ArgumentError("supersaturation_fluctuations: σ_S must be ≥ 0"))
     τ > 0 || throw(ArgumentError("supersaturation_fluctuations: τ must be > 0"))
-    return SupersaturationFluctuations(randn(rng, n), float(σ_S), float(τ), rng)
+    key = seed === nothing ? rand(rng, UInt64) : seed % UInt64
+    ξ = Vector{Float64}(undef, n)
+    launch!(backend, _initial_fluctuation!, (1:Int(n),), ξ, key)
+    return SupersaturationFluctuations(ξ, float(σ_S), float(τ), key, zeros(Int, n))
+end
+
+@inline function _initial_fluctuation!(i, ξ, key)
+    @inbounds ξ[i] = randn(counter_rng(key, 0, i))
+    return nothing
 end
 
 supersaturation_fluctuations(sd::SuperdropletSet; kw...) =
     supersaturation_fluctuations(nsuperdroplets(sd); kw...)
 
 """
-    advance_fluctuations!(fl, dt; indices = nothing) -> fl
+    advance_fluctuations!(fl, dt; indices = nothing, backend = default_backend()) -> fl
 
 Exact Ornstein-Uhlenbeck update over `dt`:
 `ξ ← ρ ξ + √(1−ρ²) N(0,1)` with `ρ = exp(−dt/τ)`. Stationary for any
 `dt` (the variance stays 1); `τ = Inf` leaves `ξ` unchanged. With
 `indices`, only those droplets advance — the ones whose time has actually
-moved on (e.g. the droplets of the one cell being stepped).
+moved on (e.g. the droplets of the one cell being stepped). Each droplet
+advances in its own work item of a launch, from its own stream.
 """
 function advance_fluctuations!(fl::SupersaturationFluctuations, dt::Real;
-                               indices::Union{Nothing,AbstractVector{Int}} = nothing)
+                               indices::Union{Nothing,AbstractVector{Int}} = nothing,
+                               backend::AbstractBackend = default_backend())
     isfinite(fl.τ) || return fl
     ρ = exp(-float(dt) / fl.τ)
     a = sqrt(max(1 - ρ^2, 0.0))
     idx = indices === nothing ? eachindex(fl.ξ) : indices
-    @inbounds for i in idx
-        fl.ξ[i] = ρ * fl.ξ[i] + a * randn(fl.rng)
-    end
+    launch!(backend, _advance_fluctuation!, (1:length(idx),), fl.ξ, fl.nadv, idx, fl.key, ρ, a)
     return fl
+end
+
+@inline function _advance_fluctuation!(p, ξ, nadv, idx, key, ρ, a)
+    @inbounds i = idx[p]
+    @inbounds n = nadv[i] += 1
+    @inbounds ξ[i] = ρ * ξ[i] + a * randn(counter_rng(key, n, i))
+    return nothing
 end
 
 """
