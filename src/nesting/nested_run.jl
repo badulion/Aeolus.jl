@@ -521,6 +521,8 @@ _advective_rate(sim) = (fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
 # One parent step
 # =========================================================================
 
+const _NO_LEDGER = Float64[]          # the window's I0 of a run with no two-way scratch
+
 """
     step_nested!(run::NestedRun; dt = nothing) -> run
 
@@ -594,8 +596,6 @@ an externally driven child would silently get none (#349). Drive a
 sponged run with [`step_nested!`](@ref), or relax the externally driven
 child with the core's own sponge (the Berlin case's top sponge).
 """
-const _NO_LEDGER = Float64[]          # the window's I0 of a run with no two-way scratch
-
 function begin_parent_step!(run::NestedRun; dt = nothing)
     _refuse_external_sponge(run, "begin_parent_step!")
     return _begin_parent_step!(run; dt)
