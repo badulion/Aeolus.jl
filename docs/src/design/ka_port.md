@@ -899,7 +899,16 @@ the row workgroups split each plane between tasks) gave level sums
 different from the serial loop in 320 of 20 × 32 level values; the
 plane-per-work-item launch differed in none.
 
-<<HARNESS>>
+**Thread invariance.** The harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,24`) with the new `fv` section: every FV kernel
+on seeded random fields with filled halos on a 64×64×32 RegularGrid, a
+geometric StretchedGrid and a TerrainFollowingGrid, the damping kernel
+with `levels` (tendency and per-level sums, also at 128×128×32 where row
+workgroups split a plane), and 3 steps of a Smagorinsky LES on the
+stretched grid (87 hashes). All 2953 hashes (primitives, 64³ DNS,
+reductions, the Berlin smoke matrix, the flagship step, nested, fft, fv)
+are identical at 4 and 24 threads to 1 thread. At `-t 1` every kernel is
+the old loop bit for bit (`test/ka_fv.jl`): no one-time change.
 
 ## Dependency tree
 
