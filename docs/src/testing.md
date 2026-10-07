@@ -229,3 +229,65 @@ new, 3 (71 s), `era5_surface_tiles.jl` 64 → 79, `input_static.jl`
 71 → 74, `era6_sigma_sgs.jl` 56 → 58, `config_examples.jl` +1;
 `era6_nudging_subsidence.jl` (68, full) split into 58 fast and
 `era6_gabls2.jl` (10, full, 92 s). The full tier was not re-run for #320.
+
+### Redundant mini-simulations pruned (#317)
+
+An audit of the test files for duplicated or overlapping
+mini-simulations, after the Berlin suite (the smoke variants that
+exercised the same code paths) was removed in #320:
+
+- `era6_large_scale_forcing.jl`: the bit-for-bit check of
+  `GeostrophicNudging` against the former `add_geostrophic_wind!` ran its
+  oracle inside 100 Berlin smoke steps, most of the file's time. The forcing is
+  a body-force hook either way; it now runs as the hook of 100 SSP-RK3
+  and 100 forward-Euler steps of a rotating, sheared, stratified,
+  turbulent box with Smagorinsky SGS, with ``τ`` = 60 s so that the
+  forcing moves the mean wind by O(1) (``⟨u⟩`` 3.90 → 1.10 m/s against
+  ``U_g = 1`` over the 200 s). A deliberately reordered oracle
+  fails both runs. The Berlin version also asserted every tracer bit for
+  bit; that assertion was dropped as redundant, not replaced: both
+  forcings write only ``u`` and ``v``, never a tracer, so a tracer can
+  differ between the two runs only through the state that advects,
+  diffuses and sources it (``u, v, w, θ, p`` and the eddy diffusivity
+  computed from them), and that state is still compared with `==`; the
+  box carries no tracers. The file went from 78.3 s to 12.6 s
+  (fast-tier runs named below) and lost its heavy tag.
+- `test/support/kolmogorov.jl`: one builder, `kolmogorov_field!`, for the
+  ``k^{-5/3}`` initial field that `era2_sgs_numerics.jl`,
+  `era6_lagrangian_sgs.jl`, `era6_lasd.jl` (named copies),
+  `era6_amd_vreman.jl` and `era6_sigma_sgs.jl` (inline copies) each
+  built. The fields are bit-identical to the copies; no run time changes.
+
+Audited and kept, because the runs assert different physics or different
+averaging windows: the 24³ half channel of `era6_neutral_abl.jl`
+(wall stress over 8–20 ``H/u_*``, Φ_m of ``C_s = 0.17``) and of
+`era6_wall_models_channel.jl` (first cell against ``h_{wm}`` and
+filtering over 6–12 ``H/u_*``), whose tolerances were set from seed
+studies over those windows; the laminar Poiseuille channels of
+`era6_stratified_channel.jl` (Nu = 1, ``Ri_τ = 5``) and
+`era6_relaminarisation.jl` (laminar consistency of the σ closures,
+``Ri_τ = 50``); the 96³ (`era6_apriori_sgs.jl`) and 48³
+(`era6_sgs_validation.jl`) DNS fixtures; the config tests' runs of the
+legacy in-code builds, which are the bit-identity oracles of the config
+migration. The slowest fast file, `config_berlin.jl` (111.9 s in the
+fast-tier run below, 105.0 s alone with `--only`), spends its
+time building the case and starting a fresh process, not stepping (12
+Berlin steps take 0.5 s).
+
+Fast tier after #317 (`test/run.jl --jobs 4`, run folder
+`.testruns/i317-fast3`, 1-min load 2.7 at start, other agents' suites
+alongside): 12.6 min, 128 jobs, 100 981 assertions (100 973 pass,
+8 broken). It is not comparable with the 12.6 min of #320 above: master
+gained four KA jobs in between. The job time saved is the 66 s of
+`era6_large_scale_forcing.jl`: 78.3 s in the fast tier of master at
+7da2b073, the last master this branch merged before the change (run
+folder `.testruns/20261007-174014-fast` of the steward worktree, 1-min
+load 2.7), against 12.6 s in `i317-fast3`. That is one run each, both
+with other agents' suites alongside; the file's time in a fast tier
+depends on the load (83 s in #320's run above). The full
+tier was not re-measured for #317. The only full-only file #317 touches
+is `era6_lasd.jl`, and only to swap in the shared `kolmogorov_field!`
+fixture (bit-identical field, unchanged assertion counts; 90.1 s with
+`--only` after the swap, no before time was recorded). The
+expected full-tier saving is therefore the same 66 s of
+`era6_large_scale_forcing.jl`; that is an estimate, not a measurement.

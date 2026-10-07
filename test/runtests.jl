@@ -944,6 +944,8 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_nest_external.jl") # #265        externally driven child (the Berlin pattern), open scalars added later
     include("era2_nest_twoway.jl")  # Phase 30   two-way feedback: anterpolation, refluxing (#263)
     include("era2_nest_twoway_longrun.jl") # Phase 30 two-way long runs: CBL, neutral, vortex (#263)
+    include("era2_nest_hierarchy.jl") # #328 nest hierarchies, siblings, non-aligned and stretched children
+    include("era2_nest_hierarchy_longrun.jl") # #328 two two-way nest levels, 50 turnovers (full tier)
 end
 
 # =========================================================================

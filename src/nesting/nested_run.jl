@@ -84,6 +84,8 @@ Keywords:
   * `limit_scalars` (`:positive`, for `qv` and the tracers), `limit_theta`
     (`:none`), `limit_momentum` (`:none`) — the limiters of the
     prolongation (#329), see [`interpolate_parent_state!`](@ref);
+  * `substeps` — the fixed number of child substeps when `cfl_child = nothing`
+    (default: the largest refinement ratio, rounded up for a rational one);
   * `order` (3), `flux_correction` (true), `scalars`, `state` — as for
     the operators of [`NestInterpState`](@ref). The run allocates its three
     field sets (the parent prolongated at both ends of the parent step and
@@ -252,7 +254,8 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     t = Float64(parent.t)
     !check_clocks || abs(Float64(child.t) - t) <= 1e-12 * max(1.0, abs(t)) ||
         error("NestedRun: parent clock $(parent.t) and child clock $(child.t) differ")
-    ns = substeps === nothing ? max(nest.rx, nest.ry, nest.rz) : Int(substeps)
+    ns = substeps === nothing ? max(1, ceil(Int, _max_ratio(nest) * (1 - 1e-9))) : Int(substeps)
+    feedback === :two_way && _check_two_way_box(nest, "NestedRun")
     ns >= 1 || error("NestedRun: substeps must be >= 1")
     # without a sponge only the child's open-boundary points are read: the
     # three field sets keep their halo slabs only (#329, item 4)
@@ -414,10 +417,12 @@ function _Rollback(sim, adv::DomainAdvance, fs::AbstractVector)
                      open_boundary_snapshot(sim))
 end
 
-function _save!(run::NestedRun, sim, adv::DomainAdvance, which::Symbol)
-    rb = which === :child ? run.rb_child : run.rb_parent
+_save!(run::NestedRun, sim, adv::DomainAdvance, which::Symbol) =
+    _save_rb!(which === :child ? run.rb_child : run.rb_parent, sim, _bound_fields(run, which))
+
+function _save_rb!(rb::_Rollback, sim, fields)
     save_state!(rb.snap, sim)
-    _copy_data!(rb.scalars, _bound_fields(run, which))
+    _copy_data!(rb.scalars, fields)
     if rb.sgs !== nothing
         closure = rb.sgs[1]
         rb.sgs = (closure, sgs_state(closure))
@@ -455,9 +460,9 @@ function _snapshot_open!(snap::AbstractVector, sim)
     return snap
 end
 
-function _restore!(run::NestedRun, sim, rb::_Rollback, which::Symbol)
+function _restore_rb!(sim, rb::_Rollback, fields)
     restore_state!(sim, rb.snap)
-    _restore_data!(_bound_fields(run, which), rb.scalars)
+    _restore_data!(fields, rb.scalars)
     rb.sgs === nothing || restore_sgs_state!(rb.sgs[1], rb.sgs[2])
     restore_open_boundaries!(sim, rb.open)
     return sim
@@ -468,9 +473,9 @@ end
 _max_speed(sim) = max(_max_abs(sim.u), _max_abs(sim.v),
                       _max_abs(sim.w))
 
-function _accept(run::NestedRun, sim, which::Symbol)
+function _accept_fields(run::NestedRun, sim, which::Symbol, fields)
     _all_finite(sim) || return false
-    for f in _bound_fields(run, which)
+    for f in fields
         interior_all_finite(f) || return false
     end
     _max_speed(sim) <= run.max_velocity || return false
@@ -529,6 +534,8 @@ _advective_rate(sim) = (fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
 # =========================================================================
 # One parent step
 # =========================================================================
+
+const _NO_LEDGER = Float64[]          # the window's I0 of a run with no two-way scratch
 
 """
     step_nested!(run::NestedRun; dt = nothing) -> run
@@ -603,8 +610,6 @@ an externally driven child would silently get none (#349). Drive a
 sponged run with [`step_nested!`](@ref), or relax the externally driven
 child with the core's own sponge (the Berlin case's top sponge).
 """
-const _NO_LEDGER = Float64[]          # the window's I0 of a run with no two-way scratch
-
 function begin_parent_step!(run::NestedRun; dt = nothing)
     _refuse_external_sponge(run, "begin_parent_step!")
     return _begin_parent_step!(run; dt)
@@ -637,6 +642,22 @@ function _begin_parent_step!(run::NestedRun; dt = nothing)
     end
     Δt > 0 || error("step_nested!: parent step must be > 0, got $Δt")
 
+    m0 = _prepare_window!(run, t_p)
+
+    # --- 3. parent step, with retries before any child substep -------------
+    tw = time_ns()
+    Δt = _advance_parent!(run, Δt)
+    st.wall_parent += (time_ns() - tw) / 1e9
+    return _open_window!(run, t_p, Float64(p.t), Δt, m0)
+end
+
+# Steps 1b–2 of a parent step at parent time t_p, before the parent moves:
+# the two-way ledger's starting composite integrals (returned: the x
+# momentum; the scalars in the run's scratch) and the boundary data at t_p.
+# A nest hierarchy (#328) calls it for every link of a domain before that
+# domain's step.
+function _prepare_window!(run::NestedRun, t_p::Float64)
+    p = run.parent; c = run.child; nest = run.nest; st = run.stats
     two_way = run.feedback === :two_way
     m0 = 0.0
     if two_way && run.record
@@ -653,12 +674,15 @@ function _begin_parent_step!(run::NestedRun; dt = nothing)
     end
     run.new_valid_at = NaN
     st.wall_boundary += (time_ns() - tb) / 1e9
+    return m0
+end
 
-    # --- 3. parent step, with retries before any child substep -------------
-    tw = time_ns()
-    Δt = _advance_parent!(run, Δt)
-    st.wall_parent += (time_ns() - tw) / 1e9
-    t_end = Float64(p.t)
+# Step 4 of a parent step that took the parent from t_p to t_end (a step of
+# Δt): the boundary data at t_end, the child's window, the two-way
+# re-projection of the child. Returns the window of end_parent_step!.
+function _open_window!(run::NestedRun, t_p::Float64, t_end::Float64, Δt::Float64, m0)
+    c = run.child; st = run.stats
+    two_way = run.feedback === :two_way
 
     # --- 4. boundary data at t_p + Δt_p ------------------------------------
     tb = time_ns()
@@ -691,7 +715,12 @@ is then set to it exactly, the discrepancy recorded in
 (step 6 of [`step_nested!`](@ref)) and records the conservation ledger;
 the parent-step statistics and the run clock are updated.
 """
-function end_parent_step!(run::NestedRun, w::NamedTuple)
+end_parent_step!(run::NestedRun, w::NamedTuple) = _end_parent_step!(run, w, true)
+
+# `reproject = false` (a nest hierarchy, #328): the two-way feedback leaves
+# the parent's re-projection to the caller, which projects once after the
+# feedback of every child of the domain.
+function _end_parent_step!(run::NestedRun, w::NamedTuple, reproject::Bool)
     p = run.parent; c = run.child; nest = run.nest; st = run.stats
     t_end = w.t_child_end
     abs(Float64(c.t) - t_end) <= 1e-9 * max(run.Δt, floatmin(Float64)) ||
@@ -703,7 +732,7 @@ function end_parent_step!(run::NestedRun, w::NamedTuple)
     # --- 6. feedback ---------------------------------------------------------
     if run.feedback === :two_way
         tw = time_ns()
-        two_way_feedback!(run)
+        two_way_feedback!(run; reproject)
         if run.record
             wk = run.work
             _composite_scalars!(wk.I1, p, c, nest, run.s_bc)
@@ -739,13 +768,16 @@ _begin!(run::NestedRun, which) = run.regs === nothing || _begin_attempt!(run.reg
 _commit!(run::NestedRun, which) = run.regs === nothing || _commit_attempt!(run.regs, which)
 
 # The parent step is one step of the parent's own record (#336): its
-# retries are part of it, a rejected attempt is not a step.
-function _advance_parent!(run::NestedRun, Δt::Float64)
+# retries are part of it, a rejected attempt is not a step. `sub` (a nest
+# hierarchy's domain, #328, or nothing): the root of a hierarchy is stepped
+# through its first link, `sub` adding the register hooks and bookings of
+# its other links and its own rollback (all bound scalars of all its links).
+function _advance_parent!(run::NestedRun, Δt::Float64, sub = nothing)
     p = run.parent; rec = step_record(p)
     d0 = rec.depth; r0 = run.stats.parent_retries
     outer = _step_begin!(rec, p)
     Δt = try
-        _advance_parent_tries!(run, Δt)
+        _advance_parent_tries!(run, Δt, sub)
     catch
         rec.depth = d0; rethrow()
     end
@@ -753,23 +785,26 @@ function _advance_parent!(run::NestedRun, Δt::Float64)
     return Δt
 end
 
-function _advance_parent_tries!(run::NestedRun, Δt::Float64)
+function _advance_parent_tries!(run::NestedRun, Δt::Float64, sub)
     p = run.parent; adv = run.advance_parent
-    hook = _hook(run, :parent)
+    hook = sub === nothing ? _hook(run, :parent) : sub.hook
     if !run.validate
-        _begin!(run, :parent); adv(p, Δt; body_force! = hook); _commit!(run, :parent)
+        _begin!(run, :parent); _begin_sub!(sub)
+        adv(p, Δt; body_force! = hook)
+        _commit!(run, :parent); _commit_sub!(sub)
         return Δt
     end
-    rb = _save!(run, p, adv, :parent)
+    fields = sub === nothing ? _bound_fields(run, :parent) : sub.fields
+    rb = sub === nothing ? _save!(run, p, adv, :parent) : _save_rb!(sub.rb, p, fields)
     dt_min = run.cfl_parent === nothing ? 0.0 : Float64(run.cfl_parent.dt_min)
     tries = 0
     while true
-        _begin!(run, :parent)
-        if _try_advance!(adv, p, Δt, hook) && _accept(run, p, :parent)
-            _commit!(run, :parent)
+        _begin!(run, :parent); _begin_sub!(sub)
+        if _try_advance!(adv, p, Δt, hook) && _accept_fields(run, p, :parent, fields)
+            _commit!(run, :parent); _commit_sub!(sub)
             return Δt
         end
-        _restore!(run, p, rb, :parent)
+        _restore_rb!(p, rb, fields)
         tries += 1
         run.stats.parent_retries += 1
         Δt_new = max(Δt / 2, dt_min)
@@ -781,20 +816,26 @@ function _advance_parent_tries!(run::NestedRun, Δt::Float64)
 end
 
 # Each accepted child substep is one step of the child's own record (#336),
-# with the retries of its piece.
-function _subcycle_child!(run::NestedRun, t_end::Float64)
+# with the retries of its piece. `sub` (#328): the child is itself the
+# coarse domain of further links of a nest hierarchy. Each substep then also
+# prepares their boundary data (before the attempt), books their registers,
+# rolls back all its bound scalars, and after it is accepted advances its
+# own children to its end (Berger & Oliger 1984: the recursion of
+# _sub_after_step!).
+function _subcycle_child!(run::NestedRun, t_end::Float64, sub = nothing)
     rec = step_record(run.child)
     d0 = rec.depth
     try
-        return _subcycle_child_pieces!(run, t_end, rec)
+        return _subcycle_child_pieces!(run, t_end, rec, sub)
     catch
         rec.depth = d0; rethrow()
     end
 end
 
-function _subcycle_child_pieces!(run::NestedRun, t_end::Float64, rec::StepRecord)
+function _subcycle_child_pieces!(run::NestedRun, t_end::Float64, rec::StepRecord, sub)
     c = run.child; adv = run.advance_child; st = run.stats
-    hook = _hook(run, :child)
+    hook = sub === nothing ? _hook(run, :child) : sub.hook
+    fields = sub === nothing ? _bound_fields(run, :child) : sub.fields
     pp = run.sponge === nothing ? nothing : _SpongeHook(run)
     adaptive = run.sync === :subcycle && run.cfl_child !== nothing
     R = t_end - c.t
@@ -815,18 +856,20 @@ function _subcycle_child_pieces!(run::NestedRun, t_end::Float64, rec::StepRecord
         h = h_retry > 0 ? h_retry : n_rem == 1 ? R : R / n_rem
         cfl = h * _advective_rate(c)
 
-        rb = run.validate ? _save!(run, c, adv, :child) : nothing
+        sub === nothing || _sub_prepare!(sub, Float64(c.t))
+        rb = !run.validate ? nothing : sub === nothing ? _save!(run, c, adv, :child) :
+                                                         _save_rb!(sub.rb, c, fields)
         tries == 0 && (outer = _step_begin!(rec, c))   # the piece's first attempt opens its step
         run.sub_t0 = Float64(c.t); run.sub_h = h
-        _begin!(run, :child)
+        _begin!(run, :child); _begin_sub!(sub)
         ok = if run.validate
-            _try_advance!(adv, c, h, hook, pp) && _accept(run, c, :child)
+            _try_advance!(adv, c, h, hook, pp) && _accept_fields(run, c, :child, fields)
         else
             adv(c, h; body_force! = hook, post_predictor! = pp); true
         end
-        ok && _commit!(run, :child)
+        ok && (_commit!(run, :child); _commit_sub!(sub))
         if !ok
-            _restore!(run, c, rb, :child)
+            _restore_rb!(c, rb, fields)
             tries += 1
             st.child_retries += 1
             tries > run.max_retries &&
@@ -843,6 +886,7 @@ function _subcycle_child_pieces!(run::NestedRun, t_end::Float64, rec::StepRecord
         if run.sponge !== nothing               # the scalars; the velocity was relaxed
             apply_nest_sponge!(c, _sponge_target!(run), run.sponge; dt = h, velocity = false)
         end
+        sub === nothing || _sub_after_step!(sub, h)
         n_taken += 1
         n_rem -= 1
         st.child_substeps += 1
@@ -934,7 +978,7 @@ moves the parent's interface faces too, by the divergence that the
 anterpolation next to the buffer zone and the flux correction left in the
 parent; the next step's child boundary data take the projected parent).
 """
-function two_way_feedback!(run::NestedRun)
+function two_way_feedback!(run::NestedRun; reproject::Bool = true)
     fb = run.twoway
     fb === nothing && error("two_way_feedback!: the run is one-way")
     p = run.parent; c = run.child; nest = run.nest
@@ -970,12 +1014,13 @@ function two_way_feedback!(run::NestedRun)
         _clear_registers!(r)
     end
     e_after = _interface_imbalance(p, c, nest, meas)
-    fb.reproject && _reproject!(p)
+    proj = fb.reproject && reproject
+    proj && _reproject!(p)
     if run.record
         nest.ledger[:mass] = e_after
         nest.ledger[:mass_before_correction] = e_before
         nest.ledger[:mass_after_projection] =
-            fb.reproject ? _interface_imbalance(p, c, nest, meas) : e_after
+            proj ? _interface_imbalance(p, c, nest, meas) : e_after
     end
     return run
 end

@@ -53,6 +53,7 @@ makedocs(
             "Nested time coupling: subcycling and temporal interpolation" => "theory/nesting_time.md",
             "Nested boundary conditions: one-way parent → child data" => "theory/nesting_boundaries.md",
             "Two-way nesting: anterpolation and refluxing" => "theory/nesting_twoway.md",
+            "Nest hierarchies, non-aligned and stretched children" => "theory/nesting_hierarchy.md",
             "Radiative transfer"          => "theory/radiation.md",
             "Era IV overview: clouds and microphysics" => "theory/era4_overview.md",
             "P3 microphysics"             => "theory/p3.md",

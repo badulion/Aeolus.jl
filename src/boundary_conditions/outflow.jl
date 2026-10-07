@@ -106,6 +106,10 @@ _boundary_local(p::OpenPlane) = p.high ? 1 : length(p.range)
 _outward(p::OpenPlane) = p.high ? 1 : -1
 
 _spacing(m::RegularGrid, ax::Int) = ax == 1 ? m.dx : ax == 2 ? m.dy : m.dz
+# a z-stretched mesh (a stretched nest child, #328): lateral faces only
+_spacing(m::AbstractMesh, ax::Int) = ax == 1 ? m.dx : ax == 2 ? m.dy :
+    throw(ArgumentError("a radiation outflow (:convective / :orlanski) on the bottom or top " *
+                        "of a z-stretched mesh is not supported; use :dirichlet there"))
 
 # Outward normal velocity at tangential point (a, b) of plane `p`, from the
 # boundary-face values of the normal plane `pn` (the state of the step
