@@ -271,8 +271,9 @@ end
     dir = mktempdir()
     ctr = DNCounter(0, 0)
     prof_at = Dict{Int,Vector{Float64}}()
+    # the driver reports (attach = false): one row per monitor! call
     with_monitor(sim; csv = joinpath(dir, "d.csv"), nc = joinpath(dir, "d.nc"),
-                 components = (; sgs = closure, c = ctr), cadence = 3.0) do mon
+                 components = (; sgs = closure, c = ctr), cadence = 3.0, attach = false) do mon
         for n in 1:12
             step_adaptive!(sim, cfl; dt = 1.0, sgs = closure)
             monitor!(mon, sim; step = n, dt = 1.0, limiter = :advective)
@@ -316,7 +317,7 @@ end
             # while the session runs, session_finished is empty
             a = nc_provenance_attributes(rf)
             @test a["session_finished"] == "" && a["session_started"] == rf.record["session"][1]["started"]
-            with_monitor(sim; run = rf, cadence = 2.0) do mon
+            with_monitor(sim; run = rf, cadence = 2.0, attach = false) do mon
                 for n in 1:5
                     step_adaptive!(sim, cfl; dt = 1.0)
                     monitor!(mon, sim; step = n, dt = 1.0)
@@ -351,7 +352,7 @@ end
         # restart: same folder, same run ID, records appended, session 2
         with_run("nc case"; root, repo, console = false, resume = rfpath[],
                  seeds = (; noise = 7), config = Dict("mesh" => Dict("N" => [10, 8, 6]))) do rf
-            with_monitor(sim; run = rf, cadence = 2.0) do mon
+            with_monitor(sim; run = rf, cadence = 2.0, attach = false) do mon
                 for n in 6:8
                     step_adaptive!(sim, cfl; dt = 1.0)
                     monitor!(mon, sim; step = n, dt = 1.0)

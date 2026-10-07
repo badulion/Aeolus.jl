@@ -75,7 +75,9 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             mark_open_boundary_solids!, WindowedBoundaryData,
                             neighbor_index
 using ..Simulations
-using ..Simulations: BoussinesqSimulation, step_rk3!, _dzf, _project_velocity!
+using ..Simulations: BoussinesqSimulation, step_rk3!, _dzf, _project_velocity!,
+                     StepRecord, _step_begin!, _step_end!, _nmax   # the step record (#336)
+import ..Simulations: step_record
 using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness
 using ..Anelastic: MassWeightedSimulation, ReferenceState, constraint_weights,
                    _project_mass_weighted!

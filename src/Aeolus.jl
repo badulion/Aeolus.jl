@@ -175,6 +175,7 @@ export AeolusLogger, TeeLogger, open_run_log, with_run_log, test_logger,
        current_domain, with_domain, parse_log_level
 # Diagnostics registry, CSV writer, progress line (LOG-c, #335)
 export Diagnostic, diagnostics, collect_diagnostics, prefixed, reduce_diagnostic, evaluate_diagnostic,
+       process_diagnostics,
        ProfileDiagnostic, profile_diagnostics, collect_profiles, evaluate_profile,
        DiagnosticsWriter, record_diagnostics!, last_diagnostics, costly_due,
        ProgressLine, progress!, WarningTap, with_progress, note_warning!
@@ -231,11 +232,13 @@ export resolved_tke_profile
 export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
-       CGPoissonSolver, solve!, poisson_axis_bcs
+       CGPoissonSolver, solve!, poisson_axis_bcs, solver_stats
 export ImpermeableWall
 export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
+# #336: the per-step record and diagnostics hook of the step cores
+export StepRecord, step_record, set_step_hook!, step_hook, reset_interval!
 export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
 # #245: full-state checkpoints with bitwise restart, periodic checkpoints
 export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint_state!,
@@ -260,7 +263,8 @@ export RunFolder, start_run, finish_run!, with_run, run_checkpoints, Uncommitted
 export checkpoint_payload, write_checkpoint,
        BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
        check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
-       RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir
+       RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir,
+       attach_monitor!, detach_monitor!, MonitorHook
 # #337: diagnostics.nc
 export DiagnosticsNCWriter, diagnostics_nc_path, nc_provenance_attributes
 export NCDataset, nc_create, nc_defvar!, nc_append_record!, nc_chunksizes,
