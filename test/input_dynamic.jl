@@ -328,10 +328,11 @@ end
     case = r.runs[1].obj.case
     @test BCD.case_sounding(case.cfg) !== nothing && case.cfg.sounding === nothing
     # the CSV path, run the same way in this process. The 12-step state is
-    # compared here rather than against digests captured on master: those
-    # depend on the process environment (the runner's single-threaded BLAS
-    # and test logger give other last bits than a plain `julia` on the same
-    # code, measured on the CSV path itself), the initial state above does not.
+    # compared here rather than against digests captured on master: the CSV
+    # path itself reproduced those digests in some processes and missed them
+    # in the last bits in others (3 of 12 fresh processes on the same code;
+    # cause not identified, see the PR), while the initial state above
+    # matched every time.
     csv = load_run_config(ID_SMOKE; overrides = ["initial.sounding=\"$ID_CSV\"", "clock.nsteps=12",
                                                  "fftw.planner=\"estimate\""])
     ref = run_config(csv; root = mktempdir(), console = false, repo = mktempdir()).obj.case
@@ -347,6 +348,9 @@ end
 @testset "InputDrivers dynamic: offline nest = online one-way nest (smoke, 12 steps, round trip)" begin
     dir = mktempdir()
     drv = joinpath(dir, "smoke_child_boundaries.nc")
+    # the planner of the round trip below (ESTIMATE): the online runs built
+    # here and the offline child plan their FFTs alike
+    Aeolus.Operators.set_fftw_policy!(; planner = :estimate)
     # the online run, recording the child's boundaries at every parent step
     t0 = time()
     online = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing, child_boundaries = drv))
@@ -354,9 +358,11 @@ end
     t_online = time() - t0
     nc = BCD.find_coupling(online, :nesting)
     st_on = berlin_state(online)
-    # recording does not change the run: the CFG-c fixture's smoke digests
-    fx = TOML.parsefile(joinpath(@__DIR__, "data", "config_berlin", "fixture.toml"))["smoke_digests"]
-    @test all(k -> digest(st_on[Symbol(k)]) == fx[k], collect(keys(fx)))
+    # recording does not change the run: the same case without the recorder
+    plain = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing))
+    BCD.run_case!(plain)
+    st_plain = berlin_state(plain)
+    @test keys(st_plain) == keys(st_on) && all(k -> isequal(st_plain[k], st_on[k]), keys(st_on))
     d = read_dynamic_driver(drv; mesh = online.mesh)
     f = d.boundary
     # a record per parent step from t = 0; the last window may reach past the run's end
