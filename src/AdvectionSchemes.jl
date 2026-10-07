@@ -1993,8 +1993,9 @@ function _boundary_scalar_flux(r, sim, ϕ, bcs, weights, fill, diffusivity, leve
     # on every face (#327).
     #
     # KA-e (#302): the face terms of a pair of opposite faces are
-    # `_bsf_x/_y/_z_terms`. When their 2-D launch runs on several tasks they
-    # are computed by it into a scratch vector, and the sums then run
+    # `_bsf_x/_y/_z_terms`. When their 2-D launch runs on several tasks (and
+    # the scheme is not a two-point one, `_bsf_threads`) they are computed
+    # by it into a scratch vector, and the sums then run
     # serially over that scratch in the old loop order; on a serial launch
     # the sums compute them on the fly (the old fused loop: the dependent
     # additions hide behind the face work, which a separate pass over the
@@ -2034,7 +2035,7 @@ end
 # in the loop: 1.9x the old loop, as in KA-d's launch!).
 @inline function _bsf_pair(bk, ::Type{ST}, body!::B, sum!::S, (ar, br), m, args, k0, levels, clev, c1, c2,
                    f1, f2) where {ST, B, S}
-    if runs_serially(bk, length(ar) * length(br))
+    if !_bsf_threads(args[1]) || runs_serially(bk, length(ar) * length(br))
         return sum!(nothing, ar, br, k0, levels, clev, c1, c2, f1, f2, args...)
     end
     lock(_BSF_LOCK)
@@ -2046,6 +2047,14 @@ end
         unlock(_BSF_LOCK)
     end
 end
+
+# Whether the face terms of reconstruction `r` are worth a threaded launch:
+# not for the two-point schemes, whose face work is less than the separate
+# ordered pass over the scratch (measured :centered on a 256×256×128 open
+# box: 306 µs fused at one thread, 455 / 487 / 730 µs through the threaded
+# launch at 4 / 12 / 24 threads; :weno_z5 2721 → 1403 µs at 4).
+@inline _bsf_threads(r) = true
+@inline _bsf_threads(::Union{Centered2,_UpwindFirst}) = false
 
 # The scratch of boundary_scalar_flux's face terms on a threaded launch: one
 # vector, grown once and reused (no allocation per call in a time loop),
