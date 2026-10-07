@@ -79,8 +79,6 @@ function bench_kernels(N)
         ("combine4 (interior)",  () -> L._combine4!(tu, 1.0, B, 0.2, C, 0.3, D, 0.1, u, g),
                                  () -> TI._combine4!(tu, 1.0, B, 0.2, C, 0.3, D, 0.1, u)),
         ("RK3 combine (storage)", () -> L.rk3_combine2!(a, s0), () -> S.combine_storage!(S._Lin2r(0.75, 0.25), a, s0)),
-        ("copy (storage)",       () -> copyto!(a, s0), () -> S.copy_storage!(a, s0)),
-        ("zero (storage)",       () -> fill!(tu.data, 0), () -> S.zero_storage!(tu)),
         ("CFL maxima",           old_cfl, () -> TI._cfl_maxima(sim, f, true)),
         ("step guard",           old_guard, () -> TI.step_guard(sim)),
     )

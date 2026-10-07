@@ -913,12 +913,15 @@ _storage(a::AbstractArray{T,3}) where {T} = map(r -> UnitRange{Int}(r), axes(a))
 """
     copy_storage!(dst, src) -> dst
 
-`dst .= src` over the whole storage (halos included), as a pointwise
-kernel; `dst` and `src` must have the same size.
+`dst .= src` over the whole storage (halos included); `dst` and `src`
+must have the same size. It is `copyto!` (a `memcpy`, which a GPU array
+also implements). A copy kernel measured no reliable gain (KA-j, #306;
+`benchmarks/bench_ka_step.jl kernels`): 1.01-1.07× the `memcpy` serially,
+and 1.09-1.30× at 64×64×32 and 0.82-1.58× at 128×128×64 on 4-24 threads.
 """
 function copy_storage!(dst::AbstractArray{T,3}, src::AbstractArray{T,3}) where {T}
     size(dst) == size(src) || throw(DimensionMismatch("copy_storage!: $(size(dst)) ≠ $(size(src))"))
-    range_map!(Backends.backend(dst), identity, dst, _storage(dst), src)
+    copyto!(dst, src)
     return dst
 end
 
@@ -932,15 +935,16 @@ end
 """
     zero_storage!(f::Field) -> f
 
-Zero every value of `f`, halos included (a pointwise kernel): the reset of
-the tendencies at the start of a step.
+Zero every value of `f`, halos included: the reset of the tendencies at
+the start of a step. It is `fill!` (a `memset`, which a GPU array also
+implements). A pointwise kernel measured slower at every thread count
+that matters: 15.8 µs against 11.2 µs serially at 64×64×32, and 28 µs at
+4 threads (KA-j, #306; `benchmarks/bench_ka_step.jl kernels`).
 """
 function zero_storage!(f::Field)
-    range_map!(Backends.backend(f.data), _Zero{eltype(f.data)}(), f.data, _storage(f.data))
+    fill!(f.data, zero(eltype(f.data)))
     return f
 end
-struct _Zero{T} end
-@inline (::_Zero{T})() where {T} = zero(T)
 
 # A zero-filled array shaped like `a`, on its backend.
 storage_like(a::AbstractArray{T}) where {T} = Backends.allocate(Backends.backend(a), T, size(a))
