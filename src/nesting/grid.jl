@@ -213,6 +213,14 @@ stretch freely above (or below) the overlap; the halo stencils that
 reach into those layers interpolate on the actual face heights.
 
 Use [`nested_grid`](@ref) to build the child mesh from a physical extent.
+Without `refinement` and `offset`, `NestedGrid(parent_mesh, child_mesh)`
+infers the geometry and also accepts rational ratios, children off the
+parent faces and z-stretched children (#328); see that method. The
+geometry along each axis is a [`NestAxis`](@ref) (`nest.axes`); `nx, ny,
+nz` and `ix, iy, iz` are the size and offset of the conservation box (the
+whole child here), `rx, ry, rz` the integer ratios (0 along an axis that
+is not integer-aligned), and `aligned` is true when every axis is
+integer-aligned with a uniform child (the N-nest-a operators).
 """
 struct NestedGrid{T, MP<:AbstractMesh{T}, MC<:AbstractMesh{T}}
     parent_mesh::MP

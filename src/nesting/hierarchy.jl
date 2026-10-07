@@ -186,7 +186,7 @@ function add_nest!(h::NestHierarchy, pr::Pair, nest::NestedGrid; id::Symbol = Sy
     size(psim.θ.data) == totalsize(nest.parent_mesh) ||
         throw(ArgumentError("add_nest!: domain :$(h.domains[pidx].id) is not on the nest's parent mesh"))
     ccfl = cfl === :parent ? h.cfl[pidx] : cfl
-    viol = proper_nesting_violations(nest, psim, child)
+    viol = proper_nesting_violations(nest, psim, child; order = get(kwargs, :order, 3))
     isempty(viol) ||
         throw(ArgumentError("add_nest!: :$id is not properly nested in :$(h.domains[pidx].id): " *
                             join(viol, "; ")))
@@ -269,10 +269,7 @@ function _sub_after_step!(d::_HDomain, Δt::Float64)
     h = d.h
     isempty(d.links) && return nothing
     t_end = Float64(d.sim.t)
-    ws = Vector{NamedTuple}(undef, length(d.links))
-    for (n, l) in enumerate(d.links)
-        ws[n] = _open_window!(h.links[l], d.t0, t_end, Δt, d.m0[n])
-    end
+    ws = [_open_window!(h.links[l], d.t0, t_end, Δt, d.m0[n]) for (n, l) in enumerate(d.links)]
     for (n, l) in enumerate(d.links)
         L = h.links[l]
         tw = time_ns()
@@ -445,19 +442,32 @@ function composite_integral(h::NestHierarchy, quantity::Symbol)
         m = d.sim.mesh
         own = d.up == 0 ? (1:m.Nx, 1:m.Ny, 1:m.Nz) :
               map(a -> a.cbox, h.links[d.up].nest.axes)
-        excl = [nest_covered_range(h.links[l].nest) for l in d.links]
-        mass = _level_mass(d.sim)
-        part = 0.0
-        @inbounds for k in own[3]
-            V = m.dx * m.dy * mass[k]
-            for j in own[2], i2 in own[1]
-                any(b -> (i2 in b[1]) && (j in b[2]) && (k in b[3]), excl) && continue
-                part += f.data[m.Hx + i2, m.Hy + j, m.Hz + k] * V
-            end
-        end
-        total += part
+        excl = NTuple{3,UnitRange{Int}}[nest_covered_range(h.links[l].nest) for l in d.links]
+        total += _own_sum(f.data, m, own, excl, _level_mass(d.sim))
     end
     return total
+end
+
+# Σ φ V over the cells `own` of a domain outside the boxes `excl` (a
+# function barrier: concrete array and mesh types in the loop).
+function _own_sum(fd::AbstractArray, m, own, excl::Vector{NTuple{3,UnitRange{Int}}},
+                  mass::Vector{Float64})
+    part = 0.0
+    @inbounds for k in own[3]
+        V = m.dx * m.dy * mass[k]
+        for j in own[2], i in own[1]
+            _in_boxes(excl, i, j, k) && continue
+            part += fd[m.Hx + i, m.Hy + j, m.Hz + k] * V
+        end
+    end
+    return part
+end
+
+function _in_boxes(excl::Vector{NTuple{3,UnitRange{Int}}}, i::Int, j::Int, k::Int)
+    for b in excl
+        (i in b[1]) && (j in b[2]) && (k in b[3]) && return true
+    end
+    return false
 end
 
 # Per-level cell thickness (or reference mass W Δz) of a domain, interior-indexed.
