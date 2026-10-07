@@ -229,3 +229,39 @@ new, 3 (71 s), `era5_surface_tiles.jl` 64 → 79, `input_static.jl`
 71 → 74, `era6_sigma_sgs.jl` 56 → 58, `config_examples.jl` +1;
 `era6_nudging_subsidence.jl` (68, full) split into 58 fast and
 `era6_gabls2.jl` (10, full, 92 s). The full tier was not re-run for #320.
+
+### Redundant mini-simulations pruned (#317)
+
+An audit of the test files for duplicated or overlapping
+mini-simulations, after the Berlin suite (the smoke variants that
+exercised the same code paths) was removed in #320:
+
+- `era6_large_scale_forcing.jl`: the bit-for-bit check of
+  `GeostrophicNudging` against the former `add_geostrophic_wind!` ran its
+  oracle inside 100 Berlin smoke steps (68 s of the file). The forcing is
+  a body-force hook either way; it now runs as the hook of 100 SSP-RK3
+  and 100 forward-Euler steps of a rotating, sheared, stratified,
+  turbulent box with Smagorinsky SGS, with ``τ`` = 60 s so that the
+  forcing moves the mean wind by O(1) (``⟨u⟩`` 3.90 → 1.10 m/s against
+  ``U_g = 1`` over the 200 s). A deliberately reordered oracle
+  fails both runs. The file went from 83 s to 14 s and lost its heavy tag.
+- `test/support/kolmogorov.jl`: one builder, `kolmogorov_field!`, for the
+  ``k^{-5/3}`` initial field that `era2_sgs_numerics.jl`,
+  `era6_lagrangian_sgs.jl`, `era6_lasd.jl` (named copies),
+  `era6_amd_vreman.jl` and `era6_sigma_sgs.jl` (inline copies) each
+  built. The fields are bit-identical to the copies; no run time changes.
+
+Audited and kept, because the runs assert different physics or different
+averaging windows: the 24³ half channel of `era6_neutral_abl.jl`
+(wall stress over 8–20 ``H/u_*``, Φ_m of ``C_s = 0.17``) and of
+`era6_wall_models_channel.jl` (first cell against ``h_{wm}`` and
+filtering over 6–12 ``H/u_*``), whose tolerances were set from seed
+studies over those windows; the laminar Poiseuille channels of
+`era6_stratified_channel.jl` (Nu = 1, ``Ri_τ = 5``) and
+`era6_relaminarisation.jl` (laminar consistency of the σ closures,
+``Ri_τ = 50``); the 96³ (`era6_apriori_sgs.jl`) and 48³
+(`era6_sgs_validation.jl`) DNS fixtures; the config tests' runs of the
+legacy in-code builds, which are the bit-identity oracles of the config
+migration. The slowest fast file, `config_berlin.jl` (105 s), spends its
+time building the case and starting a fresh process, not stepping (12
+Berlin steps take 0.5 s).
