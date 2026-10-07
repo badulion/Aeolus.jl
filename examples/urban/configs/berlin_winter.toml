@@ -23,6 +23,7 @@ theta0 = 271.0
 
 [initial]
 sounding = "none"         # the idealised profile
+dynamic = "none"
 theta_surface = 271.0
 qv0 = 0.0025
 ts0 = 272.0

@@ -82,12 +82,19 @@ Groups of fields:
   [`initial_θ`](@ref) and `core/reference_state.jl`); `utc_offset` (h,
   local clock = UTC + `utc_offset`; 2 = CEST) places the case start on
   the sounding's UTC time axis. `sounding = nothing` selects the
-  **idealised** profile instead: `θ_surface`, `θ_inversion_z`,
+  **idealised** profile instead (unless `dynamic` names a sounding
+  driver): `θ_surface`, `θ_inversion_z`,
   `θ_lapse` (θ(z) = θ_surface + max(0, z − θ_inversion_z)·θ_lapse),
   `qv0`, `qv_scale` (qv(z) = qv0·exp(−z/qv_scale)); those five fields are
   used only then. `p_surface` (Pa at the ground; `nothing` = from the
   sounding, 101325 Pa for the idealised profile; see
-  [`case_surface_pressure`](@ref)). `u0`, `Ts0` and `Ts_water_offset`
+  [`case_surface_pressure`](@ref)). `dynamic`: the dynamic driver
+  (CFG-g, #362; `aeolus preprocess dynamic` writes it; `nothing`, the
+  default: none) — a sounding driver (`--from-sounding`), which then
+  replaces `sounding` (the same tables, read from one file), or, with the
+  offline nest (`options[:nesting].parent_driver = :offline`), the
+  parent-made driver of the nest faces (`--from-parent`); see
+  [`case_sounding`](@ref). `u0`, `Ts0` and `Ts_water_offset`
   (surface temperature, water `Ts0 + offset`), `T_soil0`;
 * **physics** — `physics::Dict{Symbol,Any}`: for an exclusive slot,
   `slot => provider` (e.g. `:microphysics => :kessler`); for an additive
@@ -101,9 +108,16 @@ Groups of fields:
 * **output** — `output_path` (`nothing` disables NetCDF output; in TOML
   `[output] netcdf`, the file name, in `[output] path`, a directory: the
   run folder's `output/` under `aeolus run`, else `examples/urban/output/`);
+  `child_boundaries` (`nothing`: off) — with the online nest, the dynamic
+  driver the run writes the child's boundary slabs to at every parent
+  step (CFG-g, #362, `aeolus preprocess dynamic --from-parent`), the file
+  an offline child reads;
   what is printed is decided by the installed logger and its level (#347,
   in TOML `[logging]`): the setup summary is `Debug`, the run's start,
-  output frames and end-of-run report are `Info`, a blowup is an `Error`;
+  output frames (with each coupling's diagnostics) and the end-of-run
+  events (run, stage timing, ledgers) are `Info`, a blowup is an
+  `Error`, all structured (`subsystem = :berlin`, `event = …`, the
+  values as key-values; core/diagnostics.jl, #338);
 * **backend** — `backend::AbstractBackend` (default `CPUBackend()`): the
   compute backend of the run (`Aeolus.Backends`, KA-a #294). The core
   coupling calls `init_threads!(cfg.backend)` before building the
@@ -156,6 +170,9 @@ mutable struct CaseConfig
     θ_relaxation::Bool
     # initial state: the observed sounding (#247) …
     sounding::Union{Nothing,String}
+    # the dynamic driver (CFG-g, #362): the sounding's (replaces `sounding`)
+    # or, for the offline nest, the parent-made one
+    dynamic::Union{Nothing,String}
     # … or, with sounding = nothing, the idealised profile
     θ_surface::Float64
     θ_inversion_z::Float64
@@ -173,6 +190,7 @@ mutable struct CaseConfig
     # output
     canopy_top::Float64
     output_path::Union{Nothing,String}
+    child_boundaries::Union{Nothing,String}   # the parent-made dynamic driver to write (CFG-g, #362)
     # compute backend (KA-a, #294)
     backend::AbstractBackend
 end

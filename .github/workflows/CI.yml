@@ -28,8 +28,6 @@ env:
   # so every process, including the precompile step, plans deterministically
   AEOLUS_FFTW_PLANNER: estimate
   AEOLUS_FFTW_THREADS: '1'
-  # the 4-core runner is about 2.3x slower than a development machine on berlin_smoke.jl
-  AEOLUS_SMOKE_BUDGET_S: '900'
   JULIA_NUM_THREADS: '1'
 
 jobs:

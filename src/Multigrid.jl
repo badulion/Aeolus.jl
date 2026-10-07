@@ -40,7 +40,7 @@ using ..Fields
 using ..Fields: Field, interior_view
 using ..PressureSolvers: AbstractPressureSolver, solve!
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
-import ..PressureSolvers: solve!, poisson_axis_bcs
+import ..PressureSolvers: solve!, poisson_axis_bcs, solver_stats
 using ..StretchedGrids: StretchedGrid, cell_thickness, center_spacing
 using ..Backends: pcg!, PCGWorkspace   # the one CG driver (KA-g, #300)
 using ..Backends: backend, launch!, plane_partials!, plane_reduce!, ordered_sum   # KA-i (#303)
@@ -674,6 +674,7 @@ mg_iteration_history(s::MultigridPoissonSolver) = copy(s.history)
 
 "Relative residual after the last `solve!`."
 mg_residual_norm(s::MultigridPoissonSolver) = s.last_residual[]
+solver_stats(s::MultigridPoissonSolver) = (s.last_cycles[], Float64(s.last_residual[]))
 
 # --- coarse-grid solve ---------------------------------------------------
 
@@ -968,5 +969,6 @@ end
 "Iterations used by the last `solve!` of an `MGPreconditionedCG`."
 mg_iteration_history(s::MGPreconditionedCG) = s.last_iters[]
 mg_residual_norm(s::MGPreconditionedCG) = s.last_residual[]
+solver_stats(s::MGPreconditionedCG) = (s.last_iters[], Float64(s.last_residual[]))
 
 end # module

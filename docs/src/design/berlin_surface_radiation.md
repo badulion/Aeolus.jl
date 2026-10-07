@@ -19,8 +19,9 @@
   temperature is `θ Π̄_k` and the pressure `p̄_k` of the reference state
   (#131; roofs sit up to 190 m up). H goes into θ, E into qv of that
   cell only: the smoke check counts writes into solid cells (0 in every
-  run), and `test/berlin_surface_exchange.jl` checks that the stage
-  changes nothing else, and that ``Σρc_pΔzΔθ = ΣHΔt`` (2e-11).
+  run), and the former `test/berlin_surface_exchange.jl` (removed in
+  #320) checked that the stage changes nothing else, and that
+  ``Σρc_pΔzΔθ = ΣHΔt`` (2e-11).
 * **Cadence.** The surfaces are stepped every `cfg.cadence[:soil]`
   seconds (30 s in the flagship, 4 s in `:smoke`; a `:surface` key
   overrides it) and their fluxes are held as tendencies until the next
@@ -286,7 +287,8 @@ decoupled (bulk Ri ≈ 1.8, LE = 0.7 W m⁻² at 13:00). With
 `blending = MasonBlendingHeight(L)` etc., a column is a `BlendedMosaic`
 forced once at z_k − d̄.
 
-**Measured** (`test/berlin_parent_surface.jl`, synthetic clear-sky
+**Measured** (`examples/urban/berlin_checks.jl parent`, before #320
+`test/berlin_parent_surface.jl`; synthetic clear-sky
 forcing `parent_offline_forcing`: Bird SW and Brutsaert LW for 20 June,
 T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s; as
 measured by #249, with the case sun still 2 h early — the values on the

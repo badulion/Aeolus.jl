@@ -45,11 +45,11 @@ weight = "heavy"
 seconds = 225
 reason = "convective/Orlanski outflow and outgoing-vortex runs; open-boundary outflow stays fast in era6_open_near_boundary.jl, era6_open_boundaries.jl"
 
-["era6_nudging_subsidence.jl"]
+["era6_gabls2.jl"]
 tier = "full"
 weight = "heavy"
-seconds = 151
-reason = "plane-mean nudging and large-scale subsidence runs; LargeScaleForcing stays fast in era6_large_scale_forcing.jl (nudging/subsidence otherwise only in berlin_parent_smoke.jl: #320 must keep a fast check)"
+seconds = 92
+reason = "GABLS2 (reduced) 54 h run with large-scale subsidence; ProfileNudging and Subsidence stay fast in era6_nudging_subsidence.jl (checks 1-7, split off in #320)"
 
 ["era6_stratified_channel.jl"]
 tier = "full"
@@ -67,7 +67,7 @@ reason = "GABLS1 32^3 LES on the examples/sbl driver (driver full-only); stabili
 tier = "full"
 weight = "heavy"
 seconds = 146
-reason = "laminar and bypass-transition flat-plate runs (its Blasius / fringe unit checks go with them); Transition stays fast in era6_relaminarisation.jl, berlin_numerics.jl"
+reason = "laminar and bypass-transition flat-plate runs (its Blasius / fringe unit checks go with them); Transition stays fast in era6_relaminarisation.jl (laminar_mask!, turbulent_fraction)"
 
 ["era6_collapse.jl"]
 tier = "full"
@@ -120,12 +120,6 @@ reason = "Comte-Bellot-Corrsin 32^3 benchmark, 8 closures x 3 seeds, CI-budget w
 
 # --- fast, timing-sensitive --------------------------------------------------
 
-["berlin_smoke.jl"]
-weight = "heavy"
-exclusive = true
-seconds = 150
-# asserts its own wall time (elapsed < 300 s), so it runs alone
-
 ["era6_apriori_sgs.jl"]
 weight = "heavy"
 exclusive = true
@@ -142,29 +136,21 @@ reason = "with AEOLUS_THREAD_TESTS=1 it starts julia -t 1/4/24 subprocesses; the
 weight = "heavy"
 seconds = 90
 
-["berlin_dynamics.jl"]
-weight = "heavy"
-seconds = 83
-
 ["era6_relaminarisation.jl"]
 weight = "heavy"
 seconds = 83
-
-["berlin_numerics.jl"]
-weight = "heavy"
-seconds = 77
 
 ["era4_icenucleation.jl"]
 weight = "heavy"
 seconds = 72
 
+["era2_anelastic_cbl.jl"]
+weight = "heavy"
+seconds = 71
+
 ["era6_wall_models_channel.jl"]
 weight = "heavy"
 seconds = 65
-
-["berlin_case.jl"]
-weight = "heavy"
-seconds = 64
 
 ["era6_large_scale_forcing.jl"]
 weight = "heavy"
@@ -181,14 +167,6 @@ seconds = 53
 ["era6_sigma_sgs.jl"]
 weight = "heavy"
 seconds = 53
-
-["berlin_sw_modifiers.jl"]
-weight = "heavy"
-seconds = 49
-
-["berlin_chemistry.jl"]
-weight = "heavy"
-seconds = 48
 
 ["era5_anthropogenic_heat.jl"]
 weight = "heavy"

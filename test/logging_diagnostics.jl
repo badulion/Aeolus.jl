@@ -148,12 +148,18 @@ end
     closure = StaticSmagorinsky(0.17)
     ds = collect_diagnostics(sim, (; sgs = closure, wall = WallModel(law), user = DGComponent(2.0)))
     names = [d.name for d in ds]
+    # the core's own, then the step cores' record (#336, every row except the
+    # wall times and the CFL of the state), then the components'
+    rec = ["cfl_adv", "cfl_diff", "solver_iters", "solver_residual",
+           "wall_step", "wall_pressure", "wall_sgs", "wall_cfl", "wall_guard",
+           "implicit_iters", "cfl_adv_state", "cfl_diff_state"]
     @test names == ["ke_mean", "max_abs_u", "max_abs_v", "max_abs_w", "theta_min", "theta_max",
-                    "max_div", "nu_t_max",
+                    "max_div", "nu_t_max", rec...,
                     "sgs.nu_h_max", "sgs.nu_v_max", "sgs.kappa_h_max",
                     "wall.ustar_mean", "wall.ustar_max",
                     "user.scaled_t", "user.u_sum"]
-    @test all(d -> d.cadence === :costly, ds[1:end-2])
+    every = ("cfl_adv", "cfl_diff", "solver_iters", "solver_residual", "implicit_iters")
+    @test all(d -> d.cadence === (d.name in every ? :step : :costly), ds[1:end-2])
     @test ds[end-1].cadence === :step
     @test [d.units for d in ds[1:8]] ==
           ["m2 s-2", "m s-1", "m s-1", "m s-1", "K", "K", "s-1", "m2 s-1"]
@@ -243,7 +249,13 @@ end
     law = RoughLogLaw(0.05)
     wm = WallModel(law)
     closure = StaticSmagorinsky(0.17)
-    ds = collect_diagnostics(sim, (; sgs = closure, wall = wm, user = DGComponent(3.0)))
+    # the step cores' record diagnostics (#336) are tested against
+    # independent values in logging_step_diagnostics.jl; the wall times are
+    # not reproducible
+    ds = filter(d -> !(d.name in ("cfl_adv", "cfl_diff", "solver_iters", "solver_residual",
+                                  "implicit_iters", "cfl_adv_state", "cfl_diff_state") ||
+                       startswith(d.name, "wall_")),
+                collect_diagnostics(sim, (; sgs = closure, wall = wm, user = DGComponent(3.0))))
     path = joinpath(mktempdir(), "diagnostics.csv")
     w = DiagnosticsWriter(path, ds; cadence = 5.0)
     cfl = CFLConstraints(dt_max = 10.0)

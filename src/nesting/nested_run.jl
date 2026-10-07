@@ -192,6 +192,8 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     rb_parent::RP                  # preallocated rollback state of each domain
     rb_child::RC
     work::W                        # two-way scratch (nothing in a one-way run)
+    step_record::StepRecord        # the run's per-step record and diagnostics hook (#336)
+    retry_mark::Int                # parent + child retries at the start of the window
 end
 
 # Scratch of the two-way feedback, allocated once (#329, item 6): the
@@ -290,13 +292,31 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                     Float64(child.t), 0.0, NaN, NestRunStats(), twoway, regs,
                     _Rollback(parent, advance_parent, s_bc.parent),
                     _Rollback(child, advance_child, s_bc.child),
-                    twoway === nothing ? nothing : _two_way_work(nest, s_bc))
+                    twoway === nothing ? nothing : _two_way_work(nest, s_bc), StepRecord(), 0)
     if run.regs !== nothing                  # separate transports book through the sims
         _register_booker!(parent, run.regs, :parent, nest)
         _register_booker!(child, run.regs, :child, nest)
     end
     return run
 end
+
+"""
+    step_record(run::NestedRun) -> StepRecord
+
+The run's own [`StepRecord`](@ref Aeolus.Simulations.StepRecord) (#336),
+completed at the end of every parent step
+([`end_parent_step!`](@ref), so also when a caller drives the child
+itself): `dt` the parent step, `limiter` the parent's, `retries` the
+rejected parent steps and child substeps of the window, `cfl_adv` the
+largest advective CFL number of a child substep (at its start), the wall
+time of the whole window; its hook ([`set_step_hook!`](@ref
+Aeolus.Simulations.set_step_hook!)) is then called as `hook(run, record)`.
+Each domain's own record is completed once per **accepted** step of that
+domain: the parent step with its retries, each child substep with the
+retries of its piece (a rejected attempt is not a step), and the domain's
+hook is called then.
+"""
+step_record(run::NestedRun) = run.step_record
 
 function Base.show(io::IO, r::NestedRun)
     s = r.stats
@@ -606,6 +626,9 @@ _refuse_external_sponge(run::NestedRun, who) =
 function _begin_parent_step!(run::NestedRun; dt = nothing)
     p = run.parent; c = run.child; nest = run.nest; st = run.stats
     t_p = Float64(p.t)
+    rr = run.step_record                      # the window's record (#336)
+    rr.t_wall0 = time_ns(); rr.t_sim0 = run.t
+    run.retry_mark = st.parent_retries + st.child_retries
 
     # --- 1. parent step size ---------------------------------------------
     Δt = if dt !== nothing
@@ -728,6 +751,12 @@ function _end_parent_step!(run::NestedRun, w::NamedTuple, reproject::Bool)
     st.dt_parent_max = max(st.dt_parent_max, w.Δt)
     run.dt_prev_parent = w.Δt
     run.t = Float64(p.t)
+    # the run's step record and hook (#336): the window is the run's step,
+    # limited as the parent step was
+    rr = run.step_record
+    rr.pick_t = rr.t_sim0; rr.pick_dt = Float64(w.Δt); rr.pick_rate = NaN; rr.pick_diff = NaN
+    rr.pick_limiter = step_record(p).limiter
+    _step_end!(rr, run, w.Δt, true; retries = st.parent_retries + st.child_retries - run.retry_mark)
     return run
 end
 
@@ -738,11 +767,25 @@ _hook(run::NestedRun, which::Symbol) =
 _begin!(run::NestedRun, which) = run.regs === nothing || _begin_attempt!(run.regs, which)
 _commit!(run::NestedRun, which) = run.regs === nothing || _commit_attempt!(run.regs, which)
 
-# `sub` (a nest hierarchy's domain, #328, or nothing): the root of a
-# hierarchy is stepped through its first link, `sub` adding the register
-# hooks and bookings of its other links and its own rollback (all bound
-# scalars of all its links).
+# The parent step is one step of the parent's own record (#336): its
+# retries are part of it, a rejected attempt is not a step. `sub` (a nest
+# hierarchy's domain, #328, or nothing): the root of a hierarchy is stepped
+# through its first link, `sub` adding the register hooks and bookings of
+# its other links and its own rollback (all bound scalars of all its links).
 function _advance_parent!(run::NestedRun, Δt::Float64, sub = nothing)
+    p = run.parent; rec = step_record(p)
+    d0 = rec.depth; r0 = run.stats.parent_retries
+    outer = _step_begin!(rec, p)
+    Δt = try
+        _advance_parent_tries!(run, Δt, sub)
+    catch
+        rec.depth = d0; rethrow()
+    end
+    _step_end!(rec, p, Δt, outer; retries = run.stats.parent_retries - r0)
+    return Δt
+end
+
+function _advance_parent_tries!(run::NestedRun, Δt::Float64, sub)
     p = run.parent; adv = run.advance_parent
     hook = sub === nothing ? _hook(run, :parent) : sub.hook
     if !run.validate
@@ -772,12 +815,24 @@ function _advance_parent!(run::NestedRun, Δt::Float64, sub = nothing)
     end
 end
 
-# `sub` (#328): the child is itself the coarse domain of further links of a
-# nest hierarchy. Each substep then also prepares their boundary data
-# (before the attempt), books their registers, rolls back all its bound
-# scalars, and after it is accepted advances its own children to its end
-# (Berger & Oliger 1984: the recursion of _sub_after_step!).
+# Each accepted child substep is one step of the child's own record (#336),
+# with the retries of its piece. `sub` (#328): the child is itself the
+# coarse domain of further links of a nest hierarchy. Each substep then also
+# prepares their boundary data (before the attempt), books their registers,
+# rolls back all its bound scalars, and after it is accepted advances its
+# own children to its end (Berger & Oliger 1984: the recursion of
+# _sub_after_step!).
 function _subcycle_child!(run::NestedRun, t_end::Float64, sub = nothing)
+    rec = step_record(run.child)
+    d0 = rec.depth
+    try
+        return _subcycle_child_pieces!(run, t_end, rec, sub)
+    catch
+        rec.depth = d0; rethrow()
+    end
+end
+
+function _subcycle_child_pieces!(run::NestedRun, t_end::Float64, rec::StepRecord, sub)
     c = run.child; adv = run.advance_child; st = run.stats
     hook = sub === nothing ? _hook(run, :child) : sub.hook
     fields = sub === nothing ? _bound_fields(run, :child) : sub.fields
@@ -790,6 +845,7 @@ function _subcycle_child!(run::NestedRun, t_end::Float64, sub = nothing)
     first_piece = true
     n_taken = 0
     tries = 0
+    outer = false
     h_retry = 0.0                       # > 0: redo a rejected piece at this size
     while n_rem > 0
         R = t_end - c.t
@@ -803,6 +859,7 @@ function _subcycle_child!(run::NestedRun, t_end::Float64, sub = nothing)
         sub === nothing || _sub_prepare!(sub, Float64(c.t))
         rb = !run.validate ? nothing : sub === nothing ? _save!(run, c, adv, :child) :
                                                          _save_rb!(sub.rb, c, fields)
+        tries == 0 && (outer = _step_begin!(rec, c))   # the piece's first attempt opens its step
         run.sub_t0 = Float64(c.t); run.sub_h = h
         _begin!(run, :child); _begin_sub!(sub)
         ok = if run.validate
@@ -824,6 +881,7 @@ function _subcycle_child!(run::NestedRun, t_end::Float64, sub = nothing)
             continue
         end
         h_retry = 0.0
+        piece_retries = tries
         tries = 0
         if run.sponge !== nothing               # the scalars; the velocity was relaxed
             apply_nest_sponge!(c, _sponge_target!(run), run.sponge; dt = h, velocity = false)
@@ -835,6 +893,8 @@ function _subcycle_child!(run::NestedRun, t_end::Float64, sub = nothing)
         st.dt_child_min = min(st.dt_child_min, h)
         st.dt_child_max = max(st.dt_child_max, h)
         st.max_child_cfl = max(st.max_child_cfl, cfl)
+        run.step_record.cfl_adv = _nmax(run.step_record.cfl_adv, cfl)
+        _step_end!(rec, c, h, outer; retries = piece_retries)
         run.dt_prev_child = h
     end
     st.max_clock_error = max(st.max_clock_error,

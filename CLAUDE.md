@@ -88,17 +88,13 @@ synthetic setups (analytic limits, conservation, published benchmarks) —
 not through the Berlin case. The Berlin (Alexanderplatz) run,
 `examples/urban/alexanderplatz_diurnal.jl`, is an **example**: couple new
 physics into it when that makes sense, but nothing requires it, and it has
-no test suite of its own (maintainer decision, 2026-10-06).
+no test suite of its own (maintainer decision, 2026-10-06; the
+`test/berlin_*.jl` files and the coverage lists are gone, #320).
 
-**Transition until #320 lands.** The `test/berlin_*.jl` files, including
-`berlin_smoke.jl`, still run until #320 moves their physics checks into
-module tests and deletes them (after the nesting epic #246 merges). The
-Berlin coverage lists (`test/berlin_coverage.jl`) are already gone
-(maintainer decision, 2026-10-06). Meanwhile:
-
-- Do not add new `berlin_*` tests; put new physics tests in module tests.
-- Existing Berlin tests must stay green; if one breaks, fix the code or
-  state why the expectation was wrong, as for any test.
+- Do not add Berlin tests; put new physics tests in module tests.
+- After changing the example, run its end-to-end checks by hand:
+  `julia --project=. examples/urban/berlin_checks.jl` (every coupling
+  on, ledgers closed; the nest parent's smoke run and validations).
 
 ## Documentation is part of done
 
@@ -184,7 +180,7 @@ weeks because nobody viewed the image at size.
 
 ```
 src/            55 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
-test/           runtests.jl + era*_*.jl (+ berlin_*.jl until #320);
+test/           runtests.jl + era*_*.jl and other module tests;
                 run.jl = parallel runner, test_tags.toml = tiers
 examples/       worked cases; examples/urban/ is the flagship
 docs/src/       theory, design, API reference

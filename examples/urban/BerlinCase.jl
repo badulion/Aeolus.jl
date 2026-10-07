@@ -39,10 +39,16 @@ using Aeolus.InputDrivers: SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE_W
                            load_city_osm, osm_class, load_city_geojson, rasterize_city, static_inputs,
                            solid_and_classes, surface_class_map, tag_building_adjacent!,
                            StaticInputs, StaticTiles, read_static_driver, write_static_driver,
-                           read_static_tiles, write_static_tiles
+                           read_static_tiles, write_static_tiles,
+                           DynamicInputs, read_dynamic_driver, write_dynamic_driver, sounding_dynamic_inputs,
+                           init_time_string, init_day_seconds, surface_pressure_at, shift_table, file_fnv1a64,
+                           FileBoundaryFeed, feed_window!, feed_steady!, check_planes, check_coverage,
+                           NestBoundaryRecorder, record_boundary!, plane_snapshot
 using Aeolus.StretchedGrids: surface_refined_faces
+# the diagnostics registry (LOG-g, #338): the couplings extend these two
+import Aeolus.RunLog: diagnostics, profile_diagnostics
 using Printf
-using Dates: DateTime, Millisecond
+using Dates: Dates, DateTime, Millisecond
 using Statistics: mean
 import Random
 
@@ -54,7 +60,7 @@ const DATA_DIR = joinpath(URBAN_DIR, "data")
 for f in ("config", "scenarios", "registry", "geometry", "bus",
           "tracers", "air_heat", "air_heat_ledger", "ledger", "reference_state", "top_boundary",
           "open_boundary",
-          "output", "case", "stages")
+          "output", "case", "stages", "diagnostics")
     include(joinpath(@__DIR__, "core", f * ".jl"))
 end
 
@@ -77,6 +83,7 @@ include(joinpath(@__DIR__, "core", "config_schema.jl"))
 export CaseConfig, SCENARIO_FILES, BerlinDriver, case_state, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
+       case_diagnostics, case_profiles,
        Ledger, ledger_report, surface_budget, water_budget, heat_budget, add_heat!,
        AirHeatMeter, air_heat, register_surface_factory!,
        SurfaceSite, class_surface, class_roughness,

@@ -8,11 +8,11 @@ using ..Fields
 using ..Fields: Field
 using ..BoundaryConditions: FieldBoundaryConditions, axis_poisson_bc, _halo_periodic!, _halo_mirror!
 using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
-using ..Backends: backend, launch!, apply_transform!, pcg!, PCGWorkspace, PointOperator,
-                  IdentityPreconditioner
+using ..Backends: backend, launch!, launch_weighted!, runs_serially, apply_transform!,
+                  pcg!, PCGWorkspace, PointOperator, IdentityPreconditioner
 
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
-       CGPoissonSolver, solve!, poisson_axis_bcs
+       CGPoissonSolver, solve!, poisson_axis_bcs, solver_stats
 
 """
     AbstractPressureSolver
@@ -37,6 +37,20 @@ Phase 1a ships [`FFTPoissonSolver`](@ref) for triply-periodic
     spectral-element backend (Phase 5).
 """
 abstract type AbstractPressureSolver end
+
+"""
+    solver_stats(solver) -> (iterations, residual)
+
+The work and the convergence of the last `solve!` of `solver`, as the
+solver itself tracks them: `iterations` (CG iterations, multigrid
+cycles) and `residual`, the solver's own stopping measure (the absolute
+‖r‖₂ of [`CGPoissonSolver`](@ref) and of the anelastic
+`DensityWeightedPoissonSolver`, the ‖r‖₂/‖b‖₂ of the multigrid solvers).
+A direct solver (the FFT, cosine-FFT and stretched-z solvers) gives
+`(0, NaN)`: no iteration, no residual computed. The per-step diagnostics
+of the step cores read it after every pressure solve (#336).
+"""
+solver_stats(::AbstractPressureSolver) = (0, NaN)
 
 # -------------------------------------------------------------------------
 # FFTPoissonSolver — triply-periodic direct solve
@@ -396,6 +410,229 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
 end
 
 # -------------------------------------------------------------------------
+# ColumnTridiagonalSolver — horizontal r2r transform + Thomas in z.
+# -------------------------------------------------------------------------
+
+"""
+    ColumnTridiagonalSolver(T, (Nx, Ny, Nz), (dx, dy); lower, upper, hweight,
+                            measure, inv_coupling, gauge,
+                            bc_x = :periodic, bc_y = :periodic)
+
+The direct FFT–tridiagonal solver (Schumann & Sweet 1988; Press et al.
+2007, *Numerical Recipes* 3rd ed. §20.4) of every cell-centred Poisson
+problem whose horizontal operator is the uniform 3-point stencil and whose
+coefficients depend on height only:
+
+```math
+h_k\\,(δ_x^2 + δ_y^2)φ_k + a_k(φ_{k-1} - φ_k) + c_k(φ_{k+1} - φ_k) = b_k,
+```
+
+with `a_k = lower[k]`, `c_k = upper[k]` (`a_1 = c_{N_z} = 0`: zero flux
+through the bottom and top faces), `h_k = hweight[k] > 0`. It is the one
+implementation behind two operators:
+
+* the conservative stretched-z Laplacian of
+  [`StretchedPoissonSolver`](@ref Aeolus.StretchedGrids.StretchedPoissonSolver)
+  (`h = 1`, `a_k = 1/(Δz_c[k] Δz_f[k])`);
+* the density-weighted operator `∇·(w(z)∇φ)` of the sound-proof cores,
+  [`DirectWeightedPoissonSolver`](@ref Aeolus.Anelastic.DirectWeightedPoissonSolver)
+  (`h = w_c`, `a_k = w_f[k]/Δz²`).
+
+`x` and `y` are each `:periodic` (half-complex DFT, FFTW `R2HC`/`HC2R`) or
+`:neumann` (DCT-II/III, `REDFT10`/`REDFT01`), diagonalised with the exact
+3-point eigenvalues `λ = 4/Δ² sin²(πm/N)` or `4/Δ² sin²(πm/2N)`; each
+horizontal wavenumber leaves the tridiagonal system
+`a_k φ̂_{k-1} − (a_k + c_k + λ h_k) φ̂_k + c_k φ̂_{k+1} = b̂_k`, which is
+strictly diagonally dominant for `λ > 0` and is solved by the Thomas
+algorithm with the factorisation computed once at construction.
+
+The mean mode (`λ = 0`) is singular. It is the 1-D problem
+`G_{k+1} − G_k = m_k b̂_k` for the face flux `G_k = (φ̂_k − φ̂_{k−1}) / ι_k`
+(`m = measure`, `ι = inv_coupling`, so `a_k = 1/(m_k ι_k)` and
+`c_k = 1/(m_k ι_{k+1})`) with `G_1 = 0`: the `m`-weighted mean of the source
+is removed (the compatibility condition of the closed column), the flux is
+integrated up, and the result is shifted to zero `gauge`-weighted mean,
+`Σ_k gauge_k Σ_{ij} φ_{ijk} = 0`.
+
+Cost: one 2-D transform pair and `O(N_x N_y N_z)` for the column solves;
+exact to round-off. Periodic `z` is not supported.
+"""
+struct ColumnTridiagonalSolver{T, PF, PI} <: AbstractPressureSolver
+    plan_fwd::PF
+    plan_inv::PI
+    buf::Array{T,3}          # transform buffer, interior size
+    buf2::Array{T,3}
+    cp::Array{T,3}           # Thomas: modified upper diagonal c'_k
+    inv_den::Array{T,3}      # Thomas: 1 / (b_k - a_k c'_{k-1})
+    lower::Vector{T}         # a_k: coefficient of φ_{k-1} (0 at k = 1)
+    measure::Vector{T}       # m_k of the mean-mode column (length Nz)
+    inv_coupling::Vector{T}  # ι_k (face k = bottom of cell k, length Nz+1)
+    gauge::Vector{T}         # weights of the zero-mean gauge (length Nz)
+    measure_sum::T           # Σ m_k
+    gauge_sum::T             # Σ gauge_k
+    col::Vector{T}           # the mean-mode column (scratch)
+    norm::T                  # 1 / (forward × inverse transform scale)
+    bc_x::Symbol
+    bc_y::Symbol
+end
+
+_r2r_kinds(bc::Symbol) = bc === :periodic ? (FFTW.R2HC, FFTW.HC2R, 1) :
+                         bc === :neumann  ? (FFTW.REDFT10, FFTW.REDFT01, 2) :
+                         throw(ArgumentError("column tridiagonal Poisson solver: lateral BC " *
+                                             "must be :periodic or :neumann, got :$bc"))
+
+# Eigenvalue magnitudes 4/Δ² sin²(·) of the 3-point second difference in the
+# r2r basis: half-complex index p ↔ frequency min(p, N-p) for the DFT, p for
+# the DCT-II (period 2N).
+function _r2r_eigen(::Type{T}, N::Int, Δ::T, bc::Symbol) where {T}
+    if bc === :periodic
+        return T[4 / Δ^2 * sin(π * min(p, N - p) / N)^2 for p in 0:N-1]
+    else
+        return T[4 / Δ^2 * sin(π * p / (2N))^2 for p in 0:N-1]
+    end
+end
+
+function ColumnTridiagonalSolver(::Type{T}, (Nx, Ny, Nz)::NTuple{3,Int}, (dx, dy);
+                                 lower::AbstractVector, upper::AbstractVector,
+                                 hweight::AbstractVector, measure::AbstractVector,
+                                 inv_coupling::AbstractVector, gauge::AbstractVector,
+                                 bc_x::Symbol = :periodic, bc_y::Symbol = :periodic) where {T}
+    length(lower) == length(upper) == length(hweight) == length(measure) ==
+        length(gauge) == Nz && length(inv_coupling) == Nz + 1 ||
+        throw(DimensionMismatch("column coefficients must have length Nz = $Nz " *
+                                "(inv_coupling: Nz + 1)"))
+    lower[1] == 0 && upper[Nz] == 0 ||
+        throw(ArgumentError("the bottom and top faces carry no flux: lower[1] = upper[Nz] = 0"))
+    kx_f, kx_i, sx = _r2r_kinds(bc_x)
+    ky_f, ky_i, sy = _r2r_kinds(bc_y)
+    buf  = zeros(T, Nx, Ny, Nz)
+    buf2 = zeros(T, Nx, Ny, Nz)
+    plan_fwd = FFTW.plan_r2r(buf, (kx_f, ky_f), (1, 2); flags = fftw_planner_flags())
+    plan_inv = FFTW.plan_r2r(buf, (kx_i, ky_i), (1, 2); flags = fftw_planner_flags())
+    norm = one(T) / T(sx * Nx * sy * Ny)
+
+    lo = T.(collect(lower)); up = T.(collect(upper)); hw = T.(collect(hweight))
+    λx = _r2r_eigen(T, Nx, T(dx), bc_x)
+    λy = _r2r_eigen(T, Ny, T(dy), bc_y)
+    cp = zeros(T, Nx, Ny, Nz); inv_den = zeros(T, Nx, Ny, Nz)
+    @inbounds for q in 1:Ny, p in 1:Nx
+        λ = λx[p] + λy[q]
+        (p == 1 && q == 1) && continue          # the mean mode: integrated directly
+        cprev = zero(T)
+        for k in 1:Nz
+            b   = -(lo[k] + up[k]) - λ * hw[k]
+            den = b - lo[k] * cprev
+            inv_den[p, q, k] = 1 / den
+            cprev = up[k] / den
+            cp[p, q, k] = cprev
+        end
+    end
+    m = T.(collect(measure)); g = T.(collect(gauge))
+    return ColumnTridiagonalSolver{T, typeof(plan_fwd), typeof(plan_inv)}(
+        plan_fwd, plan_inv, buf, buf2, cp, inv_den, lo, m, T.(collect(inv_coupling)), g,
+        sum(m), sum(g), zeros(T, Nz), norm, bc_x, bc_y)
+end
+
+poisson_axis_bcs(s::ColumnTridiagonalSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = :neumann)
+
+function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
+                s::ColumnTridiagonalSolver{T}) where {T}
+    be = backend(s.buf)
+    Nx, Ny, Nz = size(s.buf)
+    copy_interior_in!(be, s.buf, source)
+    apply_transform!(be, s.buf2, s.plan_fwd, s.buf)
+    b = s.buf2
+    @views s.col .= b[1, 1, :]          # the mean mode, solved separately
+    # one tridiagonal solve per horizontal wavenumber, serial in z within
+    # the work item; a work item is a slab of ky rows, see _thomas_slab!
+    checkbounds(b, 1:Nx, 1:Ny, 1:Nz)
+    size(s.cp) == size(s.inv_den) == size(b) && length(s.lower) == Nz ||
+        throw(DimensionMismatch("ColumnTridiagonalSolver: inconsistent Thomas factors"))
+    np = Nx * Ny * Nz
+    nslab = runs_serially(be, np) ? 1 : min(Ny, Threads.nthreads())
+    launch_weighted!(be, cld(np, nslab), _thomas_slab!, (1:nslab,),
+                     b, s.cp, s.inv_den, s.lower, Nx, Ny, Nz, nslab)
+    _mean_mode!(s)
+    @views b[1, 1, :] .= s.col
+    apply_transform!(be, s.buf, s.plan_inv, s.buf2)
+    copy_interior_out!(be, p, s.buf, s.norm)
+    return p
+end
+
+# The Thomas algorithm for the columns (pp, q) of the ky rows q of slab
+# `sl` (of `nslab` contiguous slabs) of the transformed source `b`, in
+# place, with the factorisation `cp` (c'_k) and `inv_den` (1/(b_k − a_k
+# c'_{k−1})) computed at construction: forward elimination
+# d'_k = (d_k − a_k d'_{k−1}) / den_k, then back substitution
+# φ_k = d'_k − c'_k φ_{k+1}. Every column is serial in z and owned by one
+# work item, and every operation is the one the former level-by-level loop
+# did, so the bits are those of that loop whatever the slabs are: the slab
+# count may follow the thread count (one slab, the old loop exactly, when
+# the launch runs serially). The mean mode (1, 1) has cp = inv_den = 0 and
+# is overwritten by `_mean_mode!`.
+#
+# Why slabs of rows and not one column per work item: with kx innermost
+# the loop vectorises and streams through memory. One column per item
+# walks z with a stride of Nx·Ny·8 bytes, a power of two on the usual
+# grids, so every level of a column falls in the same L1 set: measured
+# 4.6× slower than the old loop at 64×64×53 on one thread. One ky row per
+# item still cost 1.2× (64×64×53) to 1.6× (192×192×53) on one thread (Nx
+# contiguous values per level are too short a stream). A GPU backend will
+# launch one column per item (Phase 81).
+@inline function _thomas_slab!(sl, b, cp, inv_den, lower, Nx, Ny, Nz, nslab)
+    q1 = (sl - 1) * Ny ÷ nslab + 1
+    q2 = sl * Ny ÷ nslab
+    @inbounds begin
+        for q in q1:q2, pp in 1:Nx
+            b[pp, q, 1] *= inv_den[pp, q, 1]
+        end
+        for k in 2:Nz
+            a = lower[k]
+            for q in q1:q2, pp in 1:Nx
+                b[pp, q, k] = (b[pp, q, k] - a * b[pp, q, k-1]) * inv_den[pp, q, k]
+            end
+        end
+        for k in Nz-1:-1:1, q in q1:q2, pp in 1:Nx
+            b[pp, q, k] -= cp[pp, q, k] * b[pp, q, k+1]
+        end
+    end
+    return nothing
+end
+
+# Column of the λ = 0 mode, in transform units (the operator is linear,
+# so the horizontal-sum scaling of the transform carries through): remove
+# the m-weighted mean of the source (the compatibility condition of the
+# zero-flux ends), integrate the flux up from the zero bottom flux,
+#   G_k = G_{k-1} + b_{k-1} m[k-1],   φ_k = φ_{k-1} + G_k ι[k],
+# then remove the gauge-weighted mean of φ.
+function _mean_mode!(s::ColumnTridiagonalSolver{T}) where {T}
+    col, m, ι, g = s.col, s.measure, s.inv_coupling, s.gauge
+    Nz = length(col)
+    mb = zero(T)
+    @inbounds for k in 1:Nz
+        mb += col[k] * m[k]
+    end
+    mb /= s.measure_sum
+    F = zero(T); φk = zero(T)
+    @inbounds begin
+        prev = col[1] - mb
+        col[1] = zero(T)
+        for k in 2:Nz
+            F  += prev * m[k-1]
+            φk += F * ι[k]
+            prev = col[k] - mb
+            col[k] = φk
+        end
+    end
+    mφ = zero(T)
+    @inbounds for k in 1:Nz
+        mφ += col[k] * g[k]
+    end
+    col .-= mφ / s.gauge_sum
+    return s
+end
+
+# -------------------------------------------------------------------------
 # CGPoissonSolver — matrix-free preconditioned conjugate gradient.
 # -------------------------------------------------------------------------
 
@@ -582,5 +819,7 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
     copy_unit_halo_out!(bk, p, solver.x)
     return p
 end
+
+solver_stats(s::CGPoissonSolver) = (s.last_iter[], Float64(s.last_residual[]))
 
 end # module
