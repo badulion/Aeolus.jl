@@ -111,6 +111,7 @@ ConfigError: 3 problems in the run configuration
 | `Date`, `Time` | local date, local time | `Dates.Date`, `Dates.Time` |
 | [`Optional{T}`](@ref Aeolus.Config.Optional) | `T` or `"none"` | `T` or `nothing` |
 | [`OpenTable(validator)`](@ref Aeolus.Config.OpenTable) | table | `Dict{String,Any}` |
+| [`OneOf(T1, T2, …)`](@ref Aeolus.Config.OneOf) | a value of any of the types, the first that accepts it | that type's value |
 
 `range = (lo, hi)` bounds numbers (closed; `open_lower = true` opens
 `lo`), elementwise for tuples and vectors; `allowed` lists the permitted
@@ -194,7 +195,12 @@ Drivers that live under `examples/` (the Berlin, SBL and validation
 drivers) are not moved into `src/`: [`DRIVER_FILES`](@ref
 Aeolus.Config.DRIVER_FILES) maps their names to files relative to the
 package directory, and the first config that names one includes the file
-into a fresh module. The migrations of #311 add their entries.
+into a fresh module. CFG-d (#359) lists `sbl` (`examples/sbl/config_schema.jl`)
+and `dns` (`examples/validation/dns_apriori_driver.jl`: the filtered-DNS
+fixture with its a-priori record, `dns256.toml`); the drivers of CFG-e
+(#360) are in the table below. `dns` and `dns_decay` run the same DNS
+(the steps of `test/fixtures/dns_decay.jl`); `dns` adds the a-priori
+record and its resolution refusal.
 
 ### The example drivers (CFG-e, #360)
 
@@ -339,6 +345,82 @@ The options:
 ```@example
 using Aeolus # hide
 print(Aeolus.Config.option_reference("simulation")) # hide
+```
+
+## The `sbl` driver
+
+`[run] driver = "sbl"` (`examples/sbl/config_schema.jl`, CFG-d #359) runs
+the stable-boundary-layer cases of `examples/sbl/`. One driver covers four
+kinds, `[case] kind`:
+
+| kind | builds and runs | shipped configs |
+| :-- | :-- | :-- |
+| `homogeneous` | `sbl_case`, `sbl_run!`: the periodic SBL LES | `gabls1`, `gabls2`, `cases99` (gabls2 + virtual towers), `gabls3`, `gabls4_exp3` |
+| `stratified_channel` | a neutral spin-up, then `stratified_channel_run` | `stratified_channel_re180` |
+| `relaminarisation_channel` | `relam_spinup`, then `relam_run` | `relaminarisation` |
+| `collapse_channel` | the neutral half channel, then `collapse_run` | `collapse_channel` |
+
+The Julia builders of `examples/sbl/driver.jl` stay the implementation;
+the driver only turns the config into their arguments. Each shipped
+config gives fields bitwise equal to the builder call it replaced
+(`test/config_sbl.jl`). Case constants live in the TOML files; the case
+tables stay the CSVs of `examples/sbl/data/`, named by `[case] data` (a
+`Path`, hashed under `[inputs]` of `run.toml`) and referenced as
+`{table, column[, row]}`. Things TOML cannot hold are named kinds with
+parameters, added in code:
+
+  * a forcing quantity (`[forcing] u_g`, `v_g`, the `subsidence` `w`, the
+    `advective_tendencies` and `nudging` targets) is a number or
+    `{kind = "table", z = […], t = […] | time = {table, column}, levels =
+    [{value} | {values} | {column}]}`, a `ForcingTable`;
+  * `[surface] temperature` is `constant`, `cooling_rate`, `series` (a
+    case-table column; with `p_sfc` and `exponent` the values are T,
+    converted to θ) or `gabls2` (the case formula, sampled);
+  * `[surface] stability` is a `SurfaceExchange` family with its
+    parameters: `{family = "businger_dyer_log_linear", beta_m = 4.8,
+    beta_h = 7.8}`;
+  * `[initial]` profiles are `constant`, `mixed_layer_lapse` or `table`
+    (with a `log` or `linear` profile below the lowest height), the
+    perturbation `theta_uniform`, `uniform`, `gaussian` (with a linear
+    taper per component) or `none`.
+
+An option that the configured kind does not use, set away from its
+default, is an error (a silently ignored key is a bug), as are `f` and
+`latitude` together, `end_time` and `nsteps` together, a closure the
+channel builders do not take, and a case-table reference that does not
+resolve (naming the table, the file and its size). A run writes
+`diagnostics.csv`, `output/statistics.toml` (the averaged statistics or
+the channel result), `output/series.csv` (every `[averaging]
+series_interval`) and, with `[towers] below > 0`, `output/towers.csv` (the
+CASES-99 hockey stick bins). The scripts `gabls1.jl` … `gabls4.jl` run
+their config (`sbl_script_run`) and make the figures; the channel sweeps
+build their cases from the configs and share one spin-up.
+
+```@example
+using Aeolus # hide
+print(Aeolus.Config.option_reference("sbl")) # hide
+```
+
+## The `dns` driver
+
+`[run] driver = "dns"` (`examples/validation/dns_apriori_driver.jl`) is the
+decaying-turbulence DNS of the filtered-DNS fixture
+(`test/fixtures/dns_decay.jl`) and its a-priori record
+(`test/fixtures/dns_apriori.jl`). `examples/validation/configs/dns256.toml`
+is the offline 256³ run; `--set grid.n=32` runs the pipeline in seconds.
+`[fluid] nu = "scaled"` is the fixture's ν = 0.018 (48/N)^{4/3} times
+`nu_margin` (1.035, the generator's margin), so the file holds no
+hand-computed viscosity. The run is the fixture's own steps (`dns_start`,
+`dns_step!` while `dns_running`), bitwise `dns_decay`'s. After the run the
+record goes to `[apriori] out` (default `output/dns_apriori.toml`); with
+`require_checks` a run that misses a required DNS check (k_max η ≥ 1.5
+over the run, the skewness band, the energy budget, monotone decay, past
+the dissipation peak) fails, names the measured k_max η, and leaves its
+record at `<out>.failed` only.
+
+```@example
+using Aeolus # hide
+print(Aeolus.Config.option_reference("dns")) # hide
 ```
 
 ## The bit-identical round trip

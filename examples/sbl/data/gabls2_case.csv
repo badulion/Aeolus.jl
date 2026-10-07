@@ -24,11 +24,14 @@
 #   h <= 53.3: -0.37 h + 18.0;  h <= 65.6: -4 - 25 cos(0.22 h + 2.5);  else 4.4.
 # Large-scale subsidence (CLUBB): w = -0.005 z/1000 m/s below 1000 m (-0.005 above) from 26 h after a 1400 LT start
 #   (40 h local); "a small subsidence rate (0.005 m/s) ... starting in the afternoon of 23 October" (as quoted in the
-#   literature). Rows w_s (m/s at z_s), z_s (m) and t_subsidence (s after 00 LT 22 Oct = 40 h local). Applied to theta
-#   by gabls2_case (LargeScaleForcing.Subsidence, #248).
+#   literature): w_s = -0.005 m/s at z_s = 1000 m, from t_subsidence = 144000 s after 00 LT 22 Oct (40 h local).
+#   Applied to theta (LargeScaleForcing.Subsidence, #248).
 # Other constants: f = 8.8983571e-5 s-1 (CLUBB; 2 Omega sin 37.6 deg); p_sfc = 972 hPa; q = 2.5 g/kg below 900 m (dry
 #   runs here: q is not carried, see the theory page).
 # Copied from source files, not digitised: digitisation uncertainty 0.
+# The case constants (U_g, V_g = 3, -9 m/s; f; z0m = 0.03 m, z0h = 0.003 m; p_sfc = 97200 Pa; t_start = 57600 s; the
+#   subsidence above) are the [forcing], [surface] and [initial] values of examples/sbl/configs/gabls2.toml (CFG-d,
+#   #359); this table holds the theta sounding (z in m, theta in K).
 table,a,b
 theta,0,288.0
 theta,200,286.0
@@ -38,13 +41,3 @@ theta,1000,292.0
 theta,2000,300.0
 theta,3500,310.0
 theta,4000,312.0
-constant,U_g,3.0
-constant,V_g,-9.0
-constant,f,8.8983571e-5
-constant,z0m,0.03
-constant,z0h,0.003
-constant,p_sfc,97200
-constant,t_start,57600
-constant,w_s,-0.005
-constant,z_s,1000
-constant,t_subsidence,144000

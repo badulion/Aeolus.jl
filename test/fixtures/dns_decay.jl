@@ -74,10 +74,90 @@ function velocity_derivative_skewness(sim)
 end
 
 """
-    dns_decay(; N = 48, seed = 1, t_end = 2.0, cfl = 0.5, ν = 0.018 (48/N)^{4/3},
-              past_peak = 0, t_max = 3t_end) -> NamedTuple
+    dns_start(; N = 48, seed = 1, ν = 0.018 (48/N)^{4/3}, spectrum = E(k) ∝ k⁴ e^{-2(k/1.5)²})
+        -> NamedTuple
 
-Run the decaying-turbulence DNS fixture (see the file header). Returns
+The initial state of the decaying-turbulence DNS (see the file header):
+the simulation `sim` on the triply periodic 2π box at `N`³ filled by
+`isotropic_random_field!` with `spectrum` from `Xoshiro(seed)` and scaled
+to u' = 1, and its history `hist = (t, K, ε, S, budget_err)` (one entry per
+step, the initial one included). Advance it with [`dns_step!`](@ref)
+while [`dns_running`](@ref); [`dns_summary`](@ref) is the result of
+[`dns_decay`](@ref). The `dns` run driver (examples/validation/dns_apriori_driver.jl,
+CFG-d #359) runs the same steps.
+"""
+function dns_start(; N::Integer = 48, seed::Integer = 1, ν::Real = DNS_NU48 * (48 / N)^(4 / 3),
+                   spectrum = _dns_spectrum)
+    L = 2π
+    mesh = RegularGrid(; size = (N, N, N), extent = (L, L, L), halo = (3, 3, 3))
+    sim = BoussinesqSimulation(mesh; ν = ν)
+    lap = (Field(FaceX(), mesh), Field(FaceY(), mesh), Field(FaceZ(), mesh))
+    isotropic_random_field!(sim, spectrum; rng = Random.Xoshiro(seed))
+    s = sqrt(1.5 / (kinetic_energy(sim) / L^3))           # K = 3/2: u' = 1
+    for f in (sim.u, sim.v, sim.w)
+        f.data .*= s
+        fill_halos!(f, sim.bcs)
+    end
+    t = [0.0]; K = [kinetic_energy(sim) / L^3]; ε = [_dns_epsilon(sim, lap)]
+    S = [velocity_derivative_skewness(sim)]
+    hist = (t = t, K = K, ε = ε, S = S, budget_err = Float64[])
+    return (; sim, mesh, ν = Float64(ν), lap, hist)
+end
+
+"""
+    dns_running(st; t_end = 2.0, past_peak = 0, t_max = 3t_end) -> Bool
+
+Whether the DNS state `st` ([`dns_start`](@ref)) has not reached `t_end`
+or, with `past_peak > 0`, is not yet `past_peak` past the maximum of ε
+(capped at `t_max`).
+"""
+function dns_running(st; t_end::Real = DNS_T_END, past_peak::Real = 0, t_max::Real = 3t_end)
+    sim = st.sim; t = st.hist.t; ε = st.hist.ε
+    return sim.t < t_end - 1e-12 ||
+           (past_peak > 0 && sim.t < min(t[argmax(ε)] + past_peak, t_max) - 1e-12)
+end
+
+"""
+    dns_step!(st; cfl = 0.5, t_end = 2.0, t_max = 3t_end) -> dt
+
+One projected SSP-RK3 step (`step_rk3!`, no SGS model) of the DNS state
+`st` at the advective step `cfl Δx/max|u|` (clipped to `t_end`, then to
+`t_max`), with the history entries of the new time.
+"""
+function dns_step!(st; cfl::Real = 0.5, t_end::Real = DNS_T_END, t_max::Real = 3t_end)
+    sim = st.sim; mesh = st.mesh; (; t, K, ε, S, budget_err) = st.hist
+    L = 2π
+    umax = maximum(f -> maximum(abs, interior_view(f)), (sim.u, sim.v, sim.w))
+    dt = min(cfl * mesh.dx / umax, (sim.t < t_end - 1e-12 ? t_end : t_max) - sim.t)
+    step_rk3!(sim, dt)
+    push!(t, sim.t); push!(K, kinetic_energy(sim) / L^3); push!(ε, _dns_epsilon(sim, st.lap))
+    push!(S, velocity_derivative_skewness(sim))
+    push!(budget_err, -(K[end] - K[end-1]) / dt / (0.5 * (ε[end] + ε[end-1])) - 1)
+    return dt
+end
+
+"""
+    dns_summary(st, wall) -> NamedTuple
+
+What [`dns_decay`](@ref) returns for the DNS state `st` (`wall` seconds).
+"""
+function dns_summary(st, wall)
+    (; sim, mesh, ν) = st; (; t, K, ε, S, budget_err) = st.hist
+    kmax = π / mesh.dx
+    η = (ν^3 ./ ε) .^ 0.25
+    u_rms = sqrt(2K[end] / 3)
+    λ = sqrt(15ν * u_rms^2 / ε[end])
+    return (; sim, mesh, ν, t, K, ε, S, budget_err, kmax_eta = minimum(kmax .* η),
+              kmax_eta_end = kmax * η[end], Re_λ = u_rms * λ / ν, u_rms, λ, η = η[end],
+              nsteps = length(t) - 1, wall)
+end
+
+"""
+    dns_decay(; N = 48, seed = 1, t_end = 2.0, cfl = 0.5, ν = 0.018 (48/N)^{4/3},
+              past_peak = 0, t_max = 3t_end, checkpoint = nothing) -> NamedTuple
+
+Run the decaying-turbulence DNS fixture (see the file header): [`dns_start`](@ref),
+then [`dns_step!`](@ref) while [`dns_running`](@ref). Returns
 the simulation `sim` at the final time, the history `t, K, ε, S` (one
 entry per RK3 step), `budget_err` (per step, dK/dt / (−ε̄) − 1 with ε̄ the
 mean of the start and end values), `kmax_eta` (its minimum over the
@@ -97,42 +177,17 @@ for bit (`wall` then counts this process only).
 function dns_decay(; N::Integer = 48, seed::Integer = 1, t_end::Real = DNS_T_END, cfl::Real = 0.5,
                    ν::Real = DNS_NU48 * (48 / N)^(4 / 3), past_peak::Real = 0, t_max::Real = 3t_end,
                    checkpoint = nothing)
-    L = 2π
-    mesh = RegularGrid(; size = (N, N, N), extent = (L, L, L), halo = (3, 3, 3))
-    sim = BoussinesqSimulation(mesh; ν = ν)
-    lap = (Field(FaceX(), mesh), Field(FaceY(), mesh), Field(FaceZ(), mesh))
+    st = nothing
     wall = @elapsed begin
-        isotropic_random_field!(sim, _dns_spectrum; rng = Random.Xoshiro(seed))
-        s = sqrt(1.5 / (kinetic_energy(sim) / L^3))           # K = 3/2: u' = 1
-        for f in (sim.u, sim.v, sim.w)
-            f.data .*= s
-            fill_halos!(f, sim.bcs)
-        end
-        t = [0.0]; K = [kinetic_energy(sim) / L^3]; ε = [_dns_epsilon(sim, lap)]
-        S = [velocity_derivative_skewness(sim)]
-        budget_err = Float64[]
-        hist = (t = t, K = K, ε = ε, S = S, budget_err = budget_err)
-        checkpoint === nothing || resume!(checkpoint, sim; components = hist)
-        running() = sim.t < t_end - 1e-12 ||
-                    (past_peak > 0 && sim.t < min(t[argmax(ε)] + past_peak, t_max) - 1e-12)
-        while running()
-            umax = maximum(f -> maximum(abs, interior_view(f)), (sim.u, sim.v, sim.w))
-            dt = min(cfl * mesh.dx / umax, (sim.t < t_end - 1e-12 ? t_end : t_max) - sim.t)
-            step_rk3!(sim, dt)
-            push!(t, sim.t); push!(K, kinetic_energy(sim) / L^3); push!(ε, _dns_epsilon(sim, lap))
-            push!(S, velocity_derivative_skewness(sim))
-            push!(budget_err, -(K[end] - K[end-1]) / dt / (0.5 * (ε[end] + ε[end-1])) - 1)
-            checkpoint === nothing || maybe_checkpoint!(checkpoint, sim; step = length(t) - 1,
-                                                        components = hist)
+        st = dns_start(; N, seed, ν)
+        checkpoint === nothing || resume!(checkpoint, st.sim; components = st.hist)
+        while dns_running(st; t_end, past_peak, t_max)
+            dns_step!(st; cfl, t_end, t_max)
+            checkpoint === nothing || maybe_checkpoint!(checkpoint, st.sim; step = length(st.hist.t) - 1,
+                                                        components = st.hist)
         end
     end
-    kmax = π / mesh.dx
-    η = (ν^3 ./ ε) .^ 0.25
-    u_rms = sqrt(2K[end] / 3)
-    λ = sqrt(15ν * u_rms^2 / ε[end])
-    return (; sim, mesh, ν, t, K, ε, S, budget_err, kmax_eta = minimum(kmax .* η),
-              kmax_eta_end = kmax * η[end], Re_λ = u_rms * λ / ν, u_rms, λ, η = η[end],
-              nsteps = length(t) - 1, wall)
+    return dns_summary(st, wall)
 end
 
 """

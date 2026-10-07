@@ -1,0 +1,70 @@
+# GABLS2 / CASES-99 — two diurnal cycles over Kansas (22-24 Oct 1999;
+# Svensson et al. 2011; Poulos et al. 2002). Provenance of every value:
+# the header of examples/sbl/data/gabls2_case.csv (CLUBB participant
+# set-up, checked against Holtslag et al. 2007).
+#
+# From 16 LT 22 October: U_g = (3, -9) m/s, f = 8.8983571e-5 s⁻¹
+# (2Ω sin 37.6°), z0m = 0.03 m, z0h = 0.003 m, the CLUBB θ sounding, the
+# prescribed surface temperature (sampled every minute; converted to θ with
+# p_s = 972 hPa), the log-linear surface functions with β = 5,
+# perturbations ±0.1 K and ±0.5 m/s in u, v below 200 m (spun up from rest
+# in the afternoon), the large-scale subsidence on θ from 40 h local time
+# (w_s = -0.005 z/1000 m/s below 1 km, -0.005 above; a 1 s linear ramp so
+# the step means integrate it exactly; #248). Dry.
+
+[run]
+driver = "sbl"
+name = "gabls2"
+seed = 1
+
+[case]
+kind = "homogeneous"
+data = "../data/gabls2_case.csv"
+
+[grid]
+size = [48, 48, 80]
+extent = [2400.0, 2400.0, 1600.0]
+
+[dynamics]
+theta0 = 288.0
+
+[forcing]
+u_g = 3.0
+v_g = -9.0
+f = 8.8983571e-5
+
+[forcing.subsidence]
+w = {kind = "table", z = [0.0, 1000.0], t = [144000.0, 144001.0], levels = [{values = [0.0, 0.0]}, {values = [0.0, -0.005]}]}
+fields = ["theta"]
+form = "mean_gradient"
+
+[surface]
+z0m = 0.03
+z0h = 0.003
+temperature = {kind = "gabls2", p_sfc = 97200.0, exponent = 0.286, sample_every = 60.0, until = 230400.0}
+stability = {family = "businger_dyer_log_linear", beta = 5.0}
+rho_cp = 1194.0703526801676    # 97200/(287.05 × 285) × 1005
+
+[initial]
+theta = {kind = "table", table = "theta", column = 2}
+perturbation = {kind = "uniform", amplitude = [0.5, 0.5, 0.1], depth = 200.0}
+t_start = 57600.0              # 16 LT 22 Oct (s after 00 LT)
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+stability = "brown94"
+
+[sponge]
+z = 1200.0                     # 0.75 Lz
+alpha = 0.01
+
+[stepper]
+end_time = 230400.0            # 64 h local: 00 LT 25 Oct
+
+[averaging]
+series_interval = 600.0
+
+[checkpoint]
+every_seconds = 1800.0         # an interrupted run resumes with --resume <run folder> (RESUME= for the scripts)
+keep = 2
