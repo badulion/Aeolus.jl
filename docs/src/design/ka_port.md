@@ -1051,6 +1051,12 @@ at one thread; speed-up = old 1 t / new N t; µs).
 | `step_urban_facets!` lagged, 564 facets | 9 586 | 9 854 | 1.03 | 3.67× | 4.21× | 4.66× |
 | `update_dynamic_roughness!`, 128×128 | 8 336 | 8 708 | 1.04 | 2.20× | 2.53× | 2.46× |
 
+Re-checked at one thread after merging KA-d (#299) and the CFG changes
+(single run each): every ratio is between 0.12 and 1.09. The largest are
+the lagged facet step (9 581 → 10 468 µs, 1.09; 1.03 above, so it is
+within run-to-run noise but close to the gate), the emissions (1.06) and
+the dynamic roughness (1.04).
+
 Reading the table:
 
 * **The 1-thread gate (≤ 1.10) holds for every kernel.** The `aq_chem`
