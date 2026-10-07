@@ -339,6 +339,14 @@ This config is, bit for bit, the simulation the script built before
     `[logging] diagnostics_cadence`), checkpoints on `[checkpoint]`, and
     the `[output] fields` every `[output] cadence` as
     `output/fields_<step>.nc`.
+  * `[initial] dynamic` names a dynamic driver: its profiles set the
+    initial u, v, θ (and qv), replacing the `[initial]` tables. Lateral
+    faces set to `"open"` (`boundaries.x`, `y`) take its boundary planes,
+    blended linearly in time (boussinesq core, uniform grid, z walls, no
+    sponge). `aeolus preprocess dynamic --from-era5 <files…> --config
+    <config.toml>` writes one from ERA5 with the site, levels and outputs
+    of `[preprocess.era5]` ([Input drivers](input_drivers.md), CFG-h
+    #363); `examples/configs/lindenberg_era5.toml` is the example.
 
 The options:
 

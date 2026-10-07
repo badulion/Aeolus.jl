@@ -666,6 +666,7 @@ using Aeolus.Fields: set!, interior_view
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
     include("ka_halos.jl")   # KA-f (#297): halo fills / nesting transfer operators on launch!
     include("ka_fv.jl")      # KA-d (#299): finite-volume kernels + grid metrics on launch!
+    include("ka_sgs.jl")     # KA-l (#304): SGS closures on launch! (dynamic, Lagrangian, AMD/Vreman/σ, TKE, RSM)
     include("ka_hooks.jl")   # KA-k (#307): Berlin dynamics hooks + WallModels on launch!
     include("ka_advection.jl")  # KA-e (#302): scalar transport / limiter / momentum advection on launch!
     include("ka_pcg.jl")     # KA-g (#300): the one pcg! driver of the four CG solvers
@@ -862,6 +863,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_berlin.jl")       # CFG-c (#358): berlin driver, scenarios from TOML, bitwise vs Julia-built, round trip
     include("input_static.jl")        # CFG-f (#361): static driver, OSM/GeoJSON preprocessors, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table and parent preprocessors, offline nest
+    include("preprocess_era5.jl")     # CFG-h (#363): ERA5 preprocessor (GRIB2/NetCDF) of the dynamic driver, open simulation box
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

@@ -256,8 +256,14 @@ end
 # ℓ = 1 every product is exact, so the neutral case is the base bit for bit.
 function _stability_correct!(νh, νv, κh, κv, av, Ri, scheme, ℓh, ℓv, Pr, dynamic::Bool,
                              g::RegularGrid)
-    ii, jj, kk = interior(g)
-    @inbounds for k in kk, j in jj, i in ii
+    launch!(Backends.backend(νh), _stability_correct_body!, interior(g), νh, νv, κh, κv, av, Ri,
+            scheme, ℓh, ℓv, Pr, dynamic)
+    return nothing
+end
+
+# KA-l (#304): pointwise; the loop's expressions, bit for bit.
+@inline function _stability_correct_body!(i, j, k, νh, νv, κh, κv, av, Ri, scheme, ℓh, ℓv, Pr, dynamic)
+    @inbounds begin
         nb = νh[i, j, k]
         r  = Ri[i, j, k]
         fm = stability_factor_m(scheme, r)
@@ -281,8 +287,8 @@ function _fill_sgs_halos!(f::SGSFields, c::StabilityCorrected, sim)
     bcs = sim.bcs
     fill_halos!(f.νh, bcs); fill_halos!(f.νv, bcs); fill_halos!(c.av, bcs)
     Pr = turbulent_prandtl(c.base, sim)
-    f.κh.data .= f.νh.data ./ Pr
-    f.κv.data .= c.av.data ./ Pr
+    _divide_storage!(f.κh.data, f.νh.data, Pr)
+    _divide_storage!(f.κv.data, c.av.data, Pr)
     return f
 end
 

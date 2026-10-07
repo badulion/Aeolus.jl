@@ -102,7 +102,10 @@ exactly, for any ``ν_t``. In the interior each flux contributes
 ``(δu/Δ)^2``, so ``D ≥ 0`` (for ``u = Sz``, ``D = S^2``); the shares of
 halo cells are folded onto the interior cells they copy (periodic image,
 or mirror at a wall), which is exact because a halo ``ν_t`` equals its
-image. ``D`` is built from the face and edge differences of the
+image. Each cell computes its own ``D`` (KA-l, #304): it gathers the
+shares destined for it, and those of the halo cells it is the image of,
+from the velocity points around it, so the kernel runs on any number of
+threads with the same bits. ``D`` is built from the face and edge differences of the
 momentum kernels, not from `Operators._velocity_gradient_at`: that
 tensor's off-diagonal entries are centred over two cells, and their
 square is not the dual of the edge-flux operator.

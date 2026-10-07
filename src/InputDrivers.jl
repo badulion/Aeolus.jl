@@ -34,7 +34,10 @@ one file instead of re-parsing OpenStreetMap at every start.
   The sounding and case-table preprocessor of the dynamic driver
   ([`sounding_dynamic_inputs`](@ref), [`forcing_dynamic_inputs`](@ref))
   and the Aeolus-parent one, an in-run writer
-  ([`NestBoundaryRecorder`](@ref)).
+  ([`NestBoundaryRecorder`](@ref)). The ERA5 preprocessor (CFG-h, #363):
+  ERA5 on pressure or model levels, GRIB2 or NetCDF ([`read_era5`](@ref)),
+  as initial profiles, boundary planes and large-scale and surface forcing
+  ([`era5_dynamic_inputs`](@ref), [`write_era5_driver`](@ref)).
 
 A file whose grid differs from the run's is an error naming both grids:
 there is no resampling inside the model; the preprocessor is re-run for
@@ -46,18 +49,21 @@ Aeolus's own, short `snake_case` with CF attributes.
 module InputDrivers
 
 using Dates: Dates, now, UTC
+using Printf: @sprintf
 using ..Grids: xnodes, ynodes, znodes, CellCenter
 using ..IBM: SolidMask
 using ..BoundaryConditions: FieldBoundaryConditions, neighbor_index, WindowedBoundaryData
 import ..BoundaryConditions: snapshot_values
 import NCDatasets
+import GRIBDatasets
 using ..NCIO: NCDataset, nc_create, nc_defvar!, nc_append_record!
-using ..MoistThermodynamics: DEFAULT_CONSTANTS, exner_function, virtual_temperature, PhasePartition
+using ..MoistThermodynamics: DEFAULT_CONSTANTS, exner_function, virtual_temperature, PhasePartition,
+                             potential_temperature, air_density
 using ..LargeScaleForcing: ForcingTable, forcing_value, Sounding, sounding_profiles, AdvectiveTendencies,
                            Subsidence, ProfileNudging
 using ..IO: fnv1a64, git_state
 
-export latlon_to_meters, DriverVariable, DriverSchema, check_driver, schema_markdown,
+export latlon_to_meters, meters_to_latlon, DriverVariable, DriverSchema, check_driver, schema_markdown,
        DRIVER_ATTRIBUTES, DRIVER_SCHEMA_VERSION, file_fnv1a64,
        SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE_WATER, SURFACE_WALL, SURFACE_CLASSES,
        Building, UrbanCity, polygon_bbox, point_in_polygon, load_city_osm, osm_class,
@@ -69,7 +75,9 @@ export latlon_to_meters, DriverVariable, DriverSchema, check_driver, schema_mark
        FileSnapshot, SlabArray, FileBoundaryData, FileBoundaryFeed, feed_window!, feed_steady!,
        advance_feed!, feed_coverage, check_coverage, check_planes, shift_table,
        dynamic_forcing, init_time_string, init_day_seconds, surface_pressure_at,
-       sounding_dynamic_inputs, forcing_dynamic_inputs, NestBoundaryRecorder, record_boundary!, plane_snapshot
+       sounding_dynamic_inputs, forcing_dynamic_inputs, NestBoundaryRecorder, record_boundary!, plane_snapshot,
+       ERA5Data, ERA5_OUTPUTS, read_era5, era5_model_level_heights, era5_vertical, era5_subsidence,
+       coriolis_parameter, era5_columns, era5_times, era5_dynamic_inputs, era5_planes!, write_era5_driver
 
 include("input_drivers/conventions.jl")
 include("preprocess/city.jl")
@@ -79,5 +87,6 @@ include("input_drivers/static.jl")
 include("input_drivers/dynamic.jl")
 include("preprocess/sounding.jl")
 include("preprocess/parent.jl")
+include("preprocess/era5.jl")
 
 end # module

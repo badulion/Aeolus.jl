@@ -274,12 +274,19 @@ end
 
 sgs_fields(c::IsentropicDiffusion, sim) = sgs_fields(c.inner, sim)
 laminar_consistent(c::IsentropicDiffusion) = laminar_consistent(c.inner)
+# out = d * a per point (the bits of the broadcast `d .* a`)
+@inline function _mul_storage_body!(i, j, k, out, a, d)
+    @inbounds out[i, j, k] = d * a[i, j, k]
+    return nothing
+end
+
 function sgs_coefficients!(f::SGSFields, c::IsentropicDiffusion, sim)
     sgs_coefficients!(f, c.inner, sim)
     κv = if c.diapycnal === nothing
         f.κv
     else
-        c.κv.data .= c.diapycnal .* f.κh.data
+        launch!(Backends.backend(c.κv.data), _mul_storage_body!, _storage_ranges(c.κv.data),
+                c.κv.data, f.κh.data, c.diapycnal)
         c.κv
     end
     isentropic_tensor!(c.K, sim.θ, f.κh, κv; slope_max = c.slope_max, grad_min = c.grad_min)
