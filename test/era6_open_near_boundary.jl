@@ -36,6 +36,7 @@ using Aeolus.Anelastic: AnelasticSimulation, max_anelastic_divergence
 using Aeolus.IBM: SolidMask, implicit_ibm_correction!, wall_distance
 using Aeolus.WallModels: immersed_walls, RoughLogLaw
 using Aeolus.LargeScaleForcing: GeostrophicPressureGradient, apply_forcing!
+using Aeolus.InputDrivers: tag_building_adjacent!, SURFACE_STREET, SURFACE_WALL
 using Printf, Random
 
 # ---------------------------------------------------------------------------
@@ -202,6 +203,17 @@ end
     @test d_per[1, 6, 2] ≈ m.dx / 2                           # the cube across the seam
     @test d_open[1, 6, 2] ≈ (Nx - 3) * m.dx - m.dx / 2        # the cube on the far side
     @test d_open[Nx-3, 6, 2] == d_per[Nx-3, 6, 2]             # unchanged near the cube
+    # … and the surface wall tagging (InputDrivers.tag_building_adjacent!,
+    # through neighbor_index; moved from test/berlin_open_boundaries.jl,
+    # #320): across the periodic seam the street column at the west edge
+    # next to the cube becomes a wall, across the open west face it stays
+    # street; the cube's inner side is a wall in both
+    per = fill(SURFACE_STREET, Nx, Ny); opn = copy(per)
+    tag_building_adjacent!(per, sm, m)
+    tag_building_adjacent!(opn, sm, m; bcs = bcs)
+    @test all(per[1, j] == SURFACE_WALL for j in 4:8)
+    @test all(opn[1, j] == SURFACE_STREET for j in 4:8)
+    @test per[Nx-3, 4:8] == opn[Nx-3, 4:8] == fill(SURFACE_WALL, 5)
 end
 
 # ---------------------------------------------------------------------------
