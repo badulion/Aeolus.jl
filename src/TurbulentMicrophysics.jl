@@ -97,6 +97,7 @@ using ..Superdroplet: SuperdropletSet, nsuperdroplets, condensation_growth!,
 import ..Superdroplet: mean_radius, relative_dispersion
 import ..MoistThermodynamics: effective_radius
 using Random: AbstractRNG, MersenneTwister, randn
+using ..Backends: AbstractBackend, default_backend, launch!, counter_rng
 
 include("turbulent_microphysics/sgs_supersaturation.jl")
 include("turbulent_microphysics/sgs_activation.jl")

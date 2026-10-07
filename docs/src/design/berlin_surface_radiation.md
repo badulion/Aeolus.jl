@@ -456,6 +456,18 @@ interreflections of the shaded beam and the buildings' window sun (read
 from the radiosity solution) are not attenuated, and the light the cloud
 scatters sideways is not added to the diffuse.
 
+**Cost of the radiosity call (KA-n, #305).** `radiosity_sun` keeps the
+LU factorisations of its two radiosity operators between calls
+(`Radiosity.RadiosityFactorCache`, one per band). The longwave
+reflectance ``1 - \varepsilon`` never changes, so the longwave LU is
+computed once per run. The shortwave albedos follow μ₀, so the shortwave
+operator is refactorised on every daytime call. Measured on the flagship
+scene (5639 facets, BLAS on one thread), one `:radiation` stage takes
+1.80 s by day (3.78 s before) and 17 ms at night (1.89 s before).
+`view_factors` at build time takes 0.83 s on one thread and 0.19 s on 12.
+The results are bit-identical to refactorising on every call. See
+[the kernel port](ka_port.md), section KA-n.
+
 Remeasured on master (`915bd49`: the reference-state surface pressure
 of 101.325 kPa, the MOST / soil surfaces of #129, the adaptive step of
 #166). 1 h runs of the flagship, 64 × 64 × 32, each run to 3600 s of
