@@ -914,11 +914,13 @@ _storage(a::AbstractArray{T,3}) where {T} = map(r -> UnitRange{Int}(r), axes(a))
     copy_storage!(dst, src) -> dst
 
 `dst .= src` over the whole storage (halos included), as a pointwise
-kernel ([`Backends.copy_array!`](@ref Aeolus.Backends.copy_array!)); `dst`
-and `src` must have the same size.
+kernel; `dst` and `src` must have the same size.
 """
-copy_storage!(dst::AbstractArray{T,3}, src::AbstractArray{T,3}) where {T} =
-    Backends.copy_array!(Backends.backend(dst), dst, src)
+function copy_storage!(dst::AbstractArray{T,3}, src::AbstractArray{T,3}) where {T}
+    size(dst) == size(src) || throw(DimensionMismatch("copy_storage!: $(size(dst)) ≠ $(size(src))"))
+    range_map!(Backends.backend(dst), identity, dst, _storage(dst), src)
+    return dst
+end
 
 # `out = a·snap + b·out` over the whole storage (the RK3 stage combinations)
 function combine_storage!(f::_Lin2r, out::AbstractArray{T,3}, snap::AbstractArray{T,3}) where {T}
@@ -930,11 +932,15 @@ end
 """
     zero_storage!(f::Field) -> f
 
-Zero every value of `f`, halos included (a pointwise kernel,
-[`Backends.fill_array!`](@ref Aeolus.Backends.fill_array!)): the reset of
+Zero every value of `f`, halos included (a pointwise kernel): the reset of
 the tendencies at the start of a step.
 """
-zero_storage!(f::Field) = (Backends.fill_array!(Backends.backend(f.data), f.data, 0); f)
+function zero_storage!(f::Field)
+    range_map!(Backends.backend(f.data), _Zero{eltype(f.data)}(), f.data, _storage(f.data))
+    return f
+end
+struct _Zero{T} end
+@inline (::_Zero{T})() where {T} = zero(T)
 
 # A zero-filled array shaped like `a`, on its backend.
 storage_like(a::AbstractArray{T}) where {T} = Backends.allocate(Backends.backend(a), T, size(a))

@@ -101,9 +101,7 @@ end
             @test p.data == p0.data
             z = mk(); SIM.zero_storage!(z); @test all(iszero, z.data)
             d = similar(A.data); SIM.copy_storage!(d, A.data); @test d == A.data
-            Aeolus.Backends.fill_array!(b, d, 2.5); @test all(==(2.5), d)
-            Aeolus.Backends.copy_array!(b, d, B.data); @test d == B.data
-            @test_throws DimensionMismatch Aeolus.Backends.copy_array!(b, d, zeros(3, 3, 3))
+            @test_throws DimensionMismatch SIM.copy_storage!(d, zeros(3, 3, 3))
         end
     end
 end
