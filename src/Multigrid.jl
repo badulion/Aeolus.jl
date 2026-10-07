@@ -42,7 +42,8 @@ using ..PressureSolvers: AbstractPressureSolver, solve!
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 import ..PressureSolvers: solve!, poisson_axis_bcs
 using ..StretchedGrids: StretchedGrid, cell_thickness, center_spacing
-using ..BoundaryConditions: _halo_periodic!, _halo_mirror!   # the halo kernels (KA-f, #297)
+using ..Backends: pcg!, PCGWorkspace   # the one CG driver (KA-g, #300)
+using ..PressureSolvers: fill_unit_halo!
 
 export MultigridPoissonSolver, MGPreconditionedCG,
        mg_vcycle!, mg_solve!, mg_residual_norm,
@@ -72,13 +73,8 @@ boundary conditions. `φ` has size `(nx+2, ny+2, nz+2)`; the interior is
 `BoundaryConditions` (KA-f, #297; one source with `fill_halos!`):
 `:periodic` wraps, `:neumann` mirrors, x then y then z.
 """
-function _fill_halo!(φ::Array{T,3}, bcx::Symbol, bcy::Symbol, bcz::Symbol) where {T}
-    for (ax, bc) in ((1, bcx), (2, bcy), (3, bcz))
-        n = size(φ, ax) - 2
-        bc === :periodic ? _halo_periodic!(φ, ax, 1, n) : _halo_mirror!(φ, ax, 1, n)
-    end
-    return φ
-end
+_fill_halo!(φ::Array{T,3}, bcx::Symbol, bcy::Symbol, bcz::Symbol) where {T} =
+    fill_unit_halo!(φ, bcx, bcy, bcz)   # one source with the CG solvers' halo (KA-g, #300)
 
 "True when the operator is singular, i.e. the constants are in its null space."
 _is_singular(bcx, bcy, bcz) =
@@ -712,13 +708,9 @@ mutable struct MGPreconditionedCG{T} <: AbstractPressureSolver
     tol::T
     maxit::Int
     # CG work arrays, interior-sized
-    r::Array{T,3}
-    z::Array{T,3}
-    pdir::Array{T,3}
-    Ap::Array{T,3}
     x::Array{T,3}
-    b::Array{T,3}                 # the (scaled, zero-mean) source
-    w::Array{T,3}                 # scratch of the dot products
+    b::Array{T,3}                 # the (scaled) source
+    ws::PCGWorkspace{T,Array{T,3}}   # r, z, p, Ap and the reduction partials
     last_iters::Base.RefValue{Int}
     last_residual::Base.RefValue{T}
 end
@@ -730,10 +722,8 @@ function MGPreconditionedCG(mesh::RegularGrid{T};
                             mg_cycles::Int = 1, kwargs...) where {T}
     mg = MultigridPoissonSolver(mesh; tol = 0.0, maxcycles = mg_cycles,
                                 kwargs...)
-    nx, ny, nz = mesh.Nx, mesh.Ny, mesh.Nz
-    z3() = zeros(T, nx, ny, nz)
-    return MGPreconditionedCG{T}(mg, T(tol), maxit,
-                                 z3(), z3(), z3(), z3(), z3(), z3(), z3(),
+    x = zeros(T, mesh.Nx, mesh.Ny, mesh.Nz)
+    return MGPreconditionedCG{T}(mg, T(tol), maxit, x, zero(x), PCGWorkspace(x),
                                  Ref(0), Ref(zero(T)))
 end
 
@@ -778,63 +768,38 @@ function _mg_precond!(z::Array{T,3}, r::Array{T,3},
     return z
 end
 
-# a·b as `sum(a .* b)` — the same pairwise sum, bit for bit — with the
-# product in the scratch `w` instead of a fresh array (#295)
-_dot!(w::Array{T,3}, a::Array{T,3}, b::Array{T,3}) where {T} = sum(w .= a .* b)
-
-function _project_mean_flat!(a::Array{T,3}) where {T}
-    a .-= sum(a) / length(a)
-    return a
+# The operator and the preconditioner as the functions `pcg!` calls.
+struct _FineOp{T}
+    s::MultigridPoissonSolver{T}
 end
+(A::_FineOp)(Ap, p) = _apply_fine!(Ap, p, A.s)
+struct _VCyclePC{T}
+    s::MultigridPoissonSolver{T}
+end
+(M::_VCyclePC)(z, r) = _mg_precond!(z, r, M.s)
 
+"""
+    solve!(p, source, solver::MGPreconditionedCG)
+
+CG preconditioned by `mg_cycles` V-cycles, through the one CG driver
+[`Aeolus.Backends.pcg!`](@ref) (KA-g, #300): canonical reductions, so a
+solve and its iteration count are identical at every thread count. For a
+singular operator (periodic / Neumann on every axis) the mean is removed
+from the source, from every preconditioned residual and from the
+solution. A breakdown (`p·Ap ≤ eps·|r·z|`) stops the iteration silently,
+as before.
+"""
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::MGPreconditionedCG{T}) where {T}
     s  = solver.mg
     b  = copyto!(solver.b, interior_view(source))
     _scale_rhs!(b, s.rhs_scale)
-    s.singular && _project_mean_flat!(b)
-    bn = sqrt(sum(abs2, b))
-    if bn == 0
-        interior_view(p) .= 0
-        solver.last_iters[] = 0
-        solver.last_residual[] = zero(T)
-        return p
-    end
-
-    x, r, z, pd, Ap = solver.x, solver.r, solver.z, solver.pdir, solver.Ap
-    fill!(x, zero(T))
-    r .= b
-    _mg_precond!(z, r, s)
-    s.singular && _project_mean_flat!(z)
-    pd .= z
-    rz_old = _dot!(solver.w, r, z)
-    iters = 0
-    rel = one(T)
-
-    for it in 1:solver.maxit
-        _apply_fine!(Ap, pd, s)
-        pAp = _dot!(solver.w, pd, Ap)
-        # breakdown test relative to r·z (pAp ~ r·z in magnitude), so the
-        # iteration is invariant to the scale of the right-hand side
-        abs(pAp) <= eps(T) * abs(rz_old) && break
-        α = rz_old / pAp
-        @. x = x + α * pd
-        @. r = r - α * Ap
-        rel = sqrt(sum(abs2, r)) / bn
-        iters = it
-        rel < solver.tol && break
-        _mg_precond!(z, r, s)
-        s.singular && _project_mean_flat!(z)
-        rz_new = _dot!(solver.w, r, z)
-        β = rz_new / rz_old
-        @. pd = z + β * pd
-        rz_old = rz_new
-    end
-
-    s.singular && _project_mean_flat!(x)
-    interior_view(p) .= x
-    solver.last_iters[] = iters
-    solver.last_residual[] = rel
+    st = pcg!(_FineOp(s), _VCyclePC(s), solver.x, b, solver.ws;
+              tol = solver.tol, maxit = solver.maxit, project_mean = s.singular,
+              definite = :negative)
+    interior_view(p) .= solver.x
+    solver.last_iters[] = st.iterations
+    solver.last_residual[] = st.status === :zero_rhs ? zero(T) : st.residual / st.bnorm
     return p
 end
 

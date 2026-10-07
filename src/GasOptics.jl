@@ -32,6 +32,7 @@ using ..RadiationCore: SpectralGrid, OpticalProperties, AtmosphericColumn,
                        band_limits, band_of_gpoint, planck_band,
                        shortwave_bands, longwave_bands
 import ..RadiationCore: compute_optics!
+using ..Backends: AbstractBackend, default_backend, launch_weighted!
 
 export MalkmusParams, malkmus_transmission, malkmus_log_transmission,
        malkmus_params,
@@ -466,25 +467,39 @@ optical-depth and scattering-weighted combination rule so a later
 function rayleigh_optics!(optics::OpticalProperties{T}, spec::SpectralGrid{T},
                           col::AtmosphericColumn{T}) where {T}
     spec.kind === :shortwave || return optics
-    nz = length(col.p_lay)
-    for b in 1:nbands(spec)
-        λ = _band_wavelength(spec, b)
-        for g in gpoint_range(spec, b)
-            @inbounds for k in 1:nz
-                dp = abs(col.p_lev[k] - col.p_lev[k + 1])
-                τr = T(rayleigh_optical_depth(λ, dp))
-                τ0 = optics.τ[k, g]; ω0 = optics.ssa[k, g]; g0 = optics.g[k, g]
-                τn = τ0 + τr
-                s0 = τ0 * ω0                       # existing scattering
-                sn = s0 + τr                       # Rayleigh is conservative
-                optics.τ[k, g]   = τn
-                optics.ssa[k, g] = τn > 0 ? sn / τn : zero(T)
-                optics.g[k, g]   = sn > 0 ? (s0 * g0) / sn : zero(T)
-            end
-        end
+    τ3, ω3, g3 = _as_columns(optics)
+    for k in 1:length(col.p_lay)
+        _rayleigh_layer!(τ3, ω3, g3, k, 1, spec, col)
     end
     return optics
 end
+
+# Rayleigh scattering added to layer k of column c (every g-point).
+function _rayleigh_layer!(τ3::AbstractArray{T,3}, ω3, g3, k, c, spec, col) where {T}
+    dp = abs(col.p_lev[k] - col.p_lev[k + 1])
+    for b in 1:nbands(spec)
+        λ = _band_wavelength(spec, b)
+        τr = T(rayleigh_optical_depth(λ, dp))
+        @inbounds for g in gpoint_range(spec, b)
+            τ0 = τ3[k, g, c]; ω0 = ω3[k, g, c]; g0 = g3[k, g, c]
+            τn = τ0 + τr
+            s0 = τ0 * ω0                       # existing scattering
+            sn = s0 + τr                       # Rayleigh is conservative
+            τ3[k, g, c] = τn
+            ω3[k, g, c] = τn > 0 ? sn / τn : zero(T)
+            g3[k, g, c] = sn > 0 ? (s0 * g0) / sn : zero(T)
+        end
+    end
+    return nothing
+end
+
+# The optics arrays as (layer, g-point, column): a single column's
+# (nlay, ngpt) arrays are reshaped (no copy) to (nlay, ngpt, 1), so the
+# single- and the multi-column paths run the same code.
+_as_columns(o::OpticalProperties{T,2}) where {T} =
+    (reshape(o.τ, size(o.τ)..., 1), reshape(o.ssa, size(o.ssa)..., 1),
+     reshape(o.g, size(o.g)..., 1))
+_as_columns(o::OpticalProperties{T,3}) where {T} = (o.τ, o.ssa, o.g)
 
 # =========================================================================
 # Gas optics object
@@ -650,53 +665,106 @@ function _continuum_tau(spec, band::Int, kind::Symbol, u_h2o::Real,
 end
 
 """
-    compute_optics!(optics, go::CorrelatedKGasOptics, col)
+    compute_optics!(optics, go::CorrelatedKGasOptics, col; backend = default_backend())
 
 Fill `optics.τ` for every layer and g-point. Each gas contributes its
 correlated-k absorption coefficient times its absorber amount; the
 contributions add because optical depths are additive. The water-vapour
 continuum and (in the shortwave) Rayleigh scattering are added when
 enabled.
+
+The layers are the work items of one
+[`launch_weighted!`](@ref Aeolus.Backends.launch_weighted!) on `backend`
+(KA-n, #305): a layer's g-points are filled by one item, in the order of the
+serial loops, so the optics are bit-identical at every thread count and to
+the serial code before the port. The k-distribution reordering (a bisection
+per layer, gas and g-point) is what a radiation call spends its time on: 33 ms
+of the Berlin child's 37 ms call on one thread.
 """
-function compute_optics!(optics::OpticalProperties{T},
+function compute_optics!(optics::OpticalProperties{T,2},
                          go::CorrelatedKGasOptics{T},
-                         col::AtmosphericColumn{T}) where {T}
-    spec = go.spec
+                         col::AtmosphericColumn{T};
+                         backend::AbstractBackend = default_backend()) where {T}
     nz = length(col.p_lay)
     size(optics.τ, 1) == nz ||
         error("compute_optics!: optics has $(size(optics.τ,1)) layers, column has $nz")
-    fill!(optics.τ, 0); fill!(optics.ssa, 0); fill!(optics.g, 0)
+    return _gas_optics!(optics, go, (col,), backend)
+end
 
+"""
+    compute_optics!(optics, go::CorrelatedKGasOptics, cols::AbstractVector{<:AtmosphericColumn};
+                    backend = default_backend())
+
+Multi-column form (KA-n, #305): `optics` has the shape `(nlay, ngpt, ncol)`
+(`τ[k, g, c]`, from `allocate_optics(T, (nlay,), spec)` per column or
+`OpticalProperties` of 3-D arrays) and column `c` is `cols[c]`. Every
+`(layer, column)` is one work item of a
+[`launch_weighted!`](@ref Aeolus.Backends.launch_weighted!) on `backend`,
+so the optics are identical at every thread count, and column `c` gets
+exactly the bits of the single-column `compute_optics!` on `cols[c]`.
+"""
+function compute_optics!(optics::OpticalProperties{T,3},
+                         go::CorrelatedKGasOptics{T},
+                         cols::AbstractVector{<:AtmosphericColumn{T}};
+                         backend::AbstractBackend = default_backend()) where {T}
+    nlay, _, ncol = size(optics.τ)
+    ncol == length(cols) ||
+        error("compute_optics!: optics has $ncol columns, got $(length(cols)) columns")
+    all(c -> length(c.p_lay) == nlay, cols) ||
+        error("compute_optics!: every column must have the $nlay layers of the optics")
+    return _gas_optics!(optics, go, cols, backend)
+end
+
+# One work item per (layer, column) fills that layer's τ for every g-point:
+# per band, the gases in order, then the continuum, then (shortwave)
+# Rayleigh — per element the additions of the serial loops before KA-n.
+# The weight counts the g-point × gas evaluations of a layer, each a
+# bisection of about 45 steps (`kdist_from_band_model`).
+function _gas_optics!(optics::OpticalProperties{T}, go::CorrelatedKGasOptics{T}, cols,
+                      backend) where {T}
+    fill!(optics.τ, 0); fill!(optics.ssa, 0); fill!(optics.g, 0)
+    τ3, ω3, g3 = _as_columns(optics)
+    nlay, _, ncol = size(τ3)
+    weight = ngpoints(go.spec) * length(go.gases) * 45
+    # (column, layer) ranges: a work item is one layer (all its columns), so
+    # a single column still spreads its layers over the threads
+    launch_weighted!(backend, weight, _gas_optics_layer!, (1:ncol, 1:nlay),
+                     τ3, ω3, g3, go, cols)
+    return optics
+end
+
+function _gas_optics_layer!(c, k, τ3::AbstractArray{T,3}, ω3, g3, go, cols) where {T}
+    spec = go.spec
+    col = cols[c]
+    p = col.p_lay[k]; Tk = col.T_lay[k]
     for b in 1:nbands(spec)
         gr = gpoint_range(spec, b)
         ngb = length(gr)
-        for k in 1:nz
-            p = col.p_lay[k]; Tk = col.T_lay[k]
-            for gas in go.gases
-                mp = malkmus_params(spec.kind, gas, b)
-                mp.k <= 0 && continue
-                u = column_absorber_amount(col, gas, k)
-                u <= 0 && continue
-                kg, _ = kdist_from_band_model(mp, ngb; pressure = p,
-                                              temperature = Tk)
-                @inbounds for (i, g) in enumerate(gr)
-                    optics.τ[k, g] += T(kg[i] * u)
-                end
+        for gas in go.gases
+            mp = malkmus_params(spec.kind, gas, b)
+            mp.k <= 0 && continue
+            u = column_absorber_amount(col, gas, k)
+            u <= 0 && continue
+            kg, _ = kdist_from_band_model(mp, ngb; pressure = p,
+                                          temperature = Tk)
+            @inbounds for (i, g) in enumerate(gr)
+                τ3[k, g, c] += T(kg[i] * u)
             end
-            if go.include_continuum
-                u_h2o = column_absorber_amount(col, :h2o, k)
-                vh = haskey(col.vmr, :h2o) ? col.vmr[:h2o][k] : 0.0
-                τc = _continuum_tau(spec, b, spec.kind, u_h2o, p, Tk, vh)
-                if τc > 0
-                    @inbounds for g in gr
-                        optics.τ[k, g] += T(τc)
-                    end
+        end
+        if go.include_continuum
+            u_h2o = column_absorber_amount(col, :h2o, k)
+            vh = haskey(col.vmr, :h2o) ? col.vmr[:h2o][k] : 0.0
+            τc = _continuum_tau(spec, b, spec.kind, u_h2o, p, Tk, vh)
+            if τc > 0
+                @inbounds for g in gr
+                    τ3[k, g, c] += T(τc)
                 end
             end
         end
     end
-    go.include_rayleigh && rayleigh_optics!(optics, spec, col)
-    return optics
+    go.include_rayleigh && spec.kind === :shortwave &&
+        _rayleigh_layer!(τ3, ω3, g3, k, c, spec, col)
+    return nothing
 end
 
 # =========================================================================

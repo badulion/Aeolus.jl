@@ -38,13 +38,14 @@ using ..RadiationCore: SpectralGrid, OpticalProperties, RadiativeFluxes,
                        heating_rate!, STEFAN_BOLTZMANN,
                        liquid_mass_extinction, ice_mass_extinction
 import ..RadiationCore: compute_optics!, solve_rt!
+using ..Backends: AbstractBackend, default_backend, launch_weighted!
 
 export TwoStreamSolver, two_stream_solver,
        DeltaEddington, PIFM, Quadrature,
        delta_scale, two_stream_coefficients,
        layer_reflectance_transmittance_sw,
        layer_reflectance_transmittance_lw,
-       adding_solver!, solve_sw!, solve_lw!,
+       adding_solver!, solve_sw!, solve_lw!, TwoStreamWorkspace,
        MieCloudOptics, mie_cloud_optics,
        liquid_water_path, ice_water_path, cloud_optical_depth,
        maximum_random_overlap, radiative_heating!
@@ -304,22 +305,37 @@ function adding_solver!(flux_up::AbstractVector{T}, flux_dn::AbstractVector{T},
                         T_beam::AbstractVector{T},
                         sfc_alb_dif::T, sfc_alb_dir::T,
                         F_top::T, μ₀::T; F_dif_top::Real = zero(T)) where {T}
+    nlev = length(R_dif) + 1
+    A = Vector{T}(undef, nlev)
+    S = Vector{T}(undef, nlev)
+    return _adding!(flux_up, flux_dn, flux_dir, R_dif, T_dif, R_dir, T_dir, T_beam,
+                    sfc_alb_dif, sfc_alb_dir, F_top, μ₀, T(F_dif_top), A, S)
+end
+
+# The adding equations with caller-provided scratch `A`, `S` (length nlev):
+# the multi-column solve runs one per (g-point, column) without allocating.
+function _adding!(flux_up::AbstractVector{T}, flux_dn::AbstractVector{T},
+                  flux_dir::AbstractVector{T},
+                  R_dif::AbstractVector{T}, T_dif::AbstractVector{T},
+                  R_dir::AbstractVector{T}, T_dir::AbstractVector{T},
+                  T_beam::AbstractVector{T},
+                  sfc_alb_dif::T, sfc_alb_dir::T,
+                  F_top::T, μ₀::T, F_dif_top::T,
+                  A::AbstractVector{T}, S::AbstractVector{T}) where {T}
     nlay = length(R_dif)
     nlev = nlay + 1
 
     # --- direct beam straight down from the top
-    flux_dir[nlev] = F_top * μ₀
-    for i in nlay:-1:1
+    @inbounds flux_dir[nlev] = F_top * μ₀
+    @inbounds for i in nlay:-1:1
         flux_dir[i] = flux_dir[i + 1] * T_beam[i]
     end
 
     # --- upward sweep: albedo A[i] of everything at and below level i,
     # plus the source S[i] emerging upward from it
-    A = Vector{T}(undef, nlev)
-    S = Vector{T}(undef, nlev)
-    A[1] = sfc_alb_dif
-    S[1] = sfc_alb_dir * flux_dir[1]
-    for i in 1:nlay
+    @inbounds A[1] = sfc_alb_dif
+    @inbounds S[1] = sfc_alb_dir * flux_dir[1]
+    @inbounds for i in 1:nlay
         d = 1 / (1 - R_dif[i] * A[i])
         A[i + 1] = R_dif[i] + T_dif[i] * T_dif[i] * A[i] * d
         S[i + 1] = R_dir[i] * flux_dir[i + 1] +
@@ -327,9 +343,9 @@ function adding_solver!(flux_up::AbstractVector{T}, flux_dn::AbstractVector{T},
     end
 
     # --- downward sweep
-    flux_dn[nlev] = T(F_dif_top)                # diffuse entering from above
-    flux_up[nlev] = A[nlev] * flux_dn[nlev] + S[nlev]
-    for i in nlay:-1:1
+    @inbounds flux_dn[nlev] = F_dif_top                # diffuse entering from above
+    @inbounds flux_up[nlev] = A[nlev] * flux_dn[nlev] + S[nlev]
+    @inbounds for i in nlay:-1:1
         d = 1 / (1 - R_dif[i] * A[i])
         flux_dn[i] = (T_dif[i] * flux_dn[i + 1] +
                       R_dif[i] * S[i] +
@@ -364,113 +380,292 @@ two_stream_solver(spec::SpectralGrid{T};
         spec, sw_variant, lw_variant, linear_lw_source)
 
 """
-    solve_sw!(fluxes, solver, optics; μ₀, sfc_albedo_direct, sfc_albedo_diffuse)
+    TwoStreamWorkspace{T}()
+
+Scratch of the multi-column two-stream solves (KA-n, #305): per g-point and
+column, the layer reflectances / transmittances / sources and the level
+fluxes of one `(g, column)` work item, for up to `TWOSTREAM_CHUNK` columns at
+a time. Pass the same workspace to every call (`workspace = ws`) and a solve
+allocates nothing; it grows when a call needs more layers, g-points or
+columns than it holds.
+"""
+mutable struct TwoStreamWorkspace{T<:AbstractFloat}
+    lay::Array{T,4}      # (nlay, 5, ngpt, chunk): R_dif, T_dif, R_dir, T_dir, T_beam (LW: R, T, S_up, S_dn)
+    lev::Array{T,4}      # (nlev, 5, ngpt, chunk): up, dn, dir, A, S
+    planck::Array{T,3}   # (nlev + 1, nbands, chunk): π B_band at the levels, then at the surface
+end
+TwoStreamWorkspace{T}() where {T} =
+    TwoStreamWorkspace{T}(zeros(T, 0, 5, 0, 0), zeros(T, 0, 5, 0, 0), zeros(T, 0, 0, 0))
+
+"Columns solved per launch by the multi-column two-stream solves (bounds the workspace)."
+const TWOSTREAM_CHUNK = 64
+
+function _ensure!(ws::TwoStreamWorkspace{T}, nlay, ngpt, nb, nc) where {T}
+    if size(ws.lay, 1) < nlay || size(ws.lay, 3) < ngpt || size(ws.lay, 4) < nc
+        ws.lay = zeros(T, nlay, 5, ngpt, nc)
+        ws.lev = zeros(T, nlay + 1, 5, ngpt, nc)
+    end
+    if size(ws.planck, 1) < nlay + 2 || size(ws.planck, 2) < nb || size(ws.planck, 3) < nc
+        ws.planck = zeros(T, nlay + 2, nb, nc)
+    end
+    return ws
+end
+
+# A single column's arrays as one-column multi-column arrays (no copy).
+_one_column(o::OpticalProperties{T,2}) where {T} =
+    OpticalProperties{T,3}(reshape(o.τ, size(o.τ)..., 1), reshape(o.ssa, size(o.ssa)..., 1),
+                           reshape(o.g, size(o.g)..., 1), o.spec)
+_one_column(f::RadiativeFluxes{T,1}) where {T} =
+    RadiativeFluxes{T,2}(reshape(f.flux_up, 1, :), reshape(f.flux_dn, 1, :),
+                         reshape(f.flux_dn_dir, 1, :), reshape(f.flux_net, 1, :))
+
+# Per-band, per-column surface property for the multi-column solves: a Real
+# for every band and column, a vector per column, a (band, column) matrix.
+@inline _sfc(a::Real, b, c, ::Type{T}) where {T} = T(a)
+@inline _sfc(a::AbstractVector, b, c, ::Type{T}) where {T} = T(a[c])
+@inline _sfc(a::AbstractMatrix, b, c, ::Type{T}) where {T} = T(a[b, c])
+# the single-column convention: a Real, or one value per band
+_band_column(a::Real) = a
+_band_column(a::AbstractVector) = reshape(a, :, 1)
+
+"""
+    solve_sw!(fluxes, solver, optics; μ₀, sfc_albedo_direct, sfc_albedo_diffuse,
+              workspace = TwoStreamWorkspace{T}(), backend = default_backend())
 
 Shortwave solve over all g-points, accumulating broadband fluxes.
 `sfc_albedo_*` may be a scalar or a per-band vector.
+
+**Multi-column form** (KA-n, #305): `optics` of shape `(nlay, ngpt, ncol)`
+(`τ[k, g, c]`) and `fluxes` of shape `(ncol, nlev)`
+(`allocate_fluxes(T, (ncol,), nlev)`). `μ₀` is a scalar or one value per
+column; `sfc_albedo_*` a scalar, one value per column, or an `(nband, ncol)`
+matrix. Every `(g-point, column)` is one work item of a
+[`launch_weighted!`](@ref Aeolus.Backends.launch_weighted!) on `backend`:
+the adding recurrence runs sequentially over the layers inside the item, on
+the item's slice of `workspace`; a second launch sums each column's
+g-points in ascending order. Column `c` gets the bits of the single-column
+solve, and the single-column form is this solve on one column, so the fluxes
+are identical at every thread count.
 """
-function solve_sw!(fluxes::RadiativeFluxes{T}, solver::TwoStreamSolver{T},
-                   optics::OpticalProperties{T};
+function solve_sw!(fluxes::RadiativeFluxes{T,1}, solver::TwoStreamSolver{T},
+                   optics::OpticalProperties{T,2};
                    μ₀::Real,
                    sfc_albedo_direct = 0.1,
-                   sfc_albedo_diffuse = nothing) where {T}
+                   sfc_albedo_diffuse = nothing,
+                   workspace::TwoStreamWorkspace{T} = TwoStreamWorkspace{T}(),
+                   backend::AbstractBackend = default_backend()) where {T}
+    ad_diffuse = sfc_albedo_diffuse === nothing ? sfc_albedo_direct : sfc_albedo_diffuse
+    _solve_sw_columns!(_one_column(fluxes), solver, _one_column(optics), μ₀,
+                       _band_column(sfc_albedo_direct), _band_column(ad_diffuse),
+                       workspace, backend)
+    return fluxes
+end
+
+function solve_sw!(fluxes::RadiativeFluxes{T,2}, solver::TwoStreamSolver{T},
+                   optics::OpticalProperties{T,3};
+                   μ₀,
+                   sfc_albedo_direct = 0.1,
+                   sfc_albedo_diffuse = nothing,
+                   workspace::TwoStreamWorkspace{T} = TwoStreamWorkspace{T}(),
+                   backend::AbstractBackend = default_backend()) where {T}
+    ad_diffuse = sfc_albedo_diffuse === nothing ? sfc_albedo_direct : sfc_albedo_diffuse
+    _solve_sw_columns!(fluxes, solver, optics, μ₀, sfc_albedo_direct, ad_diffuse,
+                       workspace, backend)
+    return fluxes
+end
+
+function _check_columns(fluxes, optics, name)
+    nlay, _, ncol = size(optics.τ)
+    size(fluxes.flux_up) == (ncol, nlay + 1) ||
+        error("$name: fluxes are $(size(fluxes.flux_up)), expected ($ncol, $(nlay + 1)) " *
+              "for optics of $nlay layers × $ncol columns")
+    return nlay, ncol
+end
+
+function _solve_sw_columns!(fluxes, solver::TwoStreamSolver{T}, optics, μ₀, αdir, αdif,
+                            ws, backend) where {T}
     spec = solver.spec
     spec.kind === :shortwave || error("solve_sw!: requires a shortwave grid")
-    nlay = size(optics.τ, 1); nlev = nlay + 1
-    μ = T(clamp(μ₀, 1e-6, 1.0))
-    ad_diffuse = sfc_albedo_diffuse === nothing ? sfc_albedo_direct :
-                                                  sfc_albedo_diffuse
-
-    fill!(fluxes.flux_up, 0); fill!(fluxes.flux_dn, 0)
-    fill!(fluxes.flux_dn_dir, 0)
-
-    Rd = Vector{T}(undef, nlay); Td = Vector{T}(undef, nlay)
-    Rr = Vector{T}(undef, nlay); Tr = Vector{T}(undef, nlay)
-    Tb = Vector{T}(undef, nlay)
-    fu = Vector{T}(undef, nlev); fd = Vector{T}(undef, nlev)
-    fdir = Vector{T}(undef, nlev)
-
-    for b in 1:nbands(spec)
-        αdir = sfc_albedo_direct isa Real ? T(sfc_albedo_direct) :
-                                            T(sfc_albedo_direct[b])
-        αdif = ad_diffuse isa Real ? T(ad_diffuse) : T(ad_diffuse[b])
-        for g in gpoint_range(spec, b)
-            F_top = T(spec.solar_src[g])
-            F_top <= 0 && continue
-            @inbounds for k in 1:nlay
-                τs, ωs, gs = delta_scale(optics.τ[k, g], optics.ssa[k, g],
-                                         optics.g[k, g])
-                Rd[k], Td[k], Rr[k], Tr[k], Tb[k] =
-                    layer_reflectance_transmittance_sw(solver.sw_variant,
-                                                       τs, ωs, gs, μ)
-            end
-            adding_solver!(fu, fd, fdir, Rd, Td, Rr, Tr, Tb, αdif, αdir,
-                           F_top, μ)
-            @inbounds for i in 1:nlev
-                fluxes.flux_up[i]     += fu[i]
-                fluxes.flux_dn[i]     += fd[i] + fdir[i]
-                fluxes.flux_dn_dir[i] += fdir[i]
-            end
-        end
+    nlay, ncol = _check_columns(fluxes, optics, "solve_sw!")
+    ngpt = ngpoints(spec)
+    _ensure!(ws, nlay, ngpt, nbands(spec), min(ncol, TWOSTREAM_CHUNK))
+    for c0 in 0:TWOSTREAM_CHUNK:ncol-1
+        nc = min(TWOSTREAM_CHUNK, ncol - c0)
+        launch_weighted!(backend, nlay, _sw_gpoint!, (1:ngpt * nc,), ws.lay, ws.lev,
+                         solver, optics.τ, optics.ssa, optics.g, μ₀, αdir, αdif, c0, ngpt)
+        launch_weighted!(backend, ngpt, _sw_gsum!, (1:nc, 1:nlay + 1), fluxes.flux_up,
+                         fluxes.flux_dn, fluxes.flux_dn_dir, ws.lev, spec, c0)
     end
     net_flux!(fluxes)
     return fluxes
 end
 
+@inline _μ(μ₀::Real, c, ::Type{T}) where {T} = T(clamp(μ₀, 1e-6, 1.0))
+@inline _μ(μ₀::AbstractVector, c, ::Type{T}) where {T} = T(clamp(μ₀[c], 1e-6, 1.0))
+
+# One (g-point, column) of the shortwave: layer properties, then the adding
+# recurrence over the layers, into the item's slice of the workspace.
+function _sw_gpoint!(n, lay::AbstractArray{T,4}, lev, solver, τ3, ω3, g3, μ₀, αdir_in, αdif_in,
+                     c0, ngpt) where {T}
+    spec = solver.spec
+    g = (n - 1) % ngpt + 1
+    cc = (n - 1) ÷ ngpt + 1
+    c = c0 + cc
+    F_top = T(spec.solar_src[g])
+    F_top <= 0 && return nothing
+    b = band_of_gpoint(spec, g)
+    μ = _μ(μ₀, c, T)
+    αdir = _sfc(αdir_in, b, c, T)
+    αdif = _sfc(αdif_in, b, c, T)
+    nlay = size(τ3, 1)
+    @inbounds for k in 1:nlay
+        τs, ωs, gs = delta_scale(τ3[k, g, c], ω3[k, g, c], g3[k, g, c])
+        lay[k, 1, g, cc], lay[k, 2, g, cc], lay[k, 3, g, cc], lay[k, 4, g, cc], lay[k, 5, g, cc] =
+            layer_reflectance_transmittance_sw(solver.sw_variant, τs, ωs, gs, μ)
+    end
+    r = 1:nlay; l = 1:nlay + 1
+    _adding!(view(lev, l, 1, g, cc), view(lev, l, 2, g, cc), view(lev, l, 3, g, cc),
+             view(lay, r, 1, g, cc), view(lay, r, 2, g, cc), view(lay, r, 3, g, cc),
+             view(lay, r, 4, g, cc), view(lay, r, 5, g, cc),
+             αdif, αdir, F_top, μ, zero(T), view(lev, l, 4, g, cc), view(lev, l, 5, g, cc))
+    return nothing
+end
+
+# The broadband sums of level i of column c0 + cc: the g-points in ascending
+# order (band by band), skipping those without solar source — the
+# accumulation order of the single-column solve.
+function _sw_gsum!(cc, i, up::AbstractArray{T}, dn, dir, lev, spec, c0) where {T}
+    su = zero(T); sd = zero(T); sr = zero(T)
+    @inbounds for b in 1:nbands(spec), g in gpoint_range(spec, b)
+        T(spec.solar_src[g]) <= 0 && continue
+        fd = lev[i, 3, g, cc]
+        su += lev[i, 1, g, cc]
+        sd += lev[i, 2, g, cc] + fd
+        sr += fd
+    end
+    c = c0 + cc
+    @inbounds up[c, i] = su
+    @inbounds dn[c, i] = sd
+    @inbounds dir[c, i] = sr
+    return nothing
+end
+
 """
-    solve_lw!(fluxes, solver, optics, col; sfc_emissivity)
+    solve_lw!(fluxes, solver, optics, col; sfc_emissivity,
+              workspace = TwoStreamWorkspace{T}(), backend = default_backend())
 
 Longwave solve. Source terms come from the Planck function evaluated at
 the layer boundary temperatures, so the linear-in-τ treatment has the
 gradient information it needs.
+
+**Multi-column form** (KA-n, #305): `optics` of shape `(nlay, ngpt, ncol)`,
+`cols` a vector of `ncol` columns, `fluxes` of shape `(ncol, nlev)`;
+`sfc_emissivity` a scalar, one value per column or an `(nband, ncol)` matrix.
+The band Planck sources are one launch over `(level, column)`, the
+`(g-point, column)` sweeps a second, the g-point sums a third, as in
+[`solve_sw!`](@ref). Column `c` gets the bits of the single-column solve on
+`cols[c]`, at every thread count.
 """
-function solve_lw!(fluxes::RadiativeFluxes{T}, solver::TwoStreamSolver{T},
-                   optics::OpticalProperties{T},
+function solve_lw!(fluxes::RadiativeFluxes{T,1}, solver::TwoStreamSolver{T},
+                   optics::OpticalProperties{T,2},
                    col::AtmosphericColumn{T};
-                   sfc_emissivity = 1.0) where {T}
+                   sfc_emissivity = 1.0,
+                   workspace::TwoStreamWorkspace{T} = TwoStreamWorkspace{T}(),
+                   backend::AbstractBackend = default_backend()) where {T}
+    _solve_lw_columns!(_one_column(fluxes), solver, _one_column(optics), (col,),
+                       _band_column(sfc_emissivity), workspace, backend)
+    return fluxes
+end
+
+function solve_lw!(fluxes::RadiativeFluxes{T,2}, solver::TwoStreamSolver{T},
+                   optics::OpticalProperties{T,3},
+                   cols::AbstractVector{<:AtmosphericColumn{T}};
+                   sfc_emissivity = 1.0,
+                   workspace::TwoStreamWorkspace{T} = TwoStreamWorkspace{T}(),
+                   backend::AbstractBackend = default_backend()) where {T}
+    _solve_lw_columns!(fluxes, solver, optics, cols, sfc_emissivity, workspace, backend)
+    return fluxes
+end
+
+function _solve_lw_columns!(fluxes, solver::TwoStreamSolver{T}, optics, cols, ε_in,
+                            ws, backend) where {T}
     spec = solver.spec
     spec.kind === :longwave || error("solve_lw!: requires a longwave grid")
-    nlay = size(optics.τ, 1); nlev = nlay + 1
-
-    fill!(fluxes.flux_up, 0); fill!(fluxes.flux_dn, 0)
+    nlay, ncol = _check_columns(fluxes, optics, "solve_lw!")
+    length(cols) == ncol ||
+        error("solve_lw!: optics have $ncol columns, got $(length(cols)) columns")
+    ngpt = ngpoints(spec)
+    nb = nbands(spec)
+    _ensure!(ws, nlay, ngpt, nb, min(ncol, TWOSTREAM_CHUNK))
     fill!(fluxes.flux_dn_dir, 0)
-
-    for b in 1:nbands(spec)
-        lo, hi = band_limits(spec, b)
-        ε = sfc_emissivity isa Real ? T(sfc_emissivity) : T(sfc_emissivity[b])
-        # band Planck source at each level and at the surface
-        Blev = T[π * planck_band(col.T_lev[i], lo, hi) for i in 1:nlev]
-        Bsfc = T(π * planck_band(col.T_sfc, lo, hi))
-        for g in gpoint_range(spec, b)
-            w = T(spec.gpt_weight[g])
-            up = Vector{T}(undef, nlev); dn = Vector{T}(undef, nlev)
-            Rl = Vector{T}(undef, nlay); Tl = Vector{T}(undef, nlay)
-            Su = Vector{T}(undef, nlay); Sd = Vector{T}(undef, nlay)
-            @inbounds for k in 1:nlay
-                Bb = solver.linear_lw_source ? w * Blev[k]     : w * (Blev[k]+Blev[k+1])/2
-                Bt = solver.linear_lw_source ? w * Blev[k + 1] : w * (Blev[k]+Blev[k+1])/2
-                Rl[k], Tl[k], Su[k], Sd[k] =
-                    layer_reflectance_transmittance_lw(solver.lw_variant,
-                        optics.τ[k, g], optics.ssa[k, g], optics.g[k, g], Bb, Bt)
-            end
-            # downward sweep from TOA
-            dn[nlev] = zero(T)
-            for k in nlay:-1:1
-                dn[k] = Tl[k] * dn[k + 1] + Sd[k]
-            end
-            # surface emission + reflection
-            up[1] = ε * w * Bsfc + (1 - ε) * dn[1]
-            for k in 1:nlay
-                up[k + 1] = Tl[k] * up[k] + Su[k] + Rl[k] * dn[k + 1]
-            end
-            @inbounds for i in 1:nlev
-                fluxes.flux_up[i] += up[i]
-                fluxes.flux_dn[i] += dn[i]
-            end
-        end
+    for c0 in 0:TWOSTREAM_CHUNK:ncol-1
+        nc = min(TWOSTREAM_CHUNK, ncol - c0)
+        launch_weighted!(backend, nb, _lw_planck!, (1:nc, 1:nlay + 2), ws.planck, spec, cols, c0)
+        launch_weighted!(backend, nlay, _lw_gpoint!, (1:ngpt * nc,), ws.lay, ws.lev, ws.planck,
+                         solver, optics.τ, optics.ssa, optics.g, ε_in, c0, ngpt)
+        launch_weighted!(backend, ngpt, _lw_gsum!, (1:nc, 1:nlay + 1), fluxes.flux_up,
+                         fluxes.flux_dn, ws.lev, spec, c0)
     end
     net_flux!(fluxes)
     return fluxes
+end
+
+# π B_band at level i of column c0 + cc for every band; i = nlev + 1 is the
+# surface (the single-column solve's `Blev`, `Bsfc`).
+function _lw_planck!(cc, i, P::AbstractArray{T,3}, spec, cols, c0) where {T}
+    col = cols[c0 + cc]
+    nlev = length(col.T_lev)
+    Tk = i <= nlev ? col.T_lev[i] : col.T_sfc
+    for b in 1:nbands(spec)
+        lo, hi = band_limits(spec, b)
+        @inbounds P[i, b, cc] = T(π * planck_band(Tk, lo, hi))
+    end
+    return nothing
+end
+
+function _lw_gpoint!(n, lay::AbstractArray{T,4}, lev, P, solver, τ3, ω3, g3, ε_in,
+                     c0, ngpt) where {T}
+    spec = solver.spec
+    g = (n - 1) % ngpt + 1
+    cc = (n - 1) ÷ ngpt + 1
+    c = c0 + cc
+    b = band_of_gpoint(spec, g)
+    ε = _sfc(ε_in, b, c, T)
+    w = T(spec.gpt_weight[g])
+    nlay = size(τ3, 1); nlev = nlay + 1
+    @inbounds for k in 1:nlay
+        Bb = solver.linear_lw_source ? w * P[k, b, cc]     : w * (P[k, b, cc]+P[k + 1, b, cc])/2
+        Bt = solver.linear_lw_source ? w * P[k + 1, b, cc] : w * (P[k, b, cc]+P[k + 1, b, cc])/2
+        lay[k, 1, g, cc], lay[k, 2, g, cc], lay[k, 3, g, cc], lay[k, 4, g, cc] =
+            layer_reflectance_transmittance_lw(solver.lw_variant,
+                τ3[k, g, c], ω3[k, g, c], g3[k, g, c], Bb, Bt)
+    end
+    @inbounds begin
+        # downward sweep from TOA
+        lev[nlev, 2, g, cc] = zero(T)
+        for k in nlay:-1:1
+            lev[k, 2, g, cc] = lay[k, 2, g, cc] * lev[k + 1, 2, g, cc] + lay[k, 4, g, cc]
+        end
+        # surface emission + reflection
+        lev[1, 1, g, cc] = ε * w * P[nlev + 1, b, cc] + (1 - ε) * lev[1, 2, g, cc]
+        for k in 1:nlay
+            lev[k + 1, 1, g, cc] = lay[k, 2, g, cc] * lev[k, 1, g, cc] + lay[k, 3, g, cc] +
+                                   lay[k, 1, g, cc] * lev[k + 1, 2, g, cc]
+        end
+    end
+    return nothing
+end
+
+function _lw_gsum!(cc, i, up::AbstractArray{T}, dn, lev, spec, c0) where {T}
+    su = zero(T); sd = zero(T)
+    @inbounds for b in 1:nbands(spec), g in gpoint_range(spec, b)
+        su += lev[i, 1, g, cc]
+        sd += lev[i, 2, g, cc]
+    end
+    c = c0 + cc
+    @inbounds up[c, i] = su
+    @inbounds dn[c, i] = sd
+    return nothing
 end
 
 """
@@ -532,11 +727,42 @@ radii. The extinction is geometric-optics-like in the solar
 and dominating in the thermal infrared — which is why clouds are bright
 in the visible and black in the longwave.
 """
-function compute_optics!(optics::OpticalProperties{T}, cloud::MieCloudOptics{T},
-                         col::AtmosphericColumn{T}) where {T}
-    spec = cloud.spec
-    nz = length(col.ql)
-    fill!(optics.τ, 0); fill!(optics.ssa, 0); fill!(optics.g, 0)
+function compute_optics!(optics::OpticalProperties{T,2}, cloud::MieCloudOptics{T},
+                         col::AtmosphericColumn{T};
+                         backend::AbstractBackend = default_backend()) where {T}
+    return _cloud_optics!(optics, _one_column(optics), cloud, (col,), backend)
+end
+
+"""
+    compute_optics!(optics, cloud::MieCloudOptics, cols::AbstractVector{<:AtmosphericColumn};
+                    backend = default_backend())
+
+Multi-column form (KA-n, #305): `optics` of shape `(nlay, ngpt, ncol)`, one
+work item per `(layer, column)`; column `c` gets the bits of the
+single-column `compute_optics!` on `cols[c]`.
+"""
+function compute_optics!(optics::OpticalProperties{T,3}, cloud::MieCloudOptics{T},
+                         cols::AbstractVector{<:AtmosphericColumn{T}};
+                         backend::AbstractBackend = default_backend()) where {T}
+    size(optics.τ, 3) == length(cols) ||
+        error("compute_optics!: optics has $(size(optics.τ, 3)) columns, got $(length(cols))")
+    return _cloud_optics!(optics, optics, cloud, cols, backend)
+end
+
+function _cloud_optics!(optics, o3::OpticalProperties{T,3}, cloud, cols, backend) where {T}
+    fill!(o3.τ, 0); fill!(o3.ssa, 0); fill!(o3.g, 0)
+    nlay, ngpt, ncol = size(o3.τ)
+    launch_weighted!(backend, ngpt, _cloud_optics_layer!, (1:ncol, 1:nlay),
+                     o3.τ, o3.ssa, o3.g, cloud.spec, cols)
+    return optics
+end
+
+# Layer k of column c, every band and g-point (each element written once).
+function _cloud_optics_layer!(c, k, τ3::AbstractArray{T,3}, ω3, g3, spec, cols) where {T}
+    col = cols[c]
+    lwp = col.ql[k] * col.ρ[k] * col.dz[k] * 1000   # g m⁻²
+    iwp = col.qi[k] * col.ρ[k] * col.dz[k] * 1000
+    (lwp > 0 || iwp > 0) || return nothing
     for b in 1:nbands(spec)
         λ = T(_band_λ(spec, b))
         # single-scattering albedo: ~1 in the visible, falling in the IR.
@@ -549,26 +775,22 @@ function compute_optics!(optics::OpticalProperties{T}, cloud::MieCloudOptics{T},
         ω_ice = λ < 0.7 ? T(0.99999) : λ < 1.5 ? T(0.999) :
                 λ < 3.0 ? T(0.95) : T(0.55)
         g_ice = λ < 1.5 ? T(0.78) : T(0.75)
-        for g in gpoint_range(spec, b)
-            @inbounds for k in 1:nz
-                lwp = col.ql[k] * col.ρ[k] * col.dz[k] * 1000   # g m⁻²
-                iwp = col.qi[k] * col.ρ[k] * col.dz[k] * 1000
-                # τ = 3·LWP / (2 ρ_w r_eff) = 1.5·LWP/r_eff (LWP in g m⁻²,
-                # r_eff in μm): RadiationCore.liquid_mass_extinction, shared
-                # with the 3-D cloud shadow of SolarGeometry.
-                τl = lwp > 0 ? T(liquid_mass_extinction(col.r_eff_liq[k]) * lwp) : zero(T)
-                τi = iwp > 0 ? T(ice_mass_extinction(col.r_eff_ice[k]) * iwp) : zero(T)
-                τt = τl + τi
-                τt <= 0 && continue
-                sl = τl * ω_liq; si = τi * ω_ice
-                ss = sl + si
-                optics.τ[k, g]   = τt
-                optics.ssa[k, g] = ss / τt
-                optics.g[k, g]   = ss > 0 ? (sl * g_liq + si * g_ice) / ss : zero(T)
-            end
+        # τ = 3·LWP / (2 ρ_w r_eff) = 1.5·LWP/r_eff (LWP in g m⁻², r_eff in
+        # μm): RadiationCore.liquid_mass_extinction, shared with the 3-D
+        # cloud shadow of SolarGeometry.
+        τl = lwp > 0 ? T(liquid_mass_extinction(col.r_eff_liq[k]) * lwp) : zero(T)
+        τi = iwp > 0 ? T(ice_mass_extinction(col.r_eff_ice[k]) * iwp) : zero(T)
+        τt = τl + τi
+        τt <= 0 && continue
+        sl = τl * ω_liq; si = τi * ω_ice
+        ss = sl + si
+        @inbounds for g in gpoint_range(spec, b)
+            τ3[k, g, c] = τt
+            ω3[k, g, c] = ss / τt
+            g3[k, g, c] = ss > 0 ? (sl * g_liq + si * g_ice) / ss : zero(T)
         end
     end
-    return optics
+    return nothing
 end
 
 """
