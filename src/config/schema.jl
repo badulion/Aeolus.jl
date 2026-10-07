@@ -32,17 +32,6 @@ the default", never `nothing`.
 struct Optional{T} end
 
 """
-    Either{A,B}
-
-Option type marker for a value of the scalar type `A` or of the scalar
-type `B` (tried in that order), e.g. `Either{Symbol,Float64}` for "a name
-or a number" (the Berlin case's `theta_top = "noflux"` or `0.003`).
-`allowed` constrains the `Symbol`/`String` values only, `range` the
-numbers only.
-"""
-struct Either{A,B} end
-
-"""
     OpenTable(validator = tbl -> String[])
 
 Option type for a table whose keys a driver decides (the per-coupling
@@ -81,8 +70,6 @@ function _valid_spec(T)
     T isa Type || return false
     T in _SCALARS && return true
     T <: Optional && return T !== Optional && _valid_spec(T.parameters[1])
-    T <: Either && return T !== Either && length(T.parameters) == 2 &&
-                          all(p -> p isa Type && p in _SCALARS, T.parameters)
     if T <: Tuple && isconcretetype(T)
         ps = fieldtypes(T)
         return !isempty(ps) && all(==(ps[1]), ps) && ps[1] in _SCALARS
@@ -210,7 +197,6 @@ Declare the option `key` of type `T` in section `s`. Types:
   * `Vector{T}`;
   * `Date` and `Time` (TOML local date and local time);
   * [`Optional{T}`](@ref Optional), where `"none"` stands for `nothing`;
-  * [`Either{A,B}`](@ref Either), a value of either of two scalar types;
   * [`OpenTable(validator)`](@ref OpenTable), a table whose keys a driver decides.
 
 `default` is the value a missing key takes (a zero-argument function is
@@ -409,7 +395,6 @@ _describe(::Type{Time}) = "a local time (hh:mm:ss)"
 _describe(::OpenTable) = "a table"
 _describe(T::OneOf) = join(map(_describe, T.alts), " or ")
 _describe(T::Type{<:Optional}) = _describe(_elem(T)) * " or \"none\""
-_describe(T::Type{<:Either}) = _describe(T.parameters[1]) * " or " * _describe(T.parameters[2])
 function _describe(T::Type)
     if T <: Tuple
         return "an array of $(fieldcount(T)) $(_plural(fieldtype(T, 1)))"
@@ -482,12 +467,6 @@ function _coerce_type(T, o, x, julia, base, key)
         msgs = String[p isa ConfigError ? join(("$(q.key): $(q.message)" for q in p.problems), "; ") :
                       string(p) for p in probs]
         return (false, nothing, join(msgs, "; "))
-    elseif T <: Either
-        for P in T.parameters
-            ok, v = _scalar(P, x, julia, base)
-            ok && _within(o, v) && return (true, v, "")
-        end
-        return _fail()
     elseif T <: Optional
         (x === nothing && julia) && return (true, nothing, "")
         x == "none" && return (true, nothing, "")
@@ -555,8 +534,7 @@ function _scalar(T, x, julia, base)
 end
 
 function _within(o::Option, v)
-    if o.allowed !== nothing && !(o.type isa Type && o.type <: Either && !(v isa Union{Symbol,AbstractString})) &&
-       !(o.type isa OneOf && v isa Real)
+    if o.allowed !== nothing && !(o.type isa OneOf && v isa Real)
         any(a -> isequal(a, v) || (v isa Symbol && a isa AbstractString && String(v) == a) ||
                  (a isa Symbol && v isa AbstractString && String(a) == v), o.allowed) || return false
     end

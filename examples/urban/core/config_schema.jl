@@ -16,7 +16,7 @@
 # the coupling files.
 
 using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Option, OpenTable,
-                     Optional, Either, Path, section, option!, config_origin, config_schema, config_sources
+                     Optional, OneOf, Path, section, option!, config_origin, config_schema, config_sources
 using Aeolus.IO: RunFolder, CheckpointSchedule, with_monitor, check_blowup!, output_dir
 using Dates: Date, year, month, day
 
@@ -645,7 +645,7 @@ function Config.driver_sections(::BerlinDriver)
                 doc = "velocity sponge rate at the top")
         option!(s, "sponge_frac", Float64; default = 0.75, range = (0, 1),
                 doc = "the sponge starts at sponge_frac × Lz")
-        option!(s, "theta_top", Either{Symbol,Float64}; default = :initial_gradient,
+        option!(s, "theta_top", OneOf(Symbol, Float64); default = :initial_gradient,
                 allowed = [:initial_gradient, :noflux], units = "K m^-1",
                 doc = "θ condition of a closed top (#254): initial_gradient, noflux or a gradient in K/m")
     end

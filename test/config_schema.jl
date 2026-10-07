@@ -349,10 +349,11 @@ end
     end
 end
 
-@testset "Config: Either{A,B} and a driver's defaults of common options (CFG-c, #358)" begin
-    # Either: a name from `allowed` or a number in `range`, tried in order
+@testset "Config: a name or a number (OneOf) and a driver's defaults of common options (CFG-c, #358)" begin
+    # OneOf(Symbol, Float64): a name from `allowed` or a number in `range` (CFG-c's Either{A,B},
+    # merged into CFG-d's OneOf so that one option type means "either")
     register_driver!("eithertest"; sections = [section("top") do s
-        option!(s, "theta", Either{Symbol,Float64}; default = :initial_gradient,
+        option!(s, "theta", OneOf(Symbol, Float64); default = :initial_gradient,
                 allowed = [:initial_gradient, :noflux], range = (-1, 1))
     end], defaults = ("output.cadence" => 1800.0, "run.name" => "alexanderplatz"))
     ld(t) = load_run_config(cfg_file("[run]\ndriver = \"eithertest\"\n" * t))
@@ -372,7 +373,4 @@ end
     @test load_run_config(cfg_file("[run]\nname = \"e\"\n")).output.cadence == 3600.0   # common: unchanged
     @test_throws ArgumentError ConfigSchema("x"; defaults = ("output.cadence" => -1.0))
     @test_throws ArgumentError ConfigSchema("x"; defaults = ("output.nope" => 1.0))
-    @test_throws ArgumentError ConfigSchema("x"; sections = [section("a") do s
-        option!(s, "e", Either{Symbol,Vector{Int}}; default = :x)   # scalars only
-    end])
 end

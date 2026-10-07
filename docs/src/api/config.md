@@ -110,7 +110,6 @@ ConfigError: 3 problems in the run configuration
 | `Vector{T}` | array | `Vector{T}` |
 | `Date`, `Time` | local date, local time | `Dates.Date`, `Dates.Time` |
 | [`Optional{T}`](@ref Aeolus.Config.Optional) | `T` or `"none"` | `T` or `nothing` |
-| [`Either{A,B}`](@ref Aeolus.Config.Either) | an `A` or a `B` (tried in that order) | `A` or `B` |
 | [`OpenTable(validator)`](@ref Aeolus.Config.OpenTable) | table | `Dict{String,Any}` |
 | [`OneOf(T1, T2, …)`](@ref Aeolus.Config.OneOf) | a value of any of the types, the first that accepts it | that type's value |
 
@@ -201,8 +200,7 @@ and `dns` (`examples/validation/dns_apriori_driver.jl`: the filtered-DNS
 fixture with its a-priori record, `dns256.toml`); the drivers of CFG-e
 (#360) are in the table below. `dns` and `dns_decay` run the same DNS
 (the steps of `test/fixtures/dns_decay.jl`); `dns` adds the a-priori
-record and its resolution refusal.
-`berlin` is the Berlin case (`examples/urban/BerlinCase.jl`).
+record and its resolution refusal. `berlin` is the Berlin case (`examples/urban/BerlinCase.jl`, CFG-c #358).
 
 ### The example drivers (CFG-e, #360)
 
