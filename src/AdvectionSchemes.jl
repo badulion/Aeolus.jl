@@ -849,17 +849,17 @@ end
 
 @inline function _b_uflux_x!(i, j, k, F, ud, ϕd)
     @inbounds vel = ud[i, j, k]
-    @inbounds F[i, j, k] = vel * (vel >= 0 ? ϕd[i-1, j, k] : ϕd[i, j, k])
+    @inbounds F[i, j, k] = vel * ifelse(vel >= 0, ϕd[i-1, j, k], ϕd[i, j, k])
     return nothing
 end
 @inline function _b_uflux_y!(i, j, k, F, vd, ϕd)
     @inbounds vel = vd[i, j, k]
-    @inbounds F[i, j, k] = vel * (vel >= 0 ? ϕd[i, j-1, k] : ϕd[i, j, k])
+    @inbounds F[i, j, k] = vel * ifelse(vel >= 0, ϕd[i, j-1, k], ϕd[i, j, k])
     return nothing
 end
 @inline function _b_uflux_z!(i, j, k, F, wd, ϕd)
     @inbounds vel = wd[i, j, k]
-    @inbounds F[i, j, k] = vel * (vel >= 0 ? ϕd[i, j, k-1] : ϕd[i, j, k])
+    @inbounds F[i, j, k] = vel * ifelse(vel >= 0, ϕd[i, j, k-1], ϕd[i, j, k])
     return nothing
 end
 
@@ -998,7 +998,7 @@ end
     @inbounds begin
         lo = _atlo(Lx, i, j, k)
         a  = fx[i,j,k] - lo
-        c  = a >= z ? Rd[i-1,j,k] : Rd[i,j,k]
+        c  = ifelse(a >= z, Rd[i-1,j,k], Rd[i,j,k])
         fx[i,j,k] = lo + c*a
     end
     return nothing
@@ -1007,7 +1007,7 @@ end
     @inbounds begin
         lo = _atlo(Ly, i, j, k)
         a  = fy[i,j,k] - lo
-        c  = a >= z ? Rd[i,j-1,k] : Rd[i,j,k]
+        c  = ifelse(a >= z, Rd[i,j-1,k], Rd[i,j,k])
         fy[i,j,k] = lo + c*a
     end
     return nothing
@@ -1016,7 +1016,7 @@ end
     @inbounds begin
         lo = _atlo(Lz, i, j, k)
         a  = fz[i,j,k] - lo
-        c  = a >= z ? Rd[i,j,k-1] : Rd[i,j,k]
+        c  = ifelse(a >= z, Rd[i,j,k-1], Rd[i,j,k])
         fz[i,j,k] = lo + c*a
     end
     return nothing
