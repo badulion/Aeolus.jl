@@ -33,6 +33,8 @@ extent = [250.0, 250.0, 100.0]
 
 [geometry]
 offset = [0.0, -312.5]
+static = "input/berlin_smoke_static.nc"
+parent_static = "input/berlin_smoke_parent_static.nc"
 
 [clock]
 start_h = 12.0

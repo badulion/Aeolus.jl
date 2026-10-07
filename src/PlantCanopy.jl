@@ -115,6 +115,7 @@ module PlantCanopy
 
 using ..Grids: RegularGrid
 using ..BoundaryConditions: fill_halos!
+using ..Backends: launch!, backend     # KA-k (#307): the canopy drag is a launch
 using ..RadiationCore: _gauss_legendre
 using ..P3Microphysics: lgamma_lanczos
 using ..RadiationCore: STEFAN_BOLTZMANN
@@ -472,8 +473,11 @@ on a `RegularGrid`. `lad` is the cell-centred leaf-area density
 [m² m⁻³], an `(Nx, Ny, Nz)` array of interior cells (see
 [`canopy_lad_field`](@ref)). At construction the LAD is averaged onto the
 `u`, `v` and `w` faces (periodic wrap in x and y, as the LES is
-horizontally periodic); the struct also carries the scratch arrays of
-drag factors, so [`apply_canopy_drag!`](@ref) does not allocate.
+horizontally periodic). The struct also lists the faces with leaves
+(`act`: `(c, i, j, k)`, component `c` = 1, 2, 3 for `u`, `v`, `w`) and
+carries one drag factor and one velocity change per listed face, so
+[`apply_canopy_drag!`](@ref) works on the canopy only and does not
+allocate.
 
 `C_d` is the leaf drag coefficient, ≈ 0.15-0.3 for forests (Shaw &
 Schumann 1992 use 0.15).
@@ -484,9 +488,9 @@ struct ResolvedCanopyDrag{T<:AbstractFloat}
     a_u::Array{T,3}
     a_v::Array{T,3}
     a_w::Array{T,3}
-    f_u::Array{T,3}
-    f_v::Array{T,3}
-    f_w::Array{T,3}
+    act::Vector{NTuple{4,Int32}}
+    fac::Vector{T}
+    dq::Vector{T}
 end
 function ResolvedCanopyDrag(mesh::RegularGrid{T}, lad::AbstractArray{<:Real,3};
                             C_d::Real = 0.2) where {T}
@@ -505,8 +509,14 @@ function ResolvedCanopyDrag(mesh::RegularGrid{T}, lad::AbstractArray{<:Real,3};
         a_v[i, j, k] = (a[i, jm, k] + a[i, j, k]) / 2
         a_w[i, j, k] = (a[i, j, km] + a[i, j, k]) / 2
     end
-    return ResolvedCanopyDrag{T}(T(C_d), a, a_u, a_v, a_w,
-                                 ones(T, Nx, Ny, Nz), ones(T, Nx, Ny, Nz), ones(T, Nx, Ny, Nz))
+    # the faces with leaves (KA-k, #307): u, then v, then w, each in the
+    # loop order k, j, i; the drag is applied over this list only
+    act = NTuple{4,Int32}[]
+    for (c, ac) in enumerate((a_u, a_v, a_w)), k in 1:Nz, j in 1:Ny, i in 1:Nx
+        ac[i, j, k] > 0 && push!(act, (Int32(c), Int32(i), Int32(j), Int32(k)))
+    end
+    return ResolvedCanopyDrag{T}(T(C_d), a, a_u, a_v, a_w, act, ones(T, length(act)),
+                                 zeros(T, length(act)))
 end
 
 """
@@ -565,6 +575,11 @@ unstable once ``Δt\\,C_d\\,a\\,|U| > 2`` (for ``C_d = 0.2``,
 ``a = 1\\,\\mathrm{m^{-1}}`` and ``|U| = 5\\,\\mathrm{m\\,s^{-1}}`` that is any
 ``Δt > 2\\,\\mathrm{s}``); this one is stable for every ``Δt``.
 
+The factors and the update are two launches over the faces with leaves
+(KA-k, #307), each face written by one work item: the same bits at every
+thread count and as the former full-grid loops; the force is folded per
+component in the former loop order.
+
 Returns the volume-integrated kinematic force the step exerted,
 ``\\sum (U' - U)/Δt\\,ΔV`` [m⁴ s⁻²] per component (negative for a flow
 in the positive direction); divide by the domain area for the canopy
@@ -572,53 +587,70 @@ momentum sink per unit ground area (a stress, m² s⁻²).
 """
 function apply_canopy_drag!(sim, drag::ResolvedCanopyDrag{T}, dt::Real) where {T}
     mesh = sim.mesh
-    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
     Δt = T(dt); C = drag.C_d
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     u = sim.u.data; v = sim.v.data; w = sim.w.data
-    q = T(1) / 4
+    act = drag.act
+    r = (1:length(act),)
+    b = backend(u)
     # 1. All factors from the pre-drag velocity.
-    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
-        I = Hx + i; J = Hy + j; K = Hz + k
-        au = drag.a_u[i, j, k]
-        if au > 0
-            uu = u[I, J, K]
-            vv = q * (v[I-1, J, K] + v[I, J, K] + v[I-1, J+1, K] + v[I, J+1, K])
-            ww = q * (w[I-1, J, K] + w[I, J, K] + w[I-1, J, K+1] + w[I, J, K+1])
-            drag.f_u[i, j, k] = canopy_drag_factor(C, au, sqrt(uu^2 + vv^2 + ww^2), Δt)
-        end
-        av = drag.a_v[i, j, k]
-        if av > 0
-            vv = v[I, J, K]
-            uu = q * (u[I, J-1, K] + u[I+1, J-1, K] + u[I, J, K] + u[I+1, J, K])
-            ww = q * (w[I, J-1, K] + w[I, J, K] + w[I, J-1, K+1] + w[I, J, K+1])
-            drag.f_v[i, j, k] = canopy_drag_factor(C, av, sqrt(uu^2 + vv^2 + ww^2), Δt)
-        end
-        aw = drag.a_w[i, j, k]
-        if aw > 0
-            ww = w[I, J, K]
-            uu = q * (u[I, J, K-1] + u[I+1, J, K-1] + u[I, J, K] + u[I+1, J, K])
-            vv = q * (v[I, J, K-1] + v[I, J+1, K-1] + v[I, J, K] + v[I, J+1, K])
-            drag.f_w[i, j, k] = canopy_drag_factor(C, aw, sqrt(uu^2 + vv^2 + ww^2), Δt)
-        end
-    end
-    # 2. Apply, and integrate the momentum removed.
+    launch!(b, _canopy_factor_body!, r, drag.fac, act, drag.a_u, drag.a_v, drag.a_w,
+            u, v, w, C, Δt, Hx, Hy, Hz)
+    # 2. Apply, and record the change of every face.
+    launch!(b, _canopy_apply_body!, r, drag.dq, drag.fac, act, u, v, w, Hx, Hy, Hz)
+    # 3. The momentum removed, folded per component in the list order
+    #    (k, j, i: the order of the former loop).
     Fx = zero(T); Fy = zero(T); Fz = zero(T)
-    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
-        I = Hx + i; J = Hy + j; K = Hz + k
-        if drag.a_u[i, j, k] > 0
-            u0 = u[I, J, K]; u[I, J, K] = u0 * drag.f_u[i, j, k]; Fx += u[I, J, K] - u0
-        end
-        if drag.a_v[i, j, k] > 0
-            v0 = v[I, J, K]; v[I, J, K] = v0 * drag.f_v[i, j, k]; Fy += v[I, J, K] - v0
-        end
-        if drag.a_w[i, j, k] > 0
-            w0 = w[I, J, K]; w[I, J, K] = w0 * drag.f_w[i, j, k]; Fz += w[I, J, K] - w0
-        end
+    @inbounds for n in eachindex(act)
+        c = act[n][1]; d = drag.dq[n]
+        c == 1 ? (Fx += d) : c == 2 ? (Fy += d) : (Fz += d)
     end
     dV = mesh.dx * mesh.dy * mesh.dz
     return (Fx = Fx * dV / Δt, Fy = Fy * dV / Δt, Fz = Fz * dV / Δt)
+end
+
+# The drag factor of listed face n (pointwise; reads u, v, w only): the
+# full speed there, the other two components averaged from their four
+# neighbouring faces.
+@inline function _canopy_factor_body!(n, fac, act, a_u, a_v, a_w, u, v, w,
+                                      C, Δt::T, Hx, Hy, Hz) where {T}
+    q = T(1) / 4
+    @inbounds begin
+        c, i32, j32, k32 = act[n]
+        i, j, k = Int(i32), Int(j32), Int(k32)
+        I = Hx + i; J = Hy + j; K = Hz + k
+        if c == 1
+            uu = u[I, J, K]
+            vv = q * (v[I-1, J, K] + v[I, J, K] + v[I-1, J+1, K] + v[I, J+1, K])
+            ww = q * (w[I-1, J, K] + w[I, J, K] + w[I-1, J, K+1] + w[I, J, K+1])
+            fac[n] = canopy_drag_factor(C, a_u[i, j, k], sqrt(uu^2 + vv^2 + ww^2), Δt)
+        elseif c == 2
+            vv = v[I, J, K]
+            uu = q * (u[I, J-1, K] + u[I+1, J-1, K] + u[I, J, K] + u[I+1, J, K])
+            ww = q * (w[I, J-1, K] + w[I, J, K] + w[I, J-1, K+1] + w[I, J, K+1])
+            fac[n] = canopy_drag_factor(C, a_v[i, j, k], sqrt(uu^2 + vv^2 + ww^2), Δt)
+        else
+            ww = w[I, J, K]
+            uu = q * (u[I, J, K-1] + u[I+1, J, K-1] + u[I, J, K] + u[I+1, J, K])
+            vv = q * (v[I, J, K-1] + v[I, J+1, K-1] + v[I, J, K] + v[I, J+1, K])
+            fac[n] = canopy_drag_factor(C, a_w[i, j, k], sqrt(uu^2 + vv^2 + ww^2), Δt)
+        end
+    end
+    return nothing
+end
+
+# Listed face n: q ← f q, dq[n] = the change (writes only its own face).
+@inline function _canopy_apply_body!(n, dq, fac, act, u, v, w, Hx, Hy, Hz)
+    @inbounds begin
+        c, i, j, k = act[n]
+        I = Hx + Int(i); J = Hy + Int(j); K = Hz + Int(k)
+        q = c == 1 ? u : c == 2 ? v : w
+        q0 = q[I, J, K]
+        q[I, J, K] = q0 * fac[n]
+        dq[n] = q[I, J, K] - q0
+    end
+    return nothing
 end
 
 # =========================================================================

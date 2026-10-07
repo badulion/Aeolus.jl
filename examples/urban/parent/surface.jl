@@ -9,7 +9,9 @@
 #
 #   * fractions — from `data/berlin_landuse_6km.csv` (the OSM extract of
 #     `data/fetch_berlin_landuse.jl`: the child's classifier and
-#     rasteriser on the child's grid, coarse-grained), and, under the
+#     rasteriser on the child's grid, coarse-grained; cropped and
+#     coarsened to the parent grid by `aeolus preprocess static`, which
+#     writes them to the parent's static driver, CFG-f #361), and, under the
 #     child's footprint, from coarse-graining the child's own class map,
 #     so parent and child agree exactly there;
 #   * tiles — built by the case's one class-to-surface factory,

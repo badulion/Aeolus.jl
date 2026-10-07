@@ -1,321 +1,12 @@
-# Geometry of the Berlin case: surface classes, footprint rasterisation,
-# and `build_geometry`, which turns a CaseConfig into the solid mask, the
-# surface-class map and the radiosity scene with its view factors.
+# Geometry of the Berlin case: `build_geometry`, which turns a CaseConfig
+# into the solid mask, the surface-class map and the radiosity scene with
+# its view factors.
 #
-# Buildings come from OpenStreetMap (`osm_ingest.jl`); a minimal GeoJSON
-# reader is kept for hand-made cities (`data/city.geojson`). Both parsers
-# are hand-rolled: they read only the subset of the formats we need and
-# keep Aeolus free of a JSON/XML dependency.
-
-# ---------------------------------------------------------------------------
-# Surface-class enum (integer flags packed into a UInt8 array)
-# ---------------------------------------------------------------------------
-const SURFACE_STREET = UInt8(1)
-const SURFACE_ROOF   = UInt8(2)
-const SURFACE_PARK   = UInt8(3)
-const SURFACE_WATER  = UInt8(4)
-const SURFACE_WALL   = UInt8(5)   # building-adjacent horizontal cell — represents effective wall heating
-
-# ---------------------------------------------------------------------------
-# Building footprint record
-# ---------------------------------------------------------------------------
-
-"""
-    Building(polygon, height, class = SURFACE_ROOF)
-
-A single footprint. `polygon` is a vector of `(x, y)` vertices in the
-mesh coordinate system (meters from the mesh origin). `height` in
-meters. `class` labels the roof surface (default `SURFACE_ROOF`).
-"""
-struct Building
-    polygon::Vector{NTuple{2, Float64}}
-    height::Float64
-    class::UInt8
-end
-
-"""
-    UrbanCity
-
-Container for a set of `Building`s plus optional patch labels for
-non-built surfaces (parks, water) as polygons.
-"""
-struct UrbanCity
-    buildings::Vector{Building}
-    patches::Vector{Building}    # non-solid surface labels (class = SURFACE_PARK / WATER)
-end
-UrbanCity() = UrbanCity(Building[], Building[])
-
-# ---------------------------------------------------------------------------
-# Minimal GeoJSON parser
-# ---------------------------------------------------------------------------
-# We recognise:
-#   {
-#     "type": "FeatureCollection",
-#     "features": [
-#       { "type": "Feature",
-#         "geometry": { "type": "Polygon",
-#                       "coordinates": [ [ [x, y], [x, y], ... ] ] },
-#         "properties": { "height": 12, "class": "roof" } },
-#       ...
-#     ]
-#   }
-
-"""
-    load_city_geojson(path) -> UrbanCity
-
-Load a minimal GeoJSON file into an `UrbanCity`. Building polygons with
-a `height` property become solid `Building`s (default class `roof`);
-polygons with `class = "park"` or `class = "water"` and no height are
-kept as `patches`.
-"""
-function load_city_geojson(path::AbstractString)
-    text = read(path, String)
-    features = _extract_features(text)
-    city = UrbanCity()
-    for feat in features
-        poly    = _extract_polygon(feat)
-        props   = _extract_properties(feat)
-        cls_str = get(props, "class", "roof")
-        h       = get(props, "height", nothing)
-        cls     = _class_from_str(cls_str)
-        if h === nothing
-            push!(city.patches, Building(poly, 0.0, cls))
-        else
-            push!(city.buildings, Building(poly, Float64(h), cls))
-        end
-    end
-    return city
-end
-
-_class_from_str(s) = s == "street" ? SURFACE_STREET :
-                     s == "park"   ? SURFACE_PARK   :
-                     s == "water"  ? SURFACE_WATER  :
-                     SURFACE_ROOF
-
-# Naive regex-driven extraction — the GeoJSON files we ship are small
-# and well-formed, so this beats pulling in JSON.jl.
-function _extract_features(text::AbstractString)
-    # Split on `"type": "Feature"` occurrences and capture each block
-    # up to the matching close-brace of the object.
-    feats = String[]
-    i = 1
-    N = length(text)
-    while true
-        k = findnext("\"type\": \"Feature\"", text, i)
-        k === nothing && break
-        # find enclosing braces of the containing feature object
-        # (walk backwards to '{' , forwards to matching '}')
-        b0 = findprev('{', text, first(k) - 1)
-        b0 === nothing && break
-        depth = 0
-        b1 = 0
-        for j in b0:N
-            c = text[j]
-            if c == '{'; depth += 1
-            elseif c == '}'
-                depth -= 1
-                if depth == 0; b1 = j; break; end
-            end
-        end
-        b1 > 0 && push!(feats, String(text[b0:b1]))
-        i = b1 + 1
-    end
-    return feats
-end
-
-function _extract_polygon(feat::AbstractString)
-    # The first array of pairs inside `"coordinates":` is the outer ring.
-    k = findfirst("\"coordinates\":", feat)
-    k === nothing && error("polygon has no coordinates")
-    # Skip to first `[[[` and read pairs until matching `]]`.
-    substr = feat[last(k)+1:end]
-    # find the outer ring — first triple-open then pairs, close with double
-    ring_start = findfirst("[[", substr)
-    ring_start === nothing && error("polygon coordinates malformed")
-    rs = last(ring_start) + 1     # position just after "[["
-    ring_end   = findnext("]]", substr, rs)
-    ring_end === nothing && error("polygon coordinates malformed")
-    ring_txt = substr[rs:first(ring_end)-1]
-    # ring_txt is: [x, y], [x, y], ..., [x, y]
-    verts = NTuple{2, Float64}[]
-    for m in eachmatch(r"\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]", ring_txt)
-        push!(verts, (parse(Float64, m.captures[1]), parse(Float64, m.captures[2])))
-    end
-    return verts
-end
-
-function _extract_properties(feat::AbstractString)
-    props = Dict{String, Any}()
-    k = findfirst("\"properties\":", feat)
-    k === nothing && return props
-    obj_start = findnext('{', feat, last(k))
-    obj_start === nothing && return props
-    depth = 0; obj_end = 0
-    for j in obj_start:length(feat)
-        c = feat[j]
-        if c == '{'; depth += 1
-        elseif c == '}'
-            depth -= 1
-            depth == 0 && (obj_end = j; break)
-        end
-    end
-    obj = feat[obj_start:obj_end]
-    for m in eachmatch(r"\"([A-Za-z_]+)\"\s*:\s*(?:\"([^\"]*)\"|(-?\d+(?:\.\d+)?))", obj)
-        key = m.captures[1]
-        props[key] = m.captures[2] !== nothing ? m.captures[2] :
-                                                 parse(Float64, m.captures[3])
-    end
-    return props
-end
-
-# ---------------------------------------------------------------------------
-# Rasterization: point-in-polygon test into the mesh
-# ---------------------------------------------------------------------------
-
-function _point_in_polygon(x::Real, y::Real, poly::Vector{NTuple{2, Float64}})
-    n = length(poly)
-    inside = false
-    j = n
-    @inbounds for i in 1:n
-        xi, yi = poly[i]
-        xj, yj = poly[j]
-        if ((yi > y) != (yj > y)) &&
-           (x < (xj - xi) * (y - yi) / ((yj - yi) + eps()) + xi)
-            inside = !inside
-        end
-        j = i
-    end
-    return inside
-end
-
-# The index ranges of the sorted cell centres `xs`, `ys` inside the
-# bounding box of `poly`.
-function _bbox_cells(poly, xs, ys)
-    xmin, xmax, ymin, ymax = polygon_bbox(poly)
-    return searchsortedfirst(xs, xmin):searchsortedlast(xs, xmax),
-           searchsortedfirst(ys, ymin):searchsortedlast(ys, ymax)
-end
-
-"""
-    rasterize_city!(sm, sfc, city, mesh; frame = (0, 0))
-
-Populate a `SolidMask sm` (marks cells inside building volumes) and a
-surface-class array `sfc::Matrix{UInt8}` (2-D horizontal, ground-level
-label per cell). Any cell not inside a building and not covered by a
-patch stays at whatever `sfc` was initialised to (typical default:
-`SURFACE_STREET`).
-
-`frame = (fx, fy)` (cells) leaves the columns within `fx` cells of the
-west and east faces and `fy` cells of the south and north faces free of
-buildings (N-open-d, #262: the `boundary_frame` of an open case, so the
-boundary data is not imposed on a building cut by the box edge).
-"""
-function rasterize_city!(sm::SolidMask, sfc::AbstractMatrix{UInt8},
-                         city::UrbanCity, mesh; frame::NTuple{2,Int} = (0, 0))
-    xs = Aeolus.Grids.xnodes(mesh, Aeolus.Grids.CellCenter())
-    ys = Aeolus.Grids.ynodes(mesh, Aeolus.Grids.CellCenter())
-    zs = Aeolus.Grids.znodes(mesh, Aeolus.Grids.CellCenter())
-    Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
-    fx, fy = frame
-    inframe(i, j) = i <= fx || i > length(xs) - fx || j <= fy || j > length(ys) - fy
-    # Only the cells whose centre lies in a polygon's bounding box are
-    # tested: a centre outside it is outside the polygon for the even–odd
-    # test of `_point_in_polygon` too (no edge spans its y, or every
-    # spanning edge lies on one side of it), so this is exact and only
-    # makes the 6 km parent raster (#249) affordable.
-    # buildings → solid mask + roof label
-    for b in city.buildings
-        ir, jr = _bbox_cells(b.polygon, xs, ys)
-        for j in jr, i in ir
-            inframe(i, j) && continue
-            if _point_in_polygon(xs[i], ys[j], b.polygon)
-                sfc[i, j] = b.class
-                for k in eachindex(zs)
-                    if zs[k] <= b.height
-                        sm.mask[Hx+i, Hy+j, Hz+k] = true
-                    end
-                end
-            end
-        end
-    end
-    # patches → surface label only
-    for p in city.patches
-        ir, jr = _bbox_cells(p.polygon, xs, ys)
-        for j in jr, i in ir
-            if _point_in_polygon(xs[i], ys[j], p.polygon)
-                sfc[i, j] = p.class
-            end
-        end
-    end
-    return (sm, sfc)
-end
-
-"""
-    surface_class_map(city, mesh; default = SURFACE_STREET, tag_walls = true,
-                      frame = (0, 0), bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
-
-Convenience: create a fresh `Matrix{UInt8}` of horizontal surface class
-labels initialized to `default`, then populate it by rasterizing `city`
-(returning also a fresh solid mask). `frame` is the building-free frame
-of [`rasterize_city!`](@ref); `bcs` the lateral conditions the wall
-tagging reads its neighbours with ([`tag_building_adjacent!`](@ref)).
-"""
-function surface_class_map(city::UrbanCity, mesh;
-                           default::UInt8 = SURFACE_STREET,
-                           tag_walls::Bool = true, frame::NTuple{2,Int} = (0, 0),
-                           bcs::FieldBoundaryConditions = FieldBoundaryConditions(:periodic, :periodic, :noflux))
-    sfc = fill(default, mesh.Nx, mesh.Ny)
-    sm  = SolidMask(mesh)
-    rasterize_city!(sm, sfc, city, mesh; frame = frame)
-    tag_walls && tag_building_adjacent!(sfc, sm, mesh; bcs = bcs)
-    return sm, sfc
-end
-
-"""
-    tag_building_adjacent!(sfc, sm, mesh; class = SURFACE_WALL,
-                           bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
-
-Overwrite any `SURFACE_STREET` cell that shares an edge with a building
-footprint (in the horizontal plane) with `class`. This lets an
-otherwise 2-D surface energy balance carry the effective heat load of
-the building's vertical walls, since real walls dominate solar
-absorption in dense urban geometry. The four neighbours are read with
-`neighbor_index` on `bcs` (#262): across a periodic side they wrap,
-across an open one the cell has no neighbour beyond the face.
-"""
-function tag_building_adjacent!(sfc::AbstractMatrix{UInt8}, sm::SolidMask, mesh;
-                                class::UInt8 = SURFACE_WALL,
-                                bcs::FieldBoundaryConditions = FieldBoundaryConditions(:periodic, :periodic, :noflux))
-    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
-    Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
-    # A footprint cell is any (i, j) that has at least one solid cell in z.
-    footprint = falses(Nx, Ny)
-    @inbounds for j in 1:Ny, i in 1:Nx
-        any_solid = false
-        for k in 1:Nz
-            if sm.mask[Hx+i, Hy+j, Hz+k]; any_solid = true; break; end
-        end
-        footprint[i, j] = any_solid
-    end
-    # Any non-solid horizontal neighbour of a footprint cell → wall class.
-    @inbounds for j in 1:Ny, i in 1:Nx
-        if footprint[i, j]; continue; end
-        if sfc[i, j] != SURFACE_STREET; continue; end
-        # the 4 neighbours (wrapped across a periodic side, the mirror —
-        # the cell itself — across an open one)
-        neighbours = ((neighbor_index(mesh, bcs, i-1, 1), j),
-                      (neighbor_index(mesh, bcs, i+1, 1), j),
-                      (i, neighbor_index(mesh, bcs, j-1, 2)),
-                      (i, neighbor_index(mesh, bcs, j+1, 2)))
-        for (ni, nj) in neighbours
-            if footprint[ni, nj]
-                sfc[i, j] = class
-                break
-            end
-        end
-    end
-    return sfc
-end
+# The ground comes from the static driver (CFG-f, #361:
+# `[geometry] static`, written by `aeolus preprocess static`), or, with
+# `static = "none"`, from preprocessing the OSM file of `[preprocess]` in
+# memory. The readers, the surface classes and the rasterisation are
+# `Aeolus.InputDrivers` (src/preprocess/), the one copy.
 
 # ---------------------------------------------------------------------------
 # The Berlin-case geometry
@@ -326,10 +17,11 @@ end
 
 Static geometry of a case, built once by [`build_geometry`](@ref):
 
-* `city` — the parsed `UrbanCity`;
+* `city` — the `UrbanCity` (its footprint polygons);
 * `sm` — the IBM `SolidMask` of the buildings;
 * `sfc` — the `(Nx, Ny)` surface-class map (`SURFACE_*`; couplings may
   add classes during `init!`, e.g. glass);
+* `lai` — the leaf-area index per column (of the static driver);
 * `heightmap` — building top height (m) per column;
 * `scene`, `vfac` — the radiosity scene and its view factors;
 * `facet_col` — the `(i, j)` column of every facet;
@@ -341,6 +33,7 @@ struct Geometry{SM, HM, SC, VF}
     city::UrbanCity
     sm::SM
     sfc::Matrix{UInt8}
+    lai::Matrix{Float64}
     heightmap::HM
     scene::SC
     vfac::VF
@@ -350,29 +43,66 @@ struct Geometry{SM, HM, SC, VF}
     open_cols::Vector{CartesianIndex{2}}
 end
 
+"The mesh coordinates of the OSM anchor `cfg.lat0/lon0`: the point `cfg.offset` m from it is the domain centre."
+anchor_xy(cfg, mesh) = (mesh.Lx / 2 - cfg.offset[1], mesh.Ly / 2 - cfg.offset[2])
+
+"""
+    berlin_static_inputs(cfg, mesh) -> StaticInputs
+
+The ground of the case from its source, in memory: the OSM file
+`cfg.osm_path` projected about `cfg.lat0/lon0` (buildings lower than
+`cfg.min_height` dropped), rasterised on `mesh` with `cfg.park_lai` on
+park cells. What `aeolus preprocess static` writes to the static driver.
+"""
+function berlin_static_inputs(cfg, mesh)
+    isfile(cfg.osm_path) ||
+        error("Missing $(cfg.osm_path). Run examples/urban/data/fetch_alexanderplatz.jl first.")
+    ox, oy = anchor_xy(cfg, mesh)
+    city = load_city_osm(cfg.osm_path; lat0 = cfg.lat0, lon0 = cfg.lon0, x_shift = ox, y_shift = oy,
+                         min_height = cfg.min_height)
+    return static_inputs(city, mesh; origin_lat = cfg.lat0, origin_lon = cfg.lon0, origin_x = ox, origin_y = oy,
+                         class_lai = Dict(SURFACE_PARK => cfg.park_lai))
+end
+
+"""
+    case_static_inputs(cfg, mesh) -> StaticInputs
+
+The case's ground: read from the static driver `cfg.static` (checked to
+be on `mesh` with the anchor where `cfg` puts it, see
+`InputDrivers.read_static_driver`), or, with `cfg.static === nothing`,
+[`berlin_static_inputs`](@ref) in memory.
+"""
+function case_static_inputs(cfg, mesh)
+    cfg.static === nothing && return berlin_static_inputs(cfg, mesh)
+    isfile(cfg.static) ||
+        error("Missing the static driver $(cfg.static). Generate it with\n" *
+              "  julia --project -m Aeolus preprocess static <the config.toml naming it>\n" *
+              "or set [geometry] static = \"none\" to preprocess $(cfg.osm_path) in memory.")
+    ox, oy = anchor_xy(cfg, mesh)
+    return read_static_driver(cfg.static; mesh = mesh, origin_lat = cfg.lat0, origin_lon = cfg.lon0,
+                              origin_x = ox, origin_y = oy)
+end
+
 """
     build_geometry(cfg, mesh) -> Geometry
 
-Load the OSM city of `cfg` (projected about `cfg.lat0/lon0`, shifted so
-that the point `cfg.offset` metres from the anchor is the domain centre),
-rasterise it on `mesh` with building-adjacent cells tagged
-`SURFACE_WALL`, and build the radiosity scene and its view factors (the
-geometry is static, so this happens once). For `cfg.lateral = :open` the
-columns within `cfg.boundary_frame` cells of the open faces are kept free
-of buildings (#262).
+The ground of the case ([`case_static_inputs`](@ref): the static driver,
+or the OSM file preprocessed in memory) as the solid mask and the
+surface-class map on `mesh`, building-adjacent cells tagged
+`SURFACE_WALL` (`InputDrivers.solid_and_classes`); then the radiosity
+scene and its view factors (the geometry is static, so this happens
+once). For an open case (`lateral_open`) the columns within
+`cfg.boundary_frame` cells of the open faces are kept free of buildings
+(#262). The Berlin case has no terrain: a driver with `zt ≠ 0` is an
+error.
 """
 function build_geometry(cfg, mesh)
-    isfile(cfg.osm_path) ||
-        error("Missing $(cfg.osm_path). Run examples/urban/data/fetch_alexanderplatz.jl first.")
-    Lx, Ly = mesh.Lx, mesh.Ly
-    city = load_city_osm(cfg.osm_path;
-                         lat0 = cfg.lat0, lon0 = cfg.lon0,
-                         x_shift = Lx / 2 - cfg.offset[1],
-                         y_shift = Ly / 2 - cfg.offset[2],
-                         min_height = cfg.min_height)
+    st = case_static_inputs(cfg, mesh)
+    all(iszero, st.zt) ||
+        error("the static driver $(cfg.static) has terrain (zt from $(minimum(st.zt)) to $(maximum(st.zt)) m); " *
+              "the Berlin case has none")
     w_f = lateral_open(cfg) ? cfg.boundary_frame : 0
-    sm, sfc = surface_class_map(city, mesh; tag_walls = true, frame = (w_f, w_f),
-                                bcs = case_scalar_bcs(cfg))
+    sm, sfc = solid_and_classes(st, mesh; tag_walls = true, frame = (w_f, w_f), bcs = case_scalar_bcs(cfg))
 
     # Era III: a radiosity scene replaces the ray-cast sky-view factor.
     # Geometry is static, so facets and view factors are built once. The
@@ -392,7 +122,7 @@ function build_geometry(cfg, mesh)
            facets = nfacets(scene), svf_mean = mean(svf))
     wall_ids = [i for (i, f) in enumerate(scene.facets) if f.kind === :wall]
     open_cols = findall(==(0), heightmap)
-    return Geometry(city, sm, sfc, heightmap, scene, vfac, facet_col,
+    return Geometry(st.city, sm, sfc, st.lai, heightmap, scene, vfac, facet_col,
                     Matrix{Float64}(svf), wall_ids, open_cols)
 end
 
@@ -422,13 +152,12 @@ building_height(g::Geometry, mesh) =
 """
     park_lai_map(case) -> (veg_mask, LAI_map)
 
-The park columns (`SURFACE_PARK`) and their leaf-area index
-(`cfg.park_lai` on park cells, 0 elsewhere).
+The park columns (`SURFACE_PARK`) and their leaf-area index (the static
+driver's `lai` on park cells, 0 elsewhere).
 """
 function park_lai_map(case)
     sfc = case.geom.sfc
     veg_mask = (sfc .== SURFACE_PARK)
-    LAI_map = fill(case.cfg.park_lai, size(sfc))
-    LAI_map .*= veg_mask
+    LAI_map = case.geom.lai .* veg_mask
     return veg_mask, LAI_map
 end

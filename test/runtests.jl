@@ -666,8 +666,12 @@ using Aeolus.Fields: set!, interior_view
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
     include("ka_halos.jl")   # KA-f (#297): halo fills / nesting transfer operators on launch!
     include("ka_fv.jl")      # KA-d (#299): finite-volume kernels + grid metrics on launch!
+    include("ka_hooks.jl")   # KA-k (#307): Berlin dynamics hooks + WallModels on launch!
     include("ka_advection.jl")  # KA-e (#302): scalar transport / limiter / momentum advection on launch!
     include("ka_pcg.jl")     # KA-g (#300): the one pcg! driver of the four CG solvers
+    include("ka_multigrid.jl")   # KA-i (#303): multigrid kernels on launch!, canonical means
+    include("ka_step.jl")    # KA-j (#306): step cores on kernels, fused CFL / step guard, per-sim workspaces
+    include("ka_columns.jl") # KA-m (#301): column physics per column (foreach_column!), caches, ported loops
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
     include("pressure_fft_threads.jl")  # KA-h (#298): spectral solvers as kernels, FFTW thread-invariant
     include("ka_radiation.jl")   # KA-n (#305): radiosity LU cache / threaded VF / gather, multi-column two-stream, counter RNG
@@ -855,6 +859,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
     include("config_examples_validation.jl")  # CFG-e (#360): examples/validation/ from TOML, bit-identical to the old scripts
     include("config_berlin.jl")       # CFG-c (#358): berlin driver, scenarios from TOML, bitwise vs Julia-built, round trip
+    include("input_static.jl")        # CFG-f (#361): static driver, OSM/GeoJSON preprocessors, Berlin ground from one file
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

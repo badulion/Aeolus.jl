@@ -4,7 +4,7 @@
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
 # Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
-# nested, fft, fv, pcg, radiation,
+# nested, fft, fv, pcg, multigrid, steps, radiation, hooks, columns,
 # advection) and writes
 # one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
 # the raw bits (Float64 → UInt64), so two processes agree iff the results
@@ -33,10 +33,22 @@
 #               two-way with Orlanski outflow faces (16³ parent, 16³
 #               child at r = 2, 3 steps) and an anelastic two-way pair
 #               (4 steps): every field of parent and child.
+#   columns     (KA-m, #301) the column-physics kernels on seeded inputs, every
+#               launch threaded (threshold 0): fog adjustment, Kessler (both
+#               sedimentation schemes), dew exchange, dry deposition, the
+#               Berlin aq_chem emissions, facet
+#               scenes (implicit, direct, lagged), the dynamic roughness, and
+#               the partials of a foreach_column! launch;
 #   fft         (KA-h, #298) one solve of every spectral pressure solver —
 #               FFT, CosineFFT for all 8 axis-BC combinations, Stretched for
 #               the 4 lateral pairs — at 64×64×32 and 128×128×64, with FFTW
 #               on the process's threads (`init_threads!`).
+#   pcg         (KA-g, #300) every solver on the one CG driver: the
+#               solution and the iteration count.
+#   multigrid   (KA-i, #303) MultigridPoissonSolver and MGPreconditionedCG
+#               at 64×64×32 and 128×128×64: periodic / Neumann / all-Neumann,
+#               W-cycle, FMG, stretched z and cut-cell coefficients (a solid
+#               block): the solution, the cycle count and the residual history.
 #   fv          (KA-d, #299) every finite-volume kernel on seeded random
 #               fields with filled halos, on a 64×64×32 RegularGrid, a
 #               geometric StretchedGrid and a TerrainFollowingGrid over a
@@ -44,6 +56,16 @@
 #               item; its per-level sums, also at 128×128×32, where a 3-D
 #               launch would race); and 3 steps of a 64×64×32
 #               Smagorinsky LES on the stretched grid (every field).
+#   steps       (KA-j, #306) every step core (test/support/step_cases.jl):
+#               Boussinesq Euler, RK3 and adaptive (the dt sequence, the CFL
+#               diagnostics, a forced retry), IMEX ARK2 / Rosenbrock2,
+#               anelastic and pseudo-incompressible, a stretched grid and
+#               every core with open boundaries: every field after 1-4 steps.
+#   hooks       (KA-k, #307) the dynamics hooks with every launch on the KA
+#               path: the IBM direct forcing, the immersed-wall operators
+#               (per-face gather) on a 64×64×32 city with their
+#               diagnostics, the canopy drag, the Berlin moist buoyancy, and
+#               every large-scale forcing on a regular and a stretched grid.
 #   advection   (KA-e, #302) the scalar-transport and momentum-advection
 #               kernels of AdvectionSchemes on seeded random fields at
 #               64×64×32: the flux-form sweep and face fluxes of every
@@ -69,6 +91,7 @@ using Aeolus.Fields: set!, interior_view, Field
 using Aeolus.Grids: interior
 using Random: Xoshiro, randn, rand
 using Printf
+import LinearAlgebra
 
 const OUT = ARGS[1]
 const SECTIONS = split(ARGS[2], ',')
@@ -183,7 +206,7 @@ function section_reductions()
     record!("reductions/sgs_stress_dissipation", O.sgs_stress_dissipation(sim.u, sim.v, sim.w, sim.νt))
     record!("reductions/max_advective_rate", TI._max_advective_rate(sim.u.data, sim.v.data, sim.w.data, mesh))
     record!("reductions/brunt_vaisala", TI._brunt_vaisala(sim))
-    record!("reductions/max_speed", TI._max_speed(sim))
+    record!("reductions/max_speed", TI.step_guard(sim).speed)   # KA-j: the speed cap of the fused guard
     record!("reductions/all_finite", TI._all_finite(sim))
     # plane_reduce!: a tuple body and a fused write
     I3 = interior(mesh)
@@ -404,6 +427,114 @@ function section_pcg()
 end
 
 # --------------------------------------------------------------------------
+# KA-m (#301): the column-physics kernels on seeded inputs, every launch on
+# the threaded path in the default mode (threshold 0), serial in `serial`
+function section_columns()
+    b = MODE == "serial" ? BACKEND : CPUBackend(threshold = 0)
+    MT = Aeolus.MoistThermodynamics
+    # fog adjustment (64×64×32): dry, near-saturated, supersaturated and foggy cells
+    n = (64, 64, 32); rng = Xoshiro(301)
+    p = collect(range(1.0e5, 9.0e4, length = n[3]))
+    Π = [MT.exner_function(pk, MT.PhasePartition(0.0)) for pk in p]
+    θ = 285 .+ 6 .* rand(rng, n...)
+    qs = [MT.saturation_specific_humidity(θ[i, j, k] * Π[k], p[k]) for i in 1:n[1], j in 1:n[2], k in 1:n[3]]
+    qv = qs .* (0.85 .+ 0.2 .* rand(rng, n...))
+    ql = ifelse.(rand(rng, n...) .< 0.2, 2e-4 .* rand(rng, n...), 0.0)
+    tot = fog_adjust!(θ, qv, ql, p, 2.0; backend = b)
+    record!("columns/fog.fields", vcat(vec(θ), vec(qv), vec(ql))); record!("columns/fog.total", tot)
+    # Kessler: conversion per cell, both sedimentation schemes per column
+    mesh = RegularGrid(; size = (48, 40, 32), extent = (2400.0, 2000.0, 1600.0), halo = (2, 2, 2))
+    I3 = interior(mesh)
+    for Vt in (:spectrum, 3.0)
+        f = [Field(mesh) for _ in 1:3]
+        f[1].data .= 0.01
+        f[2].data[I3...] .= ifelse.(rand(Xoshiro(2), 48, 40, 32) .< 0.3, 2e-3 .* rand(Xoshiro(3), 48, 40, 32), 0.0)
+        f[3].data[I3...] .= ifelse.(rand(Xoshiro(4), 48, 40, 32) .< 0.2, 1e-3 .* rand(Xoshiro(5), 48, 40, 32), 0.0)
+        apply_kessler_step!(f..., 20.0; Vt = Vt, ρ_air = collect(range(1.2, 0.95, length = 32)), backend = b)
+        record!("columns/kessler[$Vt]", vcat(vec(f[2].data), vec(f[3].data)))
+    end
+    # dew exchange and dry deposition (128×96 columns)
+    Ts = 280 .+ 8 .* rand(Xoshiro(6), 128, 96)
+    q = [MT.saturation_specific_humidity(T, 1.0e5) * (0.9 + 0.2r) for (T, r) in
+         zip(282 .+ 4 .* rand(Xoshiro(7), 128, 96), rand(Xoshiro(8), 128, 96))]
+    d = ifelse.(rand(Xoshiro(9), 128, 96) .< 0.5, 1e-3 .* rand(Xoshiro(10), 128, 96), 0.0)
+    H = with_backend(() -> dew_exchange!(q, d, Ts, 1.0e5, 60.0; dz = 4.0, ρ = 1.2), b)
+    record!("columns/dew", vcat(vec(q), vec(d), vec(H)))
+    c = 10 .+ rand(Xoshiro(11), 128, 96, 8)
+    r = Aeolus.Chemistry.apply_dry_deposition!(c, 0.01 .* rand(Xoshiro(12), 128, 96), 30.0; dz = 2.0,
+                                               k = rand(Xoshiro(13), 1:8, 128, 96), backend = b)
+    record!("columns/dry_deposition", vcat(vec(c), r))
+    # aq_chem emissions: at one thread the site's own serial loop (only the
+    # emitted terms added), threaded the column_sum launch (a 3-tuple per
+    # column, zeros included); equal hashes across the counts mean the two
+    # paths give the same fields and totals
+    ac = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing))
+    aq = BC.find_coupling(ac, :aq_chem)
+    BC._aq_sun!(aq, ac)
+    with_backend(() -> BC._aq_emit!(aq, ac, 2.0), b)
+    record!("columns/aq_emit", vcat(vec(BC._aq_sp(aq, :NO)), vec(BC._aq_sp(aq, :NO2)), vec(BC._aq_sp(aq, :VOC)),
+                                    [aq.emitted[s] for s in (:NO, :NO2, :VOC)]))
+    # facet scenes: implicit (iterative, direct) and lagged. BLAS on one
+    # thread in every process: the scene's longwave response is an LU solve
+    # whose bits depend on the BLAS thread count, and init_threads! leaves
+    # BLAS threaded at -t 1 (it pins BLAS only when Julia runs threaded), so
+    # the -t 1 reference would differ from -t 4 for a reason that is not a
+    # Julia-thread one (measured: response hash 3b3d… with 12 BLAS threads,
+    # 517a… with 1, at -t 1 and -t 4 alike)
+    nblas = LinearAlgebra.BLAS.get_num_threads()
+    LinearAlgebra.BLAS.set_num_threads(1)
+    hm = zeros(10, 8); hm[3:4, :] .= 12; hm[7, 2:6] .= 20
+    sc = Aeolus.Radiosity.build_scene(hm, 4.0, 4.0; wall_subdivisions = 2)
+    vf = Aeolus.Radiosity.view_factors(sc)
+    air = SurfaceForcing(sw_down = 500.0, lw_down = 330.0, T_air = 295.0, U = 3.0, q_air = 0.008)
+    for (lab, kw) in (("implicit", (;)), ("direct", (solver = :direct,)), ("lagged", (coupling = :lagged,)))
+        u = UrbanFacetScene(sc, vf; T = 290.0, options = f -> (T_interior = 293.0,))
+        fl = with_backend(b) do
+            local fl
+            for _ in 1:3; fl = step_urban_facets!(u, air, 600.0; kw...); end
+            fl
+        end
+        record!("columns/facets[$lab]", vcat(facet_temperatures(u), [x.H for x in fl],
+                                              reduce(vcat, [x.column.T for x in u.facets])))
+    end
+    LinearAlgebra.BLAS.set_num_threads(nblas)
+    # dynamic roughness (masked)
+    WM = Aeolus.WallModels
+    Nx, Ny, rr = 64, 16, 4
+    dx = 2π / Nx
+    xf = [(i - 0.5) * dx / rr for i in 1:Nx*rr]
+    hf = [0.02 * sin(3x) + 0.006 * sin(10x) + 0.004 * cos(2y) for x in xf, y in xf[1:Ny*rr]]
+    st = WM.subfilter_height(hf, rr; dx = dx, dy = dx, filter = :box)
+    uc = 3 .+ 0.3 .* randn(Xoshiro(14), Nx, Ny); vc = 0.3 .* randn(Xoshiro(15), Nx, Ny)
+    dr = WM.DynamicRoughness(st; z0_floor = 1e-5, C_d = 0.3, mask = rand(Xoshiro(16), Nx, Ny) .< 0.85)
+    with_backend(() -> WM.update_dynamic_roughness!(dr, uc, vc, 0.05), b)
+    record!("columns/dynamic_roughness", vcat(dr.α, vec(dr.z0)))
+    # the primitive: partials of a column launch and their fold
+    A = randn(Xoshiro(17), 96, 80, 24)
+    P = foreach_column!(b, (i, j, A) -> (s = 0.0; @inbounds(for k in axes(A, 3); s += A[i, j, k]; end);
+                                         (s, abs(s))), (1:96, 1:80), A; partials = zeros(96 * 80, 2))
+    record!("columns/foreach_column!", vcat(vec(P), column_sums(P)))
+end
+
+# --------------------------------------------------------------------------
+# KA-i (#303): the multigrid V-cycle on launch! (colour-indexed RBGS, residual,
+# restriction, prolongation, canonical means and norms).
+include(joinpath(@__DIR__, "multigrid_cases.jl"))
+function section_multigrid()
+    MGm = Aeolus.Multigrid
+    for N in ((64, 64, 32), (128, 128, 64))
+        tag = join(N, 'x')
+        for (name, (m, s)) in mg_solver_cases(N)
+            p, _ = mg_solve_case(name, m, s)
+            record!("multigrid/$tag/$name", p.data)
+            record!("multigrid/$tag/$name/cycles", mg_cycles(s))
+            s isa MGm.MultigridPoissonSolver && record!("multigrid/$tag/$name/history", mg_iteration_history(s))
+        end
+    end
+end
+
+# --------------------------------------------------------------------------
+# KA-d (#299): the finite-volume kernels on launch!.
 function section_fv()
     FVK = Aeolus.Operators.FiniteVolume
     SG = Aeolus.StretchedGrids
@@ -493,6 +624,85 @@ function section_fv()
         step!(sim, 0.05)
     end
     record_sim!("fv/stretched LES", sim)
+end
+
+# KA-k (#307): the dynamics hooks and WallModels operators. Every launch on
+# the KA path (`threshold = 0`; the sparse face lists are below the default
+# threshold on these grids), or serially in `serial` mode.
+function section_hooks()
+    hb = MODE == "serial" ? BACKEND : CPUBackend(threshold = 0)
+    LSF = Aeolus.LargeScaleForcing
+    rng = Xoshiro(307)
+    g = RegularGrid(; size = (64, 64, 32), extent = (640.0, 640.0, 320.0), halo = (3, 3, 3))
+    sim = BoussinesqSimulation(g; ν = 0.05, C_s = 0.17, f_coriolis = 1e-4,
+                               bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    sm = Aeolus.IBM.SolidMask(g)
+    # blocks of random height with one-cell streets between some of them
+    hts = 30 .+ 150 .* rand(rng, 8, 8)
+    Aeolus.IBM.mark_solid!(sm, (x, y, z) -> (bx = Int(fld(x, 80)) + 1; by = Int(fld(y, 80)) + 1;
+                                             mod(x, 80) < 60 + 10 * (bx % 2) && mod(y, 80) < 50 + 20 * (by % 2) &&
+                                             z < hts[bx, by]))
+    for f in (sim.u, sim.v, sim.w, sim.tu, sim.tv, sim.tw)
+        interior_view(f) .= randn(rng, size(interior_view(f)))
+    end
+    sim.νt.data .= 0.1 .* abs.(randn(rng, size(sim.νt.data)))
+    with_backend(hb) do
+        Aeolus.IBM.implicit_ibm_correction!(sim, sm; τ = 2.0, dt = 0.5)
+        Aeolus.IBM.add_ibm_penalty!(sim, sm; τ = 0.7)
+        Aeolus.IBM.implicit_ibm_correction!(sim, sm)
+        record!("hooks/ibm.u", sim.u.data); record!("hooks/ibm.tu", sim.tu.data); record!("hooks/ibm.w", sim.w.data)
+        law = (i, j, k) -> isodd(i ÷ 8) ? RoughLogLaw(0.05) : RoughLogLaw(0.5)
+        iw = immersed_walls(sim, sm, law)
+        record!("hooks/immersed.npairs", Float64(length(iw.faces)))
+        remove_stencil_wall_flux!(sim, iw; ν = 0.05, sgs = true)
+        apply_immersed_wall_stress!(sim, iw, 0.5)
+        for (n, f) in (("u", sim.u), ("v", sim.v), ("w", sim.w), ("tu", sim.tu), ("tv", sim.tv), ("tw", sim.tw))
+            record!("hooks/immersed.$n", f.data)
+        end
+        for k in (:F, :τA, :area, :τ_min, :F_stencil)
+            record!("hooks/immersed.stats.$k", Float64[iw.stats[k]...])
+        end
+        prof = [(10 < i < 40 && 45 < j < 60) ? Aeolus.PlantCanopy.UniformLAD(3.0, 60.0) : nothing
+                for i in 1:64, j in 1:64]
+        drag = Aeolus.PlantCanopy.ResolvedCanopyDrag(g, Aeolus.PlantCanopy.canopy_lad_field(g, prof); C_d = 0.2)
+        F = Aeolus.PlantCanopy.apply_canopy_drag!(sim, drag, 2.0)
+        record!("hooks/canopy.u", sim.u.data); record!("hooks/canopy.w", sim.w.data)
+        record!("hooks/canopy.F", collect(Float64, Tuple(F)))
+        # the Berlin moist buoyancy
+        θ = 300 .+ randn(rng, 64, 64, 32); qv = 8e-3 .+ 1e-3 .* randn(rng, 64, 64, 32)
+        qc = [abs.(1e-4 .* randn(rng, 64, 64, 32))]; fluid = rand(rng, 64, 64, 32) .< 0.8
+        Δ = zeros(64, 64, 32)
+        BC.moist_buoyancy_perturbation!(Δ, θ, qv, qc, fluid)
+        BC.add_moist_buoyancy!(sim.tw, Δ, 300.0, 9.81)
+        record!("hooks/moist.Δ", Δ); record!("hooks/moist.tw", sim.tw.data)
+    end
+    # the large-scale forcings on a regular and a stretched grid
+    for (gn, lg) in (("regular", RegularGrid(; size = (64, 64, 32), extent = (6400.0, 6400.0, 3200.0), halo = (3, 3, 3))),
+                     ("stretched", Aeolus.StretchedGrids.StretchedGrid(; size = (64, 64, 32), extent = (6400.0, 6400.0, 3200.0),
+                                                                       halo = (3, 3, 3), stretching = (:geometric, 1.05))))
+        ls = BoussinesqSimulation(lg; ν = 0.0, f_coriolis = 1e-4,
+                                  bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+        for f in (ls.u, ls.v, ls.θ, ls.tu, ls.tv, ls.tθ)
+            f.data .= randn(rng, size(f.data))
+        end
+        ls.θ.data .+= 300
+        tab = LSF.ForcingTable([0.0, 1000.0, 3200.0], [299.0, 301.0, 307.0])
+        Fs = (LSF.GeostrophicPressureGradient((z, t) -> 5 + 0.002z, -1.0),
+              LSF.ProfileNudging((θ = tab, u = 4.0), 900.0; weight = LSF.NudgingWeight(800.0; depth = 400.0)),
+              LSF.Subsidence((z, t) -> -3e-6 * z; fields = (:θ, :u)),
+              LSF.Subsidence((z, t) -> -3e-6 * z; fields = (:θ, :v), form = :local),
+              LSF.AdvectiveTendencies(; θ = (z, t) -> 1e-5 * sin(z / 300), u = tab),
+              LSF.ReferenceDamping(:θ, Aeolus.Operators.sponge_profile(0.01, 1600.0, 3200.0), :mean))
+        with_backend(hb) do
+            for (n, F) in enumerate(Fs)
+                apply_forcing!(ls, F, 60.0, 2.0)
+                record!("hooks/lsf.$gn.$n.integrals", Float64[values(LSF.tendency_integrals(F))...])
+            end
+        end
+        record!("hooks/lsf.$gn.tu", ls.tu.data); record!("hooks/lsf.$gn.tv", ls.tv.data)
+        record!("hooks/lsf.$gn.tθ", ls.tθ.data)
+        record!("hooks/lsf.$gn.damping", Fs[end].levels)
+    end
 end
 
 # --------------------------------------------------------------------------
@@ -656,7 +866,18 @@ function section_advection()
 end
 
 # --------------------------------------------------------------------------
-init_threads!(BACKEND)
+# KA-j (#306): every step core (test/support/step_cases.jl): every field of
+# the simulation after one to four steps, the dt sequences, the CFL
+# diagnostics and a forced retry.
+include(joinpath(@__DIR__, "step_cases.jl"))
+section_steps() = (run_cases(); nothing)
+
+# --------------------------------------------------------------------------
+# BLAS on one thread at every count. `init_threads!` pins it only when Julia
+# runs threaded, so at -t 1 OpenBLAS keeps its own default; LAPACK's bits
+# depend on the BLAS thread count, and the Berlin radiosity solves through
+# it (bus sw/lw, the surface ledger of the smoke and flagship sections).
+init_threads!(BACKEND; blas_threads = 1)
 t0 = time()
 for s in SECTIONS
     ts = time()
@@ -668,8 +889,12 @@ for s in SECTIONS
     s == "nested"     ? section_nested() :
     s == "fft"        ? section_fft() :
     s == "fv"         ? section_fv() :
+    s == "hooks"      ? section_hooks() :
     s == "pcg"        ? section_pcg() :
+    s == "multigrid"  ? section_multigrid() :
+    s == "steps"      ? section_steps() :
     s == "radiation"  ? section_radiation() :
+    s == "columns"    ? section_columns() :
     s == "advection"  ? section_advection() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)

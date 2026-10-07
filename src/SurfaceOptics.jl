@@ -86,7 +86,7 @@ module SurfaceOptics
 # the answer by tens of W m⁻².
 
 using ..RadiationCore
-using ..RadiationCore: SpectralGrid, AbstractSurfaceOptics,
+using ..RadiationCore: _gauss_legendre, SpectralGrid, AbstractSurfaceOptics,
                        nbands, ngpoints, band_limits, gpoint_range,
                        shortwave_bands, longwave_bands,
                        PLANCK_H, LIGHT_C, BOLTZMANN_K
@@ -122,45 +122,9 @@ export # spectral library
 # Quadrature
 # =========================================================================
 #
-# Gauss-Legendre nodes by Newton iteration on the Legendre polynomial.
-# Duplicated from `RadiationCore` deliberately: this module's numerical
-# results are its whole reason for existing, so it owns its quadrature
-# rather than depending on a private symbol in another module.
-
-const _GL_CACHE = Dict{Int, Tuple{Vector{Float64}, Vector{Float64}}}()
-
-"""
-    _gauss_legendre(n) -> (x, w)
-
-`n`-point Gauss-Legendre nodes and weights on `[-1, 1]`. Cached.
-"""
-function _gauss_legendre(n::Int)
-    n >= 1 || error("_gauss_legendre: n must be ≥ 1")
-    haskey(_GL_CACHE, n) && return _GL_CACHE[n]
-    x = zeros(Float64, n); w = zeros(Float64, n)
-    for i in 1:n
-        z = cos(π * (i - 0.25) / (n + 0.5))      # Chebyshev-like start
-        for _ in 1:100
-            p0 = 1.0; p1 = z
-            for k in 2:n
-                p0, p1 = p1, ((2k - 1) * z * p1 - (k - 1) * p0) / k
-            end
-            dp = n * (z * p1 - p0) / (z^2 - 1)
-            dz = p1 / dp
-            z -= dz
-            abs(dz) < 1e-15 && break
-        end
-        p0 = 1.0; p1 = z
-        for k in 2:n
-            p0, p1 = p1, ((2k - 1) * z * p1 - (k - 1) * p0) / k
-        end
-        dp = n * (z * p1 - p0) / (z^2 - 1)
-        x[i] = z
-        w[i] = 2 / ((1 - z^2) * dp^2)
-    end
-    _GL_CACHE[n] = (x, w)
-    return (x, w)
-end
+# Gauss-Legendre nodes: `RadiationCore._gauss_legendre`, the one source
+# (KA-m, #301; this module's own copy was the same arithmetic, bit for
+# bit, and its lazily filled cache was not safe under threads).
 
 "Gauss-Legendre nodes and weights mapped to `[0, 1]`."
 function _gl01(n::Int)
