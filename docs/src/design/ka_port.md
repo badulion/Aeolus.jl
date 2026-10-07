@@ -125,6 +125,9 @@ unchanged at one thread (axpy 22-24 µs, `set!` 11 µs, the Laplacian
 46-47 µs at 64×64×32); WENO-5 went from 6.3 to 2.0 ms at one thread and
 from 0.83 to 0.39 ms at 12. A call per *row* on the serial path instead
 of one per nest made the Laplacian 1.3× the old loop, hence `_nest!`.
+A 2-D launch on the serial path calls `_nest2!(body!, ir, jr, a1, …,
+aN)` the same way (KA-e, #302): `boundary_scalar_flux`'s face bodies (up
+to 19 arguments) ran 2-2.5× the old loop when they read the tuple.
 
 **Column kernels: `launch_weighted!`** (KA-h, #298). A body that loops
 over a whole column itself — a tridiagonal solve in z, serial within the
@@ -255,6 +258,17 @@ quotes its size.
   for a few draws or [`counter_xoshiro`](@ref Aeolus.Backends.counter_xoshiro)
   for hundreds, keyed by a seed or one draw from the caller's `rng`
   (KA-n). Tallies go into per-item buffers merged in item order.
+* A column work item ([`foreach_column!`](@ref Aeolus.Backends.foreach_column!),
+  KA-m) owns its scratch: a workspace that belongs to the column's own
+  object (a soil column's, a facet's conduction column), or vectors the
+  column allocates itself (a raining Kessler column's `col` / `Nr`).
+  Never one buffer captured by a closure and shared by every column, and
+  never a global scratch vector (the Mie log-derivative buffer was one,
+  and raced, until KA-m made it task-local).
+* Lazily filled global caches are filled before any launch can reach
+  them, or guarded by a lock (KA-m): the Gauss-Legendre nodes are a table
+  computed when `RadiationCore` loads, the aerosol optics memo and the
+  SNICAR table are locked.
 
 ## FFTW and BLAS
 
@@ -315,7 +329,9 @@ AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
 ```
 
 Later port PRs extend the worker with their own sections, not the
-driver.
+driver. KA-m added `columns`: the column kernels on seeded inputs, every
+launch threaded (`threshold = 0`), BLAS on one thread in that section
+(see "Measured at KA-m").
 
 ## Measured at KA-a
 
@@ -833,6 +849,147 @@ threads to 1 thread. Two separate processes at `-t 1` and two at `-t 24`
 gave the same fft and dns hashes. At `-t 1` every solve is bit-identical
 to master: no one-time change.
 
+## KA-i: the multigrid V-cycle (#303)
+
+**Kernels.** Every loop nest of `MultigridPoissonSolver` and of the
+V-cycle preconditioner of `MGPreconditionedCG` is a `launch!` of a
+pointwise body, and every sum a canonical plane reduction:
+
+* `_smooth_rbgs!`: per colour, the halo fill and then **one launch over
+  that colour's cells only**. The launch covers half of each i-row; the
+  index `ih` maps to `i = 2ih + ((j + k + colour) & 1)`, so
+  `(i + j + k) & 1 == colour`. It is still red-black Gauss-Seidel. The
+  cells of a colour read only the other colour, so the order they run in
+  does not matter and the sweep has the bits of the serial loop. For an
+  even `nx` every row has `nx/2` cells of a colour and the body has no
+  bounds test. The strided loop then vectorises: one colour at
+  128×128×64 takes 0.65 ms instead of 1.19 ms with the test, and 1.49 ms
+  for the old "skip by parity" loop over all cells. An odd `nx` keeps the test.
+* `_compute_residual!` (constant and variable coefficient: one body,
+  the operator passed as `_ConstOp` / `_VarOp`), `_restrict!` (each
+  coarse cell writes itself), `_prolong_add!` (each fine cell writes
+  itself; the eight weight products `wi·wj·wk` are hoisted out of the
+  body and added in the old loop order: 1.59 ms instead of 2.20 ms at
+  128×128×64), and the fine operator of MG-CG (`_apply_fine!`, which
+  writes `out` directly).
+* `_l2` and `_project_mean!` use `plane_partials!` and `ordered_sum`,
+  with the partials in a per-level buffer (`MGLevel.part`).
+
+`test/ka_multigrid.jl` compares the smoother, residual, fine operator,
+restriction and prolongation with verbatim copies of the old loops, bit
+for bit. It covers even and odd `nx`, constant and cut-cell coefficients
+and three closures, on the default, the serial and a `threshold = 1`
+backend (the last threads every launch).
+
+**Serial coarse levels.** No multigrid-specific threshold: the coarse
+levels go through the global `launch!` threshold (32 768 points). A
+colour sweep covers half a level, so at 64×64×32 only the finest level
+is threaded (65 536 points per colour), and at 128×128×64 the two
+finest. 32×32×16 and below, and the 50 sweeps of the coarsest solve,
+run serially on the calling task. `_restrict_coeff` is setup only and
+stays a serial loop.
+
+**Projections.** The operator is always singular (every axis periodic
+or Neumann), so the mean is projected out up to six times per level per
+cycle: after each smoothing, after the prolongation, from the residual
+and from the coarse right-hand side. Where it saves a sweep the
+projection is fused into a neighbouring kernel:
+
+* the residual's mean is subtracted inside the restriction, which reads
+  `r − m`. The result has the bits of a projection followed by the
+  restriction, and the sweep that wrote the projected `r` is gone;
+* the right-hand side's mean is reduced while it is copied in (fused
+  `plane_reduce!`);
+* the final projection of the solution is fused with the copy-out;
+* the projection of the convergence check's residual is fused with its
+  sum of squares.
+
+The sums were *not* fused into the stencil launches. A `plane_reduce!`
+whose body evaluates the residual and writes it took 1.49 ms at
+128×128×64 on one thread. The residual launch plus a separate sum took
+0.90 ms: the eight-lane reduction keeps the stencil from vectorising.
+The restriction showed the same (0.24 against 0.10 ms).
+
+**One-time change (expectation).** The means and norms were serial
+`for k, j, i` sums. They are now canonical plane sums. This changes the
+solution in the last bits and could have moved a cycle count by ±1 (the
+issue allowed that). Measured over 22 cases (MG with three closures,
+W-cycle, FMG, stretched and cut-cell; MG-CG with two closures, stretched
+and cut-cell; each at 32×32×16 and 64×64×32), every cycle and iteration
+count is identical to the old loops. The largest change of the solution
+is `max|Δx| / max|x|` = 2.2e-15 (MG on the stretched grid at 64×64×32);
+the others are 3.1e-16 to 1.6e-15. No regression reference of the suite
+moved, and no assertion was changed. A solve allocates 0 B on one thread
+(`@allocated`, for every case above).
+
+**Measured.** ms per `solve!`, minimum of 7 (64×64×32) or 3 (128×128×64,
+stretched), load average 7-8, Julia 1.13.1. Old = the merge base
+(master + KA-g) at one thread. Speed-up = old 1 t / new N t; in brackets
+new 1 t / new N t. Source: seeded random, tol 1e-10, default closure
+(periodic x, y; Neumann z) unless stated. Extent 1000 × 1000 × 200 m.
+
+| solver | grid | cycles | old 1 t | new 1 t | new / old | 4 t | 12 t | 24 t |
+| :----- | :--- | -----: | ------: | ------: | --------: | --: | ---: | ---: |
+| MG | 64×64×32 | 21 | 66.0 | 29.1 | 0.44 | 2.3× (1.03×) | 2.5× (1.12×) | 2.0× (0.88×) |
+| MG | 128²×64 | 21 | 580.5 | 284.8 | 0.49 | 3.4× (1.66×) | 4.2× (2.06×) | 3.0× (1.47×) |
+| MG, all Neumann | 64×64×32 | 24 | 76.0 | 33.2 | 0.44 | 2.5× (1.07×) | 2.7× (1.17×) | 2.4× (1.04×) |
+| MG-CG | 64×64×32 | 12 | 41.1 | 19.2 | 0.47 | 2.3× (1.06×) | 2.2× (1.01×) | 1.6× (0.76×) |
+| MG-CG | 128²×64 | 12 | 382.6 | 211.2 | 0.55 | 2.9× (1.57×) | 3.0× (1.68×) | 2.5× (1.36×) |
+| MG-CG, stretched (×1.04) | 64×64×32 | 43 | 212.2 | 126.1 | 0.59 | 2.6× (1.53×) | 2.2× (1.29×) | 1.8× (1.07×) |
+
+Per-level split of one V-cycle at 128×128×64 (ms; a level's own time
+is the cycle from that level minus the cycle from the next coarser one):
+
+| level | size | old 1 t | new 1 t | new 4 t | new 12 t | new 24 t |
+| :---- | :--- | ------: | ------: | ------: | -------: | -------: |
+| 1 | 128×128×64 | 21.44 | 9.45 | 5.10 | 5.01 | 5.44 |
+| 2 | 64×64×32 | 2.47 | 1.09 | 0.92 | 0.93 | 1.00 |
+| 3 | 32×32×16 | 0.32 | 0.13 | 0.14 | 0.14 | 0.14 |
+| 4 | 16×16×8 | 0.043 | 0.021 | 0.022 | 0.021 | 0.025 |
+| 5 (coarsest, 50 sweeps) | 8×8×4 | 0.067 | 0.049 | 0.048 | 0.048 | 0.048 |
+
+Reading the tables:
+
+* **The 1-thread gate holds**, by a wide margin: 0.44-0.59× of the old
+  loops. Most of the gain comes from the smoother (half the cells per
+  launch instead of a parity test on all of them, and vectorised); the
+  rest from the faster prolongation and the dropped projection sweep.
+* **Threads.** The issue asked for at least 2.5× at 4 threads and 4× at
+  12 at 128²×64. Against the old loops it is 3.4× and 4.2×; against the
+  new code on one thread only 1.7× and 2.1×. The finest level stops
+  scaling at 4 threads (5.1 ms, and 5.0 ms at 12). It is memory-bound
+  once vectorised: one colour sweep reads φ and b (17 MB) in 0.65 ms on one
+  thread. Level 2 gains 1.2× (launch start-up against 65 536 points),
+  and the serial levels are flat by design. 24 threads are slower than
+  12 everywhere. The uniform 64×64×32 solves gain 1.0-1.2× from
+  threads (the stretched one 1.5× at 4). As in KA-g, the task start-up
+  of the many small launches per cycle costs about what the work does.
+
+**Thread invariance.** The worker's new `multigrid` section hashes the
+solution, the cycle count and the residual history of MG and MG-CG at
+64×64×32 and 128×128×64. It covers three closures, the W-cycle, FMG,
+stretched z and cut-cell coefficients around a solid block: 58 hashes,
+identical at 1, 4 and 24 threads. The whole harness is quoted in the PR.
+One of its cases does not converge: plain MG on the stretched grid
+(×1.04, extent 2000 m in z) at 128×128×64 stops at its cap of 200
+cycles with a relative residual of 1.04e-6 and logs the
+`maxcycles reached` warning. The old loops do the same (200 cycles,
+1.0370739097032905e-6 against 1.0370739097035124e-6 now): point
+smoothing stalls on the anisotropic cells. MG-CG solves the same case
+in 61 iterations. It is kept as a hash, not a convergence test.
+
+**Re-checked after the master merge** (KA-d's `_row!` / `_nest!` launch
+change, load 4-8). Every solution hash and cycle count is unchanged. ms
+per solve, old 1 t / new 1 t / 4 t / 12 t / 24 t: MG 128²×64 581.4 /
+276.4 / 173.6 / 150.4 / 179.9 (new / old 0.48; 3.3×, 3.9×, 3.2× against
+the old loops). MG-CG 128²×64 390.3 / 210.2 / 96.6 / 127.7 / 155.9
+(0.54; 4.0×, 3.1×, 2.5×). MG 64×64×32 66.2 / 28.7 / 25.8 / 25.6 / 29.7
+(0.43). MG-CG stretched 64×64×32 215.3 / 110.6 / 83.4 / 105.7 / 111.2
+(0.51). The finest level of a V-cycle at 128²×64 takes 10.0 ms at 1 t
+and 5.6 / 5.2 / 7.1 ms at 4 / 12 / 24 t. The threaded times vary by
+±20 % between runs with other agents on the machine; the 1-thread gate
+(≤ 1.10×) holds at 0.43-0.54×.
+
 ## KA-d: grid metrics and the finite-volume kernels (#299)
 
 **One kernel per operator for both grids.** Every kernel of
@@ -1065,6 +1222,132 @@ stretched grid (87 hashes). All 2953 hashes (primitives, 64³ DNS,
 reductions, the Berlin smoke matrix, the flagship step, nested, fft, fv)
 are identical at 4 and 24 threads to 1 thread. At `-t 1` every kernel is
 the old loop bit for bit (`test/ka_fv.jl`): no one-time change.
+
+## KA-e: scalar transport, positivity limiter, momentum advection (#302)
+
+**Ported to `launch!`** (all in AdvectionSchemes): the flux-form sweep
+`_advect_reconstructed!` (one launch over the interior; every cell still
+evaluates both of its faces, so neighbouring cells evaluate a shared face
+twice exactly as before: sharing face fluxes would change bits and is not
+done here), `_reconstructed_fluxes!` and `_upwind_fluxes!` (three launches
+each, over the face ranges `last + 1`), `_add_flux_divergence!`, the
+WENO-Z and skew-symmetric momentum advection (one launch per component),
+the variance-conserving advection, and `boundary_scalar_flux` (#284). The
+reconstruction point functions stay `@inline` scalar functions on
+`NTuple`s.
+
+**The limiter in three phases.** `_positivity_limit!` is pass 1 (the
+ratio `R` of every cell, one launch), the halo of `R` (`_wrap_one_layer!`
+as three 2-D launches over the face planes, or `fill_halos!(R, bcs)`),
+and pass 2 (each face flux rescaled with its donor's `R`, three launches).
+Pass 2 and the upwind fluxes choose with `ifelse` instead of a branch on
+the sign of the flux or the velocity: the same value (both operands are
+computed, one is chosen), and at one thread the limiter ran 240 µs
+instead of 1800 µs on random-sign fluxes, where the branch mispredicted
+on half the faces.
+
+**Scratch.** `apply_positivity_limiter!(…; ratio = nothing)` and
+`advect_positive!(…; workspace = nothing)` throw an `ArgumentError` when
+the backend runs threaded: a time loop allocates the scratch once. The
+Berlin coupling (`couplings/scalar_advection.jl`), the TKE closure and the
+Reynolds-stress closure pass their `FluxLimiterWorkspace`; the coupling
+builds the reconstruction descriptor once. With a workspace,
+`advect_positive!` and `boundary_scalar_flux` allocate nothing on a serial
+backend (`@allocated`, `test/ka_advection.jl`).
+
+**`boundary_scalar_flux`.** Its totals, per-level sums and mass-flux
+corrections are ordered sums, so they stay serial in the old loop order.
+When a face plane's 2-D launch runs on several tasks the face terms are
+computed by it into a scratch vector (one module-level buffer, grown once,
+behind a lock) and the sums then run over the scratch; on a serial launch
+the sums compute the terms on the fly, the old fused loop (a separate
+pass over the scratch was 1.6-2.2× the fused loop at one thread). The
+two-point schemes (`:centered`, `:upwind`) always take the fused loop:
+their face work is smaller than the extra pass (256×256×128 box,
+`:centered`: 306 µs fused at one thread, 455 / 487 / 730 µs threaded at
+4 / 12 / 24). A 2-D serial launch passes the body's arguments separately
+(`_nest2!`, as `_nest!` for 3-D): through the tuple the face bodies ran
+2-2.5× the old loop.
+
+**Bit for bit.** `test/ka_advection.jl` keeps a transcript of the pre-port
+loops (`test/support/legacy_advection.jl`) and compares, on seeded random
+fields and halos included: the sweep of every reconstruction (WENO-Z5/7,
+TENO5/8, WENO-JS5, Centered2, upwind), the reconstructed and upwind face
+fluxes, the limiter (with and without low-order fluxes, periodic wrap and
+BC halos, positivity active), `advect_positive!` on a RegularGrid and a
+StretchedGrid, both momentum advections, the variance-conserving
+advection and `boundary_scalar_flux` (every flux-form scheme, levels,
+corrections, diffusion, weights, `face_fluxes`). Each runs serially,
+threaded with every launch on the KA path (`threshold = 0`) and on the
+default backend: all identical to the old loops. No one-time change: at
+one thread the flagship's state after 4 steps hashes the same as master
+(`b20cfbd49603e21f`).
+
+**Measured** (Ryzen 9 7900, 12 cores / 24 threads; µs, minimum of 200
+calls, 64×64×32 RegularGrid, halo 3; load 5-7 from other jobs; old = the
+transcript at one thread):
+
+| kernel | old, 1 t | new, 1 t | new/old | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: | --: | --: |
+| sweep WENO-Z5 | 2235 | 2263 | 1.01 | 583 (3.9×) | 430 (5.3×) | 435 (5.2×) |
+| sweep TENO5 | 2657 | 2663 | 1.00 | 684 (3.9×) | 526 (5.1×) | 470 (5.7×) |
+| sweep Centered2 | 103 | 103 | 1.00 | 36 (2.8×) | 38 (2.7×) | 40 (2.6×) |
+| face fluxes WENO-Z5 | 1042 | 1037 | 0.99 | 295 (3.5×) | 261 (4.0×) | 261 (4.0×) |
+| upwind fluxes | 275 | 103 | 0.38 | 65 (1.6×) | 66 (1.6×) | 78 (1.3×) |
+| limiter (3 phases, walls) | 1800 | 240 | 0.13 | 188 (1.3×) | 152 (1.6×) | 179 (1.3×) |
+| flux divergence | 52 | 52 | 1.01 | 28 (1.9×) | 24 (2.2×) | 26 (2.0×) |
+| advect_positive! WENO-Z5 | 3425 | 1451 | 0.42 | 571 (2.5×) | 568 (2.6×) | 609 (2.4×) |
+| momentum WENO-Z5 | 6658 | 6664 | 1.00 | 1718 (3.9×) | 1452 (4.6×) | 1387 (4.8×) |
+| momentum skew | 301 | 305 | 1.01 | 125 (2.4×) | 118 (2.6×) | 132 (2.3×) |
+| variance conserving | 87 | 87 | 1.00 | 35 (2.5×) | 31 (2.8×) | 39 (2.2×) |
+| bsf `:centered`, 64×64×32 | 16 | 16 | 1.03 | 16 | 16 | 16 |
+| bsf `:weno_z5`, 64×64×32 | 647 | 129 | 0.20 | 129 | 130 | 130 |
+| bsf `:centered`, 256×256×128 | 283 | 290 | 1.02 | 286 | 358 | 287 |
+| bsf `:weno_z5`, 256×256×128 | 14245 | 2444 | 0.17 | 1544 (1.6×) | 1667 (1.5×) | 1497 (1.6×) |
+
+Speed-ups are against the new code at one thread. Every one-thread time is
+within the 1.10× gate (worst: `boundary_scalar_flux :centered` 1.03×).
+`boundary_scalar_flux` at 64×64×32 stays serial (its planes are below the
+launch threshold); with WENO-Z5 it runs 5× faster at one thread than
+master (651 → 129 µs, master's own function measured too). The arithmetic
+is the same; the old loop body called a local closure `addl!` and the
+new one top-level functions with every array an argument. Which of the
+two made the difference was not isolated.
+
+**Flagship** (`CaseConfig()`, 64×64×64; ms/step, minimum of 3 × 8 steps
+after 4 warm-up steps; load 5-8 from other jobs; master = 8cb0b572):
+
+| threads | step, master | step, KA-e | `scalar_advection`, master | `scalar_advection`, KA-e |
+| --: | --: | --: | --: | --: |
+| 1 | 254.9 | 246.3 | 57.3 | 50.0 (0.87×) |
+| 4 | 238.6 | 217.5 | 57.4 | 34.3 (1.46×) |
+| 12 | 241.8 | 203.1 | 59.3 | 29.1 (1.72×) |
+| 24 | 246.1 | 210.2 | 58.2 | 31.6 (1.58×) |
+
+(KA-e speed-ups against KA-e at one thread.) The stage is short of the
+issue's targets (≥ 2.5× at 4, ≥ 5× at 12). Per tracer at 12 threads,
+`advect_positive!` takes 1.14 ms (3.26 at one thread, 2.9×) and the SGS
+diffusion `sgs_diffuse!` 0.63-0.81 ms (1.45, 1.8-2.3×); the limiter and
+the upwind fluxes are memory-bound and gain 1.3-1.6×. The 12- and 24-thread
+runs shared the machine with other jobs (load 5-8 on 12 cores), so they
+are lower bounds.
+
+**Launch overhead.** One `scalar_advection` stage (8 advected tracers)
+makes 259 launches, 96 of them threaded (the others are below the
+threshold: halo planes, the 2-D wraps). An empty-body launch over the 64³
+interior costs 6.3 / 13.3 / 21.6 µs at 4 / 12 / 24 threads, so about
+0.6 / 1.3 / 2.1 ms of the stage is launch overhead.
+
+**Thread invariance.** The harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,24`) with the new `advection` section (64
+hashes: the sweep, face fluxes and `advect_positive!` with its ratio
+field, periodic wrap and wall halos, of every reconstruction; the bare
+limiter; both momentum advections; the variance-conserving advection;
+`advect_positive!` on a stretched grid; `boundary_scalar_flux` on a
+256×256×128 open box, where its face planes launch on several tasks).
+All 3071 hashes (primitives, dns, reductions, smoke, flagship, nested,
+fft, fv, pcg, radiation, advection) are identical at 4 and 24 threads to
+1 thread.
 
 ## KA-n: radiation and stochastic modules (#305)
 
@@ -1704,8 +1987,9 @@ production, a scatter over the list of wall faces.
   printed digits (e 6.6662e-2 m² s⁻²). The `:smoke` scenario (12 steps,
   the state digests of `test/data/config_berlin/fixture.toml`): 13 of 22
   digests change (u, v, w, p, θ, qv, e, Ts and the chemistry tracers; the
-  nest parent's do not), by at most 7.3e-14 relative (e) and 3.9e-16 (θ);
-  with the old scatter swapped back in, all 22 equal the fixture, so the
+  nest parent's do not), by at most 6.8e-14 relative (e: max |Δe| 2.0e-15
+  m² s⁻² at max e 2.9e-2) and 3.9e-16 (θ); with the old scatter swapped
+  back in, all 22 equal the fixture (as re-recorded by KA-m), so the
   gather is the only change. The 13 digests are re-captured.
 * *The TKE and RSM budget statistics* (`tke_statistics`,
   `reynolds_stress_statistics`): per-plane running sums combined in
@@ -1786,6 +2070,222 @@ by a single sample; the SGS kernels themselves measure 0.13-1.04× above).
 A 32-step run (2 warm-up + 3 × 10) of `CaseConfig()` fails on both the old
 and the new code (`step_adaptive!: step failed (velocity) after 3
 retries`), so the flagship is timed over 11 steps.
+
+## KA-m: column physics, one work item per column (#301)
+
+**Primitives** (`src/Backends.jl`). [`foreach_column!`](@ref Aeolus.Backends.foreach_column!)
+runs a column body `body!(i, j, args...)` (or `body!(n, args...)` over a
+list of ids: the columns of one surface type, the facets of a scene) as
+one work item. The body loops over its own levels in its own order and
+writes only its own column. What the old loops accumulated across
+columns, the body *returns*; the launch stores it in row `c` of a
+`partials` matrix (column-major `c`), and
+[`column_sums`](@ref Aeolus.Backends.column_sums) folds each term in
+row order from zero. [`column_sum`](@ref Aeolus.Backends.column_sum) does
+both, and on the calling task it adds the terms as they come (no partials
+array). Both paths add the same numbers in the same order, so a total is
+identical at every thread count and equal to the old `s += x` loop. A
+maximum is `foldl(max, …)` over the partials (exact in any order).
+[`foreach_cell!`](@ref Aeolus.Backends.foreach_cell!) is `launch!` with a
+weight, or `plane_reduce!` with per-plane partials. `weight` is the work
+of one column in grid points (its levels, or its root solves), so that
+the serial threshold counts the real work.
+
+**What runs per column.**
+
+* Surface exchange (`step_all_surfaces!`): the columns are grouped by
+  concrete surface type at `init!` and each group is one launch, so every
+  launch calls `step_surface!` on one type. The worst storage error, the
+  worst MSHF ratios and the MSHF time are per-column partials; the
+  delivery loop (`:surface_flux`) returns evaporation and the solid-write
+  flag.
+* The parent's tiled surface (`step_parent_surface!`): one work item per
+  parent column, with the area sums of the tile fluxes as partials.
+* `aq_chem`: the deposition velocities (one surface-layer solve per
+  column) and the emissions; `Chemistry.apply_dry_deposition!` returns
+  what each column removed. `apply_photochemistry!` was already a
+  per-cell `plane_reduce!` (KA-b).
+* `RadiationFog.fog_adjust!`: one plane per work item, with an early exit
+  for a cell with `ql ≤ 0` and `qv < (1 − 10⁻⁸) q_s`, where the
+  adjustment returns exactly zero. `dew_exchange!` and the Berlin dew
+  pass: one column each.
+* Kessler: conversion per cell; the spectrum sedimentation one column
+  per work item, a raining column allocating its own `col` / `Nr` scratch
+  (the old loop shared one pair through a captured closure); the legacy
+  upwind one column per work item in ascending `k`. This is also the only
+  3-D use of `p3_sediment!`; the Berlin case has no 3-D P3 coupling.
+* `WallModels` dynamic roughness: the masked mean wind, the drag parts
+  and the residual at every α of the scan and the root solve.
+* `UrbanSurface` facet scenes: the trial steps of the implicit step, the
+  final column advance and the lagged step, one work item per facet. A
+  scene that lists one facet object twice is refused (it would race).
+
+**What stays serial, and why.** The facet scene's coupled longwave /
+node solve between the facet launches and the building energy balance
+are global linear systems: every unknown depends on every other, so
+there is no column to give a work item. The LU solve also depends on the
+BLAS thread count, which is why the harness section pins BLAS to one
+thread. Per-tracer parallelism is a follow-up.
+
+**Global caches.** `RadiationCore._gauss_legendre` is the one source of
+Gauss-Legendre nodes; `SurfaceOptics` and `Radiosity` delegate to it
+(their copies were the same arithmetic and gave the same bits). Orders
+1-64 are a table computed when the module loads; higher orders are
+memoised under a lock. The aerosol bulk-optics memo and the SNICAR table
+are locked (the SNICAR file is read once). The Mie log-derivative buffer
+was one global vector, and two tasks calling `mie_sphere` at once
+corrupted each other's recursion. The new first-use-under-threads test
+found this; the buffer is task-local now (2000 calls: 4.39 → 4.02 ms).
+
+**Two performance traps** found while measuring, both now fixed and
+tested:
+
+* A closure that captures a variable the loop reassigns is boxed. The
+  first `column_sums` row update did this, and every row then went
+  through dynamic dispatch (72 bytes per row). `update_dynamic_roughness!`
+  at 128² took 101 / 98 / 97 ms at 4 / 12 / 24 threads against 8.3 ms
+  for the old loop at one thread.
+* A type passed among the launch arguments (`::Type{T}`) is stored as a
+  `DataType` in the argument tuple, so the body is dispatched per
+  column. Pass `zero(T)` instead.
+
+**One-time changes against master** (named in the maintainer's
+decisions on #291):
+
+* The saturation vapour pressure is one fused exponential,
+  `e_s = p_tr exp(a ln(T/T0) + b)`, instead of `p_tr (T/T0)^a exp(b)`.
+  This changes the last bits of `e_s` and `q_s` everywhere: at most
+  8.3 × 10⁻¹⁶ relative over 230-320 K (6 ulps) and 2.4 × 10⁻¹⁵ over
+  150-400 K. The P3 precipitation-fraction golden values move by
+  9.5 × 10⁻¹⁶ in `q_c` of the cold parcel; they were re-recorded because
+  that expectation was a bit pattern.
+  After 12 flagship steps at one thread against master: θ differs by at
+  most 3.4 × 10⁻¹³ K (1.2 × 10⁻¹⁵ relative), qv by 1.4 × 10⁻¹⁷
+  (1.7 × 10⁻¹⁵), u by 6.2 × 10⁻¹⁵ m s⁻¹, the surface temperature by
+  2.3 × 10⁻¹³ K; ql is identical. In the ledgers the park class moves in
+  the 14th digit, and the domain evaporation goes from
+  1.4646778140248087 × 10⁻⁴ to 1.4646778140248762 × 10⁻⁴.
+  The CFG fixture's smoke digests (`test/data/config_berlin/fixture.toml`,
+  `berlin_smoke.toml`, 12 steps) were re-recorded for this change: the 13
+  child fields move (θ by at most 1.1 × 10⁻¹³ K, 3.9 × 10⁻¹⁶ relative; qv
+  2.8 × 10⁻¹⁷; u 6.1 × 10⁻¹⁵ m s⁻¹; Ts 1.1 × 10⁻¹³ K; O₃ 1.5 × 10⁻¹⁴
+  relative), the nest parent and the zero tracers do not. With the old
+  `e_s` restored the branch reproduces the old digests exactly, so the
+  `e_s` change is the only difference.
+* The total that `fog_adjust!` returns is the plane sums in ascending
+  `k`, so its last bits change. The Berlin coupling ignores it, and the
+  fields are bit-identical.
+
+Apart from these, every ported kernel is bit-identical to master at one
+thread. This was checked by hashing in two worktrees: facet scenes
+(implicit, direct, lagged), dry deposition, dynamic roughness, the
+smoke matrix and the flagship, 2591 hashes. The `dew_exchange!` hash
+equals the hash of master with the `e_s` change alone.
+
+**Measured** (AMD Ryzen 9 7900, Julia 1.13.1; minimum of 20 calls,
+5-10 for the slow ones; old = master at b4f6f82, the minimum of two runs
+at one thread; speed-up = old 1 t / new N t; µs).
+
+| kernel | old, 1 t | new, 1 t | 1 t / old | 4 t | 12 t | 24 t |
+| :----- | -------: | -------: | --------: | --: | ---: | ---: |
+| `fog_adjust!`, flagship state, 64×64×32 | 11 350 | 4 968 | 0.44 | 9.04× | 15.93× | 17.97× |
+| `fog_adjust!`, foggy state, 64×64×32 | 49 276 | 43 523 | 0.88 | 4.61× | 11.48× | 14.52× |
+| `fog_dew` dew pass, 64×64 | 33.5 | 32.2 | 0.96 | 2.01× | 1.32× | 1.25× |
+| `apply_kessler_step!` (spectrum), flagship state | 677 | 644 | 0.95 | 3.34× | 4.00× | 3.55× |
+| `apply_kessler_step!` (spectrum), 20 % raining cells | 3 242 882 | 3 342 466 | 1.03 | 3.77× | 6.97× | 10.56× |
+| `step_all_surfaces!`, child 64×64 | 146 241 | 140 142 | 0.96 | 4.04× | 5.42× | 11.51× |
+| `step_parent_surface!`, parent 192×192 (tiled) | 1 987 205 | 1 993 987 | 1.00 | 3.38× | 5.28× | 6.24× |
+| `aq_chem` deposition velocities, 64×64 | 24 336 | 21 086 | 0.87 | 4.37× | 7.45× | 7.98× |
+| `aq_chem` emissions, 64×64 | 5.11 | 5.32 | 1.04 | 0.96× | 0.86× | 0.85× |
+| `apply_dry_deposition!` (O₃), 64×64 | 30.9 | 23.7 | 0.77 | 1.29× | 1.29× | 1.28× |
+| surface delivery (`:surface_flux`), 64×64 | 184 | 22.9 | 0.12 | 7.92× | 7.95× | 7.88× |
+| `step_urban_facets!` implicit, 564 facets | 9 587 | 9 646 | 1.01 | 3.47× | 3.73× | 4.21× |
+| `step_urban_facets!` lagged, 564 facets | 9 586 | 9 854 | 1.03 | 3.67× | 4.21× | 4.66× |
+| `update_dynamic_roughness!`, 128×128 | 8 336 | 8 708 | 1.04 | 2.20× | 2.53× | 2.46× |
+
+Re-checked at one thread after merging KA-d (#299) and the CFG changes
+(single run each): every ratio is between 0.12 and 1.09. The largest are
+the lagged facet step (9 581 → 10 468 µs, 1.09; 1.03 above, so it is
+within run-to-run noise but close to the gate), the emissions (1.06) and
+the dynamic roughness (1.04).
+Re-checked again after merging KA-g (#300) and KA-n (#305), single run
+against the same old numbers: 0.12-1.06 for every kernel but the lagged
+facet step, which read 1.11 (5 calls). Measured on its own, old and new
+alternating, three processes each, the minimum of 60 calls: old
+9 662-9 855 µs, new 9 550-9 882 µs (0.97-1.02). The 1.11 was the 5-call
+minimum under a machine load of 5-7 from other jobs.
+
+Reading the table:
+
+* **The 1-thread gate (≤ 1.10) holds for every kernel.** The `aq_chem`
+  emissions first missed it at 1.38-1.50× (5.0 → 7.5 µs): through
+  `column_sum` every column adds a 3-tuple, zeros included, where the
+  old loop added only the one or two terms a street or park column
+  emits (3265 of 4096 columns emit). The site now runs its own serial
+  loop whenever the launch would run on the calling task, adding only
+  the emitted terms, and launches `column_sum` otherwise; both classify
+  a column through one helper, `_aq_emit_source`. Adding a +0.0 term to
+  a sum that starts at +0.0 changes nothing, so the two paths give the
+  same bits (the harness record `columns/aq_emit` runs the serial loop
+  at one thread and the threaded launch at more). Measured on the
+  flagship state, 3 repeats of the minimum of 20 000 calls: 5.11-5.24 →
+  5.32-5.39 µs, 1.02-1.05×. The emission row's 4-24 thread columns are
+  serial too (4096 points are below the threshold), and the spread
+  there is machine load.
+* **`fog_adjust!` gains at one thread** (0.44×) from the early exit,
+  because most flagship cells are far from saturation. A foggy state
+  (30 % of cells supersaturated) gains 0.88×. Both reach 15-18× at 24
+  threads.
+* **The surface delivery** is 0.12× at one thread. The old loop ran
+  inside the stage method, which reads the case's fields, and some of
+  them are not concretely typed. The column body sits behind
+  `column_sum`, which acts as a function barrier, so it is compiled for
+  concrete types. That is the likely reason; it was not profiled.
+* **Compute-heavy columns scale.** The child surface step reaches
+  11.5× at 24 threads, the parent's 192² tiled surface 6.2× (5.3× at
+  12), the deposition velocities 8.0×, and Kessler with 20 % rain 10.6×.
+  The issue expected 6-10× at 12 threads for the surface exchange; the
+  child gets 5.4× at 12 and the parent 5.3×, limited by load imbalance
+  between surface types (one launch per type).
+* **Small 2-D sums stay serial.** The emissions and the dry deposition
+  are 4096 columns × 1 point, below the threshold, so they run on the
+  calling task at any thread count. The dew pass has weight 16 (a
+  saturation humidity per column) and does thread. It reaches 2.0× at 4 threads, but only 1.3× at
+  12 and 24, where task start-up costs about as much as the 33 µs of
+  work.
+* **The facet scene** (564 facets) reaches 4.2-4.7× at 24 threads. The
+  serial longwave solve between the facet launches bounds it.
+* **The dynamic roughness** gains 2.2-2.5×: the filtered velocities and
+  the scan's bookkeeping between the residual launches are serial.
+
+**The flagship** (64×64×32 child with its parent, default cadence;
+`case.timing` per step in ms, mean over 8 steps, minimum of 3 repeats;
+old = master at one thread):
+
+| stage | old, 1 t | new, 1 t | 4 t | 12 t | 24 t |
+| :---- | -------: | -------: | --: | ---: | ---: |
+| whole step | 227.9 | 220.1 | 196.2 | 197.4 | 211.6 |
+| `chemistry/aq_chem` | 12.78 | 12.88 | 4.24 | 2.68 | 2.45 |
+| `fog_dew/fog_dew` | 11.43 | 4.83 | 1.64 | 0.99 | 0.86 |
+| `microphysics/micro_kessler` | 1.12 | 1.05 | 0.62 | 0.59 | 0.78 |
+| `surface_flux/surface_exchange` | 0.207 | 0.043 | 0.059 | 0.076 | 0.070 |
+| `surface_update/surface_exchange` | 0.106 | 0.107 | 0.115 | 0.173 | 0.139 |
+
+The issue's baseline was aq_chem 15-16.5 ms and fog_dew 9.4 ms. These
+stages now take 2.5 and 0.9 ms at 24 threads. The surface step runs at
+its cadence, so its mean per step is small; per call it is the
+`step_all_surfaces!` row above. The step as a whole is still bound by
+stages that other port issues own: the parent's nesting step (92 ms),
+scalar advection (49 ms) and the dynamics (48 ms).
+
+**Thread invariance.** The harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,12,24`) gives 3027 hashes per process
+(primitives, 64³ DNS, reductions, the Berlin smoke matrix, the flagship
+step, nested runs, fft, fv, pcg, radiation and the new `columns` section;
+measured after merging KA-g and KA-n), and all of them at 4, 12 and 24
+threads equal the 1-thread hashes. `test/ka_columns.jl` at
+`--threads 24` includes the first use of every cache from hundreds of
+tasks at once, and passes.
 
 ## Dependency tree
 

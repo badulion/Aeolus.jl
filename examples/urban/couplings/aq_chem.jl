@@ -216,18 +216,30 @@ and ``u_*``, and set ``v_d = 1/(r_a + r_b + r_c)`` for every depositing
 species.
 """
 function _aq_deposition_velocities!(c::AQChem, case)
-    u, v, θ = interior_view(case.sim.u), interior_view(case.sim.v), interior_view(case.sim.θ)
+    θ = interior_view(case.sim.θ)
     qv = haskey(case.tracers, :qv) ? interior_view(tracer(case, :qv)) : nothing
     Nx, Ny, Nz = size(θ)
     z_m = case.mesh.dz / 2                     # cell centre above the resolved surface
-    Ts = case.bus.Ts
-    Sc = Dict(s => schmidt_number(s) for s in AQ_DEPOSITING)
-    for j in 1:Ny, i in 1:Nx
+    Sc = Tuple(schmidt_number(s) for s in AQ_DEPOSITING)
+    vds = Tuple(c.v_d[s] for s in AQ_DEPOSITING)
+    rcs = Tuple(Dict(kd => surface_resistance(s, kd) for kd in unique(c.kind)) for s in AQ_DEPOSITING)
+    # one work item per column (KA-m, #301): a surface-layer solve each,
+    # writing only the column's r_a, u* and v_d
+    foreach_column!(Aeolus.Backends.backend(c.r_a), _aq_vd_column!, (1:Nx, 1:Ny), c, case, θ, qv,
+                    case.bus.Ts, z_m, Nz, Sc, vds, rcs; weight = AQ_VD_WEIGHT)
+    return c
+end
+
+# the work of one surface-layer solve in grid-point equivalents
+const AQ_VD_WEIGHT = 256
+
+function _aq_vd_column!(i, j, c, case, θ, qv, Ts, z_m, Nz, Sc, vds, rcs)
+    @inbounds begin
         k = c.k_air[i, j]
         if k > Nz
             c.r_a[i, j] = Inf; c.u_star[i, j] = 0.0
-            for s in AQ_DEPOSITING; c.v_d[s][i, j] = 0.0; end
-            continue
+            for v in vds; v[i, j] = 0.0; end
+            return nothing
         end
         U = hypot(centre_wind(case.sim, i, j, k)...)   # BC-aware faces (#262)
         q = qv === nothing ? 0.0 : qv[i, j, k]
@@ -240,12 +252,12 @@ function _aq_deposition_velocities!(c::AQChem, case)
         ra = 1 / (sol.C_H * sol.U)
         c.r_a[i, j] = ra
         c.u_star[i, j] = sol.u_star
-        for s in AQ_DEPOSITING
-            rb = quasi_laminar_resistance(sol.u_star; Sc = Sc[s])
-            c.v_d[s][i, j] = dry_deposition_velocity(ra, rb, surface_resistance(s, c.kind[i, j]))
+        for n in eachindex(vds)
+            rb = quasi_laminar_resistance(sol.u_star; Sc = Sc[n])
+            vds[n][i, j] = dry_deposition_velocity(ra, rb, rcs[n][c.kind[i, j]])
         end
     end
-    return c
+    return nothing
 end
 
 function run_stage!(c::AQChem, case, ::Val{:surface_update}, dt)
@@ -261,27 +273,65 @@ function _aq_emit!(c::AQChem, case, dt)
     Nz = size(NO, 3)
     ftr = traffic_profile(case.clock.hour)
     fsun = c.J / j_NO2(1.0)
-    eNO, eNO2, eVOC = 0.0, 0.0, 0.0
-    # surface sums: the columns' contributions folded in column-major order,
-    # the canonical order of a 2-D reduction (serial; KA-b, #296). The dry
-    # deposition total (`apply_dry_deposition!`) is the same kind of sum.
-    @inbounds for j in axes(NO, 2), i in axes(NO, 1)
-        k = c.k_air[i, j]
-        k <= Nz || continue
-        cl = sfc[i, j]
-        if cl == SURFACE_STREET || cl == SURFACE_WALL
-            a = c.F_NO * ftr * dt / dz; b = c.F_NO2 * ftr * dt / dz
-            NO[i, j, k] += a; NO2[i, j, k] += b
-            eNO += a * dz; eNO2 += b * dz
-        elseif cl == SURFACE_PARK
-            a = c.F_VOC * fsun * dt / dz
-            VOC[i, j, k] += a
-            eVOC += a * dz
+    # one work item per column (KA-m, #301), returning what it emitted; the
+    # surface sums folded in column-major order, the canonical order of a
+    # 2-D reduction and the old loop's (the same bits). The dry deposition
+    # total (`apply_dry_deposition!`) is the same kind of sum.
+    Nx, Ny = size(c.k_air)
+    b = Aeolus.Backends.backend(c.r_a)
+    a_NO, a_NO2 = c.F_NO * ftr * dt / dz, c.F_NO2 * ftr * dt / dz
+    a_VOC = c.F_VOC * fsun * dt / dz
+    eNO, eNO2, eVOC = if runs_serially(b, Nx * Ny)
+        # On the calling task, add only the terms a column emits, as the old
+        # loop did. `column_sum` would add a 3-tuple for every column, zeros
+        # included: 1.43x the old loop at one thread (#301 gate). Adding a
+        # +0.0 term leaves a sum that starts at +0.0 unchanged, so both paths
+        # give the same bits.
+        e1, e2, e3 = 0.0, 0.0, 0.0
+        k_air = c.k_air
+        @inbounds for j in 1:Ny, i in 1:Nx
+            src, k = _aq_emit_source(i, j, k_air, sfc, Nz)
+            if src == 1
+                NO[i, j, k] += a_NO; NO2[i, j, k] += a_NO2
+                e1 += a_NO * dz; e2 += a_NO2 * dz
+            elseif src == 2
+                VOC[i, j, k] += a_VOC
+                e3 += a_VOC * dz
+            end
         end
+        (e1, e2, e3)
+    else
+        column_sum(b, _aq_emit_column!, (1:Nx, 1:Ny), NO, NO2, VOC, c.k_air, sfc, Nz,
+                   a_NO, a_NO2, a_VOC, dz)
     end
     A = length(c.k_air)
     c.emitted[:NO] += eNO / A; c.emitted[:NO2] += eNO2 / A; c.emitted[:VOC] += eVOC / A
     return nothing
+end
+
+# what column (i, j) emits: 0 nothing, 1 traffic (NO, NO2), 2 park (VOC), and
+# its lowest air level. Both emission paths classify through it.
+@inline function _aq_emit_source(i, j, k_air, sfc, Nz)
+    @inbounds begin
+        k = k_air[i, j]
+        k <= Nz || return 0, k
+        cl = sfc[i, j]
+        (cl == SURFACE_STREET || cl == SURFACE_WALL) && return 1, k
+        cl == SURFACE_PARK && return 2, k
+        return 0, k
+    end
+end
+
+@inline function _aq_emit_column!(i, j, NO, NO2, VOC, k_air, sfc, Nz, a_NO, a_NO2, a_VOC, dz)
+    src, k = _aq_emit_source(i, j, k_air, sfc, Nz)
+    @inbounds if src == 1
+        NO[i, j, k] += a_NO; NO2[i, j, k] += a_NO2
+        return (a_NO * dz, a_NO2 * dz, 0.0)
+    elseif src == 2
+        VOC[i, j, k] += a_VOC
+        return (0.0, 0.0, a_VOC * dz)
+    end
+    return (0.0, 0.0, 0.0)
 end
 
 function run_stage!(c::AQChem, case, ::Val{:chemistry}, dt)

@@ -18,16 +18,19 @@
 #     Every hash must agree with
 #     the 1-thread one; the differing keys are listed otherwise.
 #     AEOLUS_THREAD_SECTIONS selects sections (default
-#     "primitives,dns,reductions,smoke,flagship,nested,fft,fv,pcg,steps,radiation,hooks,sgs";
+#     "primitives,dns,reductions,smoke,flagship,nested,fft,fv,pcg,multigrid,steps,radiation,hooks,columns,advection,sgs";
 #     reductions: the KA-b #296 reduction call sites; nested: short nested
 #     runs, KA-f #297; fft: every spectral pressure solver with FFTW on the
 #     process's threads, KA-h #298; fv: the finite-volume kernels and a
 #     stretched LES, KA-d #299; pcg: the four CG solvers, KA-g #300;
+#     multigrid: the MG solvers incl. stretched and cut-cell, KA-i #303;
 #     steps: every step core, KA-j #306; hooks: the dynamics hooks and
 #     immersed-wall operators, KA-k #307; radiation: radiosity, optics,
 #     two-stream, cloud shadow, Monte Carlo and superdroplets, KA-n #305;
-#     sgs: every SGS closure's coefficients, commits and short LES runs,
-#     KA-l #304). Every port PR runs and quotes it:
+#     columns: the column-physics kernels, KA-m #301; advection: scalar
+#     transport, limiter, momentum advection, KA-e #302; sgs: every SGS
+#     closure's coefficients, commits and short LES runs, KA-l #304).
+#     Every port PR runs and quotes it:
 #
 #       AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
 #
@@ -93,7 +96,7 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
 
     if get(ENV, "AEOLUS_THREAD_TESTS", "0") == "1"
         counts = parse.(Int, split(get(ENV, "AEOLUS_THREAD_COUNTS", "1,4,24"), ','))
-        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft,fv,pcg,steps,radiation,hooks,sgs")
+        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft,fv,pcg,multigrid,steps,radiation,hooks,columns,advection,sgs")
         project = dirname(Base.active_project())
         dir = mktempdir()
         hashes = Dict{Int,Dict{String,String}}()

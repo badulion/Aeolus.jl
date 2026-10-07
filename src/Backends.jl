@@ -27,7 +27,8 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
        plane_map!, apply_transform!,
        pcg!, PCGWorkspace, PointOperator, PointPreconditioner, IdentityPreconditioner,
-       CounterRNG, counter_rng, counter_xoshiro, set_stream!
+       CounterRNG, counter_rng, counter_xoshiro, set_stream!,
+       foreach_column!, foreach_cell!, column_sums, column_sum
 
 # =========================================================================
 # Backend types
@@ -331,6 +332,15 @@ for N in 0:24
         end
         return nothing
     end
+    # the 2-D serial nest (KA-e, #302: boundary_scalar_flux's face bodies ran
+    # 2-2.5x the old loop when the 2-D path read their arguments from the tuple)
+    @eval @noinline function _nest2!(body!::F, ir::UnitRange{Int}, jr::UnitRange{Int},
+                                     $(sig...)) where {F, $(Ts...)}
+        for j in jr, i in ir
+            body!(i, j, $(as...))
+        end
+        return nothing
+    end
 end
 # more than 24 arguments: the plain loops
 @noinline function _row!(body!::F, ir::UnitRange{Int}, j::Int, k::Int, args::Vararg{Any,N}) where {F, N}
@@ -343,6 +353,13 @@ end
                           args::Vararg{Any,N}) where {F, N}
     for k in kr, j in jr, i in ir
         body!(i, j, k, args...)
+    end
+    return nothing
+end
+@noinline function _nest2!(body!::F, ir::UnitRange{Int}, jr::UnitRange{Int},
+                           args::Vararg{Any,N}) where {F, N}
+    for j in jr, i in ir
+        body!(i, j, args...)
     end
     return nothing
 end
@@ -390,9 +407,7 @@ _npoints(ranges) = prod(length, ranges; init = 1)
     return nothing
 end
 @noinline function _serial!(body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args) where {F}
-    for j in jr, i in ir
-        body!(i, j, args...)
-    end
+    _nest2!(body!, ir, jr, args...)       # for j in jr, i in ir: body!(i, j, args...)
     return nothing
 end
 @noinline function _serial!(body!::F, (nr,)::NTuple{1,UnitRange{Int}}, args) where {F}
@@ -1563,5 +1578,219 @@ Base.copy(r::CounterRNG) = CounterRNG(r.key, r.stream, r.id, r.block, r.buf, r.h
 function Base.show(io::IO, r::CounterRNG)
     print(io, "CounterRNG(stream ", r.stream, ", id ", r.id, ", block ", r.block, ")")
 end
+
+# =========================================================================
+# Column physics: one work item per column (KA-m, #301)
+# =========================================================================
+#
+# A column body runs the k-sequential physics of one column (a surface
+# energy balance, a sedimentation sweep, a dew exchange) and writes only
+# its own column. What the old loops accumulated across columns (an
+# evaporation total, a worst ratio) the body *returns*; the launch stores
+# it in row `c` of `partials` (c = the linear index of the column in
+# column-major order), and the caller folds each term over the columns in
+# that order ([`column_sums`](@ref), or `foldl(max, …)` for a maximum).
+# The partials are written by one work item each, so they, and every
+# fold of them, are identical at every thread count — and equal, bit for
+# bit, to the old serial loop that accumulated `s += x` column by column
+# from zero (a skipped column stores 0, and `s + 0.0 == s`).
+
+@inline function _store_terms!(P, c, t::Tuple)
+    _store_from!(P, c, 1, t...)
+    return nothing
+end
+@inline _store_from!(P, c, n) = nothing
+@inline function _store_from!(P, c, n, x, rest...)
+    @inbounds P[c, n] = x
+    return _store_from!(P, c, n + 1, rest...)
+end
+@inline function _store_terms!(P, c, x)
+    @inbounds P[c, 1] = x
+    return nothing
+end
+
+@inline function _column_store_body!(i, j, body!::F, P, oi, ni, oj, args) where {F}
+    _store_terms!(P, (i - oi) + ni * (j - oj - 1), body!(i, j, args...))
+    return nothing
+end
+@inline function _column_store_body!(n, body!::F, P, on, args) where {F}
+    _store_terms!(P, n - on, body!(n, args...))
+    return nothing
+end
+
+"""
+    foreach_column!(backend, body!, cols, args...; partials = nothing, weight = 1)
+        -> partials
+
+Run the column body `body!(i, j, args...)` (`cols = (ir, jr)`, the
+`(i, j)` columns of a surface) or `body!(n, args...)` (`cols = (nr,)`, a
+list of column ids: the columns of one surface type, the facets of a
+building) once per column, as one work item each. The body loops over
+its column's levels itself, in its own (k-sequential) order, and writes
+only to its own column — the [`launch!`](@ref) contract with "point"
+read as "column": no two columns write the same location, and a column
+reads nothing another column writes in the same launch. Each column owns
+its scratch (a workspace per column, never one shared buffer).
+
+`partials` (optional): an `AbstractMatrix` with one row per column, in
+column-major order (`c = (i - first(ir) + 1) + length(ir) (j - first(jr))`,
+or `c = n - first(nr) + 1`) and one column per term. The body then
+returns its column's terms — a number, or an `NTuple` with one entry per
+term (zeros for a column that contributes nothing) — and the launch
+stores them in row `c`. No column body touches a shared accumulator.
+Fold them in column order with [`column_sums`](@ref) (a sum) or `foldl`
+(a maximum: `max` is exact); both are thread-invariant and equal, bit for
+bit, to the serial loop `s = 0.0; for j, for i: s += x` they replace.
+
+`weight` is the work of one column in grid points (its number of levels,
+or the cost of its root solves in point-equivalents): the backend's
+serial threshold and its points-per-task rule count `weight × ncolumns`
+points (see [`launch_weighted!`](@ref)). Serially the columns run in the
+historical `for j, for i` (or ascending `n`) order.
+"""
+function foreach_column!(b::AbstractBackend, body!::F, cols::NTuple{N,UnitRange{Int}},
+                         args::Vararg{Any,M}; partials = nothing,
+                         weight::Integer = 1) where {F, N, M}
+    N in (1, 2) || throw(ArgumentError("foreach_column!: cols must be (ir, jr) or (nr,)"))
+    if partials === nothing
+        launch_weighted!(b, weight, body!, cols, args...)
+        return nothing
+    end
+    nc = _npoints(cols)
+    size(partials, 1) == nc ||
+        throw(DimensionMismatch("partials has $(size(partials, 1)) rows, the launch $nc columns"))
+    if N == 2
+        ir, jr = cols
+        launch_weighted!(b, weight, _column_store_body!, cols, body!, partials,
+                         first(ir) - 1, length(ir), first(jr) - 1, args)
+    else
+        launch_weighted!(b, weight, _column_store_body!, cols, body!, partials,
+                         first(cols[1]) - 1, args)
+    end
+    return partials
+end
+foreach_column!(b::AbstractBackend, body!::F, cols::NTuple{N,AbstractUnitRange{<:Integer}},
+                args::Vararg{Any,M}; kw...) where {F, N, M} =
+    foreach_column!(b, body!, map(UnitRange{Int}, cols), args...; kw...)
+
+"""
+    foreach_cell!(backend, body!, ranges::NTuple{3,UnitRange{Int}}, args...;
+                  partials = nothing, weight = 1) -> partials
+
+Per-cell physics (a saturation adjustment, a conversion step): run
+`body!(i, j, k, args...)` once per cell of `ranges` — [`launch!`](@ref)
+with a `weight` (points per cell, for a body with a root solve).
+
+With `partials` (a vector, or an `NTuple` of vectors, with one entry per
+plane `k`) the body returns what each cell adds to the totals and the
+launch is [`plane_reduce!`](@ref): the canonical, thread-invariant plane
+sums (eight lanes per row), to be combined with [`ordered_sum`](@ref).
+For a fused update whose terms must be added in cell order (most cells
+contribute nothing, and the cheap ones are skipped) use
+[`plane_map!`](@ref) instead.
+"""
+function foreach_cell!(b::AbstractBackend, body!::F, ranges::NTuple{3,UnitRange{Int}},
+                       args::Vararg{Any,M}; partials = nothing,
+                       weight::Integer = 1) where {F, M}
+    if partials === nothing
+        launch_weighted!(b, weight, body!, ranges, args...)
+        return nothing
+    end
+    return plane_reduce!(partials, b, body!, ranges, args...)
+end
+foreach_cell!(b::AbstractBackend, body!::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
+              args::Vararg{Any,M}; kw...) where {F, M} =
+    foreach_cell!(b, body!, map(UnitRange{Int}, ranges), args...; kw...)
+
+"""
+    column_sum(backend, body, cols, args...; weight = 1) -> sum or NTuple of sums
+
+The totals over the columns of what a column body returns — a number, or
+an `NTuple` of numbers — in column-major order from zero: the
+[`foreach_column!`](@ref) launch with partials followed by
+[`column_sums`](@ref), without the partials when the launch runs on the
+calling task. Serially (one thread, `serial = true`, or fewer than the
+backend's threshold of `weight × ncolumns` points) the body's terms are
+added as they come, column after column — the old loops' running sums,
+with no partials array to fill and fold afterwards; threaded, every
+column stores its terms and the columns are folded in the same order. The
+two paths add the same numbers in the same order: the totals are
+identical, bit for bit, at every thread count.
+"""
+function column_sum(b::AbstractBackend, body::F, cols::NTuple{N,AbstractUnitRange{<:Integer}},
+                    args::Vararg{Any,M}; weight::Integer = 1) where {F, N, M}
+    cr = map(UnitRange{Int}, cols)
+    nc = _npoints(cr)
+    R = N == 2 ? Base.promote_op(body, Int, Int, map(typeof, args)...) :
+                 Base.promote_op(body, Int, map(typeof, args)...)
+    if runs_serially(b, nc * max(1, Int(weight))) || !_summable(R)
+        return _serial_column_sum(body, cr, args, _zero_terms(R))
+    end
+    P = Matrix{_term_eltype(R)}(undef, nc, _nterms(R))
+    foreach_column!(b, body, cr, args...; partials = P, weight = weight)
+    S = column_sums(P)
+    return R <: Tuple ? Tuple(S) : S[1]
+end
+
+_summable(::Type{R}) where {R<:Real} = isconcretetype(R)
+_summable(::Type{R}) where {R<:Tuple} = isconcretetype(R) && all(T -> T <: Real, fieldtypes(R))
+_summable(::Type) = false
+_nterms(::Type{R}) where {R<:Tuple} = fieldcount(R)
+_nterms(::Type) = 1
+_term_eltype(::Type{R}) where {R<:Tuple} = promote_type(fieldtypes(R)...)
+_term_eltype(::Type{R}) where {R} = R
+# the zero the running sums start from (`nothing`: not inferred, taken from
+# the first column's terms)
+_zero_terms(::Type{R}) where {R<:Real} = isconcretetype(R) ? zero(R) : nothing
+_zero_terms(::Type{R}) where {R<:Tuple} = _summable(R) ? map(zero, fieldtypes(R)) : nothing
+_zero_terms(::Type) = nothing
+
+@inline _add_terms(s::Tuple, x::Tuple) = map(+, s, x)
+@inline _add_terms(s, x) = s + x
+@inline _add_terms(::Nothing, x::Tuple) = map((z, y) -> z + y, map(zero, x), x)
+@inline _add_terms(::Nothing, x) = zero(x) + x
+
+@noinline function _serial_column_sum(body::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args, s) where {F}
+    for j in jr, i in ir
+        s = _add_terms(s, body(i, j, args...))
+    end
+    return s
+end
+@noinline function _serial_column_sum(body::F, (nr,)::NTuple{1,UnitRange{Int}}, args, s) where {F}
+    for n in nr
+        s = _add_terms(s, body(n, args...))
+    end
+    return s
+end
+
+"""
+    column_sums(partials) -> Vector
+
+The sum of every term (column of `partials`) over the columns (rows), in
+row order from zero ([`ordered_sum`](@ref)): the canonical total of a
+[`foreach_column!`](@ref) launch, thread-invariant.
+"""
+function column_sums(P::AbstractMatrix{T}) where {T}
+    nt = size(P, 2)
+    nt <= 8 && return collect(_column_sums(P, Val(nt)))
+    return [ordered_sum(view(P, :, t)) for t in axes(P, 2)]
+end
+# One pass over the rows, every term its own running sum held in a register
+# (independent chains, so one's add latency hides behind the others'),
+# each in row order from zero: the ordered_sum of each column of P.
+#
+# The row update is a separate function: a closure `t -> s[t] + P[c, t]`
+# inside the loop would capture `s`, which the loop reassigns, so Julia
+# boxes it and every row runs through dynamic dispatch (measured 5.5 ms
+# instead of a few µs for 128² rows).
+function _column_sums(P::AbstractMatrix{T}, ::Val{N}) where {T, N}
+    s = ntuple(_ -> zero(T), Val(N))
+    for c in axes(P, 1)
+        s = _add_row(s, P, c)
+    end
+    return s
+end
+@inline _add_row(s::NTuple{N,T}, P, c) where {N, T} =
+    ntuple(t -> (@inbounds s[t] + P[c, t]), Val(N))
 
 end # module

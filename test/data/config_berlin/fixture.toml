@@ -358,18 +358,21 @@ z_uniform = 500.0
 
         [smoke.parent.child.physics]
 
-# KA-l (#304): the 13 digests the dual-strain gather changes (named one-time
-# change, docs/src/design/ka_port.md) re-captured with the same driver; with
-# the old scatter swapped back in, all 22 equal the CFG-c capture.
+# smoke_digests re-recorded by KA-m (#301): the saturation vapour pressure is
+# one fused exponential (a named one-time change, docs/src/design/ka_port.md);
+# the 13 child fields moved in the last bits, the nest parent did not.
+# KA-l (#304): the same 13 digests re-captured for the dual-strain gather
+# (named one-time change, docs/src/design/ka_port.md); with the old scatter
+# swapped back in, all 22 equal the KA-m capture.
 [smoke_digests]
-HNO3 = "7c199fed0aa048cf"
-NO = "afa665f879856de3"
-NO2 = "75726f4f93a1d24c"
-O3 = "89e7b64386f6c445"
-Ts = "b069700fee7a5054"
-VOC = "316f3eb692bd08f1"
-e = "a6f6c70edaf72dd1"
-p = "b8405e59a3e771fa"
+HNO3 = "1733be3f7aab5962"
+NO = "b6795c8c8e976746"
+NO2 = "3273afa0e0827d01"
+O3 = "fc6bb57d9c28e847"
+Ts = "f58d199297fd4f3e"
+VOC = "a55986f4e6f08443"
+e = "e7bb991c3827fd22"
+p = "cb375d6fc23af9f5"
 parent_p = "a20144242790aaea"
 parent_qv = "ea52a59b9bec07f1"
 parent_u = "3b6d738234a763bd"
@@ -379,11 +382,11 @@ parent_w = "5c2c0fabed842a86"
 pollutant = "8f6955bf94ec2325"
 ql = "8f6955bf94ec2325"
 qr = "8f6955bf94ec2325"
-qv = "cacb389b7fc662a6"
-u = "ccd00787af4f0769"
-v = "fbff04249926b0bb"
-w = "06d37e0da755322b"
-"θ" = "2fb54cd3cc7e120f"
+qv = "e9d0d1ab35740ca1"
+u = "73d07398ef62321e"
+v = "faa64562e79c2819"
+w = "3376888f775bb99d"
+"θ" = "dd00d6685235a028"
 
 [summer.case]
 C_s = 0.1
