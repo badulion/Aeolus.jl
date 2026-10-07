@@ -122,12 +122,10 @@ calendar date, the SBL configs), with CF `units = "seconds since …"`.
 **Initial state.** Profiles over `init_z`,
 or 3-D fields on the run grid (`init_u3d`, …: the interior cells in
 storage order, u at the cell's west face, v at its south face, w at its
-bottom face), and `init_p_surface`. The `init_*` profiles and the
-surface series (below) are schema groups that
-[`write_dynamic_driver`](@ref Aeolus.InputDrivers.write_dynamic_driver)
-and [`read_dynamic_driver`](@ref Aeolus.InputDrivers.read_dynamic_driver)
-round-trip, but no preprocessor fills them and no case reads them yet. A
-sounding driver has no `init_*` profiles: the Berlin case reads its
+bottom face), and `init_p_surface`. The ERA5 preprocessor (below) fills
+the `init_*` profiles and the surface series, and the `simulation`
+driver's `[initial] dynamic` reads the profiles; no case reads the
+surface series yet. A sounding driver has no `init_*` profiles: the Berlin case reads its
 `ls_profile_*` tables and `init_p_surface` and evaluates the tables at
 its start time itself (the bilinear (height, time) interpolation between
 the two launches that bracket the start), which is bitwise the CSV path
@@ -199,6 +197,95 @@ the child; it also writes the child's 3-D initial wind. Recording every
 parent step, rather than extracting from 3-D output at output cadence, is
 what makes the offline child bitwise the online one: both blend the same
 Float64 snapshots over the same windows.
+
+### The ERA5 preprocessor
+
+```bash
+julia --project -m Aeolus preprocess dynamic --from-era5 \
+    examples/data/era5_lindenberg_20190629_pl.nc examples/data/era5_lindenberg_20190629_sfc.nc \
+    --config examples/configs/lindenberg_era5.toml [--box 0.5] [--out file.nc]
+```
+
+CFG-h (#363), shared with Era VIII #57. [`read_era5`](@ref Aeolus.InputDrivers.read_era5)
+reads ERA5 as the CDS delivers it, GRIB2 (GRIBDatasets) or NetCDF
+(NCDatasets), told apart by the file's first bytes: `t`, `q`, `u`, `v`,
+`w` (ω, Pa s⁻¹) and `z` (geopotential) on pressure or model levels, and
+`sp` (or `lnsp`), `skt`, `t2m` and the orography `z` from the single
+levels, possibly spread over several files that share one lat/lon grid
+and one time axis. [`era5_dynamic_inputs`](@ref Aeolus.InputDrivers.era5_dynamic_inputs)
+and [`write_era5_driver`](@ref Aeolus.InputDrivers.write_era5_driver) turn
+it into the dynamic driver:
+
+1. **Heights.** Pressure levels: `z = Φ/g₀`, g₀ = 9.80665 m s⁻² (the
+   `MoistThermodynamics` `grav`), above the ERA5 orography at the site.
+   Model levels: the IFS L137 half-level pressures `a + b p_s` and
+   hydrostatic integration with the virtual temperature
+   ([`era5_model_level_heights`](@ref Aeolus.InputDrivers.era5_model_level_heights),
+   IFS Cy41r2 Part III eqs. 2.20–2.23).
+2. **θ and qv.** `potential_temperature(T, p)` of `MoistThermodynamics`
+   (one source of truth); qv is ERA5's specific humidity.
+3. **Horizontal.** Bilinear on the regular lat/lon grid: at the domain
+   centre for the profiles and tables, and at every boundary-plane point
+   for the planes, mapped to lat/lon by [`meters_to_latlon`](@ref Aeolus.InputDrivers.meters_to_latlon),
+   the inverse of the CFG-f [`latlon_to_meters`](@ref Aeolus.InputDrivers.latlon_to_meters).
+4. **Vertical.** Linear in z ([`era5_vertical`](@ref Aeolus.InputDrivers.era5_vertical);
+   pressure linear in ln p); the lowest level's value below it; a run
+   top above the ERA5 top is an error naming both heights.
+5. **Geostrophic wind** from centred differences of Φ over the ±`box`
+   points (default ±0.5°): `u_g = −(1/f) ∂Φ/∂y`, `v_g = (1/f) ∂Φ/∂x`
+   (pressure levels only).
+6. **Subsidence** `w = −ω/(ρ g₀)`, ρ the moist-air density
+   ([`era5_subsidence`](@ref Aeolus.InputDrivers.era5_subsidence)).
+7. **Advective tendencies** `−u·∇θ`, `−u·∇qv`, centred over the same box.
+8. **Times.** The ERA5 valid times in seconds since `init_time` (the
+   first time by default), hourly as delivered: the model interpolates in
+   time (`ForcingTable`, `blend_window!`).
+
+The outputs (`[preprocess.era5] outputs`, all by default) are the
+`init_*` profiles and `init_p_surface`, the boundary planes of the run's
+open faces (one `time_bc` record per ERA5 time), the `ls_profile_*`
+tables, `ls_u_g`/`ls_v_g`, `ls_w_subs`, `ls_theta_adv`/`ls_qv_adv` and the
+surface series (`sfc_pressure`, and `sfc_temperature`, the skin
+temperature as a potential temperature). Every file read is listed with
+its FNV-1a hash in the global attribute `era5_files`.
+
+**The `simulation` driver** takes such a driver as `[initial] dynamic`:
+its profiles set the initial u, v, θ (and qv), and lateral faces set to
+`boundaries.x`/`y = "open"` take its boundary planes through a
+[`FileBoundaryFeed`](@ref Aeolus.InputDrivers.FileBoundaryFeed), blended
+linearly in time (boussinesq core, uniform grid, z walls).
+`[preprocess.era5]` gives the site (`lat`, `lon`, the domain centre),
+`box`, `levels` and `outputs`. `examples/configs/lindenberg_era5.toml` is
+a 16³ open box over Lindenberg; the file is hashed under `[inputs]` of
+`run.toml`, and 20 steps round-trip bit for bit
+(`test/preprocess_era5.jl`).
+
+**Data.** `examples/data/era5_lindenberg_20190629_{pl,sfc}.nc` (310 KB)
+is real ERA5 around Lindenberg (52.21 N, 14.12 E, ±1°), 2019-06-29
+00–12 UTC, 16 pressure levels 1000–500 hPa, with its CDS request and the
+Copernicus licence and attribution in the global attributes.
+`examples/data/fetch_era5.jl` re-creates it, or fetches another site and
+day, through the CDS API with `Downloads` and the user's `~/.cdsapirc`
+(a free CDS account and the ERA5 licence accepted once); the tests never
+call it. Attribution: Hersbach et al. (2023), ERA5 hourly data on
+pressure levels / single levels, C3S CDS, doi:10.24381/cds.bd0915c6,
+doi:10.24381/cds.adbb2d47.
+
+**Measured** (`test/preprocess_era5.jl`). On an analytic isothermal
+(280 K) hydrostatic atmosphere with every field linear in x and y,
+written in-test as NetCDF, the largest relative errors are: level
+heights against `(R T/g₀) ln(p₀/p)` 2.2e-16 (bound 1e-9), θ against
+`T (p₀/p)^κ` 1.9e-16 (1e-12), the geostrophic wind against the
+prescribed Φ gradient 1.2e-13 (1e-10), `−u·∇θ` 2.3e-14 (1e-10); the
+boundary planes match the analytic u to 8.9e-15 m/s. The subsidence is
+exact at a grid node (2.1e-16) but not between nodes (7.4e-8): w is a
+product of T and q, which are linear, so it is not bilinear. The same fields as GRIB2 (98 KB, packed as
+64-bit IEEE floats, `test/data/era5/make_grib_fixture.jl`) give the same
+driver bit for bit (10 tables, 25 boundary slabs). Against the
+Lindenberg radiosonde of 00 UTC 29 June 2019 over 200–3000 m above the
+ground, the ERA5 sample has a θ RMSE of 0.787 K (bias −0.503 K) and a
+qv RMSE of 0.718 g/kg (bias +0.192 g/kg) — within the 1.5 K and
+1.5 g/kg the issue expected.
 
 ## The Berlin case
 
