@@ -1333,7 +1333,12 @@ production, a scatter over the list of wall faces.
   (`CaseConfig()`, 64³, default `:tke` closure) the largest change of `e` is
   4.6e-10 m² s⁻² (2.1e-12 relative to max e = 220 m² s⁻²), of `u` 8.2e-12
   m s⁻¹ (3.4e-13 relative), of θ 1.8e-11 K; the domain means agree to all
-  printed digits (e 6.6662e-2 m² s⁻²).
+  printed digits (e 6.6662e-2 m² s⁻²). The `:smoke` scenario (12 steps,
+  the state digests of `test/data/config_berlin/fixture.toml`): 13 of 22
+  digests change (u, v, w, p, θ, qv, e, Ts and the chemistry tracers; the
+  nest parent's do not), by at most 7.3e-14 relative (e) and 3.9e-16 (θ);
+  with the old scatter swapped back in, all 22 equal the fixture, so the
+  gather is the only change. The 13 digests are re-captured.
 * *The TKE and RSM budget statistics* (`tke_statistics`,
   `reynolds_stress_statistics`): per-plane running sums combined in
   ascending `k` instead of one running sum over the domain. Equal to
