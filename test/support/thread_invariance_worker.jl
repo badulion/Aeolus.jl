@@ -4,7 +4,7 @@
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
 # Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
-# nested, fft, pcg) and writes
+# nested, fft, pcg, multigrid) and writes
 # one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
 # the raw bits (Float64 → UInt64), so two processes agree iff the results
 # are bit-identical. MODE is `default` (CPUBackend(): threaded when N > 1)
@@ -36,6 +36,12 @@
 #               FFT, CosineFFT for all 8 axis-BC combinations, Stretched for
 #               the 4 lateral pairs — at 64×64×32 and 128×128×64, with FFTW
 #               on the process's threads (`init_threads!`).
+#   pcg         (KA-g, #300) every solver on the one CG driver: the
+#               solution and the iteration count.
+#   multigrid   (KA-i, #303) MultigridPoissonSolver and MGPreconditionedCG
+#               at 64×64×32 and 128×128×64: periodic / Neumann / all-Neumann,
+#               W-cycle, FMG, stretched z and cut-cell coefficients (a solid
+#               block): the solution, the cycle count and the residual history.
 
 ENV["AEOLUS_FFTW_PLANNER"] = "estimate"    # deterministic plans (#245)
 using Aeolus
@@ -378,6 +384,23 @@ function section_pcg()
 end
 
 # --------------------------------------------------------------------------
+# KA-i (#303): the multigrid V-cycle on launch! (colour-indexed RBGS, residual,
+# restriction, prolongation, canonical means and norms).
+include(joinpath(@__DIR__, "multigrid_cases.jl"))
+function section_multigrid()
+    MGm = Aeolus.Multigrid
+    for N in ((64, 64, 32), (128, 128, 64))
+        tag = join(N, 'x')
+        for (name, (m, s)) in mg_solver_cases(N)
+            p, _ = mg_solve_case(name, m, s)
+            record!("multigrid/$tag/$name", p.data)
+            record!("multigrid/$tag/$name/cycles", mg_cycles(s))
+            s isa MGm.MultigridPoissonSolver && record!("multigrid/$tag/$name/history", mg_iteration_history(s))
+        end
+    end
+end
+
+# --------------------------------------------------------------------------
 init_threads!(BACKEND)
 t0 = time()
 for s in SECTIONS
@@ -390,6 +413,7 @@ for s in SECTIONS
     s == "nested"     ? section_nested() :
     s == "fft"        ? section_fft() :
     s == "pcg"        ? section_pcg() :
+    s == "multigrid"  ? section_multigrid() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)
 end
