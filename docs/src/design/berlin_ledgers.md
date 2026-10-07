@@ -100,8 +100,12 @@ water went. Since #129 both act on the first air cell (`bus.k_air`), and
 the surface exchange's smoke check counts writes into solid cells
 (zero).
 
-`run_case!` logs `ledger_report(case)` at the end of the run (an `Info`
-record, `event = :ledger`).
+`run_case!` logs the ledgers at the end of the run as `Info` events
+(`event = :ledger`, one per class, the water and each air-heat layer and
+term, the values as key-values; #338), and the run monitor writes their
+means and closures to `diagnostics.csv` as `ledger.*`
+([Diagnostics](berlin_case.md#Diagnostics)). `ledger_report(case)` is
+the same as a table, for scripts.
 The cost is about 1 ms/step on the flagship grid (the two water
 integrals), plus about 0.4 ms/step for the Kessler coupling's own
 bookkeeping.

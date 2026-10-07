@@ -136,8 +136,8 @@ end
     turbulence_diagnostics!(c::TurbulenceDiag, case) -> c
 
 Evaluate the fields and the plane-mean profiles for the current state
-(once per simulated time; the output getters, `report` and the stage
-share one evaluation).
+(once per simulated time; the output getters, the diagnostics and the
+stage share one evaluation).
 """
 function turbulence_diagnostics!(c::TurbulenceDiag, case)
     sim = case.sim
@@ -332,18 +332,56 @@ function transition_summary(c::TurbulenceDiag, case)
             Rsup_all = lvl(c.Rsup, 1:m.Nz))
 end
 
-function report(c::TurbulenceDiag, case)
-    turbulence_diagnostics!(c, case)
-    dz = case.mesh.dz
-    ks = unique(clamp.(round.(Int, [10.0, 30.0, 50.0, 70.0, 90.0, 150.0, 300.0] ./ dz .+ 0.5),
-                       1, case.mesh.Nz))
-    prof = join([@sprintf("z=%.0f: N2=%.2e Ri=%.3g fm=%.3f", (k - 0.5) * dz, c.N2[k], c.Ri[k], c.fm[k])
-                 for k in ks], "; ")
-    t = transition_summary(c, case)
-    return @sprintf("  turbulence (%s, %.2f ms/call): %s\n  transition: γ canopy %.3f free %.3f; Ri_g>1/4 fraction canopy %.3f free %.3f; Re_grid canopy %.1f free %.1f\n  relaminarised: %.1f %% of the %d stable cells (Ri_g > 1/4) are γ-laminar with ν_t/ν < %.0e (ν = %.3g m²/s)",
-                    nameof(typeof(c.stability)), 1e3 * c.seconds / max(c.ncalls, 1), prof,
-                    t.γ_canopy, t.γ_free, t.Rsup_canopy, t.Rsup_free, t.Re_canopy, t.Re_free,
-                    100 * c.relam_frac, c.relam_nstable, c.relam_νt_ratio, case.cfg.ν)
+"""
+    diagnostics(c::TurbulenceDiag, case)
+
+The transition summary ([`transition_summary`](@ref)): the turbulent
+fraction `gamma_canopy` / `gamma_free`, the fraction of cells with
+Ri_g > 1/4 `Rsup_canopy` / `Rsup_free`, the grid Reynolds number
+`Re_grid_canopy` / `Re_grid_free`, and the relaminarised share of the
+stable cells `relam_fraction` of `relam_nstable` cells (all 1), once per
+output record, as the NetCDF output ([`per_record`](@ref)); the
+wall time of one evaluation `wall.ms_per_call` (ms). The profiles are
+[`profile_diagnostics`](@ref).
+"""
+function diagnostics(c::TurbulenceDiag, case)
+    t = per_record(() -> transition_summary(c, case), case)
+    rel = per_record(() -> (turbulence_diagnostics!(c, case); (relam_frac = c.relam_frac,
+                                                               relam_nstable = c.relam_nstable)), case)
+    return Diagnostic[
+        Diagnostic("gamma_canopy", "1", () -> t().γ_canopy; description = "turbulent fraction"),
+        Diagnostic("gamma_free", "1", () -> t().γ_free; description = "turbulent fraction"),
+        Diagnostic("Rsup_canopy", "1", () -> t().Rsup_canopy; description = "fraction with Ri_g > 1/4"),
+        Diagnostic("Rsup_free", "1", () -> t().Rsup_free; description = "fraction with Ri_g > 1/4"),
+        Diagnostic("Re_grid_canopy", "1", () -> t().Re_canopy),
+        Diagnostic("Re_grid_free", "1", () -> t().Re_free),
+        Diagnostic("relam_fraction", "1", () -> rel().relam_frac;
+                   description = "share of the Ri_g > 1/4 cells that are γ-laminar with ν_t/ν < $(c.relam_νt_ratio)"),
+        Diagnostic("relam_nstable", "1", () -> rel().relam_nstable;
+                   description = "fluid cells with Ri_g > 1/4"),
+        Diagnostic("wall.ms_per_call", "ms", () -> 1e3 * c.seconds / max(c.ncalls, 1);
+                   description = "wall time of one evaluation")]
+end
+
+"""
+    profile_diagnostics(c::TurbulenceDiag, case)
+
+The fluid-cell plane means per level for `diagnostics.nc`: `N2` (s⁻²),
+`Ri_g` (1) and `f_m` (1), as in the NetCDF output, once per output
+record ([`per_record`](@ref)).
+"""
+function profile_diagnostics(c::TurbulenceDiag, case)
+    zc = case_zc(case)
+    prof = per_record(() -> (turbulence_diagnostics!(c, case); (N2 = copy(c.N2), Ri = copy(c.Ri), fm = copy(c.fm))),
+                      case)
+    ev(f) = () -> f(prof())
+    return ProfileDiagnostic[
+        ProfileDiagnostic("N2", "s-2", "z", zc, ev(x -> x.N2);
+                          description = "plane mean squared buoyancy frequency of theta_v"),
+        ProfileDiagnostic("Ri_g", "1", "z", zc, ev(x -> x.Ri);
+                          description = "gradient Richardson number of the plane means"),
+        ProfileDiagnostic("f_m", "1", "z", zc, ev(x -> x.fm);
+                          description = "plane mean momentum stability factor")]
 end
 
 function smoke_check(c::TurbulenceDiag, case)

@@ -22,7 +22,7 @@
 Slot `:sgs`, provider `:sigma`: the σ-model closure `SigmaModel(C_σ)`
 (option `C_σ`, default 1.35, Nicoud et al. 2011) passed as the `sgs` of
 every step, on any core and time stepper, with the stress-form momentum
-divergence (option `stress = :symmetric`, as for `SGSSmagorinsky`; #175). `report` prints the mean ν_t in
+divergence (option `stress = :symmetric`, as for `SGSSmagorinsky`; #175). `diagnostics` declares the mean ν_t in
 the canopy (levels with buildings) and in the free stream above the sponge
 start, next to what the Smagorinsky closure (`cfg.C_s`) gives on the same
 flow.
@@ -68,10 +68,22 @@ function sigma_νt_profile(c::SGSSigma, case)
             free_σ_max = maximum(top), min_σ = minimum(interior_view(νσ)), ksp = ksp)
 end
 
-function report(c::SGSSigma, case)
-    p = sigma_νt_profile(c, case)
-    return @sprintf("σ-model SGS: mean ν_t canopy %.3e (Smagorinsky %.3e), above the sponge start %.3e (Smagorinsky %.3e) m²/s",
-                    p.canopy_σ, p.canopy_smag, p.free_σ, p.free_smag)
+"""
+    diagnostics(c::SGSSigma, case)
+
+The σ-model's mean ν_t in the canopy and above the sponge start against
+Smagorinsky with `cfg.C_s` on the same flow ([`sigma_νt_profile`](@ref)):
+`nu_t_canopy`, `nu_t_canopy_smagorinsky`, `nu_t_free`,
+`nu_t_free_smagorinsky` (m² s⁻¹).
+"""
+function diagnostics(c::SGSSigma, case)
+    p = per_state(() -> sigma_νt_profile(c, case), case)
+    return Diagnostic[
+        Diagnostic("nu_t_canopy", "m2 s-1", () -> p().canopy_σ),
+        Diagnostic("nu_t_canopy_smagorinsky", "m2 s-1", () -> p().canopy_smag),
+        Diagnostic("nu_t_free", "m2 s-1", () -> p().free_σ; description = "above the sponge start"),
+        Diagnostic("nu_t_free_smagorinsky", "m2 s-1", () -> p().free_smag;
+                   description = "above the sponge start")]
 end
 
 function smoke_check(c::SGSSigma, case)

@@ -207,12 +207,25 @@ function sgs_stability_checks(closure, case)
     return checks
 end
 
-function sgs_stability_report(closure, case)
+"""
+    sgs_stability_diagnostics(closure, case) -> Vector{Diagnostic}
+
+With a stability-corrected closure (`cfg.sgs_stability`), from
+[`stability_stats`](@ref): `stability.supercritical` (fraction of the
+fluid cells with Ri_g ≥ Ri_c), `stability.nu_v_mean`,
+`stability.nu_h_mean` (m² s⁻¹) and `stability.kappa_ratio` (mean κv/κh).
+None without one.
+"""
+function sgs_stability_diagnostics(closure, case)
     c = stability_closure(closure)
-    c === nothing && return nothing
-    s = stability_stats(c, case)
-    return @sprintf("stability-corrected SGS (%s): %.1f %% of fluid cells Ri ≥ Ri_c, mean νv %.3g νh %.3g m²/s, mean κv/κh %.3f",
-                    case.cfg.sgs_stability, 100 * s.supercritical, s.νv, s.νh, s.κv_over_κh)
+    c === nothing && return Diagnostic[]
+    s = per_state(() -> stability_stats(c, case), case)
+    return Diagnostic[
+        Diagnostic("stability.supercritical", "1", () -> s().supercritical;
+                   description = "fraction of the fluid cells with Ri_g ≥ Ri_c ($(case.cfg.sgs_stability))"),
+        Diagnostic("stability.nu_v_mean", "m2 s-1", () -> s().νv),
+        Diagnostic("stability.nu_h_mean", "m2 s-1", () -> s().νh),
+        Diagnostic("stability.kappa_ratio", "1", () -> s().κv_over_κh; description = "mean κv/κh")]
 end
 
 """
@@ -360,9 +373,27 @@ function sgs_test_filter_metrics(case, τm, e)
             outside = isempty(vm) ? NaN : count(>(2 / 3), vm) / length(vm))
 end
 
-sgs_apriori_line(a) =
-    @sprintf("a priori at the test filter (3-cell box, canopy): k_test %.4f m²/s², e/k_test %.2f, ρ(τ, L) %.2f, median II: L %.3f, model %.3f (%.0f %% of cells II > 2/3)",
-             a.k_test, a.ratio, a.ρ, a.II_L, a.II_model, 100a.outside)
+"""
+    sgs_apriori_diagnostics(stress, case) -> Vector{Diagnostic}
+
+The a-priori metrics of [`sgs_test_filter_metrics`](@ref) of the stress
+`stress()` returns (`(τ, e)`), under `apriori.`: `k_test` (m² s⁻²),
+`ratio` (e/k_test), `rho` (ρ(τ, L)), `II_L`, `II_model` and `outside`
+(the fraction of cells with II > 2/3). They cost about a step, so they
+are evaluated once per output record ([`per_record`](@ref)).
+"""
+function sgs_apriori_diagnostics(stress, case)
+    a = per_record(() -> sgs_test_filter_metrics(case, stress()...), case)   # > a step: once per record
+    return Diagnostic[
+        Diagnostic("apriori.k_test", "m2 s-2", () -> a().k_test;
+                   description = "resolved energy between the grid and the 3-cell test filter, canopy"),
+        Diagnostic("apriori.ratio", "1", () -> a().ratio; description = "e/k_test"),
+        Diagnostic("apriori.rho", "1", () -> a().ρ; description = "correlation of τ with L"),
+        Diagnostic("apriori.II_L", "1", () -> a().II_L; description = "median Lumley II of L"),
+        Diagnostic("apriori.II_model", "1", () -> a().II_model; description = "median Lumley II of τ"),
+        Diagnostic("apriori.outside", "1", () -> a().outside;
+                   description = "fraction of cells with model II > 2/3")]
+end
 
 "Highest k (1-based interior level) with a solid cell, 0 without buildings."
 function highest_solid_level(case)
@@ -418,14 +449,19 @@ smoke_check(c::SGSSmagorinsky, case) =
      "ν_t > 0 where the flow is strained" => core_max_νt(case.sim) > 0,
      sgs_stress_checks(c.stress, case, c.closure)..., sgs_scalar_checks(c.closure, case)...,
      sgs_stability_checks(c.closure, case)...]
-function report(c::SGSSmagorinsky, case)
-    lines = String[]
+"""
+    diagnostics(c::SGSSmagorinsky, case)
+
+`isentropic_fraction` (the share of cells whose scalar tensor is rotated,
+with `scalar_tensor = :isentropic`) and the stability correction's
+([`sgs_stability_diagnostics`](@ref)).
+"""
+function diagnostics(c::SGSSmagorinsky, case)
+    ds = sgs_stability_diagnostics(c.closure, case)
     c.closure isa IsentropicDiffusion &&
-        push!(lines, @sprintf("isentropic SGS scalar tensor: %.1f %% of the cells rotated",
-                              100 * isentropic_fraction(c.closure)))
-    r = sgs_stability_report(c.closure, case)
-    r === nothing || push!(lines, r)
-    return isempty(lines) ? nothing : join(lines, "; ")
+        pushfirst!(ds, Diagnostic("isentropic_fraction", "1", () -> isentropic_fraction(c.closure);
+                                  description = "share of the cells with a rotated scalar tensor"))
+    return ds
 end
 # the built-in closure of either core (the sound-proof cores, #133, have no max_νt)
 core_max_νt(sim::BoussinesqSimulation) = Aeolus.Simulations.max_νt(sim)
@@ -465,7 +501,7 @@ reaches the coefficient. Options:
 * `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`,
   `slope_max`) — the scalar flux, as for `SGSSmagorinsky`.
 
-`report` prints the mean `C_s` (and, with LASD, the geometric-mean `β`)
+The diagnostics give the mean `C_s` (and, with LASD, the geometric-mean `β`)
 over the air cells in the canopy (the levels with buildings) and in the
 free stream (between the highest roof and the sponge).
 """
@@ -535,15 +571,22 @@ function dynamic_cs_profile(c::SGSDynamic, case)
             β_canopy = βl(1:kr), β_free = βl(kr+2:ksp))
 end
 
-function report(c::SGSDynamic, case)
-    p = dynamic_cs_profile(c, case)
-    name = c.opts.scale_dependent ? "lagrangian, scale dependent" : String(c.opts.averaging)
-    s = @sprintf("dynamic SGS (%s): mean C_s canopy %.3f, free stream %.3f (air cells)",
-                 name, p.canopy, p.free)
+"""
+    diagnostics(c::SGSDynamic, case)
+
+The mean `Cs_canopy` and `Cs_free` over the air cells
+([`dynamic_cs_profile`](@ref)); with the scale-dependent model the
+geometric-mean `beta_canopy`, `beta_free`; and the stability
+correction's ([`sgs_stability_diagnostics`](@ref)).
+"""
+function diagnostics(c::SGSDynamic, case)
+    p = per_state(() -> dynamic_cs_profile(c, case), case)
+    ds = Diagnostic[Diagnostic("Cs_canopy", "1", () -> p().canopy),
+                    Diagnostic("Cs_free", "1", () -> p().free)]
     c.opts.scale_dependent &&
-        (s *= @sprintf("; β canopy %.3f, free stream %.3f", p.β_canopy, p.β_free))
-    r = sgs_stability_report(c.closure, case)
-    return r === nothing ? s : string(s, "; ", r)
+        append!(ds, [Diagnostic("beta_canopy", "1", () -> p().β_canopy),
+                     Diagnostic("beta_free", "1", () -> p().β_free)])
+    return append!(ds, sgs_stability_diagnostics(c.closure, case))
 end
 
 smoke_variants(::Type{<:SGSDynamic}) =

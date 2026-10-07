@@ -951,9 +951,12 @@ function Aeolus.Simulations.run!(::BerlinDriver, r::BerlinRun, rf::RunFolder, ck
     case = build_case(cc)
     r.case = case
     t_end = case.sim.t + cc.nsteps * cc.dt
-    # explicit rows, one per case step (a case step may be several core steps;
-    # the step record sums them, #336)
+    # the case's diagnostics: the core's, the frame's, the ledgers, the stage
+    # timing and every coupling's (core/diagnostics.jl, #338); explicit rows,
+    # one per case step (a case step may be several core steps; the step
+    # record sums them, #336)
     with_monitor(case.sim; run = rf, t_end = t_end, cadence = r.cfg.logging.diagnostics_cadence,
+                 diagnostics = case_diagnostics(case), profiles = case_profiles(case),
                  attach = false) do m
         run_case!(case; monitor = m, callback = callback === nothing ? nothing : (c, n) -> callback(r, n))
         check_blowup!(m.guard, case.sim; step = case.clock.n, force = true)

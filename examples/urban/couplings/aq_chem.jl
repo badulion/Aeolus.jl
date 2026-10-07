@@ -412,13 +412,27 @@ function output_fields(c::AQChem, case)
     return fs
 end
 
-function report(c::AQChem, case)
-    NO, NO2, O3 = (_aq_surface_layer(c, getfield(c, s)) for s in (:NO, :NO2, :O3))
-    ok = .!isnan.(NO)
-    m(x) = sum(x[ok]) / count(ok)
-    L = aq_leighton(c, case)
-    return @sprintf("chem: sfc NO %.2f NO2 %.2f O3 %.1f ppb, Leighton φ %.3f (φ/φ_ext %.3f), J %.2e",
-                    m(NO), m(NO2), m(O3), L.φ, L.φ_ext, c.J)
+"""
+    diagnostics(c::AQChem, case)
+
+`NO_sfc`, `NO2_sfc`, `O3_sfc` (ppb): the means over the open columns of
+the first air cell; `leighton_phi` and `leighton_phi_ext` (1), the
+photostationary-state ratios of [`aq_leighton`](@ref) (once per output
+record, [`per_record`](@ref)); `J_NO2` (s⁻¹), the
+NO₂ photolysis frequency of the last photochemistry call.
+"""
+function diagnostics(c::AQChem, case)
+    m(s) = () -> (x = _aq_surface_layer(c, getfield(c, s)); ok = .!isnan.(x); sum(x[ok]) / count(ok))
+    L = per_record(() -> aq_leighton(c, case), case)
+    return Diagnostic[
+        Diagnostic("NO_sfc", "ppb", m(:NO); description = "NO, mean of the first air cell"),
+        Diagnostic("NO2_sfc", "ppb", m(:NO2); description = "NO2, mean of the first air cell"),
+        Diagnostic("O3_sfc", "ppb", m(:O3); description = "O3, mean of the first air cell"),
+        Diagnostic("leighton_phi", "1", () -> L().φ; description = "photostationary-state ratio"),
+        Diagnostic("leighton_phi_ext", "1", () -> L().φ_ext;
+                   description = "photostationary-state ratio with the peroxy-radical term"),
+        Diagnostic("J_NO2", "s-1", () -> c.J; description = "NO2 photolysis frequency"),
+    ]
 end
 
 function smoke_check(c::AQChem, case)
