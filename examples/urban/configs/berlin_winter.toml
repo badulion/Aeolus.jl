@@ -1,0 +1,30 @@
+# Berlin (Alexanderplatz), winter (CFG-c, #358): the summer domain on
+# 15 January 2024 from 06:00 CET, with cold initial air, surfaces and soil
+# from an explicitly idealised profile (no winter sounding has been added
+# yet). Initial conditions only: the surface physics is the summer set (the
+# snowpack mosaic, river ice and snow optics arrive with the winter-surface
+# issue), so this is not yet a physical winter run.
+#
+#   julia --project -m Aeolus run examples/urban/configs/berlin_winter.toml
+
+schema_version = 1
+extends = "berlin_summer.toml"
+
+[run]
+name = "winter"
+scenario = "winter"
+
+[clock]
+date = 2024-01-15
+utc_offset = 1.0          # CET
+
+[dynamics]
+theta0 = 271.0
+
+[initial]
+sounding = "none"         # the idealised profile
+theta_surface = 271.0
+qv0 = 0.0025
+ts0 = 272.0
+ts_water_offset = 5.0
+t_soil0 = 276.0

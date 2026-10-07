@@ -1,0 +1,16 @@
+# Berlin Mitte sample (CFG-c, #358): the summer case on the bundled
+# synthetic OSM sample (data/sample_berlin_mitte.osm, hand-generated, not
+# real buildings), with buildings of 15 m and more.
+#
+#   julia --project -m Aeolus run examples/urban/configs/berlin_mitte_sample.toml
+
+schema_version = 1
+extends = "berlin_summer.toml"
+
+[run]
+name = "mitte_sample"
+scenario = "mitte_sample"
+
+[geometry]
+osm_path = "../data/sample_berlin_mitte.osm"
+min_height = 15.0
