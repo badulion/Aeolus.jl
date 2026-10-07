@@ -125,6 +125,9 @@ unchanged at one thread (axpy 22-24 µs, `set!` 11 µs, the Laplacian
 46-47 µs at 64×64×32); WENO-5 went from 6.3 to 2.0 ms at one thread and
 from 0.83 to 0.39 ms at 12. A call per *row* on the serial path instead
 of one per nest made the Laplacian 1.3× the old loop, hence `_nest!`.
+A 2-D launch on the serial path calls `_nest2!(body!, ir, jr, a1, …,
+aN)` the same way (KA-e, #302): `boundary_scalar_flux`'s face bodies (up
+to 19 arguments) ran 2-2.5× the old loop when they read the tuple.
 
 **Column kernels: `launch_weighted!`** (KA-h, #298). A body that loops
 over a whole column itself — a tridiagonal solve in z, serial within the
@@ -846,6 +849,147 @@ threads to 1 thread. Two separate processes at `-t 1` and two at `-t 24`
 gave the same fft and dns hashes. At `-t 1` every solve is bit-identical
 to master: no one-time change.
 
+## KA-i: the multigrid V-cycle (#303)
+
+**Kernels.** Every loop nest of `MultigridPoissonSolver` and of the
+V-cycle preconditioner of `MGPreconditionedCG` is a `launch!` of a
+pointwise body, and every sum a canonical plane reduction:
+
+* `_smooth_rbgs!`: per colour, the halo fill and then **one launch over
+  that colour's cells only**. The launch covers half of each i-row; the
+  index `ih` maps to `i = 2ih + ((j + k + colour) & 1)`, so
+  `(i + j + k) & 1 == colour`. It is still red-black Gauss-Seidel. The
+  cells of a colour read only the other colour, so the order they run in
+  does not matter and the sweep has the bits of the serial loop. For an
+  even `nx` every row has `nx/2` cells of a colour and the body has no
+  bounds test. The strided loop then vectorises: one colour at
+  128×128×64 takes 0.65 ms instead of 1.19 ms with the test, and 1.49 ms
+  for the old "skip by parity" loop over all cells. An odd `nx` keeps the test.
+* `_compute_residual!` (constant and variable coefficient: one body,
+  the operator passed as `_ConstOp` / `_VarOp`), `_restrict!` (each
+  coarse cell writes itself), `_prolong_add!` (each fine cell writes
+  itself; the eight weight products `wi·wj·wk` are hoisted out of the
+  body and added in the old loop order: 1.59 ms instead of 2.20 ms at
+  128×128×64), and the fine operator of MG-CG (`_apply_fine!`, which
+  writes `out` directly).
+* `_l2` and `_project_mean!` use `plane_partials!` and `ordered_sum`,
+  with the partials in a per-level buffer (`MGLevel.part`).
+
+`test/ka_multigrid.jl` compares the smoother, residual, fine operator,
+restriction and prolongation with verbatim copies of the old loops, bit
+for bit. It covers even and odd `nx`, constant and cut-cell coefficients
+and three closures, on the default, the serial and a `threshold = 1`
+backend (the last threads every launch).
+
+**Serial coarse levels.** No multigrid-specific threshold: the coarse
+levels go through the global `launch!` threshold (32 768 points). A
+colour sweep covers half a level, so at 64×64×32 only the finest level
+is threaded (65 536 points per colour), and at 128×128×64 the two
+finest. 32×32×16 and below, and the 50 sweeps of the coarsest solve,
+run serially on the calling task. `_restrict_coeff` is setup only and
+stays a serial loop.
+
+**Projections.** The operator is always singular (every axis periodic
+or Neumann), so the mean is projected out up to six times per level per
+cycle: after each smoothing, after the prolongation, from the residual
+and from the coarse right-hand side. Where it saves a sweep the
+projection is fused into a neighbouring kernel:
+
+* the residual's mean is subtracted inside the restriction, which reads
+  `r − m`. The result has the bits of a projection followed by the
+  restriction, and the sweep that wrote the projected `r` is gone;
+* the right-hand side's mean is reduced while it is copied in (fused
+  `plane_reduce!`);
+* the final projection of the solution is fused with the copy-out;
+* the projection of the convergence check's residual is fused with its
+  sum of squares.
+
+The sums were *not* fused into the stencil launches. A `plane_reduce!`
+whose body evaluates the residual and writes it took 1.49 ms at
+128×128×64 on one thread. The residual launch plus a separate sum took
+0.90 ms: the eight-lane reduction keeps the stencil from vectorising.
+The restriction showed the same (0.24 against 0.10 ms).
+
+**One-time change (expectation).** The means and norms were serial
+`for k, j, i` sums. They are now canonical plane sums. This changes the
+solution in the last bits and could have moved a cycle count by ±1 (the
+issue allowed that). Measured over 22 cases (MG with three closures,
+W-cycle, FMG, stretched and cut-cell; MG-CG with two closures, stretched
+and cut-cell; each at 32×32×16 and 64×64×32), every cycle and iteration
+count is identical to the old loops. The largest change of the solution
+is `max|Δx| / max|x|` = 2.2e-15 (MG on the stretched grid at 64×64×32);
+the others are 3.1e-16 to 1.6e-15. No regression reference of the suite
+moved, and no assertion was changed. A solve allocates 0 B on one thread
+(`@allocated`, for every case above).
+
+**Measured.** ms per `solve!`, minimum of 7 (64×64×32) or 3 (128×128×64,
+stretched), load average 7-8, Julia 1.13.1. Old = the merge base
+(master + KA-g) at one thread. Speed-up = old 1 t / new N t; in brackets
+new 1 t / new N t. Source: seeded random, tol 1e-10, default closure
+(periodic x, y; Neumann z) unless stated. Extent 1000 × 1000 × 200 m.
+
+| solver | grid | cycles | old 1 t | new 1 t | new / old | 4 t | 12 t | 24 t |
+| :----- | :--- | -----: | ------: | ------: | --------: | --: | ---: | ---: |
+| MG | 64×64×32 | 21 | 66.0 | 29.1 | 0.44 | 2.3× (1.03×) | 2.5× (1.12×) | 2.0× (0.88×) |
+| MG | 128²×64 | 21 | 580.5 | 284.8 | 0.49 | 3.4× (1.66×) | 4.2× (2.06×) | 3.0× (1.47×) |
+| MG, all Neumann | 64×64×32 | 24 | 76.0 | 33.2 | 0.44 | 2.5× (1.07×) | 2.7× (1.17×) | 2.4× (1.04×) |
+| MG-CG | 64×64×32 | 12 | 41.1 | 19.2 | 0.47 | 2.3× (1.06×) | 2.2× (1.01×) | 1.6× (0.76×) |
+| MG-CG | 128²×64 | 12 | 382.6 | 211.2 | 0.55 | 2.9× (1.57×) | 3.0× (1.68×) | 2.5× (1.36×) |
+| MG-CG, stretched (×1.04) | 64×64×32 | 43 | 212.2 | 126.1 | 0.59 | 2.6× (1.53×) | 2.2× (1.29×) | 1.8× (1.07×) |
+
+Per-level split of one V-cycle at 128×128×64 (ms; a level's own time
+is the cycle from that level minus the cycle from the next coarser one):
+
+| level | size | old 1 t | new 1 t | new 4 t | new 12 t | new 24 t |
+| :---- | :--- | ------: | ------: | ------: | -------: | -------: |
+| 1 | 128×128×64 | 21.44 | 9.45 | 5.10 | 5.01 | 5.44 |
+| 2 | 64×64×32 | 2.47 | 1.09 | 0.92 | 0.93 | 1.00 |
+| 3 | 32×32×16 | 0.32 | 0.13 | 0.14 | 0.14 | 0.14 |
+| 4 | 16×16×8 | 0.043 | 0.021 | 0.022 | 0.021 | 0.025 |
+| 5 (coarsest, 50 sweeps) | 8×8×4 | 0.067 | 0.049 | 0.048 | 0.048 | 0.048 |
+
+Reading the tables:
+
+* **The 1-thread gate holds**, by a wide margin: 0.44-0.59× of the old
+  loops. Most of the gain comes from the smoother (half the cells per
+  launch instead of a parity test on all of them, and vectorised); the
+  rest from the faster prolongation and the dropped projection sweep.
+* **Threads.** The issue asked for at least 2.5× at 4 threads and 4× at
+  12 at 128²×64. Against the old loops it is 3.4× and 4.2×; against the
+  new code on one thread only 1.7× and 2.1×. The finest level stops
+  scaling at 4 threads (5.1 ms, and 5.0 ms at 12). It is memory-bound
+  once vectorised: one colour sweep reads φ and b (17 MB) in 0.65 ms on one
+  thread. Level 2 gains 1.2× (launch start-up against 65 536 points),
+  and the serial levels are flat by design. 24 threads are slower than
+  12 everywhere. The uniform 64×64×32 solves gain 1.0-1.2× from
+  threads (the stretched one 1.5× at 4). As in KA-g, the task start-up
+  of the many small launches per cycle costs about what the work does.
+
+**Thread invariance.** The worker's new `multigrid` section hashes the
+solution, the cycle count and the residual history of MG and MG-CG at
+64×64×32 and 128×128×64. It covers three closures, the W-cycle, FMG,
+stretched z and cut-cell coefficients around a solid block: 58 hashes,
+identical at 1, 4 and 24 threads. The whole harness is quoted in the PR.
+One of its cases does not converge: plain MG on the stretched grid
+(×1.04, extent 2000 m in z) at 128×128×64 stops at its cap of 200
+cycles with a relative residual of 1.04e-6 and logs the
+`maxcycles reached` warning. The old loops do the same (200 cycles,
+1.0370739097032905e-6 against 1.0370739097035124e-6 now): point
+smoothing stalls on the anisotropic cells. MG-CG solves the same case
+in 61 iterations. It is kept as a hash, not a convergence test.
+
+**Re-checked after the master merge** (KA-d's `_row!` / `_nest!` launch
+change, load 4-8). Every solution hash and cycle count is unchanged. ms
+per solve, old 1 t / new 1 t / 4 t / 12 t / 24 t: MG 128²×64 581.4 /
+276.4 / 173.6 / 150.4 / 179.9 (new / old 0.48; 3.3×, 3.9×, 3.2× against
+the old loops). MG-CG 128²×64 390.3 / 210.2 / 96.6 / 127.7 / 155.9
+(0.54; 4.0×, 3.1×, 2.5×). MG 64×64×32 66.2 / 28.7 / 25.8 / 25.6 / 29.7
+(0.43). MG-CG stretched 64×64×32 215.3 / 110.6 / 83.4 / 105.7 / 111.2
+(0.51). The finest level of a V-cycle at 128²×64 takes 10.0 ms at 1 t
+and 5.6 / 5.2 / 7.1 ms at 4 / 12 / 24 t. The threaded times vary by
+±20 % between runs with other agents on the machine; the 1-thread gate
+(≤ 1.10×) holds at 0.43-0.54×.
+
 ## KA-d: grid metrics and the finite-volume kernels (#299)
 
 **One kernel per operator for both grids.** Every kernel of
@@ -1078,6 +1222,132 @@ stretched grid (87 hashes). All 2953 hashes (primitives, 64³ DNS,
 reductions, the Berlin smoke matrix, the flagship step, nested, fft, fv)
 are identical at 4 and 24 threads to 1 thread. At `-t 1` every kernel is
 the old loop bit for bit (`test/ka_fv.jl`): no one-time change.
+
+## KA-e: scalar transport, positivity limiter, momentum advection (#302)
+
+**Ported to `launch!`** (all in AdvectionSchemes): the flux-form sweep
+`_advect_reconstructed!` (one launch over the interior; every cell still
+evaluates both of its faces, so neighbouring cells evaluate a shared face
+twice exactly as before: sharing face fluxes would change bits and is not
+done here), `_reconstructed_fluxes!` and `_upwind_fluxes!` (three launches
+each, over the face ranges `last + 1`), `_add_flux_divergence!`, the
+WENO-Z and skew-symmetric momentum advection (one launch per component),
+the variance-conserving advection, and `boundary_scalar_flux` (#284). The
+reconstruction point functions stay `@inline` scalar functions on
+`NTuple`s.
+
+**The limiter in three phases.** `_positivity_limit!` is pass 1 (the
+ratio `R` of every cell, one launch), the halo of `R` (`_wrap_one_layer!`
+as three 2-D launches over the face planes, or `fill_halos!(R, bcs)`),
+and pass 2 (each face flux rescaled with its donor's `R`, three launches).
+Pass 2 and the upwind fluxes choose with `ifelse` instead of a branch on
+the sign of the flux or the velocity: the same value (both operands are
+computed, one is chosen), and at one thread the limiter ran 240 µs
+instead of 1800 µs on random-sign fluxes, where the branch mispredicted
+on half the faces.
+
+**Scratch.** `apply_positivity_limiter!(…; ratio = nothing)` and
+`advect_positive!(…; workspace = nothing)` throw an `ArgumentError` when
+the backend runs threaded: a time loop allocates the scratch once. The
+Berlin coupling (`couplings/scalar_advection.jl`), the TKE closure and the
+Reynolds-stress closure pass their `FluxLimiterWorkspace`; the coupling
+builds the reconstruction descriptor once. With a workspace,
+`advect_positive!` and `boundary_scalar_flux` allocate nothing on a serial
+backend (`@allocated`, `test/ka_advection.jl`).
+
+**`boundary_scalar_flux`.** Its totals, per-level sums and mass-flux
+corrections are ordered sums, so they stay serial in the old loop order.
+When a face plane's 2-D launch runs on several tasks the face terms are
+computed by it into a scratch vector (one module-level buffer, grown once,
+behind a lock) and the sums then run over the scratch; on a serial launch
+the sums compute the terms on the fly, the old fused loop (a separate
+pass over the scratch was 1.6-2.2× the fused loop at one thread). The
+two-point schemes (`:centered`, `:upwind`) always take the fused loop:
+their face work is smaller than the extra pass (256×256×128 box,
+`:centered`: 306 µs fused at one thread, 455 / 487 / 730 µs threaded at
+4 / 12 / 24). A 2-D serial launch passes the body's arguments separately
+(`_nest2!`, as `_nest!` for 3-D): through the tuple the face bodies ran
+2-2.5× the old loop.
+
+**Bit for bit.** `test/ka_advection.jl` keeps a transcript of the pre-port
+loops (`test/support/legacy_advection.jl`) and compares, on seeded random
+fields and halos included: the sweep of every reconstruction (WENO-Z5/7,
+TENO5/8, WENO-JS5, Centered2, upwind), the reconstructed and upwind face
+fluxes, the limiter (with and without low-order fluxes, periodic wrap and
+BC halos, positivity active), `advect_positive!` on a RegularGrid and a
+StretchedGrid, both momentum advections, the variance-conserving
+advection and `boundary_scalar_flux` (every flux-form scheme, levels,
+corrections, diffusion, weights, `face_fluxes`). Each runs serially,
+threaded with every launch on the KA path (`threshold = 0`) and on the
+default backend: all identical to the old loops. No one-time change: at
+one thread the flagship's state after 4 steps hashes the same as master
+(`b20cfbd49603e21f`).
+
+**Measured** (Ryzen 9 7900, 12 cores / 24 threads; µs, minimum of 200
+calls, 64×64×32 RegularGrid, halo 3; load 5-7 from other jobs; old = the
+transcript at one thread):
+
+| kernel | old, 1 t | new, 1 t | new/old | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: | --: | --: |
+| sweep WENO-Z5 | 2235 | 2263 | 1.01 | 583 (3.9×) | 430 (5.3×) | 435 (5.2×) |
+| sweep TENO5 | 2657 | 2663 | 1.00 | 684 (3.9×) | 526 (5.1×) | 470 (5.7×) |
+| sweep Centered2 | 103 | 103 | 1.00 | 36 (2.8×) | 38 (2.7×) | 40 (2.6×) |
+| face fluxes WENO-Z5 | 1042 | 1037 | 0.99 | 295 (3.5×) | 261 (4.0×) | 261 (4.0×) |
+| upwind fluxes | 275 | 103 | 0.38 | 65 (1.6×) | 66 (1.6×) | 78 (1.3×) |
+| limiter (3 phases, walls) | 1800 | 240 | 0.13 | 188 (1.3×) | 152 (1.6×) | 179 (1.3×) |
+| flux divergence | 52 | 52 | 1.01 | 28 (1.9×) | 24 (2.2×) | 26 (2.0×) |
+| advect_positive! WENO-Z5 | 3425 | 1451 | 0.42 | 571 (2.5×) | 568 (2.6×) | 609 (2.4×) |
+| momentum WENO-Z5 | 6658 | 6664 | 1.00 | 1718 (3.9×) | 1452 (4.6×) | 1387 (4.8×) |
+| momentum skew | 301 | 305 | 1.01 | 125 (2.4×) | 118 (2.6×) | 132 (2.3×) |
+| variance conserving | 87 | 87 | 1.00 | 35 (2.5×) | 31 (2.8×) | 39 (2.2×) |
+| bsf `:centered`, 64×64×32 | 16 | 16 | 1.03 | 16 | 16 | 16 |
+| bsf `:weno_z5`, 64×64×32 | 647 | 129 | 0.20 | 129 | 130 | 130 |
+| bsf `:centered`, 256×256×128 | 283 | 290 | 1.02 | 286 | 358 | 287 |
+| bsf `:weno_z5`, 256×256×128 | 14245 | 2444 | 0.17 | 1544 (1.6×) | 1667 (1.5×) | 1497 (1.6×) |
+
+Speed-ups are against the new code at one thread. Every one-thread time is
+within the 1.10× gate (worst: `boundary_scalar_flux :centered` 1.03×).
+`boundary_scalar_flux` at 64×64×32 stays serial (its planes are below the
+launch threshold); with WENO-Z5 it runs 5× faster at one thread than
+master (651 → 129 µs, master's own function measured too). The arithmetic
+is the same; the old loop body called a local closure `addl!` and the
+new one top-level functions with every array an argument. Which of the
+two made the difference was not isolated.
+
+**Flagship** (`CaseConfig()`, 64×64×64; ms/step, minimum of 3 × 8 steps
+after 4 warm-up steps; load 5-8 from other jobs; master = 8cb0b572):
+
+| threads | step, master | step, KA-e | `scalar_advection`, master | `scalar_advection`, KA-e |
+| --: | --: | --: | --: | --: |
+| 1 | 254.9 | 246.3 | 57.3 | 50.0 (0.87×) |
+| 4 | 238.6 | 217.5 | 57.4 | 34.3 (1.46×) |
+| 12 | 241.8 | 203.1 | 59.3 | 29.1 (1.72×) |
+| 24 | 246.1 | 210.2 | 58.2 | 31.6 (1.58×) |
+
+(KA-e speed-ups against KA-e at one thread.) The stage is short of the
+issue's targets (≥ 2.5× at 4, ≥ 5× at 12). Per tracer at 12 threads,
+`advect_positive!` takes 1.14 ms (3.26 at one thread, 2.9×) and the SGS
+diffusion `sgs_diffuse!` 0.63-0.81 ms (1.45, 1.8-2.3×); the limiter and
+the upwind fluxes are memory-bound and gain 1.3-1.6×. The 12- and 24-thread
+runs shared the machine with other jobs (load 5-8 on 12 cores), so they
+are lower bounds.
+
+**Launch overhead.** One `scalar_advection` stage (8 advected tracers)
+makes 259 launches, 96 of them threaded (the others are below the
+threshold: halo planes, the 2-D wraps). An empty-body launch over the 64³
+interior costs 6.3 / 13.3 / 21.6 µs at 4 / 12 / 24 threads, so about
+0.6 / 1.3 / 2.1 ms of the stage is launch overhead.
+
+**Thread invariance.** The harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,24`) with the new `advection` section (64
+hashes: the sweep, face fluxes and `advect_positive!` with its ratio
+field, periodic wrap and wall halos, of every reconstruction; the bare
+limiter; both momentum advections; the variance-conserving advection;
+`advect_positive!` on a stretched grid; `boundary_scalar_flux` on a
+256×256×128 open box, where its face planes launch on several tasks).
+All 3071 hashes (primitives, dns, reductions, smoke, flagship, nested,
+fft, fv, pcg, radiation, advection) are identical at 4 and 24 threads to
+1 thread.
 
 ## KA-n: radiation and stochastic modules (#305)
 

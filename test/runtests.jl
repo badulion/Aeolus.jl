@@ -667,7 +667,9 @@ using Aeolus.Fields: set!, interior_view
     include("ka_halos.jl")   # KA-f (#297): halo fills / nesting transfer operators on launch!
     include("ka_fv.jl")      # KA-d (#299): finite-volume kernels + grid metrics on launch!
     include("ka_hooks.jl")   # KA-k (#307): Berlin dynamics hooks + WallModels on launch!
+    include("ka_advection.jl")  # KA-e (#302): scalar transport / limiter / momentum advection on launch!
     include("ka_pcg.jl")     # KA-g (#300): the one pcg! driver of the four CG solvers
+    include("ka_multigrid.jl")   # KA-i (#303): multigrid kernels on launch!, canonical means
     include("ka_step.jl")    # KA-j (#306): step cores on kernels, fused CFL / step guard, per-sim workspaces
     include("ka_columns.jl") # KA-m (#301): column physics per column (foreach_column!), caches, ported loops
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
@@ -926,6 +928,7 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_timeint.jl")     # Phases 23, 25 adaptive dt, IMEX
     include("era2_advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
     include("era2_anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
+    include("era2_anelastic_cbl.jl") # #259/#320    Boussinesq vs anelastic: 5 h CBL to ~2 km
     include("era2_multigrid.jl")   # Phase  29     geometric multigrid
     include("era2_sgs_numerics.jl") # #132         dynamic Smagorinsky, step! operator swap-ins
     include("era2_nesting.jl")     # Phase  30     parent-child nesting operators (#250)
@@ -1027,6 +1030,7 @@ end
     include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
     include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)
     include("era6_nudging_subsidence.jl") # N-parent-c: plane-mean nudging of u, v, θ, qv; large-scale subsidence (#248)
+    include("era6_gabls2.jl")            # N-parent-c: GABLS2 (reduced) with large-scale subsidence (#248, split off in #320)
     include("era6_scalar_sgs_diffusion.jl") # P56-a: SGS diffusion of qv and tracers with κ_t, solid mask (#177)
     include("era6_neutral_abl.jl")       # P54-d: half-channel ABL / channel harness + Φ_m, stress, E11 (#174)
     include("era6_amd_vreman.jl")        # P55-d: AMD and Vreman closures (#176)
@@ -1058,23 +1062,4 @@ end
     include("era6_inflow_fetch.jl")      # N-inflow-d: development length behind a synthetic inflow vs a periodic precursor (#266)
     include("era6_sounding.jl")          # N-parent-a: Lindenberg sounding → (z, t) profiles, boundary_layer_height (#247)
     include("era6_open_near_boundary.jl") # N-open-d: sponge toward the data, neighbor_index, solid open faces, boundary heat terms (#262)
-end
-
-# =========================================================================
-# The Berlin (Alexanderplatz) flagship case — examples/urban/BerlinCase.jl
-
-@testset "Berlin case" begin
-    include("berlin_case.jl")            # registry, stages, bus, tracers (#126)
-    include("berlin_surface_exchange.jl") # MOST fluxes, soil ground, roof-aware air level, drag (#129)
-    include("berlin_smoke.jl")           # every coupling and option, 12 steps, ledgers close (#127)
-    include("berlin_air_heat.jl")        # air-heat ledger: meter, closed box, H₀ = 100 W/m², night window (#253)
-    include("berlin_open_boundaries.jl") # lateral = :open: faces, data, sponge, frame, boundary heat, cost (#262)
-    include("berlin_sw_modifiers.jl")    # tree shade / cloud shadow once per radiation field; scene class map (#128)
-    include("berlin_moist.jl")           # reference state, moist buoyancy, fog enthalpy (#131)
-    include("berlin_chemistry.jl")       # NOx–O3–VOC on tracers, r_a-based dry / wet deposition (#135)
-    include("berlin_numerics.jl")        # pressure solver, SGS, advection slots (#132)
-    include("berlin_dynamics.jl")        # core / timestepper slots: anelastic, adaptive, IMEX (#133)
-    include("berlin_parent_surface.jl")  # parent tiled surface: OSM 6 km mosaic, Macdonald roughness, footprint (#249)
-    include("berlin_parent_smoke.jl")    # parent case: every forcing, 12 steps, heat and water ledgers close (#259)
-    include("berlin_parent.jl")          # parent case: encroachment, Wangara, core sensitivity (24 h Lindenberg: examples/urban/berlin_parent_lindenberg_check.jl, #315) (#259)
 end
