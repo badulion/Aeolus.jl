@@ -5,7 +5,7 @@
 # until then a driver calls it after each step.
 
 using ..RunLog: ProgressLine, progress!, WarningTap, collect_diagnostics, record_diagnostics!,
-                Diagnostic
+                Diagnostic, ProfileDiagnostic, collect_profiles
 
 "`path/crash`, the folder of a run's crash checkpoints (created)."
 crash_dir(rf::RunFolder) = mkpath(joinpath(rf.path, "crash"))
@@ -13,9 +13,10 @@ crash_dir(rf::RunFolder) = mkpath(joinpath(rf.path, "crash"))
 """
     RunMonitor(sim; run = nothing, components = (;), diagnostics = nothing,
                t_end = nothing, t_start = sim.t, cadence = 60.0,
-               progress_every = 10.0, csv = …, check_every = 10, crash = …,
-               sgs = nothing, checkpoint_components = (;), stepper = nothing,
-               rng = nothing)
+               progress_every = 10.0, csv = …, nc = …, profiles = nothing,
+               nc_attributes = …, time_origin = nothing, check_every = 10,
+               crash = …, sgs = nothing, checkpoint_components = (;),
+               stepper = nothing, rng = nothing)
 
 Everything a run reports, behind one call per step, [`monitor!`](@ref):
 
@@ -24,6 +25,14 @@ Everything a run reports, behind one call per step, [`monitor!`](@ref):
   components)`) written to the CSV `csv` (default: the run folder's
   [`diagnostics_path`](@ref) when `run` is a [`RunFolder`](@ref), else
   no file), the costly ones every `cadence` simulated seconds;
+* the same rows, plus the **profiles** `profiles` (default:
+  [`collect_profiles`](@ref Aeolus.RunLog.collect_profiles)`(sim,
+  components)`) on the costly rows, written to the NetCDF-4 file `nc`
+  ([`DiagnosticsNCWriter`](@ref); default: the run folder's
+  [`diagnostics_nc_path`](@ref), else no file) with the global
+  attributes `nc_attributes` (default: the run folder's
+  [`nc_provenance_attributes`](@ref)); each scalar is evaluated once per
+  row for both files;
 * the **progress line** towards `t_end` (none when `t_end = nothing`), at
   most every `progress_every` wall seconds;
 * the **blowup guard** ([`BlowupGuard`](@ref)): a check every
@@ -32,11 +41,12 @@ Everything a run reports, behind one call per step, [`monitor!`](@ref):
   `checkpoint_components`, `stepper` and `rng`, as [`checkpoint!`](@ref)
   takes them.
 
-`close(m)` flushes and closes the CSV. [`with_monitor`](@ref) does that
+`close(m)` flushes and closes the CSV and the NetCDF file. [`with_monitor`](@ref) does that
 and feeds the warnings to the progress line.
 """
 mutable struct RunMonitor
     writer::Union{Nothing,DiagnosticsWriter}
+    nc::Union{Nothing,DiagnosticsNCWriter}
     progress::Union{Nothing,ProgressLine}
     guard::BlowupGuard
     steps::Int
@@ -51,17 +61,26 @@ function RunMonitor(sim; run::Union{Nothing,RunFolder} = nothing, components = (
                     t_start::Real = hasproperty(sim, :t) ? sim.t : 0.0,
                     cadence::Real = 60.0, progress_every::Real = 10.0,
                     csv::Union{Nothing,AbstractString} = run === nothing ? nothing : diagnostics_path(run),
+                    nc::Union{Nothing,AbstractString} = run === nothing ? nothing : diagnostics_nc_path(run),
+                    profiles::Union{Nothing,AbstractVector{ProfileDiagnostic}} = nothing,
+                    nc_attributes::AbstractDict = run === nothing ? Dict{String,Any}() :
+                                                  nc_provenance_attributes(run),
+                    time_origin = nothing,
                     check_every::Integer = 10,
                     crash::Union{Nothing,AbstractString} = run === nothing ? nothing : crash_dir(run),
                     sgs = nothing, checkpoint_components = (;), stepper = nothing, rng = nothing)
     diags = diagnostics === nothing ? collect_diagnostics(sim, components) : diagnostics
     writer = csv === nothing ? nothing : DiagnosticsWriter(csv, diags; cadence = cadence)
+    ncw = nc === nothing ? nothing :
+          DiagnosticsNCWriter(nc, diags, profiles === nothing ? collect_profiles(sim, components) : profiles;
+                              cadence = cadence, attributes = nc_attributes,
+                              time_origin = time_origin)
     prog = t_end === nothing ? nothing :
            ProgressLine(t_end; t_start = t_start, every = progress_every)
     guard = BlowupGuard(sim; every_steps = check_every, dir = crash, sgs = sgs,
                         components = checkpoint_components, stepper = stepper, rng = rng,
                         diagnostics = writer)
-    return RunMonitor(writer, prog, guard, 0, 0, NaN, "")
+    return RunMonitor(writer, ncw, prog, guard, 0, 0, NaN, "")
 end
 
 """
@@ -74,7 +93,9 @@ diagnostics row, and the progress line when due.
 """
 function monitor!(m::RunMonitor, sim; step::Integer, dt::Real = NaN, limiter = "",
                   retries::Integer = 0)
-    check_blowup!(m.guard, sim; step)
+    _flushing_nc(m) do
+        check_blowup!(m.guard, sim; step)
+    end
     _report!(m, sim; step, dt, limiter, retries)
     return m
 end
@@ -83,7 +104,17 @@ end
 function _report!(m::RunMonitor, sim; step, dt, limiter, retries, force = false)
     t = hasproperty(sim, :t) ? Float64(sim.t) : NaN
     lim = limiter === nothing ? "" : string(limiter)
-    m.writer === nothing || record_diagnostics!(m.writer, t; step, dt, limiter = lim, retries)
+    costly = nothing
+    m.writer === nothing ||
+        (costly = record_diagnostics!(m.writer, t; step, dt, limiter = lim, retries))
+    if m.nc !== nothing
+        if costly === nothing
+            record_diagnostics!(m.nc, t; step, dt, limiter = lim, retries)
+        else   # the CSV writer has just evaluated every scalar of this row
+            record_diagnostics!(m.nc, t; step, dt, limiter = lim, retries, costly,
+                                values = m.writer.last)
+        end
+    end
     m.progress === nothing ||
         progress!(m.progress, t; step, dt, limiter = isempty(lim) ? nothing : lim, force)
     m.steps += 1; m.step = step; m.dt = dt; m.limiter = lim
@@ -112,7 +143,9 @@ end
 ```
 """
 function monitored_step!(f, m::RunMonitor, sim; step::Integer, limiter = "")
-    result = guarded_step!(f, m.guard, sim; step)
+    result = _flushing_nc(m) do
+        guarded_step!(f, m.guard, sim; step)
+    end
     dt, retries = NaN, 0
     if result isa Tuple && length(result) == 3 && result[2] isa Real && result[3] isa Integer
         dt, retries = Float64(result[2]), Int(result[3])
@@ -122,7 +155,22 @@ function monitored_step!(f, m::RunMonitor, sim; step::Integer, limiter = "")
     return result
 end
 
-Base.close(m::RunMonitor) = (m.writer === nothing || close(m.writer); nothing)
+# a blowup throws out of the monitor: the rows buffered for diagnostics.nc
+# are written first, as the guard flushes the CSV
+function _flushing_nc(f, m::RunMonitor)
+    try
+        return f()
+    catch
+        m.nc === nothing || flush(m.nc)
+        rethrow()
+    end
+end
+
+function Base.close(m::RunMonitor)
+    m.writer === nothing || close(m.writer)
+    m.nc === nothing || close(m.nc)
+    return nothing
+end
 
 """
     with_monitor(f, sim; kwargs...) -> f(m)
@@ -130,8 +178,8 @@ Base.close(m::RunMonitor) = (m.writer === nothing || close(m.writer); nothing)
 Make a [`RunMonitor`](@ref)`(sim; kwargs...)`, run `f(m)` with the
 monitor's progress line noting every warning (a
 [`WarningTap`](@ref Aeolus.RunLog.WarningTap) around the current
-logger), emit a final progress line, and close the CSV, also when `f`
-throws.
+logger), emit a final progress line, and close the CSV and
+`diagnostics.nc`, also when `f` throws.
 """
 function with_monitor(f, sim; kwargs...)
     m = RunMonitor(sim; kwargs...)
