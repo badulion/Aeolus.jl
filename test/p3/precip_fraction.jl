@@ -35,10 +35,14 @@
         # adjustment. That shifted only T, q_v and q_c of step 5: T by
         # +0.0138 K (warm), +0.0006 K (cold), +0.0045 K (melt); the
         # sub-grid-fraction code under test here was not touched.
+        # Re-recorded for KA-m (#301), whose fused exponential in e_s is a
+        # named one-time change of the last bits of q_s: q_c of the cold
+        # parcel moved by 9.5e-16 relative (…503854 → …503827); every
+        # other value, and the warm and melt parcels, are unchanged.
         ref = [
             [283.7847623122012, 90000.0, 0.008217628079583062, 0.0, 0.0,
              0.00040232076000317564, 19268.96044637655, 0.0, 0.0, 0.0, 0.0],
-            [263.15825174821794, 70000.0, 0.002551991706534512, 0.00028275205389503854,
+            [263.15825174821794, 70000.0, 0.002551991706534512, 0.00028275205389503827,
              9.725197277522258e7, 0.00017553639040846392, 9929.506893599479,
              0.00044004646557073787, 200000.0, 0.0001327076912658683, 3.117083421982849e-7],
             [275.74035972657447, 80000.0, 0.005743990840089086, 6.0209381522781445e-5,

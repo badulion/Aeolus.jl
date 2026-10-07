@@ -38,20 +38,25 @@ function run_stage!(c::MicroKessler, case, ::Val{:microphysics}, dt)
     return nothing
 end
 
-# clamp!(q, lo, hi), returning Σ_k ρ_k Σ_ij (q − clamped q), the amount removed
+# clamp!(q, lo, hi), returning Σ_k ρ_k Σ_ij (q − clamped q), the amount removed.
+# The levels run as plane_map! work items (KA-m, #301): each level's sum in
+# (j, i) order times ρ_k, the levels added in ascending k — the old loop's
+# order, so the same bits, at every thread count.
 function clamp_booked!(q::AbstractArray{<:Real,3}, lo, hi, ρ)
-    removed = 0.0
-    @inbounds for k in axes(q, 3)
-        rk = 0.0
-        for j in axes(q, 2), i in axes(q, 1)
-            x = q[i, j, k]
-            xc = clamp(x, lo, hi)
-            rk += x - xc
-            q[i, j, k] = xc
-        end
-        removed += ρ[k] * rk
+    parts = Vector{Float64}(undef, size(q, 3))
+    plane_map!(parts, Aeolus.Backends.backend(q), _clamp_level!, axes(q), q, lo, hi, ρ)
+    return ordered_sum(parts)
+end
+
+function _clamp_level!(k, ir, jr, q, lo, hi, ρ)
+    rk = 0.0
+    @inbounds for j in jr, i in ir
+        x = q[i, j, k]
+        xc = clamp(x, lo, hi)
+        rk += x - xc
+        q[i, j, k] = xc
     end
-    return removed
+    return @inbounds ρ[k] * rk
 end
 
 function budget!(c::MicroKessler, case, l)

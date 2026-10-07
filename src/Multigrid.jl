@@ -43,6 +43,7 @@ using ..RunLog: current_domain   # structured events (LOG-a, #333)
 import ..PressureSolvers: solve!, poisson_axis_bcs
 using ..StretchedGrids: StretchedGrid, cell_thickness, center_spacing
 using ..Backends: pcg!, PCGWorkspace   # the one CG driver (KA-g, #300)
+using ..Backends: backend, launch!, plane_partials!, plane_reduce!, ordered_sum   # KA-i (#303)
 using ..PressureSolvers: fill_unit_halo!
 
 export MultigridPoissonSolver, MGPreconditionedCG,
@@ -82,20 +83,6 @@ _is_singular(bcx, bcy, bcz) =
     (bcy === :periodic || bcy === :neumann) &&
     (bcz === :periodic || bcz === :neumann)
 
-"Subtract the interior mean from `a` in place (null-space projection)."
-function _project_mean!(a::Array{T,3}) where {T}
-    nx, ny, nz = size(a) .- 2
-    s = zero(T)
-    @inbounds for k in 2:nz+1, j in 2:ny+1, i in 2:nx+1
-        s += a[i, j, k]
-    end
-    m = s / (nx * ny * nz)
-    @inbounds for k in 2:nz+1, j in 2:ny+1, i in 2:nx+1
-        a[i, j, k] -= m
-    end
-    return a
-end
-
 # =========================================================================
 # Level container
 # =========================================================================
@@ -108,7 +95,9 @@ the 7-point stencil can be applied without branching at the boundary.
 
 Fields `cx`, `cy`, `cz` hold the *face* coefficients of a
 variable-coefficient operator `∇·(c ∇φ)`; for the constant-coefficient
-Laplacian they are all one and the fast path is taken.
+Laplacian they are all one and the fast path is taken. `part` holds the
+per-plane partial sums of the level's canonical reductions (one entry per
+level `k`; KA-i, #303), so a solve allocates nothing.
 """
 struct MGLevel{T}
     nx::Int; ny::Int; nz::Int
@@ -120,6 +109,7 @@ struct MGLevel{T}
     cx::Union{Nothing, Array{T,3}}
     cy::Union{Nothing, Array{T,3}}
     cz::Union{Nothing, Array{T,3}}
+    part::Vector{T}
 end
 
 function MGLevel(::Type{T}, nx, ny, nz, dx, dy, dz;
@@ -129,125 +119,254 @@ function MGLevel(::Type{T}, nx, ny, nz, dx, dy, dz;
                       z3(nx+2, ny+2, nz+2),
                       z3(nx+2, ny+2, nz+2),
                       z3(nx+2, ny+2, nz+2),
-                      cx, cy, cz)
+                      cx, cy, cz, zeros(T, nz))
 end
 
 _has_coeff(L::MGLevel) = L.cx !== nothing
+
+# Storage ranges of a level's interior, and the ranges of an interior-sized array.
+_interior(L::MGLevel) = (2:L.nx+1, 2:L.ny+1, 2:L.nz+1)
+_compact(L::MGLevel) = (1:L.nx, 1:L.ny, 1:L.nz)
+_ncells(L::MGLevel) = L.nx * L.ny * L.nz
+
+# =========================================================================
+# Kernels (KA-i, #303)
+# =========================================================================
+#
+# Every loop nest of a solve is a `Backends.launch!` of a pointwise body
+# and every sum a canonical plane reduction (`plane_partials!`,
+# `plane_reduce!`; KA-a, #294), so a solve, its cycle count and its
+# residual history are the same at every thread count. A launch over fewer
+# points than the backend's serial threshold (`Backends.SERIAL_THRESHOLD`,
+# 32 768 points) runs serially on the calling task: the coarse levels
+# (below 32×32×32, e.g. 32×32×16 and coarser; the 50-sweep coarsest
+# solve) never pay a task start-up. A red-black colour sweep covers half
+# a level, so it is threaded from 64×64×32 up.
+#
+# The operator reaches the bodies as a small struct: `_ConstOp` (the
+# constant-coefficient fast path) or `_VarOp` (`∇·(c∇φ)` with the face
+# coefficient arrays). The arithmetic of every pointwise body is that of
+# the serial loop it replaced, operation for operation (test/ka_multigrid.jl
+# compares them bit for bit).
+
+struct _ConstOp{T}
+    ix2::T; iy2::T; iz2::T
+end
+struct _VarOp{T}
+    ix2::T; iy2::T; iz2::T
+    cx::Array{T,3}; cy::Array{T,3}; cz::Array{T,3}
+end
+
+# `f(op, args...)` with the level's operator, concretely typed.
+@inline function _with_op(f::F, L::MGLevel{T}, args::Vararg{Any,M}) where {F, T, M}
+    ix2 = one(T) / L.dx^2
+    iy2 = one(T) / L.dy^2
+    iz2 = one(T) / L.dz^2
+    if _has_coeff(L)
+        return f(_VarOp{T}(ix2, iy2, iz2, L.cx::Array{T,3}, L.cy::Array{T,3}, L.cz::Array{T,3}),
+                 args...)
+    else
+        return f(_ConstOp{T}(ix2, iy2, iz2), args...)
+    end
+end
+
+# (Aφ) at the storage point (i, j, k) of a halo-filled level array.
+@inline function _Aφ(op::_ConstOp, φ, i, j, k)
+    @inbounds begin
+        c = φ[i, j, k]
+        return (φ[i+1, j, k] - 2c + φ[i-1, j, k]) * op.ix2 +
+               (φ[i, j+1, k] - 2c + φ[i, j-1, k]) * op.iy2 +
+               (φ[i, j, k+1] - 2c + φ[i, j, k-1]) * op.iz2
+    end
+end
+@inline function _Aφ(op::_VarOp, φ, i, j, k)
+    ii = i - 1; jj = j - 1; kk = k - 1     # interior-local indices
+    @inbounds begin
+        fxp = op.cx[ii+1, jj, kk]; fxm = op.cx[ii, jj, kk]
+        fyp = op.cy[ii, jj+1, kk]; fym = op.cy[ii, jj, kk]
+        fzp = op.cz[ii, jj, kk+1]; fzm = op.cz[ii, jj, kk]
+        return (fxp * (φ[i+1, j, k] - φ[i, j, k]) - fxm * (φ[i, j, k] - φ[i-1, j, k])) * op.ix2 +
+               (fyp * (φ[i, j+1, k] - φ[i, j, k]) - fym * (φ[i, j, k] - φ[i, j-1, k])) * op.iy2 +
+               (fzp * (φ[i, j, k+1] - φ[i, j, k]) - fzm * (φ[i, j, k] - φ[i, j, k-1])) * op.iz2
+    end
+end
+
+# ---- small pointwise bodies --------------------------------------------------
+
+@inline function _shift_body!(i, j, k, a, m)
+    @inbounds a[i, j, k] -= m
+    return nothing
+end
+@inline function _zero_body!(i, j, k, a)
+    @inbounds a[i, j, k] = zero(eltype(a))
+    return nothing
+end
+# the interior-sized `src` into the interior of the level array `dst`;
+# `_copyin_val` also returns the value (fused with its sum)
+@inline function _copyin_val(i, j, k, dst, src)
+    @inbounds v = src[i, j, k]
+    @inbounds dst[i+1, j+1, k+1] = v
+    return v
+end
+@inline function _copyin_body!(i, j, k, dst, src)
+    _copyin_val(i, j, k, dst, src)
+    return nothing
+end
+# the interior of the level array `φ` minus `m` into `out` and back into
+# `φ`: the final null-space projection fused with the copy (`m = 0`: a
+# plain copy, `x − 0 = x` exactly)
+@inline function _copyout_body!(i, j, k, out, φ, m)
+    @inbounds v = φ[i+1, j+1, k+1] - m
+    @inbounds φ[i+1, j+1, k+1] = v
+    @inbounds out[i, j, k] = v
+    return nothing
+end
+# a ← a − m at one point, returning the square of the new value (a
+# projection fused with the squared norm)
+@inline function _shift_sq(i, j, k, a, m)
+    @inbounds v = a[i, j, k] - m
+    @inbounds a[i, j, k] = v
+    return v * v
+end
+
+# ---- level helpers -----------------------------------------------------------
+
+# Canonical interior sum of a level array (the plane partials go to L.part).
+function _isum(L::MGLevel{T}, a::Array{T,3}) where {T}
+    plane_partials!(L.part, backend(a), identity, _interior(L), a)
+    return ordered_sum(L.part)
+end
+
+_mean(L::MGLevel, a::Array) = _isum(L, a) / _ncells(L)
+
+# a ← a − m on the interior of level L
+_shift!(L::MGLevel, a::Array, m) = launch!(backend(a), _shift_body!, _interior(L), a, m)
+
+# a ← 0 everywhere, halo included
+_zero!(a::Array{T,3}) where {T} =
+    launch!(backend(a), _zero_body!, (1:size(a, 1), 1:size(a, 2), 1:size(a, 3)), a)
+
+"""
+    _project_mean!(L, a) -> a
+
+Subtract the interior mean from the level array `a` of level `L` in place
+(null-space projection). The sum is the canonical plane sum of
+`Backends.plane_partials!` (KA-a, #294), the same at every thread count.
+"""
+function _project_mean!(L::MGLevel{T}, a::Array{T,3}) where {T}
+    _shift!(L, a, _mean(L, a))
+    return a
+end
 
 # =========================================================================
 # Operator application and residual
 # =========================================================================
 
-"""
-    _apply_laplacian!(out, L, bcx, bcy, bcz)
-
-Apply the 7-point discrete operator to `L.φ`, writing into `out`
-(interior only). Constant-coefficient fast path plus a
-variable-coefficient branch for `∇·(c∇φ)`.
-"""
-function _apply_laplacian!(out::Array{T,3}, L::MGLevel{T},
-                           bcx::Symbol, bcy::Symbol, bcz::Symbol) where {T}
-    _fill_halo!(L.φ, bcx, bcy, bcz)
-    φ = L.φ
-    nx, ny, nz = L.nx, L.ny, L.nz
-    ix2 = one(T) / L.dx^2
-    iy2 = one(T) / L.dy^2
-    iz2 = one(T) / L.dz^2
-    if !_has_coeff(L)
-        @inbounds for k in 2:nz+1, j in 2:ny+1, i in 2:nx+1
-            c = φ[i, j, k]
-            out[i, j, k] = (φ[i+1, j, k] - 2c + φ[i-1, j, k]) * ix2 +
-                           (φ[i, j+1, k] - 2c + φ[i, j-1, k]) * iy2 +
-                           (φ[i, j, k+1] - 2c + φ[i, j, k-1]) * iz2
-        end
-    else
-        cx, cy, cz = L.cx, L.cy, L.cz
-        @inbounds for k in 2:nz+1, j in 2:ny+1, i in 2:nx+1
-            ii = i - 1; jj = j - 1; kk = k - 1     # interior-local indices
-            fxp = cx[ii+1, jj, kk]; fxm = cx[ii, jj, kk]
-            fyp = cy[ii, jj+1, kk]; fym = cy[ii, jj, kk]
-            fzp = cz[ii, jj, kk+1]; fzm = cz[ii, jj, kk]
-            out[i, j, k] =
-                (fxp * (φ[i+1, j, k] - φ[i, j, k]) - fxm * (φ[i, j, k] - φ[i-1, j, k])) * ix2 +
-                (fyp * (φ[i, j+1, k] - φ[i, j, k]) - fym * (φ[i, j, k] - φ[i, j-1, k])) * iy2 +
-                (fzp * (φ[i, j, k+1] - φ[i, j, k]) - fzm * (φ[i, j, k] - φ[i, j, k-1])) * iz2
-        end
-    end
-    return out
+@inline function _res_body!(i, j, k, r, φ, b, op)
+    @inbounds r[i, j, k] = b[i, j, k] - _Aφ(op, φ, i, j, k)
+    return nothing
 end
+@inline function _apply_off_body!(i, j, k, out, φ, op)
+    @inbounds out[i-1, j-1, k-1] = _Aφ(op, φ, i, j, k)
+    return nothing
+end
+_residual_launch!(op, L::MGLevel) = launch!(backend(L.r), _res_body!, _interior(L), L.r, L.φ, L.b, op)
 
 """
     _compute_residual!(L, bcx, bcy, bcz)
 
-`r = b − Aφ` on the interior. Returns `L.r`.
+`r = b − Aφ` on the interior of level `L`: the halo fill, then one launch
+(constant or variable coefficient). Returns `L.r`.
 """
 function _compute_residual!(L::MGLevel{T}, bcx, bcy, bcz) where {T}
-    _apply_laplacian!(L.r, L, bcx, bcy, bcz)
-    nx, ny, nz = L.nx, L.ny, L.nz
-    @inbounds for k in 2:nz+1, j in 2:ny+1, i in 2:nx+1
-        L.r[i, j, k] = L.b[i, j, k] - L.r[i, j, k]
-    end
+    _fill_halo!(L.φ, bcx, bcy, bcz)
+    _with_op(_residual_launch!, L, L)
     return L.r
 end
 
-"L2 norm of the interior of an array."
-function _l2(a::Array{T,3}) where {T}
-    nx, ny, nz = size(a) .- 2
-    s = zero(T)
-    @inbounds for k in 2:nz+1, j in 2:ny+1, i in 2:nx+1
-        s += a[i, j, k]^2
-    end
-    return sqrt(s)
+"L2 norm of the interior of a level array (canonical sum of squares)."
+function _l2(L::MGLevel{T}, a::Array{T,3}) where {T}
+    plane_partials!(L.part, backend(a), abs2, _interior(L), a)
+    return sqrt(ordered_sum(L.part))
 end
 
 # =========================================================================
 # Smoother — red-black Gauss-Seidel
 # =========================================================================
 
+# One colour of a red-black sweep. The launch covers half of each i-row:
+# the index `ih` maps to the `ih`-th cell of the colour in row (j, k),
+# i = 2ih + ((j + k + colour) & 1), so (i + j + k) & 1 == colour. For an
+# even nx every row has nx/2 cells of each colour (`imax = nothing`: no
+# bounds test, and the strided loop vectorises: 1.8x faster than with the
+# test at 128×128×64); for an odd nx half the rows have one cell fewer
+# and their last index is skipped (`imax = nx + 1`).
+@inline _in_row(i, ::Nothing) = true
+@inline _in_row(i, imax::Int) = i <= imax
+
+@inline function _rbgs_body!(ih, j, k, φ, b, op::_ConstOp, diag, colour, imax)
+    i = 2ih + ((j + k + colour) & 1)
+    _in_row(i, imax) || return nothing
+    @inbounds begin
+        off = (φ[i+1, j, k] + φ[i-1, j, k]) * op.ix2 +
+              (φ[i, j+1, k] + φ[i, j-1, k]) * op.iy2 +
+              (φ[i, j, k+1] + φ[i, j, k-1]) * op.iz2
+        φ[i, j, k] = (b[i, j, k] - off) / diag
+    end
+    return nothing
+end
+@inline function _rbgs_body!(ih, j, k, φ, b, op::_VarOp{T}, ::Nothing, colour, imax) where {T}
+    i = 2ih + ((j + k + colour) & 1)
+    _in_row(i, imax) || return nothing
+    ii = i - 1; jj = j - 1; kk = k - 1
+    @inbounds begin
+        fxp = op.cx[ii+1, jj, kk]; fxm = op.cx[ii, jj, kk]
+        fyp = op.cy[ii, jj+1, kk]; fym = op.cy[ii, jj, kk]
+        fzp = op.cz[ii, jj, kk+1]; fzm = op.cz[ii, jj, kk]
+        diag = -((fxp + fxm) * op.ix2 + (fyp + fym) * op.iy2 + (fzp + fzm) * op.iz2)
+    end
+    abs(diag) < eps(T) && return nothing          # fully blocked cell
+    @inbounds begin
+        off = (fxp * φ[i+1, j, k] + fxm * φ[i-1, j, k]) * op.ix2 +
+              (fyp * φ[i, j+1, k] + fym * φ[i, j-1, k]) * op.iy2 +
+              (fzp * φ[i, j, k+1] + fzm * φ[i, j, k-1]) * op.iz2
+        φ[i, j, k] = (b[i, j, k] - off) / diag
+    end
+    return nothing
+end
+
+_rbgs_diag(op::_ConstOp) = -2 * (op.ix2 + op.iy2 + op.iz2)
+_rbgs_diag(::_VarOp) = nothing
+
+function _rbgs_sweeps!(op, L::MGLevel, bcx, bcy, bcz, nsweeps::Int)
+    iseven(L.nx) ? _rbgs_sweeps!(op, L, bcx, bcy, bcz, nsweeps, nothing) :
+                   _rbgs_sweeps!(op, L, bcx, bcy, bcz, nsweeps, L.nx + 1)
+end
+function _rbgs_sweeps!(op, L::MGLevel, bcx, bcy, bcz, nsweeps::Int, imax)
+    φ, b = L.φ, L.b
+    bk = backend(φ)
+    diag = _rbgs_diag(op)
+    half = (1:cld(L.nx, 2), 2:L.ny+1, 2:L.nz+1)
+    for _ in 1:nsweeps, colour in 0:1
+        _fill_halo!(φ, bcx, bcy, bcz)
+        launch!(bk, _rbgs_body!, half, φ, b, op, diag, colour, imax)
+    end
+    return nothing
+end
+
 """
     _smooth_rbgs!(L, bcx, bcy, bcz, nsweeps)
 
 Red-black Gauss-Seidel relaxation. Each sweep updates the even-parity
 cells then the odd-parity cells, so within a colour the updates are
-independent (and hence trivially threadable) while still getting
-Gauss-Seidel's superior smoothing factor over Jacobi.
+independent while still getting Gauss-Seidel's superior smoothing factor
+over Jacobi. Per colour: the halo fill, then one launch over that
+colour's cells only, half the level (KA-i, #303). The updates of a colour
+read only the other colour, so the result does not depend on the order
+the cells run in and equals the serial sweep bit for bit.
 """
 function _smooth_rbgs!(L::MGLevel{T}, bcx, bcy, bcz, nsweeps::Int) where {T}
-    nx, ny, nz = L.nx, L.ny, L.nz
-    ix2 = one(T) / L.dx^2
-    iy2 = one(T) / L.dy^2
-    iz2 = one(T) / L.dz^2
-    φ, b = L.φ, L.b
-    for _ in 1:nsweeps
-        for colour in 0:1
-            _fill_halo!(φ, bcx, bcy, bcz)
-            if !_has_coeff(L)
-                diag = -2 * (ix2 + iy2 + iz2)
-                @inbounds for k in 2:nz+1, j in 2:ny+1, i in 2:nx+1
-                    ((i + j + k) & 1) == colour || continue
-                    off = (φ[i+1, j, k] + φ[i-1, j, k]) * ix2 +
-                          (φ[i, j+1, k] + φ[i, j-1, k]) * iy2 +
-                          (φ[i, j, k+1] + φ[i, j, k-1]) * iz2
-                    φ[i, j, k] = (b[i, j, k] - off) / diag
-                end
-            else
-                cx, cy, cz = L.cx, L.cy, L.cz
-                @inbounds for k in 2:nz+1, j in 2:ny+1, i in 2:nx+1
-                    ((i + j + k) & 1) == colour || continue
-                    ii = i - 1; jj = j - 1; kk = k - 1
-                    fxp = cx[ii+1, jj, kk]; fxm = cx[ii, jj, kk]
-                    fyp = cy[ii, jj+1, kk]; fym = cy[ii, jj, kk]
-                    fzp = cz[ii, jj, kk+1]; fzm = cz[ii, jj, kk]
-                    diag = -((fxp + fxm) * ix2 + (fyp + fym) * iy2 + (fzp + fzm) * iz2)
-                    abs(diag) < eps(T) && continue          # fully blocked cell
-                    off = (fxp * φ[i+1, j, k] + fxm * φ[i-1, j, k]) * ix2 +
-                          (fyp * φ[i, j+1, k] + fym * φ[i, j-1, k]) * iy2 +
-                          (fzp * φ[i, j, k+1] + fzm * φ[i, j, k-1]) * iz2
-                    φ[i, j, k] = (b[i, j, k] - off) / diag
-                end
-            end
-        end
-    end
+    _with_op(_rbgs_sweeps!, L, L, bcx, bcy, bcz, nsweeps)
     return L
 end
 
@@ -255,26 +374,68 @@ end
 # Grid transfer
 # =========================================================================
 
+# Coarse storage point (I, J, K): the mean of its eight fine cells of
+# `r − m` (m = 0: the plain restriction, as `x − 0 = x` exactly).
+@inline function _restrict_body!(I, J, K, b, r, m, eighth)
+    i = 2I - 2; j = 2J - 2; k = 2K - 2      # fine halo-offset base
+    @inbounds begin
+        s = (r[i,     j,     k    ] - m) + (r[i + 1, j,     k    ] - m) +
+            (r[i,     j + 1, k    ] - m) + (r[i + 1, j + 1, k    ] - m) +
+            (r[i,     j,     k + 1] - m) + (r[i + 1, j,     k + 1] - m) +
+            (r[i,     j + 1, k + 1] - m) + (r[i + 1, j + 1, k + 1] - m)
+        b[I, J, K] = s * eighth
+    end
+    return nothing
+end
+
 """
-    _restrict!(coarse, fine)
+    _restrict!(coarse, fine, m = 0)
 
 Full-weighting restriction for a cell-centred grid: each coarse cell
 takes the mean of the eight fine cells it contains. Exact on constants.
-Operates on `fine.r` → `coarse.b`.
+Operates on `fine.r − m` → `coarse.b`, one launch in which each coarse
+cell writes itself. `m` is the mean of `fine.r` when the null space is
+projected out: subtracting it inside the restriction gives the bits of a
+projection of `fine.r` followed by the restriction, without the sweep
+that writes the projected `fine.r` (KA-i, #303).
 """
-function _restrict!(coarse::MGLevel{T}, fine::MGLevel{T}) where {T}
-    cnx, cny, cnz = coarse.nx, coarse.ny, coarse.nz
-    r, b = fine.r, coarse.b
-    eighth = one(T) / 8
-    @inbounds for K in 1:cnz, J in 1:cny, I in 1:cnx
-        i = 2I; j = 2J; k = 2K            # fine halo-offset base (2I-1 → index 2I)
-        s = r[i,     j,     k    ] + r[i + 1, j,     k    ] +
-            r[i,     j + 1, k    ] + r[i + 1, j + 1, k    ] +
-            r[i,     j,     k + 1] + r[i + 1, j,     k + 1] +
-            r[i,     j + 1, k + 1] + r[i + 1, j + 1, k + 1]
-        b[I + 1, J + 1, K + 1] = s * eighth
-    end
+function _restrict!(coarse::MGLevel{T}, fine::MGLevel{T}, m::T = zero(T)) where {T}
+    launch!(backend(coarse.b), _restrict_body!, _interior(coarse), coarse.b, fine.r, m, one(T) / 8)
     return coarse
+end
+
+# The trilinear correction at the fine storage point (is, js, ks). The
+# eight products w = wi·wj·wk are the same at every point (`_prolong_w`);
+# they are added in the order of the loop this replaced (dk, then dj,
+# then di; near before far), so the bits are those of that loop.
+@inline function _prolong_body!(is, js, ks, φ, Φ, w::NTuple{8,T}) where {T}
+    i = is - 1; j = js - 1; k = ks - 1
+    # halo-offset coarse index containing this fine cell (cld(i, 2) + 1)
+    # and the far neighbour (one coarse cell towards the fine cell)
+    Ih = (i + 1) >> 1 + 1; Ix = Ih + ifelse(isodd(i), -1, 1)
+    Jh = (j + 1) >> 1 + 1; Jy = Jh + ifelse(isodd(j), -1, 1)
+    Kh = (k + 1) >> 1 + 1; Kz = Kh + ifelse(isodd(k), -1, 1)
+    @inbounds begin
+        acc = zero(T)
+        acc += w[1] * Φ[Ih, Jh, Kh]
+        acc += w[2] * Φ[Ix, Jh, Kh]
+        acc += w[3] * Φ[Ih, Jy, Kh]
+        acc += w[4] * Φ[Ix, Jy, Kh]
+        acc += w[5] * Φ[Ih, Jh, Kz]
+        acc += w[6] * Φ[Ix, Jh, Kz]
+        acc += w[7] * Φ[Ih, Jy, Kz]
+        acc += w[8] * Φ[Ix, Jy, Kz]
+        φ[is, js, ks] += acc
+    end
+    return nothing
+end
+
+# wi * wj * wk for (dk, dj, di) in the loop order, near (3/4) before far (1/4)
+function _prolong_w(::Type{T}) where {T}
+    n = T(3) / 4
+    f = T(1) / 4
+    return (n * n * n, f * n * n, n * f * n, f * f * n,
+            n * n * f, f * n * f, n * f * f, f * f * f)
 end
 
 """
@@ -283,32 +444,12 @@ end
 Trilinear prolongation of the coarse correction, added onto the fine
 solution. For a cell-centred grid the fine cell centre sits a quarter of
 a coarse cell from the coarse centre, giving the separable (3/4, 1/4)
-weights in each direction.
+weights in each direction. The coarse halo fill, then one launch in which
+each fine cell writes itself.
 """
-function _prolong_add!(fine::MGLevel{T}, coarse::MGLevel{T},
-                       bcx, bcy, bcz) where {T}
+function _prolong_add!(fine::MGLevel{T}, coarse::MGLevel{T}, bcx, bcy, bcz) where {T}
     _fill_halo!(coarse.φ, bcx, bcy, bcz)
-    fnx, fny, fnz = fine.nx, fine.ny, fine.nz
-    Φ = coarse.φ
-    φ = fine.φ
-    w_near = T(3) / 4
-    w_far  = T(1) / 4
-    @inbounds for k in 1:fnz, j in 1:fny, i in 1:fnx
-        # coarse index containing this fine cell, and the far-neighbour offset
-        I = cld(i, 2); sx = isodd(i) ? -1 : 1
-        J = cld(j, 2); sy = isodd(j) ? -1 : 1
-        K = cld(k, 2); sz = isodd(k) ? -1 : 1
-        Ih = I + 1; Jh = J + 1; Kh = K + 1        # halo-offset coarse indices
-        acc = zero(T)
-        for (dk, wk) in ((0, w_near), (sz, w_far))
-            for (dj, wj) in ((0, w_near), (sy, w_far))
-                for (di, wi) in ((0, w_near), (sx, w_far))
-                    acc += wi * wj * wk * Φ[Ih + di, Jh + dj, Kh + dk]
-                end
-            end
-        end
-        φ[i + 1, j + 1, k + 1] += acc
-    end
+    launch!(backend(fine.φ), _prolong_body!, _interior(fine), fine.φ, coarse.φ, _prolong_w(T))
     return fine
 end
 
@@ -539,9 +680,10 @@ mg_residual_norm(s::MultigridPoissonSolver) = s.last_residual[]
 # On the coarsest level just smooth hard: it is tiny, so many sweeps are
 # cheap and this is more robust than a direct solve when the operator is
 # singular or has blocked cells.
+# Serial through the launch threshold: the coarsest level is far below it.
 function _solve_coarsest!(s::MultigridPoissonSolver{T}, L::MGLevel{T}) where {T}
     _smooth_rbgs!(L, s.bc_x, s.bc_y, s.bc_z, 50)
-    s.singular && _project_mean!(L.φ)
+    s.singular && _project_mean!(L, L.φ)
     return L
 end
 
@@ -552,6 +694,13 @@ end
 
 One multigrid cycle starting at level index `lev` (1 = finest). Recursive;
 does one recursive call for a V-cycle and two for a W-cycle.
+
+For a singular operator the mean is projected out of the solution after
+each smoothing and after the prolongation, out of the residual and out of
+the coarse right-hand side (canonical sums: the same at every thread
+count). The residual's mean is subtracted inside the restriction
+instead of in a sweep over the residual (KA-i, #303; fusing the sums
+into the stencil launches themselves measured slower, ka_port.md).
 """
 function mg_vcycle!(s::MultigridPoissonSolver{T}, lev::Int = 1) where {T}
     L = s.levels[lev]
@@ -560,19 +709,19 @@ function mg_vcycle!(s::MultigridPoissonSolver{T}, lev::Int = 1) where {T}
         return s
     end
     C = s.levels[lev + 1]
+    sing = s.singular
 
     # pre-smooth
     _smooth_rbgs!(L, s.bc_x, s.bc_y, s.bc_z, s.nu1)
-    s.singular && _project_mean!(L.φ)
+    sing && _project_mean!(L, L.φ)
 
-    # residual → coarse rhs
+    # residual → coarse rhs (of the zero-mean residual)
     _compute_residual!(L, s.bc_x, s.bc_y, s.bc_z)
-    s.singular && _project_mean!(L.r)
-    _restrict!(C, L)
-    s.singular && _project_mean!(C.b)
+    _restrict!(C, L, sing ? _mean(L, L.r) : zero(T))
+    sing && _project_mean!(C, C.b)
 
     # coarse solve for the correction (zero initial guess)
-    fill!(C.φ, zero(T))
+    _zero!(C.φ)
     nrec = s.cycle === :W ? 2 : 1
     for _ in 1:nrec
         mg_vcycle!(s, lev + 1)
@@ -580,11 +729,11 @@ function mg_vcycle!(s::MultigridPoissonSolver{T}, lev::Int = 1) where {T}
 
     # prolong and correct
     _prolong_add!(L, C, s.bc_x, s.bc_y, s.bc_z)
-    s.singular && _project_mean!(L.φ)
+    sing && _project_mean!(L, L.φ)
 
     # post-smooth
     _smooth_rbgs!(L, s.bc_x, s.bc_y, s.bc_z, s.nu2)
-    s.singular && _project_mean!(L.φ)
+    sing && _project_mean!(L, L.φ)
     return s
 end
 
@@ -594,15 +743,15 @@ function _fmg_start!(s::MultigridPoissonSolver{T}) where {T}
     nlev = length(s.levels)
     # restrict the fine rhs all the way down
     for lev in 1:nlev-1
-        s.levels[lev].r .= s.levels[lev].b
+        copyto!(s.levels[lev].r, s.levels[lev].b)
         _restrict!(s.levels[lev + 1], s.levels[lev])
-        s.singular && _project_mean!(s.levels[lev + 1].b)
+        s.singular && _project_mean!(s.levels[lev + 1], s.levels[lev + 1].b)
     end
     # solve coarsest, then interpolate + one V-cycle at each finer level
-    fill!(s.levels[nlev].φ, zero(T))
+    _zero!(s.levels[nlev].φ)
     _solve_coarsest!(s, s.levels[nlev])
     for lev in nlev-1:-1:1
-        fill!(s.levels[lev].φ, zero(T))
+        _zero!(s.levels[lev].φ)
         _prolong_add!(s.levels[lev], s.levels[lev + 1], s.bc_x, s.bc_y, s.bc_z)
         mg_vcycle!(s, lev)
     end
@@ -610,6 +759,37 @@ function _fmg_start!(s::MultigridPoissonSolver{T}) where {T}
 end
 
 # --- driver --------------------------------------------------------------
+
+# The interior-sized `rhs` into L.b; for a singular operator minus its
+# mean (the sum is reduced while copying).
+function _load_rhs!(L::MGLevel{T}, rhs::AbstractArray{T,3}, singular::Bool) where {T}
+    bk = backend(L.b)
+    if singular
+        plane_reduce!(L.part, bk, _copyin_val, _compact(L), L.b, rhs)
+        _shift!(L, L.b, ordered_sum(L.part) / _ncells(L))
+    else
+        launch!(bk, _copyin_body!, _compact(L), L.b, rhs)
+    end
+    return L.b
+end
+
+# ‖b − Aφ‖ on the finest level, the residual projected to zero mean for a
+# singular operator: the residual sweep reduces its sum, the projection
+# sweep its sum of squares.
+function _residual_norm!(L::MGLevel{T}, s) where {T}
+    _compute_residual!(L, s.bc_x, s.bc_y, s.bc_z)
+    s.singular || return _l2(L, L.r)
+    plane_reduce!(L.part, backend(L.r), _shift_sq, _interior(L), L.r, _mean(L, L.r))
+    return sqrt(ordered_sum(L.part))
+end
+
+# The interior of L.φ into the interior-sized `out`; for a singular
+# operator minus its mean, removed from L.φ too.
+function _store_solution!(out::AbstractArray{T,3}, L::MGLevel{T}, singular::Bool) where {T}
+    m = singular ? _mean(L, L.φ) : zero(T)
+    launch!(backend(L.φ), _copyout_body!, _compact(L), out, L.φ, m)
+    return out
+end
 
 """
     mg_solve!(solver, φ_out, rhs) -> NamedTuple
@@ -625,14 +805,11 @@ function mg_solve!(s::MultigridPoissonSolver{T},
     size(rhs) == (nx, ny, nz) ||
         error("mg_solve!: rhs size $(size(rhs)) ≠ ($nx, $ny, $nz)")
 
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        L.b[i+1, j+1, k+1] = rhs[i, j, k]
-    end
-    s.singular && _project_mean!(L.b)
-    fill!(L.φ, zero(T))
+    _load_rhs!(L, rhs, s.singular)
+    _zero!(L.φ)
     empty!(s.history)
 
-    b_norm = _l2(L.b)
+    b_norm = _l2(L, L.b)
     if b_norm == 0
         fill!(φ_out, zero(T))
         s.last_cycles[] = 0
@@ -647,9 +824,7 @@ function mg_solve!(s::MultigridPoissonSolver{T},
     ncyc = 0
     for cyc in 1:s.maxcycles
         mg_vcycle!(s, 1)
-        _compute_residual!(L, s.bc_x, s.bc_y, s.bc_z)
-        s.singular && _project_mean!(L.r)
-        rel = _l2(L.r) / b_norm
+        rel = _residual_norm!(L, s) / b_norm
         push!(s.history, rel)
         ncyc = cyc
         if rel < s.tol
@@ -658,10 +833,7 @@ function mg_solve!(s::MultigridPoissonSolver{T},
         end
     end
 
-    s.singular && _project_mean!(L.φ)
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        φ_out[i, j, k] = L.φ[i+1, j+1, k+1]
-    end
+    _store_solution!(φ_out, L, s.singular)
     s.last_cycles[] = ncyc
     s.last_residual[] = rel
     converged ||
@@ -734,37 +906,27 @@ function MGPreconditionedCG(g::StretchedGrid{T}; kwargs...) where {T}
 end
 
 # Apply the fine-level operator to an interior array.
+# (copy in, halo, one operator launch writing `out` directly; KA-i, #303)
 function _apply_fine!(out::Array{T,3}, x::Array{T,3},
                       s::MultigridPoissonSolver{T}) where {T}
     L = s.levels[1]
-    nx, ny, nz = L.nx, L.ny, L.nz
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        L.φ[i+1, j+1, k+1] = x[i, j, k]
-    end
-    _apply_laplacian!(L.r, L, s.bc_x, s.bc_y, s.bc_z)
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        out[i, j, k] = L.r[i+1, j+1, k+1]
-    end
+    launch!(backend(L.φ), _copyin_body!, _compact(L), L.φ, x)
+    _fill_halo!(L.φ, s.bc_x, s.bc_y, s.bc_z)
+    _with_op(_apply_launch!, L, out, L)
     return out
 end
+_apply_launch!(op, out, L) = launch!(backend(out), _apply_off_body!, _interior(L), out, L.φ, op)
 
 # One V-cycle as a preconditioner: z ← M⁻¹ r.
 function _mg_precond!(z::Array{T,3}, r::Array{T,3},
                       s::MultigridPoissonSolver{T}) where {T}
     L = s.levels[1]
-    nx, ny, nz = L.nx, L.ny, L.nz
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        L.b[i+1, j+1, k+1] = r[i, j, k]
-    end
-    s.singular && _project_mean!(L.b)
-    fill!(L.φ, zero(T))
+    _load_rhs!(L, r, s.singular)
+    _zero!(L.φ)
     for _ in 1:max(s.maxcycles, 1)
         mg_vcycle!(s, 1)
     end
-    s.singular && _project_mean!(L.φ)
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        z[i, j, k] = L.φ[i+1, j+1, k+1]
-    end
+    _store_solution!(z, L, s.singular)
     return z
 end
 
