@@ -478,151 +478,186 @@ halo ``ν`` equals its image. In the interior each flux contributes
 from the same flux locations as the momentum kernels (the face-to-face and
 edge differences), not from `Operators._velocity_gradient_at`, whose
 off-diagonal two-cell differences are not the dual of that operator.
+
+**Owner computes** (KA-l, #304). Each interior cell gathers its own `D`:
+every flux share destined for it, from the velocity points around it, plus
+the shares destined for the halo cells it is the image of. No two cells
+write the same location, so the kernel runs on any number of threads with
+the same bits. The scatter it replaced (each velocity point adding its
+shares to up to four cells, then a halo fold) added the same shares in a
+different order: a named one-time change of the last bits of `D` (the
+TKE after 12 steps is quoted in `docs/src/design/ka_port.md`).
 """
 dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs::FieldBoundaryConditions) =
     _dual_strain!(D, u, v, w, bcs, mesh(u))
 
-function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::RegularGrid{T}) where {T}
-    idx2 = 1 / g.dx^2; idy2 = 1 / g.dy^2; idz2 = 1 / g.dz^2
-    d = D.data
-    fill!(d, zero(T))
-    ud, vd, wd = u.data, v.data, w.data
-    ii, jj, kk = interior(g)
-    q4(x) = T(0.25) * x
-    @inbounds for k in kk, j in jj, i in ii
-        # ---- u at FaceX (i,j,k) ----
-        up = ud[i, j, k]
-        a = -up * (ud[i+1, j, k] - ud[i, j, k]) * idx2         # fxE, +; cell (i,j,k)
-        d[i, j, k] += a
-        a = up * (ud[i, j, k] - ud[i-1, j, k]) * idx2          # fxW, −; cell (i-1,j,k)
-        d[i-1, j, k] += a
-        a = q4(-up * (ud[i, j+1, k] - ud[i, j, k]) * idy2)     # fyN, +
-        d[i-1, j, k] += a; d[i, j, k] += a; d[i-1, j+1, k] += a; d[i, j+1, k] += a
-        a = q4(up * (ud[i, j, k] - ud[i, j-1, k]) * idy2)      # fyS, −
-        d[i-1, j-1, k] += a; d[i, j-1, k] += a; d[i-1, j, k] += a; d[i, j, k] += a
-        a = q4(-up * (ud[i, j, k+1] - ud[i, j, k]) * idz2)     # fzT, +
-        d[i-1, j, k] += a; d[i, j, k] += a; d[i-1, j, k+1] += a; d[i, j, k+1] += a
-        a = q4(up * (ud[i, j, k] - ud[i, j, k-1]) * idz2)      # fzB, −
-        d[i-1, j, k-1] += a; d[i, j, k-1] += a; d[i-1, j, k] += a; d[i, j, k] += a
+# ---- the vertical metrics of the dual -----------------------------------
+#
+# The share of every flux is the expression of the scatter it replaces: on a
+# RegularGrid `±q (δq) / Δ²` (`q4(…)` for a cross flux), on a StretchedGrid
+# the same times the control-volume height of the velocity point p (`hc` =
+# dzc[k] for u, v; `hf` = dzf[k] for w) for the horizontal fluxes, and with
+# the vertical spacings `1/dzf` (u, v) or `1/dzc` (w) for the vertical ones;
+# the stretched sum is finally divided by the thickness of the receiving
+# cell (per unit volume).
+struct _DualUniform{T}
+    idx2::T; idy2::T; idz2::T
+end
+struct _DualLevels{T, V}
+    idx2::T; idy2::T
+    dzc::V; dzf::V
+end
+@inline _hc(::_DualUniform, x, k) = x
+@inline _hc(m::_DualLevels, x, k) = @inbounds x * m.dzc[k]
+@inline _hf(::_DualUniform, x, k) = x
+@inline _hf(m::_DualLevels, x, k) = @inbounds x * m.dzf[k]
+@inline _izt(m::_DualUniform, k) = m.idz2
+@inline _izt(m::_DualLevels, k) = @inbounds 1 / m.dzf[k+1]
+@inline _izb(m::_DualUniform, k) = m.idz2
+@inline _izb(m::_DualLevels, k) = @inbounds 1 / m.dzf[k]
+@inline _iwt(m::_DualUniform, k) = m.idz2
+@inline _iwt(m::_DualLevels, k) = @inbounds 1 / m.dzc[k]
+@inline _iwb(m::_DualUniform, k) = m.idz2
+@inline _iwb(m::_DualLevels, k) = @inbounds 1 / m.dzc[k-1]
+@inline _per_volume(::_DualUniform, x, k) = x
+@inline _per_volume(m::_DualLevels, x, k) = @inbounds x * (1 / m.dzc[k])
 
-        # ---- v at FaceY (i,j,k) ----
-        vp = vd[i, j, k]
-        a = -vp * (vd[i, j+1, k] - vd[i, j, k]) * idy2         # fyN, +; cell (i,j,k)
-        d[i, j, k] += a
-        a = vp * (vd[i, j, k] - vd[i, j-1, k]) * idy2          # fyS, −; cell (i,j-1,k)
-        d[i, j-1, k] += a
-        a = q4(-vp * (vd[i+1, j, k] - vd[i, j, k]) * idx2)     # fxE, +
-        d[i, j-1, k] += a; d[i+1, j-1, k] += a; d[i, j, k] += a; d[i+1, j, k] += a
-        a = q4(vp * (vd[i, j, k] - vd[i-1, j, k]) * idx2)      # fxW, −
-        d[i-1, j-1, k] += a; d[i, j-1, k] += a; d[i-1, j, k] += a; d[i, j, k] += a
-        a = q4(-vp * (vd[i, j, k+1] - vd[i, j, k]) * idz2)     # fzT, +
-        d[i, j-1, k] += a; d[i, j, k] += a; d[i, j-1, k+1] += a; d[i, j, k+1] += a
-        a = q4(vp * (vd[i, j, k] - vd[i, j, k-1]) * idz2)      # fzB, −
-        d[i, j-1, k-1] += a; d[i, j, k-1] += a; d[i, j-1, k] += a; d[i, j, k] += a
+# ---- the 18 flux shares of a velocity point p = (i, j, k) ------------------
+# (`_ux_e`: the share of the x flux on the east side of u-point p; …). Each
+# is the very expression the scatter added, so a share has the same bits.
+@inline _q4(x) = oftype(x, 0.25) * x
+@inline _ux_e(u, m, i, j, k) = @inbounds _hc(m, -u[i,j,k] * (u[i+1,j,k] - u[i,j,k]) * m.idx2, k)
+@inline _ux_w(u, m, i, j, k) = @inbounds _hc(m, u[i,j,k] * (u[i,j,k] - u[i-1,j,k]) * m.idx2, k)
+@inline _uy_n(u, m, i, j, k) = @inbounds _q4(_hc(m, -u[i,j,k] * (u[i,j+1,k] - u[i,j,k]) * m.idy2, k))
+@inline _uy_s(u, m, i, j, k) = @inbounds _q4(_hc(m, u[i,j,k] * (u[i,j,k] - u[i,j-1,k]) * m.idy2, k))
+@inline _uz_t(u, m, i, j, k) = @inbounds _q4(-u[i,j,k] * (u[i,j,k+1] - u[i,j,k]) * _izt(m, k))
+@inline _uz_b(u, m, i, j, k) = @inbounds _q4(u[i,j,k] * (u[i,j,k] - u[i,j,k-1]) * _izb(m, k))
+@inline _vy_n(v, m, i, j, k) = @inbounds _hc(m, -v[i,j,k] * (v[i,j+1,k] - v[i,j,k]) * m.idy2, k)
+@inline _vy_s(v, m, i, j, k) = @inbounds _hc(m, v[i,j,k] * (v[i,j,k] - v[i,j-1,k]) * m.idy2, k)
+@inline _vx_e(v, m, i, j, k) = @inbounds _q4(_hc(m, -v[i,j,k] * (v[i+1,j,k] - v[i,j,k]) * m.idx2, k))
+@inline _vx_w(v, m, i, j, k) = @inbounds _q4(_hc(m, v[i,j,k] * (v[i,j,k] - v[i-1,j,k]) * m.idx2, k))
+@inline _vz_t(v, m, i, j, k) = @inbounds _q4(-v[i,j,k] * (v[i,j,k+1] - v[i,j,k]) * _izt(m, k))
+@inline _vz_b(v, m, i, j, k) = @inbounds _q4(v[i,j,k] * (v[i,j,k] - v[i,j,k-1]) * _izb(m, k))
+@inline _wz_t(w, m, i, j, k) = @inbounds -w[i,j,k] * (w[i,j,k+1] - w[i,j,k]) * _iwt(m, k)
+@inline _wz_b(w, m, i, j, k) = @inbounds w[i,j,k] * (w[i,j,k] - w[i,j,k-1]) * _iwb(m, k)
+@inline _wx_e(w, m, i, j, k) = @inbounds _q4(_hf(m, -w[i,j,k] * (w[i+1,j,k] - w[i,j,k]) * m.idx2, k))
+@inline _wx_w(w, m, i, j, k) = @inbounds _q4(_hf(m, w[i,j,k] * (w[i,j,k] - w[i-1,j,k]) * m.idx2, k))
+@inline _wy_n(w, m, i, j, k) = @inbounds _q4(_hf(m, -w[i,j,k] * (w[i,j+1,k] - w[i,j,k]) * m.idy2, k))
+@inline _wy_s(w, m, i, j, k) = @inbounds _q4(_hf(m, w[i,j,k] * (w[i,j,k] - w[i,j-1,k]) * m.idy2, k))
 
-        # ---- w at FaceZ (i,j,k) ----
-        wp = wd[i, j, k]
-        a = -wp * (wd[i, j, k+1] - wd[i, j, k]) * idz2         # fzT, +; cell (i,j,k)
-        d[i, j, k] += a
-        a = wp * (wd[i, j, k] - wd[i, j, k-1]) * idz2          # fzB, −; cell (i,j,k-1)
-        d[i, j, k-1] += a
-        a = q4(-wp * (wd[i+1, j, k] - wd[i, j, k]) * idx2)     # fxE, +
-        d[i, j, k-1] += a; d[i+1, j, k-1] += a; d[i, j, k] += a; d[i+1, j, k] += a
-        a = q4(wp * (wd[i, j, k] - wd[i-1, j, k]) * idx2)      # fxW, −
-        d[i-1, j, k-1] += a; d[i, j, k-1] += a; d[i-1, j, k] += a; d[i, j, k] += a
-        a = q4(-wp * (wd[i, j+1, k] - wd[i, j, k]) * idy2)     # fyN, +
-        d[i, j, k-1] += a; d[i, j+1, k-1] += a; d[i, j, k] += a; d[i, j+1, k] += a
-        a = q4(wp * (wd[i, j, k] - wd[i, j-1, k]) * idy2)      # fyS, −
-        d[i, j-1, k-1] += a; d[i, j, k-1] += a; d[i, j-1, k] += a; d[i, j, k] += a
+# The velocity points the scatter visited: the interior (a box of storage
+# indices). `_AllIn` stands for a cell whose every candidate point is inside
+# (the bulk of the domain): no checks.
+struct _DualBox
+    i1::Int; i2::Int; j1::Int; j2::Int; k1::Int; k2::Int
+end
+struct _AllIn end
+@inline _inbox(b::_DualBox, i, j, k) = (b.i1 <= i <= b.i2) & (b.j1 <= j <= b.j2) & (b.k1 <= k <= b.k2)
+@inline _inbox(::_AllIn, i, j, k) = true
+@inline _share(f::F, q, m, bx, i, j, k) where {F} = _inbox(bx, i, j, k) ? f(q, m, i, j, k) : zero(eltype(q))
+
+# Every share destined for storage cell (I, J, K) before the halo fold: from
+# the u points on its two x faces and their y, z neighbours, and likewise for
+# v and w (the inverse of the scatter's target lists).
+@inline function _dual_raw(u, v, w, m, bx, I, J, K)
+    # u: x fluxes of p = s and s + ex; y, z cross fluxes of the four u points
+    # around each of the cell's y- and z-edges on its two x faces
+    d = _share(_ux_e, u, m, bx, I, J, K) + _share(_ux_w, u, m, bx, I+1, J, K)
+    d += (_share(_uy_n, u, m, bx, I+1, J, K) + _share(_uy_n, u, m, bx, I, J, K)) +
+         (_share(_uy_n, u, m, bx, I+1, J-1, K) + _share(_uy_n, u, m, bx, I, J-1, K))
+    d += (_share(_uy_s, u, m, bx, I+1, J+1, K) + _share(_uy_s, u, m, bx, I, J+1, K)) +
+         (_share(_uy_s, u, m, bx, I+1, J, K) + _share(_uy_s, u, m, bx, I, J, K))
+    d += (_share(_uz_t, u, m, bx, I+1, J, K) + _share(_uz_t, u, m, bx, I, J, K)) +
+         (_share(_uz_t, u, m, bx, I+1, J, K-1) + _share(_uz_t, u, m, bx, I, J, K-1))
+    d += (_share(_uz_b, u, m, bx, I+1, J, K+1) + _share(_uz_b, u, m, bx, I, J, K+1)) +
+         (_share(_uz_b, u, m, bx, I+1, J, K) + _share(_uz_b, u, m, bx, I, J, K))
+    # v
+    d += _share(_vy_n, v, m, bx, I, J, K) + _share(_vy_s, v, m, bx, I, J+1, K)
+    d += (_share(_vx_e, v, m, bx, I, J+1, K) + _share(_vx_e, v, m, bx, I-1, J+1, K)) +
+         (_share(_vx_e, v, m, bx, I, J, K) + _share(_vx_e, v, m, bx, I-1, J, K))
+    d += (_share(_vx_w, v, m, bx, I+1, J+1, K) + _share(_vx_w, v, m, bx, I, J+1, K)) +
+         (_share(_vx_w, v, m, bx, I+1, J, K) + _share(_vx_w, v, m, bx, I, J, K))
+    d += (_share(_vz_t, v, m, bx, I, J+1, K) + _share(_vz_t, v, m, bx, I, J, K)) +
+         (_share(_vz_t, v, m, bx, I, J+1, K-1) + _share(_vz_t, v, m, bx, I, J, K-1))
+    d += (_share(_vz_b, v, m, bx, I, J+1, K+1) + _share(_vz_b, v, m, bx, I, J, K+1)) +
+         (_share(_vz_b, v, m, bx, I, J+1, K) + _share(_vz_b, v, m, bx, I, J, K))
+    # w
+    d += _share(_wz_t, w, m, bx, I, J, K) + _share(_wz_b, w, m, bx, I, J, K+1)
+    d += (_share(_wx_e, w, m, bx, I, J, K+1) + _share(_wx_e, w, m, bx, I-1, J, K+1)) +
+         (_share(_wx_e, w, m, bx, I, J, K) + _share(_wx_e, w, m, bx, I-1, J, K))
+    d += (_share(_wx_w, w, m, bx, I+1, J, K+1) + _share(_wx_w, w, m, bx, I, J, K+1)) +
+         (_share(_wx_w, w, m, bx, I+1, J, K) + _share(_wx_w, w, m, bx, I, J, K))
+    d += (_share(_wy_n, w, m, bx, I, J, K+1) + _share(_wy_n, w, m, bx, I, J-1, K+1)) +
+         (_share(_wy_n, w, m, bx, I, J, K) + _share(_wy_n, w, m, bx, I, J-1, K))
+    d += (_share(_wy_s, w, m, bx, I, J+1, K+1) + _share(_wy_s, w, m, bx, I, J, K+1)) +
+         (_share(_wy_s, w, m, bx, I, J+1, K) + _share(_wy_s, w, m, bx, I, J, K))
+    return d
+end
+
+# The halo fold of one direction: interior index I gathers itself and the
+# first halo layer (H low, H+N+1 high) when it is that layer's image (`lo`,
+# `hi` of `_images`: the periodic image or the mirror). n = 1, 2, 3; 0 = none.
+@inline _fold_src(I, H, N, lo, hi, n) =
+    n == 1 ? I : n == 2 ? (lo == I ? H : 0) : (hi == I ? H + N + 1 : 0)
+
+@inline function _dual_strain_body!(I, J, K, d, u, v, w, m, bx, Hx, Nx, lox, hix, Hy, Ny, loy, hiy,
+                                    Hz, Nz, loz, hiz)
+    T = eltype(d)
+    acc = zero(T)
+    # the bulk: one source cell, all of its candidate points inside
+    if (Hx + 1 < I < Hx + Nx) & (Hy + 1 < J < Hy + Ny) & (Hz + 1 < K < Hz + Nz)
+        acc = _dual_raw(u, v, w, m, _AllIn(), I, J, K)
+    else
+        for nz in 1:3
+            sz = _fold_src(K, Hz, Nz, loz, hiz, nz)
+            sz == 0 && continue
+            for ny in 1:3
+                sy = _fold_src(J, Hy, Ny, loy, hiy, ny)
+                sy == 0 && continue
+                for nx in 1:3
+                    sx = _fold_src(I, Hx, Nx, lox, hix, nx)
+                    sx == 0 && continue
+                    acc += _dual_raw(u, v, w, m, bx, sx, sy, sz)
+                end
+            end
+        end
     end
-    _fold_halos!(d, bcs, g)
+    @inbounds d[I, J, K] = _per_volume(m, acc, K)
+    return nothing
+end
+
+_dual_metrics(g::RegularGrid) = _DualUniform(1 / g.dx^2, 1 / g.dy^2, 1 / g.dz^2)
+_dual_metrics(g::StretchedGrid) = _DualLevels(1 / g.dx^2, 1 / g.dy^2, g.dzc, g.dzf)
+
+function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::Union{RegularGrid,StretchedGrid})
+    d = D.data
+    fill!(d, zero(eltype(d)))
+    ii, jj, kk = interior(g)
+    bx = _DualBox(first(ii), last(ii), first(jj), last(jj), first(kk), last(kk))
+    lox, hix = _images(bcs.west, g.Hx, g.Nx)
+    loy, hiy = _images(bcs.south, g.Hy, g.Ny)
+    loz, hiz = _images(bcs.bottom, g.Hz, g.Nz)
+    launch!(Backends.backend(d), _dual_strain_body!, (ii, jj, kk), d, u.data, v.data, w.data,
+            _dual_metrics(g), bx, g.Hx, g.Nx, lox, hix, g.Hy, g.Ny, loy, hiy, g.Hz, g.Nz, loz, hiz)
     return D
 end
 
-# The dual on a StretchedGrid. The momentum operator there
-# (StretchedGrids: `_add_eddy_viscosity_u!/_v!/_w!`) differences the
+# The dual on a StretchedGrid. The momentum operator there differences the
 # vertical fluxes of u, v over the centre spacing `dzf` and divides by the
 # cell thickness `dzc` (u, v control volumes), and for w the reverse (`dzc`
 # between two z-faces, `dzf` the control volume). The identity
 # Σ_c ν_c D_c V_c = −Σ_p u_p T_p V_p is volume-weighted, so each flux's
 # share −u_p (±f)/L_p · V_p (L_p the extent of p's control volume across
-# the flux) is accumulated per unit horizontal area (× the control-volume
-# height of p), folded onto the interior like the uniform form, and divided
-# by the thickness dzc of the receiving cell at the end. On a `:uniform`
+# the flux) is taken per unit horizontal area (× the control-volume height
+# of p, `_DualLevels`), gathered with the halo fold like the uniform form,
+# and divided by the thickness dzc of the receiving cell. On a `:uniform`
 # StretchedGrid this is the RegularGrid dual to round-off.
-function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::StretchedGrid{T}) where {T}
-    idx2 = 1 / g.dx^2; idy2 = 1 / g.dy^2
-    dzc, dzf = g.dzc, g.dzf
-    d = D.data
-    fill!(d, zero(T))
-    ud, vd, wd = u.data, v.data, w.data
-    ii, jj, kk = interior(g)
-    q4(x) = T(0.25) * x
-    @inbounds for k in kk
-        hc = dzc[k]                       # u, v control-volume height
-        hf = dzf[k]                       # w control-volume height
-        izt = 1 / dzf[k+1]; izb = 1 / dzf[k]       # u, v: vertical gradients between centres
-        iwt = 1 / dzc[k];   iwb = 1 / dzc[k-1]     # w: vertical gradients between z-faces
-        for j in jj, i in ii
-            # ---- u at FaceX (i,j,k) ----
-            up = ud[i, j, k]
-            a = -up * (ud[i+1, j, k] - ud[i, j, k]) * idx2 * hc
-            d[i, j, k] += a
-            a = up * (ud[i, j, k] - ud[i-1, j, k]) * idx2 * hc
-            d[i-1, j, k] += a
-            a = q4(-up * (ud[i, j+1, k] - ud[i, j, k]) * idy2 * hc)
-            d[i-1, j, k] += a; d[i, j, k] += a; d[i-1, j+1, k] += a; d[i, j+1, k] += a
-            a = q4(up * (ud[i, j, k] - ud[i, j-1, k]) * idy2 * hc)
-            d[i-1, j-1, k] += a; d[i, j-1, k] += a; d[i-1, j, k] += a; d[i, j, k] += a
-            a = q4(-up * (ud[i, j, k+1] - ud[i, j, k]) * izt)
-            d[i-1, j, k] += a; d[i, j, k] += a; d[i-1, j, k+1] += a; d[i, j, k+1] += a
-            a = q4(up * (ud[i, j, k] - ud[i, j, k-1]) * izb)
-            d[i-1, j, k-1] += a; d[i, j, k-1] += a; d[i-1, j, k] += a; d[i, j, k] += a
-
-            # ---- v at FaceY (i,j,k) ----
-            vp = vd[i, j, k]
-            a = -vp * (vd[i, j+1, k] - vd[i, j, k]) * idy2 * hc
-            d[i, j, k] += a
-            a = vp * (vd[i, j, k] - vd[i, j-1, k]) * idy2 * hc
-            d[i, j-1, k] += a
-            a = q4(-vp * (vd[i+1, j, k] - vd[i, j, k]) * idx2 * hc)
-            d[i, j-1, k] += a; d[i+1, j-1, k] += a; d[i, j, k] += a; d[i+1, j, k] += a
-            a = q4(vp * (vd[i, j, k] - vd[i-1, j, k]) * idx2 * hc)
-            d[i-1, j-1, k] += a; d[i, j-1, k] += a; d[i-1, j, k] += a; d[i, j, k] += a
-            a = q4(-vp * (vd[i, j, k+1] - vd[i, j, k]) * izt)
-            d[i, j-1, k] += a; d[i, j, k] += a; d[i, j-1, k+1] += a; d[i, j, k+1] += a
-            a = q4(vp * (vd[i, j, k] - vd[i, j, k-1]) * izb)
-            d[i, j-1, k-1] += a; d[i, j, k-1] += a; d[i, j-1, k] += a; d[i, j, k] += a
-
-            # ---- w at FaceZ (i,j,k) ----
-            wp = wd[i, j, k]
-            a = -wp * (wd[i, j, k+1] - wd[i, j, k]) * iwt
-            d[i, j, k] += a
-            a = wp * (wd[i, j, k] - wd[i, j, k-1]) * iwb
-            d[i, j, k-1] += a
-            a = q4(-wp * (wd[i+1, j, k] - wd[i, j, k]) * idx2 * hf)
-            d[i, j, k-1] += a; d[i+1, j, k-1] += a; d[i, j, k] += a; d[i+1, j, k] += a
-            a = q4(wp * (wd[i, j, k] - wd[i-1, j, k]) * idx2 * hf)
-            d[i-1, j, k-1] += a; d[i, j, k-1] += a; d[i-1, j, k] += a; d[i, j, k] += a
-            a = q4(-wp * (wd[i, j+1, k] - wd[i, j, k]) * idy2 * hf)
-            d[i, j, k-1] += a; d[i, j+1, k-1] += a; d[i, j, k] += a; d[i, j+1, k] += a
-            a = q4(wp * (wd[i, j, k] - wd[i, j-1, k]) * idy2 * hf)
-            d[i, j-1, k-1] += a; d[i, j, k-1] += a; d[i, j-1, k] += a; d[i, j, k] += a
-        end
-    end
-    _fold_halos!(d, bcs, g)
-    @inbounds for k in kk
-        ih = 1 / dzc[k]
-        for j in jj, i in ii
-            d[i, j, k] *= ih
-        end
-    end
-    return D
-end
 
 # Fold the first halo layer onto the interior cells it is a copy of (the
 # periodic image, or the mirror for no-flux / wall boundaries), x then y
 # then z, so that edge and corner halo shares are carried twice correctly.
+# (Used by the wall-model production, a scatter over the list of wall faces;
+# the dual strain gathers instead, `_fold_src`.)
 function _fold_halos!(d, bcs, g)
     Hx, Hy, Hz, Nx, Ny, Nz = g.Hx, g.Hy, g.Hz, g.Nx, g.Ny, g.Nz
     sx, sy, sz = size(d)
