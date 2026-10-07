@@ -114,9 +114,10 @@ them: `name => path` relative to the package directory. The file is
 included into a fresh module and must call [`register_driver!`](@ref)
 for `name`. Physics stays in `examples/`; nothing is moved into `src/`
 for the CLI's sake. The migrations of the example drivers (#311) add
-their entries here.
+their entries here: `berlin` (the Berlin case, CFG-c #358).
 """
-const DRIVER_FILES = Dict{String,String}()
+const DRIVER_FILES = Dict{String,String}(
+    "berlin" => joinpath("examples", "urban", "BerlinCase.jl"))   # CFG-c, #358
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))
 

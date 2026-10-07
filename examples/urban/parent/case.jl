@@ -309,8 +309,10 @@ function build_parent(pc::ParentConfig; child = nothing)
     pc.moisture && set!(sim.qv, (x, y, z) -> qf(z))
     if pc.u_init === :geostrophic
         set!(sim.u, (x, y, z) -> Ug(z, 0.0)); set!(sim.v, (x, y, z) -> Vg(z, 0.0))
-    else
+    elseif pc.u_init isa Number
         set!(sim.u, (x, y, z) -> Float64(pc.u_init))
+    else                                     # a profile u(z) (ProfileTable or a function)
+        set!(sim.u, (x, y, z) -> Float64(pc.u_init(z)))
     end
     rng = Random.Xoshiro(pc.seed)
     θi = interior_view(sim.θ)
