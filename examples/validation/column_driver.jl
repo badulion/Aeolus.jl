@@ -33,39 +33,42 @@ Config.config_dir(::ColumnDriver) = joinpath(@__DIR__, "configs")
 
 const _CASE_SECTIONS = ("dycoms_rf01" => "dycoms_rf01", "parisfog_2011" => "fog",
                         "kessler_box" => "kessler_box", "droplet_parcel" => "parcel")
-const _RF01_DOCS = Dict(:zi => "inversion height (m)", :psfc => "surface pressure (Pa)",
-                        :sst => "sea-surface temperature (K)", :qt_bl => "total water below the inversion (kg/kg)",
-                        :qt_ft => "total water above (kg/kg)", :thl_bl => "θ_l below the inversion (K)",
-                        :reff => "droplet effective radius (μm)", :f0 => "F0 of the prescribed flux (W/m²)",
-                        :f1 => "F1 of the prescribed flux (W/m²)", :kappa => "κ of the prescribed flux (m²/kg)",
-                        :dz_fine => "layer depth of the fine (LES) part (m)", :z_les => "top of the fine part (m)",
-                        :n_coarse => "stretched layers above it", :z_top => "top of the column (m)")
+# doc and units of each option (units: CF-style strings; "1": dimensionless)
+const _RF01_DOCS = Dict(:zi => ("inversion height", "m"), :psfc => ("surface pressure", "Pa"),
+                        :sst => ("sea-surface temperature", "K"), :qt_bl => ("total water below the inversion", "kg kg^-1"),
+                        :qt_ft => ("total water above", "kg kg^-1"), :thl_bl => ("θ_l below the inversion", "K"),
+                        :reff => ("droplet effective radius", "μm"), :f0 => ("F0 of the prescribed flux", "W m^-2"),
+                        :f1 => ("F1 of the prescribed flux", "W m^-2"), :kappa => ("κ of the prescribed flux", "m^2 kg^-1"),
+                        :dz_fine => ("layer depth of the fine (LES) part", "m"), :z_les => ("top of the fine part", "m"),
+                        :n_coarse => ("stretched layers above it", ""), :z_top => ("top of the column", "m"))
 
 const _FOG_DOCS = Dict(
-    :latitude => "site latitude (degrees)", :longitude => "site longitude (degrees, east positive)",
-    :start => "start (year, month, day, hour, minute) UTC", :z0m => "momentum roughness length (m)",
-    :z0h => "heat roughness length (m)", :albedo => "surface albedo", :emissivity => "surface emissivity",
-    :admittance => "thermal admittance of the soil top (J m⁻² K⁻¹ s⁻½), force-restore",
-    :T_deep => "deep soil temperature of the force-restore equation (K)",
-    :β => "soil moisture availability for bare evaporation", :λ => "asymptotic mixing length (m)",
-    :K_min => "background diffusivity (m² s⁻¹)", :ug => "geostrophic wind u (m s⁻¹)",
-    :vg => "geostrophic wind v (m s⁻¹)", :N_d => "droplet number (m⁻³)",
-    :k_shape => "shape factor of the effective radius (fog_effective_radius)",
-    :droplet_feedback => "fog droplets are seen by the radiation (false: transparent)",
-    :shortwave => "the sun rises (false: the night goes on)",
-    :settling => "droplets sediment at terminal_velocity(r_eff)", :dt => "the step (s); 5 s is converged",
-    :dt_rad => "radiation every dt_rad (s)", :dt_gas => "gas optics every dt_gas (s)",
-    :dt_out => "diagnostics every dt_out (s)", :lwc_fog => "fog is LWC ≥ lwc_fog (kg m⁻³)",
-    :z_obs => "fog at the ground: fog in the layer containing z_obs (m)")
+    :latitude => ("site latitude", "degrees_north"), :longitude => ("site longitude (east positive)", "degrees_east"),
+    :start => ("start (year, month, day, hour, minute) UTC", ""), :z0m => ("momentum roughness length", "m"),
+    :z0h => ("heat roughness length", "m"), :albedo => ("surface albedo", "1"), :emissivity => ("surface emissivity", "1"),
+    :admittance => ("thermal admittance of the soil top, force-restore", "J m^-2 K^-1 s^-1/2"),
+    :T_deep => ("deep soil temperature of the force-restore equation", "K"),
+    :β => ("soil moisture availability for bare evaporation", "1"), :λ => ("asymptotic mixing length", "m"),
+    :K_min => ("background diffusivity", "m^2 s^-1"), :ug => ("geostrophic wind u", "m s^-1"),
+    :vg => ("geostrophic wind v", "m s^-1"), :N_d => ("droplet number", "m^-3"),
+    :k_shape => ("shape factor of the effective radius (fog_effective_radius)", "1"),
+    :droplet_feedback => ("fog droplets are seen by the radiation (false: transparent)", ""),
+    :shortwave => ("the sun rises (false: the night goes on)", ""),
+    :settling => ("droplets sediment at terminal_velocity(r_eff)", ""), :dt => ("the step; 5 s is converged", "s"),
+    :dt_rad => ("radiation every dt_rad", "s"), :dt_gas => ("gas optics every dt_gas", "s"),
+    :dt_out => ("diagnostics every dt_out", "s"), :lwc_fog => ("fog is LWC ≥ lwc_fog", "kg m^-3"),
+    :z_obs => ("fog at the ground: fog in the layer containing z_obs", "m"))
 const _PARCEL_DOCS = Dict(
-    :T0 => "initial temperature (K)", :p0 => "initial pressure (Pa)",
-    :S0 => "initial supersaturation (the parcel starts at cloud base)",
-    :N => "droplet number concentration (m⁻³)", :r0 => "median radius of the initial spectrum (m)",
-    :ε0 => "log-normal width of the initial spectrum (0: monodisperse)",
-    :solute_mass => "NaCl per droplet (kg)", :n_sd => "superdroplets (reference only)",
-    :w => "updraught (m s⁻¹)", :σ_S => "sub-grid supersaturation spread",
-    :τ => "Lagrangian correlation time of the fluctuations (s)", :t_end => "duration (s)",
-    :dt => "output and coupling step (s)", :seed => "initial radii and fluctuation noise")
+    :T0 => ("initial temperature", "K"), :p0 => ("initial pressure", "Pa"),
+    :S0 => ("initial supersaturation (the parcel starts at cloud base)", "1"),
+    :N => ("droplet number concentration", "m^-3"), :r0 => ("median radius of the initial spectrum", "m"),
+    :ε0 => ("log-normal width of the initial spectrum (0: monodisperse)", "1"),
+    :solute_mass => ("NaCl per droplet", "kg"), :n_sd => ("superdroplets (reference only)", ""),
+    :w => ("updraught", "m s^-1"), :σ_S => ("sub-grid supersaturation spread", "1"),
+    :τ => ("Lagrangian correlation time of the fluctuations", "s"), :t_end => ("duration", "s"),
+    :dt => ("output and coupling step", "s"), :seed => ("initial radii and fluctuation noise", ""))
+_docs(d) = Dict(k => v[1] for (k, v) in d)
+_units(d) = Dict(k => v[2] for (k, v) in d if !isempty(v[2]))
 
 function Config.driver_sections(::ColumnDriver)
     col = section("column"; doc = "Which column case runs.") do s
@@ -75,12 +78,12 @@ function Config.driver_sections(::ColumnDriver)
     end
     rf01 = section("dycoms_rf01"; doc = "DYCOMS-II RF01 (Stevens et al. 2005): sounding, prescribed-flux constants, column grid, longwave.") do s
         for (k, v) in pairs(RF01_DEFAULTS)
-            option!(s, String(k), typeof(v); default = v, doc = _RF01_DOCS[k])
+            option!(s, String(k), typeof(v); default = v, doc = _RF01_DOCS[k][1], units = _RF01_DOCS[k][2])
         end
         option!(s, "ngpt_per_band", Int; default = 4, range = (1, 64), doc = "g-points per longwave band")
-        option!(s, "sfc_emissivity", Float64; default = 0.98, range = (0, 1), doc = "surface emissivity")
+        option!(s, "sfc_emissivity", Float64; units = "1", default = 0.98, range = (0, 1), doc = "surface emissivity")
     end
-    fog = kwdef_section("fog", FogColumnSettings; docs = _FOG_DOCS,
+    fog = kwdef_section("fog", FogColumnSettings; docs = _docs(_FOG_DOCS), units = _units(_FOG_DOCS),
                         doc = "ParisFog 2011: the RadiationFog column settings (FogColumnSettings; keys are its fields, β → beta, λ → lambda).")
     snd = section("fog_sounding"; doc = "ParisFog 2011: the initial sounding (parisfog_2011_column).") do s
         option!(s, "h", Float64; default = 1000.0, range = (0, Inf), open_lower = true, units = "m", doc = "column depth")
@@ -98,12 +101,12 @@ function Config.driver_sections(::ColumnDriver)
         option!(s, "qv", Float64; default = 0.01, range = (0, Inf), units = "kg kg^-1", doc = "uniform vapour")
         option!(s, "ql", Float64; default = 3e-3, range = (0, Inf), units = "kg kg^-1",
                 doc = "cloud water of the initial cloud layer")
-        option!(s, "cloud_layer", NTuple{2,Float64}; default = (0.6, 0.9), range = (0, 1),
+        option!(s, "cloud_layer", NTuple{2,Float64}; units = "1", default = (0.6, 0.9), range = (0, 1),
                 doc = "the cloud layer, as fractions of the height (open interval)")
         option!(s, "dt", Vector{Float64}; default = [60.0, 60.0, 120.0, 120.0, 120.0], range = (0, Inf),
                 open_lower = true, units = "s", doc = "the steps, one microphysics step each")
     end
-    pc = kwdef_section("parcel", BroadeningCase; docs = _PARCEL_DOCS,
+    pc = kwdef_section("parcel", BroadeningCase; docs = _docs(_PARCEL_DOCS), units = _units(_PARCEL_DOCS),
                        doc = "The parcel of the spectral-broadening validation (BroadeningCase; σ_S → sigma_s, τ → tau, ε0 → epsilon0).")
     option!(pc, "model", Symbol; default = :superdroplet, allowed = [:superdroplet, :bulk],
             doc = "superdroplet (per-droplet stochastic supersaturation, the reference) or bulk (the moment closure)")
@@ -118,7 +121,10 @@ function _checks(cfg)
         push!(e, ConfigError("kessler_box.cloud_layer", "expected [bottom, top] with bottom < top"))
     return e
 end
-Config.driver_checks(::ColumnDriver) = Any[_checks]
+Config.driver_checks(::ColumnDriver) = Any[
+    """`[checkpoint]` stays off: a column case runs to the end in one call
+    a key of the section of a case that `column.case` does not select must keep its default (it would be ignored)
+    `kessler_box.cloud_layer` is [bottom, top] with bottom < top""" => _checks]
 
 """
     ColumnRun

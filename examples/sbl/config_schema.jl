@@ -291,19 +291,19 @@ function Config.driver_sections(::SBLDriver)
                 doc = "homogeneous: a dynamic driver (CFG-g #362, `aeolus preprocess dynamic --from-sounding`) whose " *
                       "tables replace the config's: geostrophic wind, advective tendencies, subsidence, nudging and " *
                       "the surface θ series, each when the driver holds it; \"none\": the config's own")
-        option!(s, "richardson", Float64; default = 0.0, range = (0, Inf),
+        option!(s, "richardson", Float64; units = "1", default = 0.0, range = (0, Inf),
                 doc = "stratified_channel: the friction Richardson number Ri_τ (0: θ passive, g = 0)")
-        option!(s, "re_tau", Float64; default = 180.0, range = (0, Inf), open_lower = true,
+        option!(s, "re_tau", Float64; units = "1", default = 180.0, range = (0, Inf), open_lower = true,
                 doc = "relaminarisation_channel: the friction Reynolds number Re_τ")
-        option!(s, "h_over_l", Float64; default = 0.0, range = (0, Inf),
+        option!(s, "h_over_l", Float64; units = "1", default = 0.0, range = (0, Inf),
                 doc = "relaminarisation_channel: the stability h/L of the cooling (0: neutral)")
-        option!(s, "heat_flux_fraction", Float64; default = 0.0, range = (0, Inf),
+        option!(s, "heat_flux_fraction", Float64; units = "1", default = 0.0, range = (0, Inf),
                 doc = "collapse_channel: the surface cooling in units of the maximum sustainable heat flux at Δz/2 (0: neutral)")
-        option!(s, "z0", Float64; default = 1e-4, range = (0, Inf), open_lower = true,
+        option!(s, "z0", Float64; units = "H", default = 1e-4, range = (0, Inf), open_lower = true,
                 doc = "collapse_channel: the roughness length z0/H")
         option!(s, "theta_ref", Float64; default = 300.0, range = (0, Inf), open_lower = true, units = "K",
                 doc = "collapse_channel: the reference temperature of the flux wall law and the MSHF")
-        option!(s, "spinup_time", Float64; default = 10.0, range = (0, Inf),
+        option!(s, "spinup_time", Float64; units = "δ/u_τ, h/u_τ or H/u*", default = 10.0, range = (0, Inf),
                 doc = "channels: the neutral spin-up (δ/u_τ, h/u_τ, H/u*) the run starts from; stratified_channel: 0 starts from noise")
     end
     grid = section("grid"; doc = "The mesh.") do s
@@ -369,7 +369,7 @@ function Config.driver_sections(::SBLDriver)
         option!(s, "closure", Symbol; default = :smagorinsky,
                 allowed = [:smagorinsky, :vreman, :sigma, :amd, :dynamic_smagorinsky],
                 doc = "homogeneous: smagorinsky, vreman, sigma or amd; stratified_channel: dynamic_smagorinsky; relaminarisation_channel: sigma; collapse_channel: smagorinsky")
-        option!(s, "c_s", Optional{Float64}; range = (0, Inf), open_lower = true,
+        option!(s, "c_s", Optional{Float64}; units = "1", range = (0, Inf), open_lower = true,
                 doc = "the closure's coefficient; \"none\": smagorinsky 0.1, vreman 0.17, sigma 1.35, amd 0.3 (dynamic_smagorinsky has none)")
         option!(s, "stability", Symbol; default = :brown94,
                 allowed = [:brown94, :lilly, :long_tail, :short_tail, :none],
@@ -384,7 +384,7 @@ function Config.driver_sections(::SBLDriver)
                 doc = "geostrophic: relax toward U_g(z, t); mean: damp only the departures from the plane mean")
     end
     stepper = section("stepper"; doc = "Time stepping (SSP-RK3).") do s
-        option!(s, "cfl", Optional{Float64}; range = (0, Inf), open_lower = true,
+        option!(s, "cfl", Optional{Float64}; units = "1", range = (0, Inf), open_lower = true,
                 doc = "advective Courant number of the adaptive step; \"none\": the kind's (homogeneous 1.2, channels 0.5, the only value they take)")
         option!(s, "end_time", Optional{Float64}; units = "s (channels: δ/u_τ)",
                 doc = "the model time to run to (homogeneous: from t_start; channels: the run after the spin-up)")
@@ -396,7 +396,7 @@ function Config.driver_sections(::SBLDriver)
                 doc = "model time from which the profiles are averaged (homogeneous, stratified_channel, collapse_channel)")
         option!(s, "sample_every", Int; default = 10, range = (1, typemax(Int)),
                 doc = "homogeneous: sample every n-th step")
-        option!(s, "interval", Float64; default = 0.5, range = (0, Inf), open_lower = true,
+        option!(s, "interval", Float64; units = "h/u_τ or H/u*", default = 0.5, range = (0, Inf), open_lower = true,
                 doc = "relaminarisation_channel, collapse_channel: model time between samples")
         option!(s, "series_interval", Float64; default = 0.0, range = (0, Inf), units = "s",
                 doc = "homogeneous: model time between the rows of output/series.csv; 0: no series")
@@ -406,7 +406,7 @@ function Config.driver_sections(::SBLDriver)
                 doc = "towers at every cell centre below this height; 0: no towers")
         option!(s, "window", Float64; default = 300.0, range = (0, Inf), open_lower = true, units = "s",
                 doc = "averaging segment")
-        option!(s, "hours", NTuple{2,Float64}; default = (18.0, 6.0), range = (0, 24),
+        option!(s, "hours", NTuple{2,Float64}; units = "h", default = (18.0, 6.0), range = (0, 24),
                 doc = "local hours (from, to) in which the towers record; (0, 24): always")
     end
     return Section[case, grid, dyn, forcing, surface, initial, sgs, sponge, stepper, avg, towers]
@@ -535,7 +535,15 @@ function _sbl_checks(cfg)
     return e
 end
 
-Config.driver_checks(::SBLDriver) = Any[_sbl_checks]
+const _SBL_CHECKS_DOC = """
+a key of a section that `case.kind` does not use must keep its default (it would be ignored)
+homogeneous: exactly one of `stepper.end_time` and `stepper.nsteps`, exactly one of `forcing.f` and `forcing.latitude`; `sgs.closure` is `smagorinsky`, `vreman`, `sigma` or `amd`
+channels: run to `stepper.end_time` with the builder's closure (`stratified_channel`: `dynamic_smagorinsky` with `brown94` or no stability correction; `relaminarisation_channel`: `sigma`; `collapse_channel`: `smagorinsky`, laplacian stress) and `sgs.stability = "brown94"`
+checkpoints only for `homogeneous` and `relaminarisation_channel`
+`case.dynamic`, when given, exists (the message prints the `aeolus preprocess dynamic` command)
+`case.data` exists, and every table and column a forcing, surface or initial option refers to is in it"""
+
+Config.driver_checks(::SBLDriver) = Any[_SBL_CHECKS_DOC => _sbl_checks]
 
 # ---------------------------------------------------------------------------
 # config -> Julia objects

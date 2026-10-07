@@ -601,7 +601,7 @@ function Config.driver_sections(::BerlinDriver)
                 doc = "the OpenStreetMap file of the buildings, parks and water")
         option!(s, "min_height", Float64; default = 8.0, range = (0, Inf), units = "m",
                 doc = "buildings lower than this are dropped")
-        option!(s, "park_lai", Float64; default = 2.5, range = (0, Inf), doc = "leaf-area index of park cells")
+        option!(s, "park_lai", Float64; units = "m2 m-2", default = 2.5, range = (0, Inf), doc = "leaf-area index of park cells")
         option!(s, "landuse", Path; default = joinpath(DATA_DIR, "berlin_landuse_6km.csv"),
                 doc = "the nest parent's land-use table (data/fetch_berlin_landuse.jl)")
     end
@@ -635,15 +635,15 @@ function Config.driver_sections(::BerlinDriver)
         option!(s, "g", Float64; default = 9.81, range = (0, Inf), open_lower = true, units = "m s^-2",
                 doc = "gravitational acceleration")
         option!(s, "f_coriolis", Float64; default = 1e-4, units = "s^-1", doc = "Coriolis parameter")
-        option!(s, "c_s", Float64; default = 0.1, range = (0, Inf), doc = "Smagorinsky coefficient C_s of the core")
-        option!(s, "pr_t", Float64; default = 1 / 3, range = (0, Inf), open_lower = true,
+        option!(s, "c_s", Float64; units = "1", default = 0.1, range = (0, Inf), doc = "Smagorinsky coefficient C_s of the core")
+        option!(s, "pr_t", Float64; units = "1", default = 1 / 3, range = (0, Inf), open_lower = true,
                 doc = "turbulent Prandtl number")
         option!(s, "sgs_stability", Symbol; default = :brown94,
                 allowed = [:brown94, :lilly, :long_tail, :short_tail, :most, :none],
                 doc = "the stability correction every eddy-viscosity sgs provider wraps its closure in (P55-e, #187); none: uncorrected")
         option!(s, "sponge_alpha_max", Float64; default = 0.05, range = (0, Inf), units = "s^-1",
                 doc = "velocity sponge rate at the top")
-        option!(s, "sponge_frac", Float64; default = 0.75, range = (0, 1),
+        option!(s, "sponge_frac", Float64; units = "1", default = 0.75, range = (0, 1),
                 doc = "the sponge starts at sponge_frac × Lz")
         option!(s, "theta_top", OneOf(Symbol, Float64); default = :initial_gradient,
                 allowed = [:initial_gradient, :noflux], units = "K m^-1",
@@ -773,7 +773,13 @@ function _berlin_checks(cfg::RunConfig)
     return e
 end
 
-Config.driver_checks(::BerlinDriver) = Any[_berlin_checks]
+const _BERLIN_CHECKS_DOC = """
+the selected couplings are compatible (the declared incompatibilities of `[physics]`, with their reasons)
+every cadence an enabled coupling needs is set, and a cadence a file sets is used by an enabled coupling
+`dynamics.theta_top` is `"initial_gradient"`, `"noflux"` or a gradient in K/m
+`[checkpoint]` stays off: the Berlin case has no checkpoint/restart yet (#269)"""
+
+Config.driver_checks(::BerlinDriver) = Any[_BERLIN_CHECKS_DOC => _berlin_checks]
 
 const _BERLIN_SCHEMA = Ref{Any}(nothing)
 

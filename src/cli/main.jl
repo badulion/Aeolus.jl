@@ -19,8 +19,9 @@ usage: aeolus <command> [arguments]
         Validate the config (every member of a sweep) and print every problem.
   resolve <config> [--set key=value]... [--member k]
         Print the canonical resolved TOML (of every member of a sweep).
-  options [driver] [section]
-        Print the option reference of a driver (all sections, or one).
+  options [driver] [section] [--markdown]
+        Print the option reference of a driver (all sections and the cross-field
+        checks, or one section); --markdown: as the tables of the docs.
   preprocess <kind> [arguments]
         Run a registered preprocessor (no kind: list them).
   help
@@ -166,27 +167,58 @@ function _type_text(T)
     return lowercase(string(nameof(T)))
 end
 
+const _FROM_ENV = " (from the environment if set)"
+
 function _default_text(o::Option)
     o.required && return "(required)"
     d = o.default isa Function ? o.default() : o.default
     ok, v, _ = _coerce(o, d, true, pwd(), o.key)
     s = ok ? _emit_value(_toml_out(v)) : _show_raw(d)
-    return o.default isa Function ? s * " (from the environment if set)" : s
+    return o.default isa Function ? s * _FROM_ENV : s
 end
 
 """
-    option_reference(driver = "common"; section = nothing) -> String
+    option_reference(driver = "common"; section = nothing, format = :text) -> String
+    option_reference(schema::ConfigSchema; section = nothing, format = :text) -> String
 
-The option reference of a driver's schema, generated from the schema: one
-block per section with its doc, then one entry per option with its type,
-default, units, allowed values or range, and doc. `section` restricts it
-to one section. `aeolus options [driver] [section]` prints it.
+The option reference of a driver's schema, generated from the schema (the
+one source of truth: nothing is written by hand). For each section its
+doc, then for each option its key, type, default, units, allowed values
+or range, and doc; after the sections, the schema's cross-field checks in
+words ([`check!`](@ref)). `section` restricts it to one section (and
+leaves the checks out).
+
+`format = :text` is what `aeolus options [driver] [section]` prints;
+`format = :markdown` is one table per section (columns key, type,
+default, units, allowed / range, doc; one row per option) and a bullet
+list of the checks: `aeolus options --markdown` prints it and the docs
+build writes it to `docs/src/reference/options/<driver>.md`.
 """
-function option_reference(driver::AbstractString = "common"; section = nothing)
-    sch = driver_schema(driver)
+function option_reference(driver::AbstractString = "common"; section = nothing, format::Symbol = :text)
+    return option_reference(driver_schema(driver); section = section, format = format)
+end
+
+function option_reference(sch::ConfigSchema; section = nothing, format::Symbol = :text)
+    format in (:text, :markdown) ||
+        throw(ArgumentError("option_reference: format is :text or :markdown, got :$format"))
     secs = section === nothing ? sch.sections : filter(s -> s.name == section, sch.sections)
-    isempty(secs) && throw(ConfigError(String(section), "driver \"$driver\" has no section [$section]" *
+    isempty(secs) && throw(ConfigError(String(section), "driver \"$(sch.name)\" has no section [$section]" *
                                        _suggest(String(section), [s.name for s in sch.sections])))
+    checks = section === nothing ? _check_lines(sch) : String[]
+    return format === :text ? _reference_text(sch, secs, checks) : _reference_markdown(sch, secs, checks)
+end
+
+"The cross-field checks of `sch` in words, one line each (a check without a description: \"(undocumented)\")."
+function _check_lines(sch::ConfigSchema)
+    out = String[]
+    for (doc, _) in sch.checks
+        ls = filter(!isempty, strip.(split(doc, '\n')))
+        isempty(ls) ? push!(out, "(undocumented)") : append!(out, ls)
+    end
+    return out
+end
+
+function _reference_text(sch, secs, checks)
     io = IOBuffer()
     println(io, "# options of driver \"", sch.name, "\"")
     for s in secs
@@ -199,6 +231,54 @@ function option_reference(driver::AbstractString = "common"; section = nothing)
             println(io)
             isempty(o.doc) || println(io, "      ", o.doc)
         end
+    end
+    if !isempty(checks)
+        println(io, "\ncross-field checks:")
+        foreach(l -> println(io, "  - ", l), checks)
+    end
+    return String(take!(io))
+end
+
+"A Markdown table cell: `|` escaped, line breaks as spaces."
+_md_cell(s) = replace(String(s), '|' => "\\|", '\n' => ' ')
+
+"The allowed values or the range of `o`, for the Markdown table."
+function _md_constraint(o::Option)
+    parts = String[]
+    if o.range !== nothing
+        lo, hi = o.range
+        b(x) = x == typemax(Int) || x == typemax(Int32) ? "∞" : string(x)
+        push!(parts, (o.open_lower ? "(" : "[") * b(lo) * ", " * b(hi) * "]")
+    end
+    o.allowed === nothing || push!(parts, join(("`" * _show_raw(a) * "`" for a in o.allowed), ", "))
+    return join(parts, "; ")
+end
+
+function _reference_markdown(sch, secs, checks)
+    io = IOBuffer()
+    println(io, "Options of the driver `", sch.name, "`, generated from its schema ",
+            "(`Aeolus.Config.option_reference(\"", sch.name, "\"; format = :markdown)`, ",
+            "`aeolus options ", sch.name, " --markdown`). TOML has no null: `\"none\"` stands for nothing.")
+    for s in secs
+        println(io, "\n## `[", s.name, "]`\n")
+        isempty(s.doc) || println(io, s.doc, "\n")
+        println(io, "| key | type | default | units | allowed / range | doc |")
+        println(io, "| :-- | :-- | :-- | :-- | :-- | :-- |")
+        for o in s.options
+            d = _default_text(o)
+            env = endswith(d, _FROM_ENV)
+            env && (d = d[1:end-length(_FROM_ENV)])
+            println(io, "| `", o.key, "` | ", _md_cell(_type_text(o.type)), " | `", _md_cell(d), "`",
+                    env ? " (from the environment if set)" : "", " | ",
+                    isempty(o.units) ? "" : "`" * _md_cell(o.units) * "`", " | ",
+                    _md_cell(_md_constraint(o)), " | ", _md_cell(o.doc), " |")
+        end
+    end
+    if !isempty(checks)
+        println(io, "\n## Cross-field checks\n")
+        println(io, "Checked after every option has passed its own checks; every failure is reported ",
+                "with the others in one `ConfigError`.\n")
+        foreach(l -> println(io, "- ", l), checks)
     end
     return String(take!(io))
 end
@@ -228,10 +308,11 @@ function _cmd_resolve(args, io, err)
 end
 
 function _cmd_options(args, io, err)
-    pos, _, _, _ = _parse_args(args, (), ())
+    pos, _, _, fl = _parse_args(args, (), ("markdown",))
     length(pos) <= 2 || throw(UsageError("options takes at most a driver and a section"))
     driver = isempty(pos) ? "common" : pos[1]
-    print(io, option_reference(driver; section = length(pos) == 2 ? pos[2] : nothing))
+    print(io, option_reference(driver; section = length(pos) == 2 ? pos[2] : nothing,
+                               format = "markdown" in fl ? :markdown : :text))
     if isempty(pos)
         println(io, "\nregistered drivers: ", join(registered_drivers(), ", "),
                 isempty(DRIVER_FILES) ? "" : "; example drivers: " * join(sort!(collect(keys(DRIVER_FILES))), ", "))

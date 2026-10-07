@@ -246,15 +246,23 @@ section named like a common one adds its options to that section (the
 `simulation` driver's `[output] fields`); an option already in the common
 section, or a driver section declared twice, is an `ArgumentError`. `[run] driver`
 defaults to, and must equal, `name`. `checks` are cross-field checks
-([`check!`](@ref)). `defaults` (`"section.key" => value` pairs) give a
+([`check!`](@ref)): functions, or `"what it checks, in words" => f`
+pairs, whose text goes into the option reference ([`option_reference`](@ref)).
+`defaults` (`"section.key" => value` pairs) give a
 common option this driver's own default (the Berlin case's `[output]
 cadence` of 1800 s); its type and constraints stay the common ones.
 """
 struct ConfigSchema
     name::String
     sections::Vector{Section}
-    checks::Vector{Any}
+    checks::Vector{Pair{String,Any}}
+    ConfigSchema(name::String, sections::Vector{Section}, checks) =
+        new(name, sections, Pair{String,Any}[_check_entry(c) for c in checks])
 end
+
+"A cross-field check as `description => f` (a bare function has the description `\"\"`)."
+_check_entry(c::Pair) = String(first(c)) => last(c)
+_check_entry(f) = "" => f
 
 function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[], defaults = ())
     all_s = _common_sections(String(name))
@@ -295,14 +303,16 @@ function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[]
 end
 
 """
-    check!(schema, f) -> schema
+    check!(schema, f; doc = "") -> schema
 
 Add a cross-field check: `f(cfg::RunConfig)` returns a vector of
 [`ConfigError`](@ref)s (empty when the config is consistent). Run after
 every option has passed its own checks; their problems go into the one
-error the loader throws.
+error the loader throws. `doc` says what it checks, in words: the option
+reference lists it under "Cross-field checks".
 """
-check!(schema::ConfigSchema, f) = (push!(schema.checks, f); schema)
+check!(schema::ConfigSchema, f; doc::AbstractString = "") =
+    (push!(schema.checks, String(doc) => f); schema)
 
 _split_key(key::String) = (i = findfirst('.', key);
                            i === nothing ? (key, "") : (key[1:prevind(key, i)], key[nextind(key, i):end]))

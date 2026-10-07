@@ -144,7 +144,7 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "stretching", Symbol; default = :uniform,
                 allowed = [:uniform, :geometric, :tanh, :tanh_both],
                 doc = "vertical spacing (StretchedGrid): uniform (a RegularGrid), geometric (dz[k+1] = r dz[k]), tanh (clustered at the bottom), tanh_both (at both walls)")
-        option!(s, "stretching_parameter", Float64; default = 1.0, range = (0, Inf), open_lower = true,
+        option!(s, "stretching_parameter", Float64; units = "1", default = 1.0, range = (0, Inf), open_lower = true,
                 doc = "r of geometric, β of tanh / tanh_both; unused for uniform")
     end
     dyn = section("dynamics"; doc = "The dynamical core and its parameters.") do s
@@ -178,9 +178,9 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "closure", Symbol; default = :none,
                 allowed = [:none, :smagorinsky, :dynamic_smagorinsky, :vreman, :sigma, :amd],
                 doc = "none, smagorinsky (Smagorinsky-Lilly), dynamic_smagorinsky (Germano-Lilly, plane averaged), vreman, sigma (Nicoud et al. 2011), amd (anisotropic minimum dissipation)")
-        option!(s, "c_s", Optional{Float64}; range = (0, Inf), open_lower = true,
+        option!(s, "c_s", Optional{Float64}; units = "1", range = (0, Inf), open_lower = true,
                 doc = "the closure's coefficient; \"none\": its default (smagorinsky 0.17, vreman 0.17, sigma 1.35, amd 0.3); not used by dynamic_smagorinsky")
-        option!(s, "pr_t", Float64; default = 1 / 3, range = (0, Inf), open_lower = true,
+        option!(s, "pr_t", Float64; units = "1", default = 1 / 3, range = (0, Inf), open_lower = true,
                 doc = "turbulent Prandtl number")
         option!(s, "stability", Symbol; default = :none,
                 allowed = [:none, :brown_et_al_1994, :lilly_cutoff, :short_tail, :long_tail],
@@ -204,7 +204,7 @@ function Config.driver_sections(::SimulationDriverType)
                 doc = "euler (step!, the forward-Euler projection) or rk3 (step_rk3!, SSP-RK3); anelastic: euler")
         option!(s, "dt", Optional{Float64}; range = (0, Inf), open_lower = true, units = "s",
                 doc = "fixed step; with end_time it is shortened to end_time / ceil(end_time / dt)")
-        option!(s, "cfl", Optional{Float64}; range = (0, Inf), open_lower = true,
+        option!(s, "cfl", Optional{Float64}; units = "1", range = (0, Inf), open_lower = true,
                 doc = "adaptive step (step_adaptive!) with this advective Courant number")
         option!(s, "dt_max", Float64; default = Inf, range = (0, Inf), open_lower = true, units = "s",
                 doc = "the largest adaptive step (with cfl; the step of a fluid at rest)")
@@ -261,7 +261,17 @@ function _cross_checks(cfg)
     return e
 end
 
-Config.driver_checks(::SimulationDriverType) = Any[_cross_checks]
+const _CROSS_CHECKS_DOC = """
+exactly one of `stepper.dt` and `stepper.cfl`, and exactly one of `stepper.end_time` and `stepper.nsteps`
+an adaptive step (`stepper.cfl`) needs a finite `stepper.dt_max`
+`noslip` is a z-wall condition: not for `boundaries.x`, `boundaries.y`
+the anelastic core needs z walls, `dynamics.theta0` > 0, no moisture, `stepper.scheme = "euler"`, a fixed `stepper.dt`, a uniform grid and no checkpoints
+on a stretched grid `sgs.closure` is `none` or `smagorinsky` and `sgs.stability` is `none`
+`sgs.stability` wraps `smagorinsky`, `dynamic_smagorinsky`, `vreman` or `sigma` only
+an `initial.qv` profile and the `qv` output field need `dynamics.moisture = true`
+a Taylor-Green initial `u` or `v` needs periodic x and y"""
+
+Config.driver_checks(::SimulationDriverType) = Any[_CROSS_CHECKS_DOC => _cross_checks]
 
 # ---------------------------------------------------------------------------
 # build

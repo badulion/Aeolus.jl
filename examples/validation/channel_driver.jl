@@ -31,13 +31,13 @@ function Config.driver_sections(::ChannelDriver)
                       "full: channel_case (2πδ × πδ × 2δ, smooth walls, ν = u_τ δ/Re_τ)")
         option!(s, "size", NTuple{3,Int}; default = (24, 24, 24), range = (1, 4096),
                 doc = "cells in x, y, z")
-        option!(s, "re_tau", Float64; default = 1000.0, range = (0, Inf), open_lower = true,
+        option!(s, "re_tau", Float64; units = "1", default = 1000.0, range = (0, Inf), open_lower = true,
                 doc = "friction Reynolds number u_τ δ/ν (full)")
-        option!(s, "z0_over_h", Float64; default = 1e-4, range = (0, Inf), open_lower = true,
+        option!(s, "z0_over_h", Float64; units = "1", default = 1e-4, range = (0, Inf), open_lower = true,
                 doc = "roughness length over the depth H (half)")
         option!(s, "walls", Symbol; default = :both, allowed = [:both, :bottom],
                 doc = "modelled walls (full): both, or bottom with a free-slip top")
-        option!(s, "noise", Float64; default = 3.0, range = (0, Inf),
+        option!(s, "noise", Float64; units = "u*", default = 3.0, range = (0, Inf),
                 doc = "initial noise amplitude (in u*), seeded with [run] seed")
         option!(s, "stepper", Symbol; default = :rk3, allowed = [:rk3, :euler],
                 doc = "rk3 (step_rk3!) or euler (step!)")
@@ -45,13 +45,13 @@ function Config.driver_sections(::ChannelDriver)
     wm = section("wall_model"; doc = "The wall stress and the input it is fed.") do s
         option!(s, "law", Symbol; default = :auto, allowed = [:auto, :spalding, :rough_log],
                 doc = "auto: the kind's law (half: RoughLogLaw(z0), full: SpaldingLaw()); spalding; rough_log (RoughLogLaw(z0_over_h H))")
-        option!(s, "h_wm", Optional{Float64}; range = (0, Inf), open_lower = true,
+        option!(s, "h_wm", Optional{Float64}; units = "H or δ", range = (0, Inf), open_lower = true,
                 doc = "matching height (in H or δ); \"none\": h_wm_cells cells")
         option!(s, "h_wm_cells", Int; default = 1, range = (1, 64),
                 doc = "matching height in cells, when h_wm is \"none\"")
         option!(s, "filter", Symbol; default = :none, allowed = [:none, :temporal, :spatial, :both],
                 doc = "input filter: temporal (Yang et al. 2017), spatial (the 2Δ filter of P57-b), both")
-        option!(s, "t_f", Optional{Float64}; range = (0, Inf), open_lower = true,
+        option!(s, "t_f", Optional{Float64}; units = "δ/u_τ", range = (0, Inf), open_lower = true,
                 doc = "time-filter scale (in δ/u_τ); \"none\": 0.5")
     end
     sgs = section("sgs"; doc = "The subgrid closure (no wall damping).") do s
@@ -59,17 +59,17 @@ function Config.driver_sections(::ChannelDriver)
                 allowed = [:smagorinsky, :dynamic_smagorinsky, :lasd, :lasi],
                 doc = "smagorinsky (StaticSmagorinsky(c_s)), dynamic_smagorinsky (plane-averaged Germano-Lilly), " *
                       "lasd / lasi (LagrangianDynamicSmagorinsky, scale dependent / invariant)")
-        option!(s, "c_s", Float64; default = 0.1, range = (0, Inf), open_lower = true,
+        option!(s, "c_s", Float64; units = "1", default = 0.1, range = (0, Inf), open_lower = true,
                 doc = "the Smagorinsky coefficient (smagorinsky)")
     end
     st = section("stepper"; doc = "The run (run_channel!).") do s
-        option!(s, "end_time", Float64; default = 20.0, range = (0, Inf), open_lower = true,
+        option!(s, "end_time", Float64; units = "H/u* or δ/u_τ", default = 20.0, range = (0, Inf), open_lower = true,
                 doc = "simulated time, in H/u* (half) or δ/u_τ (full)")
-        option!(s, "average_from_fraction", Float64; default = 0.5, range = (0, 1),
+        option!(s, "average_from_fraction", Float64; units = "1", default = 0.5, range = (0, 1),
                 doc = "statistics from this fraction of end_time on")
-        option!(s, "cfl", Float64; default = 0.5, range = (0, Inf), open_lower = true,
+        option!(s, "cfl", Float64; units = "1", default = 0.5, range = (0, Inf), open_lower = true,
                 doc = "advective Courant number of the adaptive step (channel_dt)")
-        option!(s, "dt", Optional{Float64}; range = (0, Inf), open_lower = true,
+        option!(s, "dt", Optional{Float64}; units = "H/u* or δ/u_τ", range = (0, Inf), open_lower = true,
                 doc = "a fixed step instead of the adaptive one")
     end
     return Section[ch, wm, sgs, st]
@@ -86,7 +86,9 @@ function _checks(cfg)
         push!(e, ConfigError("wall_model.t_f", "t_f is the scale of the temporal filter: set wall_model.filter = \"temporal\" or \"both\""))
     return e
 end
-Config.driver_checks(::ChannelDriver) = Any[_checks]
+Config.driver_checks(::ChannelDriver) = Any[
+    """the half channel (`channel.kind = "half"`) has one wall (`channel.walls = "both"`) and no smooth-wall `spalding` law
+    `wall_model.t_f` needs the temporal filter (`wall_model.filter = "temporal"` or `"both"`)""" => _checks]
 
 """
     ChannelRun
