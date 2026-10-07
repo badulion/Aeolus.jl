@@ -263,9 +263,10 @@ no rejected step; ``\max|∇·u|`` per level ``3.6\times10^{-15}``,
 blob per root step ``\le 6.6\times10^{-15}``. The root's kinetic energy
 over the last 20 turnovers is 0.915 of the two-level run's; its 20-turnover
 means differ by a ratio 0.82 between the last two windows (seeds 1 and 3:
-1.08, 1.05; the two-level run: 1.01). Cost: 0.47 s per time unit against
-0.14 s for the two-level run (×3.3; the grandchild takes twice the child's
-substeps).
+1.08, 1.05; the two-level run: 1.01). Cost (the recorded full-tier run): 0.39 s per time unit against
+0.09 s for the two-level run (×4.5; the grandchild takes twice the child's
+substeps). Wall-clock cost varies with machine load: an earlier run on a
+less loaded machine measured ×3.3.
 
 ## Limits
 

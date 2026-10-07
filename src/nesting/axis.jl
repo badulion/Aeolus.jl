@@ -56,9 +56,6 @@ Base.show(io::IO, a::NestAxis) =
     print(io, "NestAxis(", a.integer === nothing ? "overlap" : "r=$(a.integer[1])",
           ", box parent cells ", a.pbox, ", child cells ", a.cbox, ")")
 
-"Number of box parent cells along the axis."
-_nbox(a::NestAxis) = length(a.pbox)
-
 # Snap the child faces onto coincident parent faces (relative tolerance
 # `rtol` of the local child spacing), in place.
 function _snap_faces!(cf::Vector{Float64}, pf::Vector{Float64}; rtol = 1e-9)

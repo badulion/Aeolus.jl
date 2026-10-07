@@ -440,9 +440,6 @@ function _snapshot_open!(snap::AbstractVector, sim)
     return snap
 end
 
-_restore!(run::NestedRun, sim, rb::_Rollback, which::Symbol) =
-    _restore_rb!(sim, rb, _bound_fields(run, which))
-
 function _restore_rb!(sim, rb::_Rollback, fields)
     restore_state!(sim, rb.snap)
     _restore_data!(fields, rb.scalars)
@@ -455,9 +452,6 @@ end
 # thread-invariant (KA-b, #296)
 _max_speed(sim) = max(_max_abs(sim.u), _max_abs(sim.v),
                       _max_abs(sim.w))
-
-_accept(run::NestedRun, sim, which::Symbol) =
-    _accept_fields(run, sim, which, _bound_fields(run, which))
 
 function _accept_fields(run::NestedRun, sim, which::Symbol, fields)
     _all_finite(sim) || return false
