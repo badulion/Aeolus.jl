@@ -486,10 +486,18 @@ end
                j in pm.Hy+1:pm.Hy+pm.Ny, k in pm.Hz+1:pm.Hz+pm.Nz) * pm.dx * pm.dy
     @test abs(I0 - Ipar) / Ipar < 1e-13              # prolongation: composite = parent
     preg = regs(pm, 1.0; closed=true); creg = regs(cm, 1.0; closed=false)
+    # the child's bottom is the parent's ground (a wall in both): no flux
+    # through it. (Before #349 this face carried random child fluxes, and
+    # the refluxing default `periodic = (true, true, true)` wrapped their
+    # mismatch into the parent's *top* layer, the #329 bug; with the
+    # parent's real axes the correction across a wall is dropped, so the
+    # register must be physical.)
+    @test nest_periodic_axes(pA) == (true, true, false)
+    creg[3].data[:, :, cm.Hz+1] .= 0
     fv!(pA.θ, preg, pA.ref.ρ̄c_pad); fv!(cA.θ, creg, cA.ref.ρ̄c_pad)
     Imid = composite_integral(pA.θ, cA.θ, nest; measure=m)
     restrict_to_parent!(pA.θ, cA.θ, nest; measure=m)
-    reflux!(pA.θ, preg, creg, nest; measure=m)
+    reflux!(pA.θ, preg, creg, nest; measure=m, periodic=nest_periodic_axes(pA))
     I1 = composite_integral(pA.θ, cA.θ, nest; measure=m)
     drift = abs(Imid - I0) / I0; rel = abs(I1 - I0) / I0
     @printf("  mass-measure refluxing: composite ∫ρ̄θ drift without %.2e, with %.2e\n", drift, rel)

@@ -15,7 +15,8 @@
 # Every run must close the surface-energy, water and air-heat (#253)
 # ledgers.
 #
-# Each run is CaseConfig(:smoke): a 250 m × 250 m × 100 m window of the
+# Each run is examples/urban/configs/berlin_smoke.toml with the run's
+# `--set` overrides (CFG-c, #358; test/support/smoke_matrix.jl): a 250 m × 250 m × 100 m window of the
 # real Alexanderplatz OSM file (16 × 16 × 16, dx = 15.6 m) at local noon,
 # 12 steps of 2 s, radiation every 8 s, soil every 4 s. A fog layer
 # (saturated air with ql ≈ 0.2 g/kg in the lowest three levels) and a
@@ -153,18 +154,20 @@ struct _SmokeD <: BC.AbstractCoupling end
     BC.is_default(::Type{_SmokeD}) = false
     BC.incompatible(::Type{_SmokeB}) = (:smoke_addon, :smoke_slot2 => :c)
     BC.smoke_variants(::Type{_SmokeA}) = ((label = "coarse", options = Dict(:smoke_a => (n = 2,)), nsteps = 4),)
-    runs = Dict(smoke_matrix(Type[_SmokeA, _SmokeB, _SmokeAddon, _SmokeC, _SmokeD]))
+    runs = Dict(smoke_specs(Type[_SmokeA, _SmokeB, _SmokeAddon, _SmokeC, _SmokeD]))
     @test Set(keys(runs)) == Set(["summer, everything on", "winter, everything on",
                                   "summer sounding, everything on", "smoke_slot = b", "smoke_slot2 = d", "smoke_a: coarse"])
     @test runs["summer, everything on"].physics[:smoke_addon] == true       # default-off addon on
-    @test runs["winter, everything on"].scenario === :winter
-    @test runs["winter, everything on"].θ_surface == BC.SCENARIOS[:winter].θ_surface
+    # the winter run is the smoke file plus berlin_winter.toml's values (CFG-c, #358)
+    @test "run.scenario=\"winter\"" in runs["winter, everything on"].extra
+    @test "initial.theta_surface=271.0" in runs["winter, everything on"].extra
+    @test !any(startswith("run.name="), runs["winter, everything on"].extra)
     @test runs["smoke_slot = b"].physics[:smoke_slot] === :b
     @test runs["smoke_slot = b"].physics[:smoke_addon] == false             # conflict resolved
     @test runs["smoke_slot = b"].physics[:smoke_slot2] === :d               # slot default gives way
     @test runs["smoke_slot2 = d"].physics[:smoke_slot2] === :d
     @test !haskey(runs["summer, everything on"].physics, :smoke_slot2)      # defaults untouched
-    @test runs["smoke_a: coarse"].nsteps == 4
+    @test runs["smoke_a: coarse"].fields.nsteps == 4
     @test runs["smoke_a: coarse"].options[:smoke_a] == (n = 2,)
     @test !haskey(runs["summer, everything on"].options, :pollutant)        # not in this registry
 end
@@ -178,7 +181,8 @@ end
     defaults = Set(BC.coupling_name(C) for C in BC.REGISTRY if BC.slot(C) !== :addon && BC.is_default(C))
     for label in ("summer, everything on", "winter, everything on", "summer sounding, everything on")
         cfg = runs[label]
-        @test all(a -> cfg.physics[a] === true, addons)
+        # a selection equal to the registry default is not stored (CFG-c, #358)
+        @test all(a -> get(cfg.physics, a, BC.is_default(BC.coupling_type(a))) === true, addons)
         got = Set(BC.coupling_name.(BC.selected_couplings(cfg)))
         miss = sort!(collect(setdiff(union(addons, defaults), got)))
         isempty(miss) || @error "smoke run \"$label\" does not run: $(join(miss, ", ")) " *

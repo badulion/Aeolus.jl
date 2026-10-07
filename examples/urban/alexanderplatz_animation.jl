@@ -1,10 +1,11 @@
 # Renderer for the Alexanderplatz run — NO PHYSICS.
 #
-# Reads the NetCDF file written by `alexanderplatz_diurnal.jl` and writes
-# one self-contained, compressed APNG of the whole run. Run the
-# simulation first:
+# Reads the NetCDF file written by the flagship run
+# (examples/urban/configs/berlin_summer.toml) and writes one
+# self-contained, compressed APNG of the whole run
+# (examples/urban/output/alexanderplatz.nc). Run the simulation first:
 #
-#   AEOLUS_OUTPUT_DT=600 julia --project=. examples/urban/alexanderplatz_diurnal.jl
+#   julia --project=. -m Aeolus run examples/urban/configs/berlin_summer.toml --set output.cadence=600
 #   julia --project=. examples/urban/alexanderplatz_animation.jl
 #
 # (a record every 10 min gives a smooth 144-frame day; the default 30 min

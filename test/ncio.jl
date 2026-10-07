@@ -120,6 +120,38 @@ import NCDatasets
         close(ds)
     end
 
+    @testset "nc_append_record!: blocks of records, two unlimited dimensions" begin
+        p = joinpath(dir, "two.nc")
+        ds = nc_create(p)
+        ds.dim["z"] = 3; ds.dim["time"] = Inf; ds.dim["time_costly"] = Inf
+        nc_defvar!(ds, "t", Float64, ("time",))
+        nc_defvar!(ds, "lim", String, ("time",); deflatelevel = 0)   # vlen: no filters
+        nc_defvar!(ds, "tc", Float64, ("time_costly",))
+        nc_defvar!(ds, "prof", Float64, ("z", "time_costly"))
+        # with two record dimensions the dimension must be named
+        @test_throws ErrorException nc_append_record!(ds, Dict("t" => [1.0], "lim" => ["a"]))
+        @test_throws ErrorException nc_append_record!(ds, Dict("t" => [1.0]); dim = "z")
+        # a block of three records along `time`; `time_costly` untouched
+        nc_append_record!(ds, Dict("t" => [1.0, 2.0, 3.0], "lim" => ["cfl", "", "diffusive"]);
+                          dim = "time", count = 3, sync = false)
+        @test ds.dim["time"] == 3 && ds.dim["time_costly"] == 0
+        # a block of the wrong length is refused whole
+        @test_throws ErrorException nc_append_record!(ds, Dict("t" => [4.0, 5.0], "lim" => ["x"]);
+                                                      dim = "time", count = 2)
+        @test ds.dim["time"] == 3
+        nc_append_record!(ds, Dict("tc" => [0.0], "prof" => [1.0, 2.0, 3.0]); dim = "time_costly")
+        nc_append_record!(ds, Dict("tc" => [5.0, 9.0], "prof" => [4.0 7.0; 5.0 8.0; 6.0 9.0]);
+                          dim = "time_costly", count = 2)
+        nc_append_record!(ds, Dict("t" => [4.0], "lim" => ["advective"]); dim = "time")
+        close(ds)
+        NCDataset(p) do ds
+            @test ds["t"][:] == [1.0, 2.0, 3.0, 4.0]
+            @test ds["lim"][:] == ["cfl", "", "diffusive", "advective"]
+            @test ds["tc"][:] == [0.0, 5.0, 9.0]
+            @test ds["prof"][:, :] == [1.0 4.0 7.0; 2.0 5.0 8.0; 3.0 6.0 9.0]
+        end
+    end
+
     @testset "NetCDF-3 files written before #310 still read" begin
         # written by the removed in-package NetCDFIO writer (CDF-2, 64-bit
         # offsets), same values as its generator script

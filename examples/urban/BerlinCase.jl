@@ -5,8 +5,13 @@
 #   case = build_case(CaseConfig(:alexanderplatz; nsteps = 1800))
 #   run_case!(case)
 #
+# or, from the command line (the `berlin` run driver, CFG-c #358):
+#
+#   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800
+#
 # Layout:
 #
+#   configs/     the shipped run configurations (TOML): the scenarios.
 #   core/        the case machinery — config, scenarios, the coupling
 #                registry, geometry, the surface bus, the tracer registry,
 #                the budget ledger, the Case, the stage loop, the output.
@@ -57,7 +62,11 @@ include(joinpath(@__DIR__, "parent", "surface.jl"))
 include(joinpath(@__DIR__, "parent", "config.jl"))
 include(joinpath(@__DIR__, "parent", "case.jl"))
 
-export CaseConfig, SCENARIOS, build_case, run_case!, step_case!, describe,
+# The `berlin` run driver and its configuration schema (CFG-c, #358):
+# built from the registry, so it comes last
+include(joinpath(@__DIR__, "core", "config_schema.jl"))
+
+export CaseConfig, SCENARIO_FILES, BerlinDriver, case_state, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        Ledger, ledger_report, surface_budget, water_budget, heat_budget, add_heat!,
