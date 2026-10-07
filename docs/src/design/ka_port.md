@@ -1366,43 +1366,43 @@ the dual strain, the masked box filter, the initialisations, and 3 LES
 steps with the dynamic and with the TKE closure.
 
 **Measurements** (`compute_sgs!` / `advance_sgs!` per closure on a seeded
-64×64×32 LES state, minimum of up to 40 calls, the best of three processes
+64×64×32 LES state, minimum of up to 40 calls, the best of four processes
 per entry; the old loops are today's master, the speed-ups are against the
-old loop at one thread; the machine carried other jobs at load 5-11, so the
+old loop at one thread; the machine carried other jobs at load 2-11, so the
 4-24-thread columns are lower bounds). Gate: every kernel at one thread is
-at most 1.05× the old loop (`advance_sgs!` of the Lagrangian model, its
+at most 1.04× the old loop (`advance_sgs!` of the Lagrangian model, its
 relaxation's double buffer); the scale-dependent coefficient over (i, j, k)
 cost 1.20× (2.82 ms against 2.35 ms) and now runs over one linear index
-(1.00×). The RSM coefficients take 0.14× (the old Jacobi projection's two heap
+(1.00×). The RSM coefficients take 0.13× (the old Jacobi projection's two heap
 matrices are gone), the dual-strain gather 0.60×.
 
 | kernel (64×64×32) | old loop, 1 t (µs) | KA, 1 t (µs) | 1 t / old | 4 t | 12 t | 24 t |
 | :-- | --: | --: | --: | --: | --: | --: |
-| `compute_sgs! static smagorinsky` | 896.6 | 900.0 | 1.00 | 2.9× | 2.7× | 2.9× |
-| `compute_sgs! dynamic plane` | 9837.0 | 9709.4 | 0.99 | 3.9× | 4.9× | 5.0× |
-| `compute_sgs! dynamic local` | 9574.7 | 9652.3 | 1.01 | 3.8× | 4.5× | 4.6× |
-| `compute_sgs! dynamic plane masked` | 14130.0 | 12386.9 | 0.88 | 4.2× | 5.8× | 5.2× |
-| `compute_sgs! lagrangian` | 1058.1 | 925.7 | 0.87 | 2.7× | 2.8× | 2.8× |
-| `advance_sgs! lagrangian` | 18460.6 | 19329.8 | 1.05 | 3.5× | 4.6× | 5.0× |
-| `advance_sgs! lagrangian masked` | 25635.8 | 23455.5 | 0.91 | 3.9× | 5.1× | 5.3× |
-| `compute_sgs! LASD` | 3015.1 | 3084.2 | 1.02 | 3.0× | 3.4× | 3.3× |
-| `advance_sgs! LASD` | 37432.4 | 35235.6 | 0.94 | 3.4× | 4.4× | 4.3× |
-| `compute_sgs! AMD` | 401.7 | 396.0 | 0.99 | 1.8× | 2.3× | 2.2× |
-| `compute_sgs! Vreman` | 1467.6 | 1493.1 | 1.02 | 2.9× | 3.5× | 3.5× |
-| `compute_sgs! sigma` | 6721.3 | 6773.7 | 1.01 | 3.7× | 6.0× | 5.0× |
-| `compute_sgs! stability-corrected smag` | 3498.8 | 3487.1 | 1.00 | 2.9× | 3.5× | 3.1× |
-| `compute_sgs! stability-corrected dynamic` | 12741.5 | 12527.0 | 0.98 | 3.6× | 4.6× | 4.2× |
-| `compute_sgs! TKE` | 241.0 | 238.1 | 0.99 | 1.6× | 1.3× | 1.3× |
-| `advance_sgs! TKE` | 11902.2 | 10129.3 | 0.85 | 1.8× | 1.8× | 1.9× |
-| `initialize_tke!` | 149734.9 | 148087.2 | 0.99 | 4.0× | 7.7× | 7.7× |
-| `dual_strain!` | 4418.3 | 2643.1 | 0.60 | 5.1× | 6.9× | 7.1× |
-| `compute_sgs! RSM` | 17050.5 | 2316.6 | 0.14 | 12.4× | 14.7× | 11.9× |
-| `advance_sgs! RSM` | 64097.6 | 56467.1 | 0.88 | 1.9× | 2.1× | 2.1× |
+| `compute_sgs! static smagorinsky` | 888.0 | 861.8 | 0.97 | 2.9× | 3.0× | 2.8× |
+| `compute_sgs! dynamic plane` | 9680.3 | 9292.2 | 0.96 | 3.8× | 5.3× | 4.9× |
+| `compute_sgs! dynamic local` | 9574.7 | 9299.9 | 0.97 | 3.9× | 5.3× | 4.8× |
+| `compute_sgs! dynamic plane masked` | 13865.3 | 11693.5 | 0.84 | 4.2× | 5.8× | 5.3× |
+| `compute_sgs! lagrangian` | 1052.9 | 891.2 | 0.85 | 3.2× | 2.8× | 2.9× |
+| `advance_sgs! lagrangian` | 18299.5 | 19015.5 | 1.04 | 3.5× | 5.1× | 4.9× |
+| `advance_sgs! lagrangian masked` | 25629.4 | 22965.6 | 0.90 | 4.0× | 6.0× | 6.1× |
+| `compute_sgs! LASD` | 2999.6 | 2986.4 | 1.00 | 3.5× | 4.5× | 3.4× |
+| `advance_sgs! LASD` | 37097.4 | 34825.0 | 0.94 | 3.3× | 4.5× | 4.7× |
+| `compute_sgs! AMD` | 395.1 | 385.1 | 0.97 | 2.4× | 2.6× | 2.5× |
+| `compute_sgs! Vreman` | 1463.0 | 1472.5 | 1.01 | 3.3× | 3.8× | 3.5× |
+| `compute_sgs! sigma` | 6623.0 | 6472.9 | 0.98 | 3.8× | 5.9× | 5.6× |
+| `compute_sgs! stability-corrected smag` | 3484.1 | 3279.2 | 0.94 | 3.5× | 3.5× | 3.1× |
+| `compute_sgs! stability-corrected dynamic` | 12124.1 | 11895.6 | 0.98 | 3.6× | 4.9× | 4.1× |
+| `compute_sgs! TKE` | 235.0 | 238.1 | 1.01 | 1.6× | 1.3× | 1.2× |
+| `advance_sgs! TKE` | 11840.0 | 9848.5 | 0.83 | 1.8× | 1.9× | 1.9× |
+| `initialize_tke!` | 149073.4 | 147300.0 | 0.99 | 4.0× | 7.8× | 7.8× |
+| `dual_strain!` | 4392.4 | 2627.9 | 0.60 | 5.6× | 7.4× | 7.3× |
+| `compute_sgs! RSM` | 16373.0 | 2193.3 | 0.13 | 14.8× | 14.1× | 11.4× |
+| `advance_sgs! RSM` | 62091.0 | 56467.1 | 0.91 | 1.9× | 2.1× | 2.1× |
 
 The thread speed-ups are those of a 64×64×32 domain: the Germano and
-Lagrangian filters, memory-bound, reach 4.4-5.8× at 12 threads (expected
-3-5×); the σ-model 6.0× and the TKE initialisation 7.7× (compute-bound,
-expected 6-9×); the small pointwise closures (AMD 0.40 ms, `compute_sgs!`
+Lagrangian filters, memory-bound, reach 4.5-6.0× at 12 threads (expected
+3-5×); the σ-model 5.9× and the TKE initialisation 7.8× (compute-bound,
+expected 6-9×); the small pointwise closures (AMD 0.39 ms, `compute_sgs!`
 of TKE 0.24 ms) are dominated by their halo fills. The fused TKE and RSM
 updates run one plane per work item over 32 planes and stop at about 2×:
 the advection and the six-component solve they call are not part of this
@@ -1410,7 +1410,7 @@ issue. Berlin flagship (`CaseConfig()`, 64³, `:tke`, 2 warm-up steps,
 best of three 3-step runs, s/step): old 13.60 / 12.43 / 12.15 / 12.04, new
 14.14 / 11.07 / 10.42 / 10.07 at 1 / 4 / 12 / 24 threads (one process each,
 on the loaded machine: 1.04× at one thread, not separated from the noise
-by a single sample; the SGS kernels themselves measure 0.14-1.05× above).
+by a single sample; the SGS kernels themselves measure 0.13-1.04× above).
 A 32-step run (2 warm-up + 3 × 10) of `CaseConfig()` fails on both the old
 and the new code (`step_adaptive!: step failed (velocity) after 3
 retries`), so the flagship is timed over 11 steps.
