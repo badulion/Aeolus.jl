@@ -363,3 +363,23 @@ end
     # each row is one parent step of two child substeps (refinement 2)
     @test parse.(Float64, t.col("child_substeps")) == [2, 4, 6, 8]
 end
+
+@testset "two-way nested run: the conservation ledger as diagnostics" begin
+    pm = RegularGrid(Float64; size = (12, 12, 12), extent = (1200.0, 1200.0, 1200.0), halo = (3, 3, 3))
+    nest = nested_grid(pm, ((300.0, 900.0), (300.0, 900.0), (0.0, 600.0)), 2)
+    cm = nest_child_mesh(nest)
+    p = BoussinesqSimulation(pm; θ₀ = 300.0, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    c = BoussinesqSimulation(cm; θ₀ = 300.0, bcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest))
+    fill!(p.u.data, 4.0); fill!(p.θ.data, 300.0); fill!(c.θ.data, 300.0)
+    run = NestedRun(p, c, nest; feedback = :two_way, cfl_parent = nothing, cfl_child = nothing)
+    step_nested!(run; dt = 5.0)
+    ds = collect_diagnostics(run)
+    led = [d for d in ds if startswith(d.name, "ledger_")]
+    @test [d.name for d in led] == ["ledger_" * string(k) for k in vcat(run.work.keys, [:momentum_x, :mass])]
+    for d in led
+        key = Symbol(d.name[8:end])
+        v = evaluate_diagnostic(d)
+        @test haskey(nest.ledger, key) ? v == nest.ledger[key] : isnan(v)
+    end
+    @test haskey(nest.ledger, :theta) && evaluate_diagnostic(led[1]) == nest.ledger[:theta]
+end
