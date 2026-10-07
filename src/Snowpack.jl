@@ -1667,6 +1667,7 @@ end
 
 const SNICAR_AGING_FILE = joinpath(@__DIR__, "data", "snicar_drdt_bst_fit_60_c070416.nc")
 const _SNICAR_TABLE = Ref{Union{Nothing,SnicarAgingTable}}(nothing)
+const _SNICAR_LOCK = ReentrantLock()
 
 """
     snicar_aging_table(path = SNICAR_AGING_FILE) -> SnicarAgingTable
@@ -1675,15 +1676,23 @@ Load the Flanner & Zender (2006) ageing table. The default file is read
 once and cached.
 """
 function snicar_aging_table(path::AbstractString = SNICAR_AGING_FILE)
-    if path == SNICAR_AGING_FILE && _SNICAR_TABLE[] !== nothing
-        return _SNICAR_TABLE[]
+    path == SNICAR_AGING_FILE || return _read_snicar_table(path)
+    # the default table is read once, under a lock: a first use from many
+    # threads at once reads the file once and every caller gets the same
+    # table (KA-m, #301)
+    return lock(_SNICAR_LOCK) do
+        t = _SNICAR_TABLE[]
+        t === nothing || return t
+        _SNICAR_TABLE[] = _read_snicar_table(path)
     end
+end
+
+function _read_snicar_table(path::AbstractString)
     tab = NCDataset(path) do f
         rd(name) = Float64.(Array(f[name]))
         SnicarAgingTable(rd("T"), rd("dTdz"), rd("sno_dns"), rd("drdsdt0"),
                          rd("tau"), rd("kappa"), 54.5, string(get(f.attrib, "description", "")))
     end
-    path == SNICAR_AGING_FILE && (_SNICAR_TABLE[] = tab)
     return tab
 end
 

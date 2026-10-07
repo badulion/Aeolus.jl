@@ -23,7 +23,7 @@ module Chemistry
 
 using ..Grids: RegularGrid, interior, CellCenter
 using ..Fields: Field, interior_view
-using ..Backends: Backends, plane_reduce!, plane_map!, ordered_sum
+using ..Backends: Backends, plane_reduce!, plane_map!, ordered_sum, column_sum
 
 export apply_linear_chemistry!,
        air_number_density, ppb_rate_constant, emission_ppb_flux,
@@ -451,19 +451,24 @@ the level of the first air cell, a scalar or an `(Nx, Ny)` integer
 matrix (roof-aware). Returns ``Σ_{ij} Δc\\,Δz`` (units of `c` × m), the
 column-integrated amount removed summed over columns.
 """
-function apply_dry_deposition!(c::AbstractArray{<:Real,3}, v_d, dt::Real; dz::Real, k = 1)
-    Nx, Ny, Nz = size(c)
-    removed = 0.0
-    @inbounds for j in 1:Ny, i in 1:Nx
+function apply_dry_deposition!(c::AbstractArray{<:Real,3}, v_d, dt::Real; dz::Real, k = 1,
+                               backend::Backends.AbstractBackend = Backends.backend(c))
+    Nx, Ny, _ = size(c)
+    # one work item per column (KA-m, #301), each returning what it removed;
+    # the total folded in column-major order, the old loop's (the same bits)
+    return column_sum(backend, _dry_deposition_column!, (1:Nx, 1:Ny), c, v_d, dt, dz, k)
+end
+
+@inline function _dry_deposition_column!(i, j, c, v_d, dt, dz, k)
+    @inbounds begin
         kk = k isa Integer ? k : k[i, j]
-        1 <= kk <= Nz || continue
+        1 <= kk <= size(c, 3) || return 0.0
         vd = v_d isa Real ? v_d : v_d[i, j]
         c0 = c[i, j, kk]
         c1 = c0 * exp(-vd * dt / dz)
         c[i, j, kk] = c1
-        removed += (c0 - c1) * dz
+        return (c0 - c1) * dz
     end
-    return removed
 end
 apply_dry_deposition!(c::Field, v_d, dt::Real; kw...) =
     apply_dry_deposition!(interior_view(c), v_d, dt; kw...)
