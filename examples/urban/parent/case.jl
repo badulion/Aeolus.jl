@@ -264,6 +264,67 @@ function crop_landuse(pl::ParentLanduse, Is::AbstractUnitRange, Js::AbstractUnit
 end
 
 """
+    parent_landuse_source(pc, mesh) -> ParentLanduse
+
+The land use of the parent `pc` on its `mesh` from the table
+`pc.child.landuse` ([`read_parent_landuse`](@ref)): cropped to the box
+([`crop_landuse`](@ref)) and coarsened to the mesh
+([`coarsen_landuse`](@ref)). What `aeolus preprocess static` writes to
+the parent's static driver.
+"""
+function parent_landuse_source(pc::ParentConfig, mesh)
+    pl = crop_landuse(read_parent_landuse(pc.child.landuse), pc)
+    Nx = mesh.Nx
+    b = pl.nx ÷ Nx
+    (b * Nx == pl.nx && pl.dx * b ≈ mesh.dx) ||
+        error("the land use ($(pl.nx) cells of $(pl.dx) m) does not coarsen to $Nx cells of $(mesh.dx) m")
+    return coarsen_landuse(pl, b)
+end
+
+"The mesh coordinates (the child's) of the OSM anchor; the parent mesh shares them."
+parent_anchor_xy(pc::ParentConfig) = (pc.child.extent[1] / 2 - pc.child.offset[1],
+                                      pc.child.extent[2] / 2 - pc.child.offset[2])
+
+"""
+    parent_landuse(pc, mesh) -> ParentLanduse
+
+The parent's land use: read from its static driver `pc.child.parent_static`
+(the tile form, `InputDrivers.read_static_tiles`, checked to be on the
+parent `mesh` with the anchor in place), or, when that is `nothing`,
+[`parent_landuse_source`](@ref) in memory. Bit for bit the same.
+"""
+function parent_landuse(pc::ParentConfig, mesh)
+    cfg = pc.child
+    cfg.parent_static === nothing && return parent_landuse_source(pc, mesh)
+    isfile(cfg.parent_static) ||
+        error("Missing the parent's static driver $(cfg.parent_static). Generate it with\n" *
+              "  julia --project -m Aeolus preprocess static <the config.toml naming it>\n" *
+              "or set [geometry] parent_static = \"none\" to read $(cfg.landuse) in memory.")
+    ox, oy = parent_anchor_xy(pc)
+    t = read_static_tiles(cfg.parent_static; mesh = mesh, origin_lat = cfg.lat0, origin_lon = cfg.lon0,
+                          origin_x = ox, origin_y = oy)
+    size(t.class_count, 3) == 5 ||
+        error("the parent's static driver $(cfg.parent_static) has $(size(t.class_count, 3)) classes, expected 5")
+    return ParentLanduse(length(t.x), length(t.y), t.dx, t.x0, t.y0, t.refinement, Int.(t.class_count),
+                         t.lambda_f, t.h_mean, t.h_max,
+                         vcat(t.notes, "# read from the static driver $(cfg.parent_static)"))
+end
+
+"""
+    parent_static_tiles(pl, pc, mesh) -> StaticTiles
+
+The land use `pl` of the parent `pc` (on its `mesh`) as the tile form of
+the static driver.
+"""
+function parent_static_tiles(pl::ParentLanduse, pc::ParentConfig, mesh)
+    cfg = pc.child
+    ox, oy = parent_anchor_xy(pc)
+    return StaticTiles(collect(Float64, Aeolus.Grids.xnodes(mesh, CellCenter())), collect(Float64, Aeolus.Grids.ynodes(mesh, CellCenter())),
+                       pl.dx, pl.dx, cfg.lat0, cfg.lon0, ox, oy, pl.x0, pl.y0, pl.r,
+                       Int32.(pl.counts), pl.λf, pl.hmean, pl.hmax, pl.header, Dict{String,Any}())
+end
+
+"""
     build_parent(pc::ParentConfig; child = nothing) -> ParentCase
 
 Build the parent: the mesh ([`parent_mesh`](@ref)), the reference state,
@@ -345,11 +406,7 @@ function build_parent(pc::ParentConfig; child = nothing)
     surface = nothing
     if pc.surface === :tiles
         child === nothing && (child = build_case(cfg))
-        pl = crop_landuse(read_parent_landuse(), pc)
-        b = pl.nx ÷ Nx
-        (b * Nx == pl.nx && pl.dx * b ≈ mesh.dx) ||
-            error("build_parent: the land use ($(pl.nx) cells of $(pl.dx) m) does not coarsen to $Nx cells of $(mesh.dx) m")
-        pl = coarsen_landuse(pl, b)
+        pl = parent_landuse(pc, mesh)
         surface = build_parent_surface(child, pl; z_centres = zc)
     elseif pc.surface !== :prescribed
         error("ParentConfig.surface must be :tiles or :prescribed, got $(repr(pc.surface))")
@@ -505,40 +562,53 @@ function step_parent_surface!(p::ParentCase, period::Real)
     fill!(p.θsrc, 0.0); fill!(p.qsrc, 0.0); fill!(p.drag, 0.0)
     kmax = size(p.θsrc, 3)
     U_min = p.pc.U_min
-    sRn = sH = sLE = sG = sE = 0.0
     θd = sim.θ.data
     qd = p.pc.moisture ? sim.qv.data : nothing
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
-    for J in 1:m.Ny, I in 1:m.Nx
-        col = ps.columns[I, J]
-        kf = maximum(col.ktile)
-        air = [SurfaceForcing(; sw_down = p.sw_down, lw_down = p.lw_down,
-                              T_air = θd[Hx+I, Hy+J, Hz+k] * ref.π̄[k],
-                              q_air = qd === nothing ? 0.0 : max(qd[Hx+I, Hy+J, Hz+k], 0.0),
-                              U = max(_cell_speed(sim, I, J, k), U_min), p = ref.p̄[k], z_ref = 10.0)
-               for k in 1:kf]
-        agg = step_parent_column!(ps, col, air, period; U_min = U_min)
-        sRn += agg.Rn; sH += agg.H; sLE += agg.LE; sG += agg.G; sE += agg.E
-        tf = last_tile_fluxes(_mosaic(col))
-        fr = mosaic_fractions(col.surface)
-        τsum = 0.0
-        for (n, f) in enumerate(tf)
-            nl = max(1, col.ktile[n] - 1)
-            Z = zf[nl+1]
-            for k in 1:min(nl, kmax)
-                p.θsrc[I, J, k] += fr[n] * f.H / (Z * ref.ρ̄[k] * ref.cp * ref.π̄[k])
-                p.qsrc[I, J, k] += fr[n] * f.E / (Z * ref.ρ̄[k])
-                p.drag[I, J, k] += fr[n] * f.τ / (Z * ref.ρ̄[k])
-            end
-            τsum += fr[n] * f.τ
-        end
-        p.ustar[I, J] = sqrt(max(τsum, 0.0) / ref.ρ̄[1])
-    end
+    # one work item per parent column (KA-m, #301): a column steps its own
+    # tiles and writes only its own sources and u*; the area sums of its
+    # fluxes are its partials, folded in column-major order (the old
+    # loop's order, so the same bits at every thread count)
+    sRn, sH, sLE, sG, sE = column_sum(Aeolus.Backends.backend(p.θsrc), _parent_surface_column!,
+                                      (1:m.Nx, 1:m.Ny), p, ps, sim, ref, θd, qd, zf, kmax, U_min,
+                                      period; weight = PARENT_COLUMN_WEIGHT)
     n = m.Nx * m.Ny
     for (key, v) in ((:Rn, sRn), (:H, sH), (:LE, sLE), (:G, sG), (:E, sE))
         p.sfc_mean[key] += v / n * period
     end
     return p
+end
+
+# the work of one parent column (up to six tiles, each a surface step) in
+# grid-point equivalents, for the launch's serial threshold
+const PARENT_COLUMN_WEIGHT = 4096
+
+function _parent_surface_column!(I, J, p, ps, sim, ref, θd, qd, zf, kmax, U_min, period)
+    m = p.mesh
+    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
+    col = ps.columns[I, J]
+    kf = maximum(col.ktile)
+    air = [SurfaceForcing(; sw_down = p.sw_down, lw_down = p.lw_down,
+                          T_air = θd[Hx+I, Hy+J, Hz+k] * ref.π̄[k],
+                          q_air = qd === nothing ? 0.0 : max(qd[Hx+I, Hy+J, Hz+k], 0.0),
+                          U = max(_cell_speed(sim, I, J, k), U_min), p = ref.p̄[k], z_ref = 10.0)
+           for k in 1:kf]
+    agg = step_parent_column!(ps, col, air, period; U_min = U_min)
+    tf = last_tile_fluxes(_mosaic(col))
+    fr = mosaic_fractions(col.surface)
+    τsum = 0.0
+    for (n, f) in enumerate(tf)
+        nl = max(1, col.ktile[n] - 1)
+        Z = zf[nl+1]
+        for k in 1:min(nl, kmax)
+            p.θsrc[I, J, k] += fr[n] * f.H / (Z * ref.ρ̄[k] * ref.cp * ref.π̄[k])
+            p.qsrc[I, J, k] += fr[n] * f.E / (Z * ref.ρ̄[k])
+            p.drag[I, J, k] += fr[n] * f.τ / (Z * ref.ρ̄[k])
+        end
+        τsum += fr[n] * f.τ
+    end
+    p.ustar[I, J] = sqrt(max(τsum, 0.0) / ref.ρ̄[1])
+    return (agg.Rn, agg.H, agg.LE, agg.G, agg.E)
 end
 
 # add θ, qv sources (per s) over τ seconds into the canopy levels

@@ -84,6 +84,20 @@ compares.
 """
 function state_fields end
 
+"""
+    preprocess_static(d::AbstractRunDriver, cfg::RunConfig; out = nothing, parent_out = nothing)
+        -> Vector{String}
+
+Write the static input driver(s) of the run `cfg` (CFG-f, #361:
+`Aeolus.InputDrivers`) from the sources its config names, and return the
+paths written. `out` replaces the path the config gives the run's own
+driver, `parent_out` that of a nest parent's. `aeolus preprocess static
+<config.toml> [--out file.nc] [--parent-out file.nc]` calls it. The
+default: the driver has no static preprocessor (an `ArgumentError`).
+"""
+preprocess_static(d::AbstractRunDriver, cfg::RunConfig; out = nothing, parent_out = nothing) =
+    throw(ArgumentError("the driver \"$(driver_name(d))\" has no static preprocessor"))
+
 # Simulations.run!(::AbstractRunDriver, obj, rf, ck; callback) is the
 # contract's run method (it adds a method to the generic run!).
 

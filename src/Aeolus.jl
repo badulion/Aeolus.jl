@@ -28,6 +28,7 @@ include("NCIO.jl")            # NetCDF-4 output policy over NCDatasets (#310); b
 include("IO.jl")
 include("Config.jl")         # run configuration schema, loader, canonical run.toml (CFG-a, #356)
 include("IBM.jl")
+include("InputDrivers.jl")   # static driver, OSM/GeoJSON preprocessors (CFG-f, #361); needs IBM, NCIO, IO
 include("Parallel.jl")
 include("SpectralElement.jl")
 include("Chemistry.jl")
@@ -107,6 +108,7 @@ using .IO
 using .Config
 using .Microphysics
 using .IBM
+using .InputDrivers
 using .Parallel
 using .Backends
 using .SpectralElement
@@ -275,7 +277,8 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        column_partials, interior_max, interior_all_finite, interior_map!,
        plane_reduce!, range_max, plane_map!, apply_transform!,
        pcg!, PCGWorkspace, PointOperator, PointPreconditioner, IdentityPreconditioner,
-       CounterRNG, counter_rng, counter_xoshiro, set_stream!
+       CounterRNG, counter_rng, counter_xoshiro, set_stream!,
+       foreach_column!, foreach_cell!, column_sums, column_sum
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
 export apply_linear_chemistry!,
