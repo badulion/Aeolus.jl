@@ -35,7 +35,8 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
 export checkpoint_payload, write_checkpoint,
        BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
        check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
-       RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir
+       RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir,
+       attach_monitor!, detach_monitor!, MonitorHook
 # #337: diagnostics.nc (io/diagnostics_nc.jl)
 export DiagnosticsNCWriter, diagnostics_nc_path, nc_provenance_attributes
 # #334: run folder and provenance (io/run_folder.jl)

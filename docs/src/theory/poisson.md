@@ -184,8 +184,8 @@ solve on this machine (minimum of 5),
 | 64 × 64 × 64 (deepened child) | 3.90 ms | 2.96 ms (× 0.76) | 144 ms (22 cycles) |
 | 160 × 160 × 64 | 37.9 ms | 25.9 ms (× 0.68) | 583 ms (12 cycles) |
 
-The default solver of `BoussinesqSimulation` (and the density-weighted CG
-of the sound-proof cores) derives the axis kinds from the six velocity
+The default solver of `BoussinesqSimulation` (and the density-weighted
+solver of the sound-proof cores) derives the axis kinds from the six velocity
 faces through `axis_poisson_bc(face)` (`:periodic` for `Periodic`,
 `:neumann` for every face with a prescribed normal velocity); an axis
 whose two faces disagree is an error.
@@ -213,13 +213,18 @@ volume flux vanish *before* the projection, not after; see
 The remaining cases:
 
   * **Dirichlet pressure faces, immersed boundaries, cut cells,
-    variable coefficients**: need an iterative solver — matrix-free
-    conjugate gradient (`CGPoissonSolver`, which takes the same per-axis
-    periodic / Neumann kinds), the density-weighted CG of the sound-proof
-    cores, or geometric multigrid.
-  * **Non-uniform grids**: the horizontal FFTs still work if `dx, dy`
-    are uniform; for non-uniform `dz(k)`, the DCT is replaced by a
-    tridiagonal solve of the same one-dimensional operator.
+    coefficients varying in x or y**: need an iterative solver —
+    matrix-free conjugate gradient (`CGPoissonSolver`, which takes the
+    same per-axis periodic / Neumann kinds) or geometric multigrid.
+  * **Non-uniform grids and height-dependent coefficients**: the
+    horizontal FFTs still work if `dx, dy` are uniform and the
+    coefficients depend on `z` only; the DCT in z is replaced by a
+    tridiagonal solve per horizontal wavenumber
+    (`PressureSolvers.ColumnTridiagonalSolver`). This covers the
+    stretched-z Laplacian (`StretchedPoissonSolver`) and the
+    density-weighted operator ∇·(ρ̄(z)∇φ) of the sound-proof cores
+    (`DirectWeightedPoissonSolver`, #309; their CG,
+    `DensityWeightedPoissonSolver`, solves the same operator iteratively).
 
 All three variants slot into the same [`AbstractPressureSolver`](@ref
 Aeolus.PressureSolvers.AbstractPressureSolver) interface —

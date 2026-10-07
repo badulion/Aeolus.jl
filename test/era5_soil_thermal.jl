@@ -454,6 +454,61 @@ end
             limited, Eair, col.budget.latent_mismatch)
 end
 
+# Moved from test/berlin_surface_exchange.jl (#320), where the column was
+# the Berlin street (its GroundSoil factory builds exactly this column:
+# CLM 10-layer grid, loam hydraulics, CLM thermal constants for 40 % sand,
+# 20 % clay, hydrology on); here the column is built directly.
+@testset "β follows the soil water; a sunny afternoon dries the top layer (#129)" begin
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    street(θ) = SoilThermalColumn(SoilWaterColumn(clm_exponential_soil_grid(10), h; θ = θ), p;
+                                  T_soil = 288.0, T_skin = 285.0, bottom = BottomTemperature(288.0),
+                                  albedo = 0.12, emissivity = 0.95, z0m = 0.05, z0h = 0.005,
+                                  hydrology = true)
+    f = SurfaceForcing(sw_down = 700.0, lw_down = 330.0, T_air = 295.0, q_air = 0.006,
+                       U = 2.0, z_ref = 6.25 / 2)
+    dry, moist = street(0.09), street(0.12)
+    βd, βm = Aeolus.SurfaceExchange.moisture_availability(dry), Aeolus.SurfaceExchange.moisture_availability(moist)
+    LEd, LEm = step_surface!(dry, f, 30.0).LE, step_surface!(moist, f, 30.0).LE
+    @printf("  street soil θ₁ 0.09 → β %.3f, LE %.1f W/m²; θ₁ 0.12 → β %.3f, LE %.1f W/m²\n",
+            βd, LEd, βm, LEm)
+    @test βd < βm < 1 && LEd < LEm
+    # A sunny afternoon under fixed air dries the top layer and β falls.
+    # Two things decide the latent heat. The DEMAND of the Monin–Obukhov β
+    # form, LE(β) at the current skin, can RISE (the skin heats and
+    # q_sat(T_s) grows faster than β falls — the first Berlin version of
+    # this test expected it to fall with β, which was wrong). β controls the
+    # demand's EFFICIENCY, LE(β)/LE(β = 1) at the same skin, which falls with
+    # β. What the soil DELIVERS (the E and LE step_surface! returns) is
+    # limited by the dry top layer and falls.
+    β = Float64[]; eff = Float64[]; θ1 = Float64[]; LE = Float64[]; LEdl = Float64[]
+    for n in 1:720                           # 6 h at 30 s
+        fl = step_surface!(moist, f, 30.0)
+        if n % 120 == 0
+            wet = SlabLand(; T = moist.T_skin, albedo = moist.albedo, emissivity = moist.emissivity,
+                           z0m = moist.z0m, z0h = moist.z0h, β = 1.0)
+            le = turbulent_fluxes(moist, f).LE
+            push!(β, Aeolus.SurfaceExchange.moisture_availability(moist)); push!(θ1, moist.water.θ_liq[1])
+            push!(LE, le); push!(eff, le / turbulent_fluxes(wet, f).LE); push!(LEdl, fl.LE)
+        end
+    end
+    @printf("  street soil under 6 h of sun, hourly: θ₁ = %s; β = %s; LE(β)/LE(β=1) = %s; demand LE(β) = %s W/m²; delivered LE = %s W/m²\n",
+            join((@sprintf("%.4f", x) for x in θ1), ", "), join((@sprintf("%.3f", x) for x in β), ", "),
+            join((@sprintf("%.3f", x) for x in eff), ", "), join((@sprintf("%.1f", x) for x in LE), ", "),
+            join((@sprintf("%.1f", x) for x in LEdl), ", "))
+    # delivered: high in the first hour (top layer still moist), then the
+    # surface reaches the dry potential and it falls by an order of magnitude
+    # (Berlin street, measured 267 → 5.8 W/m²)
+    @test LEdl[end] < 0.1 * LEdl[1] && issorted(LEdl[2:end]; rev = true)
+    @test issorted(θ1; rev = true) && issorted(β; rev = true) && issorted(eff; rev = true)
+    @test β[end] < βm
+    # The efficiency is β at fixed stability. It comes out a little BELOW β
+    # (Berlin street: 0.945–0.948 β): the saturated reference's larger vapour
+    # flux adds buoyancy, so it is more unstable and has the larger C_E (the
+    # same effect as in the SlabLand β test of era5_surface_exchange).
+    @test all(i -> 0.9 * β[i] < eff[i] < β[i], eachindex(β))
+end
+
 @testset "Coupled heat and water: frozen soil, runoff, conservation" begin
     h = carsel_parrish_texture(:loam)
     p = clm_soil_thermal_properties(40, 20)

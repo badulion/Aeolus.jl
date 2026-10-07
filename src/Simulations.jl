@@ -24,12 +24,15 @@ using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    _sq_dev_at                  # (f - m_k)², shared with abl_diagnostics
 using ..PressureSolvers
 using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver, solve!,
-                        poisson_axis_bcs
+                        poisson_axis_bcs, solver_stats
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
-export BoussinesqSimulation, StepWorkspaces, run!, step_rk3!, kinetic_energy, max_divergence,
+export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_hook!, step_hook,
+       reset_interval!, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile, sponge_target,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
+
+include("simulations/step_record.jl")   # the per-step record and diagnostics hook (#336)
 
 """
     StepWorkspaces()
@@ -37,7 +40,8 @@ export BoussinesqSimulation, StepWorkspaces, run!, step_rk3!, kinetic_energy, ma
 The per-simulation scratch of the step drivers: the step-start state of
 [`step_rk3!`](@ref) ([`RK3Workspace`](@ref)), the retry snapshot of
 `step_adaptive!` (`TimeIntegration.StateSnapshot`) and the IMEX stage
-state of `step_imex!` (`TimeIntegration.IMEXWorkspace`). Each slot is
+state of `step_imex!` (`TimeIntegration.IMEXWorkspace`), and the
+[`StepRecord`](@ref) of the step cores (`rec`, #336). Each workspace slot is
 allocated on first use, on the simulation's backend
 ([`Backends.allocate`](@ref Aeolus.Backends.allocate)), and lives as long
 as the simulation (`rk3_workspace`, `state_snapshot`, `imex_workspace`).
@@ -50,8 +54,9 @@ mutable struct StepWorkspaces
     rk3::Any
     snapshot::Any
     imex::Any
+    rec::StepRecord
 end
-StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing)
+StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing, StepRecord())
 
 """
     BoussinesqSimulation(mesh; kwargs...)
@@ -370,14 +375,32 @@ Two keywords swap numerical operators without changing the algorithm:
     ([`add_sgs_stress_divergence!`](@ref Aeolus.Operators.add_sgs_stress_divergence!),
     P55-b). `step_rk3!`, `step_imex!`, `step_adaptive!` and the
     sound-proof cores take the same keyword.
+
+Every step core records the cheap quantities of its step (dt and its
+limiter, retries, CFL numbers of the dt pick, pressure-solver iterations
+and residual, wall time per stage) in the simulation's
+[`StepRecord`](@ref) and then calls the simulation's diagnostics hook, if
+one is installed ([`set_step_hook!`](@ref), #336). A core called inside
+another (`step!` inside `step_adaptive!`) is part of the outer step.
 """
-function step!(sim::BoussinesqSimulation{T}, dt::Real;
-               body_force!::Union{Nothing, Function} = nothing,
-               post_predictor!::Union{Nothing, Function} = nothing,
-               momentum_advection::F = momentum_advect!,
-               sgs = nothing,
-               eddy_viscosity! = nothing,
-               sgs_stress::Symbol = :laplacian) where {T, F}
+function step!(sim::BoussinesqSimulation{T}, dt::Real; kwargs...) where {T}
+    rec = sim.workspaces.rec
+    outer = _step_begin!(rec, sim)
+    try
+        _step_euler!(sim, T(dt); kwargs...)
+    catch
+        _step_abort!(rec); rethrow()
+    end
+    return _step_end!(rec, sim, T(dt), outer)
+end
+
+function _step_euler!(sim::BoussinesqSimulation{T}, dt::Real;
+                      body_force!::Union{Nothing, Function} = nothing,
+                      post_predictor!::Union{Nothing, Function} = nothing,
+                      momentum_advection::F = momentum_advect!,
+                      sgs = nothing,
+                      eddy_viscosity! = nothing,
+                      sgs_stress::Symbol = :laplacian) where {T, F}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     prepare_open_boundaries!(sim)          # no-op unless an open face is unfilled
@@ -450,10 +473,12 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     #    moist, qv (P56-a, #177 — before it qv was advected but never
     #    diffused, a code bug).
     if closure !== nothing
+        t_sgs = time_ns()
         f = compute_sgs!(closure, sim)
         add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim; stress = sgs_stress)
         add_sgs_scalar!(sim.tθ, sim.θ, closure, f, sim)
         sim.has_moisture && _add_sgs_tracer!(sim.tqv, sim.qv, closure, f, sim, sim.lap_θ)
+        sim.workspaces.rec.wall_sgs += _wall(t_sgs)
     end
 
     # 5. Buoyancy on w-momentum. Moist buoyancy uses virtual θ when qv is on.
@@ -525,7 +550,9 @@ function _project_velocity!(sim::BoussinesqSimulation{T}) where {T}
     divergence(sim.div_buf, sim.u, sim.v, sim.w)
 
     # 9. Solve ∇²φ = ∇·u*.
+    t_solve = time_ns()
     solve!(sim.φ, sim.div_buf, sim.solver)
+    _note_solve!(sim.workspaces.rec, sim.solver, t_solve)   # iterations, residual, wall (#336)
 
     # 10. Correct velocity.
     fill_halos!(sim.φ, sim.bcs)
@@ -629,12 +656,23 @@ halos and boundary faces are exactly those of the combined state.
 The step-start state lives in `workspace` ([`RK3Workspace`](@ref), cached
 per simulation), so a step allocates nothing but the cache lookup (#295).
 """
-function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
-                   sgs = nothing, eddy_viscosity! = nothing,
-                   body_force!::Union{Nothing, Function} = nothing,
-                   post_predictor!::Union{Nothing, Function} = nothing,
-                   sgs_stress::Symbol = :laplacian,
-                   workspace::RK3Workspace = rk3_workspace(sim)) where {T}
+function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real; kwargs...) where {T}
+    rec = sim.workspaces.rec
+    outer = _step_begin!(rec, sim)
+    try
+        _step_rk3!(sim, T(dt); kwargs...)
+    catch
+        _step_abort!(rec); rethrow()
+    end
+    return _step_end!(rec, sim, T(dt), outer)
+end
+
+function _step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
+                    sgs = nothing, eddy_viscosity! = nothing,
+                    body_force!::Union{Nothing, Function} = nothing,
+                    post_predictor!::Union{Nothing, Function} = nothing,
+                    sgs_stress::Symbol = :laplacian,
+                    workspace::RK3Workspace = rk3_workspace(sim)) where {T}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     _check_sgs_stress(sgs_stress)

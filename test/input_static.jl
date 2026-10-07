@@ -197,6 +197,50 @@ end
     @test occursin("| `surface_class` | x, y | `UInt8` |", md) && count(==('\n'), md) == length(STATIC_SCHEMA.variables) + 2
 end
 
+# Moved from test/berlin_parent_surface.jl (#320); the preprocessor is
+# src/preprocess/osm.jl (multipolygon relations, #249).
+@testset "InputDrivers: OSM multipolygon relations — rings joined, holes kept" begin
+    # A 100 m water square (outer ring split over two ways, one reversed)
+    # with a 40 m island (inner ring), around the anchor; a park way.
+    lat0, lon0 = 52.5, 13.4
+    R = 6_371_000.0
+    dlat(y) = lat0 + rad2deg(y / R)
+    dlon(x) = lon0 + rad2deg(x / (R * cosd(lat0)))
+    pts = Dict(1 => (-50, -50), 2 => (50, -50), 3 => (50, 50), 4 => (-50, 50),
+               5 => (-20, -20), 6 => (20, -20), 7 => (20, 20), 8 => (-20, 20),
+               9 => (60, 60), 10 => (90, 60), 11 => (90, 90))
+    nodes = join(("<node id=\"$k\" lat=\"$(dlat(y))\" lon=\"$(dlon(x))\"/>" for (k, (x, y)) in pts), "\n")
+    nd(ids) = join(("<nd ref=\"$i\"/>" for i in ids), "")
+    xml = """<?xml version="1.0"?><osm>
+    $nodes
+    <way id="100">$(nd([1, 2, 3]))</way>
+    <way id="101">$(nd([1, 4, 3]))</way>
+    <way id="102">$(nd([5, 6, 7, 8, 5]))</way>
+    <way id="103">$(nd([9, 10, 11, 9]))<tag k="leisure" v="park"/></way>
+    <relation id="200"><member type="way" ref="100" role="outer"/><member type="way" ref="101" role="outer"/><member type="way" ref="102" role="inner"/><tag k="type" v="multipolygon"/><tag k="natural" v="water"/></relation>
+    <relation id="201"><member type="way" ref="102" role="outer"/><tag k="type" v="route"/><tag k="natural" v="water"/></relation>
+    </osm>"""
+    path = tempname() * ".osm"
+    write(path, xml)
+    city = load_city_osm(path; lat0 = lat0, lon0 = lon0, x_shift = 100, y_shift = 100)
+    rm(path)
+    @test length(city.patches) == 2                    # the park way + one multipolygon (the route is ignored)
+    water = only(filter(p -> p.class == SURFACE_WATER, city.patches))
+    @test count(p -> isnan(p[1]), water.polygon) == 2  # two closed rings, NaN-terminated
+    mesh = RegularGrid(; size = (20, 20, 1), extent = (200.0, 200.0, 6.25))
+    sm, sfc = surface_class_map(city, mesh; tag_walls = false)
+    xc(i) = (i - 0.5) * 10 - 100                        # cell centre relative to the anchor
+    inwater(x, y) = max(abs(x), abs(y)) < 50 && max(abs(x), abs(y)) > 20
+    @test all(sfc[i, j] == (inwater(xc(i), xc(j)) ? SURFACE_WATER :
+                            (60 < xc(i) < 90 && 60 < xc(j) < xc(i) ? SURFACE_PARK : SURFACE_STREET))
+              for i in 1:20, j in 1:20 if !(60 < xc(i) < 90 && abs(xc(j) - xc(i)) < 6))
+    @test sfc[10, 10] == SURFACE_STREET                 # the island is a hole
+    @test count(==(SURFACE_WATER), sfc) == 100 - 16     # 10×10 cells of 10 m minus the 4×4 island
+    @test polygon_bbox(water.polygon) == polygon_bbox(filter(p -> !isnan(p[1]), water.polygon))
+    # a file without relations (the Alexanderplatz extract) takes the way-only path
+    @test !occursin("<relation", read(joinpath(URBAN_DATA, "alexanderplatz_real.osm"), String))
+end
+
 # ---------------------------------------------------------------------------
 # the Berlin case
 # ---------------------------------------------------------------------------

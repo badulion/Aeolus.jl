@@ -23,7 +23,7 @@ include(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns_apriori.jl"))
 using Aeolus.Config
 using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, OneOf,
                      Optional, Path, section, option!, register_driver!
-using Aeolus.IO: IO, RunFolder, CheckpointSchedule, with_monitor, monitor!, output_dir
+using Aeolus.IO: IO, RunFolder, CheckpointSchedule, with_monitor, output_dir
 using Aeolus.Simulations: Simulations
 
 """
@@ -151,12 +151,13 @@ function Simulations.run!(::DNSDriver, r::DNSRun, rf::RunFolder, ck::CheckpointS
     nmax = something(cfg.stepper.nsteps, typemax(Int))
     wall = @elapsed begin
         resume!(ck, sim; components = st.hist)
-        with_monitor(sim; run = rf, t_end = k.t_end, cadence = cfg.logging.diagnostics_cadence) do m
+        # attached (#336): step_rk3! reports every step to the monitor
+        with_monitor(sim; run = rf, t_end = k.t_end, cadence = cfg.logging.diagnostics_cadence,
+                     step0 = length(st.hist.t) - 1) do m
             while dns_running(st; t_end = k.t_end, past_peak = k.past_peak, t_max = k.t_max) &&
                   length(st.hist.t) - 1 < nmax
                 dt = dns_step!(st; cfl = k.cfl, t_end = k.t_end, t_max = k.t_max)
                 n = length(st.hist.t) - 1
-                monitor!(m, sim; step = n, dt = dt)
                 maybe_checkpoint!(ck, sim; step = n, components = st.hist)
                 callback === nothing || callback(r, n)
             end

@@ -3,7 +3,7 @@
 #   julia --project=. test/run.jl                 # fast tier (default)
 #   AEOLUS_TEST_TIER=full julia --project=. test/run.jl
 #   JOBS=8 julia --project=. test/run.jl --threads 2
-#   julia --project=. test/run.jl --only era6_tke.jl,berlin_smoke.jl
+#   julia --project=. test/run.jl --only era6_tke.jl,era6_gabls1.jl
 #   julia --project=. test/run.jl --list          # show the plan, run nothing
 #
 # Every file of test/runtests.jl's include list (plus the inline tests of

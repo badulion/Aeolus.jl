@@ -34,11 +34,8 @@
 # available for a coefficient field (cut cells) the transform cannot
 # diagonalise.
 
-using FFTW: FFTW, plan_r2r
-using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
-using ..PressureSolvers: AbstractPressureSolver, copy_interior_in!, copy_interior_out!
-using ..Backends: backend, launch_weighted!, apply_transform!, runs_serially
-import ..PressureSolvers: solve!
+using ..PressureSolvers: AbstractPressureSolver, ColumnTridiagonalSolver
+import ..PressureSolvers: solve!, poisson_axis_bcs
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic
 import ..Simulations: _default_solver
 
@@ -68,54 +65,24 @@ and the column is integrated directly. The returned `φ` has zero
 volume-weighted mean. Metrics come from [`cell_thickness`](@ref) and
 [`center_spacing`](@ref); exact to round-off on any face distribution.
 
+The transform, the Thomas sweep and the mean-mode integration are those of
+[`ColumnTridiagonalSolver`](@ref Aeolus.PressureSolvers.ColumnTridiagonalSolver)
+(field `core`), which also solves the density-weighted projection of the
+sound-proof cores (#309): `h = 1`, `a_k = 1/(Δz_c[k] Δz_f[k])`,
+`c_k = 1/(Δz_c[k] Δz_f[k+1])`, measure `Δz_c`, gauge `Δz_c`.
+
 The default solver of `BoussinesqSimulation(g::StretchedGrid)` for a
 non-uniform grid; periodic-in-z is not supported (a stretched vertical
 coordinate has no periodic meaning).
 """
-struct StretchedPoissonSolver{T, PF, PI} <: AbstractPressureSolver
-    plan_fwd::PF
-    plan_inv::PI
-    buf::Array{T,3}          # transform buffer, interior size
-    buf2::Array{T,3}
-    cp::Array{T,3}           # Thomas: modified upper diagonal c'_k
-    inv_den::Array{T,3}      # Thomas: 1 / (b_k - a_k c'_{k-1})
-    lower::Vector{T}         # a_k: coefficient of φ_{k-1} (0 at k = 1)
-    dzc::Vector{T}           # interior cell thickness
-    dzf::Vector{T}           # interior face spacing, length Nz+1 (face k = bottom of cell k)
-    col::Vector{T}           # the mean-mode column (scratch)
-    norm::T                  # 1 / (forward × inverse transform scale)
-    bc_x::Symbol
-    bc_y::Symbol
-end
-
-_r2r_kinds(bc::Symbol) = bc === :periodic ? (FFTW.R2HC, FFTW.HC2R, 1) :
-                         bc === :neumann  ? (FFTW.REDFT10, FFTW.REDFT01, 2) :
-                         throw(ArgumentError("StretchedPoissonSolver: lateral BC must be " *
-                                             ":periodic or :neumann, got :$bc"))
-
-# Eigenvalue magnitudes 4/Δ² sin²(·) of the 3-point second difference in the
-# r2r basis: half-complex index p ↔ frequency min(p, N-p) for the DFT, p for
-# the DCT-II (period 2N).
-function _r2r_eigen(::Type{T}, N::Int, Δ::T, bc::Symbol) where {T}
-    if bc === :periodic
-        return T[4 / Δ^2 * sin(π * min(p, N - p) / N)^2 for p in 0:N-1]
-    else
-        return T[4 / Δ^2 * sin(π * p / (2N))^2 for p in 0:N-1]
-    end
+struct StretchedPoissonSolver{T, C<:ColumnTridiagonalSolver{T}} <: AbstractPressureSolver
+    core::C
 end
 
 function StretchedPoissonSolver(g::StretchedGrid{T};
                                 bc_x::Symbol = :periodic,
                                 bc_y::Symbol = :periodic) where {T}
     Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
-    kx_f, kx_i, sx = _r2r_kinds(bc_x)
-    ky_f, ky_i, sy = _r2r_kinds(bc_y)
-    buf  = zeros(T, Nx, Ny, Nz)
-    buf2 = zeros(T, Nx, Ny, Nz)
-    plan_fwd = plan_r2r(buf, (kx_f, ky_f), (1, 2); flags = fftw_planner_flags())
-    plan_inv = plan_r2r(buf, (kx_i, ky_i), (1, 2); flags = fftw_planner_flags())
-    norm = one(T) / T(sx * Nx * sy * Ny)
-
     kk = g.Hz+1 : g.Hz+Nz
     dzc = T[cell_thickness(g)[k] for k in kk]
     dzf = T[center_spacing(g)[k] for k in g.Hz+1 : g.Hz+Nz+1]
@@ -127,124 +94,16 @@ function StretchedPoissonSolver(g::StretchedGrid{T};
         k > 1  && (lower[k] = 1 / (dzc[k] * dzf[k]))
         k < Nz && (upper[k] = 1 / (dzc[k] * dzf[k+1]))
     end
-
-    λx = _r2r_eigen(T, Nx, T(g.dx), bc_x)
-    λy = _r2r_eigen(T, Ny, T(g.dy), bc_y)
-    cp = zeros(T, Nx, Ny, Nz); inv_den = zeros(T, Nx, Ny, Nz)
-    @inbounds for q in 1:Ny, p in 1:Nx
-        λ = λx[p] + λy[q]
-        (p == 1 && q == 1) && continue          # the mean mode: integrated directly
-        cprev = zero(T)
-        for k in 1:Nz
-            b   = -(lower[k] + upper[k]) - λ
-            den = b - lower[k] * cprev
-            inv_den[p, q, k] = 1 / den
-            cprev = upper[k] / den
-            cp[p, q, k] = cprev
-        end
-    end
-    return StretchedPoissonSolver{T, typeof(plan_fwd), typeof(plan_inv)}(
-        plan_fwd, plan_inv, buf, buf2, cp, inv_den, lower, dzc, dzf, zeros(T, Nz), norm,
-        bc_x, bc_y)
+    core = ColumnTridiagonalSolver(T, (Nx, Ny, Nz), (T(g.dx), T(g.dy));
+                                   lower = lower, upper = upper, hweight = ones(T, Nz),
+                                   measure = dzc, inv_coupling = dzf, gauge = dzc,
+                                   bc_x = bc_x, bc_y = bc_y)
+    return StretchedPoissonSolver{T, typeof(core)}(core)
 end
 
-function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
-                s::StretchedPoissonSolver{T}) where {T}
-    be = backend(s.buf)
-    Nx, Ny, Nz = size(s.buf)
-    copy_interior_in!(be, s.buf, source)
-    apply_transform!(be, s.buf2, s.plan_fwd, s.buf)
-    b = s.buf2
-    @views s.col .= b[1, 1, :]          # the mean mode, solved separately
-    # one tridiagonal solve per horizontal wavenumber, serial in z within
-    # the work item; a work item is a slab of ky rows, see _thomas_slab!
-    checkbounds(b, 1:Nx, 1:Ny, 1:Nz)
-    size(s.cp) == size(s.inv_den) == size(b) && length(s.lower) == Nz ||
-        throw(DimensionMismatch("StretchedPoissonSolver: inconsistent Thomas factors"))
-    np = Nx * Ny * Nz
-    nslab = runs_serially(be, np) ? 1 : min(Ny, Threads.nthreads())
-    launch_weighted!(be, cld(np, nslab), _thomas_slab!, (1:nslab,),
-                     b, s.cp, s.inv_den, s.lower, Nx, Ny, Nz, nslab)
-    _mean_mode!(s)
-    @views b[1, 1, :] .= s.col
-    apply_transform!(be, s.buf, s.plan_inv, s.buf2)
-    copy_interior_out!(be, p, s.buf, s.norm)
-    return p
-end
-
-# The Thomas algorithm for the columns (pp, q) of the ky rows q of slab
-# `sl` (of `nslab` contiguous slabs) of the transformed source `b`, in
-# place, with the factorisation `cp` (c'_k) and `inv_den` (1/(b_k − a_k
-# c'_{k−1})) computed at construction: forward elimination
-# d'_k = (d_k − a_k d'_{k−1}) / den_k, then back substitution
-# φ_k = d'_k − c'_k φ_{k+1}. Every column is serial in z and owned by one
-# work item, and every operation is the one the former level-by-level loop
-# did, so the bits are those of that loop whatever the slabs are: the slab
-# count may follow the thread count (one slab, the old loop exactly, when
-# the launch runs serially). The mean mode (1, 1) has cp = inv_den = 0 and
-# is overwritten by `_mean_mode!`.
-#
-# Why slabs of rows and not one column per work item: with kx innermost
-# the loop vectorises and streams through memory. One column per item
-# walks z with a stride of Nx·Ny·8 bytes, a power of two on the usual
-# grids, so every level of a column falls in the same L1 set: measured
-# 4.6× slower than the old loop at 64×64×53 on one thread. One ky row per
-# item still cost 1.2× (64×64×53) to 1.6× (192×192×53) on one thread (Nx
-# contiguous values per level are too short a stream). A GPU backend will
-# launch one column per item (Phase 81).
-@inline function _thomas_slab!(sl, b, cp, inv_den, lower, Nx, Ny, Nz, nslab)
-    q1 = (sl - 1) * Ny ÷ nslab + 1
-    q2 = sl * Ny ÷ nslab
-    @inbounds begin
-        for q in q1:q2, pp in 1:Nx
-            b[pp, q, 1] *= inv_den[pp, q, 1]
-        end
-        for k in 2:Nz
-            a = lower[k]
-            for q in q1:q2, pp in 1:Nx
-                b[pp, q, k] = (b[pp, q, k] - a * b[pp, q, k-1]) * inv_den[pp, q, k]
-            end
-        end
-        for k in Nz-1:-1:1, q in q1:q2, pp in 1:Nx
-            b[pp, q, k] -= cp[pp, q, k] * b[pp, q, k+1]
-        end
-    end
-    return nothing
-end
-
-# Column of the λ_h = 0 mode, in transform units (the operator is linear,
-# so the horizontal-sum scaling of the transform carries through): remove
-# the volume-weighted mean of the source (the compatibility condition of
-# the Neumann ends), integrate the flux up from the zero bottom flux,
-#   F_{k} = F_{k-1} + b_{k-1} Δz_c[k-1],   φ_k = φ_{k-1} + F_k Δz_f[k],
-# then remove the volume-weighted mean of φ.
-function _mean_mode!(s::StretchedPoissonSolver{T}) where {T}
-    col, dzc, dzf = s.col, s.dzc, s.dzf
-    Nz = length(col)
-    H  = sum(dzc)
-    mb = zero(T)
-    @inbounds for k in 1:Nz
-        mb += col[k] * dzc[k]
-    end
-    mb /= H
-    F = zero(T); φk = zero(T)
-    @inbounds begin
-        prev = col[1] - mb
-        col[1] = zero(T)
-        for k in 2:Nz
-            F  += prev * dzc[k-1]
-            φk += F * dzf[k]
-            prev = col[k] - mb
-            col[k] = φk
-        end
-    end
-    mφ = zero(T)
-    @inbounds for k in 1:Nz
-        mφ += col[k] * dzc[k]
-    end
-    col .-= mφ / H
-    return s
-end
+solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T}, s::StretchedPoissonSolver{T}) where {T} =
+    solve!(p, source, s.core)
+poisson_axis_bcs(s::StretchedPoissonSolver) = poisson_axis_bcs(s.core)
 
 # =========================================================================
 # Default solver of the Boussinesq core on a StretchedGrid
