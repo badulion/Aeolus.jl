@@ -1155,12 +1155,19 @@ end
 # One pass over the rows, every term its own running sum held in a register
 # (independent chains, so one's add latency hides behind the others'),
 # each in row order from zero: the ordered_sum of each column of P.
+#
+# The row update is a separate function: a closure `t -> s[t] + P[c, t]`
+# inside the loop would capture `s`, which the loop reassigns, so Julia
+# boxes it and every row runs through dynamic dispatch (measured 5.5 ms
+# instead of a few µs for 128² rows).
 function _column_sums(P::AbstractMatrix{T}, ::Val{N}) where {T, N}
     s = ntuple(_ -> zero(T), Val(N))
-    @inbounds for c in axes(P, 1)
-        s = ntuple(t -> s[t] + P[c, t], Val(N))
+    for c in axes(P, 1)
+        s = _add_row(s, P, c)
     end
     return s
 end
+@inline _add_row(s::NTuple{N,T}, P, c) where {N, T} =
+    ntuple(t -> (@inbounds s[t] + P[c, t]), Val(N))
 
 end # module

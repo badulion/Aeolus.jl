@@ -86,6 +86,12 @@ kc_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
         plane_partials!(p2, CPUBackend(serial = true), identity, (ir, jr, 2:6), A)
         @test kc_bits(p1) == kc_bits(p2)
     end
+    # the fold of the partials is one register pass: no allocation per row
+    # (a boxed accumulator allocated 72 bytes per row: 5.5 ms for 128² rows)
+    P = randn(rng, 4096, 3)
+    column_sums(P)
+    @test (@allocated Aeolus.Backends._column_sums(P, Val(3))) < 1024
+    @test kc_bits(collect(column_sums(P))) == kc_bits([foldl(+, P[:, t]; init = 0.0) for t in 1:3])
 end
 
 @testset "global caches: one Gauss-Legendre source, safe first use under threads" begin

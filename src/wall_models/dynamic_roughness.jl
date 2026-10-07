@@ -341,7 +341,7 @@ function _drag_parts(dr::DynamicRoughness{T}, uc, vc, ut, vt) where {T}
     κ = T(von_karman(dr.c))
     b = Backends.backend(uc)
     cols = (axes(uc, 1), axes(uc, 2))
-    ub, vb, nf = column_sum(b, _mean_wind_column, cols, dr.mask, uc, vc, T)
+    ub, vb, nf = column_sum(b, _mean_wind_column, cols, dr.mask, uc, vc, zero(T))
     n = Int(nf)
     n > 0 || throw(ArgumentError("DynamicRoughness: no column in the mask"))
     M = hypot(ub, vb)
@@ -352,7 +352,9 @@ function _drag_parts(dr::DynamicRoughness{T}, uc, vc, ut, vt) where {T}
     return A1, A2, R1 / n, R2 / n, n
 end
 
-@inline function _mean_wind_column(i, j, mask, uc, vc, ::Type{T}) where {T}
+# `z` is zero(T), a value: a type among the launch arguments would be stored
+# as a `DataType` in the argument tuple and the body dispatched per column.
+@inline function _mean_wind_column(i, j, mask, uc, vc, z::T) where {T}
     I = CartesianIndex(i, j)
     _in(mask, I) || return (zero(T), zero(T), zero(T))
     return @inbounds (T(uc[I]), T(vc[I]), one(T))
