@@ -59,9 +59,9 @@ closed and followed by a `NaN` vertex, the convention of
 surface-class code table ([`SURFACE_CLASSES`](@ref Aeolus.InputDrivers.SURFACE_CLASSES))
 is stored as the CF `flag_values` and `flag_meanings` of `surface_class`.
 
-```@example
-using Aeolus # hide
-print(Aeolus.InputDrivers.schema_markdown(Aeolus.InputDrivers.STATIC_SCHEMA)) # hide
+```@eval
+using Aeolus, Markdown
+Markdown.parse(Aeolus.InputDrivers.schema_markdown(Aeolus.InputDrivers.STATIC_SCHEMA))
 ```
 
 The rasters do not depend on the run's lateral boundaries: a run applies
@@ -76,9 +76,9 @@ case refuses a driver with terrain.
 
 For a grid that does not resolve buildings (the Berlin nest parent):
 
-```@example
-using Aeolus # hide
-print(Aeolus.InputDrivers.schema_markdown(Aeolus.InputDrivers.STATIC_TILES_SCHEMA)) # hide
+```@eval
+using Aeolus, Markdown
+Markdown.parse(Aeolus.InputDrivers.schema_markdown(Aeolus.InputDrivers.STATIC_TILES_SCHEMA))
 ```
 
 The tile fraction of class `c` is `class_count[:, :, c] / refinement²`
