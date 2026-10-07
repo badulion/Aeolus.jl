@@ -109,7 +109,8 @@ faces of each axis and rejects periodic-against-Neumann.
 periodic gives `FFTPoissonSolver`, anything else
 `CosineFFTPoissonSolver(mesh; poisson_axis_bcs(bcs)...)` — the channel as
 before, the all-Neumann box for a nested child. The sound-proof cores
-pass the same axes to their `DensityWeightedPoissonSolver`, and the Berlin
+pass the same axes to their `DirectWeightedPoissonSolver` (or
+`DensityWeightedPoissonSolver`), and the Berlin
 `:pressure_solver` providers (`examples/urban/couplings/pressure_solver.jl`)
 build every solver from the case's `bcs` the same way, with a smoke check
 that the axes match.
@@ -144,6 +145,47 @@ arithmetic. The dot products are canonical plane sums, so a solve and
 its iteration count are identical at every thread count. Iteration
 counts, timings and the one-time last-bit change are in
 [The kernel port](ka_port.md) (section KA-g).
+
+### Column-separable operators: `ColumnTridiagonalSolver` (#309)
+
+Two operators of the code have uniform horizontal spacing and
+coefficients that depend on height only: the conservative stretched-z
+Laplacian of the Boussinesq core on a `StretchedGrid` (#151) and the
+density-weighted projection operator ∇·(w(z)∇φ) of the anelastic and
+pseudo-incompressible cores (w = ρ̄ or ρ̄θ̄). Both are
+
+```math
+h_k\,(δ_x^2 + δ_y^2)φ_k + a_k(φ_{k-1} - φ_k) + c_k(φ_{k+1} - φ_k) = b_k ,
+```
+
+which the horizontal real FFT (periodic side) or DCT-II (Neumann side)
+reduces to one tridiagonal system per wavenumber (Schumann & Sweet
+1988). [`ColumnTridiagonalSolver`](@ref Aeolus.PressureSolvers.ColumnTridiagonalSolver)
+is the one implementation: transform, Thomas sweep with the
+factorisation stored at construction (a launch over slabs of ky rows, see
+above), the singular mean mode integrated as a column flux, inverse
+transform. `StretchedGrids.StretchedPoissonSolver` (`h = 1`) and
+`Anelastic.DirectWeightedPoissonSolver` (`h = w_c`, `a_k = w_f[k]/Δz²`)
+only build its coefficients; the latter is the default projection of
+the sound-proof cores (`pressure_solver = :direct`), with
+`DensityWeightedPoissonSolver` (CG, `pressure_solver = :cg`) kept for
+a periodic column and as the independent check.
+
+Measured (#309, one thread, isothermal 300 K base state over 3 km,
+random source; CG at the cores' tolerances):
+
+| grid | CG tol 1e-10 | CG tol 1e-12 | direct | speed-up |
+| :-- | --: | --: | --: | --: |
+| 32 × 32 × 32 | 12.4 ms (186 it.) | 14.5 ms (206 it.) | 0.10 ms | 124–145× |
+| 64 × 64 × 64 | 176 ms (367 it.) | 175 ms (409 it.) | 1.05 ms | 166× |
+| 128 × 128 × 64 | 1868 ms (612 it.) | 1960 ms (696 it.) | 8.1 ms | 231–242× |
+
+A 64³ anelastic step (warm bubble, fixed 1 s) costs 6.1 ms with the
+direct solve against 173 ms with the CG (tol 1e-10). The direct solution
+satisfies the discrete equation to a relative residual of ~5e-16 and
+agrees with a tol-1e-14 CG to ~2e-13 (`test/era2_anelastic.jl`); the
+weighted constraint after a step is at round-off (~2e-16 s⁻¹ against
+~8e-15 s⁻¹ for the CG at tol 1e-12). A solve allocates nothing.
 
 ### `SEMPoissonSolver` (Phase 5)
 
