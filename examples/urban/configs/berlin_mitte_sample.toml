@@ -12,5 +12,8 @@ name = "mitte_sample"
 scenario = "mitte_sample"
 
 [geometry]
+static = "input/berlin_mitte_sample_static.nc"
+
+[preprocess]
 osm_path = "../data/sample_berlin_mitte.osm"
 min_height = 15.0

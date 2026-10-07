@@ -728,21 +728,31 @@ import Random
         bits(x) = reinterpret(UInt64, Float64(x))
         TI = Aeolus.TimeIntegration
         @test bits(TI._max_advective_rate(u, v, w, g)) == bits(old_rate(u, v, w, g))
-        @test bits(TI._max_speed(sim)) == bits(old_speed(sim))
-        @test bits(TI._max_interior(sim.u)) == bits(maximum(interior_view(sim.u)))
+        # KA-j (#306): the speed cap is a component of the fused step guard, the
+        # SGS maxima components of the fused CFL sweep (same expectations, on
+        # the functions that replaced `_max_speed` and `_max_interior`)
+        @test bits(TI.step_guard(sim).speed) == bits(old_speed(sim))
+        @test bits(TI._max_abs(sim.u)) == bits(maximum(abs, interior_view(sim.u)))
+        cm = TI._cfl_maxima(sim, (νh = sim.u, νv = sim.v, κh = sim.w, κv = sim.θ), true)
+        @test bits(cm[1]) == bits(old_rate(u, v, w, g))
+        @test bits(cm[2]) == bits(maximum(interior_view(sim.u)))
+        @test bits(cm[3]) == bits(maximum(interior_view(sim.v)))
+        @test bits(cm[4]) == bits(maximum(interior_view(sim.w)))
+        @test bits(cm[5]) == bits(maximum(interior_view(sim.θ)))
         @test bits(max_divergence(sim)) == bits(maximum(abs, interior_view(sim.div_buf)))
-        @test TI._all_finite(sim)
+        @test bits(TI.step_guard(sim).divergence) == bits(max_divergence(sim))
+        @test TI._all_finite(sim) && TI.step_guard(sim).finite
         # NaN propagates through every maximum; ±Inf fails the finiteness check
         interior_view(sim.v)[5, 6, 7] = NaN
         @test isnan(TI._max_advective_rate(u, v, w, g)) && isnan(old_rate(u, v, w, g))
-        @test isnan(TI._max_speed(sim))
-        @test !TI._all_finite(sim)
+        @test isnan(TI.step_guard(sim).speed)
+        @test !TI._all_finite(sim) && !TI.step_guard(sim).finite
         interior_view(sim.v)[5, 6, 7] = 0.0
         interior_view(sim.p)[1, 1, 1] = -Inf
-        @test !TI._all_finite(sim)
+        @test !TI._all_finite(sim) && !TI.step_guard(sim).finite
         interior_view(sim.p)[1, 1, 1] = 0.0
         sim.p.data[1, 1, 1] = NaN                     # a halo NaN is not in the interior
-        @test TI._all_finite(sim)
+        @test TI._all_finite(sim) && TI.step_guard(sim).finite
         # the brunt_vaisala plane means: canonical sums, round-off from the old loop
         set!(sim.θ, (x, y, z) -> 300 + 3z)
         N = TI._brunt_vaisala(sim)

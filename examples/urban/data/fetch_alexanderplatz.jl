@@ -1,8 +1,11 @@
 # Download real OSM data for the Alexanderplatz area of Berlin.
 #
 # Uses the public Overpass API (no auth required) via `curl`. Writes a
-# plain OSM XML file that `load_city_osm` in `../osm_ingest.jl` reads
-# directly.
+# plain OSM XML file that `load_city_osm` (Aeolus.InputDrivers, src/preprocess/osm.jl) reads
+# directly. A new file makes the committed static drivers stale (their
+# source hash no longer matches): re-run
+#   julia --project -m Aeolus preprocess static examples/urban/configs/berlin_<s>.toml
+# for each shipped config (CFG-f, #361).
 #
 # Bounding box: 52.518°N–52.526°N, 13.402°E–13.418°E — a roughly
 # 1 km × 1 km square centered on Alexanderplatz.

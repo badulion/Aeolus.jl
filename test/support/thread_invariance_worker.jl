@@ -4,7 +4,7 @@
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
 # Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
-# nested, fft, fv, pcg, radiation, hooks) and writes
+# nested, fft, fv, pcg, steps, radiation, hooks) and writes
 # one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
 # the raw bits (Float64 → UInt64), so two processes agree iff the results
 # are bit-identical. MODE is `default` (CPUBackend(): threaded when N > 1)
@@ -43,6 +43,11 @@
 #               item; its per-level sums, also at 128×128×32, where a 3-D
 #               launch would race); and 3 steps of a 64×64×32
 #               Smagorinsky LES on the stretched grid (every field).
+#   steps       (KA-j, #306) every step core (test/support/step_cases.jl):
+#               Boussinesq Euler, RK3 and adaptive (the dt sequence, the CFL
+#               diagnostics, a forced retry), IMEX ARK2 / Rosenbrock2,
+#               anelastic and pseudo-incompressible, a stretched grid and
+#               every core with open boundaries: every field after 1-4 steps.
 #   hooks       (KA-k, #307) the dynamics hooks with every launch on the KA
 #               path: the IBM direct forcing, the immersed-wall operators
 #               (per-face gather) on a 64×64×32 city with their
@@ -178,7 +183,7 @@ function section_reductions()
     record!("reductions/sgs_stress_dissipation", O.sgs_stress_dissipation(sim.u, sim.v, sim.w, sim.νt))
     record!("reductions/max_advective_rate", TI._max_advective_rate(sim.u.data, sim.v.data, sim.w.data, mesh))
     record!("reductions/brunt_vaisala", TI._brunt_vaisala(sim))
-    record!("reductions/max_speed", TI._max_speed(sim))
+    record!("reductions/max_speed", TI.step_guard(sim).speed)   # KA-j: the speed cap of the fused guard
     record!("reductions/all_finite", TI._all_finite(sim))
     # plane_reduce!: a tuple body and a fused write
     I3 = interior(mesh)
@@ -665,6 +670,13 @@ function section_radiation()
 end
 
 # --------------------------------------------------------------------------
+# KA-j (#306): every step core (test/support/step_cases.jl): every field of
+# the simulation after one to four steps, the dt sequences, the CFL
+# diagnostics and a forced retry.
+include(joinpath(@__DIR__, "step_cases.jl"))
+section_steps() = (run_cases(); nothing)
+
+# --------------------------------------------------------------------------
 # BLAS on one thread at every count. `init_threads!` pins it only when Julia
 # runs threaded, so at -t 1 OpenBLAS keeps its own default; LAPACK's bits
 # depend on the BLAS thread count, and the Berlin radiosity solves through
@@ -683,6 +695,7 @@ for s in SECTIONS
     s == "fv"         ? section_fv() :
     s == "hooks"      ? section_hooks() :
     s == "pcg"        ? section_pcg() :
+    s == "steps"      ? section_steps() :
     s == "radiation"  ? section_radiation() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)

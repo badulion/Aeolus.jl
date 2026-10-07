@@ -11,7 +11,8 @@
 #
 # Layout:
 #
-#   configs/     the shipped run configurations (TOML): the scenarios.
+#   configs/     the shipped run configurations (TOML): the scenarios;
+#                configs/input/ their static drivers (`aeolus preprocess static`).
 #   core/        the case machinery — config, scenarios, the coupling
 #                registry, geometry, the surface bus, the tracer registry,
 #                the budget ledger, the Case, the stage loop, the output.
@@ -32,6 +33,13 @@ using Aeolus.Radiation: apply_radiative_cooling!
 using Aeolus.Operators: advect_centered!
 using Aeolus.AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using Aeolus.IBM: SolidMask, mark_solid!
+# the ground: surface classes, footprints, readers and the static driver (CFG-f, #361)
+using Aeolus.InputDrivers: SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE_WATER, SURFACE_WALL,
+                           Building, UrbanCity, polygon_bbox, point_in_polygon, latlon_to_meters,
+                           load_city_osm, osm_class, load_city_geojson, rasterize_city, static_inputs,
+                           solid_and_classes, surface_class_map, tag_building_adjacent!,
+                           StaticInputs, StaticTiles, read_static_driver, write_static_driver,
+                           read_static_tiles, write_static_tiles
 using Aeolus.StretchedGrids: surface_refined_faces
 using Printf
 using Dates: DateTime, Millisecond
@@ -40,10 +48,10 @@ import Random
 
 "Directory of the Berlin case (examples/urban)."
 const URBAN_DIR = @__DIR__
-"Input data directory (OSM files)."
+"Input data directory (the OSM files, the parent's land-use table: the preprocessor's sources)."
 const DATA_DIR = joinpath(URBAN_DIR, "data")
 
-for f in ("config", "scenarios", "registry", "geometry", "osm_ingest", "bus",
+for f in ("config", "scenarios", "registry", "geometry", "bus",
           "tracers", "air_heat", "air_heat_ledger", "ledger", "reference_state", "top_boundary",
           "open_boundary",
           "output", "case", "stages")
