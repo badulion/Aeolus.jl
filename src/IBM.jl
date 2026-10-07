@@ -122,29 +122,35 @@ end
 # ones: row (j, k) owns the u faces i1:i2+1 of the row and the v and w faces
 # of its cells' lower sides (at j and at k). A row whose cells and lower
 # neighbour rows have no solid cell — most rows — is skipped after three
-# word-wise scans of the (bit) mask; the others are walked face by face.
-# Point by point, four reads of a BitArray mask per point measured 3.6x
-# the former loop over the cells (one read per cell).
+# word-wise scans of the (bit) mask. Otherwise the row applies, per face,
+# the operation of its lower solid neighbour first (the cells of rows j-1
+# and k-1 for the v and w faces; cell i-1, met one iteration earlier, for
+# the u face i), then that of its own solid cells: one mask read per cell,
+# the order of the former loop over the cells. Walking the row face by face
+# instead (up to six mask reads per face) measured 1.14x the former loop in
+# the flagship (244 vs 219 µs per call); this cell-wise walk 0.76x (167 µs).
 @inline function _ibm_row_body!(j, k, op!::F, ou, ov, ow, su, sv, sw, mk, x,
                                 i1, i2, j1, j2, k1, k2) where {F}
     @inbounds begin
         a0 = j <= j2 && k <= k2 && _row_any(mk, i1, i2, j, k)          # cells (·, j, k)
         ay = j - 1 >= j1 && k <= k2 && _row_any(mk, i1, i2, j - 1, k)  # cells (·, j-1, k)
         az = k - 1 >= k1 && j <= j2 && _row_any(mk, i1, i2, j, k - 1)  # cells (·, j, k-1)
-        (a0 | ay | az) || return nothing
-        for i in i1:i2+1
-            if a0                                       # u face (i, j, k): cells i-1, i
-                i - 1 >= i1 && mk[i-1, j, k] && op!(ou, su, i, j, k, x)
-                i <= i2 && mk[i, j, k] && op!(ou, su, i, j, k, x)
+        if ay                                       # v faces (·, j, k) of solid cells (·, j-1, k)
+            for i in i1:i2
+                mk[i, j-1, k] && op!(ov, sv, i, j, k, x)
             end
-            i <= i2 || continue
-            if k <= k2                                  # v face (i, j, k): cells j-1, j
-                ay && mk[i, j-1, k] && op!(ov, sv, i, j, k, x)
-                a0 && mk[i, j, k] && op!(ov, sv, i, j, k, x)
+        end
+        if az                                       # w faces (·, j, k) of solid cells (·, j, k-1)
+            for i in i1:i2
+                mk[i, j, k-1] && op!(ow, sw, i, j, k, x)
             end
-            if j <= j2                                  # w face (i, j, k): cells k-1, k
-                az && mk[i, j, k-1] && op!(ow, sw, i, j, k, x)
-                a0 && mk[i, j, k] && op!(ow, sw, i, j, k, x)
+        end
+        if a0                                       # the row's own solid cells
+            for i in i1:i2
+                if mk[i, j, k]
+                    op!(ou, su, i, j, k, x); op!(ou, su, i + 1, j, k, x)
+                    op!(ov, sv, i, j, k, x); op!(ow, sw, i, j, k, x)
+                end
             end
         end
     end
