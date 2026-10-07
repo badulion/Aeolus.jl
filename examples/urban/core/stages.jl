@@ -165,14 +165,43 @@ function step_dt(case)
 end
 
 """
-    step_case!(case, dt = step_dt(case)) -> Bool
+    step_case!(case) -> Bool
+    step_case!(case, dt) -> Bool
 
-Advance the case by one step of `dt` seconds through every stage.
-Returns `false` if the `:sanity` stage found non-finite state (the step
-is complete, but the run should stop). The dynamics is advanced by the
-`:timestepper` provider's `advance_dynamics!` (default: one `step!`).
+Advance the case by one step through every stage: of `step_dt(case)`
+seconds, or of the `dt` given. Returns `false` if the `:sanity` stage
+found non-finite state (the step is complete, but the run should stop).
+The dynamics is advanced by the `:timestepper` provider's
+`advance_dynamics!` (default: one `step!`).
+
+With a variable-step provider (`variable_dt`, the default `:adaptive`)
+a `dt` above the provider's [`stable_dt`](@ref) is an `ArgumentError`,
+thrown before any stage runs. The transport, microphysics and surface
+stages take the whole `dt` in one go, and the dynamics' retry halves a
+step at most `max_retries` times, so such a step is not made safe by
+splitting it: `step_case!(case, cfg.dt)` on the default case took
+2 s steps while the stable step fell from 0.47 s to 0.09 s; the guard
+of `step_adaptive!` (finite, divergence-free, |u| ≤ 50 m/s) passed the
+first nine without a retry while |v| grew from 7.8 to 39 m/s, and the
+run failed at step 16 with `θ` spanning 229–360 K (#392). Call `step_case!(case)`, or `run_case!`, which runs to a time.
 """
-function step_case!(case, dt::Real = step_dt(case))
+step_case!(case) = _step_case!(case, step_dt(case))
+
+function step_case!(case, dt::Real)
+    ts = timestepper(case)
+    if ts !== nothing && variable_dt(typeof(ts))
+        lim = stable_dt(ts, case)
+        dt <= lim * (1 + 1e-9) || throw(ArgumentError(
+            @sprintf("step_case!: dt = %.4g s exceeds the stable step %.4g s of the :%s time stepper", dt, lim,
+                     provider(typeof(ts))) *
+            " (CFL / diffusion / buoyancy limit of the current flow); call step_case!(case) " *
+            "to take the step it picks, or run_case!, which runs to a time (#392)"))
+    end
+    return _step_case!(case, dt)
+end
+
+# One step of `dt`, unchecked: `run_case!` passes the step `step_dt` picked.
+function _step_case!(case, dt::Real)
     sim, clk = case.sim, case.clock
     clk.n += 1
     n = clk.n
@@ -253,9 +282,9 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, c
     case.clock.t_wall0 = time()
     n0 = case.clock.n
     function one_step(dt)
-        ok = monitor === nothing ? step_case!(case, dt) :
+        ok = monitor === nothing ? _step_case!(case, dt) :
              Aeolus.IO.monitored_step!(monitor, case.sim; step = case.clock.n + 1) do
-                 step_case!(case, dt)
+                 _step_case!(case, dt)
              end
         ok && callback !== nothing && callback(case, case.clock.n)
         return ok

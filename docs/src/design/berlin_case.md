@@ -141,6 +141,7 @@ Two slots drive the dynamics itself and have four more methods
 | `next_dt(c, case)` | slot `:timestepper`: the length of the next step (default `cfg.dt`) |
 | `advance_dynamics!(c, case, dt)` | slot `:timestepper`: advance `case.sim` by `dt` with the composed `:body_force` / `:post_predictor` hooks and the numerics slots' `case.step_kwargs` (default `dynamics_step!`: one `step!`) |
 | `variable_dt(::Type{C})` | slot `:timestepper`: `true` if `next_dt` varies; `run_case!` then runs to the simulated time `nsteps · cfg.dt` |
+| `stable_dt(c, case)` | slot `:timestepper`, `variable_dt` providers: the longest step the provider's stability limits (CFL, diffusion, buoyancy, Coriolis) and `dt_max` allow from the current flow, without the growth limit and without side effects (default `Inf`). `step_case!(case, dt)` throws an `ArgumentError` for a `dt` above it, before any stage runs (#392) |
 
 A keyword from `sim_options` or `step_options` is never dropped: every
 time stepper passes `case.step_kwargs` to the step it takes, and a core
