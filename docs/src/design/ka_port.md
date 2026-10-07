@@ -230,6 +230,13 @@ quotes its size.
   the work-item → task map changes with the thread count.
 * Partials arrays for reductions are sized by the outer range (`n_k`
   planes, `n_i × n_j` columns), not by the thread count.
+* Random numbers: never one generator shared by the work items of a
+  launch (the draws would depend on which task got there first). Each
+  item makes its own stream from what identifies it,
+  [`counter_rng`](@ref Aeolus.Backends.counter_rng)`(key, stream, id)`
+  for a few draws or [`counter_xoshiro`](@ref Aeolus.Backends.counter_xoshiro)
+  for hundreds, keyed by a seed or one draw from the caller's `rng`
+  (KA-n). Tallies go into per-item buffers merged in item order.
 
 ## FFTW and BLAS
 
@@ -661,6 +668,172 @@ the flagship step and the new fft section) identical at 4, 12 and 24
 threads to 1 thread. Two separate processes at `-t 1` and two at `-t 24`
 gave the same fft and dns hashes. At `-t 1` every solve is bit-identical
 to master: no one-time change.
+
+## KA-n: radiation and stochastic modules (#305)
+
+**Radiosity.** Three changes.
+
+* *LU cache.* [`RadiosityFactorCache`](@ref Aeolus.Radiosity.RadiosityFactorCache)
+  keeps the dense LU of ``M = I - \mathrm{diag}(\rho) F`` between calls
+  and refactorises only when ``F`` (by identity) or ``\rho`` (by value)
+  changes. A hit runs the same LAPACK `getrs` on the same factors, so the
+  bits equal a refactorisation at the same BLAS thread count. The
+  `radiosity_sun` coupling keeps one cache per band. The longwave
+  ``\rho = 1 - \varepsilon`` is fixed, so its LU is computed once per run.
+  The shortwave albedos follow μ₀ (`default_urban_materials(; μ₀)`; all
+  five classes change, from 0.140 / 0.268 / 0.293 / 0.359 / 0.272 at
+  μ₀ = 0.1 to 0.121 / 0.204 / 0.186 / 0.031 / 0.217 at 0.9), so the
+  shortwave operator is still refactorised on every daytime call.
+* *BLAS.* Pinned to one thread when Julia runs threaded (KA-a). LAPACK's
+  bits depend on the BLAS thread count, so the harness section pins it
+  too. Under `-t 1` the BLAS setting is left alone, and a cached solve
+  equals an uncached one at whatever count is set.
+* *View factors and aggregation.* `view_factors` is one
+  `launch_weighted!` over pairs of upper-triangle rows `(p, n − p)`, each
+  writing `F[i, j]` and `F[j, i]` of its own rows. The Gauss nodes are
+  cached before the threads read them, and the occlusion quadrature no
+  longer allocates. `F` and `F_sky` are bit-identical to the serial loop.
+  `aggregate_to_grid` gathers through a CSR column → facets index
+  (`facet_column_index`) in ascending facet order, which gives the same
+  sums as the old facet scatter (bit-identical, no expectation change).
+  An exact tie between dominant classes goes to the lowest material
+  index. `set_temperatures!(scene, Ts, facet_col)` is one launch over the
+  facets.
+
+The iterative (Gauss-Seidel) radiosity solver stays serial.
+
+**Gas optics and two-stream.** `compute_optics!` is one
+`launch_weighted!` over (column, layer): a work item fills one layer's
+g-points in the serial loop order, so the optics are bit-identical at
+every thread count. The k-distribution bisections are 33 of the 37 ms of a
+Berlin radiation call. The multi-column forms take optics `τ[k, g, c]`
+(`allocate_column_optics`). `solve_sw!` / `solve_lw!` launch over
+(g-point, column) work items, with the adding recurrence sequential in
+``k`` inside each item. Per-(g, column) scratch lives in a reusable
+[`TwoStreamWorkspace`](@ref Aeolus.TwoStream.TwoStreamWorkspace), so a
+call does not allocate. A second launch sums the g-points in ascending
+order. A single-column solve is the multi-column solve on one column (one
+code path), so column ``c`` gets the single-column bits.
+`column_radiation!`, the entry the Berlin child and the nesting parent
+share (#259), runs through these forms.
+
+**Cloud shadow.** The optical-depth field is a pointwise launch, and the
+slant rays are one `launch_weighted!` over the columns, one ray per work
+item. Both are identical to the old loops.
+
+**Random streams.** No generator is shared between work items.
+[`counter_rng`](@ref Aeolus.Backends.counter_rng)`(seed, stream, id)` is
+a Philox4x32-10 stream (Salmon et al. 2011, checked against the
+Random123 known-answer vectors) and a pure function of the triple.
+[`counter_xoshiro`](@ref Aeolus.Backends.counter_xoshiro) is a Xoshiro256++
+seeded from the first four numbers of that stream, for long streams.
+
+| module | work item | stream |
+| :-- | :-- | :-- |
+| `MonteCarloRT.mc_solve` | a batch of photons, tallied into its own buffer and merged in batch order | photon ``p``: `(key, g-point, p)` |
+| `init_exponential_superdroplets`, `broadening_initial_population` | a droplet | `(key, 0, i)` |
+| `collision_coalescence!` | a cell | `counter_xoshiro(key, 0, ci)` |
+| `SupersaturationFluctuations` | a droplet | the ``n``-th Ornstein-Uhlenbeck draw of droplet ``i``: `(key, n, i)` |
+
+The key is the caller's `seed`, or one `UInt64` drawn from the caller's
+`rng`, so a seeded `MersenneTwister` caller stays reproducible.
+`mc_solve` without either is an error, and the unseeded global `rand()`
+default is gone. A Philox block costs about 4 ns per two `UInt64`s: ten
+dependent rounds of multiplication. That is fine for a few draws per
+item, and `randn(counter_rng(…))` is not heap-allocated. A cell's
+collisions draw a few hundred numbers, which took 1.26× the old loop on
+Philox, so they use `counter_xoshiro` (under 1 ns per draw). A Philox that
+computes four blocks per refill (2.2 ns per draw) was tried and dropped.
+Its larger refill stops the generator from being inlined, so a one-draw
+stream is heap-allocated, and the superdroplet initialisation took 1.6×
+as long.
+
+**Named expectation changes** (one time, against master):
+
+* *Monte-Carlo photons.* Every realisation changes, but the statistics
+  do not: the standard-error calibration over 60 seeds gives sd/err 0.97
+  on the new streams against 0.99 on the old. Four `era3_montecarlo`
+  assertions held only for the old realisation. Their tolerances are
+  unchanged. The conservative closure and the delta-Eddington comparison
+  now use 96k photons instead of 24k: at 24k they failed for 1 or 2 of
+  20 seeds with the old draws and for 2 or 4 with the new. The 3-D cloud
+  "> 5σ" test now uses 128k / 64k photons instead of 32k / 16k: the old
+  draws failed it for 5 of 10 seeds. The shadow test's
+  `argmin(profile) == i_expect` was a wrong expectation: the τ = 20
+  shadow is a plateau of six cells equal within the noise. It now
+  asserts that both lie in the geometric shadow.
+* *Superdroplets and sub-grid fluctuations.* The realisations change. The
+  era4 superdroplet, broadening, sgs-growth and turbulent-microphysics
+  tests pass with their tolerances unchanged. The spectral-broadening
+  page's seed-1 table and seed lists were re-measured. At
+  ``\sigma_S = 0.2\,\%`` the bulk ``\varepsilon`` deficit is −2.9 / −5.1 /
+  −4.3 % over seeds 1-3, against −4.1 / −4.1 / −3.5 % before (asserted
+  2-6 %). The stationary exponent is 0.540 / 0.529 / 0.526, against
+  0.529 / 0.514 / 0.518 before.
+* Everything else in this PR is bit-identical to master at `-t 1`: the
+  radiosity (cached or not), the view factors, the aggregation, the gas
+  and cloud optics, the two-stream solves and the cloud shadow.
+
+**Thread invariance.** The harness's `radiation` section hashes the
+following:
+
+* the view factors of a 16×14 city;
+* its shortwave and longwave solves, the second longwave solve through
+  the LU cache;
+* `aggregate_to_grid`;
+* the gas and cloud optics and the multi-column solves of 6 columns;
+* the cloud optical depth and the shadow rays;
+* a Monte-Carlo solve;
+* 4 collision steps of 2000 superdroplets in 16 cells, and the sub-grid
+  fluctuations.
+
+## Measured at KA-n
+
+Same machine, Julia 1.13.1, BLAS on one thread in every run. Each figure
+is the minimum over repeats, with other agents on the machine. The
+Berlin radiosity scene is the flagship's (5639 facets). "Day call" is one
+`radiosity_sun` `:radiation` stage: materials for a new μ₀, temperatures,
+shortwave and longwave solves and aggregation. "Night" is the same
+without the sun. The parent columns are 96 columns of the 53 parent
+levels under the standard atmosphere (113 layers), LW + SW. The old code
+is master `b4f6f82`. Speed-up is old at 1 thread divided by new at N
+threads.
+
+| kernel | old 1 t (ms) | new 1 t (ms) | new / old | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: | --: | --: |
+| radiosity day call | 3783 | 1800 | 0.48 | 2.1× | 2.1× | 2.1× |
+| radiosity night call | 1892 | 17.4 | 0.009 | 110× | 111× | 109× |
+| `view_factors` (5639 facets) | 937 | 833 | 0.89 | 2.9× | 4.8× | 5.0× |
+| `aggregate_to_grid` | 0.556 | 0.120 | 0.22 | 4.7× | 4.7× | 4.8× |
+| `column_radiation!` (child, 91 layers) | 45.7 | 45.4 | 0.99 | 3.6× | 7.4× | 12.1× |
+| gas optics LW (1 column) | 20.2 | 20.2 | 1.00 | 3.8× | 7.4× | 12.5× |
+| 96 parent columns, optics + LW + SW | 3828 | 3879 | 1.01 | 3.8× | 8.4× | 10.1× |
+| `cloud_optical_depth_column` 64×64×32 | 0.0229 | 0.0235 | 1.03 | 1.8× | 1.6× | 1.3× |
+| `cloud_shadow_transmittance!` 64×64×32 | 0.798 | 0.805 | 1.01 | 3.8× | 4.2× | 3.6× |
+| `mc_solve` 16³ cloud, 64k photons, 24 batches | 95.5 | 98.6 | 1.03 | 3.7× | 9.8× | 9.6× |
+| `init_exponential_superdroplets` 64k | 3.37 | 2.64 | 0.78 | 1.8× | 1.9× | 1.9× |
+| `collision_coalescence!` 64k in 512 cells, 5 steps | 3.99 | 3.67 | 0.92 | 1.8× | 1.7× | 1.8× |
+
+A single-column `solve_lw!` / `solve_sw!` (0.13 / 0.10 ms) runs serially:
+its 1 × 16 or 1 × 14 work items are below the launch threshold. It takes
+1.00 / 1.02× the old time.
+
+* **The issue's radiosity target (≥ 10× per call) is met at night, not
+  by day.** At night only the longwave solve runs, on the cached LU:
+  17 ms against 1.9 s. By day the shortwave operator changes with μ₀, so
+  it is refactorised (1.8 s, 2.1× faster than before, when both bands
+  were). Reusing the LU across μ₀ needs a non-bitwise scheme, for
+  example iterative refinement on a stale LU or albedos held across a
+  μ₀ tolerance. That is a maintainer question (PR body).
+* **Superdroplet collisions scale poorly:** 1.7-1.8× at 4-24 threads. The bucketing,
+  `compact!` and the launch over 512 small cells are serial or too fine.
+  This path is not on the Berlin default.
+* The multi-column radiation reaches 8.4× at 12 threads at the parent
+  size (the issue expected 6-10×). The Berlin child's one domain-mean
+  column gains through the threaded gas optics (layers × g-points): 7.4×
+  at 12 threads.
+
+**Harness.** HARNESS_RESULT
 
 ## Dependency tree
 
