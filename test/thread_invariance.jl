@@ -18,8 +18,9 @@
 #     Every hash must agree with
 #     the 1-thread one; the differing keys are listed otherwise.
 #     AEOLUS_THREAD_SECTIONS selects sections (default
-#     "primitives,dns,reductions,smoke,flagship,nested,fft,fv"; reductions: KA-b #296;
+#     "primitives,dns,reductions,smoke,flagship,nested,fft,fv,hooks"; reductions: KA-b #296;
 #     fv: the finite-volume kernels and a stretched LES, KA-d #299;
+#     hooks: the dynamics hooks and immersed-wall operators, KA-k #307;
 #     nested: short nested runs,
 #     KA-f #297; fft: every spectral pressure solver with FFTW on the
 #     process's threads, KA-h #298). Every port PR runs and quotes it:
@@ -88,7 +89,7 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
 
     if get(ENV, "AEOLUS_THREAD_TESTS", "0") == "1"
         counts = parse.(Int, split(get(ENV, "AEOLUS_THREAD_COUNTS", "1,4,24"), ','))
-        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft,fv")
+        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft,fv,hooks")
         project = dirname(Base.active_project())
         dir = mktempdir()
         hashes = Dict{Int,Dict{String,String}}()
