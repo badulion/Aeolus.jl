@@ -13,6 +13,7 @@ module IBM
 
 using ..Grids: RegularGrid, interior
 using ..Fields: Field, interior_view
+using ..Backends: launch!, backend     # KA-k (#307): the direct forcing is a launch over the faces
 using ..Simulations: BoussinesqSimulation
 using ..BoundaryConditions: FieldBoundaryConditions, neighbor_index
 
@@ -100,23 +101,45 @@ projection sees.
 """
 function add_ibm_penalty!(sim, sm::SolidMask; τ::Real = 1e-3)
     m  = sm.mesh
-    ii, jj, kk = interior(m)
-    mk = sm.mask
-    ud = sim.u.data; vd = sim.v.data; wd = sim.w.data
-    tud = sim.tu.data; tvd = sim.tv.data; twd = sim.tw.data
     invτ = 1 / τ
-    @inbounds for k in kk, j in jj, i in ii
-        # A face is "in solid" if either bordering cell is solid.
-        if mk[i, j, k]
-            tud[i,   j, k] -= invτ * ud[i,   j, k]
-            tud[i+1, j, k] -= invτ * ud[i+1, j, k]
-            tvd[i, j,   k] -= invτ * vd[i, j,   k]
-            tvd[i, j+1, k] -= invτ * vd[i, j+1, k]
-            twd[i, j, k]   -= invτ * wd[i, j, k]
-            twd[i, j, k+1] -= invτ * wd[i, j, k+1]
-        end
-    end
+    _ibm_faces!(_penalty_op, sm, (sim.tu.data, sim.tv.data, sim.tw.data),
+                (sim.u.data, sim.v.data, sim.w.data), invτ)
     return sim
+end
+
+# The face loops of the direct forcing (KA-k, #307). A face "in solid" is
+# one with a solid cell on either side; the former loop over the cells
+# visited it once per solid cell (lower cell first) and applied `op!` each
+# time. Here every face is one point of a launch that applies `op!` once
+# per solid neighbour, lower first: the same operations in the same order,
+# so the same bits, and no two work items write the same face.
+# `op!(out, src, I, J, K, x)`; `out` and `src` are the (u, v, w) data arrays
+# written and read.
+@inline _penalty_op(out, src, I, J, K, invτ) = (@inbounds out[I, J, K] -= invτ * src[I, J, K]; nothing)
+@inline _scale_op(out, src, I, J, K, factor) = (@inbounds out[I, J, K] *= factor; nothing)
+
+@inline function _ibm_face_body!(i, j, k, op!::F, out, src, mk, x, d, lo, hi) where {F}
+    @inbounds begin
+        ix = i - (d == 1); jx = j - (d == 2); kx = k - (d == 3)     # the lower cell
+        n = d == 1 ? i : d == 2 ? j : k
+        n - 1 >= lo && mk[ix, jx, kx] && op!(out, src, i, j, k, x)
+        n <= hi && mk[i, j, k] && op!(out, src, i, j, k, x)
+    end
+    return nothing
+end
+
+function _ibm_faces!(op!::F, sm::SolidMask, out::NTuple{3}, src::NTuple{3}, x) where {F}
+    ii, jj, kk = interior(sm.mesh)
+    ii, jj, kk = UnitRange{Int}(ii), UnitRange{Int}(jj), UnitRange{Int}(kk)
+    mk = sm.mask
+    b = backend(src[1])
+    launch!(b, _ibm_face_body!, (first(ii):last(ii)+1, jj, kk), op!, out[1], src[1], mk, x, 1,
+            first(ii), last(ii))
+    launch!(b, _ibm_face_body!, (ii, first(jj):last(jj)+1, kk), op!, out[2], src[2], mk, x, 2,
+            first(jj), last(jj))
+    launch!(b, _ibm_face_body!, (ii, jj, first(kk):last(kk)+1), op!, out[3], src[3], mk, x, 3,
+            first(kk), last(kk))
+    return nothing
 end
 
 """
@@ -132,23 +155,16 @@ Unlike [`add_ibm_penalty!`](@ref) — which is *explicit* and requires
 any positive `τ`. `τ = 0` treats the penalty as infinite and just zeros
 the face velocity (`u* ← 0`). Best combined with `step!(sim, dt;
 post_predictor! = (s, Δt) -> implicit_ibm_correction!(s, sm; dt = Δt))`.
+
+A face between two solid cells is scaled once per solid cell (the factor
+squared; it lies inside the solid). The faces are the points of three
+launches (KA-k, #307), one per component: the same bits at every thread
+count and as the former loop over the cells.
 """
 function implicit_ibm_correction!(sim, sm::SolidMask; τ::Real = 0.0, dt::Real = 0.0)
-    m  = sm.mesh
-    ii, jj, kk = interior(m)
-    ud = sim.u.data; vd = sim.v.data; wd = sim.w.data
-    mk = sm.mask
     factor = τ > 0 ? 1 / (1 + dt / τ) : 0.0
-    @inbounds for k in kk, j in jj, i in ii
-        if mk[i, j, k]
-            ud[i,   j, k] *= factor
-            ud[i+1, j, k] *= factor
-            vd[i, j,   k] *= factor
-            vd[i, j+1, k] *= factor
-            wd[i, j, k]   *= factor
-            wd[i, j, k+1] *= factor
-        end
-    end
+    q = (sim.u.data, sim.v.data, sim.w.data)
+    _ibm_faces!(_scale_op, sm, q, q, factor)
     return sim
 end
 
