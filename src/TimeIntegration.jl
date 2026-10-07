@@ -31,8 +31,8 @@ using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ,
                Location, interior, totalsize
 using ..Fields
-using ..Fields: Field, interior_view, location
-using ..Backends: Backends, plane_partials!, range_max, interior_max, interior_all_finite
+using ..Fields: Field, interior_view, location, interior_map!
+using ..Backends: Backends, plane_mean!, range_max, interior_max
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
@@ -57,7 +57,11 @@ using ..PressureSolvers: solve!
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, max_divergence,
                      _dzc, _dzf, _dz_min,     # vertical metrics, stretched-aware (#151)
-                     _project_velocity!       # the projection (steps 8–10 of step!)
+                     _project_velocity!,      # the projection (steps 8–10 of step!)
+                     axpy!, pressure_from_potential!, copy_storage!, storage_like,
+                     _Lin2                    # the field algebra kernels (KA-j, #306)
+using ..Operators.FiniteVolume: grid_metrics, _div_at   # the one divergence stencil
+using ..IO: allfinite                    # the one finiteness check (#346)
 using ..TimeSteppers: step!
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
@@ -73,13 +77,6 @@ export CFLConstraints, cfl_diagnostics, adaptive_dt, stress_form_cfl_viscosity,
 # =========================================================================
 # Small shared helpers
 # =========================================================================
-
-"In-place `y[interior] += a · x[interior]`."
-function _axpy_interior!(y::Field, a::Number, x::Field, m::AbstractMesh)
-    ii, jj, kk = interior(m)
-    @inbounds @views y.data[ii, jj, kk] .+= a .* x.data[ii, jj, kk]
-    return y
-end
 
 _tendency(sim::BoussinesqSimulation, name::Symbol) =
     name === :u ? sim.tu : name === :v ? sim.tv : name === :w ? sim.tw :
@@ -162,31 +159,46 @@ end
 #
 # `max` is exact and commutative, so the thread-invariant `range_max` gives
 # the bits of the old serial loop (NaN-propagating; KA-b, #296).
-function _max_advective_rate(ud, vd, wd, m::RegularGrid{T}) where {T}
-    idx = 1 / m.dx; idy = 1 / m.dy; idz = 1 / m.dz
-    r = range_max(Backends.backend(ud), _adv_rate_at, interior(m), ud, vd, wd, idx, idy, idz)
-    return max(zero(T), T(r))
-end
-
-# The same rate with the local cell thickness: on a vertically stretched
-# grid (#151) the vertical CFL number of a cell is |w| / Δz_c[k], so the
-# thin near-surface cells bind, not the mean spacing.
 function _max_advective_rate(ud, vd, wd, m::AbstractMesh{T}) where {T}
-    idx = 1 / m.dx; idy = 1 / m.dy
-    r = range_max(Backends.backend(ud), _adv_rate_dzc_at, interior(m), ud, vd, wd, idx, idy, m)
+    r = range_max(Backends.backend(ud), _adv_rate_at, interior(m), ud, vd, wd,
+                  1 / m.dx, 1 / m.dy, _rate_iz(m))
     return max(zero(T), T(r))
 end
 
-@inline function _adv_rate_at(i, j, k, ud, vd, wd, idx, idy, idz)
+# The vertical factor of the rate: 1/Δz on a RegularGrid; on a vertically
+# stretched grid (#151) the local 1/Δz_c[k], so the thin near-surface cells
+# bind, not the mean spacing.
+_rate_iz(m::RegularGrid) = 1 / m.dz
+_rate_iz(m::AbstractMesh) = m
+@inline _iz_at(iz::Real, k) = iz
+@inline _iz_at(m, k) = 1 / _dzc(m, k)
+
+@inline function _adv_rate_at(i, j, k, ud, vd, wd, idx, idy, iz)
     @inbounds begin
         au = max(abs(ud[i, j, k]), abs(ud[i+1, j, k]))
         av = max(abs(vd[i, j, k]), abs(vd[i, j+1, k]))
         aw = max(abs(wd[i, j, k]), abs(wd[i, j, k+1]))
     end
-    return au * idx + av * idy + aw * idz
+    return au * idx + av * idy + aw * _iz_at(iz, k)
 end
-@inline _adv_rate_dzc_at(i, j, k, ud, vd, wd, idx, idy, m) =
-    _adv_rate_at(i, j, k, ud, vd, wd, idx, idy, 1 / _dzc(m, k))
+
+# The fused CFL sweep (KA-j, #306): the advective rate and the maxima of the
+# four SGS coefficients in one pass (one `range_max` with a tuple body, each
+# component NaN-propagating): before, one sweep per maximum.
+@inline _cfl_at(i, j, k, ud, vd, wd, idx, idy, iz, νh, νv, κh, κv) =
+    @inbounds (_adv_rate_at(i, j, k, ud, vd, wd, idx, idy, iz),
+               νh[i, j, k], νv[i, j, k], κh[i, j, k], κv[i, j, k])
+
+# (rate, νh_max, νv_max, κh_max, κv_max) of the state; the SGS maxima are 0
+# when no eddy viscosity acts (`active = false`; then only u, v, w are read).
+function _cfl_maxima(sim::BoussinesqSimulation{T}, f, active::Bool) where {T}
+    m = sim.mesh
+    ud, vd, wd = sim.u.data, sim.v.data, sim.w.data
+    active || return (_max_advective_rate(ud, vd, wd, m), zero(T), zero(T), zero(T), zero(T))
+    r = range_max(Backends.backend(ud), _cfl_at, interior(m), ud, vd, wd, 1 / m.dx, 1 / m.dy,
+                  _rate_iz(m), f.νh.data, f.νv.data, f.κh.data, f.κv.data)
+    return (max(zero(T), T(r[1])), T(r[2]), T(r[3]), T(r[4]), T(r[5]))
+end
 
 # Brunt-Väisälä frequency from the horizontal-mean (resolved) θ profile:
 # the largest N² across the faces between the plane means, from the
@@ -195,15 +207,13 @@ end
 function _brunt_vaisala(sim::BoussinesqSimulation{T}) where {T}
     sim.has_buoyancy || return zero(T)
     m = sim.mesh
-    ii, jj, kk = I3 = interior(m)
-    n_h = length(ii) * length(jj)
-    # the plane sums in the canonical, thread-invariant order (KA-b, #296)
-    S = plane_partials!(Vector{T}(undef, length(kk)), Backends.backend(sim.θ.data), identity,
-                        I3, sim.θ.data)
+    kk = interior(m)[3]
+    # the plane means in the canonical, thread-invariant order (KA-b, #296)
+    θm = plane_mean!(Vector{T}(undef, length(kk)), sim.θ)
     N²max = zero(T)
     prev  = zero(T)
     @inbounds for (kc, k) in enumerate(kk)
-        mean_k = S[kc] / n_h
+        mean_k = θm[kc]
         if kc > 1
             # the two plane means sit Δz_f[k] apart (= m.dz on a RegularGrid)
             N²max = max(N²max, buoyancy_frequency_squared(prev, mean_k, _dzf(m, k),
@@ -275,25 +285,27 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
     fill_halos!(sim.v, sim.bcs)
     fill_halos!(sim.w, sim.bcs)
 
-    # --- advective --------------------------------------------------------
-    rate = _max_advective_rate(sim.u.data, sim.v.data, sim.w.data, m)
-    # A NaN velocity must poison the limit rather than silently reporting
-    # "no constraint"; `adaptive_dt` then collapses to dt_min.
-    dt_adv = isnan(rate) ? T(NaN) : rate > 0 ? c.C_advective / rate : INF
-
-    # --- diffusive (molecular + SGS) --------------------------------------
+    # --- the SGS coefficients the step will use ---------------------------
     closure = _active_sgs(sim, sgs, nothing)
     active  = sgs_active === nothing ? closure !== nothing : sgs_active
     if update_νt && closure !== nothing
         fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
         sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
-        compute_sgs!(closure, sim)
+        compute_sgs!(closure, sim)                         # pure: u, v, w unchanged
     end
     f = closure === nothing ? SGSFields(sim.νt, sim.κt) : sgs_fields(closure, sim)
-    νh_max  = active ? _max_interior(f.νh) : zero(T)
-    νv_max  = active ? _max_interior(f.νv) : zero(T)
+
+    # --- one sweep: the advective rate and the SGS maxima (KA-j, #306) ----
+    rate, νh_max, νv_max, κh_max, κv_max = _cfl_maxima(sim, f, active)
+
+    # --- advective --------------------------------------------------------
+    # A NaN velocity must poison the limit rather than silently reporting
+    # "no constraint"; `adaptive_dt` then collapses to dt_min.
+    dt_adv = isnan(rate) ? T(NaN) : rate > 0 ? c.C_advective / rate : INF
+
+    # --- diffusive (molecular + SGS) --------------------------------------
     νt_max  = max(νh_max, νv_max)
-    κt_max  = active ? max(_max_interior(f.κh), _max_interior(f.κv)) : zero(T)
+    κt_max  = max(κh_max, κv_max)
     # the thinnest cell binds the explicit diffusive limit (#151)
     Δ²harm  = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / _dz_min(m)^2)
     # the SGS viscosity of the momentum limit: νt_max for the Laplacian form,
@@ -368,8 +380,6 @@ function stress_form_cfl_viscosity(νh_max::Real, νv_max::Real, m)
     s = ix2 + iy2 + iz2
     return 2 * max(νh_max * (ix2 + iy2) + νv_max * iz2, νv_max * s) / s
 end
-
-_max_interior(f::Field) = interior_max(f)      # exact: the bits of maximum(interior_view(f))
 
 """
     adaptive_dt(sim, constraints; dt_prev = nothing, diagnostics = nothing,
@@ -466,67 +476,89 @@ Base.show(io::IO, s::SubsteppingSchedule) =
 """
     StateSnapshot(sim)
 
-Preallocated copy of the prognostic state (`u, v, w, p, θ, qv` plus the
-clock) used by [`step_adaptive!`](@ref) to roll a failed step back. The
-buffers are allocated once; [`save_state!`](@ref) and
-[`restore_state!`](@ref) only copy. Halos are copied too, so a restore is
+Preallocated copy of the state (`u, v, w, p, θ, qv`, the SGS coefficients
+`νt, κt`, and the clock) used by [`step_adaptive!`](@ref) to roll a failed
+step back. The buffers are allocated once, on the simulation's backend;
+[`save_state!`](@ref) and [`restore_state!`](@ref) only copy, as pointwise
+kernels over the whole storage. Halos are copied too, so a restore is
 bit-identical to the pre-step state.
+
+`νt` and `κt` are part of it since KA-j (#306): a rejected try leaves the
+coefficients of its blown-up state in `sim.νt` / `sim.κt`, which the
+diagnostics and a checkpoint read; the rollback now restores them with the
+prognostic fields (the next try recomputes them before use either way).
 """
-mutable struct StateSnapshot{T}
-    u::Array{T,3}
-    v::Array{T,3}
-    w::Array{T,3}
-    p::Array{T,3}
-    θ::Array{T,3}
-    qv::Array{T,3}
+mutable struct StateSnapshot{T, A<:AbstractArray{T,3}}
+    u::A
+    v::A
+    w::A
+    p::A
+    θ::A
+    qv::A
+    νt::A
+    κt::A
     t::T
     valid::Bool
 end
 
-StateSnapshot(sim::BoussinesqSimulation{T}) where {T} =
-    StateSnapshot{T}(similar(sim.u.data), similar(sim.v.data), similar(sim.w.data),
-                     similar(sim.p.data), similar(sim.θ.data), similar(sim.qv.data),
-                     sim.t, false)
+function StateSnapshot(sim::BoussinesqSimulation{T}) where {T}
+    al(f) = storage_like(f.data)
+    return StateSnapshot(al(sim.u), al(sim.v), al(sim.w), al(sim.p), al(sim.θ), al(sim.qv),
+                         al(sim.νt), al(sim.κt), sim.t, false)
+end
 
-"Copy `sim`'s prognostic state into `snap` (no allocation)."
+# The (snapshot buffer, simulation field) pairs a snapshot holds. A
+# sound-proof core carries no qv (its buffer is empty, Anelastic).
+_snapshot_pairs(snap::StateSnapshot, sim) =
+    ((snap.u, sim.u.data), (snap.v, sim.v.data), (snap.w, sim.w.data), (snap.p, sim.p.data),
+     (snap.θ, sim.θ.data), (snap.νt, sim.νt.data), (snap.κt, sim.κt.data))
+
+"Copy `sim`'s state into `snap` (pointwise kernels, no allocation)."
 function save_state!(snap::StateSnapshot, sim::BoussinesqSimulation)
-    copyto!(snap.u,  sim.u.data)
-    copyto!(snap.v,  sim.v.data)
-    copyto!(snap.w,  sim.w.data)
-    copyto!(snap.p,  sim.p.data)
-    copyto!(snap.θ,  sim.θ.data)
-    copyto!(snap.qv, sim.qv.data)
+    for (a, f) in _snapshot_pairs(snap, sim)
+        copy_storage!(a, f)
+    end
+    copy_storage!(snap.qv, sim.qv.data)
     snap.t     = sim.t
     snap.valid = true
     return snap
 end
 
-"Restore `sim`'s prognostic state (and clock) from `snap`."
+"""
+    restore_state!(sim, snap) -> sim
+
+Restore `sim`'s state (fields with their halos, `νt`, `κt` and the clock)
+from `snap`. The copies are kernels; the backend is synchronized before
+returning, so the caller (a retry) reads the restored state.
+"""
 function restore_state!(sim::BoussinesqSimulation, snap::StateSnapshot)
     snap.valid || throw(ArgumentError("StateSnapshot has never been saved"))
-    copyto!(sim.u.data,  snap.u)
-    copyto!(sim.v.data,  snap.v)
-    copyto!(sim.w.data,  snap.w)
-    copyto!(sim.p.data,  snap.p)
-    copyto!(sim.θ.data,  snap.θ)
-    copyto!(sim.qv.data, snap.qv)
+    for (a, f) in _snapshot_pairs(snap, sim)
+        copy_storage!(f, a)
+    end
+    copy_storage!(sim.qv.data, snap.qv)
+    Backends.synchronize(Backends.backend(sim.u.data))
     sim.t = snap.t
     return sim
 end
 
-# One snapshot per simulation, created on demand. Weak keys so a
-# discarded simulation does not leak its snapshot.
-const _SNAPSHOTS = WeakKeyDict{Any,Any}()
-
 """
     state_snapshot(sim) -> StateSnapshot
 
-The snapshot buffer associated with `sim`, allocated on first use and
-cached afterwards (weakly, so it is freed with `sim`). This is what makes
+The snapshot buffer of `sim`: allocated on first use and kept in the
+simulation's [`StepWorkspaces`](@ref Aeolus.Simulations.StepWorkspaces)
+(KA-j, #306; before, a process-global weak cache). This is what makes
 `step_adaptive!`'s retry path allocation-free.
 """
-state_snapshot(sim::BoussinesqSimulation) =
-    get!(() -> StateSnapshot(sim), _SNAPSHOTS, sim)::StateSnapshot
+state_snapshot(sim::BoussinesqSimulation) = _workspace_snapshot(sim)
+
+# the snapshot slot of a core's StepWorkspaces (the sound-proof cores of
+# Anelastic use it too)
+function _workspace_snapshot(sim)
+    w = sim.workspaces
+    w.snapshot === nothing && (w.snapshot = StateSnapshot(sim))
+    return w.snapshot::StateSnapshot
+end
 
 """
     NumericalFailure(msg) <: Exception
@@ -575,20 +607,79 @@ catch
     false
 end
 
+# Every prognostic interior value finite: the one finiteness check of the
+# blowup guard, `IO.allfinite` (branch-free; #346).
 function _all_finite(sim::BoussinesqSimulation)
-    interior_all_finite(sim.u) || return false
-    interior_all_finite(sim.v) || return false
-    interior_all_finite(sim.w) || return false
-    interior_all_finite(sim.θ) || return false
-    interior_all_finite(sim.p) || return false
-    sim.has_moisture && !interior_all_finite(sim.qv) && return false
+    allfinite(interior_view(sim.u)) || return false
+    allfinite(interior_view(sim.v)) || return false
+    allfinite(interior_view(sim.w)) || return false
+    allfinite(interior_view(sim.θ)) || return false
+    allfinite(interior_view(sim.p)) || return false
+    sim.has_moisture && !allfinite(interior_view(sim.qv)) && return false
     return true
 end
 
-# max |u|, |v|, |w| over the interior: exact and NaN-propagating, so the bits
-# of `maximum(abs, interior_view(·))` at any thread count (KA-b, #296)
-_max_speed(sim::BoussinesqSimulation) = max(_max_abs(sim.u), _max_abs(sim.v), _max_abs(sim.w))
+# max |f| over the interior: exact and NaN-propagating, the bits of
+# `maximum(abs, interior_view(f))` at any thread count (KA-b, #296); the
+# acceptance test of a nested run (Nesting) uses it
 _max_abs(f::Field) = range_max(Backends.backend(f.data), Simulations._abs_at, interior(f.mesh), f.data)
+
+# ---- the fused step guard (KA-j, #306) ------------------------------------
+#
+# What `step_adaptive!` checks after a step, in one sweep over the interior
+# (before: one finiteness sweep per field, the divergence kernel and a
+# maximum over it, and one maximum per velocity component). Per point:
+#   * `x * 0` summed over every prognostic value: 0 if all are finite, NaN
+#     otherwise (`Inf * 0` is NaN);
+#   * |∇·u| with the divergence stencil of `divergence` (`_div_at`);
+#   * max(|u|, |v|, |w|).
+# The NaN-propagating component-wise maximum of `range_max` combines them:
+# `max` is exact, so |∇·u| and the speed are the bits of `max_divergence`
+# and the per-component maxima they replace, and any non-finite value
+# anywhere turns the first component into NaN. The velocity halos are
+# filled first, as `max_divergence` did.
+@inline function _guard_at(i, j, k, ud, vd, wd, θd, pd, qd, gm)
+    @inbounds begin
+        u = ud[i, j, k]; v = vd[i, j, k]; w = wd[i, j, k]
+        fin = u * 0 + v * 0 + w * 0 + θd[i, j, k] * 0 + pd[i, j, k] * 0 + _nf(qd, i, j, k)
+        return (fin, abs(_div_at(i, j, k, ud, vd, wd, gm)), max(abs(u), abs(v), abs(w)))
+    end
+end
+@inline _nf(::Nothing, i, j, k) = false
+@inline _nf(q::AbstractArray, i, j, k) = @inbounds q[i, j, k] * 0
+
+"""
+    step_guard(sim) -> (; finite, divergence, speed)
+
+The post-step checks of [`step_adaptive!`](@ref) in one fused,
+NaN-propagating sweep over the interior (KA-j, #306): `finite` (every
+prognostic value `u, v, w, θ, p` — and `qv` when moist — is finite),
+`divergence = max|∇·u|` and `speed = max(|u|, |v|, |w|)`. The velocity
+halos are filled first. `divergence` and `speed` are the bits of
+[`max_divergence`](@ref) and of the per-component maxima (the maximum is
+exact); any NaN or Inf in the velocities also makes them NaN or Inf.
+Thread-invariant.
+"""
+function step_guard(sim::BoussinesqSimulation{T}) where {T}
+    fill_halos!(sim.u, sim.bcs)
+    fill_halos!(sim.v, sim.bcs)
+    fill_halos!(sim.w, sim.bcs)
+    m = sim.mesh
+    qd = sim.has_moisture ? sim.qv.data : nothing
+    fin, d, s = range_max(Backends.backend(sim.u.data), _guard_at, interior(m), sim.u.data,
+                          sim.v.data, sim.w.data, sim.θ.data, sim.p.data, qd, grid_metrics(m))
+    return (finite = fin == 0, divergence = d, speed = s)
+end
+
+# The reason a step is rejected, in the order of the separate checks it
+# replaces: non-finite state, then divergence, then the speed cap.
+function _guard_reason(sim, div_tol, u_cap)
+    g = step_guard(sim)
+    g.finite || return :nonfinite
+    (!isfinite(g.divergence) || g.divergence > div_tol) && return :divergence
+    g.speed > u_cap && return :velocity
+    return :ok
+end
 
 # =========================================================================
 # Phase 23 — the adaptive driver
@@ -722,16 +813,9 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
                     retry = n_retries, exception = err)
         end
         if !failed
-            if !_all_finite(sim)
-                failed = true; reason = :nonfinite
-            else
-                d = max_divergence(sim)
-                if !isfinite(d) || d > div_tol
-                    failed = true; reason = :divergence
-                elseif _max_speed(sim) > u_cap
-                    failed = true; reason = :velocity
-                end
-            end
+            # finiteness, divergence and speed cap in one fused sweep (KA-j, #306)
+            reason = _guard_reason(sim, div_tol, u_cap)
+            failed = reason !== :ok
         end
 
         failed || break
@@ -1124,9 +1208,7 @@ function solve_implicit_diffusion!(field::Field{L,T}, rhs::Field{L,T}, ν_eff,
     τ = T(tol)
 
     if ν isa T && (Δt == 0 || ν == 0)
-        if field !== rhs
-            @inbounds @views field.data[ii, jj, kk] .= rhs.data[ii, jj, kk]
-        end
+        field !== rhs && interior_map!(identity, field, rhs)
         return (iterations = 0, residual = zero(T), relative_residual = zero(T),
                 converged = true, tol = τ)
     end
@@ -1356,13 +1438,12 @@ function IMEXWorkspace(sim::BoussinesqSimulation{T}) where {T}
         nothing, nothing, nothing, nothing, 0, zero(T))
 end
 
-const _IMEX_WORKSPACES = WeakKeyDict{Any,Any}()
-
 """
     imex_workspace(sim) -> IMEXWorkspace
 
-The [`IMEXWorkspace`](@ref) associated with `sim`, allocated on first use
-and cached weakly so it is freed with `sim`. Pass it explicitly to
+The [`IMEXWorkspace`](@ref) of `sim`: allocated on first use and kept in
+the simulation's [`StepWorkspaces`](@ref Aeolus.Simulations.StepWorkspaces)
+(KA-j, #306; before, a process-global weak cache). Pass it explicitly to
 `step_imex!` if you want to control the lifetime (or read the solver
 statistics it records).
 """
@@ -1373,7 +1454,9 @@ function imex_workspace(sim::BoussinesqSimulation)
         throw(ArgumentError("step_imex! (implicit diffusion) is implemented on a RegularGrid " *
                             "only, not on a $(nameof(typeof(sim.mesh))); use step!, " *
                             "step_rk3! or step_adaptive!"))
-    return get!(() -> IMEXWorkspace(sim), _IMEX_WORKSPACES, sim)::IMEXWorkspace
+    w = sim.workspaces
+    w.imex === nothing && (w.imex = IMEXWorkspace(sim))
+    return w.imex::IMEXWorkspace
 end
 
 function _k2_set!(ws::IMEXWorkspace{T,S}) where {T,S}
@@ -1477,24 +1560,24 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     ws.ν_mom  === nothing && (ws.ν_mom  = similar(sim.νt.data))
     ws.ν_scal === nothing && (ws.ν_scal = similar(sim.νt.data))
     νm = ws.ν_mom::Array{T,3}; νs = ws.ν_scal::Array{T,3}
-    @inbounds νm .= sim.ν .+ f.νh.data
-    @inbounds νs .= sim.ν .+ f.κh.data
+    _plus_ν!(νm, sim.ν, f.νh.data)
+    _plus_ν!(νs, sim.ν, f.κh.data)
     m = sim.mesh
     Ks = sgs_scalar_tensor(closure, f, sim)
     cs = if Ks !== nothing
         ws.ν_scal_v === nothing && (ws.ν_scal_v = similar(sim.νt.data))
         ws.ν_scal_y === nothing && (ws.ν_scal_y = similar(sim.νt.data))
         νsy = ws.ν_scal_y::Array{T,3}; νsz = ws.ν_scal_v::Array{T,3}
-        @inbounds νs  .= sim.ν .+ Ks.K11.data
-        @inbounds νsy .= sim.ν .+ Ks.K22.data
-        @inbounds νsz .= sim.ν .+ Ks.K33.data
+        _plus_ν!(νs, sim.ν, Ks.K11.data)
+        _plus_ν!(νsy, sim.ν, Ks.K22.data)
+        _plus_ν!(νsz, sim.ν, Ks.K33.data)
         _DirCoef3(_coef(νs, m), _coef(νsy, m), _coef(νsz, m))
     elseif f.κv === f.κh
         _coef(νs, m)
     else
         ws.ν_scal_v === nothing && (ws.ν_scal_v = similar(sim.νt.data))
         νsv = ws.ν_scal_v::Array{T,3}
-        @inbounds νsv .= sim.ν .+ f.κv.data
+        _plus_ν!(νsv, sim.ν, f.κv.data)
         _DirCoef(_coef(νs, m), _coef(νsv, m))
     end
     if sim.has_moisture
@@ -1506,7 +1589,7 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
         if κq !== f.κh
             ws.ν_qv === nothing && (ws.ν_qv = similar(sim.νt.data))
             νq = ws.ν_qv::Array{T,3}
-            @inbounds νq .= sim.ν .+ κq.data
+            _plus_ν!(νq, sim.ν, κq.data)
             cs = (θ = cs, qv = _coef(νq, m))
         end
     end
@@ -1516,7 +1599,7 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     else
         ws.ν_mom_v === nothing && (ws.ν_mom_v = similar(sim.νt.data))
         a = ws.ν_mom_v::Array{T,3}
-        @inbounds a .= sim.ν .+ f.νv.data
+        _plus_ν!(a, sim.ν, f.νv.data)
         a
     end
     h = _coef(νm, m); v = _coef(νmv, m)
@@ -1524,6 +1607,15 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
           w = _StressCoef(FaceZ(), h, v))
     return (cm, cs, (νm, νmv), Ks)
 end
+
+# out = ν + K over the whole storage (a pointwise kernel; the bits of the
+# broadcast `out .= ν .+ K`)
+_plus_ν!(out::AbstractArray{T,3}, ν, K::AbstractArray{T,3}) where {T} =
+    Backends.range_map!(Backends.backend(out), _PlusNu(ν), out, Simulations._storage(out), K)
+struct _PlusNu{T}
+    ν::T
+end
+@inline (f::_PlusNu)(K) = f.ν + K
 
 # The implicit coefficient of the field `name`: momentum `νm` (one coefficient,
 # or `(u, v, w)` for the stress form); scalars `νs`, which is one coefficient
@@ -1548,7 +1640,7 @@ function _add_diffusion_tendencies!(sim::BoussinesqSimulation{T}, ws::IMEXWorksp
         buf = _diffusion_buffer(sim, ws, name)
         ν   = _coef_for(νm, νs, name)
         _diffusion!(buf, f, ν, sim.mesh)
-        _axpy_interior!(_tendency(sim, name), one(T), buf, sim.mesh)
+        axpy!(_tendency(sim, name), one(T), buf)
     end
     return sim
 end
@@ -1569,8 +1661,7 @@ end
 # divergence-free.
 function _project!(sim::BoussinesqSimulation{T}, Δt::T) where {T}
     _project_velocity!(sim)
-    ii, jj, kk = interior(sim.mesh)
-    @inbounds @views sim.p.data[ii, jj, kk] .= sim.φ.data[ii, jj, kk] ./ Δt
+    pressure_from_potential!(sim.p, sim.φ, Δt)
     return sim
 end
 
@@ -1578,45 +1669,38 @@ end
 
 function _copy_fields!(dst::NamedTuple, sim::BoussinesqSimulation, names)
     for name in names
-        copyto!(getfield(dst, name).data, getfield(sim, name).data)
+        copy_storage!(getfield(dst, name).data, getfield(sim, name).data)
     end
     return dst
 end
 
 function _copy_tendencies!(dst::NamedTuple, sim::BoussinesqSimulation, names)
     for name in names
-        copyto!(getfield(dst, name).data, _tendency(sim, name).data)
+        copy_storage!(getfield(dst, name).data, _tendency(sim, name).data)
     end
     return dst
 end
 
+# The stage combinations over the interior, as `interior_map!` kernels
+# (KA-j, #306); each evaluates the expression of the broadcast it replaced,
+# left to right: ((a·A + b·B) + c·C) + d·D.
+struct _Lin3{T}
+    a::T; b::T; c::T
+end
+@inline (f::_Lin3)(A, B, C) = f.a * A + f.b * B + f.c * C
+struct _Lin4{T}
+    a::T; b::T; c::T; d::T
+end
+@inline (f::_Lin4)(A, B, C, D) = f.a * A + f.b * B + f.c * C + f.d * D
+
 # out = a·A + b·B (interior)
-function _combine2!(out::Field, a, A::Field, b, B::Field, m::AbstractMesh)
-    ii, jj, kk = interior(m)
-    @inbounds @views out.data[ii, jj, kk] .= a .* A.data[ii, jj, kk] .+
-                                             b .* B.data[ii, jj, kk]
-    return out
-end
-
+_combine2!(out::Field, a, A::Field, b, B::Field) = interior_map!(_Lin2(a, b), out, A, B)
 # out = a·A + b·B + c·C (interior)
-function _combine3!(out::Field, a, A::Field, b, B::Field, c, C::Field, m::AbstractMesh)
-    ii, jj, kk = interior(m)
-    @inbounds @views out.data[ii, jj, kk] .= a .* A.data[ii, jj, kk] .+
-                                             b .* B.data[ii, jj, kk] .+
-                                             c .* C.data[ii, jj, kk]
-    return out
-end
-
+_combine3!(out::Field, a, A::Field, b, B::Field, c, C::Field) =
+    interior_map!(_Lin3(promote(a, b, c)...), out, A, B, C)
 # out = a·A + b·B + c·C + d·D (interior)
-function _combine4!(out::Field, a, A::Field, b, B::Field, c, C::Field,
-                    d, D::Field, m::AbstractMesh)
-    ii, jj, kk = interior(m)
-    @inbounds @views out.data[ii, jj, kk] .= a .* A.data[ii, jj, kk] .+
-                                             b .* B.data[ii, jj, kk] .+
-                                             c .* C.data[ii, jj, kk] .+
-                                             d .* D.data[ii, jj, kk]
-    return out
-end
+_combine4!(out::Field, a, A::Field, b, B::Field, c, C::Field, d, D::Field) =
+    interior_map!(_Lin4(promote(a, b, c, d)...), out, A, B, C, D)
 
 # Solve (I - dtγ ∇·(ν∇)) f = f in place, recording solver statistics.
 # `increment = true` (Rosenbrock stages k₁, k₂) solves for a change of the
@@ -1746,7 +1830,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     for name in names
         f = getfield(sim, name)
         _combine2!(f, one(T), getfield(ws.state0, name),
-                      γ * Δt, getfield(ws.aux, name), m)
+                      γ * Δt, getfield(ws.aux, name))
         _solve_field!(sim, ws, name, f, νm, νs, γ * Δt, tol, maxit)
     end
     restore_open_boundaries!(sim, bsnap)
@@ -1775,7 +1859,7 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
         _combine4!(f, one(T), getfield(ws.state0, name),
                       δ * Δt, getfield(ws.aux, name),           # E(uⁿ)
                       (one(T) - δ) * Δt, _tendency(sim, name),  # E(U₁)
-                      (one(T) - γ) * Δt, _diffusion_buffer(sim, ws, name), m)
+                      (one(T) - γ) * Δt, _diffusion_buffer(sim, ws, name))
         _solve_field!(sim, ws, name, f, νm, νs, γ * Δt, tol, maxit)
     end
     restore_open_boundaries!(sim, bsnap)
@@ -1822,14 +1906,14 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     _add_diffusion_tendencies!(sim, ws, νm, νs, names)
     for name in names
         k1 = getfield(ws.aux, name)
-        _combine2!(k1, zero(T), k1, Δt, _tendency(sim, name), m)
+        _combine2!(k1, zero(T), k1, Δt, _tendency(sim, name))
         _solve_field!(sim, ws, name, k1, νm, νs, γ * Δt, tol, maxit; increment = true)
     end
 
     # ---- stage state uⁿ + a₂₁k₁, projected ------------------------------
     for name in names
         _combine2!(getfield(sim, name), one(T), getfield(ws.state0, name),
-                   a21, getfield(ws.aux, name), m)
+                   a21, getfield(ws.aux, name))
     end
     post_predictor! === nothing || post_predictor!(sim, a21 * Δt)
     update_open_boundaries!(sim, t0 + a21 * Δt, a21 * Δt)
@@ -1843,14 +1927,14 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     _add_diffusion_tendencies!(sim, ws, νm, νs, names)
     for name in names
         k2 = getfield(k2set, name)
-        _combine2!(k2, Δt, _tendency(sim, name), c21, getfield(ws.aux, name), m)
+        _combine2!(k2, Δt, _tendency(sim, name), c21, getfield(ws.aux, name))
         _solve_field!(sim, ws, name, k2, νm, νs, γ * Δt, tol, maxit; increment = true)
     end
 
     # ---- update ---------------------------------------------------------
     for name in names
         _combine3!(getfield(sim, name), one(T), getfield(ws.state0, name),
-                   b1, getfield(ws.aux, name), b2, getfield(k2set, name), m)
+                   b1, getfield(ws.aux, name), b2, getfield(k2set, name))
     end
     post_predictor! === nothing || post_predictor!(sim, Δt)
     rewind_open_boundaries!(sim, bc0)      # stage 2 restarts from uⁿ
