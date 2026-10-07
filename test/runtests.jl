@@ -667,6 +667,7 @@ using Aeolus.Fields: set!, interior_view
     include("ka_halos.jl")   # KA-f (#297): halo fills / nesting transfer operators on launch!
     include("ka_pcg.jl")     # KA-g (#300): the one pcg! driver of the four CG solvers
     include("ka_multigrid.jl")   # KA-i (#303): multigrid kernels on launch!, canonical means
+    include("ka_fv.jl")      # KA-d (#299): finite-volume kernels + grid metrics on launch!
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
     include("pressure_fft_threads.jl")  # KA-h (#298): spectral solvers as kernels, FFTW thread-invariant
 

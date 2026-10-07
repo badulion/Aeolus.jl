@@ -123,21 +123,20 @@ end
         fy = Field(FaceY(), sg)
         cc = Field(CellCenter(), sg)
 
-        # The method that `Operators.∂z(out, f)` resolves to must be the one
-        # defined in StretchedGrids, not the RegularGrid fallback.
+        # Before KA-d (#299) the StretchedGrid had its own copies of these
+        # kernels and this test asked `which` method ran. Since KA-d one
+        # kernel serves both grids and reads the grid's metrics: what must hold
+        # is that a StretchedGrid hands the kernels its per-level vertical
+        # metrics, not the uniform ones of the RegularGrid.
+        m = FV.grid_metrics(sg)
+        @test m.z isa FV.LevelZ
+        @test m.z === sg.zm
+        k = sg.Hz + 3
+        @test FV._idz(m, k) == 1 / sg.dzc[k] && FV._idzf(m, k) == 1 / sg.dzf[k]
+        @test FV._idz(m, k) != FV._idz(m, k + 1)          # really per level
         for (out, inp) in ((fz, c), (cc, fz), (cc, c))
-            m = which(FV._∂z!, Tuple{typeof(out), typeof(inp), typeof(sg)})
-            @test m.module === Aeolus.StretchedGrids
+            @test hasmethod(FV._∂z!, Tuple{typeof(out), typeof(inp), typeof(sg)})
         end
-        @test which(FV._laplacian!, Tuple{typeof(cc), typeof(c), typeof(sg)}).module ===
-              Aeolus.StretchedGrids
-        @test which(FV._divergence!, Tuple{typeof(cc), typeof(fx), typeof(fy),
-                                           typeof(fz), typeof(sg)}).module ===
-              Aeolus.StretchedGrids
-        @test which(FV._interp_to_face!, Tuple{typeof(fz), typeof(c), typeof(sg)}).module ===
-              Aeolus.StretchedGrids
-        @test which(FV._interp_to_center!, Tuple{typeof(cc), typeof(fz), typeof(sg)}).module ===
-              Aeolus.StretchedGrids
 
         # ... and behaviourally: a uniform-dz stencil would give a different
         # answer on this stretched grid, so the metric really is being used.
