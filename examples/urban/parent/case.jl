@@ -141,8 +141,8 @@ function sounding_zi_max(cfg::CaseConfig)
     MT = Aeolus.MoistThermodynamics
     P = S.profiles
     zi = 0.0
-    for l in S.sounding.launches
-        θv = [MT.virtual_temperature(forcing_value(P.θ, z, l.t), MT.PhasePartition(forcing_value(P.qv, z, l.t)))
+    for t in S.times                                     # the launches
+        θv = [MT.virtual_temperature(forcing_value(P.θ, z, t), MT.PhasePartition(forcing_value(P.qv, z, t)))
               for z in P.z]
         zi = max(zi, boundary_layer_height(P.z, θv; method = :parcel))
     end

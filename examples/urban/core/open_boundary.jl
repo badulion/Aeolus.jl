@@ -14,7 +14,9 @@
 #              normal velocity, the tangential velocity and θ of every
 #              open face come from `ProfileBoundaryData` — the geostrophic
 #              wind (U_g, V_g) of the `:geostrophic` coupling's options and
-#              the initial θ profile `initial_θ(cfg)` — with the uniform
+#              the initial θ profile `initial_θ(cfg)`, or the same values
+#              read as the steady planes of the sounding driver
+#              `cfg.dynamic` when it has them (CFG-g, #362) — with the uniform
 #              global mass-flux correction, and the outflow condition
 #              `cfg.outflow` (`:dirichlet`, `:convective` or `:orlanski`,
 #              N-open-c #260). The core's Rayleigh sponge relaxes u, v, w
@@ -94,7 +96,28 @@ function case_boundary_conditions(cfg::CaseConfig, mesh)
     end
     data = case_boundary_data(cfg)
     b = open_boundary_conditions(mesh, data; outflow = cfg.outflow, halo = 1)
+    _open_planes_from_driver!(b, cfg, mesh)
     return (bcs = b, θ_bcs = b, sponge_target = sponge_target(data, mesh))
+end
+
+# The open case's faces from the steady planes of its sounding driver
+# (CFG-g, #362: `aeolus preprocess dynamic --from-sounding` of an open
+# config writes them), when the driver has planes. The sponge and θ
+# relaxation keep the profile data's targets.
+function _open_planes_from_driver!(b, cfg::CaseConfig, mesh)
+    path = initial_driver(cfg)
+    path === nothing && return b
+    ox, oy = anchor_xy(cfg, mesh)
+    d = read_dynamic_driver(path; mesh = mesh, origin_lat = cfg.lat0, origin_lon = cfg.lon0,
+                            origin_x = ox, origin_y = oy)
+    f = d.boundary
+    f === nothing && return b
+    length(f.time) == 1 ||
+        error("the dynamic driver $path has $(length(f.time)) boundary records; an open case without the " *
+              "nest takes steady planes (one record): time-dependent planes feed the nest (parent_driver = \"offline\")")
+    check_planes(f, only(open_boundary_states(b)).planes)
+    set_boundary_data!(b, f.data)
+    return b
 end
 
 """
