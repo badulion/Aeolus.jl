@@ -947,6 +947,18 @@ solution, the cycle count and the residual history of MG and MG-CG at
 64×64×32 and 128×128×64. It covers three closures, the W-cycle, FMG,
 stretched z and cut-cell coefficients around a solid block: 58 hashes,
 identical at 1, 4 and 24 threads. The whole harness is quoted in the PR.
+
+**Re-checked after the master merge** (KA-d's `_row!` / `_nest!` launch
+change, load 4-8). Every solution hash and cycle count is unchanged. ms
+per solve, old 1 t / new 1 t / 4 t / 12 t / 24 t: MG 128²×64 581.4 /
+276.4 / 173.6 / 150.4 / 179.9 (new / old 0.48; 3.3×, 3.9×, 3.2× against
+the old loops). MG-CG 128²×64 390.3 / 210.2 / 96.6 / 127.7 / 155.9
+(0.54; 4.0×, 3.1×, 2.5×). MG 64×64×32 66.2 / 28.7 / 25.8 / 25.6 / 29.7
+(0.43). MG-CG stretched 64×64×32 215.3 / 110.6 / 83.4 / 105.7 / 111.2
+(0.51). The finest level of a V-cycle at 128²×64 takes 10.0 ms at 1 t
+and 5.6 / 5.2 / 7.1 ms at 4 / 12 / 24 t. The threaded times vary by
+±20 % between runs with other agents on the machine; the 1-thread gate
+(≤ 1.10×) holds at 0.43-0.54×.
 ## KA-d: grid metrics and the finite-volume kernels (#299)
 
 **One kernel per operator for both grids.** Every kernel of
