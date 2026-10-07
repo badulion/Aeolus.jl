@@ -54,14 +54,15 @@ module PrognosticSGS
 
 using ..Grids: RegularGrid, CellCenter, interior
 using ..StretchedGrids: StretchedGrid
-using ..Fields: Field, interior_view, mesh
+using ..Fields: Field, interior_view, mesh, interior_map!
+using ..Backends: Backends, launch!, plane_reduce!, plane_map!, range_map!, ordered_sum
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs,
                             passive_scalar_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
                    buoyancy_frequency_squared!, SymmetricTensorField, cloud_humidity,
                    filled_condensate!
 import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_state!, sgs_tke!
-using ..AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
+using ..AdvectionSchemes: advect_positive!, FluxLimiterWorkspace, _reconstruction
 using ..WallModels: ImmersedWalls, immersed_wall_drag!
 
 export TKEClosure, tke_length_scale, tke_dissipation_coefficient, tke_surface_value,
@@ -262,7 +263,7 @@ Keywords:
   resolved shear across the wall instead of the stencil's: see
   [`attach_immersed_walls!`](@ref), which also attaches them later.
 """
-struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS} <: AbstractSGSClosure
+struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS, RC} <: AbstractSGSClosure
     e::F
     c_k::T; c_ε0::T; c_ε1::T; c_l::T; κ::T; surface_factor::T
     Δ::T                  # the filter width (of the lowest level on a StretchedGrid)
@@ -279,6 +280,7 @@ struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS} <: AbstractSGSClosure
     transport::Bool
     dissipation::Symbol
     advection::Symbol
+    recon::RC             # the reconstruction of `advection`, built once (nothing without transport)
     # scratch (not memory)
     ν::F; κt::F; N2::F; D::F; K2::F; tend::F
     Pw::F                 # facade (wall-model) shear production, m² s⁻³ (#232)
@@ -340,7 +342,7 @@ function TKEClosure(g::Union{RegularGrid{T},StretchedGrid{T}}; e = nothing, e0::
     c = TKEClosure(ef, T(c_k), T(c_ε0), T(c_ε1), T(c_l), T(κ), T(surface_factor), Δ, Δk, vrel,
                       θ₀ === nothing ? T(NaN) : T(θ₀), g_accel === nothing ? T(NaN) : T(g_accel),
                       qv, cloud_humidity(qc, p, g), lw, fl, mk, surface, transport, dissipation, adv,
-                      mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), Ref{Any}(nothing), T[], ws,
+                      transport ? _reconstruction(adv) : nothing, mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), Ref{Any}(nothing), T[], ws,
                       similar(ef.data), zeros(T, _NSTATS), zeros(T, _NSTATS))
     walls === nothing || attach_immersed_walls!(c, walls)
     return c
@@ -402,25 +404,33 @@ end
 @inline _first(a, i, j, k) = @inbounds a[i, j, k]
 
 # ν_t, κ_t of the closure's current e into ν, κ (interior); N² must be current.
+#
+# KA-l (#304): the pointwise parts of the closure (coefficients, production
+# factors, the update of e, the initialisation) are point bodies run by
+# `launch!` (the update by `plane_map!`, which also sums its budget).
 function _coefficients!(ν::Field, κt::Field, c::TKEClosure{T}, N2::Field) where {T}
     g = mesh(c.e)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
-    ed, nd, kd, n2 = c.e.data, ν.data, κt.data, N2.data
-    ck, cl = c.c_k, c.c_l
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = Hx + i, Hy + j, Hz + k
-        Δ = c.Δk[k]
-        if _solid(c.mask, I, J, K)
+    launch!(Backends.backend(ν.data), _coefficients_body!, interior(g), ν.data, κt.data, c.e.data,
+            N2.data, c.Δk, c.mask, c.l_wall, g.Hx, g.Hy, g.Hz, c.c_k, c.c_l)
+    return ν, κt
+end
+
+@inline function _coefficients_body!(I, J, K, nd, kd, ed, n2, Δk, mask, l_wall, Hx, Hy, Hz, ck, cl)
+    T = eltype(nd)
+    i, j, k = I - Hx, J - Hy, K - Hz
+    @inbounds begin
+        Δ = Δk[k]
+        if _solid(mask, I, J, K)
             nd[I, J, K] = zero(T); kd[I, J, K] = zero(T)
-            continue
+            return nothing
         end
         e = ed[I, J, K]
-        l, _ = tke_length_scale(e, n2[I, J, K], Δ; l_wall = _lwall(c.l_wall, i, j, k, T), c_l = cl)
+        l, _ = tke_length_scale(e, n2[I, J, K], Δ; l_wall = _lwall(l_wall, i, j, k, T), c_l = cl)
         νv, κv = tke_eddy_coefficients(e, l, Δ; c_k = ck)
         nd[I, J, K] = νv
         kd[I, J, K] = κv
     end
-    return ν, κt
+    return nothing
 end
 
 """
@@ -468,151 +478,186 @@ halo ``ν`` equals its image. In the interior each flux contributes
 from the same flux locations as the momentum kernels (the face-to-face and
 edge differences), not from `Operators._velocity_gradient_at`, whose
 off-diagonal two-cell differences are not the dual of that operator.
+
+**Owner computes** (KA-l, #304). Each interior cell gathers its own `D`:
+every flux share destined for it, from the velocity points around it, plus
+the shares destined for the halo cells it is the image of. No two cells
+write the same location, so the kernel runs on any number of threads with
+the same bits. The scatter it replaced (each velocity point adding its
+shares to up to four cells, then a halo fold) added the same shares in a
+different order: a named one-time change of the last bits of `D` (the
+TKE after 12 steps is quoted in `docs/src/design/ka_port.md`).
 """
 dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs::FieldBoundaryConditions) =
     _dual_strain!(D, u, v, w, bcs, mesh(u))
 
-function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::RegularGrid{T}) where {T}
-    idx2 = 1 / g.dx^2; idy2 = 1 / g.dy^2; idz2 = 1 / g.dz^2
-    d = D.data
-    fill!(d, zero(T))
-    ud, vd, wd = u.data, v.data, w.data
-    ii, jj, kk = interior(g)
-    q4(x) = T(0.25) * x
-    @inbounds for k in kk, j in jj, i in ii
-        # ---- u at FaceX (i,j,k) ----
-        up = ud[i, j, k]
-        a = -up * (ud[i+1, j, k] - ud[i, j, k]) * idx2         # fxE, +; cell (i,j,k)
-        d[i, j, k] += a
-        a = up * (ud[i, j, k] - ud[i-1, j, k]) * idx2          # fxW, −; cell (i-1,j,k)
-        d[i-1, j, k] += a
-        a = q4(-up * (ud[i, j+1, k] - ud[i, j, k]) * idy2)     # fyN, +
-        d[i-1, j, k] += a; d[i, j, k] += a; d[i-1, j+1, k] += a; d[i, j+1, k] += a
-        a = q4(up * (ud[i, j, k] - ud[i, j-1, k]) * idy2)      # fyS, −
-        d[i-1, j-1, k] += a; d[i, j-1, k] += a; d[i-1, j, k] += a; d[i, j, k] += a
-        a = q4(-up * (ud[i, j, k+1] - ud[i, j, k]) * idz2)     # fzT, +
-        d[i-1, j, k] += a; d[i, j, k] += a; d[i-1, j, k+1] += a; d[i, j, k+1] += a
-        a = q4(up * (ud[i, j, k] - ud[i, j, k-1]) * idz2)      # fzB, −
-        d[i-1, j, k-1] += a; d[i, j, k-1] += a; d[i-1, j, k] += a; d[i, j, k] += a
+# ---- the vertical metrics of the dual -----------------------------------
+#
+# The share of every flux is the expression of the scatter it replaces: on a
+# RegularGrid `±q (δq) / Δ²` (`q4(…)` for a cross flux), on a StretchedGrid
+# the same times the control-volume height of the velocity point p (`hc` =
+# dzc[k] for u, v; `hf` = dzf[k] for w) for the horizontal fluxes, and with
+# the vertical spacings `1/dzf` (u, v) or `1/dzc` (w) for the vertical ones;
+# the stretched sum is finally divided by the thickness of the receiving
+# cell (per unit volume).
+struct _DualUniform{T}
+    idx2::T; idy2::T; idz2::T
+end
+struct _DualLevels{T, V}
+    idx2::T; idy2::T
+    dzc::V; dzf::V
+end
+@inline _hc(::_DualUniform, x, k) = x
+@inline _hc(m::_DualLevels, x, k) = @inbounds x * m.dzc[k]
+@inline _hf(::_DualUniform, x, k) = x
+@inline _hf(m::_DualLevels, x, k) = @inbounds x * m.dzf[k]
+@inline _izt(m::_DualUniform, k) = m.idz2
+@inline _izt(m::_DualLevels, k) = @inbounds 1 / m.dzf[k+1]
+@inline _izb(m::_DualUniform, k) = m.idz2
+@inline _izb(m::_DualLevels, k) = @inbounds 1 / m.dzf[k]
+@inline _iwt(m::_DualUniform, k) = m.idz2
+@inline _iwt(m::_DualLevels, k) = @inbounds 1 / m.dzc[k]
+@inline _iwb(m::_DualUniform, k) = m.idz2
+@inline _iwb(m::_DualLevels, k) = @inbounds 1 / m.dzc[k-1]
+@inline _per_volume(::_DualUniform, x, k) = x
+@inline _per_volume(m::_DualLevels, x, k) = @inbounds x * (1 / m.dzc[k])
 
-        # ---- v at FaceY (i,j,k) ----
-        vp = vd[i, j, k]
-        a = -vp * (vd[i, j+1, k] - vd[i, j, k]) * idy2         # fyN, +; cell (i,j,k)
-        d[i, j, k] += a
-        a = vp * (vd[i, j, k] - vd[i, j-1, k]) * idy2          # fyS, −; cell (i,j-1,k)
-        d[i, j-1, k] += a
-        a = q4(-vp * (vd[i+1, j, k] - vd[i, j, k]) * idx2)     # fxE, +
-        d[i, j-1, k] += a; d[i+1, j-1, k] += a; d[i, j, k] += a; d[i+1, j, k] += a
-        a = q4(vp * (vd[i, j, k] - vd[i-1, j, k]) * idx2)      # fxW, −
-        d[i-1, j-1, k] += a; d[i, j-1, k] += a; d[i-1, j, k] += a; d[i, j, k] += a
-        a = q4(-vp * (vd[i, j, k+1] - vd[i, j, k]) * idz2)     # fzT, +
-        d[i, j-1, k] += a; d[i, j, k] += a; d[i, j-1, k+1] += a; d[i, j, k+1] += a
-        a = q4(vp * (vd[i, j, k] - vd[i, j, k-1]) * idz2)      # fzB, −
-        d[i, j-1, k-1] += a; d[i, j, k-1] += a; d[i, j-1, k] += a; d[i, j, k] += a
+# ---- the 18 flux shares of a velocity point p = (i, j, k) ------------------
+# (`_ux_e`: the share of the x flux on the east side of u-point p; …). Each
+# is the very expression the scatter added, so a share has the same bits.
+@inline _q4(x) = oftype(x, 0.25) * x
+@inline _ux_e(u, m, i, j, k) = @inbounds _hc(m, -u[i,j,k] * (u[i+1,j,k] - u[i,j,k]) * m.idx2, k)
+@inline _ux_w(u, m, i, j, k) = @inbounds _hc(m, u[i,j,k] * (u[i,j,k] - u[i-1,j,k]) * m.idx2, k)
+@inline _uy_n(u, m, i, j, k) = @inbounds _q4(_hc(m, -u[i,j,k] * (u[i,j+1,k] - u[i,j,k]) * m.idy2, k))
+@inline _uy_s(u, m, i, j, k) = @inbounds _q4(_hc(m, u[i,j,k] * (u[i,j,k] - u[i,j-1,k]) * m.idy2, k))
+@inline _uz_t(u, m, i, j, k) = @inbounds _q4(-u[i,j,k] * (u[i,j,k+1] - u[i,j,k]) * _izt(m, k))
+@inline _uz_b(u, m, i, j, k) = @inbounds _q4(u[i,j,k] * (u[i,j,k] - u[i,j,k-1]) * _izb(m, k))
+@inline _vy_n(v, m, i, j, k) = @inbounds _hc(m, -v[i,j,k] * (v[i,j+1,k] - v[i,j,k]) * m.idy2, k)
+@inline _vy_s(v, m, i, j, k) = @inbounds _hc(m, v[i,j,k] * (v[i,j,k] - v[i,j-1,k]) * m.idy2, k)
+@inline _vx_e(v, m, i, j, k) = @inbounds _q4(_hc(m, -v[i,j,k] * (v[i+1,j,k] - v[i,j,k]) * m.idx2, k))
+@inline _vx_w(v, m, i, j, k) = @inbounds _q4(_hc(m, v[i,j,k] * (v[i,j,k] - v[i-1,j,k]) * m.idx2, k))
+@inline _vz_t(v, m, i, j, k) = @inbounds _q4(-v[i,j,k] * (v[i,j,k+1] - v[i,j,k]) * _izt(m, k))
+@inline _vz_b(v, m, i, j, k) = @inbounds _q4(v[i,j,k] * (v[i,j,k] - v[i,j,k-1]) * _izb(m, k))
+@inline _wz_t(w, m, i, j, k) = @inbounds -w[i,j,k] * (w[i,j,k+1] - w[i,j,k]) * _iwt(m, k)
+@inline _wz_b(w, m, i, j, k) = @inbounds w[i,j,k] * (w[i,j,k] - w[i,j,k-1]) * _iwb(m, k)
+@inline _wx_e(w, m, i, j, k) = @inbounds _q4(_hf(m, -w[i,j,k] * (w[i+1,j,k] - w[i,j,k]) * m.idx2, k))
+@inline _wx_w(w, m, i, j, k) = @inbounds _q4(_hf(m, w[i,j,k] * (w[i,j,k] - w[i-1,j,k]) * m.idx2, k))
+@inline _wy_n(w, m, i, j, k) = @inbounds _q4(_hf(m, -w[i,j,k] * (w[i,j+1,k] - w[i,j,k]) * m.idy2, k))
+@inline _wy_s(w, m, i, j, k) = @inbounds _q4(_hf(m, w[i,j,k] * (w[i,j,k] - w[i,j-1,k]) * m.idy2, k))
 
-        # ---- w at FaceZ (i,j,k) ----
-        wp = wd[i, j, k]
-        a = -wp * (wd[i, j, k+1] - wd[i, j, k]) * idz2         # fzT, +; cell (i,j,k)
-        d[i, j, k] += a
-        a = wp * (wd[i, j, k] - wd[i, j, k-1]) * idz2          # fzB, −; cell (i,j,k-1)
-        d[i, j, k-1] += a
-        a = q4(-wp * (wd[i+1, j, k] - wd[i, j, k]) * idx2)     # fxE, +
-        d[i, j, k-1] += a; d[i+1, j, k-1] += a; d[i, j, k] += a; d[i+1, j, k] += a
-        a = q4(wp * (wd[i, j, k] - wd[i-1, j, k]) * idx2)      # fxW, −
-        d[i-1, j, k-1] += a; d[i, j, k-1] += a; d[i-1, j, k] += a; d[i, j, k] += a
-        a = q4(-wp * (wd[i, j+1, k] - wd[i, j, k]) * idy2)     # fyN, +
-        d[i, j, k-1] += a; d[i, j+1, k-1] += a; d[i, j, k] += a; d[i, j+1, k] += a
-        a = q4(wp * (wd[i, j, k] - wd[i, j-1, k]) * idy2)      # fyS, −
-        d[i, j-1, k-1] += a; d[i, j, k-1] += a; d[i, j-1, k] += a; d[i, j, k] += a
+# The velocity points the scatter visited: the interior (a box of storage
+# indices). `_AllIn` stands for a cell whose every candidate point is inside
+# (the bulk of the domain): no checks.
+struct _DualBox
+    i1::Int; i2::Int; j1::Int; j2::Int; k1::Int; k2::Int
+end
+struct _AllIn end
+@inline _inbox(b::_DualBox, i, j, k) = (b.i1 <= i <= b.i2) & (b.j1 <= j <= b.j2) & (b.k1 <= k <= b.k2)
+@inline _inbox(::_AllIn, i, j, k) = true
+@inline _share(f::F, q, m, bx, i, j, k) where {F} = _inbox(bx, i, j, k) ? f(q, m, i, j, k) : zero(eltype(q))
+
+# Every share destined for storage cell (I, J, K) before the halo fold: from
+# the u points on its two x faces and their y, z neighbours, and likewise for
+# v and w (the inverse of the scatter's target lists).
+@inline function _dual_raw(u, v, w, m, bx, I, J, K)
+    # u: x fluxes of p = s and s + ex; y, z cross fluxes of the four u points
+    # around each of the cell's y- and z-edges on its two x faces
+    d = _share(_ux_e, u, m, bx, I, J, K) + _share(_ux_w, u, m, bx, I+1, J, K)
+    d += (_share(_uy_n, u, m, bx, I+1, J, K) + _share(_uy_n, u, m, bx, I, J, K)) +
+         (_share(_uy_n, u, m, bx, I+1, J-1, K) + _share(_uy_n, u, m, bx, I, J-1, K))
+    d += (_share(_uy_s, u, m, bx, I+1, J+1, K) + _share(_uy_s, u, m, bx, I, J+1, K)) +
+         (_share(_uy_s, u, m, bx, I+1, J, K) + _share(_uy_s, u, m, bx, I, J, K))
+    d += (_share(_uz_t, u, m, bx, I+1, J, K) + _share(_uz_t, u, m, bx, I, J, K)) +
+         (_share(_uz_t, u, m, bx, I+1, J, K-1) + _share(_uz_t, u, m, bx, I, J, K-1))
+    d += (_share(_uz_b, u, m, bx, I+1, J, K+1) + _share(_uz_b, u, m, bx, I, J, K+1)) +
+         (_share(_uz_b, u, m, bx, I+1, J, K) + _share(_uz_b, u, m, bx, I, J, K))
+    # v
+    d += _share(_vy_n, v, m, bx, I, J, K) + _share(_vy_s, v, m, bx, I, J+1, K)
+    d += (_share(_vx_e, v, m, bx, I, J+1, K) + _share(_vx_e, v, m, bx, I-1, J+1, K)) +
+         (_share(_vx_e, v, m, bx, I, J, K) + _share(_vx_e, v, m, bx, I-1, J, K))
+    d += (_share(_vx_w, v, m, bx, I+1, J+1, K) + _share(_vx_w, v, m, bx, I, J+1, K)) +
+         (_share(_vx_w, v, m, bx, I+1, J, K) + _share(_vx_w, v, m, bx, I, J, K))
+    d += (_share(_vz_t, v, m, bx, I, J+1, K) + _share(_vz_t, v, m, bx, I, J, K)) +
+         (_share(_vz_t, v, m, bx, I, J+1, K-1) + _share(_vz_t, v, m, bx, I, J, K-1))
+    d += (_share(_vz_b, v, m, bx, I, J+1, K+1) + _share(_vz_b, v, m, bx, I, J, K+1)) +
+         (_share(_vz_b, v, m, bx, I, J+1, K) + _share(_vz_b, v, m, bx, I, J, K))
+    # w
+    d += _share(_wz_t, w, m, bx, I, J, K) + _share(_wz_b, w, m, bx, I, J, K+1)
+    d += (_share(_wx_e, w, m, bx, I, J, K+1) + _share(_wx_e, w, m, bx, I-1, J, K+1)) +
+         (_share(_wx_e, w, m, bx, I, J, K) + _share(_wx_e, w, m, bx, I-1, J, K))
+    d += (_share(_wx_w, w, m, bx, I+1, J, K+1) + _share(_wx_w, w, m, bx, I, J, K+1)) +
+         (_share(_wx_w, w, m, bx, I+1, J, K) + _share(_wx_w, w, m, bx, I, J, K))
+    d += (_share(_wy_n, w, m, bx, I, J, K+1) + _share(_wy_n, w, m, bx, I, J-1, K+1)) +
+         (_share(_wy_n, w, m, bx, I, J, K) + _share(_wy_n, w, m, bx, I, J-1, K))
+    d += (_share(_wy_s, w, m, bx, I, J+1, K+1) + _share(_wy_s, w, m, bx, I, J, K+1)) +
+         (_share(_wy_s, w, m, bx, I, J+1, K) + _share(_wy_s, w, m, bx, I, J, K))
+    return d
+end
+
+# The halo fold of one direction: interior index I gathers itself and the
+# first halo layer (H low, H+N+1 high) when it is that layer's image (`lo`,
+# `hi` of `_images`: the periodic image or the mirror). n = 1, 2, 3; 0 = none.
+@inline _fold_src(I, H, N, lo, hi, n) =
+    n == 1 ? I : n == 2 ? (lo == I ? H : 0) : (hi == I ? H + N + 1 : 0)
+
+@inline function _dual_strain_body!(I, J, K, d, u, v, w, m, bx, Hx, Nx, lox, hix, Hy, Ny, loy, hiy,
+                                    Hz, Nz, loz, hiz)
+    T = eltype(d)
+    acc = zero(T)
+    # the bulk: one source cell, all of its candidate points inside
+    if (Hx + 1 < I < Hx + Nx) & (Hy + 1 < J < Hy + Ny) & (Hz + 1 < K < Hz + Nz)
+        acc = _dual_raw(u, v, w, m, _AllIn(), I, J, K)
+    else
+        for nz in 1:3
+            sz = _fold_src(K, Hz, Nz, loz, hiz, nz)
+            sz == 0 && continue
+            for ny in 1:3
+                sy = _fold_src(J, Hy, Ny, loy, hiy, ny)
+                sy == 0 && continue
+                for nx in 1:3
+                    sx = _fold_src(I, Hx, Nx, lox, hix, nx)
+                    sx == 0 && continue
+                    acc += _dual_raw(u, v, w, m, bx, sx, sy, sz)
+                end
+            end
+        end
     end
-    _fold_halos!(d, bcs, g)
+    @inbounds d[I, J, K] = _per_volume(m, acc, K)
+    return nothing
+end
+
+_dual_metrics(g::RegularGrid) = _DualUniform(1 / g.dx^2, 1 / g.dy^2, 1 / g.dz^2)
+_dual_metrics(g::StretchedGrid) = _DualLevels(1 / g.dx^2, 1 / g.dy^2, g.dzc, g.dzf)
+
+function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::Union{RegularGrid,StretchedGrid})
+    d = D.data
+    fill!(d, zero(eltype(d)))
+    ii, jj, kk = interior(g)
+    bx = _DualBox(first(ii), last(ii), first(jj), last(jj), first(kk), last(kk))
+    lox, hix = _images(bcs.west, g.Hx, g.Nx)
+    loy, hiy = _images(bcs.south, g.Hy, g.Ny)
+    loz, hiz = _images(bcs.bottom, g.Hz, g.Nz)
+    launch!(Backends.backend(d), _dual_strain_body!, (ii, jj, kk), d, u.data, v.data, w.data,
+            _dual_metrics(g), bx, g.Hx, g.Nx, lox, hix, g.Hy, g.Ny, loy, hiy, g.Hz, g.Nz, loz, hiz)
     return D
 end
 
-# The dual on a StretchedGrid. The momentum operator there
-# (StretchedGrids: `_add_eddy_viscosity_u!/_v!/_w!`) differences the
+# The dual on a StretchedGrid. The momentum operator there differences the
 # vertical fluxes of u, v over the centre spacing `dzf` and divides by the
 # cell thickness `dzc` (u, v control volumes), and for w the reverse (`dzc`
 # between two z-faces, `dzf` the control volume). The identity
 # Σ_c ν_c D_c V_c = −Σ_p u_p T_p V_p is volume-weighted, so each flux's
 # share −u_p (±f)/L_p · V_p (L_p the extent of p's control volume across
-# the flux) is accumulated per unit horizontal area (× the control-volume
-# height of p), folded onto the interior like the uniform form, and divided
-# by the thickness dzc of the receiving cell at the end. On a `:uniform`
+# the flux) is taken per unit horizontal area (× the control-volume height
+# of p, `_DualLevels`), gathered with the halo fold like the uniform form,
+# and divided by the thickness dzc of the receiving cell. On a `:uniform`
 # StretchedGrid this is the RegularGrid dual to round-off.
-function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::StretchedGrid{T}) where {T}
-    idx2 = 1 / g.dx^2; idy2 = 1 / g.dy^2
-    dzc, dzf = g.dzc, g.dzf
-    d = D.data
-    fill!(d, zero(T))
-    ud, vd, wd = u.data, v.data, w.data
-    ii, jj, kk = interior(g)
-    q4(x) = T(0.25) * x
-    @inbounds for k in kk
-        hc = dzc[k]                       # u, v control-volume height
-        hf = dzf[k]                       # w control-volume height
-        izt = 1 / dzf[k+1]; izb = 1 / dzf[k]       # u, v: vertical gradients between centres
-        iwt = 1 / dzc[k];   iwb = 1 / dzc[k-1]     # w: vertical gradients between z-faces
-        for j in jj, i in ii
-            # ---- u at FaceX (i,j,k) ----
-            up = ud[i, j, k]
-            a = -up * (ud[i+1, j, k] - ud[i, j, k]) * idx2 * hc
-            d[i, j, k] += a
-            a = up * (ud[i, j, k] - ud[i-1, j, k]) * idx2 * hc
-            d[i-1, j, k] += a
-            a = q4(-up * (ud[i, j+1, k] - ud[i, j, k]) * idy2 * hc)
-            d[i-1, j, k] += a; d[i, j, k] += a; d[i-1, j+1, k] += a; d[i, j+1, k] += a
-            a = q4(up * (ud[i, j, k] - ud[i, j-1, k]) * idy2 * hc)
-            d[i-1, j-1, k] += a; d[i, j-1, k] += a; d[i-1, j, k] += a; d[i, j, k] += a
-            a = q4(-up * (ud[i, j, k+1] - ud[i, j, k]) * izt)
-            d[i-1, j, k] += a; d[i, j, k] += a; d[i-1, j, k+1] += a; d[i, j, k+1] += a
-            a = q4(up * (ud[i, j, k] - ud[i, j, k-1]) * izb)
-            d[i-1, j, k-1] += a; d[i, j, k-1] += a; d[i-1, j, k] += a; d[i, j, k] += a
-
-            # ---- v at FaceY (i,j,k) ----
-            vp = vd[i, j, k]
-            a = -vp * (vd[i, j+1, k] - vd[i, j, k]) * idy2 * hc
-            d[i, j, k] += a
-            a = vp * (vd[i, j, k] - vd[i, j-1, k]) * idy2 * hc
-            d[i, j-1, k] += a
-            a = q4(-vp * (vd[i+1, j, k] - vd[i, j, k]) * idx2 * hc)
-            d[i, j-1, k] += a; d[i+1, j-1, k] += a; d[i, j, k] += a; d[i+1, j, k] += a
-            a = q4(vp * (vd[i, j, k] - vd[i-1, j, k]) * idx2 * hc)
-            d[i-1, j-1, k] += a; d[i, j-1, k] += a; d[i-1, j, k] += a; d[i, j, k] += a
-            a = q4(-vp * (vd[i, j, k+1] - vd[i, j, k]) * izt)
-            d[i, j-1, k] += a; d[i, j, k] += a; d[i, j-1, k+1] += a; d[i, j, k+1] += a
-            a = q4(vp * (vd[i, j, k] - vd[i, j, k-1]) * izb)
-            d[i, j-1, k-1] += a; d[i, j, k-1] += a; d[i, j-1, k] += a; d[i, j, k] += a
-
-            # ---- w at FaceZ (i,j,k) ----
-            wp = wd[i, j, k]
-            a = -wp * (wd[i, j, k+1] - wd[i, j, k]) * iwt
-            d[i, j, k] += a
-            a = wp * (wd[i, j, k] - wd[i, j, k-1]) * iwb
-            d[i, j, k-1] += a
-            a = q4(-wp * (wd[i+1, j, k] - wd[i, j, k]) * idx2 * hf)
-            d[i, j, k-1] += a; d[i+1, j, k-1] += a; d[i, j, k] += a; d[i+1, j, k] += a
-            a = q4(wp * (wd[i, j, k] - wd[i-1, j, k]) * idx2 * hf)
-            d[i-1, j, k-1] += a; d[i, j, k-1] += a; d[i-1, j, k] += a; d[i, j, k] += a
-            a = q4(-wp * (wd[i, j+1, k] - wd[i, j, k]) * idy2 * hf)
-            d[i, j, k-1] += a; d[i, j+1, k-1] += a; d[i, j, k] += a; d[i, j+1, k] += a
-            a = q4(wp * (wd[i, j, k] - wd[i, j-1, k]) * idy2 * hf)
-            d[i, j-1, k-1] += a; d[i, j, k-1] += a; d[i, j-1, k] += a; d[i, j, k] += a
-        end
-    end
-    _fold_halos!(d, bcs, g)
-    @inbounds for k in kk
-        ih = 1 / dzc[k]
-        for j in jj, i in ii
-            d[i, j, k] *= ih
-        end
-    end
-    return D
-end
 
 # Fold the first halo layer onto the interior cells it is a copy of (the
 # periodic image, or the mirror for no-flux / wall boundaries), x then y
 # then z, so that edge and corner halo shares are carried twice correctly.
+# (Used by the wall-model production, a scatter over the list of wall faces;
+# the dual strain gathers instead, `_fold_src`.)
 function _fold_halos!(d, bcs, g)
     Hx, Hy, Hz, Nx, Ny, Nz = g.Hx, g.Hy, g.Hz, g.Nx, g.Ny, g.Nz
     sx, sy, sz = size(d)
@@ -650,9 +695,7 @@ halos (with `bcs`), as the momentum operator needs.
 function shear_production!(P::Field, u::Field, v::Field, w::Field, νt::Field,
                            bcs::FieldBoundaryConditions)
     dual_strain!(P, u, v, w, bcs)
-    g = mesh(u)
-    ii, jj, kk = interior(g)
-    @inbounds @views P.data[ii, jj, kk] .*= νt.data[ii, jj, kk]
+    interior_map!(*, P, P, νt)
     return P
 end
 
@@ -774,11 +817,10 @@ of the SGS heat flux. (A prescribed surface heat flux adds ``(g/θ_0)F/2``
 to the boundary cells inside `advance_sgs!`; not here.)
 """
 function buoyancy_production!(P::Field, κt::Field, N2::Field)
-    g = mesh(P)
-    ii, jj, kk = interior(g)
-    @inbounds @views P.data[ii, jj, kk] .= .-κt.data[ii, jj, kk] .* N2.data[ii, jj, kk]
+    interior_map!(_neg_product, P, κt, N2)
     return P
 end
+@inline _neg_product(κ, n2) = -κ * n2
 
 # -------------------------------------------------------------------------
 # The time integration of e (the one commit per accepted step)
@@ -818,7 +860,7 @@ function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
         ebcs = passive_scalar_bcs(sim.θ_bcs)     # e: not θ's top gradient (#254)
         fill_halos!(c.e, ebcs)
         _advect_tke!(c, sim, Δt, ebcs, g)
-        c.K2.data .= 2 .* c.ν.data
+        _double!(c.K2, c.ν)
         add_eddy_diffusion_scalar!(c.tend, c.e, c.K2; mask = c.mask)
     end
     _update!(c, Δt, _surface_buoyancy(c, sim))
@@ -827,53 +869,98 @@ end
 
 # The advection of e into c.tend: flux-limited and positive (on a
 # StretchedGrid with the centred reconstruction, the only one allowed there).
+# (`c.recon`: the reconstruction built once from the scheme's name, so the
+# call does not dispatch on a Symbol; KA-l.)
 _advect_tke!(c, sim, Δt, ebcs, g) =
     advect_positive!(c.tend, sim.u, sim.v, sim.w, c.e, Δt;
-                     scheme = c.advection, workspace = c.ws, bcs = ebcs)
+                     scheme = c.recon, workspace = c.ws, bcs = ebcs)
+
+# K = 2ν over the whole storage (halos included): `2 * ν` per point, the
+# bits of the broadcast it replaces.
+_double!(K::Field, ν::Field) =
+    (range_map!(Backends.backend(K.data), Base.Fix1(*, 2), K.data, _storage(K.data), ν.data); K)
+_storage(A) = (1:size(A, 1), 1:size(A, 2), 1:size(A, 3))
 
 # Σ a V over the interior (a interior-sized)
 _tke_volume_sum(a, c, V0, ::RegularGrid) = sum(a) * V0
 _tke_volume_sum(a, c, V0, g::StretchedGrid) = sum(sum(view(a, :, :, k)) * c.vrel[k] for k in 1:g.Nz) * V0
 
+# The update of e, fused with the volume sums of its budget (KA-l, #304):
+# one work item per plane (`plane_map!`, measured 1.02x the old loop where
+# the eight-lane `plane_reduce!` took 1.09x) updates the plane's cells in
+# their loop order, each adding its contributions (P_s, P_b, transport, wall
+# work, dissipation, buoyant destruction, clip count, clipped energy) to the
+# plane's running sums; the planes are combined in ascending k. e is the
+# loop's bit for bit; the sums are a named one-time change of order (per
+# plane instead of one running sum over the domain).
 function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
     g = mesh(c.e)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     V0 = T(_tke_volume0(g))
-    ed, nd, n2, dd, td, pw = c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data, c.Pw.data
-    ck, cl = c.c_k, c.c_l
-    sPs = zero(T); sPb = zero(T); sε = zero(T); sB = zero(T); sT = zero(T); sPw = zero(T)
-    nclip = zero(T); eclip = zero(T)
-    exact = c.dissipation === :exact
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = Hx + i, Hy + j, Hz + k
-        if _solid(c.mask, I, J, K)
-            ed[I, J, K] = zero(T)
-            continue
+    par = (Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, Nz = g.Nz, V0 = V0, Δt = Δt, pb1 = T(pbs[1]),
+           pb2 = T(pbs[2]), ck = c.c_k, cl = c.c_l, cε0 = c.c_ε0, cε1 = c.c_ε1,
+           sfac = c.surface_factor, exact = c.dissipation === :exact)
+    parts = Vector{NTuple{8,T}}(undef, g.Nz)
+    plane_map!(parts, Backends.backend(c.e.data), _tke_update_plane, interior(g),
+               c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data, c.Pw.data, c.Δk, c.vrel,
+               c.l_wall, c.first_level, c.mask, par)
+    sPs, sPb, sT, sPw, sε, sB, nclip, eclip = ntuple(n -> ordered_sum(map(p -> p[n], parts)), Val(8))
+    st = c.stats
+    st[1] += nclip; st[2] += eclip
+    st[4] = sPs * V0; st[5] = sPb * V0; st[6] = sε * V0; st[7] = sB * V0; st[8] = sT * V0
+    st[9] += 1
+    st[10] = sPw * V0
+    c.surface === nothing || _surface!(c, Δt)
+    return c
+end
+
+# one plane: the cells in their loop order, each updating e and adding its
+# contributions to the plane's running sums
+function _tke_update_plane(K, ir, jr, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall, first_level, mask, p)
+    T = eltype(ed)
+    acc = ntuple(_ -> zero(T), Val(8))
+    for J in jr, I in ir
+        acc = map(+, acc, _tke_update_body(I, J, K, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall,
+                                           first_level, mask, p))
+    end
+    return acc
+end
+
+@inline function _tke_update_body(I, J, K, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall, first_level,
+                                  mask, p)
+    T = eltype(ed)
+    z = zero(T)
+    i, j, k = I - p.Hx, J - p.Hy, K - p.Hz
+    @inbounds begin
+        if _solid(mask, I, J, K)
+            ed[I, J, K] = z
+            return (z, z, z, z, z, z, z, z)
         end
-        Δ = c.Δk[k]; vr = c.vrel[k]; V = V0 * vr
+        Δt = p.Δt
+        Δ = Δk[k]; vr = vrel[k]; V = p.V0 * vr
         e = ed[I, J, K]
         N2 = n2[I, J, K]
-        l, s = tke_length_scale(e, N2, Δ; l_wall = _lwall(c.l_wall, i, j, k, T), c_l = cl)
-        fac = _first(c.first_level, i, j, k) ? c.surface_factor : one(T)
-        cε = tke_dissipation_coefficient(l, Δ; c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, factor = fac)
+        l, s = tke_length_scale(e, N2, Δ; l_wall = _lwall(l_wall, i, j, k, T), c_l = p.cl)
+        fac = _first(first_level, i, j, k) ? p.sfac : one(T)
+        cε = tke_dissipation_coefficient(l, Δ; c_ε0 = p.cε0, c_ε1 = p.cε1, factor = fac)
         Ps = nd[I, J, K] * dd[I, J, K] + pw[I, J, K]
         κv = (1 + 2l / Δ) * nd[I, J, K]
-        Psf = (k == 1 ? pbs[1] : zero(T)) + (k == g.Nz ? pbs[2] : zero(T))
+        Psf = (k == 1 ? p.pb1 : z) + (k == p.Nz ? p.pb2 : z)
         Pb = -κv * N2 + Psf
         # sources: P_s and the positive buoyancy production; sinks, linear in
         # e: dissipation c_ε s e, the buoyant destruction κ_t N² = r_N e
         # (r_N = (1+2l/Δ) c_k N²/s, finite as e → 0) and a stable surface flux
-        src = Ps + (N2 < 0 ? -κv * N2 : zero(T)) + max(Psf, zero(T))
-        rb = (N2 > 0 && s > 0 ? (1 + 2l / Δ) * ck * N2 / s : zero(T)) +
-             (Psf < 0 ? -Psf / max(e, floatmin(T)) : zero(T))
+        src = Ps + (N2 < 0 ? -κv * N2 : z) + max(Psf, z)
+        rb = (N2 > 0 && s > 0 ? (1 + 2l / Δ) * p.ck * N2 / s : z) +
+             (Psf < 0 ? -Psf / max(e, floatmin(T)) : z)
         tr = td[I, J, K]
         estar = e + Δt * (tr + src)
+        nclip = z; eclip = z
         if estar < 0
-            nclip += 1; eclip -= estar * V
-            estar = zero(T)
+            nclip = one(T); eclip = -(estar * V)
+            estar = z
         end
         rε = cε * s
-        if exact && l > 0 && estar > 0
+        if p.exact && l > 0 && estar > 0
             e1 = inv(inv(sqrt(estar)) + cε * Δt / (2l))^2
             enew = e1 / (1 + Δt * rb)
             dε = (estar - e1) / Δt
@@ -882,20 +969,12 @@ function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
             R = rε + rb
             enew = estar / (1 + Δt * R)
             rem = (estar - enew) / Δt
-            dε = R > 0 ? rem * (rε / R) : zero(T)
-            dB = R > 0 ? rem * (rb / R) : zero(T)
+            dε = R > 0 ? rem * (rε / R) : z
+            dB = R > 0 ? rem * (rb / R) : z
         end
         ed[I, J, K] = enew
-        sPs += Ps * vr; sPb += Pb * vr; sT += tr * vr; sPw += pw[I, J, K] * vr
-        sε += dε * vr; sB += dB * vr
+        return (Ps * vr, Pb * vr, tr * vr, pw[I, J, K] * vr, dε * vr, dB * vr, nclip, eclip)
     end
-    st = c.stats
-    st[1] += nclip; st[2] += eclip
-    st[4] = sPs * V0; st[5] = sPb * V0; st[6] = sε * V0; st[7] = sB * V0; st[8] = sT * V0
-    st[9] += 1
-    st[10] = sPw * V0
-    c.surface === nothing || _surface!(c, Δt)
-    return c
 end
 
 function _surface!(c::TKEClosure{T}, Δt) where {T}
@@ -952,7 +1031,7 @@ The closure's own memory: the prognostic SGS TKE `c.e` (interior copied;
 N-inflow-b, #258). See `Operators.sgs_tke!` for the contract.
 """
 function sgs_tke!(e::Field{CellCenter}, c::TKEClosure, sim; kwargs...)
-    interior_view(e) .= interior_view(c.e)
+    interior_map!(identity, e, c.e)
     return e
 end
 
@@ -1007,7 +1086,7 @@ function tke_budget(c::TKEClosure{T}, sim) where {T}
         ebcs = passive_scalar_bcs(sim.θ_bcs)
         fill_halos!(c.e, ebcs)
         _advect_tke!(c, sim, one(T), ebcs, g)
-        c.K2.data .= 2 .* c.ν.data
+        _double!(c.K2, c.ν)
         add_eddy_diffusion_scalar!(c.tend, c.e, c.K2; mask = c.mask)
         tr = _tke_volume_sum(interior_view(c.tend), c, V0, g)
     end
@@ -1049,20 +1128,29 @@ function initialize_tke!(c::TKEClosure{T}, sim; e_min::Real = 0) where {T}
     fill_halos!(sim.u, bcs); fill_halos!(sim.v, bcs); fill_halos!(sim.w, bcs)
     _stratification!(c, sim)
     dual_strain!(c.D, sim.u, sim.v, sim.w, bcs)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = Hx + i, Hy + j, Hz + k
-        if _solid(c.mask, I, J, K)
-            c.e.data[I, J, K] = zero(T)
-            continue
-        end
-        fac = _first(c.first_level, i, j, k) ? c.surface_factor : one(T)
-        eq = tke_equilibrium(max(c.D.data[I, J, K], zero(T)), c.N2.data[I, J, K], c.Δk[k];
-                             c_k = c.c_k, c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, c_l = c.c_l,
-                             l_wall = _lwall(c.l_wall, i, j, k, T), factor = fac)
-        c.e.data[I, J, K] = max(T(eq), T(e_min))
-    end
+    launch!(Backends.backend(c.e.data), _init_tke_body!, interior(g), c.e.data, c.D.data,
+            c.N2.data, c.Δk, c.mask, c.first_level, c.l_wall, g.Hx, g.Hy, g.Hz,
+            (c_k = c.c_k, c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, c_l = c.c_l, sfac = c.surface_factor,
+             e_min = T(e_min)))
     return c
+end
+
+# the equilibrium e of one cell (a bisection per point: compute-bound)
+@inline function _init_tke_body!(I, J, K, ed, dd, n2, Δk, mask, first_level, l_wall, Hx, Hy, Hz, p)
+    T = eltype(ed)
+    i, j, k = I - Hx, J - Hy, K - Hz
+    @inbounds begin
+        if _solid(mask, I, J, K)
+            ed[I, J, K] = zero(T)
+            return nothing
+        end
+        fac = _first(first_level, i, j, k) ? p.sfac : one(T)
+        eq = tke_equilibrium(max(dd[I, J, K], zero(T)), n2[I, J, K], Δk[k];
+                             c_k = p.c_k, c_ε0 = p.c_ε0, c_ε1 = p.c_ε1, c_l = p.c_l,
+                             l_wall = _lwall(l_wall, i, j, k, T), factor = fac)
+        ed[I, J, K] = max(T(eq), p.e_min)
+    end
+    return nothing
 end
 
 """
@@ -1079,12 +1167,19 @@ function initialize_tke!(c::TKEClosure{T}, τ::SymmetricTensorField) where {T}
     g = mesh(c.e)
     size(τ) == (g.Nx, g.Ny, g.Nz) ||
         throw(DimensionMismatch("initialize_tke!: τ is $(size(τ)), interior $((g.Nx, g.Ny, g.Nz))"))
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
-        e = (τ.xx[i, j, k] + τ.yy[i, j, k] + τ.zz[i, j, k]) / 2
-        c.e.data[I, J, K] = _solid(c.mask, I, J, K) ? zero(T) : max(T(e), zero(T))
-    end
+    launch!(Backends.backend(c.e.data), _init_tke_trace_body!, interior(g), c.e.data,
+            τ.xx, τ.yy, τ.zz, c.mask, g.Hx, g.Hy, g.Hz)
     return c
+end
+
+@inline function _init_tke_trace_body!(I, J, K, ed, xx, yy, zz, mask, Hx, Hy, Hz)
+    T = eltype(ed)
+    i, j, k = I - Hx, J - Hy, K - Hz
+    @inbounds begin
+        e = (xx[i, j, k] + yy[i, j, k] + zz[i, j, k]) / 2
+        ed[I, J, K] = _solid(mask, I, J, K) ? zero(T) : max(T(e), zero(T))
+    end
+    return nothing
 end
 
 include("prognostic_sgs/reynolds_stress.jl")

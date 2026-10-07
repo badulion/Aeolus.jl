@@ -149,14 +149,16 @@ _humidity_data(q::_Cloudy) = q
 
 function _buoyancy_frequency_squared!(N2::Field{CellCenter}, θ::Field{CellCenter}, qv,
                                       θ₀, g, m::RegularGrid)
-    qd = _humidity_data(qv)
-    θd, nd = θ.data, N2.data
-    dz = m.dz
-    ii, jj, kk = interior(m)
-    @inbounds for k in kk, j in jj, i in ii
-        nd[i, j, k] = _n2_cell(θd, qd, i, j, k, dz, g, _θref(θ₀, k))
-    end
+    launch!(Backends.backend(N2.data), _n2_body!, interior(m), N2.data, θ.data, _humidity_data(qv),
+            m.dz, g, θ₀)
     return N2
+end
+
+# KA-l (#304): the N², Ri_g and S² kernels are point bodies run by `launch!`
+# over the interior (the loops' expressions, bit for bit).
+@inline function _n2_body!(i, j, k, nd, θd, qd, dz, g, θ₀)
+    @inbounds nd[i, j, k] = _n2_cell(θd, qd, i, j, k, dz, g, _θref(θ₀, k))
+    return nothing
 end
 
 """
@@ -181,13 +183,15 @@ function _gradient_richardson!(Ri::Field{CellCenter}, N2::Field{CellCenter},
                                u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                                S2_min, m::RegularGrid)
     idx = 1 / m.dx; idy = 1 / m.dy; idz = 1 / m.dz
-    ud, vd, wd, nd, rd = u.data, v.data, w.data, N2.data, Ri.data
-    ii, jj, kk = interior(m)
-    @inbounds for k in kk, j in jj, i in ii
-        magS = _strain_at(ud, vd, wd, i, j, k, idx, idy, idz)[7]
-        rd[i, j, k] = gradient_richardson(nd[i, j, k], magS^2; S2_min = S2_min)
-    end
+    launch!(Backends.backend(Ri.data), _ri_body!, interior(m), Ri.data, N2.data,
+            u.data, v.data, w.data, idx, idy, idz, S2_min)
     return Ri
+end
+
+@inline function _ri_body!(i, j, k, rd, nd, ud, vd, wd, idx, idy, idz, S2_min)
+    magS = _strain_at(ud, vd, wd, i, j, k, idx, idy, idz)[7]
+    @inbounds rd[i, j, k] = gradient_richardson(nd[i, j, k], magS^2; S2_min = S2_min)
+    return nothing
 end
 
 """
@@ -204,10 +208,12 @@ strain_rate_squared!(S2::Field, u::Field, v::Field, w::Field) =
 function _strain_rate_squared!(S2::Field{CellCenter}, u::Field{FaceX}, v::Field{FaceY},
                                w::Field{FaceZ}, m::RegularGrid)
     idx = 1 / m.dx; idy = 1 / m.dy; idz = 1 / m.dz
-    ud, vd, wd, sd = u.data, v.data, w.data, S2.data
-    ii, jj, kk = interior(m)
-    @inbounds for k in kk, j in jj, i in ii
-        sd[i, j, k] = _strain_at(ud, vd, wd, i, j, k, idx, idy, idz)[7]^2
-    end
+    launch!(Backends.backend(S2.data), _s2_body!, interior(m), S2.data, u.data, v.data, w.data,
+            idx, idy, idz)
     return S2
+end
+
+@inline function _s2_body!(i, j, k, sd, ud, vd, wd, idx, idy, idz)
+    @inbounds sd[i, j, k] = _strain_at(ud, vd, wd, i, j, k, idx, idy, idz)[7]^2
+    return nothing
 end

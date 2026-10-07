@@ -666,6 +666,7 @@ using Aeolus.Fields: set!, interior_view
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
     include("ka_halos.jl")   # KA-f (#297): halo fills / nesting transfer operators on launch!
     include("ka_fv.jl")      # KA-d (#299): finite-volume kernels + grid metrics on launch!
+    include("ka_sgs.jl")     # KA-l (#304): SGS closures on launch! (dynamic, Lagrangian, AMD/Vreman/σ, TKE, RSM)
     include("ka_hooks.jl")   # KA-k (#307): Berlin dynamics hooks + WallModels on launch!
     include("ka_advection.jl")  # KA-e (#302): scalar transport / limiter / momentum advection on launch!
     include("ka_pcg.jl")     # KA-g (#300): the one pcg! driver of the four CG solvers
