@@ -399,12 +399,15 @@ function _write_output(r::SimulationRun, dir, step)
     path = joinpath(dir, string("fields_", lpad(step, 9, '0'), ".nc"))
     nc = nc_create(path; attributes = Dict("t" => Float64(sim.t), "step" => Int32(step),
                                            "note" => "cell-index arrays: face fields at their own staggered positions"))
-    nc.dim["x"] = m.Nx; nc.dim["y"] = m.Ny; nc.dim["z"] = m.Nz
-    for f in r.cfg.output.fields
-        v = nc_defvar!(nc, f, Float32, ("x", "y", "z"))
-        v[:, :, :] = Array{Float32}(interior_view(getproperty(sim, _FIELD_OF[f])))
+    try
+        nc.dim["x"] = m.Nx; nc.dim["y"] = m.Ny; nc.dim["z"] = m.Nz
+        for f in r.cfg.output.fields
+            v = nc_defvar!(nc, f, Float32, ("x", "y", "z"))
+            v[:, :, :] = Float32.(Array(interior_view(getproperty(sim, _FIELD_OF[f]))))
+        end
+    finally
+        close(nc)
     end
-    close(nc)
     return path
 end
 

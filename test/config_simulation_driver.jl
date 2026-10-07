@@ -271,7 +271,7 @@ end
     dir = joinpath(res.folder.path, "output")
     @test readdir(dir) == ["fields_00000000$(n).nc" for n in (0, 2, 4, 6)]    # dt = 5 s
     NCDataset(joinpath(dir, "fields_000000006.nc")) do nc
-        @test nc.attrib["t"] == 30.0
+        @test only(nc.attrib["t"]) == 30.0
         @test nc["theta"][:, :, :] == Float32.(interior_view(res.obj.sim.θ))
         @test nc["u"][:, :, :] == Float32.(interior_view(res.obj.sim.u))
     end
