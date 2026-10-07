@@ -62,7 +62,7 @@ runs with `core = :anelastic`). `:dynamic` gets no f_m on the momentum
 (only Pr_t(Ri)). Each provider's `smoke_check` asserts κ_v, ν_v ≥ 0;
 κ_v ≤ κ_h and ν_v ≤ ν_h ℓ_v/ℓ_h where Ri ≥ 0; ν_v ≥ ν_h ℓ_v/ℓ_h where
 Ri ≤ 0 (the convective enhancement of Brown et al.; not for `:dynamic`);
-κ_v = 0 where Ri ≥ Ri_c; its `report` prints the supercritical fraction
+κ_v = 0 where Ri ≥ Ri_c; its diagnostics give the supercritical fraction
 and the mean κ_v/κ_h. Smoke variants: `sgs_stability = :none`, `:lilly`.
 Its validation on GABLS1 and the stably stratified channel (P55-f,
 #191) adds no Berlin coupling — no new physics, a stated exception — and
@@ -165,7 +165,7 @@ on its 12-step state AMD's own κ would differ from θ's by 77–80 %
   identities every 4th step, the memories transported every step).
   `scale_dependent = false` (LASI) and `averaging = :plane` are smoke
   variants; `:local` runs `Operators.DynamicSmagorinsky` too. See
-  [the SGS theory page](../theory/sgs.md). `report` prints the mean C_s
+  [the SGS theory page](../theory/sgs.md). the diagnostics give the mean C_s
   over air cells in the canopy and in the free stream (the levels
   between the highest roof + 1 and the sponge), and with LASD the
   geometric-mean β there. `smoke_check` asserts ν_t = 0 in buildings and
@@ -216,7 +216,7 @@ on its 12-step state AMD's own κ would differ from θ's by 77–80 %
   evaluates the closure on the laminar version of the current flow (u and
   v replaced by their level means, w = 0). It requires ν_t = 0 exactly in
   the free stream above the inversion, where Smagorinsky gives up to
-  0.013 m²/s. `report` prints the canopy and free-stream mean ν_t against
+  0.013 m²/s. the diagnostics give the canopy and free-stream mean ν_t against
   Smagorinsky with `cfg.C_s`. Neither is the default; flipping it is the
   maintainer's call.
   Measured in `:smoke` after 24 s (adaptive stepper), mean ν_t over the
@@ -237,7 +237,7 @@ on its 12-step state AMD's own κ would differ from θ's by 77–80 %
   (whose top levels include the sponge).
   `:sigma` (`couplings/sgs_sigma.jl`, #184) is the σ-model of
   Nicoud et al. (2011), option `C_σ = 1.35`. Its ``ν_t`` vanishes in
-  laminar shear and 2-D flow; `report` prints the canopy and free-stream
+  laminar shear and 2-D flow; the diagnostics give the canopy and free-stream
   mean ``ν_t`` next to Smagorinsky's on the same flow. After 100 smoke
   steps that is 3.1e-2 (Smagorinsky 2.5e-2) m²/s in the canopy and 4.0e-3
   (2.3e-3) above the sponge start, where the sponge now holds a nearly
