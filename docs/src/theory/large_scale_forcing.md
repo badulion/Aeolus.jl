@@ -139,8 +139,11 @@ case's behaviour before #171. As a body-force hook of 100 SSP-RK3 or
 forward-Euler steps of a rotating, sheared, turbulent box it reproduces
 the former `add_geostrophic_wind!` bit for bit (`==` on ``u, v, w, θ,
 p``; `test/era6_large_scale_forcing.jl`, which until #317 ran the same
-oracle inside 100 Berlin smoke steps); the plane mean and the
-subtraction are computed in the same order as before.
+oracle inside 100 Berlin smoke steps and also compared every tracer;
+the tracer check is redundant, because the forcing writes only ``u`` and
+``v`` and the state a tracer is transported by is compared bit for bit);
+the plane mean and the subtraction are computed in the same order as
+before.
 
 Nudging is not a pressure gradient. It has no Coriolis partner, so it
 damps the inertial oscillation on the time scale ``τ`` and pulls the

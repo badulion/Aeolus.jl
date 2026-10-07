@@ -14,9 +14,15 @@
 #   * bit for bit: GeostrophicNudging against the Berlin case's former
 #     add_geostrophic_wind! over 100 SSP-RK3 and 100 forward-Euler steps
 #     of a sheared, rotating, turbulent box with Smagorinsky SGS (until
-#     #317 the same oracle ran inside 100 Berlin smoke steps, 68 s; the
+#     #317 the same oracle ran inside 100 Berlin smoke steps; the
 #     forcing is a body-force hook either way, and the Berlin case is an
-#     example, run by hand, not a test fixture).
+#     example, run by hand, not a test fixture). The Berlin version also
+#     asserted every tracer bit for bit; the box carries no tracers, and
+#     that check was redundant: both forcings write only u and v, never
+#     a tracer, so a tracer differs between the two runs only through
+#     the state it is advected, diffused and sourced by; that state
+#     (u, v, w, θ, p, and the eddy diffusivity computed from it) is
+#     bit-identical, which the == below checks.
 
 using Test, Printf
 using Aeolus

@@ -238,13 +238,20 @@ exercised the same code paths) was removed in #320:
 
 - `era6_large_scale_forcing.jl`: the bit-for-bit check of
   `GeostrophicNudging` against the former `add_geostrophic_wind!` ran its
-  oracle inside 100 Berlin smoke steps (68 s of the file). The forcing is
+  oracle inside 100 Berlin smoke steps, most of the file's time. The forcing is
   a body-force hook either way; it now runs as the hook of 100 SSP-RK3
   and 100 forward-Euler steps of a rotating, sheared, stratified,
   turbulent box with Smagorinsky SGS, with ``τ`` = 60 s so that the
   forcing moves the mean wind by O(1) (``⟨u⟩`` 3.90 → 1.10 m/s against
   ``U_g = 1`` over the 200 s). A deliberately reordered oracle
-  fails both runs. The file went from 83 s to 14 s and lost its heavy tag.
+  fails both runs. The Berlin version also asserted every tracer bit for
+  bit; that assertion was dropped as redundant, not replaced: both
+  forcings write only ``u`` and ``v``, never a tracer, so a tracer can
+  differ between the two runs only through the state that advects,
+  diffuses and sources it (``u, v, w, θ, p`` and the eddy diffusivity
+  computed from them), and that state is still compared with `==`; the
+  box carries no tracers. The file went from 78.3 s to TODO_AFTER s
+  (fast-tier runs, see below) and lost its heavy tag.
 - `test/support/kolmogorov.jl`: one builder, `kolmogorov_field!`, for the
   ``k^{-5/3}`` initial field that `era2_sgs_numerics.jl`,
   `era6_lagrangian_sgs.jl`, `era6_lasd.jl` (named copies),
