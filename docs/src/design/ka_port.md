@@ -1069,6 +1069,132 @@ reductions, the Berlin smoke matrix, the flagship step, nested, fft, fv)
 are identical at 4 and 24 threads to 1 thread. At `-t 1` every kernel is
 the old loop bit for bit (`test/ka_fv.jl`): no one-time change.
 
+## KA-e: scalar transport, positivity limiter, momentum advection (#302)
+
+**Ported to `launch!`** (all in AdvectionSchemes): the flux-form sweep
+`_advect_reconstructed!` (one launch over the interior; every cell still
+evaluates both of its faces, so neighbouring cells evaluate a shared face
+twice exactly as before: sharing face fluxes would change bits and is not
+done here), `_reconstructed_fluxes!` and `_upwind_fluxes!` (three launches
+each, over the face ranges `last + 1`), `_add_flux_divergence!`, the
+WENO-Z and skew-symmetric momentum advection (one launch per component),
+the variance-conserving advection, and `boundary_scalar_flux` (#284). The
+reconstruction point functions stay `@inline` scalar functions on
+`NTuple`s.
+
+**The limiter in three phases.** `_positivity_limit!` is pass 1 (the
+ratio `R` of every cell, one launch), the halo of `R` (`_wrap_one_layer!`
+as three 2-D launches over the face planes, or `fill_halos!(R, bcs)`),
+and pass 2 (each face flux rescaled with its donor's `R`, three launches).
+Pass 2 and the upwind fluxes choose with `ifelse` instead of a branch on
+the sign of the flux or the velocity: the same value (both operands are
+computed, one is chosen), and at one thread the limiter ran 240 µs
+instead of 1800 µs on random-sign fluxes, where the branch mispredicted
+on half the faces.
+
+**Scratch.** `apply_positivity_limiter!(…; ratio = nothing)` and
+`advect_positive!(…; workspace = nothing)` throw an `ArgumentError` when
+the backend runs threaded: a time loop allocates the scratch once. The
+Berlin coupling (`couplings/scalar_advection.jl`), the TKE closure and the
+Reynolds-stress closure pass their `FluxLimiterWorkspace`; the coupling
+builds the reconstruction descriptor once. With a workspace,
+`advect_positive!` and `boundary_scalar_flux` allocate nothing on a serial
+backend (`@allocated`, `test/ka_advection.jl`).
+
+**`boundary_scalar_flux`.** Its totals, per-level sums and mass-flux
+corrections are ordered sums, so they stay serial in the old loop order.
+When a face plane's 2-D launch runs on several tasks the face terms are
+computed by it into a scratch vector (one module-level buffer, grown once,
+behind a lock) and the sums then run over the scratch; on a serial launch
+the sums compute the terms on the fly, the old fused loop (a separate
+pass over the scratch was 1.6-2.2× the fused loop at one thread). The
+two-point schemes (`:centered`, `:upwind`) always take the fused loop:
+their face work is smaller than the extra pass (256×256×128 box,
+`:centered`: 306 µs fused at one thread, 455 / 487 / 730 µs threaded at
+4 / 12 / 24). A 2-D serial launch passes the body's arguments separately
+(`_nest2!`, as `_nest!` for 3-D): through the tuple the face bodies ran
+2-2.5× the old loop.
+
+**Bit for bit.** `test/ka_advection.jl` keeps a transcript of the pre-port
+loops (`test/support/legacy_advection.jl`) and compares, on seeded random
+fields and halos included: the sweep of every reconstruction (WENO-Z5/7,
+TENO5/8, WENO-JS5, Centered2, upwind), the reconstructed and upwind face
+fluxes, the limiter (with and without low-order fluxes, periodic wrap and
+BC halos, positivity active), `advect_positive!` on a RegularGrid and a
+StretchedGrid, both momentum advections, the variance-conserving
+advection and `boundary_scalar_flux` (every flux-form scheme, levels,
+corrections, diffusion, weights, `face_fluxes`). Each runs serially,
+threaded with every launch on the KA path (`threshold = 0`) and on the
+default backend: all identical to the old loops. No one-time change: at
+one thread the flagship's state after 4 steps hashes the same as master
+(`b20cfbd49603e21f`).
+
+**Measured** (Ryzen 9 7900, 12 cores / 24 threads; µs, minimum of 200
+calls, 64×64×32 RegularGrid, halo 3; load 5-7 from other jobs; old = the
+transcript at one thread):
+
+| kernel | old, 1 t | new, 1 t | new/old | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: | --: | --: |
+| sweep WENO-Z5 | 2235 | 2263 | 1.01 | 583 (3.9×) | 430 (5.3×) | 435 (5.2×) |
+| sweep TENO5 | 2657 | 2663 | 1.00 | 684 (3.9×) | 526 (5.1×) | 470 (5.7×) |
+| sweep Centered2 | 103 | 103 | 1.00 | 36 (2.8×) | 38 (2.7×) | 40 (2.6×) |
+| face fluxes WENO-Z5 | 1042 | 1037 | 0.99 | 295 (3.5×) | 261 (4.0×) | 261 (4.0×) |
+| upwind fluxes | 275 | 103 | 0.38 | 65 (1.6×) | 66 (1.6×) | 78 (1.3×) |
+| limiter (3 phases, walls) | 1800 | 240 | 0.13 | 188 (1.3×) | 152 (1.6×) | 179 (1.3×) |
+| flux divergence | 52 | 52 | 1.01 | 28 (1.9×) | 24 (2.2×) | 26 (2.0×) |
+| advect_positive! WENO-Z5 | 3425 | 1451 | 0.42 | 571 (2.5×) | 568 (2.6×) | 609 (2.4×) |
+| momentum WENO-Z5 | 6658 | 6664 | 1.00 | 1718 (3.9×) | 1452 (4.6×) | 1387 (4.8×) |
+| momentum skew | 301 | 305 | 1.01 | 125 (2.4×) | 118 (2.6×) | 132 (2.3×) |
+| variance conserving | 87 | 87 | 1.00 | 35 (2.5×) | 31 (2.8×) | 39 (2.2×) |
+| bsf `:centered`, 64×64×32 | 16 | 16 | 1.03 | 16 | 16 | 16 |
+| bsf `:weno_z5`, 64×64×32 | 647 | 129 | 0.20 | 129 | 130 | 130 |
+| bsf `:centered`, 256×256×128 | 283 | 290 | 1.02 | 286 | 358 | 287 |
+| bsf `:weno_z5`, 256×256×128 | 14245 | 2444 | 0.17 | 1544 (1.6×) | 1667 (1.5×) | 1497 (1.6×) |
+
+Speed-ups are against the new code at one thread. Every one-thread time is
+within the 1.10× gate (worst: `boundary_scalar_flux :centered` 1.03×).
+`boundary_scalar_flux` at 64×64×32 stays serial (its planes are below the
+launch threshold); with WENO-Z5 it runs 5× faster at one thread than
+master (651 → 129 µs, master's own function measured too). The arithmetic
+is the same; the old loop body called a local closure `addl!` and the
+new one top-level functions with every array an argument. Which of the
+two made the difference was not isolated.
+
+**Flagship** (`CaseConfig()`, 64×64×64; ms/step, minimum of 3 × 8 steps
+after 4 warm-up steps; load 5-8 from other jobs; master = 8cb0b572):
+
+| threads | step, master | step, KA-e | `scalar_advection`, master | `scalar_advection`, KA-e |
+| --: | --: | --: | --: | --: |
+| 1 | 254.9 | 246.3 | 57.3 | 50.0 (0.87×) |
+| 4 | 238.6 | 217.5 | 57.4 | 34.3 (1.46×) |
+| 12 | 241.8 | 203.1 | 59.3 | 29.1 (1.72×) |
+| 24 | 246.1 | 210.2 | 58.2 | 31.6 (1.58×) |
+
+(KA-e speed-ups against KA-e at one thread.) The stage is short of the
+issue's targets (≥ 2.5× at 4, ≥ 5× at 12). Per tracer at 12 threads,
+`advect_positive!` takes 1.14 ms (3.26 at one thread, 2.9×) and the SGS
+diffusion `sgs_diffuse!` 0.63-0.81 ms (1.45, 1.8-2.3×); the limiter and
+the upwind fluxes are memory-bound and gain 1.3-1.6×. The 12- and 24-thread
+runs shared the machine with other jobs (load 5-8 on 12 cores), so they
+are lower bounds.
+
+**Launch overhead.** One `scalar_advection` stage (8 advected tracers)
+makes 259 launches, 96 of them threaded (the others are below the
+threshold: halo planes, the 2-D wraps). An empty-body launch over the 64³
+interior costs 6.3 / 13.3 / 21.6 µs at 4 / 12 / 24 threads, so about
+0.6 / 1.3 / 2.1 ms of the stage is launch overhead.
+
+**Thread invariance.** The harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,24`) with the new `advection` section (64
+hashes: the sweep, face fluxes and `advect_positive!` with its ratio
+field, periodic wrap and wall halos, of every reconstruction; the bare
+limiter; both momentum advections; the variance-conserving advection;
+`advect_positive!` on a stretched grid; `boundary_scalar_flux` on a
+256×256×128 open box, where its face planes launch on several tasks).
+All 3071 hashes (primitives, dns, reductions, smoke, flagship, nested,
+fft, fv, pcg, radiation, advection) are identical at 4 and 24 threads to
+1 thread.
+
 ## KA-n: radiation and stochastic modules (#305)
 
 **Radiosity.** Three changes.
