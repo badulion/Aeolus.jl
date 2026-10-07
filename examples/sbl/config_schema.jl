@@ -950,8 +950,10 @@ function Simulations.run!(::SBLDriver, r::SBLRun, rf::RunFolder, ck::CheckpointS
         series = r.series; nextt = Ref(c.sim.t + av.series_interval); lastt = Ref(c.sim.t)
         comps = towers === nothing ? (series = series, nextt = nextt, lastt = lastt) :
                                      (series = series, nextt = nextt, lastt = lastt, towers = towers)
+        # explicit rows (the run resumes inside sbl_run!, so the driver numbers
+        # the steps); the record supplies the limiter, CFL and solver numbers
         with_monitor(c.sim; run = rf, components = (; sgs = c.closure), t_end = st.end_time,
-                     cadence = cfg.logging.diagnostics_cadence, sgs = c.closure) do m
+                     cadence = cfg.logging.diagnostics_cadence, sgs = c.closure, attach = false) do m
             cb = function (c)
                 dt = c.sim.t - lastt[]; lastt[] = c.sim.t
                 monitor!(m, c.sim; step = c.nsteps, dt = dt)
@@ -976,7 +978,7 @@ function Simulations.run!(::SBLDriver, r::SBLRun, rf::RunFolder, ck::CheckpointS
         c = r.case
         spin = sbl_channel_spinup(cfg)
         with_monitor(c.sim; run = rf, components = (; sgs = c.closure), t_end = cfg.stepper.end_time,
-                     cadence = cfg.logging.diagnostics_cadence, sgs = c.closure) do m
+                     cadence = cfg.logging.diagnostics_cadence, sgs = c.closure, attach = false) do m
             lastt = Ref(c.sim.t)
             cb = function (c)
                 monitor!(m, c.sim; step = c.nsteps, dt = c.sim.t - lastt[]); lastt[] = c.sim.t

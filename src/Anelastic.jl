@@ -25,8 +25,10 @@ Contents
   * [`ReferenceState`](@ref) and its four constructors
     ([`isothermal_reference`](@ref), [`isentropic_reference`](@ref),
     [`constant_stability_reference`](@ref), [`reference_from_profile`](@ref)).
-  * [`DensityWeightedPoissonSolver`](@ref) — matrix-free Jacobi-preconditioned
-    CG for the variable-coefficient Poisson problem `∇·(w(z) ∇φ) = f`.
+  * [`DirectWeightedPoissonSolver`](@ref) — the direct FFT/DCT + tridiagonal
+    solver of the variable-coefficient Poisson problem `∇·(w(z) ∇φ) = f`
+    (the default projection, #309), and [`DensityWeightedPoissonSolver`](@ref),
+    a matrix-free Jacobi-preconditioned CG for the same operator.
   * [`AnelasticSimulation`](@ref) / [`PseudoIncompressibleSimulation`](@ref)
     with [`step_anelastic!`](@ref) / [`step_pseudo_incompressible!`](@ref).
   * [`system_comparison_diagnostics`](@ref) — the instrument that shows the
@@ -73,16 +75,17 @@ using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    add_surface_flux!, add_sponge!,
                    compute_sgs!, add_sgs_momentum!, add_sgs_scalar!, advance_sgs!,
                    _active_sgs, _check_sgs_stress
-using ..PressureSolvers: PressureSolvers, AbstractPressureSolver
+using ..PressureSolvers: PressureSolvers, AbstractPressureSolver, ColumnTridiagonalSolver
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 
-import ..PressureSolvers: solve!, poisson_axis_bcs
+import ..PressureSolvers: solve!, poisson_axis_bcs, solver_stats
 import ..TimeSteppers: step!
 import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
 
 using ..Simulations: horizontal_mean, horizontal_variance, add_velocity_sponge!,
                      StepWorkspaces, axpy!, pressure_from_potential!, zero_storage!,
-                     storage_like, copy_storage!
+                     storage_like, copy_storage!,
+                     _step_begin!, _step_end!, _step_abort!, _note_solve!, _note_pick!, _wall
 import ..Simulations
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 using ..Operators: sgs_fields
@@ -97,7 +100,7 @@ export ReferenceState,
        constant_stability_reference, reference_from_profile,
        hydrostatic_residual, max_hydrostatic_residual,
        reference_scale_height,
-       DensityWeightedPoissonSolver, apply_weighted_laplacian!,
+       DensityWeightedPoissonSolver, DirectWeightedPoissonSolver, apply_weighted_laplacian!,
        solver_iterations, solver_residual,
        MassWeighting, AnelasticWeighting, PseudoIncompressibleWeighting,
        MassWeightedSimulation, AnelasticSimulation, PseudoIncompressibleSimulation,
@@ -764,6 +767,7 @@ poisson_axis_bcs(s::DensityWeightedPoissonSolver) = (bc_x = s.bc_x, bc_y = s.bc_
 solver_iterations(s::DensityWeightedPoissonSolver) = s.last_iter[]
 "Final residual 2-norm of the last [`solve!`](@ref)."
 solver_residual(s::DensityWeightedPoissonSolver) = s.last_residual[]
+solver_stats(s::DensityWeightedPoissonSolver) = (s.last_iter[], Float64(s.last_residual[]))
 
 # --- kernels -------------------------------------------------------------
 
@@ -816,10 +820,14 @@ Evaluate the *discrete* operator `∇·(w ∇φ)` of `solver` on the interior of
 the operator applies its own periodic / Neumann closure, exactly as during
 [`solve!`](@ref) — so this is the right tool for a manufactured-solution
 test: build `f = apply_weighted_laplacian!(f, φ, solver)`, solve for `φ`, and
-the recovery error is purely the CG tolerance.
+the recovery error is purely the CG tolerance (round-off for
+[`DirectWeightedPoissonSolver`](@ref), which inverts the same operator).
 """
-function apply_weighted_laplacian!(out::Field{CellCenter,T}, φ::Field{CellCenter,T},
-                                   s::DensityWeightedPoissonSolver{T}) where {T}
+apply_weighted_laplacian!(out::Field{CellCenter,T}, φ::Field{CellCenter,T},
+                          s::DensityWeightedPoissonSolver{T}) where {T} = _weighted_laplacian!(out, φ, s)
+
+# either solver: both carry mesh, w_c, w_f and the axis kinds
+function _weighted_laplacian!(out::Field{CellCenter,T}, φ::Field{CellCenter,T}, s) where {T}
     ii, jj, kk = interior(φ.mesh)
     xin  = Array{T,3}(view(φ.data, ii, jj, kk))
     xout = similar(xin)
@@ -882,6 +890,118 @@ end
     @inbounds b[i, j, k] = -src[i + oi, j + oj, k + ok]
     return nothing
 end
+
+# =========================================================================
+# DirectWeightedPoissonSolver (#309)
+# =========================================================================
+
+"""
+    DirectWeightedPoissonSolver(mesh, w_c, w_f; bc_x = :periodic, bc_y = :periodic,
+                                bc_z = :neumann)
+    DirectWeightedPoissonSolver(mesh, ref::ReferenceState; weighting = :ρ, kwargs...)
+    DirectWeightedPoissonSolver(mesh, c::Real; kwargs...)
+
+Direct solver of the same discrete problem as
+[`DensityWeightedPoissonSolver`](@ref),
+
+```math
+\\nabla\\cdot\\left(w(z)\\,\\nabla\\varphi\\right) = f ,
+```
+
+with the *same* operator (cell weight `w_c[k]` on the horizontal faces,
+face weight `w_f[k]` on the vertical ones, zero flux through the bottom and
+top walls), but without iterating. Because `w` depends on height only, the
+horizontal operator `w_c[k](δ²ₓ + δ²_y)` is diagonalised by the real FFT
+(periodic side) or the DCT-II (Neumann side, `bc_x`/`bc_y = :neumann`),
+which leaves one tridiagonal system per horizontal wavenumber `(m, n)`,
+
+```math
+\\frac{w_f[k]}{Δz^2}(\\hat φ_{k-1} - \\hat φ_k)
+ + \\frac{w_f[k+1]}{Δz^2}(\\hat φ_{k+1} - \\hat φ_k)
+ - λ_{mn}\\, w_c[k]\\, \\hat φ_k = \\hat f_k ,
+```
+
+solved by the Thomas algorithm — the FFT–tridiagonal method of Schumann &
+Sweet (1988, *J. Comput. Phys.* 75, 123). The transform, the sweep and the
+singular mean mode are
+[`ColumnTridiagonalSolver`](@ref Aeolus.PressureSolvers.ColumnTridiagonalSolver),
+the one implementation the stretched-grid Boussinesq solver also uses.
+
+Like the CG solver, the source is projected to zero (plain) mean, the
+compatibility condition of the closed domain, and the returned `p` has zero
+plain mean; the two solvers therefore agree to the CG tolerance, and this
+one satisfies `∇·(w∇p) = f − f̄` to round-off. It is the default projection
+solver of [`AnelasticSimulation`](@ref) and
+[`PseudoIncompressibleSimulation`](@ref) (`pressure_solver = :direct`).
+
+Only `bc_z = :neumann` exists: the sound-proof cores reject a periodic
+vertical, and a periodic column would need a cyclic (Sherman–Morrison)
+sweep no caller has. `apply_weighted_laplacian!` evaluates the operator.
+"""
+struct DirectWeightedPoissonSolver{T, C<:ColumnTridiagonalSolver{T}} <: AbstractPressureSolver
+    mesh::RegularGrid{T}
+    w_c::Vector{T}          # cell weight, length Nz
+    w_f::Vector{T}          # face weight, length Nz+1
+    bc_x::Symbol
+    bc_y::Symbol
+    bc_z::Symbol            # always :neumann
+    core::C
+end
+
+function DirectWeightedPoissonSolver(mesh::RegularGrid{T},
+                                     w_c::AbstractVector,
+                                     w_f::AbstractVector;
+                                     bc_x::Symbol = :periodic,
+                                     bc_y::Symbol = :periodic,
+                                     bc_z::Symbol = :neumann) where {T}
+    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    bc_x in (:neumann, :periodic) || error("bc_x must be :neumann or :periodic, got $bc_x")
+    bc_y in (:neumann, :periodic) || error("bc_y must be :neumann or :periodic, got $bc_y")
+    bc_z === :neumann ||
+        error("DirectWeightedPoissonSolver solves walls in z only (bc_z = :neumann), got $bc_z; " *
+              "use DensityWeightedPoissonSolver for a periodic column")
+    length(w_c) == Nz     || throw(DimensionMismatch("w_c must have length Nz=$Nz"))
+    length(w_f) == Nz + 1 || throw(DimensionMismatch("w_f must have length Nz+1=$(Nz+1)"))
+    wc = T.(collect(w_c)); wf = T.(collect(w_f))
+    all(>(0), wc) && all(>(0), wf) || error("Poisson weights must be strictly positive")
+    idz2 = 1 / mesh.dz^2
+    lower = T[k > 1  ? wf[k] * idz2     : zero(T) for k in 1:Nz]
+    upper = T[k < Nz ? wf[k+1] * idz2   : zero(T) for k in 1:Nz]
+    core = ColumnTridiagonalSolver(T, (Nx, Ny, Nz), (mesh.dx, mesh.dy);
+                                   lower = lower, upper = upper, hweight = wc,
+                                   measure = fill(T(mesh.dz^2), Nz), inv_coupling = 1 ./ wf,
+                                   gauge = ones(T, Nz), bc_x = bc_x, bc_y = bc_y)
+    return DirectWeightedPoissonSolver{T, typeof(core)}(mesh, wc, wf, bc_x, bc_y, :neumann, core)
+end
+
+"Anelastic (`:ρ`) or pseudo-incompressible (`:ρθ`) weighting taken from `ref`."
+function DirectWeightedPoissonSolver(mesh::RegularGrid{T}, ref::ReferenceState{T};
+                                     weighting::Symbol = :ρ, kwargs...) where {T}
+    ref.mesh === mesh || ref.mesh == mesh ||
+        error("ReferenceState was built for a different mesh")
+    weighting === :ρ  && return DirectWeightedPoissonSolver(mesh, ref.ρ̄, ref.ρ̄_f; kwargs...)
+    weighting === :ρθ && return DirectWeightedPoissonSolver(mesh, ref.P, ref.P_f; kwargs...)
+    error("weighting must be :ρ (anelastic) or :ρθ (pseudo-incompressible), got $weighting")
+end
+
+"Constant weight `c` — reduces to `c ∇²φ = f`, the operator of `CosineFFTPoissonSolver`."
+DirectWeightedPoissonSolver(mesh::RegularGrid{T}, c::Real; kwargs...) where {T} =
+    DirectWeightedPoissonSolver(mesh, fill(T(c), mesh.Nz), fill(T(c), mesh.Nz + 1); kwargs...)
+
+poisson_axis_bcs(s::DirectWeightedPoissonSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = s.bc_z)
+
+"""
+    solve!(p, source, solver::DirectWeightedPoissonSolver)
+
+Solve `∇·(w ∇p) = source − mean(source)` on the interior, exactly to
+round-off; `p` is returned with zero mean and its halos untouched.
+"""
+solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
+       s::DirectWeightedPoissonSolver{T}) where {T} = solve!(p, source, s.core)
+
+# the operator it inverts is the CG solver's: one implementation of it
+apply_weighted_laplacian!(out::Field{CellCenter,T}, φ::Field{CellCenter,T},
+                          s::DirectWeightedPoissonSolver{T}) where {T} = _weighted_laplacian!(out, φ, s)
 
 # =========================================================================
 # Weighted flux-form operators
@@ -1279,7 +1399,8 @@ end
 
 Lipps–Hemler anelastic LES: `∇·(ρ̄u) = 0`, buoyancy `g(θ−θ̄)/θ̄`, flux-form
 advection weighted by `ρ̄`, and a density-weighted pressure projection
-(`∇·(ρ̄∇φ) = ∇·(ρ̄u*)`, solved by [`DensityWeightedPoissonSolver`](@ref)).
+(`∇·(ρ̄∇φ) = ∇·(ρ̄u*)`, solved directly by [`DirectWeightedPoissonSolver`](@ref)
+by default).
 Advance with [`step_anelastic!`](@ref) (or the generic `step!`).
 
 Keyword arguments (all optional; each physics term is off when its parameter
@@ -1297,8 +1418,9 @@ is `0`):
 | `sponge_α_max`, `sponge_z_start` | off | Rayleigh sponge |
 | `sponge_target` | `nothing` (zero) | sponge relaxation targets; required with an open top ([`sponge_target`](@ref Aeolus.Simulations.sponge_target), #262) |
 | `bcs`, `θ_bcs` | `FieldBoundaryConditions(:periodic, :periodic, :wall)` | BCs |
-| `solver` | `DensityWeightedPoissonSolver(mesh, ref; weighting=:ρ)` | projection solver |
-| `tol`, `maxit` | `1e-12`, `500` | passed to the default solver |
+| `pressure_solver` | `:direct` | the projection solver built when `solver` is not given: `:direct` ([`DirectWeightedPoissonSolver`](@ref), FFT/DCT + tridiagonal, exact to round-off, #309) or `:cg` ([`DensityWeightedPoissonSolver`](@ref)) |
+| `solver` | from `pressure_solver`, `weighting = :ρ` | an explicit projection solver (overrides `pressure_solver`) |
+| `tol`, `maxit` | `1e-12`, `500` | of the `:cg` solver |
 
 The vertical BC **must not be periodic**: a `z`-periodic domain with a
 non-periodic `ρ̄(z)` has no well-posed anelastic constraint, and the
@@ -1389,6 +1511,7 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
                               bcs::FieldBoundaryConditions =
                                   FieldBoundaryConditions(:periodic, :periodic, :wall),
                               θ_bcs::FieldBoundaryConditions = bcs,
+                              pressure_solver::Symbol = :direct,
                               tol::Real   = 1e-12,
                               maxit::Int  = 500,
                               solver::Union{Nothing,AbstractPressureSolver} = nothing,
@@ -1406,11 +1529,13 @@ function _build_mass_weighted(S::MassWeighting, mesh::RegularGrid{T};
     # The projection's per-axis closure comes from the velocity faces
     # (periodic, or Neumann for walls and prescribed-velocity sides).
     ax = poisson_axis_bcs(bcs)
-    ps = solver === nothing ?
-        DensityWeightedPoissonSolver(mesh, refstate;
-                                     weighting = _weighting_symbol(S),
-                                     tol = tol, maxit = maxit, ax...) :
-        solver
+    ps = solver !== nothing ? solver :
+         pressure_solver === :direct ?
+             DirectWeightedPoissonSolver(mesh, refstate; weighting = _weighting_symbol(S), ax...) :
+         pressure_solver === :cg ?
+             DensityWeightedPoissonSolver(mesh, refstate; weighting = _weighting_symbol(S),
+                                          tol = tol, maxit = maxit, ax...) :
+         throw(ArgumentError("pressure_solver must be :direct or :cg, got :$pressure_solver"))
 
     u = Field(FaceX(), mesh); v = Field(FaceY(), mesh); w = Field(FaceZ(), mesh)
     p = Field(CellCenter(), mesh); θ = Field(CellCenter(), mesh)
@@ -1503,7 +1628,8 @@ fractional step:
 4. predictor `u* = uⁿ + Δt F`, then `post_predictor!(sim, Δt)`;
 5. refill halos (which re-imposes `w = 0` on the walls) and form
    `D = ∇·(ρ̄u*)`;
-6. solve `∇·(ρ̄∇φ) = D` with the [`DensityWeightedPoissonSolver`](@ref);
+6. solve `∇·(ρ̄∇φ) = D` with the projection solver (by default the direct
+   [`DirectWeightedPoissonSolver`](@ref));
 7. correct `u = u* − ∇φ`, advance `θ`, store `p = φ/Δt`, advance the clock.
 
 Steps 5–7 are *discretely consistent*: the divergence in 5 and the operator
@@ -1559,7 +1685,9 @@ function _project_mass_weighted!(sim::MassWeightedSimulation{S,T},
     weighted_divergence!(sim.div_buf, sim.u, sim.v, sim.w, Wc, Wf, m; normalize = false)
 
     # 9. variable-coefficient Poisson solve: ∇·(W∇φ) = ∇·(W u*)
+    t_solve = time_ns()
     solve!(sim.φ, sim.div_buf, sim.solver)
+    _note_solve!(sim.workspaces.rec, sim.solver, t_solve)   # iterations, residual, wall (#336)
 
     # 10. correction u = u* − ∇φ
     fill_halos!(sim.φ, sim.bcs)
@@ -1571,7 +1699,19 @@ function _project_mass_weighted!(sim::MassWeightedSimulation{S,T},
     return sim
 end
 
-function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
+# One step of a sound-proof core inside the step record's bracket (#336).
+function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real; kwargs...) where {S,T}
+    rec = sim.workspaces.rec
+    outer = _step_begin!(rec, sim)
+    try
+        _mass_weighted_step!(sim, T(dt); kwargs...)
+    catch
+        _step_abort!(rec); rethrow()
+    end
+    return _step_end!(rec, sim, T(dt), outer)
+end
+
+function _mass_weighted_step!(sim::MassWeightedSimulation{S,T}, dt::Real;
                               body_force!::Union{Nothing,Function} = nothing,
                               post_predictor!::Union{Nothing,Function} = nothing,
                               sgs = nothing,
@@ -1613,9 +1753,11 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     # 4. SGS closure (the contract shared with the Boussinesq core: the
     #    built-in Smagorinsky, or the `sgs` keyword).
     if closure !== nothing
+        t_sgs = time_ns()
         f = compute_sgs!(closure, sim)
         add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim; stress = sgs_stress)
         add_sgs_scalar!(sim.tθ, sim.θ, closure, f, sim)
+        sim.workspaces.rec.wall_sgs += _wall(t_sgs)
     end
 
     # 5. buoyancy with the height-dependent reference θ̄(z)
@@ -1943,11 +2085,17 @@ ignored, so a driver can pass the same keywords to either core.
 """
 function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
                      dt_prev = nothing, sgs = nothing, kwargs...) where {S,T}
+    t_cfl = time_ns()
     m = sim.mesh
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     rate = _max_advective_rate(sim.u.data, sim.v.data, sim.w.data, m)
-    isnan(rate) && return c.dt_min
+    rec = sim.workspaces.rec
+    if isnan(rate)
+        rec.wall_cfl += _wall(t_cfl)
+        return c.dt_min
+    end
     dt = rate > 0 ? c.C_advective / rate : T(Inf)
+    limiter = :advective
 
     closure = _active_sgs(sim, sgs, nothing)
     κmax = zero(T)
@@ -1960,7 +2108,9 @@ function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
     end
     νtot = (sim.has_viscosity ? sim.ν : zero(T)) + κmax
     Δ²harm = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
-    νtot > 0 && (dt = min(dt, c.C_diffusive * Δ²harm / νtot))
+    if νtot > 0 && c.C_diffusive * Δ²harm / νtot < dt
+        dt = c.C_diffusive * Δ²harm / νtot; limiter = :diffusive
+    end
 
     if sim.has_buoyancy
         θm = horizontal_mean(sim.θ)
@@ -1969,16 +2119,25 @@ function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
             N² = max(N², buoyancy_frequency_squared(θm[k-1], θm[k], m.dz, sim.g_accel,
                                                      (θm[k-1] + θm[k]) / 2))
         end
-        N² > 0 && (dt = min(dt, c.C_buoyancy / sqrt(N²)))
+        if N² > 0 && c.C_buoyancy / sqrt(N²) < dt
+            dt = c.C_buoyancy / sqrt(N²); limiter = :buoyancy
+        end
     end
-    sim.has_coriolis && sim.f_coriolis != 0 &&
-        (dt = min(dt, c.C_coriolis / abs(sim.f_coriolis)))
+    if sim.has_coriolis && sim.f_coriolis != 0 && c.C_coriolis / abs(sim.f_coriolis) < dt
+        dt = c.C_coriolis / abs(sim.f_coriolis); limiter = :coriolis
+    end
+    rec.wall_cfl += _wall(t_cfl)
     isnan(dt) && return c.dt_min
     if dt_prev !== nothing
         dtp = T(dt_prev)
-        dtp > 0 && (dt = min(dt, c.growth_max * dtp))
+        dtp > 0 && c.growth_max * dtp < dt && (dt = c.growth_max * dtp; limiter = :growth)
     end
-    return clamp(dt, c.dt_min, c.dt_max)
+    dt < c.dt_min && (limiter = :dt_min)
+    dt > c.dt_max && (limiter = :dt_max)
+    dt = clamp(dt, c.dt_min, c.dt_max)
+    # the pick of this state, for the step record of the step it is used for (#336)
+    _note_pick!(rec, sim, rate, νtot / Δ²harm, dt, limiter)
+    return dt
 end
 
 # A sound-proof core carries no qv: its snapshot holds an empty qv buffer.

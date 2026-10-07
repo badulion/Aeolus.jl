@@ -104,24 +104,6 @@ function run_entries!(case, S::Symbol, dt, n, t_old, t_new)
     return nothing
 end
 
-"""
-    timing_report(case) -> String
-
-Wall time spent in each (stage, coupling) entry and in `step!` (the
-dynamics, which includes the `:body_force` / `:post_predictor` entries),
-in seconds and ms per step, largest first.
-"""
-function timing_report(case)
-    n = max(case.clock.n, 1)
-    io = IOBuffer()
-    rows = sort!(collect(case.timing); by = last, rev = true)
-    @printf(io, "Wall time by stage entry over %d steps (s, ms/step):\n", n)
-    for ((S, name), t) in rows
-        @printf(io, "  %-16s %-20s %8.2f %8.2f\n", S, name, t, 1e3 * t / n)
-    end
-    return String(take!(io))
-end
-
 "The enabled provider of the `:timestepper` slot, or `nothing` (plain `step!` at `cfg.dt`)."
 function timestepper(case)
     for c in case.couplings
@@ -159,7 +141,10 @@ function step_dt(case)
     dt = next_dt(ts, case)
     variable_dt(typeof(ts)) || return dt
     for c in case.couplings
-        dt = limit_dt(c, case, dt)
+        d = limit_dt(c, case, dt)
+        # the coupling that shortened the step is what limited it
+        d < dt && hasproperty(ts, :stats) && (ts.stats.last_limiter = coupling_name(c))
+        dt = d
     end
     return dt
 end
@@ -229,11 +214,13 @@ last_step_dt(dt, remaining) = remaining <= dt ? remaining : remaining < 2dt ? re
 
 Open the output (unless `cfg.output_path === nothing`), run `nsteps`
 steps (stopping early on a blow-up), close the output and log the
-summary: the run's start and end, the stage timing and the ledgers are
-`Info` records (`subsystem = :berlin`). With a `monitor` (an `Aeolus.IO.RunMonitor`, the `berlin` run
-driver's) every step runs under it (`monitored_step!`: the diagnostics
-row, the progress line, the blowup guard); `callback(case, n)` is called
-after step `n`.
+summary: the run's start (`event = :run_start`) and
+[`log_run_end`](@ref) (the run, the stage timing and the ledgers), all
+structured `Info` events (`subsystem = :berlin`). With a `monitor` (an
+`Aeolus.IO.RunMonitor`, the `berlin` run driver's) every step runs under
+it (`monitored_step!`: the diagnostics row with the step's dt, its
+[`step_limiter`](@ref) and retries, the progress line, the blowup guard);
+`callback(case, n)` is called after step `n`.
 
 With a variable-step `:timestepper` provider (`variable_dt`, e.g.
 `:adaptive`) `nsteps · cfg.dt` is instead the simulated time to reach:
@@ -245,18 +232,25 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, c
     P = cadence_period(cfg, :output)
     ts = timestepper(case)
     variable = ts !== nothing && variable_dt(typeof(ts))
-    @info(variable ? @sprintf("Run: %.0f s with a variable step (:%s), %d output records",
-                              nsteps * cfg.dt, provider(typeof(ts)), floor(Int, nsteps * cfg.dt / P)) :
-                     @sprintf("Run: %d steps, %d output records, dt=%.0fs",
-                              nsteps, floor(Int, nsteps * cfg.dt / P), cfg.dt),
-          subsystem = :berlin, domain = current_domain(), event = :run_start)
+    @info(variable ? "run: $(nsteps * cfg.dt) s with a variable step (:$(provider(typeof(ts))))" :
+                     "run: $nsteps steps of $(cfg.dt) s",
+          subsystem = :berlin, domain = current_domain(), event = :run_start,
+          nsteps, t_end = case.sim.t + nsteps * cfg.dt,
+          dt = cfg.dt, variable_dt = variable,
+          records = floor(Int, nsteps * cfg.dt / P))
     case.clock.t_wall0 = time()
     n0 = case.clock.n
     function one_step(dt)
-        ok = monitor === nothing ? step_case!(case, dt) :
-             Aeolus.IO.monitored_step!(monitor, case.sim; step = case.clock.n + 1) do
-                 step_case!(case, dt)
-             end
+        if monitor === nothing
+            ok = step_case!(case, dt)
+        else
+            # the row gets the step's dt, what limited it and its retries
+            r0 = step_retries(case)
+            ok, _, _ = Aeolus.IO.monitored_step!(monitor, case.sim; step = case.clock.n + 1,
+                                                 limiter = step_limiter(case)) do
+                (step_case!(case, dt), Float64(dt), step_retries(case) - r0)
+            end
+        end
         ok && callback !== nothing && callback(case, case.clock.n)
         return ok
     end
@@ -273,16 +267,6 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, c
     nsteps = case.clock.n - n0
     t_wall = time() - case.clock.t_wall0
     close_output!(case)
-    @info(string(cfg.output_path === nothing ?
-                     @sprintf("Ran %d steps in %.1f s (no output file).", nsteps, t_wall) :
-                     @sprintf("Ran %d steps in %.1f s. Wrote %d time levels to %s (%.1f MB)",
-                              nsteps, t_wall, case.clock.nrecord, cfg.output_path,
-                              filesize(cfg.output_path) / 1e6),
-                 @sprintf("\nPeak ΔT (heat island): %.1f K   max|∇·u| = %.2e",
-                          maximum(case.bus.Ts) - minimum(case.bus.Ts), max_divergence(case.sim))),
-          subsystem = :berlin, domain = current_domain(), event = :run_end, steps = nsteps,
-          wall = t_wall)
-    @info(rstrip(timing_report(case)), subsystem = :berlin, domain = current_domain(), event = :timing)
-    @info(rstrip(ledger_report(case)), subsystem = :berlin, domain = current_domain(), event = :ledger)
+    log_run_end(case; nsteps, t_wall)
     return case
 end

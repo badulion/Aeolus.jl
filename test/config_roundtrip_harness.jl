@@ -29,15 +29,19 @@ bitwise_equal(a::AbstractArray{Float64}, b::AbstractArray{Float64}) =
 """
     diagnostics_without_wall(path) -> Vector{String}
 
-The lines of a `diagnostics.csv` with the wall-clock columns (header
-`wall …`) removed; none for a run without a run monitor (a harness
-driver of CFG-e writes no diagnostics.csv).
+The lines of a `diagnostics.csv` with the columns that measure the
+machine rather than the run removed: the wall clock (`wall …`, and the
+step cores' wall time per stage `wall_*`, also prefixed, `parent.wall_step`)
+and the process (`proc.*`: memory, GC time; #336). None for a run without
+a run monitor (a harness driver of CFG-e writes no diagnostics.csv).
 """
+_machine_column(h) = startswith(h, "wall") || occursin(".wall", h) || startswith(h, "proc.")
+
 function diagnostics_without_wall(path::AbstractString)
     isfile(path) || return String[]
     lines = readlines(path)
     isempty(lines) && return lines
-    keep = findall(h -> !startswith(h, "wall"), split(lines[1], ','))
+    keep = findall(h -> !_machine_column(h), split(lines[1], ','))
     return [join(split(l, ',')[keep], ',') for l in lines]
 end
 

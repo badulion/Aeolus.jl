@@ -13,8 +13,10 @@ Code: `examples/urban/parent/config.jl` (`ParentConfig`),
 `examples/urban/parent/case.jl` (`build_parent`, `step_parent!`,
 `run_parent!`), the surface `examples/urban/parent/surface.jl` (#249),
 the example `examples/urban/berlin_parent_diurnal.jl` (figures:
-`berlin_parent_figures.jl`), the tests `test/berlin_parent.jl` and
-`test/berlin_parent_smoke.jl`, and the 24 h check
+`berlin_parent_figures.jl`), the by-hand checks
+`examples/urban/berlin_checks.jl parent` (the smoke run, checks 1–3 and
+the parent surface; `test/berlin_parent.jl`, `test/berlin_parent_smoke.jl`
+and `test/berlin_parent_surface.jl` until #320) and the 24 h check
 `examples/urban/berlin_parent_lindenberg_check.jl`.
 
 ## Grid
@@ -125,8 +127,11 @@ this issue the closure is at round-off (≤ 1e-15 of the largest term).
 
 ## Validation (reduced resolution, measured)
 
-Checks 1–3 and 5 are `test/berlin_parent.jl` (idealised, 5–7 simulated
-hours, 5 min 25 s wall together). Checks 4 and 6 need a 24 h simulation
+Checks 1–3 are `examples/urban/berlin_checks.jl parent` (idealised, 6–7
+simulated hours; run by hand since #320 removed the Berlin test suite,
+before which they were `test/berlin_parent.jl`). Check 5 never used the
+parent case, only the two cores and the TKE closure: it is the module
+test `test/era2_anelastic_cbl.jl`. Checks 4 and 6 need a 24 h simulation
 and were moved out of the suite to
 `examples/urban/berlin_parent_lindenberg_check.jl` (run by hand): the
 maintainer skipped all 24 h validation runs in this issue and deferred
@@ -161,13 +166,16 @@ s⁻¹, before the default became D = 0.
 5. **Core sensitivity.** Boussinesq against anelastic (Lipps–Hemler, the
    isentropic-profile reference), uniform 24 × 24 × 40 grid, 5 h CBL
    (Q = 0.25 K m s⁻¹, Γ = 3 K/km) to ~2 km: z_i 2100 against 2325 m
-   (Δz_i/z_i = +0.107), mixed-layer θ +0.23 K. The anelastic CBL is
+   (Δz_i/z_i = +0.107), mixed-layer θ +0.23 K when measured in #259;
+   re-measured on master on 2026-10-07 (`test/era2_anelastic_cbl.jl`):
+   2175 against 2250 m (+0.034, one 75 m level), θ +0.22 K. The anelastic CBL is
    deeper and warmer because the same kinematic flux heats air whose
    density falls with height.
 6. **Robustness.** The coarse 24 h run of check 4: no NaN, no retry, 11 140 steps, dt
    mean 7.8 s (≤ 10 s, the cap; the shortest steps land on output times).
 
-`test/berlin_parent_smoke.jl`: 12 steps with every parent forcing on,
+The parent smoke run (`examples/urban/berlin_checks.jl parent`;
+`test/berlin_parent_smoke.jl` until #320): 12 steps with every parent forcing on,
 heat and water closures at round-off, the surface term equal to the
 delivered sources.
 

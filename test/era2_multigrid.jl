@@ -250,6 +250,41 @@ using Aeolus.Multigrid
     end
 
     # ---------------------------------------------------------------------
+    # MG-preconditioned CG as the pressure solver of a 100-step run gives
+    # the cosine-FFT run (the default for periodic x, y and walls) to 1e-8
+    # and keeps the flow divergence-free. Moved from test/berlin_numerics.jl
+    # (#320), where it ran on the 16³ Berlin smoke window (250 m × 250 m ×
+    # 100 m); here the same box with a warm bubble instead of the city.
+    # ---------------------------------------------------------------------
+    @testset "MG-preconditioned CG in a 100-step run: the cosine-FFT result to 1e-8" begin
+        mesh = RegularGrid(; size=(16,16,16), extent=(250.0,250.0,100.0), halo=(3,3,3))
+        function run(solver)
+            kw = solver === nothing ? (;) : (solver = solver,)
+            sim = BoussinesqSimulation(mesh; ν = 2.0, θ₀ = 300.0,
+                                       bcs = FieldBoundaryConditions(:periodic, :periodic, :wall),
+                                       θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux),
+                                       kw...)
+            set!(sim.θ, (x, y, z) -> 300.0 + 0.5 * exp(-((x - 125)^2 + (y - 100)^2 + (z - 30)^2) / 40^2))
+            set!(sim.u, (x, y, z) -> 1.0 + 0.2 * sin(2π * y / 250) * sin(π * z / 100))
+            for _ in 1:100
+                step!(sim, 1.0)
+            end
+            return sim
+        end
+        ref = run(nothing)
+        @test ref.solver isa CosineFFTPoissonSolver
+        mg = run(MGPreconditionedCG(mesh; bc_x = :periodic, bc_y = :periodic, bc_z = :neumann,
+                                    tol = 1e-10, maxit = 200))
+        d = Dict(f => maximum(abs, interior_view(getfield(mg, f)) .- interior_view(getfield(ref, f)))
+                 for f in (:u, :v, :w, :θ))
+        div = max_divergence(mg)
+        @info "MG-CG vs cosine FFT after 100 steps" d div max_w = maximum(abs, interior_view(mg.w))
+        @test maximum(abs, interior_view(mg.w)) > 1e-3     # the bubble moves the flow
+        @test all(<(1e-8), values(d))
+        @test div < 1e-8
+    end
+
+    # ---------------------------------------------------------------------
     # Odd dimensions must degrade gracefully (fewer levels), not error.
     # ---------------------------------------------------------------------
     @testset "Non-power-of-two grids degrade gracefully" begin

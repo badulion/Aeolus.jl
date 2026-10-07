@@ -7,7 +7,7 @@
 #   julia --project=. examples/urban/parent/parent_surface_diurnal.jl
 #
 # The footprint mean against the child's area mean is in
-# test/berlin_parent_surface.jl (its @info lines).
+# examples/urban/berlin_checks.jl (`parent`, its @info lines).
 
 using Aeolus, Printf
 isdefined(Main, :BerlinCase) || include(joinpath(@__DIR__, "..", "BerlinCase.jl"))

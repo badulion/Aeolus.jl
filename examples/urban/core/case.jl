@@ -35,9 +35,9 @@ slot's anelastic / pseudo-incompressible provider), `geom`
 ([`TracerRegistry`](@ref)), `ledger`, the hydrostatic reference state
 `ref` ([`CaseReference`](@ref)), the enabled `couplings` (registry
 order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
-NetCDF `output` (or `nothing`), the `io` for log lines, the composed
-`step!` hooks, `timing` (wall seconds per `(stage, coupling)`, see
-[`timing_report`](@ref)), `top` — the heat flux through a
+NetCDF `output` (or `nothing`), the composed
+`step!` hooks, `timing` (wall seconds per `(stage, coupling)`, the
+`wall.*` diagnostics and the `:timing` events of [`log_run_end`](@ref)), `top` — the heat flux through a
 fixed-gradient θ top ([`TopHeatFlux`](@ref), `nothing` for a closed
 lid) — and `open`, the heat of the open faces of a `lateral = :open`
 case ([`OpenBoundaryHeat`](@ref), `nothing` for a periodic one).
@@ -220,12 +220,11 @@ function build_case(cfg::CaseConfig)
     build_schedule!(case)
 
     sfc = geom.sfc
-    @debug(@sprintf("%s OSM: %d buildings; solid=%d wall=%d glass=%d\nCouplings: %s",
-                    cfg.name, length(geom.city.buildings), count(geom.sm.mask),
-                    count(==(SURFACE_WALL), sfc), count(==(UInt8(6)), sfc),
-                    join(string.(coupling_name.(case.couplings)), ", ")),
-           subsystem = :berlin, domain = current_domain(), event = :built,
-           buildings = length(geom.city.buildings))
+    @debug("$(cfg.name): built", subsystem = :berlin, domain = current_domain(), event = :built,
+           case = cfg.name, grid = (case.mesh.Nx, case.mesh.Ny, case.mesh.Nz),
+           buildings = length(geom.city.buildings), solid = count(geom.sm.mask),
+           wall = count(==(SURFACE_WALL), sfc), glass = count(==(UInt8(6)), sfc),
+           couplings = join(string.(coupling_name.(case.couplings)), ","))
     return case
 end
 

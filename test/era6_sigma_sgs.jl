@@ -295,5 +295,22 @@ end
             stepper(s2)
             @test all(isfinite, interior_view(s2.u)) && maximum(interior_view(s2.νt)) > 0
         end
+        # exactly zero for a laminar parallel flow that turns with height and
+        # is not uniformly sheared — a log wind u(z) and a linear v(z), w = 0
+        # (rank-1 gradient at every level) — through the closure object, as
+        # every core calls it; Smagorinsky is on (moved from
+        # test/berlin_numerics.jl, #320, where it ran on the Berlin mesh)
+        mz = RegularGrid(; size = (16, 16, 16), extent = (250.0, 250.0, 100.0), halo = (3, 3, 3))
+        sz = BoussinesqSimulation(mz; ν = 2.0)
+        zc(K) = (K - mz.Hz - 0.5) * mz.dz
+        for K in axes(sz.u.data, 3)
+            sz.u.data[:, :, K] .= 5 * log1p(max(zc(K), 0.0) / 0.5)
+            sz.v.data[:, :, K] .= 0.02 * zc(K)
+        end
+        fill!(sz.w.data, 0.0)
+        fz = compute_sgs!(c, sz)
+        νs = Field(CellCenter(), mz); compute_smagorinsky_νt!(νs, sz.u, sz.v, sz.w, 0.17)
+        @test maximum(interior_view(fz.νh)) == 0 && maximum(interior_view(fz.κh)) == 0
+        @test minimum(interior_view(νs)) > 0
     end
 end

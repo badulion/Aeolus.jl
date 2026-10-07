@@ -235,9 +235,9 @@ julia --project=. test/runtests.jl                     # serial, same tier selec
 
 - The **fast tier** (default) is every test file except the validation
   mini-simulations tagged `tier = "full"` in `test/test_tags.toml`. It
-  keeps every module covered by conservation, analytic and unit checks
-  and the Berlin smoke test, and runs in about 5 minutes on the 24-core
-  machine. A PR needs it green.
+  keeps every module covered by conservation, analytic and unit checks,
+  and runs in about 5 minutes on the 24-core machine. A PR needs it
+  green.
 - The **full tier** adds the validation runs (GABLS, channels, flat
   plate, CBC decay, urban and heterogeneous-surface campaigns). The merge
   train runs it before merging. If your change touches physics that a
@@ -295,7 +295,7 @@ as an artifact, so a failure can be read without rerunning it. Timeouts:
 90 min for the fast tier, 240 min for the full tier, 60 min for the docs.
 
 CI is a second check, not a replacement for running the suite yourself:
-the wall-clock assertions (`berlin_smoke.jl`, `era6_apriori_sgs.jl`) were
+the wall-clock assertions (`era6_apriori_sgs.jl`, `era6_cbc_decay.jl`) were
 calibrated on the 24-core machine, and a slow runner failing one of them
 is reported, not papered over by loosening the limit.
 
@@ -456,10 +456,13 @@ enforced by `test/berlin_coverage.jl` (frozen coverage lists, deleted
 on 2026-10-06) and `test/berlin_smoke.jl`. It found real cross-module defects, but the
 Berlin tests grew to about 15 minutes of suite time spent mostly
 rebuilding the Berlin geometry, and they tested `src/` physics
-indirectly. The maintainer dropped the rule; #320 moves every physics
-check from `test/berlin_*.jl` into module tests and deletes those files
-after the nesting epic (#246) merges. Until then, see the transition
-note in CLAUDE.md.
+indirectly. The maintainer dropped the rule, and #320 moved every check
+of `src/` physics from `test/berlin_*.jl` into the owning module's tests
+(synthetic setups, same quantitative targets) and deleted those files.
+The end-to-end runs of the example (every coupling on, ledgers closed;
+the nest parent's smoke run and its idealised validations) are now
+`examples/urban/berlin_checks.jl`, run by hand after changing the
+example.
 
 ### Minimal dependencies
 

@@ -190,6 +190,8 @@ const EXEMPT = Dict(
         "fixture generator: writes test/fixtures/dns256_apriori.toml offline (generate_dns_apriori, its own checkpoints)",
     "poisson_manufactured.jl" => "not a run: manufactured-solution check of the Poisson solver",
     "poisson_neumann_manufactured.jl" => "not a run: manufactured-solution check of the Neumann Poisson solver",
+    "urban/berlin_checks.jl" =>
+        "not a run: by-hand end-to-end checks of the Berlin example (the smoke matrix over configs/berlin_smoke.toml, the parent validations; #320)",
     "urban/core/bus.jl" => URBAN_LIB,
     "urban/core/config_schema.jl" => URBAN_LIB,
     "urban/core/stages.jl" => URBAN_LIB,
