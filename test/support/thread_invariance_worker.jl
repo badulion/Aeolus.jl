@@ -409,7 +409,8 @@ function section_fv()
     o = rt(CC); FVK._laplacian!(o, c, tg); record!("fv/terrain/laplacian", o.data)
     o = rt(FX); FVK._∂x!(o, c, tg); record!("fv/terrain/∂x c→f", o.data)
     # 3 steps of a Smagorinsky LES on the stretched grid
-    sim = BoussinesqSimulation(sg; ν = 1e-2, θ₀ = 300.0, C_s = 0.17)
+    sim = BoussinesqSimulation(sg; ν = 1e-2, θ₀ = 300.0, C_s = 0.17,
+                               bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
     for f in (sim.u, sim.v, sim.w)
         interior_view(f) .= 0.3 .* randn(rng, size(interior_view(f)))
     end
