@@ -28,6 +28,7 @@ include("NCIO.jl")            # NetCDF-4 output policy over NCDatasets (#310); b
 include("IO.jl")
 include("Config.jl")         # run configuration schema, loader, canonical run.toml (CFG-a, #356)
 include("IBM.jl")
+include("InputDrivers.jl")   # static driver, OSM/GeoJSON preprocessors (CFG-f, #361); needs IBM, NCIO, IO
 include("Parallel.jl")
 include("SpectralElement.jl")
 include("Chemistry.jl")
@@ -107,6 +108,7 @@ using .IO
 using .Config
 using .Microphysics
 using .IBM
+using .InputDrivers
 using .Parallel
 using .Backends
 using .SpectralElement

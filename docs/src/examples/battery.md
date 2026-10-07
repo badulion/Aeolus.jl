@@ -415,8 +415,12 @@ The minimal schema is:
 Coordinates are meters relative to the mesh origin. Recognised `class`
 values: `roof`, `street`, `park`, `water`. See
 `examples/urban/data/city.geojson` for a working example, and
-`examples/urban/core/geometry.jl` for the loader / rasterizer
-(`examples/urban/core/osm_ingest.jl` for OSM XML).
+`src/preprocess/geojson.jl` for the loader and `src/preprocess/city.jl`
+for the rasteriser (`src/preprocess/osm.jl` for OSM XML), all in
+`Aeolus.InputDrivers`. A polygon with holes (a courtyard) lists its
+rings after the outer one. `aeolus preprocess static <config.toml>`
+writes the rasterised city to a static driver (NetCDF-4) that the run
+then reads (see the [input drivers](../api/input_drivers.md) page).
 
 ### OSM XML
 

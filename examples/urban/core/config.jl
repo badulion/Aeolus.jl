@@ -30,11 +30,19 @@ Groups of fields:
   from 200 m for the nest (maintainer decision of 2026-10-05, epic #246)
   so that the Fernsehturm (368 m) fits and the child top sits in the
   parent's uniform 25 m layers;
-* **geometry** — `osm_path`, the anchor `lat0`/`lon0` of the OSM
-  projection, `offset` (m, the window centre relative to the anchor),
-  `min_height` (buildings lower than this are dropped), `elevation` (m
-  above sea level, for the solar position), `wall_subdivisions` of the
-  radiosity scene, `park_lai` (leaf-area index of park cells);
+* **geometry** — `static`, the static driver the ground is read from
+  (CFG-f #361, `aeolus preprocess static` writes it; `nothing`: the
+  `preprocess` source is rasterised in memory instead), `parent_static`,
+  the nest parent's (its land-use tiles; `nothing`: from `landuse` in
+  memory), the anchor `lat0`/`lon0` of the OSM projection, `offset` (m,
+  the window centre relative to the anchor), `elevation` (m above sea
+  level, for the solar position), `wall_subdivisions` of the radiosity
+  scene. A driver whose grid or anchor differs from the case's is an
+  error (no resampling);
+* **preprocess** — what the static drivers are made from: `osm_path`
+  (the OpenStreetMap file), `min_height` (buildings lower than this are
+  dropped), `park_lai` (leaf-area index of park cells), `landuse` (the
+  parent's land-use table, `data/berlin_landuse_6km.csv`);
 * **clock** — `date = (y, m, d)`, `start_h` (local hour at t = 0), `utc_offset` (h, local − UTC), `dt`
   (s), `nsteps`;
 * **cadences** — `cadence::Dict{Symbol,Float64}`, periods in seconds.
@@ -111,14 +119,18 @@ mutable struct CaseConfig
     extent::NTuple{3,Float64}         # 400 m deep: the nested child (#246)
     halo::NTuple{3,Int}               # 3: WENO-Z5 moisture transport
     # geometry
-    osm_path::String
+    static::Union{Nothing,String}
+    parent_static::Union{Nothing,String}
     lat0::Float64
     lon0::Float64
     offset::NTuple{2,Float64}
-    min_height::Float64
     elevation::Float64
     wall_subdivisions::Int
+    # the static drivers' sources (CFG-f, #361)
+    osm_path::String
+    min_height::Float64
     park_lai::Float64
+    landuse::String
     # clock
     date::NTuple{3,Int}               # 2019-06-29: clear-sky heat-wave day (#247)
     utc_offset::Float64               # local = UTC + 2 h (CEST)
