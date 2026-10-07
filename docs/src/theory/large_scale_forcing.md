@@ -214,9 +214,10 @@ where the centred form is the accurate one.
 
 The GABLS2 case applies ``w_s = -0.005\,z/1000`` m s⁻¹ below 1 km
 (−0.005 above) from 40 h local time (16 LT 23 October), from the CLUBB
-participant set-up (`examples/sbl/data/gabls2_case.csv`). `gabls2_case`
-now applies it to θ by default (`subsidence = false` for the sensitivity
-run), and the SBL driver books it in its θ ledger. In the reduced test
+participant set-up (`examples/sbl/data/gabls2_case.csv`; since CFG-d
+#359 the `[forcing.subsidence]` table of `examples/sbl/configs/gabls2.toml`).
+That config applies it to θ (`--set forcing.subsidence={}` for the
+sensitivity run without it), and the SBL driver books it in its θ ledger. In the reduced test
 (16 × 16 × 40, Δx = 150 m, Δz = 40 m), the residual-layer inversion
 (the largest ``∂⟨θ⟩/∂z`` above 300 m) at 06 LT 24 October is 856.0 m
 with subsidence and 1039.7 m without (−183.6 m), 0.80 Δz above a passive
