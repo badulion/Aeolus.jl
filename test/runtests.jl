@@ -861,6 +861,7 @@ using Aeolus.Fields: set!, interior_view
     include("input_static.jl")        # CFG-f (#361): static driver, OSM/GeoJSON preprocessors, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table and parent preprocessors, offline nest
     include("config_reference.jl")    # CFG-i (#364): option reference and input-format pages, counted against the schemas
+    include("config_roundtrip.jl")    # CFG-i (#364): every shipped config validates, is canonical, documented, replays bit for bit; resume
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

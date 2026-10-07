@@ -13,6 +13,7 @@
 using Aeolus
 using Aeolus.Config
 using Aeolus.IO: read_run_toml, diagnostics_path
+using TOML
 
 if !isdefined(@__MODULE__, :roundtrip_check)
 
@@ -97,6 +98,60 @@ function roundtrip_check(config_path::AbstractString; nsteps = nothing, override
             # isequal: a nan option (the Berlin canopy_top) equals itself
             config_equal = isequal(rec1["config"], rec2["config"]) && rec1["config_hash"] == rec2["config_hash"],
             runs = (r1, r2))
+end
+
+"""
+    resume_check(config_path; nsteps = 20, stop = 10 + 5, every_steps = 10, overrides = String[],
+                 nsteps_overrides = simulation_nsteps, outputs = String[]) -> NamedTuple
+
+The `--resume` round trip (CFG-i, #364): run `config_path` for `nsteps`
+steps with a checkpoint every `every_steps`, uninterrupted; run it again,
+interrupted (an `InterruptException` from the step callback) after step
+`stop`; then continue that run folder as `aeolus run <folder> --resume`
+does (`run_config(load_run_config(folder); resume = folder)`). Returns
+
+  * `fields_equal`: every array of `state_fields` of the resumed run is
+    bitwise equal to the uninterrupted run's (`fields_differing` names the
+    ones that are not);
+  * `outputs_equal`: the files `outputs` (names in the run folders'
+    `output/`) are byte-equal, a `.toml` file outside its `wall_time`
+    keys (the wall clock of a session, which no two runs share);
+  * `statuses`: the session statuses of the resumed folder's `run.toml`;
+  * `runs`: (uninterrupted, resumed) [`RunResult`](@ref Aeolus.Config.RunResult)s.
+"""
+function resume_check(config_path::AbstractString; nsteps::Integer = 20, stop::Integer = 15,
+                      every_steps::Integer = 10, overrides = String[], nsteps_overrides = simulation_nsteps,
+                      outputs = String[])
+    ovr = vcat(String[overrides...], nsteps_overrides(nsteps), "checkpoint.every_steps=$every_steps",
+               "fftw.planner=\"estimate\"")
+    cfg = load_run_config(config_path; overrides = ovr)
+    kw = (; console = false, repo = mktempdir())
+    full = run_config(cfg; root = mktempdir(), kw...)
+    root = mktempdir()
+    halt = (_, n) -> n == stop && throw(InterruptException())
+    interrupted = try
+        run_config(cfg; root = root, callback = halt, kw...); false
+    catch e
+        e isa InterruptException || rethrow(); true
+    end
+    folder = only(readdir(root; join = true))
+    res = run_config(load_run_config(folder); root = root, resume = folder, kw...)
+    f1 = Base.invokelatest(state_fields, full.obj); f2 = Base.invokelatest(state_fields, res.obj)
+    differing = [k for k in keys(f1) if !(haskey(f2, k) && bitwise_equal(f1[k], f2[k]))]
+    out(r, n) = _output_content(joinpath(r.folder.path, "output", n))
+    return (fields_equal = interrupted && isempty(differing), fields_differing = differing,
+            outputs_equal = all(n -> out(full, n) !== nothing && isequal(out(full, n), out(res, n)), outputs),
+            statuses = [s["status"] for s in read_run_toml(folder)["session"]],
+            runs = (full, res))
+end
+
+"A run output for comparison: the bytes, or for a `.toml` the parsed table without its `wall_time` keys."
+function _output_content(p)
+    isfile(p) || return nothing
+    endswith(p, ".toml") || return read(p)
+    strip_wall(d::AbstractDict) = Dict(k => strip_wall(v) for (k, v) in d if k != "wall_time")
+    strip_wall(v) = v
+    return strip_wall(TOML.parsefile(p))
 end
 
 end # if !isdefined
