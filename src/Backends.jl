@@ -20,7 +20,7 @@ using LinearAlgebra: BLAS, mul!
 
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
-       runs_serially, launch!, launch_weighted!, range_map!,
+       runs_serially, launch!, launch_weighted!, range_map!, fill_array!, copy_array!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
        plane_map!, apply_transform!,
@@ -553,6 +553,55 @@ function range_map!(b::AbstractBackend, f::F, out::AbstractArray, ranges::Tuple,
     end
     return out
 end
+
+# ---- whole-array fill and copy (KA-j, #306) --------------------------------
+
+@inline function _fill_body!(n, a, v)
+    @inbounds a[n] = v
+    return nothing
+end
+@inline function _copy_body!(n, dst, src)
+    @inbounds dst[n] = src[n]
+    return nothing
+end
+
+"""
+    fill_array!(backend, a, v) -> a
+
+Set every element of `a` (halos included) to `v`. On a serial launch this
+is `fill!` (a `memset` for zero); threaded, a 1-D launch over the linear
+indices. The same bits either way. The reset of the tendencies of every
+step core.
+"""
+function fill_array!(b::CPUBackend, a::Array{T}, v) where {T}
+    vT = convert(T, v)
+    if runs_serially(b, length(a))
+        fill!(a, vT)
+    else
+        _launch!(b, _fill_body!, (1:length(a),), (a, vT))
+    end
+    return a
+end
+fill_array!(b::GPUBackend, a, v) = _gpu_error(b, "fill_array!")
+
+"""
+    copy_array!(backend, dst, src) -> dst
+
+`dst .= src` for two arrays of the same size, halos included: `copyto!`
+(a `memcpy`) on a serial launch, a 1-D launch over the linear indices when
+threaded. The step drivers' snapshots (`save_state!`, `restore_state!`,
+the RK3 and IMEX step-start state).
+"""
+function copy_array!(b::CPUBackend, dst::Array{T}, src::Array{T}) where {T}
+    size(dst) == size(src) || throw(DimensionMismatch("copy_array!: $(size(dst)) ≠ $(size(src))"))
+    if runs_serially(b, length(dst))
+        copyto!(dst, src)
+    else
+        _launch!(b, _copy_body!, (1:length(dst),), (dst, src))
+    end
+    return dst
+end
+copy_array!(b::GPUBackend, dst, src) = _gpu_error(b, "copy_array!")
 
 # =========================================================================
 # Deterministic reductions
