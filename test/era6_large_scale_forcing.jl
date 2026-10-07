@@ -12,7 +12,17 @@
 #   * the advective tendencies: Δ∫θ dV against ∫∫(∂θ/∂t)_adv dV dt, the
 #     latter by the trapezoid rule on the table nodes, to round-off;
 #   * bit for bit: GeostrophicNudging against the Berlin case's former
-#     add_geostrophic_wind! over 100 smoke steps.
+#     add_geostrophic_wind! over 100 SSP-RK3 and 100 forward-Euler steps
+#     of a sheared, rotating, turbulent box with Smagorinsky SGS (until
+#     #317 the same oracle ran inside 100 Berlin smoke steps; the
+#     forcing is a body-force hook either way, and the Berlin case is an
+#     example, run by hand, not a test fixture). The Berlin version also
+#     asserted every tracer bit for bit; the box carries no tracers, and
+#     that check was redundant: both forcings write only u and v, never
+#     a tracer, so a tracer differs between the two runs only through
+#     the state it is advected, diffused and sourced by; that state
+#     (u, v, w, θ, p, and the eddy diffusivity computed from it) is
+#     bit-identical, which the == below checks.
 
 using Test, Printf
 using Aeolus
@@ -42,9 +52,6 @@ end
 _lsf_mean(f) = sum(interior_view(f)) / length(interior_view(f))
 _lsf_level(f, k) = (iv = interior_view(f); sum(@view iv[:, :, k]) / (size(iv, 1) * size(iv, 2)))
 
-isdefined(Main, :BerlinCase) ||
-    include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
-
 # The Berlin case's geostrophic forcing before #171
 # (examples/urban/couplings/geostrophic.jl at cc4a150), kept verbatim as
 # the oracle of the bit-for-bit test. It is a test fixture, not a second
@@ -68,11 +75,6 @@ function _legacy_add_geostrophic_wind!(sim, U_g::Real, V_g::Real, τ_relax::Real
     end
     return sim
 end
-
-struct _LegacyGeostrophic <: Main.BerlinCase.AbstractCoupling end
-Main.BerlinCase.coupling_name(::Type{_LegacyGeostrophic}) = :legacy_geostrophic
-Main.BerlinCase.run_stage!(::_LegacyGeostrophic, case, ::Val{:body_force}, dt) =
-    (_legacy_add_geostrophic_wind!(case.sim, 1.0, 0.0, 1800.0); nothing)
 
 @testset "Era VI — LargeScaleForcing (#171)" begin
 
@@ -260,29 +262,49 @@ Main.BerlinCase.run_stage!(::_LegacyGeostrophic, case, ::Val{:body_force}, dt) =
     end
 
 
-    @testset "bit for bit: GeostrophicNudging == the former add_geostrophic_wind! (100 Berlin smoke steps)" begin
-        BC = Main.BerlinCase
-        # the fixed stepper, so that the run is 100 steps (the default
-        # adaptive one covers the same 200 s in 59)
-        cfg() = BC.CaseConfig(:smoke; output_path = nothing, nsteps = 100,
-                              physics = Dict{Symbol,Any}(:timestepper => :fixed),
-                              options = Dict{Symbol,Any}(:geostrophic => (mode = :nudging,)))
-        new = BC.build_case(cfg())
-        old = BC.build_case(cfg())
-        # swap the coupling of the :body_force entry for the legacy function
-        bf = old.schedule[:body_force]
-        i = findfirst(e -> BC.coupling_name(e.coupling) === :geostrophic, bf)
-        @test i !== nothing
-        bf[i] = BC.ScheduleEntry(_LegacyGeostrophic(), bf[i].order, bf[i].cadence)
-        BC.run_case!(new)
-        BC.run_case!(old)
-        @test new.clock.n == old.clock.n == 100 && new.sim.t == old.sim.t
-        same = all(getfield(new.sim, x).data == getfield(old.sim, x).data for x in (:u, :v, :w, :θ, :p))
-        same_tr = all(a.field.data == b.field.data for (a, b) in zip(new.tracers.list, old.tracers.list))
-        @info @sprintf("Nudging bit for bit over %d smoke steps (t = %.1f s): u, v, w, θ, p identical: %s; tracers identical: %s",
-                       new.clock.n, new.sim.t, same, same_tr)
-        @test same
-        @test same_tr
+    @testset "bit for bit: GeostrophicNudging == the former add_geostrophic_wind! (100 steps, turbulent box)" begin
+        # The oracle and the forcing as body-force hooks of the same run: a
+        # rotating, sheared, stably stratified box with random fluctuations
+        # and Smagorinsky SGS, so that every tendency the hook subtracts
+        # from is non-zero and the plane means move every step. τ = 60 s
+        # (not the Berlin 1800 s) so that the nudging moves the mean by
+        # O(1) over the run: the comparison is not of two nearly unforced
+        # runs.
+        U_g, V_g, τ = 1.0, -0.5, 60.0
+        function box()
+            m = RegularGrid(; size = (12, 10, 8), extent = (600.0, 500.0, 400.0))
+            s = BoussinesqSimulation(m; θ₀ = 300.0, C_s = 0.18, ν = 1e-5, f_coriolis = 1e-4,
+                                     bcs = FieldBoundaryConditions(:periodic, :periodic, :wall),
+                                     θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+            iu, iv, iw, iθ = interior_view.((s.u, s.v, s.w, s.θ))
+            for k in 1:8, j in 1:10, i in 1:12
+                iu[i, j, k] = 3 + 0.2k + 0.5 * sin(2π * i / 12 + 2π * j / 10 + k)
+                iv[i, j, k] = 1 + 0.4 * cos(2π * j / 10 - 0.7k + i)
+                iw[i, j, k] = 0.1 * sin(i * j + k)
+                iθ[i, j, k] = 300 + 0.004 * (k - 0.5) * m.dz + 0.2 * cos(i + 2j - k)
+            end
+            return s
+        end
+        F = GeostrophicNudging(U_g, V_g, τ)
+        new_bf!(s, Δt) = (apply_forcing!(s, F, s.t, Δt); nothing)
+        old_bf!(s, Δt) = (_legacy_add_geostrophic_wind!(s, U_g, V_g, τ); nothing)
+        for (name, adv!) in (("step_rk3!", (s, bf!) -> step_rk3!(s, 2.0; body_force! = bf!)),
+                             ("step!", (s, bf!) -> step!(s, 2.0; body_force! = bf!)))
+            new, old = box(), box()
+            u0 = _lsf_mean(new.u)
+            for _ in 1:100
+                adv!(new, new_bf!); adv!(old, old_bf!)
+            end
+            same = all(getfield(new, x).data == getfield(old, x).data for x in (:u, :v, :w, :θ, :p))
+            @info @sprintf("Nudging bit for bit, %s, 100 steps (t = %.0f s = %.1f τ): u, v, w, θ, p identical: %s; ⟨u⟩ %.3f → %.3f (U_g %.1f), ⟨v⟩ → %.3f (V_g %.1f)",
+                           name, new.t, new.t / τ, same, u0, _lsf_mean(new.u), U_g, _lsf_mean(new.v), V_g)
+            @test new.t == old.t == 200.0
+            @test same
+            # the forcing acted: over 3.3 τ the mean u moved more than half-way to U_g
+            @test abs(_lsf_mean(new.u) - U_g) < 0.5 * abs(u0 - U_g)
+            # and the fluctuations are not damped by it (they are the same
+            # bits in both runs; here: they survive the 100 steps)
+            @test maximum(abs, interior_view(new.u) .- _lsf_mean(new.u)) > 1e-3
+        end
     end
-
 end

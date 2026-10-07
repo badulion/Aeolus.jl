@@ -10,9 +10,9 @@
 #   2. turbulence untouched: the nudging tendency is exactly uniform per
 #      level, and the fluctuations after one nudged step equal the
 #      un-nudged ones to round-off;
-#   3. bit for bit: GeostrophicNudging is a ProfileNudging and the Berlin
-#      `:nudging` variant reproduces the former code (the 100-step test is
-#      in era6_large_scale_forcing.jl; here the type and one level);
+#   3. bit for bit: GeostrophicNudging is a ProfileNudging and reproduces
+#      the former Berlin add_geostrophic_wind! (the 100-step test is in
+#      era6_large_scale_forcing.jl; here the type and one level);
 #   4. linear profile: −w_s Γ at every level, on a RegularGrid and on a
 #      geometric StretchedGrid (cell centres read from the mesh);
 #   5. inversion descent: a θ jump descends to z₁ + w_s t within one Δz
