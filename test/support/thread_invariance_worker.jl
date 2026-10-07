@@ -4,7 +4,7 @@
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
 # Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
-# nested, fft, fv, pcg, steps, radiation, hooks, columns) and writes
+# nested, fft, fv, pcg, multigrid, steps, radiation, hooks, columns) and writes
 # one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
 # the raw bits (Float64 → UInt64), so two processes agree iff the results
 # are bit-identical. MODE is `default` (CPUBackend(): threaded when N > 1)
@@ -42,6 +42,12 @@
 #               FFT, CosineFFT for all 8 axis-BC combinations, Stretched for
 #               the 4 lateral pairs — at 64×64×32 and 128×128×64, with FFTW
 #               on the process's threads (`init_threads!`).
+#   pcg         (KA-g, #300) every solver on the one CG driver: the
+#               solution and the iteration count.
+#   multigrid   (KA-i, #303) MultigridPoissonSolver and MGPreconditionedCG
+#               at 64×64×32 and 128×128×64: periodic / Neumann / all-Neumann,
+#               W-cycle, FMG, stretched z and cut-cell coefficients (a solid
+#               block): the solution, the cycle count and the residual history.
 #   fv          (KA-d, #299) every finite-volume kernel on seeded random
 #               fields with filled halos, on a 64×64×32 RegularGrid, a
 #               geometric StretchedGrid and a TerrainFollowingGrid over a
@@ -501,6 +507,24 @@ function section_columns()
 end
 
 # --------------------------------------------------------------------------
+# KA-i (#303): the multigrid V-cycle on launch! (colour-indexed RBGS, residual,
+# restriction, prolongation, canonical means and norms).
+include(joinpath(@__DIR__, "multigrid_cases.jl"))
+function section_multigrid()
+    MGm = Aeolus.Multigrid
+    for N in ((64, 64, 32), (128, 128, 64))
+        tag = join(N, 'x')
+        for (name, (m, s)) in mg_solver_cases(N)
+            p, _ = mg_solve_case(name, m, s)
+            record!("multigrid/$tag/$name", p.data)
+            record!("multigrid/$tag/$name/cycles", mg_cycles(s))
+            s isa MGm.MultigridPoissonSolver && record!("multigrid/$tag/$name/history", mg_iteration_history(s))
+        end
+    end
+end
+
+# --------------------------------------------------------------------------
+# KA-d (#299): the finite-volume kernels on launch!.
 function section_fv()
     FVK = Aeolus.Operators.FiniteVolume
     SG = Aeolus.StretchedGrids
@@ -792,6 +816,7 @@ for s in SECTIONS
     s == "fv"         ? section_fv() :
     s == "hooks"      ? section_hooks() :
     s == "pcg"        ? section_pcg() :
+    s == "multigrid"  ? section_multigrid() :
     s == "steps"      ? section_steps() :
     s == "radiation"  ? section_radiation() :
     s == "columns"    ? section_columns() :
