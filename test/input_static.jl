@@ -302,3 +302,27 @@ end
         end
     end
 end
+
+@testset "InputDrivers: aeolus preprocess static (the CLI)" begin
+    io, err = IOBuffer(), IOBuffer()
+    @test Aeolus.Config.main(["preprocess"]; io = io, err = err) == 0
+    @test occursin("static <config.toml>", String(take!(io)))
+    dir = mktempdir()
+    out, pout = joinpath(dir, "c.nc"), joinpath(dir, "p.nc")
+    toml = joinpath(BCI.CONFIG_DIR, "berlin_smoke.toml")
+    rc = redirect_stdout(devnull) do
+        Aeolus.Config.main(["preprocess", "static", toml, "--out", out, "--parent-out", pout]; io = io, err = err)
+    end
+    @test rc == 0 && isfile(out) && isfile(pout)
+    @test isempty(check_driver(out, STATIC_SCHEMA)) && isempty(check_driver(pout, STATIC_TILES_SCHEMA))
+    NCDataset(out) do ds
+        # the source is recorded absolute outside the checkout, with its hash
+        @test ds.attrib["source"] == BCI.CaseConfig(:smoke).osm_path
+        @test ds.attrib["source_fnv1a64"] == file_fnv1a64(BCI.CaseConfig(:smoke).osm_path)
+        @test ds.attrib["preprocessor"] == "aeolus preprocess static"
+    end
+    # a config whose static is "none" needs --out
+    rc = Aeolus.Config.main(["preprocess", "static", toml, "--set", "geometry.static=\"none\""]; io = io, err = err)
+    @test rc == 2
+end
+
