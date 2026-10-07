@@ -954,6 +954,13 @@ solution, the cycle count and the residual history of MG and MG-CG at
 64×64×32 and 128×128×64. It covers three closures, the W-cycle, FMG,
 stretched z and cut-cell coefficients around a solid block: 58 hashes,
 identical at 1, 4 and 24 threads. The whole harness is quoted in the PR.
+One of its cases does not converge: plain MG on the stretched grid
+(×1.04, extent 2000 m in z) at 128×128×64 stops at its cap of 200
+cycles with a relative residual of 1.04e-6 and logs the
+`maxcycles reached` warning. The old loops do the same (200 cycles,
+1.0370739097032905e-6 against 1.0370739097035124e-6 now): point
+smoothing stalls on the anisotropic cells. MG-CG solves the same case
+in 61 iterations. It is kept as a hash, not a convergence test.
 
 **Re-checked after the master merge** (KA-d's `_row!` / `_nest!` launch
 change, load 4-8). Every solution hash and cycle count is unchanged. ms
