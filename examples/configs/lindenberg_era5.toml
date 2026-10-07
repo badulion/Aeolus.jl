@@ -1,0 +1,53 @@
+# An open box over Lindenberg (52.21 N, 14.12 E) driven by ERA5 (CFG-h,
+# #363): 3200 × 3200 × 1600 m on 16³, open lateral faces fed by the ERA5
+# boundary planes of 2019-06-29 00-12 UTC (hourly records, blended
+# linearly in time), free-slip walls in z, initial u, v, θ, qv from the
+# ERA5 profiles at the domain centre at 00 UTC. A smoke run of the data
+# path, not a boundary-layer simulation (no surface fluxes or radiation).
+#
+# The dynamic driver is made from the committed ERA5 sample first:
+#
+#   julia --project -m Aeolus preprocess dynamic --from-era5 \
+#       examples/data/era5_lindenberg_20190629_pl.nc examples/data/era5_lindenberg_20190629_sfc.nc \
+#       --config examples/configs/lindenberg_era5.toml
+#   julia --project -m Aeolus run examples/configs/lindenberg_era5.toml
+
+[run]
+driver = "simulation"
+name = "lindenberg_era5"
+seed = 1
+
+[grid]
+size = [16, 16, 16]
+extent = [3200.0, 3200.0, 1600.0]
+
+[dynamics]
+theta0 = 300.0
+g = 9.80665
+moisture = true
+
+[boundaries]
+x = "open"
+y = "open"
+z = "free_slip"
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.17
+
+[initial]
+dynamic = "input/lindenberg_era5_dynamic.nc"
+
+[stepper]
+scheme = "rk3"
+dt = 2.0
+end_time = 600.0
+
+[preprocess.era5]
+lat = 52.2085
+lon = 14.118
+box = 0.5
+levels = "pressure"
+
+[logging]
+diagnostics_cadence = 60.0
