@@ -1,6 +1,6 @@
 # The `dns` run driver (CFG-d, #359): the decaying-turbulence DNS of the
 # filtered-DNS fixture and its a-priori record configured from TOML
-# (examples/validation/dns_driver.jl, examples/validation/configs/dns256.toml).
+# (examples/validation/dns_apriori_driver.jl, examples/validation/configs/dns256.toml).
 #
 # Acceptance tests of the issue covered here:
 #   * the driver runs the fixture's own steps: its fields are bitwise those
@@ -19,7 +19,7 @@ using Aeolus.Config
 using Aeolus.IO: read_run_toml
 import TOML
 
-include(joinpath(@__DIR__, "..", "examples", "validation", "dns_driver.jl"))
+include(joinpath(@__DIR__, "..", "examples", "validation", "dns_apriori_driver.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
 const DNSCFG = normpath(joinpath(@__DIR__, "..", "examples", "validation", "configs", "dns256.toml"))

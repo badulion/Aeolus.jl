@@ -1,0 +1,21 @@
+# A-priori SGS-stress analysis on filtered DNS — Phase 56 (P56-c, #178)
+#
+# The decaying isotropic DNS the a-priori analysis filters: the fixture of
+# the CI test (test/fixtures/dns_decay.jl) at 96³, ν = 0.018 (48/N)^(4/3),
+# to t = 2. examples/validation/apriori_sgs.jl runs it and writes the
+# correlation tables.
+#
+#   julia --project=. examples/validation/apriori_sgs.jl
+#   julia --project=. examples/validation/apriori_sgs.jl --set grid.n=48
+
+[run]
+driver = "dns_decay"
+name = "apriori_sgs"
+seed = 1
+
+[grid]
+n = 96
+
+[dns]
+end_time = 2.0
+cfl = 0.5

@@ -12,7 +12,7 @@
 #   julia --project=. examples/validation/dns256_generate.jl [--set key=value …] [--resume <run folder>]
 #
 # The run is examples/validation/configs/dns256.toml, through the `dns`
-# run driver (examples/validation/dns_driver.jl, CFG-d #359): this script
+# run driver (examples/validation/dns_apriori_driver.jl, CFG-d #359): this script
 # is `aeolus run examples/validation/configs/dns256.toml` that, at the
 # shipped grid.n = 256 and with no apriori.out of its own, writes the
 # record to test/fixtures/dns256_apriori.toml, then prints its table.
@@ -72,7 +72,7 @@
 using Aeolus
 using Aeolus.Config: run_config, with
 using Printf
-include(joinpath(@__DIR__, "dns_driver.jl"))
+include(joinpath(@__DIR__, "dns_apriori_driver.jl"))
 
 const FIXTURE = normpath(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns256_apriori.toml"))
 

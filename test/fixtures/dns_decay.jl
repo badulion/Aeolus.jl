@@ -83,7 +83,7 @@ the simulation `sim` on the triply periodic 2π box at `N`³ filled by
 to u' = 1, and its history `hist = (t, K, ε, S, budget_err)` (one entry per
 step, the initial one included). Advance it with [`dns_step!`](@ref)
 while [`dns_running`](@ref); [`dns_summary`](@ref) is the result of
-[`dns_decay`](@ref). The `dns` run driver (examples/validation/dns_driver.jl,
+[`dns_decay`](@ref). The `dns` run driver (examples/validation/dns_apriori_driver.jl,
 CFG-d #359) runs the same steps.
 """
 function dns_start(; N::Integer = 48, seed::Integer = 1, ν::Real = DNS_NU48 * (48 / N)^(4 / 3),

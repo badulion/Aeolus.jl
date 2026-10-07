@@ -403,7 +403,7 @@ function _write_output(r::SimulationRun, dir, step)
         nc.dim["x"] = m.Nx; nc.dim["y"] = m.Ny; nc.dim["z"] = m.Nz
         for f in r.cfg.output.fields
             v = nc_defvar!(nc, f, Float32, ("x", "y", "z"))
-            v[:, :, :] = Array(interior_view(getproperty(sim, _FIELD_OF[f])))
+            v[:, :, :] = Float32.(Array(interior_view(getproperty(sim, _FIELD_OF[f]))))
         end
     finally
         close(nc)

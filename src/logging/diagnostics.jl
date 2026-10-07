@@ -126,6 +126,137 @@ function collect_diagnostics(sim, components = (;); include_sim::Bool = true)
 end
 
 # ---------------------------------------------------------------------------
+# profiles (LOG-e, #337): vertical profiles for diagnostics.nc
+# ---------------------------------------------------------------------------
+
+"""
+    ProfileDiagnostic(name, units, axis, levels, source; description = "")
+
+One vertical profile a component declares through
+[`profile_diagnostics`](@ref), written to `diagnostics.nc` on the costly
+cadence (profiles are not written to the CSV):
+
+* `name`: as for a [`Diagnostic`](@ref); scalars and profiles share the
+  NetCDF namespace, so a profile's name must differ from every scalar's;
+* `units`: UDUNITS-style text;
+* `axis`, `levels`: the name and the heights (m) of its vertical
+  coordinate, e.g. `"z"` with the cell-centre heights or `"zf"` with
+  the `w`-face heights. Profiles with the same levels share one
+  NetCDF dimension;
+* `source`: a function of no arguments returning the profile, a vector of
+  `length(levels)` (the source does the horizontal reduction, typically
+  the deterministic `plane_mean!` of the port).
+
+```julia
+ProfileDiagnostic("theta", "K", "z", znodes(mesh, CellCenter()),
+                  () -> plane_mean!(zeros(Nz), sim.θ))
+```
+"""
+struct ProfileDiagnostic
+    name::String
+    units::String
+    axis::String
+    levels::Vector{Float64}
+    source::Any
+    description::String
+    function ProfileDiagnostic(name::AbstractString, units::AbstractString, axis::AbstractString,
+                               levels::AbstractVector{<:Real}, source;
+                               description::AbstractString = "")
+        for (what, n) in (("name", name), ("axis", axis))
+            occursin(r"^[A-Za-z0-9_.]+$", n) ||
+                throw(ArgumentError("ProfileDiagnostic: $what \"$n\" may hold only letters, digits, '_' and '.'"))
+        end
+        isempty(levels) && throw(ArgumentError("ProfileDiagnostic $name: no levels"))
+        return new(String(name), String(units), String(axis), collect(Float64, levels), source,
+                   String(description))
+    end
+end
+
+Base.show(io::Base.IO, p::ProfileDiagnostic) =
+    print(io, "ProfileDiagnostic(\"", p.name, "\" [", p.units, "] on ", p.axis, " (",
+          length(p.levels), " levels))")
+
+"""
+    profile_diagnostics(component, sim) -> Vector{ProfileDiagnostic}
+    profile_diagnostics(sim) = profile_diagnostics(sim, sim)
+
+The vertical profiles `component` declares when it runs in `sim`, each a
+[`ProfileDiagnostic`](@ref); the profile counterpart of
+[`diagnostics`](@ref), written to `diagnostics.nc` (#337). The default is
+none. Methods shipped: `BoussinesqSimulation` (horizontal means of `u`,
+`v`, `θ`, `qv`, the variance of `w` and the resolved flux `w'θ'`),
+`MassWeightedSimulation`, every `AbstractSGSClosure` (the mean vertical
+eddy viscosity; `TKEClosure` adds its energy) and `NestedRun` (both
+domains, prefixed).
+"""
+profile_diagnostics(component, sim) = ProfileDiagnostic[]
+profile_diagnostics(sim) = profile_diagnostics(sim, sim)
+
+"""
+    prefixed(prefix, ps::AbstractVector{ProfileDiagnostic})
+
+Profiles with their names **and axes** prefixed by `"\$prefix."`: the two
+domains of a nested run have different levels, so `parent.z` and
+`child.z` are different axes. (`diagnostics.nc` merges axes with equal
+levels, so a closure's `sgs.z` is the simulation's `z`.)
+"""
+function prefixed(prefix, ps::AbstractVector{ProfileDiagnostic})
+    p = string(prefix)
+    isempty(p) && return collect(ProfileDiagnostic, ps)
+    return ProfileDiagnostic[ProfileDiagnostic(p * "." * q.name, q.units, p * "." * q.axis,
+                                               q.levels, q.source; description = q.description)
+                             for q in ps]
+end
+
+"""
+    collect_profiles(sim, components = (;); include_sim = true) -> Vector{ProfileDiagnostic}
+
+Every profile of a run, collected as [`collect_diagnostics`](@ref)
+collects the scalars: `sim`'s own unprefixed, each component's prefixed
+with its key. A name that occurs twice is an error.
+"""
+function collect_profiles(sim, components = (;); include_sim::Bool = true)
+    out = ProfileDiagnostic[]
+    include_sim && append!(out, profile_diagnostics(sim, sim))
+    for (k, c) in pairs(components)
+        append!(out, prefixed(k, profile_diagnostics(c, sim)))
+    end
+    seen = Set{String}()
+    for q in out
+        q.name in seen && throw(ArgumentError("collect_profiles: profile \"$(q.name)\" is declared twice"))
+        push!(seen, q.name)
+    end
+    return out
+end
+
+"""
+    evaluate_profile(p::ProfileDiagnostic) -> Vector{Float64}
+
+The profile `p` now. A source that throws, or returns the wrong number
+of levels, gives a profile of `NaN` and a warning (once per profile), so
+one broken profile never stops a run.
+"""
+function evaluate_profile(p::ProfileDiagnostic)
+    n = length(p.levels)
+    v = try
+        p.source()
+    catch err
+        err isa InterruptException && rethrow()
+        @warn("profile $(p.name) could not be evaluated", subsystem = :diagnostics,
+              domain = current_domain(), diagnostic = p.name, exception = err,
+              maxlog = 1, _id = Symbol("prof_fail_", p.name))
+        return fill(NaN, n)
+    end
+    if length(v) != n
+        @warn("profile $(p.name) has $(length(v)) values for $n levels", subsystem = :diagnostics,
+              domain = current_domain(), diagnostic = p.name, maxlog = 1,
+              _id = Symbol("prof_len_", p.name))
+        return fill(NaN, n)
+    end
+    return collect(Float64, v)
+end
+
+# ---------------------------------------------------------------------------
 # evaluation
 # ---------------------------------------------------------------------------
 
@@ -220,7 +351,8 @@ _csv_header(diags) =
     DiagnosticsWriter(path, diags; cadence = 60.0, append = true, flush_every = 20)
 
 The diagnostics time series of a run as CSV (`diagnostics.csv` of the
-run folder; `diagnostics.nc` follows with #310). One row per
+run folder; `diagnostics.nc`, with the profiles, is
+[`DiagnosticsNCWriter`](@ref Aeolus.IO.DiagnosticsNCWriter), #337). One row per
 [`record_diagnostics!`](@ref): the columns `step`, `t [s]`, `wall [s]`
 (wall time since the writer opened), `dt [s]`, `dt_limiter`, `retries`,
 then one column `name [units]` per [`Diagnostic`](@ref) of `diags`.

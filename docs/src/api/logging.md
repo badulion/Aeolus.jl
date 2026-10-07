@@ -142,7 +142,8 @@ A production run writes one folder (#334), `runs/<yyyy-mm-dd>_<case>_<runID>/`:
 | :-- | :------ |
 | `run.log` | the run log: debug and up, full timestamps, source locations; appended to by every session |
 | `run.toml` | provenance: `run_id`, `case`, `created`, the full `config` and `seeds`, one `[[session]]` per start or restart; for a [`RunConfig`](config.md) the canonical `[config]`, `config_hash`, `config_sources`, `[inputs]` hashes and `replayable` |
-| `diagnostics.csv` | the diagnostics time series ([`diagnostics_path`](@ref Aeolus.IO.diagnostics_path); written by the [run monitor](#Run-monitor), `diagnostics.nc` after #310) |
+| `diagnostics.csv` | the scalar diagnostics time series ([`diagnostics_path`](@ref Aeolus.IO.diagnostics_path); written by the [run monitor](#Run-monitor)) |
+| `diagnostics.nc` | the same rows plus the vertical profiles, NetCDF-4, with the provenance as global attributes ([`diagnostics_nc_path`](@ref Aeolus.IO.diagnostics_nc_path); see [diagnostics.nc](#diagnostics.nc)) |
 | `crash/` | crash checkpoints of a blown-up run ([`crash_dir`](@ref Aeolus.IO.crash_dir); see [Blowup](#Blowup:-diagnose,-dump,-stop)) |
 | `output/` | the run's output files ([`output_dir`](@ref Aeolus.IO.output_dir)) |
 | `checkpoints/` | the [`CheckpointSchedule`](@ref Aeolus.IO.CheckpointSchedule) and FFTW wisdom ([`run_checkpoints`](@ref Aeolus.IO.run_checkpoints)) |
@@ -268,6 +269,26 @@ truth):
 
 The Berlin couplings' `report` strings move onto the registry with #338.
 
+### Profiles
+
+Vertical profiles are declared the same way (#337), through
+[`profile_diagnostics`](@ref Aeolus.RunLog.profile_diagnostics)`(component, sim)`,
+each a [`ProfileDiagnostic`](@ref Aeolus.RunLog.ProfileDiagnostic): a name,
+units, the name and heights of its vertical axis, and a source that
+returns the profile (the source does the horizontal reduction, through
+the port's deterministic `plane_mean!` or the core's own profile
+functions). [`collect_profiles`](@ref Aeolus.RunLog.collect_profiles)
+prefixes them as `collect_diagnostics` does, the axis included (`parent.z`,
+`child.z`). They are evaluated on the costly cadence and go to
+`diagnostics.nc` only.
+
+| component | profiles |
+| :-- | :-- |
+| `BoussinesqSimulation` | on `z` (cell centres): `u`, `v`, `theta`, `qv` (with moisture): horizontal means; `w_theta`, the resolved `⟨w'θ'⟩` (`resolved_flux_wθ`); on `zf` (w faces): `w_var` (`horizontal_variance`) |
+| `MassWeightedSimulation` | `u`, `v`, `theta` on `z`, `w_var` on `zf` |
+| any `AbstractSGSClosure` | `nu_v`, the mean vertical eddy viscosity (via `sgs_fields`); `TKEClosure` adds `e` |
+| `NestedRun` | both domains' profiles under `parent.` and `child.`, on their own axes |
+
 ## diagnostics.csv
 
 A [`DiagnosticsWriter`](@ref Aeolus.RunLog.DiagnosticsWriter) appends one
@@ -285,8 +306,61 @@ that was computed (tested bit for bit); a non-finite value is `NaN`,
 `Inf` or `-Inf`. A restart appends below the same header; a file whose
 columns differ is left alone and the session writes `diagnostics-2.csv`
 with a warning. Each costly row is also a `Debug` record (`subsystem =
-:diagnostics`) in `run.log`. `diagnostics.nc` (profiles, unlimited time
-dimension) follows the NetCDF-4 switch (#310, #337).
+:diagnostics`) in `run.log`.
+
+## diagnostics.nc
+
+A [`DiagnosticsNCWriter`](@ref Aeolus.IO.DiagnosticsNCWriter) writes the
+same rows as NetCDF-4 (#337, through [`NCIO`](physics.md): deflate,
+shuffle, CF attributes), plus the profiles. The file has two unlimited
+dimensions, so no costly quantity is padded with fill values between its
+evaluations:
+
+```
+dimensions:
+    time = UNLIMITED ;          // one record per row of diagnostics.csv
+    time_costly = UNLIMITED ;   // one record per costly row
+    z = 32 ; zf = 32 ;          // profile axes; equal levels share one
+variables:
+    double time(time) ; int64 step(time) ; double wall(time) ; double dt(time) ;
+    string dt_limiter(time) ; int retries(time) ;      // + every :step scalar
+    double time_costly(time_costly) ; int64 step_costly(time_costly) ;
+    double ke_mean(time_costly) ; double max_abs_w(time_costly) ; …  // every :costly scalar
+    double theta(time_costly, z) ; double w_var(time_costly, zf) ; …  // every profile
+```
+
+(`ncdump` order; in Julia `ds["theta"]` is `(z, time_costly)`.) Every
+variable has `units` and `long_name`, a reduced scalar its CF
+`cell_methods` (`area: maximum`, …). Time is in seconds of simulated
+time; `time_origin = DateTime(…)` gives it CF units `seconds since …`, so
+xarray and NCDatasets decode dates.
+
+**Provenance.** In a run folder the global attributes are
+[`nc_provenance_attributes`](@ref Aeolus.IO.nc_provenance_attributes) of
+the session: `run_id`, `case`, `session`, `git_commit`, `git_branch`,
+`git_dirty`, `julia_version`, `aeolus_version`, `manifest_fnv1a64`,
+`hostname`, `julia_threads`, `blas_threads`, `fftw_planner`,
+`fftw_threads`, `fftw_wisdom_loaded`, `bitwise_reproducible`, `command`,
+`config` and `seeds` (the session's configuration and seeds as TOML, with
+`config_hash` for a `RunConfig`), `created` (the run), `session_started`
+and `session_finished` (set when the writer closes; empty while the
+session runs or if it died), plus `title`, `source` and a `history` line per session.
+Flags are `Int8` 0/1 (NetCDF has no boolean). `run.toml` stays the full
+record (every session, every package version).
+
+**Restart.** A restart appends to the file when its layout (variables,
+units, cadence classes, profile levels; stored in the attribute
+`aeolus_diagnostics_layout`) is the same, refreshes the attributes to the
+new session and adds a `history` line; otherwise the session writes
+`diagnostics-2.nc`, as the CSV does. The costly cadence restarts with the
+session (its first row is costly).
+
+**Flushing.** The rows of `time` are buffered and written as one block at
+the first row 5 s wall after the last write (`flush_interval`, the
+`run.log` policy), after 1000 rows, at every costly row, when a blowup is
+thrown out of the monitor, and on `close`; each write ends with an HDF5
+`sync`, so after a crash the file holds every written row. A sync costs
+about 2 ms, which is why the rows are not written one by one.
 
 ## Progress line
 
@@ -349,7 +423,8 @@ per step, [`monitor!`](@ref Aeolus.IO.monitor!) (or
 [`monitored_step!`](@ref Aeolus.IO.monitored_step!), which also runs the
 step under the guard and takes dt and the retries from
 `step_adaptive!`'s return value). Given a run folder it writes the
-folder's `diagnostics.csv` and `crash/`:
+folder's `diagnostics.csv`, `diagnostics.nc` and `crash/`; each scalar is
+evaluated once per row for both files:
 
 ```julia
 with_run("cbl"; config = cfg) do rf
@@ -384,6 +459,18 @@ add up to 0.042 ms per step, 0.49 %; the benchmark fails if that exceeds
 2 %. The worst case, costly diagnostics, check and snapshot after every
 step, costs +30 %.
 
+With `diagnostics.nc` (#337; same benchmark, a later day, 7.18 ms per bare
+step, mean dt 0.10 s): the CSV-only monitor **+1.40 %**, the monitor
+with `diagnostics.nc` **+1.55 %** (paired medians; the bare-step
+repetitions spread over 6.99 to 7.38 ms). Its parts: a buffered row
+0.2 µs, a block write plus sync 2.13 ms (once per 5 s wall), a costly row
+6.5 ms (0.26 ms of it the five profiles, the rest the write and the
+sync; once per 60 s simulated). At the default cadence all parts add up
+to 0.060 ms per step, 0.84 %. The worst case (everything every step) is
++137 %, dominated by the per-step HDF5 sync of the costly row. A first
+version synced every 20 rows: 146 µs per step amortised, 3.1 % from the
+parts, over budget; hence the wall-time flush.
+
 ## Cost of a record
 
 Measured on a 64×64×32 Boussinesq case, `step_adaptive!`, one thread
@@ -415,9 +502,10 @@ does not affect.
 ## Not here yet
 
 Per-step diagnostics in the step cores and the threaded reductions (#336,
-after the KernelAbstractions port), `diagnostics.nc` and the NetCDF
-global attributes from the provenance (#337, after #310), and the Berlin
-console text and coupling reports through the registry (#338).
+after the KernelAbstractions port), and the Berlin console text and
+coupling reports through the registry (#338). The Berlin output file
+(`examples/urban/core/output.jl`) does not carry the provenance
+attributes yet: it is not written inside a run folder.
 
 ## Reference
 

@@ -190,7 +190,3 @@ function apply_nest_boundary!(csim::_NestSim, s::NestInterpState; solid = nothin
     _attach_nest_data!(csim, nest_boundary_data(s; t0 = csim.t))
     return fill_nest_halos!(csim, s)
 end
-
-# The pre-#329 private name, kept for callers written against it (the
-# Berlin nest coupling of #265 calls Aeolus.Nesting._fill_nest_halos!).
-const _fill_nest_halos! = fill_nest_halos!

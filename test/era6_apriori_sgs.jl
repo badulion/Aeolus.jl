@@ -122,7 +122,7 @@ using LinearAlgebra: eigvals, Symmetric
 
 # the `dns` run driver (CFG-d, #359); it includes fixtures/dns_apriori.jl,
 # which includes dns_decay.jl
-include(joinpath(@__DIR__, "..", "examples", "validation", "dns_driver.jl"))
+include(joinpath(@__DIR__, "..", "examples", "validation", "dns_apriori_driver.jl"))
 using Aeolus.Config: run_config
 "A run of the `dns` driver's dns256.toml with `overrides`, quietly, into a fresh root."
 dns_apriori_run(overrides) = run_config(dns_config(; overrides = vcat(overrides, "fftw.planner=\"estimate\""));

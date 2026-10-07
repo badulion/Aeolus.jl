@@ -2,7 +2,7 @@
 # (Era VI, P56-c, #178; the hybrid-DNS decision on #208).
 #
 # Included by test/era6_apriori_sgs.jl and by the `dns` run driver
-# (examples/validation/dns_driver.jl, CFG-d #359), whose config
+# (examples/validation/dns_apriori_driver.jl, CFG-d #359), whose config
 # examples/validation/configs/dns256.toml is run offline at 256³
 # (examples/validation/dns256_generate.jl copies its record to
 # test/fixtures/dns256_apriori.toml). The
@@ -204,7 +204,7 @@ goes to `out` only if every required DNS check holds (k_max η ≥ 1.5 over
 the run, skewness band, budget, monotone decay, past the peak;
 `ADVISORY_CHECKS` are recorded only); otherwise it is written to
 `out * ".failed"` and the call throws, naming the failed checks and the
-measured k_max η. The `dns` run driver (examples/validation/dns_driver.jl,
+measured k_max η. The `dns` run driver (examples/validation/dns_apriori_driver.jl,
 `[apriori]`, CFG-d #359) calls it after the run.
 """
 function dns_apriori_finish(d; out::AbstractString, ratios = (4, 8, 16, 32), seed::Integer = 1,
