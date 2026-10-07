@@ -70,7 +70,13 @@ its building-free frame (the columns next to an open face take
 ([`solid_and_classes`](@ref Aeolus.InputDrivers.solid_and_classes)), so
 one file serves a periodic and a nested run on the same grid. Terrain is
 written as `zt = 0`: no preprocessor reads elevation yet, and the Berlin
-case refuses a driver with terrain.
+case refuses a driver with terrain. There are no `vegetation_type`,
+`soil_type` or `water_type` rasters yet: no preprocessor has a source
+for them and no run reads them, so they would be written and never
+used. Schema version 2 adds them with the first reader that needs them.
+`ground_class` (the surface class with the buildings removed) is stored
+instead: the building-free frame of a nested run and the leaf area
+under a removed building need it.
 
 ## The static driver, tiles form
 
