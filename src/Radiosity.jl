@@ -169,7 +169,7 @@ _gauss_nodes(n::Int) = _gauss_legendre(n)
 
 """
 Surface-class indices. These deliberately coincide with the `SURFACE_*`
-constants of `examples/urban/core/geometry.jl`, so a `Facet`'s material index
+constants of `Aeolus.InputDrivers` (the surface classes of the static driver), so a `Facet`'s material index
 can be used directly as an index into that example's `SurfaceParams` arrays and
 a `RadiosityScene` can be driven from an existing `surface_class_map`.
 """
@@ -811,7 +811,7 @@ so it also accepts any object with those fields.
 
 Note the discretisation: a mask resolves heights only to `dz`, so the returned
 heightmap is the mask's staircase. Where the true building height is known
-(e.g. from `load_city_geojson` in `examples/urban/core/geometry.jl`) rasterise it directly instead —
+(e.g. the `building_height` of a static driver, `Aeolus.InputDrivers`) rasterise it directly instead —
 a wall facet built from the real height is exact, whereas one built from the
 mask inherits a half-cell bias.
 """

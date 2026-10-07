@@ -328,7 +328,7 @@ end
 The building height (m) of the OSM `city` on a grid `r` times finer than
 `mesh` in x and y (`(r Nx, r Ny)`, cell centres), with each footprint's
 true height (the tallest where footprints overlap) — the surface the
-IBM staircase of `rasterize_city!` represents at the grid scale.
+IBM staircase of `rasterize_city` represents at the grid scale.
 """
 function osm_height_map(city, mesh, r::Integer)
     Nf, Mf = mesh.Nx * r, mesh.Ny * r
@@ -342,7 +342,7 @@ function osm_height_map(city, mesh, r::Integer)
         i0 = max(1, floor(Int, (xmin - mesh.x0) / dxf)); i1 = min(Nf, ceil(Int, (xmax - mesh.x0) / dxf) + 1)
         j0 = max(1, floor(Int, (ymin - mesh.y0) / dyf)); j1 = min(Mf, ceil(Int, (ymax - mesh.y0) / dyf) + 1)
         for j in j0:j1, i in i0:i1
-            _point_in_polygon(xs[i], ys[j], b.polygon) && (hf[i, j] = max(hf[i, j], b.height))
+            point_in_polygon(xs[i], ys[j], b.polygon) && (hf[i, j] = max(hf[i, j], b.height))
         end
     end
     return hf

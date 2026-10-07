@@ -77,8 +77,9 @@ examples/urban/
     scenarios.jl       CaseConfig(:summer) etc.: loads configs/berlin_<scenario>.toml
     config_schema.jl   the `berlin` run driver: TOML schema (defaults), RunConfig → CaseConfig
     registry.jl        AbstractCoupling, the contract, Cadence, register!, selection
-    geometry.jl        surface classes, rasterisation, build_geometry (scene, view factors)
-    osm_ingest.jl      OSM XML reader
+    geometry.jl        build_geometry: the static driver (or the OSM file in memory) → mask,
+                       classes, radiosity scene, view factors; the readers, classes and
+                       rasterisation are Aeolus.InputDrivers (src/preprocess/, CFG-f #361)
     bus.jl             SurfaceBus (incl. the per-column surfaces), SurfaceParams, surface factories
     tracers.jl         tracer registry (ensure_tracer!)
     ledger.jl          energy/water budget ledger (surface energy per class, water in the air)
@@ -598,7 +599,7 @@ later issue.
 | `qr` sedimented but not advected; qv clamp | `micro_kessler.jl` | #143 |
 | glass is a synthetic roof mask | `glass.jl` | #144 |
 | toy aerosol: not advected or output, zero with no source; its PM deposition table | `aq_aerosol.jl` (table in `aq_chem.jl`) | #147 |
-| OSM `&&`/`||` precedence; patches overwrite roofs | `core/osm_ingest.jl`, `core/geometry.jl` | #141 |
+| OSM `&&`/`||` precedence; patches overwrite roofs | `src/preprocess/osm.jl`, `src/preprocess/city.jl` (moved by CFG-f #361, kept bit for bit) | #141 |
 
 **Found during #126, fixed in #132: stale velocity halos in the scalar
 transport.**

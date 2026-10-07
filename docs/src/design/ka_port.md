@@ -182,7 +182,7 @@ of this rule.
 | `interior_max([b,] A, ranges)` | NaN-propagating maximum (any NaN gives NaN); `-Inf` for an empty region |
 | `interior_all_finite([b,] A, ranges)` | no NaN, no ±Inf |
 | `plane_reduce!(p, [b,] body, ranges, args...)` | `p[c]` = canonical plane sum of the *indexed* `body(i, j, k, args...)`; a tuple-valued body sums each component into `p::NTuple` of vectors (KA-b) |
-| `range_max([b,] body, ranges, args...)` | NaN-propagating maximum of an indexed body, which must only read (KA-b) |
+| `range_max([b,] body, ranges, args...)` | NaN-propagating maximum of an indexed body, which must only read (KA-b); a tuple-valued body gives the component-wise maxima, several in one sweep (KA-j) |
 | `plane_map!(p, [b,] plane, ranges, args...)` | `p[c]` = `plane(k, ranges[1], ranges[2], args...)`: a whole-plane function in its own fixed loop order, one work item per plane (KA-b) |
 
 `plane_reduce!` is the general form. Its body follows the launch
@@ -1247,6 +1247,374 @@ its 1 × 16 or 1 × 14 work items are below the launch threshold. It takes
 every section (primitives, dns, reductions, smoke, flagship, nested, fft,
 radiation): all 2900 hashes, the 34 of the radiation section included,
 are identical at 4, 12 and 24 threads to 1 thread.
+
+## KA-j: the step cores (#306)
+
+**What the drivers do now.** `step!` (`_euler_projection!`), `step_rk3!`,
+`step_adaptive!`, `step_imex!` and the sound-proof cores of `Anelastic`
+keep their serial operator order. Every operator they call is a kernel:
+the finite-volume operators of KA-d, the solvers of KA-g / KA-h, and the
+field algebra below.
+
+* **One axpy.** The three copies of `_axpy_interior!` (Simulations,
+  TimeIntegration, Anelastic) are gone. `Simulations.axpy!(y, a, x)` is
+  one `interior_map!`. `_combine2/3/4!` (the IMEX stage sums), `p = φ/Δt`
+  (`pressure_from_potential!`) and the `ν + K` freezes of `step_imex!`
+  are `interior_map!` / `range_map!` kernels with the expression of the
+  broadcast they replace. The tendencies are zeroed with `fill!` and
+  copies use `copyto!` (`zero_storage!`, `copy_storage!`): a `memset` /
+  `memcpy` beat the pointwise kernel (see *A reset is a memset* below).
+* **RK3.** `step_rk3!` copies `uⁿ` into its workspace (`copy_storage!`)
+  and forms the stage combinations `¾uⁿ + ¼u` and `⅓uⁿ + ⅔u` as kernels
+  over the whole storage (`combine_storage!`; the in-place array is the
+  first argument, so the loop vectorises: 0.56-0.68× the broadcast).
+* **Fused CFL sweep.** `cfl_diagnostics` made five sweeps: the advective
+  rate and one maximum each of `νh`, `νv`, `κh`, `κv`. It now makes one:
+  a `range_max` whose body returns the 5-tuple, each component
+  NaN-propagating (`_cfl_maxima`). N² comes from `plane_mean!`.
+* **Fused step guard.** After a step, `step_adaptive!` checked
+  finiteness (one sweep per field), ran the divergence kernel, took its
+  maximum, and took one maximum per velocity component. `step_guard(sim)`
+  does all of it in one sweep: per point `(Σ x·0, |∇·u|, max(|u|,|v|,|w|))`
+  over `u, v, w, θ, p` (and `qv`). `x·0` is `0` for a finite `x` and NaN
+  for NaN or ±Inf, so the first component is 0 exactly when every value
+  is finite. `|∇·u|` uses the divergence stencil `_div_at` of
+  `FiniteVolume`, the one `max_divergence` uses. The verdict is the old
+  one, in the old order: non-finite, then divergence, then the speed cap.
+  The guard no longer writes the post-step divergence into `div_buf`.
+* **Rollback.** `save_state!` / `restore_state!` copy with
+  `copy_storage!`, and `restore_state!` synchronizes the backend (`Backends.synchronize`, a
+  no-op on the CPU) before the retry reads the state. The snapshot now
+  holds `νt` and `κt` too (#346 item 1): before, a rejected try left the
+  NaN coefficients of the blown-up state in `sim.νt` / `sim.κt`, where
+  the diagnostics and a crash checkpoint read them.
+* **`_all_finite`** is `IO.allfinite` on the interiors, the one
+  branch-free finiteness test (#346 item 2).
+* **Per-simulation workspaces.** The process-global `WeakKeyDict`s
+  `_SNAPSHOTS`, `_IMEX_WORKSPACES` and `_RK3_WORKSPACES` are replaced by
+  a `StepWorkspaces` field of each simulation (`BoussinesqSimulation`,
+  `MassWeightedSimulation`). Each slot is allocated on first use with
+  `Backends.allocate`. A lookup in a shared dictionary raced when two
+  domains were stepped from different tasks; a field of the simulation
+  does not. `test/ka_step.jl` steps two domains concurrently and compares
+  them with the sequential bits.
+* **Anelastic.** `weighted_divergence!`, `weighted_momentum_advect!`,
+  `weighted_scalar_advect!`, `add_anelastic_buoyancy!` and
+  `set_reference_state!` are `launch!` bodies with the z-dependent
+  weights as arguments indexed by `k`. `max_*_divergence` and the maxima
+  of `adaptive_dt` use `range_max` / `interior_max`.
+* **Open boundaries.** The combination and restore of the open-boundary
+  buffers in `step_rk3!` and the rollback are kernels.
+
+**Backends.** `range_max` takes a tuple-valued body (several maxima in
+one sweep). `range_map!` substituted every argument that is `out` with a
+map returning a tuple of `Union`s, which made every `interior_map!` a
+dynamic dispatch allocating 128-256 B. It now substitutes only the first
+argument, with two concretely typed branches: 0 B per launch, same bits.
+One `step!` of the Boussinesq core allocates 0 B on the serial backend
+and one `step_rk3!` 16 B (the workspace lookup).
+
+**Bit for bit against the old code.** `test/support/step_cases.jl` runs
+one to four steps of every core from seeded states: Euler, RK3,
+adaptive (dt sequence, CFL diagnostics, and a forced retry), IMEX ARK2
+and Rosenbrock2, anelastic, pseudo-incompressible, a stretched grid,
+and every core with open boundaries. It uses only APIs that predate
+KA-j, so the same file hashes the old checkout. At one thread, 402
+hashes: every prognostic field, `νt`, `κt`, `p`, the dt sequences and
+the retry counts are identical to the pre-KA-j code. The 4 that differ
+are the scratch buffer `div_buf` after `step_adaptive!` (adaptive,
+adaptive retry, stretched adaptive, open adaptive), which the fused
+guard no longer writes. `test/ka_step.jl` also checks the ported
+kernels against `test/support/legacy_step.jl`, a transcript of the old
+loops, on the serial, threshold-0 and default backends.
+
+**One changed expectation.** `logging_blowup.jl` expected a failed
+`step_adaptive!` to leave `[:v, :νt, :κt]` non-finite: the NaN injected
+in `v`, plus the eddy coefficients of the failed tries, which the
+rollback did not restore. The rollback now restores them, so only `v`
+is non-finite and the test expects `[:v]`. The code changed on purpose
+(#346 item 1); the old expectation described the missing restore.
+
+**Measured: kernels** (`benchmarks/bench_ka_step.jl kernels`, µs,
+minimum of 200 runs at 64×64×32 and 30 at 128×128×64; old = the pre-port
+loop of `test/support/legacy_step.jl` in the same process; the 1-thread
+columns are the minimum of four runs; in brackets old 1 t / new N t;
+machine load 4-7 from other jobs; Julia 1.13.1):
+
+| kernel, 64×64×32 | old 1 t | new 1 t | new / old | new 4 t | new 12 t | new 24 t |
+| :--- | ------: | ------: | --------: | ------: | -------: | -------: |
+| weighted divergence | 48.3 | 48.6 | 1.01 | 24.6 (2.0×) | 27.5 (1.8×) | 27.7 (1.7×) |
+| weighted momentum advection | 306.8 | 309.6 | 1.01 | 131.9 (2.3×) | 123.8 (2.5×) | 141.4 (2.2×) |
+| weighted scalar advection | 91.6 | 94.5 | 1.03 | 37.9 (2.4×) | 34.6 (2.6×) | 42.9 (2.1×) |
+| anelastic buoyancy | 30.3 | 30.5 | 1.01 | 15.4 (2.0×) | 14.8 (2.0×) | 20.9 (1.4×) |
+| axpy (interior) | 36.1 | 21.5 | 0.60 | 18.8 (1.9×) | 16.4 (2.2×) | 15.8 (2.3×) |
+| combine4 (interior) | 57.0 | 52.7 | 0.92 | 27.9 (2.0×) | 22.9 (2.5×) | 27.2 (2.1×) |
+| RK3 combination (storage) | 47.1 | 26.4 | 0.56 | 32.2 (1.5×) | 27.9 (1.7×) | 30.0 (1.6×) |
+| CFL maxima (5 sweeps → 1) | 259.1 | 143.0 | 0.55 | 49.5 (5.2×) | 41.2 (6.3×) | 44.0 (5.9×) |
+| step guard (11 sweeps → 1) | 631.3 | 157.8 | 0.25 | 148.8 (4.2×) | 109.5 (5.8×) | 143.1 (4.4×) |
+
+| kernel, 128×128×64 | old 1 t | new 1 t | new / old | new 4 t | new 12 t | new 24 t |
+| :--- | ------: | ------: | --------: | ------: | -------: | -------: |
+| weighted divergence | 850.7 | 813.6 | 0.96 | 194.5 (4.4×) | 188.7 (4.5×) | 194.5 (4.4×) |
+| weighted momentum advection | 4284.1 | 4237.1 | 0.99 | 1199.1 (3.6×) | 1355.7 (3.2×) | 1202.3 (3.6×) |
+| weighted scalar advection | 1579.8 | 1557.0 | 0.99 | 489.9 (3.2×) | 225.9 (7.0×) | 451.9 (3.5×) |
+| anelastic buoyancy | 238.6 | 244.0 | 1.02 | 100.2 (2.4×) | 138.3 (1.7×) | 192.1 (1.2×) |
+| axpy (interior) | 256.0 | 159.8 | 0.62 | 74.7 (3.4×) | 137.1 (1.9×) | 108.6 (2.4×) |
+| combine4 (interior) | 810.2 | 775.9 | 0.96 | 247.8 (3.3×) | 141.5 (5.7×) | 320.4 (2.5×) |
+| RK3 combination (storage) | 305.0 | 180.7 | 0.59 | 171.4 (1.8×) | 277.2 (1.1×) | 235.8 (1.3×) |
+| CFL maxima (5 sweeps → 1) | 1854.0 | 1289.5 | 0.70 | 409.3 (4.5×) | 251.4 (7.4×) | 144.1 (12.9×) |
+| step guard (11 sweeps → 1) | 9919.3 | 1719.7 | 0.17 | 1063.3 (9.3×) | 1238.7 (8.0×) | 1419.0 (7.0×) |
+
+**Measured: whole steps** (`benchmarks/bench_ka_step.jl steps`, ms per
+step, minimum of 5 after 2 warm-up steps, 20 for `adaptive_dt`; old =
+the merge base before the KA-j commits, the same script; at one thread
+the minimum of three interleaved old/new runs; at 4-24 threads the
+minimum of two runs; in brackets new 1 t / new N t). The LES is
+64×64×32, Smagorinsky, moist, walls in z. The anelastic case's
+density-weighted CG stops at `maxit = 500` (tol 1e-12) in both
+versions:
+
+| core | old 1 t | new 1 t | new / old | new 4 t | new 12 t | new 24 t |
+| :--- | ------: | ------: | --------: | ------: | -------: | -------: |
+| 64³ DNS `step!` | 7.40 | 7.26 | 0.98 | 4.86 (1.49×) | 4.42 (1.64×) | 7.90 (0.92×) |
+| LES `step!` | 5.96 | 5.82 | 0.98 | 3.61 (1.61×) | 3.51 (1.66×) | 4.82 (1.21×) |
+| LES `step_rk3!` | 18.58 | 18.05 | 0.97 | 12.42 (1.45×) | 12.17 (1.48×) | 17.28 (1.04×) |
+| LES `step_adaptive!` | 8.01 | 7.47 | 0.93 | 5.02 (1.49×) | 5.03 (1.49×) | 7.26 (1.03×) |
+| LES `adaptive_dt` | 1.23 | 1.11 | 0.90 | 0.60 (1.85×) | 0.61 (1.82×) | 0.59 (1.88×) |
+| LES `step_imex!` ARK2 | 50.11 | 49.86 | 1.00 | 23.87 (2.09×) | 22.79 (2.19×) | 27.30 (1.83×) |
+| anelastic `step!` | 111.74 | 109.48 | 0.98 | 66.48 (1.65×) | 74.47 (1.47×) | 78.11 (1.40×) |
+
+An earlier, quieter run (load 2-6) of the same cores gave 4.30 ms for
+the 64³ DNS and 2.85 ms for the LES `step!` at 12 threads: at 24
+threads and under load the numbers move by up to 2×, the 1-thread
+ratios by about 5 %.
+
+**Measured: the Berlin flagship** (`bench_berlin.jl`: default
+`CaseConfig`, nest off, 64×64×64; ms, minimum of 8 steps after 3
+warm-up steps; `step_dt` timed around the call, `dynamics/step!` from
+`case.timing`; minimum of two runs, the second one alone for old 12 t):
+
+| | old 1 t | new 1 t | new 4 t | new 12 t | new 24 t | old 12 t |
+| :-- | ------: | ------: | ------: | -------: | -------: | -------: |
+| `step_dt` | 4.55 | 4.55 | 4.49 | 4.31 | 4.43 | 4.39 |
+| `dynamics/step!` | 44.29 | 43.53 | 38.08 | 33.91 | 36.15 | 39.44 |
+| `step_case!` | 128.1 | 129.4 | 111.9 | 102.2 | 106.8 | 118.1 |
+
+Reading the tables:
+
+* **The 1-thread gate (≤ 1.10×) holds.** Every core is 0.90-1.00× the
+  old code (the largest, 1.00, is ARK2; in the Berlin case
+  `dynamics/step!` is 0.98× and `step_case!` 1.01×, run-to-run spread
+  about 3 %). Of the kernels, the weighted operators are 0.96-1.03×
+  (their bodies are the old loop bodies), the fused CFL sweep
+  0.55-0.70× and the fused guard 0.17-0.25×. The largest kernel ratio
+  is 1.03 (weighted scalar advection at 64×64×32).
+* **Threads.** The cores scale 1.5-2.1× at 4 threads and gain little
+  past 4. The issue expected 2-3× at 4 and 3.5-5× at 12 *with KA-k in*.
+  Most of a step is still outside this issue. In the Berlin case,
+  `step_dt` is 4.3-4.6 ms at every thread count: `compute_sgs!` of
+  the `TKEClosure` takes 3.5-3.7 ms of it (KA-l, #304). The fused CFL
+  sweep KA-j owns takes 0.30 ms at 1 thread and 0.06 ms at 12 (the old
+  five sweeps: 0.25 ms in the LES at 1 t). The flagship dynamics hooks
+  are KA-k (#307), and the scalar transport KA-e (#302).
+* **A reset is a memset.** The tendency reset and the state copies
+  stayed `fill!` / `copyto!`. As pointwise kernels (`range_map!` over
+  the storage) they measured, against the serial `fill!` / `copyto!`:
+  zero 1.42-1.47× at one thread and 64×64×32 (15.8 against 11.2 µs),
+  1.16-1.20× at 128×128×64, and 2.6× at 4 threads (28.4 µs); copy
+  1.07-1.15× at one thread, 1.09-1.65× at 64×64×32 on 4-24 threads and
+  0.82-1.58× at 128×128×64. A 1-D launch over the linear indices
+  measured no better (9.4 / 13.1 / 19.9 µs at 4 / 12 / 24 threads for
+  the zero). A `memset` / `memcpy` is memory-bound and already vectorised;
+  a GPU array implements both, so nothing is lost for Phase 81.
+
+**Thread invariance.** The worker's `steps` section hashes the same
+cases as above (402 hashes). `AEOLUS_THREAD_TESTS=1
+AEOLUS_THREAD_COUNTS=1,4,12,24 julia --project=. test/run.jl --only
+thread_invariance.jl` with every section (primitives, dns, reductions,
+smoke, flagship, nested, fft, fv, pcg, steps, radiation): all 3417
+hashes are identical at 4, 12 and 24 threads to 1 thread (21 of 21
+tests pass, 17.9 min). The harness's `reductions` section called
+`TimeIntegration._max_speed`, which the fused guard replaced; it now
+records `step_guard(sim).speed`, the same bits.
+
+## KA-k: the dynamics hooks and the immersed walls (#307)
+
+The `:body_force` and `:post_predictor` hooks of the Berlin case run
+inside `step!`. KA-k ports the physics behind them: the facade wall
+model (`WallModels`, `wall_models/immersed.jl`), the IBM direct forcing
+(`IBM`), the resolved canopy drag (`PlantCanopy`), the Berlin moist
+buoyancy (`couplings/moist_buoyancy.jl`) and every large-scale forcing
+(`LargeScaleForcing`, which the geostrophic coupling calls). The ground's
+wall stress (`post_predictor/surface_exchange`) is not part of it.
+
+**The immersed-wall stress as a gather.** `apply_immersed_wall_stress!`
+used to scatter `A[c][I,J,K] += a[n]` over the (face, wall) pairs into
+three full work arrays, because a face between two walls (a corner, a
+gap one cell wide) has two pairs. `ImmersedWalls` now carries a face
+index built once by `immersed_walls`: compressed sparse rows
+`face_ptr`/`face_entry`, the faces in the order of their first pair, the
+pairs of a face in pair order. Each face sums its own pairs and updates
+its own velocity (owner computes), and the per-pair and per-face work
+vectors replace the work arrays and the per-call allocation of `a`.
+`remove_stencil_wall_flux!` subtracts each face's pair fluxes the same
+way. The diagnostics (`F`, `τA`, `area`, `τ_min`, `F_stencil`) are folded
+afterwards on the calling task, in the order of the former loops.
+`fill_halos!` stays outside the kernels.
+
+**No one-time change.** The port plan named this gather as a one-time
+bit change. It is not one: a face's pairs are summed in pair order,
+which is the order the scatter added them in, so the gather gives the
+former bits. `test/ka_hooks.jl` compares every velocity, tendency and
+diagnostic with a transcript of the scatter (`test/support/legacy_hooks.jl`),
+also for a shuffled pair order. The harness's `smoke` and `flagship`
+sections (2 591 hashes: every field, tracer, bus array, ledger, dt and
+solver count of the 12-step smoke matrix and the flagship step) are
+identical between master `b94e9484` and this branch at `-t 1`, so the
+largest state difference after 12 smoke steps is 0 and the facade
+ledger values (`τA`, `F`, `F_stencil`) are unchanged.
+
+**The kernels.**
+
+* *Immersed walls.* The drag of every pair is a 1-D launch over the
+  pairs. The face update is two 1-D launches over the faces: the faces
+  with one pair (7 634 of 9 717 in the flagship) and those with
+  several. The flux removal is one launch whose work item is a block of
+  64 consecutive faces walked as one flat loop (a face never splits
+  between work items; the block size does not depend on the thread
+  count). One work item per face walked through the face index cost
+  1.35× the former loop at one thread.
+* *IBM direct forcing.* `implicit_ibm_correction!` and `add_ibm_penalty!`
+  looped over the solid cells and scaled (or penalised) the six faces of
+  each, so a face between two solid cells was written twice from two
+  iterations. Now one work item per row `(j, k)` owns the row's `u` faces
+  and the `v` and `w` faces on its cells' lower sides. It applies the
+  operation of the solid cells in rows `j − 1` and `k − 1` to those
+  faces first, then walks its own cells, one mask read per cell: per
+  face the same operations in the same order as before. Rows with no
+  solid cell in them or below them are skipped after word-wise scans of
+  the `BitArray`. Walking each row face by face instead (up to six mask
+  reads per face) measured 1.00× in an isolated call but 1.14× inside
+  the flagship step (244 against 219 µs per call). The cell-wise walk
+  measures 0.76× there.
+* *Canopy drag.* `ResolvedCanopyDrag` lists its faces with leaves once
+  (`act`, `u` then `v` then `w`, each in `k, j, i` order). The factors
+  and the update are two 1-D launches over that list instead of two
+  scans of the whole grid. The three full scratch arrays are gone. The
+  force is folded per component in the former order.
+* *Moist buoyancy.* The level sums were already a canonical
+  `plane_reduce!` (KA-b). The deviation is one work item per level (a
+  pointwise body that reloaded the level mean at every point cost 3.8×),
+  and the `w` forcing is pointwise.
+* *Large-scale forcing.* The geostrophic pressure gradient, profile
+  nudging, both subsidence forms, the advective tendencies and the
+  `:mean` target of `ReferenceDamping` run as `launch_weighted!` over
+  the levels (weight `Nx·Ny`). A work item evaluates its level's
+  coefficient once and walks the level in the former `for j, for i`
+  order. The volume integrals are folded over the levels afterwards, in
+  ascending `k`. `ProfileNudging` has a level buffer, so it no longer
+  allocates per call.
+
+Every kernel is bit-identical to the loop it replaces, at every thread
+count (`test/ka_hooks.jl` on the serial, threshold-0 and default
+backends, `--threads 4`, with a `BitArray` and a dense `Array{Bool}`
+mask for the IBM).
+
+**Measured.** Same machine as above, Julia 1.13.1, other agents' test
+runs on the machine (load 3-7). Isolated calls on the flagship geometry
+(`CaseConfig()`, 64³ after 2 steps: 11 984 facade pairs, 6 016 faces
+with leaves, 2 870 solid cells) and on synthetic forcing grids. Each
+value is the minimum over 200 calls, in µs. Speed-up = old at 1 thread /
+new at N threads.
+
+| kernel | old, 1 t | new, 1 t | 1 t / old | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: | --: | --: |
+| `remove_stencil_wall_flux!` | 81.4 | 75.9 | 0.93 | 1.08× | 1.09× | 1.07× |
+| `apply_immersed_wall_stress!` | 300.5 | 290.8 | 0.97 | 1.06× | 1.04× | 1.01× |
+| `apply_canopy_drag!` | 1 008.9 | 98.0 | 0.10 | 10.5× | 10.3× | 10.1× |
+| `implicit_ibm_correction!` (τ = 0) | 195.9 | 103.1 | 0.53 | 2.4× | 3.0× | 3.3× |
+| moist buoyancy (deviation + `w` forcing) | 1 134.9 | 1 135.3 | 1.00 | 3.7× | 3.7× | 3.8× |
+| geostrophic pressure gradient, 64³ | 53.3 | 51.2 | 0.96 | 2.5× | 2.7× | 1.9× |
+| profile nudging θ, u, 64³ | 348.0 | 360.7 | 1.04 | 3.3× | 5.5× | 3.7× |
+| subsidence (`:local`) θ, 64³ | 15 071 | 154.6 | 0.01 | 328× | 589× | 317× |
+| geostrophic pressure gradient, 192²×64 | 911.9 | 929.4 | 1.02 | 2.2× | 4.6× | 2.0× |
+| profile nudging θ, u, 192²×64 | 3 662.6 | 3 792.0 | 1.04 | 2.7× | 4.8× | 2.3× |
+| subsidence (`:local`) θ, 192²×64 | 165 608 | 1 513.1 | 0.01 | 336× | 931× | 741× |
+
+* **The 1-thread gate holds for every kernel**; the largest ratio is
+  1.04 (profile nudging). Three are much faster at one thread. The
+  canopy drag works on its 6 016 listed faces instead of 3 × 262 144.
+  The IBM skips the rows without solid cells. The `:local` subsidence
+  went from 15.1 ms to 0.15 ms per call at 64³ with the same bits; its
+  former loop ran about 57 ns per point (not profiled). The parent of
+  the Berlin nest uses this form; it is the biggest single gain of the
+  PR in the flagship (see below).
+* **The immersed walls do not thread at the flagship size.** Their
+  launches cover 9 717 faces or 11 984 pairs, fewer than the 32 768
+  points of the serial threshold, and a forced launch (threshold 0)
+  still gets one task under the 16 384-points-per-task rule (KA-a).
+  Forced through the KA path that way, `apply_immersed_wall_stress!`
+  costs 1.19-1.22× the serial path and the flux removal 1.01-1.03×,
+  for no parallelism. The canopy drag (6 016 faces) is in the same
+  position (1.5× when forced). The `launch_weighted!` weight counts
+  the points an index covers, not its cost, so it cannot be used to
+  thread them. A cost-weighted launch for sparse lists is an open
+  question for the maintainer.
+* The moist buoyancy is flat beyond 4 threads. Its cost is the
+  saturation evaluation inside the `plane_reduce!` of KA-b, not the two
+  launches added here.
+
+**Flagship, per hook entry** (`timing_report` lines, ms/step, the
+64×64×64 Alexanderplatz run, minimum over 3 × 8 steps after 4 warm-up
+steps; old = master `b94e9484`, 3 runs; new at 1 thread, 2 runs):
+
+| entry | old, 1 t | new, 1 t | 1 t / old | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: | --: | --: |
+| `body_force/moist_buoyancy` | 1.282 | 1.274 | 0.99 | 0.556 | 0.546 | 0.558 |
+| `body_force/geostrophic` | 0.327 | 0.266 | 0.81 | 0.272 | 0.395 | 0.421 |
+| `body_force/wall_model_facades` | 0.308 | 0.276 | 0.90 | 0.303 | 0.334 | 0.297 |
+| `post_predictor/wall_model_facades` | 0.637 | 0.478 | 0.75 | 0.671 | 0.614 | 0.658 |
+| `post_predictor/veg_drag` | 0.614 | 0.161 | 0.26 | 0.234 | 0.220 | 0.256 |
+| `post_predictor/ibm` | 0.222 | 0.162 | 0.73 | 0.184 | 0.157 | 0.153 |
+| **KA-k entries** | **3.390** | **2.617** | **0.77** | **2.220** | **2.266** | **2.343** |
+| `post_predictor/surface_exchange` (not ported here) | 0.379 | 0.352 | | 0.445 | 0.409 | 0.478 |
+| `dynamics/step!` | 52.3 | 51.8 | 0.99 | 46.1 | 44.5 | 43.1 |
+| step | 249.1 | 217.3 | 0.87 | 191.5 | 188.1 | 188.3 |
+
+* The KA-k entries drop **1.30× at one thread** and **1.50× at 12
+  threads** against the former loops. The issue expected at least 3× at
+  12 threads, from a profile where the hooks were about 23 % of
+  `step!`. On master all hook entries together are 3.8 of 52.3 ms (7 %).
+  Of the 2.6 ms the KA-k entries take now at one thread, 0.75 ms are
+  the two facade entries, which stay serial (above). Those
+  serial entries get slower once Julia runs threaded (0.48 → 0.61-0.67
+  ms): the velocities they read were last written by other cores.
+  The `geostrophic` entry gets slower at 12 and 24 threads. Most of its
+  time is the coupling's own six interior means, for its smoke checks,
+  and `add_sponge!`, not the forcing.
+* The whole step at one thread drops from 249 to 217 ms because of the
+  nest parent (`nest_parent/nesting`: 100 → 73 ms). The parent runs
+  `Subsidence(form = :local)` (`parent/case.jl`), the 15 ms → 0.15 ms
+  row of the table at its own size.
+
+**Thread invariance.** The harness's workers, run directly in four
+groups so each fits one 4.5 GB memory slot (primitives, dns, reductions,
+fft, fv, pcg, hooks; smoke; flagship, nested; radiation), at 1, 4, 12
+and 24 threads: all 3 055 hashes, the 40 of the `hooks` section
+included, are identical at 4, 12 and 24 threads to 1 thread.
+
+That needed one change to the worker. `init_threads!` pins BLAS to one
+thread only when Julia runs threaded, so at `-t 1` OpenBLAS kept its own
+default thread count. The Berlin radiosity solves through LAPACK, whose
+bits depend on that count, so the surface bus (`sw`, `lw`, `Rn`, `H`,
+`LE`, `G`, `E`, `Ts`) and the surface and water ledgers of the flagship
+step, and from there 2 216 of the 2 539 smoke hashes, differed between
+`-t 1` and every other count. It is not new in this branch: the
+flagship section gives the same two sets of hashes on master `b94e9484`,
+`6412fb9a` and `d5ee77da`, and the same hashes as this branch at 1 and
+at 4 threads. With `OPENBLAS_NUM_THREADS=1` the `-t 1` flagship matches
+the threaded runs. The worker now calls
+`init_threads!(BACKEND; blas_threads = 1)`.
 
 ## KA-m: column physics, one work item per column (#301)
 

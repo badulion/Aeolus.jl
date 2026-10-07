@@ -1,4 +1,5 @@
-# OpenStreetMap XML → UrbanCity ingest.
+# OpenStreetMap XML → UrbanCity (CFG-f #361: moved from
+# examples/urban/core/osm_ingest.jl, the one copy).
 #
 # Reads a subset of the OSM XML format: `<node id lat lon />` and
 # `<way id>…<nd ref/>…<tag k v/></way>`. Ways with tag
@@ -6,15 +7,13 @@
 # `landuse=grass|forest|meadow` become park patches;
 # `natural=water|waterway=riverbank` become water patches.
 #
-# Lat/lon coordinates are projected to local metres using a simple
-# equirectangular projection anchored at a user-supplied `(lat0, lon0)`.
-# Good to sub-metre accuracy over a few km — appropriate for LES
-# domains of ~100 m to ~5 km.
+# Lat/lon coordinates are projected to local metres with the drivers' one
+# projection, `latlon_to_meters` (equirectangular about `(lat0, lon0)`).
 #
 # Multipolygon relations (`type=multipolygon`, #249) are read too, with
 # the same tag classifier as the ways: their member ways are joined into
 # closed rings, and the rings (outer and inner) are stored as ONE polygon,
-# each ring closed and followed by a `NaN` vertex. `_point_in_polygon`
+# each ring closed and followed by a `NaN` vertex. `point_in_polygon`
 # never counts an edge that touches a `NaN` vertex, so the even–odd test
 # over all rings is exactly the multipolygon with its holes (a courtyard,
 # an island in the Spree). The child's OSM file has no relations, so its
@@ -28,21 +27,6 @@
 #     `latm === nothing || (lonm === nothing && continue)`;
 #   * patches are rasterised after buildings (`rasterize_city!`), so a
 #     park polygon can relabel a roof cell.
-
-const _EARTH_R = 6_371_000.0
-
-"""
-    latlon_to_meters(lat, lon, lat0, lon0) -> (x, y)
-
-Project geographic (lat, lon) in degrees to local (x, y) meters,
-tangent to the surface at (`lat0`, `lon0`). Equirectangular /
-plate-carrée: sufficient for ≤ 5 km domains.
-"""
-function latlon_to_meters(lat::Real, lon::Real, lat0::Real, lon0::Real)
-    x = _EARTH_R * deg2rad(lon - lon0) * cos(deg2rad(lat0))
-    y = _EARTH_R * deg2rad(lat - lat0)
-    return (x, y)
-end
 
 """
     load_city_osm(path; lat0, lon0, x_shift = 0, y_shift = 0,
@@ -114,7 +98,7 @@ end
     osm_class(tags, default_height) -> (class, height) or `nothing`
 
 The one OSM tag classifier of the Berlin case: a `building` (any value)
-is a roof of the tagged height ([`_extract_height`](@ref), `default_height`
+is a roof of the tagged height (`height`, or `building:levels` × 3 m; `default_height`
 when untagged); `leisure=park` and `landuse=grass|forest|meadow|recreation_ground`
 are park; `natural=water`, `waterway=riverbank` and
 `water=lake|pond|river` are water. Anything else is `nothing` (the
@@ -139,7 +123,7 @@ function _add_classified!(city, tags, poly, default_height, min_height)
     cls === nothing && return city
     c, h = cls
     if c == SURFACE_ROOF
-        h >= min_height && push!(city.buildings, Building(poly, h, SURFACE_ROOF))
+        h >= min_height && push!(city.buildings, Building(poly, h, SURFACE_ROOF; osm_attributes(tags)...))
     else
         push!(city.patches, Building(poly, 0.0, c))
     end
@@ -206,19 +190,17 @@ function _assemble_rings(ways::Vector{Vector{Int}})
 end
 
 """
-    polygon_bbox(poly) -> (xmin, xmax, ymin, ymax)
+    osm_attributes(tags) -> NamedTuple
 
-Bounding box of a footprint polygon, skipping the `NaN` ring separators
-of a multipolygon.
+The [`Building`](@ref) attributes of an OSM building: `levels`
+(`building:levels`, `NaN` if untagged or unparsable), `min_height` (m,
+`min_height`, 0 if untagged), `material` (`building:material`) and
+`roof` (`roof:shape`).
 """
-function polygon_bbox(poly)
-    xmin = ymin = Inf; xmax = ymax = -Inf
-    for (x, y) in poly
-        isnan(x) && continue
-        xmin = min(xmin, x); xmax = max(xmax, x)
-        ymin = min(ymin, y); ymax = max(ymax, y)
-    end
-    return xmin, xmax, ymin, ymax
+function osm_attributes(tags::Dict{String,String})
+    num(k, d) = haskey(tags, k) ? something(tryparse(Float64, replace(tags[k], r"[a-zA-Z ]" => "")), d) : d
+    return (levels = num("building:levels", NaN), min_height = num("min_height", 0.0),
+            material = get(tags, "building:material", ""), roof = get(tags, "roof:shape", ""))
 end
 
 # Height parsing: `height=45.5`, `height="45"`, `building:levels=15` (× 3 m).

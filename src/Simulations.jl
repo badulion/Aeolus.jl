@@ -3,8 +3,9 @@ module Simulations
 using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, interior
 using ..Fields
-using ..Fields: Field, interior_view
-using ..Backends: Backends, plane_partials!, plane_reduce!, plane_mean!, ordered_sum, range_max
+using ..Fields: Field, interior_view, interior_map!
+using ..Backends: Backends, plane_partials!, plane_reduce!, plane_mean!, ordered_sum, range_max,
+                  range_map!, interior_max
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!, Periodic, ImpermeableWall,
                             update_open_boundaries!, prepare_open_boundaries!,
@@ -26,9 +27,31 @@ using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPois
                         poisson_axis_bcs
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
-export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
+export BoussinesqSimulation, StepWorkspaces, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile, sponge_target,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
+
+"""
+    StepWorkspaces()
+
+The per-simulation scratch of the step drivers: the step-start state of
+[`step_rk3!`](@ref) ([`RK3Workspace`](@ref)), the retry snapshot of
+`step_adaptive!` (`TimeIntegration.StateSnapshot`) and the IMEX stage
+state of `step_imex!` (`TimeIntegration.IMEXWorkspace`). Each slot is
+allocated on first use, on the simulation's backend
+([`Backends.allocate`](@ref Aeolus.Backends.allocate)), and lives as long
+as the simulation (`rk3_workspace`, `state_snapshot`, `imex_workspace`).
+
+Before KA-j (#306) these lived in process-global `WeakKeyDict`s keyed by
+the simulation. A lookup there is not thread-safe, so stepping two domains
+concurrently could race on the cache; a field of the simulation cannot.
+"""
+mutable struct StepWorkspaces
+    rk3::Any
+    snapshot::Any
+    imex::Any
+end
+StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing)
 
 """
     BoussinesqSimulation(mesh; kwargs...)
@@ -144,6 +167,8 @@ mutable struct BoussinesqSimulation{T,
     lap_θ::Field{CellCenter,   T, Array{T,3}, M}
     νt::Field{CellCenter,      T, Array{T,3}, M}
     κt::Field{CellCenter,      T, Array{T,3}, M}   # SGS scalar diffusivity (Era VI, #167)
+    # the drivers' scratch (RK3 stage state, retry snapshot, IMEX), per simulation (KA-j, #306)
+    workspaces::StepWorkspaces
 end
 
 function BoussinesqSimulation(mesh::AbstractMesh{T};
@@ -201,7 +226,7 @@ function BoussinesqSimulation(mesh::AbstractMesh{T};
                                 u, v, w, p, θ, qv,
                                 tu, tv, tw, tθ, tqv,
                                 div_buf, φ, dφdx, dφdy, dφdz,
-                                lu, lv, lw, lθ, νt, κt)
+                                lu, lv, lw, lθ, νt, κt, StepWorkspaces())
 end
 
 # -------------------------------------------------------------------------
@@ -398,9 +423,9 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     mark_open_boundary_stage!(sim)   # radiating outflow: stage-start layers (N-open-c)
 
     # 2. Zero tendencies and add momentum + scalar advection.
-    fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
-    fill!(sim.tθ.data, 0)
-    sim.has_moisture && fill!(sim.tqv.data, 0)
+    zero_storage!(sim.tu); zero_storage!(sim.tv); zero_storage!(sim.tw)
+    zero_storage!(sim.tθ)
+    sim.has_moisture && zero_storage!(sim.tqv)
     momentum_advection(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w)
     advect_centered!(sim.tθ, sim.u, sim.v, sim.w, sim.θ)
     sim.has_moisture && advect_centered!(sim.tqv, sim.u, sim.v, sim.w, sim.qv)
@@ -409,13 +434,13 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     if sim.has_viscosity
         laplacian(sim.lap_u, sim.u); laplacian(sim.lap_v, sim.v); laplacian(sim.lap_w, sim.w)
         laplacian(sim.lap_θ, sim.θ)
-        _axpy_interior!(sim.tu, sim.ν, sim.lap_u, sim.mesh)
-        _axpy_interior!(sim.tv, sim.ν, sim.lap_v, sim.mesh)
-        _axpy_interior!(sim.tw, sim.ν, sim.lap_w, sim.mesh)
-        _axpy_interior!(sim.tθ, sim.ν, sim.lap_θ, sim.mesh)
+        axpy!(sim.tu, sim.ν, sim.lap_u)
+        axpy!(sim.tv, sim.ν, sim.lap_v)
+        axpy!(sim.tw, sim.ν, sim.lap_w)
+        axpy!(sim.tθ, sim.ν, sim.lap_θ)
         if sim.has_moisture                 # qv: the same molecular diffusivity as θ (#177)
             laplacian(sim.lap_θ, sim.qv)
-            _axpy_interior!(sim.tqv, sim.ν, sim.lap_θ, sim.mesh)
+            axpy!(sim.tqv, sim.ν, sim.lap_θ)
         end
     end
 
@@ -458,9 +483,9 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     body_force! === nothing || body_force!(sim, Δt)
 
     # 7. Predictor: u* = u + Δt F  (in-place).
-    _axpy_interior!(sim.u, Δt, sim.tu, sim.mesh)
-    _axpy_interior!(sim.v, Δt, sim.tv, sim.mesh)
-    _axpy_interior!(sim.w, Δt, sim.tw, sim.mesh)
+    axpy!(sim.u, Δt, sim.tu)
+    axpy!(sim.v, Δt, sim.tv)
+    axpy!(sim.w, Δt, sim.tw)
 
     # 7b. Post-predictor hook — stiff corrections (implicit IBM, mask
     # enforcement, ...). Runs after u* is formed and before the Poisson
@@ -477,12 +502,11 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     _project_velocity!(sim)
 
     # 11. Advance θ (no projection needed for scalar).
-    _axpy_interior!(sim.θ, Δt, sim.tθ, sim.mesh)
-    sim.has_moisture && _axpy_interior!(sim.qv, Δt, sim.tqv, sim.mesh)
+    axpy!(sim.θ, Δt, sim.tθ)
+    sim.has_moisture && axpy!(sim.qv, Δt, sim.tqv)
 
     # 12. Recover physical pressure and advance clock.
-    ii, jj, kk = interior(sim.mesh)
-    @inbounds @views sim.p.data[ii, jj, kk] .= sim.φ.data[ii, jj, kk] ./ Δt
+    pressure_from_potential!(sim.p, sim.φ, Δt)
     sim.t += Δt
 
     return sim
@@ -507,9 +531,9 @@ function _project_velocity!(sim::BoussinesqSimulation{T}) where {T}
     fill_halos!(sim.φ, sim.bcs)
     ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
     assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
-    _axpy_interior!(sim.u, -one(T), sim.dφdx, sim.mesh)
-    _axpy_interior!(sim.v, -one(T), sim.dφdy, sim.mesh)
-    _axpy_interior!(sim.w, -one(T), sim.dφdz, sim.mesh)
+    axpy!(sim.u, -one(T), sim.dφdx)
+    axpy!(sim.v, -one(T), sim.dφdy)
+    axpy!(sim.w, -one(T), sim.dφdz)
     return sim
 end
 
@@ -541,21 +565,23 @@ struct RK3Workspace{A<:AbstractArray}
     u0::A; v0::A; w0::A; θ0::A; q0::A
 end
 
-RK3Workspace(sim::BoussinesqSimulation) =
-    RK3Workspace(similar(sim.u.data), similar(sim.v.data), similar(sim.w.data),
-                 similar(sim.θ.data), similar(sim.θ.data))
-
-const _RK3_WORKSPACES = WeakKeyDict{Any,Any}()
+function RK3Workspace(sim::BoussinesqSimulation)
+    al(f) = storage_like(f.data)
+    return RK3Workspace(al(sim.u), al(sim.v), al(sim.w), al(sim.θ), al(sim.θ))
+end
 
 """
     rk3_workspace(sim) -> RK3Workspace
 
-The [`RK3Workspace`](@ref) of `sim`, allocated on first use and cached
-weakly (freed with `sim`), as `TimeIntegration.imex_workspace` does for
-the IMEX scratch.
+The [`RK3Workspace`](@ref) of `sim`: allocated on first use and kept in
+the simulation's [`StepWorkspaces`](@ref) (KA-j, #306; before, a global
+weak cache).
 """
-rk3_workspace(sim::BoussinesqSimulation) =
-    get!(() -> RK3Workspace(sim), _RK3_WORKSPACES, sim)::RK3Workspace
+function rk3_workspace(sim::BoussinesqSimulation)
+    w = sim.workspaces
+    w.rk3 === nothing && (w.rk3 = RK3Workspace(sim))
+    return w.rk3::RK3Workspace
+end
 
 # -------------------------------------------------------------------------
 # Projected RK3 — Phase 10.
@@ -621,12 +647,13 @@ function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
         sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
     end
 
-    # Save current state (into the workspace: no allocation per step, #295)
+    # Save current state (into the workspace: no allocation per step, #295;
+    # copy and combinations are kernels over the whole storage, KA-j #306)
     ws = workspace
-    u0 = copyto!(ws.u0, sim.u.data); v0 = copyto!(ws.v0, sim.v.data)
-    w0 = copyto!(ws.w0, sim.w.data); θ0 = copyto!(ws.θ0, sim.θ.data)
+    u0 = copy_storage!(ws.u0, sim.u.data); v0 = copy_storage!(ws.v0, sim.v.data)
+    w0 = copy_storage!(ws.w0, sim.w.data); θ0 = copy_storage!(ws.θ0, sim.θ.data)
     moist = sim.has_moisture
-    q0 = moist ? copyto!(ws.q0, sim.qv.data) : θ0      # qv is combined like θ (#177)
+    q0 = moist ? copy_storage!(ws.q0, sim.qv.data) : θ0      # qv is combined like θ (#177)
 
     _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress,
                   t0 + Δt)                                                        # u1 = uⁿ + Δt L(uⁿ), then project
@@ -635,26 +662,20 @@ function step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
     _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress,
                   t0 + 2Δt)                                                       # u1 → u1 + Δt L(u1), then project
     # combine to u2 = 3/4 uⁿ + 1/4 (…)
-    @views begin
-        sim.u.data .= 0.75 .* u0 .+ 0.25 .* sim.u.data
-        sim.v.data .= 0.75 .* v0 .+ 0.25 .* sim.v.data
-        sim.w.data .= 0.75 .* w0 .+ 0.25 .* sim.w.data
-        sim.θ.data .= 0.75 .* θ0 .+ 0.25 .* sim.θ.data
-        moist && (sim.qv.data .= 0.75 .* q0 .+ 0.25 .* sim.qv.data)
-    end
+    c2 = _Lin2r(0.75, 0.25)
+    combine_storage!(c2, sim.u.data, u0); combine_storage!(c2, sim.v.data, v0)
+    combine_storage!(c2, sim.w.data, w0); combine_storage!(c2, sim.θ.data, θ0)
+    moist && combine_storage!(c2, sim.qv.data, q0)
     combine_open_boundaries!(sim, 0.75, bc0, 0.25)
 
     _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress,
                   t0 + 3Δt / 2)                                                   # u2 → u2 + Δt L(u2), then project
     # combine to uⁿ⁺¹ = 1/3 uⁿ + 2/3 (…)
     inv3 = one(T)/3; two3 = 2*inv3
-    @views begin
-        sim.u.data .= inv3 .* u0 .+ two3 .* sim.u.data
-        sim.v.data .= inv3 .* v0 .+ two3 .* sim.v.data
-        sim.w.data .= inv3 .* w0 .+ two3 .* sim.w.data
-        sim.θ.data .= inv3 .* θ0 .+ two3 .* sim.θ.data
-        moist && (sim.qv.data .= inv3 .* q0 .+ two3 .* sim.qv.data)
-    end
+    c3 = _Lin2r(inv3, two3)
+    combine_storage!(c3, sim.u.data, u0); combine_storage!(c3, sim.v.data, v0)
+    combine_storage!(c3, sim.w.data, w0); combine_storage!(c3, sim.θ.data, θ0)
+    moist && combine_storage!(c3, sim.qv.data, q0)
     combine_open_boundaries!(sim, inv3, bc0, two3)
 
     # sim.t was advanced 3× by _rk3_substep!; correct to one nominal step
@@ -733,7 +754,7 @@ Maximum SGS eddy viscosity `νₜ` over the interior. Zero when
 `C_s = 0`; otherwise responds to local strain and gives a sense of
 where the SGS model is most active.
 """
-max_νt(sim::BoussinesqSimulation) = maximum(interior_view(sim.νt))
+max_νt(sim::BoussinesqSimulation) = interior_max(sim.νt)   # exact: the bits of maximum
 
 """
     horizontal_mean(field) -> Vector
@@ -839,11 +860,93 @@ _check_boussinesq_mesh(m::AbstractMesh) =
     throw(ArgumentError("BoussinesqSimulation: no operator set for a $(typeof(m)); " *
                         "use a RegularGrid or a StretchedGrid"))
 
-"In-place y[interior] += a · x[interior]."
-function _axpy_interior!(y::Field, a::Number, x::Field, m::AbstractMesh)
-    ii, jj, kk = interior(m)
-    @inbounds @views y.data[ii, jj, kk] .+= a .* x.data[ii, jj, kk]
-    return y
+# -------------------------------------------------------------------------
+# Field algebra of the step cores, as kernels (KA-j, #306)
+# -------------------------------------------------------------------------
+# The step drivers (step!, step_rk3!, the IMEX and adaptive drivers of
+# TimeIntegration, the sound-proof cores of Anelastic) update their fields
+# only through these: pointwise launches (`interior_map!`, `range_map!`),
+# hence the same bits as the broadcasts they replace, serially and threaded.
+
+"""
+    axpy!(y::Field, a, x::Field) -> y
+
+`y = y + a·x` over the interior ([`interior_map!`](@ref
+Aeolus.Fields.interior_map!)); halos untouched. The one axpy of the step
+cores (KA-j, #306: it replaces three copies of `_axpy_interior!`).
+"""
+axpy!(y::Field, a::Number, x::Field) = interior_map!(_Axpy(a), y, y, x)
+struct _Axpy{T}
+    a::T
 end
+@inline (f::_Axpy)(y, x) = y + f.a * x
+
+# out = a·A + b·B, the same expression as the broadcast `a .* A .+ b .* B`
+struct _Lin2{T, S}
+    a::T
+    b::S
+end
+@inline (f::_Lin2)(A, B) = f.a * A + f.b * B
+# the RK3 combination `out = a·snap + b·out`, called as f(out, snap) so that
+# the in-place array is the first argument of `range_map!`
+struct _Lin2r{T, S}
+    a::T
+    b::S
+end
+@inline (f::_Lin2r)(out, snap) = f.a * snap + f.b * out
+
+"""
+    pressure_from_potential!(p::Field, φ::Field, Δt) -> p
+
+`p = φ/Δt` over the interior: the pressure of a projection with potential
+`φ` (a pointwise kernel).
+"""
+pressure_from_potential!(p::Field, φ::Field, Δt) = interior_map!(_DivBy(Δt), p, φ)
+struct _DivBy{T}
+    d::T
+end
+@inline (f::_DivBy)(x) = x / f.d
+
+# The whole storage of an array (halos included) as launch ranges.
+_storage(a::AbstractArray{T,3}) where {T} = map(r -> UnitRange{Int}(r), axes(a))
+
+"""
+    copy_storage!(dst, src) -> dst
+
+`dst .= src` over the whole storage (halos included); `dst` and `src`
+must have the same size. It is `copyto!` (a `memcpy`, which a GPU array
+also implements). A copy kernel measured no reliable gain (KA-j, #306;
+`benchmarks/bench_ka_step.jl kernels`): 1.01-1.07× the `memcpy` serially,
+and 1.09-1.30× at 64×64×32 and 0.82-1.58× at 128×128×64 on 4-24 threads.
+"""
+function copy_storage!(dst::AbstractArray{T,3}, src::AbstractArray{T,3}) where {T}
+    size(dst) == size(src) || throw(DimensionMismatch("copy_storage!: $(size(dst)) ≠ $(size(src))"))
+    copyto!(dst, src)
+    return dst
+end
+
+# `out = a·snap + b·out` over the whole storage (the RK3 stage combinations)
+function combine_storage!(f::_Lin2r, out::AbstractArray{T,3}, snap::AbstractArray{T,3}) where {T}
+    size(out) == size(snap) || throw(DimensionMismatch("combine_storage!: sizes differ"))
+    range_map!(Backends.backend(out), f, out, _storage(out), out, snap)
+    return out
+end
+
+"""
+    zero_storage!(f::Field) -> f
+
+Zero every value of `f`, halos included: the reset of the tendencies at
+the start of a step. It is `fill!` (a `memset`, which a GPU array also
+implements). A pointwise kernel measured slower at every thread count
+that matters: 15.8 µs against 11.2 µs serially at 64×64×32, and 28 µs at
+4 threads (KA-j, #306; `benchmarks/bench_ka_step.jl kernels`).
+"""
+function zero_storage!(f::Field)
+    fill!(f.data, zero(eltype(f.data)))
+    return f
+end
+
+# A zero-filled array shaped like `a`, on its backend.
+storage_like(a::AbstractArray{T}) where {T} = Backends.allocate(Backends.backend(a), T, size(a))
 
 end # module

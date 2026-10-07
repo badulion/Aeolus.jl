@@ -303,10 +303,14 @@ _laplacian!(out::Field{L}, f::Field{L}, g::AbstractMesh) where {L<:Location} =
 # Divergence
 # =========================================================================
 
+# ∇·u at cell (i, j, k): also read by the fused step guard of
+# TimeIntegration (KA-j, #306), so the guard's |∇·u| is this stencil's
+@inline _div_at(i, j, k, u, v, w, m) =
+    @inbounds (u[i+1,j,k] - u[i,j,k]) * _idx(m, i) +
+              (v[i,j+1,k] - v[i,j,k]) * _idy(m, j) +
+              (w[i,j,k+1] - w[i,j,k]) * _idz(m, k)
 @inline function _b_divergence!(i, j, k, o, u, v, w, m)
-    @inbounds o[i,j,k] = (u[i+1,j,k] - u[i,j,k]) * _idx(m, i) +
-                         (v[i,j+1,k] - v[i,j,k]) * _idy(m, j) +
-                         (w[i,j,k+1] - w[i,j,k]) * _idz(m, k)
+    @inbounds o[i,j,k] = _div_at(i, j, k, u, v, w, m)
     return nothing
 end
 

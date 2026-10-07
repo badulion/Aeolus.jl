@@ -264,6 +264,67 @@ function crop_landuse(pl::ParentLanduse, Is::AbstractUnitRange, Js::AbstractUnit
 end
 
 """
+    parent_landuse_source(pc, mesh) -> ParentLanduse
+
+The land use of the parent `pc` on its `mesh` from the table
+`pc.child.landuse` ([`read_parent_landuse`](@ref)): cropped to the box
+([`crop_landuse`](@ref)) and coarsened to the mesh
+([`coarsen_landuse`](@ref)). What `aeolus preprocess static` writes to
+the parent's static driver.
+"""
+function parent_landuse_source(pc::ParentConfig, mesh)
+    pl = crop_landuse(read_parent_landuse(pc.child.landuse), pc)
+    Nx = mesh.Nx
+    b = pl.nx ÷ Nx
+    (b * Nx == pl.nx && pl.dx * b ≈ mesh.dx) ||
+        error("the land use ($(pl.nx) cells of $(pl.dx) m) does not coarsen to $Nx cells of $(mesh.dx) m")
+    return coarsen_landuse(pl, b)
+end
+
+"The mesh coordinates (the child's) of the OSM anchor; the parent mesh shares them."
+parent_anchor_xy(pc::ParentConfig) = (pc.child.extent[1] / 2 - pc.child.offset[1],
+                                      pc.child.extent[2] / 2 - pc.child.offset[2])
+
+"""
+    parent_landuse(pc, mesh) -> ParentLanduse
+
+The parent's land use: read from its static driver `pc.child.parent_static`
+(the tile form, `InputDrivers.read_static_tiles`, checked to be on the
+parent `mesh` with the anchor in place), or, when that is `nothing`,
+[`parent_landuse_source`](@ref) in memory. Bit for bit the same.
+"""
+function parent_landuse(pc::ParentConfig, mesh)
+    cfg = pc.child
+    cfg.parent_static === nothing && return parent_landuse_source(pc, mesh)
+    isfile(cfg.parent_static) ||
+        error("Missing the parent's static driver $(cfg.parent_static). Generate it with\n" *
+              "  julia --project -m Aeolus preprocess static <the config.toml naming it>\n" *
+              "or set [geometry] parent_static = \"none\" to read $(cfg.landuse) in memory.")
+    ox, oy = parent_anchor_xy(pc)
+    t = read_static_tiles(cfg.parent_static; mesh = mesh, origin_lat = cfg.lat0, origin_lon = cfg.lon0,
+                          origin_x = ox, origin_y = oy)
+    size(t.class_count, 3) == 5 ||
+        error("the parent's static driver $(cfg.parent_static) has $(size(t.class_count, 3)) classes, expected 5")
+    return ParentLanduse(length(t.x), length(t.y), t.dx, t.x0, t.y0, t.refinement, Int.(t.class_count),
+                         t.lambda_f, t.h_mean, t.h_max,
+                         vcat(t.notes, "# read from the static driver $(cfg.parent_static)"))
+end
+
+"""
+    parent_static_tiles(pl, pc, mesh) -> StaticTiles
+
+The land use `pl` of the parent `pc` (on its `mesh`) as the tile form of
+the static driver.
+"""
+function parent_static_tiles(pl::ParentLanduse, pc::ParentConfig, mesh)
+    cfg = pc.child
+    ox, oy = parent_anchor_xy(pc)
+    return StaticTiles(collect(Float64, Aeolus.Grids.xnodes(mesh, CellCenter())), collect(Float64, Aeolus.Grids.ynodes(mesh, CellCenter())),
+                       pl.dx, pl.dx, cfg.lat0, cfg.lon0, ox, oy, pl.x0, pl.y0, pl.r,
+                       Int32.(pl.counts), pl.λf, pl.hmean, pl.hmax, pl.header, Dict{String,Any}())
+end
+
+"""
     build_parent(pc::ParentConfig; child = nothing) -> ParentCase
 
 Build the parent: the mesh ([`parent_mesh`](@ref)), the reference state,
@@ -345,11 +406,7 @@ function build_parent(pc::ParentConfig; child = nothing)
     surface = nothing
     if pc.surface === :tiles
         child === nothing && (child = build_case(cfg))
-        pl = crop_landuse(read_parent_landuse(), pc)
-        b = pl.nx ÷ Nx
-        (b * Nx == pl.nx && pl.dx * b ≈ mesh.dx) ||
-            error("build_parent: the land use ($(pl.nx) cells of $(pl.dx) m) does not coarsen to $Nx cells of $(mesh.dx) m")
-        pl = coarsen_landuse(pl, b)
+        pl = parent_landuse(pc, mesh)
         surface = build_parent_surface(child, pl; z_centres = zc)
     elseif pc.surface !== :prescribed
         error("ParentConfig.surface must be :tiles or :prescribed, got $(repr(pc.surface))")

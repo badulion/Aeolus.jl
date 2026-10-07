@@ -252,11 +252,12 @@ end
         # blowup at 15 whose state is still non-finite, so the crash checkpoint
         # is the last good one, step 13
         @test err.step == 15 && err.checkpoint_step == 13
-        # v holds the injected NaN; the closure's νt, κt of the failed tries
-        # (eddy coefficients are not part of step_adaptive!'s rollback; the
-        # next evaluation rewrites them) are NaN around it
+        # v holds the injected NaN. νt and κt are finite: since KA-j (#306)
+        # step_adaptive!'s rollback restores the eddy coefficients with the
+        # prognostic fields, so the NaN coefficients of the failed tries are
+        # gone (before, they stayed and this listed [:v, :νt, :κt])
         @test err.cause isa ErrorException
-        @test [f.name for f in err.fields] == [:v, :νt, :κt]
+        @test [f.name for f in err.fields] == [:v]
         @test err.fields[1].count == 1 && err.fields[1].index == (3, 3, 3)
         @test err.checkpoint == joinpath(rfpath[], "crash", "crash_000000015.jls")
         @test isfile(err.checkpoint)
