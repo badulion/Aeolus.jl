@@ -309,8 +309,8 @@ end
     # Both go through the `dns` run driver (CFG-d, #359).
     @testset "offline a-priori record: pipeline at 32³" begin
         path = joinpath(mktempdir(), "dns32_apriori.toml")
-        res = dns_apriori_run(["grid.n=32", "apriori.widths=[4,8]", "apriori.out=\"$path\""])
-        rec, d32 = res.obj.record, res.obj.summary
+        run32 = dns_apriori_run(["grid.n=32", "apriori.widths=[4,8]", "apriori.out=\"$path\""])
+        rec, d32 = run32.obj.record, run32.obj.summary
         back = read_dns_apriori(path)
         @test back["dns"] == rec["dns"] && back["checks"] == rec["checks"]
         @test back["filter"]["4h"]["smagorinsky"]["rho"] == rec["filter"]["4h"]["smagorinsky"]["rho"]
