@@ -863,6 +863,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_berlin.jl")       # CFG-c (#358): berlin driver, scenarios from TOML, bitwise vs Julia-built, round trip
     include("input_static.jl")        # CFG-f (#361): static driver, OSM/GeoJSON preprocessors, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table and parent preprocessors, offline nest
+    include("preprocess_era5.jl")     # CFG-h (#363): ERA5 preprocessor (GRIB2/NetCDF) of the dynamic driver, open simulation box
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

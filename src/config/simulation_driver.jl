@@ -21,7 +21,10 @@ module SimulationDriver
 using Random: Xoshiro
 using ..Grids: RegularGrid, CellCenter
 using ..Fields: Field, set!, interior_view
-using ..BoundaryConditions: FieldBoundaryConditions
+using ..BoundaryConditions: FieldBoundaryConditions, open_boundary_conditions, open_boundary_states,
+                            set_boundary_data!
+using ..InputDrivers: InputDrivers, read_dynamic_driver, read_era5, write_era5_driver, check_planes,
+                      check_coverage, advance_feed!, FileBoundaryFeed, ERA5_OUTPUTS
 using ..Simulations: Simulations, BoussinesqSimulation, step!, step_rk3!
 using ..TimeIntegration: CFLConstraints, adaptive_dt, step_adaptive!
 using ..StretchedGrids: StretchedGrid
@@ -42,9 +45,17 @@ export SimulationDriverType, SimulationRun, profile_value
 
 The `simulation` driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
 `[run] driver = "simulation"`. Its sections are `[grid]`, `[dynamics]`,
-`[boundaries]`, `[sgs]`, `[initial]`, `[stepper]` and `fields` in
-`[output]`; `aeolus options simulation` prints them. Shipped configs:
-`examples/configs/`.
+`[boundaries]`, `[sgs]`, `[initial]`, `[stepper]`, `fields` in
+`[output]` and `[preprocess]`; `aeolus options simulation` prints them.
+Shipped configs: `examples/configs/`.
+
+`[initial] dynamic` names a dynamic driver (CFG-g, #362): its initial
+profiles set u, v, θ, qv, and open lateral faces (`boundaries.x` or `y =
+"open"`) take its boundary planes, blended linearly in time. `aeolus
+preprocess dynamic --from-era5 <files…> --config <config.toml>` writes
+one from ERA5 (CFG-h, #363, [`preprocess_dynamic`](@ref
+Aeolus.Config.preprocess_dynamic)) with the site and outputs of
+`[preprocess.era5]`.
 """
 struct SimulationDriverType <: AbstractRunDriver end
 
@@ -166,8 +177,10 @@ function Config.driver_sections(::SimulationDriverType)
     end
     bnd = section("boundaries"; doc = "Boundary conditions per axis.") do s
         for ax in ("x", "y", "z")
-            option!(s, ax, Symbol; default = :periodic, allowed = [:periodic, :free_slip, :noslip],
-                    doc = "the $ax faces: periodic, free_slip (impermeable, stress free) or noslip (z only); θ and qv have no flux through a wall, except the prescribed θ fluxes")
+            option!(s, ax, Symbol; default = :periodic,
+                    allowed = ax == "z" ? [:periodic, :free_slip, :noslip] : [:periodic, :free_slip, :noslip, :open],
+                    doc = "the $ax faces: periodic, free_slip (impermeable, stress free) or noslip (z only); θ and qv have no flux through a wall, except the prescribed θ fluxes" *
+                          (ax == "z" ? "" : "; open: the boundary planes of initial.dynamic, blended linearly in time (boussinesq, uniform grid, z walls)"))
         end
         option!(s, "theta_flux_bottom", Float64; default = 0.0, units = "K m s^-1",
                 doc = "prescribed kinematic θ flux w'θ' through the bottom (z walls)")
@@ -194,6 +207,8 @@ function Config.driver_sections(::SimulationDriverType)
                           (v in ("u", "v") ? ", or {kind = \"taylor_green\", amplitude, k} (u = A sin kx cos ky cos kz, v = -A cos kx sin ky cos kz)" : "") *
                           "; {} (the default): $d")
         end
+        option!(s, "dynamic", Optional{Path};
+                doc = "a dynamic driver (CFG-g, #362; aeolus preprocess dynamic --from-era5): its initial profiles set u, v, theta (and qv) — not together with the tables above — and open faces take its boundary planes; hashed under [inputs]")
         option!(s, "perturbation_amplitude", Float64; default = 0.0, range = (0, Inf), units = "K",
                 doc = "white noise on θ, uniform in [-a/2, a/2], drawn from Xoshiro([run] seed)")
         option!(s, "perturbation_depth", Float64; default = Inf, range = (0, Inf), units = "m",
@@ -216,7 +231,37 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "fields", Vector{String}; default = String[], allowed = _OUTPUT_FIELDS,
                 doc = "fields written to output/fields_<step>.nc every cadence (cell-index arrays, Float32); [] : none")
     end
-    return Section[grid, dyn, bnd, sgs, ini, stp, out]
+    pre = section("preprocess"; doc = "Inputs of the preprocessors (aeolus preprocess dynamic).") do s
+        option!(s, "era5", OpenTable(_era5_validator),
+                doc = "ERA5 (--from-era5, CFG-h #363): {lat, lon (degrees, the domain centre; required), box = 0.5 (degrees, the half-width of the centred differences of the geostrophic wind and the advective tendencies), levels = \"pressure\" | \"model\", outputs = [\"profiles\", \"planes\", \"large_scale\", \"geostrophic\", \"subsidence\", \"advection\", \"surface\"] (the default: all)}")
+    end
+    return Section[grid, dyn, bnd, sgs, ini, stp, out, pre]
+end
+
+const _ERA5_KEYS = ("lat", "lon", "box", "levels", "outputs")
+
+"The validator of `[preprocess.era5]` (an empty table: no ERA5 preprocessing configured)."
+function _era5_validator(t)
+    isempty(t) && return String[]
+    probs = String[]
+    for k in sort!(collect(keys(t)))
+        k in _ERA5_KEYS || push!(probs, "$k: unknown key (keys: $(join(_ERA5_KEYS, ", ")))")
+    end
+    for (k, lo, hi) in (("lat", -90, 90), ("lon", -360, 360))
+        haskey(t, k) || (push!(probs, "$k: required (degrees, the domain centre)"); continue)
+        (_isnum(t[k]) && lo <= t[k] <= hi) || push!(probs, "$k: expected a number in [$lo, $hi], got $(repr(t[k]))")
+    end
+    haskey(t, "box") && !(_isnum(t["box"]) && t["box"] > 0) &&
+        push!(probs, "box: expected a positive number of degrees, got $(repr(t["box"]))")
+    haskey(t, "levels") && !(t["levels"] in ("pressure", "model")) &&
+        push!(probs, "levels: expected \"pressure\" or \"model\", got $(repr(t["levels"]))")
+    if haskey(t, "outputs")
+        o = t["outputs"]
+        ok = String.(ERA5_OUTPUTS)
+        (o isa AbstractVector && all(x -> x in ok, o)) ||
+            push!(probs, "outputs: expected an array of " * join(repr.(ok), ", ") * ", got $(repr(o))")
+    end
+    return probs
 end
 
 function _cross_checks(cfg)
@@ -231,6 +276,24 @@ function _cross_checks(cfg)
     for ax in ("x", "y")
         b[ax] === :noslip &&
             push!(e, ConfigError("boundaries.$ax", "noslip is a z-wall condition; use free_slip or periodic"))
+    end
+    if b.x === :open || b.y === :open
+        ax = b.x === :open ? "x" : "y"
+        cfg.initial.dynamic === nothing &&
+            push!(e, ConfigError("boundaries.$ax", "open faces take the boundary planes of a dynamic driver: set initial.dynamic (aeolus preprocess dynamic --from-era5)"))
+        (b.x in (:open, :periodic) && b.y in (:open, :periodic)) ||
+            push!(e, ConfigError("boundaries.$ax", "with an open axis the other lateral axis is open or periodic"))
+        b.z === :periodic && push!(e, ConfigError("boundaries.z", "an open box needs z walls"))
+        d.core === :boussinesq || push!(e, ConfigError("dynamics.core", "open faces need the boussinesq core"))
+        g.stretching === :uniform || push!(e, ConfigError("grid.stretching", "open faces need a uniform grid"))
+        d.sponge_alpha_max == 0 ||
+            push!(e, ConfigError("dynamics.sponge_alpha_max", "the sponge of an open box has no target here; use 0"))
+    end
+    if cfg.initial.dynamic !== nothing
+        for (k, p) in (("u", cfg.initial.u), ("v", cfg.initial.v), ("theta", cfg.initial.theta), ("qv", cfg.initial.qv))
+            isempty(p) || push!(e, ConfigError("initial.$k", "initial.dynamic sets the initial $k: give one of the two"))
+        end
+        d.core === :boussinesq || push!(e, ConfigError("initial.dynamic", "a dynamic driver initialises the boussinesq core"))
     end
     if d.core === :anelastic
         b.z === :periodic && push!(e, ConfigError("boundaries.z", "the anelastic core needs z walls"))
@@ -273,13 +336,16 @@ Config.driver_checks(::SimulationDriverType) = Any[_cross_checks]
 What the `simulation` driver builds: `sim` (a `BoussinesqSimulation` or
 an `AnelasticSimulation`), `closure` (the SGS closure passed to the
 steps; `nothing` for none or the built-in Smagorinsky), `stepper` (a
-[`StepperState`](@ref)), and the resolved `cfg`.
+[`StepperState`](@ref)), the resolved `cfg`, and `feed`, the
+[`FileBoundaryFeed`](@ref Aeolus.InputDrivers.FileBoundaryFeed) of the
+open faces (`nothing`: none).
 """
 struct SimulationRun
     sim::Any
     closure::Any
     stepper::StepperState
     cfg::RunConfig
+    feed::Union{Nothing,FileBoundaryFeed}
 end
 
 function _mesh(g)
@@ -308,11 +374,35 @@ function _closure(s, mesh)
     return StabilityCorrected(base, mesh; scheme = scheme)
 end
 
+# The open box of `cfg` (an open lateral axis): the faces' planes, data set later.
+function _open_bcs(cfg, mesh)
+    b = cfg.boundaries
+    lat(a) = a === :open ? :open : :periodic
+    wall(a) = a === :noslip ? :noslip : :wall
+    fields = cfg.dynamics.moisture ? (:u, :v, :w, :θ, :qv) : (:u, :v, :w, :θ)
+    return open_boundary_conditions(mesh, nothing; x = lat(b.x), y = lat(b.y), bottom = wall(b.z), top = wall(b.z),
+                                    fields = fields, halo = 1)
+end
+
+_is_open(cfg) = cfg.boundaries.x === :open || cfg.boundaries.y === :open
+
 function Config.build(::SimulationDriverType, cfg::RunConfig)
     mesh = _mesh(cfg.grid)
     d = cfg.dynamics; b = cfg.boundaries; s = cfg.sgs
-    bcs = FieldBoundaryConditions(_bc(b.x), _bc(b.y), _bc(b.z))
-    θ_bcs = FieldBoundaryConditions(_scalar_bc(b.x), _scalar_bc(b.y), _scalar_bc(b.z))
+    dyn = cfg.initial.dynamic === nothing ? nothing :
+          read_dynamic_driver(cfg.initial.dynamic; mesh = mesh, planes = _is_open(cfg))
+    feed = nothing
+    if _is_open(cfg)
+        dyn.boundary === nothing &&
+            throw(ConfigError("initial.dynamic", "$(cfg.initial.dynamic) has no boundary planes, which the open faces need (write it with the run's open boundaries)"))
+        bcs = θ_bcs = _open_bcs(cfg, mesh)
+        feed = dyn.boundary
+        check_planes(feed, only(open_boundary_states(bcs)).planes)
+        set_boundary_data!(bcs, feed.data)
+    else
+        bcs = FieldBoundaryConditions(_bc(b.x), _bc(b.y), _bc(b.z))
+        θ_bcs = FieldBoundaryConditions(_scalar_bc(b.x), _scalar_bc(b.y), _scalar_bc(b.z))
+    end
     # the plain Smagorinsky closure is the simulation's built-in one (C_s ≠ 0),
     # bit for bit StaticSmagorinsky(C_s) (Simulations.step!)
     builtin = s.closure === :smagorinsky && s.stability === :none
@@ -329,8 +419,23 @@ function Config.build(::SimulationDriverType, cfg::RunConfig)
         BoussinesqSimulation(mesh; θ₀ = d.theta0, moisture = d.moisture, kw...)
     end
     _initialise!(sim, cfg)
+    dyn === nothing || _initialise_dynamic!(sim, dyn, cfg)
     scheme = cfg.stepper.cfl === nothing ? cfg.stepper.scheme : :adaptive
-    return SimulationRun(sim, closure, StepperState(scheme), cfg)
+    return SimulationRun(sim, closure, StepperState(scheme), cfg, feed)
+end
+
+# The initial profiles of a dynamic driver (linear in z, constant beyond
+# the ends: `profile_value` of a table).
+function _initialise_dynamic!(sim, dyn, cfg)
+    P = dyn.profiles
+    P === nothing && throw(ConfigError("initial.dynamic", "$(cfg.initial.dynamic) has no initial profiles (init_theta, …)"))
+    for (n, f) in ((:u, sim.u), (:v, sim.v), (:theta, sim.θ), (:qv, sim.qv))
+        n === :qv && !cfg.dynamics.moisture && continue
+        a = getproperty(P, n)
+        a === nothing && continue
+        _set_profile!(f, Dict{String,Any}("kind" => "table", "z" => P.z, "values" => a), n)
+    end
+    return sim
 end
 
 function _set_profile!(f::Field, p::AbstractDict, comp::Symbol)
@@ -377,13 +482,20 @@ function _fixed_steps(st)
     return st.dt, st.nsteps
 end
 
+# The open faces' window: the boundary records around the step's start
+# (the blend extrapolates linearly over the rest of a step that crosses a
+# record).
+_advance!(r::SimulationRun) = (r.feed === nothing || advance_feed!(r.feed, r.sim.t); r)
+
 function _take_step!(r::SimulationRun, dt)
+    _advance!(r)
     sim = r.sim; sgs = r.closure; scheme = r.cfg.stepper.scheme
     scheme === :rk3 ? step_rk3!(sim, dt; sgs = sgs) : step!(sim, dt; sgs = sgs)
     return (sim, Float64(dt), 0)
 end
 
 function _adaptive_step!(r::SimulationRun, c::CFLConstraints, t_end)
+    _advance!(r)
     sim = r.sim; sgs = r.closure; scheme = r.cfg.stepper.scheme
     dt = adaptive_dt(sim, c; dt_prev = previous_dt(r.stepper), sgs = sgs)
     t_end === nothing || (dt = min(dt, t_end - sim.t))
@@ -421,6 +533,7 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     nmax = adaptive ? something(st.nsteps, typemax(Int)) : nfix
     t_end = adaptive ? st.end_time : sim.t + (nmax - n) * dt_fixed      # for the progress line
     (t_end === nothing || t_end > sim.t) || (t_end = nothing)           # resumed at the end
+    (r.feed === nothing || t_end === nothing) || check_coverage(r.feed, sim.t, t_end)
     c = adaptive ? CFLConstraints(; C_advective = st.cfl, dt_max = st.dt_max) : nothing
     outdir = isempty(cfg.output.fields) ? nothing :
              cfg.output.path === nothing ? output_dir(rf) : mkpath(cfg.output.path)
@@ -467,6 +580,39 @@ function Config.state_fields(r::SimulationRun)
     s = r.sim
     s isa BoussinesqSimulation && return map(f -> f.data, IO.checkpoint_fields(s))
     return (u = s.u.data, v = s.v.data, w = s.w.data, p = s.p.data, θ = s.θ.data)
+end
+
+"""
+    preprocess_dynamic(::SimulationDriverType, cfg; from = :era5, files, box = nothing, out = nothing)
+        -> Vector{String}
+
+`aeolus preprocess dynamic --from-era5 <files…> --config <config.toml>
+[--box deg]` (CFG-h, #363): the dynamic driver of the run `cfg` from the
+ERA5 `files` ([`read_era5`](@ref Aeolus.InputDrivers.read_era5),
+[`write_era5_driver`](@ref Aeolus.InputDrivers.write_era5_driver)) at
+`[initial] dynamic` (or `out`): the domain centre at `[preprocess.era5]`
+`lat`, `lon`; its `levels`, `outputs` and `box` (`box` here replaces the
+config's; default 0.5°); on the run's level centres, with one boundary
+record per ERA5 time on the open faces of the run (`boundaries.x`/`y =
+"open"`).
+"""
+function Config.preprocess_dynamic(::SimulationDriverType, cfg::RunConfig; from::Symbol, out = nothing,
+                                   child = nothing, files = String[], box = nothing)
+    from === :era5 || throw(ArgumentError("the simulation driver's dynamic preprocessor reads ERA5 (--from-era5), not :$from"))
+    child === nothing || throw(ArgumentError("--from-era5 takes no child config"))
+    isempty(files) && throw(ArgumentError("--from-era5: no ERA5 files"))
+    t = cfg.preprocess.era5
+    isempty(t) && throw(ConfigError("preprocess.era5", "the ERA5 preprocessor needs [preprocess.era5] with lat and lon (the domain centre)"))
+    path = out !== nothing ? abspath(out) : cfg.initial.dynamic
+    path === nothing && throw(ArgumentError("[initial] dynamic is \"none\": pass --out file.nc"))
+    mesh = _mesh(cfg.grid)
+    mesh isa RegularGrid || throw(ConfigError("grid.stretching", "the ERA5 preprocessor needs a uniform grid"))
+    planes = _is_open(cfg) ? only(open_boundary_states(_open_bcs(cfg, mesh))).planes : nothing
+    e = read_era5(files; levels = Symbol(get(t, "levels", "pressure")))
+    outs = haskey(t, "outputs") ? Tuple(Symbol.(t["outputs"])) : ERA5_OUTPUTS
+    write_era5_driver(path, e; lat = Float64(t["lat"]), lon = Float64(t["lon"]), mesh, planes,
+                      box = box === nothing ? Float64(get(t, "box", 0.5)) : Float64(box), outputs = outs)
+    return [path]
 end
 
 register_driver!(SimulationDriverType())

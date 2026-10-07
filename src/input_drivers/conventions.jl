@@ -51,6 +51,19 @@ function latlon_to_meters(lat::Real, lon::Real, lat0::Real, lon0::Real)
     return (x, y)
 end
 
+"""
+    meters_to_latlon(x, y, lat0, lon0) -> (lat, lon)
+
+The inverse of [`latlon_to_meters`](@ref): local (x, y) metres about the
+anchor (`lat0`, `lon0`) back to degrees, ``φ = φ_0 + y/R``,
+``λ = λ_0 + x/(R\\cos φ_0)``.
+"""
+function meters_to_latlon(x::Real, y::Real, lat0::Real, lon0::Real)
+    lat = lat0 + rad2deg(y / _EARTH_R)
+    lon = lon0 + rad2deg(x / (_EARTH_R * cos(deg2rad(lat0))))
+    return (lat, lon)
+end
+
 "`fnv1a64` of the bytes of the file `path`, as 16 hex digits."
 file_fnv1a64(path::AbstractString) = string(fnv1a64(read(path)); base = 16, pad = 16)
 
