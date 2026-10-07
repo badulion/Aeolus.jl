@@ -11,6 +11,16 @@ Aeolus.PressureSolvers.FFTPoissonSolver
 Aeolus.PressureSolvers.CosineFFTPoissonSolver
 Aeolus.PressureSolvers.solve!
 Aeolus.PressureSolvers.poisson_axis_bcs
+Aeolus.PressureSolvers.solver_stats
+```
+
+## Column-separable direct solver
+
+The FFT/DCT + tridiagonal solver behind `StretchedPoissonSolver` and the
+anelastic `DirectWeightedPoissonSolver` (#309).
+
+```@docs
+Aeolus.PressureSolvers.ColumnTridiagonalSolver
 ```
 
 ## Iterative solver

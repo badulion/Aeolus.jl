@@ -121,8 +121,8 @@ examples and the test fixtures follow one convention:
 
 | level | for | examples |
 | :-- | :-- | :-- |
-| `Debug` | chatter: what a run log should keep but a console need not show | adaptive-step retries, checkpoint fresh start / resume / write, a costly diagnostics row |
-| `Info` | milestones | the run header, the progress line, the Berlin setup summary, output frames and end-of-run report |
+| `Debug` | chatter: what a run log should keep but a console need not show | adaptive-step retries, checkpoint fresh start / resume / write, a costly diagnostics row, the Berlin setup summary |
+| `Info` | milestones | the run header, the progress line, the Berlin output frames (with each coupling's diagnostics) and end-of-run events (stage timing, ledgers) |
 | `Warn` | problems the run survives | a solver that did not converge, a non-finite fast process, a restart across Julia versions |
 | `Error` | the run stops | a blowup, an error that ends `with_run` |
 
@@ -267,7 +267,11 @@ truth):
 | `WallBoundedCase` | `tau_wall_bottom`, `tau_wall_top`, with a scalar `q_wall_bottom`, `q_wall_top` (all `:step`); a TBLE wall model's under `wall.` |
 | `NestedRun` | `parent_steps`, `child_substeps`, `parent_retries`, `child_retries`, `substeps_last`, `max_child_cfl`, `max_clock_error` (`:step`); the stage wall times; every diagnostic of both domains under `parent.` and `child.` |
 
-The Berlin couplings' `report` strings move onto the registry with #338.
+The Berlin case (an example, not the library) implements the same
+generic for each of its couplings, `diagnostics(c, case)`, and adds its
+frame quantities, ledgers and stage timing; the `berlin` run driver
+hands them to the run monitor (#338, [the Berlin case](../design/berlin_case.md#Diagnostics)).
+Its wall-clock quantities are all named `wall.…`.
 
 ### Profiles
 
@@ -419,12 +423,12 @@ written.
 ## Run monitor
 
 [`RunMonitor`](@ref Aeolus.IO.RunMonitor) puts the three behind one call
-per step, [`monitor!`](@ref Aeolus.IO.monitor!) (or
-[`monitored_step!`](@ref Aeolus.IO.monitored_step!), which also runs the
-step under the guard and takes dt and the retries from
-`step_adaptive!`'s return value). Given a run folder it writes the
-folder's `diagnostics.csv`, `diagnostics.nc` and `crash/`; each scalar is
-evaluated once per row for both files:
+per step. Given a run folder it writes the folder's `diagnostics.csv`,
+`diagnostics.nc` and `crash/`; each scalar is evaluated once per row for
+both files. [`with_monitor`](@ref Aeolus.IO.with_monitor) **attaches** it
+to the simulation by default (#336): it becomes the simulation's
+diagnostics hook, so the step cores report every step themselves and the
+driver only steps:
 
 ```julia
 with_run("cbl"; config = cfg) do rf
@@ -432,7 +436,7 @@ with_run("cbl"; config = cfg) do rf
                  sgs = closure, stepper = st) do m
         dt = nothing
         for n in 1:nsteps
-            _, dt, _ = monitored_step!(m, sim; step = n) do
+            _, dt, _ = monitored_step!(m, sim; step = n) do   # or just step_adaptive!(…)
                 step_adaptive!(sim, cfl; dt_prev = dt, sgs = closure)
             end
         end
@@ -440,9 +444,68 @@ with_run("cbl"; config = cfg) do rf
 end
 ```
 
-The per-step hook in the step cores (#336, after the KernelAbstractions
-step cores) will make this call itself, with dt's binding limit, the CFL
-numbers and the solver statistics as `:step` diagnostics.
+[`monitored_step!`](@ref Aeolus.IO.monitored_step!) is then only needed
+to turn a step that throws into a diagnosed blowup; the row came from the
+hook. Rows are numbered `step0 + 1, step0 + 2, …` (`step0` keyword: the
+step a resumed run continues from). A driver whose step is several core
+steps, or which numbers its own steps (a run that resumes inside the
+driver), passes `attach = false` and calls
+[`monitor!`](@ref Aeolus.IO.monitor!) after its step: the row then covers
+every core step since the previous row, with `dt` the time they covered,
+the last limiter and the summed retries (the SBL and Berlin drivers do;
+the bare-simulation and DNS drivers are attached).
+
+## Per-step diagnostics in the step cores
+
+Every step core (`step!`, `step_rk3!`, `step_imex!`, `step_adaptive!`,
+the sound-proof cores, and per domain inside `step_nested!`) records its
+step in the simulation's
+[`StepRecord`](@ref Aeolus.Simulations.StepRecord) and then calls the
+simulation's hook ([`set_step_hook!`](@ref Aeolus.Simulations.set_step_hook!);
+an attached monitor's [`MonitorHook`](@ref Aeolus.IO.MonitorHook)). A
+core called inside another is part of the outer step (`step!` inside
+`step_adaptive!`), a rejected attempt is not a step, a step that throws
+records nothing. What each step costs to record is a few `time_ns()`
+calls and additions: nothing is swept for it.
+
+| quantity | diagnostic (every row) | how it is known |
+| :------- | :--------------------- | :-------------- |
+| dt | `dt` column | the step taken |
+| its binding limit | `dt_limiter` column | the limiter of the dt pick made from the step's start state ([`cfl_diagnostics`](@ref Aeolus.TimeIntegration.cfl_diagnostics), [`adaptive_dt`](@ref Aeolus.TimeIntegration.adaptive_dt), also when the driver called them); `growth`, `dt_max`, `dt_min` when a clamp bound; `retry` (shortened by rejected attempts); `prescribed` (a pick was made but another dt taken); `fixed` (no pick) |
+| retries | `retries` column | `step_adaptive!`'s, a nested domain's |
+| CFL advective, diffusive | `cfl_adv`, `cfl_diff` | `dt ×` the rates of that pick: `max_cell Σ|uᵢ|/Δxᵢ` and `max(ν + νₜ, κₜ)(Δx⁻² + Δy⁻² + Δz_min⁻²)`; `NaN` without a pick |
+| solver iterations, residual | `solver_iters`, `solver_residual` | [`solver_stats`](@ref Aeolus.PressureSolvers.solver_stats) after every pressure solve: summed, largest; a direct solver gives 0 and `NaN` |
+| implicit diffusion | `implicit_iters` | `step_imex!`'s CG iterations |
+
+On the costly cadence (default 60 s simulated): the core's KE, `max_div`,
+θ and w extremes (the Field reductions below), the cumulative wall time
+per stage `wall_step`, `wall_pressure`, `wall_sgs`, `wall_cfl` (the CFL
+sweeps of the dt picks), `wall_guard` (`step_adaptive!`'s snapshot,
+guard and rollbacks), `cfl_adv_state` and `cfl_diff_state` (the CFL of
+the current state at the last dt, one fused sweep: the CFL of a
+fixed-step run, which makes no pick), and the process's memory
+(`proc.mem_live_mb`, `proc.mem_maxrss_mb`, `proc.gc_time`,
+[`process_diagnostics`](@ref Aeolus.RunLog.process_diagnostics)). A
+nested run reports per parent step (its own record, completed in
+`end_parent_step!`): `cfl_adv` the largest child-substep CFL of the
+window, `wall_step`, and for a two-way run with a ledger the relative
+conservation errors `ledger_<quantity>`; each domain's record counts its
+accepted steps. The ledger residuals of the Berlin couplings come with
+their diagnostics (#338).
+
+**Deterministic reductions.** A [`Diagnostic`](@ref Aeolus.RunLog.Diagnostic)
+source that returns a `Field` is reduced over the interior with the
+KernelAbstractions port's reductions: `range_max` for `:max`, `:min`,
+`:maxabs` (exact, the bits of a serial maximum), the canonical plane
+sums for `:sum`, `:mean`, `:rms` (the same bits at any thread count). The
+core and closure diagnostics return their Fields.
+
+**Why not a CFL sweep every step.** On the 64×64×32 case below a fixed
+`step!` takes 5.3 ms; the advective-rate sweep 0.085 ms (1.6 %) and the
+fused sweep with the SGS maxima 0.15 ms (2.8 %): either alone would
+exceed the 2 % budget. So the every-row CFL numbers are those of the
+pick the step already made, and a fixed-step run gets its CFL on the
+costly cadence (`cfl_*_state`).
 
 **Cost** (`benchmarks/bench_run_monitor.jl`, 64×64×32 Boussinesq,
 `step_adaptive!`, one thread, 15 interleaved repetitions of 40 steps,
@@ -470,6 +533,22 @@ to 0.060 ms per step, 0.84 %. The worst case (everything every step) is
 +137 %, dominated by the per-step HDF5 sync of the costly row. A first
 version synced every 20 rows: 146 µs per step amortised, 3.1 % from the
 parts, over budget; hence the wall-time flush.
+
+With the step record and the attached monitor (#336; same benchmark, 32
+steps × 15 repetitions so that the case stays below the ~2930 steps after
+which it blows up, on master too; a shared machine at 1-minute load 8 to
+9, 5.38 ms per bare step, mean dt 0.10 s): the record's bracket around a
+step with a no-op hook costs **45 ns** (0.001 %); a cheap row with the
+step-record columns 2.0 µs (0.6 µs before), a costly row 0.46 ms (the
+core, step-record and process diagnostics, with the port's Field
+reductions), a blowup check 0.13 ms, a snapshot 0.36 ms; diagnostics.nc's
+block write and sync 5.5 ms and its costly row 15 ms (both slower than
+the #337 figures, I/O under that load). At the default cadence the parts
+add up to **0.084 ms per step, 1.56 %** of a step, within the asserted
+2 %. The whole-step comparison is within the run-to-run noise at that
+load: the attached monitor +3.05 % and the driver-called one +5.63 %
+(paired medians) in one run, +4.03 % and +1.00 % in the run before (the
+bare-step repetitions spread over 5.26 to 5.61 ms).
 
 ## Cost of a record
 
@@ -501,9 +580,7 @@ does not affect.
 
 ## Not here yet
 
-Per-step diagnostics in the step cores and the threaded reductions (#336,
-after the KernelAbstractions port), and the Berlin console text and
-coupling reports through the registry (#338). The Berlin output file
+The Berlin output file
 (`examples/urban/core/output.jl`) does not carry the provenance
 attributes yet: it is not written inside a run folder.
 
@@ -512,6 +589,9 @@ attributes yet: it is not written inside a run folder.
 ```@autodocs
 Modules = [Aeolus.RunLog]
 ```
+
+The step record of the step cores (#336) is documented with the
+[Simulations](simulations.md#The-step-record-and-the-diagnostics-hook-(#336)) API.
 
 The registry's methods for the library's components:
 

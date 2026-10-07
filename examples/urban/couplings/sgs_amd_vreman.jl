@@ -150,11 +150,22 @@ function _OPS.sgs_tracer_diffusivity!(κ, c::SolidMaskedSGS, f::SGSFields, sim, 
     return k
 end
 
-function sgs_compare_report(name, case)
-    a = sgs_level_means(case, case.sim.νt)
-    s = sgs_level_means(case, smagorinsky_reference(case))
-    return @sprintf("%s SGS: mean ν_t canopy %.3e, free stream %.3e m²/s (Smagorinsky C_s = %.2f: %.3e, %.3e)",
-                    name, a.canopy, a.free, case.cfg.C_s, s.canopy, s.free)
+"""
+    sgs_compare_diagnostics(case) -> Vector{Diagnostic}
+
+The closure's mean ν_t over the fluid cells of the canopy and of the free
+stream ([`sgs_level_means`](@ref)) against Smagorinsky with `cfg.C_s` on
+the same flow: `nu_t_canopy`, `nu_t_free`, `nu_t_canopy_smagorinsky`,
+`nu_t_free_smagorinsky` (m² s⁻¹).
+"""
+function sgs_compare_diagnostics(case)
+    a = per_state(() -> sgs_level_means(case, case.sim.νt), case)
+    s = per_state(() -> sgs_level_means(case, smagorinsky_reference(case)), case)
+    return Diagnostic[
+        Diagnostic("nu_t_canopy", "m2 s-1", () -> a().canopy),
+        Diagnostic("nu_t_free", "m2 s-1", () -> a().free),
+        Diagnostic("nu_t_canopy_smagorinsky", "m2 s-1", () -> s().canopy),
+        Diagnostic("nu_t_free_smagorinsky", "m2 s-1", () -> s().free)]
 end
 
 """
@@ -166,8 +177,9 @@ the `sgs` of every step, on any core, with ν_t = κ_t = 0 in the building
 cells ([`SolidMaskedSGS`](@ref)). Option `C` (default 0.3, the value of
 Rozema et al. 2015 for second-order central differences) and `stress =
 :symmetric`, the stress-form momentum divergence every `:sgs` provider runs
-(`sgs_step_options`, #175; `:laplacian` the Laplacian form). `report` prints
-the canopy and free-stream mean ν_t against Smagorinsky with `cfg.C_s`.
+(`sgs_step_options`, #175; `:laplacian` the Laplacian form). Its
+diagnostics are the canopy and free-stream mean ν_t against Smagorinsky
+with `cfg.C_s` ([`sgs_compare_diagnostics`](@ref)).
 """
 struct SGSAMD{C, S} <: AbstractCoupling
     closure::C          # the AMDClosure
@@ -185,7 +197,7 @@ function build(::Type{<:SGSAMD}, case, o)
     return SGSAMD(c, SolidMaskedSGS(c, copy(case.geom.sm.mask)), o.stress)
 end
 step_options(c::SGSAMD, case) = sgs_step_options(c.sgs, c.stress)
-report(c::SGSAMD, case) = sgs_compare_report("AMD", case)
+diagnostics(c::SGSAMD, case) = sgs_compare_diagnostics(case)
 function smoke_check(c::SGSAMD, case)
     sim = case.sim
     foreach(f -> fill_halos!(f, sim.bcs), (sim.u, sim.v, sim.w))
@@ -213,7 +225,7 @@ end
 Slot `:sgs`, provider `:vreman`: `VremanClosure(C_s)` (`c = 2.5 C_s²`,
 `κ_t = ν_t/Pr_t`) as the `sgs` of every step, on any core. Option `C_s`
 (`nothing`, the default, takes the case's `cfg.C_s`) and `stress`, as for
-[`SGSAMD`](@ref). `report` as for [`SGSAMD`](@ref).
+[`SGSAMD`](@ref). Diagnostics as for [`SGSAMD`](@ref).
 """
 struct SGSVreman{C} <: AbstractCoupling
     closure::C
@@ -228,7 +240,7 @@ default_options(::Type{<:SGSVreman}) = (C_s = nothing, SGS_STRESS_DEFAULT...)
 build(::Type{<:SGSVreman}, case, o) =
     SGSVreman(VremanClosure(o.C_s === nothing ? case.cfg.C_s : o.C_s), o.stress)
 step_options(c::SGSVreman, case) = sgs_step_options(c.closure, c.stress)
-report(c::SGSVreman, case) = sgs_compare_report("Vreman", case)
+diagnostics(c::SGSVreman, case) = sgs_compare_diagnostics(case)
 smoke_check(c::SGSVreman, case) =
     [sgs_switchoff_checks(case, c.closure); sgs_stress_checks(c.stress, case)]
 

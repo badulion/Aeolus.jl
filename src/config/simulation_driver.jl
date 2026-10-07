@@ -541,9 +541,11 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     next_out = outdir === nothing ? Inf : (n == 0 ? 0.0 : (floor(sim.t / cadence) + 1) * cadence)
     done() = n >= nmax || (adaptive && st.end_time !== nothing && sim.t >= st.end_time * (1 - 1e-12))
     comps = r.closure === nothing ? (;) : (; sgs = r.closure)
+    # attached (#336): the step cores report every step; monitored_step!
+    # turns a step that throws into a diagnosed blowup
     with_monitor(sim; run = rf, components = comps, t_end = t_end,
                  cadence = cfg.logging.diagnostics_cadence, sgs = r.closure,
-                 stepper = r.stepper) do m
+                 stepper = r.stepper, step0 = n) do m
         if outdir !== nothing && sim.t >= next_out * (1 - 1e-9)
             _write_output(r, outdir, n); next_out += cadence
         end

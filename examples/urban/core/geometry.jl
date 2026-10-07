@@ -115,11 +115,10 @@ function build_geometry(cfg, mesh)
     vfac  = view_factors(scene)
     facet_col = Tuple{Int,Int}[f.col for f in scene.facets]
     svf = aggregate_to_grid(scene, vfac).svf
-    @debug(@sprintf("radiosity scene: %d facets in %.1fs, recip %.1e, closure %.1e\nSVF per column: min %.3f mean %.3f max %.3f",
-                    nfacets(scene), time() - t_svf, reciprocity_error(vfac), closure_error(vfac),
-                    minimum(svf), mean(svf), maximum(svf)),
-           subsystem = :berlin, domain = current_domain(), event = :radiosity_scene,
-           facets = nfacets(scene), svf_mean = mean(svf))
+    @debug("radiosity scene", subsystem = :berlin, domain = current_domain(),
+           event = :radiosity_scene, facets = nfacets(scene), wall = round(time() - t_svf; digits = 2),
+           reciprocity = reciprocity_error(vfac), closure = closure_error(vfac),
+           svf_min = minimum(svf), svf_mean = mean(svf), svf_max = maximum(svf))
     wall_ids = [i for (i, f) in enumerate(scene.facets) if f.kind === :wall]
     open_cols = findall(==(0), heightmap)
     return Geometry(st.city, sm, sfc, st.lai, heightmap, scene, vfac, facet_col,

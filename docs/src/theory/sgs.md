@@ -927,8 +927,8 @@ Measured. An earlier probe of the Berlin `:amd` run (2026-10-05) gave
 cell-wise differences between a tracer's own AMD κ and θ's κ_t of
 54–64 % for qv and 66–92 % for the chemistry species, 28 % between NO
 and NO₂, 196 % between qv and ql, and a fallback maximum of 5.9 m²/s
-against 2.6 m²/s for θ. The design test (`test/berlin_numerics.jl`, *one
-shared κ*) recomputes them on the 12-step `:amd` smoke state (fluid cells,
+against 2.6 m²/s for θ. The design test (*one shared κ*, in
+`test/berlin_numerics.jl` until #320) recomputed them on the 12-step `:amd` smoke state (fluid cells,
 ``Σ|Δκ|/Σκ_θ`` against θ's AMD κ_t on the same state): qv 78 % (maximum
 0.26 against θ's 2.71 m²/s), NO / NO₂ / O₃ 80 / 80 / 77 %, NO vs NO₂ 24 %,
 and ql, which is zero everywhere there, exactly the fallback ``3ν_t`` in
@@ -1341,7 +1341,7 @@ laminar sheared layer (γ = 0), and σ gives 5.3e-4 against 2.0e-2 m²/s
 (2.7 %). On the laminar version of the current flow (level means of u, v;
 ``w = 0``) σ's ``ν_t`` is zero to the bit where Smagorinsky is on (the
 smoke check AMD and Vreman share), and for an exactly parallel turning
-profile on the Berlin mesh too (`test/berlin_numerics.jl`). The smoke step
+profile (`test/era6_sigma_sgs.jl`; on the Berlin mesh until #320). The smoke step
 costs 17.8 ms against 16.5 ms with Smagorinsky.
 
 Those free-stream numbers were measured with a sponge that relaxed the

@@ -1,4 +1,6 @@
-# Captured on the code before CFG-g (#362; master + #380, commit c33d292a) with
+# Captured on the code before CFG-g (#362) with (first on master + #380, commit
+# c33d292a; re-captured on master 5b488e11 after KA-m's fused saturation vapour
+# pressure (ff7073e7) moved summer_qv_* in the last bits)
 #   julia --project=. test/data/input_dynamic/capture_master.jl <checkout> master_digests.toml
 # The CSV-path initial state
 # of the summer case and the 12-step smoke "summer sounding" state.

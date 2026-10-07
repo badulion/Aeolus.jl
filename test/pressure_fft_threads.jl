@@ -17,7 +17,8 @@ using Aeolus
 using Aeolus.Fields: Field, interior_view
 using Aeolus.Grids: interior
 using Aeolus.PressureSolvers: FFTPoissonSolver, CosineFFTPoissonSolver, solve!
-using Aeolus.StretchedGrids: StretchedPoissonSolver, _mean_mode!
+using Aeolus.StretchedGrids: StretchedPoissonSolver
+using Aeolus.PressureSolvers: _mean_mode!
 
 pft_bits(A) = reinterpret(UInt64, vec(copy(A)))
 
@@ -52,7 +53,8 @@ function pft_old_solve!(p, source, s::CosineFFTPoissonSolver)
     return p
 end
 
-function pft_old_solve!(p, source, s::StretchedPoissonSolver)
+function pft_old_solve!(p, source, sw::StretchedPoissonSolver)
+    s = sw.core                    # the column solver it delegates to (#309)
     ii, jj, kk = interior(source.mesh)
     Nx, Ny, Nz = size(s.buf)
     @views s.buf .= source.data[ii, jj, kk]

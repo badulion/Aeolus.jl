@@ -31,8 +31,9 @@ SGS closures against filtered DNS, the BUBBLE / CAPITOUL campaigns and
 the patchy-surface LES. Each has a one-line reason in
 `test/test_tags.toml` naming the fast file that keeps its module
 covered. Every `src` module keeps fast coverage (checked by searching
-each module's name and exports in the fast files), and the fast tier
-includes the Berlin smoke test.
+each module's name and exports in the fast files). The Berlin example
+has no tests of its own (#320): its end-to-end runs are
+`examples/urban/berlin_checks.jl`, run by hand.
 
 The granularity is the file. A few full-only files also hold closed-form
 checks next to their simulations (the Blasius solution in
@@ -77,8 +78,8 @@ own Julia process, plus one job, `runtests.jl`, for the inline
   capped by available memory (`--mem-per-job`, default 1 GB; the
   heaviest file peaks at 2.2 GB, the median at 0.5 GB). So two agents
   running suites at once do not oversubscribe the machine.
-- **Exclusive files** (`berlin_smoke.jl`, `era6_apriori_sgs.jl`,
-  `era6_cbc_decay.jl`) run one at a time after the parallel batch,
+- **Exclusive files** (`era6_apriori_sgs.jl`, `era6_cbc_decay.jl`,
+  `thread_invariance.jl`) run one at a time after the parallel batch,
   because they assert their own wall time.
 - **Logs.** One log and one result file per job in the run folder,
   `.testruns/<yyyymmdd-HHMMSS>-<tier>/` (gitignored), plus
@@ -201,3 +202,30 @@ The fast tier is bounded by its longest files (`berlin_smoke.jl`, run
 alone, 125 s; `berlin_dynamics.jl`, 115 s) and the exclusive files run
 after the batch (`era6_apriori_sgs.jl`, 59 s alone), so more jobs do not
 shorten it much.
+
+### The Berlin suite removed (#320)
+
+The 13 `test/berlin_*.jl` files (the "Berlin case" block, 4162
+assertions) were removed on 2026-10-07; their checks of `src/` physics
+are in module tests, the example's end-to-end runs in
+`examples/urban/berlin_checks.jl` (run by hand). Fast tier, `test/run.jl
+--jobs 4`, one thread per job, other agents' suites alongside:
+
+| | Wall | Jobs | Assertions (pass + broken) | 1-min load at start |
+| :-- | --: | --: | --: | --: |
+| before (master + the KA work of #303, 2026-10-07 14:15) | 21.0 min | 134 | 100 062 | 2.8 |
+| after | 12.6 min | 124 | 97 185 | 6.2 |
+
+Before, the Berlin jobs took 1260 s of job time (`berlin_parent.jl`
+234 s, `berlin_smoke.jl` 222 s exclusive, the others 28–97 s each) and
+were 7 of the 10 slowest jobs. After, the slowest are `config_berlin.jl`
+(108 s), `era6_large_scale_forcing.jl` (83 s) and `era6_apriori_sgs.jl`
+(73 s, exclusive). Assertions per file, before → after, of the files that
+took over Berlin checks: `era2_anelastic.jl` 316 → 1483 (the reference
+state checked level by level on three profiles), `era2_anelastic_cbl.jl`
+new, 3 (71 s), `era5_surface_tiles.jl` 64 → 79, `input_static.jl`
+114 → 121, `era6_relaminarisation.jl` 66 → 73, `era5_soil_thermal.jl`
+2499 → 2504, `era2_multigrid.jl` 35 → 39, `era6_open_near_boundary.jl`
+71 → 74, `era6_sigma_sgs.jl` 56 → 58, `config_examples.jl` +1;
+`era6_nudging_subsidence.jl` (68, full) split into 58 fast and
+`era6_gabls2.jl` (10, full, 92 s). The full tier was not re-run for #320.
