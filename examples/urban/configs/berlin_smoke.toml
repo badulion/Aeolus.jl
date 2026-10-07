@@ -1,0 +1,52 @@
+# Berlin smoke run (CFG-c, #358): quick checks of every code path, not
+# physics. A 250 m × 250 m × 100 m window of the real OSM file, centred
+# 312.5 m south of the anchor (69 building and 50 park columns, tallest
+# roof 31 m, clear of the towers that reach 200 m), on 16 × 16 × 16 cells
+# (dx = 15.6 m) at local noon, nested in a small parent (1 km × 1 km ×
+# 500 m on 16 × 16 × 10 cells of 62.5 m × 50 m, refinement (4, 4, 8), the
+# land use a crop of the 6 km table; #265); 12 steps of 2 s, radiation
+# every 8 s, the surfaces (soil included) every 4 s, output every 12 s, no
+# NetCDF file.
+#
+# Idealised initial profile (sounding = "none", capping inversion at 60 m):
+# the smoke checks of the turbulence diagnostics and the AMD/Vreman/σ
+# switch-off need a stable layer above an inversion inside the 100 m box,
+# which the observed noon profile (mixed to 1.2 km) does not have. The
+# sounding path runs in the smoke test's "summer sounding" run.
+#
+#   julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml
+
+schema_version = 1
+extends = "berlin_summer.toml"
+
+[run]
+name = "smoke"
+scenario = "smoke"
+
+[output]
+cadence = 12.0
+netcdf = "none"
+
+[grid]
+size = [16, 16, 16]
+extent = [250.0, 250.0, 100.0]
+
+[geometry]
+offset = [0.0, -312.5]
+
+[clock]
+start_h = 12.0
+nsteps = 12
+
+[cadence]
+radiation = 8.0
+soil = 4.0
+
+[initial]
+sounding = "none"
+theta_inversion_z = 60.0
+
+[physics.options.nesting.parent]
+extent = [1000.0, 1000.0, 500.0]
+refinement = [4, 4, 8]
+vertical = "uniform"

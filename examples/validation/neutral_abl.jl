@@ -8,8 +8,10 @@
 # function. Built with `half_channel_case` (WallModels); Φ_m and E11 are
 # Operators' `phi_m_profile` and `streamwise_spectrum`.
 #
-# Runs each closure of CLOSURES at each resolution of NS for T_END H/u*,
-# averages over the last 40 %, and writes a two-panel figure:
+# The runs are examples/validation/configs/neutral_abl.toml (driver
+# "channel", examples/validation/channel_driver.jl): a sweep of three
+# closures × two resolutions, each run for 50 H/u* and averaged over the
+# last 40 %. This script runs the sweep, then writes a two-panel figure:
 #   (a) Φ_m(z/H) — the Smagorinsky overshoot near the wall (Mason & Thomson
 #       1992, JFM 242, 51; Porté-Agel et al. 2000 Fig. 7) and the
 #       scale-dependent Lagrangian model (LASD, Bou-Zeid et al. 2005;
@@ -39,28 +41,18 @@
 # Smagorinsky at 32³) instead of showing -5/3. Cost: LASD 544 s at 32³,
 # 3338 s at 48³ (loaded machine), Smagorinsky 199 s at 32³.
 #
-#   julia --project=. examples/validation/neutral_abl.jl         # ~15 min
-#   T_END=20 NS=32 CLOSURES=lasd julia --project=. examples/validation/neutral_abl.jl
+#   julia --project=. examples/validation/neutral_abl.jl                  # the six runs
+#   julia --project=. examples/validation/neutral_abl.jl --member lasd_32x32x32 \
+#         --set stepper.end_time=20.0                                      # one, shorter
 #
-# writes examples/validation/output/neutral_abl.svg
+# writes examples/validation/output/neutral_abl.svg (and one run folder per
+# member under runs/)
 # =========================================================================
 
 using Aeolus
 using Printf
 
-const T_END = parse(Float64, get(ENV, "T_END", "50"))
-const T_AVG = 0.6 * T_END
-const C_S = 0.1
-const CLOSURES = Symbol.(split(get(ENV, "CLOSURES", "smagorinsky,lasd"), ","))
-const NS = parse.(Int, split(get(ENV, "NS", "32,48"), ","))
-
-function make_case(N, name)
-    name === :smagorinsky && return half_channel_case(; N = N, closure = StaticSmagorinsky(C_S))
-    g = RegularGrid(; size = (N, N, N), extent = (2π, 2π, 1.0))
-    cl = LagrangianDynamicSmagorinsky(g; scale_dependent = name === :lasd)
-    name in (:lasd, :lasi) || error("unknown closure $name")
-    return half_channel_case(; N = N, closure = cl, filter = :spatial)
-end
+const CONFIG = joinpath(@__DIR__, "configs", "neutral_abl.toml")
 
 "Least-squares slope of log E against log k over k ∈ [klo, khi]."
 function fit_slope(k, E, klo, khi)
@@ -70,37 +62,43 @@ function fit_slope(k, E, klo, khi)
     return sum((x .- xm) .* (y .- ym)) / sum((x .- xm) .^ 2), count(m)
 end
 
-function run_case(N, name)
-    c = make_case(N, name)
-    levels = unique(clamp.(round.(Int, (0.06, 0.1, 0.25, 0.5) .* N .+ 0.5), 1, N))
-    Esum = nothing; ns = Ref(0); n = Ref(0)
-    cb = function (case)
-        n[] += 1
-        (case.sim.t >= T_AVG && n[] % 10 == 0) || return
-        sp = streamwise_spectrum(case.sim.u, levels)
-        Esum === nothing ? (Esum = copy(sp.E11)) : (Esum .+= sp.E11)
-        ns[] += 1
-    end
-    t0 = time()
-    st = run_channel!(c, T_END; average_from = T_AVG, callback = cb)
-    k1 = streamwise_spectrum(c.sim.u, levels).k1
+levels_of(N) = unique(clamp.(round.(Int, (0.06, 0.1, 0.25, 0.5) .* N .+ 0.5), 1, N))
+
+# the spectra: every 10th step from the averaging start on, per run
+spectra = IdDict{Any,Any}()
+function sample_spectrum(r, step)
+    st = r.cfg.stepper
+    (r.case.sim.t >= st.average_from_fraction * st.end_time && step % 10 == 0) || return
+    sp = streamwise_spectrum(r.case.sim.u, levels_of(r.cfg.channel.size[1]))
+    acc = get!(() -> (E = zero(sp.E11), n = Ref(0)), spectra, r)
+    acc.E .+= sp.E11; acc.n[] += 1
+end
+
+runs = run_configs(CONFIG, ARGS; callback = sample_spectrum)
+
+function summarise(res)
+    r = res.obj; st = r.stats; N = r.cfg.channel.size[1]; name = r.cfg.sgs.closure
+    T_END = r.cfg.stepper.end_time; T_AVG = r.cfg.stepper.average_from_fraction * T_END
+    levels = levels_of(N)
+    k1 = streamwise_spectrum(r.case.sim.u, levels).k1
     @printf("%s, N = %d: %d steps, %.0f s; ⟨τ_w⟩ = %.3f u*² over %.0f-%.0f H/u*\n",
-            name, N, c.nsteps, time() - t0, st.τ_wall, T_AVG, T_END)
+            name, N, st.nsteps, st.wall_time, st.τ_wall, T_AVG, T_END)
     @printf("   Φ_m at z/H = %s\n", join((@sprintf("%.3f:%.2f", z, p) for (z, p) in
                                           zip(st.zf[1:min(8, end)], st.phi_m[1:min(8, end)])), "  "))
     @printf("   max Φ_m below z = 0.3H: %.3f; Φ_m over 0.05 ≤ z/H ≤ 0.3 in [%.3f, %.3f]\n",
             maximum(st.phi_m[st.zf .<= 0.3]), extrema(st.phi_m[0.05 .<= st.zf .<= 0.3])...)
-    E = Esum ./ ns[]
+    acc = spectra[r]
+    E = acc.E ./ acc.n[]
     zl = [(k - 0.5) / N for k in levels]
     for (m, z) in enumerate(zl)
         lo, hi = z < 0.2 ? (1.0, 6.0) : (4.0, N / 3)
         sl, npts = fit_slope(k1, E[:, m], lo, hi)
         @printf("   E11 slope at z/H = %.3f over k1 H ∈ [%.0f, %.1f] (%d points): %.2f\n", z, lo, hi, npts, sl)
     end
-    return (; N, name, st, k1, E, zl)
+    return (; N, name, st, k1, E, zl, T_AVG, T_END, C_S = r.cfg.sgs.c_s)
 end
 
-results = [run_case(N, name) for name in CLOSURES for N in NS]
+results = [summarise(res) for res in runs]
 
 # ---- the figure ----------------------------------------------------------
 function write_figure(path, results)
@@ -108,12 +106,12 @@ function write_figure(path, results)
     W, H = 1000, 460
     pw, ph = 380, 340
     panels = ((80, 60), (580, 60))
-    cols = ("#2563eb", "#dc2626", "#059669", "#d97706")
+    cols = ("#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2")
     io = IOBuffer()
     println(io, """<?xml version="1.0" encoding="UTF-8"?>""")
     println(io, """<svg xmlns="http://www.w3.org/2000/svg" width="$W" height="$H" font-family="DejaVu Sans, sans-serif">""")
     println(io, """<rect width="100%" height="100%" fill="white"/>""")
-    println(io, """<text x="$(W/2)" y="28" font-size="17" text-anchor="middle" font-weight="bold">Neutral half channel, no wall damping ($(round(Int, T_AVG))-$(round(Int, T_END)) H/u*)</text>""")
+    println(io, """<text x="$(W/2)" y="28" font-size="17" text-anchor="middle" font-weight="bold">Neutral half channel, no wall damping ($(round(Int, results[end].T_AVG))-$(round(Int, results[end].T_END)) H/u*)</text>""")
     # (a) Φ_m: x ∈ [0, 3], y = z/H ∈ [0, 1]
     x0, y0 = panels[1]
     X(x) = x0 + x / 3 * pw; Y(z) = y0 + ph - z * ph
@@ -132,7 +130,7 @@ function write_figure(path, results)
         for (z, p) in zip(r.st.zf, r.st.phi_m)
             println(io, """<circle cx="$(X(clamp(p, 0, 3)))" cy="$(Y(z))" r="2.5" fill="$(cols[i])"/>""")
         end
-        println(io, """<line x1="$(x0+pw-120)" y1="$(y0+20i)" x2="$(x0+pw-95)" y2="$(y0+20i)" stroke="$(cols[i])" stroke-width="2"/><text x="$(x0+pw-88)" y="$(y0+20i+4)" font-size="12">$(r.name == :smagorinsky ? "Smag $(C_S)" : uppercase(String(r.name))) $(r.N)³</text>""")
+        println(io, """<line x1="$(x0+pw-120)" y1="$(y0+20i)" x2="$(x0+pw-95)" y2="$(y0+20i)" stroke="$(cols[i])" stroke-width="2"/><text x="$(x0+pw-88)" y="$(y0+20i+4)" font-size="12">$(r.name == :smagorinsky ? "Smag $(r.C_S)" : uppercase(String(r.name))) $(r.N)³</text>""")
     end
     println(io, """<text x="$(x0+pw/2)" y="$(y0+ph+42)" font-size="14" text-anchor="middle">Φ_m = (κz/u*) ∂&lt;U&gt;/∂z</text>""")
     println(io, """<text x="$(x0-48)" y="$(y0+ph/2)" font-size="14" text-anchor="middle" transform="rotate(-90 $(x0-48),$(y0+ph/2))">z / H</text>""")
@@ -175,5 +173,5 @@ function write_figure(path, results)
     return path
 end
 
-out = write_figure(get(ENV, "OUT", joinpath(@__DIR__, "output", "neutral_abl.svg")), results)
+out = write_figure(joinpath(@__DIR__, "output", "neutral_abl.svg"), results)
 println("wrote ", out)

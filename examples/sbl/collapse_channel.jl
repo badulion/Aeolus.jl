@@ -7,7 +7,10 @@
 # (`MOSTFluxWallLaw`, P57-a/P58-e) and the stability-corrected Smagorinsky
 # closure (`StabilityCorrected`, P55-e). A neutral run is spun up for
 # 10 H/u*; from its state the cooling is switched on and each run is
-# continued for 20 H/u*.
+# continued for 20 H/u*. The cases are examples/sbl/configs/collapse_channel.toml
+# (the `sbl` run driver, CFG-d #359) with each heat_flux_fraction set on
+# it; the runs share one spin-up (`julia -m Aeolus run
+# examples/sbl/configs/collapse_channel.toml` is one run with its own).
 #
 # The sweep is in units of the maximum sustainable heat flux (Van de
 # Wiel et al. 2012, `max_sustainable_heat_flux`) of the neutral state at
@@ -29,55 +32,28 @@
 # =========================================================================
 
 using Aeolus
-using Aeolus.SurfaceExchange: von_karman
 using Printf
+include(joinpath(@__DIR__, "config_schema.jl"))   # the `sbl` driver: collapse_case, collapse_run
 
-const N = (16, 16, 32)
-const Z0 = 1e-4
-const Θ = 300.0
-const SF = BusingerDyerBeljaarsHoltslag()
 # H/Q_wall of each run (0 = neutral)
 const FRACS = parse.(Float64, split(get(ENV, "FRACS", "0,0.0159,0.0636,0.25,0.5,1,2"), ","))
-
-closure(mesh) = StabilityCorrected(StaticSmagorinsky(0.1), mesh; length_scales = :isotropic)
-mesh() = RegularGrid(; size = N, extent = (2π, 2π, 1.0))
-plane_u1(s) = (g = s.mesh; sum(view(s.u.data, g.Hx+1:g.Hx+g.Nx, g.Hy+1:g.Hy+g.Ny, g.Hz+1)) / (g.Nx * g.Ny))
+const CFG = sbl_config("collapse_channel")          # 16 × 16 × 32, z0/H = 1e-4, θ_ref = 300 K
 
 function main()
-    κ = von_karman(); Nz = N[3]; h = 1 / (2Nz)
-    U0 = log(h / Z0) / κ
-    Qwall = max_sustainable_heat_flux(SF, U0, h, Z0, Z0, Θ)
-    Qbulk = max_sustainable_heat_flux(SF, log(1 / Z0) / κ, 1.0, Z0, Z0, Θ)
+    N = CFG.grid.size; Nz = N[3]
+    sc = collapse_heat_flux_scales(N; z0 = CFG.case.z0, θ_ref = CFG.case.theta_ref)
+    Qwall, Qbulk, U0 = sc.Q_wall, sc.Q_bulk, sc.U0
     @printf("MSHF of the neutral state: Q_wall = %.1f K m/s (U₀ = %.2f u* at H/64), Q_bulk = %.2f K m/s\n",
             Qwall, U0, Qbulk)
     t0 = time()
-    spin = half_channel_case(; N = N, closure = closure(mesh()))
-    run_channel!(spin, 10.0)
-    @printf("neutral spin-up to 10 H/u*: %.0f s\n\n", time() - t0)
+    spin = sbl_channel_spinup(CFG)
+    @printf("neutral spin-up to %.0f H/u*: %.0f s\n\n", CFG.case.spinup_time, time() - t0)
     lowest = 1:cld(Nz, 3)
     rows = []
     for f in FRACS
-        hc = f == 0 ? half_channel_case(; N = N, closure = closure(mesh())) :
-             half_channel_case(; N = N, closure = closure(mesh()), surface_heat_flux = -f * Qwall,
-                               θ_ref = Θ)
-        hc.sim.u.data .= spin.sim.u.data; hc.sim.v.data .= spin.sim.v.data
-        hc.sim.w.data .= spin.sim.w.data
-        e = Float64[]; el = Float64[]; u1 = Float64[]; τ = Float64[]; nxt = Ref(1.0)
-        t1 = time()
-        run_channel!(hc, 20.0; callback = c -> begin
-            if c.sim.t >= nxt[] - 1e-9
-                p = resolved_tke_profile(c.sim.u, c.sim.v, c.sim.w)
-                if c.sim.t >= 15 - 1e-9
-                    push!(e, sum(p) / Nz); push!(el, sum(p[lowest]) / length(lowest))
-                    push!(u1, plane_u1(c.sim)); push!(τ, c.τ_wall_bottom)
-                end
-                nxt[] += 1
-            end
-        end)
-        γ = turbulent_fraction(hc.sim)
-        push!(rows, (f = f, e = sum(e) / length(e), el = sum(el) / length(el),
-                     nlam = count(<(0.2), γ[lowest]), u1 = sum(u1) / length(u1) / U0,
-                     τ = sum(τ) / length(τ), wall = time() - t1))
+        cfg = with(CFG, "case.heat_flux_fraction" => f)
+        r = sbl_channel_run(cfg, sbl_channel_case(cfg), spin)
+        push!(rows, (f = f, e = r.e, el = r.el, nlam = r.nlam, u1 = r.u1, τ = r.τ, wall = r.wall))
     end
     neu = rows[findfirst(r -> r.f == 0, rows)]
     println("| H/H_max(wall) | H/H_max(bulk) | TKE/TKE₀ | TKE/TKE₀ lowest third | levels γ<0.2 (of $(length(lowest))) | U₁/U₀ | τ_w/u*² | wall time |")
