@@ -252,6 +252,21 @@ level each domain takes its own CFL step (root 7.14 s, two substeps per
 level at CFL 0.50) and lands on its parent's step ends; the composite
 ``∫θ`` drifts by ``2.8\times10^{-15}`` in 10 root steps.
 
+**Long run** (`test/era2_nest_hierarchy_longrun.jl`, full tier). A
+forced neutral (Kolmogorov) flow in a ``16^3`` periodic box with
+Smagorinsky closure, child ``r = 2`` over the middle half and grandchild
+``r = 2`` over the child's middle half, both links two-way with refluxing,
+adaptive steps on every level (CFL 0.5), 300 time units (62 eddy
+turnovers): 7496 root steps, 37 373 child and 74 746 grandchild substeps,
+no rejected step; ``\max|∇·u|`` per level ``3.6\times10^{-15}``,
+``7.1\times10^{-15}``, ``1.6\times10^{-14}``; composite ``∫θ`` of a passive
+blob per root step ``\le 6.6\times10^{-15}``. The root's kinetic energy
+over the last 20 turnovers is 0.915 of the two-level run's; its 20-turnover
+means differ by a ratio 0.82 between the last two windows (seeds 1 and 3:
+1.08, 1.05; the two-level run: 1.01). Cost: 0.47 s per time unit against
+0.14 s for the two-level run (×3.3; the grandchild takes twice the child's
+substeps).
+
 ## Limits
 
 * Overlapping siblings are refused (no priority rule).
