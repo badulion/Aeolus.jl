@@ -47,7 +47,7 @@
 #                      variable_dt(::Type{C})           -> Bool: run_case! runs to a time
 #                      stable_dt(c, case)               -> the longest step the provider's
 #                                                          limits allow now (variable_dt only;
-#                                                          step_case!(case, dt) checks dt against it)
+#                                                          an explicit dt of step_case! is checked against it)
 #
 # Keywords are never dropped: a combination of a core / time stepper with
 # a numerics provider whose keywords it does not take is declared with
