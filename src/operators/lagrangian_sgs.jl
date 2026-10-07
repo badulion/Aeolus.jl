@@ -208,24 +208,25 @@ function sgs_viscosity!(νt, c::LagrangianDynamicSmagorinsky{T}, sim) where {T}
     _strain_magnitude!(ws, ub, vb, wb, g)
     cs2max = c.cs_max^2
     cell = _cellmask(m)
+    b = Backends.backend(ws.cs2)
+    inner = (1:g.Nx, 1:g.Ny, 1:g.Nz)
     if !c.initialised[]
         fill!(ws.cs2, min(c.C0^2, cs2max))       # I_LM = C₀² I_MM (MLC96 §3)
         c.scale_dependent && fill!(c.beta, one(T))
     elseif c.scale_dependent
         _scale_dependent_cs2!(ws.cs2, c.beta, c, cs2max)
     else
-        @inbounds for I in eachindex(ws.cs2)
-            mm = c.I_MM[I]
-            ws.cs2[I] = mm > 0 ? clamp(c.I_LM[I] / mm, zero(T), cs2max) : zero(T)
-        end
+        launch!(b, _local_cs2_body!, inner, ws.cs2, c.I_LM, c.I_MM, cs2max)
     end
-    if cell !== nothing
-        @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-            cell[g.Hx+i, g.Hy+j, g.Hz+k] && (ws.cs2[i,j,k] = zero(T))
-        end
-    end
+    cell === nothing || launch!(b, _solid_zero_body!, inner, ws.cs2, cell, g.Hx, g.Hy, g.Hz)
     _dynamic_νt!(νt.data, ws, g, cell)
     return νt
+end
+
+# a = 0 in the solid cells of an interior-sized array
+@inline function _solid_zero_body!(i, j, k, a, cell, Hx, Hy, Hz)
+    @inbounds cell[Hx+i, Hy+j, Hz+k] && (a[i,j,k] = zero(eltype(a)))
+    return nothing
 end
 
 """
@@ -256,26 +257,39 @@ function _scale_dependent_cs2!(cs2, beta, c::LagrangianDynamicSmagorinsky{T}, cs
     lnα = log(c.filter_ratio)
     inv_lr = one(T) / log2(c.filter_ratio2 / c.filter_ratio)     # φ per log₂ of the ratio
     φmin, φmax = log2(c.beta_min), log2(c.beta_max)
-    φfix = c.beta_fixed === nothing ? zero(T) : log2(c.beta_fixed)
-    @inbounds for I in eachindex(cs2)
-        mm = c.I_MM[I]
-        ca = mm > 0 ? c.I_LM[I] / mm : zero(T)              # C²(αΔ)
+    fixed = c.beta_fixed !== nothing
+    φfix = fixed ? log2(c.beta_fixed) : zero(T)
+    launch!(Backends.backend(cs2), _scale_dependent_body!, axes_ranges(cs2), cs2, beta,
+            c.I_LM, c.I_MM, c.I_QN, c.I_NN, lnα, inv_lr, φmin, φmax, fixed, φfix,
+            c.beta_min, c.beta_max, cs2max)
+    return nothing
+end
+
+@inline function _scale_dependent_body!(i, j, k, cs2, beta, ILM, IMM, IQN, INN, lnα, inv_lr,
+                                        φmin, φmax, fixed, φfix, beta_min, beta_max, cs2max)
+    T = eltype(cs2)
+    @inbounds begin
+        mm = IMM[i,j,k]
+        ca = mm > 0 ? ILM[i,j,k] / mm : zero(T)              # C²(αΔ)
         if !(ca > 0)
-            cs2[I] = zero(T); beta[I] = one(T)
-            continue
+            cs2[i,j,k] = zero(T); beta[i,j,k] = one(T)
+            return nothing
         end
-        φ = if c.beta_fixed !== nothing
+        φ = if fixed
             φfix
         else
-            nn = c.I_NN[I]
-            cb = nn > 0 ? c.I_QN[I] / nn : zero(T)          # C²(α₂Δ)
+            nn = INN[i,j,k]
+            cb = nn > 0 ? IQN[i,j,k] / nn : zero(T)          # C²(α₂Δ)
             cb > 0 ? clamp(log2(cb / ca) * inv_lr, φmin, φmax) : φmin
         end
-        beta[I] = clamp(exp2(φ), c.beta_min, c.beta_max)    # β = 2^φ
-        cs2[I] = clamp(ca * exp(-φ * lnα), zero(T), cs2max) # C²(αΔ) α^(-φ)
+        beta[i,j,k] = clamp(exp2(φ), beta_min, beta_max)     # β = 2^φ
+        cs2[i,j,k] = clamp(ca * exp(-φ * lnα), zero(T), cs2max) # C²(αΔ) α^(-φ)
     end
     return nothing
 end
+
+# The index ranges of an interior-sized array, as launch ranges.
+axes_ranges(A::AbstractArray{<:Any,3}) = (1:size(A, 1), 1:size(A, 2), 1:size(A, 3))
 
 """
     advance_sgs!(c::LagrangianDynamicSmagorinsky, sim, dt)
@@ -306,11 +320,14 @@ function advance_sgs!(c::LagrangianDynamicSmagorinsky{T}, sim, dt) where {T}
         sf === nothing || _second_test_filter!(sf, ws, g, c.filter_ratio2^2, cell, per)
     end
     if !c.initialised[]
-        c.I_MM .= ws.MM
-        c.I_LM .= c.C0^2 .* ws.MM
+        b = Backends.backend(c.I_MM)
+        r = axes_ranges(c.I_MM)
+        C02 = c.C0^2
+        copyto!(c.I_MM, ws.MM)
+        range_map!(b, Base.Fix1(*, C02), c.I_LM, r, ws.MM)
         if sf !== nothing                           # β = 1 at the start
-            c.I_NN .= sf.NN
-            c.I_QN .= c.C0^2 .* sf.NN
+            copyto!(c.I_NN, sf.NN)
+            range_map!(b, Base.Fix1(*, C02), c.I_QN, r, sf.NN)
         end
         c.initialised[] = true
     else
@@ -344,8 +361,13 @@ end
 # next commit when the identity is skipped (cadence > 1).
 function _cell_velocity!(U, V, W, m, sim, g)
     ud, vd, wd = _masked_velocities!(m, sim.u.data, sim.v.data, sim.w.data)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
+    launch!(Backends.backend(U), _cell_velocity_body!, (1:g.Nx, 1:g.Ny, 1:g.Nz),
+            U, V, W, ud, vd, wd, g.Hx, g.Hy, g.Hz)
+    return nothing
+end
+
+@inline function _cell_velocity_body!(i, j, k, U, V, W, ud, vd, wd, Hx, Hy, Hz)
+    @inbounds begin
         I, J, K = Hx + i, Hy + j, Hz + k
         U[i,j,k] = 0.5 * (ud[I,J,K] + ud[I+1,J,K])
         V[i,j,k] = 0.5 * (vd[I,J,K] + vd[I,J+1,K])
@@ -436,22 +458,42 @@ _lagrangian_relax!(LMn, MMn, ILM, IMM, LM, MM, U, V, W, dt, g, θ, memory_time,
 # Several memory pairs (LM, MM) and (QN, NN) along the same pathlines in one
 # sweep: one departure point and one set of trilinear weights per cell,
 # each pair with its own time scale T.
+#
+# KA-l (#304): one launch over the interior. Every point writes only its own
+# entry of the new memories (`LMn`, `MMn`, …) and reads the old ones (`ILM`,
+# `IMM`, …) upstream: the update is double-buffered (the caller copies the
+# new memories over the old after the launch), so no point reads what
+# another writes.
 function _lagrangian_relax!(pairs::Tuple, U, V, W, dt, g, θ, memory_time, cell, per, dtε)
     T = eltype(first(first(pairs)))
     Δ = (g.dx * g.dy * g.dz)^(1/3)
     cx = dt / g.dx; cy = dt / g.dy; cz = dt / g.dz
     εfix = memory_time === nothing ? zero(T) : (dtε / memory_time) / (1 + dtε / memory_time)
     mems = _relax_memories(pairs)
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        if cell !== nothing && cell[g.Hx+i, g.Hy+j, g.Hz+k]
-            foreach(p -> (p[1][i,j,k] = zero(T); p[2][i,j,k] = zero(T)), pairs)
-            continue
-        end
-        up = _upstream_n(mems, i - U[i,j,k] * cx, j - V[i,j,k] * cy, k - W[i,j,k] * cz,
-                         i, j, k, g, per, cell)
-        _relax_pairs!(pairs, up, 1, i, j, k, θ, Δ, εfix, memory_time, dtε)
-    end
+    launch!(Backends.backend(U), _relax_body!, (1:g.Nx, 1:g.Ny, 1:g.Nz), pairs, mems, U, V, W,
+            cx, cy, cz, g, per, cell, θ, Δ, εfix, memory_time, dtε)
     return nothing
+end
+
+@inline function _relax_body!(i, j, k, pairs, mems, U, V, W, cx, cy, cz, g, per, cell, θ, Δ, εfix,
+                              memory_time, dtε)
+    if cell !== nothing && @inbounds(cell[g.Hx+i, g.Hy+j, g.Hz+k])
+        _zero_pairs!(pairs, i, j, k)
+        return nothing
+    end
+    up = @inbounds _upstream_n(mems, i - U[i,j,k] * cx, j - V[i,j,k] * cy, k - W[i,j,k] * cz,
+                               i, j, k, g, per, cell)
+    _relax_pairs!(pairs, up, 1, i, j, k, θ, Δ, εfix, memory_time, dtε)
+    return nothing
+end
+
+# the new memories of every pair = 0 at (i, j, k) (a solid cell)
+@inline _zero_pairs!(::Tuple{}, i, j, k) = nothing
+@inline function _zero_pairs!(pairs::Tuple, i, j, k)
+    p = first(pairs)
+    T = eltype(p[1])
+    @inbounds p[1][i,j,k] = zero(T); @inbounds p[2][i,j,k] = zero(T)
+    _zero_pairs!(Base.tail(pairs), i, j, k)
 end
 
 _relax_memories(pairs::Tuple{}) = ()
@@ -485,75 +527,102 @@ end
 Scratch storage of the second (wider) test filter of the scale-dependent
 Lagrangian model. The 21 Germano quantities of `_germano_terms`
 plus the fluid indicator (22 components, component first) are box-summed
-plane by plane: `Ap` (one shell plane), `Bp` (after the x pass), `C`
-(every plane after the y pass), `Ep` (one plane after the z pass); the
-interior-sized results are `QN` ``= Q^d_{ij}N_{ij}`` and `NN` ``=
-N_{ij}N_{ij}``.
+in three separable passes over the whole field (KA-l, #304): `B` after the
+x pass (`22 × Nx × (Ny+2) × (Nz+2)`), `C` after the y pass
+(`22 × Nx × Ny × (Nz+2)`); the z pass and the identity run per interior
+cell into `QN` ``= Q^d_{ij}N_{ij}`` and `NN` ``= N_{ij}N_{ij}``. At
+64 × 64 × 32 `B` and `C` take 25.3 and 24.5 MB (the plane-by-plane passes
+they replace needed `C` and three one-plane buffers, 24.6 MB, but could
+not run as independent work items).
 """
 struct _SecondTestFilter{T}
-    Ap::Array{T,3}
-    Bp::Array{T,3}
+    B::Array{T,4}
     C::Array{T,4}
-    Ep::Array{T,3}
     QN::Array{T,3}
     NN::Array{T,3}
 end
 
 function _SecondTestFilter(g::RegularGrid{T}) where {T}
     Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
-    return _SecondTestFilter{T}(zeros(T, 22, Nx + 2, Ny + 2), zeros(T, 22, Nx, Ny + 2),
-                                zeros(T, 22, Nx, Ny, Nz + 2), zeros(T, 22, Nx, Ny),
+    return _SecondTestFilter{T}(zeros(T, 22, Nx, Ny + 2, Nz + 2), zeros(T, 22, Nx, Ny, Nz + 2),
                                 zeros(T, Nx, Ny, Nz), zeros(T, Nx, Ny, Nz))
 end
 
-# The shell indices of the 5-cell box around interior index i (shell index
-# l = interior index + 1; 0 = dropped). Periodic: the stencil wraps on the
-# interior. Bounded: it stays in the interior and the points beyond are
-# dropped (their weight and their fluid count both, so the result stays a
-# renormalised average); the halo cell of a free-slip wall carries the
-# mirrored, reversed shear, which the 5-cell box would otherwise reach two
-# cells from the wall.
-function _box5_stencil(N, per)
-    return [ntuple(m -> begin
-                       s = i + m - 3
-                       per ? mod1(s, N) + 1 : (1 <= s <= N ? s + 1 : 0)
-                   end, 5) for i in 1:N]
+# The shell index of point m ∈ 1:5 of the 5-cell box around interior index i
+# (shell index l = interior index + 1; 0 = dropped). Periodic: the stencil
+# wraps on the interior. Bounded: it stays in the interior and the points
+# beyond are dropped (their weight and their fluid count both, so the result
+# stays a renormalised average); the halo cell of a free-slip wall carries
+# the mirrored, reversed shear, which the 5-cell box would otherwise reach
+# two cells from the wall. (Computed per point: the per-call stencil vectors
+# it replaces allocated on every call.)
+@inline function _box5_src(i, m, N, per)
+    s = i + m - 3
+    return per ? mod1(s, N) + 1 : (1 <= s <= N ? s + 1 : 0)
 end
 
-# dst[:, i, …] = Σ_s src[:, s, …] over the stencil of i, along the first
-# spatial dimension (`dim = 2`) or the second (`dim = 3`) of a plane.
-function _box5_plane_pass!(dst::AbstractArray{T,3}, src::AbstractArray{T,3}, st, dim) where {T}
-    D = size(dst, 1)
-    @inbounds if dim == 2
-        for c2 in axes(dst, 3), i in axes(dst, 2)
-            first = true
-            for s in st[i]
-                s == 0 && continue
-                if first
-                    @simd for c in 1:D; dst[c, i, c2] = src[c, s, c2]; end
-                    first = false
-                else
-                    @simd for c in 1:D; dst[c, i, c2] += src[c, s, c2]; end
-                end
-            end
-        end
-    else
-        for j in axes(dst, 3)
-            first = true
-            for s in st[j]
-                s == 0 && continue
-                for c1 in axes(dst, 2)
-                    if first
-                        @simd for c in 1:D; dst[c, c1, j] = src[c, c1, s]; end
-                    else
-                        @simd for c in 1:D; dst[c, c1, j] += src[c, c1, s]; end
-                    end
-                end
-                first = false
-            end
-        end
+# x pass: B[:, i, b, c] = Σ over the 5-cell x stencil of i of the 22
+# components (fluid-masked Germano quantities and the fluid indicator) of
+# shell cell (s, b, c), the first stencil point assigned and the others
+# added in stencil order (the summation order of the plane passes this
+# replaces).
+@inline function _box5_x_body!(i, b, c, B, ws, cell, oi, oj, ok, Nx, per)
+    T = eltype(B)
+    acc = ntuple(_ -> zero(T), Val(22))
+    first = true
+    @inbounds for m in 1:5
+        s = _box5_src(i, m, Nx, per)
+        s == 0 && continue
+        fluid = cell === nothing || !cell[oi + s, oj + b, ok + c]
+        t = _germano_terms(ws, s, b, c)
+        v = ntuple(q -> q <= 21 ? (fluid ? t[q] : zero(T)) : (fluid ? one(T) : zero(T)), Val(22))
+        acc = first ? v : map(+, acc, v)
+        first = false
     end
-    return dst
+    @inbounds for q in 1:22
+        B[q, i, b, c] = acc[q]
+    end
+    return nothing
+end
+
+# y pass: C[:, i, j, c] = Σ over the y stencil of j of B[:, i, s, c].
+@inline function _box5_y_body!(i, j, c, C, B, Ny, per)
+    T = eltype(C)
+    acc = ntuple(_ -> zero(T), Val(22))
+    first = true
+    @inbounds for m in 1:5
+        s = _box5_src(j, m, Ny, per)
+        s == 0 && continue
+        v = ntuple(q -> B[q, i, s, c], Val(22))
+        acc = first ? v : map(+, acc, v)
+        first = false
+    end
+    @inbounds for q in 1:22
+        C[q, i, j, c] = acc[q]
+    end
+    return nothing
+end
+
+# z pass and the identity at interior cell (i, j, k).
+@inline function _box5_z_body!(i, j, k, QN, NN, C, cell, Hx, Hy, Hz, Nz, per, Δ2, α2sq)
+    T = eltype(QN)
+    acc = ntuple(_ -> zero(T), Val(22))
+    first = true
+    @inbounds for m in 1:5
+        s = _box5_src(k, m, Nz, per)
+        s == 0 && continue
+        v = ntuple(q -> C[q, i, j, s], Val(22))
+        acc = first ? v : map(+, acc, v)
+        first = false
+    end
+    n = acc[22]
+    @inbounds if _is_solid(cell, Hx + i, Hy + j, Hz + k) || !(n > 0)
+        QN[i,j,k] = zero(T); NN[i,j,k] = zero(T)
+        return nothing
+    end
+    t = Base.front(acc)                     # the 21 quantities (no closure over `acc`)
+    @inbounds QN[i,j,k], NN[i,j,k] = _germano_LM_MM(t, one(T) / n, Δ2, α2sq)
+    return nothing
 end
 
 """
@@ -585,48 +654,15 @@ runs over fluid cells only and `QN = NN = 0` in solid cells.
 function _second_test_filter!(sf::_SecondTestFilter{T}, ws::DynamicSmagorinskyWorkspace{T},
                               g, α2sq, cell, per) where {T}
     Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
-    oH = (g.Hx - 1, g.Hy - 1, g.Hz - 1)             # shell → data index
-    stx = _box5_stencil(Nx, per[1]); sty = _box5_stencil(Ny, per[2])
-    stz = _box5_stencil(Nz, per[3])
-    Ap, Bp, C, Ep = sf.Ap, sf.Bp, sf.C, sf.Ep
-    # x and y passes, one shell plane at a time (the plane stays in cache)
-    @inbounds for c in 1:Nz+2
-        for b in 1:Ny+2, a in 1:Nx+2
-            fluid = cell === nothing || !cell[oH[1] + a, oH[2] + b, oH[3] + c]
-            t = _germano_terms(ws, a, b, c)
-            for q in 1:21
-                Ap[q, a, b] = fluid ? t[q] : zero(T)
-            end
-            Ap[22, a, b] = fluid ? one(T) : zero(T)
-        end
-        _box5_plane_pass!(Bp, Ap, stx, 2)
-        _box5_plane_pass!(view(C, :, :, :, c), Bp, sty, 3)
-    end
-    # z pass and the identity, one interior plane at a time
+    b = Backends.backend(sf.C)
+    # x pass over every shell row, y pass over every shell plane, then the z
+    # pass and the identity: three launches, each reading only the previous
+    # pass's buffer (KA-l: three full 3-D passes instead of a reused plane)
+    launch!(b, _box5_x_body!, (1:Nx, 1:Ny+2, 1:Nz+2), sf.B, ws, cell,
+            g.Hx - 1, g.Hy - 1, g.Hz - 1, Nx, per[1])
+    launch!(b, _box5_y_body!, (1:Nx, 1:Ny, 1:Nz+2), sf.C, sf.B, Ny, per[2])
     Δ2 = (g.dx * g.dy * g.dz)^(2/3)
-    D = 22
-    @inbounds for k in 1:Nz
-        first = true
-        for s in stz[k]
-            s == 0 && continue
-            for j in 1:Ny, i in 1:Nx
-                if first
-                    @simd for q in 1:D; Ep[q, i, j] = C[q, i, j, s]; end
-                else
-                    @simd for q in 1:D; Ep[q, i, j] += C[q, i, j, s]; end
-                end
-            end
-            first = false
-        end
-        for j in 1:Ny, i in 1:Nx
-            n = Ep[22, i, j]
-            if (cell !== nothing && cell[g.Hx + i, g.Hy + j, g.Hz + k]) || !(n > 0)
-                sf.QN[i,j,k] = zero(T); sf.NN[i,j,k] = zero(T)
-                continue
-            end
-            t = ntuple(q -> Ep[q, i, j], Val(21))
-            sf.QN[i,j,k], sf.NN[i,j,k] = _germano_LM_MM(t, one(T) / n, Δ2, α2sq)
-        end
-    end
+    launch!(b, _box5_z_body!, (1:Nx, 1:Ny, 1:Nz), sf.QN, sf.NN, sf.C, cell,
+            g.Hx, g.Hy, g.Hz, Nz, per[3], Δ2, α2sq)
     return nothing
 end
