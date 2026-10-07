@@ -117,7 +117,15 @@ end
 # not) staggered along that axis.
 _coord(x0, Δ, H, i, staggered::Bool) = x0 + (i - H - (staggered ? 1 : 0.5)) * Δ
 
-function OpenPlane(name::Symbol, loc::Location, side::Symbol, m::RegularGrid{T};
+# The vertical metrics of an open face's mesh: affine on a RegularGrid, the
+# per-level face/centre heights and thicknesses of a z-stretched mesh (a
+# stretched nest child, #328; detected by its fields, as gradient_top.jl
+# does, since StretchedGrids is loaded after this module).
+_zcoord(m, k, staggered::Bool) =
+    hasproperty(m, :zf) ? (staggered ? m.zf[k] : m.zc[k]) : _coord(m.z0, m.dz, m.Hz, k, staggered)
+_layer_dz(m, k) = hasproperty(m, :dzc) ? m.dzc[k] : m.dz
+
+function OpenPlane(name::Symbol, loc::Location, side::Symbol, m::AbstractMesh{T};
                    mode::Symbol = :value) where {T}
     ax, high = _side_axis(side)
     normal = _normal_loc(loc) == ax
@@ -138,7 +146,7 @@ function OpenPlane(name::Symbol, loc::Location, side::Symbol, m::RegularGrid{T};
     st = ntuple(a -> _normal_loc(loc) == a, 3)
     x = T[_coord(m.x0, m.dx, m.Hx, i, st[1]) for i in rr[1]]
     y = T[_coord(m.y0, m.dy, m.Hy, j, st[2]) for j in rr[2]]
-    z = T[_coord(m.z0, m.dz, m.Hz, k, st[3]) for k in rr[3]]
+    z = T[_zcoord(m, k, st[3]) for k in rr[3]]
     data = zeros(T, length.(rr)...)
     tang = ntuple(a -> Ns[a], 3)
     fl = ax == 1 ? trues(tang[2], tang[3]) : ax == 2 ? trues(tang[1], tang[3]) :
@@ -413,7 +421,7 @@ update.
 [`RadiationPlane`](@ref) of `planes[n]` on a radiating face, `nothing`
 otherwise (N-open-c, #260).
 """
-mutable struct OpenBoundaryState{T,M<:RegularGrid{T}}
+mutable struct OpenBoundaryState{T,M<:AbstractMesh{T}}
     mesh::M
     data::Any
     correction::Symbol
@@ -528,7 +536,7 @@ WENO-Z7); a mesh whose halo along an open axis is shallower throws an
 `ArgumentError`, since the scheme would then read halo layers that hold
 no boundary data. Inflow scalars get Dirichlet data in all `H` layers.
 """
-function open_boundary_conditions(m::RegularGrid{T}, data;
+function open_boundary_conditions(m::AbstractMesh{T}, data;
                                   x = :open, y = :open, bottom = :wall, top = :open,
                                   fields = (:u, :v, :w, :θ),
                                   correction::Symbol = :uniform,
@@ -862,12 +870,12 @@ range: the boundary face of the normal velocity on a west/south open
 face (`ic`/`jc = H+1`) and on a bottom wall (`kc = Hz+1`). Zero means
 none. Implicit solvers remove these rows from the unknowns.
 """
-pinned_face_indices(::Location, m::RegularGrid, b::FieldBoundaryConditions) = (0, 0, 0)
-pinned_face_indices(::FaceX, m::RegularGrid, b::FieldBoundaryConditions) =
+pinned_face_indices(::Location, m::AbstractMesh, b::FieldBoundaryConditions) = (0, 0, 0)
+pinned_face_indices(::FaceX, m::AbstractMesh, b::FieldBoundaryConditions) =
     (b.west isa AbstractOpenBoundary ? m.Hx + 1 : 0, 0, 0)
-pinned_face_indices(::FaceY, m::RegularGrid, b::FieldBoundaryConditions) =
+pinned_face_indices(::FaceY, m::AbstractMesh, b::FieldBoundaryConditions) =
     (0, b.south isa AbstractOpenBoundary ? m.Hy + 1 : 0, 0)
-pinned_face_indices(::FaceZ, m::RegularGrid, b::FieldBoundaryConditions) =
+pinned_face_indices(::FaceZ, m::AbstractMesh, b::FieldBoundaryConditions) =
     (0, 0, (is_wall(b.bottom) || b.bottom isa AbstractOpenBoundary) ? m.Hz + 1 : 0)
 
 # =========================================================================
@@ -896,20 +904,24 @@ boundary_flux_weights(sim) = nothing
 # accumulator is threaded through the calls rather than captured and
 # reassigned by a closure, which boxed it (#329: 384 KiB per mass-flux
 # correction of a 32³ child).
-function _fold_faces(g, acc, p::OpenPlane{T}, m::RegularGrid{T}, W) where {T}
+function _fold_faces(g, acc, p::OpenPlane{T}, m::AbstractMesh{T}, W) where {T}
     fl = _face_local(p)
     s = p.high ? one(T) : -one(T)
     if p.axis == 1
-        A = m.dy * m.dz
-        for (b, k) in enumerate(m.Hz+1:m.Hz+m.Nz), (a, j) in enumerate(m.Hy+1:m.Hy+m.Ny)
-            p.fluid[a, b] || continue
-            acc = g(acc, fl, j, k, s, T(_wlat(W, k)) * A)
+        for (b, k) in enumerate(m.Hz+1:m.Hz+m.Nz)
+            A = m.dy * _layer_dz(m, k)          # per level on a stretched mesh (#328)
+            for (a, j) in enumerate(m.Hy+1:m.Hy+m.Ny)
+                p.fluid[a, b] || continue
+                acc = g(acc, fl, j, k, s, T(_wlat(W, k)) * A)
+            end
         end
     elseif p.axis == 2
-        A = m.dx * m.dz
-        for (b, k) in enumerate(m.Hz+1:m.Hz+m.Nz), (a, i) in enumerate(m.Hx+1:m.Hx+m.Nx)
-            p.fluid[a, b] || continue
-            acc = g(acc, i, fl, k, s, T(_wlat(W, k)) * A)
+        for (b, k) in enumerate(m.Hz+1:m.Hz+m.Nz)
+            A = m.dx * _layer_dz(m, k)
+            for (a, i) in enumerate(m.Hx+1:m.Hx+m.Nx)
+                p.fluid[a, b] || continue
+                acc = g(acc, i, fl, k, s, T(_wlat(W, k)) * A)
+            end
         end
     else
         A = m.dx * m.dy
@@ -1270,7 +1282,8 @@ function open_intermediate_velocity!(sim, τ::Real)
     m = pf.mesh
     T = eltype(pd)
     τT = T(τ)
-    Hs = (m.Hx, m.Hy, m.Hz); Ns = (m.Nx, m.Ny, m.Nz); Δs = (m.dx, m.dy, m.dz)
+    Hs = (m.Hx, m.Hy, m.Hz); Ns = (m.Nx, m.Ny, m.Nz)
+    Δs = (m.dx, m.dy, hasproperty(m, :dz) ? m.dz : zero(m.dx))
     for st in open_boundary_states(sim.bcs), p in st.planes
         p.normal && continue
         dir = p.name === :u ? 1 : p.name === :v ? 2 : p.name === :w ? 3 : 0
@@ -1278,6 +1291,9 @@ function open_intermediate_velocity!(sim, τ::Real)
         # the interior layer the gradient is taken from, along the face normal
         lay = p.high ? Hs[p.axis] + Ns[p.axis] : Hs[p.axis] + 1
         inv = 1 / Δs[dir]
+        dir == 3 && hasproperty(m, :dzf) &&
+            throw(ArgumentError("open_intermediate_velocity!: the vertical pressure gradient " *
+                                "on the open faces of a z-stretched mesh is not implemented"))
         rngs = (p.irange, p.jrange, p.krange)
         @inbounds for (c, k) in enumerate(rngs[3]), (b, j) in enumerate(rngs[2]),
                       (a, i) in enumerate(rngs[1])
