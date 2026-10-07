@@ -358,15 +358,18 @@ z_uniform = 500.0
 
         [smoke.parent.child.physics]
 
+# smoke_digests re-recorded by KA-m (#301): the saturation vapour pressure is
+# one fused exponential (a named one-time change, docs/src/design/ka_port.md);
+# the 13 child fields moved in the last bits, the nest parent did not.
 [smoke_digests]
-HNO3 = "3951db839cd1f3c6"
-NO = "c1b20982930bbd8b"
-NO2 = "3bd75cba7b7f3011"
-O3 = "f030b6157f05cf82"
-Ts = "e8dafe9d63956b40"
-VOC = "6af6bb3699121b3f"
-e = "03c66bba3a3e176d"
-p = "10419ce2236fbc7c"
+HNO3 = "c30e954097b8f891"
+NO = "a5a017d5cde2e85b"
+NO2 = "ed6b41337e8dc153"
+O3 = "397f4424d66a4ba7"
+Ts = "3895b858c21cefdc"
+VOC = "bf2808037d40e5df"
+e = "3a53da14344eec88"
+p = "67b47899de4652c5"
 parent_p = "a20144242790aaea"
 parent_qv = "ea52a59b9bec07f1"
 parent_u = "3b6d738234a763bd"
@@ -376,11 +379,11 @@ parent_w = "5c2c0fabed842a86"
 pollutant = "8f6955bf94ec2325"
 ql = "8f6955bf94ec2325"
 qr = "8f6955bf94ec2325"
-qv = "5d990ede311f62ee"
-u = "7f8fbc7cc71dd8dc"
-v = "a1e378254dffb6ff"
-w = "a1d3de5ffb9017b3"
-"θ" = "072f8b50c6bfff61"
+qv = "047014eae46342ac"
+u = "d91d83351060f1c6"
+v = "9822dfe1cc05b68f"
+w = "5de7e90fe1544a81"
+"θ" = "d1fcb3e7b978132b"
 
 [summer.case]
 C_s = 0.1

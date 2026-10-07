@@ -247,8 +247,13 @@ function _saturation_vapor_pressure(T::Real, L0::Real, Δcp::Real,
     Tk <= 0 && throw(DomainError(T, "saturation_vapor_pressure: T must be > 0 K"))
     Rv = R_v(c)
     T0 = c.T_triple
-    return c.p_triple * (Tk / T0)^(Δcp / Rv) *
-           exp((L0 - Δcp * T0) / Rv * (1 / T0 - 1 / Tk))
+    # one fused exponential: (T/T0)^a · exp(b) = exp(a ln(T/T0) + b). The
+    # power was a second exp/log pair; fusing them is a named one-time
+    # change of the last bits of e_s (and q_s) everywhere (KA-m, #301:
+    # max relative change 8.3e-16 over 230-320 K, 2.4e-15 over 150-400 K;
+    # docs/src/design/ka_port.md).
+    return c.p_triple * exp(Δcp / Rv * log(Tk / T0) +
+                            (L0 - Δcp * T0) / Rv * (1 / T0 - 1 / Tk))
 end
 
 """

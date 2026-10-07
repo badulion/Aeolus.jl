@@ -124,20 +124,34 @@ end
 
 # The dew pass (a function barrier: `qv` comes untyped from the tracer
 # registry). H_dew is overwritten: 0 where no dew forms or evaporates.
+# One work item per column (KA-m, #301): a column reads and writes only
+# its own air cell, dew reservoir and H_dew, so the columns run in
+# parallel and give the serial bits at any thread count.
 function dew_pass!(H_dew, qv, bus, p̄, ρ̄, dz, dt)
-    fill!(H_dew, 0.0)
-    @inbounds for I in CartesianIndices(H_dew)
-        bus.dew_mask[I] || continue
-        k = bus.k_air[I]
-        q = qv[I, k]
-        r = Aeolus.RadiationFog.dew_deposition(q, bus.Ts[I], p̄[k], dt;
-                                               dz = dz, ρ = ρ̄[k], dew = bus.dew[I])
-        r.mass == 0 && continue
-        qv[I, k] += (q + r.Δqv) - q
-        bus.dew[I] = max(bus.dew[I] + r.mass, 0.0)
-        H_dew[I] = r.surface_heat / dt
-    end
+    Nx, Ny = size(H_dew)
+    foreach_column!(Aeolus.Backends.backend(H_dew), _dew_column!, (1:Nx, 1:Ny), H_dew, qv,
+                    bus.dew_mask, bus.k_air, bus.Ts, bus.dew, p̄, ρ̄, dz, dt; weight = DEW_WEIGHT)
     return H_dew
+end
+
+# the work of one dew column in grid-point equivalents (one saturation
+# humidity and a few divisions: about the cost of 16 pointwise updates)
+const DEW_WEIGHT = 16
+
+@inline function _dew_column!(i, j, H_dew, qv, dew_mask, k_air, Ts, dew, p̄, ρ̄, dz, dt)
+    @inbounds begin
+        H_dew[i, j] = 0.0
+        dew_mask[i, j] || return nothing
+        k = k_air[i, j]
+        q = qv[i, j, k]
+        r = Aeolus.RadiationFog.dew_deposition(q, Ts[i, j], p̄[k], dt;
+                                               dz = dz, ρ = ρ̄[k], dew = dew[i, j])
+        r.mass == 0 && return nothing
+        qv[i, j, k] += (q + r.Δqv) - q
+        dew[i, j] = max(dew[i, j] + r.mass, 0.0)
+        H_dew[i, j] = r.surface_heat / dt
+    end
+    return nothing
 end
 
 # Ledger: the dew's latent heat is an extra flux into the surface; the
