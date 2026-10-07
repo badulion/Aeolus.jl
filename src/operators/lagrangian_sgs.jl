@@ -532,8 +532,8 @@ x pass (`22 × Nx × (Ny+2) × (Nz+2)`), `C` after the y pass
 (`22 × Nx × Ny × (Nz+2)`); the z pass and the identity run per interior
 cell into `QN` ``= Q^d_{ij}N_{ij}`` and `NN` ``= N_{ij}N_{ij}``. At
 64 × 64 × 32 `B` and `C` take 25.3 and 24.5 MB (the plane-by-plane passes
-they replace needed `C` and three one-plane buffers, 24.6 MB, but could
-not run as independent work items).
+they replace needed `C` and three one-plane buffers, 26.7 MB in all, but
+could not run as independent work items: +23.1 MB).
 """
 struct _SecondTestFilter{T}
     B::Array{T,4}
