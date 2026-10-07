@@ -114,15 +114,18 @@ of ``h``.
 ## Observed cases: GABLS2, GABLS3, GABLS4 and CASES-99 (P58-d)
 
 P58-d (#194) runs three observed stable-boundary-layer cases on the same
-driver. It adds no physics to `src/`. `examples/sbl/cases.jl` reads the
-case data (CSV under `examples/sbl/data/`, provenance in every header) and
-builds each case from package forcing, surface and closure objects:
+driver. It adds no physics to `src/`. Since CFG-d (#359) each case is a
+config of the `sbl` run driver ([Run configuration](../api/config.md#The-sbl-driver))
+in `examples/sbl/configs/`: the case constants are in the TOML file, the
+case data stay the CSVs under `examples/sbl/data/` (provenance in every
+header, read by `examples/sbl/cases.jl`), and `sbl_case` builds each case
+from package forcing, surface and closure objects:
 
-| case | builder | forcing | surface | reference |
+| case | config | forcing | surface | reference |
 | :-- | :-- | :-- | :-- | :-- |
-| GABLS3, Cabauw, 00-09 UTC 2 July 2006 | `gabls3_case` | ``U_g(z,t)``, ``V_g(z,t)`` `ForcingTable`s; `AdvectiveTendencies` of u, v, θ | prescribed 0.25 m θ (`SurfaceTemperatureSeries`, `z0h = 0.25`), ``z_0 = 0.15`` m, ψ = −5z/L | Basu (2008) case description; LES ensemble: Basu, Holtslag & Bosveld (2012) |
-| GABLS4 stage 3, Dome C, 11 Dec 2009 | `gabls4_case` | ``U_g = (1.25, 4.5)`` m s⁻¹, ``f < 0`` | the official case file's skin temperature, θ at 651 hPa | Couvreux et al. (2020), Tables 4-5 |
-| GABLS2, CASES-99, 22-24 Oct 1999 | `gabls2_case` | ``U_g = (3, -9)`` m s⁻¹ | prescribed surface temperature formula | Svensson et al. (2011) (not accessible; see below), Holtslag et al. (2007) |
+| GABLS3, Cabauw, 00-09 UTC 2 July 2006 | `gabls3.toml` | ``U_g(z,t)``, ``V_g(z,t)`` `ForcingTable`s; `AdvectiveTendencies` of u, v, θ | prescribed 0.25 m θ (`SurfaceTemperatureSeries`, `z0h = 0.25`), ``z_0 = 0.15`` m, ψ = −5z/L | Basu (2008) case description; LES ensemble: Basu, Holtslag & Bosveld (2012) |
+| GABLS4 stage 3, Dome C, 11 Dec 2009 | `gabls4_exp3.toml` | ``U_g = (1.25, 4.5)`` m s⁻¹, ``f < 0`` | the official case file's skin temperature, θ at 651 hPa | Couvreux et al. (2020), Tables 4-5 |
+| GABLS2, CASES-99, 22-24 Oct 1999 | `gabls2.toml`, `cases99.toml` (with the towers) | ``U_g = (3, -9)`` m s⁻¹ | prescribed surface temperature formula | Svensson et al. (2011) (not accessible; see below), Holtslag et al. (2007) |
 
 The GABLS3 surface flux is the one the case description prescribes,
 
@@ -155,7 +158,7 @@ boundary layer is meant to evolve under the prescribed advection.
   (−5 mm s⁻¹ at 1 km, ``w_s ∝ z`` below) starts at 40 h local time, after
   the first night that the SCM ranges refer to. Until #248 it was not
   applied, because `LargeScaleForcing` had no state-dependent
-  subsidence; `gabls2_case` now applies it to θ with
+  subsidence; `gabls2.toml` now applies it to θ with
   `LargeScaleForcing.Subsidence` (see
   [Large-scale forcing](large_scale_forcing.md#GABLS2)). The first-night
   numbers below are unaffected by it.

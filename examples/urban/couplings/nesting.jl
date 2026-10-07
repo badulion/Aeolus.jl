@@ -325,7 +325,7 @@ function ensure_nest!(c::NestingCoupling, case)
     for (cf, sf) in ((sim.u, s.u), (sim.v, s.v), (sim.w, s.w))
         interior_view(cf) .= interior_view(sf)
     end
-    Aeolus.Nesting._fill_nest_halos!(sim, run.s_old)
+    fill_nest_halos!(sim, run.s_old)
     st = sim.sponge_target
     c.targets = (u = st.u isa AbstractVector ? st.u : nothing,
                  v = st.v isa AbstractVector ? st.v : nothing,

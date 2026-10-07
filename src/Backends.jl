@@ -277,9 +277,58 @@ apply_transform!(b::GPUBackend, out, plan, in) = _gpu_error(b, "apply_transform!
     b, c = @index(Global, NTuple)
     j = b + oj
     k = c + ok
-    for i in i1:i2
+    _row!(body!, i1:i2, j, k, args...)
+end
+
+# One i-row of a 3-D launch, as its own function that receives the body's
+# arguments as separate arguments (KA-d, #299). Inlined into a loop that
+# reads them from the `args` tuple, a large body with branches (WENO-5, the
+# tensor diffusion fluxes) ran 3-5x slower than the same body in a plain
+# loop: LLVM did not hoist the array loads behind the branches, which it
+# does for arrays that arrive as function arguments (known dereferenceable).
+# One call per row costs nothing measurable (ka_port.md, KA-d).
+#
+# Every argument has its own type parameter: a `Vararg{Any,N}` would not be
+# specialised on a function among the arguments (Julia's heuristic for
+# arguments that are only passed on), and the body would then be called by
+# dynamic dispatch at every point (the specialisation trap of ka_port.md).
+#
+# The serial path is the same idea for the whole loop nest (`_nest!`): one
+# call per launch, the arguments separate, the loops `for k, for j, for i`
+# in one function, so a small stencil vectorises exactly as the old loop
+# did (a call per row made the Laplacian 1.3x the old loop at 64x64x32).
+for N in 0:24
+    as = [Symbol(:a, n) for n in 1:N]
+    Ts = [Symbol(:A, n) for n in 1:N]
+    sig = [:($(as[n])::$(Ts[n])) for n in 1:N]
+    @eval @noinline function _row!(body!::F, ir::UnitRange{Int}, j::Int, k::Int,
+                                   $(sig...)) where {F, $(Ts...)}
+        for i in ir
+            body!(i, j, k, $(as...))
+        end
+        return nothing
+    end
+    @eval @noinline function _nest!(body!::F, ir::UnitRange{Int}, jr::UnitRange{Int},
+                                    kr::UnitRange{Int}, $(sig...)) where {F, $(Ts...)}
+        for k in kr, j in jr, i in ir
+            body!(i, j, k, $(as...))
+        end
+        return nothing
+    end
+end
+# more than 24 arguments: the plain loops
+@noinline function _row!(body!::F, ir::UnitRange{Int}, j::Int, k::Int, args::Vararg{Any,N}) where {F, N}
+    for i in ir
         body!(i, j, k, args...)
     end
+    return nothing
+end
+@noinline function _nest!(body!::F, ir::UnitRange{Int}, jr::UnitRange{Int}, kr::UnitRange{Int},
+                          args::Vararg{Any,N}) where {F, N}
+    for k in kr, j in jr, i in ir
+        body!(i, j, k, args...)
+    end
+    return nothing
 end
 
 @kernel inbounds = true function _rows2_kernel!(body!, i1, i2, oj, args)
@@ -321,9 +370,7 @@ _npoints(ranges) = prod(length, ranges; init = 1)
 # ---- serial reference loops (the historical loop order) ---------------------
 
 @noinline function _serial!(body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args) where {F}
-    for k in kr, j in jr, i in ir
-        body!(i, j, k, args...)
-    end
+    _nest!(body!, ir, jr, kr, args...)    # for k in kr, j in jr, i in ir: body!(i, j, k, args...)
     return nothing
 end
 @noinline function _serial!(body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args) where {F}

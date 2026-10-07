@@ -419,7 +419,7 @@ The src tests are in `test/era6_open_near_boundary.jl` (theory:
 instead of −19.7 W m⁻², and the moist buoyancy changes the flow; see
 the #131 PR for its ledger.)
 
-Flagship configuration, 1 h (`AEOLUS_NSTEPS=1800`, 06:00–07:00 local,
+Flagship configuration, 1 h (1800 steps, 06:00–07:00 local,
 20 June, 64 × 64 × 32, dt = 2 s), mean W m⁻² over the hour per class:
 
 | class | cols | Rn | H | LE | G | ΔS | Rn − H − LE − G − ΔS | extras | closure |
@@ -543,7 +543,8 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
 
 ## Smoke test
 
-**`test/berlin_smoke.jl`** runs the case in `CaseConfig(:smoke)`: a
+**`test/berlin_smoke.jl`** runs the case in `examples/urban/configs/berlin_smoke.toml`
+(each run of the matrix is that file plus `--set` overrides, CFG-c #358): a
 250 m × 250 m × 100 m window of the real OSM file (16 × 16 × 16,
 dx = 15.6 m, 312.5 m south of the anchor, 69 building and 50 park
 columns, tallest roof 31 m) at local noon, 12 steps of 2 s, radiation
@@ -555,13 +556,13 @@ dew, fog, sedimentation and precipitation all do real work. The
 flagship's pollutant stacks are outside this window, so the smoke runs
 put one stack in it, 40 m up.
 
-The run matrix is derived from the registry (`smoke_matrix()` in the
-test file):
+The run matrix is derived from the registry (`smoke_specs()` in
+`test/support/smoke_matrix.jl`, written as overrides by `smoke_overrides`):
 
 1. **summer, everything on** — every additive coupling on, including
    those off by default, and the default provider of every slot;
-2. **winter, everything on** — the same with the `:winter` initial
-   state;
+2. **winter, everything on** — the same with the values
+   `berlin_winter.toml` sets (its initial state);
 3. one run per **non-default provider** of every exclusive slot;
 4. one run per entry of every coupling's **`smoke_variants`**.
 
