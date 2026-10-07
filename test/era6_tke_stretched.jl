@@ -22,7 +22,7 @@ using Aeolus.PrognosticSGS: dual_strain!, TKEClosure, tke_budget, tke_statistics
 using Aeolus.Operators: buoyancy_frequency_squared!, add_eddy_diffusion_scalar!
 using Aeolus.Operators.FiniteVolume: _add_eddy_viscosity_u!, _add_eddy_viscosity_v!,
                                      _add_eddy_viscosity_w!
-using Aeolus.AdvectionSchemes: advect_positive!
+using Aeolus.AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using Random: Xoshiro
 
 @testset "Era VI — SGS TKE on a stretched grid (N-parent-e, #259)" begin
@@ -127,7 +127,8 @@ end
     sbcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noflux, top = :noflux)
     fill_halos!(ϕ, sbcs)
     dt = 1.0                                    # Σ|u|Δt/Δx ≤ 0.6 here
-    advect_positive!(t, u, v, w, ϕ, dt; scheme = :centered, bcs = sbcs)
+    advect_positive!(t, u, v, w, ϕ, dt; scheme = :centered, bcs = sbcs,
+                     workspace = FluxLimiterWorkspace(g))
     ϕ1 = interior_view(ϕ) .+ dt .* interior_view(t)
     @test minimum(ϕ1) >= -1e-14                 # measured -6.9e-18 (round-off of a zero cell)
     # conservative: Σ tend V = 0 with periodic sides and the walls' w = 0
@@ -135,7 +136,8 @@ end
     tot = sum(sum(view(interior_view(t), :, :, k)) * V[k] for k in 1:Nz)
     ref = sum(abs.(interior_view(t))[:, :, k] |> sum for k in 1:Nz) * maximum(V)
     @test abs(tot) < 1e-12 * ref                # measured 1.2e-18
-    @test_throws ArgumentError advect_positive!(t, u, v, w, ϕ, dt; scheme = :weno_z5, bcs = sbcs)
+    @test_throws ArgumentError advect_positive!(t, u, v, w, ϕ, dt; scheme = :weno_z5, bcs = sbcs,
+                                                workspace = FluxLimiterWorkspace(g))
 end
 
 @testset "local filter width and relative volumes" begin
