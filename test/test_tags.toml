@@ -27,6 +27,12 @@ weight = "heavy"
 seconds = 349
 reason = "two-way long runs (2 h CBL, neutral, 2000-step vortex); two-way nesting stays fast in era2_nest_twoway.jl"
 
+["era2_nest_hierarchy_longrun.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 200
+reason = "50-turnover forced neutral flow with two two-way nest levels and its two-level reference; nest hierarchies stay fast in era2_nest_hierarchy.jl"
+
 ["era6_inflow_fetch.jl"]
 tier = "full"
 weight = "heavy"
@@ -125,6 +131,10 @@ exclusive = true
 reason = "with AEOLUS_THREAD_TESTS=1 it starts julia -t 1/4/24 subprocesses; the -t 24 ones would compete with the parallel jobs for every core, so it runs alone"
 
 # --- fast, heavy (started first) ---------------------------------------------
+
+["era2_nest_hierarchy.jl"]
+weight = "heavy"
+seconds = 90
 
 ["era6_relaminarisation.jl"]
 weight = "heavy"

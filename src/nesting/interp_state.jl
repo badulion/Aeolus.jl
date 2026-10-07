@@ -50,7 +50,7 @@ function _sponge_ramp(sp::NestSponge, d::Int)
     return _sponge_prof(sp, (sp.width + 1 - d) / sp.width)
 end
 
-function _sponge_weight(sp::NestSponge, cm::RegularGrid, i::Int, j::Int, k::Int)
+function _sponge_weight(sp::NestSponge, cm::NestChildMesh, i::Int, j::Int, k::Int)
     n1 = i - cm.Hx; n2 = j - cm.Hy; n3 = k - cm.Hz
     w = 0.0
     sp.sides[1] && (w = max(w, _sponge_ramp(sp, n1)))
@@ -107,7 +107,7 @@ two window ends and the blend), `(N+2H)³ − N³` instead of `(N+2H)³`
 points per member; reading its interior is an error, so it cannot be a
 sponge target or take a `region = :all` prolongation.
 """
-struct NestInterpState{T, M<:RegularGrid{T}, A<:AbstractArray{T,3}, FC<:Field, FP<:Field}
+struct NestInterpState{T, M<:NestChildMesh{T}, A<:AbstractArray{T,3}, FC<:Field, FP<:Field}
     u::Field{FaceX,      T, A, M}
     v::Field{FaceY,      T, A, M}
     w::Field{FaceZ,      T, A, M}
@@ -122,7 +122,7 @@ end
 "Whether a state stores child-sized fields (`:full`) or halo slabs only (`:shell`)."
 nest_storage(s::NestInterpState) = s.θ.data isa _ShellArray ? :shell : :full
 
-function _state_field(loc::Location, cm::RegularGrid{T}, storage::Symbol) where {T}
+function _state_field(loc::Location, cm::NestChildMesh{T}, storage::Symbol) where {T}
     storage === :full && return Field(loc, cm)
     storage === :shell ||
         throw(ArgumentError("nest_interp_state: storage must be :full or :shell, got :$storage"))
@@ -209,6 +209,23 @@ _sim_measure(nest, p, c) = nothing          # a mixed pair: the volume measure
 _same_core(::BoussinesqSimulation, ::BoussinesqSimulation) = true
 _same_core(::MassWeightedSimulation, ::MassWeightedSimulation) = true
 _same_core(p, c) = false
+
+# A two-way nest needs a conservation box along every axis (#328): the
+# feedback, the registers and the composite integrals live on it.
+function _check_two_way_box(nest::NestedGrid, what::AbstractString)
+    for d in 1:3
+        a = nest.axes[d]
+        isempty(a.pbox) || continue
+        P = [a.pf[k] for k in a.Hp+1:a.Hp+a.Np+1 if a.cf[a.Hc+1] <= a.pf[k] <= a.cf[a.Hc+a.Nc+1]]
+        throw(ArgumentError("$what: two-way feedback needs a conservation box, but along " *
+                            "$(("x", "y", "z")[d]) fewer than two parent faces inside the child " *
+                            "are child faces (parent faces inside the child: $P; child faces " *
+                            "$(a.cf[a.Hc+1]) … $(a.cf[a.Hc+a.Nc+1]) every " *
+                            "$(a.cf[a.Hc+2] - a.cf[a.Hc+1])). Place the child so that at least " *
+                            "two parent faces are child faces, or nest it one-way."))
+    end
+    return nothing
+end
 
 # The guard of every child → parent transfer (#327, M1). A mixed pair (a
 # Boussinesq parent with a sound-proof child, or the reverse) has no

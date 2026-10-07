@@ -49,14 +49,21 @@ function _composite_sum(fp, fc, nest::NestedGrid, measure)
         end
     end
     ωz = _zweights(measure)
-    @inbounds for k in 1:cm.Nz
-        Vc = ωz === nothing ? cm.dx * cm.dy * cm.dz : cm.dx * cm.dy * ωz[cm.Hz+k]
-        for j in 1:cm.Ny, i in 1:cm.Nx
+    # the child cells of the conservation box (the whole child on an
+    # aligned nest; #328)
+    bx = nest.axes[1].cbox; by = nest.axes[2].cbox; bz = nest.axes[3].cbox
+    @inbounds for k in bz
+        Vc = ωz === nothing ? cm.dx * cm.dy * _cdz(cm, k) : cm.dx * cm.dy * ωz[cm.Hz+k]
+        for j in by, i in bx
             total += fc(cm.Hx+i, cm.Hy+j, cm.Hz+k) * Vc
         end
     end
     return total
 end
+
+# Child layer thickness at interior level k (uniform, or a stretched child).
+_cdz(cm::RegularGrid, k) = cm.dz
+_cdz(cm::StretchedGrid, k) = cell_thickness(cm)[cm.Hz + k]
 
 """
     composite_integral(parent_sim, child_sim, nest, quantity; state=nothing) -> Float64

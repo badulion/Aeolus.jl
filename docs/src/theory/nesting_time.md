@@ -289,8 +289,11 @@ These are owned by other issues of the nesting epic (#246).
   `periodic` keyword of the cell-centred `apply_flux_correction!` and of
   `reflux!` is required: its triply periodic default was wrong for every
   parent with a wall or an open face.
-* **Open (#328):** one parent–child pair per run; nest hierarchies,
-  sibling nests, non-aligned parents and stretched children.
+* **Resolved by #328: hierarchies, siblings, non-aligned and stretched
+  children.** A [`NestHierarchy`](@ref) advances a tree of domains by
+  recursive subcycling, every link a `NestedRun`; children may have a
+  rational ratio, edges off the parent faces or a stretched z. See
+  [nest hierarchies, non-aligned and stretched children](nesting_hierarchy.md).
 
 ## References
 

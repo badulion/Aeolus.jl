@@ -330,6 +330,12 @@ the benchmark applies "last hour within 20 % of the hour before" to hours
   reference profile). A mixed pair has no consistent measure and is
   refused by every two-way entry point (`NestedRun`, `anterpolate!`,
   `restrict_state_to_parent!`); it nests one-way.
+* Two-way feedback needs a conservation box on every axis (#328): at
+  least two parent faces inside the child must be child faces; a child
+  without one nests one-way. In a [`NestHierarchy`](@ref) the children of
+  a domain feed back after each of its steps (post order, the domain
+  re-projected once after all of them); see
+  [nest hierarchies, non-aligned and stretched children](nesting_hierarchy.md).
 * With a buffer zone the re-projection is not idempotent: the anterpolated
   faces next to the buffer leave the parent divergent, and the projection
   moves them (and the interface faces: the ledger's
