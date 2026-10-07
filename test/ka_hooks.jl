@@ -158,6 +158,7 @@ end
         interior_view(f) .= randn(rng, size(interior_view(f)))
     end
     st = hk_state(sim)
+    for (mname, sm) in (("BitArray mask", sm), ("Array{Bool} mask", SolidMask(sm.mesh, Array{Bool}(sm.mask))))
     cases = (("implicit τ = 0", s -> implicit_ibm_correction!(s, sm), s -> LegacyHooks.implicit_ibm_correction!(s, sm)),
              ("implicit τ > 0", s -> implicit_ibm_correction!(s, sm; τ = 3.0, dt = 0.7),
                                 s -> LegacyHooks.implicit_ibm_correction!(s, sm; τ = 3.0, dt = 0.7)),
@@ -169,9 +170,10 @@ end
             hk_restore!(sim, st)
             with_backend(() -> new!(sim), b)
             ok = all(hk_bits(x) == hk_bits(y) for (x, y) in zip(hk_state(sim), ref))
-            ok || @info "KA-k bit mismatch (IBM)" cname bname
+            ok || @info "KA-k bit mismatch (IBM)" mname cname bname
             @test ok
         end
+    end
     end
 end
 

@@ -40,16 +40,22 @@ function moist_buoyancy_perturbation!(Δ::AbstractArray{<:Real,3}, θ::AbstractA
     S, n = zeros(Nz), zeros(Nz)
     plane_reduce!((S, n), Aeolus.Backends.backend(Δ), _moist_Δ_at, (1:Nx, 1:Ny, 1:Nz),
                   Δ, θ, qv, qc, fluid)
-    @inbounds for k in 1:Nz
-        S[k] = n[k] > 0 ? S[k] / n[k] : 0.0          # the level mean
-    end
-    # the deviation: pointwise (KA-k, #307)
-    Aeolus.Backends.launch!(Aeolus.Backends.backend(Δ), _moist_Δ_dev!, (1:Nx, 1:Ny, 1:Nz), Δ, S, fluid)
+    # the deviation, one work item per level (KA-k, #307): the level's mean
+    # is a local, so the masked update vectorises as the former loop did (a
+    # pointwise body reloaded the mean at every point: 3.8x)
+    Aeolus.Backends.launch_weighted!(Aeolus.Backends.backend(Δ), Nx * Ny, _moist_Δ_dev!, (1:Nz,),
+                                     Δ, S, n, fluid)
     return Δ
 end
 
-@inline function _moist_Δ_dev!(i, j, k, Δ, mean, fluid)
-    @inbounds fluid[i, j, k] && (Δ[i, j, k] -= mean[k])
+@inline function _moist_Δ_dev!(k, Δ, S, n, fluid)
+    Nx, Ny = size(Δ, 1), size(Δ, 2)
+    @inbounds begin
+        m = n[k] > 0 ? S[k] / n[k] : 0.0
+        for j in 1:Ny, i in 1:Nx
+            fluid[i, j, k] && (Δ[i, j, k] -= m)
+        end
+    end
     return nothing
 end
 

@@ -36,7 +36,17 @@ spacings `Δ`, the sizes `dims` of the `u`, `v`, `w` data arrays, and the
 **face index** (KA-k, #307): `face_ptr` and `face_entry` group the pairs
 by velocity face (compressed sparse rows: the pairs of face `p` are
 `face_entry[face_ptr[p]:face_ptr[p+1]-1]`, the faces in the order of
-their first pair, the pairs of a face in their order in `faces`). A face
+their first pair, the pairs of a face in their order in `faces`), with
+the component of every pair and face (`pair_c`, `face_c`) and the wall
+area of every pair (`pair_dA` = ``ΔV/Δ_d``) as compact vectors for the
+ordered folds of the diagnostics, and the faces split into those with
+one pair (`single_face`, with that pair in `single_pair`) and those with
+several (`multi_face`), which the face update launches separately (a
+flat loop over the single-pair faces, the majority); `ordered` is true
+when the face index lists the pairs in their own order (as
+[`immersed_walls`](@ref) builds them), and `pair_seg`/`face_seg` are the
+index ranges of the u, v, w pairs/faces when they are sorted by
+component. A face
 between two walls (a corner, a gap one cell wide) has two pairs; the
 operators sum them per face (owner computes), so no two work items
 write the same face. `a`, `τdA`, `flux` (per pair) and `Af`, `dq` (per
@@ -61,6 +71,15 @@ struct ImmersedWalls{L<:AbstractWallLaw, T<:AbstractFloat}
     dims::NTuple{3,NTuple{3,Int}}
     face_ptr::Vector{Int32}
     face_entry::Vector{Int32}
+    pair_c::Vector{Int8}
+    pair_dA::Vector{T}
+    face_c::Vector{Int8}
+    single_face::Vector{Int32}
+    single_pair::Vector{Int32}
+    multi_face::Vector{Int32}
+    pair_seg::Union{Nothing,NTuple{3,UnitRange{Int}}}
+    face_seg::Union{Nothing,NTuple{3,UnitRange{Int}}}
+    ordered::Bool
     a::Vector{T}
     τdA::Vector{T}
     flux::Vector{T}
@@ -73,11 +92,59 @@ function ImmersedWalls(faces::Vector{ImmersedWallFace{L}}, ν::T, Δ::NTuple{3,T
                        dims::NTuple{3,NTuple{3,Int}}) where {L, T<:AbstractFloat}
     ptr, ent = _face_index(faces)
     n, nf = length(faces), length(ptr) - 1
+    dV = Δ[1] * Δ[2] * Δ[3]
+    pair_c = Int8[f.c for f in faces]
+    pair_dA = T[dV / Δ[f.d] for f in faces]
+    face_c = Int8[faces[ent[ptr[p]]].c for p in 1:nf]
+    single = [p for p in 1:nf if ptr[p+1] - ptr[p] == 1]
+    multi = Int32[p for p in 1:nf if ptr[p+1] - ptr[p] > 1]
     stats = Dict{Symbol,Any}(:F => (zero(T), zero(T), zero(T)), :τA => zero(T),
                              :area => zero(T), :τ_min => zero(T),
                              :F_stencil => (zero(T), zero(T), zero(T)))
-    return ImmersedWalls{L,T}(faces, ν, Δ, dims, ptr, ent, zeros(T, n), zeros(T, n), zeros(T, n),
+    return ImmersedWalls{L,T}(faces, ν, Δ, dims, ptr, ent, pair_c, pair_dA, face_c,
+                              Int32.(single), Int32[ent[ptr[p]] for p in single], multi,
+                              _segments(pair_c), _segments(face_c), _identity_entries(ent),
+                              zeros(T, n), zeros(T, n), zeros(T, n),
                               zeros(T, nf), zeros(T, nf), stats)
+end
+
+# The index ranges of components 1, 2, 3 when `c` is sorted (the order
+# immersed_walls builds), else nothing.
+function _segments(c::Vector{Int8})
+    issorted(c) || return nothing
+    return ntuple(k -> searchsortedfirst(c, k):searchsortedlast(c, k), 3)
+end
+
+# Σ x[n] per component c[n], each a strict left fold in index order (the
+# order of the former loops). With the component segments known the three
+# folds are interleaved (three independent chains of additions; the same
+# bits), else one loop picks the accumulator per element.
+@inline function _fold3(x::AbstractVector{T}, c, seg, skip = nothing) where {T}
+    F1 = F2 = F3 = zero(T)
+    if seg === nothing
+        @inbounds for n in eachindex(x)
+            skip === nothing || skip[n] == 0 && continue
+            cn = c[n]; xn = x[n]
+            cn == 1 ? (F1 += xn) : cn == 2 ? (F2 += xn) : (F3 += xn)
+        end
+    else
+        r1, r2, r3 = seg
+        @inbounds for m in 0:max(length(r1), length(r2), length(r3))-1
+            if m < length(r1)
+                n = first(r1) + m
+                (skip === nothing || skip[n] != 0) && (F1 += x[n])
+            end
+            if m < length(r2)
+                n = first(r2) + m
+                (skip === nothing || skip[n] != 0) && (F2 += x[n])
+            end
+            if m < length(r3)
+                n = first(r3) + m
+                (skip === nothing || skip[n] != 0) && (F3 += x[n])
+            end
+        end
+    end
+    return (F1, F2, F3)
 end
 
 # The pairs grouped by velocity face (c, I, J, K), built once: the faces in
@@ -338,22 +405,20 @@ function apply_immersed_wall_stress!(sim, iw::ImmersedWalls{L,T}, Δt::Real) whe
     a = immersed_wall_drag!(iw.a, iw, u, v, w)
     # 2. per face (owner computes): the sum of its pairs' drag, the implicit
     #    update, and τ_w ΔA of each of its walls at the end-of-step velocity
-    launch!(backend(u), _iw_face_body!, (1:length(ptr)-1,),
-            u, v, w, faces, ptr, ent, a, iw.Af, iw.dq, iw.τdA, dt, Δ, dV)
+    b = backend(u)
+    sf, sp, mf = iw.single_face, iw.single_pair, iw.multi_face
+    launch!(b, _iw_face1_body!, (1:length(sf),), sf, sp, u, v, w, faces, a, iw.Af, iw.dq, iw.τdA, dt, Δ, dV)
+    launch!(b, _iw_faceN_body!, (1:length(mf),), mf, u, v, w, faces, ptr, ent, a, iw.Af, iw.dq, iw.τdA,
+            dt, Δ, dV)
     # 3. the diagnostics, folded in a fixed order: the force over the faces
     #    (in the order of their first pair), τ_w ΔA, the area and the
     #    smallest drag over the pairs (in their order) — the order of the
     #    former loops over `faces`, so the same bits
-    F1 = F2 = F3 = zero(T)
-    @inbounds for p in 1:length(ptr)-1
-        iw.Af[p] == 0 && continue
-        c = faces[ent[ptr[p]]].c
-        d = iw.dq[p]
-        c == 1 ? (F1 += d) : c == 2 ? (F2 += d) : (F3 += d)
-    end
+    F1, F2, F3 = _fold3(iw.dq, iw.face_c, iw.face_seg, iw.Af)    # (a face with Σ a = 0 is skipped)
     τA = zero(T); area = zero(T); τmin = T(Inf)
-    @inbounds for n in eachindex(faces)
-        τA += iw.τdA[n]; area += dV / Δ[faces[n].d]
+    τdA, dA = iw.τdA, iw.pair_dA
+    @inbounds for n in eachindex(τdA)
+        τA += τdA[n]; area += dA[n]
         τmin = min(τmin, a[n])
     end
     Fo = (F1 * dV / dt, F2 * dV / dt, F3 * dV / dt)
@@ -369,16 +434,12 @@ end
 # then untouched), τdA[n] = τ_w ΔA of each of its pairs. Writes only face
 # p's velocity and its own entries; reads only face p's velocity, so the
 # faces are independent (the drag of every pair was computed before).
-@inline function _iw_face_body!(p, u, v, w, faces, ptr, ent, a, Af, dq, τdA, dt, Δ, dV)
+# `_iw_face1_body!` is a face with one pair (the m-th of `single_face`),
+# `_iw_faceN_body!` one with several (the m-th of `multi_face`).
+@inline function _iw_face_update!(p, f, A, u, v, w, Af, dq, dt)
     @inbounds begin
-        e1, e2 = ptr[p], ptr[p+1] - 1
-        f = faces[ent[e1]]
         c, I, J, K = Int(f.c), Int(f.I), Int(f.J), Int(f.K)
         q = c == 1 ? u : c == 2 ? v : w
-        A = zero(eltype(a))
-        for e in e1:e2
-            A += a[ent[e]]
-        end
         Af[p] = A
         if A == 0
             dq[p] = zero(A)
@@ -388,7 +449,31 @@ end
             q[I, J, K] = q1
             dq[p] = q1 - q0
         end
-        qe = abs(q[I, J, K])
+        return abs(q[I, J, K])
+    end
+end
+
+@inline function _iw_face1_body!(m, sf, sp, u, v, w, faces, a, Af, dq, τdA, dt, Δ, dV)
+    @inbounds begin
+        p, n = Int(sf[m]), Int(sp[m])
+        f = faces[n]
+        an = a[n]
+        qe = _iw_face_update!(p, f, zero(an) + an, u, v, w, Af, dq, dt)
+        Δd = Δ[f.d]
+        τdA[n] = (an * Δd * qe) * (dV / Δd)
+    end
+    return nothing
+end
+
+@inline function _iw_faceN_body!(m, mf, u, v, w, faces, ptr, ent, a, Af, dq, τdA, dt, Δ, dV)
+    @inbounds begin
+        p = Int(mf[m])
+        e1, e2 = ptr[p], ptr[p+1] - 1
+        A = zero(eltype(a))
+        for e in e1:e2
+            A += a[ent[e]]
+        end
+        qe = _iw_face_update!(p, faces[ent[e1]], A, u, v, w, Af, dq, dt)
         for e in e1:e2
             n = ent[e]
             Δd = Δ[faces[n].d]
@@ -448,26 +533,23 @@ function remove_stencil_wall_flux!(sim, iw::ImmersedWalls{L,T};
     faces, ptr, ent = iw.faces, iw.face_ptr, iw.face_entry
     # per face (owner computes): each pair's flux, taken out of the face's
     # tendency in the order of its pairs
-    launch!(backend(u), _iw_flux_body!, (1:length(ptr)-1,),
-            tu, tv, tw, u, v, w, nt, faces, ptr, ent, iw.flux, νT, sgs, Δ)
+    nf = length(ptr) - 1
+    # (`nothing`: the pairs are already in face order, as immersed_walls builds them)
+    entx = iw.ordered ? nothing : ent
+    launch_weighted!(backend(u), _IW_BLOCK, _iw_flux_block!, (1:cld(nf, _IW_BLOCK),),
+                     nf, tu, tv, tw, u, v, w, nt, faces, ptr, entx, iw.flux, νT, sgs, Δ)
     # the force, folded over the pairs in their order (the former loop's)
-    F1 = F2 = F3 = zero(T)
-    @inbounds for n in eachindex(faces)
-        c = faces[n].c; x = iw.flux[n]
-        c == 1 ? (F1 += x) : c == 2 ? (F2 += x) : (F3 += x)
-    end
+    F1, F2, F3 = _fold3(iw.flux, iw.pair_c, iw.pair_seg)
     Fo = (F1 * dV, F2 * dV, F3 * dV)
     iw.stats[:F_stencil] = Fo
     return Fo
 end
 
-# Face p: flux[n] = (ν + ν_t,e)(q_N − q_F)/Δ_d² of each of its pairs n,
-# subtracted from the face's tendency pair by pair. Writes only face p's
-# tendency and its own entries.
-@inline function _iw_flux_body!(p, tu, tv, tw, u, v, w, nt, faces, ptr, ent, flux::AbstractVector{T},
+# Pair n: flux[n] = (ν + ν_t,e)(q_N − q_F)/Δ_d², subtracted from its face's
+# tendency; the pairs of a face are taken in pair order by one work item.
+@inline function _iw_pair_flux!(n, tu, tv, tw, u, v, w, nt, faces, flux::AbstractVector{T},
                                 νT, sgs, Δ) where {T}
-    @inbounds for e in ptr[p]:ptr[p+1]-1
-        n = ent[e]
+    @inbounds begin
         f = faces[n]
         c, d, s = Int(f.c), Int(f.d), Int(f.s)
         I, J, K = Int(f.I), Int(f.J), Int(f.K)
@@ -486,3 +568,25 @@ end
     end
     return nothing
 end
+
+# One work item = a block of `_IW_BLOCK` consecutive faces: their pairs in
+# face-index order, one flat loop (a face's pairs are consecutive there, so
+# a face is never split between work items, and the block size does not
+# depend on the thread count). The flat loop runs as fast as the former loop
+# over the pairs; a loop per face did not (1.35x at 1 thread, ka_port.md).
+const _IW_BLOCK = 64
+
+@inline function _iw_flux_block!(b, nf, tu, tv, tw, u, v, w, nt, faces, ptr, ent, flux, νT, sgs, Δ)
+    @inbounds begin
+        e1 = Int(ptr[(b-1)*_IW_BLOCK+1])
+        e2 = Int(ptr[min(b * _IW_BLOCK, nf)+1]) - 1
+        for e in e1:e2
+            n = ent === nothing ? e : Int(ent[e])
+            _iw_pair_flux!(n, tu, tv, tw, u, v, w, nt, faces, flux, νT, sgs, Δ)
+        end
+    end
+    return nothing
+end
+
+# whether the face index lists the pairs in their own order (1, 2, …, n)
+_identity_entries(ent) = (@inbounds for e in eachindex(ent); ent[e] == e || return false; end; true)

@@ -13,7 +13,7 @@ module IBM
 
 using ..Grids: RegularGrid, interior
 using ..Fields: Field, interior_view
-using ..Backends: launch!, backend     # KA-k (#307): the direct forcing is a launch over the faces
+using ..Backends: launch_weighted!, backend     # KA-k (#307): the direct forcing is a launch over the faces
 using ..Simulations: BoussinesqSimulation
 using ..BoundaryConditions: FieldBoundaryConditions, neighbor_index
 
@@ -110,35 +110,73 @@ end
 # The face loops of the direct forcing (KA-k, #307). A face "in solid" is
 # one with a solid cell on either side; the former loop over the cells
 # visited it once per solid cell (lower cell first) and applied `op!` each
-# time. Here every face is one point of a launch that applies `op!` once
-# per solid neighbour, lower first: the same operations in the same order,
-# so the same bits, and no two work items write the same face.
+# time. Here every face belongs to one point of a launch, which applies
+# `op!` once per solid neighbour, lower first: the same operations in the
+# same order, so the same bits, and no two work items write the same face.
 # `op!(out, src, I, J, K, x)`; `out` and `src` are the (u, v, w) data arrays
 # written and read.
 @inline _penalty_op(out, src, I, J, K, invτ) = (@inbounds out[I, J, K] -= invτ * src[I, J, K]; nothing)
 @inline _scale_op(out, src, I, J, K, factor) = (@inbounds out[I, J, K] *= factor; nothing)
 
-@inline function _ibm_face_body!(i, j, k, op!::F, out, src, mk, x, d, lo, hi) where {F}
+# One launch over the rows (j, k) of cells, plus the rows above the last
+# ones: row (j, k) owns the u faces i1:i2+1 of the row and the v and w faces
+# of its cells' lower sides (at j and at k). A row whose cells and lower
+# neighbour rows have no solid cell — most rows — is skipped after three
+# word-wise scans of the (bit) mask; the others are walked face by face.
+# Point by point, four reads of a BitArray mask per point measured 3.6x
+# the former loop over the cells (one read per cell).
+@inline function _ibm_row_body!(j, k, op!::F, ou, ov, ow, su, sv, sw, mk, x,
+                                i1, i2, j1, j2, k1, k2) where {F}
     @inbounds begin
-        ix = i - (d == 1); jx = j - (d == 2); kx = k - (d == 3)     # the lower cell
-        n = d == 1 ? i : d == 2 ? j : k
-        n - 1 >= lo && mk[ix, jx, kx] && op!(out, src, i, j, k, x)
-        n <= hi && mk[i, j, k] && op!(out, src, i, j, k, x)
+        a0 = j <= j2 && k <= k2 && _row_any(mk, i1, i2, j, k)          # cells (·, j, k)
+        ay = j - 1 >= j1 && k <= k2 && _row_any(mk, i1, i2, j - 1, k)  # cells (·, j-1, k)
+        az = k - 1 >= k1 && j <= j2 && _row_any(mk, i1, i2, j, k - 1)  # cells (·, j, k-1)
+        (a0 | ay | az) || return nothing
+        for i in i1:i2+1
+            if a0                                       # u face (i, j, k): cells i-1, i
+                i - 1 >= i1 && mk[i-1, j, k] && op!(ou, su, i, j, k, x)
+                i <= i2 && mk[i, j, k] && op!(ou, su, i, j, k, x)
+            end
+            i <= i2 || continue
+            if k <= k2                                  # v face (i, j, k): cells j-1, j
+                ay && mk[i, j-1, k] && op!(ov, sv, i, j, k, x)
+                a0 && mk[i, j, k] && op!(ov, sv, i, j, k, x)
+            end
+            if j <= j2                                  # w face (i, j, k): cells k-1, k
+                az && mk[i, j, k-1] && op!(ow, sw, i, j, k, x)
+                a0 && mk[i, j, k] && op!(ow, sw, i, j, k, x)
+            end
+        end
     end
     return nothing
 end
 
+# whether any of mk[i1:i2, j, k] is true; a BitArray is scanned 64 cells per word
+_row_any(mk::AbstractArray{Bool,3}, i1, i2, j, k) = (@inbounds for i in i1:i2; mk[i, j, k] && return true; end; false)
+@inline function _row_any(mk::BitArray{3}, i1, i2, j, k)
+    n1, n2 = size(mk, 1), size(mk, 2)
+    l1 = i1 + (j - 1) * n1 + (k - 1) * n1 * n2            # linear indices of the row
+    l2 = l1 + (i2 - i1)
+    c = mk.chunks
+    w1, w2 = ((l1 - 1) >> 6) + 1, ((l2 - 1) >> 6) + 1
+    lo = ~UInt64(0) << ((l1 - 1) & 63)                     # bits from l1 on, in word w1
+    hi = ~UInt64(0) >> (63 - ((l2 - 1) & 63))              # bits up to l2, in word w2
+    @inbounds begin
+        w1 == w2 && return (c[w1] & lo & hi) != 0
+        (c[w1] & lo) != 0 && return true
+        for w in w1+1:w2-1
+            c[w] != 0 && return true
+        end
+        return (c[w2] & hi) != 0
+    end
+end
+
 function _ibm_faces!(op!::F, sm::SolidMask, out::NTuple{3}, src::NTuple{3}, x) where {F}
     ii, jj, kk = interior(sm.mesh)
-    ii, jj, kk = UnitRange{Int}(ii), UnitRange{Int}(jj), UnitRange{Int}(kk)
-    mk = sm.mask
-    b = backend(src[1])
-    launch!(b, _ibm_face_body!, (first(ii):last(ii)+1, jj, kk), op!, out[1], src[1], mk, x, 1,
-            first(ii), last(ii))
-    launch!(b, _ibm_face_body!, (ii, first(jj):last(jj)+1, kk), op!, out[2], src[2], mk, x, 2,
-            first(jj), last(jj))
-    launch!(b, _ibm_face_body!, (ii, jj, first(kk):last(kk)+1), op!, out[3], src[3], mk, x, 3,
-            first(kk), last(kk))
+    i1, i2, j1, j2, k1, k2 = first(ii), last(ii), first(jj), last(jj), first(kk), last(kk)
+    # a row covers its i2 - i1 + 2 faces of each component
+    launch_weighted!(backend(src[1]), i2 - i1 + 2, _ibm_row_body!, (j1:j2+1, k1:k2+1), op!,
+                     out..., src..., sm.mask, x, i1, i2, j1, j2, k1, k2)
     return nothing
 end
 
@@ -157,9 +195,9 @@ the face velocity (`u* ← 0`). Best combined with `step!(sim, dt;
 post_predictor! = (s, Δt) -> implicit_ibm_correction!(s, sm; dt = Δt))`.
 
 A face between two solid cells is scaled once per solid cell (the factor
-squared; it lies inside the solid). The faces are the points of three
-launches (KA-k, #307), one per component: the same bits at every thread
-count and as the former loop over the cells.
+squared; it lies inside the solid). The faces are written by one launch
+(KA-k, #307), each by one work item: the same bits at every thread count
+and as the former loop over the cells.
 """
 function implicit_ibm_correction!(sim, sm::SolidMask; τ::Real = 0.0, dt::Real = 0.0)
     factor = τ > 0 ? 1 / (1 + dt / τ) : 0.0
