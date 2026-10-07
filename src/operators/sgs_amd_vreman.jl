@@ -144,23 +144,34 @@ end
 _βg(b::Real, k) = b
 _βg(b, k) = b(k)
 
+# g/θ̄(z_k) of the interior level k: the buoyancy parameter of a sound-proof
+# core (a callable struct rather than a closure, so a kernel takes it as a
+# plain argument; KA-l).
+struct _LevelBuoyancy{G, V}
+    g::G
+    θ̄::V
+end
+@inline (b::_LevelBuoyancy)(k) = @inbounds b.g / b.θ̄[k]
+
+# KA-l (#304): the AMD, AMD-scalar and Vreman kernels are point bodies run by
+# `launch!` over the interior; each evaluates the expressions of the loop it
+# replaces, so ν_t, κ_t are bit-identical to the pre-port loops.
 function _amd_kernel!(nd, kd, ud, vd, wd, θd, g, C, Pr, buoy)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
     d2 = (g.dx^2, g.dy^2, g.dz^2)
-    @inbounds for kk in 1:g.Nz
-        βg = float(_βg(buoy, kk))
-        k = Hz + kk
-        for jj in 1:g.Ny, ii in 1:g.Nx
-            i = Hx + ii; j = Hy + jj
-            G = _velocity_gradient_at(ud, vd, wd, i, j, k, idx, idy, idz)
-            gθ = _scalar_gradient_at(θd, i, j, k, idx, idy, idz)
-            νn, νd_, κn, κd_ = _amd_point(G, gθ, d2, βg)
-            ν = νd_ > 0 ? C * max(zero(νn), νn) / νd_ : zero(νn)
-            nd[i,j,k] = ν
-            kd[i,j,k] = κd_ > 0 ? C * max(zero(κn), κn) / κd_ : ν / Pr
-        end
-    end
+    launch!(Backends.backend(nd), _amd_body!, interior(g), nd, kd, ud, vd, wd, θd,
+            g.Hz, idx, idy, idz, d2, C, Pr, buoy)
+    return nothing
+end
+
+@inline function _amd_body!(i, j, k, nd, kd, ud, vd, wd, θd, Hz, idx, idy, idz, d2, C, Pr, buoy)
+    βg = float(_βg(buoy, k - Hz))              # of the interior level
+    G = _velocity_gradient_at(ud, vd, wd, i, j, k, idx, idy, idz)
+    gθ = _scalar_gradient_at(θd, i, j, k, idx, idy, idz)
+    νn, νd_, κn, κd_ = _amd_point(G, gθ, d2, βg)
+    ν = νd_ > 0 ? C * max(zero(νn), νn) / νd_ : zero(νn)
+    @inbounds nd[i,j,k] = ν
+    @inbounds kd[i,j,k] = κd_ > 0 ? C * max(zero(κn), κn) / κd_ : ν / Pr
     return nothing
 end
 
@@ -190,16 +201,18 @@ function compute_amd_scalar_diffusivity!(κt::Field, νt::Field, u::Field, v::Fi
 end
 
 function _amd_scalar_kernel!(kd, nd, ud, vd, wd, ϕd, g, C, Pr)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
     d2 = (g.dx^2, g.dy^2, g.dz^2)
-    @inbounds for kk in 1:g.Nz, jj in 1:g.Ny, ii in 1:g.Nx
-        i = Hx + ii; j = Hy + jj; k = Hz + kk
-        G = _velocity_gradient_at(ud, vd, wd, i, j, k, idx, idy, idz)
-        gϕ = _scalar_gradient_at(ϕd, i, j, k, idx, idy, idz)
-        κn, κd_ = _amd_scalar_point(G, gϕ, d2)
-        kd[i,j,k] = κd_ > 0 ? C * max(zero(κn), κn) / κd_ : nd[i,j,k] / Pr
-    end
+    launch!(Backends.backend(kd), _amd_scalar_body!, interior(g), kd, nd, ud, vd, wd, ϕd,
+            idx, idy, idz, d2, C, Pr)
+    return nothing
+end
+
+@inline function _amd_scalar_body!(i, j, k, kd, nd, ud, vd, wd, ϕd, idx, idy, idz, d2, C, Pr)
+    G = _velocity_gradient_at(ud, vd, wd, i, j, k, idx, idy, idz)
+    gϕ = _scalar_gradient_at(ϕd, i, j, k, idx, idy, idz)
+    κn, κd_ = _amd_scalar_point(G, gϕ, d2)
+    @inbounds kd[i,j,k] = κd_ > 0 ? C * max(zero(κn), κn) / κd_ : nd[i,j,k] / Pr
     return nothing
 end
 
@@ -234,15 +247,16 @@ function compute_vreman_νt!(νt::Field, u::Field, v::Field, w::Field, C_s::Real
 end
 
 function _vreman_kernel!(nd, ud, vd, wd, g, c)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
     d2 = (g.dx^2, g.dy^2, g.dz^2)
-    @inbounds for kk in 1:g.Nz, jj in 1:g.Ny, ii in 1:g.Nx
-        i = Hx + ii; j = Hy + jj; k = Hz + kk
-        G = _velocity_gradient_at(ud, vd, wd, i, j, k, idx, idy, idz)
-        Bβ, aa = _vreman_point(G, d2)
-        nd[i,j,k] = aa > 0 ? c * sqrt(Bβ / aa) : zero(Bβ)
-    end
+    launch!(Backends.backend(nd), _vreman_body!, interior(g), nd, ud, vd, wd, idx, idy, idz, d2, c)
+    return nothing
+end
+
+@inline function _vreman_body!(i, j, k, nd, ud, vd, wd, idx, idy, idz, d2, c)
+    G = _velocity_gradient_at(ud, vd, wd, i, j, k, idx, idy, idz)
+    Bβ, aa = _vreman_point(G, d2)
+    @inbounds nd[i,j,k] = aa > 0 ? c * sqrt(Bβ / aa) : zero(Bβ)
     return nothing
 end
 
@@ -281,14 +295,14 @@ AMDClosure(; C::Real = 0.3, Pr_t = nothing, buoyancy::Bool = true) = AMDClosure(
 """
     sgs_buoyancy_parameter(sim) -> βg
 
-`g/θ₀` of a simulation's buoyancy (a number, or a function `k -> g/θ̄(z_k)`
-of the interior level on the sound-proof cores); `0` when buoyancy is off.
+`g/θ₀` of a simulation's buoyancy (a number, or a callable `k -> g/θ̄(z_k)`
+of the interior level on the sound-proof cores, a `_LevelBuoyancy` that a
+kernel takes as a plain argument); `0` when buoyancy is off.
 """
 function sgs_buoyancy_parameter(sim)
     if hasproperty(sim, :ref)                       # anelastic / pseudo-incompressible
         sim.has_buoyancy || return 0.0
-        θ̄ = sim.ref.θ̄; gg = sim.g_accel
-        return k -> gg / θ̄[k]
+        return _LevelBuoyancy(sim.g_accel, sim.ref.θ̄)
     elseif hasproperty(sim, :θ₀)                    # Boussinesq
         return sim.θ₀ == 0 ? 0.0 : sim.g_accel / sim.θ₀
     end

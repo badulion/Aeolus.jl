@@ -124,11 +124,33 @@ driver's [`preprocess_dynamic`](@ref) (CFG-g, #362): from the sounding or case t
 names (`--from-sounding`), or by running the config's nest parent with the child's boundary slabs
 recorded at every parent step (`--from-parent`; `--child` names the child config when it is not
 the same file); prints the files written.
+
+`aeolus preprocess dynamic --from-era5 <files…> --config <config.toml> [--box deg] [--out file.nc]
+[--set key=value]...` (CFG-h, #363): the dynamic driver of the run from ERA5 files (GRIB2 or
+NetCDF; the config's `[preprocess.era5]` table gives the site, levels and outputs, `--box` the
+half-width in degrees of the centred differences).
 """
 function _preprocess_dynamic(args)
-    pos, sets, opts, fl = _parse_args(args, ("set", "out", "child"), ("from-sounding", "from-parent"))
-    length(fl) == 1 || throw(UsageError("give one of --from-sounding, --from-parent"))
-    from = "from-sounding" in fl ? :sounding : :parent
+    pos, sets, opts, fl = _parse_args(args, ("set", "out", "child", "config", "box"),
+                                      ("from-sounding", "from-parent", "from-era5"))
+    length(fl) == 1 || throw(UsageError("give one of --from-sounding, --from-parent, --from-era5"))
+    from = "from-sounding" in fl ? :sounding : "from-parent" in fl ? :parent : :era5
+    if from === :era5
+        isempty(pos) && throw(UsageError("--from-era5: give the ERA5 files"))
+        haskey(opts, "config") || throw(UsageError("--from-era5: give the run config with --config"))
+        haskey(opts, "child") && throw(UsageError("--from-era5 takes no --child"))
+        box = haskey(opts, "box") ? tryparse(Float64, opts["box"]) : nothing
+        haskey(opts, "box") && box === nothing && throw(UsageError("--box: expected a number, got $(opts["box"])"))
+        cfg = load_run_config(opts["config"]; overrides = sets)
+        d = run_driver(cfg.run.driver)
+        Base.invokelatest(hasmethod, preprocess_dynamic, Tuple{typeof(d),typeof(cfg)}, (:files,)) ||
+            throw(ArgumentError("the driver \"$(cfg.run.driver)\" has no ERA5 preprocessor"))
+        files = Base.invokelatest(preprocess_dynamic, d, cfg; from = from, out = get(opts, "out", nothing),
+                                  files = abspath.(pos), box = box)
+        foreach(f -> println("wrote ", f), files)
+        return 0
+    end
+    (haskey(opts, "config") || haskey(opts, "box")) && throw(UsageError("--config and --box go with --from-era5"))
     path = _one_positional(pos, "config file")
     cfg = load_run_config(path; overrides = sets)
     d = run_driver(cfg.run.driver)
@@ -142,7 +164,9 @@ function _preprocess_dynamic(args)
 end
 register_preprocessor!("dynamic", _preprocess_dynamic,
                        "dynamic (--from-sounding | --from-parent) <config.toml> [--child <config.toml>] " *
-                       "[--out file.nc] [--set key=value]...  write the run's dynamic input driver")
+                       "[--out file.nc] [--set key=value]...  write the run's dynamic input driver;\n" *
+                       "    dynamic --from-era5 <files...> --config <config.toml> [--box deg] [--out file.nc] " *
+                       "[--set key=value]...  the same from ERA5 (GRIB2 or NetCDF)")
 
 register_preprocessor!("static", _preprocess_static,
                        "static <config.toml> [--out file.nc] [--parent-out file.nc] [--set key=value]...  " *
