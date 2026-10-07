@@ -41,12 +41,16 @@ function moist_buoyancy_perturbation!(Δ::AbstractArray{<:Real,3}, θ::AbstractA
     plane_reduce!((S, n), Aeolus.Backends.backend(Δ), _moist_Δ_at, (1:Nx, 1:Ny, 1:Nz),
                   Δ, θ, qv, qc, fluid)
     @inbounds for k in 1:Nz
-        m = n[k] > 0 ? S[k] / n[k] : 0.0
-        for j in 1:Ny, i in 1:Nx
-            fluid[i, j, k] && (Δ[i, j, k] -= m)
-        end
+        S[k] = n[k] > 0 ? S[k] / n[k] : 0.0          # the level mean
     end
+    # the deviation: pointwise (KA-k, #307)
+    Aeolus.Backends.launch!(Aeolus.Backends.backend(Δ), _moist_Δ_dev!, (1:Nx, 1:Ny, 1:Nz), Δ, S, fluid)
     return Δ
+end
+
+@inline function _moist_Δ_dev!(i, j, k, Δ, mean, fluid)
+    @inbounds fluid[i, j, k] && (Δ[i, j, k] -= mean[k])
+    return nothing
 end
 
 @inline function _moist_Δ_at(i, j, k, Δ, θ, qv, qc, fluid)
@@ -82,10 +86,18 @@ function add_moist_buoyancy!(tw, Δ::AbstractArray{<:Real,3}, θ₀::Real, g::Re
     Nx, Ny, Nz = size(Δ)
     coef = g / θ₀
     d = tw.data
-    @inbounds for k in 2:Nz, j in 1:Ny, i in 1:Nx
-        d[Hx+i, Hy+j, Hz+k] += coef * 0.5 * (Δ[i, j, k-1] + Δ[i, j, k])
-    end
+    # pointwise over the interior w faces, in storage indices (KA-k, #307)
+    Aeolus.Backends.launch!(Aeolus.Backends.backend(d), _moist_b_body!,
+                            (Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+2:Hz+Nz), d, Δ, coef, Hx, Hy, Hz)
     return tw
+end
+
+@inline function _moist_b_body!(I, J, K, d, Δ, coef, Hx, Hy, Hz)
+    @inbounds begin
+        i, j, k = I - Hx, J - Hy, K - Hz
+        d[I, J, K] += coef * 0.5 * (Δ[i, j, k-1] + Δ[i, j, k])
+    end
+    return nothing
 end
 
 """
