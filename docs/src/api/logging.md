@@ -121,8 +121,8 @@ examples and the test fixtures follow one convention:
 
 | level | for | examples |
 | :-- | :-- | :-- |
-| `Debug` | chatter: what a run log should keep but a console need not show | adaptive-step retries, checkpoint fresh start / resume / write, a costly diagnostics row |
-| `Info` | milestones | the run header, the progress line, the Berlin setup summary, output frames and end-of-run report |
+| `Debug` | chatter: what a run log should keep but a console need not show | adaptive-step retries, checkpoint fresh start / resume / write, a costly diagnostics row, the Berlin setup summary |
+| `Info` | milestones | the run header, the progress line, the Berlin output frames (with each coupling's diagnostics) and end-of-run events (stage timing, ledgers) |
 | `Warn` | problems the run survives | a solver that did not converge, a non-finite fast process, a restart across Julia versions |
 | `Error` | the run stops | a blowup, an error that ends `with_run` |
 
@@ -267,7 +267,11 @@ truth):
 | `WallBoundedCase` | `tau_wall_bottom`, `tau_wall_top`, with a scalar `q_wall_bottom`, `q_wall_top` (all `:step`); a TBLE wall model's under `wall.` |
 | `NestedRun` | `parent_steps`, `child_substeps`, `parent_retries`, `child_retries`, `substeps_last`, `max_child_cfl`, `max_clock_error` (`:step`); the stage wall times; every diagnostic of both domains under `parent.` and `child.` |
 
-The Berlin couplings' `report` strings move onto the registry with #338.
+The Berlin case (an example, not the library) implements the same
+generic for each of its couplings, `diagnostics(c, case)`, and adds its
+frame quantities, ledgers and stage timing; the `berlin` run driver
+hands them to the run monitor (#338, [the Berlin case](../design/berlin_case.md#Diagnostics)).
+Its wall-clock quantities are all named `wall.…`.
 
 ### Profiles
 
@@ -502,8 +506,7 @@ does not affect.
 ## Not here yet
 
 Per-step diagnostics in the step cores and the threaded reductions (#336,
-after the KernelAbstractions port), and the Berlin console text and
-coupling reports through the registry (#338). The Berlin output file
+after the KernelAbstractions port). The Berlin output file
 (`examples/urban/core/output.jl`) does not carry the provenance
 attributes yet: it is not written inside a run folder.
 
