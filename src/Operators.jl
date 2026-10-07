@@ -5,7 +5,8 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, Locat
 using ..Fields
 using ..Fields: Field, mesh, interior_view
 using ..Grids: interior
-using ..Backends: Backends, plane_reduce!, plane_partials!, ordered_sum, range_max
+using ..Backends: Backends, plane_reduce!, plane_partials!, ordered_sum, range_max,
+                  launch!, launch_weighted!, range_map!
 using ..BoundaryConditions: BoundaryConditions, fill_halos!, Periodic, FieldBoundaryConditions,
                             passive_scalar_bcs
 using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR,
@@ -13,6 +14,7 @@ using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI
                              stability_factor_m, stability_factor_h
 using ..MoistThermodynamics: saturated_buoyancy_frequency_squared, DEFAULT_CONSTANTS
 using FFTW: rfft, irfft, fft, ifft, fftfreq, plan_rfft
+using StaticArrays: MVector
 using Random: AbstractRNG, default_rng, randn
 
 export ∂x, ∂y, ∂z, laplacian, divergence,
@@ -533,6 +535,11 @@ storage-sized velocity buffers. The dynamic procedure reads the velocity
 through [`_masked_velocities!`](@ref), which puts the no-slip value 0 on
 every face that touches a solid cell, so nothing stored inside an obstacle
 can reach a fluid coefficient.
+
+The masks are `Array{Bool,3}` (KA-l, #304): one byte per cell, so the halo
+fill can run as a kernel (several work items writing neighbouring cells of a
+packed `BitArray` would race on the shared 64-bit chunks), and a read is a
+plain load.
 """
 struct _SGSMask{B<:AbstractArray{Bool,3}, T}
     cell::B; fx::B; fy::B; fz::B
@@ -543,24 +550,38 @@ function _SGSMask(mask::AbstractArray{Bool,3}, g::RegularGrid{T}, periodic) wher
     sz = (g.Nx + 2g.Hx, g.Ny + 2g.Hy, g.Nz + 2g.Hz)
     size(mask) == sz ||
         throw(DimensionMismatch("solid mask has size $(size(mask)), the mesh storage is $sz"))
-    cell = BitArray(mask)
+    cell = Array{Bool,3}(mask)
     periodic === nothing || _fill_mask_halos!(cell, g, periodic)
-    return _SGSMask(cell, staggered_solid_mask(cell, FaceX()), staggered_solid_mask(cell, FaceY()),
-                    staggered_solid_mask(cell, FaceZ()), zeros(T, sz), zeros(T, sz), zeros(T, sz))
+    face(loc) = Array{Bool,3}(staggered_solid_mask(cell, loc))
+    return _SGSMask(cell, face(FaceX()), face(FaceY()), face(FaceZ()),
+                    zeros(T, sz), zeros(T, sz), zeros(T, sz))
 end
 _SGSMask(m::_SGSMask, g, periodic) = m
 
-# Halos of a storage-sized cell mask: periodic wrap, or the nearest interior layer.
-function _fill_mask_halos!(m, g, periodic::NTuple{3,Bool})
+# Halos of a storage-sized cell mask: periodic wrap, or the nearest interior
+# layer, direction by direction (x, then y over the x-filled planes, then z),
+# each direction one launch over its two halo slabs (every point reads a
+# point interior in that direction, which no point of the launch writes).
+@inline function _mask_halo_body!(i, j, k, m, d, h, n, per)
+    @inbounds begin
+        I = (i, j, k)
+        l = I[d]
+        s = per ? h + mod(l - h - 1, n) + 1 : clamp(l, h + 1, h + n)
+        J = Base.setindex(I, s, d)
+        m[i, j, k] = m[J[1], J[2], J[3]]
+    end
+    return nothing
+end
+
+function _fill_mask_halos!(m::Array{Bool,3}, g, periodic::NTuple{3,Bool})
     N = (g.Nx, g.Ny, g.Nz); H = (g.Hx, g.Hy, g.Hz)
-    @inbounds for d in 1:3
+    b = Backends.backend(m)
+    full = (1:size(m, 1), 1:size(m, 2), 1:size(m, 3))
+    for d in 1:3
         n, h = N[d], H[d]
-        for I in CartesianIndices(m)
-            l = I[d]
-            (l <= h || l > h + n) || continue
-            s = periodic[d] ? h + mod(l - h - 1, n) + 1 : clamp(l, h + 1, h + n)
-            J = Base.setindex(Tuple(I), s, d)
-            m[I] = m[J...]
+        for slab in (1:h, h+n+1:size(m, d))          # the low and the high halo
+            r = Base.setindex(full, slab, d)
+            launch!(b, _mask_halo_body!, r, m, d, h, n, periodic[d])
         end
     end
     return m
@@ -573,32 +594,55 @@ Copies of the velocity storage with every face that touches a solid set to
 the no-slip value 0 (the rule of `IBM.apply_solid_mask!`), halos included.
 """
 function _masked_velocities!(m::_SGSMask, ud, vd, wd)
-    @inbounds for I in eachindex(ud)
-        m.ub[I] = m.fx[I] ? zero(eltype(m.ub)) : ud[I]
-        m.vb[I] = m.fy[I] ? zero(eltype(m.vb)) : vd[I]
-        m.wb[I] = m.fz[I] ? zero(eltype(m.wb)) : wd[I]
-    end
+    launch!(Backends.backend(ud), _masked_velocity_body!, _storage_ranges(ud),
+            m.ub, m.vb, m.wb, m.fx, m.fy, m.fz, ud, vd, wd)
     return m.ub, m.vb, m.wb
 end
 _masked_velocities!(::Nothing, ud, vd, wd) = (ud, vd, wd)
 
+@inline function _masked_velocity_body!(i, j, k, ub, vb, wb, fx, fy, fz, ud, vd, wd)
+    @inbounds begin
+        ub[i, j, k] = fx[i, j, k] ? zero(eltype(ub)) : ud[i, j, k]
+        vb[i, j, k] = fy[i, j, k] ? zero(eltype(vb)) : vd[i, j, k]
+        wb[i, j, k] = fz[i, j, k] ? zero(eltype(wb)) : wd[i, j, k]
+    end
+    return nothing
+end
+
+# The whole storage of a 3-D array as launch ranges (halos included).
+_storage_ranges(A::AbstractArray{<:Any,3}) = (1:size(A, 1), 1:size(A, 2), 1:size(A, 3))
+
 _cellmask(::Nothing) = nothing
 _cellmask(m::_SGSMask) = m.cell
+
+# A solid cell? (`cell === nothing`: no mask; the branch compiles away)
+@inline _is_solid(::Nothing, i, j, k) = false
+@inline _is_solid(cell, i, j, k) = @inbounds cell[i, j, k]
 
 # -------------------------------------------------------------------------
 # The Germano identity: one kernel for every averaging (P54-b, #173)
 # -------------------------------------------------------------------------
+#
+# KA-l (#304): each pass is a point body run by `launch!` (pass 1 over the
+# interior plus one shell, the others over the interior), the plane average
+# one work item per level. Every body evaluates the expressions of the loop
+# it replaces in the same order, so the coefficients are bit-identical to
+# the pre-port loops, serially and at any thread count.
 
 # Pass 1: cell-centred velocity and strain on the interior + one shell.
 # Local index l ∈ 1:N+2 is data index H - 1 + l.
 function _germano_pass1!(ws::DynamicSmagorinskyWorkspace, ud, vd, wd, g)
-    Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
-    Uc, Vc, Wc, magS = ws.Uc, ws.Vc, ws.Wc, ws.magS
-    S11, S22, S33, S12, S13, S23 = ws.S11, ws.S22, ws.S33, ws.S12, ws.S13, ws.S23
-    @inbounds for lk in 1:Nz+2, lj in 1:Ny+2, li in 1:Nx+2
-        i = Hx - 1 + li; j = Hy - 1 + lj; k = Hz - 1 + lk
+    launch!(Backends.backend(ud), _germano_pass1_body!, (1:g.Nx+2, 1:g.Ny+2, 1:g.Nz+2),
+            ws.Uc, ws.Vc, ws.Wc, ws.S11, ws.S22, ws.S33, ws.S12, ws.S13, ws.S23, ws.magS,
+            ud, vd, wd, g.Hx - 1, g.Hy - 1, g.Hz - 1, idx, idy, idz)
+    return nothing
+end
+
+@inline function _germano_pass1_body!(li, lj, lk, Uc, Vc, Wc, S11, S22, S33, S12, S13, S23, magS,
+                                      ud, vd, wd, oi, oj, ok, idx, idy, idz)
+    @inbounds begin
+        i = oi + li; j = oj + lj; k = ok + lk
         Uc[li,lj,lk] = 0.5 * (ud[i,j,k] + ud[i+1,j,k])
         Vc[li,lj,lk] = 0.5 * (vd[i,j,k] + vd[i,j+1,k])
         Wc[li,lj,lk] = 0.5 * (wd[i,j,k] + wd[i,j,k+1])
@@ -613,11 +657,14 @@ end
 # |S| alone on the interior (into the shell-indexed ws.magS): what ν_t needs
 # when the coefficient comes from memory (the Lagrangian closure).
 function _strain_magnitude!(ws::DynamicSmagorinskyWorkspace, ud, vd, wd, g)
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        ws.magS[i+1,j+1,k+1] = _strain_at(ud, vd, wd, Hx + i, Hy + j, Hz + k, idx, idy, idz)[7]
-    end
+    launch!(Backends.backend(ud), _strain_magnitude_body!, (1:g.Nx, 1:g.Ny, 1:g.Nz),
+            ws.magS, ud, vd, wd, g.Hx, g.Hy, g.Hz, idx, idy, idz)
+    return nothing
+end
+
+@inline function _strain_magnitude_body!(i, j, k, magS, ud, vd, wd, Hx, Hy, Hz, idx, idy, idz)
+    @inbounds magS[i+1,j+1,k+1] = _strain_at(ud, vd, wd, Hx + i, Hy + j, Hz + k, idx, idy, idz)[7]
     return nothing
 end
 
@@ -658,6 +705,36 @@ end
     return LM, MM
 end
 
+# The test-filter summands of the box sum, as named functions of the shell
+# index (KA-l: the closures `(a, b, c) -> …` they replace captured the
+# workspace; these take it as a field). `_box_stencil_sum` adds them in its
+# fixed order, z outer, x inner.
+struct _GermanoAt{W}            # the 21 quantities
+    ws::W
+end
+@inline (t::_GermanoAt)(a, b, c) = _germano_terms(t.ws, a, b, c)
+
+struct _GermanoFluidAt{W, B, T}  # … or 21 zeros on a solid cell
+    ws::W
+    cell::B
+    oi::Int; oj::Int; ok::Int    # shell → data index
+    z21::NTuple{21,T}
+end
+@inline function (t::_GermanoFluidAt)(a, b, c)
+    s = _germano_terms(t.ws, a, b, c)
+    return @inbounds t.cell[t.oi + a, t.oj + b, t.ok + c] ? t.z21 : s
+end
+
+struct _FluidCount{B}           # (1,) on a fluid cell, (0,) on a solid one
+    cell::B
+    oi::Int; oj::Int; ok::Int
+end
+@inline (t::_FluidCount)(a, b, c) = @inbounds (t.cell[t.oi + a, t.oj + b, t.ok + c] ? 0 : 1,)
+
+# The box sum of the 21 quantities around interior cell (i, j, k): the
+# 3 × 3 × 3 box of `box_filter!`, summed for all 21 in one sweep.
+@inline _germano_box(ws, i, j, k) = _box_stencil_sum(_GermanoAt(ws), i + 1, j + 1, k + 1, 1, 1, 1)
+
 # Pass 2: L^d_ij M_ij and M_ij M_ij at every interior cell. The test
 # filter is the 3 × 3 × 3 box of `box_filter!`, summed for all 21
 # quantities in one sweep of the shared stencil; with a mask it is the
@@ -666,31 +743,36 @@ end
 function _germano_pass2!(ws::DynamicSmagorinskyWorkspace{T}, g, α2, ::Nothing) where {T}
     Δ2 = (g.dx * g.dy * g.dz)^(2/3)
     inv27 = one(T) / 27
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        t = _box_stencil_sum((a, b, c) -> _germano_terms(ws, a, b, c), i + 1, j + 1, k + 1, 1, 1, 1)
-        ws.LM[i,j,k], ws.MM[i,j,k] = _germano_LM_MM(t, inv27, Δ2, α2)
-    end
+    launch!(Backends.backend(ws.LM), _germano_pass2_body!, (1:g.Nx, 1:g.Ny, 1:g.Nz),
+            ws.LM, ws.MM, ws, inv27, Δ2, α2)
+    return nothing
+end
+
+@inline function _germano_pass2_body!(i, j, k, LM, MM, ws, inv27, Δ2, α2)
+    t = _germano_box(ws, i, j, k)
+    @inbounds LM[i,j,k], MM[i,j,k] = _germano_LM_MM(t, inv27, Δ2, α2)
     return nothing
 end
 
 function _germano_pass2!(ws::DynamicSmagorinskyWorkspace{T}, g, α2, cell) where {T}
     Δ2 = (g.dx * g.dy * g.dz)^(2/3)
-    oH = (g.Hx - 1, g.Hy - 1, g.Hz - 1)                 # shell → data index
     z21 = ntuple(_ -> zero(T), Val(21))
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        if cell[g.Hx + i, g.Hy + j, g.Hz + k]
-            ws.LM[i,j,k] = zero(T); ws.MM[i,j,k] = zero(T)
-            continue
-        end
-        s = _box_stencil_sum(i + 1, j + 1, k + 1, 1, 1, 1) do a, b, c
-            t = _germano_terms(ws, a, b, c)
-            @inbounds cell[oH[1] + a, oH[2] + b, oH[3] + c] ? z21 : t
-        end
-        (n,) = _box_stencil_sum(i + 1, j + 1, k + 1, 1, 1, 1) do a, b, c
-            @inbounds (cell[oH[1] + a, oH[2] + b, oH[3] + c] ? 0 : 1,)
-        end
-        ws.LM[i,j,k], ws.MM[i,j,k] = _germano_LM_MM(s, one(T) / n, Δ2, α2)
+    fl = _GermanoFluidAt(ws, cell, g.Hx - 1, g.Hy - 1, g.Hz - 1, z21)   # shell → data index
+    cnt = _FluidCount(cell, g.Hx - 1, g.Hy - 1, g.Hz - 1)
+    launch!(Backends.backend(ws.LM), _germano_pass2_masked_body!, (1:g.Nx, 1:g.Ny, 1:g.Nz),
+            ws.LM, ws.MM, cell, fl, cnt, g.Hx, g.Hy, g.Hz, Δ2, α2)
+    return nothing
+end
+
+@inline function _germano_pass2_masked_body!(i, j, k, LM, MM, cell, fl, cnt, Hx, Hy, Hz, Δ2, α2)
+    T = eltype(LM)
+    @inbounds if cell[Hx + i, Hy + j, Hz + k]
+        LM[i,j,k] = zero(T); MM[i,j,k] = zero(T)
+        return nothing
     end
+    s = _box_stencil_sum(fl, i + 1, j + 1, k + 1, 1, 1, 1)
+    (n,) = _box_stencil_sum(cnt, i + 1, j + 1, k + 1, 1, 1, 1)
+    @inbounds LM[i,j,k], MM[i,j,k] = _germano_LM_MM(s, one(T) / n, Δ2, α2)
     return nothing
 end
 
@@ -714,12 +796,43 @@ end
 
 # ν_t = C_s² Δ² |S| on the interior, 0 in solid cells.
 function _dynamic_νt!(nd, ws::DynamicSmagorinskyWorkspace{T}, g, cell) where {T}
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     Δ2 = (g.dx * g.dy * g.dz)^(2/3)
-    cs2, magS = ws.cs2, ws.magS
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        solid = cell !== nothing && cell[Hx+i, Hy+j, Hz+k]
-        nd[Hx+i, Hy+j, Hz+k] = solid ? zero(T) : cs2[i,j,k] * Δ2 * magS[i+1, j+1, k+1]
+    launch!(Backends.backend(nd), _dynamic_νt_body!, (1:g.Nx, 1:g.Ny, 1:g.Nz),
+            nd, ws.cs2, ws.magS, cell, g.Hx, g.Hy, g.Hz, Δ2)
+    return nothing
+end
+
+@inline function _dynamic_νt_body!(i, j, k, nd, cs2, magS, cell, Hx, Hy, Hz, Δ2)
+    T = eltype(nd)
+    solid = _is_solid(cell, Hx+i, Hy+j, Hz+k)
+    @inbounds nd[Hx+i, Hy+j, Hz+k] = solid ? zero(T) : cs2[i,j,k] * Δ2 * magS[i+1, j+1, k+1]
+    return nothing
+end
+
+# The plane average of the identity and the clip to [0, cs_max²] for level
+# k: one work item per level, its (j, i) loop serial (the sums are the old
+# per-level sums, in their order, at every thread count). With a mask the
+# average runs over the fluid cells of the level only.
+@inline function _plane_cs2_body!(k, cs2, LM, MM, cell, Hx, Hy, Hz, Nx, Ny, cs2max)
+    T = eltype(cs2)
+    lm = zero(T); mm = zero(T)
+    @inbounds for j in 1:Ny, i in 1:Nx
+        _is_solid(cell, Hx+i, Hy+j, Hz+k) && continue
+        lm += LM[i,j,k]; mm += MM[i,j,k]
+    end
+    c = mm > 0 ? clamp(lm / mm, zero(T), T(cs2max)) : zero(T)
+    @inbounds for j in 1:Ny, i in 1:Nx
+        cs2[i,j,k] = _is_solid(cell, Hx+i, Hy+j, Hz+k) ? zero(T) : c
+    end
+    return nothing
+end
+
+# The pointwise ratio (`averaging = :local`) and the clip.
+@inline function _local_cs2_body!(i, j, k, cs2, LM, MM, cs2max)
+    T = eltype(cs2)
+    @inbounds begin
+        mm = MM[i,j,k]
+        cs2[i,j,k] = mm > 0 ? clamp(LM[i,j,k] / mm, zero(T), T(cs2max)) : zero(T)
     end
     return nothing
 end
@@ -729,27 +842,12 @@ function _dynamic_smagorinsky!(nd, ud, vd, wd, ws::DynamicSmagorinskyWorkspace{T
     Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
     _germano_identity!(ws, ud, vd, wd, g, α2, mask)
     cell = _cellmask(mask)
-
-    # Averaging of the identity and the clip to [0, cs_max²]. With a mask
-    # the plane average runs over the fluid cells of the level only.
-    cs2 = ws.cs2
+    b = Backends.backend(nd)
     if plane
-        @inbounds for k in 1:Nz
-            lm = zero(T); mm = zero(T)
-            for j in 1:Ny, i in 1:Nx
-                cell !== nothing && cell[g.Hx+i, g.Hy+j, g.Hz+k] && continue
-                lm += ws.LM[i,j,k]; mm += ws.MM[i,j,k]
-            end
-            c = mm > 0 ? clamp(lm / mm, zero(T), T(cs2max)) : zero(T)
-            for j in 1:Ny, i in 1:Nx
-                cs2[i,j,k] = cell !== nothing && cell[g.Hx+i, g.Hy+j, g.Hz+k] ? zero(T) : c
-            end
-        end
+        launch_weighted!(b, Nx * Ny, _plane_cs2_body!, (1:Nz,),
+                         ws.cs2, ws.LM, ws.MM, cell, g.Hx, g.Hy, g.Hz, Nx, Ny, cs2max)
     else
-        @inbounds for I in eachindex(cs2)
-            mm = ws.MM[I]
-            cs2[I] = mm > 0 ? clamp(ws.LM[I] / mm, zero(T), T(cs2max)) : zero(T)
-        end
+        launch!(b, _local_cs2_body!, (1:Nx, 1:Ny, 1:Nz), ws.cs2, ws.LM, ws.MM, cs2max)
     end
     _dynamic_νt!(nd, ws, g, cell)
     return nothing
