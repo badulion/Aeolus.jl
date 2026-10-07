@@ -900,11 +900,13 @@ end
     return x, acc ./ n, n
 end
 
-# KA-l (#304): one `plane_reduce!` body per cell that writes the cell's new
-# stresses and returns its contributions to the step's budget and counters
-# (P, βh₃, ε, transport, clips, clipped energy, split cells, unrealizable
-# inputs), summed per plane in the canonical order. The stresses are the
-# loop's bit for bit; the sums are a named one-time change of order.
+# KA-l (#304): one work item per plane (`plane_map!`) updates the plane's
+# cells in their loop order; each cell writes its new stresses and adds its
+# contributions to the step's budget and counters (P, βh₃, ε, transport,
+# clips, clipped energy, split cells, unrealizable inputs) to the plane's
+# running sums, and the planes are combined in ascending k. The stresses
+# are the loop's bit for bit; the sums are a named one-time change of order
+# (per-plane sums instead of one running sum over the domain).
 function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     g = mesh(c.τ[1])
     q = _qv(c, sim)
@@ -913,12 +915,12 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
            Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, β = T(_β(c, sim)),
            rot = Ω != (zero(T), zero(T), zero(T)), R = coriolis_rotation(Ω, Δt), Δt = Δt,
            C1 = c.C1, C2 = c.C2, C3 = c.C3, transport = c.transport)
-    parts = ntuple(_ -> zeros(T, g.Nz), Val(8))
-    plane_reduce!(parts, Backends.backend(c.τ[1].data), _rsm_update_body, interior(g),
-                  map(x -> x.data, c.τ), map(x -> x.data, c.tend), sim.u.data, sim.v.data,
-                  sim.w.data, sim.θ.data, q === nothing ? nothing : q.data, c.N2.data,
-                  _Edges(c.mask, bounded_directions(sim.bcs), g), c, par)
-    sP, sB, sε, sT, nclip, eclip, nsplit, nin = map(ordered_sum, parts)
+    parts = Vector{NTuple{8,T}}(undef, g.Nz)
+    plane_map!(parts, Backends.backend(c.τ[1].data), _rsm_update_plane, interior(g),
+               map(x -> x.data, c.τ), map(x -> x.data, c.tend), sim.u.data, sim.v.data,
+               sim.w.data, sim.θ.data, q === nothing ? nothing : q.data, c.N2.data,
+               _Edges(c.mask, bounded_directions(sim.bcs), g), c, par)
+    sP, sB, sε, sT, nclip, eclip, nsplit, nin = ntuple(n -> ordered_sum(map(p -> p[n], parts)), Val(8))
     V = par.V
     st = c.stats
     st[1] += nclip; st[2] += eclip
@@ -929,6 +931,17 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     st[10] = nsplit
     st[12] = nin
     return c
+end
+
+# one plane: the cells in their loop order, each updating its stresses and
+# adding its contributions to the plane's running sums
+function _rsm_update_plane(K, ir, jr, τd, td, ud, vd, wd, θd, qd, n2, E, c, p)
+    T = eltype(n2)
+    acc = ntuple(_ -> zero(T), Val(8))
+    for J in jr, I in ir
+        acc = map(+, acc, _rsm_update_body(I, J, K, τd, td, ud, vd, wd, θd, qd, n2, E, c, p))
+    end
+    return acc
 end
 
 @inline function _rsm_update_body(I, J, K, τd, td, ud, vd, wd, θd, qd, n2, E, c, p)

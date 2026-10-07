@@ -55,7 +55,7 @@ module PrognosticSGS
 using ..Grids: RegularGrid, CellCenter, interior
 using ..StretchedGrids: StretchedGrid
 using ..Fields: Field, interior_view, mesh, interior_map!
-using ..Backends: Backends, launch!, plane_reduce!, range_map!, ordered_sum
+using ..Backends: Backends, launch!, plane_reduce!, plane_map!, range_map!, ordered_sum
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs,
                             passive_scalar_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
@@ -407,7 +407,7 @@ end
 #
 # KA-l (#304): the pointwise parts of the closure (coefficients, production
 # factors, the update of e, the initialisation) are point bodies run by
-# `launch!` (the update by `plane_reduce!`, which also sums its budget).
+# `launch!` (the update by `plane_map!`, which also sums its budget).
 function _coefficients!(ν::Field, κt::Field, c::TKEClosure{T}, N2::Field) where {T}
     g = mesh(c.e)
     launch!(Backends.backend(ν.data), _coefficients_body!, interior(g), ν.data, κt.data, c.e.data,
@@ -885,23 +885,25 @@ _storage(A) = (1:size(A, 1), 1:size(A, 2), 1:size(A, 3))
 _tke_volume_sum(a, c, V0, ::RegularGrid) = sum(a) * V0
 _tke_volume_sum(a, c, V0, g::StretchedGrid) = sum(sum(view(a, :, :, k)) * c.vrel[k] for k in 1:g.Nz) * V0
 
-# The update of e, fused with the volume sums of its budget: a
-# `plane_reduce!` body that writes e at its point and returns the point's
-# contributions (P_s, P_b, transport, wall work, dissipation, buoyant
-# destruction, clip count, clipped energy), summed per plane in the
-# canonical order (KA-l, #304; the per-point values, and so e, are the
-# loop's bit for bit; the sums are a named one-time change of order).
+# The update of e, fused with the volume sums of its budget (KA-l, #304):
+# one work item per plane (`plane_map!`, measured 1.02x the old loop where
+# the eight-lane `plane_reduce!` took 1.09x) updates the plane's cells in
+# their loop order, each adding its contributions (P_s, P_b, transport, wall
+# work, dissipation, buoyant destruction, clip count, clipped energy) to the
+# plane's running sums; the planes are combined in ascending k. e is the
+# loop's bit for bit; the sums are a named one-time change of order (per
+# plane instead of one running sum over the domain).
 function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
     g = mesh(c.e)
     V0 = T(_tke_volume0(g))
     par = (Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, Nz = g.Nz, V0 = V0, Δt = Δt, pb1 = T(pbs[1]),
            pb2 = T(pbs[2]), ck = c.c_k, cl = c.c_l, cε0 = c.c_ε0, cε1 = c.c_ε1,
            sfac = c.surface_factor, exact = c.dissipation === :exact)
-    parts = ntuple(_ -> zeros(T, g.Nz), Val(8))
-    plane_reduce!(parts, Backends.backend(c.e.data), _tke_update_body, interior(g),
-                  c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data, c.Pw.data, c.Δk, c.vrel,
-                  c.l_wall, c.first_level, c.mask, par)
-    sPs, sPb, sT, sPw, sε, sB, nclip, eclip = map(ordered_sum, parts)
+    parts = Vector{NTuple{8,T}}(undef, g.Nz)
+    plane_map!(parts, Backends.backend(c.e.data), _tke_update_plane, interior(g),
+               c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data, c.Pw.data, c.Δk, c.vrel,
+               c.l_wall, c.first_level, c.mask, par)
+    sPs, sPb, sT, sPw, sε, sB, nclip, eclip = ntuple(n -> ordered_sum(map(p -> p[n], parts)), Val(8))
     st = c.stats
     st[1] += nclip; st[2] += eclip
     st[4] = sPs * V0; st[5] = sPb * V0; st[6] = sε * V0; st[7] = sB * V0; st[8] = sT * V0
@@ -909,6 +911,18 @@ function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
     st[10] = sPw * V0
     c.surface === nothing || _surface!(c, Δt)
     return c
+end
+
+# one plane: the cells in their loop order, each updating e and adding its
+# contributions to the plane's running sums
+function _tke_update_plane(K, ir, jr, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall, first_level, mask, p)
+    T = eltype(ed)
+    acc = ntuple(_ -> zero(T), Val(8))
+    for J in jr, I in ir
+        acc = map(+, acc, _tke_update_body(I, J, K, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall,
+                                           first_level, mask, p))
+    end
+    return acc
 end
 
 @inline function _tke_update_body(I, J, K, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall, first_level,
