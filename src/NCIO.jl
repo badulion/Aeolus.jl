@@ -48,7 +48,8 @@ the file on disk always holds every completed record.
 module NCIO
 
 using Dates: DateTime, Millisecond, format
-using NCDatasets: NCDataset, defVar, unlimited, dimnames, sync
+import NCDatasets
+using NCDatasets: NCDataset, defVar, unlimited, dimnames
 
 export NCDataset, nc_create, nc_defvar!, nc_append_record!, nc_chunksizes,
        cf_time_units, NC_DEFLATE_LEVEL
@@ -135,22 +136,38 @@ function nc_defvar!(ds::NCDataset, name::AbstractString, ::Type{T}, dims;
 end
 
 """
-    nc_append_record!(ds, data::AbstractDict)
+    nc_append_record!(ds, data::AbstractDict; dim = <the unlimited dimension>,
+                      count = 1, sync = true)
 
-Append one record along the unlimited dimension. `data` maps variable name
-(`String` or `Symbol`) to the array of one record: every variable over the
-unlimited dimension must be present, with that dimension last; a variable
-over the unlimited dimension alone takes a one-element vector. The whole
-record is checked before any of it is written. Values are
-written raw (no CF time or scale encoding: pass the numbers the units
-attribute describes), then the file is flushed with `sync`.
+Append one record (or `count` records) along the unlimited dimension `dim`.
+`data` maps variable name (`String` or `Symbol`) to the array of the
+record: every variable over `dim` must be present, with `dim` last; a
+variable over `dim` alone takes a one-element vector. With `count > 1`
+each array carries the `count` records along a trailing dimension (a
+vector of length `count` for a variable over `dim` alone), so a block of
+buffered records is one write per variable. The whole call is checked
+before any of it is written. Values are written raw (no CF time or scale
+encoding: pass the numbers the units attribute describes), then the file
+is flushed with `sync` (`sync = false` leaves that to a later call).
+
+`dim` may be left out when the file has one unlimited dimension; a file
+with several (NetCDF-4 allows that, `diagnostics.nc` has two) names it.
 """
-function nc_append_record!(ds::NCDataset, data::AbstractDict)
+function nc_append_record!(ds::NCDataset, data::AbstractDict;
+                           dim::Union{Nothing,AbstractString} = nothing, count::Integer = 1,
+                           sync::Bool = true)
     unl = unlimited(ds.dim)
-    length(unl) == 1 ||
-        error("nc_append_record!: expected one unlimited dimension, found $(length(unl))")
-    udim = only(unl)
-    n = Int(ds.dim[udim]) + 1
+    if dim === nothing
+        length(unl) == 1 ||
+            error("nc_append_record!: expected one unlimited dimension, found $(length(unl)); pass `dim`")
+        udim = only(unl)
+    else
+        udim = String(dim)
+        udim in unl || error("nc_append_record!: $udim is not an unlimited dimension of the file")
+    end
+    count >= 1 || error("nc_append_record!: count must be ≥ 1, got $count")
+    n0 = Int(ds.dim[udim])
+    rng = n0+1:n0+count
     # check the whole record before writing any of it, so a bad call does
     # not leave a partial record behind
     todo = Tuple{Any,Any,Int}[]
@@ -164,22 +181,25 @@ function nc_append_record!(ds::NCDataset, data::AbstractDict)
             error("nc_append_record!: missing record variable $name")
         v = ds[name].var                       # raw: no CF decoding on write
         if length(dn) == 1
-            length(A) == 1 ||
-                error("nc_append_record!: $name takes one value per record, got $(length(A))")
+            length(A) == count ||
+                error("nc_append_record!: $name takes $count value(s), got $(length(A))")
         else
-            size(A) == size(v)[1:end-1] ||
-                error("nc_append_record!: $name has size $(size(A)), expected $(size(v)[1:end-1])")
+            want = count == 1 ? size(v)[1:end-1] : (size(v)[1:end-1]..., count)
+            size(A) == want ||
+                error("nc_append_record!: $name has size $(size(A)), expected $want")
         end
         push!(todo, (v, A, length(dn)))
     end
     for (v, A, nd) in todo
         if nd == 1
-            v[n:n] = collect(A)
+            v[rng] = collect(A)
+        elseif count == 1
+            v[ntuple(_ -> Colon(), nd - 1)..., n0 + 1] = A
         else
-            v[ntuple(_ -> Colon(), nd - 1)..., n] = A
+            v[ntuple(_ -> Colon(), nd - 1)..., rng] = A
         end
     end
-    sync(ds)
+    sync && NCDatasets.sync(ds)
     return nothing
 end
 

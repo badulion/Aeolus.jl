@@ -665,6 +665,7 @@ using Aeolus.Fields: set!, interior_view
 
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
     include("ka_halos.jl")   # KA-f (#297): halo fills / nesting transfer operators on launch!
+    include("ka_fv.jl")      # KA-d (#299): finite-volume kernels + grid metrics on launch!
     include("ka_pcg.jl")     # KA-g (#300): the one pcg! driver of the four CG solvers
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
     include("pressure_fft_threads.jl")  # KA-h (#298): spectral solvers as kernels, FFTW thread-invariant
@@ -842,8 +843,16 @@ using Aeolus.Fields: set!, interior_view
     include("logging_run_folder.jl")  # #334: run folder, run.toml provenance, dirty-tree policy
     include("logging_diagnostics.jl") # #335: diagnostics registry, CSV writer, progress line
     include("logging_blowup.jl")      # #335: blowup diagnose-dump-stop, run monitor
+    include("logging_diagnostics_nc.jl")  # #337: diagnostics.nc (profiles, NetCDF-4, provenance attributes)
     include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
     include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
+    include("config_simulation_driver.jl")  # CFG-b (#357): simulation driver, bitwise round trip, resume, TGV
+    include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
+    include("config_sbl.jl")          # CFG-d (#359): sbl driver, bit-identity to the old builders, round trip
+    include("config_dns.jl")          # CFG-d (#359): dns driver, round trip, the k_max η refusal
+    include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
+    include("config_examples_validation.jl")  # CFG-e (#360): examples/validation/ from TOML, bit-identical to the old scripts
+    include("config_berlin.jl")       # CFG-c (#358): berlin driver, scenarios from TOML, bitwise vs Julia-built, round trip
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

@@ -16,27 +16,20 @@
 #
 # Three runs from 23:20 UTC: the reference, the same with the droplets
 # made transparent to radiation (no droplet-radiative feedback), and the
-# same with the sun switched off. Writes SVG time series to output/.
+# same with the sun switched off — the sweep
+# examples/validation/configs/parisfog_2011.toml (driver "column", case
+# "parisfog_2011"). Writes SVG time series to output/.
 #
-#   julia --project=. examples/validation/parisfog_2011_radiation_fog.jl
+#   julia --project=. examples/validation/parisfog_2011_radiation_fog.jl [--set key=value]
 # =========================================================================
 
 using Aeolus
 using Printf
 include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 
-const HOURS = 14
-
-function run_case(set)
-    col = parisfog_2011_column(; settings = set)
-    run!(col, HOURS * 3600)
-    return col
-end
-
-runs = [("reference",   FogColumnSettings()),
-        ("no feedback", FogColumnSettings(droplet_feedback = false)),
-        ("no sun",      FogColumnSettings(shortwave = false))]
-cols = [(name, run_case(set)) for (name, set) in runs]
+names = Dict("reference" => "reference", "no_feedback" => "no feedback", "no_sun" => "no sun")
+cols = [(names[chop(r.obj.cfg.run.name; head = length("parisfog_2011_"), tail = 0)], r.obj.state)
+        for r in run_configs(joinpath(@__DIR__, "configs", "parisfog_2011.toml"), ARGS)]
 
 sunrise = 24 + 6 + 59 / 60
 println("ParisFog 2011 — observed: fog at ground 02:30 UTC, max LWP ≈ 70 g/m² at 07:30,")

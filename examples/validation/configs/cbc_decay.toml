@@ -1,0 +1,27 @@
+# Decaying grid turbulence of Comte-Bellot & Corrsin (1971) — Phase 54 (#168)
+#
+# LES of the CBC wind-tunnel experiment (M = 5.08 cm, U0 = 10 m/s) in a
+# periodic box of side 11 M at 64³, started from the measured spectrum at
+# tU0/M = 42 and compared with the measured spectra at 98 and 171. Three
+# runs: the dynamic Smagorinsky model, static Smagorinsky (C_s = 0.17) and
+# no model, each averaged over three seeds. The harness and the data are
+# shared with the CI test (32³): test/cbc_benchmark_driver.jl,
+# test/data/cbc1971_table3.txt, test/era6_cbc_decay.jl.
+#
+#   julia --project=. examples/validation/cbc_decay.jl              # the three runs and the figure
+#   julia --project=. examples/validation/cbc_decay.jl --set grid.n=32
+
+[run]
+driver = "cbc_decay"
+name = "cbc_decay"
+
+[grid]
+n = 64
+
+[benchmark]
+seeds = [1, 2, 3]
+spinup = 2
+cfl = 0.5
+
+[sweep]
+axis = [ { key = "sgs.closure", values = ["dynamic", "smagorinsky", "none"] } ]
