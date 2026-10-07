@@ -1,0 +1,30 @@
+# 3-D Taylor-Green vortex (formerly built in code by
+# examples/taylor_green_vortex.jl). Triply periodic box [0, 2π]³, 32³,
+# ν = 1e-2 (Re ≈ 100 on L and U₀ = 1), no buoyancy, no SGS model:
+#     u =  sin x cos y cos z,   v = -cos x sin y cos z,   w = 0.
+# The vortex decays under viscosity; the projection keeps ∇·u at round-off.
+#
+#   julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml
+
+[run]
+driver = "simulation"
+name = "taylor_green_vortex"
+
+[grid]
+size = [32, 32, 32]
+extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
+
+[dynamics]
+nu = 0.01
+
+[initial]
+u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
+v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
+
+[stepper]
+scheme = "euler"
+dt = 0.07853981633974483        # 0.4 dx / U₀ (the viscous limit 0.4 dx²/2ν is larger)
+end_time = 2.0                  # 26 steps of 2/26
+
+[logging]
+diagnostics_cadence = 0.1

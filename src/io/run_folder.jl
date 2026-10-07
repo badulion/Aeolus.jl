@@ -315,7 +315,7 @@ Base.show(io::Base.IO, rf::RunFolder) =
 run_log_path(rf::RunFolder) = joinpath(rf.path, "run.log")
 "`path/run.toml`, the provenance record."
 run_toml_path(rf::RunFolder) = joinpath(rf.path, "run.toml")
-"`path/diagnostics.csv`, the diagnostics time series (written by #335; `diagnostics.nc` after #310)."
+"`path/diagnostics.csv`, the scalar diagnostics time series (#335); [`diagnostics_nc_path`](@ref) is the NetCDF-4 file with the profiles (#337)."
 diagnostics_path(rf::RunFolder) = joinpath(rf.path, "diagnostics.csv")
 "`path/output`, the folder for the run's output files (created)."
 output_dir(rf::RunFolder) = mkpath(joinpath(rf.path, "output"))

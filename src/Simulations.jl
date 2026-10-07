@@ -749,11 +749,13 @@ end
 """
     horizontal_variance(field) -> Vector
 
-Horizontal variance of a cell-centered field over the interior,
-`⟨(f - ⟨f⟩)²⟩`, one entry per interior `z`-level.
+Horizontal variance of a field over the interior, `⟨(f - ⟨f⟩)²⟩`, one
+entry per interior `z`-level (the face levels for a `FaceZ` field).
 """
-function horizontal_variance(field::Field{CellCenter})
-    m = horizontal_mean(field)
+function horizontal_variance(field::Field)
+    # the plane mean of any location (horizontal_mean is cell-centred only),
+    # then the canonical plane sums of (f - m_k)²: thread-invariant (KA-b, #296)
+    m = plane_mean!(zeros(eltype(field.data), size(interior_view(field), 3)), field)
     I3 = interior(field.mesh)
     n = length(I3[1]) * length(I3[2])
     s = plane_reduce!(similar(m), Backends.backend(field.data), _sq_dev_at, I3,

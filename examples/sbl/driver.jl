@@ -79,6 +79,7 @@ mutable struct SBLCase
     sim::Any
     closure::Any
     sgs_stability::Symbol
+    sgs_stress::Symbol                # momentum SGS divergence: :symmetric (stress form) or :laplacian
     forcing::Any                      # AbstractLargeScaleForcing or a Tuple of them
     Ts::Any                           # SurfaceTemperatureSeries (or anything with surface_temperature)
     sf::Any                           # SurfaceExchange stability functions
@@ -115,7 +116,7 @@ end
              z_pert = 50, seed = 1, extra_forcing = (),
              θ_init = nothing, u_init = nothing, v_init = nothing,
              perturb = nothing, t_start = 0, sponge_target = :geostrophic,
-             ρcp = 1.3 * 1005) -> SBLCase
+             ρcp = 1.3 * 1005, sgs_stress = :symmetric) -> SBLCase
 
 Build the SBL LES. Defaults are the GABLS1 protocol (Beare et al. 2006,
 BLM 118, 247; set-up as quoted by Basu & Porté-Agel 2006, JAS 63, 2074):
@@ -145,7 +146,13 @@ the remaining keywords:
   in the sponge layer, for cases whose mean wind above the boundary layer
   evolves under advective tendencies (GABLS3); `:geostrophic` relaxes
   toward `U_g(z, t)`;
-* `ρcp` converts the kinematic surface heat flux to W m⁻².
+* `ρcp` converts the kinematic surface heat flux to W m⁻²;
+* `sgs_stress` is the momentum SGS divergence of `step_rk3!`:
+  `:symmetric` (the stress form, so that the corrected vertical viscosity
+  reaches the momentum equation; the default) or `:laplacian`.
+
+The `sbl` run driver (`examples/sbl/config_schema.jl`, CFG-d #359) builds
+every case of `examples/sbl/configs/` through this function.
 """
 function sbl_case(; N = (32, 32, 32), extent = (400.0, 400.0, 400.0),
                   U_g = 8.0, V_g = 0.0, f = 1.39e-4, z0m = 0.1, z0h = z0m,
@@ -156,9 +163,11 @@ function sbl_case(; N = (32, 32, 32), extent = (400.0, 400.0, 400.0),
                   perturbation = 0.1, z_pert = 50.0, seed = 1, extra_forcing = (),
                   θ_init = nothing, u_init = nothing, v_init = nothing,
                   perturb = nothing, t_start = 0.0, sponge_target::Symbol = :geostrophic,
-                  ρcp = 1.3 * 1005)
+                  ρcp = 1.3 * 1005, sgs_stress::Symbol = :symmetric)
     sponge_target in (:geostrophic, :mean) ||
         throw(ArgumentError("sponge_target must be :geostrophic or :mean, got :$sponge_target"))
+    sgs_stress in (:symmetric, :laplacian) ||
+        throw(ArgumentError("sgs_stress must be :symmetric or :laplacian, got :$sgs_stress"))
     Nx, Ny, Nz = N
     mesh = RegularGrid(; size = (Nx, Ny, Nz), extent = Float64.(extent))
     bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
@@ -196,7 +205,7 @@ function sbl_case(; N = (32, 32, 32), extent = (400.0, 400.0, 400.0),
     z = zeros(Nx, Ny)
     zu = Aeolus.Fields.Field(Aeolus.Grids.FaceX(), mesh)
     zv = Aeolus.Fields.Field(Aeolus.Grids.FaceY(), mesh)
-    return SBLCase(sim, closure, sgs_stability, F, Ts, stability, Float64(z0m), Float64(z0h),
+    return SBLCase(sim, closure, sgs_stability, sgs_stress, F, Ts, stability, Float64(z0m), Float64(z0h),
                    U_g, V_g, sponge_target, Float64(ρcp), laws, copy(z), copy(z),
                    fill(Inf, Nx, Ny), zu, zv, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, nothing, Float64(t_start))
 end
@@ -231,6 +240,9 @@ function sbl_surface!(c::SBLCase, t)
     z1 = m.dz / 2
     θs = surface_temperature(c.Ts, t)
     c.t_surf = t
+    # the first-level wind of column Nx (Ny) reads the periodic halo: refill
+    # it from the current interior (the last RK3 combination left it stale)
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
     @inbounds for j in 1:m.Ny, i in 1:m.Nx
         uc, vc, θ = _sbl_first_level(sim, i, j)
         sol = solve_surface_layer(c.sf; U = sqrt(uc^2 + vc^2), z_m = z1, θ_a = θ, θ_s = θs,
@@ -322,7 +334,7 @@ function sbl_step!(c::SBLCase, dt::Real)
         return nothing
     end
     tw = time()
-    step_rk3!(s, dt; sgs = c.closure, sgs_stress = :symmetric,
+    step_rk3!(s, dt; sgs = c.closure, sgs_stress = c.sgs_stress,
               body_force! = force!, post_predictor! = wall!)
     c.wall_time += time() - tw
     c.τx = τx[]; c.τy = τy[]
@@ -447,13 +459,15 @@ function sbl_bl_height(zf, τ; fraction = 0.05)
 end
 
 """
-    sbl_run!(c, t_end; cfl = 1.2, average_from = Inf, sample_every = 10,
-             callback = nothing, checkpoint = nothing, checkpoint_components = (;)) -> stats
+    sbl_run!(c, t_end; cfl = 1.2, average_from = Inf, sample_every = 10, nsteps = typemax(Int),
+             callback = nothing, checkpoint = nothing, checkpoint_components = (;),
+             final_checkpoint = true) -> stats
 
-Advance to `t_end` (s) with [`sbl_dt`](@ref). With `checkpoint` (a
-`CheckpointSchedule`, e.g. [`sbl_checkpoints`](@ref)) the run resumes from
-the newest checkpoint of its folder, writes periodic ones, and a final one
-at `t_end`; `checkpoint_components` (a `NamedTuple`) adds the state of the
+Advance to `t_end` (s) with [`sbl_dt`](@ref), or until this call has taken
+`nsteps` steps (counted from the call's first step, across a resume). With
+`checkpoint` (a `CheckpointSchedule`, e.g. [`sbl_checkpoints`](@ref)) the
+run resumes from the newest checkpoint of its folder, writes periodic ones,
+and (with `final_checkpoint`) a final one at the end; `checkpoint_components` (a `NamedTuple`) adds the state of the
 caller's callback (its series, counters) to every checkpoint. Use one
 checkpoint `prefix` per call when a script calls `sbl_run!` more than once. From `average_from` on,
 every `sample_every`-th step is sampled: the returned `stats` hold the
@@ -465,14 +479,15 @@ magnitude), the mean surface heat flux `wθ0` (K m s⁻¹) and `H0`
 `nsteps`, `wall_time`.
 """
 function sbl_run!(c::SBLCase, t_end; cfl = 1.2, average_from = Inf, sample_every = 10,
-                  callback = nothing, checkpoint = nothing, checkpoint_components = (;))
+                  nsteps::Integer = typemax(Int), callback = nothing, checkpoint = nothing,
+                  checkpoint_components = (;), final_checkpoint::Bool = true)
     s = c.sim
     # the run's accumulators, in one checkpointable Dict (#245)
     R = Dict{Symbol,Any}(:acc => nothing, :ns => 0, :τs => 0.0, :wθs => 0.0, :Ls => 0.0,
                          :n0 => c.nsteps)
     comps = (sbl_case = c, sbl_run = R, checkpoint_components...)
     checkpoint === nothing || resume!(checkpoint, s; components = comps)
-    while s.t < t_end - 1e-9
+    while s.t < t_end - 1e-9 && c.nsteps - R[:n0] < nsteps
         dt = min(sbl_dt(c; cfl = cfl), t_end - s.t)
         sbl_step!(c, dt)
         callback === nothing || callback(c)
@@ -487,8 +502,8 @@ function sbl_run!(c::SBLCase, t_end; cfl = 1.2, average_from = Inf, sample_every
         checkpoint === nothing || maybe_checkpoint!(checkpoint, s; step = c.nsteps, components = comps)
     end
     # a final checkpoint: a rerun of a finished phase returns at once
-    checkpoint === nothing || maybe_checkpoint!(checkpoint, s; step = c.nsteps, force = true,
-                                                components = comps)
+    (checkpoint === nothing || !final_checkpoint) ||
+        maybe_checkpoint!(checkpoint, s; step = c.nsteps, force = true, components = comps)
     acc = R[:acc] === nothing ? nothing : Dict(k => copy(v) for (k, v) in R[:acc])
     ns, τs, wθs, Ls, n0 = R[:ns], R[:τs], R[:wθs], R[:Ls], R[:n0]
     ns == 0 && return (nsamples = 0, nsteps = c.nsteps - n0, wall_time = c.wall_time)
@@ -853,22 +868,23 @@ end
 # =========================================================================
 
 """
-    stratified_channel_case(Ri, stab; N, seed = 1) -> WallBoundedCase
+    stratified_channel_case(Ri, stab; N, seed = 1, sgs_stress = :symmetric) -> WallBoundedCase
 
 The wall-resolved channel at Re_τ = 180 on 2πδ × πδ × 2δ: no-slip walls,
 θ walls at `stratified_channel_walls(Ri)` (for `Ri = 0` θ is passive: walls
 (0, 1) and g = 0), Pr = 0.71, the plane-averaged dynamic Smagorinsky
 closure (Germano et al. 1991), wrapped in `StabilityCorrected` (Brown et
 al. 1994, anisotropic length scales: the Berlin default) for
-`stab = :brown94`, stress-form momentum divergence.
+`stab = :brown94`, stress-form momentum divergence (`sgs_stress = :symmetric`;
+`:laplacian` for the Laplacian form).
 """
-function stratified_channel_case(Ri, stab; N = (32, 32, 48), seed = 1)
+function stratified_channel_case(Ri, stab; N = (32, 32, 48), seed = 1, sgs_stress::Symbol = :symmetric)
     mesh = RegularGrid(; size = N, extent = (2π, π, 2.0))
     base = DynamicSmagorinsky(mesh)
     closure = stab === :none ? base : StabilityCorrected(base, mesh)
     walls = Ri == 0 ? (0.0, 1.0) : stratified_channel_walls(Ri)
     return channel_case(; Re_τ = 180, N = N, closure = closure, bottom_bc = :noslip,
-                        sgs_stress = :symmetric, θ_walls = walls, Pr = 0.71,
+                        sgs_stress = sgs_stress, θ_walls = walls, Pr = 0.71,
                         g_accel = Ri == 0 ? 0.0 : 1.0, seed = seed)
 end
 
@@ -891,7 +907,8 @@ end
 
 """
     stratified_channel_run(Ri, stab; N = (32, 32, 48), T_end = 40, T_avg = 20, seed = 1,
-                           spinup = nothing) -> NamedTuple
+                           spinup = nothing, case = stratified_channel_case(Ri, stab; N, seed),
+                           callback = nothing) -> NamedTuple
 
 One wall-resolved channel ([`stratified_channel_case`](@ref)) at
 Re_τ = 180 and `Ri`, run to `T_end` and averaged from `T_avg` (δ/u_τ),
@@ -900,11 +917,15 @@ rescaled to the walls) or, with `spinup = nothing`, from noise. Returns the time
 centres `zc`), bulk velocity `Ub` (u_τ units), Nusselt number `Nu` (wall
 heat flux over the laminar ``κΔθ/2δ``), mean wall stress, the averaged
 total stress profile and the momentum-budget residual
-``\\max_z|τ(z) - τ(0) - ∫_0^z(∂⟨U⟩/∂t - G)dz'|``.
+``\\max_z|τ(z) - τ(0) - ∫_0^z(∂⟨U⟩/∂t - G)dz'|``, and the `case` it ran.
+`case` is the channel to run (built by the `sbl` run driver from its
+config, CFG-d #359); `callback(case)` is called after every step.
 """
 function stratified_channel_run(Ri, stab; N = (32, 32, 48), T_end = 40.0, T_avg = 20.0,
-                                seed = 1, spinup = nothing)
-    c = stratified_channel_case(Ri, stab; N = N, seed = seed)
+                                seed = 1, spinup = nothing,
+                                case = stratified_channel_case(Ri, stab; N = N, seed = seed),
+                                callback = nothing)
+    c = case
     walls = c.θ_walls
     if spinup !== nothing          # start from the developed neutral channel
         s = c.sim
@@ -912,10 +933,11 @@ function stratified_channel_run(Ri, stab; N = (32, 32, 48), T_end = 40.0, T_avg 
         s.θ.data .= walls[1] .+ (walls[2] - walls[1]) .* spinup.θ
         s.t = spinup.t
     end
-    run_channel!(c, T_avg)
+    run_channel!(c, T_avg; callback = callback)
     U0 = Aeolus.WallModels._uv_means(c.sim)[1]; t0 = c.sim.t
     q = Ref(0.0); nq = Ref(0)
-    cb = c -> (q[] += -(c.q_wall_bottom + c.q_wall_top) / 2; nq[] += 1)
+    cb = c -> (q[] += -(c.q_wall_bottom + c.q_wall_top) / 2; nq[] += 1;
+               callback === nothing || callback(c); nothing)
     st = run_channel!(c, T_end; average_from = T_avg, callback = cb)
     U1 = Aeolus.WallModels._uv_means(c.sim)[1]
     dUdt = (U1 .- U0) ./ (c.sim.t - t0)
@@ -924,7 +946,7 @@ function stratified_channel_run(Ri, stab; N = (32, 32, 48), T_end = 40.0, T_avg 
     q_lam = (c.sim.ν / c.Pr) * (walls[2] - walls[1]) / 2
     return (Ri = Ri, stab = stab, N = N, U = st.U, zc = st.zc, Ub = mean(st.U),
             Nu = q[] / nq[] / q_lam, τ_wall = st.τ_wall, stress = st.stress, budget = budget,
-            ΔUb = mean(U1) - mean(U0), nsteps = c.nsteps, wall_time = st.wall_time)
+            ΔUb = mean(U1) - mean(U0), nsteps = c.nsteps, wall_time = st.wall_time, case = c)
 end
 
 
@@ -953,21 +975,23 @@ relam_heat_flux(h_over_L; κ = Aeolus.SurfaceExchange.von_karman(), u_τ = 1.0, 
                 θ₀ = SBL_RELAM_θ₀, g = θ₀) = -h_over_L * θ₀ * u_τ^3 / (κ * g * h)
 
 """
-    relam_case(Re_τ, h_over_L; N = (32, 32, 32), extent = (2π, π, 1), seed = 1)
-        -> WallBoundedCase
+    relam_case(Re_τ, h_over_L; N = (32, 32, 32), extent = (2π, π, 1), seed = 1,
+               sgs_stress = :symmetric) -> WallBoundedCase
 
 The open channel at `Re_τ` cooled at `h/L`: no-slip bottom, free-slip
 insulated top, Pr = 0.71, the σ-model (Nicoud et al. 2011) wrapped in
 `StabilityCorrected` (Brown et al. 1994) with isotropic length scales, as
 P58-e's collapse runs use (there the anisotropic Δh relaminarised even the
 neutral half channel; not re-measured for this channel), stress-form
-momentum divergence.
+momentum divergence (`sgs_stress = :symmetric`; `:laplacian` for the
+Laplacian form).
 """
-function relam_case(Re_τ, h_over_L; N = (32, 32, 32), extent = (2π, π, 1.0), seed = 1)
+function relam_case(Re_τ, h_over_L; N = (32, 32, 32), extent = (2π, π, 1.0), seed = 1,
+                    sgs_stress::Symbol = :symmetric)
     mesh = RegularGrid(; size = N, extent = extent)
     closure = StabilityCorrected(SigmaModel(), mesh; length_scales = :isotropic)
     return channel_case(; Re_τ = Re_τ, N = N, closure = closure, bottom_bc = :noslip,
-                        walls = :bottom, extent = extent, sgs_stress = :symmetric, Pr = 0.71,
+                        walls = :bottom, extent = extent, sgs_stress = sgs_stress, Pr = 0.71,
                         θ₀ = SBL_RELAM_θ₀, g_accel = SBL_RELAM_θ₀,
                         surface_heat_flux = relam_heat_flux(h_over_L), noise = 0.0, seed = seed)
 end
@@ -1018,7 +1042,8 @@ function relam_spinup(Re_τ; N = (32, 32, 32), T_spin = 10.0, seed = 1, checkpoi
 end
 
 """
-    relam_run(Re_τ, h_over_L, spinup; T_end = 20, sample = 0.5, checkpoint = nothing) -> NamedTuple
+    relam_run(Re_τ, h_over_L, spinup; T_end = 20, sample = 0.5, checkpoint = nothing,
+              case = relam_case(Re_τ, h_over_L; N = spinup.N), callback = nothing) -> NamedTuple
 
 Switch the cooling `h/L` on in the developed neutral open channel
 `spinup` (θ reset to θ₀) and run `T_end` h/u_τ. Samples every `sample`:
@@ -1029,10 +1054,13 @@ the bulk velocity. Returns the series, the final TKE ratio, the
 relaminarisation criteria at the switch-on (`relaminarisation_criteria`
 with the nominal u_τ = 1) and the wall time. `checkpoint` (a
 `CheckpointSchedule`, [`sbl_checkpoints`](@ref)) resumes an interrupted run,
-series included (`run_channel!`'s hook, #245).
+series included (`run_channel!`'s hook, #245). `case` is the channel to
+run (built by the `sbl` run driver from its config, CFG-d #359; returned
+as `case`); `callback(case)` is called after every step.
 """
-function relam_run(Re_τ, h_over_L, spinup; T_end = 20.0, sample = 0.5, checkpoint = nothing)
-    c = relam_case(Re_τ, h_over_L; N = spinup.N)
+function relam_run(Re_τ, h_over_L, spinup; T_end = 20.0, sample = 0.5, checkpoint = nothing,
+                   case = relam_case(Re_τ, h_over_L; N = spinup.N), callback = nothing)
+    c = case
     s = c.sim
     s.u.data .= spinup.u; s.v.data .= spinup.v; s.w.data .= spinup.w
     crit = relaminarisation_criteria(s; u_τ = 1.0, h = 1.0)
@@ -1044,6 +1072,7 @@ function relam_run(Re_τ, h_over_L, spinup; T_end = 20.0, sample = 0.5, checkpoi
     nxt = Ref(sample)
     t00 = time()
     run_channel!(c, T_end; callback = function (c)
+        callback === nothing || callback(c)
         s.t + 1e-9 >= nxt[] || return
         push!(ts, s.t); push!(es, tke() / e0); push!(γs, γlow()); push!(τs, c.τ_wall_bottom)
         push!(Ubs, mean(Aeolus.WallModels._uv_means(s)[1]))
@@ -1052,7 +1081,88 @@ function relam_run(Re_τ, h_over_L, spinup; T_end = 20.0, sample = 0.5, checkpoi
        checkpoint_components = (ts = ts, es = es, γs = γs, τs = τs, Ubs = Ubs, nxt = nxt))
     return (Re_τ = Re_τ, h_over_L = h_over_L, crit = crit, t = ts, tke = es, γ = γs,
             τ_wall = τs, Ub = Ubs, tke_end = es[end], γ_end = γs[end],
-            nsteps = c.nsteps, wall_time = time() - t00)
+            nsteps = c.nsteps, wall_time = time() - t00, case = c)
+end
+
+# =========================================================================
+# Turbulence collapse in the flux-cooled half channel (P58-e, #193): the
+# P54-d `half_channel_case` (2πH × 2πH × H, -∂p/∂x = u*²/H) with a
+# prescribed surface cooling, the flux-prescribed MOST wall law and the
+# stability-corrected Smagorinsky closure with isotropic length scales. A
+# neutral run is spun up; from its state the cooling is switched on.
+# Shared by examples/sbl/collapse_channel.jl and the `sbl` run driver.
+# =========================================================================
+
+"""
+    collapse_heat_flux_scales(N; z0 = 1e-4, θ_ref = 300, stability = BusingerDyerBeljaarsHoltslag())
+        -> (Q_wall, Q_bulk, U0)
+
+The maximum sustainable heat flux (Van de Wiel et al. 2012,
+`max_sustainable_heat_flux`) of the neutral half channel (u* = H = 1) at
+the wall model's height Δz/2 = H/(2N_z) (`Q_wall`, with the neutral
+wind there, `U0` = ln(Δz/2z0)/κ) and at the channel height H (`Q_bulk`).
+"""
+function collapse_heat_flux_scales(N; z0 = 1e-4, θ_ref = 300.0,
+                                   stability = BusingerDyerBeljaarsHoltslag())
+    κ = Aeolus.SurfaceExchange.von_karman(); h = 1 / (2N[3])
+    U0 = log(h / z0) / κ
+    Qwall = max_sustainable_heat_flux(stability, U0, h, z0, z0, θ_ref)
+    Qbulk = max_sustainable_heat_flux(stability, log(1 / z0) / κ, 1.0, z0, z0, θ_ref)
+    return (Q_wall = Qwall, Q_bulk = Qbulk, U0 = U0)
+end
+
+"""
+    collapse_case(N; heat_flux = nothing, θ_ref = 300, z0 = 1e-4, c_s = 0.1) -> WallBoundedCase
+
+The half channel of the collapse study on `N` cells: `half_channel_case`
+with the closure `StabilityCorrected(StaticSmagorinsky(c_s); length_scales
+= :isotropic)` (Brown et al. 1994) and, unless `heat_flux = nothing`
+(neutral), the kinematic surface heat flux `heat_flux` (negative: cooling)
+with the flux-prescribed MOST wall law at `θ_ref`.
+"""
+function collapse_case(N; heat_flux = nothing, θ_ref = 300.0, z0 = 1e-4, c_s = 0.1)
+    mesh = RegularGrid(; size = N, extent = (2π, 2π, 1.0))
+    closure = StabilityCorrected(StaticSmagorinsky(c_s), mesh; length_scales = :isotropic)
+    return heat_flux === nothing ?
+        half_channel_case(; N = N, closure = closure, z0_over_H = z0) :
+        half_channel_case(; N = N, closure = closure, z0_over_H = z0, surface_heat_flux = heat_flux,
+                          θ_ref = θ_ref)
+end
+
+"""
+    collapse_run(c, spin; T_end = 20, average_from = 15, sample = 1, U0, callback = nothing)
+        -> NamedTuple
+
+Copy the velocity of the spun-up neutral half channel `spin` into `c`
+(time from zero) and run it to `T_end` H/u*. Every `sample` H/u* from
+`average_from` on, record the resolved TKE of the domain (`e`) and of the
+lowest third (`el`), the first-level wind relative to `U0` (`u1`) and
+the wall stress (`τ`). Returns their means, the number of lowest-third
+levels with turbulent fraction γ < 0.2 at the end (`nlam`), `nsteps` and
+`wall` (s). `callback(c)` is called after every step.
+"""
+function collapse_run(c, spin; T_end = 20.0, average_from = 15.0, sample = 1.0, U0, callback = nothing)
+    c.sim.u.data .= spin.sim.u.data; c.sim.v.data .= spin.sim.v.data
+    c.sim.w.data .= spin.sim.w.data
+    g = c.sim.mesh; Nz = g.Nz; lowest = 1:cld(Nz, 3)
+    plane_u1(s) = sum(view(s.u.data, g.Hx+1:g.Hx+g.Nx, g.Hy+1:g.Hy+g.Ny, g.Hz+1)) / (g.Nx * g.Ny)
+    e = Float64[]; el = Float64[]; u1 = Float64[]; τ = Float64[]; nxt = Ref(sample)
+    t1 = time()
+    run_channel!(c, T_end; callback = function (c)
+        callback === nothing || callback(c)
+        if c.sim.t >= nxt[] - 1e-9
+            p = resolved_tke_profile(c.sim.u, c.sim.v, c.sim.w)
+            if c.sim.t >= average_from - 1e-9
+                push!(e, sum(p) / Nz); push!(el, sum(p[lowest]) / length(lowest))
+                push!(u1, plane_u1(c.sim)); push!(τ, c.τ_wall_bottom)
+            end
+            nxt[] += sample
+        end
+    end)
+    γ = turbulent_fraction(c.sim)
+    return (e = sum(e) / length(e), el = sum(el) / length(el), nlam = count(<(0.2), γ[lowest]),
+            nlowest = length(lowest), u1 = sum(u1) / length(u1) / U0, τ = sum(τ) / length(τ),
+            nsamples = length(e), nsteps = c.nsteps, wall = time() - t1)
 end
 
 # ---- checkpoint / restart of the SBL runs (#245) -----------------------------

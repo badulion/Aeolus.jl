@@ -12,9 +12,11 @@ module IO
 #     periodic checkpoints with automatic resume (`CheckpointSchedule`).
 #   * Configuration via `TOML` — human-editable namelists.
 #
-# NetCDF output (NetCDF-4 through NCDatasets) is in src/NCIO.jl (#310).
+# NetCDF output (NetCDF-4 through NCDatasets) is in src/NCIO.jl (#310);
+# the diagnostics.nc writer (io/diagnostics_nc.jl, #337) uses it.
 
 using Serialization
+import NCDatasets
 using TOML
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 using ..Grids: interior, RegularGrid
@@ -34,6 +36,8 @@ export checkpoint_payload, write_checkpoint,
        BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
        check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
        RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir
+# #337: diagnostics.nc (io/diagnostics_nc.jl)
+export DiagnosticsNCWriter, diagnostics_nc_path, nc_provenance_attributes
 # #334: run folder and provenance (io/run_folder.jl)
 export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
        provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,
@@ -98,6 +102,9 @@ include("io/checkpoint.jl")
 # Run folder and provenance (#334): runs/<date>_<case>_<runID>/ with run.log,
 # run.toml, diagnostics, output and checkpoints; the dirty-tree policy.
 include("io/run_folder.jl")
+
+# diagnostics.nc (#337): scalars and profiles as NetCDF-4, provenance attributes.
+include("io/diagnostics_nc.jl")
 
 # Blowup: diagnose, dump, stop; the run monitor (#335): the diagnostics CSV,
 # the progress line and the blowup guard behind one call per step.

@@ -6,6 +6,10 @@ using Test
 using Aeolus
 using Aeolus.SurfaceExchange: _Φm, von_karman, grav
 
+# the LES runs are the cases of examples/sbl/configs/collapse_channel.toml
+# (the `sbl` run driver, CFG-d #359)
+isdefined(Main, :sbl_build) || include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))
+
 @testset "P58-e: maximum sustainable heat flux" begin
     κ = von_karman(); g = grav()
     LL = BusingerDyerLogLinear(β = 5.0)
@@ -151,10 +155,6 @@ end
 # P55-e closure) and the LES collapse regime.
 # -------------------------------------------------------------------------
 
-# the closure of the collapse runs: P55-e's stability correction of
-# Smagorinsky, with isotropic length scales (see the comment in the testset)
-_collapse_closure(mesh) = StabilityCorrected(StaticSmagorinsky(0.1), mesh;
-                                             length_scales = :isotropic)
 _plane_u1(s) = (g = s.mesh; sum(view(s.u.data, g.Hx+1:g.Hx+g.Nx, g.Hy+1:g.Hy+g.Ny, g.Hz+1)) / (g.Nx * g.Ny))
 
 @testset "P58-e: flux-cooled half channel" begin
@@ -210,7 +210,6 @@ end
     # (see the theory page for why one H_max cannot separate the regimes).
     sf = BusingerDyerBeljaarsHoltslag(); κ = von_karman()
     N = (16, 16, 32); z0 = 1e-4; θ = 300.0; Nz = N[3]
-    mk() = RegularGrid(; size = N, extent = (2π, 2π, 1.0))
     h = 1 / (2Nz)
     U1 = log(h / z0) / κ
     Qwall = max_sustainable_heat_flux(sf, U1, h, z0, z0, θ)
@@ -220,13 +219,16 @@ end
     # default anisotropic scales (Δh = √(dx dy) = 12.6 Δz on this grid)
     # give νh 5.4× the isotropic value and relaminarise even the neutral
     # run (resolved TKE 0.18 → 0.0035 u*² over 20 H/u*, measured).
-    spin = half_channel_case(; N = N, closure = _collapse_closure(mk()))
-    run_channel!(spin, 10.0)                 # developed neutral turbulence
+    # The cases of collapse_channel.toml: its spin-up of 10 H/u* (developed
+    # neutral turbulence), then the cooling in units of Q_wall.
+    cfg = sbl_config("collapse_channel")
+    @test cfg.grid.size == N && cfg.case.z0 == z0 && cfg.case.theta_ref == θ && cfg.case.spinup_time == 10.0
+    @test collapse_heat_flux_scales(N; z0 = z0, θ_ref = θ).Q_wall == Qwall
+    spin = sbl_channel_spinup(cfg)
+    @test spin.closure isa StabilityCorrected && spin.sim.t ≈ 10.0
     lowest = 1:cld(Nz, 3)
-    function branch(Qs, t_end)
-        hc = Qs === nothing ? half_channel_case(; N = N, closure = _collapse_closure(mk())) :
-             half_channel_case(; N = N, closure = _collapse_closure(mk()),
-                               surface_heat_flux = Qs, θ_ref = θ)
+    function branch(frac, t_end)
+        hc = sbl_channel_case(with(cfg, "case.heat_flux_fraction" => frac))
         hc.sim.u.data .= spin.sim.u.data; hc.sim.v.data .= spin.sim.v.data
         hc.sim.w.data .= spin.sim.w.data
         rec = (t = Float64[], e = Float64[], elow = Float64[], u1 = Float64[], γ20 = Float64[])
@@ -243,9 +245,9 @@ end
         return rec
     end
     late(r, f) = sum(f[(r.t .>= 15) .& (r.t .<= 20.5)]) / count((r.t .>= 15) .& (r.t .<= 20.5))
-    neu = branch(nothing, 20.0)
-    sub = branch(-0.5Qbulk, 20.0)
-    col = branch(-2Qwall, 40.0)
+    neu = branch(0.0, 20.0)
+    sub = branch(0.5Qbulk / Qwall, 20.0)
+    col = branch(2.0, 40.0)
     e_neu = late(neu, neu.e); elow_neu = late(neu, neu.elow)
     i20 = findfirst(t -> abs(t - 20) < 0.5, col.t); i40 = findlast(t -> t > 39.5, col.t)
     @info "P58-e collapse LES" Qwall Qbulk e_neu elow_neu e_sub = late(sub, sub.e) e_col20 = col.e[i20] e_col40 = col.e[i40] elow_col20 = col.elow[i20] u1_col = extrema(col.u1[5:20]) ./ U1 γlow_col20 = col.γ20[lowest] γlow_neu = neu.γ20[lowest]

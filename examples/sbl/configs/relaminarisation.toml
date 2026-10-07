@@ -1,0 +1,38 @@
+# Relaminarisation of the flux-cooled open channel (P59-e, #195; Nieuwstadt
+# 2005, Flores & Riley 2011, Donda et al. 2015): a pressure-driven channel
+# of depth h with a no-slip bottom and a free-slip, insulated top, cooled
+# at the bottom by the constant kinematic heat flux of stability h/L
+# (relam_heat_flux; L includes κ), Pr = 0.71, the σ-model (Nicoud et al.
+# 2011) with the Brown et al. (1994) correction and isotropic length
+# scales, stress-form momentum divergence. Wall units h = u_τ = 1,
+# ν = 1/Re_τ, g/θ₀ = 1. A neutral spin-up (relam_spinup: the
+# law-of-the-wall profile plus a smooth solenoidal perturbation) for
+# spinup_time h/u_τ, then the cooling is switched on for end_time h/u_τ,
+# sampled every averaging.interval (volume-mean resolved TKE, turbulent
+# fraction, wall stress, bulk velocity). Collapsed: TKE < 10 % of its
+# switch-on value at the end. 32³ at Re_τ = 180; 48³ at 360.
+
+[run]
+driver = "sbl"
+name = "relaminarisation"
+seed = 1
+
+[case]
+kind = "relaminarisation_channel"
+re_tau = 180.0
+h_over_l = 1.0
+spinup_time = 10.0
+
+[grid]
+size = [32, 32, 32]
+
+[sgs]
+closure = "sigma"
+stability = "brown94"
+stress = "symmetric"
+
+[stepper]
+end_time = 20.0
+
+[averaging]
+interval = 0.5

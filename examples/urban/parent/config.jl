@@ -12,7 +12,11 @@
 """
     ParentConfig(child::CaseConfig = CaseConfig(); kwargs...)
 
-Configuration of the Berlin nesting parent. The date, the clock
+Configuration of the Berlin nesting parent. The defaults are those of
+the parent's configuration schema (`[physics.options.nesting.parent]` of
+the `berlin` driver, `core/config_schema.jl`, CFG-c #358); in TOML the
+keys are the ASCII names of the fields (`nudging_tau`, `theta_top`,
+`q_surface`, …, `aeolus options berlin`). The date, the clock
 (`start_h`, `utc_offset`), the location (`lat0`, `lon0`, `elevation`),
 `θ₀`, `g`, `f_coriolis`, the sounding and the initial θ(z), qv(z) and
 ground pressure are the child's (`initial_θ`, `initial_qv`,
@@ -39,8 +43,11 @@ Groups of keywords:
   #249, [`build_parent_surface`](@ref), forced by the parent's air and
   radiation) or `:prescribed` (a kinematic heat flux `Q_surface(t)`,
   K m s⁻¹, and moisture flux `E_surface(t)`, kg kg⁻¹ m s⁻¹, both
-  functions of the simulation time in s; no momentum flux — the
-  idealised CBL tests); `surface_period` (s, the tiles' step), `U_min`
+  functions of the simulation time in s: a [`ConstantForcing`](@ref)
+  (`{kind = "constant", value}` in TOML), a [`SeriesForcing`](@ref)
+  (`{kind = "series", t, value}`, linear in time) or any Julia function,
+  which makes the run not replayable; no momentum flux — the idealised
+  CBL tests); `surface_period` (s, the tiles' step), `U_min`
   (m s⁻¹, the wind floor of the surface layer).
 * **radiation** — `radiation` (`true`: the column radiation of the child,
   `column_radiation!`, on the parent's mean column every `radiation_period`
@@ -67,8 +74,9 @@ Groups of keywords:
   choice of D are deferred to issue #315 (after
   the KernelAbstractions port).
 * **initial state** — from `child`, unless `θ_init` / `qv_init` (functions
-  of z) override it (the idealised tests); `u_init` (`:geostrophic` or a
-  number), `perturbation` (K, uniform random amplitude in the lowest
+  of z: a [`ProfileTable`](@ref), `{kind = "table", z, values}` in TOML,
+  or any Julia function) override it (the idealised tests); `u_init`
+  (`:geostrophic`, a number or a function of z), `perturbation` (K, uniform random amplitude in the lowest
   `perturbation_depth` m), `seed`.
 * **time** — `hours` (simulated length), `output_period` (s, the
   diagnostics' cadence), the `AdaptiveStep` constraints of the child
@@ -96,55 +104,123 @@ Groups of keywords:
 What is printed is the installed logger's choice (#347): the build summary
 is a `Debug` record, each output of [`run_parent!`](@ref) an `Info` one.
 """
-Base.@kwdef mutable struct ParentConfig
-    child::CaseConfig                    = CaseConfig(; output_path = nothing)
+mutable struct ParentConfig
+    child::CaseConfig
     # placement
-    center::Union{Nothing,NTuple{2,Float64}} = nothing   # nothing: on the child
+    center::Union{Nothing,NTuple{2,Float64}}   # nothing: on the child
     # grid
-    extent::NTuple{3,Float64}            = (6000.0, 6000.0, 3000.0)
-    refinement::NTuple{3,Int}            = (2, 2, 4)
-    vertical::Symbol                     = :stretched
-    z_uniform::Float64                   = 500.0
-    ratio::Float64                       = 1.08
-    dz_max::Float64                      = 100.0
-    halo::NTuple{3,Int}                  = (2, 2, 2)
+    extent::NTuple{3,Float64}
+    refinement::NTuple{3,Int}
+    vertical::Symbol
+    z_uniform::Float64
+    ratio::Float64
+    dz_max::Float64
+    halo::NTuple{3,Int}
     # surface
-    surface::Symbol                      = :tiles
-    Q_surface::Any                       = t -> 0.0
-    E_surface::Any                       = t -> 0.0
-    surface_period::Float64              = 60.0
-    U_min::Float64                       = 0.5
+    surface::Symbol
+    Q_surface::Any                # a function of t (s): ConstantForcing, SeriesForcing or any Julia function
+    E_surface::Any
+    surface_period::Float64
+    U_min::Float64
     # radiation
-    radiation::Bool                      = true
-    radiation_period::Float64            = 600.0
+    radiation::Bool
+    radiation_period::Float64
     # large-scale forcing
-    geostrophic::Bool                    = true
-    z_g::Float64                         = NaN       # NaN: 1.2 × the sounding's largest z_i
-    nudging_τ::Float64                   = 6 * 3600.0
-    nudging_factor::Float64              = 1.2
-    nudging_depth::Float64               = 200.0
-    divergence::Float64                  = 0.0       # 3e-6 diverges by day, #312
-    damping_rate::Float64                = 0.01
-    damping_frac::Float64                = 0.25
-    θ_top::Symbol                        = :initial_gradient
+    geostrophic::Bool
+    z_g::Float64                  # NaN: 1.2 × the sounding's largest z_i
+    nudging_τ::Float64
+    nudging_factor::Float64
+    nudging_depth::Float64
+    divergence::Float64           # 3e-6 diverges by day, #312
+    damping_rate::Float64
+    damping_frac::Float64
+    θ_top::Symbol
     # initial state
-    θ_init::Any                          = nothing
-    qv_init::Any                         = nothing
-    u_init::Any                          = :geostrophic
-    perturbation::Float64                = 0.2
-    perturbation_depth::Float64          = 100.0
-    seed::Int                            = 259
+    θ_init::Any                   # nothing (the child's sounding) or a function of z
+    qv_init::Any
+    u_init::Any                   # :geostrophic, a number or a function of z
+    perturbation::Float64
+    perturbation_depth::Float64
+    seed::Int
     # time
-    hours::Float64                       = 24.0
-    output_period::Float64               = 600.0
+    hours::Float64
+    output_period::Float64
     # numerics
-    sgs::Symbol                          = :tke
-    stepper::Symbol                      = :rk3
-    C_advective::Float64                 = 0.9
-    moisture::Bool                       = true
+    sgs::Symbol
+    stepper::Symbol
+    C_advective::Float64
+    moisture::Bool
+end
+
+# The defaults live in the parent's configuration schema
+# (`parent_section` in core/config_schema.jl), the one place they are
+# written; `ParentConfig(; kw...)` starts from them.
+function ParentConfig(; child::CaseConfig = CaseConfig(; output_path = nothing), kw...)
+    d = parent_defaults()
+    for (k, v) in kw
+        k === :child && continue
+        haskey(d, k) || throw(ArgumentError("ParentConfig has no field $k" *
+                                            " (fields: $(join(sort!(string.(collect(keys(d)))), ", ")))"))
+        d[k] = v
+    end
+    return ParentConfig(child, (d[f] for f in fieldnames(ParentConfig)[2:end])...)
 end
 
 ParentConfig(child::CaseConfig; kw...) = ParentConfig(; child = child, kw...)
+
+"""
+    ConstantForcing(value)
+
+A surface forcing of the parent that does not change in time:
+`f(t) = value`. The TOML form `{kind = "constant", value = …}` of
+`q_surface` / `e_surface` (CFG-c, #358).
+"""
+struct ConstantForcing
+    value::Float64
+end
+(f::ConstantForcing)(t) = f.value
+
+"""
+    SeriesForcing(t, value)
+
+A surface forcing of the parent given at the times `t` (s, strictly
+increasing): linear in time between them, constant beyond the ends. The
+TOML form `{kind = "series", t = […], value = […]}` (CFG-c, #358).
+"""
+struct SeriesForcing
+    t::Vector{Float64}
+    value::Vector{Float64}
+end
+(f::SeriesForcing)(t) = _interp1(f.t, f.value, t)
+Base.:(==)(a::SeriesForcing, b::SeriesForcing) = a.t == b.t && a.value == b.value
+Base.isequal(a::SeriesForcing, b::SeriesForcing) = isequal(a.t, b.t) && isequal(a.value, b.value)
+Base.hash(a::SeriesForcing, h::UInt) = hash(a.value, hash(a.t, hash(:SeriesForcing, h)))
+
+"""
+    ProfileTable(z, values)
+
+A vertical profile of the parent's initial state, linear in `z` (m,
+strictly increasing) between the given heights and constant beyond the
+ends. The TOML form `{kind = "table", z = […], values = […]}` of
+`theta_init`, `qv_init` and `u_init` (CFG-c, #358).
+"""
+struct ProfileTable
+    z::Vector{Float64}
+    values::Vector{Float64}
+end
+(p::ProfileTable)(z) = _interp1(p.z, p.values, z)
+Base.:(==)(a::ProfileTable, b::ProfileTable) = a.z == b.z && a.values == b.values
+Base.isequal(a::ProfileTable, b::ProfileTable) = isequal(a.z, b.z) && isequal(a.values, b.values)
+Base.hash(a::ProfileTable, h::UInt) = hash(a.values, hash(a.z, hash(:ProfileTable, h)))
+
+"Linear interpolation of `(xs, ys)` at `x`, constant beyond the ends."
+function _interp1(xs, ys, x)
+    x <= xs[1] && return ys[1]
+    x >= xs[end] && return ys[end]
+    i = searchsortedlast(xs, x)
+    w = (x - xs[i]) / (xs[i+1] - xs[i])
+    return (1 - w) * ys[i] + w * ys[i+1]
+end
 
 "Horizontal and surface vertical spacing (m) of the parent: the child's spacing × the refinement."
 function parent_spacing(pc::ParentConfig)

@@ -79,7 +79,7 @@ end
 # the extends chain
 # ---------------------------------------------------------------------------
 
-function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema)
+function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema; sweep::Symbol = :error)
     ovr, oprobs = _parse_overrides(overrides)
     files = String[leaf]; dicts = Dict{String,Any}[deepcopy(leafdict)]
     seen = Set{String}([_real(leaf)])
@@ -103,6 +103,13 @@ function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema)
     raw = Dict{String,Any}(); origins = Dict{String,String}()
     for i in length(files):-1:1                     # root first, the leaf last
         _merge!(raw, origins, dicts[i], files[i], "")
+    end
+    # a [sweep] (CFG-e) is expanded by the runner, never part of a resolved config
+    sw = pop!(raw, "sweep", nothing)
+    sweep === :table && return sw
+    if sw !== nothing && sweep === :error
+        n = sw isa AbstractDict ? length(sweep_members(sw, leaf)) : 0
+        throw(_sweep_error(leaf, n))
     end
     _apply_overrides!(raw, origins, ovr, oprobs)
     sources = Dict{String,Any}("files" => files, "overrides" => String[overrides...])
@@ -129,6 +136,7 @@ function _find_extends(ext::String, cur::String, hint)
     isfile(cand) && return cand
     looked = String[cand]
     dirs = String[]
+    hint === nothing || _ensure_driver(hint)
     if hint !== nothing && haskey(_DRIVERS, hint)
         d = _DRIVERS[hint].config_dir
         d === nothing || push!(dirs, d)
@@ -190,7 +198,9 @@ function _parse_overrides(overrides)
         end
         key = strip(s[1:prevind(s, i)]); val = strip(s[nextind(s, i):end])
         parts = split(key, '.')
-        if isempty(key) || any(p -> !occursin(r"^[A-Za-z0-9_-]+$", p), parts)
+        # a part is a TOML bare key, or letters and digits of any script
+        # (the Berlin per-coupling options keep their Julia names: "τ", "C_σ")
+        if isempty(key) || any(p -> !occursin(r"^[\p{L}\p{N}_-]+$", p), parts)
             push!(probs, ConfigProblem(String(key), OVERRIDE_ORIGIN, "not a dotted key: \"$key\""))
             continue
         end
@@ -320,7 +330,8 @@ end
 
 "The default of `o`, evaluated (a function is called) and checked."
 function _default(o::Option, key)
-    d = o.default isa Function ? o.default() : o.default
+    # invokelatest: a driver loaded from DRIVER_FILES during this load is newer than the caller's world
+    d = o.default isa Function ? Base.invokelatest(o.default) : o.default
     ok, v, why = _coerce(o, d, true, pwd(), key)
     ok || return (false, nothing, "the default $(_show_raw(d)) is invalid: $why")
     return (true, v, "")
@@ -334,7 +345,7 @@ function _finish(sch::ConfigSchema, values, vorig, sources)
                     vorig, sources, _nonreplayable(values))
     probs = ConfigProblem[]
     for f in sch.checks
-        for e in f(cfg)
+        for e in Base.invokelatest(f, cfg)     # an example driver may have been loaded just now
             for p in (e isa ConfigError ? e.problems : [ConfigProblem("", "", string(e))])
                 push!(probs, isempty(p.file) ? ConfigProblem(p.key, get(vorig, p.key, ""), p.message) : p)
             end

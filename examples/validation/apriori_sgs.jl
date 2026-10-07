@@ -10,7 +10,12 @@
 # second-moment test-to-grid ratio and (b) on the LES grid of spacing Δ
 # (Fourier coarse-grained field, default ratio 3).
 #
-#   julia --project=. examples/validation/apriori_sgs.jl [N]
+# The DNS is examples/validation/configs/apriori_sgs.toml (driver
+# "dns_decay", examples/validation/dns_driver.jl); this script runs it and
+# analyses its final fields.
+#
+#   julia --project=. examples/validation/apriori_sgs.jl
+#   julia --project=. examples/validation/apriori_sgs.jl --set grid.n=48
 #
 # writes examples/validation/output/apriori_sgs_<N>.md (correlation tables)
 # =========================================================================
@@ -20,9 +25,8 @@ using Aeolus.Fields: interior_view
 using Printf
 include(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns_apriori.jl"))   # + dns_decay.jl
 
-N = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 96
-
-d = dns_decay(; N)
+d = only(run_configs(joinpath(@__DIR__, "configs", "apriori_sgs.toml"), ARGS)).obj.result
+N = d.mesh.Nx
 @printf("DNS %d³: ν = %.4g, %d steps, %.0f s; Re_λ %.1f; k_max η ≥ %.2f (%.2f at t = %.1f); S = %.3f; max |budget err| %.1e\n",
         N, d.ν, d.nsteps, d.wall, d.Re_λ, d.kmax_eta, d.kmax_eta_end, d.t[end], d.S[end], maximum(abs, d.budget_err))
 

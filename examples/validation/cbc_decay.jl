@@ -9,23 +9,26 @@
 # test/cbc_benchmark_driver.jl, test/data/cbc1971_table3.txt,
 # test/era6_cbc_decay.jl.
 #
-#   julia --project=. examples/validation/cbc_decay.jl [N]
+# The three runs are the sweep examples/validation/configs/cbc_decay.toml
+# (driver "cbc_decay", examples/validation/cbc_driver.jl); this script runs
+# them and draws the figure.
+#
+#   julia --project=. examples/validation/cbc_decay.jl
+#   julia --project=. examples/validation/cbc_decay.jl --set grid.n=32
 #
 # writes examples/validation/output/cbc_decay_<N>.svg
 # =========================================================================
 
 using Aeolus
 using Printf
-include(joinpath(@__DIR__, "..", "..", "test", "cbc_benchmark_driver.jl"))
+include(joinpath(@__DIR__, "..", "..", "test", "cbc_benchmark_driver.jl"))   # cbc_table, cbc_spectrum, cbc_summary
 
-N = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 64
-
-closures = (:dynamic, :smagorinsky, :none)
-res = Dict{Symbol,Any}()
-for c in closures
-    res[c] = cbc_benchmark(c; N)
-    println(cbc_summary(String(c), res[c]))
+runs = run_configs(joinpath(@__DIR__, "configs", "cbc_decay.toml"), ARGS)
+res = Dict{Symbol,Any}(r.obj.cfg.sgs.closure => r.obj.result for r in runs)
+for r in runs
+    println(cbc_summary(String(r.obj.cfg.sgs.closure), r.obj.result))
 end
+N = runs[1].obj.cfg.grid.n
 
 # --- figure: E(k) at the three stations, log-log --------------------------
 function write_figure(path, res, N)

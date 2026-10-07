@@ -4,11 +4,20 @@ The canonical benchmark for incompressible LES cores. The initial
 condition is analytically divergence-free, and (in the linearized
 limit) the kinetic energy decays as `exp(-6νt)`.
 
-Location: `examples/taylor_green_vortex.jl`.
+Location: `examples/configs/taylor_green_vortex.toml` (the
+`simulation` driver; `examples/taylor_green_vortex.jl` is a three-line
+runner for it).
 
 ```bash
-$ julia --project=. examples/taylor_green_vortex.jl
+$ julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml
+$ julia --project=. examples/taylor_green_vortex.jl          # the same
 ```
+
+The run writes a run folder `runs/<date>_taylor_green_vortex_<id>/`
+with `run.toml`, `run.log` and `diagnostics.csv` (`ke_mean`, `max_div`,
+… every 0.1 s). The config reproduces, bit for bit, the simulation the
+script built in code before it became a config
+(`test/config_simulation_driver.jl`), so the numbers below still hold.
 
 ## Setup
 
@@ -23,6 +32,10 @@ on `32³` over `[0, 2π]³`, triply-periodic, molecular viscosity
 viscous)` CFL with factor 0.4.
 
 ## Expected output
+
+The KE values of the former script's printout (`ke_mean` in
+`diagnostics.csv` is KE divided by the box volume (2π)³: 0.12447 at
+t = 0.077, 0.11084 at t = 1.923):
 
 ```text
 TGV N = 32³   ν = 1.00e-02   dt = 7.69e-02   nsteps = 26
