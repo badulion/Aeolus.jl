@@ -378,7 +378,7 @@ Left as they are, with the reason:
   order-independent.
 * **Plane-at-a-time loops** (dynamic Smagorinsky, #288 damping levels,
   `LargeScaleForcing` nudging and subsidence): canonical as they stand.
-* **CG / MG dot products**: KA-g (#300).
+* **CG / MG dot products**: ported by KA-g (#300), below.
 * **Reports, smoke checks and one-off diagnostics** (`bubble_top_height`,
   `θ_variance`, the SGS reports, `laminar_reference_νt`): not on the step
   path; serial and thread-invariant.
@@ -597,6 +597,152 @@ Reading the table:
   1-thread time it is 1.6–2.1× at 12 threads.
 * **The whole-child prolongation is compute-bound** (a 27-point stencil
   per point) and scales to 7.1× at 24 threads.
+
+## KA-g: one CG driver (#300)
+
+**One loop.** `Backends.pcg!` is the only preconditioned conjugate
+gradient in Aeolus. `CGPoissonSolver`, `MGPreconditionedCG`,
+`DensityWeightedPoissonSolver` and `solve_implicit_diffusion!` (the IMEX
+steppers' implicit diffusion) call it. Their own loops are deleted:
+`_dot!`, `_project_mean_flat!`, Anelastic's `_dot`, `_remove_mean!` and
+`_jacobi!`, TimeIntegration's `_apply_implicit!` and `_idot`. A solver
+supplies four things:
+
+* the operator: a `PointOperator(f, args...; prepare)` (the stencil at
+  one point; `prepare` is the halo fill of the array it reads) or a
+  function `A!(Ap, p)` (the multigrid fine-grid operator);
+* the preconditioner: `IdentityPreconditioner()`, a pointwise
+  `PointPreconditioner` (Jacobi), or a function `M!(z, r)` (V-cycles);
+* `project_mean` for a singular operator (all axes periodic or Neumann);
+* `constraint`: the pinned planes of a staggered field with walls.
+
+Per iteration the driver makes three sweeps and two canonical
+reductions:
+
+1. `Ap = A p`, with `p·Ap` reduced over each plane while it is in cache;
+2. `x += αp`, `r -= αAp`, `z = M⁻¹r` (a pointwise `M`), with
+   `(r·r, r·z, Σz, Σr)` as one 4-tuple reduction;
+3. `p = (z − m) + βp`, where `m = Σz / n` with the mean projected out.
+
+The mean projection costs no extra sweep: `r·z` of the deflated `z` is
+`Σ rz − m Σ r`. The density-weighted solver went from nine passes over
+the arrays per iteration (five sweeps and four separate reductions) to
+three sweeps carrying two reductions. A function preconditioner adds one
+reduction after `M!`. Every reduction is a `plane_reduce!`-style plane
+sum, so a solve, its iteration count and its residual are the same at
+every thread count.
+
+**Unit halos.** `CGPoissonSolver` and `DensityWeightedPoissonSolver`
+now keep `b`, `x`, `r`, `z`, `p` and `Ap` as `(N+2)`-arrays with one halo
+layer. `fill_unit_halo!` (the KA-f halo kernels, also the multigrid
+level halo) fills the periodic wrap or the Neumann mirror before each
+operator application. The stencil then has no wrap-around index
+arithmetic and vectorises: one point of `_laplacian_at` and
+`_neg_wlap_at` gives the values of the old wrap-around loops (a mirrored
+neighbour makes the face difference exactly zero). The implicit
+diffusion iterates on the field's own storage as before, with
+`fill_halos!` as `prepare`. `_diffusion_kernel!` is a `launch!` of
+`_diff_at`.
+
+**Pinned rows.** A per-point pinned test in the sweeps stopped the row
+loops from vectorising: 4× slower in a first version. The sweeps
+therefore compute every point and then zero the pinned plane (`Ap`, `z`
+and `p` there are 0, `x` keeps its value, `b` there does not count in
+`‖b‖`), as `_apply_constraint!` did.
+
+**Status.** `pcg!` returns `(iterations, residual, bnorm, status,
+curvature)`. `status` is `:converged`, `:maxit`, `:breakdown` or
+`:zero_rhs`, and each solver logs it as before. One change:
+`CGPoissonSolver` now stops at a breakdown and warns. Before, it divided
+by a vanishing `p·Ap` and went on. `definite = :negative` is for the
+two Poisson solvers that iterate on `∇²` itself (negative
+semi-definite). For those only a vanishing curvature is a breakdown.
+
+**Workspace.** `PCGWorkspace` holds `r`, `z`, `p`, `Ap` and the
+per-plane partial sums. Every solver preallocates one, so a solve
+allocates nothing on one thread. Measured with `@allocated`, the
+Poisson solvers allocate 0 B. `solve_implicit_diffusion!` allocates
+48 B (352 B with a moving wall), the same as before; the 48 B are its
+returned NamedTuple at a dynamic call site. A first version allocated
+80 B more with a ν array: the `Union` of the two preconditioners was
+boxed. It now has one `pcg!` call per preconditioner. Above the serial threshold a threaded launch allocates
+KernelAbstractions' tasks, about 9 kB per iteration at 4 threads.
+
+**One-time change (expectation).** The dot products were
+`sum(w .= a .* b)` (pairwise) in CG and MG-CG and serial `@simd` loops
+in the other two. They are now canonical plane sums. The iteration
+counts did not change: identical in all 28 cases measured (the 14
+below at 32×32×16 and 64×64×32; the issue allowed ±1). The solutions
+change in the last bits: `sum(|x|)` and `max(|x|)` changed by at most
+2.2e-15 and 1.8e-15 relative (deep density-weighted case). In 2 of the
+28 cases both are bit-identical. No regression reference of the suite
+moved. One assertion was replaced: `era2_multigrid.jl` asserted that
+MG-CG's dot equals `sum(x .* y)`. It now asserts that the driver's dot
+is `interior_dot` (canonical).
+
+**Measured** (64×64×32; ms per solve, minimum of 5; load 2-4 for 1 and
+24 threads and 2-6 for 4 and 12; Julia 1.13.1; old = master b4f6f82 at
+one thread; speed-up = old 1 t / new N t, in brackets new 1 t / new N
+t):
+
+| solver | iterations old → new | old 1 t | new 1 t | new / old | 4 t | 12 t | 24 t |
+| :----- | :------------------- | ------: | ------: | --------: | --: | ---: | ---: |
+| CG, periodic xy, Neumann z | 288 → 288 | 123.4 | 51.0 | 0.41 | 5.3× (2.18×) | 3.8× (1.56×) | 3.8× (1.55×) |
+| CG, closed box | 508 → 508 | 221.2 | 89.6 | 0.41 | 5.9× (2.40×) | 2.9× (1.17×) | 3.7× (1.50×) |
+| CG, triply periodic | 259 → 259 | 108.9 | 46.7 | 0.43 | 6.0× (2.56×) | 3.0× (1.30×) | 3.7× (1.57×) |
+| MG-CG, periodic xy, Neumann z | 12 → 12 | 40.3 | 39.1 | 0.97 | 1.0× | 1.0× | 1.0× |
+| MG-CG, triply periodic | 12 → 12 | 40.4 | 39.0 | 0.97 | 1.0× | 0.9× | 1.0× |
+| MG-CG, stretched (×1.04) | 47 → 47 | 226.7 | 222.4 | 0.98 | 1.0× | 0.9× | 1.0× |
+| density-weighted, periodic xy, Neumann z | 330 → 330 | 124.7 | 62.0 | 0.50 | 4.8× (2.41×) | 2.4× (1.18×) | 3.3× (1.62×) |
+| density-weighted, triply periodic | 292 → 292 | 93.7 | 54.0 | 0.58 | 4.1× (2.37×) | 2.4× (1.40×) | 2.8× (1.62×) |
+| density-weighted, closed box | 569 → 569 | 224.1 | 105.3 | 0.47 | 5.5× (2.61×) | 2.8× (1.32×) | 3.3× (1.56×) |
+| density-weighted, 3 km deep | 519 → 519 | 223.9 | 96.1 | 0.43 | 6.0× (2.57×) | 3.2× (1.38×) | 3.6× (1.56×) |
+| implicit diffusion θ, scalar ν | 27 → 27 | 11.0 | 5.6 | 0.51 | 4.0× (2.07×) | 2.4× (1.23×) | 2.8× (1.44×) |
+| implicit diffusion θ, ν(x, z), walls | 34 → 34 | 46.6 | 28.6 | 0.61 | 5.1× (3.12×) | 4.3× (2.67×) | 3.2× (1.99×) |
+| implicit diffusion w, pinned walls | 27 → 27 | 11.0 | 5.6 | 0.51 | 3.9× (2.01×) | 2.1× (1.07×) | 2.9× (1.47×) |
+| implicit diffusion u, moving no-slip wall | 28 → 28 | 11.5 | 5.9 | 0.51 | 4.5× (2.28×) | 2.5× (1.28×) | 2.8× (1.41×) |
+
+The Berlin flagship step at 64³ (ms per step, minimum of 8 after 2
+warm-up steps, the smoke matrix's `core = anelastic` and `timestepper =
+imex` rows without nesting; the `:dynamics` timers in brackets; 419
+density-weighted iterations per solve; old = master b4f6f82):
+
+| run | old 1 t | new 1 t | new 4 t | new 12 t | new 24 t | old 24 t |
+| :-- | ------: | ------: | ------: | -------: | -------: | -------: |
+| anelastic core | 362.0 (276.0) | 291.0 (205.2) | 169.2 (91.0) | 196.8 (120.0) | 243.6 (164.0) | 353.2 (276.8) |
+| IMEX ARK2 | 234.2 (151.3) | 216.1 (132.2) | 141.2 (69.7) | 144.2 (70.8) | 164.6 (85.5) | 220.9 (148.2) |
+
+Reading the tables:
+
+* **The 1-thread gate holds everywhere** (largest new / old 0.98,
+  MG-CG stretched). CG, density-weighted CG and implicit diffusion are
+  0.41-0.61× the old loops on one thread. The gain comes from fewer
+  sweeps (the fused reductions, the mean projection folded into `r·z`)
+  and from stencils without wrap-around indices.
+* **MG-CG does not change.** Its time is the V-cycle (smoothing,
+  restriction, prolongation). That cycle is still serial and outside
+  this issue.
+* **Threads.** The issue expected 2-3× at 4 threads and 3-5× at 12.
+  Against the new 1-thread time we get 2.0-3.1× at 4 threads and
+  1.1-2.7× at 12. At 12 threads it is worse than at 4, and 24 threads
+  is between the two. The likely cause (not profiled) is that 32 planes
+  of 64×64 points are too little work per task for the start-up of
+  three launches per iteration. Against the old loops at one
+  thread this is 3.9-6.0× at 4 threads.
+* **Berlin.** At 4 threads the anelastic dynamics take 91 ms instead of
+  276 ms (3.0×) and the IMEX dynamics 70 ms instead of 151 ms (2.2×).
+  The issue quoted 139.6 ms and 124.7-163.9 ms, measured on another
+  setup; on this one master takes 276 ms and 151 ms. The replacement of the
+  density-weighted CG by a direct solve is #309.
+
+**Thread invariance.** The worker's `pcg` section hashes the solution
+and the iteration count of every solver above at 64×64×32 (the
+singular Neumann and periodic cases, the stretched multigrid and the
+ν(x, z) / pinned / moving-wall implicit cases): 28 hashes. With
+`AEOLUS_THREAD_TESTS=1` at 1, 4 and 24 threads, all 2894 hashes of the
+harness (every section, `pcg` included) are identical to 1 thread.
+`test/ka_pcg.jl` checks the serial backend against the default one,
+solution and iteration count, for every solver.
 
 ## Measured at KA-h
 
