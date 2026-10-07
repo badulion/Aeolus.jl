@@ -187,8 +187,11 @@ end
 
 @testset "sound-proof core: record, dt pick and solver statistics" begin
     m = RegularGrid(; size = (8, 8, 8), extent = (800.0, 800.0, 800.0), halo = (3, 3, 3))
+    # the CG solver (the default is the direct solve since #309, which has
+    # no iterations: checked below)
     sim = AnelasticSimulation(m; ref = isothermal_reference(m; T_surf = 300.0),
-                              bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+                              bcs = FieldBoundaryConditions(:periodic, :periodic, :wall),
+                              pressure_solver = :cg)
     rng = Xoshiro(2)
     set!(sim.u, (x, y, z) -> 3.0 + 0.5 * randn(rng))
     calls = hooked(sim)
@@ -200,6 +203,14 @@ end
     @test r.solves == 1 && r.solver_iters == solver_iterations(sim.solver) > 0
     @test r.solver_residual == solver_residual(sim.solver)
     @test r.cfl_adv ≈ c.C_advective rtol = 1e-12      # the advective limit binds
+    # the direct solve (#309): one solve, 0 iterations, no residual
+    simd = AnelasticSimulation(m; ref = isothermal_reference(m; T_surf = 300.0),
+                               bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    @test simd.solver isa Aeolus.Anelastic.DirectWeightedPoissonSolver
+    set!(simd.u, (x, y, z) -> 3.0 + 0.5 * randn(rng))
+    rd = step_record(simd)
+    step!(simd, dt)
+    @test rd.solves == 1 && rd.solver_iters == 0 && isnan(rd.solver_residual)
 end
 
 @testset "nested run: the run's step, each domain's accepted steps" begin
