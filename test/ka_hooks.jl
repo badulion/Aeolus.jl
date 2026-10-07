@@ -9,7 +9,17 @@
 #      and without eddy viscosity, also for a shuffled pair order; serially,
 #      threaded with every launch on the KA path (`threshold = 0`), and on the
 #      default backend;
-#   2. the face index groups every pair of a face, once, in pair order.
+#   2. the face index groups every pair of a face, once, in pair order;
+#   3. the canopy drag (PlantCanopy.apply_canopy_drag!) over its list of
+#      faces with leaves, the direct forcing of the IBM
+#      (implicit_ibm_correction! with τ = 0 and τ > 0, add_ibm_penalty!) as
+#      launches over the faces, the moist buoyancy of the Berlin example
+#      (examples/urban/couplings/moist_buoyancy.jl) and the large-scale
+#      forcings (geostrophic pressure gradient, profile nudging with a
+#      height weight, both subsidence forms, advective tendencies, the
+#      `:mean` target of ReferenceDamping) one work item per level, on a
+#      RegularGrid and a StretchedGrid: bit for bit against the former loops,
+#      on every backend.
 
 using Test
 using Random: Xoshiro, randn, rand, shuffle
@@ -17,6 +27,13 @@ using Aeolus
 using Aeolus.Fields: interior_view
 using Aeolus.IBM: SolidMask, mark_solid!, implicit_ibm_correction!
 using Aeolus.WallModels: ImmersedWalls, ImmersedWallFace
+using Aeolus.PlantCanopy: ResolvedCanopyDrag, apply_canopy_drag!, UniformLAD, canopy_lad_field
+using Aeolus.IBM: add_ibm_penalty!
+using Aeolus.StretchedGrids: StretchedGrid
+const LSF = Aeolus.LargeScaleForcing
+
+isdefined(Main, :BerlinCase) ||
+    include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
 
 isdefined(@__MODULE__, :LegacyHooks) || include(joinpath(@__DIR__, "support", "legacy_hooks.jl"))
 
@@ -109,6 +126,159 @@ end
     end
     # the physics is untouched: the walls take momentum out, τ_w ≥ 0
     @test iw.stats[:τ_min] >= 0 && iw.stats[:τA] > 0
+end
+
+@testset "canopy drag over the faces with leaves = former full-grid loops" begin
+    sim, sm = hk_city(; seed = 11)
+    g = sim.mesh
+    prof = [(3 < i < 12 && 12 < j < 18) || (i == 20 && j == 3) ? UniformLAD(2.5 + 0.1i, 4.0) : nothing
+            for i in 1:g.Nx, j in 1:g.Ny]
+    drag = ResolvedCanopyDrag(g, canopy_lad_field(g, prof); C_d = 0.25)
+    @test length(drag.act) == count(>(0), drag.a_u) + count(>(0), drag.a_v) + count(>(0), drag.a_w)
+    @test issorted(drag.act; by = x -> (x[1], x[4], x[3], x[2]))       # u, v, w; each k, j, i
+    st = hk_state(sim)
+    fs = ntuple(_ -> ones(g.Nx, g.Ny, g.Nz), 3)
+    Fref = LegacyHooks.apply_canopy_drag!(sim, drag, fs..., 2.0)
+    ref = hk_state(sim)
+    for (bname, b) in HK_BACKENDS
+        hk_restore!(sim, st)
+        F = with_backend(() -> apply_canopy_drag!(sim, drag, 2.0), b)
+        ok = all(hk_bits(x) == hk_bits(y) for (x, y) in zip(hk_state(sim), ref)) &&
+             hk_bits(Tuple(F)) == hk_bits(Tuple(Fref))
+        ok || @info "KA-k bit mismatch (canopy drag)" bname
+        @test ok
+    end
+    @test Fref.Fx != 0 && Fref.Fy != 0 && Fref.Fz != 0      # the canopy is on all three components
+end
+
+@testset "IBM direct forcing over the faces = former loop over the solid cells" begin
+    sim, sm = hk_city(; seed = 12)
+    rng = Xoshiro(5)
+    for f in (sim.u, sim.v, sim.w)          # undo the correction of hk_city: velocity inside the solid
+        interior_view(f) .= randn(rng, size(interior_view(f)))
+    end
+    st = hk_state(sim)
+    cases = (("implicit τ = 0", s -> implicit_ibm_correction!(s, sm), s -> LegacyHooks.implicit_ibm_correction!(s, sm)),
+             ("implicit τ > 0", s -> implicit_ibm_correction!(s, sm; τ = 3.0, dt = 0.7),
+                                s -> LegacyHooks.implicit_ibm_correction!(s, sm; τ = 3.0, dt = 0.7)),
+             ("penalty", s -> add_ibm_penalty!(s, sm; τ = 0.4), s -> LegacyHooks.add_ibm_penalty!(s, sm; τ = 0.4)))
+    for (cname, new!, old!) in cases
+        hk_restore!(sim, st); old!(sim); ref = hk_state(sim)
+        @test any(hk_state(sim)[i] != st[i] for i in 1:6)
+        for (bname, b) in HK_BACKENDS
+            hk_restore!(sim, st)
+            with_backend(() -> new!(sim), b)
+            ok = all(hk_bits(x) == hk_bits(y) for (x, y) in zip(hk_state(sim), ref))
+            ok || @info "KA-k bit mismatch (IBM)" cname bname
+            @test ok
+        end
+    end
+end
+
+@testset "moist buoyancy of the Berlin example = former loops" begin
+    BCm = Main.BerlinCase
+    g = RegularGrid(; size = (24, 20, 10), extent = (24.0, 20.0, 10.0), halo = (3, 3, 3))
+    rng = Xoshiro(13)
+    θ = 300 .+ randn(rng, 24, 20, 10); qv = 8e-3 .+ 1e-3 .* randn(rng, 24, 20, 10)
+    qc = [abs.(1e-4 .* randn(rng, 24, 20, 10)), abs.(1e-5 .* randn(rng, 24, 20, 10))]
+    fluid = rand(rng, 24, 20, 10) .< 0.8
+    fluid[:, :, 10] .= false                                    # a level with no fluid
+    tw = Aeolus.Fields.Field(Aeolus.Grids.FaceZ(), g); tw.data .= randn(rng, size(tw.data))
+    tw0 = copy(tw.data)
+    # the reference: the same plane_reduce! level sums, then the former loops
+    Δr = zeros(24, 20, 10); S, n = zeros(10), zeros(10)
+    plane_reduce!((S, n), CPUBackend(serial = true), BCm._moist_Δ_at, (1:24, 1:20, 1:10), Δr, θ, qv, qc, fluid)
+    LegacyHooks.moist_deviation!(Δr, S, n, fluid)
+    LegacyHooks.add_moist_buoyancy!(tw, Δr, 300.0, 9.81); twr = copy(tw.data)
+    for (bname, b) in HK_BACKENDS
+        Δ = zeros(24, 20, 10); tw.data .= tw0
+        with_backend(b) do
+            BCm.moist_buoyancy_perturbation!(Δ, θ, qv, qc, fluid)
+            BCm.add_moist_buoyancy!(tw, Δ, 300.0, 9.81)
+        end
+        ok = hk_bits(Δ) == hk_bits(Δr) && hk_bits(tw.data) == hk_bits(twr)
+        ok || @info "KA-k bit mismatch (moist buoyancy)" bname
+        @test ok
+    end
+end
+
+function hk_lsf_sim(gname; seed = 14)
+    sz, ex = (20, 16, 24), (2000.0, 1600.0, 2400.0)
+    g = gname == "regular" ? RegularGrid(; size = sz, extent = ex, halo = (3, 3, 3)) :
+                             StretchedGrid(; size = sz, extent = ex, halo = (3, 3, 3), stretching = (:geometric, 1.06))
+    sim = BoussinesqSimulation(g; ν = 0.0, f_coriolis = 1e-4,
+                               bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    rng = Xoshiro(seed)
+    for f in (sim.u, sim.v, sim.θ, sim.tu, sim.tv, sim.tθ)
+        f.data .= randn(rng, size(f.data))
+    end
+    sim.θ.data .+= 300
+    return sim
+end
+hk_lsf_state(sim) = map(copy, (sim.tu.data, sim.tv.data, sim.tθ.data))
+function hk_lsf_restore!(sim, st)
+    for (f, x) in zip((sim.tu, sim.tv, sim.tθ), st)
+        f.data .= x
+    end
+end
+
+@testset "large-scale forcing one level per work item = former loops ($gname)" for gname in ("regular", "stretched")
+    sim = hk_lsf_sim(gname)
+    m = sim.mesh
+    st = hk_lsf_state(sim)
+    Ug = (z, t) -> 5 + 0.002z + 1e-4t
+    tab = LSF.ForcingTable([0.0, 800.0, 2400.0], [299.0, 301.0, 306.0])
+    ws = (z, t) -> -3e-3 * z / 1000
+    W = LSF.NudgingWeight(600.0; depth = 400.0)
+    t, Δt = 120.0, 2.5
+    cases = (
+      ("geostrophic", s -> (apply_forcing!(s, LSF.GeostrophicPressureGradient(Ug, -1.5), t, Δt); ()),
+                      s -> (LegacyHooks.apply_gpg!(s, LSF.GeostrophicPressureGradient(Ug, -1.5), t, Δt); ())),
+      ("nudging (weighted)", s -> Tuple(apply_forcing!(s, LSF.ProfileNudging((θ = tab, u = 4.0), 900.0; weight = W), t, Δt)),
+                      s -> (wf = LSF._weight_fn(W, s);
+                            (LegacyHooks._nudge_levels!(s.θ.data, s.tθ.data, m, tab, 1 / 900.0, wf, t, t + Δt),
+                             LegacyHooks._nudge_levels!(s.u.data, s.tu.data, m, 4.0, 1 / 900.0, wf, t, t + Δt)))),
+      ("nudging (unweighted)", s -> Tuple(apply_forcing!(s, LSF.GeostrophicNudging(3.0, 1.0, 600.0), t, Δt)),
+                      s -> (LegacyHooks._nudge_levels!(s.u.data, s.tu.data, m, 3.0, 1 / 600.0, nothing, t, t + Δt),
+                            LegacyHooks._nudge_levels!(s.v.data, s.tv.data, m, 1.0, 1 / 600.0, nothing, t, t + Δt))),
+      ("subsidence, mean gradient", s -> Tuple(apply_forcing!(s, LSF.Subsidence(ws; fields = (:θ, :u)), t, Δt)),
+                      s -> (LegacyHooks._subside_mean!(s.θ.data, s.tθ.data, m, ws, t, t + Δt, Float64[]),
+                            LegacyHooks._subside_mean!(s.u.data, s.tu.data, m, ws, t, t + Δt, Float64[]))),
+      ("subsidence, local", s -> Tuple(apply_forcing!(s, LSF.Subsidence(ws; fields = (:θ, :v), form = :local), t, Δt)),
+                      s -> (LegacyHooks._subside_local!(s.θ.data, s.tθ.data, m, ws, t, t + Δt),
+                            LegacyHooks._subside_local!(s.v.data, s.tv.data, m, ws, t, t + Δt))),
+      ("subsidence, local, ascent", s -> Tuple(apply_forcing!(s, LSF.Subsidence(2e-3; fields = (:θ,), form = :local), t, Δt)),
+                      s -> (LegacyHooks._subside_local!(s.θ.data, s.tθ.data, m, 2e-3, t, t + Δt),)),
+      ("advective tendencies", s -> (apply_forcing!(s, LSF.AdvectiveTendencies(; θ = (z, t) -> 1e-5 * sin(z / 300), u = tab), t, Δt); ()),
+                      s -> (LegacyHooks._add_level_tendency!(s.tθ.data, m, (z, t) -> 1e-5 * sin(z / 300), t, Δt);
+                            LegacyHooks._add_level_tendency!(s.tu.data, m, tab, t, Δt); ())))
+    for (cname, new!, old!) in cases
+        hk_lsf_restore!(sim, st); Iref = old!(sim); ref = hk_lsf_state(sim)
+        @test any(ref[i] != st[i] for i in 1:3)
+        for (bname, b) in HK_BACKENDS
+            hk_lsf_restore!(sim, st)
+            I = with_backend(() -> new!(sim), b)
+            ok = all(hk_bits(x) == hk_bits(y) for (x, y) in zip(hk_lsf_state(sim), ref)) &&
+                 hk_bits(Float64.(I)) == hk_bits(Float64.(Iref))
+            ok || @info "KA-k bit mismatch (large-scale forcing)" gname cname bname
+            @test ok
+        end
+    end
+    # ReferenceDamping toward the slab mean: the level means of the target
+    F = LSF.ReferenceDamping(:θ, Aeolus.Operators.sponge_profile(0.01, 1200.0, 2400.0), :mean)
+    bref = LegacyHooks.resolve_plane_means!(zeros(m.Nz), sim.θ)
+    for (bname, b) in HK_BACKENDS
+        resize!(F.buf, m.Nz)
+        got = with_backend(() -> copy(LSF._resolve_target(F, :mean, sim.θ, nothing, t)), b)
+        @test hk_bits(got) == hk_bits(bref)
+    end
+    # the whole apply_forcing! of the damping is thread-invariant
+    outs = map(HK_BACKENDS) do (bname, b)
+        hk_lsf_restore!(sim, st)
+        with_backend(() -> apply_forcing!(sim, F, t, Δt), b)
+        (hk_bits(sim.tθ.data), hk_bits(F.levels), hk_bits(F.integral[]))
+    end
+    @test allequal(outs)
 end
 
 end # testset
