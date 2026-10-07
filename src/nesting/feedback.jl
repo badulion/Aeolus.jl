@@ -616,12 +616,21 @@ end
 # Bookings of a separate transport (#327, M3)
 # =========================================================================
 
-# simulation => (registers, :parent | :child, nest) of the two-way run that
-# owns it (weak keys: a discarded simulation drops out). Set by NestedRun.
-const _NEST_BOOKERS = WeakKeyDict{Any,Tuple{NestFluxRegisters,Symbol,NestedGrid}}()
+# simulation => [(registers, :parent | :child, nest)] of the two-way runs it
+# belongs to (weak keys: a discarded simulation drops out). Set by NestedRun.
+# A domain of a nest hierarchy (#328) is the child of one link and the
+# parent of others, hence a list; a domain re-registered on the same side
+# of the same nest (a run rebuilt on the same simulations) replaces its entry.
+const _NEST_BOOKERS = WeakKeyDict{Any,Vector{Tuple{NestFluxRegisters,Symbol,NestedGrid}}}()
 
-_register_booker!(sim, r::NestFluxRegisters, which::Symbol, nest::NestedGrid) =
-    (_NEST_BOOKERS[sim] = (r, which, nest); nothing)
+function _register_booker!(sim, r::NestFluxRegisters, which::Symbol, nest::NestedGrid)
+    v = get!(_NEST_BOOKERS, sim) do
+        Tuple{NestFluxRegisters,Symbol,NestedGrid}[]
+    end
+    filter!(e -> !(e[2] === which && e[3] === nest), v)
+    push!(v, (r, which, nest))
+    return nothing
+end
 
 """
     book_nest_flux!(sim, name, ϕ, dt; scheme = nothing, diffusivity = nothing,
@@ -666,14 +675,25 @@ Bookings land in the step being attempted and are discarded with it if the
 step is rejected. Returns `false` (and books nothing) when `sim` is in no
 refluxing two-way run, `name` is not declared with `applied_by = :transport`,
 or no step of `sim`'s domain is under way — so a transport can call it
-unconditionally.
+unconditionally. A domain of a [`NestHierarchy`](@ref) that belongs to
+several two-way links (the child of one, the parent of others) books into
+every one of them.
 """
 function book_nest_flux!(sim, name::Symbol, ϕ::Field, dt::Real; scheme = nothing,
                          diffusivity = nothing, velocity = (sim.u, sim.v, sim.w),
                          weights = :sim, sgs = nothing)
-    entry = get(_NEST_BOOKERS, sim, nothing)
-    entry === nothing && return false
-    r, which, nest = entry
+    entries = get(_NEST_BOOKERS, sim, nothing)
+    entries === nothing && return false
+    booked = false
+    for (r, which, nest) in entries            # every link the domain belongs to (#328)
+        booked |= _book_entry!(r, which, nest, sim, name, ϕ, dt; scheme, diffusivity,
+                               velocity, weights, sgs)
+    end
+    return booked
+end
+
+function _book_entry!(r::NestFluxRegisters, which::Symbol, nest::NestedGrid, sim, name::Symbol,
+                      ϕ::Field, dt::Real; scheme, diffusivity, velocity, weights, sgs)
     n = findfirst(==(name), r.names)
     (n === nothing || _by_core(r.models[n])) && return false
     par = which === :parent

@@ -110,6 +110,7 @@ export NestedGrid, NestAxis, nested_grid, refinement_ratio, nest_offset,
        DomainAdvance, domain_advance, stage_times,
        NestedRun, NestRunStats, boundary_time, begin_parent_step!, end_parent_step!, subcycle_dt,
        begin_child_step!, end_child_step!,
+       NestHierarchy, add_nest!, nest_domain, nest_link, proper_nesting_violations,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
        anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights
 
@@ -130,5 +131,6 @@ include("nesting/step.jl")
 include("nesting/domain_advance.jl")
 include("nesting/feedback.jl")
 include("nesting/nested_run.jl")
+include("nesting/hierarchy.jl")
 
 end # module
