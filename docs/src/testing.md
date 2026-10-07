@@ -265,3 +265,10 @@ legacy in-code builds, which are the bit-identity oracles of the config
 migration. The slowest fast file, `config_berlin.jl` (105 s), spends its
 time building the case and starting a fresh process, not stepping (12
 Berlin steps take 0.5 s).
+
+Fast tier after #317 (`test/run.jl --jobs 4`, 1-min load 5.2 at start,
+other agents' suites alongside): 13.4 min, 128 jobs, 100 981 assertions
+(100 973 pass, 8 broken). It is not comparable with the 12.6 min of
+#320 above: master gained four KA jobs in between. The job time saved
+is the 69 s of `era6_large_scale_forcing.jl` (83 → 13.3 s); the full
+tier, whose full-only files #317 does not touch, saves the same.
