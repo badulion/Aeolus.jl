@@ -285,6 +285,7 @@ end
     dt = 0.4 * g.dx                     # CFL = 0.4
     nsteps = round(Int, 1.0/dt)          # exactly one period
 
+    wsp = FluxLimiterWorkspace(g)        # required when the backend runs threaded (KA-e)
     schemes = (("centered", (t,u,v,w,f,dt) -> advect_centered!(t,u,v,w,f)),
                ("weno5(legacy)", (t,u,v,w,f,dt) -> Aeolus.advect_weno5!(t,u,v,w,f)),
                ("weno_z5", (t,u,v,w,f,dt) -> advect_weno_z!(t,u,v,w,f; order=5)),
@@ -292,7 +293,7 @@ end
                ("teno5",   (t,u,v,w,f,dt) -> advect_teno!(t,u,v,w,f; order=5)),
                ("teno8",   (t,u,v,w,f,dt) -> advect_teno!(t,u,v,w,f; order=8)),
                ("positive(teno5)", (t,u,v,w,f,dt) ->
-                    advect_positive!(t,u,v,w,f,dt; scheme=:teno5)))
+                    advect_positive!(t,u,v,w,f,dt; scheme=:teno5, workspace=wsp)))
 
     results = map(schemes) do (name, adv)
         ϕ = Aeolus.Field(CellCenter(), g); set!(ϕ, (x,y,z) -> square(x))
@@ -343,6 +344,7 @@ end
     fill_halos!(ϕ, PERIODIC)
     dV = g.dx*g.dy*g.dz
 
+    wsp = FluxLimiterWorkspace(g)
     schemes = (("centered", (t) -> advect_centered!(t,u,v,w,ϕ)),
                ("weno5(legacy)", (t) -> Aeolus.advect_weno5!(t,u,v,w,ϕ)),
                ("weno_z5", (t) -> advect_weno_z!(t,u,v,w,ϕ; order=5)),
@@ -351,7 +353,7 @@ end
                ("teno8",   (t) -> advect_teno!(t,u,v,w,ϕ; order=8)),
                ("upwind1",  advection_scheme(:upwind)  |> s -> (t) -> s(t,u,v,w,ϕ)),
                ("variance_conserving", (t) -> advect_variance_conserving!(t,u,v,w,ϕ)),
-               ("positive(weno_z5)", (t) -> advect_positive!(t,u,v,w,ϕ,1e-3; scheme=:weno_z5)))
+               ("positive(weno_z5)", (t) -> advect_positive!(t,u,v,w,ϕ,1e-3; scheme=:weno_z5, workspace=wsp)))
 
     msgs = String[]
     for (name, adv) in schemes
@@ -415,7 +417,7 @@ end
     for (F, vel) in ((fx, u), (fy, v), (fz, w))
         F.data .= 5.0 .* vel.data          # deliberately absurd fluxes
     end
-    apply_positivity_limiter!(fx, fy, fz, ϕ, 10.0, g)     # CFL ≈ 100
+    apply_positivity_limiter!(fx, fy, fz, ϕ, 10.0, g; ratio = Aeolus.Field(CellCenter(), g))  # CFL ≈ 100
     t = Aeolus.Field(CellCenter(), g)
     Aeolus.AdvectionSchemes._add_flux_divergence!(t, fx, fy, fz, g)
     ii, jj, kk = interior(g)

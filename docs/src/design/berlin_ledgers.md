@@ -27,6 +27,11 @@ combined over ``k`` in ascending order; the heat of the air takes its
 fluid and solid level sums the same way (`air_heat_levels!`).
 `add_surface!` sums the step's column contributions per class in
 column-major order and adds that step total to the accumulated term.
+The couplings' own column totals — the surface exchange's evaporation,
+the `aq_chem` emissions and dry deposition, the parent's area sums of
+its tile fluxes — are `column_sum` totals (KA-m, #301): one work item
+per column, the columns' terms added in column-major order from zero,
+the same bits serially and threaded.
 
 **Surface energy.** `:Rn` (net radiation into the surface), `:H`,
 `:LE`, `:G` (sensible, latent and ground heat flux out of it) and `:dS`
@@ -176,7 +181,11 @@ at the 200 m domain top (the next tallest roof is 143.75 m, the
 default `:canopy` is the whole column there; set `cfg.canopy_top` for the
 street canyons.
 
-**Tests** (`test/berlin_air_heat.jl`, `test/berlin_smoke.jl`). The meter
+**Tests** (the former `test/berlin_air_heat.jl` and `test/berlin_smoke.jl`,
+removed in #320 with the rest of the Berlin suite; the heat content of
+the discretely hydrostatic reference against this analytic value is now
+asserted in `test/era2_anelastic.jl`, the ledger closure by the smoke runs
+of `examples/urban/berlin_checks.jl`). The meter
 against the analytic heat of a uniform-θ hydrostatic layer
 (``c_p^2 θ p_0/(R g)\,[Π^{c_p/R+1}/(c_p/R+1)]``: 3.1e-8 at Nz = 16,
 2.0e-9 at Nz = 64, second order). A closed box (every θ source off):
@@ -391,10 +400,13 @@ machine:
 The open faces' work (the buffer update and mass correction, the
 boundary-heat capture, the θ relaxation) costs no more than the
 measurement noise; the all-Neumann cosine solve of the open box is if
-anything cheaper than the periodic-x, y solve. `test/berlin_open_boundaries.jl`
-prints a smoke-window measurement.
+anything cheaper than the periodic-x, y solve. The former
+`test/berlin_open_boundaries.jl` printed a smoke-window measurement.
 
-**Tests.** `test/berlin_open_boundaries.jl`: the default stays periodic;
+**Tests** (the former `test/berlin_open_boundaries.jl`, removed in #320;
+the +1 K anomaly's analytic face flux, upwind and centred, with the
+diffusive part, and the wall tagging across an open face are asserted in
+`test/era6_open_near_boundary.jl`): the default stays periodic;
 the open faces, data, sponge target, solver axes, frame and solid points;
 one dynamics step through the case's own hook books 0.0 J m⁻² for an
 inflow equal to the interior and ``ρ̄c_pΠ̄(UΔT/2 + νΔT/Δx)AΔt`` = 604.525
@@ -467,7 +479,7 @@ original script, so it is indicative.
 adjustment uses `T = θ Π(p)`, about 1.1 K warmer at 1013 hPa. The air
 was at 93.5 % RH and the fog evaporated completely on the first
 `:fog_dew` call. Since #131 the seed is `q_s(θ Π̄_k, p̄_k)` and the fog
-persists. Remeasured on master (`915bd49`, `test/berlin_smoke.jl`
+persists. Remeasured on master (`915bd49`, smoke-run
 configuration, 16 × 16 × 16, every addon on, 24 s at noon: with the
 adaptive default that is 9 steps, the first of 2.2 s, mean 2.67 s, not
 12 of 2 s):
@@ -538,7 +550,11 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
 
 ## Smoke test
 
-**`test/berlin_smoke.jl`** runs the case in `examples/urban/configs/berlin_smoke.toml`
+The smoke runs were `test/berlin_smoke.jl` until #320 removed the Berlin
+test suite; they are now the `smoke` part of
+**`examples/urban/berlin_checks.jl`**, run by hand after changing the
+example (`julia --project=. examples/urban/berlin_checks.jl smoke`). They
+run the case in `examples/urban/configs/berlin_smoke.toml`
 (each run of the matrix is that file plus `--set` overrides, CFG-c #358): a
 250 m × 250 m × 100 m window of the real OSM file (16 × 16 × 16,
 dx = 15.6 m, 312.5 m south of the anchor, 69 building and 50 park
@@ -573,8 +589,8 @@ class (1e-6 W m⁻²) and the water ledger (1e-12 kg m⁻²). The first run
 also asserts that the domain gains radiative energy at noon (Rn > 0,
 ΔS > 0) and that the transport conserves water (|transport| <
 1e-12 kg m⁻²; measured ~1e-19 since #132). Finally every registered
-coupling must have run in at least one configuration, and the whole
-test must take less than 300 s.
+coupling must have run in at least one configuration. (As a test it also
+had to take less than 300 s; the by-hand script has no time limit.)
 
 At #127 the matrix was 2 runs (no slot had a second provider yet); #130
 added the column radiation's `surface_sw = :bird` variant, and #132 the
@@ -589,9 +605,8 @@ density_weighted_cg`, adaptive, IMEX, adaptive + ARK2): 18 runs.
 
 The coverage test `test/berlin_coverage.jl` and its lists (`BERLIN_EXEMPT`,
 `BERLIN_PENDING`, `BERLIN_DEFAULT_OFF`, `BERLIN_OPTION_ONLY`) were removed
-(maintainer decision 2026-10-06, #320).
-
-`test/berlin_smoke.jl` also checks that the "summer / winter, everything
-on" configurations of `smoke_matrix()` select every addon and every
-default provider, so an `incompatible` declaration cannot silently drop
-a coupling from the runs that are meant to have everything.
+(maintainer decision 2026-10-06), and with #320 the rest of the Berlin
+suite: the checks that the "everything on" runs select every addon and
+default provider and that the matrix is derived from the registry
+(plumbing of the former flagship rule) are gone; the every-coupling-ran
+check stays in the smoke runs.

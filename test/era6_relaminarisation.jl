@@ -277,4 +277,55 @@ end
                    st.νv / st.ν, st.νh / st.ν, st.νs / st.ν, st.tke, nt.tke)
 end
 
+# Moved from test/berlin_numerics.jl (#320), where it was measured on the
+# Berlin free stream above the sponge start: a quiet free stream carrying
+# weak residual fluctuations over a turbulent layer is turbulent against
+# its own plane-mean vorticity (the plane-normalised γ is scale-free) and
+# laminar against the domain-mean vorticity (`normalization = :volume`,
+# the setting for a quiet free stream). Here the same situation is built
+# synthetically.
+@testset "3. laminar_mask!: plane vs volume normalisation, laminar shear, solids" begin
+    m = RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (2, 2, 2))
+    sim = BoussinesqSimulation(m; bcs = FieldBoundaryConditions(:periodic))
+    iu, iv, iw = interior_view(sim.u), interior_view(sim.v), interior_view(sim.w)
+    rng = Xoshiro(195)
+    for (ks, a, U) in ((1:8, 1.0, 0.0), (9:16, 1e-3, 1.0))     # turbulent layer, quiet stream
+        n = (16, 16, length(ks))
+        iu[:, :, ks] .= U .+ a .* randn(rng, n...)
+        iv[:, :, ks] .= a .* randn(rng, n...)
+        iw[:, :, ks] .= a .* randn(rng, n...)
+    end
+    fillv!() = foreach(f -> fill_halos!(f, sim.bcs), (sim.u, sim.v, sim.w))
+    fillv!()
+    lam = falses(16, 16, 16)
+    γ(ks) = 1 - mean(lam[:, :, ks])
+    laminar_mask!(lam, sim.u, sim.v, sim.w)
+    γp_free, γp_turb = γ(10:15), γ(2:7)        # away from the jump between the layers
+    laminar_mask!(lam, sim.u, sim.v, sim.w; normalization = :volume)
+    γv_free, γv_turb = γ(10:15), γ(2:7)
+    @info @sprintf("  laminar_mask!: quiet stream γ = %.3f (plane), %.3f (volume); turbulent layer γ = %.3f (plane), %.3f (volume)",
+                   γp_free, γv_free, γp_turb, γv_turb)
+    @test γp_free > 0.9 && γp_turb > 0.9       # scale-free: noise is noise
+    @test γv_free < 0.1                        # weak against the domain's vorticity
+    @test γv_turb > 0.9
+    # the complement of turbulent_indicator! within the fluid; solid cells are
+    # neither turbulent nor laminar
+    fluid = trues(16, 16, 16); fluid[4:6, 4:6, 1:5] .= false
+    ind = falses(16, 16, 16)
+    turbulent_indicator!(ind, sim.u, sim.v, sim.w; fluid = fluid)
+    laminar_mask!(lam, sim.u, sim.v, sim.w; fluid = fluid)
+    @test lam == (fluid .& .!ind)
+    @test !any(lam[4:6, 4:6, 1:5]) && !any(ind[4:6, 4:6, 1:5])
+    # a laminar parallel shear flow, u(z), v(z) turning with height: laminar
+    # everywhere in both normalisations
+    zc = [(k - 0.5) * m.dz for k in 1:16]
+    for k in 1:16
+        iu[:, :, k] .= sin(2π * zc[k]); iv[:, :, k] .= 0.3 * cos(2π * zc[k])
+    end
+    iw .= 0
+    fillv!()
+    @test all(laminar_mask!(lam, sim.u, sim.v, sim.w))
+    @test all(laminar_mask!(lam, sim.u, sim.v, sim.w; normalization = :volume))
+end
+
 end # testset

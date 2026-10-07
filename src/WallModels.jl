@@ -119,11 +119,13 @@ using ..BoundaryConditions: AbstractBoundaryData, open_boundary_conditions   # N
 using ..Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!, box_filter!,
                    spectral_cutoff_filter!
 using ..Fields: Field, interior_view
+using ..Backends: launch!, launch_weighted!, backend      # KA-k (#307): the immersed-wall operators are launches
 import ..Operators: phi_m_profile, total_stress_profile
 using ..Simulations: BoussinesqSimulation, step_rk3!
 using ..Operators: laplacian
 using ..BoundaryConditions: NoSlipWall
 using ..TimeSteppers: step!
+using ..Backends: Backends, column_sum
 using Random
 using ..SurfaceExchange
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,

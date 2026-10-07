@@ -1,5 +1,6 @@
-# The Berlin smoke-test run matrix and its moist seeding, shared by
-# test/berlin_smoke.jl and the thread-invariance harness
+# The Berlin smoke run matrix and its moist seeding, shared by the
+# by-hand checks of the example (examples/urban/berlin_checks.jl; the
+# Berlin test suite was removed in #320) and the thread-invariance harness
 # (test/thread_invariance.jl, KA-a #294), which hashes the same runs at
 # 1, 4 and 24 threads. The includer defines `BC = Main.BerlinCase` and
 # loads Aeolus, `interior_view` and `Random.Xoshiro`.
@@ -84,8 +85,8 @@ smoke_matrix(registry = BC.REGISTRY) = [label => smoke_config(spec) for (label, 
 """
     smoke_specs(registry = BC.REGISTRY) -> Vector{Pair{String,NamedTuple}}
 
-The smoke-test runs derived from `registry` (see the file header of
-test/berlin_smoke.jl), each `label => (physics, options, fields, extra)`:
+The smoke runs derived from `registry` (see the smoke section of
+docs/src/design/berlin_ledgers.md), each `label => (physics, options, fields, extra)`:
 the `[physics]` selection, the per-coupling options, `CaseConfig` field
 values and raw overrides that run sets over `berlin_smoke.toml`. Every
 run has every additive coupling on; a run that selects a coupling
