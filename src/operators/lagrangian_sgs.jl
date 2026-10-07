@@ -259,31 +259,34 @@ function _scale_dependent_cs2!(cs2, beta, c::LagrangianDynamicSmagorinsky{T}, cs
     φmin, φmax = log2(c.beta_min), log2(c.beta_max)
     fixed = c.beta_fixed !== nothing
     φfix = fixed ? log2(c.beta_fixed) : zero(T)
-    launch!(Backends.backend(cs2), _scale_dependent_body!, axes_ranges(cs2), cs2, beta,
+    # One linear index per point: the 3-D (i, j, k) form of the same body
+    # took 1.20x the old eachindex loop at 64x64x32 (one thread, 2.82 ms
+    # against 2.35 ms); the linear one takes 1.00x.
+    launch!(Backends.backend(cs2), _scale_dependent_body!, (1:length(cs2),), cs2, beta,
             c.I_LM, c.I_MM, c.I_QN, c.I_NN, lnα, inv_lr, φmin, φmax, fixed, φfix,
             c.beta_min, c.beta_max, cs2max)
     return nothing
 end
 
-@inline function _scale_dependent_body!(i, j, k, cs2, beta, ILM, IMM, IQN, INN, lnα, inv_lr,
+@inline function _scale_dependent_body!(I, cs2, beta, ILM, IMM, IQN, INN, lnα, inv_lr,
                                         φmin, φmax, fixed, φfix, beta_min, beta_max, cs2max)
     T = eltype(cs2)
     @inbounds begin
-        mm = IMM[i,j,k]
-        ca = mm > 0 ? ILM[i,j,k] / mm : zero(T)              # C²(αΔ)
+        mm = IMM[I]
+        ca = mm > 0 ? ILM[I] / mm : zero(T)              # C²(αΔ)
         if !(ca > 0)
-            cs2[i,j,k] = zero(T); beta[i,j,k] = one(T)
+            cs2[I] = zero(T); beta[I] = one(T)
             return nothing
         end
         φ = if fixed
             φfix
         else
-            nn = INN[i,j,k]
-            cb = nn > 0 ? IQN[i,j,k] / nn : zero(T)          # C²(α₂Δ)
+            nn = INN[I]
+            cb = nn > 0 ? IQN[I] / nn : zero(T)          # C²(α₂Δ)
             cb > 0 ? clamp(log2(cb / ca) * inv_lr, φmin, φmax) : φmin
         end
-        beta[i,j,k] = clamp(exp2(φ), beta_min, beta_max)     # β = 2^φ
-        cs2[i,j,k] = clamp(ca * exp(-φ * lnα), zero(T), cs2max) # C²(αΔ) α^(-φ)
+        beta[I] = clamp(exp2(φ), beta_min, beta_max)     # β = 2^φ
+        cs2[I] = clamp(ca * exp(-φ * lnα), zero(T), cs2max) # C²(αΔ) α^(-φ)
     end
     return nothing
 end
