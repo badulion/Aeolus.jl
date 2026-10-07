@@ -4,7 +4,8 @@
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
 # Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
-# nested, fft, fv, pcg, steps, radiation, hooks, columns) and writes
+# nested, fft, fv, pcg, multigrid, steps, radiation, hooks, columns,
+# advection) and writes
 # one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
 # the raw bits (Float64 → UInt64), so two processes agree iff the results
 # are bit-identical. MODE is `default` (CPUBackend(): threaded when N > 1)
@@ -42,6 +43,12 @@
 #               FFT, CosineFFT for all 8 axis-BC combinations, Stretched for
 #               the 4 lateral pairs — at 64×64×32 and 128×128×64, with FFTW
 #               on the process's threads (`init_threads!`).
+#   pcg         (KA-g, #300) every solver on the one CG driver: the
+#               solution and the iteration count.
+#   multigrid   (KA-i, #303) MultigridPoissonSolver and MGPreconditionedCG
+#               at 64×64×32 and 128×128×64: periodic / Neumann / all-Neumann,
+#               W-cycle, FMG, stretched z and cut-cell coefficients (a solid
+#               block): the solution, the cycle count and the residual history.
 #   fv          (KA-d, #299) every finite-volume kernel on seeded random
 #               fields with filled halos, on a 64×64×32 RegularGrid, a
 #               geometric StretchedGrid and a TerrainFollowingGrid over a
@@ -59,6 +66,15 @@
 #               (per-face gather) on a 64×64×32 city with their
 #               diagnostics, the canopy drag, the Berlin moist buoyancy, and
 #               every large-scale forcing on a regular and a stretched grid.
+#   advection   (KA-e, #302) the scalar-transport and momentum-advection
+#               kernels of AdvectionSchemes on seeded random fields at
+#               64×64×32: the flux-form sweep and face fluxes of every
+#               reconstruction, advect_positive! with the limiter active
+#               (periodic wrap and wall halos; its ratio field), the bare
+#               limiter, the WENO-Z / skew momentum and variance-conserving
+#               advection, advect_positive! on a stretched grid, and
+#               boundary_scalar_flux on a 256×256×128 open box (face
+#               launches on several tasks; totals, levels, correction).
 #   radiation   (KA-n, #305) the radiosity view factors of a 16×14 city
 #               (n ≈ 600 facets), its shortwave / longwave solves through
 #               the LU cache (BLAS pinned to one thread here: LAPACK's bits
@@ -501,6 +517,24 @@ function section_columns()
 end
 
 # --------------------------------------------------------------------------
+# KA-i (#303): the multigrid V-cycle on launch! (colour-indexed RBGS, residual,
+# restriction, prolongation, canonical means and norms).
+include(joinpath(@__DIR__, "multigrid_cases.jl"))
+function section_multigrid()
+    MGm = Aeolus.Multigrid
+    for N in ((64, 64, 32), (128, 128, 64))
+        tag = join(N, 'x')
+        for (name, (m, s)) in mg_solver_cases(N)
+            p, _ = mg_solve_case(name, m, s)
+            record!("multigrid/$tag/$name", p.data)
+            record!("multigrid/$tag/$name/cycles", mg_cycles(s))
+            s isa MGm.MultigridPoissonSolver && record!("multigrid/$tag/$name/history", mg_iteration_history(s))
+        end
+    end
+end
+
+# --------------------------------------------------------------------------
+# KA-d (#299): the finite-volume kernels on launch!.
 function section_fv()
     FVK = Aeolus.Operators.FiniteVolume
     SG = Aeolus.StretchedGrids
@@ -767,6 +801,71 @@ function section_radiation()
 end
 
 # --------------------------------------------------------------------------
+function section_advection()
+    AS = Aeolus.AdvectionSchemes
+    SG = Aeolus.StretchedGrids
+    CC, FX, FY, FZ = Aeolus.Grids.CellCenter(), Aeolus.Grids.FaceX(), Aeolus.Grids.FaceY(), Aeolus.Grids.FaceZ()
+    g = RegularGrid(; size = (64, 64, 32), extent = (640.0, 640.0, 320.0), halo = (5, 5, 5))
+    rng = Xoshiro(302)
+    rf(loc, m = g; s = 1.0, o = 0.0) = (f = Field(loc, m); f.data .= o .+ s .* randn(rng, size(f.data)); f)
+    pos(m = g) = (f = Field(CC, m); f.data .= max.(randn(rng, size(f.data)), 0.0) .^ 3; f)
+    u, v, w = rf(FX), rf(FY), rf(FZ; s = 0.5)
+    θ = rf(CC; s = 2.0, o = 300.0); q = pos()
+    walls = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    ws = AS.FluxLimiterWorkspace(g)
+    for (rn, r) in (("weno_z5", AS.WENOZ(5, 2)), ("weno_z7", AS.WENOZ(7, 2)), ("teno5", AS.TENO(5)),
+                    ("teno8", AS.TENO(8)), ("weno_js5", AS.WENOJS(5)), ("centered", AS.Centered2()),
+                    ("upwind", AS._UpwindFirst()))
+        o = rf(CC); AS._advect_reconstructed!(o, u, v, w, θ, r, g); record!("advection/$rn/sweep", o.data)
+        AS._reconstructed_fluxes!(ws.Fx, ws.Fy, ws.Fz, u, v, w, θ, r, g)
+        record!("advection/$rn/face fluxes", vcat(vec(ws.Fx.data), vec(ws.Fy.data), vec(ws.Fz.data)))
+        for (bn, bcs) in (("wrap", nothing), ("walls", walls))
+            o = rf(CC); advect_positive!(o, u, v, w, q, 400.0; scheme = r, workspace = ws, bcs = bcs)
+            record!("advection/$rn/advect_positive! $bn", o.data)
+            record!("advection/$rn/advect_positive! $bn.ratio", ws.ratio.data)
+        end
+    end
+    # the bare limiter with absurd fluxes (no low-order fallback)
+    Fx, Fy, Fz = rf(FX; s = 50.0), rf(FY; s = 50.0), rf(FZ; s = 50.0)
+    apply_positivity_limiter!(Fx, Fy, Fz, q, 10.0, g; ratio = ws.ratio)
+    record!("advection/bare limiter", vcat(vec(Fx.data), vec(Fy.data), vec(Fz.data), vec(ws.ratio.data)))
+    for (rn, r) in (("weno_z5", AS.WENOZ(5, 2)), ("weno_z7", AS.WENOZ(7, 2)))
+        a, b, c = rf(FX), rf(FY), rf(FZ); AS._momentum_advect_recon!(a, b, c, u, v, w, r, g)
+        record!("advection/momentum $rn", vcat(vec(a.data), vec(b.data), vec(c.data)))
+    end
+    a, b, c = rf(FX), rf(FY), rf(FZ); AS._momentum_advect_skew!(a, b, c, u, v, w, g)
+    record!("advection/momentum skew", vcat(vec(a.data), vec(b.data), vec(c.data)))
+    o = rf(CC); AS._advect_variance_conserving!(o, u, v, w, θ, g); record!("advection/variance conserving", o.data)
+    # the positive-definite path on a stretched grid (centred)
+    sg = SG.StretchedGrid(; size = (64, 64, 32), extent = (640.0, 640.0, 320.0), halo = (3, 3, 3),
+                          stretching = (:geometric, 1.05))
+    sws = AS.FluxLimiterWorkspace(sg)
+    o = rf(CC, sg)
+    advect_positive!(o, rf(FX, sg), rf(FY, sg), rf(FZ, sg; s = 0.5), pos(sg), 400.0;
+                     scheme = :centered, workspace = sws, bcs = walls)
+    record!("advection/stretched advect_positive!", o.data)
+    # boundary_scalar_flux on an open box large enough that its 2-D face
+    # launches run on several tasks (a 256×128 side plane: 2 tasks; the
+    # 256×256 bottom/top plane: 4), with a mass-flux correction δ ≠ 0,
+    # diffusion, weights and levels
+    bg = RegularGrid(; size = (256, 256, 128), extent = (2560.0, 2560.0, 1280.0), halo = (5, 5, 5))
+    data = FunctionBoundaryData(u = 2.0, v = -1.0, w = 0.1, θ = 300.0)
+    bcs = open_boundary_conditions(bg, data; halo = 5)
+    bcs.west.state.δ = 0.003
+    bu, bv, bw = rf(FX, bg; o = 2.0), rf(FY, bg; o = -1.0), rf(FZ, bg; s = 0.1)
+    bθ = rf(CC, bg; s = 0.5, o = 300.0); bκ = rf(CC, bg; s = 0.1, o = 1.0)
+    fake = (u = bu, v = bv, w = bw, bcs = bcs, θ_bcs = bcs)
+    W = (1.0 .+ 0.1 .* rand(rng, size(bθ.data, 3)), 1.0 .+ 0.1 .* rand(rng, size(bθ.data, 3)))
+    for sch in (:centered, :upwind, :weno_z5, :teno8)
+        lv = zeros(bg.Nz); cl = zeros(bg.Nz)
+        F = boundary_scalar_flux(fake, bθ; scheme = sch, fill = false, levels = lv, correction_levels = cl,
+                                 weights = W, diffusivity = (ν = 0.1, κh = bκ, κv = bκ))
+        record!("advection/boundary_scalar_flux $sch.totals", collect(values(F)))
+        record!("advection/boundary_scalar_flux $sch.levels", vcat(lv, cl))
+    end
+end
+
+# --------------------------------------------------------------------------
 # KA-j (#306): every step core (test/support/step_cases.jl): every field of
 # the simulation after one to four steps, the dt sequences, the CFL
 # diagnostics and a forced retry.
@@ -792,9 +891,11 @@ for s in SECTIONS
     s == "fv"         ? section_fv() :
     s == "hooks"      ? section_hooks() :
     s == "pcg"        ? section_pcg() :
+    s == "multigrid"  ? section_multigrid() :
     s == "steps"      ? section_steps() :
     s == "radiation"  ? section_radiation() :
     s == "columns"    ? section_columns() :
+    s == "advection"  ? section_advection() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)
 end
