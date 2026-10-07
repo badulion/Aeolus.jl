@@ -142,10 +142,6 @@ seconds = 71
 weight = "heavy"
 seconds = 65
 
-["era6_large_scale_forcing.jl"]
-weight = "heavy"
-seconds = 60
-
 ["era6_neutral_abl.jl"]
 weight = "heavy"
 seconds = 56
