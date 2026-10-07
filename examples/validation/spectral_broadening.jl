@@ -24,7 +24,11 @@
 #    σ_{r²}(t) on log-log axes against the Ornstein-Uhlenbeck curve and the
 #    t^{1/2} law, with the fitted exponents.
 #
-# Run:  julia --project=examples examples/validation/spectral_broadening.jl
+# The runs (the parcels of 1. and 2., each with the superdroplet reference
+# and the bulk scheme) are the sweep examples/validation/configs/
+# spectral_broadening.toml (driver "column", case "droplet_parcel").
+#
+# Run:  julia --project=. examples/validation/spectral_broadening.jl [--set key=value]
 # Writes two SVGs to examples/validation/output/ (gitignored).
 # =========================================================================
 
@@ -34,15 +38,18 @@ include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 outdir = joinpath(@__DIR__, "output")
 mkpath(outdir)
 
+runs = run_configs(joinpath(@__DIR__, "configs", "spectral_broadening.toml"), ARGS)
+H = Dict(chop(r.obj.cfg.run.name; head = length("spectral_broadening_"), tail = 0) => r.obj.state for r in runs)
+cfg_of = Dict(chop(r.obj.cfg.run.name; head = length("spectral_broadening_"), tail = 0) => r.obj.cfg for r in runs)
+
 # --- 1. ascending parcel ---------------------------------------------------
 println("Ascending parcel, w = 0.5 m/s, τ = 5 s, n_sd = 8000")
 println("  σ_S     ε(300 s) SD   ε bulk   Δε      σ_r² SD   σ_r² bulk  (μm²)")
 series = Vector{Vector{Float64}}(); labels = String[]
 t_axis = Float64[]
-for σ in (0.0, 1e-3, 2e-3)
-    case = BroadeningCase(σ_S = σ, n_sd = 8000)
-    Hs = run_broadening_case(case)
-    Hb = run_broadening_case(case; model = :bulk)
+for (σ, lab) in ((0.0, "0.0"), (1e-3, "0.1"), (2e-3, "0.2"))
+    Hs = H["parcel_$(lab)_superdroplet"]
+    Hb = H["parcel_$(lab)_bulk"]
     global t_axis = Hs.t
     @printf("  %.1f %%   %.4f      %.4f   %+.1f %%  %.2f     %.2f\n",
             100σ, Hs.ε[end], Hb.ε[end], 100(Hb.ε[end] / Hs.ε[end] - 1),
@@ -55,11 +62,11 @@ save_multiline(joinpath(outdir, "broadening_parcel_eps.svg"), t_axis, series, la
                title = "Ascending parcel: dispersion vs sigma_S", width = 720, height = 440)
 
 # --- 2. stationary fluctuations: the t^{1/2} law ---------------------------
-τ, σ = 5.0, 1e-3
-case = BroadeningCase(ε0 = 0.0, r0 = 10e-6, w = 0.0, σ_S = σ, τ = τ,
-                      t_end = 600.0, n_sd = 4000)
-Hs = run_broadening_case(case)
-Hb = run_broadening_case(case; model = :bulk)
+pc = cfg_of["stationary_superdroplet"].parcel
+τ, σ = pc.tau, pc.sigma_s
+case = (; p0 = pc.p0)
+Hs = H["stationary_superdroplet"]
+Hb = H["stationary_bulk"]
 G = 1 / (Aeolus.Superdroplet.fk_thermal(Hb.T[end]) +
          Aeolus.Superdroplet.fd_vapor(Hb.T[end], case.p0))
 t = Hs.t[2:end]

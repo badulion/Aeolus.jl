@@ -44,11 +44,29 @@ struct OpenTable
 end
 OpenTable() = OpenTable(_ -> String[])
 
+"""
+    OneOf(T1, T2, …)
+
+Option type for a value of any of the option types `T1, T2, …` (scalars,
+`Optional`, tuples, vectors, [`OpenTable`](@ref)): the first that accepts
+the value wins. A forcing quantity that is a number or a table is
+`OneOf(Float64, OpenTable(validator))`; a viscosity that is a number or
+the keyword `"scaled"` is `OneOf(Float64, Symbol)` with `allowed =
+[:scaled]` (`allowed` applies to the non-numeric alternatives only;
+`range` to the numeric ones). An option of this type needs a `default`.
+"""
+struct OneOf
+    alts::Tuple
+    OneOf(alts...) = length(alts) >= 2 ? new(Tuple(alts)) :
+                     throw(ArgumentError("OneOf needs at least two alternatives"))
+end
+
 const _SCALARS = (Float64, Int, Bool, String, Symbol, Path, Date, Time)
 
 "Whether `T` is a supported option type (see [`option!`](@ref))."
 function _valid_spec(T)
     T isa OpenTable && return true
+    T isa OneOf && return all(a -> !(a isa OneOf) && _valid_spec(a), T.alts)
     T isa Type || return false
     T in _SCALARS && return true
     T <: Optional && return T !== Optional && _valid_spec(T.parameters[1])
@@ -219,13 +237,18 @@ function option!(s::Section, key::AbstractString, T; default = NoDefault(),
 end
 
 """
-    ConfigSchema(name; sections = Section[], checks = Function[])
+    ConfigSchema(name; sections = Section[], checks = Function[], defaults = ())
 
 The schema of a driver `name`: the common sections every run has
 (`[run]`, `[fftw]`, `[logging]`, `[checkpoint]`, `[output]`; see the
-Configuration page) followed by the driver's `sections`. `[run] driver`
+Configuration page) followed by the driver's `sections`. A driver
+section named like a common one adds its options to that section (the
+`simulation` driver's `[output] fields`); an option already in the common
+section, or a driver section declared twice, is an `ArgumentError`. `[run] driver`
 defaults to, and must equal, `name`. `checks` are cross-field checks
-([`check!`](@ref)).
+([`check!`](@ref)). `defaults` (`"section.key" => value` pairs) give a
+common option this driver's own default (the Berlin case's `[output]
+cadence` of 1800 s); its type and constraints stay the common ones.
 """
 struct ConfigSchema
     name::String
@@ -233,13 +256,40 @@ struct ConfigSchema
     checks::Vector{Any}
 end
 
-function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[])
-    common = _common_sections(String(name))
-    all_s = vcat(common, collect(Section, sections))
-    names = [s.name for s in all_s]
-    for n in names
-        count(==(n), names) > 1 &&
-            throw(ArgumentError("schema \"$name\": section [$n] is declared twice (or collides with a common section)"))
+function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[], defaults = ())
+    all_s = _common_sections(String(name))
+    ncommon = length(all_s)
+    defaults isa Pair && (defaults = (defaults,))
+    for (key, d) in defaults                # a driver's own default of a common option
+        sname, okey = _split_key(String(key))
+        i = findfirst(c -> c.name == sname, all_s)
+        j = i === nothing ? nothing : findfirst(o -> o.key == okey, all_s[i].options)
+        j === nothing && throw(ArgumentError("schema \"$name\": \"$key\" in defaults is not a common option"))
+        o = all_s[i].options[j]
+        o2 = Option(o.key, o.type, d, o.doc, o.units, o.allowed, o.range, o.open_lower, o.required,
+                    o.input, o.allow_julia)
+        if !(d isa Function)
+            ok, _, why = _coerce(o2, d, true, pwd(), String(key))
+            ok || throw(ArgumentError("schema \"$name\": the default $(repr(d)) of $key is invalid: $why"))
+        end
+        opts = copy(all_s[i].options); opts[j] = o2
+        all_s[i] = Section(all_s[i].name, all_s[i].doc, opts)
+    end
+    for s in sections
+        i = findfirst(c -> c.name == s.name, all_s)
+        if i === nothing
+            push!(all_s, s)
+        elseif i <= ncommon                 # a driver's options added to a common section
+            c = all_s[i]
+            for o in s.options
+                any(x -> x.key == o.key, c.options) &&
+                    throw(ArgumentError("schema \"$name\": option \"$(o.key)\" of [$(s.name)] " *
+                                        "is already a common option"))
+            end
+            all_s[i] = Section(c.name, c.doc, vcat(c.options, s.options))
+        else
+            throw(ArgumentError("schema \"$name\": section [$(s.name)] is declared twice"))
+        end
     end
     return ConfigSchema(String(name), all_s, Any[checks...])
 end
@@ -253,6 +303,9 @@ every option has passed its own checks; their problems go into the one
 error the loader throws.
 """
 check!(schema::ConfigSchema, f) = (push!(schema.checks, f); schema)
+
+_split_key(key::String) = (i = findfirst('.', key);
+                           i === nothing ? (key, "") : (key[1:prevind(key, i)], key[nextind(key, i):end]))
 
 _section(schema::ConfigSchema, name) =
     (i = findfirst(s -> s.name == name, schema.sections); i === nothing ? nothing : schema.sections[i])
@@ -272,17 +325,18 @@ const _DRIVERS = Dict{String,DriverEntry}()
 
 """
     register_driver!(name; sections = Section[], checks = Function[],
-                     config_dir = nothing) -> ConfigSchema
+                     config_dir = nothing, defaults = ()) -> ConfigSchema
 
 Register the configuration schema of the driver `name` (`[run] driver =
 "name"` selects it). `config_dir` is where `extends = "base.toml"` looks
-when the file is not next to the extending one. Registering a name again
+when the file is not next to the extending one; `defaults` are the
+driver's own defaults of common options ([`ConfigSchema`](@ref)). Registering a name again
 replaces it. The driver `"common"` (the common sections only) is always
 registered.
 """
 function register_driver!(name::AbstractString; sections = Section[], checks = Any[],
-                          config_dir = nothing)
-    schema = ConfigSchema(name; sections = sections, checks = checks)
+                          config_dir = nothing, defaults = ())
+    schema = ConfigSchema(name; sections = sections, checks = checks, defaults = defaults)
     _DRIVERS[String(name)] = DriverEntry(schema, config_dir === nothing ? nothing : abspath(config_dir))
     return schema
 end
@@ -290,9 +344,11 @@ end
 """
     driver_schema(name) -> ConfigSchema
 
-The schema registered for the driver `name` ([`register_driver!`](@ref)).
+The schema registered for the driver `name` ([`register_driver!`](@ref)),
+loading an example driver listed in [`DRIVER_FILES`](@ref) on first use.
 """
 function driver_schema(name::AbstractString)
+    _ensure_driver(name)              # an example driver is loaded on first use (CFG-b)
     haskey(_DRIVERS, name) || throw(ConfigError("run.driver",
         "unknown driver \"$name\"" * _suggest(name, collect(keys(_DRIVERS))) *
         "; registered drivers: " * join(sort!(repr.(collect(keys(_DRIVERS)))), ", ")))
@@ -337,6 +393,7 @@ _describe(::Type{Path}) = "a path (a string)"
 _describe(::Type{Date}) = "a local date (yyyy-mm-dd)"
 _describe(::Type{Time}) = "a local time (hh:mm:ss)"
 _describe(::OpenTable) = "a table"
+_describe(T::OneOf) = join(map(_describe, T.alts), " or ")
 _describe(T::Type{<:Optional}) = _describe(_elem(T)) * " or \"none\""
 function _describe(T::Type)
     if T <: Tuple
@@ -393,10 +450,19 @@ end
 _fail() = (false, nothing, "")
 
 function _coerce_type(T, o, x, julia, base, key)
-    if T isa OpenTable
+    if T isa OneOf
+        why = ""
+        for a in T.alts
+            ok, v, w = _coerce_type(a, o, x, julia, base, key)
+            ok && return (true, v, "")
+            # a table that one alternative takes but finds invalid: its reasons
+            (a isa OpenTable && x isa AbstractDict && !isempty(w)) && (why = w)
+        end
+        return (false, nothing, why)
+    elseif T isa OpenTable
         tbl = x isa AbstractDict ? _plain_table(x) : (julia && x isa NamedTuple) ? _plain_table(x) : nothing
         tbl === nothing && return _fail()
-        probs = T.validator(tbl)
+        probs = Base.invokelatest(T.validator, tbl)     # a driver loaded at run time
         isempty(probs) && return (true, tbl, "")
         msgs = String[p isa ConfigError ? join(("$(q.key): $(q.message)" for q in p.problems), "; ") :
                       string(p) for p in probs]
@@ -468,7 +534,7 @@ function _scalar(T, x, julia, base)
 end
 
 function _within(o::Option, v)
-    if o.allowed !== nothing
+    if o.allowed !== nothing && !(o.type isa OneOf && v isa Real)
         any(a -> isequal(a, v) || (v isa Symbol && a isa AbstractString && String(v) == a) ||
                  (a isa Symbol && v isa AbstractString && String(a) == v), o.allowed) || return false
     end

@@ -49,7 +49,7 @@ Combine several physics modules in one run.
     (see [Real Berlin — Alexanderplatz OSM run](@ref) and the
     [Berlin case design page](../design/berlin_case.md)). The synthetic
     sample city runs through the same case with
-    `AEOLUS_SCENARIO=mitte_sample`. The setup and numbers below are the
+    `examples/urban/configs/berlin_mitte_sample.toml`. The setup and numbers below are the
     old script's and are kept as a record.
 
 `examples/urban/urban_diurnal.jl` (removed) — the "everything on"
@@ -266,8 +266,9 @@ only script in `examples/urban` that integrates the equations. Since
 then `run_case!`, with every physics coupling in its own file under
 `examples/urban/couplings/`. The [Berlin case design page](../design/berlin_case.md)
 describes the registry, the stage loop and how to add a coupling.
-`AEOLUS_NSTEPS` sets the number of steps and `AEOLUS_OUTPUT_DT` the
-seconds between NetCDF records. It runs
+Its configuration is `examples/urban/configs/berlin_summer.toml`;
+`--set clock.nsteps=…` sets the number of steps and `--set output.cadence=…`
+the seconds between NetCDF records. It runs
 the full physics against `data/alexanderplatz_real.osm` — an actual Overpass-API
 download of a 1 km × 1 km box around Alexanderplatz, Berlin
 (52.518–52.526 N, 13.402–13.418 E). To (re-)fetch:

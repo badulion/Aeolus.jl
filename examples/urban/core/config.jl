@@ -4,16 +4,24 @@
 # parameters, initial state, cadences (in SECONDS, never in steps, so the
 # schedule survives a change of dt or an adaptive stepper) and the
 # `physics` / `options` dictionaries the coupling registry reads to decide
-# which couplings run and how. Scenarios (`scenarios.jl`) are named
-# presets of this struct.
+# which couplings run and how. Its defaults and its TOML form are the
+# `berlin` run-configuration schema (core/config_schema.jl, CFG-c #358);
+# the scenarios are the shipped TOML files in examples/urban/configs/.
 
 """
     CaseConfig(; kwargs...)
     CaseConfig(scenario::Symbol; kwargs...)
+    CaseConfig(cfg::RunConfig; run_output = nothing)
 
-Configuration of a Berlin (Alexanderplatz) case. The second form starts
-from a named scenario preset (see [`SCENARIOS`](@ref)) and then applies
-`kwargs` on top.
+Configuration of a Berlin (Alexanderplatz) case, the struct
+[`build_case`](@ref) consumes. Its defaults are those of the `berlin`
+run-configuration schema (`core/config_schema.jl`, CFG-c #358; `aeolus
+options berlin` lists them with the TOML key of every field): the first
+form is the all-defaults config with `kwargs` set on top. The second
+loads the shipped scenario file `examples/urban/configs/berlin_<scenario>.toml`
+(see [`SCENARIO_FILES`](@ref)) and then applies `kwargs` (`physics` and
+`options` merge per coupling over the file's). The third converts a
+loaded [`RunConfig`](@ref Aeolus.Config.RunConfig) of the `berlin` driver.
 
 Groups of fields:
 
@@ -31,7 +39,8 @@ Groups of fields:
   (s), `nsteps`;
 * **cadences** — `cadence::Dict{Symbol,Float64}`, periods in seconds.
   `:radiation`, `:soil` and `:output` are used by the initial couplings;
-  a coupling may add its own key;
+  a coupling may add its own key (in TOML: `[cadence]`, whose keys are
+  the ones the couplings declare, and `[output] cadence`);
 * **dynamics** — `ν`, `θ₀`, `g`, `f_coriolis`, `C_s`, `Pr_t`,
   `sponge_α_max`, `sponge_frac` (sponge starts at `sponge_frac·Lz`; it
   damps the velocity only; in a nested case toward the parent's mean wind
@@ -81,10 +90,12 @@ Groups of fields:
 * **ledger** — `canopy_top` (m): top of the `:canopy` layer of the
   air-heat budget (`heat_budget(…; layer = :canopy)`); `NaN` (default)
   takes the tallest roof of the scene;
-* **output** — `output_path` (`nothing` disables NetCDF output); what
-  is printed is decided by the installed logger and its level (#347):
-  the setup summary is `Debug`, the run's start, output frames and
-  end-of-run report are `Info`, a blowup is an `Error`;
+* **output** — `output_path` (`nothing` disables NetCDF output; in TOML
+  `[output] netcdf`, the file name, in `[output] path`, a directory: the
+  run folder's `output/` under `aeolus run`, else `examples/urban/output/`);
+  what is printed is decided by the installed logger and its level (#347,
+  in TOML `[logging]`): the setup summary is `Debug`, the run's start,
+  output frames and end-of-run report are `Info`, a blowup is an `Error`;
 * **backend** — `backend::AbstractBackend` (default `CPUBackend()`): the
   compute backend of the run (`Aeolus.Backends`, KA-a #294). The core
   coupling calls `init_threads!(cfg.backend)` before building the
@@ -92,67 +103,79 @@ Groups of fields:
   it; `CPUBackend(serial = true)` is the single-task reference of the
   thread-invariance tests.
 """
-Base.@kwdef mutable struct CaseConfig
-    name::Symbol                      = :alexanderplatz
-    scenario::Symbol                  = :summer
+mutable struct CaseConfig
+    name::Symbol
+    scenario::Symbol
     # grid
-    size::NTuple{3,Int}               = (64, 64, 64)
-    extent::NTuple{3,Float64}         = (1000.0, 1000.0, 400.0)   # 400 m: the nested child (#246)
-    halo::NTuple{3,Int}               = (3, 3, 3)      # 3: WENO-Z5 moisture transport
+    size::NTuple{3,Int}
+    extent::NTuple{3,Float64}         # 400 m deep: the nested child (#246)
+    halo::NTuple{3,Int}               # 3: WENO-Z5 moisture transport
     # geometry
-    osm_path::String                  = joinpath(DATA_DIR, "alexanderplatz_real.osm")
-    lat0::Float64                     = 52.5220
-    lon0::Float64                     = 13.4100
-    offset::NTuple{2,Float64}         = (0.0, 0.0)
-    min_height::Float64               = 8.0
-    elevation::Float64                = 34.0
-    wall_subdivisions::Int            = 1
-    park_lai::Float64                 = 2.5
+    osm_path::String
+    lat0::Float64
+    lon0::Float64
+    offset::NTuple{2,Float64}
+    min_height::Float64
+    elevation::Float64
+    wall_subdivisions::Int
+    park_lai::Float64
     # clock
-    date::NTuple{3,Int}               = (2019, 6, 29)   # clear-sky heat-wave day (#247)
-    utc_offset::Float64               = 2.0             # local = UTC + 2 h (CEST)
-    start_h::Float64                  = 6.0
-    dt::Float64                       = 2.0
-    nsteps::Int                       = 43_200
-    cadence::Dict{Symbol,Float64}     = Dict(:radiation => 600.0, :soil => 30.0,
-                                             :output => 1800.0)
+    date::NTuple{3,Int}               # 2019-06-29: clear-sky heat-wave day (#247)
+    utc_offset::Float64               # local = UTC + 2 h (CEST)
+    start_h::Float64
+    dt::Float64
+    nsteps::Int
+    cadence::Dict{Symbol,Float64}
     # dynamics
-    ν::Float64                        = 2.0
-    θ₀::Float64                       = 293.0
-    g::Float64                        = 9.81
-    f_coriolis::Float64               = 1e-4
-    C_s::Float64                      = 0.1
-    Pr_t::Float64                     = 1 / 3
-    sgs_stability::Symbol             = :brown94
-    sponge_α_max::Float64             = 0.05
-    sponge_frac::Float64              = 0.75
-    θ_top::Union{Symbol,Float64}      = :initial_gradient
+    ν::Float64
+    θ₀::Float64
+    g::Float64
+    f_coriolis::Float64
+    C_s::Float64
+    Pr_t::Float64
+    sgs_stability::Symbol
+    sponge_α_max::Float64
+    sponge_frac::Float64
+    θ_top::Union{Symbol,Float64}
     # lateral boundaries (N-open-d, #262)
-    lateral::Symbol                   = :periodic
-    outflow::Symbol                   = :dirichlet
-    boundary_frame::Int               = 3
-    θ_relaxation::Bool                = true
+    lateral::Symbol
+    outflow::Symbol
+    boundary_frame::Int
+    θ_relaxation::Bool
     # initial state: the observed sounding (#247) …
-    sounding::Union{Nothing,String}   = joinpath(DATA_DIR, "lindenberg_10393_20190629.csv")
+    sounding::Union{Nothing,String}
     # … or, with sounding = nothing, the idealised profile
-    θ_surface::Float64                = 293.0
-    θ_inversion_z::Float64            = 100.0
-    θ_lapse::Float64                  = 3e-3
-    u0::Float64                       = 1.0
-    qv0::Float64                      = 0.010
-    qv_scale::Float64                 = 800.0
-    Ts0::Float64                      = 285.0
-    Ts_water_offset::Float64          = 5.0
-    T_soil0::Float64                  = 288.0
-    p_surface::Union{Nothing,Float64} = nothing         # nothing: from the sounding
+    θ_surface::Float64
+    θ_inversion_z::Float64
+    θ_lapse::Float64
+    u0::Float64
+    qv0::Float64
+    qv_scale::Float64
+    Ts0::Float64
+    Ts_water_offset::Float64
+    T_soil0::Float64
+    p_surface::Union{Nothing,Float64}  # nothing: from the sounding
     # coupling selection
-    physics::Dict{Symbol,Any}         = Dict{Symbol,Any}()
-    options::Dict{Symbol,Any}         = Dict{Symbol,Any}()
+    physics::Dict{Symbol,Any}
+    options::Dict{Symbol,Any}
     # output
-    canopy_top::Float64               = NaN
-    output_path::Union{Nothing,String} = joinpath(URBAN_DIR, "output", "alexanderplatz.nc")
+    canopy_top::Float64
+    output_path::Union{Nothing,String}
     # compute backend (KA-a, #294)
-    backend::AbstractBackend          = CPUBackend()
+    backend::AbstractBackend
+end
+
+# The defaults live in the `berlin` configuration schema
+# (core/config_schema.jl), the one place they are written: `CaseConfig(;
+# kw...)` is the all-defaults config with `kw` set on top.
+function CaseConfig(; kw...)
+    c = CaseConfig(default_run_config())
+    for (k, v) in kw
+        hasfield(CaseConfig, k) || throw(ArgumentError("CaseConfig has no field $k" *
+            " (fields: $(join(string.(fieldnames(CaseConfig)), ", ")))"))
+        setfield!(c, k, convert(fieldtype(CaseConfig, k), v))
+    end
+    return c
 end
 
 "Cadence period (s) named `key` in `cfg`; errors if the config has none."

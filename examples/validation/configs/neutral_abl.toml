@@ -1,0 +1,51 @@
+# Neutral ABL half channel — the Phase 54 benchmark (P54-d, #174; P54-e, #186)
+#
+# The pressure-driven half channel of Porté-Agel, Meneveau & Parlange
+# (2000, JFM 415, 261) and Bou-Zeid, Meneveau & Parlange (2005, Phys.
+# Fluids 17, 025105): 2πH × 2πH × H, -∂p/∂x = u*²/H, free-slip top, rough
+# log-law wall stress at the bottom (z0/H = 1e-4), inviscid, no damping
+# function. 50 H/u*, statistics over the last 40 %.
+#
+# The sweep: three closures × two resolutions, one run folder each —
+#   smagorinsky  StaticSmagorinsky(0.1)
+#   lasd         LagrangianDynamicSmagorinsky(scale_dependent = true), with
+#                the P57-b 2Δ input filter of the wall model
+#   lasi         the scale-invariant Lagrangian model, same filter
+#
+#   julia --project=. examples/validation/neutral_abl.jl          # all six, then the figure
+#   julia --project -m Aeolus run examples/validation/configs/neutral_abl.toml --member 3
+#   … --set stepper.end_time=20.0      (any key; applies to every member)
+
+[run]
+driver = "channel"
+name = "neutral_abl"
+seed = 1
+
+[channel]
+kind = "half"
+z0_over_h = 1e-4
+
+[sgs]
+c_s = 0.1
+
+[stepper]
+end_time = 50.0
+average_from_fraction = 0.6
+
+[[sweep.member]]
+label = "smagorinsky"
+sgs = { closure = "smagorinsky" }
+wall_model = { filter = "none" }
+
+[[sweep.member]]
+label = "lasd"
+sgs = { closure = "lasd" }
+wall_model = { filter = "spatial" }
+
+[[sweep.member]]
+label = "lasi"
+sgs = { closure = "lasi" }
+wall_model = { filter = "spatial" }
+
+[sweep]
+axis = [ { key = "channel.size", values = [[32, 32, 32], [48, 48, 48]] } ]

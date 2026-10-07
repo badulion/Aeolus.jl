@@ -3,27 +3,30 @@
 # Svensson et al. 2011; Poulos et al. 2002; LES: Kumar et al. 2010) and the
 # CASES-99 "hockey stick" of Sun et al. (2012), P58-d (#194)
 #
-# `gabls2_case` (examples/sbl/cases.jl) from 16 LT 22 October for 48 h:
-# U_g = (3, -9) m/s, the prescribed surface temperature, z0m = 0.03 m,
-# z0h = 0.003 m; dry (see the CSV header); the case's large-scale
-# subsidence on θ from 40 h (16 LT 23 Oct, LargeScaleForcing.Subsidence,
-# #248; SUBSIDENCE=0 for the run without it). The residual-layer inversion
-# height (sbl_inversion_height) is recorded with the series. Virtual towers in
-# every column record 5-min means and variances below 60 m during the two
-# nights (18-06 LT, as Sun et al. 2012); V_TKE (Transition's
-# turbulence_velocity_scale, resolved + SGS energy) is binned against the
-# wind speed and the hockey-stick threshold V_s is fitted per level and
-# compared with Sun et al. (2012) Fig. 3a.
+# The run is examples/sbl/configs/cases99.toml (gabls2.toml with the
+# towers; the `sbl` run driver, CFG-d #359), one run folder per closure:
+# from 16 LT 22 October for 48 h, U_g = (3, -9) m/s, the prescribed surface
+# temperature, z0m = 0.03 m, z0h = 0.003 m; dry (see the CSV header); the
+# case's large-scale subsidence on θ from 40 h (16 LT 23 Oct,
+# LargeScaleForcing.Subsidence, #248; SUBSIDENCE=0 for the run without it).
+# The residual-layer inversion height (sbl_inversion_height) is recorded
+# with the series (output/series.csv of the run folder, every 600 s).
+# Virtual towers in every column record 5-min means and variances below
+# 60 m during the two nights (18-06 LT, as Sun et al. 2012); V_TKE
+# (Transition's turbulence_velocity_scale, resolved + SGS energy) is binned
+# against the wind speed and the hockey-stick threshold V_s is fitted per
+# level and compared with Sun et al. (2012) Fig. 3a. This script then
+# makes the figures.
 #
 #   julia --project=. examples/sbl/gabls2.jl                    # 64 x 64 x 128 (37.5 m / 12.5 m)
 #   NX=48 NZ=80 julia --project=. examples/sbl/gabls2.jl        # 50 m / 20 m
-#   CLOSURES=brown94 ... ; REUSE=1 ... ; SUBSIDENCE=0 ...
+#   CLOSURES=brown94 ... ; REUSE=1 ... ; SUBSIDENCE=0 ... ; CLOSURES=brown94 RESUME=runs/<run folder> ...
 #
 # writes examples/sbl/output/gabls2_<tag>.svg, cases99_hockey_<tag>.svg,
 # gabls2_<tag>_series.csv, cases99_hockey_<tag>.csv
 # =========================================================================
 
-include(joinpath(@__DIR__, "cases.jl"))
+include(joinpath(@__DIR__, "config_schema.jl"))
 include(joinpath(@__DIR__, "svgplot.jl"))
 using Printf
 using Serialization
@@ -39,34 +42,20 @@ const SUBSIDENCE = get(ENV, "SUBSIDENCE", "1") == "1"
 const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))" * (SUBSIDENCE ? "" : "_nosubs")
 const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
 const P_SFC = 97200.0
-night(t) = (h = mod(t / 3600, 24); h >= 18 || h < 6)
 
-function run_closure(stab, ck = nothing)
-    c = gabls2_case(; N = (NX, NX, NZ), extent = (LX, LX, LZ), sgs_stability = stab, t_end = T_END,
-                    subsidence = SUBSIDENCE)
-    dz = LZ / NZ
-    towers = sbl_towers(c, [(k - 0.5) * dz for k in 1:NZ if (k - 0.5) * dz < 60]; window = 300.0)
-    series = NamedTuple[]
-    nextt = Ref(c.sim.t)
-    lastt = Ref(c.sim.t)
-    cb = function (c)
-        dt = c.sim.t - lastt[]; lastt[] = c.sim.t
-        towers.active = night(c.sim.t)
-        sbl_towers_sample!(towers, c, dt)
-        c.sim.t >= nextt[] || return
-        nextt[] += 600.0
-        p = sbl_profiles(c); k = argmax(p.S)
-        scr = sbl_screen(c)
-        push!(series, (t = c.sim.t, u_star = sqrt(hypot(c.τx, c.τy)), H = c.ρcp * mean(c.wθ),
-                       h = sbl_bl_height(p.zf, p.τ), S_max = p.S[k], z_jet = p.z[k],
-                       z_inv = sbl_inversion_height(p.z, p.θ), ls_heat = c.ls_heat_applied,
-                       T2 = scr.θ_screen * (P_SFC / 1e5)^0.286 - 273.15, U10 = scr.U_screen,
-                       Ts = surface_temperature(c.Ts, c.sim.t) * (P_SFC / 1e5)^0.286 - 273.15))
-    end
-    sbl_run!(c, T_END; callback = cb, checkpoint = ck,
-             checkpoint_components = (series = series, nextt = nextt, lastt = lastt, towers = towers))
-    @printf("%-8s %s: %d steps, %.0f s, %d tower segments\n", stab, TAG, c.nsteps, c.wall_time, towers.nseg)
-    return (stab = stab, series = series, towers = towers, nsteps = c.nsteps, wall = c.wall_time)
+function run_closure(stab)
+    ov = ["grid.size=[$NX,$NX,$NZ]", "grid.extent=[$LX,$LX,$LZ]", "sponge.z=$(0.75LZ)",
+          "sgs.stability=\"$stab\"", "stepper.end_time=$T_END",
+          "surface.temperature={kind=\"gabls2\", p_sfc=$P_SFC, exponent=0.286, sample_every=60.0, until=$T_END}"]
+    SUBSIDENCE || push!(ov, "forcing.subsidence={}")
+    r = sbl_script_run("cases99"; overrides = ov)
+    c = r.case
+    # the series rows in the script's units: 2 m and surface temperatures in °C
+    toC(θ) = θ * (P_SFC / 1e5)^0.286 - 273.15
+    series = [(t = s.t, u_star = s.u_star, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet, z_inv = s.z_inv,
+               ls_heat = s.ls_heat, T2 = toC(s.θ_screen), U10 = s.U_screen, Ts = toC(s.T_s)) for s in r.series]
+    @printf("%-8s %s: %d steps, %.0f s, %d tower segments\n", stab, TAG, c.nsteps, c.wall_time, r.towers.nseg)
+    return (stab = stab, series = series, towers = r.towers, nsteps = c.nsteps, wall = c.wall_time)
 end
 
 function cached(stab)
@@ -75,11 +64,8 @@ function cached(stab)
         println("$stab: cached $path")
         return deserialize(path)
     end
-    # periodic checkpoints, automatic resume (#245); made before the case
-    ck = sbl_checkpoints("gabls2_$(TAG)_$(stab)")
-    r = run_closure(stab, ck)
+    r = run_closure(stab)
     serialize(path, r)
-    finish_checkpoints!(ck)
     return r
 end
 results = [cached(s) for s in CLOSURES]

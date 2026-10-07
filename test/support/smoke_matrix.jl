@@ -3,18 +3,98 @@
 # (test/thread_invariance.jl, KA-a #294), which hashes the same runs at
 # 1, 4 and 24 threads. The includer defines `BC = Main.BerlinCase` and
 # loads Aeolus, `interior_view` and `Random.Xoshiro`.
+#
+# Every run is examples/urban/configs/berlin_smoke.toml with `--set`
+# overrides (CFG-c, #358): `smoke_specs` derives what each run changes
+# from the registry, `smoke_overrides` writes it as overrides, and
+# `smoke_matrix` loads the configs.
+
+using Aeolus: load_run_config
+using TOML
+
+"The shipped smoke config every run starts from."
+const SMOKE_TOML = joinpath(BC.CONFIG_DIR, "berlin_smoke.toml")
+
+"""
+    file_overrides(path) -> Vector{String}
+
+The values a scenario file sets (its tables flattened to `--set`
+overrides; `extends`, `schema_version` and `[run] name` left out): the
+differences of `berlin_winter.toml` applied to the smoke run.
+"""
+function file_overrides(path)
+    d = TOML.parsefile(path)
+    out = String[]
+    function walk(t, prefix)
+        for k in sort!(collect(keys(t)))
+            key = isempty(prefix) ? k : prefix * "." * k
+            key in ("extends", "schema_version", "run.name") && continue
+            v = t[k]
+            v isa AbstractDict ? walk(v, key) :
+                push!(out, key * "=" * Aeolus.Config._emit_value(Aeolus.Config._toml_out(v)))
+        end
+    end
+    walk(d, "")
+    return out
+end
+
+"""
+    smoke_overrides(spec) -> Vector{String}
+
+The `--set` overrides of `berlin_smoke.toml` for a run of
+[`smoke_specs`](@ref): `physics.<slot or addon>`, every option as
+`physics.options.<coupling>.<key>` (the nest parent's as
+`physics.options.nesting.parent.<key>`), every `CaseConfig` field by its
+TOML key (`BC.CASE_FIELDS`), then the spec's raw overrides.
+"""
+function smoke_overrides(spec)
+    out = String[]
+    for k in sort!(collect(keys(spec.physics)))
+        push!(out, "physics.$k=" * BC.toml_literal(spec.physics[k]))
+    end
+    for c in sort!(collect(keys(spec.options))), (k, v) in pairs(spec.options[c])
+        if c === :nesting && k === :parent
+            for (pk, pv) in pairs(v)
+                push!(out, "physics.options.nesting.parent.$(BC.PARENT_FIELDS[pk])=" * BC.toml_literal(pv))
+            end
+        else
+            push!(out, "physics.options.$c.$k=" * BC.toml_literal(v))
+        end
+    end
+    for (f, v) in pairs(spec.fields)
+        keys_ = BC.CASE_FIELDS[f]
+        length(keys_) == 1 || error("smoke_overrides: the field $f is made of several options ($(join(keys_, ", ")))")
+        push!(out, keys_[1] * "=" * BC.toml_literal(v))
+    end
+    return vcat(out, spec.extra)
+end
+
+"The `CaseConfig` of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its overrides."
+smoke_config(spec) = BC.CaseConfig(load_run_config(SMOKE_TOML; overrides = smoke_overrides(spec),
+                                                   schema = BC.berlin_schema()))
 
 """
     smoke_matrix(registry = BC.REGISTRY) -> Vector{Pair{String,CaseConfig}}
 
-The smoke-test configurations derived from `registry` (see the file
-header of test/berlin_smoke.jl). Every run starts from `CaseConfig(:smoke)` with every additive
-coupling on; a run that selects a coupling declared incompatible with an
-additive one switches that additive coupling off, and one incompatible
-with the default provider of another slot switches that slot to its
-first compatible provider (registry order).
+The smoke-test configurations: [`smoke_config`](@ref) of every run of
+[`smoke_specs`](@ref).
 """
-function smoke_matrix(registry = BC.REGISTRY)
+smoke_matrix(registry = BC.REGISTRY) = [label => smoke_config(spec) for (label, spec) in smoke_specs(registry)]
+
+"""
+    smoke_specs(registry = BC.REGISTRY) -> Vector{Pair{String,NamedTuple}}
+
+The smoke-test runs derived from `registry` (see the file header of
+test/berlin_smoke.jl), each `label => (physics, options, fields, extra)`:
+the `[physics]` selection, the per-coupling options, `CaseConfig` field
+values and raw overrides that run sets over `berlin_smoke.toml`. Every
+run has every additive coupling on; a run that selects a coupling
+declared incompatible with an additive one switches that additive
+coupling off, and one incompatible with the default provider of another
+slot switches that slot to its first compatible provider (registry
+order).
+"""
+function smoke_specs(registry = BC.REGISTRY)
     name = BC.coupling_name
     addons = [C for C in registry if BC.slot(C) === :addon]
     defaults = Dict{Symbol,Symbol}()
@@ -27,7 +107,7 @@ function smoke_matrix(registry = BC.REGISTRY)
         :pollutant => (stacks = [(0.0, -312.5, 40.0)],))
     hits(C, D) = any(x -> x isa Pair ? (BC.slot(D) === x.first && BC.provider(D) === x.second) :
                                         name(D) === x, BC.incompatible(C))
-    function mk(label; physics = Dict{Symbol,Any}(), options = Dict{Symbol,Any}(), kw...)
+    function mk(label; physics = Dict{Symbol,Any}(), options = Dict{Symbol,Any}(), extra = String[], kw...)
         phys = Dict{Symbol,Any}(name(C) => true for C in addons)
         merge!(phys, physics)
         # The selection this physics makes. A coupling it conflicts with
@@ -73,11 +153,11 @@ function smoke_matrix(registry = BC.REGISTRY)
         opts = base_options()
         haskey(opts, :pollutant) && !any(C -> name(C) === :pollutant, registry) && delete!(opts, :pollutant)
         merge!(opts, options)
-        return label => BC.CaseConfig(:smoke; output_path = nothing,
-                                      physics = phys, options = opts, kw...)
+        return label => (physics = phys, options = opts, fields = (; kw...), extra = String[extra...])
     end
     runs = [mk("summer, everything on"),
-            mk("winter, everything on"; pairs(BC.SCENARIOS[:winter])..., scenario = :winter),
+            # the winter scenario's differences (berlin_winter.toml) over the smoke run
+            mk("winter, everything on"; extra = file_overrides(joinpath(BC.CONFIG_DIR, "berlin_winter.toml"))),
             # the observed initial state of the flagship (#247): the smoke
             # scenario's idealised profile replaced by the summer default
             # sounding (Lindenberg, 29 June 2019, interpolated to noon)

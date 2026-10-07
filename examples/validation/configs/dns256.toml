@@ -1,0 +1,49 @@
+# The offline 256³ filtered-DNS a-priori record (P56-c, #178; the hybrid-DNS
+# decision on #208): decaying isotropic turbulence from E(k) ∝ k⁴
+# exp(-2 (k/1.5)²), u' = 1, the projected SSP-RK3 of step_rk3! (2nd-order
+# energy-conserving centred advection, no SGS model, CFL 0.5), run to
+# t = 2 and on to 0.25 past the dissipation peak (capped at t = 6), then
+# Gaussian filtered at Δ = 4h, 8h, 16h, 32h (test/fixtures/dns_apriori.jl).
+#
+# ν = 1.035 · 0.018 (48/N)^{4/3} ("scaled"; 2.00e-3 at 256³): the
+# fixture's scaling, which holds k_max η roughly fixed, with a 3.5 %
+# margin. The 2nd-order solver needs k_max η ≥ 1.5 over the run; a run
+# that misses it (or another required DNS check) fails and its record goes
+# to <out>.failed only.
+#
+#   julia -m Aeolus run examples/validation/configs/dns256.toml                   # ≈ 1.6 h, ≈ 10 GB
+#   julia -m Aeolus run examples/validation/configs/dns256.toml --set grid.n=32   # the pipeline in 30 s
+#   julia --project=. examples/validation/dns256_generate.jl                       # writes test/fixtures/dns256_apriori.toml
+#
+# Measured (test/fixtures/dns256_apriori.toml, 2026-10-05, #235): 1264
+# steps to t = 3.85 (ε peak at t = 3.60), 5671 s of DNS on one core plus
+# 195 s of statistics, max RSS 9.81 GB.
+
+[run]
+driver = "dns"
+name = "dns256"
+seed = 1
+
+[grid]
+n = 256
+
+[fluid]
+nu = "scaled"
+nu_margin = 1.035
+
+[initial]
+spectrum = {kind = "k4_gaussian", k_p = 1.5}
+
+[stepper]
+cfl = 0.5
+end_time = 2.0
+past_peak = 0.25
+max_time = 6.0
+
+[apriori]
+widths = [4, 8, 16, 32]
+require_checks = true
+
+[checkpoint]
+every_seconds = 1800.0          # an interrupted run resumes with --resume <run folder>
+keep = 2

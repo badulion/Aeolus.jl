@@ -153,15 +153,17 @@ function restrict_state_to_parent!(psim::_NestSim, csim::_NestSim, nest::NestedG
 end
 
 """
-    reflux!(parent_field, parent_registers, child_registers, nest)
+    reflux!(parent_field, parent_registers, child_registers, nest; periodic,
+            measure=nothing)
 
 Berger & Colella (1989) refluxing of one cell-centred scalar.
 `parent_registers` and `child_registers` are `(Φx, Φy, Φz)`: the
 time-integrated advective+diffusive fluxes `Φ = ∫ F dt` (field value ×
 length) on the parent and child faces over one parent step. The
 coarse-minus-fine mismatch on the six interface planes is booked into the
-parent cells just outside the nest (`periodic`: the parent's periodic
-axes, see [`apply_flux_correction!`](@ref)), so the composite integral
+parent cells just outside the nest (`periodic`, required: the parent's
+periodic axes, e.g. `nest_periodic_axes(parent_sim)`, see
+[`apply_flux_correction!`](@ref)), so the composite integral
 ([`composite_integral`](@ref)) of the scalar is unchanged by the nest to
 round-off.
 
@@ -174,7 +176,7 @@ Reference: Berger, M. J. & Colella, P. (1989), *J. Comput. Phys.* 82,
 """
 function reflux!(pf::Field{CellCenter}, preg::NTuple{3,Field}, creg::NTuple{3,Field},
                  nest::NestedGrid; measure=nothing,
-                 periodic::NTuple{3,Bool} = (true, true, true))
+                 periodic::NTuple{3,Bool})
     location(preg[1]) isa FaceX && location(preg[2]) isa FaceY &&
         location(preg[3]) isa FaceZ ||
         error("reflux!: registers must be (FaceX, FaceY, FaceZ) fields")

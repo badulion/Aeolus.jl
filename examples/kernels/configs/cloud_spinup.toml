@@ -1,0 +1,24 @@
+# Kernel demo 04 — Kessler cloud spinup.
+#
+# A 4 × 4 × 32 box of side 2 km with no dynamics: uniform vapour 10 g/kg,
+# a cloud layer of 3 g/kg between 0.6 and 0.9 of the height; Kessler
+# microphysics converts cloud to rain and the rain falls out, in five
+# steps (60, 60, 120, 120, 120 s).
+#
+#   julia --project=. examples/kernels/04_cloud_spinup.jl
+#   julia --project -m Aeolus run examples/kernels/configs/cloud_spinup.toml
+
+[run]
+driver = "column"
+name = "cloud_spinup"
+
+[column]
+case = "kessler_box"
+
+[kessler_box]
+size = [4, 4, 32]
+height = 2000.0
+qv = 0.01
+ql = 3e-3
+cloud_layer = [0.6, 0.9]
+dt = [60.0, 60.0, 120.0, 120.0, 120.0]

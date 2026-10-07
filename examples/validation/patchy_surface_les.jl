@@ -16,10 +16,14 @@
 #     1.5 h): λ = 0.8 … 12.8 km, i.e. λ/z_i ≈ 0.8 … 11, for the
 #     organised-motion comparison with Patton, Sullivan & Moeng (2005).
 #
-# Writes SVG figures to output/patchy_surface/. The runs are independent;
-# start Julia with threads to run them in parallel:
+# The thirteen runs are the sweep examples/validation/configs/
+# patchy_surface.toml (driver "patchy_surface",
+# examples/validation/patchy_surface_driver.jl). This script runs them one
+# after the other (one process per member, `--member A_tiled`, runs them
+# in parallel), prints the tables and writes SVG figures to
+# output/patchy_surface/:
 #
-#   julia --project=. -t 8 examples/validation/patchy_surface_les.jl
+#   julia --project=. examples/validation/patchy_surface_les.jl
 #
 # References
 #   Patton, E. G., Sullivan, P. P. & Moeng, C.-H. (2005). The influence of
@@ -36,44 +40,33 @@
 # =========================================================================
 
 using Printf
-include(joinpath(@__DIR__, "patchy_surface", "driver.jl"))
+using Aeolus
+include(joinpath(@__DIR__, "patchy_surface", "driver.jl"))       # patchy_amplitude
 include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 
 const OUT = joinpath(@__DIR__, "..", "..", "output", "patchy_surface")
 mkpath(OUT)
 
-hot, cool, mean_T = 310.0, 300.0, 305.0
-windy = (Ug = 5.0, f_cor = 1e-4)
-A_cases = [
-    ("uniform 305 K (= parameter aggregate)", (λ = 800.0, T_hot = mean_T, T_cool = mean_T)),
-    ("strips λ = 0.8 km",                     (λ = 800.0, T_hot = hot, T_cool = cool)),
-    ("strips λ = 3.2 km",                     (λ = 3200.0, T_hot = hot, T_cool = cool)),
-    ("tiled mosaic in every column",          (λ = 800.0, T_hot = hot, T_cool = cool, mode = :tiled)),
-    ("windy: uniform 305 K",                  (λ = 3200.0, T_hot = mean_T, T_cool = mean_T, windy...)),
-    ("windy: strips λ = 3.2 km",              (λ = 3200.0, T_hot = hot, T_cool = cool, windy...)),
-    ("windy: tiled mosaic",                   (λ = 3200.0, T_hot = hot, T_cool = cool, mode = :tiled, windy...)),
-]
+# member label => the name the tables print
+A_cases = [("A_uniform", "uniform 305 K (= parameter aggregate)"),
+           ("A_strips_800", "strips λ = 0.8 km"),
+           ("A_strips_3200", "strips λ = 3.2 km"),
+           ("A_tiled", "tiled mosaic in every column"),
+           ("A_windy_uniform", "windy: uniform 305 K"),
+           ("A_windy_strips_3200", "windy: strips λ = 3.2 km"),
+           ("A_windy_tiled", "windy: tiled mosaic")]
 B_λ = [800.0, 1600.0, 3200.0, 6400.0, 12800.0]
-B_cases = [[("sweep λ = $(Int(λ)) m", (λ = λ, T_hot = hot, T_cool = cool)) for λ in B_λ];
-           ("sweep uniform 305 K", (λ = 800.0, T_hot = mean_T, T_cool = mean_T))]
+B_cases = [[("B_strips_$(Int(λ))", "sweep λ = $(Int(λ)) m") for λ in B_λ]; ("B_uniform", "sweep uniform 305 K")]
 
-A_grid = (Nx = 64, Ny = 32, Nz = 32, Lx = 3200.0, Ly = 1600.0, Lz = 1600.0)
-B_grid = (Nx = 128, Ny = 16, Nz = 16, Lx = 12800.0, Ly = 1600.0, Lz = 1600.0)
-A_run = (t_end = 7200.0, dt = 3.0, t_avg = 3600.0, every = 5)
-B_run = (t_end = 10800.0, dt = 5.0, t_avg = 5400.0, every = 3)
-
-# Build serially (FFTW plans), run in parallel.
-jobs = [[(name, patchy_les(; A_grid..., cfg...), A_run) for (name, cfg) in A_cases];
-        [(name, patchy_les(; B_grid..., cfg...), B_run) for (name, cfg) in B_cases]]
-results = Vector{Any}(undef, length(jobs))
-println("Running $(length(jobs)) LES on $(Threads.nthreads()) thread(s) …")
-Threads.@threads :dynamic for k in eachindex(jobs)
-    name, pl, run = jobs[k]
-    t = @elapsed results[k] = patchy_run!(pl; run...)
-    @printf("  done: %-40s %6.0f s\n", name, t)
-end
-res = Dict(jobs[k][1] => results[k] for k in eachindex(jobs))
-cfgs = Dict(vcat(A_cases, B_cases))
+runs = run_configs(joinpath(@__DIR__, "configs", "patchy_surface.toml"), ARGS)
+label(r) = chop(r.obj.cfg.run.name; head = length("patchy_surface_"), tail = 0)
+name_of = Dict(vcat(A_cases, B_cases))
+res = Dict(name_of[label(r)] => r.obj.result for r in runs)
+cfgs = Dict(name_of[label(r)] => (λ = r.obj.cfg.surface.wavelength, T_hot = r.obj.cfg.surface.t_hot,
+                                  T_cool = r.obj.cfg.surface.t_cool, mode = r.obj.cfg.surface.mode)
+            for r in runs)
+B_grid = (Lz = runs[end].obj.cfg.grid.extent[3], Nz = runs[end].obj.cfg.grid.size[3])
+A_cases = [(n, nothing) for (_, n) in A_cases]
 rel(a, b) = 100 * (a - b) / b
 Au(r) = patchy_amplitude(r.u_p) / r.wstar
 
@@ -83,7 +76,7 @@ println("\nA. Domain-mean surface kinematic heat flux w'θ'₀ (K m/s), time mea
 for (name, _) in A_cases
     r = res[name]
     c = cfgs[name]
-    λzi = (c.T_hot == c.T_cool || get(c, :mode, :resolved) !== :resolved) ? "—" : @sprintf("%.2f", c.λ / r.zi)
+    λzi = (c.T_hot == c.T_cool || c.mode !== :resolved) ? "—" : @sprintf("%.2f", c.λ / r.zi)
     @printf("%-40s %7.4f %7s | %+7.1f%% %+7.1f%% %+7.1f%% %+7.1f%% %+7.1f%% %+7.1f%% | %6.2f %5.0f %6.3f\n",
             name, r.les, λzi, rel(r.tile_patch, r.les), rel(r.tile_speed, r.les),
             rel(r.tile_vec, r.les), rel(r.tile_gust, r.les), rel(r.blended, r.les), rel(r.param, r.les),
